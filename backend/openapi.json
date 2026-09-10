@@ -2483,7 +2483,7 @@
           "ontology"
         ],
         "summary": "Delete Relation Type",
-        "description": "관계 종류를 지운다.\n\n맺힌 관계가 있으면 **2-b 에서** 막는다(그 표가 아직 없다). 지금은 정의만\n지운다 — 속성 정의도 함께 지운다. 안 지우면 같은 slug 로 다시 만들 때\n**옛 속성이 되살아난다.**",
+        "description": "관계 종류를 지운다 — **맺힌 관계가 하나도 없을 때만.**\n\n엣지는 이 slug 를 문자열로 들고 있다(FK 가 없다 — 종류의 추가·삭제가\n설정 변경이어야 하기 때문이다). 종류를 지우면 그 관계들은 **이름 없는 엣지**\n로 남고, 화면은 그 줄에 slug 를 그대로 보여 줄 수밖에 없다.\n\n비어 있으면 지운다. **속성 정의도 함께** — 안 지우면 같은 slug 로 다시 만들 때\n옛 속성이 되살아난다.",
         "operationId": "delete_relation_type_api_ontology_relation_types__slug__delete",
         "parameters": [
           {
