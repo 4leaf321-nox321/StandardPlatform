@@ -1,4 +1,4 @@
-/** 인스턴스 API. */
+/** 객체 API. */
 
 import type { PropertyDef } from '@/modules/ontology/api'
 import { api } from '@/shared/api/client'

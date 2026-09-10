@@ -1,4 +1,4 @@
-"""인스턴스 라우터 — **보이는 것과 고칠 수 있는 것은 다른 축이다.**
+"""객체 라우터 — **보이는 것과 고칠 수 있는 것은 다른 축이다.**
 
 보기는 `visible_owner_clause`(전역 + 내 부서), 고치기는 `require_owner_edit`
 (소유 부서의 관리자 또는 시스템 관리자).
@@ -131,7 +131,7 @@ def list_objects(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Page[ObjectOut]:
-    """이 타입의 인스턴스 목록.
+    """이 타입의 객체 목록.
 
     거르기는 `?p.<속성키>=<값>` 으로 온다. `list_view` 가 열·정렬·검색 자리를
     정하고, 안 정해 뒀으면 기본형으로 떨어진다 — **빈 화면이 되지는 않는다.**

@@ -32,7 +32,9 @@ const MembersPage = lazy(() => import('@/modules/workspaces/MembersPage'))
 const NoticesPage = lazy(() => import('@/modules/notices/NoticesPage'))
 const ObjectListPage = lazy(() => import('@/modules/objects/ObjectListPage'))
 const ObjectProfilePage = lazy(() => import('@/modules/objects/ObjectProfilePage'))
-const OntologyAdminPage = lazy(() => import('@/modules/ontology/OntologyAdminPage'))
+const OntologyLayout = lazy(() => import('@/modules/ontology/OntologyLayout'))
+const OntologyGroupsPage = lazy(() => import('@/modules/ontology/OntologyGroupsPage'))
+const OntologyTypesPage = lazy(() => import('@/modules/ontology/OntologyTypesPage'))
 const NotificationsPage = lazy(() => import('@/modules/notifications/NotificationsPage'))
 const ProfilePage = lazy(() => import('@/modules/auth/ProfilePage'))
 const ServerPage = lazy(() => import('@/modules/server/ServerPage'))
@@ -98,7 +100,17 @@ export const router = createBrowserRouter([
 
           // 관리 (전사)
           { path: 'admin/accounts', element: <AccountsAdminPage /> },
-          { path: 'admin/ontology', element: <OntologyAdminPage /> },
+          // **두 번째 사이드바.** 묶음과 타입을 각각 제 화면에서 본다 —
+          // 한 화면에 쌓으면 「지금 어디를 보고 있나」 를 화면이 말해 주지 못한다.
+          {
+            path: 'admin/ontology',
+            element: <OntologyLayout />,
+            children: [
+              { index: true, element: <Navigate to="groups" replace /> },
+              { path: 'groups', element: <OntologyGroupsPage /> },
+              { path: 'types', element: <OntologyTypesPage /> },
+            ],
+          },
           { path: 'admin/workspaces', element: <WorkspacesAdminPage /> },
           { path: 'admin/server', element: <ServerPage /> },
 

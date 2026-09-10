@@ -1,20 +1,18 @@
 /**
- * 온톨로지 관리 — **도메인을 여기서 정의한다.**
+ * 타입 — **객체의 종류.** 하나 만들면 그 순간 목록·상세 화면이 생긴다.
  *
- * 그룹을 만들면 사이드바에 묶음이 서고, 타입을 만들면 그 묶음 안에 화면이 생기고,
- * 속성을 정의하면 그 화면의 폼이 생긴다. 코드를 고치는 일이 아니다.
+ * 행을 누르면 타입 자체의 설정을 고치고, 「속성」 을 누르면 그 타입이 담는 값의
+ * 모양을 고친다. **한 창에 섞지 않는다** — 섞으면 둘이 같은 것처럼 읽힌다.
  */
 
 import { useState } from 'react'
 
-import { GroupEditDialog } from '@/modules/ontology/GroupEditDialog'
 import { TypeEditDialog } from '@/modules/ontology/TypeEditDialog'
+import { useOntology } from '@/modules/ontology/OntologyLayout'
 import { ontologyApi } from '@/modules/ontology/api'
-import type { DataType, NavGroupRow, ObjectType, PropertyDef } from '@/modules/ontology/api'
+import type { DataType, ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
-import { ErrorNotice } from '@/shared/components/ErrorNotice'
-import { PageHeader } from '@/shared/components/PageHeader'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
@@ -33,7 +31,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table'
-import { useResource } from '@/shared/hooks/useResource'
 
 const DATA_TYPE_LABELS: Record<DataType, string> = {
   text: '글',
@@ -45,135 +42,54 @@ const DATA_TYPE_LABELS: Record<DataType, string> = {
   file: '파일',
 }
 
-const AUDIENCE_LABELS: Record<string, string> = {
-  everyone: '모두',
-  manager: '부서 관리자',
-  system_admin: '시스템 관리자',
-}
-
 const KIND_LABELS: Record<string, string> = {
   reference: '어휘',
-  record: '인스턴스',
+  record: '객체',
   system: '투영',
 }
 
-export default function OntologyAdminPage() {
-  const schema = useResource(() => ontologyApi.schema(), [])
-  const [error, setError] = useState<Error | null>(null)
+export default function OntologyTypesPage() {
+  const { schema, reload, setError } = useOntology()
+  const [editing, setEditing] = useState<string | null>(null)
   const [openProperties, setOpenProperties] = useState<string | null>(null)
-  const [editingType, setEditingType] = useState<string | null>(null)
-  const [editingGroup, setEditingGroup] = useState<string | null>(null)
 
-  async function act(run: () => Promise<unknown>) {
+  const types = schema?.types ?? []
+  const groups = schema?.groups ?? []
+  const target = types.find((row) => row.slug === editing) ?? null
+  const propertyTarget = types.find((row) => row.slug === openProperties) ?? null
+
+  async function create(body: Record<string, unknown>) {
     setError(null)
     try {
-      await run()
-      schema.reload()
+      await ontologyApi.createType(body)
+      reload()
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     }
   }
 
-  if (schema.error) return <ErrorNotice error={schema.error} />
-  const data = schema.data
-  const types = data?.types ?? []
-  const groups = data?.groups ?? []
-
-  const propertyTarget = types.find((row) => row.slug === openProperties) ?? null
-  const typeTarget = types.find((row) => row.slug === editingType) ?? null
-  const groupTarget = groups.find((row) => row.slug === editingGroup) ?? null
-
-  /** 이 묶음에 걸린 타입 이름들. 지우기 전에 무엇이 걸렸는지 말하는 데 쓴다. */
-  function attachedTo(group: NavGroupRow): string[] {
-    return types.filter((row) => row.nav_group_slug === group.slug).map((row) => row.label)
-  }
-
   return (
-    <div className="mx-auto max-w-5xl space-y-10">
-      <PageHeader
-        title="온톨로지"
-        description="타입을 정의하면 사이드바와 화면이 생깁니다. 코드를 고치지 않습니다."
-      />
+    <div className="space-y-4">
+      <p className="text-muted-foreground text-sm">
+        객체의 종류입니다. 하나 만들면 그 순간 목록·상세 화면이 생깁니다.
+      </p>
 
-      {error && <ErrorNotice error={error} />}
-
-      {/* **묶음이 먼저다.** 타입을 사이드바에 세우려면 들어갈 묶음이 먼저 있어야
-          한다 — 순서가 곧 밟는 차례여야 「다음에 무엇을」 을 안 묻는다. */}
-      <section className="space-y-4">
-        <div>
-          <h2 className="text-base font-semibold">1. 사이드바 묶음</h2>
-          <p className="text-muted-foreground text-sm">
-            「도메인」 처럼 화면을 묶는 이름입니다. 묶음이 없으면 타입을 만들어도 사이드바에
-            서지 않습니다.
-          </p>
-        </div>
-
-        <NewGroupForm onSubmit={(body) => act(() => ontologyApi.createGroup(body))} />
-
-        {groups.length === 0 ? (
-          <EmptyState
-            title="묶음이 없습니다"
-            hint="먼저 묶음 하나를 만드세요. 그다음 타입을 그 안에 넣습니다."
-          />
-        ) : (
-          <div className="rounded-md border">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>이름</TableHead>
-                  <TableHead>slug</TableHead>
-                  <TableHead>보이는 대상</TableHead>
-                  <TableHead className="text-right">걸린 타입</TableHead>
-                  <TableHead className="text-right">순서</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {groups.map((group) => (
-                  <TableRow
-                    key={group.slug}
-                    className="cursor-pointer"
-                    onClick={() => setEditingGroup(group.slug)}
-                  >
-                    <TableCell className="font-medium">
-                      {group.label}
-                      {!group.is_active && (
-                        <span className="text-muted-foreground ml-2 text-xs">사용 안 함</span>
-                      )}
-                    </TableCell>
-                    <TableCell className="font-mono text-xs">{group.slug}</TableCell>
-                    <TableCell>{AUDIENCE_LABELS[group.audience] ?? group.audience}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {attachedTo(group).length}
-                    </TableCell>
-                    <TableCell className="text-right tabular-nums">{group.sort_order}</TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-          </div>
-        )}
-        <p className="text-muted-foreground text-xs">행을 누르면 고치거나 지웁니다.</p>
-      </section>
-
-      <section className="space-y-4">
-        <div>
-          <h2 className="text-base font-semibold">2. 타입</h2>
-          <p className="text-muted-foreground text-sm">
-            인스턴스의 종류입니다. 하나 만들면 그 순간 목록·상세 화면이 생깁니다.
-          </p>
-        </div>
-
-        <NewTypeForm
-          groups={groups.map((group) => group.slug)}
-          onSubmit={(body) => act(() => ontologyApi.createType(body))}
+      {groups.length === 0 && (
+        <EmptyState
+          title="묶음을 먼저 만드세요"
+          hint="타입은 만들 수 있지만, 들어갈 묶음이 없으면 사이드바에 서지 않습니다."
         />
+      )}
 
-        {types.length === 0 ? (
-          <EmptyState
-            title="아직 타입이 없습니다"
-            hint="타입 하나를 만들면 그 순간 목록·상세 화면이 생깁니다. 사이드바에 세우려면 묶음을 함께 고르세요."
-          />
-        ) : (
+      <NewTypeForm groups={groups.map((group) => group.slug)} onSubmit={create} />
+
+      {types.length === 0 ? (
+        <EmptyState
+          title="아직 타입이 없습니다"
+          hint="타입 하나를 만들면 그 순간 목록·상세 화면이 생깁니다. 사이드바에 세우려면 묶음을 함께 고르세요."
+        />
+      ) : (
+        <>
           <div className="rounded-md border">
             <Table>
               <TableHeader>
@@ -182,7 +98,7 @@ export default function OntologyAdminPage() {
                   <TableHead>slug</TableHead>
                   <TableHead>분류</TableHead>
                   <TableHead>묶음</TableHead>
-                  <TableHead className="text-right">인스턴스</TableHead>
+                  <TableHead className="text-right">객체</TableHead>
                   <TableHead className="text-right">속성</TableHead>
                 </TableRow>
               </TableHeader>
@@ -191,7 +107,7 @@ export default function OntologyAdminPage() {
                   <TableRow
                     key={row.slug}
                     className="cursor-pointer"
-                    onClick={() => setEditingType(row.slug)}
+                    onClick={() => setEditing(row.slug)}
                   >
                     <TableCell className="font-medium">
                       {row.label}
@@ -226,85 +142,33 @@ export default function OntologyAdminPage() {
               </TableBody>
             </Table>
           </div>
-        )}
-        <p className="text-muted-foreground text-xs">
-          행을 누르면 묶음·분류·식별자 정책을 고치거나 지웁니다. 「속성」 을 누르면 아래에
-          그 타입의 속성 정의가 열립니다.
-        </p>
-      </section>
+          <p className="text-muted-foreground text-xs">
+            행을 누르면 묶음·분류·식별자 정책을 고치거나 지웁니다. 「속성」 을 누르면 아래에
+            그 타입의 속성 정의가 열립니다.
+          </p>
+        </>
+      )}
 
       {propertyTarget && (
-        <section className="space-y-4">
-          <h2 className="text-base font-semibold">3. {propertyTarget.label} 의 속성</h2>
+        <section className="space-y-3">
+          <h2 className="text-base font-semibold">{propertyTarget.label} 의 속성</h2>
           <PropertyEditor
             type={propertyTarget}
             types={types}
-            onChanged={() => schema.reload()}
+            onChanged={reload}
             onError={setError}
           />
         </section>
       )}
 
-      {typeTarget && (
+      {target && (
         <TypeEditDialog
-          type={typeTarget}
+          type={target}
           groups={groups}
-          onClose={() => setEditingType(null)}
-          onChanged={() => schema.reload()}
+          onClose={() => setEditing(null)}
+          onChanged={reload}
         />
       )}
-
-      {groupTarget && (
-        <GroupEditDialog
-          group={groupTarget}
-          attached={attachedTo(groupTarget)}
-          onClose={() => setEditingGroup(null)}
-          onChanged={() => schema.reload()}
-        />
-      )}
-    </div>
-  )
-}
-
-function NewGroupForm({ onSubmit }: { onSubmit: (body: Record<string, unknown>) => void }) {
-  const [slug, setSlug] = useState('')
-  const [label, setLabel] = useState('')
-
-  return (
-    <div className="flex flex-wrap items-end gap-3 rounded-md border p-4">
-      <div className="space-y-1.5">
-        <Label htmlFor="group-slug">slug</Label>
-        <Input
-          id="group-slug"
-          value={slug}
-          placeholder="domain"
-          className="w-40 font-mono"
-          onChange={(event) => setSlug(event.target.value)}
-        />
-      </div>
-      <div className="space-y-1.5">
-        <Label htmlFor="group-label">이름</Label>
-        <Input
-          id="group-label"
-          value={label}
-          placeholder="도메인"
-          className="w-48"
-          onChange={(event) => setLabel(event.target.value)}
-        />
-      </div>
-      <Button
-        disabled={!slug.trim() || !label.trim()}
-        onClick={() => {
-          onSubmit({ slug, label })
-          setSlug('')
-          setLabel('')
-        }}
-      >
-        묶음 만들기
-      </Button>
-      <p className="text-muted-foreground w-full text-xs">
-        slug 는 소문자·숫자·밑줄이고 <b>나중에 바꿀 수 없습니다.</b>
-      </p>
     </div>
   )
 }
@@ -393,6 +257,7 @@ function NewTypeForm({
     </div>
   )
 }
+
 
 function PropertyEditor({
   type,

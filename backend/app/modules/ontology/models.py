@@ -10,7 +10,7 @@
 ## 여기 있는 셋
 
     NavGroup      표시 — 사이드바 묶음
-    ObjectType    의미 — 인스턴스의 종류(= 축)
+    ObjectType    의미 — 객체의 종류(= 축)
     PropertyDef   속성 정의 — 타입에도 붙고 **관계 종류에도** 붙는다
 
 **표시와 의미를 나눈 이유**: 한 표로 두면 「이 타입을 두 그룹에」 「그룹을 부서마다
@@ -19,7 +19,7 @@
 ## 타입은 전역이다
 
 `owner_workspace_id` 를 두지 않는다. 타입까지 부서별로 열면 같은 개념이 부서마다
-갈리고, **연결하려고 만든 것이 칸막이가 된다.** 인스턴스만 부서가 소유한다.
+갈리고, **연결하려고 만든 것이 칸막이가 된다.** 객체만 부서가 소유한다.
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ NAV_AUDIENCES = ("everyone", "manager", "system_admin")
 #: 타입의 **객체 분류.**
 #:
 #:   reference  어휘/enum. 속성 거의 없음, picker 선택용 (불량 종류·개발 단계)
-#:   record     속성을 가진 인스턴스 객체 (부품·과제·공급사)
+#:   record     속성을 가진 객체 객체 (부품·과제·공급사)
 #:   system     이미 있는 1급 표의 **투영** (부서·계정·공지)
 #:
 #: **system 이 핵심이다.** 부서를 온톨로지에 넣겠다고 `objects` 에 행을 복제하면
@@ -64,7 +64,7 @@ KIND_CLASSES = ("reference", "record", "system")
 #:   closed  관리자가 등록한 값만. 정형 마스터(부품번호·BOM)를 잠근다
 ENTRY_POLICIES = ("open", "closed")
 
-#: 인스턴스 식별자(`key`) 정책. 사람이 정하는 값(부품번호·과제코드)이다.
+#: 객체 식별자(`key`) 정책. 사람이 정하는 값(부품번호·과제코드)이다.
 #:   none      쓰지 않는다. label 만으로 산다 (어휘 축)
 #:   optional  있으면 유니크, 없어도 된다
 #:   required  반드시 있고 유니크
@@ -134,7 +134,7 @@ class NavGroup(Base):
 
 
 class ObjectType(Base):
-    """인스턴스의 종류(= 축) — **의미**."""
+    """객체의 종류(= 축) — **의미**."""
 
     __tablename__ = "object_types"
     __table_args__ = (UniqueConstraint("slug", name="uq_object_types_slug"),)

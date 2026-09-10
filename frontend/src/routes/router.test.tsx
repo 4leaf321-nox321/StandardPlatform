@@ -76,4 +76,12 @@ describe('라우터', () => {
     expect(known).toContain('/w/:slug')
     expect(known).toContain('/w/:slug/members')
   })
+
+  it('온톨로지의 두 번째 사이드바가 제 화면을 갖는다', () => {
+    // **줄은 있는데 화면이 없으면 눌렀을 때 「없는 페이지」 로 떨어진다** —
+    // 그것은 권한 문제와 구별되지 않는다.
+    expect(known).toContain('/admin/ontology')
+    expect(known).toContain('/admin/ontology/groups')
+    expect(known).toContain('/admin/ontology/types')
+  })
 })

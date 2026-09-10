@@ -63,7 +63,7 @@ def _api_router() -> APIRouter:
     router.include_router(notifications_routes.router)
     router.include_router(files_routes.router)
     router.include_router(audit_routes.router)
-    # 메타모델과 그 인스턴스. **도메인이 아니라 메커니즘이다**(ADR 0005) —
+    # 메타모델과 그 객체. **도메인이 아니라 메커니즘이다**(ADR 0005) —
     # 도메인은 여전히 이 저장소에 없고, 여기 정의로 얹힌다.
     router.include_router(ontology_routes.router)
     router.include_router(objects_routes.router)

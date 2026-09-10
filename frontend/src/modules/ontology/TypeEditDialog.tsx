@@ -148,7 +148,7 @@ export function TypeEditDialog({ type, groups, onClose, onChanged }: Props) {
             <div className="grid grid-cols-2 gap-3">
               <Field label="객체 분류" value={kindClass} onChange={setKindClass}
                 options={[
-                  ['record', '인스턴스'],
+                  ['record', '객체'],
                   ['reference', '어휘'],
                   ['system', '투영'],
                 ]}

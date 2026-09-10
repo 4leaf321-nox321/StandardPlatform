@@ -1,11 +1,11 @@
-"""인스턴스 — 타입이 정의한 모양대로 쌓이는 실제 데이터.
+"""객체 — 타입이 정의한 모양대로 쌓이는 실제 데이터.
 
 메타모델(`ontology`)이 「무엇이 있을 수 있나」 를 정하고, 여기가 「실제로 무엇이
 있나」 를 담는다. 배경은 [ADR 0005](../../../../docs/adr/0005-온톨로지-메타모델.md).
 
-## 인스턴스는 부서가 소유한다
+## 객체는 부서가 소유한다
 
-타입은 전역이지만 인스턴스는 `owner_workspace_id` 를 갖는다(NULL = 전역).
+타입은 전역이지만 객체는 `owner_workspace_id` 를 갖는다(NULL = 전역).
 그러면 `visible_owner_clause` · `resolve_owner_workspace` · `require_owner_edit`
 가 그대로 붙는다 — 이 틀이 그렇게 만들어져 있다.
 
@@ -37,7 +37,7 @@ from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
 
-#: 인스턴스의 상태.
+#: 객체의 상태.
 #:   active      picker 와 목록에 나온다
 #:   deprecated  picker 에서 숨되 **이미 걸린 관계와 값은 그대로 남는다**
 #:
@@ -47,7 +47,7 @@ OBJECT_STATUSES = ("active", "deprecated")
 
 
 class ObjectInstance(Base):
-    """타입 하나에 속하는 인스턴스 하나."""
+    """타입 하나에 속하는 객체 하나."""
 
     __tablename__ = "objects"
     __table_args__ = (
@@ -66,7 +66,7 @@ class ObjectInstance(Base):
         ForeignKey("object_types.id", ondelete="RESTRICT"),
         index=True,
     )
-    """**RESTRICT 다.** 타입을 지우면 그 인스턴스가 통째로 사라지는데, 그것은
+    """**RESTRICT 다.** 타입을 지우면 그 객체가 통째로 사라지는데, 그것은
     화면의 실수 한 번으로 일어날 일이 아니다. 지우기 전에 무엇이 걸렸는지
     보여 주는 자리가 먼저 있어야 한다."""
 
@@ -125,4 +125,4 @@ class ObjectInstance(Base):
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
-    """지우지 않는다. 이 인스턴스를 가리키는 관계와 첨부가 밖에 남아 있다."""
+    """지우지 않는다. 이 객체를 가리키는 관계와 첨부가 밖에 남아 있다."""

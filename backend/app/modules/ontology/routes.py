@@ -87,7 +87,7 @@ def _type(db: Session, slug: str) -> ObjectType:
 
 
 def _counts(db: Session) -> dict[uuid.UUID, int]:
-    """타입별 인스턴스 수. **한 번에 센다** — 타입마다 세면 목록 하나에 질의가
+    """타입별 객체 수. **한 번에 센다** — 타입마다 세면 목록 하나에 질의가
     타입 수만큼 붙고, 타입은 늘어나기만 한다."""
     rows = db.execute(
         select(ObjectInstance.type_id, func.count())
@@ -334,7 +334,7 @@ def delete_type(
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> None:
-    """타입을 지운다 — **인스턴스가 하나도 없을 때만.**
+    """타입을 지운다 — **객체가 하나도 없을 때만.**
 
     행이 있는데 지우면 그 데이터가 통째로 고아가 된다. 그런데 그것은 화면의 실수
     한 번으로 일어날 일이 아니다. 그래서 몇 개가 걸려 있는지 말하며 막고,

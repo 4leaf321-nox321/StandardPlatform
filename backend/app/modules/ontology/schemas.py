@@ -85,7 +85,7 @@ class ObjectTypeOut(BaseModel):
     list_view: dict[str, Any]
     is_active: bool
     object_count: int
-    """이 타입의 인스턴스가 몇 개인가. **지우기 전에 무엇이 걸렸는지 알아야 한다** —
+    """이 타입의 객체가 몇 개인가. **지우기 전에 무엇이 걸렸는지 알아야 한다** —
     그 물음에 답할 자리가 목록 자체여야 한다."""
 
 

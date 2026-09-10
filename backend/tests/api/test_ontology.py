@@ -1,4 +1,4 @@
-"""메타모델과 인스턴스 — **진짜 앱을 부른다.**
+"""메타모델과 객체 — **진짜 앱을 부른다.**
 
 여기서 보려는 것은 「검증이 되나」 가 아니라(그건 단위 시험이 본다) **라우터·
 권한·소유 판정이 실제로 걸리나** 다. 실제로 깨지는 자리는 대개 거기다.
@@ -117,10 +117,10 @@ def test_선택_속성은_고를_것이_있어야_한다(client: TestClient, adm
     assert response.status_code == 409
 
 
-# --- 인스턴스 ---------------------------------------------------------------
+# --- 객체 ---------------------------------------------------------------
 
 
-def test_인스턴스를_만들고_속성이_검증된다(client: TestClient, admin: Signed) -> None:
+def test_객체를_만들고_속성이_검증된다(client: TestClient, admin: Signed) -> None:
     part = _make_type(client, admin, label="부품")
     _make_property(client, admin, part, key="qty", label="수량", data_type="number")
 
@@ -273,7 +273,7 @@ def test_파일_속성은_properties_로_안_받는다(client: TestClient, admin
     assert "첨부" in response.json()["error"]["message"]
 
 
-def test_system_타입에는_인스턴스를_안_만든다(client: TestClient, admin: Signed) -> None:
+def test_system_타입에는_객체를_안_만든다(client: TestClient, admin: Signed) -> None:
     """system 축은 **원 표를 투영한다.** 여기 행을 만들면 두 벌이 되고 갈린다."""
     dept = _make_type(client, admin, "dept", label="부서", kind_class="system")
     response = client.post(
@@ -470,7 +470,7 @@ def test_속성을_지우기_전에_값이_몇_개인지_말한다(client: TestC
 # --- 지우기 -----------------------------------------------------------------
 
 
-def test_인스턴스가_있는_타입은_못_지운다(client: TestClient, admin: Signed) -> None:
+def test_객체가_있는_타입은_못_지운다(client: TestClient, admin: Signed) -> None:
     """**행이 있는데 지우면 그 데이터가 통째로 고아가 된다.** 몇 개가 걸렸는지
     말하며 막고, 그만 쓰려는 것이면 비활성으로 두라고 알려 준다."""
     part = _make_type(client, admin, label="부품")

@@ -1,4 +1,4 @@
-"""인스턴스 API 형태."""
+"""객체 API 형태."""
 
 from __future__ import annotations
 
