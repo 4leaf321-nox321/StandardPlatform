@@ -10,8 +10,9 @@
 
 import { useState } from 'react'
 
+import { ListViewEditor } from '@/modules/ontology/ListViewEditor'
 import { ontologyApi } from '@/modules/ontology/api'
-import type { NavGroupRow, ObjectType } from '@/modules/ontology/api'
+import type { ListView, NavGroupRow, ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
@@ -31,13 +32,15 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { Textarea } from '@/shared/components/ui/textarea'
 
 /** 「묶음 없음」. **빈 문자열을 쓸 수 없다** — Select 가 그것을 「고른 것 없음」 으로 본다. */
 const NONE = '__none__'
 
 interface Props {
-  type: ObjectType
+  /** 속성 정의까지 들고 온다 — **열로 고를 것이 그 목록에서 나온다.** */
+  type: ObjectType & { properties: PropertyDef[] }
   groups: NavGroupRow[]
   onClose: () => void
   onChanged: () => void
@@ -54,6 +57,7 @@ export function TypeEditDialog({ type, groups, onClose, onChanged }: Props) {
   const [temporalKind, setTemporalKind] = useState<string>(type.temporal_kind)
   const [sortOrder, setSortOrder] = useState(String(type.sort_order))
   const [isActive, setIsActive] = useState(type.is_active)
+  const [listView, setListView] = useState<ListView>(type.list_view ?? {})
 
   const [error, setError] = useState<Error | null>(null)
   const [saving, setSaving] = useState(false)
@@ -63,8 +67,7 @@ export function TypeEditDialog({ type, groups, onClose, onChanged }: Props) {
     setError(null)
     setSaving(true)
     try {
-      // **보낸 것만 바뀐다.** `list_view` 는 여기서 안 만지므로 안 보낸다 —
-      // 실어 보내면 이 창에 없는 설정을 이 창이 덮어쓰게 된다.
+      // **보낸 것만 바뀐다.** 이 창이 아는 칸만 실어 보낸다.
       await ontologyApi.updateType(type.slug, {
         label,
         description,
@@ -76,6 +79,7 @@ export function TypeEditDialog({ type, groups, onClose, onChanged }: Props) {
         temporal_kind: temporalKind,
         sort_order: Number(sortOrder) || 0,
         is_active: isActive,
+        list_view: listView,
       })
       onChanged()
       onClose()
@@ -94,9 +98,17 @@ export function TypeEditDialog({ type, groups, onClose, onChanged }: Props) {
             <DialogTitle>{type.label} 고치기</DialogTitle>
           </DialogHeader>
 
-          <div className="space-y-4">
-            {error && <ErrorNotice error={error} />}
+          {error && <ErrorNotice error={error} />}
 
+          <Tabs defaultValue="basic">
+            <TabsList>
+              <TabsTrigger value="basic">설정</TabsTrigger>
+              {/* **목록 화면은 타입의 설정이지만 성격이 다르다.** 한 폼에 이어
+                  붙이면 스크롤이 길어져 아래 절반을 아무도 안 본다. */}
+              <TabsTrigger value="list">목록 화면</TabsTrigger>
+            </TabsList>
+
+            <TabsContent value="basic" className="space-y-4">
             <div className="space-y-1.5">
               <Label>slug</Label>
               <Input value={type.slug} readOnly disabled className="font-mono" />
@@ -203,7 +215,16 @@ export function TypeEditDialog({ type, groups, onClose, onChanged }: Props) {
                 끄면 메뉴와 만들기에서 빠집니다. <b>자료는 그대로 남습니다.</b>
               </span>
             </label>
-          </div>
+            </TabsContent>
+
+            <TabsContent value="list" className="space-y-4">
+              <ListViewEditor
+                defs={type.properties}
+                value={listView}
+                onChange={setListView}
+              />
+            </TabsContent>
+          </Tabs>
 
           <DialogFooter className="justify-between sm:justify-between">
             <Button variant="ghost" onClick={() => setRemoving(true)} disabled={saving}>

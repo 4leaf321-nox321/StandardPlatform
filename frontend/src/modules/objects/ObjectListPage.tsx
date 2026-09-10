@@ -70,7 +70,11 @@ function buildColumns(type: ObjectType, defs: PropertyDef[]): Column[] {
         // **정의가 없는 열은 조용히 버린다.** 속성을 지운 뒤 list_view 에 이름이
         // 남아 있으면 빈 열이 서는데, 그 빈 열은 「값이 없다」 로 읽힌다.
         if (!def) return null
-        return { id, label: def.label, render: (row) => propertyText(def, row.properties[key]) }
+        return {
+          id,
+          label: def.label,
+          render: (row) => propertyText(def, row.properties[key], row.ref_labels),
+        }
       }
       return null
     })

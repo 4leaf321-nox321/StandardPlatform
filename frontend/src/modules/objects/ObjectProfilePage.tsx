@@ -151,7 +151,12 @@ export default function ObjectProfilePage() {
             </div>
           </div>
         ) : (
-          <ReadOnlyProperties defs={valueDefs} values={row.properties} note={row.description} />
+          <ReadOnlyProperties
+            defs={valueDefs}
+            values={row.properties}
+            refLabels={row.ref_labels}
+            note={row.description}
+          />
         )}
       </section>
 
@@ -202,10 +207,12 @@ export default function ObjectProfilePage() {
 function ReadOnlyProperties({
   defs,
   values,
+  refLabels,
   note,
 }: {
   defs: PropertyDef[]
   values: Record<string, unknown>
+  refLabels: Record<string, string>
   note: string
 }) {
   return (
@@ -223,7 +230,7 @@ function ReadOnlyProperties({
                 {def.label}
                 {def.unit && ` (${def.unit})`}
               </dt>
-              <dd className="text-sm">{propertyText(def, values[def.key])}</dd>
+              <dd className="text-sm">{propertyText(def, values[def.key], refLabels)}</dd>
             </div>
           ))}
         </dl>

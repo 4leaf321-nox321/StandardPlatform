@@ -35,7 +35,7 @@ from app.modules.objects.services import (
     require_key_free,
     require_refs_exist,
 )
-from app.modules.ontology.models import ObjectType
+from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.ontology.schemas import PropertyDefOut
 from app.modules.ontology.services import (
     merge_properties,
@@ -70,7 +70,43 @@ def _workspace_slugs(db: Session) -> dict[uuid.UUID, str]:
     return {row.id: row.slug for row in db.scalars(select(Workspace))}
 
 
-def _out(row: ObjectInstance, type_slug: str, workspaces: dict[uuid.UUID, str]) -> ObjectOut:
+def _ref_labels(
+    db: Session, defs: list[PropertyDef], rows: list[ObjectInstance]
+) -> dict[uuid.UUID, str]:
+    """이 목록이 가리키는 객체들의 이름을 **한 번에** 읽는다.
+
+    행마다 물으면 목록 한 쪽에 질의가 수십 개 붙는다. 어느 키가 참조인지는
+    속성 정의가 알므로, 아무 문자열이나 uuid 로 넘겨짚지 않는다.
+    """
+    ref_keys = [d.key for d in defs if d.data_type == "object_ref"]
+    if not ref_keys:
+        return {}
+
+    wanted: set[uuid.UUID] = set()
+    for row in rows:
+        values = row.properties or {}
+        for key in ref_keys:
+            raw = values.get(key)
+            for item in raw if isinstance(raw, list) else [raw]:
+                if not isinstance(item, str):
+                    continue
+                try:
+                    wanted.add(uuid.UUID(item))
+                except ValueError:  # pragma: no cover - 검증이 이미 막는다
+                    continue
+    if not wanted:
+        return {}
+
+    found = db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(wanted)))
+    return {row.id: row.label for row in found}
+
+
+def _out(
+    row: ObjectInstance,
+    type_slug: str,
+    workspaces: dict[uuid.UUID, str],
+    ref_labels: dict[uuid.UUID, str] | None = None,
+) -> ObjectOut:
     return ObjectOut(
         id=row.id,
         type_slug=type_slug,
@@ -78,6 +114,7 @@ def _out(row: ObjectInstance, type_slug: str, workspaces: dict[uuid.UUID, str]) 
         label=row.label,
         description=row.description,
         properties=row.properties or {},
+        ref_labels={str(k): v for k, v in (ref_labels or {}).items()},
         status=row.status,
         owner_workspace_slug=(
             workspaces.get(row.owner_workspace_id) if row.owner_workspace_id else None
@@ -158,9 +195,11 @@ def list_objects(
     capped = clamp_limit(limit)
     rows = db.scalars(apply_sort(stmt, object_type).limit(capped).offset(offset))
 
+    found = list(rows)
     workspaces = _workspace_slugs(db)
+    labels = _ref_labels(db, properties_of(db, object_type.id), found)
     return Page(
-        items=[_out(row, object_type.slug, workspaces) for row in rows],
+        items=[_out(row, object_type.slug, workspaces, labels) for row in found],
         total=total,
         limit=capped,
         offset=offset,
@@ -190,12 +229,11 @@ def object_profile(
         .order_by(Attachment.created_at.desc())
     )
 
+    defs = properties_of(db, object_type.id)
     return ObjectProfileOut(
-        object=_out(row, object_type.slug, _workspace_slugs(db)),
+        object=_out(row, object_type.slug, _workspace_slugs(db), _ref_labels(db, defs, [row])),
         type_label=object_type.label,
-        properties_schema=[
-            PropertyDefOut.model_validate(p) for p in properties_of(db, object_type.id)
-        ],
+        properties_schema=[PropertyDefOut.model_validate(p) for p in defs],
         attachments=[AttachmentBrief.model_validate(a) for a in attachments],
         can_edit=_can_edit(db, user, row),
     )

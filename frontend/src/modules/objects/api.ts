@@ -11,6 +11,8 @@ export interface ObjectRow {
   label: string
   description: string
   properties: Record<string, unknown>
+  /** `object_ref` 가 가리키는 객체의 이름 (id -> 이름). **서버가 한 번에 모아 준다.** */
+  ref_labels: Record<string, string>
   status: string
   owner_workspace_slug: string | null
   valid_from_year: number | null

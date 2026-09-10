@@ -20,6 +20,14 @@ class ObjectOut(BaseModel):
     label: str
     description: str
     properties: dict[str, Any]
+    ref_labels: dict[str, str] = Field(default_factory=dict)
+    """`object_ref` 속성이 가리키는 객체의 **이름**(id -> 이름).
+
+    **값에는 id 만 있다.** 그대로 그리면 목록에 UUID 가 뜨고, 그 열은 아무것도
+    말해 주지 못한다 — 그러면 「참조를 열로 보이기」 기능 자체가 쓸모없어진다.
+    화면이 객체마다 이름을 물으러 가면 목록 한 쪽에 요청이 수십 개 붙으므로,
+    **서버가 한 번에 모아 실어 준다.**"""
+
     status: str
     owner_workspace_slug: str | None
     """NULL 은 전역이다 — 여러 부서가 함께 쓰므로 고치는 것은 시스템 관리자뿐이다."""

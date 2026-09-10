@@ -312,16 +312,32 @@ export function PropertyFields({ defs, values, onChange, disabled }: Props) {
   )
 }
 
-/** 보기 전용 — 값 하나를 사람이 읽는 말로. */
-export function propertyText(def: PropertyDef, value: unknown): string {
+/**
+ * 보기 전용 — 값 하나를 사람이 읽는 말로.
+ *
+ * `refLabels` 는 서버가 실어 준 「id -> 이름」 이다. **없으면 UUID 가 그대로
+ * 보이는데, 그 칸은 아무것도 말해 주지 못한다.**
+ */
+export function propertyText(
+  def: PropertyDef,
+  value: unknown,
+  refLabels: Record<string, string> = {},
+): string {
   if (value === undefined || value === null || value === '') return '—'
   if (Array.isArray(value)) {
-    return value.length === 0 ? '—' : value.map((item) => oneText(def.data_type, item)).join(', ')
+    return value.length === 0
+      ? '—'
+      : value.map((item) => oneText(def.data_type, item, refLabels)).join(', ')
   }
-  return oneText(def.data_type, value)
+  return oneText(def.data_type, value, refLabels)
 }
 
-function oneText(kind: DataType, value: unknown): string {
+function oneText(kind: DataType, value: unknown, refLabels: Record<string, string>): string {
   if (kind === 'bool') return value === true ? '예' : '아니오'
+  if (kind === 'object_ref' && typeof value === 'string') {
+    // **못 찾으면 「지워진 객체」 라고 말한다.** id 를 그대로 두면 사람은 그것이
+    // 값인 줄 알고, 없어진 것인지 원래 그런 것인지 구별할 수 없다.
+    return refLabels[value] ?? '(찾을 수 없는 객체)'
+  }
   return String(value)
 }

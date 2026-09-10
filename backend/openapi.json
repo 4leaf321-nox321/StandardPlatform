@@ -4340,6 +4340,13 @@
             "type": "object",
             "title": "Properties"
           },
+          "ref_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Ref Labels"
+          },
           "status": {
             "type": "string",
             "title": "Status"

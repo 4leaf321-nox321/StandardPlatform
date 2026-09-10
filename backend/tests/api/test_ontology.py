@@ -672,3 +672,59 @@ def test_필수로_바꿔도_이미_있는_객체는_안_건드린다(client: Te
         headers=admin.headers,
     )
     assert denied.status_code == 422
+
+
+def test_참조는_id_가_아니라_이름으로_읽힌다(client: TestClient, admin: Signed) -> None:
+    """**값에는 id 만 있다.** 그대로 그리면 목록에 UUID 가 뜨고, 그 열은 아무것도
+    말해 주지 못한다 — 그러면 「참조를 열로 보이기」 자체가 쓸모없어진다."""
+    vendor = _make_type(client, admin, "vendor", label="공급사")
+    part = _make_type(client, admin, label="부품")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="vendor",
+        label="공급사",
+        data_type="object_ref",
+        ref_type_slug=vendor,
+    )
+    supplier = _make_object(client, admin, vendor, label="한빛정밀")
+    _make_object(client, admin, part, label="볼트", properties={"vendor": supplier["id"]})
+
+    listed = client.get(f"/api/objects/{part}", headers=admin.headers).json()
+    row = listed["items"][0]
+    assert row["properties"]["vendor"] == supplier["id"]
+    assert row["ref_labels"][supplier["id"]] == "한빛정밀"
+
+
+def test_참조가_없으면_이름도_안_싣는다(client: TestClient, admin: Signed) -> None:
+    """**한 번에 모아 읽는다.** 참조 속성이 없으면 질의 자체를 안 한다."""
+    part = _make_type(client, admin, label="부품")
+    _make_object(client, admin, part, label="볼트")
+    listed = client.get(f"/api/objects/{part}", headers=admin.headers).json()
+    assert listed["items"][0]["ref_labels"] == {}
+
+
+def test_목록_화면_설정을_저장한다(client: TestClient, admin: Signed) -> None:
+    """**정의가 곧 화면이다.** 이것을 못 정하면 속성을 아무리 만들어도 목록은
+    기본형으로 떨어지고, 「정의가 곧 화면」 이라는 말이 반만 참이 된다."""
+    part = _make_type(client, admin, label="부품")
+    _make_property(client, admin, part, key="grade", label="등급", data_type="text")
+
+    view = {
+        "columns": ["label", "properties.grade"],
+        "sort": {"field": "properties.grade", "dir": "desc"},
+        "search": ["label", "properties.grade"],
+        "filters": ["properties.grade"],
+    }
+    saved = client.patch(
+        f"/api/ontology/types/{part}", json={"list_view": view}, headers=admin.headers
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["list_view"] == view
+
+    # 그 설정대로 목록이 돈다.
+    for label, grade in (("볼트", "A"), ("너트", "B")):
+        _make_object(client, admin, part, label=label, properties={"grade": grade})
+    listed = client.get(f"/api/objects/{part}", headers=admin.headers).json()
+    assert [row["label"] for row in listed["items"]] == ["너트", "볼트"]
