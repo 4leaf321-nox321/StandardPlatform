@@ -80,6 +80,18 @@ def admin(client: TestClient, db: Session, workspace: Workspace) -> Signed:
 
 
 @pytest.fixture
+def manager(client: TestClient, db: Session, workspace: Workspace) -> Signed:
+    """시스템 관리자가 **아닌** 부서 관리자.
+
+    부서 소유 자산(첨부·객체)을 만들려면 그 부서의 관리자여야 한다
+    (`resolve_owner_workspace`). 시스템 관리자로만 시험하면 **그 문턱이 실제로
+    있는지**를 아무도 안 보게 된다.
+    """
+    user = _make_user(db, workspace, label="manager", is_system_admin=False, role="manager")
+    return Signed(email=user.email, token=_login(client, user.email), workspace=workspace.slug)
+
+
+@pytest.fixture
 def member(client: TestClient, db: Session, workspace: Workspace) -> Signed:
     """같은 부서의 평범한 멤버. **권한 시험에는 관리자 아닌 사람이 필요하다** —
     관리자만으로 도는 시험은 무엇도 막지 못한다."""

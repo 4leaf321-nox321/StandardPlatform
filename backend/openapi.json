@@ -3123,6 +3123,196 @@
         }
       }
     },
+    "/api/objects/{type_slug}/{object_id}/relations": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Add Relation",
+        "description": "관계를 맺는다 — **출발점을 고칠 수 있는 사람만.**\n\n도착점은 볼 수만 있으면 된다. 양쪽 다 고칠 수 있어야 한다고 하면 부서를\n가로지르는 연결을 아무도 못 만들고, 그러면 **연결하려고 만든 것이 칸막이가\n된다.** 대신 맺은 사람과 근거가 남는다.",
+        "operationId": "add_relation_api_objects__type_slug___object_id__relations_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelationCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelatedObjectOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/{object_id}/relations/{relation_id}": {
+      "patch": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Update Relation",
+        "description": "관계의 속성과 근거를 고친다. **양끝과 종류는 못 바꾼다** — 그건 다른 관계다.",
+        "operationId": "update_relation_api_objects__type_slug___object_id__relations__relation_id__patch",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          },
+          {
+            "name": "relation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Relation Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelationPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelatedObjectOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Remove Relation",
+        "description": "관계를 끊는다.\n\n**엣지는 진짜로 지운다.** 객체와 달리 관계는 그 자체로 기록이 아니라 두 기록\n사이의 말이고, 끊긴 관계를 남겨 두면 「지금 이어져 있나」 를 묻는 모든 질의가\n그 상태를 걸러야 한다. 대신 **감사 로그에 남는다.**",
+        "operationId": "remove_relation_api_objects__type_slug___object_id__relations__relation_id__delete",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          },
+          {
+            "name": "relation_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Relation Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/server/status": {
       "get": {
         "tags": [
@@ -4673,6 +4863,13 @@
             "type": "array",
             "title": "Attachments"
           },
+          "related": {
+            "items": {
+              "$ref": "#/components/schemas/RelatedObjectOut"
+            },
+            "type": "array",
+            "title": "Related"
+          },
           "can_edit": {
             "type": "boolean",
             "title": "Can Edit"
@@ -4684,6 +4881,7 @@
           "type_label",
           "properties_schema",
           "attachments",
+          "related",
           "can_edit"
         ],
         "title": "ObjectProfileOut",
@@ -5720,6 +5918,147 @@
           "note"
         ],
         "title": "RejectRequest"
+      },
+      "RelatedObjectOut": {
+        "properties": {
+          "relation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Relation Id"
+          },
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "outgoing": {
+            "type": "boolean",
+            "title": "Outgoing"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "object_label": {
+            "type": "string",
+            "title": "Object Label"
+          },
+          "object_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Key"
+          },
+          "object_type_slug": {
+            "type": "string",
+            "title": "Object Type Slug"
+          },
+          "object_type_label": {
+            "type": "string",
+            "title": "Object Type Label"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          },
+          "evidence_note": {
+            "type": "string",
+            "title": "Evidence Note"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relation_id",
+          "relation",
+          "label",
+          "outgoing",
+          "object_id",
+          "object_label",
+          "object_key",
+          "object_type_slug",
+          "object_type_label",
+          "properties",
+          "evidence_note",
+          "created_at"
+        ],
+        "title": "RelatedObjectOut",
+        "description": "「관련 객체」 한 줄.\n\n**방향을 함께 준다.** 어느 쪽으로 읽느냐에 따라 말이 달라지는데(속함 <-> 포함),\n화면이 그것을 스스로 알 방법이 없다."
+      },
+      "RelationCreateRequest": {
+        "properties": {
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "dst_object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Dst Object Id"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          },
+          "evidence_note": {
+            "type": "string",
+            "maxLength": 500,
+            "title": "Evidence Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "relation",
+          "dst_object_id"
+        ],
+        "title": "RelationCreateRequest"
+      },
+      "RelationPatchRequest": {
+        "properties": {
+          "properties": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Properties"
+          },
+          "evidence_note": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Evidence Note"
+          }
+        },
+        "type": "object",
+        "title": "RelationPatchRequest",
+        "description": "**보낸 것만 바꾼다.** 양끝과 종류는 못 바꾼다 — 그건 다른 관계다."
       },
       "RelationTypeOut": {
         "properties": {

@@ -862,3 +862,232 @@ def test_속성_묶음과_이름_틀_칸이_저장된다(client: TestClient, adm
         f"/api/ontology/types/{part}", json={"label": "부품2"}, headers=admin.headers
     ).json()
     assert again["title_template"] == "{model} {size}"
+
+
+# --- 관계 맺기 (2-b) ---------------------------------------------------------
+
+
+def _link(
+    client: TestClient,
+    who: Signed,
+    type_slug: str,
+    src: str,
+    relation: str,
+    dst: str,
+    **kw: Any,
+) -> Any:
+    return client.post(
+        f"/api/objects/{type_slug}/{src}/relations",
+        json={"relation": relation, "dst_object_id": dst, **kw},
+        headers=who.headers,
+    )
+
+
+def test_관계를_맺으면_양쪽_모두에서_보인다(client: TestClient, admin: Signed) -> None:
+    """**「이것이 가리키는 것」 만 주면 「이것을 가리키는 것」 을 물을 자리가
+    없어진다** — 부품에서 그 부품을 쓰는 어셈블리를 못 보면 지워도 되는지 모른다."""
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(
+        client,
+        admin,
+        "part_of",
+        label="속함",
+        inverse_label="포함",
+        transitive=True,
+        acyclic=True,
+    )
+    parent = _make_object(client, admin, part, label="구동부")
+    child = _make_object(client, admin, part, label="모터")
+
+    made = _link(
+        client, admin, part, child["id"], kind, parent["id"], evidence_note="BOM 기준"
+    )
+    assert made.status_code == 201, made.text
+    assert made.json()["label"] == "속함"
+    assert made.json()["outgoing"] is True
+
+    # 부모 쪽에서는 역방향 말로 읽힌다.
+    up = client.get(f"/api/objects/{part}/{parent['id']}", headers=admin.headers).json()
+    seen = up["related"][0]
+    assert seen["label"] == "포함"
+    assert seen["outgoing"] is False
+    assert seen["object_label"] == "모터"
+    assert seen["evidence_note"] == "BOM 기준"
+
+
+def test_역방향_이름이_없으면_그렇다고_말한다(client: TestClient, admin: Signed) -> None:
+    """빈 칸으로 두면 그 줄이 무슨 관계인지 알 방법이 없다."""
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(client, admin, "tested", label="시험함")
+    one = _make_object(client, admin, part, label="A")
+    two = _make_object(client, admin, part, label="B")
+    _link(client, admin, part, one["id"], kind, two["id"])
+
+    down = client.get(f"/api/objects/{part}/{two['id']}", headers=admin.headers).json()
+    assert down["related"][0]["label"] == "시험함의 반대"
+
+
+def test_허용_타입이_아니면_거절한다(client: TestClient, admin: Signed) -> None:
+    """**말이 안 되는 관계가 남으면 그 데이터로는 아무것도 못 믿는다.**"""
+    part = _make_type(client, admin, "part", label="부품")
+    vendor = _make_type(client, admin, "vendor", label="공급사")
+    kind = _make_relation(
+        client,
+        admin,
+        "supplied_by",
+        label="공급받음",
+        src_type_slugs=[part],
+        dst_type_slugs=[vendor],
+    )
+    one = _make_object(client, admin, part, label="볼트")
+    two = _make_object(client, admin, part, label="너트")
+
+    denied = _link(client, admin, part, one["id"], kind, two["id"])
+    assert denied.status_code == 409
+    assert "공급사" in denied.json()["error"]["message"]
+
+
+def test_개수_제약을_지킨다(client: TestClient, admin: Signed) -> None:
+    """**없으면 「한 부품의 공급사는 하나」 가 조용히 여럿이 된다.**"""
+    part = _make_type(client, admin, "part", label="부품")
+    vendor = _make_type(client, admin, "vendor", label="공급사")
+    kind = _make_relation(
+        client,
+        admin,
+        "supplied_by",
+        label="공급받음",
+        cardinality="many_to_one",
+        src_type_slugs=[part],
+        dst_type_slugs=[vendor],
+    )
+    bolt = _make_object(client, admin, part, label="볼트")
+    first = _make_object(client, admin, vendor, label="한빛")
+    second = _make_object(client, admin, vendor, label="대성")
+
+    assert _link(client, admin, part, bolt["id"], kind, first["id"]).status_code == 201
+    twice = _link(client, admin, part, bolt["id"], kind, second["id"])
+    assert twice.status_code == 409
+    assert "하나만" in twice.json()["error"]["message"]
+
+
+def test_순환을_막는다(client: TestClient, admin: Signed) -> None:
+    """**자기 조상을 자식으로 넣는 순간 트리가 무한히 돈다** — 그 상태는 화면이
+    멈추는 것으로만 드러난다."""
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(
+        client, admin, "part_of", label="속함", transitive=True, acyclic=True
+    )
+    a = _make_object(client, admin, part, label="A")
+    b = _make_object(client, admin, part, label="B")
+    c = _make_object(client, admin, part, label="C")
+
+    assert _link(client, admin, part, a["id"], kind, b["id"]).status_code == 201
+    assert _link(client, admin, part, b["id"], kind, c["id"]).status_code == 201
+
+    # C -> A 를 이으면 A -> B -> C -> A 로 돈다.
+    looped = _link(client, admin, part, c["id"], kind, a["id"])
+    assert looped.status_code == 409
+    assert "순환" in looped.json()["error"]["message"]
+
+    myself = _link(client, admin, part, a["id"], kind, a["id"])
+    assert myself.status_code == 409
+
+
+def test_같은_관계를_두_번_안_맺는다(client: TestClient, admin: Signed) -> None:
+    """막지 않으면 「관련 객체」 에 같은 줄이 둘 서고, 사람은 그것을 데이터가
+    이상한 것으로 읽는다."""
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(client, admin, "near", label="가까움")
+    one = _make_object(client, admin, part, label="A")
+    two = _make_object(client, admin, part, label="B")
+
+    assert _link(client, admin, part, one["id"], kind, two["id"]).status_code == 201
+    assert _link(client, admin, part, one["id"], kind, two["id"]).status_code == 409
+
+
+def test_출발점을_고칠_수_있어야_맺는다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """도착점은 **볼 수만 있으면** 된다.
+
+    양쪽 다 고칠 수 있어야 한다고 하면 부서를 가로지르는 연결을 아무도 못 만들고,
+    그러면 **연결하려고 만든 것이 칸막이가 된다.** 대신 맺은 사람과 근거가 남는다.
+    """
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(client, admin, "near", label="가까움")
+    mine = _make_object(client, manager, part, label="내 것")
+    global_one = client.post(
+        f"/api/objects/{part}", json={"label": "전역"}, headers=admin.headers
+    ).json()
+
+    # 전역 객체는 시스템 관리자만 고친다 — 출발점으로는 못 쓴다.
+    denied = _link(client, manager, part, global_one["id"], kind, mine["id"])
+    assert denied.status_code == 403
+
+    # 내 부서 것을 출발점으로 하면 전역을 가리킬 수 있다.
+    allowed = _link(client, manager, part, mine["id"], kind, global_one["id"])
+    assert allowed.status_code == 201, allowed.text
+
+
+def test_관계_속성과_근거를_고치고_끊는다(client: TestClient, admin: Signed) -> None:
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(client, admin, "near", label="가까움")
+    one = _make_object(client, admin, part, label="A")
+    two = _make_object(client, admin, part, label="B")
+    made = _link(client, admin, part, one["id"], kind, two["id"]).json()
+
+    patched = client.patch(
+        f"/api/objects/{part}/{one['id']}/relations/{made['relation_id']}",
+        json={"evidence_note": "도면 확인"},
+        headers=admin.headers,
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["evidence_note"] == "도면 확인"
+
+    cut = client.delete(
+        f"/api/objects/{part}/{one['id']}/relations/{made['relation_id']}",
+        headers=admin.headers,
+    )
+    assert cut.status_code == 204
+    profile = client.get(f"/api/objects/{part}/{one['id']}", headers=admin.headers).json()
+    assert profile["related"] == []
+
+
+def test_남의_관계는_내_화면에서_못_끊는다(client: TestClient, admin: Signed) -> None:
+    """아니면 남의 관계를 남의 화면에서 끊을 수 있게 된다."""
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(client, admin, "near", label="가까움")
+    one = _make_object(client, admin, part, label="A")
+    two = _make_object(client, admin, part, label="B")
+    outsider = _make_object(client, admin, part, label="상관없는 것")
+    made = _link(client, admin, part, one["id"], kind, two["id"]).json()
+
+    denied = client.delete(
+        f"/api/objects/{part}/{outsider['id']}/relations/{made['relation_id']}",
+        headers=admin.headers,
+    )
+    assert denied.status_code == 404
+
+
+def test_안_쓰는_관계_종류로는_못_맺는다(client: TestClient, admin: Signed) -> None:
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(client, admin, "old", label="옛것", is_active=False)
+    one = _make_object(client, admin, part, label="A")
+    two = _make_object(client, admin, part, label="B")
+
+    denied = _link(client, admin, part, one["id"], kind, two["id"])
+    assert denied.status_code == 409
+
+
+def test_맺힌_관계가_있는_종류는_못_지운다(client: TestClient, admin: Signed) -> None:
+    """엣지는 slug 를 문자열로 들고 있다(FK 가 없다). 종류를 지우면 그 관계들은
+    **이름 없는 엣지**로 남고, 화면은 slug 를 그대로 보여 줄 수밖에 없다."""
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(client, admin, "near", label="가까움")
+    one = _make_object(client, admin, part, label="A")
+    two = _make_object(client, admin, part, label="B")
+    _link(client, admin, part, one["id"], kind, two["id"])
+
+    denied = client.delete(f"/api/ontology/relation-types/{kind}", headers=admin.headers)
+    assert denied.status_code == 409
+    assert "1개" in denied.json()["error"]["message"]

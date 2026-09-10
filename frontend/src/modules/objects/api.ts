@@ -29,11 +29,30 @@ export interface AttachmentBrief {
   created_at: string
 }
 
+export interface RelatedObject {
+  relation_id: string
+  relation: string
+  /** 이 줄에 적을 말 — **방향에 맞는 쪽**(정방향이면 label, 역방향이면 inverse_label). */
+  label: string
+  /** 내가 출발점인가. 거짓이면 저쪽이 나를 가리킨다. */
+  outgoing: boolean
+  object_id: string
+  object_label: string
+  object_key: string | null
+  object_type_slug: string
+  object_type_label: string
+  properties: Record<string, unknown>
+  evidence_note: string
+  created_at: string
+}
+
 export interface ObjectProfile {
   object: ObjectRow
   type_label: string
   properties_schema: PropertyDef[]
   attachments: AttachmentBrief[]
+  /** 이 객체에 걸린 관계들. **양방향 다 온다.** */
+  related: RelatedObject[]
   /** **서버가 판정한 것이다.** 화면이 스스로 정하면 화면마다 단추가 달라진다. */
   can_edit: boolean
 }
@@ -68,4 +87,15 @@ export const objectApi = {
   update: (typeSlug: string, id: string, body: Record<string, unknown>) =>
     api.patch<ObjectRow>(`/objects/${typeSlug}/${id}`, body),
   remove: (typeSlug: string, id: string) => api.delete<void>(`/objects/${typeSlug}/${id}`),
+
+  addRelation: (typeSlug: string, id: string, body: Record<string, unknown>) =>
+    api.post<RelatedObject>(`/objects/${typeSlug}/${id}/relations`, body),
+  updateRelation: (
+    typeSlug: string,
+    id: string,
+    relationId: string,
+    body: Record<string, unknown>,
+  ) => api.patch<RelatedObject>(`/objects/${typeSlug}/${id}/relations/${relationId}`, body),
+  removeRelation: (typeSlug: string, id: string, relationId: string) =>
+    api.delete<void>(`/objects/${typeSlug}/${id}/relations/${relationId}`),
 }

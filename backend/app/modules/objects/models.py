@@ -29,6 +29,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -36,6 +37,7 @@ from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.modules.ontology.models import SLUG_MAX
 
 #: 객체의 상태.
 #:   active      picker 와 목록에 나온다
@@ -126,3 +128,58 @@ class ObjectInstance(Base):
         DateTime(timezone=True), nullable=True, index=True
     )
     """지우지 않는다. 이 객체를 가리키는 관계와 첨부가 밖에 남아 있다."""
+
+
+class ObjectRelation(Base):
+    """객체와 객체를 잇는 엣지 하나.
+
+    **관계 종류(`relation_types`)에 FK 를 걸지 않는다.** 종류의 추가·삭제가
+    마이그레이션이 아니라 설정 변경이어야 하기 때문이다 — 도메인을 데이터로
+    정의한다는 이 설계의 전제가 그것이다. 정합은 서비스 레이어가 지킨다.
+    """
+
+    __tablename__ = "object_relations"
+    __table_args__ = (
+        # 같은 것을 두 번 맺지 않는다. **막지 않으면 「관련 객체」 에 같은 줄이
+        # 둘 서고, 사람은 그것을 데이터가 이상한 것으로 읽는다.**
+        UniqueConstraint(
+            "src_object_id", "dst_object_id", "relation", name="uq_object_relations_edge"
+        ),
+        # 양방향으로 훑는다 — 「이것이 가리키는 것」 과 「이것을 가리키는 것」.
+        Index("ix_object_relations_src", "src_object_id", "relation"),
+        Index("ix_object_relations_dst", "dst_object_id", "relation"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    src_object_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE"), index=True
+    )
+    dst_object_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE"), index=True
+    )
+    """**CASCADE 다.** 객체는 `deleted_at` 으로만 지우므로 이 길로 사라지는 일은
+    거의 없다. 정말 행을 지우는 날(초기화·정리)에는 엣지가 남아 **가리키는 것이
+    없는 관계**가 되는데, 그것은 화면에서 빈 줄로만 드러난다."""
+
+    relation: Mapped[str] = mapped_column(String(SLUG_MAX), index=True)
+    """관계 종류의 slug. 그 종류가 지워져도 이 값은 남는다 — 그래서 종류를 지울 때
+    맺힌 관계가 있으면 막는다."""
+
+    properties: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default="{}"
+    )
+    """관계 자체의 속성. `property_defs.owner_kind='relation'` 이 모양을 정한다 —
+    **타입의 속성 폼과 같은 컴포넌트를 쓴다.**"""
+
+    evidence_note: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    """**왜 이렇게 이었는가.** 근거 없는 연결은 시간이 지나면 아무도 못 믿는다 —
+    맞는지 확인하려면 처음부터 다시 조사해야 하기 때문이다."""
+
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

@@ -19,7 +19,7 @@ from app.modules.auth.models import PersonalAccessToken, RefreshToken
 from app.modules.files.models import Attachment
 from app.modules.notices.models import Notice, NoticeRead
 from app.modules.notifications.models import Notification
-from app.modules.objects.models import ObjectInstance
+from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.ontology.models import (
     NavGroup,
     ObjectType,
@@ -38,6 +38,7 @@ __all__ = [
     "NoticeRead",
     "Notification",
     "ObjectInstance",
+    "ObjectRelation",
     "ObjectType",
     "PersonalAccessToken",
     "PropertyDef",

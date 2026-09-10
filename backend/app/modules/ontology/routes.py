@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
-from app.modules.objects.models import ObjectInstance
+from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.ontology.models import (
     CARDINALITIES,
     DATA_TYPES,
@@ -570,13 +570,26 @@ def delete_relation_type(
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> None:
-    """관계 종류를 지운다.
+    """관계 종류를 지운다 — **맺힌 관계가 하나도 없을 때만.**
 
-    맺힌 관계가 있으면 **2-b 에서** 막는다(그 표가 아직 없다). 지금은 정의만
-    지운다 — 속성 정의도 함께 지운다. 안 지우면 같은 slug 로 다시 만들 때
-    **옛 속성이 되살아난다.**
+    엣지는 이 slug 를 문자열로 들고 있다(FK 가 없다 — 종류의 추가·삭제가
+    설정 변경이어야 하기 때문이다). 종류를 지우면 그 관계들은 **이름 없는 엣지**
+    로 남고, 화면은 그 줄에 slug 를 그대로 보여 줄 수밖에 없다.
+
+    비어 있으면 지운다. **속성 정의도 함께** — 안 지우면 같은 slug 로 다시 만들 때
+    옛 속성이 되살아난다.
     """
     row = _relation_type(db, slug)
+    edges = db.scalar(
+        select(func.count()).select_from(ObjectRelation).where(ObjectRelation.relation == slug)
+    )
+    if edges:
+        raise Conflict(
+            code("ONTOLOGY", 44),
+            f"{row.label}으로 맺힌 관계가 {edges}개 있어 지울 수 없습니다. "
+            "그만 쓰려는 것이면 「사용함」 을 끄세요 — 맺힌 것은 남고 새로 맺지만 못합니다.",
+            details={"relation_count": int(edges)},
+        )
     _audit(
         db,
         user,

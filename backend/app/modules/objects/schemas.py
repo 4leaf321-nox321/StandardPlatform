@@ -75,6 +75,46 @@ class AttachmentBrief(BaseModel):
     created_at: datetime
 
 
+class RelatedObjectOut(BaseModel):
+    """「관련 객체」 한 줄.
+
+    **방향을 함께 준다.** 어느 쪽으로 읽느냐에 따라 말이 달라지는데(속함 <-> 포함),
+    화면이 그것을 스스로 알 방법이 없다.
+    """
+
+    relation_id: uuid.UUID
+    relation: str
+    """관계 종류의 slug."""
+    label: str
+    """이 줄에 적을 말. 방향에 맞는 쪽(정방향이면 label, 역방향이면 inverse_label)."""
+    outgoing: bool
+    """내가 출발점인가. 거짓이면 저쪽이 나를 가리킨다."""
+
+    object_id: uuid.UUID
+    object_label: str
+    object_key: str | None
+    object_type_slug: str
+    object_type_label: str
+
+    properties: dict[str, Any]
+    evidence_note: str
+    created_at: datetime
+
+
+class RelationCreateRequest(BaseModel):
+    relation: str
+    dst_object_id: uuid.UUID
+    properties: dict[str, Any] = Field(default_factory=dict)
+    evidence_note: str = Field(default="", max_length=500)
+
+
+class RelationPatchRequest(BaseModel):
+    """**보낸 것만 바꾼다.** 양끝과 종류는 못 바꾼다 — 그건 다른 관계다."""
+
+    properties: dict[str, Any] | None = None
+    evidence_note: str | None = Field(default=None, max_length=500)
+
+
 class ObjectProfileOut(BaseModel):
     """객체 하나에 착지하면 **연결된 것이 모인다.**
 
@@ -86,6 +126,10 @@ class ObjectProfileOut(BaseModel):
     type_label: str
     properties_schema: list[PropertyDefOut]
     attachments: list[AttachmentBrief]
+    related: list[RelatedObjectOut]
+    """이 객체에 걸린 관계들. **양방향 다 온다** — 「이것이 가리키는 것」 만 주면
+    「이것을 가리키는 것」 을 물을 자리가 없어진다."""
+
     can_edit: bool
     """**서버가 판정한 것을 화면에 알려 준다.** 화면이 스스로 정하면 어떤 화면은
     단추를 보이고 어떤 화면은 안 보이는 상태가 되고, 그 차이는 설명할 수 없다."""

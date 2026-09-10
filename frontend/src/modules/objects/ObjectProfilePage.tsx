@@ -9,6 +9,8 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { Pencil, Trash2 } from 'lucide-react'
 
 import { AttachmentList } from '@/modules/files/AttachmentList'
+import { ontologyApi } from '@/modules/ontology/api'
+import { RelatedObjects } from '@/modules/objects/RelatedObjects'
 import type { PropertyDef } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
 import { PropertyFields, propertyText } from '@/modules/objects/PropertyFields'
@@ -29,6 +31,9 @@ export default function ObjectProfilePage() {
   const { typeSlug = '', objectId = '' } = useParams()
   const navigate = useNavigate()
   const profile = useResource(() => objectApi.profile(typeSlug, objectId), [typeSlug, objectId])
+  // 관계 종류는 스키마에서 온다 — **어떤 관계를 맺을 수 있는지 화면이 알아야
+  // 고를 것을 걸러 줄 수 있다.**
+  const schema = useResource(() => ontologyApi.schema(), [])
 
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState('')
@@ -159,6 +164,17 @@ export default function ObjectProfilePage() {
           />
         )}
       </section>
+
+      <RelatedObjects
+        typeSlug={typeSlug}
+        objectId={objectId}
+        objectLabel={row.label}
+        objectTypeSlug={row.type_slug}
+        related={profile.data.related}
+        relationTypes={schema.data?.relation_types ?? []}
+        canEdit={profile.data.can_edit}
+        onChanged={profile.reload}
+      />
 
       {/* **속성이 둘이면 첨부 목록도 둘이다.** 안 가르면 「도면」 칸에
           「시험성적서」 가 섞여 보이고, 그 목록은 무엇도 말해 주지 못한다. */}

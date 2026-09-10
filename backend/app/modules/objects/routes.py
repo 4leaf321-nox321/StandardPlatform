@@ -17,13 +17,17 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.files.models import Attachment
-from app.modules.objects.models import OBJECT_STATUSES, ObjectInstance
+from app.modules.objects import relations as rel
+from app.modules.objects.models import OBJECT_STATUSES, ObjectInstance, ObjectRelation
 from app.modules.objects.schemas import (
     AttachmentBrief,
     ObjectCreateRequest,
     ObjectOut,
     ObjectPatchRequest,
     ObjectProfileOut,
+    RelatedObjectOut,
+    RelationCreateRequest,
+    RelationPatchRequest,
 )
 from app.modules.objects.services import (
     apply_property_filters,
@@ -35,7 +39,7 @@ from app.modules.objects.services import (
     require_key_free,
     require_refs_exist,
 )
-from app.modules.ontology.models import ObjectType, PropertyDef
+from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.schemas import PropertyDefOut
 from app.modules.ontology.services import (
     merge_properties,
@@ -45,7 +49,7 @@ from app.modules.ontology.services import (
 from app.modules.workspaces.models import Workspace
 from app.shared import audit
 from app.shared.auth import current_user
-from app.shared.errors import Forbidden, NotFound, code
+from app.shared.errors import Conflict, Forbidden, NotFound, code
 from app.shared.pagination import Page, clamp_limit
 from app.shared.permissions import (
     require_owner_edit,
@@ -235,6 +239,7 @@ def object_profile(
         type_label=object_type.label,
         properties_schema=[PropertyDefOut.model_validate(p) for p in defs],
         attachments=[AttachmentBrief.model_validate(a) for a in attachments],
+        related=_related(db, user, row),
         can_edit=_can_edit(db, user, row),
     )
 
@@ -388,3 +393,254 @@ def delete_object(
         workspace_id=row.owner_workspace_id,
     )
     db.commit()
+
+
+# --- 관련 객체 --------------------------------------------------------------
+
+
+def _related(db: Session, user: User, row: ObjectInstance) -> list[RelatedObjectOut]:
+    """이 객체에 걸린 관계들 — **양방향 다.**
+
+    「이것이 가리키는 것」 만 주면 「이것을 가리키는 것」 을 물을 자리가 없어진다.
+    부품에서 그 부품을 쓰는 어셈블리를 못 보면, 그 부품을 지워도 되는지 알 수 없다.
+
+    **볼 수 있는 것만 준다.** 저쪽 끝이 남의 부서 것이면 그 줄은 안 나온다 —
+    없는 것과 안 보이는 것을 같은 말로 답하는 이 틀의 규칙 그대로다.
+    """
+    edges = list(
+        db.scalars(
+            select(ObjectRelation)
+            .where(
+                (ObjectRelation.src_object_id == row.id)
+                | (ObjectRelation.dst_object_id == row.id)
+            )
+            .order_by(ObjectRelation.created_at)
+        )
+    )
+    if not edges:
+        return []
+
+    other_ids = {
+        (edge.dst_object_id if edge.src_object_id == row.id else edge.src_object_id)
+        for edge in edges
+    }
+    others = {
+        one.id: one
+        for one in db.scalars(
+            select(ObjectInstance).where(
+                ObjectInstance.id.in_(other_ids),
+                ObjectInstance.deleted_at.is_(None),
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+            )
+        )
+    }
+    kinds = {one.slug: one for one in db.scalars(select(RelationType))}
+    types = {one.id: one for one in db.scalars(select(ObjectType))}
+
+    out: list[RelatedObjectOut] = []
+    for edge in edges:
+        outgoing = edge.src_object_id == row.id
+        other = others.get(edge.dst_object_id if outgoing else edge.src_object_id)
+        if other is None:
+            continue
+        kind = kinds.get(edge.relation)
+        object_type = types.get(other.type_id)
+
+        # **방향에 맞는 말을 고른다.** 없으면 slug 를 보여 준다 — 빈 칸으로 두면
+        # 그 줄이 무슨 관계인지 알 방법이 없다.
+        if kind is None:
+            label = edge.relation
+        elif outgoing or not kind.directed:
+            label = kind.label
+        else:
+            label = kind.inverse_label or f"{kind.label}의 반대"
+
+        out.append(
+            RelatedObjectOut(
+                relation_id=edge.id,
+                relation=edge.relation,
+                label=label,
+                outgoing=outgoing,
+                object_id=other.id,
+                object_label=other.label,
+                object_key=other.key,
+                object_type_slug=object_type.slug if object_type else "",
+                object_type_label=object_type.label if object_type else "알 수 없음",
+                properties=edge.properties or {},
+                evidence_note=edge.evidence_note,
+                created_at=edge.created_at,
+            )
+        )
+    return out
+
+
+@router.post(
+    "/{type_slug}/{object_id}/relations", response_model=RelatedObjectOut, status_code=201
+)
+def add_relation(
+    type_slug: str,
+    object_id: uuid.UUID,
+    payload: RelationCreateRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RelatedObjectOut:
+    """관계를 맺는다 — **출발점을 고칠 수 있는 사람만.**
+
+    도착점은 볼 수만 있으면 된다. 양쪽 다 고칠 수 있어야 한다고 하면 부서를
+    가로지르는 연결을 아무도 못 만들고, 그러면 **연결하려고 만든 것이 칸막이가
+    된다.** 대신 맺은 사람과 근거가 남는다.
+    """
+    object_type = _type(db, type_slug)
+    src = _visible(db, user, object_type, object_id)
+    require_owner_edit(
+        db, user, src.owner_workspace_id, what="객체", code_value=code("OBJECTS", 27)
+    )
+
+    dst = db.scalar(
+        select(ObjectInstance).where(
+            ObjectInstance.id == payload.dst_object_id,
+            ObjectInstance.deleted_at.is_(None),
+            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+        )
+    )
+    if dst is None:
+        raise NotFound(code("OBJECTS", 28), "이을 객체를 찾을 수 없습니다.")
+
+    kind = rel.relation_type(db, payload.relation)
+    rel.require_endpoints_allowed(db, kind, src, dst)
+    rel.require_cardinality(db, kind, src.id, dst.id)
+    rel.require_no_cycle(db, kind, src.id, dst.id)
+
+    existing = db.scalar(
+        select(ObjectRelation).where(
+            ObjectRelation.src_object_id == src.id,
+            ObjectRelation.dst_object_id == dst.id,
+            ObjectRelation.relation == kind.slug,
+        )
+    )
+    if existing is not None:
+        raise Conflict(code("OBJECTS", 29), "이미 이어져 있습니다.")
+
+    # 관계 종류가 정한 속성 모양대로 검증한다 — **타입의 속성과 같은 규칙**이다.
+    defs = list(
+        db.scalars(
+            select(PropertyDef).where(
+                PropertyDef.owner_kind == "relation", PropertyDef.owner_id == kind.id
+            )
+        )
+    )
+    properties = validate_properties(defs, payload.properties)
+
+    edge = ObjectRelation(
+        src_object_id=src.id,
+        dst_object_id=dst.id,
+        relation=kind.slug,
+        properties=properties,
+        evidence_note=payload.evidence_note,
+        created_by_id=user.id,
+    )
+    db.add(edge)
+    db.flush()
+    audit.record(
+        db,
+        action="object.relation.add",
+        actor=user,
+        target_table="object_relations",
+        target_id=edge.id,
+        target_label=f"{src.label} -{kind.slug}-> {dst.label}",
+        workspace_id=src.owner_workspace_id,
+    )
+    db.commit()
+
+    found = [one for one in _related(db, user, src) if one.relation_id == edge.id]
+    return found[0]
+
+
+@router.patch(
+    "/{type_slug}/{object_id}/relations/{relation_id}", response_model=RelatedObjectOut
+)
+def update_relation(
+    type_slug: str,
+    object_id: uuid.UUID,
+    relation_id: uuid.UUID,
+    payload: RelationPatchRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RelatedObjectOut:
+    """관계의 속성과 근거를 고친다. **양끝과 종류는 못 바꾼다** — 그건 다른 관계다."""
+    object_type = _type(db, type_slug)
+    row = _visible(db, user, object_type, object_id)
+    require_owner_edit(
+        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 30)
+    )
+    edge = _edge(db, relation_id, row)
+
+    if payload.evidence_note is not None:
+        edge.evidence_note = payload.evidence_note
+    if payload.properties is not None:
+        kind = rel.relation_type(db, edge.relation)
+        defs = list(
+            db.scalars(
+                select(PropertyDef).where(
+                    PropertyDef.owner_kind == "relation", PropertyDef.owner_id == kind.id
+                )
+            )
+        )
+        merged = merge_properties(edge.properties or {}, payload.properties)
+        edge.properties = validate_properties(defs, merged)
+
+    audit.record(
+        db,
+        action="object.relation.update",
+        actor=user,
+        target_table="object_relations",
+        target_id=edge.id,
+        target_label=f"{row.label} · {edge.relation}",
+        workspace_id=row.owner_workspace_id,
+    )
+    db.commit()
+    found = [one for one in _related(db, user, row) if one.relation_id == edge.id]
+    return found[0]
+
+
+@router.delete("/{type_slug}/{object_id}/relations/{relation_id}", status_code=204)
+def remove_relation(
+    type_slug: str,
+    object_id: uuid.UUID,
+    relation_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    """관계를 끊는다.
+
+    **엣지는 진짜로 지운다.** 객체와 달리 관계는 그 자체로 기록이 아니라 두 기록
+    사이의 말이고, 끊긴 관계를 남겨 두면 「지금 이어져 있나」 를 묻는 모든 질의가
+    그 상태를 걸러야 한다. 대신 **감사 로그에 남는다.**
+    """
+    object_type = _type(db, type_slug)
+    row = _visible(db, user, object_type, object_id)
+    require_owner_edit(
+        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 31)
+    )
+    edge = _edge(db, relation_id, row)
+
+    audit.record(
+        db,
+        action="object.relation.remove",
+        actor=user,
+        target_table="object_relations",
+        target_id=edge.id,
+        target_label=f"{row.label} · {edge.relation}",
+        workspace_id=row.owner_workspace_id,
+    )
+    db.delete(edge)
+    db.commit()
+
+
+def _edge(db: Session, relation_id: uuid.UUID, row: ObjectInstance) -> ObjectRelation:
+    """그 관계가 **이 객체에 걸린 것인가.** 아니면 남의 관계를 남의 화면에서
+    끊을 수 있게 된다."""
+    edge = db.get(ObjectRelation, relation_id)
+    if edge is None or row.id not in (edge.src_object_id, edge.dst_object_id):
+        raise NotFound(code("OBJECTS", 32), "관계를 찾을 수 없습니다.")
+    return edge
