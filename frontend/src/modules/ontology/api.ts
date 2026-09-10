@@ -22,6 +22,8 @@ export interface PropertyDef {
   multi: boolean
   enum_options: string[] | null
   ref_type_slug: string | null
+  /** 속성 묶음. 폼과 상세가 함께 쓴다(3단계). */
+  section: string
   sort_order: number
 }
 
@@ -48,8 +50,32 @@ export interface ObjectType {
   key_scope: 'global' | 'workspace'
   temporal_kind: 'evergreen' | 'lifecycle' | 'yearly' | 'derived'
   list_view: ListView
+  /** 3단계에서 쓴다. 지금은 칸만 있다. */
+  form_view: Record<string, unknown>
+  detail_view: Record<string, unknown>
+  title_template: string
   is_active: boolean
   object_count: number
+}
+
+export type Cardinality = 'one_to_one' | 'one_to_many' | 'many_to_one' | 'many_to_many'
+
+export interface RelationType {
+  id: string
+  slug: string
+  label: string
+  /** 역방향의 말. `part_of` <-> 「포함」. 없으면 도착 쪽 화면이 말을 못 만든다. */
+  inverse_label: string
+  description: string
+  directed: boolean
+  /** **재귀 펼침 대상인가.** 트리와 롤업이 이것으로 갈린다. */
+  transitive: boolean
+  acyclic: boolean
+  cardinality: Cardinality
+  src_type_slugs: string[] | null
+  dst_type_slugs: string[] | null
+  sort_order: number
+  is_active: boolean
 }
 
 export interface NavGroupRow {
@@ -74,6 +100,7 @@ export interface NavGroupNode {
 export interface OntologySchema {
   groups: NavGroupRow[]
   types: (ObjectType & { properties: PropertyDef[] })[]
+  relation_types: RelationType[]
   data_types: DataType[]
   generated_at: string
 }
@@ -102,6 +129,14 @@ export const ontologyApi = {
   updateType: (slug: string, body: Record<string, unknown>) =>
     api.patch<ObjectType>(`/ontology/types/${slug}`, body),
   removeType: (slug: string) => api.delete<void>(`/ontology/types/${slug}`),
+
+  relationTypes: () => api.get<RelationType[]>('/ontology/relation-types'),
+  createRelationType: (body: Record<string, unknown>) =>
+    api.post<RelationType>('/ontology/relation-types', body),
+  /** **보낸 것만 바뀐다.** 허용 타입을 풀려면 `null` 을 명시한다. */
+  updateRelationType: (slug: string, body: Record<string, unknown>) =>
+    api.patch<RelationType>(`/ontology/relation-types/${slug}`, body),
+  removeRelationType: (slug: string) => api.delete<void>(`/ontology/relation-types/${slug}`),
 
   properties: (slug: string) => api.get<PropertyDef[]>(`/ontology/types/${slug}/properties`),
   createProperty: (slug: string, body: Record<string, unknown>) =>

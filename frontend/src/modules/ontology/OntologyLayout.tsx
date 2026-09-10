@@ -12,7 +12,7 @@
 
 import { useState } from 'react'
 import { NavLink, Outlet, useOutletContext } from 'react-router-dom'
-import { Boxes, LayoutList } from 'lucide-react'
+import { Boxes, LayoutList, Share2 } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import type { OntologySchema } from '@/modules/ontology/api'
@@ -45,6 +45,14 @@ const SECTIONS = [
     label: '타입',
     icon: LayoutList,
     count: (schema: OntologySchema | null) => schema?.types.length,
+  },
+  {
+    // 타입 다음이다 — **관계는 타입과 타입을 잇는다.** 이을 것이 없으면 먼저
+    // 만들 것이 타입이다.
+    to: 'relations',
+    label: '관계 종류',
+    icon: Share2,
+    count: (schema: OntologySchema | null) => schema?.relation_types.length,
   },
 ]
 

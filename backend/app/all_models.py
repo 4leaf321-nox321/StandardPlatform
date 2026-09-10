@@ -20,7 +20,12 @@ from app.modules.files.models import Attachment
 from app.modules.notices.models import Notice, NoticeRead
 from app.modules.notifications.models import Notification
 from app.modules.objects.models import ObjectInstance
-from app.modules.ontology.models import NavGroup, ObjectType, PropertyDef
+from app.modules.ontology.models import (
+    NavGroup,
+    ObjectType,
+    PropertyDef,
+    RelationType,
+)
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 
 __all__ = [
@@ -37,6 +42,7 @@ __all__ = [
     "PersonalAccessToken",
     "PropertyDef",
     "RefreshToken",
+    "RelationType",
     "User",
     "Workspace",
     "WorkspaceMember",

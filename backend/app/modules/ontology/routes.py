@@ -17,6 +17,7 @@ from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology.models import (
+    CARDINALITIES,
     DATA_TYPES,
     ENTRY_POLICIES,
     KEY_POLICIES,
@@ -27,6 +28,7 @@ from app.modules.ontology.models import (
     NavGroup,
     ObjectType,
     PropertyDef,
+    RelationType,
 )
 from app.modules.ontology.schemas import (
     NavGroupNode,
@@ -41,6 +43,9 @@ from app.modules.ontology.schemas import (
     PropertyDefOut,
     PropertyDefWriteRequest,
     PropertyUsage,
+    RelationTypeOut,
+    RelationTypePatchRequest,
+    RelationTypeWriteRequest,
 )
 from app.modules.ontology.services import (
     require_choice,
@@ -113,6 +118,9 @@ def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectType
         key_scope=row.key_scope,
         temporal_kind=row.temporal_kind,
         list_view=row.list_view or {},
+        form_view=row.form_view or {},
+        detail_view=row.detail_view or {},
+        title_template=row.title_template,
         is_active=row.is_active,
         object_count=count,
     )
@@ -237,6 +245,9 @@ def create_type(
         key_scope=payload.key_scope,
         temporal_kind=payload.temporal_kind,
         list_view=payload.list_view,
+        form_view=payload.form_view,
+        detail_view=payload.detail_view,
+        title_template=payload.title_template,
         is_active=payload.is_active,
     )
     db.add(row)
@@ -293,6 +304,12 @@ def update_type(
         row.sort_order = payload.sort_order
     if "list_view" in sent and payload.list_view is not None:
         row.list_view = payload.list_view
+    if "form_view" in sent and payload.form_view is not None:
+        row.form_view = payload.form_view
+    if "detail_view" in sent and payload.detail_view is not None:
+        row.detail_view = payload.detail_view
+    if "title_template" in sent and payload.title_template is not None:
+        row.title_template = payload.title_template
     if "is_active" in sent and payload.is_active is not None:
         row.is_active = payload.is_active
 
@@ -404,6 +421,177 @@ def delete_group(
     db.commit()
 
 
+# --- 관계 종류 --------------------------------------------------------------
+
+
+def _relation_types(db: Session) -> list[RelationType]:
+    return list(
+        db.scalars(select(RelationType).order_by(RelationType.sort_order, RelationType.label))
+    )
+
+
+def _relation_type(db: Session, slug: str) -> RelationType:
+    row = db.scalar(select(RelationType).where(RelationType.slug == slug))
+    if row is None:
+        raise NotFound(code("ONTOLOGY", 40), f"관계 종류를 찾을 수 없습니다: {slug}")
+    return row
+
+
+def _check_type_slugs(db: Session, slugs: list[str] | None, *, what: str) -> None:
+    """허용 타입이 **실재하는 타입인가.**
+
+    없는 slug 를 넣어 두면 그 관계는 아무것도 못 맺는데, 화면은 「고를 것이
+    없습니다」 라고만 말한다 — 오타인지 데이터가 없는 것인지 구별되지 않는다.
+    """
+    if not slugs:
+        return
+    known = {row.slug for row in db.scalars(select(ObjectType))}
+    missing = sorted(set(slugs) - known)
+    if missing:
+        raise NotFound(
+            code("ONTOLOGY", 41), f"{what}에 없는 타입이 있습니다: {', '.join(missing)}"
+        )
+
+
+def _check_relation_shape(payload: RelationTypeWriteRequest) -> None:
+    require_choice(payload.cardinality, CARDINALITIES, what="개수 제약")
+    # **이행적인데 순환을 허용하면 트리 렌더가 무한히 돈다.** 재귀 펼침이 자기
+    # 자신으로 돌아오기 때문이다 — 그 상태는 화면이 멈추는 것으로만 드러난다.
+    if payload.transitive and not payload.acyclic:
+        raise Conflict(
+            code("ONTOLOGY", 42),
+            "재귀로 펼치는 관계는 순환을 막아야 합니다. "
+            "안 그러면 자기 조상을 자식으로 넣는 순간 트리가 무한히 돕니다.",
+        )
+
+
+@router.get("/relation-types", response_model=list[RelationTypeOut])
+def list_relation_types(
+    _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[RelationType]:
+    return _relation_types(db)
+
+
+@router.post("/relation-types", response_model=RelationTypeOut, status_code=201)
+def create_relation_type(
+    payload: RelationTypeWriteRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> RelationType:
+    slug = require_slug(payload.slug, what="관계 slug")
+    _check_relation_shape(payload)
+    _check_type_slugs(db, payload.src_type_slugs, what="출발 타입")
+    _check_type_slugs(db, payload.dst_type_slugs, what="도착 타입")
+    if db.scalar(select(RelationType).where(RelationType.slug == slug)) is not None:
+        raise Conflict(code("ONTOLOGY", 43), f"이미 있는 관계 종류입니다: {slug}")
+
+    row = RelationType(
+        slug=slug,
+        label=payload.label,
+        inverse_label=payload.inverse_label,
+        description=payload.description,
+        directed=payload.directed,
+        transitive=payload.transitive,
+        acyclic=payload.acyclic,
+        cardinality=payload.cardinality,
+        src_type_slugs=payload.src_type_slugs,
+        dst_type_slugs=payload.dst_type_slugs,
+        sort_order=payload.sort_order,
+        is_active=payload.is_active,
+    )
+    db.add(row)
+    db.flush()
+    _audit(
+        db,
+        user,
+        action="ontology.relation_type.create",
+        table="relation_types",
+        row_id=row.id,
+        label=slug,
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.patch("/relation-types/{slug}", response_model=RelationTypeOut)
+def update_relation_type(
+    slug: str,
+    payload: RelationTypePatchRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> RelationType:
+    """**보낸 것만 바꾼다.** slug 는 안 바꾼다 — 이미 맺힌 관계가 그 값을
+    문자열로 들고 있어서, 바꾸면 그 관계들이 통째로 고아가 된다."""
+    row = _relation_type(db, slug)
+    sent = payload.model_fields_set
+
+    if "cardinality" in sent and payload.cardinality is not None:
+        row.cardinality = require_choice(payload.cardinality, CARDINALITIES, what="개수 제약")
+    for field in ("label", "inverse_label", "description", "sort_order"):
+        value = getattr(payload, field)
+        if field in sent and value is not None:
+            setattr(row, field, value)
+    for flag in ("directed", "transitive", "acyclic", "is_active"):
+        value = getattr(payload, flag)
+        if flag in sent and value is not None:
+            setattr(row, flag, value)
+
+    # **`null` 을 명시하면 제약을 푼다.** 안 보내면 그대로 둔다.
+    for field, what in (("src_type_slugs", "출발 타입"), ("dst_type_slugs", "도착 타입")):
+        if field in sent:
+            value = getattr(payload, field)
+            _check_type_slugs(db, value, what=what)
+            setattr(row, field, value)
+
+    if row.transitive and not row.acyclic:
+        raise Conflict(
+            code("ONTOLOGY", 42),
+            "재귀로 펼치는 관계는 순환을 막아야 합니다. "
+            "안 그러면 자기 조상을 자식으로 넣는 순간 트리가 무한히 돕니다.",
+        )
+
+    _audit(
+        db,
+        user,
+        action="ontology.relation_type.update",
+        table="relation_types",
+        row_id=row.id,
+        label=slug,
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.delete("/relation-types/{slug}", status_code=204)
+def delete_relation_type(
+    slug: str,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    """관계 종류를 지운다.
+
+    맺힌 관계가 있으면 **2-b 에서** 막는다(그 표가 아직 없다). 지금은 정의만
+    지운다 — 속성 정의도 함께 지운다. 안 지우면 같은 slug 로 다시 만들 때
+    **옛 속성이 되살아난다.**
+    """
+    row = _relation_type(db, slug)
+    _audit(
+        db,
+        user,
+        action="ontology.relation_type.delete",
+        table="relation_types",
+        row_id=row.id,
+        label=slug,
+    )
+    db.query(PropertyDef).filter(
+        PropertyDef.owner_kind == "relation", PropertyDef.owner_id == row.id
+    ).delete(synchronize_session=False)
+    db.delete(row)
+    db.commit()
+
+
 # --- 속성 정의 --------------------------------------------------------------
 
 
@@ -459,6 +647,7 @@ def create_property(
         multi=payload.multi,
         enum_options=payload.enum_options,
         ref_type_slug=payload.ref_type_slug,
+        section=payload.section,
         sort_order=payload.sort_order,
     )
     db.add(row)
@@ -505,6 +694,7 @@ def update_property(
     row.multi = payload.multi
     row.enum_options = payload.enum_options
     row.ref_type_slug = payload.ref_type_slug
+    row.section = payload.section
     row.sort_order = payload.sort_order
     _audit(
         db,
@@ -623,6 +813,7 @@ def ontology_schema(
     return OntologySchemaOut(
         groups=[NavGroupOut.model_validate(g) for g in groups],
         types=types,
+        relation_types=[RelationTypeOut.model_validate(r) for r in _relation_types(db)],
         data_types=list(DATA_TYPES),
         generated_at=datetime.now(UTC),
     )

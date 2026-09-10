@@ -728,3 +728,137 @@ def test_목록_화면_설정을_저장한다(client: TestClient, admin: Signed)
         _make_object(client, admin, part, label=label, properties={"grade": grade})
     listed = client.get(f"/api/objects/{part}", headers=admin.headers).json()
     assert [row["label"] for row in listed["items"]] == ["너트", "볼트"]
+
+
+# --- 관계 종류 (2-a) ---------------------------------------------------------
+
+
+def _make_relation(client: TestClient, admin: Signed, base: str = "part_of", **kw: Any) -> str:
+    slug = kw.pop("slug", None) or _uniq(base)
+    body = {"slug": slug, "label": kw.pop("label", base), **kw}
+    response = client.post("/api/ontology/relation-types", json=body, headers=admin.headers)
+    assert response.status_code == 201, response.text
+    return str(response.json()["slug"])
+
+
+def test_관계_종류는_시스템_관리자만_만든다(
+    client: TestClient, admin: Signed, member: Signed
+) -> None:
+    slug = _uniq("supplied_by")
+    denied = client.post(
+        "/api/ontology/relation-types",
+        json={"slug": slug, "label": "공급"},
+        headers=member.headers,
+    )
+    assert denied.status_code == 403
+    assert _make_relation(client, admin, slug=slug, label="공급") == slug
+
+
+def test_이행적인데_순환을_허용하면_거절한다(client: TestClient, admin: Signed) -> None:
+    """**재귀 펼침이 자기 자신으로 돌아오면 트리가 무한히 돈다** — 그 상태는
+    화면이 멈추는 것으로만 드러난다."""
+    response = client.post(
+        "/api/ontology/relation-types",
+        json={"slug": _uniq("bad"), "label": "나쁨", "transitive": True, "acyclic": False},
+        headers=admin.headers,
+    )
+    assert response.status_code == 409
+    assert "무한히" in response.json()["error"]["message"]
+
+
+def test_개수_제약을_고른다(client: TestClient, admin: Signed) -> None:
+    """**없으면 「한 부품의 공급사는 하나」 를 표현할 방법이 없다.**"""
+    slug = _make_relation(
+        client, admin, "supplied_by", label="공급", cardinality="many_to_one"
+    )
+    found = next(
+        row
+        for row in client.get("/api/ontology/relation-types", headers=admin.headers).json()
+        if row["slug"] == slug
+    )
+    assert found["cardinality"] == "many_to_one"
+
+    bad = client.post(
+        "/api/ontology/relation-types",
+        json={"slug": _uniq("x"), "label": "x", "cardinality": "one_to_three"},
+        headers=admin.headers,
+    )
+    assert bad.status_code == 422
+
+
+def test_허용_타입은_실재해야_한다(client: TestClient, admin: Signed) -> None:
+    """없는 slug 를 넣어 두면 그 관계는 아무것도 못 맺는데, 화면은 「고를 것이
+    없습니다」 라고만 말한다 — **오타인지 데이터가 없는 것인지 구별되지 않는다.**"""
+    part = _make_type(client, admin, label="부품")
+    ok = _make_relation(client, admin, "made_of", label="재질", src_type_slugs=[part])
+    assert ok
+
+    bad = client.post(
+        "/api/ontology/relation-types",
+        json={"slug": _uniq("y"), "label": "y", "dst_type_slugs": ["없는타입"]},
+        headers=admin.headers,
+    )
+    assert bad.status_code == 404
+
+
+def test_허용_타입은_null_로_풀고_안_보내면_그대로다(
+    client: TestClient, admin: Signed
+) -> None:
+    part = _make_type(client, admin, label="부품")
+    slug = _make_relation(client, admin, "used_in", label="쓰임", src_type_slugs=[part])
+
+    kept = client.patch(
+        f"/api/ontology/relation-types/{slug}", json={"label": "쓰임2"}, headers=admin.headers
+    ).json()
+    assert kept["src_type_slugs"] == [part]
+
+    cleared = client.patch(
+        f"/api/ontology/relation-types/{slug}",
+        json={"src_type_slugs": None},
+        headers=admin.headers,
+    ).json()
+    assert cleared["src_type_slugs"] is None
+
+
+def test_스키마가_관계_종류도_돌려준다(
+    client: TestClient, admin: Signed, member: Signed
+) -> None:
+    """**MCP 가 이 하나를 읽는다.** 관계가 빠지면 기계는 엮는 법을 모른다."""
+    slug = _make_relation(client, admin, "caused_by", label="원인", inverse_label="일으킴")
+    schema = client.get("/api/ontology/schema", headers=member.headers).json()
+    found = next(row for row in schema["relation_types"] if row["slug"] == slug)
+    assert found["inverse_label"] == "일으킴"
+
+
+def test_관계_종류를_지운다(client: TestClient, admin: Signed) -> None:
+    slug = _make_relation(client, admin, "tested", label="시험")
+    assert (
+        client.delete(
+            f"/api/ontology/relation-types/{slug}", headers=admin.headers
+        ).status_code
+        == 204
+    )
+    remaining = client.get("/api/ontology/relation-types", headers=admin.headers).json()
+    assert all(row["slug"] != slug for row in remaining)
+
+
+def test_속성_묶음과_이름_틀_칸이_저장된다(client: TestClient, admin: Signed) -> None:
+    """**동작은 3단계지만 칸은 지금 있다.** 나중에 넣으면 이미 정의된 속성 전부를
+    다시 분류해야 한다."""
+    part = _make_type(client, admin, label="부품")
+    prop = _make_property(
+        client, admin, part, key="width", label="폭", data_type="number", section="치수"
+    )
+    assert prop["section"] == "치수"
+
+    patched = client.patch(
+        f"/api/ontology/types/{part}",
+        json={"title_template": "{model} {size}"},
+        headers=admin.headers,
+    ).json()
+    assert patched["title_template"] == "{model} {size}"
+    # 다른 칸을 고쳐도 안 날아간다.
+    again = client.patch(
+        f"/api/ontology/types/{part}", json={"label": "부품2"}, headers=admin.headers
+    ).json()
+    assert again["title_template"] == "{model} {size}"

@@ -179,6 +179,24 @@ class ObjectType(Base):
     으로 떨어진다 — 빈 화면이 되지는 않는다.
     """
 
+    form_view: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """만들기·고치기 폼의 모양 — 섹션·순서·열 수·접힘.
+
+    **동작은 3단계지만 칸은 지금 둔다.** 속성이 40개인 타입에서 폼이 일렬로 서면
+    사람은 그 폼을 안 채운다. 비어 있으면 화면이 속성 순서대로 그린다."""
+
+    detail_view: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default="{}"
+    )
+    """객체 상세의 배치. **폼과 같은 `section` 을 쓴다** — 두 벌로 두면 갈리고,
+    갈린 것은 한쪽만 고쳐진다."""
+
+    title_template: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    """이름을 속성에서 조합한다 — `"{model} {size}"`.
+
+    기계가 객체를 대량으로 만들 때 `label` 을 매번 정하는 것보다 **타입이 규칙을
+    갖는 편이 낫다.** 비어 있으면 사람이 적은 `label` 을 그대로 쓴다."""
+
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
     created_at: Mapped[datetime] = mapped_column(
@@ -227,8 +245,84 @@ class PropertyDef(Base):
     ref_type_slug: Mapped[str | None] = mapped_column(String(SLUG_MAX), nullable=True)
     """`data_type='object_ref'` 일 때 가리키는 타입. NULL 이면 아무 타입이나."""
 
+    section: Mapped[str] = mapped_column(String(48), default="", server_default="")
+    """속성 묶음의 이름 — 「치수」·「재질」·「이력」. 폼과 상세가 **함께 쓴다.**
+
+    **동작은 3단계지만 칸은 지금 둔다.** 나중에 넣으면 이미 정의된 속성 전부를
+    다시 분류해야 하고, 그 일은 아무도 정확히 못 한다."""
+
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+#: 관계의 **개수 제약.** 한쪽 끝에 몇 개가 붙을 수 있는가.
+#:
+#:   one_to_one    둘 다 하나씩
+#:   one_to_many   출발 하나 -> 도착 여럿
+#:   many_to_one   출발 여럿 -> 도착 하나 (부품 -> 공급사)
+#:   many_to_many  제약 없음
+#:
+#: **없으면 「한 부품의 공급사는 하나」 를 표현할 방법이 없고**, 데이터가 조용히
+#: 여러 개를 갖는다. 나중에 넣으면 이미 어긴 데이터가 쌓여 있어 **켤 수가 없다** —
+#: 그래서 처음부터 둔다.
+CARDINALITIES = ("one_to_one", "one_to_many", "many_to_one", "many_to_many")
+
+
+class RelationType(Base):
+    """관계의 종류 — **엣지의 의미를 데이터로 정의한다.**
+
+    코드에 암묵이면 화면도 MCP 도 그 의미를 알 방법이 없다. ReportArchive 가
+    `p55` 에서 뒤늦게 깨달은 자리다: *「관계 타입의 의미가 코드에 암묵 — AI 가
+    스키마를 인지하거나 질의를 생성할 근거가 없음」*.
+    """
+
+    __tablename__ = "relation_types"
+    __table_args__ = (UniqueConstraint("slug", name="uq_relation_types_slug"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    slug: Mapped[str] = mapped_column(String(SLUG_MAX))
+    """**바뀌면 안 된다.** 이미 맺힌 관계가 이 값을 문자열로 들고 있다."""
+
+    label: Mapped[str] = mapped_column(String(64))
+    inverse_label: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    """역방향의 말. `part_of` <-> 「포함」. **화면이 양쪽에서 읽히게 하려면 필요하다** —
+    없으면 도착 쪽 객체의 「관련 객체」 에 「part_of 의 반대」 라고 적힐 수밖에 없다."""
+
+    description: Mapped[str] = mapped_column(Text, default="", server_default="")
+
+    directed: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    """방향이 있나. 없으면(`false`) 양쪽이 같은 말로 읽힌다(「비슷함」)."""
+
+    transitive: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    """**재귀 펼침 대상인가.** 트리와 롤업이 이것으로 갈린다 — `part_of` 는 참이고
+    「시험함」 은 거짓이다(시험의 시험은 시험이 아니다)."""
+
+    acyclic: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    """순환 금지. 참이면 맺을 때 가드가 붙는다 — **자기 조상을 자식으로 넣는 순간
+    트리 렌더가 무한히 돈다.**"""
+
+    cardinality: Mapped[str] = mapped_column(
+        String(20), default="many_to_many", server_default="many_to_many"
+    )
+
+    src_type_slugs: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    dst_type_slugs: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
+    """허용 출발/도착 타입. NULL 이면 제약 없음.
+
+    **없으면 「공급사를 시험함」 같은 말이 안 되는 관계가 남고**, 그 뒤로 그
+    데이터로는 아무것도 못 믿는다."""
+
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )

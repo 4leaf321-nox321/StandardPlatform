@@ -50,6 +50,7 @@ class PropertyDefOut(BaseModel):
     multi: bool
     enum_options: list[str] | None
     ref_type_slug: str | None
+    section: str
     sort_order: int
 
 
@@ -63,6 +64,7 @@ class PropertyDefWriteRequest(BaseModel):
     multi: bool = False
     enum_options: list[str] | None = None
     ref_type_slug: str | None = None
+    section: str = Field(default="", max_length=48)
     sort_order: int = 0
 
 
@@ -83,6 +85,9 @@ class ObjectTypeOut(BaseModel):
     key_scope: str
     temporal_kind: str
     list_view: dict[str, Any]
+    form_view: dict[str, Any]
+    detail_view: dict[str, Any]
+    title_template: str
     is_active: bool
     object_count: int
     """이 타입의 객체가 몇 개인가. **지우기 전에 무엇이 걸렸는지 알아야 한다** —
@@ -103,6 +108,9 @@ class ObjectTypeWriteRequest(BaseModel):
     key_scope: str = "global"
     temporal_kind: str = "evergreen"
     list_view: dict[str, Any] = Field(default_factory=dict)
+    form_view: dict[str, Any] = Field(default_factory=dict)
+    detail_view: dict[str, Any] = Field(default_factory=dict)
+    title_template: str = ""
     is_active: bool = True
 
 
@@ -127,6 +135,9 @@ class ObjectTypePatchRequest(BaseModel):
     key_scope: str | None = None
     temporal_kind: str | None = None
     list_view: dict[str, Any] | None = None
+    form_view: dict[str, Any] | None = None
+    detail_view: dict[str, Any] | None = None
+    title_template: str | None = None
     is_active: bool | None = None
 
 
@@ -136,6 +147,55 @@ class NavGroupPatchRequest(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=64)
     icon: str | None = Field(default=None, max_length=40)
     audience: str | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
+class RelationTypeOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    slug: str
+    label: str
+    inverse_label: str
+    description: str
+    directed: bool
+    transitive: bool
+    acyclic: bool
+    cardinality: str
+    src_type_slugs: list[str] | None
+    dst_type_slugs: list[str] | None
+    sort_order: int
+    is_active: bool
+
+
+class RelationTypeWriteRequest(BaseModel):
+    slug: str
+    label: str = Field(min_length=1, max_length=64)
+    inverse_label: str = Field(default="", max_length=64)
+    description: str = ""
+    directed: bool = True
+    transitive: bool = False
+    acyclic: bool = False
+    cardinality: str = "many_to_many"
+    src_type_slugs: list[str] | None = None
+    dst_type_slugs: list[str] | None = None
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class RelationTypePatchRequest(BaseModel):
+    """**보낸 것만 바꾼다.** 허용 타입을 비우려면 `null` 을 명시한다."""
+
+    label: str | None = Field(default=None, min_length=1, max_length=64)
+    inverse_label: str | None = Field(default=None, max_length=64)
+    description: str | None = None
+    directed: bool | None = None
+    transitive: bool | None = None
+    acyclic: bool | None = None
+    cardinality: str | None = None
+    src_type_slugs: list[str] | None = None
+    dst_type_slugs: list[str] | None = None
     sort_order: int | None = None
     is_active: bool | None = None
 
@@ -155,6 +215,7 @@ class OntologySchemaOut(BaseModel):
 
     groups: list[NavGroupOut]
     types: list[ObjectTypeSchema]
+    relation_types: list[RelationTypeOut]
     data_types: list[str]
     generated_at: datetime
 
