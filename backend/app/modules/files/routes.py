@@ -28,6 +28,7 @@ router = APIRouter(prefix="/attachments", tags=["files"])
 def upload(
     owner_table: str = Form(max_length=60),
     owner_id: uuid.UUID = Form(),
+    owner_field: str | None = Form(default=None, max_length=48),
     workspace_slug: str | None = Form(default=None),
     upload_file: UploadFile = File(alias="file"),
     user: User = Depends(current_user),
@@ -43,6 +44,7 @@ def upload(
         user=user,
         owner_table=owner_table,
         owner_id=owner_id,
+        owner_field=owner_field,
         workspace_slug=workspace_slug,
         filename=upload_file.filename or "이름없음",
         content_type=upload_file.content_type,
@@ -54,10 +56,14 @@ def upload(
 def list_attachments(
     owner_table: str,
     owner_id: uuid.UUID,
+    owner_field: str | None = None,
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[AttachmentOut]:
-    return services.list_for(db, user=user, owner_table=owner_table, owner_id=owner_id)
+    """그 자료의 첨부들. `owner_field` 를 주면 **그 자리의 것만** 나온다."""
+    return services.list_for(
+        db, user=user, owner_table=owner_table, owner_id=owner_id, owner_field=owner_field
+    )
 
 
 @router.get("/{attachment_id}/content", include_in_schema=False)

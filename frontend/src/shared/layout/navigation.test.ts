@@ -54,4 +54,43 @@ describe('사이드바', () => {
     expect(canSee(undefined, MEMBER)).toBe(true)
     expect(canSee('everyone', MEMBER)).toBe(true)
   })
+
+  it('정의가 만든 묶음이 홈 바로 아래 선다', () => {
+    // **동선이 곧 순서여야 한다.** 사람이 밟는 차례대로 놓으면 「다음에 어디로」
+    // 를 안 묻는다.
+    const groups = visibleGroups(ADMIN, [
+      {
+        slug: 'domain',
+        label: '도메인',
+        icon: '',
+        audience: 'everyone',
+        items: [{ label: '부품', icon: '', to: '/o/part', slug: 'part' }],
+      },
+    ])
+    expect(groups[1].title).toBe('도메인')
+    expect(groups[1].items[0].to).toBe('/o/part')
+  })
+
+  it('정의가 만든 묶음이 있으면 자리표시자를 감춘다', () => {
+    // 실제 도메인 화면 옆에 「(도메인 화면)」 stub 이 함께 서면, 그것을 눌러야
+    // 하는지 아닌지를 사람이 **매번** 판단하게 된다.
+    const before = visibleGroups(ADMIN)
+    expect(before.some((group) => group.items.some((item) => item.to === '/domain'))).toBe(true)
+
+    const after = visibleGroups(ADMIN, [
+      {
+        slug: 'domain',
+        label: '도메인',
+        icon: '',
+        audience: 'everyone',
+        items: [{ label: '부품', icon: '', to: '/o/part', slug: 'part' }],
+      },
+    ])
+    expect(after.some((group) => group.items.some((item) => item.to === '/domain'))).toBe(false)
+  })
+
+  it('정의가 없으면 정적 메뉴 그대로다', () => {
+    // **못 불러와도 사이드바는 선다.** 통째로 비면 나갈 길까지 사라진다.
+    expect(visibleGroups(ADMIN, [])).toEqual(visibleGroups(ADMIN))
+  })
 })

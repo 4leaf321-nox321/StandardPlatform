@@ -30,6 +30,9 @@ from app.modules.files import routes as files_routes
 from app.modules.files import services as files_services
 from app.modules.notices import routes as notices_routes
 from app.modules.notifications import routes as notifications_routes
+from app.modules.objects import routes as objects_routes
+from app.modules.objects import services as objects_services
+from app.modules.ontology import routes as ontology_routes
 from app.modules.server import routes as server_routes
 from app.modules.workspaces import routes as workspaces_routes
 from app.schema_version import warn_if_behind
@@ -60,6 +63,10 @@ def _api_router() -> APIRouter:
     router.include_router(notifications_routes.router)
     router.include_router(files_routes.router)
     router.include_router(audit_routes.router)
+    # 메타모델과 그 인스턴스. **도메인이 아니라 메커니즘이다**(ADR 0005) —
+    # 도메인은 여전히 이 저장소에 없고, 여기 정의로 얹힌다.
+    router.include_router(ontology_routes.router)
+    router.include_router(objects_routes.router)
     router.include_router(server_routes.router)
 
     # --- 여기에 도메인 라우터를 더한다 -----------------------------------
@@ -86,6 +93,9 @@ def _register_extensions() -> None:
     # **부서를 지울 때 첨부가 목록에 뜬다.** 안 걸면 사람은 아무것도 안 걸린 줄
     # 알고 지우려 하는데, FK 가 RESTRICT 라 서버가 500 을 낸다.
     extensions.register_workspace_reference(files_services.workspace_reference)
+    # **부서를 지울 때 그 부서 소유의 객체가 목록에 뜬다.** 안 걸면 사람은
+    # 아무것도 안 걸린 줄 알고 지우려 하는데, FK 가 RESTRICT 라 500 이 난다.
+    extensions.register_workspace_reference(objects_services.workspace_reference)
 
     # --- 여기에 도메인 확장을 더한다 ---------------------------------------
     #

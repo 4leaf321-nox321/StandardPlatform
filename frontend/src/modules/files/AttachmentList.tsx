@@ -27,6 +27,16 @@ import { shownDate } from '@/shared/lib/datetime'
 interface AttachmentListProps {
   ownerTable: string
   ownerId: string
+  /**
+   * 그 행의 **어느 자리**의 첨부인가. 안 주면 행 전체다.
+   *
+   * 온톨로지의 `file` 속성이 이것을 준다 — 속성이 둘이면 목록도 둘로 갈려야
+   * 한다. 안 가르면 「도면」 칸에 「시험성적서」 가 섞여 보이고, 그 목록은
+   * 무엇도 말해 주지 못한다.
+   */
+  ownerField?: string | null
+  /** 제목. 자리별로 나눠 쓸 때 무엇의 첨부인지 적는다. */
+  title?: string
   /** 어느 부서의 것인가. 비우면 전역 — **시스템 관리자만 붙일 수 있다.** */
   workspaceSlug?: string | null
   /** 고칠 수 있는 사람인가. 서버가 최종 판정을 한다 — 여기는 표시일 뿐이다. */
@@ -43,12 +53,14 @@ function shownSize(bytes: number): string {
 export function AttachmentList({
   ownerTable,
   ownerId,
+  ownerField,
+  title = '첨부',
   workspaceSlug,
   canEdit = false,
 }: AttachmentListProps) {
   const list = useResource(
-    () => attachmentApi.list(ownerTable, ownerId),
-    [ownerTable, ownerId],
+    () => attachmentApi.list(ownerTable, ownerId, ownerField),
+    [ownerTable, ownerId, ownerField],
   )
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [busy, setBusy] = useState(false)
@@ -74,7 +86,7 @@ export function AttachmentList({
       <div className="flex items-center justify-between gap-3">
         <h2 className="flex items-center gap-2 text-base font-semibold">
           <Paperclip className="size-4" />
-          첨부
+          {title}
           {rows.length > 0 && (
             <span className="text-muted-foreground text-sm font-normal tabular-nums">
               {rows.length}
@@ -98,6 +110,7 @@ export function AttachmentList({
                     attachmentApi.upload({
                       ownerTable,
                       ownerId,
+                      ownerField,
                       workspaceSlug: workspaceSlug ?? null,
                       file,
                     }),

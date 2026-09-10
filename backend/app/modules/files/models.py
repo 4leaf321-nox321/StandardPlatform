@@ -35,6 +35,14 @@ class Attachment(Base):
     """무슨 표에 붙었나. **외래키가 아니다** — 공통 틀은 도메인 표를 모른다."""
     owner_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), index=True)
 
+    owner_field: Mapped[str | None] = mapped_column(String(48), nullable=True, index=True)
+    """그 행의 **어느 자리**에 붙었나. NULL 이면 행 전체의 첨부다(기존 동작).
+
+    온톨로지의 `file` 속성이 이 칸을 쓴다 — 속성 키가 여기 들어간다. 대신
+    `properties` JSONB 에 첨부 id 를 넣는 길도 있었지만, 그러면 첨부를 지웠을 때
+    **JSONB 에 유령 id 가 남고 그것은 화면의 깨진 링크로만** 드러난다. 이 칸이면
+    목록을 거르기만 하면 되고 삭제가 저절로 반영된다."""
+
     workspace_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True),
         ForeignKey("workspaces.id", ondelete="RESTRICT"),

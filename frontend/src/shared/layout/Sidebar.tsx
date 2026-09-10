@@ -13,6 +13,7 @@ import { isAnyManager, isSystemAdmin } from '@/shared/auth/roles'
 import { APP_NAME, APP_TAGLINE } from '@/shared/branding'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/shared/components/ui/sheet'
 import { useResource } from '@/shared/hooks/useResource'
+import { ontologyApi } from '@/modules/ontology/api'
 import { itemHref, visibleGroups } from '@/shared/layout/navigation'
 import { cn } from '@/shared/lib/utils'
 
@@ -39,10 +40,17 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
 
   // **볼 수 있는 것만 보여 준다.** 눌러야 403 을 아는 메뉴는 "할 수 있는 일" 을
   // 알려 주지 못한다. 권한은 서버가 판정한다 — 여기는 표시일 뿐이다.
-  const groups = visibleGroups({
-    isSystemAdmin: isSystemAdmin(user),
-    isAnyManager: isAnyManager(user),
-  })
+  // **정의가 만든 화면.** 못 불러와도 정적 메뉴는 그대로 선다 — 사이드바가
+  // 통째로 비면 나갈 길까지 사라진다.
+  const dynamic = useResource(() => ontologyApi.nav(), [])
+
+  const groups = visibleGroups(
+    {
+      isSystemAdmin: isSystemAdmin(user),
+      isAnyManager: isAnyManager(user),
+    },
+    dynamic.data ?? [],
+  )
 
   return (
     <div className="flex h-full w-60 flex-col">

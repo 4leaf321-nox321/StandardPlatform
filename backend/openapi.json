@@ -1809,6 +1809,7 @@
           "files"
         ],
         "summary": "List Attachments",
+        "description": "그 자료의 첨부들. `owner_field` 를 주면 **그 자리의 것만** 나온다.",
         "operationId": "list_attachments_api_attachments_get",
         "parameters": [
           {
@@ -1828,6 +1829,22 @@
               "type": "string",
               "format": "uuid",
               "title": "Owner Id"
+            }
+          },
+          {
+            "name": "owner_field",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Owner Field"
             }
           }
         ],
@@ -2029,6 +2046,848 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/groups": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "List Groups",
+        "operationId": "list_groups_api_ontology_groups_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/NavGroupOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Groups Api Ontology Groups Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Create Group",
+        "operationId": "create_group_api_ontology_groups_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NavGroupWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NavGroupOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/groups/{slug}": {
+      "patch": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Update Group",
+        "operationId": "update_group_api_ontology_groups__slug__patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/NavGroupWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NavGroupOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "List Types",
+        "operationId": "list_types_api_ontology_types_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ObjectTypeOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Types Api Ontology Types Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Create Type",
+        "operationId": "create_type_api_ontology_types_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObjectTypeWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectTypeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}": {
+      "patch": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Update Type",
+        "operationId": "update_type_api_ontology_types__slug__patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObjectTypeWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectTypeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}/properties": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "List Properties",
+        "operationId": "list_properties_api_ontology_types__slug__properties_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PropertyDefOut"
+                  },
+                  "title": "Response List Properties Api Ontology Types  Slug  Properties Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Create Property",
+        "operationId": "create_property_api_ontology_types__slug__properties_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PropertyDefWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyDefOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}/properties/{key}": {
+      "patch": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Update Property",
+        "operationId": "update_property_api_ontology_types__slug__properties__key__patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PropertyDefWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyDefOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Delete Property",
+        "description": "정의를 지운다. **값은 JSONB 에 그대로 남는다.**\n\n값까지 훑어 지우면 되돌릴 방법이 없다. 남겨 두면 정의를 되살렸을 때 값이\n돌아온다 — 실수로 지우는 일이 실제로 있기 때문이다. 대신 화면이 몇 개가\n안 보이게 되는지(`/usage`) 먼저 말한다.",
+        "operationId": "delete_property_api_ontology_types__slug__properties__key__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}/properties/{key}/usage": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Property Usage",
+        "description": "**지우기 전에 무엇이 사라지는지.** 화면의 확인 창이 이것을 읽어 말한다.",
+        "operationId": "property_usage_api_ontology_types__slug__properties__key__usage_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyUsage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/schema": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Ontology Schema",
+        "description": "**자기 설명적 스키마 — MCP 의 입력.**\n\n이 하나를 읽으면 도구를 동적으로 만들 수 있다. 도메인마다 MCP 서버를 새로\n짜지 않아도 되는 이유가 이것이다.",
+        "operationId": "ontology_schema_api_ontology_schema_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OntologySchemaOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/nav": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Dynamic Nav",
+        "description": "동적 사이드바. **정적 메뉴를 대체하지 않고 그 아래 합류한다.**\n\n빈 묶음은 내보내지 않는다 — 제목은 「여기 여럿이 있다」 는 신호라서, 하나도\n없는데 달면 거짓말이 된다.",
+        "operationId": "dynamic_nav_api_ontology_nav_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/NavGroupNode"
+                  },
+                  "type": "array",
+                  "title": "Response Dynamic Nav Api Ontology Nav Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "List Objects",
+        "description": "이 타입의 인스턴스 목록.\n\n거르기는 `?p.<속성키>=<값>` 으로 온다. `list_view` 가 열·정렬·검색 자리를\n정하고, 안 정해 뒀으면 기본형으로 떨어진다 — **빈 화면이 되지는 않는다.**",
+        "operationId": "list_objects_api_objects__type_slug__get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이름·식별자·검색 속성",
+              "title": "Q"
+            },
+            "description": "이름·식별자·검색 속성"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_ObjectOut_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Create Object",
+        "operationId": "create_object_api_objects__type_slug__post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObjectCreateRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/{object_id}": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Object Profile",
+        "operationId": "object_profile_api_objects__type_slug___object_id__get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectProfileOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Update Object",
+        "operationId": "update_object_api_objects__type_slug___object_id__patch",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObjectPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Delete Object",
+        "description": "**지우지 않는다.** `deleted_at` 만 채운다 — 이 객체를 가리키는 관계와\n첨부가 밖에 남아 있고, 몇 년 뒤에도 그것이 무엇이었는지는 물어질 수 있다.",
+        "operationId": "delete_object_api_objects__type_slug___object_id__delete",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -2312,6 +3171,48 @@
         "type": "object",
         "title": "ApproveRequest"
       },
+      "AttachmentBrief": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "owner_field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Field"
+          },
+          "original_name": {
+            "type": "string",
+            "title": "Original Name"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "owner_field",
+          "original_name",
+          "size_bytes",
+          "created_at"
+        ],
+        "title": "AttachmentBrief"
+      },
       "AttachmentOut": {
         "properties": {
           "id": {
@@ -2327,6 +3228,17 @@
             "type": "string",
             "format": "uuid",
             "title": "Owner Id"
+          },
+          "owner_field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Field"
           },
           "original_name": {
             "type": "string",
@@ -2355,6 +3267,7 @@
           "id",
           "owner_table",
           "owner_id",
+          "owner_field",
           "original_name",
           "content_type",
           "size_bytes",
@@ -2549,6 +3462,18 @@
             "type": "string",
             "format": "uuid",
             "title": "Owner Id"
+          },
+          "owner_field": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 48
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Field"
           },
           "workspace_slug": {
             "anyOf": [
@@ -2852,6 +3777,131 @@
         ],
         "title": "MemberRoleRequest"
       },
+      "NavGroupNode": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "icon": {
+            "type": "string",
+            "title": "Icon"
+          },
+          "audience": {
+            "type": "string",
+            "title": "Audience"
+          },
+          "items": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "icon",
+          "audience",
+          "items"
+        ],
+        "title": "NavGroupNode",
+        "description": "동적 사이드바 한 묶음."
+      },
+      "NavGroupOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "icon": {
+            "type": "string",
+            "title": "Icon"
+          },
+          "audience": {
+            "type": "string",
+            "title": "Audience"
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "label",
+          "icon",
+          "audience",
+          "sort_order",
+          "is_active"
+        ],
+        "title": "NavGroupOut"
+      },
+      "NavGroupWriteRequest": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "icon": {
+            "type": "string",
+            "maxLength": 40,
+            "title": "Icon",
+            "default": ""
+          },
+          "audience": {
+            "type": "string",
+            "title": "Audience",
+            "default": "everyone"
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order",
+            "default": 0
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label"
+        ],
+        "title": "NavGroupWriteRequest"
+      },
       "NoticeOut": {
         "properties": {
           "id": {
@@ -3051,6 +4101,641 @@
         ],
         "title": "NotificationOut"
       },
+      "ObjectCreateRequest": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          },
+          "workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Slug"
+          },
+          "valid_from_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From Year"
+          },
+          "valid_to_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid To Year"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label"
+        ],
+        "title": "ObjectCreateRequest"
+      },
+      "ObjectOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "owner_workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Workspace Slug"
+          },
+          "valid_from_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From Year"
+          },
+          "valid_to_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid To Year"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type_slug",
+          "key",
+          "label",
+          "description",
+          "properties",
+          "status",
+          "owner_workspace_slug",
+          "valid_from_year",
+          "valid_to_year",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "ObjectOut"
+      },
+      "ObjectPatchRequest": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "properties": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Properties"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          },
+          "valid_from_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From Year"
+          },
+          "valid_to_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid To Year"
+          }
+        },
+        "type": "object",
+        "title": "ObjectPatchRequest",
+        "description": "**「안 보낸 것」 과 「비운 것」 을 구별한다.**\n\n안 보낸 필드는 그대로 둔다. `properties` 는 보낸 키만 병합하고, 값을\n지우려면 그 키에 `null` 을 명시한다 — 통째로 덮으면 이름 하나 바꿀 때마다\n다른 속성이 함께 날아가고 **그 손실은 저장한 사람 눈에 안 보인다.**"
+      },
+      "ObjectProfileOut": {
+        "properties": {
+          "object": {
+            "$ref": "#/components/schemas/ObjectOut"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "properties_schema": {
+            "items": {
+              "$ref": "#/components/schemas/PropertyDefOut"
+            },
+            "type": "array",
+            "title": "Properties Schema"
+          },
+          "attachments": {
+            "items": {
+              "$ref": "#/components/schemas/AttachmentBrief"
+            },
+            "type": "array",
+            "title": "Attachments"
+          },
+          "can_edit": {
+            "type": "boolean",
+            "title": "Can Edit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "object",
+          "type_label",
+          "properties_schema",
+          "attachments",
+          "can_edit"
+        ],
+        "title": "ObjectProfileOut",
+        "description": "객체 하나에 착지하면 **연결된 것이 모인다.**\n\n타입 정의를 함께 주는 이유: 화면이 폼을 그리려면 속성 정의가 필요한데, 따로\n받게 하면 두 번 왕복하고 그 사이에 정의가 바뀔 수 있다."
+      },
+      "ObjectTypeOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "icon": {
+            "type": "string",
+            "title": "Icon"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order"
+          },
+          "nav_group_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Group Id"
+          },
+          "nav_group_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Group Slug"
+          },
+          "kind_class": {
+            "type": "string",
+            "title": "Kind Class"
+          },
+          "entry_policy": {
+            "type": "string",
+            "title": "Entry Policy"
+          },
+          "key_policy": {
+            "type": "string",
+            "title": "Key Policy"
+          },
+          "key_scope": {
+            "type": "string",
+            "title": "Key Scope"
+          },
+          "temporal_kind": {
+            "type": "string",
+            "title": "Temporal Kind"
+          },
+          "list_view": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "List View"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "object_count": {
+            "type": "integer",
+            "title": "Object Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "label",
+          "icon",
+          "description",
+          "sort_order",
+          "nav_group_id",
+          "nav_group_slug",
+          "kind_class",
+          "entry_policy",
+          "key_policy",
+          "key_scope",
+          "temporal_kind",
+          "list_view",
+          "is_active",
+          "object_count"
+        ],
+        "title": "ObjectTypeOut"
+      },
+      "ObjectTypeSchema": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "icon": {
+            "type": "string",
+            "title": "Icon"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order"
+          },
+          "nav_group_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Group Id"
+          },
+          "nav_group_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Group Slug"
+          },
+          "kind_class": {
+            "type": "string",
+            "title": "Kind Class"
+          },
+          "entry_policy": {
+            "type": "string",
+            "title": "Entry Policy"
+          },
+          "key_policy": {
+            "type": "string",
+            "title": "Key Policy"
+          },
+          "key_scope": {
+            "type": "string",
+            "title": "Key Scope"
+          },
+          "temporal_kind": {
+            "type": "string",
+            "title": "Temporal Kind"
+          },
+          "list_view": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "List View"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "object_count": {
+            "type": "integer",
+            "title": "Object Count"
+          },
+          "properties": {
+            "items": {
+              "$ref": "#/components/schemas/PropertyDefOut"
+            },
+            "type": "array",
+            "title": "Properties"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "label",
+          "icon",
+          "description",
+          "sort_order",
+          "nav_group_id",
+          "nav_group_slug",
+          "kind_class",
+          "entry_policy",
+          "key_policy",
+          "key_scope",
+          "temporal_kind",
+          "list_view",
+          "is_active",
+          "object_count",
+          "properties"
+        ],
+        "title": "ObjectTypeSchema",
+        "description": "타입 하나 + 그 속성 정의 전부. 스키마 응답의 원소."
+      },
+      "ObjectTypeWriteRequest": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "icon": {
+            "type": "string",
+            "maxLength": 40,
+            "title": "Icon",
+            "default": ""
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order",
+            "default": 0
+          },
+          "nav_group_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Group Slug"
+          },
+          "kind_class": {
+            "type": "string",
+            "title": "Kind Class",
+            "default": "record"
+          },
+          "entry_policy": {
+            "type": "string",
+            "title": "Entry Policy",
+            "default": "open"
+          },
+          "key_policy": {
+            "type": "string",
+            "title": "Key Policy",
+            "default": "none"
+          },
+          "key_scope": {
+            "type": "string",
+            "title": "Key Scope",
+            "default": "global"
+          },
+          "temporal_kind": {
+            "type": "string",
+            "title": "Temporal Kind",
+            "default": "evergreen"
+          },
+          "list_view": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "List View"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active",
+            "default": true
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label"
+        ],
+        "title": "ObjectTypeWriteRequest"
+      },
+      "OntologySchemaOut": {
+        "properties": {
+          "groups": {
+            "items": {
+              "$ref": "#/components/schemas/NavGroupOut"
+            },
+            "type": "array",
+            "title": "Groups"
+          },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectTypeSchema"
+            },
+            "type": "array",
+            "title": "Types"
+          },
+          "data_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Data Types"
+          },
+          "generated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Generated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "groups",
+          "types",
+          "data_types",
+          "generated_at"
+        ],
+        "title": "OntologySchemaOut",
+        "description": "**자기 설명적 스키마** — MCP 의 입력.\n\n이 하나를 읽으면 도구를 동적으로 만들 수 있다. 도메인마다 MCP 서버를 새로\n짤 필요가 없는 이유가 이것이다."
+      },
       "Page_AccessLogOut_": {
         "properties": {
           "items": {
@@ -3112,6 +4797,37 @@
           "offset"
         ],
         "title": "Page[AuditEntryOut]"
+      },
+      "Page_ObjectOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "Page[ObjectOut]"
       },
       "PatCreateRequest": {
         "properties": {
@@ -3257,6 +4973,199 @@
         ],
         "title": "ProfileUpdateRequest",
         "description": "자기 정보 수정.\n\n**표시 이름만 바꾼다.** 아이디(email)는 로그인 식별자라 본인이 바꾸면 감사\n로그·알림이 가리키는 대상이 흔들린다 — 그것은 관리자의 일로 남긴다."
+      },
+      "PropertyDefOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "owner_kind": {
+            "type": "string",
+            "title": "Owner Kind"
+          },
+          "owner_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Owner Id"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "data_type": {
+            "type": "string",
+            "title": "Data Type"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit"
+          },
+          "help": {
+            "type": "string",
+            "title": "Help"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          },
+          "multi": {
+            "type": "boolean",
+            "title": "Multi"
+          },
+          "enum_options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enum Options"
+          },
+          "ref_type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type Slug"
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "owner_kind",
+          "owner_id",
+          "key",
+          "label",
+          "data_type",
+          "unit",
+          "help",
+          "required",
+          "multi",
+          "enum_options",
+          "ref_type_slug",
+          "sort_order"
+        ],
+        "title": "PropertyDefOut"
+      },
+      "PropertyDefWriteRequest": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "data_type": {
+            "type": "string",
+            "title": "Data Type"
+          },
+          "unit": {
+            "type": "string",
+            "maxLength": 24,
+            "title": "Unit",
+            "default": ""
+          },
+          "help": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Help",
+            "default": ""
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required",
+            "default": false
+          },
+          "multi": {
+            "type": "boolean",
+            "title": "Multi",
+            "default": false
+          },
+          "enum_options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enum Options"
+          },
+          "ref_type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type Slug"
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "data_type"
+        ],
+        "title": "PropertyDefWriteRequest"
+      },
+      "PropertyUsage": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "objects_with_value": {
+            "type": "integer",
+            "title": "Objects With Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "objects_with_value"
+        ],
+        "title": "PropertyUsage",
+        "description": "**지우기 전에 무엇이 사라지는지.**\n\n\"정말 삭제하시겠습니까\" 만 묻는 창은 아무도 안 읽고 예를 누른다 — 읽을 것이\n없어서다. 속성 하나를 지우면 그 값이 전부 사라지므로, 몇 개인지 말해 준다."
       },
       "RejectRequest": {
         "properties": {

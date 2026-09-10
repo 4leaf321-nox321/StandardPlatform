@@ -41,8 +41,16 @@ const WORKSPACE: Record<string, { label: string; tone: Tone }> = {
   archived: { label: '보관', tone: 'neutral' },
 }
 
+const OBJECT: Record<string, { label: string; tone: Tone }> = {
+  active: { label: '사용', tone: 'good' },
+  // **더 이상 쓰지 않음은 나쁨이 아니다.** picker 에서 숨을 뿐, 이미 걸린 값과
+  // 관계는 그대로 남는다 — 지운 것이 아니다.
+  deprecated: { label: '안 씀', tone: 'neutral' },
+}
+
 const TABLES = {
   account: ACCOUNT,
+  object: OBJECT,
   notice: NOTICE,
   workspace: WORKSPACE,
 } as const

@@ -30,6 +30,9 @@ const AccountsAdminPage = lazy(() => import('@/modules/accounts/AccountsAdminPag
 const AuditPage = lazy(() => import('@/modules/audit/AuditPage'))
 const MembersPage = lazy(() => import('@/modules/workspaces/MembersPage'))
 const NoticesPage = lazy(() => import('@/modules/notices/NoticesPage'))
+const ObjectListPage = lazy(() => import('@/modules/objects/ObjectListPage'))
+const ObjectProfilePage = lazy(() => import('@/modules/objects/ObjectProfilePage'))
+const OntologyAdminPage = lazy(() => import('@/modules/ontology/OntologyAdminPage'))
 const NotificationsPage = lazy(() => import('@/modules/notifications/NotificationsPage'))
 const ProfilePage = lazy(() => import('@/modules/auth/ProfilePage'))
 const ServerPage = lazy(() => import('@/modules/server/ServerPage'))
@@ -88,8 +91,14 @@ export const router = createBrowserRouter([
           { path: 'notices', element: <NoticesPage /> },
           { path: 'audit', element: <AuditPage /> },
 
+          // **정의가 만드는 화면.** 타입이 늘어도 라우트는 안 늘어난다 —
+          // `navigation.ts` 가 정적 화면의 정본이라는 규칙이 그대로 선다.
+          { path: 'o/:typeSlug', element: <ObjectListPage /> },
+          { path: 'o/:typeSlug/:objectId', element: <ObjectProfilePage /> },
+
           // 관리 (전사)
           { path: 'admin/accounts', element: <AccountsAdminPage /> },
+          { path: 'admin/ontology', element: <OntologyAdminPage /> },
           { path: 'admin/workspaces', element: <WorkspacesAdminPage /> },
           { path: 'admin/server', element: <ServerPage /> },
 

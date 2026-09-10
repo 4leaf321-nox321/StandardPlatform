@@ -19,6 +19,8 @@ from app.modules.auth.models import PersonalAccessToken, RefreshToken
 from app.modules.files.models import Attachment
 from app.modules.notices.models import Notice, NoticeRead
 from app.modules.notifications.models import Notification
+from app.modules.objects.models import ObjectInstance
+from app.modules.ontology.models import NavGroup, ObjectType, PropertyDef
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 
 __all__ = [
@@ -26,10 +28,14 @@ __all__ = [
     "Attachment",
     "AuditEntry",
     "Base",
+    "NavGroup",
     "Notice",
     "NoticeRead",
     "Notification",
+    "ObjectInstance",
+    "ObjectType",
     "PersonalAccessToken",
+    "PropertyDef",
     "RefreshToken",
     "User",
     "Workspace",

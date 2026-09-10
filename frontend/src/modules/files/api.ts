@@ -6,6 +6,8 @@ export interface Attachment {
   id: string
   owner_table: string
   owner_id: string
+  /** 그 행의 **어느 자리**에 붙었나. null 이면 행 전체의 첨부다. */
+  owner_field: string | null
   original_name: string
   content_type: string
   size_bytes: number
@@ -15,10 +17,12 @@ export interface Attachment {
 }
 
 export const attachmentApi = {
-  list: (ownerTable: string, ownerId: string) =>
-    api.get<Attachment[]>(
-      `/attachments?owner_table=${encodeURIComponent(ownerTable)}&owner_id=${ownerId}`,
-    ),
+  list: (ownerTable: string, ownerId: string, ownerField?: string | null) => {
+    const params = new URLSearchParams({ owner_table: ownerTable, owner_id: ownerId })
+    // **안 주는 것과 빈 값은 다르다.** 안 주면 전부, 주면 그 자리의 것만.
+    if (ownerField) params.set('owner_field', ownerField)
+    return api.get<Attachment[]>(`/attachments?${params.toString()}`)
+  },
 
   /**
    * 파일 하나를 붙인다.
@@ -31,17 +35,20 @@ export const attachmentApi = {
   upload: ({
     ownerTable,
     ownerId,
+    ownerField,
     workspaceSlug,
     file,
   }: {
     ownerTable: string
     ownerId: string
+    ownerField?: string | null
     workspaceSlug: string | null
     file: File
   }) => {
     const body = new FormData()
     body.append('owner_table', ownerTable)
     body.append('owner_id', ownerId)
+    if (ownerField) body.append('owner_field', ownerField)
     if (workspaceSlug) body.append('workspace_slug', workspaceSlug)
     body.append('file', file)
     return api.postForm<Attachment>('/attachments', body)

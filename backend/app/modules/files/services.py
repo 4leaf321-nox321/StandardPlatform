@@ -34,6 +34,7 @@ def _out(attachment: Attachment) -> AttachmentOut:
         id=attachment.id,
         owner_table=attachment.owner_table,
         owner_id=attachment.owner_id,
+        owner_field=attachment.owner_field,
         original_name=attachment.original_name,
         content_type=attachment.content_type,
         size_bytes=attachment.size_bytes,
@@ -56,6 +57,7 @@ def upload(
     user: User,
     owner_table: str,
     owner_id: uuid.UUID,
+    owner_field: str | None,
     workspace_slug: str | None,
     filename: str,
     content_type: str | None,
@@ -86,6 +88,7 @@ def upload(
     attachment = Attachment(
         owner_table=owner_table,
         owner_id=owner_id,
+        owner_field=owner_field,
         workspace_id=workspace_id,
         original_name=clean(filename)[:255] or "이름없음",
         content_type=(content_type or "application/octet-stream")[:120],
@@ -101,13 +104,24 @@ def upload(
 
 
 def list_for(
-    db: Session, *, user: User, owner_table: str, owner_id: uuid.UUID
+    db: Session,
+    *,
+    user: User,
+    owner_table: str,
+    owner_id: uuid.UUID,
+    owner_field: str | None = None,
 ) -> list[AttachmentOut]:
-    rows = db.scalars(
-        _visible(db, user)
-        .where(Attachment.owner_table == owner_table, Attachment.owner_id == owner_id)
-        .order_by(Attachment.created_at)
+    """그 자료의 첨부들.
+
+    `owner_field` 를 주면 **그 자리의 것만** 돌려준다. 안 주면 전부다 — 자리를
+    안 나눠 쓰던 기존 화면이 그대로 돈다.
+    """
+    stmt = _visible(db, user).where(
+        Attachment.owner_table == owner_table, Attachment.owner_id == owner_id
     )
+    if owner_field is not None:
+        stmt = stmt.where(Attachment.owner_field == owner_field)
+    rows = db.scalars(stmt.order_by(Attachment.created_at))
     return [_out(row) for row in rows]
 
 

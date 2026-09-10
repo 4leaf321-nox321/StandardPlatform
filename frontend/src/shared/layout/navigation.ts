@@ -14,6 +14,7 @@
 
 import {
   Bell,
+  Boxes,
   Building2,
   Home,
   LayoutGrid,
@@ -57,6 +58,15 @@ export interface NavItem {
   phase?: string
   /** 한 줄 설명. 개요 화면과 stub 화면이 같은 말을 하도록 여기 한 번만 적는다. */
   summary?: string
+}
+
+/** 서버가 주는 동적 묶음 (`modules/ontology/api` 의 NavGroupNode 와 짝). */
+export interface DynamicGroup {
+  slug: string
+  label: string
+  icon: string
+  audience: string
+  items: { label: string; icon: string; to: string; slug: string }[]
 }
 
 export interface NavGroup {
@@ -130,10 +140,50 @@ export const NAV_GROUPS: NavGroup[] = [
       // **전사 부서 목록이다.** 위 '내 부서' 와 헷갈리지 않게 이름을 가른다 —
       // 이쪽은 부서를 만들고 고치는 자리고, 저쪽은 내 부서의 일이다.
       { label: '부서 정보', icon: Building2, to: '/admin/workspaces', audience: 'system_admin' },
+      // **도메인을 정의하는 자리.** 타입을 만들면 위 묶음과 화면이 여기서 생긴다.
+      {
+        label: '온톨로지',
+        icon: Boxes,
+        to: '/admin/ontology',
+        audience: 'system_admin',
+      },
       { label: '서버', icon: Server, to: '/admin/server', audience: 'system_admin' },
     ],
   },
 ]
+
+/**
+ * 서버가 준 동적 묶음(`/api/ontology/nav`)을 정적 메뉴와 합친다.
+ *
+ * **정적 화면의 정본은 여전히 이 파일이다.** 동적 그룹은 그 아래 합류할 뿐이고,
+ * 라우트는 `/o/:typeSlug` 둘로 받으므로 `router.test.tsx` 의 어긋남 검사가
+ * 그대로 선다.
+ *
+ * 동적 묶음이 하나라도 있으면 **「도메인」 자리표시자를 감춘다** — 실제 도메인
+ * 화면 옆에 「(도메인 화면)」 stub 이 함께 서면, 그것을 눌러야 하는지 아닌지를
+ * 사람이 매번 판단하게 된다.
+ */
+export function mergeDynamic(groups: NavGroup[], dynamic: DynamicGroup[]): NavGroup[] {
+  if (dynamic.length === 0) return groups
+
+  const converted: NavGroup[] = dynamic.map((group) => ({
+    title: group.label,
+    audience: (group.audience as NavAudience) ?? 'everyone',
+    items: group.items.map((item) => ({
+      label: item.label,
+      // 아이콘 이름은 데이터에서 온다. **모르는 이름이면 기본으로 떨어진다** —
+      // 메뉴가 통째로 안 뜨는 것보다 낫다.
+      icon: LayoutGrid,
+      to: item.to,
+    })),
+  }))
+
+  const withoutPlaceholder = groups.filter(
+    (group) => !group.items.every((item) => item.pending && item.to === '/domain'),
+  )
+  // 홈 바로 아래에 세운다 — **동선이 곧 순서여야 한다.**
+  return [withoutPlaceholder[0], ...converted, ...withoutPlaceholder.slice(1)]
+}
 
 export function itemHref(item: NavItem, slug: string): string {
   return item.to ?? item.resolve?.(slug) ?? '/'
@@ -150,11 +200,14 @@ export function canSee(
 }
 
 /** 볼 수 있는 것만 남긴 메뉴. **빈 그룹은 제목까지 지운다.** */
-export function visibleGroups(viewer: {
-  isSystemAdmin: boolean
-  isAnyManager: boolean
-}): NavGroup[] {
-  return NAV_GROUPS.map((group) => ({
+export function visibleGroups(
+  viewer: {
+    isSystemAdmin: boolean
+    isAnyManager: boolean
+  },
+  dynamic: DynamicGroup[] = [],
+): NavGroup[] {
+  return mergeDynamic(NAV_GROUPS, dynamic).map((group) => ({
     ...group,
     items: group.items.filter((item) => canSee(item.audience, viewer)),
   })).filter((group) => canSee(group.audience, viewer) && group.items.length > 0)

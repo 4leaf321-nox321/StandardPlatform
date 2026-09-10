@@ -5,6 +5,8 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -15,6 +17,26 @@ from tests.api.conftest import Signed
 # --- 계정 --------------------------------------------------------------------
 
 
+def _all_accounts(client: TestClient, admin: Signed) -> list[dict[str, Any]]:
+    """계정을 **끝까지** 읽는다.
+
+    목록은 서버가 상한을 강제한다(기본 50). 첫 쪽만 읽고 「이게 전부」 로 여기면,
+    시험이 늘어 계정이 그 상한을 넘는 날 **조용히 틀린 것을 보게 된다** — 그리고
+    그 실패는 계정과 아무 상관 없어 보이는 시험에서 튀어나온다. 실측으로 그렇게
+    나왔다(온톨로지 시험을 더한 날).
+    """
+    out: list[dict[str, Any]] = []
+    offset = 0
+    while True:
+        page = client.get(
+            f"/api/accounts?limit=100&offset={offset}", headers=admin.headers
+        ).json()
+        out.extend(page)
+        if len(page) < 100:
+            return out
+        offset += 100
+
+
 def test_마지막_관리자는_정지할_수_없다(client: TestClient, admin: Signed) -> None:
     """잃으면 복구 경로가 **서버 콘솔뿐**이다. 그 상태는 실제로 일어나고, 일어난
     뒤에는 화면에서 할 수 있는 것이 하나도 없다.
@@ -23,7 +45,7 @@ def test_마지막_관리자는_정지할_수_없다(client: TestClient, admin: 
     앞선 시험들이 만든 관리자가 남아 있다 — 그것을 안 치우고 「마지막이니 막힐
     것」 을 기대하면, 이 시험은 관리자가 하나뿐일 때만 우연히 통과한다.
     """
-    accounts = client.get("/api/accounts", headers=admin.headers).json()
+    accounts = _all_accounts(client, admin)
     me = next(one for one in accounts if one["email"] == admin.email)
     others = [
         one
