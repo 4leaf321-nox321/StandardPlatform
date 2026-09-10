@@ -1,0 +1,74 @@
+"""서버 기동 — 개발에서도, 컨테이너 안에서도 이 파일 하나가 띄운다.
+
+    python run.py                      개발 (reload, 포트 +1)
+    APP_ENV=production python run.py   운영 (다중 워커)
+
+**같은 진입점을 쓰는 이유**: SIF 의 `%runscript` 가 이것을 부른다. 개발과 운영이
+다른 경로로 뜨면 "개발에서는 되는데 배포하면 안 되는" 차이가 그 틈에 쌓인다.
+
+## 개발은 포트를 +1 한다
+
+운영과 같은 포트를 쓰면 개발 백엔드를 내린 순간 프론트 프록시가 **같은 기계의
+운영 설치본**에 그대로 붙는다. 서버가 죽은 것도 코드가 틀린 것도 아니어서 볼 곳이
+없다. 그래서 운영이 N, 개발이 N+1 이다.
+
+## reload 와 다중 워커는 같이 못 쓴다
+
+uvicorn 이 둘을 함께 받으면 한쪽을 조용히 버린다. 여기서 갈라서 준다.
+"""
+
+from __future__ import annotations
+
+import socket
+
+import uvicorn
+
+from app.config import get_settings
+
+
+def _answering(host: str, port: int) -> bool:
+    """그 포트에 이미 응답하는 것이 있나.
+
+    **바인딩을 시도해 보는 것으로는 부족하다.** `SO_REUSEADDR` 때문에 TIME_WAIT
+    소켓 위에도 바인딩이 성공한다. 실제로 붙어 본다.
+    """
+    target = "127.0.0.1" if host in ("0.0.0.0", "") else host
+    with socket.socket() as probe:
+        probe.settimeout(0.3)
+        return probe.connect_ex((target, port)) == 0
+
+
+def main() -> None:
+    settings = get_settings()
+    development = settings.app_env == "development"
+    port = settings.port + 1 if development else settings.port
+
+    # **운영에서는 검사하지 않는다.** systemd 가 재시작할 때 옛 프로세스의 소켓이
+    # 아직 닫히는 중일 수 있는데, 거기서 기동을 거부하면 서비스가 영영 안 올라온다.
+    # 그 자리는 systemd 의 Restart 가 맡는다.
+    if development and _answering(settings.host, port):
+        raise SystemExit(
+            f"{port} 포트에 이미 응답하는 서버가 있습니다. 그대로 띄우면 둘이 번갈아\n"
+            f"답해서, 새로 만든 API 가 404 로 오는데 코드에는 있는 상태가 됩니다.\n"
+            f"\n"
+            f"  ss -ltnp 'sport = :{port}'\n"
+            f"\n"
+            f"으로 잡고 있는 프로세스를 찾아 내린 뒤 다시 돌리세요.\n"
+            f"systemd 로 도는 것이면 그 출력에 유닛 이름이 함께 나옵니다."
+        )
+
+    if development:
+        uvicorn.run("app.main:app", host=settings.host, port=port, reload=True)
+    else:
+        # **앱을 문자열로 넘긴다.** 다중 워커는 uvicorn 이 프로세스를 새로 띄워
+        # 앱을 다시 import 하므로, 객체를 넘기면 그 프로세스가 그것을 못 만든다.
+        uvicorn.run(
+            "app.main:app",
+            host=settings.host,
+            port=port,
+            workers=settings.uvicorn_workers,
+        )
+
+
+if __name__ == "__main__":
+    main()

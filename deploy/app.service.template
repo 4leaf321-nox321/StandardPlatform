@@ -1,0 +1,41 @@
+[Unit]
+Description=@@APP_NAME@@ (FastAPI in Apptainer)
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+User=@@USER@@
+Group=@@USER@@
+WorkingDirectory=@@INSTALL_DIR@@
+
+# bind-mount 배치 — **이 셋이 전부다.**
+#
+#   .env         읽기 전용. DB 비밀번호와 JWT 키라 이미지에 안 박는다
+#   filestore/   쓰기. 첨부의 실제 내용
+#   logs/        쓰기. 창을 닫아도 남아야 한다
+#
+# **SIF 루트는 읽기 전용이다.** 여기 안 걸린 경로에 쓰려 하면 그 순간
+# `[Errno 30] Read-only file system` 이 나고, 그 오류는 그 기능을 쓰는
+# 사람에게만 보인다.
+ExecStart=/usr/bin/apptainer run \
+    --bind @@INSTALL_DIR@@/.env:/opt/app/backend/.env:ro \
+    --bind @@INSTALL_DIR@@/filestore:/data/filestore \
+    --bind @@INSTALL_DIR@@/logs:/data/logs \
+    @@INSTALL_DIR@@/app.sif
+
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=30
+
+# 가벼운 하드닝 — Apptainer 가 이미 rootless·네임스페이스 격리다.
+# **ProtectHome 은 끈다**: 설치 폴더가 /home/<operator> 아래에 있어서,
+# 켜면 자기 .env 와 filestore 를 못 읽는다.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
