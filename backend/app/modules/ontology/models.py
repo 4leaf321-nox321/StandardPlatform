@@ -31,6 +31,7 @@ from typing import Any
 from sqlalchemy import (
     Boolean,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
@@ -92,7 +93,22 @@ TEMPORAL_KINDS = ("evergreen", "lifecycle", "yearly", "derived")
 #: `file` 은 첨부 모듈을 재사용한다(`attachments.owner_field`). JSONB 에 첨부 id 를
 #: 넣지 않는 이유는, 첨부를 지우면 **유령 id 가 남고 그것은 깨진 링크로만**
 #: 드러나기 때문이다.
-DATA_TYPES = ("text", "number", "date", "bool", "enum", "object_ref", "file")
+#:
+#: `text_long` 과 `text` 를 가르는 이유는 **위젯이 다르기 때문**이다 — 여러 줄
+#: 글을 한 줄 칸에 넣으면 사람은 자기가 쓴 것을 못 본다. `url` 은 링크로 뜬다.
+#: `datetime` 은 날짜만으로 시각을 못 담는 자리(측정·기록 시각)에 쓴다.
+DATA_TYPES = (
+    "text",
+    "text_long",
+    "number",
+    "date",
+    "datetime",
+    "bool",
+    "enum",
+    "url",
+    "object_ref",
+    "file",
+)
 
 #: 속성 정의가 무엇에 붙는가. **타입의 폼과 관계의 폼이 같은 컴포넌트여야 한다** —
 #: 두 벌로 만들면 위젯이 갈리고, 갈린 것은 한쪽만 고쳐진다.
@@ -244,6 +260,28 @@ class PropertyDef(Base):
 
     ref_type_slug: Mapped[str | None] = mapped_column(String(SLUG_MAX), nullable=True)
     """`data_type='object_ref'` 일 때 가리키는 타입. NULL 이면 아무 타입이나."""
+
+    min_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    max_value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """`number` 의 아래·위 끝. **없으면 두께가 -5mm 여도 통과한다** — 그 값은
+    나중에 집계에 섞여 들어가 어디서 온 것인지 아무도 못 찾는다."""
+
+    decimals: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """소수 자릿수. 넘으면 거절한다 — **반올림해서 저장하지 않는다.** 조용히
+    바꾸면 사람이 넣은 값과 저장된 값이 달라지고, 그 차이는 아무 데도 안 뜬다."""
+
+    pattern: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    """`text` 계열의 정규식. 사번·도번처럼 **모양이 정해진 값**에 쓴다."""
+
+    default_value: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
+    """안 채웠을 때 들어가는 값. **기계가 대량으로 만들 때** 특히 쓸모 있다."""
+
+    unique: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    """이 값이 유일해야 하는가. 범위는 타입의 `key_scope` 를 따른다 —
+    **두 벌의 규칙을 만들지 않는다.**
+
+    DB 유니크로 못 거는 이유는 `key` 와 같다: 범위가 타입마다 다르고, 값이 JSONB
+    안에 있다. 그래서 서비스 레이어가 지킨다."""
 
     section: Mapped[str] = mapped_column(String(48), default="", server_default="")
     """속성 묶음의 이름 — 「치수」·「재질」·「이력」. 폼과 상세가 **함께 쓴다.**

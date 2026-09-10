@@ -7,7 +7,17 @@
 
 import { api } from '@/shared/api/client'
 
-export type DataType = 'text' | 'number' | 'date' | 'bool' | 'enum' | 'object_ref' | 'file'
+export type DataType =
+  | 'text'
+  | 'text_long'
+  | 'number'
+  | 'date'
+  | 'datetime'
+  | 'bool'
+  | 'enum'
+  | 'url'
+  | 'object_ref'
+  | 'file'
 
 export interface PropertyDef {
   id: string
@@ -22,6 +32,17 @@ export interface PropertyDef {
   multi: boolean
   enum_options: string[] | null
   ref_type_slug: string | null
+  /** `number` 의 아래·위 끝. **없으면 두께가 -5mm 여도 통과한다.** */
+  min_value: number | null
+  max_value: number | null
+  /** 소수 자릿수. 넘으면 **반올림하지 않고 거절한다.** */
+  decimals: number | null
+  /** `text` 계열의 모양 규칙(정규식). */
+  pattern: string | null
+  /** 안 채웠을 때 들어가는 값. **만들 때만** 적용된다. */
+  default_value: unknown
+  /** 유일해야 하는가. 범위는 타입의 `key_scope` 를 따른다. */
+  unique: boolean
   /** 속성 묶음. 폼과 상세가 함께 쓴다(3단계). */
   section: string
   sort_order: number

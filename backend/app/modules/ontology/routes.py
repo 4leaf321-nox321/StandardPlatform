@@ -660,6 +660,12 @@ def create_property(
         multi=payload.multi,
         enum_options=payload.enum_options,
         ref_type_slug=payload.ref_type_slug,
+        min_value=payload.min_value,
+        max_value=payload.max_value,
+        decimals=payload.decimals,
+        pattern=payload.pattern,
+        default_value=payload.default_value,
+        unique=payload.unique,
         section=payload.section,
         sort_order=payload.sort_order,
     )
@@ -707,6 +713,12 @@ def update_property(
     row.multi = payload.multi
     row.enum_options = payload.enum_options
     row.ref_type_slug = payload.ref_type_slug
+    row.min_value = payload.min_value
+    row.max_value = payload.max_value
+    row.decimals = payload.decimals
+    row.pattern = payload.pattern
+    row.default_value = payload.default_value
+    row.unique = payload.unique
     row.section = payload.section
     row.sort_order = payload.sort_order
     _audit(
@@ -782,6 +794,18 @@ def _property(db: Session, slug: str, key: str) -> PropertyDef:
 
 
 def _check_property_shape(payload: PropertyDefWriteRequest) -> None:
+    if (
+        payload.min_value is not None
+        and payload.max_value is not None
+        and payload.min_value > payload.max_value
+    ):
+        # **뒤집힌 범위는 아무 값도 안 받는다.** 그런데 화면에는 「값이 틀렸다」
+        # 로만 뜨므로, 정의가 잘못된 것을 아무도 못 찾는다.
+        raise Conflict(
+            code("ONTOLOGY", 38),
+            f"아래 끝({payload.min_value})이 위 끝({payload.max_value})보다 큽니다. "
+            "이러면 어떤 값도 못 넣습니다.",
+        )
     if payload.data_type == "enum" and not payload.enum_options:
         raise Conflict(
             code("ONTOLOGY", 37),

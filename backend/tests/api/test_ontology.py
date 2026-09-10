@@ -1292,3 +1292,186 @@ def test_derived_는_등록이_없으면_안_거른다(client: TestClient, admin
     _make_object(client, admin, part, label="볼트")
     listed = client.get(f"/api/objects/{part}?year=2020", headers=admin.headers).json()
     assert listed["total"] == 1
+
+
+# --- 속성 표현력 (3-a) -------------------------------------------------------
+
+
+def test_숫자의_아래위_끝을_지킨다(client: TestClient, admin: Signed) -> None:
+    """**없으면 두께가 -5mm 여도 통과한다** — 그 값은 나중에 집계에 섞여 들어가
+    어디서 온 것인지 아무도 못 찾는다."""
+    part = _make_type(client, admin, label="부품")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="width",
+        label="폭",
+        data_type="number",
+        unit="mm",
+        min_value=0,
+        max_value=500,
+    )
+    assert _make_object(client, admin, part, label="A", properties={"width": 10})
+
+    for bad in (-5, 900):
+        denied = client.post(
+            f"/api/objects/{part}",
+            json={
+                "label": "B",
+                "properties": {"width": bad},
+                "workspace_slug": admin.workspace,
+            },
+            headers=admin.headers,
+        )
+        assert denied.status_code == 422, bad
+        assert "mm" in denied.json()["error"]["message"]
+
+
+def test_소수_자릿수는_반올림하지_않고_거절한다(client: TestClient, admin: Signed) -> None:
+    """**조용히 바꾸면 사람이 넣은 값과 저장된 값이 달라지고, 그 차이는 아무
+    데도 안 뜬다.**"""
+    part = _make_type(client, admin, label="부품")
+    _make_property(client, admin, part, key="w", label="폭", data_type="number", decimals=1)
+    assert _make_object(client, admin, part, label="A", properties={"w": 1.5})
+    denied = client.post(
+        f"/api/objects/{part}",
+        json={"label": "B", "properties": {"w": 1.55}, "workspace_slug": admin.workspace},
+        headers=admin.headers,
+    )
+    assert denied.status_code == 422
+    assert "소수점" in denied.json()["error"]["message"]
+
+
+def test_모양_규칙을_지킨다(client: TestClient, admin: Signed) -> None:
+    part = _make_type(client, admin, label="부품")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="dwg",
+        label="도번",
+        data_type="text",
+        pattern=r"^D-\d{4}$",
+    )
+    assert _make_object(client, admin, part, label="A", properties={"dwg": "D-1234"})
+    denied = client.post(
+        f"/api/objects/{part}",
+        json={"label": "B", "properties": {"dwg": "1234"}, "workspace_slug": admin.workspace},
+        headers=admin.headers,
+    )
+    assert denied.status_code == 422
+    assert "모양" in denied.json()["error"]["message"]
+
+
+def test_깨진_규칙은_정의가_잘못됐다고_말한다(client: TestClient, admin: Signed) -> None:
+    """**「식이 잘못됐다」 와 「값이 안 맞는다」 는 고칠 곳이 다르다.**"""
+    part = _make_type(client, admin, label="부품")
+    _make_property(
+        client, admin, part, key="x", label="X", data_type="text", pattern="[unclosed"
+    )
+    denied = client.post(
+        f"/api/objects/{part}",
+        json={
+            "label": "A",
+            "properties": {"x": "아무거나"},
+            "workspace_slug": admin.workspace,
+        },
+        headers=admin.headers,
+    )
+    assert denied.status_code == 422
+    assert "정의" in denied.json()["error"]["message"]
+
+
+def test_뒤집힌_범위는_만들_때_막는다(client: TestClient, admin: Signed) -> None:
+    """뒤집힌 범위는 아무 값도 안 받는데, 화면에는 「값이 틀렸다」 로만 뜬다."""
+    part = _make_type(client, admin, label="부품")
+    denied = client.post(
+        f"/api/ontology/types/{part}/properties",
+        json={
+            "key": "w",
+            "label": "폭",
+            "data_type": "number",
+            "min_value": 100,
+            "max_value": 1,
+        },
+        headers=admin.headers,
+    )
+    assert denied.status_code == 409
+
+
+def test_기본값은_안_넣었을_때만_들어간다(client: TestClient, admin: Signed) -> None:
+    """**넣은 것을 덮으면 사람이 지운 값이 되살아나고**, 그 되살아남은 저장한
+    사람 눈에 안 보인다."""
+    part = _make_type(client, admin, label="부품")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="grade",
+        label="등급",
+        data_type="enum",
+        enum_options=["A", "B"],
+        default_value="A",
+    )
+    filled = _make_object(client, admin, part, label="A")
+    assert filled["properties"]["grade"] == "A"
+
+    given = _make_object(client, admin, part, label="B", properties={"grade": "B"})
+    assert given["properties"]["grade"] == "B"
+
+    # 명시적으로 지우면 기본값이 안 되살아난다.
+    cleared = client.patch(
+        f"/api/objects/{part}/{given['id']}",
+        json={"properties": {"grade": None}},
+        headers=admin.headers,
+    ).json()
+    assert "grade" not in cleared["properties"]
+
+
+def test_유일해야_하는_속성은_두_번_안_들어간다(client: TestClient, admin: Signed) -> None:
+    """**같은 것이 둘이 되면 둘 다 못 믿게 된다** — 어느 쪽이 맞는지 알 방법이 없다."""
+    part = _make_type(client, admin, label="부품")
+    _make_property(
+        client, admin, part, key="serial", label="시리얼", data_type="text", unique=True
+    )
+    _make_object(client, admin, part, label="A", properties={"serial": "S-1"})
+    denied = client.post(
+        f"/api/objects/{part}",
+        json={
+            "label": "B",
+            "properties": {"serial": "S-1"},
+            "workspace_slug": admin.workspace,
+        },
+        headers=admin.headers,
+    )
+    assert denied.status_code == 409
+    assert "둘 다 못 믿게" in denied.json()["error"]["message"]
+
+
+def test_새_종류_셋을_받는다(client: TestClient, admin: Signed) -> None:
+    """`datetime`(시각) · `url`(링크) · `text_long`(여러 줄)."""
+    part = _make_type(client, admin, label="부품")
+    for key, kind in (("at", "datetime"), ("link", "url"), ("memo", "text_long")):
+        _make_property(client, admin, part, key=key, label=key, data_type=kind)
+
+    ok = _make_object(
+        client,
+        admin,
+        part,
+        label="A",
+        properties={
+            "at": "2026-09-11T13:05",
+            "link": "https://example.local/a",
+            "memo": "여러\n줄",
+        },
+    )
+    assert ok["properties"]["link"] == "https://example.local/a"
+
+    for key, bad in (("at", "2026-09-11 오후"), ("link", "example.local")):
+        denied = client.post(
+            f"/api/objects/{part}",
+            json={"label": "B", "properties": {key: bad}, "workspace_slug": admin.workspace},
+            headers=admin.headers,
+        )
+        assert denied.status_code == 422, key

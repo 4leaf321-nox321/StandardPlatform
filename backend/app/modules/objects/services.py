@@ -112,6 +112,54 @@ def require_refs_exist(db: Session, defs: list[PropertyDef], values: dict[str, A
         )
 
 
+def require_unique_properties(
+    db: Session,
+    object_type: ObjectType,
+    defs: list[PropertyDef],
+    values: dict[str, Any],
+    *,
+    owner_workspace_id: uuid.UUID | None,
+    exclude_id: uuid.UUID | None = None,
+) -> None:
+    """`unique` 인 속성이 이미 쓰이고 있는가.
+
+    **DB 유니크로 못 건다** — 값이 JSONB 안에 있고, 범위가 타입마다 다르다.
+    범위는 `key_scope` 를 따른다: 두 벌의 규칙을 만들면 「식별자는 전사인데
+    시리얼은 부서」 같은 상태가 생기고, 그것을 기억할 사람이 없다.
+
+    **같은 것이 둘이 되면 둘 다 못 믿게 된다** — 어느 쪽이 맞는지 알 방법이 없다.
+    """
+    unique_keys = [d.key for d in defs if d.unique and d.key in values]
+    if not unique_keys:
+        return
+
+    for key in unique_keys:
+        value = values.get(key)
+        if value is None or value == "" or value == []:
+            continue
+        stmt = select(ObjectInstance.id).where(
+            ObjectInstance.type_id == object_type.id,
+            ObjectInstance.deleted_at.is_(None),
+            ObjectInstance.properties[key].astext == str(value),
+        )
+        if object_type.key_scope == "workspace":
+            if owner_workspace_id is None:
+                stmt = stmt.where(ObjectInstance.owner_workspace_id.is_(None))
+            else:
+                stmt = stmt.where(ObjectInstance.owner_workspace_id == owner_workspace_id)
+        if exclude_id is not None:
+            stmt = stmt.where(ObjectInstance.id != exclude_id)
+
+        if db.scalar(stmt) is not None:
+            label = next(d.label for d in defs if d.key == key)
+            where = "이 부서에" if object_type.key_scope == "workspace" else "이미"
+            raise Conflict(
+                code("OBJECTS", 5),
+                f"{label}에 같은 값이 {where} 있습니다: {value}. "
+                "같은 것이 둘이 되면 둘 다 못 믿게 됩니다 — 찾아서 고치는 편이 낫습니다.",
+            )
+
+
 def apply_search(stmt: Select[Any], object_type: ObjectType, term: str) -> Select[Any]:
     """`list_view.search` 가 가리키는 자리들을 훑는다.
 

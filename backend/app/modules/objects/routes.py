@@ -47,6 +47,7 @@ from app.modules.objects.services import (
     properties_of,
     require_key_free,
     require_refs_exist,
+    require_unique_properties,
 )
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.schemas import PropertyDefOut
@@ -384,8 +385,11 @@ def create_object(
     require_key_free(db, object_type, key, owner_workspace_id=owner_workspace_id)
 
     defs = properties_of(db, object_type.id)
-    properties = validate_properties(defs, payload.properties)
+    properties = validate_properties(defs, payload.properties, apply_defaults=True)
     require_refs_exist(db, defs, properties)
+    require_unique_properties(
+        db, object_type, defs, properties, owner_workspace_id=owner_workspace_id
+    )
 
     row = ObjectInstance(
         type_id=object_type.id,
@@ -457,6 +461,14 @@ def update_object(
         merged = merge_properties(row.properties or {}, payload.properties)
         cleaned = validate_properties(defs, merged)
         require_refs_exist(db, defs, cleaned)
+        require_unique_properties(
+            db,
+            object_type,
+            defs,
+            cleaned,
+            owner_workspace_id=row.owner_workspace_id,
+            exclude_id=row.id,
+        )
         row.properties = cleaned
 
     after: dict[str, Any] = {
@@ -642,7 +654,7 @@ def add_relation(
             )
         )
     )
-    properties = validate_properties(defs, payload.properties)
+    properties = validate_properties(defs, payload.properties, apply_defaults=True)
 
     edge = ObjectRelation(
         src_object_id=src.id,

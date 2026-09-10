@@ -34,25 +34,36 @@ import {
 } from '@/shared/components/ui/select'
 
 export const DATA_TYPE_LABELS: Record<DataType, string> = {
-  text: '글',
+  text: '글 (한 줄)',
+  text_long: '글 (여러 줄)',
   number: '숫자',
   date: '날짜',
+  datetime: '날짜와 시각',
   bool: '예/아니오',
   enum: '선택',
+  url: '주소',
   object_ref: '객체 참조',
   file: '파일',
 }
 
 /** 종류마다 무엇이 되는지 한 줄. **고르기 전에 알아야 고를 수 있다.** */
 const DATA_TYPE_HINTS: Record<DataType, string> = {
-  text: '아무 글이나. 이름·메모처럼 정해진 모양이 없는 값.',
+  text: '한 줄. 이름·번호처럼 짧은 값. 모양 규칙을 걸 수 있습니다.',
+  text_long: '여러 줄. 설명·메모 — 한 줄 칸에 넣으면 사람은 자기가 쓴 것을 못 봅니다.',
   number: '숫자만. 정렬과 집계가 됩니다 — 글로 넣으면 사전순으로 섞입니다.',
   date: 'YYYY-MM-DD. 날짜 선택기가 뜹니다.',
+  datetime: '날짜와 시각. 측정·기록 시각처럼 날짜만으로 부족한 자리에 씁니다.',
   bool: '예/아니오 하나.',
   enum: '정한 것 중에서 고릅니다. 스물이 넘으면 검색 가능한 picker 로 바뀝니다.',
+  url: '링크로 열립니다. http:// 나 https:// 로 시작해야 합니다.',
   object_ref: '다른 객체를 가리킵니다. 가리킬 타입을 정해 두면 그 안에서만 고릅니다.',
   file: '첨부로 올립니다. 값이 아니라 파일이라 저장한 뒤 상세 화면에서 붙입니다.',
 }
+
+/** 규칙 칸을 보여 줄 종류. **안 쓰이는 칸을 세우면 그것이 뭔가 하는 줄 안다.** */
+const NUMERIC = new Set<DataType>(['number'])
+const PATTERNABLE = new Set<DataType>(['text', 'text_long', 'url'])
+const UNIQUEABLE = new Set<DataType>(['text', 'number', 'url', 'date', 'datetime'])
 
 interface Props {
   /** 이 속성이 붙는 타입. */
@@ -77,6 +88,14 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
   const [multi, setMulti] = useState(property?.multi ?? false)
   const [sortOrder, setSortOrder] = useState(String(property?.sort_order ?? 0))
   const [options, setOptions] = useState((property?.enum_options ?? []).join(', '))
+  const [minValue, setMinValue] = useState(property?.min_value?.toString() ?? '')
+  const [maxValue, setMaxValue] = useState(property?.max_value?.toString() ?? '')
+  const [decimals, setDecimals] = useState(property?.decimals?.toString() ?? '')
+  const [pattern, setPattern] = useState(property?.pattern ?? '')
+  const [defaultValue, setDefaultValue] = useState(
+    property?.default_value == null ? '' : String(property.default_value),
+  )
+  const [unique, setUnique] = useState(property?.unique ?? false)
   const [refType, setRefType] = useState(property?.ref_type_slug ?? '')
 
   const [error, setError] = useState<Error | null>(null)
@@ -94,6 +113,14 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
       required,
       multi,
       sort_order: Number(sortOrder) || 0,
+      min_value: NUMERIC.has(dataType) && minValue !== '' ? Number(minValue) : null,
+      max_value: NUMERIC.has(dataType) && maxValue !== '' ? Number(maxValue) : null,
+      decimals: NUMERIC.has(dataType) && decimals !== '' ? Number(decimals) : null,
+      pattern: PATTERNABLE.has(dataType) && pattern ? pattern : null,
+      // **빈 칸은 「기본값 없음」 이다.** 빈 문자열을 넣으면 그것이 기본값이 되고,
+      // 그러면 필수 검사가 통과해 버린다.
+      default_value: defaultValue === '' ? null : coerceDefault(dataType, defaultValue),
+      unique: UNIQUEABLE.has(dataType) ? unique : false,
       enum_options:
         dataType === 'enum'
           ? options
@@ -245,6 +272,66 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
               </div>
             </div>
 
+            {NUMERIC.has(dataType) && (
+              <div className="space-y-1.5">
+                <Label>값의 범위</Label>
+                <div className="grid grid-cols-3 gap-3">
+                  <Input
+                    type="number"
+                    placeholder="아래 끝"
+                    value={minValue}
+                    onChange={(event) => setMinValue(event.target.value)}
+                  />
+                  <Input
+                    type="number"
+                    placeholder="위 끝"
+                    value={maxValue}
+                    onChange={(event) => setMaxValue(event.target.value)}
+                  />
+                  <Input
+                    type="number"
+                    placeholder="소수 자릿수"
+                    value={decimals}
+                    onChange={(event) => setDecimals(event.target.value)}
+                  />
+                </div>
+                <p className="text-muted-foreground text-xs">
+                  비우면 안 봅니다 — <b>그러면 두께가 -5mm 여도 통과합니다.</b> 소수
+                  자릿수를 넘는 값은 <b>반올림하지 않고 거절</b>합니다(조용히 바꾸면 넣은
+                  값과 저장된 값이 달라집니다).
+                </p>
+              </div>
+            )}
+
+            {PATTERNABLE.has(dataType) && (
+              <div className="space-y-1.5">
+                <Label htmlFor="prop-pattern">모양 규칙</Label>
+                <Input
+                  id="prop-pattern"
+                  value={pattern}
+                  placeholder="^D-\\d{4}$"
+                  className="font-mono"
+                  onChange={(event) => setPattern(event.target.value)}
+                />
+                <p className="text-muted-foreground text-xs">
+                  사번·도번처럼 <b>모양이 정해진 값</b>에 씁니다(정규식). 비우면 안 봅니다.
+                </p>
+              </div>
+            )}
+
+            <div className="space-y-1.5">
+              <Label htmlFor="prop-default">기본값</Label>
+              <Input
+                id="prop-default"
+                value={defaultValue}
+                onChange={(event) => setDefaultValue(event.target.value)}
+              />
+              <p className="text-muted-foreground text-xs">
+                <b>만들 때만</b> 채웁니다. 고칠 때도 채우면 사람이 방금 지운 값이
+                되살아나고, 그 되살아남은 저장한 사람 눈에 안 보입니다.
+              </p>
+            </div>
+
             <div className="space-y-1.5">
               <Label htmlFor="prop-help">안내</Label>
               <Input
@@ -271,6 +358,24 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                   </span>
                 </span>
               </label>
+              {UNIQUEABLE.has(dataType) && (
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 size-4"
+                    checked={unique}
+                    onChange={(event) => setUnique(event.target.checked)}
+                  />
+                  <span>
+                    유일해야 함
+                    <span className="text-muted-foreground ml-1 text-xs">
+                      시리얼·사번처럼 겹치면 안 되는 값. 범위는 타입의 <b>식별자 범위</b>를
+                      따릅니다. <b>같은 것이 둘이 되면 둘 다 못 믿게 됩니다.</b>
+                    </span>
+                  </span>
+                </label>
+              )}
+
               <label className="flex items-start gap-2 text-sm">
                 <input
                   type="checkbox"
@@ -344,4 +449,12 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
       )}
     </>
   )
+}
+
+
+/** 기본값을 그 종류의 모양으로. **글로 저장하면 숫자 속성이 사전순으로 정렬된다.** */
+function coerceDefault(kind: DataType, raw: string): unknown {
+  if (kind === 'number') return Number(raw)
+  if (kind === 'bool') return raw === 'true' || raw === '예'
+  return raw
 }

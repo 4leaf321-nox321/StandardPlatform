@@ -26,6 +26,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select'
+import { Textarea } from '@/shared/components/ui/textarea'
 
 /** 고를 것이 이보다 많으면 통째로 펼치지 않는다 — 눈으로 찾는 일은 실패한다. */
 const PICKER_THRESHOLD = 20
@@ -67,6 +68,11 @@ function OneValue({
     return (
       <Input
         type="number"
+        // **정의가 정한 범위를 브라우저도 안다.** 서버가 최종 판정을 하지만,
+        // 여기서 막으면 거절당하고 나서 무엇을 고칠지 찾을 일이 없다.
+        min={def.min_value ?? undefined}
+        max={def.max_value ?? undefined}
+        step={def.decimals != null ? 10 ** -def.decimals : undefined}
         value={value === undefined || value === null ? '' : String(value)}
         disabled={disabled}
         // **빈 칸은 값이 없는 것이지 0 이 아니다.** 0 으로 바꿔 두면 「안 적었다」 와
@@ -74,6 +80,40 @@ function OneValue({
         onChange={(event) =>
           onChange(event.target.value === '' ? null : Number(event.target.value))
         }
+      />
+    )
+  }
+
+  if (def.data_type === 'text_long') {
+    return (
+      <Textarea
+        rows={4}
+        value={typeof value === 'string' ? value : ''}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    )
+  }
+
+  if (def.data_type === 'url') {
+    return (
+      <Input
+        type="url"
+        placeholder="https://"
+        value={typeof value === 'string' ? value : ''}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value)}
+      />
+    )
+  }
+
+  if (def.data_type === 'datetime') {
+    return (
+      <Input
+        type="datetime-local"
+        value={typeof value === 'string' ? value : ''}
+        disabled={disabled}
+        onChange={(event) => onChange(event.target.value || null)}
       />
     )
   }

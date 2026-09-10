@@ -50,6 +50,12 @@ class PropertyDefOut(BaseModel):
     multi: bool
     enum_options: list[str] | None
     ref_type_slug: str | None
+    min_value: float | None
+    max_value: float | None
+    decimals: int | None
+    pattern: str | None
+    default_value: Any | None
+    unique: bool
     section: str
     sort_order: int
 
@@ -64,6 +70,12 @@ class PropertyDefWriteRequest(BaseModel):
     multi: bool = False
     enum_options: list[str] | None = None
     ref_type_slug: str | None = None
+    min_value: float | None = None
+    max_value: float | None = None
+    decimals: int | None = Field(default=None, ge=0, le=10)
+    pattern: str | None = Field(default=None, max_length=200)
+    default_value: Any | None = None
+    unique: bool = False
     section: str = Field(default="", max_length=48)
     sort_order: int = 0
 

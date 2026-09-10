@@ -38,9 +38,10 @@ const BUILT_IN: { id: string; label: string }[] = [
  * 목록에 세울 수 없는 속성 종류.
  *
  * `file` 은 값이 아니라 첨부다 — `properties` 에 아무것도 없어서 빈 열이 서고,
- * 빈 열은 「값이 없다」 로 읽힌다.
+ * 빈 열은 「값이 없다」 로 읽힌다. `text_long` 은 여러 줄이라 표를 무너뜨린다 —
+ * 목록에서는 잘려 보이느니 **안 보이는 편이 낫다**(상세에 있다).
  */
-const NOT_A_COLUMN = new Set(['file'])
+const NOT_A_GOOD_COLUMN = new Set(['file', 'text_long'])
 
 /** 「트리 없음」. 빈 문자열을 쓸 수 없다 — Select 가 그것을 「고른 것 없음」 으로 본다. */
 const NO_TREE = '__none__'
@@ -49,7 +50,7 @@ const NO_TREE = '__none__'
 const FALLBACK_PREVIEW = ['key', 'label', 'updated_at']
 
 /** 거르기·검색에 쓸 수 있는 종류. 문자열 비교만 하므로 글과 선택뿐이다. */
-const FILTERABLE = new Set(['text', 'enum'])
+const FILTERABLE = new Set(['text', 'enum', 'url'])
 
 interface Props {
   defs: PropertyDef[]
@@ -65,7 +66,7 @@ function fieldOptions(defs: PropertyDef[]): { id: string; label: string }[] {
   return [
     ...BUILT_IN,
     ...defs
-      .filter((def) => !NOT_A_COLUMN.has(def.data_type))
+      .filter((def) => !NOT_A_GOOD_COLUMN.has(def.data_type))
       .map((def) => ({ id: `properties.${def.key}`, label: def.label })),
   ]
 }

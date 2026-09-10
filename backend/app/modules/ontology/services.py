@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 import uuid
-from datetime import date
+from datetime import date, datetime
 from typing import Any
 
 from app.modules.ontology.models import (
@@ -81,9 +81,22 @@ def _coerce_one(definition: PropertyDef, raw: Any) -> Any:
     label = definition.label
     kind = definition.data_type
 
-    if kind == "text":
+    if kind in ("text", "text_long"):
         if not isinstance(raw, str):
             raise InvalidValue(code("ONTOLOGY", 10), f"{label}: 글자여야 합니다.")
+        _check_pattern(definition, raw)
+        return raw
+
+    if kind == "url":
+        if not isinstance(raw, str) or not raw.startswith(("http://", "https://")):
+            raise InvalidValue(
+                code("ONTOLOGY", 18),
+                f"{label}: 주소는 http:// 나 https:// 로 시작해야 합니다. "
+                "그래야 화면이 링크로 열 수 있습니다.",
+            )
+        if any(ch.isspace() for ch in raw):
+            raise InvalidValue(code("ONTOLOGY", 18), f"{label}: 주소에 공백이 있습니다.")
+        _check_pattern(definition, raw)
         return raw
 
     if kind == "number":
@@ -91,6 +104,28 @@ def _coerce_one(definition: PropertyDef, raw: Any) -> Any:
         # 저장되고, 그 값은 나중에 아무도 설명할 수 없다.
         if isinstance(raw, bool) or not isinstance(raw, (int, float)):
             raise InvalidValue(code("ONTOLOGY", 11), f"{label}: 숫자여야 합니다.")
+        unit = f" {definition.unit}" if definition.unit else ""
+        if definition.min_value is not None and raw < definition.min_value:
+            raise InvalidValue(
+                code("ONTOLOGY", 30),
+                f"{label}: {definition.min_value}{unit} 보다 작을 수 없습니다"
+                f" (넣은 값 {raw}).",
+            )
+        if definition.max_value is not None and raw > definition.max_value:
+            raise InvalidValue(
+                code("ONTOLOGY", 31),
+                f"{label}: {definition.max_value}{unit} 보다 클 수 없습니다 (넣은 값 {raw}).",
+            )
+        if definition.decimals is not None:
+            # **반올림해서 저장하지 않는다.** 조용히 바꾸면 사람이 넣은 값과
+            # 저장된 값이 달라지고, 그 차이는 아무 데도 안 뜬다.
+            quantized = round(float(raw), definition.decimals)
+            if abs(quantized - float(raw)) > 1e-12:
+                places = definition.decimals
+                raise InvalidValue(
+                    code("ONTOLOGY", 32),
+                    f"{label}: 소수점 {places}자리까지만 넣습니다 (넣은 값 {raw}).",
+                )
         return raw
 
     if kind == "bool":
@@ -106,6 +141,19 @@ def _coerce_one(definition: PropertyDef, raw: Any) -> Any:
         except ValueError:
             raise InvalidValue(
                 code("ONTOLOGY", 13), f"{label}: 날짜(YYYY-MM-DD)여야 합니다: {raw!r}"
+            ) from None
+        return raw
+
+    if kind == "datetime":
+        # **날짜만으로는 시각을 못 담는다** — 측정·기록 시각이 그런 자리다.
+        if not isinstance(raw, str):
+            raise InvalidValue(code("ONTOLOGY", 19), f"{label}: 날짜와 시각이어야 합니다.")
+        try:
+            datetime.fromisoformat(raw)
+        except ValueError:
+            raise InvalidValue(
+                code("ONTOLOGY", 19),
+                f"{label}: 날짜와 시각(2026-09-11T13:05)이어야 합니다: {raw!r}",
             ) from None
         return raw
 
@@ -141,6 +189,29 @@ def _coerce_one(definition: PropertyDef, raw: Any) -> Any:
     raise InvalidValue(code("ONTOLOGY", 17), f"{label}: 모르는 속성 종류입니다: {kind}")
 
 
+def _check_pattern(definition: PropertyDef, raw: str) -> None:
+    """모양이 정해진 값(사번·도번)을 지킨다.
+
+    **정규식이 깨져 있으면 그 속성은 아무 값도 못 받는다.** 그래서 여기서
+    「식이 잘못됐다」 와 「값이 안 맞는다」 를 갈라 말한다 — 고칠 곳이 다르다.
+    """
+    if not definition.pattern:
+        return
+    try:
+        matched = re.match(definition.pattern, raw)
+    except re.error as caught:
+        raise InvalidValue(
+            code("ONTOLOGY", 33),
+            f"{definition.label}: 속성 정의의 모양 규칙이 잘못됐습니다 ({caught}). "
+            "온톨로지 관리에서 고치세요.",
+        ) from None
+    if matched is None:
+        raise InvalidValue(
+            code("ONTOLOGY", 34),
+            f"{definition.label}: 정해진 모양이 아닙니다 (규칙 {definition.pattern}).",
+        )
+
+
 def _is_empty(value: Any) -> bool:
     return value is None or value == "" or value == []
 
@@ -163,11 +234,17 @@ def merge_properties(current: dict[str, Any], patch: dict[str, Any]) -> dict[str
     return merged
 
 
-def validate_properties(defs: list[PropertyDef], values: dict[str, Any]) -> dict[str, Any]:
+def validate_properties(
+    defs: list[PropertyDef], values: dict[str, Any], *, apply_defaults: bool = False
+) -> dict[str, Any]:
     """정의에 비추어 값 묶음 전체를 검증하고, 저장할 모양으로 돌려준다.
 
     **모르는 키는 거절한다.** 조용히 저장하면 어느 화면에도 안 나오는 데이터가
     쌓이고, 그것이 있다는 사실은 아무도 모른다.
+
+    `apply_defaults` 는 **만들 때만 참**이다. 고칠 때도 채우면 **사람이 방금 지운
+    값이 기본값으로 되살아나고**, 그 되살아남은 저장한 사람 눈에 안 보인다 —
+    실측으로 확인했다(시험이 그것을 잡았다).
     """
     by_key = {d.key: d for d in defs}
 
@@ -182,6 +259,11 @@ def validate_properties(defs: list[PropertyDef], values: dict[str, Any]) -> dict
     cleaned: dict[str, Any] = {}
     for key, definition in by_key.items():
         raw = values.get(key)
+
+        # **기본값은 만들 때만 들어간다.** 고칠 때도 채우면 사람이 방금 지운
+        # 값이 되살아난다.
+        if apply_defaults and _is_empty(raw) and definition.default_value is not None:
+            raw = definition.default_value
 
         if _is_empty(raw):
             if definition.required and definition.data_type != "file":
