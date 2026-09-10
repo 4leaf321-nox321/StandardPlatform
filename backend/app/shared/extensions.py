@@ -1,10 +1,11 @@
-"""도메인이 공통 화면에 자기를 끼우는 자리 — **세 개뿐이다.**
+"""도메인이 공통 화면에 자기를 끼우는 자리 — **넷.**
 
-공통 틀에는 세 개의 "모두가 보는 화면" 이 있고, 그 셋은 도메인이 무엇인지 모른다.
+공통 틀에는 도메인을 모르는 화면이 있고, 그것들은 도메인이 무엇인지 모른다.
 
-    홈의 「남은 일」      -> maintenance   무엇이 아직 안 채워졌나
-    서버 화면의 「쌓인 것」 -> stats         무엇이 얼마나 있나
-    부서 삭제 확인       -> references    무엇이 이 부서를 가리키나
+    홈의 「남은 일」      -> maintenance     무엇이 아직 안 채워졌나
+    서버 화면의 「쌓인 것」 -> stats           무엇이 얼마나 있나
+    부서 삭제 확인       -> references      무엇이 이 부서를 가리키나
+    객체의 연도 추론     -> temporal_source  이 객체가 언제 쓰였나
 
 ## 왜 레지스트리인가
 
@@ -75,9 +76,13 @@ StatProvider = Callable[[Session], list[StatItem]]
 #: 부서 삭제 확인이 부르는 것들.
 ReferenceProvider = Callable[[Session, uuid.UUID], list[WorkspaceReference]]
 
+#: 객체 id 목록 -> 그 객체가 **쓰인 연도들.** 도메인이 자기 기록에서 답한다.
+TemporalProvider = Callable[[Session, list[uuid.UUID]], dict[uuid.UUID, set[int]]]
+
 _maintenance: list[MaintenanceProvider] = []
 _stats: list[StatProvider] = []
 _references: list[ReferenceProvider] = []
+_temporal: list[TemporalProvider] = []
 
 
 # 셋 다 **같은 것을 두 번 넣어도 안전하다.** `create_app()` 은 시험에서 두 번
@@ -98,6 +103,35 @@ def register_stats(provider: StatProvider) -> None:
 def register_workspace_reference(provider: ReferenceProvider) -> None:
     if provider not in _references:
         _references.append(provider)
+
+
+def register_temporal_source(provider: TemporalProvider) -> None:
+    """`temporal_kind='derived'` 인 축의 **연도를 도메인이 답한다.**
+
+    「그 객체가 쓰인 기록의 연도」 에서 추론하는 정책인데, **공통 틀에는 「기록」
+    이 없다** — 그것은 도메인의 것이다(보고서·시험·거래).
+
+    등록하지 않으면 그 축은 **연도 필터를 무시한다**(evergreen 처럼 군다).
+    조용히 빈 목록을 주지 않는 이유는, 빈 목록이 「데이터가 없다」 로 읽히기
+    때문이다 — 그러면 사람은 없는 것을 새로 만든다.
+    """
+    if provider not in _temporal:
+        _temporal.append(provider)
+
+
+def has_temporal_source() -> bool:
+    """도메인이 연도를 답할 수 있는가. **없으면 부르는 쪽이 필터를 건너뛴다.**"""
+    return bool(_temporal)
+
+
+def temporal_years(db: Session, object_ids: list[uuid.UUID]) -> dict[uuid.UUID, set[int]]:
+    """객체별로 「쓰인 연도」 들. **등록이 없으면 빈 dict** 이고, 부르는 쪽은
+    그때 필터를 적용하지 않는다."""
+    out: dict[uuid.UUID, set[int]] = {}
+    for provider in _temporal:
+        for object_id, years in provider(db, object_ids).items():
+            out.setdefault(object_id, set()).update(years)
+    return out
 
 
 def maintenance_items(db: Session, viewer: User) -> list[MaintenanceItem]:

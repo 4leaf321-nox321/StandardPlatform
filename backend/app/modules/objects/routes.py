@@ -19,7 +19,12 @@ from app.modules.accounts.models import User
 from app.modules.files.models import Attachment
 from app.modules.objects import graph
 from app.modules.objects import relations as rel
-from app.modules.objects.models import OBJECT_STATUSES, ObjectInstance, ObjectRelation
+from app.modules.objects.models import (
+    OBJECT_STATUSES,
+    ObjectInstance,
+    ObjectRelation,
+    ObjectYear,
+)
 from app.modules.objects.schemas import (
     AttachmentBrief,
     ObjectCreateRequest,
@@ -36,6 +41,7 @@ from app.modules.objects.services import (
     apply_property_filters,
     apply_search,
     apply_sort,
+    apply_year,
     count_of,
     normalize_key,
     properties_of,
@@ -253,6 +259,9 @@ def list_objects(
     status: str | None = Query(default=None),
     under: uuid.UUID | None = Query(default=None, description="트리에서 고른 노드"),
     deep: bool = Query(default=True, description="아래 것까지 포함"),
+    year: int | None = Query(
+        default=None, ge=1900, le=2999, description="그 해에 해당하는 것만"
+    ),
     limit: int | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
     user: User = Depends(current_user),
@@ -274,6 +283,8 @@ def list_objects(
         stmt = stmt.where(ObjectInstance.status == status)
     if q:
         stmt = apply_search(stmt, object_type, q)
+    if year is not None:
+        stmt = apply_year(db, stmt, object_type, year)
     if under is not None:
         # **기본은 「아래 것까지 포함」 이다.** 안 그러면 상위 노드를 눌렀을 때
         # 목록이 비고, 그 빈 목록은 「없다」 로 읽힌다.
@@ -746,3 +757,66 @@ def _edge(db: Session, relation_id: uuid.UUID, row: ObjectInstance) -> ObjectRel
     if edge is None or row.id not in (edge.src_object_id, edge.dst_object_id):
         raise NotFound(code("OBJECTS", 32), "관계를 찾을 수 없습니다.")
     return edge
+
+
+# --- 연도 배정 --------------------------------------------------------------
+
+
+@router.get("/{type_slug}/{object_id}/years", response_model=list[int])
+def list_years(
+    type_slug: str,
+    object_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[int]:
+    """이 객체가 **명시적으로 배정된** 연도들(`temporal_kind='yearly'`)."""
+    object_type = _type(db, type_slug)
+    row = _visible(db, user, object_type, object_id)
+    return sorted(db.scalars(select(ObjectYear.year).where(ObjectYear.object_id == row.id)))
+
+
+@router.put("/{type_slug}/{object_id}/years", response_model=list[int])
+def set_years(
+    type_slug: str,
+    object_id: uuid.UUID,
+    years: list[int],
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[int]:
+    """연도 배정을 **통째로** 정한다.
+
+    부분 수정이 아닌 이유: 배정은 「이 해들」 이라는 하나의 답이고, 한 해를 빼는
+    일이 한 해를 더하는 일만큼 흔하다. 통째로 받으면 **화면이 보여 준 것과
+    저장되는 것이 같다.**
+    """
+    object_type = _type(db, type_slug)
+    row = _visible(db, user, object_type, object_id)
+    require_owner_edit(
+        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 34)
+    )
+    if object_type.temporal_kind != "yearly":
+        raise Conflict(
+            code("OBJECTS", 35),
+            f"{object_type.label}은 연도를 배정하는 축이 아닙니다"
+            f"(지금 정책: {object_type.temporal_kind}).",
+        )
+
+    wanted = sorted({one for one in years if 1900 <= one <= 2999})
+    db.query(ObjectYear).filter(ObjectYear.object_id == row.id).delete(
+        synchronize_session=False
+    )
+    for one in wanted:
+        db.add(ObjectYear(object_id=row.id, year=one))
+
+    audit.record(
+        db,
+        action="object.years.set",
+        actor=user,
+        target_table="objects",
+        target_id=row.id,
+        target_label=f"{object_type.slug}:{row.label}",
+        workspace_id=row.owner_workspace_id,
+        changes={"years": wanted},
+    )
+    db.commit()
+    return wanted

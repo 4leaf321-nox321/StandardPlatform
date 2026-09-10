@@ -10,6 +10,7 @@ import { Pencil, Trash2 } from 'lucide-react'
 
 import { AttachmentList } from '@/modules/files/AttachmentList'
 import { ontologyApi } from '@/modules/ontology/api'
+import { ObjectYears } from '@/modules/objects/ObjectYears'
 import { RelatedObjects } from '@/modules/objects/RelatedObjects'
 import type { PropertyDef } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
@@ -164,6 +165,11 @@ export default function ObjectProfilePage() {
           />
         )}
       </section>
+
+      {/* **연도를 쓰는 축에서만 나온다.** 없는 것을 있는 척하지 않는다. */}
+      {schema.data?.types.find((one) => one.slug === typeSlug)?.temporal_kind === 'yearly' && (
+        <ObjectYears typeSlug={typeSlug} objectId={objectId} canEdit={profile.data.can_edit} />
+      )}
 
       <RelatedObjects
         typeSlug={typeSlug}

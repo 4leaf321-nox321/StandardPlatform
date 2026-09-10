@@ -1222,3 +1222,73 @@ def test_부모가_반대쪽인_관계도_그린다(client: TestClient, admin: S
     assert [one["label"] for one in _tree(client, admin, part, parent=top["id"])["nodes"]] == [
         "모터"
     ]
+
+
+# --- 시간 차원 (2-e) ---------------------------------------------------------
+
+
+def test_evergreen_은_연도_필터를_무시한다(client: TestClient, admin: Signed) -> None:
+    """기본값이다. **연도와 상관없는 축**(시험 종류·개발 단계)이 대부분이다."""
+    part = _make_type(client, admin, label="부품")
+    _make_object(client, admin, part, label="볼트")
+    listed = client.get(f"/api/objects/{part}?year=2020", headers=admin.headers).json()
+    assert listed["total"] == 1
+
+
+def test_lifecycle_은_유효_구간으로_거른다(client: TestClient, admin: Signed) -> None:
+    """도입·폐지가 있는 축. **NULL 끝은 열려 있다** — 아직 안 끝난 것이다."""
+    part = _make_type(client, admin, label="부품", temporal_kind="lifecycle")
+    _make_object(client, admin, part, label="옛것", valid_from_year=2010, valid_to_year=2015)
+    _make_object(client, admin, part, label="지금것", valid_from_year=2020)
+
+    old = client.get(f"/api/objects/{part}?year=2012", headers=admin.headers).json()
+    assert [one["label"] for one in old["items"]] == ["옛것"]
+
+    now = client.get(f"/api/objects/{part}?year=2026", headers=admin.headers).json()
+    assert [one["label"] for one in now["items"]] == ["지금것"]
+
+
+def test_yearly_는_배정한_해에만_나온다(client: TestClient, admin: Signed) -> None:
+    """**불연속이 가능하다** — 2024·2026 에는 쓰고 2025 에는 안 쓰는 일이 있다.
+    구간으로는 그것을 표현할 수 없다."""
+    model = _make_type(client, admin, "model", label="모델", temporal_kind="yearly")
+    one = _make_object(client, admin, model, label="A모델")
+
+    saved = client.put(
+        f"/api/objects/{model}/{one['id']}/years", json=[2024, 2026], headers=admin.headers
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json() == [2024, 2026]
+
+    for year, expected in ((2024, 1), (2025, 0), (2026, 1)):
+        listed = client.get(f"/api/objects/{model}?year={year}", headers=admin.headers).json()
+        assert listed["total"] == expected, year
+
+
+def test_연도_배정은_통째로_바꾼다(client: TestClient, admin: Signed) -> None:
+    """**화면이 보여 준 것과 저장되는 것이 같아야 한다.**"""
+    model = _make_type(client, admin, "model", label="모델", temporal_kind="yearly")
+    one = _make_object(client, admin, model, label="A모델")
+    client.put(f"/api/objects/{model}/{one['id']}/years", json=[2024], headers=admin.headers)
+    client.put(f"/api/objects/{model}/{one['id']}/years", json=[2026], headers=admin.headers)
+    got = client.get(f"/api/objects/{model}/{one['id']}/years", headers=admin.headers).json()
+    assert got == [2026]
+
+
+def test_연도_축이_아니면_배정을_거절한다(client: TestClient, admin: Signed) -> None:
+    """조용히 저장하면 아무 데도 안 쓰이는 데이터가 쌓인다."""
+    part = _make_type(client, admin, label="부품")  # evergreen
+    one = _make_object(client, admin, part, label="볼트")
+    denied = client.put(
+        f"/api/objects/{part}/{one['id']}/years", json=[2024], headers=admin.headers
+    )
+    assert denied.status_code == 409
+
+
+def test_derived_는_등록이_없으면_안_거른다(client: TestClient, admin: Signed) -> None:
+    """**빈 목록을 주지 않는다.** 빈 목록은 「데이터가 없다」 로 읽히고, 그러면
+    사람은 없는 것을 새로 만든다 — 필터가 작동 안 하는 것과는 다른 일이다."""
+    part = _make_type(client, admin, label="부품", temporal_kind="derived")
+    _make_object(client, admin, part, label="볼트")
+    listed = client.get(f"/api/objects/{part}?year=2020", headers=admin.headers).json()
+    assert listed["total"] == 1

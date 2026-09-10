@@ -12,7 +12,7 @@ from typing import Any
 from sqlalchemy import Select, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.modules.objects.models import ObjectInstance
+from app.modules.objects.models import ObjectInstance, ObjectYear
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.ontology.services import InvalidValue, object_ref_ids
 from app.shared import extensions
@@ -195,3 +195,48 @@ def workspace_reference(
             table="objects", label="객체", count=count, blocks_delete=True
         )
     ]
+
+
+def apply_year(
+    db: Session, stmt: Select[Any], object_type: ObjectType, year: int
+) -> Select[Any]:
+    """축의 **시간 정책**대로 연도를 거른다.
+
+        evergreen  필터를 무시한다 (기본값)
+        lifecycle  valid_from_year ~ valid_to_year 에 그 해가 들면. NULL 끝 = 열림
+        yearly     object_years 에 그 해가 배정돼 있으면 (불연속 가능)
+        derived    도메인이 답한다 — 등록이 없으면 무시한다
+
+    **`derived` 에서 등록이 없을 때 빈 목록을 주지 않는 이유**: 빈 목록은
+    「데이터가 없다」 로 읽히고, 그러면 사람은 없는 것을 새로 만든다. 필터가
+    작동하지 않는 것과 데이터가 없는 것은 다른 일이다.
+    """
+    kind = object_type.temporal_kind
+
+    if kind == "lifecycle":
+        return stmt.where(
+            or_(
+                ObjectInstance.valid_from_year.is_(None),
+                ObjectInstance.valid_from_year <= year,
+            ),
+            or_(
+                ObjectInstance.valid_to_year.is_(None),
+                ObjectInstance.valid_to_year >= year,
+            ),
+        )
+
+    if kind == "yearly":
+        assigned = select(ObjectYear.object_id).where(ObjectYear.year == year)
+        return stmt.where(ObjectInstance.id.in_(assigned))
+
+    if kind == "derived":
+        # 도메인이 등록한 것이 없으면 **거르지 않는다.**
+        if not extensions.has_temporal_source():
+            return stmt
+        candidates = list(db.scalars(stmt.with_only_columns(ObjectInstance.id)))
+        years = extensions.temporal_years(db, candidates)
+        wanted = [one for one in candidates if year in years.get(one, set())]
+        return stmt.where(ObjectInstance.id.in_(wanted))
+
+    # evergreen — 연도 무관.
+    return stmt

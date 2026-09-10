@@ -45,6 +45,9 @@ import { shownDateTime } from '@/shared/lib/datetime'
  *  「고른 것 없음」 으로 보고 자리표시자로 돌아간다. */
 const ALL = '__all__'
 
+/** 고를 수 있는 해. 올해에서 뒤로 열 해 — 그보다 옛것은 「전체 연도」 로 본다. */
+const YEAR_OPTIONS = Array.from({ length: 11 }, (_, index) => new Date().getFullYear() - index)
+
 /** `list_view.columns` 를 안 정했을 때의 기본. **빈 화면이 되지는 않는다.** */
 const FALLBACK_COLUMNS = ['key', 'label', 'updated_at']
 
@@ -126,10 +129,20 @@ export default function ObjectListPage() {
   const [filters, setFilters] = useState<Record<string, string>>({})
   const [under, setUnder] = useState<string | null>(null)
   const [deep, setDeep] = useState(true)
+  /**
+   * **올해가 기본이다.** 연도를 쓰는 축에서 전체를 먼저 보여 주면 몇 해치가
+   * 섞여 뜨고, 사람은 그것을 지금 쓰는 것으로 읽는다. 「전체 보기」 는 옵트인이다.
+   */
+  const [year, setYear] = useState<number | null>(new Date().getFullYear())
   const [offset, setOffset] = useState(0)
   const [creating, setCreating] = useState(false)
 
   const schema = useResource(() => ontologyApi.schema(), [])
+  const foundType = schema.data?.types.find((row) => row.slug === typeSlug)
+  /** 연도가 뜻을 갖는 축인가. `evergreen` 이면 토글을 안 그린다 — **없는 것을
+   *  있는 척하지 않는다.** */
+  const yearApplies = Boolean(foundType && foundType.temporal_kind !== 'evergreen')
+
   const list = useResource(
     () =>
       objectApi.list(typeSlug, {
@@ -137,15 +150,20 @@ export default function ObjectListPage() {
         properties: filters,
         under,
         deep,
+        year: yearApplies ? year : null,
         offset,
       }),
     // filters 는 객체라 참조가 매번 바뀐다 — 내용으로 비교한다.
-    [typeSlug, query, JSON.stringify(filters), under, deep, offset],
+    [typeSlug, query, JSON.stringify(filters), under, deep, year, offset],
   )
 
-  const type = schema.data?.types.find((row) => row.slug === typeSlug)
+  const type = foundType
   /** 지금 목록이 좁혀져 있나. 빈 목록의 이유가 이것으로 갈린다. */
-  const narrowed = Boolean(query) || Object.keys(filters).length > 0 || Boolean(under)
+  const narrowed =
+    Boolean(query) ||
+    Object.keys(filters).length > 0 ||
+    Boolean(under) ||
+    (yearApplies && year !== null)
   /** 트리가 정의된 타입인가. 안 정했으면 왼쪽을 안 그린다. */
   const hasTree = Boolean(type?.list_view?.tree?.relation)
   const columns = useMemo(
@@ -234,6 +252,32 @@ export default function ObjectListPage() {
             />
           )
         })}
+        {/* **올해 기본 + 전체 보기.** 연도를 쓰는 축에서 전체를 먼저 보여 주면
+            몇 해치가 섞여 뜨고, 사람은 그것을 지금 쓰는 것으로 읽는다. */}
+        {yearApplies && (
+          <div className="flex items-end gap-2 pb-0.5">
+            <Select
+              value={year === null ? ALL : String(year)}
+              onValueChange={(next) => {
+                setYear(next === ALL ? null : Number(next))
+                setOffset(0)
+              }}
+            >
+              <SelectTrigger className="h-9 w-32">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={ALL}>전체 연도</SelectItem>
+                {YEAR_OPTIONS.map((one) => (
+                  <SelectItem key={one} value={String(one)}>
+                    {one}년
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        )}
+
         {/* **기본은 포함이다.** 끄면 직계만 본다 — 상위 노드를 눌렀을 때 목록이
             비면 그 빈 목록은 「없다」 로 읽힌다. */}
         {under && (
@@ -263,7 +307,9 @@ export default function ObjectListPage() {
             narrowed
               ? under
                 ? '고른 가지 아래에 맞는 것이 없습니다. 왼쪽에서 「전체 보기」 를 누르거나 거르기를 줄여 보세요.'
-                : '찾는 말이나 거르기를 줄여 보세요. 다른 부서의 것은 여기 안 보입니다.'
+                : yearApplies && year !== null
+                  ? `${year}년에 해당하는 것이 없습니다. 「전체 연도」 로 바꿔 보세요.`
+                  : '찾는 말이나 거르기를 줄여 보세요. 다른 부서의 것은 여기 안 보입니다.'
               : '「만들기」 로 첫 항목을 넣거나, 다른 부서의 것이라면 그 부서 사람에게 물어보세요.'
           }
           action={
@@ -275,6 +321,7 @@ export default function ObjectListPage() {
                   setQuery('')
                   setFilters({})
                   setUnder(null)
+                  setYear(null)
                   setOffset(0)
                 }}
               >

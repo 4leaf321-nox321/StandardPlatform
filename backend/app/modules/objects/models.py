@@ -183,3 +183,25 @@ class ObjectRelation(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
+
+
+class ObjectYear(Base):
+    """`temporal_kind='yearly'` 인 축의 **연도 배정.**
+
+    모델명처럼 **연도가 불연속인** 값을 위한 표다 — 2024·2026 에는 쓰고 2025 에는
+    안 쓰는 일이 실제로 있다. 구간(`valid_from_year`~`valid_to_year`)으로는 그것을
+    표현할 수 없다.
+    """
+
+    __tablename__ = "object_years"
+    __table_args__ = (
+        UniqueConstraint("object_id", "year", name="uq_object_years_object_year"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    object_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE"), index=True
+    )
+    year: Mapped[int] = mapped_column(Integer, index=True)

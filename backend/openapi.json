@@ -2971,6 +2971,26 @@
             "description": "아래 것까지 포함"
           },
           {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2999,
+                  "minimum": 1900
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "그 해에 해당하는 것만",
+              "title": "Year"
+            },
+            "description": "그 해에 해당하는 것만"
+          },
+          {
             "name": "limit",
             "in": "query",
             "required": false,
@@ -3404,6 +3424,132 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/{object_id}/years": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "List Years",
+        "description": "이 객체가 **명시적으로 배정된** 연도들(`temporal_kind='yearly'`).",
+        "operationId": "list_years_api_objects__type_slug___object_id__years_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  },
+                  "title": "Response List Years Api Objects  Type Slug   Object Id  Years Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Set Years",
+        "description": "연도 배정을 **통째로** 정한다.\n\n부분 수정이 아닌 이유: 배정은 「이 해들」 이라는 하나의 답이고, 한 해를 빼는\n일이 한 해를 더하는 일만큼 흔하다. 통째로 받으면 **화면이 보여 준 것과\n저장되는 것이 같다.**",
+        "operationId": "set_years_api_objects__type_slug___object_id__years_put",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "array",
+                "items": {
+                  "type": "integer"
+                },
+                "title": "Years"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer"
+                  },
+                  "title": "Response Set Years Api Objects  Type Slug   Object Id  Years Put"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",

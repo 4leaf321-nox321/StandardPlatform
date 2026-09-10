@@ -82,6 +82,8 @@ export interface ObjectQuery {
   under?: string | null
   /** 그 아래 것까지 포함할지. **기본은 포함**이다. */
   deep?: boolean
+  /** 그 해에 해당하는 것만. 축의 시간 정책이 뜻을 정한다. */
+  year?: number | null
 }
 
 function queryString(query: ObjectQuery): string {
@@ -91,6 +93,7 @@ function queryString(query: ObjectQuery): string {
   if (query.offset) params.set('offset', String(query.offset))
   if (query.under) params.set('under', query.under)
   if (query.under && query.deep === false) params.set('deep', 'false')
+  if (query.year) params.set('year', String(query.year))
   for (const [key, value] of Object.entries(query.properties ?? {})) {
     if (value) params.set(`p.${key}`, value)
   }
@@ -126,4 +129,10 @@ export const objectApi = {
   ) => api.patch<RelatedObject>(`/objects/${typeSlug}/${id}/relations/${relationId}`, body),
   removeRelation: (typeSlug: string, id: string, relationId: string) =>
     api.delete<void>(`/objects/${typeSlug}/${id}/relations/${relationId}`),
+
+  years: (typeSlug: string, id: string) =>
+    api.get<number[]>(`/objects/${typeSlug}/${id}/years`),
+  /** **통째로** 정한다 — 화면이 보여 준 것과 저장되는 것이 같아야 한다. */
+  setYears: (typeSlug: string, id: string, years: number[]) =>
+    api.put<number[]>(`/objects/${typeSlug}/${id}/years`, years),
 }
