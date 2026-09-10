@@ -15,6 +15,7 @@ import { objectApi } from '@/modules/objects/api'
 import type { ObjectRow } from '@/modules/objects/api'
 import { propertyText } from '@/modules/objects/PropertyFields'
 import { ObjectCreateDialog } from '@/modules/objects/ObjectCreateDialog'
+import { ObjectTree } from '@/modules/objects/ObjectTree'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -123,19 +124,30 @@ export default function ObjectListPage() {
   const { typeSlug = '' } = useParams()
   const [query, setQuery] = useState('')
   const [filters, setFilters] = useState<Record<string, string>>({})
+  const [under, setUnder] = useState<string | null>(null)
+  const [deep, setDeep] = useState(true)
   const [offset, setOffset] = useState(0)
   const [creating, setCreating] = useState(false)
 
   const schema = useResource(() => ontologyApi.schema(), [])
   const list = useResource(
-    () => objectApi.list(typeSlug, { q: query || undefined, properties: filters, offset }),
+    () =>
+      objectApi.list(typeSlug, {
+        q: query || undefined,
+        properties: filters,
+        under,
+        deep,
+        offset,
+      }),
     // filters 는 객체라 참조가 매번 바뀐다 — 내용으로 비교한다.
-    [typeSlug, query, JSON.stringify(filters), offset],
+    [typeSlug, query, JSON.stringify(filters), under, deep, offset],
   )
 
   const type = schema.data?.types.find((row) => row.slug === typeSlug)
   /** 지금 목록이 좁혀져 있나. 빈 목록의 이유가 이것으로 갈린다. */
-  const narrowed = Boolean(query) || Object.keys(filters).length > 0
+  const narrowed = Boolean(query) || Object.keys(filters).length > 0 || Boolean(under)
+  /** 트리가 정의된 타입인가. 안 정했으면 왼쪽을 안 그린다. */
+  const hasTree = Boolean(type?.list_view?.tree?.relation)
   const columns = useMemo(
     () => (type ? buildColumns(type, type.properties) : []),
     [type],
@@ -157,7 +169,20 @@ export default function ObjectListPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className={hasTree ? 'flex min-h-full gap-6' : 'mx-auto max-w-5xl'}>
+      {hasTree && type && (
+        <ObjectTree
+          typeSlug={typeSlug}
+          selected={under}
+          onSelect={(id) => {
+            setUnder(id)
+            setOffset(0)
+          }}
+          reloadKey={list.data?.total ?? 0}
+        />
+      )}
+
+      <div className="min-w-0 flex-1">
       <PageHeader
         title={type?.label ?? '…'}
         description={type?.description || undefined}
@@ -209,6 +234,22 @@ export default function ObjectListPage() {
             />
           )
         })}
+        {/* **기본은 포함이다.** 끄면 직계만 본다 — 상위 노드를 눌렀을 때 목록이
+            비면 그 빈 목록은 「없다」 로 읽힌다. */}
+        {under && (
+          <label className="text-muted-foreground flex items-center gap-1.5 pb-1.5 text-sm">
+            <input
+              type="checkbox"
+              className="size-4"
+              checked={deep}
+              onChange={(event) => {
+                setDeep(event.target.checked)
+                setOffset(0)
+              }}
+            />
+            아래 것까지 포함
+          </label>
+        )}
       </div>
 
       {list.error && <ErrorNotice error={list.error} />}
@@ -220,7 +261,9 @@ export default function ObjectListPage() {
             /* **비어 있는 이유를 말한다.** 데이터가 없는 것인지, 거르기가 좁은
                것인지, 권한 때문인지는 해야 할 일이 전혀 다르다. */
             narrowed
-              ? '찾는 말이나 거르기를 줄여 보세요. 다른 부서의 것은 여기 안 보입니다.'
+              ? under
+                ? '고른 가지 아래에 맞는 것이 없습니다. 왼쪽에서 「전체 보기」 를 누르거나 거르기를 줄여 보세요.'
+                : '찾는 말이나 거르기를 줄여 보세요. 다른 부서의 것은 여기 안 보입니다.'
               : '「만들기」 로 첫 항목을 넣거나, 다른 부서의 것이라면 그 부서 사람에게 물어보세요.'
           }
           action={
@@ -231,6 +274,7 @@ export default function ObjectListPage() {
                 onClick={() => {
                   setQuery('')
                   setFilters({})
+                  setUnder(null)
                   setOffset(0)
                 }}
               >
@@ -292,6 +336,8 @@ export default function ObjectListPage() {
           />
         </div>
       )}
+
+      </div>
 
       {type && creating && (
         <ObjectCreateDialog

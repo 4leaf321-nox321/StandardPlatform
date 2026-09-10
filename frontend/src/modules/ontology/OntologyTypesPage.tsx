@@ -165,6 +165,7 @@ export default function OntologyTypesPage() {
         <TypeEditDialog
           type={target}
           groups={groups}
+          relationTypes={schema?.relation_types ?? []}
           onClose={() => setEditing(null)}
           onChanged={reload}
         />

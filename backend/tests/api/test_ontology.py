@@ -1091,3 +1091,134 @@ def test_맺힌_관계가_있는_종류는_못_지운다(client: TestClient, adm
     denied = client.delete(f"/api/ontology/relation-types/{kind}", headers=admin.headers)
     assert denied.status_code == 409
     assert "1개" in denied.json()["error"]["message"]
+
+
+# --- 트리 (2-c · 2-d) --------------------------------------------------------
+
+
+def _tree(client: TestClient, who: Signed, type_slug: str, **params: Any) -> Any:
+    query = "&".join(f"{k}={v}" for k, v in params.items())
+    return client.get(
+        f"/api/objects/{type_slug}/tree{'?' + query if query else ''}", headers=who.headers
+    ).json()
+
+
+def _tree_type(client: TestClient, admin: Signed) -> tuple[str, str]:
+    """트리가 그려지는 타입 하나와 그 관계."""
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(
+        client,
+        admin,
+        "part_of",
+        label="속함",
+        inverse_label="포함",
+        transitive=True,
+        acyclic=True,
+    )
+    client.patch(
+        f"/api/ontology/types/{part}",
+        json={"list_view": {"tree": {"relation": kind, "parent": "dst"}}},
+        headers=admin.headers,
+    )
+    return part, kind
+
+
+def test_트리를_안_정하면_안_그린다(client: TestClient, admin: Signed) -> None:
+    """**`transitive` 인 관계가 둘 이상일 수 있다** — 아무거나 골라 그리면 그
+    트리는 무엇을 보여 주는지 말할 수 없다."""
+    part = _make_type(client, admin, label="부품")
+    _make_object(client, admin, part, label="볼트")
+    assert _tree(client, admin, part) == {"nodes": [], "orphan_count": 0}
+
+
+def test_뿌리와_어디에도_안_걸린_것을_가른다(client: TestClient, admin: Signed) -> None:
+    """트리를 아직 안 만든 타입에서는 거의 모두가 부모가 없다 — **안 가르면 뿌리
+    목록이 곧 전체 목록이 된다.** 그리고 안 걸린 것을 아예 안 보여 주면 눈에서
+    사라진 채 남는다."""
+    part, kind = _tree_type(client, admin)
+    top = _make_object(client, admin, part, label="구동부")
+    child = _make_object(client, admin, part, label="모터")
+    _make_object(client, admin, part, label="떠도는 것")
+    _link(client, admin, part, child["id"], kind, top["id"])
+
+    roots = _tree(client, admin, part)
+    assert [one["label"] for one in roots["nodes"]] == ["구동부"]
+    assert roots["nodes"][0]["child_count"] == 1
+    assert roots["orphan_count"] == 1
+
+    orphans = _tree(client, admin, part, orphans="true")
+    assert [one["label"] for one in orphans["nodes"]] == ["떠도는 것"]
+
+
+def test_한_단계씩_펼친다(client: TestClient, admin: Signed) -> None:
+    """**통째로 안 불러온다** — 부품 5천 개짜리 트리에서 첫 화면이 안 뜬다."""
+    part, kind = _tree_type(client, admin)
+    top = _make_object(client, admin, part, label="A")
+    mid = _make_object(client, admin, part, label="B")
+    leaf = _make_object(client, admin, part, label="C")
+    _link(client, admin, part, mid["id"], kind, top["id"])
+    _link(client, admin, part, leaf["id"], kind, mid["id"])
+
+    # 뿌리에는 A 만. B 는 A 를 펼쳐야 나온다.
+    assert [one["label"] for one in _tree(client, admin, part)["nodes"]] == ["A"]
+    level = _tree(client, admin, part, parent=top["id"])
+    assert [one["label"] for one in level["nodes"]] == ["B"]
+    assert level["nodes"][0]["child_count"] == 1
+
+
+def test_아래_것까지_포함이_기본이다(client: TestClient, admin: Signed) -> None:
+    """**안 그러면 상위 노드를 눌렀을 때 목록이 비고, 그 빈 목록은 「없다」 로
+    읽힌다.**"""
+    part, kind = _tree_type(client, admin)
+    top = _make_object(client, admin, part, label="A")
+    mid = _make_object(client, admin, part, label="B")
+    leaf = _make_object(client, admin, part, label="C")
+    _link(client, admin, part, mid["id"], kind, top["id"])
+    _link(client, admin, part, leaf["id"], kind, mid["id"])
+
+    deep = client.get(f"/api/objects/{part}?under={top['id']}", headers=admin.headers).json()
+    assert sorted(one["label"] for one in deep["items"]) == ["A", "B", "C"]
+
+    shallow = client.get(
+        f"/api/objects/{part}?under={top['id']}&deep=false", headers=admin.headers
+    ).json()
+    assert [one["label"] for one in shallow["items"]] == ["A"]
+
+
+def test_트리가_없는_타입에_under_를_주면_말해_준다(client: TestClient, admin: Signed) -> None:
+    """조용히 무시하면 화면은 좁혀진 줄 아는데 목록은 전부를 보여 준다."""
+    part = _make_type(client, admin, label="부품")
+    one = _make_object(client, admin, part, label="A")
+    denied = client.get(f"/api/objects/{part}?under={one['id']}", headers=admin.headers)
+    assert denied.status_code == 409
+    assert "트리" in denied.json()["error"]["message"]
+
+
+def test_부모가_반대쪽인_관계도_그린다(client: TestClient, admin: Signed) -> None:
+    """관계는 사람이 정의하므로 방향이 둘 다 가능하다 — **하나로 정하면 반대로
+    정의한 사람의 트리가 뒤집힌 채 그려지고 그것을 말해 주는 자리가 없다.**"""
+    part = _make_type(client, admin, label="부품")
+    kind = _make_relation(
+        client,
+        admin,
+        "contains",
+        label="포함",
+        inverse_label="속함",
+        transitive=True,
+        acyclic=True,
+    )
+    client.patch(
+        f"/api/ontology/types/{part}",
+        json={"list_view": {"tree": {"relation": kind, "parent": "src"}}},
+        headers=admin.headers,
+    )
+    top = _make_object(client, admin, part, label="구동부")
+    child = _make_object(client, admin, part, label="모터")
+    # 부모 -> 자식 방향으로 잇는다.
+    _link(client, admin, part, top["id"], kind, child["id"])
+
+    roots = _tree(client, admin, part)
+    assert [one["label"] for one in roots["nodes"]] == ["구동부"]
+    assert [one["label"] for one in _tree(client, admin, part, parent=top["id"])["nodes"]] == [
+        "모터"
+    ]

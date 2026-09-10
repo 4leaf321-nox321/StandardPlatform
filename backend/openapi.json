@@ -2813,6 +2813,80 @@
         }
       }
     },
+    "/api/objects/{type_slug}/tree": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Object Tree",
+        "description": "트리 한 단계.\n\n**통째로 안 불러온다.** 펼칠 때 그 단계만 읽는다 — 안 그러면 부품 5천 개짜리\n트리에서 첫 화면이 안 뜬다.",
+        "operationId": "object_tree_api_objects__type_slug__tree_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "parent",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "펼칠 노드. 없으면 뿌리",
+              "title": "Parent"
+            },
+            "description": "펼칠 노드. 없으면 뿌리"
+          },
+          {
+            "name": "orphans",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "어디에도 안 걸린 것만",
+              "default": false,
+              "title": "Orphans"
+            },
+            "description": "어디에도 안 걸린 것만"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TreeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}": {
       "get": {
         "tags": [
@@ -2864,6 +2938,37 @@
               ],
               "title": "Status"
             }
+          },
+          {
+            "name": "under",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "트리에서 고른 노드",
+              "title": "Under"
+            },
+            "description": "트리에서 고른 노드"
+          },
+          {
+            "name": "deep",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "아래 것까지 포함",
+              "default": true,
+              "title": "Deep"
+            },
+            "description": "아래 것까지 포함"
           },
           {
             "name": "limit",
@@ -6568,6 +6673,69 @@
         ],
         "title": "TokenScopesOut",
         "description": "이 설치가 아는 범위. **화면이 목록을 손으로 들지 않는다** — 도메인이 범위를\n더하면 화면은 아무것도 안 고쳐도 새 범위를 보여 준다."
+      },
+      "TreeNodeOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "child_count": {
+            "type": "integer",
+            "title": "Child Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "key",
+          "status",
+          "child_count"
+        ],
+        "title": "TreeNodeOut",
+        "description": "트리 한 줄."
+      },
+      "TreeOut": {
+        "properties": {
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/TreeNodeOut"
+            },
+            "type": "array",
+            "title": "Nodes"
+          },
+          "orphan_count": {
+            "type": "integer",
+            "title": "Orphan Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nodes",
+          "orphan_count"
+        ],
+        "title": "TreeOut"
       },
       "UnreadCountOut": {
         "properties": {

@@ -57,12 +57,31 @@ export interface ObjectProfile {
   can_edit: boolean
 }
 
+export interface TreeNode {
+  id: string
+  label: string
+  key: string | null
+  status: string
+  /** **자식 수를 미리 준다** — 없는데 펼침 화살표가 보이면 눌러 보고서야 안다. */
+  child_count: number
+}
+
+export interface TreeOut {
+  nodes: TreeNode[]
+  /** 부모도 자식도 없는 것의 수. **안 보여 주면 눈에서 사라진 채 남는다.** */
+  orphan_count: number
+}
+
 export interface ObjectQuery {
   q?: string
   limit?: number
   offset?: number
   /** `?p.<키>=<값>` 으로 나간다. */
   properties?: Record<string, string>
+  /** 트리에서 고른 노드. */
+  under?: string | null
+  /** 그 아래 것까지 포함할지. **기본은 포함**이다. */
+  deep?: boolean
 }
 
 function queryString(query: ObjectQuery): string {
@@ -70,6 +89,8 @@ function queryString(query: ObjectQuery): string {
   if (query.q) params.set('q', query.q)
   if (query.limit !== undefined) params.set('limit', String(query.limit))
   if (query.offset) params.set('offset', String(query.offset))
+  if (query.under) params.set('under', query.under)
+  if (query.under && query.deep === false) params.set('deep', 'false')
   for (const [key, value] of Object.entries(query.properties ?? {})) {
     if (value) params.set(`p.${key}`, value)
   }
@@ -80,6 +101,13 @@ function queryString(query: ObjectQuery): string {
 export const objectApi = {
   list: (typeSlug: string, query: ObjectQuery = {}) =>
     api.get<Page<ObjectRow>>(`/objects/${typeSlug}${queryString(query)}`),
+  tree: (typeSlug: string, opts: { parent?: string; orphans?: boolean } = {}) => {
+    const params = new URLSearchParams()
+    if (opts.parent) params.set('parent', opts.parent)
+    if (opts.orphans) params.set('orphans', 'true')
+    const text = params.toString()
+    return api.get<TreeOut>(`/objects/${typeSlug}/tree${text ? `?${text}` : ''}`)
+  },
   profile: (typeSlug: string, id: string) =>
     api.get<ObjectProfile>(`/objects/${typeSlug}/${id}`),
   create: (typeSlug: string, body: Record<string, unknown>) =>

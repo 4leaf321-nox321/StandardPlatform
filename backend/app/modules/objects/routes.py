@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.files.models import Attachment
+from app.modules.objects import graph
 from app.modules.objects import relations as rel
 from app.modules.objects.models import OBJECT_STATUSES, ObjectInstance, ObjectRelation
 from app.modules.objects.schemas import (
@@ -28,6 +29,8 @@ from app.modules.objects.schemas import (
     RelatedObjectOut,
     RelationCreateRequest,
     RelationPatchRequest,
+    TreeNodeOut,
+    TreeOut,
 )
 from app.modules.objects.services import (
     apply_property_filters,
@@ -158,6 +161,87 @@ def _can_edit(db: Session, user: User, row: ObjectInstance) -> bool:
     return True
 
 
+def _tree_spec(object_type: ObjectType) -> tuple[str | None, graph.ParentEnd]:
+    """`list_view.tree` 가 정한 트리 관계와 부모 쪽 끝.
+
+    안 정했으면 트리를 안 그린다 — **`transitive` 인 관계가 둘 이상일 수 있어서**
+    아무거나 골라 그리면 그 트리는 무엇을 보여 주는지 말할 수 없다.
+    """
+    spec = (object_type.list_view or {}).get("tree") or {}
+    relation = spec.get("relation")
+    parent_end: graph.ParentEnd = "src" if spec.get("parent") == "src" else "dst"
+    return (relation if isinstance(relation, str) and relation else None, parent_end)
+
+
+# --- 트리 -------------------------------------------------------------------
+
+
+@router.get("/{type_slug}/tree", response_model=TreeOut)
+def object_tree(
+    type_slug: str,
+    parent: uuid.UUID | None = Query(default=None, description="펼칠 노드. 없으면 뿌리"),
+    orphans: bool = Query(default=False, description="어디에도 안 걸린 것만"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> TreeOut:
+    """트리 한 단계.
+
+    **통째로 안 불러온다.** 펼칠 때 그 단계만 읽는다 — 안 그러면 부품 5천 개짜리
+    트리에서 첫 화면이 안 뜬다.
+    """
+    object_type = _type(db, type_slug)
+    relation, parent_end = _tree_spec(object_type)
+    if relation is None:
+        return TreeOut(nodes=[], orphan_count=0)
+
+    if parent is not None:
+        ids = graph.child_ids(db, relation=relation, parent_id=parent, parent_end=parent_end)
+        orphan_count = 0
+    else:
+        parentless = graph.parentless_ids(
+            db, relation=relation, type_id=object_type.id, parent_end=parent_end
+        )
+        counts = graph.child_counts(
+            db, relation=relation, parent_ids=parentless, parent_end=parent_end
+        )
+        roots = [one for one in parentless if counts.get(one, 0) > 0]
+        orphan_ids = [one for one in parentless if counts.get(one, 0) == 0]
+        ids = orphan_ids if orphans else roots
+        orphan_count = len(orphan_ids)
+
+    if not ids:
+        return TreeOut(nodes=[], orphan_count=orphan_count)
+
+    # **볼 수 있는 것만 준다.** 남의 부서 것은 트리에도 안 나온다.
+    rows = list(
+        db.scalars(
+            select(ObjectInstance)
+            .where(
+                ObjectInstance.id.in_(ids),
+                ObjectInstance.deleted_at.is_(None),
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+            )
+            .order_by(ObjectInstance.label)
+        )
+    )
+    counts = graph.child_counts(
+        db, relation=relation, parent_ids=[row.id for row in rows], parent_end=parent_end
+    )
+    return TreeOut(
+        nodes=[
+            TreeNodeOut(
+                id=row.id,
+                label=row.label,
+                key=row.key,
+                status=row.status,
+                child_count=counts.get(row.id, 0),
+            )
+            for row in rows
+        ],
+        orphan_count=orphan_count,
+    )
+
+
 # --- 목록 -------------------------------------------------------------------
 
 
@@ -167,6 +251,8 @@ def list_objects(
     request: Request,
     q: str | None = Query(default=None, description="이름·식별자·검색 속성"),
     status: str | None = Query(default=None),
+    under: uuid.UUID | None = Query(default=None, description="트리에서 고른 노드"),
+    deep: bool = Query(default=True, description="아래 것까지 포함"),
     limit: int | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
     user: User = Depends(current_user),
@@ -188,6 +274,22 @@ def list_objects(
         stmt = stmt.where(ObjectInstance.status == status)
     if q:
         stmt = apply_search(stmt, object_type, q)
+    if under is not None:
+        # **기본은 「아래 것까지 포함」 이다.** 안 그러면 상위 노드를 눌렀을 때
+        # 목록이 비고, 그 빈 목록은 「없다」 로 읽힌다.
+        relation, parent_end = _tree_spec(object_type)
+        if relation is None:
+            raise Conflict(
+                code("OBJECTS", 33),
+                f"{object_type.label}에는 트리가 정의돼 있지 않습니다. "
+                "타입의 「목록 화면」 에서 트리로 쓸 관계를 고르세요.",
+            )
+        wanted = [under]
+        if deep:
+            wanted += graph.descendant_ids(
+                db, relation=relation, root_id=under, parent_end=parent_end
+            )
+        stmt = stmt.where(ObjectInstance.id.in_(wanted))
 
     filters = {
         key[2:]: value for key, value in request.query_params.items() if key.startswith("p.")

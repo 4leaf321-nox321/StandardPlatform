@@ -101,6 +101,28 @@ class RelatedObjectOut(BaseModel):
     created_at: datetime
 
 
+class TreeNodeOut(BaseModel):
+    """트리 한 줄."""
+
+    id: uuid.UUID
+    label: str
+    key: str | None
+    status: str
+    child_count: int
+    """**자식 수를 미리 준다.** 없는데 펼침 화살표가 보이면 눌러 보고서야 빈 것을
+    안다 — 그 한 번이 매 노드마다 반복된다."""
+
+
+class TreeOut(BaseModel):
+    nodes: list[TreeNodeOut]
+    orphan_count: int
+    """부모도 자식도 없는 것의 수.
+
+    **트리에 안 보이는 채로 남으면 눈에서 사라진다.** 뿌리와 가르는 이유는,
+    트리를 아직 안 만든 타입에서는 거의 모두가 부모가 없어 안 가르면 뿌리
+    목록이 곧 전체 목록이 되기 때문이다."""
+
+
 class RelationCreateRequest(BaseModel):
     relation: str
     dst_object_id: uuid.UUID

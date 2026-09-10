@@ -30,6 +30,14 @@ export interface PropertyDef {
 /** 목록 화면의 모양. **없으면 모든 목록이 똑같아지고, 똑같으면 아무도 안 쓴다.** */
 export interface ListView {
   columns?: string[]
+  /**
+   * 목록 왼쪽에 세울 트리.
+   *
+   * **관계를 고르는 이유**: `transitive` 인 관계가 둘 이상일 수 있어서, 아무거나
+   * 골라 그리면 그 트리는 무엇을 보여 주는지 말할 수 없다. `parent` 는 **부모가
+   * 어느 끝인가** — `part_of`(자식→부모)면 `dst`, `contains`(부모→자식)면 `src`.
+   */
+  tree?: { relation: string; parent?: 'src' | 'dst' }
   sort?: { field: string; dir?: 'asc' | 'desc' }
   filters?: string[]
   search?: string[]

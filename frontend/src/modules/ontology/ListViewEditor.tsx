@@ -15,7 +15,7 @@
 
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react'
 
-import type { ListView, PropertyDef } from '@/modules/ontology/api'
+import type { ListView, PropertyDef, RelationType } from '@/modules/ontology/api'
 import { Button } from '@/shared/components/ui/button'
 import { Label } from '@/shared/components/ui/label'
 import {
@@ -42,6 +42,9 @@ const BUILT_IN: { id: string; label: string }[] = [
  */
 const NOT_A_COLUMN = new Set(['file'])
 
+/** 「트리 없음」. 빈 문자열을 쓸 수 없다 — Select 가 그것을 「고른 것 없음」 으로 본다. */
+const NO_TREE = '__none__'
+
 /** 열을 안 골랐을 때 목록이 떨어지는 기본. `ObjectListPage` 와 같아야 한다. */
 const FALLBACK_PREVIEW = ['key', 'label', 'updated_at']
 
@@ -50,6 +53,10 @@ const FILTERABLE = new Set(['text', 'enum'])
 
 interface Props {
   defs: PropertyDef[]
+  /** 트리로 쓸 수 있는 관계를 고르기 위해 받는다. */
+  relationTypes: RelationType[]
+  /** 이 타입의 slug — 허용 타입에 걸린 관계만 고르게 한다. */
+  typeSlug: string
   value: ListView
   onChange: (next: ListView) => void
 }
@@ -131,7 +138,7 @@ function Preview({ defs, value }: { defs: PropertyDef[]; value: ListView }) {
   )
 }
 
-export function ListViewEditor({ defs, value, onChange }: Props) {
+export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange }: Props) {
   const all = fieldOptions(defs)
   const chosen = value.columns ?? []
   const rest = all.filter((one) => !chosen.includes(one.id))
@@ -286,6 +293,14 @@ export function ListViewEditor({ defs, value, onChange }: Props) {
         </div>
       </div>
 
+      {/* --- 트리 ------------------------------------------------------- */}
+      <TreeSection
+        relationTypes={relationTypes}
+        typeSlug={typeSlug}
+        value={value}
+        onChange={onChange}
+      />
+
       {/* --- 검색·거르기 ------------------------------------------------ */}
       <Toggles
         title="검색이 훑을 자리"
@@ -340,6 +355,104 @@ function Toggles({
         </div>
       )}
       <p className="text-muted-foreground text-xs">{hint}</p>
+    </div>
+  )
+}
+
+
+/**
+ * 목록 왼쪽에 세울 트리.
+ *
+ * **재귀로 펼치는(`transitive`) 관계만** 고르게 한다. 아닌 관계로 트리를 그리면
+ * 한 단계밖에 안 펼쳐지는데, 화면은 그것이 「자식이 없어서」 인지 「관계가 그런
+ * 종류라서」 인지 말해 주지 못한다.
+ */
+function TreeSection({
+  relationTypes,
+  typeSlug,
+  value,
+  onChange,
+}: {
+  relationTypes: RelationType[]
+  typeSlug: string
+  value: ListView
+  onChange: (next: ListView) => void
+}) {
+  const usable = relationTypes.filter(
+    (one) =>
+      one.is_active &&
+      one.transitive &&
+      // 양끝 중 어느 쪽이든 이 타입이 낄 수 있어야 트리가 그려진다.
+      (!one.src_type_slugs || one.src_type_slugs.includes(typeSlug)) &&
+      (!one.dst_type_slugs || one.dst_type_slugs.includes(typeSlug)),
+  )
+  const chosen = value.tree?.relation ?? NO_TREE
+  const parent = value.tree?.parent ?? 'dst'
+  const kind = usable.find((one) => one.slug === chosen) ?? null
+
+  return (
+    <div className="space-y-2">
+      <Label>목록 왼쪽 트리</Label>
+      {usable.length === 0 ? (
+        <p className="text-muted-foreground text-sm">
+          쓸 수 있는 관계가 없습니다. <b>「재귀로 펼친다」 로 정의된 관계</b>라야 트리를
+          세울 수 있습니다 — 관리 → 온톨로지 → 관계 종류에서 만드세요.
+        </p>
+      ) : (
+        <>
+          <Select
+            value={chosen}
+            onValueChange={(next) =>
+              onChange({
+                ...value,
+                tree: next === NO_TREE ? undefined : { relation: next, parent },
+              })
+            }
+          >
+            <SelectTrigger>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={NO_TREE}>트리 없음</SelectItem>
+              {usable.map((one) => (
+                <SelectItem key={one.slug} value={one.slug}>
+                  {one.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {kind && (
+            <>
+              <Select
+                value={parent}
+                onValueChange={(next) =>
+                  onChange({
+                    ...value,
+                    tree: { relation: kind.slug, parent: next as 'src' | 'dst' },
+                  })
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="dst">
+                    자식이 부모를 가리킨다 (A가 B에 「{kind.label}」)
+                  </SelectItem>
+                  <SelectItem value="src">
+                    부모가 자식을 가리킨다 (A가 B를 「{kind.label}」)
+                  </SelectItem>
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground text-xs">
+                <b>방향을 잘못 고르면 트리가 뒤집힌 채 그려지고</b>, 화면은 그것을 말해
+                주지 못합니다. 이은 뒤 목록에서 한번 확인하세요.
+              </p>
+            </>
+          )}
+        </>
+      )}
     </div>
   )
 }

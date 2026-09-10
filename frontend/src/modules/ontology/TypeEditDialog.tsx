@@ -12,7 +12,13 @@ import { useState } from 'react'
 
 import { ListViewEditor } from '@/modules/ontology/ListViewEditor'
 import { ontologyApi } from '@/modules/ontology/api'
-import type { ListView, NavGroupRow, ObjectType, PropertyDef } from '@/modules/ontology/api'
+import type {
+  ListView,
+  NavGroupRow,
+  ObjectType,
+  PropertyDef,
+  RelationType,
+} from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
@@ -42,11 +48,12 @@ interface Props {
   /** 속성 정의까지 들고 온다 — **열로 고를 것이 그 목록에서 나온다.** */
   type: ObjectType & { properties: PropertyDef[] }
   groups: NavGroupRow[]
+  relationTypes: RelationType[]
   onClose: () => void
   onChanged: () => void
 }
 
-export function TypeEditDialog({ type, groups, onClose, onChanged }: Props) {
+export function TypeEditDialog({ type, groups, relationTypes, onClose, onChanged }: Props) {
   const [label, setLabel] = useState(type.label)
   const [description, setDescription] = useState(type.description)
   const [group, setGroup] = useState(type.nav_group_slug ?? NONE)
@@ -220,6 +227,8 @@ export function TypeEditDialog({ type, groups, onClose, onChanged }: Props) {
             <TabsContent value="list" className="space-y-4">
               <ListViewEditor
                 defs={type.properties}
+                relationTypes={relationTypes}
+                typeSlug={type.slug}
                 value={listView}
                 onChange={setListView}
               />
