@@ -19,12 +19,20 @@ import inspect
 import json
 from typing import Any
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from mcp_server import tools
 from mcp_server.tools import Platform, PlatformError
 
-mcp = FastMCP("standardplatform-ontology")
+mcp = MCPServer(
+    "standardplatform-ontology",
+    instructions=(
+        "이 설치의 온톨로지를 읽고 쓴다. **`ontology_schema` 를 먼저 부른다** — "
+        "무엇을 만들 수 있고 각 타입이 어떤 값을 받는지가 거기 다 있다. "
+        "정의를 바꿀 때는 `ontology_import` 를 기본값(apply=false)으로 먼저 불러 "
+        "계획과 경고를 사람에게 보여 주고, 판단을 받은 뒤에 apply=true 로 부른다."
+    ),
+)
 
 #: **한 번만 만든다.** 도구마다 새로 만들면 토큰 검사와 연결이 매번 다시 붙는다.
 _platform: Platform | None = None

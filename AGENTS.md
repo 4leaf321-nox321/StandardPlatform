@@ -211,6 +211,15 @@ cd backend
 cd ../frontend && npm run build && npm test && npm run lint
 ```
 
+**MCP 어댑터는 환경을 갈라 본다.** `mcp` 가 `httpx2` 를 끌어오고, 그것이 깔리면
+`starlette.testclient` 가 HTTP 스택을 바꿔 백엔드 시험의 타입이 흔들린다.
+
+```bash
+python -m venv mcp_server/.venv
+mcp_server/.venv/bin/pip install -r mcp_server/requirements.txt pytest
+mcp_server/.venv/bin/python -m pytest mcp_server/tests
+```
+
 `alembic check` 가 여기 있는 이유: **시험은 모델로 표를 만들기 때문에**
 마이그레이션이 모델과 어긋난 것을 못 잡는다 — 그 어긋남은 배포하고 나서 500 으로
 드러난다. (이 저장소의 첫 마이그레이션도 `created_at` 의 NOT NULL 을 빠뜨렸고,

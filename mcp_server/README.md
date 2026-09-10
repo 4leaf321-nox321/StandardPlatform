@@ -29,20 +29,47 @@
 2. 셋을 가른 이유: 한 범위로 묶으면 「객체만 넣게」 하려던 토큰이 **타입까지 지울
    수 있다.**
 
+**환경을 갈라 만든다.** `mcp` 는 `httpx2` 를 끌어오고, 그것이 백엔드 개발 환경에
+깔리면 `starlette.testclient` 가 HTTP 스택을 바꿔 **그쪽 시험의 타입이 흔들린다**
+(실측으로 겪었다).
+
 ```bash
-pip install -r mcp_server/requirements.txt
-export PLATFORM_URL=http://<서버>:8030/api
-export PLATFORM_TOKEN=<발급받은 토큰>
-python -m mcp_server.server
+python -m venv mcp_server/.venv
+mcp_server/.venv/bin/pip install -r mcp_server/requirements.txt
 ```
 
-## Claude Code / Desktop 에 붙이기
+토큰은 **저장소에 안 넣는다.** 홈 아래에 두고 권한을 좁힌다:
+
+```bash
+cat > ~/.standardplatform-mcp.env <<'ENV'
+PLATFORM_URL=http://<서버>:8030/api
+PLATFORM_TOKEN=<발급받은 토큰>
+ENV
+chmod 600 ~/.standardplatform-mcp.env
+```
+
+## Claude Code 에 붙이기
+
+```bash
+set -a; . ~/.standardplatform-mcp.env; set +a
+claude mcp add standardplatform --scope local \
+  --env PLATFORM_URL="$PLATFORM_URL" \
+  --env PLATFORM_TOKEN="$PLATFORM_TOKEN" \
+  -- "$PWD/mcp_server/.venv/bin/python" -m mcp_server.server
+
+claude mcp list        # standardplatform: ... - ✔ Connected
+```
+
+`--scope local` 은 **이 저장소에서만** 붙는다는 뜻이다. 토큰이 들어가므로
+`--scope project`(`.mcp.json`, 커밋됨) 로 두지 않는다.
+
+Claude Desktop 은 설정 파일에 같은 값을 적는다:
 
 ```jsonc
 {
   "mcpServers": {
     "standardplatform": {
-      "command": "python",
+      "command": "/path/to/StandardPlatform/mcp_server/.venv/bin/python",
       "args": ["-m", "mcp_server.server"],
       "cwd": "/path/to/StandardPlatform",
       "env": {
