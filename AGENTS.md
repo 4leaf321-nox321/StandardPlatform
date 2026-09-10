@@ -203,7 +203,8 @@
 
 ```bash
 cd backend
-.venv/bin/ruff format . && .venv/bin/ruff check .
+.venv/bin/ruff format . ../mcp_server --config pyproject.toml
+.venv/bin/ruff check . ../mcp_server --config pyproject.toml
 .venv/bin/mypy
 .venv/bin/python -m pytest
 .venv/bin/python -m alembic check

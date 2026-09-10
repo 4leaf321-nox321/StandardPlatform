@@ -24,6 +24,8 @@
 | 첨부 | 파일 올리기·내려받기, 내용 해시로 중복 제거, 부서 단위 권한 |
 | 운영 | 공지(팝업 포함), 알림, 감사 로그, 접근 로그, 서버 상태 화면 |
 | 배포 | Apptainer 이미지·systemd 유닛·설치/갱신/롤백/백업/복구 스크립트, GitHub Actions |
+| 온톨로지 | 타입·속성·관계를 **데이터로 정의**하면 사이드바·목록·상세·트리가 생긴다 |
+| MCP | 기계가 정의를 읽고 채우는 길 — 스키마·가져오기(미리 보기)·객체·관계 |
 | 규약 | 오류 봉투 + 요청 ID, 로그, 페이지네이션(서버 상한 + 화면), 구조 시험 |
 
 ## 안 들어 있는 것 (일부러)
@@ -33,7 +35,6 @@
 - **휴지통.** soft delete 는 하지만 복구 화면은 없다.
 - **런타임 설정 화면.** `config.py` 에 3단 fallback 의 DB 단 자리만 잡혀 있다.
 - **로그 보존 정책.** 접근 로그·감사 로그를 지우는 쪽이 없다 — 운영 들어가기 전에 정한다.
-- **MCP 서버.** REST 를 얇게 감싸는 것이라 API 가 자리 잡은 뒤에 붙이는 편이 낫다.
 
 위 넷은 **필요해진 플랫폼에서 만들고 되가져오는** 편이 낫다. 안 쓰는 곳에서는
 지워야 할 코드가 되기 때문이다([ADR 0001](docs/adr/0001-공통-틀과-도메인의-경계.md)).
@@ -110,6 +111,18 @@ export type CurrentUser = components['schemas']['UserOut']
 갈린다.
 
 ---
+
+## 도메인을 데이터로 얹는다 (온톨로지)
+
+**[ADR 0005](docs/adr/0005-온톨로지-메타모델.md)** 가 결정이고
+**[설계 문서](docs/온톨로지-메타모델-설계.md)** 가 절차다.
+
+    묶음을 정의하면   -> 사이드바에 묶음이 생기고
+    타입을 정의하면   -> 그 묶음 안에 목록·상세 화면이 생기고
+    속성·관계를 정의하면 -> 그 화면의 폼과 관계 편집기·트리가 생긴다
+
+관리 → 온톨로지에서 사람이 채우고, [mcp_server](mcp_server/README.md) 로 기계가
+채운다. **정의를 바꾸는 일은 배포가 아니다** — 그래서 포크는 특수 기능에만 남는다.
 
 ## 새 플랫폼 만들기
 
@@ -236,7 +249,8 @@ sudo ./deploy.sh status
 
 ```bash
 cd backend
-.venv/bin/ruff format . && .venv/bin/ruff check .
+.venv/bin/ruff format . ../mcp_server --config pyproject.toml
+.venv/bin/ruff check . ../mcp_server --config pyproject.toml
 .venv/bin/mypy
 .venv/bin/python -m pytest
 .venv/bin/python -m alembic check

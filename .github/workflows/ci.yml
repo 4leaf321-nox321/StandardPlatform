@@ -70,11 +70,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt -r requirements-dev.txt
 
+      # **`mcp_server` 도 함께 본다.** 저장소 루트에 있어서 backend 안의 검사에
+      # 안 걸리는데, 그러면 그 파일만 규칙 밖에 남고 조용히 갈라진다.
       - name: 린트 (ruff)
         working-directory: backend
         run: |
-          python -m ruff check .
-          python -m ruff format --check .
+          python -m ruff check . ../mcp_server --config pyproject.toml
+          python -m ruff format --check . ../mcp_server --config pyproject.toml
 
       - name: 타입 (mypy strict)
         working-directory: backend

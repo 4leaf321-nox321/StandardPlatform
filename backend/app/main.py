@@ -36,7 +36,7 @@ from app.modules.ontology import routes as ontology_routes
 from app.modules.server import routes as server_routes
 from app.modules.workspaces import routes as workspaces_routes
 from app.schema_version import warn_if_behind
-from app.shared import extensions, ops
+from app.shared import extensions, ops, scopes
 from app.shared.access_log import AccessLogMiddleware
 from app.shared.errors import NotFound, code, register_error_handlers
 from app.shared.request_context import RequestIdMiddleware
@@ -96,6 +96,18 @@ def _register_extensions() -> None:
     # **부서를 지울 때 그 부서 소유의 객체가 목록에 뜬다.** 안 걸면 사람은
     # 아무것도 안 걸린 줄 알고 지우려 하는데, FK 가 RESTRICT 라 500 이 난다.
     extensions.register_workspace_reference(objects_services.workspace_reference)
+
+    # **기계 자격으로 온톨로지를 채우는 길**(3-d). 안 열면 PAT 로는 못 고친다 —
+    # 기본이 「막힘」 이고, 그것이 맞는 기본값이다(shared/scopes.py).
+    #
+    # 정의와 데이터를 **가른다.** 정의를 바꾸는 것은 화면의 모양을 바꾸는 일이라
+    # 데이터를 넣는 것과 무게가 다르다 — 한 범위로 묶으면 「객체만 넣게」 하려던
+    # 토큰이 타입까지 지울 수 있다.
+    scopes.register_write_scope("/api/ontology", "ontology:write")
+    scopes.register_write_scope("/api/objects", "objects:write")
+    # `import` 는 POST 지만 `dry_run` 이면 아무것도 안 바꾼다. 그래도 **읽기로
+    # 열지 않는다** — 같은 경로가 적용도 하기 때문이다. 읽기 토큰은 `schema` 로
+    # 본다.
 
     # --- 여기에 도메인 확장을 더한다 ---------------------------------------
     #

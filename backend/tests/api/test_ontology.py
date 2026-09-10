@@ -1859,3 +1859,64 @@ def test_안_바뀐_묶음을_바뀐다고_안_적는다(client: TestClient, adm
         client, admin, {"types": [{"slug": part, "label": "부품", "nav_group_slug": group}]}
     ).json()
     assert [c["action"] for c in plan["changes"]] == ["unchanged"], plan["changes"]
+
+
+# --- 기계 자격 (3-d) ---------------------------------------------------------
+
+
+def test_기계_자격은_범위가_있어야_고친다(client: TestClient, admin: Signed) -> None:
+    """**안 열면 PAT 로는 못 고친다** — 기본이 「막힘」 이고 그것이 맞는 기본값이다.
+
+    그리고 정의와 데이터를 가른다: 한 범위로 묶으면 「객체만 넣게」 하려던 토큰이
+    **타입까지 지울 수 있다.**
+    """
+    part = _make_type(client, admin, label="부품")
+
+    def pat(*scopes: str) -> dict[str, str]:
+        made = client.post(
+            "/api/auth/tokens",
+            json={"name": _uniq("bot"), "scopes": list(scopes)},
+            headers=admin.headers,
+        )
+        assert made.status_code == 201, made.text
+        return {"Authorization": f"Bearer {made.json()['token']}"}
+
+    read_only = pat("read")
+    # 읽기는 된다.
+    assert client.get("/api/ontology/schema", headers=read_only).status_code == 200
+    # 쓰기는 막힌다 — 정의도 데이터도.
+    assert (
+        client.post(
+            f"/api/objects/{part}", json={"label": "볼트"}, headers=read_only
+        ).status_code
+        == 403
+    )
+    assert (
+        client.post(
+            "/api/ontology/types", json={"slug": _uniq("x"), "label": "x"}, headers=read_only
+        ).status_code
+        == 403
+    )
+
+    data_only = pat("read", "objects:write")
+    assert (
+        client.post(
+            f"/api/objects/{part}", json={"label": "볼트"}, headers=data_only
+        ).status_code
+        == 201
+    )
+    # **데이터 범위로는 정의를 못 고친다.**
+    assert (
+        client.post(
+            "/api/ontology/types", json={"slug": _uniq("x"), "label": "x"}, headers=data_only
+        ).status_code
+        == 403
+    )
+
+    full = pat("read", "ontology:write")
+    assert (
+        client.post(
+            "/api/ontology/types", json={"slug": _uniq("ok"), "label": "됨"}, headers=full
+        ).status_code
+        == 201
+    )
