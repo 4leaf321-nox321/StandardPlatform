@@ -6,12 +6,13 @@
  */
 
 import { useState } from 'react'
+import { ChevronDown, Plus, Settings2 } from 'lucide-react'
 
+import { PropertyEditDialog, DATA_TYPE_LABELS } from '@/modules/ontology/PropertyEditDialog'
 import { TypeEditDialog } from '@/modules/ontology/TypeEditDialog'
 import { useOntology } from '@/modules/ontology/OntologyLayout'
 import { ontologyApi } from '@/modules/ontology/api'
-import type { DataType, ObjectType, PropertyDef } from '@/modules/ontology/api'
-import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
+import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
@@ -31,16 +32,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table'
-
-const DATA_TYPE_LABELS: Record<DataType, string> = {
-  text: '글',
-  number: '숫자',
-  date: '날짜',
-  bool: '예/아니오',
-  enum: '선택',
-  object_ref: '객체 참조',
-  file: '파일',
-}
+import { cn } from '@/shared/lib/utils'
 
 const KIND_LABELS: Record<string, string> = {
   reference: '어휘',
@@ -99,7 +91,9 @@ export default function OntologyTypesPage() {
                   <TableHead>분류</TableHead>
                   <TableHead>묶음</TableHead>
                   <TableHead className="text-right">객체</TableHead>
-                  <TableHead className="text-right">속성</TableHead>
+                  {/* **열 이름이 「누르세요」 라고 말한다.** 숫자만 있으면 읽을 것으로
+                      보이지 눌러 볼 것으로는 안 보인다. */}
+                  <TableHead className="text-right">속성 정의</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -124,17 +118,26 @@ export default function OntologyTypesPage() {
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{row.object_count}</TableCell>
                     <TableCell className="text-right">
-                      {/* **속성 정의는 그것대로 자기 자리가 있다.** 행 클릭은
-                          타입 설정이고, 여기는 그 타입이 담는 값의 모양이다. */}
+                      {/* **눌러지는 것으로 보여야 누른다.** 행 클릭은 타입 설정이고
+                          여기는 그 타입이 담는 값의 모양이라, 같은 표 안에서 두 길이
+                          갈린다 — 테두리와 화살표가 그 갈림을 말한다. */}
                       <Button
-                        variant="ghost"
+                        variant="outline"
                         size="sm"
+                        aria-expanded={row.slug === openProperties}
                         onClick={(event) => {
                           event.stopPropagation()
                           setOpenProperties(row.slug === openProperties ? null : row.slug)
                         }}
                       >
+                        <Settings2 className="mr-1 size-3.5" />
                         속성 {row.properties.length}
+                        <ChevronDown
+                          className={cn(
+                            'ml-1 size-3.5 transition-transform',
+                            row.slug === openProperties && 'rotate-180',
+                          )}
+                        />
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -143,8 +146,8 @@ export default function OntologyTypesPage() {
             </Table>
           </div>
           <p className="text-muted-foreground text-xs">
-            행을 누르면 묶음·분류·식별자 정책을 고치거나 지웁니다. 「속성」 을 누르면 아래에
-            그 타입의 속성 정의가 열립니다.
+            <b>행</b>을 누르면 묶음·분류·식별자 정책을 고치거나 지웁니다.{' '}
+            <b>「속성 정의」 단추</b>를 누르면 그 타입이 담는 값의 모양이 아래에 열립니다.
           </p>
         </>
       )}
@@ -152,12 +155,9 @@ export default function OntologyTypesPage() {
       {propertyTarget && (
         <section className="space-y-3">
           <h2 className="text-base font-semibold">{propertyTarget.label} 의 속성</h2>
-          <PropertyEditor
-            type={propertyTarget}
-            types={types}
-            onChanged={reload}
-            onError={setError}
-          />
+          {/* 오류는 이 창 안에 선다 — 화면 맨 위로 올리면 아래를 보고 있던
+              사람 눈에 안 들어온다. */}
+          <PropertyEditor type={propertyTarget} types={types} onChanged={reload} />
         </section>
       )}
 
@@ -263,36 +263,20 @@ function PropertyEditor({
   type,
   types,
   onChanged,
-  onError,
 }: {
   type: ObjectType & { properties: PropertyDef[] }
   types: ObjectType[]
   onChanged: () => void
-  onError: (error: Error | null) => void
 }) {
-  const [key, setKey] = useState('')
-  const [label, setLabel] = useState('')
-  const [dataType, setDataType] = useState<DataType>('text')
-  const [refType, setRefType] = useState('')
-  const [options, setOptions] = useState('')
-  const [removing, setRemoving] = useState<PropertyDef | null>(null)
-  const [usage, setUsage] = useState<number | null>(null)
-
-  async function act(run: () => Promise<unknown>) {
-    onError(null)
-    try {
-      await run()
-      onChanged()
-    } catch (caught) {
-      onError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
-    }
-  }
+  const [editing, setEditing] = useState<PropertyDef | null>(null)
+  const [creating, setCreating] = useState(false)
 
   return (
-    <section className="space-y-4 rounded-md border p-4">
+    <section className="space-y-3 rounded-md border p-4">
       {type.properties.length === 0 ? (
         <p className="text-muted-foreground text-sm">
-          아직 속성이 없습니다. 하나 정의하면 만들기·상세 화면의 폼에 칸이 생깁니다.
+          아직 속성이 없습니다. 하나 정의하면 <b>{type.label} 만들기·상세 화면의 폼에 칸이
+          생깁니다.</b>
         </p>
       ) : (
         <Table>
@@ -301,160 +285,53 @@ function PropertyEditor({
               <TableHead>이름</TableHead>
               <TableHead>키</TableHead>
               <TableHead>종류</TableHead>
+              <TableHead>단위</TableHead>
               <TableHead>필수</TableHead>
-              <TableHead />
+              <TableHead>여러 값</TableHead>
+              <TableHead className="text-right">순서</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
             {type.properties.map((def) => (
-              <TableRow key={def.key}>
+              <TableRow
+                key={def.key}
+                className="cursor-pointer"
+                onClick={() => setEditing(def)}
+              >
                 <TableCell className="font-medium">{def.label}</TableCell>
                 <TableCell className="font-mono text-xs">{def.key}</TableCell>
-                <TableCell>
-                  {DATA_TYPE_LABELS[def.data_type]}
-                  {def.multi && ' (여러 값)'}
-                </TableCell>
+                <TableCell>{DATA_TYPE_LABELS[def.data_type]}</TableCell>
+                <TableCell className="text-muted-foreground">{def.unit || '—'}</TableCell>
                 <TableCell>{def.required ? '예' : '—'}</TableCell>
-                <TableCell className="text-right">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    onClick={async () => {
-                      // **지우기 전에 몇 개가 안 보이게 되는지 먼저 읽는다.**
-                      const found = await ontologyApi.propertyUsage(type.slug, def.key)
-                      setUsage(found.objects_with_value)
-                      setRemoving(def)
-                    }}
-                  >
-                    지우기
-                  </Button>
-                </TableCell>
+                <TableCell>{def.multi ? '예' : '—'}</TableCell>
+                <TableCell className="text-right tabular-nums">{def.sort_order}</TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
       )}
 
-      <div className="flex flex-wrap items-end gap-3 border-t pt-4">
-        <div className="space-y-1.5">
-          <Label htmlFor="prop-key">키</Label>
-          <Input
-            id="prop-key"
-            value={key}
-            placeholder="vendor"
-            className="w-36 font-mono"
-            onChange={(event) => setKey(event.target.value)}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="prop-label">이름</Label>
-          <Input
-            id="prop-label"
-            value={label}
-            placeholder="공급사"
-            className="w-36"
-            onChange={(event) => setLabel(event.target.value)}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="prop-type">종류</Label>
-          <Select value={dataType} onValueChange={(next) => setDataType(next as DataType)}>
-            <SelectTrigger id="prop-type" className="w-36">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {(Object.keys(DATA_TYPE_LABELS) as DataType[]).map((one) => (
-                <SelectItem key={one} value={one}>
-                  {DATA_TYPE_LABELS[one]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-
-        {dataType === 'enum' && (
-          <div className="space-y-1.5">
-            <Label htmlFor="prop-options">고를 값 (쉼표로)</Label>
-            <Input
-              id="prop-options"
-              value={options}
-              placeholder="A, B, C"
-              className="w-48"
-              onChange={(event) => setOptions(event.target.value)}
-            />
-          </div>
-        )}
-
-        {dataType === 'object_ref' && (
-          <div className="space-y-1.5">
-            <Label htmlFor="prop-ref">가리킬 타입</Label>
-            <Select value={refType} onValueChange={setRefType}>
-              <SelectTrigger id="prop-ref" className="w-40">
-                <SelectValue placeholder="고르세요" />
-              </SelectTrigger>
-              <SelectContent>
-                {types.map((one) => (
-                  <SelectItem key={one.slug} value={one.slug}>
-                    {one.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
-        <Button
-          disabled={!key.trim() || !label.trim()}
-          onClick={() => {
-            void act(() =>
-              ontologyApi.createProperty(type.slug, {
-                key,
-                label,
-                data_type: dataType,
-                enum_options:
-                  dataType === 'enum'
-                    ? options
-                        .split(',')
-                        .map((one) => one.trim())
-                        .filter(Boolean)
-                    : null,
-                ref_type_slug: dataType === 'object_ref' ? refType || null : null,
-              }),
-            )
-            setKey('')
-            setLabel('')
-            setOptions('')
-          }}
-        >
+      <div className="flex items-center justify-between gap-3 border-t pt-3">
+        <p className="text-muted-foreground text-xs">
+          {type.properties.length > 0 && '행을 누르면 이름·단위·안내·필수·여러 값을 고치거나 지웁니다. '}
+          키와 종류는 만들 때만 정합니다.
+        </p>
+        <Button size="sm" onClick={() => setCreating(true)}>
+          <Plus className="mr-1 size-4" />
           속성 더하기
         </Button>
-        <p className="text-muted-foreground w-full text-xs">
-          키와 종류는 <b>나중에 바꿀 수 없습니다</b> — 이미 저장된 값이 새 종류에 안 맞아도
-          화면이 그것을 말해 주지 못합니다. 바꾸려면 새 속성을 만들어 옮깁니다.
-        </p>
       </div>
 
-      {removing && (
-        <ConfirmDialog
-          open
-          destructive
-          title={`${removing.label} 속성을 지웁니다`}
-          description={
-            <>
-              지금 이 값을 가진 객체가 <b>{usage ?? 0}개</b> 있습니다. 정의를 지우면 그
-              값들은 <b>화면에서 사라집니다</b>(데이터는 남아 있어, 정의를 되살리면 다시
-              보입니다).
-            </>
-          }
-          confirmLabel="지우기"
-          onConfirm={async () => {
-            await ontologyApi.removeProperty(type.slug, removing.key)
-            onChanged()
-          }}
+      {(creating || editing) && (
+        <PropertyEditDialog
+          type={type}
+          property={editing}
+          types={types}
           onClose={() => {
-            setRemoving(null)
-            setUsage(null)
+            setCreating(false)
+            setEditing(null)
           }}
+          onChanged={onChanged}
         />
       )}
     </section>

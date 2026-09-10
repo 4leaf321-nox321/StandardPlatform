@@ -581,3 +581,94 @@ def test_묶음에서_빼려면_null_을_명시한다(client: TestClient, admin:
         f"/api/ontology/types/{part}", json={"nav_group_slug": None}, headers=admin.headers
     ).json()
     assert cleared["nav_group_slug"] is None
+
+
+def test_속성의_모든_칸을_고칠_수_있다(client: TestClient, admin: Signed) -> None:
+    """**고칠 자리가 없으면 지웠다 다시 만들게 되고, 그 순간 그 속성의 값이 전부
+    화면에서 사라진다.**"""
+    part = _make_type(client, admin, label="부품")
+    _make_property(client, admin, part, key="width", label="폭", data_type="number")
+
+    patched = client.patch(
+        f"/api/ontology/types/{part}/properties/width",
+        json={
+            "key": "width",
+            "label": "너비",
+            "data_type": "number",
+            "unit": "mm",
+            "help": "바깥 지름 기준",
+            "required": True,
+            "multi": True,
+            "sort_order": 5,
+        },
+        headers=admin.headers,
+    )
+    assert patched.status_code == 200, patched.text
+    got = patched.json()
+    assert got["label"] == "너비"
+    assert got["unit"] == "mm"
+    assert got["help"] == "바깥 지름 기준"
+    assert got["required"] is True
+    assert got["multi"] is True
+    assert got["sort_order"] == 5
+
+
+def test_고른_값_목록을_고칠_수_있다(client: TestClient, admin: Signed) -> None:
+    part = _make_type(client, admin, label="부품")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="grade",
+        label="등급",
+        data_type="enum",
+        enum_options=["A", "B"],
+    )
+    patched = client.patch(
+        f"/api/ontology/types/{part}/properties/grade",
+        json={
+            "key": "grade",
+            "label": "등급",
+            "data_type": "enum",
+            "enum_options": ["A", "B", "C"],
+        },
+        headers=admin.headers,
+    )
+    assert patched.json()["enum_options"] == ["A", "B", "C"]
+
+
+def test_필수로_바꿔도_이미_있는_객체는_안_건드린다(client: TestClient, admin: Signed) -> None:
+    """**정의를 고치는 일이 이미 쌓인 자료를 건드리면 안 된다.** 대신 다음에
+    그것을 고칠 때 걸린다 — 그때는 사람이 화면 앞에 있어 값을 넣을 수 있다."""
+    part = _make_type(client, admin, label="부품")
+    _make_property(client, admin, part, key="memo", label="메모", data_type="text")
+    created = _make_object(client, admin, part, label="볼트")
+
+    client.patch(
+        f"/api/ontology/types/{part}/properties/memo",
+        json={"key": "memo", "label": "메모", "data_type": "text", "required": True},
+        headers=admin.headers,
+    )
+
+    # 그대로 읽힌다.
+    assert (
+        client.get(f"/api/objects/{part}/{created['id']}", headers=admin.headers).status_code
+        == 200
+    )
+    # 속성과 상관없는 수정도 그대로 된다. **관계없는 고침을 막지 않는다** —
+    # 이름 오타 하나를 고치려다 남의 속성을 채우게 하면, 사람은 고치기를 그만둔다.
+    assert (
+        client.patch(
+            f"/api/objects/{part}/{created['id']}",
+            json={"label": "볼트2"},
+            headers=admin.headers,
+        ).status_code
+        == 200
+    )
+    # **속성을 건드리는 순간 걸린다.** 그때는 사람이 화면 앞에 있어 값을 넣을 수 있다.
+    denied = client.patch(
+        f"/api/objects/{part}/{created['id']}",
+        json={"properties": {}},
+        headers=admin.headers,
+    )
+    assert denied.status_code == 422
