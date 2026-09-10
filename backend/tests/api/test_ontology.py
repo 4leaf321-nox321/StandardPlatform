@@ -465,3 +465,119 @@ def test_속성을_지우기_전에_값이_몇_개인지_말한다(client: TestC
         f"/api/ontology/types/{part}/properties/qty/usage", headers=admin.headers
     ).json()
     assert usage["objects_with_value"] == 2
+
+
+# --- 지우기 -----------------------------------------------------------------
+
+
+def test_인스턴스가_있는_타입은_못_지운다(client: TestClient, admin: Signed) -> None:
+    """**행이 있는데 지우면 그 데이터가 통째로 고아가 된다.** 몇 개가 걸렸는지
+    말하며 막고, 그만 쓰려는 것이면 비활성으로 두라고 알려 준다."""
+    part = _make_type(client, admin, label="부품")
+    _make_object(client, admin, part, label="볼트")
+
+    denied = client.delete(f"/api/ontology/types/{part}", headers=admin.headers)
+    assert denied.status_code == 409
+    assert "1개" in denied.json()["error"]["message"]
+
+
+def test_빈_타입은_속성_정의까지_함께_지운다(client: TestClient, admin: Signed) -> None:
+    """안 지우면 같은 slug 로 다시 만들 때 **옛 속성이 되살아난다.**"""
+    part = _make_type(client, admin, label="부품")
+    _make_property(client, admin, part, key="qty", label="수량", data_type="number")
+
+    removed = client.delete(f"/api/ontology/types/{part}", headers=admin.headers)
+    assert removed.status_code == 204
+
+    again = _make_type(client, admin, slug=part, label="부품 다시")
+    assert (
+        client.get(f"/api/ontology/types/{again}/properties", headers=admin.headers).json()
+        == []
+    )
+
+
+def test_타입이_걸린_묶음은_못_지운다(client: TestClient, admin: Signed) -> None:
+    """FK 가 SET NULL 이라 DB 는 지우게 두지만, 그러면 그 타입들이 **조용히
+    사이드바에서 사라진다.**"""
+    group = _uniq("domain")
+    client.post(
+        "/api/ontology/groups", json={"slug": group, "label": "도메인"}, headers=admin.headers
+    )
+    _make_type(client, admin, label="부품", nav_group_slug=group)
+
+    denied = client.delete(f"/api/ontology/groups/{group}", headers=admin.headers)
+    assert denied.status_code == 409
+    assert "부품" in denied.json()["error"]["message"]
+
+
+def test_빈_묶음은_지워진다(client: TestClient, admin: Signed) -> None:
+    group = _uniq("empty")
+    client.post(
+        "/api/ontology/groups", json={"slug": group, "label": "빈 묶음"}, headers=admin.headers
+    )
+    assert (
+        client.delete(f"/api/ontology/groups/{group}", headers=admin.headers).status_code
+        == 204
+    )
+    remaining = client.get("/api/ontology/groups", headers=admin.headers).json()
+    assert all(row["slug"] != group for row in remaining)
+
+
+def test_지우기도_시스템_관리자만(client: TestClient, admin: Signed, member: Signed) -> None:
+    part = _make_type(client, admin, label="부품")
+    assert (
+        client.delete(f"/api/ontology/types/{part}", headers=member.headers).status_code == 403
+    )
+
+
+def test_타입의_묶음을_바꿀_수_있다(client: TestClient, admin: Signed) -> None:
+    """**행을 눌러 고치는 자리가 있어야 한다.** 없으면 잘못 넣은 타입을 옮길
+    방법이 없어, 사람은 새로 만들고 옛것을 버려 둔다."""
+    first, second = _uniq("g1"), _uniq("g2")
+    for slug in (first, second):
+        client.post(
+            "/api/ontology/groups", json={"slug": slug, "label": slug}, headers=admin.headers
+        )
+    part = _make_type(client, admin, label="부품", nav_group_slug=first)
+
+    moved = client.patch(
+        f"/api/ontology/types/{part}",
+        json={"slug": part, "label": "부품", "nav_group_slug": second},
+        headers=admin.headers,
+    )
+    assert moved.status_code == 200
+    assert moved.json()["nav_group_slug"] == second
+
+
+def test_타입_수정은_안_보낸_것을_안_건드린다(client: TestClient, admin: Signed) -> None:
+    """**전체 교체면 화면이 `list_view` 를 안 실어 보낸 날 그 설정이 통째로
+    날아가고, 그 손실은 저장한 사람 눈에 안 보인다.**"""
+    part = _make_type(
+        client, admin, label="부품", list_view={"columns": ["label"], "search": ["label"]}
+    )
+    patched = client.patch(
+        f"/api/ontology/types/{part}", json={"label": "부품(수정)"}, headers=admin.headers
+    )
+    assert patched.status_code == 200, patched.text
+    assert patched.json()["label"] == "부품(수정)"
+    assert patched.json()["list_view"] == {"columns": ["label"], "search": ["label"]}
+
+
+def test_묶음에서_빼려면_null_을_명시한다(client: TestClient, admin: Signed) -> None:
+    """**안 보낸 것과 비운 것을 구별한다.** 안 가르면 다른 칸 하나 고칠 때마다
+    그 타입이 메뉴에서 사라진다."""
+    group = _uniq("domain")
+    client.post(
+        "/api/ontology/groups", json={"slug": group, "label": "도메인"}, headers=admin.headers
+    )
+    part = _make_type(client, admin, label="부품", nav_group_slug=group)
+
+    kept = client.patch(
+        f"/api/ontology/types/{part}", json={"label": "부품2"}, headers=admin.headers
+    ).json()
+    assert kept["nav_group_slug"] == group
+
+    cleared = client.patch(
+        f"/api/ontology/types/{part}", json={"nav_group_slug": None}, headers=admin.headers
+    ).json()
+    assert cleared["nav_group_slug"] is None

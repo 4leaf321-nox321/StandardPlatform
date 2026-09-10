@@ -7,8 +7,10 @@
 
 import { useState } from 'react'
 
+import { GroupEditDialog } from '@/modules/ontology/GroupEditDialog'
+import { TypeEditDialog } from '@/modules/ontology/TypeEditDialog'
 import { ontologyApi } from '@/modules/ontology/api'
-import type { DataType, ObjectType, PropertyDef } from '@/modules/ontology/api'
+import type { DataType, NavGroupRow, ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -31,7 +33,6 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { useResource } from '@/shared/hooks/useResource'
 
 const DATA_TYPE_LABELS: Record<DataType, string> = {
@@ -44,6 +45,12 @@ const DATA_TYPE_LABELS: Record<DataType, string> = {
   file: '파일',
 }
 
+const AUDIENCE_LABELS: Record<string, string> = {
+  everyone: '모두',
+  manager: '부서 관리자',
+  system_admin: '시스템 관리자',
+}
+
 const KIND_LABELS: Record<string, string> = {
   reference: '어휘',
   record: '인스턴스',
@@ -53,7 +60,9 @@ const KIND_LABELS: Record<string, string> = {
 export default function OntologyAdminPage() {
   const schema = useResource(() => ontologyApi.schema(), [])
   const [error, setError] = useState<Error | null>(null)
-  const [selected, setSelected] = useState<string | null>(null)
+  const [openProperties, setOpenProperties] = useState<string | null>(null)
+  const [editingType, setEditingType] = useState<string | null>(null)
+  const [editingGroup, setEditingGroup] = useState<string | null>(null)
 
   async function act(run: () => Promise<unknown>) {
     setError(null)
@@ -67,10 +76,20 @@ export default function OntologyAdminPage() {
 
   if (schema.error) return <ErrorNotice error={schema.error} />
   const data = schema.data
-  const type = data?.types.find((row) => row.slug === selected) ?? null
+  const types = data?.types ?? []
+  const groups = data?.groups ?? []
+
+  const propertyTarget = types.find((row) => row.slug === openProperties) ?? null
+  const typeTarget = types.find((row) => row.slug === editingType) ?? null
+  const groupTarget = groups.find((row) => row.slug === editingGroup) ?? null
+
+  /** 이 묶음에 걸린 타입 이름들. 지우기 전에 무엇이 걸렸는지 말하는 데 쓴다. */
+  function attachedTo(group: NavGroupRow): string[] {
+    return types.filter((row) => row.nav_group_slug === group.slug).map((row) => row.label)
+  }
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="mx-auto max-w-5xl space-y-10">
       <PageHeader
         title="온톨로지"
         description="타입을 정의하면 사이드바와 화면이 생깁니다. 코드를 고치지 않습니다."
@@ -78,109 +97,171 @@ export default function OntologyAdminPage() {
 
       {error && <ErrorNotice error={error} />}
 
-      <Tabs defaultValue="types">
-        <TabsList>
-          <TabsTrigger value="types">타입</TabsTrigger>
-          <TabsTrigger value="groups">사이드바 묶음</TabsTrigger>
-        </TabsList>
+      {/* **묶음이 먼저다.** 타입을 사이드바에 세우려면 들어갈 묶음이 먼저 있어야
+          한다 — 순서가 곧 밟는 차례여야 「다음에 무엇을」 을 안 묻는다. */}
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-base font-semibold">1. 사이드바 묶음</h2>
+          <p className="text-muted-foreground text-sm">
+            「도메인」 처럼 화면을 묶는 이름입니다. 묶음이 없으면 타입을 만들어도 사이드바에
+            서지 않습니다.
+          </p>
+        </div>
 
-        <TabsContent value="types" className="space-y-6">
-          <NewTypeForm
-            groups={(data?.groups ?? []).map((group) => group.slug)}
-            onSubmit={(body) => act(() => ontologyApi.createType(body))}
+        <NewGroupForm onSubmit={(body) => act(() => ontologyApi.createGroup(body))} />
+
+        {groups.length === 0 ? (
+          <EmptyState
+            title="묶음이 없습니다"
+            hint="먼저 묶음 하나를 만드세요. 그다음 타입을 그 안에 넣습니다."
           />
-
-          {data && data.types.length === 0 ? (
-            <EmptyState
-              title="아직 타입이 없습니다"
-              hint="타입 하나를 만들면 그 순간 목록·상세 화면이 생깁니다. 사이드바에 세우려면 묶음을 함께 고르세요."
-            />
-          ) : (
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>이름</TableHead>
-                    <TableHead>slug</TableHead>
-                    <TableHead>분류</TableHead>
-                    <TableHead>묶음</TableHead>
-                    <TableHead className="text-right">인스턴스</TableHead>
-                    <TableHead className="text-right">속성</TableHead>
+        ) : (
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>이름</TableHead>
+                  <TableHead>slug</TableHead>
+                  <TableHead>보이는 대상</TableHead>
+                  <TableHead className="text-right">걸린 타입</TableHead>
+                  <TableHead className="text-right">순서</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {groups.map((group) => (
+                  <TableRow
+                    key={group.slug}
+                    className="cursor-pointer"
+                    onClick={() => setEditingGroup(group.slug)}
+                  >
+                    <TableCell className="font-medium">
+                      {group.label}
+                      {!group.is_active && (
+                        <span className="text-muted-foreground ml-2 text-xs">사용 안 함</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{group.slug}</TableCell>
+                    <TableCell>{AUDIENCE_LABELS[group.audience] ?? group.audience}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      {attachedTo(group).length}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{group.sort_order}</TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(data?.types ?? []).map((row) => (
-                    <TableRow
-                      key={row.slug}
-                      className="cursor-pointer"
-                      onClick={() => setSelected(row.slug)}
-                    >
-                      <TableCell className="font-medium">{row.label}</TableCell>
-                      <TableCell className="font-mono text-xs">{row.slug}</TableCell>
-                      <TableCell>{KIND_LABELS[row.kind_class] ?? row.kind_class}</TableCell>
-                      <TableCell className="text-muted-foreground">
-                        {/* **안 걸린 것은 사이드바에 안 선다.** 빈 칸으로 두면
-                            「빠뜨렸나」 를 물을 자리가 없다. */}
-                        {row.nav_group_slug ?? '사이드바에 없음'}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {row.object_count}
-                      </TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {row.properties.length}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+        <p className="text-muted-foreground text-xs">행을 누르면 고치거나 지웁니다.</p>
+      </section>
 
-          {type && (
-            <PropertyEditor
-              type={type}
-              types={data?.types ?? []}
-              onChanged={() => schema.reload()}
-              onError={setError}
-            />
-          )}
-        </TabsContent>
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-base font-semibold">2. 타입</h2>
+          <p className="text-muted-foreground text-sm">
+            인스턴스의 종류입니다. 하나 만들면 그 순간 목록·상세 화면이 생깁니다.
+          </p>
+        </div>
 
-        <TabsContent value="groups" className="space-y-6">
-          <NewGroupForm onSubmit={(body) => act(() => ontologyApi.createGroup(body))} />
-          {data && data.groups.length === 0 ? (
-            <EmptyState
-              title="묶음이 없습니다"
-              hint="「도메인」 처럼 사이드바에서 화면을 묶는 이름입니다. 묶음이 없으면 타입은 만들어져도 사이드바에 서지 않습니다."
-            />
-          ) : (
-            <div className="rounded-md border">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>이름</TableHead>
-                    <TableHead>slug</TableHead>
-                    <TableHead>보이는 대상</TableHead>
-                    <TableHead className="text-right">순서</TableHead>
+        <NewTypeForm
+          groups={groups.map((group) => group.slug)}
+          onSubmit={(body) => act(() => ontologyApi.createType(body))}
+        />
+
+        {types.length === 0 ? (
+          <EmptyState
+            title="아직 타입이 없습니다"
+            hint="타입 하나를 만들면 그 순간 목록·상세 화면이 생깁니다. 사이드바에 세우려면 묶음을 함께 고르세요."
+          />
+        ) : (
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>이름</TableHead>
+                  <TableHead>slug</TableHead>
+                  <TableHead>분류</TableHead>
+                  <TableHead>묶음</TableHead>
+                  <TableHead className="text-right">인스턴스</TableHead>
+                  <TableHead className="text-right">속성</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {types.map((row) => (
+                  <TableRow
+                    key={row.slug}
+                    className="cursor-pointer"
+                    onClick={() => setEditingType(row.slug)}
+                  >
+                    <TableCell className="font-medium">
+                      {row.label}
+                      {!row.is_active && (
+                        <span className="text-muted-foreground ml-2 text-xs">사용 안 함</span>
+                      )}
+                    </TableCell>
+                    <TableCell className="font-mono text-xs">{row.slug}</TableCell>
+                    <TableCell>{KIND_LABELS[row.kind_class] ?? row.kind_class}</TableCell>
+                    <TableCell className="text-muted-foreground">
+                      {/* **안 걸린 것은 사이드바에 안 선다.** 빈 칸으로 두면
+                          「빠뜨렸나」 를 물을 자리가 없다. */}
+                      {row.nav_group_slug ?? '사이드바에 없음'}
+                    </TableCell>
+                    <TableCell className="text-right tabular-nums">{row.object_count}</TableCell>
+                    <TableCell className="text-right">
+                      {/* **속성 정의는 그것대로 자기 자리가 있다.** 행 클릭은
+                          타입 설정이고, 여기는 그 타입이 담는 값의 모양이다. */}
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setOpenProperties(row.slug === openProperties ? null : row.slug)
+                        }}
+                      >
+                        속성 {row.properties.length}
+                      </Button>
+                    </TableCell>
                   </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {(data?.groups ?? []).map((group) => (
-                    <TableRow key={group.slug}>
-                      <TableCell className="font-medium">{group.label}</TableCell>
-                      <TableCell className="font-mono text-xs">{group.slug}</TableCell>
-                      <TableCell>{group.audience}</TableCell>
-                      <TableCell className="text-right tabular-nums">
-                        {group.sort_order}
-                      </TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
-          )}
-        </TabsContent>
-      </Tabs>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
+        <p className="text-muted-foreground text-xs">
+          행을 누르면 묶음·분류·식별자 정책을 고치거나 지웁니다. 「속성」 을 누르면 아래에
+          그 타입의 속성 정의가 열립니다.
+        </p>
+      </section>
+
+      {propertyTarget && (
+        <section className="space-y-4">
+          <h2 className="text-base font-semibold">3. {propertyTarget.label} 의 속성</h2>
+          <PropertyEditor
+            type={propertyTarget}
+            types={types}
+            onChanged={() => schema.reload()}
+            onError={setError}
+          />
+        </section>
+      )}
+
+      {typeTarget && (
+        <TypeEditDialog
+          type={typeTarget}
+          groups={groups}
+          onClose={() => setEditingType(null)}
+          onChanged={() => schema.reload()}
+        />
+      )}
+
+      {groupTarget && (
+        <GroupEditDialog
+          group={groupTarget}
+          attached={attachedTo(groupTarget)}
+          onClose={() => setEditingGroup(null)}
+          onChanged={() => schema.reload()}
+        />
+      )}
     </div>
   )
 }
@@ -344,8 +425,6 @@ function PropertyEditor({
 
   return (
     <section className="space-y-4 rounded-md border p-4">
-      <h2 className="text-base font-semibold">{type.label} 의 속성</h2>
-
       {type.properties.length === 0 ? (
         <p className="text-muted-foreground text-sm">
           아직 속성이 없습니다. 하나 정의하면 만들기·상세 화면의 폼에 칸이 생깁니다.

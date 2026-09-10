@@ -106,6 +106,40 @@ class ObjectTypeWriteRequest(BaseModel):
     is_active: bool = True
 
 
+class ObjectTypePatchRequest(BaseModel):
+    """타입 부분 수정 — **「안 보낸 것」 과 「비운 것」 을 구별한다.**
+
+    전체 교체로 두면 화면이 `list_view` 를 안 실어 보낸 날 그 설정이 통째로
+    날아가고, **그 손실은 저장한 사람 눈에 안 보인다.** 무엇을 보냈는지는
+    `model_fields_set` 이 안다 — `None` 을 기본값으로 둔 것과 명시적으로 `null`
+    을 보낸 것이 그래야 갈린다(묶음에서 빼기가 그 경우다).
+    """
+
+    label: str | None = Field(default=None, min_length=1, max_length=64)
+    icon: str | None = Field(default=None, max_length=40)
+    description: str | None = None
+    sort_order: int | None = None
+    nav_group_slug: str | None = None
+    """`null` 을 명시하면 사이드바에서 뺀다. 안 보내면 그대로 둔다."""
+    kind_class: str | None = None
+    entry_policy: str | None = None
+    key_policy: str | None = None
+    key_scope: str | None = None
+    temporal_kind: str | None = None
+    list_view: dict[str, Any] | None = None
+    is_active: bool | None = None
+
+
+class NavGroupPatchRequest(BaseModel):
+    """묶음 부분 수정. 같은 이유로 전체 교체가 아니다."""
+
+    label: str | None = Field(default=None, min_length=1, max_length=64)
+    icon: str | None = Field(default=None, max_length=40)
+    audience: str | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
 class ObjectTypeSchema(ObjectTypeOut):
     """타입 하나 + 그 속성 정의 전부. 스키마 응답의 원소."""
 

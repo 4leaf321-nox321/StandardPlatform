@@ -31,8 +31,10 @@ from app.modules.ontology.models import (
 from app.modules.ontology.schemas import (
     NavGroupNode,
     NavGroupOut,
+    NavGroupPatchRequest,
     NavGroupWriteRequest,
     ObjectTypeOut,
+    ObjectTypePatchRequest,
     ObjectTypeSchema,
     ObjectTypeWriteRequest,
     OntologySchemaOut,
@@ -162,19 +164,26 @@ def create_group(
 @router.patch("/groups/{slug}", response_model=NavGroupOut)
 def update_group(
     slug: str,
-    payload: NavGroupWriteRequest,
+    payload: NavGroupPatchRequest,
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> NavGroup:
+    """**보낸 것만 바꾼다.** slug 는 안 바꾼다 — 타입은 id 로 가리키지만 사람과
+    문서는 slug 로 가리키고, 바꾸면 그 말들이 조용히 틀린 것이 된다."""
     row = _group(db, slug)
-    require_choice(payload.audience, NAV_AUDIENCES, what="보이는 대상")
-    # **slug 는 안 바꾼다.** 타입이 이 그룹을 id 로 가리키지만, 사람과 문서는
-    # slug 로 가리킨다 — 바꾸면 그 말들이 조용히 틀린 것이 된다.
-    row.label = payload.label
-    row.icon = payload.icon
-    row.audience = payload.audience
-    row.sort_order = payload.sort_order
-    row.is_active = payload.is_active
+    sent = payload.model_fields_set
+
+    if "audience" in sent and payload.audience is not None:
+        row.audience = require_choice(payload.audience, NAV_AUDIENCES, what="보이는 대상")
+    if "label" in sent and payload.label is not None:
+        row.label = payload.label
+    if "icon" in sent and payload.icon is not None:
+        row.icon = payload.icon
+    if "sort_order" in sent and payload.sort_order is not None:
+        row.sort_order = payload.sort_order
+    if "is_active" in sent and payload.is_active is not None:
+        row.is_active = payload.is_active
+
     _audit(
         db, user, action="ontology.group.update", table="nav_groups", row_id=row.id, label=slug
     )
@@ -248,27 +257,51 @@ def create_type(
 @router.patch("/types/{slug}", response_model=ObjectTypeOut)
 def update_type(
     slug: str,
-    payload: ObjectTypeWriteRequest,
+    payload: ObjectTypePatchRequest,
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> ObjectTypeOut:
-    row = _type(db, slug)
-    _check_type_choices(payload)
-    group = _group(db, payload.nav_group_slug) if payload.nav_group_slug else None
+    """**보낸 것만 바꾼다.**
 
-    # **slug 는 안 바꾼다.** URL·관계의 허용 타입·MCP 도구 이름이 여기 물려 있다.
-    row.label = payload.label
-    row.icon = payload.icon
-    row.description = payload.description
-    row.sort_order = payload.sort_order
-    row.nav_group_id = group.id if group else None
-    row.kind_class = payload.kind_class
-    row.entry_policy = payload.entry_policy
-    row.key_policy = payload.key_policy
-    row.key_scope = payload.key_scope
-    row.temporal_kind = payload.temporal_kind
-    row.list_view = payload.list_view
-    row.is_active = payload.is_active
+    전체 교체로 두면 화면이 `list_view` 를 안 실어 보낸 날 그 설정이 통째로
+    날아가고, **그 손실은 저장한 사람 눈에 안 보인다.**
+
+    **slug 는 안 바꾼다** — URL(`/o/<slug>`)·관계의 허용 타입·MCP 도구 이름이
+    여기 물려 있어서, 바꾸면 그 셋이 조용히 어긋난다.
+    """
+    row = _type(db, slug)
+    sent = payload.model_fields_set
+
+    choices = (
+        ("kind_class", payload.kind_class, KIND_CLASSES, "객체 분류"),
+        ("entry_policy", payload.entry_policy, ENTRY_POLICIES, "입력 정책"),
+        ("key_policy", payload.key_policy, KEY_POLICIES, "식별자 정책"),
+        ("key_scope", payload.key_scope, KEY_SCOPES, "식별자 범위"),
+        ("temporal_kind", payload.temporal_kind, TEMPORAL_KINDS, "시간 정책"),
+    )
+    for field, value, allowed, what in choices:
+        if field in sent and value is not None:
+            setattr(row, field, require_choice(value, allowed, what=what))
+
+    if "label" in sent and payload.label is not None:
+        row.label = payload.label
+    if "icon" in sent and payload.icon is not None:
+        row.icon = payload.icon
+    if "description" in sent and payload.description is not None:
+        row.description = payload.description
+    if "sort_order" in sent and payload.sort_order is not None:
+        row.sort_order = payload.sort_order
+    if "list_view" in sent and payload.list_view is not None:
+        row.list_view = payload.list_view
+    if "is_active" in sent and payload.is_active is not None:
+        row.is_active = payload.is_active
+
+    # **`null` 을 명시하면 사이드바에서 뺀다.** 안 보내면 그대로 둔다 — 그 둘을
+    # 안 가르면 다른 칸 하나 고칠 때마다 메뉴에서 사라진다.
+    if "nav_group_slug" in sent:
+        group = _group(db, payload.nav_group_slug) if payload.nav_group_slug else None
+        row.nav_group_id = group.id if group else None
+
     _audit(
         db,
         user,
@@ -279,16 +312,96 @@ def update_type(
     )
     db.commit()
     db.refresh(row)
-    counts = _counts(db)
-    return _type_out(row, group.slug if group else None, counts.get(row.id, 0))
+    return _type_out(
+        row,
+        _group_slugs(db).get(row.nav_group_id) if row.nav_group_id else None,
+        _counts(db).get(row.id, 0),
+    )
 
 
 def _check_type_choices(payload: ObjectTypeWriteRequest) -> None:
+    """만들 때의 고른 값 검사. **고치기는 보낸 것만 보므로 따로 본다**(update_type)."""
     require_choice(payload.kind_class, KIND_CLASSES, what="객체 분류")
     require_choice(payload.entry_policy, ENTRY_POLICIES, what="입력 정책")
     require_choice(payload.key_policy, KEY_POLICIES, what="식별자 정책")
     require_choice(payload.key_scope, KEY_SCOPES, what="식별자 범위")
     require_choice(payload.temporal_kind, TEMPORAL_KINDS, what="시간 정책")
+
+
+@router.delete("/types/{slug}", status_code=204)
+def delete_type(
+    slug: str,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    """타입을 지운다 — **인스턴스가 하나도 없을 때만.**
+
+    행이 있는데 지우면 그 데이터가 통째로 고아가 된다. 그런데 그것은 화면의 실수
+    한 번으로 일어날 일이 아니다. 그래서 몇 개가 걸려 있는지 말하며 막고,
+    **그만 쓰려는 것이면 비활성으로 두라고** 알려 준다 — 이 저장소는 지우지 않는다.
+
+    비어 있으면 진짜로 지운다. 잘못 만든 타입이 목록에 영원히 남으면, 그 목록은
+    곧 아무도 안 읽는다.
+    """
+    row = _type(db, slug)
+    count = db.scalar(
+        select(func.count())
+        .select_from(ObjectInstance)
+        .where(ObjectInstance.type_id == row.id)
+    )
+    if count:
+        raise Conflict(
+            code("ONTOLOGY", 38),
+            f"{row.label}에 {count}개가 들어 있어 지울 수 없습니다. "
+            "그만 쓰려는 것이면 「사용 안 함」 으로 두세요 — 자료는 남고 화면에서만 빠집니다.",
+            details={"object_count": int(count)},
+        )
+
+    _audit(
+        db,
+        user,
+        action="ontology.type.delete",
+        table="object_types",
+        row_id=row.id,
+        label=slug,
+    )
+    # 속성 정의는 FK 가 없다(가리키는 표가 둘이라 걸 수 없다) — 여기서 함께 지운다.
+    # 안 지우면 같은 slug 로 타입을 다시 만들 때 **옛 속성이 되살아난다.**
+    db.query(PropertyDef).filter(
+        PropertyDef.owner_kind == "type", PropertyDef.owner_id == row.id
+    ).delete(synchronize_session=False)
+    db.delete(row)
+    db.commit()
+
+
+@router.delete("/groups/{slug}", status_code=204)
+def delete_group(
+    slug: str,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    """묶음을 지운다 — **걸린 타입이 없을 때만.**
+
+    FK 가 SET NULL 이라 DB 는 지우게 두지만, 그러면 그 타입들이 **조용히
+    사이드바에서 사라진다.** 없어진 이유를 물을 자리가 없으므로 여기서 막는다.
+    """
+    row = _group(db, slug)
+    attached = list(
+        db.scalars(select(ObjectType.label).where(ObjectType.nav_group_id == row.id))
+    )
+    if attached:
+        raise Conflict(
+            code("ONTOLOGY", 39),
+            f"{row.label}에 {', '.join(attached)} 이(가) 걸려 있습니다. "
+            "그 타입들의 묶음을 먼저 바꾸세요 — 안 그러면 사이드바에서 조용히 사라집니다.",
+            details={"types": attached},
+        )
+
+    _audit(
+        db, user, action="ontology.group.delete", table="nav_groups", row_id=row.id, label=slug
+    )
+    db.delete(row)
+    db.commit()
 
 
 # --- 속성 정의 --------------------------------------------------------------

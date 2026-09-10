@@ -2130,6 +2130,7 @@
           "ontology"
         ],
         "summary": "Update Group",
+        "description": "**보낸 것만 바꾼다.** slug 는 안 바꾼다 — 타입은 id 로 가리키지만 사람과\n문서는 slug 로 가리키고, 바꾸면 그 말들이 조용히 틀린 것이 된다.",
         "operationId": "update_group_api_ontology_groups__slug__patch",
         "parameters": [
           {
@@ -2147,7 +2148,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/NavGroupWriteRequest"
+                "$ref": "#/components/schemas/NavGroupPatchRequest"
               }
             }
           }
@@ -2162,6 +2163,40 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Delete Group",
+        "description": "묶음을 지운다 — **걸린 타입이 없을 때만.**\n\nFK 가 SET NULL 이라 DB 는 지우게 두지만, 그러면 그 타입들이 **조용히\n사이드바에서 사라진다.** 없어진 이유를 물을 자리가 없으므로 여기서 막는다.",
+        "operationId": "delete_group_api_ontology_groups__slug__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -2246,6 +2281,7 @@
           "ontology"
         ],
         "summary": "Update Type",
+        "description": "**보낸 것만 바꾼다.**\n\n전체 교체로 두면 화면이 `list_view` 를 안 실어 보낸 날 그 설정이 통째로\n날아가고, **그 손실은 저장한 사람 눈에 안 보인다.**\n\n**slug 는 안 바꾼다** — URL(`/o/<slug>`)·관계의 허용 타입·MCP 도구 이름이\n여기 물려 있어서, 바꾸면 그 셋이 조용히 어긋난다.",
         "operationId": "update_type_api_ontology_types__slug__patch",
         "parameters": [
           {
@@ -2263,7 +2299,7 @@
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/ObjectTypeWriteRequest"
+                "$ref": "#/components/schemas/ObjectTypePatchRequest"
               }
             }
           }
@@ -2278,6 +2314,40 @@
                 }
               }
             }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Delete Type",
+        "description": "타입을 지운다 — **인스턴스가 하나도 없을 때만.**\n\n행이 있는데 지우면 그 데이터가 통째로 고아가 된다. 그런데 그것은 화면의 실수\n한 번으로 일어날 일이 아니다. 그래서 몇 개가 걸려 있는지 말하며 막고,\n**그만 쓰려는 것이면 비활성으로 두라고** 알려 준다 — 이 저장소는 지우지 않는다.\n\n비어 있으면 진짜로 지운다. 잘못 만든 타입이 목록에 영원히 남으면, 그 목록은\n곧 아무도 안 읽는다.",
+        "operationId": "delete_type_api_ontology_types__slug__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
           },
           "422": {
             "description": "Validation Error",
@@ -3861,6 +3931,71 @@
         ],
         "title": "NavGroupOut"
       },
+      "NavGroupPatchRequest": {
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
+          },
+          "audience": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Audience"
+          },
+          "sort_order": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sort Order"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "title": "NavGroupPatchRequest",
+        "description": "묶음 부분 수정. 같은 이유로 전체 교체가 아니다."
+      },
       "NavGroupWriteRequest": {
         "properties": {
           "slug": {
@@ -4500,6 +4635,149 @@
           "object_count"
         ],
         "title": "ObjectTypeOut"
+      },
+      "ObjectTypePatchRequest": {
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "sort_order": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sort Order"
+          },
+          "nav_group_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Group Slug"
+          },
+          "kind_class": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind Class"
+          },
+          "entry_policy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Entry Policy"
+          },
+          "key_policy": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Policy"
+          },
+          "key_scope": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key Scope"
+          },
+          "temporal_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Temporal Kind"
+          },
+          "list_view": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "List View"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "title": "ObjectTypePatchRequest",
+        "description": "타입 부분 수정 — **「안 보낸 것」 과 「비운 것」 을 구별한다.**\n\n전체 교체로 두면 화면이 `list_view` 를 안 실어 보낸 날 그 설정이 통째로\n날아가고, **그 손실은 저장한 사람 눈에 안 보인다.** 무엇을 보냈는지는\n`model_fields_set` 이 안다 — `None` 을 기본값으로 둔 것과 명시적으로 `null`\n을 보낸 것이 그래야 갈린다(묶음에서 빼기가 그 경우다)."
       },
       "ObjectTypeSchema": {
         "properties": {

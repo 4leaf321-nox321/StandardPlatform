@@ -91,13 +91,17 @@ export const ontologyApi = {
 
   groups: () => api.get<NavGroupRow[]>('/ontology/groups'),
   createGroup: (body: Record<string, unknown>) => api.post<NavGroupRow>('/ontology/groups', body),
+  /** **보낸 것만 바뀐다.** 안 보낸 칸은 그대로다. */
   updateGroup: (slug: string, body: Record<string, unknown>) =>
     api.patch<NavGroupRow>(`/ontology/groups/${slug}`, body),
+  removeGroup: (slug: string) => api.delete<void>(`/ontology/groups/${slug}`),
 
   types: () => api.get<ObjectType[]>('/ontology/types'),
   createType: (body: Record<string, unknown>) => api.post<ObjectType>('/ontology/types', body),
+  /** **보낸 것만 바뀐다.** `nav_group_slug: null` 을 명시하면 사이드바에서 뺀다. */
   updateType: (slug: string, body: Record<string, unknown>) =>
     api.patch<ObjectType>(`/ontology/types/${slug}`, body),
+  removeType: (slug: string) => api.delete<void>(`/ontology/types/${slug}`),
 
   properties: (slug: string) => api.get<PropertyDef[]>(`/ontology/types/${slug}/properties`),
   createProperty: (slug: string, body: Record<string, unknown>) =>
