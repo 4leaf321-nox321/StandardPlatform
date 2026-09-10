@@ -4,6 +4,13 @@
  * **없으면 모든 목록이 똑같아지고, 똑같으면 아무도 안 쓴다.** 속성을 아무리
  * 정의해도 목록에는 안 나오고 기본형(식별자·이름·고친 때)으로 떨어진다 —
  * 그러면 「정의가 곧 화면」 이라는 말이 반만 참이 된다.
+ *
+ * ## 설명을 글로 적지 않고 보여 준다
+ *
+ * 네 칸이 화면의 어디에 꽂히는지는 말로 하면 안 읽힌다. 그래서 **지금 설정대로
+ * 그려지는 목록을 위에 붙인다** — 열을 담으면 그 자리에서 표 머리가 바뀌고,
+ * 거르기를 켜면 위에 칸이 선다. 이 저장소가 「빈 목록은 이유를 말한다」 로 푸는
+ * 것과 같은 방식이다: **화면이 스스로를 설명하게 한다.**
  */
 
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react'
@@ -35,6 +42,9 @@ const BUILT_IN: { id: string; label: string }[] = [
  */
 const NOT_A_COLUMN = new Set(['file'])
 
+/** 열을 안 골랐을 때 목록이 떨어지는 기본. `ObjectListPage` 와 같아야 한다. */
+const FALLBACK_PREVIEW = ['key', 'label', 'updated_at']
+
 /** 거르기·검색에 쓸 수 있는 종류. 문자열 비교만 하므로 글과 선택뿐이다. */
 const FILTERABLE = new Set(['text', 'enum'])
 
@@ -51,6 +61,74 @@ function fieldOptions(defs: PropertyDef[]): { id: string; label: string }[] {
       .filter((def) => !NOT_A_COLUMN.has(def.data_type))
       .map((def) => ({ id: `properties.${def.key}`, label: def.label })),
   ]
+}
+
+/**
+ * 지금 설정대로 그려지는 목록 — **가짜 데이터로 모양만** 보여 준다.
+ *
+ * 진짜 데이터를 끌어오면 「비어 있는 타입」 에서는 미리보기가 비고, 그러면 설정이
+ * 잘못된 것인지 데이터가 없는 것인지 구별되지 않는다.
+ */
+function Preview({ defs, value }: { defs: PropertyDef[]; value: ListView }) {
+  const all = fieldOptions(defs)
+  const columns = value.columns?.length ? value.columns : FALLBACK_PREVIEW
+  const filters = value.filters ?? []
+
+  function labelOf(id: string): string {
+    return all.find((one) => one.id === id)?.label ?? id
+  }
+
+  return (
+    <div className="bg-muted/30 space-y-2 rounded-md border border-dashed p-3">
+      <p className="text-muted-foreground text-xs">
+        이 타입의 목록 화면(<code>/o/{'{'}타입{'}'}</code>)이 이렇게 그려집니다.
+      </p>
+
+      <div className="bg-background space-y-2 rounded border p-2">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-muted-foreground rounded border px-2 py-1 text-xs">
+            {(value.search ?? ['label', 'key']).map(labelOf).join('·')} (으)로 찾기
+          </span>
+          {filters.map((id) => (
+            <span key={id} className="text-muted-foreground rounded border px-2 py-1 text-xs">
+              {labelOf(id)} ▾
+            </span>
+          ))}
+        </div>
+
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="text-muted-foreground border-b">
+              {columns.map((id, index) => (
+                <th key={id} className="py-1 text-left font-medium">
+                  {labelOf(id)}
+                  {index === 0 && <span className="ml-1 text-[10px]">(링크)</span>}
+                  {value.sort?.field === id && (
+                    <span className="ml-1">{value.sort.dir === 'desc' ? '▼' : '▲'}</span>
+                  )}
+                </th>
+              ))}
+              <th className="text-muted-foreground py-1 text-left font-medium">부서</th>
+              <th className="text-muted-foreground py-1 text-left font-medium">상태</th>
+            </tr>
+          </thead>
+          <tbody className="text-muted-foreground">
+            {[0, 1].map((row) => (
+              <tr key={row}>
+                {columns.map((id) => (
+                  <td key={id} className="py-1">
+                    ···
+                  </td>
+                ))}
+                <td className="py-1">···</td>
+                <td className="py-1">···</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
 }
 
 export function ListViewEditor({ defs, value, onChange }: Props) {
@@ -95,6 +173,8 @@ export function ListViewEditor({ defs, value, onChange }: Props) {
 
   return (
     <div className="space-y-5">
+      <Preview defs={defs} value={value} />
+
       {/* --- 열 --------------------------------------------------------- */}
       <div className="space-y-2">
         <Label>목록에 보일 열</Label>
