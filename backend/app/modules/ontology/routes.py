@@ -16,6 +16,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance, ObjectRelation
+from app.modules.ontology import views
 from app.modules.ontology.models import (
     CARDINALITIES,
     DATA_TYPES,
@@ -232,6 +233,10 @@ def create_type(
         raise Conflict(code("ONTOLOGY", 33), f"이미 있는 타입입니다: {slug}")
 
     group = _group(db, payload.nav_group_slug) if payload.nav_group_slug else None
+    # 새 타입에는 속성이 없다 — 뷰가 속성을 가리키면 그 자리에서 걸린다.
+    views.validate_list_view(payload.list_view, [])
+    views.validate_form_view(payload.form_view, [], what="폼 화면")
+    views.validate_form_view(payload.detail_view, [], what="상세 화면")
     row = ObjectType(
         slug=slug,
         label=payload.label,
@@ -302,12 +307,15 @@ def update_type(
         row.description = payload.description
     if "sort_order" in sent and payload.sort_order is not None:
         row.sort_order = payload.sort_order
+    # **모르는 키가 오면 거절한다 — 조용히 무시하지 않는다.** 무시하면 「스펙에는
+    # 있는데 안 그려지는 필드」 가 쌓이고, 적은 쪽은 적용된 줄 안다(ADR 0005).
+    defs = _properties_of(db, row.id)
     if "list_view" in sent and payload.list_view is not None:
-        row.list_view = payload.list_view
+        row.list_view = views.validate_list_view(payload.list_view, defs)
     if "form_view" in sent and payload.form_view is not None:
-        row.form_view = payload.form_view
+        row.form_view = views.validate_form_view(payload.form_view, defs, what="폼 화면")
     if "detail_view" in sent and payload.detail_view is not None:
-        row.detail_view = payload.detail_view
+        row.detail_view = views.validate_form_view(payload.detail_view, defs, what="상세 화면")
     if "title_template" in sent and payload.title_template is not None:
         row.title_template = payload.title_template
     if "is_active" in sent and payload.is_active is not None:
@@ -767,6 +775,10 @@ def delete_property(
     안 보이게 되는지(`/usage`) 먼저 말한다.
     """
     row = _property(db, slug, key)
+    owner = _type(db, slug)
+    # **안 걷어내면 그 뒤로 타입을 고칠 때마다 「없는 속성」 이라고 거절당한다** —
+    # 그리고 사람은 자기가 방금 고친 것과 상관없는 그 오류를 이해할 수 없다.
+    owner.list_view = views.prune_field(owner.list_view or {}, key)
     _audit(
         db,
         user,

@@ -10,9 +10,10 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Plus, X } from 'lucide-react'
+import type { ReactNode } from 'react'
+import { ChevronRight, Plus, X } from 'lucide-react'
 
-import type { DataType, PropertyDef } from '@/modules/ontology/api'
+import type { DataType, PropertyDef, SectionView } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
 import type { PickerOption } from '@/shared/components/SearchablePicker'
@@ -27,6 +28,7 @@ import {
   SelectValue,
 } from '@/shared/components/ui/select'
 import { Textarea } from '@/shared/components/ui/textarea'
+import { cn } from '@/shared/lib/utils'
 
 /** 고를 것이 이보다 많으면 통째로 펼치지 않는다 — 눈으로 찾는 일은 실패한다. */
 const PICKER_THRESHOLD = 20
@@ -38,6 +40,12 @@ interface Props {
   values: PropertyValues
   onChange: (values: PropertyValues) => void
   disabled?: boolean
+  /**
+   * 묶음의 순서와 모양(`form_view`). 안 주면 한 덩어리로 선다.
+   *
+   * **속성이 40개인 폼이 일렬로 서면 사람은 그 폼을 안 채운다.**
+   */
+  view?: SectionView
 }
 
 /** 값 하나짜리 입력. 종류마다 위젯이 다르다. */
@@ -299,7 +307,45 @@ function ManyValues({
   )
 }
 
-export function PropertyFields({ defs, values, onChange, disabled }: Props) {
+/**
+ * 정의를 묶음으로 나눈다.
+ *
+ * 뷰가 적어 둔 순서를 먼저 쓰고, **거기 없는 묶음은 뒤에 붙인다** — 새 속성을
+ * 만들었는데 뷰를 안 고쳤다고 그 속성이 화면에서 사라지면, 만든 사람은 저장이
+ * 안 된 줄 안다.
+ */
+export function groupBySection(
+  defs: PropertyDef[],
+  view?: SectionView,
+): { name: string; columns: number; collapsed: boolean; defs: PropertyDef[] }[] {
+  const byName = new Map<string, PropertyDef[]>()
+  for (const def of defs) {
+    const name = def.section || ''
+    byName.set(name, [...(byName.get(name) ?? []), def])
+  }
+
+  const ordered: string[] = []
+  // 묶음 없는 것들이 맨 위에 선다 — 대개 이름·식별자 같은 기본 칸이다.
+  if (byName.has('')) ordered.push('')
+  for (const one of view?.sections ?? []) {
+    if (byName.has(one.name) && !ordered.includes(one.name)) ordered.push(one.name)
+  }
+  for (const name of byName.keys()) {
+    if (!ordered.includes(name)) ordered.push(name)
+  }
+
+  return ordered.map((name) => {
+    const spec = view?.sections?.find((one) => one.name === name)
+    return {
+      name,
+      columns: spec?.columns ?? 1,
+      collapsed: spec?.collapsed ?? false,
+      defs: byName.get(name) ?? [],
+    }
+  })
+}
+
+export function PropertyFields({ defs, values, onChange, disabled, view }: Props) {
   if (defs.length === 0) {
     return (
       <p className="text-muted-foreground text-sm">
@@ -312,9 +358,22 @@ export function PropertyFields({ defs, values, onChange, disabled }: Props) {
     onChange({ ...values, [key]: next })
   }
 
+  const groups = groupBySection(defs, view)
+
   return (
-    <div className="space-y-4">
-      {defs.map((def) => (
+    <div className="space-y-5">
+      {groups.map((group) => (
+        <Section key={group.name || '__none__'} group={group}>
+          <div
+            className={
+              group.columns === 3
+                ? 'grid gap-4 sm:grid-cols-3'
+                : group.columns === 2
+                  ? 'grid gap-4 sm:grid-cols-2'
+                  : 'space-y-4'
+            }
+          >
+            {group.defs.map((def) => (
         <div key={def.key} className="space-y-1.5">
           <Label htmlFor={`prop-${def.key}`}>
             {def.label}
@@ -347,7 +406,37 @@ export function PropertyFields({ defs, values, onChange, disabled }: Props) {
 
           {def.help && <p className="text-muted-foreground text-xs">{def.help}</p>}
         </div>
+            ))}
+          </div>
+        </Section>
       ))}
+    </div>
+  )
+}
+
+/** 묶음 하나. 이름이 없으면 제목 없이 칸만 선다 — **한 덩어리에 제목을 달면
+ *  「여기 여럿이 있다」 로 읽힌다.** */
+function Section({
+  group,
+  children,
+}: {
+  group: { name: string; collapsed: boolean }
+  children: ReactNode
+}) {
+  const [open, setOpen] = useState(!group.collapsed)
+  if (!group.name) return <>{children}</>
+
+  return (
+    <div className="space-y-2">
+      <button
+        type="button"
+        className="text-muted-foreground hover:text-foreground flex items-center gap-1 text-xs font-medium"
+        onClick={() => setOpen((now) => !now)}
+      >
+        <ChevronRight className={cn('size-3.5 transition-transform', open && 'rotate-90')} />
+        {group.name}
+      </button>
+      {open && children}
     </div>
   )
 }

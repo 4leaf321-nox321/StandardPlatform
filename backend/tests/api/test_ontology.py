@@ -1475,3 +1475,107 @@ def test_새_종류_셋을_받는다(client: TestClient, admin: Signed) -> None:
             headers=admin.headers,
         )
         assert denied.status_code == 422, key
+
+
+# --- 뷰 스펙의 경계 (3-b) ----------------------------------------------------
+
+
+def test_모르는_키는_거절한다(client: TestClient, admin: Signed) -> None:
+    """**조용히 무시하면 적어 둔 사람은 적용된 줄 안다** — 「스펙에는 있는데
+    안 그려지는 필드」 가 쌓인다(ADR 0005 「뷰 스펙의 경계」)."""
+    part = _make_type(client, admin, label="부품")
+    denied = client.patch(
+        f"/api/ontology/types/{part}",
+        json={"list_view": {"columns": ["label"], "group_by": "properties.x"}},
+        headers=admin.headers,
+    )
+    assert denied.status_code == 422
+    assert "group_by" in denied.json()["error"]["message"]
+
+
+def test_없는_속성을_가리키면_거절한다(client: TestClient, admin: Signed) -> None:
+    """**가리키는 속성이 없으면 빈 열이 서고, 빈 열은 「값이 없다」 로 읽힌다.**"""
+    part = _make_type(client, admin, label="부품")
+    denied = client.patch(
+        f"/api/ontology/types/{part}",
+        json={"list_view": {"columns": ["properties.없는것"]}},
+        headers=admin.headers,
+    )
+    assert denied.status_code == 422
+    assert "없는것" in denied.json()["error"]["message"]
+
+
+def test_속성을_지우면_뷰에서도_걷어낸다(client: TestClient, admin: Signed) -> None:
+    """**안 걷어내면 그 뒤로 타입을 고칠 때마다 「없는 속성」 이라고 거절당하고**,
+    사람은 자기가 방금 고친 것과 상관없는 그 오류를 이해할 수 없다."""
+    part = _make_type(client, admin, label="부품")
+    _make_property(client, admin, part, key="grade", label="등급", data_type="text")
+    client.patch(
+        f"/api/ontology/types/{part}",
+        json={
+            "list_view": {
+                "columns": ["label", "properties.grade"],
+                "sort": {"field": "properties.grade"},
+                "filters": ["properties.grade"],
+            }
+        },
+        headers=admin.headers,
+    )
+    client.delete(f"/api/ontology/types/{part}/properties/grade", headers=admin.headers)
+
+    got = next(
+        row
+        for row in client.get("/api/ontology/types", headers=admin.headers).json()
+        if row["slug"] == part
+    )
+    assert got["list_view"]["columns"] == ["label"]
+    assert "sort" not in got["list_view"]
+    assert got["list_view"]["filters"] == []
+
+    # 그다음 타입을 고쳐도 안 걸린다.
+    again = client.patch(
+        f"/api/ontology/types/{part}", json={"label": "부품2"}, headers=admin.headers
+    )
+    assert again.status_code == 200
+
+
+def test_폼_묶음은_속성이_들고_있다(client: TestClient, admin: Signed) -> None:
+    """뷰가 소속까지 정하면 두 벌이 되고, **갈린 두 벌은 한쪽만 고쳐진다.**"""
+    part = _make_type(client, admin, label="부품")
+    _make_property(
+        client, admin, part, key="w", label="폭", data_type="number", section="치수"
+    )
+
+    ok = client.patch(
+        f"/api/ontology/types/{part}",
+        json={"form_view": {"sections": [{"name": "치수", "columns": 2}]}},
+        headers=admin.headers,
+    )
+    assert ok.status_code == 200, ok.text
+
+    # 속한 속성이 없는 묶음은 **빈 칸으로 선다** — 비어 있는 제목은 「뭔가 안
+    # 나온다」 로 읽힌다.
+    denied = client.patch(
+        f"/api/ontology/types/{part}",
+        json={"form_view": {"sections": [{"name": "없는묶음"}]}},
+        headers=admin.headers,
+    )
+    assert denied.status_code == 422
+    assert "속한 속성이 없습니다" in denied.json()["error"]["message"]
+
+
+def test_묶음의_열_수와_접힘만_정한다(client: TestClient, admin: Signed) -> None:
+    part = _make_type(client, admin, label="부품")
+    _make_property(
+        client, admin, part, key="w", label="폭", data_type="number", section="치수"
+    )
+    for bad, why in (
+        ({"name": "치수", "properties": ["w"]}, "소속은 뷰가 안 정한다"),
+        ({"name": "치수", "columns": 7}, "열 수는 1·2·3"),
+    ):
+        denied = client.patch(
+            f"/api/ontology/types/{part}",
+            json={"form_view": {"sections": [bad]}},
+            headers=admin.headers,
+        )
+        assert denied.status_code == 422, why

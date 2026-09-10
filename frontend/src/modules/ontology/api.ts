@@ -79,9 +79,14 @@ export interface ObjectType {
   key_scope: 'global' | 'workspace'
   temporal_kind: 'evergreen' | 'lifecycle' | 'yearly' | 'derived'
   list_view: ListView
-  /** 3단계에서 쓴다. 지금은 칸만 있다. */
-  form_view: Record<string, unknown>
-  detail_view: Record<string, unknown>
+  /**
+   * 폼·상세의 묶음 순서와 모양.
+   *
+   * **묶음의 소속은 여기서 안 정한다** — 속성의 `section` 이 들고 있다.
+   * 뷰가 소속까지 정하면 두 벌이 되고, 갈린 두 벌은 한쪽만 고쳐진다.
+   */
+  form_view: SectionView
+  detail_view: SectionView
   title_template: string
   is_active: boolean
   object_count: number
@@ -105,6 +110,11 @@ export interface RelationType {
   dst_type_slugs: string[] | null
   sort_order: number
   is_active: boolean
+}
+
+/** 폼·상세가 쓰는 묶음 스펙. 둘이 같은 모양인 이유는 **같은 묶음을 쓰기 때문**이다. */
+export interface SectionView {
+  sections?: { name: string; columns?: 1 | 2 | 3; collapsed?: boolean }[]
 }
 
 export interface NavGroupRow {

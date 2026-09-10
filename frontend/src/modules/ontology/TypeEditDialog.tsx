@@ -11,6 +11,7 @@
 import { useState } from 'react'
 
 import { ListViewEditor } from '@/modules/ontology/ListViewEditor'
+import { SectionViewEditor } from '@/modules/ontology/SectionViewEditor'
 import { ontologyApi } from '@/modules/ontology/api'
 import type {
   ListView,
@@ -18,6 +19,7 @@ import type {
   ObjectType,
   PropertyDef,
   RelationType,
+  SectionView,
 } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -65,6 +67,8 @@ export function TypeEditDialog({ type, groups, relationTypes, onClose, onChanged
   const [sortOrder, setSortOrder] = useState(String(type.sort_order))
   const [isActive, setIsActive] = useState(type.is_active)
   const [listView, setListView] = useState<ListView>(type.list_view ?? {})
+  const [formView, setFormView] = useState<SectionView>(type.form_view ?? {})
+  const [detailView, setDetailView] = useState<SectionView>(type.detail_view ?? {})
 
   const [error, setError] = useState<Error | null>(null)
   const [saving, setSaving] = useState(false)
@@ -87,6 +91,8 @@ export function TypeEditDialog({ type, groups, relationTypes, onClose, onChanged
         sort_order: Number(sortOrder) || 0,
         is_active: isActive,
         list_view: listView,
+        form_view: formView,
+        detail_view: detailView,
       })
       onChanged()
       onClose()
@@ -113,6 +119,7 @@ export function TypeEditDialog({ type, groups, relationTypes, onClose, onChanged
               {/* **목록 화면은 타입의 설정이지만 성격이 다르다.** 한 폼에 이어
                   붙이면 스크롤이 길어져 아래 절반을 아무도 안 본다. */}
               <TabsTrigger value="list">목록 화면</TabsTrigger>
+              <TabsTrigger value="form">폼·상세</TabsTrigger>
             </TabsList>
 
             <TabsContent value="basic" className="space-y-4">
@@ -232,6 +239,27 @@ export function TypeEditDialog({ type, groups, relationTypes, onClose, onChanged
                 value={listView}
                 onChange={setListView}
               />
+            </TabsContent>
+
+            <TabsContent value="form" className="space-y-6">
+              <div className="space-y-2">
+                <Label>만들기·고치기 폼</Label>
+                <SectionViewEditor
+                  defs={type.properties}
+                  value={formView}
+                  onChange={setFormView}
+                  what="폼"
+                />
+              </div>
+              <div className="space-y-2 border-t pt-4">
+                <Label>객체 상세</Label>
+                <SectionViewEditor
+                  defs={type.properties}
+                  value={detailView}
+                  onChange={setDetailView}
+                  what="상세"
+                />
+              </div>
             </TabsContent>
           </Tabs>
 

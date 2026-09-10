@@ -114,7 +114,13 @@ export function ObjectCreateDialog({ type, defs, onClose, onCreated }: Props) {
             />
           </div>
 
-          <PropertyFields defs={defs} values={values} onChange={setValues} disabled={saving} />
+          <PropertyFields
+            defs={defs}
+            values={values}
+            onChange={setValues}
+            disabled={saving}
+            view={type.form_view}
+          />
 
           <p className="text-muted-foreground text-xs">
             {myWorkspace

@@ -12,9 +12,9 @@ import { AttachmentList } from '@/modules/files/AttachmentList'
 import { ontologyApi } from '@/modules/ontology/api'
 import { ObjectYears } from '@/modules/objects/ObjectYears'
 import { RelatedObjects } from '@/modules/objects/RelatedObjects'
-import type { PropertyDef } from '@/modules/ontology/api'
+import type { PropertyDef, SectionView } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
-import { PropertyFields, propertyText } from '@/modules/objects/PropertyFields'
+import { PropertyFields, groupBySection, propertyText } from '@/modules/objects/PropertyFields'
 import type { PropertyValues } from '@/modules/objects/PropertyFields'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -35,6 +35,7 @@ export default function ObjectProfilePage() {
   // 관계 종류는 스키마에서 온다 — **어떤 관계를 맺을 수 있는지 화면이 알아야
   // 고를 것을 걸러 줄 수 있다.**
   const schema = useResource(() => ontologyApi.schema(), [])
+  const objectType = schema.data?.types.find((one) => one.slug === typeSlug)
 
   const [editing, setEditing] = useState(false)
   const [label, setLabel] = useState('')
@@ -145,6 +146,7 @@ export default function ObjectProfilePage() {
               values={values}
               onChange={setValues}
               disabled={saving}
+              view={objectType?.form_view}
             />
 
             <div className="flex justify-end gap-2">
@@ -162,12 +164,13 @@ export default function ObjectProfilePage() {
             values={row.properties}
             refLabels={row.ref_labels}
             note={row.description}
+            view={objectType?.detail_view}
           />
         )}
       </section>
 
       {/* **연도를 쓰는 축에서만 나온다.** 없는 것을 있는 척하지 않는다. */}
-      {schema.data?.types.find((one) => one.slug === typeSlug)?.temporal_kind === 'yearly' && (
+      {objectType?.temporal_kind === 'yearly' && (
         <ObjectYears typeSlug={typeSlug} objectId={objectId} canEdit={profile.data.can_edit} />
       )}
 
@@ -231,31 +234,64 @@ function ReadOnlyProperties({
   values,
   refLabels,
   note,
+  view,
 }: {
   defs: PropertyDef[]
   values: Record<string, unknown>
   refLabels: Record<string, string>
   note: string
+  /** **폼과 같은 묶음을 쓴다.** 두 벌로 두면 갈리고, 갈린 것은 한쪽만 고쳐진다. */
+  view?: SectionView
 }) {
+  const groups = groupBySection(defs, view)
+
   return (
-    <div className="space-y-3">
+    <div className="space-y-4">
       {note && <p className="text-sm whitespace-pre-wrap">{note}</p>}
       {defs.length === 0 ? (
         <p className="text-muted-foreground text-sm">
           이 타입에는 아직 속성이 없습니다. 온톨로지 관리에서 정의하면 여기에 나타납니다.
         </p>
       ) : (
-        <dl className="grid gap-x-6 gap-y-2 sm:grid-cols-2">
-          {defs.map((def) => (
-            <div key={def.key}>
-              <dt className="text-muted-foreground text-xs">
-                {def.label}
-                {def.unit && ` (${def.unit})`}
-              </dt>
-              <dd className="text-sm">{propertyText(def, values[def.key], refLabels)}</dd>
-            </div>
-          ))}
-        </dl>
+        groups.map((group) => (
+          <div key={group.name || '__none__'} className="space-y-1.5">
+            {group.name && (
+              <p className="text-muted-foreground text-xs font-medium">{group.name}</p>
+            )}
+            <dl
+              className={
+                group.columns === 3
+                  ? 'grid gap-x-6 gap-y-2 sm:grid-cols-3'
+                  : group.columns === 1
+                    ? 'grid gap-y-2'
+                    : 'grid gap-x-6 gap-y-2 sm:grid-cols-2'
+              }
+            >
+              {group.defs.map((def) => (
+                <div key={def.key}>
+                  <dt className="text-muted-foreground text-xs">
+                    {def.label}
+                    {def.unit && ` (${def.unit})`}
+                  </dt>
+                  <dd className="text-sm break-words">
+                    {def.data_type === 'url' && typeof values[def.key] === 'string' ? (
+                      <a
+                        className="hover:underline"
+                        href={values[def.key] as string}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        {values[def.key] as string}
+                      </a>
+                    ) : (
+                      propertyText(def, values[def.key], refLabels)
+                    )}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        ))
       )}
     </div>
   )
