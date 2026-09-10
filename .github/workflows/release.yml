@@ -43,10 +43,8 @@ jobs:
         with:
           python-version-file: '.python-version'
 
-      - name: apptainer 설치
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends apptainer
+      # 설치를 한 자리에서 정한다 — ci 와 release 가 같은 것을 쓴다.
+      - uses: ./.github/actions/apptainer
 
       # **버전은 태그다.** `git describe` 에 맡기면 얕은 체크아웃에서 엉뚱한 값이
       # 나오고, 그 값이 BUILD_INFO 를 거쳐 `/api/health` 까지 간다 — 「지금 서버에
