@@ -364,3 +364,37 @@ class RelationType(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class OntologySnapshot(Base):
+    """정의 전체를 한 행에 담아 둔 것 — **되돌릴 자리.**
+
+    **감사 로그는 「누가 뭘 했나」 는 알려 주지만 되돌려 주지는 않는다.** 사람이
+    한 칸씩 고칠 때는 그것으로 충분했지만, 기계는 타입 20개·속성 200개를 5초에
+    만든다 — 그 실수도 같은 속도로 반영된다.
+
+    적용 **직전**의 스키마를 통째로 남긴다. 되돌리기는 그 스키마를 다시 덮어
+    씌우는 일이다. **그 뒤에 새로 만든 것은 안 지운다** — 지우면 그 사이에 쌓인
+    객체가 고아가 된다(그 사실은 설명 문구가 말한다).
+    """
+
+    __tablename__ = "ontology_snapshots"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    taken_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+    )
+    actor_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    actor_label: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    """**그때의 이름을 박는다.** 계정이 지워지면 누가 했는지 모르게 되는데, 그건
+    되돌릴 자리가 존재하는 이유와 정면으로 어긋난다."""
+
+    reason: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    """무엇을 하기 직전인가 — 「가져오기」·「되돌리기」."""
+
+    schema: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """그 시점의 그룹·타입·속성·관계 종류 전부."""

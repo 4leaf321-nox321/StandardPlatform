@@ -23,6 +23,7 @@ from app.modules.objects.models import ObjectInstance, ObjectRelation, ObjectYea
 from app.modules.ontology.models import (
     NavGroup,
     ObjectType,
+    OntologySnapshot,
     PropertyDef,
     RelationType,
 )
@@ -41,6 +42,7 @@ __all__ = [
     "ObjectRelation",
     "ObjectType",
     "ObjectYear",
+    "OntologySnapshot",
     "PersonalAccessToken",
     "PropertyDef",
     "RefreshToken",

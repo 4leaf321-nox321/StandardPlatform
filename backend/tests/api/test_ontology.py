@@ -1579,3 +1579,283 @@ def test_묶음의_열_수와_접힘만_정한다(client: TestClient, admin: Sig
             headers=admin.headers,
         )
         assert denied.status_code == 422, why
+
+
+# --- 가져오기·되돌리기 (3-c) -------------------------------------------------
+
+
+def _import(
+    client: TestClient, admin: Signed, body: dict[str, Any], *, dry_run: bool = True
+) -> Any:
+    return client.post(
+        f"/api/ontology/import?dry_run={'true' if dry_run else 'false'}",
+        json=body,
+        headers=admin.headers,
+    )
+
+
+def test_기본은_미리보기다(client: TestClient, admin: Signed) -> None:
+    """**기계가 부르는 자리**라 실수가 기계 속도로 반영된다. 적용은 의도를 적어야
+    일어난다."""
+    slug = _uniq("mach")
+    plan = _import(client, admin, {"types": [{"slug": slug, "label": "기계"}]}).json()
+    assert plan["applied"] is False
+    assert [(c["kind"], c["action"]) for c in plan["changes"]] == [("type", "create")]
+
+    # 안 만들어졌다.
+    listed = client.get("/api/ontology/types", headers=admin.headers).json()
+    assert all(row["slug"] != slug for row in listed)
+
+
+def test_한_번에_통째로_적용한다(client: TestClient, admin: Signed) -> None:
+    """한 칸씩이면 200번 왕복하고, **중간에 실패하면 반쯤 만들어진 온톨로지가 남는다.**"""
+    group, part, vendor, rel = _uniq("g"), _uniq("part"), _uniq("vendor"), _uniq("made")
+    body = {
+        "groups": [{"slug": group, "label": "묶음"}],
+        "types": [
+            {"slug": vendor, "label": "공급사", "nav_group_slug": group},
+            {
+                "slug": part,
+                "label": "부품",
+                "nav_group_slug": group,
+                "key_policy": "required",
+                "properties": [
+                    {
+                        "key": "w",
+                        "label": "폭",
+                        "data_type": "number",
+                        "min_value": 0,
+                        "max_value": 100,
+                        "section": "치수",
+                    },
+                    {
+                        "key": "v",
+                        "label": "공급사",
+                        "data_type": "object_ref",
+                        "ref_type_slug": vendor,
+                    },
+                ],
+                "list_view": {"columns": ["key", "label", "properties.w"]},
+                "form_view": {"sections": [{"name": "치수", "columns": 2}]},
+            },
+        ],
+        "relation_types": [
+            {
+                "slug": rel,
+                "label": "만듦",
+                "inverse_label": "만들어짐",
+                "src_type_slugs": [part],
+                "dst_type_slugs": [vendor],
+            },
+        ],
+    }
+    applied = _import(client, admin, body, dry_run=False)
+    assert applied.status_code == 200, applied.text
+    got = applied.json()
+    assert got["applied"] is True
+    assert got["errors"] == []
+    assert got["snapshot_id"]
+
+    schema = client.get("/api/ontology/schema", headers=admin.headers).json()
+    made = next(t for t in schema["types"] if t["slug"] == part)
+    assert [p["key"] for p in made["properties"]] == ["w", "v"], "적은 차례대로"
+    assert made["form_view"]["sections"][0]["name"] == "치수"
+    assert any(r["slug"] == rel for r in schema["relation_types"])
+
+
+def test_오류가_하나라도_있으면_아무것도_안_바꾼다(client: TestClient, admin: Signed) -> None:
+    """**반쯤 만들어진 온톨로지가 남지 않는다** — 그것이 한 트랜잭션인 이유다."""
+    good, bad = _uniq("good"), _uniq("bad")
+    body = {
+        "types": [
+            {"slug": good, "label": "정상"},
+            {"slug": bad, "label": "틀림", "kind_class": "없는분류"},
+        ]
+    }
+    got = _import(client, admin, body, dry_run=False).json()
+    assert got["applied"] is False
+    assert got["errors"]
+
+    listed = client.get("/api/ontology/types", headers=admin.headers).json()
+    assert all(row["slug"] != good for row in listed), "앞의 것도 안 만들어져야 한다"
+
+
+def test_모르는_항목은_거절한다(client: TestClient, admin: Signed) -> None:
+    denied = _import(client, admin, {"타입들": []})
+    assert denied.status_code == 409
+    assert "모르는 항목" in denied.json()["error"]["message"]
+
+
+def test_위험한_것을_미리_말한다(client: TestClient, admin: Signed) -> None:
+    """**적용은 되지만 조용히 무언가를 잃는 것.** 사람이 읽고 판단할 자리다."""
+    part = _make_type(client, admin, label="부품")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="grade",
+        label="등급",
+        data_type="enum",
+        enum_options=["A", "B", "C"],
+    )
+    _make_object(client, admin, part, label="볼트", properties={"grade": "C"})
+
+    plan = _import(
+        client,
+        admin,
+        {
+            "types": [
+                {
+                    "slug": part,
+                    "label": "부품",
+                    "properties": [
+                        {
+                            "key": "grade",
+                            "label": "등급",
+                            "data_type": "enum",
+                            "enum_options": ["A", "B"],
+                            "required": True,
+                        }
+                    ],
+                }
+            ]
+        },
+    ).json()
+    joined = " ".join(plan["warnings"])
+    assert "C" in joined and "거절" in joined, joined
+    assert "필수로 바꿉니다" in joined
+
+
+def test_종류_변경은_계획에서_막는다(client: TestClient, admin: Signed) -> None:
+    part = _make_type(client, admin, label="부품")
+    _make_property(client, admin, part, key="w", label="폭", data_type="number")
+    plan = _import(
+        client,
+        admin,
+        {
+            "types": [
+                {
+                    "slug": part,
+                    "label": "부품",
+                    "properties": [{"key": "w", "label": "폭", "data_type": "text"}],
+                }
+            ]
+        },
+    ).json()
+    assert any("종류는 바꿀 수 없습니다" in one for one in plan["errors"])
+
+
+def test_안_바뀌는_것은_unchanged_로_적는다(client: TestClient, admin: Signed) -> None:
+    """**안 바뀌는 것을 바뀐다고 적으면 사람은 그 목록을 안 읽게 되고, 그때 진짜
+    하나가 묻힌다.**"""
+    part = _make_type(client, admin, label="부품", sort_order=7)
+    plan = _import(
+        client, admin, {"types": [{"slug": part, "label": "부품", "sort_order": 7}]}
+    ).json()
+    assert [c["action"] for c in plan["changes"]] == ["unchanged"]
+
+
+def test_되돌리면_그때의_정의로_돌아온다(client: TestClient, admin: Signed) -> None:
+    """**감사 로그는 누가 뭘 했는지는 알려 주지만 되돌려 주지 않는다.**"""
+    part = _uniq("part")
+    _import(client, admin, {"types": [{"slug": part, "label": "처음"}]}, dry_run=False)
+    second = _import(
+        client, admin, {"types": [{"slug": part, "label": "고친 뒤"}]}, dry_run=False
+    ).json()
+    snapshot = second["snapshot_id"]
+
+    now = next(
+        t
+        for t in client.get("/api/ontology/types", headers=admin.headers).json()
+        if t["slug"] == part
+    )
+    assert now["label"] == "고친 뒤"
+
+    restored = client.post(
+        f"/api/ontology/snapshots/{snapshot}/restore", headers=admin.headers
+    )
+    assert restored.status_code == 200, restored.text
+    back = next(
+        t
+        for t in client.get("/api/ontology/types", headers=admin.headers).json()
+        if t["slug"] == part
+    )
+    assert back["label"] == "처음"
+
+
+def test_되돌려도_그_뒤에_만든_것은_안_지운다(client: TestClient, admin: Signed) -> None:
+    """**지우면 그 사이에 쌓인 객체가 통째로 갈 곳을 잃는다** — 되돌리기가
+    그것까지 하면 되돌리기 자체가 위험해진다."""
+    first, later = _uniq("first"), _uniq("later")
+    made = _import(
+        client, admin, {"types": [{"slug": first, "label": "처음"}]}, dry_run=False
+    ).json()
+    _import(client, admin, {"types": [{"slug": later, "label": "나중"}]}, dry_run=False)
+
+    client.post(
+        f"/api/ontology/snapshots/{made['snapshot_id']}/restore", headers=admin.headers
+    )
+    slugs = {
+        t["slug"] for t in client.get("/api/ontology/types", headers=admin.headers).json()
+    }
+    assert later in slugs
+
+
+def test_스냅샷_목록이_남는다(client: TestClient, admin: Signed) -> None:
+    _import(client, admin, {"types": [{"slug": _uniq("x"), "label": "x"}]}, dry_run=False)
+    rows = client.get("/api/ontology/snapshots", headers=admin.headers).json()
+    assert rows
+    assert rows[0]["reason"] == "가져오기"
+    assert rows[0]["actor_label"]
+
+
+def test_가져오기는_시스템_관리자만(client: TestClient, admin: Signed, member: Signed) -> None:
+    denied = client.post("/api/ontology/import", json={"types": []}, headers=member.headers)
+    assert denied.status_code == 403
+
+
+def test_적은_차례가_그대로_순서가_된다(client: TestClient, admin: Signed) -> None:
+    """**안 그러면 전부 0 이 되어 이름순으로 서고**, 스키마에 적어 둔 순서(대개
+    사람이 읽는 차례)가 조용히 뒤집힌다."""
+    part = _uniq("part")
+    _import(
+        client,
+        admin,
+        {
+            "types": [
+                {
+                    "slug": part,
+                    "label": "부품",
+                    "properties": [
+                        {"key": "zulu", "label": "마지막에 읽을 것", "data_type": "text"},
+                        {"key": "alpha", "label": "먼저 읽을 것", "data_type": "text"},
+                    ],
+                }
+            ]
+        },
+        dry_run=False,
+    )
+
+    schema = client.get("/api/ontology/schema", headers=admin.headers).json()
+    made = next(t for t in schema["types"] if t["slug"] == part)
+    assert [p["key"] for p in made["properties"]] == ["zulu", "alpha"]
+
+
+def test_안_바뀐_묶음을_바뀐다고_안_적는다(client: TestClient, admin: Signed) -> None:
+    """행에는 `nav_group_id` 가 있고 스키마에는 slug 가 온다 — 그것을 안 맞추면
+    **늘 바뀐다고 나오고**, 그러면 사람은 계획을 안 읽게 된다."""
+    group = _uniq("g")
+    part = _uniq("part")
+    client.post(
+        "/api/ontology/groups", json={"slug": group, "label": "묶음"}, headers=admin.headers
+    )
+    _import(
+        client,
+        admin,
+        {"types": [{"slug": part, "label": "부품", "nav_group_slug": group}]},
+        dry_run=False,
+    )
+    plan = _import(
+        client, admin, {"types": [{"slug": part, "label": "부품", "nav_group_slug": group}]}
+    ).json()
+    assert [c["action"] for c in plan["changes"]] == ["unchanged"], plan["changes"]

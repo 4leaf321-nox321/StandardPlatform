@@ -12,7 +12,7 @@
 
 import { useState } from 'react'
 import { NavLink, Outlet, useOutletContext } from 'react-router-dom'
-import { Boxes, LayoutList, Share2 } from 'lucide-react'
+import { Boxes, LayoutList, Share2, Upload } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import type { OntologySchema } from '@/modules/ontology/api'
@@ -53,6 +53,13 @@ const SECTIONS = [
     label: '관계 종류',
     icon: Share2,
     count: (schema: OntologySchema | null) => schema?.relation_types.length,
+  },
+  {
+    // **기계가 정의를 만드는 자리.** 사람이 한 칸씩 만드는 길과 나란히 둔다.
+    to: 'import',
+    label: '가져오기·이력',
+    icon: Upload,
+    count: () => undefined,
   },
 ]
 

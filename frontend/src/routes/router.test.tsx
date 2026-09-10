@@ -84,5 +84,6 @@ describe('라우터', () => {
     expect(known).toContain('/admin/ontology/groups')
     expect(known).toContain('/admin/ontology/types')
     expect(known).toContain('/admin/ontology/relations')
+    expect(known).toContain('/admin/ontology/import')
   })
 })

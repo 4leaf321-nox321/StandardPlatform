@@ -8,15 +8,16 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
+from typing import Any
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Query
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance, ObjectRelation
-from app.modules.ontology import views
+from app.modules.ontology import importer, views
 from app.modules.ontology.models import (
     CARDINALITIES,
     DATA_TYPES,
@@ -28,10 +29,13 @@ from app.modules.ontology.models import (
     TEMPORAL_KINDS,
     NavGroup,
     ObjectType,
+    OntologySnapshot,
     PropertyDef,
     RelationType,
 )
 from app.modules.ontology.schemas import (
+    ChangeOut,
+    ImportPlanOut,
     NavGroupNode,
     NavGroupOut,
     NavGroupPatchRequest,
@@ -47,6 +51,7 @@ from app.modules.ontology.schemas import (
     RelationTypeOut,
     RelationTypePatchRequest,
     RelationTypeWriteRequest,
+    SnapshotOut,
 )
 from app.modules.ontology.services import (
     require_choice,
@@ -911,3 +916,133 @@ def dynamic_nav(
             )
         )
     return out
+
+
+# --- 가져오기와 되돌리기 -----------------------------------------------------
+
+
+def _snapshot(db: Session, user: User, *, reason: str) -> OntologySnapshot:
+    """지금 정의를 통째로 남긴다. **부르는 쪽이 커밋한다.**"""
+    row = OntologySnapshot(
+        actor_id=user.id,
+        # **그때의 이름을 박는다.** 계정이 지워지면 누가 했는지 모르게 되는데,
+        # 그건 되돌릴 자리가 존재하는 이유와 정면으로 어긋난다.
+        actor_label=user.display_name or user.email,
+        reason=reason,
+        schema=importer.capture(db),
+    )
+    db.add(row)
+    db.flush()
+    return row
+
+
+def _plan_out(
+    prepared: importer.Plan, *, applied: bool, snapshot_id: uuid.UUID | None
+) -> ImportPlanOut:
+    return ImportPlanOut(
+        applied=applied,
+        changes=[
+            ChangeOut(kind=c.kind, slug=c.slug, action=c.action, fields=c.fields)
+            for c in prepared.changes
+        ],
+        warnings=prepared.warnings,
+        errors=prepared.errors,
+        snapshot_id=snapshot_id,
+    )
+
+
+@router.post("/import", response_model=ImportPlanOut)
+def import_schema(
+    payload: dict[str, Any],
+    dry_run: bool = Query(default=True, description="적용하지 않고 계획만 본다"),
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> ImportPlanOut:
+    """정의를 통째로 받아 **한 트랜잭션으로** 적용한다.
+
+    **기본이 `dry_run=true` 인 이유**: 기계가 부르는 자리이고, 실수가 기계 속도로
+    반영되면 그 아래 쌓인 것이 전부 흔들린다. 적용은 **의도를 적어야** 일어난다.
+
+    **더하고 고치기만 한다.** 「스키마에 없으니 지운다」 로 만들면 부분 스키마를
+    한 번 보낸 날 그 타입의 객체가 통째로 갈 곳을 잃는다.
+    """
+    try:
+        prepared = importer.plan(db, payload) if dry_run else importer.apply(db, payload)
+    except ValueError as caught:
+        # **모르는 항목은 거절한다.** 조용히 무시하면 보낸 쪽은 적용된 줄 안다.
+        raise Conflict(code("ONTOLOGY", 70), str(caught)) from None
+
+    if dry_run or prepared.errors:
+        # 오류가 하나라도 있으면 **아무것도 안 바꾼다.**
+        db.rollback()
+        return _plan_out(prepared, applied=False, snapshot_id=None)
+
+    # **적용 직전의 모습을 남긴다.** 감사 로그는 누가 뭘 했는지는 알려 주지만
+    # 되돌려 주지는 않는다.
+    db.rollback()
+    snapshot = _snapshot(db, user, reason="가져오기")
+    prepared = importer.apply(db, payload)
+    _audit(
+        db,
+        user,
+        action="ontology.import",
+        table="ontology_snapshots",
+        row_id=snapshot.id,
+        label=f"{len([c for c in prepared.changes if c.action != 'unchanged'])}건",
+    )
+    db.commit()
+    return _plan_out(prepared, applied=True, snapshot_id=snapshot.id)
+
+
+@router.get("/snapshots", response_model=list[SnapshotOut])
+def list_snapshots(
+    _: User = Depends(require_system_admin), db: Session = Depends(get_db)
+) -> list[SnapshotOut]:
+    rows = db.scalars(
+        select(OntologySnapshot).order_by(OntologySnapshot.taken_at.desc()).limit(50)
+    )
+    return [
+        SnapshotOut(
+            id=row.id,
+            taken_at=row.taken_at,
+            actor_label=row.actor_label,
+            reason=row.reason,
+            type_count=len((row.schema or {}).get("types") or []),
+            relation_count=len((row.schema or {}).get("relation_types") or []),
+        )
+        for row in rows
+    ]
+
+
+@router.post("/snapshots/{snapshot_id}/restore", response_model=ImportPlanOut)
+def restore_snapshot(
+    snapshot_id: uuid.UUID,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> ImportPlanOut:
+    """그때의 정의를 다시 덮어씌운다.
+
+    **그 뒤에 새로 만든 것은 안 지운다.** 지우면 그 사이에 쌓인 객체가 통째로 갈
+    곳을 잃는다 — 되돌리기가 그것까지 하면 되돌리기 자체가 위험해진다.
+    """
+    row = db.get(OntologySnapshot, snapshot_id)
+    if row is None:
+        raise NotFound(code("ONTOLOGY", 71), "스냅샷을 찾을 수 없습니다.")
+
+    # 되돌리기 **직전**도 남긴다 — 되돌린 것을 되돌릴 수 있어야 한다.
+    before = _snapshot(db, user, reason=f"되돌리기 직전 ({row.taken_at:%Y-%m-%d %H:%M})")
+    prepared = importer.apply(db, row.schema or {})
+    if prepared.errors:
+        db.rollback()
+        return _plan_out(prepared, applied=False, snapshot_id=None)
+
+    _audit(
+        db,
+        user,
+        action="ontology.restore",
+        table="ontology_snapshots",
+        row_id=row.id,
+        label=f"{row.taken_at:%Y-%m-%d %H:%M} 로 되돌림",
+    )
+    db.commit()
+    return _plan_out(prepared, applied=True, snapshot_id=before.id)

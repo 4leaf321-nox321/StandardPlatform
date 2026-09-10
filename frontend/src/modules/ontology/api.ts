@@ -144,6 +144,32 @@ export interface OntologySchema {
   generated_at: string
 }
 
+export interface ImportChange {
+  kind: string
+  slug: string
+  action: 'create' | 'update' | 'unchanged'
+  fields: string[]
+}
+
+export interface ImportPlan {
+  applied: boolean
+  changes: ImportChange[]
+  /** **적용은 되지만 조용히 무언가를 잃는 것.** 사람이 읽고 판단할 자리다. */
+  warnings: string[]
+  /** 하나라도 있으면 **아무것도 안 바꾼다.** */
+  errors: string[]
+  snapshot_id: string | null
+}
+
+export interface Snapshot {
+  id: string
+  taken_at: string
+  actor_label: string
+  reason: string
+  type_count: number
+  relation_count: number
+}
+
 export interface PropertyUsage {
   key: string
   label: string
@@ -187,4 +213,10 @@ export const ontologyApi = {
     api.get<PropertyUsage>(`/ontology/types/${slug}/properties/${key}/usage`),
   removeProperty: (slug: string, key: string) =>
     api.delete<void>(`/ontology/types/${slug}/properties/${key}`),
+
+  /** **기본이 미리 보기다.** 적용은 의도를 적어야 일어난다. */
+  importSchema: (body: unknown, dryRun: boolean) =>
+    api.post<ImportPlan>(`/ontology/import?dry_run=${dryRun ? 'true' : 'false'}`, body),
+  snapshots: () => api.get<Snapshot[]>('/ontology/snapshots'),
+  restore: (id: string) => api.post<ImportPlan>(`/ontology/snapshots/${id}/restore`),
 }

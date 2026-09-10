@@ -38,6 +38,7 @@ const OntologyTypesPage = lazy(() => import('@/modules/ontology/OntologyTypesPag
 const OntologyRelationsPage = lazy(
   () => import('@/modules/ontology/OntologyRelationsPage'),
 )
+const OntologyImportPage = lazy(() => import('@/modules/ontology/OntologyImportPage'))
 const NotificationsPage = lazy(() => import('@/modules/notifications/NotificationsPage'))
 const ProfilePage = lazy(() => import('@/modules/auth/ProfilePage'))
 const ServerPage = lazy(() => import('@/modules/server/ServerPage'))
@@ -113,6 +114,7 @@ export const router = createBrowserRouter([
               { path: 'groups', element: <OntologyGroupsPage /> },
               { path: 'types', element: <OntologyTypesPage /> },
               { path: 'relations', element: <OntologyRelationsPage /> },
+              { path: 'import', element: <OntologyImportPage /> },
             ],
           },
           { path: 'admin/workspaces', element: <WorkspacesAdminPage /> },

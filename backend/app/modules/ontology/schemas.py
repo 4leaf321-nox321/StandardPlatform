@@ -252,3 +252,39 @@ class PropertyUsage(BaseModel):
     key: str
     label: str
     objects_with_value: int
+
+
+class ChangeOut(BaseModel):
+    kind: str
+    slug: str
+    action: str
+    fields: list[str]
+
+
+class ImportPlanOut(BaseModel):
+    """가져오기가 무엇을 할 것인가 — **적용 전에 보는 것.**
+
+    이것이 없으면 에이전트의 실수가 **기계 속도로** 반영되고, 온톨로지는 데이터의
+    모양이라 그 아래 쌓인 것이 전부 흔들린다.
+    """
+
+    applied: bool
+    """실제로 적용했나. `dry_run` 이면 거짓."""
+    changes: list[ChangeOut]
+    warnings: list[str]
+    """**적용은 되지만 조용히 무언가를 잃는 것.** 사람이 읽고 판단할 자리다."""
+    errors: list[str]
+    """적용하면 실패할 것. **하나라도 있으면 아무것도 안 바꾼다.**"""
+    snapshot_id: uuid.UUID | None
+    """적용 직전에 남긴 스냅샷. 되돌릴 때 쓴다."""
+
+
+class SnapshotOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    taken_at: datetime
+    actor_label: str
+    reason: str
+    type_count: int
+    relation_count: int

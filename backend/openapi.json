@@ -2813,6 +2813,133 @@
         }
       }
     },
+    "/api/ontology/import": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Import Schema",
+        "description": "정의를 통째로 받아 **한 트랜잭션으로** 적용한다.\n\n**기본이 `dry_run=true` 인 이유**: 기계가 부르는 자리이고, 실수가 기계 속도로\n반영되면 그 아래 쌓인 것이 전부 흔들린다. 적용은 **의도를 적어야** 일어난다.\n\n**더하고 고치기만 한다.** 「스키마에 없으니 지운다」 로 만들면 부분 스키마를\n한 번 보낸 날 그 타입의 객체가 통째로 갈 곳을 잃는다.",
+        "operationId": "import_schema_api_ontology_import_post",
+        "parameters": [
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "적용하지 않고 계획만 본다",
+              "default": true,
+              "title": "Dry Run"
+            },
+            "description": "적용하지 않고 계획만 본다"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "additionalProperties": true,
+                "title": "Payload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/snapshots": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "List Snapshots",
+        "operationId": "list_snapshots_api_ontology_snapshots_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/SnapshotOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Snapshots Api Ontology Snapshots Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/snapshots/{snapshot_id}/restore": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Restore Snapshot",
+        "description": "그때의 정의를 다시 덮어씌운다.\n\n**그 뒤에 새로 만든 것은 안 지운다.** 지우면 그 사이에 쌓인 객체가 통째로 갈\n곳을 잃는다 — 되돌리기가 그것까지 하면 되돌리기 자체가 위험해진다.",
+        "operationId": "restore_snapshot_api_ontology_snapshots__snapshot_id__restore_post",
+        "parameters": [
+          {
+            "name": "snapshot_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Snapshot Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImportPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/tree": {
       "get": {
         "tags": [
@@ -4162,6 +4289,37 @@
         ],
         "title": "Body_upload_api_attachments_post"
       },
+      "ChangeOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "slug",
+          "action",
+          "fields"
+        ],
+        "title": "ChangeOut"
+      },
       "ChangePasswordRequest": {
         "properties": {
           "current_password": {
@@ -4280,6 +4438,57 @@
         ],
         "title": "HomeWorkspaceRequest",
         "description": "대표 소속을 정한다.\n\n**비우는 길은 두지 않는다.** 대표 소속이 없으면 로그인이 소속 중 첫 부서로\n떨어지는데 그것은 사람이 정한 값이 아니다. 지우고 싶은 상황은 실제로는\n\"다른 부서로 옮긴다\" 이므로 그때도 새 값을 준다."
+      },
+      "ImportPlanOut": {
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeOut"
+            },
+            "type": "array",
+            "title": "Changes"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "changes",
+          "warnings",
+          "errors",
+          "snapshot_id"
+        ],
+        "title": "ImportPlanOut",
+        "description": "가져오기가 무엇을 할 것인가 — **적용 전에 보는 것.**\n\n이것이 없으면 에이전트의 실수가 **기계 속도로** 반영되고, 온톨로지는 데이터의\n모양이라 그 아래 쌓인 것이 전부 흔들린다."
       },
       "LoginRequest": {
         "properties": {
@@ -6876,6 +7085,46 @@
           "workspace_slug"
         ],
         "title": "SignupRequest"
+      },
+      "SnapshotOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "taken_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Taken At"
+          },
+          "actor_label": {
+            "type": "string",
+            "title": "Actor Label"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "type_count": {
+            "type": "integer",
+            "title": "Type Count"
+          },
+          "relation_count": {
+            "type": "integer",
+            "title": "Relation Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "taken_at",
+          "actor_label",
+          "reason",
+          "type_count",
+          "relation_count"
+        ],
+        "title": "SnapshotOut"
       },
       "SystemAdminRequest": {
         "properties": {
