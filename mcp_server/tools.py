@@ -191,6 +191,49 @@ def relation_add(
     )
 
 
+def objects_import(
+    platform: Platform,
+    type_slug: str,
+    rows: list[dict[str, Any]],
+    workspace_slug: str | None = None,
+    apply: bool = False,
+) -> Any:
+    """객체를 **여러 행 한 번에** — 같은 식별자(`key`)면 만들지 않고 고친다(upsert).
+
+    `apply=False`(기본)면 **아무것도 안 바꾸고** 행마다 무엇이 될지(새로/고침/그대로/
+    오류)를 돌려준다. 사람에게 보여 주고 판단을 받은 뒤 `apply=True` 로 부른다.
+    **한 행이라도 오류면 아무것도 안 넣는다.**
+
+    행은 `{"key": ..., "label": ..., <속성 키>: ...}` 꼴. 없는 키는 안 건드리고,
+    비우려면 `null` 을 넣는다. 참조 속성은 상대의 식별자(없으면 이름)로 적어도 된다.
+    한 번에 5000행까지.
+    """
+    return platform.request(
+        "POST",
+        f"/objects/{type_slug}/import-rows",
+        json={"rows": rows, "workspace_slug": workspace_slug, "apply": apply},
+    )
+
+
+def relations_import(
+    platform: Platform,
+    type_slug: str,
+    rows: list[dict[str, Any]],
+    apply: bool = False,
+) -> Any:
+    """관계를 **여러 줄 한 번에** — `type_slug` 의 객체에서 출발하는 선들.
+
+    행은 `{"src": ..., "relation": ..., "dst": ..., "evidence_note": ...}` 꼴. 끝점은
+    식별자(없으면 이름). 이미 이어진 것은 「그대로」 라 두 번 올려도 두 겹이 안 된다.
+    `apply=False` 면 계획만. **근거(evidence_note)를 적는다** — 기계가 이은 것이면 더.
+    """
+    return platform.request(
+        "POST",
+        f"/objects/{type_slug}/relations/import-rows",
+        json={"rows": rows, "apply": apply},
+    )
+
+
 #: 도구 이름 -> 함수. `server.py` 가 이 표로 등록한다.
 TOOLS = {
     "ontology_schema": ontology_schema,
@@ -200,4 +243,6 @@ TOOLS = {
     "object_create": object_create,
     "object_update": object_update,
     "relation_add": relation_add,
+    "objects_import": objects_import,
+    "relations_import": relations_import,
 }

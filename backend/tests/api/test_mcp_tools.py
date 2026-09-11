@@ -223,13 +223,45 @@ def test_이을_때_근거를_남긴다(bot: _ClientPlatform) -> None:
     ]
 
 
-def test_도구는_일곱이고_설명이_있다() -> None:
+def test_도구는_아홉이고_설명이_있다() -> None:
     """**도구 목록이 길수록 모델은 엉뚱한 것을 고른다.** 동적인 것은 도구가
     아니라 스키마다.
 
     설명은 함수의 docstring 이 정본이다 — 어댑터에 다시 적으면 두 벌이 되고,
     모델이 읽는 것은 그쪽이라 **실제 동작과 다른 설명을 읽게 된다.**
     """
-    assert len(tools.TOOLS) == 7
+    assert len(tools.TOOLS) == 9
     for name, function in tools.TOOLS.items():
         assert function.__doc__, f"{name} 에 설명이 없습니다"
+
+
+def test_여러_행을_한_번에_넣고_두_번_넣어도_두_벌이_안_된다(bot: _ClientPlatform) -> None:
+    slug = _uniq("tool")
+    tools.ontology_import(
+        bot,
+        {
+            "types": [
+                {
+                    "slug": slug,
+                    "label": "도구",
+                    "key_policy": "required",
+                    "properties": [{"key": "cost", "label": "가격", "data_type": "number"}],
+                }
+            ]
+        },
+        apply=True,
+    )
+    rows = [
+        {"key": "T-1", "label": "망치", "cost": 10},
+        {"key": "T-2", "label": "톱", "cost": 20},
+    ]
+
+    plan = tools.objects_import(bot, slug, rows)
+    assert plan["applied"] is False
+    assert plan["counts"]["create"] == 2
+
+    done = tools.objects_import(bot, slug, rows, apply=True)
+    assert done["applied"] is True
+    again = tools.objects_import(bot, slug, rows, apply=True)
+    assert again["counts"] == {"create": 0, "update": 0, "unchanged": 2, "error": 0}
+    assert tools.objects_list(bot, slug)["total"] == 2
