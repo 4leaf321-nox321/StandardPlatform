@@ -211,3 +211,41 @@ class ObjectYear(Base):
         PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE"), index=True
     )
     year: Mapped[int] = mapped_column(Integer, index=True)
+
+
+class SavedView(Base):
+    """저장된 뷰 — **조건·정렬을 이름 붙여 둔다.**
+
+    「영남 공급사 중 심사 점수 80 미만」 을 매번 다시 거르면 사람은 곧 안 거른다.
+    `workspace_id` 가 있으면 그 부서가 함께 쓰고, 없으면 만든 사람 것이다. 전사 뷰는
+    따로 없다 — 타입 정의의 `list_view` 가 그 자리다.
+    """
+
+    __tablename__ = "saved_views"
+    __table_args__ = (Index("ix_saved_views_type_owner", "type_id", "owner_user_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    type_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("object_types.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100))
+    owner_user_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE")
+    )
+    workspace_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("workspaces.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
+    """있으면 그 부서가 함께 쓴다. NULL 은 만든 사람 것."""
+    query: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """`{"q": ..., "conditions": [{"field","op","value"}], "sort": {...}}`."""
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
