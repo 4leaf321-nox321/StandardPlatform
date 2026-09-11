@@ -124,6 +124,12 @@ class ObjectInstance(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    merged_into_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="SET NULL"), nullable=True
+    )
+    """다른 객체에 **합쳐져서** 지워졌으면 그 객체. 옛 링크가 이것을 따라 새 것으로 간다 —
+    안 남기면 「ACME」 와 「ACME Inc.」 를 합친 뒤 옛 주소가 전부 404 가 된다."""
+
     deleted_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True, index=True
     )
