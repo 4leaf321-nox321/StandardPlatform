@@ -15,15 +15,61 @@
 ## reload 와 다중 워커는 같이 못 쓴다
 
 uvicorn 이 둘을 함께 받으면 한쪽을 조용히 버린다. 여기서 갈라서 준다.
+
+## 개발에서는 MCP 서버도 함께 띄운다
+
+MCP 서버(`mcp_server/server.py`)는 별도 venv·별도 프로세스라 따로 띄워야 하는데, 매번
+두 터미널에서 두 명령을 치는 것은 곧 안 하게 된다 — 그러면 Claude 가 「연결 실패」 만
+보고 이유는 모른다. 그래서 개발 모드는 `mcp_server/venv` 가 있으면 자식 프로세스로 함께
+띄우고(포트 +2, 백엔드는 이 프로세스의 개발 포트로), 이 프로세스가 끝날 때 같이 내린다.
+`MCP_DEV=0` 이면 안 띄운다. **운영에서는 하지 않는다** — 거기는 systemd 유닛
+(`<slug>-mcp`)이 따로 띄운다.
 """
 
 from __future__ import annotations
 
+import os
 import socket
+import subprocess
+import sys
+from pathlib import Path
 
 import uvicorn
 
 from app.config import get_settings
+
+MCP_DIR = Path(__file__).resolve().parents[1] / "mcp_server"
+
+
+def _start_mcp(api_port: int, mcp_port: int) -> subprocess.Popen[bytes] | None:
+    """개발용 MCP 서버를 자식으로. 못 띄우는 이유는 **말하고** 건너뛴다 — 조용히 빠지면
+    「Claude 가 안 붙는다」 를 여기서 찾을 사람이 없다."""
+    if os.environ.get("MCP_DEV") == "0":
+        return None
+    python = MCP_DIR / "venv" / "bin" / "python"
+    server = MCP_DIR / "server.py"
+    if not python.exists() or not server.exists():
+        print(
+            f"MCP 서버는 안 띄웁니다 — {python} 이 없습니다. (cd mcp_server && "
+            "python3 -m venv venv && ./venv/bin/pip install -r requirements.txt)",
+            file=sys.stderr,
+        )
+        return None
+    if _answering("127.0.0.1", mcp_port):
+        print(
+            f"MCP 서버는 안 띄웁니다 — {mcp_port} 포트에 이미 응답하는 것이 있습니다.",
+            file=sys.stderr,
+        )
+        return None
+    env = {
+        **os.environ,
+        "PLATFORM_API_BASE": f"http://127.0.0.1:{api_port}",
+        "MCP_HOST": "127.0.0.1",
+        "MCP_PORT": str(mcp_port),
+    }
+    child = subprocess.Popen([str(python), str(server)], cwd=MCP_DIR, env=env)
+    print(f"MCP 서버: http://127.0.0.1:{mcp_port}/mcp → 백엔드 http://127.0.0.1:{api_port}")
+    return child
 
 
 def _answering(host: str, port: int) -> bool:
@@ -58,7 +104,16 @@ def main() -> None:
         )
 
     if development:
-        uvicorn.run("app.main:app", host=settings.host, port=port, reload=True)
+        mcp = _start_mcp(port, settings.port + 2)
+        try:
+            uvicorn.run("app.main:app", host=settings.host, port=port, reload=True)
+        finally:
+            if mcp is not None and mcp.poll() is None:
+                mcp.terminate()
+                try:
+                    mcp.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    mcp.kill()
     else:
         # **앱을 문자열로 넘긴다.** 다중 워커는 uvicorn 이 프로세스를 새로 띄워
         # 앱을 다시 import 하므로, 객체를 넘기면 그 프로세스가 그것을 못 만든다.

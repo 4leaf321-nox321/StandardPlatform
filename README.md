@@ -74,7 +74,7 @@ cp .env.example .env
 변경이 강제된다.
 
 ```bash
-.venv/bin/python run.py                  # 8041 (개발). 운영은 8040
+.venv/bin/python run.py                  # 8041 (개발). 운영은 8040. mcp_server/venv 가 있으면 MCP(8042)도 함께
 ```
 
 포트가 잡혀 있으면 개발 모드가 그것을 말하며 멈춘다. 누가 쥐고 있는지는

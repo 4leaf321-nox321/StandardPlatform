@@ -13,9 +13,11 @@ PLATFORM_API_BASE=http://localhost:8030 ./venv/bin/python server.py
 # → streamable-http, 기본 http://127.0.0.1:8042/mcp
 ```
 
-개발 백엔드(`run.py`, 8041)에 붙이려면 `PLATFORM_API_BASE=http://127.0.0.1:8041`.
-포트는 백엔드 포트 +2 다(플랫폼마다 10씩 벌리는 규칙 안에서 8040 운영 · 8041 개발 ·
-8042 MCP). `MCP_HOST`/`MCP_PORT` 로 바꾼다.
+**개발에서는 이 명령을 칠 일이 없다.** `backend` 의 `python run.py` 가 이 venv 가 있으면
+MCP 서버를 자식으로 함께 띄운다(개발 백엔드 8041 → MCP 8042, Ctrl+C 로 같이 내림).
+위 명령은 따로 띄우고 싶을 때(`MCP_DEV=0 python run.py` 로 자동 기동을 끄고)나 운영
+호스트에서 손으로 확인할 때 쓴다. 포트는 백엔드 포트 +2 다(플랫폼마다 10씩 벌리는 규칙
+안에서 8040 운영 · 8041 개발 · 8042 MCP). `MCP_HOST`/`MCP_PORT` 로 바꾼다.
 
 ## Claude Code 등록 (사용자별 토큰)
 ```bash
