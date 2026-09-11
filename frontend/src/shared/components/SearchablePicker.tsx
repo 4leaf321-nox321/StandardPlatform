@@ -47,6 +47,17 @@ interface SearchablePickerProps {
   emptyText?: string
   id?: string
   className?: string
+  /**
+   * **서버가 찾는 모드.** 친 글자를 이리로 넘기면 호스트가 후보를 다시 받아 온다 —
+   * 그때 이 컴포넌트는 스스로 거르지 않는다(서버가 이미 걸렀고, 검색 속성처럼 화면에
+   * 없는 것으로 맞은 줄을 여기서 떨어뜨리면 안 된다).
+   */
+  onQueryChange?: (query: string) => void
+  /** 서버가 말한 전체 수. 후보가 잘렸음을 「N / 전체」 로 보여 준다. */
+  total?: number
+  loading?: boolean
+  /** 골라 둔 값이 후보에 없을 때 대신 보여 줄 것(호스트가 상세에서 읽어 온 이름). */
+  pinned?: PickerOption | null
 }
 
 /** 눈에 같아 보이는 값을 같게 본다 — 전각·대소문자·군더더기 공백. */
@@ -63,26 +74,41 @@ export function SearchablePicker({
   emptyText = '맞는 것이 없습니다',
   id,
   className,
+  onQueryChange,
+  total,
+  loading = false,
+  pinned = null,
 }: SearchablePickerProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const boxRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
-  const selected = options.find((one) => one.value === value) ?? null
+  const selected =
+    options.find((one) => one.value === value) ?? (pinned && pinned.value === value ? pinned : null)
 
   const shown = useMemo(() => {
+    // 골라 둔 것이 후보 밖이면 맨 위에 꽂는다 — 안 그러면 고른 것이 목록에 없어 보인다.
+    const base =
+      pinned && pinned.value === value && !options.some((one) => one.value === pinned.value)
+        ? [pinned, ...options]
+        : options
     const needle = normalize(query)
-    if (!needle) return options
-    return options.filter((one) =>
+    if (!needle || onQueryChange) return base
+    return base.filter((one) =>
       normalize(`${one.label} ${one.hint ?? ''} ${one.keywords ?? ''}`).includes(needle),
     )
-  }, [options, query])
+  }, [options, pinned, value, query, onQueryChange])
 
   // 열면 검색 칸으로 바로 간다 — 열고 나서 한 번 더 클릭하게 하지 않는다.
   useEffect(() => {
     if (open) searchRef.current?.focus()
-    else setQuery('')
+    else {
+      setQuery('')
+      onQueryChange?.('')
+    }
+    // onQueryChange 는 호스트가 매 렌더 새로 만들 수 있다 — 열림/닫힘에만 반응한다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open])
 
   // 바깥을 누르거나 Esc 면 닫는다.
@@ -132,7 +158,10 @@ export function SearchablePicker({
             <Input
               ref={searchRef}
               value={query}
-              onChange={(event) => setQuery(event.target.value)}
+              onChange={(event) => {
+                setQuery(event.target.value)
+                onQueryChange?.(event.target.value)
+              }}
               placeholder={searchPlaceholder}
               className="h-8 pl-8"
             />
@@ -142,7 +171,7 @@ export function SearchablePicker({
           <ul className="max-h-64 overflow-y-auto p-1">
             {shown.length === 0 && (
               <li className="text-muted-foreground px-2 py-6 text-center text-sm">
-                {emptyText}
+                {loading ? '찾는 중…' : emptyText}
               </li>
             )}
             {shown.map((one) => (
@@ -185,10 +214,15 @@ export function SearchablePicker({
           </ul>
 
           {/* 몇 개 중 몇 개를 보고 있는지. 거르고 나서 「이게 전부인가」 를 묻지
-              않게 한다. */}
-          {options.length > 0 && (
+              않게 한다. 서버가 찾는 모드면 전체 수는 서버의 것이다 — 후보가 잘렸으면
+              「더 좁혀 치라」 고 말한다. */}
+          {(options.length > 0 || (total ?? 0) > 0) && (
             <p className="text-muted-foreground border-t px-3 py-1.5 text-xs tabular-nums">
-              {shown.length} / {options.length}
+              {shown.length} / {total ?? options.length}
+              {total !== undefined &&
+                total > options.length &&
+                ' — 더 있습니다. 이름을 더 쳐서 좁히세요.'}
+              {loading && ' · 찾는 중…'}
             </p>
           )}
         </div>

@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -257,15 +258,35 @@ def report(db: Session, user: User, *, kinds: tuple[str, ...] = KINDS) -> list[F
 # --- 홈과 서버 화면에 등록하는 것 ------------------------------------------------
 
 
+#: 홈의 수를 이만큼 기억한다. 검사는 볼 수 있는 객체를 파이썬으로 훑는다 — 홈은 사람마다
+#: 하루에 수십 번 열리고, 그때마다 표 전체를 훑으면 객체가 몇만을 넘는 날 홈이 느려지고
+#: **느려진 이유는 홈 어디에도 안 적힌다.** 품질 화면(`/quality`)은 늘 새로 센다 — 거기가
+#: 고치러 가는 자리라서, 거기서 숫자가 안 맞으면 고친 것이 반영 안 된 줄 안다.
+MAINTENANCE_CACHE_SECONDS = 60.0
+_maintenance_cache: dict[uuid.UUID, tuple[float, list[extensions.MaintenanceItem]]] = {}
+
+
+def forget_maintenance() -> None:
+    """기억한 수를 버린다 — 시험이나 대량 작업 뒤에."""
+    _maintenance_cache.clear()
+
+
 def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
     """홈 「남은 일」 — 종류마다 한 줄. **고칠 수 있는 사람(부서 관리자)에게만.**
-    처리할 수 없는 사람에게 띄우면 그 자리는 못 지우는 숫자가 된다."""
+    처리할 수 없는 사람에게 띄우면 그 자리는 못 지우는 숫자가 된다.
+
+    **최대 60초 묵은 수다**(`MAINTENANCE_CACHE_SECONDS`). 누르면 오는 품질 화면은 새로 센다.
+    """
     if not is_any_manager(db, viewer):
         return []
+    now = time.monotonic()
+    cached = _maintenance_cache.get(viewer.id)
+    if cached is not None and cached[0] > now:
+        return cached[1]
     totals: dict[str, int] = {}
     for one in report(db, viewer):
         totals[one.kind] = totals.get(one.kind, 0) + one.count
-    return [
+    items = [
         extensions.MaintenanceItem(
             key=f"quality_{kind}",
             label=LABELS[kind],
@@ -277,6 +298,8 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
         for kind in KINDS
         if totals.get(kind)
     ]
+    _maintenance_cache[viewer.id] = (now + MAINTENANCE_CACHE_SECONDS, items)
+    return items
 
 
 def stats(db: Session) -> list[extensions.StatItem]:

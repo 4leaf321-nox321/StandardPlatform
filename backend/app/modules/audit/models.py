@@ -16,7 +16,18 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Identity, Integer, String, Text, func
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKey,
+    Identity,
+    Index,
+    Integer,
+    String,
+    Text,
+    func,
+    text,
+)
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -77,6 +88,13 @@ class AuditEntry(Base):
     """
 
     __tablename__ = "audit_entries"
+    __table_args__ = (
+        # 객체의 변경 이력이 **관계 기록을 양 끝 id 로** 찾는다(`changes.src / dst`).
+        # 표현식 인덱스가 없으면 그 조회가 감사 표 전체를 훑고, 표는 매일 자란다 —
+        # 느려진 이유는 상세 화면 어디에도 안 적힌다.
+        Index("ix_audit_entries_changes_src", text("(changes ->> 'src')")),
+        Index("ix_audit_entries_changes_dst", text("(changes ->> 'dst')")),
+    )
 
     id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4

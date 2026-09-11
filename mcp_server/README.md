@@ -10,19 +10,19 @@ Claude(Claude Code/Desktop)에서 온톨로지를 읽고 채우게 하는 MCP �
 cd mcp_server
 python3 -m venv venv && ./venv/bin/pip install -r requirements.txt
 PLATFORM_API_BASE=http://localhost:8030 ./venv/bin/python server.py
-# → streamable-http, 기본 http://127.0.0.1:8032/mcp
+# → streamable-http, 기본 http://127.0.0.1:8042/mcp
 ```
 
-개발 백엔드(`run.py`, 8031)에 붙이려면 `PLATFORM_API_BASE=http://127.0.0.1:8031`.
-포트는 백엔드 포트 +2 다(플랫폼마다 10씩 벌리는 규칙 안에서 8030 운영 · 8031 개발 ·
-8032 MCP). `MCP_HOST`/`MCP_PORT` 로 바꾼다.
+개발 백엔드(`run.py`, 8041)에 붙이려면 `PLATFORM_API_BASE=http://127.0.0.1:8041`.
+포트는 백엔드 포트 +2 다(플랫폼마다 10씩 벌리는 규칙 안에서 8040 운영 · 8041 개발 ·
+8042 MCP). `MCP_HOST`/`MCP_PORT` 로 바꾼다.
 
 ## Claude Code 등록 (사용자별 토큰)
 ```bash
-claude mcp add --transport http standardplatform http://<host>:8032/mcp \
+claude mcp add --transport http standardplatform http://<host>:8042/mcp \
   --header "Authorization: Bearer <내 토큰>"
 
-claude mcp list        # standardplatform: http://<host>:8032/mcp (HTTP) - ✔ Connected
+claude mcp list        # standardplatform: http://<host>:8042/mcp (HTTP) - ✔ Connected
 ```
 이후 Claude 에게 "이 표를 시뮬레이션 툴로 넣어줘" 라고 하면 `ontology_schema` →
 `objects_import(apply=false)` → 확인 → `apply=true` 로 들어간다.
@@ -69,14 +69,15 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 
 스텁엔 안내 본문이 없으므로 **한 번 깔면 다시 복사할 일이 없다.**
 
-## 도구 열
+## 도구 열셋
 
 | 도구 | 무엇 |
 | --- | --- |
 | `get_guide` | 사용 안내 — **먼저 이것부터** |
 | `ontology_schema` | 묶음·타입·속성·관계 전부 |
 | `ontology_import` | 정의를 한 트랜잭션으로. **기본은 미리 보기**(`apply=false`) |
-| `objects_list` · `object_get` | 객체 읽기 (`object_get` 은 관련 객체까지) |
+| `objects_list` · `object_get` | 객체 읽기 — 화면과 같은 조건 거르기 (`object_get` 은 관련 객체까지) |
+| `object_history` · `object_references` · `quality_report` | 이력 · 가리키는 것 · 품질 — 화면의 읽기와 대칭 |
 | `object_create` · `object_update` | 객체 쓰기 (`update` 는 보낸 것만) |
 | `objects_import` | 여러 행 한 번에(upsert). 기본은 미리 보기 |
 | `relation_add` · `relations_import` | 객체 둘을 잇기 (**근거를 적는다**) |
@@ -84,7 +85,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 ### 왜 타입마다 도구를 안 만드나
 
 타입 20개에 도구가 80개가 되고, **도구 목록이 길수록 모델은 엉뚱한 것을 고른다.**
-도구는 열로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
+도구는 열셋으로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
 받는가」 를 말한다 — **동적인 것은 도구가 아니라 스키마다.**
 
 검증도 권한도 백엔드가 한다. 여기에 규칙을 두면 **MCP 로는 되는데 화면에서는 안

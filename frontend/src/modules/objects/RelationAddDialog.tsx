@@ -6,14 +6,14 @@
  * 사람은 무엇이 잘못됐는지 찾느라 목록을 다시 훑는다.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import type { ObjectType, RelationType } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
+import { useObjectOptions } from '@/modules/objects/useObjectOptions'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
-import type { PickerOption } from '@/shared/components/SearchablePicker'
 import { Button } from '@/shared/components/ui/button'
 import {
   Dialog,
@@ -59,9 +59,7 @@ export function RelationAddDialog({
    * 있었지」 를 묻게 만든다.
    */
   const usable = relationTypes.filter(
-    (one) =>
-      one.is_active &&
-      (!one.src_type_slugs || one.src_type_slugs.includes(objectTypeSlug)),
+    (one) => one.is_active && (!one.src_type_slugs || one.src_type_slugs.includes(objectTypeSlug)),
   )
 
   const [relation, setRelation] = useState(usable[0]?.slug ?? '')
@@ -79,36 +77,19 @@ export function RelationAddDialog({
     ? allTypes.filter((one) => kind.dst_type_slugs!.includes(one.slug))
     : allTypes.filter((one) => one.kind_class !== 'system')
 
-  const [options, setOptions] = useState<PickerOption[]>([])
-  useEffect(() => {
-    let cancelled = false
-    setTarget(null)
-    Promise.all(
-      targetTypes.map((one) =>
-        objectApi.list(one.slug, { limit: 200 }).then((page) =>
-          page.items
-            .filter((row) => row.id !== objectId)
-            .map((row) => ({
-              value: `${one.slug}:${row.id}`,
-              label: row.label,
-              hint: `${one.label}${row.key ? ` · ${row.key}` : ''}`,
-              disabledReason: row.status === 'deprecated' ? '안 쓰는 값' : undefined,
-            })),
-        ),
-      ),
-    )
-      .then((lists) => {
-        if (!cancelled) setOptions(lists.flat())
-      })
-      .catch(() => {
-        if (!cancelled) setOptions([])
-      })
-    return () => {
-      cancelled = true
-    }
-    // targetTypes 는 매번 새 배열이라 slug 목록으로 비교한다.
+  // 후보는 **서버가 찾는다** — 도착 타입마다 목록 API 로. 관계를 바꾸면 고른 것을 비운다
+  // (다른 타입의 객체가 남아 있으면 「허용 타입」 검사에서 거절되고, 그 이유는 안 보인다).
+  const targetKey = targetTypes.map((one) => one.slug).join(',')
+  const sources = useMemo(
+    () => targetTypes.map((one) => ({ slug: one.slug, label: one.label })),
+    // targetTypes 는 매 렌더 새 배열이라 slug 목록으로 비교한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [objectId, targetTypes.map((one) => one.slug).join(',')])
+    [targetKey],
+  )
+  const found = useObjectOptions(sources, { exclude: objectId, value: target, composite: true })
+  useEffect(() => {
+    setTarget(null)
+  }, [targetKey])
 
   async function submit() {
     if (!target) return
@@ -140,8 +121,8 @@ export function RelationAddDialog({
 
           {usable.length === 0 ? (
             <p className="text-muted-foreground text-sm">
-              이 타입에서 출발할 수 있는 관계 종류가 없습니다. 관리 → 온톨로지 → 관계
-              종류에서 만들거나, <b>허용 출발 타입</b>에 이 타입을 넣으세요.
+              이 타입에서 출발할 수 있는 관계 종류가 없습니다. 관리 → 온톨로지 → 관계 종류에서
+              만들거나, <b>허용 출발 타입</b>에 이 타입을 넣으세요.
             </p>
           ) : (
             <>
@@ -170,11 +151,18 @@ export function RelationAddDialog({
               <div className="space-y-1.5">
                 <Label>이을 객체</Label>
                 <SearchablePicker
-                  options={options}
+                  options={found.options}
+                  pinned={found.pinned}
+                  total={found.total}
+                  loading={found.loading}
+                  onQueryChange={found.setQuery}
                   value={target}
                   onChange={setTarget}
                   placeholder="객체를 고르세요"
-                  emptyText="고를 객체가 없습니다"
+                  searchPlaceholder="이름·식별자로 찾기"
+                  emptyText={
+                    found.failed ? '고를 것을 불러오지 못했습니다' : '고를 객체가 없습니다'
+                  }
                 />
                 <p className="text-muted-foreground text-xs">
                   {kind?.dst_type_slugs
@@ -193,8 +181,8 @@ export function RelationAddDialog({
                   onChange={(event) => setNote(event.target.value)}
                 />
                 <p className="text-muted-foreground text-xs">
-                  <b>근거 없는 연결은 시간이 지나면 아무도 못 믿습니다</b> — 맞는지
-                  확인하려면 처음부터 다시 조사해야 하기 때문입니다.
+                  <b>근거 없는 연결은 시간이 지나면 아무도 못 믿습니다</b> — 맞는지 확인하려면
+                  처음부터 다시 조사해야 하기 때문입니다.
                 </p>
               </div>
             </>

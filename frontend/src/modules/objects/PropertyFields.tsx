@@ -9,14 +9,13 @@
  * 다시 쓴다. **두 벌로 만들면 위젯이 갈리고, 갈린 것은 한쪽만 고쳐진다.**
  */
 
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { ChevronRight, Plus, X } from 'lucide-react'
 
 import type { DataType, PropertyDef, SectionView } from '@/modules/ontology/api'
-import { objectApi } from '@/modules/objects/api'
+import { useObjectOptions } from '@/modules/objects/useObjectOptions'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
-import type { PickerOption } from '@/shared/components/SearchablePicker'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
@@ -191,7 +190,8 @@ function OneValue({
  * 객체를 고르는 picker.
  *
  * **치는 길과 훑는 길을 함께 낸다** — 이름의 일부를 알 때와 무엇이 있는지 모를 때가
- * 둘 다 있다. `SearchablePicker` 가 그 둘을 이미 한다.
+ * 둘 다 있다. 후보는 **서버가 찾는다**(`useObjectOptions`) — 처음 200개만 받아 화면에서
+ * 거르면 201번째부터 없는 것으로 보이고, 못 찾은 사람은 새로 만든다.
  */
 function ObjectRefPicker({
   typeSlug,
@@ -202,34 +202,8 @@ function ObjectRefPicker({
   value: string | null
   onChange: (next: string) => void
 }) {
-  const [options, setOptions] = useState<PickerOption[]>([])
-  const [failed, setFailed] = useState(false)
-
-  useEffect(() => {
-    if (!typeSlug) return
-    let cancelled = false
-    objectApi
-      .list(typeSlug, { limit: 200 })
-      .then((page) => {
-        if (cancelled) return
-        setOptions(
-          page.items.map((row) => ({
-            value: row.id,
-            label: row.label,
-            hint: row.key ?? undefined,
-            // 이미 못 고르는 줄은 **이유를 적는다.** 비활성만 시키고 말 안 하면
-            // 버그로 읽힌다.
-            disabledReason: row.status === 'deprecated' ? '안 쓰는 값' : undefined,
-          })),
-        )
-      })
-      .catch(() => {
-        if (!cancelled) setFailed(true)
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [typeSlug])
+  const sources = useMemo(() => (typeSlug ? [{ slug: typeSlug }] : []), [typeSlug])
+  const found = useObjectOptions(sources, { value })
 
   if (!typeSlug) {
     return (
@@ -238,16 +212,21 @@ function ObjectRefPicker({
       </p>
     )
   }
-  if (failed) {
+  if (found.failed) {
     return <p className="text-destructive text-sm">고를 것을 불러오지 못했습니다.</p>
   }
 
   return (
     <SearchablePicker
-      options={options}
+      options={found.options}
+      pinned={found.pinned}
+      total={found.total}
+      loading={found.loading}
+      onQueryChange={found.setQuery}
       value={value}
       onChange={onChange}
       placeholder="객체를 고르세요"
+      searchPlaceholder="이름·식별자로 찾기"
       emptyText="맞는 객체가 없습니다"
     />
   )
@@ -374,38 +353,38 @@ export function PropertyFields({ defs, values, onChange, disabled, view }: Props
             }
           >
             {group.defs.map((def) => (
-        <div key={def.key} className="space-y-1.5">
-          <Label htmlFor={`prop-${def.key}`}>
-            {def.label}
-            {def.unit && <span className="text-muted-foreground ml-1">({def.unit})</span>}
-            {def.required && <span className="text-destructive ml-1">*</span>}
-          </Label>
+              <div key={def.key} className="space-y-1.5">
+                <Label htmlFor={`prop-${def.key}`}>
+                  {def.label}
+                  {def.unit && <span className="text-muted-foreground ml-1">({def.unit})</span>}
+                  {def.required && <span className="text-destructive ml-1">*</span>}
+                </Label>
 
-          {def.data_type === 'file' ? (
-            /* **첨부는 저장한 뒤에 붙는다.** 파일은 객체 id 에 매달리므로, 만들기
+                {def.data_type === 'file' ? (
+                  /* **첨부는 저장한 뒤에 붙는다.** 파일은 객체 id 에 매달리므로, 만들기
                화면에서 미리 올릴 자리가 없다. 빈 칸을 놓아 두면 「올렸는데 안
                붙었다」 가 되므로 무엇을 해야 하는지 적는다. */
-            <p className="text-muted-foreground text-sm">
-              저장한 뒤 상세 화면에서 파일을 올립니다.
-            </p>
-          ) : def.multi ? (
-            <ManyValues
-              def={def}
-              values={Array.isArray(values[def.key]) ? (values[def.key] as unknown[]) : []}
-              onChange={(next) => set(def.key, next)}
-              disabled={disabled}
-            />
-          ) : (
-            <OneValue
-              def={def}
-              value={values[def.key]}
-              onChange={(next) => set(def.key, next)}
-              disabled={disabled}
-            />
-          )}
+                  <p className="text-muted-foreground text-sm">
+                    저장한 뒤 상세 화면에서 파일을 올립니다.
+                  </p>
+                ) : def.multi ? (
+                  <ManyValues
+                    def={def}
+                    values={Array.isArray(values[def.key]) ? (values[def.key] as unknown[]) : []}
+                    onChange={(next) => set(def.key, next)}
+                    disabled={disabled}
+                  />
+                ) : (
+                  <OneValue
+                    def={def}
+                    value={values[def.key]}
+                    onChange={(next) => set(def.key, next)}
+                    disabled={disabled}
+                  />
+                )}
 
-          {def.help && <p className="text-muted-foreground text-xs">{def.help}</p>}
-        </div>
+                {def.help && <p className="text-muted-foreground text-xs">{def.help}</p>}
+              </div>
             ))}
           </div>
         </Section>

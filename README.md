@@ -74,11 +74,11 @@ cp .env.example .env
 변경이 강제된다.
 
 ```bash
-.venv/bin/python run.py                  # 8031 (개발). 운영은 8030
+.venv/bin/python run.py                  # 8041 (개발). 운영은 8040
 ```
 
 포트가 잡혀 있으면 개발 모드가 그것을 말하며 멈춘다. 누가 쥐고 있는지는
-`ss -ltnp 'sport = :8031'` 로 본다. **운영에서는 이 검사를 하지 않는다** — 그 자리는
+`ss -ltnp 'sport = :8041'` 로 본다. **운영에서는 이 검사를 하지 않는다** — 그 자리는
 systemd 의 `Restart` 가 맡는다.
 
 ### 프론트엔드
@@ -143,7 +143,7 @@ ERROR_PREFIX = "PTR"        # 오류 코드가 PTR-AUTH-0001 이 된다
 
 나머지 둘은 `frontend/index.html` 의 `<title>` 과 `backend/app/config.py` 의
 `port` 다. **포트만 손으로 정한다** — 조직 전체에서 안 겹치게 배정하는 값이라
-이름에서 나올 수 없다(10씩 벌린다: MatNexus 8010 · TestScope 8020 · 이 틀 8030).
+이름에서 나올 수 없다(10씩 벌린다: MatNexus 8010 · TestScope 8020 · CrossAXTF 8030 · 이 틀 8040).
 
 Apptainer 는 **호스트 네트워크**를 쓴다. 컨테이너 안의 포트가 곧 호스트의 포트라
 겹치면 나중에 뜬 쪽이 그냥 못 뜬다 — 포트 매핑으로 덮을 자리가 없다.

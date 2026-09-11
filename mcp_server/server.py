@@ -14,11 +14,11 @@
 도구가 아니라 스키마다.**
 
 실행:
-    PLATFORM_API_BASE=http://localhost:8030 \
+    PLATFORM_API_BASE=http://localhost:8040 \
     ./venv/bin/python server.py          # streamable-http, 기본 127.0.0.1:8032/mcp
 
 Claude Code 등록(사용자별 토큰):
-    claude mcp add --transport http standardplatform http://<host>:8032/mcp \
+    claude mcp add --transport http standardplatform http://<host>:8042/mcp \
       --header "Authorization: Bearer <내 토큰>"
 """
 
@@ -31,7 +31,7 @@ from typing import Any
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
 
-API_BASE = os.environ.get("PLATFORM_API_BASE", "http://localhost:8030").rstrip("/")
+API_BASE = os.environ.get("PLATFORM_API_BASE", "http://localhost:8040").rstrip("/")
 
 # 기본은 SSE(streamable-http 스트림) 응답. 다만 중간에 SSE 를 버퍼링하는 프록시/
 # VPN/보안장비가 끼면 initialize 응답의 첫 바이트가 클라이언트까지 도달하지 못해
@@ -101,7 +101,11 @@ def _client(timeout: float) -> httpx.AsyncClient:
     return httpx.AsyncClient(base_url=API_BASE, timeout=timeout, transport=_TRANSPORT)
 
 
-async def _get(ctx: Context, path: str, params: dict[str, Any] | None = None) -> Any:
+async def _get(
+    ctx: Context,
+    path: str,
+    params: dict[str, Any] | list[tuple[str, Any]] | None = None,
+) -> Any:
     async with _client(60) as client:
         return _unwrap(await client.get(path, params=params, headers=_forward_headers(ctx)))
 
@@ -130,7 +134,7 @@ async def _patch(ctx: Context, path: str, json_body: Any) -> Any:
 # 달라 낡는다. 로컬엔 짧은 스텁만 두고 본문은 여기서 읽어 준다.
 # --------------------------------------------------------------------------- #
 _GUIDE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guide", "GUIDE.md")
-_GUIDE_TOPICS = ("overview", "schema", "objects", "bulk", "relations")
+_GUIDE_TOPICS = ("overview", "schema", "find", "objects", "bulk", "relations")
 
 
 def _guide_sections() -> tuple[str, dict[str, str]]:
@@ -166,6 +170,7 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
     `topic` 없이 부르면 **overview** — "하려는 일 → 어떤 도구" 표와 기본 습관.
     대개 이것만으로 충분하고, 세부가 필요하면 그때 주제를 지정한다:
       - `schema` 정의 읽기·바꾸기(미리 보기 → 적용)
+      - `find` 찾기·거르기·이력·참조·품질
       - `objects` 객체 하나씩 만들고 고치기
       - `bulk` 여러 행 한 번에(upsert)
       - `relations` 객체 잇기(근거)
@@ -240,13 +245,31 @@ async def objects_list(
     limit: int = 50,
     offset: int = 0,
     properties: dict[str, str] | None = None,
+    conditions: list[dict[str, str]] | None = None,
+    status: str | None = None,
 ) -> Any:
-    """그 타입의 객체 목록. `properties` 는 `{"등급": "A"}` 처럼 **속성 키로** 거른다."""
-    params: dict[str, Any] = {"limit": limit, "offset": offset}
+    """그 타입의 객체 목록 — 화면의 목록과 **같은 거르기**다.
+
+    - `q`: 이름·식별자·검색 속성.
+    - `properties`: `{"grade": "A"}` 처럼 속성 키로 「같음」 거르기(짧은 꼴).
+    - `conditions`: `[{"field": "power", "op": "gte", "value": "10"}, ...]` — 칸끼리 AND,
+      같은 칸에 여럿이면 그 안은 OR. 연산은 칸의 종류가 정한다:
+      숫자·날짜 `eq ne gt gte lt lte in` · 글자 `eq ne contains starts in` ·
+      선택·참조 `eq ne in` · 참/거짓 `eq` · 모두 `empty notempty`.
+      `in` 의 값은 `|` 로 잇는다(`"A|B"`). `field` 는 속성 키 또는 `label`·`key`·`status`.
+    - `status`: `active` · `deprecated`.
+
+    응답의 `total` 이 전체 수다 — 한 쪽(limit ≤ 200)씩 `offset` 으로 넘긴다."""
+    params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset)]
     if q:
-        params["q"] = q
+        params.append(("q", q))
+    if status:
+        params.append(("status", status))
     for key, value in (properties or {}).items():
-        params[f"p.{key}"] = value
+        params.append((f"p.{key}", value))
+    for one in conditions or []:
+        field, op, value = one.get("field", ""), one.get("op", "eq"), one.get("value", "")
+        params.append((f"f.{field}.{op}", value))
     return await _get(ctx, f"/api/objects/{type_slug}", params=params)
 
 
@@ -254,6 +277,35 @@ async def objects_list(
 async def object_get(ctx: Context, type_slug: str, object_id: str) -> Any:
     """객체 하나 — 속성·첨부·**관련 객체**(양방향)까지."""
     return await _get(ctx, f"/api/objects/{type_slug}/{object_id}")
+
+
+@mcp.tool()
+async def object_history(ctx: Context, type_slug: str, object_id: str) -> Any:
+    """객체의 **변경 이력** — 최근 것이 앞. 언제·누가·어느 칸을 전→후, 관계를 맺고 끊은 것.
+
+    값 기록에는 `snapshot`(그 시점의 값 전체)이 붙는다. **되돌리기는 여기서 하지 않는다**
+    — 사람이 화면에서 「이 값으로 되돌리기」 를 누른다(저장과 같은 검증을 거친다)."""
+    return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/history")
+
+
+@mcp.tool()
+async def object_references(ctx: Context, type_slug: str, object_id: str) -> Any:
+    """이 객체를 **가리키는 것** — 속성으로 가리키는 객체들과 걸린 관계들.
+
+    지우거나 합치기 전에 본다. 남의 부서 것은 수만 온다(`hidden_*`) — 「아무것도 안
+    걸렸다」 로 읽고 지우면 그쪽 화면이 깨진다."""
+    return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/references")
+
+
+@mcp.tool()
+async def quality_report(ctx: Context, kind: str | None = None) -> Any:
+    """데이터 품질 — **나빠지고 있는 것.** 홈 「남은 일」 과 같은 것.
+
+    `kind` 로 한 종류만: `missing_required`(필수값 빈 객체) · `orphan`(관계 없는 객체) ·
+    `broken_ref`(지워진 것을 가리키는 칸) · `duplicate`(이름이 같은 객체). 종류·타입마다
+    수는 전부, 목록은 앞의 몇 개(`sample_limit`)만. **볼 수 있는 것만 센다.**"""
+    params = {"kind": kind} if kind else None
+    return await _get(ctx, "/api/objects/quality/report", params=params)
 
 
 @mcp.tool()
@@ -375,7 +427,7 @@ async def relations_import(
 if __name__ == "__main__":
     host = os.environ.get("MCP_HOST", "127.0.0.1")
     mcp.settings.host = host
-    mcp.settings.port = int(os.environ.get("MCP_PORT", "8032"))
+    mcp.settings.port = int(os.environ.get("MCP_PORT", "8042"))
 
     # FastMCP 는 생성 시점(host=127.0.0.1)에 DNS rebinding 보호를 켜고
     # allowed_hosts 를 localhost(127.0.0.1:* / localhost:* / [::1]:*)로 고정한다.
@@ -390,7 +442,7 @@ if __name__ == "__main__":
         ]
         if allowed:
             # 권장: 허용할 Host 만 명시. 포트 와일드카드 가능.
-            #   MCP_ALLOWED_HOSTS="mcp.example.com,mcp.example.com:*,10.0.0.5:8032"
+            #   MCP_ALLOWED_HOSTS="mcp.example.com,mcp.example.com:*,10.0.0.5:8042"
             # nginx 리버스프록시면 proxy_set_header Host 로 넘어오는 값(도메인)을 넣는다.
             mcp.settings.transport_security = TransportSecuritySettings(
                 enable_dns_rebinding_protection=True,

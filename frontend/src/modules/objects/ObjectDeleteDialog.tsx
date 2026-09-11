@@ -12,16 +12,16 @@
  * 읽고 지우게 된다.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 
 import { objectApi } from '@/modules/objects/api'
+import { useObjectOptions } from '@/modules/objects/useObjectOptions'
 import type { ObjectRow } from '@/modules/objects/api'
 import { ApiError } from '@/shared/api/client'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
-import type { PickerOption } from '@/shared/components/SearchablePicker'
 import { Button } from '@/shared/components/ui/button'
 import {
   Dialog,
@@ -57,39 +57,15 @@ export function ObjectDeleteDialog({
   const refs = useResource(() => objectApi.references(typeSlug, object.id), [typeSlug, object.id])
   const [choice, setChoice] = useState<Choice>('keep')
   const [into, setInto] = useState<string | null>(null)
-  const [candidates, setCandidates] = useState<PickerOption[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<ApiError | Error | null>(null)
 
   const blocked = Boolean(refs.data && refs.data.total > 0)
 
-  // 합칠 상대 — 같은 타입의 다른 객체. 고를 때만 읽는다.
-  useEffect(() => {
-    if (choice !== 'merge' || candidates !== null) return
-    let cancelled = false
-    objectApi
-      .list(typeSlug, { limit: 200 })
-      .then((page) => {
-        if (cancelled) return
-        setCandidates(
-          page.items
-            .filter((one) => one.id !== object.id)
-            .map((one) => ({
-              value: one.id,
-              label: one.label,
-              hint: one.key ?? undefined,
-              keywords: one.key ?? undefined,
-              disabledReason: one.status === 'deprecated' ? '사용 중지' : undefined,
-            })),
-        )
-      })
-      .catch(() => {
-        if (!cancelled) setCandidates([])
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [choice, candidates, typeSlug, object.id])
+  // 합칠 상대 — 같은 타입의 다른 객체. **서버가 찾는다** — 200개 안에 없는 것을 「없다」 로
+  // 읽고 새로 만들면 그것이 바로 합치려던 중복이다.
+  const sources = useMemo(() => [{ slug: typeSlug }], [typeSlug])
+  const candidates = useObjectOptions(sources, { exclude: object.id, value: into })
 
   const summary = useMemo(() => {
     const data = refs.data
@@ -121,7 +97,8 @@ export function ObjectDeleteDialog({
     }
   }
 
-  const canRun = !busy && refs.data !== null && (!blocked || choice === 'detach' || (choice === 'merge' && into))
+  const canRun =
+    !busy && refs.data !== null && (!blocked || choice === 'detach' || (choice === 'merge' && into))
   const runLabel = !blocked
     ? '지우기'
     : choice === 'detach'
@@ -136,15 +113,14 @@ export function ObjectDeleteDialog({
         <DialogHeader>
           <DialogTitle>{object.label} 을(를) 지웁니다</DialogTitle>
           <DialogDescription>
-            목록에서 사라집니다. <b>기록은 남습니다</b> — 첨부와 감사 기록이 밖에 있어서,
-            지운 흔적까지 없애면 그것들이 무엇을 가리키는지 설명할 수 없게 됩니다.
+            목록에서 사라집니다. <b>기록은 남습니다</b> — 첨부와 감사 기록이 밖에 있어서, 지운
+            흔적까지 없애면 그것들이 무엇을 가리키는지 설명할 수 없게 됩니다.
           </DialogDescription>
         </DialogHeader>
 
         {refs.loading && (
           <p className="text-muted-foreground flex items-center gap-2 text-sm">
-            <Loader2 className="size-4 animate-spin" />
-            이 객체를 가리키는 것을 세는 중…
+            <Loader2 className="size-4 animate-spin" />이 객체를 가리키는 것을 세는 중…
           </p>
         )}
         {refs.error && <ErrorNotice error={refs.error} />}
@@ -172,8 +148,8 @@ export function ObjectDeleteDialog({
                           className="text-foreground hover:underline"
                         >
                           {one.label}
-                        </Link>
-                        {' '}({one.type_label}) 의 「{one.property_label}」
+                        </Link>{' '}
+                        ({one.type_label}) 의 「{one.property_label}」
                       </li>
                     ))}
                     {refs.data.property_refs.length > LIST_LIMIT && (
@@ -232,8 +208,8 @@ export function ObjectDeleteDialog({
                   <span>
                     <span className="font-medium">참조를 비우고 관계를 끊고 지우기</span>
                     <span className="text-muted-foreground block text-xs">
-                      가리키던 {summary.props}개의 칸이 비고 관계 {summary.rels}개가 끊깁니다.
-                      그 객체마다 「왜 비었는지」 기록이 남습니다.
+                      가리키던 {summary.props}개의 칸이 비고 관계 {summary.rels}개가 끊깁니다. 그
+                      객체마다 「왜 비었는지」 기록이 남습니다.
                     </span>
                   </span>
                 </label>
@@ -258,21 +234,22 @@ export function ObjectDeleteDialog({
                     이름도 꼬인다. */}
                 {choice === 'merge' && (
                   <div className="pl-6">
-                    {candidates === null ? (
-                      <span className="text-muted-foreground flex items-center gap-1 text-xs">
-                        <Loader2 className="size-3 animate-spin" />
-                        같은 타입의 객체를 읽는 중…
-                      </span>
-                    ) : (
-                      <SearchablePicker
-                        options={candidates}
-                        value={into}
-                        onChange={setInto}
-                        placeholder="이긴 쪽 고르기"
-                        searchPlaceholder="이름·식별자로 찾기"
-                        emptyText="합칠 상대가 없습니다"
-                      />
-                    )}
+                    <SearchablePicker
+                      options={candidates.options}
+                      pinned={candidates.pinned}
+                      total={candidates.total}
+                      loading={candidates.loading}
+                      onQueryChange={candidates.setQuery}
+                      value={into}
+                      onChange={setInto}
+                      placeholder="이긴 쪽 고르기"
+                      searchPlaceholder="이름·식별자로 찾기"
+                      emptyText={
+                        candidates.failed
+                          ? '같은 타입의 객체를 읽지 못했습니다'
+                          : '합칠 상대가 없습니다'
+                      }
+                    />
                   </div>
                 )}
               </fieldset>

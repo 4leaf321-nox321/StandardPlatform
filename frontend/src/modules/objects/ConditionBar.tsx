@@ -11,10 +11,11 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Plus, X } from 'lucide-react'
 
-import { objectApi } from '@/modules/objects/api'
+import { useObjectOptions } from '@/modules/objects/useObjectOptions'
 import type { Condition, ConditionOp } from '@/modules/objects/api'
 import { CONDITION_MULTI_SEP } from '@/modules/objects/api'
 import type { DataType, PropertyDef } from '@/modules/ontology/api'
+import { SearchablePicker } from '@/shared/components/SearchablePicker'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/shared/components/ui/popover'
@@ -66,7 +67,12 @@ export function opsFor(dataType: DataType | 'fixed'): ConditionOp[] {
   if (dataType === 'number' || dataType === 'date' || dataType === 'datetime') {
     return ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', ...any]
   }
-  if (dataType === 'text' || dataType === 'text_long' || dataType === 'url' || dataType === 'fixed') {
+  if (
+    dataType === 'text' ||
+    dataType === 'text_long' ||
+    dataType === 'url' ||
+    dataType === 'fixed'
+  ) {
     return ['eq', 'ne', 'contains', 'starts', 'in', ...any]
   }
   if (dataType === 'enum' || dataType === 'object_ref') return ['eq', 'ne', 'in', ...any]
@@ -231,8 +237,17 @@ function ConditionEditor({ fields, onAdd }: ConditionEditorProps) {
       </label>
       {needsValue && (
         <div className="space-y-1">
-          <span className="text-muted-foreground text-xs">값{multi ? ' — 여럿 고르면 「그 중 하나」' : ''}</span>
-          <ValueInput field={field} multi={multi} value={value} picked={picked} onValue={setValue} onPicked={setPicked} />
+          <span className="text-muted-foreground text-xs">
+            값{multi ? ' — 여럿 고르면 「그 중 하나」' : ''}
+          </span>
+          <ValueInput
+            field={field}
+            multi={multi}
+            value={value}
+            picked={picked}
+            onValue={setValue}
+            onPicked={setPicked}
+          />
         </div>
       )}
       <div className="flex justify-end">
@@ -259,46 +274,133 @@ interface ValueInputProps {
 
 /** 칸의 종류대로 — 선택은 고르고, 참조는 이름으로 찾고, 숫자·날짜는 그 입력을. */
 function ValueInput({ field, multi, value, picked, onValue, onPicked }: ValueInputProps) {
-  const [options, setOptions] = useState<{ value: string; label: string }[] | null>(null)
+  if (field.data_type === 'object_ref') {
+    return field.ref_type_slug ? (
+      <RefValueInput
+        typeSlug={field.ref_type_slug}
+        multi={multi}
+        value={value}
+        picked={picked}
+        onValue={onValue}
+        onPicked={onPicked}
+      />
+    ) : (
+      <p className="text-muted-foreground text-xs">가리킬 타입이 정해져 있지 않습니다.</p>
+    )
+  }
+  return (
+    <PlainValueInput
+      field={field}
+      multi={multi}
+      value={value}
+      picked={picked}
+      onValue={onValue}
+      onPicked={onPicked}
+    />
+  )
+}
 
-  // 참조 칸 — 상대 타입의 객체를 읽어 고르게 한다. 200개까지(목록 상한).
+/**
+ * 참조 칸의 값 — **서버가 찾는다.** 200개를 받아 펼치던 목록은 201번째부터 없는 것으로
+ * 보였다. 하나면 picker, 여럿(`in`)이면 찾는 칸 + 고른 것을 위에 꽂은 체크 목록.
+ */
+function RefValueInput({
+  typeSlug,
+  multi,
+  value,
+  picked,
+  onValue,
+  onPicked,
+}: Omit<ValueInputProps, 'field'> & { typeSlug: string }) {
+  const sources = useMemo(() => [{ slug: typeSlug }], [typeSlug])
+  const found = useObjectOptions(sources, { value: multi ? null : value })
+  // 고른 것의 이름 — 후보에서 본 것을 기억해 둔다. 검색으로 좁혀도 고른 줄이 이름을 잃지 않게.
+  const [seen, setSeen] = useState<Record<string, string>>({})
   useEffect(() => {
-    // 칸이 바뀌면 옛 타입의 후보를 먼저 비운다 — 안 비우면 새 목록이 올 때까지 남의 객체가 고를 수 있게 보인다.
-    setOptions(null)
-    if (field.data_type !== 'object_ref' || !field.ref_type_slug) return
-    let cancelled = false
-    objectApi
-      .list(field.ref_type_slug, { limit: 200 })
-      .then((page) => {
-        if (!cancelled) {
-          setOptions(
-            page.items.map((one) => ({ value: one.id, label: one.key ? `${one.label} (${one.key})` : one.label })),
-          )
-        }
-      })
-      .catch(() => {
-        if (!cancelled) setOptions([])
-      })
-    return () => {
-      cancelled = true
-    }
-  }, [field.data_type, field.ref_type_slug])
+    setSeen((current) => {
+      const next = { ...current }
+      for (const one of found.options) next[one.value] = one.label
+      return next
+    })
+  }, [found.options])
 
+  if (!multi) {
+    return (
+      <SearchablePicker
+        options={found.options}
+        pinned={found.pinned}
+        total={found.total}
+        loading={found.loading}
+        onQueryChange={found.setQuery}
+        value={value || null}
+        onChange={onValue}
+        placeholder="고르기"
+        searchPlaceholder="이름·식별자로 찾기"
+        emptyText={found.failed ? '읽지 못했습니다' : '맞는 객체가 없습니다'}
+      />
+    )
+  }
+
+  const rows = [
+    ...picked
+      .filter((id) => !found.options.some((one) => one.value === id))
+      .map((id) => ({ value: id, label: seen[id] ?? id })),
+    ...found.options,
+  ]
+  return (
+    <div className="space-y-1">
+      <Input
+        value={found.query}
+        placeholder="이름·식별자로 찾기"
+        className="h-8 text-xs"
+        onChange={(event) => found.setQuery(event.target.value)}
+      />
+      <ul className="max-h-40 space-y-0.5 overflow-y-auto rounded-md border p-1">
+        {rows.map((one) => (
+          <li key={one.value}>
+            <label className="hover:bg-muted flex cursor-pointer items-center gap-2 rounded px-1.5 py-0.5 text-xs">
+              <input
+                type="checkbox"
+                className="size-3.5"
+                checked={picked.includes(one.value)}
+                onChange={(event) =>
+                  onPicked(
+                    event.target.checked
+                      ? [...picked, one.value]
+                      : picked.filter((item) => item !== one.value),
+                  )
+                }
+              />
+              {one.label}
+            </label>
+          </li>
+        ))}
+        {rows.length === 0 && (
+          <li className="text-muted-foreground px-1.5 py-1 text-xs">
+            {found.loading ? '찾는 중…' : '고를 것이 없습니다.'}
+          </li>
+        )}
+      </ul>
+      {found.total > found.options.length && (
+        <p className="text-muted-foreground text-[11px]">
+          {found.options.length} / {found.total} — 더 있습니다. 이름을 더 쳐서 좁히세요.
+        </p>
+      )}
+    </div>
+  )
+}
+
+function PlainValueInput({ field, multi, value, picked, onValue, onPicked }: ValueInputProps) {
   const choices =
     field.data_type === 'enum'
       ? (field.enum_options ?? []).map((one) => ({ value: one, label: one }))
-      : field.data_type === 'object_ref'
-        ? options
-        : field.data_type === 'bool'
-          ? [
-              { value: 'true', label: '예' },
-              { value: 'false', label: '아니오' },
-            ]
-          : null
+      : field.data_type === 'bool'
+        ? [
+            { value: 'true', label: '예' },
+            { value: 'false', label: '아니오' },
+          ]
+        : null
 
-  if (choices === null && field.data_type === 'object_ref') {
-    return <p className="text-muted-foreground text-xs">읽는 중…</p>
-  }
   if (choices) {
     if (multi) {
       return (
@@ -322,7 +424,9 @@ function ValueInput({ field, multi, value, picked, onValue, onPicked }: ValueInp
               </label>
             </li>
           ))}
-          {choices.length === 0 && <li className="text-muted-foreground px-1.5 py-1 text-xs">고를 것이 없습니다.</li>}
+          {choices.length === 0 && (
+            <li className="text-muted-foreground px-1.5 py-1 text-xs">고를 것이 없습니다.</li>
+          )}
         </ul>
       )
     }

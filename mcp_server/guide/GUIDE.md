@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-09-12b
+GUIDE_VERSION: 2026-09-12c
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -14,8 +14,11 @@ GUIDE_VERSION: 2026-09-12b
 |---|---|---|
 | 지금 무엇이 정의돼 있나 | `ontology_schema` | **다른 도구보다 먼저** |
 | 타입·속성·관계 종류를 만들거나 고치기 | `ontology_import(apply=false)` → 사람 확인 → `apply=true` | 미리 보기를 건너뛰지 않는다 |
-| 객체 찾기 | `objects_list(type_slug, q=, properties=)` | 속성 키로 거른다 |
+| 객체 찾기 | `objects_list(type_slug, q=, properties=, conditions=)` | 화면과 같은 거르기 |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | — |
+| 언제 누가 무엇을 바꿨나 | `object_history` | 되돌리기는 화면에서 |
+| 지우기·합치기 전에 무엇이 걸렸나 | `object_references` | 남의 부서 것은 수만 |
+| 무엇이 나빠지고 있나(필수값·고아·끊긴 참조·중복) | `quality_report` | 볼 수 있는 것만 |
 | 객체 하나 만들기 | `object_create` | 정의에 없는 속성 키는 거절된다 |
 | 객체 고치기 | `object_update` | **보낸 키만** 병합. 비우려면 `null` |
 | 여러 행 한 번에(upsert) | `objects_import(apply=false)` → `apply=true` | 같은 `key` 면 고침. 한 행이라도 오류면 전부 안 넣음 |
@@ -66,6 +69,33 @@ GUIDE_VERSION: 2026-09-12b
   안 맞게 되는 것 등). 반드시 사람에게 보여 준다.
 - `apply=true` 응답의 `snapshot_id` 가 되돌릴 자리다. 되돌리기는 화면의
   **관리 → 온톨로지 → 가져오기·이력**에서 한다.
+
+<!--@ find -->
+## 찾기와 살피기
+
+`objects_list(type_slug, q=, properties=, conditions=, status=, limit=, offset=)`:
+
+- `q` 는 이름·식별자·검색 속성. `properties={"grade": "A"}` 는 「같음」 의 짧은 꼴.
+- `conditions` 는 화면의 조건 줄과 같다 — **칸끼리 AND, 같은 칸 안은 OR**:
+  ```json
+  [{"field": "power", "op": "gte", "value": "10"},
+   {"field": "license", "op": "in", "value": "상용|오픈소스"},
+   {"field": "vendor", "op": "notempty", "value": ""}]
+  ```
+  연산은 칸의 종류가 정한다(숫자·날짜 `eq ne gt gte lt lte in`, 글자 `eq ne contains
+  starts in`, 선택·참조 `eq ne in`, 참/거짓 `eq`, 모두 `empty notempty`). 안 맞는 연산은
+  서버가 `[코드] 문구` 로 거절한다 — 우회하지 말고 고친다.
+- 응답의 `total` 이 전체 수다. 한 쪽은 200까지. 다 세야 하면 `offset` 으로 넘긴다.
+
+`object_history(type_slug, object_id)` — 언제·누가·어느 칸을 전→후. 값 기록의
+`snapshot` 이 그 시점의 값 전체다. 되돌리기는 사람이 화면에서 한다.
+
+`object_references(type_slug, object_id)` — 이 객체를 가리키는 속성·관계. 지우거나
+합치기 전에 본다. `hidden_*` 는 남의 부서 것이라 수만 온다 — 0 이 아니면 지우지 않는다.
+
+`quality_report(kind=)` — 필수값 빈 객체·관계 없는 객체·지워진 것을 가리키는 칸·이름이
+같은 객체. 사용자가 「데이터 정리해 줘」 라고 하면 여기서 시작한다: 찾고, 사람에게
+보여 주고, 판단을 받은 뒤 `object_update` 로 고친다.
 
 <!--@ objects -->
 ## 객체 하나씩

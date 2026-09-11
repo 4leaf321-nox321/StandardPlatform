@@ -336,3 +336,44 @@ def test_읽기_토큰으로는_못_쓴다(client: TestClient, admin: Signed) ->
         assert "ontology:write" in str(denied.value)
     finally:
         server._TRANSPORT = None
+
+
+def test_읽기가_화면과_대칭이다(bot: Bot) -> None:
+    """조건 거르기·이력·가리키는 것·품질 — 화면이 보는 것을 MCP 도 본다. 한쪽만 보이면
+    「화면에서는 보이는데 도구로는 못 찾는」 상태가 되고, 모델은 없다고 답한다."""
+    slug = _uniq("mach")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": slug,
+                    "label": "설비",
+                    "key_policy": "required",
+                    "properties": [{"key": "power", "label": "출력", "data_type": "number"}],
+                }
+            ]
+        },
+        apply=True,
+    )
+    small = bot.call(
+        server.object_create, slug, label="1호기", key="M-1", properties={"power": 5}
+    )
+    bot.call(server.object_create, slug, label="2호기", key="M-2", properties={"power": 50})
+
+    strong = bot.call(
+        server.objects_list,
+        slug,
+        conditions=[{"field": "power", "op": "gte", "value": "10"}],
+    )
+    assert [one["key"] for one in strong["items"]] == ["M-2"]
+
+    bot.call(server.object_update, slug, small["id"], properties={"power": 7})
+    history = bot.call(server.object_history, slug, small["id"])
+    assert history[0]["kind"] == "object" and "properties.power" in history[0]["changes"]
+
+    refs = bot.call(server.object_references, slug, small["id"])
+    assert refs["property_refs"] == [] and refs["relations"] == []
+
+    report = bot.call(server.quality_report, kind="orphan")
+    assert "findings" in report

@@ -34,6 +34,9 @@ TOOLS = {
     "relation_add",
     "objects_import",
     "relations_import",
+    "object_history",
+    "object_references",
+    "quality_report",
 }
 
 
@@ -125,12 +128,32 @@ def test_미리_보기가_기본이다() -> None:
     assert json.loads(seen[0].content)["apply"] is False
 
 
+def test_조건은_화면과_같은_모양으로_건너간다() -> None:
+    """`conditions` 가 `f.<칸>.<연산>=<값>` 로 — 같은 칸 둘은 둘 다(OR)."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 0}))
+    asyncio.run(
+        server.objects_list(
+            _ctx("Bearer t"),
+            "mach",
+            conditions=[
+                {"field": "power", "op": "gte", "value": "10"},
+                {"field": "power", "op": "lte", "value": "50"},
+                {"field": "license", "op": "in", "value": "A|B"},
+            ],
+            status="active",
+        )
+    )
+    params = seen[0].url.params
+    assert params["f.power.gte"] == "10" and params["f.power.lte"] == "50"
+    assert params["f.license.in"] == "A|B" and params["status"] == "active"
+
+
 def test_가이드는_서버가_쥔다() -> None:
     """로컬 스킬에 본문을 두면 사람마다 복사 시점이 달라 낡는다."""
     overview = asyncio.run(server.get_guide(_ctx(None)))
     assert overview["topic"] == "overview"
     assert "ontology_schema" in overview["content"]
-    assert set(overview["more_topics"]) >= {"schema", "objects", "bulk", "relations"}
+    assert set(overview["more_topics"]) >= {"schema", "find", "objects", "bulk", "relations"}
 
     bulk = asyncio.run(server.get_guide(_ctx(None), topic="bulk"))
     assert bulk["topic"] == "bulk" and "upsert" in bulk["content"]
