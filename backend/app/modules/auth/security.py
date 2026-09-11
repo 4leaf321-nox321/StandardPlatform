@@ -95,6 +95,10 @@ def create_access_token(user_id: uuid.UUID) -> tuple[str, int]:
     return token, int(ttl.total_seconds())
 
 
+#: 발급·검증 사이의 시계 어긋남 허용치.
+CLOCK_LEEWAY_SECONDS = 30
+
+
 def decode_access_token(token: str) -> dict[str, Any] | None:
     """검증에 실패하면 None.
 
@@ -103,7 +107,13 @@ def decode_access_token(token: str) -> dict[str, Any] | None:
     """
     try:
         payload: dict[str, Any] = jwt.decode(
-            token, get_settings().jwt_secret, algorithms=["HS256"]
+            token,
+            get_settings().jwt_secret,
+            algorithms=["HS256"],
+            # **시계가 뒤로 튀는 기계가 있다.** WSL2 가 NTP 로 재동기화하면 몇 초가
+            # 되감기고, 그러면 방금 발급한 토큰의 iat 가 「미래」 라 거절된다 — 로그인
+            # 직후 401 이 산발적으로 난다. 30초는 만료 판정에 실질적 영향이 없다.
+            leeway=CLOCK_LEEWAY_SECONDS,
         )
     except jwt.PyJWTError:
         return None

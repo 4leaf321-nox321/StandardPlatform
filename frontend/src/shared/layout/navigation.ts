@@ -20,6 +20,7 @@ import {
   LayoutGrid,
   Megaphone,
   ScrollText,
+  ShieldCheck,
   Server,
   UserCog,
   Users,
@@ -134,6 +135,15 @@ export const NAV_GROUPS: NavGroup[] = [
         label: '변경 이력',
         icon: ScrollText,
         to: '/audit',
+        audience: 'manager',
+      },
+      {
+        // **나빠지고 있으면 어딘가에 떠야 한다.** 검증은 넣을 때만 걸리고, 그 뒤에
+        // 필수가 생기고 가리키던 것이 지워지고 같은 것이 둘이 된다. 고칠 수 있는
+        // 사람(관리자)에게만 — 못 고치는 사람에게 띄우면 못 지우는 숫자가 된다.
+        label: '데이터 품질',
+        icon: ShieldCheck,
+        to: '/quality',
         audience: 'manager',
       },
     ],

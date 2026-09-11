@@ -31,6 +31,7 @@ from app.modules.files import services as files_services
 from app.modules.graph import routes as graph_routes
 from app.modules.notices import routes as notices_routes
 from app.modules.notifications import routes as notifications_routes
+from app.modules.objects import quality as objects_quality
 from app.modules.objects import routes as objects_routes
 from app.modules.objects import services as objects_services
 from app.modules.ontology import routes as ontology_routes
@@ -98,6 +99,9 @@ def _register_extensions() -> None:
     # **부서를 지울 때 그 부서 소유의 객체가 목록에 뜬다.** 안 걸면 사람은
     # 아무것도 안 걸린 줄 알고 지우려 하는데, FK 가 RESTRICT 라 500 이 난다.
     extensions.register_workspace_reference(objects_services.workspace_reference)
+    # 데이터 품질 — 필수값 빈 것·고아·깨진 참조·이름 같은 것을 홈 「남은 일」 에.
+    extensions.register_maintenance(objects_quality.maintenance)
+    extensions.register_stats(objects_quality.stats)
 
     # **기계 자격으로 온톨로지를 채우는 길**(3-d). 안 열면 PAT 로는 못 고친다 —
     # 기본이 「막힘」 이고, 그것이 맞는 기본값이다(shared/scopes.py).
