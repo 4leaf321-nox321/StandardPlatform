@@ -1,0 +1,1530 @@
+/**
+ * 지식 그래프 — **두 그림, 하나의 규칙: 「전부」 는 없다.**
+ *
+ *   구조   타입이 노드, 관계 종류가 선. 객체가 백만 개여도 노드는 타입 수만큼이다.
+ *          선의 굵기가 실제로 걸린 관계 수라서 「어디가 붐비나」 가 여기서 보인다.
+ *   탐색   객체 하나에서 출발해 몇 단계를 본다. 서버가 상한(단계·이웃 수·노드 수)을
+ *          강제하고, **잘린 자리에는 「+N」 이 붙는다.** 거기서 다시 펼친다.
+ *
+ * 그림 하나가 모든 것을 담으려 하면 아무것도 안 보인다. 그래서 「전체 보기」 단추가
+ * 없다 — 전체는 구조 그림이고, 자세한 것은 탐색 그림에서 한 걸음씩 간다.
+ *
+ * 탐색 그림은 **여러 번의 응답을 합쳐** 든다(씨앗 + 펼친 것들). 그래서 같은 노드가
+ * 두 응답에 있어도 하나로 합치고, 나중 응답의 degree 로 갱신한다.
+ *
+ * 씨앗은 둘 중 하나다:
+ *   focus  객체 하나 — 검색하거나, 타입에서 훑어 고르거나, 상세에서 「그래프에서 보기」
+ *   type   한 타입의 인스턴스 전부 — 쪽 단위(서버 상한), 「N개 중 M개」 를 적는다
+ */
+
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Link, useSearchParams } from 'react-router-dom'
+import {
+  Boxes,
+  ChevronLeft,
+  ChevronRight,
+  Crosshair,
+  ExternalLink,
+  Loader2,
+  RotateCw,
+  Search,
+  X,
+} from 'lucide-react'
+
+import { graphApi } from '@/modules/graph/api'
+import type {
+  GraphEdge,
+  GraphNode,
+  Neighborhood,
+  Overview,
+  SearchHit,
+  Subgraph,
+} from '@/modules/graph/api'
+import { colorScale, withAlpha } from '@/modules/graph/colors'
+import { GraphCanvas } from '@/modules/graph/GraphCanvas'
+import type { CanvasLink, CanvasNode } from '@/modules/graph/GraphCanvas'
+import { COMMUNITY_MIN_NODES, useCommunities } from '@/modules/graph/useCommunities'
+import { useShortcuts } from '@/modules/graph/useShortcuts'
+import { objectApi } from '@/modules/objects/api'
+import type { ObjectRow, RelatedObject } from '@/modules/objects/api'
+import { propertyText } from '@/modules/objects/PropertyFields'
+import { ontologyApi } from '@/modules/ontology/api'
+import { ApiError } from '@/shared/api/client'
+import { isSystemAdmin } from '@/shared/auth/roles'
+import { useAuth } from '@/shared/auth/AuthContext'
+import { EmptyState } from '@/shared/components/EmptyState'
+import { ErrorNotice } from '@/shared/components/ErrorNotice'
+import { PageHeader } from '@/shared/components/PageHeader'
+import { Badge } from '@/shared/components/ui/badge'
+import { Button } from '@/shared/components/ui/button'
+import { Input } from '@/shared/components/ui/input'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/shared/components/ui/select'
+import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
+import { useResource } from '@/shared/hooks/useResource'
+
+type Mode = 'schema' | 'explore'
+type ColorBy = 'type' | 'workspace' | 'status' | 'community'
+
+/** 탐색의 씨앗 — 어디서 시작하나. */
+export type Seed =
+  | { kind: 'focus'; id: string }
+  | { kind: 'type'; slugs: string[]; offset: number }
+
+const DEPTHS = [1, 2, 3]
+const FANOUTS = [10, 30, 100]
+/** 타입 전부를 그릴 때 한 쪽의 크기. 서버 상한(500)보다 작게 — 그 이상은 아무도 못 읽는다. */
+const TYPE_PAGE = 200
+/** 훑기 목록의 한 쪽. */
+const BROWSE_PAGE = 20
+const FOCUS_RING = '#f59e0b'
+
+/** 탐색 그림이 든 것 — 여러 응답을 합친 결과. */
+interface Explored {
+  /** 씨앗이 객체였으면 그 id. 타입 전부면 없다. */
+  focus: string | null
+  nodes: Map<string, GraphNode>
+  edges: Map<string, GraphEdge>
+  /** 어느 응답이든 하나라도 잘렸으면 참. */
+  truncated: boolean
+  /** 안내문에 적는 상한. 씨앗 종류에 따라 온 것만 든다. */
+  limits: { depth?: number; fanout?: number; node_limit: number }
+  /** 타입 전부일 때 — 「N개 중 M개」. */
+  page: { total: number; offset: number; limit: number } | null
+  /** 어느 노드를 펼쳐서 들어왔나(id → 펼친 노드 id). 캔버스가 새 노드를 그 곁에 놓는다. */
+  origin: Map<string, string>
+}
+
+function mergeNodes(
+  previous: Explored | null,
+  fresh: { nodes: GraphNode[]; edges: GraphEdge[]; truncated: boolean },
+  from: string | null,
+) {
+  const nodes = new Map(previous?.nodes ?? [])
+  const edges = new Map(previous?.edges ?? [])
+  const origin = new Map(previous?.origin ?? [])
+  for (const node of fresh.nodes) {
+    if (from && !nodes.has(node.id) && node.id !== from) origin.set(node.id, from)
+    nodes.set(node.id, node)
+  }
+  for (const edge of fresh.edges) edges.set(edge.id, edge)
+  return { nodes, edges, origin, truncated: Boolean(previous?.truncated) || fresh.truncated }
+}
+
+function mergeNeighborhood(previous: Explored | null, fresh: Neighborhood): Explored {
+  return {
+    ...mergeNodes(previous, fresh, previous ? fresh.focus : null),
+    focus: previous ? previous.focus : fresh.focus,
+    limits: {
+      depth: fresh.depth,
+      fanout: fresh.fanout,
+      node_limit: previous?.limits.node_limit ?? fresh.node_limit,
+    },
+    page: previous?.page ?? null,
+  }
+}
+
+function fromSubgraph(fresh: Subgraph): Explored {
+  return {
+    ...mergeNodes(null, fresh, null),
+    focus: null,
+    limits: { node_limit: fresh.limit },
+    page: { total: fresh.total, offset: fresh.offset, limit: fresh.limit },
+  }
+}
+
+/** 탐색의 조작 상태 — 주소에 남겨 **붙여 넣으면 같은 그림**이 선다(ReportArchive Phase 3). */
+interface Controls {
+  depth: number
+  fanout: number
+  relations: Set<string>
+  types: Set<string>
+  colorBy: ColorBy
+  /** 관계 없는 노드를 숨긴다 — 타입 전부를 그릴 때 잎만 수백 개면 아무것도 안 보인다. */
+  hideIsolated: boolean
+}
+
+const CONTROL_KEYS = {
+  depth: 'd',
+  fanout: 'fo',
+  relations: 'rel',
+  types: 'ty',
+  colorBy: 'color',
+  hideIsolated: 'iso',
+}
+
+function controlsFromParams(params: URLSearchParams): Controls {
+  const csv = (raw: string | null) => new Set((raw ?? '').split(',').filter(Boolean))
+  const depth = Number(params.get(CONTROL_KEYS.depth))
+  const fanout = Number(params.get(CONTROL_KEYS.fanout))
+  return {
+    depth: DEPTHS.includes(depth) ? depth : 1,
+    fanout: FANOUTS.includes(fanout) ? fanout : 30,
+    relations: csv(params.get(CONTROL_KEYS.relations)),
+    types: csv(params.get(CONTROL_KEYS.types)),
+    colorBy: (['workspace', 'status', 'community'] as const).find(
+      (one) => one === params.get(CONTROL_KEYS.colorBy),
+    ) ?? 'type',
+    hideIsolated: params.get(CONTROL_KEYS.hideIsolated) === '1',
+  }
+}
+
+function writeControls(params: URLSearchParams, controls: Controls): void {
+  const put = (key: string, value: string, isDefault: boolean) => {
+    if (isDefault) params.delete(key)
+    else params.set(key, value)
+  }
+  put(CONTROL_KEYS.depth, String(controls.depth), controls.depth === 1)
+  put(CONTROL_KEYS.fanout, String(controls.fanout), controls.fanout === 30)
+  put(CONTROL_KEYS.relations, [...controls.relations].join(','), controls.relations.size === 0)
+  put(CONTROL_KEYS.types, [...controls.types].join(','), controls.types.size === 0)
+  put(CONTROL_KEYS.colorBy, controls.colorBy, controls.colorBy === 'type')
+  put(CONTROL_KEYS.hideIsolated, '1', !controls.hideIsolated)
+}
+
+function seedFromParams(params: URLSearchParams): Seed | null {
+  const focus = params.get('focus')
+  if (focus) return { kind: 'focus', id: focus }
+  const type = params.get('type')
+  if (type) return { kind: 'type', slugs: type.split(',').filter(Boolean), offset: 0 }
+  return null
+}
+
+/** 화면에 실린 선의 수를 노드마다 센다 — 「+N」 의 N 은 degree 에서 이것을 뺀 것이다. */
+function shownDegrees(edges: Iterable<GraphEdge>): Map<string, number> {
+  const counts = new Map<string, number>()
+  for (const edge of edges) {
+    counts.set(edge.src, (counts.get(edge.src) ?? 0) + 1)
+    if (edge.dst !== edge.src) counts.set(edge.dst, (counts.get(edge.dst) ?? 0) + 1)
+  }
+  return counts
+}
+
+export default function GraphPage() {
+  const { user } = useAuth()
+  const [params, setParams] = useSearchParams()
+  const [seed, setSeedState] = useState<Seed | null>(() => seedFromParams(params))
+  const [mode, setMode] = useState<Mode>(seed ? 'explore' : 'schema')
+  const [controls, setControlsState] = useState<Controls>(() => controlsFromParams(params))
+
+  const setControls = useCallback(
+    (patch: Partial<Controls>) => {
+      setControlsState((current) => {
+        const next = { ...current, ...patch }
+        const query = new URLSearchParams(params)
+        writeControls(query, next)
+        setParams(query, { replace: true })
+        return next
+      })
+    },
+    [params, setParams],
+  )
+
+  // 주소가 곧 씨앗이다 — 링크를 붙여 넣으면 같은 그림이 선다. 쪽(offset)은 안 적는다.
+  const setSeed = useCallback(
+    (next: Seed | null) => {
+      setSeedState(next)
+      const query = new URLSearchParams(params)
+      query.delete('focus')
+      query.delete('type')
+      if (next?.kind === 'focus') query.set('focus', next.id)
+      if (next?.kind === 'type') query.set('type', next.slugs.join(','))
+      setParams(query, { replace: true })
+    },
+    [params, setParams],
+  )
+
+  const schema = useResource(() => ontologyApi.schema(), [])
+  const overview = useResource(() => graphApi.overview(), [])
+
+  // 타입 색은 정의 순서로 — 구조 그림과 탐색 그림이 **같은 색**을 쓴다.
+  const typeColor = useMemo(
+    () => colorScale((schema.data?.types ?? []).map((one) => one.slug)),
+    [schema.data],
+  )
+  const typeLabel = useMemo(
+    () => new Map((schema.data?.types ?? []).map((one) => [one.slug, one.label])),
+    [schema.data],
+  )
+
+  return (
+    <div className="space-y-4">
+      <PageHeader
+        title="지식 그래프"
+        description="정의가 어떻게 이어지는지(구조), 그리고 한 객체 주변에 무엇이 있는지(탐색)."
+        actions={
+          <Tabs value={mode} onValueChange={(value) => setMode(value as Mode)}>
+            <TabsList>
+              <TabsTrigger value="schema">구조</TabsTrigger>
+              <TabsTrigger value="explore">탐색</TabsTrigger>
+            </TabsList>
+          </Tabs>
+        }
+      />
+
+      {schema.error && <ErrorNotice error={schema.error} />}
+
+      {mode === 'schema' ? (
+        <SchemaView
+          overview={overview.data}
+          error={overview.error}
+          loading={overview.loading}
+          typeColor={typeColor}
+          canDefine={isSystemAdmin(user)}
+          onDrawType={(slug) => {
+            setSeed({ kind: 'type', slugs: [slug], offset: 0 })
+            setMode('explore')
+          }}
+        />
+      ) : (
+        <ExploreView
+          seed={seed}
+          onSeed={setSeed}
+          controls={controls}
+          onControls={setControls}
+          typeColor={typeColor}
+          typeLabel={typeLabel}
+          relationTypes={schema.data?.relation_types ?? []}
+          types={schema.data?.types ?? []}
+        />
+      )}
+    </div>
+  )
+}
+
+// --- 구조 ---------------------------------------------------------------------
+
+interface SchemaViewProps {
+  overview: Overview | null
+  error: ApiError | Error | null
+  loading: boolean
+  typeColor: (slug: string) => string
+  canDefine: boolean
+  /** 이 타입의 인스턴스 전부를 탐색 그림에 그린다. */
+  onDrawType: (slug: string) => void
+}
+
+function SchemaView({ overview, error, loading, typeColor, canDefine, onDrawType }: SchemaViewProps) {
+  const [selected, setSelected] = useState<string | null>(null)
+
+  const { nodes, links } = useMemo(() => {
+    if (!overview) return { nodes: [] as CanvasNode[], links: [] as CanvasLink[] }
+    const maxCount = Math.max(1, ...overview.nodes.map((one) => one.count))
+    const maxEdge = Math.max(1, ...overview.edges.map((one) => one.count))
+    return {
+      nodes: overview.nodes.map(
+        (one): CanvasNode => ({
+          id: one.slug,
+          label: one.label,
+          sublabel: `${one.count.toLocaleString()}개`,
+          card: [one.label, `${one.count.toLocaleString()}개 · 더블클릭: 인스턴스 전부 그리기`],
+          color: one.count === 0 ? withAlpha(typeColor(one.slug), 0.35) : typeColor(one.slug),
+          // 객체 수에 비례하되 sqrt 로 완만하게 — 1개와 1만 개가 백 배 차이 나면 작은 것이 안 보인다.
+          radius: 7 + Math.sqrt(one.count / maxCount) * 12,
+          shape: 'square',
+        }),
+      ),
+      links: overview.edges.map(
+        (one): CanvasLink => ({
+          id: `${one.relation}:${one.src_type}:${one.dst_type}`,
+          source: one.src_type,
+          target: one.dst_type,
+          label: one.count ? `${one.label} · ${one.count.toLocaleString()}` : `${one.label} · 비어 있음`,
+          directed: one.directed,
+          width: one.count ? 1 + (one.count / maxEdge) * 5 : 1,
+          dashed: one.count === 0,
+        }),
+      ),
+    }
+  }, [overview, typeColor])
+
+  const picked = overview?.nodes.find((one) => one.slug === selected) ?? null
+  const pickedEdges = useMemo(
+    () =>
+      (overview?.edges ?? []).filter(
+        (one) => one.src_type === selected || one.dst_type === selected,
+      ),
+    [overview, selected],
+  )
+
+  if (error) return <ErrorNotice error={error} />
+  if (!loading && overview && overview.nodes.length === 0) {
+    return (
+      <EmptyState
+        title="정의된 타입이 없습니다"
+        hint={
+          canDefine
+            ? '온톨로지에서 타입과 관계 종류를 먼저 정의하면 여기 구조가 그려집니다.'
+            : '시스템 관리자가 온톨로지를 정의하면 여기 구조가 그려집니다.'
+        }
+        action={
+          canDefine ? (
+            <Button asChild size="sm" variant="outline">
+              <Link to="/admin/ontology/types">
+                <Boxes className="mr-1 size-4" />
+                온톨로지 열기
+              </Link>
+            </Button>
+          ) : undefined
+        }
+      />
+    )
+  }
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+      <GraphCanvas
+        nodes={nodes}
+        links={links}
+        linkLabels
+        selectedId={selected}
+        onNodeClick={setSelected}
+        onNodeDoubleClick={(slug) => {
+          if ((overview?.nodes.find((one) => one.slug === slug)?.count ?? 0) > 0) onDrawType(slug)
+        }}
+        onBackgroundClick={() => setSelected(null)}
+        onEscape={() => setSelected(null)}
+        exportName="구조"
+        overlay={
+          <>
+            {loading && (
+              <div className="absolute inset-0 flex items-center justify-center">
+                <Loader2 className="text-muted-foreground size-5 animate-spin" />
+              </div>
+            )}
+            {overview && (
+              <div className="text-muted-foreground bg-background/80 absolute bottom-2 left-2 rounded px-2 py-1 text-xs">
+                타입 {overview.nodes.length} · 관계 종류 {overview.edges.length} · 객체{' '}
+                {overview.object_count.toLocaleString()} · 관계{' '}
+                {overview.edge_count.toLocaleString()}
+              </div>
+            )}
+          </>
+        }
+      />
+      <aside className="space-y-3 text-sm">
+        {picked ? (
+          <div className="space-y-3 rounded-md border p-3">
+            <div className="flex items-start justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-2">
+                  <span
+                    className="inline-block size-3 shrink-0 rounded-sm"
+                    style={{ background: typeColor(picked.slug) }}
+                  />
+                  <span className="font-medium">{picked.label}</span>
+                </div>
+                <p className="text-muted-foreground mt-0.5 font-mono text-xs">{picked.slug}</p>
+              </div>
+              <Button size="icon-sm" variant="ghost" onClick={() => setSelected(null)}>
+                <X className="size-4" />
+              </Button>
+            </div>
+            <p>
+              객체 <strong>{picked.count.toLocaleString()}</strong>개
+            </p>
+            {pickedEdges.length > 0 && (
+              <ul className="space-y-1">
+                {pickedEdges.map((edge) => (
+                  <li
+                    key={`${edge.relation}:${edge.src_type}:${edge.dst_type}`}
+                    className="text-muted-foreground flex justify-between gap-2"
+                  >
+                    <span className="truncate">
+                      {edge.src_type === picked.slug ? '→' : '←'} {edge.label}{' '}
+                      <span className="opacity-70">
+                        ({edge.src_type === picked.slug ? edge.dst_type : edge.src_type})
+                      </span>
+                    </span>
+                    <span className="shrink-0 tabular-nums">{edge.count.toLocaleString()}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+            <div className="flex flex-wrap gap-2">
+              <Button asChild size="sm" variant="outline">
+                <Link to={`/o/${picked.slug}`}>
+                  <ExternalLink className="mr-1 size-3.5" />
+                  목록 보기
+                </Link>
+              </Button>
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={picked.count === 0}
+                onClick={() => onDrawType(picked.slug)}
+              >
+                <Crosshair className="mr-1 size-3.5" />
+                인스턴스 전부 그리기
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <div className="text-muted-foreground rounded-md border border-dashed p-3">
+            타입을 누르면 걸린 관계와 수가 나오고, 그 타입의 인스턴스 전부를 그릴 수
+            있습니다. 점선은 정의만 있고 아직 아무것도 안 이어진 관계입니다.
+          </div>
+        )}
+      </aside>
+    </div>
+  )
+}
+
+// --- 탐색 ---------------------------------------------------------------------
+
+interface ExploreViewProps {
+  seed: Seed | null
+  onSeed: (seed: Seed | null) => void
+  controls: Controls
+  onControls: (patch: Partial<Controls>) => void
+  typeColor: (slug: string) => string
+  typeLabel: Map<string, string>
+  relationTypes: { slug: string; label: string; is_active: boolean }[]
+  types: { slug: string; label: string; is_active: boolean; object_count: number }[]
+}
+
+function ExploreView({
+  seed,
+  onSeed,
+  controls,
+  onControls,
+  typeColor,
+  typeLabel,
+  relationTypes,
+  types,
+}: ExploreViewProps) {
+  const {
+    depth,
+    fanout,
+    relations: relationFilter,
+    types: typeFilter,
+    colorBy,
+    hideIsolated,
+  } = controls
+  const setDepth = (value: number) => onControls({ depth: value })
+  const setFanout = (value: number) => onControls({ fanout: value })
+  const setRelationFilter = (value: Set<string>) => onControls({ relations: value })
+  const setTypeFilter = (value: Set<string>) => onControls({ types: value })
+  const setColorBy = (value: ColorBy) => onControls({ colorBy: value })
+  /** 새로고침 — 같은 씨앗을 다시 든다. 다른 화면에서 관계를 이은 뒤 돌아왔을 때. */
+  const [reloadTick, setReloadTick] = useState(0)
+  /** 목록에서 고른 노드로 찾아가기. nonce 로 같은 노드도 다시. */
+  const [centerOn, setCenterOn] = useState<{ id: string; nonce: number } | null>(null)
+  const findRef = useRef<HTMLInputElement>(null)
+  const [explored, setExplored] = useState<Explored | null>(null)
+  const [selected, setSelected] = useState<string | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState<ApiError | Error | null>(null)
+
+  const query = useCallback(
+    (id: string, depthOverride?: number) =>
+      graphApi.neighborhood({
+        focus: id,
+        depth: depthOverride ?? depth,
+        fanout,
+        relations: [...relationFilter],
+        types: [...typeFilter],
+      }),
+    [depth, fanout, relationFilter, typeFilter],
+  )
+
+  // 씨앗·상한·거르기가 바뀌면 **처음부터 다시** 든다. 펼쳐 둔 것은 버린다 —
+  // 거르기가 바뀐 뒤에도 옛 노드가 남아 있으면 그 그림은 무엇을 거른 것인지 말할 수 없다.
+  useEffect(() => {
+    if (!seed) {
+      setExplored(null)
+      return
+    }
+    let cancelled = false
+    setLoading(true)
+    setError(null)
+    const request =
+      seed.kind === 'focus'
+        ? query(seed.id).then((fresh) => mergeNeighborhood(null, fresh))
+        : graphApi
+            .subgraph({
+              types: seed.slugs,
+              relations: [...relationFilter],
+              limit: TYPE_PAGE,
+              offset: seed.offset,
+            })
+            .then(fromSubgraph)
+    request
+      .then((fresh) => {
+        if (cancelled) return
+        setExplored(fresh)
+        setSelected(fresh.focus)
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [seed, query, relationFilter, reloadTick])
+
+  const pickFocus = (id: string | null) => onSeed(id ? { kind: 'focus', id } : null)
+
+  /** 노드에서 한 단계 더 — 이미 든 것에 합친다. */
+  const expand = async (id: string) => {
+    setLoading(true)
+    setError(null)
+    try {
+      const fresh = await query(id, 1)
+      setExplored((previous) => mergeNeighborhood(previous, fresh))
+    } catch (caught: unknown) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const edgeList = useMemo(() => [...(explored?.edges.values() ?? [])], [explored])
+  const shown = useMemo(() => shownDegrees(edgeList), [edgeList])
+  const allNodes = useMemo(() => [...(explored?.nodes.values() ?? [])], [explored])
+  // 관계 없는 것 숨기기 — 화면에 선이 하나도 안 닿는 노드. 시작점은 늘 남긴다.
+  const nodeList = useMemo(
+    () =>
+      hideIsolated
+        ? allNodes.filter((one) => one.id === explored?.focus || (shown.get(one.id) ?? 0) > 0)
+        : allNodes,
+    [allNodes, hideIsolated, shown, explored?.focus],
+  )
+  const isolatedCount = allNodes.length - nodeList.length
+  const nodeIds = useMemo(() => nodeList.map((one) => one.id), [nodeList])
+  const communities = useCommunities(nodeIds, edgeList, colorBy === 'community')
+  const [findText, setFindText] = useState('')
+
+  // 그림 안 검색 — 매칭만 또렷. 노드가 200개면 이름을 눈으로 못 찾는다.
+  const matchIds = useMemo(() => {
+    const needle = findText.trim().toLowerCase()
+    if (!needle) return null
+    return new Set(
+      nodeList
+        .filter((one) => `${one.label} ${one.key ?? ''}`.toLowerCase().includes(needle))
+        .map((one) => one.id),
+    )
+  }, [findText, nodeList])
+
+  // 노드 색 — 색 기준별 키와 라벨. 부서·상태는 그림에 있는 값의 순서로 색을 받는다.
+  const nodeCategory = useCallback(
+    (one: GraphNode): { key: string; label: string } => {
+      if (colorBy === 'workspace') {
+        return one.owner_workspace_slug
+          ? { key: one.owner_workspace_slug, label: one.owner_workspace_slug }
+          : { key: '__global__', label: '전역' }
+      }
+      if (colorBy === 'status') return { key: one.status, label: one.status }
+      return { key: one.type_slug, label: one.type_label }
+    },
+    [colorBy],
+  )
+  const categoryScale = useMemo(() => {
+    if (colorBy === 'type') return typeColor
+    const keys: string[] = []
+    for (const one of nodeList) {
+      const { key } = nodeCategory(one)
+      if (!keys.includes(key)) keys.push(key)
+    }
+    return colorScale(keys)
+  }, [colorBy, typeColor, nodeList, nodeCategory])
+  const nodeColorOf = useCallback(
+    (one: GraphNode) =>
+      communities.ready ? communities.colorOf(one.id) : categoryScale(nodeCategory(one).key),
+    [communities, categoryScale, nodeCategory],
+  )
+
+  // 선 색 — 관계 종류가 둘 이상일 때만 종류별로. 하나뿐이면 회색이 덜 시끄럽다.
+  const relationScale = useMemo(() => {
+    const slugs: string[] = []
+    for (const one of edgeList) if (!slugs.includes(one.relation)) slugs.push(one.relation)
+    return slugs.length > 1 ? colorScale(slugs) : null
+  }, [edgeList])
+
+  // 범례 — 그림에 실제로 있는 범주만. 노드 범주는 눌러서 「그것만 또렷」.
+  const [legendActive, setLegendActive] = useState<string | null>(null)
+  const legend = useMemo(() => {
+    const items: { color: string; label: string; key?: string; line?: boolean }[] = []
+    if (!communities.ready) {
+      const seen = new Map<string, string>()
+      for (const one of nodeList) {
+        const { key, label } = nodeCategory(one)
+        if (!seen.has(key)) seen.set(key, label)
+      }
+      for (const [key, label] of seen) items.push({ color: categoryScale(key), label, key })
+    }
+    if (relationScale) {
+      const seen = new Map<string, string>()
+      for (const one of edgeList) if (!seen.has(one.relation)) seen.set(one.relation, one.label)
+      for (const [slug, label] of seen) items.push({ color: relationScale(slug), label, line: true })
+    }
+    return items
+  }, [nodeList, edgeList, communities.ready, nodeCategory, categoryScale, relationScale])
+  const legendMatch = useMemo(() => {
+    if (!legendActive) return null
+    return new Set(nodeList.filter((one) => nodeCategory(one).key === legendActive).map((one) => one.id))
+  }, [legendActive, nodeList, nodeCategory])
+
+  const { nodes, links } = useMemo(() => {
+    const maxDegree = Math.max(1, ...nodeList.map((one) => one.degree))
+    const visible = new Set(nodeList.map((one) => one.id))
+    return {
+      nodes: nodeList.map((one): CanvasNode => {
+        const hidden = one.degree - (shown.get(one.id) ?? 0)
+        return {
+          id: one.id,
+          label: one.label,
+          sublabel: one.type_label,
+          card: [
+            one.label,
+            `${one.type_label}${one.key ? ` · ${one.key}` : ''}`,
+            `관계 ${one.degree}개${hidden > 0 ? ` · 화면에 없는 것 ${hidden}` : ''}`,
+            '클릭: 선택 · 더블클릭: 여기를 중심으로',
+          ],
+          color: nodeColorOf(one),
+          radius: 4 + Math.sqrt(one.degree / maxDegree) * 6,
+          shape: 'circle',
+          ring: one.id === explored?.focus ? FOCUS_RING : null,
+          badge: hidden > 0 ? `+${hidden}` : null,
+          near: explored?.origin.get(one.id) ?? null,
+          hull: communities.ready ? communities.keyOf(one.id) : null,
+          hullColor: communities.ready ? communities.colorOf(one.id) : undefined,
+        }
+      }),
+      links: edgeList
+        .filter((one) => visible.has(one.src) && visible.has(one.dst))
+        .map(
+          (one): CanvasLink => ({
+            id: one.id,
+            source: one.src,
+            target: one.dst,
+            label: one.label,
+            tooltip:
+              one.directed && one.inverse_label && one.inverse_label !== one.label
+                ? `${one.label} ↔ ${one.inverse_label}`
+                : one.label,
+            directed: one.directed,
+            width: 1,
+            color: relationScale ? relationScale(one.relation) : undefined,
+          }),
+        ),
+    }
+  }, [nodeList, edgeList, shown, communities, nodeColorOf, relationScale, explored?.focus, explored?.origin])
+
+  const picked = selected ? (explored?.nodes.get(selected) ?? null) : null
+  const pickedHidden = picked ? picked.degree - (shown.get(picked.id) ?? 0) : 0
+
+  /** 목록에서 고르기 — 선택하고 카메라도 옮긴다. 캔버스 클릭과 달리 어디 있는지 모르니까. */
+  const selectAndGo = useCallback((id: string) => {
+    setSelected(id)
+    setCenterOn((current) => ({ id, nonce: (current?.nonce ?? 0) + 1 }))
+  }, [])
+
+  const hostShortcuts = useMemo(
+    () => [
+      { keys: 'Enter', what: '고른 노드에서 펼치기' },
+      { keys: 'Shift+Enter', what: '고른 노드를 중심으로' },
+      { keys: '/', what: '그림 안에서 찾기' },
+      { keys: 'R', what: '새로고침' },
+    ],
+    [],
+  )
+  useShortcuts(
+    useMemo(
+      () => ({
+        Enter: () => {
+          if (picked && pickedHidden > 0 && !loading) void expand(picked.id)
+        },
+        'shift+Enter': () => {
+          if (picked && picked.id !== explored?.focus) pickFocus(picked.id)
+        },
+        '/': (event) => {
+          event.preventDefault()
+          findRef.current?.focus()
+        },
+        r: () => {
+          if (seed) setReloadTick((value) => value + 1)
+        },
+        R: () => {
+          if (seed) setReloadTick((value) => value + 1)
+        },
+      }),
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+      [picked, pickedHidden, loading, explored?.focus, seed],
+    ),
+    Boolean(seed),
+  )
+
+  const toggle = (set: Set<string>, value: string, update: (next: Set<string>) => void) => {
+    const next = new Set(set)
+    if (next.has(value)) next.delete(value)
+    else next.add(value)
+    update(next)
+  }
+
+  return (
+    <div className="grid gap-4 lg:grid-cols-[260px_1fr_280px]">
+      {/* 왼쪽 — 시작점과 상한 */}
+      <aside className="space-y-4 text-sm">
+        <SeedPanel
+          seed={seed}
+          current={
+            explored?.focus ? (explored.nodes.get(explored.focus) ?? null) : null
+          }
+          types={types}
+          typeLabel={typeLabel}
+          onPick={(id) => pickFocus(id)}
+          onDrawTypes={(slugs) => onSeed({ kind: 'type', slugs, offset: 0 })}
+          onClear={() => onSeed(null)}
+        />
+
+        <div className="grid grid-cols-2 gap-2">
+          <label className="space-y-1">
+            <span className="text-muted-foreground text-xs">단계</span>
+            <Select value={String(depth)} onValueChange={(value) => setDepth(Number(value))}>
+              <SelectTrigger size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {DEPTHS.map((one) => (
+                  <SelectItem key={one} value={String(one)}>
+                    {one}단계
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+          <label className="space-y-1">
+            <span className="text-muted-foreground text-xs">노드당 이웃</span>
+            <Select value={String(fanout)} onValueChange={(value) => setFanout(Number(value))}>
+              <SelectTrigger size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {FANOUTS.map((one) => (
+                  <SelectItem key={one} value={String(one)}>
+                    {one}개까지
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </label>
+        </div>
+
+        <FilterList
+          title="관계 종류"
+          options={relationTypes.filter((one) => one.is_active)}
+          picked={relationFilter}
+          onToggle={(slug) => toggle(relationFilter, slug, setRelationFilter)}
+          onClear={() => setRelationFilter(new Set())}
+        />
+        <FilterList
+          title="이웃 타입"
+          options={types.filter((one) => one.is_active)}
+          picked={typeFilter}
+          onToggle={(slug) => toggle(typeFilter, slug, setTypeFilter)}
+          onClear={() => setTypeFilter(new Set())}
+          swatch={typeColor}
+        />
+
+        <label className="hover:bg-muted flex cursor-pointer items-center gap-2 rounded px-1 py-0.5">
+          <input
+            type="checkbox"
+            className="size-3.5"
+            checked={hideIsolated}
+            onChange={(event) => onControls({ hideIsolated: event.target.checked })}
+          />
+          <span>
+            관계 없는 것 숨기기
+            {isolatedCount > 0 && (
+              <span className="text-muted-foreground ml-1 text-xs">({isolatedCount}개 숨김)</span>
+            )}
+          </span>
+        </label>
+
+        <label className="space-y-1">
+          <span className="text-muted-foreground text-xs">색</span>
+          <Select value={colorBy} onValueChange={(value) => setColorBy(value as ColorBy)}>
+            <SelectTrigger size="sm">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="type">타입별</SelectItem>
+              <SelectItem value="workspace">부서별</SelectItem>
+              <SelectItem value="status">상태별</SelectItem>
+              <SelectItem value="community">
+                무리별{nodeList.length < COMMUNITY_MIN_NODES ? ` (노드 ${COMMUNITY_MIN_NODES}개부터)` : ''}
+              </SelectItem>
+            </SelectContent>
+          </Select>
+        </label>
+      </aside>
+
+      {/* 가운데 — 그림 */}
+      <div className="space-y-2">
+        {error && <ErrorNotice error={error} />}
+        {seed && (
+          <div className="flex items-center gap-2">
+            <div className="relative flex-1">
+              <Search className="text-muted-foreground absolute top-2 left-2 size-4" />
+              <Input
+                ref={findRef}
+                value={findText}
+                onChange={(event) => setFindText(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Escape') {
+                    setFindText('')
+                    event.currentTarget.blur()
+                  }
+                }}
+                placeholder="그림 안에서 찾기 (/) — 맞는 노드만 또렷하게"
+                className="pl-8"
+                disabled={nodeList.length < 2}
+              />
+              {matchIds && (
+                <span className="text-muted-foreground absolute top-2 right-2 text-xs">
+                  {matchIds.size}개
+                </span>
+              )}
+            </div>
+            <Button
+              size="icon-sm"
+              variant="outline"
+              aria-label="새로고침"
+              title="같은 씨앗을 다시 읽기 (R)"
+              disabled={loading}
+              onClick={() => setReloadTick((value) => value + 1)}
+            >
+              <RotateCw className={`size-3.5 ${loading ? 'animate-spin' : ''}`} />
+            </Button>
+          </div>
+        )}
+        {!seed ? (
+          <EmptyState
+            title="시작점을 고르세요"
+            hint="왼쪽에서 이름으로 객체를 찾거나, 타입에서 훑어 고르거나, 한 타입의 인스턴스를 전부 그립니다. 모든 타입을 한 번에 그리는 단추는 없습니다 — 전체 모양은 「구조」 에서 봅니다."
+          />
+        ) : (
+          <GraphCanvas
+            nodes={nodes}
+            links={links}
+            selectedId={selected}
+            matchIds={matchIds ?? legendMatch}
+            legend={legend}
+            legendActive={legendActive}
+            onLegendClick={(key) => setLegendActive((current) => (current === key ? null : key))}
+            onNodeClick={setSelected}
+            onNodeDoubleClick={(id) => pickFocus(id)}
+            onBackgroundClick={() => setSelected(null)}
+            onEscape={() => setSelected(null)}
+            centerOn={centerOn}
+            hostShortcuts={hostShortcuts}
+            exportName="탐색"
+            overlay={
+              <>
+                {loading && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <Loader2 className="text-muted-foreground size-5 animate-spin" />
+                  </div>
+                )}
+                {explored && nodeList.length === 1 && !loading && (
+                  <div className="text-muted-foreground absolute inset-x-0 top-3 text-center text-xs">
+                    연결된 관계가 없습니다
+                    {relationFilter.size + typeFilter.size > 0 ? ' — 거르기를 넓혀 보세요.' : '.'}
+                  </div>
+                )}
+                {explored && (
+                  <div className="text-muted-foreground bg-background/80 absolute bottom-2 left-2 flex items-center gap-2 rounded px-2 py-1 text-xs">
+                    <span>
+                      {explored.page
+                        ? `${explored.page.total.toLocaleString()}개 중 ${explored.page.offset + 1}–${(
+                            explored.page.offset + nodeList.length
+                          ).toLocaleString()}`
+                        : `노드 ${nodeList.length}`}
+                      {' · '}관계 {edgeList.length}
+                      {communities.ready ? ` · 무리 ${communities.count}` : ''}
+                    </span>
+                    {explored.page && explored.page.total > explored.page.limit && seed?.kind === 'type' && (
+                      <span className="flex items-center gap-0.5">
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label="앞 쪽"
+                          disabled={loading || explored.page.offset === 0}
+                          onClick={() =>
+                            onSeed({
+                              ...seed,
+                              offset: Math.max(0, explored.page!.offset - explored.page!.limit),
+                            })
+                          }
+                        >
+                          <ChevronLeft className="size-3.5" />
+                        </Button>
+                        <Button
+                          size="icon-xs"
+                          variant="ghost"
+                          aria-label="다음 쪽"
+                          disabled={
+                            loading ||
+                            explored.page.offset + explored.page.limit >= explored.page.total
+                          }
+                          onClick={() =>
+                            onSeed({ ...seed, offset: explored.page!.offset + explored.page!.limit })
+                          }
+                        >
+                          <ChevronRight className="size-3.5" />
+                        </Button>
+                      </span>
+                    )}
+                    {explored.truncated && (
+                      <span className="text-amber-600 dark:text-amber-400">
+                        · 일부만 실었습니다 — 「+N」 이 붙은 노드에서 더 펼칩니다
+                      </span>
+                    )}
+                  </div>
+                )}
+              </>
+            }
+          />
+        )}
+      </div>
+
+      {/* 오른쪽 — 고른 노드 */}
+      <aside className="text-sm">
+        {picked ? (
+          <NodeDetail
+            node={picked}
+            hidden={pickedHidden}
+            isFocus={picked.id === explored?.focus}
+            loading={loading}
+            inGraph={(id) => Boolean(explored?.nodes.has(id))}
+            color={typeColor(picked.type_slug)}
+            typeLabel={typeLabel.get(picked.type_slug) ?? picked.type_label}
+            onExpand={() => void expand(picked.id)}
+            onFocus={() => pickFocus(picked.id)}
+            onSelect={selectAndGo}
+            onClose={() => setSelected(null)}
+          />
+        ) : (
+          <div className="text-muted-foreground rounded-md border border-dashed p-3">
+            노드를 누르면 상세와 「여기서 펼치기」 가 나옵니다. 더블클릭은 「여기를 중심으로」.
+            주황 링이 시작점, 「+N」 은 화면에 안 실린 관계의 수입니다.
+          </div>
+        )}
+        {explored && (
+          <p className="text-muted-foreground mt-3 text-xs">
+            {explored.limits.depth !== undefined
+              ? `한 번에 ${explored.limits.depth}단계 · 노드당 이웃 ${explored.limits.fanout}개 · `
+              : '한 쪽에 '}
+            노드 {explored.limits.node_limit}개까지. 상한은 서버가 정합니다.
+          </p>
+        )}
+      </aside>
+    </div>
+  )
+}
+
+// --- 고른 노드 -----------------------------------------------------------------
+
+interface NodeDetailProps {
+  node: GraphNode
+  /** 화면에 안 실린 관계의 수. */
+  hidden: number
+  isFocus: boolean
+  loading: boolean
+  inGraph: (id: string) => boolean
+  color: string
+  typeLabel: string
+  onExpand: () => void
+  onFocus: () => void
+  onSelect: (id: string) => void
+  onClose: () => void
+}
+
+/** 상세에서 보여 줄 속성 수 — 전부는 상세 화면이 있다. */
+const DETAIL_PROPERTIES = 6
+
+/**
+ * 고른 노드의 요약 — **그래프를 떠나지 않고 「이게 뭐지」 에 답한다.**
+ *
+ * 속성 몇 개와 관계를 종류별로 묶어 보여 준다. 관계 목록의 한 줄은 그림에 있으면
+ * 그 노드를 고르고(선택), 없으면 「펼치기」 로 안내한다 — 목록과 그림이 같은 것을
+ * 가리켜야 사람이 둘을 오가며 읽는다.
+ */
+function NodeDetail({
+  node,
+  hidden,
+  isFocus,
+  loading,
+  inGraph,
+  color,
+  typeLabel,
+  onExpand,
+  onFocus,
+  onSelect,
+  onClose,
+}: NodeDetailProps) {
+  const profile = useResource(
+    () => objectApi.profile(node.type_slug, node.id),
+    [node.type_slug, node.id],
+  )
+
+  const properties = useMemo(() => {
+    const data = profile.data
+    if (!data) return []
+    return data.properties_schema
+      .filter((def) => def.data_type !== 'file')
+      .map((def) => ({
+        key: def.key,
+        label: def.label,
+        text: propertyText(def, data.object.properties[def.key], data.object.ref_labels),
+      }))
+      .filter((one) => one.text !== '—')
+      .slice(0, DETAIL_PROPERTIES)
+  }, [profile.data])
+
+  // 관계 — 종류(방향에 맞는 말)별로 묶고, 방향을 함께 적는다. 「속함」 과 「포함」 이
+  // 같은 관계의 두 얼굴이라는 것을 말로 보여 주는 자리다.
+  const related = useMemo(() => {
+    const groups = new Map<string, { label: string; outgoing: boolean; rows: RelatedObject[] }>()
+    for (const one of profile.data?.related ?? []) {
+      const key = `${one.outgoing ? 'out' : 'in'}:${one.label}`
+      if (!groups.has(key)) groups.set(key, { label: one.label, outgoing: one.outgoing, rows: [] })
+      groups.get(key)!.rows.push(one)
+    }
+    return [...groups.values()]
+  }, [profile.data])
+
+  return (
+    <div className="space-y-3 rounded-md border p-3">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2">
+            <span className="inline-block size-3 shrink-0 rounded-full" style={{ background: color }} />
+            <span className="truncate font-medium">{node.label}</span>
+          </div>
+          <p className="text-muted-foreground mt-0.5 text-xs">
+            {typeLabel}
+            {node.key ? ` · ${node.key}` : ''}
+          </p>
+        </div>
+        <Button size="icon-sm" variant="ghost" onClick={onClose} aria-label="닫기">
+          <X className="size-4" />
+        </Button>
+      </div>
+
+      <div className="flex flex-wrap gap-2">
+        <Button
+          size="sm"
+          variant={hidden > 0 ? 'default' : 'outline'}
+          disabled={loading || hidden === 0}
+          onClick={onExpand}
+        >
+          여기서 펼치기{hidden > 0 ? ` (+${hidden})` : ''}
+        </Button>
+        <Button size="sm" variant="outline" disabled={isFocus} onClick={onFocus}>
+          <Crosshair className="mr-1 size-3.5" />
+          여기를 중심으로
+        </Button>
+        <Button asChild size="sm" variant="outline">
+          <Link to={`/o/${node.type_slug}/${node.id}`}>
+            <ExternalLink className="mr-1 size-3.5" />
+            상세 보기
+          </Link>
+        </Button>
+      </div>
+
+      {profile.error && <ErrorNotice error={profile.error} />}
+      {profile.data?.object.description && (
+        <p className="text-muted-foreground line-clamp-3 text-xs">
+          {profile.data.object.description}
+        </p>
+      )}
+      {properties.length > 0 && (
+        <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs">
+          {properties.map((one) => (
+            <Fragment key={one.key}>
+              <dt className="text-muted-foreground whitespace-nowrap">{one.label}</dt>
+              <dd className="truncate" title={one.text}>
+                {one.text}
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+
+      <div className="space-y-1.5">
+        <p className="text-muted-foreground text-xs">
+          관계 {node.degree}개
+          {hidden > 0 && (
+            <>
+              {' '}
+              · <Badge variant="secondary">화면에 없는 것 {hidden}</Badge>
+            </>
+          )}
+        </p>
+        {related.map(({ label, outgoing, rows }) => (
+          <div key={`${outgoing}:${label}`}>
+            <p className="text-xs font-medium">
+              {label} <span className="text-muted-foreground font-normal">{rows.length}</span>
+              <span className="text-muted-foreground ml-1 text-[10px] font-normal">
+                {outgoing ? '(이 객체 → 대상)' : '(대상 → 이 객체)'}
+              </span>
+            </p>
+            <ul className="mt-0.5 space-y-0.5">
+              {rows.map((one) => {
+                const here = inGraph(one.object_id)
+                return (
+                  <li key={one.relation_id}>
+                    <button
+                      type="button"
+                      className="hover:bg-muted flex w-full items-baseline justify-between gap-2 rounded px-1.5 py-0.5 text-left text-xs disabled:cursor-default disabled:opacity-60"
+                      title={
+                        here
+                          ? one.evidence_note || '그림에서 고르기'
+                          : '그림에 없습니다 — 「여기서 펼치기」 로 불러옵니다'
+                      }
+                      disabled={!here}
+                      onClick={() => onSelect(one.object_id)}
+                    >
+                      <span className="truncate">{one.object_label}</span>
+                      <span className="text-muted-foreground shrink-0">
+                        {one.object_type_label}
+                        {!here && ' · 화면 밖'}
+                      </span>
+                    </button>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+// --- 부품 -----------------------------------------------------------------------
+
+interface SeedPanelProps {
+  seed: Seed | null
+  current: GraphNode | null
+  types: { slug: string; label: string; is_active: boolean; object_count: number }[]
+  typeLabel: Map<string, string>
+  onPick: (id: string) => void
+  onDrawTypes: (slugs: string[]) => void
+  onClear: () => void
+}
+
+/**
+ * 씨앗 고르기 — **세 길.**
+ *
+ *   치는 것    이름의 일부를 알 때(타입을 가리지 않는다)
+ *   훑는 것    무엇이 있는지 모를 때 — 타입을 고르고 쪽 단위로 본다
+ *   전부       고른 타입(들)을 통째로 — 「N개 중 M개」 를 적는다
+ *
+ * 검색만 있으면 뭘 쳐야 할지 모르는 사람이 막힌다. 그래서 훑는 길이 함께 선다.
+ * 타입 칩은 **여러 개** 고를 수 있다 — 훑기 목록은 마지막에 고른 타입을 보여 주고,
+ * 「전부 그리기」 는 고른 것 전부를 한 그림에 그린다.
+ */
+function SeedPanel({ seed, current, types, typeLabel, onPick, onDrawTypes, onClear }: SeedPanelProps) {
+  const [text, setText] = useState('')
+  const [hits, setHits] = useState<SearchHit[]>([])
+  const [searching, setSearching] = useState(false)
+  const [pickedTypes, setPickedTypes] = useState<string[]>([])
+  const browseType = pickedTypes[pickedTypes.length - 1] ?? ''
+  const [browseOffset, setBrowseOffset] = useState(0)
+  const [rows, setRows] = useState<{ items: ObjectRow[]; total: number } | null>(null)
+  const [browsing, setBrowsing] = useState(false)
+
+  useEffect(() => {
+    const needle = text.trim()
+    if (!needle) {
+      setHits([])
+      return
+    }
+    let cancelled = false
+    setSearching(true)
+    const timer = window.setTimeout(() => {
+      graphApi
+        .search(needle)
+        .then((found) => {
+          if (!cancelled) setHits(found)
+        })
+        .catch(() => {
+          if (!cancelled) setHits([])
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false)
+        })
+    }, 250)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [text])
+
+  // 훑기 — 타입의 목록 API 를 그대로 쓴다. 상한과 쪽은 그쪽 규칙이다.
+  useEffect(() => {
+    if (!browseType) {
+      setRows(null)
+      return
+    }
+    let cancelled = false
+    setBrowsing(true)
+    objectApi
+      .list(browseType, { limit: BROWSE_PAGE, offset: browseOffset })
+      .then((page) => {
+        if (!cancelled) setRows({ items: page.items, total: page.total })
+      })
+      .catch(() => {
+        if (!cancelled) setRows({ items: [], total: 0 })
+      })
+      .finally(() => {
+        if (!cancelled) setBrowsing(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [browseType, browseOffset])
+
+  const browsed = types.find((one) => one.slug === browseType) ?? null
+  const pickedRows = pickedTypes
+    .map((slug) => types.find((one) => one.slug === slug))
+    .filter((one): one is (typeof types)[number] => one !== undefined)
+  const pickedCount = pickedRows.reduce((sum, one) => sum + one.object_count, 0)
+  const seedType =
+    seed?.kind === 'type'
+      ? seed.slugs.map((slug) => typeLabel.get(slug) ?? slug).join(' · ')
+      : null
+
+  return (
+    <div className="space-y-3">
+      <span className="text-muted-foreground text-xs">시작점</span>
+      {(current || seedType) && (
+        <div className="flex items-center justify-between gap-2 rounded-md border px-2 py-1.5">
+          <span className="truncate">
+            {current ? (
+              <>
+                <span className="font-medium">{current.label}</span>
+                <span className="text-muted-foreground ml-1 text-xs">{current.type_label}</span>
+              </>
+            ) : (
+              <>
+                <span className="font-medium">{seedType}</span>
+                <span className="text-muted-foreground ml-1 text-xs">전부</span>
+              </>
+            )}
+          </span>
+          <Button size="icon-xs" variant="ghost" onClick={onClear} aria-label="시작점 지우기">
+            <X className="size-3.5" />
+          </Button>
+        </div>
+      )}
+
+      <div className="relative">
+        <Search className="text-muted-foreground absolute top-2 left-2 size-4" />
+        <Input
+          value={text}
+          onChange={(event) => setText(event.target.value)}
+          placeholder="이름·식별자로 찾기"
+          className="pl-8"
+        />
+        {searching && (
+          <Loader2 className="text-muted-foreground absolute top-2 right-2 size-4 animate-spin" />
+        )}
+      </div>
+      {text.trim() && !searching && hits.length === 0 && (
+        <p className="text-muted-foreground text-xs">맞는 것이 없습니다.</p>
+      )}
+      {hits.length > 0 && (
+        <ul className="max-h-56 space-y-0.5 overflow-y-auto rounded-md border p-1">
+          {hits.map((hit) => (
+            <li key={hit.id}>
+              <button
+                type="button"
+                className="hover:bg-muted flex w-full items-baseline justify-between gap-2 rounded px-2 py-1 text-left"
+                onClick={() => {
+                  onPick(hit.id)
+                  setText('')
+                  setHits([])
+                }}
+              >
+                <span className="truncate">{hit.label}</span>
+                <span className="text-muted-foreground shrink-0 text-xs">{hit.type_label}</span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      <div className="space-y-1.5">
+        <span className="text-muted-foreground text-xs">타입에서 훑기</span>
+        {/* 드롭다운이 아니라 칩이다 — **무엇이 있는지가 열기 전에 보여야** 훑기다. */}
+        <ul className="flex max-h-32 flex-wrap gap-1 overflow-y-auto">
+          {types
+            .filter((one) => one.is_active)
+            .map((one) => {
+              const on = pickedTypes.includes(one.slug)
+              return (
+                <li key={one.slug}>
+                  <button
+                    type="button"
+                    aria-pressed={on}
+                    className={`rounded-full border px-2 py-0.5 text-xs ${
+                      on ? 'bg-foreground text-background border-foreground' : 'hover:bg-muted'
+                    }`}
+                    onClick={() => {
+                      setPickedTypes(
+                        on
+                          ? pickedTypes.filter((slug) => slug !== one.slug)
+                          : [...pickedTypes, one.slug],
+                      )
+                      setBrowseOffset(0)
+                    }}
+                  >
+                    {one.label}{' '}
+                    <span className={on ? 'opacity-70' : 'text-muted-foreground'}>
+                      {one.object_count.toLocaleString()}
+                    </span>
+                  </button>
+                </li>
+              )
+            })}
+        </ul>
+        {pickedRows.length > 0 && (
+          <Button
+            size="sm"
+            variant="outline"
+            className="w-full"
+            disabled={pickedCount === 0}
+            onClick={() => onDrawTypes(pickedRows.map((one) => one.slug))}
+          >
+            <Crosshair className="mr-1 size-3.5" />
+            {pickedRows.length === 1
+              ? `${pickedRows[0].label} 전부 그리기`
+              : `고른 ${pickedRows.length}개 타입 전부 그리기`}{' '}
+            ({pickedCount.toLocaleString()})
+          </Button>
+        )}
+        {browsed && rows && (
+          <>
+            {pickedRows.length > 1 && (
+              <p className="text-muted-foreground text-xs">{browsed.label} 훑기</p>
+            )}
+            {rows.items.length === 0 ? (
+              <p className="text-muted-foreground text-xs">
+                {browsing ? '읽는 중…' : '보이는 객체가 없습니다.'}
+              </p>
+            ) : (
+              <ul className="max-h-64 space-y-0.5 overflow-y-auto rounded-md border p-1">
+                {rows.items.map((row) => (
+                  <li key={row.id}>
+                    <button
+                      type="button"
+                      className={`hover:bg-muted flex w-full items-baseline justify-between gap-2 rounded px-2 py-1 text-left ${
+                        current?.id === row.id ? 'bg-muted font-medium' : ''
+                      }`}
+                      onClick={() => onPick(row.id)}
+                    >
+                      <span className="truncate">{row.label}</span>
+                      {row.key && (
+                        <span className="text-muted-foreground shrink-0 font-mono text-xs">{row.key}</span>
+                      )}
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {rows.total > BROWSE_PAGE && (
+              <div className="text-muted-foreground flex items-center justify-between text-xs">
+                <span>
+                  {rows.total.toLocaleString()}개 중 {browseOffset + 1}–
+                  {Math.min(browseOffset + BROWSE_PAGE, rows.total).toLocaleString()}
+                </span>
+                <span className="flex gap-0.5">
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label="앞 쪽"
+                    disabled={browsing || browseOffset === 0}
+                    onClick={() => setBrowseOffset(Math.max(0, browseOffset - BROWSE_PAGE))}
+                  >
+                    <ChevronLeft className="size-3.5" />
+                  </Button>
+                  <Button
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label="다음 쪽"
+                    disabled={browsing || browseOffset + BROWSE_PAGE >= rows.total}
+                    onClick={() => setBrowseOffset(browseOffset + BROWSE_PAGE)}
+                  >
+                    <ChevronRight className="size-3.5" />
+                  </Button>
+                </span>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
+
+interface FilterListProps {
+  title: string
+  options: { slug: string; label: string }[]
+  picked: Set<string>
+  onToggle: (slug: string) => void
+  onClear: () => void
+  swatch?: (slug: string) => string
+}
+
+/** 거르기 — **아무것도 안 고르면 전부다.** 고른 것이 있으면 그것만. */
+function FilterList({ title, options, picked, onToggle, onClear, swatch }: FilterListProps) {
+  if (options.length === 0) return null
+  return (
+    <div className="space-y-1">
+      <div className="flex items-center justify-between">
+        <span className="text-muted-foreground text-xs">
+          {title}
+          {picked.size > 0 ? ` · ${picked.size}개만` : ' · 전부'}
+        </span>
+        {picked.size > 0 && (
+          <button type="button" className="text-muted-foreground text-xs underline" onClick={onClear}>
+            전부
+          </button>
+        )}
+      </div>
+      <ul className="max-h-44 space-y-0.5 overflow-y-auto">
+        {options.map((one) => (
+          <li key={one.slug}>
+            <label className="hover:bg-muted flex cursor-pointer items-center gap-2 rounded px-1 py-0.5">
+              <input
+                type="checkbox"
+                checked={picked.has(one.slug)}
+                onChange={() => onToggle(one.slug)}
+                className="size-3.5"
+              />
+              {swatch && (
+                <span
+                  className="inline-block size-2.5 shrink-0 rounded-full"
+                  style={{ background: swatch(one.slug) }}
+                />
+              )}
+              <span className="truncate">{one.label}</span>
+            </label>
+          </li>
+        ))}
+      </ul>
+    </div>
+  )
+}

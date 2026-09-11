@@ -18,10 +18,16 @@
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 from typing import Literal
 
-from sqlalchemy import text
-from sqlalchemy.orm import Session
+from sqlalchemy import case, func, or_, select, text
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy.sql import ColumnElement
+
+from app.modules.accounts.models import User
+from app.modules.objects.models import ObjectInstance, ObjectRelation
+from app.shared.permissions import visible_owner_clause
 
 ParentEnd = Literal["src", "dst"]
 
@@ -184,3 +190,184 @@ def parentless_ids(
         {"type_id": str(type_id), "rel": relation},
     )
     return [row.id for row in rows]
+
+
+# --- 이웃 — 그래프 화면이 쓴다 ---------------------------------------------
+#
+# 위의 트리 함수들은 **관계 하나**를 따라가고, 아래는 **모든 관계**를 양방향으로
+# 본다. 그래서 위와 달리 한 단계에 **두 종류의 상한**이 든다:
+#
+#     fanout   노드 하나가 데려오는 이웃 수. 없으면 허브 하나(「본사」 같은
+#              것)가 이웃 5천 개를 끌고 와서 화면이 검은 덩어리가 된다
+#     node cap 한 번에 돌려주는 노드 수 — 호출하는 쪽이 건다
+#
+# 잘린 것은 **잘렸다고 말한다**(`degree_counts` 로 원래 몇이었는지 함께 준다).
+# 말 안 하면 그 그림은 「이게 전부」 로 읽히고, 그것은 틀린 그림이다.
+
+
+@dataclass(frozen=True)
+class Edge:
+    id: uuid.UUID
+    relation: str
+    src: uuid.UUID
+    dst: uuid.UUID
+
+
+def _ends_of(
+    ids: list[uuid.UUID],
+) -> tuple[ColumnElement[uuid.UUID], ColumnElement[uuid.UUID]]:
+    """(내 쪽 끝, 저쪽 끝). 양쪽 다 ids 에 있으면 src 를 내 쪽으로 친다."""
+    rel = ObjectRelation
+    anchor = case((rel.src_object_id.in_(ids), rel.src_object_id), else_=rel.dst_object_id)
+    other = case((rel.src_object_id.in_(ids), rel.dst_object_id), else_=rel.src_object_id)
+    return anchor, other
+
+
+def neighbor_edges(
+    db: Session,
+    *,
+    frontier: list[uuid.UUID],
+    user: User,
+    fanout: int,
+    relations: list[str] | None = None,
+    type_ids: list[uuid.UUID] | None = None,
+) -> list[Edge]:
+    """frontier 의 각 노드에서 **fanout 개까지**의 이웃 관계.
+
+    저쪽 끝이 지워졌거나 안 보이는 관계는 아예 안 센다 — 보이지 않는 이웃 때문에
+    보이는 이웃이 fanout 에서 밀려나면 그 이유를 아무도 설명할 수 없다.
+    """
+    if not frontier:
+        return []
+    rel, obj = ObjectRelation, ObjectInstance
+    anchor, other = _ends_of(frontier)
+    conditions = [
+        or_(rel.src_object_id.in_(frontier), rel.dst_object_id.in_(frontier)),
+        obj.deleted_at.is_(None),
+        visible_owner_clause(user, obj.owner_workspace_id),
+    ]
+    if relations:
+        conditions.append(rel.relation.in_(relations))
+    if type_ids:
+        conditions.append(obj.type_id.in_(type_ids))
+    ranked = (
+        select(
+            rel.id,
+            rel.relation,
+            rel.src_object_id,
+            rel.dst_object_id,
+            func.row_number().over(partition_by=anchor, order_by=rel.created_at).label("rn"),
+        )
+        .select_from(rel)
+        .join(obj, obj.id == other)
+        .where(*conditions)
+        .subquery()
+    )
+    rows = db.execute(select(ranked).where(ranked.c.rn <= fanout))
+    return [
+        Edge(id=r.id, relation=r.relation, src=r.src_object_id, dst=r.dst_object_id)
+        for r in rows
+    ]
+
+
+def induced_edges(
+    db: Session, *, ids: list[uuid.UUID], limit: int, relations: list[str] | None = None
+) -> list[Edge]:
+    """양 끝이 모두 ids 안인 관계 — **이미 화면에 있는 노드끼리의 선.**
+
+    fanout 에 밀려 안 따라간 관계도 양 끝이 다 보이면 그려야 한다. 안 그리면
+    화면에 나란히 선 둘이 「관계없음」 으로 읽힌다.
+    """
+    if not ids:
+        return []
+    rel = ObjectRelation
+    conditions = [rel.src_object_id.in_(ids), rel.dst_object_id.in_(ids)]
+    if relations:
+        conditions.append(rel.relation.in_(relations))
+    rows = db.execute(
+        select(rel.id, rel.relation, rel.src_object_id, rel.dst_object_id)
+        .where(*conditions)
+        .order_by(rel.created_at)
+        .limit(limit)
+    )
+    return [
+        Edge(id=r.id, relation=r.relation, src=r.src_object_id, dst=r.dst_object_id)
+        for r in rows
+    ]
+
+
+def degree_counts(db: Session, *, ids: list[uuid.UUID], user: User) -> dict[uuid.UUID, int]:
+    """각 노드에 걸린 **보이는** 관계의 수. 화면이 「+N 더」 를 적는 근거다."""
+    if not ids:
+        return {}
+    rel, obj = ObjectRelation, ObjectInstance
+    counts: dict[uuid.UUID, int] = {}
+    # 내가 출발점인 것과 도착점인 것을 따로 센다 — 한 질의로 합치면 양 끝이 다
+    # ids 인 관계가 한쪽에만 잡힌다.
+    for mine, other in (
+        (rel.src_object_id, rel.dst_object_id),
+        (rel.dst_object_id, rel.src_object_id),
+    ):
+        rows = db.execute(
+            select(mine, func.count())
+            .select_from(rel)
+            .join(obj, obj.id == other)
+            .where(
+                mine.in_(ids),
+                obj.deleted_at.is_(None),
+                visible_owner_clause(user, obj.owner_workspace_id),
+            )
+            .group_by(mine)
+        )
+        for node_id, n in rows:
+            counts[node_id] = counts.get(node_id, 0) + int(n)
+    return counts
+
+
+@dataclass(frozen=True)
+class TypeEdge:
+    relation: str
+    src_type_id: uuid.UUID
+    dst_type_id: uuid.UUID
+    count: int
+
+
+def type_edge_counts(db: Session, *, user: User) -> list[TypeEdge]:
+    """타입 사이에 실제로 몇 개의 관계가 걸려 있나 — **정의 그래프의 선 굵기.**
+
+    객체가 백만 개여도 답은 (관계 종류 x 타입 쌍) 줄이다. 그래서 이것이 그래프
+    화면의 첫 그림이다 — 객체를 하나도 안 그리고 전체 모양을 보여 준다.
+    """
+    rel = ObjectRelation
+    src = aliased(ObjectInstance)
+    dst = aliased(ObjectInstance)
+    # 보이는 규칙을 **양 끝에 따로** 건다. 한쪽만 걸면 남의 부서 객체가 「선의
+    # 저쪽 끝」 으로 세어져, 보이지 않는 것의 수가 굵기로 새어 나온다.
+    rows = db.execute(
+        select(rel.relation, src.type_id, dst.type_id, func.count())
+        .select_from(rel)
+        .join(src, src.id == rel.src_object_id)
+        .join(dst, dst.id == rel.dst_object_id)
+        .where(
+            src.deleted_at.is_(None),
+            dst.deleted_at.is_(None),
+            visible_owner_clause(user, src.owner_workspace_id),
+            visible_owner_clause(user, dst.owner_workspace_id),
+        )
+        .group_by(rel.relation, src.type_id, dst.type_id)
+    )
+    return [
+        TypeEdge(relation=r[0], src_type_id=r[1], dst_type_id=r[2], count=int(r[3]))
+        for r in rows
+    ]
+
+
+def object_counts_by_type(db: Session, *, user: User) -> dict[uuid.UUID, int]:
+    """타입마다 보이는 객체가 몇 개인가 — 정의 그래프의 노드 크기."""
+    obj = ObjectInstance
+    rows = db.execute(
+        select(obj.type_id, func.count())
+        .where(obj.deleted_at.is_(None), visible_owner_clause(user, obj.owner_workspace_id))
+        .group_by(obj.type_id)
+    )
+    return {type_id: int(n) for type_id, n in rows}

@@ -23,6 +23,7 @@ import {
   Server,
   UserCog,
   Users,
+  Waypoints,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
@@ -111,10 +112,15 @@ export const NAV_GROUPS: NavGroup[] = [
     ],
   },
   {
-    // 한 항목뿐이지만 제목을 단다 — 도메인이 「기준정보」 같은 것을 여기 더하게
-    // 되어 있고, 그때 이름을 다시 정하지 않아도 되도록.
+    // 도메인이 「기준정보」 같은 것을 여기 더하게 되어 있고, 그때 이름을 다시
+    // 정하지 않아도 되도록 제목을 단다.
     title: '공통',
-    items: [{ label: '공지', icon: Megaphone, to: '/notices' }],
+    items: [
+      // **정의가 있는 설치라면 어디서나 있어야 하는 화면이다.** 타입이 늘수록
+      // 「이게 저것과 어떻게 이어지지」 를 물을 자리가 목록만으로는 안 생긴다.
+      { label: '지식 그래프', icon: Waypoints, to: '/graph' },
+      { label: '공지', icon: Megaphone, to: '/notices' },
+    ],
   },
   {
     // **사슬이 아닌 둘.** 부서 사람과 그 부서에서 무엇이 바뀌었나.

@@ -28,6 +28,7 @@ from app.modules.audit import routes as audit_routes
 from app.modules.auth import routes as auth_routes
 from app.modules.files import routes as files_routes
 from app.modules.files import services as files_services
+from app.modules.graph import routes as graph_routes
 from app.modules.notices import routes as notices_routes
 from app.modules.notifications import routes as notifications_routes
 from app.modules.objects import routes as objects_routes
@@ -67,6 +68,7 @@ def _api_router() -> APIRouter:
     # 도메인은 여전히 이 저장소에 없고, 여기 정의로 얹힌다.
     router.include_router(ontology_routes.router)
     router.include_router(objects_routes.router)
+    router.include_router(graph_routes.router)
     router.include_router(server_routes.router)
 
     # --- 여기에 도메인 라우터를 더한다 -----------------------------------

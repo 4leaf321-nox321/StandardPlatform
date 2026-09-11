@@ -28,6 +28,7 @@ import { DEFAULT_WORKSPACE, pendingItems } from '@/shared/layout/navigation'
  */
 const AccountsAdminPage = lazy(() => import('@/modules/accounts/AccountsAdminPage'))
 const AuditPage = lazy(() => import('@/modules/audit/AuditPage'))
+const GraphPage = lazy(() => import('@/modules/graph/GraphPage'))
 const MembersPage = lazy(() => import('@/modules/workspaces/MembersPage'))
 const NoticesPage = lazy(() => import('@/modules/notices/NoticesPage'))
 const ObjectListPage = lazy(() => import('@/modules/objects/ObjectListPage'))
@@ -94,6 +95,8 @@ export const router = createBrowserRouter([
           { path: 'me', element: <ProfilePage /> },
 
           // 공통
+          // **정의를 그림으로.** 타입이 늘어도 경로는 하나다 — 구조와 탐색이 한 화면이다.
+          { path: 'graph', element: <GraphPage /> },
           { path: 'notices', element: <NoticesPage /> },
           { path: 'audit', element: <AuditPage /> },
 
