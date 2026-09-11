@@ -235,10 +235,12 @@ health_check() {
 
 # ───────────────────────── 명령 ─────────────────────────
 cmd_prepare() {
-    info "OS 패키지 설치 (apptainer, postgresql)"
+    info "OS 패키지 설치 (apptainer, postgresql, python3-venv)"
+    # python3-venv: MCP 서버가 별도 venv 로 돈다. 없으면 install 때 MCP 만 조용히
+    # 건너뛰어지고, 그 사실은 Claude 를 붙이는 날에야 드러난다.
     apt-get update
     apt-get install -y --no-install-recommends \
-        apptainer postgresql postgresql-contrib ca-certificates curl python3
+        apptainer postgresql postgresql-contrib ca-certificates curl python3 python3-venv
 
     info "postgresql 기동"
     systemctl enable postgresql
