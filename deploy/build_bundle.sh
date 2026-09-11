@@ -5,7 +5,8 @@
 #   ./deploy/build_bundle.sh v0.1.0     직접 지정
 #
 # 산출물: release/<slug>-<버전>.tar.gz
-#   app.sif · deploy.sh · app.service.template · .env.example · BUILD_INFO · README.md
+#   app.sif · deploy.sh · app.service.template · mcp.service.template · .env.example
+#   · BUILD_INFO · README.md · mcp_server/ (서버 + 오프라인 설치용 휠)
 #
 # **배포 스크립트를 번들에 함께 담는다.** 서버가 릴리스만 받는 환경이어도 tar 하나로
 # 그다음 배포가 돌아야 한다 — 빠뜨리면 첫 배포에 저장소를 클론하는 수밖에 없고,
@@ -61,7 +62,11 @@ RELEASE_NAME="${APP_SLUG}-${VERSION}"
 OUT_DIR="release"
 STAGE="${OUT_DIR}/${RELEASE_NAME}"
 
-echo "==> $APP_NAME ($APP_SLUG) · 포트 $APP_PORT · 버전 $VERSION"
+# MCP 서버 포트 — **앱 포트 +2.** 플랫폼마다 10씩 벌리는 규칙 안에서 운영(+0)·개발(+1)
+# 다음 자리다. 따로 적으면 옆 플랫폼과 겹치는지 볼 자리가 하나 더 생긴다.
+MCP_PORT=$((APP_PORT + 2))
+
+echo "==> $APP_NAME ($APP_SLUG) · 포트 $APP_PORT (MCP $MCP_PORT) · 버전 $VERSION"
 
 # ── 1. 프론트엔드 ─────────────────────────────────────────────────────────────
 # **이게 없으면 배포된 앱이 모든 페이지에 API 의 JSON 404 를 돌려준다** —
@@ -112,9 +117,32 @@ cp deploy/deploy.sh                  "$STAGE/"
 cp deploy/backup.sh                  "$STAGE/"
 cp deploy/restore.sh                 "$STAGE/"
 cp deploy/app.service.template       "$STAGE/"
+cp deploy/mcp.service.template       "$STAGE/"
 cp deploy/.env.production.example    "$STAGE/.env.example"
 cp deploy/README_OPERATOR.md         "$STAGE/README.md"
 chmod +x "$STAGE"/*.sh
+
+# ── 3b. MCP 서버 (별도 venv 로 운영 서버에서 돌아감) ──────────────────────────
+# 백엔드 SIF 와 의존성이 충돌해 컨테이너에 못 넣는다. 소스 + 오프라인 설치용 휠을
+# 동봉 → deploy.sh 가 운영 호스트에서 venv 만들고 `pip install --no-index` 로 설치.
+echo "==> [3b/4] MCP 서버 + 오프라인 휠 동봉"
+mkdir -p "$STAGE/mcp_server"
+cp mcp_server/server.py        "$STAGE/mcp_server/"
+cp mcp_server/requirements.txt "$STAGE/mcp_server/"
+[[ -f mcp_server/README.md ]] && cp mcp_server/README.md "$STAGE/mcp_server/" || true
+# 스킬 스텁(사용자가 ~/.claude/skills 로 설치) — 번들에 동봉
+[[ -d mcp_server/skill ]] && cp -r mcp_server/skill "$STAGE/mcp_server/skill" || true
+# 사용 가이드(get_guide 가 읽는 본문) — **서버가 쥔다.** 빠지면 get_guide 가
+# 빈 응답을 주고 AI 는 도구 설명만으로 헤맨다.
+[[ -d mcp_server/guide ]] && cp -r mcp_server/guide "$STAGE/mcp_server/guide" || true
+# 빌드 머신(인터넷 O)에서 휠을 받아 둔다. 운영 호스트가 폐쇄망이어도 설치되게.
+# 빌드/운영 아키텍처가 같다고 가정(둘 다 linux x86_64). 다르면 --platform 지정 필요.
+if python3 -m pip download --only-binary=:all: \
+        -r mcp_server/requirements.txt -d "$STAGE/mcp_server/wheels" >/dev/null 2>&1; then
+    echo "    휠 $(ls "$STAGE/mcp_server/wheels" | wc -l)개 동봉"
+else
+    echo "    ⚠ pip download 실패 — 휠 미동봉. 운영 호스트에 인터넷/사내 PyPI 있어야 MCP 설치됨."
+fi
 
 # **번들이 자기가 무슨 플랫폼인지 말한다.** deploy.sh 가 여기서 DB 이름·포트·
 # 유닛 이름을 읽으므로, 배포 스크립트에는 제품 이름이 박혀 있지 않다.
@@ -122,6 +150,7 @@ cat > "$STAGE/BUILD_INFO" <<INFO
 app_name=$APP_NAME
 app_slug=$APP_SLUG
 port=$APP_PORT
+mcp_port=$MCP_PORT
 version=$VERSION
 python=3.12
 built_at=$(date -Is)

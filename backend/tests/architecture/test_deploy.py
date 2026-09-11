@@ -60,6 +60,12 @@ def test_배포_스크립트가_번들에_함께_담긴다() -> None:
         "restore.sh",
         "app.service.template",
         ".env.production.example",
+        # MCP 서버는 SIF 에 못 들어간다(의존성 충돌). 소스와 유닛 템플릿, 그리고
+        # get_guide 가 읽는 guide/ 가 번들에 있어야 운영 호스트에서 설 수 있다.
+        "mcp.service.template",
+        "mcp_server/server.py",
+        "mcp_server/requirements.txt",
+        "mcp_server/guide",
     ):
         assert name in text, f"{name} 이 번들에 안 담깁니다 (build_bundle.sh)"
 
@@ -80,7 +86,15 @@ def test_번들이_약속한_파일이_실제로_담긴다() -> None:
     built = builder.read_text(encoding="utf-8")
     promised = readme.read_text(encoding="utf-8").split("---", 1)[0]
 
-    for name in ("deploy.sh", "backup.sh", "restore.sh", "app.sif", "BUILD_INFO"):
+    for name in (
+        "deploy.sh",
+        "backup.sh",
+        "restore.sh",
+        "app.sif",
+        "BUILD_INFO",
+        "mcp.service.template",
+        "mcp_server",
+    ):
         if name in promised:
             assert name in built or name == "app.sif", (
                 f"README 는 번들에 {name} 이 있다고 적는데 build_bundle.sh 는 안 담습니다"
@@ -153,12 +167,32 @@ def test_번들이_자기가_무슨_플랫폼인지_말한다() -> None:
         return
 
     written = builder.read_text(encoding="utf-8")
-    for key in ("app_name=", "app_slug=", "port=", "version="):
+    for key in ("app_name=", "app_slug=", "port=", "mcp_port=", "version="):
         assert key in written, f"build_bundle.sh 가 BUILD_INFO 에 {key} 를 안 씁니다"
 
     read = installer.read_text(encoding="utf-8")
-    for key in ("app_name", "app_slug", "port"):
+    for key in ("app_name", "app_slug", "port", "mcp_port"):
         assert f"bundle {key}" in read, f"deploy.sh 가 {key} 를 안 읽습니다"
+
+
+def test_MCP_유닛이_서버를_venv_로_띄운다() -> None:
+    """MCP 서버는 **한 파일**이고 `venv/bin/python server.py` 로 그 자리에서 뜬다.
+
+    `-m` 으로 패키지처럼 부르면 저장소 루트가 필요한데, 설치 폴더에는 그것이
+    없다 — `ModuleNotFoundError` 가 나고, 그 오류는 무엇이 빠졌는지 말해 주지
+    않는다. 유닛 템플릿과 deploy.sh 가 같은 자리를 가리키는지 여기서 본다.
+    """
+    unit = DEPLOY / "mcp.service.template"
+    installer = DEPLOY / "deploy.sh"
+    if not unit.exists() or not installer.exists():  # pragma: no cover
+        return
+    text = unit.read_text(encoding="utf-8")
+    assert "mcp_server/venv/bin/python" in text and "mcp_server/server.py" in text
+    assert "-m mcp_server" not in text
+    for key in ("PLATFORM_API_BASE", "MCP_HOST", "MCP_PORT", "MCP_ALLOWED_HOSTS"):
+        assert f"Environment={key}=" in text, f"유닛 템플릿에 {key} 가 없습니다"
+    read = installer.read_text(encoding="utf-8")
+    assert "mcp.service.template" in read and "setup_mcp" in read
 
 
 def test_배포_자산에_플랫폼_이름을_박지_않는다() -> None:

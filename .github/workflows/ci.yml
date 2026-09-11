@@ -93,13 +93,14 @@ jobs:
           createdb -h localhost -U postgres '${{ steps.platform.outputs.slug }}_test'
           python -m pytest
 
-      # **MCP 어댑터는 환경을 갈라 본다.**
+      # **MCP 서버는 환경을 갈라 본다.**
       #
-      # `mcp` 는 `httpx2` 를 끌어오고, 그것이 깔리면 `starlette.testclient` 가
-      # HTTP 스택을 바꾼다 — 백엔드 개발 환경에 섞으면 그쪽 시험의 타입이
-      # 흔들린다(실측). 그렇다고 안 보면 **`mcp` 가 API 를 바꾸는 날 붙여 보기
-      # 전까지 아무도 모른다**(2.x 에서 FastMCP -> MCPServer 로 바뀌었다).
-      - name: MCP 어댑터 (갈라진 환경)
+      # `mcp` 를 백엔드 개발 환경에 깔면 `starlette.testclient` 가 쓰는 HTTP
+      # 스택이 바뀌어 그쪽 시험의 타입이 흔들린다(실측). 그렇다고 안 보면 **`mcp`
+      # 가 API 를 바꾸는 날 붙여 보기 전까지 아무도 모른다**(2.x 에서 FastMCP ->
+      # MCPServer 로 바뀌었다 — 그래서 1.x 로 고정돼 있다). 진짜 앱에 붙여 보는
+      # 쪽은 위의 백엔드 pytest 가 가짜 mcp 로 이미 했다.
+      - name: MCP 서버 (갈라진 환경)
         run: |
           python -m venv /tmp/mcpvenv
           /tmp/mcpvenv/bin/pip install --quiet -r mcp_server/requirements.txt pytest

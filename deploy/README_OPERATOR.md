@@ -31,7 +31,8 @@ tar xzf <slug>-<태그>.tar.gz
 cd <slug>-<태그>
 ls
 #  app.sif  deploy.sh  backup.sh  restore.sh
-#  app.service.template  .env.example  BUILD_INFO  README.md
+#  app.service.template  mcp.service.template  .env.example  BUILD_INFO  README.md
+#  mcp_server/   (Claude 연동 MCP 서버 + 오프라인 설치용 휠)
 ```
 
 > `/home` 에서 실행이 막히는 서버가 있다(noexec 마운트). 그때는 `/tmp` 에 풀어
@@ -91,6 +92,8 @@ sudo ./deploy.sh install
 4. 마이그레이션 → 설치 시드
 5. systemd 유닛 렌더 → `enable` → `start`
 6. `/api/health` 확인
+7. MCP 서버 설치(별도 venv + `<slug>-mcp` 유닛) — 아래 「MCP 서버」. 실패해도
+   백엔드 배포는 그대로다
 
 > 관리자 **임시 비밀번호가 화면에 한 번만** 찍힌다. 받아 적어 전달한다.
 > 첫 로그인에서 변경이 강제된다.
@@ -177,6 +180,35 @@ DB 를 지우고 다시 만들며 첨부도 지운다. `.env`·DB 역할·system
 
 ---
 
+## 5b. MCP 서버 (Claude 연동, 선택)
+
+`deploy.sh install`/`update` 가 **MCP 서버까지 자동 설치**한다 — 별도 venv 생성 + (번들에
+동봉된 휠로) **오프라인 pip 설치** + `<slug>-mcp` systemd 서비스 기동까지. 사용자는
+Claude Code 에서 온톨로지를 읽고 채울 수 있다.
+
+- **상태**: `sudo systemctl status <slug>-mcp` / 로그 `journalctl -u <slug>-mcp -f`
+  (`sudo ./deploy.sh status` 도 함께 보여 준다)
+- **끄기**: `MCP_ENABLED=0 sudo ./deploy.sh update` (유닛은 별도 `systemctl disable --now <slug>-mcp`)
+- **포트**: `BUILD_INFO` 의 `mcp_port` — **앱 포트 +2** (운영 +0 · 개발 +1 다음 자리).
+  바꾸려면 `MCP_PORT=<포트> sudo ./deploy.sh update`.
+- **외부 노출**: 기본 `127.0.0.1` (로컬만). 사내망에 열려면 **한 번만**
+  `MCP_HOST=0.0.0.0 sudo ./deploy.sh update` — 이후 `./deploy.sh update` 는 설치된 유닛에서
+  값을 읽어 **자동으로 유지**하므로 매번 다시 붙일 필요 없다(되돌릴 땐 그때만 `MCP_HOST=127.0.0.1 …`).
+  외부망이면 nginx 리버스프록시(TLS) 권장. 백엔드가 다른 주소면 `MCP_API_BASE=http://127.0.0.1:<포트>`.
+- **Host 보호**: 비-localhost 로 열면 server.py 가 DNS rebinding 보호를 자동으로 끈다(사내망 가정).
+  더 단단히 하려면 `MCP_ALLOWED_HOSTS="<서버호스트>:<mcp포트>,<서버IP>:<mcp포트>"` (또는 nginx 도메인) 지정 —
+  이 값도 유닛에 저장돼 자동 유지된다. (지정한 Host 만 허용, 나머지는 421 차단)
+- **사용자 등록(각자)** — 토큰은 화면의 「내 정보」 에서 발급:
+  ```bash
+  claude mcp add --transport http <slug> http://<서버>:<mcp포트>/mcp \
+    --header "Authorization: Bearer <내 토큰>"
+  ```
+  → 인증은 **사용자별 토큰**이 그대로 백엔드로 전달돼 그 토큰의 범위로 동작한다.
+- **오프라인 휠이 없던 빌드**라면 MCP 만 설치가 건너뛰어진다(백엔드는 정상). 그땐 호스트에서
+  `cd <INSTALL_DIR>/mcp_server && ./venv/bin/pip install -r requirements.txt` 후 서비스 재기동.
+
+---
+
 ## 6. 한 서버에 여러 플랫폼
 
 이 틀에서 나온 플랫폼들은 **slug 하나로 전부 갈린다**:
@@ -185,8 +217,8 @@ DB 를 지우고 다시 만들며 첨부도 지운다. `.env`·DB 역할·system
 | --- | --- |
 | 설치 경로 | `~/apps/<slug>` |
 | 데이터베이스 · 역할 | `<slug>` |
-| systemd 유닛 | `<slug>.service` |
-| 포트 | `BUILD_INFO` 의 `port` (플랫폼마다 10씩 벌린다) |
+| systemd 유닛 | `<slug>.service` · `<slug>-mcp.service` |
+| 포트 | `BUILD_INFO` 의 `port` (플랫폼마다 10씩 벌린다) · MCP 는 `mcp_port` (+2) |
 
 **slug 가 겹치면 서로를 덮어쓴다.** 유닛 이름이 같으면 나중 배포가 앞의 것을
 그대로 지우고, 그 사실은 아무 데도 안 적힌다.
@@ -212,6 +244,8 @@ DB 를 지우고 다시 만들며 첨부도 지운다. `.env`·DB 역할·system
 | **`bad interpreter: /usr/bin/env bash^M`** | 스크립트가 Windows 를 거치며 CRLF 가 됐다. 번들에서 푼 것을 그대로 쓴다(리눅스에서 만들어진다). 이미 섞였으면 `sed -i 's/\r$//' *.sh` |
 | `운영 계정을 알 수 없습니다` | `root` 로 바로 ssh 했다. `OPERATOR=<계정> ./deploy.sh install` |
 | `reset` 이 입력을 못 받고 끝난다 | TTY 가 없다. `ssh -t <계정>@<서버>` 로 붙는다 |
+| MCP 가 `python3 -m venv 실패` | `sudo apt install python3-venv` 후 `sudo ./deploy.sh update` |
+| Claude 에서 MCP 가 421 `Invalid Host header` | 비-localhost 로 열었는데 `MCP_ALLOWED_HOSTS` 가 안 맞는다. 5b 참고 |
 
 ### `.env` 를 고친 뒤에는
 

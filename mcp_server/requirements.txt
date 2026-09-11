@@ -1,6 +1,6 @@
-# MCP 서버는 **플랫폼과 따로 돈다** — 사람의 PC(Claude Desktop·Claude Code)에서
-# 뜨고 REST 로 서버에 붙는다. 그래서 백엔드 requirements 와 섞지 않는다:
-# 섞으면 배포 이미지에 안 쓰는 것이 들어가고, 이미지는 커지는데 얻는 것이 없다.
-# 2.x 에서 FastMCP 가 MCPServer 로 바뀌었다 — 1.x 로는 안 돈다.
-mcp>=2.0
-httpx>=0.27
+# MCP 서버는 **플랫폼과 따로 돈다** — 별도 venv·별도 프로세스로 뜨고 REST 로
+# 백엔드에 붙는다. 그래서 백엔드 requirements 와 섞지 않는다: 섞으면 배포 이미지에
+# 안 쓰는 것이 들어가고, `mcp` 가 끌어오는 것들이 백엔드 시험의 HTTP 스택을 바꾼다.
+# 1.x 의 FastMCP(streamable-http)를 쓴다 — 2.x 는 API 가 다르다(MCPServer).
+mcp>=1.27.0,<2
+httpx>=0.27.0

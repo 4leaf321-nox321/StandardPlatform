@@ -1,52 +1,139 @@
 """어댑터가 서는가 — **`mcp` 가 API 를 바꾸면 여기서 걸린다.**
 
-이 시험만 따로 도는 이유: `mcp` 는 `httpx2` 를 끌어오고, 그것이 깔리면
-`starlette.testclient` 가 **HTTP 스택을 바꾼다.** 백엔드 개발 환경에 섞으면
-그쪽 시험의 타입이 흔들린다 — 실측으로 겪었다. 그래서 **환경을 가른다.**
+이 시험만 따로 도는 이유: `mcp` 를 백엔드 개발 환경에 깔면 `starlette.testclient`
+가 쓰는 HTTP 스택이 바뀌어 그쪽 시험의 타입이 흔들린다 — 실측으로 겪었다. 그래서
+**환경을 가른다.**
 
-    python -m venv mcp_server/.venv
-    mcp_server/.venv/bin/pip install -r mcp_server/requirements.txt pytest
-    mcp_server/.venv/bin/python -m pytest mcp_server/tests
+    cd mcp_server && python3 -m venv venv && ./venv/bin/pip install -r requirements.txt pytest
+    cd .. && mcp_server/venv/bin/python -m pytest mcp_server/tests
 
-알맹이(`tools.py`)의 시험은 백엔드 쪽에 있다 — 진짜 앱에 붙여야 확인이 되기 때문이다.
+진짜 앱에 붙여 보는 시험은 백엔드 쪽에 있다(`backend/tests/api/test_mcp_tools.py`).
+여기서는 **헤더가 그대로 건너가는가, 오류 봉투가 서버의 말을 잃지 않는가, 가이드가
+읽히는가**만 본다 — 백엔드 없이 확인할 수 있는 전부다.
 """
 
 from __future__ import annotations
 
 import asyncio
-import os
+import json
+from types import SimpleNamespace
+from typing import Any
 
-from mcp_server import server, tools
+import httpx
+
+import server
+
+TOOLS = {
+    "get_guide",
+    "ontology_schema",
+    "ontology_import",
+    "objects_list",
+    "object_get",
+    "object_create",
+    "object_update",
+    "relation_add",
+    "objects_import",
+    "relations_import",
+}
+
+
+def _ctx(authorization: str | None) -> Any:
+    """들어온 MCP HTTP 요청 흉내 — `_forward_headers` 가 보는 것은 헤더뿐이다."""
+    headers = {"authorization": authorization} if authorization else {}
+    request = SimpleNamespace(headers=headers)
+    return SimpleNamespace(request_context=SimpleNamespace(request=request))
+
+
+def _serve(handler: Any) -> list[httpx.Request]:
+    """가짜 백엔드. 받은 요청을 모아 두고 handler 의 응답을 돌려준다."""
+    seen: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return handler(request)
+
+    server._TRANSPORT = httpx.MockTransport(respond)
+    return seen
 
 
 def test_도구가_그대로_선다() -> None:
-    """**설명은 `tools.py` 의 docstring 이 정본이다.**
-
-    어댑터에 다시 적으면 두 벌이 되고, 모델이 읽는 것은 그쪽이라 **실제 동작과
-    다른 설명을 읽게 된다.**
-    """
-    os.environ.setdefault("PLATFORM_TOKEN", "여기서는 안 부른다")
+    """도구 이름은 README·가이드·스킬이 함께 부르는 이름이다 — 하나 빠지면 안내가
+    없는 도구를 가리킨다."""
     listed = asyncio.run(server.mcp.list_tools())
-    assert {one.name for one in listed} == set(tools.TOOLS)
-
-    by_name = {one.name: one for one in listed}
-    for name, function in tools.TOOLS.items():
-        described = by_name[name].description or ""
-        assert described.strip(), f"{name} 에 설명이 없습니다"
-        assert described.splitlines()[0] in (function.__doc__ or "")
-
-        # **`platform` 은 인자가 아니다.** 노출되면 모델이 그것을 채우려 든다.
-        assert "platform" not in (by_name[name].input_schema.get("properties") or {})
+    assert {one.name for one in listed} == TOOLS
 
 
-def test_꼭_있어야_하는_인자가_필수로_선다() -> None:
-    os.environ.setdefault("PLATFORM_TOKEN", "여기서는 안 부른다")
-    listed = {one.name: one for one in asyncio.run(server.mcp.list_tools())}
-    assert set(listed["relation_add"].input_schema["required"]) == {
-        "type_slug",
-        "object_id",
-        "relation",
-        "dst_object_id",
+def test_토큰을_그대로_건넨다() -> None:
+    """**만능 토큰이 없다.** 들어온 Authorization 을 그대로 백엔드에 넘기므로 같은
+    서버를 여러 사람이 각자 권한으로 쓴다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"types": []}))
+    got = asyncio.run(server.ontology_schema(_ctx("Bearer abc")))
+    assert got == {"types": []}
+    assert seen[0].headers["authorization"] == "Bearer abc"
+    assert seen[0].url.path == "/api/ontology/schema"
+
+    seen = _serve(
+        lambda _r: httpx.Response(401, json={"error": {"code": "X", "message": "m"}})
+    )
+    asyncio.run(server.ontology_schema(_ctx(None)))
+    assert "authorization" not in seen[0].headers
+
+
+def test_서버의_말을_그대로_전한다() -> None:
+    """오류 문구에 무엇을 고쳐야 하는지가 적혀 있다 — 여기서 고쳐 쓰면 그것을 잃는다."""
+    _serve(
+        lambda _r: httpx.Response(
+            422,
+            json={
+                "error": {
+                    "code": "APP-OBJ-0007",
+                    "message": "출력은 500 kW 이하여야 합니다: 9000",
+                    "details": {"key": "power"},
+                }
+            },
+        )
+    )
+    got = asyncio.run(
+        server.object_create(
+            _ctx("Bearer t"), "mach", label="터빈", properties={"power": 9000}
+        )
+    )
+    assert got == {
+        "error": "[APP-OBJ-0007] 출력은 500 kW 이하여야 합니다: 9000",
+        "details": {"key": "power"},
     }
-    # 스키마 읽기는 인자가 없다 — **먼저 부르는 도구라 문턱이 없어야 한다.**
-    assert not (listed["ontology_schema"].input_schema.get("properties") or {})
+
+
+def test_빈_성공은_확인_신호가_된다() -> None:
+    """돌려줄 게 없는 성공을 그대로 흘리면 도구 결과가 빈 문자열이라 **조용한
+    무동작과 구분이 안 된다.**"""
+    _serve(lambda _r: httpx.Response(204))
+    got = asyncio.run(server.object_update(_ctx("Bearer t"), "mach", "id", label="x"))
+    assert got["ok"] is True
+
+
+def test_미리_보기가_기본이다() -> None:
+    """`apply` 를 안 주면 dry_run — 에이전트의 실수가 기계 속도로 반영되지 않게."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"applied": False}))
+    asyncio.run(server.ontology_import(_ctx("Bearer t"), {"types": []}))
+    assert seen[0].url.params["dry_run"] == "true"
+    asyncio.run(server.ontology_import(_ctx("Bearer t"), {"types": []}, apply=True))
+    assert seen[1].url.params["dry_run"] == "false"
+
+    seen = _serve(lambda _r: httpx.Response(200, json={"applied": False}))
+    asyncio.run(server.objects_import(_ctx("Bearer t"), "mach", rows=[{"key": "M-1"}]))
+    assert json.loads(seen[0].content)["apply"] is False
+
+
+def test_가이드는_서버가_쥔다() -> None:
+    """로컬 스킬에 본문을 두면 사람마다 복사 시점이 달라 낡는다."""
+    overview = asyncio.run(server.get_guide(_ctx(None)))
+    assert overview["topic"] == "overview"
+    assert "ontology_schema" in overview["content"]
+    assert set(overview["more_topics"]) >= {"schema", "objects", "bulk", "relations"}
+
+    bulk = asyncio.run(server.get_guide(_ctx(None), topic="bulk"))
+    assert bulk["topic"] == "bulk" and "upsert" in bulk["content"]
+
+    missing = asyncio.run(server.get_guide(_ctx(None), topic="없는주제"))
+    assert "error" in missing and "bulk" in missing["topics"]

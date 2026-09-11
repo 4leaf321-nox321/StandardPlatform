@@ -15,6 +15,11 @@ src = [".", "scripts"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
+[tool.ruff.lint.isort]
+# `mcp_server/server.py` 는 패키지가 아니라 한 파일이라, 그 시험이 `import server`
+# 로 집어 온다. 여기 적지 않으면 ruff 가 그것을 남의 패키지로 보고 줄을 옮긴다.
+known-first-party = ["app", "tests", "server"]
+
 [tool.ruff.lint.flake8-bugbear]
 # FastAPI 의 의존성 주입은 기본값 자리에 Depends() 를 쓰는 것이 정식 문법이라
 # B008(기본 인자에서 함수 호출)이 전부 오탐이 된다.
@@ -39,21 +44,13 @@ extend-immutable-calls = [
 [tool.mypy]
 python_version = "3.12"
 strict = true
-files = ["app", "tests", "../mcp_server"]
-# `mcp_server` 는 저장소 루트에 있다 — 배포 이미지에 안 들어가고 사람의 PC 에서
-# 도는 것이라 백엔드 안에 두지 않았다. 그래도 **시험은 여기서 돈다**(진짜 앱에
-# 붙여야 확인이 되므로), 그래서 타입 검사도 그 경로를 본다.
-mypy_path = ".."
+files = ["app", "tests"]
+# `mcp_server/server.py` 는 여기서 안 본다 — `mcp` 를 백엔드 환경에 깔지 않으므로
+# 그 데코레이터가 전부 Any 가 되어 strict 가 의미를 잃는다. ruff 는 본다(위).
+# 진짜 앱에 붙여 보는 시험은 `tests/api/test_mcp_tools.py` 가 가짜 `mcp` 로 한다.
 
 [[tool.mypy.overrides]]
 module = ["uvicorn.*"]
-ignore_missing_imports = true
-
-# `mcp` 는 **배포에 안 들어간다** — MCP 서버는 사람의 PC 에서 돌기 때문이다
-# (`mcp_server/requirements.txt`). 백엔드 개발 환경에 깔지 않으므로 여기서만
-# 모르는 것으로 둔다. 알맹이(`tools.py`)는 httpx 만 쓰므로 그대로 검사된다.
-[[tool.mypy.overrides]]
-module = ["mcp.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

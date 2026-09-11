@@ -52,6 +52,30 @@ SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 
 as_op() { sudo -u "$OPERATOR" "$@"; }
 
+# ───────────────────────── MCP 서버 (Claude 연동, 선택) ─────────────────────────
+# 별도 venv + 별도 systemd 유닛. 백엔드 SIF 와 의존성이 충돌해 컨테이너에 못 넣는다.
+MCP_SERVICE_NAME="${APP_SLUG}-mcp"
+MCP_SERVICE_UNIT="/etc/systemd/system/${MCP_SERVICE_NAME}.service"
+# 설치된 systemd 유닛에서 Environment=KEY=VALUE 값을 읽는다(없으면 빈 문자열).
+# → 한 번 배포한 MCP 설정을 다음 배포가 자동으로 기억하게 하는 장치.
+unit_env() {  # $1=key
+    [[ -f "$MCP_SERVICE_UNIT" ]] || return 0
+    sed -n "s|^Environment=$1=||p" "$MCP_SERVICE_UNIT" | tail -n1
+}
+
+MCP_ENABLED="${MCP_ENABLED:-1}"                        # 0 으로 두면 MCP 전체 건너뜀
+# 우선순위: 명시한 env > 설치된 유닛에 저장된 값 > 기본값(번들의 BUILD_INFO).
+# → 최초 한 번 'MCP_HOST=0.0.0.0 ./deploy.sh' 하면, 이후 './deploy.sh update' 가
+#   매번 다시 지정하지 않아도 같은 값을 유지한다(되돌리려면 그때만 env 로 덮어쓰기).
+MCP_PORT_DEFAULT="$(bundle mcp_port)"; MCP_PORT_DEFAULT="${MCP_PORT_DEFAULT:-$((APP_PORT + 2))}"
+MCP_HOST="${MCP_HOST:-$(unit_env MCP_HOST)}";  MCP_HOST="${MCP_HOST:-127.0.0.1}"
+MCP_PORT="${MCP_PORT:-$(unit_env MCP_PORT)}";  MCP_PORT="${MCP_PORT:-$MCP_PORT_DEFAULT}"
+MCP_API_BASE="${MCP_API_BASE:-$(unit_env PLATFORM_API_BASE)}"
+MCP_API_BASE="${MCP_API_BASE:-http://127.0.0.1:$APP_PORT}"
+# DNS rebinding 보호 허용 Host(쉼표구분). 비우면 server.py 가 비-localhost 바인딩 시
+# 보호를 끈다(사내망). 외부 노출 시 도메인/IP 지정 권장. 이 값도 위처럼 기억된다.
+MCP_ALLOWED_HOSTS="${MCP_ALLOWED_HOSTS:-$(unit_env MCP_ALLOWED_HOSTS)}"
+
 # ───────────────────────── 조각들 ─────────────────────────
 ensure_dirs() {
     info "설치 폴더 준비: $INSTALL_DIR"
@@ -127,6 +151,77 @@ render_service_unit() {
     systemctl daemon-reload
 }
 
+# ── MCP 서버 (선택) — 별도 venv + systemd. 실패는 전부 비치명적(백엔드 배포 무관). ──
+render_mcp_service_unit() {
+    [[ -f "$HERE/mcp.service.template" ]] \
+        || { warn "mcp.service.template 없음 — MCP 유닛 건너뜀"; return 1; }
+    info "MCP systemd 유닛 렌더 → $MCP_SERVICE_UNIT"
+    sed -e "s|@@USER@@|$OPERATOR|g" \
+        -e "s|@@INSTALL_DIR@@|$INSTALL_DIR|g" \
+        -e "s|@@APP_NAME@@|$APP_NAME|g" \
+        -e "s|@@APP_SLUG@@|$APP_SLUG|g" \
+        -e "s|@@API_BASE@@|$MCP_API_BASE|g" \
+        -e "s|@@MCP_HOST@@|$MCP_HOST|g" \
+        -e "s|@@MCP_PORT@@|$MCP_PORT|g" \
+        -e "s|@@MCP_ALLOWED_HOSTS@@|$MCP_ALLOWED_HOSTS|g" \
+        "$HERE/mcp.service.template" > "$MCP_SERVICE_UNIT"
+    chmod 644 "$MCP_SERVICE_UNIT"
+    systemctl daemon-reload
+}
+
+setup_mcp() {
+    [[ "$MCP_ENABLED" == "1" ]] || { info "MCP 비활성(MCP_ENABLED=0) — 건너뜀"; return 0; }
+    [[ -d "$HERE/mcp_server" ]] || { warn "번들에 mcp_server/ 없음 — MCP 건너뜀"; return 0; }
+
+    info "MCP 서버 설치 (별도 venv + systemd)"
+    local md="$INSTALL_DIR/mcp_server"
+
+    # 1) 소스 배치
+    as_op mkdir -p "$md"
+    install -o "$OPERATOR" -g "$OPERATOR" -m 644 "$HERE/mcp_server/server.py" "$md/server.py"
+    # 사용 가이드 — get_guide 가 읽는 본문. server.py 옆 guide/ 에 있어야 한다.
+    # 이게 빠지면 get_guide 가 "가이드를 읽을 수 없습니다" 를 돌려주고, AI 는
+    # 도구 설명만으로 일하게 된다(치명적이진 않지만 품질이 떨어진다).
+    if [[ -d "$HERE/mcp_server/guide" ]]; then
+        as_op mkdir -p "$md/guide"
+        as_op cp -r "$HERE/mcp_server/guide/." "$md/guide/"
+    fi
+    install -o "$OPERATOR" -g "$OPERATOR" -m 644 "$HERE/mcp_server/requirements.txt" "$md/requirements.txt"
+    [[ -f "$HERE/mcp_server/README.md" ]] \
+        && install -o "$OPERATOR" -g "$OPERATOR" -m 644 "$HERE/mcp_server/README.md" "$md/README.md" || true
+
+    # 2) venv 없으면 생성
+    if [[ ! -x "$md/venv/bin/python" ]]; then
+        info "MCP venv 생성: $md/venv"
+        if ! as_op python3 -m venv "$md/venv"; then
+            warn "python3 -m venv 실패('python3-venv' 설치 필요?) — MCP 미설치(백엔드 영향 없음)"; return 0
+        fi
+    fi
+
+    # 3) 의존성 설치 — 동봉 휠 우선(오프라인), 없으면 온라인 시도
+    local pip="$md/venv/bin/pip"
+    if [[ -d "$HERE/mcp_server/wheels" ]]; then
+        as_op rm -rf "$md/wheels"
+        as_op cp -r "$HERE/mcp_server/wheels" "$md/wheels"   # 재실행 안전(중첩 방지)
+        info "MCP 의존성 설치 (오프라인 휠)"
+        if ! as_op "$pip" install -q --no-index --find-links "$md/wheels" -r "$md/requirements.txt"; then
+            warn "오프라인 휠 설치 실패 — MCP 미설치. 수동: cd $md && ./venv/bin/pip install --no-index --find-links wheels -r requirements.txt"; return 0
+        fi
+    else
+        info "MCP 의존성 설치 (온라인 pip — 휠 미동봉)"
+        if ! as_op "$pip" install -q -r "$md/requirements.txt"; then
+            warn "pip 설치 실패(폐쇄망?). 백엔드 배포는 정상. 수동 설치 후 'systemctl restart $MCP_SERVICE_NAME'"; return 0
+        fi
+    fi
+
+    # 4) 유닛 렌더 + 기동
+    render_mcp_service_unit || return 0
+    systemctl enable "$MCP_SERVICE_NAME" >/dev/null 2>&1 || true
+    systemctl restart "$MCP_SERVICE_NAME" \
+        || warn "MCP 서비스 기동 실패 — 'journalctl -u $MCP_SERVICE_NAME' 확인"
+    info "MCP 서버: http://$MCP_HOST:$MCP_PORT/mcp  → 백엔드 $MCP_API_BASE"
+}
+
 health_check() {
     # 기동 직후에는 아직 안 뜬다. 몇 초 기다려 준다.
     local url="http://127.0.0.1:$APP_PORT/api/health"
@@ -190,12 +285,15 @@ cmd_install() {
     systemctl restart "$SERVICE_NAME"
     health_check || true
 
+    setup_mcp || warn "MCP 설정 건너뜀(비치명적)"
+
     cat <<MSG
 
 [OK] 설치 완료.
   로그   : sudo journalctl -u $SERVICE_NAME -f
   접속   : http://<서버주소>:$APP_PORT/
   자료   : $INSTALL_DIR  (filestore·logs·.env — 백업 대상)
+  MCP    : sudo systemctl status $MCP_SERVICE_NAME   (Claude 연동, 선택)
 
   위에 찍힌 관리자 임시 비밀번호는 **다시 표시되지 않습니다.**
   첫 로그인에서 변경이 강제됩니다.
@@ -221,6 +319,9 @@ cmd_update() {
 
     systemctl start "$SERVICE_NAME"
     health_check || true
+
+    # MCP 도 함께 갱신(소스 교체 + 유닛 재렌더 + 재기동). 비치명적.
+    setup_mcp || warn "MCP 설정 건너뜀(비치명적)"
 
     cat <<MSG
 
@@ -274,6 +375,11 @@ cmd_status() {
     echo
     echo "== /api/health =="
     health_check || true
+    if [[ -f "$MCP_SERVICE_UNIT" ]]; then
+        echo
+        echo "== MCP ($MCP_SERVICE_NAME · http://$MCP_HOST:$MCP_PORT/mcp) =="
+        systemctl --no-pager --lines=5 status "$MCP_SERVICE_NAME" || true
+    fi
 }
 
 cmd_auto() {
@@ -305,6 +411,7 @@ $APP_NAME 배포 스크립트 ($VERSION)
   DB_NAME     = $DB_NAME
   DB_USER     = $DB_USER
   APP_PORT    = $APP_PORT
+  MCP_ENABLED = $MCP_ENABLED   (MCP_HOST=$MCP_HOST MCP_PORT=$MCP_PORT MCP_API_BASE=$MCP_API_BASE)
 MSG
 }
 

@@ -211,14 +211,18 @@ cd backend
 cd ../frontend && npm run build && npm test && npm run lint
 ```
 
-**MCP 어댑터는 환경을 갈라 본다.** `mcp` 가 `httpx2` 를 끌어오고, 그것이 깔리면
-`starlette.testclient` 가 HTTP 스택을 바꿔 백엔드 시험의 타입이 흔들린다.
+**MCP 서버는 환경을 갈라 본다.** `mcp` 를 백엔드 개발 환경에 깔면 `starlette.testclient`
+가 쓰는 HTTP 스택이 바뀌어 백엔드 시험의 타입이 흔들린다. `mcp_server/` 는 ReportArchive
+와 같은 모양이다 — **한 파일 `server.py`**, 그 폴더 안의 `venv`, `./venv/bin/python server.py`
+로 띄우는 streamable-http 서버(백엔드 포트 +2). 패키지가 아니므로 `-m` 으로 부르지 않는다.
 
 ```bash
-python -m venv mcp_server/.venv
-mcp_server/.venv/bin/pip install -r mcp_server/requirements.txt pytest
-mcp_server/.venv/bin/python -m pytest mcp_server/tests
+cd mcp_server && python3 -m venv venv && ./venv/bin/pip install -r requirements.txt pytest
+cd .. && mcp_server/venv/bin/python -m pytest mcp_server/tests
 ```
+
+진짜 앱에 붙여 보는 시험은 백엔드 쪽(`tests/api/test_mcp_tools.py`)이 가짜 `mcp` 로
+도구 함수만 꺼내 돌린다 — 그래서 위의 `pytest` 에 이미 들어 있다.
 
 `alembic check` 가 여기 있는 이유: **시험은 모델로 표를 만들기 때문에**
 마이그레이션이 모델과 어긋난 것을 못 잡는다 — 그 어긋남은 배포하고 나서 500 으로

@@ -35,5 +35,7 @@ def upgrade() -> None:
 
 def downgrade() -> None:
     """Downgrade schema."""
-    op.drop_constraint(op.f("fk_objects_merged_into_id_objects"), "objects", type_="foreignkey")
+    op.drop_constraint(
+        op.f("fk_objects_merged_into_id_objects"), "objects", type_="foreignkey"
+    )
     op.drop_column("objects", "merged_into_id")
