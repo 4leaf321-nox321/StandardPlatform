@@ -17,6 +17,7 @@ from app.modules.ontology.models import (
     DATA_TYPES,
     PropertyDef,
 )
+from app.shared import system_sources
 from app.shared.errors import AppError, code
 
 #: slug 는 **바뀌면 안 되는 식별자**다. URL·관계의 허용 타입·MCP 도구 이름이
@@ -67,6 +68,33 @@ def require_choice(value: str, allowed: tuple[str, ...], *, what: str) -> str:
             f"{what}는 {', '.join(allowed)} 중 하나여야 합니다: {value!r}",
         )
     return value
+
+
+def system_source_error(kind_class: str, source: str) -> str | None:
+    """`kind_class` 와 `system_source` 가 짝이 맞는가 — 틀리면 **무엇을 고쳐야 하는지**.
+
+    투영 타입은 비출 표가 있어야 하고, 그 표는 `shared/system_sources.py` 에 등록된
+    것이어야 한다(안 그러면 목록이 빈 채로 뜨고 그것은 「없다」 로 읽힌다). 반대로
+    보통 타입에 표를 적으면 아무 일도 안 일어나는데, 적은 사람은 일어난 줄 안다.
+    """
+    known = ", ".join(system_sources.known_source_keys()) or "(없음)"
+    if kind_class == "system":
+        if not source:
+            return (
+                "투영 타입은 어느 표를 비추는지(system_source)를 적어야 합니다. "
+                f"등록된 것: {known}"
+            )
+        if system_sources.system_source(source) is None:
+            return f"등록되지 않은 원 표입니다: {source}. 등록된 것: {known}"
+    elif source:
+        return "원 표(system_source)는 투영(system) 타입에서만 씁니다."
+    return None
+
+
+def require_system_source(kind_class: str, source: str) -> None:
+    message = system_source_error(kind_class, source)
+    if message:
+        raise InvalidValue(code("ONTOLOGY", 3), message)
 
 
 # --- 값 하나 ----------------------------------------------------------------

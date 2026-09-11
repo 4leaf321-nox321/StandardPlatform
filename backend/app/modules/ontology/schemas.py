@@ -92,6 +92,9 @@ class ObjectTypeOut(BaseModel):
     nav_group_id: uuid.UUID | None
     nav_group_slug: str | None
     kind_class: str
+    system_source: str
+    """`kind_class='system'` 이면 어느 원 표를 비추는가(`workspace` · `user` …).
+    아니면 빈 값."""
     entry_policy: str
     key_policy: str
     key_scope: str
@@ -115,6 +118,7 @@ class ObjectTypeWriteRequest(BaseModel):
     nav_group_slug: str | None = None
     """NULL 이면 사이드바에 안 선다. 어휘 축은 대개 그렇다."""
     kind_class: str = "record"
+    system_source: str = ""
     entry_policy: str = "open"
     key_policy: str = "none"
     key_scope: str = "global"
@@ -142,6 +146,7 @@ class ObjectTypePatchRequest(BaseModel):
     nav_group_slug: str | None = None
     """`null` 을 명시하면 사이드바에서 뺀다. 안 보내면 그대로 둔다."""
     kind_class: str | None = None
+    system_source: str | None = None
     entry_policy: str | None = None
     key_policy: str | None = None
     key_scope: str | None = None
@@ -229,7 +234,14 @@ class OntologySchemaOut(BaseModel):
     types: list[ObjectTypeSchema]
     relation_types: list[RelationTypeOut]
     data_types: list[str]
+    system_sources: list[SystemSourceOut] = Field(default_factory=list)
+    """투영(system) 타입이 비출 수 있는 원 표들. 이 설치가 등록한 것만."""
     generated_at: datetime
+
+
+class SystemSourceOut(BaseModel):
+    key: str
+    label: str
 
 
 class NavGroupNode(BaseModel):

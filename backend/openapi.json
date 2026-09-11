@@ -7178,6 +7178,10 @@
             "type": "string",
             "title": "Kind Class"
           },
+          "system_source": {
+            "type": "string",
+            "title": "System Source"
+          },
           "entry_policy": {
             "type": "string",
             "title": "Entry Policy"
@@ -7233,6 +7237,7 @@
           "nav_group_id",
           "nav_group_slug",
           "kind_class",
+          "system_source",
           "entry_policy",
           "key_policy",
           "key_scope",
@@ -7316,6 +7321,17 @@
               }
             ],
             "title": "Kind Class"
+          },
+          "system_source": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "System Source"
           },
           "entry_policy": {
             "anyOf": [
@@ -7478,6 +7494,10 @@
             "type": "string",
             "title": "Kind Class"
           },
+          "system_source": {
+            "type": "string",
+            "title": "System Source"
+          },
           "entry_policy": {
             "type": "string",
             "title": "Entry Policy"
@@ -7540,6 +7560,7 @@
           "nav_group_id",
           "nav_group_slug",
           "kind_class",
+          "system_source",
           "entry_policy",
           "key_policy",
           "key_scope",
@@ -7598,6 +7619,11 @@
             "type": "string",
             "title": "Kind Class",
             "default": "record"
+          },
+          "system_source": {
+            "type": "string",
+            "title": "System Source",
+            "default": ""
           },
           "entry_policy": {
             "type": "string",
@@ -7681,6 +7707,13 @@
             },
             "type": "array",
             "title": "Data Types"
+          },
+          "system_sources": {
+            "items": {
+              "$ref": "#/components/schemas/SystemSourceOut"
+            },
+            "type": "array",
+            "title": "System Sources"
           },
           "generated_at": {
             "type": "string",
@@ -9614,6 +9647,24 @@
         ],
         "title": "SystemAdminRequest",
         "description": "시스템 관리자 권한을 주거나 뺀다.\n\n**한 엔드포인트에 참·거짓을 실어 보낸다.** 이 값은 상태가 아니라 권한 한\n칸이다 — 화면이 지금 값을 보고 반대를 보내면 되고, 지정과 해제가 따로 있으면\n지금 값을 모르는 쪽이 둘 중 하나를 골라야 한다."
+      },
+      "SystemSourceOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "SystemSourceOut"
       },
       "TableCountOut": {
         "properties": {

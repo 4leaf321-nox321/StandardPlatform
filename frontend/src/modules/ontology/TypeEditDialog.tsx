@@ -20,6 +20,7 @@ import type {
   PropertyDef,
   RelationType,
   SectionView,
+  SystemSource,
 } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -51,15 +52,27 @@ interface Props {
   type: ObjectType & { properties: PropertyDef[] }
   groups: NavGroupRow[]
   relationTypes: RelationType[]
+  /** 투영이 비출 수 있는 원 표. 스키마가 준다 — 등록 안 된 표는 고를 수 없다. */
+  systemSources?: SystemSource[]
   onClose: () => void
   onChanged: () => void
 }
 
-export function TypeEditDialog({ type, groups, relationTypes, onClose, onChanged }: Props) {
+export function TypeEditDialog({
+  type,
+  groups,
+  relationTypes,
+  systemSources = [],
+  onClose,
+  onChanged,
+}: Props) {
   const [label, setLabel] = useState(type.label)
   const [description, setDescription] = useState(type.description)
   const [group, setGroup] = useState(type.nav_group_slug ?? NONE)
   const [kindClass, setKindClass] = useState<string>(type.kind_class)
+  const [systemSource, setSystemSource] = useState<string>(
+    type.system_source || systemSources[0]?.key || '',
+  )
   const [entryPolicy, setEntryPolicy] = useState<string>(type.entry_policy)
   const [keyPolicy, setKeyPolicy] = useState<string>(type.key_policy)
   const [keyScope, setKeyScope] = useState<string>(type.key_scope)
@@ -84,6 +97,7 @@ export function TypeEditDialog({ type, groups, relationTypes, onClose, onChanged
         description,
         nav_group_slug: group === NONE ? null : group,
         kind_class: kindClass,
+        system_source: kindClass === 'system' ? systemSource : '',
         entry_policy: entryPolicy,
         key_policy: keyPolicy,
         key_scope: keyScope,
@@ -123,112 +137,137 @@ export function TypeEditDialog({ type, groups, relationTypes, onClose, onChanged
             </TabsList>
 
             <TabsContent value="basic" className="space-y-4">
-            <div className="space-y-1.5">
-              <Label>slug</Label>
-              <Input value={type.slug} readOnly disabled className="font-mono" />
-              <p className="text-muted-foreground text-xs">
-                <b>바꿀 수 없습니다.</b> 주소(<code>/o/{type.slug}</code>)와 관계·MCP 도구
-                이름이 여기 물려 있어, 바꾸면 그 셋이 조용히 어긋납니다.
-              </p>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="type-edit-label">이름</Label>
-              <Input
-                id="type-edit-label"
-                value={label}
-                onChange={(event) => setLabel(event.target.value)}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="type-edit-description">설명</Label>
-              <Textarea
-                id="type-edit-description"
-                rows={2}
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-              />
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="type-edit-group">사이드바 묶음</Label>
-              <Select value={group} onValueChange={setGroup}>
-                <SelectTrigger id="type-edit-group">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NONE}>사이드바에 안 세움</SelectItem>
-                  {groups.map((one) => (
-                    <SelectItem key={one.slug} value={one.slug}>
-                      {one.label}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-muted-foreground text-xs">
-                안 세우면 화면은 있지만 메뉴에 안 뜹니다 — 어휘 축은 대개 그렇습니다.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="객체 분류" value={kindClass} onChange={setKindClass}
-                options={[
-                  ['record', '객체'],
-                  ['reference', '어휘'],
-                  ['system', '투영'],
-                ]}
-              />
-              <Field label="입력 정책" value={entryPolicy} onChange={setEntryPolicy}
-                options={[
-                  ['open', '누구나 추가'],
-                  ['closed', '관리자만'],
-                ]}
-              />
-              <Field label="식별자" value={keyPolicy} onChange={setKeyPolicy}
-                options={[
-                  ['none', '안 씀'],
-                  ['optional', '선택'],
-                  ['required', '필수'],
-                ]}
-              />
-              <Field label="식별자 범위" value={keyScope} onChange={setKeyScope}
-                options={[
-                  ['global', '전사에서 하나'],
-                  ['workspace', '부서에서 하나'],
-                ]}
-              />
-              <Field label="시간 정책" value={temporalKind} onChange={setTemporalKind}
-                options={[
-                  ['evergreen', '연도 무관'],
-                  ['lifecycle', '유효 구간'],
-                  ['yearly', '연도 배정'],
-                  ['derived', '쓰인 데서 추론'],
-                ]}
-              />
               <div className="space-y-1.5">
-                <Label htmlFor="type-edit-sort">순서</Label>
+                <Label>slug</Label>
+                <Input value={type.slug} readOnly disabled className="font-mono" />
+                <p className="text-muted-foreground text-xs">
+                  <b>바꿀 수 없습니다.</b> 주소(<code>/o/{type.slug}</code>)와 관계·MCP 도구 이름이
+                  여기 물려 있어, 바꾸면 그 셋이 조용히 어긋납니다.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="type-edit-label">이름</Label>
                 <Input
-                  id="type-edit-sort"
-                  type="number"
-                  value={sortOrder}
-                  onChange={(event) => setSortOrder(event.target.value)}
+                  id="type-edit-label"
+                  value={label}
+                  onChange={(event) => setLabel(event.target.value)}
                 />
               </div>
-            </div>
 
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                className="size-4"
-                checked={isActive}
-                onChange={(event) => setIsActive(event.target.checked)}
-              />
-              사용함
-              <span className="text-muted-foreground text-xs">
-                끄면 메뉴와 만들기에서 빠집니다. <b>자료는 그대로 남습니다.</b>
-              </span>
-            </label>
+              <div className="space-y-1.5">
+                <Label htmlFor="type-edit-description">설명</Label>
+                <Textarea
+                  id="type-edit-description"
+                  rows={2}
+                  value={description}
+                  onChange={(event) => setDescription(event.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="type-edit-group">사이드바 묶음</Label>
+                <Select value={group} onValueChange={setGroup}>
+                  <SelectTrigger id="type-edit-group">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE}>사이드바에 안 세움</SelectItem>
+                    {groups.map((one) => (
+                      <SelectItem key={one.slug} value={one.slug}>
+                        {one.label}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-muted-foreground text-xs">
+                  안 세우면 화면은 있지만 메뉴에 안 뜹니다 — 어휘 축은 대개 그렇습니다.
+                </p>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <Field
+                  label="객체 분류"
+                  value={kindClass}
+                  onChange={setKindClass}
+                  options={[
+                    ['record', '객체'],
+                    ['reference', '어휘'],
+                    ['system', '투영'],
+                  ]}
+                />
+                {/* 투영은 **어느 표를 비추는지**가 전부다 — 행이 없고, 목록·상세·참조가
+                  그 표에서 나온다. 등록된 표가 없으면 고를 것도 없다. */}
+                {kindClass === 'system' && (
+                  <Field
+                    label="비추는 원 표"
+                    value={systemSource}
+                    onChange={setSystemSource}
+                    options={systemSources.map((one) => [one.key, `${one.label} (${one.key})`])}
+                  />
+                )}
+                <Field
+                  label="입력 정책"
+                  value={entryPolicy}
+                  onChange={setEntryPolicy}
+                  options={[
+                    ['open', '누구나 추가'],
+                    ['closed', '관리자만'],
+                  ]}
+                />
+                <Field
+                  label="식별자"
+                  value={keyPolicy}
+                  onChange={setKeyPolicy}
+                  options={[
+                    ['none', '안 씀'],
+                    ['optional', '선택'],
+                    ['required', '필수'],
+                  ]}
+                />
+                <Field
+                  label="식별자 범위"
+                  value={keyScope}
+                  onChange={setKeyScope}
+                  options={[
+                    ['global', '전사에서 하나'],
+                    ['workspace', '부서에서 하나'],
+                  ]}
+                />
+                <Field
+                  label="시간 정책"
+                  value={temporalKind}
+                  onChange={setTemporalKind}
+                  options={[
+                    ['evergreen', '연도 무관'],
+                    ['lifecycle', '유효 구간'],
+                    ['yearly', '연도 배정'],
+                    ['derived', '쓰인 데서 추론'],
+                  ]}
+                />
+                <div className="space-y-1.5">
+                  <Label htmlFor="type-edit-sort">순서</Label>
+                  <Input
+                    id="type-edit-sort"
+                    type="number"
+                    value={sortOrder}
+                    onChange={(event) => setSortOrder(event.target.value)}
+                  />
+                </div>
+              </div>
+
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="size-4"
+                  checked={isActive}
+                  onChange={(event) => setIsActive(event.target.checked)}
+                />
+                사용함
+                <span className="text-muted-foreground text-xs">
+                  끄면 메뉴와 만들기에서 빠집니다. <b>자료는 그대로 남습니다.</b>
+                </span>
+              </label>
             </TabsContent>
 
             <TabsContent value="list" className="space-y-4">
@@ -287,13 +326,13 @@ export function TypeEditDialog({ type, groups, relationTypes, onClose, onChanged
           description={
             type.object_count > 0 ? (
               <>
-                지금 <b>{type.object_count}개</b>가 들어 있어 <b>지울 수 없습니다.</b> 그만
-                쓰려는 것이면 「사용함」 을 끄세요 — 자료는 남고 화면에서만 빠집니다.
+                지금 <b>{type.object_count}개</b>가 들어 있어 <b>지울 수 없습니다.</b> 그만 쓰려는
+                것이면 「사용함」 을 끄세요 — 자료는 남고 화면에서만 빠집니다.
               </>
             ) : (
               <>
-                들어 있는 것이 없어 지울 수 있습니다. <b>속성 정의도 함께 사라집니다</b> —
-                안 지우면 같은 slug 로 다시 만들 때 옛 속성이 되살아납니다.
+                들어 있는 것이 없어 지울 수 있습니다. <b>속성 정의도 함께 사라집니다</b> — 안 지우면
+                같은 slug 로 다시 만들 때 옛 속성이 되살아납니다.
               </>
             )
           }

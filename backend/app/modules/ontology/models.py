@@ -176,6 +176,10 @@ class ObjectType(Base):
     kind_class: Mapped[str] = mapped_column(
         String(20), default="record", server_default="record"
     )
+    system_source: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    """`kind_class='system'` 일 때 **어느 원 표를 비추는가** — `workspace` · `user`,
+    또는 승격한 전용 표가 `shared/system_sources.py` 에 등록한 키. 행을 복제하지
+    않으므로 이 타입에는 `objects` 행이 없다. system 이 아니면 빈 문자열."""
     entry_policy: Mapped[str] = mapped_column(
         String(20), default="open", server_default="open"
     )

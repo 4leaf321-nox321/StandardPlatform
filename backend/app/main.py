@@ -37,8 +37,9 @@ from app.modules.objects import services as objects_services
 from app.modules.ontology import routes as ontology_routes
 from app.modules.server import routes as server_routes
 from app.modules.workspaces import routes as workspaces_routes
+from app.modules.workspaces import services as workspaces_services
 from app.schema_version import warn_if_behind
-from app.shared import extensions, ops, scopes
+from app.shared import extensions, ops, scopes, system_sources
 from app.shared.access_log import AccessLogMiddleware
 from app.shared.errors import NotFound, code, register_error_handlers
 from app.shared.request_context import RequestIdMiddleware
@@ -102,6 +103,11 @@ def _register_extensions() -> None:
     # 데이터 품질 — 필수값 빈 것·고아·깨진 참조·이름 같은 것을 홈 「남은 일」 에.
     extensions.register_maintenance(objects_quality.maintenance)
     extensions.register_stats(objects_quality.stats)
+
+    # `system` 타입이 비추는 원 표. **등록하지 않으면 그 타입은 만들 수 없다** —
+    # 스키마의 `system_sources` 가 여기서 나온다. 승격한 전용 표도 여기 더한다.
+    system_sources.register_system_source(workspaces_services.SYSTEM_SOURCE)
+    system_sources.register_system_source(accounts_services.SYSTEM_SOURCE)
 
     # **기계 자격으로 온톨로지를 채우는 길**(3-d). 안 열면 PAT 로는 못 고친다 —
     # 기본이 「막힘」 이고, 그것이 맞는 기본값이다(shared/scopes.py).

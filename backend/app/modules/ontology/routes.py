@@ -57,12 +57,15 @@ from app.modules.ontology.schemas import (
     RenameOptionOut,
     RenameOptionRequest,
     SnapshotOut,
+    SystemSourceOut,
 )
 from app.modules.ontology.services import (
     require_choice,
     require_key,
     require_slug,
+    require_system_source,
 )
+from app.shared import system_sources
 from app.shared.audit import record as record_audit
 from app.shared.auth import current_user, require_system_admin
 from app.shared.errors import Conflict, NotFound, code
@@ -124,6 +127,7 @@ def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectType
         nav_group_id=row.nav_group_id,
         nav_group_slug=group_slug,
         kind_class=row.kind_class,
+        system_source=row.system_source,
         entry_policy=row.entry_policy,
         key_policy=row.key_policy,
         key_scope=row.key_scope,
@@ -255,6 +259,7 @@ def create_type(
         sort_order=payload.sort_order,
         nav_group_id=group.id if group else None,
         kind_class=payload.kind_class,
+        system_source=payload.system_source,
         entry_policy=payload.entry_policy,
         key_policy=payload.key_policy,
         key_scope=payload.key_scope,
@@ -308,6 +313,18 @@ def update_type(
     for field, value, allowed, what in choices:
         if field in sent and value is not None:
             setattr(row, field, require_choice(value, allowed, what=what))
+    if "system_source" in sent and payload.system_source is not None:
+        row.system_source = payload.system_source.strip()
+    if "kind_class" in sent or "system_source" in sent:
+        require_system_source(row.kind_class, row.system_source)
+        if row.kind_class == "system" and _counts(db).get(row.id, 0):
+            # 행이 있는 타입을 투영으로 돌리면 그 행이 **화면에서 사라진다** —
+            # 지워진 것이 아닌데 안 보이고, 그 사실은 아무 데도 안 적힌다.
+            raise Conflict(
+                code("ONTOLOGY", 34),
+                f"{row.label}에는 객체가 {_counts(db)[row.id]}개 있어 투영으로 바꿀 수 "
+                "없습니다. 전용 표로 옮기는 절차(docs/승격-경로.md)를 따르세요.",
+            )
 
     if "label" in sent and payload.label is not None:
         row.label = payload.label
@@ -357,6 +374,7 @@ def update_type(
 def _check_type_choices(payload: ObjectTypeWriteRequest) -> None:
     """만들 때의 고른 값 검사. **고치기는 보낸 것만 보므로 따로 본다**(update_type)."""
     require_choice(payload.kind_class, KIND_CLASSES, what="객체 분류")
+    require_system_source(payload.kind_class, payload.system_source)
     require_choice(payload.entry_policy, ENTRY_POLICIES, what="입력 정책")
     require_choice(payload.key_policy, KEY_POLICIES, what="식별자 정책")
     require_choice(payload.key_scope, KEY_SCOPES, what="식별자 범위")
@@ -948,6 +966,10 @@ def ontology_schema(
         types=types,
         relation_types=[RelationTypeOut.model_validate(r) for r in _relation_types(db)],
         data_types=list(DATA_TYPES),
+        system_sources=[
+            SystemSourceOut(key=one.key, label=one.label)
+            for one in system_sources.system_sources()
+        ],
         generated_at=datetime.now(UTC),
     )
 

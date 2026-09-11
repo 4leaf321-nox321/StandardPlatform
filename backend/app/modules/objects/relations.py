@@ -18,7 +18,7 @@ import uuid
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
-from app.modules.objects.models import ObjectInstance, ObjectRelation
+from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.ontology.models import ObjectType, RelationType
 from app.shared.errors import Conflict, NotFound, code
 
@@ -40,26 +40,36 @@ def require_endpoints_allowed(
     **안 막으면 말이 안 되는 관계가 데이터에 남고, 그 뒤로 그 데이터로는
     아무것도 못 믿는다.**
     """
+    types = {row.id: row for row in db.scalars(select(ObjectType))}
+    src_type = types.get(src.type_id)
+    dst_type = types.get(dst.type_id)
+    require_end_types_allowed(
+        db, kind, src_type.slug if src_type else "", dst_type.slug if dst_type else ""
+    )
+
+
+def require_end_types_allowed(
+    db: Session, kind: RelationType, src_slug: str, dst_slug: str
+) -> None:
+    """타입 slug 로 보는 같은 검사 — 한쪽 끝이 system 객체(행이 없는 것)여도 된다."""
     rows = list(db.scalars(select(ObjectType)))
-    types = {row.id: row for row in rows}
     #: slug -> 사람이 읽는 이름. **오류에 slug 를 그대로 쓰면 아무도 못 읽는다** —
     #: 화면에는 「부품」 이라고 적혀 있는데 메시지는 `part_87b8` 라고 말한다.
     labels = {row.slug: row.label for row in rows}
 
-    def check(end: ObjectInstance, allowed: list[str] | None, what: str) -> None:
+    def check(slug: str, allowed: list[str] | None, what: str) -> None:
         if not allowed:
             return
-        found = types.get(end.type_id)
-        if found is None or found.slug not in allowed:
-            names = ", ".join(labels.get(slug, slug) for slug in allowed)
+        if slug not in allowed:
+            names = ", ".join(labels.get(one, one) for one in allowed)
             raise Conflict(
                 code("OBJECTS", 22),
                 f"{kind.label}의 {what}은 {names} 만 됩니다. "
-                f"{found.label if found else '알 수 없는 타입'}은 안 됩니다.",
+                f"{labels.get(slug, '알 수 없는 타입')}은 안 됩니다.",
             )
 
-    check(src, kind.src_type_slugs, "출발")
-    check(dst, kind.dst_type_slugs, "도착")
+    check(src_slug, kind.src_type_slugs, "출발")
+    check(dst_slug, kind.dst_type_slugs, "도착")
 
 
 def require_cardinality(
@@ -73,11 +83,17 @@ def require_cardinality(
     src_limited = kind.cardinality in ("one_to_one", "many_to_one")
     dst_limited = kind.cardinality in ("one_to_one", "one_to_many")
 
+    # 선은 두 표에 있다 — 양끝이 객체면 `object_relations`, 한쪽이 system 이면
+    # `object_links`. 한쪽만 세면 「공급사는 하나」 가 부서 끝에서 조용히 둘이 된다.
     if src_limited:
         existing = db.scalar(
             select(ObjectRelation.id).where(
                 ObjectRelation.relation == kind.slug,
                 ObjectRelation.src_object_id == src_id,
+            )
+        ) or db.scalar(
+            select(ObjectLink.id).where(
+                ObjectLink.relation == kind.slug, ObjectLink.src_id == src_id
             )
         )
         if existing is not None:
@@ -91,6 +107,10 @@ def require_cardinality(
             select(ObjectRelation.id).where(
                 ObjectRelation.relation == kind.slug,
                 ObjectRelation.dst_object_id == dst_id,
+            )
+        ) or db.scalar(
+            select(ObjectLink.id).where(
+                ObjectLink.relation == kind.slug, ObjectLink.dst_id == dst_id
             )
         )
         if existing is not None:

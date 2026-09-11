@@ -12,7 +12,13 @@ import { Download, FileUp, Plus } from 'lucide-react'
 import { ontologyApi } from '@/modules/ontology/api'
 import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
-import type { Condition, ConditionOp, ObjectQuery, ObjectRow, SavedView } from '@/modules/objects/api'
+import type {
+  Condition,
+  ConditionOp,
+  ObjectQuery,
+  ObjectRow,
+  SavedView,
+} from '@/modules/objects/api'
 import { ConditionBar } from '@/modules/objects/ConditionBar'
 import { ViewPicker } from '@/modules/objects/ViewPicker'
 import { propertyText } from '@/modules/objects/PropertyFields'
@@ -227,17 +233,21 @@ export default function ObjectListPage() {
   }, [list.data])
 
   const type = foundType
+  /** 원 표를 비추는 타입 — 행이 없다. 만들기·파일·조건·뷰가 없고, 찾기만 있다. */
+  const isSystem = type?.kind_class === 'system'
   /** 지금 목록이 좁혀져 있나. 빈 목록의 이유가 이것으로 갈린다. */
   const narrowed =
-    Boolean(query) ||
-    conditions.length > 0 ||
-    Boolean(under) ||
-    (yearApplies && year !== null)
+    Boolean(query) || conditions.length > 0 || Boolean(under) || (yearApplies && year !== null)
   /** 트리가 정의된 타입인가. 안 정했으면 왼쪽을 안 그린다. */
   const hasTree = Boolean(type?.list_view?.tree?.relation)
   const columns = useMemo(
-    () => (type ? buildColumns(type, type.properties) : []),
-    [type],
+    () =>
+      type
+        ? isSystem
+          ? buildColumns({ ...type, list_view: { columns: ['key', 'label'] } }, [])
+          : buildColumns(type, type.properties)
+        : [],
+    [type, isSystem],
   )
 
   if (schema.error) return <ErrorNotice error={schema.error} />
@@ -247,8 +257,8 @@ export default function ObjectListPage() {
         title="없는 타입입니다"
         hint={
           <>
-            <code>{typeSlug}</code> 이라는 타입이 정의돼 있지 않습니다. 온톨로지 관리에서
-            만들거나 주소를 확인하세요.
+            <code>{typeSlug}</code> 이라는 타입이 정의돼 있지 않습니다. 온톨로지 관리에서 만들거나
+            주소를 확인하세요.
           </>
         }
       />
@@ -270,245 +280,266 @@ export default function ObjectListPage() {
       )}
 
       <div className="min-w-0 flex-1">
-      <PageHeader
-        title={type?.label ?? '…'}
-        description={type?.description || undefined}
-        actions={
-          type && (
-            <div className="flex gap-2">
-              {/* 내보내기는 **지금 거른 목록 그대로** — 화면과 파일이 같은 것을 말한다. */}
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button size="sm" variant="outline">
-                    <Download className="mr-1 size-4" />
-                    내보내기
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => download(() => objectApi.export(typeSlug, 'csv', exportQuery))}>
-                    객체 CSV (거른 {list.data?.total ?? 0}건)
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => download(() => objectApi.export(typeSlug, 'json', exportQuery))}>
-                    객체 JSON
-                  </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => download(() => objectApi.exportRelations(typeSlug, 'csv'))}>
-                    관계 CSV (이 타입에서 출발하는 것 전부)
-                  </DropdownMenuItem>
-                </DropdownMenuContent>
-              </DropdownMenu>
-              {type.kind_class !== 'system' && (
-                <>
-                  <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
-                    <FileUp className="mr-1 size-4" />
-                    파일로 넣기
-                  </Button>
-                  <Button size="sm" onClick={() => setCreating(true)}>
-                    <Plus className="mr-1 size-4" />
-                    만들기
-                  </Button>
-                </>
-              )}
-            </div>
-          )
-        }
-      />
-
-      <div className="mb-4 flex flex-wrap items-end gap-3">
-        <Input
-          value={query}
-          placeholder="이름·식별자로 찾기"
-          onChange={(event) => {
-            setQuery(event.target.value)
-            setOffset(0)
-          }}
-          className="max-w-xs"
+        <PageHeader
+          title={type?.label ?? '…'}
+          description={type?.description || undefined}
+          actions={
+            type &&
+            !isSystem && (
+              <div className="flex gap-2">
+                {/* 내보내기는 **지금 거른 목록 그대로** — 화면과 파일이 같은 것을 말한다. */}
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <Button size="sm" variant="outline">
+                      <Download className="mr-1 size-4" />
+                      내보내기
+                    </Button>
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        download(() => objectApi.export(typeSlug, 'csv', exportQuery))
+                      }
+                    >
+                      객체 CSV (거른 {list.data?.total ?? 0}건)
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() =>
+                        download(() => objectApi.export(typeSlug, 'json', exportQuery))
+                      }
+                    >
+                      객체 JSON
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onSelect={() => download(() => objectApi.exportRelations(typeSlug, 'csv'))}
+                    >
+                      관계 CSV (이 타입에서 출발하는 것 전부)
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+                {type.kind_class !== 'system' && (
+                  <>
+                    <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
+                      <FileUp className="mr-1 size-4" />
+                      파일로 넣기
+                    </Button>
+                    <Button size="sm" onClick={() => setCreating(true)}>
+                      <Plus className="mr-1 size-4" />
+                      만들기
+                    </Button>
+                  </>
+                )}
+              </div>
+            )
+          }
         />
 
-        {/* **거르기도 정의에서 나온다.** `list_view.filters` 가 가리키는 속성만
+        <div className="mb-4 flex flex-wrap items-end gap-3">
+          <Input
+            value={query}
+            placeholder="이름·식별자로 찾기"
+            onChange={(event) => {
+              setQuery(event.target.value)
+              setOffset(0)
+            }}
+            className="max-w-xs"
+          />
+
+          {/* **거르기도 정의에서 나온다.** `list_view.filters` 가 가리키는 속성만
             선다 — 전부 세우면 속성이 스물인 타입에서 그 줄이 화면을 덮는다. */}
-        {(type?.list_view?.filters ?? []).map((id) => {
-          if (!id.startsWith('properties.')) return null
-          const key = id.slice('properties.'.length)
-          const def = type?.properties.find((one) => one.key === key)
-          if (!def) return null
-          // 빠른 거르기는 「같음」 조건 하나다 — 아래 조건 줄과 같은 것을 가리킨다.
-          const quick = conditions.find((one) => one.field === key && one.op === 'eq')
-          return (
-            <PropertyFilter
-              key={key}
-              def={def}
-              value={quick?.value ?? ''}
-              onChange={(next) => {
-                const rest = conditions.filter((one) => !(one.field === key && one.op === 'eq'))
-                // **빈 값은 「거르지 않음」 이다.** 빈 문자열로 걸면 값이 빈
-                // 행만 나오는데, 그것은 아무도 뜻한 적 없는 결과다.
-                setConditions(next ? [...rest, { field: key, op: 'eq', value: next }] : rest)
-                setOffset(0)
-              }}
-            />
-          )
-        })}
-        {/* **올해 기본 + 전체 보기.** 연도를 쓰는 축에서 전체를 먼저 보여 주면
+          {(type?.list_view?.filters ?? []).map((id) => {
+            if (!id.startsWith('properties.')) return null
+            const key = id.slice('properties.'.length)
+            const def = type?.properties.find((one) => one.key === key)
+            if (!def) return null
+            // 빠른 거르기는 「같음」 조건 하나다 — 아래 조건 줄과 같은 것을 가리킨다.
+            const quick = conditions.find((one) => one.field === key && one.op === 'eq')
+            return (
+              <PropertyFilter
+                key={key}
+                def={def}
+                value={quick?.value ?? ''}
+                onChange={(next) => {
+                  const rest = conditions.filter((one) => !(one.field === key && one.op === 'eq'))
+                  // **빈 값은 「거르지 않음」 이다.** 빈 문자열로 걸면 값이 빈
+                  // 행만 나오는데, 그것은 아무도 뜻한 적 없는 결과다.
+                  setConditions(next ? [...rest, { field: key, op: 'eq', value: next }] : rest)
+                  setOffset(0)
+                }}
+              />
+            )
+          })}
+          {/* **올해 기본 + 전체 보기.** 연도를 쓰는 축에서 전체를 먼저 보여 주면
             몇 해치가 섞여 뜨고, 사람은 그것을 지금 쓰는 것으로 읽는다. */}
-        {yearApplies && (
-          <div className="flex items-end gap-2 pb-0.5">
-            <Select
-              value={year === null ? ALL : String(year)}
-              onValueChange={(next) => {
-                setYear(next === ALL ? null : Number(next))
-                setOffset(0)
-              }}
-            >
-              <SelectTrigger className="h-9 w-32">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL}>전체 연도</SelectItem>
-                {YEAR_OPTIONS.map((one) => (
-                  <SelectItem key={one} value={String(one)}>
-                    {one}년
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-        )}
-
-        {/* **기본은 포함이다.** 끄면 직계만 본다 — 상위 노드를 눌렀을 때 목록이
-            비면 그 빈 목록은 「없다」 로 읽힌다. */}
-        {under && (
-          <label className="text-muted-foreground flex items-center gap-1.5 pb-1.5 text-sm">
-            <input
-              type="checkbox"
-              className="size-4"
-              checked={deep}
-              onChange={(event) => {
-                setDeep(event.target.checked)
-                setOffset(0)
-              }}
-            />
-            아래 것까지 포함
-          </label>
-        )}
-      </div>
-
-      {exportError && <ErrorNotice error={exportError} className="mb-4" />}
-
-      {/* 조건 줄 — 칸 안 OR, 칸끼리 AND. 주소에 남고, 뷰로 저장된다. */}
-      {type && (
-        <div className="mb-4 flex flex-wrap items-center gap-2">
-          <ViewPicker
-            typeSlug={typeSlug}
-            current={{ q: query, conditions, status: null }}
-            activeId={activeView}
-            onApply={(view) => {
-              applyView(view)
-              setOffset(0)
-            }}
-            onClear={() => {
-              sync({ q: '', conditions: [], view: null })
-              setOffset(0)
-            }}
-          />
-          <ConditionBar
-            defs={type.properties}
-            conditions={conditions}
-            onChange={(next) => {
-              setConditions(next)
-              setOffset(0)
-            }}
-            refLabels={refLabelsOfList}
-          />
-        </div>
-      )}
-
-      {list.error && <ErrorNotice error={list.error} />}
-
-      {list.data && list.data.items.length === 0 ? (
-        <EmptyState
-          title={narrowed ? '거르기에 맞는 것이 없습니다' : '아직 아무것도 없습니다'}
-          hint={
-            /* **비어 있는 이유를 말한다.** 데이터가 없는 것인지, 거르기가 좁은
-               것인지, 권한 때문인지는 해야 할 일이 전혀 다르다. */
-            narrowed
-              ? under
-                ? '고른 가지 아래에 맞는 것이 없습니다. 왼쪽에서 「전체 보기」 를 누르거나 거르기를 줄여 보세요.'
-                : yearApplies && year !== null
-                  ? `${year}년에 해당하는 것이 없습니다. 「전체 연도」 로 바꿔 보세요.`
-                  : '찾는 말이나 거르기를 줄여 보세요. 다른 부서의 것은 여기 안 보입니다.'
-              : '「만들기」 로 첫 항목을 넣거나, 다른 부서의 것이라면 그 부서 사람에게 물어보세요.'
-          }
-          action={
-            narrowed ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  sync({ q: '', conditions: [], view: null })
-                  setUnder(null)
-                  setYear(null)
+          {yearApplies && (
+            <div className="flex items-end gap-2 pb-0.5">
+              <Select
+                value={year === null ? ALL : String(year)}
+                onValueChange={(next) => {
+                  setYear(next === ALL ? null : Number(next))
                   setOffset(0)
                 }}
               >
-                거르기 지우기
-              </Button>
-            ) : undefined
-          }
-        />
-      ) : (
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                {columns.map((column) => (
-                  <TableHead key={column.id}>{column.label}</TableHead>
-                ))}
-                <TableHead>부서</TableHead>
-                <TableHead>상태</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {(list.data?.items ?? []).map((row) => (
-                <TableRow key={row.id}>
-                  {columns.map((column, index) => (
-                    <TableCell key={column.id}>
-                      {index === 0 ? (
-                        <Link
-                          className="font-medium hover:underline"
-                          to={`/o/${typeSlug}/${row.id}`}
-                        >
-                          {column.render(row)}
-                        </Link>
-                      ) : (
-                        column.render(row)
-                      )}
-                    </TableCell>
+                <SelectTrigger className="h-9 w-32">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>전체 연도</SelectItem>
+                  {YEAR_OPTIONS.map((one) => (
+                    <SelectItem key={one} value={String(one)}>
+                      {one}년
+                    </SelectItem>
                   ))}
-                  <TableCell className="text-muted-foreground">
-                    {/* **NULL 은 전역이다.** 빈 칸으로 두면 「부서가 없다」 로 읽힌다. */}
-                    {row.owner_workspace_slug ?? '전역'}
-                  </TableCell>
-                  <TableCell>
-                    <StatusBadge kind="object" value={row.status} />
-                  </TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        </div>
-      )}
+                </SelectContent>
+              </Select>
+            </div>
+          )}
 
-      {list.data && (
-        <div className="mt-4">
-          <Pagination
-            total={list.data.total}
-            limit={list.data.limit}
-            offset={list.data.offset}
-            onChange={setOffset}
+          {/* **기본은 포함이다.** 끄면 직계만 본다 — 상위 노드를 눌렀을 때 목록이
+            비면 그 빈 목록은 「없다」 로 읽힌다. */}
+          {under && (
+            <label className="text-muted-foreground flex items-center gap-1.5 pb-1.5 text-sm">
+              <input
+                type="checkbox"
+                className="size-4"
+                checked={deep}
+                onChange={(event) => {
+                  setDeep(event.target.checked)
+                  setOffset(0)
+                }}
+              />
+              아래 것까지 포함
+            </label>
+          )}
+        </div>
+
+        {exportError && <ErrorNotice error={exportError} className="mb-4" />}
+
+        {isSystem && (
+          <p className="text-muted-foreground mb-4 text-sm">
+            이 목록은 다른 표(원 표)를 비춥니다 — 여기서 만들거나 고치지 않고, 그 표의 화면에서
+            합니다. 객체는 이것을 속성이나 관계로 가리킬 수 있습니다.
+          </p>
+        )}
+
+        {/* 조건 줄 — 칸 안 OR, 칸끼리 AND. 주소에 남고, 뷰로 저장된다. */}
+        {type && !isSystem && (
+          <div className="mb-4 flex flex-wrap items-center gap-2">
+            <ViewPicker
+              typeSlug={typeSlug}
+              current={{ q: query, conditions, status: null }}
+              activeId={activeView}
+              onApply={(view) => {
+                applyView(view)
+                setOffset(0)
+              }}
+              onClear={() => {
+                sync({ q: '', conditions: [], view: null })
+                setOffset(0)
+              }}
+            />
+            <ConditionBar
+              defs={type.properties}
+              conditions={conditions}
+              onChange={(next) => {
+                setConditions(next)
+                setOffset(0)
+              }}
+              refLabels={refLabelsOfList}
+            />
+          </div>
+        )}
+
+        {list.error && <ErrorNotice error={list.error} />}
+
+        {list.data && list.data.items.length === 0 ? (
+          <EmptyState
+            title={narrowed ? '거르기에 맞는 것이 없습니다' : '아직 아무것도 없습니다'}
+            hint={
+              /* **비어 있는 이유를 말한다.** 데이터가 없는 것인지, 거르기가 좁은
+               것인지, 권한 때문인지는 해야 할 일이 전혀 다르다. */
+              narrowed
+                ? under
+                  ? '고른 가지 아래에 맞는 것이 없습니다. 왼쪽에서 「전체 보기」 를 누르거나 거르기를 줄여 보세요.'
+                  : yearApplies && year !== null
+                    ? `${year}년에 해당하는 것이 없습니다. 「전체 연도」 로 바꿔 보세요.`
+                    : '찾는 말이나 거르기를 줄여 보세요. 다른 부서의 것은 여기 안 보입니다.'
+                : isSystem
+                  ? '비추는 원 표가 비어 있습니다.'
+                  : '「만들기」 로 첫 항목을 넣거나, 다른 부서의 것이라면 그 부서 사람에게 물어보세요.'
+            }
+            action={
+              narrowed ? (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    sync({ q: '', conditions: [], view: null })
+                    setUnder(null)
+                    setYear(null)
+                    setOffset(0)
+                  }}
+                >
+                  거르기 지우기
+                </Button>
+              ) : undefined
+            }
           />
-        </div>
-      )}
+        ) : (
+          <div className="rounded-md border">
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  {columns.map((column) => (
+                    <TableHead key={column.id}>{column.label}</TableHead>
+                  ))}
+                  {!isSystem && <TableHead>부서</TableHead>}
+                  <TableHead>상태</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {(list.data?.items ?? []).map((row) => (
+                  <TableRow key={row.id}>
+                    {columns.map((column, index) => (
+                      <TableCell key={column.id}>
+                        {index === 0 ? (
+                          <Link
+                            className="font-medium hover:underline"
+                            to={`/o/${typeSlug}/${row.id}`}
+                          >
+                            {column.render(row)}
+                          </Link>
+                        ) : (
+                          column.render(row)
+                        )}
+                      </TableCell>
+                    ))}
+                    {!isSystem && (
+                      <TableCell className="text-muted-foreground">
+                        {/* **NULL 은 전역이다.** 빈 칸으로 두면 「부서가 없다」 로 읽힌다. */}
+                        {row.owner_workspace_slug ?? '전역'}
+                      </TableCell>
+                    )}
+                    <TableCell>
+                      <StatusBadge kind="object" value={row.status} />
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </div>
+        )}
 
+        {list.data && (
+          <div className="mt-4">
+            <Pagination
+              total={list.data.total}
+              limit={list.data.limit}
+              offset={list.data.offset}
+              onChange={setOffset}
+            />
+          </div>
+        )}
       </div>
 
       {type && importing && (

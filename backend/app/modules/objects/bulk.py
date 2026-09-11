@@ -36,8 +36,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.objects import links, system
 from app.modules.objects import relations as rel
-from app.modules.objects.models import OBJECT_STATUSES, ObjectInstance, ObjectRelation
+from app.modules.objects.models import (
+    OBJECT_STATUSES,
+    ObjectInstance,
+    ObjectLink,
+    ObjectRelation,
+)
 from app.modules.objects.services import (
     normalize_key,
     properties_of,
@@ -154,7 +160,13 @@ class _Refs:
             by_key: dict[str, uuid.UUID] = {}
             by_label: dict[str, list[uuid.UUID]] = {}
             ids: set[str] = set()
-            if object_type is not None:
+            if object_type is not None and system.is_system(object_type):
+                # 원 표를 비추는 타입 — 식별자는 그 표의 것(부서 slug · 로그인 아이디).
+                for ref in system.source_of(object_type).list_all(self.db):
+                    ids.add(str(ref.id))
+                    by_key[ref.key] = ref.id
+                    by_label.setdefault(ref.label.strip(), []).append(ref.id)
+            elif object_type is not None:
                 rows = self.db.scalars(
                     select(ObjectInstance).where(
                         ObjectInstance.type_id == object_type.id,
@@ -803,6 +815,43 @@ def _type_ids(db: Session, slugs: list[str] | None) -> list[uuid.UUID] | None:
     return list(db.scalars(select(ObjectType.id).where(ObjectType.slug.in_(slugs))))
 
 
+def _find_dst(db: Session, user: User, text: str, kind: RelationType) -> system.End:
+    """도착점 — 객체 표 먼저, 그다음 관계가 허용한 system 타입의 원 표.
+
+    system 끝은 관계 종류가 도착 타입을 **정해 뒀을 때만** 본다. 안 정했으면 원 표를
+    전부 뒤지게 되고, 「부서 slug 를 적었더니 계정이 걸렸다」 같은 일이 생긴다.
+    """
+    types = system.types_by_slug(db)
+    allowed = kind.dst_type_slugs or []
+    plain = [types[s].id for s in allowed if s in types and not system.is_system(types[s])]
+    systemic = [types[s] for s in allowed if s in types and system.is_system(types[s])]
+    if not allowed or plain:
+        try:
+            found = _find_endpoint(db, user, text, plain or None)
+            found_type = next(t for t in types.values() if t.id == found.type_id)
+            return system.end_of(found, found_type)
+        except InvalidValue:
+            if not systemic:
+                raise
+    for target in systemic:
+        refs = system.source_of(target).list_all(db)
+        by_key = [r for r in refs if r.key == text]
+        by_label = [r for r in refs if r.label.strip() == text]
+        hit = by_key[0] if len(by_key) == 1 else by_label[0] if len(by_label) == 1 else None
+        if hit is None and len(by_label) > 1:
+            raise InvalidValue(
+                code("OBJECTS", 46),
+                f"「{text}」 이름이 {len(by_label)}개에 맞습니다. 식별자로 적으세요.",
+            )
+        if hit is None:
+            hit = next((r for r in refs if str(r.id) == text), None)
+        if hit is not None:
+            return system.End(
+                id=hit.id, type_slug=target.slug, label=hit.label, is_system=True
+            )
+    raise InvalidValue(code("OBJECTS", 46), f"「{text}」 을 찾을 수 없습니다.")
+
+
 def plan_relations(
     db: Session, user: User, object_type: ObjectType, rows: list[dict[str, Any]]
 ) -> Plan:
@@ -862,17 +911,24 @@ def _plan_relation(
         )
 
     src = _find_endpoint(db, user, src_text, [object_type.id])
-    dst = _find_endpoint(db, user, dst_text, _type_ids(db, kind.dst_type_slugs))
+    dst = _find_dst(db, user, dst_text, kind)
     require_owner_edit(
         db, user, src.owner_workspace_id, what="객체", code_value=code("OBJECTS", 27)
     )
-    rel.require_endpoints_allowed(db, kind, src, dst)
+    rel.require_end_types_allowed(db, kind, object_type.slug, dst.type_slug)
 
     triple = (src.id, kind.slug, dst.id)
     if triple in seen:
         raise InvalidValue(code("OBJECTS", 44), "같은 관계가 이 파일에 두 번 있습니다.")
     seen.add(triple)
     label = f"{src.label} -{kind.label}-> {dst.label}"
+    if dst.is_system:
+        # 한쪽 끝이 원 표면 선은 `object_links` 에 있다.
+        found = links.existing(db, src.id, dst.id, kind.slug)
+        if found is not None:
+            return RowPlan(row=index, action="unchanged", label=label, object_id=found.id)
+        rel.require_cardinality(db, kind, src.id, dst.id)
+        return RowPlan(row=index, action="create", label=label)
     existing = db.scalar(
         select(ObjectRelation.id).where(
             ObjectRelation.src_object_id == src.id,
@@ -901,9 +957,20 @@ def apply_relations(
         slug = str(row.get("relation") or "").strip()
         kind = kinds.get(slug) or by_label[slug]
         src = _find_endpoint(db, user, str(row.get("src") or "").strip(), [object_type.id])
-        dst = _find_endpoint(
-            db, user, str(row.get("dst") or "").strip(), _type_ids(db, kind.dst_type_slugs)
-        )
+        dst = _find_dst(db, user, str(row.get("dst") or "").strip(), kind)
+        if dst.is_system:
+            # `links.add` 가 개수 제약을 넣기 직전에 다시 본다 — 앞 행이 채웠을 수 있다.
+            link = links.add(
+                db,
+                user,
+                kind,
+                system.end_of(src, object_type),
+                dst,
+                evidence_note=str(row.get("evidence_note") or "").strip(),
+                reason="일괄 가져오기",
+            )
+            row_plan.object_id = link.id
+            continue
         # 앞 행이 만든 관계가 카디널리티를 채웠을 수 있다 — 넣기 직전에 한 번 더.
         rel.require_cardinality(db, kind, src.id, dst.id)
         rel.require_no_cycle(db, kind, src.id, dst.id)
@@ -983,4 +1050,41 @@ def export_relations(db: Session, user: User, object_type: ObjectType) -> list[d
                 "evidence_note": edge.evidence_note or "",
             }
         )
+    # 원 표(system)로 가는 선도 같은 파일에 — 도착점은 그 표의 식별자(부서 slug 등)로.
+    # 안 실으면 내보낸 파일을 다시 넣었을 때 그 선만 빠지고, 빠진 것은 안 보인다.
+    types = system.types_by_slug(db)
+    srcs = {
+        one.id: one
+        for one in db.scalars(
+            select(ObjectInstance).where(
+                ObjectInstance.type_id == object_type.id,
+                ObjectInstance.deleted_at.is_(None),
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+            )
+        )
+    }
+    if srcs:
+        link_rows = list(
+            db.scalars(
+                select(ObjectLink)
+                .where(ObjectLink.src_id.in_(srcs))
+                .order_by(ObjectLink.created_at)
+            )
+        )
+        for link in link_rows:
+            target_type = types.get(link.dst_type)
+            if target_type is None or not system.is_system(target_type):
+                continue
+            ref = system.find(db, target_type, link.dst_id)
+            if ref is None:
+                continue
+            origin = srcs[link.src_id]
+            out.append(
+                {
+                    "src": origin.key or origin.label,
+                    "relation": link.relation,
+                    "dst": ref.key,
+                    "evidence_note": link.evidence_note or "",
+                }
+            )
     return out

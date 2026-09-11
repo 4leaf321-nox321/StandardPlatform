@@ -49,12 +49,11 @@ export default function ObjectProfilePage() {
   const [confirming, setConfirming] = useState(false)
 
   // 매 렌더 새 배열이면 관계도가 글자 하나 칠 때마다 다시 흔들린다 — 정의가 바뀔 때만.
-  const typeSlugs = useMemo(
-    () => (schema.data?.types ?? []).map((one) => one.slug),
-    [schema.data],
-  )
+  const typeSlugs = useMemo(() => (schema.data?.types ?? []).map((one) => one.slug), [schema.data])
   const row = profile.data?.object
   const defs = profile.data?.properties_schema ?? []
+  /** 원 표를 비추는 객체 — 속성·첨부·이력·연도가 없고, 고치는 곳은 그 표의 화면이다. */
+  const isSystem = objectType?.kind_class === 'system'
 
   // 편집을 열 때 지금 값을 담는다. **화면 상태를 서버 값과 따로 두면** 저장을
   // 취소했을 때 어느 쪽이 진짜인지 알 수 없다.
@@ -97,7 +96,6 @@ export default function ObjectProfilePage() {
     }
   }
 
-
   return (
     <div className="mx-auto max-w-3xl space-y-6">
       <PageHeader
@@ -106,13 +104,16 @@ export default function ObjectProfilePage() {
         back={{ to: `/o/${typeSlug}`, label: profile.data.type_label }}
         actions={
           <div className="flex gap-2">
-            {/* **관계 목록은 한 단계만 보여 준다.** 그 너머는 그래프에서 — 누구나. */}
-            <Button asChild size="sm" variant="outline">
-              <Link to={`/graph?focus=${row.id}`}>
-                <Waypoints className="mr-1 size-4" />
-                그래프에서 보기
-              </Link>
-            </Button>
+            {/* **관계 목록은 한 단계만 보여 준다.** 그 너머는 그래프에서 — 누구나.
+                원 표의 객체는 그래프가 모른다(행이 없다). */}
+            {!isSystem && (
+              <Button asChild size="sm" variant="outline">
+                <Link to={`/graph?focus=${row.id}`}>
+                  <Waypoints className="mr-1 size-4" />
+                  그래프에서 보기
+                </Link>
+              </Button>
+            )}
             {profile.data.can_edit && !editing && (
               <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
                 <Pencil className="mr-1 size-4" />
@@ -134,14 +135,20 @@ export default function ObjectProfilePage() {
       <section className="space-y-3 rounded-md border p-4">
         <div className="flex flex-wrap items-center gap-3 text-sm">
           <StatusBadge kind="object" value={row.status} />
-          <span className="text-muted-foreground">
-            {/* **NULL 은 전역이다.** 빈 칸으로 두면 「부서가 없다」 로 읽힌다. */}
-            {row.owner_workspace_slug ? `${row.owner_workspace_slug} 부서` : '전역'}
-          </span>
-          <span className="text-muted-foreground">고친 때 {shownDateTime(row.updated_at)}</span>
+          {!isSystem && (
+            <span className="text-muted-foreground">
+              {/* **NULL 은 전역이다.** 빈 칸으로 두면 「부서가 없다」 로 읽힌다. */}
+              {row.owner_workspace_slug ? `${row.owner_workspace_slug} 부서` : '전역'}
+            </span>
+          )}
+          {!isSystem && (
+            <span className="text-muted-foreground">고친 때 {shownDateTime(row.updated_at)}</span>
+          )}
         </div>
 
-        {editing ? (
+        {isSystem ? (
+          <p className="text-muted-foreground text-sm">{row.description || '원 표의 행입니다.'}</p>
+        ) : editing ? (
           <div className="space-y-4">
             <div className="space-y-1.5">
               <Label htmlFor="edit-label">이름</Label>
@@ -189,6 +196,13 @@ export default function ObjectProfilePage() {
         )}
       </section>
 
+      {isSystem && (
+        <p className="text-muted-foreground text-sm">
+          이 객체는 다른 표(원 표)를 비춥니다. 이름과 내용은 그 표의 화면에서 고칩니다 — 여기서는
+          이것을 가리키는 관계만 봅니다.
+        </p>
+      )}
+
       {/* **연도를 쓰는 축에서만 나온다.** 없는 것을 있는 척하지 않는다. */}
       {objectType?.temporal_kind === 'yearly' && (
         <ObjectYears typeSlug={typeSlug} objectId={objectId} canEdit={profile.data.can_edit} />
@@ -205,26 +219,29 @@ export default function ObjectProfilePage() {
         onChanged={profile.reload}
       />
 
-      {/* 상세를 떠나지 않고 보는 관계도 — 관계가 없으면 안 그린다. */}
-      <GraphPanel objectId={objectId} typeSlugs={typeSlugs} />
+      {/* 상세를 떠나지 않고 보는 관계도 — 관계가 없으면 안 그린다. 원 표의 객체는
+          그래프가 모른다(행이 없다). */}
+      {!isSystem && <GraphPanel objectId={objectId} typeSlugs={typeSlugs} />}
 
       {/* 이 값이 어디서 왔나 — 상세가 다시 읽힐 때마다 이력도 다시(관계 변경은 updated_at 을
-          안 건드리므로 응답 객체 자체를 키로 쓴다). */}
-      <ObjectHistory
-        typeSlug={typeSlug}
-        objectId={objectId}
-        defs={defs}
-        current={{
-          key: row.key,
-          label: row.label,
-          status: row.status,
-          properties: row.properties,
-        }}
-        refLabels={row.ref_labels}
-        canEdit={profile.data.can_edit}
-        onRestored={profile.reload}
-        reloadKey={profile.data}
-      />
+          안 건드리므로 응답 객체 자체를 키로 쓴다). 원 표의 객체는 이력이 그 표에 있다. */}
+      {!isSystem && (
+        <ObjectHistory
+          typeSlug={typeSlug}
+          objectId={objectId}
+          defs={defs}
+          current={{
+            key: row.key,
+            label: row.label,
+            status: row.status,
+            properties: row.properties,
+          }}
+          refLabels={row.ref_labels}
+          canEdit={profile.data.can_edit}
+          onRestored={profile.reload}
+          reloadKey={profile.data}
+        />
+      )}
 
       {/* **속성이 둘이면 첨부 목록도 둘이다.** 안 가르면 「도면」 칸에
           「시험성적서」 가 섞여 보이고, 그 목록은 무엇도 말해 주지 못한다. */}
@@ -240,14 +257,16 @@ export default function ObjectProfilePage() {
         />
       ))}
 
-      {/* 속성으로 정해지지 않은 첨부. 자리를 안 나눠 쓰는 경우다. */}
-      <AttachmentList
-        ownerTable="objects"
-        ownerId={row.id}
-        workspaceSlug={row.owner_workspace_slug}
-        canEdit={profile.data.can_edit}
-        title={fileDefs.length > 0 ? '그 밖의 첨부' : '첨부'}
-      />
+      {/* 속성으로 정해지지 않은 첨부. 자리를 안 나눠 쓰는 경우다. 원 표의 객체에는 없다. */}
+      {!isSystem && (
+        <AttachmentList
+          ownerTable="objects"
+          ownerId={row.id}
+          workspaceSlug={row.owner_workspace_slug}
+          canEdit={profile.data.can_edit}
+          title={fileDefs.length > 0 ? '그 밖의 첨부' : '첨부'}
+        />
+      )}
 
       {confirming && (
         <ObjectDeleteDialog

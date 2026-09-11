@@ -191,6 +191,45 @@ class ObjectRelation(Base):
     )
 
 
+class ObjectLink(Base):
+    """한쪽 끝이 `objects` 밖인 관계 — **`system` 객체(부서·계정·승격한 표)와 잇는 선.**
+
+    `object_relations` 는 양끝이 `objects` 행이라 FK 로 묶인다. system 객체는 행이
+    없으므로(원 표를 투영한다) 그 선은 여기 담는다. 끝은 **타입 slug + id** 로
+    적는다 — 어느 끝이 원 표인지는 그 타입의 `kind_class` 가 말한다.
+
+    FK 가 없는 대가: 객체가 진짜로 지워지는 날 이 선이 남는다. 객체는 `deleted_at`
+    으로만 지우고, 지우기 전 확인(`lifecycle.references_of`)이 이 선도 세므로
+    그 날은 사실상 오지 않는다.
+    """
+
+    __tablename__ = "object_links"
+    __table_args__ = (
+        UniqueConstraint("src_id", "dst_id", "relation", name="uq_object_links_edge"),
+        Index("ix_object_links_src", "src_id", "relation"),
+        Index("ix_object_links_dst", "dst_id", "relation"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    src_type: Mapped[str] = mapped_column(String(SLUG_MAX))
+    src_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True))
+    dst_type: Mapped[str] = mapped_column(String(SLUG_MAX))
+    dst_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True))
+    relation: Mapped[str] = mapped_column(String(SLUG_MAX), index=True)
+    properties: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default="{}"
+    )
+    evidence_note: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class ObjectYear(Base):
     """`temporal_kind='yearly'` 인 축의 **연도 배정.**
 

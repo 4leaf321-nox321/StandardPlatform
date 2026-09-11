@@ -74,6 +74,11 @@ export interface ObjectType {
   nav_group_id: string | null
   nav_group_slug: string | null
   kind_class: 'reference' | 'record' | 'system'
+  /**
+   * 투영(`system`)이 비추는 원 표 — `workspace`(부서) · `user`(계정) · 승격한 전용 표.
+   * 그 타입에는 `objects` 행이 없다: 목록·상세·참조가 전부 원 표에서 나온다.
+   */
+  system_source: string
   entry_policy: 'open' | 'closed'
   key_policy: 'none' | 'optional' | 'required'
   key_scope: 'global' | 'workspace'
@@ -136,11 +141,18 @@ export interface NavGroupNode {
   items: { label: string; icon: string; to: string; slug: string }[]
 }
 
+export interface SystemSource {
+  key: string
+  label: string
+}
+
 export interface OntologySchema {
   groups: NavGroupRow[]
   types: (ObjectType & { properties: PropertyDef[] })[]
   relation_types: RelationType[]
   data_types: DataType[]
+  /** 투영 타입이 비출 수 있는 원 표들 — 이 설치가 등록한 것만. */
+  system_sources: SystemSource[]
   generated_at: string
 }
 
@@ -184,7 +196,12 @@ export interface PromoteOut {
   target_slug: string
   target_label: string
   target_new: boolean
-  options: { value: string; action: 'create' | 'reuse'; object_id: string | null; objects_with_value: number }[]
+  options: {
+    value: string
+    action: 'create' | 'reuse'
+    object_id: string | null
+    objects_with_value: number
+  }[]
   errors: string[]
   warnings: string[]
   snapshot_id: string | null
@@ -236,7 +253,12 @@ export const ontologyApi = {
   promoteProperty: (
     slug: string,
     key: string,
-    body: { target_type_slug?: string | null; new_slug?: string | null; new_label?: string | null; apply: boolean },
+    body: {
+      target_type_slug?: string | null
+      new_slug?: string | null
+      new_label?: string | null
+      apply: boolean
+    },
   ) => api.post<PromoteOut>(`/ontology/types/${slug}/properties/${key}/promote`, body),
   propertyUsage: (slug: string, key: string) =>
     api.get<PropertyUsage>(`/ontology/types/${slug}/properties/${key}/usage`),

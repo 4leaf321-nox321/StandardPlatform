@@ -146,8 +146,8 @@ export default function OntologyTypesPage() {
             </Table>
           </div>
           <p className="text-muted-foreground text-xs">
-            <b>행</b>을 누르면 묶음·분류·식별자 정책을 고치거나 지웁니다.{' '}
-            <b>「속성 정의」 단추</b>를 누르면 그 타입이 담는 값의 모양이 아래에 열립니다.
+            <b>행</b>을 누르면 묶음·분류·식별자 정책을 고치거나 지웁니다. <b>「속성 정의」 단추</b>
+            를 누르면 그 타입이 담는 값의 모양이 아래에 열립니다.
           </p>
         </>
       )}
@@ -166,6 +166,7 @@ export default function OntologyTypesPage() {
           type={target}
           groups={groups}
           relationTypes={schema?.relation_types ?? []}
+          systemSources={schema?.system_sources ?? []}
           onClose={() => setEditing(null)}
           onChanged={reload}
         />
@@ -252,13 +253,12 @@ function NewTypeForm({
         타입 만들기
       </Button>
       <p className="text-muted-foreground w-full text-xs">
-        slug 는 <b>나중에 바꿀 수 없습니다</b> — 주소(<code>/o/&lt;slug&gt;</code>)와 관계·MCP
-        도구 이름이 여기 물립니다.
+        slug 는 <b>나중에 바꿀 수 없습니다</b> — 주소(<code>/o/&lt;slug&gt;</code>)와 관계·MCP 도구
+        이름이 여기 물립니다.
       </p>
     </div>
   )
 }
-
 
 function PropertyEditor({
   type,
@@ -276,8 +276,8 @@ function PropertyEditor({
     <section className="space-y-3 rounded-md border p-4">
       {type.properties.length === 0 ? (
         <p className="text-muted-foreground text-sm">
-          아직 속성이 없습니다. 하나 정의하면 <b>{type.label} 만들기·상세 화면의 폼에 칸이
-          생깁니다.</b>
+          아직 속성이 없습니다. 하나 정의하면{' '}
+          <b>{type.label} 만들기·상세 화면의 폼에 칸이 생깁니다.</b>
         </p>
       ) : (
         <Table>
@@ -294,11 +294,7 @@ function PropertyEditor({
           </TableHeader>
           <TableBody>
             {type.properties.map((def) => (
-              <TableRow
-                key={def.key}
-                className="cursor-pointer"
-                onClick={() => setEditing(def)}
-              >
+              <TableRow key={def.key} className="cursor-pointer" onClick={() => setEditing(def)}>
                 <TableCell className="font-medium">{def.label}</TableCell>
                 <TableCell className="font-mono text-xs">{def.key}</TableCell>
                 <TableCell>{DATA_TYPE_LABELS[def.data_type]}</TableCell>
@@ -314,7 +310,8 @@ function PropertyEditor({
 
       <div className="flex items-center justify-between gap-3 border-t pt-3">
         <p className="text-muted-foreground text-xs">
-          {type.properties.length > 0 && '행을 누르면 이름·단위·안내·필수·여러 값을 고치거나 지웁니다. '}
+          {type.properties.length > 0 &&
+            '행을 누르면 이름·단위·안내·필수·여러 값을 고치거나 지웁니다. '}
           키와 종류는 만들 때만 정합니다.
         </p>
         <Button size="sm" onClick={() => setCreating(true)}>

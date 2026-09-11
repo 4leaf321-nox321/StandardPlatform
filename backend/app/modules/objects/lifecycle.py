@@ -27,6 +27,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.objects import links, system
 from app.modules.objects import relations as rel
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
@@ -136,6 +137,7 @@ def references_of(
                 out.hidden_property_refs += 1
 
     types = {one.id: one for one in db.scalars(select(ObjectType))}
+    types_by_slug = {one.slug: one for one in types.values()}
     edges = list(
         db.scalars(
             select(ObjectRelation).where(
@@ -163,6 +165,24 @@ def references_of(
             )
         else:
             out.hidden_relations += 1
+
+    # 원 표(system)와 이은 선도 「가리키는 것」 이다 — 안 세면 「담당 부서」 선이
+    # 걸린 객체가 「아무것도 안 걸렸다」 로 지워진다.
+    for link in system.links_of(db, row.id):
+        far = system.other_end(db, user, link, row.id, types_by_slug)
+        if far is None:
+            out.hidden_relations += 1
+            continue
+        out.relations.append(
+            RelationHit(
+                relation_id=link.id,
+                relation=link.relation,
+                outgoing=link.src_id == row.id,
+                other_id=far.id,
+                other_label=far.label,
+                other_type_slug=far.type_slug,
+            )
+        )
     return out
 
 
@@ -295,9 +315,20 @@ def delete_detaching(
             reason=reason,
         )
         db.delete(edge)
+    found_links = system.links_of(db, row.id)
+    for link in found_links:
+        links.remove(
+            db,
+            user,
+            link,
+            src_label="",
+            dst_label="",
+            workspace_id=row.owner_workspace_id,
+            reason=reason,
+        )
     _soft_delete(db, user, row, object_type, reason="참조를 비우고 지움")
     db.commit()
-    return {"property_refs": cleared, "relations": len(edges)}
+    return {"property_refs": cleared, "relations": len(edges) + len(found_links)}
 
 
 def merge_into(
@@ -369,6 +400,29 @@ def merge_into(
                 continue
         edge.src_object_id = src
         edge.dst_object_id = dst
+        moved_edges += 1
+    db.flush()
+
+    # 원 표와 이은 선도 이긴 쪽으로 — 겹치거나 개수 제약에 걸리면 버린다(위와 같다).
+    for link in system.links_of(db, row.id):
+        src_id = target.id if link.src_id == row.id else link.src_id
+        dst_id = target.id if link.dst_id == row.id else link.dst_id
+        kind = kinds.get(link.relation)
+        if links.existing(db, src_id, dst_id, link.relation) is not None:
+            db.delete(link)
+            dropped_edges += 1
+            continue
+        if kind is not None:
+            try:
+                rel.require_cardinality(db, kind, src_id, dst_id)
+            except AppError:
+                db.delete(link)
+                dropped_edges += 1
+                continue
+        link.src_id = src_id
+        link.dst_id = dst_id
+        if link.src_type == object_type.slug and src_id == target.id:
+            link.src_type = object_type.slug
         moved_edges += 1
     db.flush()
 

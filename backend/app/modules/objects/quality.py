@@ -19,11 +19,12 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, union
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.objects.models import ObjectInstance, ObjectRelation
+from app.modules.objects import system
+from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared import extensions
 from app.shared.permissions import is_any_manager, visible_owner_clause
@@ -110,7 +111,13 @@ def _orphans(
     )
     if not applies:
         return None
-    linked = select(ObjectRelation.src_object_id).union(select(ObjectRelation.dst_object_id))
+    # 원 표(부서·계정)와 이은 선도 관계다 — 안 세면 「담당 부서」 만 걸린 객체가 고아로 뜬다.
+    linked = union(
+        select(ObjectRelation.src_object_id),
+        select(ObjectRelation.dst_object_id),
+        select(ObjectLink.src_id),
+        select(ObjectLink.dst_id),
+    )
     stmt = _visible_objects(db, user, object_type).where(ObjectInstance.id.not_in(linked))
     count = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     if not count:
@@ -136,15 +143,35 @@ def _broken_refs(
         row_id: label
         for row_id, label in db.execute(select(ObjectInstance.id, ObjectInstance.label))
     }
+    # 상대가 원 표(system)인 칸은 그 표에서 산 것을 본다 — 객체 표에는 없는 id 라서.
+    types = system.types_by_slug(db)
+    rows = list(db.scalars(_visible_objects(db, user, object_type)))
+    system_alive: dict[str, set[str]] = {}
+    for d in ref_defs:
+        target = types.get(d.ref_type_slug or "")
+        if target is None or not system.is_system(target):
+            continue
+        wanted: set[uuid.UUID] = set()
+        for row in rows:
+            raw = (row.properties or {}).get(d.key)
+            for item in raw if isinstance(raw, list) else [raw]:
+                if isinstance(item, str) and item:
+                    try:
+                        wanted.add(uuid.UUID(item))
+                    except ValueError:
+                        continue
+        found = system.source_of(target).lookup(db, sorted(wanted)) if wanted else {}
+        system_alive[d.key] = {str(one) for one in found}
     hits: list[Hit] = []
     count = 0
-    for row in db.scalars(_visible_objects(db, user, object_type)):
+    for row in rows:
         values = row.properties or {}
         broken: list[str] = []
         for d in ref_defs:
             raw = values.get(d.key)
+            living = system_alive.get(d.key, alive)
             for item in raw if isinstance(raw, list) else [raw]:
-                if isinstance(item, str) and item and item not in alive:
+                if isinstance(item, str) and item and item not in living:
                     try:
                         name = names.get(uuid.UUID(item))
                     except ValueError:

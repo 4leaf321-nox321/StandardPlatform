@@ -100,7 +100,8 @@ def _entries(db: Session, row: ObjectInstance) -> list[AuditEntry]:
         .where(
             or_(
                 (AuditEntry.target_table == "objects") & (AuditEntry.target_id == row.id),
-                (AuditEntry.target_table == "object_relations")
+                # 원 표와 이은 선(`object_links`)도 같은 모양으로 남는다 — 이력에 함께.
+                AuditEntry.target_table.in_(("object_relations", "object_links"))
                 & or_(
                     AuditEntry.changes["src"].astext == mine,
                     AuditEntry.changes["dst"].astext == mine,

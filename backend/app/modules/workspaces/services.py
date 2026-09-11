@@ -20,10 +20,10 @@ from app.modules.workspaces.schemas import (
     WorkspaceOut,
     WorkspaceReferenceOut,
 )
-from app.shared import audit, extensions
+from app.shared import audit, extensions, system_sources
 from app.shared.errors import AppError, Conflict, NotFound, code
 from app.shared.permissions import membership_of, workspace_by_slug
-from app.shared.text import clean
+from app.shared.text import clean, compare_key
 
 ROLES = ("member", "manager")
 
@@ -538,3 +538,56 @@ def export_rows(db: Session) -> list[list[object]]:
             ]
         )
     return out
+
+
+# --- 온톨로지가 부서를 비추는 길 --------------------------------------------
+
+
+def _system_ref(node: Workspace, path: str) -> system_sources.SystemRef:
+    return system_sources.SystemRef(
+        id=node.id, key=node.slug, label=node.name, hint=path, active=node.is_active
+    )
+
+
+def _system_search(
+    db: Session, _viewer: User, q: str | None, limit: int, offset: int
+) -> tuple[list[system_sources.SystemRef], int]:
+    """**트리 순서 그대로.** 부서 선택기가 어디서 열리든 같은 차례여야 한다.
+
+    보는 사람의 소속과 무관하게 전부 준다 — 「담당 부서」 를 고르려면 남의 부서도
+    골라야 하고, 부서 이름은 가입 화면(`/options`)이 이미 로그인 없이 보여 준다.
+    """
+    needle = compare_key(q) if q else ""
+    rows = [
+        _system_ref(node, path)
+        for node, _depth, path in ordered_tree(db)
+        if not needle
+        or needle in compare_key(node.name)
+        or needle in compare_key(node.slug)
+        or needle in compare_key(path)
+    ]
+    return rows[offset : offset + limit], len(rows)
+
+
+def _system_lookup(
+    db: Session, ids: list[uuid.UUID]
+) -> dict[uuid.UUID, system_sources.SystemRef]:
+    if not ids:
+        return {}
+    paths = {node.id: path for node, _depth, path in ordered_tree(db)}
+    found = db.scalars(select(Workspace).where(Workspace.id.in_(ids)))
+    return {row.id: _system_ref(row, paths.get(row.id, row.name)) for row in found}
+
+
+def _system_list_all(db: Session) -> list[system_sources.SystemRef]:
+    return [_system_ref(node, path) for node, _depth, path in ordered_tree(db)]
+
+
+#: `kind_class='system'` 타입이 `system_source='workspace'` 로 가리키는 원 표.
+SYSTEM_SOURCE = system_sources.SystemSource(
+    key="workspace",
+    label="부서",
+    search=_system_search,
+    lookup=_system_lookup,
+    list_all=_system_list_all,
+)

@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-09-12a
+GUIDE_VERSION: 2026-09-12b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -77,8 +77,12 @@ GUIDE_VERSION: 2026-09-12a
   값을 비우려면 그 키에 `null`. 통째로 덮지 않는다.
 - 참조 속성(`data_type: reference`)에는 상대 객체의 **id** 를 넣는다. id 를 모르면
   `objects_list` 로 먼저 찾는다.
-- `object_get` 은 `object` · `properties_schema` · `relations`(양방향) 를 함께 준다 —
+- `object_get` 은 `object` · `properties_schema` · `related`(양방향) 를 함께 준다 —
   화면의 상세와 같은 것이다.
+- `kind_class` 가 `system` 인 타입(부서·계정 등)은 **행이 없다** — 다른 표를 비춘다.
+  `objects_list` 로 읽고 `object_ref`·관계의 상대로 쓸 수는 있지만, 만들거나 고치지는
+  못한다(그 표의 화면에서 한다). 파일·`objects_import` 에서는 그 표의 식별자(부서면
+  slug, 계정이면 로그인 아이디)로 적는다.
 
 <!--@ bulk -->
 ## 여러 행 한 번에

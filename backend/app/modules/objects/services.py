@@ -9,10 +9,11 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import Select, func, or_, select
+from sqlalchemy import Select, Text, func, or_, select
 from sqlalchemy.orm import Session
 
-from app.modules.objects.models import ObjectInstance, ObjectYear
+from app.modules.objects import system
+from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectYear
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.ontology.services import InvalidValue, object_ref_ids
 from app.shared import extensions
@@ -94,17 +95,10 @@ def require_refs_exist(db: Session, defs: list[PropertyDef], values: dict[str, A
     **없는 것을 가리키는 참조를 저장하면 화면에 빈 칸으로 나오고**, 그것이
     「값이 없음」 인지 「가리키던 것이 사라짐」 인지 구별할 수 없다.
     """
-    wanted = object_ref_ids(defs, values)
-    if not wanted:
+    if not object_ref_ids(defs, values):
         return
-    found = set(
-        db.scalars(
-            select(ObjectInstance.id).where(
-                ObjectInstance.id.in_(wanted), ObjectInstance.deleted_at.is_(None)
-            )
-        )
-    )
-    missing = [str(x) for x in wanted if x not in found]
+    # 상대가 system 타입이면 원 표에서, 아니면 객체 표에서 — `system.py` 가 가른다.
+    missing = system.missing_refs(db, defs, values)
     if missing:
         raise InvalidValue(
             code("OBJECTS", 4),
@@ -238,10 +232,43 @@ def workspace_reference(
         )
         or 0
     )
+    # 온톨로지가 이 부서를 **가리키는** 것 — 관계 선(`object_links`)과 참조 칸. FK 가
+    # 없어 DB 는 안 막지만, 지우면 「담당 부서」 가 빈 칸이 되고 그 이유는 안 뜬다.
+    linked = (
+        db.scalar(
+            select(func.count())
+            .select_from(ObjectLink)
+            .where((ObjectLink.src_id == workspace_id) | (ObjectLink.dst_id == workspace_id))
+        )
+        or 0
+    )
+    referring = (
+        db.scalar(
+            select(func.count())
+            .select_from(ObjectInstance)
+            .where(
+                ObjectInstance.deleted_at.is_(None),
+                ObjectInstance.properties.cast(Text).contains(str(workspace_id)),
+            )
+        )
+        or 0
+    )
     return [
         extensions.WorkspaceReference(
             table="objects", label="객체", count=count, blocks_delete=True
-        )
+        ),
+        extensions.WorkspaceReference(
+            table="object_links",
+            label="이 부서와 이은 객체(관계)",
+            count=int(linked),
+            blocks_delete=True,
+        ),
+        extensions.WorkspaceReference(
+            table="objects.properties",
+            label="이 부서를 가리키는 객체(속성)",
+            count=int(referring),
+            blocks_delete=True,
+        ),
     ]
 
 

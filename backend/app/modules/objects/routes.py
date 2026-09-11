@@ -19,11 +19,21 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.files.models import Attachment
-from app.modules.objects import bulk, conditions, graph, history, lifecycle, quality
+from app.modules.objects import (
+    bulk,
+    conditions,
+    graph,
+    history,
+    lifecycle,
+    links,
+    quality,
+    system,
+)
 from app.modules.objects import relations as rel
 from app.modules.objects.models import (
     OBJECT_STATUSES,
     ObjectInstance,
+    ObjectLink,
     ObjectRelation,
     ObjectYear,
     SavedView,
@@ -102,6 +112,16 @@ def _type(db: Session, slug: str) -> ObjectType:
     return row
 
 
+def _not_system(object_type: ObjectType, what: str) -> None:
+    """system 축은 **원 표를 투영**한다. 여기에 행을 만들면 두 벌이 되고, 두 벌은
+    반드시 갈린다. 원 표의 화면(부서 관리·계정 관리)에서 한다."""
+    if system.is_system(object_type):
+        raise Forbidden(
+            code("OBJECTS", 14),
+            f"{object_type.label}은 다른 표를 비추는 타입이라 여기서 {what} 않습니다.",
+        )
+
+
 def _workspace_slugs(db: Session) -> dict[uuid.UUID, str]:
     return {row.id: row.slug for row in db.scalars(select(Workspace))}
 
@@ -112,33 +132,10 @@ def _ref_labels(
     """이 목록이 가리키는 객체들의 이름을 **한 번에** 읽는다.
 
     행마다 물으면 목록 한 쪽에 질의가 수십 개 붙는다. 어느 키가 참조인지는
-    속성 정의가 알므로, 아무 문자열이나 uuid 로 넘겨짚지 않는다.
+    속성 정의가 알므로, 아무 문자열이나 uuid 로 넘겨짚지 않는다. 상대가 system
+    타입이면 원 표에서 읽는다 — `system.ref_labels` 가 가른다.
     """
-    ref_keys = [d.key for d in defs if d.data_type == "object_ref"]
-    if not ref_keys:
-        return {}
-
-    wanted: set[uuid.UUID] = set()
-    for row in rows:
-        values = row.properties or {}
-        for key in ref_keys:
-            raw = values.get(key)
-            for item in raw if isinstance(raw, list) else [raw]:
-                if not isinstance(item, str):
-                    continue
-                try:
-                    wanted.add(uuid.UUID(item))
-                except ValueError:  # pragma: no cover - 검증이 이미 막는다
-                    continue
-    if not wanted:
-        return {}
-
-    found = db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(wanted)))
-    # 지워진 것을 가리키면 **지워졌다고 적는다.** 이름만 보이면 살아 있는 줄 안다.
-    return {
-        row.id: row.label if row.deleted_at is None else f"{row.label} (지워짐)"
-        for row in found
-    }
+    return system.ref_labels(db, defs, [row.properties or {} for row in rows])
 
 
 def _out(
@@ -594,6 +591,7 @@ def object_template(
 ) -> Response:
     """빈 CSV — 헤더가 「무엇을 채워야 하는지」 를 말한다."""
     object_type = _type(db, type_slug)
+    _not_system(object_type, "파일로 넣지")
     defs = properties_of(db, object_type.id)
     body = bulk.to_csv(bulk.export_columns(defs), [])
     return Response(
@@ -619,6 +617,7 @@ def export_objects(
     """지금 거른 목록 **그대로** 파일로. 쪽 상한 없이 전부 — 목록의 상한은 화면을
     위한 것이고, 파일은 그 상한을 넘어서기 위해 있다."""
     object_type = _type(db, type_slug)
+    _not_system(object_type, "내보내지")
     defs = properties_of(db, object_type.id)
     stmt = _filtered(
         db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
@@ -765,13 +764,24 @@ def list_objects(
     정하고, 안 정해 뒀으면 기본형으로 떨어진다 — **빈 화면이 되지는 않는다.**
     """
     object_type = _type(db, type_slug)
+    capped = clamp_limit(limit)
+
+    if system.is_system(object_type):
+        # 행이 없다 — 원 표를 그대로 투영한다. 거르기는 검색어뿐이다(속성이 없으므로).
+        refs, total = system.source_of(object_type).search(db, user, q, capped, offset)
+        now = datetime.now(UTC)
+        return Page(
+            items=[system.projected(ref, object_type.slug, now) for ref in refs],
+            total=total,
+            limit=capped,
+            offset=offset,
+        )
 
     stmt = _filtered(
         db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
     )
 
     total = count_of(db, stmt)
-    capped = clamp_limit(limit)
     rows = db.scalars(apply_sort(stmt, object_type).limit(capped).offset(offset))
 
     found = list(rows)
@@ -796,6 +806,19 @@ def object_profile(
     db: Session = Depends(get_db),
 ) -> ObjectProfileOut:
     object_type = _type(db, type_slug)
+    if system.is_system(object_type):
+        ref = system.find(db, object_type, object_id)
+        if ref is None:
+            raise NotFound(code("OBJECTS", 11), "객체를 찾을 수 없습니다.")
+        return ObjectProfileOut(
+            object=system.projected(ref, object_type.slug, datetime.now(UTC)),
+            type_label=object_type.label,
+            properties_schema=[],
+            attachments=[],
+            related=_related_links(db, user, object_id),
+            # 원 표의 화면에서 고친다. 관계도 객체 쪽 끝에서 맺는다.
+            can_edit=False,
+        )
     try:
         row = _visible(db, user, object_type, object_id)
     except NotFound:
@@ -856,13 +879,7 @@ def create_object(
         raise Forbidden(
             code("OBJECTS", 13), f"{object_type.label}은 지금 쓰지 않는 타입입니다."
         )
-    if object_type.kind_class == "system":
-        # system 축은 **원 표를 투영**한다. 여기에 행을 만들면 두 벌이 되고,
-        # 두 벌은 반드시 갈린다.
-        raise Forbidden(
-            code("OBJECTS", 14),
-            f"{object_type.label}은 다른 표를 비추는 타입이라 여기서 만들지 않습니다.",
-        )
+    _not_system(object_type, "만들지")
 
     owner_workspace_id = resolve_owner_workspace(
         db, user, payload.workspace_slug, what="객체", code_value=code("OBJECTS", 15)
@@ -1115,7 +1132,7 @@ def _related(db: Session, user: User, row: ObjectInstance) -> list[RelatedObject
         )
     )
     if not edges:
-        return []
+        return _related_links(db, user, row.id)
 
     other_ids = {
         (edge.dst_object_id if edge.src_object_id == row.id else edge.src_object_id)
@@ -1168,6 +1185,46 @@ def _related(db: Session, user: User, row: ObjectInstance) -> list[RelatedObject
                 created_at=edge.created_at,
             )
         )
+    return out + _related_links(db, user, row.id)
+
+
+def _related_links(db: Session, user: User, mine: uuid.UUID) -> list[RelatedObjectOut]:
+    """한쪽 끝이 원 표(system)인 선들 — 「관련 객체」 에 같은 줄로 선다."""
+    found = system.links_of(db, mine)
+    if not found:
+        return []
+    kinds = {one.slug: one for one in db.scalars(select(RelationType))}
+    types = system.types_by_slug(db)
+    out: list[RelatedObjectOut] = []
+    for link in found:
+        other = system.other_end(db, user, link, mine, types)
+        if other is None:
+            continue
+        outgoing = link.src_id == mine
+        kind = kinds.get(link.relation)
+        if kind is None:
+            label = link.relation
+        elif outgoing or not kind.directed:
+            label = kind.label
+        else:
+            label = kind.inverse_label or f"{kind.label}의 반대"
+        other_type = types.get(other.type_slug)
+        out.append(
+            RelatedObjectOut(
+                relation_id=link.id,
+                relation=link.relation,
+                label=label,
+                outgoing=outgoing,
+                object_id=other.id,
+                object_label=other.label,
+                object_key=None,
+                object_type_slug=other.type_slug,
+                object_type_label=other_type.label if other_type else "알 수 없음",
+                properties=link.properties or {},
+                evidence_note=link.evidence_note,
+                created_at=link.created_at,
+            )
+        )
     return out
 
 
@@ -1193,17 +1250,33 @@ def add_relation(
         db, user, src.owner_workspace_id, what="객체", code_value=code("OBJECTS", 27)
     )
 
-    dst = db.scalar(
-        select(ObjectInstance).where(
-            ObjectInstance.id == payload.dst_object_id,
-            ObjectInstance.deleted_at.is_(None),
-            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
-        )
-    )
-    if dst is None:
-        raise NotFound(code("OBJECTS", 28), "이을 객체를 찾을 수 없습니다.")
-
     kind = rel.relation_type(db, payload.relation)
+    dst_end = system.find_end(db, user, payload.dst_object_id, allowed=kind.dst_type_slugs)
+    if dst_end is None:
+        raise NotFound(code("OBJECTS", 28), "이을 객체를 찾을 수 없습니다.")
+    if dst_end.is_system:
+        # 도착점이 원 표(부서·계정)면 선은 `object_links` 에 — 규칙은 같다.
+        defs = list(
+            db.scalars(
+                select(PropertyDef).where(
+                    PropertyDef.owner_kind == "relation", PropertyDef.owner_id == kind.id
+                )
+            )
+        )
+        link = links.add(
+            db,
+            user,
+            kind,
+            system.end_of(src, object_type),
+            dst_end,
+            properties=validate_properties(defs, payload.properties, apply_defaults=True),
+            evidence_note=payload.evidence_note,
+        )
+        db.commit()
+        return _link_out(db, user, src.id, link.id)
+
+    dst = db.get(ObjectInstance, dst_end.id)
+    assert dst is not None
     rel.require_endpoints_allowed(db, kind, src, dst)
     rel.require_cardinality(db, kind, src.id, dst.id)
     rel.require_no_cycle(db, kind, src.id, dst.id)
@@ -1272,6 +1345,34 @@ def update_relation(
     require_owner_edit(
         db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 30)
     )
+    link = _link(db, relation_id, row)
+    if link is not None:
+        if payload.evidence_note is not None:
+            link.evidence_note = payload.evidence_note
+        if payload.properties is not None:
+            kind = rel.relation_type(db, link.relation)
+            defs = list(
+                db.scalars(
+                    select(PropertyDef).where(
+                        PropertyDef.owner_kind == "relation", PropertyDef.owner_id == kind.id
+                    )
+                )
+            )
+            link.properties = validate_properties(
+                defs, merge_properties(link.properties or {}, payload.properties)
+            )
+        audit.record(
+            db,
+            action="object.relation.update",
+            actor=user,
+            target_table=links.TABLE,
+            target_id=link.id,
+            target_label=f"{row.label} · {link.relation}",
+            workspace_id=row.owner_workspace_id,
+            changes=links.endpoints(link, *_link_labels(db, user, link)),
+        )
+        db.commit()
+        return _link_out(db, user, row.id, link.id)
     edge = _edge(db, relation_id, row)
 
     if payload.evidence_note is not None:
@@ -1322,6 +1423,19 @@ def remove_relation(
     require_owner_edit(
         db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 31)
     )
+    link = _link(db, relation_id, row)
+    if link is not None:
+        src_label, dst_label = _link_labels(db, user, link)
+        links.remove(
+            db,
+            user,
+            link,
+            src_label=src_label,
+            dst_label=dst_label,
+            workspace_id=row.owner_workspace_id,
+        )
+        db.commit()
+        return
     edge = _edge(db, relation_id, row)
 
     audit.record(
@@ -1341,6 +1455,28 @@ def remove_relation(
 def _edge_labels(db: Session, edge: ObjectRelation) -> tuple[str, str]:
     src = db.get(ObjectInstance, edge.src_object_id)
     dst = db.get(ObjectInstance, edge.dst_object_id)
+    return (src.label if src else "", dst.label if dst else "")
+
+
+def _link_out(
+    db: Session, user: User, mine: uuid.UUID, link_id: uuid.UUID
+) -> RelatedObjectOut:
+    return next(one for one in _related_links(db, user, mine) if one.relation_id == link_id)
+
+
+def _link(db: Session, relation_id: uuid.UUID, row: ObjectInstance) -> ObjectLink | None:
+    """그 id 가 **이 객체에 걸린 링크**인가. 관계 id 와 링크 id 는 한 자리(`relation_id`)로
+    온다 — 화면은 둘을 구별할 이유가 없고, 구별하게 하면 지우는 단추가 둘이 된다."""
+    link = db.get(ObjectLink, relation_id)
+    if link is None or row.id not in (link.src_id, link.dst_id):
+        return None
+    return link
+
+
+def _link_labels(db: Session, user: User, link: ObjectLink) -> tuple[str, str]:
+    types = system.types_by_slug(db)
+    src = system.other_end(db, user, link, link.dst_id, types)
+    dst = system.other_end(db, user, link, link.src_id, types)
     return (src.label if src else "", dst.label if dst else "")
 
 

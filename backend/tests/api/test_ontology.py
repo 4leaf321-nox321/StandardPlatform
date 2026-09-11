@@ -275,7 +275,9 @@ def test_파일_속성은_properties_로_안_받는다(client: TestClient, admin
 
 def test_system_타입에는_객체를_안_만든다(client: TestClient, admin: Signed) -> None:
     """system 축은 **원 표를 투영한다.** 여기 행을 만들면 두 벌이 되고 갈린다."""
-    dept = _make_type(client, admin, "dept", label="부서", kind_class="system")
+    dept = _make_type(
+        client, admin, "dept", label="부서", kind_class="system", system_source="workspace"
+    )
     response = client.post(
         f"/api/objects/{dept}",
         json={"label": "본사", "workspace_slug": admin.workspace},

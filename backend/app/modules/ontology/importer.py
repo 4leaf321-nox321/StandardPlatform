@@ -42,7 +42,7 @@ from app.modules.ontology.models import (
     PropertyDef,
     RelationType,
 )
-from app.modules.ontology.services import require_key, require_slug
+from app.modules.ontology.services import require_key, require_slug, system_source_error
 
 #: 스키마가 담을 수 있는 것. **모르는 것이 오면 거절한다** — 조용히 무시하면
 #: 보낸 쪽은 적용된 줄 안다.
@@ -57,6 +57,7 @@ TYPE_FIELDS = {
     "sort_order",
     "nav_group_slug",
     "kind_class",
+    "system_source",
     "entry_policy",
     "key_policy",
     "key_scope",
@@ -211,6 +212,13 @@ def plan(db: Session, payload: dict[str, Any]) -> Plan:
         if wanted and wanted not in groups and wanted not in incoming:
             out.errors.append(f"타입 {slug}: 없는 묶음을 가리킵니다: {wanted}")
 
+        # 투영 타입은 비출 표가 등록돼 있어야 한다 — 보낸 것과 있는 것을 합쳐 본다.
+        kind = one.get("kind_class", object_type.kind_class if object_type else "record")
+        source = one.get("system_source", object_type.system_source if object_type else "")
+        source_error = system_source_error(str(kind or "record"), str(source or ""))
+        if source_error:
+            out.errors.append(f"타입 {slug}: {source_error}")
+
         if object_type is None:
             out.changes.append(Change("type", slug, "create"))
         else:
@@ -353,6 +361,22 @@ def _warn_property_risks(
 
 
 def _warn_type_risks(db: Session, found: ObjectType, one: dict[str, Any], out: Plan) -> None:
+    if one.get("kind_class") == "system" and found.kind_class != "system":
+        count = int(
+            db.scalar(
+                select(func.count())
+                .select_from(ObjectInstance)
+                .where(ObjectInstance.type_id == found.id, ObjectInstance.deleted_at.is_(None))
+            )
+            or 0
+        )
+        if count:
+            # 행이 있는 타입을 투영으로 돌리면 그 행이 화면에서 사라진다 — 경고가
+            # 아니라 오류다. 승격은 절차가 따로 있다.
+            out.errors.append(
+                f"타입 {found.slug}: 객체가 {count}개 있어 투영(system)으로 바꿀 수 없습니다. "
+                "전용 표로 옮기는 절차(docs/승격-경로.md)를 따르세요."
+            )
     if one.get("is_active") is False and found.is_active:
         count = int(
             db.scalar(
