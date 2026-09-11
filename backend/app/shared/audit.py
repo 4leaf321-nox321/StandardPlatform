@@ -64,6 +64,21 @@ def diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def relation_endpoints(edge: Any, src_label: str, dst_label: str) -> dict[str, Any]:
+    """관계 기록에 양 끝을 **id 로** 남긴다.
+
+    이름만 남기면 객체의 이력에서 「이 관계가 나에게 걸린 것」 을 찾을 수 없다 —
+    이름은 바뀌고 겹친다.
+    """
+    return {
+        "relation": edge.relation,
+        "src": str(edge.src_object_id),
+        "dst": str(edge.dst_object_id),
+        "src_label": src_label,
+        "dst_label": dst_label,
+    }
+
+
 def record(
     db: Session,
     *,
