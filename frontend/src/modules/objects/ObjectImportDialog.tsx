@@ -66,10 +66,20 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
   const [error, setError] = useState<Error | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
+  const download = (job: () => Promise<void>) => {
+    setError(null)
+    job().catch((caught: unknown) =>
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류')),
+    )
+  }
+
   const run = async (apply: boolean) => {
     if (!file) return
     setBusy(true)
     setError(null)
+    // 같은 경로를 다시 고를 수 있게 입력 칸을 비운다 — 안 비우면 change 가 안 나고,
+    // 엑셀에서 고친 파일을 다시 골라도 옛 File 객체가 나가 「Failed to fetch」 로 끝난다.
+    if (inputRef.current) inputRef.current.value = ''
     try {
       const result =
         kind === 'objects'
@@ -144,7 +154,7 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
           )}
           <div className="flex flex-wrap gap-2 pt-1">
             {kind === 'objects' && (
-              <Button size="xs" variant="outline" onClick={() => void objectApi.template(type.slug)}>
+              <Button size="xs" variant="outline" onClick={() => download(() => objectApi.template(type.slug))}>
                 <Download className="mr-1 size-3" />
                 템플릿 받기
               </Button>
@@ -153,9 +163,11 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
               size="xs"
               variant="outline"
               onClick={() =>
-                void (kind === 'objects'
-                  ? objectApi.export(type.slug, 'csv')
-                  : objectApi.exportRelations(type.slug, 'csv'))
+                download(() =>
+                  kind === 'objects'
+                    ? objectApi.export(type.slug, 'csv')
+                    : objectApi.exportRelations(type.slug, 'csv'),
+                )
               }
             >
               <Download className="mr-1 size-3" />

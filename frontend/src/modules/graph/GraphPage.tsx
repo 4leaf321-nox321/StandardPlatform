@@ -94,8 +94,8 @@ interface Explored {
   truncated: boolean
   /** 안내문에 적는 상한. 씨앗 종류에 따라 온 것만 든다. */
   limits: { depth?: number; fanout?: number; node_limit: number }
-  /** 타입 전부일 때 — 「N개 중 M개」. */
-  page: { total: number; offset: number; limit: number } | null
+  /** 타입 전부일 때 — 「N개 중 M개」. `shown` 은 이 쪽에 실린 행 수(펼치기·숨기기와 무관). */
+  page: { total: number; offset: number; limit: number; shown: number } | null
   /** 어느 노드를 펼쳐서 들어왔나(id → 펼친 노드 id). 캔버스가 새 노드를 그 곁에 놓는다. */
   origin: Map<string, string>
 }
@@ -120,10 +120,11 @@ function mergeNeighborhood(previous: Explored | null, fresh: Neighborhood): Expl
   return {
     ...mergeNodes(previous, fresh, previous ? fresh.focus : null),
     focus: previous ? previous.focus : fresh.focus,
-    limits: {
+    // 펼치기는 늘 1단계로 부르므로 안내문의 상한은 **첫 응답 것**을 지킨다.
+    limits: previous?.limits ?? {
       depth: fresh.depth,
       fanout: fresh.fanout,
-      node_limit: previous?.limits.node_limit ?? fresh.node_limit,
+      node_limit: fresh.node_limit,
     },
     page: previous?.page ?? null,
   }
@@ -134,7 +135,7 @@ function fromSubgraph(fresh: Subgraph): Explored {
     ...mergeNodes(null, fresh, null),
     focus: null,
     limits: { node_limit: fresh.limit },
-    page: { total: fresh.total, offset: fresh.offset, limit: fresh.limit },
+    page: { total: fresh.total, offset: fresh.offset, limit: fresh.limit, shown: fresh.nodes.length },
   }
 }
 
@@ -208,35 +209,63 @@ function shownDegrees(edges: Iterable<GraphEdge>): Map<string, number> {
 export default function GraphPage() {
   const { user } = useAuth()
   const [params, setParams] = useSearchParams()
-  const [seed, setSeedState] = useState<Seed | null>(() => seedFromParams(params))
+  // **주소가 곧 상태다.** 씨앗과 조작을 따로 들고 있으면 사이드바에서 같은 화면으로 다시
+  // 올 때(재마운트 없음) 옛 그림이 남는다. 쪽(offset)만은 주소에 안 적어 여기 든다.
+  // 값이 같으면 같은 객체여야 한다 — 매번 새 객체면 색 기준만 바꿔도 그림을 다시 읽는다.
+  const focusParam = params.get('focus')
+  const typeParam = params.get('type')
+  const urlSeed = useMemo(
+    () => seedFromParams(new URLSearchParams({ ...(focusParam ? { focus: focusParam } : {}), ...(typeParam ? { type: typeParam } : {}) })),
+    [focusParam, typeParam],
+  )
+  const [offset, setOffset] = useState(0)
+  const seed = useMemo<Seed | null>(
+    () => (urlSeed?.kind === 'type' ? { ...urlSeed, offset } : urlSeed),
+    [urlSeed, offset],
+  )
+  const controlsKey = Object.values(CONTROL_KEYS)
+    .map((key) => params.get(key) ?? '')
+    .join('\u0000')
+  const controls = useMemo(
+    () => controlsFromParams(params),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [controlsKey],
+  )
   const [mode, setMode] = useState<Mode>(seed ? 'explore' : 'schema')
-  const [controls, setControlsState] = useState<Controls>(() => controlsFromParams(params))
+  useEffect(() => {
+    if (urlSeed) setMode('explore')
+  }, [urlSeed])
 
   const setControls = useCallback(
     (patch: Partial<Controls>) => {
-      setControlsState((current) => {
-        const next = { ...current, ...patch }
-        const query = new URLSearchParams(params)
-        writeControls(query, next)
-        setParams(query, { replace: true })
-        return next
-      })
+      setParams(
+        (current) => {
+          const query = new URLSearchParams(current)
+          writeControls(query, { ...controlsFromParams(current), ...patch })
+          return query
+        },
+        { replace: true },
+      )
     },
-    [params, setParams],
+    [setParams],
   )
 
-  // 주소가 곧 씨앗이다 — 링크를 붙여 넣으면 같은 그림이 선다. 쪽(offset)은 안 적는다.
   const setSeed = useCallback(
     (next: Seed | null) => {
-      setSeedState(next)
-      const query = new URLSearchParams(params)
-      query.delete('focus')
-      query.delete('type')
-      if (next?.kind === 'focus') query.set('focus', next.id)
-      if (next?.kind === 'type') query.set('type', next.slugs.join(','))
-      setParams(query, { replace: true })
+      setOffset(next?.kind === 'type' ? next.offset : 0)
+      setParams(
+        (current) => {
+          const query = new URLSearchParams(current)
+          query.delete('focus')
+          query.delete('type')
+          if (next?.kind === 'focus') query.set('focus', next.id)
+          if (next?.kind === 'type') query.set('type', next.slugs.join(','))
+          return query
+        },
+        { replace: true },
+      )
     },
-    [params, setParams],
+    [setParams],
   )
 
   const schema = useResource(() => ontologyApi.schema(), [])
@@ -535,9 +564,14 @@ function ExploreView({
 
   // 씨앗·상한·거르기가 바뀌면 **처음부터 다시** 든다. 펼쳐 둔 것은 버린다 —
   // 거르기가 바뀐 뒤에도 옛 노드가 남아 있으면 그 그림은 무엇을 거른 것인지 말할 수 없다.
+  // 진행 중인 요청의 세대. 씨앗·거르기가 바뀌면 올라가고, 늦게 온 응답은 버린다 —
+  // 안 버리면 거르기를 바꾼 뒤에 옛 펼치기 응답이 걸러 낸 노드를 도로 넣는다.
+  const generation = useRef(0)
   useEffect(() => {
+    generation.current += 1
     if (!seed) {
       setExplored(null)
+      setLoading(false)
       return
     }
     let cancelled = false
@@ -575,15 +609,19 @@ function ExploreView({
 
   /** 노드에서 한 단계 더 — 이미 든 것에 합친다. */
   const expand = async (id: string) => {
+    const mine = generation.current
     setLoading(true)
     setError(null)
     try {
       const fresh = await query(id, 1)
-      setExplored((previous) => mergeNeighborhood(previous, fresh))
+      if (generation.current !== mine) return // 그새 씨앗·거르기가 바뀌었다 — 이 응답은 옛것
+      setExplored((previous) => (previous ? mergeNeighborhood(previous, fresh) : previous))
     } catch (caught: unknown) {
-      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+      if (generation.current === mine) {
+        setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+      }
     } finally {
-      setLoading(false)
+      if (generation.current === mine) setLoading(false)
     }
   }
 
@@ -651,6 +689,10 @@ function ExploreView({
 
   // 범례 — 그림에 실제로 있는 범주만. 노드 범주는 눌러서 「그것만 또렷」.
   const [legendActive, setLegendActive] = useState<string | null>(null)
+  // 색 기준이나 씨앗이 바뀌면 범례의 키가 다른 것이 된다 — 옛 키로 거르면 전부 흐려진다.
+  useEffect(() => {
+    setLegendActive(null)
+  }, [colorBy, seed, communities.ready])
   const legend = useMemo(() => {
     const items: { color: string; label: string; key?: string; line?: boolean }[] = []
     if (!communities.ready) {
@@ -757,8 +799,9 @@ function ExploreView({
           if (seed) setReloadTick((value) => value + 1)
         },
       }),
+      // expand·pickFocus 는 매 렌더 새 함수라 그대로 적는다 — 빼면 옛 거르기로 펼친다.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-      [picked, pickedHidden, loading, explored?.focus, seed],
+      [picked, pickedHidden, loading, explored?.focus, seed, expand, pickFocus],
     ),
     Boolean(seed),
   )
@@ -946,8 +989,8 @@ function ExploreView({
                     <span>
                       {explored.page
                         ? `${explored.page.total.toLocaleString()}개 중 ${explored.page.offset + 1}–${(
-                            explored.page.offset + nodeList.length
-                          ).toLocaleString()}`
+                            explored.page.offset + explored.page.shown
+                          ).toLocaleString()} · 노드 ${nodeList.length}`
                         : `노드 ${nodeList.length}`}
                       {' · '}관계 {edgeList.length}
                       {communities.ready ? ` · 무리 ${communities.count}` : ''}
@@ -1249,6 +1292,7 @@ function SeedPanel({ seed, current, types, typeLabel, onPick, onDrawTypes, onCle
     const needle = text.trim()
     if (!needle) {
       setHits([])
+      setSearching(false)
       return
     }
     let cancelled = false

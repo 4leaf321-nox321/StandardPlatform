@@ -47,6 +47,7 @@ interface ViewPickerProps {
 export function ViewPicker({ typeSlug, current, activeId, onApply, onClear }: ViewPickerProps) {
   const views = useResource(() => viewApi.list(typeSlug), [typeSlug])
   const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
   const list = views.data ?? []
   const shared = list.filter((one) => one.workspace_slug)
   const mine = list.filter((one) => !one.workspace_slug)
@@ -104,10 +105,16 @@ export function ViewPicker({ typeSlug, current, activeId, onApply, onClear }: Vi
             <DropdownMenuItem
               className="text-destructive"
               onSelect={() => {
-                void viewApi.remove(typeSlug, active.id).then(() => {
-                  views.reload()
-                  onClear()
-                })
+                setError(null)
+                viewApi
+                  .remove(typeSlug, active.id)
+                  .then(() => {
+                    views.reload()
+                    onClear()
+                  })
+                  .catch((caught: unknown) =>
+                    setError(caught instanceof Error ? caught : new Error('알 수 없는 오류')),
+                  )
               }}
             >
               <Trash2 className="mr-1 size-3.5" />
@@ -117,6 +124,7 @@ export function ViewPicker({ typeSlug, current, activeId, onApply, onClear }: Vi
         </DropdownMenuContent>
       </DropdownMenu>
 
+      {error && <ErrorNotice error={error} className="basis-full" />}
       {saving && (
         <SaveViewDialog
           typeSlug={typeSlug}

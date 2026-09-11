@@ -147,9 +147,11 @@ function conditionsFromParams(params: URLSearchParams): Condition[] {
 export default function ObjectListPage() {
   const { typeSlug = '' } = useParams()
   const [params, setParams] = useSearchParams()
-  const [query, setQueryState] = useState(() => params.get('q') ?? '')
-  const [conditions, setConditionsState] = useState<Condition[]>(() => conditionsFromParams(params))
-  const [activeView, setActiveView] = useState<string | null>(() => params.get('view'))
+  // **주소가 곧 상태다.** 따로 들고 있으면 사이드바에서 다른 타입으로 갈 때(같은 화면이
+  // 재사용된다) 옛 조건이 남아 「없는 칸」 으로 422 가 난다. 주소에서 매번 읽는다.
+  const query = params.get('q') ?? ''
+  const conditions = useMemo(() => conditionsFromParams(params), [params])
+  const activeView = params.get('view')
   /** 검색어·조건을 바꾸면 주소도 같이 — 그리고 걸려 있던 뷰는 풀린다(손댄 순간 그 뷰가 아니다). */
   const sync = (next: { q?: string; conditions?: Condition[]; view?: string | null }) => {
     const q = next.q ?? query
@@ -164,9 +166,6 @@ export default function ObjectListPage() {
     for (const one of list) copy.append(`f.${one.field}.${one.op}`, one.value)
     if (view) copy.set('view', view)
     setParams(copy, { replace: true })
-    setQueryState(q)
-    setConditionsState(list)
-    setActiveView(view)
   }
   const setQuery = (q: string) => sync({ q })
   const setConditions = (list: Condition[]) => sync({ conditions: list })
@@ -182,6 +181,14 @@ export default function ObjectListPage() {
   const [offset, setOffset] = useState(0)
   const [creating, setCreating] = useState(false)
   const [importing, setImporting] = useState(false)
+  /** 내보내기 실패 — 새 탭이 아니라 이 화면에 떠야 한다. 조용히 실패하면 아무 일도 안 일어난 것처럼 보인다. */
+  const [exportError, setExportError] = useState<Error | null>(null)
+  const download = (run: () => Promise<void>) => {
+    setExportError(null)
+    run().catch((caught: unknown) =>
+      setExportError(caught instanceof Error ? caught : new Error('알 수 없는 오류')),
+    )
+  }
 
   const schema = useResource(() => ontologyApi.schema(), [])
   const foundType = schema.data?.types.find((row) => row.slug === typeSlug)
@@ -278,13 +285,13 @@ export default function ObjectListPage() {
                   </Button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end">
-                  <DropdownMenuItem onSelect={() => void objectApi.export(typeSlug, 'csv', exportQuery)}>
+                  <DropdownMenuItem onSelect={() => download(() => objectApi.export(typeSlug, 'csv', exportQuery))}>
                     객체 CSV (거른 {list.data?.total ?? 0}건)
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => void objectApi.export(typeSlug, 'json', exportQuery)}>
+                  <DropdownMenuItem onSelect={() => download(() => objectApi.export(typeSlug, 'json', exportQuery))}>
                     객체 JSON
                   </DropdownMenuItem>
-                  <DropdownMenuItem onSelect={() => void objectApi.exportRelations(typeSlug, 'csv')}>
+                  <DropdownMenuItem onSelect={() => download(() => objectApi.exportRelations(typeSlug, 'csv'))}>
                     관계 CSV (이 타입에서 출발하는 것 전부)
                   </DropdownMenuItem>
                 </DropdownMenuContent>
@@ -384,6 +391,8 @@ export default function ObjectListPage() {
           </label>
         )}
       </div>
+
+      {exportError && <ErrorNotice error={exportError} className="mb-4" />}
 
       {/* 조건 줄 — 칸 안 OR, 칸끼리 AND. 주소에 남고, 뷰로 저장된다. */}
       {type && (

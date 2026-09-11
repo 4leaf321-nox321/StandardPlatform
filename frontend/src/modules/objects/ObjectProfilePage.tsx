@@ -4,7 +4,7 @@
  * 속성·첨부가 한 화면에 있고, 2단계에서 관계와 관계도가 여기 붙는다.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Pencil, Trash2, Waypoints } from 'lucide-react'
 
@@ -48,6 +48,11 @@ export default function ObjectProfilePage() {
   const [saving, setSaving] = useState(false)
   const [confirming, setConfirming] = useState(false)
 
+  // 매 렌더 새 배열이면 관계도가 글자 하나 칠 때마다 다시 흔들린다 — 정의가 바뀔 때만.
+  const typeSlugs = useMemo(
+    () => (schema.data?.types ?? []).map((one) => one.slug),
+    [schema.data],
+  )
   const row = profile.data?.object
   const defs = profile.data?.properties_schema ?? []
 
@@ -201,10 +206,7 @@ export default function ObjectProfilePage() {
       />
 
       {/* 상세를 떠나지 않고 보는 관계도 — 관계가 없으면 안 그린다. */}
-      <GraphPanel
-        objectId={objectId}
-        typeSlugs={(schema.data?.types ?? []).map((one) => one.slug)}
-      />
+      <GraphPanel objectId={objectId} typeSlugs={typeSlugs} />
 
       {/* 이 값이 어디서 왔나 — 상세가 다시 읽힐 때마다 이력도 다시(관계 변경은 updated_at 을
           안 건드리므로 응답 객체 자체를 키로 쓴다). */}

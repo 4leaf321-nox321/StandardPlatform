@@ -229,3 +229,20 @@ def test_뷰를_고치면_이름과_조건이_바뀐다(client: TestClient, admi
     assert patched.status_code == 200, patched.text
     assert patched.json()["name"] == "아주 무거운 것"
     assert patched.json()["query"]["conditions"][0]["value"] == "20"
+
+
+def test_숫자_칸의_그_중_하나와_여러_값_숫자_칸(client: TestClient, admin: Signed) -> None:
+    """`in` 이 값을 통째로 숫자로 읽어 422 를 내던 것, 여러 값 숫자 칸이 500 을 내던 것."""
+    part, _, _ = _world(client, admin)
+    assert _labels(client, admin, part, **{"f.weight.in": "5|20"}) == ["볼트", "와셔"]
+    _make_property(
+        client, admin, part, key="sizes", label="치수들", data_type="number", multi=True
+    )
+    _make_object(client, admin, part, key="P-D", label="다치수", properties={"sizes": [3, 5]})
+    assert _labels(client, admin, part, **{"f.sizes.eq": "5"}) == ["다치수"]
+    assert _labels(client, admin, part, **{"f.sizes.in": "4|3"}) == ["다치수"]
+    assert _labels(client, admin, part, **{"f.sizes.ne": "3"}) == ["너트", "볼트", "와셔"]
+    ranged = client.get(
+        f"/api/objects/{part}", params={"f.sizes.gte": "3"}, headers=admin.headers
+    )
+    assert ranged.status_code == 422 and "범위" in ranged.json()["error"]["message"]

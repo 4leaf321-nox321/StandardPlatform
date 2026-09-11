@@ -39,8 +39,9 @@ interface EnumOptionsPanelProps {
   property: PropertyDef
   /** 코드표로 쓸 수 있는 타입(kind_class=reference). */
   types: ObjectType[]
-  /** 이름을 바꾸거나 승격한 뒤 — 정의를 다시 읽는다. */
-  onChanged: () => void
+  /** 이름을 바꾼 뒤 — 정의를 다시 읽는다. **바뀐 것을 함께 준다**: 이 창이 들고 있는 옛
+   *  정의로 「저장」 을 누르면 방금 바꾼 이름이 도로 옛 이름으로 덮인다. */
+  onChanged: (renamed?: { from: string; to: string }) => void
   /** 승격이 끝나면 이 창(속성 편집)을 닫는다 — 속성이 더는 enum 이 아니다. */
   onPromoted: () => void
 }
@@ -48,7 +49,9 @@ interface EnumOptionsPanelProps {
 export function EnumOptionsPanel({ type, property, types, onChanged, onPromoted }: EnumOptionsPanelProps) {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [promoting, setPromoting] = useState(false)
-  const options = property.enum_options ?? []
+  // 바꾼 이름을 여기서도 바로 반영한다 — 부모가 정의를 다시 읽기 전에 옛 이름이 남으면
+  // 「스틸」 을 또 바꾸려다 「고를 값에 없습니다」 를 본다.
+  const [options, setOptions] = useState<string[]>(property.enum_options ?? [])
 
   return (
     <div className="space-y-2 rounded-md border p-3">
@@ -80,9 +83,11 @@ export function EnumOptionsPanel({ type, property, types, onChanged, onPromoted 
           propertyKey={property.key}
           from={renaming}
           onClose={() => setRenaming(null)}
-          onDone={() => {
+          onDone={(to) => {
+            const from = renaming
             setRenaming(null)
-            onChanged()
+            setOptions((current) => current.map((one) => (one === from ? to : one)))
+            onChanged({ from, to })
           }}
         />
       )}
@@ -107,7 +112,8 @@ interface RenameDialogProps {
   propertyKey: string
   from: string
   onClose: () => void
-  onDone: () => void
+  /** 바뀐 새 이름. */
+  onDone: (to: string) => void
 }
 
 function RenameDialog({ typeSlug, propertyKey, from, onClose, onDone }: RenameDialogProps) {
@@ -122,7 +128,7 @@ function RenameDialog({ typeSlug, propertyKey, from, onClose, onDone }: RenameDi
     try {
       const result = await ontologyApi.renameOption(typeSlug, propertyKey, { from, to: to.trim(), apply })
       setPlan(result)
-      if (result.applied) onDone()
+      if (result.applied) onDone(result.to_value)
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     } finally {

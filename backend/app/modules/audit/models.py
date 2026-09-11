@@ -16,7 +16,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Identity, Integer, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
@@ -126,6 +126,12 @@ class AuditEntry(Base):
     """사람이 적은 사유. 없을 수 있다 — **없다고 안 남기지는 않는다.**"""
 
     request_id: Mapped[str | None] = mapped_column(String(40), nullable=True, index=True)
+    seq: Mapped[int] = mapped_column(
+        BigInteger, Identity(always=False), nullable=False, unique=True
+    )
+    """넣은 차례. `created_at` 은 트랜잭션 시작 시각이라 **한 트랜잭션의 기록 여럿이 같은
+    값**을 갖는다 — 합치기·승격처럼 객체 여러 개를 한 번에 고치는 일이 그렇다. 그 안의
+    순서를 이것이 정한다. 이력 재구성이 이 순서를 거꾸로 밟는다."""
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )

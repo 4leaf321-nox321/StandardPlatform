@@ -263,6 +263,8 @@ function ValueInput({ field, multi, value, picked, onValue, onPicked }: ValueInp
 
   // 참조 칸 — 상대 타입의 객체를 읽어 고르게 한다. 200개까지(목록 상한).
   useEffect(() => {
+    // 칸이 바뀌면 옛 타입의 후보를 먼저 비운다 — 안 비우면 새 목록이 올 때까지 남의 객체가 고를 수 있게 보인다.
+    setOptions(null)
     if (field.data_type !== 'object_ref' || !field.ref_type_slug) return
     let cancelled = false
     objectApi

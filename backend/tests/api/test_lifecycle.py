@@ -270,3 +270,36 @@ def test_남의_부서가_가리키면_수만_말한다(
     assert refs["property_refs"] == []
     assert refs["hidden_property_refs"] == 1
     assert refs["total"] == 1
+
+
+def test_합칠_때도_관계_종류의_규칙을_지킨다(client: TestClient, admin: Signed) -> None:
+    """many_to_one 인 관계를 옮기다 이긴 쪽에 둘이 되면 버린다 — 직접 이을 때 거절당할
+    선이다."""
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    vendor = _make_type(client, admin, label="공급사", key_policy="optional")
+    kind = _make_relation(
+        client,
+        admin,
+        "supplied_by",
+        label="공급받음",
+        src_type_slugs=[part],
+        dst_type_slugs=[vendor],
+        cardinality="many_to_one",
+    )
+    bolt = _make_object(client, admin, part, key="P-1", label="볼트")
+    acme = _make_object(client, admin, vendor, label="ACME")
+    other = _make_object(client, admin, vendor, label="OTHER")
+    # 볼트 → ACME 하나. 그리고 너트 → OTHER.
+    assert _link(client, admin, part, bolt["id"], kind, acme["id"]).status_code == 201
+    nut = _make_object(client, admin, part, key="P-2", label="너트")
+    assert _link(client, admin, part, nut["id"], kind, other["id"]).status_code == 201
+    # 너트를 볼트에 합치면 볼트 → OTHER 선이 생겨야 하는데, 볼트는 이미 공급사가 하나라
+    # 못 갖는다.
+    result = client.post(
+        f"/api/objects/{part}/{nut['id']}/merge",
+        json={"into": bolt["id"]},
+        headers=admin.headers,
+    ).json()
+    assert result["relations_moved"] == 0 and result["relations_dropped"] == 1
+    profile = client.get(f"/api/objects/{part}/{bolt['id']}", headers=admin.headers).json()
+    assert [one["object_label"] for one in profile["related"]] == ["ACME"]

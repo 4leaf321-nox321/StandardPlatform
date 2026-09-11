@@ -107,7 +107,8 @@ def _entries(db: Session, row: ObjectInstance) -> list[AuditEntry]:
                 ),
             )
         )
-        .order_by(AuditEntry.created_at.asc(), AuditEntry.id.asc())
+        # created_at 은 트랜잭션 시작 시각이라 한 트랜잭션 안에서는 같다 — 넣은 차례(seq)로.
+        .order_by(AuditEntry.seq.asc())
     )
     return list(db.scalars(stmt))
 

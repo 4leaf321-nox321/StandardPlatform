@@ -218,3 +218,47 @@ def test_이력은_볼_수_있는_사람이면_누구나_되돌리기는_고칠_
         headers=member.headers,
     )
     assert denied.status_code == 403
+
+
+def test_한_트랜잭션의_기록_여럿도_넣은_차례대로_되짚는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """created_at 은 트랜잭션 시작 시각이라 같은 값이 여럿 — 순서가 무작위면 시점 값이 틀린다.
+    고를 값 이름 바꾸기가 객체 셋을 한 트랜잭션에 고친다."""
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="material",
+        label="재질",
+        data_type="enum",
+        enum_options=["스틸", "고무"],
+    )
+    rows = [
+        _make_object(
+            client,
+            admin,
+            part,
+            key=f"P-{i}",
+            label=f"부품{i}",
+            properties={"material": "스틸"},
+        )
+        for i in range(3)
+    ]
+    for _ in range(3):
+        client.post(
+            f"/api/ontology/types/{part}/properties/material/rename-option",
+            json={"from": "스틸", "to": "강", "apply": True},
+            headers=admin.headers,
+        )
+        client.post(
+            f"/api/ontology/types/{part}/properties/material/rename-option",
+            json={"from": "강", "to": "스틸", "apply": True},
+            headers=admin.headers,
+        )
+    for row in rows:
+        entries = _history(client, admin, part, row["id"])
+        values = [one["snapshot"]["properties"]["material"] for one in entries]
+        # 최근 → 과거: 스틸, 강, 스틸, 강, 스틸, 강, 스틸(만듦)
+        assert values == ["스틸", "강", "스틸", "강", "스틸", "강", "스틸"]

@@ -40,7 +40,11 @@ describe('고를 값 다루기', () => {
     expect(ontologyApi.renameOption).toHaveBeenCalledWith('part', 'material', { from: '스틸', to: '강', apply: false })
     await userEvent.click(screen.getByRole('button', { name: /바꾸기 — 저장값 7개 포함/ }))
     await waitFor(() => expect(ontologyApi.renameOption).toHaveBeenLastCalledWith('part', 'material', { from: '스틸', to: '강', apply: true }))
-    expect(onChanged).toHaveBeenCalled()
+    // 바뀐 것을 부모에게 알리고, 이 판의 목록도 바로 새 이름이다 — 옛 정의로 「저장」 을 눌러
+    // 되돌리는 구멍을 막는다.
+    expect(onChanged).toHaveBeenCalledWith({ from: '스틸', to: '강' })
+    expect(await screen.findByText('강')).toBeInTheDocument()
+    expect(screen.queryByText('스틸')).not.toBeInTheDocument()
   })
 
   it('승격 — 계획(값마다 새로/재사용, 옮길 수)을 보고 누른다', async () => {

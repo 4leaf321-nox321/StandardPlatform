@@ -27,10 +27,11 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.objects import relations as rel
 from app.modules.objects.models import ObjectInstance, ObjectRelation
-from app.modules.ontology.models import ObjectType, PropertyDef
+from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared import audit
-from app.shared.errors import Conflict, code
+from app.shared.errors import AppError, Conflict, code
 from app.shared.permissions import require_owner_edit, visible_owner_clause
 
 
@@ -334,6 +335,7 @@ def merge_into(
             )
         )
     )
+    kinds = {one.slug: one for one in db.scalars(select(RelationType))}
     moved_edges = 0
     dropped_edges = 0
     for edge in edges:
@@ -353,6 +355,18 @@ def merge_into(
             db.delete(edge)
             dropped_edges += 1
             continue
+        # 옮긴 뒤에도 관계 종류의 규칙(카디널리티·순환)이 서야 한다 — 직접 이을 때
+        # 거절당할 선을 합치기가 몰래 만들면 그 선은 아무도 설명 못 한다. 안 서면 버린다.
+        kind = kinds.get(edge.relation)
+        if kind is not None:
+            # 이 선은 아직 지는 쪽에 걸려 있어 이긴 쪽 기준의 개수·순환 검사에 안 세어진다.
+            try:
+                rel.require_cardinality(db, kind, src, dst)
+                rel.require_no_cycle(db, kind, src, dst)
+            except AppError:
+                db.delete(edge)
+                dropped_edges += 1
+                continue
         edge.src_object_id = src
         edge.dst_object_id = dst
         moved_edges += 1

@@ -359,3 +359,64 @@ def test_파일_안_중복_식별자는_오류(client: TestClient, admin: Signed
     plan = _upload(client, admin, part, "key,label\nP-1,볼트\nP-1,볼트2\n")
     assert plan["rows"][1]["action"] == "error"
     assert "행에도" in plan["rows"][1]["message"]
+
+
+# --- 리뷰에서 잡힌 것 ------------------------------------------------------------
+
+
+def test_id_로_고치면서_식별자도_바꾼다(client: TestClient, admin: Signed) -> None:
+    """계획은 「key 바뀜」 이라 했는데 적용이 옛 키를 쓰던 구멍."""
+    part = _part_type(client, admin)
+    made = _make_object(client, admin, part, key="P-1", label="볼트")
+    done = _upload(client, admin, part, f"id,key,label\n{made['id']},P-9,볼트\n", apply=True)
+    assert done["applied"] is True and done["rows"][0]["changes"] == ["key"]
+    profile = client.get(f"/api/objects/{part}/{made['id']}", headers=admin.headers).json()
+    assert profile["object"]["key"] == "P-9"
+
+
+def test_JSON_의_null_은_비움이고_없는_키는_안_보냄이다(
+    client: TestClient, admin: Signed
+) -> None:
+    """MCP 가 그렇게 약속했다 — 파일과 달리 JSON 은 null 로 「비움」 을 말할 수 있다."""
+    part = _part_type(client, admin)
+    made = _make_object(
+        client,
+        admin,
+        part,
+        key="P-1",
+        label="볼트",
+        properties={"weight": 1, "material": "스틸"},
+    )
+    response = client.post(
+        f"/api/objects/{part}/import-rows",
+        json={
+            "rows": [{"key": "P-1", "label": "볼트", "material": None}],
+            "workspace_slug": admin.workspace,
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+    assert response.json()["rows"][0]["changes"] == ["material"]
+    profile = client.get(f"/api/objects/{part}/{made['id']}", headers=admin.headers).json()
+    assert profile["object"]["properties"] == {"weight": 1}
+
+
+def test_uuid_모양이어도_없는_객체를_가리키면_거절한다(
+    client: TestClient, admin: Signed
+) -> None:
+    """모양만 보고 받으면 없는 것을 가리키는 참조가 저장되고, 화면에는 빈 칸으로 뜬다."""
+    vendor = _make_type(client, admin, label="공급사", key_policy="optional")
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="vendor",
+        label="공급사",
+        data_type="object_ref",
+        ref_type_slug=vendor,
+    )
+    ghost = "11111111-1111-4111-8111-111111111111"
+    plan = _upload(client, admin, part, f"key,label,vendor\nP-1,볼트,{ghost}\n", apply=True)
+    assert plan["applied"] is False
+    assert plan["rows"][0]["action"] == "error" and "찾을 수 없" in plan["rows"][0]["message"]

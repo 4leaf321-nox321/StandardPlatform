@@ -42,6 +42,7 @@ from app.modules.objects.services import (
     normalize_key,
     properties_of,
     require_key_free,
+    require_refs_exist,
     require_unique_properties,
 )
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
@@ -139,15 +140,20 @@ class _Refs:
     def __init__(self, db: Session, user: User) -> None:
         self.db = db
         self.user = user
-        self.cache: dict[str, tuple[dict[str, uuid.UUID], dict[str, list[uuid.UUID]]]] = {}
+        self.cache: dict[
+            str, tuple[dict[str, uuid.UUID], dict[str, list[uuid.UUID]], set[str]]
+        ] = {}
 
-    def _load(self, type_slug: str) -> tuple[dict[str, uuid.UUID], dict[str, list[uuid.UUID]]]:
+    def _load(
+        self, type_slug: str
+    ) -> tuple[dict[str, uuid.UUID], dict[str, list[uuid.UUID]], set[str]]:
         if type_slug not in self.cache:
             object_type = self.db.scalar(
                 select(ObjectType).where(ObjectType.slug == type_slug)
             )
             by_key: dict[str, uuid.UUID] = {}
             by_label: dict[str, list[uuid.UUID]] = {}
+            ids: set[str] = set()
             if object_type is not None:
                 rows = self.db.scalars(
                     select(ObjectInstance).where(
@@ -157,16 +163,17 @@ class _Refs:
                     )
                 )
                 for row in rows:
+                    ids.add(str(row.id))
                     if row.key:
                         by_key[row.key] = row.id
                     by_label.setdefault(row.label.strip(), []).append(row.id)
-            self.cache[type_slug] = (by_key, by_label)
+            self.cache[type_slug] = (by_key, by_label, ids)
         return self.cache[type_slug]
 
     def resolve(self, definition: PropertyDef, raw: str) -> str:
         """식별자 → 이름 → uuid 순으로 맞춘다. 이름이 여럿에 맞으면 거절."""
         target = definition.ref_type_slug or ""
-        by_key, by_label = self._load(target)
+        by_key, by_label, ids = self._load(target)
         text = raw.strip()
         if text in by_key:
             return str(by_key[text])
@@ -179,14 +186,14 @@ class _Refs:
                 f"{definition.label}: 「{text}」 이름이 {len(hits)}개에 맞습니다. "
                 "식별자로 적으세요.",
             )
-        try:
-            uuid.UUID(text)
+        # uuid 로 적었어도 **있는 것이어야** 한다 — 모양만 보고 받으면 없는 것을 가리키는
+        # 참조가 저장되고, 화면에는 빈 칸으로 뜬다.
+        if text in ids:
             return text
-        except ValueError:
-            raise InvalidValue(
-                code("OBJECTS", 41),
-                f"{definition.label}: 「{text}」 을 {target} 에서 찾을 수 없습니다.",
-            ) from None
+        raise InvalidValue(
+            code("OBJECTS", 41),
+            f"{definition.label}: 「{text}」 을 {target} 에서 찾을 수 없습니다.",
+        )
 
 
 def _one_from_text(definition: PropertyDef, raw: Any, refs: _Refs) -> Any:
@@ -234,6 +241,31 @@ def cell_to_value(definition: PropertyDef, raw: Any, refs: _Refs) -> Any:
 
 def _is_blank(raw: Any) -> bool:
     return raw is None or (isinstance(raw, str) and raw.strip() == "")
+
+
+def _patch_of(
+    row: dict[str, Any],
+    mapping: dict[str, str],
+    by_key: dict[str, PropertyDef],
+    refs: _Refs,
+) -> dict[str, Any]:
+    """행 → 속성 패치. **없는 열과 빈 칸은 「안 보냄」, JSON 의 null 과 `\\null` 은 「비움」.**
+
+    CSV 는 빈 칸으로 「비움」 을 말할 수 없어 표시(`\\null`)를 쓰고, JSON 은 null 로
+    말한다 — MCP 가 그렇게 약속했다. 둘 다 None 으로 모여 merge 에서 그 키를 지운다.
+    """
+    patch: dict[str, Any] = {}
+    for header, prop_key in mapping.items():
+        if header not in row:
+            continue
+        raw = row[header]
+        if raw is None:
+            patch[prop_key] = None
+            continue
+        if isinstance(raw, str) and raw.strip() == "":
+            continue
+        patch[prop_key] = cell_to_value(by_key[prop_key], raw, refs)
+    return patch
 
 
 # --- 객체 -----------------------------------------------------------------------
@@ -356,13 +388,7 @@ def _plan_row(
     seen_keys: dict[str, int],
     seen_ids: dict[str, int],
 ) -> RowPlan:
-    # 속성 — 빈 칸은 빼고, \null 은 None 으로.
-    patch: dict[str, Any] = {}
-    for header, prop_key in mapping.items():
-        raw = row.get(header)
-        if _is_blank(raw):
-            continue
-        patch[prop_key] = cell_to_value(by_key[prop_key], raw, refs)
+    patch = _patch_of(row, mapping, by_key, refs)
 
     raw_id = _fixed(row, "id")
     raw_key = _fixed(row, "key")
@@ -445,6 +471,7 @@ def _plan_row(
         properties = validate_properties(
             defs, {k: v for k, v in patch.items() if v is not None}, apply_defaults=True
         )
+        require_refs_exist(db, defs, properties)
         require_unique_properties(
             db, object_type, defs, properties, owner_workspace_id=owner_workspace_id
         )
@@ -495,6 +522,7 @@ def _plan_row(
     if patch:
         merged = merge_properties(existing.properties or {}, patch)
         cleaned = validate_properties(defs, merged)
+        require_refs_exist(db, defs, cleaned)
         require_unique_properties(
             db,
             object_type,
@@ -511,7 +539,8 @@ def _plan_row(
         row=index,
         action="update" if changes else "unchanged",
         label=existing.label,
-        key=existing.key,
+        # 바꿀 식별자가 있으면 그것 — 적용이 이 값을 쓴다.
+        key=key if key is not None else existing.key,
         object_id=existing.id,
         changes=changes,
     )
@@ -554,12 +583,7 @@ def apply_objects(
     for row_plan, row in zip(plan.rows, rows, strict=True):
         if row_plan.action == "unchanged":
             continue
-        patch: dict[str, Any] = {}
-        for header, prop_key in mapping.items():
-            raw = row.get(header)
-            if _is_blank(raw):
-                continue
-            patch[prop_key] = cell_to_value(by_key[prop_key], raw, refs)
+        patch = _patch_of(row, mapping, by_key, refs)
         raw_label = _fixed(row, "label")
         raw_description = _fixed(row, "description")
         raw_status = _fixed(row, "status")

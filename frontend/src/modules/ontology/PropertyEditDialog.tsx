@@ -236,7 +236,21 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                 type={type}
                 property={property}
                 types={types}
-                onChanged={onChanged}
+                onChanged={(renamed) => {
+                  if (renamed) {
+                    // 이 창의 「고를 값」 칸도 같이 — 안 그러면 「저장」 이 옛 목록을 다시 보낸다.
+                    setOptions((current) =>
+                      current
+                        .split(',')
+                        .map((one) => one.trim())
+                        .filter(Boolean)
+                        .map((one) => (one === renamed.from ? renamed.to : one))
+                        .join(', '),
+                    )
+                    setDefaultValue((current) => (current === renamed.from ? renamed.to : current))
+                  }
+                  onChanged()
+                }}
                 onPromoted={() => {
                   onChanged()
                   onClose()

@@ -138,14 +138,24 @@ def _clause(condition: Condition, definition: PropertyDef | None) -> Any:
         return and_(json_col.is_not(None), column != "", column != "[]", column != "null")
 
     if data_type == "number":
-        number = _number(label, raw)
+        if multi:
+            # 여러 값 칸은 배열이라 숫자로 못 바꾼다 — 「담고 있나」 만 묻는다.
+            if op in ("gt", "gte", "lt", "lte"):
+                raise InvalidValue(
+                    code("OBJECTS", 72),
+                    f"{label}: 여러 값 칸에는 범위를 못 겁니다. 같음·그 중 하나·비어 있음만.",
+                )
+            numbers = [_number(label, one) for one in (_values(raw) if op == "in" else [raw])]
+            if not numbers:
+                return false()
+            has_any = or_(*[json_col.contains([one]) for one in numbers])
+            # 「다름」 은 칸이 비어 있는 것도 포함한다 — NULL 의 부정은 NULL 이라 따로 적는다.
+            return or_(json_col.is_(None), ~has_any) if op == "ne" else has_any
         numeric = cast(column, Numeric)
         if op == "in":
-            return (
-                or_(*[numeric == _number(label, one) for one in _values(raw)])
-                if _values(raw)
-                else false()
-            )
+            picked = [_number(label, one) for one in _values(raw)]
+            return or_(*[numeric == one for one in picked]) if picked else false()
+        number = _number(label, raw)
         return {
             "eq": numeric == number,
             "ne": numeric != number,
@@ -164,7 +174,7 @@ def _clause(condition: Condition, definition: PropertyDef | None) -> Any:
         if op == "eq":
             return json_col.contains([raw])
         if op == "ne":
-            return ~json_col.contains([raw])
+            return or_(json_col.is_(None), ~json_col.contains([raw]))
         if op == "in":
             values = _values(raw)
             return or_(*[json_col.contains([one]) for one in values]) if values else false()
