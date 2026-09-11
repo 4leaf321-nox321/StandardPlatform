@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance, ObjectRelation
-from app.modules.ontology import importer, views
+from app.modules.ontology import codebook, importer, views
 from app.modules.ontology.models import (
     CARDINALITIES,
     DATA_TYPES,
@@ -45,12 +45,17 @@ from app.modules.ontology.schemas import (
     ObjectTypeSchema,
     ObjectTypeWriteRequest,
     OntologySchemaOut,
+    PromoteOptionOut,
+    PromoteOut,
+    PromoteRequest,
     PropertyDefOut,
     PropertyDefWriteRequest,
     PropertyUsage,
     RelationTypeOut,
     RelationTypePatchRequest,
     RelationTypeWriteRequest,
+    RenameOptionOut,
+    RenameOptionRequest,
     SnapshotOut,
 )
 from app.modules.ontology.services import (
@@ -745,6 +750,80 @@ def update_property(
     db.commit()
     db.refresh(row)
     return row
+
+
+@router.post("/types/{slug}/properties/{key}/rename-option", response_model=RenameOptionOut)
+def rename_option(
+    slug: str,
+    key: str,
+    payload: RenameOptionRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> RenameOptionOut:
+    """고를 값의 이름을 바꾸면서 **저장된 값도 함께** 바꾼다.
+
+    이름만 바꾸면 이미 저장된 값이 옛 이름으로 남아 거르기에서 빠지고, 그 사실은
+    아무 데도 안 뜬다. `apply=false` 면 몇 개가 함께 바뀔지만 말한다.
+    """
+    owner = _type(db, slug)
+    definition = _property(db, slug, key)
+    if payload.apply:
+        plan = codebook.apply_rename(
+            db, user, owner, definition, payload.from_value, payload.to_value
+        )
+        return RenameOptionOut(applied=not plan.errors, **vars(plan))
+    plan = codebook.plan_rename(db, owner, definition, payload.from_value, payload.to_value)
+    return RenameOptionOut(applied=False, **vars(plan))
+
+
+@router.post("/types/{slug}/properties/{key}/promote", response_model=PromoteOut)
+def promote_property(
+    slug: str,
+    key: str,
+    payload: PromoteRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> PromoteOut:
+    """enum 속성을 **코드표(참조 타입)** 로 승격한다.
+
+    옵션마다 객체가 생기고(또는 있는 것에 붙고), 저장된 문자열이 그 객체를 가리키게
+    바뀐다. 정의가 바뀌므로 **되돌릴 자리(스냅샷)** 를 먼저 남긴다 — 값 이전은
+    스냅샷이 못 되돌리지만, 정의만이라도 되돌릴 수 있어야 다음 수를 둘 수 있다.
+    """
+    owner = _type(db, slug)
+    definition = _property(db, slug, key)
+    args = {
+        "existing_slug": payload.target_type_slug,
+        "new_slug": payload.new_slug,
+        "new_label": payload.new_label,
+    }
+    if not payload.apply:
+        plan = codebook.plan_promote(db, owner, definition, **args)
+        return _promote_out(plan, applied=False, snapshot_id=None)
+    snapshot = _snapshot(db, user, reason=f"승격 직전: {slug}.{key}")
+    snapshot_id = snapshot.id
+    plan = codebook.apply_promote(
+        db, user, owner, definition, nav_group_slug=payload.nav_group_slug, **args
+    )
+    if plan.errors:
+        db.rollback()
+        return _promote_out(plan, applied=False, snapshot_id=None)
+    return _promote_out(plan, applied=True, snapshot_id=snapshot_id)
+
+
+def _promote_out(
+    plan: codebook.PromotePlan, *, applied: bool, snapshot_id: uuid.UUID | None
+) -> PromoteOut:
+    return PromoteOut(
+        applied=applied,
+        target_slug=plan.target_slug,
+        target_label=plan.target_label,
+        target_new=plan.target_new,
+        options=[PromoteOptionOut(**vars(one)) for one in plan.options],
+        errors=plan.errors,
+        warnings=plan.warnings,
+        snapshot_id=snapshot_id,
+    )
 
 
 @router.get("/types/{slug}/properties/{key}/usage", response_model=PropertyUsage)

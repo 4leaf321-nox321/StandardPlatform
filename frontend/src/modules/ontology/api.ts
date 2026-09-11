@@ -170,6 +170,26 @@ export interface Snapshot {
   relation_count: number
 }
 
+export interface RenameOptionOut {
+  applied: boolean
+  from_value: string
+  to_value: string
+  /** 함께 바뀌는(바뀐) 저장값의 수. */
+  objects_with_value: number
+  errors: string[]
+}
+
+export interface PromoteOut {
+  applied: boolean
+  target_slug: string
+  target_label: string
+  target_new: boolean
+  options: { value: string; action: 'create' | 'reuse'; object_id: string | null; objects_with_value: number }[]
+  errors: string[]
+  warnings: string[]
+  snapshot_id: string | null
+}
+
 export interface PropertyUsage {
   key: string
   label: string
@@ -209,6 +229,15 @@ export const ontologyApi = {
   updateProperty: (slug: string, key: string, body: Record<string, unknown>) =>
     api.patch<PropertyDef>(`/ontology/types/${slug}/properties/${key}`, body),
   /** **지우기 전에 무엇이 사라지는지.** 확인 창이 이것을 읽어 말한다. */
+  /** 고를 값 이름을 바꾸면서 저장된 값도 함께 — `apply=false` 면 몇 개인지만. */
+  renameOption: (slug: string, key: string, body: { from: string; to: string; apply: boolean }) =>
+    api.post<RenameOptionOut>(`/ontology/types/${slug}/properties/${key}/rename-option`, body),
+  /** enum 속성을 코드표(참조 타입)로 승격 — 계획 먼저. */
+  promoteProperty: (
+    slug: string,
+    key: string,
+    body: { target_type_slug?: string | null; new_slug?: string | null; new_label?: string | null; apply: boolean },
+  ) => api.post<PromoteOut>(`/ontology/types/${slug}/properties/${key}/promote`, body),
   propertyUsage: (slug: string, key: string) =>
     api.get<PropertyUsage>(`/ontology/types/${slug}/properties/${key}/usage`),
   removeProperty: (slug: string, key: string) =>

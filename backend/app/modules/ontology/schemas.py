@@ -288,3 +288,52 @@ class SnapshotOut(BaseModel):
     reason: str
     type_count: int
     relation_count: int
+
+
+# --- 코드표 -------------------------------------------------------------------
+
+
+class RenameOptionRequest(BaseModel):
+    from_value: str = Field(alias="from", min_length=1)
+    to_value: str = Field(alias="to", min_length=1)
+    apply: bool = False
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class RenameOptionOut(BaseModel):
+    applied: bool
+    from_value: str
+    to_value: str
+    objects_with_value: int
+    """함께 바뀌는(바뀐) 저장값의 수."""
+    errors: list[str]
+
+
+class PromoteRequest(BaseModel):
+    """있는 코드표에 붙이거나(`target_type_slug`), 새로 만든다(`new_slug`·`new_label`)."""
+
+    target_type_slug: str | None = None
+    new_slug: str | None = None
+    new_label: str | None = None
+    nav_group_slug: str | None = None
+    apply: bool = False
+
+
+class PromoteOptionOut(BaseModel):
+    value: str
+    action: str
+    """`create`(코드표에 새로 만듦) · `reuse`(이미 있는 객체에 붙임)."""
+    object_id: uuid.UUID | None
+    objects_with_value: int
+
+
+class PromoteOut(BaseModel):
+    applied: bool
+    target_slug: str
+    target_label: str
+    target_new: bool
+    options: list[PromoteOptionOut]
+    errors: list[str]
+    warnings: list[str]
+    snapshot_id: uuid.UUID | None

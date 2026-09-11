@@ -12,6 +12,7 @@
 import { useState } from 'react'
 
 import { ontologyApi } from '@/modules/ontology/api'
+import { EnumOptionsPanel } from '@/modules/ontology/EnumOptionsPanel'
 import type { DataType, ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -227,6 +228,20 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                   빼기 전에 그 값을 쓰는 것이 있는지 보세요.
                 </p>
               </div>
+            )}
+
+            {/* 저장된 속성의 고를 값 — 이름을 바꾸면 저장값도 함께, 코드표로 승격. */}
+            {editing && property && property.data_type === 'enum' && dataType === 'enum' && (
+              <EnumOptionsPanel
+                type={type}
+                property={property}
+                types={types}
+                onChanged={onChanged}
+                onPromoted={() => {
+                  onChanged()
+                  onClose()
+                }}
+              />
             )}
 
             {dataType === 'object_ref' && (
