@@ -5,10 +5,11 @@
  */
 
 import { useEffect, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
-import { Pencil, Trash2 } from 'lucide-react'
+import { Link, useNavigate, useParams } from 'react-router-dom'
+import { Pencil, Trash2, Waypoints } from 'lucide-react'
 
 import { AttachmentList } from '@/modules/files/AttachmentList'
+import { GraphPanel } from '@/modules/graph/GraphPanel'
 import { ontologyApi } from '@/modules/ontology/api'
 import { ObjectYears } from '@/modules/objects/ObjectYears'
 import { RelatedObjects } from '@/modules/objects/RelatedObjects'
@@ -16,7 +17,9 @@ import type { PropertyDef, SectionView } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
 import { PropertyFields, groupBySection, propertyText } from '@/modules/objects/PropertyFields'
 import type { PropertyValues } from '@/modules/objects/PropertyFields'
-import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
+import { ObjectDeleteDialog } from '@/modules/objects/ObjectDeleteDialog'
+import { ObjectHistory } from '@/modules/objects/ObjectHistory'
+import { ApiError } from '@/shared/api/client'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -58,6 +61,15 @@ export default function ObjectProfilePage() {
     }
   }, [row, editing])
 
+  // 합쳐져서 지워진 것이면 **이긴 쪽으로 간다** — 옛 링크가 404 로 끝나지 않게.
+  const mergedInto =
+    profile.error instanceof ApiError && typeof profile.error.details.merged_into === 'string'
+      ? profile.error.details.merged_into
+      : null
+  useEffect(() => {
+    if (mergedInto) navigate(`/o/${typeSlug}/${mergedInto}`, { replace: true })
+  }, [mergedInto, navigate, typeSlug])
+
   if (profile.error) return <ErrorNotice error={profile.error} />
   if (!profile.data || !row) {
     return profile.loading ? null : <EmptyState title="객체를 찾을 수 없습니다" />
@@ -80,10 +92,6 @@ export default function ObjectProfilePage() {
     }
   }
 
-  async function remove() {
-    await objectApi.remove(typeSlug, objectId)
-    navigate(`/o/${typeSlug}`)
-  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-6">
@@ -92,20 +100,27 @@ export default function ObjectProfilePage() {
         description={row.key ? `식별자 ${row.key}` : undefined}
         back={{ to: `/o/${typeSlug}`, label: profile.data.type_label }}
         actions={
-          profile.data.can_edit && (
-            <div className="flex gap-2">
-              {!editing && (
-                <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
-                  <Pencil className="mr-1 size-4" />
-                  고치기
-                </Button>
-              )}
+          <div className="flex gap-2">
+            {/* **관계 목록은 한 단계만 보여 준다.** 그 너머는 그래프에서 — 누구나. */}
+            <Button asChild size="sm" variant="outline">
+              <Link to={`/graph?focus=${row.id}`}>
+                <Waypoints className="mr-1 size-4" />
+                그래프에서 보기
+              </Link>
+            </Button>
+            {profile.data.can_edit && !editing && (
+              <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
+                <Pencil className="mr-1 size-4" />
+                고치기
+              </Button>
+            )}
+            {profile.data.can_edit && (
               <Button size="sm" variant="outline" onClick={() => setConfirming(true)}>
                 <Trash2 className="mr-1 size-4" />
                 지우기
               </Button>
-            </div>
-          )
+            )}
+          </div>
         }
       />
 
@@ -185,6 +200,30 @@ export default function ObjectProfilePage() {
         onChanged={profile.reload}
       />
 
+      {/* 상세를 떠나지 않고 보는 관계도 — 관계가 없으면 안 그린다. */}
+      <GraphPanel
+        objectId={objectId}
+        typeSlugs={(schema.data?.types ?? []).map((one) => one.slug)}
+      />
+
+      {/* 이 값이 어디서 왔나 — 상세가 다시 읽힐 때마다 이력도 다시(관계 변경은 updated_at 을
+          안 건드리므로 응답 객체 자체를 키로 쓴다). */}
+      <ObjectHistory
+        typeSlug={typeSlug}
+        objectId={objectId}
+        defs={defs}
+        current={{
+          key: row.key,
+          label: row.label,
+          status: row.status,
+          properties: row.properties,
+        }}
+        refLabels={row.ref_labels}
+        canEdit={profile.data.can_edit}
+        onRestored={profile.reload}
+        reloadKey={profile.data}
+      />
+
       {/* **속성이 둘이면 첨부 목록도 둘이다.** 안 가르면 「도면」 칸에
           「시험성적서」 가 섞여 보이고, 그 목록은 무엇도 말해 주지 못한다. */}
       {fileDefs.map((def) => (
@@ -209,20 +248,15 @@ export default function ObjectProfilePage() {
       />
 
       {confirming && (
-        <ConfirmDialog
-          open
-          destructive
-          title={`${row.label} 을(를) 지웁니다`}
-          description={
-            <>
-              목록에서 사라집니다. <b>기록은 남습니다</b> — 이 객체를 가리키는 첨부와
-              (앞으로 생길) 관계가 밖에 있어서, 지운 흔적까지 없애면 그것들이 무엇을
-              가리키는지 설명할 수 없게 됩니다.
-            </>
-          }
-          confirmLabel="지우기"
-          onConfirm={remove}
+        <ObjectDeleteDialog
+          typeSlug={typeSlug}
+          typeLabel={profile.data.type_label}
+          object={row}
           onClose={() => setConfirming(false)}
+          onDone={(into) => {
+            setConfirming(false)
+            navigate(into ? `/o/${typeSlug}/${into}` : `/o/${typeSlug}`, { replace: true })
+          }}
         />
       )}
     </div>

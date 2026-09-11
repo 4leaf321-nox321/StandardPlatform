@@ -6,15 +6,18 @@
  */
 
 import { useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
-import { Plus } from 'lucide-react'
+import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Download, FileUp, Plus } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
-import type { ObjectRow } from '@/modules/objects/api'
+import type { Condition, ConditionOp, ObjectQuery, ObjectRow, SavedView } from '@/modules/objects/api'
+import { ConditionBar } from '@/modules/objects/ConditionBar'
+import { ViewPicker } from '@/modules/objects/ViewPicker'
 import { propertyText } from '@/modules/objects/PropertyFields'
 import { ObjectCreateDialog } from '@/modules/objects/ObjectCreateDialog'
+import { ObjectImportDialog } from '@/modules/objects/ObjectImportDialog'
 import { ObjectTree } from '@/modules/objects/ObjectTree'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -22,6 +25,12 @@ import { PageHeader } from '@/shared/components/PageHeader'
 import { Pagination } from '@/shared/components/Pagination'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { Button } from '@/shared/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/shared/components/ui/dropdown-menu'
 import { Input } from '@/shared/components/ui/input'
 import {
   Select,
@@ -123,10 +132,46 @@ function PropertyFilter({
   )
 }
 
+/** 주소 ↔ 조건. `f.<칸>.<연산>=<값>` — 붙여 넣으면 같은 목록이 선다. */
+function conditionsFromParams(params: URLSearchParams): Condition[] {
+  const out: Condition[] = []
+  for (const [key, value] of params.entries()) {
+    if (!key.startsWith('f.')) continue
+    const dot = key.lastIndexOf('.')
+    if (dot <= 2) continue
+    out.push({ field: key.slice(2, dot), op: key.slice(dot + 1) as ConditionOp, value })
+  }
+  return out
+}
+
 export default function ObjectListPage() {
   const { typeSlug = '' } = useParams()
-  const [query, setQuery] = useState('')
-  const [filters, setFilters] = useState<Record<string, string>>({})
+  const [params, setParams] = useSearchParams()
+  const [query, setQueryState] = useState(() => params.get('q') ?? '')
+  const [conditions, setConditionsState] = useState<Condition[]>(() => conditionsFromParams(params))
+  const [activeView, setActiveView] = useState<string | null>(() => params.get('view'))
+  /** 검색어·조건을 바꾸면 주소도 같이 — 그리고 걸려 있던 뷰는 풀린다(손댄 순간 그 뷰가 아니다). */
+  const sync = (next: { q?: string; conditions?: Condition[]; view?: string | null }) => {
+    const q = next.q ?? query
+    const list = next.conditions ?? conditions
+    const view = next.view === undefined ? null : next.view
+    const copy = new URLSearchParams(params)
+    // 지우면서 돌면 건너뛰는 키가 생긴다 — 먼저 복사해 둔다.
+    for (const key of Array.from(copy.keys())) if (key.startsWith('f.')) copy.delete(key)
+    copy.delete('q')
+    copy.delete('view')
+    if (q) copy.set('q', q)
+    for (const one of list) copy.append(`f.${one.field}.${one.op}`, one.value)
+    if (view) copy.set('view', view)
+    setParams(copy, { replace: true })
+    setQueryState(q)
+    setConditionsState(list)
+    setActiveView(view)
+  }
+  const setQuery = (q: string) => sync({ q })
+  const setConditions = (list: Condition[]) => sync({ conditions: list })
+  const applyView = (view: SavedView) =>
+    sync({ q: view.query.q, conditions: view.query.conditions, view: view.id })
   const [under, setUnder] = useState<string | null>(null)
   const [deep, setDeep] = useState(true)
   /**
@@ -136,6 +181,7 @@ export default function ObjectListPage() {
   const [year, setYear] = useState<number | null>(new Date().getFullYear())
   const [offset, setOffset] = useState(0)
   const [creating, setCreating] = useState(false)
+  const [importing, setImporting] = useState(false)
 
   const schema = useResource(() => ontologyApi.schema(), [])
   const foundType = schema.data?.types.find((row) => row.slug === typeSlug)
@@ -147,21 +193,37 @@ export default function ObjectListPage() {
     () =>
       objectApi.list(typeSlug, {
         q: query || undefined,
-        properties: filters,
+        conditions,
         under,
         deep,
         year: yearApplies ? year : null,
         offset,
       }),
-    // filters 는 객체라 참조가 매번 바뀐다 — 내용으로 비교한다.
-    [typeSlug, query, JSON.stringify(filters), under, deep, year, offset],
+    // conditions 는 배열이라 참조가 매번 바뀐다 — 내용으로 비교한다.
+    [typeSlug, query, JSON.stringify(conditions), under, deep, year, offset],
   )
+
+  /** 내보내기에 그대로 넘기는 거르기 — 쪽(offset)만 뺀다. 파일은 전부다. */
+  const exportQuery: ObjectQuery = {
+    q: query || undefined,
+    conditions,
+    under,
+    deep,
+    year: yearApplies ? year : null,
+  }
+
+  /** 참조 조건의 값을 이름으로 보여 주려고 — 목록에 실린 것들의 ref_labels 를 모은다. */
+  const refLabelsOfList = useMemo(() => {
+    const out: Record<string, string> = {}
+    for (const row of list.data?.items ?? []) Object.assign(out, row.ref_labels)
+    return out
+  }, [list.data])
 
   const type = foundType
   /** 지금 목록이 좁혀져 있나. 빈 목록의 이유가 이것으로 갈린다. */
   const narrowed =
     Boolean(query) ||
-    Object.keys(filters).length > 0 ||
+    conditions.length > 0 ||
     Boolean(under) ||
     (yearApplies && year !== null)
   /** 트리가 정의된 타입인가. 안 정했으면 왼쪽을 안 그린다. */
@@ -205,12 +267,41 @@ export default function ObjectListPage() {
         title={type?.label ?? '…'}
         description={type?.description || undefined}
         actions={
-          type &&
-          type.kind_class !== 'system' && (
-            <Button size="sm" onClick={() => setCreating(true)}>
-              <Plus className="mr-1 size-4" />
-              만들기
-            </Button>
+          type && (
+            <div className="flex gap-2">
+              {/* 내보내기는 **지금 거른 목록 그대로** — 화면과 파일이 같은 것을 말한다. */}
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button size="sm" variant="outline">
+                    <Download className="mr-1 size-4" />
+                    내보내기
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end">
+                  <DropdownMenuItem onSelect={() => void objectApi.export(typeSlug, 'csv', exportQuery)}>
+                    객체 CSV (거른 {list.data?.total ?? 0}건)
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => void objectApi.export(typeSlug, 'json', exportQuery)}>
+                    객체 JSON
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onSelect={() => void objectApi.exportRelations(typeSlug, 'csv')}>
+                    관계 CSV (이 타입에서 출발하는 것 전부)
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+              {type.kind_class !== 'system' && (
+                <>
+                  <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
+                    <FileUp className="mr-1 size-4" />
+                    파일로 넣기
+                  </Button>
+                  <Button size="sm" onClick={() => setCreating(true)}>
+                    <Plus className="mr-1 size-4" />
+                    만들기
+                  </Button>
+                </>
+              )}
+            </div>
           )
         }
       />
@@ -233,20 +324,18 @@ export default function ObjectListPage() {
           const key = id.slice('properties.'.length)
           const def = type?.properties.find((one) => one.key === key)
           if (!def) return null
+          // 빠른 거르기는 「같음」 조건 하나다 — 아래 조건 줄과 같은 것을 가리킨다.
+          const quick = conditions.find((one) => one.field === key && one.op === 'eq')
           return (
             <PropertyFilter
               key={key}
               def={def}
-              value={filters[key] ?? ''}
+              value={quick?.value ?? ''}
               onChange={(next) => {
-                setFilters((current) => {
-                  const copy = { ...current }
-                  // **빈 값은 「거르지 않음」 이다.** 빈 문자열로 걸면 값이 빈
-                  // 행만 나오는데, 그것은 아무도 뜻한 적 없는 결과다.
-                  if (next) copy[key] = next
-                  else delete copy[key]
-                  return copy
-                })
+                const rest = conditions.filter((one) => !(one.field === key && one.op === 'eq'))
+                // **빈 값은 「거르지 않음」 이다.** 빈 문자열로 걸면 값이 빈
+                // 행만 나오는데, 그것은 아무도 뜻한 적 없는 결과다.
+                setConditions(next ? [...rest, { field: key, op: 'eq', value: next }] : rest)
                 setOffset(0)
               }}
             />
@@ -296,6 +385,34 @@ export default function ObjectListPage() {
         )}
       </div>
 
+      {/* 조건 줄 — 칸 안 OR, 칸끼리 AND. 주소에 남고, 뷰로 저장된다. */}
+      {type && (
+        <div className="mb-4 flex flex-wrap items-center gap-2">
+          <ViewPicker
+            typeSlug={typeSlug}
+            current={{ q: query, conditions, status: null }}
+            activeId={activeView}
+            onApply={(view) => {
+              applyView(view)
+              setOffset(0)
+            }}
+            onClear={() => {
+              sync({ q: '', conditions: [], view: null })
+              setOffset(0)
+            }}
+          />
+          <ConditionBar
+            defs={type.properties}
+            conditions={conditions}
+            onChange={(next) => {
+              setConditions(next)
+              setOffset(0)
+            }}
+            refLabels={refLabelsOfList}
+          />
+        </div>
+      )}
+
       {list.error && <ErrorNotice error={list.error} />}
 
       {list.data && list.data.items.length === 0 ? (
@@ -318,8 +435,7 @@ export default function ObjectListPage() {
                 variant="outline"
                 size="sm"
                 onClick={() => {
-                  setQuery('')
-                  setFilters({})
+                  sync({ q: '', conditions: [], view: null })
                   setUnder(null)
                   setYear(null)
                   setOffset(0)
@@ -385,6 +501,14 @@ export default function ObjectListPage() {
       )}
 
       </div>
+
+      {type && importing && (
+        <ObjectImportDialog
+          type={type}
+          onClose={() => setImporting(false)}
+          onApplied={() => list.reload()}
+        />
+      )}
 
       {type && creating && (
         <ObjectCreateDialog

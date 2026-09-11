@@ -155,3 +155,183 @@ class ObjectProfileOut(BaseModel):
     can_edit: bool
     """**서버가 판정한 것을 화면에 알려 준다.** 화면이 스스로 정하면 어떤 화면은
     단추를 보이고 어떤 화면은 안 보이는 상태가 되고, 그 차이는 설명할 수 없다."""
+
+
+# --- 일괄 -------------------------------------------------------------------
+
+
+class ImportRowOut(BaseModel):
+    row: int
+    """파일의 몇 번째 행인가(헤더 다음이 1). 오류를 고치러 갈 자리."""
+    action: str
+    """`create` · `update` · `unchanged` · `error`."""
+    label: str
+    key: str | None
+    object_id: uuid.UUID | None
+    changes: list[str]
+    """바뀌는 칸. 「고침」 이 무엇을 고치는지 보여 준다 — 안 보여 주면 사람은 안 누른다."""
+    message: str
+
+
+class ImportPlanOut(BaseModel):
+    applied: bool
+    rows: list[ImportRowOut]
+    errors: list[str]
+    """행과 무관한 오류(모르는 열, 상한). 하나라도 있으면 **아무것도 안 넣는다.**"""
+    counts: dict[str, int]
+
+
+class ImportRowsRequest(BaseModel):
+    """파일 대신 JSON 으로 — MCP 가 쓴다. 규칙은 파일과 같다."""
+
+    rows: list[dict[str, Any]]
+    workspace_slug: str | None = None
+    apply: bool = False
+
+
+# --- 지우기 전에 -------------------------------------------------------------
+
+
+class RefHitOut(BaseModel):
+    """이 객체를 **속성으로** 가리키는 객체 하나."""
+
+    object_id: uuid.UUID
+    label: str
+    key: str | None
+    type_slug: str
+    type_label: str
+    property_key: str
+    property_label: str
+
+
+class RelationHitOut(BaseModel):
+    relation_id: uuid.UUID
+    relation: str
+    outgoing: bool
+    other_id: uuid.UUID
+    other_label: str
+    other_type_slug: str
+
+
+class ReferencesOut(BaseModel):
+    property_refs: list[RefHitOut]
+    relations: list[RelationHitOut]
+    hidden_property_refs: int
+    """볼 수 없는 부서의 참조 수. **수만 말한다** — 안 말하면 「아무것도 안 걸렸다」 로
+    읽는다."""
+    hidden_relations: int
+    total: int
+
+
+class MergeRequest(BaseModel):
+    into: uuid.UUID
+    """이긴 쪽. 같은 타입이어야 한다."""
+
+
+class MergeResultOut(BaseModel):
+    into: uuid.UUID
+    property_refs: int
+    relations_moved: int
+    relations_dropped: int
+    """겹쳐서 버린 관계 — 두 겹으로 남기면 병합이 아니라 복제다."""
+
+
+# --- 이력 -------------------------------------------------------------------
+
+
+class SnapshotOut(BaseModel):
+    """그 시점의 값 전체 — 지금 값에서 기록을 거꾸로 대어 재구성한 것."""
+
+    key: str | None
+    label: str
+    status: str
+    properties: dict[str, Any]
+
+
+class HistoryEntryOut(BaseModel):
+    id: uuid.UUID
+    at: datetime
+    actor_label: str
+    action: str
+    reason: str | None
+    kind: str
+    """`object` 는 값이 바뀐 기록, `relation` 은 관계가 걸리거나 끊긴 기록."""
+    changes: dict[str, Any]
+    """칸별 `{before, after}`. 속성은 `properties.<키>` 로 풀어서."""
+    relation: dict[str, Any] | None
+    snapshot: SnapshotOut | None
+    """값 기록에만 있다. 되돌리기의 목표."""
+
+
+class RestoreRequest(BaseModel):
+    entry_id: uuid.UUID
+
+
+# --- 저장된 뷰 --------------------------------------------------------------
+
+
+class ConditionOut(BaseModel):
+    field: str
+    op: str
+    value: str = ""
+
+
+class SavedViewQuery(BaseModel):
+    """뷰가 담는 것. 열·정렬은 안 담는다 — 그것은 타입 정의(`list_view`)의 몫이고,
+    뷰마다 갈리면 「왜 이 뷰만 열이 다르지」 를 아무도 설명 못 한다."""
+
+    q: str = ""
+    conditions: list[ConditionOut] = Field(default_factory=list)
+    status: str | None = None
+
+
+class SavedViewOut(BaseModel):
+    id: uuid.UUID
+    type_slug: str
+    name: str
+    query: SavedViewQuery
+    owner_user_id: uuid.UUID
+    owner_label: str
+    workspace_slug: str | None
+    """있으면 그 부서가 함께 쓴다. 없으면 내 것."""
+    can_edit: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class SavedViewWriteRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=100)
+    query: SavedViewQuery
+    workspace_slug: str | None = None
+    """부서와 함께 쓸지. 그 부서의 관리자여야 한다."""
+
+
+class SavedViewPatchRequest(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=100)
+    query: SavedViewQuery | None = None
+
+
+# --- 품질 -------------------------------------------------------------------
+
+
+class QualityHitOut(BaseModel):
+    id: uuid.UUID
+    label: str
+    key: str | None
+    detail: str
+    """왜 걸렸나."""
+
+
+class QualityFindingOut(BaseModel):
+    kind: str
+    kind_label: str
+    type_slug: str
+    type_label: str
+    count: int
+    """전부 센 수. 아래 목록은 상한까지만."""
+    hits: list[QualityHitOut]
+
+
+class QualityReportOut(BaseModel):
+    findings: list[QualityFindingOut]
+    sample_limit: int

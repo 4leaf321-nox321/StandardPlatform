@@ -2713,6 +2713,130 @@
         }
       }
     },
+    "/api/ontology/types/{slug}/properties/{key}/rename-option": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Rename Option",
+        "description": "고를 값의 이름을 바꾸면서 **저장된 값도 함께** 바꾼다.\n\n이름만 바꾸면 이미 저장된 값이 옛 이름으로 남아 거르기에서 빠지고, 그 사실은\n아무 데도 안 뜬다. `apply=false` 면 몇 개가 함께 바뀔지만 말한다.",
+        "operationId": "rename_option_api_ontology_types__slug__properties__key__rename_option_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameOptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameOptionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/types/{slug}/properties/{key}/promote": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Promote Property",
+        "description": "enum 속성을 **코드표(참조 타입)** 로 승격한다.\n\n옵션마다 객체가 생기고(또는 있는 것에 붙고), 저장된 문자열이 그 객체를 가리키게\n바뀐다. 정의가 바뀌므로 **되돌릴 자리(스냅샷)** 를 먼저 남긴다 — 값 이전은\n스냅샷이 못 되돌리지만, 정의만이라도 되돌릴 수 있어야 다음 수를 둘 수 있다.",
+        "operationId": "promote_property_api_ontology_types__slug__properties__key__promote_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromoteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromoteOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ontology/types/{slug}/properties/{key}/usage": {
       "get": {
         "tags": [
@@ -2853,7 +2977,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ImportPlanOut"
+                  "$ref": "#/components/schemas/app__modules__ontology__schemas__ImportPlanOut"
                 }
               }
             }
@@ -2885,7 +3009,7 @@
               "application/json": {
                 "schema": {
                   "items": {
-                    "$ref": "#/components/schemas/SnapshotOut"
+                    "$ref": "#/components/schemas/app__modules__ontology__schemas__SnapshotOut"
                   },
                   "type": "array",
                   "title": "Response List Snapshots Api Ontology Snapshots Get"
@@ -2922,7 +3046,59 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ImportPlanOut"
+                  "$ref": "#/components/schemas/app__modules__ontology__schemas__ImportPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/quality/report": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Quality Report",
+        "description": "필수값 빈 것 · 고아 · 깨진 참조 · 이름 같은 것. **볼 수 있는 것만 센다.**",
+        "operationId": "quality_report_api_objects_quality_report_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "한 종류만",
+              "title": "Kind"
+            },
+            "description": "한 종류만"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/QualityReportOut"
                 }
               }
             }
@@ -2997,6 +3173,642 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/TreeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/views": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "List Views",
+        "description": "내 뷰 + 내 부서와 함께 쓰는 뷰. 부서 것이 먼저, 그 안에서는 이름순.",
+        "operationId": "list_views_api_objects__type_slug__views_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SavedViewOut"
+                  },
+                  "title": "Response List Views Api Objects  Type Slug  Views Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Create View",
+        "description": "뷰를 저장한다. 부서와 함께 쓰려면 그 부서의 관리자여야 한다 — 아무나 부서\n뷰를 만들면 목록이 곧 개인 취향으로 가득 찬다.",
+        "operationId": "create_view_api_objects__type_slug__views_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/views/{view_id}": {
+      "patch": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Update View",
+        "operationId": "update_view_api_objects__type_slug__views__view_id__patch",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "View Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SavedViewPatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SavedViewOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Delete View",
+        "description": "뷰는 진짜로 지운다 — 데이터가 아니라 거르기 조건이라, 남겨 둘 이유가 없다.",
+        "operationId": "delete_view_api_objects__type_slug__views__view_id__delete",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "view_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "View Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/template": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Object Template",
+        "description": "빈 CSV — 헤더가 「무엇을 채워야 하는지」 를 말한다.",
+        "operationId": "object_template_api_objects__type_slug__template_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/export": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Export Objects",
+        "description": "지금 거른 목록 **그대로** 파일로. 쪽 상한 없이 전부 — 목록의 상한은 화면을\n위한 것이고, 파일은 그 상한을 넘어서기 위해 있다.",
+        "operationId": "export_objects_api_objects__type_slug__export_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(csv|json)$",
+              "default": "csv",
+              "title": "Format"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2999,
+                  "minimum": 1900
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          },
+          {
+            "name": "under",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Under"
+            }
+          },
+          {
+            "name": "deep",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Deep"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/import": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Import Objects",
+        "description": "파일로 넣기 — `apply=false` 면 **계획만**. 사람이 읽고 판단한 뒤 다시 부른다.",
+        "operationId": "import_objects_api_objects__type_slug__import_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_objects_api_objects__type_slug__import_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app__modules__objects__schemas__ImportPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/import-rows": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Import Object Rows",
+        "description": "JSON 행으로 넣기 — 파일과 같은 규칙. MCP 가 쓴다.",
+        "operationId": "import_object_rows_api_objects__type_slug__import_rows_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRowsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app__modules__objects__schemas__ImportPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/relations/export": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Export Relations",
+        "description": "이 타입에서 **출발하는** 관계 전부 — `src, relation, dst, evidence_note`.",
+        "operationId": "export_relations_api_objects__type_slug__relations_export_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(csv|json)$",
+              "default": "csv",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/relations/import": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Import Relations",
+        "operationId": "import_relations_api_objects__type_slug__relations_import_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_relations_api_objects__type_slug__relations_import_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app__modules__objects__schemas__ImportPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/relations/import-rows": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Import Relation Rows",
+        "operationId": "import_relation_rows_api_objects__type_slug__relations_import_rows_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRowsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app__modules__objects__schemas__ImportPlanOut"
                 }
               }
             }
@@ -3335,8 +4147,65 @@
           "objects"
         ],
         "summary": "Delete Object",
-        "description": "**지우지 않는다.** `deleted_at` 만 채운다 — 이 객체를 가리키는 관계와\n첨부가 밖에 남아 있고, 몇 년 뒤에도 그것이 무엇이었는지는 물어질 수 있다.",
+        "description": "**지우지 않는다.** `deleted_at` 만 채운다 — 첨부가 밖에 남아 있고, 몇 년 뒤에도\n그것이 무엇이었는지는 물어질 수 있다.\n\n가리키는 것이 있으면 `block`(기본)은 **막고 무엇이 걸렸는지 말한다.** `detach` 는\n참조를 비우고 관계를 끊고 지운다 — 사람이 확인 창에서 고른 뒤에만 온다. 합치기는\n`POST .../merge` 다.",
         "operationId": "delete_object_api_objects__type_slug___object_id__delete",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          },
+          {
+            "name": "mode",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(block|detach)$",
+              "default": "block",
+              "title": "Mode"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/{object_id}/references": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Object References",
+        "description": "이 객체를 가리키는 것 — **누르기 전에 아는 자리.** 지우기 확인 창이 쓴다.",
+        "operationId": "object_references_api_objects__type_slug___object_id__references_get",
         "parameters": [
           {
             "name": "type_slug",
@@ -3359,8 +4228,198 @@
           }
         ],
         "responses": {
-          "204": {
-            "description": "Successful Response"
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReferencesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/{object_id}/history": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Object History",
+        "description": "이 객체의 이력 — 최근 것이 앞. **볼 수 있는 사람은 누구나** — 「이 값이 어디서\n왔나」 는 그 값을 쓰는 사람의 물음이지 관리자의 물음이 아니다.",
+        "operationId": "object_history_api_objects__type_slug___object_id__history_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HistoryEntryOut"
+                  },
+                  "title": "Response Object History Api Objects  Type Slug   Object Id  History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/{object_id}/restore": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Restore Object",
+        "description": "그 시점의 값으로 **고친다** — 저장과 같은 검증을 거쳐서. 그때 가리키던 것이\n지워졌거나 규칙이 바뀌었으면 막고 이유를 말한다.",
+        "operationId": "restore_object_api_objects__type_slug___object_id__restore_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RestoreRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/{object_id}/merge": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Merge Object",
+        "description": "이 객체를 다른 객체에 **합치고** 지운다 — 참조·관계가 이긴 쪽으로 옮겨 가고,\n지는 쪽은 `merged_into` 로 남아 옛 링크가 새 것으로 간다.",
+        "operationId": "merge_object_api_objects__type_slug___object_id__merge_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MergeResultOut"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -3674,6 +4733,324 @@
                     "type": "integer"
                   },
                   "title": "Response Set Years Api Objects  Type Slug   Object Id  Years Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/graph/overview": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Overview",
+        "description": "정의 그래프 — 타입이 노드, 관계 종류가 선.\n\n**첫 화면이 이것이다.** 객체를 하나도 안 그리고 전체 모양을 보여 준다. 선의\n굵기는 실제로 걸린 관계 수라서, 정의만 있고 비어 있는 관계는 점선으로 드러난다.",
+        "operationId": "overview_api_graph_overview_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OverviewOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/graph/search": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Search",
+        "description": "타입을 가리지 않고 시작점을 찾는다.\n\n목록 API 는 타입마다 따로다 — 그래프에서 「어디서 시작하지」 를 물을 때는 타입을\n먼저 고르게 하면 안 된다. 무엇이 어느 타입인지 모르는 사람이 찾는 자리다.",
+        "operationId": "search_api_graph_search_get",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "이름·식별자의 일부",
+              "title": "Q"
+            },
+            "description": "이름·식별자의 일부"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/SearchHitOut"
+                  },
+                  "title": "Response Search Api Graph Search Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/graph/neighborhood": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Neighborhood",
+        "description": "시작점에서 depth 단계까지의 이웃.\n\n**한 단계씩, 노드마다 fanout 개까지, 전체 node_limit 개까지.** 셋 다 서버가\n상한을 강제한다. 잘리면 `truncated` 와 노드의 `degree` 로 **잘렸다고 말한다** —\n화면은 그 노드에 「+N 더」 를 적고, 사람은 거기서 다시 펼친다.",
+        "operationId": "neighborhood_api_graph_neighborhood_get",
+        "parameters": [
+          {
+            "name": "focus",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "시작 객체",
+              "title": "Focus"
+            },
+            "description": "시작 객체"
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "몇 단계까지. 최대 3",
+              "title": "Depth"
+            },
+            "description": "몇 단계까지. 최대 3"
+          },
+          {
+            "name": "fanout",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "노드 하나가 데려오는 이웃 수. 최대 100",
+              "title": "Fanout"
+            },
+            "description": "노드 하나가 데려오는 이웃 수. 최대 100"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "노드 상한. 최대 500",
+              "title": "Limit"
+            },
+            "description": "노드 상한. 최대 500"
+          },
+          {
+            "name": "relations",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "관계 slug, 쉼표로",
+              "title": "Relations"
+            },
+            "description": "관계 slug, 쉼표로"
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이웃 타입 slug, 쉼표로",
+              "title": "Types"
+            },
+            "description": "이웃 타입 slug, 쉼표로"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NeighborhoodOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/graph/subgraph": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Subgraph",
+        "description": "한 타입(들)의 인스턴스를 **쪽 단위로** 전부, 그 사이의 관계와 함께.\n\n「이 타입에 뭐가 있나」 를 그림으로 답하는 길이다. 상한(limit)을 넘으면 `total`\n과 함께 잘렸다고 말한다 — 화면은 「1,234개 중 500개」 라고 적고 다음 쪽으로 넘긴다.\n다른 타입으로 나가는 선은 여기 없다(노드의 `degree` 로 「+N」 만 붙는다) — 그것은\n노드를 눌러 펼친다.",
+        "operationId": "subgraph_api_graph_subgraph_get",
+        "parameters": [
+          {
+            "name": "types",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "타입 slug, 쉼표로",
+              "title": "Types"
+            },
+            "description": "타입 slug, 쉼표로"
+          },
+          {
+            "name": "relations",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "관계 slug, 쉼표로",
+              "title": "Relations"
+            },
+            "description": "관계 slug, 쉼표로"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이름·식별자의 일부",
+              "title": "Q"
+            },
+            "description": "이름·식별자의 일부"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "노드 상한. 최대 500",
+              "title": "Limit"
+            },
+            "description": "노드 상한. 최대 500"
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubgraphOut"
                 }
               }
             }
@@ -4240,6 +5617,55 @@
         "title": "BackupOut",
         "description": "마지막 백업이 언제였나. **「없다」 와 「설정이 없다」 를 구별한다** —\n같게 말하면 사람은 안 해도 되는 일을 하러 간다."
       },
+      "Body_import_objects_api_objects__type_slug__import_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Slug"
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_import_objects_api_objects__type_slug__import_post"
+      },
+      "Body_import_relations_api_objects__type_slug__relations_import_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_import_relations_api_objects__type_slug__relations_import_post"
+      },
       "Body_upload_api_attachments_post": {
         "properties": {
           "owner_table": {
@@ -4342,6 +5768,29 @@
         ],
         "title": "ChangePasswordRequest"
       },
+      "ConditionOut": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "op": {
+            "type": "string",
+            "title": "Op"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "op"
+        ],
+        "title": "ConditionOut"
+      },
       "CreateAccountRequest": {
         "properties": {
           "email": {
@@ -4410,6 +5859,52 @@
         ],
         "title": "DiskOut"
       },
+      "EdgeOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "inverse_label": {
+            "type": "string",
+            "title": "Inverse Label"
+          },
+          "directed": {
+            "type": "boolean",
+            "title": "Directed"
+          },
+          "src": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Src"
+          },
+          "dst": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Dst"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "relation",
+          "label",
+          "inverse_label",
+          "directed",
+          "src",
+          "dst"
+        ],
+        "title": "EdgeOut"
+      },
       "HTTPValidationError": {
         "properties": {
           "detail": {
@@ -4422,6 +5917,83 @@
         },
         "type": "object",
         "title": "HTTPValidationError"
+      },
+      "HistoryEntryOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "actor_label": {
+            "type": "string",
+            "title": "Actor Label"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "changes": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Changes"
+          },
+          "relation": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relation"
+          },
+          "snapshot": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app__modules__objects__schemas__SnapshotOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "at",
+          "actor_label",
+          "action",
+          "reason",
+          "kind",
+          "changes",
+          "relation",
+          "snapshot"
+        ],
+        "title": "HistoryEntryOut"
       },
       "HomeWorkspaceRequest": {
         "properties": {
@@ -4439,34 +6011,32 @@
         "title": "HomeWorkspaceRequest",
         "description": "대표 소속을 정한다.\n\n**비우는 길은 두지 않는다.** 대표 소속이 없으면 로그인이 소속 중 첫 부서로\n떨어지는데 그것은 사람이 정한 값이 아니다. 지우고 싶은 상황은 실제로는\n\"다른 부서로 옮긴다\" 이므로 그때도 새 값을 준다."
       },
-      "ImportPlanOut": {
+      "ImportRowOut": {
         "properties": {
-          "applied": {
-            "type": "boolean",
-            "title": "Applied"
+          "row": {
+            "type": "integer",
+            "title": "Row"
           },
-          "changes": {
-            "items": {
-              "$ref": "#/components/schemas/ChangeOut"
-            },
-            "type": "array",
-            "title": "Changes"
+          "action": {
+            "type": "string",
+            "title": "Action"
           },
-          "warnings": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Warnings"
+          "label": {
+            "type": "string",
+            "title": "Label"
           },
-          "errors": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Errors"
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
           },
-          "snapshot_id": {
+          "object_id": {
             "anyOf": [
               {
                 "type": "string",
@@ -4476,19 +6046,65 @@
                 "type": "null"
               }
             ],
-            "title": "Snapshot Id"
+            "title": "Object Id"
+          },
+          "changes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Changes"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
           }
         },
         "type": "object",
         "required": [
-          "applied",
+          "row",
+          "action",
+          "label",
+          "key",
+          "object_id",
           "changes",
-          "warnings",
-          "errors",
-          "snapshot_id"
+          "message"
         ],
-        "title": "ImportPlanOut",
-        "description": "가져오기가 무엇을 할 것인가 — **적용 전에 보는 것.**\n\n이것이 없으면 에이전트의 실수가 **기계 속도로** 반영되고, 온톨로지는 데이터의\n모양이라 그 아래 쌓인 것이 전부 흔들린다."
+        "title": "ImportRowOut"
+      },
+      "ImportRowsRequest": {
+        "properties": {
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Slug"
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows"
+        ],
+        "title": "ImportRowsRequest",
+        "description": "파일 대신 JSON 으로 — MCP 가 쓴다. 규칙은 파일과 같다."
       },
       "LoginRequest": {
         "properties": {
@@ -4647,6 +6263,49 @@
           "role"
         ],
         "title": "MemberRoleRequest"
+      },
+      "MergeRequest": {
+        "properties": {
+          "into": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Into"
+          }
+        },
+        "type": "object",
+        "required": [
+          "into"
+        ],
+        "title": "MergeRequest"
+      },
+      "MergeResultOut": {
+        "properties": {
+          "into": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Into"
+          },
+          "property_refs": {
+            "type": "integer",
+            "title": "Property Refs"
+          },
+          "relations_moved": {
+            "type": "integer",
+            "title": "Relations Moved"
+          },
+          "relations_dropped": {
+            "type": "integer",
+            "title": "Relations Dropped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "into",
+          "property_refs",
+          "relations_moved",
+          "relations_dropped"
+        ],
+        "title": "MergeResultOut"
       },
       "NavGroupNode": {
         "properties": {
@@ -4837,6 +6496,124 @@
           "label"
         ],
         "title": "NavGroupWriteRequest"
+      },
+      "NeighborhoodOut": {
+        "properties": {
+          "focus": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Focus"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/NodeOut"
+            },
+            "type": "array",
+            "title": "Nodes"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeOut"
+            },
+            "type": "array",
+            "title": "Edges"
+          },
+          "depth": {
+            "type": "integer",
+            "title": "Depth"
+          },
+          "fanout": {
+            "type": "integer",
+            "title": "Fanout"
+          },
+          "node_limit": {
+            "type": "integer",
+            "title": "Node Limit"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          }
+        },
+        "type": "object",
+        "required": [
+          "focus",
+          "nodes",
+          "edges",
+          "depth",
+          "fanout",
+          "node_limit",
+          "truncated"
+        ],
+        "title": "NeighborhoodOut"
+      },
+      "NodeOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "owner_workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Workspace Slug"
+          },
+          "degree": {
+            "type": "integer",
+            "title": "Degree"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "key",
+          "type_slug",
+          "type_label",
+          "status",
+          "owner_workspace_slug",
+          "degree",
+          "truncated"
+        ],
+        "title": "NodeOut"
       },
       "NoticeOut": {
         "properties": {
@@ -5922,6 +7699,40 @@
         "title": "OntologySchemaOut",
         "description": "**자기 설명적 스키마** — MCP 의 입력.\n\n이 하나를 읽으면 도구를 동적으로 만들 수 있다. 도메인마다 MCP 서버를 새로\n짤 필요가 없는 이유가 이것이다."
       },
+      "OverviewOut": {
+        "properties": {
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/TypeNodeOut"
+            },
+            "type": "array",
+            "title": "Nodes"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/TypeEdgeOut"
+            },
+            "type": "array",
+            "title": "Edges"
+          },
+          "object_count": {
+            "type": "integer",
+            "title": "Object Count"
+          },
+          "edge_count": {
+            "type": "integer",
+            "title": "Edge Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nodes",
+          "edges",
+          "object_count",
+          "edge_count"
+        ],
+        "title": "OverviewOut"
+      },
       "Page_AccessLogOut_": {
         "properties": {
           "items": {
@@ -6159,6 +7970,163 @@
         ],
         "title": "ProfileUpdateRequest",
         "description": "자기 정보 수정.\n\n**표시 이름만 바꾼다.** 아이디(email)는 로그인 식별자라 본인이 바꾸면 감사\n로그·알림이 가리키는 대상이 흔들린다 — 그것은 관리자의 일로 남긴다."
+      },
+      "PromoteOptionOut": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "object_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Id"
+          },
+          "objects_with_value": {
+            "type": "integer",
+            "title": "Objects With Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value",
+          "action",
+          "object_id",
+          "objects_with_value"
+        ],
+        "title": "PromoteOptionOut"
+      },
+      "PromoteOut": {
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "target_slug": {
+            "type": "string",
+            "title": "Target Slug"
+          },
+          "target_label": {
+            "type": "string",
+            "title": "Target Label"
+          },
+          "target_new": {
+            "type": "boolean",
+            "title": "Target New"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/PromoteOptionOut"
+            },
+            "type": "array",
+            "title": "Options"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "target_slug",
+          "target_label",
+          "target_new",
+          "options",
+          "errors",
+          "warnings",
+          "snapshot_id"
+        ],
+        "title": "PromoteOut"
+      },
+      "PromoteRequest": {
+        "properties": {
+          "target_type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Type Slug"
+          },
+          "new_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Slug"
+          },
+          "new_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "New Label"
+          },
+          "nav_group_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Group Slug"
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "PromoteRequest",
+        "description": "있는 코드표에 붙이거나(`target_type_slug`), 새로 만든다(`new_slug`·`new_label`)."
       },
       "PropertyDefOut": {
         "properties": {
@@ -6488,6 +8456,195 @@
         "title": "PropertyUsage",
         "description": "**지우기 전에 무엇이 사라지는지.**\n\n\"정말 삭제하시겠습니까\" 만 묻는 창은 아무도 안 읽고 예를 누른다 — 읽을 것이\n없어서다. 속성 하나를 지우면 그 값이 전부 사라지므로, 몇 개인지 말해 준다."
       },
+      "QualityFindingOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "kind_label": {
+            "type": "string",
+            "title": "Kind Label"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "hits": {
+            "items": {
+              "$ref": "#/components/schemas/QualityHitOut"
+            },
+            "type": "array",
+            "title": "Hits"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "kind_label",
+          "type_slug",
+          "type_label",
+          "count",
+          "hits"
+        ],
+        "title": "QualityFindingOut"
+      },
+      "QualityHitOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "key",
+          "detail"
+        ],
+        "title": "QualityHitOut"
+      },
+      "QualityReportOut": {
+        "properties": {
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/QualityFindingOut"
+            },
+            "type": "array",
+            "title": "Findings"
+          },
+          "sample_limit": {
+            "type": "integer",
+            "title": "Sample Limit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "findings",
+          "sample_limit"
+        ],
+        "title": "QualityReportOut"
+      },
+      "RefHitOut": {
+        "properties": {
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "property_key": {
+            "type": "string",
+            "title": "Property Key"
+          },
+          "property_label": {
+            "type": "string",
+            "title": "Property Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "object_id",
+          "label",
+          "key",
+          "type_slug",
+          "type_label",
+          "property_key",
+          "property_label"
+        ],
+        "title": "RefHitOut",
+        "description": "이 객체를 **속성으로** 가리키는 객체 하나."
+      },
+      "ReferencesOut": {
+        "properties": {
+          "property_refs": {
+            "items": {
+              "$ref": "#/components/schemas/RefHitOut"
+            },
+            "type": "array",
+            "title": "Property Refs"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/RelationHitOut"
+            },
+            "type": "array",
+            "title": "Relations"
+          },
+          "hidden_property_refs": {
+            "type": "integer",
+            "title": "Hidden Property Refs"
+          },
+          "hidden_relations": {
+            "type": "integer",
+            "title": "Hidden Relations"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "property_refs",
+          "relations",
+          "hidden_property_refs",
+          "hidden_relations",
+          "total"
+        ],
+        "title": "ReferencesOut"
+      },
       "RejectRequest": {
         "properties": {
           "note": {
@@ -6612,6 +8769,46 @@
           "dst_object_id"
         ],
         "title": "RelationCreateRequest"
+      },
+      "RelationHitOut": {
+        "properties": {
+          "relation_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Relation Id"
+          },
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "outgoing": {
+            "type": "boolean",
+            "title": "Outgoing"
+          },
+          "other_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Other Id"
+          },
+          "other_label": {
+            "type": "string",
+            "title": "Other Label"
+          },
+          "other_type_slug": {
+            "type": "string",
+            "title": "Other Type Slug"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relation_id",
+          "relation",
+          "outgoing",
+          "other_id",
+          "other_label",
+          "other_type_slug"
+        ],
+        "title": "RelationHitOut"
       },
       "RelationPatchRequest": {
         "properties": {
@@ -6964,6 +9161,279 @@
         ],
         "title": "RelationTypeWriteRequest"
       },
+      "RenameOptionOut": {
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "from_value": {
+            "type": "string",
+            "title": "From Value"
+          },
+          "to_value": {
+            "type": "string",
+            "title": "To Value"
+          },
+          "objects_with_value": {
+            "type": "integer",
+            "title": "Objects With Value"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "from_value",
+          "to_value",
+          "objects_with_value",
+          "errors"
+        ],
+        "title": "RenameOptionOut"
+      },
+      "RenameOptionRequest": {
+        "properties": {
+          "from": {
+            "type": "string",
+            "minLength": 1,
+            "title": "From"
+          },
+          "to": {
+            "type": "string",
+            "minLength": 1,
+            "title": "To"
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "title": "RenameOptionRequest"
+      },
+      "RestoreRequest": {
+        "properties": {
+          "entry_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Entry Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "entry_id"
+        ],
+        "title": "RestoreRequest"
+      },
+      "SavedViewOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "query": {
+            "$ref": "#/components/schemas/SavedViewQuery"
+          },
+          "owner_user_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Owner User Id"
+          },
+          "owner_label": {
+            "type": "string",
+            "title": "Owner Label"
+          },
+          "workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Slug"
+          },
+          "can_edit": {
+            "type": "boolean",
+            "title": "Can Edit"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type_slug",
+          "name",
+          "query",
+          "owner_user_id",
+          "owner_label",
+          "workspace_slug",
+          "can_edit",
+          "created_at",
+          "updated_at"
+        ],
+        "title": "SavedViewOut"
+      },
+      "SavedViewPatchRequest": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 100,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SavedViewQuery"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "title": "SavedViewPatchRequest"
+      },
+      "SavedViewQuery": {
+        "properties": {
+          "q": {
+            "type": "string",
+            "title": "Q",
+            "default": ""
+          },
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/ConditionOut"
+            },
+            "type": "array",
+            "title": "Conditions"
+          },
+          "status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Status"
+          }
+        },
+        "type": "object",
+        "title": "SavedViewQuery",
+        "description": "뷰가 담는 것. 열·정렬은 안 담는다 — 그것은 타입 정의(`list_view`)의 몫이고,\n뷰마다 갈리면 「왜 이 뷰만 열이 다르지」 를 아무도 설명 못 한다."
+      },
+      "SavedViewWriteRequest": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "query": {
+            "$ref": "#/components/schemas/SavedViewQuery"
+          },
+          "workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Slug"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "query"
+        ],
+        "title": "SavedViewWriteRequest"
+      },
+      "SearchHitOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "key",
+          "type_slug",
+          "type_label"
+        ],
+        "title": "SearchHitOut"
+      },
       "ServerStatusOut": {
         "properties": {
           "app_name": {
@@ -7086,45 +9556,50 @@
         ],
         "title": "SignupRequest"
       },
-      "SnapshotOut": {
+      "SubgraphOut": {
         "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Id"
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/NodeOut"
+            },
+            "type": "array",
+            "title": "Nodes"
           },
-          "taken_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Taken At"
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeOut"
+            },
+            "type": "array",
+            "title": "Edges"
           },
-          "actor_label": {
-            "type": "string",
-            "title": "Actor Label"
-          },
-          "reason": {
-            "type": "string",
-            "title": "Reason"
-          },
-          "type_count": {
+          "total": {
             "type": "integer",
-            "title": "Type Count"
+            "title": "Total"
           },
-          "relation_count": {
+          "limit": {
             "type": "integer",
-            "title": "Relation Count"
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
           }
         },
         "type": "object",
         "required": [
-          "id",
-          "taken_at",
-          "actor_label",
-          "reason",
-          "type_count",
-          "relation_count"
+          "nodes",
+          "edges",
+          "total",
+          "limit",
+          "offset",
+          "truncated"
         ],
-        "title": "SnapshotOut"
+        "title": "SubgraphOut",
+        "description": "한 타입(들)의 인스턴스 전부 — **상한 안에서.**"
       },
       "SystemAdminRequest": {
         "properties": {
@@ -7255,6 +9730,84 @@
           "orphan_count"
         ],
         "title": "TreeOut"
+      },
+      "TypeEdgeOut": {
+        "properties": {
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "directed": {
+            "type": "boolean",
+            "title": "Directed"
+          },
+          "src_type": {
+            "type": "string",
+            "title": "Src Type"
+          },
+          "dst_type": {
+            "type": "string",
+            "title": "Dst Type"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relation",
+          "label",
+          "directed",
+          "src_type",
+          "dst_type",
+          "count"
+        ],
+        "title": "TypeEdgeOut"
+      },
+      "TypeNodeOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "icon": {
+            "type": "string",
+            "title": "Icon"
+          },
+          "group_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Group Slug"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "icon",
+          "group_slug",
+          "count"
+        ],
+        "title": "TypeNodeOut"
       },
       "UnreadCountOut": {
         "properties": {
@@ -7677,6 +10230,171 @@
         "type": "object",
         "title": "WorkspaceUpdateRequest",
         "description": "**안 보낸 것과 비운 것을 구별한다.** None 은 \"안 바꿈\" 이다.\n\n구별하지 않으면 이름만 고칠 때마다 공개 설정이 함께 초기화되고, 그 손실은\n저장한 사람 눈에 안 보인다."
+      },
+      "app__modules__objects__schemas__ImportPlanOut": {
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/ImportRowOut"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "rows",
+          "errors",
+          "counts"
+        ],
+        "title": "ImportPlanOut"
+      },
+      "app__modules__objects__schemas__SnapshotOut": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "status",
+          "properties"
+        ],
+        "title": "SnapshotOut",
+        "description": "그 시점의 값 전체 — 지금 값에서 기록을 거꾸로 대어 재구성한 것."
+      },
+      "app__modules__ontology__schemas__ImportPlanOut": {
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/ChangeOut"
+            },
+            "type": "array",
+            "title": "Changes"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "changes",
+          "warnings",
+          "errors",
+          "snapshot_id"
+        ],
+        "title": "ImportPlanOut",
+        "description": "가져오기가 무엇을 할 것인가 — **적용 전에 보는 것.**\n\n이것이 없으면 에이전트의 실수가 **기계 속도로** 반영되고, 온톨로지는 데이터의\n모양이라 그 아래 쌓인 것이 전부 흔들린다."
+      },
+      "app__modules__ontology__schemas__SnapshotOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "taken_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Taken At"
+          },
+          "actor_label": {
+            "type": "string",
+            "title": "Actor Label"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "type_count": {
+            "type": "integer",
+            "title": "Type Count"
+          },
+          "relation_count": {
+            "type": "integer",
+            "title": "Relation Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "taken_at",
+          "actor_label",
+          "reason",
+          "type_count",
+          "relation_count"
+        ],
+        "title": "SnapshotOut"
       }
     }
   }

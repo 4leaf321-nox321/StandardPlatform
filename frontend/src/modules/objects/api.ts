@@ -1,7 +1,7 @@
 /** 객체 API. */
 
 import type { PropertyDef } from '@/modules/ontology/api'
-import { api } from '@/shared/api/client'
+import { api, downloadFile } from '@/shared/api/client'
 import type { Page } from '@/shared/api/paging'
 
 export interface ObjectRow {
@@ -72,6 +72,140 @@ export interface TreeOut {
   orphan_count: number
 }
 
+/** 일괄 계획의 한 줄 — 행마다 무엇이 되는지. */
+export interface ImportRow {
+  row: number
+  action: 'create' | 'update' | 'unchanged' | 'error'
+  label: string
+  key: string | null
+  object_id: string | null
+  /** 바뀌는 칸. 「고침」 이 무엇을 고치는지 — 안 보여 주면 사람은 안 누른다. */
+  changes: string[]
+  message: string
+}
+
+export interface ImportPlan {
+  applied: boolean
+  rows: ImportRow[]
+  /** 행과 무관한 오류(모르는 열, 상한). **하나라도 있으면 아무것도 안 넣는다.** */
+  errors: string[]
+  counts: Record<'create' | 'update' | 'unchanged' | 'error', number>
+}
+
+/** 이 객체를 가리키는 것 — 지우기 전에 보는 것. */
+export interface References {
+  property_refs: {
+    object_id: string
+    label: string
+    key: string | null
+    type_slug: string
+    type_label: string
+    property_key: string
+    property_label: string
+  }[]
+  relations: {
+    relation_id: string
+    relation: string
+    outgoing: boolean
+    other_id: string
+    other_label: string
+    other_type_slug: string
+  }[]
+  /** 볼 수 없는 부서의 것 — **수만 온다.** */
+  hidden_property_refs: number
+  hidden_relations: number
+  total: number
+}
+
+export interface MergeResult {
+  into: string
+  property_refs: number
+  relations_moved: number
+  relations_dropped: number
+}
+
+/** 그 시점의 값 전체 — 지금 값에서 기록을 거꾸로 대어 재구성한 것. */
+export interface Snapshot {
+  key: string | null
+  label: string
+  status: string
+  properties: Record<string, unknown>
+}
+
+export interface HistoryEntry {
+  id: string
+  at: string
+  actor_label: string
+  action: string
+  reason: string | null
+  /** `object` 는 값이 바뀐 기록, `relation` 은 관계가 걸리거나 끊긴 기록. */
+  kind: 'object' | 'relation'
+  /** 칸별 `{before, after}`. 속성은 `properties.<키>`. */
+  changes: Record<string, { before: unknown; after: unknown }>
+  relation: { relation: string; outgoing: boolean; other_id: string; other_label: string } | null
+  /** 값 기록에만 있다 — 되돌리기의 목표. */
+  snapshot: Snapshot | null
+}
+
+/** 조건 하나 — `f.<칸>.<연산>=<값>`. 칸 안에서는 `in` 으로 OR, 칸끼리는 AND. */
+export interface Condition {
+  field: string
+  op: ConditionOp
+  value: string
+}
+
+export type ConditionOp =
+  | 'eq'
+  | 'ne'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'in'
+  | 'contains'
+  | 'starts'
+  | 'empty'
+  | 'notempty'
+
+/** 값 여럿(`in`)의 구분자. 서버와 같다. */
+export const CONDITION_MULTI_SEP = '|'
+
+export interface SavedViewQuery {
+  q: string
+  conditions: Condition[]
+  status: string | null
+}
+
+export interface SavedView {
+  id: string
+  type_slug: string
+  name: string
+  query: SavedViewQuery
+  owner_user_id: string
+  owner_label: string
+  /** 있으면 그 부서가 함께 쓴다. 없으면 내 것. */
+  workspace_slug: string | null
+  can_edit: boolean
+  created_at: string
+  updated_at: string
+}
+
+/** 품질 — 한 종류·한 타입의 걸린 것들. */
+export interface QualityFinding {
+  kind: 'missing_required' | 'orphan' | 'broken_ref' | 'duplicate'
+  kind_label: string
+  type_slug: string
+  type_label: string
+  /** 전부 센 수. `hits` 는 상한까지만. */
+  count: number
+  hits: { id: string; label: string; key: string | null; detail: string }[]
+}
+
+export interface QualityReport {
+  findings: QualityFinding[]
+  sample_limit: number
+}
+
 export interface ObjectQuery {
   q?: string
   limit?: number
@@ -84,6 +218,9 @@ export interface ObjectQuery {
   deep?: boolean
   /** 그 해에 해당하는 것만. 축의 시간 정책이 뜻을 정한다. */
   year?: number | null
+  /** 조건 거르기. 칸 안 OR, 칸끼리 AND. */
+  conditions?: Condition[]
+  status?: string | null
 }
 
 function queryString(query: ObjectQuery): string {
@@ -97,11 +234,65 @@ function queryString(query: ObjectQuery): string {
   for (const [key, value] of Object.entries(query.properties ?? {})) {
     if (value) params.set(`p.${key}`, value)
   }
+  if (query.status) params.set('status', query.status)
+  for (const one of query.conditions ?? []) {
+    params.append(`f.${one.field}.${one.op}`, one.value)
+  }
   const text = params.toString()
   return text ? `?${text}` : ''
 }
 
+function importForm(file: File, apply: boolean, workspaceSlug?: string | null): FormData {
+  const form = new FormData()
+  form.set('file', file)
+  form.set('apply', apply ? 'true' : 'false')
+  if (workspaceSlug) form.set('workspace_slug', workspaceSlug)
+  return form
+}
+
+export const qualityApi = {
+  report: (kind?: string) =>
+    api.get<QualityReport>(`/objects/quality/report${kind ? `?kind=${kind}` : ''}`),
+}
+
+export const viewApi = {
+  list: (typeSlug: string) => api.get<SavedView[]>(`/objects/${typeSlug}/views`),
+  create: (typeSlug: string, body: { name: string; query: SavedViewQuery; workspace_slug?: string | null }) =>
+    api.post<SavedView>(`/objects/${typeSlug}/views`, body),
+  update: (typeSlug: string, id: string, body: { name?: string; query?: SavedViewQuery }) =>
+    api.patch<SavedView>(`/objects/${typeSlug}/views/${id}`, body),
+  remove: (typeSlug: string, id: string) => api.delete<void>(`/objects/${typeSlug}/views/${id}`),
+}
+
 export const objectApi = {
+  /** 빈 CSV — 헤더가 「무엇을 채워야 하는지」 를 말한다. */
+  template: (typeSlug: string) =>
+    downloadFile(`/objects/${typeSlug}/template`, `${typeSlug}-template.csv`),
+  /** 지금 거른 목록 그대로 — 쪽 상한 없이 전부. */
+  export: (typeSlug: string, format: 'csv' | 'json', query: ObjectQuery = {}) => {
+    const params = new URLSearchParams(queryString(query).replace(/^\?/, ''))
+    params.set('format', format)
+    return downloadFile(
+      `/objects/${typeSlug}/export?${params.toString()}`,
+      `${typeSlug}.${format}`,
+    )
+  },
+  /** 파일로 넣기 — `apply=false` 면 계획만. */
+  import: (typeSlug: string, file: File, opts: { apply: boolean; workspaceSlug?: string | null }) =>
+    api.postForm<ImportPlan>(
+      `/objects/${typeSlug}/import`,
+      importForm(file, opts.apply, opts.workspaceSlug),
+    ),
+  exportRelations: (typeSlug: string, format: 'csv' | 'json') =>
+    downloadFile(
+      `/objects/${typeSlug}/relations/export?format=${format}`,
+      `${typeSlug}-relations.${format}`,
+    ),
+  importRelations: (typeSlug: string, file: File, opts: { apply: boolean }) =>
+    api.postForm<ImportPlan>(
+      `/objects/${typeSlug}/relations/import`,
+      importForm(file, opts.apply),
+    ),
   list: (typeSlug: string, query: ObjectQuery = {}) =>
     api.get<Page<ObjectRow>>(`/objects/${typeSlug}${queryString(query)}`),
   tree: (typeSlug: string, opts: { parent?: string; orphans?: boolean } = {}) => {
@@ -117,7 +308,21 @@ export const objectApi = {
     api.post<ObjectRow>(`/objects/${typeSlug}`, body),
   update: (typeSlug: string, id: string, body: Record<string, unknown>) =>
     api.patch<ObjectRow>(`/objects/${typeSlug}/${id}`, body),
-  remove: (typeSlug: string, id: string) => api.delete<void>(`/objects/${typeSlug}/${id}`),
+  /** 이 객체의 이력 — 최근 것이 앞. 볼 수 있는 사람이면 누구나. */
+  history: (typeSlug: string, id: string) =>
+    api.get<HistoryEntry[]>(`/objects/${typeSlug}/${id}/history`),
+  /** 그 시점 값으로 고친다 — 저장과 같은 검증을 거쳐서. */
+  restore: (typeSlug: string, id: string, entryId: string) =>
+    api.post<ObjectRow>(`/objects/${typeSlug}/${id}/restore`, { entry_id: entryId }),
+  /** 지우기 전에 — 이 객체를 가리키는 것. */
+  references: (typeSlug: string, id: string) =>
+    api.get<References>(`/objects/${typeSlug}/${id}/references`),
+  /** `block`(기본)은 가리키는 것이 있으면 409. `detach` 는 참조를 비우고 관계를 끊고 지운다. */
+  remove: (typeSlug: string, id: string, mode: 'block' | 'detach' = 'block') =>
+    api.delete<void>(`/objects/${typeSlug}/${id}?mode=${mode}`),
+  /** 다른 객체에 합치고 지운다 — 참조·관계가 이긴 쪽으로. */
+  merge: (typeSlug: string, id: string, into: string) =>
+    api.post<MergeResult>(`/objects/${typeSlug}/${id}/merge`, { into }),
 
   addRelation: (typeSlug: string, id: string, body: Record<string, unknown>) =>
     api.post<RelatedObject>(`/objects/${typeSlug}/${id}/relations`, body),
