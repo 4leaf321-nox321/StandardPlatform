@@ -7,8 +7,13 @@
 from __future__ import annotations
 
 import os
+import re
+import shutil
 import stat
+import subprocess
 from pathlib import Path
+
+import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 DEPLOY = REPO / "deploy"
@@ -248,3 +253,149 @@ def test_bind_mount_대상이_이미지에_있다() -> None:
         assert "mkdir -p" in def_text and target in def_text, (
             f"{target} 이 apptainer.def 의 %post 에서 안 만들어집니다"
         )
+
+
+# --- apptainer 를 까는 길 ------------------------------------------------------------
+#
+# apptainer 는 우분투 기본 저장소에 없다. `prepare` 가 PPA 없이 `apt-get install apptainer`
+# 를 부르던 v0.1.0 은 새 서버에서 「Unable to locate package」 로 멈췄다 — 그리고 그것은
+# **운영 서버에 SSH 로 붙어 있는 자리**에서만 드러난다. 그래서 그 길을 가짜 명령으로 돌려 본다.
+
+
+def _piece(text: str, name: str) -> str:
+    """deploy.sh 에서 함수 하나를 꺼낸다 — 스크립트 전체는 root·BUILD_INFO 를 요구한다."""
+    one_line = re.search(rf"^{name}\(\)\s*\{{[^\n]*\}}$", text, re.M)
+    if one_line:
+        return one_line.group(0)
+    block = re.search(rf"^{name}\(\)\s*\{{\n.*?^\}}$", text, re.M | re.S)
+    assert block, f"deploy.sh 에 {name} 이 없습니다"
+    return block.group(0)
+
+
+def _stub(path: Path, body: str) -> None:
+    path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _ensure_apptainer(
+    tmp_path: Path,
+    *,
+    installed: bool = False,
+    candidate: str = "(none)",
+    os_id: str = "ubuntu",
+    ppa_reachable: bool = True,
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    constants = [
+        line
+        for line in text.splitlines()
+        if line.startswith(("APPTAINER_PPA=", "APPTAINER_DOCS=", "APPTAINER_DEBS="))
+    ]
+    pieces = [
+        _piece(text, name) for name in ("err", "info", "warn", "os_id", "ensure_apptainer")
+    ]
+
+    bin_dir = tmp_path / "bin"
+    tools = tmp_path / "tools"
+    bin_dir.mkdir()
+    tools.mkdir()
+    # **진짜 apptainer 가 PATH 에 섞이면 안 된다**(이 PC·CI 에는 깔려 있다).
+    # 쓰는 도구만 옮긴다.
+    for tool in ("sed", "grep", "tr", "chmod", "cat"):
+        found = shutil.which(tool)
+        assert found, f"{tool} 이 없습니다"
+        (tools / tool).symlink_to(found)
+    log = tmp_path / "calls.log"
+    fake_apptainer = "#!/bin/sh\necho apptainer version 1.5.3\n"
+    if installed:
+        _stub(bin_dir / "apptainer", "echo apptainer version 1.5.3\n")
+    _stub(
+        bin_dir / "apt-cache",
+        f'printf "apptainer:\\n  Installed: (none)\\n  Candidate: {candidate}\\n"\n',
+    )
+    # apt-get install ... apptainer 가 불리면 「깔린」 것으로 만든다.
+    _stub(
+        bin_dir / "apt-get",
+        f'echo "apt-get $*" >> "{log}"\n'
+        f'case "$*" in *" apptainer"*) printf \'{fake_apptainer}\' > "{bin_dir}/apptainer"; '
+        f'chmod +x "{bin_dir}/apptainer";; esac\n',
+    )
+    _stub(
+        bin_dir / "add-apt-repository",
+        f'echo "add-apt-repository $*" >> "{log}"\nexit {0 if ppa_reachable else 1}\n',
+    )
+    os_release = tmp_path / "os-release"
+    os_release.write_text(
+        f'NAME="Test"\nID={os_id}\nVERSION="99 (os-release)"\n', encoding="utf-8"
+    )
+
+    script = "set -euo pipefail\n" + "\n".join([*constants, *pieces]) + "\nensure_apptainer\n"
+    done = subprocess.run(
+        # PATH 를 가짜 명령 자리로 좁히므로 bash 자신은 절대 경로로 부른다.
+        [shutil.which("bash") or "bash", "-c", script],
+        env={"PATH": f"{bin_dir}:{tools}", "OS_RELEASE": str(os_release)},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return done, calls
+
+
+_no_bash = pytest.mark.skipif(
+    shutil.which("bash") is None or os.name == "nt", reason="bash 가 있는 리눅스에서만"
+)
+
+
+def test_prepare_는_apptainer_를_기본_저장소에서_바로_찾지_않는다() -> None:
+    """패키지 목록에 apptainer 를 넣으면 새 우분투 서버에서 apt 가 통째로 실패한다."""
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    prepare = _piece(text, "cmd_prepare")
+    installs = [line for line in prepare.splitlines() if "postgresql-contrib" in line]
+    assert installs and all("apptainer" not in line for line in installs)
+    assert "ensure_apptainer" in prepare
+    assert "ppa:apptainer/ppa" in text
+
+
+@_no_bash
+def test_이미_깔려_있으면_아무것도_안_한다(tmp_path: Path) -> None:
+    done, calls = _ensure_apptainer(tmp_path, installed=True)
+    assert done.returncode == 0, done.stderr
+    assert calls == []
+
+
+@_no_bash
+def test_우분투면_공식_PPA_를_더해_깐다(tmp_path: Path) -> None:
+    done, calls = _ensure_apptainer(tmp_path)
+    assert done.returncode == 0, done.stderr
+    ppa = next(i for i, one in enumerate(calls) if one.startswith("add-apt-repository"))
+    assert "ppa:apptainer/ppa" in calls[ppa]
+    # PPA 를 더한 **뒤에** 깐다.
+    assert any("install" in one and " apptainer" in one for one in calls[ppa + 1 :])
+    assert "apptainer version" in done.stdout
+
+
+@_no_bash
+def test_닿는_저장소에_있으면_PPA_를_더하지_않는다(tmp_path: Path) -> None:
+    """사내 미러에 이미 있는 것을 굳이 바깥 PPA 로 받으러 가지 않는다."""
+    done, calls = _ensure_apptainer(tmp_path, candidate="1.5.3-1~noble")
+    assert done.returncode == 0, done.stderr
+    assert not any(one.startswith("add-apt-repository") for one in calls)
+    assert any("install" in one and " apptainer" in one for one in calls)
+
+
+@_no_bash
+def test_PPA_에_닿지_않으면_할_일을_말하고_멈춘다(tmp_path: Path) -> None:
+    """폐쇄망 — **조용히 넘어가지 않고**, 무엇을 먼저 깔아야 하는지 말한다."""
+    done, calls = _ensure_apptainer(tmp_path, ppa_reachable=False)
+    assert done.returncode != 0
+    assert ".deb" in done.stderr and "prepare" in done.stderr
+    assert not any("install" in one and " apptainer" in one for one in calls)
+
+
+@_no_bash
+def test_우분투가_아니면_PPA_를_쓰지_않고_설치_안내를_준다(tmp_path: Path) -> None:
+    done, calls = _ensure_apptainer(tmp_path, os_id="debian")
+    assert done.returncode != 0
+    assert "apptainer.org" in done.stderr
+    assert not any(one.startswith("add-apt-repository") for one in calls)

@@ -53,7 +53,7 @@ ls
 | **`root` 로 바로 ssh 했다면** | 운영 계정을 알 수 없어 멈춘다(`sudo` 를 거치지 않아 `SUDO_USER` 가 없다). `OPERATOR=<계정> ./deploy.sh install` 로 준다 |
 | **임시 비밀번호는 한 번만 찍힌다** | 세션이 끊기면 잃는다. `sudo ./deploy.sh install 2>&1 \| tee ~/install-<태그>.log` 로 받아 둔다 |
 | **`reset` 은 되묻는다** | `ssh <서버> 'sudo ./deploy.sh reset'` 은 TTY 가 없어 그 물음에서 실패한다. `ssh -t` 로 붙는다 |
-| **`prepare` 는 apt 를 쓴다** | 서버가 우분투 저장소(또는 사내 미러)에 닿아야 한다. 안 닿으면 apptainer·postgresql 을 **먼저 따로 깔고** `prepare` 를 돌린다 — 나머지 단계(DB 역할·폴더)는 그대로 멱등하다 |
+| **`prepare` 는 apt 와 apptainer PPA 를 쓴다** | 서버가 우분투 저장소(또는 사내 미러)와 `ppa.launchpadcontent.net` 에 닿아야 한다. PPA 에 안 닿으면 `prepare` 가 DB·폴더까지 만든 뒤 **무엇을 먼저 깔지 말하고 멈춘다** — apptainer 를 `.deb` 로 깔고 `prepare` 를 다시 돌린다(앞 단계는 멱등하다) |
 
 번들 전체를 한 줄로 밀어 넣는 것도 된다:
 
@@ -73,8 +73,29 @@ scp <slug>-<태그>.tar.gz <계정>@<서버>:~/ && \
 sudo ./deploy.sh prepare
 ```
 
-apt 패키지(apptainer·postgresql), DB 역할과 데이터베이스, 설치 폴더를 만든다.
+apt 패키지(postgresql·python3-venv), **apptainer**, DB 역할과 데이터베이스, 설치 폴더를 만든다.
 **멱등하다** — 다시 돌려도 이미 있는 것은 건드리지 않는다.
+
+**apptainer 는 우분투 기본 저장소에 없다.** 그래서 `prepare` 는 이 순서로 찾는다:
+
+1. 이미 깔려 있으면 그대로 쓴다.
+2. 닿는 저장소(사내 미러 등)에 있으면 거기서 받는다.
+3. 우분투면 **공식 PPA(`ppa:apptainer/ppa`)를 더해** 받는다 — CI 가 번들을 만들 때 쓰는 것과 같은 곳이다.
+
+PPA 에 닿지 않는 서버(폐쇄망·프록시)라면 `prepare` 가 **DB·폴더까지 만든 뒤** 멈추고 할 일을 말한다.
+닿는 PC 에서 `.deb` 를 받아 옮겨 깔고 다시 돌린다:
+
+```bash
+# 닿는 PC 에서: https://github.com/apptainer/apptainer/releases 의 amd64 .deb 를 받아
+scp apptainer_*.deb <계정>@<서버>:~/
+
+# 서버에서
+sudo apt install ./apptainer_*.deb
+sudo ./deploy.sh prepare      # 앞 단계는 이미 서 있어 건너뛴다
+```
+
+우분투가 아니면 PPA 를 쓸 수 없다 — https://apptainer.org/docs/admin/main/installation.html 대로
+먼저 깔고 `prepare` 를 돌린다.
 
 ---
 
@@ -249,7 +270,8 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 
 | 증상 | 원인과 해결 |
 | --- | --- |
-| `apptainer: command not found` | `sudo ./deploy.sh prepare` |
+| `apptainer: command not found` | `sudo ./deploy.sh prepare` — 공식 PPA 를 더해 깐다. 폐쇄망이면 `.deb` 로 먼저(1. 서버 준비) |
+| `prepare` 가 `Unable to locate package apptainer` 로 멈춘다 | **v0.1.0 번들이다** — PPA 없이 apt 에서 찾았다. 새 번들로 다시 돌리거나 `sudo add-apt-repository -y ppa:apptainer/ppa && sudo apt-get update` 후 `prepare` 를 다시 |
 | 서비스가 `failed` | `journalctl -u <slug> -n 50` |
 | **파일 업로드에서 `Read-only file system`** | `.env` 의 `FILESTORE_DIR` 가 bind-mount 밖을 가리킨다. `/data/filestore` 여야 한다 |
 | 모든 페이지가 JSON 404 | SIF 에 `frontend/dist` 가 없다. 라우팅 버그처럼 보이지만 아니다 |

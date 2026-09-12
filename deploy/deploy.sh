@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 배포 — 준비 · 설치 · 갱신 · 초기화 · 상태.
 #
-#   sudo ./deploy.sh prepare   최초 1회: apt 패키지, postgres, DB 역할·DB 생성
+#   sudo ./deploy.sh prepare   최초 1회: apt 패키지, apptainer(공식 PPA), postgres, DB 역할·DB 생성
 #   sudo ./deploy.sh install   SIF 배치 + .env 생성 + systemd + 마이그레이션 + 시드 + 기동
 #   sudo ./deploy.sh update    SIF 교체 + 마이그레이션 + 재시작 (자료 그대로)
 #   sudo ./deploy.sh reset     DB 통째로 초기화 (파괴적)
@@ -83,6 +83,42 @@ MCP_API_BASE="${MCP_API_BASE:-http://127.0.0.1:$APP_PORT}"
 MCP_ALLOWED_HOSTS="${MCP_ALLOWED_HOSTS:-$(unit_env MCP_ALLOWED_HOSTS)}"
 
 # ───────────────────────── 조각들 ─────────────────────────
+# apptainer 는 **우분투 기본 저장소에 없다** — 공식 PPA 에만 있다. `apt-get install apptainer`
+# 를 바로 부르면 새 서버에서 「Unable to locate package」 로 멈추고, set -e 라 그 뒤의 준비가
+# 통째로 안 된다. CI(`.github/actions/apptainer`)가 까는 길과 같은 길로 간다.
+APPTAINER_PPA="ppa:apptainer/ppa"
+APPTAINER_DOCS="https://apptainer.org/docs/admin/main/installation.html"
+APPTAINER_DEBS="https://github.com/apptainer/apptainer/releases"
+OS_RELEASE="${OS_RELEASE:-/etc/os-release}"
+
+# **source 하지 않는다** — os-release 의 VERSION 이 번들 버전(VERSION)을 덮는다.
+os_id() { sed -n 's/^ID=//p' "$OS_RELEASE" 2>/dev/null | tr -d '"'; }
+
+ensure_apptainer() {
+    if command -v apptainer >/dev/null 2>&1; then
+        info "apptainer 가 이미 있습니다: $(apptainer --version 2>/dev/null || echo '?')"
+        return 0
+    fi
+    # 이미 닿는 저장소(사내 미러 등)에 있으면 그것을 쓴다 — PPA 를 굳이 더하지 않는다.
+    if apt-cache policy apptainer 2>/dev/null | grep -q 'Candidate: [0-9]'; then
+        info "apptainer 설치 (이미 닿는 저장소에서)"
+        apt-get install -y --no-install-recommends apptainer
+        return 0
+    fi
+    if [[ "$(os_id)" != "ubuntu" ]]; then
+        err "apt 에서 apptainer 를 찾을 수 없고 우분투가 아니라 PPA 를 쓸 수 없습니다. $APPTAINER_DOCS 대로 먼저 설치하고 'sudo ./deploy.sh prepare' 를 다시 돌리세요 — 이미 만든 DB·폴더는 그대로 둡니다."
+    fi
+    info "apptainer 공식 PPA 추가: $APPTAINER_PPA"
+    if ! { apt-get install -y --no-install-recommends software-properties-common \
+            && add-apt-repository -y "$APPTAINER_PPA" \
+            && apt-get update; }; then
+        err "PPA 를 추가하지 못했습니다 — 서버가 ppa.launchpadcontent.net 에 닿지 않는 것 같습니다(폐쇄망·프록시). 닿는 PC 에서 apptainer .deb 를 받아($APPTAINER_DEBS) 옮기고 'sudo apt install ./apptainer_*.deb' 로 설치한 뒤 'sudo ./deploy.sh prepare' 를 다시 돌리세요 — 이미 만든 DB·폴더는 그대로 둡니다."
+    fi
+    apt-get install -y --no-install-recommends apptainer \
+        || err "PPA 를 더했는데 apptainer 를 설치하지 못했습니다 — 위의 apt 출력을 확인하세요."
+    info "apptainer 설치: $(apptainer --version 2>/dev/null || echo '?')"
+}
+
 ensure_dirs() {
     info "설치 폴더 준비: $INSTALL_DIR"
     # **운영 데이터는 SIF 밖이다.** 이미지가 통째로 교체돼도 살아남아야 한다.
@@ -260,12 +296,13 @@ health_check() {
 
 # ───────────────────────── 명령 ─────────────────────────
 cmd_prepare() {
-    info "OS 패키지 설치 (apptainer, postgresql, python3-venv)"
+    info "OS 패키지 설치 (postgresql, python3-venv)"
     # python3-venv: MCP 서버가 별도 venv 로 돈다. 없으면 install 때 MCP 만 조용히
     # 건너뛰어지고, 그 사실은 Claude 를 붙이는 날에야 드러난다.
+    # apptainer 는 여기 없다 — 기본 저장소에 없어서, 맨 끝 `ensure_apptainer` 가 따로 깐다.
     apt-get update
     apt-get install -y --no-install-recommends \
-        apptainer postgresql postgresql-contrib ca-certificates curl python3 python3-venv
+        postgresql postgresql-contrib ca-certificates curl python3 python3-venv
 
     info "postgresql 기동"
     systemctl enable postgresql
@@ -289,6 +326,10 @@ cmd_prepare() {
     else
         info "데이터베이스가 이미 있습니다: $DB_NAME"
     fi
+
+    # **맨 끝에 둔다.** PPA 에 닿지 않는 서버에서 여기서 멈춰도 DB·폴더는 이미 서 있고,
+    # apptainer 만 따로 깐 뒤 prepare 를 다시 돌리면 된다(앞 단계는 멱등하다).
+    ensure_apptainer
 
     cat <<MSG
 
@@ -432,7 +473,7 @@ $APP_NAME 배포 스크립트 ($VERSION)
 
   sudo ./deploy.sh [prepare|install|update|reset|status]
 
-  prepare   최초 1회: apt 패키지, postgres, DB 역할·DB
+  prepare   최초 1회: apt 패키지, apptainer(공식 PPA), postgres, DB 역할·DB
   install   SIF + .env + systemd, 마이그레이션, 시드, 기동
   update    SIF 교체 + 마이그레이션 + 재시작 (자료 그대로)
   reset     DB·첨부 초기화 (파괴적)
