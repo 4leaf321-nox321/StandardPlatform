@@ -176,6 +176,44 @@ export interface OntologySchema {
   generated_at: string
 }
 
+export type InferRole = 'label' | 'key' | 'description' | 'aliases' | 'property' | 'ignore'
+
+export interface InferColumn {
+  header: string
+  role: InferRole
+  key: string
+  label: string
+  data_type: DataType
+  multi: boolean
+  enum_options: string[]
+  decimals: number | null
+  filled: number
+  distinct: number
+  samples: string[]
+  /** 왜 이렇게 맞혔나 — 사람이 읽고 고칠 근거. */
+  note: string
+}
+
+export interface InferResult {
+  rows: number
+  columns: InferColumn[]
+  raw_rows: Record<string, unknown>[]
+}
+
+export interface InferBuildRequest {
+  slug: string
+  label: string
+  nav_group_slug?: string | null
+  key_policy?: 'none' | 'optional' | 'required'
+  columns: InferColumn[]
+  raw_rows: Record<string, unknown>[]
+}
+
+export interface InferBuild {
+  schema: Record<string, unknown>
+  import_rows: Record<string, unknown>[]
+}
+
 export interface ImportChange {
   kind: string
   slug: string
@@ -288,6 +326,14 @@ export const ontologyApi = {
   /** **기본이 미리 보기다.** 적용은 의도를 적어야 일어난다. */
   importSchema: (body: unknown, dryRun: boolean) =>
     api.post<ImportPlan>(`/ontology/import?dry_run=${dryRun ? 'true' : 'false'}`, body),
+  /** CSV·JSON 데이터 파일에서 타입 정의를 추론 — 아무것도 안 바꾼다. */
+  infer: (file: File) => {
+    const form = new FormData()
+    form.append('file', file)
+    return api.postForm<InferResult>('/ontology/infer', form)
+  },
+  /** 고친 열 정의 + 행 → 정의 스키마와 가져올 행. */
+  inferBuild: (body: InferBuildRequest) => api.post<InferBuild>('/ontology/infer/build', body),
   snapshots: () => api.get<Snapshot[]>('/ontology/snapshots'),
   restore: (id: string) => api.post<ImportPlan>(`/ontology/snapshots/${id}/restore`),
 }

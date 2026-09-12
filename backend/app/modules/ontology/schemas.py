@@ -349,3 +349,49 @@ class PromoteOut(BaseModel):
     errors: list[str]
     warnings: list[str]
     snapshot_id: uuid.UUID | None
+
+
+# --- 표에서 타입 추론 ---------------------------------------------------------
+
+
+class InferColumnOut(BaseModel):
+    header: str
+    role: str
+    """label · key · description · aliases · property · ignore."""
+    key: str
+    label: str
+    data_type: str
+    multi: bool
+    enum_options: list[str]
+    decimals: int | None
+    filled: int
+    distinct: int
+    samples: list[str]
+    note: str
+
+
+class InferOut(BaseModel):
+    rows: int
+    columns: list[InferColumnOut]
+    raw_rows: list[dict[str, Any]]
+    """읽은 행 그대로 — 화면이 역할·종류를 고친 뒤 `build` 로 다시 보낸다."""
+
+
+class InferBuildRequest(BaseModel):
+    """사람이 고친 열 정의 + 행 → 정의 스키마와 가져올 행."""
+
+    slug: str
+    label: str = Field(min_length=1, max_length=64)
+    nav_group_slug: str | None = None
+    key_policy: str = "optional"
+    columns: list[InferColumnOut]
+    raw_rows: list[dict[str, Any]]
+
+
+class InferBuildOut(BaseModel):
+    schema_: dict[str, Any] = Field(alias="schema")
+    """`POST /ontology/import` 에 그대로 보낼 것."""
+    import_rows: list[dict[str, Any]]
+    """`POST /objects/{slug}/import-rows` 에 그대로 보낼 것."""
+
+    model_config = ConfigDict(populate_by_name=True)

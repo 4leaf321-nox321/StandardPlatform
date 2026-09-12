@@ -283,6 +283,17 @@ export const objectApi = {
     return downloadFile(`/objects/${typeSlug}/export?${params.toString()}`, `${typeSlug}.${format}`)
   },
   /** 파일로 넣기 — `apply=false` 면 계획만. */
+  /** 파일 대신 JSON 행으로 — 표에서 타입 만들기가 쓴다. 규칙은 파일과 같다. */
+  importRows: (
+    typeSlug: string,
+    rows: Record<string, unknown>[],
+    opts: { apply: boolean; workspaceSlug?: string | null },
+  ) =>
+    api.post<ImportPlan>(`/objects/${typeSlug}/import-rows`, {
+      rows,
+      apply: opts.apply,
+      workspace_slug: opts.workspaceSlug ?? null,
+    }),
   import: (typeSlug: string, file: File, opts: { apply: boolean; workspaceSlug?: string | null }) =>
     api.postForm<ImportPlan>(
       `/objects/${typeSlug}/import`,

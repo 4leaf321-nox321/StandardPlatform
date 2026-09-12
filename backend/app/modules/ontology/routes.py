@@ -10,14 +10,15 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, File, Query, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
+from app.modules.objects import bulk
 from app.modules.objects.models import ObjectInstance, ObjectRelation
-from app.modules.ontology import codebook, importer, views
+from app.modules.ontology import codebook, importer, inference, views
 from app.modules.ontology.models import (
     CARDINALITIES,
     DATA_TYPES,
@@ -36,6 +37,10 @@ from app.modules.ontology.models import (
 from app.modules.ontology.schemas import (
     ChangeOut,
     ImportPlanOut,
+    InferBuildOut,
+    InferBuildRequest,
+    InferColumnOut,
+    InferOut,
     NavGroupNode,
     NavGroupOut,
     NavGroupPatchRequest,
@@ -60,6 +65,7 @@ from app.modules.ontology.schemas import (
     SystemSourceOut,
 )
 from app.modules.ontology.services import (
+    InvalidValue,
     require_choice,
     require_key,
     require_slug,
@@ -1049,6 +1055,67 @@ def _plan_out(
         warnings=prepared.warnings,
         errors=prepared.errors,
         snapshot_id=snapshot_id,
+    )
+
+
+@router.post("/infer", response_model=InferOut)
+def infer_from_file(
+    upload: UploadFile = File(alias="file"),
+    _: User = Depends(require_system_admin),
+) -> InferOut:
+    """CSV·JSON **데이터** 파일에서 타입 정의를 추론한다 — 열마다 역할과 종류를 제안.
+
+    아무것도 안 바꾼다. 사람이 제안을 고쳐 `infer/build` → `import` → `objects/import-rows`
+    로 이어 간다. 추론은 보수적이다 — 애매하면 글자로 둔다."""
+    raw = upload.file.read()
+    try:
+        rows = bulk.parse_file(upload.filename or "rows.csv", raw)
+    except InvalidValue as caught:
+        raise Conflict(code("ONTOLOGY", 71), caught.message) from None
+    if not rows:
+        raise Conflict(code("ONTOLOGY", 71), "파일에 행이 없습니다.")
+    if len(rows) > bulk.MAX_ROWS:
+        raise Conflict(
+            code("ONTOLOGY", 71),
+            f"한 번에 {bulk.MAX_ROWS}행까지입니다 (넣은 행 {len(rows)}). 나눠 올리세요.",
+        )
+    inferred = inference.infer(rows)
+    return InferOut(
+        rows=inferred.rows,
+        columns=[InferColumnOut(**one.__dict__) for one in inferred.columns],
+        raw_rows=rows,
+    )
+
+
+@router.post("/infer/build", response_model=InferBuildOut, response_model_by_alias=True)
+def build_from_inferred(
+    payload: InferBuildRequest,
+    _: User = Depends(require_system_admin),
+) -> InferBuildOut:
+    """사람이 고친 열 정의를 **정의 스키마**와 **가져올 행**으로 — 둘 다 기존 길로 넣는다."""
+    slug = require_slug(payload.slug, what="타입 slug")
+    require_choice(payload.key_policy, KEY_POLICIES, what="식별자 정책")
+    columns = [inference.ColumnGuess(**one.model_dump()) for one in payload.columns]
+    taken: set[str] = set()
+    for column in columns:
+        if column.role == "property":
+            column.key = require_key(column.key)
+            if column.key in taken:
+                raise Conflict(code("ONTOLOGY", 72), f"속성 키가 겹칩니다: {column.key}")
+            taken.add(column.key)
+            require_choice(column.data_type, DATA_TYPES, what="속성 종류")
+    if sum(one.role == "label" for one in columns) != 1:
+        raise Conflict(code("ONTOLOGY", 72), "이름(label) 역할의 열이 정확히 하나여야 합니다.")
+    inferred = inference.Inferred(rows=len(payload.raw_rows), columns=columns)
+    return InferBuildOut(
+        schema=inference.schema_of(
+            inferred,
+            slug=slug,
+            label=payload.label,
+            nav_group_slug=payload.nav_group_slug,
+            key_policy=payload.key_policy,
+        ),
+        import_rows=inference.rows_of(inferred, payload.raw_rows),
     )
 
 

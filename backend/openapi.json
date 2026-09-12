@@ -3576,6 +3576,90 @@
         }
       }
     },
+    "/api/ontology/infer": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Infer From File",
+        "description": "CSV·JSON **데이터** 파일에서 타입 정의를 추론한다 — 열마다 역할과 종류를 제안.\n\n아무것도 안 바꾼다. 사람이 제안을 고쳐 `infer/build` → `import` → `objects/import-rows`\n로 이어 간다. 추론은 보수적이다 — 애매하면 글자로 둔다.",
+        "operationId": "infer_from_file_api_ontology_infer_post",
+        "requestBody": {
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_infer_from_file_api_ontology_infer_post"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InferOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/infer/build": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Build From Inferred",
+        "description": "사람이 고친 열 정의를 **정의 스키마**와 **가져올 행**으로 — 둘 다 기존 길로 넣는다.",
+        "operationId": "build_from_inferred_api_ontology_infer_build_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InferBuildRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InferBuildOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ontology/import": {
       "post": {
         "tags": [
@@ -6443,6 +6527,20 @@
         ],
         "title": "Body_import_relations_api_objects__type_slug__relations_import_post"
       },
+      "Body_infer_from_file_api_ontology_infer_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file"
+        ],
+        "title": "Body_infer_from_file_api_ontology_infer_post"
+      },
       "Body_upload_api_attachments_post": {
         "properties": {
           "owner_table": {
@@ -7422,6 +7520,194 @@
         ],
         "title": "ImportRowsRequest",
         "description": "파일 대신 JSON 으로 — MCP 가 쓴다. 규칙은 파일과 같다."
+      },
+      "InferBuildOut": {
+        "properties": {
+          "schema": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Schema"
+          },
+          "import_rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Import Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "schema",
+          "import_rows"
+        ],
+        "title": "InferBuildOut"
+      },
+      "InferBuildRequest": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "nav_group_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Group Slug"
+          },
+          "key_policy": {
+            "type": "string",
+            "title": "Key Policy",
+            "default": "optional"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/InferColumnOut"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "raw_rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Raw Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "columns",
+          "raw_rows"
+        ],
+        "title": "InferBuildRequest",
+        "description": "사람이 고친 열 정의 + 행 → 정의 스키마와 가져올 행."
+      },
+      "InferColumnOut": {
+        "properties": {
+          "header": {
+            "type": "string",
+            "title": "Header"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "data_type": {
+            "type": "string",
+            "title": "Data Type"
+          },
+          "multi": {
+            "type": "boolean",
+            "title": "Multi"
+          },
+          "enum_options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Enum Options"
+          },
+          "decimals": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decimals"
+          },
+          "filled": {
+            "type": "integer",
+            "title": "Filled"
+          },
+          "distinct": {
+            "type": "integer",
+            "title": "Distinct"
+          },
+          "samples": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Samples"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "header",
+          "role",
+          "key",
+          "label",
+          "data_type",
+          "multi",
+          "enum_options",
+          "decimals",
+          "filled",
+          "distinct",
+          "samples",
+          "note"
+        ],
+        "title": "InferColumnOut"
+      },
+      "InferOut": {
+        "properties": {
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "columns": {
+            "items": {
+              "$ref": "#/components/schemas/InferColumnOut"
+            },
+            "type": "array",
+            "title": "Columns"
+          },
+          "raw_rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Raw Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows",
+          "columns",
+          "raw_rows"
+        ],
+        "title": "InferOut"
       },
       "LoginRequest": {
         "properties": {

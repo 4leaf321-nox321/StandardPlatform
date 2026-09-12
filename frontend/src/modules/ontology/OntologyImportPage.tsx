@@ -6,9 +6,10 @@
  * 감사 로그는 누가 뭘 했는지는 알려 주지만 되돌려 주지 않는다.
  */
 
-import { useState } from 'react'
-import { AlertTriangle, Download, History, Play } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { AlertTriangle, Download, FileUp, History, Play } from 'lucide-react'
 
+import { InferFromTablePanel } from '@/modules/ontology/InferFromTablePanel'
 import { useOntology } from '@/modules/ontology/OntologyLayout'
 import { ontologyApi } from '@/modules/ontology/api'
 import type { ImportPlan } from '@/modules/ontology/api'
@@ -49,6 +50,7 @@ export default function OntologyImportPage() {
   const [error, setError] = useState<Error | null>(null)
   const [busy, setBusy] = useState(false)
   const [restoring, setRestoring] = useState<string | null>(null)
+  const schemaFileRef = useRef<HTMLInputElement>(null)
 
   async function run(dryRun: boolean) {
     setError(null)
@@ -101,13 +103,44 @@ export default function OntologyImportPage() {
 
       {error && <ErrorNotice error={error} />}
 
+      <InferFromTablePanel
+        groups={schema?.groups ?? []}
+        onChanged={() => {
+          reload()
+          snapshots.reload()
+        }}
+      />
+
       <div className="space-y-2">
         <div className="flex items-center justify-between gap-3">
           <span className="text-sm font-medium">스키마 (JSON)</span>
-          <Button variant="outline" size="sm" onClick={exportCurrent} disabled={!schema}>
-            <Download className="mr-1 size-4" />
-            지금 정의 꺼내기
-          </Button>
+          <div className="flex gap-2">
+            {/* 내보낸 정의 파일을 붙여 넣지 않고 그대로 — 큰 스키마는 붙여 넣다 잘린다. */}
+            <input
+              ref={schemaFileRef}
+              type="file"
+              accept=".json,application/json"
+              className="hidden"
+              onChange={(event) => {
+                const file = event.target.files?.[0]
+                if (file) {
+                  file.text().then((raw) => {
+                    setText(raw)
+                    setPlan(null)
+                  })
+                }
+                event.target.value = ''
+              }}
+            />
+            <Button variant="outline" size="sm" onClick={() => schemaFileRef.current?.click()}>
+              <FileUp className="mr-1 size-4" />
+              정의 파일 올리기
+            </Button>
+            <Button variant="outline" size="sm" onClick={exportCurrent} disabled={!schema}>
+              <Download className="mr-1 size-4" />
+              지금 정의 꺼내기
+            </Button>
+          </div>
         </div>
         <Textarea
           rows={12}
@@ -138,8 +171,8 @@ export default function OntologyImportPage() {
           </h2>
           {plan.applied && changed.length === 0 && (
             <p className="text-muted-foreground text-sm">
-              <b>바뀐 것이 없습니다.</b> 그 시점의 정의가 지금과 같거나, 되돌리려던 것이
-              그때는 아직 없던 것일 수 있습니다 — 가져오기는 지우지 않습니다.
+              <b>바뀐 것이 없습니다.</b> 그 시점의 정의가 지금과 같거나, 되돌리려던 것이 그때는 아직
+              없던 것일 수 있습니다 — 가져오기는 지우지 않습니다.
             </p>
           )}
 
@@ -205,9 +238,8 @@ export default function OntologyImportPage() {
           정의 이력
         </h2>
         <p className="text-muted-foreground text-xs">
-          가져오기 <b>직전</b>의 정의를 남깁니다. 되돌리기는 그때의 정의를 다시 덮어씌우는
-          일이고, <b>그 뒤에 새로 만든 것은 안 지웁니다</b> — 지우면 그 사이에 쌓인 객체가
-          갈 곳을 잃습니다.
+          가져오기 <b>직전</b>의 정의를 남깁니다. 되돌리기는 그때의 정의를 다시 덮어씌우는 일이고,{' '}
+          <b>그 뒤에 새로 만든 것은 안 지웁니다</b> — 지우면 그 사이에 쌓인 객체가 갈 곳을 잃습니다.
         </p>
 
         {(snapshots.data ?? []).length === 0 ? (
@@ -253,9 +285,9 @@ export default function OntologyImportPage() {
           title="그때의 정의로 되돌립니다"
           description={
             <>
-              그 시점의 묶음·타입·속성·관계를 <b>다시 덮어씌웁니다</b>. 그 뒤에 새로 만든
-              것은 <b>안 지웁니다</b> — 지우면 그 사이에 쌓인 객체가 갈 곳을 잃습니다.
-              되돌리기 직전의 모습도 이력에 남습니다.
+              그 시점의 묶음·타입·속성·관계를 <b>다시 덮어씌웁니다</b>. 그 뒤에 새로 만든 것은{' '}
+              <b>안 지웁니다</b> — 지우면 그 사이에 쌓인 객체가 갈 곳을 잃습니다. 되돌리기 직전의
+              모습도 이력에 남습니다.
             </>
           }
           confirmLabel="되돌리기"
