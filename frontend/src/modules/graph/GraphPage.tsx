@@ -44,6 +44,7 @@ import { colorScale, withAlpha } from '@/modules/graph/colors'
 import { GraphCanvas } from '@/modules/graph/GraphCanvas'
 import type { CanvasLink, CanvasNode } from '@/modules/graph/GraphCanvas'
 import { COMMUNITY_MIN_NODES, useCommunities } from '@/modules/graph/useCommunities'
+import { useFullscreen } from '@/modules/graph/useFullscreen'
 import { useShortcuts } from '@/modules/graph/useShortcuts'
 import { objectApi } from '@/modules/objects/api'
 import type { ObjectRow, RelatedObject } from '@/modules/objects/api'
@@ -72,9 +73,7 @@ type Mode = 'schema' | 'explore'
 type ColorBy = 'type' | 'workspace' | 'status' | 'community'
 
 /** 탐색의 씨앗 — 어디서 시작하나. */
-export type Seed =
-  | { kind: 'focus'; id: string }
-  | { kind: 'type'; slugs: string[]; offset: number }
+export type Seed = { kind: 'focus'; id: string } | { kind: 'type'; slugs: string[]; offset: number }
 
 const DEPTHS = [1, 2, 3]
 const FANOUTS = [10, 30, 100]
@@ -135,7 +134,12 @@ function fromSubgraph(fresh: Subgraph): Explored {
     ...mergeNodes(null, fresh, null),
     focus: null,
     limits: { node_limit: fresh.limit },
-    page: { total: fresh.total, offset: fresh.offset, limit: fresh.limit, shown: fresh.nodes.length },
+    page: {
+      total: fresh.total,
+      offset: fresh.offset,
+      limit: fresh.limit,
+      shown: fresh.nodes.length,
+    },
   }
 }
 
@@ -168,9 +172,10 @@ function controlsFromParams(params: URLSearchParams): Controls {
     fanout: FANOUTS.includes(fanout) ? fanout : 30,
     relations: csv(params.get(CONTROL_KEYS.relations)),
     types: csv(params.get(CONTROL_KEYS.types)),
-    colorBy: (['workspace', 'status', 'community'] as const).find(
-      (one) => one === params.get(CONTROL_KEYS.colorBy),
-    ) ?? 'type',
+    colorBy:
+      (['workspace', 'status', 'community'] as const).find(
+        (one) => one === params.get(CONTROL_KEYS.colorBy),
+      ) ?? 'type',
     hideIsolated: params.get(CONTROL_KEYS.hideIsolated) === '1',
   }
 }
@@ -208,6 +213,9 @@ function shownDegrees(edges: Iterable<GraphEdge>): Map<string, number> {
 
 export default function GraphPage() {
   const { user } = useAuth()
+  // 전체화면이 덮을 것 — 그림과 옆 판을 함께.
+  const shellRef = useRef<HTMLDivElement>(null)
+  const fullscreen = useFullscreen(shellRef)
   const [params, setParams] = useSearchParams()
   // **주소가 곧 상태다.** 씨앗과 조작을 따로 들고 있으면 사이드바에서 같은 화면으로 다시
   // 올 때(재마운트 없음) 옛 그림이 남는다. 쪽(offset)만은 주소에 안 적어 여기 든다.
@@ -215,7 +223,13 @@ export default function GraphPage() {
   const focusParam = params.get('focus')
   const typeParam = params.get('type')
   const urlSeed = useMemo(
-    () => seedFromParams(new URLSearchParams({ ...(focusParam ? { focus: focusParam } : {}), ...(typeParam ? { type: typeParam } : {}) })),
+    () =>
+      seedFromParams(
+        new URLSearchParams({
+          ...(focusParam ? { focus: focusParam } : {}),
+          ...(typeParam ? { type: typeParam } : {}),
+        }),
+      ),
     [focusParam, typeParam],
   )
   const [offset, setOffset] = useState(0)
@@ -282,7 +296,21 @@ export default function GraphPage() {
   )
 
   return (
-    <div className="space-y-4">
+    /**
+     * 전체화면은 **이 화면 전체**다 — 그림만 덮으면 옆의 고르개와 상세 판이 사라져,
+     * 여럿을 고르고 하나를 골라 읽는 일이 안 된다. 그래프의 쓸모가 거기 있다.
+     *
+     * `fixed` 는 브라우저가 전체화면을 거절했을 때의 버팀목이다. 안쪽은 스크롤되게
+     * 둔다 — 좁은 화면에서는 옆 판이 아래로 내려간다.
+     */
+    <div
+      ref={shellRef}
+      className={
+        fullscreen.active
+          ? 'bg-background fixed inset-0 z-50 space-y-4 overflow-auto p-4'
+          : 'space-y-4'
+      }
+    >
       <PageHeader
         title="지식 그래프"
         description="정의가 어떻게 이어지는지(구조), 그리고 한 객체 주변에 무엇이 있는지(탐색)."
@@ -300,6 +328,8 @@ export default function GraphPage() {
 
       {mode === 'schema' ? (
         <SchemaView
+          wide={fullscreen.active}
+          onToggleWide={fullscreen.toggle}
           overview={overview.data}
           error={overview.error}
           loading={overview.loading}
@@ -312,6 +342,8 @@ export default function GraphPage() {
         />
       ) : (
         <ExploreView
+          wide={fullscreen.active}
+          onToggleWide={fullscreen.toggle}
           seed={seed}
           onSeed={setSeed}
           controls={controls}
@@ -329,6 +361,9 @@ export default function GraphPage() {
 // --- 구조 ---------------------------------------------------------------------
 
 interface SchemaViewProps {
+  /** 전체화면은 이 화면 전체가 맡는다 — 캔버스는 단추만 그린다. */
+  wide: boolean
+  onToggleWide: () => void
   overview: Overview | null
   error: ApiError | Error | null
   loading: boolean
@@ -338,7 +373,16 @@ interface SchemaViewProps {
   onDrawType: (slug: string) => void
 }
 
-function SchemaView({ overview, error, loading, typeColor, canDefine, onDrawType }: SchemaViewProps) {
+function SchemaView({
+  wide,
+  onToggleWide,
+  overview,
+  error,
+  loading,
+  typeColor,
+  canDefine,
+  onDrawType,
+}: SchemaViewProps) {
   const [selected, setSelected] = useState<string | null>(null)
 
   const { nodes, links } = useMemo(() => {
@@ -346,29 +390,27 @@ function SchemaView({ overview, error, loading, typeColor, canDefine, onDrawType
     const maxCount = Math.max(1, ...overview.nodes.map((one) => one.count))
     const maxEdge = Math.max(1, ...overview.edges.map((one) => one.count))
     return {
-      nodes: overview.nodes.map(
-        (one): CanvasNode => ({
-          id: one.slug,
-          label: one.label,
-          sublabel: `${one.count.toLocaleString()}개`,
-          card: [one.label, `${one.count.toLocaleString()}개 · 더블클릭: 인스턴스 전부 그리기`],
-          color: one.count === 0 ? withAlpha(typeColor(one.slug), 0.35) : typeColor(one.slug),
-          // 객체 수에 비례하되 sqrt 로 완만하게 — 1개와 1만 개가 백 배 차이 나면 작은 것이 안 보인다.
-          radius: 7 + Math.sqrt(one.count / maxCount) * 12,
-          shape: 'square',
-        }),
-      ),
-      links: overview.edges.map(
-        (one): CanvasLink => ({
-          id: `${one.relation}:${one.src_type}:${one.dst_type}`,
-          source: one.src_type,
-          target: one.dst_type,
-          label: one.count ? `${one.label} · ${one.count.toLocaleString()}` : `${one.label} · 비어 있음`,
-          directed: one.directed,
-          width: one.count ? 1 + (one.count / maxEdge) * 5 : 1,
-          dashed: one.count === 0,
-        }),
-      ),
+      nodes: overview.nodes.map((one): CanvasNode => ({
+        id: one.slug,
+        label: one.label,
+        sublabel: `${one.count.toLocaleString()}개`,
+        card: [one.label, `${one.count.toLocaleString()}개 · 더블클릭: 인스턴스 전부 그리기`],
+        color: one.count === 0 ? withAlpha(typeColor(one.slug), 0.35) : typeColor(one.slug),
+        // 객체 수에 비례하되 sqrt 로 완만하게 — 1개와 1만 개가 백 배 차이 나면 작은 것이 안 보인다.
+        radius: 7 + Math.sqrt(one.count / maxCount) * 12,
+        shape: 'square',
+      })),
+      links: overview.edges.map((one): CanvasLink => ({
+        id: `${one.relation}:${one.src_type}:${one.dst_type}`,
+        source: one.src_type,
+        target: one.dst_type,
+        label: one.count
+          ? `${one.label} · ${one.count.toLocaleString()}`
+          : `${one.label} · 비어 있음`,
+        directed: one.directed,
+        width: one.count ? 1 + (one.count / maxEdge) * 5 : 1,
+        dashed: one.count === 0,
+      })),
     }
   }, [overview, typeColor])
 
@@ -410,6 +452,8 @@ function SchemaView({ overview, error, loading, typeColor, canDefine, onDrawType
       <GraphCanvas
         nodes={nodes}
         links={links}
+        wide={wide}
+        onToggleWide={onToggleWide}
         linkLabels
         selectedId={selected}
         onNodeClick={setSelected}
@@ -495,8 +539,8 @@ function SchemaView({ overview, error, loading, typeColor, canDefine, onDrawType
           </div>
         ) : (
           <div className="text-muted-foreground rounded-md border border-dashed p-3">
-            타입을 누르면 걸린 관계와 수가 나오고, 그 타입의 인스턴스 전부를 그릴 수
-            있습니다. 점선은 정의만 있고 아직 아무것도 안 이어진 관계입니다.
+            타입을 누르면 걸린 관계와 수가 나오고, 그 타입의 인스턴스 전부를 그릴 수 있습니다.
+            점선은 정의만 있고 아직 아무것도 안 이어진 관계입니다.
           </div>
         )}
       </aside>
@@ -507,6 +551,9 @@ function SchemaView({ overview, error, loading, typeColor, canDefine, onDrawType
 // --- 탐색 ---------------------------------------------------------------------
 
 interface ExploreViewProps {
+  /** 전체화면은 이 화면 전체가 맡는다 — 캔버스는 단추만 그린다. */
+  wide: boolean
+  onToggleWide: () => void
   seed: Seed | null
   onSeed: (seed: Seed | null) => void
   controls: Controls
@@ -518,6 +565,8 @@ interface ExploreViewProps {
 }
 
 function ExploreView({
+  wide,
+  onToggleWide,
   seed,
   onSeed,
   controls,
@@ -706,13 +755,16 @@ function ExploreView({
     if (relationScale) {
       const seen = new Map<string, string>()
       for (const one of edgeList) if (!seen.has(one.relation)) seen.set(one.relation, one.label)
-      for (const [slug, label] of seen) items.push({ color: relationScale(slug), label, line: true })
+      for (const [slug, label] of seen)
+        items.push({ color: relationScale(slug), label, line: true })
     }
     return items
   }, [nodeList, edgeList, communities.ready, nodeCategory, categoryScale, relationScale])
   const legendMatch = useMemo(() => {
     if (!legendActive) return null
-    return new Set(nodeList.filter((one) => nodeCategory(one).key === legendActive).map((one) => one.id))
+    return new Set(
+      nodeList.filter((one) => nodeCategory(one).key === legendActive).map((one) => one.id),
+    )
   }, [legendActive, nodeList, nodeCategory])
 
   const { nodes, links } = useMemo(() => {
@@ -743,23 +795,30 @@ function ExploreView({
       }),
       links: edgeList
         .filter((one) => visible.has(one.src) && visible.has(one.dst))
-        .map(
-          (one): CanvasLink => ({
-            id: one.id,
-            source: one.src,
-            target: one.dst,
-            label: one.label,
-            tooltip:
-              one.directed && one.inverse_label && one.inverse_label !== one.label
-                ? `${one.label} ↔ ${one.inverse_label}`
-                : one.label,
-            directed: one.directed,
-            width: 1,
-            color: relationScale ? relationScale(one.relation) : undefined,
-          }),
-        ),
+        .map((one): CanvasLink => ({
+          id: one.id,
+          source: one.src,
+          target: one.dst,
+          label: one.label,
+          tooltip:
+            one.directed && one.inverse_label && one.inverse_label !== one.label
+              ? `${one.label} ↔ ${one.inverse_label}`
+              : one.label,
+          directed: one.directed,
+          width: 1,
+          color: relationScale ? relationScale(one.relation) : undefined,
+        })),
     }
-  }, [nodeList, edgeList, shown, communities, nodeColorOf, relationScale, explored?.focus, explored?.origin])
+  }, [
+    nodeList,
+    edgeList,
+    shown,
+    communities,
+    nodeColorOf,
+    relationScale,
+    explored?.focus,
+    explored?.origin,
+  ])
 
   const picked = selected ? (explored?.nodes.get(selected) ?? null) : null
   const pickedHidden = picked ? picked.degree - (shown.get(picked.id) ?? 0) : 0
@@ -819,9 +878,7 @@ function ExploreView({
       <aside className="space-y-4 text-sm">
         <SeedPanel
           seed={seed}
-          current={
-            explored?.focus ? (explored.nodes.get(explored.focus) ?? null) : null
-          }
+          current={explored?.focus ? (explored.nodes.get(explored.focus) ?? null) : null}
           types={types}
           typeLabel={typeLabel}
           onPick={(id) => pickFocus(id)}
@@ -904,7 +961,10 @@ function ExploreView({
               <SelectItem value="workspace">부서별</SelectItem>
               <SelectItem value="status">상태별</SelectItem>
               <SelectItem value="community">
-                무리별{nodeList.length < COMMUNITY_MIN_NODES ? ` (노드 ${COMMUNITY_MIN_NODES}개부터)` : ''}
+                무리별
+                {nodeList.length < COMMUNITY_MIN_NODES
+                  ? ` (노드 ${COMMUNITY_MIN_NODES}개부터)`
+                  : ''}
               </SelectItem>
             </SelectContent>
           </Select>
@@ -959,6 +1019,8 @@ function ExploreView({
           <GraphCanvas
             nodes={nodes}
             links={links}
+            wide={wide}
+            onToggleWide={onToggleWide}
             selectedId={selected}
             matchIds={matchIds ?? legendMatch}
             legend={legend}
@@ -995,38 +1057,43 @@ function ExploreView({
                       {' · '}관계 {edgeList.length}
                       {communities.ready ? ` · 무리 ${communities.count}` : ''}
                     </span>
-                    {explored.page && explored.page.total > explored.page.limit && seed?.kind === 'type' && (
-                      <span className="flex items-center gap-0.5">
-                        <Button
-                          size="icon-xs"
-                          variant="ghost"
-                          aria-label="앞 쪽"
-                          disabled={loading || explored.page.offset === 0}
-                          onClick={() =>
-                            onSeed({
-                              ...seed,
-                              offset: Math.max(0, explored.page!.offset - explored.page!.limit),
-                            })
-                          }
-                        >
-                          <ChevronLeft className="size-3.5" />
-                        </Button>
-                        <Button
-                          size="icon-xs"
-                          variant="ghost"
-                          aria-label="다음 쪽"
-                          disabled={
-                            loading ||
-                            explored.page.offset + explored.page.limit >= explored.page.total
-                          }
-                          onClick={() =>
-                            onSeed({ ...seed, offset: explored.page!.offset + explored.page!.limit })
-                          }
-                        >
-                          <ChevronRight className="size-3.5" />
-                        </Button>
-                      </span>
-                    )}
+                    {explored.page &&
+                      explored.page.total > explored.page.limit &&
+                      seed?.kind === 'type' && (
+                        <span className="flex items-center gap-0.5">
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            aria-label="앞 쪽"
+                            disabled={loading || explored.page.offset === 0}
+                            onClick={() =>
+                              onSeed({
+                                ...seed,
+                                offset: Math.max(0, explored.page!.offset - explored.page!.limit),
+                              })
+                            }
+                          >
+                            <ChevronLeft className="size-3.5" />
+                          </Button>
+                          <Button
+                            size="icon-xs"
+                            variant="ghost"
+                            aria-label="다음 쪽"
+                            disabled={
+                              loading ||
+                              explored.page.offset + explored.page.limit >= explored.page.total
+                            }
+                            onClick={() =>
+                              onSeed({
+                                ...seed,
+                                offset: explored.page!.offset + explored.page!.limit,
+                              })
+                            }
+                          >
+                            <ChevronRight className="size-3.5" />
+                          </Button>
+                        </span>
+                      )}
                     {explored.truncated && (
                       <span className="text-amber-600 dark:text-amber-400">
                         · 일부만 실었습니다 — 「+N」 이 붙은 노드에서 더 펼칩니다
@@ -1058,8 +1125,8 @@ function ExploreView({
           />
         ) : (
           <div className="text-muted-foreground rounded-md border border-dashed p-3">
-            노드를 누르면 상세와 「여기서 펼치기」 가 나옵니다. 더블클릭은 「여기를 중심으로」.
-            주황 링이 시작점, 「+N」 은 화면에 안 실린 관계의 수입니다.
+            노드를 누르면 상세와 「여기서 펼치기」 가 나옵니다. 더블클릭은 「여기를 중심으로」. 주황
+            링이 시작점, 「+N」 은 화면에 안 실린 관계의 수입니다.
           </div>
         )}
         {explored && (
@@ -1151,7 +1218,10 @@ function NodeDetail({
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
-            <span className="inline-block size-3 shrink-0 rounded-full" style={{ background: color }} />
+            <span
+              className="inline-block size-3 shrink-0 rounded-full"
+              style={{ background: color }}
+            />
             <span className="truncate font-medium">{node.label}</span>
           </div>
           <p className="text-muted-foreground mt-0.5 text-xs">
@@ -1278,7 +1348,15 @@ interface SeedPanelProps {
  * 타입 칩은 **여러 개** 고를 수 있다 — 훑기 목록은 마지막에 고른 타입을 보여 주고,
  * 「전부 그리기」 는 고른 것 전부를 한 그림에 그린다.
  */
-function SeedPanel({ seed, current, types, typeLabel, onPick, onDrawTypes, onClear }: SeedPanelProps) {
+function SeedPanel({
+  seed,
+  current,
+  types,
+  typeLabel,
+  onPick,
+  onDrawTypes,
+  onClear,
+}: SeedPanelProps) {
   const [text, setText] = useState('')
   const [hits, setHits] = useState<SearchHit[]>([])
   const [searching, setSearching] = useState(false)
@@ -1346,9 +1424,7 @@ function SeedPanel({ seed, current, types, typeLabel, onPick, onDrawTypes, onCle
     .filter((one): one is (typeof types)[number] => one !== undefined)
   const pickedCount = pickedRows.reduce((sum, one) => sum + one.object_count, 0)
   const seedType =
-    seed?.kind === 'type'
-      ? seed.slugs.map((slug) => typeLabel.get(slug) ?? slug).join(' · ')
-      : null
+    seed?.kind === 'type' ? seed.slugs.map((slug) => typeLabel.get(slug) ?? slug).join(' · ') : null
 
   return (
     <div className="space-y-3">
@@ -1481,7 +1557,9 @@ function SeedPanel({ seed, current, types, typeLabel, onPick, onDrawTypes, onCle
                     >
                       <span className="truncate">{row.label}</span>
                       {row.key && (
-                        <span className="text-muted-foreground shrink-0 font-mono text-xs">{row.key}</span>
+                        <span className="text-muted-foreground shrink-0 font-mono text-xs">
+                          {row.key}
+                        </span>
                       )}
                     </button>
                   </li>
@@ -1543,7 +1621,11 @@ function FilterList({ title, options, picked, onToggle, onClear, swatch }: Filte
           {picked.size > 0 ? ` · ${picked.size}개만` : ' · 전부'}
         </span>
         {picked.size > 0 && (
-          <button type="button" className="text-muted-foreground text-xs underline" onClick={onClear}>
+          <button
+            type="button"
+            className="text-muted-foreground text-xs underline"
+            onClick={onClear}
+          >
             전부
           </button>
         )}

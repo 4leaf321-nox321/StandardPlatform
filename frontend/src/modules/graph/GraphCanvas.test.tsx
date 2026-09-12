@@ -131,3 +131,20 @@ describe('나갈 길', () => {
     expect(box.className).toContain('relative')
   })
 })
+
+describe('호스트가 전체화면을 맡을 때', () => {
+  it('캔버스는 자기를 안 덮는다 — 덮는 것은 호스트의 껍데기다', async () => {
+    // 지식 그래프는 옆 판(고르개·상세)까지 함께 덮어야 한다. 캔버스만 덮으면 고른
+    // 것의 상세를 못 읽고, 그러면 전체화면이 「크게 보기만 되는 화면」 이 된다.
+    const box = await draw({ wide: true, onToggleWide: vi.fn() })
+    expect(box.className).toContain('relative')
+    expect(box.className).not.toContain('fixed')
+  })
+
+  it('단추는 호스트를 부른다', async () => {
+    const onToggleWide = vi.fn()
+    await draw({ wide: false, onToggleWide })
+    await userEvent.click(await screen.findByRole('button', { name: '넓게 보기' }))
+    expect(onToggleWide).toHaveBeenCalled()
+  })
+})

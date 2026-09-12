@@ -55,6 +55,7 @@ import { Download, HelpCircle, Home, Loader2, Maximize2, Minimize2, Tag } from '
 
 import { withAlpha } from '@/modules/graph/colors'
 import { useElementSize, useFillHeight } from '@/modules/graph/useElementSize'
+import { useFullscreen } from '@/modules/graph/useFullscreen'
 import { useShortcuts } from '@/modules/graph/useShortcuts'
 import { Button } from '@/shared/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/shared/components/ui/popover'
@@ -129,6 +130,13 @@ interface GraphCanvasProps {
   links: CanvasLink[]
   /** 선 위에 관계 이름을 늘 그릴지. 선이 수십 개인 구조 그림에서만 켠다. */
   linkLabels?: boolean
+  /**
+   * 전체화면을 **호스트가 맡을 때.** 지식 그래프는 옆 판(고르개·상세)까지 함께
+   * 덮어야 한다 — 캔버스만 덮으면 고른 것의 상세를 못 읽고, 그러면 전체화면이
+   * 「크게 보기만 되는 화면」 이 된다.
+   */
+  wide?: boolean
+  onToggleWide?: () => void
   selectedId?: string | null
   /** 그림 안 검색 — 이 집합만 또렷하게. null 이면 검색 없음. */
   matchIds?: Set<string> | null
@@ -212,6 +220,8 @@ export function GraphCanvas({
   nodes,
   links,
   linkLabels = false,
+  wide: controlledWide,
+  onToggleWide,
   selectedId = null,
   matchIds = null,
   legend,
@@ -233,7 +243,6 @@ export function GraphCanvas({
   const { theme } = useTheme()
   const graphRef = useRef<Methods | undefined>(undefined)
   const [ready, setReady] = useState(false)
-  const [wide, setWide] = useState(false)
   /** 선 위에 관계 이름을 그릴지. **화면에서 켠다** — 정의가 정한 기본값에서 시작한다.
    *  선이 스물을 넘으면 이름이 서로 겹쳐 못 읽으므로 기본은 꺼짐이고, 「저 선이 무슨
    *  관계지」 를 물을 때 켠다. */
@@ -316,37 +325,11 @@ export function GraphCanvas({
     if (matchIds) return matchIds
     return null
   }, [hoveredId, selectedId, matchIds, adjacency])
-  /**
-   * **진짜 전체화면.** `fixed inset-0` 은 브라우저 안쪽만 덮는다 — 주소창과 탭이
-   * 그대로 남아 그림이 화면의 4분의 3에서 멈춘다. 그래프는 넓을수록 읽히는 그림이라
-   * 그 차이가 크다.
-   *
-   * 실패해도 켠다. 권한이 막히거나(사용자 제스처 없이 부른 경우) 브라우저가 안 해
-   * 주면 `fixed` 만으로도 브라우저 안에서는 넓어진다 — **아무 일도 안 일어나는 것이
-   * 가장 나쁘다.**
-   */
-  const toggleWide = useCallback(() => {
-    // **나가는 판단은 우리 상태로 한다.** `document.fullscreenElement` 로만 보면,
-    // 브라우저가 전체화면을 거절해 `fixed` 로만 넓어진 경우 그 값이 비어 있어 「축소」
-    // 도 ESC 도 다시 켜기가 된다 — 나갈 길이 없는 화면에 갇힌다.
-    if (wide) {
-      setWide(false)
-      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
-      return
-    }
-    setWide(true)
-    void containerRef.current?.requestFullscreen?.().catch(() => {})
-  }, [wide, containerRef])
-
-  // 브라우저가 전체화면을 빠져나가면(ESC·F11·탭 전환) 우리 상태도 따라 내려온다.
-  // 안 맞추면 단추는 「축소」 라고 적힌 채 화면은 이미 작아져 있다.
-  useEffect(() => {
-    const sync = () => {
-      if (!document.fullscreenElement) setWide(false)
-    }
-    document.addEventListener('fullscreenchange', sync)
-    return () => document.removeEventListener('fullscreenchange', sync)
-  }, [])
+  // 호스트가 전체화면을 맡으면(지식 그래프는 옆 판까지 함께 덮는다) 그쪽을 따른다.
+  // 안 넘기면 캔버스가 혼자 전체화면이 된다 — 상세 안의 작은 관계도가 그렇다.
+  const own = useFullscreen(containerRef)
+  const wide = controlledWide ?? own.active
+  const toggleWide = onToggleWide ?? own.toggle
 
   const isDim = useCallback((id: string) => focusSet !== null && !focusSet.has(id), [focusSet])
 
@@ -661,7 +644,14 @@ export function GraphCanvas({
   // **`relative` 와 `fixed` 를 함께 두면 안 된다.** 둘 다 position 을 정하는데,
   // Tailwind 가 내보내는 차례가 `fixed` → `relative` 라 나중 것이 이긴다 — 넓게
   // 보기를 켜도 요소는 제자리에 남고, 높이 클래스만 사라져 그림이 사라졌다.
-  const frame = wide ? 'fixed inset-0 z-50 rounded-none border-0' : 'relative rounded-md border'
+  // **`relative` 와 `fixed` 를 함께 두면 안 된다.** 둘 다 position 을 정하는데, Tailwind 가
+  // 내보내는 차례가 `fixed` → `relative` 라 나중 것이 이긴다 — 넓게 보기를 켜도 요소는
+  // 제자리에 남고, 높이 클래스만 사라져 그림이 사라졌다.
+  //
+  // 호스트가 전체화면을 맡았으면(`onToggleWide`) **자기를 안 덮는다** — 덮는 것은
+  // 호스트의 껍데기이고, 거기에는 옆 판까지 들어 있다.
+  const covering = wide && !onToggleWide
+  const frame = covering ? 'fixed inset-0 z-50 rounded-none border-0' : 'relative rounded-md border'
 
   return (
     // **높이는 고정이고 캔버스는 레이아웃 밖(absolute)이다.** 높이가 내용을 따르면
@@ -672,7 +662,7 @@ export function GraphCanvas({
       className={`bg-muted/20 w-full overflow-hidden ${frame} ${className ?? ''}`}
       // 높이는 **재서** 넣는다(`useFillHeight`) — 화면 아래까지 채운다. 상세 안의
       // 작은 관계도처럼 제 높이를 가진 곳은 `h-[360px]!` 로 이것을 덮는다.
-      style={wide ? { background: palette.bg } : { height: fillHeight }}
+      style={wide && !onToggleWide ? { background: palette.bg } : { height: fillHeight }}
     >
       {hasNodes && size.width > 0 && (
         <Suspense
