@@ -30,6 +30,7 @@ from app.modules.objects import (
     quality,
     rollup,
     system,
+    watches,
 )
 from app.modules.objects import relations as rel
 from app.modules.objects import summary as summary_service
@@ -79,6 +80,8 @@ from app.modules.objects.schemas import (
     SummaryOut,
     TreeNodeOut,
     TreeOut,
+    WatchOut,
+    WatchRequest,
 )
 from app.modules.objects.services import (
     apply_property_filters,
@@ -1063,6 +1066,8 @@ def object_profile(
             related=_related_links(db, user, object_id),
             # 원 표의 화면에서 고친다. 관계도 객체 쪽 끝에서 맺는다.
             can_edit=False,
+            # 행이 없으니 지켜볼 것도 없다 — 그 표의 화면이 알릴 일이다.
+            watching=False,
         )
     try:
         row = _visible(db, user, object_type, object_id)
@@ -1115,6 +1120,8 @@ def object_profile(
         attachments=[AttachmentBrief.model_validate(a) for a in attachments],
         related=_related(db, user, row),
         can_edit=_can_edit(db, user, row),
+        watching=watches.watching(db, object_id=row.id, user_id=user.id),
+        watcher_count=watches.counts(db, [row.id]).get(row.id, 0),
     )
 
 
@@ -1167,6 +1174,9 @@ def create_object(
         target_label=f"{object_type.slug}:{row.label}",
         workspace_id=owner_workspace_id,
     )
+    # **만든 사람은 자동으로 지켜본다.** 스스로 켜야만 하는 기능은 켜는 법을 아는
+    # 사람만 쓰고, 그 사람은 대개 이미 알고 있는 사람이다.
+    watches.watch_own(db, object_id=row.id, user_id=user.id)
     db.commit()
     db.refresh(row)
     return _out(row, object_type.slug, _workspace_slugs(db))
@@ -1281,6 +1291,33 @@ def set_aliases(
         _workspace_slugs(db),
         _ref_labels(db, properties_of(db, object_type.id), [row]),
         aliases.of(db, [row.id]).get(row.id),
+    )
+
+
+@router.put("/{type_slug}/{object_id}/watch", response_model=WatchOut)
+def set_watch(
+    type_slug: str,
+    object_id: uuid.UUID,
+    payload: WatchRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> WatchOut:
+    """이것이 바뀌면 알려 달라(또는 그만).
+
+    **볼 수 있는 것만 지켜본다** — `_visible` 이 그것을 판정한다. 못 보는 것을 지켜보면
+    알림 제목으로 그 이름이 새어 나간다.
+    """
+    object_type = _type(db, type_slug)
+    if system.is_system(object_type):
+        raise Conflict(
+            code("OBJECTS", 53),
+            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 지켜볼 수 없습니다.",
+        )
+    row = _visible(db, user, object_type, object_id)
+    watching = watches.set_watching(db, object_id=row.id, user_id=user.id, on=payload.on)
+    db.commit()
+    return WatchOut(
+        watching=watching, watcher_count=watches.counts(db, [row.id]).get(row.id, 0)
     )
 
 

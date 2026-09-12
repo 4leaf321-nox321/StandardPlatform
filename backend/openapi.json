@@ -5409,6 +5409,69 @@
         }
       }
     },
+    "/api/objects/{type_slug}/{object_id}/watch": {
+      "put": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Set Watch",
+        "description": "이것이 바뀌면 알려 달라(또는 그만).\n\n**볼 수 있는 것만 지켜본다** — `_visible` 이 그것을 판정한다. 못 보는 것을 지켜보면\n알림 제목으로 그 이름이 새어 나간다.",
+        "operationId": "set_watch_api_objects__type_slug___object_id__watch_put",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WatchOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/{object_id}/rollup": {
       "get": {
         "tags": [
@@ -9336,6 +9399,16 @@
           "can_edit": {
             "type": "boolean",
             "title": "Can Edit"
+          },
+          "watching": {
+            "type": "boolean",
+            "title": "Watching",
+            "default": false
+          },
+          "watcher_count": {
+            "type": "integer",
+            "title": "Watcher Count",
+            "default": 0
           }
         },
         "type": "object",
@@ -12790,6 +12863,38 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "WatchOut": {
+        "properties": {
+          "watching": {
+            "type": "boolean",
+            "title": "Watching"
+          },
+          "watcher_count": {
+            "type": "integer",
+            "title": "Watcher Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "watching",
+          "watcher_count"
+        ],
+        "title": "WatchOut"
+      },
+      "WatchRequest": {
+        "properties": {
+          "on": {
+            "type": "boolean",
+            "title": "On"
+          }
+        },
+        "type": "object",
+        "required": [
+          "on"
+        ],
+        "title": "WatchRequest",
+        "description": "지켜보기 켜고 끄기. **여러 번 눌러도 같은 결과다.**"
       },
       "WebhookOut": {
         "properties": {

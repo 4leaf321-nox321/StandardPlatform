@@ -36,6 +36,7 @@ from app.modules.notifications import routes as notifications_routes
 from app.modules.objects import quality as objects_quality
 from app.modules.objects import routes as objects_routes
 from app.modules.objects import services as objects_services
+from app.modules.objects import watches as objects_watches
 from app.modules.ontology import routes as ontology_routes
 from app.modules.search import routes as search_routes
 from app.modules.server import routes as server_routes
@@ -124,6 +125,9 @@ def _register_extensions() -> None:
 
     # 변경 이벤트(감사 기록이 커밋된 뒤)를 웹훅이 듣는다.
     events.register_listener(webhooks_services.on_events)
+    # **지켜보는 사람에게도 같은 줄기로 간다.** 따로 심으면 두 벌이 되고, 두 벌은
+    # 반드시 갈린다 — 감사에는 남는데 알림은 안 가는 변경이 생긴다.
+    events.register_listener(objects_watches.on_events)
     extensions.register_stats(webhooks_services.stats)
 
     # **조용히 멎는 것들을 홈이 말한다.** 동기화 실패와 포기한 웹훅 전송은 지금까지

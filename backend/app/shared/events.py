@@ -40,6 +40,9 @@ class ChangeEvent:
     target_id: uuid.UUID | None
     target_label: str
     workspace_id: uuid.UUID | None
+    actor_id: uuid.UUID | None
+    """누가 했나. **이름이 아니라 id 다** — 듣는 쪽이 「내가 한 일은 나에게 안 알린다」 를
+    판단하려면 사람을 가려내야 하고, 이름은 같을 수 있다. 시스템이 한 일이면 None."""
     actor_label: str
     actor_client: str | None
     actor_token: str | None

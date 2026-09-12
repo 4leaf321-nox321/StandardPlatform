@@ -160,6 +160,11 @@ class ObjectProfileOut(BaseModel):
     """**서버가 판정한 것을 화면에 알려 준다.** 화면이 스스로 정하면 어떤 화면은
     단추를 보이고 어떤 화면은 안 보이는 상태가 되고, 그 차이는 설명할 수 없다."""
 
+    watching: bool = False
+    """내가 이것을 지켜보고 있나 — 바뀌면 알림이 온다."""
+    watcher_count: int = 0
+    """몇 사람이 지켜보나. **혼자가 아니라는 것을 아는 것**이 고칠 때의 조심을 만든다."""
+
 
 class AliasesRequest(BaseModel):
     """사람이 붙인 별칭을 통째로 — 빈 목록이면 전부 지운다."""
@@ -460,3 +465,14 @@ class SummaryOut(BaseModel):
     other_count: int
     group_options: list[GroupOptionOut]
     metric_options: list[GroupOptionOut]
+
+
+class WatchRequest(BaseModel):
+    """지켜보기 켜고 끄기. **여러 번 눌러도 같은 결과다.**"""
+
+    on: bool
+
+
+class WatchOut(BaseModel):
+    watching: bool
+    watcher_count: int

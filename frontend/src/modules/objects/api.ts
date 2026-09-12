@@ -59,6 +59,10 @@ export interface ObjectProfile {
   related: RelatedObject[]
   /** **서버가 판정한 것이다.** 화면이 스스로 정하면 화면마다 단추가 달라진다. */
   can_edit: boolean
+  /** 내가 지켜보고 있나 — 바뀌면 알림이 온다. */
+  watching: boolean
+  /** 몇 사람이 지켜보나. **혼자가 아니라는 것을 아는 것**이 고칠 때의 조심을 만든다. */
+  watcher_count: number
 }
 
 export interface TreeNode {
@@ -425,6 +429,15 @@ export const objectApi = {
     if (options.metricField) params.set('metric_field', options.metricField)
     return api.get<Summary>(`/objects/${typeSlug}/summary?${params.toString()}`)
   },
+  /**
+   * 이것이 바뀌면 알려 달라(또는 그만).
+   *
+   * **여러 번 눌러도 같은 결과다** — 두 번 켠 사람이 두 통을 받지 않는다.
+   */
+  setWatch: (typeSlug: string, id: string, on: boolean) =>
+    api.put<{ watching: boolean; watcher_count: number }>(`/objects/${typeSlug}/${id}/watch`, {
+      on,
+    }),
   /** 사람이 붙인 다른 이름을 통째로. 같은 타입의 다른 객체가 쓰는 별칭이면 거절된다. */
   setAliases: (typeSlug: string, id: string, aliases: string[]) =>
     api.put<ObjectRow>(`/objects/${typeSlug}/${id}/aliases`, { aliases }),

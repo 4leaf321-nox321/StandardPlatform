@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Pencil, Trash2, Waypoints } from 'lucide-react'
+import { Bell, BellOff, Pencil, Trash2, Waypoints } from 'lucide-react'
 
 import { AttachmentList } from '@/modules/files/AttachmentList'
 import { GraphPanel } from '@/modules/graph/GraphPanel'
@@ -47,6 +47,7 @@ export default function ObjectProfilePage() {
   const [description, setDescription] = useState('')
   const [values, setValues] = useState<PropertyValues>({})
   const [error, setError] = useState<Error | null>(null)
+  const [watchBusy, setWatchBusy] = useState(false)
   const [saving, setSaving] = useState(false)
   const [confirming, setConfirming] = useState(false)
 
@@ -114,6 +115,45 @@ export default function ObjectProfilePage() {
                 그래프에서 보기
               </Link>
             </Button>
+            {/* **지켜보기.** 「내가 보던 그게 아직 그대로인가」 를 알 방법이 목록을
+                다시 여는 것뿐이면, 사람은 안 열고 옛 값을 들고 회의에 들어간다.
+                투영 타입에는 행이 없어 지켜볼 것도 없다. */}
+            {!isSystem && (
+              <Button
+                size="sm"
+                variant={profile.data.watching ? 'secondary' : 'outline'}
+                aria-pressed={profile.data.watching}
+                title={
+                  profile.data.watching
+                    ? '바뀌면 알림이 옵니다 — 내가 고친 것은 빼고'
+                    : '이것이 바뀌면 알림을 받습니다'
+                }
+                disabled={watchBusy}
+                onClick={() => {
+                  setWatchBusy(true)
+                  setError(null)
+                  objectApi
+                    .setWatch(typeSlug, row.id, !profile.data?.watching)
+                    .then(() => profile.reload())
+                    .catch((caught: unknown) =>
+                      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류')),
+                    )
+                    .finally(() => setWatchBusy(false))
+                }}
+              >
+                {profile.data.watching ? (
+                  <Bell className="mr-1 size-4" />
+                ) : (
+                  <BellOff className="mr-1 size-4" />
+                )}
+                {profile.data.watching ? '지켜보는 중' : '지켜보기'}
+                {profile.data.watcher_count > 1 && (
+                  <span className="text-muted-foreground ml-1 text-xs">
+                    {profile.data.watcher_count}
+                  </span>
+                )}
+              </Button>
+            )}
             {profile.data.can_edit && !editing && (
               <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
                 <Pencil className="mr-1 size-4" />

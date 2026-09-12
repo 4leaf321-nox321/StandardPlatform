@@ -343,3 +343,34 @@ class SavedView(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+
+
+class ObjectWatch(Base):
+    """**이 객체가 바뀌면 나에게 알려 달라.**
+
+    데이터를 함께 쓰는 플랫폼에서 가장 자주 나오는 물음은 「내가 보던 그게 아직 그대로
+    인가」 다. 그것을 알 방법이 목록을 다시 여는 것뿐이면, 사람은 안 열고 옛 값을 들고
+    회의에 들어간다.
+
+    **만든 사람은 자동으로 지켜본다.** 스스로 켜야만 하는 기능은 켜는 법을 아는 사람만
+    쓰게 되고, 그 사람은 대개 이미 알고 있는 사람이다.
+
+    관계는 이 표가 안 담는다 — 「무엇을」 지켜보는지는 객체 하나로 충분하고, 관계가
+    바뀌면 양 끝 객체의 감사 기록에 남는다.
+    """
+
+    __tablename__ = "object_watches"
+    __table_args__ = (UniqueConstraint("object_id", "user_id", name="uq_object_watches_pair"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    object_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE"), index=True
+    )
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

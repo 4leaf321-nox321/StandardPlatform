@@ -131,6 +131,7 @@ def record(
             target_id=target_id,
             target_label=entry.target_label,
             workspace_id=workspace_id,
+            actor_id=actor.id if actor else None,
             actor_label=entry.actor_label,
             actor_client=entry.actor_client,
             actor_token=entry.actor_token,

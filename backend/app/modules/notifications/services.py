@@ -26,6 +26,9 @@ DATASOURCE_FAILED = "datasource.failed"
 DATASOURCE_RECOVERED = "datasource.recovered"
 """다시 된다. **복구도 알린다** — 안 알리면 사람은 실패 알림 하나를 들고 「아직도
 안 되나」 를 손으로 확인하러 간다."""
+OBJECT_CHANGED = "object.changed"
+"""지켜보는 객체가 바뀌었다. **내가 한 일은 나에게 안 온다** — 자기 행동을 돌려받으면
+그 종은 곧 잡음이 되고, 잡음이 된 종은 진짜 하나가 울려도 안 읽힌다."""
 WEBHOOK_FAILED = "webhook.failed"
 """보내기를 세 번 다 실패해 포기했다. 받는 쪽이 조용히 못 받고 있는 상태다."""
 

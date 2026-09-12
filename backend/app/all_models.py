@@ -25,6 +25,7 @@ from app.modules.objects.models import (
     ObjectInstance,
     ObjectLink,
     ObjectRelation,
+    ObjectWatch,
     ObjectYear,
     SavedView,
 )
@@ -54,6 +55,7 @@ __all__ = [
     "ObjectLink",
     "ObjectRelation",
     "ObjectType",
+    "ObjectWatch",
     "ObjectYear",
     "OntologySnapshot",
     "PersonalAccessToken",
