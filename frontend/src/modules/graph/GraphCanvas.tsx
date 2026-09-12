@@ -53,7 +53,7 @@ import { polygonHull } from 'd3-polygon'
 import { Download, HelpCircle, Home, Loader2, Maximize2, Minimize2 } from 'lucide-react'
 
 import { withAlpha } from '@/modules/graph/colors'
-import { useElementSize } from '@/modules/graph/useElementSize'
+import { useElementSize, useFillHeight } from '@/modules/graph/useElementSize'
 import { useShortcuts } from '@/modules/graph/useShortcuts'
 import { Button } from '@/shared/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/shared/components/ui/popover'
@@ -226,6 +226,8 @@ export function GraphCanvas({
   className,
 }: GraphCanvasProps) {
   const [containerRef, size] = useElementSize<HTMLDivElement>()
+  // 화면 아래까지 채운다 — 그래프는 넓을수록 읽히는 그림이라 남는 여백이 곧 손해다.
+  const fillHeight = useFillHeight(containerRef)
   const { theme } = useTheme()
   const graphRef = useRef<Methods | undefined>(undefined)
   const [ready, setReady] = useState(false)
@@ -578,8 +580,14 @@ export function GraphCanvas({
           const r = node.radius + HULL_PAD
           const d = r * 0.7071
           points.push(
-            [x + r, y], [x - r, y], [x, y + r], [x, y - r],
-            [x + d, y + d], [x - d, y + d], [x + d, y - d], [x - d, y - d],
+            [x + r, y],
+            [x - r, y],
+            [x, y + r],
+            [x, y - r],
+            [x + d, y + d],
+            [x - d, y + d],
+            [x + d, y - d],
+            [x - d, y - d],
           )
         }
         const hull = polygonHull(points)
@@ -609,9 +617,10 @@ export function GraphCanvas({
   }, [])
 
   const hasNodes = graphData.nodes.length > 0
-  const frame = wide
-    ? 'fixed inset-0 z-50 rounded-none border-0'
-    : 'h-[min(640px,calc(100vh-220px))] min-h-[420px] rounded-md border'
+  // **`relative` 와 `fixed` 를 함께 두면 안 된다.** 둘 다 position 을 정하는데,
+  // Tailwind 가 내보내는 차례가 `fixed` → `relative` 라 나중 것이 이긴다 — 넓게
+  // 보기를 켜도 요소는 제자리에 남고, 높이 클래스만 사라져 그림이 사라졌다.
+  const frame = wide ? 'fixed inset-0 z-50 rounded-none border-0' : 'relative rounded-md border'
 
   return (
     // **높이는 고정이고 캔버스는 레이아웃 밖(absolute)이다.** 높이가 내용을 따르면
@@ -619,8 +628,10 @@ export function GraphCanvas({
     // 커진다 — 화면이 아래로 끝없이 자라는 되먹임이 그것이다.
     <div
       ref={containerRef}
-      className={`bg-muted/20 relative w-full overflow-hidden ${frame} ${className ?? ''}`}
-      style={wide ? { background: palette.bg } : undefined}
+      className={`bg-muted/20 w-full overflow-hidden ${frame} ${className ?? ''}`}
+      // 높이는 **재서** 넣는다(`useFillHeight`) — 화면 아래까지 채운다. 상세 안의
+      // 작은 관계도처럼 제 높이를 가진 곳은 `h-[360px]!` 로 이것을 덮는다.
+      style={wide ? { background: palette.bg } : { height: fillHeight }}
     >
       {hasNodes && size.width > 0 && (
         <Suspense
