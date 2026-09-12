@@ -41,6 +41,7 @@ from app.modules.objects.models import (
     ObjectInstance,
     ObjectLink,
     ObjectRelation,
+    ObjectWatch,
     ObjectYear,
     SavedView,
 )
@@ -84,6 +85,7 @@ from app.modules.objects.schemas import (
     SummaryOut,
     TreeNodeOut,
     TreeOut,
+    WatchedOut,
     WatchOut,
     WatchRequest,
 )
@@ -606,37 +608,104 @@ def _move_home(db: Session, user: User, row: SavedView, position: int) -> None:
 
 @router.get("/home", response_model=list[HomeWidgetOut])
 def home_widgets(
-    workspace: str = Query(description="부서 slug"),
+    workspace: str | None = Query(
+        default=None, description="부서 slug. 안 주면 **내 부서 전부**"
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[HomeWidgetOut]:
     """부서 홈에 올라간 뷰들 — **홈은 타입을 모르므로 여기서 다 실어 준다.**
 
+    부서를 안 주면 내가 속한 부서 전부의 것을 준다. 사람은 대개 여러 부서에 속하고,
+    그때 「저 부서 홈에 뭐가 있더라」 를 보려고 부서를 갈아 가며 도는 일이 생긴다.
+
     부서가 함께 보는 자리라 개인 뷰는 안 온다. 그 부서 멤버가 아니면 빈 목록이다 —
     403 이 아니라 빈 목록인 이유는, 남의 부서 홈을 열어 본 것 자체가 흔한 실수라서다.
     """
-    target = workspace_by_slug(db, workspace)
-    if not user.is_system_admin and target.id not in set(my_workspace_ids(db, user)):
+    mine = set(my_workspace_ids(db, user))
+    if workspace:
+        target = workspace_by_slug(db, workspace)
+        if not user.is_system_admin and target.id not in mine:
+            return []
+        wanted = [target.id]
+    else:
+        wanted = list(mine)
+    if not wanted:
         return []
     types = {row.id: row for row in db.scalars(select(ObjectType))}
+    spaces = {
+        row.id: row for row in db.scalars(select(Workspace).where(Workspace.id.in_(wanted)))
+    }
     rows = sorted(
         db.scalars(
             select(SavedView).where(
-                SavedView.workspace_id == target.id, SavedView.home_order.is_not(None)
+                SavedView.workspace_id.in_(wanted), SavedView.home_order.is_not(None)
             )
         ),
-        key=lambda one: (one.home_order or 0, one.name),
+        key=lambda one: (
+            spaces[one.workspace_id].name if one.workspace_id in spaces else "",
+            one.home_order or 0,
+            one.name,
+        ),
     )
     out: list[HomeWidgetOut] = []
     for row in rows:
         object_type = types.get(row.type_id)
-        if object_type is None:
+        space = spaces.get(row.workspace_id) if row.workspace_id else None
+        if object_type is None or space is None:
             continue
         out.append(
             HomeWidgetOut(
                 view=_view_out(db, user, row, object_type.slug),
                 type_label=object_type.label,
                 icon=object_type.icon,
+                workspace_slug=space.slug,
+                workspace_name=space.name,
+            )
+        )
+    return out
+
+
+@router.get("/watching", response_model=list[WatchedOut])
+def watching(
+    limit: int | None = Query(default=None),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[WatchedOut]:
+    """내가 지켜보는 것 — **최근 바뀐 것부터.**
+
+    지켜보기를 켜 두고도 그것을 한자리에 모아 볼 곳이 없으면, 사람은 알림이 올 때만
+    그것을 떠올린다. 그리고 알림은 읽고 나면 사라진다.
+    """
+    capped = clamp_limit(limit)
+    types = {row.id: row for row in db.scalars(select(ObjectType))}
+    rows = db.scalars(
+        select(ObjectInstance)
+        .join(ObjectWatch, ObjectWatch.object_id == ObjectInstance.id)
+        .where(
+            ObjectWatch.user_id == user.id,
+            ObjectInstance.deleted_at.is_(None),
+            # 지켜보기를 켠 뒤에 부서가 바뀌어 못 보게 됐을 수 있다.
+            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+        )
+        .order_by(ObjectInstance.updated_at.desc())
+        .limit(capped)
+    )
+    out: list[WatchedOut] = []
+    for row in rows:
+        object_type = types.get(row.type_id)
+        if object_type is None:
+            continue
+        out.append(
+            WatchedOut(
+                id=row.id,
+                type_slug=object_type.slug,
+                type_label=object_type.label,
+                icon=object_type.icon,
+                label=row.label,
+                key=row.key,
+                status=row.status,
+                updated_at=row.updated_at,
             )
         )
     return out

@@ -386,6 +386,23 @@ class HomeWidgetOut(BaseModel):
     view: SavedViewOut
     type_label: str
     icon: str
+    workspace_slug: str
+    workspace_name: str
+    """어느 부서의 것인가. 여러 부서를 한 화면에 놓을 때 **어디 것인지 안 적으면
+    같은 이름의 위젯 둘이 나란히 서고 아무도 구별 못 한다.**"""
+
+
+class WatchedOut(BaseModel):
+    """내가 지켜보는 것 한 줄 — **최근 바뀐 것부터.**"""
+
+    id: uuid.UUID
+    type_slug: str
+    type_label: str
+    icon: str
+    label: str
+    key: str | None
+    status: str
+    updated_at: datetime
 
 
 # --- 품질 -------------------------------------------------------------------

@@ -7,7 +7,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 
-const objectApi = vi.hoisted(() => ({ summary: vi.fn() }))
+const objectApi = vi.hoisted(() => ({ summary: vi.fn(), list: vi.fn() }))
 const viewApi = vi.hoisted(() => ({ update: vi.fn() }))
 vi.mock('@/modules/objects/api', () => ({ objectApi, viewApi }))
 vi.mock('@/shared/charts', () => ({
@@ -36,6 +36,8 @@ function widget(overrides: Record<string, unknown> = {}) {
   return {
     type_label: '부품',
     icon: 'Box',
+    workspace_slug: 'cae',
+    workspace_name: '해석팀',
     view: {
       id: 'v1',
       type_slug: 'part',
@@ -137,5 +139,49 @@ describe('홈에서 내리기', () => {
     await userEvent.click(screen.getByRole('button', { name: '위젯 메뉴' }))
     expect(await screen.findByRole('menuitem', { name: /뒤로/ })).toBeInTheDocument()
     expect(screen.queryByRole('menuitem', { name: /앞으로/ })).not.toBeInTheDocument()
+  })
+})
+
+describe('목록으로 세운 위젯', () => {
+  const asList = () =>
+    widget({
+      summary: {
+        group_by: '',
+        split_by: '',
+        metric: 'count',
+        metric_field: null,
+        chart: 'list',
+        stacked: false,
+        order: 'desc',
+      },
+    })
+
+  it('세는 대신 몇 줄을 읽는다 — 「최근 들어온 것」 은 이름이 보여야 한다', async () => {
+    objectApi.list.mockResolvedValue({
+      items: [
+        { id: 'x', label: '볼트', key: 'P-1' },
+        { id: 'y', label: '너트', key: null },
+      ],
+      total: 2,
+      limit: 5,
+      offset: 0,
+    })
+    await show(asList())
+    expect(await screen.findByText('볼트')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /너트/ })).toHaveAttribute('href', '/o/part/y')
+    // 그림도 큰 숫자도 안 그린다.
+    expect(screen.queryByTestId('chart')).not.toBeInTheDocument()
+  })
+
+  it('해당하는 것이 없으면 그렇다고 말한다', async () => {
+    objectApi.list.mockResolvedValue({ items: [], total: 0, limit: 5, offset: 0 })
+    await show(asList())
+    expect(await screen.findByText('지금은 해당하는 것이 없습니다.')).toBeInTheDocument()
+  })
+
+  it('여러 부서를 함께 볼 때는 어디 것인지 적는다', async () => {
+    objectApi.summary.mockResolvedValue(SUMMARY)
+    await show(widget(), { showWorkspace: true })
+    expect(await screen.findByText('해석팀 · 부품')).toBeInTheDocument()
   })
 })

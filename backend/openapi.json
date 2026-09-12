@@ -4295,19 +4295,26 @@
           "objects"
         ],
         "summary": "Home Widgets",
-        "description": "부서 홈에 올라간 뷰들 — **홈은 타입을 모르므로 여기서 다 실어 준다.**\n\n부서가 함께 보는 자리라 개인 뷰는 안 온다. 그 부서 멤버가 아니면 빈 목록이다 —\n403 이 아니라 빈 목록인 이유는, 남의 부서 홈을 열어 본 것 자체가 흔한 실수라서다.",
+        "description": "부서 홈에 올라간 뷰들 — **홈은 타입을 모르므로 여기서 다 실어 준다.**\n\n부서를 안 주면 내가 속한 부서 전부의 것을 준다. 사람은 대개 여러 부서에 속하고,\n그때 「저 부서 홈에 뭐가 있더라」 를 보려고 부서를 갈아 가며 도는 일이 생긴다.\n\n부서가 함께 보는 자리라 개인 뷰는 안 온다. 그 부서 멤버가 아니면 빈 목록이다 —\n403 이 아니라 빈 목록인 이유는, 남의 부서 홈을 열어 본 것 자체가 흔한 실수라서다.",
         "operationId": "home_widgets_api_objects_home_get",
         "parameters": [
           {
             "name": "workspace",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string",
-              "description": "부서 slug",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "부서 slug. 안 주면 **내 부서 전부**",
               "title": "Workspace"
             },
-            "description": "부서 slug"
+            "description": "부서 slug. 안 주면 **내 부서 전부**"
           }
         ],
         "responses": {
@@ -4321,6 +4328,60 @@
                     "$ref": "#/components/schemas/HomeWidgetOut"
                   },
                   "title": "Response Home Widgets Api Objects Home Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/watching": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Watching",
+        "description": "내가 지켜보는 것 — **최근 바뀐 것부터.**\n\n지켜보기를 켜 두고도 그것을 한자리에 모아 볼 곳이 없으면, 사람은 알림이 올 때만\n그것을 떠올린다. 그리고 알림은 읽고 나면 사라진다.",
+        "operationId": "watching_api_objects_watching_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WatchedOut"
+                  },
+                  "title": "Response Watching Api Objects Watching Get"
                 }
               }
             }
@@ -8245,13 +8306,23 @@
           "icon": {
             "type": "string",
             "title": "Icon"
+          },
+          "workspace_slug": {
+            "type": "string",
+            "title": "Workspace Slug"
+          },
+          "workspace_name": {
+            "type": "string",
+            "title": "Workspace Name"
           }
         },
         "type": "object",
         "required": [
           "view",
           "type_label",
-          "icon"
+          "icon",
+          "workspace_slug",
+          "workspace_name"
         ],
         "title": "HomeWidgetOut",
         "description": "부서 홈에 올라간 뷰 하나. 홈 화면은 타입을 모르므로 **여기서 다 실어 준다.**"
@@ -13069,6 +13140,64 @@
         ],
         "title": "WatchRequest",
         "description": "지켜보기 켜고 끄기. **여러 번 눌러도 같은 결과다.**"
+      },
+      "WatchedOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "icon": {
+            "type": "string",
+            "title": "Icon"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type_slug",
+          "type_label",
+          "icon",
+          "label",
+          "key",
+          "status",
+          "updated_at"
+        ],
+        "title": "WatchedOut",
+        "description": "내가 지켜보는 것 한 줄 — **최근 바뀐 것부터.**"
       },
       "WebhookOut": {
         "properties": {

@@ -70,7 +70,10 @@ BY_YEAR = ("date", "datetime")
 
 #: 저장된 뷰가 담을 수 있는 그림 모양. 앞의 넷은 `shared/charts` 의 `Chart`,
 #: `heatmap` 은 plotly(`LazyPlot`)가 그린다 — **두 축일 때만 뜻이 있다.**
-CHART_KINDS = ("bar", "line", "area", "pie", "heatmap")
+CHART_KINDS = ("bar", "line", "area", "pie", "heatmap", "list", "count")
+#: 축이 없을 때의 두 모양 — 수 하나이거나, 몇 줄을 늘어놓거나. 「미승인 12건」 은 수가
+#: 낫고, 「최근 들어온 것」 은 이름이 보여야 한다.
+AXISLESS_KINDS = ("count", "list")
 
 #: 차례. 많은 것부터가 기본이고, 적은 것부터는 「가장 낮은 것」 을 찾을 때 쓴다
 #: (불량률이 가장 낮은 공정, 점수가 가장 낮은 공급사).

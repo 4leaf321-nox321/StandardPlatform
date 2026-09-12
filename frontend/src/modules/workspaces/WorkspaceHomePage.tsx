@@ -25,7 +25,7 @@ import { Plus } from 'lucide-react'
 
 import { HomeWidget } from '@/modules/objects/HomeWidget'
 import { AddWidgetDialog } from '@/modules/workspaces/AddWidgetDialog'
-import { viewApi } from '@/modules/objects/api'
+import { objectApi, viewApi } from '@/modules/objects/api'
 import { api } from '@/shared/api/client'
 import type { MaintenanceItem } from '@/shared/api/types'
 import { useAuth } from '@/shared/auth/AuthContext'
@@ -34,13 +34,22 @@ import { APP_NAME } from '@/shared/branding'
 import { Button } from '@/shared/components/ui/button'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
+import { TypeIcon } from '@/shared/components/TypeIcon'
 import { useResource } from '@/shared/hooks/useResource'
+import { shownDateTime } from '@/shared/lib/datetime'
 
 export default function WorkspaceHomePage() {
   const { slug } = useParams<{ slug?: string }>()
   const { user } = useAuth()
   const maintenance = useResource(() => api.get<MaintenanceItem[]>('/server/maintenance'), [])
-  const widgets = useResource(() => viewApi.home(slug ?? ''), [slug])
+  // **다른 부서 것도 함께** 볼 수 있다. 사람은 대개 여러 부서에 속하고, 그때 부서를
+  // 갈아 가며 도는 일이 생긴다. 기본은 지금 부서만 — 홈은 「여기」 의 자리다.
+  const [everywhere, setEverywhere] = useState(false)
+  const widgets = useResource(
+    () => viewApi.home(everywhere ? null : (slug ?? '')),
+    [slug, everywhere],
+  )
+  const watched = useResource(() => objectApi.watching(8), [])
   const [adding, setAdding] = useState(false)
   // 올리는 것은 부서 관리자다. 못 올리는 사람에게 단추를 보이면 눌러 보고 나서 알게 된다.
   const canAdd = isManagerOf(user, slug)
@@ -92,22 +101,61 @@ export default function WorkspaceHomePage() {
       {/* --- 부서가 올린 위젯 -------------------------------------------------
           화면을 고쳐서 더하지 않는다. 목록에서 조건을 걸고 「묶어 보기」 축을 고른 뒤
           부서 뷰로 저장하고, 그 뷰를 홈에 올리면 여기 그려진다. */}
+      {/* --- 내가 지켜보는 것 -------------------------------------------------
+          알림은 읽고 나면 사라진다. 모아 볼 자리가 없으면 지켜보기는 알림이 올 때만
+          떠오르고, 그러면 「내가 보던 그게 지금 어떤가」 를 여전히 물을 데가 없다. */}
+      {(watched.data ?? []).length > 0 && (
+        <section className="space-y-3">
+          <h2 className="text-base font-semibold">내가 지켜보는 것</h2>
+          <ul className="divide-y rounded-md border">
+            {(watched.data ?? []).map((one) => (
+              <li key={one.id}>
+                <Link
+                  to={`/o/${one.type_slug}/${one.id}`}
+                  className="hover:bg-muted/50 flex items-center gap-3 px-3 py-2 text-sm"
+                >
+                  <TypeIcon name={one.icon} className="shrink-0" />
+                  <span className="min-w-0 flex-1 truncate">{one.label}</span>
+                  <span className="text-muted-foreground shrink-0 text-xs">{one.type_label}</span>
+                  {/* 언제 바뀌었는지 — **최근 바뀐 것부터** 서므로 이 값이 차례의 근거다. */}
+                  <span className="text-muted-foreground shrink-0 text-xs">
+                    {shownDateTime(one.updated_at)}
+                  </span>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       {(widgets.data ?? []).length > 0 ? (
         <section className="space-y-3">
-          <div className="flex items-center justify-between">
+          <div className="flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-base font-semibold">부서가 보는 것</h2>
-            {canAdd && (
-              <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
-                <Plus className="mr-1 size-4" />
-                위젯 추가
+            <div className="flex items-center gap-2">
+              <Button
+                variant={everywhere ? 'secondary' : 'outline'}
+                size="sm"
+                aria-pressed={everywhere}
+                onClick={() => setEverywhere((before) => !before)}
+              >
+                {everywhere ? '이 부서만' : '다른 부서 것도'}
               </Button>
-            )}
+              {canAdd && (
+                <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
+                  <Plus className="mr-1 size-4" />
+                  위젯 추가
+                </Button>
+              )}
+            </div>
           </div>
           <div className="grid gap-4 lg:grid-cols-2">
             {(widgets.data ?? []).map((one, index) => (
               <HomeWidget
                 key={one.view.id}
                 widget={one}
+                // 여러 부서를 한 화면에 놓으면 **어디 것인지** 적어야 한다.
+                showWorkspace={everywhere}
                 canEdit={canAdd}
                 index={index}
                 total={(widgets.data ?? []).length}

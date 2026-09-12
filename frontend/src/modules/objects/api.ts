@@ -228,6 +228,21 @@ export interface HomeWidget {
   view: SavedView
   type_label: string
   icon: string
+  /** 어느 부서의 것인가 — 여러 부서를 한 화면에 놓을 때 이것이 없으면 구별이 안 된다. */
+  workspace_slug: string
+  workspace_name: string
+}
+
+/** 내가 지켜보는 것 한 줄 — 최근 바뀐 것부터. */
+export interface Watched {
+  id: string
+  type_slug: string
+  type_label: string
+  icon: string
+  label: string
+  key: string | null
+  status: string
+  updated_at: string
 }
 
 /** 품질 — 한 종류·한 타입의 걸린 것들. */
@@ -335,9 +350,18 @@ export const viewApi = {
     },
   ) => api.patch<SavedView>(`/objects/${typeSlug}/views/${id}`, body),
   remove: (typeSlug: string, id: string) => api.delete<void>(`/objects/${typeSlug}/views/${id}`),
-  /** 이 부서 홈에 올라간 것들. 부서 사람이 아니면 빈 목록이다. */
-  home: (workspaceSlug: string) =>
-    api.get<HomeWidget[]>(`/objects/home?workspace=${encodeURIComponent(workspaceSlug)}`),
+  /**
+   * 홈에 올라간 것들. 부서를 주면 그 부서만, **안 주면 내 부서 전부.**
+   *
+   * 사람은 대개 여러 부서에 속하고, 그때 「저 부서 홈에 뭐가 있더라」 를 보려고 부서를
+   * 갈아 가며 도는 일이 생긴다.
+   */
+  home: (workspaceSlug?: string | null) =>
+    api.get<HomeWidget[]>(
+      workspaceSlug
+        ? `/objects/home?workspace=${encodeURIComponent(workspaceSlug)}`
+        : '/objects/home',
+    ),
 }
 
 /** 묶어 보기의 막대 하나. `key` 는 거르기에 그대로 넣을 수 있는 값(빈 칸이면 null). */
@@ -430,6 +454,8 @@ export const objectApi = {
     typeSlug: string,
     body: { ids: string[]; field: string; value: unknown; apply: boolean },
   ) => api.post<BulkEditPlan>(`/objects/${typeSlug}/bulk-edit`, body),
+  /** 내가 지켜보는 것 — 최근 바뀐 것부터. **알림은 읽으면 사라지지만 이것은 남는다.** */
+  watching: (limit = 10) => api.get<Watched[]>(`/objects/watching?limit=${limit}`),
   list: (typeSlug: string, query: ObjectQuery = {}) =>
     api.get<Page<ObjectRow>>(`/objects/${typeSlug}${queryString(query)}`),
   /**

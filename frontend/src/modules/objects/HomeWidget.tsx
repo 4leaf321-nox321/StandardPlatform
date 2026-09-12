@@ -1,8 +1,8 @@
 /**
  * 부서 홈에 올라간 뷰 하나 — **그림이거나, 수 하나거나.**
  *
- * 뷰에 묶어 보기 설정이 있으면 그림을 그리고, 없으면 「N건」 한 줄이다. 둘 다 쓸모가
- * 있다 — 「미승인 12건」 은 축이 없어도 홈에 있어야 하는 숫자다.
+ * 축이 있으면 그림, 없으면 **수 하나이거나 몇 줄**이다. 셋 다 쓸모가 있다 —
+ * 「미승인 12건」 은 수가 낫고, 「최근 들어온 것」 은 이름이 보여야 한다.
  *
  * ## 누르면 그 목록으로 간다
  *
@@ -21,7 +21,7 @@ import { Link } from 'react-router-dom'
 import { ChevronDown, ChevronUp, Loader2, MoreHorizontal, X } from 'lucide-react'
 
 import { objectApi, viewApi } from '@/modules/objects/api'
-import type { HomeWidget as Widget, Summary } from '@/modules/objects/api'
+import type { HomeWidget as Widget, ObjectRow, Summary } from '@/modules/objects/api'
 import { Chart, LazyPlot, colorFor } from '@/shared/charts'
 import type { ChartKind } from '@/shared/charts'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -33,6 +33,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/shared/components/ui/dropdown-menu'
+
+/** 목록으로 세운 위젯이 보여 줄 줄 수. 홈은 훑는 자리라 다섯이면 충분하다 — 더 보려면
+ *  제목을 눌러 목록으로 간다. */
+const LIST_ROWS = 5
 
 /** 쪼갠 조각의 값. 없는 계열은 0 — 빈 자리는 「없음」 과 0 을 구별 못 하게 만든다. */
 function partValue(
@@ -59,6 +63,8 @@ export function viewHref(widget: Widget): string {
 
 interface Props {
   widget: Widget
+  /** 여러 부서를 한 화면에 놓을 때 — **어디 것인지** 적는다. */
+  showWorkspace?: boolean
   /** 내리고 옮길 수 있나 — 부서 관리자만. */
   canEdit?: boolean
   /** 몇 번째인지와 전부 몇 개인지 — 끝에서는 그 방향 단추를 안 보인다. */
@@ -68,7 +74,14 @@ interface Props {
   onChanged?: () => void
 }
 
-export function HomeWidget({ widget, canEdit = false, index = 0, total = 1, onChanged }: Props) {
+export function HomeWidget({
+  widget,
+  showWorkspace = false,
+  canEdit = false,
+  index = 0,
+  total = 1,
+  onChanged,
+}: Props) {
   const { view } = widget
   const [busy, setBusy] = useState(false)
   const [failedEdit, setFailedEdit] = useState<Error | null>(null)
@@ -84,29 +97,46 @@ export function HomeWidget({ widget, canEdit = false, index = 0, total = 1, onCh
       .finally(() => setBusy(false))
   }
   const grouped = Boolean(view.summary.group_by)
+  /** 축이 없는 뷰의 두 모양 — 수 하나이거나 몇 줄이거나. */
+  const asList = !grouped && view.summary.chart === 'list'
   const [data, setData] = useState<Summary | null>(null)
+  const [rows, setRows] = useState<ObjectRow[]>([])
   const [loading, setLoading] = useState(true)
   const [failed, setFailed] = useState(false)
 
   useEffect(() => {
     let cancelled = false
     setLoading(true)
-    objectApi
-      .summary(
-        view.type_slug,
-        { q: view.query.q || undefined, conditions: view.query.conditions },
-        {
-          // 축이 없으면 상태로 묶어 수만 쓴다 — 한 번 더 물을 것 없이 total 이 나온다.
-          groupBy: view.summary.group_by || 'status',
-          splitBy: view.summary.group_by ? view.summary.split_by || null : null,
-          metric: view.summary.group_by ? view.summary.metric : 'count',
-          metricField: view.summary.group_by ? view.summary.metric_field : null,
-          order: view.summary.order || 'desc',
-        },
-      )
-      .then((found) => {
-        if (!cancelled) setData(found)
-      })
+    setFailed(false)
+    // 목록으로 세울 것은 **세는 대신 몇 줄을 읽는다** — 「최근 들어온 것」 은 수가
+    // 아니라 이름이 보여야 한다.
+    const asked = asList
+      ? objectApi
+          .list(view.type_slug, {
+            q: view.query.q || undefined,
+            conditions: view.query.conditions,
+            limit: LIST_ROWS,
+          })
+          .then((page) => {
+            if (!cancelled) setRows(page.items)
+          })
+      : objectApi
+          .summary(
+            view.type_slug,
+            { q: view.query.q || undefined, conditions: view.query.conditions },
+            {
+              // 축이 없으면 상태로 묶어 수만 쓴다 — 한 번 더 물을 것 없이 total 이 나온다.
+              groupBy: view.summary.group_by || 'status',
+              splitBy: view.summary.group_by ? view.summary.split_by || null : null,
+              metric: view.summary.group_by ? view.summary.metric : 'count',
+              metricField: view.summary.group_by ? view.summary.metric_field : null,
+              order: view.summary.order || 'desc',
+            },
+          )
+          .then((found) => {
+            if (!cancelled) setData(found)
+          })
+    asked
       .catch(() => {
         // **한 위젯이 깨져도 홈은 선다.** 정의가 바뀌어 축이 사라질 수 있고, 그때
         // 홈 전체가 안 뜨면 고칠 화면으로 가는 길까지 막힌다.
@@ -119,6 +149,7 @@ export function HomeWidget({ widget, canEdit = false, index = 0, total = 1, onCh
       cancelled = true
     }
   }, [
+    asList,
     view.type_slug,
     view.id,
     view.summary.group_by,
@@ -140,7 +171,9 @@ export function HomeWidget({ widget, canEdit = false, index = 0, total = 1, onCh
         >
           {view.name}
         </Link>
-        <span className="text-muted-foreground shrink-0 text-xs">{widget.type_label}</span>
+        <span className="text-muted-foreground shrink-0 text-xs">
+          {showWorkspace ? `${widget.workspace_name} · ${widget.type_label}` : widget.type_label}
+        </span>
         {canEdit && (
           <DropdownMenu>
             <DropdownMenuTrigger asChild>
@@ -247,6 +280,29 @@ export function HomeWidget({ widget, canEdit = false, index = 0, total = 1, onCh
           title={`${view.name} — ${data?.group_label ?? ''}`}
           emptyText="지금은 셀 것이 없습니다."
         />
+      ) : asList ? (
+        /* 「최근 들어온 것」 은 수가 아니라 이름이 보여야 한다. */
+        rows.length === 0 ? (
+          <p className="text-muted-foreground text-sm">지금은 해당하는 것이 없습니다.</p>
+        ) : (
+          <ul className="divide-y text-sm">
+            {rows.map((one) => (
+              <li key={one.id}>
+                <Link
+                  to={`/o/${view.type_slug}/${one.id}`}
+                  className="hover:bg-muted/50 -mx-1 flex items-center gap-2 rounded px-1 py-1.5"
+                >
+                  <span className="min-w-0 flex-1 truncate">{one.label}</span>
+                  {one.key && (
+                    <span className="text-muted-foreground shrink-0 font-mono text-xs">
+                      {one.key}
+                    </span>
+                  )}
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )
       ) : (
         <Link to={viewHref(widget)} className="block">
           {/* 축이 없는 뷰는 **수 하나**다. 「미승인 12건」 은 그림이 필요 없다. */}

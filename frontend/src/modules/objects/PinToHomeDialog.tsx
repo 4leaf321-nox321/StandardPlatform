@@ -48,6 +48,9 @@ export function PinToHomeDialog({
   onClose,
 }: Props) {
   const [name, setName] = useState(suggested)
+  /** 축이 없을 때의 두 모양 — 수 하나이거나 몇 줄이거나. 「미승인 12건」 은 수가 낫고,
+   *  「최근 들어온 것」 은 이름이 보여야 한다. */
+  const [shape, setShape] = useState<'count' | 'list'>('count')
   const [busy, setBusy] = useState(false)
   const [done, setDone] = useState(false)
   const [error, setError] = useState<Error | null>(null)
@@ -60,7 +63,15 @@ export function PinToHomeDialog({
         name: name.trim(),
         query,
         workspace_slug: workspaceSlug,
-        summary,
+        summary: summary ?? {
+          group_by: '',
+          split_by: '',
+          metric: 'count',
+          metric_field: null,
+          chart: shape,
+          stacked: false,
+          order: 'desc',
+        },
         on_home: true,
       })
       setDone(true)
@@ -106,11 +117,32 @@ export function PinToHomeDialog({
               onChange={(event) => setName(event.target.value)}
             />
             {!summary && (
-              /* 축 없이 올려도 된다 — 수 하나짜리 위젯이 된다. 그 사실을 여기서 말한다. */
-              <p className="text-muted-foreground text-xs">
-                묶어 보기 축이 없어 <strong>수 하나</strong>로 섭니다. 그림으로 올리려면 닫고 축을
-                고른 뒤 다시 누르세요.
-              </p>
+              /* 축이 없으면 **무엇으로 세울지** 고르게 한다. 둘 다 쓸모가 있다. */
+              <div className="space-y-1">
+                <span className="text-sm">어떻게 세울까요</span>
+                <div className="flex gap-2">
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={shape === 'count' ? 'default' : 'outline'}
+                    onClick={() => setShape('count')}
+                  >
+                    수 하나
+                  </Button>
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant={shape === 'list' ? 'default' : 'outline'}
+                    onClick={() => setShape('list')}
+                  >
+                    목록으로
+                  </Button>
+                </div>
+                <p className="text-muted-foreground text-xs">
+                  「미승인 12건」 은 수가 낫고, 「최근 들어온 것」 은 이름이 보여야 합니다. 그림으로
+                  올리려면 닫고 묶어 보기 축을 고른 뒤 다시 누르세요.
+                </p>
+              </div>
             )}
             <ErrorNotice error={error} />
             <DialogFooter>

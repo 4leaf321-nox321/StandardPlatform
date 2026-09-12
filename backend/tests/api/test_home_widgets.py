@@ -237,3 +237,62 @@ def test_홈에서_순서를_바꾸고_내린다(
     )
     assert denied.status_code == 409
     assert first["home_order"] == 0
+
+
+def test_부서를_안_주면_내_부서_전부(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """사람은 대개 여러 부서에 속한다 — 부서를 갈아 가며 도는 일이 없어야 한다."""
+    part = _type_with_grade(client, admin)
+    other = client.post(
+        "/api/workspaces",
+        json={"slug": "home-second", "name": "둘째팀"},
+        headers=admin.headers,
+    )
+    slug = other.json()["slug"] if other.status_code == 201 else "home-second"
+
+    _view(
+        client,
+        manager,
+        part,
+        name="내 부서 것",
+        workspace_slug=manager.workspace,
+        on_home=True,
+    )
+    _view(client, admin, part, name="둘째팀 것", workspace_slug=slug, on_home=True)
+
+    got = client.get("/api/objects/home", headers=admin.headers)
+    assert got.status_code == 200, got.text
+    names = {one["view"]["name"] for one in got.json()}
+    assert {"내 부서 것", "둘째팀 것"} <= names
+    # **어디 것인지 적는다** — 안 적으면 같은 이름의 위젯 둘이 나란히 서고 구별이 안 된다.
+    for one in got.json():
+        assert one["workspace_slug"] and one["workspace_name"]
+
+
+def test_지켜보는_것을_한자리에_모아_본다(
+    client: TestClient, admin: Signed, manager: Signed, member: Signed
+) -> None:
+    """알림은 읽고 나면 사라진다 — 모아 볼 곳이 없으면 지켜보기는 그때만 떠오른다."""
+    part = _type_with_grade(client, admin)
+    watched = _make_object(client, admin, part, label="지켜볼 것")
+    _make_object(client, admin, part, label="안 지켜볼 것")
+    client.put(
+        f"/api/objects/{part}/{watched['id']}/watch",
+        json={"on": True},
+        headers=manager.headers,
+    )
+
+    got = client.get("/api/objects/watching", headers=manager.headers)
+    assert got.status_code == 200, got.text
+    rows = got.json()
+    assert [one["label"] for one in rows] == ["지켜볼 것"]
+    assert rows[0]["type_label"] == "부품"
+
+    # 지켜보지도 만들지도 않은 사람에게는 안 보인다.
+    other = client.get("/api/objects/watching", headers=member.headers).json()
+    assert all(one["id"] != watched["id"] for one in other)
+
+    # 만든 사람(admin)은 **자동으로 지켜보므로** 둘 다 보인다.
+    made = client.get("/api/objects/watching", headers=admin.headers).json()
+    assert {watched["id"]} <= {one["id"] for one in made}
