@@ -63,6 +63,8 @@ def test_배포_스크립트가_번들에_함께_담긴다() -> None:
         # MCP 서버는 SIF 에 못 들어간다(의존성 충돌). 소스와 유닛 템플릿, 그리고
         # get_guide 가 읽는 guide/ 가 번들에 있어야 운영 호스트에서 설 수 있다.
         "mcp.service.template",
+        "sync.service.template",
+        "sync.timer.template",
         "mcp_server/server.py",
         "mcp_server/requirements.txt",
         "mcp_server/guide",

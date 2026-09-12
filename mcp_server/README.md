@@ -71,7 +71,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 
 스텁엔 안내 본문이 없으므로 **한 번 깔면 다시 복사할 일이 없다.**
 
-## 도구 열넷
+## 도구 열여섯
 
 | 도구 | 무엇 |
 | --- | --- |
@@ -83,11 +83,12 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `object_create` · `object_update` | 객체 쓰기 (`update` 는 보낸 것만) |
 | `objects_import` | 여러 행 한 번에(upsert). 기본은 미리 보기 |
 | `relation_add` · `relations_import` | 객체 둘을 잇기 (**근거를 적는다**) |
+| `datasources_list` · `datasource_sync` | 바깥 시스템(OData)에서 읽어 채우기 — 계획 먼저 |
 
 ### 왜 타입마다 도구를 안 만드나
 
 타입 20개에 도구가 80개가 되고, **도구 목록이 길수록 모델은 엉뚱한 것을 고른다.**
-도구는 열넷으로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
+도구는 열여섯으로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
 받는가」 를 말한다 — **동적인 것은 도구가 아니라 스키마다.**
 
 검증도 권한도 백엔드가 한다. 여기에 규칙을 두면 **MCP 로는 되는데 화면에서는 안

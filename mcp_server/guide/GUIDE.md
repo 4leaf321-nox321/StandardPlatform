@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-09-12e
+GUIDE_VERSION: 2026-09-12f
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -25,6 +25,7 @@ GUIDE_VERSION: 2026-09-12e
 | 여러 행 한 번에(upsert) | `objects_import(apply=false)` → `apply=true` | 같은 `key` 면 고침. 한 행이라도 오류면 전부 안 넣음 |
 | 객체 둘 잇기 | `relation_add` | **근거(evidence_note)를 적는다** |
 | 관계 여러 줄 한 번에 | `relations_import(apply=false)` → `apply=true` | 이미 이어진 건 그대로 |
+| 바깥 시스템(OData)에서 읽어 채우기 | `datasources_list` → `datasource_sync(apply=false)` → `apply=true` | 정의는 화면에서. 오류 행이 있으면 아무것도 안 넣음 |
 
 ## 기본 습관
 

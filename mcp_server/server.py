@@ -449,6 +449,32 @@ async def relations_import(
     )
 
 
+# --------------------------------------------------------------------------- #
+# 데이터 소스 — 바깥 시스템(OData)에서 읽어 채우기. 정의는 화면에서, 돌리는 것은 여기서도.
+# --------------------------------------------------------------------------- #
+@mcp.tool()
+async def datasources_list(ctx: Context) -> Any:
+    """정의된 **데이터 소스**(OData → 타입) 목록 — 어느 표를 어느 타입에 넣는지, 마지막 결과.
+    시스템 관리자 토큰이어야 보인다."""
+    return await _get(ctx, "/api/datasources")
+
+
+@mcp.tool()
+async def datasource_sync(ctx: Context, slug: str, apply: bool = False) -> Any:
+    """데이터 소스를 **동기화**한다 — 바깥 표를 읽어 그 타입의 객체로.
+
+    `apply=False`(기본)면 **계획만**: 행마다 새로/고침/그대로/오류와 그 이유. 사람에게 보여
+    주고 판단을 받은 뒤 `apply=True`. **한 행이라도 오류면 아무것도 안 넣는다.** 같은 객체는
+    바깥 식별자 → 식별자 → 별칭·이름 순으로 다시 찾고, 빈 칸은 안 건드린다. 값 대응표에 없는
+    값·못 푸는 참조는 오류 행이다 — 사용자에게 무엇을 고쳐야 하는지 말한다."""
+    return await _post(
+        ctx,
+        f"/api/datasources/{slug}/sync",
+        None,
+        params={"apply": "true" if apply else "false"},
+    )
+
+
 if __name__ == "__main__":
     host = os.environ.get("MCP_HOST", "127.0.0.1")
     mcp.settings.host = host

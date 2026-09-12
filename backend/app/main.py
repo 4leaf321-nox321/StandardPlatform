@@ -26,6 +26,7 @@ from app.modules.accounts import routes as accounts_routes
 from app.modules.accounts import services as accounts_services
 from app.modules.audit import routes as audit_routes
 from app.modules.auth import routes as auth_routes
+from app.modules.datasources import routes as datasources_routes
 from app.modules.files import routes as files_routes
 from app.modules.files import services as files_services
 from app.modules.graph import routes as graph_routes
@@ -66,6 +67,7 @@ def _api_router() -> APIRouter:
     router.include_router(workspaces_routes.router)
     router.include_router(notices_routes.router)
     router.include_router(webhooks_routes.router)
+    router.include_router(datasources_routes.router)
     router.include_router(notifications_routes.router)
     router.include_router(files_routes.router)
     router.include_router(audit_routes.router)
@@ -124,6 +126,8 @@ def _register_extensions() -> None:
     # 토큰이 타입까지 지울 수 있다.
     scopes.register_write_scope("/api/ontology", "ontology:write")
     scopes.register_write_scope("/api/objects", "objects:write")
+    # 동기화는 객체를 넣는 일이다 — 같은 범위. 소스 정의 자체는 시스템 관리자만.
+    scopes.register_write_scope("/api/datasources", "objects:write")
     # `import` 는 POST 지만 `dry_run` 이면 아무것도 안 바꾼다. 그래도 **읽기로
     # 열지 않는다** — 같은 경로가 적용도 하기 때문이다. 읽기 토큰은 `schema` 로
     # 본다.

@@ -16,6 +16,7 @@ import {
   Bell,
   Boxes,
   Building2,
+  DatabaseZap,
   Home,
   LayoutGrid,
   Megaphone,
@@ -167,6 +168,13 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: '서버', icon: Server, to: '/admin/server', audience: 'system_admin' },
       // 바뀐 것을 바깥에 알리는 자리 — 감사 기록에 남는 변경이 곧 이벤트다.
       { label: '웹훅', icon: Webhook, to: '/admin/webhooks', audience: 'system_admin' },
+      // 바깥 시스템(OData)에서 읽어 채우는 자리 — 웹훅의 반대 방향.
+      {
+        label: '데이터 소스',
+        icon: DatabaseZap,
+        to: '/admin/datasources',
+        audience: 'system_admin',
+      },
     ],
   },
 ]

@@ -1,0 +1,24 @@
+[Unit]
+Description=@@APP_NAME@@ 데이터 소스 동기화 (차례가 된 것)
+After=@@APP_SLUG@@.service postgresql.service
+Requires=postgresql.service
+
+[Service]
+Type=oneshot
+User=@@USER@@
+Group=@@USER@@
+WorkingDirectory=@@INSTALL_DIR@@
+
+# 웹 서비스와 **같은 SIF·같은 .env** 로 돈다 — 다른 파이썬으로 돌리면 그 둘이 다른
+# 스키마를 볼 수 있다.
+ExecStart=/usr/bin/apptainer exec \
+    --bind @@INSTALL_DIR@@/.env:/opt/app/backend/.env:ro \
+    --bind @@INSTALL_DIR@@/filestore:/data/filestore \
+    --bind @@INSTALL_DIR@@/logs:/data/logs \
+    @@INSTALL_DIR@@/app.sif \
+    sh -c 'cd /opt/app/backend && /opt/app/venv/bin/python scripts/sync_datasources.py --due'
+
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=false
+PrivateTmp=true

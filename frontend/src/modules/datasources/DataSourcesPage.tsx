@@ -1,0 +1,783 @@
+/**
+ * 데이터 소스 — **바깥 시스템(OData)에서 읽어 온톨로지를 채운다.**
+ *
+ * 규칙은 파일 가져오기와 같다: 계획 먼저, 전부 아니면 무, 같은 객체면 고침, 빈 칸은 안 건드림.
+ * 다른 것은 행이 어디서 오는가(OData)와 같은 객체를 어떻게 다시 찾는가(바깥 식별자를
+ * 별칭으로 남김)뿐이다. 「미리 보기」 로 칸 대응을 맞추고, 「동기화」 는 계획을 보여 준 뒤
+ * 적용한다.
+ */
+
+import { useState } from 'react'
+import { Eye, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+
+import { datasourceApi } from '@/modules/datasources/api'
+import type {
+  AuthKind,
+  DataSource,
+  DataSourceWrite,
+  MappingColumn,
+  Preview,
+  SyncResult,
+} from '@/modules/datasources/api'
+import { ontologyApi } from '@/modules/ontology/api'
+import type { PropertyDef } from '@/modules/ontology/api'
+import { workspaceApi } from '@/modules/workspaces/api'
+import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
+import { EmptyState } from '@/shared/components/EmptyState'
+import { ErrorNotice } from '@/shared/components/ErrorNotice'
+import { PageHeader } from '@/shared/components/PageHeader'
+import { Button } from '@/shared/components/ui/button'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/shared/components/ui/dialog'
+import { Input } from '@/shared/components/ui/input'
+import { Label } from '@/shared/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/shared/components/ui/select'
+import { Textarea } from '@/shared/components/ui/textarea'
+import { useResource } from '@/shared/hooks/useResource'
+import { shownDateTime } from '@/shared/lib/datetime'
+
+const NONE = '__none__'
+
+export default function DataSourcesPage() {
+  const list = useResource(() => datasourceApi.list(), [])
+  const schema = useResource(() => ontologyApi.schema(), [])
+  const workspaces = useResource(() => workspaceApi.list(true), [])
+  const [editing, setEditing] = useState<DataSource | 'new' | null>(null)
+  const [removing, setRemoving] = useState<DataSource | null>(null)
+  const [opened, setOpened] = useState<string | null>(null)
+  const [syncing, setSyncing] = useState<{ source: DataSource; result: SyncResult } | null>(null)
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
+
+  const sources = list.data ?? []
+
+  async function plan(source: DataSource) {
+    setBusy(source.slug)
+    setError(null)
+    try {
+      setSyncing({ source, result: await datasourceApi.sync(source.slug, false) })
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <div className="mx-auto max-w-5xl space-y-6">
+      <PageHeader
+        title="데이터 소스"
+        description="바깥 시스템(OData)에서 읽어 온톨로지를 채웁니다. 규칙은 파일 가져오기와 같습니다 — 계획 먼저, 전부 아니면 무."
+        actions={
+          <Button size="sm" onClick={() => setEditing('new')}>
+            <Plus className="mr-1 size-4" />
+            만들기
+          </Button>
+        }
+      />
+
+      {list.error && <ErrorNotice error={list.error} />}
+      {error && <ErrorNotice error={error} />}
+
+      {list.data && sources.length === 0 ? (
+        <EmptyState
+          title="데이터 소스가 없습니다"
+          hint="OData 서비스 주소·엔티티 셋·칸 대응을 적으면, 그 표의 행이 한 타입의 객체로 들어옵니다. ENOVIA·Teamcenter·ERP 가 이런 표를 냅니다."
+        />
+      ) : (
+        <ul className="divide-y rounded-md border">
+          {sources.map((source) => (
+            <li key={source.slug} className="space-y-2 p-4">
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  className="text-left font-medium hover:underline"
+                  onClick={() => setOpened(opened === source.slug ? null : source.slug)}
+                >
+                  {source.name}
+                </button>
+                <code className="text-muted-foreground text-xs">{source.slug}</code>
+                {!source.is_active && (
+                  <span className="text-muted-foreground text-xs">사용 안 함</span>
+                )}
+                {source.last_status && (
+                  <span
+                    className={
+                      source.last_status === 'ok'
+                        ? 'text-xs text-emerald-700 dark:text-emerald-400'
+                        : 'text-destructive text-xs'
+                    }
+                  >
+                    마지막 {source.last_status === 'ok' ? '성공' : '실패'}
+                    {source.last_run_at && ` · ${shownDateTime(source.last_run_at)}`}
+                  </span>
+                )}
+                <span className="ml-auto flex gap-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={busy === source.slug}
+                    onClick={() => plan(source)}
+                  >
+                    <RefreshCw className="mr-1 size-3.5" />
+                    동기화
+                  </Button>
+                  <Button size="sm" variant="outline" onClick={() => setEditing(source)}>
+                    고치기
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    aria-label="데이터 소스 지우기"
+                    onClick={() => setRemoving(source)}
+                  >
+                    <Trash2 className="size-4" />
+                  </Button>
+                </span>
+              </div>
+              <p className="text-muted-foreground font-mono text-xs break-all">
+                {source.base_url}/{source.entity_set}
+                {source.filter && ` ?$filter=${source.filter}`}
+              </p>
+              <p className="text-muted-foreground text-xs">
+                → {source.type_slug}
+                {source.workspace_slug ? ` · ${source.workspace_slug} 부서` : ' · 전역'}
+                {source.interval_minutes > 0
+                  ? ` · ${source.interval_minutes}분마다`
+                  : ' · 손으로만'}
+                {source.deprecate_missing && ' · 사라진 행은 사용 중지'}
+                {source.auth_kind !== 'none' && ` · 인증 ${source.auth_kind}`}
+              </p>
+              {opened === source.slug && <Runs source={source} />}
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {editing && (
+        <EditDialog
+          source={editing === 'new' ? null : editing}
+          types={(schema.data?.types ?? []).filter((one) => one.kind_class !== 'system')}
+          workspaceSlugs={(workspaces.data ?? []).map((one) => one.slug)}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            setEditing(null)
+            list.reload()
+          }}
+        />
+      )}
+
+      {syncing && (
+        <SyncDialog
+          source={syncing.source}
+          result={syncing.result}
+          onClose={() => {
+            setSyncing(null)
+            list.reload()
+          }}
+        />
+      )}
+
+      <ConfirmDialog
+        open={removing !== null}
+        title={`「${removing?.name}」 을 지웁니다`}
+        description="가져온 객체는 남습니다. 그 객체에 남긴 바깥 식별자도 남아서, 같은 slug 로 다시 만들면 이어서 찾습니다."
+        confirmLabel="지우기"
+        destructive
+        onConfirm={async () => {
+          if (removing) await datasourceApi.remove(removing.slug)
+          setRemoving(null)
+          list.reload()
+        }}
+        onClose={() => setRemoving(null)}
+      />
+    </div>
+  )
+}
+
+/** 최근 동기화 기록. */
+function Runs({ source }: { source: DataSource }) {
+  const runs = useResource(() => datasourceApi.runs(source.slug), [source.slug])
+  const rows = runs.data ?? []
+  const [shown, setShown] = useState<string | null>(null)
+  return (
+    <div className="mt-2 space-y-1 rounded-md border p-3 text-xs">
+      <div className="flex items-center justify-between">
+        <span className="text-sm font-medium">최근 동기화 {rows.length}건</span>
+        <Button size="sm" variant="ghost" onClick={runs.reload}>
+          <RefreshCw className="size-3.5" />
+        </Button>
+      </div>
+      {runs.data && rows.length === 0 && (
+        <p className="text-muted-foreground">아직 돌린 적이 없습니다.</p>
+      )}
+      {rows.map((run) => (
+        <div key={run.id} className="flex flex-wrap items-center gap-2">
+          <span
+            className={
+              run.status === 'ok'
+                ? 'text-emerald-700 dark:text-emerald-400'
+                : run.status === 'failed'
+                  ? 'text-destructive'
+                  : 'text-muted-foreground'
+            }
+          >
+            {run.status === 'ok' ? '적용' : run.status === 'failed' ? '실패' : '계획만'}
+          </span>
+          <span className="text-muted-foreground">{shownDateTime(run.started_at)}</span>
+          <span>{run.actor_label}</span>
+          <span className="text-muted-foreground">
+            행 {run.rows_seen} ·{' '}
+            {Object.entries(run.counts)
+              .filter(([, n]) => n > 0)
+              .map(([k, n]) => `${COUNT_LABEL[k] ?? k} ${n}`)
+              .join(' · ')}
+          </span>
+          {run.errors.length > 0 && (
+            <button
+              type="button"
+              className="text-destructive hover:underline"
+              onClick={() => setShown(shown === run.id ? null : run.id)}
+            >
+              오류 {run.errors.length}
+            </button>
+          )}
+          {shown === run.id && (
+            <ul className="bg-muted w-full rounded p-2">
+              {run.errors.map((one, index) => (
+                <li key={index}>{one}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      ))}
+    </div>
+  )
+}
+
+const COUNT_LABEL: Record<string, string> = {
+  create: '새로',
+  update: '고침',
+  unchanged: '그대로',
+  error: '오류',
+  deprecated: '사용 중지',
+}
+
+/** 계획을 보고 적용한다 — 파일 가져오기의 계획 창과 같은 무늬. */
+function SyncDialog({
+  source,
+  result: initial,
+  onClose,
+}: {
+  source: DataSource
+  result: SyncResult
+  onClose: () => void
+}) {
+  const [result, setResult] = useState(initial)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
+  const ok = result.errors.length === 0 && (result.counts.error ?? 0) === 0 && !result.truncated
+  const problems = result.rows.filter((row) => row.action === 'error')
+
+  async function apply() {
+    setBusy(true)
+    setError(null)
+    try {
+      setResult(await datasourceApi.sync(source.slug, true))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>
+            {source.name} — {result.applied ? '적용했습니다' : '동기화 계획'}
+          </DialogTitle>
+          <DialogDescription>
+            바깥에서 {result.run.rows_seen}행을 읽었습니다.{' '}
+            {Object.entries(result.counts)
+              .filter(([, n]) => n > 0)
+              .map(([k, n]) => `${COUNT_LABEL[k] ?? k} ${n}`)
+              .join(' · ')}
+            {!result.applied && !ok && ' — 오류가 있어 아무것도 안 넣습니다.'}
+          </DialogDescription>
+        </DialogHeader>
+        {error && <ErrorNotice error={error} />}
+        {result.errors.length > 0 && (
+          <ul className="text-destructive space-y-1 text-sm">
+            {result.errors.map((one, index) => (
+              <li key={index}>{one}</li>
+            ))}
+          </ul>
+        )}
+        {problems.length > 0 && (
+          <div className="max-h-64 overflow-auto rounded-md border text-xs">
+            <table className="w-full">
+              <tbody>
+                {problems.slice(0, 100).map((row) => (
+                  <tr key={row.row} className="border-b">
+                    <td className="text-muted-foreground px-2 py-1 tabular-nums">{row.row}</td>
+                    <td className="px-2 py-1">{row.label}</td>
+                    <td className="text-destructive px-2 py-1">{row.message}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {!result.applied && ok && (
+          <p className="text-muted-foreground text-sm">
+            같은 객체(바깥 식별자·식별자·별칭·이름 순)는 고치고, 없으면 새로 만듭니다. 빈 칸은
+            건드리지 않습니다.
+          </p>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            {result.applied ? '닫기' : '취소'}
+          </Button>
+          {!result.applied && (
+            <Button onClick={apply} disabled={busy || !ok}>
+              적용 — {result.counts.create ?? 0}개 새로, {result.counts.update ?? 0}개 고침
+            </Button>
+          )}
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+const TARGETS: [string, string][] = [
+  ['label', '이름 (label)'],
+  ['key', '식별자 (key)'],
+  ['description', '설명'],
+  ['alias', '다른 이름 (별칭에 더함)'],
+]
+
+function EditDialog({
+  source,
+  types,
+  workspaceSlugs,
+  onClose,
+  onSaved,
+}: {
+  source: DataSource | null
+  types: { slug: string; label: string; properties: PropertyDef[] }[]
+  workspaceSlugs: string[]
+  onClose: () => void
+  onSaved: () => void
+}) {
+  const [slug, setSlug] = useState(source?.slug ?? '')
+  const [name, setName] = useState(source?.name ?? '')
+  const [baseUrl, setBaseUrl] = useState(source?.base_url ?? '')
+  const [entitySet, setEntitySet] = useState(source?.entity_set ?? '')
+  const [filter, setFilter] = useState(source?.filter ?? '')
+  const [authKind, setAuthKind] = useState<AuthKind>(source?.auth_kind ?? 'none')
+  const [authUser, setAuthUser] = useState(source?.auth_user ?? '')
+  const [authSecret, setAuthSecret] = useState('')
+  const [typeSlug, setTypeSlug] = useState(source?.type_slug ?? types[0]?.slug ?? '')
+  const [workspace, setWorkspace] = useState(source?.workspace_slug ?? NONE)
+  const [externalKey, setExternalKey] = useState(source?.mapping.external_key ?? '')
+  const [columns, setColumns] = useState<MappingColumn[]>(source?.mapping.columns ?? [])
+  const [deprecate, setDeprecate] = useState(source?.deprecate_missing ?? false)
+  const [interval, setInterval] = useState(String(source?.interval_minutes ?? 0))
+  const [active, setActive] = useState(source?.is_active ?? true)
+  const [preview, setPreview] = useState<Preview | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
+
+  const type = types.find((one) => one.slug === typeSlug)
+  const propertyTargets = (type?.properties ?? [])
+    .filter((def) => def.data_type !== 'file')
+    .map((def): [string, string] => [`properties.${def.key}`, `${def.label} (${def.key})`])
+
+  function body(): DataSourceWrite {
+    const out: DataSourceWrite = {
+      slug: slug.trim(),
+      name: name.trim(),
+      base_url: baseUrl.trim(),
+      entity_set: entitySet.trim(),
+      filter: filter.trim(),
+      auth_kind: authKind,
+      auth_user: authUser.trim(),
+      type_slug: typeSlug,
+      workspace_slug: workspace === NONE ? null : workspace,
+      mapping: { external_key: externalKey.trim(), columns },
+      deprecate_missing: deprecate,
+      interval_minutes: Number(interval) || 0,
+      is_active: active,
+    }
+    // 비밀은 **적었을 때만** 보낸다 — 빈 값으로 보내면 있던 비밀이 지워진다.
+    if (authSecret || !source) out.auth_secret = authSecret
+    return out
+  }
+
+  async function save() {
+    setBusy(true)
+    setError(null)
+    try {
+      if (source) await datasourceApi.update(source.slug, body())
+      else await datasourceApi.create(body())
+      onSaved()
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** 미리 보기 — 저장한 뒤 앞의 몇 행을 읽어 온다. 열 이름이 여기서 보이면 칸 대응이 쉽다. */
+  async function peek() {
+    setBusy(true)
+    setError(null)
+    try {
+      if (source) await datasourceApi.update(source.slug, body())
+      else await datasourceApi.create(body())
+      setPreview(await datasourceApi.preview(slug.trim()))
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const sourceColumns = preview?.columns ?? []
+
+  return (
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
+        <DialogHeader>
+          <DialogTitle>{source ? '데이터 소스 고치기' : '데이터 소스 만들기'}</DialogTitle>
+          <DialogDescription>
+            OData 서비스의 한 엔티티 셋을 한 타입으로. 「미리 보기」 로 열 이름을 받아 칸 대응을
+            맞추고, 목록에서 「동기화」 로 계획을 본 뒤 적용합니다.
+          </DialogDescription>
+        </DialogHeader>
+        <div className="space-y-4">
+          {error && <ErrorNotice error={error} />}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="ds-slug">slug {source && '(바꿀 수 없음)'}</Label>
+              <Input
+                id="ds-slug"
+                value={slug}
+                disabled={Boolean(source)}
+                placeholder="plm_suppliers"
+                onChange={(event) => setSlug(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ds-name">이름</Label>
+              <Input id="ds-name" value={name} onChange={(event) => setName(event.target.value)} />
+            </div>
+            <div className="space-y-1.5 sm:col-span-2">
+              <Label htmlFor="ds-url">OData 서비스 루트</Label>
+              <Input
+                id="ds-url"
+                value={baseUrl}
+                placeholder="https://plm.example.com/odata/v4"
+                onChange={(event) => setBaseUrl(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ds-set">엔티티 셋</Label>
+              <Input
+                id="ds-set"
+                value={entitySet}
+                placeholder="Suppliers"
+                onChange={(event) => setEntitySet(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ds-filter">$filter (선택)</Label>
+              <Input
+                id="ds-filter"
+                value={filter}
+                placeholder="Status eq 'Released'"
+                onChange={(event) => setFilter(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label>인증</Label>
+              <Select value={authKind} onValueChange={(next) => setAuthKind(next as AuthKind)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="none">없음</SelectItem>
+                  <SelectItem value="basic">Basic (아이디·비밀번호)</SelectItem>
+                  <SelectItem value="bearer">Bearer 토큰</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {authKind === 'basic' && (
+              <div className="space-y-1.5">
+                <Label htmlFor="ds-user">아이디</Label>
+                <Input
+                  id="ds-user"
+                  value={authUser}
+                  onChange={(event) => setAuthUser(event.target.value)}
+                />
+              </div>
+            )}
+            {authKind !== 'none' && (
+              <div className="space-y-1.5">
+                <Label htmlFor="ds-secret">
+                  {authKind === 'basic' ? '비밀번호' : '토큰'}{' '}
+                  {source?.has_secret && '(비우면 그대로)'}
+                </Label>
+                <Input
+                  id="ds-secret"
+                  type="password"
+                  value={authSecret}
+                  onChange={(event) => setAuthSecret(event.target.value)}
+                />
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <Label>넣을 타입</Label>
+              <Select value={typeSlug} onValueChange={setTypeSlug}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {types.map((one) => (
+                    <SelectItem key={one.slug} value={one.slug}>
+                      {one.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>새 객체의 소유 부서</Label>
+              <Select value={workspace} onValueChange={setWorkspace}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE}>전역</SelectItem>
+                  {workspaceSlugs.map((one) => (
+                    <SelectItem key={one} value={one}>
+                      {one}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+
+          {/* --- 칸 대응 --- */}
+          <div className="space-y-2 rounded-md border p-3">
+            <div className="flex items-center justify-between">
+              <Label>칸 대응</Label>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={busy || !slug.trim() || !baseUrl.trim() || !entitySet.trim()}
+                onClick={peek}
+              >
+                <Eye className="mr-1 size-3.5" />
+                미리 보기 (저장하고 앞 5행 읽기)
+              </Button>
+            </div>
+            {preview?.mapping_error && (
+              <p className="text-destructive text-xs">{preview.mapping_error}</p>
+            )}
+            {sourceColumns.length > 0 && (
+              <p className="text-muted-foreground text-xs">
+                바깥 열:{' '}
+                {sourceColumns.map((one) => (
+                  <code key={one} className="mr-1">
+                    {one}
+                  </code>
+                ))}
+              </p>
+            )}
+            <div className="space-y-1.5">
+              <Label htmlFor="ds-ext">바깥 식별자 열 — 같은 객체를 다음에 다시 찾는 근거</Label>
+              <Input
+                id="ds-ext"
+                value={externalKey}
+                placeholder="VendorNo"
+                list="ds-columns"
+                onChange={(event) => setExternalKey(event.target.value)}
+              />
+              <datalist id="ds-columns">
+                {sourceColumns.map((one) => (
+                  <option key={one} value={one} />
+                ))}
+              </datalist>
+            </div>
+            {columns.map((column, index) => (
+              <div key={index} className="flex flex-wrap items-start gap-2">
+                <Input
+                  value={column.source}
+                  placeholder="바깥 열"
+                  list="ds-columns"
+                  className="w-40"
+                  onChange={(event) =>
+                    setColumns(
+                      columns.map((one, i) =>
+                        i === index ? { ...one, source: event.target.value } : one,
+                      ),
+                    )
+                  }
+                />
+                <Select
+                  value={column.target}
+                  onValueChange={(next) =>
+                    setColumns(
+                      columns.map((one, i) => (i === index ? { ...one, target: next } : one)),
+                    )
+                  }
+                >
+                  <SelectTrigger className="w-52">
+                    <SelectValue placeholder="어디로" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[...TARGETS, ...propertyTargets].map(([key, text]) => (
+                      <SelectItem key={key} value={key}>
+                        {text}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Textarea
+                  value={column.values ? JSON.stringify(column.values) : ''}
+                  placeholder='값 대응표 (선택) {"US": "미국"}'
+                  rows={1}
+                  className="min-h-9 flex-1 font-mono text-xs"
+                  onChange={(event) => {
+                    const text = event.target.value.trim()
+                    let values: Record<string, unknown> | undefined
+                    try {
+                      values = text ? (JSON.parse(text) as Record<string, unknown>) : undefined
+                    } catch {
+                      return
+                    }
+                    setColumns(columns.map((one, i) => (i === index ? { ...one, values } : one)))
+                  }}
+                />
+                <Button
+                  type="button"
+                  size="icon"
+                  variant="ghost"
+                  aria-label="칸 대응 지우기"
+                  onClick={() => setColumns(columns.filter((_one, i) => i !== index))}
+                >
+                  <X className="size-4" />
+                </Button>
+              </div>
+            ))}
+            <Button
+              type="button"
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                setColumns([
+                  ...columns,
+                  { source: '', target: columns.length === 0 ? 'label' : '' },
+                ])
+              }
+            >
+              <Plus className="mr-1 size-4" />열 더하기
+            </Button>
+            <p className="text-muted-foreground text-xs">
+              값 대응표에 없는 값이 오면 그 행은 오류입니다(조용히 통과시키면 고를 값이 오염됩니다).
+              참조 칸은 상대의 식별자·별칭·이름으로 풀리고, 못 풀면 오류 행입니다.
+            </p>
+            {preview && preview.mapped.length > 0 && (
+              <div className="max-h-40 overflow-auto rounded border text-xs">
+                <table className="w-full">
+                  <tbody>
+                    {preview.mapped.map((one, index) => (
+                      <tr key={index} className="border-b">
+                        <td className="px-2 py-1 font-mono">{one.external_id}</td>
+                        <td className="px-2 py-1">
+                          {one.error ? (
+                            <span className="text-destructive">{one.error}</span>
+                          ) : (
+                            JSON.stringify(one.row)
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-1.5">
+              <Label htmlFor="ds-interval">몇 분마다 (0 = 손으로만)</Label>
+              <Input
+                id="ds-interval"
+                type="number"
+                min={0}
+                value={interval}
+                onChange={(event) => setInterval(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2 pt-6">
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="size-4"
+                  checked={deprecate}
+                  onChange={(event) => setDeprecate(event.target.checked)}
+                />
+                바깥에서 사라진 행은 「사용 중지」 로 표시 (기본은 건드리지 않음)
+              </label>
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="size-4"
+                  checked={active}
+                  onChange={(event) => setActive(event.target.checked)}
+                />
+                사용
+              </label>
+            </div>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose} disabled={busy}>
+            취소
+          </Button>
+          <Button
+            onClick={save}
+            disabled={
+              busy ||
+              !slug.trim() ||
+              !name.trim() ||
+              !baseUrl.trim() ||
+              !entitySet.trim() ||
+              !typeSlug
+            }
+          >
+            저장
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}

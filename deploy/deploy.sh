@@ -52,6 +52,12 @@ SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 
 as_op() { sudo -u "$OPERATOR" "$@"; }
 
+# 데이터 소스 동기화 타이머 — 화면에서 간격을 정한 소스를 몇 분마다 돌린다. 앱과 같은 SIF.
+SYNC_SERVICE_NAME="${APP_SLUG}-sync"
+SYNC_SERVICE_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.service"
+SYNC_TIMER_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.timer"
+SYNC_ENABLED="${SYNC_ENABLED:-1}"                      # 0 으로 두면 타이머 안 설치
+
 # ───────────────────────── MCP 서버 (Claude 연동, 선택) ─────────────────────────
 # 별도 venv + 별도 systemd 유닛. 백엔드 SIF 와 의존성이 충돌해 컨테이너에 못 넣는다.
 MCP_SERVICE_NAME="${APP_SLUG}-mcp"
@@ -222,6 +228,25 @@ setup_mcp() {
     info "MCP 서버: http://$MCP_HOST:$MCP_PORT/mcp  → 백엔드 $MCP_API_BASE"
 }
 
+# ── 동기화 타이머 — 같은 SIF 재사용, 별도 venv 없음. 비치명적. ──
+setup_sync_timer() {
+    [[ "$SYNC_ENABLED" == "1" ]] || { info "동기화 타이머 비활성(SYNC_ENABLED=0) — 건너뜀"; return 0; }
+    [[ -f "$HERE/sync.service.template" && -f "$HERE/sync.timer.template" ]] \
+        || { warn "sync.*.template 없음 — 동기화 타이머 건너뜀"; return 0; }
+    info "동기화 타이머 렌더 → $SYNC_TIMER_UNIT"
+    sed -e "s|@@USER@@|$OPERATOR|g" \
+        -e "s|@@INSTALL_DIR@@|$INSTALL_DIR|g" \
+        -e "s|@@APP_NAME@@|$APP_NAME|g" \
+        -e "s|@@APP_SLUG@@|$APP_SLUG|g" \
+        "$HERE/sync.service.template" > "$SYNC_SERVICE_UNIT"
+    sed -e "s|@@APP_NAME@@|$APP_NAME|g" "$HERE/sync.timer.template" > "$SYNC_TIMER_UNIT"
+    chmod 644 "$SYNC_SERVICE_UNIT" "$SYNC_TIMER_UNIT"
+    systemctl daemon-reload
+    systemctl enable --now "${SYNC_SERVICE_NAME}.timer" >/dev/null 2>&1 \
+        || warn "동기화 타이머 기동 실패 — 'systemctl status ${SYNC_SERVICE_NAME}.timer' 확인"
+    info "동기화 타이머: 5분마다 차례가 된 데이터 소스를 돌립니다 (journalctl -u $SYNC_SERVICE_NAME)"
+}
+
 health_check() {
     # 기동 직후에는 아직 안 뜬다. 몇 초 기다려 준다.
     local url="http://127.0.0.1:$APP_PORT/api/health"
@@ -288,6 +313,7 @@ cmd_install() {
     health_check || true
 
     setup_mcp || warn "MCP 설정 건너뜀(비치명적)"
+    setup_sync_timer || warn "동기화 타이머 건너뜀(비치명적)"
 
     cat <<MSG
 
@@ -324,6 +350,7 @@ cmd_update() {
 
     # MCP 도 함께 갱신(소스 교체 + 유닛 재렌더 + 재기동). 비치명적.
     setup_mcp || warn "MCP 설정 건너뜀(비치명적)"
+    setup_sync_timer || warn "동기화 타이머 건너뜀(비치명적)"
 
     cat <<MSG
 
@@ -381,6 +408,11 @@ cmd_status() {
         echo
         echo "== MCP ($MCP_SERVICE_NAME · http://$MCP_HOST:$MCP_PORT/mcp) =="
         systemctl --no-pager --lines=5 status "$MCP_SERVICE_NAME" || true
+    fi
+    if [[ -f "$SYNC_TIMER_UNIT" ]]; then
+        echo
+        echo "== 동기화 타이머 ($SYNC_SERVICE_NAME.timer) =="
+        systemctl --no-pager list-timers "${SYNC_SERVICE_NAME}.timer" || true
     fi
 }
 

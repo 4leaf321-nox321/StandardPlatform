@@ -38,6 +38,8 @@ TOOLS = {
     "object_references",
     "object_rollup",
     "quality_report",
+    "datasources_list",
+    "datasource_sync",
 }
 
 

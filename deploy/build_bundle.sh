@@ -118,6 +118,8 @@ cp deploy/backup.sh                  "$STAGE/"
 cp deploy/restore.sh                 "$STAGE/"
 cp deploy/app.service.template       "$STAGE/"
 cp deploy/mcp.service.template       "$STAGE/"
+cp deploy/sync.service.template      "$STAGE/"
+cp deploy/sync.timer.template        "$STAGE/"
 cp deploy/.env.production.example    "$STAGE/.env.example"
 cp deploy/README_OPERATOR.md         "$STAGE/README.md"
 chmod +x "$STAGE"/*.sh

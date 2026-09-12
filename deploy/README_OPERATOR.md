@@ -31,7 +31,8 @@ tar xzf <slug>-<태그>.tar.gz
 cd <slug>-<태그>
 ls
 #  app.sif  deploy.sh  backup.sh  restore.sh
-#  app.service.template  mcp.service.template  .env.example  BUILD_INFO  README.md
+#  app.service.template  mcp.service.template  sync.service.template  sync.timer.template
+#  .env.example  BUILD_INFO  README.md
 #  mcp_server/   (Claude 연동 MCP 서버 + 오프라인 설치용 휠)
 ```
 
@@ -209,6 +210,20 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 
 ---
 
+## 5c. 데이터 소스 동기화 타이머
+
+`deploy.sh install`/`update` 가 `<slug>-sync.timer` 를 함께 설치한다 — 5분마다 「몇 분마다」 가
+정해진 데이터 소스(관리 › 데이터 소스) 중 차례가 된 것을 돌린다. 앱과 **같은 SIF·같은 .env**
+로 `scripts/sync_datasources.py --due` 를 실행한다.
+
+- **상태**: `systemctl list-timers <slug>-sync.timer` / 로그 `journalctl -u <slug>-sync`
+- **끄기**: `SYNC_ENABLED=0 sudo ./deploy.sh update` (유닛은 `systemctl disable --now <slug>-sync.timer`)
+- **손으로 한 번**: `sudo systemctl start <slug>-sync` (차례가 된 것만) — 하나만 지정해 돌리려면
+  화면의 「동기화」 나 컨테이너 안에서 `scripts/sync_datasources.py --slug <소스>`.
+- 결과는 화면(관리 › 데이터 소스 › 최근 동기화)에도 남는다.
+
+---
+
 ## 6. 한 서버에 여러 플랫폼
 
 이 틀에서 나온 플랫폼들은 **slug 하나로 전부 갈린다**:
@@ -217,7 +232,7 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 | --- | --- |
 | 설치 경로 | `~/apps/<slug>` |
 | 데이터베이스 · 역할 | `<slug>` |
-| systemd 유닛 | `<slug>.service` · `<slug>-mcp.service` |
+| systemd 유닛 | `<slug>.service` · `<slug>-mcp.service` · `<slug>-sync.timer` |
 | 포트 | `BUILD_INFO` 의 `port` (플랫폼마다 10씩 벌린다) · MCP 는 `mcp_port` (+2) |
 
 **slug 가 겹치면 서로를 덮어쓴다.** 유닛 이름이 같으면 나중 배포가 앞의 것을

@@ -43,6 +43,7 @@ const NotificationsPage = lazy(() => import('@/modules/notifications/Notificatio
 const ProfilePage = lazy(() => import('@/modules/auth/ProfilePage'))
 const ServerPage = lazy(() => import('@/modules/server/ServerPage'))
 const WebhooksPage = lazy(() => import('@/modules/webhooks/WebhooksPage'))
+const DataSourcesPage = lazy(() => import('@/modules/datasources/DataSourcesPage'))
 const SignupPage = lazy(() => import('@/modules/auth/SignupPage'))
 const WorkspaceHomePage = lazy(() => import('@/modules/workspaces/WorkspaceHomePage'))
 const WorkspacesAdminPage = lazy(() => import('@/modules/workspaces/WorkspacesAdminPage'))
@@ -122,6 +123,7 @@ export const router = createBrowserRouter([
           { path: 'admin/workspaces', element: <WorkspacesAdminPage /> },
           { path: 'admin/server', element: <ServerPage /> },
           { path: 'admin/webhooks', element: <WebhooksPage /> },
+          { path: 'admin/datasources', element: <DataSourcesPage /> },
 
           // 부서 스코프
           {

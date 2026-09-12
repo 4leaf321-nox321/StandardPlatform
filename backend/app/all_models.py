@@ -16,6 +16,7 @@ from app.database import Base
 from app.modules.accounts.models import User
 from app.modules.audit.models import AccessLog, AuditEntry
 from app.modules.auth.models import PersonalAccessToken, RefreshToken
+from app.modules.datasources.models import DataSource, DataSourceRun
 from app.modules.files.models import Attachment
 from app.modules.notices.models import Notice, NoticeRead
 from app.modules.notifications.models import Notification
@@ -42,6 +43,8 @@ __all__ = [
     "Attachment",
     "AuditEntry",
     "Base",
+    "DataSource",
+    "DataSourceRun",
     "NavGroup",
     "Notice",
     "NoticeRead",
