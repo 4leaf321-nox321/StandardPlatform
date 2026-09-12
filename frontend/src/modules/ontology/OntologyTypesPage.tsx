@@ -14,6 +14,8 @@ import { useOntology } from '@/modules/ontology/OntologyLayout'
 import { ontologyApi } from '@/modules/ontology/api'
 import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { EmptyState } from '@/shared/components/EmptyState'
+import { IconPickerButton } from '@/shared/components/IconPicker'
+import { TypeIcon } from '@/shared/components/TypeIcon'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
@@ -104,6 +106,9 @@ export default function OntologyTypesPage() {
                     onClick={() => setEditing(row.slug)}
                   >
                     <TableCell className="font-medium">
+                      {/* 사이드바에 설 그림을 **여기서도** 보여 준다 — 정의 화면과
+                          메뉴가 다른 것을 보이면 고른 사람이 확인할 자리가 없다. */}
+                      <TypeIcon name={row.icon} className="mr-2 inline align-text-bottom" />
                       {row.label}
                       {!row.is_active && (
                         <span className="text-muted-foreground ml-2 text-xs">사용 안 함</span>
@@ -186,6 +191,9 @@ function NewTypeForm({
   const [label, setLabel] = useState('')
   const [group, setGroup] = useState<string>('')
   const [keyPolicy, setKeyPolicy] = useState('none')
+  // **만들 때 고른다.** 만들고 나면 그 타입은 곧 쓰이기 시작하고, 사이드바를 다듬으러
+  // 다시 오는 사람은 없다 — 그래서 전부 같은 네모로 남는다.
+  const [icon, setIcon] = useState('LayoutGrid')
 
   return (
     <div className="flex flex-wrap items-end gap-3 rounded-md border p-4">
@@ -208,6 +216,10 @@ function NewTypeForm({
           className="w-40"
           onChange={(event) => setLabel(event.target.value)}
         />
+      </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="type-icon">아이콘</Label>
+        <IconPickerButton id="type-icon" value={icon} onChange={setIcon} />
       </div>
       <div className="space-y-1.5">
         <Label htmlFor="type-group">사이드바 묶음</Label>
@@ -243,6 +255,7 @@ function NewTypeForm({
           onSubmit({
             slug,
             label,
+            icon,
             nav_group_slug: group || null,
             key_policy: keyPolicy,
           })

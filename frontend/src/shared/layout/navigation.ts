@@ -16,6 +16,7 @@ import {
   Bell,
   Boxes,
   Building2,
+  ChartColumn,
   DatabaseZap,
   Home,
   LayoutGrid,
@@ -29,6 +30,8 @@ import {
   Webhook,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
+
+import { iconOf } from '@/shared/icons'
 
 /** 소속 부서를 아직 모를 때 쓰는 임시 slug. 설치 스크립트가 만드는 뿌리 부서다. */
 export const DEFAULT_WORKSPACE = 'hq'
@@ -166,6 +169,14 @@ export const NAV_GROUPS: NavGroup[] = [
         audience: 'system_admin',
       },
       { label: '서버', icon: Server, to: '/admin/server', audience: 'system_admin' },
+      // **이 설치가 그릴 수 있는 그림 전부.** 없으면 도메인을 얹는 사람이 차트
+      // 라이브러리를 제 손으로 부르게 되고, 그때부터 축 색과 범례 규칙이 갈린다.
+      {
+        label: '차트 보기',
+        icon: ChartColumn,
+        to: '/admin/charts',
+        audience: 'system_admin',
+      },
       // 바뀐 것을 바깥에 알리는 자리 — 감사 기록에 남는 변경이 곧 이벤트다.
       { label: '웹훅', icon: Webhook, to: '/admin/webhooks', audience: 'system_admin' },
       // 바깥 시스템(OData)에서 읽어 채우는 자리 — 웹훅의 반대 방향.
@@ -198,9 +209,11 @@ export function mergeDynamic(groups: NavGroup[], dynamic: DynamicGroup[]): NavGr
     audience: (group.audience as NavAudience) ?? 'everyone',
     items: group.items.map((item) => ({
       label: item.label,
-      // 아이콘 이름은 데이터에서 온다. **모르는 이름이면 기본으로 떨어진다** —
-      // 메뉴가 통째로 안 뜨는 것보다 낫다.
-      icon: LayoutGrid,
+      // 아이콘 이름은 데이터에서 온다(타입 정의의 `icon`). **모르는 이름이면 기본으로
+      // 떨어진다** — 메뉴가 통째로 안 뜨는 것보다 낫다. 여기서 전부 같은 그림으로
+      // 두면 타입이 열둘쯤 될 때 사이드바가 **이름을 한 자씩 읽어야 하는 목록**이
+      // 된다. 눈은 모양을 먼저 잡는데, 모양이 하나뿐이면 그 능력이 안 쓰인다.
+      icon: iconOf(item.icon),
       to: item.to,
     })),
   }))

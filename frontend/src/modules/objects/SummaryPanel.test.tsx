@@ -1,13 +1,49 @@
 /**
- * 묶어 보기가 지키는 것 — **합이 전체와 맞고, 안 맞으면 그 차이를 적고, 막대는 거르기가 된다.**
+ * 묶어 보기가 지키는 것 — **목록과 같은 거르기를 넘기고, 합이 안 맞으면 그 차이를 적고,
+ * 막대를 누르면 원래 값으로 거른다.**
+ *
+ * 그림 자체는 `shared/charts` 의 몫이라 여기서는 **무엇을 넘기나**만 본다. 그래서
+ * 차트를 가짜로 바꿔 끼우고, 넘어온 행과 `onPick` 을 들여다본다.
  */
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
 const objectApi = vi.hoisted(() => ({ summary: vi.fn() }))
 vi.mock('@/modules/objects/api', () => ({ objectApi }))
+
+/** 가짜 차트 — 행마다 단추 하나. 누르면 진짜 차트가 하듯 **행 그대로** 넘긴다. */
+const charts = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }))
+vi.mock('@/shared/charts', () => ({
+  Chart: ({
+    data,
+    x,
+    onPick,
+    title,
+  }: {
+    data: Record<string, unknown>[]
+    x: string
+    onPick?: (row: Record<string, unknown>) => void
+    title?: string
+  }) => {
+    charts.rows = data
+    return (
+      <div aria-label={title}>
+        {data.map((row) => (
+          <button
+            key={String(row[x])}
+            type="button"
+            disabled={!onPick}
+            onClick={() => onPick?.(row)}
+          >
+            {String(row[x])}
+          </button>
+        ))}
+      </div>
+    )
+  },
+}))
 
 const BASE = {
   group_field: 'properties.grade',
@@ -35,21 +71,21 @@ async function panel(data: object) {
   const { SummaryPanel } = await import('@/modules/objects/SummaryPanel')
   const onPick = vi.fn()
   render(<SummaryPanel typeSlug="part" query={{ q: '볼트' }} onPick={onPick} onClose={vi.fn()} />)
-  await waitFor(() => expect(screen.getByText('(비어 있음)')).toBeInTheDocument())
+  await screen.findByText(/거른 것 전체/)
   return onPick
 }
 
 describe('묶어 보기', () => {
-  it('빈 값도 한 칸으로 보여 주고, 목록과 같은 거르기를 넘긴다', async () => {
+  it('목록과 같은 거르기를 넘기고, 빈 값도 한 칸으로 그린다', async () => {
     await panel(BASE)
-    // **빈 값을 숨기면 막대의 합이 전체와 안 맞고, 그 차이는 화면 어디에도 안 적힌다.**
-    expect(screen.getByText('(비어 있음)')).toBeInTheDocument()
-    expect(screen.getByText('거른 것 전체 5건')).toBeInTheDocument()
     expect(objectApi.summary).toHaveBeenCalledWith(
       'part',
       { q: '볼트' },
       { groupBy: 'status', metric: 'count', metricField: null },
     )
+    // **빈 값을 숨기면 막대의 합이 전체와 안 맞고, 그 차이는 화면 어디에도 안 적힌다.**
+    expect(charts.rows.map((one) => one.name)).toEqual(['A', 'B', '(비어 있음)'])
+    expect(screen.getByText(/거른 것 전체 5건/)).toBeInTheDocument()
   })
 
   it('접힌 그룹이 있으면 몇 종류 몇 건이 빠졌는지 적는다', async () => {
@@ -57,18 +93,35 @@ describe('묶어 보기', () => {
     expect(screen.getByText(/7종류 35건은 접혔습니다/)).toBeInTheDocument()
   })
 
-  it('막대를 누르면 그 값으로 거른다 — 빈 칸은 못 누른다', async () => {
+  it('막대를 누르면 **원래 값**으로 거른다 — 빈 칸은 거를 값이 없다', async () => {
     const onPick = await panel(BASE)
     await userEvent.click(screen.getByRole('button', { name: 'A' }))
     expect(onPick).toHaveBeenCalledWith('properties.grade', 'A')
-    expect(screen.getByRole('button', { name: '(비어 있음)' })).toBeDisabled()
+
+    onPick.mockClear()
+    await userEvent.click(screen.getByRole('button', { name: '(비어 있음)' }))
+    expect(onPick).not.toHaveBeenCalled()
+  })
+
+  it('걸 수 없는 축이면 아예 안 누르게 한다', async () => {
+    await panel({ ...BASE, group_field: 'workspace', group_label: '소유 부서' })
+    expect(screen.getByRole('button', { name: 'A' })).toBeDisabled()
   })
 
   it('셀 숫자 칸이 없으면 합계·평균을 못 고른다', async () => {
     await panel({ ...BASE, metric_options: [] })
     await userEvent.click(screen.getByRole('combobox', { name: '세는 방법' }))
-    await waitFor(() =>
-      expect(screen.getByRole('option', { name: '합계' })).toHaveAttribute('aria-disabled', 'true'),
+    expect(await screen.findByRole('option', { name: '합계' })).toHaveAttribute(
+      'aria-disabled',
+      'true',
     )
+  })
+
+  it('그림 모양을 막대·꺾은선·원으로 바꾼다', async () => {
+    await panel(BASE)
+    const pie = screen.getByRole('button', { name: '원' })
+    expect(pie).toHaveAttribute('aria-pressed', 'false')
+    await userEvent.click(pie)
+    expect(pie).toHaveAttribute('aria-pressed', 'true')
   })
 })

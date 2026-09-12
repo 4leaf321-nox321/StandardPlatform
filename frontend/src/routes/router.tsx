@@ -42,6 +42,8 @@ const OntologyImportPage = lazy(() => import('@/modules/ontology/OntologyImportP
 const NotificationsPage = lazy(() => import('@/modules/notifications/NotificationsPage'))
 const ProfilePage = lazy(() => import('@/modules/auth/ProfilePage'))
 const ServerPage = lazy(() => import('@/modules/server/ServerPage'))
+// 차트 층 자신의 문서다 — 도메인 모듈이 아니라 `shared/charts` 에 산다.
+const ChartGalleryPage = lazy(() => import('@/shared/charts/GalleryPage'))
 const WebhooksPage = lazy(() => import('@/modules/webhooks/WebhooksPage'))
 const DataSourcesPage = lazy(() => import('@/modules/datasources/DataSourcesPage'))
 const SignupPage = lazy(() => import('@/modules/auth/SignupPage'))
@@ -107,6 +109,7 @@ export const router = createBrowserRouter([
 
           // 관리 (전사)
           { path: 'admin/accounts', element: <AccountsAdminPage /> },
+          { path: 'admin/charts', element: <ChartGalleryPage /> },
           // **두 번째 사이드바.** 묶음과 타입을 각각 제 화면에서 본다 —
           // 한 화면에 쌓으면 「지금 어디를 보고 있나」 를 화면이 말해 주지 못한다.
           {

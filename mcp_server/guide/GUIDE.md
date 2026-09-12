@@ -52,7 +52,7 @@ GUIDE_VERSION: 2026-09-12g
   "groups": [{"slug": "sim", "label": "시뮬레이션"}],
   "types": [
     {"slug": "sim_tool", "label": "시뮬레이션 툴", "nav_group_slug": "sim",
-     "key_policy": "required",
+     "key_policy": "required", "icon": "Cog",
      "properties": [
        {"key": "vendor", "label": "공급사", "data_type": "text"},
        {"key": "license", "label": "라이선스", "data_type": "enum",
@@ -66,6 +66,12 @@ GUIDE_VERSION: 2026-09-12g
 }
 ```
 
+- **`icon` 을 골라 준다.** 사이드바에 설 그림 이름(lucide)이다. 안 주면 타입이 전부
+  같은 네모로 서고, 그러면 사람이 메뉴에서 이름을 한 자씩 읽어야 한다. 뜻이 가까운
+  것으로: `Box`(부품) · `Cog`(설비·툴) · `FlaskConical`(시험) · `Microscope`(해석) ·
+  `Building2`(조직) · `Users`(사람) · `FileText`(문서) · `Truck`(물류) ·
+  `ClipboardCheck`(검사) · `Target`(지표) · `Database`(기준정보) · `Workflow`(공정).
+  모르는 이름을 주면 기본 그림으로 떨어질 뿐 오류는 아니다.
 - **더하고 고치기만 한다.** 스키마에 없다고 지우지 않는다.
 - `apply=false` 응답의 `warnings` 가 **조용히 잃는 것**이다(값 종류가 바뀌어 저장값이
   안 맞게 되는 것 등). 반드시 사람에게 보여 준다.

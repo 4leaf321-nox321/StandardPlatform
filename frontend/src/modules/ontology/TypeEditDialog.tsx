@@ -24,6 +24,7 @@ import type {
 } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
+import { IconPicker } from '@/shared/components/IconPicker'
 import { Button } from '@/shared/components/ui/button'
 import {
   Dialog,
@@ -67,6 +68,7 @@ export function TypeEditDialog({
   onChanged,
 }: Props) {
   const [label, setLabel] = useState(type.label)
+  const [icon, setIcon] = useState(type.icon || 'LayoutGrid')
   const [description, setDescription] = useState(type.description)
   const [group, setGroup] = useState(type.nav_group_slug ?? NONE)
   const [kindClass, setKindClass] = useState<string>(type.kind_class)
@@ -95,6 +97,7 @@ export function TypeEditDialog({
       await ontologyApi.updateType(type.slug, {
         label,
         description,
+        icon,
         nav_group_slug: group === NONE ? null : group,
         kind_class: kindClass,
         system_source: kindClass === 'system' ? systemSource : '',
@@ -163,6 +166,13 @@ export function TypeEditDialog({
                   value={description}
                   onChange={(event) => setDescription(event.target.value)}
                 />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="type-edit-icon">아이콘</Label>
+                {/* 사이드바와 목록에 서는 그림. 전부 같은 네모면 타입이 열둘쯤 될 때
+                    이름을 한 자씩 읽어야 한다 — 눈은 모양을 먼저 잡는다. */}
+                <IconPicker id="type-edit-icon" value={icon} onChange={setIcon} />
               </div>
 
               <div className="space-y-1.5">

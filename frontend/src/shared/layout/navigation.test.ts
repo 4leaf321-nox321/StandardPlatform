@@ -6,7 +6,15 @@
 
 import { describe, expect, it } from 'vitest'
 
-import { NAV_GROUPS, canSee, itemHref, pendingItems, visibleGroups } from '@/shared/layout/navigation'
+import { DEFAULT_ICON, iconOf } from '@/shared/icons'
+
+import {
+  NAV_GROUPS,
+  canSee,
+  itemHref,
+  pendingItems,
+  visibleGroups,
+} from '@/shared/layout/navigation'
 
 const ADMIN = { isSystemAdmin: true, isAnyManager: true }
 const MANAGER = { isSystemAdmin: false, isAnyManager: true }
@@ -87,6 +95,29 @@ describe('사이드바', () => {
       },
     ])
     expect(after.some((group) => group.items.some((item) => item.to === '/domain'))).toBe(false)
+  })
+
+  it('타입이 고른 그림이 사이드바에 선다', () => {
+    // 전부 같은 네모면 타입이 열둘쯤 될 때 사이드바가 **이름을 한 자씩 읽어야 하는
+    // 목록**이 된다. 눈은 모양을 먼저 잡는데, 모양이 하나뿐이면 그 능력이 안 쓰인다.
+    const groups = visibleGroups(ADMIN, [
+      {
+        slug: 'domain',
+        label: '도메인',
+        icon: '',
+        audience: 'everyone',
+        items: [
+          { label: '공구', icon: 'Wrench', to: '/o/tool', slug: 'tool' },
+          { label: '시험', icon: 'FlaskConical', to: '/o/test', slug: 'test' },
+          // **모르는 이름이면 기본으로 떨어진다** — 메뉴가 통째로 안 뜨는 것보다 낫다.
+          { label: '옛것', icon: '없는이름', to: '/o/old', slug: 'old' },
+        ],
+      },
+    ])
+    const [tool, test, old] = groups[1].items
+    expect(tool.icon).toBe(iconOf('Wrench'))
+    expect(test.icon).not.toBe(tool.icon)
+    expect(old.icon).toBe(DEFAULT_ICON)
   })
 
   it('정의가 없으면 정적 메뉴 그대로다', () => {

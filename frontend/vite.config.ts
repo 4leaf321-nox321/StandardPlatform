@@ -34,6 +34,10 @@ export default defineConfig({
   },
   build: {
     outDir: 'dist',
-    chunkSizeWarningLimit: 700,
+    // **plotly 한 덩어리가 4MB 다**(`shared/charts/LazyPlot`). 히트맵·사케이·3차원을
+    // 그리는 화면을 열 때만 받으므로 첫 화면에는 안 실린다 — 그래서 이 경고는 늘
+    // 켜져 있게 되고, 늘 켜진 경고는 **진짜 커진 덩어리를 가린다.** 한도를 그 위로
+    // 올리되 이유를 여기 적어 둔다.
+    chunkSizeWarningLimit: 4200,
   },
 })

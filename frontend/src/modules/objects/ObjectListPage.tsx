@@ -5,7 +5,7 @@
  * `navigation.ts` 가 정적 화면의 정본이라는 규칙과 `router.test.tsx` 가 그대로 선다.
  */
 
-import { useMemo, useState } from 'react'
+import { Suspense, lazy, useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
 import { BarChart3, Download, FileUp, Plus } from 'lucide-react'
 
@@ -25,7 +25,6 @@ import { propertyText } from '@/modules/objects/PropertyFields'
 import { ObjectCreateDialog } from '@/modules/objects/ObjectCreateDialog'
 import { ObjectImportDialog } from '@/modules/objects/ObjectImportDialog'
 import { ObjectTree } from '@/modules/objects/ObjectTree'
-import { SummaryPanel } from '@/modules/objects/SummaryPanel'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -54,8 +53,20 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table'
+import { TypeIcon } from '@/shared/components/TypeIcon'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
+
+/**
+ * 묶어 보기는 **누를 때 받는다.**
+ *
+ * 차트 라이브러리가 이 화면 덩어리에 들어가면, 그림을 한 번도 안 여는 사람까지
+ * 목록을 볼 때마다 그만큼을 받는다. 목록은 이 플랫폼에서 가장 자주 여는 화면이라
+ * 그 값이 가장 비싸게 매겨진다.
+ */
+const SummaryPanel = lazy(() =>
+  import('@/modules/objects/SummaryPanel').then((mod) => ({ default: mod.SummaryPanel })),
+)
 
 /** 「거르지 않음」 을 나타내는 값. **빈 문자열을 쓸 수 없다** — Select 가 빈 값을
  *  「고른 것 없음」 으로 보고 자리표시자로 돌아간다. */
@@ -285,7 +296,18 @@ export default function ObjectListPage() {
 
       <div className="min-w-0 flex-1">
         <PageHeader
-          title={type?.label ?? '…'}
+          title={
+            type ? (
+              <span className="flex items-center gap-2">
+                {/* 사이드바에서 누른 그림이 여기에도 선다 — 같은 것을 보고 있다는
+                    확인이 없으면, 타입이 여럿일 때 「내가 뭘 열었지」 를 묻게 된다. */}
+                <TypeIcon name={type.icon} className="size-5" />
+                {type.label}
+              </span>
+            ) : (
+              '…'
+            )
+          }
           description={type?.description || undefined}
           actions={
             type &&
@@ -464,23 +486,31 @@ export default function ObjectListPage() {
 
         {grouping && type && !isSystem && (
           <div className="mb-4">
-            <SummaryPanel
-              typeSlug={typeSlug}
-              query={exportQuery}
-              onClose={() => setGrouping(false)}
-              onPick={(field, key) => {
-                // **누른 막대가 곧 거르기다.** 여기서 거르기 칸으로 돌아가 값을 다시
-                // 치게 하면, 그 한 번이 사람을 엑셀로 돌려보낸다.
-                if (key === null) return
-                if (field === 'status') return
-                const propertyKey = field.slice('properties.'.length)
-                const rest = conditions.filter(
-                  (one) => !(one.field === propertyKey && one.op === 'eq'),
-                )
-                setConditions([...rest, { field: propertyKey, op: 'eq', value: key }])
-                setOffset(0)
-              }}
-            />
+            <Suspense
+              fallback={
+                <p className="text-muted-foreground rounded-md border p-4 text-sm">
+                  묶어 보기를 준비하는 중…
+                </p>
+              }
+            >
+              <SummaryPanel
+                typeSlug={typeSlug}
+                query={exportQuery}
+                onClose={() => setGrouping(false)}
+                onPick={(field, key) => {
+                  // **누른 막대가 곧 거르기다.** 여기서 거르기 칸으로 돌아가 값을 다시
+                  // 치게 하면, 그 한 번이 사람을 엑셀로 돌려보낸다.
+                  if (key === null) return
+                  if (field === 'status') return
+                  const propertyKey = field.slice('properties.'.length)
+                  const rest = conditions.filter(
+                    (one) => !(one.field === propertyKey && one.op === 'eq'),
+                  )
+                  setConditions([...rest, { field: propertyKey, op: 'eq', value: key }])
+                  setOffset(0)
+                }}
+              />
+            </Suspense>
           </div>
         )}
 
