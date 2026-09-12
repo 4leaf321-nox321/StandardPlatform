@@ -100,6 +100,26 @@ export interface ImportPlan {
   counts: Record<'create' | 'update' | 'unchanged' | 'error', number>
 }
 
+/** 여럿 골라 한 칸 바꾸기의 계획 — 행마다 무엇이 되는지. */
+export interface BulkEditRow {
+  id: string
+  label: string
+  action: 'change' | 'unchanged' | 'error'
+  before: string
+  after: string
+  message: string
+}
+
+export interface BulkEditPlan {
+  applied: boolean
+  field: string
+  field_label: string
+  rows: BulkEditRow[]
+  counts: Record<string, number>
+  /** 고를 수 있는 칸 — 고르개가 이것만 보여 준다. */
+  fields: { field: string; label: string }[]
+}
+
 /** 이 객체를 가리키는 것 — 지우기 전에 보는 것. */
 export interface References {
   property_refs: {
@@ -400,6 +420,16 @@ export const objectApi = {
     ),
   importRelations: (typeSlug: string, file: File, opts: { apply: boolean }) =>
     api.postForm<ImportPlan>(`/objects/${typeSlug}/relations/import`, importForm(file, opts.apply)),
+  /**
+   * 고른 것들의 **한 칸**을 바꾼다 — `apply: false`(기본)면 계획만.
+   *
+   * 한 칸씩인 이유: 여러 칸을 동시에 바꾸면 그 창은 곧 「폼」 이 되고, 실수 한 번의
+   * 크기가 수백 배가 된다.
+   */
+  bulkEdit: (
+    typeSlug: string,
+    body: { ids: string[]; field: string; value: unknown; apply: boolean },
+  ) => api.post<BulkEditPlan>(`/objects/${typeSlug}/bulk-edit`, body),
   list: (typeSlug: string, query: ObjectQuery = {}) =>
     api.get<Page<ObjectRow>>(`/objects/${typeSlug}${queryString(query)}`),
   /**

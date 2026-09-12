@@ -4542,6 +4542,59 @@
         }
       }
     },
+    "/api/objects/{type_slug}/bulk-edit": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Bulk Edit",
+        "description": "고른 것들의 **한 칸**을 바꾼다 — `apply=false`(기본)면 계획만.\n\n한 칸씩인 이유: 여러 칸을 동시에 바꾸게 하면 이 화면은 곧 「폼」 이 되고, 그때\n실수 한 번의 크기가 수백 배가 된다.\n\n못 고치는 것(남의 부서 것)이 섞여 있으면 **조용히 건너뛰지 않고** 행마다 이유를\n적는다 — 건너뛴 것은 「바꿨다」 고 믿은 사람에게 나중에 다른 값으로 나타난다.",
+        "operationId": "bulk_edit_api_objects__type_slug__bulk_edit_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkEditRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkEditPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/template": {
       "get": {
         "tags": [
@@ -7214,6 +7267,127 @@
           "count"
         ],
         "title": "BucketOut"
+      },
+      "BulkEditPlanOut": {
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "field_label": {
+            "type": "string",
+            "title": "Field Label"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/BulkEditRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "fields": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "field",
+          "field_label",
+          "rows",
+          "counts",
+          "fields"
+        ],
+        "title": "BulkEditPlanOut",
+        "description": "**계획 먼저.** 몇 건이 바뀌고, 몇 건이 이미 그 값이고, 몇 건은 왜 안 되나."
+      },
+      "BulkEditRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Ids"
+          },
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "value": {
+            "title": "Value"
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids",
+          "field"
+        ],
+        "title": "BulkEditRequest"
+      },
+      "BulkEditRow": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "before": {
+            "type": "string",
+            "title": "Before"
+          },
+          "after": {
+            "type": "string",
+            "title": "After"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "action",
+          "before",
+          "after",
+          "message"
+        ],
+        "title": "BulkEditRow"
       },
       "ChangeOut": {
         "properties": {

@@ -5,11 +5,12 @@
  * `navigation.ts` 가 정적 화면의 정본이라는 규칙과 `router.test.tsx` 가 그대로 선다.
  */
 
-import { Suspense, lazy, useMemo, useState } from 'react'
+import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { BarChart3, Download, FileUp, Plus } from 'lucide-react'
+import { BarChart3, Download, FileUp, Pencil, Plus } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
+import { workspaceApi } from '@/modules/workspaces/api'
 import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
 import type {
@@ -25,6 +26,7 @@ import { ConditionBar } from '@/modules/objects/ConditionBar'
 import { ViewPicker } from '@/modules/objects/ViewPicker'
 import { propertyText } from '@/modules/objects/PropertyFields'
 import { ObjectCreateDialog } from '@/modules/objects/ObjectCreateDialog'
+import { BulkEditDialog } from '@/modules/objects/BulkEditDialog'
 import { ObjectImportDialog } from '@/modules/objects/ObjectImportDialog'
 import { ObjectTree } from '@/modules/objects/ObjectTree'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -224,6 +226,13 @@ export default function ObjectListPage() {
   /** 묶어 보기 설정 — **여기가 들고 있다.** 뷰를 불러오면 그 뷰의 축으로 열려야 하고,
    *  저장할 때는 지금 축이 함께 담겨야 한다. 패널이 혼자 들면 둘 다 못 한다. */
   const [summary, setSummary] = useState<SummarySettings>(DEFAULT_SUMMARY)
+  /** 고른 줄 — **쪽을 넘기면 푼다.** 안 보이는 것을 고른 채로 두면 「10건 골랐다」 는
+   *  말과 눈에 보이는 것이 어긋나고, 그때 사람은 무엇을 바꾸는지 모른다. */
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [bulkEditing, setBulkEditing] = useState(false)
+  // 소유 부서를 바꿀 때 고를 것 — **내가 관리하는 부서만** 서버가 받아 준다. 목록은
+  // 내 소속을 주고, 못 고르는 것은 서버가 행마다 이유를 적는다.
+  const myWorkspaces = useResource(() => workspaceApi.list(), [])
   const [importing, setImporting] = useState(false)
   /** 내보내기 실패 — 새 탭이 아니라 이 화면에 떠야 한다. 조용히 실패하면 아무 일도 안 일어난 것처럼 보인다. */
   const [exportError, setExportError] = useState<Error | null>(null)
@@ -239,6 +248,11 @@ export default function ObjectListPage() {
   /** 연도가 뜻을 갖는 축인가. `evergreen` 이면 토글을 안 그린다 — **없는 것을
    *  있는 척하지 않는다.** */
   const yearApplies = Boolean(foundType && foundType.temporal_kind !== 'evergreen')
+
+  // 목록이 달라지면 고른 것을 푼다(쪽 넘김·거르기·타입 바꾸기).
+  useEffect(() => {
+    setPicked(new Set())
+  }, [typeSlug, query, JSON.stringify(conditions), under, deep, year, offset])
 
   const list = useResource(
     () =>
@@ -554,6 +568,22 @@ export default function ObjectListPage() {
           </div>
         )}
 
+        {/* **고른 것이 있으면 무엇을 할 수 있는지 그 자리에 뜬다.** 위쪽 도구 막대에
+            숨겨 두면 고른 사람은 그것을 찾지 못하고, 결국 한 건씩 연다. */}
+        {picked.size > 0 && !isSystem && (
+          <div className="bg-muted/50 mb-4 flex flex-wrap items-center gap-3 rounded-md border p-3">
+            <span className="text-sm">
+              <strong>{picked.size}건</strong> 골랐습니다
+            </span>
+            <Button size="sm" onClick={() => setBulkEditing(true)}>
+              <Pencil className="mr-1 size-4" />한 칸 바꾸기
+            </Button>
+            <Button size="sm" variant="ghost" onClick={() => setPicked(new Set())}>
+              고른 것 풀기
+            </Button>
+          </div>
+        )}
+
         {list.error && <ErrorNotice error={list.error} />}
 
         {list.data && list.data.items.length === 0 ? (
@@ -594,6 +624,27 @@ export default function ObjectListPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {/* 고르기는 **고칠 수 있는 타입에서만** — 투영 타입은 여기서 안 고친다. */}
+                  {!isSystem && (
+                    <TableHead className="w-8">
+                      <input
+                        type="checkbox"
+                        aria-label="이 쪽 전부 고르기"
+                        className="size-4"
+                        checked={
+                          (list.data?.items.length ?? 0) > 0 &&
+                          picked.size === (list.data?.items.length ?? 0)
+                        }
+                        onChange={(event) =>
+                          setPicked(
+                            event.target.checked
+                              ? new Set((list.data?.items ?? []).map((one) => one.id))
+                              : new Set(),
+                          )
+                        }
+                      />
+                    </TableHead>
+                  )}
                   {columns.map((column) => (
                     <TableHead key={column.id}>{column.label}</TableHead>
                   ))}
@@ -611,13 +662,31 @@ export default function ObjectListPage() {
                     key={row.id}
                     className="hover:bg-muted/50 cursor-pointer"
                     onClick={(event) => {
-                      // 안에 있는 링크·단추를 눌렀으면 그쪽이 한다 — 두 번 가지 않는다.
-                      if ((event.target as HTMLElement).closest('a,button')) return
+                      // 안에 있는 링크·단추·체크를 눌렀으면 그쪽이 한다 — 두 번 가지 않는다.
+                      if ((event.target as HTMLElement).closest('a,button,input,label')) return
                       // 글자를 끌어 고른 것은 열려는 것이 아니다.
                       if (window.getSelection()?.toString()) return
                       navigate(`/o/${typeSlug}/${row.id}`)
                     }}
                   >
+                    {!isSystem && (
+                      <TableCell className="w-8">
+                        <input
+                          type="checkbox"
+                          aria-label={`${row.label} 고르기`}
+                          className="size-4"
+                          checked={picked.has(row.id)}
+                          onChange={(event) =>
+                            setPicked((before) => {
+                              const next = new Set(before)
+                              if (event.target.checked) next.add(row.id)
+                              else next.delete(row.id)
+                              return next
+                            })
+                          }
+                        />
+                      </TableCell>
+                    )}
                     {columns.map((column, index) => (
                       <TableCell key={column.id}>
                         {index === 0 ? (
@@ -659,6 +728,20 @@ export default function ObjectListPage() {
           </div>
         )}
       </div>
+
+      {type && bulkEditing && (
+        <BulkEditDialog
+          typeSlug={typeSlug}
+          ids={[...picked]}
+          defs={type.properties}
+          workspaces={(myWorkspaces.data ?? []).map((one) => ({ slug: one.slug, name: one.name }))}
+          onClose={() => setBulkEditing(false)}
+          onApplied={() => {
+            list.reload()
+            setPicked(new Set())
+          }}
+        />
+      )}
 
       {type && importing && (
         <ObjectImportDialog

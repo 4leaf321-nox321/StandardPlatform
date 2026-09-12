@@ -476,3 +476,36 @@ class WatchRequest(BaseModel):
 class WatchOut(BaseModel):
     watching: bool
     watcher_count: int
+
+
+# --- 여럿 골라 한 칸 바꾸기 ----------------------------------------------------
+
+
+class BulkEditRow(BaseModel):
+    id: uuid.UUID
+    label: str
+    action: str
+    """change · unchanged · error."""
+    before: str
+    after: str
+    message: str
+
+
+class BulkEditPlanOut(BaseModel):
+    """**계획 먼저.** 몇 건이 바뀌고, 몇 건이 이미 그 값이고, 몇 건은 왜 안 되나."""
+
+    applied: bool
+    field: str
+    field_label: str
+    rows: list[BulkEditRow]
+    counts: dict[str, int]
+    fields: list[dict[str, str]]
+    """고를 수 있는 칸 — 화면의 고르개가 이것만 보여 준다."""
+
+
+class BulkEditRequest(BaseModel):
+    ids: list[uuid.UUID] = Field(min_length=1)
+    field: str
+    """status · description · workspace · properties.<칸>."""
+    value: Any = None
+    apply: bool = False

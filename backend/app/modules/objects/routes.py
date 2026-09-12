@@ -22,6 +22,7 @@ from app.modules.files.models import Attachment
 from app.modules.objects import (
     aliases,
     bulk,
+    bulkedit,
     conditions,
     graph,
     history,
@@ -47,6 +48,9 @@ from app.modules.objects.schemas import (
     AliasesRequest,
     AttachmentBrief,
     BucketOut,
+    BulkEditPlanOut,
+    BulkEditRequest,
+    BulkEditRow,
     GroupOptionOut,
     HistoryEntryOut,
     HomeWidgetOut,
@@ -826,6 +830,115 @@ def _import_objects(
         db, user, object_type, rows, owner_workspace_id=owner_workspace_id
     )
     return _plan_out(plan, applied=False)
+
+
+@router.post("/{type_slug}/bulk-edit", response_model=BulkEditPlanOut)
+def bulk_edit(
+    type_slug: str,
+    payload: BulkEditRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> BulkEditPlanOut:
+    """고른 것들의 **한 칸**을 바꾼다 — `apply=false`(기본)면 계획만.
+
+    한 칸씩인 이유: 여러 칸을 동시에 바꾸게 하면 이 화면은 곧 「폼」 이 되고, 그때
+    실수 한 번의 크기가 수백 배가 된다.
+
+    못 고치는 것(남의 부서 것)이 섞여 있으면 **조용히 건너뛰지 않고** 행마다 이유를
+    적는다 — 건너뛴 것은 「바꿨다」 고 믿은 사람에게 나중에 다른 값으로 나타난다.
+    """
+    object_type = _type(db, type_slug)
+    if system.is_system(object_type):
+        raise Conflict(
+            code("OBJECTS", 56),
+            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 못 고칩니다.",
+        )
+    ids = bulkedit.ids_of(payload.ids)
+    # **볼 수 있는 것만 손댄다.** 목록과 같은 가시성 규칙이다.
+    rows = list(
+        db.scalars(
+            select(ObjectInstance).where(
+                ObjectInstance.id.in_(ids),
+                ObjectInstance.type_id == object_type.id,
+                ObjectInstance.deleted_at.is_(None),
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+            )
+        )
+    )
+    planned = bulkedit.plan(
+        db,
+        user,
+        object_type,
+        ids=ids,
+        field_name=payload.field,
+        value=payload.value,
+        rows=rows,
+    )
+    if payload.apply and planned.ok:
+        before = {
+            row.id: {
+                "key": row.key,
+                "label": row.label,
+                "status": row.status,
+                "properties": dict(row.properties or {}),
+            }
+            for row in rows
+        }
+        bulkedit.apply_to(
+            db,
+            user,
+            object_type,
+            field_name=payload.field,
+            value=payload.value,
+            rows=rows,
+            planned=planned,
+        )
+        db.flush()
+        changed = {one.id for one in planned.rows if one.action == "change"}
+        for row in rows:
+            if row.id not in changed:
+                continue
+            # **한 건씩 기록한다.** 한 줄로 뭉뚱그리면 그 객체의 이력에서 이 변경이
+            # 사라지고, 지켜보는 사람에게도 안 간다.
+            audit.record(
+                db,
+                action="object.update",
+                actor=user,
+                target_table="objects",
+                target_id=row.id,
+                target_label=f"{object_type.slug}:{row.label}",
+                workspace_id=row.owner_workspace_id,
+                changes=audit.diff(
+                    before[row.id],
+                    {
+                        "key": row.key,
+                        "label": row.label,
+                        "status": row.status,
+                        "properties": dict(row.properties or {}),
+                    },
+                ),
+                reason=f"여럿 골라 고치기 — {planned.field_label}",
+            )
+        db.commit()
+        planned.applied = True
+    return BulkEditPlanOut(
+        applied=planned.applied,
+        field=payload.field,
+        field_label=planned.field_label,
+        rows=[
+            BulkEditRow(
+                id=one.id,
+                label=one.label,
+                action=one.action,
+                before=one.before,
+                after=one.after,
+                message=one.message,
+            )
+            for one in planned.rows
+        ],
+        counts=planned.counts,
+        fields=bulkedit.selectable(object_type, properties_of(db, object_type.id)),
+    )
 
 
 @router.get("/{type_slug}/template")
