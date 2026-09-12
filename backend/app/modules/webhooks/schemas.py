@@ -28,7 +28,8 @@ class WebhookWriteRequest(BaseModel):
     url: str = Field(min_length=1, max_length=500)
     secret: str = Field(default="", max_length=200)
     events: list[str] = Field(min_length=1)
-    """`object.*` · `object.relation.add` · `*`. 비우면 아무것도 안 보내므로 하나는 있어야 한다."""
+    """`object.*` · `object.relation.add` · `*`. 비우면 아무것도 안 보내므로 하나는
+    있어야 한다."""
     type_slugs: list[str] | None = None
     is_active: bool = True
 

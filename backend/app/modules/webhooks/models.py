@@ -6,8 +6,9 @@
 
 ## 무엇을 보내나
 
-감사 기록에 남는 것 전부가 후보다(`object.create` · `object.relation.add` · `ontology.type.update`
-…). 웹훅마다 `events`(패턴, `object.*` 처럼)와 `type_slugs`(객체 타입)로 거른다.
+감사 기록에 남는 것 전부가 후보다(`object.create` · `object.relation.add` ·
+`ontology.type.update` …). 웹훅마다 `events`(패턴, `object.*` 처럼)와 `type_slugs`(객체
+타입)로 거른다.
 받는 쪽은 `X-Signature-256`(HMAC-SHA256, secret)으로 진짜인지 확인한다.
 """
 
