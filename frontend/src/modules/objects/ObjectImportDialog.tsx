@@ -29,6 +29,7 @@ import {
   DialogTitle,
 } from '@/shared/components/ui/dialog'
 import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
+import { Textarea } from '@/shared/components/ui/textarea'
 
 type Kind = 'objects' | 'relations'
 
@@ -46,7 +47,10 @@ const ACTION_LABEL: Record<ImportRow['action'], string> = {
   error: '오류',
 }
 
-const ACTION_VARIANT: Record<ImportRow['action'], 'default' | 'secondary' | 'outline' | 'destructive'> = {
+const ACTION_VARIANT: Record<
+  ImportRow['action'],
+  'default' | 'secondary' | 'outline' | 'destructive'
+> = {
   create: 'default',
   update: 'secondary',
   unchanged: 'outline',
@@ -61,6 +65,7 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
   const myWorkspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
   const [kind, setKind] = useState<Kind>('objects')
   const [file, setFile] = useState<File | null>(null)
+  const [pasted, setPasted] = useState('')
   const [plan, setPlan] = useState<ImportPlan | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error | null>(null)
@@ -100,8 +105,12 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
     setError(null)
   }
 
-  const canApply = Boolean(plan && !plan.applied && plan.errors.length === 0 && plan.counts.error === 0)
-  const nothingToDo = Boolean(plan && plan.counts.create + plan.counts.update === 0 && plan.counts.error === 0)
+  const canApply = Boolean(
+    plan && !plan.applied && plan.errors.length === 0 && plan.counts.error === 0,
+  )
+  const nothingToDo = Boolean(
+    plan && plan.counts.create + plan.counts.update === 0 && plan.counts.error === 0,
+  )
   const shownRows = plan
     ? plan.rows.filter(
         (one) => one.action !== 'unchanged' || plan.rows.length <= SHOW_UNCHANGED_BELOW,
@@ -114,8 +123,8 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
         <DialogHeader>
           <DialogTitle>{type.label} 파일로 넣기</DialogTitle>
           <DialogDescription>
-            올리면 먼저 <strong>무엇이 바뀔지</strong>를 보여 줍니다. 한 행이라도 틀리면 아무것도
-            안 넣습니다 — 고쳐서 다시 올리세요.
+            올리면 먼저 <strong>무엇이 바뀔지</strong>를 보여 줍니다. 한 행이라도 틀리면 아무것도 안
+            넣습니다 — 고쳐서 다시 올리세요.
           </DialogDescription>
         </DialogHeader>
 
@@ -142,8 +151,8 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
                 입니다 — 비우려면 <code>\null</code> 을 적습니다.
               </p>
               <p>
-                여러 값은 <code>;</code> 로, 참조는 상대의 식별자(없으면 이름)로. 엑셀에서는
-                「CSV UTF-8」 로 저장하세요.
+                여러 값은 <code>;</code> 로, 참조는 상대의 식별자(없으면 이름)로. 엑셀에서는 「CSV
+                UTF-8」 로 저장하세요.
               </p>
             </>
           ) : (
@@ -154,7 +163,11 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
           )}
           <div className="flex flex-wrap gap-2 pt-1">
             {kind === 'objects' && (
-              <Button size="xs" variant="outline" onClick={() => download(() => objectApi.template(type.slug))}>
+              <Button
+                size="xs"
+                variant="outline"
+                onClick={() => download(() => objectApi.template(type.slug))}
+              >
                 <Download className="mr-1 size-3" />
                 템플릿 받기
               </Button>
@@ -182,7 +195,10 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
             type="file"
             accept=".csv,.json,text/csv,application/json"
             className="text-sm"
-            onChange={(event) => pick(event.target.files?.[0] ?? null)}
+            onChange={(event) => {
+              setPasted('')
+              pick(event.target.files?.[0] ?? null)
+            }}
           />
           <Button size="sm" disabled={!file || busy} onClick={() => void run(false)}>
             {busy && !plan?.applied ? (
@@ -194,6 +210,37 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
           </Button>
         </div>
 
+        {/* 붙여 넣기 — 엑셀에서 복사하면 탭으로 온다. 사내 DRM 이 저장을 잠그면 이것이 유일한 길이다. */}
+        <details className="text-sm" open={pasted !== ''}>
+          <summary className="text-muted-foreground cursor-pointer">
+            파일 대신 붙여 넣기 (엑셀에서 복사 · CSV · JSON)
+          </summary>
+          <Textarea
+            rows={5}
+            value={pasted}
+            placeholder={'key\tlabel\tweight\nP-1\t볼트\t1.5'}
+            className="mt-2 font-mono text-xs"
+            onChange={(event) => {
+              setPasted(event.target.value)
+              const text = event.target.value
+              // 붙여 넣은 글을 파일처럼 넘긴다 — 서버는 같은 길로 읽는다(탭·쉼표를 알아본다).
+              pick(
+                text.trim()
+                  ? new File(
+                      [text],
+                      text.trim().startsWith('{') || text.trim().startsWith('[')
+                        ? 'pasted.json'
+                        : 'pasted.csv',
+                      {
+                        type: 'text/plain',
+                      },
+                    )
+                  : null,
+              )
+            }}
+          />
+        </details>
+
         {error && <ErrorNotice error={error} />}
 
         {plan && (
@@ -202,8 +249,12 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
               <Badge>새로 {plan.counts.create}</Badge>
               <Badge variant="secondary">고침 {plan.counts.update}</Badge>
               <Badge variant="outline">그대로 {plan.counts.unchanged}</Badge>
-              {plan.counts.error > 0 && <Badge variant="destructive">오류 {plan.counts.error}</Badge>}
-              {plan.applied && <span className="text-emerald-600 dark:text-emerald-400">적용했습니다.</span>}
+              {plan.counts.error > 0 && (
+                <Badge variant="destructive">오류 {plan.counts.error}</Badge>
+              )}
+              {plan.applied && (
+                <span className="text-emerald-600 dark:text-emerald-400">적용했습니다.</span>
+              )}
             </div>
             {plan.errors.length > 0 && (
               <ul className="text-destructive space-y-0.5 text-sm">
@@ -226,13 +277,19 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
                   <tbody>
                     {shownRows.map((one) => (
                       <tr key={one.row} className="border-t">
-                        <td className="text-muted-foreground px-2 py-1 text-right tabular-nums">{one.row}</td>
+                        <td className="text-muted-foreground px-2 py-1 text-right tabular-nums">
+                          {one.row}
+                        </td>
                         <td className="px-2 py-1">
-                          <Badge variant={ACTION_VARIANT[one.action]}>{ACTION_LABEL[one.action]}</Badge>
+                          <Badge variant={ACTION_VARIANT[one.action]}>
+                            {ACTION_LABEL[one.action]}
+                          </Badge>
                         </td>
                         <td className="max-w-48 truncate px-2 py-1">
                           {one.label}
-                          {one.key && <span className="text-muted-foreground ml-1 font-mono">{one.key}</span>}
+                          {one.key && (
+                            <span className="text-muted-foreground ml-1 font-mono">{one.key}</span>
+                          )}
                         </td>
                         <td className="px-2 py-1">
                           {one.action === 'error' ? (
@@ -248,7 +305,9 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
               </div>
             )}
             {plan.rows.length > SHOW_UNCHANGED_BELOW && plan.counts.unchanged > 0 && (
-              <p className="text-muted-foreground text-xs">「그대로」 {plan.counts.unchanged}행은 표에서 뺐습니다.</p>
+              <p className="text-muted-foreground text-xs">
+                「그대로」 {plan.counts.unchanged}행은 표에서 뺐습니다.
+              </p>
             )}
           </div>
         )}

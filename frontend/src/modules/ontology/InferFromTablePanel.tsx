@@ -25,6 +25,7 @@ import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
+import { Textarea } from '@/shared/components/ui/textarea'
 import {
   Select,
   SelectContent,
@@ -65,6 +66,7 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
   const { user } = useAuth()
   const fileRef = useRef<HTMLInputElement>(null)
   const [fileName, setFileName] = useState('')
+  const [pasted, setPasted] = useState('')
   const [result, setResult] = useState<InferResult | null>(null)
   const [columns, setColumns] = useState<InferColumn[]>([])
   const [slug, setSlug] = useState('')
@@ -191,6 +193,39 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
         뒤 적용하면 <b>타입이 생기고 행이 그 타입에 들어갑니다.</b> 애매한 열은 글자로 둡니다.
         나중에 좁히는 것은 쉽고, 잘못 좁힌 것을 되돌리는 것은 어렵습니다.
       </p>
+      {/* 붙여 넣기 — 엑셀에서 복사하면 탭으로 온다. 사내 DRM 이 저장을 잠그면 이것이 유일한 길이다. */}
+      <details className="text-sm">
+        <summary className="text-muted-foreground cursor-pointer">
+          파일 대신 붙여 넣기 (엑셀에서 복사 · CSV · JSON)
+        </summary>
+        <div className="mt-2 space-y-2">
+          <Textarea
+            rows={6}
+            value={pasted}
+            placeholder={'코드\t이름\t무게\nP-1\t볼트\t1.5'}
+            className="font-mono text-xs"
+            onChange={(event) => setPasted(event.target.value)}
+          />
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy || !pasted.trim()}
+            onClick={() => {
+              const text = pasted.trim()
+              const isJson = text.startsWith('{') || text.startsWith('[')
+              void load(
+                new File([pasted], isJson ? '붙여넣기.json' : '붙여넣기.csv', {
+                  type: 'text/plain',
+                }),
+              )
+            }}
+          >
+            <Table2 className="mr-1 size-4" />
+            붙여 넣은 표 읽기
+          </Button>
+        </div>
+      </details>
+
       {error && <ErrorNotice error={error} />}
 
       {result && (

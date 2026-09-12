@@ -132,7 +132,12 @@ def parse_file(name: str, raw: bytes) -> list[dict[str, Any]]:
                 code("OBJECTS", 40), 'JSON 은 객체의 배열이거나 {"rows": [...]} 여야 합니다.'
             )
         return rows
-    reader = csv.DictReader(io.StringIO(text))
+    # 구분자를 알아본다 — 엑셀에서 복사해 붙여 넣으면 **탭**으로 온다(사내 DRM 이 저장을
+    # 잠그면 붙여 넣기가 유일한 길이다). 첫 줄에 탭이 있으면 탭, 아니면 쉼표. 세미콜론은
+    # 여러 값의 구분자(`;`)라 구분자로 안 본다.
+    first = text.split("\n", 1)[0]
+    delimiter = "\t" if "\t" in first else ","
+    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
     out: list[dict[str, Any]] = []
     for row in reader:
         # 열 이름의 앞뒤 공백은 사람 눈에 안 보이는 오타다.

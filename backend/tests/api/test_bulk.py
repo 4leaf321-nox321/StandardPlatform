@@ -421,3 +421,20 @@ def test_uuid_모양이어도_없는_객체를_가리키면_거절한다(
     plan = _upload(client, admin, part, f"key,label,vendor\nP-1,볼트,{ghost}\n", apply=True)
     assert plan["applied"] is False
     assert plan["rows"][0]["action"] == "error" and "찾을 수 없" in plan["rows"][0]["message"]
+
+
+def test_붙여_넣은_탭_구분_표도_받는다(client: TestClient, admin: Signed) -> None:
+    """엑셀에서 복사하면 탭으로 온다 — 사내 DRM 이 저장을 잠그면 붙여 넣기가 유일한 길이다."""
+    import io
+
+    part = _part_type(client, admin)
+    text = "key\tlabel\tweight\nP-1\t볼트\t1.5\nP-2\t너트\t0.5\n"
+    planned = client.post(
+        f"/api/objects/{part}/import",
+        files={"file": ("pasted.csv", io.BytesIO(text.encode("utf-8")), "text/csv")},
+        data={"workspace_slug": admin.workspace, "apply": "false"},
+        headers=admin.headers,
+    )
+    assert planned.status_code == 200, planned.text
+    assert [r["action"] for r in planned.json()["rows"]] == ["create", "create"]
+    assert planned.json()["rows"][0]["label"] == "볼트"
