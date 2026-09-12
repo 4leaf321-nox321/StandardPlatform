@@ -94,6 +94,8 @@ class AuditEntry(Base):
         # 느려진 이유는 상세 화면 어디에도 안 적힌다.
         Index("ix_audit_entries_changes_src", text("(changes ->> 'src')")),
         Index("ix_audit_entries_changes_dst", text("(changes ->> 'dst')")),
+        # 여럿 골라 고치기의 묶음 번호 — 「같이 바뀐 것 되돌리기」 가 이것으로 찾는다.
+        Index("ix_audit_entries_changes_batch", text("((changes -> '_batch') ->> 'id')")),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

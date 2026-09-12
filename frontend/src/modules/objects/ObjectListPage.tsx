@@ -27,6 +27,7 @@ import { ViewPicker } from '@/modules/objects/ViewPicker'
 import { propertyText } from '@/modules/objects/PropertyFields'
 import { ObjectCreateDialog } from '@/modules/objects/ObjectCreateDialog'
 import { BulkEditDialog } from '@/modules/objects/BulkEditDialog'
+import { BulkUndoDialog } from '@/modules/objects/BulkUndoDialog'
 import { ObjectImportDialog } from '@/modules/objects/ObjectImportDialog'
 import { ObjectTree } from '@/modules/objects/ObjectTree'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -232,6 +233,8 @@ export default function ObjectListPage() {
    *  말과 눈에 보이는 것이 어긋나고, 그때 사람은 무엇을 바꾸는지 모른다. */
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [bulkEditing, setBulkEditing] = useState(false)
+  /** 되돌릴 묶음 — 여럿 고치기를 적용한 직후 「되돌리기」 로 연다. */
+  const [undoBatch, setUndoBatch] = useState<string | null>(null)
   // 소유 부서를 바꿀 때 고를 것 — **내가 관리하는 부서만** 서버가 받아 준다. 목록은
   // 내 소속을 주고, 못 고르는 것은 서버가 행마다 이유를 적는다.
   const myWorkspaces = useResource(() => workspaceApi.list(), [])
@@ -742,6 +745,19 @@ export default function ObjectListPage() {
             list.reload()
             setPicked(new Set())
           }}
+          onUndo={(batchId) => {
+            setBulkEditing(false)
+            setUndoBatch(batchId)
+          }}
+        />
+      )}
+
+      {undoBatch && (
+        <BulkUndoDialog
+          typeSlug={typeSlug}
+          batchId={undoBatch}
+          onClose={() => setUndoBatch(null)}
+          onApplied={() => list.reload()}
         />
       )}
 

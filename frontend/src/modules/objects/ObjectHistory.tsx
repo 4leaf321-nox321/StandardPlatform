@@ -8,9 +8,10 @@
  */
 
 import { useMemo, useState } from 'react'
-import { ChevronDown, ChevronRight, History, Loader2, RotateCcw } from 'lucide-react'
+import { ChevronDown, ChevronRight, History, Layers, Loader2, RotateCcw } from 'lucide-react'
 
 import { objectApi } from '@/modules/objects/api'
+import { BulkUndoDialog } from '@/modules/objects/BulkUndoDialog'
 import type { HistoryEntry, Snapshot } from '@/modules/objects/api'
 import { propertyText } from '@/modules/objects/PropertyFields'
 import type { PropertyDef } from '@/modules/ontology/api'
@@ -77,6 +78,7 @@ export function ObjectHistory({
   )
   const [expanded, setExpanded] = useState(false)
   const [picked, setPicked] = useState<HistoryEntry | null>(null)
+  const [undoBatch, setUndoBatch] = useState<string | null>(null)
   const byKey = useMemo(() => new Map(defs.map((def) => [def.key, def])), [defs])
 
   const labelOf = (field: string): string => {
@@ -191,11 +193,24 @@ export function ObjectHistory({
           canEdit={canEdit}
           isLatest={entries[0]?.id === picked.id}
           onClose={() => setPicked(null)}
+          onUndoBatch={(batchId) => {
+            setPicked(null)
+            setUndoBatch(batchId)
+          }}
           onRestore={async () => {
             await objectApi.restore(typeSlug, objectId, picked.id)
             setPicked(null)
             onRestored()
           }}
+        />
+      )}
+
+      {undoBatch && (
+        <BulkUndoDialog
+          typeSlug={typeSlug}
+          batchId={undoBatch}
+          onClose={() => setUndoBatch(null)}
+          onApplied={onRestored}
         />
       )}
     </section>
@@ -213,6 +228,8 @@ interface SnapshotDialogProps {
   isLatest: boolean
   onClose: () => void
   onRestore: () => Promise<void>
+  /** 여럿 골라 고치기로 같이 바뀐 기록이면 — 그 묶음을 통째로 되돌린다. */
+  onUndoBatch: (batchId: string) => void
 }
 
 /** 그때와 지금을 나란히 — 다른 칸만 진하게. */
@@ -226,6 +243,7 @@ function SnapshotDialog({
   isLatest,
   onClose,
   onRestore,
+  onUndoBatch,
 }: SnapshotDialogProps) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error | null>(null)
@@ -317,6 +335,25 @@ function SnapshotDialog({
         </table>
 
         {error && <ErrorNotice error={error} />}
+
+        {/* **한 건만 되돌리면 나머지는 틀린 값으로 남는다.** 여럿 골라 고친 기록이면
+            그때 같이 바뀐 것을 한 번에 돌리는 길을 여기 둔다 — 틀린 값을 발견하는
+            자리가 대개 이 이력이다. */}
+        {canEdit && entry.batch && (
+          <div className="bg-muted/50 flex flex-wrap items-center justify-between gap-2 rounded-md px-3 py-2 text-sm">
+            <span>
+              여럿 골라 고치기로 <strong>{entry.batch.size}건</strong>이 함께 바뀐 기록입니다.
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => onUndoBatch((entry.batch as { id: string }).id)}
+            >
+              <Layers className="mr-1 size-3.5" />
+              함께 바뀐 {entry.batch.size}건 되돌리기
+            </Button>
+          </div>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={busy}>

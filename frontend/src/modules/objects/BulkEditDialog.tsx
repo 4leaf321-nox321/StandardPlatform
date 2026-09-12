@@ -17,7 +17,7 @@
  */
 
 import { useEffect, useState } from 'react'
-import { Loader2 } from 'lucide-react'
+import { Loader2, RotateCcw } from 'lucide-react'
 
 import { objectApi } from '@/modules/objects/api'
 import type { BulkEditPlan } from '@/modules/objects/api'
@@ -58,9 +58,19 @@ interface Props {
   workspaces: { slug: string; name: string }[]
   onClose: () => void
   onApplied: () => void
+  /** 적용한 뒤 「되돌리기」 — 방금 바꾼 묶음 번호를 넘긴다. */
+  onUndo?: (batchId: string) => void
 }
 
-export function BulkEditDialog({ typeSlug, ids, defs, workspaces, onClose, onApplied }: Props) {
+export function BulkEditDialog({
+  typeSlug,
+  ids,
+  defs,
+  workspaces,
+  onClose,
+  onApplied,
+  onUndo,
+}: Props) {
   const [field, setField] = useState('status')
   const [value, setValue] = useState<unknown>('active')
   const [plan, setPlan] = useState<BulkEditPlan | null>(null)
@@ -211,6 +221,14 @@ export function BulkEditDialog({ typeSlug, ids, defs, workspaces, onClose, onApp
         )}
 
         <DialogFooter>
+          {/* **실수를 알아채는 때는 대개 누른 직후다.** 그 자리에 되돌리는 길을 둔다 —
+              이력에서 한 건씩 찾아 되돌리게 하면 수백 건은 사실상 못 돌린다. */}
+          {plan?.applied && plan.batch_id && onUndo && (
+            <Button variant="outline" onClick={() => onUndo(plan.batch_id as string)}>
+              <RotateCcw className="mr-1 size-4" />
+              되돌리기
+            </Button>
+          )}
           <Button variant="outline" onClick={onClose} disabled={busy}>
             {plan?.applied ? '닫기' : '취소'}
           </Button>

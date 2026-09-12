@@ -29,9 +29,12 @@ import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
 function shownChanges(changes: AuditEntry['changes']): string {
-  const parts = Object.entries(changes).map(
-    ([key, value]) => `${key}: ${String(value.before ?? '—')} -> ${String(value.after ?? '—')}`,
-  )
+  // `_` 로 시작하는 키는 기록에 붙인 표식(묶음 번호 등)이다 — 칸이 아니다.
+  const parts = Object.entries(changes)
+    .filter(([key]) => !key.startsWith('_'))
+    .map(
+      ([key, value]) => `${key}: ${String(value.before ?? '—')} -> ${String(value.after ?? '—')}`,
+    )
   return parts.join(', ') || '—'
 }
 
@@ -71,9 +74,7 @@ export default function AuditPage() {
           <TableBody>
             {(page.data?.items ?? []).map((one) => (
               <TableRow key={one.id}>
-                <TableCell className="whitespace-nowrap">
-                  {shownDateTime(one.created_at)}
-                </TableCell>
+                <TableCell className="whitespace-nowrap">{shownDateTime(one.created_at)}</TableCell>
                 <TableCell className="font-mono text-xs">{one.action}</TableCell>
                 <TableCell>
                   {one.actor_label}

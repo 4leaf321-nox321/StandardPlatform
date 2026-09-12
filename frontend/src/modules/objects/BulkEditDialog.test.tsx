@@ -90,4 +90,27 @@ describe('여럿 골라 한 칸 바꾸기', () => {
     await waitFor(() => expect(screen.getByRole('button', { name: '바꾸기' })).toBeDisabled())
     expect(screen.queryByText('사용 → 안 씀')).not.toBeInTheDocument()
   })
+
+  it('적용한 뒤에는 그 자리에서 되돌릴 수 있다', async () => {
+    objectApi.bulkEdit
+      .mockResolvedValueOnce(PLAN)
+      .mockResolvedValueOnce({ ...PLAN, applied: true, batch_id: 'batch-9' })
+    const { BulkEditDialog } = await import('@/modules/objects/BulkEditDialog')
+    const onUndo = vi.fn()
+    render(
+      <BulkEditDialog
+        typeSlug="part"
+        ids={['a', 'b', 'c']}
+        defs={[]}
+        workspaces={[]}
+        onClose={vi.fn()}
+        onApplied={vi.fn()}
+        onUndo={onUndo}
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: '계획 보기' }))
+    await userEvent.click(await screen.findByRole('button', { name: '2건 바꾸기' }))
+    await userEvent.click(await screen.findByRole('button', { name: /되돌리기/ }))
+    expect(onUndo).toHaveBeenCalledWith('batch-9')
+  })
 })

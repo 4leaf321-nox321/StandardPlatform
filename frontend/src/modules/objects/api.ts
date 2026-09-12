@@ -112,6 +112,8 @@ export interface BulkEditRow {
 
 export interface BulkEditPlan {
   applied: boolean
+  /** 적용했을 때만 — 같이 바뀐 것을 한 번에 되돌릴 때 이 번호를 쓴다. */
+  batch_id: string | null
   field: string
   field_label: string
   rows: BulkEditRow[]
@@ -173,6 +175,8 @@ export interface HistoryEntry {
   relation: { relation: string; outgoing: boolean; other_id: string; other_label: string } | null
   /** 값 기록에만 있다 — 되돌리기의 목표. */
   snapshot: Snapshot | null
+  /** 여럿 골라 고치기로 **같이 바뀐** 기록이면 그 묶음. 한 번에 되돌리는 입구다. */
+  batch?: { id: string; field_label: string; size: number } | null
 }
 
 /** 조건 하나 — `f.<칸>.<연산>=<값>`. 칸 안에서는 `in` 으로 OR, 칸끼리는 AND. */
@@ -431,6 +435,44 @@ export interface Points {
   group_options: GroupOption[]
 }
 
+/** 묶어 보기의 축 — 그림과 파일이 **같은 주소**를 쓴다(따로 만들면 숫자가 갈린다). */
+export interface SummaryOptions {
+  groupBy: string
+  splitBy?: string | null
+  metric?: string
+  metricField?: string | null
+  order?: string
+}
+
+/** 원값 그림의 칸. */
+export interface PointsOptions {
+  x: string
+  y?: string | null
+  groupBy?: string | null
+}
+
+function summaryParams(query: ObjectQuery, options: SummaryOptions): URLSearchParams {
+  const params = new URLSearchParams(
+    queryString({ ...query, limit: undefined, offset: 0 }).replace(/^\?/, ''),
+  )
+  params.set('group_by', options.groupBy)
+  if (options.splitBy) params.set('split_by', options.splitBy)
+  if (options.order) params.set('order', options.order)
+  if (options.metric) params.set('metric', options.metric)
+  if (options.metricField) params.set('metric_field', options.metricField)
+  return params
+}
+
+function pointsParams(query: ObjectQuery, options: PointsOptions): URLSearchParams {
+  const params = new URLSearchParams(
+    queryString({ ...query, limit: undefined, offset: 0 }).replace(/^\?/, ''),
+  )
+  params.set('x', options.x)
+  if (options.y) params.set('y', options.y)
+  if (options.groupBy) params.set('group_by', options.groupBy)
+  return params
+}
+
 export const objectApi = {
   /** 빈 CSV — 헤더가 「무엇을 채워야 하는지」 를 말한다. */
   template: (typeSlug: string) =>
@@ -476,23 +518,31 @@ export const objectApi = {
     body: { ids: string[]; field: string; value: unknown; apply: boolean },
   ) => api.post<BulkEditPlan>(`/objects/${typeSlug}/bulk-edit`, body),
   /**
+   * 같이 바뀐 것을 **한 번에** 그때 값으로 — `apply: false` 면 계획만.
+   *
+   * 그 뒤에 누가 또 고친 행은 덮어쓰지 않고 이유를 적는다.
+   */
+  bulkEditUndo: (typeSlug: string, batchId: string, apply: boolean) =>
+    api.post<BulkEditPlan>(`/objects/${typeSlug}/bulk-edit/${batchId}/undo`, { apply }),
+  /**
    * **안 센 값들** — 상자 그림과 산점도가 쓴다.
    *
    * 분포는 집계로 안 보인다: 평균이 같은 두 공정이 전혀 다른 모양일 수 있고, 그 차이가
    * 대개 문제의 자리다.
    */
-  points: (
+  points: (typeSlug: string, query: ObjectQuery = {}, options: PointsOptions) =>
+    api.get<Points>(`/objects/${typeSlug}/points?${pointsParams(query, options).toString()}`),
+  /** 상자·산점도에 그린 원값을 파일로 — 행 하나가 객체 하나. */
+  exportPoints: (
     typeSlug: string,
-    query: ObjectQuery = {},
-    options: { x: string; y?: string | null; groupBy?: string | null },
+    query: ObjectQuery,
+    options: PointsOptions,
+    format: 'csv' | 'xlsx',
+    filename: string,
   ) => {
-    const params = new URLSearchParams(
-      queryString({ ...query, limit: undefined, offset: 0 }).replace(/^\?/, ''),
-    )
-    params.set('x', options.x)
-    if (options.y) params.set('y', options.y)
-    if (options.groupBy) params.set('group_by', options.groupBy)
-    return api.get<Points>(`/objects/${typeSlug}/points?${params.toString()}`)
+    const params = pointsParams(query, options)
+    params.set('format', format)
+    return downloadFile(`/objects/${typeSlug}/points/export?${params.toString()}`, filename)
   },
   /** 내가 지켜보는 것 — 최근 바뀐 것부터. **알림은 읽으면 사라지지만 이것은 남는다.** */
   watching: (limit = 10) => api.get<Watched[]>(`/objects/watching?limit=${limit}`),
@@ -504,26 +554,22 @@ export const objectApi = {
    * 거르기를 따로 보내면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느
    * 쪽이 맞는지 아무도 모른다. 그래서 목록이 쓰는 `ObjectQuery` 를 그대로 받는다.
    */
-  summary: (
+  summary: (typeSlug: string, query: ObjectQuery = {}, options: SummaryOptions) =>
+    api.get<Summary>(`/objects/${typeSlug}/summary?${summaryParams(query, options).toString()}`),
+  /**
+   * 묶어 본 표를 파일로 — **화면의 그림과 같은 숫자.** 막대를 보고 손으로 옮겨 적으면
+   * 그 사이에 틀리고, 틀린 숫자가 회의에 들어간다.
+   */
+  exportSummary: (
     typeSlug: string,
-    query: ObjectQuery = {},
-    options: {
-      groupBy: string
-      splitBy?: string | null
-      metric?: string
-      metricField?: string | null
-      order?: string
-    },
+    query: ObjectQuery,
+    options: SummaryOptions,
+    format: 'csv' | 'xlsx',
+    filename: string,
   ) => {
-    const params = new URLSearchParams(
-      queryString({ ...query, limit: undefined, offset: 0 }).replace(/^\?/, ''),
-    )
-    params.set('group_by', options.groupBy)
-    if (options.splitBy) params.set('split_by', options.splitBy)
-    if (options.order) params.set('order', options.order)
-    if (options.metric) params.set('metric', options.metric)
-    if (options.metricField) params.set('metric_field', options.metricField)
-    return api.get<Summary>(`/objects/${typeSlug}/summary?${params.toString()}`)
+    const params = summaryParams(query, options)
+    params.set('format', format)
+    return downloadFile(`/objects/${typeSlug}/summary/export?${params.toString()}`, filename)
   },
   /**
    * 이것이 바뀌면 알려 달라(또는 그만).

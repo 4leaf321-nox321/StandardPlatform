@@ -11,7 +11,11 @@ import type { HistoryEntry } from '@/modules/objects/api'
 import type { PropertyDef } from '@/modules/ontology/api'
 import { ApiError } from '@/shared/api/client'
 
-const objectApi = vi.hoisted(() => ({ history: vi.fn(), restore: vi.fn() }))
+const objectApi = vi.hoisted(() => ({
+  history: vi.fn(),
+  restore: vi.fn(),
+  bulkEditUndo: vi.fn(),
+}))
 vi.mock('@/modules/objects/api', () => ({ objectApi }))
 
 const DEFS = [
@@ -156,5 +160,29 @@ describe('변경 이력', () => {
     await userEvent.click(await screen.findByRole('button', { name: /이 .*1\.2/ }))
     await screen.findByText(/지금과 다른 칸/)
     expect(screen.queryByRole('button', { name: '이 값으로 되돌리기' })).not.toBeInTheDocument()
+  })
+
+  it('여럿 골라 고친 기록이면 함께 바뀐 것을 한 번에 되돌리는 길이 선다', async () => {
+    // **한 건만 되돌리면 나머지는 틀린 값으로 남는다.** 틀린 값을 발견하는 자리가 대개
+    // 이 이력이라 입구를 여기 둔다.
+    objectApi.history.mockResolvedValue([
+      { ...ENTRIES[2], batch: { id: 'batch-1', field_label: '무게', size: 40 } },
+      ...ENTRIES,
+    ])
+    objectApi.bulkEditUndo.mockResolvedValue({
+      applied: false,
+      batch_id: null,
+      field: 'properties.weight',
+      field_label: '무게',
+      counts: { change: 40, unchanged: 0, error: 0 },
+      fields: [],
+      rows: [],
+    })
+    await mount()
+    const rows = await screen.findAllByTitle('그 시점의 값 보기')
+    await userEvent.click(rows[0])
+    await userEvent.click(await screen.findByRole('button', { name: /함께 바뀐 40건 되돌리기/ }))
+    expect(await screen.findByRole('button', { name: /40건 되돌리기/ })).toBeEnabled()
+    expect(objectApi.bulkEditUndo).toHaveBeenCalledWith('part', 'batch-1', false)
   })
 })

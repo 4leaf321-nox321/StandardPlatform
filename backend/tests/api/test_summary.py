@@ -368,3 +368,87 @@ def test_숫자가_아닌_칸으로는_못_그린다(client: TestClient, admin: 
     )
     assert denied.status_code == 422
     assert "숫자 칸이 아니라" in denied.json()["error"]["message"]
+
+
+# --- 파일로 내보내기 -----------------------------------------------------------------
+
+
+def test_묶어_본_표를_엑셀로_내보낸다_화면과_같은_숫자로(
+    client: TestClient, admin: Signed
+) -> None:
+    from io import BytesIO
+
+    from openpyxl import load_workbook
+
+    part = _parts(client, admin)
+    got = client.get(
+        f"/api/objects/{part}/summary/export",
+        params={"group_by": "properties.grade", "format": "xlsx"},
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    assert "spreadsheetml" in got.headers["content-type"]
+    sheet = load_workbook(BytesIO(got.content)).active
+    table = [[cell.value for cell in row] for row in sheet.iter_rows()]
+    assert table[0] == ["등급", "건수"]
+    assert {row[0]: row[1] for row in table[1:]} == {
+        "A": 2,
+        "B": 1,
+        "C": 1,
+        "(비어 있음)": 1,
+        "전체": 5,
+    }
+
+
+def test_쪼갠_표는_계열이_열이_되고_CSV_는_BOM_이_붙는다(
+    client: TestClient, admin: Signed
+) -> None:
+    import csv
+    import io
+
+    part = _parts(client, admin)
+    got = client.get(
+        f"/api/objects/{part}/summary/export",
+        params={"group_by": "status", "split_by": "properties.grade", "format": "csv"},
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    # 엑셀이 한글을 안 깨뜨리게.
+    assert got.content.startswith("﻿".encode())
+    rows = list(csv.reader(io.StringIO(got.content.decode("utf-8-sig"))))
+    assert rows[0][0] == "상태" and rows[0][-1] == "합계"
+    assert set(rows[0][1:-1]) == {"A", "B", "C", "(비어 있음)"}
+    assert rows[-1][0] == "전체" and rows[-1][-1] == "5"
+
+
+def test_수식으로_읽히는_이름은_글자로_막는다(client: TestClient, admin: Signed) -> None:
+    """이름은 사람이 적는다 — `=HYPERLINK(...)` 가 셀에서 실행되면 안 된다."""
+    import csv
+    import io
+
+    part = _parts(client, admin)
+    _make_object(client, admin, part, label='=HYPERLINK("http://x")', properties={"weight": 1})
+    got = client.get(
+        f"/api/objects/{part}/summary/export",
+        params={"group_by": "label", "format": "csv"},
+        headers=admin.headers,
+    )
+    labels = [row[0] for row in csv.reader(io.StringIO(got.content.decode("utf-8-sig")))]
+    assert '\'=HYPERLINK("http://x")' in labels
+    assert '=HYPERLINK("http://x")' not in labels
+
+
+def test_원값도_파일로_나간다(client: TestClient, admin: Signed) -> None:
+    import csv
+    import io
+
+    part = _parts(client, admin)
+    got = client.get(
+        f"/api/objects/{part}/points/export",
+        params={"x": "properties.weight", "group_by": "properties.grade", "format": "csv"},
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    rows = list(csv.reader(io.StringIO(got.content.decode("utf-8-sig"))))
+    assert rows[0] == ["이름", "무게", "등급"]
+    assert len(rows) == 1 + 5

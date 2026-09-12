@@ -277,6 +277,13 @@ class SnapshotOut(BaseModel):
     properties: dict[str, Any]
 
 
+class HistoryBatchOut(BaseModel):
+    id: uuid.UUID
+    field_label: str
+    size: int
+    """그때 같이 바뀐 행 수."""
+
+
 class HistoryEntryOut(BaseModel):
     id: uuid.UUID
     at: datetime
@@ -290,6 +297,8 @@ class HistoryEntryOut(BaseModel):
     relation: dict[str, Any] | None
     snapshot: SnapshotOut | None
     """값 기록에만 있다. 되돌리기의 목표."""
+    batch: HistoryBatchOut | None = None
+    """여럿 골라 고치기로 **같이 바뀐** 기록이면 그 묶음. 한 번에 되돌리는 입구다."""
 
 
 class RestoreRequest(BaseModel):
@@ -512,6 +521,8 @@ class BulkEditPlanOut(BaseModel):
     """**계획 먼저.** 몇 건이 바뀌고, 몇 건이 이미 그 값이고, 몇 건은 왜 안 되나."""
 
     applied: bool
+    batch_id: uuid.UUID | None = None
+    """적용했을 때만 — 같이 바뀐 것을 한 번에 되돌릴 때 이 번호를 쓴다."""
     field: str
     field_label: str
     rows: list[BulkEditRow]
@@ -525,6 +536,10 @@ class BulkEditRequest(BaseModel):
     field: str
     """status · description · workspace · properties.<칸>."""
     value: Any = None
+    apply: bool = False
+
+
+class BulkUndoRequest(BaseModel):
     apply: bool = False
 
 

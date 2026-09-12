@@ -617,3 +617,96 @@ def points(
             )
         )
     return out
+
+
+# --- 파일로 내보내기 -------------------------------------------------------------
+#
+# 화면의 그림과 **같은 숫자**여야 한다. 그래서 새로 세지 않고 `summarize`·`points` 가 낸
+# 것을 표로 펴기만 한다 — 따로 세면 「화면에는 12 인데 파일에는 15」 가 된다.
+
+#: 표에 적는 「그 밖에」 줄 — 상한을 넘어 접힌 것. 숨기면 합이 전체와 안 맞는다.
+OTHER_LABEL = "그 밖에"
+TOTAL_LABEL = "전체"
+
+
+def summary_table(found: Summary) -> tuple[list[str], list[list[Any]]]:
+    """묶어 센 결과 → (머리줄, 행들).
+
+    쪼갰으면 쪼갠 값이 열이 된다(그림의 계열 차례 그대로). 건수로 셌을 때만 합계 열과
+    「전체」 줄을 붙인다 — 평균·최솟값은 더하면 뜻이 없다.
+    """
+    counting = found.metric == "count"
+    header: list[str] = [found.group_label]
+    rows: list[list[Any]] = []
+
+    if not found.splits:
+        header += ["건수"] if counting else [found.metric_label, "건수"]
+        for bucket in found.buckets:
+            rows.append(
+                [bucket.label, bucket.count]
+                if counting
+                else [bucket.label, bucket.value, bucket.count]
+            )
+        if found.other_groups:
+            label = f"{OTHER_LABEL} {found.other_groups}종류"
+            rows.append(
+                [label, found.other_count] if counting else [label, None, found.other_count]
+            )
+        rows.append(
+            [TOTAL_LABEL, found.total] if counting else [TOTAL_LABEL, None, found.total]
+        )
+        return header, rows
+
+    header += list(found.splits)
+    folded = counting and found.other_splits > 0
+    if folded:
+        header.append(f"{OTHER_LABEL} {found.other_splits}종류")
+    if counting:
+        header.append("합계")
+    for bucket in found.buckets:
+        by_label = {part.label: part for part in bucket.parts}
+        line: list[Any] = [bucket.label]
+        for label in found.splits:
+            part = by_label.get(label)
+            if counting:
+                line.append(part.count if part else 0)
+            else:
+                line.append(part.value if part else None)
+        if folded:
+            line.append(bucket.count - sum(part.count for part in bucket.parts))
+        if counting:
+            line.append(bucket.count)
+        rows.append(line)
+    if counting:
+        blanks = [None] * (len(header) - 2)
+        if found.other_groups:
+            rows.append(
+                [f"{OTHER_LABEL} {found.other_groups}종류", *blanks, found.other_count]
+            )
+        rows.append([TOTAL_LABEL, *blanks, found.total])
+    return header, rows
+
+
+def points_table(found: Points) -> tuple[list[str], list[list[Any]]]:
+    """원값 → (머리줄, 행들). 행 하나가 객체 하나."""
+    header = ["이름", found.x_label]
+    if found.y_label:
+        header.append(found.y_label)
+    if found.group_label:
+        header.append(found.group_label)
+    rows: list[list[Any]] = []
+    for one in found.rows:
+        line: list[Any] = [one.label, one.x]
+        if found.y_label:
+            line.append(one.y)
+        if found.group_label:
+            line.append(one.group)
+        rows.append(line)
+    if found.truncated:
+        rows.append(
+            [
+                f"(앞의 {len(found.rows):,}건만 실었습니다 — 전체 {found.total:,}건. "
+                "조건으로 좁히세요)"
+            ]
+        )
+    return header, rows

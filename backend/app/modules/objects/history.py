@@ -69,12 +69,17 @@ class Entry:
     """속성은 **칸별로** 풀어 준다 — 통째 diff 는 사람이 못 읽는다."""
     relation: dict[str, Any] | None = None
     snapshot: Snapshot | None = None
+    batch: dict[str, Any] | None = None
+    """여럿 골라 고치기로 같이 바뀐 기록이면 `{id, field_label, size}`."""
 
 
 def _split_properties(changes: dict[str, Any]) -> dict[str, Any]:
     """통째 속성 diff 를 칸별로 — `properties` 하나를 `properties.<키>` 여럿으로."""
     out: dict[str, Any] = {}
     for key, value in changes.items():
+        # `_` 로 시작하는 키는 기록에 붙인 표식(묶음 번호 등)이다 — 사람이 읽을 칸이 아니다.
+        if key.startswith("_"):
+            continue
         # 「전→후」 꼴만 — 합치기의 merged_from 같은 메모는 사람이 읽을 칸이 아니다.
         if not isinstance(value, dict) or "after" not in value:
             continue
@@ -170,9 +175,21 @@ def history_of(db: Session, row: ObjectInstance) -> list[Entry]:
                 changes=_split_properties(changes) if is_object else {},
                 relation=relation,
                 snapshot=snapshot,
+                batch=_batch_of(changes) if is_object else None,
             )
         )
     return out
+
+
+def _batch_of(changes: dict[str, Any]) -> dict[str, Any] | None:
+    meta = changes.get("_batch")
+    if not isinstance(meta, dict) or not meta.get("id"):
+        return None
+    return {
+        "id": meta["id"],
+        "field_label": str(meta.get("field_label") or meta.get("field") or ""),
+        "size": int(meta.get("size") or 0),
+    }
 
 
 def snapshot_at(

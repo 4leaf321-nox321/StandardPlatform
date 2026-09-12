@@ -4382,6 +4382,367 @@
         }
       }
     },
+    "/api/objects/{type_slug}/summary/export": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Summary Export",
+        "description": "묶어 본 표를 **파일로** — 화면의 그림과 같은 숫자.\n\n묶어 본 숫자는 결국 보고서로 옮겨진다. 막대를 보고 손으로 옮겨 적으면 그 사이에\n틀리고, 틀린 숫자가 회의에 들어간다. 거르기·축은 `/summary` 와 똑같이 받는다.",
+        "operationId": "summary_export_api_objects__type_slug__summary_export_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(csv|xlsx)$",
+              "default": "xlsx",
+              "title": "Format"
+            }
+          },
+          {
+            "name": "group_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "status",
+              "title": "Group By"
+            }
+          },
+          {
+            "name": "split_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Split By"
+            }
+          },
+          {
+            "name": "metric",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "count",
+              "title": "Metric"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "desc",
+              "title": "Order"
+            }
+          },
+          {
+            "name": "metric_field",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Metric Field"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "under",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Under"
+            }
+          },
+          {
+            "name": "deep",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Deep"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2999,
+                  "minimum": 1900
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/points/export": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Points Export",
+        "description": "상자·산점도에 그린 **원값**을 파일로 — 행 하나가 객체 하나.\n\n그림과 같은 상한(`MAX_POINTS`)을 쓴다. 잘렸으면 파일 맨 끝에 그렇다고 적는다 —\n안 적으면 파일은 「이게 전부」 로 읽힌다.",
+        "operationId": "points_export_api_objects__type_slug__points_export_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(csv|xlsx)$",
+              "default": "xlsx",
+              "title": "Format"
+            }
+          },
+          {
+            "name": "x",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "X"
+            }
+          },
+          {
+            "name": "y",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Y"
+            }
+          },
+          {
+            "name": "group_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Group By"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "under",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Under"
+            }
+          },
+          {
+            "name": "deep",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Deep"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2999,
+                  "minimum": 1900
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/tree": {
       "get": {
         "tags": [
@@ -4776,7 +5137,7 @@
           "objects"
         ],
         "summary": "Bulk Edit",
-        "description": "고른 것들의 **한 칸**을 바꾼다 — `apply=false`(기본)면 계획만.\n\n한 칸씩인 이유: 여러 칸을 동시에 바꾸게 하면 이 화면은 곧 「폼」 이 되고, 그때\n실수 한 번의 크기가 수백 배가 된다.\n\n못 고치는 것(남의 부서 것)이 섞여 있으면 **조용히 건너뛰지 않고** 행마다 이유를\n적는다 — 건너뛴 것은 「바꿨다」 고 믿은 사람에게 나중에 다른 값으로 나타난다.",
+        "description": "고른 것들의 **한 칸**을 바꾼다 — `apply=false`(기본)면 계획만.\n\n한 칸씩인 이유: 여러 칸을 동시에 바꾸게 하면 이 화면은 곧 「폼」 이 되고, 그때\n실수 한 번의 크기가 수백 배가 된다.\n\n못 고치는 것(남의 부서 것)이 섞여 있으면 **조용히 건너뛰지 않고** 행마다 이유를\n적는다 — 건너뛴 것은 「바꿨다」 고 믿은 사람에게 나중에 다른 값으로 나타난다.\n\n적용하면 `batch_id` 가 온다 — 그것으로 같이 바뀐 것을 한 번에 되돌린다.",
         "operationId": "bulk_edit_api_objects__type_slug__bulk_edit_post",
         "parameters": [
           {
@@ -4795,6 +5156,69 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/BulkEditRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkEditPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/bulk-edit/{batch_id}/undo": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Bulk Edit Undo",
+        "description": "같이 바뀐 것을 **한 번에** 그때 값으로 — `apply=false`(기본)면 계획만.\n\n한 번에 수백 건을 바꾸는 길이 있는데 되돌리는 길이 한 건씩뿐이면, 실수 한 번은\n사실상 되돌릴 수 없다.\n\n**그 뒤에 누가 또 고친 행은 덮어쓰지 않는다** — 묶음이 넣은 값이 아직 그대로인\n행만 되돌리고, 나머지는 이유를 적는다. 되돌리기 자체도 새 묶음으로 기록되므로\n그것을 다시 되돌릴 수 있다.",
+        "operationId": "bulk_edit_undo_api_objects__type_slug__bulk_edit__batch_id__undo_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkUndoRequest"
               }
             }
           }
@@ -7502,6 +7926,18 @@
             "type": "boolean",
             "title": "Applied"
           },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          },
           "field": {
             "type": "string",
             "title": "Field"
@@ -7616,6 +8052,17 @@
           "message"
         ],
         "title": "BulkEditRow"
+      },
+      "BulkUndoRequest": {
+        "properties": {
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "BulkUndoRequest"
       },
       "ChangeOut": {
         "properties": {
@@ -8384,6 +8831,30 @@
         "type": "object",
         "title": "HTTPValidationError"
       },
+      "HistoryBatchOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "field_label": {
+            "type": "string",
+            "title": "Field Label"
+          },
+          "size": {
+            "type": "integer",
+            "title": "Size"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "field_label",
+          "size"
+        ],
+        "title": "HistoryBatchOut"
+      },
       "HistoryEntryOut": {
         "properties": {
           "id": {
@@ -8440,6 +8911,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/app__modules__objects__schemas__SnapshotOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "batch": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HistoryBatchOut"
               },
               {
                 "type": "null"

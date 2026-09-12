@@ -28,6 +28,7 @@ import {
   BarChart3,
   Box as BoxIcon,
   ChartArea,
+  Download,
   ChartLine,
   ChartPie,
   Grid3x3,
@@ -55,6 +56,12 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/shared/components/ui/dropdown-menu'
 import { cn } from '@/shared/lib/utils'
 
 /** 목록 화면은 `summarySettings` 에서 **바로** 가져간다 — 여기서 가져가면 그 화면이
@@ -269,6 +276,52 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
   )
   const canFilter = Boolean(data && filterable(data.group_field))
 
+  /**
+   * 지금 그림을 **같은 숫자로** 파일에. 막대를 보고 옮겨 적으면 그 사이에 틀리고, 틀린
+   * 숫자가 회의에 들어간다. 원값 그림이면 그린 점 그대로(행 하나가 객체 하나).
+   */
+  const [exporting, setExporting] = useState(false)
+  async function exportAs(format: 'csv' | 'xlsx') {
+    const current = JSON.parse(signature) as ObjectQuery
+    setExporting(true)
+    setError(null)
+    try {
+      if (raw) {
+        const x = settings.x || numbers[0]?.field
+        if (!x) return
+        await objectApi.exportPoints(
+          typeSlug,
+          current,
+          {
+            x,
+            y: settings.chart === 'scatter' ? settings.y || numbers[1]?.field : null,
+            groupBy: settings.splitBy || (settings.chart === 'box' ? groupBy : null),
+          },
+          format,
+          `${typeSlug}-${points?.x_label ?? '값'}.${format}`,
+        )
+        return
+      }
+      await objectApi.exportSummary(
+        typeSlug,
+        current,
+        {
+          groupBy,
+          splitBy: settings.splitBy || null,
+          metric,
+          metricField: metric === 'count' ? null : metricField,
+          order: settings.order,
+        },
+        format,
+        `${typeSlug}-${data?.group_label ?? '묶어보기'}별.${format}`,
+      )
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setExporting(false)
+    }
+  }
+
   return (
     <div className="space-y-3 rounded-md border p-4">
       <div className="flex flex-wrap items-center gap-2">
@@ -439,6 +492,28 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
 
         {loading && <Loader2 className="text-muted-foreground size-4 animate-spin" />}
         <div className="ml-auto flex items-center gap-2">
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={loading || exporting || (raw ? !points : !data)}
+              >
+                {exporting ? (
+                  <Loader2 className="mr-1 size-4 animate-spin" />
+                ) : (
+                  <Download className="mr-1 size-4" />
+                )}
+                내보내기
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onSelect={() => void exportAs('xlsx')}>
+                Excel (.xlsx)
+              </DropdownMenuItem>
+              <DropdownMenuItem onSelect={() => void exportAs('csv')}>CSV</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
           {/* **의도가 생기는 자리에 단추를 둔다.** 못 올리는 사람에게는 누가 올리는지
               적는다 — 단추만 없으면 그 기능이 있는 줄도 모른다. */}
           {canPin ? (

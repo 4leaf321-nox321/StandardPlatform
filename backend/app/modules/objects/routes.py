@@ -52,7 +52,9 @@ from app.modules.objects.schemas import (
     BulkEditPlanOut,
     BulkEditRequest,
     BulkEditRow,
+    BulkUndoRequest,
     GroupOptionOut,
+    HistoryBatchOut,
     HistoryEntryOut,
     HomeWidgetOut,
     ImportPlanOut,
@@ -111,7 +113,7 @@ from app.modules.ontology.services import (
     validate_properties,
 )
 from app.modules.workspaces.models import Workspace
-from app.shared import audit
+from app.shared import audit, sheets
 from app.shared.auth import current_user
 from app.shared.errors import Conflict, Forbidden, NotFound, code
 from app.shared.pagination import Page, clamp_limit
@@ -408,6 +410,91 @@ def points(
             GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
             for one in summary_service.group_options(object_type, defs)
         ],
+    )
+
+
+@router.get("/{type_slug}/summary/export")
+def summary_export(
+    type_slug: str,
+    request: Request,
+    format: str = Query(default="xlsx", pattern="^(csv|xlsx)$"),
+    group_by: str = Query(default="status"),
+    split_by: str | None = Query(default=None),
+    metric: str = Query(default="count"),
+    order: str = Query(default="desc"),
+    metric_field: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    under: uuid.UUID | None = Query(default=None),
+    deep: bool = Query(default=True),
+    year: int | None = Query(default=None, ge=1900, le=2999),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """묶어 본 표를 **파일로** — 화면의 그림과 같은 숫자.
+
+    묶어 본 숫자는 결국 보고서로 옮겨진다. 막대를 보고 손으로 옮겨 적으면 그 사이에
+    틀리고, 틀린 숫자가 회의에 들어간다. 거르기·축은 `/summary` 와 똑같이 받는다.
+    """
+    object_type = _type(db, type_slug)
+    if system.is_system(object_type):
+        raise Conflict(
+            code("OBJECTS", 47),
+            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 세지 않습니다.",
+        )
+    stmt = _filtered(
+        db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
+    )
+    found = summary_service.summarize(
+        db,
+        object_type,
+        stmt,
+        group_by=group_by,
+        split_by=split_by,
+        metric=metric,
+        metric_field=metric_field,
+        order=order,
+    )
+    header, rows = summary_service.summary_table(found)
+    return sheets.file_response(
+        header, rows, fmt=format, stem=f"{type_slug}-summary", sheet="묶어 보기"
+    )
+
+
+@router.get("/{type_slug}/points/export")
+def points_export(
+    type_slug: str,
+    request: Request,
+    format: str = Query(default="xlsx", pattern="^(csv|xlsx)$"),
+    x: str = Query(),
+    y: str | None = Query(default=None),
+    group_by: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    under: uuid.UUID | None = Query(default=None),
+    deep: bool = Query(default=True),
+    year: int | None = Query(default=None, ge=1900, le=2999),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """상자·산점도에 그린 **원값**을 파일로 — 행 하나가 객체 하나.
+
+    그림과 같은 상한(`MAX_POINTS`)을 쓴다. 잘렸으면 파일 맨 끝에 그렇다고 적는다 —
+    안 적으면 파일은 「이게 전부」 로 읽힌다.
+    """
+    object_type = _type(db, type_slug)
+    if system.is_system(object_type):
+        raise Conflict(
+            code("OBJECTS", 58),
+            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 못 그립니다.",
+        )
+    stmt = _filtered(
+        db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
+    )
+    found = summary_service.points(db, object_type, stmt, x=x, y=y, group_by=group_by)
+    header, rows = summary_service.points_table(found)
+    return sheets.file_response(
+        header, rows, fmt=format, stem=f"{type_slug}-points", sheet="값"
     )
 
 
@@ -958,30 +1045,11 @@ def _import_objects(
     return _plan_out(plan, applied=False)
 
 
-@router.post("/{type_slug}/bulk-edit", response_model=BulkEditPlanOut)
-def bulk_edit(
-    type_slug: str,
-    payload: BulkEditRequest,
-    user: User = Depends(current_user),
-    db: Session = Depends(get_db),
-) -> BulkEditPlanOut:
-    """고른 것들의 **한 칸**을 바꾼다 — `apply=false`(기본)면 계획만.
-
-    한 칸씩인 이유: 여러 칸을 동시에 바꾸게 하면 이 화면은 곧 「폼」 이 되고, 그때
-    실수 한 번의 크기가 수백 배가 된다.
-
-    못 고치는 것(남의 부서 것)이 섞여 있으면 **조용히 건너뛰지 않고** 행마다 이유를
-    적는다 — 건너뛴 것은 「바꿨다」 고 믿은 사람에게 나중에 다른 값으로 나타난다.
-    """
-    object_type = _type(db, type_slug)
-    if system.is_system(object_type):
-        raise Conflict(
-            code("OBJECTS", 56),
-            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 못 고칩니다.",
-        )
-    ids = bulkedit.ids_of(payload.ids)
-    # **볼 수 있는 것만 손댄다.** 목록과 같은 가시성 규칙이다.
-    rows = list(
+def _editable_rows(
+    db: Session, user: User, object_type: ObjectType, ids: list[uuid.UUID]
+) -> list[ObjectInstance]:
+    """**볼 수 있는 것만 손댄다.** 목록과 같은 가시성 규칙이다."""
+    return list(
         db.scalars(
             select(ObjectInstance).where(
                 ObjectInstance.id.in_(ids),
@@ -991,65 +1059,19 @@ def bulk_edit(
             )
         )
     )
-    planned = bulkedit.plan(
-        db,
-        user,
-        object_type,
-        ids=ids,
-        field_name=payload.field,
-        value=payload.value,
-        rows=rows,
-    )
-    if payload.apply and planned.ok:
-        before = {
-            row.id: {
-                "key": row.key,
-                "label": row.label,
-                "status": row.status,
-                "properties": dict(row.properties or {}),
-            }
-            for row in rows
-        }
-        bulkedit.apply_to(
-            db,
-            user,
-            object_type,
-            field_name=payload.field,
-            value=payload.value,
-            rows=rows,
-            planned=planned,
-        )
-        db.flush()
-        changed = {one.id for one in planned.rows if one.action == "change"}
-        for row in rows:
-            if row.id not in changed:
-                continue
-            # **한 건씩 기록한다.** 한 줄로 뭉뚱그리면 그 객체의 이력에서 이 변경이
-            # 사라지고, 지켜보는 사람에게도 안 간다.
-            audit.record(
-                db,
-                action="object.update",
-                actor=user,
-                target_table="objects",
-                target_id=row.id,
-                target_label=f"{object_type.slug}:{row.label}",
-                workspace_id=row.owner_workspace_id,
-                changes=audit.diff(
-                    before[row.id],
-                    {
-                        "key": row.key,
-                        "label": row.label,
-                        "status": row.status,
-                        "properties": dict(row.properties or {}),
-                    },
-                ),
-                reason=f"여럿 골라 고치기 — {planned.field_label}",
-            )
-        db.commit()
-        planned.applied = True
+
+
+def _bulk_out(
+    db: Session,
+    object_type: ObjectType,
+    planned: bulkedit.EditPlan,
+    field: str,
+    batch_id: uuid.UUID | None,
+) -> BulkEditPlanOut:
     return BulkEditPlanOut(
         applied=planned.applied,
-        field=payload.field,
+        batch_id=batch_id,
+        field=field,
         field_label=planned.field_label,
         rows=[
             BulkEditRow(
@@ -1065,6 +1087,127 @@ def bulk_edit(
         counts=planned.counts,
         fields=bulkedit.selectable(object_type, properties_of(db, object_type.id)),
     )
+
+
+@router.post("/{type_slug}/bulk-edit", response_model=BulkEditPlanOut)
+def bulk_edit(
+    type_slug: str,
+    payload: BulkEditRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> BulkEditPlanOut:
+    """고른 것들의 **한 칸**을 바꾼다 — `apply=false`(기본)면 계획만.
+
+    한 칸씩인 이유: 여러 칸을 동시에 바꾸게 하면 이 화면은 곧 「폼」 이 되고, 그때
+    실수 한 번의 크기가 수백 배가 된다.
+
+    못 고치는 것(남의 부서 것)이 섞여 있으면 **조용히 건너뛰지 않고** 행마다 이유를
+    적는다 — 건너뛴 것은 「바꿨다」 고 믿은 사람에게 나중에 다른 값으로 나타난다.
+
+    적용하면 `batch_id` 가 온다 — 그것으로 같이 바뀐 것을 한 번에 되돌린다.
+    """
+    object_type = _type(db, type_slug)
+    _not_bulk_editable(object_type)
+    ids = bulkedit.ids_of(payload.ids)
+    rows = _editable_rows(db, user, object_type, ids)
+    planned = bulkedit.plan(
+        db,
+        user,
+        object_type,
+        ids=ids,
+        field_name=payload.field,
+        value=payload.value,
+        rows=rows,
+    )
+    batch_id: uuid.UUID | None = None
+    if payload.apply and planned.ok:
+        before_state = {row.id: bulkedit.state_of(row) for row in rows}
+        before_raw = {row.id: bulkedit.raw_value(row, payload.field) for row in rows}
+        bulkedit.apply_to(
+            db,
+            user,
+            object_type,
+            field_name=payload.field,
+            value=payload.value,
+            rows=rows,
+            planned=planned,
+        )
+        db.flush()
+        batch_id = uuid.uuid4()
+        bulkedit.record(
+            db,
+            user,
+            object_type,
+            rows=rows,
+            before_state=before_state,
+            before_raw=before_raw,
+            changed={one.id for one in planned.rows if one.action == "change"},
+            field_name=payload.field,
+            field_label=planned.field_label,
+            batch_id=batch_id,
+            reason=f"여럿 골라 고치기 — {planned.field_label}",
+        )
+        db.commit()
+        planned.applied = True
+    return _bulk_out(db, object_type, planned, payload.field, batch_id)
+
+
+@router.post("/{type_slug}/bulk-edit/{batch_id}/undo", response_model=BulkEditPlanOut)
+def bulk_edit_undo(
+    type_slug: str,
+    batch_id: uuid.UUID,
+    payload: BulkUndoRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> BulkEditPlanOut:
+    """같이 바뀐 것을 **한 번에** 그때 값으로 — `apply=false`(기본)면 계획만.
+
+    한 번에 수백 건을 바꾸는 길이 있는데 되돌리는 길이 한 건씩뿐이면, 실수 한 번은
+    사실상 되돌릴 수 없다.
+
+    **그 뒤에 누가 또 고친 행은 덮어쓰지 않는다** — 묶음이 넣은 값이 아직 그대로인
+    행만 되돌리고, 나머지는 이유를 적는다. 되돌리기 자체도 새 묶음으로 기록되므로
+    그것을 다시 되돌릴 수 있다.
+    """
+    object_type = _type(db, type_slug)
+    _not_bulk_editable(object_type)
+    entries = bulkedit.batch_entries(db, batch_id)
+    rows = _editable_rows(
+        db, user, object_type, [one.target_id for one in entries if one.target_id]
+    )
+    undo = bulkedit.undo_plan(db, user, object_type, entries=entries, rows=rows)
+    planned = undo.plan
+    new_batch: uuid.UUID | None = None
+    if payload.apply and planned.ok:
+        before_state = {row.id: bulkedit.state_of(row) for row in rows}
+        before_raw = {row.id: bulkedit.raw_value(row, undo.field_name) for row in rows}
+        bulkedit.apply_undo(db, user, object_type, rows=rows, undo=undo)
+        db.flush()
+        new_batch = uuid.uuid4()
+        bulkedit.record(
+            db,
+            user,
+            object_type,
+            rows=rows,
+            before_state=before_state,
+            before_raw=before_raw,
+            changed={one.id for one in planned.rows if one.action == "change"},
+            field_name=undo.field_name,
+            field_label=planned.field_label,
+            batch_id=new_batch,
+            reason=f"여럿 고치기 되돌림 — {planned.field_label}",
+        )
+        db.commit()
+        planned.applied = True
+    return _bulk_out(db, object_type, planned, undo.field_name, new_batch)
+
+
+def _not_bulk_editable(object_type: ObjectType) -> None:
+    if system.is_system(object_type):
+        raise Conflict(
+            code("OBJECTS", 56),
+            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 못 고칩니다.",
+        )
 
 
 @router.get("/{type_slug}/template")
@@ -1627,6 +1770,7 @@ def object_history(
             changes=one.changes,
             relation=one.relation,
             snapshot=SnapshotOut(**vars(one.snapshot)) if one.snapshot else None,
+            batch=HistoryBatchOut(**one.batch) if one.batch else None,
         )
         for one in history.history_of(db, row)
     ]

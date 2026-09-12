@@ -11,7 +11,10 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 
-const objectApi = vi.hoisted(() => ({ summary: vi.fn() }))
+const objectApi = vi.hoisted(() => ({
+  summary: vi.fn(),
+  exportSummary: vi.fn(),
+}))
 const viewApi = vi.hoisted(() => ({ create: vi.fn() }))
 vi.mock('@/modules/objects/api', () => ({ objectApi, viewApi }))
 
@@ -269,5 +272,22 @@ describe('개별 순위', () => {
     const { onSettings } = await panel(BASE)
     await userEvent.click(screen.getByRole('button', { name: '차례 바꾸기' }))
     expect(onSettings).toHaveBeenCalledWith(expect.objectContaining({ order: 'asc' }))
+  })
+
+  it('내보내기는 그림과 같은 거르기·축으로 파일을 받는다', async () => {
+    // **화면과 같은 숫자여야 한다** — 따로 만들면 「화면에는 12 인데 파일에는 15」.
+    objectApi.exportSummary.mockResolvedValue(undefined)
+    await panel(BASE)
+    await userEvent.click(screen.getByRole('button', { name: /내보내기/ }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Excel/ }))
+    await waitFor(() =>
+      expect(objectApi.exportSummary).toHaveBeenCalledWith(
+        'part',
+        { q: '볼트' },
+        { groupBy: 'status', splitBy: null, metric: 'count', metricField: null, order: 'desc' },
+        'xlsx',
+        'part-등급별.xlsx',
+      ),
+    )
   })
 })
