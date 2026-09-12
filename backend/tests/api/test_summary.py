@@ -319,3 +319,52 @@ def test_모르는_차례는_막는다(client: TestClient, admin: Signed) -> Non
         headers=admin.headers,
     )
     assert denied.status_code == 422
+
+
+def _points(client: TestClient, who: Signed, part: str, **params: Any) -> dict[str, Any]:
+    got = client.get(f"/api/objects/{part}/points", params=params, headers=who.headers)
+    assert got.status_code == 200, got.text
+    return dict(got.json())
+
+
+def test_원값을_그대로_준다_분포는_집계로_안_보인다(client: TestClient, admin: Signed) -> None:
+    """평균이 같은 두 공정이 전혀 다른 모양일 수 있고, 그 차이가 대개 문제의 자리다."""
+    part = _grid(client, admin)
+    found = _points(client, admin, part, x="properties.score", group_by="properties.grade")
+    assert found["x_label"] == "점수" and found["group_label"] == "등급"
+    assert sorted(one["x"] for one in found["rows"]) == [10, 20, 30, 40]
+    groups = {one["group"] for one in found["rows"]}
+    assert groups == {"A", "B"}
+    assert found["truncated"] is False
+
+
+def test_값이_없는_행은_점이_안_된다(client: TestClient, admin: Signed) -> None:
+    """0 으로 채우면 없는 점이 원점에 모여 그림이 거짓말을 한다."""
+    part = _grid(client, admin)
+    # 공급사5 는 점수가 없다.
+    labels = {
+        one["label"] for one in _points(client, admin, part, x="properties.score")["rows"]
+    }
+    assert "공급사5" not in labels
+
+
+def test_산점도는_두_칸을_받는다(client: TestClient, admin: Signed) -> None:
+    part = _make_type(client, admin, label="시험")
+    for key, label in [("load", "하중"), ("stress", "응력")]:
+        _make_property(client, admin, part, key=key, label=label, data_type="number")
+    _make_object(client, admin, part, label="시험1", properties={"load": 10, "stress": 100})
+    found = _points(client, admin, part, x="properties.load", y="properties.stress")
+    assert found["y_label"] == "응력"
+    assert found["rows"][0]["x"] == 10 and found["rows"][0]["y"] == 100
+
+
+def test_숫자가_아닌_칸으로는_못_그린다(client: TestClient, admin: Signed) -> None:
+    """고를 수 있다고 보여 주고 나서 빈 그림을 주지 않는다."""
+    part = _grid(client, admin)
+    denied = client.get(
+        f"/api/objects/{part}/points",
+        params={"x": "properties.grade"},
+        headers=admin.headers,
+    )
+    assert denied.status_code == 422
+    assert "숫자 칸이 아니라" in denied.json()["error"]["message"]

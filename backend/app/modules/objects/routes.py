@@ -65,6 +65,8 @@ from app.modules.objects.schemas import (
     ObjectPatchRequest,
     ObjectProfileOut,
     PartOut,
+    PointOut,
+    PointsOut,
     QualityFindingOut,
     QualityHitOut,
     QualityReportOut,
@@ -350,6 +352,61 @@ def summary(
         metric_options=[
             GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
             for one in summary_service.metric_options(defs)
+        ],
+    )
+
+
+@router.get("/{type_slug}/points", response_model=PointsOut)
+def points(
+    type_slug: str,
+    request: Request,
+    x: str = Query(description="숫자 칸 — properties.<칸>"),
+    y: str | None = Query(default=None, description="두 번째 숫자 칸(산점도)"),
+    group_by: str | None = Query(default=None, description="상자를 가를 축 · 점의 색"),
+    q: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    under: uuid.UUID | None = Query(default=None),
+    deep: bool = Query(default=True),
+    year: int | None = Query(default=None, ge=1900, le=2999),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> PointsOut:
+    """**안 센 값들** — 상자 그림과 산점도가 쓴다.
+
+    집계는 「몇 건인가」 에 답하지만 **분포는 집계로 안 보인다.** 평균이 같은 두 공정이
+    전혀 다른 모양일 수 있고, 그 차이가 대개 문제의 자리다.
+
+    거르기는 목록과 똑같이 온다. 값이 없는 행은 빠진다 — 0 으로 채우면 없는 점이
+    원점에 모여 그림이 거짓말을 한다.
+    """
+    object_type = _type(db, type_slug)
+    if system.is_system(object_type):
+        raise Conflict(
+            code("OBJECTS", 58),
+            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 못 그립니다.",
+        )
+    stmt = _filtered(
+        db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
+    )
+    found = summary_service.points(db, object_type, stmt, x=x, y=y, group_by=group_by)
+    defs = properties_of(db, object_type.id)
+    return PointsOut(
+        x_label=found.x_label,
+        y_label=found.y_label,
+        group_label=found.group_label,
+        rows=[
+            PointOut(id=one.id, label=one.label, group=one.group, x=one.x, y=one.y)
+            for one in found.rows
+        ],
+        total=found.total,
+        truncated=found.truncated,
+        number_fields=[
+            GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
+            for one in summary_service.metric_options(defs)
+        ],
+        group_options=[
+            GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
+            for one in summary_service.group_options(object_type, defs)
         ],
     )
 

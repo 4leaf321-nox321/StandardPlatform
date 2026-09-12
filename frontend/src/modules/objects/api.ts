@@ -410,6 +410,27 @@ export interface Summary {
   metric_options: GroupOption[]
 }
 
+/** 점 하나 — 상자 그림의 값, 산점도의 좌표. */
+export interface Point {
+  id: string
+  label: string
+  group: string
+  x: number | null
+  y: number | null
+}
+
+export interface Points {
+  x_label: string
+  y_label: string
+  group_label: string
+  rows: Point[]
+  total: number
+  /** 상한을 넘어 잘렸나. **잘렸는데 말 안 하면 그 그림은 「이게 전부」 로 읽힌다.** */
+  truncated: boolean
+  number_fields: GroupOption[]
+  group_options: GroupOption[]
+}
+
 export const objectApi = {
   /** 빈 CSV — 헤더가 「무엇을 채워야 하는지」 를 말한다. */
   template: (typeSlug: string) =>
@@ -454,6 +475,25 @@ export const objectApi = {
     typeSlug: string,
     body: { ids: string[]; field: string; value: unknown; apply: boolean },
   ) => api.post<BulkEditPlan>(`/objects/${typeSlug}/bulk-edit`, body),
+  /**
+   * **안 센 값들** — 상자 그림과 산점도가 쓴다.
+   *
+   * 분포는 집계로 안 보인다: 평균이 같은 두 공정이 전혀 다른 모양일 수 있고, 그 차이가
+   * 대개 문제의 자리다.
+   */
+  points: (
+    typeSlug: string,
+    query: ObjectQuery = {},
+    options: { x: string; y?: string | null; groupBy?: string | null },
+  ) => {
+    const params = new URLSearchParams(
+      queryString({ ...query, limit: undefined, offset: 0 }).replace(/^\?/, ''),
+    )
+    params.set('x', options.x)
+    if (options.y) params.set('y', options.y)
+    if (options.groupBy) params.set('group_by', options.groupBy)
+    return api.get<Points>(`/objects/${typeSlug}/points?${params.toString()}`)
+  },
   /** 내가 지켜보는 것 — 최근 바뀐 것부터. **알림은 읽으면 사라지지만 이것은 남는다.** */
   watching: (limit = 10) => api.get<Watched[]>(`/objects/watching?limit=${limit}`),
   list: (typeSlug: string, query: ObjectQuery = {}) =>

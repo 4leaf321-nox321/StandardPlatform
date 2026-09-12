@@ -526,3 +526,29 @@ class BulkEditRequest(BaseModel):
     """status · description · workspace · properties.<칸>."""
     value: Any = None
     apply: bool = False
+
+
+class PointOut(BaseModel):
+    """점 하나 — 상자 그림의 값, 산점도의 좌표."""
+
+    id: uuid.UUID
+    label: str
+    group: str
+    x: float | None
+    y: float | None = None
+
+
+class PointsOut(BaseModel):
+    """**안 센 값들.** 분포는 집계로 안 보인다 — 평균이 같은 두 공정이 전혀 다른
+    모양일 수 있고, 그 차이가 대개 문제의 자리다."""
+
+    x_label: str
+    y_label: str
+    group_label: str
+    rows: list[PointOut]
+    total: int
+    truncated: bool
+    """상한을 넘어 잘렸나. **잘렸는데 말 안 하면 그 그림은 「이게 전부」 로 읽힌다.**"""
+    number_fields: list[GroupOptionOut]
+    """숫자 칸 — 화면의 고르개가 이것만 보여 준다."""
+    group_options: list[GroupOptionOut]

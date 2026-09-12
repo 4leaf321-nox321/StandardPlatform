@@ -226,6 +226,14 @@ const objectApi = vi.hoisted(() => ({
   ),
 }))
 vi.mock('@/modules/objects/api', () => ({ objectApi }))
+
+// plotly 는 happy-dom 에서 안 뜬다(그리고 1MB 를 받을 이유도 없다) — 사케이에 실제로
+// 무엇이 실렸는지만 본다.
+vi.mock('@/shared/charts/LazyPlot', () => ({
+  LazyPlot: ({ data }: { data: Record<string, unknown>[] }) => (
+    <div data-testid="plot">{JSON.stringify(data)}</div>
+  ),
+}))
 vi.mock('@/modules/ontology/api', () => ({
   ontologyApi: {
     schema: () =>
@@ -502,5 +510,63 @@ describe('상한 고르기', () => {
         expect.objectContaining({ depth: 1, fanout: 30, limit: 300 }),
       ),
     )
+  })
+})
+
+describe('구조 — 흐름(사케이)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('그물과 흐름을 오가고, 흐름에는 실제로 걸린 관계만 싣는다', async () => {
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    await mount()
+    await waitFor(() => expect(screen.getByText(/타입 2 · 관계 종류 2/)).toBeInTheDocument())
+
+    await userEvent.click(screen.getByRole('button', { name: /흐름으로/ }))
+    const plot = await screen.findByTestId('plot')
+    const [trace] = JSON.parse(plot.textContent ?? '[]')
+    expect(trace.type).toBe('sankey')
+    // 부품 → 공급사 5건 하나만. 0건인 「속함」 은 굵기가 없어 그릴 것이 없다.
+    expect(trace.link.value).toEqual([5])
+    expect(trace.link.label).toEqual(['공급받음'])
+    expect(trace.node.label).toEqual(['부품', '공급사'])
+
+    // **돌아갈 길.** 흐름만 보고 갇히면 옆 판의 선택이 안 된다.
+    await userEvent.click(screen.getByRole('button', { name: /그물로/ }))
+    await waitFor(() => expect(screen.queryByTestId('plot')).not.toBeInTheDocument())
+  })
+
+  it('되돌아오는 관계는 빼고, 뺐다고 말한다', async () => {
+    // 사케이는 순환을 못 그린다 — 굵은 것을 남기고 되돌아오는 것을 뺀다.
+    graphApi.overview.mockResolvedValue({
+      ...OVERVIEW,
+      edges: [
+        ...OVERVIEW.edges,
+        {
+          relation: 'supplies',
+          label: '공급함',
+          directed: true,
+          src_type: 'vendor',
+          dst_type: 'part',
+          count: 2,
+        },
+      ],
+    })
+    await mount()
+    await userEvent.click(await screen.findByRole('button', { name: /흐름으로/ }))
+    const plot = await screen.findByTestId('plot')
+    const [trace] = JSON.parse(plot.textContent ?? '[]')
+    expect(trace.link.value).toEqual([5])
+    expect(screen.getByText(/되돌아오는 관계 1개는 흐름에서 뺐습니다/)).toBeInTheDocument()
+  })
+
+  it('이을 관계가 하나도 없으면 흐름 단추를 안 낸다', async () => {
+    graphApi.overview.mockResolvedValue({
+      ...OVERVIEW,
+      edges: [OVERVIEW.edges[1]],
+      edge_count: 0,
+    })
+    await mount()
+    await waitFor(() => expect(screen.getByText(/타입 2 · 관계 종류 1/)).toBeInTheDocument())
+    expect(screen.queryByRole('button', { name: /흐름으로/ })).not.toBeInTheDocument()
   })
 })

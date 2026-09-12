@@ -490,3 +490,130 @@ def check_metric(defs: list[PropertyDef], metric: str, metric_field: str | None)
             status=422,
         )
     _metric_expr(defs, metric, metric_field)
+
+
+# --- 원값 뽑기(분포·산점도) ----------------------------------------------------
+#
+# 집계는 「몇 건인가」 에 답한다. 그런데 **분포는 집계로 안 보인다** — 평균이 같은 두
+# 공정이 전혀 다른 모양일 수 있고, 그 차이가 대개 문제의 자리다. 상자 그림과 산점도가
+# 그것을 보여 주는데, 둘 다 **원값**이 필요하다.
+#
+# 그래서 여기서는 안 센다. 고른 칸의 값을 그대로 내보내되 상한을 둔다 — 브라우저가
+# 그릴 수 있는 점의 수에는 끝이 있고, 그 위로는 그림이 아니라 얼룩이 된다.
+
+#: 한 번에 내보낼 점의 수. 넘으면 잘랐다고 말한다.
+MAX_POINTS = 3000
+
+
+@dataclass
+class Point:
+    id: uuid.UUID
+    label: str
+    group: str
+    """쪼갠 축의 값(상자 그림의 상자 하나, 산점도의 색). 없으면 빈 글자."""
+    x: float | None
+    y: float | None = None
+
+
+@dataclass
+class Points:
+    x_label: str = ""
+    y_label: str = ""
+    group_label: str = ""
+    rows: list[Point] = field(default_factory=list)
+    total: int = 0
+    truncated: bool = False
+
+
+def _number_def(defs: list[PropertyDef], field_name: str) -> PropertyDef:
+    """숫자 칸만. **글자 칸으로 분포를 그릴 수는 없다** — 고를 수 있다고 보여 주고
+    나서 빈 그림을 주지 않는다."""
+    one = _prop(defs, field_name)
+    if one.data_type != "number" or one.multi:
+        raise AppError(
+            code("OBJECTS", 57),
+            f"「{one.label}」 은 숫자 칸이 아니라 분포를 그릴 수 없습니다.",
+            status=422,
+        )
+    return one
+
+
+def points(
+    db: Session,
+    object_type: ObjectType,
+    filtered: Select[Any],
+    *,
+    x: str,
+    y: str | None = None,
+    group_by: str | None = None,
+) -> Points:
+    """고른 것들의 **원값**을 그대로. 상자 그림은 x 하나와 묶을 축, 산점도는 x·y 둘."""
+    defs = properties_of(db, object_type.id)
+    x_def = _number_def(defs, x)
+    y_def = _number_def(defs, y) if y else None
+    group_expr = None
+    group_label = ""
+    group_kind = ""
+    if group_by:
+        group_expr, group_label, group_kind = _group_expr(defs, group_by)
+
+    x_expr = case(
+        (
+            ObjectInstance.properties[x_def.key].astext.op("~")(NUMERIC_RE),
+            cast(ObjectInstance.properties[x_def.key].astext, Float),
+        ),
+        else_=None,
+    )
+    columns: list[Any] = [
+        ObjectInstance.id.label("id"),
+        ObjectInstance.label.label("label"),
+        x_expr.label("x"),
+    ]
+    if y_def is not None:
+        columns.append(
+            case(
+                (
+                    ObjectInstance.properties[y_def.key].astext.op("~")(NUMERIC_RE),
+                    cast(ObjectInstance.properties[y_def.key].astext, Float),
+                ),
+                else_=None,
+            ).label("y")
+        )
+    if group_expr is not None:
+        columns.append(group_expr.label("g"))
+
+    # 값이 없는 행은 점이 될 수 없다 — 0 으로 채우면 없는 점이 원점에 모여 그림이
+    # 거짓말을 한다.
+    stmt = filtered.with_only_columns(*columns).where(x_expr.is_not(None))
+    total = count_of(db, stmt)
+    rows = list(db.execute(stmt.limit(MAX_POINTS)))
+
+    keys = [str(row.g) for row in rows if group_expr is not None and row.g is not None]
+    names = (
+        _labels(db, group_kind, keys, defs, group_by or "") if group_expr is not None else {}
+    )
+    out = Points(
+        x_label=x_def.label,
+        y_label=y_def.label if y_def else "",
+        group_label=group_label,
+        total=total,
+        truncated=total > MAX_POINTS,
+    )
+    for row in rows:
+        raw = getattr(row, "g", None) if group_expr is not None else None
+        out.rows.append(
+            Point(
+                id=row.id,
+                label=row.label,
+                group=(
+                    EMPTY_LABEL
+                    if group_expr is not None and (raw is None or str(raw) == "")
+                    else names.get(str(raw), str(raw))
+                    if raw is not None
+                    else ""
+                ),
+                x=_float(row.x),
+                y=_float(getattr(row, "y", None)) if y_def is not None else None,
+            )
+        )
+    return out

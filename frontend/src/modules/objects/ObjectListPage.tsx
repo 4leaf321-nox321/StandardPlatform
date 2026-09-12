@@ -20,8 +20,8 @@ import type {
   ObjectRow,
   SavedView,
 } from '@/modules/objects/api'
-import { DEFAULT_SUMMARY } from '@/modules/objects/SummaryPanel'
-import type { SummarySettings } from '@/modules/objects/SummaryPanel'
+import { DEFAULT_SUMMARY } from '@/modules/objects/summarySettings'
+import type { SummarySettings } from '@/modules/objects/summarySettings'
 import { ConditionBar } from '@/modules/objects/ConditionBar'
 import { ViewPicker } from '@/modules/objects/ViewPicker'
 import { propertyText } from '@/modules/objects/PropertyFields'
@@ -203,6 +203,8 @@ export default function ObjectListPage() {
         metric: view.summary.metric || 'count',
         metricField: view.summary.metric_field,
         chart: (view.summary.chart as SummarySettings['chart']) || 'bar',
+        x: '',
+        y: '',
         stacked: Boolean(view.summary.stacked),
         order: view.summary.order || 'desc',
       })

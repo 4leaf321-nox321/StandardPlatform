@@ -26,8 +26,12 @@ import {
   Crosshair,
   ExternalLink,
   Loader2,
+  Maximize2,
+  Minimize2,
   RotateCw,
   Search,
+  Share2,
+  Waypoints,
   X,
 } from 'lucide-react'
 
@@ -51,6 +55,7 @@ import type { ObjectRow, RelatedObject } from '@/modules/objects/api'
 import { propertyText } from '@/modules/objects/PropertyFields'
 import { ontologyApi } from '@/modules/ontology/api'
 import { ApiError } from '@/shared/api/client'
+import { LazyPlot } from '@/shared/charts'
 import { isSystemAdmin } from '@/shared/auth/roles'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -400,6 +405,74 @@ function SchemaView({
   onDrawType,
 }: SchemaViewProps) {
   const [selected, setSelected] = useState<string | null>(null)
+  const [shape, setShape] = useState<'web' | 'flow'>('web')
+
+  /** 사케이로 볼 정의 — 노드는 타입, 선은 **실제로 걸린** 관계의 수.
+   *
+   * 정의만 있고 아무것도 안 이어진 관계는 여기서 뺀다. 흐름 그림에서 굵기 0 인
+   * 선은 없는 것과 같은데, 자리는 차지해서 남은 줄기를 눌러 놓는다.
+   *
+   * **되돌아오는 선은 못 그린다.** plotly 의 사케이는 순환을 거부한다(그림이
+   * 왼쪽에서 오른쪽으로 한 번 흐른다는 전제 위에 서 있다). 그래서 굵은 것부터
+   * 넣고 순환을 만드는 것만 뺀다 — 굵은 줄기가 남아야 그림이 말이 된다. 뺀 수는
+   * 세어서 화면에 적는다: 조용히 빼면 그림이 「그 관계는 없다」 고 거짓말한다.
+   */
+  const flow = useMemo(() => {
+    const nodes = overview?.nodes ?? []
+    const at = new Map(nodes.map((one, index) => [one.slug, index]))
+    const source: number[] = []
+    const target: number[] = []
+    const value: number[] = []
+    const label: string[] = []
+    const color: string[] = []
+    let dropped = 0
+
+    const reaches = (from: number, goal: number): boolean => {
+      const seen = new Set<number>([from])
+      const queue = [from]
+      while (queue.length > 0) {
+        const here = queue.shift() as number
+        if (here === goal) return true
+        source.forEach((one, index) => {
+          if (one === here && !seen.has(target[index])) {
+            seen.add(target[index])
+            queue.push(target[index])
+          }
+        })
+      }
+      return false
+    }
+
+    const edges = [...(overview?.edges ?? [])]
+      .filter((one) => one.count > 0)
+      .sort((a, b) => b.count - a.count)
+    for (const one of edges) {
+      const from = at.get(one.src_type)
+      const to = at.get(one.dst_type)
+      if (from === undefined || to === undefined) continue
+      if (from === to || reaches(to, from)) {
+        dropped += 1
+        continue
+      }
+      source.push(from)
+      target.push(to)
+      value.push(one.count)
+      label.push(one.label)
+      color.push(withAlpha(typeColor(one.src_type), 0.35))
+    }
+
+    return {
+      node: {
+        label: nodes.map((one) => one.label),
+        color: nodes.map((one) => typeColor(one.slug)),
+        pad: 14,
+        thickness: 14,
+        line: { width: 0 },
+      },
+      links: { source, target, value, label, color },
+      dropped,
+    }
+  }, [overview, typeColor])
 
   const { nodes, links } = useMemo(() => {
     if (!overview) return { nodes: [] as CanvasNode[], links: [] as CanvasLink[] }
@@ -465,37 +538,102 @@ function SchemaView({
 
   return (
     <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
-      <GraphCanvas
-        nodes={nodes}
-        links={links}
-        wide={wide}
-        onToggleWide={onToggleWide}
-        linkLabels
-        selectedId={selected}
-        onNodeClick={setSelected}
-        onNodeDoubleClick={(slug) => {
-          if ((overview?.nodes.find((one) => one.slug === slug)?.count ?? 0) > 0) onDrawType(slug)
-        }}
-        onBackgroundClick={() => setSelected(null)}
-        onEscape={() => setSelected(null)}
-        exportName="구조"
-        overlay={
-          <>
-            {loading && (
-              <div className="absolute inset-0 flex items-center justify-center">
-                <Loader2 className="text-muted-foreground size-5 animate-spin" />
-              </div>
-            )}
-            {overview && (
-              <div className="text-muted-foreground bg-background/80 absolute bottom-2 left-2 rounded px-2 py-1 text-xs">
-                타입 {overview.nodes.length} · 관계 종류 {overview.edges.length} · 객체{' '}
-                {overview.object_count.toLocaleString()} · 관계{' '}
-                {overview.edge_count.toLocaleString()}
-              </div>
-            )}
-          </>
-        }
-      />
+      {/* **같은 정의를 두 모양으로 본다.** 그물은 「무엇이 무엇과 이어지나」 를, 흐름은
+          「어디서 어디로 얼마나 가나」 를 보여 준다 — 관계가 단계로 이어지는 구조
+          (접수 → 검토 → 승인)는 그물에서 잘 안 읽힌다. */}
+      {shape === 'flow' ? (
+        <div className="relative rounded-md border p-2">
+          {/* **나갈 길은 어느 모양에서나 있어야 한다.** 전체화면에서 흐름으로 넘어온
+              사람에게 축소 단추가 없으면, 브라우저가 전체화면을 거절한 경우 ESC 도
+              안 먹어 갇힌다. */}
+          <div className="absolute top-2 left-2 z-10 flex items-center gap-1">
+            <Button
+              size="sm"
+              variant="outline"
+              className="bg-background/90 backdrop-blur"
+              onClick={() => setShape('web')}
+            >
+              <Share2 className="mr-1 size-3.5" />
+              그물로
+            </Button>
+            <Button
+              size="icon-sm"
+              variant="outline"
+              className="bg-background/90 backdrop-blur"
+              aria-label={wide ? '축소' : '넓게 보기'}
+              title={wide ? '축소' : '넓게 보기'}
+              onClick={onToggleWide}
+            >
+              {wide ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+            </Button>
+          </div>
+          {flow.links.source.length === 0 ? (
+            <p className="text-muted-foreground py-16 text-center text-sm">
+              이어진 관계가 아직 없습니다 — 흐름은 <strong>실제로 걸린</strong> 관계가 있어야
+              그려집니다. 정의만 있는 관계는 굵기가 없어 그릴 것이 없습니다.
+            </p>
+          ) : (
+            <LazyPlot
+              height={520}
+              title="타입 사이의 흐름"
+              data={[{ type: 'sankey', node: flow.node, link: flow.links }]}
+              layout={{ margin: { t: 44, r: 16, b: 16, l: 16 }, showlegend: false }}
+            />
+          )}
+          {flow.dropped > 0 && (
+            <p className="text-muted-foreground px-2 pb-1 text-xs">
+              되돌아오는 관계 {flow.dropped}개는 흐름에서 뺐습니다 — 흐름 그림은 한 방향으로만
+              흐릅니다. 그 관계들은 <strong>그물</strong>에서 보입니다.
+            </p>
+          )}
+        </div>
+      ) : (
+        <GraphCanvas
+          nodes={nodes}
+          links={links}
+          wide={wide}
+          onToggleWide={onToggleWide}
+          linkLabels
+          selectedId={selected}
+          onNodeClick={setSelected}
+          onNodeDoubleClick={(slug) => {
+            if ((overview?.nodes.find((one) => one.slug === slug)?.count ?? 0) > 0) onDrawType(slug)
+          }}
+          onBackgroundClick={() => setSelected(null)}
+          onEscape={() => setSelected(null)}
+          exportName="구조"
+          overlay={
+            <>
+              {/* **그물에서는 단계가 안 읽힌다.** 접수 → 검토 → 승인처럼 한 방향으로
+                  이어지는 구조는 흐름에서 한눈에 보인다. 이을 관계가 하나도 없으면
+                  단추를 안 낸다 — 눌러서 빈 그림을 보는 일은 없는 편이 낫다. */}
+              {flow.links.source.length > 0 && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="bg-background/90 absolute top-2 left-2 z-10 backdrop-blur"
+                  onClick={() => setShape('flow')}
+                >
+                  <Waypoints className="mr-1 size-3.5" />
+                  흐름으로
+                </Button>
+              )}
+              {loading && (
+                <div className="absolute inset-0 flex items-center justify-center">
+                  <Loader2 className="text-muted-foreground size-5 animate-spin" />
+                </div>
+              )}
+              {overview && (
+                <div className="text-muted-foreground bg-background/80 absolute bottom-2 left-2 rounded px-2 py-1 text-xs">
+                  타입 {overview.nodes.length} · 관계 종류 {overview.edges.length} · 객체{' '}
+                  {overview.object_count.toLocaleString()} · 관계{' '}
+                  {overview.edge_count.toLocaleString()}
+                </div>
+              )}
+            </>
+          }
+        />
+      )}
       <aside className="space-y-3 text-sm">
         {picked ? (
           <div className="space-y-3 rounded-md border p-3">

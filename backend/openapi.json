@@ -4215,6 +4215,173 @@
         }
       }
     },
+    "/api/objects/{type_slug}/points": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Points",
+        "description": "**안 센 값들** — 상자 그림과 산점도가 쓴다.\n\n집계는 「몇 건인가」 에 답하지만 **분포는 집계로 안 보인다.** 평균이 같은 두 공정이\n전혀 다른 모양일 수 있고, 그 차이가 대개 문제의 자리다.\n\n거르기는 목록과 똑같이 온다. 값이 없는 행은 빠진다 — 0 으로 채우면 없는 점이\n원점에 모여 그림이 거짓말을 한다.",
+        "operationId": "points_api_objects__type_slug__points_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "x",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "숫자 칸 — properties.<칸>",
+              "title": "X"
+            },
+            "description": "숫자 칸 — properties.<칸>"
+          },
+          {
+            "name": "y",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "두 번째 숫자 칸(산점도)",
+              "title": "Y"
+            },
+            "description": "두 번째 숫자 칸(산점도)"
+          },
+          {
+            "name": "group_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "상자를 가를 축 · 점의 색",
+              "title": "Group By"
+            },
+            "description": "상자를 가를 축 · 점의 색"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "under",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Under"
+            }
+          },
+          {
+            "name": "deep",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Deep"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2999,
+                  "minimum": 1900
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/tree": {
       "get": {
         "tags": [
@@ -10573,6 +10740,112 @@
           "revoked_at"
         ],
         "title": "PatOut"
+      },
+      "PointOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "x": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "X"
+          },
+          "y": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Y"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "group",
+          "x"
+        ],
+        "title": "PointOut",
+        "description": "점 하나 — 상자 그림의 값, 산점도의 좌표."
+      },
+      "PointsOut": {
+        "properties": {
+          "x_label": {
+            "type": "string",
+            "title": "X Label"
+          },
+          "y_label": {
+            "type": "string",
+            "title": "Y Label"
+          },
+          "group_label": {
+            "type": "string",
+            "title": "Group Label"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/PointOut"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "number_fields": {
+            "items": {
+              "$ref": "#/components/schemas/GroupOptionOut"
+            },
+            "type": "array",
+            "title": "Number Fields"
+          },
+          "group_options": {
+            "items": {
+              "$ref": "#/components/schemas/GroupOptionOut"
+            },
+            "type": "array",
+            "title": "Group Options"
+          }
+        },
+        "type": "object",
+        "required": [
+          "x_label",
+          "y_label",
+          "group_label",
+          "rows",
+          "total",
+          "truncated",
+          "number_fields",
+          "group_options"
+        ],
+        "title": "PointsOut",
+        "description": "**안 센 값들.** 분포는 집계로 안 보인다 — 평균이 같은 두 공정이 전혀 다른\n모양일 수 있고, 그 차이가 대개 문제의 자리다."
       },
       "PreviewOut": {
         "properties": {
