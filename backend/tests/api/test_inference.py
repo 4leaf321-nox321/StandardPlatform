@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import uuid
+from typing import Any
 
 from fastapi.testclient import TestClient
 
@@ -22,12 +23,16 @@ CSV = "﻿" + "\n".join(
 )
 
 
-def _upload(client: TestClient, admin: Signed, text: str, name: str = "parts.csv") -> dict:
-    return client.post(
-        "/api/ontology/infer",
-        files={"file": (name, io.BytesIO(text.encode("utf-8")), "text/csv")},
-        headers=admin.headers,
-    ).json()
+def _upload(
+    client: TestClient, admin: Signed, text: str, name: str = "parts.csv"
+) -> dict[str, Any]:
+    return dict(
+        client.post(
+            "/api/ontology/infer",
+            files={"file": (name, io.BytesIO(text.encode("utf-8")), "text/csv")},
+            headers=admin.headers,
+        ).json()
+    )
 
 
 def test_열마다_역할과_종류를_제안한다(client: TestClient, admin: Signed) -> None:
