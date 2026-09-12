@@ -21,6 +21,7 @@ from app.modules.workspaces.schemas import (
     MemberAddRequest,
     MemberOut,
     MemberRoleRequest,
+    WorkspaceContentOut,
     WorkspaceCreateRequest,
     WorkspaceImportPlanOut,
     WorkspaceImportRequest,
@@ -28,6 +29,8 @@ from app.modules.workspaces.schemas import (
     WorkspaceMoveRequest,
     WorkspaceOption,
     WorkspaceOut,
+    WorkspaceReassignRequest,
+    WorkspaceReassignResult,
     WorkspaceReferenceOut,
     WorkspaceReorderRequest,
     WorkspaceUpdateRequest,
@@ -180,7 +183,13 @@ def move_workspace(
     admin: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> WorkspaceOut:
-    workspace = services.move(db, slug=slug, parent_slug=payload.parent_slug)
+    workspace = services.move(
+        db,
+        slug=slug,
+        parent_slug=payload.parent_slug,
+        position=payload.position,
+        actor=admin,
+    )
     return services.workspace_out(db, workspace, admin)
 
 
@@ -203,6 +212,34 @@ def workspace_references(
 ) -> list[WorkspaceReferenceOut]:
     """무엇이 이 부서를 가리키는가. 삭제 확인 화면이 부른다."""
     return services.references(db, slug=slug)
+
+
+@router.get("/{slug}/contents", response_model=list[WorkspaceContentOut])
+def workspace_contents(
+    slug: str,
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> list[WorkspaceContentOut]:
+    """이 부서가 가진 것 — 자료 옮기기 화면이 부른다. 0 건도 나간다."""
+    return services.contents(db, slug=slug)
+
+
+@router.post("/{slug}/reassign", response_model=WorkspaceReassignResult)
+def reassign_workspace(
+    slug: str,
+    payload: WorkspaceReassignRequest,
+    admin: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> WorkspaceReassignResult:
+    """자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계.
+
+    옮기고 나서 원본을 보관하거나 지운다. 고른 종류만 옮기고, 하나라도 실패하면
+    아무것도 안 옮긴다.
+    """
+    moved = services.reassign(
+        db, slug=slug, target_slug=payload.target_slug, kinds=payload.kinds, actor=admin
+    )
+    return WorkspaceReassignResult(moved=moved)
 
 
 @router.delete("/{slug}", status_code=204)

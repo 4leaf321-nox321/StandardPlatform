@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -20,6 +21,7 @@ from app.modules.workspaces.models import Workspace, WorkspaceMember
 from app.modules.workspaces.schemas import (
     SLUG_PATTERN,
     MemberOut,
+    WorkspaceContentOut,
     WorkspaceOption,
     WorkspaceOut,
     WorkspaceReferenceOut,
@@ -243,15 +245,27 @@ def update(
     return workspace
 
 
-def move(db: Session, *, slug: str, parent_slug: str | None) -> Workspace:
-    """상위 부서 바꾸기 — 조직 개편.
+def move(
+    db: Session,
+    *,
+    slug: str,
+    parent_slug: str | None,
+    position: int | None = None,
+    actor: User | None = None,
+) -> Workspace:
+    """상위 부서 바꾸기 — 조직 개편. `position` 을 주면 **형제 사이 자리까지** 정한다.
 
     **자료는 하나도 안 움직인다.** 자료는 부서 id 를 가리키고, 트리를 옮겨도 그 id 는
     그대로다. 조직 식별자를 데이터에 직접 박았다면 개편에 대응할 수단이 없다.
+
+    끌어 놓기가 자리를 한 번에 정하는 이유: 화면이 형제들의 순서를 제 손으로 다시
+    매겨 PATCH 를 여러 번 보내면, 중간에 하나가 실패했을 때 **트리가 반쯤 뒤섞인
+    채로 남는다.** 여기서 한 트랜잭션으로 끝낸다.
     """
     workspace = workspace_by_slug(db, slug)
+    before_parent = db.get(Workspace, workspace.parent_id) if workspace.parent_id else None
     if parent_slug is None:
-        workspace.parent_id = None
+        parent_id = None
     else:
         parent = workspace_by_slug(db, parent_slug)
         # **자기 하위로는 못 간다.** 막지 않으면 트리에서 통째로 사라지고, 화면에
@@ -262,7 +276,43 @@ def move(db: Session, *, slug: str, parent_slug: str | None) -> Workspace:
                 "자기 자신이나 하위 부서 아래로는 옮길 수 없습니다.",
                 status=400,
             )
-        workspace.parent_id = parent.id
+        parent_id = parent.id
+    moved_out = parent_id != workspace.parent_id
+    workspace.parent_id = parent_id
+
+    siblings = sorted(
+        (
+            item
+            for item in db.scalars(select(Workspace).where(Workspace.parent_id == parent_id))
+            if item.id != workspace.id
+        ),
+        key=lambda item: (item.sort_order, item.name),
+    )
+    if position is None:
+        # 자리를 안 주면 **끝에 붙인다.** 옛 자리의 sort_order 를 들고 오면 새 형제들
+        # 사이 아무 데나 끼어드는데, 그것은 아무도 시키지 않은 순서다.
+        workspace.sort_order = (siblings[-1].sort_order + 1) if siblings else 0
+    else:
+        index = max(0, min(position, len(siblings)))
+        siblings.insert(index, workspace)
+        # **자리를 통째로 다시 매긴다** — 옛 데이터에 같은 값이 여럿이면 끼워 넣기만
+        # 해서는 순서가 안 바뀐 것처럼 보인다.
+        for order, item in enumerate(siblings):
+            item.sort_order = order
+    if moved_out or position is not None:
+        audit.record(
+            db,
+            action=audit.WORKSPACE_MOVED,
+            actor=actor,
+            target_table="workspaces",
+            target_id=workspace.id,
+            target_label=workspace.name,
+            workspace_id=workspace.id,
+            changes=audit.diff(
+                {"parent": before_parent.slug if before_parent else None},
+                {"parent": parent_slug},
+            ),
+        )
     db.commit()
     db.refresh(workspace)
     return workspace
@@ -368,6 +418,116 @@ def delete(db: Session, *, slug: str, actor: User) -> None:
     )
     db.delete(workspace)
     db.commit()
+
+
+# --- 자료 옮기기(부서 통폐합) ------------------------------------------------
+
+
+def _move_members(db: Session, source_id: uuid.UUID, target_id: uuid.UUID) -> int:
+    """멤버십을 옮긴다. **양쪽에 이미 있는 사람은 원본 쪽만 지운다** — 짝이 유일해야
+    하고(uq_workspace_members_pair), 옮기다 막히면 통폐합 전체가 멈춘다.
+
+    역할은 높은 쪽을 남긴다. 대상 부서에서 관리자였던 사람을 멤버로 낮추면, 통폐합
+    직후에 그 부서를 고칠 수 있는 사람이 줄어든다.
+    """
+    existing = {
+        row.user_id: row
+        for row in db.scalars(
+            select(WorkspaceMember).where(WorkspaceMember.workspace_id == target_id)
+        )
+    }
+    moved = 0
+    for row in list(
+        db.scalars(select(WorkspaceMember).where(WorkspaceMember.workspace_id == source_id))
+    ):
+        already = existing.get(row.user_id)
+        if already is not None:
+            if row.role == "manager":
+                already.role = "manager"
+            db.delete(row)
+        else:
+            row.workspace_id = target_id
+            existing[row.user_id] = row
+        moved += 1
+    # 대표 소속이 사라지는 부서를 가리키고 있으면 함께 옮긴다. FK 가 SET NULL 이라
+    # 안 옮기면 삭제 순간 조용히 비고, 그 사람은 다음 로그인에서 아무 데도 안 선다.
+    db.execute(
+        sa_update(User)
+        .where(User.home_workspace_id == source_id)
+        .values(home_workspace_id=target_id)
+    )
+    return moved
+
+
+def own_content(db: Session, workspace_id: uuid.UUID) -> list[extensions.WorkspaceContent]:
+    """부서 모듈 자신이 옮길 수 있는 것. 도메인 것은 레지스트리가 더한다."""
+    return [
+        extensions.WorkspaceContent(
+            kind="members",
+            label="멤버",
+            count=member_count(db, workspace_id),
+            move=_move_members,
+        )
+    ]
+
+
+def _contents(db: Session, workspace_id: uuid.UUID) -> list[extensions.WorkspaceContent]:
+    return own_content(db, workspace_id) + extensions.workspace_contents(db, workspace_id)
+
+
+def contents(db: Session, *, slug: str) -> list[WorkspaceContentOut]:
+    """이 부서가 **가진** 것 — 옮기기 화면이 먼저 부른다.
+
+    삭제 확인의 `references` 와 다르다. 저기는 「이 부서를 가리켜서 삭제를 막는 것」
+    이고, 여기는 「다른 부서로 넘길 수 있는 것」 이다. 넘길 수 없는 참조(관계 선·
+    속성 값)는 여기 안 뜬다 — 자동으로 바꾸면 담당 부서가 사람 모르게 바뀐다.
+    """
+    workspace = workspace_by_slug(db, slug)
+    return [
+        WorkspaceContentOut(kind=one.kind, label=one.label, count=one.count)
+        for one in _contents(db, workspace.id)
+    ]
+
+
+def reassign(
+    db: Session, *, slug: str, target_slug: str, kinds: list[str], actor: User
+) -> dict[str, int]:
+    """자료를 다른 부서로 통째 옮긴다 — **부서 통폐합의 앞 단계.**
+
+    옮기고 나서 원본을 보관하거나 지운다. 삭제만 있고 이 길이 없으면, 없어지는 부서의
+    자료를 살리는 방법이 「하나씩 손으로 고치기」 뿐이다 — 그 일은 아무도 끝내지 못하고,
+    결국 쓰지 않는 부서가 목록에 영원히 남는다.
+
+    **고른 종류만 옮기고, 하나라도 실패하면 아무것도 안 옮긴다.** 절반만 옮겨진 부서는
+    어디까지 됐는지 화면으로 알 수 없다.
+    """
+    source = workspace_by_slug(db, slug)
+    target = workspace_by_slug(db, target_slug)
+    if source.id == target.id:
+        raise AppError(code("WORKSPACES", 14), "같은 부서로는 옮길 수 없습니다.", status=400)
+    available = {one.kind: one for one in _contents(db, source.id)}
+    unknown = [one for one in kinds if one not in available]
+    if unknown:
+        raise AppError(
+            code("WORKSPACES", 15),
+            f"옮길 수 없는 종류입니다: {', '.join(unknown)}. "
+            f"이 설치가 아는 것: {', '.join(available)}",
+            status=422,
+        )
+    moved = {kind: available[kind].move(db, source.id, target.id) for kind in kinds}
+    audit.record(
+        db,
+        action=audit.WORKSPACE_REASSIGNED,
+        actor=actor,
+        target_table="workspaces",
+        target_id=source.id,
+        target_label=source.name,
+        workspace_id=source.id,
+        changes={"target": target.slug, "moved": moved},
+        reason=f"{source.name} → {target.name}",
+    )
+    db.commit()
+    return moved
 
 
 # --- 멤버 --------------------------------------------------------------------

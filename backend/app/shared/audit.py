@@ -51,6 +51,11 @@ LOGIN_THROTTLED = "auth.login_throttled"
 """같은 계정의 실패가 문턱을 넘어 응답을 늦추기 시작했다. 실패마다 남기면 넘치므로
 문턱을 넘는 순간 한 번만."""
 WORKSPACE_DELETED = "workspace.deleted"
+WORKSPACE_MOVED = "workspace.moved"
+"""조직 개편 — 상위 부서나 형제 순서가 바뀌었다. **자료는 하나도 안 움직인다.**"""
+WORKSPACE_REASSIGNED = "workspace.reassigned"
+"""자료를 다른 부서로 통째 옮겼다. 부서 통폐합의 앞 단계 — 옮기고 나서 보관하거나
+지운다. 무엇이 몇 건 옮겨졌는지가 changes 에 남는다."""
 
 
 def diff(before: dict[str, Any], after: dict[str, Any]) -> dict[str, Any]:

@@ -9,11 +9,17 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
-from sqlalchemy import Select, Text, func, or_, select
+from sqlalchemy import Select, Text, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.objects import system
-from app.modules.objects.models import ObjectAlias, ObjectInstance, ObjectLink, ObjectYear
+from app.modules.objects.models import (
+    ObjectAlias,
+    ObjectInstance,
+    ObjectLink,
+    ObjectYear,
+    SavedView,
+)
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.ontology.services import InvalidValue, object_ref_ids
 from app.shared import extensions
@@ -276,6 +282,60 @@ def workspace_reference(
             label="이 부서를 가리키는 객체(속성)",
             count=int(referring),
             blocks_delete=True,
+        ),
+    ]
+
+
+def _move_objects(db: Session, source: uuid.UUID, target: uuid.UUID) -> int:
+    """소유 부서를 바꾼다. **지운 객체도 함께 옮긴다** — 행이 남아 있으면 FK 는
+    그대로 붙들고, 그러면 원본 부서를 끝내 지울 수 없다."""
+    done = db.execute(
+        update(ObjectInstance)
+        .where(ObjectInstance.owner_workspace_id == source)
+        .values(owner_workspace_id=target)
+    )
+    return extensions.rows_changed(done)
+
+
+def _move_saved_views(db: Session, source: uuid.UUID, target: uuid.UUID) -> int:
+    done = db.execute(
+        update(SavedView).where(SavedView.workspace_id == source).values(workspace_id=target)
+    )
+    return extensions.rows_changed(done)
+
+
+def workspace_content(
+    db: Session, workspace_id: uuid.UUID
+) -> list[extensions.WorkspaceContent]:
+    """부서 통폐합 때 **옮길 수 있는 것.** 참조(`workspace_reference`)와 다르다 —
+    저기는 「가리키는 것」 이고 여기는 「가진 것」 이다.
+
+    관계 선과 속성 참조는 여기 없다. 그것들은 이 부서를 **값으로** 가리키는 것이라,
+    옮기는 것이 아니라 고쳐야 한다 — 자동으로 바꾸면 「담당 부서」 가 사람 모르게
+    바뀐다.
+    """
+    objects = (
+        db.scalar(
+            select(func.count())
+            .select_from(ObjectInstance)
+            .where(ObjectInstance.owner_workspace_id == workspace_id)
+        )
+        or 0
+    )
+    views = (
+        db.scalar(
+            select(func.count())
+            .select_from(SavedView)
+            .where(SavedView.workspace_id == workspace_id)
+        )
+        or 0
+    )
+    return [
+        extensions.WorkspaceContent(
+            kind="objects", label="객체", count=int(objects), move=_move_objects
+        ),
+        extensions.WorkspaceContent(
+            kind="saved_views", label="저장된 뷰", count=int(views), move=_move_saved_views
         ),
     ]
 

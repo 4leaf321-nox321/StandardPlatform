@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import BinaryIO
 
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, func, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -172,6 +172,34 @@ def stats(db: Session) -> list[extensions.StatItem]:
         or 0
     )
     return [extensions.StatItem(label="첨부", count=total)]
+
+
+def _move_attachments(db: Session, source: uuid.UUID, target: uuid.UUID) -> int:
+    done = db.execute(
+        update(Attachment).where(Attachment.workspace_id == source).values(workspace_id=target)
+    )
+    return extensions.rows_changed(done)
+
+
+def workspace_content(
+    db: Session, workspace_id: uuid.UUID
+) -> list[extensions.WorkspaceContent]:
+    """부서 통폐합 때 옮길 첨부. **파일 자체는 안 움직인다** — 저장소의 경로는
+    그대로고 소유 부서만 바뀐다. 옮기는 데 걸리는 시간이 파일 크기와 무관해야
+    사람이 큰 부서도 통폐합할 수 있다."""
+    count = (
+        db.scalar(
+            select(func.count())
+            .select_from(Attachment)
+            .where(Attachment.workspace_id == workspace_id)
+        )
+        or 0
+    )
+    return [
+        extensions.WorkspaceContent(
+            kind="attachments", label="첨부", count=int(count), move=_move_attachments
+        )
+    ]
 
 
 def workspace_reference(

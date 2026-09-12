@@ -21,7 +21,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -31,7 +31,7 @@ from app.modules.objects import aliases, bulk
 from app.modules.objects.models import ObjectAlias, ObjectInstance
 from app.modules.objects.services import properties_of
 from app.modules.ontology.models import ObjectType, PropertyDef
-from app.shared import audit
+from app.shared import audit, extensions
 from app.shared.errors import AppError, code
 from app.shared.text import compare_key
 
@@ -513,3 +513,32 @@ def due(db: Session, now: datetime | None = None) -> list[DataSource]:
         ):
             out.append(source)
     return out
+
+
+def _move_sources(db: Session, source_id: uuid.UUID, target_id: uuid.UUID) -> int:
+    done = db.execute(
+        update(DataSource)
+        .where(DataSource.workspace_id == source_id)
+        .values(workspace_id=target_id)
+    )
+    return extensions.rows_changed(done)
+
+
+def workspace_content(
+    db: Session, workspace_id: uuid.UUID
+) -> list[extensions.WorkspaceContent]:
+    """부서 통폐합 때 옮길 데이터 소스. **새로 들어오는 객체의 소유 부서가 이것으로
+    정해진다** — 안 옮기면 통폐합 뒤에도 동기화가 없어진 부서로 계속 넣는다."""
+    count = (
+        db.scalar(
+            select(func.count())
+            .select_from(DataSource)
+            .where(DataSource.workspace_id == workspace_id)
+        )
+        or 0
+    )
+    return [
+        extensions.WorkspaceContent(
+            kind="datasources", label="데이터 소스", count=int(count), move=_move_sources
+        )
+    ]

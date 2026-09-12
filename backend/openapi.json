@@ -1280,6 +1280,106 @@
         }
       }
     },
+    "/api/workspaces/{slug}/contents": {
+      "get": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "Workspace Contents",
+        "description": "이 부서가 가진 것 — 자료 옮기기 화면이 부른다. 0 건도 나간다.",
+        "operationId": "workspace_contents_api_workspaces__slug__contents_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkspaceContentOut"
+                  },
+                  "title": "Response Workspace Contents Api Workspaces  Slug  Contents Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/workspaces/{slug}/reassign": {
+      "post": {
+        "tags": [
+          "workspaces"
+        ],
+        "summary": "Reassign Workspace",
+        "description": "자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계.\n\n옮기고 나서 원본을 보관하거나 지운다. 고른 종류만 옮기고, 하나라도 실패하면\n아무것도 안 옮긴다.",
+        "operationId": "reassign_workspace_api_workspaces__slug__reassign_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WorkspaceReassignRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkspaceReassignResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/workspaces/{slug}/members": {
       "get": {
         "tags": [
@@ -12069,6 +12169,30 @@
         ],
         "title": "WebhookWriteRequest"
       },
+      "WorkspaceContentOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "label",
+          "count"
+        ],
+        "title": "WorkspaceContentOut",
+        "description": "이 부서가 **가진** 것 한 종류. 옮기기 화면이 고를 목록으로 쓴다.\n\n`WorkspaceReferenceOut` 과 다르다 — 저기는 「가리켜서 삭제를 막는 것」 이고\n여기는 「다른 부서로 넘길 수 있는 것」 이다. 0 건도 나간다(빠지면 사람은 그\n종류가 안 옮겨지는 줄 안다)."
+      },
       "WorkspaceCreateRequest": {
         "properties": {
           "slug": {
@@ -12274,6 +12398,18 @@
               }
             ],
             "title": "Parent Slug"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
           }
         },
         "type": "object",
@@ -12397,6 +12533,45 @@
           "my_role"
         ],
         "title": "WorkspaceOut"
+      },
+      "WorkspaceReassignRequest": {
+        "properties": {
+          "target_slug": {
+            "type": "string",
+            "title": "Target Slug"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Kinds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_slug",
+          "kinds"
+        ],
+        "title": "WorkspaceReassignRequest",
+        "description": "자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계."
+      },
+      "WorkspaceReassignResult": {
+        "properties": {
+          "moved": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Moved"
+          }
+        },
+        "type": "object",
+        "required": [
+          "moved"
+        ],
+        "title": "WorkspaceReassignResult"
       },
       "WorkspaceReferenceOut": {
         "properties": {

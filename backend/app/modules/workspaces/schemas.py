@@ -73,6 +73,11 @@ class WorkspaceMoveRequest(BaseModel):
     """
 
     parent_slug: str | None = None
+    position: int | None = Field(default=None, ge=0)
+    """형제 사이 몇 번째 자리인가(0 부터). 안 주면 끝에 붙인다.
+
+    끌어 놓기가 이 값을 준다. 화면이 형제 순서를 제 손으로 다시 매겨 여러 번
+    저장하면, 중간에 하나가 실패했을 때 **트리가 반쯤 뒤섞인 채로 남는다.**"""
 
 
 class WorkspaceReorderRequest(BaseModel):
@@ -87,6 +92,30 @@ class WorkspaceReferenceOut(BaseModel):
     count: int
     blocks_delete: bool
     """지우려면 먼저 정리해야 하는가. RESTRICT 도 여기 들어간다 — DB 가 거부한다."""
+
+
+class WorkspaceContentOut(BaseModel):
+    """이 부서가 **가진** 것 한 종류. 옮기기 화면이 고를 목록으로 쓴다.
+
+    `WorkspaceReferenceOut` 과 다르다 — 저기는 「가리켜서 삭제를 막는 것」 이고
+    여기는 「다른 부서로 넘길 수 있는 것」 이다. 0 건도 나간다(빠지면 사람은 그
+    종류가 안 옮겨지는 줄 안다)."""
+
+    kind: str
+    label: str
+    count: int
+
+
+class WorkspaceReassignRequest(BaseModel):
+    """자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계."""
+
+    target_slug: str
+    kinds: list[str] = Field(min_length=1)
+    """옮길 종류. **고른 것만 옮긴다** — 멤버는 두고 객체만 넘기는 개편이 흔하다."""
+
+
+class WorkspaceReassignResult(BaseModel):
+    moved: dict[str, int]
 
 
 class MemberOut(BaseModel):

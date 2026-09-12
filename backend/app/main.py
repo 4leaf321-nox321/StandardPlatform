@@ -27,6 +27,7 @@ from app.modules.accounts import services as accounts_services
 from app.modules.audit import routes as audit_routes
 from app.modules.auth import routes as auth_routes
 from app.modules.datasources import routes as datasources_routes
+from app.modules.datasources import services as datasources_services
 from app.modules.files import routes as files_routes
 from app.modules.files import services as files_services
 from app.modules.graph import routes as graph_routes
@@ -105,6 +106,11 @@ def _register_extensions() -> None:
     # **부서를 지울 때 그 부서 소유의 객체가 목록에 뜬다.** 안 걸면 사람은
     # 아무것도 안 걸린 줄 알고 지우려 하는데, FK 가 RESTRICT 라 500 이 난다.
     extensions.register_workspace_reference(objects_services.workspace_reference)
+    # **부서를 통폐합할 때 자료를 넘기는 길.** 안 걸면 그 표는 옮기기 화면에 안 뜨고,
+    # 사람은 없어지는 부서를 비울 방법이 없어 삭제도 보관도 못 한다.
+    extensions.register_workspace_content(objects_services.workspace_content)
+    extensions.register_workspace_content(files_services.workspace_content)
+    extensions.register_workspace_content(datasources_services.workspace_content)
     # 데이터 품질 — 필수값 빈 것·고아·깨진 참조·이름 같은 것을 홈 「남은 일」 에.
     extensions.register_maintenance(objects_quality.maintenance)
     extensions.register_stats(objects_quality.stats)
@@ -137,6 +143,7 @@ def _register_extensions() -> None:
     #   extensions.register_stats(equipment_services.stats)
     #   extensions.register_maintenance(equipment_services.maintenance)
     #   extensions.register_workspace_reference(equipment_services.workspace_reference)
+    #   extensions.register_workspace_content(equipment_services.workspace_content)
     #
     # PAT 범위도 같은 자리에서 연다. **안 열면 기계 자격으로 못 고친다** —
     # 그것이 맞는 기본값이다(shared/scopes.py).
