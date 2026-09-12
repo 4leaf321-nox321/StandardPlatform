@@ -98,13 +98,15 @@ def fetch(
     """엔티티 셋을 끝까지(상한 안에서) 읽는다. 연결·인증 실패는 **무엇이 실패했는지**
     말한다."""
     url = f"{base_url.rstrip('/')}/{entity_set.strip('/')}"
-    params: dict[str, str] = {"$top": str(max(1, min(page_size, 5000)))}
+    page = max(1, min(page_size, 5000))
+    params: dict[str, str] = {"$top": str(page)}
     if select.strip():
         params["$select"] = select.strip()
     if filter_.strip():
         params["$filter"] = filter_.strip()
     headers = {"Accept": "application/json", **(auth.headers() if auth else {})}
     out = Fetched()
+    skip = 0
     next_url: str | None = url
     next_params: dict[str, str] | None = params
     try:
@@ -144,9 +146,19 @@ def fetch(
                         out.truncated = True
                         return out
                     out.rows.append(row)
-                # nextLink 는 이미 쿼리를 담고 있다 — 다시 붙이면 `$top` 이 두 번 간다.
-                next_url = next_link
-                next_params = None
+                if next_link:
+                    # 서버가 쪽을 넘긴다(server-driven paging). nextLink 는 이미 쿼리를 담고
+                    # 있다 — 다시 붙이면 `$top` 이 두 번 간다.
+                    next_url = next_link
+                    next_params = None
+                elif len(rows) >= page:
+                    # 서버가 안 넘기면 `$top` 은 상한일 뿐이다 — `$skip` 으로 우리가 넘긴다.
+                    # 한 쪽이 꽉 찼을 때만 다음을 묻는다(덜 차면 끝이다).
+                    skip += page
+                    next_url = url
+                    next_params = {**params, "$skip": str(skip)}
+                else:
+                    next_url = None
     except httpx.HTTPError as caught:
         raise AppError(
             code("DATASOURCES", 13),

@@ -54,6 +54,9 @@ class FakeOData:
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
+        # `/plain/` 아래는 nextLink 를 안 주는 서버 흉내 — `$top` 이 상한일 뿐인 곳(Northwind
+        # 공개 표본이 그렇다). 그러면 우리가 `$skip` 으로 넘겨야 전부 온다.
+        plain = request.url.path.startswith("/plain/")
         if self.auth_required and request.headers.get("Authorization") != self.auth_required:
             return httpx.Response(401, json={"error": "no"})
         query = parse_qs(request.url.query.decode())
@@ -71,7 +74,7 @@ class FakeOData:
                 )
             return httpx.Response(200, json=body)
         body = {"value": page}
-        if skip + top < len(rows):
+        if skip + top < len(rows) and not plain:
             body["@odata.nextLink"] = (
                 f"http://plm.local/odata/Suppliers?$top={top}&$skip={skip + top}"
             )
@@ -332,6 +335,21 @@ def test_v2_봉투와_인증과_필터(client: TestClient, admin: Signed, plm: F
         f"/api/datasources/{source['slug']}/sync", headers=admin.headers
     ).json()
     assert failed["run"]["status"] == "failed" and "인증" in failed["errors"][0]
+
+
+def test_nextLink_없는_서버는_skip_으로_넘긴다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    vendor = _vendor_type(client, admin)
+    source = _source(client, admin, vendor, base_url="http://plm.local/plain")
+    done = client.post(
+        f"/api/datasources/{source['slug']}/sync",
+        params={"apply": "true"},
+        headers=admin.headers,
+    ).json()
+    assert done["run"]["rows_seen"] == 3 and done["counts"]["create"] == 3
+    skips = [parse_qs(r.url.query.decode()).get("$skip", ["0"])[0] for r in plm.requests]
+    assert skips == ["0", "2"]  # 2행씩: 꽉 찬 첫 쪽 → 다음, 덜 찬 둘째 쪽 → 끝
 
 
 def test_타이머가_돌릴_차례(client: TestClient, admin: Signed, plm: FakeOData) -> None:
