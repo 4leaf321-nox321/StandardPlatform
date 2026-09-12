@@ -19,14 +19,19 @@
  * 없지」 를 아무도 설명하지 못한다.
  */
 
+import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
+import { Plus } from 'lucide-react'
 
 import { HomeWidget } from '@/modules/objects/HomeWidget'
+import { AddWidgetDialog } from '@/modules/workspaces/AddWidgetDialog'
 import { viewApi } from '@/modules/objects/api'
 import { api } from '@/shared/api/client'
 import type { MaintenanceItem } from '@/shared/api/types'
 import { useAuth } from '@/shared/auth/AuthContext'
+import { isManagerOf } from '@/shared/auth/roles'
 import { APP_NAME } from '@/shared/branding'
+import { Button } from '@/shared/components/ui/button'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { useResource } from '@/shared/hooks/useResource'
@@ -36,6 +41,9 @@ export default function WorkspaceHomePage() {
   const { user } = useAuth()
   const maintenance = useResource(() => api.get<MaintenanceItem[]>('/server/maintenance'), [])
   const widgets = useResource(() => viewApi.home(slug ?? ''), [slug])
+  const [adding, setAdding] = useState(false)
+  // 올리는 것은 부서 관리자다. 못 올리는 사람에게 단추를 보이면 눌러 보고 나서 알게 된다.
+  const canAdd = isManagerOf(user, slug)
 
   const workspace = user?.memberships.find((one) => one.slug === slug)
 
@@ -86,7 +94,15 @@ export default function WorkspaceHomePage() {
           부서 뷰로 저장하고, 그 뷰를 홈에 올리면 여기 그려진다. */}
       {(widgets.data ?? []).length > 0 ? (
         <section className="space-y-3">
-          <h2 className="text-base font-semibold">부서가 보는 것</h2>
+          <div className="flex items-center justify-between">
+            <h2 className="text-base font-semibold">부서가 보는 것</h2>
+            {canAdd && (
+              <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
+                <Plus className="mr-1 size-4" />
+                위젯 추가
+              </Button>
+            )}
+          </div>
           <div className="grid gap-4 lg:grid-cols-2">
             {(widgets.data ?? []).map((one) => (
               <HomeWidget key={one.view.id} widget={one} />
@@ -98,12 +114,21 @@ export default function WorkspaceHomePage() {
            구별되지 않는다. 무엇을 하면 채워지는지까지 적는다. */
         <section className="rounded-md border border-dashed p-6">
           <h2 className="text-sm font-medium">이 아래가 부서의 자리입니다</h2>
-          <p className="text-muted-foreground mt-1 text-sm">
-            타입 목록에서 조건을 걸고 「묶어 보기」 로 축을 고른 다음, <strong>부서 뷰</strong>로
-            저장하고 「홈에 올리기」 를 누르면 그 그림이 여기 섭니다. 부서 관리자가 올립니다.
+          <p className="text-muted-foreground mt-1 mb-3 text-sm">
+            {canAdd
+              ? '무엇을 띄울지 고르면 그 목록이 열립니다. 거기서 조건과 축을 정하고 「홈에 올리기」 를 누르면 여기 섭니다.'
+              : '부서 관리자가 위젯을 올리면 여기 섭니다. 목록 화면의 「묶어 보기」 에서 올립니다.'}
           </p>
+          {canAdd && (
+            <Button variant="outline" size="sm" onClick={() => setAdding(true)}>
+              <Plus className="mr-1 size-4" />
+              위젯 추가
+            </Button>
+          )}
         </section>
       )}
+
+      {adding && <AddWidgetDialog onClose={() => setAdding(false)} />}
     </div>
   )
 }

@@ -14,13 +14,22 @@
  *
  * 「B 등급이 12건」 다음의 물음은 언제나 「그 12건이 뭔데」 다. 거기서 거르기 칸으로
  * 돌아가 값을 다시 치게 하면, 그 한 번이 사람을 엑셀로 돌려보낸다.
+ *
+ * ## 홈에 올리는 단추가 여기 있다
+ *
+ * 「이거 홈에 두고 싶다」 는 생각은 **그림을 막 그려 놓고 보는 이 자리**에서 난다.
+ * 그때 뷰 메뉴를 열어 저장하고 부서와 함께 쓰기를 켜고 메뉴를 다시 열게 하면, 그
+ * 경로를 찾아낸 사람만 이 기능을 쓴다.
  */
 
 import { useEffect, useMemo, useState } from 'react'
-import { BarChart3, ChartLine, ChartPie, Loader2, X } from 'lucide-react'
+import { BarChart3, ChartLine, ChartPie, House, Loader2, X } from 'lucide-react'
 
 import { objectApi } from '@/modules/objects/api'
-import type { ObjectQuery, Summary } from '@/modules/objects/api'
+import type { ObjectQuery, SavedViewQuery, Summary } from '@/modules/objects/api'
+import { PinToHomeDialog } from '@/modules/objects/PinToHomeDialog'
+import { useAuth } from '@/shared/auth/AuthContext'
+import { isManagerOf } from '@/shared/auth/roles'
 import { Chart } from '@/shared/charts'
 import type { ChartKind } from '@/shared/charts'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -94,6 +103,11 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
   const [data, setData] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
+  const [pinning, setPinning] = useState(false)
+  const { user } = useAuth()
+  // 올릴 곳은 내 대표 소속이다 — 뷰를 부서와 함께 쓸 때와 같은 규칙(`ViewPicker`).
+  const myWorkspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
+  const canPin = Boolean(myWorkspace && isManagerOf(user, myWorkspace))
 
   // 거르기가 바뀌면 다시 센다. `query` 는 매 렌더 새 객체라 **내용**으로 비교한다 —
   // 안 그러면 이 효과가 끝없이 돈다.
@@ -217,12 +231,48 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
         </div>
 
         {loading && <Loader2 className="text-muted-foreground size-4 animate-spin" />}
-        <Button variant="ghost" size="icon" aria-label="묶어 보기 닫기" onClick={onClose}>
-          <X className="size-4" />
-        </Button>
+        <div className="ml-auto flex items-center gap-2">
+          {/* **의도가 생기는 자리에 단추를 둔다.** 못 올리는 사람에게는 누가 올리는지
+              적는다 — 단추만 없으면 그 기능이 있는 줄도 모른다. */}
+          {canPin ? (
+            <Button variant="outline" size="sm" onClick={() => setPinning(true)}>
+              <House className="mr-1 size-4" />
+              홈에 올리기
+            </Button>
+          ) : (
+            <span className="text-muted-foreground text-xs">부서 관리자가 홈에 올립니다</span>
+          )}
+          <Button variant="ghost" size="icon" aria-label="묶어 보기 닫기" onClick={onClose}>
+            <X className="size-4" />
+          </Button>
+        </div>
       </div>
 
       <ErrorNotice error={error} />
+
+      {pinning && myWorkspace && (
+        <PinToHomeDialog
+          typeSlug={typeSlug}
+          workspaceSlug={myWorkspace}
+          query={
+            (query.conditions
+              ? { q: query.q ?? '', conditions: query.conditions, status: null }
+              : { q: query.q ?? '', conditions: [], status: null }) as SavedViewQuery
+          }
+          summary={
+            settings.groupBy
+              ? {
+                  group_by: settings.groupBy,
+                  metric: settings.metric,
+                  metric_field: settings.metricField,
+                  chart: settings.chart,
+                }
+              : null
+          }
+          suggested={data ? `${data.group_label}별 ${data.metric_label}` : ''}
+          onClose={() => setPinning(false)}
+        />
+      )}
 
       {data && !error && (
         <div className="space-y-1">

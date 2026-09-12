@@ -288,6 +288,9 @@ export const viewApi = {
       query: SavedViewQuery
       workspace_slug?: string | null
       summary?: SavedViewSummary | null
+      /** 저장하면서 바로 부서 홈에 올릴지. **한 요청이다** — 둘로 나누면 저장은 됐는데
+       *  안 올라간 상태가 생기고, 그때 사람은 무엇을 빠뜨렸는지 모른다. */
+      on_home?: boolean
     },
   ) => api.post<SavedView>(`/objects/${typeSlug}/views`, body),
   /** **보낸 것만 바뀐다.** `on_home` 만 보내 홈에 올리거나 내린다. */

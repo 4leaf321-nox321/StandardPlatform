@@ -11809,6 +11809,11 @@
                 "type": "null"
               }
             ]
+          },
+          "on_home": {
+            "type": "boolean",
+            "title": "On Home",
+            "default": false
           }
         },
         "type": "object",

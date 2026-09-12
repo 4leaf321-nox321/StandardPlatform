@@ -214,7 +214,9 @@ export default function ObjectListPage() {
   const [creating, setCreating] = useState(false)
   /** 묶어 보기를 펼쳐 두었나. **기본은 접힘** — 목록을 보러 온 사람에게
    *  막대를 먼저 들이밀면 목록이 한 화면 아래로 밀린다. */
-  const [grouping, setGrouping] = useState(false)
+  /** 홈의 「위젯 추가」 가 `?group=1` 로 보낸다 — 도착하자마자 묶어 보기가 펼쳐져
+   *  있어야, 여기까지 온 사람이 무엇을 하러 왔는지 화면이 이어서 말한다. */
+  const [grouping, setGrouping] = useState(params.get('group') === '1')
   /** 묶어 보기 설정 — **여기가 들고 있다.** 뷰를 불러오면 그 뷰의 축으로 열려야 하고,
    *  저장할 때는 지금 축이 함께 담겨야 한다. 패널이 혼자 들면 둘 다 못 한다. */
   const [summary, setSummary] = useState<SummarySettings>(DEFAULT_SUMMARY)

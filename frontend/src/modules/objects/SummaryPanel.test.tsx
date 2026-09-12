@@ -6,12 +6,23 @@
  * 차트를 가짜로 바꿔 끼우고, 넘어온 행과 `onPick` 을 들여다본다.
  */
 
-import { render, screen } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 
 const objectApi = vi.hoisted(() => ({ summary: vi.fn() }))
-vi.mock('@/modules/objects/api', () => ({ objectApi }))
+const viewApi = vi.hoisted(() => ({ create: vi.fn() }))
+vi.mock('@/modules/objects/api', () => ({ objectApi, viewApi }))
+
+// 「홈에 올리기」 는 부서 관리자에게만 보인다 — 누구로 로그인했는지가 이 시험의 조건이다.
+const auth = vi.hoisted(() => ({
+  user: {
+    home_workspace_slug: 'cae',
+    memberships: [{ slug: 'cae', role: 'manager', name: '해석팀', path: '해석팀' }],
+  } as Record<string, unknown>,
+}))
+vi.mock('@/shared/auth/AuthContext', () => ({ useAuth: () => auth }))
 
 /** 가짜 차트 — 행마다 단추 하나. 누르면 진짜 차트가 하듯 **행 그대로** 넘긴다. */
 const charts = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }))
@@ -73,14 +84,17 @@ async function panel(data: object) {
   const onSettings = vi.fn()
   // 설정은 **화면이 들고 있다** — 여기서는 호스트 노릇만 한다.
   render(
-    <SummaryPanel
-      typeSlug="part"
-      query={{ q: '볼트' }}
-      settings={DEFAULT_SUMMARY}
-      onSettings={onSettings}
-      onPick={onPick}
-      onClose={vi.fn()}
-    />,
+    // 올린 뒤의 「홈에서 보기」 가 링크라 라우터가 필요하다.
+    <MemoryRouter>
+      <SummaryPanel
+        typeSlug="part"
+        query={{ q: '볼트' }}
+        settings={DEFAULT_SUMMARY}
+        onSettings={onSettings}
+        onPick={onPick}
+        onClose={vi.fn()}
+      />
+    </MemoryRouter>,
   )
   await screen.findByText(/거른 것 전체/)
   return { onPick, onSettings }
@@ -134,5 +148,52 @@ describe('묶어 보기', () => {
     expect(pie).toHaveAttribute('aria-pressed', 'false')
     await userEvent.click(pie)
     expect(onSettings).toHaveBeenCalledWith(expect.objectContaining({ chart: 'pie' }))
+  })
+})
+
+describe('홈에 올리기', () => {
+  it('부서 관리자에게는 단추가, 아닌 사람에게는 누가 올리는지가 보인다', async () => {
+    // **단추만 없으면 그 기능이 있는 줄도 모른다.**
+    await panel(BASE)
+    expect(screen.getByRole('button', { name: '홈에 올리기' })).toBeInTheDocument()
+
+    cleanup()
+    auth.user = {
+      home_workspace_slug: 'cae',
+      memberships: [{ slug: 'cae', role: 'member', name: '해석팀', path: '해석팀' }],
+    }
+    await panel(BASE)
+    expect(screen.queryByRole('button', { name: '홈에 올리기' })).not.toBeInTheDocument()
+    expect(screen.getByText('부서 관리자가 홈에 올립니다')).toBeInTheDocument()
+  })
+
+  it('한 번에 부서 뷰로 저장하고 홈에 올린다', async () => {
+    // 요청 둘로 나누면 저장은 됐는데 안 올라간 상태가 생기고, 그때 사람은 자기가
+    // 무엇을 빠뜨렸는지 모른다.
+    auth.user = {
+      home_workspace_slug: 'cae',
+      memberships: [{ slug: 'cae', role: 'manager', name: '해석팀', path: '해석팀' }],
+    }
+    viewApi.create.mockResolvedValue({ id: 'v9' })
+    await panel(BASE)
+    await userEvent.click(screen.getByRole('button', { name: '홈에 올리기' }))
+
+    // 이름이 미리 채워진다 — 무엇을 올리는지 사람이 이미 안다.
+    const name = await screen.findByPlaceholderText(/홈에 뜰 이름/)
+    expect(name).toHaveValue('등급별 건수')
+    await userEvent.click(screen.getByRole('button', { name: /홈에 올리기/ }))
+
+    await waitFor(() =>
+      expect(viewApi.create).toHaveBeenCalledWith(
+        'part',
+        expect.objectContaining({
+          name: '등급별 건수',
+          workspace_slug: 'cae',
+          on_home: true,
+          summary: expect.objectContaining({ group_by: 'status' }),
+        }),
+      ),
+    )
+    expect(await screen.findByRole('link', { name: '홈에서 보기' })).toBeInTheDocument()
   })
 })

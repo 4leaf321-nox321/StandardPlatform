@@ -627,6 +627,8 @@ def create_view(
     )
     db.add(row)
     db.flush()
+    if payload.on_home:
+        _set_home(db, user, row, on_home=True)
     audit.record(
         db,
         action="object.view.create",

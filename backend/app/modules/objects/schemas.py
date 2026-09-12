@@ -347,6 +347,12 @@ class SavedViewWriteRequest(BaseModel):
     workspace_slug: str | None = None
     """부서와 함께 쓸지. 그 부서의 관리자여야 한다."""
     summary: SavedViewSummary | None = None
+    on_home: bool = False
+    """저장하면서 **바로 부서 홈에 올릴지.**
+
+    한 번에 받는 이유: 화면에서 「홈에 올리기」 는 한 동작인데 요청 둘로 나누면 저장은
+    됐는데 안 올라간 상태가 생기고, 그때 사람은 자기가 무엇을 빠뜨렸는지 모른다.
+    """
 
 
 class SavedViewPatchRequest(BaseModel):

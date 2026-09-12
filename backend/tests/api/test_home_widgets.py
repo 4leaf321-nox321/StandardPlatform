@@ -84,6 +84,26 @@ def test_뷰가_묶어_보기_설정을_담고_홈에_오른다(
     assert client.get(f"/api/objects/{part}/views", headers=manager.headers).json()
 
 
+def test_저장과_올리기가_한_번에_된다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """화면에서 「홈에 올리기」 는 한 동작이다. 요청 둘로 나누면 저장은 됐는데 안 올라간
+    상태가 생기고, 그때 사람은 자기가 무엇을 빠뜨렸는지 모른다."""
+    part = _type_with_grade(client, admin)
+    view = _view(
+        client,
+        manager,
+        part,
+        workspace_slug=manager.workspace,
+        summary={"group_by": "properties.grade", "metric": "count", "chart": "bar"},
+        on_home=True,
+    )
+    assert view["home_order"] == 0
+    assert [one["view"]["id"] for one in _home(client, manager, manager.workspace)] == [
+        view["id"]
+    ]
+
+
 def test_개인_뷰는_부서_홈에_못_올린다(
     client: TestClient, admin: Signed, manager: Signed
 ) -> None:
