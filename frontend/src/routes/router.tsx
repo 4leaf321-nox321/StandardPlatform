@@ -32,6 +32,7 @@ const GraphPage = lazy(() => import('@/modules/graph/GraphPage'))
 const MembersPage = lazy(() => import('@/modules/workspaces/MembersPage'))
 const NoticesPage = lazy(() => import('@/modules/notices/NoticesPage'))
 const ObjectListPage = lazy(() => import('@/modules/objects/ObjectListPage'))
+const SearchPage = lazy(() => import('@/modules/search/SearchPage'))
 const ObjectProfilePage = lazy(() => import('@/modules/objects/ObjectProfilePage'))
 const QualityPage = lazy(() => import('@/modules/objects/QualityPage'))
 const OntologyLayout = lazy(() => import('@/modules/ontology/OntologyLayout'))
@@ -98,6 +99,8 @@ export const router = createBrowserRouter([
           // 공통
           // **정의를 그림으로.** 타입이 늘어도 경로는 하나다 — 구조와 탐색이 한 화면이다.
           { path: 'graph', element: <GraphPage /> },
+          // **타입을 모르는 사람이 서는 자리.** 목록은 타입마다 따로다.
+          { path: 'search', element: <SearchPage /> },
           { path: 'notices', element: <NoticesPage /> },
           { path: 'audit', element: <AuditPage /> },
           { path: 'quality', element: <QualityPage /> },

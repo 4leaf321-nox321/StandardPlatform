@@ -19,6 +19,8 @@ import type {
   ObjectRow,
   SavedView,
 } from '@/modules/objects/api'
+import { DEFAULT_SUMMARY } from '@/modules/objects/SummaryPanel'
+import type { SummarySettings } from '@/modules/objects/SummaryPanel'
 import { ConditionBar } from '@/modules/objects/ConditionBar'
 import { ViewPicker } from '@/modules/objects/ViewPicker'
 import { propertyText } from '@/modules/objects/PropertyFields'
@@ -187,8 +189,20 @@ export default function ObjectListPage() {
   }
   const setQuery = (q: string) => sync({ q })
   const setConditions = (list: Condition[]) => sync({ conditions: list })
-  const applyView = (view: SavedView) =>
+  const applyView = (view: SavedView) => {
     sync({ q: view.query.q, conditions: view.query.conditions, view: view.id })
+    // 뷰에 축이 담겨 있으면 그림까지 그대로 연다 — 조건만 돌려주고 축을 다시 고르게
+    // 하면, 그 수고 때문에 사람은 뷰를 안 쓰게 된다.
+    if (view.summary?.group_by) {
+      setSummary({
+        groupBy: view.summary.group_by,
+        metric: view.summary.metric || 'count',
+        metricField: view.summary.metric_field,
+        chart: (view.summary.chart as SummarySettings['chart']) || 'bar',
+      })
+      setGrouping(true)
+    }
+  }
   const [under, setUnder] = useState<string | null>(null)
   const [deep, setDeep] = useState(true)
   /**
@@ -201,6 +215,9 @@ export default function ObjectListPage() {
   /** 묶어 보기를 펼쳐 두었나. **기본은 접힘** — 목록을 보러 온 사람에게
    *  막대를 먼저 들이밀면 목록이 한 화면 아래로 밀린다. */
   const [grouping, setGrouping] = useState(false)
+  /** 묶어 보기 설정 — **여기가 들고 있다.** 뷰를 불러오면 그 뷰의 축으로 열려야 하고,
+   *  저장할 때는 지금 축이 함께 담겨야 한다. 패널이 혼자 들면 둘 다 못 한다. */
+  const [summary, setSummary] = useState<SummarySettings>(DEFAULT_SUMMARY)
   const [importing, setImporting] = useState(false)
   /** 내보내기 실패 — 새 탭이 아니라 이 화면에 떠야 한다. 조용히 실패하면 아무 일도 안 일어난 것처럼 보인다. */
   const [exportError, setExportError] = useState<Error | null>(null)
@@ -462,6 +479,18 @@ export default function ObjectListPage() {
             <ViewPicker
               typeSlug={typeSlug}
               current={{ q: query, conditions, status: null }}
+              // 묶어 보기를 펼쳐 둔 채 저장하면 **축까지 담긴다.** 조건과 축은 같은
+              // 물음의 두 쪽이다 — 「영남 공급사를 등급별로」.
+              summary={
+                grouping
+                  ? {
+                      group_by: summary.groupBy,
+                      metric: summary.metric,
+                      metric_field: summary.metricField,
+                      chart: summary.chart,
+                    }
+                  : null
+              }
               activeId={activeView}
               onApply={(view) => {
                 applyView(view)
@@ -496,6 +525,8 @@ export default function ObjectListPage() {
               <SummaryPanel
                 typeSlug={typeSlug}
                 query={exportQuery}
+                settings={summary}
+                onSettings={setSummary}
                 onClose={() => setGrouping(false)}
                 onPick={(field, key) => {
                   // **누른 막대가 곧 거르기다.** 여기서 거르기 칸으로 돌아가 값을 다시

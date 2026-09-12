@@ -6,14 +6,23 @@
  *
  * ## 도메인이 여기에 무엇을 더하나
  *
- * **아무것도 안 더한다.** 「남은 일」 은 서버의 레지스트리
- * (`backend/app/shared/extensions.py`)가 채우므로, 도메인은 그쪽에 등록만 하면
- * 이 화면이 저절로 그 줄을 그린다 — 화면을 고치는 것과 서버를 고치는 것이 둘 다
- * 필요하면, 언젠가 한쪽만 고쳐진다.
+ * **화면을 고쳐서 더하지 않는다.** 두 길이 있고 둘 다 데이터다:
+ *
+ *     남은 일    서버의 레지스트리(`shared/extensions.py`)에 등록하면 저절로 뜬다
+ *     위젯       부서 뷰에 「묶어 보기」 설정을 담고 **홈에 올리면** 그려진다
+ *
+ * 화면을 고치는 것과 서버를 고치는 것이 둘 다 필요하면, 언젠가 한쪽만 고쳐진다.
+ *
+ * ## 위젯은 그 부서가 함께 본다
+ *
+ * 개인 뷰는 못 올린다. 같은 화면을 보는 사람마다 다른 것이 뜨면 「내 홈에는 왜 그게
+ * 없지」 를 아무도 설명하지 못한다.
  */
 
 import { Link, useParams } from 'react-router-dom'
 
+import { HomeWidget } from '@/modules/objects/HomeWidget'
+import { viewApi } from '@/modules/objects/api'
 import { api } from '@/shared/api/client'
 import type { MaintenanceItem } from '@/shared/api/types'
 import { useAuth } from '@/shared/auth/AuthContext'
@@ -26,6 +35,7 @@ export default function WorkspaceHomePage() {
   const { slug } = useParams<{ slug?: string }>()
   const { user } = useAuth()
   const maintenance = useResource(() => api.get<MaintenanceItem[]>('/server/maintenance'), [])
+  const widgets = useResource(() => viewApi.home(slug ?? ''), [slug])
 
   const workspace = user?.memberships.find((one) => one.slug === slug)
 
@@ -71,17 +81,29 @@ export default function WorkspaceHomePage() {
         )}
       </section>
 
-      {/* --- 여기가 각 플랫폼이 채우는 자리다 --------------------------------
-          이 틀에는 보여 줄 도메인 자료가 없다. 그 사실을 빈 화면으로 두지 않고
-          말한다 — 빈 화면은 「아직 안 만들었다」 와 「고장났다」 가 구별되지 않는다. */}
-      <section className="rounded-md border border-dashed p-6">
-        <h2 className="text-sm font-medium">이 아래가 도메인 자리입니다</h2>
-        <p className="text-muted-foreground mt-1 text-sm">
-          각 플랫폼이 자기 요약을 여기 그립니다. 「남은 일」 은 백엔드의{' '}
-          <code className="font-mono text-xs">shared/extensions.py</code> 에 등록하면 위 목록에
-          저절로 끼므로, 이 화면을 고칠 필요가 없습니다.
-        </p>
-      </section>
+      {/* --- 부서가 올린 위젯 -------------------------------------------------
+          화면을 고쳐서 더하지 않는다. 목록에서 조건을 걸고 「묶어 보기」 축을 고른 뒤
+          부서 뷰로 저장하고, 그 뷰를 홈에 올리면 여기 그려진다. */}
+      {(widgets.data ?? []).length > 0 ? (
+        <section className="space-y-3">
+          <h2 className="text-base font-semibold">부서가 보는 것</h2>
+          <div className="grid gap-4 lg:grid-cols-2">
+            {(widgets.data ?? []).map((one) => (
+              <HomeWidget key={one.view.id} widget={one} />
+            ))}
+          </div>
+        </section>
+      ) : (
+        /* 빈 화면으로 두지 않는다 — 빈 화면은 「아직 안 만들었다」 와 「고장났다」 가
+           구별되지 않는다. 무엇을 하면 채워지는지까지 적는다. */
+        <section className="rounded-md border border-dashed p-6">
+          <h2 className="text-sm font-medium">이 아래가 부서의 자리입니다</h2>
+          <p className="text-muted-foreground mt-1 text-sm">
+            타입 목록에서 조건을 걸고 「묶어 보기」 로 축을 고른 다음, <strong>부서 뷰</strong>로
+            저장하고 「홈에 올리기」 를 누르면 그 그림이 여기 섭니다. 부서 관리자가 올립니다.
+          </p>
+        </section>
+      )}
     </div>
   )
 }

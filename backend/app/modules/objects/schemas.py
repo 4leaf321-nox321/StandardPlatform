@@ -309,6 +309,21 @@ class SavedViewQuery(BaseModel):
     status: str | None = None
 
 
+class SavedViewSummary(BaseModel):
+    """이 뷰를 **그림으로** 볼 때의 설정. 비어 있으면(group_by 가 없으면) 목록일 뿐이다.
+
+    조건과 축은 같은 물음의 두 쪽이다(「영남 공급사를 등급별로」). 따로 두면 뷰를
+    불러올 때마다 축을 다시 고르게 되고, 그 수고가 반복되면 사람은 CSV 로 내려받는다.
+    """
+
+    group_by: str = ""
+    metric: str = "count"
+    metric_field: str | None = None
+    chart: str = "bar"
+    """bar · line · area · pie. 그림 모양까지 담는다 — 「원으로 보던 것」 이 막대로 뜨면
+    같은 뷰로 안 읽힌다."""
+
+
 class SavedViewOut(BaseModel):
     id: uuid.UUID
     type_slug: str
@@ -318,6 +333,9 @@ class SavedViewOut(BaseModel):
     owner_label: str
     workspace_slug: str | None
     """있으면 그 부서가 함께 쓴다. 없으면 내 것."""
+    summary: SavedViewSummary
+    home_order: int | None
+    """부서 홈에 올린 자리. NULL 이면 홈에 없다."""
     can_edit: bool
     created_at: datetime
     updated_at: datetime
@@ -328,11 +346,25 @@ class SavedViewWriteRequest(BaseModel):
     query: SavedViewQuery
     workspace_slug: str | None = None
     """부서와 함께 쓸지. 그 부서의 관리자여야 한다."""
+    summary: SavedViewSummary | None = None
 
 
 class SavedViewPatchRequest(BaseModel):
+    """**안 보낸 것은 그대로다.** `home_order` 만 보내 홈에 올리거나 내린다."""
+
     name: str | None = Field(default=None, min_length=1, max_length=100)
     query: SavedViewQuery | None = None
+    summary: SavedViewSummary | None = None
+    on_home: bool | None = None
+    """true 면 부서 홈 맨 끝에 올리고, false 면 내린다. 자리는 `reorder` 가 정한다."""
+
+
+class HomeWidgetOut(BaseModel):
+    """부서 홈에 올라간 뷰 하나. 홈 화면은 타입을 모르므로 **여기서 다 실어 준다.**"""
+
+    view: SavedViewOut
+    type_label: str
+    icon: str
 
 
 # --- 품질 -------------------------------------------------------------------

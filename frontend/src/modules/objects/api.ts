@@ -170,6 +170,14 @@ export interface SavedViewQuery {
   status: string | null
 }
 
+/** 이 뷰를 **그림으로** 볼 때의 설정. `group_by` 가 비면 목록일 뿐이다. */
+export interface SavedViewSummary {
+  group_by: string
+  metric: string
+  metric_field: string | null
+  chart: string
+}
+
 export interface SavedView {
   id: string
   type_slug: string
@@ -179,9 +187,19 @@ export interface SavedView {
   owner_label: string
   /** 있으면 그 부서가 함께 쓴다. 없으면 내 것. */
   workspace_slug: string | null
+  summary: SavedViewSummary
+  /** 부서 홈에 올린 자리. null 이면 홈에 없다. */
+  home_order: number | null
   can_edit: boolean
   created_at: string
   updated_at: string
+}
+
+/** 부서 홈에 올라간 뷰 하나. **홈은 타입을 모르므로** 서버가 다 실어 준다. */
+export interface HomeWidget {
+  view: SavedView
+  type_label: string
+  icon: string
 }
 
 /** 품질 — 한 종류·한 타입의 걸린 것들. */
@@ -265,11 +283,28 @@ export const viewApi = {
   list: (typeSlug: string) => api.get<SavedView[]>(`/objects/${typeSlug}/views`),
   create: (
     typeSlug: string,
-    body: { name: string; query: SavedViewQuery; workspace_slug?: string | null },
+    body: {
+      name: string
+      query: SavedViewQuery
+      workspace_slug?: string | null
+      summary?: SavedViewSummary | null
+    },
   ) => api.post<SavedView>(`/objects/${typeSlug}/views`, body),
-  update: (typeSlug: string, id: string, body: { name?: string; query?: SavedViewQuery }) =>
-    api.patch<SavedView>(`/objects/${typeSlug}/views/${id}`, body),
+  /** **보낸 것만 바뀐다.** `on_home` 만 보내 홈에 올리거나 내린다. */
+  update: (
+    typeSlug: string,
+    id: string,
+    body: {
+      name?: string
+      query?: SavedViewQuery
+      summary?: SavedViewSummary | null
+      on_home?: boolean
+    },
+  ) => api.patch<SavedView>(`/objects/${typeSlug}/views/${id}`, body),
   remove: (typeSlug: string, id: string) => api.delete<void>(`/objects/${typeSlug}/views/${id}`),
+  /** 이 부서 홈에 올라간 것들. 부서 사람이 아니면 빈 목록이다. */
+  home: (workspaceSlug: string) =>
+    api.get<HomeWidget[]>(`/objects/home?workspace=${encodeURIComponent(workspaceSlug)}`),
 }
 
 /** 묶어 보기의 막대 하나. `key` 는 거르기에 그대로 넣을 수 있는 값(빈 칸이면 null). */

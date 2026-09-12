@@ -324,6 +324,19 @@ class SavedView(Base):
     """있으면 그 부서가 함께 쓴다. NULL 은 만든 사람 것."""
     query: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     """`{"q": ..., "conditions": [{"field","op","value"}], "sort": {...}}`."""
+    summary: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """묶어 보기 설정 — `{"group_by", "metric", "metric_field", "chart"}`. 비어 있으면
+    이 뷰는 목록일 뿐이다.
+
+    뷰에 함께 담는 이유: 조건과 축은 **같은 물음의 두 쪽**이다(「영남 공급사를 등급별로」).
+    따로 두면 뷰를 불러올 때마다 축을 다시 고르게 되고, 그 수고가 몇 번 반복되면
+    사람은 그 화면을 CSV 로 내려받아 엑셀에서 본다."""
+
+    home_order: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
+    """부서 홈에 올린 자리(0부터). NULL 이면 홈에 없다.
+
+    **부서 뷰만 올릴 수 있다.** 개인 뷰를 부서 홈에 붙이면 같은 화면을 보는 사람마다
+    다른 것이 뜨고, 그때 「내 홈에는 왜 그게 없지」 를 아무도 설명하지 못한다."""
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

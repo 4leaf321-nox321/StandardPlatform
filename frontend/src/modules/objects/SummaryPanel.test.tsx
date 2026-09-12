@@ -68,11 +68,22 @@ const BASE = {
 
 async function panel(data: object) {
   objectApi.summary.mockResolvedValue(data)
-  const { SummaryPanel } = await import('@/modules/objects/SummaryPanel')
+  const { SummaryPanel, DEFAULT_SUMMARY } = await import('@/modules/objects/SummaryPanel')
   const onPick = vi.fn()
-  render(<SummaryPanel typeSlug="part" query={{ q: '볼트' }} onPick={onPick} onClose={vi.fn()} />)
+  const onSettings = vi.fn()
+  // 설정은 **화면이 들고 있다** — 여기서는 호스트 노릇만 한다.
+  render(
+    <SummaryPanel
+      typeSlug="part"
+      query={{ q: '볼트' }}
+      settings={DEFAULT_SUMMARY}
+      onSettings={onSettings}
+      onPick={onPick}
+      onClose={vi.fn()}
+    />,
+  )
   await screen.findByText(/거른 것 전체/)
-  return onPick
+  return { onPick, onSettings }
 }
 
 describe('묶어 보기', () => {
@@ -94,7 +105,7 @@ describe('묶어 보기', () => {
   })
 
   it('막대를 누르면 **원래 값**으로 거른다 — 빈 칸은 거를 값이 없다', async () => {
-    const onPick = await panel(BASE)
+    const { onPick } = await panel(BASE)
     await userEvent.click(screen.getByRole('button', { name: 'A' }))
     expect(onPick).toHaveBeenCalledWith('properties.grade', 'A')
 
@@ -117,11 +128,11 @@ describe('묶어 보기', () => {
     )
   })
 
-  it('그림 모양을 막대·꺾은선·원으로 바꾼다', async () => {
-    await panel(BASE)
+  it('그림 모양을 바꾸면 **호스트에게 알린다** — 그래야 뷰에 담긴다', async () => {
+    const { onSettings } = await panel(BASE)
     const pie = screen.getByRole('button', { name: '원' })
     expect(pie).toHaveAttribute('aria-pressed', 'false')
     await userEvent.click(pie)
-    expect(pie).toHaveAttribute('aria-pressed', 'true')
+    expect(onSettings).toHaveBeenCalledWith(expect.objectContaining({ chart: 'pie' }))
   })
 })

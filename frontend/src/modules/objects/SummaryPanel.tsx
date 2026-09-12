@@ -53,10 +53,31 @@ const METRICS = [
   { value: 'max', label: '최댓값' },
 ]
 
+/** 무엇을 어떻게 그릴지. **뷰에 담기는 것과 같은 모양이다** — 저장했다가 그대로 돌려받는다. */
+export interface SummarySettings {
+  groupBy: string
+  metric: string
+  metricField: string | null
+  chart: ChartKind
+}
+
+export const DEFAULT_SUMMARY: SummarySettings = {
+  groupBy: 'status',
+  metric: 'count',
+  metricField: null,
+  chart: 'bar',
+}
+
 interface Props {
   typeSlug: string
   /** 목록이 지금 쓰는 거르기 그대로. */
   query: ObjectQuery
+  /**
+   * 지금 설정. **화면이 들고 있다** — 뷰를 불러오면 그 뷰의 축으로 열려야 하고,
+   * 저장할 때는 지금 축이 함께 담겨야 한다. 이 패널이 혼자 들고 있으면 둘 다 못 한다.
+   */
+  settings: SummarySettings
+  onSettings: (next: SummarySettings) => void
   /** 막대를 눌렀을 때 — 걸 수 있는 축이면 부른다. */
   onPick: (field: string, key: string | null) => void
   onClose: () => void
@@ -67,11 +88,9 @@ function filterable(field: string): boolean {
   return field === 'status' || field.startsWith('properties.')
 }
 
-export function SummaryPanel({ typeSlug, query, onPick, onClose }: Props) {
-  const [groupBy, setGroupBy] = useState('status')
-  const [metric, setMetric] = useState('count')
-  const [metricField, setMetricField] = useState<string | null>(null)
-  const [kind, setKind] = useState<ChartKind>('bar')
+export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, onClose }: Props) {
+  const { groupBy, metric, metricField, chart: kind } = settings
+  const patch = (next: Partial<SummarySettings>) => onSettings({ ...settings, ...next })
   const [data, setData] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<Error | null>(null)
@@ -125,7 +144,7 @@ export function SummaryPanel({ typeSlug, query, onPick, onClose }: Props) {
         <BarChart3 className="text-muted-foreground size-4" />
         <span className="text-sm font-medium">묶어 보기</span>
 
-        <Select value={groupBy} onValueChange={setGroupBy}>
+        <Select value={groupBy} onValueChange={(next) => patch({ groupBy: next })}>
           <SelectTrigger className="w-48" aria-label="묶을 축">
             <SelectValue />
           </SelectTrigger>
@@ -141,12 +160,13 @@ export function SummaryPanel({ typeSlug, query, onPick, onClose }: Props) {
         <Select
           value={metric}
           onValueChange={(next) => {
-            setMetric(next)
             // 합·평균으로 바꾸면 셀 칸이 필요하다. 하나뿐이면 그것으로 정해 준다 —
             // 고를 것이 하나인 고르개는 묻는 시늉일 뿐이다.
-            if (next !== 'count' && !metricField && numbers.length > 0) {
-              setMetricField(numbers[0].field)
-            }
+            const field =
+              next !== 'count' && !metricField && numbers.length > 0
+                ? numbers[0].field
+                : metricField
+            patch({ metric: next, metricField: field })
           }}
         >
           <SelectTrigger className="w-32" aria-label="세는 방법">
@@ -166,7 +186,7 @@ export function SummaryPanel({ typeSlug, query, onPick, onClose }: Props) {
         </Select>
 
         {metric !== 'count' && (
-          <Select value={metricField ?? ''} onValueChange={setMetricField}>
+          <Select value={metricField ?? ''} onValueChange={(next) => patch({ metricField: next })}>
             <SelectTrigger className="w-40" aria-label="셀 칸">
               <SelectValue placeholder="숫자 칸" />
             </SelectTrigger>
@@ -189,7 +209,7 @@ export function SummaryPanel({ typeSlug, query, onPick, onClose }: Props) {
               aria-pressed={kind === one.value}
               title={one.label}
               className={cn('px-2 py-1.5', kind === one.value ? 'bg-muted' : 'hover:bg-muted/50')}
-              onClick={() => setKind(one.value)}
+              onClick={() => patch({ chart: one.value })}
             >
               <one.Icon className="size-4" />
             </button>

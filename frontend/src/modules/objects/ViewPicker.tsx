@@ -7,10 +7,10 @@
  */
 
 import { useState } from 'react'
-import { Bookmark, BookmarkPlus, Check, Trash2, Users } from 'lucide-react'
+import { Bookmark, BookmarkPlus, Check, House, Trash2, Users } from 'lucide-react'
 
 import { viewApi } from '@/modules/objects/api'
-import type { SavedView, SavedViewQuery } from '@/modules/objects/api'
+import type { SavedView, SavedViewQuery, SavedViewSummary } from '@/modules/objects/api'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isManagerOf } from '@/shared/auth/roles'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -38,13 +38,22 @@ interface ViewPickerProps {
   typeSlug: string
   /** 지금 걸린 것 — 저장할 내용. */
   current: SavedViewQuery
+  /** 지금 묶어 보기 설정. 펼쳐 두고 저장하면 **축까지 담긴다.** 안 펼쳤으면 null. */
+  summary?: SavedViewSummary | null
   /** 지금 적용된 뷰(있으면). 조건을 손대면 호스트가 null 로 되돌린다. */
   activeId: string | null
   onApply: (view: SavedView) => void
   onClear: () => void
 }
 
-export function ViewPicker({ typeSlug, current, activeId, onApply, onClear }: ViewPickerProps) {
+export function ViewPicker({
+  typeSlug,
+  current,
+  summary = null,
+  activeId,
+  onApply,
+  onClear,
+}: ViewPickerProps) {
   const views = useResource(() => viewApi.list(typeSlug), [typeSlug])
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<Error | null>(null)
@@ -52,7 +61,8 @@ export function ViewPicker({ typeSlug, current, activeId, onApply, onClear }: Vi
   const shared = list.filter((one) => one.workspace_slug)
   const mine = list.filter((one) => !one.workspace_slug)
   const active = list.find((one) => one.id === activeId) ?? null
-  const hasSomething = current.q.trim() !== '' || current.conditions.length > 0 || Boolean(current.status)
+  const hasSomething =
+    current.q.trim() !== '' || current.conditions.length > 0 || Boolean(current.status)
 
   return (
     <>
@@ -66,7 +76,9 @@ export function ViewPicker({ typeSlug, current, activeId, onApply, onClear }: Vi
         <DropdownMenuContent align="start" className="w-64">
           {shared.length > 0 && (
             <>
-              <DropdownMenuLabel className="text-muted-foreground text-xs">부서와 함께</DropdownMenuLabel>
+              <DropdownMenuLabel className="text-muted-foreground text-xs">
+                부서와 함께
+              </DropdownMenuLabel>
               {shared.map((one) => (
                 <DropdownMenuItem key={one.id} onSelect={() => onApply(one)}>
                   <Users className="text-muted-foreground mr-1 size-3.5" />
@@ -101,6 +113,25 @@ export function ViewPicker({ typeSlug, current, activeId, onApply, onClear }: Vi
           {active && (
             <DropdownMenuItem onSelect={onClear}>뷰 해제 — 조건 전부 지우기</DropdownMenuItem>
           )}
+          {/* **부서 뷰만 홈에 오른다.** 개인 뷰를 부서 홈에 붙이면 같은 화면을 보는
+              사람마다 다른 것이 뜨고, 그때 「내 홈에는 왜 그게 없지」 를 아무도 설명
+              하지 못한다. */}
+          {active?.can_edit && active.workspace_slug && (
+            <DropdownMenuItem
+              onSelect={() => {
+                setError(null)
+                viewApi
+                  .update(typeSlug, active.id, { on_home: active.home_order === null })
+                  .then(() => views.reload())
+                  .catch((caught: unknown) =>
+                    setError(caught instanceof Error ? caught : new Error('알 수 없는 오류')),
+                  )
+              }}
+            >
+              <House className="mr-1 size-3.5" />
+              {active.home_order === null ? '부서 홈에 올리기' : '부서 홈에서 내리기'}
+            </DropdownMenuItem>
+          )}
           {active?.can_edit && (
             <DropdownMenuItem
               className="text-destructive"
@@ -117,8 +148,7 @@ export function ViewPicker({ typeSlug, current, activeId, onApply, onClear }: Vi
                   )
               }}
             >
-              <Trash2 className="mr-1 size-3.5" />
-              「{active.name}」 지우기
+              <Trash2 className="mr-1 size-3.5" />「{active.name}」 지우기
             </DropdownMenuItem>
           )}
         </DropdownMenuContent>
@@ -129,6 +159,7 @@ export function ViewPicker({ typeSlug, current, activeId, onApply, onClear }: Vi
         <SaveViewDialog
           typeSlug={typeSlug}
           query={current}
+          summary={summary}
           onClose={() => setSaving(false)}
           onSaved={(view) => {
             setSaving(false)
@@ -144,11 +175,12 @@ export function ViewPicker({ typeSlug, current, activeId, onApply, onClear }: Vi
 interface SaveViewDialogProps {
   typeSlug: string
   query: SavedViewQuery
+  summary: SavedViewSummary | null
   onClose: () => void
   onSaved: (view: SavedView) => void
 }
 
-function SaveViewDialog({ typeSlug, query, onClose, onSaved }: SaveViewDialogProps) {
+function SaveViewDialog({ typeSlug, query, summary, onClose, onSaved }: SaveViewDialogProps) {
   const { user } = useAuth()
   const myWorkspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
   const canShare = Boolean(myWorkspace && isManagerOf(user, myWorkspace))
@@ -165,6 +197,7 @@ function SaveViewDialog({ typeSlug, query, onClose, onSaved }: SaveViewDialogPro
         name: name.trim(),
         query,
         workspace_slug: share ? myWorkspace : null,
+        summary,
       })
       onSaved(view)
     } catch (caught) {
@@ -180,8 +213,10 @@ function SaveViewDialog({ typeSlug, query, onClose, onSaved }: SaveViewDialogPro
         <DialogHeader>
           <DialogTitle>뷰로 저장</DialogTitle>
           <DialogDescription>
-            지금 걸린 조건 {query.conditions.length}개{query.q ? `와 검색어 「${query.q}」` : ''}를 이름
-            붙여 둡니다. 열·정렬은 타입 정의를 따릅니다.
+            지금 걸린 조건 {query.conditions.length}개{query.q ? `와 검색어 「${query.q}」` : ''}를
+            이름 붙여 둡니다. 열·정렬은 타입 정의를 따릅니다.
+            {summary?.group_by &&
+              ' 묶어 보기 축도 함께 담깁니다 — 불러오면 그림까지 그대로 뜹니다.'}
           </DialogDescription>
         </DialogHeader>
         <form

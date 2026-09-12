@@ -5,17 +5,18 @@
  * 소속만 오간다 — 전사 목록은 부서 관리 화면의 일이다. 두 목적을 한 위젯에
  * 섞으면 "내 부서" 라는 개념이 흐려진다.
  *
- * **검색 칸이 없다.** 이 틀에는 찾을 것이 없기 때문이다. 도메인이 검색 화면을
- * 만들면 여기에 한 칸을 두되, 결과는 그리지 말고 `/search?q=` 로 넘긴다 —
- * 좁은 드롭다운에 결과를 떨구면 무엇을 찾았는지 안 보이고 주소로 공유도 안 된다.
+ * **검색 칸은 결과를 그리지 않는다.** 친 말을 `/search?q=` 로 넘길 뿐이다. 좁은
+ * 드롭다운에 결과를 떨구면 무엇을 찾았는지 안 보이고, 주소로 공유도 안 되고,
+ * 뒤로가기로 돌아갈 수도 없다 — 찾기는 화면 하나를 가질 만한 일이다.
  */
 
 import { useState } from 'react'
-import { KeyRound, LogOut, Moon, PanelLeft, Sun, User, UserCog } from 'lucide-react'
+import { KeyRound, LogOut, Moon, PanelLeft, Search, Sun, User, UserCog } from 'lucide-react'
 import { useNavigate, useParams } from 'react-router-dom'
 
 import { useAuth } from '@/shared/auth/AuthContext'
 import { Button } from '@/shared/components/ui/button'
+import { Input } from '@/shared/components/ui/input'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -45,6 +46,7 @@ export function Header({ onToggleSidebar, workspaceSlug }: HeaderProps) {
   const { theme, toggle } = useTheme()
   const { user, logout } = useAuth()
   const [changingPassword, setChangingPassword] = useState(false)
+  const [query, setQuery] = useState('')
   const navigate = useNavigate()
   const params = useParams<{ slug?: string }>()
 
@@ -72,6 +74,29 @@ export function Header({ onToggleSidebar, workspaceSlug }: HeaderProps) {
       >
         <PanelLeft className="size-4" />
       </Button>
+
+      <Separator orientation="vertical" className="mx-1 h-6" />
+
+      {/* 결과는 여기 안 그린다 — 화면으로 넘긴다. 주소에 남아야 공유되고 뒤로가기가 산다. */}
+      <form
+        className="relative w-40 sm:w-64"
+        onSubmit={(event) => {
+          event.preventDefault()
+          const word = query.trim()
+          if (!word) return
+          navigate(`/search?q=${encodeURIComponent(word)}`)
+          setQuery('')
+        }}
+      >
+        <Search className="text-muted-foreground absolute top-1/2 left-2 size-4 -translate-y-1/2" />
+        <Input
+          className="h-8 pl-8"
+          value={query}
+          placeholder="찾기"
+          aria-label="전체에서 찾기"
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </form>
 
       <Separator orientation="vertical" className="mx-1 h-6" />
 
@@ -125,8 +150,7 @@ export function Header({ onToggleSidebar, workspaceSlug }: HeaderProps) {
           </DropdownMenuLabel>
           <DropdownMenuSeparator />
           <DropdownMenuItem onClick={() => navigate('/me')}>
-            <UserCog className="size-4" />
-            내 정보
+            <UserCog className="size-4" />내 정보
           </DropdownMenuItem>
           <DropdownMenuItem onClick={() => setChangingPassword(true)}>
             <KeyRound className="size-4" />

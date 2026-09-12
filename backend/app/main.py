@@ -37,6 +37,7 @@ from app.modules.objects import quality as objects_quality
 from app.modules.objects import routes as objects_routes
 from app.modules.objects import services as objects_services
 from app.modules.ontology import routes as ontology_routes
+from app.modules.search import routes as search_routes
 from app.modules.server import routes as server_routes
 from app.modules.webhooks import routes as webhooks_routes
 from app.modules.webhooks import services as webhooks_services
@@ -77,6 +78,7 @@ def _api_router() -> APIRouter:
     router.include_router(ontology_routes.router)
     router.include_router(objects_routes.router)
     router.include_router(graph_routes.router)
+    router.include_router(search_routes.router)
     router.include_router(server_routes.router)
 
     # --- 여기에 도메인 라우터를 더한다 -----------------------------------

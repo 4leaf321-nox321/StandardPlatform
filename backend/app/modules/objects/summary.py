@@ -62,6 +62,9 @@ GROUPABLE = ("text", "enum", "bool", "url", "number", "date", "datetime", "objec
 #: 해로 묶는 종류.
 BY_YEAR = ("date", "datetime")
 
+#: 저장된 뷰가 담을 수 있는 그림 모양 — 화면의 `shared/charts` 와 같은 넷.
+CHART_KINDS = ("bar", "line", "area", "pie")
+
 #: 한 번에 돌려줄 그룹 수. 넘는 것은 「그 밖에」 한 줄로 접는다 — 막대 200개는
 #: 읽을 수 없고, 그림이 아니라 벽이 된다.
 MAX_BUCKETS = 30
@@ -326,3 +329,20 @@ def _float(raw: Any) -> float | None:
     if raw is None:
         return None
     return float(raw)
+
+
+def check_group(defs: list[PropertyDef], field_name: str) -> None:
+    """이 축으로 묶을 수 있나. **저장할 때 부른다** — 안 하면 열었을 때 그림만 안 뜨고,
+    무엇이 잘못됐는지 말할 자리가 없다."""
+    _group_expr(defs, field_name)
+
+
+def check_metric(defs: list[PropertyDef], metric: str, metric_field: str | None) -> None:
+    """이 방법·이 칸으로 셀 수 있나."""
+    if metric not in METRICS:
+        raise AppError(
+            code("OBJECTS", 46),
+            f"세는 방법은 {', '.join(METRICS)} 중 하나여야 합니다: {metric}",
+            status=422,
+        )
+    _metric_expr(defs, metric, metric_field)

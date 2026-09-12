@@ -13,7 +13,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import Response
-from sqlalchemy import false, or_, select, true
+from sqlalchemy import false, func, or_, select, true
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -48,6 +48,7 @@ from app.modules.objects.schemas import (
     BucketOut,
     GroupOptionOut,
     HistoryEntryOut,
+    HomeWidgetOut,
     ImportPlanOut,
     ImportRowOut,
     ImportRowsRequest,
@@ -71,6 +72,7 @@ from app.modules.objects.schemas import (
     SavedViewOut,
     SavedViewPatchRequest,
     SavedViewQuery,
+    SavedViewSummary,
     SavedViewWriteRequest,
     SnapshotOut,
     SummaryOut,
@@ -106,6 +108,7 @@ from app.shared.permissions import (
     require_owner_edit,
     resolve_owner_workspace,
     visible_owner_clause,
+    workspace_by_slug,
 )
 
 router = APIRouter(prefix="/objects", tags=["objects"])
@@ -449,6 +452,8 @@ def _view_out(db: Session, user: User, row: SavedView, type_slug: str) -> SavedV
         owner_user_id=row.owner_user_id,
         owner_label=owner.display_name if owner else "",
         workspace_slug=workspaces.get(row.workspace_id) if row.workspace_id else None,
+        summary=SavedViewSummary.model_validate(row.summary or {}),
+        home_order=row.home_order,
         can_edit=_can_edit_view(db, user, row),
         created_at=row.created_at,
         updated_at=row.updated_at,
@@ -481,6 +486,90 @@ def _view(db: Session, user: User, object_type: ObjectType, view_id: uuid.UUID) 
     if not (mine or shared_with_me):
         raise NotFound(code("OBJECTS", 81), "뷰를 찾을 수 없습니다.")
     return row
+
+
+def _checked_summary(
+    db: Session, object_type: ObjectType, asked: SavedViewSummary | None
+) -> dict[str, Any]:
+    """**저장할 때 검사한다.** 안 하면 열었을 때 422 가 나는 뷰가 남고, 그때는 무엇이
+    잘못됐는지 화면이 말해 줄 자리가 없다(그림이 안 뜰 뿐이다)."""
+    if asked is None or not asked.group_by:
+        return {}
+    defs = properties_of(db, object_type.id)
+    summary_service.check_group(defs, asked.group_by)
+    summary_service.check_metric(defs, asked.metric, asked.metric_field)
+    if asked.chart not in summary_service.CHART_KINDS:
+        raise Conflict(
+            code("OBJECTS", 48),
+            f"그림 모양은 {', '.join(summary_service.CHART_KINDS)} 중 "
+            f"하나여야 합니다: {asked.chart}",
+        )
+    return asked.model_dump()
+
+
+def _set_home(db: Session, user: User, row: SavedView, *, on_home: bool) -> None:
+    """부서 홈에 올리거나 내린다.
+
+    **부서 뷰만 올린다.** 개인 뷰를 부서 홈에 붙이면 같은 화면을 보는 사람마다 다른
+    것이 뜨고, 그때 「내 홈에는 왜 그게 없지」 를 아무도 설명하지 못한다.
+    """
+    if not on_home:
+        row.home_order = None
+        return
+    if row.workspace_id is None:
+        raise Conflict(
+            code("OBJECTS", 49),
+            "부서와 함께 쓰는 뷰만 부서 홈에 올릴 수 있습니다. 먼저 부서 뷰로 저장하세요.",
+        )
+    require_owner_edit(
+        db, user, row.workspace_id, what="부서 홈", code_value=code("OBJECTS", 50)
+    )
+    if row.home_order is not None:
+        return
+    last = db.scalar(
+        select(func.max(SavedView.home_order)).where(
+            SavedView.workspace_id == row.workspace_id
+        )
+    )
+    row.home_order = (last + 1) if last is not None else 0
+
+
+@router.get("/home", response_model=list[HomeWidgetOut])
+def home_widgets(
+    workspace: str = Query(description="부서 slug"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[HomeWidgetOut]:
+    """부서 홈에 올라간 뷰들 — **홈은 타입을 모르므로 여기서 다 실어 준다.**
+
+    부서가 함께 보는 자리라 개인 뷰는 안 온다. 그 부서 멤버가 아니면 빈 목록이다 —
+    403 이 아니라 빈 목록인 이유는, 남의 부서 홈을 열어 본 것 자체가 흔한 실수라서다.
+    """
+    target = workspace_by_slug(db, workspace)
+    if not user.is_system_admin and target.id not in set(my_workspace_ids(db, user)):
+        return []
+    types = {row.id: row for row in db.scalars(select(ObjectType))}
+    rows = sorted(
+        db.scalars(
+            select(SavedView).where(
+                SavedView.workspace_id == target.id, SavedView.home_order.is_not(None)
+            )
+        ),
+        key=lambda one: (one.home_order or 0, one.name),
+    )
+    out: list[HomeWidgetOut] = []
+    for row in rows:
+        object_type = types.get(row.type_id)
+        if object_type is None:
+            continue
+        out.append(
+            HomeWidgetOut(
+                view=_view_out(db, user, row, object_type.slug),
+                type_label=object_type.label,
+                icon=object_type.icon,
+            )
+        )
+    return out
 
 
 @router.get("/{type_slug}/views", response_model=list[SavedViewOut])
@@ -534,6 +623,7 @@ def create_view(
         owner_user_id=user.id,
         workspace_id=workspace_id,
         query=payload.query.model_dump(),
+        summary=_checked_summary(db, object_type, payload.summary),
     )
     db.add(row)
     db.flush()
@@ -572,6 +662,10 @@ def update_view(
             [conditions.Condition(c.field, c.op, c.value) for c in payload.query.conditions],
         )
         row.query = payload.query.model_dump()
+    if payload.summary is not None:
+        row.summary = _checked_summary(db, object_type, payload.summary)
+    if payload.on_home is not None:
+        _set_home(db, user, row, on_home=payload.on_home)
     audit.record(
         db,
         action="object.view.update",
