@@ -33,13 +33,15 @@ from app.modules.graph.schemas import (
     TypeEdgeOut,
     TypeNodeOut,
 )
-from app.modules.objects import graph
+from app.modules.objects import graph, system
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology.models import NavGroup, ObjectType, RelationType
 from app.modules.workspaces.models import Workspace
+from app.shared import system_sources
 from app.shared.auth import current_user
 from app.shared.errors import NotFound, code
 from app.shared.permissions import visible_owner_clause
+from app.shared.system_sources import SystemRef
 
 router = APIRouter(prefix="/graph", tags=["graph"])
 
@@ -86,6 +88,78 @@ def _csv(raw: str | None) -> list[str] | None:
     return items or None
 
 
+def _system_types(types: dict[uuid.UUID, ObjectType]) -> dict[str, ObjectType]:
+    """원 표를 비추는 타입들 — slug 로. 그래프에서 이 타입의 노드는 `objects` 가 아니라
+    원 표에서 온다.
+
+    **원 표가 등록 안 된 타입은 뺀다.** 그 타입의 목록은 무엇이 빠졌는지 말하며 409 를
+    내지만, 그래프는 여러 타입을 한 그림에 담으므로 하나 때문에 전체가 안 뜨면 안 된다 —
+    그 타입만 그림에서 빠지고, 이유는 그 타입의 목록에서 드러난다."""
+    return {
+        row.slug: row
+        for row in types.values()
+        if system.is_system(row) and system_sources.system_source(row.system_source)
+    }
+
+
+def _slug_of(edges: list[graph.Edge], extra: dict[uuid.UUID, str]) -> dict[uuid.UUID, str]:
+    """원 표 행의 타입 — 링크의 끝 타입에서. 같은 표를 비추는 타입이 둘일 수 있어서
+    id 만으로는 못 정한다."""
+    out = dict(extra)
+    for edge in edges:
+        if edge.src_type:
+            out.setdefault(edge.src, edge.src_type)
+        if edge.dst_type:
+            out.setdefault(edge.dst, edge.dst_type)
+    return out
+
+
+def _system_nodes(
+    db: Session,
+    ids: list[uuid.UUID],
+    systems: dict[str, ObjectType],
+    degrees: dict[uuid.UUID, int],
+    shown: dict[uuid.UUID, int],
+    slug_of: dict[uuid.UUID, str],
+) -> dict[uuid.UUID, NodeOut]:
+    """ids 중 원 표의 행인 것을 노드로. 타입은 `slug_of`(링크의 끝 타입)가 말한다."""
+    out: dict[uuid.UUID, NodeOut] = {}
+    by_type: dict[str, list[uuid.UUID]] = {}
+    for one in ids:
+        slug = slug_of.get(one)
+        if slug in systems:
+            by_type.setdefault(slug, []).append(one)
+    for slug, wanted in by_type.items():
+        object_type = systems[slug]
+        found = system.source_of(object_type).lookup(db, wanted)
+        for ref in found.values():
+            degree = degrees.get(ref.id, 0)
+            out[ref.id] = NodeOut(
+                id=ref.id,
+                label=ref.label,
+                key=ref.key,
+                type_slug=object_type.slug,
+                type_label=object_type.label,
+                status="active" if ref.active else "deprecated",
+                owner_workspace_slug=None,
+                degree=degree,
+                truncated=degree > shown.get(ref.id, 0),
+            )
+    return out
+
+
+def _degrees(
+    db: Session, ids: list[uuid.UUID], user: User, systems: dict[str, ObjectType]
+) -> dict[uuid.UUID, int]:
+    """관계와 링크를 합친 차수 — 「+N 더」 의 근거."""
+    out = graph.degree_counts(db, ids=ids, user=user)
+    for node_id, n in graph.link_degree_counts(
+        db, ids=ids, user=user, systems=list(systems)
+    ).items():
+        out[node_id] = out.get(node_id, 0) + n
+    return out
+
+
 @router.get("/overview", response_model=OverviewOut)
 def overview(user: User = Depends(current_user), db: Session = Depends(get_db)) -> OverviewOut:
     """정의 그래프 — 타입이 노드, 관계 종류가 선.
@@ -98,6 +172,11 @@ def overview(user: User = Depends(current_user), db: Session = Depends(get_db)) 
     kinds = {row.slug: row for row in db.scalars(select(RelationType))}
     counts = graph.object_counts_by_type(db, user=user)
     by_id = {row.id: row for row in types}
+    by_slug = {row.slug: row for row in types}
+    systems = _system_types(by_id)
+    # 원 표를 비추는 타입은 행이 없다 — 노드 크기는 원 표의 행 수다.
+    for projected in systems.values():
+        counts[projected.id] = len(system.source_of(projected).list_all(db))
 
     nodes = [
         TypeNodeOut(
@@ -130,6 +209,22 @@ def overview(user: User = Depends(current_user), db: Session = Depends(get_db)) 
                 src_type=src.slug,
                 dst_type=dst.slug,
                 count=found.count,
+            )
+        )
+    # 원 표와 이은 선도 굵기에 든다 — 안 그러면 「사용 부서」 선이 정의만 있는 점선으로 보인다.
+    for link in graph.type_link_counts(db, user=user, systems=list(systems)):
+        if link.src_type_slug not in by_slug or link.dst_type_slug not in by_slug:
+            continue
+        kind = kinds.get(link.relation)
+        seen.add((link.relation, link.src_type_slug, link.dst_type_slug))
+        edges.append(
+            TypeEdgeOut(
+                relation=link.relation,
+                label=kind.label if kind else link.relation,
+                directed=kind.directed if kind else True,
+                src_type=link.src_type_slug,
+                dst_type=link.dst_type_slug,
+                count=link.count,
             )
         )
     active_slugs = {row.slug for row in types}
@@ -197,7 +292,25 @@ def search(
                 type_label=object_type.label if object_type else "알 수 없음",
             )
         )
-    return out
+    # 원 표의 행(부서·계정)에서도 시작할 수 있어야 한다 — 「해석팀이 쓰는 툴」 은
+    # 부서에서 출발한다.
+    for object_type in _system_types(types).values():
+        if not object_type.is_active:
+            continue
+        refs, _total = system.source_of(object_type).search(
+            db, user, q.strip(), SEARCH_LIMIT, 0
+        )
+        out.extend(
+            SearchHitOut(
+                id=ref.id,
+                label=ref.label,
+                key=ref.key,
+                type_slug=object_type.slug,
+                type_label=object_type.label,
+            )
+            for ref in refs
+        )
+    return out[:SEARCH_LIMIT]
 
 
 @router.get("/neighborhood", response_model=NeighborhoodOut)
@@ -224,6 +337,8 @@ def neighborhood(
     node_limit = _clamp(limit, default=DEFAULT_NODES, maximum=MAX_NODES)
     wanted_relations = _csv(relations)
 
+    all_types = {row.id: row for row in db.scalars(select(ObjectType))}
+    systems = _system_types(all_types)
     start = db.scalar(
         select(ObjectInstance).where(
             ObjectInstance.id == focus,
@@ -231,23 +346,32 @@ def neighborhood(
             visible_owner_clause(user, ObjectInstance.owner_workspace_id),
         )
     )
+    start_type: ObjectType | None = all_types.get(start.type_id) if start else None
     if start is None:
+        # 원 표의 행(부서 등)에서도 출발한다.
+        for candidate in systems.values():
+            if system.find(db, candidate, focus) is not None:
+                start_type = candidate
+                break
+    if start_type is None:
         # 없는 것과 안 보이는 것을 같은 말로 답한다 — objects 와 같은 규칙.
         raise NotFound(code("GRAPH", 1), "객체를 찾을 수 없습니다.")
 
-    all_types = {row.id: row for row in db.scalars(select(ObjectType))}
     type_ids: list[uuid.UUID] | None = None
+    type_slugs: list[str] | None = None
     if wanted := _csv(types):
         type_ids = [row.id for row in all_types.values() if row.slug in wanted]
+        type_slugs = list(wanted)
         # 시작점의 타입은 거르기와 무관하게 늘 들어간다 — 안 그러면 「부품만」 을
         # 고른 순간 시작점인 공급사에서 아무것도 안 나온다.
-        if start.type_id not in type_ids:
-            type_ids.append(start.type_id)
+        if start_type.id not in type_ids:
+            type_ids.append(start_type.id)
+            type_slugs.append(start_type.slug)
 
-    seen: set[uuid.UUID] = {start.id}
-    order: list[uuid.UUID] = [start.id]
+    seen: set[uuid.UUID] = {focus}
+    order: list[uuid.UUID] = [focus]
     edges: dict[uuid.UUID, graph.Edge] = {}
-    frontier = [start.id]
+    frontier = [focus]
     truncated = False
 
     for _ in range(depth_n):
@@ -261,6 +385,14 @@ def neighborhood(
             fanout=fanout_n,
             relations=wanted_relations,
             type_ids=type_ids,
+        ) + graph.neighbor_link_edges(
+            db,
+            frontier=frontier,
+            user=user,
+            fanout=fanout_n,
+            systems=list(systems),
+            relations=wanted_relations,
+            type_slugs=type_slugs,
         )
         next_frontier: list[uuid.UUID] = []
         for edge in found:
@@ -279,7 +411,7 @@ def neighborhood(
     # 있으면 그려야 「관계없음」 으로 안 읽힌다.
     for edge in graph.induced_edges(
         db, ids=order, limit=MAX_EDGES, relations=wanted_relations
-    ):
+    ) + graph.induced_link_edges(db, ids=order, limit=MAX_EDGES, relations=wanted_relations):
         edges[edge.id] = edge
     if len(edges) > MAX_EDGES:
         truncated = True
@@ -289,19 +421,31 @@ def neighborhood(
         row.id: row
         for row in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(order)))
     }
-    degrees = graph.degree_counts(db, ids=order, user=user)
+    degrees = _degrees(db, order, user, systems)
     shown: dict[uuid.UUID, int] = {}
     for edge in edges.values():
         shown[edge.src] = shown.get(edge.src, 0) + 1
         if edge.dst != edge.src:
             shown[edge.dst] = shown.get(edge.dst, 0) + 1
+    system_nodes = _system_nodes(
+        db,
+        [one for one in order if one not in rows],
+        systems,
+        degrees,
+        shown,
+        _slug_of(list(edges.values()), {focus: start_type.slug} if start is None else {}),
+    )
 
     kinds = {row.slug: row for row in db.scalars(select(RelationType))}
     workspaces = _workspace_slugs(db)
     nodes: list[NodeOut] = []
     for node_id in order:
         row = rows.get(node_id)
-        if row is None:  # pragma: no cover - 같은 트랜잭션 안에서 사라질 일은 없다
+        if row is None:
+            if node_id in system_nodes:
+                node = system_nodes[node_id]
+                truncated = truncated or node.truncated
+                nodes.append(node)
             continue
         object_type = all_types.get(row.type_id)
         degree = degrees.get(node_id, 0)
@@ -326,7 +470,7 @@ def neighborhood(
         )
 
     return NeighborhoodOut(
-        focus=start.id,
+        focus=focus,
         nodes=nodes,
         edges=[_edge_out(edge, kinds) for edge in edges.values()],
         depth=depth_n,
@@ -356,10 +500,28 @@ def subgraph(
     node_limit = _clamp(limit, default=DEFAULT_NODES, maximum=MAX_NODES)
     wanted_relations = _csv(relations)
     all_types = {row.id: row for row in db.scalars(select(ObjectType))}
+    systems = _system_types(all_types)
     wanted = _csv(types) or []
-    type_ids = [row.id for row in all_types.values() if row.slug in wanted]
-    if not type_ids:
+    wanted_systems = [row for slug, row in systems.items() if slug in wanted]
+    type_ids = [
+        row.id
+        for row in all_types.values()
+        if row.slug in wanted and not system.is_system(row)
+    ]
+    if not type_ids and not wanted_systems:
         raise NotFound(code("GRAPH", 2), f"타입을 찾을 수 없습니다: {types}")
+    if not type_ids:
+        # 원 표만 골랐다 — 행 없이 원 표에서 쪽을 뜬다.
+        return _system_subgraph(
+            db,
+            user,
+            wanted_systems,
+            systems,
+            q=q,
+            limit=node_limit,
+            offset=offset,
+            relations=wanted_relations,
+        )
 
     conditions = [
         ObjectInstance.type_id.in_(type_ids),
@@ -384,8 +546,18 @@ def subgraph(
         )
     )
     ids = [row.id for row in rows]
-    edges = graph.induced_edges(db, ids=ids, limit=MAX_EDGES, relations=wanted_relations)
-    degrees = graph.degree_counts(db, ids=ids, user=user)
+    # 함께 고른 원 표 타입의 행은 뒤에 붙는다 — 쪽은 객체 쪽 기준이다.
+    extra_refs = [
+        (object_type, ref)
+        for object_type in wanted_systems
+        for ref in system.source_of(object_type).list_all(db)
+        if not q or q.strip().lower() in f"{ref.label} {ref.key}".lower()
+    ][: max(0, node_limit - len(ids))]
+    ids += [ref.id for _t, ref in extra_refs]
+    edges = graph.induced_edges(
+        db, ids=ids, limit=MAX_EDGES, relations=wanted_relations
+    ) + graph.induced_link_edges(db, ids=ids, limit=MAX_EDGES, relations=wanted_relations)
+    degrees = _degrees(db, ids, user, systems)
     shown: dict[uuid.UUID, int] = {}
     for edge in edges:
         shown[edge.src] = shown.get(edge.src, 0) + 1
@@ -395,6 +567,21 @@ def subgraph(
     kinds = {row.slug: row for row in db.scalars(select(RelationType))}
     workspaces = _workspace_slugs(db)
     nodes: list[NodeOut] = []
+    for system_type, ref in extra_refs:
+        degree = degrees.get(ref.id, 0)
+        nodes.append(
+            NodeOut(
+                id=ref.id,
+                label=ref.label,
+                key=ref.key,
+                type_slug=system_type.slug,
+                type_label=system_type.label,
+                status="active" if ref.active else "deprecated",
+                owner_workspace_slug=None,
+                degree=degree,
+                truncated=degree > shown.get(ref.id, 0),
+            )
+        )
     for row in rows:
         object_type = all_types.get(row.type_id)
         degree = degrees.get(row.id, 0)
@@ -416,8 +603,60 @@ def subgraph(
     return SubgraphOut(
         nodes=nodes,
         edges=[_edge_out(edge, kinds) for edge in edges],
-        total=total,
+        total=total + len(extra_refs),
         limit=node_limit,
         offset=offset,
         truncated=offset + len(rows) < total or len(edges) >= MAX_EDGES,
+    )
+
+
+def _system_subgraph(
+    db: Session,
+    user: User,
+    wanted: list[ObjectType],
+    systems: dict[str, ObjectType],
+    *,
+    q: str | None,
+    limit: int,
+    offset: int,
+    relations: list[str] | None,
+) -> SubgraphOut:
+    """원 표 타입만 고른 그림 — 행은 원 표에서, 선은 링크에서."""
+    refs: list[tuple[ObjectType, SystemRef]] = []
+    total = 0
+    for object_type in wanted:
+        found, n = system.source_of(object_type).search(db, user, q, limit, offset)
+        total += n
+        refs.extend((object_type, ref) for ref in found)
+    refs = refs[:limit]
+    ids = [ref.id for _t, ref in refs]
+    edges = graph.induced_link_edges(db, ids=ids, limit=MAX_EDGES, relations=relations)
+    degrees = _degrees(db, ids, user, systems)
+    shown: dict[uuid.UUID, int] = {}
+    for edge in edges:
+        shown[edge.src] = shown.get(edge.src, 0) + 1
+        if edge.dst != edge.src:
+            shown[edge.dst] = shown.get(edge.dst, 0) + 1
+    kinds = {row.slug: row for row in db.scalars(select(RelationType))}
+    nodes = [
+        NodeOut(
+            id=ref.id,
+            label=ref.label,
+            key=ref.key,
+            type_slug=object_type.slug,
+            type_label=object_type.label,
+            status="active" if ref.active else "deprecated",
+            owner_workspace_slug=None,
+            degree=degrees.get(ref.id, 0),
+            truncated=degrees.get(ref.id, 0) > shown.get(ref.id, 0),
+        )
+        for object_type, ref in refs
+    ]
+    return SubgraphOut(
+        nodes=nodes,
+        edges=[_edge_out(edge, kinds) for edge in edges],
+        total=total,
+        limit=limit,
+        offset=offset,
+        truncated=offset + len(refs) < total or len(edges) >= MAX_EDGES,
     )

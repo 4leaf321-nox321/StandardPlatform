@@ -47,7 +47,8 @@ class Settings(BaseSettings):
 
     host: str = "0.0.0.0"
     port: int = 8040
-    """**플랫폼마다 10씩 벌린다** — MatNexus 8010, TestScope 8020, CrossAXTF 8030, 이 틀이 8040.
+    """**플랫폼마다 10씩 벌린다** — MatNexus 8010, TestScope 8020, CrossAXTF 8030,
+    이 틀이 8040.
     (8030 이었는데 CrossAXTF 가 먼저 운영에 올라가 있어 2026-09-12 에 8040 으로 옮겼다.
     개발 8031 과 MCP 8032 도 같은 PC 의 CrossAXTF 개발·e2e 를 밀어냈었다.)
 

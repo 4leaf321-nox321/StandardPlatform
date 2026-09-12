@@ -505,3 +505,61 @@ def test_승격은_id_를_보존하고_관계를_선으로_옮긴다(
     assert [r["object_label"] for r in profile["related"]] == ["ACME (장부)"]
     listed = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()
     assert [row["key"] for row in listed["items"]] == ["ACME-1"]
+
+
+# --- 그래프 --------------------------------------------------------------------
+
+
+def test_그래프가_원_표와_이은_선을_본다(
+    client: TestClient, admin: Signed, workspace: Workspace
+) -> None:
+    """「담당 부서」 로만 이어진 객체가 그림에서 외톨이로 보이면 그것은 「관계없음」 으로
+    읽힌다. 정의 그림의 굵기·이웃 펼치기·찾기·한 타입 전부가 전부 링크를 알아야 한다."""
+    w = _world(client, admin)
+    assert (
+        _link(
+            client, admin, w["part"], w["bolt"]["id"], w["kind"], str(workspace.id)
+        ).status_code
+        == 201
+    )
+
+    overview = client.get("/api/graph/overview", headers=admin.headers).json()
+    edge = next(e for e in overview["edges"] if e["relation"] == w["kind"])
+    assert (
+        edge["count"] == 1 and edge["src_type"] == w["part"] and edge["dst_type"] == w["dept"]
+    )
+    dept_node = next(n for n in overview["nodes"] if n["slug"] == w["dept"])
+    assert dept_node["count"] >= 1
+
+    # 객체에서 출발하면 부서가 이웃으로 온다.
+    hood = client.get(
+        "/api/graph/neighborhood", params={"focus": w["bolt"]["id"]}, headers=admin.headers
+    ).json()
+    assert {n["type_slug"] for n in hood["nodes"]} == {w["part"], w["dept"]}
+    assert [e["relation"] for e in hood["edges"]] == [w["kind"]]
+    assert next(n for n in hood["nodes"] if n["id"] == w["bolt"]["id"])["degree"] == 1
+
+    # 부서에서 출발해도 된다 — 원 표의 행이 시작점.
+    from_dept = client.get(
+        "/api/graph/neighborhood", params={"focus": str(workspace.id)}, headers=admin.headers
+    ).json()
+    assert from_dept["focus"] == str(workspace.id)
+    assert {n["label"] for n in from_dept["nodes"]} >= {workspace.name, "볼트"}
+
+    # 찾기에 부서도 걸린다.
+    hits = client.get(
+        "/api/graph/search", params={"q": workspace.slug}, headers=admin.headers
+    ).json()
+    assert any(h["id"] == str(workspace.id) and h["type_slug"] == w["dept"] for h in hits)
+
+    # 한 타입 전부 — 원 표 타입만 골라도, 객체 타입과 함께 골라도 선이 있다.
+    only = client.get(
+        "/api/graph/subgraph", params={"types": w["dept"]}, headers=admin.headers
+    ).json()
+    assert any(n["id"] == str(workspace.id) for n in only["nodes"]) and only["edges"] == []
+    both = client.get(
+        "/api/graph/subgraph",
+        params={"types": f"{w['part']},{w['dept']}"},
+        headers=admin.headers,
+    ).json()
+    assert [e["relation"] for e in both["edges"]] == [w["kind"]]

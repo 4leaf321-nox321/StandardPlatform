@@ -105,15 +105,13 @@ export default function ObjectProfilePage() {
         actions={
           <div className="flex gap-2">
             {/* **관계 목록은 한 단계만 보여 준다.** 그 너머는 그래프에서 — 누구나.
-                원 표의 객체는 그래프가 모른다(행이 없다). */}
-            {!isSystem && (
-              <Button asChild size="sm" variant="outline">
-                <Link to={`/graph?focus=${row.id}`}>
-                  <Waypoints className="mr-1 size-4" />
-                  그래프에서 보기
-                </Link>
-              </Button>
-            )}
+                원 표의 객체(부서 등)에서도 출발한다. */}
+            <Button asChild size="sm" variant="outline">
+              <Link to={`/graph?focus=${row.id}`}>
+                <Waypoints className="mr-1 size-4" />
+                그래프에서 보기
+              </Link>
+            </Button>
             {profile.data.can_edit && !editing && (
               <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
                 <Pencil className="mr-1 size-4" />
@@ -219,9 +217,8 @@ export default function ObjectProfilePage() {
         onChanged={profile.reload}
       />
 
-      {/* 상세를 떠나지 않고 보는 관계도 — 관계가 없으면 안 그린다. 원 표의 객체는
-          그래프가 모른다(행이 없다). */}
-      {!isSystem && <GraphPanel objectId={objectId} typeSlugs={typeSlugs} />}
+      {/* 상세를 떠나지 않고 보는 관계도 — 관계가 없으면 안 그린다. */}
+      <GraphPanel objectId={objectId} typeSlugs={typeSlugs} />
 
       {/* 이 값이 어디서 왔나 — 상세가 다시 읽힐 때마다 이력도 다시(관계 변경은 updated_at 을
           안 건드리므로 응답 객체 자체를 키로 쓴다). 원 표의 객체는 이력이 그 표에 있다. */}

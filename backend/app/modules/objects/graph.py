@@ -19,14 +19,14 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any, Literal
 
 from sqlalchemy import case, func, or_, select, text
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import ColumnElement
 
 from app.modules.accounts.models import User
-from app.modules.objects.models import ObjectInstance, ObjectRelation
+from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.shared.permissions import visible_owner_clause
 
 ParentEnd = Literal["src", "dst"]
@@ -211,6 +211,10 @@ class Edge:
     relation: str
     src: uuid.UUID
     dst: uuid.UUID
+    src_type: str | None = None
+    dst_type: str | None = None
+    """링크(`object_links`)만 채운다 — 원 표의 행은 id 만으로는 어느 타입인지 모른다
+    (부서를 비추는 타입이 둘일 수 있다). 관계는 객체 행이 타입을 안다."""
 
 
 def _ends_of(
@@ -371,3 +375,156 @@ def object_counts_by_type(db: Session, *, user: User) -> dict[uuid.UUID, int]:
         .group_by(obj.type_id)
     )
     return {type_id: int(n) for type_id, n in rows}
+
+
+# --- 원 표와 이은 선(`object_links`) ------------------------------------------
+#
+# 한쪽 끝이 system 객체(부서·계정·승격한 표)인 선은 FK 없이 `object_links` 에 있다.
+# 그래프가 이것을 모르면 「담당 부서」 로만 이어진 객체가 그림에서 외톨이로 보이고,
+# 그 외톨이는 「관계없음」 으로 읽힌다. 규칙은 관계와 같다 — 저쪽 끝이 객체면 보이는
+# 것만, system 이면 항상(원 표의 행은 부서 소유가 아니다).
+
+
+def _link_other_visible(
+    user: User, other_type: Any, other_id: Any, systems: list[str]
+) -> ColumnElement[bool]:
+    obj = aliased(ObjectInstance)
+    seen = (
+        select(obj.id)
+        .where(
+            obj.id == other_id,
+            obj.deleted_at.is_(None),
+            visible_owner_clause(user, obj.owner_workspace_id),
+        )
+        .exists()
+    )
+    return or_(other_type.in_(systems), seen) if systems else seen
+
+
+def neighbor_link_edges(
+    db: Session,
+    *,
+    frontier: list[uuid.UUID],
+    user: User,
+    fanout: int,
+    systems: list[str],
+    relations: list[str] | None = None,
+    type_slugs: list[str] | None = None,
+) -> list[Edge]:
+    """frontier 의 각 노드에서 fanout 개까지의 링크 — `neighbor_edges` 와 같은 규칙."""
+    if not frontier:
+        return []
+    link = ObjectLink
+    anchor = case((link.src_id.in_(frontier), link.src_id), else_=link.dst_id)
+    other_type = case((link.src_id.in_(frontier), link.dst_type), else_=link.src_type)
+    other_id = case((link.src_id.in_(frontier), link.dst_id), else_=link.src_id)
+    conditions = [
+        or_(link.src_id.in_(frontier), link.dst_id.in_(frontier)),
+        _link_other_visible(user, other_type, other_id, systems),
+    ]
+    if relations:
+        conditions.append(link.relation.in_(relations))
+    if type_slugs:
+        conditions.append(other_type.in_(type_slugs))
+    ranked = (
+        select(
+            link.id,
+            link.relation,
+            link.src_id,
+            link.dst_id,
+            link.src_type,
+            link.dst_type,
+            func.row_number().over(partition_by=anchor, order_by=link.created_at).label("rn"),
+        )
+        .where(*conditions)
+        .subquery()
+    )
+    rows = db.execute(select(ranked).where(ranked.c.rn <= fanout))
+    return [
+        Edge(
+            id=r.id,
+            relation=r.relation,
+            src=r.src_id,
+            dst=r.dst_id,
+            src_type=r.src_type,
+            dst_type=r.dst_type,
+        )
+        for r in rows
+    ]
+
+
+def induced_link_edges(
+    db: Session, *, ids: list[uuid.UUID], limit: int, relations: list[str] | None = None
+) -> list[Edge]:
+    """양 끝이 모두 ids 안인 링크."""
+    if not ids:
+        return []
+    link = ObjectLink
+    conditions = [link.src_id.in_(ids), link.dst_id.in_(ids)]
+    if relations:
+        conditions.append(link.relation.in_(relations))
+    rows = db.execute(
+        select(link.id, link.relation, link.src_id, link.dst_id, link.src_type, link.dst_type)
+        .where(*conditions)
+        .order_by(link.created_at)
+        .limit(limit)
+    )
+    return [
+        Edge(
+            id=r.id,
+            relation=r.relation,
+            src=r.src_id,
+            dst=r.dst_id,
+            src_type=r.src_type,
+            dst_type=r.dst_type,
+        )
+        for r in rows
+    ]
+
+
+def link_degree_counts(
+    db: Session, *, ids: list[uuid.UUID], user: User, systems: list[str]
+) -> dict[uuid.UUID, int]:
+    """각 노드에 걸린 보이는 링크의 수 — `degree_counts` 에 더한다."""
+    if not ids:
+        return {}
+    link = ObjectLink
+    counts: dict[uuid.UUID, int] = {}
+    for mine, other_type, other_id in (
+        (link.src_id, link.dst_type, link.dst_id),
+        (link.dst_id, link.src_type, link.src_id),
+    ):
+        rows = db.execute(
+            select(mine, func.count())
+            .where(mine.in_(ids), _link_other_visible(user, other_type, other_id, systems))
+            .group_by(mine)
+        )
+        for node_id, n in rows:
+            counts[node_id] = counts.get(node_id, 0) + int(n)
+    return counts
+
+
+@dataclass(frozen=True)
+class TypeLinkEdge:
+    relation: str
+    src_type_slug: str
+    dst_type_slug: str
+    count: int
+
+
+def type_link_counts(db: Session, *, user: User, systems: list[str]) -> list[TypeLinkEdge]:
+    """타입 사이에 걸린 링크 수 — 정의 그래프의 선 굵기에 더한다. 양 끝에 보이는
+    규칙을 따로 건다(관계와 같다)."""
+    link = ObjectLink
+    rows = db.execute(
+        select(link.relation, link.src_type, link.dst_type, func.count())
+        .where(
+            _link_other_visible(user, link.src_type, link.src_id, systems),
+            _link_other_visible(user, link.dst_type, link.dst_id, systems),
+        )
+        .group_by(link.relation, link.src_type, link.dst_type)
+    )
+    return [
+        TypeLinkEdge(relation=r[0], src_type_slug=r[1], dst_type_slug=r[2], count=int(r[3]))
+        for r in rows
+    ]
