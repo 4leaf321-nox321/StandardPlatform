@@ -171,6 +171,16 @@ const LABEL_MIN_SCALE = 1.1
 const MAX_FIT_ZOOM = 2.2
 /** 히트 영역의 화면상 최소 반지름(px). 이보다 작으면 축소했을 때 눌러도 안 잡힌다. */
 const MIN_HIT_PX = 10
+
+/**
+ * 클릭으로 볼 수 있는 흔들림(px).
+ *
+ * **빈 곳을 눌러 선택을 푸는 일이 될 때도 안 될 때도 있었다.** 그림 라이브러리는
+ * 포인터가 조금이라도 움직이면 그 누름을 「화면 끌기」 로 보고 클릭을 아예 안 알린다.
+ * 마우스를 누르는 동안 1~2px 흔들리는 것은 사람 손의 기본값이라, 그 판정에만 기대면
+ * 선택 해제는 운에 맡겨진다 — 그리고 안 되는 쪽을 사람은 고장으로 읽는다.
+ */
+const DRAG_SLOP_PX = 5
 /** 같은 노드를 이 안에 두 번 누르면 더블클릭. */
 const DOUBLE_CLICK_MS = 350
 /** 흐려진 노드·선의 투명도. */
@@ -401,6 +411,10 @@ export function GraphCanvas({
 
   // 더블클릭 — 라이브러리에 없어 시간으로 가른다.
   const lastClick = useRef<{ id: string; at: number }>({ id: '', at: 0 })
+  /** 눌린 자리 — 놓은 자리와 멀면 끌기다. */
+  const pressedAt = useRef<{ x: number; y: number } | null>(null)
+  /** 노드 클릭이 방금 있었나. 있었으면 이 클릭은 배경 클릭이 아니다. */
+  const nodeClickAt = useRef(0)
   const handleNodeClick = useCallback(
     (node: Node) => {
       const id = String(node.id)
@@ -412,6 +426,7 @@ export function GraphCanvas({
         return
       }
       lastClick.current = { id, at: now }
+      nodeClickAt.current = now
       onNodeClick?.(id)
     },
     [onNodeClick, onNodeDoubleClick],
@@ -659,6 +674,24 @@ export function GraphCanvas({
     // 커진다 — 화면이 아래로 끝없이 자라는 되먹임이 그것이다.
     <div
       ref={containerRef}
+      onPointerDown={(event) => {
+        pressedAt.current = { x: event.clientX, y: event.clientY }
+      }}
+      onClick={(event) => {
+        // **빈 곳 클릭을 우리가 판정한다.** 라이브러리의 클릭은 흔들림 한 번에 사라진다.
+        if (!onBackgroundClick) return
+        // 도구 막대·범례처럼 캔버스 위에 얹힌 것은 제 일을 한다.
+        if ((event.target as HTMLElement).closest('button,a,input,label')) return
+        const start = pressedAt.current
+        pressedAt.current = null
+        if (start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > DRAG_SLOP_PX) {
+          return
+        }
+        // 노드를 눌렀으면(또는 노드 위에 있으면) 배경이 아니다.
+        if (Date.now() - nodeClickAt.current < DOUBLE_CLICK_MS) return
+        if (hoveredId) return
+        onBackgroundClick()
+      }}
       className={`bg-muted/20 w-full overflow-hidden ${frame} ${className ?? ''}`}
       // 높이는 **재서** 넣는다(`useFillHeight`) — 화면 아래까지 채운다. 상세 안의
       // 작은 관계도처럼 제 높이를 가진 곳은 `h-[360px]!` 로 이것을 덮는다.
@@ -705,6 +738,8 @@ export function GraphCanvas({
               onEngineStop={handleEngineStop}
               onNodeClick={handleNodeClick}
               onNodeHover={(node: Node | null) => setHoveredId(node ? String(node.id) : null)}
+              // 라이브러리가 알려 주는 배경 클릭 — **우리 것과 겹쳐도 둔다.** 선택
+              // 해제는 여러 번 불러도 같은 결과고, 둘 중 하나가 놓친 경우를 나머지가 받는다.
               onBackgroundClick={() => onBackgroundClick?.()}
               minZoom={0.2}
               maxZoom={8}

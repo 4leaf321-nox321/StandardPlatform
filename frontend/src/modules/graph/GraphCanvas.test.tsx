@@ -5,7 +5,7 @@
  * 배치다 — 그리고 이 둘은 **눈으로만 확인하던 것**이라 조용히 되돌아갈 수 있었다.
  */
 
-import { render, screen } from '@testing-library/react'
+import { fireEvent, render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeAll, describe, expect, it, vi } from 'vitest'
 
@@ -146,5 +146,32 @@ describe('호스트가 전체화면을 맡을 때', () => {
     await draw({ wide: false, onToggleWide })
     await userEvent.click(await screen.findByRole('button', { name: '넓게 보기' }))
     expect(onToggleWide).toHaveBeenCalled()
+  })
+})
+
+describe('빈 곳을 눌러 선택 풀기', () => {
+  it('가만히 누르면 풀린다', async () => {
+    // 그림 라이브러리는 포인터가 1~2px 만 움직여도 그 누름을 「끌기」 로 보고 클릭을
+    // 안 알린다 — 그 판정에만 기대면 선택 해제가 **될 때도 안 될 때도** 있다.
+    const onBackgroundClick = vi.fn()
+    const box = await draw({ onBackgroundClick })
+    fireEvent.pointerDown(box, { clientX: 100, clientY: 100 })
+    fireEvent.click(box, { clientX: 101, clientY: 101 })
+    expect(onBackgroundClick).toHaveBeenCalledTimes(1)
+  })
+
+  it('끌었으면 안 풀린다 — 화면을 옮긴 것이지 고른 것이 아니다', async () => {
+    const onBackgroundClick = vi.fn()
+    const box = await draw({ onBackgroundClick })
+    fireEvent.pointerDown(box, { clientX: 100, clientY: 100 })
+    fireEvent.click(box, { clientX: 180, clientY: 140 })
+    expect(onBackgroundClick).not.toHaveBeenCalled()
+  })
+
+  it('도구 막대를 눌러도 안 풀린다', async () => {
+    const onBackgroundClick = vi.fn()
+    await draw({ onBackgroundClick })
+    await userEvent.click(await screen.findByRole('button', { name: '화면 맞춤' }))
+    expect(onBackgroundClick).not.toHaveBeenCalled()
   })
 })
