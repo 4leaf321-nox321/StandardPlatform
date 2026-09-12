@@ -80,7 +80,7 @@ async function show(one: ReturnType<typeof widget>, props: Record<string, unknow
 }
 
 describe('홈 위젯', () => {
-  it('축이 있으면 그림을 그리고, 제목은 그 뷰로 간다', async () => {
+  it('기준이 있으면 그림을 그리고, 제목은 그 뷰로 간다', async () => {
     objectApi.summary.mockResolvedValue(SUMMARY)
     await show(widget())
     await waitFor(() => expect(screen.getByTestId('chart')).toBeInTheDocument())
@@ -91,7 +91,7 @@ describe('홈 위젯', () => {
     )
   })
 
-  it('축이 없는 뷰는 수 하나다 — 「미승인 12건」 은 그림이 필요 없다', async () => {
+  it('기준이 없는 뷰는 수 하나다 — 「미승인 12건」 은 그림이 필요 없다', async () => {
     objectApi.summary.mockResolvedValue({ ...SUMMARY, total: 12 })
     await show(
       widget({ summary: { group_by: '', metric: 'count', metric_field: null, chart: 'bar' } }),
@@ -100,7 +100,7 @@ describe('홈 위젯', () => {
     expect(screen.queryByTestId('chart')).not.toBeInTheDocument()
   })
 
-  it('한 위젯이 깨져도 홈은 선다 — 정의가 바뀌어 축이 사라질 수 있다', async () => {
+  it('한 위젯이 깨져도 홈은 선다 — 정의가 바뀌어 기준이 사라질 수 있다', async () => {
     objectApi.summary.mockRejectedValue(new Error('422'))
     await show(widget())
     await waitFor(() => expect(screen.getByText(/지금 셀 수 없습니다/)).toBeInTheDocument())

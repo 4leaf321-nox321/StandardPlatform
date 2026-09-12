@@ -1,7 +1,7 @@
 /**
  * 홈에 올리기 — **그림을 막 그려 놓고 보는 그 자리에서.**
  *
- * 사람이 「이거 홈에 두고 싶다」 고 생각하는 순간은 묶어 보기로 그림을 그린 직후다.
+ * 사람이 「이거 홈에 두고 싶다」 고 생각하는 순간은 통계로 그림을 그린 직후다.
  * 그때 뷰 메뉴를 열어 저장하고, 부서와 함께 쓰기를 켜고, 메뉴를 다시 열어 올리게
  * 하면 — 그 경로를 찾아낸 사람만 이 기능을 쓴다. 여기서는 **이름 하나만** 받고
  * 나머지(부서 뷰로 저장 + 홈에 올리기)는 한 요청으로 끝낸다.
@@ -88,7 +88,7 @@ export function PinToHomeDialog({
         <DialogHeader>
           <DialogTitle>부서 홈에 올리기</DialogTitle>
           <DialogDescription>
-            지금 조건 {query.conditions.length}개와 {summary ? '묶어 보기 축을' : '검색 조건을'}{' '}
+            지금 조건 {query.conditions.length}개와 {summary ? '통계 기준을' : '검색 조건을'}{' '}
             <strong>{workspaceSlug}</strong> 부서 뷰로 저장하고 그 부서 홈에 올립니다. 부서 사람
             모두가 같은 것을 봅니다.
           </DialogDescription>
@@ -140,7 +140,7 @@ export function PinToHomeDialog({
                 </div>
                 <p className="text-muted-foreground text-xs">
                   「미승인 12건」 은 수가 낫고, 「최근 들어온 것」 은 이름이 보여야 합니다. 그림으로
-                  올리려면 닫고 묶어 보기 축을 고른 뒤 다시 누르세요.
+                  올리려면 닫고 통계 기준을 고른 뒤 다시 누르세요.
                 </p>
               </div>
             )}

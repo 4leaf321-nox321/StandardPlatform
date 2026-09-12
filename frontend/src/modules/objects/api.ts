@@ -368,8 +368,8 @@ export const viewApi = {
     ),
 }
 
-/** 묶어 보기의 막대 하나. `key` 는 거르기에 그대로 넣을 수 있는 값(빈 칸이면 null). */
-/** 쪼갠 조각 하나 — 두 번째 축의 값별로. 합은 그 칸의 `count` 와 맞는다. */
+/** 통계의 막대 하나. `key` 는 거르기에 그대로 넣을 수 있는 값(빈 칸이면 null). */
+/** 세부 기준으로 나눈 조각 하나 — 세부 기준의 값별로. 합은 그 칸의 `count` 와 맞는다. */
 export interface Part {
   key: string | null
   label: string
@@ -395,7 +395,7 @@ export interface GroupOption {
 export interface Summary {
   group_field: string
   group_label: string
-  /** desc(많은 것부터) · asc(적은 것부터). */
+  /** desc(큰 값부터) · asc(작은 값부터). */
   order: string
   split_field: string
   split_label: string
@@ -435,7 +435,7 @@ export interface Points {
   group_options: GroupOption[]
 }
 
-/** 묶어 보기의 축 — 그림과 파일이 **같은 주소**를 쓴다(따로 만들면 숫자가 갈린다). */
+/** 통계의 기준 — 그림과 파일이 **같은 주소**를 쓴다(따로 만들면 숫자가 갈린다). */
 export interface SummaryOptions {
   groupBy: string
   splitBy?: string | null
@@ -549,7 +549,7 @@ export const objectApi = {
   list: (typeSlug: string, query: ObjectQuery = {}) =>
     api.get<Page<ObjectRow>>(`/objects/${typeSlug}${queryString(query)}`),
   /**
-   * 묶어 보기 — **목록과 같은 거르기 위에서.**
+   * 통계 — **목록과 같은 거르기 위에서.**
    *
    * 거르기를 따로 보내면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느
    * 쪽이 맞는지 아무도 모른다. 그래서 목록이 쓰는 `ObjectQuery` 를 그대로 받는다.

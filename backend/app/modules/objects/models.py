@@ -325,7 +325,7 @@ class SavedView(Base):
     query: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     """`{"q": ..., "conditions": [{"field","op","value"}], "sort": {...}}`."""
     summary: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
-    """묶어 보기 설정 — `{"group_by", "metric", "metric_field", "chart"}`. 비어 있으면
+    """통계 설정 — `{"group_by", "metric", "metric_field", "chart"}`. 비어 있으면
     이 뷰는 목록일 뿐이다.
 
     뷰에 함께 담는 이유: 조건과 축은 **같은 물음의 두 쪽**이다(「영남 공급사를 등급별로」).

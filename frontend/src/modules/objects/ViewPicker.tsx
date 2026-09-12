@@ -38,7 +38,7 @@ interface ViewPickerProps {
   typeSlug: string
   /** 지금 걸린 것 — 저장할 내용. */
   current: SavedViewQuery
-  /** 지금 묶어 보기 설정. 펼쳐 두고 저장하면 **축까지 담긴다.** 안 펼쳤으면 null. */
+  /** 지금 통계 설정. 펼쳐 두고 저장하면 **기준까지 담긴다.** 안 펼쳤으면 null. */
   summary?: SavedViewSummary | null
   /** 지금 적용된 뷰(있으면). 조건을 손대면 호스트가 null 로 되돌린다. */
   activeId: string | null
@@ -215,8 +215,7 @@ function SaveViewDialog({ typeSlug, query, summary, onClose, onSaved }: SaveView
           <DialogDescription>
             지금 걸린 조건 {query.conditions.length}개{query.q ? `와 검색어 「${query.q}」` : ''}를
             이름 붙여 둡니다. 열·정렬은 타입 정의를 따릅니다.
-            {summary?.group_by &&
-              ' 묶어 보기 축도 함께 담깁니다 — 불러오면 그림까지 그대로 뜹니다.'}
+            {summary?.group_by && ' 통계 기준도 함께 담깁니다 — 불러오면 그림까지 그대로 뜹니다.'}
           </DialogDescription>
         </DialogHeader>
         <form

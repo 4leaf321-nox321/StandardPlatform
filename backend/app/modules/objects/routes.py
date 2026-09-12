@@ -275,13 +275,13 @@ def summary(
     type_slug: str,
     request: Request,
     group_by: str = Query(
-        default="status", description="묶을 축 — status·workspace·created_year·properties.<칸>"
+        default="status", description="기준 — status·workspace·created_year·properties.<칸>"
     ),
     split_by: str | None = Query(
-        default=None, description="두 번째 축 — 같은 규칙. 주면 계열이 여럿이 된다"
+        default=None, description="세부 기준 — 같은 규칙. 주면 계열이 여럿이 된다"
     ),
     metric: str = Query(default="count", description="count·sum·avg·min·max"),
-    order: str = Query(default="desc", description="desc(많은 것부터)·asc(적은 것부터)"),
+    order: str = Query(default="desc", description="desc(큰 값부터)·asc(작은 값부터)"),
     metric_field: str | None = Query(default=None, description="합·평균을 낼 숫자 칸"),
     q: str | None = Query(default=None),
     status: str | None = Query(default=None),
@@ -291,7 +291,7 @@ def summary(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> SummaryOut:
-    """묶어 보기 — **목록과 같은 거르기 위에서 센다.**
+    """통계 — **목록과 같은 거르기 위에서 센다.**
 
     거르기는 목록과 똑같이 온다(`?p.<칸>=`, `?f.<칸>.<연산>=`, q·status·year·under).
     따로 세면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느 쪽이 맞는지
@@ -364,7 +364,7 @@ def points(
     request: Request,
     x: str = Query(description="숫자 칸 — properties.<칸>"),
     y: str | None = Query(default=None, description="두 번째 숫자 칸(산점도)"),
-    group_by: str | None = Query(default=None, description="상자를 가를 축 · 점의 색"),
+    group_by: str | None = Query(default=None, description="상자를 나눌 기준 · 점의 색"),
     q: str | None = Query(default=None),
     status: str | None = Query(default=None),
     under: uuid.UUID | None = Query(default=None),
@@ -431,7 +431,7 @@ def summary_export(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    """묶어 본 표를 **파일로** — 화면의 그림과 같은 숫자.
+    """통계 표를 **파일로** — 화면의 그림과 같은 숫자.
 
     묶어 본 숫자는 결국 보고서로 옮겨진다. 막대를 보고 손으로 옮겨 적으면 그 사이에
     틀리고, 틀린 숫자가 회의에 들어간다. 거르기·축은 `/summary` 와 똑같이 받는다.
@@ -457,7 +457,7 @@ def summary_export(
     )
     header, rows = summary_service.summary_table(found)
     return sheets.file_response(
-        header, rows, fmt=format, stem=f"{type_slug}-summary", sheet="묶어 보기"
+        header, rows, fmt=format, stem=f"{type_slug}-summary", sheet="통계"
     )
 
 

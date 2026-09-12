@@ -63,7 +63,7 @@ import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
 /**
- * 묶어 보기는 **누를 때 받는다.**
+ * 통계는 **누를 때 받는다.**
  *
  * 차트 라이브러리가 이 화면 덩어리에 들어가면, 그림을 한 번도 안 여는 사람까지
  * 목록을 볼 때마다 그만큼을 받는다. 목록은 이 플랫폼에서 가장 자주 여는 화면이라
@@ -221,12 +221,12 @@ export default function ObjectListPage() {
   const [year, setYear] = useState<number | null>(new Date().getFullYear())
   const [offset, setOffset] = useState(0)
   const [creating, setCreating] = useState(false)
-  /** 묶어 보기를 펼쳐 두었나. **기본은 접힘** — 목록을 보러 온 사람에게
+  /** 통계를 펼쳐 두었나. **기본은 접힘** — 목록을 보러 온 사람에게
    *  막대를 먼저 들이밀면 목록이 한 화면 아래로 밀린다. */
-  /** 홈의 「위젯 추가」 가 `?group=1` 로 보낸다 — 도착하자마자 묶어 보기가 펼쳐져
+  /** 홈의 「위젯 추가」 가 `?group=1` 로 보낸다 — 도착하자마자 통계가 펼쳐져
    *  있어야, 여기까지 온 사람이 무엇을 하러 왔는지 화면이 이어서 말한다. */
   const [grouping, setGrouping] = useState(params.get('group') === '1')
-  /** 묶어 보기 설정 — **여기가 들고 있다.** 뷰를 불러오면 그 뷰의 축으로 열려야 하고,
+  /** 통계 설정 — **여기가 들고 있다.** 뷰를 불러오면 그 뷰의 기준으로 열려야 하고,
    *  저장할 때는 지금 축이 함께 담겨야 한다. 패널이 혼자 들면 둘 다 못 한다. */
   const [summary, setSummary] = useState<SummarySettings>(DEFAULT_SUMMARY)
   /** 고른 줄 — **쪽을 넘기면 푼다.** 안 보이는 것을 고른 채로 두면 「10건 골랐다」 는
@@ -393,7 +393,7 @@ export default function ObjectListPage() {
                       onClick={() => setGrouping((before) => !before)}
                     >
                       <BarChart3 className="mr-1 size-4" />
-                      묶어 보기
+                      통계
                     </Button>
                     <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
                       <FileUp className="mr-1 size-4" />
@@ -504,7 +504,7 @@ export default function ObjectListPage() {
             <ViewPicker
               typeSlug={typeSlug}
               current={{ q: query, conditions, status: null }}
-              // 묶어 보기를 펼쳐 둔 채 저장하면 **축까지 담긴다.** 조건과 축은 같은
+              // 통계를 펼쳐 둔 채 저장하면 **기준까지 담긴다.** 조건과 기준은 같은
               // 물음의 두 쪽이다 — 「영남 공급사를 등급별로」.
               summary={
                 grouping
@@ -546,7 +546,7 @@ export default function ObjectListPage() {
             <Suspense
               fallback={
                 <p className="text-muted-foreground rounded-md border p-4 text-sm">
-                  묶어 보기를 준비하는 중…
+                  통계를 준비하는 중…
                 </p>
               }
             >

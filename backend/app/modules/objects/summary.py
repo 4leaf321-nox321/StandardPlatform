@@ -1,4 +1,4 @@
-"""묶어 보기 — **넣은 다음의 물음에 답한다.**
+"""통계 — **넣은 다음의 물음에 답한다.**
 
 정의하면 화면이 생기고 데이터가 정확히 쌓인다. 그다음 사람이 묻는 것은 언제나 같다:
 「그래서 부서별로 몇 건인데」 「등급별로는」 「올해 들어온 게 몇 개지」.
@@ -40,7 +40,7 @@ from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.workspaces.models import Workspace
 from app.shared.errors import AppError, code
 
-#: 세는 방법. `count` 는 칸을 안 받고, 나머지는 숫자 속성 하나를 받는다.
+#: 집계 방식. `count` 는 칸을 안 받고, 나머지는 숫자 속성 하나를 받는다.
 METRICS = ("count", "sum", "avg", "min", "max")
 METRIC_LABELS = {
     "count": "건수",
@@ -69,17 +69,17 @@ GROUPABLE = ("text", "enum", "bool", "url", "number", "date", "datetime", "objec
 BY_YEAR = ("date", "datetime")
 
 #: 저장된 뷰가 담을 수 있는 그림 모양. 앞의 넷은 `shared/charts` 의 `Chart`,
-#: `heatmap` 은 plotly(`LazyPlot`)가 그린다 — **두 축일 때만 뜻이 있다.**
+#: `heatmap` 은 plotly(`LazyPlot`)가 그린다 — **세부 기준이 있을 때만 뜻이 있다.**
 CHART_KINDS = ("bar", "line", "area", "pie", "heatmap", "list", "count")
 #: 축이 없을 때의 두 모양 — 수 하나이거나, 몇 줄을 늘어놓거나. 「미승인 12건」 은 수가
 #: 낫고, 「최근 들어온 것」 은 이름이 보여야 한다.
 AXISLESS_KINDS = ("count", "list")
 
-#: 차례. 많은 것부터가 기본이고, 적은 것부터는 「가장 낮은 것」 을 찾을 때 쓴다
+#: 차례. 큰 값부터가 기본이고, 작은 값부터는 「가장 낮은 것」 을 찾을 때 쓴다
 #: (불량률이 가장 낮은 공정, 점수가 가장 낮은 공급사).
 ORDERS = ("desc", "asc")
 
-#: 쪼개기(두 번째 축)에서 돌려줄 값의 수. 이보다 많으면 색이 겹쳐 못 읽는다 —
+#: 세부 기준에서 돌려줄 값의 수. 이보다 많으면 색이 겹쳐 못 읽는다 —
 #: 여덟 색을 돌려 쓰므로 열둘이면 이미 같은 색이 두 번 나온다.
 MAX_SPLITS = 12
 
@@ -97,7 +97,7 @@ NUMERIC_RE = r"^-?[0-9]+(\.[0-9]+)?$"
 
 @dataclass
 class Part:
-    """쪼갠 조각 하나 — 두 번째 축의 값별로."""
+    """세부 기준으로 나눈 조각 하나 — 세부 기준의 값별로."""
 
     key: str | None
     label: str
@@ -114,7 +114,7 @@ class Bucket:
     value: float | None = None
     """`metric` 이 count 가 아닐 때의 값. count 면 None."""
     parts: list[Part] = field(default_factory=list)
-    """쪼개기를 줬을 때만 채워진다. 합은 이 칸의 `count` 와 맞는다."""
+    """세부 기준을 줬을 때만 채워진다. 합은 이 칸의 `count` 와 맞는다."""
 
 
 @dataclass
@@ -130,10 +130,10 @@ class Summary:
     split_field: str = ""
     split_label: str = ""
     splits: list[str] = field(default_factory=list)
-    """쪼갠 값들의 **차례.** 화면이 계열 순서를 여기서 가져가야 그림마다 같은 값이
+    """세부 기준 값들의 **차례.** 화면이 계열 순서를 여기서 가져가야 그림마다 같은 값이
     같은 자리에 선다."""
     other_splits: int = 0
-    """상한을 넘어 빠진 쪼갠 값의 수."""
+    """상한을 넘어 빠진 세부 기준 값의 수."""
     buckets: list[Bucket] = field(default_factory=list)
     other_groups: int = 0
     """상한을 넘어 접힌 그룹 수."""
@@ -216,7 +216,7 @@ def _group_expr(defs: list[PropertyDef], field_name: str) -> tuple[Any, str, str
     if not field_name.startswith("properties."):
         raise AppError(
             code("OBJECTS", 41),
-            f"묶을 수 없는 축입니다: {field_name}. "
+            f"기준으로 쓸 수 없는 칸입니다: {field_name}. "
             f"쓸 수 있는 것: {', '.join(FIXED_FIELDS)} 또는 properties.<칸>",
             status=422,
         )
@@ -224,14 +224,14 @@ def _group_expr(defs: list[PropertyDef], field_name: str) -> tuple[Any, str, str
     if one.data_type not in GROUPABLE:
         raise AppError(
             code("OBJECTS", 42),
-            f"「{one.label}」 은 묶을 수 없는 종류입니다({one.data_type}). "
-            "긴 글과 파일로는 묶지 않습니다 — 그룹이 행 수만큼 나옵니다.",
+            f"「{one.label}」 은 기준으로 쓸 수 없는 종류입니다({one.data_type}). "
+            "긴 글과 파일은 기준이 되지 않습니다 — 그룹이 행 수만큼 나옵니다.",
             status=422,
         )
     if one.multi:
         raise AppError(
             code("OBJECTS", 43),
-            f"「{one.label}」 은 여러 값을 담는 칸이라 아직 못 묶습니다. "
+            f"「{one.label}」 은 여러 값을 담는 칸이라 아직 기준으로 쓸 수 없습니다. "
             "한 행이 여러 막대에 들어가 합이 전체와 안 맞습니다.",
             status=422,
         )
@@ -317,16 +317,16 @@ def summarize(
     metric_field: str | None = None,
     order: str = "desc",
 ) -> Summary:
-    """목록과 **같은 거르기** 위에서 묶어 센다. `split_by` 를 주면 두 축으로 쪼갠다.
+    """목록과 **같은 거르기** 위에서 묶어 센다. `split_by`(세부 기준)를 주면 한 번 더 나눈다.
 
-    두 축이 필요한 이유: 「부서별 몇 건」 다음에 오는 물음이 거의 언제나 「그 안에서
+    세부 기준이 필요한 이유: 「부서별 몇 건」 다음에 오는 물음이 거의 언제나 「그 안에서
     등급은 어떻게 되나」 이기 때문이다. 그때 거르기를 등급마다 바꿔 가며 여섯 번 세는
     것이 지금까지의 방법이었고, 그것은 사람이 그 답을 포기하게 만든다.
     """
     if metric not in METRICS:
         raise AppError(
             code("OBJECTS", 46),
-            f"세는 방법은 {', '.join(METRICS)} 중 하나여야 합니다: {metric}",
+            f"집계 방식은 {', '.join(METRICS)} 중 하나여야 합니다: {metric}",
             status=422,
         )
     if order not in ORDERS:
@@ -416,9 +416,9 @@ def _split(
     metric: str,
     value_expr: Any,
 ) -> tuple[str, list[str], int]:
-    """두 번째 축으로 쪼갠다 — 이미 고른 칸들 **안에서만.**
+    """세부 기준으로 나눈다 — 이미 고른 칸들 **안에서만.**
 
-    쪼갠 조각을 칸마다 채우고, 계열의 차례를 돌려준다. 차례를 서버가 정하는 이유:
+    나눈 조각을 칸마다 채우고, 계열의 차례를 돌려준다. 차례를 서버가 정하는 이유:
     화면이 칸마다 나오는 순서대로 계열을 만들면 첫 칸에 없던 값이 뒤에서 튀어나와
     **색이 밀린다** — 같은 값이 그림 안에서 두 색을 갖는다.
     """
@@ -430,14 +430,14 @@ def _split(
     wanted = [one.key for one in buckets]
     grouped = (
         filtered.with_only_columns(*columns)
-        # 보여 줄 칸 안에서만 쪼갠다. 전부 쪼개면 접힌 그룹의 조각까지 실려 응답이
+        # 보여 줄 칸 안에서만 나눈다. 전부 나누면 접힌 그룹의 조각까지 실려 응답이
         # 몇 배가 되고, 화면은 그것을 안 쓴다.
         .where(key_expr.in_([one for one in wanted if one is not None]))
         .group_by(key_expr, split_expr)
     )
     rows = list(db.execute(grouped))
 
-    # 계열의 차례 — 전체에서 많은 것부터. 상한을 넘으면 자른다(색이 여덟이라 열둘이면
+    # 계열의 차례 — 전체에서 큰 값부터. 상한을 넘으면 자른다(색이 여덟이라 열둘이면
     # 이미 같은 색이 두 번 나온다).
     weight: dict[str | None, int] = {}
     for row in rows:
@@ -486,7 +486,7 @@ def check_metric(defs: list[PropertyDef], metric: str, metric_field: str | None)
     if metric not in METRICS:
         raise AppError(
             code("OBJECTS", 46),
-            f"세는 방법은 {', '.join(METRICS)} 중 하나여야 합니다: {metric}",
+            f"집계 방식은 {', '.join(METRICS)} 중 하나여야 합니다: {metric}",
             status=422,
         )
     _metric_expr(defs, metric, metric_field)
@@ -510,7 +510,7 @@ class Point:
     id: uuid.UUID
     label: str
     group: str
-    """쪼갠 축의 값(상자 그림의 상자 하나, 산점도의 색). 없으면 빈 글자."""
+    """세부 기준의 값(상자 그림의 상자 하나, 산점도의 색). 없으면 빈 글자."""
     x: float | None
     y: float | None = None
 
@@ -547,7 +547,7 @@ def points(
     y: str | None = None,
     group_by: str | None = None,
 ) -> Points:
-    """고른 것들의 **원값**을 그대로. 상자 그림은 x 하나와 묶을 축, 산점도는 x·y 둘."""
+    """고른 것들의 **원값**을 그대로. 상자 그림은 x 하나와 기준, 산점도는 x·y 둘."""
     defs = properties_of(db, object_type.id)
     x_def = _number_def(defs, x)
     y_def = _number_def(defs, y) if y else None
@@ -632,7 +632,7 @@ TOTAL_LABEL = "전체"
 def summary_table(found: Summary) -> tuple[list[str], list[list[Any]]]:
     """묶어 센 결과 → (머리줄, 행들).
 
-    쪼갰으면 쪼갠 값이 열이 된다(그림의 계열 차례 그대로). 건수로 셌을 때만 합계 열과
+    쪼갰으면 세부 기준 값이 열이 된다(그림의 계열 차례 그대로). 건수로 셌을 때만 합계 열과
     「전체」 줄을 붙인다 — 평균·최솟값은 더하면 뜻이 없다.
     """
     counting = found.metric == "count"

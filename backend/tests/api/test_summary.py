@@ -1,4 +1,4 @@
-"""묶어 보기 — **목록과 같은 거르기 위에서 센다.**
+"""통계 — **목록과 같은 거르기 위에서 센다.**
 
 따로 세면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느 쪽이 맞는지 아무도
 모른다. 그래서 이 시험은 언제나 **목록의 total 과 묶음의 합**을 나란히 본다.
@@ -134,7 +134,7 @@ def test_숫자가_아닌_값이_섞여도_안_죽는다(client: TestClient, adm
     assert found["buckets"][0]["count"] == 6
 
 
-def test_묶을_수_없는_축은_이유를_말한다(client: TestClient, admin: Signed) -> None:
+def test_기준으로_쓸_수_없는_칸은_이유를_말한다(client: TestClient, admin: Signed) -> None:
     part = _make_type(client, admin, label="문서")
     _make_property(client, admin, part, key="body", label="본문", data_type="text_long")
     _make_property(
@@ -175,7 +175,7 @@ def test_투영_타입은_여기서_세지_않는다(client: TestClient, admin: 
 
 
 def _grid(client: TestClient, admin: Signed) -> str:
-    """등급(A/B)과 지역(영남/수도권)을 가진 타입 — 두 축으로 쪼갤 것."""
+    """등급(A/B)과 지역(영남/수도권)을 가진 타입 — 기준과 세부 기준으로 나눌 것."""
     part = _make_type(client, admin, label="공급사")
     _make_property(
         client,
@@ -210,12 +210,14 @@ def _grid(client: TestClient, admin: Signed) -> str:
             label=f"공급사{index}",
             properties={"grade": grade, "area": area, "score": score},
         )
-    # 지역이 빈 것 하나 — 쪼갠 조각에도 「(비어 있음)」 이 있어야 한다.
+    # 지역이 빈 것 하나 — 세부 기준 조각에도 「(비어 있음)」 이 있어야 한다.
     _make_object(client, admin, part, label="공급사5", properties={"grade": "B"})
     return part
 
 
-def test_두_축으로_쪼개면_조각의_합이_칸과_맞는다(client: TestClient, admin: Signed) -> None:
+def test_세부_기준으로_나누면_조각의_합이_칸과_맞는다(
+    client: TestClient, admin: Signed
+) -> None:
     """「부서별 몇 건」 다음 물음은 거의 언제나 「그 안에서 등급은」 이다."""
     part = _grid(client, admin)
     found = _summary(
@@ -235,7 +237,7 @@ def test_두_축으로_쪼개면_조각의_합이_칸과_맞는다(client: TestC
     assert by_label["B"]["parts"][-1]["label"] == "(비어 있음)"
 
 
-def test_쪼개도_합과_평균을_낸다(client: TestClient, admin: Signed) -> None:
+def test_세부_기준이_있어도_합과_평균을_낸다(client: TestClient, admin: Signed) -> None:
     part = _grid(client, admin)
     found = _summary(
         client,
@@ -251,7 +253,7 @@ def test_쪼개도_합과_평균을_낸다(client: TestClient, admin: Signed) ->
     assert values == {"영남": 30, "수도권": 30}
 
 
-def test_쪼갤_수_없는_축은_저장이_아니라_여기서도_막는다(
+def test_세부_기준으로_못_쓰는_칸은_저장이_아니라_여기서도_막는다(
     client: TestClient, admin: Signed
 ) -> None:
     part = _grid(client, admin)
@@ -280,7 +282,7 @@ def test_이름으로_묶으면_개별_순위가_된다(client: TestClient, admi
     assert [one["label"] for one in found["buckets"][:2]] == ["공급사4", "공급사3"]
     assert found["buckets"][0]["value"] == 40
 
-    # 적은 것부터 — 「가장 낮은 것」 을 찾는 물음이 따로 있다.
+    # 작은 값부터 — 「가장 낮은 것」 을 찾는 물음이 따로 있다.
     lowest = _summary(
         client,
         admin,
@@ -294,7 +296,9 @@ def test_이름으로_묶으면_개별_순위가_된다(client: TestClient, admi
     assert lowest["buckets"][0]["label"] == "공급사1"
 
 
-def test_식별자를_안_쓰는_타입에는_그_축이_안_뜬다(client: TestClient, admin: Signed) -> None:
+def test_식별자를_안_쓰는_타입에는_그_기준이_안_뜬다(
+    client: TestClient, admin: Signed
+) -> None:
     """고를 수 있다고 보여 주고 나서 빈 그림을 주지 않는다."""
     none_key = _make_type(client, admin, label="메모", key_policy="none")
     fields = {
@@ -373,7 +377,7 @@ def test_숫자가_아닌_칸으로는_못_그린다(client: TestClient, admin: 
 # --- 파일로 내보내기 -----------------------------------------------------------------
 
 
-def test_묶어_본_표를_엑셀로_내보낸다_화면과_같은_숫자로(
+def test_통계_표를_엑셀로_내보낸다_화면과_같은_숫자로(
     client: TestClient, admin: Signed
 ) -> None:
     from io import BytesIO
@@ -400,7 +404,7 @@ def test_묶어_본_표를_엑셀로_내보낸다_화면과_같은_숫자로(
     }
 
 
-def test_쪼갠_표는_계열이_열이_되고_CSV_는_BOM_이_붙는다(
+def test_세부_기준이_있으면_그_값이_열이_되고_CSV_는_BOM_이_붙는다(
     client: TestClient, admin: Signed
 ) -> None:
     import csv

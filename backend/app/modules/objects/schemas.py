@@ -332,7 +332,7 @@ class SavedViewSummary(BaseModel):
 
     group_by: str = ""
     split_by: str = ""
-    """두 번째 축. 있으면 계열이 여럿이 되고, 쌓은 막대·나란한 막대·히트맵이 뜻을 갖는다."""
+    """세부 기준. 있으면 계열이 여럿이 되고, 쌓은 막대·나란한 막대·히트맵이 뜻을 갖는다."""
     metric: str = "count"
     metric_field: str | None = None
     chart: str = "bar"
@@ -342,7 +342,7 @@ class SavedViewSummary(BaseModel):
     stacked: bool = False
     """막대를 쌓을지. 여럿을 나란히 두면 「전체가 얼마인지」 를 못 읽는 물음이 있다."""
     order: str = "desc"
-    """desc(많은 것부터) · asc(적은 것부터). 적은 것부터는 「가장 낮은 것」 을 찾을 때 쓴다."""
+    """desc(큰 값부터) · asc(작은 값부터). 작은 값부터는 「가장 낮은 것」 을 찾을 때 쓴다."""
 
 
 class SavedViewOut(BaseModel):
@@ -440,11 +440,11 @@ class QualityReportOut(BaseModel):
     sample_limit: int
 
 
-# --- 묶어 보기 ----------------------------------------------------------------
+# --- 통계 ----------------------------------------------------------------
 
 
 class GroupOptionOut(BaseModel):
-    """묶을 수 있는(또는 셀 수 있는) 축 하나. 화면의 고르개가 이것만 보여 준다."""
+    """기준으로 쓸 수 있는(또는 집계할 수 있는) 칸 하나. 화면의 고르개가 이것만 보여 준다."""
 
     field: str
     label: str
@@ -452,7 +452,7 @@ class GroupOptionOut(BaseModel):
 
 
 class PartOut(BaseModel):
-    """쪼갠 조각 하나 — 두 번째 축의 값별로. 합은 그 칸의 `count` 와 맞는다."""
+    """세부 기준으로 나눈 조각 하나 — 세부 기준의 값별로. 합은 그 칸의 `count` 와 맞는다."""
 
     key: str | None
     label: str
@@ -479,7 +479,7 @@ class SummaryOut(BaseModel):
     split_field: str
     split_label: str
     splits: list[str]
-    """쪼갠 값들의 차례. 화면이 계열 순서를 여기서 가져간다 — 칸마다 나오는 대로
+    """세부 기준 값들의 차례. 화면이 계열 순서를 여기서 가져간다 — 칸마다 나오는 대로
     만들면 첫 칸에 없던 값이 뒤에서 튀어나와 색이 밀린다."""
     other_splits: int
     metric: str

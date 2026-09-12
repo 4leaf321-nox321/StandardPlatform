@@ -1,5 +1,5 @@
 /**
- * 묶어 보기가 지키는 것 — **목록과 같은 거르기를 넘기고, 합이 안 맞으면 그 차이를 적고,
+ * 통계가 지키는 것 — **목록과 같은 거르기를 넘기고, 합이 안 맞으면 그 차이를 적고,
  * 막대를 누르면 원래 값으로 거른다.**
  *
  * 그림 자체는 `shared/charts` 의 몫이라 여기서는 **무엇을 넘기나**만 본다. 그래서
@@ -112,11 +112,11 @@ async function panel(data: object) {
       />
     </MemoryRouter>,
   )
-  await screen.findByText(/거른 것 전체/)
+  await screen.findByText(/조건에 맞는 전체/)
   return { onPick, onSettings }
 }
 
-describe('묶어 보기', () => {
+describe('통계', () => {
   it('목록과 같은 거르기를 넘기고, 빈 값도 한 칸으로 그린다', async () => {
     await panel(BASE)
     expect(objectApi.summary).toHaveBeenCalledWith(
@@ -126,7 +126,7 @@ describe('묶어 보기', () => {
     )
     // **빈 값을 숨기면 막대의 합이 전체와 안 맞고, 그 차이는 화면 어디에도 안 적힌다.**
     expect(charts.rows.map((one) => one.name)).toEqual(['A', 'B', '(비어 있음)'])
-    expect(screen.getByText(/거른 것 전체 5건/)).toBeInTheDocument()
+    expect(screen.getByText(/조건에 맞는 전체 5건/)).toBeInTheDocument()
   })
 
   it('접힌 그룹이 있으면 몇 종류 몇 건이 빠졌는지 적는다', async () => {
@@ -144,14 +144,14 @@ describe('묶어 보기', () => {
     expect(onPick).not.toHaveBeenCalled()
   })
 
-  it('걸 수 없는 축이면 아예 안 누르게 한다', async () => {
+  it('거를 수 없는 기준이면 아예 안 누르게 한다', async () => {
     await panel({ ...BASE, group_field: 'workspace', group_label: '소유 부서' })
     expect(screen.getByRole('button', { name: 'A' })).toBeDisabled()
   })
 
   it('셀 숫자 칸이 없으면 합계·평균을 못 고른다', async () => {
     await panel({ ...BASE, metric_options: [] })
-    await userEvent.click(screen.getByRole('combobox', { name: '세는 방법' }))
+    await userEvent.click(screen.getByRole('combobox', { name: '집계 방식' }))
     expect(await screen.findByRole('option', { name: '합계' })).toHaveAttribute(
       'aria-disabled',
       'true',
@@ -214,7 +214,7 @@ describe('홈에 올리기', () => {
   })
 })
 
-describe('두 축으로 쪼개기', () => {
+describe('세부 기준', () => {
   const SPLIT = {
     ...BASE,
     split_field: 'properties.area',
@@ -248,13 +248,13 @@ describe('두 축으로 쪼개기', () => {
     expect(charts.rows[1]).toMatchObject({ name: 'B', 영남: 0, 수도권: 1 })
   })
 
-  it('쪼갠 값이 잘렸으면 그렇다고 적는다', async () => {
+  it('세부 기준 값이 잘렸으면 그렇다고 적는다', async () => {
     await panel({ ...SPLIT, other_splits: 4 })
-    expect(screen.getByText(/쪼갠 값 4가지는 빠졌습니다/)).toBeInTheDocument()
+    expect(screen.getByText(/세부 기준 값 4가지는 빠졌습니다/)).toBeInTheDocument()
   })
 
-  it('쪼개지 않고 히트맵을 고르면 두 축이 필요하다고 말한다', async () => {
-    // 한 축짜리 히트맵은 색칠한 막대 하나일 뿐이다.
+  it('세부 기준 없이 히트맵을 고르면 세부 기준이 필요하다고 말한다', async () => {
+    // 세부 기준 없는 히트맵은 색칠한 막대 하나일 뿐이다.
     const { onSettings } = await panel(BASE)
     await userEvent.click(screen.getByRole('button', { name: '히트맵' }))
     expect(onSettings).toHaveBeenCalledWith(expect.objectContaining({ chart: 'heatmap' }))
@@ -262,7 +262,7 @@ describe('두 축으로 쪼개기', () => {
 })
 
 describe('개별 순위', () => {
-  it('이름으로 묶고 건수를 세면 그것이 순위가 아님을 말한다', async () => {
+  it('이름을 기준으로 건수를 세면 그것이 순위가 아님을 말한다', async () => {
     // 막대가 전부 1 인 그림을 주고 아무 말도 안 하면, 사람은 기능이 고장난 줄 안다.
     await panel({ ...BASE, group_field: 'label', group_label: '이름' })
     expect(screen.getByText(/숫자 칸의 합·평균으로/)).toBeInTheDocument()
@@ -274,7 +274,7 @@ describe('개별 순위', () => {
     expect(onSettings).toHaveBeenCalledWith(expect.objectContaining({ order: 'asc' }))
   })
 
-  it('내보내기는 그림과 같은 거르기·축으로 파일을 받는다', async () => {
+  it('내보내기는 그림과 같은 조건·기준으로 파일을 받는다', async () => {
     // **화면과 같은 숫자여야 한다** — 따로 만들면 「화면에는 12 인데 파일에는 15」.
     objectApi.exportSummary.mockResolvedValue(undefined)
     await panel(BASE)

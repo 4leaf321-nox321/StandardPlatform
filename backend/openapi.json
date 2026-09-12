@@ -4029,7 +4029,7 @@
           "objects"
         ],
         "summary": "Summary",
-        "description": "묶어 보기 — **목록과 같은 거르기 위에서 센다.**\n\n거르기는 목록과 똑같이 온다(`?p.<칸>=`, `?f.<칸>.<연산>=`, q·status·year·under).\n따로 세면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느 쪽이 맞는지\n아무도 모른다.\n\n투영(system) 타입은 행이 없어 못 센다 — 원 표에 물어야 하는 일이고, 그 표의 축을\n이 틀은 모른다.",
+        "description": "통계 — **목록과 같은 거르기 위에서 센다.**\n\n거르기는 목록과 똑같이 온다(`?p.<칸>=`, `?f.<칸>.<연산>=`, q·status·year·under).\n따로 세면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느 쪽이 맞는지\n아무도 모른다.\n\n투영(system) 타입은 행이 없어 못 센다 — 원 표에 물어야 하는 일이고, 그 표의 축을\n이 틀은 모른다.",
         "operationId": "summary_api_objects__type_slug__summary_get",
         "parameters": [
           {
@@ -4047,11 +4047,11 @@
             "required": false,
             "schema": {
               "type": "string",
-              "description": "묶을 축 — status·workspace·created_year·properties.<칸>",
+              "description": "기준 — status·workspace·created_year·properties.<칸>",
               "default": "status",
               "title": "Group By"
             },
-            "description": "묶을 축 — status·workspace·created_year·properties.<칸>"
+            "description": "기준 — status·workspace·created_year·properties.<칸>"
           },
           {
             "name": "split_by",
@@ -4066,10 +4066,10 @@
                   "type": "null"
                 }
               ],
-              "description": "두 번째 축 — 같은 규칙. 주면 계열이 여럿이 된다",
+              "description": "세부 기준 — 같은 규칙. 주면 계열이 여럿이 된다",
               "title": "Split By"
             },
-            "description": "두 번째 축 — 같은 규칙. 주면 계열이 여럿이 된다"
+            "description": "세부 기준 — 같은 규칙. 주면 계열이 여럿이 된다"
           },
           {
             "name": "metric",
@@ -4089,11 +4089,11 @@
             "required": false,
             "schema": {
               "type": "string",
-              "description": "desc(많은 것부터)·asc(적은 것부터)",
+              "description": "desc(큰 값부터)·asc(작은 값부터)",
               "default": "desc",
               "title": "Order"
             },
-            "description": "desc(많은 것부터)·asc(적은 것부터)"
+            "description": "desc(큰 값부터)·asc(작은 값부터)"
           },
           {
             "name": "metric_field",
@@ -4275,10 +4275,10 @@
                   "type": "null"
                 }
               ],
-              "description": "상자를 가를 축 · 점의 색",
+              "description": "상자를 나눌 기준 · 점의 색",
               "title": "Group By"
             },
-            "description": "상자를 가를 축 · 점의 색"
+            "description": "상자를 나눌 기준 · 점의 색"
           },
           {
             "name": "q",
@@ -4388,7 +4388,7 @@
           "objects"
         ],
         "summary": "Summary Export",
-        "description": "묶어 본 표를 **파일로** — 화면의 그림과 같은 숫자.\n\n묶어 본 숫자는 결국 보고서로 옮겨진다. 막대를 보고 손으로 옮겨 적으면 그 사이에\n틀리고, 틀린 숫자가 회의에 들어간다. 거르기·축은 `/summary` 와 똑같이 받는다.",
+        "description": "통계 표를 **파일로** — 화면의 그림과 같은 숫자.\n\n묶어 본 숫자는 결국 보고서로 옮겨진다. 막대를 보고 손으로 옮겨 적으면 그 사이에\n틀리고, 틀린 숫자가 회의에 들어간다. 거르기·축은 `/summary` 와 똑같이 받는다.",
         "operationId": "summary_export_api_objects__type_slug__summary_export_get",
         "parameters": [
           {
@@ -8816,7 +8816,7 @@
           "kind"
         ],
         "title": "GroupOptionOut",
-        "description": "묶을 수 있는(또는 셀 수 있는) 축 하나. 화면의 고르개가 이것만 보여 준다."
+        "description": "기준으로 쓸 수 있는(또는 집계할 수 있는) 칸 하나. 화면의 고르개가 이것만 보여 준다."
       },
       "HTTPValidationError": {
         "properties": {
@@ -11091,7 +11091,7 @@
           "count"
         ],
         "title": "PartOut",
-        "description": "쪼갠 조각 하나 — 두 번째 축의 값별로. 합은 그 칸의 `count` 와 맞는다."
+        "description": "세부 기준으로 나눈 조각 하나 — 세부 기준의 값별로. 합은 그 칸의 `count` 와 맞는다."
       },
       "PatCreateRequest": {
         "properties": {

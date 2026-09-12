@@ -1,5 +1,5 @@
 /**
- * 묶어 보기 — 목록 위에서 **「그래서 몇 건인데」** 에 답한다.
+ * 통계 — 목록 위에서 **「그래서 몇 건인데」** 에 답한다.
  *
  * 그리는 일은 `shared/charts` 가 한다. 이 화면은 **무엇을 그릴지만** 정한다 —
  * 축 색·범례 높이·빈 데이터 처리를 여기서 또 정하면 다른 화면의 그림과 어긋나고,
@@ -76,7 +76,7 @@ const KINDS: { value: SummarySettings['chart']; label: string; Icon: typeof BarC
   { value: 'line', label: '꺾은선', Icon: ChartLine },
   { value: 'area', label: '영역', Icon: ChartArea },
   { value: 'pie', label: '원', Icon: ChartPie },
-  // **두 축일 때만 뜻이 있다.** 한 축짜리 히트맵은 색칠한 막대 하나일 뿐이다.
+  // **세부 기준이 있을 때만 뜻이 있다.** 세부 기준 없는 히트맵은 색칠한 막대 하나일 뿐이다.
   { value: 'heatmap', label: '히트맵', Icon: Grid3x3 },
   // 아래 둘은 **안 센 값**을 그린다 — 분포는 집계로 안 보인다.
   { value: 'box', label: '상자', Icon: BoxIcon },
@@ -98,7 +98,7 @@ const METRICS = [
   { value: 'max', label: '최댓값' },
 ]
 
-/** 「쪼개지 않음」. 빈 문자열은 Select 가 「고른 것 없음」 으로 보고 자리표시자로 돌아간다. */
+/** 「세부 기준 없음」. 빈 문자열은 Select 가 「고른 것 없음」 으로 보고 자리표시자로 돌아간다. */
 const NO_SPLIT = '__none__'
 
 interface Props {
@@ -266,7 +266,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
     })
   }, [data])
 
-  /** 계열 — 쪼갠 값의 **차례를 서버가 준다.** 그래야 같은 값이 언제나 같은 색이다. */
+  /** 계열 — 세부 기준 값의 **차례를 서버가 준다.** 그래야 같은 값이 언제나 같은 색이다. */
   const series = useMemo(
     () =>
       (data?.splits ?? []).length > 0
@@ -313,7 +313,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
           order: settings.order,
         },
         format,
-        `${typeSlug}-${data?.group_label ?? '묶어보기'}별.${format}`,
+        `${typeSlug}-${data?.group_label ?? '통계'}별.${format}`,
       )
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
@@ -326,10 +326,10 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
     <div className="space-y-3 rounded-md border p-4">
       <div className="flex flex-wrap items-center gap-2">
         <BarChart3 className="text-muted-foreground size-4" />
-        <span className="text-sm font-medium">묶어 보기</span>
+        <span className="text-sm font-medium">통계</span>
 
         <Select value={groupBy} onValueChange={(next) => patch({ groupBy: next })}>
-          <SelectTrigger className="w-48" aria-label="묶을 축">
+          <SelectTrigger className="w-48" aria-label="기준">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
@@ -341,22 +341,22 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
           </SelectContent>
         </Select>
 
-        {/* **두 번째 축.** 「부서별 몇 건」 다음 물음은 거의 언제나 「그 안에서 등급은」
+        {/* **세부 기준.** 「부서별 몇 건」 다음 물음은 거의 언제나 「그 안에서 등급은」
             이다. 그때 거르기를 바꿔 가며 여섯 번 세게 하면 사람은 그 답을 포기한다. */}
         <Select
           value={settings.splitBy || NO_SPLIT}
           onValueChange={(next) => patch({ splitBy: next === NO_SPLIT ? '' : next })}
         >
-          <SelectTrigger className="w-44" aria-label="쪼갤 축">
+          <SelectTrigger className="w-44" aria-label="세부 기준">
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={NO_SPLIT}>쪼개지 않음</SelectItem>
+            <SelectItem value={NO_SPLIT}>세부 기준 없음</SelectItem>
             {(data?.group_options ?? [])
               .filter((one) => one.field !== groupBy)
               .map((one) => (
                 <SelectItem key={one.field} value={one.field}>
-                  {one.label}로 쪼개기
+                  {one.label} 기준
                 </SelectItem>
               ))}
           </SelectContent>
@@ -375,7 +375,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
               patch({ metric: next, metricField: field })
             }}
           >
-            <SelectTrigger className="w-32" aria-label="세는 방법">
+            <SelectTrigger className="w-32" aria-label="집계 방식">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -392,7 +392,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
           </Select>
         )}
 
-        {/* 원값 그림은 **숫자 칸**을 받는다 — 세는 방법·차례는 뜻이 없어 감춘다. */}
+        {/* 원값 그림은 **숫자 칸**을 받는다 — 집계 방식·차례는 뜻이 없어 감춘다. */}
         {raw && (
           <>
             <Select
@@ -467,12 +467,12 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
           <Button
             variant="outline"
             size="sm"
-            title={settings.order === 'desc' ? '많은 것부터' : '적은 것부터'}
+            title={settings.order === 'desc' ? '큰 값부터' : '작은 값부터'}
             aria-label="차례 바꾸기"
             onClick={() => patch({ order: settings.order === 'desc' ? 'asc' : 'desc' })}
           >
             <ArrowUpDown className="mr-1 size-4" />
-            {settings.order === 'desc' ? '많은 것부터' : '적은 것부터'}
+            {settings.order === 'desc' ? '큰 값부터' : '작은 값부터'}
           </Button>
         )}
 
@@ -482,11 +482,11 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
             variant={settings.stacked ? 'secondary' : 'outline'}
             size="sm"
             aria-pressed={settings.stacked}
-            title="쌓아서 전체를 보거나, 나란히 놓고 서로 견주거나"
+            title="누적해서 전체를 보거나, 나란히 놓고 서로 견주거나"
             onClick={() => patch({ stacked: !settings.stacked })}
           >
             <Layers className="mr-1 size-4" />
-            {settings.stacked ? '쌓음' : '나란히'}
+            {settings.stacked ? '누적' : '나란히'}
           </Button>
         )}
 
@@ -524,7 +524,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
           ) : (
             <span className="text-muted-foreground text-xs">부서 관리자가 홈에 올립니다</span>
           )}
-          <Button variant="ghost" size="icon" aria-label="묶어 보기 닫기" onClick={onClose}>
+          <Button variant="ghost" size="icon" aria-label="통계 닫기" onClick={onClose}>
             <X className="size-4" />
           </Button>
         </div>
@@ -592,8 +592,8 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
               />
             )
           ) : kind === 'heatmap' && data.splits.length > 0 ? (
-            /* 히트맵은 plotly 가 그린다 — **두 축일 때만.** 색이 값이라 계열이 많아도
-               읽히는 것이 장점이고, 그래서 쪼갠 값이 열둘까지여도 견딘다. */
+            /* 히트맵은 plotly 가 그린다 — **세부 기준이 있을 때만.** 색이 값이라 계열이 많아도
+               읽히는 것이 장점이고, 그래서 세부 기준 값이 열둘까지여도 견딘다. */
             <LazyPlot
               height={Math.max(240, Math.min(460, rows.length * 30 + 120))}
               title={`${data.group_label} × ${data.split_label}`}
@@ -634,12 +634,12 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
                 오류로 읽고, 그 뒤로 이 그림을 안 믿는다. */}
             {raw && points
               ? `점 ${points.rows.length.toLocaleString()}개`
-              : `거른 것 전체 ${data.total.toLocaleString()}건`}
+              : `조건에 맞는 전체 ${data.total.toLocaleString()}건`}
             {raw && points?.truncated && (
               <>
                 {' · '}
                 <strong>{points.total.toLocaleString()}개 중 앞의 것만</strong> 그렸습니다 —
-                거르기로 좁히면 전부 보입니다
+                조건으로 좁히면 전부 보입니다
               </>
             )}
             {data.other_groups > 0 && (
@@ -651,17 +651,17 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
             {data.metric !== 'count' && ' · 숫자로 안 읽히는 값은 셈에서 빠집니다'}
             {canFilter && kind !== 'heatmap' && ' · 막대를 누르면 그것만 걸러집니다'}
             {kind === 'heatmap' && data.splits.length === 0 && (
-              <> · 히트맵은 두 축이 필요합니다 — 「쪼갤 축」 을 고르세요</>
+              <> · 히트맵은 세부 기준이 필요합니다 — 「세부 기준」 을 고르세요</>
             )}
             {data.group_field === 'label' && data.metric === 'count' && (
               <>
                 {' '}
-                · 이름으로 묶고 건수를 세면 대개 전부 1 입니다 — 숫자 칸의 합·평균으로 바꾸면 순위가
-                됩니다
+                · 이름을 기준으로 건수를 세면 대개 전부 1 입니다 — 숫자 칸의 합·평균으로 바꾸면
+                순위가 됩니다
               </>
             )}
             {data.other_splits > 0 && (
-              <> · 쪼갠 값 {data.other_splits}가지는 빠졌습니다(색이 겹쳐 못 읽습니다)</>
+              <> · 세부 기준 값 {data.other_splits}가지는 빠졌습니다(색이 겹쳐 못 읽습니다)</>
             )}
           </p>
         </div>

@@ -38,7 +38,7 @@ import {
  *  제목을 눌러 목록으로 간다. */
 const LIST_ROWS = 5
 
-/** 쪼갠 조각의 값. 없는 계열은 0 — 빈 자리는 「없음」 과 0 을 구별 못 하게 만든다. */
+/** 세부 기준 조각의 값. 없는 계열은 0 — 빈 자리는 「없음」 과 0 을 구별 못 하게 만든다. */
 function partValue(
   bucket: { parts: { label: string; count: number; value: number | null }[] },
   label: string,
@@ -97,7 +97,7 @@ export function HomeWidget({
       .finally(() => setBusy(false))
   }
   const grouped = Boolean(view.summary.group_by)
-  /** 축이 없는 뷰의 두 모양 — 수 하나이거나 몇 줄이거나. */
+  /** 기준이 없는 뷰의 두 모양 — 수 하나이거나 몇 줄이거나. */
   const asList = !grouped && view.summary.chart === 'list'
   const [data, setData] = useState<Summary | null>(null)
   const [rows, setRows] = useState<ObjectRow[]>([])
@@ -228,7 +228,7 @@ export function HomeWidget({
         </div>
       ) : failed ? (
         <p className="text-muted-foreground text-sm">
-          지금 셀 수 없습니다. 뷰의 조건이나 축이 정의와 안 맞을 수 있습니다 —{' '}
+          지금 셀 수 없습니다. 뷰의 조건이나 기준이 정의와 안 맞을 수 있습니다 —{' '}
           <Link to={viewHref(widget)} className="underline">
             목록에서 확인
           </Link>
@@ -305,7 +305,7 @@ export function HomeWidget({
         )
       ) : (
         <Link to={viewHref(widget)} className="block">
-          {/* 축이 없는 뷰는 **수 하나**다. 「미승인 12건」 은 그림이 필요 없다. */}
+          {/* 기준이 없는 뷰는 **수 하나**다. 「미승인 12건」 은 그림이 필요 없다. */}
           <p className="text-3xl font-semibold tabular-nums">
             {(data?.total ?? 0).toLocaleString()}
           </p>
