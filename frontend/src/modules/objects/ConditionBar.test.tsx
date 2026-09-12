@@ -12,7 +12,15 @@ vi.mock('@/modules/objects/api', async (original) => {
   const real = await original<typeof import('@/modules/objects/api')>()
   return {
     ...real,
-    objectApi: { list: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 }) },
+    objectApi: {
+      list: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 }),
+      // 상세 — 칩의 이름을 채울 때 읽는다. 모르는 id 는 볼 수 없는 것처럼 실패한다.
+      profile: vi.fn((_slug: string, id: string) =>
+        id === 'w1'
+          ? Promise.resolve({ object: { id, label: '해석팀' } })
+          : Promise.reject(new Error('볼 수 없음')),
+      ),
+    },
   }
 })
 
@@ -109,5 +117,33 @@ describe('조건 줄', () => {
   it('상대가 정해지지 않은 관계는 있음·없음만 걸 수 있다', async () => {
     const { opsFor } = await import('@/modules/objects/ConditionBar')
     expect(opsFor('relation')).toEqual(['empty', 'notempty'])
+  })
+
+  it('목록에 이름이 안 실려 오는 참조 값도 새로 열었을 때 이름으로 선다', async () => {
+    // **주소로 들어오면 고르던 기억이 없다.** 그래도 칩은 id 가 아니라 이름이어야 읽힌다.
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    render(
+      <ConditionBar
+        defs={DEFS}
+        conditions={[
+          { field: 'out.used_by', op: 'in', value: 'w1|w9' },
+          { field: 'out.used_by', op: 'notempty', value: '' },
+        ]}
+        onChange={vi.fn()}
+        linked={[
+          {
+            field: 'out.used_by',
+            label: '사용 부서',
+            heading: '관계 · 사용 부서',
+            data_type: 'object_ref',
+            multi: true,
+            enum_options: null,
+            ref_type_slug: 'workspace',
+          },
+        ]}
+      />,
+    )
+    // 볼 수 없는 w9 는 id 그대로 — 이름을 지어내지 않는다.
+    expect(await screen.findByText('사용 부서 ∈ 해석팀, w9')).toBeInTheDocument()
   })
 })

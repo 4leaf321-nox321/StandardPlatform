@@ -8,12 +8,12 @@
  * 전체를 OR 로 잇는 트리는 안 만든다. 화면에 그릴 수 없고, 그려도 사람이 못 읽는다.
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, X } from 'lucide-react'
 
 import { useObjectOptions } from '@/modules/objects/useObjectOptions'
 import type { Condition, ConditionOp, LinkedField } from '@/modules/objects/api'
-import { CONDITION_MULTI_SEP } from '@/modules/objects/api'
+import { CONDITION_MULTI_SEP, objectApi } from '@/modules/objects/api'
 import type { DataType, PropertyDef } from '@/modules/ontology/api'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
 import { Button } from '@/shared/components/ui/button'
@@ -146,6 +146,42 @@ export function ConditionBar({
   )
   const byKey = useMemo(() => new Map(fields.map((one) => [one.key, one])), [fields])
   const [open, setOpen] = useState(false)
+
+  /**
+   * **새로고침해도 이름으로.** 목록 행에 이름이 실려 오지 않는 참조 값 — 이어진 것 너머의
+   * 칸, 「≠」 로 걸려 목록에 안 나오는 것 — 은 상세를 한 번 읽어 채운다. 고르개가 골라 둔
+   * 값을 핀으로 꽂는 것과 같은 길이라 **서버의 가시성 규칙을 그대로 따른다**: 볼 수 없는
+   * 부서의 것이면 이름을 못 받고 id 그대로 선다.
+   *
+   * 한 값은 한 번만 묻는다 — 실패한 것까지 기억해 두지 않으면 렌더마다 다시 묻는다.
+   */
+  const asked = useRef(new Set<string>())
+  useEffect(() => {
+    const wanted: [string, string][] = []
+    for (const one of conditions) {
+      const field = byKey.get(one.field)
+      if (field?.data_type !== 'object_ref' || !field.ref_type_slug) continue
+      if (one.op === 'empty' || one.op === 'notempty') continue
+      const values = one.op === 'in' ? one.value.split(CONDITION_MULTI_SEP) : [one.value]
+      for (const value of values) {
+        if (!value || refLabels[value] || known[value] || asked.current.has(value)) continue
+        asked.current.add(value)
+        wanted.push([field.ref_type_slug, value])
+      }
+    }
+    if (wanted.length === 0) return
+    void Promise.allSettled(
+      wanted.map(([slug, id]) =>
+        objectApi.profile(slug, id).then((found) => [id, found.object.label] as const),
+      ),
+    ).then((results) => {
+      const names: Record<string, string> = {}
+      for (const result of results) {
+        if (result.status === 'fulfilled') names[result.value[0]] = result.value[1]
+      }
+      if (Object.keys(names).length > 0) remember(names)
+    })
+  }, [conditions, byKey, refLabels, known, remember])
 
   const describe = (one: Condition): string => {
     const field = byKey.get(one.field)
