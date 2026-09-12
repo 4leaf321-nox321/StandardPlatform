@@ -27,6 +27,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.datasources import fetchers, odata
 from app.modules.datasources.models import DataSource, DataSourceRun
+from app.modules.notifications import services as notifications
 from app.modules.objects import aliases, bulk
 from app.modules.objects.models import ObjectAlias, ObjectInstance
 from app.modules.objects.services import properties_of
@@ -284,8 +285,49 @@ def preview(db: Session, source: DataSource, *, limit: int = 5) -> dict[str, Any
 
 
 def sync(db: Session, user: User | None, source: DataSource, *, apply: bool) -> SyncResult:
-    """계획을 세우고(그리고 `apply` 면 넣고) 기록을 남긴다. **부르는 쪽이 커밋하지 않는다** —
-    여기서 커밋한다(bulk 가 그렇고, 기록은 실패해도 남아야 한다)."""
+    """계획을 세우고(그리고 `apply` 면 넣고) 기록을 남긴다. 상태가 바뀌면 알린다.
+
+    **부르는 쪽이 커밋하지 않는다** — 여기서 커밋한다(bulk 가 그렇고, 기록은 실패해도
+    남아야 한다).
+    """
+    before = source.last_status
+    result = _sync(db, user, source, apply=apply)
+    _announce(db, source, before=before)
+    return result
+
+
+def _announce(db: Session, source: DataSource, *, before: str | None) -> None:
+    """**상태가 바뀔 때만 알린다.**
+
+    타이머가 5분마다 도니까 실패할 때마다 알리면 하루에 288개가 쌓이고, 그러면 사람은
+    이 종류를 통째로 안 읽게 된다 — 그때 이 알림은 없는 것과 같다. 복구도 알린다:
+    안 알리면 실패 알림 하나를 들고 「아직도 안 되나」 를 손으로 확인하러 간다.
+
+    계획만 본 것(`apply=false`)은 `last_status` 를 안 건드리므로 여기 안 걸린다.
+    """
+    after = source.last_status
+    if after == before:
+        return
+    if after == "failed":
+        notifications.notify_system_admins(
+            db,
+            kind=notifications.DATASOURCE_FAILED,
+            title=f"데이터 소스 「{source.name}」 동기화가 실패했습니다",
+            body="자동 동기화가 멈춘 것은 아닙니다 — 다음 차례에 다시 시도합니다. "
+            "무엇이 막았는지는 소스 화면의 기록에 있습니다.",
+            link="/admin/datasources",
+        )
+    elif after == "ok" and before == "failed":
+        notifications.notify_system_admins(
+            db,
+            kind=notifications.DATASOURCE_RECOVERED,
+            title=f"데이터 소스 「{source.name}」 동기화가 다시 됩니다",
+            link="/admin/datasources",
+        )
+    db.commit()
+
+
+def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) -> SyncResult:
     object_type = db.get(ObjectType, source.type_id)
     if object_type is None:
         raise AppError(code("DATASOURCES", 21), "소스가 가리키는 타입이 없습니다.", status=409)
@@ -542,3 +584,67 @@ def workspace_content(
             kind="datasources", label="데이터 소스", count=int(count), move=_move_sources
         )
     ]
+
+
+# --- 홈 「남은 일」 ------------------------------------------------------------
+
+#: 간격의 이 배를 넘도록 안 돌았으면 「멎었다」 로 본다. 딱 한 배로 보면 5분 간격에서
+#: 타이머가 한 번만 늦어도 경고가 뜨고, 그런 경고는 곧 무시된다.
+STALE_FACTOR = 3
+
+
+def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
+    """**조용히 멎은 것을 홈이 말한다.**
+
+    동기화가 실패하면 지금까지는 `last_status` 에 failed 만 적혔다. 소스 화면을 열어
+    보는 사람만 그것을 안다 — 그리고 잘 도는 동안에는 아무도 그 화면을 안 연다.
+    그것이 정기 작업의 기본 실패 방식이고, 그 사실은 데이터가 몇 주 낡은 뒤에야
+    드러난다.
+
+    시스템 관리자에게만. 데이터 소스 화면을 그들만 열 수 있어서, 다른 사람에게 띄우면
+    그 줄은 못 지우는 숫자가 된다.
+    """
+    if not viewer.is_system_admin:
+        return []
+    failed = list(
+        db.scalars(
+            select(DataSource).where(
+                DataSource.is_active.is_(True), DataSource.last_status == "failed"
+            )
+        )
+    )
+    now = datetime.now(UTC)
+    stale = [
+        one
+        for one in db.scalars(
+            select(DataSource).where(
+                DataSource.is_active.is_(True), DataSource.interval_minutes > 0
+            )
+        )
+        if one.last_status != "failed"
+        and one.last_run_at is not None
+        and one.last_run_at + timedelta(minutes=one.interval_minutes * STALE_FACTOR) < now
+    ]
+    return [
+        extensions.MaintenanceItem(
+            key="datasource_failed",
+            label="동기화가 실패한 데이터 소스",
+            count=len(failed),
+            link="/admin/datasources",
+            # **경고다.** 여기가 실패하면 화면의 값이 조용히 낡아 가고, 그 사실은
+            # 값 자체로는 드러나지 않는다 — 틀린 값이 아니라 옛 값이기 때문이다.
+            severity="warning",
+        ),
+        extensions.MaintenanceItem(
+            key="datasource_stale",
+            label="정해진 간격보다 오래 안 돈 데이터 소스",
+            count=len(stale),
+            link="/admin/datasources",
+            severity="warning",
+        ),
+    ]
+
+
+def stats(db: Session) -> list[extensions.StatItem]:
+    total = db.scalar(select(func.count()).select_from(DataSource)) or 0
+    return [extensions.StatItem(label="데이터 소스", count=int(total))]

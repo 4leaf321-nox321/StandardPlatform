@@ -7,7 +7,7 @@
 
 import { useMemo, useState } from 'react'
 import { Link, useParams, useSearchParams } from 'react-router-dom'
-import { Download, FileUp, Plus } from 'lucide-react'
+import { BarChart3, Download, FileUp, Plus } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
@@ -25,6 +25,7 @@ import { propertyText } from '@/modules/objects/PropertyFields'
 import { ObjectCreateDialog } from '@/modules/objects/ObjectCreateDialog'
 import { ObjectImportDialog } from '@/modules/objects/ObjectImportDialog'
 import { ObjectTree } from '@/modules/objects/ObjectTree'
+import { SummaryPanel } from '@/modules/objects/SummaryPanel'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -186,6 +187,9 @@ export default function ObjectListPage() {
   const [year, setYear] = useState<number | null>(new Date().getFullYear())
   const [offset, setOffset] = useState(0)
   const [creating, setCreating] = useState(false)
+  /** 묶어 보기를 펼쳐 두었나. **기본은 접힘** — 목록을 보러 온 사람에게
+   *  막대를 먼저 들이밀면 목록이 한 화면 아래로 밀린다. */
+  const [grouping, setGrouping] = useState(false)
   const [importing, setImporting] = useState(false)
   /** 내보내기 실패 — 새 탭이 아니라 이 화면에 떠야 한다. 조용히 실패하면 아무 일도 안 일어난 것처럼 보인다. */
   const [exportError, setExportError] = useState<Error | null>(null)
@@ -319,6 +323,14 @@ export default function ObjectListPage() {
                 </DropdownMenu>
                 {type.kind_class !== 'system' && (
                   <>
+                    <Button
+                      size="sm"
+                      variant={grouping ? 'secondary' : 'outline'}
+                      onClick={() => setGrouping((before) => !before)}
+                    >
+                      <BarChart3 className="mr-1 size-4" />
+                      묶어 보기
+                    </Button>
                     <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
                       <FileUp className="mr-1 size-4" />
                       파일로 넣기
@@ -446,6 +458,28 @@ export default function ObjectListPage() {
                 setOffset(0)
               }}
               refLabels={refLabelsOfList}
+            />
+          </div>
+        )}
+
+        {grouping && type && !isSystem && (
+          <div className="mb-4">
+            <SummaryPanel
+              typeSlug={typeSlug}
+              query={exportQuery}
+              onClose={() => setGrouping(false)}
+              onPick={(field, key) => {
+                // **누른 막대가 곧 거르기다.** 여기서 거르기 칸으로 돌아가 값을 다시
+                // 치게 하면, 그 한 번이 사람을 엑셀로 돌려보낸다.
+                if (key === null) return
+                if (field === 'status') return
+                const propertyKey = field.slice('properties.'.length)
+                const rest = conditions.filter(
+                  (one) => !(one.field === propertyKey && one.op === 'eq'),
+                )
+                setConditions([...rest, { field: propertyKey, op: 'eq', value: key }])
+                setOffset(0)
+              }}
             />
           </div>
         )}

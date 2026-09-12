@@ -16,7 +16,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.webhooks import services
 from app.modules.webhooks.models import Webhook
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, maintenance_counts, notifications_of
 from tests.api.test_ontology import _make_object, _make_type
 
 
@@ -173,6 +173,29 @@ def test_실패는_남아서_다시_보낸다(
         f"/api/webhooks/{hook['id']}/deliveries/{one['id']}/retry", headers=admin.headers
     ).json()
     assert retried["status"] == "ok" and retried["attempts"] == 1
+
+
+def test_포기하면_홈과_종이_말한다(
+    client: TestClient, admin: Signed, member: Signed, inbox: list[httpx.Request]
+) -> None:
+    """**받는 쪽이 조용히 못 받고 있는 상태**를 아무도 모르면 안 된다 — 잘 가는 동안에는
+    웹훅 화면을 아무도 안 연다."""
+    hook = _hook(client, admin, url="http://receiver.local/fail")
+    part = _make_type(client, admin, label="부품")
+    quiet = maintenance_counts(client, admin).get("webhook_failed", 0)
+    before = len(notifications_of(client, admin, "webhook.failed"))
+
+    _make_object(client, admin, part, label="너트")
+    services.dispatcher.deliver_pending()
+    # 아직 포기 전(세 번째에 포기) — 알리지 않는다.
+    assert len(notifications_of(client, admin, "webhook.failed")) == before
+
+    services.dispatcher.deliver_pending()
+    after = notifications_of(client, admin, "webhook.failed")
+    assert len(after) == before + 1
+    assert hook["name"] in after[0]["title"]
+    assert maintenance_counts(client, admin)["webhook_failed"] == quiet + 1
+    assert "webhook_failed" not in maintenance_counts(client, member)
 
 
 def test_보내_보기는_그_자리에서_결과를_준다(

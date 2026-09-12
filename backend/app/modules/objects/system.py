@@ -49,6 +49,17 @@ def source_of(object_type: ObjectType) -> SystemSource:
     return found
 
 
+def source_or_none(object_type: ObjectType) -> SystemSource | None:
+    """등록이 빠졌으면 None. **한 타입 때문에 화면 전체가 멈추면 안 되는 자리**에서 쓴다.
+
+    원 표는 `main.py` 에서 조립된다 — 도메인을 떼거나 되돌리면 그 표를 가리키던 타입이
+    정의에 남는다. 그때 홈의 「남은 일」 처럼 **모든 타입을 훑는 화면**이 409 를 내면,
+    설치 전체가 그 타입 하나 때문에 멎는다. 목록·상세처럼 그 타입을 **직접** 여는
+    자리에서는 여전히 `source_of` 가 멈춰 이유를 말한다.
+    """
+    return system_sources.system_source(object_type.system_source)
+
+
 def types_by_slug(db: Session) -> dict[str, ObjectType]:
     return {row.slug: row for row in db.scalars(select(ObjectType))}
 

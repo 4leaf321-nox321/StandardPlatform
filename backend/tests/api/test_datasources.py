@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.modules.datasources import services
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, maintenance_counts, notifications_of
 from tests.api.test_ontology import _make_object, _make_property, _make_type
 
 ROWS: list[dict[str, Any]] = [
@@ -586,3 +586,53 @@ def test_파일을_URL_로_받는다(client: TestClient, admin: Signed, plm: Fak
         headers=admin.headers,
     ).json()
     assert done["applied"] is True and done["counts"]["create"] == 3
+
+
+# --- 조용히 멎는 것 ------------------------------------------------------------
+
+
+def test_동기화가_실패하면_홈과_종이_말한다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """**실패가 표에만 적히면 아무도 모른다** — 잘 도는 동안에는 그 화면을 안 연다."""
+    vendor = _vendor_type(client, admin)
+    source = _source(client, admin, vendor)
+    slug = source["slug"]
+
+    before = len(notifications_of(client, admin, "datasource.failed"))
+    # 시험 DB 는 스위트가 함께 쓴다 — 남이 남긴 실패가 이미 있을 수 있어 **차이로 본다.**
+    quiet = maintenance_counts(client, admin).get("datasource_failed", 0)
+    plm.auth_required = "Bearer 없는것"  # 서버가 401 을 낸다
+    failed = client.post(f"/api/datasources/{slug}/sync?apply=true", headers=admin.headers)
+    assert failed.status_code == 200, failed.text
+    assert failed.json()["run"]["status"] == "failed"
+
+    assert maintenance_counts(client, admin)["datasource_failed"] == quiet + 1
+    after = notifications_of(client, admin, "datasource.failed")
+    assert len(after) == before + 1
+    assert "PLM 공급사" in after[0]["title"]
+
+    # **같은 실패를 두 번 알리지 않는다.** 타이머가 5분마다 돌면 하루에 288개가 쌓이고,
+    # 그러면 사람은 이 종류를 통째로 안 읽게 된다.
+    client.post(f"/api/datasources/{slug}/sync?apply=true", headers=admin.headers)
+    assert len(notifications_of(client, admin, "datasource.failed")) == before + 1
+
+    # 복구도 알린다 — 안 알리면 사람이 손으로 확인하러 간다.
+    plm.auth_required = None
+    done = client.post(f"/api/datasources/{slug}/sync?apply=true", headers=admin.headers)
+    assert done.json()["run"]["status"] == "ok", done.text
+    assert notifications_of(client, admin, "datasource.recovered")
+    assert maintenance_counts(client, admin).get("datasource_failed", 0) == quiet
+
+
+def test_멎은_것은_시스템_관리자에게만_뜬다(
+    client: TestClient, member: Signed, admin: Signed, plm: FakeOData
+) -> None:
+    """못 고치는 사람에게 띄우면 그 줄은 못 지우는 숫자가 된다."""
+    vendor = _vendor_type(client, admin)
+    slug = _source(client, admin, vendor)["slug"]
+    plm.auth_required = "Bearer 없는것"
+    client.post(f"/api/datasources/{slug}/sync?apply=true", headers=admin.headers)
+
+    assert maintenance_counts(client, admin).get("datasource_failed", 0) >= 1
+    assert "datasource_failed" not in maintenance_counts(client, member)

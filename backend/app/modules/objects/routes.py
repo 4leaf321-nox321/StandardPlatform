@@ -32,6 +32,7 @@ from app.modules.objects import (
     system,
 )
 from app.modules.objects import relations as rel
+from app.modules.objects import summary as summary_service
 from app.modules.objects.models import (
     OBJECT_STATUSES,
     ObjectAlias,
@@ -44,6 +45,8 @@ from app.modules.objects.models import (
 from app.modules.objects.schemas import (
     AliasesRequest,
     AttachmentBrief,
+    BucketOut,
+    GroupOptionOut,
     HistoryEntryOut,
     ImportPlanOut,
     ImportRowOut,
@@ -70,6 +73,7 @@ from app.modules.objects.schemas import (
     SavedViewQuery,
     SavedViewWriteRequest,
     SnapshotOut,
+    SummaryOut,
     TreeNodeOut,
     TreeOut,
 )
@@ -247,6 +251,69 @@ def quality_report(
 
 
 # --- 트리 -------------------------------------------------------------------
+
+
+@router.get("/{type_slug}/summary", response_model=SummaryOut)
+def summary(
+    type_slug: str,
+    request: Request,
+    group_by: str = Query(
+        default="status", description="묶을 축 — status·workspace·created_year·properties.<칸>"
+    ),
+    metric: str = Query(default="count", description="count·sum·avg·min·max"),
+    metric_field: str | None = Query(default=None, description="합·평균을 낼 숫자 칸"),
+    q: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    under: uuid.UUID | None = Query(default=None),
+    deep: bool = Query(default=True),
+    year: int | None = Query(default=None, ge=1900, le=2999),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> SummaryOut:
+    """묶어 보기 — **목록과 같은 거르기 위에서 센다.**
+
+    거르기는 목록과 똑같이 온다(`?p.<칸>=`, `?f.<칸>.<연산>=`, q·status·year·under).
+    따로 세면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느 쪽이 맞는지
+    아무도 모른다.
+
+    투영(system) 타입은 행이 없어 못 센다 — 원 표에 물어야 하는 일이고, 그 표의 축을
+    이 틀은 모른다.
+    """
+    object_type = _type(db, type_slug)
+    if system.is_system(object_type):
+        raise Conflict(
+            code("OBJECTS", 47),
+            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 세지 않습니다.",
+        )
+    stmt = _filtered(
+        db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
+    )
+    found = summary_service.summarize(
+        db, object_type, stmt, group_by=group_by, metric=metric, metric_field=metric_field
+    )
+    defs = properties_of(db, object_type.id)
+    return SummaryOut(
+        group_field=found.group_field,
+        group_label=found.group_label,
+        metric=found.metric,
+        metric_field=found.metric_field,
+        metric_label=found.metric_label,
+        total=found.total,
+        buckets=[
+            BucketOut(key=one.key, label=one.label, count=one.count, value=one.value)
+            for one in found.buckets
+        ],
+        other_groups=found.other_groups,
+        other_count=found.other_count,
+        group_options=[
+            GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
+            for one in summary_service.group_options(defs)
+        ],
+        metric_options=[
+            GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
+            for one in summary_service.metric_options(defs)
+        ],
+    )
 
 
 @router.get("/{type_slug}/tree", response_model=TreeOut)

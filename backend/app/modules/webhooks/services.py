@@ -26,10 +26,12 @@ from datetime import UTC, datetime
 from typing import Any
 
 import httpx
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
+from app.modules.accounts.models import User
+from app.modules.notifications import services as notifications
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology.models import ObjectType
 from app.modules.webhooks.models import Webhook, WebhookDelivery
@@ -200,6 +202,7 @@ class Dispatcher:
     def deliver_pending(self) -> int:
         """pending 을 전부 한 번씩. **아직 남은(실패해서 다시 보낼) 수**를 돌려준다."""
         left = 0
+        gave_up: set[uuid.UUID] = set()
         with SessionLocal() as db:
             rows = list(
                 db.scalars(
@@ -233,10 +236,28 @@ class Dispatcher:
                     delivery.delivered_at = now
                 elif delivery.attempts >= MAX_ATTEMPTS:
                     delivery.status = "failed"
+                    gave_up.add(hook.id)
                 else:
                     left += 1
                 hook.last_status = "ok" if result.ok else "failed"
                 hook.last_at = now
+                db.commit()
+            # **웹훅 하나에 한 번만 알린다.** 받는 쪽이 죽으면 밀린 전송이 한꺼번에
+            # 포기하는데, 그때 건마다 알리면 종에 같은 말이 수십 개 쌓이고 사람은
+            # 그것을 통째로 지운다 — 정작 다른 웹훅의 알림도 함께 지워진다.
+            for hook_id in gave_up:
+                hook = hooks.get(hook_id)
+                if hook is None:
+                    continue
+                notifications.notify_system_admins(
+                    db,
+                    kind=notifications.WEBHOOK_FAILED,
+                    title=f"웹훅 「{hook.name}」 보내기를 포기했습니다",
+                    body=f"{MAX_ATTEMPTS}번 다 실패했습니다. 받는 쪽이 지금 못 받고 "
+                    "있습니다 — 고친 뒤 웹훅 화면에서 「다시 보내기」 를 누르세요.",
+                    link="/admin/webhooks",
+                )
+            if gave_up:
                 db.commit()
         return left
 
@@ -254,8 +275,6 @@ def resend(db: Session, delivery: WebhookDelivery) -> None:
 
 
 def stats(db: Session) -> list[extensions.StatItem]:
-    from sqlalchemy import func
-
     total = db.scalar(select(func.count()).select_from(Webhook)) or 0
     failed = (
         db.scalar(
@@ -268,4 +287,34 @@ def stats(db: Session) -> list[extensions.StatItem]:
     return [
         extensions.StatItem(label="웹훅", count=int(total)),
         extensions.StatItem(label="웹훅 실패", count=int(failed)),
+    ]
+
+
+def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
+    """**포기한 전송이 있으면 홈이 말한다.**
+
+    받는 쪽이 죽으면 이 표에 failed 가 쌓이는데, 웹훅 화면을 여는 사람만 그것을
+    본다 — 그리고 잘 가는 동안에는 아무도 그 화면을 안 연다. 그러면 저쪽 시스템은
+    몇 주째 못 받고 있고, 그 사실을 양쪽 다 모른다.
+
+    시스템 관리자에게만. 「다시 보내기」 를 그들만 누를 수 있다.
+    """
+    if not viewer.is_system_admin:
+        return []
+    failed = (
+        db.scalar(
+            select(func.count())
+            .select_from(WebhookDelivery)
+            .where(WebhookDelivery.status == "failed")
+        )
+        or 0
+    )
+    return [
+        extensions.MaintenanceItem(
+            key="webhook_failed",
+            label="보내기를 포기한 웹훅 전송",
+            count=int(failed),
+            link="/admin/webhooks",
+            severity="warning",
+        )
     ]

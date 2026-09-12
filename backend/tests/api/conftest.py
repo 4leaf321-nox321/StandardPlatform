@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -97,3 +98,21 @@ def member(client: TestClient, db: Session, workspace: Workspace) -> Signed:
     관리자만으로 도는 시험은 무엇도 막지 못한다."""
     user = _make_user(db, workspace, label="member", is_system_admin=False, role="member")
     return Signed(email=user.email, token=_login(client, user.email), workspace=workspace.slug)
+
+
+def maintenance_counts(client: TestClient, who: Signed) -> dict[str, int]:
+    """홈 「남은 일」 을 {열쇠: 수} 로. **시험 DB 를 스위트가 함께 쓰므로 차이로 본다** —
+    남이 남긴 줄이 이미 있을 수 있다."""
+    got = client.get("/api/server/maintenance", headers=who.headers)
+    # **봉투가 오면 여기서 말한다.** 안 그러면 「문자열 인덱스」 라는 엉뚱한 오류가 나고,
+    # 진짜 원인(어느 제공자가 터졌나)은 아무 데도 안 적힌다.
+    assert got.status_code == 200, got.text
+    return {one["key"]: one["count"] for one in got.json()}
+
+
+def notifications_of(client: TestClient, who: Signed, kind: str) -> list[dict[str, Any]]:
+    got = client.get("/api/notifications", headers=who.headers)
+    assert got.status_code == 200, got.text
+    body: Any = got.json()
+    rows: list[dict[str, Any]] = body["items"] if isinstance(body, dict) else body
+    return [one for one in rows if one["kind"] == kind]

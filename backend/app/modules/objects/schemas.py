@@ -359,3 +359,39 @@ class QualityFindingOut(BaseModel):
 class QualityReportOut(BaseModel):
     findings: list[QualityFindingOut]
     sample_limit: int
+
+
+# --- 묶어 보기 ----------------------------------------------------------------
+
+
+class GroupOptionOut(BaseModel):
+    """묶을 수 있는(또는 셀 수 있는) 축 하나. 화면의 고르개가 이것만 보여 준다."""
+
+    field: str
+    label: str
+    kind: str
+
+
+class BucketOut(BaseModel):
+    key: str | None
+    """거르기에 그대로 넣을 수 있는 값. 빈 칸이면 null."""
+    label: str
+    count: int
+    value: float | None = None
+
+
+class SummaryOut(BaseModel):
+    """묶어 센 결과. **막대의 합이 total 과 다르면 그 차이가 「그 밖에」 다** —
+    숨기면 사람은 그 차이를 오류로 읽는다."""
+
+    group_field: str
+    group_label: str
+    metric: str
+    metric_field: str | None
+    metric_label: str
+    total: int
+    buckets: list[BucketOut]
+    other_groups: int
+    other_count: int
+    group_options: list[GroupOptionOut]
+    metric_options: list[GroupOptionOut]

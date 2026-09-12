@@ -3981,6 +3981,168 @@
         }
       }
     },
+    "/api/objects/{type_slug}/summary": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Summary",
+        "description": "묶어 보기 — **목록과 같은 거르기 위에서 센다.**\n\n거르기는 목록과 똑같이 온다(`?p.<칸>=`, `?f.<칸>.<연산>=`, q·status·year·under).\n따로 세면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느 쪽이 맞는지\n아무도 모른다.\n\n투영(system) 타입은 행이 없어 못 센다 — 원 표에 물어야 하는 일이고, 그 표의 축을\n이 틀은 모른다.",
+        "operationId": "summary_api_objects__type_slug__summary_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "group_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "묶을 축 — status·workspace·created_year·properties.<칸>",
+              "default": "status",
+              "title": "Group By"
+            },
+            "description": "묶을 축 — status·workspace·created_year·properties.<칸>"
+          },
+          {
+            "name": "metric",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "count·sum·avg·min·max",
+              "default": "count",
+              "title": "Metric"
+            },
+            "description": "count·sum·avg·min·max"
+          },
+          {
+            "name": "metric_field",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "합·평균을 낼 숫자 칸",
+              "title": "Metric Field"
+            },
+            "description": "합·평균을 낼 숫자 칸"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Q"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "under",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Under"
+            }
+          },
+          {
+            "name": "deep",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": true,
+              "title": "Deep"
+            }
+          },
+          {
+            "name": "year",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 2999,
+                  "minimum": 1900
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Year"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SummaryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/tree": {
       "get": {
         "tags": [
@@ -6732,6 +6894,47 @@
         ],
         "title": "Body_upload_api_attachments_post"
       },
+      "BucketOut": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "count"
+        ],
+        "title": "BucketOut"
+      },
       "ChangeOut": {
         "properties": {
           "kind": {
@@ -7461,6 +7664,30 @@
           "dst"
         ],
         "title": "EdgeOut"
+      },
+      "GroupOptionOut": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "label",
+          "kind"
+        ],
+        "title": "GroupOptionOut",
+        "description": "묶을 수 있는(또는 셀 수 있는) 축 하나. 화면의 고르개가 이것만 보여 준다."
       },
       "HTTPValidationError": {
         "properties": {
@@ -11556,6 +11783,86 @@
         ],
         "title": "SubgraphOut",
         "description": "한 타입(들)의 인스턴스 전부 — **상한 안에서.**"
+      },
+      "SummaryOut": {
+        "properties": {
+          "group_field": {
+            "type": "string",
+            "title": "Group Field"
+          },
+          "group_label": {
+            "type": "string",
+            "title": "Group Label"
+          },
+          "metric": {
+            "type": "string",
+            "title": "Metric"
+          },
+          "metric_field": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metric Field"
+          },
+          "metric_label": {
+            "type": "string",
+            "title": "Metric Label"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/BucketOut"
+            },
+            "type": "array",
+            "title": "Buckets"
+          },
+          "other_groups": {
+            "type": "integer",
+            "title": "Other Groups"
+          },
+          "other_count": {
+            "type": "integer",
+            "title": "Other Count"
+          },
+          "group_options": {
+            "items": {
+              "$ref": "#/components/schemas/GroupOptionOut"
+            },
+            "type": "array",
+            "title": "Group Options"
+          },
+          "metric_options": {
+            "items": {
+              "$ref": "#/components/schemas/GroupOptionOut"
+            },
+            "type": "array",
+            "title": "Metric Options"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group_field",
+          "group_label",
+          "metric",
+          "metric_field",
+          "metric_label",
+          "total",
+          "buckets",
+          "other_groups",
+          "other_count",
+          "group_options",
+          "metric_options"
+        ],
+        "title": "SummaryOut",
+        "description": "묶어 센 결과. **막대의 합이 total 과 다르면 그 차이가 「그 밖에」 다** —\n숨기면 사람은 그 차이를 오류로 읽는다."
       },
       "SyncOut": {
         "properties": {

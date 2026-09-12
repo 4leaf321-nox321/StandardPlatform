@@ -12,6 +12,7 @@ import uuid
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.modules.accounts.models import User
 from app.modules.notifications.models import Notification
 
 #: 알림의 종류. 화면이 아이콘을 고르는 근거이자, **나중에 사람이 끄고 켤 단위**다.
@@ -19,6 +20,14 @@ from app.modules.notifications.models import Notification
 #: 두 이름으로 갈리고, 그때 "이 알림 끄기" 를 만들 수가 없다.
 ACCOUNT_APPROVED = "account.approved"
 ACCOUNT_REJECTED = "account.rejected"
+DATASOURCE_FAILED = "datasource.failed"
+"""외부 소스에서 읽어 오는 일이 **처음으로** 실패했다. 타이머가 5분마다 도니까 매번
+알리면 하루에 288개가 쌓이고, 그러면 사람은 이 종류를 통째로 안 읽게 된다."""
+DATASOURCE_RECOVERED = "datasource.recovered"
+"""다시 된다. **복구도 알린다** — 안 알리면 사람은 실패 알림 하나를 들고 「아직도
+안 되나」 를 손으로 확인하러 간다."""
+WEBHOOK_FAILED = "webhook.failed"
+"""보내기를 세 번 다 실패해 포기했다. 받는 쪽이 조용히 못 받고 있는 상태다."""
 
 
 def notify(
@@ -35,6 +44,30 @@ def notify(
     row = Notification(user_id=user_id, kind=kind, title=title, body=body, link=link)
     db.add(row)
     return row
+
+
+def notify_system_admins(
+    db: Session,
+    *,
+    kind: str,
+    title: str,
+    body: str | None = None,
+    link: str | None = None,
+) -> int:
+    """설치 전체가 걸린 일(동기화·웹훅이 멎은 것)을 **고칠 수 있는 사람들에게.**
+
+    부서 관리자에게 보내지 않는 이유: 데이터 소스와 웹훅 화면은 시스템 관리자만
+    연다. 못 여는 사람에게 알리면 그 알림은 읽고 나서 할 일이 없는 알림이 되고,
+    그런 것이 몇 번 오면 종 자체를 안 보게 된다.
+    """
+    admins = list(
+        db.scalars(
+            select(User.id).where(User.is_system_admin.is_(True), User.status == "active")
+        )
+    )
+    for user_id in admins:
+        notify(db, user_id=user_id, kind=kind, title=title, body=body, link=link)
+    return len(admins)
 
 
 def unread_count(db: Session, user_id: uuid.UUID) -> int:

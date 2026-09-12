@@ -149,9 +149,16 @@ def _broken_refs(
     types = system.types_by_slug(db)
     rows = list(db.scalars(_visible_objects(db, user, object_type)))
     system_alive: dict[str, set[str]] = {}
+    # 원 표가 등록 안 된 타입을 가리키는 칸은 **안 본다.** 살아 있는지 물을 곳이 없는데
+    # 객체 표에서 찾으면 그 값 전부가 「깨진 참조」 로 뜬다 — 없는 문제를 만들어 내고,
+    # 사람은 멀쩡한 값을 지우러 간다.
+    unchecked: set[str] = set()
     for d in ref_defs:
         target = types.get(d.ref_type_slug or "")
         if target is None or not system.is_system(target):
+            continue
+        if system.source_or_none(target) is None:
+            unchecked.add(d.key)
             continue
         wanted: set[uuid.UUID] = set()
         for row in rows:
@@ -170,6 +177,8 @@ def _broken_refs(
         values = row.properties or {}
         broken: list[str] = []
         for d in ref_defs:
+            if d.key in unchecked:
+                continue
             raw = values.get(d.key)
             living = system_alive.get(d.key, alive)
             for item in raw if isinstance(raw, list) else [raw]:

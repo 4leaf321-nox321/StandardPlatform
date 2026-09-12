@@ -124,6 +124,14 @@ def _register_extensions() -> None:
     events.register_listener(webhooks_services.on_events)
     extensions.register_stats(webhooks_services.stats)
 
+    # **조용히 멎는 것들을 홈이 말한다.** 동기화 실패와 포기한 웹훅 전송은 지금까지
+    # 각자의 표에만 적혔고, 그 화면을 여는 사람만 알았다 — 그리고 잘 도는 동안에는
+    # 아무도 그 화면을 안 연다. 그것이 정기 작업의 기본 실패 방식이고, 백업을 같은
+    # 이유로 이미 여기 걸어 두었다(ops.maintenance).
+    extensions.register_maintenance(datasources_services.maintenance)
+    extensions.register_stats(datasources_services.stats)
+    extensions.register_maintenance(webhooks_services.maintenance)
+
     # **기계 자격으로 온톨로지를 채우는 길**(3-d). 안 열면 PAT 로는 못 고친다 —
     # 기본이 「막힘」 이고, 그것이 맞는 기본값이다(shared/scopes.py).
     #

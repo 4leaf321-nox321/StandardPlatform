@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from tests.api.conftest import Signed
 from tests.api.test_ontology import (
@@ -162,3 +164,73 @@ def test_서버_화면에_타입_객체_관계_수가_선다(client: TestClient,
     assert response.status_code == 200, response.text
     labels = {one["label"] for one in response.json()["counts"]}
     assert {"타입", "객체", "관계"} <= labels
+
+
+def test_원_표가_사라져도_홈이_멎지_않는다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """**한 타입 때문에 설치 전체가 멎으면 안 된다.**
+
+    원 표는 `main.py` 에서 조립된다 — 도메인을 떼거나 되돌리면 그 표를 가리키던 타입이
+    정의에 남는다. 그때 모든 타입을 훑는 홈의 「남은 일」 이 409 를 내면, 홈이 통째로
+    안 뜬다. 살아 있는지 물을 곳이 없는 칸은 **안 본다**(없는 문제를 만들어 내지 않는다).
+    """
+    from app.modules.objects.models import ObjectInstance
+    from app.shared import system_sources
+
+    gone = uuid.uuid4()
+
+    def _lookup(
+        db: Session, ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, system_sources.SystemRef]:
+        # 등록돼 있는 **동안에는** 있는 행처럼 답한다 — 객체를 만들 수 있어야 그 뒤에
+        # 「원 표가 사라진」 상태를 흉내 낼 수 있다.
+        return {
+            one: system_sources.SystemRef(
+                id=one, key="g", label="유령 행", hint="", active=True
+            )
+            for one in ids
+            if one == gone
+        }
+
+    ghost = system_sources.SystemSource(
+        key="ghost",
+        label="사라질 표",
+        search=lambda db, user, q, limit, offset: ([], 0),
+        lookup=_lookup,
+        list_all=lambda db: [],
+    )
+    system_sources.register_system_source(ghost)
+    try:
+        mirrored = _make_type(
+            client, admin, label="유령", kind_class="system", system_source="ghost"
+        )
+        part = _make_type(client, admin, label="부품")
+        _make_property(
+            client,
+            admin,
+            part,
+            key="owner",
+            label="담당",
+            data_type="object_ref",
+            ref_type_slug=mirrored,
+        )
+        made = _make_object(client, admin, part, label="볼트", properties={"owner": str(gone)})
+    finally:
+        system_sources._sources.pop("ghost", None)
+
+    home = client.get("/api/server/maintenance", headers=admin.headers)
+    assert home.status_code == 200, home.text
+
+    report = client.get("/api/objects/quality/report", headers=admin.headers)
+    assert report.status_code == 200, report.text
+    broken = [
+        hit["id"]
+        for one in report.json()["findings"]
+        if one["kind"] == "broken_ref"
+        for hit in one["hits"]
+    ]
+    # 물을 곳이 없는 칸을 「깨졌다」 고 하면, 사람은 멀쩡한 값을 지우러 간다.
+    assert made["id"] not in broken
+    db.query(ObjectInstance).filter_by(id=made["id"]).delete()
+    db.commit()

@@ -272,6 +272,36 @@ export const viewApi = {
   remove: (typeSlug: string, id: string) => api.delete<void>(`/objects/${typeSlug}/views/${id}`),
 }
 
+/** 묶어 보기의 막대 하나. `key` 는 거르기에 그대로 넣을 수 있는 값(빈 칸이면 null). */
+export interface Bucket {
+  key: string | null
+  label: string
+  count: number
+  value: number | null
+}
+
+/** 묶을 수 있는(또는 셀 수 있는) 축 하나. */
+export interface GroupOption {
+  field: string
+  label: string
+  kind: string
+}
+
+export interface Summary {
+  group_field: string
+  group_label: string
+  metric: string
+  metric_field: string | null
+  metric_label: string
+  /** 거르기를 통과한 **전체 행 수.** 막대의 합과 다르면 그 차이가 「그 밖에」 다. */
+  total: number
+  buckets: Bucket[]
+  other_groups: number
+  other_count: number
+  group_options: GroupOption[]
+  metric_options: GroupOption[]
+}
+
 export const objectApi = {
   /** 빈 CSV — 헤더가 「무엇을 채워야 하는지」 를 말한다. */
   template: (typeSlug: string) =>
@@ -308,6 +338,25 @@ export const objectApi = {
     api.postForm<ImportPlan>(`/objects/${typeSlug}/relations/import`, importForm(file, opts.apply)),
   list: (typeSlug: string, query: ObjectQuery = {}) =>
     api.get<Page<ObjectRow>>(`/objects/${typeSlug}${queryString(query)}`),
+  /**
+   * 묶어 보기 — **목록과 같은 거르기 위에서.**
+   *
+   * 거르기를 따로 보내면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느
+   * 쪽이 맞는지 아무도 모른다. 그래서 목록이 쓰는 `ObjectQuery` 를 그대로 받는다.
+   */
+  summary: (
+    typeSlug: string,
+    query: ObjectQuery = {},
+    options: { groupBy: string; metric?: string; metricField?: string | null },
+  ) => {
+    const params = new URLSearchParams(
+      queryString({ ...query, limit: undefined, offset: 0 }).replace(/^\?/, ''),
+    )
+    params.set('group_by', options.groupBy)
+    if (options.metric) params.set('metric', options.metric)
+    if (options.metricField) params.set('metric_field', options.metricField)
+    return api.get<Summary>(`/objects/${typeSlug}/summary?${params.toString()}`)
+  },
   /** 사람이 붙인 다른 이름을 통째로. 같은 타입의 다른 객체가 쓰는 별칭이면 거절된다. */
   setAliases: (typeSlug: string, id: string, aliases: string[]) =>
     api.put<ObjectRow>(`/objects/${typeSlug}/${id}/aliases`, { aliases }),
