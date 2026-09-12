@@ -49,6 +49,21 @@ export interface PropertyDef {
 }
 
 /** 목록 화면의 모양. **없으면 모든 목록이 똑같아지고, 똑같으면 아무도 안 쓴다.** */
+export type RollupFn = 'sum' | 'min' | 'max' | 'avg' | 'count'
+export const ROLLUP_FNS: [RollupFn, string][] = [
+  ['sum', '합계'],
+  ['min', '최소'],
+  ['max', '최대'],
+  ['avg', '평균'],
+  ['count', '개수'],
+]
+
+export interface RollupSpec {
+  property: string
+  fn: RollupFn
+  label?: string
+}
+
 export interface ListView {
   columns?: string[]
   /**
@@ -59,6 +74,11 @@ export interface ListView {
    * 어느 끝인가** — `part_of`(자식→부모)면 `dst`, `contains`(부모→자식)면 `src`.
    */
   tree?: { relation: string; parent?: 'src' | 'dst' }
+  /**
+   * 「아래 전부」 의 숫자를 트리 관계로 모은 것 — 상세에 뜬다. 저장하지 않고 볼 때마다
+   * 센다. 트리가 있어야 하고, 숫자 속성만 된다.
+   */
+  rollups?: RollupSpec[]
   sort?: { field: string; dir?: 'asc' | 'desc' }
   filters?: string[]
   search?: string[]

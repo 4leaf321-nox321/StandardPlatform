@@ -15,8 +15,16 @@
 
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react'
 
-import type { ListView, PropertyDef, RelationType } from '@/modules/ontology/api'
+import { ROLLUP_FNS } from '@/modules/ontology/api'
+import type {
+  ListView,
+  PropertyDef,
+  RelationType,
+  RollupFn,
+  RollupSpec,
+} from '@/modules/ontology/api'
 import { Button } from '@/shared/components/ui/button'
+import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
 import {
   Select,
@@ -89,7 +97,11 @@ function Preview({ defs, value }: { defs: PropertyDef[]; value: ListView }) {
   return (
     <div className="bg-muted/30 space-y-2 rounded-md border border-dashed p-3">
       <p className="text-muted-foreground text-xs">
-        이 타입의 목록 화면(<code>/o/{'{'}타입{'}'}</code>)이 이렇게 그려집니다.
+        이 타입의 목록 화면(
+        <code>
+          /o/{'{'}타입{'}'}
+        </code>
+        )이 이렇게 그려집니다.
       </p>
 
       <div className="bg-background space-y-2 rounded border p-2">
@@ -188,8 +200,8 @@ export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange 
         <Label>목록에 보일 열</Label>
         {chosen.length === 0 ? (
           <p className="text-muted-foreground text-sm">
-            안 고르면 <b>식별자 · 이름 · 고친 때</b>로 떨어집니다 — 빈 화면이 되지는 않지만,
-            정의한 속성은 안 보입니다.
+            안 고르면 <b>식별자 · 이름 · 고친 때</b>로 떨어집니다 — 빈 화면이 되지는 않지만, 정의한
+            속성은 안 보입니다.
           </p>
         ) : (
           <ul className="space-y-1">
@@ -248,8 +260,8 @@ export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange 
           </div>
         )}
         <p className="text-muted-foreground text-xs">
-          <b>첫 열이 상세로 가는 링크가 됩니다.</b> 파일 속성은 값이 아니라 첨부라 열로
-          세울 수 없습니다.
+          <b>첫 열이 상세로 가는 링크가 됩니다.</b> 파일 속성은 값이 아니라 첨부라 열로 세울 수
+          없습니다.
         </p>
       </div>
 
@@ -301,6 +313,9 @@ export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange 
         value={value}
         onChange={onChange}
       />
+
+      {/* --- 롤업 ------------------------------------------------------- */}
+      {value.tree?.relation && <RollupSection defs={defs} value={value} onChange={onChange} />}
 
       {/* --- 검색·거르기 ------------------------------------------------ */}
       <Toggles
@@ -360,7 +375,6 @@ function Toggles({
   )
 }
 
-
 /**
  * 목록 왼쪽에 세울 트리.
  *
@@ -396,8 +410,8 @@ function TreeSection({
       <Label>목록 왼쪽 트리</Label>
       {usable.length === 0 ? (
         <p className="text-muted-foreground text-sm">
-          쓸 수 있는 관계가 없습니다. <b>「재귀로 펼친다」 로 정의된 관계</b>라야 트리를
-          세울 수 있습니다 — 관리 → 온톨로지 → 관계 종류에서 만드세요.
+          쓸 수 있는 관계가 없습니다. <b>「재귀로 펼친다」 로 정의된 관계</b>라야 트리를 세울 수
+          있습니다 — 관리 → 온톨로지 → 관계 종류에서 만드세요.
         </p>
       ) : (
         <>
@@ -447,11 +461,117 @@ function TreeSection({
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-xs">
-                <b>방향을 잘못 고르면 트리가 뒤집힌 채 그려지고</b>, 화면은 그것을 말해
-                주지 못합니다. 이은 뒤 목록에서 한번 확인하세요.
+                <b>방향을 잘못 고르면 트리가 뒤집힌 채 그려지고</b>, 화면은 그것을 말해 주지
+                못합니다. 이은 뒤 목록에서 한번 확인하세요.
               </p>
             </>
           )}
+        </>
+      )}
+    </div>
+  )
+}
+
+/**
+ * 롤업 — 「아래 전부」 의 숫자를 모아 상세에 띄운다. 트리가 있을 때만 뜻이 있고,
+ * 숫자 속성만 고를 수 있다. 저장하지 않고 볼 때마다 세므로 여기서 정의만 한다.
+ */
+function RollupSection({
+  defs,
+  value,
+  onChange,
+}: {
+  defs: PropertyDef[]
+  value: ListView
+  onChange: (next: ListView) => void
+}) {
+  const numeric = defs.filter((def) => def.data_type === 'number')
+  const rows = value.rollups ?? []
+  const set = (next: RollupSpec[]) =>
+    onChange({ ...value, rollups: next.length > 0 ? next : undefined })
+
+  return (
+    <div className="space-y-2">
+      <Label>아래 전부 모으기 (롤업)</Label>
+      {numeric.length === 0 ? (
+        <p className="text-muted-foreground text-sm">
+          숫자 속성이 없습니다. 무게·수량·금액 같은 숫자 칸이 있어야 모을 것이 있습니다.
+        </p>
+      ) : (
+        <>
+          {rows.map((row, index) => (
+            <div key={index} className="flex flex-wrap items-center gap-2">
+              <Select
+                value={row.property}
+                onValueChange={(next) =>
+                  set(rows.map((one, i) => (i === index ? { ...one, property: next } : one)))
+                }
+              >
+                <SelectTrigger className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {numeric.map((def) => (
+                    <SelectItem key={def.key} value={def.key}>
+                      {def.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Select
+                value={row.fn}
+                onValueChange={(next) =>
+                  set(rows.map((one, i) => (i === index ? { ...one, fn: next as RollupFn } : one)))
+                }
+              >
+                <SelectTrigger className="w-28">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ROLLUP_FNS.map(([key, text]) => (
+                    <SelectItem key={key} value={key}>
+                      {text}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Input
+                value={row.label ?? ''}
+                placeholder="표시 이름 (비우면 「무게 합계」 처럼)"
+                className="w-52"
+                onChange={(event) =>
+                  set(
+                    rows.map((one, i) =>
+                      i === index ? { ...one, label: event.target.value || undefined } : one,
+                    ),
+                  )
+                }
+              />
+              <Button
+                type="button"
+                size="icon"
+                variant="ghost"
+                aria-label="롤업 지우기"
+                onClick={() => set(rows.filter((_one, i) => i !== index))}
+              >
+                <X className="size-4" />
+              </Button>
+            </div>
+          ))}
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => set([...rows, { property: numeric[0].key, fn: 'sum' }])}
+          >
+            <Plus className="mr-1 size-4" />
+            모을 것 더하기
+          </Button>
+          <p className="text-muted-foreground text-xs">
+            상세 화면에 「아래 전부」 의 값이 뜹니다 — 어셈블리의 총 무게, 과제의 예산 합계처럼.
+            저장하지 않고 볼 때마다 세므로 부품을 고치면 바로 바뀝니다. 값이 빈 것은 몇 개인지 함께
+            보입니다.
+          </p>
         </>
       )}
     </div>

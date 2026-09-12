@@ -27,6 +27,7 @@ from app.modules.objects import (
     lifecycle,
     links,
     quality,
+    rollup,
     system,
 )
 from app.modules.objects import relations as rel
@@ -60,6 +61,7 @@ from app.modules.objects.schemas import (
     RelationHitOut,
     RelationPatchRequest,
     RestoreRequest,
+    RollupOut,
     SavedViewOut,
     SavedViewPatchRequest,
     SavedViewQuery,
@@ -993,6 +995,31 @@ def update_object(
     db.commit()
     db.refresh(row)
     return _out(row, object_type.slug, _workspace_slugs(db))
+
+
+@router.get("/{type_slug}/{object_id}/rollup", response_model=list[RollupOut])
+def object_rollup(
+    type_slug: str,
+    object_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[RollupOut]:
+    """이 객체 「아래 전부」 의 숫자를 모은 것 — `list_view.rollups` 가 정한 대로.
+
+    저장하지 않고 볼 때마다 센다. 값이 빈 것이 몇 개인지 함께 준다 — 안 주면 합계가
+    「전부의 합」 으로 읽히고, 그것은 틀린 수다."""
+    object_type = _type(db, type_slug)
+    row = _visible(db, user, object_type, object_id)
+    relation, parent_end = _tree_spec(object_type)
+    if relation is None:
+        return []
+    defs = properties_of(db, object_type.id)
+    return [
+        RollupOut(**one.__dict__)
+        for one in rollup.compute(
+            db, user, object_type, row, defs, relation=relation, parent_end=parent_end
+        )
+    ]
 
 
 @router.get("/{type_slug}/{object_id}/references", response_model=ReferencesOut)

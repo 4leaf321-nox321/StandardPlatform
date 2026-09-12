@@ -157,6 +157,20 @@ class ObjectProfileOut(BaseModel):
     단추를 보이고 어떤 화면은 안 보이는 상태가 되고, 그 차이는 설명할 수 없다."""
 
 
+class RollupOut(BaseModel):
+    """「아래 전부」 를 모은 수 하나 — 볼 때마다 센다(저장하지 않는다)."""
+
+    property: str
+    label: str
+    fn: str
+    value: float | None
+    """값이 하나도 없으면 null. 0 으로 두면 「합이 0」 으로 읽힌다."""
+    count: int
+    missing: int
+    """아래에 있지만 값이 빈 객체 수. **이것이 붙어야 합계가 「전부의 합」 으로 안 읽힌다.**"""
+    descendants: int
+
+
 # --- 일괄 -------------------------------------------------------------------
 
 

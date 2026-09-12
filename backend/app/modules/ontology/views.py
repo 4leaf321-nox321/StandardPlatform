@@ -26,9 +26,12 @@ from app.modules.ontology.services import InvalidValue
 from app.shared.errors import code
 
 #: 목록 화면이 아는 것.
-LIST_KEYS = {"columns", "sort", "filters", "search", "tree"}
+LIST_KEYS = {"columns", "sort", "filters", "search", "tree", "rollups"}
 SORT_KEYS = {"field", "dir"}
 TREE_KEYS = {"relation", "parent"}
+ROLLUP_KEYS = {"property", "fn", "label"}
+#: 롤업이 하는 셈. 「아래 전부」 의 숫자 속성을 트리 관계로 모은다.
+ROLLUP_FNS = ("sum", "min", "max", "avg", "count")
 
 #: 폼·상세가 아는 것. 둘이 같은 모양인 이유는 **같은 묶음을 쓰기 때문**이다.
 FORM_KEYS = {"sections"}
@@ -108,6 +111,30 @@ def validate_list_view(spec: dict[str, Any], defs: list[PropertyDef]) -> dict[st
         if tree.get("parent") not in (None, "src", "dst"):
             raise InvalidValue(
                 code("ONTOLOGY", 56), "트리의 부모 쪽은 src 나 dst 여야 합니다."
+            )
+
+    # 롤업 — 트리가 있어야 뜻이 있고, 숫자 칸만 모은다. 글자를 더하면 그 수는 아무 뜻도 없다.
+    rollups = spec.get("rollups") or []
+    if rollups and not tree:
+        raise InvalidValue(
+            code("ONTOLOGY", 60),
+            "롤업은 트리 관계가 있어야 합니다 — 무엇의 「아래 전부」 를 모을지 "
+            "트리가 정합니다.",
+        )
+    numeric = {d.key for d in defs if d.data_type == "number"}
+    for one in rollups:
+        if not isinstance(one, dict):
+            raise InvalidValue(code("ONTOLOGY", 60), "롤업은 표여야 합니다.")
+        _reject_unknown(one, ROLLUP_KEYS, what="롤업")
+        if one.get("property") not in numeric:
+            raise InvalidValue(
+                code("ONTOLOGY", 60),
+                f"롤업은 숫자 속성만 모읍니다: {one.get('property')!r} 은 숫자 칸이 아닙니다.",
+            )
+        if one.get("fn") not in ROLLUP_FNS:
+            raise InvalidValue(
+                code("ONTOLOGY", 60),
+                f"롤업의 셈은 {', '.join(ROLLUP_FNS)} 중 하나여야 합니다: {one.get('fn')!r}",
             )
     return spec
 

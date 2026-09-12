@@ -36,6 +36,7 @@ TOOLS = {
     "relations_import",
     "object_history",
     "object_references",
+    "object_rollup",
     "quality_report",
 }
 

@@ -289,6 +289,16 @@ async def object_history(ctx: Context, type_slug: str, object_id: str) -> Any:
 
 
 @mcp.tool()
+async def object_rollup(ctx: Context, type_slug: str, object_id: str) -> Any:
+    """이 객체 **「아래 전부」 의 숫자를 모은 것** — 어셈블리의 총 무게, 과제의 예산 합계.
+
+    타입의 `list_view.rollups` 가 정한 대로 트리 관계 아래를 펼쳐 `sum·min·max·avg·count`
+    로 모은다. 저장된 값이 아니라 볼 때마다 센 것이다. `missing` 이 0 이 아니면 그 합계는
+    「전부의 합」 이 아니다 — 사용자에게 함께 말한다. 정의가 없는 타입은 빈 목록."""
+    return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/rollup")
+
+
+@mcp.tool()
 async def object_references(ctx: Context, type_slug: str, object_id: str) -> Any:
     """이 객체를 **가리키는 것** — 속성으로 가리키는 객체들과 걸린 관계들.
 

@@ -13,6 +13,7 @@ import { GraphPanel } from '@/modules/graph/GraphPanel'
 import { ontologyApi } from '@/modules/ontology/api'
 import { ObjectYears } from '@/modules/objects/ObjectYears'
 import { RelatedObjects } from '@/modules/objects/RelatedObjects'
+import { RollupPanel } from '@/modules/objects/RollupPanel'
 import type { PropertyDef, SectionView } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
 import { PropertyFields, groupBySection, propertyText } from '@/modules/objects/PropertyFields'
@@ -204,6 +205,11 @@ export default function ObjectProfilePage() {
       {/* **연도를 쓰는 축에서만 나온다.** 없는 것을 있는 척하지 않는다. */}
       {objectType?.temporal_kind === 'yearly' && (
         <ObjectYears typeSlug={typeSlug} objectId={objectId} canEdit={profile.data.can_edit} />
+      )}
+
+      {/* 롤업 — 트리와 롤업 정의가 있는 타입에서만. 정의가 없으면 빈 목록이라 안 뜬다. */}
+      {objectType?.list_view?.tree?.relation && (objectType.list_view.rollups?.length ?? 0) > 0 && (
+        <RollupPanel typeSlug={typeSlug} objectId={objectId} reloadKey={profile.data} />
       )}
 
       <RelatedObjects

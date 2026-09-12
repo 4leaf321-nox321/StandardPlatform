@@ -155,17 +155,7 @@ export interface Condition {
 }
 
 export type ConditionOp =
-  | 'eq'
-  | 'ne'
-  | 'gt'
-  | 'gte'
-  | 'lt'
-  | 'lte'
-  | 'in'
-  | 'contains'
-  | 'starts'
-  | 'empty'
-  | 'notempty'
+  'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'contains' | 'starts' | 'empty' | 'notempty'
 
 /** 값 여럿(`in`)의 구분자. 서버와 같다. */
 export const CONDITION_MULTI_SEP = '|'
@@ -204,6 +194,18 @@ export interface QualityFinding {
 export interface QualityReport {
   findings: QualityFinding[]
   sample_limit: number
+}
+
+export interface Rollup {
+  property: string
+  label: string
+  fn: string
+  /** 값이 하나도 없으면 null — 0 은 「합이 0」 으로 읽힌다. */
+  value: number | null
+  count: number
+  /** 아래에 있지만 값이 빈 객체 수. 이것이 붙어야 합계가 「전부의 합」 으로 안 읽힌다. */
+  missing: number
+  descendants: number
 }
 
 export interface ObjectQuery {
@@ -257,8 +259,10 @@ export const qualityApi = {
 
 export const viewApi = {
   list: (typeSlug: string) => api.get<SavedView[]>(`/objects/${typeSlug}/views`),
-  create: (typeSlug: string, body: { name: string; query: SavedViewQuery; workspace_slug?: string | null }) =>
-    api.post<SavedView>(`/objects/${typeSlug}/views`, body),
+  create: (
+    typeSlug: string,
+    body: { name: string; query: SavedViewQuery; workspace_slug?: string | null },
+  ) => api.post<SavedView>(`/objects/${typeSlug}/views`, body),
   update: (typeSlug: string, id: string, body: { name?: string; query?: SavedViewQuery }) =>
     api.patch<SavedView>(`/objects/${typeSlug}/views/${id}`, body),
   remove: (typeSlug: string, id: string) => api.delete<void>(`/objects/${typeSlug}/views/${id}`),
@@ -272,10 +276,7 @@ export const objectApi = {
   export: (typeSlug: string, format: 'csv' | 'json', query: ObjectQuery = {}) => {
     const params = new URLSearchParams(queryString(query).replace(/^\?/, ''))
     params.set('format', format)
-    return downloadFile(
-      `/objects/${typeSlug}/export?${params.toString()}`,
-      `${typeSlug}.${format}`,
-    )
+    return downloadFile(`/objects/${typeSlug}/export?${params.toString()}`, `${typeSlug}.${format}`)
   },
   /** 파일로 넣기 — `apply=false` 면 계획만. */
   import: (typeSlug: string, file: File, opts: { apply: boolean; workspaceSlug?: string | null }) =>
@@ -289,12 +290,11 @@ export const objectApi = {
       `${typeSlug}-relations.${format}`,
     ),
   importRelations: (typeSlug: string, file: File, opts: { apply: boolean }) =>
-    api.postForm<ImportPlan>(
-      `/objects/${typeSlug}/relations/import`,
-      importForm(file, opts.apply),
-    ),
+    api.postForm<ImportPlan>(`/objects/${typeSlug}/relations/import`, importForm(file, opts.apply)),
   list: (typeSlug: string, query: ObjectQuery = {}) =>
     api.get<Page<ObjectRow>>(`/objects/${typeSlug}${queryString(query)}`),
+  /** 「아래 전부」 를 모은 수 — `list_view.rollups` 가 정한 대로. 없으면 빈 목록. */
+  rollup: (typeSlug: string, id: string) => api.get<Rollup[]>(`/objects/${typeSlug}/${id}/rollup`),
   tree: (typeSlug: string, opts: { parent?: string; orphans?: boolean } = {}) => {
     const params = new URLSearchParams()
     if (opts.parent) params.set('parent', opts.parent)
@@ -302,8 +302,7 @@ export const objectApi = {
     const text = params.toString()
     return api.get<TreeOut>(`/objects/${typeSlug}/tree${text ? `?${text}` : ''}`)
   },
-  profile: (typeSlug: string, id: string) =>
-    api.get<ObjectProfile>(`/objects/${typeSlug}/${id}`),
+  profile: (typeSlug: string, id: string) => api.get<ObjectProfile>(`/objects/${typeSlug}/${id}`),
   create: (typeSlug: string, body: Record<string, unknown>) =>
     api.post<ObjectRow>(`/objects/${typeSlug}`, body),
   update: (typeSlug: string, id: string, body: Record<string, unknown>) =>
@@ -335,8 +334,7 @@ export const objectApi = {
   removeRelation: (typeSlug: string, id: string, relationId: string) =>
     api.delete<void>(`/objects/${typeSlug}/${id}/relations/${relationId}`),
 
-  years: (typeSlug: string, id: string) =>
-    api.get<number[]>(`/objects/${typeSlug}/${id}/years`),
+  years: (typeSlug: string, id: string) => api.get<number[]>(`/objects/${typeSlug}/${id}/years`),
   /** **통째로** 정한다 — 화면이 보여 준 것과 저장되는 것이 같아야 한다. */
   setYears: (typeSlug: string, id: string, years: number[]) =>
     api.put<number[]>(`/objects/${typeSlug}/${id}/years`, years),

@@ -4198,6 +4198,63 @@
         }
       }
     },
+    "/api/objects/{type_slug}/{object_id}/rollup": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Object Rollup",
+        "description": "이 객체 「아래 전부」 의 숫자를 모은 것 — `list_view.rollups` 가 정한 대로.\n\n저장하지 않고 볼 때마다 센다. 값이 빈 것이 몇 개인지 함께 준다 — 안 주면 합계가\n「전부의 합」 으로 읽히고, 그것은 틀린 수다.",
+        "operationId": "object_rollup_api_objects__type_slug___object_id__rollup_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RollupOut"
+                  },
+                  "title": "Response Object Rollup Api Objects  Type Slug   Object Id  Rollup Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/{object_id}/references": {
       "get": {
         "tags": [
@@ -9268,6 +9325,57 @@
           "entry_id"
         ],
         "title": "RestoreRequest"
+      },
+      "RollupOut": {
+        "properties": {
+          "property": {
+            "type": "string",
+            "title": "Property"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "fn": {
+            "type": "string",
+            "title": "Fn"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "missing": {
+            "type": "integer",
+            "title": "Missing"
+          },
+          "descendants": {
+            "type": "integer",
+            "title": "Descendants"
+          }
+        },
+        "type": "object",
+        "required": [
+          "property",
+          "label",
+          "fn",
+          "value",
+          "count",
+          "missing",
+          "descendants"
+        ],
+        "title": "RollupOut",
+        "description": "「아래 전부」 를 모은 수 하나 — 볼 때마다 센다(저장하지 않는다)."
       },
       "SavedViewOut": {
         "properties": {
