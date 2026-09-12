@@ -185,4 +185,26 @@ describe('변경 이력', () => {
     expect(await screen.findByRole('button', { name: /40건 되돌리기/ })).toBeEnabled()
     expect(objectApi.bulkEditUndo).toHaveBeenCalledWith('part', 'batch-1', false)
   })
+
+  it('설명·연도·소유 부서를 바꾼 기록도 칸 이름과 전→후로 선다', async () => {
+    // **「고침」 만 찍히고 무엇이 바뀌었는지 비어 있으면** 누가 설명을 바꿨는지 답할 수 없다.
+    objectApi.history.mockResolvedValue([
+      {
+        ...ENTRIES[0],
+        id: 'e9',
+        changes: {
+          description: { before: '처음 메모', after: '고친 메모' },
+          valid_from_year: { before: null, after: 2020 },
+          owner_workspace_id: { before: '해석팀', after: '(전역)' },
+        },
+        snapshot: { ...CURRENT, description: '고친 메모', valid_from_year: 2020 },
+      },
+    ])
+    await mount()
+    expect(await screen.findByText('설명')).toBeInTheDocument()
+    expect(screen.getByText('처음 메모')).toBeInTheDocument()
+    expect(screen.getByText('시작 연도')).toBeInTheDocument()
+    expect(screen.getByText('소유 부서')).toBeInTheDocument()
+    expect(screen.getByText('해석팀')).toBeInTheDocument()
+  })
 })

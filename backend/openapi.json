@@ -14907,6 +14907,33 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Properties"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "valid_from_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid From Year"
+          },
+          "valid_to_year": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Valid To Year"
           }
         },
         "type": "object",

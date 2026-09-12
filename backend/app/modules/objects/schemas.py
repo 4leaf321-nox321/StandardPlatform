@@ -275,6 +275,9 @@ class SnapshotOut(BaseModel):
     label: str
     status: str
     properties: dict[str, Any]
+    description: str = ""
+    valid_from_year: int | None = None
+    valid_to_year: int | None = None
 
 
 class HistoryBatchOut(BaseModel):

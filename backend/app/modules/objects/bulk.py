@@ -45,6 +45,7 @@ from app.modules.objects.models import (
     ObjectRelation,
 )
 from app.modules.objects.services import (
+    audit_state,
     normalize_key,
     properties_of,
     require_key_free,
@@ -659,12 +660,7 @@ def apply_objects(
         if found is None:  # pragma: no cover - 방금 계획에서 찾았다
             continue
         target = found
-        before = {
-            "key": target.key,
-            "label": target.label,
-            "status": target.status,
-            "properties": dict(target.properties or {}),
-        }
+        before = audit_state(target)
         if raw_label not in (_MISSING, None):
             target.label = str(raw_label).strip()
         if raw_description is not _MISSING:
@@ -689,12 +685,7 @@ def apply_objects(
             target.properties = validate_properties(
                 defs, merge_properties(target.properties or {}, patch)
             )
-        after = {
-            "key": target.key,
-            "label": target.label,
-            "status": target.status,
-            "properties": dict(target.properties or {}),
-        }
+        after = audit_state(target)
         audit.record(
             db,
             action="object.update",

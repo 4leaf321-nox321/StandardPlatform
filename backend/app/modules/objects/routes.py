@@ -100,6 +100,7 @@ from app.modules.objects.services import (
     apply_search,
     apply_sort,
     apply_year,
+    audit_state,
     count_of,
     normalize_key,
     properties_of,
@@ -1622,12 +1623,7 @@ def update_object(
         db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 16)
     )
 
-    before: dict[str, Any] = {
-        "key": row.key,
-        "label": row.label,
-        "status": row.status,
-        "properties": dict(row.properties or {}),
-    }
+    before = audit_state(row)
 
     if payload.key is not None:
         key = normalize_key(object_type, payload.key)
@@ -1661,12 +1657,7 @@ def update_object(
         )
         row.properties = cleaned
 
-    after: dict[str, Any] = {
-        "key": row.key,
-        "label": row.label,
-        "status": row.status,
-        "properties": dict(row.properties or {}),
-    }
+    after = audit_state(row)
     audit.record(
         db,
         action="object.update",

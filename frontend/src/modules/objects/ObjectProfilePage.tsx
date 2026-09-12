@@ -291,6 +291,9 @@ export default function ObjectProfilePage() {
             label: row.label,
             status: row.status,
             properties: row.properties,
+            description: row.description,
+            valid_from_year: row.valid_from_year,
+            valid_to_year: row.valid_to_year,
           }}
           refLabels={row.ref_labels}
           canEdit={profile.data.can_edit}

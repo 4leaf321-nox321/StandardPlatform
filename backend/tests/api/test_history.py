@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, notifications_of
 from tests.api.test_ontology import (
     _link,
     _make_object,
@@ -262,3 +264,84 @@ def test_한_트랜잭션의_기록_여럿도_넣은_차례대로_되짚는다(
         values = [one["snapshot"]["properties"]["material"] for one in entries]
         # 최근 → 과거: 스틸, 강, 스틸, 강, 스틸, 강, 스틸(만듦)
         assert values == ["스틸", "강", "스틸", "강", "스틸", "강", "스틸"]
+
+
+# --- 설명·연도·소유 부서 -----------------------------------------------------------
+#
+# 고치는 길마다 비교할 칸을 따로 적었더니 이 셋이 빠져, 바꾼 기록이 「고침」 만 남고 비어
+# 있었다. 누가 설명을 바꿨는지 답할 수 없고, 알림에 칸 이름이 없고, 되돌릴 수도 없었다.
+
+
+def _memo(client: TestClient, admin: Signed) -> tuple[str, str, str]:
+    memo = _make_type(client, admin, label="메모")
+    label = f"메모-{uuid.uuid4().hex[:6]}"
+    made = _make_object(client, admin, memo, label=label, description="처음")
+    return memo, made["id"], label
+
+
+def test_설명과_연도를_고친_기록에_칸이_남고_되돌리면_돌아온다(
+    client: TestClient, admin: Signed
+) -> None:
+    memo, object_id, _ = _memo(client, admin)
+    _patch(client, admin, memo, object_id, description="고침", valid_from_year=2020)
+
+    history = _history(client, admin, memo, object_id)
+    latest = history[0]
+    assert latest["changes"]["description"] == {"before": "처음", "after": "고침"}
+    assert latest["changes"]["valid_from_year"] == {"before": None, "after": 2020}
+
+    created = history[-1]
+    assert created["snapshot"]["description"] == "처음"
+    assert created["snapshot"]["valid_from_year"] is None
+
+    restored = client.post(
+        f"/api/objects/{memo}/{object_id}/restore",
+        json={"entry_id": created["id"]},
+        headers=admin.headers,
+    )
+    assert restored.status_code == 200, restored.text
+    got = client.get(f"/api/objects/{memo}/{object_id}", headers=admin.headers).json()[
+        "object"
+    ]
+    assert got["description"] == "처음" and got["valid_from_year"] is None
+    # 되돌린 것도 칸이 남는 기록이다.
+    assert _history(client, admin, memo, object_id)[0]["changes"]["description"] == {
+        "before": "고침",
+        "after": "처음",
+    }
+
+
+def test_여럿_고치기로_소유_부서를_바꾼_기록에_부서_이름이_남는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """기록은 id 로 남기고 보여 줄 때 이름으로 — 부서 이름은 바뀐다."""
+    memo, object_id, _ = _memo(client, admin)
+    done = client.post(
+        f"/api/objects/{memo}/bulk-edit",
+        json={"ids": [object_id], "field": "workspace", "value": "", "apply": True},
+        headers=admin.headers,
+    )
+    assert done.status_code == 200 and done.json()["counts"]["change"] == 1, done.text
+
+    change = _history(client, admin, memo, object_id)[0]["changes"]["owner_workspace_id"]
+    assert change["after"] == "(전역)"
+    assert change["before"] not in ("", None, "(지워진 부서)")
+    with pytest.raises(ValueError):
+        uuid.UUID(change["before"])
+
+
+def test_설명을_고치면_지켜보는_사람의_알림에_칸_이름이_간다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    memo, object_id, label = _memo(client, admin)
+    client.put(
+        f"/api/objects/{memo}/{object_id}/watch", json={"on": True}, headers=manager.headers
+    )
+    _patch(client, admin, memo, object_id, description="고침")
+
+    mine = [
+        one
+        for one in notifications_of(client, manager, "object.changed")
+        if one["title"].startswith(label)
+    ]
+    assert mine and "설명" in mine[0]["body"]

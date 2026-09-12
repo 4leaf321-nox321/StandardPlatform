@@ -220,6 +220,26 @@ def apply_sort(stmt: Select[Any], object_type: ObjectType) -> Select[Any]:
     return stmt.order_by(column.desc() if descending else column.asc())
 
 
+def audit_state(row: ObjectInstance) -> dict[str, Any]:
+    """감사 기록이 비교하는 **객체의 값 전체** — 고치는 길이 모두 이것 하나를 쓴다.
+
+    길마다 칸 목록을 따로 적었더니 설명·연도·소유 부서가 빠졌고, 그 칸을 바꾼 기록은
+    diff 가 비어 「고침」 만 남았다. 누가 설명을 바꿨는지 답할 수 없고, 지켜보는 사람의
+    알림에도 칸 이름이 없고, 그 시점으로 되돌릴 수도 없었다. 한 벌이면 새 칸이 생겨도
+    한 곳만 고친다.
+    """
+    return {
+        "key": row.key,
+        "label": row.label,
+        "description": row.description or "",
+        "status": row.status,
+        "valid_from_year": row.valid_from_year,
+        "valid_to_year": row.valid_to_year,
+        "owner_workspace_id": str(row.owner_workspace_id) if row.owner_workspace_id else None,
+        "properties": dict(row.properties or {}),
+    }
+
+
 def count_of(db: Session, stmt: Select[Any]) -> int:
     """**total 을 함께 준다.** 없으면 화면이 「다음 쪽이 있는지」 를 알려고 한 건
     더 요청하는 편법을 쓰고, 그 편법은 화면마다 달라진다."""

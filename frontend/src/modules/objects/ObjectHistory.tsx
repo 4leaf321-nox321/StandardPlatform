@@ -56,7 +56,12 @@ const ACTION_LABEL: Record<string, string> = {
 const FIXED_LABEL: Record<string, string> = {
   key: '식별자',
   label: '이름',
+  description: '설명',
   status: '상태',
+  valid_from_year: '시작 연도',
+  valid_to_year: '끝 연도',
+  // 서버가 id 를 이름으로 바꿔 보낸다 — 부서 이름은 바뀌므로 기록은 id 로 남는다.
+  owner_workspace_id: '소유 부서',
 }
 
 /** 처음에 보여 줄 줄 수. 그 위는 「더 보기」. */
@@ -250,10 +255,15 @@ function SnapshotDialog({
 
   const rows = useMemo(() => {
     const out: { label: string; was: string; now: string; differs: boolean }[] = []
+    const year = (value: number | null | undefined) =>
+      value === null || value === undefined ? null : String(value)
     const fixed: [string, string | null, string | null][] = [
       ['식별자', snapshot.key, current.key],
       ['이름', snapshot.label, current.label],
+      ['설명', snapshot.description || null, current.description || null],
       ['상태', snapshot.status, current.status],
+      ['시작 연도', year(snapshot.valid_from_year), year(current.valid_from_year)],
+      ['끝 연도', year(snapshot.valid_to_year), year(current.valid_to_year)],
     ]
     for (const [label, then, now] of fixed) {
       out.push({ label, was: then ?? '—', now: now ?? '—', differs: then !== now })

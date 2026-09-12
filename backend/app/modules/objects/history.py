@@ -33,6 +33,7 @@ from app.modules.accounts.models import User
 from app.modules.audit.models import AuditEntry
 from app.modules.objects.models import ObjectInstance
 from app.modules.objects.services import (
+    audit_state,
     normalize_key,
     properties_of,
     require_key_free,
@@ -41,11 +42,21 @@ from app.modules.objects.services import (
 )
 from app.modules.ontology.models import ObjectType
 from app.modules.ontology.services import validate_properties
+from app.modules.workspaces.models import Workspace
 from app.shared import audit
 from app.shared.errors import Conflict, NotFound, code
 
 #: 값 기록에서 스냅샷을 구성하는 칸. 기록의 `changes` 키와 같다.
-STATE_FIELDS = ("key", "label", "status", "properties")
+STATE_FIELDS = (
+    "key",
+    "label",
+    "description",
+    "status",
+    "valid_from_year",
+    "valid_to_year",
+    "owner_workspace_id",
+    "properties",
+)
 
 
 @dataclass
@@ -54,6 +65,11 @@ class Snapshot:
     label: str
     status: str
     properties: dict[str, Any]
+    description: str = ""
+    valid_from_year: int | None = None
+    valid_to_year: int | None = None
+    """소유 부서는 **싣지 않는다** — 이력에는 서지만 되돌리기로 부서를 옮기지는 않는다.
+    부서를 옮기는 일은 권한이 실린 일이라 그 화면(여럿 고치기·부서 통폐합)에서 한다."""
 
 
 @dataclass
@@ -73,15 +89,52 @@ class Entry:
     """여럿 골라 고치기로 같이 바뀐 기록이면 `{id, field_label, size}`."""
 
 
-def _split_properties(changes: dict[str, Any]) -> dict[str, Any]:
-    """통째 속성 diff 를 칸별로 — `properties` 하나를 `properties.<키>` 여럿으로."""
+def _workspace_names(db: Session, rows: list[AuditEntry]) -> dict[str, str]:
+    """기록에 남은 소유 부서 id → 이름. **기록은 id 로 남기고 보여 줄 때 이름으로** —
+    부서 이름은 바뀌므로 이름으로 남기면 옛 기록이 지금 없는 이름을 가리킨다."""
+    ids: set[uuid.UUID] = set()
+    for entry in rows:
+        change = (entry.changes or {}).get("owner_workspace_id")
+        if not isinstance(change, dict):
+            continue
+        for value in (change.get("before"), change.get("after")):
+            try:
+                ids.add(uuid.UUID(str(value)))
+            except ValueError:
+                continue
+    if not ids:
+        return {}
+    return {
+        str(one.id): one.name
+        for one in db.scalars(select(Workspace).where(Workspace.id.in_(ids)))
+    }
+
+
+def _split_properties(
+    changes: dict[str, Any], workspaces: dict[str, str] | None = None
+) -> dict[str, Any]:
+    """통째 속성 diff 를 칸별로 — `properties` 하나를 `properties.<키>` 여럿으로. 소유
+    부서는 id 대신 이름으로(전역이면 「(전역)」, 지워졌으면 「(지워진 부서)」)."""
     out: dict[str, Any] = {}
+    names = workspaces or {}
+
+    def workspace(value: Any) -> str:
+        if value is None:
+            return "(전역)"
+        return names.get(str(value), "(지워진 부서)")
+
     for key, value in changes.items():
         # `_` 로 시작하는 키는 기록에 붙인 표식(묶음 번호 등)이다 — 사람이 읽을 칸이 아니다.
         if key.startswith("_"):
             continue
         # 「전→후」 꼴만 — 합치기의 merged_from 같은 메모는 사람이 읽을 칸이 아니다.
         if not isinstance(value, dict) or "after" not in value:
+            continue
+        if key == "owner_workspace_id":
+            out[key] = {
+                "before": workspace(value.get("before")),
+                "after": workspace(value.get("after")),
+            }
             continue
         if key != "properties":
             out[key] = value
@@ -123,12 +176,8 @@ def history_of(db: Session, row: ObjectInstance) -> list[Entry]:
     """이력 — 최근 것이 앞. 값 기록마다 그 시점의 값을 붙인다."""
     rows = _entries(db, row)
     # 거꾸로 — 지금 값에서 출발해 각 기록의 before 를 대며 앞으로 간다.
-    running: dict[str, Any] = {
-        "key": row.key,
-        "label": row.label,
-        "status": row.status,
-        "properties": dict(row.properties or {}),
-    }
+    running: dict[str, Any] = audit_state(row)
+    workspaces = _workspace_names(db, rows)
     out: list[Entry] = []
     for entry in reversed(rows):
         is_object = entry.target_table == "objects"
@@ -140,6 +189,9 @@ def history_of(db: Session, row: ObjectInstance) -> list[Entry]:
                 label=running["label"],
                 status=running["status"],
                 properties=dict(running["properties"]),
+                description=running["description"] or "",
+                valid_from_year=running["valid_from_year"],
+                valid_to_year=running["valid_to_year"],
             )
             for name in STATE_FIELDS:
                 change = changes.get(name)
@@ -172,7 +224,7 @@ def history_of(db: Session, row: ObjectInstance) -> list[Entry]:
                 action=entry.action,
                 reason=entry.reason,
                 kind="object" if is_object else "relation",
-                changes=_split_properties(changes) if is_object else {},
+                changes=_split_properties(changes, workspaces) if is_object else {},
                 relation=relation,
                 snapshot=snapshot,
                 batch=_batch_of(changes) if is_object else None,
@@ -215,12 +267,7 @@ def restore(
     if wanted.status == "deleted":  # pragma: no cover - 상태값에 없다
         raise Conflict(code("OBJECTS", 62), "지워진 상태로는 되돌리지 않습니다.")
 
-    before = {
-        "key": row.key,
-        "label": row.label,
-        "status": row.status,
-        "properties": dict(row.properties or {}),
-    }
+    before = audit_state(row)
     defs = properties_of(db, object_type.id)
     key = normalize_key(object_type, wanted.key)
     if key != row.key:
@@ -248,12 +295,10 @@ def restore(
     row.label = wanted.label
     row.status = wanted.status
     row.properties = properties
-    after = {
-        "key": row.key,
-        "label": row.label,
-        "status": row.status,
-        "properties": dict(row.properties or {}),
-    }
+    row.description = wanted.description
+    row.valid_from_year = wanted.valid_from_year
+    row.valid_to_year = wanted.valid_to_year
+    after = audit_state(row)
     stamp = entry.at.strftime("%Y-%m-%d %H:%M")
     note = f"{stamp} 시점 값으로 되돌림"
     if dropped:

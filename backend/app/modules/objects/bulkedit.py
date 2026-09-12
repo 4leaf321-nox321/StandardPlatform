@@ -35,6 +35,7 @@ from app.modules.accounts.models import User
 from app.modules.audit.models import AuditEntry
 from app.modules.objects.models import OBJECT_STATUSES, ObjectInstance
 from app.modules.objects.services import (
+    audit_state,
     properties_of,
     require_refs_exist,
     require_unique_properties,
@@ -353,13 +354,8 @@ def raw_value(row: ObjectInstance, field_name: str) -> Any:
 
 
 def state_of(row: ObjectInstance) -> dict[str, Any]:
-    """감사 diff 가 보는 모양 — 이력 재구성과 같은 칸."""
-    return {
-        "key": row.key,
-        "label": row.label,
-        "status": row.status,
-        "properties": dict(row.properties or {}),
-    }
+    """감사 diff 가 보는 모양 — 고치는 길 모두와 같은 한 벌(`audit_state`)."""
+    return audit_state(row)
 
 
 def record(

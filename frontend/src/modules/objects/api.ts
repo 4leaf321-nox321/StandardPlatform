@@ -160,6 +160,9 @@ export interface Snapshot {
   label: string
   status: string
   properties: Record<string, unknown>
+  description?: string
+  valid_from_year?: number | null
+  valid_to_year?: number | null
 }
 
 export interface HistoryEntry {
