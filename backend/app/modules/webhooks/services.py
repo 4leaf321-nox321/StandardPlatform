@@ -51,9 +51,9 @@ def wants(hook: Webhook, action: str, type_slug: str | None) -> bool:
         return False
     if not any(fnmatch.fnmatchcase(action, pattern) for pattern in hook.events or []):
         return False
-    if hook.type_slugs and type_slug is not None and type_slug not in hook.type_slugs:
-        return False
-    return True
+    # 타입을 정해 뒀으면 그 타입의 객체 이벤트만. 객체가 아닌 이벤트(정의 변경)는 타입이
+    # 없으므로 통과한다 — 타입 거르기는 객체에만 뜻이 있다.
+    return not (hook.type_slugs and type_slug is not None and type_slug not in hook.type_slugs)
 
 
 def _type_slug_of(db: Session, one: events.ChangeEvent) -> str | None:
