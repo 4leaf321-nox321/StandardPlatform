@@ -172,3 +172,92 @@ def test_투영_타입은_여기서_세지_않는다(client: TestClient, admin: 
     denied = client.get(f"/api/objects/{projected}/summary", headers=admin.headers)
     assert denied.status_code == 409
     assert "비추는 타입" in denied.json()["error"]["message"]
+
+
+def _grid(client: TestClient, admin: Signed) -> str:
+    """등급(A/B)과 지역(영남/수도권)을 가진 타입 — 두 축으로 쪼갤 것."""
+    part = _make_type(client, admin, label="공급사")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="grade",
+        label="등급",
+        data_type="enum",
+        enum_options=["A", "B"],
+    )
+    _make_property(
+        client,
+        admin,
+        part,
+        key="area",
+        label="지역",
+        data_type="enum",
+        enum_options=["영남", "수도권"],
+    )
+    _make_property(client, admin, part, key="score", label="점수", data_type="number")
+    rows = [
+        ("A", "영남", 10),
+        ("A", "영남", 20),
+        ("A", "수도권", 30),
+        ("B", "수도권", 40),
+    ]
+    for index, (grade, area, score) in enumerate(rows, start=1):
+        _make_object(
+            client,
+            admin,
+            part,
+            label=f"공급사{index}",
+            properties={"grade": grade, "area": area, "score": score},
+        )
+    # 지역이 빈 것 하나 — 쪼갠 조각에도 「(비어 있음)」 이 있어야 한다.
+    _make_object(client, admin, part, label="공급사5", properties={"grade": "B"})
+    return part
+
+
+def test_두_축으로_쪼개면_조각의_합이_칸과_맞는다(client: TestClient, admin: Signed) -> None:
+    """「부서별 몇 건」 다음 물음은 거의 언제나 「그 안에서 등급은」 이다."""
+    part = _grid(client, admin)
+    found = _summary(
+        client, admin, part, group_by="properties.grade", split_by="properties.area"
+    )
+    assert found["split_label"] == "지역"
+    # 계열의 **차례를 서버가 정한다** — 칸마다 나오는 대로 만들면 색이 밀린다.
+    assert found["splits"] == ["수도권", "영남", "(비어 있음)"]
+
+    by_label = {one["label"]: one for one in found["buckets"]}
+    assert by_label["A"]["count"] == 3
+    parts = {one["label"]: one["count"] for one in by_label["A"]["parts"]}
+    assert parts == {"영남": 2, "수도권": 1}
+    for bucket in found["buckets"]:
+        # 조각의 합은 그 칸과 맞는다 — 안 맞으면 그림이 거짓말을 한다.
+        assert sum(one["count"] for one in bucket["parts"]) == bucket["count"]
+    assert by_label["B"]["parts"][-1]["label"] == "(비어 있음)"
+
+
+def test_쪼개도_합과_평균을_낸다(client: TestClient, admin: Signed) -> None:
+    part = _grid(client, admin)
+    found = _summary(
+        client,
+        admin,
+        part,
+        group_by="properties.grade",
+        split_by="properties.area",
+        metric="sum",
+        metric_field="properties.score",
+    )
+    a = next(one for one in found["buckets"] if one["label"] == "A")
+    values = {one["label"]: one["value"] for one in a["parts"]}
+    assert values == {"영남": 30, "수도권": 30}
+
+
+def test_쪼갤_수_없는_축은_저장이_아니라_여기서도_막는다(
+    client: TestClient, admin: Signed
+) -> None:
+    part = _grid(client, admin)
+    denied = client.get(
+        f"/api/objects/{part}/summary",
+        params={"group_by": "properties.grade", "split_by": "properties.note"},
+        headers=admin.headers,
+    )
+    assert denied.status_code == 422

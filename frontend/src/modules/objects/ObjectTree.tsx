@@ -79,8 +79,7 @@ export function ObjectTree({ typeSlug, selected, onSelect, reloadKey }: Props) {
 
       {roots.length === 0 && orphanCount === 0 ? (
         <p className="text-muted-foreground text-xs">
-          아직 이어진 것이 없습니다. 객체 상세의 「관련 객체」 에서 이으면 여기 구조가
-          생깁니다.
+          아직 이어진 것이 없습니다. 객체 상세의 「관련 객체」 에서 이으면 여기 구조가 생깁니다.
         </p>
       ) : (
         <ul className="space-y-0.5">
@@ -180,7 +179,12 @@ function Node({
         ) : (
           <span className="w-[18px]" style={{ marginLeft: depth * 12 }} />
         )}
-        <NodeButton node={node} depth={0} active={selected === node.id} onSelect={() => onSelect(node.id)} />
+        <NodeButton
+          node={node}
+          depth={0}
+          active={selected === node.id}
+          onSelect={() => onSelect(node.id)}
+        />
       </div>
 
       {open && children && (
@@ -227,9 +231,7 @@ function NodeButton({
     >
       {node.label}
       {node.child_count > 0 && (
-        <span className="text-muted-foreground ml-1 text-xs tabular-nums">
-          {node.child_count}
-        </span>
+        <span className="text-muted-foreground ml-1 text-xs tabular-nums">{node.child_count}</span>
       )}
     </button>
   )

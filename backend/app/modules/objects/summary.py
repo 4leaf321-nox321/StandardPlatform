@@ -62,8 +62,13 @@ GROUPABLE = ("text", "enum", "bool", "url", "number", "date", "datetime", "objec
 #: 해로 묶는 종류.
 BY_YEAR = ("date", "datetime")
 
-#: 저장된 뷰가 담을 수 있는 그림 모양 — 화면의 `shared/charts` 와 같은 넷.
-CHART_KINDS = ("bar", "line", "area", "pie")
+#: 저장된 뷰가 담을 수 있는 그림 모양. 앞의 넷은 `shared/charts` 의 `Chart`,
+#: `heatmap` 은 plotly(`LazyPlot`)가 그린다 — **두 축일 때만 뜻이 있다.**
+CHART_KINDS = ("bar", "line", "area", "pie", "heatmap")
+
+#: 쪼개기(두 번째 축)에서 돌려줄 값의 수. 이보다 많으면 색이 겹쳐 못 읽는다 —
+#: 여덟 색을 돌려 쓰므로 열둘이면 이미 같은 색이 두 번 나온다.
+MAX_SPLITS = 12
 
 #: 한 번에 돌려줄 그룹 수. 넘는 것은 「그 밖에」 한 줄로 접는다 — 막대 200개는
 #: 읽을 수 없고, 그림이 아니라 벽이 된다.
@@ -78,6 +83,16 @@ NUMERIC_RE = r"^-?[0-9]+(\.[0-9]+)?$"
 
 
 @dataclass
+class Part:
+    """쪼갠 조각 하나 — 두 번째 축의 값별로."""
+
+    key: str | None
+    label: str
+    count: int
+    value: float | None = None
+
+
+@dataclass
 class Bucket:
     key: str | None
     """거르기에 그대로 쓸 수 있는 값. 빈 칸이면 None."""
@@ -85,6 +100,8 @@ class Bucket:
     count: int
     value: float | None = None
     """`metric` 이 count 가 아닐 때의 값. count 면 None."""
+    parts: list[Part] = field(default_factory=list)
+    """쪼개기를 줬을 때만 채워진다. 합은 이 칸의 `count` 와 맞는다."""
 
 
 @dataclass
@@ -96,6 +113,13 @@ class Summary:
     metric_label: str
     total: int
     """거르기를 통과한 **전체 행 수.** 막대의 합과 다르면 「그 밖에」 가 그 차이다."""
+    split_field: str = ""
+    split_label: str = ""
+    splits: list[str] = field(default_factory=list)
+    """쪼갠 값들의 **차례.** 화면이 계열 순서를 여기서 가져가야 그림마다 같은 값이
+    같은 자리에 선다."""
+    other_splits: int = 0
+    """상한을 넘어 빠진 쪼갠 값의 수."""
     buckets: list[Bucket] = field(default_factory=list)
     other_groups: int = 0
     """상한을 넘어 접힌 그룹 수."""
@@ -267,10 +291,16 @@ def summarize(
     filtered: Select[Any],
     *,
     group_by: str,
+    split_by: str | None = None,
     metric: str = "count",
     metric_field: str | None = None,
 ) -> Summary:
-    """목록과 **같은 거르기** 위에서 묶어 센다."""
+    """목록과 **같은 거르기** 위에서 묶어 센다. `split_by` 를 주면 두 축으로 쪼갠다.
+
+    두 축이 필요한 이유: 「부서별 몇 건」 다음에 오는 물음이 거의 언제나 「그 안에서
+    등급은 어떻게 되나」 이기 때문이다. 그때 거르기를 등급마다 바꿔 가며 여섯 번 세는
+    것이 지금까지의 방법이었고, 그것은 사람이 그 답을 포기하게 만든다.
+    """
     if metric not in METRICS:
         raise AppError(
             code("OBJECTS", 46),
@@ -312,7 +342,25 @@ def summarize(
         for row in rows
     ]
     shown = sum(one.count for one in buckets)
+    split_label = ""
+    splits: list[str] = []
+    other_splits = 0
+    if split_by:
+        split_label, splits, other_splits = _split(
+            db,
+            defs,
+            filtered,
+            buckets=buckets,
+            key_expr=key_expr,
+            split_by=split_by,
+            metric=metric,
+            value_expr=value_expr,
+        )
     return Summary(
+        split_field=split_by or "",
+        split_label=split_label,
+        splits=splits,
+        other_splits=other_splits,
         group_field=group_by,
         group_label=group_label,
         metric=metric,
@@ -323,6 +371,70 @@ def summarize(
         other_groups=max(0, int(distinct) - len(buckets)),
         other_count=max(0, total - shown),
     )
+
+
+def _split(
+    db: Session,
+    defs: list[PropertyDef],
+    filtered: Select[Any],
+    *,
+    buckets: list[Bucket],
+    key_expr: Any,
+    split_by: str,
+    metric: str,
+    value_expr: Any,
+) -> tuple[str, list[str], int]:
+    """두 번째 축으로 쪼갠다 — 이미 고른 칸들 **안에서만.**
+
+    쪼갠 조각을 칸마다 채우고, 계열의 차례를 돌려준다. 차례를 서버가 정하는 이유:
+    화면이 칸마다 나오는 순서대로 계열을 만들면 첫 칸에 없던 값이 뒤에서 튀어나와
+    **색이 밀린다** — 같은 값이 그림 안에서 두 색을 갖는다.
+    """
+    split_expr, split_label, split_kind = _group_expr(defs, split_by)
+    counted = func.count().label("n")
+    columns: list[Any] = [key_expr.label("k"), split_expr.label("s"), counted]
+    if value_expr is not None:
+        columns.append(getattr(func, metric)(value_expr).label("v"))
+    wanted = [one.key for one in buckets]
+    grouped = (
+        filtered.with_only_columns(*columns)
+        # 보여 줄 칸 안에서만 쪼갠다. 전부 쪼개면 접힌 그룹의 조각까지 실려 응답이
+        # 몇 배가 되고, 화면은 그것을 안 쓴다.
+        .where(key_expr.in_([one for one in wanted if one is not None]))
+        .group_by(key_expr, split_expr)
+    )
+    rows = list(db.execute(grouped))
+
+    # 계열의 차례 — 전체에서 많은 것부터. 상한을 넘으면 자른다(색이 여덟이라 열둘이면
+    # 이미 같은 색이 두 번 나온다).
+    weight: dict[str | None, int] = {}
+    for row in rows:
+        key = None if row.s is None or str(row.s) == "" else str(row.s)
+        weight[key] = weight.get(key, 0) + int(row.n)
+    ordered = sorted(weight, key=lambda one: (-weight[one], one or ""))
+    kept = ordered[:MAX_SPLITS]
+    names = _labels(db, split_kind, [one for one in kept if one is not None], defs, split_by)
+    label_of = {one: (EMPTY_LABEL if one is None else names.get(one, one)) for one in kept}
+
+    by_key = {one.key: one for one in buckets}
+    for row in rows:
+        bucket = by_key.get(None if row.k is None else str(row.k))
+        if bucket is None:
+            continue
+        key = None if row.s is None or str(row.s) == "" else str(row.s)
+        if key not in label_of:
+            continue
+        bucket.parts.append(
+            Part(
+                key=key,
+                label=label_of[key],
+                count=int(row.n),
+                value=(None if value_expr is None else _float(row.v)),
+            )
+        )
+    for bucket in buckets:
+        bucket.parts.sort(key=lambda one: kept.index(one.key))
+    return split_label, [label_of[one] for one in kept], max(0, len(ordered) - len(kept))
 
 
 def _float(raw: Any) -> float | None:

@@ -25,20 +25,28 @@ const auth = vi.hoisted(() => ({
 vi.mock('@/shared/auth/AuthContext', () => ({ useAuth: () => auth }))
 
 /** 가짜 차트 — 행마다 단추 하나. 누르면 진짜 차트가 하듯 **행 그대로** 넘긴다. */
-const charts = vi.hoisted(() => ({ rows: [] as Record<string, unknown>[] }))
+const charts = vi.hoisted(() => ({
+  rows: [] as Record<string, unknown>[],
+  series: [] as { key: string; label?: string }[],
+}))
 vi.mock('@/shared/charts', () => ({
+  colorFor: () => '#2563eb',
+  LazyPlot: ({ title }: { title?: string }) => <div data-testid="plot">{title}</div>,
   Chart: ({
     data,
     x,
+    series,
     onPick,
     title,
   }: {
     data: Record<string, unknown>[]
     x: string
+    series: { key: string; label?: string }[]
     onPick?: (row: Record<string, unknown>) => void
     title?: string
   }) => {
     charts.rows = data
+    charts.series = series
     return (
       <div aria-label={title}>
         {data.map((row) => (
@@ -59,14 +67,18 @@ vi.mock('@/shared/charts', () => ({
 const BASE = {
   group_field: 'properties.grade',
   group_label: '등급',
+  split_field: '',
+  split_label: '',
+  splits: [],
+  other_splits: 0,
   metric: 'count',
   metric_field: null,
   metric_label: '건수',
   total: 5,
   buckets: [
-    { key: 'A', label: 'A', count: 2, value: null },
-    { key: 'B', label: 'B', count: 1, value: null },
-    { key: null, label: '(비어 있음)', count: 2, value: null },
+    { key: 'A', label: 'A', count: 2, value: null, parts: [] },
+    { key: 'B', label: 'B', count: 1, value: null, parts: [] },
+    { key: null, label: '(비어 있음)', count: 2, value: null, parts: [] },
   ],
   other_groups: 0,
   other_count: 0,
@@ -106,7 +118,7 @@ describe('묶어 보기', () => {
     expect(objectApi.summary).toHaveBeenCalledWith(
       'part',
       { q: '볼트' },
-      { groupBy: 'status', metric: 'count', metricField: null },
+      { groupBy: 'status', splitBy: null, metric: 'count', metricField: null },
     )
     // **빈 값을 숨기면 막대의 합이 전체와 안 맞고, 그 차이는 화면 어디에도 안 적힌다.**
     expect(charts.rows.map((one) => one.name)).toEqual(['A', 'B', '(비어 있음)'])
@@ -195,5 +207,52 @@ describe('홈에 올리기', () => {
       ),
     )
     expect(await screen.findByRole('link', { name: '홈에서 보기' })).toBeInTheDocument()
+  })
+})
+
+describe('두 축으로 쪼개기', () => {
+  const SPLIT = {
+    ...BASE,
+    split_field: 'properties.area',
+    split_label: '지역',
+    splits: ['영남', '수도권'],
+    buckets: [
+      {
+        key: 'A',
+        label: 'A',
+        count: 3,
+        value: null,
+        parts: [
+          { key: '영남', label: '영남', count: 2, value: null },
+          { key: '수도권', label: '수도권', count: 1, value: null },
+        ],
+      },
+      // 이 칸에는 영남이 없다 — **0 으로 채워져야** 쌓은 막대의 자리가 안 빈다.
+      {
+        key: 'B',
+        label: 'B',
+        count: 1,
+        value: null,
+        parts: [{ key: '수도권', label: '수도권', count: 1, value: null }],
+      },
+    ],
+  }
+
+  it('계열의 차례를 서버에서 받고, 없는 계열은 0 으로 채운다', async () => {
+    await panel(SPLIT)
+    expect(charts.series.map((one) => one.key)).toEqual(['영남', '수도권'])
+    expect(charts.rows[1]).toMatchObject({ name: 'B', 영남: 0, 수도권: 1 })
+  })
+
+  it('쪼갠 값이 잘렸으면 그렇다고 적는다', async () => {
+    await panel({ ...SPLIT, other_splits: 4 })
+    expect(screen.getByText(/쪼갠 값 4가지는 빠졌습니다/)).toBeInTheDocument()
+  })
+
+  it('쪼개지 않고 히트맵을 고르면 두 축이 필요하다고 말한다', async () => {
+    // 한 축짜리 히트맵은 색칠한 막대 하나일 뿐이다.
+    const { onSettings } = await panel(BASE)
+    await userEvent.click(screen.getByRole('button', { name: '히트맵' }))
+    expect(onSettings).toHaveBeenCalledWith(expect.objectContaining({ chart: 'heatmap' }))
   })
 })

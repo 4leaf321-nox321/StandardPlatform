@@ -22,7 +22,7 @@ import { ChevronDown, ChevronUp, Loader2, MoreHorizontal, X } from 'lucide-react
 
 import { objectApi, viewApi } from '@/modules/objects/api'
 import type { HomeWidget as Widget, Summary } from '@/modules/objects/api'
-import { Chart } from '@/shared/charts'
+import { Chart, LazyPlot, colorFor } from '@/shared/charts'
 import type { ChartKind } from '@/shared/charts'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { TypeIcon } from '@/shared/components/TypeIcon'
@@ -33,6 +33,17 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from '@/shared/components/ui/dropdown-menu'
+
+/** 쪼갠 조각의 값. 없는 계열은 0 — 빈 자리는 「없음」 과 0 을 구별 못 하게 만든다. */
+function partValue(
+  bucket: { parts: { label: string; count: number; value: number | null }[] },
+  label: string,
+  metric: string | undefined,
+): number {
+  const part = bucket.parts.find((one) => one.label === label)
+  if (!part) return 0
+  return metric === 'count' ? part.count : (part.value ?? 0)
+}
 
 /** 이 뷰를 그대로 여는 목록 주소 — 조건까지 실어 보낸다. */
 export function viewHref(widget: Widget): string {
@@ -87,6 +98,7 @@ export function HomeWidget({ widget, canEdit = false, index = 0, total = 1, onCh
         {
           // 축이 없으면 상태로 묶어 수만 쓴다 — 한 번 더 물을 것 없이 total 이 나온다.
           groupBy: view.summary.group_by || 'status',
+          splitBy: view.summary.group_by ? view.summary.split_by || null : null,
           metric: view.summary.group_by ? view.summary.metric : 'count',
           metricField: view.summary.group_by ? view.summary.metric_field : null,
         },
@@ -109,6 +121,7 @@ export function HomeWidget({ widget, canEdit = false, index = 0, total = 1, onCh
     view.type_slug,
     view.id,
     view.summary.group_by,
+    view.summary.split_by,
     view.summary.metric,
     view.summary.metric_field,
     view.query.q,
@@ -186,15 +199,48 @@ export function HomeWidget({ widget, canEdit = false, index = 0, total = 1, onCh
           </Link>
           하세요.
         </p>
+      ) : grouped && view.summary.chart === 'heatmap' && (data?.splits.length ?? 0) > 0 ? (
+        <LazyPlot
+          height={220}
+          title={`${data?.group_label} × ${data?.split_label}`}
+          data={[
+            {
+              type: 'heatmap',
+              z: (data?.buckets ?? []).map((one) =>
+                (data?.splits ?? []).map((label) => partValue(one, label, data?.metric)),
+              ),
+              x: data?.splits ?? [],
+              y: (data?.buckets ?? []).map((one) => one.label),
+              colorscale: 'Blues',
+            },
+          ]}
+        />
       ) : grouped ? (
         <Chart
           kind={(view.summary.chart as ChartKind) || 'bar'}
-          data={(data?.buckets ?? []).map((one) => ({
-            name: one.label,
-            값: data?.metric === 'count' ? one.count : (one.value ?? 0),
-          }))}
+          data={(data?.buckets ?? []).map((one) => {
+            const row: Record<string, unknown> = {
+              name: one.label,
+              값: data?.metric === 'count' ? one.count : (one.value ?? 0),
+            }
+            // **없는 계열은 0 으로 채운다** — 빠뜨리면 쌓은 막대에서 그 자리만 비고,
+            // 사람은 데이터가 없는 것과 0 을 구별 못 한다.
+            for (const label of data?.splits ?? []) {
+              row[label] = partValue(one, label, data?.metric)
+            }
+            return row
+          })}
           x="name"
-          series={[{ key: '값', label: data?.metric_label ?? '건수' }]}
+          series={
+            (data?.splits ?? []).length > 0
+              ? (data?.splits ?? []).map((label) => ({
+                  key: label,
+                  label,
+                  color: colorFor(label),
+                }))
+              : [{ key: '값', label: data?.metric_label ?? '건수' }]
+          }
+          stacked={view.summary.stacked}
           height={200}
           title={`${view.name} — ${data?.group_label ?? ''}`}
           emptyText="지금은 셀 것이 없습니다."

@@ -317,11 +317,16 @@ class SavedViewSummary(BaseModel):
     """
 
     group_by: str = ""
+    split_by: str = ""
+    """두 번째 축. 있으면 계열이 여럿이 되고, 쌓은 막대·나란한 막대·히트맵이 뜻을 갖는다."""
     metric: str = "count"
     metric_field: str | None = None
     chart: str = "bar"
-    """bar · line · area · pie. 그림 모양까지 담는다 — 「원으로 보던 것」 이 막대로 뜨면
-    같은 뷰로 안 읽힌다."""
+    """bar · line · area · pie · heatmap. 그림 모양까지 담는다 — 「원으로 보던 것」 이
+    막대로 뜨면 같은 뷰로 안 읽힌다. `heatmap` 은 두 축일 때만 뜻이 있다."""
+
+    stacked: bool = False
+    """막대를 쌓을지. 여럿을 나란히 두면 「전체가 얼마인지」 를 못 읽는 물음이 있다."""
 
 
 class SavedViewOut(BaseModel):
@@ -413,12 +418,22 @@ class GroupOptionOut(BaseModel):
     kind: str
 
 
+class PartOut(BaseModel):
+    """쪼갠 조각 하나 — 두 번째 축의 값별로. 합은 그 칸의 `count` 와 맞는다."""
+
+    key: str | None
+    label: str
+    count: int
+    value: float | None = None
+
+
 class BucketOut(BaseModel):
     key: str | None
     """거르기에 그대로 넣을 수 있는 값. 빈 칸이면 null."""
     label: str
     count: int
     value: float | None = None
+    parts: list[PartOut] = Field(default_factory=list)
 
 
 class SummaryOut(BaseModel):
@@ -427,6 +442,12 @@ class SummaryOut(BaseModel):
 
     group_field: str
     group_label: str
+    split_field: str
+    split_label: str
+    splits: list[str]
+    """쪼갠 값들의 차례. 화면이 계열 순서를 여기서 가져간다 — 칸마다 나오는 대로
+    만들면 첫 칸에 없던 값이 뒤에서 튀어나와 색이 밀린다."""
+    other_splits: int
     metric: str
     metric_field: str | None
     metric_label: str

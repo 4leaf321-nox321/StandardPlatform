@@ -4012,6 +4012,24 @@
             "description": "묶을 축 — status·workspace·created_year·properties.<칸>"
           },
           {
+            "name": "split_by",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "두 번째 축 — 같은 규칙. 주면 계열이 여럿이 된다",
+              "title": "Split By"
+            },
+            "description": "두 번째 축 — 같은 규칙. 주면 계열이 여럿이 된다"
+          },
+          {
             "name": "metric",
             "in": "query",
             "required": false,
@@ -7063,6 +7081,13 @@
               }
             ],
             "title": "Value"
+          },
+          "parts": {
+            "items": {
+              "$ref": "#/components/schemas/PartOut"
+            },
+            "type": "array",
+            "title": "Parts"
           }
         },
         "type": "object",
@@ -10006,6 +10031,48 @@
         ],
         "title": "Page[ObjectOut]"
       },
+      "PartOut": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "count"
+        ],
+        "title": "PartOut",
+        "description": "쪼갠 조각 하나 — 두 번째 축의 값별로. 합은 그 칸의 `count` 와 맞는다."
+      },
       "PatCreateRequest": {
         "properties": {
           "name": {
@@ -11764,6 +11831,11 @@
             "title": "Group By",
             "default": ""
           },
+          "split_by": {
+            "type": "string",
+            "title": "Split By",
+            "default": ""
+          },
           "metric": {
             "type": "string",
             "title": "Metric",
@@ -11784,6 +11856,11 @@
             "type": "string",
             "title": "Chart",
             "default": "bar"
+          },
+          "stacked": {
+            "type": "boolean",
+            "title": "Stacked",
+            "default": false
           }
         },
         "type": "object",
@@ -12090,6 +12167,25 @@
             "type": "string",
             "title": "Group Label"
           },
+          "split_field": {
+            "type": "string",
+            "title": "Split Field"
+          },
+          "split_label": {
+            "type": "string",
+            "title": "Split Label"
+          },
+          "splits": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Splits"
+          },
+          "other_splits": {
+            "type": "integer",
+            "title": "Other Splits"
+          },
           "metric": {
             "type": "string",
             "title": "Metric"
@@ -12147,6 +12243,10 @@
         "required": [
           "group_field",
           "group_label",
+          "split_field",
+          "split_label",
+          "splits",
+          "other_splits",
           "metric",
           "metric_field",
           "metric_label",

@@ -90,8 +90,8 @@ export function ObjectYears({ typeSlug, objectId, canEdit }: Props) {
       </div>
 
       <p className="text-muted-foreground text-xs">
-        고른 해의 목록에만 나옵니다. <b>하나도 안 고르면 어느 해에도 안 나옵니다</b> —
-        「전체 연도」 로 봐야 보입니다.
+        고른 해의 목록에만 나옵니다. <b>하나도 안 고르면 어느 해에도 안 나옵니다</b> — 「전체 연도」
+        로 봐야 보입니다.
       </p>
 
       {canEdit && (

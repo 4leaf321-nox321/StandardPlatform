@@ -26,8 +26,24 @@ const TYPE = { slug: 'part', label: '부품', kind_class: 'record' } as ObjectTy
 const WITH_ERROR: ImportPlan = {
   applied: false,
   rows: [
-    { row: 1, action: 'create', label: '볼트', key: 'P-1', object_id: null, changes: ['weight'], message: '' },
-    { row: 2, action: 'error', label: '너트', key: 'P-2', object_id: null, changes: [], message: '무게: 숫자여야 합니다' },
+    {
+      row: 1,
+      action: 'create',
+      label: '볼트',
+      key: 'P-1',
+      object_id: null,
+      changes: ['weight'],
+      message: '',
+    },
+    {
+      row: 2,
+      action: 'error',
+      label: '너트',
+      key: 'P-2',
+      object_id: null,
+      changes: [],
+      message: '무게: 숫자여야 합니다',
+    },
   ],
   errors: [],
   counts: { create: 1, update: 0, unchanged: 0, error: 1 },
@@ -36,8 +52,24 @@ const WITH_ERROR: ImportPlan = {
 const CLEAN: ImportPlan = {
   applied: false,
   rows: [
-    { row: 1, action: 'create', label: '볼트', key: 'P-1', object_id: null, changes: ['weight'], message: '' },
-    { row: 2, action: 'update', label: '너트', key: 'P-2', object_id: 'x', changes: ['material'], message: '' },
+    {
+      row: 1,
+      action: 'create',
+      label: '볼트',
+      key: 'P-1',
+      object_id: null,
+      changes: ['weight'],
+      message: '',
+    },
+    {
+      row: 2,
+      action: 'update',
+      label: '너트',
+      key: 'P-2',
+      object_id: 'x',
+      changes: ['material'],
+      message: '',
+    },
   ],
   errors: [],
   counts: { create: 1, update: 1, unchanged: 0, error: 0 },
@@ -81,17 +113,23 @@ describe('파일로 넣기', () => {
     const apply = await screen.findByRole('button', { name: /^적용 — 새로 1 · 고침 1/ })
     expect(apply).toBeEnabled()
     await userEvent.click(apply)
-    await waitFor(() => expect(objectApi.import).toHaveBeenLastCalledWith(
-      'part',
-      expect.any(File),
-      expect.objectContaining({ apply: true }),
-    ))
+    await waitFor(() =>
+      expect(objectApi.import).toHaveBeenLastCalledWith(
+        'part',
+        expect.any(File),
+        expect.objectContaining({ apply: true }),
+      ),
+    )
     await waitFor(() => expect(screen.getByText('적용했습니다.')).toBeInTheDocument())
     expect(onApplied).toHaveBeenCalled()
   })
 
   it('관계 탭은 관계 API 로 간다', async () => {
-    objectApi.importRelations.mockResolvedValue({ ...CLEAN, rows: [], counts: { create: 0, update: 0, unchanged: 0, error: 0 } })
+    objectApi.importRelations.mockResolvedValue({
+      ...CLEAN,
+      rows: [],
+      counts: { create: 0, update: 0, unchanged: 0, error: 0 },
+    })
     await mount()
     await userEvent.click(screen.getByRole('tab', { name: '관계' }))
     await upload()

@@ -116,9 +116,7 @@ export function RelatedObjects({
                       {/* **왜 이렇게 이었는가.** 근거 없는 연결은 시간이 지나면
                           아무도 못 믿는다 — 확인하려면 처음부터 다시 조사해야 한다. */}
                       {row.evidence_note && (
-                        <p className="text-muted-foreground mt-0.5 text-xs">
-                          {row.evidence_note}
-                        </p>
+                        <p className="text-muted-foreground mt-0.5 text-xs">{row.evidence_note}</p>
                       )}
                     </div>
                     {canEdit && (
@@ -161,8 +159,8 @@ export function RelatedObjects({
           title={`${cutting.object_label} 와(과)의 관계를 끊습니다`}
           description={
             <>
-              「{cutting.label}」 연결만 사라집니다. <b>양쪽 객체는 그대로 남습니다.</b>{' '}
-              끊은 기록은 변경 이력에 남습니다.
+              「{cutting.label}」 연결만 사라집니다. <b>양쪽 객체는 그대로 남습니다.</b> 끊은 기록은
+              변경 이력에 남습니다.
             </>
           }
           confirmLabel="끊기"

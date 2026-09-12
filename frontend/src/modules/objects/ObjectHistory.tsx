@@ -141,7 +141,8 @@ export function ObjectHistory({
                     </span>
                     {one.relation && (
                       <span className="mt-0.5 block text-xs">
-                        {one.relation.outgoing ? '→' : '←'} {one.relation.other_label || '(이름 없음)'}{' '}
+                        {one.relation.outgoing ? '→' : '←'}{' '}
+                        {one.relation.other_label || '(이름 없음)'}{' '}
                         <span className="text-muted-foreground">({one.relation.relation})</span>
                       </span>
                     )}
@@ -157,12 +158,16 @@ export function ObjectHistory({
                           </span>
                         ))}
                         {fields.length > 4 && (
-                          <span className="text-muted-foreground block">… 외 {fields.length - 4}칸</span>
+                          <span className="text-muted-foreground block">
+                            … 외 {fields.length - 4}칸
+                          </span>
                         )}
                       </span>
                     )}
                   </span>
-                  {clickable && <ChevronRight className="text-muted-foreground mt-1 size-4 shrink-0" />}
+                  {clickable && (
+                    <ChevronRight className="text-muted-foreground mt-1 size-4 shrink-0" />
+                  )}
                 </button>
               </li>
             )
@@ -295,7 +300,10 @@ function SnapshotDialog({
           </thead>
           <tbody>
             {rows.map((one) => (
-              <tr key={one.label} className={`border-t ${one.differs ? 'font-medium' : 'text-muted-foreground'}`}>
+              <tr
+                key={one.label}
+                className={`border-t ${one.differs ? 'font-medium' : 'text-muted-foreground'}`}
+              >
                 <td className="py-1 pr-3 whitespace-nowrap">{one.label}</td>
                 <td className="max-w-48 truncate py-1 pr-3" title={one.was}>
                   {one.was}
@@ -318,9 +326,15 @@ function SnapshotDialog({
             <Button
               disabled={busy || isLatest || changed === 0}
               onClick={() => void run()}
-              title={isLatest || changed === 0 ? '지금 값과 같습니다' : '저장과 같은 검증을 거칩니다'}
+              title={
+                isLatest || changed === 0 ? '지금 값과 같습니다' : '저장과 같은 검증을 거칩니다'
+              }
             >
-              {busy ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <RotateCcw className="mr-1 size-3.5" />}
+              {busy ? (
+                <Loader2 className="mr-1 size-3.5 animate-spin" />
+              ) : (
+                <RotateCcw className="mr-1 size-3.5" />
+              )}
               이 값으로 되돌리기
             </Button>
           )}

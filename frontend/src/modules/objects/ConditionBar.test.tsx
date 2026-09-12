@@ -10,7 +10,10 @@ import type { PropertyDef } from '@/modules/ontology/api'
 
 vi.mock('@/modules/objects/api', async (original) => {
   const real = await original<typeof import('@/modules/objects/api')>()
-  return { ...real, objectApi: { list: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 }) } }
+  return {
+    ...real,
+    objectApi: { list: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 200, offset: 0 }) },
+  }
 })
 
 const DEFS = [
@@ -45,7 +48,17 @@ describe('조건 줄', () => {
 
   it('연산 표는 칸의 종류를 따른다 — 서버와 같은 표', async () => {
     const { opsFor } = await import('@/modules/objects/ConditionBar')
-    expect(opsFor('number')).toEqual(['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', 'empty', 'notempty'])
+    expect(opsFor('number')).toEqual([
+      'eq',
+      'ne',
+      'gt',
+      'gte',
+      'lt',
+      'lte',
+      'in',
+      'empty',
+      'notempty',
+    ])
     expect(opsFor('enum')).toEqual(['eq', 'ne', 'in', 'empty', 'notempty'])
     expect(opsFor('bool')).toEqual(['eq', 'empty', 'notempty'])
     expect(opsFor('text')).toEqual(['eq', 'ne', 'contains', 'starts', 'in', 'empty', 'notempty'])

@@ -6,7 +6,7 @@
  */
 
 import { Suspense, lazy, useMemo, useState } from 'react'
-import { Link, useParams, useSearchParams } from 'react-router-dom'
+import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { BarChart3, Download, FileUp, Plus } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
@@ -167,6 +167,7 @@ function conditionsFromParams(params: URLSearchParams): Condition[] {
 export default function ObjectListPage() {
   const { typeSlug = '' } = useParams()
   const [params, setParams] = useSearchParams()
+  const navigate = useNavigate()
   // **주소가 곧 상태다.** 따로 들고 있으면 사이드바에서 다른 타입으로 갈 때(같은 화면이
   // 재사용된다) 옛 조건이 남아 「없는 칸」 으로 422 가 난다. 주소에서 매번 읽는다.
   const query = params.get('q') ?? ''
@@ -196,9 +197,11 @@ export default function ObjectListPage() {
     if (view.summary?.group_by) {
       setSummary({
         groupBy: view.summary.group_by,
+        splitBy: view.summary.split_by || '',
         metric: view.summary.metric || 'count',
         metricField: view.summary.metric_field,
         chart: (view.summary.chart as SummarySettings['chart']) || 'bar',
+        stacked: Boolean(view.summary.stacked),
       })
       setGrouping(true)
     }
@@ -487,9 +490,11 @@ export default function ObjectListPage() {
                 grouping
                   ? {
                       group_by: summary.groupBy,
+                      split_by: summary.splitBy,
                       metric: summary.metric,
                       metric_field: summary.metricField,
                       chart: summary.chart,
+                      stacked: summary.stacked,
                     }
                   : null
               }
@@ -596,7 +601,21 @@ export default function ObjectListPage() {
               </TableHeader>
               <TableBody>
                 {(list.data?.items ?? []).map((row) => (
-                  <TableRow key={row.id}>
+                  /* **행 어디를 눌러도 들어간다.** 이름 글자만 링크로 두면 사람은 그
+                     좁은 과녁을 매번 겨눠야 하고, 옆 칸을 눌렀을 때 아무 일도 안
+                     일어나는 것을 고장으로 읽는다. 링크는 그대로 둔다 — 가운데 클릭으로
+                     새 탭을 열고 키보드로 옮겨 다니는 길이 거기 있다. */
+                  <TableRow
+                    key={row.id}
+                    className="hover:bg-muted/50 cursor-pointer"
+                    onClick={(event) => {
+                      // 안에 있는 링크·단추를 눌렀으면 그쪽이 한다 — 두 번 가지 않는다.
+                      if ((event.target as HTMLElement).closest('a,button')) return
+                      // 글자를 끌어 고른 것은 열려는 것이 아니다.
+                      if (window.getSelection()?.toString()) return
+                      navigate(`/o/${typeSlug}/${row.id}`)
+                    }}
+                  >
                     {columns.map((column, index) => (
                       <TableCell key={column.id}>
                         {index === 0 ? (

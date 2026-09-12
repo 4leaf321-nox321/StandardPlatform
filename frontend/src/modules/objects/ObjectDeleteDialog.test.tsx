@@ -28,10 +28,25 @@ const NONE: References = {
 }
 const SOME: References = {
   property_refs: [
-    { object_id: 'bolt', label: '볼트', key: 'P-1', type_slug: 'part', type_label: '부품', property_key: 'vendor', property_label: '공급사' },
+    {
+      object_id: 'bolt',
+      label: '볼트',
+      key: 'P-1',
+      type_slug: 'part',
+      type_label: '부품',
+      property_key: 'vendor',
+      property_label: '공급사',
+    },
   ],
   relations: [
-    { relation_id: 'r1', relation: 'supplied_by', outgoing: false, other_id: 'nut', other_label: '너트', other_type_slug: 'part' },
+    {
+      relation_id: 'r1',
+      relation: 'supplied_by',
+      outgoing: false,
+      other_id: 'nut',
+      other_label: '너트',
+      other_type_slug: 'part',
+    },
   ],
   hidden_property_refs: 2,
   hidden_relations: 0,
@@ -43,7 +58,13 @@ async function mount() {
   const onDone = vi.fn()
   render(
     <MemoryRouter>
-      <ObjectDeleteDialog typeSlug="vendor" typeLabel="공급사" object={ACME} onClose={() => {}} onDone={onDone} />
+      <ObjectDeleteDialog
+        typeSlug="vendor"
+        typeLabel="공급사"
+        object={ACME}
+        onClose={() => {}}
+        onDone={onDone}
+      />
     </MemoryRouter>,
   )
   return onDone
@@ -56,7 +77,9 @@ describe('지우기 창', () => {
     objectApi.references.mockResolvedValue(NONE)
     objectApi.remove.mockResolvedValue(undefined)
     const onDone = await mount()
-    await waitFor(() => expect(screen.getByText('이 객체를 가리키는 것이 없습니다.')).toBeInTheDocument())
+    await waitFor(() =>
+      expect(screen.getByText('이 객체를 가리키는 것이 없습니다.')).toBeInTheDocument(),
+    )
     expect(screen.queryByRole('radio')).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '지우기' }))
     await waitFor(() => expect(objectApi.remove).toHaveBeenCalledWith('vendor', 'acme', 'block'))
@@ -79,7 +102,9 @@ describe('지우기 창', () => {
     objectApi.references.mockResolvedValue(SOME)
     objectApi.remove.mockResolvedValue(undefined)
     const onDone = await mount()
-    await userEvent.click(await screen.findByRole('radio', { name: /참조를 비우고 관계를 끊고 지우기/ }))
+    await userEvent.click(
+      await screen.findByRole('radio', { name: /참조를 비우고 관계를 끊고 지우기/ }),
+    )
     await userEvent.click(screen.getByRole('button', { name: '비우고 끊고 지우기' }))
     await waitFor(() => expect(objectApi.remove).toHaveBeenCalledWith('vendor', 'acme', 'detach'))
     expect(onDone).toHaveBeenCalledWith(null)
@@ -96,7 +121,12 @@ describe('지우기 창', () => {
       limit: 200,
       offset: 0,
     })
-    objectApi.merge.mockResolvedValue({ into: 'other', property_refs: 1, relations_moved: 1, relations_dropped: 0 })
+    objectApi.merge.mockResolvedValue({
+      into: 'other',
+      property_refs: 1,
+      relations_moved: 1,
+      relations_dropped: 0,
+    })
     const onDone = await mount()
     await userEvent.click(await screen.findByRole('radio', { name: /다른 공급사에 합치고 지우기/ }))
     const apply = await screen.findByRole('button', { name: '합치고 지우기' })

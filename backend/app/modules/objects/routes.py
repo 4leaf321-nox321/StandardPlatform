@@ -58,6 +58,7 @@ from app.modules.objects.schemas import (
     ObjectOut,
     ObjectPatchRequest,
     ObjectProfileOut,
+    PartOut,
     QualityFindingOut,
     QualityHitOut,
     QualityReportOut,
@@ -263,6 +264,9 @@ def summary(
     group_by: str = Query(
         default="status", description="묶을 축 — status·workspace·created_year·properties.<칸>"
     ),
+    split_by: str | None = Query(
+        default=None, description="두 번째 축 — 같은 규칙. 주면 계열이 여럿이 된다"
+    ),
     metric: str = Query(default="count", description="count·sum·avg·min·max"),
     metric_field: str | None = Query(default=None, description="합·평균을 낼 숫자 칸"),
     q: str | None = Query(default=None),
@@ -292,18 +296,37 @@ def summary(
         db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
     )
     found = summary_service.summarize(
-        db, object_type, stmt, group_by=group_by, metric=metric, metric_field=metric_field
+        db,
+        object_type,
+        stmt,
+        group_by=group_by,
+        split_by=split_by,
+        metric=metric,
+        metric_field=metric_field,
     )
     defs = properties_of(db, object_type.id)
     return SummaryOut(
         group_field=found.group_field,
         group_label=found.group_label,
+        split_field=found.split_field,
+        split_label=found.split_label,
+        splits=found.splits,
+        other_splits=found.other_splits,
         metric=found.metric,
         metric_field=found.metric_field,
         metric_label=found.metric_label,
         total=found.total,
         buckets=[
-            BucketOut(key=one.key, label=one.label, count=one.count, value=one.value)
+            BucketOut(
+                key=one.key,
+                label=one.label,
+                count=one.count,
+                value=one.value,
+                parts=[
+                    PartOut(key=part.key, label=part.label, count=part.count, value=part.value)
+                    for part in one.parts
+                ],
+            )
             for one in found.buckets
         ],
         other_groups=found.other_groups,
@@ -497,6 +520,8 @@ def _checked_summary(
         return {}
     defs = properties_of(db, object_type.id)
     summary_service.check_group(defs, asked.group_by)
+    if asked.split_by:
+        summary_service.check_group(defs, asked.split_by)
     summary_service.check_metric(defs, asked.metric, asked.metric_field)
     if asked.chart not in summary_service.CHART_KINDS:
         raise Conflict(

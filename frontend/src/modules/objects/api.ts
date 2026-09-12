@@ -173,9 +173,12 @@ export interface SavedViewQuery {
 /** 이 뷰를 **그림으로** 볼 때의 설정. `group_by` 가 비면 목록일 뿐이다. */
 export interface SavedViewSummary {
   group_by: string
+  /** 두 번째 축. 있으면 계열이 여럿이 된다. */
+  split_by: string
   metric: string
   metric_field: string | null
   chart: string
+  stacked: boolean
 }
 
 export interface SavedView {
@@ -313,11 +316,20 @@ export const viewApi = {
 }
 
 /** 묶어 보기의 막대 하나. `key` 는 거르기에 그대로 넣을 수 있는 값(빈 칸이면 null). */
+/** 쪼갠 조각 하나 — 두 번째 축의 값별로. 합은 그 칸의 `count` 와 맞는다. */
+export interface Part {
+  key: string | null
+  label: string
+  count: number
+  value: number | null
+}
+
 export interface Bucket {
   key: string | null
   label: string
   count: number
   value: number | null
+  parts: Part[]
 }
 
 /** 묶을 수 있는(또는 셀 수 있는) 축 하나. */
@@ -330,6 +342,11 @@ export interface GroupOption {
 export interface Summary {
   group_field: string
   group_label: string
+  split_field: string
+  split_label: string
+  /** 계열의 **차례.** 칸마다 나오는 대로 만들면 첫 칸에 없던 값이 뒤에서 튀어나와 색이 밀린다. */
+  splits: string[]
+  other_splits: number
   metric: string
   metric_field: string | null
   metric_label: string
@@ -387,12 +404,18 @@ export const objectApi = {
   summary: (
     typeSlug: string,
     query: ObjectQuery = {},
-    options: { groupBy: string; metric?: string; metricField?: string | null },
+    options: {
+      groupBy: string
+      splitBy?: string | null
+      metric?: string
+      metricField?: string | null
+    },
   ) => {
     const params = new URLSearchParams(
       queryString({ ...query, limit: undefined, offset: 0 }).replace(/^\?/, ''),
     )
     params.set('group_by', options.groupBy)
+    if (options.splitBy) params.set('split_by', options.splitBy)
     if (options.metric) params.set('metric', options.metric)
     if (options.metricField) params.set('metric_field', options.metricField)
     return api.get<Summary>(`/objects/${typeSlug}/summary?${params.toString()}`)

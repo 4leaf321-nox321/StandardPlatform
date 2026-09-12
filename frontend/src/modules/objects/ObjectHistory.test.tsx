@@ -21,28 +21,59 @@ const DEFS = [
 
 const ENTRIES: HistoryEntry[] = [
   {
-    id: 'e2', at: '2026-08-01T10:00:00+09:00', actor_label: '박', action: 'object.update', reason: null,
+    id: 'e2',
+    at: '2026-08-01T10:00:00+09:00',
+    actor_label: '박',
+    action: 'object.update',
+    reason: null,
     kind: 'object',
-    changes: { 'properties.weight': { before: 1.2, after: 0.8 }, 'properties.material': { before: '스틸', after: '알루미늄' } },
+    changes: {
+      'properties.weight': { before: 1.2, after: 0.8 },
+      'properties.material': { before: '스틸', after: '알루미늄' },
+    },
     relation: null,
-    snapshot: { key: 'P-1', label: '볼트', status: 'active', properties: { weight: 0.8, material: '알루미늄' } },
+    snapshot: {
+      key: 'P-1',
+      label: '볼트',
+      status: 'active',
+      properties: { weight: 0.8, material: '알루미늄' },
+    },
   },
   {
-    id: 'r1', at: '2026-06-01T10:00:00+09:00', actor_label: '김', action: 'object.relation.add', reason: null,
-    kind: 'relation', changes: {},
+    id: 'r1',
+    at: '2026-06-01T10:00:00+09:00',
+    actor_label: '김',
+    action: 'object.relation.add',
+    reason: null,
+    kind: 'relation',
+    changes: {},
     relation: { relation: 'supplied_by', outgoing: true, other_id: 'acme', other_label: 'ACME' },
     snapshot: null,
   },
   {
-    id: 'e1', at: '2026-05-10T10:00:00+09:00', actor_label: '이', action: 'object.update', reason: null,
+    id: 'e1',
+    at: '2026-05-10T10:00:00+09:00',
+    actor_label: '이',
+    action: 'object.update',
+    reason: null,
     kind: 'object',
     changes: { 'properties.weight': { before: 1, after: 1.2 } },
     relation: null,
-    snapshot: { key: 'P-1', label: '볼트', status: 'active', properties: { weight: 1.2, material: '스틸' } },
+    snapshot: {
+      key: 'P-1',
+      label: '볼트',
+      status: 'active',
+      properties: { weight: 1.2, material: '스틸' },
+    },
   },
 ]
 
-const CURRENT = { key: 'P-1', label: '볼트', status: 'active', properties: { weight: 0.8, material: '알루미늄' } }
+const CURRENT = {
+  key: 'P-1',
+  label: '볼트',
+  status: 'active',
+  properties: { weight: 0.8, material: '알루미늄' },
+}
 
 async function mount(canEdit = true) {
   const { ObjectHistory } = await import('@/modules/objects/ObjectHistory')
@@ -89,7 +120,12 @@ describe('변경 이력', () => {
     objectApi.history.mockResolvedValue(ENTRIES)
     objectApi.restore.mockRejectedValueOnce(
       new ApiError(422, {
-        error: { code: 'X-OBJECTS-0004', message: '가리키는 객체를 찾을 수 없습니다: acme', request_id: 'r', details: {} },
+        error: {
+          code: 'X-OBJECTS-0004',
+          message: '가리키는 객체를 찾을 수 없습니다: acme',
+          request_id: 'r',
+          details: {},
+        },
       }),
     )
     const onRestored = await mount()
