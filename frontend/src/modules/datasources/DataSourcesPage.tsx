@@ -363,13 +363,6 @@ function SyncDialog({
   )
 }
 
-const TARGETS: [string, string][] = [
-  ['label', '이름 (label)'],
-  ['key', '식별자 (key)'],
-  ['description', '설명'],
-  ['alias', '다른 이름 (별칭에 더함)'],
-]
-
 function EditDialog({
   source,
   types,
@@ -407,6 +400,20 @@ function EditDialog({
     .filter((def) => def.data_type !== 'file')
     .map((def): [string, string] => [`properties.${def.key}`, `${def.label} (${def.key})`])
 
+  /** 고정 칸(이름·식별자·설명·별칭)으로 가는 열 — 각자 자리 하나씩. */
+  const fixedOf = (target: string) => columns.find((one) => one.target === target)?.source ?? ''
+  function setFixed(target: string, source: string) {
+    const rest = columns.filter((one) => one.target !== target)
+    setColumns(source.trim() ? [...rest, { source: source.trim(), target }] : rest)
+  }
+  /** 속성으로 가는 열만 — 표에는 이것만 선다. */
+  const propertyColumns = columns
+    .map((column, index) => ({ column, index }))
+    .filter(({ column }) => column.target.startsWith('properties.') || column.target === '')
+  function patchColumn(index: number, patch: Partial<MappingColumn>) {
+    setColumns(columns.map((one, i) => (i === index ? { ...one, ...patch } : one)))
+  }
+
   function body(): DataSourceWrite {
     const out: DataSourceWrite = {
       slug: slug.trim(),
@@ -418,7 +425,11 @@ function EditDialog({
       auth_user: authUser.trim(),
       type_slug: typeSlug,
       workspace_slug: workspace === NONE ? null : workspace,
-      mapping: { external_key: externalKey.trim(), columns },
+      // 빈 줄(열 이름을 아직 안 적은 속성 줄)은 보내지 않는다 — 서버가 「source 가 없다」 로 거절한다.
+      mapping: {
+        external_key: externalKey.trim(),
+        columns: columns.filter((one) => one.source.trim() && one.target),
+      },
       deprecate_missing: deprecate,
       interval_minutes: Number(interval) || 0,
       is_active: active,
@@ -447,8 +458,13 @@ function EditDialog({
     setBusy(true)
     setError(null)
     try {
-      if (source) await datasourceApi.update(source.slug, body())
-      else await datasourceApi.create(body())
+      // 미리 보기는 칸 대응을 **맞추기 전**에 누른다 — 아직 덜 된 대응은 보내지 않는다
+      // (서버가 「이름 열이 없다」 로 거절하면 열 이름을 볼 길이 없다).
+      const draft = body()
+      const complete = Boolean(externalKey.trim() && fixedOf('label'))
+      const payload = complete ? draft : { ...draft, mapping: {} }
+      if (source) await datasourceApi.update(source.slug, payload)
+      else await datasourceApi.create(payload)
       setPreview(await datasourceApi.preview(slug.trim()))
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
@@ -583,10 +599,10 @@ function EditDialog({
             </div>
           </div>
 
-          {/* --- 칸 대응 --- */}
-          <div className="space-y-2 rounded-md border p-3">
+          {/* --- 칸 대응 — 역할별로 가른다. 식별자·이름은 각자 자리에서, 속성은 표에서. --- */}
+          <div className="space-y-4 rounded-md border p-3">
             <div className="flex items-center justify-between">
-              <Label>칸 대응</Label>
+              <Label>칸 대응 — 바깥 열이 우리 객체의 어느 칸으로 가는가</Label>
               <Button
                 type="button"
                 size="sm"
@@ -611,99 +627,176 @@ function EditDialog({
                 ))}
               </p>
             )}
+            <datalist id="ds-columns">
+              {sourceColumns.map((one) => (
+                <option key={one} value={one} />
+              ))}
+            </datalist>
+
+            {/* ① 같은 것 찾기 */}
             <div className="space-y-1.5">
-              <Label htmlFor="ds-ext">바깥 식별자 열 — 같은 객체를 다음에 다시 찾는 근거</Label>
-              <Input
-                id="ds-ext"
-                value={externalKey}
-                placeholder="VendorNo"
-                list="ds-columns"
-                onChange={(event) => setExternalKey(event.target.value)}
-              />
-              <datalist id="ds-columns">
-                {sourceColumns.map((one) => (
-                  <option key={one} value={one} />
-                ))}
-              </datalist>
-            </div>
-            {columns.map((column, index) => (
-              <div key={index} className="flex flex-wrap items-start gap-2">
-                <Input
-                  value={column.source}
-                  placeholder="바깥 열"
-                  list="ds-columns"
-                  className="w-40"
-                  onChange={(event) =>
-                    setColumns(
-                      columns.map((one, i) =>
-                        i === index ? { ...one, source: event.target.value } : one,
-                      ),
-                    )
-                  }
-                />
-                <Select
-                  value={column.target}
-                  onValueChange={(next) =>
-                    setColumns(
-                      columns.map((one, i) => (i === index ? { ...one, target: next } : one)),
-                    )
-                  }
-                >
-                  <SelectTrigger className="w-52">
-                    <SelectValue placeholder="어디로" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {[...TARGETS, ...propertyTargets].map(([key, text]) => (
-                      <SelectItem key={key} value={key}>
-                        {text}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Textarea
-                  value={column.values ? JSON.stringify(column.values) : ''}
-                  placeholder='값 대응표 (선택) {"US": "미국"}'
-                  rows={1}
-                  className="min-h-9 flex-1 font-mono text-xs"
-                  onChange={(event) => {
-                    const text = event.target.value.trim()
-                    let values: Record<string, unknown> | undefined
-                    try {
-                      values = text ? (JSON.parse(text) as Record<string, unknown>) : undefined
-                    } catch {
-                      return
+              <p className="text-sm font-medium">① 같은 것 찾기</p>
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="space-y-1">
+                  <Label htmlFor="ds-ext" className="text-xs">
+                    바깥 식별자 열
+                  </Label>
+                  <Input
+                    id="ds-ext"
+                    value={externalKey}
+                    placeholder="SupplierID"
+                    list="ds-columns"
+                    className="w-48"
+                    onChange={(event) => setExternalKey(event.target.value)}
+                  />
+                </div>
+                <label className="flex cursor-pointer items-center gap-2 pb-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="size-4"
+                    checked={fixedOf('key') === externalKey.trim() && externalKey.trim() !== ''}
+                    onChange={(event) =>
+                      setFixed('key', event.target.checked ? externalKey.trim() : '')
                     }
-                    setColumns(columns.map((one, i) => (i === index ? { ...one, values } : one)))
-                  }}
+                  />
+                  우리 식별자(key)로도 쓴다
+                </label>
+              </div>
+              <p className="text-muted-foreground text-xs">
+                이 열의 값이 그 객체에 남아, 다음 동기화가 같은 객체를 다시 찾습니다 — 우리 쪽
+                이름·식별자를 고쳐도 안 끊깁니다.
+              </p>
+            </div>
+
+            {/* ② 이름 */}
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium">② 이름</p>
+              <div className="space-y-1">
+                <Label htmlFor="ds-label" className="text-xs">
+                  이름 열 (필수)
+                </Label>
+                <Input
+                  id="ds-label"
+                  value={fixedOf('label')}
+                  placeholder="CompanyName"
+                  list="ds-columns"
+                  className="w-48"
+                  onChange={(event) => setFixed('label', event.target.value)}
                 />
+              </div>
+            </div>
+
+            {/* ③ 속성 */}
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium">③ 속성</p>
+              {propertyTargets.length === 0 && (
+                <p className="text-muted-foreground text-xs">
+                  이 타입에 속성이 없습니다. 관리 › 온톨로지에서 먼저 만드세요.
+                </p>
+              )}
+              {propertyColumns.map(({ column, index }) => (
+                <div key={index} className="flex flex-wrap items-start gap-2">
+                  <Input
+                    value={column.source}
+                    placeholder="바깥 열"
+                    list="ds-columns"
+                    className="w-40"
+                    onChange={(event) => patchColumn(index, { source: event.target.value })}
+                  />
+                  <span className="text-muted-foreground pt-2 text-sm">→</span>
+                  <Select
+                    value={column.target}
+                    onValueChange={(next) => patchColumn(index, { target: next })}
+                  >
+                    <SelectTrigger className="w-52">
+                      <SelectValue placeholder="어느 속성으로" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {propertyTargets.map(([key, text]) => (
+                        <SelectItem key={key} value={key}>
+                          {text}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <Textarea
+                    defaultValue={column.values ? JSON.stringify(column.values) : ''}
+                    placeholder='값 대응표 (선택) {"US": "미국"}'
+                    rows={1}
+                    className="min-h-9 flex-1 font-mono text-xs"
+                    onBlur={(event) => {
+                      const text = event.target.value.trim()
+                      try {
+                        patchColumn(index, {
+                          values: text ? (JSON.parse(text) as Record<string, unknown>) : undefined,
+                        })
+                      } catch {
+                        setError(new Error(`값 대응표가 JSON 이 아닙니다: ${text.slice(0, 40)}`))
+                      }
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    size="icon"
+                    variant="ghost"
+                    aria-label="속성 대응 지우기"
+                    onClick={() => setColumns(columns.filter((_one, i) => i !== index))}
+                  >
+                    <X className="size-4" />
+                  </Button>
+                </div>
+              ))}
+              {propertyTargets.length > 0 && (
                 <Button
                   type="button"
-                  size="icon"
-                  variant="ghost"
-                  aria-label="칸 대응 지우기"
-                  onClick={() => setColumns(columns.filter((_one, i) => i !== index))}
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    setColumns([...columns, { source: '', target: propertyTargets[0][0] }])
+                  }
                 >
-                  <X className="size-4" />
+                  <Plus className="mr-1 size-4" />
+                  속성 더하기
                 </Button>
+              )}
+              <p className="text-muted-foreground text-xs">
+                값 대응표에 없는 값이 오면 그 행은 오류입니다(조용히 통과시키면 고를 값이
+                오염됩니다). 참조 속성은 상대의 식별자·별칭·이름으로 풀리고, 못 풀면 오류 행입니다.
+              </p>
+            </div>
+
+            {/* ④ 그 밖에 */}
+            <div className="space-y-1.5">
+              <p className="text-sm font-medium">④ 그 밖에 (선택)</p>
+              <div className="flex flex-wrap gap-3">
+                <div className="space-y-1">
+                  <Label htmlFor="ds-desc" className="text-xs">
+                    설명 열
+                  </Label>
+                  <Input
+                    id="ds-desc"
+                    value={fixedOf('description')}
+                    list="ds-columns"
+                    className="w-48"
+                    onChange={(event) => setFixed('description', event.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label htmlFor="ds-alias" className="text-xs">
+                    다른 이름(별칭) 열
+                  </Label>
+                  <Input
+                    id="ds-alias"
+                    value={fixedOf('alias')}
+                    placeholder="ShortName"
+                    list="ds-columns"
+                    className="w-48"
+                    onChange={(event) => setFixed('alias', event.target.value)}
+                  />
+                </div>
               </div>
-            ))}
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              onClick={() =>
-                setColumns([
-                  ...columns,
-                  { source: '', target: columns.length === 0 ? 'label' : '' },
-                ])
-              }
-            >
-              <Plus className="mr-1 size-4" />열 더하기
-            </Button>
-            <p className="text-muted-foreground text-xs">
-              값 대응표에 없는 값이 오면 그 행은 오류입니다(조용히 통과시키면 고를 값이 오염됩니다).
-              참조 칸은 상대의 식별자·별칭·이름으로 풀리고, 못 풀면 오류 행입니다.
-            </p>
+            </div>
+
             {preview && preview.mapped.length > 0 && (
               <div className="max-h-40 overflow-auto rounded border text-xs">
                 <table className="w-full">
@@ -771,7 +864,9 @@ function EditDialog({
               !name.trim() ||
               !baseUrl.trim() ||
               !entitySet.trim() ||
-              !typeSlug
+              !typeSlug ||
+              !externalKey.trim() ||
+              !fixedOf('label')
             }
           >
             저장
