@@ -257,10 +257,32 @@ async def objects_list(
       숫자·날짜 `eq ne gt gte lt lte in` · 글자 `eq ne contains starts in` ·
       선택·참조 `eq ne in` · 참/거짓 `eq` · 모두 `empty notempty`.
       `in` 의 값은 `|` 로 잇는다(`"A|B"`). `field` 는 속성 키 또는 `label`·`key`·`status`.
+      **다른 타입의 칸**도 된다 — `ref.vendor.country`(참조 칸이 가리키는 것의 칸),
+      `out.used_by`(관계로 이어진 것 자체), `in.resells.country`. 주소는 `object_fields`
+      가 준다 — 추측하지 않는다.
     - `status`: `active` · `deprecated`.
 
-    응답의 `total` 이 전체 수다 — 한 쪽(limit ≤ 200)씩 `offset` 으로 넘긴다."""
-    params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset)]
+    응답의 `total` 이 전체 수다 — 한 쪽(limit ≤ 200)씩 `offset` 으로 넘긴다.
+    **몇 건인지 세려면 전부 받지 말고 `objects_summary`.**"""
+    params: list[tuple[str, Any]] = [
+        ("limit", limit),
+        ("offset", offset),
+        *_filter_params(q, status, properties, conditions),
+    ]
+    return await _get(ctx, f"/api/objects/{type_slug}", params=params)
+
+
+def _filter_params(
+    q: str | None,
+    status: str | None,
+    properties: dict[str, str] | None,
+    conditions: list[dict[str, str]] | None,
+) -> list[tuple[str, Any]]:
+    """목록과 통계가 **같은 거르기**를 보낸다.
+
+    따로 만들면 「목록은 12건인데 통계는 15건」 이 되고, 모델은 어느 쪽을
+    믿을지 모른다."""
+    params: list[tuple[str, Any]] = []
     if q:
         params.append(("q", q))
     if status:
@@ -270,7 +292,74 @@ async def objects_list(
     for one in conditions or []:
         field, op, value = one.get("field", ""), one.get("op", "eq"), one.get("value", "")
         params.append((f"f.{field}.{op}", value))
-    return await _get(ctx, f"/api/objects/{type_slug}", params=params)
+    return params
+
+
+@mcp.tool()
+async def objects_summary(
+    ctx: Context,
+    type_slug: str,
+    group_by: str = "status",
+    split_by: str | None = None,
+    metric: str = "count",
+    metric_field: str | None = None,
+    order: str = "desc",
+    q: str | None = None,
+    properties: dict[str, str] | None = None,
+    conditions: list[dict[str, str]] | None = None,
+    status: str | None = None,
+) -> Any:
+    """**통계** — 「부서별 몇 건」 「개발사 국가별 툴 수」. 화면의 「통계」 와 같다.
+
+    **목록을 전부 받아 직접 세지 않는다** — 쪽 상한에서 틀리고, 수천 건이면
+    못 한다. 서버가 센다. 거르기(`q`·`properties`·`conditions`·`status`)는
+    `objects_list` 와 같다 — 그래서 목록의 `total` 과 여기 `total` 이 같다.
+
+    - `group_by` 기준: `label`·`key`·`status`·`workspace`(소유 부서)·
+      `created_year`, 속성은 `properties.<키>`, 다른 타입의 칸은
+      `object_fields` 의 주소. 날짜는 해로 센다. 긴 글·파일은 안 된다.
+      쓸 수 있는 기준 전부가 응답의 `group_options` 다.
+    - `split_by` 세부 기준(같은 규칙). 주면 칸마다 `parts` 로 나뉜다.
+    - `metric`: `count`(기본)·`sum`·`avg`·`min`·`max`. `count` 가 아니면
+      `metric_field`(숫자 속성 `properties.<키>`)가 필요하다.
+    - `order`: `desc`(큰 값부터)·`asc`(작은 값부터 — 「가장 낮은 것」).
+
+    사용자에게 옮길 때 **빼먹지 않는다**:
+    - `total` 은 거른 **객체 수**. 「(비어 있음)」 칸도 숨기지 않는다.
+    - `other_groups`·`other_count` 가 0 이 아니면 「그 밖에 N종류 M건」.
+    - `overlap` 이 true 면 한 객체가 여러 칸에 든다(여러 값 칸, 여럿과 이어진
+      관계) — 칸의 합이 `total` 보다 클 수 있다고 함께 말한다.
+    - 「그 칸이 뭔데」 는 `buckets[].key` 를 조건 값으로 `objects_list`:
+      기준이 `properties.<키>` 면 field 는 `<키>`, 다른 타입의 칸이면 그 주소,
+      `status` 면 `status` 인자. key 가 null 이면 op 는 `empty`."""
+    params: list[tuple[str, Any]] = [
+        ("group_by", group_by),
+        ("metric", metric),
+        ("order", order),
+    ]
+    if split_by:
+        params.append(("split_by", split_by))
+    if metric_field and metric != "count":
+        params.append(("metric_field", metric_field))
+    params += _filter_params(q, status, properties, conditions)
+    return await _get(ctx, f"/api/objects/{type_slug}/summary", params=params)
+
+
+@mcp.tool()
+async def object_fields(ctx: Context, type_slug: str) -> Any:
+    """**다른 타입의 칸**을 쓰는 주소 — `conditions` 의 `field`, `objects_summary`
+    의 `group_by` 에 그대로 넣는다. 자기 칸은 `ontology_schema` 에 있다.
+
+    한 걸음까지다: `ref.<참조 칸>.<칸>`(참조 칸이 가리키는 것의 칸),
+    `out.<관계>`(관계로 이어진 것 자체 — 값은 상대 id), `out.<관계>.<칸>`,
+    `in.<관계>[.<칸>]`(들어오는 관계). `heading` 이 어느 걸음인지 가른다 —
+    참조 칸과 관계가 같은 이름일 수 있다. `data_type` 이 `relation` 이면 상대가
+    하나로 안 정해져 `empty`·`notempty` 만 걸린다.
+
+    뜻: 이어진 것이 여럿이면 **그중 하나라도** 맞으면 걸린다. 이어진 것이 없는
+    객체는 그 너머의 칸 조건에 안 걸린다(`ne` 도) — 그것은 참조 칸이나 관계의
+    `empty` 로 묻는다."""
+    return await _get(ctx, f"/api/objects/{type_slug}/fields")
 
 
 @mcp.tool()

@@ -28,6 +28,8 @@ TOOLS = {
     "ontology_schema",
     "ontology_import",
     "objects_list",
+    "objects_summary",
+    "object_fields",
     "object_get",
     "object_create",
     "object_update",
@@ -149,6 +151,36 @@ def test_조건은_화면과_같은_모양으로_건너간다() -> None:
     params = seen[0].url.params
     assert params["f.power.gte"] == "10" and params["f.power.lte"] == "50"
     assert params["f.license.in"] == "A|B" and params["status"] == "active"
+
+
+def test_통계는_목록과_같은_거르기로_건너간다() -> None:
+    """목록과 통계가 거르기를 따로 만들면 「목록은 12건인데 통계는 15건」 이 된다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"buckets": [], "total": 0}))
+    asyncio.run(
+        server.objects_summary(
+            _ctx("Bearer t"),
+            "tool",
+            group_by="ref.vendor.country",
+            split_by="status",
+            q="해석",
+            properties={"grade": "A"},
+            conditions=[{"field": "ref.vendor.country", "op": "eq", "value": "미국"}],
+        )
+    )
+    request = seen[0]
+    params = request.url.params
+    assert request.url.path == "/api/objects/tool/summary"
+    assert params["group_by"] == "ref.vendor.country" and params["split_by"] == "status"
+    assert params["f.ref.vendor.country.eq"] == "미국"
+    assert params["p.grade"] == "A" and params["q"] == "해석"
+    # 건수로 셀 때는 숫자 칸을 안 보낸다.
+    assert "metric_field" not in params
+
+
+def test_이어진_칸의_주소는_서버에_묻는다() -> None:
+    seen = _serve(lambda _r: httpx.Response(200, json=[]))
+    asyncio.run(server.object_fields(_ctx("Bearer t"), "tool"))
+    assert seen[0].url.path == "/api/objects/tool/fields"
 
 
 def test_가이드는_서버가_쥔다() -> None:

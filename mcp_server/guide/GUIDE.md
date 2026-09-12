@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-09-12g
+GUIDE_VERSION: 2026-09-13a
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -15,6 +15,8 @@ GUIDE_VERSION: 2026-09-12g
 | 지금 무엇이 정의돼 있나 | `ontology_schema` | **다른 도구보다 먼저** |
 | 타입·속성·관계 종류를 만들거나 고치기 | `ontology_import(apply=false)` → 사람 확인 → `apply=true` | 미리 보기를 건너뛰지 않는다 |
 | 객체 찾기 | `objects_list(type_slug, q=, properties=, conditions=)` | 화면과 같은 거르기 |
+| 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
+| 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 한 걸음까지. 주소를 추측하지 않는다 |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | — |
 | 언제 누가 무엇을 바꿨나 | `object_history` | 되돌리기는 화면에서 |
 | 지우기·합치기 전에 무엇이 걸렸나 | `object_references` | 남의 부서 것은 수만 |
@@ -93,7 +95,39 @@ GUIDE_VERSION: 2026-09-12g
   연산은 칸의 종류가 정한다(숫자·날짜 `eq ne gt gte lt lte in`, 글자 `eq ne contains
   starts in`, 선택·참조 `eq ne in`, 참/거짓 `eq`, 모두 `empty notempty`). 안 맞는 연산은
   서버가 `[코드] 문구` 로 거절한다 — 우회하지 말고 고친다.
-- 응답의 `total` 이 전체 수다. 한 쪽은 200까지. 다 세야 하면 `offset` 으로 넘긴다.
+- 응답의 `total` 이 전체 수다. 한 쪽은 200까지. **몇 건인지 세려면 넘기지 말고 통계로.**
+
+### 다른 타입의 칸 — `object_fields(type_slug)`
+
+「미국 기업이 만든 툴」 은 기업 목록을 거치지 않는다. `object_fields` 가 주는 주소를
+`conditions` 의 `field` 에 그대로 넣는다:
+
+```json
+[{"field": "ref.vendor.country", "op": "eq", "value": "미국"},
+ {"field": "out.used_by", "op": "notempty", "value": ""}]
+```
+
+- `ref.<참조 칸>.<칸>` 참조 칸이 가리키는 것의 칸 · `out.<관계>` 관계로 이어진 것 자체(값은
+  상대 id) · `out.<관계>.<칸>` 그것의 칸 · `in.<관계>[.<칸>]` 들어오는 관계.
+- **한 걸음까지다.** 「개발사의 모회사의 국가」 는 없다.
+- 이어진 것이 여럿이면 **그중 하나라도** 맞으면 걸린다. 이어진 것이 **없는** 객체는 너머의 칸
+  조건에 안 걸린다(`ne` 도). 「개발사가 없는 툴」 은 참조 칸 `vendor` 의 `empty` 로 묻는다.
+- 참조 칸과 관계가 같은 이름일 수 있다 — `heading` 으로 가른다.
+
+### 통계 — `objects_summary(type_slug, group_by=, split_by=, metric=, metric_field=, order=, ...)`
+
+「몇 건」 은 서버가 센다. 목록을 받아 세면 쪽 상한에서 틀린다. 거르기 인자는 `objects_list`
+와 같아서 **같은 조건이면 total 이 같다.**
+
+- `group_by`: `status`·`workspace`·`created_year`·`label`·`key`, 속성은 `properties.<키>`, 다른
+  타입의 칸은 `object_fields` 의 주소. 쓸 수 있는 전부가 응답의 `group_options`.
+- `metric` 이 `sum`·`avg`·`min`·`max` 면 `metric_field`(숫자 속성)가 필요하다.
+- `order="asc"` 는 「가장 낮은 것」 을 찾을 때.
+- 옮길 때 **빼먹지 않는다**: `total` 은 객체 수, 「(비어 있음)」 도 한 칸, `other_groups`·
+  `other_count` 가 0 이 아니면 「그 밖에 N종류 M건」, `overlap` 이 true 면 한 객체가 여러 칸에
+  들어 **칸의 합이 total 보다 클 수 있다**.
+- 「그 칸이 뭔데」 는 `buckets[].key` 를 조건 값으로 `objects_list` — 기준이 `properties.<키>`
+  면 field `<키>`, 다른 타입의 칸이면 그 주소, key 가 null 이면 `empty`.
 
 `object_history(type_slug, object_id)` — 언제·누가·어느 칸을 전→후. 값 기록의
 `snapshot` 이 그 시점의 값 전체다. 되돌리기는 사람이 화면에서 한다.

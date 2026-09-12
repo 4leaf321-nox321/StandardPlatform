@@ -377,3 +377,62 @@ def test_읽기가_화면과_대칭이다(bot: Bot) -> None:
 
     report = bot.call(server.quality_report, kind="orphan")
     assert "findings" in report
+
+
+def test_통계와_다른_타입의_칸을_도구로도_센다(bot: Bot) -> None:
+    """「개발사 국가별 툴 수」 — 목록을 전부 받아 세게 두면 쪽 상한에서 틀린다. 화면의
+    통계와 **같은 서버의 셈**을 도구가 받아야 모델의 답과 화면의 숫자가 같다."""
+    company, tool = _uniq("company"), _uniq("tool")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": company,
+                    "label": "기업",
+                    "properties": [
+                        {
+                            "key": "country",
+                            "label": "국가",
+                            "data_type": "enum",
+                            "enum_options": ["미국", "한국"],
+                        }
+                    ],
+                },
+                {
+                    "slug": tool,
+                    "label": "툴",
+                    "properties": [
+                        {
+                            "key": "vendor",
+                            "label": "개발사",
+                            "data_type": "object_ref",
+                            "ref_type_slug": company,
+                        }
+                    ],
+                },
+            ]
+        },
+        apply=True,
+    )
+    us = bot.call(
+        server.object_create, company, label="미국사", properties={"country": "미국"}
+    )
+    kr = bot.call(
+        server.object_create, company, label="한국사", properties={"country": "한국"}
+    )
+    for label, vendor in (("툴1", us), ("툴2", us), ("툴3", kr)):
+        bot.call(server.object_create, tool, label=label, properties={"vendor": vendor["id"]})
+
+    fields = {one["field"]: one for one in bot.call(server.object_fields, tool)}
+    assert fields["ref.vendor.country"]["label"] == "개발사 › 국가"
+
+    found = bot.call(server.objects_summary, tool, group_by="ref.vendor.country")
+    assert {one["label"]: one["count"] for one in found["buckets"]} == {"미국": 2, "한국": 1}
+    assert found["total"] == 3 and found["overlap"] is False
+
+    # **거르기가 목록과 같다** — 같은 조건이면 total 이 같다.
+    american = [{"field": "ref.vendor.country", "op": "eq", "value": "미국"}]
+    narrowed = bot.call(server.objects_summary, tool, group_by="status", conditions=american)
+    listed = bot.call(server.objects_list, tool, conditions=american)
+    assert narrowed["total"] == listed["total"] == 2
