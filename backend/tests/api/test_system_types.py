@@ -553,8 +553,11 @@ def test_그래프가_원_표와_이은_선을_본다(
     assert any(h["id"] == str(workspace.id) and h["type_slug"] == w["dept"] for h in hits)
 
     # 한 타입 전부 — 원 표 타입만 골라도, 객체 타입과 함께 골라도 선이 있다.
+    # 시험 DB 는 스위트가 함께 쓴다 — 부서가 한 쪽을 넘을 수 있으니 찾기로 좁힌다.
     only = client.get(
-        "/api/graph/subgraph", params={"types": w["dept"]}, headers=admin.headers
+        "/api/graph/subgraph",
+        params={"types": w["dept"], "q": workspace.slug},
+        headers=admin.headers,
     ).json()
     assert any(n["id"] == str(workspace.id) for n in only["nodes"]) and only["edges"] == []
     both = client.get(

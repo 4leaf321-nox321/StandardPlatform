@@ -546,13 +546,18 @@ def subgraph(
         )
     )
     ids = [row.id for row in rows]
-    # 함께 고른 원 표 타입의 행은 뒤에 붙는다 — 쪽은 객체 쪽 기준이다.
-    extra_refs = [
+    # 함께 고른 원 표 타입의 행은 뒤에 붙는다 — 쪽은 객체 쪽 기준이다. **이 쪽의 객체와
+    # 이어진 행이 먼저** — 「툴 + 부서」 를 골랐으면 그 툴을 쓰는 부서가 상한 안에 들어야
+    # 선이 보인다. 이어지지 않은 행은 남는 자리에.
+    linked = graph.link_partner_ids(db, ids=ids) if ids and wanted_systems else set()
+    candidates = [
         (object_type, ref)
         for object_type in wanted_systems
         for ref in system.source_of(object_type).list_all(db)
         if not q or q.strip().lower() in f"{ref.label} {ref.key}".lower()
-    ][: max(0, node_limit - len(ids))]
+    ]
+    candidates.sort(key=lambda pair: pair[1].id not in linked)
+    extra_refs = candidates[: max(0, node_limit - len(ids))]
     ids += [ref.id for _t, ref in extra_refs]
     edges = graph.induced_edges(
         db, ids=ids, limit=MAX_EDGES, relations=wanted_relations

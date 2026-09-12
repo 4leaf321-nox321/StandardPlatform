@@ -528,3 +528,14 @@ def type_link_counts(db: Session, *, user: User, systems: list[str]) -> list[Typ
         TypeLinkEdge(relation=r[0], src_type_slug=r[1], dst_type_slug=r[2], count=int(r[3]))
         for r in rows
     ]
+
+
+def link_partner_ids(db: Session, *, ids: list[uuid.UUID]) -> set[uuid.UUID]:
+    """ids 와 링크로 이어진 저쪽 끝의 id 들 — 「함께 고른 원 표」 에서 무엇을 먼저 실을지."""
+    if not ids:
+        return set()
+    link = ObjectLink
+    out: set[uuid.UUID] = set()
+    for mine, other in ((link.src_id, link.dst_id), (link.dst_id, link.src_id)):
+        out.update(db.scalars(select(other).where(mine.in_(ids))))
+    return out
