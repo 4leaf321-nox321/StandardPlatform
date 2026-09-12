@@ -66,16 +66,17 @@ def test_템플릿은_속성이_헤더로_적힌_빈_CSV(client: TestClient, adm
     # 엑셀이 한글을 안 깨뜨리게 BOM 이 붙는다.
     assert response.content.startswith("﻿".encode())
     header = response.text.lstrip("\ufeff").splitlines()[0].split(",")
-    assert header[:7] == [
+    assert header[:8] == [
         "id",
         "key",
         "label",
         "description",
+        "aliases",
         "status",
         "valid_from_year",
         "valid_to_year",
     ]
-    assert sorted(header[7:]) == ["material", "tags", "weight"]
+    assert sorted(header[8:]) == ["material", "tags", "weight"]
 
 
 def test_계획은_아무것도_안_바꾸고_행마다_말한다(client: TestClient, admin: Signed) -> None:

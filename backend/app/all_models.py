@@ -20,6 +20,7 @@ from app.modules.files.models import Attachment
 from app.modules.notices.models import Notice, NoticeRead
 from app.modules.notifications.models import Notification
 from app.modules.objects.models import (
+    ObjectAlias,
     ObjectInstance,
     ObjectLink,
     ObjectRelation,
@@ -45,6 +46,7 @@ __all__ = [
     "Notice",
     "NoticeRead",
     "Notification",
+    "ObjectAlias",
     "ObjectInstance",
     "ObjectLink",
     "ObjectRelation",

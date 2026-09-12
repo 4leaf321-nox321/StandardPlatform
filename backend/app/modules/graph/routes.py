@@ -34,7 +34,7 @@ from app.modules.graph.schemas import (
     TypeNodeOut,
 )
 from app.modules.objects import graph, system
-from app.modules.objects.models import ObjectInstance
+from app.modules.objects.models import ObjectAlias, ObjectInstance
 from app.modules.ontology.models import NavGroup, ObjectType, RelationType
 from app.modules.workspaces.models import Workspace
 from app.shared import system_sources
@@ -275,7 +275,13 @@ def search(
         .where(
             ObjectInstance.deleted_at.is_(None),
             visible_owner_clause(user, ObjectInstance.owner_workspace_id),
-            or_(ObjectInstance.label.ilike(needle), ObjectInstance.key.ilike(needle)),
+            or_(
+                ObjectInstance.label.ilike(needle),
+                ObjectInstance.key.ilike(needle),
+                ObjectInstance.id.in_(
+                    select(ObjectAlias.object_id).where(ObjectAlias.value.ilike(needle))
+                ),
+            ),
         )
         .order_by(ObjectInstance.label)
         .limit(SEARCH_LIMIT)

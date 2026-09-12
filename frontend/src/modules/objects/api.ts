@@ -13,6 +13,10 @@ export interface ObjectRow {
   properties: Record<string, unknown>
   /** `object_ref` 가 가리키는 객체의 이름 (id -> 이름). **서버가 한 번에 모아 준다.** */
   ref_labels: Record<string, string>
+  /** 사람이 붙인 다른 이름. 찾기·참조 풀이·파일이 이것으로도 찾는다. 시험 자료에는 없을 수 있다. */
+  aliases?: string[]
+  /** {데이터 소스 slug: 그쪽 식별자}. 동기화가 남긴다 — 보기만. */
+  external_ids?: Record<string, string>
   status: string
   owner_workspace_slug: string | null
   valid_from_year: number | null
@@ -182,7 +186,7 @@ export interface SavedView {
 
 /** 품질 — 한 종류·한 타입의 걸린 것들. */
 export interface QualityFinding {
-  kind: 'missing_required' | 'orphan' | 'broken_ref' | 'duplicate'
+  kind: 'missing_required' | 'orphan' | 'broken_ref' | 'duplicate' | 'alias_clash'
   kind_label: string
   type_slug: string
   type_label: string
@@ -293,6 +297,9 @@ export const objectApi = {
     api.postForm<ImportPlan>(`/objects/${typeSlug}/relations/import`, importForm(file, opts.apply)),
   list: (typeSlug: string, query: ObjectQuery = {}) =>
     api.get<Page<ObjectRow>>(`/objects/${typeSlug}${queryString(query)}`),
+  /** 사람이 붙인 다른 이름을 통째로. 같은 타입의 다른 객체가 쓰는 별칭이면 거절된다. */
+  setAliases: (typeSlug: string, id: string, aliases: string[]) =>
+    api.put<ObjectRow>(`/objects/${typeSlug}/${id}/aliases`, { aliases }),
   /** 「아래 전부」 를 모은 수 — `list_view.rollups` 가 정한 대로. 없으면 빈 목록. */
   rollup: (typeSlug: string, id: string) => api.get<Rollup[]>(`/objects/${typeSlug}/${id}/rollup`),
   tree: (typeSlug: string, opts: { parent?: string; orphans?: boolean } = {}) => {

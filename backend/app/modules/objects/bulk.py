@@ -36,10 +36,11 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.objects import links, system
+from app.modules.objects import aliases, links, system
 from app.modules.objects import relations as rel
 from app.modules.objects.models import (
     OBJECT_STATUSES,
+    ObjectAlias,
     ObjectInstance,
     ObjectLink,
     ObjectRelation,
@@ -56,6 +57,7 @@ from app.modules.ontology.services import InvalidValue, merge_properties, valida
 from app.shared import audit
 from app.shared.errors import AppError, code
 from app.shared.permissions import require_owner_edit, visible_owner_clause
+from app.shared.text import compare_key
 
 #: 비움 표시. 빈 칸은 「안 보냄」 이라, 지우려면 이것을 적는다.
 NULL_MARK = "\\null"
@@ -66,6 +68,7 @@ FIXED_COLUMNS = (
     "key",
     "label",
     "description",
+    "aliases",
     "status",
     "valid_from_year",
     "valid_to_year",
@@ -147,17 +150,26 @@ class _Refs:
         self.db = db
         self.user = user
         self.cache: dict[
-            str, tuple[dict[str, uuid.UUID], dict[str, list[uuid.UUID]], set[str]]
+            str,
+            tuple[
+                dict[str, uuid.UUID],
+                dict[str, uuid.UUID],
+                dict[str, list[uuid.UUID]],
+                set[str],
+            ],
         ] = {}
 
     def _load(
         self, type_slug: str
-    ) -> tuple[dict[str, uuid.UUID], dict[str, list[uuid.UUID]], set[str]]:
+    ) -> tuple[
+        dict[str, uuid.UUID], dict[str, uuid.UUID], dict[str, list[uuid.UUID]], set[str]
+    ]:
         if type_slug not in self.cache:
             object_type = self.db.scalar(
                 select(ObjectType).where(ObjectType.slug == type_slug)
             )
             by_key: dict[str, uuid.UUID] = {}
+            by_alias: dict[str, uuid.UUID] = {}
             by_label: dict[str, list[uuid.UUID]] = {}
             ids: set[str] = set()
             if object_type is not None and system.is_system(object_type):
@@ -167,6 +179,10 @@ class _Refs:
                     by_key[ref.key] = ref.id
                     by_label.setdefault(ref.label.strip(), []).append(ref.id)
             elif object_type is not None:
+                # 별칭·외부 식별자도 식별자처럼 — 「앤시스」 로 적어도 「Ansys」 로 풀린다.
+                for norm, hits in aliases.index_of(self.db, object_type).items():
+                    if len(hits) == 1 and norm not in by_key:
+                        by_alias[norm] = hits[0]
                 rows = self.db.scalars(
                     select(ObjectInstance).where(
                         ObjectInstance.type_id == object_type.id,
@@ -179,16 +195,18 @@ class _Refs:
                     if row.key:
                         by_key[row.key] = row.id
                     by_label.setdefault(row.label.strip(), []).append(row.id)
-            self.cache[type_slug] = (by_key, by_label, ids)
+            self.cache[type_slug] = (by_key, by_alias, by_label, ids)
         return self.cache[type_slug]
 
     def resolve(self, definition: PropertyDef, raw: str) -> str:
-        """식별자 → 이름 → uuid 순으로 맞춘다. 이름이 여럿에 맞으면 거절."""
+        """식별자 → 별칭 → 이름 → uuid 순으로 맞춘다. 이름이 여럿에 맞으면 거절."""
         target = definition.ref_type_slug or ""
-        by_key, by_label, ids = self._load(target)
+        by_key, by_alias, by_label, ids = self._load(target)
         text = raw.strip()
         if text in by_key:
             return str(by_key[text])
+        if compare_key(text) in by_alias:
+            return str(by_alias[compare_key(text)])
         hits = by_label.get(text, [])
         if len(hits) == 1:
             return str(hits[0])
@@ -409,6 +427,12 @@ def _plan_row(
     raw_description = _fixed(row, "description")
     raw_from = _fixed(row, "valid_from_year")
     raw_to = _fixed(row, "valid_to_year")
+    raw_aliases = _fixed(row, "aliases")
+    wanted_aliases: list[str] | None = (
+        None
+        if raw_aliases is _MISSING
+        else aliases.clean([] if raw_aliases is None else str(raw_aliases).split(MULTI_SEP))
+    )
 
     if (
         raw_status is not _MISSING
@@ -487,12 +511,14 @@ def _plan_row(
         require_unique_properties(
             db, object_type, defs, properties, owner_workspace_id=owner_workspace_id
         )
+        if wanted_aliases:
+            aliases.require_free(db, object_type, wanted_aliases, exclude_id=None)
         return RowPlan(
             row=index,
             action="create",
             label=str(raw_label).strip(),
             key=key,
-            changes=sorted(properties),
+            changes=sorted(properties) + (["aliases"] if wanted_aliases else []),
         )
 
     # 고침 — 보낸 것만.
@@ -522,6 +548,13 @@ def _plan_row(
         and (None if raw_to is None else int(raw_to)) != existing.valid_to_year
     ):
         changes.append("valid_to_year")
+    if wanted_aliases is not None:
+        current_aliases = aliases.human_of(db, [existing.id]).get(existing.id, [])
+        if [compare_key(a) for a in wanted_aliases] != [
+            compare_key(a) for a in current_aliases
+        ]:
+            aliases.require_free(db, object_type, wanted_aliases, exclude_id=existing.id)
+            changes.append("aliases")
     if key is not None and key != existing.key:
         require_key_free(
             db,
@@ -624,6 +657,9 @@ def apply_objects(
             db.add(target)
             db.flush()
             row_plan.object_id = target.id
+            raw_aliases = _fixed(row, "aliases")
+            if raw_aliases not in (_MISSING, None) and str(raw_aliases).strip():
+                aliases.set_human(db, target, object_type, str(raw_aliases).split(MULTI_SEP))
             audit.record(
                 db,
                 action="object.create",
@@ -658,6 +694,14 @@ def apply_objects(
             target.valid_to_year = None if raw_to is None else int(raw_to)
         if row_plan.key is not None and "key" in row_plan.changes:
             target.key = row_plan.key
+        if "aliases" in row_plan.changes:
+            raw_aliases = _fixed(row, "aliases")
+            aliases.set_human(
+                db,
+                target,
+                object_type,
+                [] if raw_aliases in (_MISSING, None) else str(raw_aliases).split(MULTI_SEP),
+            )
         if patch:
             target.properties = validate_properties(
                 defs, merge_properties(target.properties or {}, patch)
@@ -725,6 +769,7 @@ def export_rows(
         for found in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(wanted))):
             names[str(found.id)] = found.key or found.label
 
+    names_of = aliases.human_of(db, [row.id for row in rows])
     out: list[dict[str, Any]] = []
     for row in rows:
         record: dict[str, Any] = {
@@ -732,6 +777,7 @@ def export_rows(
             "key": row.key or "",
             "label": row.label,
             "description": row.description or "",
+            "aliases": MULTI_SEP.join(names_of.get(row.id, [])),
             "status": row.status,
             "valid_from_year": row.valid_from_year if row.valid_from_year is not None else "",
             "valid_to_year": row.valid_to_year if row.valid_to_year is not None else "",
@@ -791,6 +837,20 @@ def _find_endpoint(
             code("OBJECTS", 46),
             f"「{text}」 식별자가 {len(by_key)}개 타입에 있습니다. "
             "관계 종류의 타입을 좁히세요.",
+        )
+    # 별칭(외부 식별자 포함)으로도 — 「앤시스」 로 적어도 「Ansys」 로 풀린다.
+    alias_stmt = stmt.where(
+        ObjectInstance.id.in_(
+            select(ObjectAlias.object_id).where(ObjectAlias.norm == compare_key(text))
+        )
+    )
+    by_alias = list(db.scalars(alias_stmt))
+    if len(by_alias) == 1:
+        return by_alias[0]
+    if len(by_alias) > 1:
+        raise InvalidValue(
+            code("OBJECTS", 46),
+            f"「{text}」 별칭이 {len(by_alias)}개에 맞습니다. 식별자로 적으세요.",
         )
     by_label = list(db.scalars(stmt.where(ObjectInstance.label == text)))
     if len(by_label) == 1:

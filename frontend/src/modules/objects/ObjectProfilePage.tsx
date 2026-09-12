@@ -12,6 +12,7 @@ import { AttachmentList } from '@/modules/files/AttachmentList'
 import { GraphPanel } from '@/modules/graph/GraphPanel'
 import { ontologyApi } from '@/modules/ontology/api'
 import { ObjectYears } from '@/modules/objects/ObjectYears'
+import { AliasesPanel } from '@/modules/objects/AliasesPanel'
 import { RelatedObjects } from '@/modules/objects/RelatedObjects'
 import { RollupPanel } from '@/modules/objects/RollupPanel'
 import type { PropertyDef, SectionView } from '@/modules/ontology/api'
@@ -205,6 +206,18 @@ export default function ObjectProfilePage() {
       {/* **연도를 쓰는 축에서만 나온다.** 없는 것을 있는 척하지 않는다. */}
       {objectType?.temporal_kind === 'yearly' && (
         <ObjectYears typeSlug={typeSlug} objectId={objectId} canEdit={profile.data.can_edit} />
+      )}
+
+      {/* 다른 이름 — 원 표의 객체에는 없다(그 표가 이름을 갖는다). */}
+      {!isSystem && (
+        <AliasesPanel
+          typeSlug={typeSlug}
+          objectId={objectId}
+          aliases={row.aliases ?? []}
+          externalIds={row.external_ids ?? {}}
+          canEdit={profile.data.can_edit}
+          onChanged={profile.reload}
+        />
       )}
 
       {/* 롤업 — 트리와 롤업 정의가 있는 타입에서만. 정의가 없으면 빈 목록이라 안 뜬다. */}

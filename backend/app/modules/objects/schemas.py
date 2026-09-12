@@ -21,6 +21,10 @@ class ObjectOut(BaseModel):
     description: str
     properties: dict[str, Any]
     ref_labels: dict[str, str] = Field(default_factory=dict)
+    aliases: list[str] = Field(default_factory=list)
+    """사람이 붙인 다른 이름. 찾기·참조 풀이·파일이 이것으로도 찾는다."""
+    external_ids: dict[str, str] = Field(default_factory=dict)
+    """{데이터 소스 slug: 그쪽 식별자}. 동기화가 남긴다 — 화면에서는 보기만."""
     """`object_ref` 속성이 가리키는 객체의 **이름**(id -> 이름).
 
     **값에는 id 만 있다.** 그대로 그리면 목록에 UUID 가 뜨고, 그 열은 아무것도
@@ -155,6 +159,12 @@ class ObjectProfileOut(BaseModel):
     can_edit: bool
     """**서버가 판정한 것을 화면에 알려 준다.** 화면이 스스로 정하면 어떤 화면은
     단추를 보이고 어떤 화면은 안 보이는 상태가 되고, 그 차이는 설명할 수 없다."""
+
+
+class AliasesRequest(BaseModel):
+    """사람이 붙인 별칭을 통째로 — 빈 목록이면 전부 지운다."""
+
+    aliases: list[str] = Field(max_length=50)
 
 
 class RollupOut(BaseModel):

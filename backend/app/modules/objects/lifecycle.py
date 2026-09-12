@@ -27,7 +27,7 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.objects import links, system
+from app.modules.objects import aliases, links, system
 from app.modules.objects import relations as rel
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
@@ -202,6 +202,9 @@ def _soft_delete(
     db: Session, user: User, row: ObjectInstance, object_type: ObjectType, *, reason: str
 ) -> None:
     row.deleted_at = datetime.now(UTC)
+    # 지운 객체의 별칭은 비운다 — 남기면 그 이름을 다른 객체가 못 쓴다. (합치기는 이 전에
+    # 이긴 쪽으로 옮겨 두었다.)
+    aliases.drop_all(db, row.id)
     audit.record(
         db,
         action="object.delete",
@@ -437,6 +440,9 @@ def merge_into(
     if not target.description and row.description:
         target.description = row.description
 
+    # 지는 쪽의 별칭과 이름을 이긴 쪽에 — 같은 표기로 다시 와도 같은 것으로 풀린다.
+    aliases_moved, aliases_dropped = aliases.move(db, row, target)
+
     row.merged_into_id = target.id
     _soft_delete(db, user, row, object_type, reason=reason)
     audit.record(
@@ -453,6 +459,8 @@ def merge_into(
             "property_refs": moved_refs,
             "relations_moved": moved_edges,
             "relations_dropped": dropped_edges,
+            "aliases_moved": aliases_moved,
+            "aliases_dropped": aliases_dropped,
             **audit.diff({"properties": before}, {"properties": target.properties or {}}),
         },
         reason=reason,

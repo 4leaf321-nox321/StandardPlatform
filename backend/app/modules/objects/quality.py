@@ -24,19 +24,20 @@ from sqlalchemy import func, select, union
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.objects import system
+from app.modules.objects import aliases, system
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared import extensions
 from app.shared.permissions import is_any_manager, visible_owner_clause
 from app.shared.text import compare_key
 
-KINDS = ("missing_required", "orphan", "broken_ref", "duplicate")
+KINDS = ("missing_required", "orphan", "broken_ref", "duplicate", "alias_clash")
 LABELS = {
     "missing_required": "필수값이 빈 객체",
     "orphan": "관계 없는 객체",
     "broken_ref": "지워진 것을 가리키는 칸",
     "duplicate": "이름이 같은 객체",
+    "alias_clash": "별칭이 다른 객체의 이름과 같음",
 }
 #: 종류·타입마다 목록에 싣는 상한. 수는 전부 세고, 목록만 자른다.
 SAMPLE = 50
@@ -210,6 +211,39 @@ def _duplicates(db: Session, user: User, object_type: ObjectType) -> Finding | N
     return _finding("duplicate", object_type, count, hits)
 
 
+def _alias_clashes(db: Session, user: User, object_type: ObjectType) -> Finding | None:
+    """한 객체의 별칭이 **다른 객체의 이름·식별자**와 같다 — 같은 별칭끼리는 표가 막지만,
+    이름과 별칭이 겹치는 것은 막을 자리가 없어서 여기서 센다. 그 표기로 찾으면 둘이 나오고,
+    파일은 「여럿에 맞는다」 로 거절된다."""
+    rows = list(db.scalars(_visible_objects(db, user, object_type)))
+    by_norm: dict[str, list[ObjectInstance]] = {}
+    for row in rows:
+        by_norm.setdefault(compare_key(row.label), []).append(row)
+        if row.key:
+            by_norm.setdefault(compare_key(row.key), []).append(row)
+    hits: list[Hit] = []
+    count = 0
+    names = aliases.of(db, [row.id for row in rows])
+    for row in rows:
+        for one in names.get(row.id, []):
+            if one.kind != aliases.HUMAN:
+                continue
+            others = [other for other in by_norm.get(one.norm, []) if other.id != row.id]
+            if not others:
+                continue
+            count += 1
+            if len(hits) < SAMPLE:
+                hits.append(
+                    Hit(
+                        id=row.id,
+                        label=row.label,
+                        key=row.key,
+                        detail=f"별칭 「{one.value}」 = {others[0].label}의 이름",
+                    )
+                )
+    return _finding("alias_clash", object_type, count, hits)
+
+
 def _finding(
     kind: str, object_type: ObjectType, count: int, hits: list[Hit]
 ) -> Finding | None:
@@ -250,6 +284,7 @@ def report(db: Session, user: User, *, kinds: tuple[str, ...] = KINDS) -> list[F
             _orphans(db, user, object_type, relation_kinds) if "orphan" in kinds else None,
             _broken_refs(db, user, object_type, defs) if "broken_ref" in kinds else None,
             _duplicates(db, user, object_type) if "duplicate" in kinds else None,
+            _alias_clashes(db, user, object_type) if "alias_clash" in kinds else None,
         ]
         out.extend(one for one in found if one is not None)
     return out

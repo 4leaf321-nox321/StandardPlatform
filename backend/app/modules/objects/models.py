@@ -230,6 +230,48 @@ class ObjectLink(Base):
     )
 
 
+class ObjectAlias(Base):
+    """객체의 **다른 이름** — 사람이 붙인 별칭과, 바깥 시스템이 부르는 식별자.
+
+    같은 것을 다르게 부르는 일은 늘 있다(「Ansys」 「ANSYS Inc.」 「앤시스」). 이름 풀이가
+    식별자와 이름만 보면 표기가 하나라도 다른 순간 못 찾고, **못 찾은 사람은 새로 만든다**
+    — 그러면 같은 것이 둘이 된다. 별칭을 두면 찾기·참조 풀이·파일·동기화가 전부 그것을
+    본다. 합치기는 지는 쪽 이름을 이긴 쪽 별칭으로 남겨 **같은 중복이 다시 안 생기게** 한다.
+
+    `kind`:
+        alias            사람이 붙인 다른 이름
+        source:<slug>    그 데이터 소스의 외부 식별자 — 동기화가 남기고, 다음 동기화가 이것으로
+                         같은 객체를 다시 찾는다(우리 쪽 이름·식별자를 고쳐도 안 끊긴다)
+
+    **같은 타입 안에서 (kind, 값) 은 하나뿐이다.** 「ANSYS」 가 두 객체의 별칭이면 어느
+    쪽인지 아무도 모른다. 비교는 `norm`(전각·대소문자·공백을 모은 것)으로 한다.
+    """
+
+    __tablename__ = "object_aliases"
+    __table_args__ = (
+        UniqueConstraint("type_id", "kind", "norm", name="uq_object_aliases_value"),
+        Index("ix_object_aliases_object", "object_id"),
+        Index("ix_object_aliases_lookup", "type_id", "norm"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    object_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE")
+    )
+    type_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("object_types.id", ondelete="CASCADE")
+    )
+    """객체의 타입을 여기도 둔다 — 유일성이 타입 안에서 서기 때문이다."""
+    kind: Mapped[str] = mapped_column(String(80), default="alias", server_default="alias")
+    value: Mapped[str] = mapped_column(String(200))
+    norm: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
 class ObjectYear(Base):
     """`temporal_kind='yearly'` 인 축의 **연도 배정.**
 

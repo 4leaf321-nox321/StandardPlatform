@@ -20,13 +20,24 @@ import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/ui/badge'
 import { useResource } from '@/shared/hooks/useResource'
 
-const KIND_ORDER: QualityFinding['kind'][] = ['broken_ref', 'missing_required', 'duplicate', 'orphan']
+const KIND_ORDER: QualityFinding['kind'][] = [
+  'broken_ref',
+  'missing_required',
+  'duplicate',
+  'alias_clash',
+  'orphan',
+]
 
 const KIND_HINT: Record<QualityFinding['kind'], string> = {
-  broken_ref: '가리키던 객체가 지워졌습니다. 그 칸을 비우거나 다른 것으로 바꾸세요 — 화면에는 뜻 모를 값으로 뜹니다.',
+  broken_ref:
+    '가리키던 객체가 지워졌습니다. 그 칸을 비우거나 다른 것으로 바꾸세요 — 화면에는 뜻 모를 값으로 뜹니다.',
   missing_required: '필수가 된 뒤에도 안 채운 옛 객체입니다. 고칠 때 거절되니 먼저 채우세요.',
-  duplicate: '이름을 정규화(공백·대소문자·전각)하면 같은 것들입니다. 같은 것이면 한쪽 상세에서 「합치기」 로 하나로.',
-  orphan: '관계가 하나도 안 걸린 객체입니다. 관계가 정의된 타입에서만 셉니다 — 정말 홀로 있는 것인지 보세요.',
+  duplicate:
+    '이름을 정규화(공백·대소문자·전각)하면 같은 것들입니다. 같은 것이면 한쪽 상세에서 「합치기」 로 하나로.',
+  orphan:
+    '관계가 하나도 안 걸린 객체입니다. 관계가 정의된 타입에서만 셉니다 — 정말 홀로 있는 것인지 보세요.',
+  alias_clash:
+    '한 객체의 별칭이 다른 객체의 이름·식별자와 같습니다. 그 표기로 찾으면 둘이 나옵니다 — 같은 것이면 합치고, 다른 것이면 별칭을 지우세요.',
 }
 
 export default function QualityPage() {
@@ -100,7 +111,11 @@ export default function QualityPage() {
                       >
                         <span className="min-w-0 truncate">
                           {hit.label}
-                          {hit.key && <span className="text-muted-foreground ml-1 font-mono text-xs">{hit.key}</span>}
+                          {hit.key && (
+                            <span className="text-muted-foreground ml-1 font-mono text-xs">
+                              {hit.key}
+                            </span>
+                          )}
                         </span>
                         <span className="text-muted-foreground shrink-0 text-xs">{hit.detail}</span>
                       </Link>

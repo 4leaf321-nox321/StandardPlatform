@@ -353,11 +353,16 @@ async def object_update(
     label: str | None = None,
     properties: dict[str, Any] | None = None,
     description: str | None = None,
+    aliases: list[str] | None = None,
 ) -> Any:
     """객체를 고친다 — **보낸 것만.**
 
     `properties` 는 보낸 키만 병합한다. 값을 지우려면 그 키에 `null` 을 넣는다 —
-    통째로 덮으면 다른 속성이 함께 날아가고 **그 손실은 아무 데도 안 뜬다.**"""
+    통째로 덮으면 다른 속성이 함께 날아가고 **그 손실은 아무 데도 안 뜬다.**
+
+    `aliases` 는 **다른 이름 전부**(통째로 바꿈). 「Ansys」 를 「앤시스」 로도 부르면 여기
+    적는다 — 그 뒤로 찾기·참조·파일이 그 이름으로도 같은 객체를 찾는다. 같은 타입의 다른
+    객체가 쓰는 별칭이면 거절된다."""
     body: dict[str, Any] = {}
     if label is not None:
         body["label"] = label
@@ -365,7 +370,17 @@ async def object_update(
         body["description"] = description
     if properties is not None:
         body["properties"] = properties
-    return await _patch(ctx, f"/api/objects/{type_slug}/{object_id}", body)
+    got = await _patch(ctx, f"/api/objects/{type_slug}/{object_id}", body) if body else None
+    if aliases is not None:
+        async with _client(60) as client:
+            got = _unwrap(
+                await client.put(
+                    f"/api/objects/{type_slug}/{object_id}/aliases",
+                    json={"aliases": aliases},
+                    headers=_forward_headers(ctx),
+                )
+            )
+    return got if got is not None else {"ok": True, "message": "바꿀 것이 없었습니다"}
 
 
 @mcp.tool()

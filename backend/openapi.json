@@ -4493,6 +4493,69 @@
         }
       }
     },
+    "/api/objects/{type_slug}/{object_id}/aliases": {
+      "put": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Set Aliases",
+        "description": "사람이 붙인 다른 이름을 통째로 바꾼다. **같은 타입의 다른 객체가 쓰는 별칭이면\n거절한다** — 어느 객체인지 말하며.",
+        "operationId": "set_aliases_api_objects__type_slug___object_id__aliases_put",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasesRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/{object_id}/rollup": {
       "get": {
         "tags": [
@@ -5666,6 +5729,24 @@
         ],
         "title": "AccountSummaryOut",
         "description": "활성 시스템 관리자 수.\n\n**1명이면 그 사람이 잠기는 순간 복구 경로가 서버 콘솔뿐이다.** 목록은 쪽\n단위라 화면이 세면 틀린다 — 서버가 센다."
+      },
+      "AliasesRequest": {
+        "properties": {
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "title": "Aliases"
+          }
+        },
+        "type": "object",
+        "required": [
+          "aliases"
+        ],
+        "title": "AliasesRequest",
+        "description": "사람이 붙인 별칭을 통째로 — 빈 목록이면 전부 지운다."
       },
       "ApproveRequest": {
         "properties": {
@@ -7354,6 +7435,20 @@
             },
             "type": "object",
             "title": "Ref Labels"
+          },
+          "aliases": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases"
+          },
+          "external_ids": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "External Ids"
           },
           "status": {
             "type": "string",

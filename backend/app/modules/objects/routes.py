@@ -20,6 +20,7 @@ from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.files.models import Attachment
 from app.modules.objects import (
+    aliases,
     bulk,
     conditions,
     graph,
@@ -33,6 +34,7 @@ from app.modules.objects import (
 from app.modules.objects import relations as rel
 from app.modules.objects.models import (
     OBJECT_STATUSES,
+    ObjectAlias,
     ObjectInstance,
     ObjectLink,
     ObjectRelation,
@@ -40,6 +42,7 @@ from app.modules.objects.models import (
     SavedView,
 )
 from app.modules.objects.schemas import (
+    AliasesRequest,
     AttachmentBrief,
     HistoryEntryOut,
     ImportPlanOut,
@@ -145,7 +148,14 @@ def _out(
     type_slug: str,
     workspaces: dict[uuid.UUID, str],
     ref_labels: dict[uuid.UUID, str] | None = None,
+    alias_rows: list[ObjectAlias] | None = None,
 ) -> ObjectOut:
+    names = [one.value for one in (alias_rows or []) if one.kind == aliases.HUMAN]
+    external = {
+        one.kind.split(":", 1)[1]: one.value
+        for one in (alias_rows or [])
+        if one.kind.startswith("source:")
+    }
     return ObjectOut(
         id=row.id,
         type_slug=type_slug,
@@ -154,6 +164,8 @@ def _out(
         description=row.description,
         properties=row.properties or {},
         ref_labels={str(k): v for k, v in (ref_labels or {}).items()},
+        aliases=names,
+        external_ids=external,
         status=row.status,
         owner_workspace_slug=(
             workspaces.get(row.owner_workspace_id) if row.owner_workspace_id else None
@@ -789,8 +801,11 @@ def list_objects(
     found = list(rows)
     workspaces = _workspace_slugs(db)
     labels = _ref_labels(db, properties_of(db, object_type.id), found)
+    names = aliases.of(db, [row.id for row in found])
     return Page(
-        items=[_out(row, object_type.slug, workspaces, labels) for row in found],
+        items=[
+            _out(row, object_type.slug, workspaces, labels, names.get(row.id)) for row in found
+        ],
         total=total,
         limit=capped,
         offset=offset,
@@ -860,7 +875,13 @@ def object_profile(
 
     defs = properties_of(db, object_type.id)
     return ObjectProfileOut(
-        object=_out(row, object_type.slug, _workspace_slugs(db), _ref_labels(db, defs, [row])),
+        object=_out(
+            row,
+            object_type.slug,
+            _workspace_slugs(db),
+            _ref_labels(db, defs, [row]),
+            aliases.of(db, [row.id]).get(row.id),
+        ),
         type_label=object_type.label,
         properties_schema=[PropertyDefOut.model_validate(p) for p in defs],
         attachments=[AttachmentBrief.model_validate(a) for a in attachments],
@@ -995,6 +1016,44 @@ def update_object(
     db.commit()
     db.refresh(row)
     return _out(row, object_type.slug, _workspace_slugs(db))
+
+
+@router.put("/{type_slug}/{object_id}/aliases", response_model=ObjectOut)
+def set_aliases(
+    type_slug: str,
+    object_id: uuid.UUID,
+    payload: AliasesRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ObjectOut:
+    """사람이 붙인 다른 이름을 통째로 바꾼다. **같은 타입의 다른 객체가 쓰는 별칭이면
+    거절한다** — 어느 객체인지 말하며."""
+    object_type = _type(db, type_slug)
+    _not_system(object_type, "별칭을 붙이지")
+    row = _visible(db, user, object_type, object_id)
+    require_owner_edit(
+        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 12)
+    )
+    before, after = aliases.set_human(db, row, object_type, payload.aliases)
+    if before != after:
+        audit.record(
+            db,
+            action="object.update",
+            actor=user,
+            target_table="objects",
+            target_id=row.id,
+            target_label=f"{object_type.slug}:{row.label}",
+            workspace_id=row.owner_workspace_id,
+            changes={"aliases": {"before": before, "after": after}},
+        )
+    db.commit()
+    return _out(
+        row,
+        object_type.slug,
+        _workspace_slugs(db),
+        _ref_labels(db, properties_of(db, object_type.id), [row]),
+        aliases.of(db, [row.id]).get(row.id),
+    )
 
 
 @router.get("/{type_slug}/{object_id}/rollup", response_model=list[RollupOut])

@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-09-12d
+GUIDE_VERSION: 2026-09-12e
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -106,8 +106,12 @@ GUIDE_VERSION: 2026-09-12d
   `key_policy` 가 `required` 인 타입은 `key` 가 있어야 한다.
 - `object_update(type_slug, object_id, properties=)` — **보낸 키만** 병합한다.
   값을 비우려면 그 키에 `null`. 통째로 덮지 않는다.
-- 참조 속성(`data_type: reference`)에는 상대 객체의 **id** 를 넣는다. id 를 모르면
-  `objects_list` 로 먼저 찾는다.
+- 참조 속성(`data_type: object_ref`)에는 상대 객체의 **id** 를 넣는다. id 를 모르면
+  `objects_list` 로 먼저 찾는다 — 찾기는 별칭에도 걸린다.
+- **별칭** — 같은 것을 다르게 부르면(「Ansys」 「앤시스」 「ANSYS Inc.」)
+  `object_update(aliases=[...])` 로 다른 이름을 붙인다. 그 뒤로 파일·참조·찾기가 그 표기로도
+  같은 객체를 찾는다. **같은 것을 새로 만들지 말고 별칭을 붙인다.** 이미 둘이 됐으면 사람이
+  화면에서 「합치기」 — 지는 쪽 이름이 자동으로 별칭이 된다.
 - `object_get` 은 `object` · `properties_schema` · `related`(양방향) 를 함께 준다 —
   화면의 상세와 같은 것이다.
 - `kind_class` 가 `system` 인 타입(부서·계정 등)은 **행이 없다** — 다른 표를 비춘다.
@@ -127,8 +131,9 @@ GUIDE_VERSION: 2026-09-12d
 
 - 같은 `key` 가 이미 있으면 **고친다**(upsert). 없는 키는 안 건드린다.
   `null` 이 비움이다.
-- 참조 속성은 상대의 **식별자(key)**, 없으면 **이름(label)** 으로 적어도 된다.
+- 참조 속성은 상대의 **식별자(key)**, **별칭**, 없으면 **이름(label)** 순으로 풀린다.
   겹치면 거절된다 — 그때는 id 로 적는다.
+- `aliases` 열에 `;` 로 여럿 — 그 객체의 다른 이름을 함께 넣는다(통째로 바꿈).
 - 응답은 행마다 `create` / `update` / `unchanged` / `error`. **한 행이라도 `error`
   면 `apply=true` 여도 아무것도 안 들어간다.** 오류를 고쳐 다시 보낸다.
 - 한 번에 5000행까지. 더 많으면 나눈다.

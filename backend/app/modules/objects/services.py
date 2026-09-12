@@ -13,7 +13,7 @@ from sqlalchemy import Select, Text, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.objects import system
-from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectYear
+from app.modules.objects.models import ObjectAlias, ObjectInstance, ObjectLink, ObjectYear
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.ontology.services import InvalidValue, object_ref_ids
 from app.shared import extensions
@@ -174,6 +174,14 @@ def apply_search(stmt: Select[Any], object_type: ObjectType, term: str) -> Selec
             clauses.append(ObjectInstance.properties[key].astext.ilike(pattern))
     if not clauses:
         return stmt
+    # 별칭에도 걸린다 — 「앤시스」 로 찾아도 「Ansys」 가 나와야 새로 만들지 않는다.
+    clauses.append(
+        ObjectInstance.id.in_(
+            select(ObjectAlias.object_id).where(
+                ObjectAlias.type_id == object_type.id, ObjectAlias.value.ilike(pattern)
+            )
+        )
+    )
     return stmt.where(or_(*clauses))
 
 
