@@ -11709,6 +11709,18 @@
               }
             ],
             "title": "On Home"
+          },
+          "home_position": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Position"
           }
         },
         "type": "object",

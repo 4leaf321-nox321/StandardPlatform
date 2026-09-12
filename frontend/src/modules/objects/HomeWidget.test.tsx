@@ -2,12 +2,14 @@
  * 홈 위젯이 지키는 것 — **축이 있으면 그림, 없으면 수 하나, 깨져도 홈은 선다.**
  */
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 
 const objectApi = vi.hoisted(() => ({ summary: vi.fn() }))
-vi.mock('@/modules/objects/api', () => ({ objectApi }))
+const viewApi = vi.hoisted(() => ({ update: vi.fn() }))
+vi.mock('@/modules/objects/api', () => ({ objectApi, viewApi }))
 vi.mock('@/shared/charts', () => ({
   Chart: ({ title }: { title?: string }) => <div data-testid="chart">{title}</div>,
 }))
@@ -33,7 +35,11 @@ function widget(overrides: Record<string, unknown> = {}) {
       id: 'v1',
       type_slug: 'part',
       name: '등급별',
-      query: { q: '', status: null, conditions: [{ field: 'grade', op: 'eq' as const, value: 'A' }] },
+      query: {
+        q: '',
+        status: null,
+        conditions: [{ field: 'grade', op: 'eq' as const, value: 'A' }],
+      },
       owner_user_id: 'u1',
       owner_label: '나',
       workspace_slug: 'cae',
@@ -47,13 +53,15 @@ function widget(overrides: Record<string, unknown> = {}) {
   }
 }
 
-async function show(one: ReturnType<typeof widget>) {
+async function show(one: ReturnType<typeof widget>, props: Record<string, unknown> = {}) {
   const { HomeWidget } = await import('@/modules/objects/HomeWidget')
+  const onChanged = vi.fn()
   render(
     <MemoryRouter>
-      <HomeWidget widget={one} />
+      <HomeWidget widget={one} onChanged={onChanged} {...props} />
     </MemoryRouter>,
   )
+  return onChanged
 }
 
 describe('홈 위젯', () => {
@@ -82,5 +90,39 @@ describe('홈 위젯', () => {
     await show(widget())
     await waitFor(() => expect(screen.getByText(/지금 셀 수 없습니다/)).toBeInTheDocument())
     expect(screen.getByRole('link', { name: '목록에서 확인' })).toBeInTheDocument()
+  })
+})
+
+describe('홈에서 내리기', () => {
+  it('부서 관리자에게만 메뉴가 보인다', async () => {
+    objectApi.summary.mockResolvedValue(SUMMARY)
+    await show(widget())
+    expect(screen.queryByRole('button', { name: '위젯 메뉴' })).not.toBeInTheDocument()
+
+    cleanup()
+    await show(widget(), { canEdit: true })
+    expect(screen.getByRole('button', { name: '위젯 메뉴' })).toBeInTheDocument()
+  })
+
+  it('내려도 **뷰는 안 지운다** — 거르기까지 잃을 이유가 없다', async () => {
+    objectApi.summary.mockResolvedValue(SUMMARY)
+    viewApi.update.mockResolvedValue({})
+    const onChanged = await show(widget(), { canEdit: true })
+
+    await userEvent.click(screen.getByRole('button', { name: '위젯 메뉴' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: /홈에서 내리기/ }))
+
+    await waitFor(() =>
+      expect(viewApi.update).toHaveBeenCalledWith('part', 'v1', { on_home: false }),
+    )
+    expect(onChanged).toHaveBeenCalled()
+  })
+
+  it('끝에서는 그 방향 단추를 안 보인다', async () => {
+    objectApi.summary.mockResolvedValue(SUMMARY)
+    await show(widget(), { canEdit: true, index: 0, total: 2 })
+    await userEvent.click(screen.getByRole('button', { name: '위젯 메뉴' }))
+    expect(await screen.findByRole('menuitem', { name: /뒤로/ })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: /앞으로/ })).not.toBeInTheDocument()
   })
 })

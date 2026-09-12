@@ -104,8 +104,15 @@ export default function WorkspaceHomePage() {
             )}
           </div>
           <div className="grid gap-4 lg:grid-cols-2">
-            {(widgets.data ?? []).map((one) => (
-              <HomeWidget key={one.view.id} widget={one} />
+            {(widgets.data ?? []).map((one, index) => (
+              <HomeWidget
+                key={one.view.id}
+                widget={one}
+                canEdit={canAdd}
+                index={index}
+                total={(widgets.data ?? []).length}
+                onChanged={() => widgets.reload()}
+              />
             ))}
           </div>
         </section>

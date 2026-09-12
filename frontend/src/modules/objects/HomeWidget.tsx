@@ -8,17 +8,31 @@
  *
  * 홈의 숫자를 보고 다음에 하는 일은 언제나 「그게 뭔데」 다. 거기서 사이드바를 뒤져
  * 타입을 찾고 조건을 다시 걸게 하면, 그 수고 때문에 아무도 홈을 안 쓰게 된다.
+ *
+ * ## 내리는 단추도 여기 있다
+ *
+ * 「이건 좀 치우자」 는 생각은 **홈을 보다가** 온다. 그때 목록 화면으로 가서 그 뷰를
+ * 불러온 뒤 메뉴를 열게 하면, 올리는 것만 쉽고 내리는 것은 어려운 화면이 된다 —
+ * 그러면 홈은 한번 올라간 것들로 곧 지저분해지고, 아무도 안 보게 된다.
  */
 
 import { useEffect, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { Loader2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, Loader2, MoreHorizontal, X } from 'lucide-react'
 
-import { objectApi } from '@/modules/objects/api'
+import { objectApi, viewApi } from '@/modules/objects/api'
 import type { HomeWidget as Widget, Summary } from '@/modules/objects/api'
 import { Chart } from '@/shared/charts'
 import type { ChartKind } from '@/shared/charts'
+import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { TypeIcon } from '@/shared/components/TypeIcon'
+import { Button } from '@/shared/components/ui/button'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/shared/components/ui/dropdown-menu'
 
 /** 이 뷰를 그대로 여는 목록 주소 — 조건까지 실어 보낸다. */
 export function viewHref(widget: Widget): string {
@@ -32,8 +46,32 @@ export function viewHref(widget: Widget): string {
   return `/o/${widget.view.type_slug}?${params.toString()}`
 }
 
-export function HomeWidget({ widget }: { widget: Widget }) {
+interface Props {
+  widget: Widget
+  /** 내리고 옮길 수 있나 — 부서 관리자만. */
+  canEdit?: boolean
+  /** 몇 번째인지와 전부 몇 개인지 — 끝에서는 그 방향 단추를 안 보인다. */
+  index?: number
+  total?: number
+  /** 내리거나 옮긴 뒤. 홈이 다시 읽는다. */
+  onChanged?: () => void
+}
+
+export function HomeWidget({ widget, canEdit = false, index = 0, total = 1, onChanged }: Props) {
   const { view } = widget
+  const [busy, setBusy] = useState(false)
+  const [failedEdit, setFailedEdit] = useState<Error | null>(null)
+
+  function act(run: () => Promise<unknown>) {
+    setBusy(true)
+    setFailedEdit(null)
+    run()
+      .then(() => onChanged?.())
+      .catch((caught: unknown) =>
+        setFailedEdit(caught instanceof Error ? caught : new Error('알 수 없는 오류')),
+      )
+      .finally(() => setBusy(false))
+  }
   const grouped = Boolean(view.summary.group_by)
   const [data, setData] = useState<Summary | null>(null)
   const [loading, setLoading] = useState(true)
@@ -88,7 +126,53 @@ export function HomeWidget({ widget }: { widget: Widget }) {
           {view.name}
         </Link>
         <span className="text-muted-foreground shrink-0 text-xs">{widget.type_label}</span>
+        {canEdit && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="ghost" size="icon" className="size-7" aria-label="위젯 메뉴">
+                <MoreHorizontal className="size-4" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              {index > 0 && (
+                <DropdownMenuItem
+                  disabled={busy}
+                  onSelect={() =>
+                    act(() => viewApi.update(view.type_slug, view.id, { home_position: index - 1 }))
+                  }
+                >
+                  <ChevronUp className="mr-1 size-3.5" />
+                  앞으로
+                </DropdownMenuItem>
+              )}
+              {index < total - 1 && (
+                <DropdownMenuItem
+                  disabled={busy}
+                  onSelect={() =>
+                    act(() => viewApi.update(view.type_slug, view.id, { home_position: index + 1 }))
+                  }
+                >
+                  <ChevronDown className="mr-1 size-3.5" />
+                  뒤로
+                </DropdownMenuItem>
+              )}
+              {/* **뷰는 안 지운다.** 홈에서만 내린다 — 거르기까지 잃을 이유가 없고,
+                  나중에 다시 올릴 수도 있다. */}
+              <DropdownMenuItem
+                disabled={busy}
+                onSelect={() =>
+                  act(() => viewApi.update(view.type_slug, view.id, { on_home: false }))
+                }
+              >
+                <X className="mr-1 size-3.5" />
+                홈에서 내리기
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
+
+      <ErrorNotice error={failedEdit} className="mb-2" />
 
       {loading ? (
         <div className="text-muted-foreground flex h-24 items-center justify-center">

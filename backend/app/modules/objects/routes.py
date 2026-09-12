@@ -534,6 +534,36 @@ def _set_home(db: Session, user: User, row: SavedView, *, on_home: bool) -> None
     row.home_order = (last + 1) if last is not None else 0
 
 
+def _move_home(db: Session, user: User, row: SavedView, position: int) -> None:
+    """홈에서의 자리. **그 부서의 홈 뷰를 통째로 다시 매긴다.**
+
+    두 값만 맞바꾸면 옛 데이터에 같은 자리 값이 여럿일 때 순서가 안 바뀐 것처럼 보인다
+    (부서 트리에서 같은 이유로 같은 선택을 했다).
+    """
+    if row.home_order is None or row.workspace_id is None:
+        raise Conflict(code("OBJECTS", 51), "홈에 올라가 있지 않은 뷰입니다.")
+    require_owner_edit(
+        db, user, row.workspace_id, what="부서 홈", code_value=code("OBJECTS", 50)
+    )
+    siblings = sorted(
+        (
+            one
+            for one in db.scalars(
+                select(SavedView).where(
+                    SavedView.workspace_id == row.workspace_id,
+                    SavedView.home_order.is_not(None),
+                )
+            )
+            if one.id != row.id
+        ),
+        key=lambda one: (one.home_order or 0, one.name),
+    )
+    index = max(0, min(position, len(siblings)))
+    siblings.insert(index, row)
+    for order, one in enumerate(siblings):
+        one.home_order = order
+
+
 @router.get("/home", response_model=list[HomeWidgetOut])
 def home_widgets(
     workspace: str = Query(description="부서 slug"),
@@ -668,6 +698,8 @@ def update_view(
         row.summary = _checked_summary(db, object_type, payload.summary)
     if payload.on_home is not None:
         _set_home(db, user, row, on_home=payload.on_home)
+    if payload.home_position is not None:
+        _move_home(db, user, row, payload.home_position)
     audit.record(
         db,
         action="object.view.update",

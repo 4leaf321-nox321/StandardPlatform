@@ -186,3 +186,54 @@ def test_남의_부서_홈은_빈_목록이다(client: TestClient, admin: Signed
     )
     slug = other.json()["slug"] if other.status_code == 201 else "home-other"
     assert _home(client, member, slug) == []
+
+
+def test_홈에서_순서를_바꾸고_내린다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """내리는 자리는 **홈**이다 — 치우고 싶은 순간은 홈을 보다가 온다."""
+    part = _type_with_grade(client, admin)
+    first = _view(
+        client, manager, part, name="첫째", workspace_slug=manager.workspace, on_home=True
+    )
+    second = _view(
+        client, manager, part, name="둘째", workspace_slug=manager.workspace, on_home=True
+    )
+    assert [one["view"]["name"] for one in _home(client, manager, manager.workspace)] == [
+        "첫째",
+        "둘째",
+    ]
+
+    moved = client.patch(
+        f"/api/objects/{part}/views/{second['id']}",
+        json={"home_position": 0},
+        headers=manager.headers,
+    )
+    assert moved.status_code == 200, moved.text
+    assert [one["view"]["name"] for one in _home(client, manager, manager.workspace)] == [
+        "둘째",
+        "첫째",
+    ]
+
+    client.patch(
+        f"/api/objects/{part}/views/{second['id']}",
+        json={"on_home": False},
+        headers=manager.headers,
+    )
+    left = _home(client, manager, manager.workspace)
+    assert [one["view"]["name"] for one in left] == ["첫째"]
+    # 내려도 뷰는 남는다 — 거르기까지 잃을 이유가 없다.
+    names = [
+        one["name"]
+        for one in client.get(f"/api/objects/{part}/views", headers=manager.headers).json()
+    ]
+    assert "둘째" in names
+
+    # 홈에 없는 것은 자리를 못 옮긴다 — 무엇을 옮기는지가 없다.
+    denied = client.patch(
+        f"/api/objects/{part}/views/{second['id']}",
+        json={"home_position": 0},
+        headers=manager.headers,
+    )
+    assert denied.status_code == 409
+    assert first["home_order"] == 0

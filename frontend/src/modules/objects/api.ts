@@ -302,6 +302,8 @@ export const viewApi = {
       query?: SavedViewQuery
       summary?: SavedViewSummary | null
       on_home?: boolean
+      /** 홈에서 몇 번째 자리로. 서버가 그 부서의 홈 뷰를 통째로 다시 매긴다. */
+      home_position?: number
     },
   ) => api.patch<SavedView>(`/objects/${typeSlug}/views/${id}`, body),
   remove: (typeSlug: string, id: string) => api.delete<void>(`/objects/${typeSlug}/views/${id}`),

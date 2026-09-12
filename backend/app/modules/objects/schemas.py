@@ -362,7 +362,10 @@ class SavedViewPatchRequest(BaseModel):
     query: SavedViewQuery | None = None
     summary: SavedViewSummary | None = None
     on_home: bool | None = None
-    """true 면 부서 홈 맨 끝에 올리고, false 면 내린다. 자리는 `reorder` 가 정한다."""
+    """true 면 부서 홈 맨 끝에 올리고, false 면 내린다."""
+    home_position: int | None = Field(default=None, ge=0)
+    """부서 홈에서 몇 번째 자리로. 서버가 그 부서의 홈 뷰들을 **통째로 다시 매긴다** —
+    화면이 자리를 제 손으로 매겨 여러 번 저장하면 중간 실패가 순서를 뒤섞는다."""
 
 
 class HomeWidgetOut(BaseModel):
