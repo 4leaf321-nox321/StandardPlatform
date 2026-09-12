@@ -5,7 +5,26 @@ import type { Member, Workspace, WorkspaceOption, WorkspaceReference } from '@/s
 
 export type { Member, Workspace, WorkspaceOption, WorkspaceReference }
 
+export interface WorkspaceImportRow {
+  row: number
+  slug: string
+  action: 'create' | 'update' | 'unchanged' | 'skip' | 'error'
+  label: string
+  changes: string[]
+  message: string
+}
+
+export interface WorkspaceImportPlan {
+  applied: boolean
+  rows: WorkspaceImportRow[]
+  errors: string[]
+  counts: Record<'create' | 'update' | 'unchanged' | 'skip' | 'error', number>
+}
+
 export const workspaceApi = {
+  /** 붙여 넣은 표(다른 플랫폼의 내보내기)로 부서를 넣는다 — 계획(apply=false) 또는 적용. */
+  importText: (text: string, apply: boolean) =>
+    api.post<WorkspaceImportPlan>('/workspaces/import', { text, apply }),
   /**
    * 부서 정보를 CSV 로 내려받는다.
    *

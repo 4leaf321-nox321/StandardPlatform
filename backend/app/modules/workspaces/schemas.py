@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -104,3 +105,28 @@ class MemberAddRequest(BaseModel):
 
 class MemberRoleRequest(BaseModel):
     role: str
+
+
+class WorkspaceImportRequest(BaseModel):
+    """붙여 넣은 표(다른 플랫폼의 부서 정보 내보내기) — 행 그대로. `text` 를 주면 서버가
+    표로 읽는다."""
+
+    rows: list[dict[str, Any]] | None = None
+    text: str | None = None
+    apply: bool = False
+
+
+class WorkspaceImportRowOut(BaseModel):
+    row: int
+    slug: str
+    action: str
+    label: str
+    changes: list[str]
+    message: str
+
+
+class WorkspaceImportPlanOut(BaseModel):
+    applied: bool
+    rows: list[WorkspaceImportRowOut]
+    errors: list[str]
+    counts: dict[str, int]

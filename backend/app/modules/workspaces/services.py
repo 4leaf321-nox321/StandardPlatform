@@ -7,7 +7,10 @@
 
 from __future__ import annotations
 
+import re
 import uuid
+from dataclasses import dataclass, field
+from typing import Any
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -15,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 from app.modules.workspaces.schemas import (
+    SLUG_PATTERN,
     MemberOut,
     WorkspaceOption,
     WorkspaceOut,
@@ -24,6 +28,10 @@ from app.shared import audit, extensions, system_sources
 from app.shared.errors import AppError, Conflict, NotFound, code
 from app.shared.permissions import membership_of, workspace_by_slug
 from app.shared.text import clean, compare_key
+
+#: 부서 주소 — 만들기 화면(`schemas.SLUG_PATTERN`)과 **같은 규칙**이어야 한다. 갈리면 붙여
+#: 넣기로는 되는데 화면으로는 안 만들어지는 slug 가 생긴다.
+SLUG_RE = re.compile(SLUG_PATTERN)
 
 ROLES = ("member", "manager")
 
@@ -591,3 +599,299 @@ SYSTEM_SOURCE = system_sources.SystemSource(
     lookup=_system_lookup,
     list_all=_system_list_all,
 )
+
+
+# --- 붙여 넣어 추가 — 다른 플랫폼(ReportArchive 등)의 부서 정보 내보내기를 그대로 ------------
+#
+# 내보내기 CSV 의 열 이름이 그대로 열쇠다(slug·name·parent_slug·status·description·sort_order·
+# restricted). ReportArchive 것에는 kind·external_view_default 같은 열이 더 있는데 모르는 열은
+# **무시한다** — 부서 정보는 정의가 고정돼 있어 「모르는 열 = 오타」 가 아니라 「저쪽에만 있는
+# 열」 이다. 다만 personal(개인 공간)은 부서가 아니니 건너뛴다.
+#
+# 규칙은 객체 파일 가져오기와 같다: 계획 먼저, 전부 아니면 무, 같은 slug 면 고침, 빈 칸은 안
+# 건드림. 상위 부서는 같은 표 안의 것이어도 된다 — 먼저 전부 만들고 뒤에 잇는다.
+
+IMPORT_COLUMNS = (
+    "slug",
+    "name",
+    "parent_slug",
+    "status",
+    "description",
+    "sort_order",
+    "restricted",
+)
+
+
+@dataclass
+class ImportRow:
+    row: int
+    slug: str
+    action: str
+    """create · update · unchanged · skip · error."""
+    label: str = ""
+    changes: list[str] = field(default_factory=list)
+    message: str = ""
+
+
+@dataclass
+class ImportPlan:
+    rows: list[ImportRow] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def counts(self) -> dict[str, int]:
+        out = {"create": 0, "update": 0, "unchanged": 0, "skip": 0, "error": 0}
+        for one in self.rows:
+            out[one.action] = out.get(one.action, 0) + 1
+        return out
+
+    @property
+    def ok(self) -> bool:
+        return not self.errors and self.counts["error"] == 0
+
+
+def _cell(row: dict[str, Any], name: str) -> str | None:
+    """없으면 None(안 건드림), 있으면 다듬은 글자(빈 글자 포함)."""
+    if name not in row or row[name] is None:
+        return None
+    return str(row[name]).strip()
+
+
+def _truthy(text: str) -> bool:
+    return text.strip().lower() in ("true", "1", "yes", "y", "예", "참")
+
+
+def plan_import(db: Session, rows: list[dict[str, Any]]) -> ImportPlan:
+    plan = ImportPlan()
+    existing = {row.slug: row for row in db.scalars(select(Workspace))}
+    seen: dict[str, int] = {}
+    incoming: set[str] = set()
+    for row in rows:
+        slug = (_cell(row, "slug") or "").lower()
+        if slug and SLUG_RE.match(slug):
+            incoming.add(slug)
+    for index, row in enumerate(rows, start=1):
+        kind = (_cell(row, "kind") or "").lower()
+        slug = (_cell(row, "slug") or "").lower()
+        name = _cell(row, "name")
+        if kind == "personal":
+            plan.rows.append(
+                ImportRow(
+                    row=index,
+                    slug=slug,
+                    action="skip",
+                    label=name or slug,
+                    message="개인 공간은 부서가 아니라 건너뜁니다",
+                )
+            )
+            continue
+        if not slug or not SLUG_RE.match(slug):
+            plan.rows.append(
+                ImportRow(
+                    row=index,
+                    slug=slug,
+                    action="error",
+                    label=name or "",
+                    message="slug 는 소문자·숫자·하이픈 2~50자여야 합니다",
+                )
+            )
+            continue
+        if slug in seen:
+            plan.rows.append(
+                ImportRow(
+                    row=index,
+                    slug=slug,
+                    action="error",
+                    label=name or slug,
+                    message=f"같은 slug 가 {seen[slug]}행에도 있습니다",
+                )
+            )
+            continue
+        seen[slug] = index
+        parent = _cell(row, "parent_slug")
+        parent = parent.lower() if parent else parent
+        if parent and parent not in existing and parent not in incoming:
+            plan.rows.append(
+                ImportRow(
+                    row=index,
+                    slug=slug,
+                    action="error",
+                    label=name or slug,
+                    message=f"상위 부서를 찾을 수 없습니다: {parent}",
+                )
+            )
+            continue
+        if parent == slug:
+            plan.rows.append(
+                ImportRow(
+                    row=index,
+                    slug=slug,
+                    action="error",
+                    label=name or slug,
+                    message="자기 자신을 상위로 둘 수 없습니다",
+                )
+            )
+            continue
+        status = _cell(row, "status")
+        if status is not None and status and status.lower() not in ("active", "archived"):
+            plan.rows.append(
+                ImportRow(
+                    row=index,
+                    slug=slug,
+                    action="error",
+                    label=name or slug,
+                    message=f"status 는 active 나 archived 여야 합니다: {status}",
+                )
+            )
+            continue
+        current = existing.get(slug)
+        if current is None:
+            if not name:
+                plan.rows.append(
+                    ImportRow(
+                        row=index,
+                        slug=slug,
+                        action="error",
+                        message="새 부서에는 name 이 있어야 합니다",
+                    )
+                )
+                continue
+            plan.rows.append(ImportRow(row=index, slug=slug, action="create", label=name))
+            continue
+        changes: list[str] = []
+        if name and clean(name) != current.name:
+            changes.append("name")
+        description = _cell(row, "description")
+        if description is not None and clean(description) != (current.description or ""):
+            changes.append("description")
+        if status and (status.lower() == "active") != current.is_active:
+            changes.append("status")
+        current_parent = db.get(Workspace, current.parent_id) if current.parent_id else None
+        if parent is not None and (parent or None) != (
+            current_parent.slug if current_parent else None
+        ):
+            changes.append("parent_slug")
+        restricted = _cell(row, "restricted")
+        if (
+            restricted is not None
+            and restricted != ""
+            and _truthy(restricted) != current.restricted
+        ):
+            changes.append("restricted")
+        plan.rows.append(
+            ImportRow(
+                row=index,
+                slug=slug,
+                action="update" if changes else "unchanged",
+                label=current.name,
+                changes=changes,
+            )
+        )
+    return plan
+
+
+def apply_import(db: Session, rows: list[dict[str, Any]], *, actor: User) -> ImportPlan:
+    """계획을 다시 세우고, 오류가 없을 때만 **한 트랜잭션으로.** 상위는 전부 만든 뒤에
+    잇는다."""
+    plan = plan_import(db, rows)
+    if not plan.ok:
+        return plan
+    by_slug = {row.slug: row for row in db.scalars(select(Workspace))}
+    by_row = {one.row: one for one in plan.rows}
+    # 1) 만들고 고친다 — 상위는 아직 안 잇는다.
+    for index, row in enumerate(rows, start=1):
+        planned = by_row[index]
+        if planned.action in ("skip", "unchanged"):
+            continue
+        slug = planned.slug
+        name = _cell(row, "name")
+        description = _cell(row, "description")
+        status = _cell(row, "status")
+        restricted = _cell(row, "restricted")
+        order = _cell(row, "sort_order")
+        if planned.action == "create":
+            workspace = Workspace(
+                slug=slug,
+                name=clean(name or slug),
+                description=clean(description or ""),
+                is_active=(status or "active").lower() == "active",
+                restricted=_truthy(restricted) if restricted else False,
+                sort_order=int(order) if order and order.lstrip("-").isdigit() else 0,
+            )
+            db.add(workspace)
+            db.flush()
+            by_slug[slug] = workspace
+            audit.record(
+                db,
+                action="workspace.create",
+                actor=actor,
+                target_table="workspaces",
+                target_id=workspace.id,
+                target_label=workspace.name,
+                workspace_id=workspace.id,
+                reason="붙여 넣어 추가",
+            )
+            continue
+        workspace = by_slug[slug]
+        before = {
+            "name": workspace.name,
+            "description": workspace.description,
+            "is_active": workspace.is_active,
+            "restricted": workspace.restricted,
+        }
+        if "name" in planned.changes and name:
+            workspace.name = clean(name)
+        if "description" in planned.changes and description is not None:
+            workspace.description = clean(description)
+        if "status" in planned.changes and status:
+            workspace.is_active = status.lower() == "active"
+        if "restricted" in planned.changes and restricted:
+            workspace.restricted = _truthy(restricted)
+        after = {
+            "name": workspace.name,
+            "description": workspace.description,
+            "is_active": workspace.is_active,
+            "restricted": workspace.restricted,
+        }
+        audit.record(
+            db,
+            action="workspace.update",
+            actor=actor,
+            target_table="workspaces",
+            target_id=workspace.id,
+            target_label=workspace.name,
+            workspace_id=workspace.id,
+            changes=audit.diff(before, after),
+            reason="붙여 넣어 추가",
+        )
+    # 2) 상위를 잇는다 — 같은 표 안의 것이 이제 다 있다.
+    for index, row in enumerate(rows, start=1):
+        planned = by_row[index]
+        if planned.action == "create" or "parent_slug" in planned.changes:
+            parent = _cell(row, "parent_slug")
+            parent = parent.lower() if parent else None
+            workspace = by_slug[planned.slug]
+            workspace.parent_id = by_slug[parent].id if parent else None
+    db.flush()
+    # 3) 순환이 생겼으면 아무것도 안 넣는다 — 트리가 무한히 돈다.
+    for workspace in by_slug.values():
+        seen: set[uuid.UUID] = set()
+        node: Workspace | None = workspace
+        while node is not None:
+            if node.id in seen:
+                db.rollback()
+                plan.errors.append(f"상위 관계가 순환합니다: {workspace.slug}")
+                return plan
+            seen.add(node.id)
+            node = db.get(Workspace, node.parent_id) if node.parent_id else None
+    audit.record(
+        db,
+        action="workspace.import",
+        actor=actor,
+        target_table="workspaces",
+        target_id=None,
+        target_label="붙여 넣어 추가",
+        changes={"rows": len(rows), **plan.counts},
+    )
+    db.commit()
+    return plan

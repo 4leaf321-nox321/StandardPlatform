@@ -9,8 +9,9 @@
  */
 
 import { useState } from 'react'
-import { ChevronDown, ChevronUp, Download, Plus, Trash2 } from 'lucide-react'
+import { ChevronDown, ChevronUp, ClipboardPaste, Download, Plus, Trash2 } from 'lucide-react'
 
+import { WorkspaceImportDialog } from '@/modules/workspaces/WorkspaceImportDialog'
 import { workspaceApi } from '@/modules/workspaces/api'
 import type { Workspace, WorkspaceReference } from '@/modules/workspaces/api'
 import { ApiError } from '@/shared/api/client'
@@ -37,6 +38,7 @@ export default function WorkspacesAdminPage() {
   const [name, setName] = useState('')
   const [parent, setParent] = useState('')
   const [error, setError] = useState<ApiError | Error | null>(null)
+  const [importing, setImporting] = useState(false)
 
   // 삭제 확인 — **누르기 전에 무엇이 딸려 있는지 보여 준다.**
   const [deleting, setDeleting] = useState<Workspace | null>(null)
@@ -69,17 +71,23 @@ export default function WorkspacesAdminPage() {
         title="부서 정보"
         description="조직도를 만들고 고칩니다. 부서를 옮겨도 자료는 하나도 움직이지 않습니다."
         actions={
-          <Button
-            variant="outline"
-            onClick={() =>
-              act(async () => {
-                await workspaceApi.exportCsv()
-              })
-            }
-          >
-            <Download className="size-4" />
-            CSV 내보내기
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="outline" onClick={() => setImporting(true)}>
+              <ClipboardPaste className="size-4" />
+              붙여 넣어 추가
+            </Button>
+            <Button
+              variant="outline"
+              onClick={() =>
+                act(async () => {
+                  await workspaceApi.exportCsv()
+                })
+              }
+            >
+              <Download className="size-4" />
+              CSV 내보내기
+            </Button>
+          </div>
         }
       />
 
@@ -256,6 +264,12 @@ export default function WorkspacesAdminPage() {
         }}
         onClose={() => setDeleting(null)}
       />
+      {importing && (
+        <WorkspaceImportDialog
+          onClose={() => setImporting(false)}
+          onApplied={() => list.reload()}
+        />
+      )}
     </div>
   )
 }

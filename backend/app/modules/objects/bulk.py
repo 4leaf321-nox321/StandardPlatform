@@ -27,7 +27,6 @@ from __future__ import annotations
 
 import csv
 import io
-import json
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
@@ -54,7 +53,7 @@ from app.modules.objects.services import (
 )
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.services import InvalidValue, merge_properties, validate_properties
-from app.shared import audit
+from app.shared import audit, tabular
 from app.shared.errors import AppError, code
 from app.shared.permissions import require_owner_edit, visible_owner_clause
 from app.shared.text import compare_key
@@ -116,33 +115,12 @@ class Plan:
 
 
 def parse_file(name: str, raw: bytes) -> list[dict[str, Any]]:
-    """CSV 나 JSON 을 행 목록으로. **BOM 을 벗긴다** — 엑셀이 붙이는 것이라 안 벗기면
-    첫 열 이름이 `\\ufeffkey` 가 되어 「모르는 열」 로 거절된다."""
-    text = raw.decode("utf-8-sig")
-    if name.lower().endswith(".json"):
-        try:
-            data = json.loads(text)
-        except json.JSONDecodeError as caught:
-            raise InvalidValue(
-                code("OBJECTS", 40), f"JSON 을 읽을 수 없습니다: {caught}"
-            ) from None
-        rows = data.get("rows") if isinstance(data, dict) else data
-        if not isinstance(rows, list) or not all(isinstance(one, dict) for one in rows):
-            raise InvalidValue(
-                code("OBJECTS", 40), 'JSON 은 객체의 배열이거나 {"rows": [...]} 여야 합니다.'
-            )
-        return rows
-    # 구분자를 알아본다 — 엑셀에서 복사해 붙여 넣으면 **탭**으로 온다(사내 DRM 이 저장을
-    # 잠그면 붙여 넣기가 유일한 길이다). 첫 줄에 탭이 있으면 탭, 아니면 쉼표. 세미콜론은
-    # 여러 값의 구분자(`;`)라 구분자로 안 본다.
-    first = text.split("\n", 1)[0]
-    delimiter = "\t" if "\t" in first else ","
-    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
-    out: list[dict[str, Any]] = []
-    for row in reader:
-        # 열 이름의 앞뒤 공백은 사람 눈에 안 보이는 오타다.
-        out.append({(k or "").strip(): v for k, v in row.items() if k is not None})
-    return out
+    """CSV·탭 구분·JSON 을 행 목록으로 — `shared/tabular.py` 가 읽고, 여기서는 오류 코드만
+    붙인다."""
+    try:
+        return tabular.parse_rows(name, raw)
+    except tabular.TabularError as caught:
+        raise InvalidValue(code("OBJECTS", 40), str(caught)) from None
 
 
 # --- 값 읽기 -------------------------------------------------------------------

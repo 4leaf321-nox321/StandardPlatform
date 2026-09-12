@@ -78,8 +78,8 @@ export default function WorkspaceHomePage() {
         <h2 className="text-sm font-medium">이 아래가 도메인 자리입니다</h2>
         <p className="text-muted-foreground mt-1 text-sm">
           각 플랫폼이 자기 요약을 여기 그립니다. 「남은 일」 은 백엔드의{' '}
-          <code className="font-mono text-xs">shared/extensions.py</code> 에 등록하면 위
-          목록에 저절로 끼므로, 이 화면을 고칠 필요가 없습니다.
+          <code className="font-mono text-xs">shared/extensions.py</code> 에 등록하면 위 목록에
+          저절로 끼므로, 이 화면을 고칠 필요가 없습니다.
         </p>
       </section>
     </div>

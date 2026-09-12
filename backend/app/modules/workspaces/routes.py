@@ -22,6 +22,9 @@ from app.modules.workspaces.schemas import (
     MemberOut,
     MemberRoleRequest,
     WorkspaceCreateRequest,
+    WorkspaceImportPlanOut,
+    WorkspaceImportRequest,
+    WorkspaceImportRowOut,
     WorkspaceMoveRequest,
     WorkspaceOption,
     WorkspaceOut,
@@ -29,8 +32,9 @@ from app.modules.workspaces.schemas import (
     WorkspaceReorderRequest,
     WorkspaceUpdateRequest,
 )
+from app.shared import tabular
 from app.shared.auth import current_user, require_system_admin
-from app.shared.errors import Forbidden, code
+from app.shared.errors import Conflict, Forbidden, code
 from app.shared.permissions import require_manager, require_member, workspace_by_slug
 
 router = APIRouter(prefix="/workspaces", tags=["workspaces"])
@@ -53,6 +57,52 @@ def list_workspaces(
             code("WORKSPACES", 13), "전체 부서 목록은 시스템 관리자만 볼 수 있습니다."
         )
     return services.list_for(db, user, all_workspaces=all_workspaces)
+
+
+@router.post("/import", response_model=WorkspaceImportPlanOut)
+def import_workspaces(
+    payload: WorkspaceImportRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> WorkspaceImportPlanOut:
+    """붙여 넣은 부서 정보를 넣는다 — ReportArchive 같은 다른 플랫폼의 내보내기를 그대로.
+
+    `apply=false` 면 **계획만**: 행마다 새로/고침/그대로/건너뜀/오류. 오류가 하나라도 있으면
+    아무것도 안 넣는다. 같은 slug 면 고치고, 상위는 같은 표 안의 것이어도 된다. 개인 공간
+    (`kind=personal`)은 건너뛴다. 멤버·관리자 열은 안 읽는다 — 사람은 이쪽 계정으로 따로
+    넣는다.
+    """
+    rows = payload.rows
+    if rows is None:
+        try:
+            rows = tabular.parse_rows("pasted.csv", (payload.text or "").encode("utf-8"))
+        except tabular.TabularError as caught:
+            raise Conflict(code("WORKSPACES", 30), str(caught)) from None
+    if not rows:
+        raise Conflict(code("WORKSPACES", 30), "행이 없습니다.")
+    if len(rows) > 2000:
+        raise Conflict(code("WORKSPACES", 30), "한 번에 2,000행까지입니다.")
+    plan = (
+        services.apply_import(db, rows, actor=user)
+        if payload.apply
+        else services.plan_import(db, rows)
+    )
+    return WorkspaceImportPlanOut(
+        applied=payload.apply and plan.ok,
+        rows=[
+            WorkspaceImportRowOut(
+                row=one.row,
+                slug=one.slug,
+                action=one.action,
+                label=one.label,
+                changes=one.changes,
+                message=one.message,
+            )
+            for one in plan.rows
+        ],
+        errors=plan.errors,
+        counts=plan.counts,
+    )
 
 
 @router.get("/export.csv", include_in_schema=False)
