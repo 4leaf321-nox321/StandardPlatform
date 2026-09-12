@@ -17,6 +17,7 @@ vi.mock('@/shared/charts', () => ({
 const SUMMARY = {
   group_field: 'properties.grade',
   group_label: '등급',
+  order: 'desc',
   split_field: '',
   split_label: '',
   splits: [],
@@ -54,6 +55,7 @@ function widget(overrides: Record<string, unknown> = {}) {
         metric_field: null,
         chart: 'bar',
         stacked: false,
+        order: 'desc',
       },
       home_order: 0,
       can_edit: true,

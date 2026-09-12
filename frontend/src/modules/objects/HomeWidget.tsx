@@ -101,6 +101,7 @@ export function HomeWidget({ widget, canEdit = false, index = 0, total = 1, onCh
           splitBy: view.summary.group_by ? view.summary.split_by || null : null,
           metric: view.summary.group_by ? view.summary.metric : 'count',
           metricField: view.summary.group_by ? view.summary.metric_field : null,
+          order: view.summary.order || 'desc',
         },
       )
       .then((found) => {
@@ -124,6 +125,7 @@ export function HomeWidget({ widget, canEdit = false, index = 0, total = 1, onCh
     view.summary.split_by,
     view.summary.metric,
     view.summary.metric_field,
+    view.summary.order,
     view.query.q,
     view.query.conditions,
   ])

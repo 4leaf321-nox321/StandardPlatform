@@ -67,6 +67,7 @@ vi.mock('@/shared/charts', () => ({
 const BASE = {
   group_field: 'properties.grade',
   group_label: '등급',
+  order: 'desc',
   split_field: '',
   split_label: '',
   splits: [],
@@ -118,7 +119,7 @@ describe('묶어 보기', () => {
     expect(objectApi.summary).toHaveBeenCalledWith(
       'part',
       { q: '볼트' },
-      { groupBy: 'status', splitBy: null, metric: 'count', metricField: null },
+      { groupBy: 'status', splitBy: null, metric: 'count', metricField: null, order: 'desc' },
     )
     // **빈 값을 숨기면 막대의 합이 전체와 안 맞고, 그 차이는 화면 어디에도 안 적힌다.**
     expect(charts.rows.map((one) => one.name)).toEqual(['A', 'B', '(비어 있음)'])
@@ -254,5 +255,19 @@ describe('두 축으로 쪼개기', () => {
     const { onSettings } = await panel(BASE)
     await userEvent.click(screen.getByRole('button', { name: '히트맵' }))
     expect(onSettings).toHaveBeenCalledWith(expect.objectContaining({ chart: 'heatmap' }))
+  })
+})
+
+describe('개별 순위', () => {
+  it('이름으로 묶고 건수를 세면 그것이 순위가 아님을 말한다', async () => {
+    // 막대가 전부 1 인 그림을 주고 아무 말도 안 하면, 사람은 기능이 고장난 줄 안다.
+    await panel({ ...BASE, group_field: 'label', group_label: '이름' })
+    expect(screen.getByText(/숫자 칸의 합·평균으로/)).toBeInTheDocument()
+  })
+
+  it('차례를 뒤집으면 「가장 낮은 것」 을 찾는다', async () => {
+    const { onSettings } = await panel(BASE)
+    await userEvent.click(screen.getByRole('button', { name: '차례 바꾸기' }))
+    expect(onSettings).toHaveBeenCalledWith(expect.objectContaining({ order: 'asc' }))
   })
 })

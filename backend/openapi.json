@@ -4042,6 +4042,18 @@
             "description": "count·sum·avg·min·max"
           },
           {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "desc(많은 것부터)·asc(적은 것부터)",
+              "default": "desc",
+              "title": "Order"
+            },
+            "description": "desc(많은 것부터)·asc(적은 것부터)"
+          },
+          {
             "name": "metric_field",
             "in": "query",
             "required": false,
@@ -11861,6 +11873,11 @@
             "type": "boolean",
             "title": "Stacked",
             "default": false
+          },
+          "order": {
+            "type": "string",
+            "title": "Order",
+            "default": "desc"
           }
         },
         "type": "object",
@@ -12167,6 +12184,10 @@
             "type": "string",
             "title": "Group Label"
           },
+          "order": {
+            "type": "string",
+            "title": "Order"
+          },
           "split_field": {
             "type": "string",
             "title": "Split Field"
@@ -12243,6 +12264,7 @@
         "required": [
           "group_field",
           "group_label",
+          "order",
           "split_field",
           "split_label",
           "splits",

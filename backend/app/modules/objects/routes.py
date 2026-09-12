@@ -268,6 +268,7 @@ def summary(
         default=None, description="두 번째 축 — 같은 규칙. 주면 계열이 여럿이 된다"
     ),
     metric: str = Query(default="count", description="count·sum·avg·min·max"),
+    order: str = Query(default="desc", description="desc(많은 것부터)·asc(적은 것부터)"),
     metric_field: str | None = Query(default=None, description="합·평균을 낼 숫자 칸"),
     q: str | None = Query(default=None),
     status: str | None = Query(default=None),
@@ -303,11 +304,13 @@ def summary(
         split_by=split_by,
         metric=metric,
         metric_field=metric_field,
+        order=order,
     )
     defs = properties_of(db, object_type.id)
     return SummaryOut(
         group_field=found.group_field,
         group_label=found.group_label,
+        order=found.order,
         split_field=found.split_field,
         split_label=found.split_label,
         splits=found.splits,
@@ -333,7 +336,7 @@ def summary(
         other_count=found.other_count,
         group_options=[
             GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
-            for one in summary_service.group_options(defs)
+            for one in summary_service.group_options(object_type, defs)
         ],
         metric_options=[
             GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
@@ -520,6 +523,11 @@ def _checked_summary(
         return {}
     defs = properties_of(db, object_type.id)
     summary_service.check_group(defs, asked.group_by)
+    if asked.order not in summary_service.ORDERS:
+        raise Conflict(
+            code("OBJECTS", 52),
+            f"차례는 {', '.join(summary_service.ORDERS)} 중 하나여야 합니다: {asked.order}",
+        )
     if asked.split_by:
         summary_service.check_group(defs, asked.split_by)
     summary_service.check_metric(defs, asked.metric, asked.metric_field)

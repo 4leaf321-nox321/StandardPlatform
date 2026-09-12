@@ -24,6 +24,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import {
+  ArrowUpDown,
   BarChart3,
   ChartArea,
   ChartLine,
@@ -84,6 +85,8 @@ export interface SummarySettings {
   metricField: string | null
   chart: ChartKind | 'heatmap'
   stacked: boolean
+  /** desc(많은 것부터) · asc(적은 것부터). 「가장 낮은 것」 을 찾는 물음이 따로 있다. */
+  order: string
 }
 
 export const DEFAULT_SUMMARY: SummarySettings = {
@@ -93,6 +96,7 @@ export const DEFAULT_SUMMARY: SummarySettings = {
   metricField: null,
   chart: 'bar',
   stacked: false,
+  order: 'desc',
 }
 
 /** 「쪼개지 않음」. 빈 문자열은 Select 가 「고른 것 없음」 으로 보고 자리표시자로 돌아간다. */
@@ -143,6 +147,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
         splitBy: settings.splitBy || null,
         metric,
         metricField: metric === 'count' ? null : metricField,
+        order: settings.order,
       })
       .then((found) => {
         if (cancelled) return
@@ -158,7 +163,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
     return () => {
       cancelled = true
     }
-  }, [typeSlug, signature, groupBy, settings.splitBy, metric, metricField])
+  }, [typeSlug, signature, groupBy, settings.splitBy, metric, metricField, settings.order])
 
   const numbers = data?.metric_options ?? []
   /**
@@ -293,6 +298,19 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
           ))}
         </div>
 
+        {/* 「가장 낮은 것」 을 찾는 물음이 따로 있다 — 점수가 제일 낮은 공급사, 불량이
+            제일 적은 공정. 그때마다 데이터를 거꾸로 넣게 할 수는 없다. */}
+        <Button
+          variant="outline"
+          size="sm"
+          title={settings.order === 'desc' ? '많은 것부터' : '적은 것부터'}
+          aria-label="차례 바꾸기"
+          onClick={() => patch({ order: settings.order === 'desc' ? 'asc' : 'desc' })}
+        >
+          <ArrowUpDown className="mr-1 size-4" />
+          {settings.order === 'desc' ? '많은 것부터' : '적은 것부터'}
+        </Button>
+
         {/* 쌓기는 **쪼갰을 때만** 뜻이 있다. 계열이 하나면 쌓아도 같은 그림이다. */}
         {settings.splitBy && (kind === 'bar' || kind === 'area') && (
           <Button
@@ -345,6 +363,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
                   metric_field: settings.metricField,
                   chart: settings.chart,
                   stacked: settings.stacked,
+                  order: settings.order,
                 }
               : null
           }
@@ -407,6 +426,13 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
             {canFilter && kind !== 'heatmap' && ' · 막대를 누르면 그것만 걸러집니다'}
             {kind === 'heatmap' && data.splits.length === 0 && (
               <> · 히트맵은 두 축이 필요합니다 — 「쪼갤 축」 을 고르세요</>
+            )}
+            {data.group_field === 'label' && data.metric === 'count' && (
+              <>
+                {' '}
+                · 이름으로 묶고 건수를 세면 대개 전부 1 입니다 — 숫자 칸의 합·평균으로 바꾸면 순위가
+                됩니다
+              </>
             )}
             {data.other_splits > 0 && (
               <> · 쪼갠 값 {data.other_splits}가지는 빠졌습니다(색이 겹쳐 못 읽습니다)</>

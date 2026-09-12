@@ -327,6 +327,8 @@ class SavedViewSummary(BaseModel):
 
     stacked: bool = False
     """막대를 쌓을지. 여럿을 나란히 두면 「전체가 얼마인지」 를 못 읽는 물음이 있다."""
+    order: str = "desc"
+    """desc(많은 것부터) · asc(적은 것부터). 적은 것부터는 「가장 낮은 것」 을 찾을 때 쓴다."""
 
 
 class SavedViewOut(BaseModel):
@@ -442,6 +444,7 @@ class SummaryOut(BaseModel):
 
     group_field: str
     group_label: str
+    order: str
     split_field: str
     split_label: str
     splits: list[str]

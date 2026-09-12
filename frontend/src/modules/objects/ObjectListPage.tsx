@@ -202,6 +202,7 @@ export default function ObjectListPage() {
         metricField: view.summary.metric_field,
         chart: (view.summary.chart as SummarySettings['chart']) || 'bar',
         stacked: Boolean(view.summary.stacked),
+        order: view.summary.order || 'desc',
       })
       setGrouping(true)
     }
@@ -495,6 +496,7 @@ export default function ObjectListPage() {
                       metric_field: summary.metricField,
                       chart: summary.chart,
                       stacked: summary.stacked,
+                      order: summary.order,
                     }
                   : null
               }

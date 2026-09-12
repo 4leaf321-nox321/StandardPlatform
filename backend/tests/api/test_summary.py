@@ -261,3 +261,61 @@ def test_쪼갤_수_없는_축은_저장이_아니라_여기서도_막는다(
         headers=admin.headers,
     )
     assert denied.status_code == 422
+
+
+def test_이름으로_묶으면_개별_순위가_된다(client: TestClient, admin: Signed) -> None:
+    """**개별 순위가 가장 자주 보는 그림이다.** 「그룹이 행 수만큼」 이라고 막아 두면
+    「점수 높은 공급사 열 곳」 을 그릴 방법이 아예 없다 — 상한과 차례가 그것을 순위로
+    만든다."""
+    part = _grid(client, admin)
+    found = _summary(
+        client,
+        admin,
+        part,
+        group_by="label",
+        metric="sum",
+        metric_field="properties.score",
+    )
+    assert found["group_label"] == "이름"
+    assert [one["label"] for one in found["buckets"][:2]] == ["공급사4", "공급사3"]
+    assert found["buckets"][0]["value"] == 40
+
+    # 적은 것부터 — 「가장 낮은 것」 을 찾는 물음이 따로 있다.
+    lowest = _summary(
+        client,
+        admin,
+        part,
+        group_by="label",
+        metric="sum",
+        metric_field="properties.score",
+        order="asc",
+    )
+    assert lowest["order"] == "asc"
+    assert lowest["buckets"][0]["label"] == "공급사1"
+
+
+def test_식별자를_안_쓰는_타입에는_그_축이_안_뜬다(client: TestClient, admin: Signed) -> None:
+    """고를 수 있다고 보여 주고 나서 빈 그림을 주지 않는다."""
+    none_key = _make_type(client, admin, label="메모", key_policy="none")
+    fields = {
+        one["field"]
+        for one in _summary(client, admin, none_key, group_by="label")["group_options"]
+    }
+    assert "label" in fields and "key" not in fields
+
+    with_key = _make_type(client, admin, label="부품", key_policy="required")
+    fields = {
+        one["field"]
+        for one in _summary(client, admin, with_key, group_by="label")["group_options"]
+    }
+    assert "key" in fields
+
+
+def test_모르는_차례는_막는다(client: TestClient, admin: Signed) -> None:
+    part = _grid(client, admin)
+    denied = client.get(
+        f"/api/objects/{part}/summary",
+        params={"group_by": "label", "order": "제일 큰 것"},
+        headers=admin.headers,
+    )
+    assert denied.status_code == 422

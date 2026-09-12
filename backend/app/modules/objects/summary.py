@@ -51,7 +51,13 @@ METRIC_LABELS = {
 }
 
 #: 속성이 아니라 객체 자신이 가진 축.
+#:
+#: **이름·식별자도 축이다.** 그룹이 행 수만큼 나온다는 이유로 막아 두면 「점수가 높은
+#: 부품 열 개」 같은 **개별 순위** 그림이 아예 안 나온다 — 그런데 사람이 실제로 자주
+#: 보는 것이 그것이다. 상한(`MAX_BUCKETS`)과 정렬이 이미 있으니 그대로 순위가 된다.
 FIXED_FIELDS = {
+    "label": "이름",
+    "key": "식별자",
     "status": "상태",
     "workspace": "소유 부서",
     "created_year": "만든 해",
@@ -65,6 +71,10 @@ BY_YEAR = ("date", "datetime")
 #: 저장된 뷰가 담을 수 있는 그림 모양. 앞의 넷은 `shared/charts` 의 `Chart`,
 #: `heatmap` 은 plotly(`LazyPlot`)가 그린다 — **두 축일 때만 뜻이 있다.**
 CHART_KINDS = ("bar", "line", "area", "pie", "heatmap")
+
+#: 차례. 많은 것부터가 기본이고, 적은 것부터는 「가장 낮은 것」 을 찾을 때 쓴다
+#: (불량률이 가장 낮은 공정, 점수가 가장 낮은 공급사).
+ORDERS = ("desc", "asc")
 
 #: 쪼개기(두 번째 축)에서 돌려줄 값의 수. 이보다 많으면 색이 겹쳐 못 읽는다 —
 #: 여덟 색을 돌려 쓰므로 열둘이면 이미 같은 색이 두 번 나온다.
@@ -113,6 +123,7 @@ class Summary:
     metric_label: str
     total: int
     """거르기를 통과한 **전체 행 수.** 막대의 합과 다르면 「그 밖에」 가 그 차이다."""
+    order: str = "desc"
     split_field: str = ""
     split_label: str = ""
     splits: list[str] = field(default_factory=list)
@@ -137,10 +148,13 @@ class GroupOption:
     """fixed 이거나 속성의 data_type."""
 
 
-def group_options(defs: list[PropertyDef]) -> list[GroupOption]:
+def group_options(object_type: ObjectType, defs: list[PropertyDef]) -> list[GroupOption]:
     out = [
         GroupOption(field=key, label=label, kind="fixed")
         for key, label in FIXED_FIELDS.items()
+        # 식별자를 안 쓰는 타입에서는 그 축이 「(비어 있음)」 한 칸이 된다 — 고를 수
+        # 있다고 보여 주고 나서 빈 그림을 주지 않는다.
+        if not (key == "key" and object_type.key_policy == "none")
     ]
     for one in defs:
         # 여러 값을 담는 칸은 아직 안 묶는다 — JSONB 배열을 펼쳐 세야 하고, 그러면
@@ -179,6 +193,10 @@ def _group_expr(defs: list[PropertyDef], field_name: str) -> tuple[Any, str, str
     """(SQL 식, 보여 줄 이름, 종류). 식은 **글자**를 내놓는다 — 그래야 한 자리에서
     상태·부서·속성을 같은 규칙으로 다룬다."""
     if field_name in FIXED_FIELDS:
+        if field_name == "label":
+            return ObjectInstance.label, FIXED_FIELDS[field_name], "plain"
+        if field_name == "key":
+            return ObjectInstance.key, FIXED_FIELDS[field_name], "plain"
         if field_name == "status":
             return ObjectInstance.status, FIXED_FIELDS[field_name], "status"
         if field_name == "workspace":
@@ -294,6 +312,7 @@ def summarize(
     split_by: str | None = None,
     metric: str = "count",
     metric_field: str | None = None,
+    order: str = "desc",
 ) -> Summary:
     """목록과 **같은 거르기** 위에서 묶어 센다. `split_by` 를 주면 두 축으로 쪼갠다.
 
@@ -305,6 +324,12 @@ def summarize(
         raise AppError(
             code("OBJECTS", 46),
             f"세는 방법은 {', '.join(METRICS)} 중 하나여야 합니다: {metric}",
+            status=422,
+        )
+    if order not in ORDERS:
+        raise AppError(
+            code("OBJECTS", 52),
+            f"차례는 {', '.join(ORDERS)} 중 하나여야 합니다: {order}",
             status=422,
         )
     defs = properties_of(db, object_type.id)
@@ -323,8 +348,11 @@ def summarize(
     distinct = (
         db.scalar(select(func.count()).select_from(grouped.order_by(None).subquery())) or 0
     )
-    order = (counted if value_expr is None else columns[-1]).desc()
-    rows = list(db.execute(grouped.order_by(nulls_last(order), key_expr).limit(MAX_BUCKETS)))
+    measured = counted if value_expr is None else columns[-1]
+    ordering = measured.asc() if order == "asc" else measured.desc()
+    rows = list(
+        db.execute(grouped.order_by(nulls_last(ordering), key_expr).limit(MAX_BUCKETS))
+    )
 
     keys = [str(row.k) for row in rows if row.k is not None]
     names = _labels(db, kind, keys, defs, group_by)
@@ -357,6 +385,7 @@ def summarize(
             value_expr=value_expr,
         )
     return Summary(
+        order=order,
         split_field=split_by or "",
         split_label=split_label,
         splits=splits,

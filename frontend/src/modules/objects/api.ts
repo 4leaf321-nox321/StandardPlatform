@@ -179,6 +179,7 @@ export interface SavedViewSummary {
   metric_field: string | null
   chart: string
   stacked: boolean
+  order: string
 }
 
 export interface SavedView {
@@ -342,6 +343,8 @@ export interface GroupOption {
 export interface Summary {
   group_field: string
   group_label: string
+  /** desc(많은 것부터) · asc(적은 것부터). */
+  order: string
   split_field: string
   split_label: string
   /** 계열의 **차례.** 칸마다 나오는 대로 만들면 첫 칸에 없던 값이 뒤에서 튀어나와 색이 밀린다. */
@@ -409,6 +412,7 @@ export const objectApi = {
       splitBy?: string | null
       metric?: string
       metricField?: string | null
+      order?: string
     },
   ) => {
     const params = new URLSearchParams(
@@ -416,6 +420,7 @@ export const objectApi = {
     )
     params.set('group_by', options.groupBy)
     if (options.splitBy) params.set('split_by', options.splitBy)
+    if (options.order) params.set('order', options.order)
     if (options.metric) params.set('metric', options.metric)
     if (options.metricField) params.set('metric_field', options.metricField)
     return api.get<Summary>(`/objects/${typeSlug}/summary?${params.toString()}`)
