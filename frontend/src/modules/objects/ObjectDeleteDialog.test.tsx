@@ -71,12 +71,21 @@ async function mount() {
 }
 
 describe('지우기 창', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    // 합치기 후보 — 창이 열리면 늘 찾는다. **값 없는 가짜로 두면** `undefined.then` 이 되어,
+    // 시험은 다 통과하는데 처리 안 된 오류 하나가 실행 전체를 실패로 만든다(v0.1.1 릴리스).
+    objectApi.list.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
+  })
 
   it('걸린 것이 없으면 바로 지운다', async () => {
     objectApi.references.mockResolvedValue(NONE)
     objectApi.remove.mockResolvedValue(undefined)
     const onDone = await mount()
+    // **합치기 후보는 열리자마자 200ms 뒤에 찾는다**(`useObjectOptions`). 시험이 그보다 빨리
+    // 끝나면 가짜 목록이 한 번도 안 불리고, 느린 CI 에서만 불려 터진다 — 그 자리를 여기서
+    // 늘 밟게 한다.
+    await new Promise((resolve) => setTimeout(resolve, 300))
     await waitFor(() =>
       expect(screen.getByText('이 객체를 가리키는 것이 없습니다.')).toBeInTheDocument(),
     )
