@@ -36,10 +36,12 @@ from app.modules.objects import routes as objects_routes
 from app.modules.objects import services as objects_services
 from app.modules.ontology import routes as ontology_routes
 from app.modules.server import routes as server_routes
+from app.modules.webhooks import routes as webhooks_routes
+from app.modules.webhooks import services as webhooks_services
 from app.modules.workspaces import routes as workspaces_routes
 from app.modules.workspaces import services as workspaces_services
 from app.schema_version import warn_if_behind
-from app.shared import extensions, ops, scopes, system_sources
+from app.shared import events, extensions, ops, scopes, system_sources
 from app.shared.access_log import AccessLogMiddleware
 from app.shared.errors import NotFound, code, register_error_handlers
 from app.shared.request_context import RequestIdMiddleware
@@ -63,6 +65,7 @@ def _api_router() -> APIRouter:
     router.include_router(accounts_routes.router)
     router.include_router(workspaces_routes.router)
     router.include_router(notices_routes.router)
+    router.include_router(webhooks_routes.router)
     router.include_router(notifications_routes.router)
     router.include_router(files_routes.router)
     router.include_router(audit_routes.router)
@@ -108,6 +111,10 @@ def _register_extensions() -> None:
     # 스키마의 `system_sources` 가 여기서 나온다. 승격한 전용 표도 여기 더한다.
     system_sources.register_system_source(workspaces_services.SYSTEM_SOURCE)
     system_sources.register_system_source(accounts_services.SYSTEM_SOURCE)
+
+    # 변경 이벤트(감사 기록이 커밋된 뒤)를 웹훅이 듣는다.
+    events.register_listener(webhooks_services.on_events)
+    extensions.register_stats(webhooks_services.stats)
 
     # **기계 자격으로 온톨로지를 채우는 길**(3-d). 안 열면 PAT 로는 못 고친다 —
     # 기본이 「막힘」 이고, 그것이 맞는 기본값이다(shared/scopes.py).

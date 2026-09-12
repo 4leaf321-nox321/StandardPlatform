@@ -33,6 +33,7 @@ from app.modules.ontology.models import (
     PropertyDef,
     RelationType,
 )
+from app.modules.webhooks.models import Webhook, WebhookDelivery
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 
 __all__ = [
@@ -56,6 +57,8 @@ __all__ = [
     "RelationType",
     "SavedView",
     "User",
+    "Webhook",
+    "WebhookDelivery",
     "Workspace",
     "WorkspaceMember",
 ]

@@ -24,12 +24,14 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.audit.models import AuditEntry
+from app.shared import events
 from app.shared.request_context import (
     get_actor_client,
     get_actor_token,
@@ -115,4 +117,22 @@ def record(
         request_id=get_request_id(),
     )
     db.add(entry)
+    # 커밋되면 바깥(웹훅)에 알린다 — 감사가 곧 「알릴 만한 변경」 의 정의다.
+    events.stage(
+        db,
+        events.ChangeEvent(
+            action=action,
+            target_table=target_table,
+            target_id=target_id,
+            target_label=entry.target_label,
+            workspace_id=workspace_id,
+            actor_label=entry.actor_label,
+            actor_client=entry.actor_client,
+            actor_token=entry.actor_token,
+            changes=entry.changes,
+            reason=reason,
+            request_id=entry.request_id,
+            at=datetime.now(UTC),
+        ),
+    )
     return entry

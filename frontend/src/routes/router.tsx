@@ -37,13 +37,12 @@ const QualityPage = lazy(() => import('@/modules/objects/QualityPage'))
 const OntologyLayout = lazy(() => import('@/modules/ontology/OntologyLayout'))
 const OntologyGroupsPage = lazy(() => import('@/modules/ontology/OntologyGroupsPage'))
 const OntologyTypesPage = lazy(() => import('@/modules/ontology/OntologyTypesPage'))
-const OntologyRelationsPage = lazy(
-  () => import('@/modules/ontology/OntologyRelationsPage'),
-)
+const OntologyRelationsPage = lazy(() => import('@/modules/ontology/OntologyRelationsPage'))
 const OntologyImportPage = lazy(() => import('@/modules/ontology/OntologyImportPage'))
 const NotificationsPage = lazy(() => import('@/modules/notifications/NotificationsPage'))
 const ProfilePage = lazy(() => import('@/modules/auth/ProfilePage'))
 const ServerPage = lazy(() => import('@/modules/server/ServerPage'))
+const WebhooksPage = lazy(() => import('@/modules/webhooks/WebhooksPage'))
 const SignupPage = lazy(() => import('@/modules/auth/SignupPage'))
 const WorkspaceHomePage = lazy(() => import('@/modules/workspaces/WorkspaceHomePage'))
 const WorkspacesAdminPage = lazy(() => import('@/modules/workspaces/WorkspacesAdminPage'))
@@ -55,9 +54,7 @@ const WorkspacesAdminPage = lazy(() => import('@/modules/workspaces/WorkspacesAd
  */
 const stubs = pendingItems().map((item) => ({
   path: item.to!.replace(/^\//, ''),
-  element: (
-    <Placeholder title={item.label} phase={item.phase ?? '—'} description={item.summary} />
-  ),
+  element: <Placeholder title={item.label} phase={item.phase ?? '—'} description={item.summary} />,
 }))
 
 /**
@@ -124,6 +121,7 @@ export const router = createBrowserRouter([
           },
           { path: 'admin/workspaces', element: <WorkspacesAdminPage /> },
           { path: 'admin/server', element: <ServerPage /> },
+          { path: 'admin/webhooks', element: <WebhooksPage /> },
 
           // 부서 스코프
           {

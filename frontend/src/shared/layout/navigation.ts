@@ -25,6 +25,7 @@ import {
   UserCog,
   Users,
   Waypoints,
+  Webhook,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
@@ -164,6 +165,8 @@ export const NAV_GROUPS: NavGroup[] = [
         audience: 'system_admin',
       },
       { label: '서버', icon: Server, to: '/admin/server', audience: 'system_admin' },
+      // 바뀐 것을 바깥에 알리는 자리 — 감사 기록에 남는 변경이 곧 이벤트다.
+      { label: '웹훅', icon: Webhook, to: '/admin/webhooks', audience: 'system_admin' },
     ],
   },
 ]
@@ -223,10 +226,12 @@ export function visibleGroups(
   },
   dynamic: DynamicGroup[] = [],
 ): NavGroup[] {
-  return mergeDynamic(NAV_GROUPS, dynamic).map((group) => ({
-    ...group,
-    items: group.items.filter((item) => canSee(item.audience, viewer)),
-  })).filter((group) => canSee(group.audience, viewer) && group.items.length > 0)
+  return mergeDynamic(NAV_GROUPS, dynamic)
+    .map((group) => ({
+      ...group,
+      items: group.items.filter((item) => canSee(item.audience, viewer)),
+    }))
+    .filter((group) => canSee(group.audience, viewer) && group.items.length > 0)
 }
 
 /** 아직 화면이 없는 항목들. 라우터가 이것으로 stub 경로를 만든다 — **사이드바가
