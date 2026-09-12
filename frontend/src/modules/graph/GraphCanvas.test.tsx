@@ -79,3 +79,55 @@ describe('그래프 캔버스', () => {
     expect(box.className).toContain('h-[360px]!')
   })
 })
+
+describe('전체화면과 관계 이름', () => {
+  it('브라우저 밖까지 나가려 한다 — 막히면 안에서라도 넓어진다', async () => {
+    // `fixed inset-0` 은 주소창과 탭을 못 덮는다. 그래프는 넓을수록 읽히는 그림이라
+    // 그 차이가 크다.
+    const request = vi.fn().mockResolvedValue(undefined)
+    Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', {
+      value: request,
+      configurable: true,
+    })
+    const box = await draw()
+    await userEvent.click(await screen.findByRole('button', { name: '넓게 보기' }))
+    expect(request).toHaveBeenCalled()
+    // 브라우저가 거절해도 화면 안에서는 넓어진다 — 아무 일도 안 일어나는 것이 가장 나쁘다.
+    expect(box.className).toContain('fixed')
+  })
+
+  it('관계 이름을 켜고 끈다', async () => {
+    // 「저 선이 무슨 관계지」 는 그림을 보다가 나오는 물음이다. 정의 화면으로 가서
+    // 확인하게 하면 그 물음은 대개 포기된다.
+    await draw()
+    const button = await screen.findByRole('button', { name: '관계 이름 보기' })
+    expect(button).toHaveAttribute('aria-pressed', 'false')
+    await userEvent.click(button)
+    expect(await screen.findByRole('button', { name: '관계 이름 숨기기' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+  })
+
+  it('호스트가 켜 둔 채로 시작할 수 있다 — 구조 그림이 그렇다', async () => {
+    await draw({ linkLabels: true })
+    expect(await screen.findByRole('button', { name: '관계 이름 숨기기' })).toBeInTheDocument()
+  })
+})
+
+describe('나갈 길', () => {
+  it('전체화면이 막혀도 축소가 먹는다 — 갇히지 않는다', async () => {
+    // `document.fullscreenElement` 로만 판단하면, 거절당해 `fixed` 로만 넓어진 경우
+    // 그 값이 비어 있어 「축소」 도 ESC 도 **다시 켜기**가 된다.
+    Object.defineProperty(HTMLElement.prototype, 'requestFullscreen', {
+      value: vi.fn().mockRejectedValue(new Error('거절')),
+      configurable: true,
+    })
+    const box = await draw()
+    await userEvent.click(await screen.findByRole('button', { name: '넓게 보기' }))
+    expect(box.className).toContain('fixed')
+
+    await userEvent.click(await screen.findByRole('button', { name: '축소' }))
+    expect(box.className).toContain('relative')
+  })
+})

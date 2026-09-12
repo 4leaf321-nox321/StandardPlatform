@@ -24,11 +24,12 @@
  *   빈 곳       선택 해제
  *   hover       이웃 강조(선택보다 우선) + 미니카드
  *   홈          화면 맞춤으로 되돌린다
- *   넓게 보기   전체화면. ESC 로 돌아온다
+ *   넓게 보기   **브라우저 밖까지** 전체화면(Fullscreen API). ESC 로 돌아온다 —
+ *               막히면 브라우저 안에서만 넓어진다(아무 일도 안 일어나는 것보다 낫다)
  *   무리 외곽선 색이 무리별일 때 같은 무리를 convex hull 로 감싼다(ReportArchive §11.4 4b)
  *   찾아가기    호스트가 목록에서 고른 노드로 카메라를 옮긴다(`centerOn`)
  *
- * 키보드(입력 칸 밖에서): ESC 넓게 보기 닫기 → 선택 해제 · F 화면 맞춤 · +/- 줌 ·
+ * 키보드(입력 칸 밖에서): ESC 넓게 보기 닫기 → 선택 해제 · F 화면 맞춤 · L 관계 이름 · +/- 줌 ·
  * ? 도움말. Enter·`/` 같은 호스트 몫은 `useShortcuts` 로 호스트가 건다.
  *
  * ## 많아졌을 때
@@ -50,7 +51,7 @@ import type {
 } from 'react-force-graph-2d'
 import { forceCollide } from 'd3-force'
 import { polygonHull } from 'd3-polygon'
-import { Download, HelpCircle, Home, Loader2, Maximize2, Minimize2 } from 'lucide-react'
+import { Download, HelpCircle, Home, Loader2, Maximize2, Minimize2, Tag } from 'lucide-react'
 
 import { withAlpha } from '@/modules/graph/colors'
 import { useElementSize, useFillHeight } from '@/modules/graph/useElementSize'
@@ -178,6 +179,7 @@ const ZOOM_STEP = 1.3
 
 const CANVAS_SHORTCUTS = [
   { keys: 'Esc', what: '넓게 보기 닫기 → 선택 해제' },
+  { keys: 'L', what: '선 위에 관계 이름' },
   { keys: 'F', what: '화면 맞춤' },
   { keys: '+ / −', what: '확대 / 축소' },
   { keys: '?', what: '이 도움말' },
@@ -232,6 +234,10 @@ export function GraphCanvas({
   const graphRef = useRef<Methods | undefined>(undefined)
   const [ready, setReady] = useState(false)
   const [wide, setWide] = useState(false)
+  /** 선 위에 관계 이름을 그릴지. **화면에서 켠다** — 정의가 정한 기본값에서 시작한다.
+   *  선이 스물을 넘으면 이름이 서로 겹쳐 못 읽으므로 기본은 꺼짐이고, 「저 선이 무슨
+   *  관계지」 를 물을 때 켠다. */
+  const [labels, setLabels] = useState(linkLabels)
   const [help, setHelp] = useState(false)
   const [hoveredId, setHoveredId] = useState<string | null>(null)
 
@@ -310,6 +316,38 @@ export function GraphCanvas({
     if (matchIds) return matchIds
     return null
   }, [hoveredId, selectedId, matchIds, adjacency])
+  /**
+   * **진짜 전체화면.** `fixed inset-0` 은 브라우저 안쪽만 덮는다 — 주소창과 탭이
+   * 그대로 남아 그림이 화면의 4분의 3에서 멈춘다. 그래프는 넓을수록 읽히는 그림이라
+   * 그 차이가 크다.
+   *
+   * 실패해도 켠다. 권한이 막히거나(사용자 제스처 없이 부른 경우) 브라우저가 안 해
+   * 주면 `fixed` 만으로도 브라우저 안에서는 넓어진다 — **아무 일도 안 일어나는 것이
+   * 가장 나쁘다.**
+   */
+  const toggleWide = useCallback(() => {
+    // **나가는 판단은 우리 상태로 한다.** `document.fullscreenElement` 로만 보면,
+    // 브라우저가 전체화면을 거절해 `fixed` 로만 넓어진 경우 그 값이 비어 있어 「축소」
+    // 도 ESC 도 다시 켜기가 된다 — 나갈 길이 없는 화면에 갇힌다.
+    if (wide) {
+      setWide(false)
+      if (document.fullscreenElement) void document.exitFullscreen().catch(() => {})
+      return
+    }
+    setWide(true)
+    void containerRef.current?.requestFullscreen?.().catch(() => {})
+  }, [wide, containerRef])
+
+  // 브라우저가 전체화면을 빠져나가면(ESC·F11·탭 전환) 우리 상태도 따라 내려온다.
+  // 안 맞추면 단추는 「축소」 라고 적힌 채 화면은 이미 작아져 있다.
+  useEffect(() => {
+    const sync = () => {
+      if (!document.fullscreenElement) setWide(false)
+    }
+    document.addEventListener('fullscreenchange', sync)
+    return () => document.removeEventListener('fullscreenchange', sync)
+  }, [])
+
   const isDim = useCallback((id: string) => focusSet !== null && !focusSet.has(id), [focusSet])
 
   // force 는 인스턴스에 한 번 걸면 남는다. lazy 라 ref 가 언제 채워질지 몰라서,
@@ -407,17 +445,20 @@ export function GraphCanvas({
     () => ({
       Escape: () => {
         if (help) setHelp(false)
-        else if (wide) setWide(false)
+        else if (wide) toggleWide()
         else onEscape?.()
       },
       f: () => fit(true),
       F: () => fit(true),
+      // 「저 선이 무슨 관계지」 는 손이 마우스를 떠나기 전에 나오는 물음이다.
+      l: () => setLabels((value) => !value),
+      L: () => setLabels((value) => !value),
       '+': () => zoomBy(ZOOM_STEP),
       '=': () => zoomBy(ZOOM_STEP),
       '-': () => zoomBy(1 / ZOOM_STEP),
       '?': () => setHelp((value) => !value),
     }),
-    [help, wide, onEscape, fit, zoomBy],
+    [help, wide, toggleWide, onEscape, fit, zoomBy],
   )
   useShortcuts(shortcuts)
 
@@ -526,7 +567,7 @@ export function GraphCanvas({
 
   const paintLinkLabel = useCallback(
     (link: Link, ctx: CanvasRenderingContext2D, scale: number) => {
-      if (!linkLabels || scale < 0.6 || linkDim(link)) return
+      if (!labels || scale < 0.6 || linkDim(link)) return
       const source = link.source
       const target = link.target
       if (typeof source !== 'object' || typeof target !== 'object') return
@@ -546,7 +587,7 @@ export function GraphCanvas({
       ctx.textBaseline = 'middle'
       ctx.fillText(link.label, mx, my)
     },
-    [linkLabels, linkDim, palette],
+    [labels, linkDim, palette],
   )
 
   // 화살촉을 도착 노드 **밖**에 둔다 — relPos=1 이면 노드 중심에 찍혀 안 보인다.
@@ -696,13 +737,27 @@ export function GraphCanvas({
             >
               <Home className="size-3.5" />
             </Button>
+            {/* **「저 선이 무슨 관계지」 는 그림을 보다가 나오는 물음이다.** 정의 화면으로
+                가서 확인하게 하면 그 물음은 대개 포기된다. 기본이 꺼짐인 이유는 선이
+                스물을 넘으면 이름끼리 겹쳐 오히려 못 읽기 때문이다. */}
+            <Button
+              size="icon-sm"
+              variant={labels ? 'secondary' : 'outline'}
+              className="bg-background/90 backdrop-blur"
+              aria-label={labels ? '관계 이름 숨기기' : '관계 이름 보기'}
+              title={labels ? '관계 이름 숨기기 (L)' : '선 위에 관계 이름 (L)'}
+              aria-pressed={labels}
+              onClick={() => setLabels((value) => !value)}
+            >
+              <Tag className="size-3.5" />
+            </Button>
             <Button
               size="icon-sm"
               variant="outline"
               className="bg-background/90 backdrop-blur"
               aria-label={wide ? '축소' : '넓게 보기'}
               title={wide ? '축소 (ESC)' : '넓게 보기'}
-              onClick={() => setWide((value) => !value)}
+              onClick={toggleWide}
             >
               {wide ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
             </Button>
