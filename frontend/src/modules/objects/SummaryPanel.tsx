@@ -40,7 +40,13 @@ import {
 } from 'lucide-react'
 
 import { objectApi } from '@/modules/objects/api'
-import type { ObjectQuery, Points, SavedViewQuery, Summary } from '@/modules/objects/api'
+import type {
+  GroupOption,
+  ObjectQuery,
+  Points,
+  SavedViewQuery,
+  Summary,
+} from '@/modules/objects/api'
 import { PinToHomeDialog } from '@/modules/objects/PinToHomeDialog'
 import { DEFAULT_SUMMARY } from '@/modules/objects/summarySettings'
 import type { SummarySettings } from '@/modules/objects/summarySettings'
@@ -52,7 +58,9 @@ import { Button } from '@/shared/components/ui/button'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select'
@@ -149,9 +157,26 @@ function plotTraces(kind: string, points: Points): Record<string, unknown>[] {
   })
 }
 
+/**
+ * 제목이 같은 기준끼리 — 자기 칸(제목 없음)이 먼저, 이어진 것은 걸음마다.
+ *
+ * 참조 칸 「개발사」 와 관계 「개발사」 가 둘 다 있으면 「개발사 › 국가」 가 두 번 선다. 제목
+ * 없이 늘어놓으면 둘 중 무엇을 골랐는지 알 수 없다.
+ */
+function byHeading(options: GroupOption[]): [string, GroupOption[]][] {
+  const out: [string, GroupOption[]][] = []
+  for (const one of options) {
+    const heading = one.heading ?? ''
+    const last = out[out.length - 1]
+    if (last && last[0] === heading) last[1].push(one)
+    else out.push([heading, [one]])
+  }
+  return out
+}
+
 /** 이 축으로 묶은 값을 목록 거르기에 그대로 걸 수 있나. */
 function filterable(field: string): boolean {
-  return field === 'status' || field.startsWith('properties.')
+  return field === 'status' || field.startsWith('properties.') || /^(ref|out|in)\./.test(field)
 }
 
 export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, onClose }: Props) {
@@ -333,11 +358,16 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {(data?.group_options ?? []).map((one) => (
-              <SelectItem key={one.field} value={one.field}>
-                {one.label}
-                {one.multi && ' (여러 값)'}
-              </SelectItem>
+            {byHeading(data?.group_options ?? []).map(([heading, items], index) => (
+              <SelectGroup key={`${index}-${heading}`}>
+                {heading && <SelectLabel>{heading}</SelectLabel>}
+                {items.map((one) => (
+                  <SelectItem key={one.field} value={one.field}>
+                    {one.label}
+                    {one.multi && ' (여러 값)'}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             ))}
           </SelectContent>
         </Select>
@@ -353,13 +383,18 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
           </SelectTrigger>
           <SelectContent>
             <SelectItem value={NO_SPLIT}>세부 기준 없음</SelectItem>
-            {(data?.group_options ?? [])
-              .filter((one) => one.field !== groupBy)
-              .map((one) => (
-                <SelectItem key={one.field} value={one.field}>
-                  {one.label} 기준{one.multi && ' (여러 값)'}
-                </SelectItem>
-              ))}
+            {byHeading((data?.group_options ?? []).filter((one) => one.field !== groupBy)).map(
+              ([heading, items], index) => (
+                <SelectGroup key={`${index}-${heading}`}>
+                  {heading && <SelectLabel>{heading}</SelectLabel>}
+                  {items.map((one) => (
+                    <SelectItem key={one.field} value={one.field}>
+                      {one.label} 기준{one.multi && ' (여러 값)'}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ),
+            )}
           </SelectContent>
         </Select>
 

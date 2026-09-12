@@ -392,6 +392,8 @@ export interface GroupOption {
   kind: string
   /** 여러 값 칸 — 한 행이 여러 막대에 든다. */
   multi?: boolean
+  /** 이어진 것 너머의 기준이면 그 제목 — 「개발사 (시뮬레이션 기업)」. 자기 칸은 비어 있다. */
+  heading?: string
 }
 
 export interface Summary {
@@ -477,6 +479,23 @@ function pointsParams(query: ObjectQuery, options: PointsOptions): URLSearchPara
   return params
 }
 
+/**
+ * 이어진 것 너머의 칸 — 조건 고르개가 이 타입 자신의 칸 아래에 제목별로 붙인다.
+ *
+ * 주소: `ref.<참조 칸>.<칸>` · `out.<관계>` · `out.<관계>.<칸>` · `in.<관계>[.<칸>]`.
+ * 통계 기준도 **같은 주소**를 쓴다 — 막대를 누르면 그대로 조건이 된다.
+ */
+export interface LinkedField {
+  field: string
+  label: string
+  heading: string
+  /** `relation` 이면 상대 타입이 하나로 정해지지 않아 있음/없음만 걸 수 있다. */
+  data_type: string
+  multi: boolean
+  enum_options: string[] | null
+  ref_type_slug: string | null
+}
+
 export const objectApi = {
   /** 빈 CSV — 헤더가 「무엇을 채워야 하는지」 를 말한다. */
   template: (typeSlug: string) =>
@@ -548,6 +567,8 @@ export const objectApi = {
     params.set('format', format)
     return downloadFile(`/objects/${typeSlug}/points/export?${params.toString()}`, filename)
   },
+  /** 이어진 것 너머의 칸 — 「개발사 › 국가」, 「관계 · 사용 부서」. */
+  fields: (typeSlug: string) => api.get<LinkedField[]>(`/objects/${typeSlug}/fields`),
   /** 내가 지켜보는 것 — 최근 바뀐 것부터. **알림은 읽으면 사라지지만 이것은 남는다.** */
   watching: (limit = 10) => api.get<Watched[]>(`/objects/watching?limit=${limit}`),
   list: (typeSlug: string, query: ObjectQuery = {}) =>

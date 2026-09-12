@@ -443,6 +443,22 @@ class QualityReportOut(BaseModel):
 # --- 통계 ----------------------------------------------------------------
 
 
+class FieldOptionOut(BaseModel):
+    """이어진 것 너머의 칸 하나 — 조건 고르개와 통계 기준이 **같은 주소**를 쓴다."""
+
+    field: str
+    """`ref.<참조 칸>.<칸>` · `out.<관계>` · `out.<관계>.<칸>` · `in.<관계>[.<칸>]`."""
+    label: str
+    """「개발사 › 국가」."""
+    heading: str
+    """고르개에서 묶어 보여 줄 제목 — 「개발사 (시뮬레이션 기업)」 · 「관계 · 사용 부서」."""
+    data_type: str
+    """`relation` 이면 상대 타입이 하나로 정해지지 않아 있음/없음만 걸 수 있다."""
+    multi: bool = False
+    enum_options: list[str] | None = None
+    ref_type_slug: str | None = None
+
+
 class GroupOptionOut(BaseModel):
     """기준으로 쓸 수 있는(또는 집계할 수 있는) 칸 하나. 화면의 고르개가 이것만 보여 준다."""
 
@@ -451,6 +467,8 @@ class GroupOptionOut(BaseModel):
     kind: str
     multi: bool = False
     """여러 값 칸 — 한 행이 여러 막대에 든다."""
+    heading: str = ""
+    """이어진 것 너머의 기준이면 그 제목. 자기 칸은 비어 있다."""
 
 
 class PartOut(BaseModel):

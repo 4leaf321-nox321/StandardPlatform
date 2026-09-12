@@ -30,12 +30,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Numeric, and_, cast, false, or_
+from sqlalchemy import Numeric, String, and_, cast, false, func, literal, or_, select
+from sqlalchemy.orm import aliased
 
+from app.modules.objects import paths
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology.models import PropertyDef
 from app.modules.ontology.services import InvalidValue
-from app.shared.errors import code
+from app.shared.errors import AppError, code
 
 OPS_ORDER: tuple[str, ...] = ("eq", "ne", "gt", "gte", "lt", "lte", "in")
 OPS_TEXT: tuple[str, ...] = ("eq", "ne", "contains", "starts", "in")
@@ -89,14 +91,14 @@ def parse(params: Any) -> list[Condition]:
     return out
 
 
-def _column(field: str) -> Any:
+def _column(field: str, entity: Any = ObjectInstance) -> Any:
     if field == "label":
-        return ObjectInstance.label
+        return entity.label
     if field == "key":
-        return ObjectInstance.key
+        return entity.key
     if field == "status":
-        return ObjectInstance.status
-    return ObjectInstance.properties[field].astext
+        return entity.status
+    return entity.properties[field].astext
 
 
 def _values(raw: str) -> list[str]:
@@ -110,7 +112,14 @@ def _number(field: str, raw: str) -> float:
         raise InvalidValue(code("OBJECTS", 71), f"{field}: 숫자여야 합니다: {raw!r}") from None
 
 
-def _clause(condition: Condition, definition: PropertyDef | None) -> Any:
+def _clause(
+    condition: Condition,
+    definition: PropertyDef | None,
+    entity: Any = ObjectInstance,
+    label: str | None = None,
+) -> Any:
+    """조건 하나 → SQL. `entity` 는 보통 목록의 객체이고, 이어진 것 너머의 칸이면 그
+    이어진 객체(별칭)다 — 같은 규칙을 두 벌로 적지 않는다."""
     field, op, raw = condition.field, condition.op, condition.value
     is_fixed = field in FIXED_FIELDS
     data_type = "text" if is_fixed else (definition.data_type if definition else "")
@@ -118,15 +127,15 @@ def _clause(condition: Condition, definition: PropertyDef | None) -> Any:
     if field == "status":
         data_type = "enum"
     allowed = ops_for(data_type)
-    label = definition.label if definition else field
+    label = label or (definition.label if definition else field)
     if op not in allowed:
         raise InvalidValue(
             code("OBJECTS", 72),
             f"{label}: 「{op}」 는 이 칸에 못 겁니다. 되는 것: {', '.join(allowed)}",
         )
 
-    column = _column(field)
-    json_col = ObjectInstance.properties[field]
+    column = _column(field, entity)
+    json_col = entity.properties[field]
 
     if op == "empty":
         if is_fixed:
@@ -203,12 +212,26 @@ def _clause(condition: Condition, definition: PropertyDef | None) -> Any:
     return column == raw
 
 
-def apply(stmt: Any, defs: list[PropertyDef], conditions: list[Condition]) -> Any:
-    """조건 전부를 AND 로 건다. 없는 칸은 거절."""
+def apply(
+    stmt: Any,
+    defs: list[PropertyDef],
+    conditions: list[Condition],
+    resolver: paths.Resolver | None = None,
+) -> Any:
+    """조건 전부를 AND 로 건다. 없는 칸은 거절.
+
+    이어진 것 너머의 칸(`ref.`·`out.`·`in.`)은 `resolver` 가 풀어 준다 — 없으면 그런 칸은
+    없는 칸이다.
+    """
     if not conditions:
         return stmt
     by_key = {d.key: d for d in defs}
-    for condition in conditions:
+    for index, condition in enumerate(conditions):
+        if paths.is_path(condition.field):
+            if resolver is None:
+                raise InvalidValue(code("OBJECTS", 73), f"없는 칸입니다: {condition.field}")
+            stmt = stmt.where(_hop_clause(resolver, condition, index))
+            continue
         definition = by_key.get(condition.field)
         if condition.field not in FIXED_FIELDS and definition is None:
             raise InvalidValue(code("OBJECTS", 73), f"없는 칸입니다: {condition.field}")
@@ -218,6 +241,61 @@ def apply(stmt: Any, defs: list[PropertyDef], conditions: list[Condition]) -> An
             )
         stmt = stmt.where(_clause(condition, definition))
     return stmt
+
+
+def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> Any:
+    """이어진 것 너머의 조건 — **「이어진 것 중 하나라도 맞으면」** (`EXISTS`).
+
+    조인으로 걸면 이어진 것이 여럿인 객체가 목록에 여러 번 선다. EXISTS 는 몇 개가
+    이어져 있든 한 번이다.
+    """
+    try:
+        found = resolver.parse(condition.field)
+    except AppError as caught:
+        raise InvalidValue(code("OBJECTS", 73), caught.message) from caught
+    hop, op, raw = found.hop, condition.op, condition.value
+
+    if found.field is None:
+        # 관계로 이어진 것 자체 — 누구와 이어졌나, 또는 이어져 있기는 한가.
+        allowed = (*OPS_CHOICE, *OPS_ANY) if found.data_type == "object_ref" else OPS_ANY
+        if op not in allowed:
+            raise InvalidValue(
+                code("OBJECTS", 72),
+                f"{found.label}: 「{op}」 는 이 칸에 못 겁니다. 되는 것: {', '.join(allowed)}",
+            )
+        edges = resolver.edges(hop, f"hop{index}_edges")
+        linked = select(literal(1)).select_from(edges).where(edges.c.me == ObjectInstance.id)
+        if op == "empty":
+            return ~linked.exists()
+        if op == "notempty":
+            return linked.exists()
+        if op == "eq":
+            return linked.where(edges.c.other == raw).exists()
+        if op == "ne":
+            return ~linked.where(edges.c.other == raw).exists()
+        values = _values(raw)
+        return linked.where(edges.c.other.in_(values)).exists() if values else false()
+
+    if found.definition is not None and found.definition.data_type == "file":
+        raise InvalidValue(code("OBJECTS", 73), f"{found.label}: 파일 칸은 못 겁니다.")
+    target = aliased(ObjectInstance, name=f"hop{index}_obj")
+    inner = _clause(
+        Condition(found.field, op, raw), found.definition, target, label=found.label
+    )
+    alive = target.deleted_at.is_(None)
+    if hop.kind == "ref":
+        # 참조 칸은 id 하나(글자) 또는 id 의 배열 — `@>` 는 둘 다에 맞다.
+        pointed = ObjectInstance.properties[hop.name].op("@>", is_comparison=True)(
+            func.to_jsonb(cast(target.id, String))
+        )
+        return select(literal(1)).select_from(target).where(pointed, alive, inner).exists()
+    edges = resolver.edges(hop, f"hop{index}_edges")
+    return (
+        select(literal(1))
+        .select_from(edges.join(target, cast(target.id, String) == edges.c.other))
+        .where(edges.c.me == ObjectInstance.id, alive, inner)
+        .exists()
+    )
 
 
 def to_query(conditions: list[Condition]) -> dict[str, str]:

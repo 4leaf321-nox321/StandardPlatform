@@ -77,4 +77,37 @@ describe('조건 줄', () => {
     await userEvent.click(add)
     expect(onChange).toHaveBeenCalledWith([{ field: 'label', op: 'eq', value: '볼' }])
   })
+
+  it('이어진 것 너머의 칸은 자기 칸 뒤에 제목 아래로 서고, 칩은 그 이름으로 읽힌다', async () => {
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    render(
+      <ConditionBar
+        defs={DEFS}
+        conditions={[{ field: 'ref.developer.country', op: 'eq', value: '미국' }]}
+        onChange={vi.fn()}
+        linked={[
+          {
+            field: 'ref.developer.country',
+            label: '개발사 › 국가',
+            heading: '개발사 (기업)',
+            data_type: 'enum',
+            multi: false,
+            enum_options: ['미국', '한국'],
+            ref_type_slug: null,
+          },
+        ]}
+      />,
+    )
+    expect(screen.getByText('개발사 › 국가 = 미국')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /조건 추가/ }))
+    // 첫 고르개가 「칸」 이다.
+    await userEvent.click(screen.getAllByRole('combobox')[0])
+    expect(await screen.findByText('개발사 (기업)')).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: '개발사 › 국가' })).toBeInTheDocument()
+  })
+
+  it('상대가 정해지지 않은 관계는 있음·없음만 걸 수 있다', async () => {
+    const { opsFor } = await import('@/modules/objects/ConditionBar')
+    expect(opsFor('relation')).toEqual(['empty', 'notempty'])
+  })
 })

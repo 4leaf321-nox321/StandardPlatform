@@ -28,6 +28,7 @@ from app.modules.objects import (
     history,
     lifecycle,
     links,
+    paths,
     quality,
     rollup,
     system,
@@ -53,6 +54,7 @@ from app.modules.objects.schemas import (
     BulkEditRequest,
     BulkEditRow,
     BulkUndoRequest,
+    FieldOptionOut,
     GroupOptionOut,
     HistoryBatchOut,
     HistoryEntryOut,
@@ -349,8 +351,16 @@ def summary(
         other_count=found.other_count,
         overlap=found.group_multi or found.split_multi,
         group_options=[
-            GroupOptionOut(field=one.field, label=one.label, kind=one.kind, multi=one.multi)
-            for one in summary_service.group_options(object_type, defs)
+            GroupOptionOut(
+                field=one.field,
+                label=one.label,
+                kind=one.kind,
+                multi=one.multi,
+                heading=one.heading,
+            )
+            for one in summary_service.group_options(
+                object_type, defs, paths.Resolver(db, object_type)
+            )
         ],
         metric_options=[
             GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
@@ -408,8 +418,16 @@ def points(
             for one in summary_service.metric_options(defs)
         ],
         group_options=[
-            GroupOptionOut(field=one.field, label=one.label, kind=one.kind, multi=one.multi)
-            for one in summary_service.group_options(object_type, defs)
+            GroupOptionOut(
+                field=one.field,
+                label=one.label,
+                kind=one.kind,
+                multi=one.multi,
+                heading=one.heading,
+            )
+            for one in summary_service.group_options(
+                object_type, defs, paths.Resolver(db, object_type)
+            )
         ],
     )
 
@@ -497,6 +515,26 @@ def points_export(
     return sheets.file_response(
         header, rows, fmt=format, stem=f"{type_slug}-points", sheet="값"
     )
+
+
+@router.get("/{type_slug}/fields", response_model=list[FieldOptionOut])
+def linked_fields(
+    type_slug: str,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[FieldOptionOut]:
+    """**이어진 것 너머의 칸** — 참조 칸이 가리키는 타입의 칸, 관계로 이어진 것과 그 칸.
+
+    조건 고르개가 이 타입 자신의 칸 아래에 제목별로 붙인다. 통계 기준은 `/summary` 의
+    `group_options` 에 같은 주소로 실린다. 한 걸음까지다 — 두 걸음부터는 조건을 읽을 수 없다.
+    """
+    object_type = _type(db, type_slug)
+    if system.is_system(object_type):
+        return []
+    return [
+        FieldOptionOut(**vars(one))
+        for one in paths.Resolver(db, object_type).options(for_group=False)
+    ]
 
 
 @router.get("/{type_slug}/tree", response_model=TreeOut)
@@ -614,7 +652,9 @@ def _filtered(
     # 조건 거르기 — `f.<칸>.<연산>=<값>`. 칸 안 OR, 칸끼리 AND.
     asked = conditions.parse(request.query_params)
     if asked:
-        stmt = conditions.apply(stmt, properties_of(db, object_type.id), asked)
+        stmt = conditions.apply(
+            stmt, properties_of(db, object_type.id), asked, paths.Resolver(db, object_type)
+        )
     return stmt
 
 
@@ -676,14 +716,15 @@ def _checked_summary(
     if asked is None or not asked.group_by:
         return {}
     defs = properties_of(db, object_type.id)
-    summary_service.check_group(defs, asked.group_by)
+    resolver = paths.Resolver(db, object_type)
+    summary_service.check_group(defs, asked.group_by, resolver)
     if asked.order not in summary_service.ORDERS:
         raise Conflict(
             code("OBJECTS", 52),
             f"차례는 {', '.join(summary_service.ORDERS)} 중 하나여야 합니다: {asked.order}",
         )
     if asked.split_by:
-        summary_service.check_group(defs, asked.split_by)
+        summary_service.check_group(defs, asked.split_by, resolver)
     summary_service.check_metric(defs, asked.metric, asked.metric_field)
     if asked.chart not in summary_service.CHART_KINDS:
         raise Conflict(
@@ -900,6 +941,7 @@ def create_view(
         select(ObjectInstance),
         properties_of(db, object_type.id),
         [conditions.Condition(c.field, c.op, c.value) for c in payload.query.conditions],
+        paths.Resolver(db, object_type),
     )
     row = SavedView(
         type_id=object_type.id,
@@ -946,6 +988,7 @@ def update_view(
             select(ObjectInstance),
             properties_of(db, object_type.id),
             [conditions.Condition(c.field, c.op, c.value) for c in payload.query.conditions],
+            paths.Resolver(db, object_type),
         )
         row.query = payload.query.model_dump()
     if payload.summary is not None:

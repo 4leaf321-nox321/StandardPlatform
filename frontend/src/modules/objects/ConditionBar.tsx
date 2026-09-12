@@ -8,11 +8,11 @@
  * 전체를 OR 로 잇는 트리는 안 만든다. 화면에 그릴 수 없고, 그려도 사람이 못 읽는다.
  */
 
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { Plus, X } from 'lucide-react'
 
 import { useObjectOptions } from '@/modules/objects/useObjectOptions'
-import type { Condition, ConditionOp } from '@/modules/objects/api'
+import type { Condition, ConditionOp, LinkedField } from '@/modules/objects/api'
 import { CONDITION_MULTI_SEP } from '@/modules/objects/api'
 import type { DataType, PropertyDef } from '@/modules/ontology/api'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
@@ -22,7 +22,9 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/shared/components/ui/
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select'
@@ -62,7 +64,7 @@ const OP_SIGN: Record<ConditionOp, string> = {
 }
 
 /** 칸 종류별 연산 — 서버 `ops_for` 와 같은 표. */
-export function opsFor(dataType: DataType | 'fixed'): ConditionOp[] {
+export function opsFor(dataType: DataType | 'fixed' | 'relation'): ConditionOp[] {
   const any: ConditionOp[] = ['empty', 'notempty']
   if (dataType === 'number' || dataType === 'date' || dataType === 'datetime') {
     return ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', ...any]
@@ -83,12 +85,15 @@ export function opsFor(dataType: DataType | 'fixed'): ConditionOp[] {
 interface Field {
   key: string
   label: string
-  data_type: DataType
+  /** `relation` — 상대 타입이 하나로 정해지지 않은 관계. 있음/없음만. */
+  data_type: DataType | 'relation'
   enum_options?: string[] | null
   ref_type_slug?: string | null
+  /** 이어진 것 너머의 칸이면 그 제목 — 「개발사 (시뮬레이션 기업)」. 자기 칸은 없다. */
+  heading?: string
 }
 
-function fieldsOf(defs: PropertyDef[]): Field[] {
+function fieldsOf(defs: PropertyDef[], linked: LinkedField[]): Field[] {
   return [
     ...FIXED,
     ...defs
@@ -100,8 +105,20 @@ function fieldsOf(defs: PropertyDef[]): Field[] {
         enum_options: def.enum_options,
         ref_type_slug: def.ref_type_slug,
       })),
+    // **이어진 것 너머의 칸은 자기 칸 뒤에, 제목 아래로.** 「개발사 › 국가」 가 자기 칸
+    // 사이에 섞이면 어느 것이 이 타입의 칸인지 안 읽힌다.
+    ...linked.map((one) => ({
+      key: one.field,
+      label: one.label,
+      data_type: one.data_type as DataType | 'relation',
+      enum_options: one.enum_options,
+      ref_type_slug: one.ref_type_slug,
+      heading: one.heading,
+    })),
   ]
 }
+
+const NO_LINKED: LinkedField[] = []
 
 interface ConditionBarProps {
   defs: PropertyDef[]
@@ -109,10 +126,24 @@ interface ConditionBarProps {
   onChange: (next: Condition[]) => void
   /** 참조 값을 이름으로 보여 주려고 — id → 이름. 없으면 id 그대로. */
   refLabels?: Record<string, string>
+  /** 이어진 것 너머의 칸(`/objects/{slug}/fields`). */
+  linked?: LinkedField[]
 }
 
-export function ConditionBar({ defs, conditions, onChange, refLabels = {} }: ConditionBarProps) {
-  const fields = useMemo(() => fieldsOf(defs), [defs])
+export function ConditionBar({
+  defs,
+  conditions,
+  onChange,
+  refLabels = {},
+  linked = NO_LINKED,
+}: ConditionBarProps) {
+  const fields = useMemo(() => fieldsOf(defs, linked), [defs, linked])
+  // 고르면서 본 이름 — 이어진 것 너머의 참조는 목록 행에 이름이 안 실려 온다.
+  const [known, setKnown] = useState<Record<string, string>>({})
+  const remember = useCallback(
+    (names: Record<string, string>) => setKnown((current) => ({ ...current, ...names })),
+    [],
+  )
   const byKey = useMemo(() => new Map(fields.map((one) => [one.key, one])), [fields])
   const [open, setOpen] = useState(false)
 
@@ -121,7 +152,7 @@ export function ConditionBar({ defs, conditions, onChange, refLabels = {} }: Con
     const label = field?.label ?? one.field
     if (one.op === 'empty' || one.op === 'notempty') return `${label} ${OP_SIGN[one.op]}`
     const values = one.op === 'in' ? one.value.split(CONDITION_MULTI_SEP) : [one.value]
-    const shown = values.map((value) => refLabels[value] ?? value).join(', ')
+    const shown = values.map((value) => refLabels[value] ?? known[value] ?? value).join(', ')
     return `${label} ${OP_SIGN[one.op]} ${shown}`
   }
 
@@ -154,6 +185,7 @@ export function ConditionBar({ defs, conditions, onChange, refLabels = {} }: Con
         <PopoverContent align="start" className="w-80 p-3">
           <ConditionEditor
             fields={fields}
+            onNames={remember}
             onAdd={(next) => {
               onChange([...conditions, next])
               setOpen(false)
@@ -177,10 +209,22 @@ export function ConditionBar({ defs, conditions, onChange, refLabels = {} }: Con
 interface ConditionEditorProps {
   fields: Field[]
   onAdd: (next: Condition) => void
+  onNames?: (names: Record<string, string>) => void
 }
 
 /** 칸 → 연산 → 값. 연산과 값 입력은 칸의 종류를 따라간다. */
-function ConditionEditor({ fields, onAdd }: ConditionEditorProps) {
+function ConditionEditor({ fields, onAdd, onNames }: ConditionEditorProps) {
+  // 제목이 같은 칸끼리 — 자기 칸(제목 없음)이 먼저, 이어진 것은 걸음마다.
+  const groups = useMemo(() => {
+    const out: [string, Field[]][] = []
+    for (const one of fields) {
+      const heading = one.heading ?? ''
+      const last = out[out.length - 1]
+      if (last && last[0] === heading) last[1].push(one)
+      else out.push([heading, [one]])
+    }
+    return out
+  }, [fields])
   const [fieldKey, setFieldKey] = useState(fields[0]?.key ?? '')
   const field = fields.find((one) => one.key === fieldKey) ?? fields[0]
   const kind = FIXED.some((one) => one.key === field?.key) ? 'fixed' : (field?.data_type ?? 'text')
@@ -212,11 +256,24 @@ function ConditionEditor({ fields, onAdd }: ConditionEditorProps) {
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
-            {fields.map((one) => (
-              <SelectItem key={one.key} value={one.key}>
-                {one.label}
-              </SelectItem>
-            ))}
+            {groups.map(([heading, items]) =>
+              heading ? (
+                <SelectGroup key={heading}>
+                  <SelectLabel>{heading}</SelectLabel>
+                  {items.map((one) => (
+                    <SelectItem key={one.key} value={one.key}>
+                      {one.label}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              ) : (
+                items.map((one) => (
+                  <SelectItem key={one.key} value={one.key}>
+                    {one.label}
+                  </SelectItem>
+                ))
+              ),
+            )}
           </SelectContent>
         </Select>
       </label>
@@ -242,6 +299,7 @@ function ConditionEditor({ fields, onAdd }: ConditionEditorProps) {
           </span>
           <ValueInput
             field={field}
+            onNames={onNames}
             multi={multi}
             value={value}
             picked={picked}
@@ -270,14 +328,16 @@ interface ValueInputProps {
   picked: string[]
   onValue: (next: string) => void
   onPicked: (next: string[]) => void
+  onNames?: (names: Record<string, string>) => void
 }
 
 /** 칸의 종류대로 — 선택은 고르고, 참조는 이름으로 찾고, 숫자·날짜는 그 입력을. */
-function ValueInput({ field, multi, value, picked, onValue, onPicked }: ValueInputProps) {
+function ValueInput({ field, multi, value, picked, onValue, onPicked, onNames }: ValueInputProps) {
   if (field.data_type === 'object_ref') {
     return field.ref_type_slug ? (
       <RefValueInput
         typeSlug={field.ref_type_slug}
+        onNames={onNames}
         multi={multi}
         value={value}
         picked={picked}
@@ -311,6 +371,7 @@ function RefValueInput({
   picked,
   onValue,
   onPicked,
+  onNames,
 }: Omit<ValueInputProps, 'field'> & { typeSlug: string }) {
   const sources = useMemo(() => [{ slug: typeSlug }], [typeSlug])
   const found = useObjectOptions(sources, { value: multi ? null : value })
@@ -323,6 +384,9 @@ function RefValueInput({
       return next
     })
   }, [found.options])
+  useEffect(() => {
+    onNames?.(seen)
+  }, [seen, onNames])
 
   if (!multi) {
     return (

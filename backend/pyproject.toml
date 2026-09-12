@@ -14,6 +14,9 @@ src = [".", "scripts"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+# 「개발사 › 국가」 의 `›` 는 화면에 그대로 나가는 구분자다 — `>` 로 바꾸면 조건식처럼
+# 읽혀 「개발사 > 국가」(국가보다 크다)가 된다.
+allowed-confusables = ["›"]
 
 [tool.ruff.lint.isort]
 # `mcp_server/server.py` 는 패키지가 아니라 한 파일이라, 그 시험이 `import server`

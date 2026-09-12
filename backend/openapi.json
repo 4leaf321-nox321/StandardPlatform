@@ -4743,6 +4743,53 @@
         }
       }
     },
+    "/api/objects/{type_slug}/fields": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Linked Fields",
+        "description": "**이어진 것 너머의 칸** — 참조 칸이 가리키는 타입의 칸, 관계로 이어진 것과 그 칸.\n\n조건 고르개가 이 타입 자신의 칸 아래에 제목별로 붙인다. 통계 기준은 `/summary` 의\n`group_options` 에 같은 주소로 실린다. 한 걸음까지다 — 두 걸음부터는 조건을 읽을 수 없다.",
+        "operationId": "linked_fields_api_objects__type_slug__fields_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/FieldOptionOut"
+                  },
+                  "title": "Response Linked Fields Api Objects  Type Slug  Fields Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/tree": {
       "get": {
         "tags": [
@@ -8794,6 +8841,65 @@
         ],
         "title": "EdgeOut"
       },
+      "FieldOptionOut": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "heading": {
+            "type": "string",
+            "title": "Heading"
+          },
+          "data_type": {
+            "type": "string",
+            "title": "Data Type"
+          },
+          "multi": {
+            "type": "boolean",
+            "title": "Multi",
+            "default": false
+          },
+          "enum_options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enum Options"
+          },
+          "ref_type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type Slug"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "label",
+          "heading",
+          "data_type"
+        ],
+        "title": "FieldOptionOut",
+        "description": "이어진 것 너머의 칸 하나 — 조건 고르개와 통계 기준이 **같은 주소**를 쓴다."
+      },
       "GroupOptionOut": {
         "properties": {
           "field": {
@@ -8812,6 +8918,11 @@
             "type": "boolean",
             "title": "Multi",
             "default": false
+          },
+          "heading": {
+            "type": "string",
+            "title": "Heading",
+            "default": ""
           }
         },
         "type": "object",

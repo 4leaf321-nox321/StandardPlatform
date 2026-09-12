@@ -304,4 +304,35 @@ describe('개별 순위', () => {
     await userEvent.click(screen.getByRole('combobox', { name: '기준' }))
     expect(await screen.findByRole('option', { name: '해석 분야 (여러 값)' })).toBeInTheDocument()
   })
+
+  it('이어진 것 너머의 기준은 제목 아래로 서서 같은 이름이어도 갈린다', async () => {
+    await panel({
+      ...BASE,
+      group_options: [
+        ...BASE.group_options,
+        {
+          field: 'ref.vendor.country',
+          label: '개발사 › 국가',
+          kind: 'enum',
+          heading: '개발사 (시뮬레이션 기업)',
+        },
+        {
+          field: 'out.developed_by.country',
+          label: '개발사 › 국가',
+          kind: 'enum',
+          heading: '관계 · 개발사 (시뮬레이션 기업)',
+        },
+      ],
+    })
+    await userEvent.click(screen.getByRole('combobox', { name: '기준' }))
+    expect(await screen.findByText('개발사 (시뮬레이션 기업)')).toBeInTheDocument()
+    expect(screen.getByText('관계 · 개발사 (시뮬레이션 기업)')).toBeInTheDocument()
+    expect(screen.getAllByRole('option', { name: '개발사 › 국가' })).toHaveLength(2)
+  })
+
+  it('이어진 것 너머의 기준도 막대를 누르면 그 주소로 거른다', async () => {
+    const { onPick } = await panel({ ...BASE, group_field: 'ref.vendor.country' })
+    await userEvent.click(screen.getByRole('button', { name: 'A' }))
+    expect(onPick).toHaveBeenCalledWith('ref.vendor.country', 'A')
+  })
 })

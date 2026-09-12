@@ -17,6 +17,7 @@ import type {
   Condition,
   ConditionOp,
   ObjectQuery,
+  LinkedField,
   ObjectRow,
   SavedView,
 } from '@/modules/objects/api'
@@ -76,6 +77,8 @@ const SummaryPanel = lazy(() =>
 /** 「거르지 않음」 을 나타내는 값. **빈 문자열을 쓸 수 없다** — Select 가 빈 값을
  *  「고른 것 없음」 으로 보고 자리표시자로 돌아간다. */
 const ALL = '__all__'
+
+const NO_LINKED: LinkedField[] = []
 
 /** 고를 수 있는 해. 올해에서 뒤로 열 해 — 그보다 옛것은 「전체 연도」 로 본다. */
 const YEAR_OPTIONS = Array.from({ length: 11 }, (_, index) => new Date().getFullYear() - index)
@@ -233,6 +236,8 @@ export default function ObjectListPage() {
    *  말과 눈에 보이는 것이 어긋나고, 그때 사람은 무엇을 바꾸는지 모른다. */
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [bulkEditing, setBulkEditing] = useState(false)
+  /** 이어진 것 너머의 칸 — 조건 고르개가 자기 칸 아래에 붙인다. */
+  const linked = useResource(() => objectApi.fields(typeSlug), [typeSlug])
   /** 되돌릴 묶음 — 여럿 고치기를 적용한 직후 「되돌리기」 로 연다. */
   const [undoBatch, setUndoBatch] = useState<string | null>(null)
   // 소유 부서를 바꿀 때 고를 것 — **내가 관리하는 부서만** 서버가 받아 준다. 목록은
@@ -537,6 +542,7 @@ export default function ObjectListPage() {
                 setOffset(0)
               }}
               refLabels={refLabelsOfList}
+              linked={linked.data ?? NO_LINKED}
             />
           </div>
         )}
@@ -561,7 +567,10 @@ export default function ObjectListPage() {
                   // 치게 하면, 그 한 번이 사람을 엑셀로 돌려보낸다.
                   if (key === null) return
                   if (field === 'status') return
-                  const propertyKey = field.slice('properties.'.length)
+                  // 자기 칸은 `properties.<키>` → `<키>`, 이어진 것 너머의 칸은 주소 그대로.
+                  const propertyKey = field.startsWith('properties.')
+                    ? field.slice('properties.'.length)
+                    : field
                   const rest = conditions.filter(
                     (one) => !(one.field === propertyKey && one.op === 'eq'),
                   )
