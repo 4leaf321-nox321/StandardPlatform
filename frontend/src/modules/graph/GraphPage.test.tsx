@@ -25,8 +25,22 @@ const OVERVIEW: Overview = {
     { slug: 'vendor', label: '공급사', icon: '', group_slug: 'domain', count: 2 },
   ],
   edges: [
-    { relation: 'supplied_by', label: '공급받음', directed: true, src_type: 'part', dst_type: 'vendor', count: 5 },
-    { relation: 'part_of', label: '속함', directed: true, src_type: 'part', dst_type: 'part', count: 0 },
+    {
+      relation: 'supplied_by',
+      label: '공급받음',
+      directed: true,
+      src_type: 'part',
+      dst_type: 'vendor',
+      count: 5,
+    },
+    {
+      relation: 'part_of',
+      label: '속함',
+      directed: true,
+      src_type: 'part',
+      dst_type: 'part',
+      count: 0,
+    },
   ],
   object_count: 9,
   edge_count: 5,
@@ -35,13 +49,59 @@ const OVERVIEW: Overview = {
 const NEIGHBORHOOD: Neighborhood = {
   focus: 'hub',
   nodes: [
-    { id: 'hub', label: '허브', key: null, type_slug: 'part', type_label: '부품', status: 'active', owner_workspace_slug: null, degree: 5, truncated: true },
-    { id: 'a', label: '잎A', key: null, type_slug: 'part', type_label: '부품', status: 'active', owner_workspace_slug: null, degree: 1, truncated: false },
-    { id: 'b', label: '잎B', key: null, type_slug: 'part', type_label: '부품', status: 'active', owner_workspace_slug: null, degree: 1, truncated: false },
+    {
+      id: 'hub',
+      label: '허브',
+      key: null,
+      type_slug: 'part',
+      type_label: '부품',
+      status: 'active',
+      owner_workspace_slug: null,
+      degree: 5,
+      truncated: true,
+    },
+    {
+      id: 'a',
+      label: '잎A',
+      key: null,
+      type_slug: 'part',
+      type_label: '부품',
+      status: 'active',
+      owner_workspace_slug: null,
+      degree: 1,
+      truncated: false,
+    },
+    {
+      id: 'b',
+      label: '잎B',
+      key: null,
+      type_slug: 'part',
+      type_label: '부품',
+      status: 'active',
+      owner_workspace_slug: null,
+      degree: 1,
+      truncated: false,
+    },
   ],
   edges: [
-    { id: 'e1', relation: 'near', label: '가까움', inverse_label: '가까움', directed: true, src: 'hub', dst: 'a' },
-    { id: 'e2', relation: 'near', label: '가까움', inverse_label: '가까움', directed: true, src: 'hub', dst: 'b' },
+    {
+      id: 'e1',
+      relation: 'near',
+      label: '가까움',
+      inverse_label: '가까움',
+      directed: true,
+      src: 'hub',
+      dst: 'a',
+    },
+    {
+      id: 'e2',
+      relation: 'near',
+      label: '가까움',
+      inverse_label: '가까움',
+      directed: true,
+      src: 'hub',
+      dst: 'b',
+    },
   ],
   depth: 1,
   fanout: 2,
@@ -51,10 +111,40 @@ const NEIGHBORHOOD: Neighborhood = {
 
 const SUBGRAPH: Subgraph = {
   nodes: [
-    { id: 'p1', label: '부품1', key: 'P-1', type_slug: 'part', type_label: '부품', status: 'active', owner_workspace_slug: null, degree: 1, truncated: false },
-    { id: 'p2', label: '부품2', key: 'P-2', type_slug: 'part', type_label: '부품', status: 'active', owner_workspace_slug: null, degree: 1, truncated: false },
+    {
+      id: 'p1',
+      label: '부품1',
+      key: 'P-1',
+      type_slug: 'part',
+      type_label: '부품',
+      status: 'active',
+      owner_workspace_slug: null,
+      degree: 1,
+      truncated: false,
+    },
+    {
+      id: 'p2',
+      label: '부품2',
+      key: 'P-2',
+      type_slug: 'part',
+      type_label: '부품',
+      status: 'active',
+      owner_workspace_slug: null,
+      degree: 1,
+      truncated: false,
+    },
   ],
-  edges: [{ id: 'e9', relation: 'near', label: '가까움', inverse_label: '가까움', directed: true, src: 'p1', dst: 'p2' }],
+  edges: [
+    {
+      id: 'e9',
+      relation: 'near',
+      label: '가까움',
+      inverse_label: '가까움',
+      directed: true,
+      src: 'p1',
+      dst: 'p2',
+    },
+  ],
   total: 7,
   limit: 2,
   offset: 0,
@@ -90,13 +180,46 @@ const objectApi = vi.hoisted(() => ({
       type_label: '부품',
       properties_schema: [
         { key: 'material', label: '재질', data_type: 'enum', multi: false, unit: '' },
-        { key: 'weight', label: '무게', data_type: 'number', multi: false, unit: 'kg', decimals: null },
+        {
+          key: 'weight',
+          label: '무게',
+          data_type: 'number',
+          multi: false,
+          unit: 'kg',
+          decimals: null,
+        },
         { key: 'note', label: '비고', data_type: 'text', multi: false, unit: '' },
       ],
       attachments: [],
       related: [
-        { relation_id: 'e1', relation: 'near', label: '가까움', outgoing: true, object_id: 'a', object_label: '잎A', object_key: null, object_type_slug: 'part', object_type_label: '부품', properties: {}, evidence_note: '', created_at: '' },
-        { relation_id: 'e9', relation: 'near', label: '가까움', outgoing: true, object_id: 'zzz', object_label: '먼 것', object_key: null, object_type_slug: 'part', object_type_label: '부품', properties: {}, evidence_note: '', created_at: '' },
+        {
+          relation_id: 'e1',
+          relation: 'near',
+          label: '가까움',
+          outgoing: true,
+          object_id: 'a',
+          object_label: '잎A',
+          object_key: null,
+          object_type_slug: 'part',
+          object_type_label: '부품',
+          properties: {},
+          evidence_note: '',
+          created_at: '',
+        },
+        {
+          relation_id: 'e9',
+          relation: 'near',
+          label: '가까움',
+          outgoing: true,
+          object_id: 'zzz',
+          object_label: '먼 것',
+          object_key: null,
+          object_type_slug: 'part',
+          object_type_label: '부품',
+          properties: {},
+          evidence_note: '',
+          created_at: '',
+        },
       ],
       can_edit: false,
     }),
@@ -187,9 +310,29 @@ describe('지식 그래프', () => {
       focus: 'hub',
       nodes: [
         NEIGHBORHOOD.nodes[0],
-        { id: 'c', label: '잎C', key: null, type_slug: 'part', type_label: '부품', status: 'active', owner_workspace_slug: null, degree: 1, truncated: false },
+        {
+          id: 'c',
+          label: '잎C',
+          key: null,
+          type_slug: 'part',
+          type_label: '부품',
+          status: 'active',
+          owner_workspace_slug: null,
+          degree: 1,
+          truncated: false,
+        },
       ],
-      edges: [{ id: 'e3', relation: 'near', label: '가까움', inverse_label: '가까움', directed: true, src: 'hub', dst: 'c' }],
+      edges: [
+        {
+          id: 'e3',
+          relation: 'near',
+          label: '가까움',
+          inverse_label: '가까움',
+          directed: true,
+          src: 'hub',
+          dst: 'c',
+        },
+      ],
       truncated: false,
     })
     await mount('/graph?focus=hub')
@@ -207,8 +350,10 @@ describe('지식 그래프', () => {
     graphApi.subgraph.mockResolvedValue(SUBGRAPH)
     await mount('/graph?type=part')
     await waitFor(() => expect(screen.getByText(/7개 중 1–2/)).toBeInTheDocument())
+    // 「한 타입 전부」 도 화면에서 고른 노드 상한을 쓴다 — 여기만 다른 수를 쓰면
+    // 「왜 저기서는 되고 여기서는 안 되지」 가 된다. 수를 손으로 박지 않는다.
     expect(graphApi.subgraph).toHaveBeenCalledWith(
-      expect.objectContaining({ types: ['part'], offset: 0, limit: 200 }),
+      expect.objectContaining({ types: ['part'], offset: 0, limit: expect.any(Number) }),
     )
     // 한 쪽에 다 안 들어가므로 쪽 넘기기가 선다 — **잘렸는데 넘길 길이 없으면 그것이 전부로 읽힌다.**
     await userEvent.click(screen.getByRole('button', { name: '다음 쪽' }))
@@ -323,9 +468,39 @@ describe('지식 그래프', () => {
     await mount('/graph?focus=hub&d=2&fo=100&rel=supplied_by&color=community')
     await waitFor(() =>
       expect(graphApi.neighborhood).toHaveBeenCalledWith(
-        expect.objectContaining({ focus: 'hub', depth: 2, fanout: 100, relations: ['supplied_by'] }),
+        expect.objectContaining({
+          focus: 'hub',
+          depth: 2,
+          fanout: 100,
+          relations: ['supplied_by'],
+        }),
       ),
     )
     expect(screen.getByRole('checkbox', { name: /공급받음/ })).toBeChecked()
+  })
+})
+
+describe('상한 고르기', () => {
+  it('단계·이웃·노드 수를 주소에 담고 그대로 묻는다', async () => {
+    // **주소가 곧 상태다.** 크게 펼친 그림을 복사해 보내면 상대도 같은 것을 본다.
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    graphApi.neighborhood.mockResolvedValue(NEIGHBORHOOD)
+    await mount('/graph?focus=hub&d=5&fo=300&n=1500')
+    await waitFor(() =>
+      expect(graphApi.neighborhood).toHaveBeenCalledWith(
+        expect.objectContaining({ focus: 'hub', depth: 5, fanout: 300, limit: 1500 }),
+      ),
+    )
+  })
+
+  it('모르는 값은 기본으로 떨어진다 — 주소를 손으로 고쳐도 안 깨진다', async () => {
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    graphApi.neighborhood.mockResolvedValue(NEIGHBORHOOD)
+    await mount('/graph?focus=hub&d=99&fo=7&n=999999')
+    await waitFor(() =>
+      expect(graphApi.neighborhood).toHaveBeenCalledWith(
+        expect.objectContaining({ depth: 1, fanout: 30, limit: 300 }),
+      ),
+    )
   })
 })

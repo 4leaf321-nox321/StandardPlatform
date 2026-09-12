@@ -12,6 +12,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from app.modules.graph import routes
 from tests.api.conftest import Signed
 from tests.api.test_ontology import _link, _make_object, _make_relation, _make_type
 
@@ -138,9 +139,15 @@ def test_상한은_서버가_강제한다(client: TestClient, admin: Signed) -> 
     part = _make_type(client, admin, label="부품")
     one = _make_object(client, admin, part, label="A")
     body = _neighborhood(client, admin, one["id"], depth=99, fanout=99999, limit=99999)
-    assert body["depth"] == 3
-    assert body["fanout"] == 100
-    assert body["node_limit"] == 500
+    # **상한을 여기 두 번 적지 않는다.** 시험이 숫자를 손으로 들고 있으면 상한을 올릴
+    # 때마다 시험이 「틀렸다」 고 말하고, 그러면 그 시험은 규칙이 아니라 잡음이 된다.
+    assert body["depth"] == routes.MAX_DEPTH
+    assert body["fanout"] == routes.MAX_FANOUT
+    assert body["node_limit"] == routes.MAX_NODES
+    # 기본은 상한보다 **낮다** — 처음 뜨는 그림은 읽히는 크기여야 한다.
+    plain = _neighborhood(client, admin, one["id"])
+    assert plain["depth"] < routes.MAX_DEPTH
+    assert plain["node_limit"] < routes.MAX_NODES
 
 
 def test_깊이만큼만_간다(client: TestClient, admin: Signed) -> None:

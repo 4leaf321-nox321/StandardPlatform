@@ -6082,10 +6082,10 @@
                   "type": "null"
                 }
               ],
-              "description": "몇 단계까지. 최대 3",
+              "description": "몇 단계까지. 최대 6",
               "title": "Depth"
             },
-            "description": "몇 단계까지. 최대 3"
+            "description": "몇 단계까지. 최대 6"
           },
           {
             "name": "fanout",
@@ -6100,10 +6100,10 @@
                   "type": "null"
                 }
               ],
-              "description": "노드 하나가 데려오는 이웃 수. 최대 100",
+              "description": "노드 하나가 데려오는 이웃 수. 최대 500",
               "title": "Fanout"
             },
-            "description": "노드 하나가 데려오는 이웃 수. 최대 100"
+            "description": "노드 하나가 데려오는 이웃 수. 최대 500"
           },
           {
             "name": "limit",
@@ -6118,10 +6118,10 @@
                   "type": "null"
                 }
               ],
-              "description": "노드 상한. 최대 500",
+              "description": "노드 상한. 최대 3000",
               "title": "Limit"
             },
-            "description": "노드 상한. 최대 500"
+            "description": "노드 상한. 최대 3000"
           },
           {
             "name": "relations",
@@ -6253,10 +6253,10 @@
                   "type": "null"
                 }
               ],
-              "description": "노드 상한. 최대 500",
+              "description": "노드 상한. 최대 3000",
               "title": "Limit"
             },
-            "description": "노드 상한. 최대 500"
+            "description": "노드 상한. 최대 3000"
           },
           {
             "name": "offset",

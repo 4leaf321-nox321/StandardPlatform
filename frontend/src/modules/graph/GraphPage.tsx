@@ -75,10 +75,20 @@ type ColorBy = 'type' | 'workspace' | 'status' | 'community'
 /** 탐색의 씨앗 — 어디서 시작하나. */
 export type Seed = { kind: 'focus'; id: string } | { kind: 'type'; slugs: string[]; offset: number }
 
-const DEPTHS = [1, 2, 3]
-const FANOUTS = [10, 30, 100]
-/** 타입 전부를 그릴 때 한 쪽의 크기. 서버 상한(500)보다 작게 — 그 이상은 아무도 못 읽는다. */
-const TYPE_PAGE = 200
+/**
+ * 고를 수 있는 값들 — **기본은 낮게, 갈 수 있는 데까지는 넉넉히.**
+ *
+ * 처음 뜨는 그림은 읽히는 크기여야 하고(그래서 기본이 1단계·30개·300노드), 그 다음에
+ * 「더」 를 누르는 사람은 자기가 무엇을 하는지 안다 — 거기서 막으면 그 사람은 답을
+ * 못 얻는다. 부품 구성처럼 깊은 사슬은 세 단계로는 안 닿는다.
+ *
+ * 서버가 같은 상한을 다시 강제한다(`graph/routes.py`) — 화면을 고쳐 큰 수를 보내도
+ * 서버는 안 죽는다.
+ */
+const DEPTHS = [1, 2, 3, 4, 5, 6]
+const FANOUTS = [10, 30, 100, 300, 500]
+/** 그림에 세울 노드 수. 큰 것을 고르면 느려진다는 말을 화면이 함께 한다. */
+const NODE_LIMITS = [300, 800, 1500, 3000]
 /** 훑기 목록의 한 쪽. */
 const BROWSE_PAGE = 20
 const FOCUS_RING = '#f59e0b'
@@ -147,6 +157,8 @@ function fromSubgraph(fresh: Subgraph): Explored {
 interface Controls {
   depth: number
   fanout: number
+  /** 그림에 세울 노드 상한. 서버가 여기서 자르고 **잘랐다고 말한다.** */
+  nodeLimit: number
   relations: Set<string>
   types: Set<string>
   colorBy: ColorBy
@@ -157,6 +169,7 @@ interface Controls {
 const CONTROL_KEYS = {
   depth: 'd',
   fanout: 'fo',
+  nodeLimit: 'n',
   relations: 'rel',
   types: 'ty',
   colorBy: 'color',
@@ -167,9 +180,11 @@ function controlsFromParams(params: URLSearchParams): Controls {
   const csv = (raw: string | null) => new Set((raw ?? '').split(',').filter(Boolean))
   const depth = Number(params.get(CONTROL_KEYS.depth))
   const fanout = Number(params.get(CONTROL_KEYS.fanout))
+  const nodeLimit = Number(params.get(CONTROL_KEYS.nodeLimit))
   return {
     depth: DEPTHS.includes(depth) ? depth : 1,
     fanout: FANOUTS.includes(fanout) ? fanout : 30,
+    nodeLimit: NODE_LIMITS.includes(nodeLimit) ? nodeLimit : NODE_LIMITS[0],
     relations: csv(params.get(CONTROL_KEYS.relations)),
     types: csv(params.get(CONTROL_KEYS.types)),
     colorBy:
@@ -187,6 +202,7 @@ function writeControls(params: URLSearchParams, controls: Controls): void {
   }
   put(CONTROL_KEYS.depth, String(controls.depth), controls.depth === 1)
   put(CONTROL_KEYS.fanout, String(controls.fanout), controls.fanout === 30)
+  put(CONTROL_KEYS.nodeLimit, String(controls.nodeLimit), controls.nodeLimit === NODE_LIMITS[0])
   put(CONTROL_KEYS.relations, [...controls.relations].join(','), controls.relations.size === 0)
   put(CONTROL_KEYS.types, [...controls.types].join(','), controls.types.size === 0)
   put(CONTROL_KEYS.colorBy, controls.colorBy, controls.colorBy === 'type')
@@ -579,6 +595,7 @@ function ExploreView({
   const {
     depth,
     fanout,
+    nodeLimit,
     relations: relationFilter,
     types: typeFilter,
     colorBy,
@@ -586,6 +603,7 @@ function ExploreView({
   } = controls
   const setDepth = (value: number) => onControls({ depth: value })
   const setFanout = (value: number) => onControls({ fanout: value })
+  const setNodeLimit = (value: number) => onControls({ nodeLimit: value })
   const setRelationFilter = (value: Set<string>) => onControls({ relations: value })
   const setTypeFilter = (value: Set<string>) => onControls({ types: value })
   const setColorBy = (value: ColorBy) => onControls({ colorBy: value })
@@ -605,10 +623,11 @@ function ExploreView({
         focus: id,
         depth: depthOverride ?? depth,
         fanout,
+        limit: nodeLimit,
         relations: [...relationFilter],
         types: [...typeFilter],
       }),
-    [depth, fanout, relationFilter, typeFilter],
+    [depth, fanout, nodeLimit, relationFilter, typeFilter],
   )
 
   // 씨앗·상한·거르기가 바뀌면 **처음부터 다시** 든다. 펼쳐 둔 것은 버린다 —
@@ -633,7 +652,9 @@ function ExploreView({
             .subgraph({
               types: seed.slugs,
               relations: [...relationFilter],
-              limit: TYPE_PAGE,
+              // 「한 타입 전부」 도 같은 상한을 쓴다 — 화면에서 고른 값이 여기만
+              // 안 먹으면 「왜 저기서는 3,000개가 되고 여기서는 안 되지」 가 된다.
+              limit: nodeLimit,
               offset: seed.offset,
             })
             .then(fromSubgraph)
@@ -916,6 +937,32 @@ function ExploreView({
                 ))}
               </SelectContent>
             </Select>
+          </label>
+          <label className="col-span-2 space-y-1">
+            <span className="text-muted-foreground text-xs">그림에 세울 노드</span>
+            <Select
+              value={String(nodeLimit)}
+              onValueChange={(value) => setNodeLimit(Number(value))}
+            >
+              <SelectTrigger size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {NODE_LIMITS.map((one) => (
+                  <SelectItem key={one} value={String(one)}>
+                    {one.toLocaleString()}개까지
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            {/* **많이 고르면 느려진다는 말을 미리 한다.** 느려진 뒤에 알게 되면 사람은
+                그것을 고장으로 읽고, 다음부터 이 화면을 안 연다. */}
+            {nodeLimit > NODE_LIMITS[1] && (
+              <span className="text-muted-foreground block text-xs">
+                수천 개를 한 그림에 두면 배치가 느려집니다. 거르기로 좁히는 편이 대개 빠르고 잘
+                읽힙니다.
+              </span>
+            )}
           </label>
         </div>
 
