@@ -336,6 +336,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
             {(data?.group_options ?? []).map((one) => (
               <SelectItem key={one.field} value={one.field}>
                 {one.label}
+                {one.multi && ' (여러 값)'}
               </SelectItem>
             ))}
           </SelectContent>
@@ -356,7 +357,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
               .filter((one) => one.field !== groupBy)
               .map((one) => (
                 <SelectItem key={one.field} value={one.field}>
-                  {one.label} 기준
+                  {one.label} 기준{one.multi && ' (여러 값)'}
                 </SelectItem>
               ))}
           </SelectContent>
@@ -646,6 +647,15 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
               <>
                 {' · '}
                 <strong>그 밖에</strong> {data.other_groups}종류 {data.other_count}건은 접혔습니다
+              </>
+            )}
+            {/* **합이 안 맞는 이유를 적는다.** 여러 값 칸은 한 행이 여러 막대에 들어가
+                막대의 합이 전체보다 크다 — 안 적으면 사람은 그것을 오류로 읽는다. */}
+            {!raw && data.overlap && (
+              <>
+                {' · '}
+                <strong>여러 값 칸</strong>이라 한 행이 여러 막대에 들어갑니다 — 막대의 합이
+                전체보다 클 수 있습니다
               </>
             )}
             {data.metric !== 'count' && ' · 숫자로 안 읽히는 값은 셈에서 빠집니다'}

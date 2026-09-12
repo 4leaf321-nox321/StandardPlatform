@@ -30,7 +30,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import Float, Select, String, case, cast, func, nulls_last, select
+from sqlalchemy import Float, Select, String, case, cast, func, nulls_last, or_, select, true
 from sqlalchemy.orm import Session
 
 from app.modules.objects import system
@@ -134,6 +134,10 @@ class Summary:
     같은 자리에 선다."""
     other_splits: int = 0
     """상한을 넘어 빠진 세부 기준 값의 수."""
+    group_multi: bool = False
+    split_multi: bool = False
+    """기준·세부 기준이 여러 값 칸이면 True — **한 행이 여러 막대에 든다.** 막대의 합이
+    전체보다 클 수 있다는 것을 화면과 파일이 적는다."""
     buckets: list[Bucket] = field(default_factory=list)
     other_groups: int = 0
     """상한을 넘어 접힌 그룹 수."""
@@ -149,6 +153,20 @@ class GroupOption:
     label: str
     kind: str
     """fixed 이거나 속성의 data_type."""
+    multi: bool = False
+    """여러 값 칸 — 한 행이 여러 막대에 든다."""
+
+
+@dataclass
+class Axis:
+    """기준 하나를 SQL 로 — 식·보여 줄 이름·종류, 그리고 여러 값 칸이면 **펼친 배열**."""
+
+    expr: Any
+    label: str
+    kind: str
+    join: Any = None
+    """여러 값 칸의 `LATERAL jsonb_array_elements_text(...)`. 없으면 None."""
+    multi: bool = False
 
 
 def group_options(object_type: ObjectType, defs: list[PropertyDef]) -> list[GroupOption]:
@@ -160,13 +178,15 @@ def group_options(object_type: ObjectType, defs: list[PropertyDef]) -> list[Grou
         if not (key == "key" and object_type.key_policy == "none")
     ]
     for one in defs:
-        # 여러 값을 담는 칸은 아직 안 묶는다 — JSONB 배열을 펼쳐 세야 하고, 그러면
-        # 막대의 합이 행 수보다 커진다(한 행이 여러 막대에 든다). 그 사실을 화면이
-        # 설명하지 못하면 사람은 그것을 오류로 읽는다.
-        if one.data_type not in GROUPABLE or one.multi:
+        if one.data_type not in GROUPABLE:
             continue
         out.append(
-            GroupOption(field=f"properties.{one.key}", label=one.label, kind=one.data_type)
+            GroupOption(
+                field=f"properties.{one.key}",
+                label=one.label,
+                kind=one.data_type,
+                multi=one.multi,
+            )
         )
     return out
 
@@ -192,27 +212,27 @@ def _prop(defs: list[PropertyDef], field_name: str) -> PropertyDef:
     return found
 
 
-def _group_expr(defs: list[PropertyDef], field_name: str) -> tuple[Any, str, str]:
-    """(SQL 식, 보여 줄 이름, 종류). 식은 **글자**를 내놓는다 — 그래야 한 자리에서
-    상태·부서·속성을 같은 규칙으로 다룬다."""
+def _group_expr(defs: list[PropertyDef], field_name: str, alias: str = "g") -> Axis:
+    """기준 하나. 식은 **글자**를 내놓는다 — 그래야 한 자리에서 상태·부서·속성을 같은
+    규칙으로 다룬다.
+
+    **여러 값 칸은 배열을 펼쳐** 값마다 한 줄로 센다(`LEFT JOIN LATERAL`). 막아 두면
+    「해석 분야별 툴 수」 처럼 사람이 실제로 묻는 그림이 아예 안 나온다. 대신 한 행이
+    여러 막대에 들어가 막대의 합이 전체보다 커질 수 있고, 그 사실을 `multi` 로 화면에
+    넘겨 **적게 한다** — 안 적으면 사람은 합이 안 맞는 것을 오류로 읽는다. 값이 하나도
+    없는 행은 바깥 조인이라 「(비어 있음)」 한 칸으로 남는다.
+    """
     if field_name in FIXED_FIELDS:
+        label = FIXED_FIELDS[field_name]
         if field_name == "label":
-            return ObjectInstance.label, FIXED_FIELDS[field_name], "plain"
+            return Axis(ObjectInstance.label, label, "plain")
         if field_name == "key":
-            return ObjectInstance.key, FIXED_FIELDS[field_name], "plain"
+            return Axis(ObjectInstance.key, label, "plain")
         if field_name == "status":
-            return ObjectInstance.status, FIXED_FIELDS[field_name], "status"
+            return Axis(ObjectInstance.status, label, "status")
         if field_name == "workspace":
-            return (
-                cast(ObjectInstance.owner_workspace_id, String),
-                FIXED_FIELDS[field_name],
-                "workspace",
-            )
-        return (
-            func.to_char(ObjectInstance.created_at, "YYYY"),
-            FIXED_FIELDS[field_name],
-            "year",
-        )
+            return Axis(cast(ObjectInstance.owner_workspace_id, String), label, "workspace")
+        return Axis(func.to_char(ObjectInstance.created_at, "YYYY"), label, "year")
     if not field_name.startswith("properties."):
         raise AppError(
             code("OBJECTS", 41),
@@ -228,18 +248,37 @@ def _group_expr(defs: list[PropertyDef], field_name: str) -> tuple[Any, str, str
             "긴 글과 파일은 기준이 되지 않습니다 — 그룹이 행 수만큼 나옵니다.",
             status=422,
         )
+    join: Any = None
     if one.multi:
-        raise AppError(
-            code("OBJECTS", 43),
-            f"「{one.label}」 은 여러 값을 담는 칸이라 아직 기준으로 쓸 수 없습니다. "
-            "한 행이 여러 막대에 들어가 합이 전체와 안 맞습니다.",
-            status=422,
+        raw = ObjectInstance.properties[one.key]
+        shape = func.jsonb_typeof(raw)
+        # 옛 데이터에는 배열이 아닌 값 하나가 들어 있을 수 있다 — 그것도 한 값으로 센다.
+        array = case(
+            (shape == "array", raw),
+            (func.coalesce(shape, "null") == "null", func.jsonb_build_array()),
+            else_=func.jsonb_build_array(raw),
         )
-    column = ObjectInstance.properties[one.key].astext
+        join = (
+            func.jsonb_array_elements_text(array)
+            .table_valued("value")
+            .lateral(f"{alias}_values")
+        )
+        column = join.c.value
+    else:
+        column = ObjectInstance.properties[one.key].astext
     if one.data_type in BY_YEAR:
         # 날짜 하나하나로 묶으면 그룹이 수백 개다. 사람이 묻는 것은 연도다.
-        return func.substr(column, 1, 4), f"{one.label} (해)", "year"
-    return column, one.label, one.data_type
+        return Axis(func.substr(column, 1, 4), f"{one.label} (해)", "year", join, one.multi)
+    return Axis(column, one.label, one.data_type, join, one.multi)
+
+
+def _joined(stmt: Select[Any], *axes: Axis) -> Select[Any]:
+    """여러 값 기준이면 펼친 배열을 **바깥 조인**으로 붙인다 — 안쪽 조인이면 값이 하나도
+    없는 행이 사라져 「(비어 있음)」 이 안 서고, 막대의 합이 전체보다 작아진다."""
+    for axis in axes:
+        if axis.join is not None:
+            stmt = stmt.outerjoin_from(ObjectInstance, axis.join, true())
+    return stmt
 
 
 def _metric_expr(defs: list[PropertyDef], metric: str, metric_field: str | None) -> Any:
@@ -317,7 +356,7 @@ def summarize(
     metric_field: str | None = None,
     order: str = "desc",
 ) -> Summary:
-    """목록과 **같은 거르기** 위에서 묶어 센다. `split_by`(세부 기준)를 주면 한 번 더 나눈다.
+    """목록과 **같은 거르기** 위에서 센다. `split_by`(세부 기준)를 주면 한 번 더 나눈다.
 
     세부 기준이 필요한 이유: 「부서별 몇 건」 다음에 오는 물음이 거의 언제나 「그 안에서
     등급은 어떻게 되나」 이기 때문이다. 그때 거르기를 등급마다 바꿔 가며 여섯 번 세는
@@ -336,7 +375,8 @@ def summarize(
             status=422,
         )
     defs = properties_of(db, object_type.id)
-    key_expr, group_label, kind = _group_expr(defs, group_by)
+    group = _group_expr(defs, group_by, "g")
+    key_expr = group.expr
     value_expr = _metric_expr(defs, metric, metric_field)
 
     total = count_of(db, filtered)
@@ -344,13 +384,15 @@ def summarize(
     columns: list[Any] = [key_expr.label("k"), counted]
     if value_expr is not None:
         columns.append(getattr(func, metric)(value_expr).label("v"))
-    grouped = filtered.with_only_columns(*columns).group_by(key_expr)
+    grouped = _joined(filtered.with_only_columns(*columns), group).group_by(key_expr)
 
-    # 그룹이 몇 개인지 **먼저** 센다. 상한을 넘는 축(자유 글자 칸)에서 전부 읽어 오면
-    # 응답이 수만 줄이 되고, 화면은 그것을 그리지도 못한다.
-    distinct = (
-        db.scalar(select(func.count()).select_from(grouped.order_by(None).subquery())) or 0
-    )
+    # 그룹이 몇 개인지, 그리고 **센 줄이 모두 몇인지** 먼저 센다. 상한을 넘는 축(자유
+    # 글자 칸)에서 전부 읽어 오면 응답이 수만 줄이 된다. 센 줄의 합은 여러 값 칸이면
+    # 전체 행 수보다 크다 — 「그 밖에 M건」 은 그 합에서 뺀다.
+    every = grouped.order_by(None).subquery()
+    distinct, counted_rows = db.execute(
+        select(func.count(), func.coalesce(func.sum(every.c.n), 0)).select_from(every)
+    ).one()
     measured = counted if value_expr is None else columns[-1]
     ordering = measured.asc() if order == "asc" else measured.desc()
     rows = list(
@@ -358,7 +400,7 @@ def summarize(
     )
 
     keys = [str(row.k) for row in rows if row.k is not None]
-    names = _labels(db, kind, keys, defs, group_by)
+    names = _labels(db, group.kind, keys, defs, group_by)
     buckets = [
         Bucket(
             key=None if row.k is None else str(row.k),
@@ -376,13 +418,14 @@ def summarize(
     split_label = ""
     splits: list[str] = []
     other_splits = 0
+    split_multi = False
     if split_by:
-        split_label, splits, other_splits = _split(
+        split_label, splits, other_splits, split_multi = _split(
             db,
             defs,
             filtered,
             buckets=buckets,
-            key_expr=key_expr,
+            group=group,
             split_by=split_by,
             metric=metric,
             value_expr=value_expr,
@@ -394,14 +437,16 @@ def summarize(
         splits=splits,
         other_splits=other_splits,
         group_field=group_by,
-        group_label=group_label,
+        group_label=group.label,
         metric=metric,
         metric_field=metric_field,
         metric_label=METRIC_LABELS[metric],
         total=total,
         buckets=buckets,
         other_groups=max(0, int(distinct) - len(buckets)),
-        other_count=max(0, total - shown),
+        other_count=max(0, int(counted_rows) - shown),
+        group_multi=group.multi,
+        split_multi=split_multi,
     )
 
 
@@ -411,31 +456,34 @@ def _split(
     filtered: Select[Any],
     *,
     buckets: list[Bucket],
-    key_expr: Any,
+    group: Axis,
     split_by: str,
     metric: str,
     value_expr: Any,
-) -> tuple[str, list[str], int]:
+) -> tuple[str, list[str], int, bool]:
     """세부 기준으로 나눈다 — 이미 고른 칸들 **안에서만.**
 
     나눈 조각을 칸마다 채우고, 계열의 차례를 돌려준다. 차례를 서버가 정하는 이유:
     화면이 칸마다 나오는 순서대로 계열을 만들면 첫 칸에 없던 값이 뒤에서 튀어나와
     **색이 밀린다** — 같은 값이 그림 안에서 두 색을 갖는다.
     """
-    split_expr, split_label, split_kind = _group_expr(defs, split_by)
+    split = _group_expr(defs, split_by, "s")
+    key_expr = group.expr
     counted = func.count().label("n")
-    columns: list[Any] = [key_expr.label("k"), split_expr.label("s"), counted]
+    columns: list[Any] = [key_expr.label("k"), split.expr.label("s"), counted]
     if value_expr is not None:
         columns.append(getattr(func, metric)(value_expr).label("v"))
-    wanted = [one.key for one in buckets]
-    grouped = (
-        filtered.with_only_columns(*columns)
-        # 보여 줄 칸 안에서만 나눈다. 전부 나누면 접힌 그룹의 조각까지 실려 응답이
-        # 몇 배가 되고, 화면은 그것을 안 쓴다.
-        .where(key_expr.in_([one for one in wanted if one is not None]))
-        .group_by(key_expr, split_expr)
-    )
-    rows = list(db.execute(grouped))
+    wanted = [one.key for one in buckets if one.key is not None]
+    # 보여 줄 칸 안에서만 나눈다. 전부 나누면 접힌 그룹의 조각까지 실려 응답이 몇 배가
+    # 되고, 화면은 그것을 안 쓴다. **「(비어 있음)」 칸도 보여 주는 칸이다** — IN 에는
+    # NULL 이 안 걸리므로 따로 적는다(안 적으면 그 칸만 조각이 비어 0 으로 그려진다).
+    within = key_expr.in_(wanted) if wanted else None
+    if any(one.key is None for one in buckets):
+        within = key_expr.is_(None) if within is None else or_(within, key_expr.is_(None))
+    stmt = _joined(filtered.with_only_columns(*columns), group, split)
+    if within is not None:
+        stmt = stmt.where(within)
+    rows = list(db.execute(stmt.group_by(key_expr, split.expr)))
 
     # 계열의 차례 — 전체에서 큰 값부터. 상한을 넘으면 자른다(색이 여덟이라 열둘이면
     # 이미 같은 색이 두 번 나온다).
@@ -445,7 +493,7 @@ def _split(
         weight[key] = weight.get(key, 0) + int(row.n)
     ordered = sorted(weight, key=lambda one: (-weight[one], one or ""))
     kept = ordered[:MAX_SPLITS]
-    names = _labels(db, split_kind, [one for one in kept if one is not None], defs, split_by)
+    names = _labels(db, split.kind, [one for one in kept if one is not None], defs, split_by)
     label_of = {one: (EMPTY_LABEL if one is None else names.get(one, one)) for one in kept}
 
     by_key = {one.key: one for one in buckets}
@@ -466,7 +514,12 @@ def _split(
         )
     for bucket in buckets:
         bucket.parts.sort(key=lambda one: kept.index(one.key))
-    return split_label, [label_of[one] for one in kept], max(0, len(ordered) - len(kept))
+    return (
+        split.label,
+        [label_of[one] for one in kept],
+        max(0, len(ordered) - len(kept)),
+        split.multi,
+    )
 
 
 def _float(raw: Any) -> float | None:
@@ -551,11 +604,10 @@ def points(
     defs = properties_of(db, object_type.id)
     x_def = _number_def(defs, x)
     y_def = _number_def(defs, y) if y else None
-    group_expr = None
-    group_label = ""
-    group_kind = ""
-    if group_by:
-        group_expr, group_label, group_kind = _group_expr(defs, group_by)
+    axis = _group_expr(defs, group_by) if group_by else None
+    group_expr = axis.expr if axis else None
+    group_label = axis.label if axis else ""
+    group_kind = axis.kind if axis else ""
 
     x_expr = case(
         (
@@ -585,6 +637,9 @@ def points(
     # 값이 없는 행은 점이 될 수 없다 — 0 으로 채우면 없는 점이 원점에 모여 그림이
     # 거짓말을 한다.
     stmt = filtered.with_only_columns(*columns).where(x_expr.is_not(None))
+    if axis is not None:
+        # 여러 값 기준이면 값마다 점이 하나씩 — 상자 그림에서는 그 값의 상자에 든다.
+        stmt = _joined(stmt, axis)
     total = count_of(db, stmt)
     rows = list(db.execute(stmt.limit(MAX_POINTS)))
 
@@ -636,6 +691,10 @@ def summary_table(found: Summary) -> tuple[list[str], list[list[Any]]]:
     「전체」 줄을 붙인다 — 평균·최솟값은 더하면 뜻이 없다.
     """
     counting = found.metric == "count"
+    # 여러 값 칸이면 칸의 합이 전체보다 크다 — 「전체」 가 무엇을 센 것인지 적는다.
+    total_label = (
+        f"{TOTAL_LABEL} (객체 수)" if found.group_multi or found.split_multi else TOTAL_LABEL
+    )
     header: list[str] = [found.group_label]
     rows: list[list[Any]] = []
 
@@ -653,12 +712,13 @@ def summary_table(found: Summary) -> tuple[list[str], list[list[Any]]]:
                 [label, found.other_count] if counting else [label, None, found.other_count]
             )
         rows.append(
-            [TOTAL_LABEL, found.total] if counting else [TOTAL_LABEL, None, found.total]
+            [total_label, found.total] if counting else [total_label, None, found.total]
         )
         return header, rows
 
     header += list(found.splits)
-    folded = counting and found.other_splits > 0
+    # 세부 기준이 여러 값이면 조각의 합이 칸보다 커서 「그 밖에」 를 뺄셈으로 못 낸다.
+    folded = counting and found.other_splits > 0 and not found.split_multi
     if folded:
         header.append(f"{OTHER_LABEL} {found.other_splits}종류")
     if counting:
@@ -683,7 +743,7 @@ def summary_table(found: Summary) -> tuple[list[str], list[list[Any]]]:
             rows.append(
                 [f"{OTHER_LABEL} {found.other_groups}종류", *blanks, found.other_count]
             )
-        rows.append([TOTAL_LABEL, *blanks, found.total])
+        rows.append([total_label, *blanks, found.total])
     return header, rows
 
 

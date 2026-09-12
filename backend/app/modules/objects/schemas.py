@@ -449,6 +449,8 @@ class GroupOptionOut(BaseModel):
     field: str
     label: str
     kind: str
+    multi: bool = False
+    """여러 값 칸 — 한 행이 여러 막대에 든다."""
 
 
 class PartOut(BaseModel):
@@ -489,6 +491,9 @@ class SummaryOut(BaseModel):
     buckets: list[BucketOut]
     other_groups: int
     other_count: int
+    overlap: bool = False
+    """기준·세부 기준이 여러 값 칸이면 True — **막대의 합이 total 보다 클 수 있다.**
+    한 행이 여러 막대에 들기 때문이다. 화면이 그 사실을 적는다."""
     group_options: list[GroupOptionOut]
     metric_options: list[GroupOptionOut]
 

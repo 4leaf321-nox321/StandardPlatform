@@ -8807,6 +8807,11 @@
           "kind": {
             "type": "string",
             "title": "Kind"
+          },
+          "multi": {
+            "type": "boolean",
+            "title": "Multi",
+            "default": false
           }
         },
         "type": "object",
@@ -13442,6 +13447,11 @@
           "other_count": {
             "type": "integer",
             "title": "Other Count"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap",
+            "default": false
           },
           "group_options": {
             "items": {

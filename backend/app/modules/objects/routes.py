@@ -347,8 +347,9 @@ def summary(
         ],
         other_groups=found.other_groups,
         other_count=found.other_count,
+        overlap=found.group_multi or found.split_multi,
         group_options=[
-            GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
+            GroupOptionOut(field=one.field, label=one.label, kind=one.kind, multi=one.multi)
             for one in summary_service.group_options(object_type, defs)
         ],
         metric_options=[
@@ -407,7 +408,7 @@ def points(
             for one in summary_service.metric_options(defs)
         ],
         group_options=[
-            GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
+            GroupOptionOut(field=one.field, label=one.label, kind=one.kind, multi=one.multi)
             for one in summary_service.group_options(object_type, defs)
         ],
     )

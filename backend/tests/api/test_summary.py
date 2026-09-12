@@ -149,19 +149,20 @@ def test_기준으로_쓸_수_없는_칸은_이유를_말한다(client: TestClie
     assert long_text.status_code == 422
     assert "그룹이 행 수만큼" in long_text.json()["error"]["message"]
 
+    # **여러 값 칸은 기준이 된다** — 값마다 한 줄로 센다(아래 시험들).
     many = client.get(
         f"/api/objects/{part}/summary",
         params={"group_by": "properties.tags"},
         headers=admin.headers,
     )
-    assert many.status_code == 422
-    assert "합이 전체와 안 맞" in many.json()["error"]["message"]
+    assert many.status_code == 200, many.text
 
-    # 고르개에도 안 뜬다 — 고를 수 없는 것을 보여 주고 나서 거절하지 않는다.
+    # 긴 글은 고르개에도 안 뜬다 — 고를 수 없는 것을 보여 주고 나서 거절하지 않는다.
     options = _summary(client, admin, part, group_by="status")["group_options"]
-    fields = {one["field"] for one in options}
-    assert "properties.body" not in fields and "properties.tags" not in fields
-    assert {"status", "workspace", "created_year"} <= fields
+    fields = {one["field"]: one for one in options}
+    assert "properties.body" not in fields
+    assert fields["properties.tags"]["multi"] is True
+    assert {"status", "workspace", "created_year"} <= set(fields)
 
 
 def test_투영_타입은_여기서_세지_않는다(client: TestClient, admin: Signed) -> None:
@@ -456,3 +457,122 @@ def test_원값도_파일로_나간다(client: TestClient, admin: Signed) -> Non
     rows = list(csv.reader(io.StringIO(got.content.decode("utf-8-sig"))))
     assert rows[0] == ["이름", "무게", "등급"]
     assert len(rows) == 1 + 5
+
+
+# --- 여러 값 칸을 기준으로 ---------------------------------------------------------
+
+#: 해석 분야(여러 값)와 출시 연도를 가진 툴 넷. 하나는 분야가 비어 있다.
+TOOLS = [
+    ("툴1", ["구조", "유체"], 2000),
+    ("툴2", ["구조"], 2010),
+    ("툴3", [], 2020),
+    ("툴4", ["유체", "열"], 2016),
+]
+
+
+def _tools(client: TestClient, admin: Signed) -> str:
+    tool = _make_type(client, admin, label="툴")
+    _make_property(
+        client,
+        admin,
+        tool,
+        key="field",
+        label="해석 분야",
+        data_type="enum",
+        enum_options=["구조", "유체", "열"],
+        multi=True,
+    )
+    _make_property(client, admin, tool, key="year", label="출시", data_type="number")
+    for label, fields, year in TOOLS:
+        properties: dict[str, Any] = {"year": year}
+        if fields:
+            properties["field"] = fields
+        _make_object(client, admin, tool, label=label, properties=properties)
+    return tool
+
+
+def test_여러_값_칸은_값마다_세고_합이_전체보다_클_수_있다고_알린다(
+    client: TestClient, admin: Signed
+) -> None:
+    """「해석 분야별 툴 수」 — 막아 두면 사람이 실제로 묻는 그림이 아예 안 나온다."""
+    tool = _tools(client, admin)
+    found = _summary(client, admin, tool, group_by="properties.field")
+
+    buckets = {one["label"]: one["count"] for one in found["buckets"]}
+    assert buckets == {"구조": 2, "유체": 2, "열": 1, "(비어 있음)": 1}
+    # **전체는 객체 수다.** 막대의 합(6)이 전체(4)보다 크고, 그 사실을 알린다.
+    assert found["total"] == 4
+    assert found["overlap"] is True
+    assert found["other_count"] == 0 and found["other_groups"] == 0
+
+    # 막대의 수와 그 값으로 거른 목록의 수가 같다 — 막대를 누르면 그대로 걸러진다.
+    listed = client.get(
+        f"/api/objects/{tool}", params={"f.field.eq": "구조"}, headers=admin.headers
+    ).json()
+    assert listed["total"] == buckets["구조"]
+
+    # 여러 값이 아닌 기준이면 알리지 않는다.
+    assert _summary(client, admin, tool, group_by="status")["overlap"] is False
+
+
+def test_여러_값_칸으로_평균을_내고_세부_기준으로도_쓴다(
+    client: TestClient, admin: Signed
+) -> None:
+    tool = _tools(client, admin)
+    averaged = _summary(
+        client,
+        admin,
+        tool,
+        group_by="properties.field",
+        metric="avg",
+        metric_field="properties.year",
+    )
+    values = {one["label"]: one["value"] for one in averaged["buckets"]}
+    assert values["구조"] == 2005 and values["열"] == 2016
+
+    split = _summary(client, admin, tool, group_by="status", split_by="properties.field")
+    assert split["overlap"] is True
+    active = split["buckets"][0]
+    parts = {one["label"]: one["count"] for one in active["parts"]}
+    # **빈 값도 조각이다** — 분야가 없는 툴3 이 「(비어 있음)」 조각으로 선다.
+    assert parts == {"구조": 2, "유체": 2, "열": 1, "(비어 있음)": 1}
+
+
+def test_여러_값_기준으로_나누면_비어_있음_칸에도_조각이_선다(
+    client: TestClient, admin: Signed
+) -> None:
+    """IN 에는 NULL 이 안 걸린다 — 따로 안 적으면 「(비어 있음)」 칸만 조각이 빈다."""
+    tool = _tools(client, admin)
+    found = _summary(client, admin, tool, group_by="properties.field", split_by="status")
+    empty = next(one for one in found["buckets"] if one["key"] is None)
+    assert [part["count"] for part in empty["parts"]] == [1]
+
+
+def test_여러_값_기준의_파일은_전체가_객체_수라고_적는다(
+    client: TestClient, admin: Signed
+) -> None:
+    import csv
+    import io
+
+    tool = _tools(client, admin)
+    got = client.get(
+        f"/api/objects/{tool}/summary/export",
+        params={"group_by": "properties.field", "format": "csv"},
+        headers=admin.headers,
+    )
+    rows = list(csv.reader(io.StringIO(got.content.decode("utf-8-sig"))))
+    assert rows[-1] == ["전체 (객체 수)", "4"]
+
+
+def test_여러_값_기준으로_상자를_가르면_값마다_점이_든다(
+    client: TestClient, admin: Signed
+) -> None:
+    tool = _tools(client, admin)
+    got = client.get(
+        f"/api/objects/{tool}/points",
+        params={"x": "properties.year", "group_by": "properties.field"},
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    groups = sorted(one["group"] for one in got.json()["rows"])
+    assert groups == ["(비어 있음)", "구조", "구조", "열", "유체", "유체"]

@@ -290,4 +290,18 @@ describe('개별 순위', () => {
       ),
     )
   })
+
+  it('여러 값 기준이면 막대의 합이 전체보다 클 수 있다고 적고, 고르개에 표시한다', async () => {
+    await panel({
+      ...BASE,
+      overlap: true,
+      group_options: [
+        ...BASE.group_options,
+        { field: 'properties.field', label: '해석 분야', kind: 'enum', multi: true },
+      ],
+    })
+    expect(screen.getByText(/한 행이 여러 막대에 들어갑니다/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('combobox', { name: '기준' }))
+    expect(await screen.findByRole('option', { name: '해석 분야 (여러 값)' })).toBeInTheDocument()
+  })
 })

@@ -390,6 +390,8 @@ export interface GroupOption {
   field: string
   label: string
   kind: string
+  /** 여러 값 칸 — 한 행이 여러 막대에 든다. */
+  multi?: boolean
 }
 
 export interface Summary {
@@ -410,6 +412,8 @@ export interface Summary {
   buckets: Bucket[]
   other_groups: number
   other_count: number
+  /** 기준·세부 기준이 여러 값 칸이면 true — **막대의 합이 total 보다 클 수 있다.** */
+  overlap?: boolean
   group_options: GroupOption[]
   metric_options: GroupOption[]
 }
