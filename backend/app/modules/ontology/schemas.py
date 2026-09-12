@@ -395,3 +395,32 @@ class InferBuildOut(BaseModel):
     """`POST /objects/{slug}/import-rows` 에 그대로 보낼 것."""
 
     model_config = ConfigDict(populate_by_name=True)
+
+
+# --- 통째로 비우기 ------------------------------------------------------------
+
+
+class ResetItemOut(BaseModel):
+    """사라질 것 한 줄. **0 건도 나간다** — 여기서는 「없다」 는 답도 정보다."""
+
+    table: str
+    label: str
+    count: int
+
+
+class ResetPlanOut(BaseModel):
+    """비우기 계획. `applied=false` 면 아직 아무것도 안 지웠다."""
+
+    applied: bool
+    items: list[ResetItemOut]
+    total: int
+    confirm_phrase: str
+    """적용하려면 이 문구를 그대로 보내야 한다 — 실수로 누르는 것과 작정하고 하는 것
+    사이에 글자 몇 개를 둔다."""
+    snapshot_id: uuid.UUID | None = None
+    """비우기 직전에 남긴 정의. **정의는 여기서 되돌린다 — 데이터는 안 돌아온다.**"""
+
+
+class ResetRequest(BaseModel):
+    apply: bool = False
+    confirm: str = ""

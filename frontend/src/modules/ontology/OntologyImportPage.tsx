@@ -7,9 +7,10 @@
  */
 
 import { useRef, useState } from 'react'
-import { AlertTriangle, Download, FileUp, History, Play } from 'lucide-react'
+import { AlertTriangle, Download, FileUp, History, Play, TriangleAlert } from 'lucide-react'
 
 import { InferFromTablePanel } from '@/modules/ontology/InferFromTablePanel'
+import { ResetDialog } from '@/modules/ontology/ResetDialog'
 import { useOntology } from '@/modules/ontology/OntologyLayout'
 import { ontologyApi } from '@/modules/ontology/api'
 import type { ImportPlan } from '@/modules/ontology/api'
@@ -50,6 +51,7 @@ export default function OntologyImportPage() {
   const [error, setError] = useState<Error | null>(null)
   const [busy, setBusy] = useState(false)
   const [restoring, setRestoring] = useState<string | null>(null)
+  const [resetting, setResetting] = useState(false)
   const schemaFileRef = useRef<HTMLInputElement>(null)
 
   async function run(dryRun: boolean) {
@@ -233,10 +235,18 @@ export default function OntologyImportPage() {
       )}
 
       <section className="space-y-3">
-        <h2 className="flex items-center gap-2 text-base font-semibold">
-          <History className="size-4" />
-          정의 이력
-        </h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="flex items-center gap-2 text-base font-semibold">
+            <History className="size-4" />
+            정의 이력
+          </h2>
+          {/* **되돌릴 수 없는 일은 되돌릴 자리 곁에 둔다.** 이력이 바로 아래 있으면
+              「비우면 뭐가 남나」 를 그 자리에서 볼 수 있다. */}
+          <Button variant="outline" size="sm" onClick={() => setResetting(true)}>
+            <TriangleAlert className="text-destructive mr-1 size-3.5" />
+            온톨로지 초기화…
+          </Button>
+        </div>
         <p className="text-muted-foreground text-xs">
           가져오기 <b>직전</b>의 정의를 남깁니다. 되돌리기는 그때의 정의를 다시 덮어씌우는 일이고,{' '}
           <b>그 뒤에 새로 만든 것은 안 지웁니다</b> — 지우면 그 사이에 쌓인 객체가 갈 곳을 잃습니다.
@@ -278,6 +288,15 @@ export default function OntologyImportPage() {
         )}
       </section>
 
+      {resetting && (
+        <ResetDialog
+          onClose={() => setResetting(false)}
+          onDone={() => {
+            reload()
+            snapshots.reload()
+          }}
+        />
+      )}
       {restoring && (
         <ConfirmDialog
           open

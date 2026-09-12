@@ -18,7 +18,7 @@ from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.objects import bulk
 from app.modules.objects.models import ObjectInstance, ObjectRelation
-from app.modules.ontology import codebook, importer, inference, views
+from app.modules.ontology import codebook, importer, inference, reset, views
 from app.modules.ontology.models import (
     CARDINALITIES,
     DATA_TYPES,
@@ -61,6 +61,9 @@ from app.modules.ontology.schemas import (
     RelationTypeWriteRequest,
     RenameOptionOut,
     RenameOptionRequest,
+    ResetItemOut,
+    ResetPlanOut,
+    ResetRequest,
     SnapshotOut,
     SystemSourceOut,
 )
@@ -1160,6 +1163,51 @@ def import_schema(
     )
     db.commit()
     return _plan_out(prepared, applied=True, snapshot_id=snapshot.id)
+
+
+@router.post("/reset", response_model=ResetPlanOut)
+def reset_ontology(
+    payload: ResetRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> ResetPlanOut:
+    """정의를 통째로 비운다 — **되돌릴 수 없는 일.**
+
+    `apply=false`(기본)면 **계획만**: 무엇이 몇 건 사라지는지 센다. 적용하려면 계획에
+    실린 문구(`confirm_phrase`)를 그대로 보내야 한다.
+
+    비우기 직전의 **정의는 스냅샷으로 남는다**(이력에서 되돌릴 수 있다). 객체와 관계는
+    **안 돌아온다** — 그 비대칭을 화면이 분명히 말해야 한다.
+    """
+    found = reset.plan(db) if not payload.apply else None
+    snapshot_id: uuid.UUID | None = None
+    if payload.apply:
+        # **지우기 전에 남긴다.** 순서가 바뀌면 남길 것이 이미 없다.
+        snapshot = _snapshot(db, user, reason="온톨로지 초기화 직전")
+        snapshot_id = snapshot.id
+        found = reset.apply(db, confirm=payload.confirm)
+        record_audit(
+            db,
+            action="ontology.reset",
+            actor=user,
+            target_table="object_types",
+            target_id=None,
+            target_label="온톨로지 초기화",
+            changes={one.table: one.count for one in found.items if one.count},
+            reason=f"스냅샷 {snapshot.id}",
+        )
+        db.commit()
+    assert found is not None
+    return ResetPlanOut(
+        applied=found.applied,
+        items=[
+            ResetItemOut(table=one.table, label=one.label, count=one.count)
+            for one in found.items
+        ],
+        total=found.total,
+        confirm_phrase=found.confirm_phrase,
+        snapshot_id=snapshot_id,
+    )
 
 
 @router.get("/snapshots", response_model=list[SnapshotOut])

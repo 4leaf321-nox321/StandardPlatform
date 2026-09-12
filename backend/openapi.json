@@ -3860,6 +3860,48 @@
         }
       }
     },
+    "/api/ontology/reset": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Reset Ontology",
+        "description": "정의를 통째로 비운다 — **되돌릴 수 없는 일.**\n\n`apply=false`(기본)면 **계획만**: 무엇이 몇 건 사라지는지 센다. 적용하려면 계획에\n실린 문구(`confirm_phrase`)를 그대로 보내야 한다.\n\n비우기 직전의 **정의는 스냅샷으로 남는다**(이력에서 되돌릴 수 있다). 객체와 관계는\n**안 돌아온다** — 그 비대칭을 화면이 분명히 말해야 한다.",
+        "operationId": "reset_ontology_api_ontology_reset_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResetPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ontology/snapshots": {
       "get": {
         "tags": [
@@ -11526,6 +11568,90 @@
           "to"
         ],
         "title": "RenameOptionRequest"
+      },
+      "ResetItemOut": {
+        "properties": {
+          "table": {
+            "type": "string",
+            "title": "Table"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "table",
+          "label",
+          "count"
+        ],
+        "title": "ResetItemOut",
+        "description": "사라질 것 한 줄. **0 건도 나간다** — 여기서는 「없다」 는 답도 정보다."
+      },
+      "ResetPlanOut": {
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResetItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "confirm_phrase": {
+            "type": "string",
+            "title": "Confirm Phrase"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "items",
+          "total",
+          "confirm_phrase"
+        ],
+        "title": "ResetPlanOut",
+        "description": "비우기 계획. `applied=false` 면 아직 아무것도 안 지웠다."
+      },
+      "ResetRequest": {
+        "properties": {
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          },
+          "confirm": {
+            "type": "string",
+            "title": "Confirm",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "ResetRequest"
       },
       "RestoreRequest": {
         "properties": {

@@ -271,6 +271,23 @@ export interface PropertyUsage {
   objects_with_value: number
 }
 
+/** 초기화 계획의 한 줄 — 사라질 것 하나. */
+export interface ResetItem {
+  table: string
+  label: string
+  count: number
+}
+
+export interface ResetPlan {
+  applied: boolean
+  items: ResetItem[]
+  total: number
+  /** 적용하려면 이 문구를 그대로 보내야 한다. */
+  confirm_phrase: string
+  /** 비우기 직전에 남긴 정의. **정의는 여기서 되돌린다 — 데이터는 안 돌아온다.** */
+  snapshot_id: string | null
+}
+
 export const ontologyApi = {
   /** **자기 설명적 스키마.** 화면도 MCP 도 이 하나를 읽는다. */
   schema: () => api.get<OntologySchema>('/ontology/schema'),
@@ -336,4 +353,12 @@ export const ontologyApi = {
   inferBuild: (body: InferBuildRequest) => api.post<InferBuild>('/ontology/infer/build', body),
   snapshots: () => api.get<Snapshot[]>('/ontology/snapshots'),
   restore: (id: string) => api.post<ImportPlan>(`/ontology/snapshots/${id}/restore`),
+  /**
+   * 정의를 통째로 비운다 — **되돌릴 수 없는 일.**
+   *
+   * `apply: false`(기본)면 계획만 센다. 적용하려면 계획이 준 `confirm_phrase` 를
+   * 그대로 보내야 한다.
+   */
+  reset: (body: { apply: boolean; confirm?: string }) =>
+    api.post<ResetPlan>('/ontology/reset', body),
 }
