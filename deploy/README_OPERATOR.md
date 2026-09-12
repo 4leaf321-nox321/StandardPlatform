@@ -221,6 +221,9 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 - **손으로 한 번**: `sudo systemctl start <slug>-sync` (차례가 된 것만) — 하나만 지정해 돌리려면
   화면의 「동기화」 나 컨테이너 안에서 `scripts/sync_datasources.py --slug <소스>`.
 - 결과는 화면(관리 › 데이터 소스 › 최근 동기화)에도 남는다.
+- **파일 소스**(CSV·Excel 을 폴더에 떨어뜨리는 방식)를 쓰려면 `.env` 에 `DATASOURCE_DIR` 을 적는다
+  — 컨테이너 안 경로라 bind-mount 아래여야 한다(`/data/filestore/incoming` 권장). 안 적으면
+  URL 로만 읽는다.
 
 ---
 

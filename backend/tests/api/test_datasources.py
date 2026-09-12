@@ -59,6 +59,12 @@ class FakeOData:
         plain = request.url.path.startswith("/plain/")
         if self.auth_required and request.headers.get("Authorization") != self.auth_required:
             return httpx.Response(401, json={"error": "no"})
+        if request.url.path.endswith("/export.csv"):
+            lines = ["VendorNo,Name,Short,CountryCd,Rating"] + [
+                f"{r['VendorNo']},{r['Name']},{r['Short']},{r['CountryCd']},{r['Rating']}"
+                for r in self.rows
+            ]
+            return httpx.Response(200, text="\n".join(lines))
         query = parse_qs(request.url.query.decode())
         top = int(query.get("$top", ["500"])[0])
         skip = int(query.get("$skip", ["0"])[0])
@@ -369,3 +375,214 @@ def test_타이머가_돌릴_차례(client: TestClient, admin: Signed, plm: Fake
     with SessionLocal() as db:
         assert every["slug"] not in {one.slug for one in services.due(db)}
     json.dumps(ROWS)  # 자료가 JSON 으로 나가는 모양인지 — 가짜 서버가 그대로 쓴다
+
+
+# --- REST 와 파일 ---------------------------------------------------------------
+
+
+class FakeRest:
+    """REST 흉내 — 쪽 넘김 세 방식(page·offset·cursor)과 헤더 인증."""
+
+    def __init__(self) -> None:
+        self.rows = [dict(one) for one in ROWS]
+        self.requests: list[httpx.Request] = []
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        if request.headers.get("X-API-Key") != "k3y":
+            return httpx.Response(401, json={"error": "no key"})
+        query = parse_qs(request.url.query.decode())
+        size = int(query.get("limit", query.get("page_size", ["100"]))[0])
+        path = request.url.path
+        if path.endswith("/page"):
+            page = int(query.get("page", ["1"])[0])
+            start = (page - 1) * size
+            return httpx.Response(
+                200, json={"data": {"items": self.rows[start : start + size]}}
+            )
+        if path.endswith("/offset"):
+            start = int(query.get("offset", ["0"])[0])
+            return httpx.Response(200, json={"items": self.rows[start : start + size]})
+        if path.endswith("/cursor"):
+            start = int(query.get("cursor", ["0"])[0])
+            body: dict[str, Any] = {"items": self.rows[start : start + size], "meta": {}}
+            if start + size < len(self.rows):
+                body["meta"]["next"] = str(start + size)
+            return httpx.Response(200, json=body)
+        return httpx.Response(200, json=self.rows)
+
+
+@pytest.fixture
+def rest() -> Iterator[FakeRest]:
+    fake = FakeRest()
+    services.transport = httpx.MockTransport(fake)
+    try:
+        yield fake
+    finally:
+        services.transport = None
+
+
+def _rest_source(
+    client: TestClient, admin: Signed, vendor: str, path: str, options: dict[str, Any]
+) -> dict[str, Any]:
+    return _source(
+        client,
+        admin,
+        vendor,
+        kind="rest",
+        base_url="http://api.local/v1",
+        entity_set=path,
+        options=options,
+        auth_kind="header",
+        auth_user="X-API-Key",
+        auth_secret="k3y",
+    )
+
+
+@pytest.mark.parametrize(
+    ("path", "options"),
+    [
+        ("suppliers", {"rows_path": ""}),
+        (
+            "suppliers/page",
+            {"rows_path": "data.items", "paging": "page", "size_param": "limit"},
+        ),
+        (
+            "suppliers/offset",
+            {"rows_path": "items", "paging": "offset", "size_param": "limit"},
+        ),
+        (
+            "suppliers/cursor",
+            {
+                "rows_path": "items",
+                "paging": "cursor",
+                "cursor_path": "meta.next",
+                "size_param": "limit",
+            },
+        ),
+    ],
+)
+def test_REST_는_행_자리와_쪽_넘김을_정의가_적는다(
+    client: TestClient, admin: Signed, rest: FakeRest, path: str, options: dict[str, Any]
+) -> None:
+    vendor = _vendor_type(client, admin)
+    source = _rest_source(client, admin, vendor, path, options)
+    done = client.post(
+        f"/api/datasources/{source['slug']}/sync",
+        params={"apply": "true"},
+        headers=admin.headers,
+    ).json()
+    assert done["applied"] is True, done
+    assert done["run"]["rows_seen"] == 3 and done["counts"]["create"] == 3
+    assert rest.requests[0].headers["X-API-Key"] == "k3y"
+
+
+def test_REST_행_자리가_틀리면_무엇을_적어야_하는지_말한다(
+    client: TestClient, admin: Signed, rest: FakeRest
+) -> None:
+    vendor = _vendor_type(client, admin)
+    source = _rest_source(client, admin, vendor, "suppliers/offset", {"rows_path": "wrong"})
+    failed = client.post(
+        f"/api/datasources/{source['slug']}/sync", headers=admin.headers
+    ).json()
+    assert failed["run"]["status"] == "failed" and "rows_path" in failed["errors"][0]
+
+
+def test_파일_CSV_와_Excel_과_JSON(
+    client: TestClient, admin: Signed, tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import csv
+    import io
+
+    from openpyxl import Workbook
+
+    from app.config import get_settings
+
+    # 허용 폴더 아래의 파일만 읽는다.
+    monkeypatch.setattr(get_settings(), "datasource_dir", tmp_path)
+    (tmp_path / "erp").mkdir()
+    header = ["VendorNo", "Name", "Short", "CountryCd", "Rating"]
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=header)
+    writer.writeheader()
+    writer.writerows(ROWS)
+    (tmp_path / "erp" / "suppliers.csv").write_text("﻿" + buffer.getvalue(), encoding="utf-8")
+    book = Workbook()
+    sheet = book.active
+    sheet.title = "Suppliers"
+    sheet.append(header)
+    for one in ROWS:
+        sheet.append([one[name] for name in header])
+    book.save(tmp_path / "erp" / "suppliers.xlsx")
+    (tmp_path / "erp" / "suppliers.json").write_text(
+        json.dumps({"rows": ROWS}, ensure_ascii=False), encoding="utf-8"
+    )
+
+    vendor = _vendor_type(client, admin)
+    for name, options in (
+        ("suppliers.csv", {}),
+        ("suppliers.xlsx", {"sheet": "Suppliers"}),
+        ("suppliers.json", {}),
+    ):
+        source = _source(
+            client,
+            admin,
+            vendor,
+            kind="file",
+            base_url="",
+            entity_set=f"erp/{name}",
+            options=options,
+        )
+        done = client.post(
+            f"/api/datasources/{source['slug']}/sync",
+            params={"apply": "true"},
+            headers=admin.headers,
+        ).json()
+        assert done["applied"] is True, (name, done)
+        assert done["run"]["rows_seen"] == 3
+    # 같은 세 행이 세 소스에서 왔으니 객체는 셋뿐이다 — 별칭·이름으로 합류했다.
+    assert client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["total"] == 3
+
+    # 폴더 밖은 안 읽는다.
+    outside = _source(
+        client,
+        admin,
+        vendor,
+        kind="file",
+        base_url="",
+        entity_set="../../etc/passwd",
+        options={"format": "csv"},
+    )
+    failed = client.post(
+        f"/api/datasources/{outside['slug']}/sync", headers=admin.headers
+    ).json()
+    assert failed["run"]["status"] == "failed" and "아래에서만" in failed["errors"][0]
+
+
+def test_파일_폴더가_안_정해졌으면_URL_로만(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    vendor = _vendor_type(client, admin)
+    local = _source(client, admin, vendor, kind="file", base_url="", entity_set="x.csv")
+    failed = client.post(
+        f"/api/datasources/{local['slug']}/sync", headers=admin.headers
+    ).json()
+    assert failed["run"]["status"] == "failed" and "DATASOURCE_DIR" in failed["errors"][0]
+
+
+def test_파일을_URL_로_받는다(client: TestClient, admin: Signed, plm: FakeOData) -> None:
+    vendor = _vendor_type(client, admin)
+    source = _source(
+        client,
+        admin,
+        vendor,
+        kind="file",
+        base_url="",
+        entity_set="http://plm.local/export.csv",
+    )
+    done = client.post(
+        f"/api/datasources/{source['slug']}/sync",
+        params={"apply": "true"},
+        headers=admin.headers,
+    ).json()
+    assert done["applied"] is True and done["counts"]["create"] == 3

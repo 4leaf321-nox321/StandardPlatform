@@ -14,6 +14,8 @@ import { datasourceApi } from '@/modules/datasources/api'
 import type {
   AuthKind,
   DataSource,
+  SourceKind,
+  SourceOptions,
   DataSourceWrite,
   MappingColumn,
   Preview,
@@ -49,6 +51,7 @@ import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
 const NONE = '__none__'
+const KIND_LABEL: Record<string, string> = { odata: 'OData', rest: 'REST', file: '파일' }
 
 export default function DataSourcesPage() {
   const list = useResource(() => datasourceApi.list(), [])
@@ -148,11 +151,13 @@ export default function DataSourcesPage() {
                 </span>
               </div>
               <p className="text-muted-foreground font-mono text-xs break-all">
-                {source.base_url}/{source.entity_set}
-                {source.filter && ` ?$filter=${source.filter}`}
+                {source.kind === 'file'
+                  ? source.entity_set
+                  : `${source.base_url}/${source.entity_set.replace(/^\//, '')}`}
+                {source.kind === 'odata' && source.filter && ` ?$filter=${source.filter}`}
               </p>
               <p className="text-muted-foreground text-xs">
-                → {source.type_slug}
+                {KIND_LABEL[source.kind] ?? source.kind} → {source.type_slug}
                 {source.workspace_slug ? ` · ${source.workspace_slug} 부서` : ' · 전역'}
                 {source.interval_minutes > 0
                   ? ` · ${source.interval_minutes}분마다`
@@ -378,6 +383,8 @@ function EditDialog({
 }) {
   const [slug, setSlug] = useState(source?.slug ?? '')
   const [name, setName] = useState(source?.name ?? '')
+  const [kind, setKind] = useState<SourceKind>(source?.kind ?? 'odata')
+  const [options, setOptions] = useState<SourceOptions>(source?.options ?? {})
   const [baseUrl, setBaseUrl] = useState(source?.base_url ?? '')
   const [entitySet, setEntitySet] = useState(source?.entity_set ?? '')
   const [filter, setFilter] = useState(source?.filter ?? '')
@@ -418,8 +425,10 @@ function EditDialog({
     const out: DataSourceWrite = {
       slug: slug.trim(),
       name: name.trim(),
-      base_url: baseUrl.trim(),
+      kind,
+      base_url: kind === 'file' ? '' : baseUrl.trim(),
       entity_set: entitySet.trim(),
+      options,
       filter: filter.trim(),
       auth_kind: authKind,
       auth_user: authUser.trim(),
@@ -502,32 +511,18 @@ function EditDialog({
               <Label htmlFor="ds-name">이름</Label>
               <Input id="ds-name" value={name} onChange={(event) => setName(event.target.value)} />
             </div>
-            <div className="space-y-1.5 sm:col-span-2">
-              <Label htmlFor="ds-url">OData 서비스 루트</Label>
-              <Input
-                id="ds-url"
-                value={baseUrl}
-                placeholder="https://plm.example.com/odata/v4"
-                onChange={(event) => setBaseUrl(event.target.value)}
-              />
-            </div>
             <div className="space-y-1.5">
-              <Label htmlFor="ds-set">엔티티 셋</Label>
-              <Input
-                id="ds-set"
-                value={entitySet}
-                placeholder="Suppliers"
-                onChange={(event) => setEntitySet(event.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="ds-filter">$filter (선택)</Label>
-              <Input
-                id="ds-filter"
-                value={filter}
-                placeholder="Status eq 'Released'"
-                onChange={(event) => setFilter(event.target.value)}
-              />
+              <Label>종류</Label>
+              <Select value={kind} onValueChange={(next) => setKind(next as SourceKind)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="odata">OData (v4 · v2)</SelectItem>
+                  <SelectItem value="rest">REST JSON</SelectItem>
+                  <SelectItem value="file">파일 (CSV · Excel · JSON)</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
             <div className="space-y-1.5">
               <Label>인증</Label>
@@ -539,15 +534,17 @@ function EditDialog({
                   <SelectItem value="none">없음</SelectItem>
                   <SelectItem value="basic">Basic (아이디·비밀번호)</SelectItem>
                   <SelectItem value="bearer">Bearer 토큰</SelectItem>
+                  <SelectItem value="header">헤더 직접 지정 (X-API-Key 같은 것)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            {authKind === 'basic' && (
+            {(authKind === 'basic' || authKind === 'header') && (
               <div className="space-y-1.5">
-                <Label htmlFor="ds-user">아이디</Label>
+                <Label htmlFor="ds-user">{authKind === 'basic' ? '아이디' : '헤더 이름'}</Label>
                 <Input
                   id="ds-user"
                   value={authUser}
+                  placeholder={authKind === 'header' ? 'X-API-Key' : ''}
                   onChange={(event) => setAuthUser(event.target.value)}
                 />
               </div>
@@ -555,7 +552,7 @@ function EditDialog({
             {authKind !== 'none' && (
               <div className="space-y-1.5">
                 <Label htmlFor="ds-secret">
-                  {authKind === 'basic' ? '비밀번호' : '토큰'}{' '}
+                  {authKind === 'basic' ? '비밀번호' : authKind === 'header' ? '헤더 값' : '토큰'}{' '}
                   {source?.has_secret && '(비우면 그대로)'}
                 </Label>
                 <Input
@@ -563,6 +560,172 @@ function EditDialog({
                   type="password"
                   value={authSecret}
                   onChange={(event) => setAuthSecret(event.target.value)}
+                />
+              </div>
+            )}
+
+            {/* 종류별 — 어디서 읽는가 */}
+            {kind !== 'file' && (
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor="ds-url">
+                  {kind === 'odata' ? 'OData 서비스 루트' : 'API 루트'}
+                </Label>
+                <Input
+                  id="ds-url"
+                  value={baseUrl}
+                  placeholder={
+                    kind === 'odata'
+                      ? 'https://plm.example.com/odata/v4'
+                      : 'https://erp.example.com/api'
+                  }
+                  onChange={(event) => setBaseUrl(event.target.value)}
+                />
+              </div>
+            )}
+            <div className={kind === 'file' ? 'space-y-1.5 sm:col-span-2' : 'space-y-1.5'}>
+              <Label htmlFor="ds-set">
+                {kind === 'odata'
+                  ? '엔티티 셋'
+                  : kind === 'rest'
+                    ? '경로'
+                    : '파일 위치 (URL 또는 서버 폴더 아래 경로)'}
+              </Label>
+              <Input
+                id="ds-set"
+                value={entitySet}
+                placeholder={
+                  kind === 'odata'
+                    ? 'Suppliers'
+                    : kind === 'rest'
+                      ? '/v1/suppliers'
+                      : 'erp/suppliers.xlsx'
+                }
+                onChange={(event) => setEntitySet(event.target.value)}
+              />
+              {kind === 'file' && (
+                <p className="text-muted-foreground text-xs">
+                  서버 폴더는 운영자가 .env 의 DATASOURCE_DIR 로 정합니다 — 그 아래만 읽습니다.
+                  형식은 확장자로 압니다(.csv/.xlsx/.json).
+                </p>
+              )}
+            </div>
+            {kind === 'odata' && (
+              <div className="space-y-1.5">
+                <Label htmlFor="ds-filter">$filter (선택)</Label>
+                <Input
+                  id="ds-filter"
+                  value={filter}
+                  placeholder="Status eq 'Released'"
+                  onChange={(event) => setFilter(event.target.value)}
+                />
+              </div>
+            )}
+            {kind === 'rest' && (
+              <>
+                <div className="space-y-1.5">
+                  <Label htmlFor="ds-rows">행이 있는 자리 (비우면 응답 자체가 배열)</Label>
+                  <Input
+                    id="ds-rows"
+                    value={options.rows_path ?? ''}
+                    placeholder="items 또는 data.results"
+                    onChange={(event) => setOptions({ ...options, rows_path: event.target.value })}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>쪽 넘김</Label>
+                  <Select
+                    value={options.paging ?? 'none'}
+                    onValueChange={(next) =>
+                      setOptions({ ...options, paging: next as SourceOptions['paging'] })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">없음 — 한 번에 전부</SelectItem>
+                      <SelectItem value="page">page=1,2,… (쪽이 덜 차면 끝)</SelectItem>
+                      <SelectItem value="offset">offset=0,N,2N…</SelectItem>
+                      <SelectItem value="cursor">응답의 다음 커서/링크</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                {options.paging && options.paging !== 'none' && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ds-size">쪽 크기 파라미터 이름</Label>
+                    <Input
+                      id="ds-size"
+                      value={options.size_param ?? ''}
+                      placeholder="page_size (또는 limit)"
+                      onChange={(event) =>
+                        setOptions({ ...options, size_param: event.target.value || undefined })
+                      }
+                    />
+                  </div>
+                )}
+                {options.paging === 'page' && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ds-page">쪽 번호 파라미터 이름</Label>
+                    <Input
+                      id="ds-page"
+                      value={options.page_param ?? ''}
+                      placeholder="page"
+                      onChange={(event) =>
+                        setOptions({ ...options, page_param: event.target.value || undefined })
+                      }
+                    />
+                  </div>
+                )}
+                {options.paging === 'offset' && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="ds-offset">오프셋 파라미터 이름</Label>
+                    <Input
+                      id="ds-offset"
+                      value={options.offset_param ?? ''}
+                      placeholder="offset"
+                      onChange={(event) =>
+                        setOptions({ ...options, offset_param: event.target.value || undefined })
+                      }
+                    />
+                  </div>
+                )}
+                {options.paging === 'cursor' && (
+                  <>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="ds-cpath">응답에서 다음 커서가 있는 자리</Label>
+                      <Input
+                        id="ds-cpath"
+                        value={options.cursor_path ?? ''}
+                        placeholder="next 또는 meta.next"
+                        onChange={(event) =>
+                          setOptions({ ...options, cursor_path: event.target.value || undefined })
+                        }
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label htmlFor="ds-cparam">커서를 보낼 파라미터 이름</Label>
+                      <Input
+                        id="ds-cparam"
+                        value={options.cursor_param ?? ''}
+                        placeholder="cursor"
+                        onChange={(event) =>
+                          setOptions({ ...options, cursor_param: event.target.value || undefined })
+                        }
+                      />
+                    </div>
+                  </>
+                )}
+              </>
+            )}
+            {kind === 'file' && (
+              <div className="space-y-1.5">
+                <Label htmlFor="ds-sheet">시트 이름 (Excel, 비우면 첫 시트)</Label>
+                <Input
+                  id="ds-sheet"
+                  value={options.sheet ?? ''}
+                  onChange={(event) =>
+                    setOptions({ ...options, sheet: event.target.value || undefined })
+                  }
                 />
               </div>
             )}
@@ -607,7 +770,9 @@ function EditDialog({
                 type="button"
                 size="sm"
                 variant="outline"
-                disabled={busy || !slug.trim() || !baseUrl.trim() || !entitySet.trim()}
+                disabled={
+                  busy || !slug.trim() || (kind !== 'file' && !baseUrl.trim()) || !entitySet.trim()
+                }
                 onClick={peek}
               >
                 <Eye className="mr-1 size-3.5" />
@@ -862,7 +1027,7 @@ function EditDialog({
               busy ||
               !slug.trim() ||
               !name.trim() ||
-              !baseUrl.trim() ||
+              (kind !== 'file' && !baseUrl.trim()) ||
               !entitySet.trim() ||
               !typeSlug ||
               !externalKey.trim() ||

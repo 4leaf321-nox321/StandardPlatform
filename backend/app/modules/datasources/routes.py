@@ -11,7 +11,12 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.datasources import services
-from app.modules.datasources.models import AUTH_KINDS, DataSource, DataSourceRun
+from app.modules.datasources.models import (
+    AUTH_KINDS,
+    SOURCE_KINDS,
+    DataSource,
+    DataSourceRun,
+)
 from app.modules.datasources.schemas import (
     DataSourceOut,
     DataSourcePatchRequest,
@@ -45,6 +50,7 @@ def _out(db: Session, row: DataSource) -> DataSourceOut:
         kind=row.kind,
         base_url=row.base_url,
         entity_set=row.entity_set,
+        options=row.options or {},
         filter=row.filter,
         select=row.select,
         auth_kind=str(auth.get("kind") or "none"),
@@ -91,7 +97,10 @@ def _workspace(db: Session, slug: str | None) -> Workspace | None:
     return row
 
 
-def _require_url(url: str) -> str:
+def _require_url(url: str, *, kind: str) -> str:
+    """OData·REST 는 루트 주소가 있어야 한다. 파일은 없어도 된다(위치가 entity_set 에)."""
+    if kind == "file":
+        return url.strip().rstrip("/")
     parsed = urlparse(url.strip())
     if parsed.scheme not in ("http", "https") or not parsed.netloc:
         raise AppError(
@@ -128,13 +137,16 @@ def create_source(
         raise Conflict(code("DATASOURCES", 6), f"이미 있는 데이터 소스입니다: {slug}")
     object_type = _type(db, payload.type_slug)
     workspace = _workspace(db, payload.workspace_slug)
+    require_choice(payload.kind, SOURCE_KINDS, what="소스 종류")
     require_choice(payload.auth_kind, AUTH_KINDS, what="인증 방식")
     _check_mapping(db, object_type, payload.mapping)
     row = DataSource(
         slug=slug,
         name=payload.name.strip(),
-        base_url=_require_url(payload.base_url),
+        kind=payload.kind,
+        base_url=_require_url(payload.base_url, kind=payload.kind),
         entity_set=payload.entity_set.strip(),
+        options=payload.options,
         filter=payload.filter.strip(),
         select=payload.select.strip(),
         auth={
@@ -196,10 +208,14 @@ def update_source(
     }
     if "name" in sent and payload.name is not None:
         row.name = payload.name.strip()
+    if "kind" in sent and payload.kind is not None:
+        row.kind = require_choice(payload.kind, SOURCE_KINDS, what="소스 종류")
     if "base_url" in sent and payload.base_url is not None:
-        row.base_url = _require_url(payload.base_url)
+        row.base_url = _require_url(payload.base_url, kind=row.kind)
     if "entity_set" in sent and payload.entity_set is not None:
         row.entity_set = payload.entity_set.strip()
+    if "options" in sent and payload.options is not None:
+        row.options = payload.options
     if "filter" in sent and payload.filter is not None:
         row.filter = payload.filter.strip()
     if "select" in sent and payload.select is not None:

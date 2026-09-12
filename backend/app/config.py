@@ -78,6 +78,13 @@ class Settings(BaseSettings):
     Read-only file system` 이 난다 — 그리고 그 오류는 파일을 올리는 사람에게만
     보인다. ReportArchive 가 임베드 번들 경로에서 정확히 그것을 겪었다."""
 
+    datasource_dir: Path | None = None
+    """데이터 소스가 **파일**(CSV·Excel·JSON)을 읽어도 되는 폴더. 비우면 URL 로만 읽는다.
+
+    아무 경로나 읽게 두면 데이터 소스 화면이 서버의 모든 파일을 읽는 문이 된다 — 그래서
+    이 폴더 아래만. 운영에서는 bind-mount 된 곳(예: `/data/filestore/incoming`)을 적고,
+    바깥 시스템이 거기로 파일을 떨어뜨리게 한다."""
+
     backup_dir: Path | None = None
     """백업 스크립트(`deploy/backup.sh`)가 덤프를 남기는 폴더.
 

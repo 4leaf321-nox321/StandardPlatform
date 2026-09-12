@@ -18,6 +18,7 @@ class DataSourceOut(BaseModel):
     kind: str
     base_url: str
     entity_set: str
+    options: dict[str, Any]
     filter: str
     select: str
     auth_kind: str
@@ -39,8 +40,10 @@ class DataSourceOut(BaseModel):
 class DataSourceWriteRequest(BaseModel):
     slug: str
     name: str = Field(min_length=1, max_length=100)
-    base_url: str = Field(min_length=1, max_length=500)
-    entity_set: str = Field(min_length=1, max_length=200)
+    kind: str = "odata"
+    base_url: str = Field(default="", max_length=500)
+    entity_set: str = Field(min_length=1, max_length=500)
+    options: dict[str, Any] = Field(default_factory=dict)
     filter: str = ""
     select: str = ""
     auth_kind: str = "none"
@@ -60,8 +63,10 @@ class DataSourcePatchRequest(BaseModel):
     — 별칭 `source:<slug>` 가 거기 물려 있다."""
 
     name: str | None = Field(default=None, min_length=1, max_length=100)
-    base_url: str | None = Field(default=None, min_length=1, max_length=500)
-    entity_set: str | None = Field(default=None, min_length=1, max_length=200)
+    kind: str | None = None
+    base_url: str | None = Field(default=None, max_length=500)
+    entity_set: str | None = Field(default=None, min_length=1, max_length=500)
+    options: dict[str, Any] | None = None
     filter: str | None = None
     select: str | None = None
     auth_kind: str | None = None

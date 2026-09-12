@@ -6635,6 +6635,11 @@
             "type": "string",
             "title": "Entity Set"
           },
+          "options": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Options"
+          },
           "filter": {
             "type": "string",
             "title": "Filter"
@@ -6728,6 +6733,7 @@
           "kind",
           "base_url",
           "entity_set",
+          "options",
           "filter",
           "select",
           "auth_kind",
@@ -6761,12 +6767,22 @@
             ],
             "title": "Name"
           },
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
           "base_url": {
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 500,
-                "minLength": 1
+                "maxLength": 500
               },
               {
                 "type": "null"
@@ -6778,7 +6794,7 @@
             "anyOf": [
               {
                 "type": "string",
-                "maxLength": 200,
+                "maxLength": 500,
                 "minLength": 1
               },
               {
@@ -6786,6 +6802,18 @@
               }
             ],
             "title": "Entity Set"
+          },
+          "options": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Options"
           },
           "filter": {
             "anyOf": [
@@ -6941,17 +6969,27 @@
             "minLength": 1,
             "title": "Name"
           },
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "odata"
+          },
           "base_url": {
             "type": "string",
             "maxLength": 500,
-            "minLength": 1,
-            "title": "Base Url"
+            "title": "Base Url",
+            "default": ""
           },
           "entity_set": {
             "type": "string",
-            "maxLength": 200,
+            "maxLength": 500,
             "minLength": 1,
             "title": "Entity Set"
+          },
+          "options": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Options"
           },
           "filter": {
             "type": "string",
@@ -7027,7 +7065,6 @@
         "required": [
           "slug",
           "name",
-          "base_url",
           "entity_set",
           "type_slug"
         ],

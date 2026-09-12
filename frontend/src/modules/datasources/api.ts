@@ -3,7 +3,24 @@
 import { api } from '@/shared/api/client'
 import type { ImportRow } from '@/modules/objects/api'
 
-export type AuthKind = 'none' | 'basic' | 'bearer'
+export type AuthKind = 'none' | 'basic' | 'bearer' | 'header'
+export type SourceKind = 'odata' | 'rest' | 'file'
+export type RestPaging = 'none' | 'page' | 'offset' | 'cursor'
+
+/** 종류별 설정. REST: 행 자리·쪽 넘김. 파일: 형식·시트. */
+export interface SourceOptions {
+  rows_path?: string
+  paging?: RestPaging
+  page_param?: string
+  size_param?: string
+  offset_param?: string
+  cursor_param?: string
+  cursor_path?: string
+  start_page?: number
+  params?: Record<string, string>
+  format?: 'csv' | 'xlsx' | 'json'
+  sheet?: string
+}
 
 export interface MappingColumn {
   /** 바깥 열 이름 — `Name`, `Address/Country` 처럼 안으로 들어간 것도. */
@@ -25,9 +42,10 @@ export interface DataSource {
   id: string
   slug: string
   name: string
-  kind: string
+  kind: SourceKind
   base_url: string
   entity_set: string
+  options: SourceOptions
   filter: string
   select: string
   auth_kind: AuthKind
@@ -48,8 +66,10 @@ export interface DataSource {
 export interface DataSourceWrite {
   slug: string
   name: string
-  base_url: string
+  kind?: SourceKind
+  base_url?: string
   entity_set: string
+  options?: SourceOptions
   filter?: string
   select?: string
   auth_kind?: AuthKind

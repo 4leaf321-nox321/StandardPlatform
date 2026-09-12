@@ -32,6 +32,9 @@ class Auth:
     def headers(self) -> dict[str, str]:
         if self.kind == "bearer" and self.secret:
             return {"Authorization": f"Bearer {self.secret}"}
+        if self.kind == "header" and self.user:
+            # 이름이 정해진 헤더 하나 — `X-API-Key: …` 처럼. REST 에서 흔하다.
+            return {self.user: self.secret}
         return {}
 
     def basic(self) -> tuple[str, str] | None:

@@ -32,9 +32,12 @@ from app.database import Base
 from app.modules.ontology.models import SLUG_MAX
 
 #: 인증 방식.
-AUTH_KINDS = ("none", "basic", "bearer")
-#: 소스의 종류. 지금은 OData 뿐이지만 칸은 둔다 — REST/CSV-URL 이 올 자리.
-SOURCE_KINDS = ("odata",)
+AUTH_KINDS = ("none", "basic", "bearer", "header")
+#: 소스의 종류.
+#:   odata  OData v4(v2 봉투도). base_url + entity_set
+#:   rest   JSON 을 주는 REST. base_url + entity_set(경로), options 로 행 자리·쪽 넘김
+#:   file   CSV·Excel·JSON 파일 — URL 또는 `datasource_dir` 아래 경로. entity_set 이 그 위치
+SOURCE_KINDS = ("odata", "rest", "file")
 #: 동기화 기록의 상태.
 RUN_STATUSES = ("planned", "ok", "failed")
 
@@ -51,16 +54,21 @@ class DataSource(Base):
     name: Mapped[str] = mapped_column(String(100))
     kind: Mapped[str] = mapped_column(String(20), default="odata", server_default="odata")
 
-    base_url: Mapped[str] = mapped_column(String(500))
-    """OData 서비스 루트 — `https://plm.example.com/odata/v4`."""
-    entity_set: Mapped[str] = mapped_column(String(200))
-    """읽을 엔티티 셋 — `Suppliers`. 루트 뒤에 그대로 붙는다."""
+    base_url: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    """OData 서비스 루트 — `https://plm.example.com/odata/v4`. REST 면 API 루트. 파일이면
+    빈 값."""
+    entity_set: Mapped[str] = mapped_column(String(500))
+    """읽을 것 — OData 는 엔티티 셋(`Suppliers`), REST 는 경로(`/v1/suppliers`), 파일은
+    URL 또는 `datasource_dir` 아래 경로(`erp/suppliers.xlsx`)."""
+    options: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """종류별 설정 — `fetchers.py`. REST: rows_path·paging·… / 파일: format·sheet."""
     filter: Mapped[str] = mapped_column(Text, default="", server_default="")
     """`$filter` 그대로 — `Status eq 'Released'`."""
     select: Mapped[str] = mapped_column(Text, default="", server_default="")
     """`$select` — 비우면 칸 대응에 쓰인 열만 청한다."""
     auth: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
-    """{kind: none|basic|bearer, user, secret}. **화면에 다시 보여 주지 않는다.**"""
+    """{kind: none|basic|bearer|header, user, secret}. `header` 면 user 가 헤더 이름
+    (`X-API-Key`), secret 이 값. **화면에 다시 보여 주지 않는다.**"""
     page_size: Mapped[int] = mapped_column(Integer, default=500, server_default="500")
 
     type_id: Mapped[uuid.UUID] = mapped_column(

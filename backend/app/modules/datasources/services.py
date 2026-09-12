@@ -25,7 +25,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.datasources import odata
+from app.modules.datasources import fetchers, odata
 from app.modules.datasources.models import DataSource, DataSourceRun
 from app.modules.objects import aliases, bulk
 from app.modules.objects.models import ObjectAlias, ObjectInstance
@@ -254,12 +254,10 @@ def preview(db: Session, source: DataSource, *, limit: int = 5) -> dict[str, Any
     object_type = db.get(ObjectType, source.type_id)
     assert object_type is not None
     defs = properties_of(db, object_type.id)
-    fetched = odata.fetch(
-        base_url=source.base_url,
-        entity_set=source.entity_set,
-        select=source.select,
-        filter_=source.filter,
+    fetched = fetchers.fetch(
+        source,
         auth=_auth(source),
+        select=source.select,
         page_size=limit,
         max_rows=limit,
         transport=transport,
@@ -301,13 +299,10 @@ def sync(db: Session, user: User | None, source: DataSource, *, apply: bool) -> 
     db.flush()
 
     try:
-        fetched = odata.fetch(
-            base_url=source.base_url,
-            entity_set=source.entity_set,
-            select=source.select or mapping.select_clause(),
-            filter_=source.filter,
+        fetched = fetchers.fetch(
+            source,
             auth=_auth(source),
-            page_size=source.page_size,
+            select=source.select or mapping.select_clause(),
             transport=transport,
         )
     except AppError as caught:
