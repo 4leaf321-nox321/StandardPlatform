@@ -12,7 +12,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from tests.api.conftest import Signed, notifications_of
-from tests.api.test_ontology import _make_object, _make_type
+from tests.api.test_ontology import _make_object, _make_property, _make_type
 
 
 def _profile(client: TestClient, who: Signed, slug: str, object_id: str) -> dict[str, Any]:
@@ -102,3 +102,30 @@ def test_투영_타입은_여기서_안_지켜본다(client: TestClient, admin: 
         return
     denied = _watch(client, admin, projected, listed["items"][0]["id"], True)
     assert denied.status_code == 409
+
+
+def test_알림이_사람의_말로_적힌다(client: TestClient, admin: Signed, manager: Signed) -> None:
+    """**내부 키를 그대로 내보내면 알림이 하려던 일이 안 된다.**
+
+    `properties.weight` 를 받은 사람은 그것이 화면의 어느 칸인지 모르고, 그러면 열어
+    보는 수밖에 없다 — 열지 말지를 정하라고 보낸 알림인데.
+    """
+    part = _make_type(client, admin, label="부품")
+    _make_property(client, admin, part, key="weight", label="무게", data_type="number")
+    bolt = _make_object(client, admin, part, label="볼트", properties={"weight": 10})
+    _watch(client, manager, part, bolt["id"], True)
+
+    client.patch(
+        f"/api/objects/{part}/{bolt['id']}",
+        json={"label": "육각 볼트", "properties": {"weight": 12}},
+        headers=admin.headers,
+    )
+    got = notifications_of(client, manager, "object.changed")[0]
+    # 제목에 타입 slug 가 새면 안 된다 — 사람이 화면에서 본 적 없는 글자다.
+    assert got["title"].startswith("육각 볼트")
+    assert f"{part}:" not in got["title"]
+    # 바뀐 칸은 정의에 적힌 이름으로.
+    assert "이름" in got["body"] and "무게" in got["body"]
+    assert "properties.weight" not in got["body"]
+    # 어느 타입의 것인지도 한 줄에.
+    assert "부품" in got["body"]

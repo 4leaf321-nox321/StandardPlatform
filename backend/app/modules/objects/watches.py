@@ -32,7 +32,7 @@ from sqlalchemy.orm import Session
 from app.database import SessionLocal
 from app.modules.notifications import services as notifications
 from app.modules.objects.models import ObjectInstance, ObjectWatch
-from app.modules.ontology.models import ObjectType
+from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared import events
 
 logger = logging.getLogger(__name__)
@@ -107,14 +107,68 @@ def counts(db: Session, object_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
     return {key: len(value) for key, value in watchers(db, object_ids).items()}
 
 
-def _changed_fields(one: events.ChangeEvent) -> str:
-    """무엇이 바뀌었나 — 칸 이름 몇 개. **값은 안 싣는다**: 알림은 못 보는 사람에게도
-    남고, 남의 부서 값이 거기 적히면 그것은 샌 것이다."""
-    keys = [key for key in (one.changes or {}) if not key.startswith("_")]
-    if not keys:
+#: 객체 자신이 가진 칸의 이름. 속성은 정의에서 가져온다.
+FIXED_LABELS = {
+    "label": "이름",
+    "key": "식별자",
+    "description": "설명",
+    "status": "상태",
+    "owner_workspace_id": "소유 부서",
+    "valid_from_year": "시작 연도",
+    "valid_to_year": "끝 연도",
+}
+
+
+def _changed_fields(one: events.ChangeEvent, labels: dict[str, str]) -> str:
+    """무엇이 바뀌었나 — **사람이 읽는 칸 이름으로.**
+
+    `properties.weight` 같은 내부 키를 그대로 내보내면 알림을 받은 사람은 그것이
+    화면의 어느 칸인지 모른다 — 그러면 열어 보는 수밖에 없고, 알림이 하려던 일
+    (열지 말지 정하기)이 안 된다.
+
+    **값은 안 싣는다**: 알림은 못 보는 사람에게도 남고, 남의 부서 값이 거기 적히면
+    그것은 샌 것이다.
+    """
+    shown: list[str] = []
+    for key, change in (one.changes or {}).items():
+        if key.startswith("_"):
+            continue
+        if key == "properties":
+            # 속성은 통째로 한 칸에 담겨 온다(JSONB) — **무엇이 바뀌었는지는 그 안에
+            # 있다.** 「속성이 바뀌었습니다」 로 뭉뚱그리면 열어 보는 수밖에 없다.
+            shown.extend(_changed_properties(change, labels))
+            continue
+        shown.append(labels.get(key, FIXED_LABELS.get(key, key.split(".")[-1])))
+    if not shown:
         return ""
-    shown = ", ".join(keys[:3])
-    return f"{shown} 외 {len(keys) - 3}개" if len(keys) > 3 else shown
+    return ", ".join(shown[:3]) + (f" 외 {len(shown) - 3}개" if len(shown) > 3 else "")
+
+
+def _changed_properties(change: object, labels: dict[str, str]) -> list[str]:
+    """`{"before": {...}, "after": {...}}` 에서 **실제로 달라진 속성**의 이름만."""
+    if not isinstance(change, dict):
+        return []
+    before = change.get("before") or {}
+    after = change.get("after") or {}
+    if not isinstance(before, dict) or not isinstance(after, dict):
+        return []
+    keys = sorted(key for key in {*before, *after} if before.get(key) != after.get(key))
+    return [labels.get(f"properties.{key}", key) for key in keys]
+
+
+def _property_labels(db: Session, type_ids: set[uuid.UUID]) -> dict[uuid.UUID, dict[str, str]]:
+    """타입마다 {`properties.<키>`: 사람이 읽는 이름}. 한 질의로 모은다."""
+    out: dict[uuid.UUID, dict[str, str]] = {}
+    if not type_ids:
+        return out
+    rows = db.scalars(
+        select(PropertyDef).where(
+            PropertyDef.owner_kind == "type", PropertyDef.owner_id.in_(type_ids)
+        )
+    )
+    for row in rows:
+        out.setdefault(row.owner_id, {})[f"properties.{row.key}"] = row.label
+    return out
 
 
 def on_events(staged: list[events.ChangeEvent]) -> None:
@@ -134,11 +188,12 @@ def on_events(staged: list[events.ChangeEvent]) -> None:
             by_object = watchers(db, ids)
             if not by_object:
                 return
-            types = {row.id: row.slug for row in db.scalars(select(ObjectType))}
+            types = {row.id: row for row in db.scalars(select(ObjectType))}
             objects = {
                 row.id: row
                 for row in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(ids)))
             }
+            labels = _property_labels(db, {row.type_id for row in objects.values()})
             sent = 0
             for one in wanted:
                 target = one.target_id
@@ -150,14 +205,24 @@ def on_events(staged: list[events.ChangeEvent]) -> None:
                     if one.actor_id and user_id == one.actor_id:
                         continue
                     row = objects.get(target)
-                    slug = types.get(row.type_id) if row else None
-                    fields = _changed_fields(one)
+                    object_type = types.get(row.type_id) if row else None
+                    slug = object_type.slug if object_type else None
+                    fields = _changed_fields(one, labels.get(row.type_id, {}) if row else {})
+                    # **감사 기록의 이름표를 그대로 쓰지 않는다.** 그것은 `slug:이름`
+                    # 이라 타입 슬러그가 알림 제목으로 새어 나온다 — 사람이 화면에서
+                    # 본 적 없는 글자다.
+                    name = row.label if row else one.target_label.split(":", 1)[-1]
+                    where = object_type.label if object_type else ""
                     notifications.notify(
                         db,
                         user_id=user_id,
                         kind=notifications.OBJECT_CHANGED,
-                        title=f"{one.target_label} — {LABELS.get(one.action, '바뀌었습니다')}",
-                        body=f"{one.actor_label}{f' · {fields}' if fields else ''}",
+                        title=f"{name} — {LABELS.get(one.action, '바뀌었습니다')}",
+                        # 타입 · 누가 · 무엇이. 빈 조각은 뺀다 — 「부품 ·  · 」 는
+                        # 정보가 아니라 잡음이다.
+                        body=" · ".join(
+                            part for part in (where, one.actor_label, fields) if part
+                        ),
                         # 지워진 것은 열 수 없다 — 그때는 목록으로 보낸다.
                         link=(
                             f"/o/{slug}/{target}"
