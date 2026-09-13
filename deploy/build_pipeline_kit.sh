@@ -54,6 +54,9 @@ echo "    휠 $(find "$STAGE/wheels" -name '*.whl' | wc -l)개"
 echo "==> [3/3] 묶기"
 ( cd "$OUT_DIR" && python3 -m zipfile -c "$NAME.zip" "$NAME" \
     && sha256sum "$NAME.zip" > "$NAME.zip.sha256" )
+# **풀어 둔 폴더를 남기지 않는다.** release/ 에는 서버 번들 폴더도 있다 — 둘이 나란히 있으면
+# 「번들 폴더 하나」 를 찾는 릴리스 검사가 이것을 집는다(v0.2.0 에서 실제로 막혔다).
+rm -rf "$STAGE"
 
 SIZE=$(du -h "$OUT_DIR/$NAME.zip" | cut -f1)
 echo

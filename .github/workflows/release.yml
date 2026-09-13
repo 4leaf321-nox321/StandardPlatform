@@ -97,7 +97,9 @@ jobs:
       - name: 번들 스크립트가 LF 인가
         run: |
           set -euo pipefail
-          dir=$(find release -maxdepth 1 -type d -name '*-*' | head -1)
+          # 정제 도구 묶음(sp-pipeline-*)은 서버 번들이 아니다 — 집지 않는다.
+          dir=$(find release -maxdepth 1 -type d -name '*-*' ! -name 'sp-pipeline-*' | head -1)
+          [ -n "$dir" ] && ls "$dir"/*.sh >/dev/null 2>&1 || { echo "번들 폴더 · 스크립트를 찾지 못했습니다"; exit 1; }
           for sh in "$dir"/*.sh; do
             if grep -qU $'\r' "$sh"; then
               echo "$sh 에 CRLF 가 있습니다 — 서버에서 bad interpreter 로 죽습니다"

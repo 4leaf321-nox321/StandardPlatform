@@ -484,7 +484,9 @@ describe('지식 그래프', () => {
         }),
       ),
     )
-    expect(screen.getByRole('checkbox', { name: /공급받음/ })).toBeChecked()
+    // 관계 칩은 이웃을 부른 **뒤에** 그려진다 — 부른 것을 본 순간 바로 찾으면 느린 CI 에서만
+    // 없다고 나온다(v0.2.0 에서 실제로 막혔다). 그려질 때까지 기다린다.
+    expect(await screen.findByRole('checkbox', { name: /공급받음/ })).toBeChecked()
   })
 })
 
