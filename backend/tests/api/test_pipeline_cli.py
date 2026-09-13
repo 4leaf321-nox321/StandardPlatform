@@ -233,3 +233,23 @@ def test_플랫폼이_거절하면_이유를_말하고_멈춘다(
     _fill(run, admin.workspace)
     with pytest.raises(pipeline.Stop, match="거절"):
         pipeline.cmd_preview(run, server=SERVER, token="spt_not-a-real-token")
+
+
+def test_플랫폼에_닿지_않으면_트레이스백이_아니라_할_일을_말한다(tmp_path: Path) -> None:
+    """서버가 꺼졌거나 주소가 틀렸을 때 — 거절당한 것과 **닿지 않은 것**을 가른다."""
+    run = tmp_path / "run"
+    pipeline.cmd_init(run)
+    _fill(run, "cae")
+
+    def refused(
+        method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> tuple[int, Any]:
+        raise pipeline.urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+    before = pipeline.SEND
+    pipeline.SEND = refused
+    try:
+        with pytest.raises(pipeline.Stop, match="닿지 않습니다"):
+            pipeline.cmd_preview(run, server="http://127.0.0.1:9", token="spt_x")
+    finally:
+        pipeline.SEND = before

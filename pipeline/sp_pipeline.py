@@ -314,7 +314,17 @@ def _post_bundle(server: str, token: str, body: dict[str, Any]) -> dict[str, Any
         "X-Client": CLIENT,
     }
     raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
-    status, answer = SEND("POST", f"{server.rstrip('/')}/api/bundles/import", headers, raw)
+    url = f"{server.rstrip('/')}/api/bundles/import"
+    try:
+        status, answer = SEND("POST", url, headers, raw)
+    except (urllib.error.URLError, OSError) as failure:
+        # **닿지 않은 것과 거절당한 것을 가른다.** 트레이스백을 보여 주면 사람은 무엇을
+        # 고칠지(주소 · 서버가 떠 있나 · 사내망) 모른다.
+        reason = getattr(failure, "reason", failure)
+        raise Stop(
+            f"플랫폼에 닿지 않습니다: {server} ({reason}) — "
+            "주소(SP_SERVER)와 서버가 떠 있는지 확인하세요"
+        ) from failure
     if status != 200:
         error = answer.get("error", {}) if isinstance(answer, dict) else {}
         raise Stop(
