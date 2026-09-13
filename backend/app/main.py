@@ -26,6 +26,7 @@ from app.modules.accounts import routes as accounts_routes
 from app.modules.accounts import services as accounts_services
 from app.modules.audit import routes as audit_routes
 from app.modules.auth import routes as auth_routes
+from app.modules.bundles import routes as bundles_routes
 from app.modules.datasources import routes as datasources_routes
 from app.modules.datasources import services as datasources_services
 from app.modules.files import routes as files_routes
@@ -78,6 +79,8 @@ def _api_router() -> APIRouter:
     # 도메인은 여전히 이 저장소에 없고, 여기 정의로 얹힌다.
     router.include_router(ontology_routes.router)
     router.include_router(objects_routes.router)
+    # 정의 · 객체 · 관계를 한 묶음으로 — 로컬 정제 도구(pipeline/)가 부른다.
+    router.include_router(bundles_routes.router)
     router.include_router(graph_routes.router)
     router.include_router(search_routes.router)
     router.include_router(server_routes.router)
@@ -146,6 +149,8 @@ def _register_extensions() -> None:
     # 토큰이 타입까지 지울 수 있다.
     scopes.register_write_scope("/api/ontology", "ontology:write")
     scopes.register_write_scope("/api/objects", "objects:write")
+    # 묶음은 객체를 쓴다. 정의가 들면 라우트가 ontology:write 를 더 묻는다.
+    scopes.register_write_scope("/api/bundles", "objects:write")
     # 동기화는 객체를 넣는 일이다 — 같은 범위. 소스 정의 자체는 시스템 관리자만.
     scopes.register_write_scope("/api/datasources", "objects:write")
     # `import` 는 POST 지만 `dry_run` 이면 아무것도 안 바꾼다. 그래도 **읽기로

@@ -25,7 +25,8 @@
 | 운영 | 공지(팝업 포함), 알림, 감사 로그, 접근 로그, 서버 상태 화면 |
 | 배포 | Apptainer 이미지·systemd 유닛·설치/갱신/롤백/백업/복구 스크립트, GitHub Actions |
 | 온톨로지 | 타입·속성·관계를 **데이터로 정의**하면 사이드바·목록·상세·트리가 생긴다 |
-| MCP | 기계가 정의를 읽고 채우는 길 — 스키마·가져오기(미리 보기)·객체·관계 |
+| MCP | 기계가 정의를 읽고 채우는 길 — 스키마·가져오기(미리 보기)·객체·관계·통계·묶음 |
+| 정제 파이프라인 | 원천을 AI(Claude Code · Gemini CLI)로 정제한 결과물 묶음을 검증 → 한 번에 미리 보기 → 전부 아니면 무로 적재 — [pipeline/](pipeline/README.md) |
 | 웹훅 | 커밋된 변경을 바깥에 알린다 — 감사 기록이 곧 이벤트, 서명·재시도·보낸 기록 |
 | 데이터 소스 | 바깥 시스템(OData v4/v2 · REST JSON · CSV/Excel/JSON 파일)에서 읽어 온톨로지를 채운다 — 칸·값 대응, 별칭으로 같은 객체 다시 찾기, 계획 먼저, 타이머 |
 | 규약 | 오류 봉투 + 요청 ID, 로그, 페이지네이션(서버 상한 + 화면), 구조 시험 |
@@ -251,8 +252,8 @@ sudo ./deploy.sh status
 
 ```bash
 cd backend
-.venv/bin/ruff format . ../mcp_server --config pyproject.toml
-.venv/bin/ruff check . ../mcp_server --config pyproject.toml
+.venv/bin/ruff format . ../mcp_server ../pipeline --config pyproject.toml
+.venv/bin/ruff check . ../mcp_server ../pipeline --config pyproject.toml
 .venv/bin/mypy
 .venv/bin/python -m pytest
 .venv/bin/python -m alembic check
@@ -314,10 +315,12 @@ deploy/                **배포의 정본** — 산출물이 아니다
   backup.sh restore.sh DB 덤프와 파일 — 복구는 카탈로그로 검증한다
   README_OPERATOR.md   **운영자가 읽는 정본**
 .github/workflows/     CI (백엔드 · 프론트 · 이미지 빌드)
+pipeline/              로컬 정제 도구 — AI 결과물 묶음을 검증 · 미리 보기 · 적재 (AGENTS.md 가 절차의 정본)
 docs/
   adr/                 판단이 갈렸던 결정
   새-플랫폼-만들기.md    포크 절차의 정본
   리눅스-이전-계획.md    Windows -> 리눅스 이전의 기록과 밟은 함정
+  데이터-온톨로지화-계획.md  원천 데이터를 AI 로 정제해 넣는 길 — 만들 것과 순서(계획)
 ```
 
 ## 참고

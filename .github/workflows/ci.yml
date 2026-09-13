@@ -75,8 +75,8 @@ jobs:
       - name: 린트 (ruff)
         working-directory: backend
         run: |
-          python -m ruff check . ../mcp_server --config pyproject.toml
-          python -m ruff format --check . ../mcp_server --config pyproject.toml
+          python -m ruff check . ../mcp_server ../pipeline --config pyproject.toml
+          python -m ruff format --check . ../mcp_server ../pipeline --config pyproject.toml
 
       - name: 타입 (mypy strict)
         working-directory: backend

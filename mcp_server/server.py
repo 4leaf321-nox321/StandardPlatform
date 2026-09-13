@@ -500,6 +500,27 @@ async def objects_import(
 # 관계
 # --------------------------------------------------------------------------- #
 @mcp.tool()
+async def bundle_import(ctx: Context, bundle: dict[str, Any], apply: bool = False) -> Any:
+    """**정의 · 객체 · 관계를 한 묶음으로** — 정제 도구(`pipeline/`)가 만든 결과물.
+
+    `apply=False`(기본)면 **아무것도 저장하지 않고 한 번에 미리 본다** — 정의를
+    먼저 적용하지 않아도 그 정의로 객체와 관계를 맞춰 본다. 만든 묶음이 어떻게
+    들어갈지 스스로 확인할 때 쓴다.
+
+    `apply=True` 는 **전부 아니면 무** — 한 곳이라도 오류면 아무것도 안 들어간다.
+    **넣는 것은 사람이 미리 보기를 확인한 뒤에만** 한다(보통은 `sp_pipeline.py
+    apply` 가 한다).
+
+    모양: `{"ontology": <ontology_import 와 같은 스키마, 없으면 생략>,
+    "objects": [{"type_slug", "workspace_slug", "rows": [...]}],
+    "relations": [{"type_slug", "rows": [{"src","relation","dst","evidence_note"}]}]}`.
+    행은 `objects_import` · `relations_import` 와 같다. `objects` 는 **적은 차례대로**
+    넣는다 — 참조하는 타입을 뒤에. 정의가 들면 시스템 관리자와 `ontology:write`
+    범위가 필요하다."""
+    return await _post(ctx, "/api/bundles/import", {**bundle, "apply": apply})
+
+
+@mcp.tool()
 async def relation_add(
     ctx: Context,
     type_slug: str,

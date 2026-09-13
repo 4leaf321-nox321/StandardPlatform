@@ -436,3 +436,17 @@ def test_통계와_다른_타입의_칸을_도구로도_센다(bot: Bot) -> None
     narrowed = bot.call(server.objects_summary, tool, group_by="status", conditions=american)
     listed = bot.call(server.objects_list, tool, conditions=american)
     assert narrowed["total"] == listed["total"] == 2
+
+
+def test_묶음을_도구로_미리_본다(bot: Bot) -> None:
+    """AI 가 만든 묶음이 어떻게 들어갈지 **스스로** 확인하는 자리 — 아무것도 안 남는다."""
+    slug = _uniq("memo")
+    bundle = {
+        "ontology": {"types": [{"slug": slug, "label": "메모", "properties": []}]},
+        "objects": [{"type_slug": slug, "rows": [{"label": "첫 메모"}]}],
+    }
+    seen = bot.call(server.bundle_import, bundle)
+    assert seen["ok"] is True and seen["applied"] is False
+    assert seen["counts"]["objects_create"] == 1
+    with pytest.raises(ToolError):
+        bot.call(server.objects_list, slug)

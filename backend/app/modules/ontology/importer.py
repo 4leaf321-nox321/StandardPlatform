@@ -26,6 +26,7 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
+from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.ontology import views
 from app.modules.ontology.models import (
@@ -39,6 +40,7 @@ from app.modules.ontology.models import (
     TEMPORAL_KINDS,
     NavGroup,
     ObjectType,
+    OntologySnapshot,
     PropertyDef,
     RelationType,
 )
@@ -424,6 +426,25 @@ def _warn_relation_risks(
 
 
 # --- 적용 -------------------------------------------------------------------
+
+
+def take_snapshot(db: Session, user: User, *, reason: str) -> OntologySnapshot:
+    """지금 정의를 통째로 남긴다. **부르는 쪽이 커밋한다.**
+
+    가져오기 화면과 묶음 가져오기가 같이 쓴다 — 따로 적으면 한쪽 스냅샷에만 빠지는 칸이
+    생기고, 그 차이는 되돌리는 날에야 드러난다.
+    """
+    row = OntologySnapshot(
+        actor_id=user.id,
+        # **그때의 이름을 박는다.** 계정이 지워지면 누가 했는지 모르게 되는데,
+        # 그건 되돌릴 자리가 존재하는 이유와 정면으로 어긋난다.
+        actor_label=user.display_name or user.email,
+        reason=reason,
+        schema=capture(db),
+    )
+    db.add(row)
+    db.flush()
+    return row
 
 
 def capture(db: Session) -> dict[str, Any]:

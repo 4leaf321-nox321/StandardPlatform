@@ -35,6 +35,7 @@ TOOLS = {
     "object_update",
     "relation_add",
     "objects_import",
+    "bundle_import",
     "relations_import",
     "object_history",
     "object_references",
@@ -181,6 +182,14 @@ def test_이어진_칸의_주소는_서버에_묻는다() -> None:
     seen = _serve(lambda _r: httpx.Response(200, json=[]))
     asyncio.run(server.object_fields(_ctx("Bearer t"), "tool"))
     assert seen[0].url.path == "/api/objects/tool/fields"
+
+
+def test_묶음은_미리_보기가_기본이다() -> None:
+    """넣는 것은 사람이 미리 보기를 확인한 뒤다 — 기본으로 넣으면 그 자리가 없다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"ok": True, "applied": False}))
+    asyncio.run(server.bundle_import(_ctx("Bearer t"), {"objects": []}))
+    assert seen[0].url.path == "/api/bundles/import"
+    assert json.loads(seen[0].content)["apply"] is False
 
 
 def test_가이드는_서버가_쥔다() -> None:

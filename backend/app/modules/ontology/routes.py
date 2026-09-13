@@ -1032,18 +1032,8 @@ def dynamic_nav(
 
 
 def _snapshot(db: Session, user: User, *, reason: str) -> OntologySnapshot:
-    """지금 정의를 통째로 남긴다. **부르는 쪽이 커밋한다.**"""
-    row = OntologySnapshot(
-        actor_id=user.id,
-        # **그때의 이름을 박는다.** 계정이 지워지면 누가 했는지 모르게 되는데,
-        # 그건 되돌릴 자리가 존재하는 이유와 정면으로 어긋난다.
-        actor_label=user.display_name or user.email,
-        reason=reason,
-        schema=importer.capture(db),
-    )
-    db.add(row)
-    db.flush()
-    return row
+    """지금 정의를 통째로 남긴다. **부르는 쪽이 커밋한다.** 묶음 가져오기와 한 벌이다."""
+    return importer.take_snapshot(db, user, reason=reason)
 
 
 def _plan_out(

@@ -32,6 +32,9 @@ logger = logging.getLogger(__name__)
 
 _KEY = "change_events"
 
+#: 이 세션의 커밋을 **바깥에 알리지 않고 모아 두는** 자리. `hold` 가 연다.
+_HOLD = "change_events_held"
+
 
 @dataclass(frozen=True)
 class ChangeEvent:
@@ -66,9 +69,38 @@ def stage(db: Session, one: ChangeEvent) -> None:
     db.info.setdefault(_KEY, []).append(one)
 
 
+def hold(db: Session) -> None:
+    """이 세션의 커밋을 **바깥에 알리지 않고 모아 둔다.**
+
+    묶음 가져오기는 바깥 트랜잭션 하나 안에서 여러 서비스를 부르고, 그 서비스들이 저마다
+    커밋한다(세이브포인트). 그 커밋마다 내보내면 끝내 롤백된 변경이 이미 나가 있다 —
+    미리 보기는 전부 롤백이다. 모았다가 바깥이 커밋된 뒤 `release` 로 내보낸다.
+    """
+    db.info[_HOLD] = []
+
+
+def release(db: Session) -> None:
+    """모아 둔 것을 내보낸다. **바깥 트랜잭션이 커밋된 뒤에만** 부른다."""
+    held: list[ChangeEvent] = [*db.info.pop(_HOLD, []), *db.info.pop(_KEY, [])]
+    _dispatch(held)
+
+
+def drop_held(db: Session) -> None:
+    """모아 둔 것을 버린다 — 바깥이 롤백될 때."""
+    db.info.pop(_HOLD, None)
+    db.info.pop(_KEY, None)
+
+
 @event.listens_for(Session, "after_commit")
 def _flush(session: Session) -> None:
     staged: list[ChangeEvent] = session.info.pop(_KEY, [])
+    if _HOLD in session.info:
+        session.info[_HOLD].extend(staged)
+        return
+    _dispatch(staged)
+
+
+def _dispatch(staged: list[ChangeEvent]) -> None:
     if not staged or not _listeners:
         return
     for listener in _listeners:

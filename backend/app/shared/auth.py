@@ -82,6 +82,9 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
             raise AppError(code("AUTH", 101), "토큰이 유효하지 않습니다.", status=401)
         user, pat = found
         _enforce_token_scope(request, list(pat.scopes or []), request.url.path)
+        # 한 요청이 **범위 둘**을 요구할 때(정의가 든 묶음) 라우트가 더 물을 수 있게 남긴다.
+        # 사람 세션에는 없다 — 범위는 기계 자격에만 있는 개념이다.
+        request.state.token_scopes = list(pat.scopes or [])
         # **감사에 토큰 이름을 남긴다.** 소유자만 남기면 사람이 넣은 것과 기계가
         # 넣은 것이 구별되지 않는다.
         set_actor_token(pat.name)

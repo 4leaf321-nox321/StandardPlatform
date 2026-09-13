@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-09-13a
+GUIDE_VERSION: 2026-09-13b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -24,6 +24,7 @@ GUIDE_VERSION: 2026-09-13a
 | 무엇이 나빠지고 있나(필수값·고아·끊긴 참조·중복) | `quality_report` | 볼 수 있는 것만 |
 | 객체 하나 만들기 | `object_create` | 정의에 없는 속성 키는 거절된다 |
 | 객체 고치기 | `object_update` | **보낸 키만** 병합. 비우려면 `null` |
+| 정제 도구가 만든 묶음(정의 · 객체 · 관계)이 어떻게 들어갈지 | `bundle_import(bundle, apply=false)` | **넣는 것은 사람이 미리 보기를 본 뒤에만.** 원천을 곧바로 넣지 않는다 — `pipeline/AGENTS.md` |
 | 여러 행 한 번에(upsert) | `objects_import(apply=false)` → `apply=true` | 같은 `key` 면 고침. 한 행이라도 오류면 전부 안 넣음 |
 | 객체 둘 잇기 | `relation_add` | **근거(evidence_note)를 적는다** |
 | 관계 여러 줄 한 번에 | `relations_import(apply=false)` → `apply=true` | 이미 이어진 건 그대로 |
@@ -178,6 +179,13 @@ GUIDE_VERSION: 2026-09-13a
 - 응답은 행마다 `create` / `update` / `unchanged` / `error`. **한 행이라도 `error`
   면 `apply=true` 여도 아무것도 안 들어간다.** 오류를 고쳐 다시 보낸다.
 - 한 번에 5000행까지. 더 많으면 나눈다.
+
+### 묶음 — `bundle_import(bundle, apply=false)`
+
+원천 데이터를 정제해 넣을 때는 **`pipeline/` 의 절차**를 따른다(실행 폴더 · 검증 · 미리 보기 ·
+적용). 이 도구는 그 묶음을 **한 번에 미리 보는** 자리다 — 정의를 먼저 적용하지 않아도 그 정의로
+객체 · 관계를 맞춰 본다. `apply=true` 는 전부 아니면 무. **사람이 미리 보기를 확인하기 전에는
+`apply=true` 로 부르지 않는다.**
 
 <!--@ relations -->
 ## 객체 잇기

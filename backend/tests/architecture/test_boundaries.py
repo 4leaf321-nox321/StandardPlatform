@@ -18,7 +18,11 @@ MODULES = BACKEND / "app" / "modules"
 
 #: 모듈 이름이 프론트와 같아야 한다는 규칙의 예외. **사유와 함께** 적는다 —
 #: 목록에 있다는 것 자체가 "여기는 일부러 다르다" 는 기록이다.
-FRONTEND_MERGED: set[str] = set()
+FRONTEND_MERGED: set[str] = {
+    # 묶음 가져오기 — 지금은 로컬 정제 도구(pipeline/)와 MCP 가 부른다. 묶음을 올려
+    # 미리 보는 화면이 생기면 그 모듈을 만들고 여기서 뺀다.
+    "bundles",
+}
 
 
 def _imports(path: Path) -> set[str]:
