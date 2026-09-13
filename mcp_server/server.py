@@ -134,7 +134,7 @@ async def _patch(ctx: Context, path: str, json_body: Any) -> Any:
 # 달라 낡는다. 로컬엔 짧은 스텁만 두고 본문은 여기서 읽어 준다.
 # --------------------------------------------------------------------------- #
 _GUIDE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guide", "GUIDE.md")
-_GUIDE_TOPICS = ("overview", "schema", "find", "objects", "bulk", "relations")
+_GUIDE_TOPICS = ("overview", "modeling", "schema", "find", "objects", "bulk", "relations")
 
 
 def _guide_sections() -> tuple[str, dict[str, str]]:
@@ -169,6 +169,7 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
 
     `topic` 없이 부르면 **overview** — "하려는 일 → 어떤 도구" 표와 기본 습관.
     대개 이것만으로 충분하고, 세부가 필요하면 그때 주제를 지정한다:
+      - `modeling` 무엇을 타입·속성·관계로 만드나 — 원천을 정제하기 전에
       - `schema` 정의 읽기·바꾸기(미리 보기 → 적용)
       - `find` 찾기·거르기·이력·참조·품질
       - `objects` 객체 하나씩 만들고 고치기

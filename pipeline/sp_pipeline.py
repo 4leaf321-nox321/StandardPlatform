@@ -47,6 +47,8 @@ CLIENT = "sp-pipeline"
 #: 플랫폼이 한 번에 받는 행 수(파일로 넣기와 같다).
 MAX_ROWS = 5000
 RELATION_FIELDS = ("src", "relation", "dst", "evidence_note")
+#: 이보다 낮은 확신도의 행은 넣지 않는다 — 모델링 규약 5장. unresolved.json 으로 간다.
+LOW_CONFIDENCE = 0.7
 ONTOLOGY_KEYS = {"groups", "types", "relation_types"}
 
 #: (method, url, headers, body) -> (status, json). 시험이 갈아 끼운다.
@@ -280,6 +282,11 @@ def validate(run: Run, *, allow_unresolved: bool = False) -> Report:
     return report
 
 
+def _rows(indexes: list[int], limit: int = 5) -> str:
+    shown = ", ".join(str(one) for one in indexes[:limit])
+    return shown + (f" 외 {len(indexes) - limit}" if len(indexes) > limit else "")
+
+
 def _check_rows(batch: Batch, report: Report, *, max_rows: int) -> None:
     if len(batch.rows) > max_rows:
         report.errors.append(
@@ -288,6 +295,31 @@ def _check_rows(batch: Batch, report: Report, *, max_rows: int) -> None:
     not_dict = sum(1 for row in batch.rows if not isinstance(row, dict))
     if not_dict:
         report.errors.append(f"{batch.file}: 객체({{...}})가 아닌 행 {not_dict}개")
+    rows = [row for row in batch.rows if isinstance(row, dict)]
+    weak = [
+        index
+        for index, row in enumerate(rows, start=1)
+        if isinstance(row.get("_confidence"), int | float)
+        and row["_confidence"] < LOW_CONFIDENCE
+    ]
+    if weak:
+        report.errors.append(
+            f"{batch.file}: 확신도 {LOW_CONFIDENCE} 미만인 행 {len(weak)}개({_rows(weak)}행)"
+            " — 넣지 말고 unresolved.json 으로 옮기세요"
+        )
+    # 문서(쪽 · 슬라이드)에서 뽑은 행은 원문 인용이 있어야 검토하는 사람이 원문을 안 연다.
+    unquoted = [
+        index
+        for index, row in enumerate(rows, start=1)
+        if isinstance(row.get("_source"), dict)
+        and ("page" in row["_source"] or "slide" in row["_source"])
+        and not row["_source"].get("quote")
+    ]
+    if unquoted:
+        report.warnings.append(
+            f"{batch.file}: 문서에서 뽑았는데 원문 인용(_source.quote)이 없는 행"
+            f" {len(unquoted)}개({_rows(unquoted)}행) — 검토할 때 원문을 열어야 합니다"
+        )
     no_source = sum(
         1 for row in batch.rows if isinstance(row, dict) and not row.get("_source")
     )

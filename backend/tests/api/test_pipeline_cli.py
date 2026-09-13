@@ -253,3 +253,34 @@ def test_플랫폼에_닿지_않으면_트레이스백이_아니라_할_일을_�
             pipeline.cmd_preview(run, server="http://127.0.0.1:9", token="spt_x")
     finally:
         pipeline.SEND = before
+
+
+def test_규약대로_확신도가_낮은_행은_막고_인용_없는_문서_행은_경고한다(tmp_path: Path) -> None:
+    """모델링 규약 5장 — 0.7 미만은 넣지 않고, 문서에서 뽑은 행은 원문 인용을 붙인다."""
+    run = tmp_path / "run"
+    pipeline.cmd_init(run)
+    names = _fill(run, "cae")
+    _write(
+        run / "objects" / "c_docs.json",
+        {
+            "type_slug": names["company"],
+            "workspace_slug": "cae",
+            "rows": [
+                {
+                    "key": "C-9",
+                    "label": "문맥으로 짐작한 기업",
+                    "_source": {"file": "보고서.pdf", "page": 4, "quote": "협력사로 참여"},
+                    "_confidence": 0.5,
+                },
+                {
+                    "key": "C-8",
+                    "label": "표에서 읽은 기업",
+                    "_source": {"file": "발표.pptx", "slide": 7},
+                },
+            ],
+        },
+    )
+    ok, text = pipeline.cmd_validate(run)
+    assert ok is False
+    assert "확신도 0.7 미만인 행 1개(1행)" in text
+    assert "원문 인용(_source.quote)이 없는 행 1개(2행)" in text

@@ -197,7 +197,17 @@ def test_가이드는_서버가_쥔다() -> None:
     overview = asyncio.run(server.get_guide(_ctx(None)))
     assert overview["topic"] == "overview"
     assert "ontology_schema" in overview["content"]
-    assert set(overview["more_topics"]) >= {"schema", "find", "objects", "bulk", "relations"}
+    assert set(overview["more_topics"]) >= {
+        "modeling",
+        "schema",
+        "find",
+        "objects",
+        "bulk",
+        "relations",
+    }
+    # 규약은 **코어 온톨로지 초안을 가리킨다** — AI 가 무엇부터 쓸지 여기서 안다.
+    modeling = asyncio.run(server.get_guide(_ctx(None), topic="modeling"))
+    assert "core-ontology.json" in modeling["content"]
 
     bulk = asyncio.run(server.get_guide(_ctx(None), topic="bulk"))
     assert bulk["topic"] == "bulk" and "upsert" in bulk["content"]
