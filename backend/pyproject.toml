@@ -1,6 +1,6 @@
 [project]
 name = "standard-platform-backend"
-version = "0.1.2"
+version = "0.2.0"
 requires-python = ">=3.12,<3.13"
 
 # 의존성 정본은 requirements.txt 다. 폐쇄망 배포가 `pip wheel -r requirements.txt`

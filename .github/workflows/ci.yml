@@ -103,8 +103,10 @@ jobs:
       - name: MCP 서버 (갈라진 환경)
         run: |
           python -m venv /tmp/mcpvenv
-          /tmp/mcpvenv/bin/pip install --quiet -r mcp_server/requirements.txt pytest
+          /tmp/mcpvenv/bin/pip install --quiet -r mcp_server/requirements.txt -r pipeline/requirements.txt pytest
           /tmp/mcpvenv/bin/python -m pytest mcp_server/tests -q
+          # 로컬 정제 MCP(sp_mcp.py)도 같은 까닭으로 여기서 — 앱에 붙는 한 바퀴는 백엔드 pytest 가 봤다.
+          /tmp/mcpvenv/bin/python -m pytest pipeline/tests -q
 
       # **마이그레이션이 모델과 어긋났는지 본다.** 시험은 모델로 표를 만들기 때문에
       # 그 어긋남을 못 잡는다 — 그리고 그것은 배포하고 나서야 500 으로 드러난다.

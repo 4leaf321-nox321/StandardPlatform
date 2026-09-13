@@ -8,6 +8,7 @@
 - 무엇을 무엇으로 만드나: 모델링 규약 — MCP `get_guide(topic="modeling")` (본문 `mcp_server/guide/GUIDE.md`)
 - 공통 코어 온톨로지 초안: [core/core-ontology.json](core/core-ontology.json)
 - 그룹이 시작 전에 채우는 것: [templates/파일럿-그룹-정리.md](templates/파일럿-그룹-정리.md)
+- 사내 AI 에게 단계마다 붙여 넣는 지시문: [templates/사내-AI-지시문.md](templates/사내-AI-지시문.md)
 
 ## 준비
 
@@ -40,6 +41,84 @@ python sp_pipeline.py apply    runs/2026-09-13-sim-tools   # 사람이 확인한
 | `apply` | **미리 본 것과 지문이 같을 때만** 적용 → `applied.json` | 안 들어갔으면 1 |
 
 도구가 막고 멈추면 종료 코드 2 와 함께 이유를 적는다(검증 실패 · 미리 본 뒤 바뀜 · 서버 거절).
+
+## 표(CSV)는 규칙으로 — `sp_table.py`
+
+한 행에 여러 타입이 섞인 표를 **대응 파일**대로 타입마다 나눠 실행 폴더를 만든다. 행마다 AI 가
+판단하지 않는다.
+
+```bash
+python sp_table.py plm-models.table.json 프로젝트-모델.csv runs/2026-09-13-plm-models
+python sp_pipeline.py validate runs/2026-09-13-plm-models    # 그 뒤는 위와 같다
+```
+
+| 하는 일 | |
+| --- | --- |
+| 같은 식별자는 한 객체로 | 칸 값이 행마다 다르면 **짐작하지 않고** `unresolved.json` 으로 |
+| 이름에 박힌 조각을 칸으로 | 해석기 — 자리 + 사전 · 정규식. 두 갈래로 읽히면 고르지 않는다. 못 읽은 행은 넣고 조각 칸만 비운다 |
+| 보고서 `table-report.txt` | 값을 **가린 패턴**(`A` · `9` · `가`)으로만 — 사내 밖에서 규칙을 의논할 수 있다 |
+| 종료 코드 | 0 미해결 없음 · 1 미해결 있음 · 2 대응 파일 · 원천 오류 |
+
+대응 파일의 모양은 [AGENTS.md](AGENTS.md) 의 「표를 규칙으로 옮기기」. **대응 파일 · 사전 · 정의는
+원천과 같이 저장소 밖 작업 폴더에 둔다** — 열 이름과 코드 체계도 사내 정보다.
+
+## Claude Desktop · Gemini CLI 에 붙이기 (로컬 MCP)
+
+AI 가 **사용자 PC 에서** 조사 · 변환 · 검증 · 미리 보기를 직접 돌리게 한다. 도구는
+`sp_mcp.py` 하나이고, 두 클라이언트가 같은 설정 모양으로 붙는다.
+
+**1. 설치** — 릴리스의 `sp-pipeline-<버전>.zip` 을 풀고(휠 동봉 · 인터넷 없이 설치):
+
+```bash
+python sp_setup.py --work-root "D:\온톨로지작업" --server http://<플랫폼>:<포트> \
+                   --token spt_... --write-claude --write-gemini
+```
+
+- venv(`venv/`)를 만들고 `mcp` 를 동봉 휠로 깐다(인터넷이 되면 `--online`).
+- `--write-claude` · `--write-gemini` 는 각 설정 파일에 `sp-pipeline` 항목만 넣는다. 원래 파일은
+  `.bak` 로 남고, 다른 MCP 항목은 안 건드린다. 빼면 넣을 내용만 보여 준다.
+- **Claude Desktop 은 완전히 종료했다가 다시 켠다.**
+
+**2. 설정의 모양** (직접 넣을 때 — `mcpServers` 안에):
+
+```json
+"sp-pipeline": {
+  "command": "C:\\...\\sp-pipeline\\venv\\Scripts\\python.exe",
+  "args": ["C:\\...\\sp-pipeline\\sp_mcp.py"],
+  "env": {"SP_WORK_ROOT": "D:\\온톨로지작업", "SP_SERVER": "http://...", "SP_TOKEN": "spt_..."}
+}
+```
+
+| 클라이언트 | 설정 파일 |
+| --- | --- |
+| Claude Desktop (Windows) | `%APPDATA%\Claude\claude_desktop_config.json` |
+| Claude Desktop (macOS) | `~/Library/Application Support/Claude/claude_desktop_config.json` |
+| Gemini CLI | `~/.gemini/settings.json` |
+
+| 환경 변수 | 뜻 |
+| --- | --- |
+| `SP_WORK_ROOT` | 작업 폴더들을 두는 곳 — **도구는 이 안만 읽고 쓴다** |
+| `SP_SERVER` · `SP_TOKEN` | 플랫폼 주소 · 개인 토큰(`read` · `objects:write`, 정의까지면 `ontology:write`). 미리 보기 · 코어 대조에 |
+
+플랫폼 MCP(`standardplatform`)도 함께 붙여 두면 AI 가 지금 정의(`ontology_schema`)를 읽는다.
+
+**3. 쓰기** — 대화에서 「`D:\온톨로지작업` 에 해석팀 의뢰 대장 작업을 시작하자」 처럼 말하면 AI 가
+`pipeline_guide` → `work_init` → (원천을 `00-원천/` 에 넣어 달라고 한다) → `source_profile` …
+순서로 간다. 절차와 **멈추는 자리**는 [AGENTS.md](AGENTS.md) 「작업 폴더로 일한다」.
+
+| 도구 | 하는 일 |
+| --- | --- |
+| `pipeline_guide` | 절차 · 형식의 정본(이 폴더의 AGENTS.md, 모델링 규약) |
+| `work_list` · `work_init` · `work_status` | 작업 폴더 — **어디까지 했고 다음이 무엇인지** |
+| `source_profile` · `source_head` | 원천 표 조사(계산) · 앞부분 보기 |
+| `work_read` · `work_write` | 정의 · 판단표 · 대응 · 실행 폴더 행 파일(쓸 수 있는 자리가 정해져 있다) |
+| `decision_record` | 사람이 정한 것 — 정의 확정 · 미해결의 답 |
+| `table_convert` · `run_init` · `run_validate` · `run_preview` | 변환 · 빈 실행 · 검증 · 미리 보기 |
+
+**적용 도구는 없다.** `run_preview` 가 돌려주는 `apply_command` 를 사람이 확인한 뒤 직접 실행한다.
+
+MCP 없이 명령으로도 같은 일을 한다 — `sp_work.py init|status|record`, `sp_profile.py`,
+`sp_table.py`, `sp_pipeline.py`.
 
 ## 그룹을 시작할 때
 

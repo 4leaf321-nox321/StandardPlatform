@@ -56,6 +56,21 @@ jobs:
           USE_SUDO_APPTAINER: '1'
         run: ./deploy/build_bundle.sh "${GITHUB_REF_NAME}"
 
+      # **사용자 PC 에 옮기는 정제 도구 묶음**도 같은 태그로 낸다. 서버 번들과 따로 받는다 —
+      # 받는 사람이 다르다(운영 담당 / 데이터를 정제하는 사람).
+      - name: 정제 도구 묶음 빌드
+        run: |
+          set -euo pipefail
+          ./deploy/build_pipeline_kit.sh "${GITHUB_REF_NAME}"
+          kit=$(ls release/sp-pipeline-*.zip)
+          python3 -m zipfile -l "$kit" > /tmp/kit.txt
+          for f in sp_mcp.py sp_setup.py sp_pipeline.py sp_table.py sp_profile.py sp_work.py \
+                   AGENTS.md requirements.txt guide/GUIDE.md VERSION; do
+            grep -q "/$f " /tmp/kit.txt || { echo "묶음에 $f 가 없습니다"; exit 1; }
+          done
+          grep -q "pywin32-.*win_amd64.whl" /tmp/kit.txt \
+            || { echo "Windows 휠(pywin32)이 없습니다 — 오프라인 설치가 멈춥니다"; exit 1; }
+
       # 나가기 전에 **번들이 자기 발로 서는지** 본다. 여기서 빠진 파일은 서버에서
       # `deploy.sh` 가 멈추는 것으로 드러나고, 그때는 SSH 로 붙어 있는 자리다.
       - name: 번들이 온전한가
@@ -125,7 +140,13 @@ jobs:
             printf '푸는 순간에야 드러나고, 그때는 배포하려고 서버에 붙어 있는 자리입니다.\n'
           } > "$RUNNER_TEMP/notes.md"
 
-          gh release create "${GITHUB_REF_NAME}" "$tarball" "$sha" \
+          kit=$(ls release/sp-pipeline-*.zip)
+          {
+            printf '\n## 정제 도구 묶음 (데이터를 정제하는 사람의 PC)\n\n'
+            printf '`%s` 를 풀고 안의 `README.md` 「Claude Desktop · Gemini CLI 에 붙이기」 를 따릅니다.\n' "$(basename "$kit")"
+          } >> "$RUNNER_TEMP/notes.md"
+
+          gh release create "${GITHUB_REF_NAME}" "$tarball" "$sha" "$kit" "$kit.sha256" \
             --title "${GITHUB_REF_NAME}" \
             --generate-notes \
             --notes-file "$RUNNER_TEMP/notes.md"

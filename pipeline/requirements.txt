@@ -1,0 +1,4 @@
+# **로컬 MCP 서버(sp_mcp.py)만** 이것이 필요하다. 나머지 도구(sp_pipeline · sp_table ·
+# sp_profile · sp_work)는 표준 라이브러리만 쓴다 — MCP 없이 명령으로도 돈다.
+# 1.x 의 FastMCP 를 쓴다 — 2.x 는 API 가 다르다(플랫폼 MCP 서버와 같은 고정).
+mcp>=1.27.0,<2
