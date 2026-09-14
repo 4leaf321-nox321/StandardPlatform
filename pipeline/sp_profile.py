@@ -368,6 +368,42 @@ def _place(place: str) -> str:
     return f"{place}번" if place.isdigit() else place
 
 
+def brief(result: dict[str, Any]) -> str:
+    """조사 결과를 **말로 전할 몇 줄**로 — 행 · 유일 열 · 몇 대 몇 · 갈리는 칸 · 고를 값 ·
+    코어 대조. 값은 없고 수와 열 이름뿐이라 그대로 읽어 전해도 된다."""
+    source = result["source"]
+    lines = [f"행 {source['rows']} · 열 {len(result['columns'])}"]
+    unique = result["unique"]
+    if unique["columns"]:
+        lines.append("유일한 열: " + ", ".join(unique["columns"]))
+    elif unique["pairs"]:
+        lines.append(
+            "유일한 쌍: " + " / ".join("+".join(pair) for pair in unique["pairs"][:3])
+        )
+    else:
+        lines.append("한 열 · 두 열로 유일하지 않음")
+    for one in result["cardinality"][:8]:
+        lines.append(f"{one['a']} ↔ {one['b']}: {one['kind']}")
+    for one in result["varying"]:
+        split = [f"{c['column']}({c['keys']})" for c in one["varying"][:4]]
+        if split:
+            lines.append(f"{one['key']} 기준 갈림: " + ", ".join(split))
+    enums = [f"{one['column']}({one['distinct']})" for one in result["enums"]]
+    if enums:
+        lines.append("고를 값 후보: " + ", ".join(enums))
+    for one in result["dates"]:
+        lines.append(
+            f"날짜 {one['column']}: 날짜 {one['dates']} · 아님 {one['not_date_rows']}"
+        )
+    for one in result["core"]:
+        rows = one["rows"] or 1
+        lines.append(
+            f"코어 대조 {one['column']}→{one['core']}: 그대로 {one['exact'] / rows:.0%} · "
+            f"대소문자 {one['case']} · 줄여 씀 {one['shorter']} · 없음 {one['none']}"
+        )
+    return "\n".join(lines)
+
+
 def render(result: dict[str, Any]) -> str:
     source = result["source"]
     total = source["rows"]
@@ -552,7 +588,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--token", default=os.environ.get("SP_TOKEN", ""))
     args = parser.parse_args(argv)
     try:
-        _, text = run(
+        result, text = run(
             args.source,
             out_dir=args.out,
             show_values=args.values,
@@ -568,6 +604,7 @@ def main(argv: list[str] | None = None) -> int:
         print(str(stop), file=sys.stderr)
         return 2
     print(text)
+    print("\n== 말로 전할 요약 ==\n" + brief(result))
     return 0
 
 

@@ -69,7 +69,9 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models    # 그 뒤는 위와
 AI 가 **사용자 PC 에서** 조사 · 변환 · 검증 · 미리 보기를 직접 돌리게 한다. 도구는
 `sp_mcp.py` 하나이고, 두 클라이언트가 같은 설정 모양으로 붙는다.
 
-**1. 설치** — 릴리스의 `sp-pipeline-<버전>.zip` 을 풀고(휠 동봉 · 인터넷 없이 설치):
+**1. 설치** — 릴리스의 `sp-pipeline-<버전>.zip` 을 풀고(휠 동봉 · 인터넷 없이 설치). 저장소에 없는
+사내 파일(허브 정의 · 대응 파일)까지 함께 들고 가려면 `KIT_PRIVATE_DIR=<폴더> ./deploy/build_pipeline_kit.sh`
+로 만든 `…-private.zip` 을 쓴다(그 zip 은 올리지 않는다):
 
 ```bash
 python sp_setup.py --work-root "D:\온톨로지작업" --server http://<플랫폼>:<포트> \
@@ -119,6 +121,9 @@ python sp_setup.py --work-root "D:\온톨로지작업" --server http://<플랫�
 | `hub_pull` | (쌍둥이) 허브의 PLM 기준정보를 새 실행 폴더로 받는다 — env 에 `SP_HUB_SERVER` · `SP_HUB_TOKEN`(설치: `--hub-server` · `--hub-token`) |
 
 **적용 도구는 없다.** `run_preview` 가 돌려주는 `apply_command` 를 사람이 확인한 뒤 직접 실행한다.
+
+**결과를 밖으로 못 들고 나오는 자리** — `source_profile` 의 끝과 `table_convert` 의 `brief` 에 **「말로
+전할 요약」**(수와 열 이름만, 값 없음)이 있다. 그것을 읽어 전하면 규칙을 고칠 수 있다.
 
 MCP 없이 명령으로도 같은 일을 한다 — `sp_work.py init|status|record`, `sp_profile.py`,
 `sp_table.py`, `sp_pipeline.py`.

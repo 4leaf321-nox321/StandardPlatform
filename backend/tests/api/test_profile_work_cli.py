@@ -229,3 +229,14 @@ def test_실행_폴더의_상태와_지난_실행을_덮지_않는_이름(tmp_pa
     with pytest.raises(sp_work.Stop, match="밖의 경로"):
         sp_work.inside(folder, "../다른")
     assert "작업: w" in sp_work.render(sp_work.status(folder))
+
+
+def test_조사의_말로_전할_요약(tmp_path: Path) -> None:
+    result, _ = _profile(tmp_path)
+    short = sp_profile.brief(result)
+    lines = short.splitlines()
+    assert lines[0] == "행 18 · 열 6" and lines[1] == "유일한 열: 개발모델명"
+    assert "과제코드 ↔ 개발모델명: 1:N" in lines
+    assert "과제코드 기준 갈림: CS(6)" in lines
+    for secret in ("TK-0", "SM-X", "과제1"):
+        assert secret not in short

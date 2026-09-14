@@ -287,7 +287,7 @@ def source_profile(
     try:
         # `@파일` 은 작업 폴더를 기준으로 푼다.
         os.chdir(folder)
-        _, text = sp_profile.run(
+        result, text = sp_profile.run(
             path,
             out_dir=folder / sp_work.SURVEY,
             show_values=show_values,
@@ -297,7 +297,7 @@ def source_profile(
         )
     finally:
         os.chdir(previous)
-    return text
+    return text + "\n\n== 말로 전할 요약 ==\n" + sp_profile.brief(result)
 
 
 @mcp.tool()
@@ -337,6 +337,7 @@ def table_convert(work: str, mapping: str, source: str, name: str = "") -> dict[
         "run": run.relative_to(folder).as_posix(),
         "unresolved_empty": ok,
         "report": report,
+        "brief": sp_table.brief(report),
     }
 
 

@@ -801,6 +801,27 @@ def convert(
     return not unresolved, text
 
 
+def brief(report: str) -> str:
+    """보고서를 **말로 옮길 수 있는 몇 줄**로 — 파일을 들고 나올 수 없는 자리에서 사람이 읽어
+    전하거나 받아 적는다. 수만 있고 값은 없다(가린 패턴도 상위 2개까지)."""
+    lines: list[str] = []
+    for line in report.splitlines():
+        if line.startswith("[") and "]" in line:
+            head = line.split("]", 1)[0].lstrip("[")
+            body = line.split("]", 1)[1].strip()
+            lines.append(f"{head}: {body}")
+        elif line.startswith("  ") and (
+            any(word in line for word in ("못 나눔", "검증:", "두 갈래"))
+            or line.strip().startswith(("여러 개 ", "없음 "))
+        ):
+            what, _, rest = line.strip().partition(":")
+            top = " · ".join(rest.strip().split(" · ")[:2])
+            lines.append(f"  {what}: {top}")
+        elif line.startswith("  칸 ") or line.strip().startswith("미해결"):
+            lines.append("  " + line.strip())
+    return "\n".join(lines)
+
+
 def _report(
     mapping: Mapping, mapping_path: Path, results: list[TypeResult], run: Path, unresolved: int
 ) -> str:
@@ -868,6 +889,7 @@ def main(argv: list[str] | None = None) -> int:
         print(str(stop), file=sys.stderr)
         return 2
     print(text)
+    print("\n== 말로 전할 요약 ==\n" + brief(text))
     return 0 if ok else 1
 
 

@@ -600,3 +600,17 @@ def test_참조_대조는_플랫폼에서_식별자를_받는다(
     rows = _objects(tmp_path / "run", "cae_x")
     assert rows["A"]["core"] == "K-1" and rows["B"]["core"] is None
     assert "대소문자만 다름 1 · 없음 1" in report
+
+
+def test_말로_전할_요약은_수와_열_이름뿐이다(tmp_path: Path) -> None:
+    """보고서 파일을 들고 나올 수 없는 자리 — 사람이 읽어 전할 몇 줄. 값은 없어야 한다."""
+    mapping_path, source = _files(tmp_path, _mapping(SLUGS))
+    _, report = table.convert(mapping_path, source, tmp_path / "run")
+    short = table.brief(report)
+    assert short.splitlines()[0] == "t_project: 객체 2 · 식별자가 빈 행 0 · 값이 갈린 칸 0"
+    assert "해석 model_name: 개발모델명 7행 · 읽음 4 · 못 읽음 3" in short
+    assert "  못 나눔(조각 3개) 1: AA-A999_AAA_AA9 1" in short
+    assert "조각 marker" not in short
+    assert len(short.splitlines()) <= 12
+    for secret in ("SM-X", "TK-00", "알파", "SKT"):
+        assert secret not in short
