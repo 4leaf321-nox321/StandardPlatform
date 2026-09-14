@@ -168,7 +168,7 @@ function Node({
         {node.child_count > 0 ? (
           <button
             type="button"
-            aria-label={`${node.label} 펼치기`}
+            aria-label={`${node.label} 확장`}
             aria-expanded={open}
             className="text-muted-foreground hover:text-foreground p-0.5"
             style={{ marginLeft: depth * 12 }}

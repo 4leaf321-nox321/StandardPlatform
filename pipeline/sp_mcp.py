@@ -326,7 +326,13 @@ def table_convert(work: str, mapping: str, source: str, name: str = "") -> dict[
     mapping_path = sp_work.inside(folder, mapping)
     source_path = _source(folder, source)
     run = sp_work.new_run(folder, name or source_path.stem)
-    ok, report = sp_table.convert(mapping_path, source_path, run)
+    ok, report = sp_table.convert(
+        mapping_path,
+        source_path,
+        run,
+        server=os.environ.get("SP_SERVER", "").strip(),
+        token=os.environ.get("SP_TOKEN", "").strip(),
+    )
     return {
         "run": run.relative_to(folder).as_posix(),
         "unresolved_empty": ok,
@@ -341,6 +347,24 @@ def run_init(work: str, name: str, title: str = "") -> str:
     run = sp_work.new_run(folder, name)
     pipeline.cmd_init(run, title=title or name)
     return f"만들었습니다: {run.relative_to(folder).as_posix()}"
+
+
+@mcp.tool()
+def hub_pull(work: str, group: str, name: str = "") -> str:
+    """허브가 내보낸 사이드바 묶음(PLM 기준정보면 `plm`)을 **새 실행 폴더로** 받는다 — 이 PC 가
+    쌍둥이 플랫폼에 넣을 때. 그 뒤는 `run_validate` → `run_preview` → 사람이 적용. 받은 타입은
+    받는 플랫폼에서 허브 관리가 되어 거기서는 못 고친다. env 에 SP_HUB_SERVER · SP_HUB_TOKEN 이
+    있어야 한다."""
+    folder = _work(work)
+    hub = os.environ.get("SP_HUB_SERVER", "").strip()
+    token = os.environ.get("SP_HUB_TOKEN", "").strip()
+    if not hub or not token:
+        raise Stop(
+            "허브에서 받으려면 MCP 설정의 env 에 SP_HUB_SERVER · SP_HUB_TOKEN 이 있어야 합니다"
+        )
+    run = sp_work.new_run(folder, name or f"허브-{group}")
+    text = pipeline.cmd_pull(run, hub=hub, hub_token=token, group=group)
+    return f"{text}\n실행: {run.relative_to(folder).as_posix()}"
 
 
 @mcp.tool()

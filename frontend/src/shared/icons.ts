@@ -12,7 +12,7 @@
  *
  * ## 왜 전부(수천 개)를 안 열어 두나
  *
- * lucide 는 3,600개를 준다. 전부 고르게 하면 (1) 고르는 일이 찾기가 아니라 훑기가
+ * lucide 는 3,600개를 준다. 전부 고르게 하면 (1) 고르는 일이 검색이 아니라 목록이
  * 되고, (2) 설치마다 제각각인 그림이 서고, (3) 번들에 3,600개가 딸려 온다. 여기
  * 골라 둔 것만 **정적으로 import** 해서 그 셋을 다 막는다.
  *
@@ -99,7 +99,7 @@ export interface IconChoice {
 /** 무리. 고르개가 이 차례로 세운다 — 훑는 사람이 「이 근처」 를 짐작할 수 있게. */
 export const ICON_GROUPS = [
   '물건',
-  '만들기',
+  '생성',
   '재고·물류',
   '조직·사람',
   '문서·일정',
@@ -119,7 +119,7 @@ export const ICON_CATALOG: Record<IconGroup, IconChoice[]> = {
     { name: 'Package', Icon: Package, label: '포장', keywords: '제품 출하' },
     { name: 'Car', Icon: Car, label: '차량', keywords: '자동차 완성차' },
   ],
-  만들기: [
+  생성: [
     { name: 'Wrench', Icon: Wrench, label: '공구', keywords: '정비 수리 도구' },
     { name: 'Hammer', Icon: Hammer, label: '망치', keywords: '작업 제작' },
     { name: 'Cog', Icon: Cog, label: '톱니', keywords: '기계 설비 장비' },

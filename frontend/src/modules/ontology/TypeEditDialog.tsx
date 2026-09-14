@@ -125,7 +125,7 @@ export function TypeEditDialog({
       <Dialog open onOpenChange={(open) => !open && onClose()}>
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{type.label} 고치기</DialogTitle>
+            <DialogTitle>{type.label} 수정</DialogTitle>
           </DialogHeader>
 
           {error && <ErrorNotice error={error} />}
@@ -275,7 +275,7 @@ export function TypeEditDialog({
                 />
                 사용함
                 <span className="text-muted-foreground text-xs">
-                  끄면 메뉴와 만들기에서 빠집니다. <b>자료는 그대로 남습니다.</b>
+                  끄면 메뉴와 생성에서 빠집니다. <b>자료는 그대로 남습니다.</b>
                 </span>
               </label>
             </TabsContent>
@@ -292,7 +292,7 @@ export function TypeEditDialog({
 
             <TabsContent value="form" className="space-y-6">
               <div className="space-y-2">
-                <Label>만들기·고치기 폼</Label>
+                <Label>생성·수정 폼</Label>
                 <SectionViewEditor
                   defs={type.properties}
                   value={formView}
@@ -314,7 +314,7 @@ export function TypeEditDialog({
 
           <DialogFooter className="justify-between sm:justify-between">
             <Button variant="ghost" onClick={() => setRemoving(true)} disabled={saving}>
-              지우기
+              삭제
             </Button>
             <div className="flex gap-2">
               <Button variant="outline" onClick={onClose} disabled={saving}>
@@ -346,7 +346,7 @@ export function TypeEditDialog({
               </>
             )
           }
-          confirmLabel="지우기"
+          confirmLabel="삭제"
           onConfirm={async () => {
             await ontologyApi.removeType(type.slug)
             onChanged()

@@ -1,5 +1,5 @@
 /**
- * 통계가 지키는 것 — **목록과 같은 거르기를 넘기고, 합이 안 맞으면 그 차이를 적고,
+ * 통계가 지키는 것 — **목록과 같은 필터를 넘기고, 합이 안 맞으면 그 차이를 적고,
  * 막대를 누르면 원래 값으로 거른다.**
  *
  * 그림 자체는 `shared/charts` 의 몫이라 여기서는 **무엇을 넘기나**만 본다. 그래서
@@ -117,7 +117,7 @@ async function panel(data: object) {
 }
 
 describe('통계', () => {
-  it('목록과 같은 거르기를 넘기고, 빈 값도 한 칸으로 그린다', async () => {
+  it('목록과 같은 필터를 넘기고, 빈 값도 한 칸으로 그린다', async () => {
     await panel(BASE)
     expect(objectApi.summary).toHaveBeenCalledWith(
       'part',

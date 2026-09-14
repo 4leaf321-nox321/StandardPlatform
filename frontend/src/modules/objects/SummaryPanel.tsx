@@ -12,7 +12,7 @@
  *
  * ## 막대를 누르면 그 줄만 걸러진다
  *
- * 「B 등급이 12건」 다음의 물음은 언제나 「그 12건이 뭔데」 다. 거기서 거르기 칸으로
+ * 「B 등급이 12건」 다음의 물음은 언제나 「그 12건이 뭔데」 다. 거기서 필터 칸으로
  * 돌아가 값을 다시 치게 하면, 그 한 번이 사람을 엑셀로 돌려보낸다.
  *
  * ## 홈에 올리는 단추가 여기 있다
@@ -111,7 +111,7 @@ const NO_SPLIT = '__none__'
 
 interface Props {
   typeSlug: string
-  /** 목록이 지금 쓰는 거르기 그대로. */
+  /** 목록이 지금 쓰는 필터 그대로. */
   query: ObjectQuery
   /**
    * 지금 설정. **화면이 들고 있다** — 뷰를 불러오면 그 뷰의 축으로 열려야 하고,
@@ -174,7 +174,7 @@ function byHeading(options: GroupOption[]): [string, GroupOption[]][] {
   return out
 }
 
-/** 이 축으로 묶은 값을 목록 거르기에 그대로 걸 수 있나. */
+/** 이 축으로 묶은 값을 목록 필터에 그대로 걸 수 있나. */
 function filterable(field: string): boolean {
   return field === 'status' || field.startsWith('properties.') || /^(ref|out|in)\./.test(field)
 }
@@ -193,7 +193,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
   const myWorkspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
   const canPin = Boolean(myWorkspace && isManagerOf(user, myWorkspace))
 
-  // 거르기가 바뀌면 다시 센다. `query` 는 매 렌더 새 객체라 **내용**으로 비교한다 —
+  // 필터가 바뀌면 다시 센다. `query` 는 매 렌더 새 객체라 **내용**으로 비교한다 —
   // 안 그러면 이 효과가 끝없이 돈다.
   const signature = JSON.stringify(query)
 
@@ -373,7 +373,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
         </Select>
 
         {/* **세부 기준.** 「부서별 몇 건」 다음 물음은 거의 언제나 「그 안에서 등급은」
-            이다. 그때 거르기를 바꿔 가며 여섯 번 세게 하면 사람은 그 답을 포기한다. */}
+            이다. 그때 필터를 바꿔 가며 여섯 번 세게 하면 사람은 그 답을 포기한다. */}
         <Select
           value={settings.splitBy || NO_SPLIT}
           onValueChange={(next) => patch({ splitBy: next === NO_SPLIT ? '' : next })}
@@ -658,7 +658,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
                 canFilter
                   ? (row) => {
                       const key = row[KEY]
-                      // 빈 칸은 「값이 없음」 이라 거르기로 옮길 값이 없다.
+                      // 빈 칸은 「값이 없음」 이라 필터로 옮길 값이 없다.
                       if (typeof key === 'string') onPick(data.group_field, key)
                     }
                   : undefined

@@ -183,6 +183,10 @@ class ObjectType(Base):
     entry_policy: Mapped[str] = mapped_column(
         String(20), default="open", server_default="open"
     )
+    managed_by: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    """**누가 이 정의와 그 객체를 관리하나** — 빈 값이면 이 설치, `hub` 면 허브. 허브 것은
+    묶음 가져오기에 같은 `source` 를 적어서만 바뀐다(`ontology/managed.py`). 가져오기가
+    채우고 사람이 고치지 않는다 — 그래서 정의 가져오기의 칸이 아니다."""
     key_policy: Mapped[str] = mapped_column(String(20), default="none", server_default="none")
     key_scope: Mapped[str] = mapped_column(
         String(20), default="global", server_default="global"
@@ -264,6 +268,11 @@ class PropertyDef(Base):
 
     ref_type_slug: Mapped[str | None] = mapped_column(String(SLUG_MAX), nullable=True)
     """`data_type='object_ref'` 일 때 가리키는 타입. NULL 이면 아무 타입이나."""
+
+    inverse_label: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    """`object_ref` 의 **역방향 이름** — 「과제」 칸을 과제 쪽에서 읽으면 「개발모델」. 참조
+    칸은 칸에 저장한 많대일 관계라, 관계 종류의 `inverse_label` 과 같은 자리다
+    (`objects/refedges.py`). 비어 있으면 화면이 「<타입 이름>」 으로 대신 말한다."""
 
     min_value: Mapped[float | None] = mapped_column(Float, nullable=True)
     max_value: Mapped[float | None] = mapped_column(Float, nullable=True)
@@ -358,6 +367,9 @@ class RelationType(Base):
 
     **없으면 「공급사를 시험함」 같은 말이 안 되는 관계가 남고**, 그 뒤로 그
     데이터로는 아무것도 못 믿는다."""
+
+    managed_by: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    """누가 이 관계 종류와 그 줄을 관리하나 — `ObjectType.managed_by` 와 같다."""
 
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")

@@ -16,9 +16,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
-from app.modules.objects import bulk
+from app.modules.objects import bulk, refedges
 from app.modules.objects.models import ObjectInstance, ObjectRelation
-from app.modules.ontology import codebook, importer, inference, reset, views
+from app.modules.ontology import codebook, importer, inference, managed, reset, views
 from app.modules.ontology.models import (
     CARDINALITIES,
     DATA_TYPES,
@@ -56,6 +56,7 @@ from app.modules.ontology.schemas import (
     PropertyDefOut,
     PropertyDefWriteRequest,
     PropertyUsage,
+    ReferenceEdgeOut,
     RelationTypeOut,
     RelationTypePatchRequest,
     RelationTypeWriteRequest,
@@ -138,6 +139,7 @@ def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectType
         kind_class=row.kind_class,
         system_source=row.system_source,
         entry_policy=row.entry_policy,
+        managed_by=row.managed_by,
         key_policy=row.key_policy,
         key_scope=row.key_scope,
         temporal_kind=row.temporal_kind,
@@ -310,6 +312,7 @@ def update_type(
     여기 물려 있어서, 바꾸면 그 셋이 조용히 어긋난다.
     """
     row = _type(db, slug)
+    managed.require_definition_editable(row)
     sent = payload.model_fields_set
 
     choices = (
@@ -406,6 +409,7 @@ def delete_type(
     곧 아무도 안 읽는다.
     """
     row = _type(db, slug)
+    managed.require_definition_editable(row)
     count = db.scalar(
         select(func.count())
         .select_from(ObjectInstance)
@@ -569,6 +573,7 @@ def update_relation_type(
     """**보낸 것만 바꾼다.** slug 는 안 바꾼다 — 이미 맺힌 관계가 그 값을
     문자열로 들고 있어서, 바꾸면 그 관계들이 통째로 고아가 된다."""
     row = _relation_type(db, slug)
+    managed.require_definition_editable(row)
     sent = payload.model_fields_set
 
     if "cardinality" in sent and payload.cardinality is not None:
@@ -625,6 +630,7 @@ def delete_relation_type(
     옛 속성이 되살아난다.
     """
     row = _relation_type(db, slug)
+    managed.require_definition_editable(row)
     edges = db.scalar(
         select(func.count()).select_from(ObjectRelation).where(ObjectRelation.relation == slug)
     )
@@ -679,6 +685,7 @@ def create_property(
     db: Session = Depends(get_db),
 ) -> PropertyDef:
     owner = _type(db, slug)
+    managed.require_definition_editable(owner)
     key = require_key(payload.key)
     require_choice(payload.data_type, DATA_TYPES, what="속성 종류")
     _check_property_shape(payload)
@@ -705,6 +712,7 @@ def create_property(
         multi=payload.multi,
         enum_options=payload.enum_options,
         ref_type_slug=payload.ref_type_slug,
+        inverse_label=payload.inverse_label.strip(),
         min_value=payload.min_value,
         max_value=payload.max_value,
         decimals=payload.decimals,
@@ -738,6 +746,7 @@ def update_property(
     db: Session = Depends(get_db),
 ) -> PropertyDef:
     row = _property(db, slug, key)
+    managed.require_definition_editable(_type(db, slug))
     require_choice(payload.data_type, DATA_TYPES, what="속성 종류")
     _check_property_shape(payload)
 
@@ -758,6 +767,7 @@ def update_property(
     row.multi = payload.multi
     row.enum_options = payload.enum_options
     row.ref_type_slug = payload.ref_type_slug
+    row.inverse_label = payload.inverse_label.strip()
     row.min_value = payload.min_value
     row.max_value = payload.max_value
     row.decimals = payload.decimals
@@ -793,6 +803,7 @@ def rename_option(
     아무 데도 안 뜬다. `apply=false` 면 몇 개가 함께 바뀔지만 말한다.
     """
     owner = _type(db, slug)
+    managed.require_definition_editable(owner)
     definition = _property(db, slug, key)
     if payload.apply:
         plan = codebook.apply_rename(
@@ -818,6 +829,7 @@ def promote_property(
     스냅샷이 못 되돌리지만, 정의만이라도 되돌릴 수 있어야 다음 수를 둘 수 있다.
     """
     owner = _type(db, slug)
+    managed.require_definition_editable(owner)
     definition = _property(db, slug, key)
     args = {
         "existing_slug": payload.target_type_slug,
@@ -887,6 +899,7 @@ def delete_property(
     """
     row = _property(db, slug, key)
     owner = _type(db, slug)
+    managed.require_definition_editable(owner)
     # **안 걷어내면 그 뒤로 타입을 고칠 때마다 「없는 속성」 이라고 거절당한다** —
     # 그리고 사람은 자기가 방금 고친 것과 상관없는 그 오류를 이해할 수 없다.
     owner.list_view = views.prune_field(owner.list_view or {}, key)
@@ -974,6 +987,18 @@ def ontology_schema(
         groups=[NavGroupOut.model_validate(g) for g in groups],
         types=types,
         relation_types=[RelationTypeOut.model_validate(r) for r in _relation_types(db)],
+        reference_edges=[
+            ReferenceEdgeOut(
+                slug=kind.slug,
+                label=kind.label,
+                inverse_label=kind.inverse_label,
+                src_type_slug=kind.src_type.slug,
+                dst_type_slug=kind.dst_type.slug,
+                field_key=kind.key,
+                multi=kind.multi,
+            )
+            for kind in refedges.kinds(db).values()
+        ],
         data_types=list(DATA_TYPES),
         system_sources=[
             SystemSourceOut(key=one.key, label=one.label)
@@ -1236,7 +1261,7 @@ def restore_snapshot(
         raise NotFound(code("ONTOLOGY", 71), "스냅샷을 찾을 수 없습니다.")
 
     # 되돌리기 **직전**도 남긴다 — 되돌린 것을 되돌릴 수 있어야 한다.
-    before = _snapshot(db, user, reason=f"되돌리기 직전 ({row.taken_at:%Y-%m-%d %H:%M})")
+    before = _snapshot(db, user, reason=f"복원 직전 ({row.taken_at:%Y-%m-%d %H:%M})")
     prepared = importer.apply(db, row.schema or {})
     if prepared.errors:
         db.rollback()

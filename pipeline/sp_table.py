@@ -25,9 +25,11 @@ import csv
 import hashlib
 import io
 import json
+import os
 import re
 import sys
-from collections import Counter
+from collections import Counter, defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
@@ -43,6 +45,10 @@ DATE_RE = re.compile(r"^(\d{4})[-./](\d{1,2})[-./](\d{1,2})$")
 BLANK = "<blank>"
 DATE = "<date>"
 TOP = 10
+BOUNDARIES = "_-/. "
+"""참조 대조에서 「앞부분」 을 가르는 자리 — 코드가 끊기는 글자."""
+MATCH_OUTCOMES = ("그대로", "대소문자만 다름", "앞부분이 하나", "여러 개", "없음")
+ON_MISSING = ("blank", "unresolved", "keep")
 
 Stop = pipeline.Stop
 
@@ -147,6 +153,9 @@ class Slot:
     values: set[str] | None = None
     pattern: re.Pattern[str] | None = None
     kinds: list[tuple[str, re.Pattern[str]]] = field(default_factory=list)
+    rare_below: int | None = None
+    """해석기의 `rare_below` 를 이 조각만 바꾼다 — 기본 모델코드처럼 원래 종류가 많은
+    조각은 0."""
 
     def match(self, token: str) -> tuple[bool, str | None]:
         if self.values is not None and token not in self.values:
@@ -211,6 +220,7 @@ class Parser:
                 Slot(
                     name=str(one["name"]),
                     optional=bool(one.get("optional")),
+                    rare_below=int(one["rare_below"]) if "rare_below" in one else None,
                     values=values,
                     pattern=_regex(one.get("pattern"), where),
                     kinds=[
@@ -320,20 +330,17 @@ class Parser:
             if slot.name in stats.kinds:
                 head += f" — {_top(stats.kinds[slot.name])}"
             lines.append(head)
-            if self.rare_below:
+            below = self.rare_below if slot.rare_below is None else slot.rare_below
+            if below:
                 rare = Counter(
-                    {
-                        value: count
-                        for value, count in values.items()
-                        if count < self.rare_below
-                    }
+                    {value: count for value, count in values.items() if count < below}
                 )
                 if rare:
                     shapes: Counter[str] = Counter()
                     for value, count in rare.items():
                         shapes[mask(value)] += count
                     lines.append(
-                        f"    {self.rare_below}행 미만인 값 {len(rare)}종"
+                        f"    {below}행 미만인 값 {len(rare)}종"
                         f"({sum(rare.values())}행): {_top(shapes)}"
                     )
         return lines
@@ -374,8 +381,52 @@ class FieldStats:
     problems: dict[str, Counter[str]] = field(default_factory=dict)
 
 
+class KeyMatch:
+    """원천이 적은 코드를 플랫폼(코어)의 식별자와 맞춘다 — 그대로, 대소문자만 다른 것, 그리고
+    허락하면 **앞부분이 하나뿐인** 것(`SM-A1` → `SM-A1_KOR_SKT`). 둘 이상이면 고르지 않는다."""
+
+    def __init__(self, keys: set[str]) -> None:
+        self.exact = set(keys)
+        self.upper: dict[str, set[str]] = defaultdict(set)
+        self.fronts: dict[str, set[str]] = defaultdict(set)
+        for key in keys:
+            self.upper[key.upper()].add(key)
+            for index, char in enumerate(key):
+                if index and char in BOUNDARIES:
+                    self.fronts[key[:index].upper()].add(key)
+
+    def find(self, text: str, *, prefix: bool) -> tuple[str | None, str]:
+        if text in self.exact:
+            return text, "그대로"
+        found = self.upper.get(text.upper(), set())
+        if len(found) == 1:
+            return next(iter(found)), "대소문자만 다름"
+        if len(found) > 1:
+            return None, "여러 개"
+        if prefix:
+            found = self.fronts.get(text.upper(), set())
+            if len(found) == 1:
+                return next(iter(found)), "앞부분이 하나"
+            if len(found) > 1:
+                return None, "여러 개"
+        return None, "없음"
+
+
+@dataclass
+class MatchStats:
+    target: str
+    outcomes: Counter[str] = field(default_factory=Counter)
+    misses: dict[str, Counter[str]] = field(default_factory=dict)
+    """못 맞춘 까닭(여러 개 · 없음) → 가린 패턴."""
+
+
 class Mapping:
-    def __init__(self, spec: dict[str, Any], table: Table) -> None:
+    def __init__(
+        self,
+        spec: dict[str, Any],
+        table: Table,
+        keys: Callable[[str], set[str]] | None = None,
+    ) -> None:
         if spec.get("format") != FORMAT:
             raise Stop(f"대응 파일: format 이 {FORMAT} 가 아닙니다 ({spec.get('format')!r})")
         self.spec = spec
@@ -388,6 +439,10 @@ class Mapping:
             str(name): Parser(str(name), one, dictionaries, table.header)
             for name, one in (spec.get("parsers") or {}).items()
         }
+        self.keys = keys
+        self.matchers: dict[str, KeyMatch] = {}
+        self.match_stats: dict[tuple[str, str], MatchStats] = {}
+        self.match_unresolved: dict[tuple[str, str, str], list[int]] = {}
         self.types: list[dict[str, Any]] = list(spec.get("types") or [])
         if not self.types:
             raise Stop("대응 파일: types 가 비어 있습니다")
@@ -404,6 +459,11 @@ class Mapping:
             specs = {"key": one["key"], "label": one.get("label") or one["key"]}
             specs.update(one.get("fields") or {})
             for name, value in specs.items():
+                if name in ("key", "label") and isinstance(value, dict) and "match" in value:
+                    raise Stop(
+                        f"대응 파일: {slug}.{name} 에는 match 를 쓰지 않습니다"
+                        " — 참조 칸에 쓴다"
+                    )
                 self._check(value, where=f"{slug}.{name}")
         self.stats: dict[tuple[str, str], FieldStats] = {}
 
@@ -412,6 +472,8 @@ class Mapping:
             raise Stop(f"대응 파일: {where} 는 {{...}} 여야 합니다")
         if "column" in spec:
             _column(spec, self.table.header, where=where)
+            if "match" in spec:
+                self._check_match(spec["match"], where=where)
         elif "key_of" in spec:
             if spec["key_of"] not in self.by_slug:
                 raise Stop(
@@ -432,6 +494,41 @@ class Mapping:
                 f"대응 파일: {where} 는 column · key_of · parser · value 중"
                 " 하나가 있어야 합니다"
             )
+
+    def _check_match(self, rule: Any, *, where: str) -> None:
+        if not isinstance(rule, dict) or not str(rule.get("keys") or "").strip():
+            raise Stop(
+                f"대응 파일: {where} 의 match 에는 keys(타입 slug 또는 @파일)가 있어야 합니다"
+            )
+        if rule.get("on_missing", "blank") not in ON_MISSING:
+            raise Stop(f"대응 파일: {where} 의 on_missing 은 {' · '.join(ON_MISSING)} 중 하나")
+        if self.keys is None:
+            raise Stop(
+                f"대응 파일: {where} 가 참조 대조(match)를 씁니다 — "
+                "SP_SERVER · SP_TOKEN 을 두거나 keys 를 @파일로 적으세요"
+            )
+        target = str(rule["keys"]).strip()
+        if target not in self.matchers:
+            self.matchers[target] = KeyMatch(self.keys(target))
+
+    def _match(
+        self, rule: dict[str, Any], text: str, number: int, *, at: tuple[str, str]
+    ) -> Any:
+        target = str(rule["keys"]).strip()
+        key, outcome = self.matchers[target].find(text, prefix=bool(rule.get("prefix")))
+        stats = self.match_stats.setdefault(at, MatchStats(target))
+        stats.outcomes[outcome] += 1
+        if key is not None:
+            return key
+        stats.misses.setdefault(outcome, Counter())[mask(text)] += 1
+        on_missing = rule.get("on_missing", "blank")
+        if on_missing == "keep":
+            return text
+        if on_missing == "unresolved":
+            self.match_unresolved.setdefault((at[0], at[1], text), []).append(number)
+        # **못 맞춘 참조는 비워 넣는다** — 그대로 보내면 묶음 전체가 막히고, 짐작하면 엉뚱한
+        # 것에 붙는다. 보고서가 몇 행 · 어떤 모양인지 말한다.
+        return None
 
     def value(
         self, spec: dict[str, Any], number: int, row: dict[str, str], *, at: tuple[str, str]
@@ -469,6 +566,8 @@ class Mapping:
             if iso is None:
                 self._problem(at, "날짜가 아닌 값", text)
             return iso
+        if "match" in spec:
+            return self._match(spec["match"], text, number, at=at)
         return text
 
     def _problem(self, at: tuple[str, str], what: str, text: str) -> None:
@@ -611,8 +710,11 @@ def _mapping_notes(mapping: Mapping, mapping_path: Path, digest: str) -> str:
     return "\n".join(lines)
 
 
-def convert(mapping_path: Path, source_path: Path, run: Path) -> tuple[bool, str]:
-    """실행 폴더를 만든다. (미해결이 없나, 보고서)."""
+def convert(
+    mapping_path: Path, source_path: Path, run: Path, *, server: str = "", token: str = ""
+) -> tuple[bool, str]:
+    """실행 폴더를 만든다. (미해결이 없나, 보고서). 참조 대조(`match`)가 있으면 식별자를
+    플랫폼(`server` · `token`)이나 `@파일`에서 받는다."""
     spec = _load_mapping(mapping_path)
     source = spec.get("source") or {}
     table = read_table(
@@ -622,7 +724,23 @@ def convert(mapping_path: Path, source_path: Path, run: Path) -> tuple[bool, str
     )
     if not table.rows:
         raise Stop(f"{table.name}: 값이 있는 행이 없습니다")
-    mapping = Mapping(spec, table)
+    cache: dict[str, set[str]] = {}
+
+    def keys(target: str) -> set[str]:
+        if target not in cache:
+            if target.startswith("@"):
+                cache[target] = pipeline.read_keys_file(
+                    (mapping_path.parent / target[1:]).resolve()
+                )
+            elif not server or not token:
+                raise Stop(
+                    f"참조 대조({target})에 플랫폼 식별자가 필요합니다 — SP_SERVER · SP_TOKEN"
+                )
+            else:
+                cache[target] = pipeline.fetch_keys(server, token, target)
+        return cache[target]
+
+    mapping = Mapping(spec, table, keys=keys)
     ontology: dict[str, Any] | None = None
     if spec.get("ontology"):
         ontology_path = (mapping_path.parent / str(spec["ontology"])).resolve()
@@ -666,6 +784,16 @@ def convert(mapping_path: Path, source_path: Path, run: Path) -> tuple[bool, str
                 },
             )
         unresolved.extend(result.unresolved)
+    for (slug, name, text), numbers in mapping.match_unresolved.items():
+        unresolved.append(
+            {
+                "what": f"{slug} 의 칸 {name} 값 {text!r}",
+                "question": "코어에 없는(또는 여럿과 맞는) 식별자입니다 — "
+                "어느 것을 가리키나요? 맞는 것이 없으면 비워 넣습니다",
+                "options": [],
+                "_source": {"file": table.name, "rows": numbers[:20]},
+            }
+        )
     pipeline._write(run / pipeline.UNRESOLVED, unresolved)
 
     text = _report(mapping, mapping_path, results, run, len(unresolved))
@@ -700,6 +828,18 @@ def _report(
                 lines.append(
                     f"  칸 {name} — {what} {sum(patterns.values())}: {_top(patterns)}"
                 )
+    if mapping.match_stats:
+        lines.append("")
+    for (slug, name), stats in sorted(mapping.match_stats.items()):
+        total = sum(stats.outcomes.values())
+        parts = " · ".join(
+            f"{label} {stats.outcomes[label]}"
+            for label in MATCH_OUTCOMES
+            if stats.outcomes[label]
+        )
+        lines.append(f"[참조 대조] {slug}.{name} → {stats.target} {total}행 — {parts}")
+        for outcome, patterns in stats.misses.items():
+            lines.append(f"  {outcome} {sum(patterns.values())}: {_top(patterns)}")
     for parser in mapping.parsers.values():
         lines.append("")
         lines.extend(parser.report())
@@ -717,7 +857,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("run", type=Path, help="만들 실행 폴더 — 없는 폴더여야 한다")
     args = parser.parse_args(argv)
     try:
-        ok, text = convert(args.mapping, args.source, args.run)
+        ok, text = convert(
+            args.mapping,
+            args.source,
+            args.run,
+            server=os.environ.get("SP_SERVER", ""),
+            token=os.environ.get("SP_TOKEN", ""),
+        )
     except Stop as stop:
         print(str(stop), file=sys.stderr)
         return 2

@@ -50,6 +50,8 @@ class PropertyDefOut(BaseModel):
     multi: bool
     enum_options: list[str] | None
     ref_type_slug: str | None
+    inverse_label: str = ""
+    """`object_ref` 를 상대 쪽에서 읽는 말 — 「과제」 칸의 역은 「개발모델」."""
     min_value: float | None
     max_value: float | None
     decimals: int | None
@@ -70,6 +72,7 @@ class PropertyDefWriteRequest(BaseModel):
     multi: bool = False
     enum_options: list[str] | None = None
     ref_type_slug: str | None = None
+    inverse_label: str = Field(default="", max_length=64)
     min_value: float | None = None
     max_value: float | None = None
     decimals: int | None = Field(default=None, ge=0, le=10)
@@ -96,6 +99,8 @@ class ObjectTypeOut(BaseModel):
     """`kind_class='system'` 이면 어느 원 표를 비추는가(`workspace` · `user` …).
     아니면 빈 값."""
     entry_policy: str
+    managed_by: str = ""
+    """빈 값이면 이 설치의 정의, `hub` 면 허브가 내려준 것 — 화면은 고치는 단추를 감춘다."""
     key_policy: str
     key_scope: str
     temporal_kind: str
@@ -182,6 +187,7 @@ class RelationTypeOut(BaseModel):
     cardinality: str
     src_type_slugs: list[str] | None
     dst_type_slugs: list[str] | None
+    managed_by: str = ""
     sort_order: int
     is_active: bool
 
@@ -223,6 +229,19 @@ class ObjectTypeSchema(ObjectTypeOut):
     properties: list[PropertyDefOut]
 
 
+class ReferenceEdgeOut(BaseModel):
+    """참조 칸을 관계처럼 읽은 것 — **길 목록이 한 벌**이 되게. AI 와 그래프가 관계 종류와 함께
+    본다. slug 는 `ref:<타입>.<칸>`, 조건 · 통계에서는 `ref.<칸>.…` 로 건넌다."""
+
+    slug: str
+    label: str
+    inverse_label: str
+    src_type_slug: str
+    dst_type_slug: str
+    field_key: str
+    multi: bool
+
+
 class OntologySchemaOut(BaseModel):
     """**자기 설명적 스키마** — MCP 의 입력.
 
@@ -233,6 +252,9 @@ class OntologySchemaOut(BaseModel):
     groups: list[NavGroupOut]
     types: list[ObjectTypeSchema]
     relation_types: list[RelationTypeOut]
+    reference_edges: list[ReferenceEdgeOut] = Field(default_factory=list)
+    """참조 칸(`object_ref`)을 관계 모양으로 — 타입 사이의 길은 이것과 `relation_types` 를 합친
+    것이다."""
     data_types: list[str]
     system_sources: list[SystemSourceOut] = Field(default_factory=list)
     """투영(system) 타입이 비출 수 있는 원 표들. 이 설치가 등록한 것만."""

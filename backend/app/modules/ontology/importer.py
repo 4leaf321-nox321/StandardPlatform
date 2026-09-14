@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance, ObjectRelation
-from app.modules.ontology import views
+from app.modules.ontology import managed, views
 from app.modules.ontology.models import (
     CARDINALITIES,
     DATA_TYPES,
@@ -81,6 +81,7 @@ PROPERTY_FIELDS = {
     "multi",
     "enum_options",
     "ref_type_slug",
+    "inverse_label",
     "min_value",
     "max_value",
     "decimals",
@@ -177,8 +178,11 @@ def _diff(
     return changed
 
 
-def plan(db: Session, payload: dict[str, Any]) -> Plan:
-    """적용하면 무엇이 바뀌는지 — **적용하지 않고** 돌려준다."""
+def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
+    """적용하면 무엇이 바뀌는지 — **적용하지 않고** 돌려준다.
+
+    `source` 는 허브에서 받는 묶음만 적는다 — 그 허브가 관리하는 정의를 고칠 수 있고,
+    새로 들이거나 고친 타입 · 관계 종류는 그 허브의 관리가 된다."""
     _reject_unknown(payload, TOP_KEYS, what="스키마")
     out = Plan()
 
@@ -260,7 +264,44 @@ def plan(db: Session, payload: dict[str, Any]) -> Plan:
             )
             _warn_relation_risks(db, relation, one, out)
 
+    _refuse_managed(out, types, relations, source)
     return out
+
+
+def _refuse_managed(
+    out: Plan,
+    types: dict[str, ObjectType],
+    relations: dict[str, RelationType],
+    source: str,
+) -> None:
+    """허브가 관리하는 정의는 **그 허브의 묶음으로만** 바뀐다 — 받는 쪽에서 고치면 다음 받기가
+    덮어쓰거나, 덮어쓰지 못해 둘이 갈린다. 아무것도 안 바뀌는 줄(되돌리기 스냅샷)은 막지
+    않는다."""
+    warned: set[str] = set()
+    for change in out.changes:
+        if change.action == "unchanged":
+            continue
+        row: ObjectType | RelationType | None
+        if change.kind in ("type", "property"):
+            row = types.get(change.slug.split(".", 1)[0])
+        elif change.kind == "relation_type":
+            row = relations.get(change.slug)
+        else:
+            continue
+        if row is None:
+            continue
+        owner = managed.owner_of(row)
+        if owner and owner != source:
+            out.errors.append(
+                f"{change.slug}: {owner} 가 관리하는 정의라 여기서 바꾸지 않습니다 — "
+                f"{owner} 에서 고친 뒤 받으세요."
+            )
+        elif source and not owner and row.slug not in warned:
+            warned.add(row.slug)
+            out.warnings.append(
+                f"{row.slug}: 이 설치에서 만든 정의를 {source} 가 관리하게 됩니다 — "
+                "그 뒤로 여기서는 못 고칩니다."
+            )
 
 
 def _plan_properties(
@@ -496,13 +537,13 @@ def _assign(
         row.sort_order = position * 10
 
 
-def apply(db: Session, payload: dict[str, Any]) -> Plan:
+def apply(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
     """**한 트랜잭션으로** 적용한다. 부르는 쪽이 커밋한다.
 
     중간에 실패하면 반쯤 만들어진 온톨로지가 남지 않는다 — 그것이 이 함수가
     존재하는 이유다.
     """
-    prepared = plan(db, payload)
+    prepared = plan(db, payload, source=source)
     if prepared.errors:
         return prepared
 
@@ -526,6 +567,8 @@ def apply(db: Session, payload: dict[str, Any]) -> Plan:
             object_type = ObjectType(slug=slug, label=one.get("label", slug))
             db.add(object_type)
         _assign(object_type, one, TYPE_FIELDS, position=index if fresh else None)
+        if source:
+            object_type.managed_by = source
         if "nav_group_slug" in one:
             group = groups.get(one["nav_group_slug"]) if one["nav_group_slug"] else None
             object_type.nav_group_id = group.id if group else None
@@ -578,6 +621,8 @@ def apply(db: Session, payload: dict[str, Any]) -> Plan:
             relation = RelationType(slug=slug, label=one.get("label", slug))
             db.add(relation)
         _assign(relation, one, RELATION_FIELDS, position=index if fresh else None)
+        if source:
+            relation.managed_by = source
 
     db.flush()
     return prepared

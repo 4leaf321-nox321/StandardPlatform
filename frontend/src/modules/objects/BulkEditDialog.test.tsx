@@ -110,7 +110,7 @@ describe('여럿 골라 한 칸 바꾸기', () => {
     )
     await userEvent.click(screen.getByRole('button', { name: '계획 보기' }))
     await userEvent.click(await screen.findByRole('button', { name: '2건 바꾸기' }))
-    await userEvent.click(await screen.findByRole('button', { name: /되돌리기/ }))
+    await userEvent.click(await screen.findByRole('button', { name: /복원/ }))
     expect(onUndo).toHaveBeenCalledWith('batch-9')
   })
 })

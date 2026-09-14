@@ -19,8 +19,6 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-import urllib.error
-import urllib.parse
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from itertools import combinations
@@ -150,11 +148,14 @@ def profile(
         )
 
     # ── 2. 행을 유일하게 만드는 열 ─────────────────────────────────────────
+    # 식별자 후보 — 날짜 모양이 섞인 열(날짜 · 주차)과 너무 거친 열(행의 1% 미만 종류)은 뺀다.
+    # 넣으면 「몇 대 몇」 이 뜻 없는 쌍으로 차고, 정작 봐야 할 쌍이 묻힌다(리허설에서 겪었다).
+    floor = max(enum_limit, total // 100)
     ids = [
         one
         for one in columns
-        if one.distinct > enum_limit
-        and one.dates < 0.8 * max(one.filled, 1)
+        if one.distinct > floor
+        and one.dates < DATE_SHARE * max(one.filled, 1)
         and one.blank < total / 2
     ][:ID_COLUMNS]
     unique_columns = [one.name for one in columns if one.blank == 0 and one.distinct == total]
@@ -191,8 +192,14 @@ def profile(
             continue  # 한 번씩만 나오는 열 — 갈릴 수가 없다
         changes = []
         steady = []
+        finer = []
         for other in columns:
             if other is key:
+                continue
+            if other in ids and other.distinct > key.distinct:
+                # 더 잘게 나뉘는 식별자(프로젝트 아래 과제코드)는 갈리는 게 당연하다
+                # — 따로 적는다.
+                finer.append(other.name)
                 continue
             groups: dict[str, set[str]] = defaultdict(set)
             rows: Counter[str] = Counter()
@@ -216,6 +223,7 @@ def profile(
                 "key": key.name,
                 "keys": key.distinct,
                 "varying": sorted(changes, key=lambda one: -one["keys"]),
+                "finer": finer,
                 "steady": steady,
             }
         )
@@ -252,7 +260,10 @@ def profile(
                         "distinct": len(tokens),
                         "top": shown(tokens, enum_limit if show_values else TOP),
                     }
-                    for place, tokens in positions.items()
+                    for place, tokens in sorted(
+                        positions.items(),
+                        key=lambda item: int(item[0]) if item[0].isdigit() else 10**6,
+                    )
                 ],
                 "shapes": {
                     shape: dict(places)
@@ -353,6 +364,10 @@ def profile(
 # --------------------------------------------------------------------------
 
 
+def _place(place: str) -> str:
+    return f"{place}번" if place.isdigit() else place
+
+
 def render(result: dict[str, Any]) -> str:
     source = result["source"]
     total = source["rows"]
@@ -400,6 +415,8 @@ def render(result: dict[str, Any]) -> str:
                 f"  - {change['column']}: {change['keys']}개 식별자"
                 f" · {change['rows']}행에서 갈림"
             )
+        if one["finer"]:
+            lines.append("  - 더 잘게 나뉘는 식별자(갈려도 당연): " + ", ".join(one["finer"]))
         if one["steady"]:
             lines.append("  - 늘 같음: " + ", ".join(one["steady"]))
     if not result["varying"]:
@@ -411,10 +428,10 @@ def render(result: dict[str, Any]) -> str:
         lines.append(f"- {one['column']} (`{one['separator']}` 로 자름): {pieces}")
         for place in one["positions"]:
             top = " · ".join(f"{v} {c}" for v, c in place["top"])
-            lines.append(f"  - {place['position']}번: 고유 {place['distinct']} — {top}")
+            lines.append(f"  - {_place(place['position'])}: 고유 {place['distinct']} — {top}")
         lines.append("  - 조각 모양과 자리:")
         for shape, places in one["shapes"].items():
-            spread = " · ".join(f"{place}번 {count}" for place, count in places.items())
+            spread = " · ".join(f"{_place(place)} {count}" for place, count in places.items())
             lines.append(f"    - {shape}: {spread}")
     if not result["splits"]:
         lines.append("- 없음")
@@ -464,35 +481,8 @@ def render(result: dict[str, Any]) -> str:
 # --------------------------------------------------------------------------
 
 
-def fetch_keys(server: str, token: str, type_slug: str) -> set[str]:
-    """플랫폼에서 그 타입의 식별자를 전부 받는다(쪽마다)."""
-    keys: set[str] = set()
-    offset = 0
-    headers = {"Authorization": f"Bearer {token}", "X-Client": pipeline.CLIENT}
-    while True:
-        url = (
-            f"{server.rstrip('/')}/api/objects/{urllib.parse.quote(type_slug)}"
-            f"?limit=500&offset={offset}"
-        )
-        try:
-            status, body = pipeline.SEND("GET", url, headers, None)
-        except (urllib.error.URLError, OSError) as failure:
-            reason = getattr(failure, "reason", failure)
-            raise Stop(
-                f"플랫폼에 닿지 않습니다: {server} ({reason}) — "
-                "주소(SP_SERVER)와 서버가 떠 있는지 확인하세요"
-            ) from failure
-        if status != 200 or not isinstance(body, dict):
-            error = body.get("error", {}) if isinstance(body, dict) else {}
-            raise Stop(
-                f"코어 식별자를 받지 못했습니다({type_slug}, {status}): "
-                f"{error.get('message', body)}"
-            )
-        items = body.get("items") or []
-        keys.update(str(one["key"]) for one in items if one.get("key"))
-        offset += len(items)
-        if not items or offset >= int(body.get("total") or 0):
-            return keys
+fetch_keys = pipeline.fetch_keys
+"""식별자 받기는 `sp_pipeline` 에 한 벌 — 변환기의 참조 대조도 같은 것을 쓴다."""
 
 
 def core_sources(
@@ -507,11 +497,7 @@ def core_sources(
             raise Stop(f"--match 는 열=타입 또는 열=@파일 이어야 합니다: {one!r}")
         if target.startswith("@"):
             path = (base / target[1:]).resolve()
-            try:
-                lines = path.read_text(encoding="utf-8-sig").splitlines()
-            except OSError as failure:
-                raise Stop(f"식별자 파일을 읽을 수 없습니다: {path} ({failure})") from failure
-            out[column] = (path.name, {line.strip() for line in lines if line.strip()})
+            out[column] = (path.name, pipeline.read_keys_file(path))
         else:
             if not server or not token:
                 raise Stop(

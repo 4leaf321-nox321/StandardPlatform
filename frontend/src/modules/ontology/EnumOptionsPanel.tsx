@@ -256,13 +256,13 @@ function PromoteDialog({ type, property, books, onClose, onDone }: PromoteDialog
             </label>
             <label className="flex cursor-pointer items-center gap-1.5">
               <input type="radio" checked={mode === 'new'} onChange={() => { setMode('new'); setPlan(null) }} />
-              새 코드표 만들기
+              새 코드표 생성
             </label>
           </div>
           {mode === 'existing' ? (
             <Select value={target} onValueChange={(next) => { setTarget(next); setPlan(null) }}>
               <SelectTrigger size="sm" className="w-full">
-                <SelectValue placeholder="코드표 고르기" />
+                <SelectValue placeholder="코드표 선택" />
               </SelectTrigger>
               <SelectContent>
                 {books.map((one) => (

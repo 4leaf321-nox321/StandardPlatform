@@ -1,5 +1,5 @@
 /**
- * 아이콘 고르기 — **눈으로 훑고, 말로 찾는다.**
+ * 아이콘 선택 — **눈으로 훑고, 말로 찾는다.**
  *
  * 이름만 적는 칸으로 두면(`Wrench` 를 치는) 무엇이 있는지 알 수 없고, 오타는 조용히
  * 기본 그림으로 떨어진다 — 고른 사람은 자기가 고른 줄 안다. 그래서 격자로 펼친다.
@@ -54,7 +54,7 @@ export function IconPicker({ value, onChange, disabled = false, id }: Props) {
             className="pl-8"
             value={query}
             disabled={disabled}
-            placeholder="공구·시험·부서처럼 뜻으로 찾기"
+            placeholder="공구·시험·부서처럼 뜻으로 검색"
             onChange={(event) => setQuery(event.target.value)}
           />
         </div>
@@ -99,7 +99,7 @@ export function IconPicker({ value, onChange, disabled = false, id }: Props) {
 }
 
 /**
- * 좁은 자리(만들기 줄)를 위한 단추 하나 — 눌러야 격자가 뜬다.
+ * 좁은 자리(생성 줄)를 위한 단추 하나 — 눌러야 격자가 뜬다.
  *
  * 만들 때부터 고르게 두는 이유: **나중에 고치는 것은 안 한다.** 만들고 나면 그
  * 타입은 이미 쓰이기 시작하고, 그 뒤에 사이드바를 다듬으러 다시 오는 사람은 없다.
@@ -118,9 +118,9 @@ export function IconPickerButton({
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <Button id={id} variant="outline" aria-label="아이콘 고르기" className="w-20">
+        <Button id={id} variant="outline" aria-label="아이콘 선택" className="w-20">
           <Current className="size-4" />
-          <span className="text-muted-foreground text-xs">고르기</span>
+          <span className="text-muted-foreground text-xs">선택</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-96 p-3">

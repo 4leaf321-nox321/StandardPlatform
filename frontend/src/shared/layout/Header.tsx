@@ -7,7 +7,7 @@
  *
  * **검색 칸은 결과를 그리지 않는다.** 친 말을 `/search?q=` 로 넘길 뿐이다. 좁은
  * 드롭다운에 결과를 떨구면 무엇을 찾았는지 안 보이고, 주소로 공유도 안 되고,
- * 뒤로가기로 돌아갈 수도 없다 — 찾기는 화면 하나를 가질 만한 일이다.
+ * 뒤로가기로 돌아갈 수도 없다 — 검색은 화면 하나를 가질 만한 일이다.
  */
 
 import { useState } from 'react'
@@ -70,7 +70,7 @@ export function Header({ onToggleSidebar, workspaceSlug }: HeaderProps) {
         variant="ghost"
         size="icon"
         onClick={onToggleSidebar}
-        aria-label="사이드바 접기/펼치기"
+        aria-label="사이드바 접기/확장"
       >
         <PanelLeft className="size-4" />
       </Button>
@@ -92,8 +92,8 @@ export function Header({ onToggleSidebar, workspaceSlug }: HeaderProps) {
         <Input
           className="h-8 pl-8"
           value={query}
-          placeholder="찾기"
-          aria-label="전체에서 찾기"
+          placeholder="검색"
+          aria-label="전체에서 검색"
           onChange={(event) => setQuery(event.target.value)}
         />
       </form>

@@ -111,7 +111,7 @@ export function ViewPicker({
             지금 조건을 뷰로 저장…
           </DropdownMenuItem>
           {active && (
-            <DropdownMenuItem onSelect={onClear}>뷰 해제 — 조건 전부 지우기</DropdownMenuItem>
+            <DropdownMenuItem onSelect={onClear}>뷰 해제 — 조건 전부 삭제</DropdownMenuItem>
           )}
           {/* **부서 뷰만 홈에 오른다.** 개인 뷰를 부서 홈에 붙이면 같은 화면을 보는
               사람마다 다른 것이 뜨고, 그때 「내 홈에는 왜 그게 없지」 를 아무도 설명
@@ -148,7 +148,7 @@ export function ViewPicker({
                   )
               }}
             >
-              <Trash2 className="mr-1 size-3.5" />「{active.name}」 지우기
+              <Trash2 className="mr-1 size-3.5" />「{active.name}」 삭제
             </DropdownMenuItem>
           )}
         </DropdownMenuContent>

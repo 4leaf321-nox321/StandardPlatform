@@ -299,6 +299,22 @@ def test_대응_파일이_틀리면_무엇이_틀렸는지_말하고_멈춘다(t
         table.convert(mapping_path, source, tmp_path / "run")
 
 
+def test_원래_종류가_많은_조각은_드문_값_목록에서_뺄_수_있다(tmp_path: Path) -> None:
+    """기본 모델코드는 거의 다 드물다 — 목록이 수천 줄이 되면 정작 드문 사업자가 묻힌다."""
+    mapping = _mapping(SLUGS)
+    mapping["parsers"]["model_name"]["rare_below"] = 3
+    _, noisy = table.convert(*_files(tmp_path, mapping), tmp_path / "noisy")
+    mapping["parsers"]["model_name"]["slots"][0]["rare_below"] = 0
+    _, quiet = table.convert(*_files(tmp_path, mapping), tmp_path / "quiet")
+
+    def block(report: str, slot: str) -> str:
+        return report.split(f"조각 {slot}:", 1)[1].split("조각 ", 1)[0]
+
+    assert "3행 미만인 값" in block(noisy, "base")
+    assert "3행 미만인 값" not in block(quiet, "base")
+    assert "3행 미만인 값" in block(quiet, "carrier")
+
+
 def test_두_갈래로_읽히는_이름은_고르지_않는다() -> None:
     parser = table.Parser(
         "code",
@@ -460,3 +476,127 @@ def test_만든_실행_폴더가_미리_보기와_적용을_통과한다(
     assert rc["properties"]["rc_marker"] == "D1" and rc["properties"]["region"] == "KOR"
     # 참조 칸은 식별자로 적었고 플랫폼이 객체로 풀었다.
     assert rc["properties"]["task"]
+
+
+def test_코어를_가리키는_칸은_식별자와_맞추고_못_맞춘_것은_비우고_말한다(
+    tmp_path: Path,
+) -> None:
+    """그룹 표는 코어 코드를 줄여 쓰거나 틀리게 적는다 — 그대로 보내면 묶음 전체가 막힌다."""
+    (tmp_path / "keys.txt").write_text(
+        "SM-A1_KOR_SKT\nSM-B2_NA_ATT\nSM-B2_EUR_VOD\n", encoding="utf-8"
+    )
+    header = "의뢰번호,모델명"
+    rows = [
+        "R-1,SM-A1_KOR_SKT",  # 그대로
+        "R-2,sm-a1_kor_skt",  # 대소문자만 다름
+        "R-3,SM-A1",  # 앞부분이 하나
+        "R-4,SM-B2",  # 앞부분이 둘 — 고르지 않는다
+        "R-5,OL-Z9",  # 없음
+    ]
+    source = tmp_path / "의뢰.csv"
+    source.write_text("\n".join([header, *rows]), encoding="utf-8-sig")
+    mapping: dict[str, Any] = {
+        "format": "sp-table/1",
+        "workspace_slug": "cae",
+        "types": [
+            {
+                "type_slug": "cae_request",
+                "key": {"column": "의뢰번호"},
+                "fields": {
+                    "model": {
+                        "column": "모델명",
+                        "match": {"keys": "@keys.txt", "prefix": True},
+                    }
+                },
+            }
+        ],
+    }
+    mapping_path = tmp_path / "의뢰.table.json"
+    mapping_path.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+
+    ok, report = table.convert(mapping_path, source, tmp_path / "run")
+    assert ok is True, report
+    requests = _objects(tmp_path / "run", "cae_request")
+    assert {key: row["model"] for key, row in requests.items()} == {
+        "R-1": "SM-A1_KOR_SKT",
+        "R-2": "SM-A1_KOR_SKT",
+        "R-3": "SM-A1_KOR_SKT",
+        "R-4": None,
+        "R-5": None,
+    }
+    assert (
+        "[참조 대조] cae_request.model → @keys.txt 5행 — "
+        "그대로 1 · 대소문자만 다름 1 · 앞부분이 하나 1 · 여러 개 1 · 없음 1"
+    ) in report
+    assert "여러 개 1: AA-A9 1" in report and "없음 1: AA-A9 1" in report
+    for secret in ("SM-B2", "OL-Z9"):
+        assert secret not in report
+
+    # 사람에게 물으려면 unresolved — 미해결이 넣기를 막는다.
+    mapping["types"][0]["fields"]["model"]["match"]["on_missing"] = "unresolved"
+    mapping_path.write_text(json.dumps(mapping, ensure_ascii=False), encoding="utf-8")
+    ok, _ = table.convert(mapping_path, source, tmp_path / "run2")
+    assert ok is False
+    unresolved = json.loads(
+        (tmp_path / "run2" / "unresolved.json").read_text(encoding="utf-8")
+    )
+    assert [one["_source"]["rows"] for one in unresolved] == [[5], [6]]
+
+
+def test_참조_대조는_플랫폼에서_식별자를_받는다(
+    client: TestClient, admin: Signed, platform: None, tmp_path: Path
+) -> None:
+    tag = uuid.uuid4().hex[:6]
+    kind = f"core_{tag}"
+    made = client.post(
+        "/api/bundles/import",
+        json={
+            "ontology": {
+                "groups": [],
+                "types": [{"slug": kind, "label": "코어", "key_policy": "required"}],
+                "relation_types": [],
+            },
+            "objects": [
+                {
+                    "type_slug": kind,
+                    "workspace_slug": admin.workspace,
+                    "rows": [{"key": "K-1", "label": "하나"}],
+                }
+            ],
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+    assert made.json()["applied"] is True, made.text
+    token = client.post(
+        "/api/auth/tokens",
+        json={"name": f"match-{tag}", "scopes": ["read"]},
+        headers=admin.headers,
+    ).json()["token"]
+    source = tmp_path / "표.csv"
+    source.write_text("번호,코어\nA,k-1\nB,K-2\n", encoding="utf-8-sig")
+    mapping_path = tmp_path / "표.table.json"
+    mapping_path.write_text(
+        json.dumps(
+            {
+                "format": "sp-table/1",
+                "types": [
+                    {
+                        "type_slug": "cae_x",
+                        "key": {"column": "번호"},
+                        "fields": {"core": {"column": "코어", "match": {"keys": kind}}},
+                    }
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    with pytest.raises(table.Stop, match="SP_SERVER"):
+        table.convert(mapping_path, source, tmp_path / "no-server")
+    _, report = table.convert(
+        mapping_path, source, tmp_path / "run", server=SERVER, token=token
+    )
+    rows = _objects(tmp_path / "run", "cae_x")
+    assert rows["A"]["core"] == "K-1" and rows["B"]["core"] is None
+    assert "대소문자만 다름 1 · 없음 1" in report

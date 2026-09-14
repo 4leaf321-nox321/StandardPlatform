@@ -69,17 +69,26 @@ def install(python: Path, *, online: bool) -> None:
         raise Stop("설치는 끝났는데 mcp 를 불러오지 못합니다 — venv 를 지우고 다시 하세요")
 
 
-def server_entry(python: Path, *, work_root: Path, server: str, token: str) -> dict[str, Any]:
-    """두 클라이언트가 같은 모양(`command` · `args` · `env`)을 받는다."""
-    return {
-        "command": str(python),
-        "args": [str(HERE / "sp_mcp.py")],
-        "env": {
-            "SP_WORK_ROOT": str(work_root),
-            "SP_SERVER": server,
-            "SP_TOKEN": token or TOKEN_PLACEHOLDER,
-        },
+def server_entry(
+    python: Path,
+    *,
+    work_root: Path,
+    server: str,
+    token: str,
+    hub: str = "",
+    hub_token: str = "",
+) -> dict[str, Any]:
+    """두 클라이언트가 같은 모양(`command` · `args` · `env`)을 받는다. 허브 주소는 쌍둥이에
+    넣는 PC 만."""
+    env = {
+        "SP_WORK_ROOT": str(work_root),
+        "SP_SERVER": server,
+        "SP_TOKEN": token or TOKEN_PLACEHOLDER,
     }
+    if hub:
+        env["SP_HUB_SERVER"] = hub
+        env["SP_HUB_TOKEN"] = hub_token or TOKEN_PLACEHOLDER
+    return {"command": str(python), "args": [str(HERE / "sp_mcp.py")], "env": env}
 
 
 def claude_config() -> Path:
@@ -125,9 +134,12 @@ def merge(path: Path, entry: dict[str, Any]) -> str:
 
 def _shown(entry: dict[str, Any]) -> dict[str, Any]:
     """화면에는 토큰을 가려 보인다."""
-    token = entry["env"]["SP_TOKEN"]
-    hidden = token if token == TOKEN_PLACEHOLDER else token[:6] + "…"
-    return {**entry, "env": {**entry["env"], "SP_TOKEN": hidden}}
+    env = dict(entry["env"])
+    for name in ("SP_TOKEN", "SP_HUB_TOKEN"):
+        token = env.get(name)
+        if token and token != TOKEN_PLACEHOLDER:
+            env[name] = token[:6] + "…"
+    return {**entry, "env": env}
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -137,6 +149,12 @@ def main(argv: list[str] | None = None) -> int:
         "--server", default=os.environ.get("SP_SERVER", ""), help="플랫폼 주소"
     )
     parser.add_argument("--token", default=os.environ.get("SP_TOKEN", ""), help="개인 토큰")
+    parser.add_argument(
+        "--hub-server",
+        default=os.environ.get("SP_HUB_SERVER", ""),
+        help="허브 주소(쌍둥이에 넣는 PC 만)",
+    )
+    parser.add_argument("--hub-token", default=os.environ.get("SP_HUB_TOKEN", ""))
     parser.add_argument("--venv", type=Path, default=HERE / "venv")
     parser.add_argument("--online", action="store_true", help="동봉 휠 대신 PyPI 에서")
     parser.add_argument("--no-install", action="store_true", help="설치는 건너뛰고 설정만")
@@ -149,7 +167,14 @@ def main(argv: list[str] | None = None) -> int:
         python = venv_python(args.venv) if args.no_install else create_venv(args.venv)
         if not args.no_install:
             install(python, online=args.online)
-        entry = server_entry(python, work_root=work_root, server=args.server, token=args.token)
+        entry = server_entry(
+            python,
+            work_root=work_root,
+            server=args.server,
+            token=args.token,
+            hub=args.hub_server,
+            hub_token=args.hub_token,
+        )
 
         print("\n설정(두 클라이언트 같음) — mcpServers 안에:")
         print(json.dumps({NAME: _shown(entry)}, ensure_ascii=False, indent=2))

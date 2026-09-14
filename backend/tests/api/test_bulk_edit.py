@@ -79,7 +79,7 @@ def test_한_건씩_기록이_남아_지켜보는_사람에게_간다(
 
     assert len(notifications_of(client, manager, "object.changed")) == before + 1
     history = client.get(f"/api/objects/{part}/{ids[0]}/history", headers=admin.headers).json()
-    assert any("여럿 골라" in (one["reason"] or "") for one in history)
+    assert any("일괄 수정" in (one["reason"] or "") for one in history)
 
 
 def test_못_고치는_것은_이유를_적고_나머지는_고친다(

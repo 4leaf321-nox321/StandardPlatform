@@ -1,5 +1,5 @@
 /**
- * 찾기 — **타입을 모르는 사람이 서는 자리.**
+ * 검색 — **타입을 모르는 사람이 서는 자리.**
  *
  * 목록은 타입마다 따로다. 그런데 무엇을 찾을 때 그것이 어느 타입인지 아는 경우는
  * 드물다 — 알았다면 이미 그 목록에 가 있었을 것이다.
@@ -92,7 +92,7 @@ export default function SearchPage() {
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader
-        title="찾기"
+        title="검색"
         description="타입을 가리지 않고 이름·식별자·별칭으로 찾습니다. 볼 수 있는 것만 나옵니다."
       />
 
@@ -115,7 +115,7 @@ export default function SearchPage() {
           />
         </div>
         <Button type="submit" disabled={loading}>
-          {loading ? <Loader2 className="size-4 animate-spin" /> : '찾기'}
+          {loading ? <Loader2 className="size-4 animate-spin" /> : '검색'}
         </Button>
       </form>
 
@@ -154,7 +154,7 @@ export default function SearchPage() {
       ) : tooShort ? (
         <EmptyState
           title={`${data?.min_query ?? 2}글자 이상 쳐 주세요`}
-          hint="한 글자로는 거의 모든 것이 걸려 찾기가 아니라 목록이 됩니다."
+          hint="한 글자로는 거의 모든 것이 걸려 검색이 아니라 목록이 됩니다."
         />
       ) : data && data.items.length === 0 ? (
         <EmptyState

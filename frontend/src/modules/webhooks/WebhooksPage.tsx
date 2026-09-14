@@ -70,7 +70,7 @@ export default function WebhooksPage() {
         actions={
           <Button size="sm" onClick={() => setEditing('new')}>
             <Plus className="mr-1 size-4" />
-            만들기
+            생성
           </Button>
         }
       />
@@ -130,12 +130,12 @@ export default function WebhooksPage() {
                     보내 보기
                   </Button>
                   <Button size="sm" variant="outline" onClick={() => setEditing(hook)}>
-                    고치기
+                    수정
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
-                    aria-label="웹훅 지우기"
+                    aria-label="웹훅 삭제"
                     onClick={() => setRemoving(hook)}
                   >
                     <Trash2 className="size-4" />
@@ -173,7 +173,7 @@ export default function WebhooksPage() {
         open={removing !== null}
         title={`「${removing?.name}」 을 지웁니다`}
         description="보낸 기록도 함께 사라집니다. 잠시 멈추려면 지우지 말고 「사용 안 함」 으로 두세요."
-        confirmLabel="지우기"
+        confirmLabel="삭제"
         destructive
         onConfirm={async () => {
           if (removing) await webhookApi.remove(removing.id)
@@ -314,7 +314,7 @@ function EditDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{hook ? '웹훅 고치기' : '웹훅 만들기'}</DialogTitle>
+          <DialogTitle>{hook ? '웹훅 수정' : '웹훅 생성'}</DialogTitle>
           <DialogDescription>
             변경이 커밋된 뒤 이 주소로 JSON 을 POST 합니다. 실패하면 세 번까지 다시 보냅니다.
           </DialogDescription>
@@ -396,7 +396,7 @@ function EditDialog({
                   setCustom('')
                 }}
               >
-                더하기
+                추가
               </Button>
             </div>
           </div>

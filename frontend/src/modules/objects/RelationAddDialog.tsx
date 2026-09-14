@@ -159,7 +159,7 @@ export function RelationAddDialog({
                   value={target}
                   onChange={setTarget}
                   placeholder="객체를 고르세요"
-                  searchPlaceholder="이름·식별자로 찾기"
+                  searchPlaceholder="이름·식별자로 검색"
                   emptyText={
                     found.failed ? '고를 것을 불러오지 못했습니다' : '고를 객체가 없습니다'
                   }
@@ -194,7 +194,7 @@ export function RelationAddDialog({
             취소
           </Button>
           <Button onClick={submit} disabled={saving || !target || usable.length === 0}>
-            잇기
+            연결
           </Button>
         </DialogFooter>
       </DialogContent>

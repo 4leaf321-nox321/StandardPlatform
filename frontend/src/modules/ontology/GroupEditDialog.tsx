@@ -31,7 +31,7 @@ import {
 
 interface Props {
   group: NavGroupRow
-  /** 이 묶음에 걸린 타입 이름들. **지우기 전에 무엇이 걸렸는지 말한다.** */
+  /** 이 묶음에 걸린 타입 이름들. **삭제 전에 무엇이 걸렸는지 말한다.** */
   attached: string[]
   onClose: () => void
   onChanged: () => void
@@ -71,7 +71,7 @@ export function GroupEditDialog({ group, attached, onClose, onChanged }: Props) 
       <Dialog open onOpenChange={(open) => !open && onClose()}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>{group.label} 고치기</DialogTitle>
+            <DialogTitle>{group.label} 수정</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -139,7 +139,7 @@ export function GroupEditDialog({ group, attached, onClose, onChanged }: Props) 
 
           <DialogFooter className="justify-between sm:justify-between">
             <Button variant="ghost" onClick={() => setRemoving(true)} disabled={saving}>
-              지우기
+              삭제
             </Button>
             <div className="flex gap-2">
               <Button variant="outline" onClick={onClose} disabled={saving}>
@@ -168,7 +168,7 @@ export function GroupEditDialog({ group, attached, onClose, onChanged }: Props) 
               <>걸린 타입이 없어 지울 수 있습니다.</>
             )
           }
-          confirmLabel="지우기"
+          confirmLabel="삭제"
           onConfirm={async () => {
             await ontologyApi.removeGroup(group.slug)
             onChanged()

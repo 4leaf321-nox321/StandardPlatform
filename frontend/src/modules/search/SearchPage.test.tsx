@@ -1,5 +1,5 @@
 /**
- * 찾기 화면이 지키는 것 — **왜 걸렸는지 말하고, 주소가 상태고, 좁힐 수 있다.**
+ * 검색 화면이 지키는 것 — **왜 걸렸는지 말하고, 주소가 상태고, 좁힐 수 있다.**
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -55,7 +55,7 @@ async function open(url: string) {
   )
 }
 
-describe('찾기', () => {
+describe('검색', () => {
   // 부른 횟수를 보는 시험이 있다 — 앞 시험의 호출이 남으면 그 셈이 틀어진다.
   beforeEach(() => searchApi.find.mockClear())
 

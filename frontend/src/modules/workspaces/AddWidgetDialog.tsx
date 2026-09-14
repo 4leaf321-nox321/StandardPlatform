@@ -58,7 +58,7 @@ export function AddWidgetDialog({ onClose }: { onClose: () => void }) {
           value={slug}
           onChange={setSlug}
           placeholder="어느 것을 띄울까요"
-          searchPlaceholder="타입 이름으로 찾기"
+          searchPlaceholder="타입 이름으로 검색"
           emptyText="정의된 타입이 없습니다. 먼저 온톨로지에서 타입을 만드세요."
           loading={schema.loading}
         />

@@ -6,7 +6,8 @@
 - 계획과 순서: [docs/데이터-온톨로지화-계획.md](../docs/데이터-온톨로지화-계획.md)
 - AI 가 따르는 절차와 실행 폴더의 모양: [AGENTS.md](AGENTS.md) (**정본**)
 - 무엇을 무엇으로 만드나: 모델링 규약 — MCP `get_guide(topic="modeling")` (본문 `mcp_server/guide/GUIDE.md`)
-- 공통 코어 온톨로지 초안: [core/core-ontology.json](core/core-ontology.json)
+- 공통 코어: [core/plm-core.json](core/plm-core.json)(PLM 기준정보 — 허브가 내려준다) ·
+  [core/work-core.json](core/work-core.json)(업무 공통 — 그룹의 일이 PLM 과제에 붙는 자리)
 - 그룹이 시작 전에 채우는 것: [templates/파일럿-그룹-정리.md](templates/파일럿-그룹-정리.md)
 - 사내 AI 에게 단계마다 붙여 넣는 지시문: [templates/사내-AI-지시문.md](templates/사내-AI-지시문.md)
 
@@ -39,6 +40,7 @@ python sp_pipeline.py apply    runs/2026-09-13-sim-tools   # 사람이 확인한
 | `validate` | JSON 모양, 식별자 겹침, 관계 행의 칸, 미해결 목록. 출처(`_source`) · 근거가 없으면 경고 | 오류 있으면 1 |
 | `preview` | 검증 → 플랫폼 `POST /api/bundles/import`(apply=false) → `preview.json` 에 결과와 **지문** | 계획에 오류 있으면 1 |
 | `apply` | **미리 본 것과 지문이 같을 때만** 적용 → `applied.json` | 안 들어갔으면 1 |
+| `pull` | (쌍둥이) 허브가 내보낸 사이드바 묶음을 새 실행 폴더로 — `--group plm`, `SP_HUB_SERVER` · `SP_HUB_TOKEN`. 그 뒤는 `validate` → `preview` → `apply`(받는 플랫폼에) | 0 |
 
 도구가 막고 멈추면 종료 코드 2 와 함께 이유를 적는다(검증 실패 · 미리 본 뒤 바뀜 · 서버 거절).
 
@@ -114,6 +116,7 @@ python sp_setup.py --work-root "D:\온톨로지작업" --server http://<플랫�
 | `work_read` · `work_write` | 정의 · 판단표 · 대응 · 실행 폴더 행 파일(쓸 수 있는 자리가 정해져 있다) |
 | `decision_record` | 사람이 정한 것 — 정의 확정 · 미해결의 답 |
 | `table_convert` · `run_init` · `run_validate` · `run_preview` | 변환 · 빈 실행 · 검증 · 미리 보기 |
+| `hub_pull` | (쌍둥이) 허브의 PLM 기준정보를 새 실행 폴더로 받는다 — env 에 `SP_HUB_SERVER` · `SP_HUB_TOKEN`(설치: `--hub-server` · `--hub-token`) |
 
 **적용 도구는 없다.** `run_preview` 가 돌려주는 `apply_command` 를 사람이 확인한 뒤 직접 실행한다.
 
@@ -124,8 +127,8 @@ MCP 없이 명령으로도 같은 일을 한다 — `sp_work.py init|status|reco
 
 1. 그룹 담당자가 `templates/파일럿-그룹-정리.md` 를 복사해 **작업 폴더(저장소 밖)** 에서 채운다 —
    특히 2장 「자주 묻는 질문」.
-2. 플랫폼에 코어가 없으면 코어부터 넣는다 — `ontology.json` 에 `core/core-ontology.json` 을 그대로
-   두고 `preview` → 확인 → `apply`.
+2. 플랫폼에 코어가 없으면 코어부터 넣는다. **허브**는 `core/plm-core.json`(+ 사내 확장 정의),
+   **쌍둥이**는 허브에서 PLM 기준정보를 받은 뒤 `core/work-core.json` — `preview` → 확인 → `apply`.
 3. AI 가 정리 문서와 규약을 읽고 그룹 전용 정의(`<그룹코드>_`)를 제안한다 → 온톨로지 담당이 확인.
 4. 원천 종류마다 실행 폴더를 만들어 한 바퀴씩 돈다 — 엑셀은 규칙(스크립트)으로, 문서는 AI 추출로.
 

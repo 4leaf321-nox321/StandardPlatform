@@ -1,12 +1,12 @@
 /**
- * 지우기 — **누르기 전에 무엇이 걸렸는지 보고, 걸렸으면 어떻게 할지 고른다.**
+ * 삭제 — **누르기 전에 무엇이 걸렸는지 보고, 걸렸으면 어떻게 할지 고른다.**
  *
  * 「정말 삭제하시겠습니까」 만 묻는 창은 아무도 안 읽는다. 이 창은 먼저 「이 객체를
  * 가리키는 것」 을 세어 보여 준다. 없으면 그냥 지운다. 있으면 셋 중 하나:
  *
  *   그대로 두기          취소 — 먼저 끊거나 고치러 간다
- *   비우고 끊고 지우기   가리키던 칸이 비고 관계가 끊긴다. 그 객체마다 기록이 남는다
- *   다른 것에 합치기     참조·관계가 이긴 쪽으로 옮겨 가고, 옛 주소는 새 것으로 간다
+ *   참조 해제 후 삭제   가리키던 칸이 비고 관계가 끊긴다. 그 객체마다 기록이 남는다
+ *   다른 것에 병합     참조·관계가 이긴 쪽으로 옮겨 가고, 옛 주소는 새 것으로 간다
  *
  * 남의 부서 것이 가리키고 있으면 **수만** 보인다 — 안 보이면 「아무것도 안 걸렸다」 로
  * 읽고 지우게 된다.
@@ -100,12 +100,12 @@ export function ObjectDeleteDialog({
   const canRun =
     !busy && refs.data !== null && (!blocked || choice === 'detach' || (choice === 'merge' && into))
   const runLabel = !blocked
-    ? '지우기'
+    ? '삭제'
     : choice === 'detach'
-      ? '비우고 끊고 지우기'
+      ? '참조 해제 후 삭제'
       : choice === 'merge'
-        ? '합치고 지우기'
-        : '지우기'
+        ? '병합 후 삭제'
+        : '삭제'
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -206,7 +206,7 @@ export function ObjectDeleteDialog({
                     className="mt-1"
                   />
                   <span>
-                    <span className="font-medium">참조를 비우고 관계를 끊고 지우기</span>
+                    <span className="font-medium">참조를 참조를 비우고 관계를 해제한 뒤 삭제</span>
                     <span className="text-muted-foreground block text-xs">
                       가리키던 {summary.props}개의 칸이 비고 관계 {summary.rels}개가 끊깁니다. 그
                       객체마다 「왜 비었는지」 기록이 남습니다.
@@ -222,7 +222,7 @@ export function ObjectDeleteDialog({
                     className="mt-1"
                   />
                   <span>
-                    <span className="font-medium">다른 {typeLabel}에 합치고 지우기</span>
+                    <span className="font-medium">다른 {typeLabel}에 병합 후 삭제</span>
                     <span className="text-muted-foreground block text-xs">
                       <b>같은 것이 둘로 갈렸을 때</b>(「ACME」 와 「ACME Inc.」 처럼). 이긴 쪽만
                       남기고, 이 객체를 가리키던 참조와 관계를 전부 그리로 옮깁니다. 옛 주소로
@@ -242,8 +242,8 @@ export function ObjectDeleteDialog({
                       onQueryChange={candidates.setQuery}
                       value={into}
                       onChange={setInto}
-                      placeholder="이긴 쪽 고르기"
-                      searchPlaceholder="이름·식별자로 찾기"
+                      placeholder="이긴 쪽 선택"
+                      searchPlaceholder="이름·식별자로 검색"
                       emptyText={
                         candidates.failed
                           ? '같은 타입의 객체를 읽지 못했습니다'

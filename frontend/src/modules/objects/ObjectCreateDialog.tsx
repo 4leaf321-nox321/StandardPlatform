@@ -1,5 +1,5 @@
 /**
- * 객체 만들기.
+ * 객체 생성.
  *
  * **`window.prompt` 를 쓰지 않는다** — 서버가 거절했을 때 그 말을 보여 줄 자리가
  * 없어서다. 여기서는 오류가 폼 안에 그대로 선다.
@@ -72,7 +72,7 @@ export function ObjectCreateDialog({ type, defs, onClose, onCreated }: Props) {
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{type.label} 만들기</DialogTitle>
+          <DialogTitle>{type.label} 생성</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
@@ -134,7 +134,7 @@ export function ObjectCreateDialog({ type, defs, onClose, onCreated }: Props) {
             취소
           </Button>
           <Button onClick={submit} disabled={saving || !label.trim()}>
-            만들기
+            생성
           </Button>
         </DialogFooter>
       </DialogContent>

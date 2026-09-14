@@ -204,7 +204,7 @@ export function HomeWidget({
                   뒤로
                 </DropdownMenuItem>
               )}
-              {/* **뷰는 안 지운다.** 홈에서만 내린다 — 거르기까지 잃을 이유가 없고,
+              {/* **뷰는 안 지운다.** 홈에서만 내린다 — 필터까지 잃을 이유가 없고,
                   나중에 다시 올릴 수도 있다. */}
               <DropdownMenuItem
                 disabled={busy}

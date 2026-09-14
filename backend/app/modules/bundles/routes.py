@@ -2,17 +2,19 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
+from sqlalchemy.orm import Session
 
+from app.database import get_db
 from app.modules.accounts.models import User
-from app.modules.bundles import services
-from app.modules.bundles.schemas import BatchOut, BundleIn, BundleOut
+from app.modules.bundles import export, services
+from app.modules.bundles.schemas import BatchOut, BundleExportOut, BundleIn, BundleOut
 from app.modules.objects import bulk
 from app.modules.objects.schemas import ImportPlanOut as RowsPlanOut
 from app.modules.objects.schemas import ImportRowOut
 from app.modules.ontology.schemas import ChangeOut
 from app.modules.ontology.schemas import ImportPlanOut as SchemaPlanOut
-from app.shared.auth import current_user
+from app.shared.auth import current_user, require_system_admin
 from app.shared.errors import Conflict, Forbidden, code
 
 router = APIRouter(prefix="/bundles", tags=["bundles"])
@@ -57,6 +59,22 @@ def import_bundle(
         snapshot_id=outcome.snapshot_id,
         counts=outcome.counts,
     )
+
+
+@router.get("/export", response_model=BundleExportOut)
+def export_bundle(
+    group: str = Query(
+        min_length=1, description="사이드바 묶음 slug — 허브의 PLM 기준정보면 plm"
+    ),
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> BundleExportOut:
+    """허브가 쌍둥이에 내려주는 묶음 — 사이드바 묶음 하나의 정의 · 객체 · 관계를 **가져오기와
+    같은 모양으로.** 받는 쪽은 이것을 그대로 `POST /bundles/import` 에 `source` 를 붙여 보낸다.
+
+    시스템 관리자만 — 허브의 기준정보 전부를 부서 가리지 않고 내보내기 때문이다.
+    """
+    return BundleExportOut(**export.export_group(db, group))
 
 
 def _schema_out(outcome: services.Outcome) -> SchemaPlanOut:

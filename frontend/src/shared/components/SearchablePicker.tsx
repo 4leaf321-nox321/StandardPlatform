@@ -1,5 +1,5 @@
 /**
- * 많은 것 중에서 하나 고르기.
+ * 많은 것 중에서 하나 선택.
  *
  * **고를 것이 스물을 넘으면 `<Select>` 를 쓰지 않는다.** 통째로 펼쳐 놓고 눈으로
  * 찾으라고 하면 그 일은 실패하고, **못 찾은 사람은 없다고 결론 내리고 새로 만든다**
@@ -70,7 +70,7 @@ export function SearchablePicker({
   value,
   onChange,
   placeholder = '고르세요',
-  searchPlaceholder = '이름으로 찾기',
+  searchPlaceholder = '이름으로 검색',
   emptyText = '맞는 것이 없습니다',
   id,
   className,

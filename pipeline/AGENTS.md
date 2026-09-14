@@ -24,6 +24,7 @@
 | 4 변환 | `table_convert` → 보고서를 읽고 대응을 고쳐 다시 | **미해결은 사람에게 묻고** `decision_record` |
 | 4′ 문서 추출 | `run_init` · `work_write` 로 `runs/<실행>/objects/…` · `relations/…` | 확신 없는 것은 `unresolved.json` 으로 |
 | 5 검증 · 미리 보기 | `run_validate` → `run_preview` | **요약을 보이고, 적용은 사람이 `apply_command` 로** — 적용 도구는 없다 |
+| 허브에서 받기(쌍둥이) | `hub_pull(work, group="plm")` → `run_validate` → `run_preview` | 적용은 사람이. 받은 타입은 받는 플랫폼에서 **허브 관리**가 되어 거기서는 못 고친다 — 정의 · 값이 틀렸으면 허브 쪽 작업에서 고친다 |
 
 - **통계를 스스로 세지 않는다.** `source_profile` 결과를 인용한다 — 수천 행을 AI 가 읽어 센 수는
   틀려도 알 길이 없다.
@@ -236,6 +237,15 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models      # 그 뒤는 여�
   `.` · `/` → ISO, 아니면 비우고 보고서에) · `map`(값 → 값. `<date>` 는 날짜 모양, `<blank>` 는 빈 칸.
   대응에 없는 값은 비우고 보고서에).
 - `key` 가 빈 행은 그 타입에서 건너뛴다(보고서에 건수). `label` 을 안 적으면 `key` 와 같다.
+- **참조 대조** — 코어(허브에서 받은 PLM 기준정보)를 가리키는 칸은 `column` 에 `match` 를 붙인다:
+  `{"column": "모델명", "match": {"keys": "plm_model", "prefix": true, "on_missing": "blank"}}`.
+  - `keys`: 식별자를 받을 타입 slug(플랫폼에서 — `SP_SERVER` · `SP_TOKEN`) 또는 `@파일`(한 줄에 하나,
+    대응 파일 기준 경로).
+  - 맞추는 차례: 그대로 → 대소문자만 다름 → (`prefix` 면) 앞부분이 **하나뿐인** 식별자. 둘 이상이면
+    고르지 않는다.
+  - `on_missing`: `blank`(기본 — 비워 넣고 보고서에) · `unresolved`(미해결로 올려 사람에게) · `keep`
+    (그대로 보냄 — 플랫폼이 거절하면 묶음 전체가 막힌다).
+  - 보고서 `[참조 대조]` 에 그대로 · 대소문자 · 앞부분 · 여러 개 · 없음의 건수와 못 맞춘 것의 가린 패턴.
 
 ### 해석기 — 이름에 박힌 조각
 
@@ -249,7 +259,8 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models      # 그 뒤는 여�
 - `checks` — 읽힌 뒤의 검증. `suffix_of`: 조각이 있으면 다른 열이 `<joiner><조각>` 으로 끝나야
   한다. `require`: `when_column` 이 `in` 중 하나면 그 조각이 있어야 한다.
 - 못 읽었거나 검증을 어긴 행은 **넣되 해석 칸을 모두 비운다**(`null`). 보고서에 이유별 패턴이 나온다.
-- `rare_below`: 조각 값이 그보다 적게 나오면 보고서에 드문 값으로 — 마스터와 대조할 후보.
+- `rare_below`: 조각 값이 그보다 적게 나오면 보고서에 드문 값으로 — 마스터와 대조할 후보. 조각에
+  `rare_below` 를 따로 적으면 그 조각만 바뀐다(기본 모델코드처럼 원래 종류가 많은 조각은 `0`).
 
 <!--@ sources -->
 ## 무엇을 무엇으로 만드나 — `get_guide(topic="modeling")`
@@ -257,9 +268,11 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models      # 그 뒤는 여�
 **판단의 기준은 모델링 규약이다** — 서버가 쥐고 `get_guide(topic="modeling")` 로 내려준다(본문은
 `mcp_server/guide/GUIDE.md`). 정제를 시작하기 전에 읽는다. 요점:
 
-- **코어 온톨로지를 먼저 쓴다** — [`core/core-ontology.json`](core/core-ontology.json). 과제 · 업무 ·
-  문서 · 사람 · 기관 · 설비 · 소프트웨어 · 기술 분야, 그리고 근거 문서 · 담당 · 사용 같은 관계.
-  그룹 전용 타입과 속성은 `<그룹코드>_` 로 시작한다.
+- **코어를 먼저 쓴다** — PLM 기준정보 [`core/plm-core.json`](core/plm-core.json)(프로젝트 · 과제 ·
+  개발모델 · 시험 주체 — 허브가 내려주고 쌍둥이는 **받기만** 한다)과 업무 공통
+  [`core/work-core.json`](core/work-core.json)(업무 · 문서 · 사람 · 기관 · 설비 · 소프트웨어 · 기술
+  분야, 근거 문서 · 담당 · 사용 같은 관계). 그룹의 일은 그룹 타입으로 만들고 **PLM 과제 · 모델을
+  참조 칸으로 가리킨다.** 그룹 전용 타입과 속성은 `<그룹코드>_` 로 시작한다.
 - **질문에서 시작한다** — 그룹이 채운 [`templates/파일럿-그룹-정리.md`](templates/파일럿-그룹-정리.md)
   의 질문 목록에 답하는 데 필요한 것만 만든다.
 - **식별자는 다시 돌려도 같게** — 원천 번호 → 정규화한 이름 → 문서는 `doc-<sha256 앞 12자>`.

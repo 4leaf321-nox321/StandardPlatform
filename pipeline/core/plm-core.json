@@ -1,0 +1,207 @@
+{
+  "groups": [
+    {
+      "slug": "plm",
+      "label": "PLM 기준정보",
+      "sort_order": 0
+    }
+  ],
+  "types": [
+    {
+      "slug": "plm_project",
+      "label": "프로젝트",
+      "nav_group_slug": "plm",
+      "icon": "FolderOpen",
+      "key_policy": "required",
+      "description": "PLM 의 프로젝트. 과제를 여럿 가진다. **허브가 PLM 에서 받아 쌍둥이에 내려준다 — 쌍둥이에서 고치지 않는다.**"
+    },
+    {
+      "slug": "plm_test_site",
+      "label": "시험 주체",
+      "nav_group_slug": "plm",
+      "icon": "Microscope",
+      "key_policy": "required",
+      "description": "지역에 고정된 시험 실행 주체.",
+      "properties": [
+        {
+          "key": "region_text",
+          "label": "담당 지역",
+          "data_type": "text"
+        }
+      ]
+    },
+    {
+      "slug": "plm_task",
+      "label": "과제",
+      "nav_group_slug": "plm",
+      "icon": "Target",
+      "key_policy": "required",
+      "description": "PLM 과제. 식별자는 과제코드, 이름은 과제명. 한 과제에 개발모델이 여럿 붙는다. 그룹의 일(의뢰 · 해석 · 시험)은 그룹 타입으로 만들고 이 과제를 가리킨다.",
+      "properties": [
+        {
+          "key": "project",
+          "label": "프로젝트",
+          "data_type": "object_ref",
+          "ref_type_slug": "plm_project",
+          "required": true,
+          "inverse_label": "과제"
+        },
+        {
+          "key": "task_status",
+          "label": "과제상태",
+          "data_type": "enum",
+          "enum_options": [],
+          "help": "고를 값은 허브의 사내 확장 정의가 채운다."
+        },
+        {
+          "key": "sra_on",
+          "label": "SRA 실적일",
+          "data_type": "date",
+          "help": "실적 주차는 저장하지 않는다 — 날짜로 계산된다."
+        },
+        {
+          "key": "sra_kind",
+          "label": "SRA 구분",
+          "data_type": "enum",
+          "enum_options": [
+            "실적",
+            "면제",
+            "미도래"
+          ]
+        },
+        {
+          "key": "test_site",
+          "label": "시험 주체",
+          "data_type": "object_ref",
+          "ref_type_slug": "plm_test_site",
+          "inverse_label": "과제"
+        },
+        {
+          "key": "test_kind",
+          "label": "Test 유형",
+          "data_type": "text"
+        },
+        {
+          "key": "test_plan_status",
+          "label": "TestPlan 상태",
+          "data_type": "text"
+        }
+      ]
+    },
+    {
+      "slug": "plm_model",
+      "label": "개발모델",
+      "nav_group_slug": "plm",
+      "icon": "Cpu",
+      "key_policy": "required",
+      "description": "PLM 개발모델 한 건. 식별자는 개발모델명 원문. 「모델명 해석」 칸은 이름을 규칙으로 나눈 것이다(못 나누면 비어 있다).",
+      "properties": [
+        {
+          "key": "task",
+          "label": "과제",
+          "data_type": "object_ref",
+          "ref_type_slug": "plm_task",
+          "required": true,
+          "inverse_label": "개발모델"
+        },
+        {
+          "key": "model_kind",
+          "label": "개발모델유형",
+          "data_type": "enum",
+          "enum_options": [],
+          "help": "고를 값은 허브의 사내 확장 정의가 채운다."
+        },
+        {
+          "key": "cs_target",
+          "label": "CS 인증 대상",
+          "data_type": "enum",
+          "enum_options": [],
+          "help": "과제가 아니라 모델의 속성. 고를 값은 사내 확장 정의가 채운다."
+        },
+        {
+          "key": "test_progress",
+          "label": "Test 진행상태",
+          "data_type": "text",
+          "help": "과제가 아니라 모델의 속성."
+        },
+        {
+          "key": "product_text",
+          "label": "제품",
+          "data_type": "text"
+        },
+        {
+          "key": "mass_model_code",
+          "label": "양산모델코드",
+          "data_type": "text",
+          "help": "BOM 완제품과 이어질 자리."
+        },
+        {
+          "key": "base_code",
+          "label": "기본 모델코드",
+          "data_type": "text",
+          "section": "모델명 해석"
+        },
+        {
+          "key": "series",
+          "label": "모델명 계열",
+          "data_type": "enum",
+          "enum_options": [],
+          "section": "모델명 해석"
+        },
+        {
+          "key": "rc_marker",
+          "label": "변형 마커",
+          "data_type": "text",
+          "section": "모델명 해석"
+        },
+        {
+          "key": "region",
+          "label": "지역",
+          "data_type": "enum",
+          "enum_options": [],
+          "section": "모델명 해석"
+        },
+        {
+          "key": "model_revision",
+          "label": "모델 리비전",
+          "data_type": "text",
+          "section": "모델명 해석",
+          "help": "모델명의 리비전 조각. BOM 부품 리비전과는 다른 것."
+        },
+        {
+          "key": "model_revision_kind",
+          "label": "모델 리비전 종류",
+          "data_type": "enum",
+          "enum_options": [
+            "OS 버전",
+            "차수",
+            "기호"
+          ],
+          "section": "모델명 해석"
+        },
+        {
+          "key": "carrier",
+          "label": "사업자 · 채널",
+          "data_type": "text",
+          "section": "모델명 해석"
+        }
+      ]
+    }
+  ],
+  "relation_types": [
+    {
+      "slug": "plm_derived_from",
+      "label": "원 모델",
+      "inverse_label": "파생 모델",
+      "description": "파생 모델이 어느 기본 모델에서 나왔나. PLM 원천을 받은 뒤 채운다 — 짐작으로 채우지 않는다.",
+      "cardinality": "many_to_one",
+      "acyclic": true,
+      "src_type_slugs": [
+        "plm_model"
+      ],
+      "dst_type_slugs": [
+        "plm_model"
+      ]
+    }
+  ]
+}

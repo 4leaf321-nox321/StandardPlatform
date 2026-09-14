@@ -1,8 +1,8 @@
 /**
- * 자료 옮기기 — **부서 통폐합의 앞 단계.**
+ * 자료 이동 — **부서 통폐합의 앞 단계.**
  *
  * 없어지는 부서의 자료를 다른 부서로 통째 넘기고, 그다음에 원본을 보관하거나 지운다.
- * 이 길이 없으면 자료를 살리는 방법이 「객체를 하나씩 손으로 고치기」 뿐이고, 그 일은
+ * 이 길이 없으면 자료를 살리는 방법이 「객체를 하나씩 손으로 수정」 뿐이고, 그 일은
  * 아무도 끝내지 못한다 — 결국 쓰지 않는 부서가 목록에 영원히 남는다.
  *
  * **고른 종류만 옮긴다.** 멤버는 두고 객체만 넘기는 개편이 흔하다(팀은 남고 업무만
@@ -98,7 +98,7 @@ export function WorkspaceReassignDialog({ source, all, onClose, onDone }: Props)
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{source.name} 의 자료 옮기기</DialogTitle>
+          <DialogTitle>{source.name} 의 자료 이동</DialogTitle>
           <DialogDescription>
             고른 것을 다른 부서로 통째 넘깁니다. 자료 자체는 그대로고 소유 부서만 바뀝니다. 다 넘긴
             뒤에 이 부서를 보관하거나 지우면 통폐합이 끝납니다.
@@ -128,7 +128,7 @@ export function WorkspaceReassignDialog({ source, all, onClose, onDone }: Props)
                 value={target || null}
                 onChange={setTarget}
                 placeholder="어느 부서로 넘길까요"
-                searchPlaceholder="부서 이름이나 주소로 찾기"
+                searchPlaceholder="부서 이름이나 주소로 검색"
               />
             </div>
             <div className="space-y-2">
@@ -175,7 +175,7 @@ export function WorkspaceReassignDialog({ source, all, onClose, onDone }: Props)
           </Button>
           {!moved && (
             <Button onClick={run} disabled={busy || !target || picked.size === 0}>
-              {busy ? '옮기는 중…' : `${total}건 옮기기`}
+              {busy ? '옮기는 중…' : `${total}건 이동`}
             </Button>
           )}
         </DialogFooter>

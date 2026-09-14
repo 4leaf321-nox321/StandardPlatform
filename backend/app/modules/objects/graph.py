@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import ColumnElement
 
 from app.modules.accounts.models import User
+from app.modules.objects import refedges
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.shared.permissions import visible_owner_clause
 
@@ -56,6 +57,9 @@ def child_ids(
 ) -> list[uuid.UUID]:
     """바로 아래 한 단계. **한 단계씩 읽는 것이 트리의 기본**이다 — 통째로
     불러오면 부품 5천 개짜리에서 첫 화면이 안 뜬다."""
+    if refedges.is_ref(relation):
+        # 참조 칸 트리 — 자식이 칸으로 부모를 가리킨다(`refedges`).
+        return refedges.child_ids(db, relation=relation, parent_id=parent_id)
     parent_col, child_col = _ends(parent_end)
     rows = db.execute(
         text(f"""
@@ -84,6 +88,10 @@ def descendant_ids(
     「아래 것까지 포함」 이 이것을 쓴다. 안 쓰면 상위 노드를 눌렀을 때 목록이
     비고, **그 빈 목록은 「없다」 로 읽힌다.**
     """
+    if refedges.is_ref(relation):
+        return refedges.descendant_ids(
+            db, relation=relation, root_id=root_id, max_depth=max_depth
+        )
     parent_col, child_col = _ends(parent_end)
     rows = db.execute(
         text(f"""
@@ -116,6 +124,10 @@ def ancestor_ids(
     max_depth: int = MAX_DEPTH,
 ) -> list[uuid.UUID]:
     """위로 올라가며 만나는 것 전부. 상세 화면의 경로(빵부스러기)가 쓴다."""
+    if refedges.is_ref(relation):
+        return refedges.ancestor_ids(
+            db, relation=relation, node_id=object_id, max_depth=max_depth
+        )
     parent_col, child_col = _ends(parent_end)
     rows = db.execute(
         text(f"""
@@ -150,6 +162,8 @@ def child_counts(
     """
     if not parent_ids:
         return {}
+    if refedges.is_ref(relation):
+        return refedges.child_counts(db, relation=relation, parent_ids=parent_ids)
     parent_col, child_col = _ends(parent_end)
     rows = db.execute(
         text(f"""
@@ -175,6 +189,8 @@ def parentless_ids(
     둘을 가르는 이유: 트리를 아직 안 만든 타입에서는 거의 모두가 부모가 없어,
     안 가르면 뿌리 목록이 곧 전체 목록이 된다.
     """
+    if refedges.is_ref(relation):
+        return refedges.parentless_ids(db, relation=relation, type_id=type_id)
     _, child_col = _ends(parent_end)
     rows = db.execute(
         text(f"""

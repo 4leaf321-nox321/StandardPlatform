@@ -57,6 +57,8 @@ export default function ObjectProfilePage() {
   const defs = profile.data?.properties_schema ?? []
   /** 원 표를 비추는 객체 — 속성·첨부·이력·연도가 없고, 고치는 곳은 그 표의 화면이다. */
   const isSystem = objectType?.kind_class === 'system'
+  /** 허브가 내려준 객체 — 값은 허브에서 고치고, 여기서는 관계로 가리키기만 한다. */
+  const managed = Boolean(objectType?.managed_by)
 
   // 편집을 열 때 지금 값을 담는다. **화면 상태를 서버 값과 따로 두면** 저장을
   // 취소했을 때 어느 쪽이 진짜인지 알 수 없다.
@@ -115,7 +117,7 @@ export default function ObjectProfilePage() {
                 그래프에서 보기
               </Link>
             </Button>
-            {/* **지켜보기.** 「내가 보던 그게 아직 그대로인가」 를 알 방법이 목록을
+            {/* **알림 구독.** 「내가 보던 그게 아직 그대로인가」 를 알 방법이 목록을
                 다시 여는 것뿐이면, 사람은 안 열고 옛 값을 들고 회의에 들어간다.
                 투영 타입에는 행이 없어 지켜볼 것도 없다. */}
             {!isSystem && (
@@ -146,7 +148,7 @@ export default function ObjectProfilePage() {
                 ) : (
                   <BellOff className="mr-1 size-4" />
                 )}
-                {profile.data.watching ? '지켜보는 중' : '지켜보기'}
+                {profile.data.watching ? '지켜보는 중' : '알림 구독'}
                 {profile.data.watcher_count > 1 && (
                   <span className="text-muted-foreground ml-1 text-xs">
                     {profile.data.watcher_count}
@@ -157,13 +159,13 @@ export default function ObjectProfilePage() {
             {profile.data.can_edit && !editing && (
               <Button size="sm" variant="outline" onClick={() => setEditing(true)}>
                 <Pencil className="mr-1 size-4" />
-                고치기
+                수정
               </Button>
             )}
             {profile.data.can_edit && (
               <Button size="sm" variant="outline" onClick={() => setConfirming(true)}>
                 <Trash2 className="mr-1 size-4" />
-                지우기
+                삭제
               </Button>
             )}
           </div>
@@ -171,6 +173,14 @@ export default function ObjectProfilePage() {
       />
 
       {error && <ErrorNotice error={error} />}
+
+      {managed && (
+        <p className="text-muted-foreground text-sm">
+          {objectType?.managed_by === 'hub' ? '허브' : objectType?.managed_by}가 내려준
+          기준정보입니다 — 값은 허브에서 고친 뒤 받습니다. 이 설치의 관계(산출 문서 · 참여 등)는
+          여기서 잇습니다.
+        </p>
+      )}
 
       <section className="space-y-3 rounded-md border p-4">
         <div className="flex flex-wrap items-center gap-3 text-sm">
@@ -272,7 +282,7 @@ export default function ObjectProfilePage() {
         objectTypeSlug={row.type_slug}
         related={profile.data.related}
         relationTypes={schema.data?.relation_types ?? []}
-        canEdit={profile.data.can_edit}
+        canEdit={profile.data.can_link ?? profile.data.can_edit}
         onChanged={profile.reload}
       />
 

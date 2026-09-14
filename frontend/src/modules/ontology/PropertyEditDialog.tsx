@@ -1,5 +1,5 @@
 /**
- * 속성 정의 하나 — 만들기와 고치기를 **같은 창이 한다.**
+ * 속성 정의 하나 — 생성과 수정을 **같은 창이 한다.**
  *
  * 두 벌로 만들면 칸이 갈리고, 갈린 것은 한쪽만 고쳐진다. 그러면 「만들 때는
  * 정할 수 있는데 고칠 때는 없는 칸」 이 생기고, 그것을 고치려면 지웠다 다시
@@ -47,7 +47,7 @@ export const DATA_TYPE_LABELS: Record<DataType, string> = {
   file: '파일',
 }
 
-/** 종류마다 무엇이 되는지 한 줄. **고르기 전에 알아야 고를 수 있다.** */
+/** 종류마다 무엇이 되는지 한 줄. **선택 전에 알아야 고를 수 있다.** */
 const DATA_TYPE_HINTS: Record<DataType, string> = {
   text: '한 줄. 이름·번호처럼 짧은 값. 모양 규칙을 걸 수 있습니다.',
   text_long: '여러 줄. 설명·메모 — 한 줄 칸에 넣으면 사람은 자기가 쓴 것을 못 봅니다.',
@@ -69,7 +69,7 @@ const UNIQUEABLE = new Set<DataType>(['text', 'number', 'url', 'date', 'datetime
 interface Props {
   /** 이 속성이 붙는 타입. */
   type: ObjectType
-  /** 고칠 속성. 없으면 만들기다. */
+  /** 고칠 속성. 없으면 생성다. */
   property?: PropertyDef | null
   /** 「객체 참조」 가 가리킬 수 있는 타입들. */
   types: ObjectType[]
@@ -98,6 +98,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
   )
   const [unique, setUnique] = useState(property?.unique ?? false)
   const [refType, setRefType] = useState(property?.ref_type_slug ?? '')
+  const [inverseLabel, setInverseLabel] = useState(property?.inverse_label ?? '')
 
   const [error, setError] = useState<Error | null>(null)
   const [saving, setSaving] = useState(false)
@@ -130,6 +131,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
               .filter(Boolean)
           : null,
       ref_type_slug: dataType === 'object_ref' ? refType || null : null,
+      inverse_label: dataType === 'object_ref' ? inverseLabel.trim() : '',
     }
   }
 
@@ -154,7 +156,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
-              {type.label} · {editing ? `${property?.label} 고치기` : '속성 더하기'}
+              {type.label} · {editing ? `${property?.label} 수정` : '속성 추가'}
             </DialogTitle>
           </DialogHeader>
 
@@ -191,8 +193,8 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                 <>
                   <Input value={DATA_TYPE_LABELS[dataType]} readOnly disabled />
                   <p className="text-muted-foreground text-xs">
-                    <b>종류는 바꿀 수 없습니다.</b> 이미 저장된 값이 새 종류에 안 맞아도
-                    화면이 그것을 말해 주지 못합니다 — 바꾸려면 새 속성을 만들어 옮기세요.
+                    <b>종류는 바꿀 수 없습니다.</b> 이미 저장된 값이 새 종류에 안 맞아도 화면이
+                    그것을 말해 주지 못합니다 — 바꾸려면 새 속성을 만들어 옮기세요.
                   </p>
                 </>
               ) : (
@@ -274,8 +276,19 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                   </SelectContent>
                 </Select>
                 <p className="text-muted-foreground text-xs">
-                  안 정하면 아무 객체나 고를 수 있습니다 — 고를 것이 많아지면 사람은 못 찾고,
-                  못 찾으면 없는 줄 알고 새로 만듭니다.
+                  안 정하면 아무 객체나 고를 수 있습니다 — 고를 것이 많아지면 사람은 못 찾고, 못
+                  찾으면 없는 줄 알고 새로 만듭니다.
+                </p>
+                <Label htmlFor="prop-inverse">상대 쪽에서 읽는 말</Label>
+                <Input
+                  id="prop-inverse"
+                  value={inverseLabel}
+                  placeholder="예: 「과제」 칸이면 과제 쪽에서는 「개발모델」"
+                  onChange={(event) => setInverseLabel(event.target.value)}
+                />
+                <p className="text-muted-foreground text-xs">
+                  참조 칸은 칸에 저장한 관계입니다 — 그래프와 「관련 객체」 가 상대 쪽에서는 이 말로
+                  읽습니다. 비우면 이 타입의 이름으로 읽습니다.
                 </p>
               </div>
             )}
@@ -325,9 +338,9 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                   />
                 </div>
                 <p className="text-muted-foreground text-xs">
-                  비우면 안 봅니다 — <b>그러면 두께가 -5mm 여도 통과합니다.</b> 소수
-                  자릿수를 넘는 값은 <b>반올림하지 않고 거절</b>합니다(조용히 바꾸면 넣은
-                  값과 저장된 값이 달라집니다).
+                  비우면 안 봅니다 — <b>그러면 두께가 -5mm 여도 통과합니다.</b> 소수 자릿수를 넘는
+                  값은 <b>반올림하지 않고 거절</b>합니다(조용히 바꾸면 넣은 값과 저장된 값이
+                  달라집니다).
                 </p>
               </div>
             )}
@@ -356,8 +369,8 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                 onChange={(event) => setDefaultValue(event.target.value)}
               />
               <p className="text-muted-foreground text-xs">
-                <b>만들 때만</b> 채웁니다. 고칠 때도 채우면 사람이 방금 지운 값이
-                되살아나고, 그 되살아남은 저장한 사람 눈에 안 보입니다.
+                <b>만들 때만</b> 채웁니다. 고칠 때도 채우면 사람이 방금 지운 값이 되살아나고, 그
+                되살아남은 저장한 사람 눈에 안 보입니다.
               </p>
             </div>
 
@@ -382,8 +395,8 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                 <span>
                   필수
                   <span className="text-muted-foreground ml-1 text-xs">
-                    비어 있으면 저장이 거절됩니다. <b>이미 있는 객체는 그대로 둡니다</b> —
-                    그 객체의 <b>속성을 고칠 때</b> 걸립니다(이름만 고치는 것은 막지 않습니다).
+                    비어 있으면 저장이 거절됩니다. <b>이미 있는 객체는 그대로 둡니다</b> — 그 객체의{' '}
+                    <b>속성을 고칠 때</b> 걸립니다(이름만 고치는 것은 막지 않습니다).
                   </span>
                 </span>
               </label>
@@ -415,8 +428,8 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                 <span>
                   여러 값
                   <span className="text-muted-foreground ml-1 text-xs">
-                    목록으로 저장합니다. <b>이미 값이 있는 속성에서 켜고 끄면</b> 그 값들이
-                    새 모양에 안 맞아 고칠 때 거절됩니다.
+                    목록으로 저장합니다. <b>이미 값이 있는 속성에서 켜고 끄면</b> 그 값들이 새
+                    모양에 안 맞아 고칠 때 거절됩니다.
                   </span>
                 </span>
               </label>
@@ -429,13 +442,13 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                 variant="ghost"
                 disabled={saving}
                 onClick={async () => {
-                  // **지우기 전에 몇 개가 안 보이게 되는지 먼저 읽는다.**
+                  // **삭제 전에 몇 개가 안 보이게 되는지 먼저 읽는다.**
                   const found = await ontologyApi.propertyUsage(type.slug, property!.key)
                   setUsage(found.objects_with_value)
                   setRemoving(true)
                 }}
               >
-                지우기
+                삭제
               </Button>
             ) : (
               <span />
@@ -445,7 +458,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                 취소
               </Button>
               <Button onClick={save} disabled={saving || !key.trim() || !label.trim()}>
-                {editing ? '저장' : '더하기'}
+                {editing ? '저장' : '추가'}
               </Button>
             </div>
           </DialogFooter>
@@ -464,7 +477,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
               보입니다.
             </>
           }
-          confirmLabel="지우기"
+          confirmLabel="삭제"
           onConfirm={async () => {
             await ontologyApi.removeProperty(type.slug, property.key)
             onChanged()
@@ -479,7 +492,6 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
     </>
   )
 }
-
 
 /** 기본값을 그 종류의 모양으로. **글로 저장하면 숫자 속성이 사전순으로 정렬된다.** */
 function coerceDefault(kind: DataType, raw: string): unknown {

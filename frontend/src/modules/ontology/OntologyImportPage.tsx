@@ -1,5 +1,5 @@
 /**
- * 가져오기와 되돌리기 — **기계가 정의를 만들 때 필요한 자리.**
+ * 가져오기와 복원 — **기계가 정의를 만들 때 필요한 자리.**
  *
  * 사람은 타입 하나를 5분에 만들고 에이전트는 200개를 5초에 만든다. 그러면
  * **적용 전에 무엇이 바뀌는지 보는 자리**와 **되돌릴 자리**가 반드시 있어야 한다 —
@@ -99,7 +99,7 @@ export default function OntologyImportPage() {
     <div className="space-y-5">
       <p className="text-muted-foreground text-sm">
         정의를 통째로 받아 <b>한 트랜잭션으로</b> 적용합니다. 중간에 실패하면 반쯤 만들어진
-        온톨로지가 남지 않습니다. <b>더하고 고치기만 합니다</b> — 스키마에 없다고 지우지
+        온톨로지가 남지 않습니다. <b>더하고 수정만 합니다</b> — 스키마에 없다고 지우지
         않습니다(부분 스키마를 한 번 보낸 날 그 타입의 객체가 갈 곳을 잃습니다).
       </p>
 
@@ -248,7 +248,7 @@ export default function OntologyImportPage() {
           </Button>
         </div>
         <p className="text-muted-foreground text-xs">
-          가져오기 <b>직전</b>의 정의를 남깁니다. 되돌리기는 그때의 정의를 다시 덮어씌우는 일이고,{' '}
+          가져오기 <b>직전</b>의 정의를 남깁니다. 복원은 그때의 정의를 다시 덮어씌우는 일이고,{' '}
           <b>그 뒤에 새로 만든 것은 안 지웁니다</b> — 지우면 그 사이에 쌓인 객체가 갈 곳을 잃습니다.
         </p>
 
@@ -277,7 +277,7 @@ export default function OntologyImportPage() {
                     </TableCell>
                     <TableCell className="text-right">
                       <Button variant="ghost" size="sm" onClick={() => setRestoring(one.id)}>
-                        되돌리기
+                        복원
                       </Button>
                     </TableCell>
                   </TableRow>
@@ -305,15 +305,15 @@ export default function OntologyImportPage() {
           description={
             <>
               그 시점의 묶음·타입·속성·관계를 <b>다시 덮어씌웁니다</b>. 그 뒤에 새로 만든 것은{' '}
-              <b>안 지웁니다</b> — 지우면 그 사이에 쌓인 객체가 갈 곳을 잃습니다. 되돌리기 직전의
+              <b>안 지웁니다</b> — 지우면 그 사이에 쌓인 객체가 갈 곳을 잃습니다. 복원 직전의
               모습도 이력에 남습니다.
             </>
           }
-          confirmLabel="되돌리기"
+          confirmLabel="복원"
           onConfirm={async () => {
             // **되돌린 결과를 보여 준다.** 그 스냅샷이 지금과 같으면 아무 일도
             // 안 일어나는데(예: 그때는 없던 타입), 화면이 조용하면 사람은
-            // 되돌리기가 고장 났다고 읽는다.
+            // 복원이 고장 났다고 읽는다.
             setPlan(await ontologyApi.restore(restoring))
             reload()
             snapshots.reload()

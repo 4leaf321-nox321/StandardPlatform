@@ -449,7 +449,7 @@ def undo_plan(
     if not entries:
         raise NotFound(
             code("OBJECTS", 84),
-            "그 묶음을 찾을 수 없습니다 — 여럿 골라 고치기로 바꾼 기록이 아닙니다.",
+            "그 묶음을 찾을 수 없습니다 — 일괄 수정으로 바꾼 기록이 아닙니다.",
         )
     meta = entries[0].changes.get(BATCH_KEY) or {}
     field_name = str(meta.get("field") or "")

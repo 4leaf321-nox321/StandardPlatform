@@ -52,6 +52,7 @@ from app.modules.objects.services import (
     require_refs_exist,
     require_unique_properties,
 )
+from app.modules.ontology import managed
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.services import InvalidValue, merge_properties, validate_properties
 from app.shared import audit, tabular
@@ -329,8 +330,9 @@ def plan_objects(
     rows: list[dict[str, Any]],
     *,
     owner_workspace_id: uuid.UUID | None,
+    source: str = "",
 ) -> Plan:
-    """행마다 무엇이 될지 — **아무것도 안 바꾼다.**"""
+    """행마다 무엇이 될지 — **아무것도 안 바꾼다.** `source` 는 허브에서 받는 묶음만 적는다."""
     plan = Plan()
     if len(rows) > MAX_ROWS:
         plan.errors.append(
@@ -339,6 +341,10 @@ def plan_objects(
         return plan
     if not object_type.is_active or object_type.kind_class == "system":
         plan.errors.append(f"{object_type.label}에는 파일로 넣지 않습니다.")
+        return plan
+    refused = managed.objects_refusal(object_type, source=source, what="넣지")
+    if refused:
+        plan.errors.append(refused)
         return plan
 
     defs = [d for d in properties_of(db, object_type.id) if d.data_type != "file"]
@@ -594,13 +600,16 @@ def apply_objects(
     rows: list[dict[str, Any]],
     *,
     owner_workspace_id: uuid.UUID | None,
+    source: str = "",
 ) -> Plan:
     """계획을 다시 세우고, 오류가 없을 때만 **한 트랜잭션으로** 넣는다.
 
     계획을 다시 세우는 이유: 미리 보기와 적용 사이에 다른 사람이 무엇을 바꿨을 수
     있다. 그때 옛 계획대로 넣으면 그 사람의 변경이 조용히 덮인다.
     """
-    plan = plan_objects(db, user, object_type, rows, owner_workspace_id=owner_workspace_id)
+    plan = plan_objects(
+        db, user, object_type, rows, owner_workspace_id=owner_workspace_id, source=source
+    )
     if not plan.ok:
         return plan
 
@@ -887,7 +896,12 @@ def _find_dst(db: Session, user: User, text: str, kind: RelationType) -> system.
 
 
 def plan_relations(
-    db: Session, user: User, object_type: ObjectType, rows: list[dict[str, Any]]
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    rows: list[dict[str, Any]],
+    *,
+    source: str = "",
 ) -> Plan:
     """관계 파일 — `src, relation, dst, evidence_note`. 출발점은 이 타입이어야 한다.
 
@@ -912,7 +926,9 @@ def plan_relations(
     seen: set[tuple[uuid.UUID, str, uuid.UUID]] = set()
     for index, row in enumerate(rows, start=1):
         try:
-            plan.rows.append(_plan_relation(db, user, object_type, kinds, row, index, seen))
+            plan.rows.append(
+                _plan_relation(db, user, object_type, kinds, row, index, seen, source)
+            )
         except AppError as caught:
             plan.rows.append(RowPlan(row=index, action="error", message=caught.message))
     return plan
@@ -926,6 +942,7 @@ def _plan_relation(
     row: dict[str, Any],
     index: int,
     seen: set[tuple[uuid.UUID, str, uuid.UUID]],
+    source: str = "",
 ) -> RowPlan:
     src_text = str(row.get("src") or "").strip()
     dst_text = str(row.get("dst") or "").strip()
@@ -943,6 +960,7 @@ def _plan_relation(
         raise InvalidValue(
             code("OBJECTS", 47), f"{kind.label}은 지금 쓰지 않는 관계 종류입니다."
         )
+    managed.require_relation_editable(kind, source=source)
 
     src = _find_endpoint(db, user, src_text, [object_type.id])
     dst = _find_dst(db, user, dst_text, kind)
@@ -978,9 +996,14 @@ def _plan_relation(
 
 
 def apply_relations(
-    db: Session, user: User, object_type: ObjectType, rows: list[dict[str, Any]]
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    rows: list[dict[str, Any]],
+    *,
+    source: str = "",
 ) -> Plan:
-    plan = plan_relations(db, user, object_type, rows)
+    plan = plan_relations(db, user, object_type, rows, source=source)
     if not plan.ok:
         return plan
     kinds = {row.slug: row for row in db.scalars(select(RelationType))}

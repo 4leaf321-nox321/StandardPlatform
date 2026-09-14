@@ -103,6 +103,11 @@ class RelatedObjectOut(BaseModel):
     properties: dict[str, Any]
     evidence_note: str
     created_at: datetime
+    stored_as: str = "relation"
+    """`relation`(관계 줄) · `field`(참조 칸 — 칸에 저장한 관계). 칸이면 끊는 단추 대신 그 칸을
+    고치라고 화면이 안내한다."""
+    field_key: str | None = None
+    """`stored_as='field'` 일 때 어느 칸인가(가리키는 쪽 객체의 속성 키)."""
 
 
 class TreeNodeOut(BaseModel):
@@ -157,6 +162,9 @@ class ObjectProfileOut(BaseModel):
     「이것을 가리키는 것」 을 물을 자리가 없어진다."""
 
     can_edit: bool
+    can_link: bool = False
+    """관계를 맺고 끊을 수 있나 — 보통 `can_edit` 와 같다. 허브가 관리하는 객체는 값을 못
+    고쳐도(`can_edit` 거짓) 이 설치의 관계로 가리키는 것은 된다(과제의 산출 문서 등)."""
     """**서버가 판정한 것을 화면에 알려 준다.** 화면이 스스로 정하면 어떤 화면은
     단추를 보이고 어떤 화면은 안 보이는 상태가 되고, 그 차이는 설명할 수 없다."""
 

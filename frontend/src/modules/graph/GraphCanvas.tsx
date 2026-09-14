@@ -12,7 +12,7 @@
  *   - **움직이는 과녁을 없앤다.** 시뮬레이션이 식고 화면 맞춤이 끝날 때까지(`ready`)
  *     캔버스를 숨긴다. 맞춤은 애니메이션 없이 즉시 — 카메라가 움직이는 동안 누르면
  *     노드가 손가락 밑에서 도망간다.
- *   - **데이터가 바뀌어도 자리를 지킨다.** 펼치기·색 바꾸기마다 처음부터 다시 흩어지면
+ *   - **데이터가 바뀌어도 자리를 지킨다.** 확장·색 바꾸기마다 처음부터 다시 흩어지면
  *     방금 보던 노드가 어디로 갔는지 잃는다. 있던 노드는 x,y 를 이어받고, 새 노드는
  *     이웃 곁에서 시작한다.
  *   - 안내문·범례는 `pointer-events-none` — 캔버스 위 띠가 클릭을 먹지 않게.
@@ -78,7 +78,7 @@ export interface CanvasNode {
   badge?: string | null
   /** 미니카드(툴팁)에 적을 줄들. 없으면 label·sublabel 로 만든다. */
   card?: string[]
-  /** 새로 들어온 노드를 어느 노드 곁에 놓을지 — 펼치기의 출발점. */
+  /** 새로 들어온 노드를 어느 노드 곁에 놓을지 — 확장의 출발점. */
   near?: string | null
   /** 같은 값끼리 외곽선으로 감싼다(무리). 없으면 안 감싼다. */
   hull?: string | null
@@ -375,7 +375,7 @@ export function GraphCanvas({
 
   // 데이터가 바뀌면 식을 때까지 숨겼다가, 배치가 끝난 뒤 **즉시** 맞춰 드러낸다.
   // 펼쳐지는 과정을 보여 주면 확대→축소로 깜빡이고, 그동안 누른 클릭은 빗나간다.
-  // 단, 위치를 이어받은 갱신(펼치기·색)은 이미 자리가 있으니 숨기지 않는다.
+  // 단, 위치를 이어받은 갱신(확장·색)은 이미 자리가 있으니 숨기지 않는다.
   const fitPending = useRef(true)
   const hadPositions = useRef(false)
   useEffect(() => {
@@ -817,7 +817,7 @@ export function GraphCanvas({
                   <dt className="text-muted-foreground">더블클릭</dt>
                   <dd>{onNodeDoubleClick ? '여기를 중심으로' : '—'}</dd>
                   <dt className="text-muted-foreground">드래그</dt>
-                  <dd>노드 옮기기 · 빈 곳은 화면 이동</dd>
+                  <dd>노드 이동 · 빈 곳은 화면 이동</dd>
                   <dt className="text-muted-foreground">휠</dt>
                   <dd>확대 / 축소</dd>
                   {[...CANVAS_SHORTCUTS, ...(hostShortcuts ?? [])].map((one) => (

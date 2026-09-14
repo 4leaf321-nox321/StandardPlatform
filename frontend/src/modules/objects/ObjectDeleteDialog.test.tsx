@@ -1,5 +1,5 @@
 /**
- * 지우기 창이 지키는 것 — **걸린 것을 먼저 보여 주고, 고른 대로 보낸다.**
+ * 삭제 창이 지키는 것 — **걸린 것을 먼저 보여 주고, 고른 대로 보낸다.**
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -70,10 +70,10 @@ async function mount() {
   return onDone
 }
 
-describe('지우기 창', () => {
+describe('삭제 창', () => {
   beforeEach(() => {
     vi.clearAllMocks()
-    // 합치기 후보 — 창이 열리면 늘 찾는다. **값 없는 가짜로 두면** `undefined.then` 이 되어,
+    // 병합 후보 — 창이 열리면 늘 찾는다. **값 없는 가짜로 두면** `undefined.then` 이 되어,
     // 시험은 다 통과하는데 처리 안 된 오류 하나가 실행 전체를 실패로 만든다(v0.1.1 릴리스).
     objectApi.list.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
   })
@@ -82,7 +82,7 @@ describe('지우기 창', () => {
     objectApi.references.mockResolvedValue(NONE)
     objectApi.remove.mockResolvedValue(undefined)
     const onDone = await mount()
-    // **합치기 후보는 열리자마자 200ms 뒤에 찾는다**(`useObjectOptions`). 시험이 그보다 빨리
+    // **병합 후보는 열리자마자 200ms 뒤에 찾는다**(`useObjectOptions`). 시험이 그보다 빨리
     // 끝나면 가짜 목록이 한 번도 안 불리고, 느린 CI 에서만 불려 터진다 — 그 자리를 여기서
     // 늘 밟게 한다.
     await new Promise((resolve) => setTimeout(resolve, 300))
@@ -90,36 +90,36 @@ describe('지우기 창', () => {
       expect(screen.getByText('이 객체를 가리키는 것이 없습니다.')).toBeInTheDocument(),
     )
     expect(screen.queryByRole('radio')).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: '지우기' }))
+    await userEvent.click(screen.getByRole('button', { name: '삭제' }))
     await waitFor(() => expect(objectApi.remove).toHaveBeenCalledWith('vendor', 'acme', 'block'))
     expect(onDone).toHaveBeenCalledWith(null)
   })
 
-  it('걸린 것이 있으면 세어 보여 주고, 볼 수 없는 것도 수로 말하고, 고르기 전엔 못 지운다', async () => {
+  it('걸린 것이 있으면 세어 보여 주고, 볼 수 없는 것도 수로 말하고, 선택 전엔 못 지운다', async () => {
     objectApi.references.mockResolvedValue(SOME)
     await mount()
     await waitFor(() => expect(screen.getByText(/이 객체를 가리키는 것 4개/)).toBeInTheDocument())
     expect(screen.getByText(/속성 참조 3 · 관계 1/)).toBeInTheDocument()
     expect(screen.getByText(/볼 수 없는 부서의 것 2/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '볼트' })).toHaveAttribute('href', '/o/part/bolt')
-    // 「그대로 두기」 가 기본이고, 그 상태에서는 지우기 단추가 안 선다.
+    // 「그대로 두기」 가 기본이고, 그 상태에서는 삭제 단추가 안 선다.
     expect(screen.getByRole('radio', { name: /그대로 두기/ })).toBeChecked()
-    expect(screen.getByRole('button', { name: '지우기' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '삭제' })).toBeDisabled()
   })
 
-  it('「비우고 끊고 지우기」 는 detach 로 보낸다', async () => {
+  it('「참조 해제 후 삭제」 는 detach 로 보낸다', async () => {
     objectApi.references.mockResolvedValue(SOME)
     objectApi.remove.mockResolvedValue(undefined)
     const onDone = await mount()
     await userEvent.click(
-      await screen.findByRole('radio', { name: /참조를 비우고 관계를 끊고 지우기/ }),
+      await screen.findByRole('radio', { name: /참조를 참조를 비우고 관계를 해제한 뒤 삭제/ }),
     )
-    await userEvent.click(screen.getByRole('button', { name: '비우고 끊고 지우기' }))
+    await userEvent.click(screen.getByRole('button', { name: '참조 해제 후 삭제' }))
     await waitFor(() => expect(objectApi.remove).toHaveBeenCalledWith('vendor', 'acme', 'detach'))
     expect(onDone).toHaveBeenCalledWith(null)
   })
 
-  it('「합치기」 는 이긴 쪽을 고른 뒤에만 서고, 합친 곳으로 간다', async () => {
+  it('「병합」 는 이긴 쪽을 고른 뒤에만 서고, 합친 곳으로 간다', async () => {
     objectApi.references.mockResolvedValue(SOME)
     objectApi.list.mockResolvedValue({
       items: [
@@ -137,15 +137,15 @@ describe('지우기 창', () => {
       relations_dropped: 0,
     })
     const onDone = await mount()
-    await userEvent.click(await screen.findByRole('radio', { name: /다른 공급사에 합치고 지우기/ }))
-    const apply = await screen.findByRole('button', { name: '합치고 지우기' })
+    await userEvent.click(await screen.findByRole('radio', { name: /다른 공급사에 병합 후 삭제/ }))
+    const apply = await screen.findByRole('button', { name: '병합 후 삭제' })
     expect(apply).toBeDisabled()
     await userEvent.click(await screen.findByRole('combobox'))
     const option = await screen.findByRole('button', { name: /OTHER/ })
     // 자기 자신은 후보에 없다.
     expect(screen.queryByRole('button', { name: /^ACME/ })).not.toBeInTheDocument()
     await userEvent.click(option)
-    await userEvent.click(screen.getByRole('button', { name: '합치고 지우기' }))
+    await userEvent.click(screen.getByRole('button', { name: '병합 후 삭제' }))
     await waitFor(() => expect(objectApi.merge).toHaveBeenCalledWith('vendor', 'acme', 'other'))
     expect(onDone).toHaveBeenCalledWith('other')
   })

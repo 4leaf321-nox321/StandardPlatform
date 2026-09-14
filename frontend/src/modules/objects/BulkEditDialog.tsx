@@ -58,7 +58,7 @@ interface Props {
   workspaces: { slug: string; name: string }[]
   onClose: () => void
   onApplied: () => void
-  /** 적용한 뒤 「되돌리기」 — 방금 바꾼 묶음 번호를 넘긴다. */
+  /** 적용한 뒤 「복원」 — 방금 바꾼 묶음 번호를 넘긴다. */
   onUndo?: (batchId: string) => void
 }
 
@@ -161,7 +161,7 @@ export function BulkEditDialog({
               </Select>
             ) : def ? (
               /* 칸의 종류에 맞는 입력을 **폼과 같은 것**으로 그린다 — 고를 값은 고르개로,
-                 참조는 찾아 고르기로. 여기서 따로 만들면 한 화면에서는 되는 값이 다른
+                 참조는 찾아 선택으로. 여기서 따로 만들면 한 화면에서는 되는 값이 다른
                  화면에서는 안 된다. */
               <PropertyFields
                 defs={[def]}
@@ -226,7 +226,7 @@ export function BulkEditDialog({
           {plan?.applied && plan.batch_id && onUndo && (
             <Button variant="outline" onClick={() => onUndo(plan.batch_id as string)}>
               <RotateCcw className="mr-1 size-4" />
-              되돌리기
+              복원
             </Button>
           )}
           <Button variant="outline" onClick={onClose} disabled={busy}>

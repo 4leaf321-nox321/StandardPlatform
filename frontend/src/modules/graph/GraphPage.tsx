@@ -93,8 +93,8 @@ export type Seed = { kind: 'focus'; id: string } | { kind: 'type'; slugs: string
 const DEPTHS = [1, 2, 3, 4, 5, 6]
 const FANOUTS = [10, 30, 100, 300, 500]
 /** 그림에 세울 노드 수. 큰 것을 고르면 느려진다는 말을 화면이 함께 한다. */
-const NODE_LIMITS = [300, 800, 1500, 3000]
-/** 훑기 목록의 한 쪽. */
+const NODE_LIMITS = [300, 800, 1500, 3000, 10000, 20000]
+/** 타입별 목록의 한 쪽. */
 const BROWSE_PAGE = 20
 const FOCUS_RING = '#f59e0b'
 
@@ -108,7 +108,7 @@ interface Explored {
   truncated: boolean
   /** 안내문에 적는 상한. 씨앗 종류에 따라 온 것만 든다. */
   limits: { depth?: number; fanout?: number; node_limit: number }
-  /** 타입 전부일 때 — 「N개 중 M개」. `shown` 은 이 쪽에 실린 행 수(펼치기·숨기기와 무관). */
+  /** 타입 전부일 때 — 「N개 중 M개」. `shown` 은 이 쪽에 실린 행 수(확장·숨기기와 무관). */
   page: { total: number; offset: number; limit: number; shown: number } | null
   /** 어느 노드를 펼쳐서 들어왔나(id → 펼친 노드 id). 캔버스가 새 노드를 그 곁에 놓는다. */
   origin: Map<string, string>
@@ -134,7 +134,7 @@ function mergeNeighborhood(previous: Explored | null, fresh: Neighborhood): Expl
   return {
     ...mergeNodes(previous, fresh, previous ? fresh.focus : null),
     focus: previous ? previous.focus : fresh.focus,
-    // 펼치기는 늘 1단계로 부르므로 안내문의 상한은 **첫 응답 것**을 지킨다.
+    // 확장은 늘 1단계로 부르므로 안내문의 상한은 **첫 응답 것**을 지킨다.
     limits: previous?.limits ?? {
       depth: fresh.depth,
       fanout: fresh.fanout,
@@ -483,7 +483,7 @@ function SchemaView({
         id: one.slug,
         label: one.label,
         sublabel: `${one.count.toLocaleString()}개`,
-        card: [one.label, `${one.count.toLocaleString()}개 · 더블클릭: 인스턴스 전부 그리기`],
+        card: [one.label, `${one.count.toLocaleString()}개 · 더블클릭: 인스턴스 전체 표시`],
         color: one.count === 0 ? withAlpha(typeColor(one.slug), 0.35) : typeColor(one.slug),
         // 객체 수에 비례하되 sqrt 로 완만하게 — 1개와 1만 개가 백 배 차이 나면 작은 것이 안 보인다.
         radius: 7 + Math.sqrt(one.count / maxCount) * 12,
@@ -687,7 +687,7 @@ function SchemaView({
                 onClick={() => onDrawType(picked.slug)}
               >
                 <Crosshair className="mr-1 size-3.5" />
-                인스턴스 전부 그리기
+                인스턴스 전체 표시
               </Button>
             </div>
           </div>
@@ -768,10 +768,10 @@ function ExploreView({
     [depth, fanout, nodeLimit, relationFilter, typeFilter],
   )
 
-  // 씨앗·상한·거르기가 바뀌면 **처음부터 다시** 든다. 펼쳐 둔 것은 버린다 —
-  // 거르기가 바뀐 뒤에도 옛 노드가 남아 있으면 그 그림은 무엇을 거른 것인지 말할 수 없다.
-  // 진행 중인 요청의 세대. 씨앗·거르기가 바뀌면 올라가고, 늦게 온 응답은 버린다 —
-  // 안 버리면 거르기를 바꾼 뒤에 옛 펼치기 응답이 걸러 낸 노드를 도로 넣는다.
+  // 씨앗·상한·필터가 바뀌면 **처음부터 다시** 든다. 펼쳐 둔 것은 버린다 —
+  // 필터가 바뀐 뒤에도 옛 노드가 남아 있으면 그 그림은 무엇을 거른 것인지 말할 수 없다.
+  // 진행 중인 요청의 세대. 씨앗·필터가 바뀌면 올라가고, 늦게 온 응답은 버린다 —
+  // 안 버리면 필터를 바꾼 뒤에 옛 확장 응답이 걸러 낸 노드를 도로 넣는다.
   const generation = useRef(0)
   useEffect(() => {
     generation.current += 1
@@ -822,7 +822,7 @@ function ExploreView({
     setError(null)
     try {
       const fresh = await query(id, 1)
-      if (generation.current !== mine) return // 그새 씨앗·거르기가 바뀌었다 — 이 응답은 옛것
+      if (generation.current !== mine) return // 그새 씨앗·필터가 바뀌었다 — 이 응답은 옛것
       setExplored((previous) => (previous ? mergeNeighborhood(previous, fresh) : previous))
     } catch (caught: unknown) {
       if (generation.current === mine) {
@@ -982,7 +982,7 @@ function ExploreView({
   const picked = selected ? (explored?.nodes.get(selected) ?? null) : null
   const pickedHidden = picked ? picked.degree - (shown.get(picked.id) ?? 0) : 0
 
-  /** 목록에서 고르기 — 선택하고 카메라도 옮긴다. 캔버스 클릭과 달리 어디 있는지 모르니까. */
+  /** 목록에서 선택 — 선택하고 카메라도 옮긴다. 캔버스 클릭과 달리 어디 있는지 모르니까. */
   const selectAndGo = useCallback((id: string) => {
     setSelected(id)
     setCenterOn((current) => ({ id, nonce: (current?.nonce ?? 0) + 1 }))
@@ -990,9 +990,9 @@ function ExploreView({
 
   const hostShortcuts = useMemo(
     () => [
-      { keys: 'Enter', what: '고른 노드에서 펼치기' },
+      { keys: 'Enter', what: '고른 노드에서 확장' },
       { keys: 'Shift+Enter', what: '고른 노드를 중심으로' },
-      { keys: '/', what: '그림 안에서 찾기' },
+      { keys: '/', what: '그림 안에서 검색' },
       { keys: 'R', what: '새로고침' },
     ],
     [],
@@ -1017,7 +1017,7 @@ function ExploreView({
           if (seed) setReloadTick((value) => value + 1)
         },
       }),
-      // expand·pickFocus 는 매 렌더 새 함수라 그대로 적는다 — 빼면 옛 거르기로 펼친다.
+      // expand·pickFocus 는 매 렌더 새 함수라 그대로 적는다 — 빼면 옛 필터로 펼친다.
       // eslint-disable-next-line react-hooks/exhaustive-deps
       [picked, pickedHidden, loading, explored?.focus, seed, expand, pickFocus],
     ),
@@ -1088,7 +1088,9 @@ function ExploreView({
               <SelectContent>
                 {NODE_LIMITS.map((one) => (
                   <SelectItem key={one} value={String(one)}>
-                    {one.toLocaleString()}개까지
+                    {one === NODE_LIMITS[NODE_LIMITS.length - 1]
+                      ? `전부 (${one.toLocaleString()}개까지)`
+                      : `${one.toLocaleString()}개까지`}
                   </SelectItem>
                 ))}
               </SelectContent>
@@ -1097,8 +1099,8 @@ function ExploreView({
                 그것을 고장으로 읽고, 다음부터 이 화면을 안 연다. */}
             {nodeLimit > NODE_LIMITS[1] && (
               <span className="text-muted-foreground block text-xs">
-                수천 개를 한 그림에 두면 배치가 느려집니다. 거르기로 좁히는 편이 대개 빠르고 잘
-                읽힙니다.
+                수천 개를 한 그림에 두면 배치가 느려집니다 — 1만 개가 넘으면 자리 잡는 데 수십 초가
+                걸릴 수 있습니다. 필터로 좁히는 편이 대개 빠르고 잘 읽힙니다.
               </span>
             )}
           </label>
@@ -1173,7 +1175,7 @@ function ExploreView({
                     event.currentTarget.blur()
                   }
                 }}
-                placeholder="그림 안에서 찾기 (/) — 맞는 노드만 또렷하게"
+                placeholder="그림 안에서 검색 (/) — 맞는 노드만 또렷하게"
                 className="pl-8"
                 disabled={nodeList.length < 2}
               />
@@ -1228,7 +1230,7 @@ function ExploreView({
                 {explored && nodeList.length === 1 && !loading && (
                   <div className="text-muted-foreground absolute inset-x-0 top-3 text-center text-xs">
                     연결된 관계가 없습니다
-                    {relationFilter.size + typeFilter.size > 0 ? ' — 거르기를 넓혀 보세요.' : '.'}
+                    {relationFilter.size + typeFilter.size > 0 ? ' — 필터를 넓혀 보세요.' : '.'}
                   </div>
                 )}
                 {explored && (
@@ -1310,7 +1312,7 @@ function ExploreView({
           />
         ) : (
           <div className="text-muted-foreground rounded-md border border-dashed p-3">
-            노드를 누르면 상세와 「여기서 펼치기」 가 나옵니다. 더블클릭은 「여기를 중심으로」. 주황
+            노드를 누르면 상세와 「여기서 확장」 가 나옵니다. 더블클릭은 「여기를 중심으로」. 주황
             링이 시작점, 「+N」 은 화면에 안 실린 관계의 수입니다.
           </div>
         )}
@@ -1351,7 +1353,7 @@ const DETAIL_PROPERTIES = 6
  * 고른 노드의 요약 — **그래프를 떠나지 않고 「이게 뭐지」 에 답한다.**
  *
  * 속성 몇 개와 관계를 종류별로 묶어 보여 준다. 관계 목록의 한 줄은 그림에 있으면
- * 그 노드를 고르고(선택), 없으면 「펼치기」 로 안내한다 — 목록과 그림이 같은 것을
+ * 그 노드를 고르고(선택), 없으면 「확장」 로 안내한다 — 목록과 그림이 같은 것을
  * 가리켜야 사람이 둘을 오가며 읽는다.
  */
 function NodeDetail({
@@ -1426,7 +1428,7 @@ function NodeDetail({
           disabled={loading || hidden === 0}
           onClick={onExpand}
         >
-          여기서 펼치기{hidden > 0 ? ` (+${hidden})` : ''}
+          여기서 확장{hidden > 0 ? ` (+${hidden})` : ''}
         </Button>
         <Button size="sm" variant="outline" disabled={isFocus} onClick={onFocus}>
           <Crosshair className="mr-1 size-3.5" />
@@ -1487,8 +1489,8 @@ function NodeDetail({
                       className="hover:bg-muted flex w-full items-baseline justify-between gap-2 rounded px-1.5 py-0.5 text-left text-xs disabled:cursor-default disabled:opacity-60"
                       title={
                         here
-                          ? one.evidence_note || '그림에서 고르기'
-                          : '그림에 없습니다 — 「여기서 펼치기」 로 불러옵니다'
+                          ? one.evidence_note || '그림에서 선택'
+                          : '그림에 없습니다 — 「여기서 확장」 로 불러옵니다'
                       }
                       disabled={!here}
                       onClick={() => onSelect(one.object_id)}
@@ -1523,15 +1525,16 @@ interface SeedPanelProps {
 }
 
 /**
- * 씨앗 고르기 — **세 길.**
+ * 씨앗 선택 — **세 길.**
  *
  *   치는 것    이름의 일부를 알 때(타입을 가리지 않는다)
  *   훑는 것    무엇이 있는지 모를 때 — 타입을 고르고 쪽 단위로 본다
  *   전부       고른 타입(들)을 통째로 — 「N개 중 M개」 를 적는다
  *
  * 검색만 있으면 뭘 쳐야 할지 모르는 사람이 막힌다. 그래서 훑는 길이 함께 선다.
- * 타입 칩은 **여러 개** 고를 수 있다 — 훑기 목록은 마지막에 고른 타입을 보여 주고,
- * 「전부 그리기」 는 고른 것 전부를 한 그림에 그린다.
+ * 타입 칩은 **여러 개** 고를 수 있다 — 타입별 목록은 고른 타입 중 하나를 보여 주고(처음엔
+ * 마지막에 고른 것, 고른 타입이 둘 이상이면 그 사이를 오간다), 「전체 표시」 는 고른 것
+ * 전부를 한 그림에 그린다.
  */
 function SeedPanel({
   seed,
@@ -1546,7 +1549,12 @@ function SeedPanel({
   const [hits, setHits] = useState<SearchHit[]>([])
   const [searching, setSearching] = useState(false)
   const [pickedTypes, setPickedTypes] = useState<string[]>([])
-  const browseType = pickedTypes[pickedTypes.length - 1] ?? ''
+  // 훑는 타입 — 고른 것 중 하나. 고른 목록이 바뀌면 마지막에 고른 것으로 옮겨 가되, 이미 보던
+  // 타입이 아직 고른 채면 그대로 둔다(칩 하나 더 눌렀다고 보던 목록이 바뀌면 안 된다).
+  const [browsePick, setBrowsePick] = useState('')
+  const browseType = pickedTypes.includes(browsePick)
+    ? browsePick
+    : (pickedTypes[pickedTypes.length - 1] ?? '')
   const [browseOffset, setBrowseOffset] = useState(0)
   const [rows, setRows] = useState<{ items: ObjectRow[]; total: number } | null>(null)
   const [browsing, setBrowsing] = useState(false)
@@ -1579,7 +1587,7 @@ function SeedPanel({
     }
   }, [text])
 
-  // 훑기 — 타입의 목록 API 를 그대로 쓴다. 상한과 쪽은 그쪽 규칙이다.
+  // 목록 — 타입의 목록 API 를 그대로 쓴다. 상한과 쪽은 그쪽 규칙이다.
   useEffect(() => {
     if (!browseType) {
       setRows(null)
@@ -1629,7 +1637,7 @@ function SeedPanel({
               </>
             )}
           </span>
-          <Button size="icon-xs" variant="ghost" onClick={onClear} aria-label="시작점 지우기">
+          <Button size="icon-xs" variant="ghost" onClick={onClear} aria-label="시작점 삭제">
             <X className="size-3.5" />
           </Button>
         </div>
@@ -1640,7 +1648,7 @@ function SeedPanel({
         <Input
           value={text}
           onChange={(event) => setText(event.target.value)}
-          placeholder="이름·식별자로 찾기"
+          placeholder="이름·식별자로 검색"
           className="pl-8"
         />
         {searching && (
@@ -1672,8 +1680,8 @@ function SeedPanel({
       )}
 
       <div className="space-y-1.5">
-        <span className="text-muted-foreground text-xs">타입에서 훑기</span>
-        {/* 드롭다운이 아니라 칩이다 — **무엇이 있는지가 열기 전에 보여야** 훑기다. */}
+        <span className="text-muted-foreground text-xs">타입별 목록</span>
+        {/* 드롭다운이 아니라 칩이다 — **무엇이 있는지가 열기 전에 보여야** 목록다. */}
         <ul className="flex max-h-32 flex-wrap gap-1 overflow-y-auto">
           {types
             .filter((one) => one.is_active)
@@ -1693,6 +1701,7 @@ function SeedPanel({
                           ? pickedTypes.filter((slug) => slug !== one.slug)
                           : [...pickedTypes, one.slug],
                       )
+                      if (!on) setBrowsePick(one.slug)
                       setBrowseOffset(0)
                     }}
                   >
@@ -1715,15 +1724,36 @@ function SeedPanel({
           >
             <Crosshair className="mr-1 size-3.5" />
             {pickedRows.length === 1
-              ? `${pickedRows[0].label} 전부 그리기`
-              : `고른 ${pickedRows.length}개 타입 전부 그리기`}{' '}
+              ? `${pickedRows[0].label} 전체 표시`
+              : `고른 ${pickedRows.length}개 타입 전체 표시`}{' '}
             ({pickedCount.toLocaleString()})
           </Button>
         )}
         {browsed && rows && (
           <>
             {pickedRows.length > 1 && (
-              <p className="text-muted-foreground text-xs">{browsed.label} 훑기</p>
+              // 고른 타입이 둘 이상이면 어느 것을 훑을지 고른다 — 마지막에 고른 것에 묶이면
+              // 앞서 고른 타입은 훑을 길이 없다.
+              <div className="flex flex-wrap items-center gap-1 text-xs" role="tablist">
+                <span className="text-muted-foreground">목록:</span>
+                {pickedRows.map((one) => (
+                  <button
+                    key={one.slug}
+                    type="button"
+                    role="tab"
+                    aria-selected={one.slug === browseType}
+                    className={`rounded px-1.5 py-0.5 ${
+                      one.slug === browseType ? 'bg-muted font-medium' : 'hover:bg-muted/60'
+                    }`}
+                    onClick={() => {
+                      setBrowsePick(one.slug)
+                      setBrowseOffset(0)
+                    }}
+                  >
+                    {one.label}
+                  </button>
+                ))}
+              </div>
             )}
             {rows.items.length === 0 ? (
               <p className="text-muted-foreground text-xs">
@@ -1795,7 +1825,7 @@ interface FilterListProps {
   swatch?: (slug: string) => string
 }
 
-/** 거르기 — **아무것도 안 고르면 전부다.** 고른 것이 있으면 그것만. */
+/** 필터 — **아무것도 안 고르면 전부다.** 고른 것이 있으면 그것만. */
 function FilterList({ title, options, picked, onToggle, onClear, swatch }: FilterListProps) {
   if (options.length === 0) return null
   return (

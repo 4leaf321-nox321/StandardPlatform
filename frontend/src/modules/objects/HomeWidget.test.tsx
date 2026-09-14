@@ -119,7 +119,7 @@ describe('홈에서 내리기', () => {
     expect(screen.getByRole('button', { name: '위젯 메뉴' })).toBeInTheDocument()
   })
 
-  it('내려도 **뷰는 안 지운다** — 거르기까지 잃을 이유가 없다', async () => {
+  it('내려도 **뷰는 안 지운다** — 필터까지 잃을 이유가 없다', async () => {
     objectApi.summary.mockResolvedValue(SUMMARY)
     viewApi.update.mockResolvedValue({})
     const onChanged = await show(widget(), { canEdit: true })

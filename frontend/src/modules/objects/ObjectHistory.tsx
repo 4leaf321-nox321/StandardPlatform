@@ -3,7 +3,7 @@
  *
  * 언제·누가·어느 칸을 무엇에서 무엇으로. 관계가 걸리고 끊긴 것도 같은 줄에 선다.
  * 값 기록을 누르면 **그 시점의 값 전체**가 지금 값과 나란히 뜨고, 고칠 수 있는
- * 사람에게는 「이 값으로 되돌리기」 가 선다 — 저장과 같은 검증을 거치므로, 그때
+ * 사람에게는 「이 값으로 복원」 가 선다 — 저장과 같은 검증을 거치므로, 그때
  * 가리키던 것이 지워졌으면 서버가 막고 이유를 말한다. 그 말은 창 안에 그대로 뜬다.
  */
 
@@ -233,7 +233,7 @@ interface SnapshotDialogProps {
   isLatest: boolean
   onClose: () => void
   onRestore: () => Promise<void>
-  /** 여럿 골라 고치기로 같이 바뀐 기록이면 — 그 묶음을 통째로 되돌린다. */
+  /** 일괄 수정으로 같이 바뀐 기록이면 — 그 묶음을 통째로 되돌린다. */
   onUndoBatch: (batchId: string) => void
 }
 
@@ -352,7 +352,7 @@ function SnapshotDialog({
         {canEdit && entry.batch && (
           <div className="bg-muted/50 flex flex-wrap items-center justify-between gap-2 rounded-md px-3 py-2 text-sm">
             <span>
-              여럿 골라 고치기로 <strong>{entry.batch.size}건</strong>이 함께 바뀐 기록입니다.
+              일괄 수정으로 <strong>{entry.batch.size}건</strong>이 함께 바뀐 기록입니다.
             </span>
             <Button
               size="sm"
@@ -360,7 +360,7 @@ function SnapshotDialog({
               onClick={() => onUndoBatch((entry.batch as { id: string }).id)}
             >
               <Layers className="mr-1 size-3.5" />
-              함께 바뀐 {entry.batch.size}건 되돌리기
+              함께 바뀐 {entry.batch.size}건 복원
             </Button>
           </div>
         )}
@@ -382,7 +382,7 @@ function SnapshotDialog({
               ) : (
                 <RotateCcw className="mr-1 size-3.5" />
               )}
-              이 값으로 되돌리기
+              이 값으로 복원
             </Button>
           )}
         </DialogFooter>

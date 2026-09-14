@@ -168,7 +168,9 @@ def test_합치면_참조와_관계가_옮겨_가고_옛_링크가_새_것으로
     ).json()
     assert bolt["object"]["properties"]["vendor"] == w["other"]["id"]
     assert bolt["object"]["ref_labels"][w["other"]["id"]] == "OTHER"
-    assert [one["object_id"] for one in bolt["related"]] == [w["other"]["id"]]
+    # 관계 줄 하나와 참조 칸(vendor) 하나 — 둘 다 이긴 쪽을 가리킨다. 참조 칸도 관련 객체다.
+    assert {one["object_id"] for one in bolt["related"]} == {w["other"]["id"]}
+    assert sorted(one["stored_as"] for one in bolt["related"]) == ["field", "relation"]
     nut = client.get(
         f"/api/objects/{w['part']}/{w['nut']['id']}", headers=admin.headers
     ).json()

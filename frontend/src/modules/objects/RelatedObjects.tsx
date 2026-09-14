@@ -69,7 +69,7 @@ export function RelatedObjects({
         {canEdit && (
           <Button size="sm" variant="outline" onClick={() => setAdding(true)}>
             <Plus className="mr-1 size-4" />
-            잇기
+            연결
           </Button>
         )}
       </div>
@@ -82,7 +82,7 @@ export function RelatedObjects({
           hint={
             relationTypes.length === 0
               ? '관계 종류가 아직 정의되지 않았습니다 — 관리 → 온톨로지 → 관계 종류에서 먼저 만드세요.'
-              : '「잇기」 로 다른 객체와 이어 보세요. 남의 부서 것은 여기 안 보입니다.'
+              : '「연결」 로 다른 객체와 이어 보세요. 남의 부서 것은 여기 안 보입니다.'
           }
         />
       ) : (
@@ -119,11 +119,24 @@ export function RelatedObjects({
                         <p className="text-muted-foreground mt-0.5 text-xs">{row.evidence_note}</p>
                       )}
                     </div>
-                    {canEdit && (
+                    {/* 참조 칸으로 이어진 줄은 끊는 단추가 없다 — 그 칸을 고치는 일이다. */}
+                    {row.stored_as === 'field' ? (
+                      <span
+                        className="text-muted-foreground text-xs"
+                        title={
+                          row.outgoing
+                            ? `이 객체의 「${row.label}」 칸에 적힌 것 — 고치려면 「수정」 에서 그 칸을`
+                            : `저 객체의 「${row.field_key ?? ''}」 칸이 이 객체를 가리킴`
+                        }
+                      >
+                        칸
+                      </span>
+                    ) : null}
+                    {canEdit && row.stored_as !== 'field' && (
                       <Button
                         variant="ghost"
                         size="icon"
-                        aria-label={`${row.object_label} 끊기`}
+                        aria-label={`${row.object_label} 연결 해제`}
                         onClick={() => setCutting(row)}
                       >
                         <X className="size-4" />
@@ -163,7 +176,7 @@ export function RelatedObjects({
               변경 이력에 남습니다.
             </>
           }
-          confirmLabel="끊기"
+          confirmLabel="연결 해제"
           onConfirm={async () => {
             setError(null)
             try {

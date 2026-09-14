@@ -107,7 +107,10 @@ def run(user: User, bundle: BundleIn) -> Outcome:
                 target_id=None,
                 target_label=", ".join(sorted({b.type_slug for b in outcome.objects}))
                 or "정의",
-                changes=outcome.counts,
+                changes={
+                    **outcome.counts,
+                    **({"source": bundle.source} if bundle.source else {}),
+                },
             )
             db.commit()
             outer.commit()
@@ -130,6 +133,12 @@ def run(user: User, bundle: BundleIn) -> Outcome:
 
 
 def _stages(db: Session, user: User, bundle: BundleIn, out: Outcome) -> None:
+    if bundle.source and not user.is_system_admin:
+        out.errors.append(
+            f"받은 묶음(source={bundle.source})은 시스템 관리자만 넣습니다 — "
+            "허브의 것을 고칠 수 있는 길이라서다."
+        )
+        return
     if bundle.ontology is not None:
         if not user.is_system_admin:
             out.errors.append(
@@ -140,7 +149,7 @@ def _stages(db: Session, user: User, bundle: BundleIn, out: Outcome) -> None:
         if bundle.apply:
             out.snapshot_id = importer.take_snapshot(db, user, reason="묶음 가져오기").id
         try:
-            planned = importer.apply(db, bundle.ontology)
+            planned = importer.apply(db, bundle.ontology, source=bundle.source)
         except ValueError as caught:
             out.errors.append(f"정의: {caught}")
             return
@@ -175,7 +184,12 @@ def _stages(db: Session, user: User, bundle: BundleIn, out: Outcome) -> None:
             # 미리 보기에서도 **적용한다** — 그래야 뒤 묶음(참조 · 관계)이 이 객체를 찾는다.
             # 바깥이 롤백되므로 남지 않는다.
             planned_rows = bulk.apply_objects(
-                db, user, object_type, batch.rows, owner_workspace_id=owner
+                db,
+                user,
+                object_type,
+                batch.rows,
+                owner_workspace_id=owner,
+                source=bundle.source,
             )
         except AppError as caught:
             out.objects.append(Batch(batch.type_slug, None, caught.message))
@@ -190,7 +204,9 @@ def _stages(db: Session, user: User, bundle: BundleIn, out: Outcome) -> None:
             )
             continue
         try:
-            planned_links = bulk.apply_relations(db, user, source_type, links.rows)
+            planned_links = bulk.apply_relations(
+                db, user, source_type, links.rows, source=bundle.source
+            )
         except AppError as caught:
             out.relations.append(Batch(links.type_slug, None, caught.message))
             continue

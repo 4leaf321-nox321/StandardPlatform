@@ -38,7 +38,7 @@ export default function OntologyGroupsPage() {
   const types = schema?.types ?? []
   const target = groups.find((row) => row.slug === editing) ?? null
 
-  /** 이 묶음에 걸린 타입 이름들. **지우기 전에 무엇이 걸렸는지 말하는 데 쓴다.** */
+  /** 이 묶음에 걸린 타입 이름들. **삭제 전에 무엇이 걸렸는지 말하는 데 쓴다.** */
   function attachedTo(group: NavGroupRow): string[] {
     return types.filter((row) => row.nav_group_slug === group.slug).map((row) => row.label)
   }
@@ -154,7 +154,7 @@ function NewGroupForm({ onSubmit }: { onSubmit: (body: Record<string, unknown>) 
           setLabel('')
         }}
       >
-        묶음 만들기
+        묶음 생성
       </Button>
       <p className="text-muted-foreground w-full text-xs">
         slug 는 소문자·숫자·밑줄이고 <b>나중에 바꿀 수 없습니다.</b>

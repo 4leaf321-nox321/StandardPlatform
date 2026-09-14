@@ -6875,6 +6875,52 @@
         }
       }
     },
+    "/api/bundles/export": {
+      "get": {
+        "tags": [
+          "bundles"
+        ],
+        "summary": "Export Bundle",
+        "description": "허브가 쌍둥이에 내려주는 묶음 — 사이드바 묶음 하나의 정의 · 객체 · 관계를 **가져오기와\n같은 모양으로.** 받는 쪽은 이것을 그대로 `POST /bundles/import` 에 `source` 를 붙여 보낸다.\n\n시스템 관리자만 — 허브의 기준정보 전부를 부서 가리지 않고 내보내기 때문이다.",
+        "operationId": "export_bundle_api_bundles_export_get",
+        "parameters": [
+          {
+            "name": "group",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 1,
+              "description": "사이드바 묶음 slug — 허브의 PLM 기준정보면 plm",
+              "title": "Group"
+            },
+            "description": "사이드바 묶음 slug — 허브의 PLM 기준정보면 plm"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BundleExportOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/graph/overview": {
       "get": {
         "tags": [
@@ -7017,10 +7063,10 @@
                   "type": "null"
                 }
               ],
-              "description": "노드 상한. 최대 3000",
+              "description": "노드 상한. 최대 20000",
               "title": "Limit"
             },
-            "description": "노드 상한. 최대 3000"
+            "description": "노드 상한. 최대 20000"
           },
           {
             "name": "relations",
@@ -7152,10 +7198,10 @@
                   "type": "null"
                 }
               ],
-              "description": "노드 상한. 최대 3000",
+              "description": "노드 상한. 최대 20000",
               "title": "Limit"
             },
-            "description": "노드 상한. 최대 3000"
+            "description": "노드 상한. 최대 20000"
           },
           {
             "name": "offset",
@@ -8182,6 +8228,68 @@
         "type": "object",
         "title": "BulkUndoRequest"
       },
+      "BundleExportOut": {
+        "properties": {
+          "format": {
+            "type": "string",
+            "title": "Format"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "exported_at": {
+            "type": "string",
+            "title": "Exported At"
+          },
+          "ontology": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Ontology"
+          },
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectBatchIn"
+            },
+            "type": "array",
+            "title": "Objects"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/RelationBatchIn"
+            },
+            "type": "array",
+            "title": "Relations"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "format",
+          "group",
+          "exported_at",
+          "ontology",
+          "objects",
+          "relations",
+          "counts",
+          "warnings"
+        ],
+        "title": "BundleExportOut",
+        "description": "허브가 내려주는 묶음 — **가져오기와 같은 모양.** 받는 쪽은 `ontology` · `objects` ·\n`relations` 를 그대로 `POST /bundles/import` 에 `source` 를 붙여 보낸다."
+      },
       "BundleIn": {
         "properties": {
           "ontology": {
@@ -8209,6 +8317,12 @@
             },
             "type": "array",
             "title": "Relations"
+          },
+          "source": {
+            "type": "string",
+            "pattern": "^([a-z][a-z0-9_-]{0,39})?$",
+            "title": "Source",
+            "default": ""
           },
           "apply": {
             "type": "boolean",
@@ -10626,6 +10740,11 @@
             "type": "boolean",
             "title": "Can Edit"
           },
+          "can_link": {
+            "type": "boolean",
+            "title": "Can Link",
+            "default": false
+          },
           "watching": {
             "type": "boolean",
             "title": "Watching",
@@ -10710,6 +10829,11 @@
           "entry_policy": {
             "type": "string",
             "title": "Entry Policy"
+          },
+          "managed_by": {
+            "type": "string",
+            "title": "Managed By",
+            "default": ""
           },
           "key_policy": {
             "type": "string",
@@ -11027,6 +11151,11 @@
             "type": "string",
             "title": "Entry Policy"
           },
+          "managed_by": {
+            "type": "string",
+            "title": "Managed By",
+            "default": ""
+          },
           "key_policy": {
             "type": "string",
             "title": "Key Policy"
@@ -11225,6 +11354,13 @@
             },
             "type": "array",
             "title": "Relation Types"
+          },
+          "reference_edges": {
+            "items": {
+              "$ref": "#/components/schemas/ReferenceEdgeOut"
+            },
+            "type": "array",
+            "title": "Reference Edges"
           },
           "data_types": {
             "items": {
@@ -11949,6 +12085,11 @@
             ],
             "title": "Ref Type Slug"
           },
+          "inverse_label": {
+            "type": "string",
+            "title": "Inverse Label",
+            "default": ""
+          },
           "min_value": {
             "anyOf": [
               {
@@ -12102,6 +12243,12 @@
               }
             ],
             "title": "Ref Type Slug"
+          },
+          "inverse_label": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Inverse Label",
+            "default": ""
           },
           "min_value": {
             "anyOf": [
@@ -12358,6 +12505,50 @@
         "title": "RefHitOut",
         "description": "이 객체를 **속성으로** 가리키는 객체 하나."
       },
+      "ReferenceEdgeOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "inverse_label": {
+            "type": "string",
+            "title": "Inverse Label"
+          },
+          "src_type_slug": {
+            "type": "string",
+            "title": "Src Type Slug"
+          },
+          "dst_type_slug": {
+            "type": "string",
+            "title": "Dst Type Slug"
+          },
+          "field_key": {
+            "type": "string",
+            "title": "Field Key"
+          },
+          "multi": {
+            "type": "boolean",
+            "title": "Multi"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "inverse_label",
+          "src_type_slug",
+          "dst_type_slug",
+          "field_key",
+          "multi"
+        ],
+        "title": "ReferenceEdgeOut",
+        "description": "참조 칸을 관계처럼 읽은 것 — **길 목록이 한 벌**이 되게. AI 와 그래프가 관계 종류와 함께\n본다. slug 는 `ref:<타입>.<칸>`, 조건 · 통계에서는 `ref.<칸>.…` 로 건넌다."
+      },
       "ReferencesOut": {
         "properties": {
           "property_refs": {
@@ -12472,6 +12663,22 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "stored_as": {
+            "type": "string",
+            "title": "Stored As",
+            "default": "relation"
+          },
+          "field_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Field Key"
           }
         },
         "type": "object",
@@ -12682,6 +12889,11 @@
               }
             ],
             "title": "Dst Type Slugs"
+          },
+          "managed_by": {
+            "type": "string",
+            "title": "Managed By",
+            "default": ""
           },
           "sort_order": {
             "type": "integer",

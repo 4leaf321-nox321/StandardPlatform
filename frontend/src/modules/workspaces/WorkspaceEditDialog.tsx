@@ -1,7 +1,7 @@
 /**
- * 부서 고치기 — 이름·설명·상위·공개.
+ * 부서 수정 — 이름·설명·상위·공개.
  *
- * **이름을 못 고치면 조직 개편이 「새로 만들고 옮기기」 가 된다.** 그러면 부서 id 가
+ * **이름을 못 고치면 조직 개편이 「새로 만들고 이동」 가 된다.** 그러면 부서 id 가
  * 바뀌고, 그 부서를 가리키던 자료가 통째로 끊어진다. 개명은 흔한 일이라 반드시
  * 제자리에서 되어야 한다.
  *
@@ -81,7 +81,7 @@ export function WorkspaceEditDialog({ workspace, all, onClose, onSaved }: Props)
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
       <DialogContent className="sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{workspace.name} 고치기</DialogTitle>
+          <DialogTitle>{workspace.name} 수정</DialogTitle>
           <DialogDescription>
             주소(<span className="font-mono">{workspace.slug}</span>)는 못 바꿉니다. 다른 시스템이
             이 주소로 부서를 찾고 있어서, 바꾸면 그쪽에서 조용히 안 맞습니다.
@@ -142,7 +142,7 @@ export function WorkspaceEditDialog({ workspace, all, onClose, onSaved }: Props)
               value={parent}
               onChange={setParent}
               placeholder="상위 부서를 고르세요"
-              searchPlaceholder="부서 이름이나 주소로 찾기"
+              searchPlaceholder="부서 이름이나 주소로 검색"
             />
             {parentChanged && (
               <p className="text-muted-foreground text-xs">

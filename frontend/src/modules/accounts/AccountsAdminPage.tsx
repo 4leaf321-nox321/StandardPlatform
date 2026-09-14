@@ -130,7 +130,7 @@ export default function AccountsAdminPage() {
             value={newWorkspace || null}
             onChange={setNewWorkspace}
             placeholder="부서를 고르세요"
-            searchPlaceholder="부서 이름이나 주소로 찾기"
+            searchPlaceholder="부서 이름이나 주소로 검색"
             emptyText="그런 부서가 없습니다"
             options={(workspaces.data ?? []).map((one) => ({
               value: one.slug,
@@ -142,7 +142,7 @@ export default function AccountsAdminPage() {
         </div>
         <Button type="submit" disabled={!newWorkspace}>
           <Plus className="size-4" />
-          계정 만들기
+          계정 생성
         </Button>
       </form>
 

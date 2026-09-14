@@ -33,6 +33,7 @@ TOOLS = {
     "source_head",
     "table_convert",
     "run_init",
+    "hub_pull",
     "run_validate",
     "run_preview",
 }

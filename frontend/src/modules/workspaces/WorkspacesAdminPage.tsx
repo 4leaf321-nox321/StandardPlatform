@@ -6,7 +6,7 @@
  *
  * **부서를 지우는 것은 예외다.** 기본은 보관(is_active=false)이고, 삭제는 잘못
  * 만든 부서처럼 자료가 아예 없는 경우를 위한 것이다. 자료가 있는 부서를 없애려면
- * 먼저 「자료 옮기기」 로 다른 부서에 넘긴다.
+ * 먼저 「자료 이동」 로 다른 부서에 넘긴다.
  *
  * ## 표가 아니라 트리인 이유
  *
@@ -175,7 +175,7 @@ export default function WorkspacesAdminPage() {
             options={[{ value: ROOT, label: '최상위 (상위 없음)' }, ...parentOptions(all, null)]}
             value={parent}
             onChange={setParent}
-            searchPlaceholder="부서 이름이나 주소로 찾기"
+            searchPlaceholder="부서 이름이나 주소로 검색"
           />
         </div>
         <Button type="submit" disabled={busy}>
@@ -192,7 +192,7 @@ export default function WorkspacesAdminPage() {
           <Input
             className="pl-8"
             value={query}
-            placeholder="부서 이름·주소·하는 일로 찾기"
+            placeholder="부서 이름·주소·하는 일로 검색"
             onChange={(event) => setQuery(event.target.value)}
           />
         </div>
@@ -213,7 +213,7 @@ export default function WorkspacesAdminPage() {
             )
           }
         >
-          {collapsed.size > 0 ? '모두 펼치기' : '모두 접기'}
+          {collapsed.size > 0 ? '모두 확장' : '모두 접기'}
         </Button>
         <span className="text-muted-foreground text-sm">
           {rows.length}개 보임 / 전체 {all.length}개
@@ -251,7 +251,7 @@ export default function WorkspacesAdminPage() {
       <p className="text-muted-foreground text-xs">
         줄을 끌어 다른 줄 <strong>위의 가는 띠</strong>에 놓으면 그 부서 앞에 형제로 서고,{' '}
         <strong>줄 본체</strong>에 놓으면 그 부서의 막내가 됩니다. 마우스를 쓰지 않으면 ↑/↓ 단추로
-        같은 상위 안에서 순서를 바꾸고, 고치기(✏️)에서 상위 부서를 고를 수 있습니다.
+        같은 상위 안에서 순서를 바꾸고, 수정(✏️)에서 상위 부서를 고를 수 있습니다.
       </p>
 
       <ConfirmDialog
@@ -279,7 +279,7 @@ export default function WorkspacesAdminPage() {
                   ))}
                 </ul>
                 <p className="text-muted-foreground">
-                  <strong>자료 옮기기</strong>로 다른 부서에 넘기면 이 목록이 비고, 그때 지울 수
+                  <strong>자료 이동</strong>로 다른 부서에 넘기면 이 목록이 비고, 그때 지울 수
                   있습니다.
                 </p>
               </>

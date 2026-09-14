@@ -1,5 +1,5 @@
 /**
- * 변경 이력이 지키는 것 — **칸별로 전→후를 말하고, 그 시점 값을 나란히 놓고, 되돌리기는
+ * 변경 이력이 지키는 것 — **칸별로 전→후를 말하고, 그 시점 값을 나란히 놓고, 복원은
  * 서버의 말을 창 안에 그대로 띄운다.**
  */
 
@@ -120,7 +120,7 @@ describe('변경 이력', () => {
     expect(row).toHaveTextContent('0.8')
   })
 
-  it('되돌리기는 restore 를 부르고, 서버가 막으면 그 말이 창 안에 뜬다', async () => {
+  it('복원은 restore 를 부르고, 서버가 막으면 그 말이 창 안에 뜬다', async () => {
     objectApi.history.mockResolvedValue(ENTRIES)
     objectApi.restore.mockRejectedValueOnce(
       new ApiError(422, {
@@ -134,32 +134,32 @@ describe('변경 이력', () => {
     )
     const onRestored = await mount()
     await userEvent.click(await screen.findByRole('button', { name: /이 .*1\.2/ }))
-    await userEvent.click(await screen.findByRole('button', { name: '이 값으로 되돌리기' }))
+    await userEvent.click(await screen.findByRole('button', { name: '이 값으로 복원' }))
     expect(await screen.findByText(/가리키는 객체를 찾을 수 없습니다/)).toBeInTheDocument()
     expect(onRestored).not.toHaveBeenCalled()
     // 창은 닫히지 않았다.
-    expect(screen.getByRole('button', { name: '이 값으로 되돌리기' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '이 값으로 복원' })).toBeInTheDocument()
 
     objectApi.restore.mockResolvedValueOnce({})
-    await userEvent.click(screen.getByRole('button', { name: '이 값으로 되돌리기' }))
+    await userEvent.click(screen.getByRole('button', { name: '이 값으로 복원' }))
     await waitFor(() => expect(objectApi.restore).toHaveBeenLastCalledWith('part', 'bolt', 'e1'))
     expect(onRestored).toHaveBeenCalled()
   })
 
-  it('가장 최근 기록은 지금 값과 같아 되돌리기가 안 서고, 고칠 수 없는 사람에겐 단추가 없다', async () => {
+  it('가장 최근 기록은 지금 값과 같아 복원이 안 서고, 고칠 수 없는 사람에겐 단추가 없다', async () => {
     objectApi.history.mockResolvedValue(ENTRIES)
     await mount()
     await userEvent.click(await screen.findByRole('button', { name: /박.*0\.8/ }))
     expect(await screen.findByText(/가장 최근 기록이라 지금 값과 같습니다/)).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '이 값으로 되돌리기' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: '이 값으로 복원' })).toBeDisabled()
   })
 
-  it('고칠 수 없는 사람에게는 되돌리기가 없다', async () => {
+  it('고칠 수 없는 사람에게는 복원이 없다', async () => {
     objectApi.history.mockResolvedValue(ENTRIES)
     await mount(false)
     await userEvent.click(await screen.findByRole('button', { name: /이 .*1\.2/ }))
     await screen.findByText(/지금과 다른 칸/)
-    expect(screen.queryByRole('button', { name: '이 값으로 되돌리기' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '이 값으로 복원' })).not.toBeInTheDocument()
   })
 
   it('여럿 골라 고친 기록이면 함께 바뀐 것을 한 번에 되돌리는 길이 선다', async () => {
@@ -181,8 +181,8 @@ describe('변경 이력', () => {
     await mount()
     const rows = await screen.findAllByTitle('그 시점의 값 보기')
     await userEvent.click(rows[0])
-    await userEvent.click(await screen.findByRole('button', { name: /함께 바뀐 40건 되돌리기/ }))
-    expect(await screen.findByRole('button', { name: /40건 되돌리기/ })).toBeEnabled()
+    await userEvent.click(await screen.findByRole('button', { name: /함께 바뀐 40건 복원/ }))
+    expect(await screen.findByRole('button', { name: /40건 복원/ })).toBeEnabled()
     expect(objectApi.bulkEditUndo).toHaveBeenCalledWith('part', 'batch-1', false)
   })
 

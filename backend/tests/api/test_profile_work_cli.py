@@ -65,10 +65,11 @@ def test_행_단위와_몇_대_몇과_갈리는_열을_센다(tmp_path: Path) ->
 
     by_task = next(one for one in result["varying"] if one["key"] == "과제코드")
     # CS 는 과제가 아니라 모델의 칸이다 — 짝수 과제 6개 · 12행에서 갈린다.
-    assert by_task["varying"] == [
-        {"column": "CS", "keys": 6, "rows": 12},
-        {"column": "개발모델명", "keys": 6, "rows": 12},
-    ]
+    assert by_task["varying"] == [{"column": "CS", "keys": 6, "rows": 12}]
+    # 과제 아래 모델은 더 잘게 나뉘는 식별자 — 갈리는 게 당연해 따로 적는다.
+    assert by_task["finer"] == ["개발모델명"]
+    # 날짜 모양이 섞인 열은 식별자 후보가 아니다.
+    assert all(one["key"] != "SRA실적일" for one in result["varying"])
     assert "과제명" in by_task["steady"] and "SRA실적일" in by_task["steady"]
 
 

@@ -35,7 +35,7 @@ describe('SearchablePicker', () => {
   it('이름의 일부로 걸러진다 — 아는 사람의 길', async () => {
     render(<SearchablePicker options={OPTIONS} value={null} onChange={vi.fn()} />)
     await open()
-    await userEvent.type(screen.getByPlaceholderText('이름으로 찾기'), '품질')
+    await userEvent.type(screen.getByPlaceholderText('이름으로 검색'), '품질')
     expect(screen.getAllByRole('button', { name: /품질팀/ })).toHaveLength(2)
     expect(screen.getByText('2 / 4')).toBeInTheDocument()
   })
@@ -45,7 +45,7 @@ describe('SearchablePicker', () => {
     // 「없다」 고 결론 내리고 새로 만든다 — 그러면 같은 값이 둘로 갈린다.
     render(<SearchablePicker options={OPTIONS} value={null} onChange={vi.fn()} />)
     await open()
-    await userEvent.type(screen.getByPlaceholderText('이름으로 찾기'), 'mat-lab')
+    await userEvent.type(screen.getByPlaceholderText('이름으로 검색'), 'mat-lab')
     expect(screen.getByRole('button', { name: /재료시험팀/ })).toBeInTheDocument()
   })
 
@@ -73,14 +73,14 @@ describe('SearchablePicker', () => {
     await open()
     await userEvent.click(screen.getByRole('button', { name: /재료시험팀/ }))
     expect(onChange).toHaveBeenCalledWith('mat-lab')
-    expect(screen.queryByPlaceholderText('이름으로 찾기')).not.toBeInTheDocument()
+    expect(screen.queryByPlaceholderText('이름으로 검색')).not.toBeInTheDocument()
   })
 
   it('맞는 것이 없으면 그렇다고 말한다', async () => {
     // 빈 목록을 그냥 두면 「고장났나」 로 읽힌다.
     render(<SearchablePicker options={OPTIONS} value={null} onChange={vi.fn()} />)
     await open()
-    await userEvent.type(screen.getByPlaceholderText('이름으로 찾기'), '없는부서')
+    await userEvent.type(screen.getByPlaceholderText('이름으로 검색'), '없는부서')
     expect(screen.getByText('맞는 것이 없습니다')).toBeInTheDocument()
   })
 
@@ -94,7 +94,7 @@ describe('SearchablePicker', () => {
       />,
     )
     await open()
-    await userEvent.type(screen.getByPlaceholderText('이름으로 찾기'), 'ａｓｔｍ')
+    await userEvent.type(screen.getByPlaceholderText('이름으로 검색'), 'ａｓｔｍ')
     expect(screen.getByRole('button', { name: /ASTM E8/ })).toBeInTheDocument()
   })
 })

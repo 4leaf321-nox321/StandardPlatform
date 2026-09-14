@@ -1,7 +1,7 @@
 /**
  * 다른 이름(별칭) — **같은 것을 다르게 불러도 같은 것으로 풀리게.**
  *
- * 「Ansys」 를 「앤시스」 「ANSYS Inc.」 로도 부른다. 별칭을 두면 찾기·참조 풀이·파일·동기화가
+ * 「Ansys」 를 「앤시스」 「ANSYS Inc.」 로도 부른다. 별칭을 두면 검색·참조 풀이·파일·동기화가
  * 그것으로도 찾는다 — 못 찾은 사람이 새로 만들어 같은 것이 둘이 되는 일을 막는다.
  * 바깥 시스템의 식별자(동기화가 남김)는 보기만 한다.
  */
@@ -72,7 +72,7 @@ export function AliasesPanel({
             {canEdit && (
               <button
                 type="button"
-                aria-label={`별칭 ${one} 지우기`}
+                aria-label={`별칭 ${one} 삭제`}
                 className="text-muted-foreground hover:text-foreground"
                 disabled={busy}
                 onClick={() => save(aliases.filter((item) => item !== one))}
@@ -95,7 +95,7 @@ export function AliasesPanel({
           >
             <Input
               value={draft}
-              placeholder="다른 이름 더하기"
+              placeholder="다른 이름 추가"
               className="h-8 w-48 text-sm"
               disabled={busy}
               onChange={(event) => setDraft(event.target.value)}

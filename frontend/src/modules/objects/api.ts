@@ -13,7 +13,7 @@ export interface ObjectRow {
   properties: Record<string, unknown>
   /** `object_ref` 가 가리키는 객체의 이름 (id -> 이름). **서버가 한 번에 모아 준다.** */
   ref_labels: Record<string, string>
-  /** 사람이 붙인 다른 이름. 찾기·참조 풀이·파일이 이것으로도 찾는다. 시험 자료에는 없을 수 있다. */
+  /** 사람이 붙인 다른 이름. 검색·참조 풀이·파일이 이것으로도 찾는다. 시험 자료에는 없을 수 있다. */
   aliases?: string[]
   /** {데이터 소스 slug: 그쪽 식별자}. 동기화가 남긴다 — 보기만. */
   external_ids?: Record<string, string>
@@ -48,6 +48,9 @@ export interface RelatedObject {
   properties: Record<string, unknown>
   evidence_note: string
   created_at: string
+  /** `relation`(관계 줄) · `field`(참조 칸 — 칸에 저장한 관계, 끊는 대신 칸을 고친다). */
+  stored_as?: 'relation' | 'field'
+  field_key?: string | null
 }
 
 export interface ObjectProfile {
@@ -59,6 +62,11 @@ export interface ObjectProfile {
   related: RelatedObject[]
   /** **서버가 판정한 것이다.** 화면이 스스로 정하면 화면마다 단추가 달라진다. */
   can_edit: boolean
+  /**
+   * 관계를 맺고 끊을 수 있나. 허브가 내려준 객체는 값을 못 고쳐도(`can_edit` 거짓)
+   * 이 설치의 관계로 가리키는 것은 된다 — 과제의 산출 문서처럼.
+   */
+  can_link?: boolean
   /** 내가 지켜보고 있나 — 바뀌면 알림이 온다. */
   watching: boolean
   /** 몇 사람이 지켜보나. **혼자가 아니라는 것을 아는 것**이 고칠 때의 조심을 만든다. */
@@ -122,7 +130,7 @@ export interface BulkEditPlan {
   fields: { field: string; label: string }[]
 }
 
-/** 이 객체를 가리키는 것 — 지우기 전에 보는 것. */
+/** 이 객체를 가리키는 것 — 삭제 전에 보는 것. */
 export interface References {
   property_refs: {
     object_id: string
@@ -176,9 +184,9 @@ export interface HistoryEntry {
   /** 칸별 `{before, after}`. 속성은 `properties.<키>`. */
   changes: Record<string, { before: unknown; after: unknown }>
   relation: { relation: string; outgoing: boolean; other_id: string; other_label: string } | null
-  /** 값 기록에만 있다 — 되돌리기의 목표. */
+  /** 값 기록에만 있다 — 복원의 목표. */
   snapshot: Snapshot | null
-  /** 여럿 골라 고치기로 **같이 바뀐** 기록이면 그 묶음. 한 번에 되돌리는 입구다. */
+  /** 일괄 수정으로 **같이 바뀐** 기록이면 그 묶음. 한 번에 되돌리는 입구다. */
   batch?: { id: string; field_label: string; size: number } | null
 }
 
@@ -292,7 +300,7 @@ export interface ObjectQuery {
   deep?: boolean
   /** 그 해에 해당하는 것만. 축의 시간 정책이 뜻을 정한다. */
   year?: number | null
-  /** 조건 거르기. 칸 안 OR, 칸끼리 AND. */
+  /** 조건 필터. 칸 안 OR, 칸끼리 AND. */
   conditions?: Condition[]
   status?: string | null
 }
@@ -371,7 +379,7 @@ export const viewApi = {
     ),
 }
 
-/** 통계의 막대 하나. `key` 는 거르기에 그대로 넣을 수 있는 값(빈 칸이면 null). */
+/** 통계의 막대 하나. `key` 는 필터에 그대로 넣을 수 있는 값(빈 칸이면 null). */
 /** 세부 기준으로 나눈 조각 하나 — 세부 기준의 값별로. 합은 그 칸의 `count` 와 맞는다. */
 export interface Part {
   key: string | null
@@ -412,7 +420,7 @@ export interface Summary {
   metric: string
   metric_field: string | null
   metric_label: string
-  /** 거르기를 통과한 **전체 행 수.** 막대의 합과 다르면 그 차이가 「그 밖에」 다. */
+  /** 필터를 통과한 **전체 행 수.** 막대의 합과 다르면 그 차이가 「그 밖에」 다. */
   total: number
   buckets: Bucket[]
   other_groups: number
@@ -509,8 +517,8 @@ export const objectApi = {
     params.set('format', format)
     return downloadFile(`/objects/${typeSlug}/export?${params.toString()}`, `${typeSlug}.${format}`)
   },
-  /** 파일로 넣기 — `apply=false` 면 계획만. */
-  /** 파일 대신 JSON 행으로 — 표에서 타입 만들기가 쓴다. 규칙은 파일과 같다. */
+  /** 파일 가져오기 — `apply=false` 면 계획만. */
+  /** 파일 대신 JSON 행으로 — 표에서 타입 생성이 쓴다. 규칙은 파일과 같다. */
   importRows: (
     typeSlug: string,
     rows: Record<string, unknown>[],
@@ -577,9 +585,9 @@ export const objectApi = {
   list: (typeSlug: string, query: ObjectQuery = {}) =>
     api.get<Page<ObjectRow>>(`/objects/${typeSlug}${queryString(query)}`),
   /**
-   * 통계 — **목록과 같은 거르기 위에서.**
+   * 통계 — **목록과 같은 필터 위에서.**
    *
-   * 거르기를 따로 보내면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느
+   * 필터를 따로 보내면 「목록에는 12건인데 묶어 보면 15건」 이 되고, 그때 어느
    * 쪽이 맞는지 아무도 모른다. 그래서 목록이 쓰는 `ObjectQuery` 를 그대로 받는다.
    */
   summary: (typeSlug: string, query: ObjectQuery = {}, options: SummaryOptions) =>
@@ -631,7 +639,7 @@ export const objectApi = {
   /** 그 시점 값으로 고친다 — 저장과 같은 검증을 거쳐서. */
   restore: (typeSlug: string, id: string, entryId: string) =>
     api.post<ObjectRow>(`/objects/${typeSlug}/${id}/restore`, { entry_id: entryId }),
-  /** 지우기 전에 — 이 객체를 가리키는 것. */
+  /** 삭제 전에 — 이 객체를 가리키는 것. */
   references: (typeSlug: string, id: string) =>
     api.get<References>(`/objects/${typeSlug}/${id}/references`),
   /** `block`(기본)은 가리키는 것이 있으면 409. `detach` 는 참조를 비우고 관계를 끊고 지운다. */

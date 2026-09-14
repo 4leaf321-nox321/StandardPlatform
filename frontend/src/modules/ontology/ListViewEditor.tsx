@@ -9,7 +9,7 @@
  *
  * 네 칸이 화면의 어디에 꽂히는지는 말로 하면 안 읽힌다. 그래서 **지금 설정대로
  * 그려지는 목록을 위에 붙인다** — 열을 담으면 그 자리에서 표 머리가 바뀌고,
- * 거르기를 켜면 위에 칸이 선다. 이 저장소가 「빈 목록은 이유를 말한다」 로 푸는
+ * 필터를 켜면 위에 칸이 선다. 이 저장소가 「빈 목록은 이유를 말한다」 로 푸는
  * 것과 같은 방식이다: **화면이 스스로를 설명하게 한다.**
  */
 
@@ -57,12 +57,12 @@ const NO_TREE = '__none__'
 /** 열을 안 골랐을 때 목록이 떨어지는 기본. `ObjectListPage` 와 같아야 한다. */
 const FALLBACK_PREVIEW = ['key', 'label', 'updated_at']
 
-/** 거르기·검색에 쓸 수 있는 종류. 문자열 비교만 하므로 글과 선택뿐이다. */
+/** 필터·검색에 쓸 수 있는 종류. 문자열 비교만 하므로 글과 선택뿐이다. */
 const FILTERABLE = new Set(['text', 'enum', 'url'])
 
 interface Props {
   defs: PropertyDef[]
-  /** 트리로 쓸 수 있는 관계를 고르기 위해 받는다. */
+  /** 트리로 쓸 수 있는 관계를 선택 위해 받는다. */
   relationTypes: RelationType[]
   /** 이 타입의 slug — 허용 타입에 걸린 관계만 고르게 한다. */
   typeSlug: string
@@ -107,7 +107,7 @@ function Preview({ defs, value }: { defs: PropertyDef[]; value: ListView }) {
       <div className="bg-background space-y-2 rounded border p-2">
         <div className="flex flex-wrap items-center gap-1.5">
           <span className="text-muted-foreground rounded border px-2 py-1 text-xs">
-            {(value.search ?? ['label', 'key']).map(labelOf).join('·')} (으)로 찾기
+            {(value.search ?? ['label', 'key']).map(labelOf).join('·')} (으)로 검색
           </span>
           {filters.map((id) => (
             <span key={id} className="text-muted-foreground rounded border px-2 py-1 text-xs">
@@ -317,7 +317,7 @@ export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange 
       {/* --- 롤업 ------------------------------------------------------- */}
       {value.tree?.relation && <RollupSection defs={defs} value={value} onChange={onChange} />}
 
-      {/* --- 검색·거르기 ------------------------------------------------ */}
+      {/* --- 검색·필터 ------------------------------------------------ */}
       <Toggles
         title="검색이 훑을 자리"
         hint="안 고르면 이름과 식별자를 봅니다 — 빈 결과보다 그럴듯한 기본이 낫습니다."
@@ -327,7 +327,7 @@ export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange 
       />
 
       <Toggles
-        title="목록 위에 세울 거르기 칸"
+        title="목록 위에 세울 필터 칸"
         hint="글과 선택 속성만 됩니다 — 지금은 문자열 비교만 하고, 범위 질의는 없습니다. 없는 것을 있는 척하지 않습니다."
         options={filterable}
         chosen={value.filters ?? []}
@@ -551,7 +551,7 @@ function RollupSection({
                 type="button"
                 size="icon"
                 variant="ghost"
-                aria-label="롤업 지우기"
+                aria-label="롤업 삭제"
                 onClick={() => set(rows.filter((_one, i) => i !== index))}
               >
                 <X className="size-4" />
@@ -565,7 +565,7 @@ function RollupSection({
             onClick={() => set([...rows, { property: numeric[0].key, fn: 'sum' }])}
           >
             <Plus className="mr-1 size-4" />
-            모을 것 더하기
+            모을 것 추가
           </Button>
           <p className="text-muted-foreground text-xs">
             상세 화면에 「아래 전부」 의 값이 뜹니다 — 어셈블리의 총 무게, 과제의 예산 합계처럼.

@@ -1,5 +1,5 @@
 /**
- * 같이 바뀐 것 한 번에 되돌리기 — **계획 먼저.**
+ * 같이 바뀐 것 한 번에 복원 — **계획 먼저.**
  *
  * 한 번에 수백 건을 바꾸는 길이 있는데 되돌리는 길이 한 건씩뿐이면, 실수 한 번은
  * 사실상 되돌릴 수 없다. 그래서 여럿 골라 고친 것은 묶음으로 기록되고, 여기서 그
@@ -8,7 +8,7 @@
  * ## 그 뒤에 누가 고친 행은 건드리지 않는다
  *
  * 묶음이 넣은 값이 아직 그대로인 행만 되돌린다. 그 사이 다른 사람이 새로 고친 행을
- * 덮어쓰면 되돌리기가 남의 작업을 지운다 — 그 행은 「못 되돌림」 과 이유로 선다.
+ * 덮어쓰면 복원이 남의 작업을 지운다 — 그 행은 「못 되돌림」 과 이유로 선다.
  */
 
 import { useEffect, useState } from 'react'
@@ -85,10 +85,10 @@ export function BulkUndoDialog({ typeSlug, batchId, onClose, onApplied }: Props)
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>같이 바뀐 것 한 번에 되돌리기</DialogTitle>
+          <DialogTitle>같이 바뀐 것 한 번에 복원</DialogTitle>
           <DialogDescription>
-            {plan ? `「${plan.field_label}」 칸을 ` : ''}여럿 골라 고치기 전의 값으로 돌립니다.{' '}
-            <strong>그 뒤에 누가 또 고친 행은 건드리지 않습니다</strong> — 되돌리기가 남의 새 작업을
+            {plan ? `「${plan.field_label}」 칸을 ` : ''}일괄 수정 전의 값으로 돌립니다.{' '}
+            <strong>그 뒤에 누가 또 고친 행은 건드리지 않습니다</strong> — 복원이 남의 새 작업을
             지우면 안 되니까요.
           </DialogDescription>
         </DialogHeader>
@@ -171,7 +171,7 @@ export function BulkUndoDialog({ typeSlug, batchId, onClose, onApplied }: Props)
               ) : (
                 <RotateCcw className="mr-1 size-4" />
               )}
-              {change}건 되돌리기
+              {change}건 복원
             </Button>
           )}
         </DialogFooter>

@@ -1,5 +1,5 @@
 /**
- * 파일로 넣기 — **계획 먼저, 적용은 사람이 누른 뒤.**
+ * 파일 가져오기 — **계획 먼저, 적용은 사람이 누른 뒤.**
  *
  * 정의 가져오기와 같은 무늬다. 파일을 올리면 서버가 행마다 무엇이 될지(새로/고침/
  * 그대로/오류)를 돌려주고, 그것을 표로 보여 준다. **한 행이라도 오류면 「적용」 이
@@ -121,7 +121,7 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>{type.label} 파일로 넣기</DialogTitle>
+          <DialogTitle>{type.label} 파일 가져오기</DialogTitle>
           <DialogDescription>
             올리면 먼저 <strong>무엇이 바뀔지</strong>를 보여 줍니다. 한 행이라도 틀리면 아무것도 안
             넣습니다 — 고쳐서 다시 올리세요.
@@ -210,10 +210,10 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
           </Button>
         </div>
 
-        {/* 붙여 넣기 — 엑셀에서 복사하면 탭으로 온다. 사내 DRM 이 저장을 잠그면 이것이 유일한 길이다. */}
+        {/* 붙여넣기 — 엑셀에서 복사하면 탭으로 온다. 사내 DRM 이 저장을 잠그면 이것이 유일한 길이다. */}
         <details className="text-sm" open={pasted !== ''}>
           <summary className="text-muted-foreground cursor-pointer">
-            파일 대신 붙여 넣기 (엑셀에서 복사 · CSV · JSON)
+            파일 대신 붙여넣기 (엑셀에서 복사 · CSV · JSON)
           </summary>
           <Textarea
             rows={5}

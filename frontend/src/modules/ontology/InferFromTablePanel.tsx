@@ -1,5 +1,5 @@
 /**
- * 표에서 타입 만들기 — **CSV·JSON 하나로 타입과 데이터가 함께 생긴다.**
+ * 표에서 타입 생성 — **CSV·JSON 하나로 타입과 데이터가 함께 생긴다.**
  *
  * 파일 가져오기는 타입이 먼저 있어야 했다. 여기서는 열을 보고 정의를 제안하고(숫자·날짜·참/거짓·
  * 고를 값·주소·글자), 사람이 역할과 종류를 고친 뒤 **정의를 만들고 행을 넣는다** — 둘 다 기존
@@ -165,7 +165,7 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
       <div className="flex flex-wrap items-center justify-between gap-2">
         <h2 className="flex items-center gap-2 text-base font-semibold">
           <Table2 className="size-4" />
-          표에서 타입 만들기
+          표에서 타입 생성
         </h2>
         <input
           ref={fileRef}
@@ -193,10 +193,10 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
         뒤 적용하면 <b>타입이 생기고 행이 그 타입에 들어갑니다.</b> 애매한 열은 글자로 둡니다.
         나중에 좁히는 것은 쉽고, 잘못 좁힌 것을 되돌리는 것은 어렵습니다.
       </p>
-      {/* 붙여 넣기 — 엑셀에서 복사하면 탭으로 온다. 사내 DRM 이 저장을 잠그면 이것이 유일한 길이다. */}
+      {/* 붙여넣기 — 엑셀에서 복사하면 탭으로 온다. 사내 DRM 이 저장을 잠그면 이것이 유일한 길이다. */}
       <details className="text-sm">
         <summary className="text-muted-foreground cursor-pointer">
-          파일 대신 붙여 넣기 (엑셀에서 복사 · CSV · JSON)
+          파일 대신 붙여넣기 (엑셀에서 복사 · CSV · JSON)
         </summary>
         <div className="mt-2 space-y-2">
           <Textarea
@@ -407,7 +407,7 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
                 onClick={apply}
                 disabled={busy || !ready || !schemaPlan || schemaPlan.errors.length > 0}
               >
-                타입 만들고 {result.rows}행 넣기
+                타입 만들고 {result.rows}행 추가
               </Button>
             </div>
           </div>
@@ -435,7 +435,7 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
               <p className="font-medium">
                 {rowsPlan.applied
                   ? `행을 넣었습니다 — 새로 ${rowsPlan.counts.create}, 고침 ${rowsPlan.counts.update}`
-                  : `행은 안 들어갔습니다 — 오류 ${rowsPlan.counts.error}개. 정의는 이미 생겼으니, 파일을 고쳐 「파일로 넣기」 로 넣으세요.`}
+                  : `행은 안 들어갔습니다 — 오류 ${rowsPlan.counts.error}개. 정의는 이미 생겼으니, 파일을 고쳐 「파일 가져오기」 로 넣으세요.`}
               </p>
               {rowsPlan.errors.map((one) => (
                 <p key={one} className="text-destructive text-xs">

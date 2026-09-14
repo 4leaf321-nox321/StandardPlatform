@@ -1,5 +1,5 @@
 /**
- * 조건 거르기 — **칸 안에서는 OR, 칸끼리는 AND.**
+ * 조건 필터 — **칸 안에서는 OR, 칸끼리는 AND.**
  *
  * 걸린 조건은 칩으로 서고(「무게 ≥ 10」), 「조건 추가」 는 칸 → 연산 → 값 세 단계다.
  * 연산은 칸의 종류가 정한다(숫자·날짜는 범위, 선택은 「그 중 하나」, 모두 「비어 있음」).
@@ -204,7 +204,7 @@ export function ConditionBar({
           <button
             type="button"
             className="hover:bg-background rounded-full p-0.5"
-            aria-label={`조건 지우기: ${describe(one)}`}
+            aria-label={`조건 삭제: ${describe(one)}`}
             onClick={() => onChange(conditions.filter((_, i) => i !== index))}
           >
             <X className="size-3" />
@@ -235,7 +235,7 @@ export function ConditionBar({
           className="text-muted-foreground text-xs underline"
           onClick={() => onChange([])}
         >
-          전부 지우기
+          전부 삭제
         </button>
       )}
     </div>
@@ -434,8 +434,8 @@ function RefValueInput({
         onQueryChange={found.setQuery}
         value={value || null}
         onChange={onValue}
-        placeholder="고르기"
-        searchPlaceholder="이름·식별자로 찾기"
+        placeholder="선택"
+        searchPlaceholder="이름·식별자로 검색"
         emptyText={found.failed ? '읽지 못했습니다' : '맞는 객체가 없습니다'}
       />
     )
@@ -451,7 +451,7 @@ function RefValueInput({
     <div className="space-y-1">
       <Input
         value={found.query}
-        placeholder="이름·식별자로 찾기"
+        placeholder="이름·식별자로 검색"
         className="h-8 text-xs"
         onChange={(event) => found.setQuery(event.target.value)}
       />
@@ -533,7 +533,7 @@ function PlainValueInput({ field, multi, value, picked, onValue, onPicked }: Val
     return (
       <Select value={value} onValueChange={onValue}>
         <SelectTrigger size="sm" className="w-full">
-          <SelectValue placeholder="고르기" />
+          <SelectValue placeholder="선택" />
         </SelectTrigger>
         <SelectContent>
           {choices.map((one) => (

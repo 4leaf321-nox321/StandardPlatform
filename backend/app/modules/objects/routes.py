@@ -30,6 +30,7 @@ from app.modules.objects import (
     links,
     paths,
     quality,
+    refedges,
     rollup,
     system,
     watches,
@@ -108,6 +109,7 @@ from app.modules.objects.services import (
     require_refs_exist,
     require_unique_properties,
 )
+from app.modules.ontology import managed
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.schemas import PropertyDefOut
 from app.modules.ontology.services import (
@@ -139,6 +141,11 @@ def _type(db: Session, slug: str) -> ObjectType:
     if row is None:
         raise NotFound(code("OBJECTS", 10), f"타입을 찾을 수 없습니다: {slug}")
     return row
+
+
+#: 상세의 「관련 객체」 에 참조 칸으로 실을 상한 — 프로젝트 하나를 5천 개 과제가 가리키면 그
+#: 목록은 읽을 수 없다. 넘치면 목록 화면에서 조건으로 본다.
+REF_RELATED_LIMIT = 200
 
 
 def _not_system(object_type: ObjectType, what: str) -> None:
@@ -1153,6 +1160,7 @@ def bulk_edit(
     """
     object_type = _type(db, type_slug)
     _not_bulk_editable(object_type)
+    managed.require_objects_editable(object_type)
     ids = bulkedit.ids_of(payload.ids)
     rows = _editable_rows(db, user, object_type, ids)
     planned = bulkedit.plan(
@@ -1190,7 +1198,7 @@ def bulk_edit(
             field_name=payload.field,
             field_label=planned.field_label,
             batch_id=batch_id,
-            reason=f"여럿 골라 고치기 — {planned.field_label}",
+            reason=f"일괄 수정 — {planned.field_label}",
         )
         db.commit()
         planned.applied = True
@@ -1216,6 +1224,7 @@ def bulk_edit_undo(
     """
     object_type = _type(db, type_slug)
     _not_bulk_editable(object_type)
+    managed.require_objects_editable(object_type)
     entries = bulkedit.batch_entries(db, batch_id)
     rows = _editable_rows(
         db, user, object_type, [one.target_id for one in entries if one.target_id]
@@ -1240,7 +1249,7 @@ def bulk_edit_undo(
             field_name=undo.field_name,
             field_label=planned.field_label,
             batch_id=new_batch,
-            reason=f"여럿 고치기 되돌림 — {planned.field_label}",
+            reason=f"일괄 수정 복원 — {planned.field_label}",
         )
         db.commit()
         planned.applied = True
@@ -1546,7 +1555,8 @@ def object_profile(
         properties_schema=[PropertyDefOut.model_validate(p) for p in defs],
         attachments=[AttachmentBrief.model_validate(a) for a in attachments],
         related=_related(db, user, row),
-        can_edit=_can_edit(db, user, row),
+        can_edit=_can_edit(db, user, row) and not managed.owner_of(object_type),
+        can_link=_can_edit(db, user, row),
         watching=watches.watching(db, object_id=row.id, user_id=user.id),
         watcher_count=watches.counts(db, [row.id]).get(row.id, 0),
     )
@@ -1565,6 +1575,7 @@ def create_object(
             code("OBJECTS", 13), f"{object_type.label}은 지금 쓰지 않는 타입입니다."
         )
     _not_system(object_type, "만들지")
+    managed.require_objects_editable(object_type, what="만들지")
 
     owner_workspace_id = resolve_owner_workspace(
         db, user, payload.workspace_slug, what="객체", code_value=code("OBJECTS", 15)
@@ -1623,6 +1634,7 @@ def update_object(
         db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 16)
     )
 
+    managed.require_objects_editable(object_type)
     before = audit_state(row)
 
     if payload.key is not None:
@@ -1685,6 +1697,7 @@ def set_aliases(
     거절한다** — 어느 객체인지 말하며."""
     object_type = _type(db, type_slug)
     _not_system(object_type, "별칭을 붙이지")
+    managed.require_objects_editable(object_type, what="별칭을 붙이지")
     row = _visible(db, user, object_type, object_id)
     require_owner_edit(
         db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 12)
@@ -1826,6 +1839,7 @@ def restore_object(
     require_owner_edit(
         db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 16)
     )
+    managed.require_objects_editable(object_type, what="되돌리지")
     history.restore(db, user, row, object_type, payload.entry_id)
     db.refresh(row)
     defs = properties_of(db, object_type.id)
@@ -1852,6 +1866,7 @@ def delete_object(
     require_owner_edit(
         db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 17)
     )
+    managed.require_objects_editable(object_type, what="지우지")
     if mode == "detach":
         lifecycle.delete_detaching(db, user, row, object_type)
     else:
@@ -1873,6 +1888,7 @@ def merge_object(
     require_owner_edit(
         db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 17)
     )
+    managed.require_objects_editable(object_type, what="합치지")
     target = _visible(db, user, object_type, payload.into)
     result = lifecycle.merge_into(db, user, row, object_type, target)
     return MergeResultOut(into=target.id, **result)
@@ -1901,7 +1917,7 @@ def _related(db: Session, user: User, row: ObjectInstance) -> list[RelatedObject
         )
     )
     if not edges:
-        return _related_links(db, user, row.id)
+        return _related_refs(db, user, row) + _related_links(db, user, row.id)
 
     other_ids = {
         (edge.dst_object_id if edge.src_object_id == row.id else edge.src_object_id)
@@ -1954,7 +1970,50 @@ def _related(db: Session, user: User, row: ObjectInstance) -> list[RelatedObject
                 created_at=edge.created_at,
             )
         )
-    return out + _related_links(db, user, row.id)
+    return out + _related_refs(db, user, row) + _related_links(db, user, row.id)
+
+
+def _related_refs(db: Session, user: User, row: ObjectInstance) -> list[RelatedObjectOut]:
+    """참조 칸으로 이어진 것 — **칸에 저장한 관계도 관련 객체다.** 가리키는 것(칸 값)과 나를
+    가리키는 것(다른 객체의 칸 값) 둘 다. 이 줄은 관계 줄이 아니라 끊는 단추가 없다 — 칸을
+    비우거나 상대 객체의 칸을 고친다."""
+    kinds = refedges.kinds(db)
+    found = refedges.neighbor_edges(db, frontier=[row.id], user=user, fanout=REF_RELATED_LIMIT)
+    if not found:
+        return []
+    other_ids = {edge.dst if edge.src == row.id else edge.src for edge in found}
+    others = {
+        one.id: one
+        for one in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(other_ids)))
+    }
+    types = {one.id: one for one in db.scalars(select(ObjectType))}
+    out: list[RelatedObjectOut] = []
+    for edge in found:
+        outgoing = edge.src == row.id
+        other = others.get(edge.dst if outgoing else edge.src)
+        kind = kinds.get(edge.relation)
+        if other is None or kind is None:
+            continue
+        object_type = types.get(other.type_id)
+        out.append(
+            RelatedObjectOut(
+                relation_id=edge.id,
+                relation=edge.relation,
+                label=kind.label if outgoing else kind.inverse_label,
+                outgoing=outgoing,
+                object_id=other.id,
+                object_label=other.label,
+                object_key=other.key,
+                object_type_slug=object_type.slug if object_type else "",
+                object_type_label=object_type.label if object_type else "알 수 없음",
+                properties={},
+                evidence_note="",
+                created_at=other.created_at,
+                stored_as="field",
+                field_key=kind.key,
+            )
+        )
+    return out
 
 
 def _related_links(db: Session, user: User, mine: uuid.UUID) -> list[RelatedObjectOut]:
@@ -2020,6 +2079,7 @@ def add_relation(
     )
 
     kind = rel.relation_type(db, payload.relation)
+    managed.require_relation_editable(kind)
     dst_end = system.find_end(db, user, payload.dst_object_id, allowed=kind.dst_type_slugs)
     if dst_end is None:
         raise NotFound(code("OBJECTS", 28), "이을 객체를 찾을 수 없습니다.")
@@ -2116,6 +2176,7 @@ def update_relation(
     )
     link = _link(db, relation_id, row)
     if link is not None:
+        managed.require_relation_editable(rel.relation_type(db, link.relation))
         if payload.evidence_note is not None:
             link.evidence_note = payload.evidence_note
         if payload.properties is not None:
@@ -2143,6 +2204,7 @@ def update_relation(
         db.commit()
         return _link_out(db, user, row.id, link.id)
     edge = _edge(db, relation_id, row)
+    managed.require_relation_editable(rel.relation_type(db, edge.relation))
 
     if payload.evidence_note is not None:
         edge.evidence_note = payload.evidence_note
@@ -2194,6 +2256,7 @@ def remove_relation(
     )
     link = _link(db, relation_id, row)
     if link is not None:
+        managed.require_relation_editable(rel.relation_type(db, link.relation))
         src_label, dst_label = _link_labels(db, user, link)
         links.remove(
             db,
@@ -2206,6 +2269,7 @@ def remove_relation(
         db.commit()
         return
     edge = _edge(db, relation_id, row)
+    managed.require_relation_editable(rel.relation_type(db, edge.relation))
 
     audit.record(
         db,
@@ -2293,6 +2357,7 @@ def set_years(
     require_owner_edit(
         db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 34)
     )
+    managed.require_objects_editable(object_type, what="연도를 배정하지")
     if object_type.temporal_kind != "yearly":
         raise Conflict(
             code("OBJECTS", 35),

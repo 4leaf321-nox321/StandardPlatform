@@ -304,9 +304,9 @@ describe('지식 그래프', () => {
     )
     // 잘렸다는 말 — 안 하면 그림은 「이게 전부」 로 읽힌다.
     expect(screen.getByText(/일부만 실었습니다/)).toBeInTheDocument()
-    // 시작점이 골라져 있고, 화면에 없는 관계의 수(5 - 2)를 근거로 「펼치기」 가 선다.
+    // 시작점이 골라져 있고, 화면에 없는 관계의 수(5 - 2)를 근거로 「확장」 가 선다.
     expect(screen.getByText('화면에 없는 것 3')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '여기서 펼치기 (+3)' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: '여기서 확장 (+3)' })).toBeEnabled()
     // 상한은 서버가 준 값 그대로 적는다.
     expect(screen.getByText(/노드당 이웃 2개 · 노드 200개까지/)).toBeInTheDocument()
   })
@@ -345,7 +345,7 @@ describe('지식 그래프', () => {
     })
     await mount('/graph?focus=hub')
     await waitFor(() => expect(screen.getByText(/노드 3 · 관계 2/)).toBeInTheDocument())
-    await userEvent.click(screen.getByRole('button', { name: '여기서 펼치기 (+3)' }))
+    await userEvent.click(screen.getByRole('button', { name: '여기서 확장 (+3)' }))
     // 3 + 1 노드, 2 + 1 관계 — 앞서 든 잎A·잎B 가 사라지지 않는다.
     await waitFor(() => expect(screen.getByText(/노드 4 · 관계 3/)).toBeInTheDocument())
     expect(graphApi.neighborhood).toHaveBeenLastCalledWith(
@@ -375,11 +375,11 @@ describe('지식 그래프', () => {
     graphApi.subgraph.mockResolvedValue(SUBGRAPH)
     await mount()
     await waitFor(() => expect(screen.getByText(/타입 2 · 관계 종류 2/)).toBeInTheDocument())
-    // 캔버스가 없으니(happy-dom) 노드를 누를 수 없다 — 훑기 쪽으로 같은 길을 밟는다.
+    // 캔버스가 없으니(happy-dom) 노드를 누를 수 없다 — 목록 쪽으로 같은 길을 밟는다.
     objectApi.list.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 })
     await userEvent.click(screen.getByRole('tab', { name: '탐색' }))
     await userEvent.click(await screen.findByRole('button', { name: /^부품 7$/ }))
-    await userEvent.click(screen.getByRole('button', { name: '부품 전부 그리기 (7)' }))
+    await userEvent.click(screen.getByRole('button', { name: '부품 전체 표시 (7)' }))
     await waitFor(() => expect(screen.getByText(/7개 중 1–2/)).toBeInTheDocument())
   })
 
@@ -412,7 +412,7 @@ describe('지식 그래프', () => {
     await userEvent.click(screen.getByRole('tab', { name: '탐색' }))
     await userEvent.click(await screen.findByRole('button', { name: /^부품 7$/ }))
     await userEvent.click(screen.getByRole('button', { name: /^공급사 2$/ }))
-    await userEvent.click(screen.getByRole('button', { name: '고른 2개 타입 전부 그리기 (9)' }))
+    await userEvent.click(screen.getByRole('button', { name: '고른 2개 타입 전체 표시 (9)' }))
     await waitFor(() =>
       expect(graphApi.subgraph).toHaveBeenCalledWith(
         expect.objectContaining({ types: ['part', 'vendor'], offset: 0 }),
@@ -425,6 +425,30 @@ describe('지식 그래프', () => {
       expect(graphApi.subgraph).toHaveBeenCalledWith(
         expect.objectContaining({ types: ['part', 'vendor'] }),
       ),
+    )
+  })
+
+  it('타입을 여럿 고르면 훑을 타입을 그 사이에서 고른다', async () => {
+    // 마지막에 고른 타입에 묶이면 앞서 고른 타입은 훑을 길이 없다.
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    objectApi.list.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 })
+    await mount()
+    await userEvent.click(screen.getByRole('tab', { name: '탐색' }))
+    await userEvent.click(await screen.findByRole('button', { name: /^부품 7$/ }))
+    await userEvent.click(screen.getByRole('button', { name: /^공급사 2$/ }))
+    await waitFor(() =>
+      expect(objectApi.list).toHaveBeenLastCalledWith('vendor', { limit: 20, offset: 0 }),
+    )
+    await userEvent.click(screen.getByRole('tab', { name: '부품' }))
+    await waitFor(() =>
+      expect(objectApi.list).toHaveBeenLastCalledWith('part', { limit: 20, offset: 0 }),
+    )
+    // 칩을 빼도 보던 타입이 아직 고른 채면 그대로, 새로 고른 칩은 그것을 훑는다.
+    await userEvent.click(screen.getByRole('button', { name: /^공급사 2$/ }))
+    expect(objectApi.list).toHaveBeenLastCalledWith('part', { limit: 20, offset: 0 })
+    await userEvent.click(screen.getByRole('button', { name: /^공급사 2$/ }))
+    await waitFor(() =>
+      expect(screen.getByRole('tab', { name: '공급사' })).toHaveAttribute('aria-selected', 'true'),
     )
   })
 
@@ -459,14 +483,14 @@ describe('지식 그래프', () => {
     )
 
     // 입력 칸 안에서는 단축키가 안 듣는다 — 검색어에 「r」 을 치는데 새로고침되면 버그다.
-    await userEvent.click(screen.getByPlaceholderText(/그림 안에서 찾기/))
+    await userEvent.click(screen.getByPlaceholderText(/그림 안에서 검색/))
     await userEvent.keyboard('r')
     expect(graphApi.neighborhood).toHaveBeenCalledTimes(2)
 
     // ESC — 검색 칸을 비우고 나온 뒤, 한 번 더 누르면 선택이 풀린다.
     await userEvent.keyboard('{Escape}')
     await waitFor(() =>
-      expect(screen.queryByRole('button', { name: /여기서 펼치기/ })).not.toBeInTheDocument(),
+      expect(screen.queryByRole('button', { name: /여기서 확장/ })).not.toBeInTheDocument(),
     )
   })
 
@@ -490,7 +514,7 @@ describe('지식 그래프', () => {
   })
 })
 
-describe('상한 고르기', () => {
+describe('상한 선택', () => {
   it('단계·이웃·노드 수를 주소에 담고 그대로 묻는다', async () => {
     // **주소가 곧 상태다.** 크게 펼친 그림을 복사해 보내면 상대도 같은 것을 본다.
     graphApi.overview.mockResolvedValue(OVERVIEW)

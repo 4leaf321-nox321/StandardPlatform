@@ -1,5 +1,5 @@
 /**
- * 메타모델 API — **읽기는 누구나, 고치기는 시스템 관리자.**
+ * 메타모델 API — **읽기는 누구나, 수정은 시스템 관리자.**
  *
  * 이 응답이 화면의 모양을 정한다. 타입 정의를 못 읽으면 폼을 그릴 수 없으므로
  * 읽기는 열려 있다.
@@ -32,6 +32,8 @@ export interface PropertyDef {
   multi: boolean
   enum_options: string[] | null
   ref_type_slug: string | null
+  /** 참조 칸의 역방향 이름 — 「과제」 칸을 과제 쪽에서 읽으면 「개발모델」. 참조 칸은 칸에 저장한 관계다. */
+  inverse_label?: string
   /** `number` 의 아래·위 끝. **없으면 두께가 -5mm 여도 통과한다.** */
   min_value: number | null
   max_value: number | null
@@ -100,6 +102,8 @@ export interface ObjectType {
    */
   system_source: string
   entry_policy: 'open' | 'closed'
+  /** 누가 관리하나 — 빈 값이면 이 설치, `hub` 면 허브가 내려준 것(여기서 못 고친다). */
+  managed_by?: string
   key_policy: 'none' | 'optional' | 'required'
   key_scope: 'global' | 'workspace'
   temporal_kind: 'evergreen' | 'lifecycle' | 'yearly' | 'derived'
@@ -119,6 +123,17 @@ export interface ObjectType {
 
 export type Cardinality = 'one_to_one' | 'one_to_many' | 'many_to_one' | 'many_to_many'
 
+export interface ReferenceEdge {
+  /** `ref:<타입>.<칸>` — 그래프 · 이웃 필터가 관계 slug 와 같은 자리에 쓴다. */
+  slug: string
+  label: string
+  inverse_label: string
+  src_type_slug: string
+  dst_type_slug: string
+  field_key: string
+  multi: boolean
+}
+
 export interface RelationType {
   id: string
   slug: string
@@ -135,6 +150,8 @@ export interface RelationType {
   dst_type_slugs: string[] | null
   sort_order: number
   is_active: boolean
+  /** 누가 관리하나 — `hub` 면 허브가 내려준 관계 종류(여기서 그 줄을 잇거나 끊지 않는다). */
+  managed_by?: string
 }
 
 /** 폼·상세가 쓰는 묶음 스펙. 둘이 같은 모양인 이유는 **같은 묶음을 쓰기 때문**이다. */
@@ -170,6 +187,8 @@ export interface OntologySchema {
   groups: NavGroupRow[]
   types: (ObjectType & { properties: PropertyDef[] })[]
   relation_types: RelationType[]
+  /** 참조 칸을 관계 모양으로 — 타입 사이의 길은 이것과 relation_types 를 합친 것. */
+  reference_edges?: ReferenceEdge[]
   data_types: DataType[]
   /** 투영 타입이 비출 수 있는 원 표들 — 이 설치가 등록한 것만. */
   system_sources: SystemSource[]
@@ -284,7 +303,7 @@ export interface ResetPlan {
   total: number
   /** 적용하려면 이 문구를 그대로 보내야 한다. */
   confirm_phrase: string
-  /** 비우기 직전에 남긴 정의. **정의는 여기서 되돌린다 — 데이터는 안 돌아온다.** */
+  /** 초기화 직전에 남긴 정의. **정의는 여기서 되돌린다 — 데이터는 안 돌아온다.** */
   snapshot_id: string | null
 }
 
@@ -320,7 +339,7 @@ export const ontologyApi = {
     api.post<PropertyDef>(`/ontology/types/${slug}/properties`, body),
   updateProperty: (slug: string, key: string, body: Record<string, unknown>) =>
     api.patch<PropertyDef>(`/ontology/types/${slug}/properties/${key}`, body),
-  /** **지우기 전에 무엇이 사라지는지.** 확인 창이 이것을 읽어 말한다. */
+  /** **삭제 전에 무엇이 사라지는지.** 확인 창이 이것을 읽어 말한다. */
   /** 고를 값 이름을 바꾸면서 저장된 값도 함께 — `apply=false` 면 몇 개인지만. */
   renameOption: (slug: string, key: string, body: { from: string; to: string; apply: boolean }) =>
     api.post<RenameOptionOut>(`/ontology/types/${slug}/properties/${key}/rename-option`, body),

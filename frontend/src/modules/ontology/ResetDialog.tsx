@@ -1,5 +1,5 @@
 /**
- * 온톨로지 통째로 비우기 — **되돌릴 수 없는 일 앞의 세 겹.**
+ * 온톨로지 통째로 초기화 — **되돌릴 수 없는 일 앞의 세 겹.**
  *
  * 정의를 시험 삼아 몇 번 세워 보는 동안 타입은 금세 열댓 개가 되고, 그것을 하나씩
  * 지우는 일은 순서까지 맞춰야 해서(객체 → 관계 → 타입) 사람이 포기한다. 그래서 한
@@ -143,7 +143,7 @@ export function ResetDialog({ onClose, onDone }: Props) {
           </Button>
           {!done && shown.length > 0 && (
             <Button variant="destructive" disabled={!ready || busy} onClick={run}>
-              {busy ? '비우는 중…' : `${plan?.total.toLocaleString()}건 지우기`}
+              {busy ? '비우는 중…' : `${plan?.total.toLocaleString()}건 삭제`}
             </Button>
           )}
         </DialogFooter>

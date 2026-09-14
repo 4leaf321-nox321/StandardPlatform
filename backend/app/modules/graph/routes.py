@@ -33,7 +33,7 @@ from app.modules.graph.schemas import (
     TypeEdgeOut,
     TypeNodeOut,
 )
-from app.modules.objects import graph, system
+from app.modules.objects import graph, refedges, system
 from app.modules.objects.models import ObjectAlias, ObjectInstance
 from app.modules.ontology.models import NavGroup, ObjectType, RelationType
 from app.modules.workspaces.models import Workspace
@@ -58,11 +58,13 @@ MAX_DEPTH = 6
 DEFAULT_DEPTH = 1
 MAX_FANOUT = 500
 DEFAULT_FANOUT = 30
-MAX_NODES = 3000
+#: 「고른 타입 전부」 를 한 그림에 두려는 사람이 있다(기준정보 계층 1만여 개). 화면이
+#: 느려지는 것은 화면이 미리 말하고, 여기서는 브라우저가 서지 않는 선에서 끊는다.
+MAX_NODES = 20000
 DEFAULT_NODES = 300
-#: 노드 3,000개 사이의 선은 이론상 450만 개다. 그만큼은 아무도 못 읽고 브라우저가
+#: 노드 2만 개 사이의 선은 이론상 2억 개다. 그만큼은 아무도 못 읽고 브라우저가
 #: 먼저 멈춘다 — 여기서 끊고, 끊었다는 말은 화면이 한다.
-MAX_EDGES = 20000
+MAX_EDGES = 60000
 SEARCH_LIMIT = 20
 
 
@@ -76,7 +78,17 @@ def _workspace_slugs(db: Session) -> dict[uuid.UUID, str]:
     return {row.id: row.slug for row in db.scalars(select(Workspace))}
 
 
-def _edge_out(edge: graph.Edge, kinds: dict[str, RelationType]) -> EdgeOut:
+Kind = RelationType | refedges.RefKind
+
+
+def _kinds(db: Session) -> dict[str, Kind]:
+    """관계 종류와 참조 칸을 **한 목록으로** — 선의 라벨은 둘 다 여기서 읽는다."""
+    out: dict[str, Kind] = {row.slug: row for row in db.scalars(select(RelationType))}
+    out.update(refedges.kinds(db))
+    return out
+
+
+def _edge_out(edge: graph.Edge | refedges.RefEdge, kinds: dict[str, Kind]) -> EdgeOut:
     kind = kinds.get(edge.relation)
     return EdgeOut(
         id=edge.id,
@@ -165,6 +177,8 @@ def _degrees(
         db, ids=ids, user=user, systems=list(systems)
     ).items():
         out[node_id] = out.get(node_id, 0) + n
+    for node_id, n in refedges.degree_counts(db, ids=ids, user=user).items():
+        out[node_id] = out.get(node_id, 0) + n
     return out
 
 
@@ -177,7 +191,7 @@ def overview(user: User = Depends(current_user), db: Session = Depends(get_db)) 
     """
     types = list(db.scalars(select(ObjectType).where(ObjectType.is_active.is_(True))))
     groups = {row.id: row.slug for row in db.scalars(select(NavGroup))}
-    kinds = {row.slug: row for row in db.scalars(select(RelationType))}
+    kinds = _kinds(db)
     counts = graph.object_counts_by_type(db, user=user)
     by_id = {row.id: row for row in types}
     by_slug = {row.slug: row for row in types}
@@ -219,6 +233,25 @@ def overview(user: User = Depends(current_user), db: Session = Depends(get_db)) 
                 count=found.count,
             )
         )
+    # 참조 칸도 선이다 — 「개발모델의 과제」 는 칸에 저장한 관계라, 여기 안 그리면 계층이
+    # 안 보인다.
+    for ref in refedges.type_edge_counts(db, user=user):
+        src = by_id.get(ref.src_type_id)
+        dst = by_id.get(ref.dst_type_id)
+        kind = kinds.get(ref.relation)
+        if src is None or dst is None or kind is None:
+            continue
+        seen.add((ref.relation, src.slug, dst.slug))
+        edges.append(
+            TypeEdgeOut(
+                relation=ref.relation,
+                label=kind.label,
+                directed=True,
+                src_type=src.slug,
+                dst_type=dst.slug,
+                count=ref.count,
+            )
+        )
     # 원 표와 이은 선도 굵기에 든다 — 안 그러면 「사용 부서」 선이 정의만 있는 점선으로 보인다.
     for link in graph.type_link_counts(db, user=user, systems=list(systems)):
         if link.src_type_slug not in by_slug or link.dst_type_slug not in by_slug:
@@ -236,7 +269,10 @@ def overview(user: User = Depends(current_user), db: Session = Depends(get_db)) 
             )
         )
     active_slugs = {row.slug for row in types}
-    for kind in sorted(kinds.values(), key=lambda one: (one.sort_order, one.slug)):
+    for kind in sorted(
+        (one for one in kinds.values() if isinstance(one, RelationType)),
+        key=lambda one: (one.sort_order, one.slug),
+    ):
         if not kind.is_active or not kind.src_type_slugs or not kind.dst_type_slugs:
             continue
         for src_slug in kind.src_type_slugs:
@@ -384,7 +420,7 @@ def neighborhood(
 
     seen: set[uuid.UUID] = {focus}
     order: list[uuid.UUID] = [focus]
-    edges: dict[uuid.UUID, graph.Edge] = {}
+    edges: dict[uuid.UUID, graph.Edge | refedges.RefEdge] = {}
     frontier = [focus]
     truncated = False
 
@@ -392,21 +428,32 @@ def neighborhood(
         if not frontier:
             break
         frontier_set = set(frontier)
-        found = graph.neighbor_edges(
-            db,
-            frontier=frontier,
-            user=user,
-            fanout=fanout_n,
-            relations=wanted_relations,
-            type_ids=type_ids,
-        ) + graph.neighbor_link_edges(
-            db,
-            frontier=frontier,
-            user=user,
-            fanout=fanout_n,
-            systems=list(systems),
-            relations=wanted_relations,
-            type_slugs=type_slugs,
+        found = (
+            graph.neighbor_edges(
+                db,
+                frontier=frontier,
+                user=user,
+                fanout=fanout_n,
+                relations=wanted_relations,
+                type_ids=type_ids,
+            )
+            + graph.neighbor_link_edges(
+                db,
+                frontier=frontier,
+                user=user,
+                fanout=fanout_n,
+                systems=list(systems),
+                relations=wanted_relations,
+                type_slugs=type_slugs,
+            )
+            + refedges.neighbor_edges(
+                db,
+                frontier=frontier,
+                user=user,
+                fanout=fanout_n,
+                relations=wanted_relations,
+                type_ids=type_ids,
+            )
         )
         next_frontier: list[uuid.UUID] = []
         for edge in found:
@@ -423,9 +470,11 @@ def neighborhood(
 
     # 이미 실린 노드끼리의 선을 마저 긋는다 — fanout 에 밀린 관계도 양 끝이 화면에
     # 있으면 그려야 「관계없음」 으로 안 읽힌다.
-    for edge in graph.induced_edges(
-        db, ids=order, limit=MAX_EDGES, relations=wanted_relations
-    ) + graph.induced_link_edges(db, ids=order, limit=MAX_EDGES, relations=wanted_relations):
+    for edge in (
+        graph.induced_edges(db, ids=order, limit=MAX_EDGES, relations=wanted_relations)
+        + graph.induced_link_edges(db, ids=order, limit=MAX_EDGES, relations=wanted_relations)
+        + refedges.induced_edges(db, ids=order, limit=MAX_EDGES, relations=wanted_relations)
+    ):
         edges[edge.id] = edge
     if len(edges) > MAX_EDGES:
         truncated = True
@@ -447,10 +496,13 @@ def neighborhood(
         systems,
         degrees,
         shown,
-        _slug_of(list(edges.values()), {focus: start_type.slug} if start is None else {}),
+        _slug_of(
+            [e for e in edges.values() if isinstance(e, graph.Edge)],
+            {focus: start_type.slug} if start is None else {},
+        ),
     )
 
-    kinds = {row.slug: row for row in db.scalars(select(RelationType))}
+    kinds = _kinds(db)
     workspaces = _workspace_slugs(db)
     nodes: list[NodeOut] = []
     for node_id in order:
@@ -550,15 +602,23 @@ def subgraph(
     total = int(
         db.scalar(select(func.count()).select_from(ObjectInstance).where(*conditions)) or 0
     )
-    rows = list(
-        db.scalars(
-            select(ObjectInstance)
-            .where(*conditions)
-            .order_by(ObjectInstance.label, ObjectInstance.id)
-            .offset(offset)
-            .limit(node_limit)
+    # **쪽을 타입마다 나눠 채운다.** 이름순으로 통째로 뜨면 한 타입이 첫 쪽을 다 차지하고
+    # (「SM-…」 이 한글보다 앞), 다른 타입이 없는 그림은 선이 하나도 없어 「관계없음」 으로
+    # 읽힌다.
+    share = max(1, node_limit // len(type_ids))
+    per_type_offset = offset // len(type_ids)
+    rows: list[ObjectInstance] = []
+    for type_id in type_ids:
+        rows += list(
+            db.scalars(
+                select(ObjectInstance)
+                .where(*conditions, ObjectInstance.type_id == type_id)
+                .order_by(ObjectInstance.label, ObjectInstance.id)
+                .offset(per_type_offset)
+                .limit(share)
+            )
         )
-    )
+    rows = rows[:node_limit]
     ids = [row.id for row in rows]
     # 함께 고른 원 표 타입의 행은 뒤에 붙는다 — 쪽은 객체 쪽 기준이다. **이 쪽의 객체와
     # 이어진 행이 먼저** — 「툴 + 부서」 를 골랐으면 그 툴을 쓰는 부서가 상한 안에 들어야
@@ -573,9 +633,11 @@ def subgraph(
     candidates.sort(key=lambda pair: pair[1].id not in linked)
     extra_refs = candidates[: max(0, node_limit - len(ids))]
     ids += [ref.id for _t, ref in extra_refs]
-    edges = graph.induced_edges(
-        db, ids=ids, limit=MAX_EDGES, relations=wanted_relations
-    ) + graph.induced_link_edges(db, ids=ids, limit=MAX_EDGES, relations=wanted_relations)
+    edges: list[graph.Edge | refedges.RefEdge] = [
+        *graph.induced_edges(db, ids=ids, limit=MAX_EDGES, relations=wanted_relations),
+        *graph.induced_link_edges(db, ids=ids, limit=MAX_EDGES, relations=wanted_relations),
+        *refedges.induced_edges(db, ids=ids, limit=MAX_EDGES, relations=wanted_relations),
+    ]
     degrees = _degrees(db, ids, user, systems)
     shown: dict[uuid.UUID, int] = {}
     for edge in edges:
@@ -583,7 +645,7 @@ def subgraph(
         if edge.dst != edge.src:
             shown[edge.dst] = shown.get(edge.dst, 0) + 1
 
-    kinds = {row.slug: row for row in db.scalars(select(RelationType))}
+    kinds = _kinds(db)
     workspaces = _workspace_slugs(db)
     nodes: list[NodeOut] = []
     for system_type, ref in extra_refs:
@@ -656,7 +718,7 @@ def _system_subgraph(
         shown[edge.src] = shown.get(edge.src, 0) + 1
         if edge.dst != edge.src:
             shown[edge.dst] = shown.get(edge.dst, 0) + 1
-    kinds = {row.slug: row for row in db.scalars(select(RelationType))}
+    kinds = _kinds(db)
     nodes = [
         NodeOut(
             id=ref.id,

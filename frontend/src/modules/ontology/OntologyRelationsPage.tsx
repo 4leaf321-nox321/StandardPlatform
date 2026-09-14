@@ -46,15 +46,14 @@ export default function OntologyRelationsPage() {
   return (
     <div className="space-y-4">
       <p className="text-muted-foreground text-sm">
-        객체들이 <b>어떻게 엮이는지</b>를 정합니다. 여기서 정한 의미(방향·재귀·개수 제약·
-        허용 타입)를 화면과 MCP 가 함께 읽습니다 — <b>코드에 숨겨 두면 둘 다 그 뜻을 알 수
-        없습니다.</b>
+        객체들이 <b>어떻게 엮이는지</b>를 정합니다. 여기서 정한 의미(방향·재귀·개수 제약· 허용
+        타입)를 화면과 MCP 가 함께 읽습니다 — <b>코드에 숨겨 두면 둘 다 그 뜻을 알 수 없습니다.</b>
       </p>
 
       <div className="flex justify-end">
         <Button size="sm" onClick={() => setCreating(true)}>
           <Plus className="mr-1 size-4" />
-          관계 종류 만들기
+          관계 종류 생성
         </Button>
       </div>
 
@@ -80,8 +79,8 @@ export default function OntologyRelationsPage() {
                 {relations.map((row) => (
                   <TableRow
                     key={row.slug}
-                    className="cursor-pointer"
-                    onClick={() => setEditing(row.slug)}
+                    className={row.managed_by ? undefined : 'cursor-pointer'}
+                    onClick={() => !row.managed_by && setEditing(row.slug)}
                   >
                     <TableCell className="font-medium">
                       <span className="flex items-center gap-1.5">
@@ -97,6 +96,9 @@ export default function OntologyRelationsPage() {
                       </span>
                       {!row.is_active && (
                         <span className="text-muted-foreground ml-2 text-xs">사용 안 함</span>
+                      )}
+                      {row.managed_by && (
+                        <span className="ml-2 rounded border px-1.5 text-xs">허브 관리</span>
                       )}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{row.slug}</TableCell>
@@ -119,8 +121,8 @@ export default function OntologyRelationsPage() {
             </Table>
           </div>
           <p className="text-muted-foreground text-xs">
-            행을 누르면 고치거나 지웁니다. <b>「재귀」 인 관계라야</b> 목록 왼쪽에 트리를
-            세울 수 있습니다.
+            행을 누르면 고치거나 지웁니다. <b>「재귀」 인 관계라야</b> 목록 왼쪽에 트리를 세울 수
+            있습니다.
           </p>
         </>
       )}

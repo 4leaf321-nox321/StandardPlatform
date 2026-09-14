@@ -238,7 +238,7 @@ export default function ObjectListPage() {
   const [bulkEditing, setBulkEditing] = useState(false)
   /** 이어진 것 너머의 칸 — 조건 고르개가 자기 칸 아래에 붙인다. */
   const linked = useResource(() => objectApi.fields(typeSlug), [typeSlug])
-  /** 되돌릴 묶음 — 여럿 고치기를 적용한 직후 「되돌리기」 로 연다. */
+  /** 되돌릴 묶음 — 일괄 수정을 적용한 직후 「복원」 로 연다. */
   const [undoBatch, setUndoBatch] = useState<string | null>(null)
   // 소유 부서를 바꿀 때 고를 것 — **내가 관리하는 부서만** 서버가 받아 준다. 목록은
   // 내 소속을 주고, 못 고르는 것은 서버가 행마다 이유를 적는다.
@@ -259,7 +259,7 @@ export default function ObjectListPage() {
    *  있는 척하지 않는다.** */
   const yearApplies = Boolean(foundType && foundType.temporal_kind !== 'evergreen')
 
-  // 목록이 달라지면 고른 것을 푼다(쪽 넘김·거르기·타입 바꾸기).
+  // 목록이 달라지면 고른 것을 푼다(쪽 넘김·필터·타입 바꾸기).
   useEffect(() => {
     setPicked(new Set())
   }, [typeSlug, query, JSON.stringify(conditions), under, deep, year, offset])
@@ -278,7 +278,7 @@ export default function ObjectListPage() {
     [typeSlug, query, JSON.stringify(conditions), under, deep, year, offset],
   )
 
-  /** 내보내기에 그대로 넘기는 거르기 — 쪽(offset)만 뺀다. 파일은 전부다. */
+  /** 내보내기에 그대로 넘기는 필터 — 쪽(offset)만 뺀다. 파일은 전부다. */
   const exportQuery: ObjectQuery = {
     q: query || undefined,
     conditions,
@@ -295,8 +295,10 @@ export default function ObjectListPage() {
   }, [list.data])
 
   const type = foundType
-  /** 원 표를 비추는 타입 — 행이 없다. 만들기·파일·조건·뷰가 없고, 찾기만 있다. */
+  /** 원 표를 비추는 타입 — 행이 없다. 생성·파일·조건·뷰가 없고, 검색만 있다. */
   const isSystem = type?.kind_class === 'system'
+  /** 허브가 내려준 타입 — 보고 찾고 가리키지만, 여기서 만들거나 고치지 않는다. */
+  const managed = Boolean(type?.managed_by)
   /** 지금 목록이 좁혀져 있나. 빈 목록의 이유가 이것으로 갈린다. */
   const narrowed =
     Boolean(query) || conditions.length > 0 || Boolean(under) || (yearApplies && year !== null)
@@ -400,14 +402,18 @@ export default function ObjectListPage() {
                       <BarChart3 className="mr-1 size-4" />
                       통계
                     </Button>
-                    <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
-                      <FileUp className="mr-1 size-4" />
-                      파일로 넣기
-                    </Button>
-                    <Button size="sm" onClick={() => setCreating(true)}>
-                      <Plus className="mr-1 size-4" />
-                      만들기
-                    </Button>
+                    {!managed && (
+                      <>
+                        <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
+                          <FileUp className="mr-1 size-4" />
+                          파일 가져오기
+                        </Button>
+                        <Button size="sm" onClick={() => setCreating(true)}>
+                          <Plus className="mr-1 size-4" />
+                          생성
+                        </Button>
+                      </>
+                    )}
                   </>
                 )}
               </div>
@@ -418,7 +424,7 @@ export default function ObjectListPage() {
         <div className="mb-4 flex flex-wrap items-end gap-3">
           <Input
             value={query}
-            placeholder="이름·식별자로 찾기"
+            placeholder="이름·식별자로 검색"
             onChange={(event) => {
               setQuery(event.target.value)
               setOffset(0)
@@ -426,14 +432,14 @@ export default function ObjectListPage() {
             className="max-w-xs"
           />
 
-          {/* **거르기도 정의에서 나온다.** `list_view.filters` 가 가리키는 속성만
+          {/* **필터도 정의에서 나온다.** `list_view.filters` 가 가리키는 속성만
             선다 — 전부 세우면 속성이 스물인 타입에서 그 줄이 화면을 덮는다. */}
           {(type?.list_view?.filters ?? []).map((id) => {
             if (!id.startsWith('properties.')) return null
             const key = id.slice('properties.'.length)
             const def = type?.properties.find((one) => one.key === key)
             if (!def) return null
-            // 빠른 거르기는 「같음」 조건 하나다 — 아래 조건 줄과 같은 것을 가리킨다.
+            // 빠른 필터는 「같음」 조건 하나다 — 아래 조건 줄과 같은 것을 가리킨다.
             const quick = conditions.find((one) => one.field === key && one.op === 'eq')
             return (
               <PropertyFilter
@@ -495,6 +501,14 @@ export default function ObjectListPage() {
         </div>
 
         {exportError && <ErrorNotice error={exportError} className="mb-4" />}
+
+        {managed && (
+          <p className="text-muted-foreground mb-4 text-sm">
+            이 목록은 <b>{type?.managed_by === 'hub' ? '허브' : type?.managed_by}</b>가 내려준
+            기준정보입니다 — 여기서 만들거나 고치지 않고, 허브에서 고친 뒤 받습니다. 이 설치의
+            객체는 이것을 속성이나 관계로 가리킬 수 있습니다.
+          </p>
+        )}
 
         {isSystem && (
           <p className="text-muted-foreground mb-4 text-sm">
@@ -563,7 +577,7 @@ export default function ObjectListPage() {
                 onSettings={setSummary}
                 onClose={() => setGrouping(false)}
                 onPick={(field, key) => {
-                  // **누른 막대가 곧 거르기다.** 여기서 거르기 칸으로 돌아가 값을 다시
+                  // **누른 막대가 곧 필터다.** 여기서 필터 칸으로 돌아가 값을 다시
                   // 치게 하면, 그 한 번이 사람을 엑셀로 돌려보낸다.
                   if (key === null) return
                   if (field === 'status') return
@@ -584,7 +598,7 @@ export default function ObjectListPage() {
 
         {/* **고른 것이 있으면 무엇을 할 수 있는지 그 자리에 뜬다.** 위쪽 도구 막대에
             숨겨 두면 고른 사람은 그것을 찾지 못하고, 결국 한 건씩 연다. */}
-        {picked.size > 0 && !isSystem && (
+        {picked.size > 0 && !isSystem && !managed && (
           <div className="bg-muted/50 mb-4 flex flex-wrap items-center gap-3 rounded-md border p-3">
             <span className="text-sm">
               <strong>{picked.size}건</strong> 골랐습니다
@@ -593,7 +607,7 @@ export default function ObjectListPage() {
               <Pencil className="mr-1 size-4" />한 칸 바꾸기
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setPicked(new Set())}>
-              고른 것 풀기
+              선택 해제
             </Button>
           </div>
         )}
@@ -602,19 +616,19 @@ export default function ObjectListPage() {
 
         {list.data && list.data.items.length === 0 ? (
           <EmptyState
-            title={narrowed ? '거르기에 맞는 것이 없습니다' : '아직 아무것도 없습니다'}
+            title={narrowed ? '필터에 맞는 것이 없습니다' : '아직 아무것도 없습니다'}
             hint={
-              /* **비어 있는 이유를 말한다.** 데이터가 없는 것인지, 거르기가 좁은
+              /* **비어 있는 이유를 말한다.** 데이터가 없는 것인지, 필터가 좁은
                것인지, 권한 때문인지는 해야 할 일이 전혀 다르다. */
               narrowed
                 ? under
-                  ? '고른 가지 아래에 맞는 것이 없습니다. 왼쪽에서 「전체 보기」 를 누르거나 거르기를 줄여 보세요.'
+                  ? '고른 가지 아래에 맞는 것이 없습니다. 왼쪽에서 「전체 보기」 를 누르거나 필터를 줄여 보세요.'
                   : yearApplies && year !== null
                     ? `${year}년에 해당하는 것이 없습니다. 「전체 연도」 로 바꿔 보세요.`
-                    : '찾는 말이나 거르기를 줄여 보세요. 다른 부서의 것은 여기 안 보입니다.'
+                    : '찾는 말이나 필터를 줄여 보세요. 다른 부서의 것은 여기 안 보입니다.'
                 : isSystem
                   ? '비추는 원 표가 비어 있습니다.'
-                  : '「만들기」 로 첫 항목을 넣거나, 다른 부서의 것이라면 그 부서 사람에게 물어보세요.'
+                  : '「생성」 로 첫 항목을 넣거나, 다른 부서의 것이라면 그 부서 사람에게 물어보세요.'
             }
             action={
               narrowed ? (
@@ -628,7 +642,7 @@ export default function ObjectListPage() {
                     setOffset(0)
                   }}
                 >
-                  거르기 지우기
+                  필터 삭제
                 </Button>
               ) : undefined
             }
@@ -638,12 +652,12 @@ export default function ObjectListPage() {
             <Table>
               <TableHeader>
                 <TableRow>
-                  {/* 고르기는 **고칠 수 있는 타입에서만** — 투영 타입은 여기서 안 고친다. */}
+                  {/* 선택은 **고칠 수 있는 타입에서만** — 투영 타입은 여기서 안 고친다. */}
                   {!isSystem && (
                     <TableHead className="w-8">
                       <input
                         type="checkbox"
-                        aria-label="이 쪽 전부 고르기"
+                        aria-label="이 쪽 전부 선택"
                         className="size-4"
                         checked={
                           (list.data?.items.length ?? 0) > 0 &&
@@ -687,7 +701,7 @@ export default function ObjectListPage() {
                       <TableCell className="w-8">
                         <input
                           type="checkbox"
-                          aria-label={`${row.label} 고르기`}
+                          aria-label={`${row.label} 선택`}
                           className="size-4"
                           checked={picked.has(row.id)}
                           onChange={(event) =>

@@ -1,5 +1,5 @@
 /**
- * 관계 종류 하나 — 만들기와 고치기를 같은 창이 한다.
+ * 관계 종류 하나 — 생성과 수정을 같은 창이 한다.
  *
  * **여기서 정하는 것이 관계의 의미다.** 코드에 암묵이면 화면도 MCP 도 그 뜻을
  * 알 방법이 없다 — 어느 쪽으로 읽는지, 재귀로 펼치는지, 무엇과 무엇을 이을 수
@@ -103,7 +103,7 @@ export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: 
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>
-              {editing ? `${relation?.label} 고치기` : '관계 종류 만들기'}
+              {editing ? `${relation?.label} 수정` : '관계 종류 생성'}
             </DialogTitle>
           </DialogHeader>
 
@@ -258,7 +258,7 @@ export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: 
           <DialogFooter className="justify-between sm:justify-between">
             {editing ? (
               <Button variant="ghost" onClick={() => setRemoving(true)} disabled={saving}>
-                지우기
+                삭제
               </Button>
             ) : (
               <span />
@@ -271,7 +271,7 @@ export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: 
                 onClick={save}
                 disabled={saving || !label.trim() || (!editing && !slug.trim())}
               >
-                {editing ? '저장' : '만들기'}
+                {editing ? '저장' : '생성'}
               </Button>
             </div>
           </DialogFooter>
@@ -290,7 +290,7 @@ export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: 
               생기면 붙습니다.
             </>
           }
-          confirmLabel="지우기"
+          confirmLabel="삭제"
           onConfirm={async () => {
             await ontologyApi.removeRelationType(relation.slug)
             onChanged()
@@ -303,7 +303,7 @@ export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: 
   )
 }
 
-/** 허용 타입 고르기. **비어 있음 = 제약 없음**이라고 말해 준다. */
+/** 허용 타입 선택. **비어 있음 = 제약 없음**이라고 말해 준다. */
 function TypePicker({
   title,
   hint,

@@ -46,7 +46,7 @@ describe('온톨로지 초기화', () => {
 
   it('문구를 그대로 적어야 단추가 산다', async () => {
     await open()
-    const button = await screen.findByRole('button', { name: /27건 지우기/ })
+    const button = await screen.findByRole('button', { name: /27건 삭제/ })
     expect(button).toBeDisabled()
 
     await userEvent.type(screen.getByPlaceholderText('온톨로지 초기화'), '초기화')
@@ -68,6 +68,6 @@ describe('온톨로지 초기화', () => {
   it('이미 비어 있으면 지울 단추를 안 보인다', async () => {
     await open({ ...PLAN, total: 0, items: [{ table: 'objects', label: '객체', count: 0 }] })
     expect(await screen.findByText('지울 것이 없습니다. 이미 비어 있습니다.')).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: /지우기/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /삭제/ })).not.toBeInTheDocument()
   })
 })

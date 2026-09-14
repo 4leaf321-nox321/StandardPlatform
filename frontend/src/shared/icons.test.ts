@@ -9,7 +9,7 @@ import { describe, expect, it } from 'vitest'
 
 import { DEFAULT_ICON, allIcons, iconOf, matches } from '@/shared/icons'
 
-describe('아이콘 찾기', () => {
+describe('아이콘 검색', () => {
   it('아는 이름은 그 그림으로', () => {
     expect(iconOf('Wrench')).not.toBe(DEFAULT_ICON)
     expect(iconOf('Wrench')).toBe(iconOf('Wrench'))
@@ -28,7 +28,7 @@ describe('아이콘 찾기', () => {
   })
 })
 
-describe('고르개 찾기', () => {
+describe('고르개 검색', () => {
   const wrench = allIcons().find((one) => one.name === 'Wrench')!
 
   it('한글 이름으로 찾는다 — 영어 이름은 못 치는 사람이 많다', () => {

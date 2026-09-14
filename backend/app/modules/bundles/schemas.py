@@ -35,6 +35,13 @@ class BundleIn(BaseModel):
     objects: list[ObjectBatchIn] = Field(default_factory=list)
     """**적는 차례대로 넣는다** — 다른 타입을 참조하는 타입은 그 뒤에 둔다."""
     relations: list[RelationBatchIn] = Field(default_factory=list)
+    source: str = Field(default="", pattern=r"^([a-z][a-z0-9_-]{0,39})?$")
+    """**어디서 받은 묶음인가** — 허브에서 받으면 `hub`. 적으면 그 허브가 관리하는 정의 ·
+    객체를 고칠 수 있고, 이 묶음이 들이는 타입 · 관계 종류는 그 허브의 관리가 된다(그 뒤로
+    이 설치의 화면 · 파일 · MCP 로는 못 고친다). 시스템 관리자만.
+
+    적지 않으면(기본) 허브가 관리하는 것은 **막힌다** — 받는 쪽에서 고친 값은 다음 받기가
+    덮어쓰고, 그 사실은 고친 사람에게 안 보이기 때문이다."""
     apply: bool = False
     """거짓(기본)이면 아무것도 저장하지 않고 한 번에 미리 본다."""
 
@@ -61,3 +68,18 @@ class BundleOut(BaseModel):
     snapshot_id: uuid.UUID | None
     """정의를 적용했으면 그 직전의 스냅샷 — 되돌릴 자리."""
     counts: dict[str, int]
+
+
+class BundleExportOut(BaseModel):
+    """허브가 내려주는 묶음 — **가져오기와 같은 모양.** 받는 쪽은 `ontology` · `objects` ·
+    `relations` 를 그대로 `POST /bundles/import` 에 `source` 를 붙여 보낸다."""
+
+    format: str
+    group: str
+    exported_at: str
+    ontology: dict[str, Any]
+    objects: list[ObjectBatchIn]
+    relations: list[RelationBatchIn]
+    counts: dict[str, int]
+    warnings: list[str]
+    """내보냈지만 받는 쪽에서 잃는 것 — 식별자 없는 객체, 관계에 붙은 속성 등."""

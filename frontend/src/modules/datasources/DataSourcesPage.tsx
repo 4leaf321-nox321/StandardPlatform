@@ -86,7 +86,7 @@ export default function DataSourcesPage() {
         actions={
           <Button size="sm" onClick={() => setEditing('new')}>
             <Plus className="mr-1 size-4" />
-            만들기
+            생성
           </Button>
         }
       />
@@ -138,12 +138,12 @@ export default function DataSourcesPage() {
                     동기화
                   </Button>
                   <Button size="sm" variant="outline" onClick={() => setEditing(source)}>
-                    고치기
+                    수정
                   </Button>
                   <Button
                     size="sm"
                     variant="ghost"
-                    aria-label="데이터 소스 지우기"
+                    aria-label="데이터 소스 삭제"
                     onClick={() => setRemoving(source)}
                   >
                     <Trash2 className="size-4" />
@@ -199,7 +199,7 @@ export default function DataSourcesPage() {
         open={removing !== null}
         title={`「${removing?.name}」 을 지웁니다`}
         description="가져온 객체는 남습니다. 그 객체에 남긴 바깥 식별자도 남아서, 같은 slug 로 다시 만들면 이어서 찾습니다."
-        confirmLabel="지우기"
+        confirmLabel="삭제"
         destructive
         onConfirm={async () => {
           if (removing) await datasourceApi.remove(removing.slug)
@@ -488,7 +488,7 @@ function EditDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-3xl">
         <DialogHeader>
-          <DialogTitle>{source ? '데이터 소스 고치기' : '데이터 소스 만들기'}</DialogTitle>
+          <DialogTitle>{source ? '데이터 소스 수정' : '데이터 소스 생성'}</DialogTitle>
           <DialogDescription>
             OData 서비스의 한 엔티티 셋을 한 타입으로. 「미리 보기」 로 열 이름을 받아 칸 대응을
             맞추고, 목록에서 「동기화」 로 계획을 본 뒤 적용합니다.
@@ -798,9 +798,9 @@ function EditDialog({
               ))}
             </datalist>
 
-            {/* ① 같은 것 찾기 */}
+            {/* ① 같은 것 검색 */}
             <div className="space-y-1.5">
-              <p className="text-sm font-medium">① 같은 것 찾기</p>
+              <p className="text-sm font-medium">① 같은 것 검색</p>
               <div className="flex flex-wrap items-end gap-3">
                 <div className="space-y-1">
                   <Label htmlFor="ds-ext" className="text-xs">
@@ -904,7 +904,7 @@ function EditDialog({
                     type="button"
                     size="icon"
                     variant="ghost"
-                    aria-label="속성 대응 지우기"
+                    aria-label="속성 대응 삭제"
                     onClick={() => setColumns(columns.filter((_one, i) => i !== index))}
                   >
                     <X className="size-4" />
@@ -921,7 +921,7 @@ function EditDialog({
                   }
                 >
                   <Plus className="mr-1 size-4" />
-                  속성 더하기
+                  속성 추가
                 </Button>
               )}
               <p className="text-muted-foreground text-xs">

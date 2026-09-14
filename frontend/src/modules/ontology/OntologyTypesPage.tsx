@@ -102,8 +102,9 @@ export default function OntologyTypesPage() {
                 {types.map((row) => (
                   <TableRow
                     key={row.slug}
-                    className="cursor-pointer"
-                    onClick={() => setEditing(row.slug)}
+                    className={row.managed_by ? undefined : 'cursor-pointer'}
+                    // 허브가 내려준 타입은 여기서 안 고친다 — 허브에서 고친 뒤 받는다.
+                    onClick={() => !row.managed_by && setEditing(row.slug)}
                   >
                     <TableCell className="font-medium">
                       {/* 사이드바에 설 그림을 **여기서도** 보여 준다 — 정의 화면과
@@ -112,6 +113,9 @@ export default function OntologyTypesPage() {
                       {row.label}
                       {!row.is_active && (
                         <span className="text-muted-foreground ml-2 text-xs">사용 안 함</span>
+                      )}
+                      {row.managed_by && (
+                        <span className="ml-2 rounded border px-1.5 text-xs">허브 관리</span>
                       )}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{row.slug}</TableCell>
@@ -162,7 +166,12 @@ export default function OntologyTypesPage() {
           <h2 className="text-base font-semibold">{propertyTarget.label} 의 속성</h2>
           {/* 오류는 이 창 안에 선다 — 화면 맨 위로 올리면 아래를 보고 있던
               사람 눈에 안 들어온다. */}
-          <PropertyEditor type={propertyTarget} types={types} onChanged={reload} />
+          <PropertyEditor
+            type={propertyTarget}
+            types={types}
+            onChanged={reload}
+            readOnly={Boolean(propertyTarget.managed_by)}
+          />
         </section>
       )}
 
@@ -263,7 +272,7 @@ function NewTypeForm({
           setLabel('')
         }}
       >
-        타입 만들기
+        타입 생성
       </Button>
       <p className="text-muted-foreground w-full text-xs">
         slug 는 <b>나중에 바꿀 수 없습니다</b> — 주소(<code>/o/&lt;slug&gt;</code>)와 관계·MCP 도구
@@ -277,10 +286,13 @@ function PropertyEditor({
   type,
   types,
   onChanged,
+  readOnly = false,
 }: {
   type: ObjectType & { properties: PropertyDef[] }
   types: ObjectType[]
   onChanged: () => void
+  /** 허브가 내려준 타입 — 속성을 보이기만 한다. */
+  readOnly?: boolean
 }) {
   const [editing, setEditing] = useState<PropertyDef | null>(null)
   const [creating, setCreating] = useState(false)
@@ -290,7 +302,7 @@ function PropertyEditor({
       {type.properties.length === 0 ? (
         <p className="text-muted-foreground text-sm">
           아직 속성이 없습니다. 하나 정의하면{' '}
-          <b>{type.label} 만들기·상세 화면의 폼에 칸이 생깁니다.</b>
+          <b>{type.label} 생성·상세 화면의 폼에 칸이 생깁니다.</b>
         </p>
       ) : (
         <Table>
@@ -307,7 +319,11 @@ function PropertyEditor({
           </TableHeader>
           <TableBody>
             {type.properties.map((def) => (
-              <TableRow key={def.key} className="cursor-pointer" onClick={() => setEditing(def)}>
+              <TableRow
+                key={def.key}
+                className={readOnly ? undefined : 'cursor-pointer'}
+                onClick={() => !readOnly && setEditing(def)}
+              >
                 <TableCell className="font-medium">{def.label}</TableCell>
                 <TableCell className="font-mono text-xs">{def.key}</TableCell>
                 <TableCell>{DATA_TYPE_LABELS[def.data_type]}</TableCell>
@@ -323,14 +339,16 @@ function PropertyEditor({
 
       <div className="flex items-center justify-between gap-3 border-t pt-3">
         <p className="text-muted-foreground text-xs">
-          {type.properties.length > 0 &&
-            '행을 누르면 이름·단위·안내·필수·여러 값을 고치거나 지웁니다. '}
-          키와 종류는 만들 때만 정합니다.
+          {readOnly
+            ? '허브가 내려준 타입이라 여기서 속성을 고치지 않습니다 — 허브에서 고친 뒤 받습니다.'
+            : `${type.properties.length > 0 ? '행을 누르면 이름·단위·안내·필수·여러 값을 고치거나 지웁니다. ' : ''}키와 종류는 만들 때만 정합니다.`}
         </p>
-        <Button size="sm" onClick={() => setCreating(true)}>
-          <Plus className="mr-1 size-4" />
-          속성 더하기
-        </Button>
+        {!readOnly && (
+          <Button size="sm" onClick={() => setCreating(true)}>
+            <Plus className="mr-1 size-4" />
+            속성 추가
+          </Button>
+        )}
       </div>
 
       {(creating || editing) && (

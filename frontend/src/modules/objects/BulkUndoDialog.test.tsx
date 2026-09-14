@@ -1,5 +1,5 @@
 /**
- * 같이 바뀐 것 되돌리기가 지키는 것 — **계획을 먼저 보이고, 못 되돌리는 행은 이유를 적고,
+ * 같이 바뀐 것 복원이 지키는 것 — **계획을 먼저 보이고, 못 되돌리는 행은 이유를 적고,
  * 되돌릴 것이 없으면 단추를 죽인다.**
  */
 
@@ -40,13 +40,13 @@ async function open() {
   return onApplied
 }
 
-describe('같이 바뀐 것 한 번에 되돌리기', () => {
+describe('같이 바뀐 것 한 번에 복원', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('열자마자 계획을 보이고, 그 뒤에 바뀐 행은 이유와 지금 값을 적는다', async () => {
     objectApi.bulkEditUndo.mockResolvedValue(PLAN)
     await open()
-    expect(await screen.findByRole('button', { name: /2건 되돌리기/ })).toBeEnabled()
+    expect(await screen.findByRole('button', { name: /2건 복원/ })).toBeEnabled()
     expect(objectApi.bulkEditUndo).toHaveBeenCalledWith('part', 'batch-1', false)
     expect(screen.getByText(/「등급」 칸을/)).toBeInTheDocument()
     expect(screen.getByText(/다시 바뀌었습니다.*\(지금: C\)/)).toBeInTheDocument()
@@ -57,7 +57,7 @@ describe('같이 바뀐 것 한 번에 되돌리기', () => {
       .mockResolvedValueOnce(PLAN)
       .mockResolvedValueOnce({ ...PLAN, applied: true, batch_id: 'batch-2' })
     const onApplied = await open()
-    await userEvent.click(await screen.findByRole('button', { name: /2건 되돌리기/ }))
+    await userEvent.click(await screen.findByRole('button', { name: /2건 복원/ }))
     await waitFor(() => expect(onApplied).toHaveBeenCalled())
     expect(objectApi.bulkEditUndo).toHaveBeenLastCalledWith('part', 'batch-1', true)
     expect(screen.getByText('되돌렸습니다.')).toBeInTheDocument()
@@ -70,7 +70,7 @@ describe('같이 바뀐 것 한 번에 되돌리기', () => {
       rows: PLAN.rows.map((one) => ({ ...one, action: 'unchanged', message: '' })),
     })
     await open()
-    expect(await screen.findByRole('button', { name: /0건 되돌리기/ })).toBeDisabled()
+    expect(await screen.findByRole('button', { name: /0건 복원/ })).toBeDisabled()
     expect(screen.getByText(/이미 되돌렸거나/)).toBeInTheDocument()
   })
 })

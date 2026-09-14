@@ -141,7 +141,7 @@ export function WorkspaceTree({
                 <button
                   type="button"
                   className="hover:bg-muted rounded p-0.5"
-                  aria-label={collapsed ? '펼치기' : '접기'}
+                  aria-label={collapsed ? '확장' : '접기'}
                   onClick={() => onToggle(node.slug)}
                 >
                   {collapsed ? (
@@ -204,7 +204,7 @@ export function WorkspaceTree({
                 <Button
                   variant="ghost"
                   size="icon"
-                  aria-label="고치기"
+                  aria-label="수정"
                   title="이름·하는 일·상위 부서"
                   disabled={busy}
                   onClick={() => onEdit(node)}
@@ -214,8 +214,8 @@ export function WorkspaceTree({
                 <Button
                   variant="ghost"
                   size="icon"
-                  aria-label="자료 옮기기"
-                  title="자료를 다른 부서로 통째 옮기기 (통폐합)"
+                  aria-label="자료 이동"
+                  title="자료를 다른 부서로 통째 이동 (통폐합)"
                   disabled={busy}
                   onClick={() => onReassign(node)}
                 >

@@ -112,6 +112,7 @@ def test_적용_도구는_없고_안내는_정본을_내려준다() -> None:
         "source_head",
         "table_convert",
         "run_init",
+        "hub_pull",
         "run_validate",
         "run_preview",
     }

@@ -125,9 +125,9 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       // **정의가 있는 설치라면 어디서나 있어야 하는 화면이다.** 타입이 늘수록
       // 「이게 저것과 어떻게 이어지지」 를 물을 자리가 목록만으로는 안 생긴다.
-      // **찾기는 맨 위다.** 무엇을 찾을 때 그것이 어느 타입인지 아는 경우는 드물고,
+      // **검색은 맨 위다.** 무엇을 찾을 때 그것이 어느 타입인지 아는 경우는 드물고,
       // 그때 사람이 먼저 보는 곳이 여기여야 한다.
-      { label: '찾기', icon: Search, to: '/search' },
+      { label: '검색', icon: Search, to: '/search' },
       { label: '지식 그래프', icon: Waypoints, to: '/graph' },
       { label: '공지', icon: Megaphone, to: '/notices' },
     ],
@@ -139,8 +139,8 @@ export const NAV_GROUPS: NavGroup[] = [
     items: [
       { label: '부서 멤버', icon: Users, resolve: (s) => `/w/${s}/members`, audience: 'manager' },
       {
-        // **기록만 쌓이고 볼 자리가 없으면 자산이 아니다.** 여기에는 만들기·
-        // 고치기·지우기가 없다 — 고칠 수 있으면 감사가 아니다.
+        // **기록만 쌓이고 볼 자리가 없으면 자산이 아니다.** 여기에는 생성·
+        // 수정·삭제가 없다 — 고칠 수 있으면 감사가 아니다.
         label: '변경 이력',
         icon: ScrollText,
         to: '/audit',

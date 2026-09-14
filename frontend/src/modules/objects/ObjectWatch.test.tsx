@@ -1,5 +1,5 @@
 /**
- * 지켜보기 단추가 지키는 것 — **상태가 보이고, 누르면 서버가 정한다.**
+ * 알림 구독 단추가 지키는 것 — **상태가 보이고, 누르면 서버가 정한다.**
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -58,11 +58,11 @@ async function open(profile: object) {
   )
 }
 
-describe('지켜보기', () => {
+describe('알림 구독', () => {
   it('안 보고 있으면 켤 수 있다', async () => {
     objectApi.setWatch.mockResolvedValue({ watching: true, watcher_count: 1 })
     await open(PROFILE)
-    const button = await screen.findByRole('button', { name: /지켜보기/ })
+    const button = await screen.findByRole('button', { name: /알림 구독/ })
     expect(button).toHaveAttribute('aria-pressed', 'false')
 
     await userEvent.click(button)

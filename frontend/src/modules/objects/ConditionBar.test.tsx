@@ -47,7 +47,7 @@ describe('조건 줄', () => {
     expect(screen.getByText('무게 ≥ 10')).toBeInTheDocument()
     expect(screen.getByText('지역 ∈ 영남, 호남')).toBeInTheDocument()
     expect(screen.getByText('무게 = ∅')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: /조건 지우기: 지역/ }))
+    await userEvent.click(screen.getByRole('button', { name: /조건 삭제: 지역/ }))
     expect(onChange).toHaveBeenCalledWith([
       { field: 'weight', op: 'gte', value: '10' },
       { field: 'weight', op: 'empty', value: '' },

@@ -284,3 +284,58 @@ def test_규약대로_확신도가_낮은_행은_막고_인용_없는_문서_행
     assert ok is False
     assert "확신도 0.7 미만인 행 1개(1행)" in text
     assert "원문 인용(_source.quote)이 없는 행 1개(2행)" in text
+
+
+def test_허브에서_받은_실행은_source_를_싣고_받은_타입은_허브_관리가_된다(
+    client: TestClient, admin: Signed, platform: None, tmp_path: Path
+) -> None:
+    """쌍둥이 쪽 한 바퀴 — 받기(pull) → 검증 → 미리 보기 → 적용. 시험 DB 하나가 허브도 된다."""
+    tag = uuid.uuid4().hex[:6]
+    group, kind = f"hg{tag}", f"hk{tag}"
+    made = client.post(
+        "/api/bundles/import",
+        json={
+            "ontology": {
+                "groups": [{"slug": group, "label": "허브 묶음"}],
+                "types": [
+                    {
+                        "slug": kind,
+                        "label": "기준",
+                        "nav_group_slug": group,
+                        "key_policy": "required",
+                    }
+                ],
+                "relation_types": [],
+            },
+            "objects": [{"type_slug": kind, "rows": [{"key": "K-1", "label": "하나"}]}],
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+    assert made.json()["applied"] is True, made.text
+    token = _token(client, admin)
+
+    run = tmp_path / "pulled"
+    text = pipeline.cmd_pull(run, hub=SERVER, hub_token=token, group=group)
+    assert "객체 1" in text
+    manifest = json.loads((run / "bundle.json").read_text(encoding="utf-8"))
+    assert manifest["source"] == "hub" and manifest["objects_order"] == [kind]
+
+    ok, report = pipeline.cmd_validate(run)
+    assert ok is True, report
+    # 받은 행은 원천이 허브다 — 행마다 출처를 요구하지 않는다.
+    assert "출처(_source)" not in report and "전역" not in report
+    assert pipeline.payload(pipeline.load(run))["source"] == "hub"
+
+    ok, summary = pipeline.cmd_preview(run, server=SERVER, token=token)
+    assert ok is True, summary
+    ok, summary = pipeline.cmd_apply(run, server=SERVER, token=token)
+    assert ok is True, summary
+    types = {
+        one["slug"]: one
+        for one in client.get("/api/ontology/types", headers=admin.headers).json()
+    }
+    assert types[kind]["managed_by"] == "hub"
+
+    with pytest.raises(pipeline.Stop, match="거절"):
+        pipeline.cmd_pull(tmp_path / "없음", hub=SERVER, hub_token=token, group="없는묶음")

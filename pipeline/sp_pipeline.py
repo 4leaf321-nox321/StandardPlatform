@@ -26,6 +26,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -165,8 +166,11 @@ def _clean(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def payload(run: Run) -> dict[str, Any]:
-    """플랫폼 `POST /api/bundles/import` 에 보내는 몸통(`apply` 제외)."""
-    return {
+    """플랫폼 `POST /api/bundles/import` 에 보내는 몸통(`apply` 제외).
+
+    허브에서 받은 실행(`bundle.json` 의 `source`)이면 그 이름을 싣는다 — 플랫폼은 그 허브가
+    관리하는 정의 · 객체만 이 길로 고치게 한다."""
+    body = {
         "ontology": run.ontology,
         "objects": [
             {
@@ -184,6 +188,10 @@ def payload(run: Run) -> dict[str, Any]:
             for one in run.relations
         ],
     }
+    source = str(run.manifest.get("source") or "").strip()
+    if source:
+        body["source"] = source
+    return body
 
 
 def digest(body: dict[str, Any]) -> str:
@@ -223,10 +231,11 @@ def validate(run: Run, *, allow_unresolved: bool = False) -> Report:
             "묶음이 비어 있습니다 — 정의 · 객체 · 관계 중 하나는 있어야 합니다"
         )
 
+    received = bool(str(run.manifest.get("source") or "").strip())
     keys: dict[str, dict[str, str]] = {}
     for batch in run.objects:
-        _check_rows(batch, report, max_rows=MAX_ROWS)
-        if not batch.workspace_slug:
+        _check_rows(batch, report, max_rows=MAX_ROWS, received=received)
+        if not batch.workspace_slug and not received:
             report.warnings.append(
                 f"{batch.file}: workspace_slug 이 없어 **전역**으로 들어갑니다"
                 " (시스템 관리자만)"
@@ -248,7 +257,7 @@ def validate(run: Run, *, allow_unresolved: bool = False) -> Report:
                     seen[key] = where
 
     for batch in run.relations:
-        _check_rows(batch, report, max_rows=MAX_ROWS)
+        _check_rows(batch, report, max_rows=MAX_ROWS, received=received)
         no_evidence = 0
         for index, row in enumerate(batch.rows, start=1):
             if not isinstance(row, dict):
@@ -270,7 +279,7 @@ def validate(run: Run, *, allow_unresolved: bool = False) -> Report:
                 )
             if not row.get("evidence_note"):
                 no_evidence += 1
-        if no_evidence:
+        if no_evidence and not received:
             report.warnings.append(
                 f"{batch.file}: 근거(evidence_note)가 없는 관계 {no_evidence}줄"
                 " — 왜 이었는지 남지 않습니다"
@@ -287,7 +296,9 @@ def _rows(indexes: list[int], limit: int = 5) -> str:
     return shown + (f" 외 {len(indexes) - limit}" if len(indexes) > limit else "")
 
 
-def _check_rows(batch: Batch, report: Report, *, max_rows: int) -> None:
+def _check_rows(
+    batch: Batch, report: Report, *, max_rows: int, received: bool = False
+) -> None:
     if len(batch.rows) > max_rows:
         report.errors.append(
             f"{batch.file}: {len(batch.rows)}행 — 한 파일에 {max_rows}행까지입니다. 나누세요"
@@ -307,6 +318,9 @@ def _check_rows(batch: Batch, report: Report, *, max_rows: int) -> None:
             f"{batch.file}: 확신도 {LOW_CONFIDENCE} 미만인 행 {len(weak)}개({_rows(weak)}행)"
             " — 넣지 말고 unresolved.json 으로 옮기세요"
         )
+    if received:
+        # 허브에서 받은 행은 원천이 허브다 — 출처 · 인용을 행마다 요구하지 않는다.
+        return
     # 문서(쪽 · 슬라이드)에서 뽑은 행은 원문 인용이 있어야 검토하는 사람이 원문을 안 연다.
     unquoted = [
         index
@@ -366,6 +380,67 @@ def _post_bundle(server: str, token: str, body: dict[str, Any]) -> dict[str, Any
     if not isinstance(answer, dict):
         raise Stop(f"플랫폼 응답을 읽을 수 없습니다: {answer!r}")
     return answer
+
+
+def _get_json(server: str, token: str, path: str) -> Any:
+    headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
+    url = f"{server.rstrip('/')}{path}"
+    try:
+        status, answer = SEND("GET", url, headers, None)
+    except (urllib.error.URLError, OSError) as failure:
+        reason = getattr(failure, "reason", failure)
+        raise Stop(
+            f"허브에 닿지 않습니다: {server} ({reason}) — "
+            "주소(SP_HUB_SERVER)와 서버를 확인하세요"
+        ) from failure
+    if status != 200:
+        error = answer.get("error", {}) if isinstance(answer, dict) else {}
+        raise Stop(
+            f"허브가 거절했습니다 ({status}): [{error.get('code', '?')}] "
+            f"{error.get('message', answer)}"
+        )
+    return answer
+
+
+def fetch_keys(server: str, token: str, type_slug: str) -> set[str]:
+    """플랫폼에서 그 타입의 식별자를 전부 받는다(쪽마다) — 원천의 코드가 코어에 붙나를
+    볼 때."""
+    keys: set[str] = set()
+    offset = 0
+    headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
+    while True:
+        url = (
+            f"{server.rstrip('/')}/api/objects/{urllib.parse.quote(type_slug)}"
+            f"?limit=500&offset={offset}"
+        )
+        try:
+            status, body = SEND("GET", url, headers, None)
+        except (urllib.error.URLError, OSError) as failure:
+            reason = getattr(failure, "reason", failure)
+            raise Stop(
+                f"플랫폼에 닿지 않습니다: {server} ({reason}) — "
+                "주소(SP_SERVER)와 서버가 떠 있는지 확인하세요"
+            ) from failure
+        if status != 200 or not isinstance(body, dict):
+            error = body.get("error", {}) if isinstance(body, dict) else {}
+            raise Stop(
+                f"코어 식별자를 받지 못했습니다({type_slug}, {status}): "
+                f"{error.get('message', body)}"
+            )
+        items = body.get("items") or []
+        keys.update(str(one["key"]) for one in items if one.get("key"))
+        offset += len(items)
+        if not items or offset >= int(body.get("total") or 0):
+            return keys
+
+
+def read_keys_file(path: Path) -> set[str]:
+    """식별자 파일 — 한 줄에 하나. 허브에 닿지 않는 PC 에서 코어 식별자를 옮겨 올 때."""
+    try:
+        lines = path.read_text(encoding="utf-8-sig").splitlines()
+    except OSError as failure:
+        raise Stop(f"식별자 파일을 읽을 수 없습니다: {path} ({failure})") from failure
+    return {line.strip() for line in lines if line.strip()}
 
 
 def summarize(result: dict[str, Any], *, limit: int = 20) -> str:
@@ -443,6 +518,55 @@ def cmd_init(path: Path, *, title: str = "") -> str:
     return f"실행 폴더를 만들었습니다: {path}"
 
 
+def cmd_pull(path: Path, *, hub: str, hub_token: str, group: str, source: str = "hub") -> str:
+    """허브가 내보낸 묶음(사이드바 묶음 하나)을 **새 실행 폴더로** 받는다.
+
+    받은 것도 여느 실행과 같다 — `validate` → `preview`(받는 플랫폼) → 사람이 확인 → `apply`.
+    `bundle.json` 의 `source` 가 실려 가므로, 받는 플랫폼은 그 타입들을 허브 관리로 둔다.
+    """
+    if not group.strip():
+        raise Stop("받을 사이드바 묶음(--group)이 필요합니다 — PLM 기준정보면 plm")
+    query = urllib.parse.urlencode({"group": group.strip()})
+    body = _get_json(hub, hub_token, f"/api/bundles/export?{query}")
+    if not isinstance(body, dict) or body.get("format") != FORMAT:
+        raise Stop(f"허브의 응답이 묶음이 아닙니다: {str(body)[:200]}")
+    cmd_init(path, title=f"허브에서 받기 — {group}")
+    manifest = json.loads((path / MANIFEST).read_text(encoding="utf-8"))
+    manifest["source"] = source
+    manifest["sources"] = [
+        {
+            "name": hub,
+            "group": group,
+            "exported_at": body.get("exported_at"),
+            "counts": body.get("counts") or {},
+        }
+    ]
+    batches = body.get("objects") or []
+    manifest["objects_order"] = list(dict.fromkeys(str(one["type_slug"]) for one in batches))
+    manifest["notes"] = "\n".join(str(one) for one in body.get("warnings") or [])
+    _write(path / MANIFEST, manifest)
+    _write(path / ONTOLOGY, body.get("ontology") or {})
+    for index, batch in enumerate(batches, start=1):
+        _write(path / OBJECTS_DIR / f"{index:03d}-{batch['type_slug']}.json", batch)
+    for index, batch in enumerate(body.get("relations") or [], start=1):
+        _write(path / RELATIONS_DIR / f"{index:03d}-{batch['type_slug']}.json", batch)
+    counts = body.get("counts") or {}
+    lines = [
+        f"받았습니다: {path}",
+        f"허브 {hub} · 묶음 {group} · 내보낸 때 {body.get('exported_at')}",
+        "타입 {types} · 관계 종류 {relation_types} · 객체 {objects} · 관계 {relations}".format(
+            **{
+                key: counts.get(key, 0)
+                for key in ("types", "relation_types", "objects", "relations")
+            }
+        ),
+        *[f"경고: {one}" for one in body.get("warnings") or []],
+        f"다음: python sp_pipeline.py validate {path}"
+        " → preview → 확인 → apply (받는 플랫폼에)",
+    ]
+    return "\n".join(lines)
+
+
 def cmd_validate(path: Path, *, allow_unresolved: bool = False) -> tuple[bool, str]:
     run = load(path)
     report = validate(run, allow_unresolved=allow_unresolved)
@@ -514,6 +638,13 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("run", type=Path)
     check.add_argument("--allow-unresolved", action="store_true")
 
+    pull = sub.add_parser("pull", help="허브가 내보낸 묶음을 새 실행 폴더로 받는다")
+    pull.add_argument("run", type=Path)
+    pull.add_argument("--group", required=True, help="사이드바 묶음 slug — PLM 기준정보면 plm")
+    pull.add_argument("--hub", default=os.environ.get("SP_HUB_SERVER", ""))
+    pull.add_argument("--hub-token", default=os.environ.get("SP_HUB_TOKEN", ""))
+    pull.add_argument("--source", default="hub")
+
     for name, what in (
         ("preview", "아무것도 저장하지 않고 미리 본다"),
         ("apply", "미리 본 것을 넣는다"),
@@ -532,6 +663,22 @@ def main(argv: list[str] | None = None) -> int:
             ok, text = cmd_validate(args.run, allow_unresolved=args.allow_unresolved)
             print(text)
             return 0 if ok else 1
+        if args.command == "pull":
+            if not args.hub or not args.hub_token:
+                raise Stop(
+                    "허브 주소와 토큰이 필요합니다 — SP_HUB_SERVER · SP_HUB_TOKEN 또는 "
+                    "--hub · --hub-token"
+                )
+            print(
+                cmd_pull(
+                    args.run,
+                    hub=args.hub,
+                    hub_token=args.hub_token,
+                    group=args.group,
+                    source=args.source,
+                )
+            )
+            return 0
         if not args.server or not args.token:
             raise Stop(
                 "서버와 토큰이 필요합니다 — SP_SERVER · SP_TOKEN 또는 --server · --token"

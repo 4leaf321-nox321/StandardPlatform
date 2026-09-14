@@ -1,5 +1,5 @@
 /**
- * 파일로 넣기가 지키는 것 — **오류가 있으면 「적용」 이 안 서고, 계획을 본 뒤에야 넣는다.**
+ * 파일 가져오기가 지키는 것 — **오류가 있으면 「적용」 이 안 서고, 계획을 본 뒤에야 넣는다.**
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -88,7 +88,7 @@ async function upload() {
   await userEvent.click(screen.getByRole('button', { name: /미리 보기/ }))
 }
 
-describe('파일로 넣기', () => {
+describe('파일 가져오기', () => {
   beforeEach(() => vi.clearAllMocks())
 
   it('오류 행이 있으면 적용이 안 선다 — 어느 행이 왜 틀렸는지 적는다', async () => {

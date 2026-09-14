@@ -226,7 +226,7 @@ function ObjectRefPicker({
       value={value}
       onChange={onChange}
       placeholder="객체를 고르세요"
-      searchPlaceholder="이름·식별자로 찾기"
+      searchPlaceholder="이름·식별자로 검색"
       emptyText="맞는 객체가 없습니다"
     />
   )
@@ -265,7 +265,7 @@ function ManyValues({
             variant="ghost"
             size="icon"
             disabled={disabled}
-            aria-label={`${def.label} ${index + 1}번째 지우기`}
+            aria-label={`${def.label} ${index + 1}번째 삭제`}
             onClick={() => onChange(values.filter((_, at) => at !== index))}
           >
             <X className="size-4" />
@@ -361,7 +361,7 @@ export function PropertyFields({ defs, values, onChange, disabled, view }: Props
                 </Label>
 
                 {def.data_type === 'file' ? (
-                  /* **첨부는 저장한 뒤에 붙는다.** 파일은 객체 id 에 매달리므로, 만들기
+                  /* **첨부는 저장한 뒤에 붙는다.** 파일은 객체 id 에 매달리므로, 생성
                화면에서 미리 올릴 자리가 없다. 빈 칸을 놓아 두면 「올렸는데 안
                붙었다」 가 되므로 무엇을 해야 하는지 적는다. */
                   <p className="text-muted-foreground text-sm">

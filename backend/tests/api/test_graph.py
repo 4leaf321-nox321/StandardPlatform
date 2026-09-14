@@ -14,7 +14,13 @@ from fastapi.testclient import TestClient
 
 from app.modules.graph import routes
 from tests.api.conftest import Signed
-from tests.api.test_ontology import _link, _make_object, _make_relation, _make_type
+from tests.api.test_ontology import (
+    _link,
+    _make_object,
+    _make_property,
+    _make_relation,
+    _make_type,
+)
 
 
 def _hidden_workspace(client: TestClient, admin: Signed) -> str:
@@ -304,3 +310,43 @@ def test_없는_타입_전부는_404(client: TestClient, admin: Signed) -> None:
         headers=admin.headers,
     )
     assert response.status_code == 404
+
+
+def test_여러_타입_전부는_쪽을_타입마다_나눠_채운다(client: TestClient, admin: Signed) -> None:
+    """이름순으로 통째로 뜨면 한 타입이 첫 쪽을 다 차지한다(「SM-…」 이 한글보다 앞) — 그
+    그림엔 다른 타입이 없어 선이 하나도 없고, 그것은 「관계없음」 으로 읽힌다."""
+    task = _make_type(client, admin, label="과제")
+    model = _make_type(client, admin, label="모델")
+    _make_property(
+        client,
+        admin,
+        model,
+        key="task",
+        label="과제",
+        data_type="object_ref",
+        ref_type_slug=task,
+    )
+    tasks = [_make_object(client, admin, task, label=f"과제{i}") for i in range(3)]
+    for i in range(6):
+        _make_object(
+            client, admin, model, label=f"M-{i}", properties={"task": tasks[i % 3]["id"]}
+        )
+
+    first = client.get(
+        "/api/graph/subgraph",
+        params={"types": f"{task},{model}", "limit": 4},
+        headers=admin.headers,
+    ).json()
+    assert first["total"] == 9
+    # 4개를 둘로 나눠 타입마다 2개 — 이름순이면 M-0…M-3 만 실렸을 것이다.
+    assert [node["label"] for node in first["nodes"]] == ["과제0", "과제1", "M-0", "M-1"]
+    # 실린 노드끼리의 참조 선이 그려진다(M-0 → 과제0, M-1 → 과제1).
+    assert len(first["edges"]) == 2
+    assert first["truncated"] is True
+
+    second = client.get(
+        "/api/graph/subgraph",
+        params={"types": f"{task},{model}", "limit": 4, "offset": 4},
+        headers=admin.headers,
+    ).json()
+    assert [node["label"] for node in second["nodes"]] == ["과제2", "M-2", "M-3"]
