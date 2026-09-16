@@ -181,7 +181,14 @@ generate_env_if_missing() {
     [[ -f "$HERE/.env.example" ]] || err ".env.example 이 스크립트 옆에 없습니다 ($HERE)"
     # 비밀번호는 **주 DB** 에서 돌린다. 대기 서버(읽기 전용)에서는 할 수 없다 — 이중화의 두 번째
     # 서버는 공용 폴더의 .env 를 그대로 쓰므로 여기 올 일이 없다. 왔다면 순서가 틀린 것이다.
-    pg_in_recovery && err "이 서버의 DB 는 대기입니다. .env 는 주 서버에서 install 할 때 만들어집니다$( [[ -n "$DATA_DIR" ]] && echo " ($ENV_FILE — 주 서버에서 먼저 install)" )"
+    if pg_in_recovery; then
+        if [[ -n "$DATA_DIR" ]]; then
+            err "이 서버의 DB 는 대기입니다. .env 는 주 서버에서 install 할 때 $ENV_FILE 에 만들어집니다 — 주 서버에서 먼저 install"
+        else
+            err "이 서버의 DB 는 대기입니다. 공용 폴더(DATA_DIR)가 없으니 주 서버의 .env 를 그대로 복사해 두세요:
+  scp <주 서버>:$INSTALL_DIR/.env $ENV_FILE   (JWT 비밀 · DB 주소가 두 서버에서 같아야 합니다)"
+        fi
+    fi
 
     local pw secret
     pw="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"

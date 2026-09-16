@@ -361,6 +361,15 @@ sudo ./deploy.sh status            # 앱 · 상대 앱 · 메인 서버 경유 h
 
 DB VIP 가 있으면 A 의 첫 명령부터 `DB_VIP=<주소>` 를 함께 준다. **없으면** 앱은 A 의 IP 로 DB 에 붙고 자동 승격은 꺼진다 — 받은 뒤 「8.5」.
 
+### 8.1b DB VIP 도 `/data` 도 아직 없을 때 — 리허설은 된다
+
+| 없는 것 | 대신 |
+| --- | --- |
+| **DB VIP** | `DB_VIP` 를 안 주면 keepalived 도 자동 승격도 없다. 앱은 A 의 IP 로 DB 에 붙는다. 승격은 손으로(8.3 「DB VIP 없이」). guard 는 VIP 없이도 상대에게 물어 동작한다. 받으면 8.5 |
+| **`/data/<slug>`** | `DATA_DIR` 를 안 주면 각 서버 `~/apps/<slug>` 에 전부 둔다. **B 의 `.env` 는 A 의 것을 복사**한다 — B 에서 만들 수 없다(대기 DB 는 비밀번호를 못 돌린다): `scp <A>:~/apps/<slug>/.env ~/apps/<slug>/.env` 뒤 `install`. 첨부는 서버마다 따로 쌓인다(리허설이면 그것으로 충분). 나중에 `/data` 가 오면 `~/apps/<slug>/{.env,filestore}` 를 옮기고 `DATA_DIR=/data/<slug> sudo ./deploy.sh update` — 양쪽 |
+
+리허설에서 볼 수 있는 것: 복제(`db-status` 의 지연), 손 승격 · demote · `db-standby` 재구성, guard(옛 주 부팅), 두 앱 동시 운영(동시 편집 · 타이머 한 대만 · 웹훅 한 번만), B→A 업데이트, 재부팅. 못 보는 것: 자동 승격, 공용 첨부, 백업 폴더, 메인 서버 경유.
+
 ### 8.2 업데이트 — B 먼저, 그다음 A
 
 ```bash
