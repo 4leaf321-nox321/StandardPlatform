@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.config import get_settings
 from tests.api.conftest import Signed
 
 
-def _app_with(monkeypatch: pytest.MonkeyPatch, extensions: str):
+def _app_with(monkeypatch: pytest.MonkeyPatch, extensions: str) -> FastAPI:
     from app.main import create_app
 
     monkeypatch.setenv("EXTENSIONS", extensions)
@@ -48,7 +51,7 @@ def test_없는_확장은_기동에서_멈춘다(monkeypatch: pytest.MonkeyPatch
 
 
 def test_이름은_env_에서_오고_화면에_심긴다(
-    tmp_path, monkeypatch: pytest.MonkeyPatch, client: TestClient
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, client: TestClient
 ) -> None:
     """번들 하나 · 설치마다 다른 이름. 화면은 index.html 의 meta 로 자기 이름을 안다."""
     from app.main import create_app

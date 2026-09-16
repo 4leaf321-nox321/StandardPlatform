@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -22,7 +23,8 @@ BACKEND = Path(__file__).resolve().parents[2]
 def _settings(**env: str) -> Settings:
     """`.env` 를 안 읽는 Settings — 주어진 값만으로. conftest 가 환경에 둔 시험 DB 주소는
     비워서 slug 파생을 본다(직접 준 값이 환경보다 우선한다)."""
-    return Settings(_env_file=None, **{"DATABASE_URL": "", **env})  # type: ignore[call-arg]
+    values: dict[str, Any] = {"_env_file": None, "DATABASE_URL": "", **env}
+    return Settings(**values)
 
 
 def test_DB_이름이_slug_에서_나온다() -> None:
