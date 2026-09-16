@@ -358,6 +358,7 @@ def test_주소_접두어는_빌드가_아니라_배포_설정이다(
         "<!doctype html><html><head><title>x</title></head><body></body></html>",
         encoding="utf-8",
     )
+    (dist / "assets" / "app.js").write_text("console.log(1)", encoding="utf-8")
     monkeypatch.setenv("PUBLIC_PATH", "plm/")
     monkeypatch.setenv("FRONTEND_DIST", str(dist))
     get_settings.cache_clear()
@@ -371,6 +372,12 @@ def test_주소_접두어는_빌드가_아니라_배포_설정이다(
             assert '<meta name="app-base" content="/plm" />' in page
             # 문서 주소도 접두어 아래(root_path).
             assert web.get("/api/openapi.json").json()["servers"][0]["url"] == "/plm"
+            # **접두어를 떼고 넘기든(nginx) 붙인 채 오든(직접 접속) 같다.** 정적 파일은
+            # Starlette 가 붙어 있어야만 찾으므로, 떼고 온 쪽이 404 였다(실측).
+            for prefix in ("", "/plm"):
+                assert web.get(f"{prefix}/api/health").status_code == 200
+                assert web.get(f"{prefix}/assets/app.js").text == "console.log(1)"
+                assert '<base href="/plm/" />' in web.get(f"{prefix}/o/anything").text
         from app.modules.auth.routes import _cookie_path
 
         assert _cookie_path() == "/plm/api/auth"

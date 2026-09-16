@@ -16,6 +16,7 @@ from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import version
 from app.branding import APP_NAME
@@ -260,6 +261,30 @@ def _guard_writable_paths(settings: Settings) -> None:
             ) from failure
 
 
+class PrefixMiddleware:
+    """접두어(`/<slug>`)가 **없이** 온 요청에 접두어를 붙여 준다.
+
+    Starlette 는 `root_path` 가 경로에 **붙어 있다**고 본다 — 라우트 매칭은 붙어 있으면
+    떼고 없으면 그대로 두지만, 정적 파일 마운트는 붙어 있어야만 찾는다(없으면
+    `/assets/…` 가 404 — 실측). 그런데 앞의 nginx 는 접두어를 떼고 넘기는 쪽이 흔하고,
+    직접 붙는 확인은 붙인 채로 온다. 어느 쪽이든 되게 여기서 모양을 하나로 맞춘다.
+    """
+
+    def __init__(self, app: ASGIApp, base_path: str) -> None:
+        self.app = app
+        self.base = base_path
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if self.base and scope["type"] in ("http", "websocket"):
+            path = scope.get("path", "")
+            if path != self.base and not path.startswith(self.base + "/"):
+                scope = dict(scope)
+                scope["path"] = self.base + path
+                if scope.get("raw_path"):
+                    scope["raw_path"] = self.base.encode() + scope["raw_path"]
+        await self.app(scope, receive, send)
+
+
 def create_app() -> FastAPI:
     settings = get_settings()
     # **로그보다 먼저다.** 로그를 여는 것이 첫 번째 쓰기다.
@@ -282,6 +307,8 @@ def create_app() -> FastAPI:
     # 읽으려면 그 id 가 먼저 설정돼 있어야 한다.
     app.add_middleware(AccessLogMiddleware)
     app.add_middleware(RequestIdMiddleware)
+    # 맨 바깥 — 접근 로그도 접두어가 붙은 한 가지 모양으로 본다.
+    app.add_middleware(PrefixMiddleware, base_path=settings.base_path)
 
     # 요청 처리 밖에서 DB 를 쓰는 곳(접근 로그)이 참조한다. 테스트는 이 값을 자기
     # DB 로 바꿔 끼운다.

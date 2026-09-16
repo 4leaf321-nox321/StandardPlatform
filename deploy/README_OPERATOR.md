@@ -355,7 +355,9 @@ cat ~/apps/<slug>/main-server-nginx.conf   # 이것을 그대로 넣어 달라�
 sudo ./deploy.sh status            # 앱 · 상대 앱 · 메인 서버 경유 health · pg-ha 역할 · 복제 지연 · VIP
 ```
 
-**메인 서버 쪽에 부탁할 것 두 가지** — 조각에 그대로 있다: ① `proxy_pass http://<slug>_app/;` 끝의 `/` (접두어 `/<slug>/` 를 벗겨 넘긴다 — 앱은 접두어를 모른다), ② `X-Forwarded-Proto $scheme` (앱이 https 인 줄 알아야 쿠키가 산다). MCP 경로는 `proxy_buffering off` · 긴 타임아웃.
+**메인 서버 쪽에 부탁할 것** — 조각에 그대로 있다: `X-Forwarded-Proto $scheme` (앱이 https 인 줄 알아야 쿠키가 산다). 접두어 `/<slug>/` 는 벗겨 넘기든 그대로 넘기든 앱이 둘 다 받는다. MCP 경로는 `proxy_buffering off` · 긴 타임아웃.
+
+**메인 서버가 아직 없어도** A · B 설치와 8.3 · 8.4 의 리허설은 전부 된다 — 화면은 `http://<A의 IP>:8040/<slug>/` 로 직접 본다(접두어를 붙여서). http 라 리프레시 쿠키(Secure)는 안 살아 12시간마다 다시 로그인하는 것만 다르다.
 
 DB VIP 가 있으면 A 의 첫 명령부터 `DB_VIP=<주소>` 를 함께 준다. **없으면** 앱은 A 의 IP 로 DB 에 붙고 자동 승격은 꺼진다 — 받은 뒤 「8.5」.
 
@@ -379,7 +381,7 @@ sudo ./deploy.sh update
 | **서버 A(주) 통째** | **DB VIP 가 있으면** 약 15초 뒤 B 가 승격되고 DB VIP → B. 마지막 몇 초의 쓰기는 유실될 수 있다. 앱은 B 만 남는다 | A 가 살아나도 **주로 못 뜬다**(guard). 「8.4」 대로 A 를 대기로 |
 | **주 DB 만**(A 의 postgres) | 위와 같다(`pg-ha check` 가 3번 실패 → VIP 이동 → 승격) | 같다 |
 | **DB VIP 없이 A 통째** | 앱은 B 만 남지만 **DB 를 잃는다** | B 에서 `sudo ./deploy.sh db-promote` → `/data/…/.env` 의 `DATABASE_URL` 호스트를 B 로 → `sudo systemctl restart <slug>` |
-| **메인 서버** | 아무도 못 들어온다 — 메인 서버 쪽 일 | A · B 는 그대로 돈다. 급하면 `http://<A>:8040/` 로 직접(접두어 없이는 화면이 안 맞는다 — `PUBLIC_PATH` 때문. 확인용으로만) |
+| **메인 서버** | 아무도 못 들어온다 — 메인 서버 쪽 일 | A · B 는 그대로 돈다. 급하면 `http://<A>:8040/<slug>/` 로 직접(접두어를 붙여서. http 라 리프레시 쿠키는 안 산다 — 확인용으로만) |
 | **/data 가 안 보인다** | 첨부 · 백업이 멈춘다. 앱 재시작은 `.env` 를 못 읽어 실패한다(떠 있는 앱은 계속 돈다) | 마운트를 살린다. 그동안은 앱을 재시작하지 않는다 |
 
 ### 8.4 승격 뒤 원복 — 옛 주를 대기로, 그리고 (원하면) 다시 주로

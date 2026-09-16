@@ -232,8 +232,8 @@ EOF
 
 # ───────────────────────── 메인 서버용 nginx 조각 (LB_MODE=external) ─────────────────────────
 # 메인 서버의 nginx 는 메인 서버 쪽이 관리한다 — 우리는 **넣어 달라고 할 조각**을 만들어 준다.
-# 접두어를 벗겨 넘기는 것(proxy_pass 끝의 '/')과 X-Forwarded-Proto 가 핵심이다: 앞은 앱이
-# /<slug>/ 를 모르기 때문이고, 뒤는 앱이 https 인 줄 알아야 쿠키(Secure)와 주소가 맞기 때문이다.
+# 핵심은 X-Forwarded-Proto — 앱이 https 인 줄 알아야 쿠키(Secure)와 주소가 맞는다. 접두어는
+# 벗겨 넘기든 그대로 넘기든 앱이 둘 다 받는다(PrefixMiddleware).
 render_main_server_snippet() {
     local prefix="/$APP_SLUG" out="${1:-$INSTALL_DIR/main-server-nginx.conf}"
     mkdir -p "$(dirname "$out")"
@@ -270,7 +270,8 @@ location $prefix/mcp {
     proxy_send_timeout 3600s;
 }
 
-# 앱 — **끝의 '/' 가 접두어 $prefix 를 벗긴다.** 앱은 PUBLIC_PATH=$prefix 로 화면 · 쿠키 · API 주소를 맞춘다.
+# 앱 — 끝의 '/' 가 접두어 $prefix 를 벗겨 넘긴다. 앱은 벗겨 오든 붙은 채 오든 둘 다 받으므로
+# 'proxy_pass http://${APP_SLUG}_app;' (그대로 넘김) 이어도 된다. X-Forwarded-Proto 는 꼭 있어야 한다.
 location $prefix/ {
     proxy_pass http://${APP_SLUG}_app/;
     proxy_http_version 1.1;
@@ -413,7 +414,7 @@ setup_lb() {
     else
         render_main_server_snippet
         info "메인 서버에 넣을 nginx 조각: $INSTALL_DIR/main-server-nginx.conf  → https://$PUBLIC_HOST/$APP_SLUG/"
-        echo "    메인 서버 쪽에 부탁할 것: 이 조각 그대로(접두어를 벗기는 proxy_pass 끝의 '/', X-Forwarded-Proto)."
+        echo "    메인 서버 쪽에 부탁할 것: 이 조각 그대로 — 특히 X-Forwarded-Proto (접두어는 벗겨도 그대로 넘겨도 된다)."
     fi
     if keepalived_needed; then
         command -v keepalived >/dev/null || err "keepalived 가 없습니다 — 'sudo ./deploy.sh prepare' 를 먼저"
