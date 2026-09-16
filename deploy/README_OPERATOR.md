@@ -305,25 +305,31 @@ sudo systemctl restart <slug>
 
 ---
 
-## 8. 이중화 — 서버 두 대 · HTTPS · 자동 전환
+## 8. 이중화 — 서버 두 대 · 메인 서버 뒤 · 자동 전환
 
 설계와 결정은 저장소의 `docs/이중화-배포-설계.md`. 여기는 **손으로 치는 순서**다.
 
 ```
-사용자 ──HTTPS──▶ 웹 VIP (keepalived) ──▶ nginx ──▶ 앱 A :8040 · 앱 B :8040   (둘 다 활성)
-                                                    └─▶ DB VIP ──▶ PostgreSQL 주(A) ══복제══▶ 대기(B)
-/data/<공통폴더>/<slug>/  첨부 · 백업 · 인증서 · .env (두 서버가 같은 경로로 마운트)
+사용자 · 외부 AI ──HTTPS──▶ 메인 서버 (포탈 + nginx — 메인 서버 쪽이 관리)
+                              /<slug>/… → 접두어를 벗겨 A · B 로 분배
+                         ┌──────────┴──────────┐
+                    서버 A                  서버 B          둘 다 활성 (앱 :8040 · MCP :8042)
+                    PostgreSQL 주 ── 복제 ──▶ 대기          DB VIP(있으면) 가 주를 따라간다
+                         └──── /data/<slug>/ 공용 ────┘      첨부 · 백업 · .env
 ```
 
 | 무엇이 어디에 | |
 | --- | --- |
 | 코드(SIF) · 로그 · MCP venv | 각 서버 `~/apps/<slug>` (`INSTALL_DIR`) |
-| 첨부 · 백업 · 인증서 · `.env` · 복제 비밀번호 | `/data/<공통폴더>/<slug>/{filestore,backup,tls,.env,db/}` (`DATA_DIR`) |
+| 첨부 · 백업 · `.env` · 복제 비밀번호 | `/data/<slug>/{filestore,backup,.env,db/}` (`DATA_DIR` — 경로는 env) |
 | DB 원본 | 각 서버 로컬(`/var/lib/postgresql/16/main`) — `/data` 는 느려서 두지 않는다 |
-| 호스트 수준 설정 | `/etc/platform-ha.conf` (역할 · 상대 IP · VIP · 호스트명) — 그 서버의 모든 플랫폼이 공유 |
+| TLS · 로드밸런싱 · 접두어 벗기기 | **메인 서버의 nginx.** 우리는 넣어 달라고 할 조각(`~/apps/<slug>/main-server-nginx.conf`)을 만든다 |
+| 호스트 수준 설정 | `/etc/platform-ha.conf` (역할 · 상대 IP · DB VIP · 호스트명) — 그 서버의 모든 플랫폼이 공유 |
 | DB 주/대기 도구 | `/usr/local/sbin/pg-ha` (deploy.sh 가 깐다) · `/etc/pg-ha.conf` · `/etc/pg-ha.replpass` |
 
 **운영 계정은 두 서버에서 같은 이름 · 같은 uid** 여야 한다 — `/data` 의 파일을 둘 다 읽고 써야 한다.
+
+메인 서버가 없이 A · B 가 직접 받아야 하면 `LB_MODE=local WEB_VIP=<VIP>` — A · B 에 nginx + keepalived 웹 VIP + 자체 서명 인증서를 세운다(8.9).
 
 ### 8.1 최초 설치 — A(주) 먼저, 그다음 B
 
@@ -331,24 +337,27 @@ sudo systemctl restart <slug>
 
 ```bash
 # ── 서버 A (주) ──
-HA_ROLE=master PEER_IP=<B의 IP> WEB_VIP=<웹 VIP> PUBLIC_HOST=<호스트명> \
-DATA_DIR=/data/<공통폴더>/<slug> sudo ./deploy.sh prepare      # 패키지(postgresql-16 · nginx · keepalived) · DB 역할
+HA_ROLE=master PEER_IP=<B의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
+  sudo ./deploy.sh prepare         # 패키지(postgresql-16 · keepalived) · DB 역할
 sudo ./deploy.sh db-primary        # 복제 계정 · pg_hba · 감시 훅 · 원복 잠금. 비밀번호를 /data/…/db/ 에 둔다
-sudo ./deploy.sh install           # .env(/data 에) · SIF · 마이그레이션 · 시드 · 유닛 · nginx · keepalived · 인증서
+sudo ./deploy.sh install           # .env(/data 에) · SIF · 마이그레이션 · 시드 · 유닛 · 메인 서버용 nginx 조각
 
 # ── 서버 B (대기) ──
-HA_ROLE=backup PEER_IP=<A의 IP> WEB_VIP=<웹 VIP> PUBLIC_HOST=<호스트명> \
-DATA_DIR=/data/<공통폴더>/<slug> sudo ./deploy.sh prepare
+HA_ROLE=backup PEER_IP=<A의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
+  sudo ./deploy.sh prepare
 sudo ./deploy.sh db-standby        # A 에서 pg_basebackup — 기존 로컬 DB 는 옆으로 치운다
 sudo ./deploy.sh install           # .env 는 /data 의 것을 그대로(만들지 않는다) · 마이그레이션은 이미 돼 있어 통과
 
+# ── 메인 서버 쪽에 ──
+cat ~/apps/<slug>/main-server-nginx.conf   # 이것을 그대로 넣어 달라고 한다
+
 # 확인 (양쪽)
-sudo ./deploy.sh status            # 앱 · LB 경유 health · pg-ha 역할 · 복제 지연 · VIP 가 어디 있나
+sudo ./deploy.sh status            # 앱 · 상대 앱 · 메인 서버 경유 health · pg-ha 역할 · 복제 지연 · VIP
 ```
 
-DB VIP 가 있으면 A 의 첫 명령부터 `DB_VIP=<주소>` 를 함께 준다. **없으면** 앱은 A 의 IP 로 DB 에 붙고 자동 승격은 꺼진다 — 받은 뒤 「8.5」.
+**메인 서버 쪽에 부탁할 것 두 가지** — 조각에 그대로 있다: ① `proxy_pass http://<slug>_app/;` 끝의 `/` (접두어 `/<slug>/` 를 벗겨 넘긴다 — 앱은 접두어를 모른다), ② `X-Forwarded-Proto $scheme` (앱이 https 인 줄 알아야 쿠키가 산다). MCP 경로는 `proxy_buffering off` · 긴 타임아웃.
 
-인증서는 A 가 자체 서명으로 만들어 `/data/…/tls/` 에 두고 B 가 가져간다(같은 인증서). 정식 인증서를 받으면 두 서버의 `/etc/nginx/tls/server.{crt,key}` 를 바꾸고 `sudo systemctl reload nginx`.
+DB VIP 가 있으면 A 의 첫 명령부터 `DB_VIP=<주소>` 를 함께 준다. **없으면** 앱은 A 의 IP 로 DB 에 붙고 자동 승격은 꺼진다 — 받은 뒤 「8.5」.
 
 ### 8.2 업데이트 — B 먼저, 그다음 A
 
@@ -359,18 +368,18 @@ sudo ./deploy.sh update            # B 앱 중지 → SIF 교체 → 마이그�
 sudo ./deploy.sh update
 ```
 
-한 대씩 하므로 **서비스는 끊기지 않는다** — nginx 가 멈춘 쪽을 빼고 보낸다. 마이그레이션은 어느 서버에서 돌려도 DB VIP(주)로 가고 두 번째는 할 일이 없다. 파괴적 마이그레이션(컬럼 삭제)은 옛 SIF 가 아직 도는 몇 분 동안 오류를 낼 수 있다 — 그런 릴리스는 두 대를 빠르게 잇달아 한다.
+한 대씩 하므로 **서비스는 끊기지 않는다** — 메인 서버의 nginx 가 멈춘 쪽을 빼고 보낸다(`max_fails=3`). 마이그레이션은 어느 서버에서 돌려도 주 DB 로 가고 두 번째는 할 일이 없다. 파괴적 마이그레이션(컬럼 삭제)은 옛 SIF 가 아직 도는 몇 분 동안 오류를 낼 수 있다 — 그런 릴리스는 두 대를 빠르게 잇달아 한다. 앱 포트 · MCP 포트 · slug 가 바뀌지 않는 한 메인 서버의 조각은 그대로다.
 
 ### 8.3 장애 — 무엇이 죽었나
 
 | 죽은 것 | 저절로 | 사람이 |
 | --- | --- | --- |
-| **앱 한 대** | nginx 가 3번 실패 뒤 뺀다(`max_fails=3`). 살아나면 다시 넣는다 | `journalctl -u <slug>` |
-| **nginx 한 대** | 웹 VIP 가 다른 서버로(2초 × 3) | `systemctl restart nginx` |
+| **앱 한 대** | 메인 서버 nginx 가 3번 실패 뒤 뺀다. 살아나면 다시 넣는다 | `journalctl -u <slug>` |
 | **서버 B(대기) 통째** | 아무 일도 없다. 복제만 멈춘다 | 살아나면 복제가 이어진다. `sudo ./deploy.sh db-status` 로 지연 확인. 오래 죽어 슬롯이 버려졌으면(`max_slot_wal_keep_size`) `db-standby` 로 다시 |
-| **서버 A(주) 통째** | 웹 VIP → B. **DB VIP 가 있으면** 약 15초 뒤 B 가 승격되고 DB VIP → B. 마지막 몇 초의 쓰기는 유실될 수 있다 | A 가 살아나도 **주로 못 뜬다**(guard). 「8.4」 대로 A 를 대기로 |
+| **서버 A(주) 통째** | **DB VIP 가 있으면** 약 15초 뒤 B 가 승격되고 DB VIP → B. 마지막 몇 초의 쓰기는 유실될 수 있다. 앱은 B 만 남는다 | A 가 살아나도 **주로 못 뜬다**(guard). 「8.4」 대로 A 를 대기로 |
 | **주 DB 만**(A 의 postgres) | 위와 같다(`pg-ha check` 가 3번 실패 → VIP 이동 → 승격) | 같다 |
-| **DB VIP 없이 A 통째** | 웹 VIP 만 B 로. **앱은 DB 를 잃는다** | B 에서 `sudo ./deploy.sh db-promote` → `/data/…/.env` 의 `DATABASE_URL` 호스트를 B 로 → 양쪽 `sudo systemctl restart <slug>` |
+| **DB VIP 없이 A 통째** | 앱은 B 만 남지만 **DB 를 잃는다** | B 에서 `sudo ./deploy.sh db-promote` → `/data/…/.env` 의 `DATABASE_URL` 호스트를 B 로 → `sudo systemctl restart <slug>` |
+| **메인 서버** | 아무도 못 들어온다 — 메인 서버 쪽 일 | A · B 는 그대로 돈다. 급하면 `http://<A>:8040/` 로 직접(접두어 없이는 화면이 안 맞는다 — `PUBLIC_PATH` 때문. 확인용으로만) |
 | **/data 가 안 보인다** | 첨부 · 백업이 멈춘다. 앱 재시작은 `.env` 를 못 읽어 실패한다(떠 있는 앱은 계속 돈다) | 마운트를 살린다. 그동안은 앱을 재시작하지 않는다 |
 
 ### 8.4 승격 뒤 원복 — 옛 주를 대기로, 그리고 (원하면) 다시 주로
@@ -408,15 +417,15 @@ sudo ./deploy.sh db-primary                  # /etc/pg-ha.conf 에 VIP 를 적�
 
 ### 8.6 재부팅 점검
 
-부팅 순서는 유닛이 정한다 — PostgreSQL → nginx → keepalived(그 뒤에 떠야 「아직 안 뜬 주」 를 죽었다고 보지 않는다) → 앱. 켠 뒤:
+부팅 순서는 유닛이 정한다 — PostgreSQL → keepalived(그 뒤에 떠야 「아직 안 뜬 주」 를 죽었다고 보지 않는다) → 앱. 켠 뒤:
 
 ```bash
 sudo ./deploy.sh status
 ```
 
 - 「역할」 이 기대와 같은가(A 주 · B 대기). 옛 주가 guard 에 막혀 postgres 가 안 떴으면 `journalctl -u postgresql@16-main` 에 「pg-ha: …standby --from…」 이 있다 — 그대로 한다.
-- 웹 VIP · DB VIP 가 어디 있나. 둘 다 살아 있으면 웹 VIP 는 master 역할 서버, DB VIP 는 주 DB 서버.
-- LB 경유 health 가 200 인가.
+- DB VIP 가 주 DB 서버에 있나.
+- 메인 서버 경유 health 가 200 인가.
 
 ### 8.7 스플릿 브레인 — 두 주가 되는 것을 막는 세 겹
 
@@ -428,4 +437,8 @@ sudo ./deploy.sh status
 
 ### 8.8 한 서버 두 대에 여러 플랫폼
 
-`/etc/platform-ha.conf` · keepalived · nginx 의 server 블록 · PostgreSQL 주/대기는 **호스트에 하나**다. 두 번째 플랫폼은 같은 역할 · 상대 · VIP 로 `prepare` → `install` 만 하면 `/etc/nginx/platforms.d/<slug>.conf` 가 하나 더 생기고 같은 PostgreSQL 클러스터에 DB 하나가 더 생긴다(복제도 저절로 함께). `db-primary` · `db-standby` 는 **클러스터에 한 번**이면 된다 — 두 번째 플랫폼에서 다시 돌리면 pg_hba 만 갱신되고 같다.
+`/etc/platform-ha.conf` · keepalived · PostgreSQL 주/대기는 **호스트에 하나**다. 두 번째 플랫폼은 같은 역할 · 상대 · DB VIP 로 `prepare` → `install` 만 하면 메인 서버용 조각이 하나 더 생기고 같은 PostgreSQL 클러스터에 DB 하나가 더 생긴다(복제도 저절로 함께). `db-primary` · `db-standby` 는 **클러스터에 한 번**이면 된다 — 두 번째 플랫폼에서 다시 돌리면 pg_hba 만 갱신되고 같다.
+
+### 8.9 메인 서버 없이 — A · B 가 직접 받을 때 (`LB_MODE=local`)
+
+`LB_MODE=local WEB_VIP=<VIP>` 를 더해 8.1 을 그대로 하면 A · B 에 nginx(TLS 종단 · 접두어 벗기기 · 두 앱 분배)와 keepalived 웹 VIP(vrid 51, master 역할 서버가 쥔다)가 선다. 인증서는 A 가 자체 서명으로 만들어 `/data/…/tls/` 에 두고 B 가 가져간다. 정식 인증서를 받으면 두 서버의 `/etc/nginx/tls/server.{crt,key}` 를 바꾸고 `sudo systemctl reload nginx`.

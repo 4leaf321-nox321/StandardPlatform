@@ -10,7 +10,7 @@
 #
 # 서버 두 대 이중화(ha.sh · pg-ha.sh — 자세한 것은 README 「이중화」):
 #   sudo ./deploy.sh db-primary | db-standby --from <IP> | db-promote | db-demote | db-status
-#   sudo ./deploy.sh lb        nginx · keepalived · 인증서를 env 에서 다시 만들고 반영
+#   sudo ./deploy.sh lb        메인 서버용 nginx 조각 · keepalived(DB VIP)를 env 에서 다시 만들고 반영
 #
 # **번들이 자기가 무슨 플랫폼인지 말한다**(BUILD_INFO). 앱 이름·slug·포트가 거기
 # 있으므로 이 스크립트에는 제품 이름이 박혀 있지 않다 — 박아 두면 포크할 때 바꿀
@@ -61,7 +61,7 @@ as_op() { sudo -u "$OPERATOR" "$@"; }
 
 # ───────────────────────── 이중화 · 공용 스토리지 ─────────────────────────
 # ha.sh 가 /etc/platform-ha.conf(호스트) 와 $INSTALL_DIR/deploy.conf(플랫폼) 를 읽어
-# HA_ROLE · PEER_IP · WEB_VIP · DB_VIP · PUBLIC_HOST · DATA_DIR 를 채운다(env 가 우선).
+# HA_ROLE · LB_MODE · PEER_IP · DB_VIP · PUBLIC_HOST · DATA_DIR (local 이면 WEB_VIP) 를 채운다(env 가 우선).
 [[ -f "$HERE/ha.sh" ]] || err "ha.sh 가 $HERE 에 없습니다 (릴리스 번들에서 실행하세요)"
 # shellcheck disable=SC1091
 source "$HERE/ha.sh"
@@ -118,8 +118,9 @@ MCP_API_BASE="${MCP_API_BASE:-http://127.0.0.1:$APP_PORT}"
 # DNS rebinding 보호 허용 Host(쉼표구분). 비우면 server.py 가 비-localhost 바인딩 시
 # 보호를 끈다(사내망). 외부 노출 시 도메인/IP 지정 권장. 이 값도 위처럼 기억된다.
 MCP_ALLOWED_HOSTS="${MCP_ALLOWED_HOSTS:-$(unit_env MCP_ALLOWED_HOSTS)}"
-# nginx 가 Host 를 그대로 넘기므로 공개 호스트명이 허용 목록에 있어야 한다.
-[[ -n "$HA_ROLE" && -z "$MCP_ALLOWED_HOSTS" ]] && MCP_ALLOWED_HOSTS="$PUBLIC_HOST,$WEB_VIP,$SELF_IP,$PEER_IP"
+# 우리 nginx(LB_MODE=local)는 Host 를 그대로 넘기므로 공개 호스트명이 허용 목록에 있어야 한다.
+# 메인 서버의 nginx 가 무엇을 넘기는지는 모르므로 그때는 비워 둔다(0.0.0.0 이면 보호를 끈다 — 사내망).
+[[ "$HA_ROLE" != "" && "$LB_MODE" == "local" && -z "$MCP_ALLOWED_HOSTS" ]] && MCP_ALLOWED_HOSTS="$PUBLIC_HOST,$WEB_VIP,$SELF_IP,$PEER_IP"
 
 # ───────────────────────── 조각들 ─────────────────────────
 # apptainer 는 **우분투 기본 저장소에 없다** — 공식 PPA 에만 있다. `apt-get install apptainer`
@@ -405,13 +406,15 @@ health_check() {
 
 # ───────────────────────── 명령 ─────────────────────────
 cmd_prepare() {
-    info "OS 패키지 설치 (postgresql-$PG_VERSION, python3-venv$( [[ -n "$HA_ROLE" ]] && echo ', nginx, keepalived' ))"
+    info "OS 패키지 설치 (postgresql-$PG_VERSION, python3-venv$( [[ -n "$HA_ROLE" ]] && echo ', keepalived' )$( [[ "$LB_MODE" == "local" ]] && echo ', nginx' ))"
     # python3-venv: MCP 서버가 별도 venv 로 돈다. 없으면 install 때 MCP 만 조용히
     # 건너뛰어지고, 그 사실은 Claude 를 붙이는 날에야 드러난다.
     # apptainer 는 여기 없다 — 기본 저장소에 없어서, 맨 끝 `ensure_apptainer` 가 따로 깐다.
     # **PostgreSQL 은 버전을 박아 깐다.** 두 서버의 버전이 다르면 복제가 안 된다 — 「postgresql」
     # 메타패키지는 OS 가 주는 것을 깔아 서버마다 달라질 수 있다.
-    local ha_pkgs=(); [[ -n "$HA_ROLE" ]] && ha_pkgs=(nginx keepalived openssl)
+    # keepalived 는 DB VIP 를 나중에 받아도 바로 켤 수 있게 이중화면 늘 깐다. nginx 는 우리가 LB 일 때만.
+    local ha_pkgs=(); [[ -n "$HA_ROLE" ]] && ha_pkgs=(keepalived)
+    [[ "$LB_MODE" == "local" ]] && ha_pkgs+=(nginx openssl)
     apt-get update
     apt-get install -y --no-install-recommends \
         "postgresql-$PG_VERSION" "postgresql-client-$PG_VERSION" postgresql-contrib \
@@ -595,21 +598,23 @@ cmd_status() {
     ha_status
 }
 
-# 아무것도 바꾸지 않고 결과만 — ETC=<폴더> 를 주면 nginx · keepalived 설정도 거기 쓴다.
+# 아무것도 바꾸지 않고 결과만 — ETC=<폴더> 를 주면 거기 쓰고, 없으면 임시 폴더에 쓴 뒤 화면에 보여 준다.
 cmd_render() {
-    local out="${ETC:-}"
+    local show=0
+    if [[ -z "${ETC:-}" ]]; then ETC="$(mktemp -d)"; show=1; fi
     local tpl unit
+    mkdir -p "$ETC/etc/systemd/system"
     for tpl in app.service sync.service backup.service; do
         [[ -f "$HERE/$tpl.template" ]] || continue
         case "$tpl" in app.service) unit="$SERVICE_NAME.service" ;; sync.service) unit="$SYNC_SERVICE_NAME.service" ;; *) unit="$BACKUP_SERVICE_NAME.service" ;; esac
-        if [[ -n "$out" ]]; then
-            mkdir -p "$out/etc/systemd/system"
-            render_unit_paths "$HERE/$tpl.template" > "$out/etc/systemd/system/$unit"
-        else
-            echo "### $tpl"; render_unit_paths "$HERE/$tpl.template"; echo
-        fi
+        render_unit_paths "$HERE/$tpl.template" > "$ETC/etc/systemd/system/$unit"
     done
-    if [[ -n "$out" ]]; then render_lb; echo "렌더 결과: $out/etc"; else render_lb; fi
+    render_lb
+    if [[ $show -eq 1 ]]; then
+        find "$ETC" -type f | sort | while read -r f; do echo "### ${f#"$ETC"}"; cat "$f"; echo; done
+    else
+        echo "렌더 결과: $ETC"
+    fi
 }
 
 cmd_auto() {
@@ -640,7 +645,7 @@ $APP_NAME 배포 스크립트 ($VERSION)
   db-standby [--from IP]  이 서버의 PostgreSQL 을 대기로 (데이터는 주에서 새로 받는다)
   db-promote              대기를 주로 (장애)      db-demote  주를 곱게 내림 (계획 전환)
   db-status               역할 · 복제 지연 · VIP
-  lb                      nginx · keepalived · 인증서를 지금 설정으로 다시 만들고 반영
+  lb                      메인 서버용 nginx 조각 · keepalived(DB VIP)를 지금 설정으로 다시 만들고 반영
 
 지금 설정 (env 로 덮을 수 있음):
   OPERATOR    = $OPERATOR
@@ -650,7 +655,7 @@ $APP_NAME 배포 스크립트 ($VERSION)
   DB_USER     = $DB_USER
   APP_PORT    = $APP_PORT
   MCP_ENABLED = $MCP_ENABLED   (MCP_HOST=$MCP_HOST MCP_PORT=$MCP_PORT MCP_API_BASE=$MCP_API_BASE)
-  HA_ROLE     = ${HA_ROLE:-(없음)}   PEER_IP=$PEER_IP WEB_VIP=$WEB_VIP DB_VIP=${DB_VIP:-(없음)} PUBLIC_HOST=$PUBLIC_HOST
+  HA_ROLE     = ${HA_ROLE:-(없음)}   PEER_IP=$PEER_IP DB_VIP=${DB_VIP:-(없음)} PUBLIC_HOST=$PUBLIC_HOST LB_MODE=$LB_MODE${WEB_VIP:+ WEB_VIP=$WEB_VIP}
 MSG
 }
 

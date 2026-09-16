@@ -1,17 +1,27 @@
 # 이중화 — deploy.sh 가 source 한다. 단독으로 실행하지 않는다.
 #
-# 서버 두 대(A · B)에 같은 플랫폼을 올리고, keepalived 의 VIP 하나로 받아 nginx 가 두 앱에
-# 나눠 준다. DB 는 한쪽이 주(쓰기), 한쪽이 대기(복제)이며 그 일은 /usr/local/sbin/pg-ha 가 한다.
+#   사용자 · 외부 AI ──HTTPS──▶ 메인 서버(포탈 + nginx — 메인 서버 쪽이 관리)
+#                                  /<slug>/… → 접두어를 벗겨 A · B 로 분배
+#                             ┌──────────┴──────────┐
+#                        서버 A                  서버 B          둘 다 활성. 앱 :8040 · MCP :8042
+#                        PostgreSQL 주 ── 복제 ──▶ 대기          DB VIP(있으면) 가 주를 따라간다
+#                             └──── /data/<slug>/ 공용 ────┘      첨부 · 백업 · .env
+#
+# 서버 두 대(A · B)에 같은 플랫폼을 올린다. **로드밸런서는 메인 서버의 것**이다(LB_MODE=external,
+# 기본) — A · B 에는 nginx 도 웹 VIP 도 인증서도 없고, 메인 서버에 넘길 nginx 조각만 만들어 준다.
+# DB 는 한쪽이 주(쓰기), 한쪽이 대기(복제)이며 그 일은 /usr/local/sbin/pg-ha 가 한다. DB VIP 가
+# 있으면 keepalived 가 그것을 주에 붙이고, 주가 죽으면 대기를 승격한다.
+#
+# 메인 서버가 없을 때(LB_MODE=local)는 A · B 자체에 nginx + keepalived 웹 VIP 를 세운다.
 #
 # **호스트 수준과 플랫폼 수준을 가른다.**
-#   호스트 수준(서버 두 대에 하나): keepalived · nginx 의 server 블록 · 인증서 · PostgreSQL 주/대기.
+#   호스트 수준(서버 두 대에 하나): keepalived · PostgreSQL 주/대기 (local 이면 nginx server 블록 · 인증서도).
 #     설정은 /etc/platform-ha.conf — 같은 서버의 모든 플랫폼이 공유한다.
-#   플랫폼 수준(slug 마다): nginx 의 location · upstream, 앱 · MCP 유닛, /data 의 자기 폴더.
-#     설정은 $INSTALL_DIR/deploy.conf (DATA_DIR).
+#   플랫폼 수준(slug 마다): 메인 서버용 nginx 조각(또는 local 의 location · upstream), 앱 · MCP 유닛,
+#     /data 의 자기 폴더. 설정은 $INSTALL_DIR/deploy.conf (DATA_DIR).
 #
 # 처음 한 번 env 로 주면 파일에 남아 다음 배포가 기억한다(MCP 설정과 같은 방식):
-#   HA_ROLE=master PEER_IP=10.252.39.138 WEB_VIP=10.252.39.140 PUBLIC_HOST=hwax.sec.samsung.net \
-#   DATA_DIR=/data/<공통폴더>/<slug>  sudo ./deploy.sh prepare
+#   HA_ROLE=master PEER_IP=<B> PUBLIC_HOST=hwax.sec.samsung.net DATA_DIR=/data/<slug> sudo ./deploy.sh prepare
 
 # ETC 를 주면 /etc 대신 그 아래에 쓴다 — 'deploy.sh render' 가 root 없이 결과를 보여 주는 길.
 ETC="${ETC:-}"
@@ -23,6 +33,7 @@ platform_conf_get() { [[ -f "$INSTALL_DIR/deploy.conf" ]] && sed -n "s|^$1=||p" 
 
 ha_load() {
     HA_ROLE="${HA_ROLE:-$(ha_conf_get HA_ROLE)}"
+    LB_MODE="${LB_MODE:-$(ha_conf_get LB_MODE)}"; LB_MODE="${LB_MODE:-external}"
     PEER_IP="${PEER_IP:-$(ha_conf_get PEER_IP)}"
     WEB_VIP="${WEB_VIP:-$(ha_conf_get WEB_VIP)}"
     DB_VIP="${DB_VIP:-$(ha_conf_get DB_VIP)}"
@@ -34,10 +45,14 @@ ha_load() {
     BACKUP_HOST_DIR="${BACKUP_HOST_DIR:-$(platform_conf_get BACKUP_HOST_DIR)}"
     if [[ -n "$HA_ROLE" ]]; then
         [[ "$HA_ROLE" == "master" || "$HA_ROLE" == "backup" ]] || err "HA_ROLE 은 master 또는 backup 입니다: $HA_ROLE"
-        [[ -n "$PEER_IP" && -n "$WEB_VIP" && -n "$PUBLIC_HOST" ]] \
-            || err "이중화에는 PEER_IP · WEB_VIP · PUBLIC_HOST 가 필요합니다 (한 번 주면 $HA_CONF 에 남습니다)"
+        [[ "$LB_MODE" == "external" || "$LB_MODE" == "local" ]] || err "LB_MODE 는 external(메인 서버의 nginx) 또는 local 입니다: $LB_MODE"
+        [[ -n "$PEER_IP" && -n "$PUBLIC_HOST" ]] \
+            || err "이중화에는 PEER_IP · PUBLIC_HOST 가 필요합니다 (한 번 주면 $HA_CONF 에 남습니다)"
+        [[ "$LB_MODE" == "external" || -n "$WEB_VIP" ]] || err "LB_MODE=local 에는 WEB_VIP 가 필요합니다"
         [[ -n "$VRRP_IFACE" ]] || VRRP_IFACE="$(ip -o route get "$PEER_IP" 2>/dev/null | sed -n 's/.* dev \([^ ]*\).*/\1/p' | head -n1)"
-        [[ -n "$VRRP_IFACE" ]] || err "VRRP 인터페이스를 알 수 없습니다 — VRRP_IFACE=<eth> 로 주세요"
+        if [[ -z "$VRRP_IFACE" && ( -n "$DB_VIP" || "$LB_MODE" == "local" ) ]]; then
+            err "VRRP 인터페이스를 알 수 없습니다 — VRRP_IFACE=<eth> 로 주세요"
+        fi
     fi
     # 상대에게 갈 때 쓰는 내 주소 — NIC 가 여럿이면 SELF_IP=<주소> 로 준다(파일에 남는다).
     SELF_IP="${SELF_IP:-$(ha_conf_get SELF_IP)}"
@@ -50,6 +65,7 @@ ha_save() {
     cat > "$HA_CONF" <<EOF
 # 서버 두 대 이중화 — 이 서버의 모든 플랫폼이 공유한다. deploy.sh 가 쓴다(env 로 덮으면 갱신).
 HA_ROLE=$HA_ROLE
+LB_MODE=$LB_MODE
 PEER_IP=$PEER_IP
 SELF_IP=$SELF_IP
 WEB_VIP=$WEB_VIP
@@ -214,9 +230,74 @@ location $prefix/ {
 EOF
 }
 
+# ───────────────────────── 메인 서버용 nginx 조각 (LB_MODE=external) ─────────────────────────
+# 메인 서버의 nginx 는 메인 서버 쪽이 관리한다 — 우리는 **넣어 달라고 할 조각**을 만들어 준다.
+# 접두어를 벗겨 넘기는 것(proxy_pass 끝의 '/')과 X-Forwarded-Proto 가 핵심이다: 앞은 앱이
+# /<slug>/ 를 모르기 때문이고, 뒤는 앱이 https 인 줄 알아야 쿠키(Secure)와 주소가 맞기 때문이다.
+render_main_server_snippet() {
+    local prefix="/$APP_SLUG" out="${1:-$INSTALL_DIR/main-server-nginx.conf}"
+    mkdir -p "$(dirname "$out")"
+    cat > "$out" <<EOF
+# $APP_NAME — 메인 서버 nginx 에 넣을 조각 (deploy.sh 가 만들었다 · $(date -I))
+# https://$PUBLIC_HOST$prefix/ → 서버 A · B 의 앱, $prefix/mcp → A · B 의 MCP.
+# upstream 은 http 컨텍스트에, location 은 $PUBLIC_HOST 의 server(443) 블록 안에.
+
+upstream ${APP_SLUG}_app {
+    server $SELF_IP:$APP_PORT max_fails=3 fail_timeout=10s;
+    server $PEER_IP:$APP_PORT max_fails=3 fail_timeout=10s;
+    keepalive 32;
+}
+upstream ${APP_SLUG}_mcp {
+    server $SELF_IP:$MCP_PORT max_fails=3 fail_timeout=10s;
+    server $PEER_IP:$MCP_PORT max_fails=3 fail_timeout=10s;
+}
+
+# ---- 아래는 server { listen 443 ssl; server_name $PUBLIC_HOST; … } 안에 ----
+location = $prefix { return 301 $prefix/; }
+
+# MCP(스트리밍 HTTP) — 버퍼를 끄고 오래 연다.
+location $prefix/mcp {
+    proxy_pass http://${APP_SLUG}_mcp/mcp;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_buffering off;
+    proxy_cache off;
+    proxy_read_timeout 3600s;
+    proxy_send_timeout 3600s;
+}
+
+# 앱 — **끝의 '/' 가 접두어 $prefix 를 벗긴다.** 앱은 PUBLIC_PATH=$prefix 로 화면 · 쿠키 · API 주소를 맞춘다.
+location $prefix/ {
+    proxy_pass http://${APP_SLUG}_app/;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-Prefix $prefix;
+    client_max_body_size 512m;
+    proxy_read_timeout 600s;
+    proxy_send_timeout 600s;
+    # 한 앱이 죽으면 다른 앱으로 — 읽기와 멱등한 것만(POST 는 두 번 가면 안 된다).
+    proxy_next_upstream error timeout http_502 http_503;
+    proxy_next_upstream_tries 2;
+}
+EOF
+    [[ -n "$ETC" ]] || chown "$OPERATOR:$OPERATOR" "$out" 2>/dev/null || true
+}
+
 # ───────────────────────── keepalived ─────────────────────────
 # 호스트 수준. 웹 VIP 는 nginx 를 보고, DB VIP 는 pg-ha 를 본다.
+# keepalived 가 필요한가 — DB VIP 가 있거나, 웹 VIP 를 우리가 쥐어야 할 때.
+keepalived_needed() { [[ -n "$DB_VIP" || "$LB_MODE" == "local" ]]; }
+
 render_keepalived() {
+    keepalived_needed || return 0
     local prio_web=100 prio_db=100
     [[ "$HA_ROLE" == "master" ]] && prio_web=150
     # DB VIP 는 **주가 항상 이긴다**(check-primary +50). 서버 우선순위는 동점을 가를 뿐이다.
@@ -233,6 +314,10 @@ global_defs {
     vrrp_garp_master_delay 1
     vrrp_garp_master_repeat 3
 }
+
+EOF
+    if [[ "$LB_MODE" == "local" ]]; then
+        cat >> "$ETC/etc/keepalived/keepalived.conf" <<EOF
 
 vrrp_script chk_nginx {
     script "/usr/bin/pidof nginx"
@@ -255,6 +340,7 @@ vrrp_instance VI_WEB {
     track_script { chk_nginx }
 }
 EOF
+    fi
     if [[ -n "$DB_VIP" ]]; then
         cat >> "$ETC/etc/keepalived/keepalived.conf" <<EOF
 
@@ -295,7 +381,7 @@ EOF
     mkdir -p "$ETC/etc/systemd/system/keepalived.service.d"
     cat > "$ETC/etc/systemd/system/keepalived.service.d/platform-ha.conf" <<EOF
 [Unit]
-After=postgresql.service nginx.service
+After=postgresql.service$( [[ "$LB_MODE" == "local" ]] && echo ' nginx.service' )
 EOF
     [[ -n "$ETC" ]] || systemctl daemon-reload
 }
@@ -303,35 +389,56 @@ EOF
 # root 없이 결과만 본다 — 'ETC=<폴더> ./deploy.sh render' 가 nginx · keepalived 설정을 거기 쓴다.
 render_lb() {
     [[ -n "$HA_ROLE" ]] || { echo "(HA_ROLE 이 없어 로드밸런서 설정은 없다)"; return 0; }
-    render_nginx_host
-    render_nginx_platform
+    if [[ "$LB_MODE" == "local" ]]; then
+        render_nginx_host
+        render_nginx_platform
+    else
+        render_main_server_snippet "${ETC:+$ETC/main-server-nginx.conf}"
+    fi
     render_keepalived
 }
 
 setup_lb() {
     [[ -n "$HA_ROLE" ]] || return 0
-    command -v nginx >/dev/null && command -v keepalived >/dev/null \
-        || err "nginx · keepalived 가 없습니다 — 'sudo ./deploy.sh prepare' 를 먼저"
     install_pg_ha || true
-    ensure_tls
-    render_nginx_host
-    render_nginx_platform
-    render_keepalived
-    nginx -t >/dev/null 2>&1 || { nginx -t; err "nginx 설정이 틀렸습니다"; }
-    systemctl enable nginx keepalived >/dev/null 2>&1 || true
-    systemctl reload-or-restart nginx
-    systemctl reload-or-restart keepalived
-    info "로드밸런서: https://$PUBLIC_HOST/$APP_SLUG/  (VIP $WEB_VIP · 이 서버 $SELF_IP · 상대 $PEER_IP)"
-    [[ -n "$DB_VIP" ]] || warn "DB VIP 가 없어 자동 승격은 꺼져 있습니다 — 받으면 DB_VIP=<주소> sudo ./deploy.sh lb"
+    if [[ "$LB_MODE" == "local" ]]; then
+        command -v nginx >/dev/null || err "nginx 가 없습니다 — 'sudo ./deploy.sh prepare' 를 먼저"
+        ensure_tls
+        render_nginx_host
+        render_nginx_platform
+        nginx -t >/dev/null 2>&1 || { nginx -t; err "nginx 설정이 틀렸습니다"; }
+        systemctl enable nginx >/dev/null 2>&1 || true
+        systemctl reload-or-restart nginx
+        info "로드밸런서(이 서버): https://$PUBLIC_HOST/$APP_SLUG/  (VIP $WEB_VIP · 이 서버 $SELF_IP · 상대 $PEER_IP)"
+    else
+        render_main_server_snippet
+        info "메인 서버에 넣을 nginx 조각: $INSTALL_DIR/main-server-nginx.conf  → https://$PUBLIC_HOST/$APP_SLUG/"
+        echo "    메인 서버 쪽에 부탁할 것: 이 조각 그대로(접두어를 벗기는 proxy_pass 끝의 '/', X-Forwarded-Proto)."
+    fi
+    if keepalived_needed; then
+        command -v keepalived >/dev/null || err "keepalived 가 없습니다 — 'sudo ./deploy.sh prepare' 를 먼저"
+        render_keepalived
+        systemctl enable keepalived >/dev/null 2>&1 || true
+        systemctl reload-or-restart keepalived
+    fi
+    [[ -n "$DB_VIP" ]] || warn "DB VIP 가 없어 자동 승격은 꺼져 있습니다 — 받으면 DB_VIP=<주소> sudo ./deploy.sh lb (양쪽)"
 }
 
 ha_status() {
     [[ -n "$HA_ROLE" ]] || { echo "  이중화   : (단독 서버)"; return 0; }
-    echo "== 이중화 ($HA_ROLE · 이 서버 $SELF_IP · 상대 $PEER_IP) =="
-    echo "  웹 VIP   : $WEB_VIP$( ip -o addr show 2>/dev/null | grep -q " inet $WEB_VIP/" && echo ' — 이 서버가 쥠' || echo ' — 다른 곳')"
+    echo "== 이중화 ($HA_ROLE · 이 서버 $SELF_IP · 상대 $PEER_IP · LB $LB_MODE) =="
     echo "  주소     : https://$PUBLIC_HOST/$APP_SLUG/"
-    echo "  nginx    : $(systemctl is-active nginx 2>/dev/null)   keepalived: $(systemctl is-active keepalived 2>/dev/null)"
-    local code; code="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 3 "https://127.0.0.1/$APP_SLUG/api/health" 2>/dev/null || true)"
-    echo "  LB 경유  : https://127.0.0.1/$APP_SLUG/api/health → ${code:-실패}"
+    local code
+    if [[ "$LB_MODE" == "local" ]]; then
+        echo "  웹 VIP   : $WEB_VIP$( ip -o addr show 2>/dev/null | grep -q " inet $WEB_VIP/" && echo ' — 이 서버가 쥠' || echo ' — 다른 곳')"
+        echo "  nginx    : $(systemctl is-active nginx 2>/dev/null)"
+        code="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 3 "https://127.0.0.1/$APP_SLUG/api/health" 2>/dev/null || true)"
+        echo "  LB 경유  : https://127.0.0.1/$APP_SLUG/api/health → ${code:-실패}"
+    else
+        code="$(curl -ksS -o /dev/null -w '%{http_code}' --max-time 5 "https://$PUBLIC_HOST/$APP_SLUG/api/health" 2>/dev/null || true)"
+        echo "  메인 서버 경유 : https://$PUBLIC_HOST/$APP_SLUG/api/health → ${code:-실패 (메인 서버에 조각이 들어갔는지)}"
+        echo "  상대 앱  : $(curl -sS -o /dev/null -w '%{http_code}' --max-time 3 "http://$PEER_IP:$APP_PORT/api/health" 2>/dev/null || echo 실패)"
+    fi
+    keepalived_needed && echo "  keepalived: $(systemctl is-active keepalived 2>/dev/null)"
     if [[ -x /usr/local/sbin/pg-ha ]]; then echo; /usr/local/sbin/pg-ha status; fi
 }

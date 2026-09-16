@@ -15,16 +15,18 @@ import pytest
 REPO = Path(__file__).resolve().parents[3]
 DEPLOY = REPO / "deploy"
 
+# 기본 — 메인 서버(포탈 + nginx)가 로드밸런서. A · B 에는 앱 · MCP · DB 만.
 HA_ENV = {
     "HA_ROLE": "master",
     "PEER_IP": "10.0.0.2",
     "SELF_IP": "10.0.0.1",
-    "WEB_VIP": "10.0.0.10",
     "DB_VIP": "10.0.0.11",
     "PUBLIC_HOST": "portal.example.local",
     "VRRP_IFACE": "eth0",
     "DATA_DIR": "/data/common/testplatform",
 }
+# 메인 서버가 없을 때 — A · B 자체에 nginx + 웹 VIP.
+LOCAL_ENV = {**HA_ENV, "LB_MODE": "local", "WEB_VIP": "10.0.0.10"}
 
 
 @pytest.fixture
@@ -105,9 +107,31 @@ def test_이중화는_공용_폴더와_로컬을_가른다(bundle: Path, tmp_pat
     )
 
 
-def test_nginx_는_접두어를_떼고_두_앱에_나눈다(bundle: Path, tmp_path: Path) -> None:
+def test_메인_서버에_넘길_nginx_조각(bundle: Path, tmp_path: Path) -> None:
     etc = tmp_path / "etc"
     render(bundle, etc, **HA_ENV)
+    # A · B 에는 nginx 가 없다 — 메인 서버 쪽에 넣을 조각만.
+    assert not (etc / "etc/nginx").exists()
+    snippet = (etc / "main-server-nginx.conf").read_text(encoding="utf-8")
+    assert "server 10.0.0.1:8040" in snippet and "server 10.0.0.2:8040" in snippet
+    assert "server 10.0.0.1:8042" in snippet and "server 10.0.0.2:8042" in snippet
+    # 접두어를 벗기는 것(끝의 '/')과 https 를 알리는 것 — 이 둘이 없으면 앱이 못 맞춘다.
+    assert "location /testplatform/ {" in snippet
+    assert "proxy_pass http://testplatform_app/;" in snippet
+    assert "proxy_set_header X-Forwarded-Proto $scheme;" in snippet
+    assert "location /testplatform/mcp {" in snippet
+    assert "proxy_pass http://testplatform_mcp/mcp;" in snippet
+    assert "proxy_buffering off;" in snippet
+    # keepalived 는 DB VIP 만.
+    conf = read(etc, "keepalived/keepalived.conf")
+    assert "VI_DB" in conf and "VI_WEB" not in conf and "chk_nginx" not in conf
+    dropin = read(etc, "systemd/system/keepalived.service.d/platform-ha.conf")
+    assert "After=postgresql.service\n" in dropin
+
+
+def test_로컬_LB_는_접두어를_떼고_두_앱에_나눈다(bundle: Path, tmp_path: Path) -> None:
+    etc = tmp_path / "etc"
+    render(bundle, etc, **LOCAL_ENV)
     upstream = read(etc, "nginx/conf.d/testplatform-upstream.conf")
     assert "server 10.0.0.1:8040" in upstream and "server 10.0.0.2:8040" in upstream
     assert "server 10.0.0.1:8042" in upstream and "server 10.0.0.2:8042" in upstream
@@ -131,7 +155,7 @@ def test_nginx_는_접두어를_떼고_두_앱에_나눈다(bundle: Path, tmp_pa
 
 def test_keepalived_는_주_DB_가_항상_이긴다(bundle: Path, tmp_path: Path) -> None:
     etc = tmp_path / "etc"
-    render(bundle, etc, **HA_ENV)
+    render(bundle, etc, **LOCAL_ENV)
     conf = (etc / "etc/keepalived/keepalived.conf").read_text(encoding="utf-8")
     assert "virtual_router_id 51" in conf and "virtual_ipaddress { 10.0.0.10 }" in conf
     assert "virtual_router_id 52" in conf and "virtual_ipaddress { 10.0.0.11 }" in conf
@@ -145,7 +169,7 @@ def test_keepalived_는_주_DB_가_항상_이긴다(bundle: Path, tmp_path: Path
     assert "After=postgresql.service nginx.service" in dropin.read_text(encoding="utf-8")
 
     other = tmp_path / "etc-b"
-    swapped = {**HA_ENV, "HA_ROLE": "backup", "SELF_IP": "10.0.0.2", "PEER_IP": "10.0.0.1"}
+    swapped = {**LOCAL_ENV, "HA_ROLE": "backup", "SELF_IP": "10.0.0.2", "PEER_IP": "10.0.0.1"}
     render(bundle, other, **swapped)
     conf_b = read(other, "keepalived/keepalived.conf")
     assert "state BACKUP" in conf_b and "priority 100" in conf_b
@@ -154,9 +178,14 @@ def test_keepalived_는_주_DB_가_항상_이긴다(bundle: Path, tmp_path: Path
 
 def test_DB_VIP_가_없으면_자동_승격_인스턴스가_없다(bundle: Path, tmp_path: Path) -> None:
     etc = tmp_path / "etc"
-    render(bundle, etc, **{**HA_ENV, "DB_VIP": ""})
+    render(bundle, etc, **{**LOCAL_ENV, "DB_VIP": ""})
     conf = (etc / "etc/keepalived/keepalived.conf").read_text(encoding="utf-8")
     assert "VI_WEB" in conf and "VI_DB" not in conf and "on-master" not in conf
+    # 메인 서버가 LB 이고 DB VIP 도 없으면 keepalived 자체가 없다.
+    plain = tmp_path / "etc-plain"
+    render(bundle, plain, **{**HA_ENV, "DB_VIP": ""})
+    assert not (plain / "etc/keepalived").exists()
+    assert (plain / "main-server-nginx.conf").exists()
 
 
 def test_스크립트_문법(bundle: Path) -> None:
