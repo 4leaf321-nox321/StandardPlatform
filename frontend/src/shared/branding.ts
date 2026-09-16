@@ -32,8 +32,12 @@ export const APP_NAME = meta('app-name') || DEFAULT_APP_NAME
  */
 export const APP_SLUG = meta('app-slug') || DEFAULT_APP_SLUG
 
-/** 한 줄 설명. 로그인 화면과 사이드바가 같은 말을 한다. */
-export const APP_TAGLINE = meta('app-tagline') || DEFAULT_APP_TAGLINE
+/**
+ * 한 줄 설명. 로그인 화면과 사이드바가 같은 말을 한다. **비면 안 그린다.** 틀의 기본 문구는
+ * 이름도 틀 그대로일 때만 — 이름을 정한 인스턴스 밑에 「공통 틀」 이 붙으면 틀린 말이다.
+ */
+export const APP_TAGLINE =
+  meta('app-tagline') ?? (APP_NAME === DEFAULT_APP_NAME ? DEFAULT_APP_TAGLINE : '')
 
 /**
  * 이 설치가 켠 확장(`.env` 의 EXTENSIONS). 화면은 이 목록에 있는 것의 메뉴 · 페이지만 붙인다

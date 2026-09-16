@@ -44,8 +44,9 @@ class Settings(BaseSettings):
     바꾸면 쿠키 · 토큰이 다 무효가 되고 DB 이름이 어긋난다."""
     app_name: str = DEFAULT_APP_NAME
     """화면 제목 · API 문서 제목 · 기동 로그 · `/api/health` 의 `app`."""
-    app_tagline: str = DEFAULT_APP_TAGLINE
-    """한 줄 설명 — 로그인 화면과 사이드바."""
+    app_tagline: str = ""
+    """한 줄 설명 — 로그인 화면과 사이드바. 비우면 안 뜬다. 이름을 안 준 설치(틀 그대로)만
+    틀의 기본 문구가 들어간다 — 이름을 정한 인스턴스 밑에 「공통 틀」 이 붙으면 틀린 말이다."""
     extensions: str = ""
     """이 설치가 켜는 확장 모듈, 쉼표로(`hub,bom`). **코어는 확장을 모른다** — 이름으로
     `app/extensions/<이름>` 을 찾아 라우터 · 훅을 붙이고, 화면에도 같은 목록을 심어 그쪽
@@ -148,6 +149,8 @@ class Settings(BaseSettings):
             raise ValueError(
                 f"APP_SLUG 는 소문자·숫자 한 덩어리 32자 이내여야 합니다: {self.app_slug!r}"
             )
+        if not self.app_tagline and self.app_name == DEFAULT_APP_NAME:
+            self.app_tagline = DEFAULT_APP_TAGLINE
         if not self.database_url:
             self.database_url = (
                 f"postgresql+psycopg://postgres:postgres@localhost:5432/{self.app_slug}"

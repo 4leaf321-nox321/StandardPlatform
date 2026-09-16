@@ -61,7 +61,11 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
               고장난 것처럼 보이는데, 실제로는 개발 경로에서 돈다는 뜻이다. */}
           {release && release !== UNKNOWN_VERSION && (
             <span
-              className={cn('ml-1.5 font-mono', stale && 'font-semibold text-amber-600')}
+              className={cn(
+                'font-mono',
+                APP_TAGLINE && 'ml-1.5',
+                stale && 'font-semibold text-amber-600',
+              )}
               title={
                 stale
                   ? `이 화면은 ${__APP_VERSION__} 인데 서버는 ${release} 입니다. ` +

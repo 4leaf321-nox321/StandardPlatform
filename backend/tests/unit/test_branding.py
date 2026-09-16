@@ -116,3 +116,11 @@ def test_프론트는_이름을_굽지_않는다() -> None:
     assert "meta('app-name')" in text and "meta('app-slug')" in text
     found = re.search(r"DEFAULT_APP_SLUG\s*=\s*'([^']+)'", text)
     assert found and found.group(1) == DEFAULT_APP_SLUG
+
+
+def test_설명_문구는_틀_이름일_때만_기본값이다() -> None:
+    """이름을 정한 인스턴스 밑에 「사내 플랫폼 공통 틀」 이 붙으면 틀린 말이다 — 안 주면
+    비운다."""
+    assert _settings().app_tagline != ""
+    assert _settings(APP_NAME="PLM 기준정보").app_tagline == ""
+    assert _settings(APP_NAME="PLM 기준정보", APP_TAGLINE="한 줄").app_tagline == "한 줄"

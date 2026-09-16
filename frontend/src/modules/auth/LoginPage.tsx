@@ -53,7 +53,7 @@ export default function LoginPage() {
       <form onSubmit={submit} className="w-full max-w-sm space-y-5">
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">{APP_NAME}</h1>
-          <p className="text-muted-foreground mt-1 text-sm">{APP_TAGLINE}</p>
+          {APP_TAGLINE && <p className="text-muted-foreground mt-1 text-sm">{APP_TAGLINE}</p>}
         </div>
 
         <div className="space-y-2">
