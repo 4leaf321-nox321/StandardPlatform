@@ -7,6 +7,7 @@
 #   sudo ./deploy.sh reset     DB 통째로 초기화 (파괴적)
 #   sudo ./deploy.sh status    서비스 상태 + /api/health
 #   sudo ./deploy.sh           자동: 설치된 흔적이 없으면 install, 있으면 update
+#   sudo ./deploy.sh remove    이 인스턴스를 서버에서 지운다 — 유닛 · DB · 설치 폴더 (공용 폴더는 남긴다)
 #   sudo ./deploy.sh setup     **물어보고 알아서** — 이름 · 역할 · 상대 서버를 답하면 prepare → (DB 주/대기)
 #                              → install 을 순서대로. 서버 두 대 첫 설치는 이것 하나면 된다.
 #
@@ -756,8 +757,9 @@ PLAN
     as_op mkdir -p "$INSTALL_DIR"
     local log="$INSTALL_DIR/setup.log"
     # 화면에 찍히는 것을 전부 파일에도 — 임시 비밀번호가 「한 번만」 찍히는 문제를 여기서 푼다.
+    # **파일은 tee 보다 먼저 만든다.** tee 는 뒤늦게 뜨므로 그 뒤에 chown 하면 「없는 파일」 이다(실측).
+    touch "$log"; chown "$OPERATOR:$OPERATOR" "$log"; chmod 600 "$log"
     exec > >(tee -a "$log") 2>&1
-    chown "$OPERATOR:$OPERATOR" "$log"; chmod 600 "$log"
     echo "[$(date -Is)] setup 시작 — $APP_NAME ($APP_SLUG) $HA_ROLE"
 
     cmd_prepare
@@ -815,6 +817,47 @@ MSG
     echo "[$(date -Is)] setup 끝"
 }
 
+# ───────────────────────── remove — 인스턴스 지우기 ─────────────────────────
+# 리허설로 올린 것을 치우거나 플랫폼을 내릴 때. **공용 폴더(DATA_DIR)는 안 지운다** — 첨부와 백업은
+# 사람이 보고 지우는 것이다. 이름을 그대로 쳐야 진행된다(reset 과 같은 무늬).
+cmd_remove() {
+    cat <<MSG
+
+  ⚠ 인스턴스 삭제 — $APP_NAME ($APP_SLUG). 다음이 **전부 사라집니다**:
+      유닛     : $SERVICE_NAME · $MCP_SERVICE_NAME · $SYNC_SERVICE_NAME.timer · $BACKUP_SERVICE_NAME.timer
+      DB       : $DB_NAME 과 역할 $DB_USER (이 서버의 PostgreSQL 이 주일 때)
+      설치 폴더: $INSTALL_DIR (SIF · .env · 로그$( [[ -z "$DATA_DIR" ]] && echo ' · 첨부' ))
+      기록     : $INSTANCES_DIR/$APP_SLUG.conf
+  남기는 것: $( [[ -n "$DATA_DIR" ]] && echo "공용 폴더 $DATA_DIR (첨부 · 백업 · .env)" || echo "없음" ). 호스트 설정(/etc/platform-ha.conf · pg-ha)도 그대로.
+
+MSG
+    read -r -p "정말 진행하려면 '$APP_SLUG' 을 그대로 입력하세요: " confirm
+    [[ "$confirm" == "$APP_SLUG" ]] || err "취소했습니다. 아무것도 바뀌지 않았습니다."
+
+    local unit
+    for unit in "$SERVICE_NAME.service" "$MCP_SERVICE_NAME.service" "$SYNC_SERVICE_NAME.timer" \
+                "$SYNC_SERVICE_NAME.service" "$BACKUP_SERVICE_NAME.timer" "$BACKUP_SERVICE_NAME.service"; do
+        systemctl disable --now "$unit" >/dev/null 2>&1 || true
+        rm -f "/etc/systemd/system/$unit"
+    done
+    systemctl daemon-reload
+    info "유닛 삭제"
+    if pg_in_recovery; then
+        warn "이 서버의 DB 는 대기라 DB 는 여기서 못 지웁니다 — 주 서버에서 remove 하면 복제로 함께 사라집니다."
+    else
+        sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
+DROP DATABASE IF EXISTS "$DB_NAME";
+DROP ROLE IF EXISTS "$DB_USER";
+SQL
+        info "DB · 역할 삭제: $DB_NAME"
+    fi
+    rm -rf "$INSTALL_DIR"
+    rm -f "$INSTANCES_DIR/$APP_SLUG.conf"
+    [[ -n "$LB_MODE" && "$LB_MODE" == "local" ]] && rm -f "/etc/nginx/platforms.d/$APP_SLUG.conf" "/etc/nginx/conf.d/${APP_SLUG}-upstream.conf" && { nginx -t >/dev/null 2>&1 && systemctl reload nginx || true; }
+    echo
+    echo "[OK] $APP_SLUG 를 지웠습니다.$( [[ -n "$DATA_DIR" ]] && echo " 공용 폴더 $DATA_DIR 는 남아 있습니다." )"
+}
+
 # 아무것도 바꾸지 않고 결과만 — ETC=<폴더> 를 주면 거기 쓰고, 없으면 임시 폴더에 쓴 뒤 화면에 보여 준다.
 cmd_render() {
     local show=0
@@ -857,6 +900,7 @@ $APP_NAME 배포 스크립트 ($VERSION)
   install   SIF + .env + systemd, 마이그레이션, 시드, 기동
   update    SIF 교체 + 마이그레이션 + 재시작 (자료 그대로)
   reset     DB·첨부 초기화 (파괴적)
+  remove    이 인스턴스를 지운다 — 유닛 · DB · 설치 폴더 (공용 폴더는 남김, 파괴적)
   status    서비스 상태 + health (+ 이중화 · DB 주/대기)
   (없으면)  자동: 처음이면 install, 아니면 update
 
@@ -882,6 +926,7 @@ MSG
 
 case "${1:-}" in
     setup)          shift; cmd_setup "$@" ;;
+    remove)         cmd_remove ;;
     prepare)        cmd_prepare ;;
     install)        cmd_install ;;
     update)         cmd_update  ;;

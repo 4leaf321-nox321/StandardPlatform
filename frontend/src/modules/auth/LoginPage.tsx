@@ -26,7 +26,10 @@ export default function LoginPage() {
   const [error, setError] = useState<ApiError | Error | null>(null)
   const [busy, setBusy] = useState(false)
 
-  const from = (location.state as { from?: { pathname: string } } | null)?.from?.pathname
+  const wanted = (location.state as { from?: { pathname: string } } | null)?.from?.pathname
+  // 로그인 · 비밀번호 변경 화면은 「돌아갈 곳」 이 아니다 — 거기서 로그아웃돼 왔을 때 그리로
+  // 되돌리면 방금 한 일을 또 시킨다.
+  const from = wanted && !['/login', '/force-password-change'].includes(wanted) ? wanted : undefined
 
   if (status === 'authenticated') return <Navigate to={from ?? '/'} replace />
 

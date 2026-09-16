@@ -31,6 +31,12 @@ export function ProtectedRoute() {
   if (user.must_change_password && location.pathname !== '/force-password-change') {
     return <Navigate to="/force-password-change" replace />
   }
+  // **바꿀 필요가 없는데 변경 화면에 있다면 홈으로.** 변경 뒤 로그아웃되는 순간 이 라우트가
+  // 「로그인하면 아까 있던 곳으로」 를 기억해 두는데, 그 「아까 있던 곳」 이 바로 변경 화면이라
+  // 새 비밀번호로 들어와도 또 바꾸라는 화면이 떴다(실측 — 첫 설치마다 걸린다).
+  if (!user.must_change_password && location.pathname === '/force-password-change') {
+    return <Navigate to="/" replace />
+  }
 
   return <Outlet />
 }
