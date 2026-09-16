@@ -42,7 +42,8 @@ API_BASE = os.environ.get("PLATFORM_API_BASE", "http://localhost:8040").rstrip("
 _JSON_RESPONSE = os.environ.get("MCP_JSON_RESPONSE") == "1"
 
 mcp = FastMCP(
-    "standardplatform",
+    # 번들 하나로 여러 플랫폼을 띄우므로 이름은 설치(유닛의 APP_SLUG)에서 온다.
+    os.environ.get("APP_SLUG", "standardplatform"),
     json_response=_JSON_RESPONSE,
     instructions=(
         "이 설치의 온톨로지를 읽고 쓴다. **`get_guide` 와 `ontology_schema` 를 먼저 "

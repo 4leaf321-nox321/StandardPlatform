@@ -232,9 +232,11 @@ scp <slug>-v1.0.0.tar.gz <계정>@서버:~/
 # 서버에서
 ssh <계정>@서버
 tar xzf <slug>-v1.0.0.tar.gz && cd <slug>-v1.0.0
-sudo ./deploy.sh prepare                 # 최초 1회 — apt·postgres·DB 역할
-sudo ./deploy.sh install                 # 첫 설치 — .env·systemd 유닛·시드까지
-sudo ./deploy.sh update                  # 그다음부터
+# 번들 하나로 여러 플랫폼 — 어느 플랫폼인지는 설치가 정한다(처음 한 번, 그 뒤엔 기억한다)
+APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8040 EXTENSIONS=hub \
+  sudo ./deploy.sh prepare               # 최초 1회 — apt·postgres·DB 역할
+APP_SLUG=plmhub sudo ./deploy.sh install # 첫 설치 — .env·systemd 유닛·시드까지
+sudo ./deploy.sh update                  # 그다음부터 (인스턴스가 여럿이면 APP_SLUG=… 를 붙인다)
 sudo ./deploy.sh status
 ```
 
@@ -251,8 +253,10 @@ sudo ./deploy.sh status
 [docs/이중화-배포-설계.md](docs/이중화-배포-설계.md).
 
 ```bash
+APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> EXTENSIONS=<확장> \
 HA_ROLE=master PEER_IP=<B> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
   sudo ./deploy.sh prepare && sudo ./deploy.sh db-primary && sudo ./deploy.sh install   # A
+APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> EXTENSIONS=<확장> \
 HA_ROLE=backup PEER_IP=<A> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
   sudo ./deploy.sh prepare && sudo ./deploy.sh db-standby && sudo ./deploy.sh install   # B
 cat ~/apps/<slug>/main-server-nginx.conf     # → 메인 서버 쪽에

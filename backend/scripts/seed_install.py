@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from sqlalchemy import select
 
 import app.all_models  # noqa: F401  (DB 를 만지는 스크립트는 반드시 이것을 읽는다)
-from app.branding import APP_NAME
+from app.config import get_settings
 from app.database import SessionLocal
 from app.modules.accounts.models import User
 from app.modules.auth import security
@@ -39,7 +39,7 @@ from app.modules.workspaces.models import Workspace, WorkspaceMember
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description=f"{APP_NAME} 첫 설치 시드")
+    parser = argparse.ArgumentParser(description=f"{get_settings().app_name} 첫 설치 시드")
     parser.add_argument("--email", default="admin")
     parser.add_argument("--name", default="시스템 관리자")
     parser.add_argument("--password", default=None)

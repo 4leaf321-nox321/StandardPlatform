@@ -78,6 +78,35 @@ def test_확장_지점은_도메인을_모른다() -> None:
             assert name in allowed, f"extensions.py 가 {name} 을 압니다"
 
 
+def test_코어는_확장을_모른다() -> None:
+    """확장은 인스턴스마다 켜고 끈다(`.env` 의 EXTENSIONS). 코어(`modules` · `shared`)가
+    확장을 import 하면 **끈 인스턴스에서 코어가 안 뜨거나 없는 메뉴를 부른다** — 그리고
+    그것은 확장을 켠 개발 PC 에서는 안 드러난다. 붙이는 자리는 `app/extensions.load` 하나다.
+    """
+    for root in ("modules", "shared"):
+        for path in (BACKEND / "app" / root).rglob("*.py"):
+            for name in _imports(path):
+                assert not name.startswith("app.extensions"), (
+                    f"{path.relative_to(BACKEND)} 이 확장 {name} 을 압니다"
+                )
+
+
+def test_코드는_제품_이름을_branding_에서_import_하지_않는다() -> None:
+    """이름은 설치마다 다르다(`.env`). 코드가 `branding` 의 기본값을 쓰면 **모든 설치가
+    틀의 이름으로 보인다** — 읽는 자리는 `get_settings().app_name` 뿐이다. `config.py` 만
+    기본값을 받으려고 branding 을 안다."""
+    for path in (BACKEND / "app").rglob("*.py"):
+        if path.name in ("branding.py", "config.py"):
+            continue
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom) and node.module == "app.branding":
+                names = {alias.name for alias in node.names}
+                assert names <= {"ERROR_PREFIX"}, (
+                    f"{path.relative_to(BACKEND)} 이 branding 에서 {sorted(names)} 를 가져온다"
+                )
+
+
 def test_모든_모델이_all_models_에_있다() -> None:
     """빠뜨리면 autogenerate 가 **기존 표를 지우는** 마이그레이션을 만든다.
 
@@ -129,12 +158,12 @@ def test_시험이_플랫폼_이름을_손으로_박지_않는다() -> None:
     그래서 시험도 `branding` 에서 읽는다. 코드에 적용한 규칙("문자열을 손으로
     잇지 않는다")이 시험에도 그대로 적용된다.
     """
-    from app.branding import APP_NAME, APP_SLUG, ERROR_PREFIX
+    from app.branding import DEFAULT_APP_NAME, DEFAULT_APP_SLUG, ERROR_PREFIX
 
     banned = {
         f'"{ERROR_PREFIX}-': "오류 코드 접두사",
-        f'"{APP_SLUG}': "APP_SLUG",
-        f'"{APP_NAME}"': "APP_NAME",
+        f'"{DEFAULT_APP_SLUG}': "APP_SLUG",
+        f'"{DEFAULT_APP_NAME}"': "APP_NAME",
     }
     offenders: list[str] = []
     for path in (BACKEND / "tests").rglob("*.py"):

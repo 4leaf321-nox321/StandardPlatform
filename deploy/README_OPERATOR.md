@@ -39,9 +39,27 @@ ls
 > `/home` 에서 실행이 막히는 서버가 있다(noexec 마운트). 그때는 `/tmp` 에 풀어
 > 실행한다 — 설치 **대상** 폴더는 그대로 `/home/<계정>/apps/<slug>` 다.
 
-**`BUILD_INFO` 가 이 번들이 무엇인지 말해 준다** — 앱 이름·slug·포트·버전.
-`deploy.sh` 가 여기서 DB 이름과 systemd 유닛 이름을 정하므로, 설치할 때 그것들을
-따로 주지 않아도 된다.
+**번들 하나로 여러 플랫폼(인스턴스)을 설치한다.** 어느 플랫폼인지는 설치할 때 주는
+`APP_SLUG` 가 정한다 — DB 이름 · systemd 유닛 · 설치 경로 · 주소 접두어가 전부 거기서 나온다.
+`BUILD_INFO` 에는 버전과 **아무것도 안 줬을 때의 기본값**(틀의 이름 · 기본 포트)만 있다.
+
+```bash
+# 처음 한 번 — 이름 · 포트 · 확장을 준다. /etc/platform-instances/<slug>.conf 에 남는다
+APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8040 EXTENSIONS=hub sudo ./deploy.sh prepare
+APP_SLUG=plmhub sudo ./deploy.sh install
+# 그다음부터 — 이 서버에 인스턴스가 하나면 APP_SLUG 를 안 줘도 그것이다
+sudo ./deploy.sh update
+```
+
+| 설치 때 주는 것 | 뜻 | 나중에 |
+| --- | --- | --- |
+| `APP_SLUG` | 기계가 읽는 이름. 소문자·숫자 한 덩어리, 32자 이내 | **바꾸지 않는다** — DB · 쿠키 · 토큰 · 유닛이 다 걸린다 |
+| `APP_NAME` · `APP_TAGLINE` | 화면에 보이는 이름 · 한 줄 설명 | `APP_NAME=… sudo ./deploy.sh update` 로 바꿀 수 있다 |
+| `APP_PORT` | 앱 포트(MCP 는 +2). 같은 서버의 인스턴스마다 10씩 벌린다 | 바꾸면 메인 서버 조각도 다시 넣어야 한다 |
+| `EXTENSIONS` | 이 인스턴스가 켜는 확장 모듈, 쉼표로 | `EXTENSIONS=hub,bom sudo ./deploy.sh update` |
+
+같은 서버에 두 번째 인스턴스는 다른 `APP_SLUG` · `APP_PORT` 로 같은 명령을 한 번 더. 인스턴스가
+여럿이면 `update` · `status` 에도 `APP_SLUG=<slug>` 를 붙인다(안 붙이면 어느 것인지 묻는다).
 
 ### SSH 로만 붙는 서버라면 — 미리 알아 둘 넷
 
@@ -252,17 +270,18 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 
 ## 6. 한 서버에 여러 플랫폼
 
-이 틀에서 나온 플랫폼들은 **slug 하나로 전부 갈린다**:
+같은 번들의 인스턴스든 다른 제품군이든 **slug 하나로 전부 갈린다**:
 
 | | 값 |
 | --- | --- |
 | 설치 경로 | `~/apps/<slug>` |
 | 데이터베이스 · 역할 | `<slug>` |
 | systemd 유닛 | `<slug>.service` · `<slug>-mcp.service` · `<slug>-sync.timer` |
-| 포트 | `BUILD_INFO` 의 `port` (플랫폼마다 10씩 벌린다) · MCP 는 `mcp_port` (+2) |
+| 포트 | 설치 때 준 `APP_PORT` (없으면 `BUILD_INFO` 의 `port`) · MCP 는 +2 (플랫폼마다 10씩 벌린다) |
 
 **slug 가 겹치면 서로를 덮어쓴다.** 유닛 이름이 같으면 나중 배포가 앞의 것을
-그대로 지우고, 그 사실은 아무 데도 안 적힌다.
+그대로 지우고, 그 사실은 아무 데도 안 적힌다. 설치된 인스턴스는 `/etc/platform-instances/` 에
+한 파일씩 있다 — 어느 것이 있는지는 `ls` 로 본다.
 
 ---
 
@@ -336,13 +355,15 @@ sudo systemctl restart <slug>
 한 번 준 env 는 `/etc/platform-ha.conf` · `~/apps/<slug>/deploy.conf` 에 남아 **다음부터는 `sudo ./deploy.sh update` 만** 치면 된다.
 
 ```bash
-# ── 서버 A (주) ──
+# ── 서버 A (주) ──  (APP_SLUG · APP_NAME · APP_PORT · EXTENSIONS 도 여기서 함께 — §0)
+APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> EXTENSIONS=<확장> \
 HA_ROLE=master PEER_IP=<B의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
   sudo ./deploy.sh prepare         # 패키지(postgresql-16 · keepalived) · DB 역할
 sudo ./deploy.sh db-primary        # 복제 계정 · pg_hba · 감시 훅 · 원복 잠금. 비밀번호를 /data/…/db/ 에 둔다
 sudo ./deploy.sh install           # .env(/data 에) · SIF · 마이그레이션 · 시드 · 유닛 · 메인 서버용 nginx 조각
 
-# ── 서버 B (대기) ──
+# ── 서버 B (대기) ──  (같은 APP_* 값으로)
+APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> EXTENSIONS=<확장> \
 HA_ROLE=backup PEER_IP=<A의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
   sudo ./deploy.sh prepare
 sudo ./deploy.sh db-standby        # A 에서 pg_basebackup — 기존 로컬 DB 는 옆으로 치운다
@@ -448,7 +469,7 @@ sudo ./deploy.sh status
 
 ### 8.8 한 서버 두 대에 여러 플랫폼
 
-`/etc/platform-ha.conf` · keepalived · PostgreSQL 주/대기는 **호스트에 하나**다. 두 번째 플랫폼은 같은 역할 · 상대 · DB VIP 로 `prepare` → `install` 만 하면 메인 서버용 조각이 하나 더 생기고 같은 PostgreSQL 클러스터에 DB 하나가 더 생긴다(복제도 저절로 함께). `db-primary` · `db-standby` 는 **클러스터에 한 번**이면 된다 — 두 번째 플랫폼에서 다시 돌리면 pg_hba 만 갱신되고 같다.
+`/etc/platform-ha.conf` · keepalived · PostgreSQL 주/대기는 **호스트에 하나**다. 두 번째 플랫폼(같은 번들의 다른 인스턴스든 다른 제품군이든)은 다른 `APP_SLUG` · `APP_PORT` 로 `prepare` → `install` 만 하면 메인 서버용 조각이 하나 더 생기고 같은 PostgreSQL 클러스터에 DB 하나가 더 생긴다(복제도 저절로 함께). `db-primary` · `db-standby` 는 **클러스터에 한 번**이면 된다 — 두 번째 플랫폼에서 다시 돌리면 pg_hba 만 갱신되고 같다.
 
 ### 8.9 메인 서버 없이 — A · B 가 직접 받을 때 (`LB_MODE=local`)
 

@@ -18,26 +18,28 @@ from typing import Any
 import bcrypt
 import jwt
 
-from app.branding import APP_SLUG
 from app.config import get_settings
-
-#: PAT 평문 앞에 붙는 표식. 로그와 소스에서 유출을 눈으로 찾을 수 있게 한다.
-#:
-#: **`branding.APP_SLUG` 에서 나온다.** 플랫폼마다 달라야 하는데, 따로 적으면
-#: 포크할 때 이것만 안 바뀐다 — 그러면 옆 플랫폼의 토큰을 붙여 넣었을 때 "형식은
-#: 맞는데 인증이 안 되는" 상태가 되고, 그것은 오타와 구별되지 않는다.
-#:
-#: 길이를 줄이지 않는다. 이 표식이 하는 일은 **로그와 소스에서 눈으로 찾는 것**
-#: 이라, `matpylon_pat_` 이 `mpl_pat_` 보다 낫다.
-PAT_PREFIX = f"{APP_SLUG}_pat_"
 
 #: 이름을 바꾸기 전에 발급된 표식. **발급은 안 하고 알아보기만 한다** — 이미 나간
 #: 토큰을 죽이면 그것을 붙여 둔 설정은 사람이 손으로 찾아가 고쳐야 하고, 그것은
 #: "이름만 바꾸는 일" 의 대가로 너무 크다. 전부 재발급한 뒤 지운다.
 LEGACY_PAT_PREFIXES: tuple[str, ...] = ()
 
-#: 받을 때 쓰는 목록. 발급은 항상 PAT_PREFIX 하나로만 한다.
-ACCEPTED_PAT_PREFIXES = (PAT_PREFIX, *LEGACY_PAT_PREFIXES)
+
+def pat_prefix() -> str:
+    """PAT 평문 앞에 붙는 표식 — `<app_slug>_pat_`. 로그와 소스에서 유출을 눈으로 찾게 한다.
+
+    **설치의 slug 에서 나온다.** 플랫폼마다 달라야 하는데, 따로 적으면 옆 플랫폼의 토큰을
+    붙여 넣었을 때 "형식은 맞는데 인증이 안 되는" 상태가 되고, 그것은 오타와 구별되지 않는다.
+
+    길이를 줄이지 않는다. 이 표식이 하는 일은 **로그와 소스에서 눈으로 찾는 것**이라,
+    `matpylon_pat_` 이 `mpl_pat_` 보다 낫다."""
+    return f"{get_settings().app_slug}_pat_"
+
+
+def accepted_pat_prefixes() -> tuple[str, ...]:
+    """받을 때 쓰는 목록. 발급은 항상 `pat_prefix()` 하나로만 한다."""
+    return (pat_prefix(), *LEGACY_PAT_PREFIXES)
 
 
 def _prepared(password: str) -> bytes:
@@ -76,8 +78,9 @@ def new_opaque_token() -> str:
 
 def new_pat() -> tuple[str, str, str]:
     """(평문, 표시용 prefix, 해시). 평문은 발급 응답에서 한 번만 노출된다."""
-    raw = PAT_PREFIX + secrets.token_urlsafe(32)
-    return raw, raw[: len(PAT_PREFIX) + 6], hash_token(raw)
+    prefix = pat_prefix()
+    raw = prefix + secrets.token_urlsafe(32)
+    return raw, raw[: len(prefix) + 6], hash_token(raw)
 
 
 def create_access_token(user_id: uuid.UUID) -> tuple[str, int]:

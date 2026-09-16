@@ -126,7 +126,7 @@ def test_개인_토큰은_읽기만_기본이다(client: TestClient, admin: Sign
     assert created.status_code == 201, created.text
     body = created.json()
     assert body["pat"]["scopes"] == ["read"]
-    assert body["token"].startswith(security.PAT_PREFIX)
+    assert body["token"].startswith(security.pat_prefix())
 
     # 발급된 토큰으로 읽기는 된다.
     with_pat = {"Authorization": f"Bearer {body['token']}"}

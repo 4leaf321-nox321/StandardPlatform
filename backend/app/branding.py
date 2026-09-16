@@ -1,22 +1,27 @@
-"""이 설치가 무슨 플랫폼인가 — **이름을 한 곳에서만 정한다.**
+"""이 코드가 무슨 제품군인가 — **설치가 무슨 플랫폼인가는 여기가 아니라 `.env` 가 정한다.**
 
-이 저장소는 여러 플랫폼의 공통 틀이다. 포크해서 도메인을 얹는 순간 제품 이름이
-바뀌는데, 그 이름이 코드 곳곳에 흩어져 있으면 **한 벌만 바뀐다** — 로그인 화면은
-새 이름인데 로그는 옛 이름으로 남고, 그때 두 기록을 잇는 사람이 없다.
+이 저장소 하나로 여러 플랫폼(인스턴스)을 띄운다 — 허브 · 그룹 쌍둥이들. 번들은 하나고,
+설치마다 `.env` 의 `APP_SLUG` · `APP_NAME` · `APP_TAGLINE` · `EXTENSIONS` 가
+다르다(`app/config.py`).
+그래서 여기 있는 이름은 **아무것도 안 준 설치의 기본값**(개발 PC · 시험)일 뿐이다. 코드가
+제품 이름을 쓰려면 `get_settings().app_name` 을 읽는다 — 여기서 import 하지 않는다.
 
 ## 오류 코드 접두사
 
-`APP-<MODULE>-<NNNN>`. 포크할 때 `ERROR_PREFIX` 를 바꾸고 `app/` 아래를 찾아
-바꾼다 — 시험(`tests/architecture/test_boundaries.py`)이 **섞였는지 검사한다.**
-두 접두사가 섞이면 로그 검색이 절반만 걸리고, 안 걸린 절반은 없는 것처럼 보인다.
+`APP-<MODULE>-<NNNN>`. 이것만은 **빌드에 박힌다** — 코드 곳곳의 `errors.code()` 가 조립하는
+문자열이라 설치마다 다를 이유가 없고, 로그 검색이 한 값으로 걸려야 한다. 포크(다른 제품군)할 때
+`ERROR_PREFIX` 를 바꾸고 `app/` 아래를 찾아 바꾼다 —
+시험(`tests/architecture/test_boundaries.py`)이
+**섞였는지 검사한다.**
 """
 
 from __future__ import annotations
 
-#: 화면 제목·API 문서 제목·로그의 기동 줄에 함께 나간다.
-APP_NAME = "StandardPlatform"
+#: `.env` 에 `APP_NAME` 이 없을 때 — 화면 제목 · API 문서 제목 · 기동 로그.
+DEFAULT_APP_NAME = "StandardPlatform"
 
-#: 기계가 읽는 이름 — **DB·쿠키·토큰 표식이 전부 여기서 나온다.**
+#: `.env` 에 `APP_SLUG` 가 없을 때 — 기계가 읽는 이름. **DB·쿠키·토큰 표식이 전부 여기서
+#: 나온다.**
 #:
 #: 소문자와 숫자만, 한 덩어리로 적는다(`matnexus` · `testscope` · `crossaxtf`).
 #: 옆 플랫폼들이 이미 그 규약이고, DB 이름을 눈으로 대조하는 자리가 있어서
@@ -32,12 +37,12 @@ APP_NAME = "StandardPlatform"
 #:   토큰     옆 플랫폼 토큰을 붙여 넣으면 「형식은 맞는데 인증이 안 되는」 상태가
 #:            되는데, 그것은 오타와 구별되지 않는다.
 #:
-#: 그래서 셋을 따로 적지 않고 여기 하나에서 만든다 — 따로 적으면 언젠가 하나가
+#: 그래서 셋을 따로 적지 않고 `Settings` 가 slug 하나에서 만든다 — 따로 적으면 언젠가 하나가
 #: 안 바뀌고, 안 바뀐 하나는 위 셋 중 하나로 나타난다.
-APP_SLUG = "standardplatform"
+DEFAULT_APP_SLUG = "standardplatform"
 
-#: 한 줄 설명. 로그인 화면과 사이드바가 같은 말을 하도록 여기 한 번만 적는다.
-APP_TAGLINE = "사내 플랫폼 공통 틀"
+#: `.env` 에 `APP_TAGLINE` 이 없을 때 — 한 줄 설명. 로그인 화면과 사이드바가 같은 말을 한다.
+DEFAULT_APP_TAGLINE = "사내 플랫폼 공통 틀"
 
 #: 오류 코드 접두사. **한 저장소에 하나뿐이어야 한다.**
 ERROR_PREFIX = "APP"

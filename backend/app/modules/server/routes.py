@@ -18,7 +18,6 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 
 from app import schema_version, version
-from app.branding import APP_NAME
 from app.config import get_settings
 from app.database import engine, get_db
 from app.modules.accounts.models import User
@@ -80,7 +79,9 @@ def status(
         disk = None
 
     return ServerStatusOut(
-        app_name=APP_NAME,
+        app_name=settings.app_name,
+        app_slug=settings.app_slug,
+        extensions=list(settings.extension_names),
         version=version.current(),
         app_env=settings.app_env,
         database_url_safe=_safe_url(settings.database_url),

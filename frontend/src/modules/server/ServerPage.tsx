@@ -9,7 +9,8 @@
 
 import { api } from '@/shared/api/client'
 import type { ServerStatus } from '@/shared/api/types'
-import { APP_NAME } from '@/shared/branding'
+import { missingExtensions } from '@/extensions'
+import { APP_NAME, ENABLED_EXTENSIONS } from '@/shared/branding'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { useResource } from '@/shared/hooks/useResource'
@@ -47,8 +48,17 @@ export default function ServerPage() {
       {nameMismatch && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
           화면은 <span className="font-mono">{APP_NAME}</span> 인데 서버는{' '}
-          <span className="font-mono">{one.app_name}</span> 이라고 합니다. 포크할 때
-          <span className="font-mono"> branding</span> 을 한쪽만 고쳤을 수 있습니다.
+          <span className="font-mono">{one.app_name}</span> 이라고 합니다. 화면이 옛 index.html
+          을 들고 있거나(새로 고침), 개발 서버가 다른 백엔드에 붙어 있을 수 있습니다.
+        </div>
+      )}
+
+      {/* **켰는데 화면 쪽 짝이 없는 확장.** 서버에는 있고 메뉴에는 없는 상태 — 사람은
+          「안 켜졌다」 로 읽는다. */}
+      {missingExtensions(ENABLED_EXTENSIONS).length > 0 && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+          확장 <span className="font-mono">{missingExtensions(ENABLED_EXTENSIONS).join(', ')}</span>{' '}
+          이 켜져 있지만 화면 쪽(<span className="font-mono">src/extensions</span>)에 짝이 없습니다.
         </div>
       )}
 
@@ -68,11 +78,23 @@ export default function ServerPage() {
       <dl className="grid gap-4 rounded-md border p-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <dt className="text-muted-foreground text-xs">플랫폼</dt>
-          <dd className="text-sm">{one.app_name}</dd>
+          <dd className="text-sm">
+            {one.app_name} <span className="text-muted-foreground font-mono">({one.app_slug})</span>
+          </dd>
         </div>
         <div>
           <dt className="text-muted-foreground text-xs">버전</dt>
           <dd className="font-mono text-sm">{one.version}</dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">켠 확장</dt>
+          <dd className="text-sm">
+            {one.extensions.length === 0 ? (
+              <span className="text-muted-foreground">없음</span>
+            ) : (
+              <span className="font-mono">{one.extensions.join(', ')}</span>
+            )}
+          </dd>
         </div>
         <div>
           <dt className="text-muted-foreground text-xs">환경</dt>

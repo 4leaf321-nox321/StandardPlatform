@@ -1,4 +1,6 @@
-# 이중화 — deploy.sh 가 source 한다. 단독으로 실행하지 않는다.
+#!/usr/bin/env bash
+# 이중화 — deploy.sh 가 source 한다. 단독으로 실행하지 않는다(shebang · set 은 검사 규칙 때문에,
+# 그리고 source 하는 쪽과 같은 엄격 모드라는 뜻으로 둔다).
 #
 #   사용자 · 외부 AI ──HTTPS──▶ 메인 서버(포탈 + nginx — 메인 서버 쪽이 관리)
 #                                  /<slug>/… → 접두어를 벗겨 A · B 로 분배
@@ -18,18 +20,19 @@
 #   호스트 수준(서버 두 대에 하나): keepalived · PostgreSQL 주/대기 (local 이면 nginx server 블록 · 인증서도).
 #     설정은 /etc/platform-ha.conf — 같은 서버의 모든 플랫폼이 공유한다.
 #   플랫폼 수준(slug 마다): 메인 서버용 nginx 조각(또는 local 의 location · upstream), 앱 · MCP 유닛,
-#     /data 의 자기 폴더. 설정은 $INSTALL_DIR/deploy.conf (DATA_DIR).
+#     /data 의 자기 폴더. 설정은 /etc/platform-instances/<slug>.conf (deploy.sh 가 쓴다).
 #
 # 처음 한 번 env 로 주면 파일에 남아 다음 배포가 기억한다(MCP 설정과 같은 방식):
 #   HA_ROLE=master PEER_IP=<B> PUBLIC_HOST=hwax.sec.samsung.net DATA_DIR=/data/<slug> sudo ./deploy.sh prepare
 
 # ETC 를 주면 /etc 대신 그 아래에 쓴다 — 'deploy.sh render' 가 root 없이 결과를 보여 주는 길.
 ETC="${ETC:-}"
+set -euo pipefail
+
 HA_CONF="$ETC/etc/platform-ha.conf"
 
 # ───────────────────────── 설정 읽기 · 쓰기 ─────────────────────────
 ha_conf_get() { [[ -f "$HA_CONF" ]] && sed -n "s|^$1=||p" "$HA_CONF" | tail -n1 || true; }
-platform_conf_get() { [[ -f "$INSTALL_DIR/deploy.conf" ]] && sed -n "s|^$1=||p" "$INSTALL_DIR/deploy.conf" | tail -n1 || true; }
 
 ha_load() {
     HA_ROLE="${HA_ROLE:-$(ha_conf_get HA_ROLE)}"
@@ -41,8 +44,8 @@ ha_load() {
     VRRP_IFACE="${VRRP_IFACE:-$(ha_conf_get VRRP_IFACE)}"
     TLS_CERT="${TLS_CERT:-$(ha_conf_get TLS_CERT)}"; TLS_CERT="${TLS_CERT:-/etc/nginx/tls/server.crt}"
     TLS_KEY="${TLS_KEY:-$(ha_conf_get TLS_KEY)}";    TLS_KEY="${TLS_KEY:-/etc/nginx/tls/server.key}"
-    DATA_DIR="${DATA_DIR:-$(platform_conf_get DATA_DIR)}"
-    BACKUP_HOST_DIR="${BACKUP_HOST_DIR:-$(platform_conf_get BACKUP_HOST_DIR)}"
+    DATA_DIR="${DATA_DIR:-$(instance_conf_get "$APP_SLUG" DATA_DIR)}"
+    BACKUP_HOST_DIR="${BACKUP_HOST_DIR:-$(instance_conf_get "$APP_SLUG" BACKUP_HOST_DIR)}"
     if [[ -n "$HA_ROLE" ]]; then
         [[ "$HA_ROLE" == "master" || "$HA_ROLE" == "backup" ]] || err "HA_ROLE 은 master 또는 backup 입니다: $HA_ROLE"
         [[ "$LB_MODE" == "external" || "$LB_MODE" == "local" ]] || err "LB_MODE 는 external(메인 서버의 nginx) 또는 local 입니다: $LB_MODE"
@@ -76,16 +79,6 @@ TLS_CERT=$TLS_CERT
 TLS_KEY=$TLS_KEY
 EOF
     chmod 644 "$HA_CONF"
-}
-
-platform_save() {
-    [[ -d "$INSTALL_DIR" ]] || return 0
-    cat > "$INSTALL_DIR/deploy.conf" <<EOF
-# 이 플랫폼의 배포 설정 — deploy.sh 가 기억한다(env 로 덮으면 갱신).
-DATA_DIR=$DATA_DIR
-BACKUP_HOST_DIR=$BACKUP_HOST_DIR
-EOF
-    chown "$OPERATOR:$OPERATOR" "$INSTALL_DIR/deploy.conf" 2>/dev/null || true
 }
 
 # ───────────────────────── pg-ha 설치 ─────────────────────────

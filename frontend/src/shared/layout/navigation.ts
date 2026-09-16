@@ -250,8 +250,14 @@ export function visibleGroups(
     isAnyManager: boolean
   },
   dynamic: DynamicGroup[] = [],
+  /** 이 설치가 켠 확장의 그룹(`src/extensions`). 서버가 켠 것만 온다. */
+  extension: NavGroup[] = [],
 ): NavGroup[] {
-  return mergeDynamic(NAV_GROUPS, dynamic)
+  const merged = mergeDynamic(NAV_GROUPS, dynamic)
+  // 확장은 동적 묶음 뒤, 공통 화면 앞 — 「이 설치만의 것」 이 「어디에나 있는 것」 보다 앞선다.
+  const withExtensions =
+    extension.length === 0 ? merged : [merged[0], ...extension, ...merged.slice(1)]
+  return withExtensions
     .map((group) => ({
       ...group,
       items: group.items.filter((item) => canSee(item.audience, viewer)),

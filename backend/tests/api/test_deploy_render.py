@@ -191,3 +191,32 @@ def test_DB_VIP_가_없으면_자동_승격_인스턴스가_없다(bundle: Path,
 def test_스크립트_문법(bundle: Path) -> None:
     for name in ["deploy.sh", "ha.sh", "pg-ha.sh", "backup.sh", "restore.sh"]:
         subprocess.run(["bash", "-n", str(bundle / name)], check=True)
+
+
+def test_번들_하나로_인스턴스_여럿(bundle: Path, tmp_path: Path) -> None:
+    """slug · 이름 · 포트 · 확장은 번들이 아니라 설치가 준다. 같은 번들에서 두 인스턴스를
+    렌더하면 유닛 · 경로 · 포트 · 메인 서버 조각이 전부 갈리고, 준 값은 인스턴스 파일에 남아
+    다음 배포가 기억한다."""
+    etc = tmp_path / "etc"
+    one = {**HA_ENV, "APP_SLUG": "plmhub", "APP_NAME": "PLM & 기준정보", "APP_PORT": "8050"}
+    render(bundle, etc, **one, EXTENSIONS="sample")
+    two = {**HA_ENV, "APP_SLUG": "simtools", "APP_NAME": "시뮬레이션", "APP_PORT": "8060"}
+    render(bundle, etc, **{**two, "DATA_DIR": "/data/simtools"})
+
+    units = etc / "etc/systemd/system"
+    assert (units / "plmhub.service").exists() and (units / "simtools.service").exists()
+    assert "/opt/testplatform/app.sif" in read(etc, "systemd/system/plmhub.service")
+    snippet = (etc / "main-server-nginx.conf").read_text(encoding="utf-8")
+    # 마지막에 렌더한 인스턴스의 조각 — 포트 +2 가 MCP.
+    assert "server 10.0.0.1:8060" in snippet and "server 10.0.0.1:8062" in snippet
+    assert "location /simtools/ {" in snippet
+
+    saved = read(etc, "platform-instances/plmhub.conf")
+    assert "APP_NAME=PLM & 기준정보" in saved and "APP_PORT=8050" in saved
+    assert "EXTENSIONS=sample" in saved
+    assert "DATA_DIR=/data/simtools" in read(etc, "platform-instances/simtools.conf")
+
+    # 두 인스턴스가 있으면 slug 없이는 못 고른다.
+    with pytest.raises(subprocess.CalledProcessError) as failed:
+        render(bundle, etc)
+    assert "APP_SLUG=<slug>" in failed.value.stderr

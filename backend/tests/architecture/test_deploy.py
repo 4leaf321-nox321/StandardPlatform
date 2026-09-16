@@ -208,13 +208,13 @@ def test_배포_자산에_플랫폼_이름을_박지_않는다() -> None:
     문서(`README_OPERATOR.md`)는 예외다 — 거기서는 `<slug>` 자리표시자를 쓴다.
     검사하는 것은 **동작에 쓰이는 스크립트와 유닛 템플릿**이다.
     """
-    from app.branding import APP_NAME, APP_SLUG
+    from app.branding import DEFAULT_APP_NAME, DEFAULT_APP_SLUG
 
     targets = [*_scripts(), *DEPLOY.glob("*.template")]
     offenders = []
     for path in targets:
         text = path.read_text(encoding="utf-8")
-        if APP_SLUG in text or APP_NAME in text:
+        if DEFAULT_APP_SLUG in text or DEFAULT_APP_NAME in text:
             offenders.append(path.name)
     assert not offenders, (
         "배포 자산에 플랫폼 이름이 박혔습니다(포크하면 두 플랫폼이 겹칩니다): "

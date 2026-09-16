@@ -1,30 +1,48 @@
 /**
- * 이 화면이 무슨 플랫폼인가 — **이름을 한 곳에서만 정한다.**
+ * 이 화면이 무슨 플랫폼인가 — **서버가 말해 준다.**
  *
- * 이 저장소는 여러 플랫폼의 공통 틀이다. 포크해서 도메인을 얹는 순간 제품 이름이
- * 바뀌는데, 그 이름이 화면 곳곳에 흩어져 있으면 **한 벌만 바뀐다** — 로그인
- * 화면은 새 이름인데 사이드바는 옛 이름으로 남는다.
+ * 번들 하나로 여러 플랫폼(허브 · 그룹 쌍둥이들)을 띄운다. 그래서 이름은 빌드에 굽지 않고,
+ * 서버가 `index.html` 에 심는 `<meta name="app-name">` 들에서 읽는다(backend/app/main.py —
+ * 설치의 `.env` 가 정한다). 첫 화면부터 값이 있으므로 깜빡임이 없다.
  *
- * 백엔드에도 짝이 있다(`backend/app/branding.py`). 두 벌인 이유는 화면이 이름을
- * 그리려고 서버를 한 번 더 물으면 첫 화면이 비었다 채워지기 때문이다 — 사람은
- * 그 깜빡임을 고장으로 읽는다. **서버 응답에도 이름이 실려 오므로**(`/api/health`)
- * 둘이 어긋나면 서버 화면에서 드러난다.
+ * meta 가 없는 곳은 둘뿐이다 — Vite 개발 서버(vite.config.ts 가 `backend/.env` 에서 같은 meta 를
+ * 심는다)와 시험. 그때만 아래 기본값(틀의 이름)이 쓰인다. **기본값을 제품 이름으로 고치지
+ * 않는다** — 그러면 모든 설치가 그 이름으로 보인다. 설치의 이름은 `.env` 에.
+ *
+ * 서버 응답에도 이름이 실려 오므로(`/api/health`) 둘이 어긋나면 서버 화면에서 드러난다.
  */
+
+function meta(name: string): string | null {
+  if (typeof document === 'undefined') return null
+  return document.querySelector(`meta[name="${name}"]`)?.getAttribute('content') ?? null
+}
+
+/** 틀의 기본값 — meta 가 없을 때(개발 서버 · 시험)만. 백엔드 `branding.py` 와 같은 값. */
+export const DEFAULT_APP_NAME = 'StandardPlatform'
+export const DEFAULT_APP_SLUG = 'standardplatform'
+export const DEFAULT_APP_TAGLINE = '사내 플랫폼 공통 틀'
 
 /** 브라우저 탭·로그인 화면·사이드바 머리글. */
-export const APP_NAME = 'StandardPlatform'
+export const APP_NAME = meta('app-name') || DEFAULT_APP_NAME
 
 /**
- * 기계가 읽는 이름. **백엔드 `branding.py` 의 `APP_SLUG` 와 같은 값이어야 한다.**
- *
- * 저쪽에서는 이 값이 DB 이름·쿠키 이름·토큰 표식을 만든다. 이쪽에서는
- * localStorage 키만 만든다 — 같은 브라우저로 두 플랫폼을 열면 저장소는 보통
- * 출처로 갈리지만, 같은 서버의 다른 경로에 얹는 구성에서는 안 갈린다.
+ * 기계가 읽는 이름 — 서버의 `app_slug`. 저쪽에서는 DB 이름·쿠키 이름·토큰 표식을 만들고,
+ * 이쪽에서는 localStorage 키만 만든다 — 같은 서버의 다른 경로에 두 플랫폼을 얹는 구성에서
+ * 저장소가 출처로 안 갈리기 때문이다.
  */
-export const APP_SLUG = 'standardplatform'
+export const APP_SLUG = meta('app-slug') || DEFAULT_APP_SLUG
 
-/** 한 줄 설명. 로그인 화면과 사이드바가 같은 말을 하도록 여기 한 번만 적는다. */
-export const APP_TAGLINE = '사내 플랫폼 공통 틀'
+/** 한 줄 설명. 로그인 화면과 사이드바가 같은 말을 한다. */
+export const APP_TAGLINE = meta('app-tagline') || DEFAULT_APP_TAGLINE
+
+/**
+ * 이 설치가 켠 확장(`.env` 의 EXTENSIONS). 화면은 이 목록에 있는 것의 메뉴 · 페이지만 붙인다
+ * (`src/extensions/index.ts`). 서버가 같은 목록으로 라우터를 붙이므로 둘은 늘 같다.
+ */
+export const ENABLED_EXTENSIONS: readonly string[] = (meta('app-extensions') ?? '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean)
 
 /** localStorage 키의 앞머리. */
 export const STORAGE_PREFIX = APP_SLUG

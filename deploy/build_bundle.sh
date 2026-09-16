@@ -20,10 +20,11 @@ cd "$REPO_ROOT"
 command -v apptainer >/dev/null || { echo "오류: apptainer 가 없습니다"; exit 1; }
 command -v npm       >/dev/null || { echo "오류: npm 이 없습니다 (프론트 빌드에 필요)"; exit 1; }
 
-# ── 플랫폼 정보 — **branding.py 와 config.py 에서 읽는다** ────────────────────
+# ── 기본 정보 — **branding.py 와 config.py 에서 읽는다** ──────────────────────
 #
-# 여기서 다시 적으면 그때부터 두 벌이다. 배포 스크립트가 이 값으로 DB 이름·
-# systemd 유닛 이름·설치 경로를 정하므로, 어긋나면 두 플랫폼이 서로를 덮어쓴다.
+# **번들 하나로 여러 플랫폼을 설치한다.** 여기서 읽는 이름은 설치가 APP_SLUG 를 안 줬을 때의
+# 기본값(틀의 이름)이고 번들 파일 이름이 된다. 실제 플랫폼 이름은 deploy.sh 에 주는 env 다.
+# 여기서 다시 적으면 그때부터 두 벌이다.
 read -r APP_NAME APP_SLUG APP_PORT <<EOF
 $(python3 - <<'PY'
 import ast, pathlib, sys
@@ -44,14 +45,14 @@ def literals(path, names):
                 pass
     return out
 
-branding = literals('backend/app/branding.py', {'APP_NAME', 'APP_SLUG'})
+branding = literals('backend/app/branding.py', {'DEFAULT_APP_NAME', 'DEFAULT_APP_SLUG'})
 config = literals('backend/app/config.py', {'port'})
-for key in ('APP_NAME', 'APP_SLUG'):
+for key in ('DEFAULT_APP_NAME', 'DEFAULT_APP_SLUG'):
     if key not in branding:
         sys.exit(f'branding.py 에서 {key} 를 읽지 못했습니다.')
 if 'port' not in config:
     sys.exit('config.py 에서 port 를 읽지 못했습니다.')
-print(branding['APP_NAME'], branding['APP_SLUG'], config['port'])
+print(branding['DEFAULT_APP_NAME'], branding['DEFAULT_APP_SLUG'], config['port'])
 PY
 )
 EOF
@@ -152,8 +153,8 @@ else
     echo "    ⚠ pip download 실패 — 휠 미동봉. 운영 호스트에 인터넷/사내 PyPI 있어야 MCP 설치됨."
 fi
 
-# **번들이 자기가 무슨 플랫폼인지 말한다.** deploy.sh 가 여기서 DB 이름·포트·
-# 유닛 이름을 읽으므로, 배포 스크립트에는 제품 이름이 박혀 있지 않다.
+# **번들의 기본값.** deploy.sh 는 APP_SLUG 를 안 줬을 때만 여기 이름을 쓴다 — 배포
+# 스크립트에는 제품 이름이 박혀 있지 않고, 실제 이름은 설치마다 env 로 온다.
 cat > "$STAGE/BUILD_INFO" <<INFO
 app_name=$APP_NAME
 app_slug=$APP_SLUG

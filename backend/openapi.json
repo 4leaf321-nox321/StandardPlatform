@@ -13779,6 +13779,17 @@
             "type": "string",
             "title": "App Name"
           },
+          "app_slug": {
+            "type": "string",
+            "title": "App Slug"
+          },
+          "extensions": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Extensions"
+          },
           "version": {
             "type": "string",
             "title": "Version"
@@ -13846,6 +13857,8 @@
         "type": "object",
         "required": [
           "app_name",
+          "app_slug",
+          "extensions",
           "version",
           "app_env",
           "database_url_safe",

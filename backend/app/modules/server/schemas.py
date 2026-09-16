@@ -33,6 +33,8 @@ class BackupOut(BaseModel):
 
 class ServerStatusOut(BaseModel):
     app_name: str
+    app_slug: str
+    extensions: list[str]
     version: str
     app_env: str
     database_url_safe: str

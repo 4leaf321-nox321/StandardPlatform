@@ -12,6 +12,7 @@
 import { lazy } from 'react'
 import { Navigate, createBrowserRouter } from 'react-router-dom'
 
+import { extensionRoutes } from '@/extensions'
 import { ROUTER_BASENAME } from '@/shared/base'
 
 import ForcePasswordChangePage from '@/modules/auth/ForcePasswordChangePage'
@@ -94,6 +95,10 @@ export const router = createBrowserRouter(
             // 사이드바에 `pending: true` 로 적어 두면 아래 stubs 가 자리를 만든다.
             // 실제 화면이 생기면 그 표시를 지우고 여기에 한 줄을 적는다.
             ...stubs,
+
+            // **이 설치가 켠 확장의 화면.** 서버가 `<meta name="app-extensions">` 로 준 이름만
+            // 붙는다(`src/extensions`). 안 켠 인스턴스에는 경로 자체가 없다.
+            ...extensionRoutes(),
 
             // 내 활동
             { path: 'notifications', element: <NotificationsPage /> },

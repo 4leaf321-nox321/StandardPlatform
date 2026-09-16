@@ -193,6 +193,10 @@ export interface MaintenanceItem {
 
 export interface ServerStatus {
   app_name: string
+  /** 기계가 읽는 이름 — DB · 쿠키 · 유닛 이름이 여기서 나온다. */
+  app_slug: string
+  /** 이 설치가 켠 확장. 화면의 ENABLED_EXTENSIONS 와 같아야 한다. */
+  extensions: string[]
   version: string
   app_env: string
   /** 비밀번호를 지운 접속 문자열. **어느 DB 를 보고 있는지가 첫 물음이다.** */

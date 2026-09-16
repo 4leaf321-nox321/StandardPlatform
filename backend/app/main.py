@@ -11,6 +11,8 @@
 from __future__ import annotations
 
 import logging
+import re
+from html import escape as html_escape
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -18,8 +20,8 @@ from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.types import ASGIApp, Receive, Scope, Send
 
+from app import extensions as ext_loader
 from app import version
-from app.branding import APP_NAME
 from app.config import Settings, get_settings
 from app.database import SessionLocal, engine
 from app.logging_setup import setup_logging
@@ -57,14 +59,19 @@ logger = logging.getLogger(__name__)
 API_PREFIX = "/api"
 
 
-def _api_router() -> APIRouter:
+def _api_router(settings: Settings) -> APIRouter:
     router = APIRouter(prefix=API_PREFIX)
 
     @router.get("/health", tags=["system"])
     def health() -> dict[str, str]:
         # **버전을 함께 준다.** 원격에서 "지금 서버에 뭐가 깔렸나" 를 물을 수 있는
         # 유일한 자리다. 배포 뒤 확인도, 나중의 점검 스크립트도 여기를 본다.
-        return {"status": "ok", "version": version.current(), "app": APP_NAME}
+        return {
+            "status": "ok",
+            "version": version.current(),
+            "app": settings.app_name,
+            "slug": settings.app_slug,
+        }
 
     # 모듈 라우터는 **여기서만** 모은다.
     router.include_router(auth_routes.router)
@@ -85,6 +92,11 @@ def _api_router() -> APIRouter:
     router.include_router(graph_routes.router)
     router.include_router(search_routes.router)
     router.include_router(server_routes.router)
+
+    # --- 이 설치가 켠 확장의 라우터 --------------------------------------
+    # 코어는 확장을 import 하지 않는다. `.env` 의 EXTENSIONS 에 적힌 이름만 찾아 붙인다.
+    for name in settings.extension_names:
+        ext_loader.load(name).register(router)
 
     # --- 여기에 도메인 라우터를 더한다 -----------------------------------
     #
@@ -186,12 +198,25 @@ def _mount_spa(app: FastAPI, settings: Settings) -> None:
     # `<base href>` 로 자산 주소를, `<meta name="app-base">` 로 API · 라우터 주소를 푼다.
     # 그래서 같은 이미지가 `/` 에서도 `/plm/` 에서도 뜬다 — 접두어는 배포 설정(.env)이지
     # 빌드가 아니다.
+    # **이름도 심는다.** 번들 하나로 여러 플랫폼을 띄우므로 화면은 자기가 무슨 플랫폼인지
+    # 빌드로는 모른다 — `<meta name="app-name">` 들이 말해 주고, 없을 때(개발 서버)만
+    # 화면의 기본값이 쓰인다. `<title>` 도 여기서 바꾼다.
     base = settings.base_path
-    html = index.read_text(encoding="utf-8").replace(
-        "<head>",
-        f'<head>\n    <base href="{base}/" />\n    <meta name="app-base" content="{base}" />',
-        1,
+    metas = "\n    ".join(
+        f'<meta name="{key}" content="{html_escape(value)}" />'
+        for key, value in (
+            ("app-base", base),
+            ("app-name", settings.app_name),
+            ("app-slug", settings.app_slug),
+            ("app-tagline", settings.app_tagline),
+            ("app-extensions", ",".join(settings.extension_names)),
+        )
     )
+    html = index.read_text(encoding="utf-8").replace(
+        "<head>", f'<head>\n    <base href="{base}/" />\n    {metas}', 1
+    )
+    title = f"<title>{html_escape(settings.app_name)}</title>"
+    html = re.sub(r"<title>.*?</title>", title, html, count=1)
 
     # response_model=None — 이 경로는 스키마에 나오지 않으므로 응답 모델이 필요
     # 없다. 반환 애노테이션에 Union 을 쓰면 FastAPI 가 모델을 만들려다 기동에
@@ -293,7 +318,7 @@ def create_app() -> FastAPI:
     _guard_production_secrets(settings)
 
     app = FastAPI(
-        title=f"{APP_NAME} API",
+        title=f"{settings.app_name} API",
         version=version.current(),
         docs_url=f"{API_PREFIX}/docs",
         openapi_url=f"{API_PREFIX}/openapi.json",
@@ -324,7 +349,7 @@ def create_app() -> FastAPI:
 
     register_error_handlers(app)
     _register_extensions()
-    app.include_router(_api_router())
+    app.include_router(_api_router(settings))
 
     # SPA catch-all 은 반드시 API 라우터 뒤에 등록한다.
     _mount_spa(app, settings)
@@ -333,7 +358,13 @@ def create_app() -> FastAPI:
     # 으로 먼저 만나는데, 거기엔 원인이 안 적힌다.
     warn_if_behind(engine)
 
-    logger.info("%s 기동 (env=%s)", APP_NAME, settings.app_env)
+    logger.info(
+        "%s (%s) 기동 (env=%s, 확장=%s)",
+        settings.app_name,
+        settings.app_slug,
+        settings.app_env,
+        ",".join(settings.extension_names) or "없음",
+    )
     return app
 
 

@@ -12,9 +12,11 @@
 #   sudo ./deploy.sh db-primary | db-standby --from <IP> | db-promote | db-demote | db-status
 #   sudo ./deploy.sh lb        메인 서버용 nginx 조각 · keepalived(DB VIP)를 env 에서 다시 만들고 반영
 #
-# **번들이 자기가 무슨 플랫폼인지 말한다**(BUILD_INFO). 앱 이름·slug·포트가 거기
-# 있으므로 이 스크립트에는 제품 이름이 박혀 있지 않다 — 박아 두면 포크할 때 바꿀
-# 자리가 하나 더 늘고, 안 바꾸면 두 플랫폼이 **같은 DB 와 같은 유닛 이름**을 쓴다.
+# **번들 하나로 여러 플랫폼(인스턴스)을 설치한다.** 어느 플랫폼인지는 `APP_SLUG` 가 정한다 —
+# 처음 한 번 env 로 주면(`APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8040 EXTENSIONS=hub`)
+# /etc/platform-instances/<slug>.conf 에 남아 다음부터는 `APP_SLUG=plmhub ./deploy.sh update` 로
+# 충분하고, 이 서버에 인스턴스가 하나뿐이면 그것마저 생략된다. 안 주면 번들의 기본값
+# (BUILD_INFO — 틀의 이름)으로 뜬다. slug 하나에서 DB · 유닛 · 경로 · 주소가 전부 나온다.
 #
 # 어디서 실행해도 된다. 짝이 되는 파일(app.sif · .env.example · 유닛 템플릿)을
 # 자기 디렉터리에서 찾는다.
@@ -31,15 +33,15 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 [[ -f "$HERE/BUILD_INFO" ]] || err "BUILD_INFO 가 없습니다 ($HERE). 릴리스 번들 안에서 실행하세요."
 bundle() { sed -n "s|^$1=||p" "$HERE/BUILD_INFO" | tail -n1; }
 
-APP_NAME="$(bundle app_name)"
-APP_SLUG="$(bundle app_slug)"
+APP_NAME_DEFAULT="$(bundle app_name)"
+APP_SLUG_DEFAULT="$(bundle app_slug)"
 APP_PORT_DEFAULT="$(bundle port)"
 VERSION="$(bundle version)"
-[[ -n "$APP_SLUG" && -n "$APP_NAME" ]] || err "BUILD_INFO 에 app_name/app_slug 가 없습니다."
+[[ -n "$APP_SLUG_DEFAULT" && -n "$APP_NAME_DEFAULT" ]] || err "BUILD_INFO 에 app_name/app_slug 가 없습니다."
 
 # ───────────────────────── 사전 확인 ─────────────────────────
 # 'render' 는 아무것도 바꾸지 않는다 — root 없이 유닛 · nginx · keepalived 설정을 보여 준다.
-RENDER_ONLY=0; [[ "${1:-}" == "render" ]] && RENDER_ONLY=1
+RENDER_ONLY=0; [[ "${1:-}" =~ ^(render|-h|--help|help)$ ]] && RENDER_ONLY=1
 [[ $EUID -eq 0 || $RENDER_ONLY -eq 1 ]] || err "root 로 실행하세요 (sudo)"
 
 OPERATOR="${OPERATOR:-${SUDO_USER:-}}"
@@ -47,15 +49,57 @@ OPERATOR="${OPERATOR:-${SUDO_USER:-}}"
     || err "운영 계정을 알 수 없습니다. 일반 사용자로 sudo 하거나 OPERATOR=<이름> 을 주세요."
 [[ $RENDER_ONLY -eq 1 ]] || id "$OPERATOR" >/dev/null 2>&1 || err "그런 계정이 없습니다: $OPERATOR"
 
+# ───────────────────────── 이 설치는 무슨 플랫폼인가 ─────────────────────────
+# 우선순위: env > /etc/platform-instances/<slug>.conf(지난 설치가 남긴 것) > 번들 기본값.
+ETC="${ETC:-}"
+INSTANCES_DIR="$ETC/etc/platform-instances"
+instance_conf_get() { [[ -f "$INSTANCES_DIR/$1.conf" ]] && sed -n "s|^$2=||p" "$INSTANCES_DIR/$1.conf" | tail -n1 || true; }
+
+if [[ -z "${APP_SLUG:-}" ]]; then
+    # slug 를 안 줬다 — 이 서버에 설치된 인스턴스가 하나면 그것, 여럿이면 물어본다.
+    mapfile -t _known < <(ls "$INSTANCES_DIR"/*.conf 2>/dev/null | xargs -rn1 basename | sed 's/\.conf$//')
+    if [[ ${#_known[@]} -eq 1 ]]; then
+        APP_SLUG="${_known[0]}"
+    elif [[ ${#_known[@]} -gt 1 ]]; then
+        err "이 서버에 인스턴스가 여럿입니다: ${_known[*]} — APP_SLUG=<slug> 로 어느 것인지 주세요."
+    else
+        APP_SLUG="$APP_SLUG_DEFAULT"
+    fi
+fi
+[[ "$APP_SLUG" =~ ^[a-z][a-z0-9]{0,31}$ ]] || err "APP_SLUG 는 소문자·숫자 한 덩어리 32자 이내여야 합니다: $APP_SLUG"
+APP_NAME="${APP_NAME:-$(instance_conf_get "$APP_SLUG" APP_NAME)}"; APP_NAME="${APP_NAME:-$APP_NAME_DEFAULT}"
+APP_TAGLINE="${APP_TAGLINE:-$(instance_conf_get "$APP_SLUG" APP_TAGLINE)}"
+EXTENSIONS="${EXTENSIONS-$(instance_conf_get "$APP_SLUG" EXTENSIONS)}"
+APP_PORT="${APP_PORT:-$(instance_conf_get "$APP_SLUG" APP_PORT)}"; APP_PORT="${APP_PORT:-$APP_PORT_DEFAULT}"
+
 # **설치 경로·DB·유닛 이름이 전부 slug 에서 나온다.** 한 서버에 여러 플랫폼을
 # 얹을 때 이것이 겹치면 서로를 덮어쓴다.
+INSTALL_DIR="${INSTALL_DIR:-$(instance_conf_get "$APP_SLUG" INSTALL_DIR)}"
 INSTALL_DIR="${INSTALL_DIR:-/home/$OPERATOR/apps/$APP_SLUG}"
 PG_VERSION="${PG_VERSION:-16}"                          # 두 서버가 같아야 복제가 된다
 DB_NAME="${DB_NAME:-$APP_SLUG}"
 DB_USER="${DB_USER:-$APP_SLUG}"
-APP_PORT="${APP_PORT:-$APP_PORT_DEFAULT}"
 SERVICE_NAME="$APP_SLUG"
 SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
+
+# sed 치환값에 들어가면 뜻을 갖는 글자(& | \)를 막는다 — 이름에 '&' 가 있으면 매치 전체가 들어간다.
+sed_escape() { printf '%s' "$1" | sed -e 's/[&|\\]/\\&/g'; }
+
+# 이 인스턴스의 설정을 남긴다 — 다음 배포가 기억한다.
+instance_save() {
+    mkdir -p "$INSTANCES_DIR"
+    cat > "$INSTANCES_DIR/$APP_SLUG.conf" <<EOF
+# $APP_NAME ($APP_SLUG) — deploy.sh 가 기억한다(env 로 덮으면 갱신). 설치 뒤 slug 는 바꾸지 않는다.
+APP_NAME=$APP_NAME
+APP_TAGLINE=$APP_TAGLINE
+APP_PORT=$APP_PORT
+EXTENSIONS=$EXTENSIONS
+INSTALL_DIR=$INSTALL_DIR
+DATA_DIR=${DATA_DIR:-}
+BACKUP_HOST_DIR=${BACKUP_HOST_DIR:-}
+EOF
+    chmod 644 "$INSTANCES_DIR/$APP_SLUG.conf"
+}
 
 as_op() { sudo -u "$OPERATOR" "$@"; }
 
@@ -108,7 +152,9 @@ MCP_ENABLED="${MCP_ENABLED:-1}"                        # 0 으로 두면 MCP 전
 # 우선순위: 명시한 env > 설치된 유닛에 저장된 값 > 기본값(번들의 BUILD_INFO).
 # → 최초 한 번 'MCP_HOST=0.0.0.0 ./deploy.sh' 하면, 이후 './deploy.sh update' 가
 #   매번 다시 지정하지 않아도 같은 값을 유지한다(되돌리려면 그때만 env 로 덮어쓰기).
-MCP_PORT_DEFAULT="$(bundle mcp_port)"; MCP_PORT_DEFAULT="${MCP_PORT_DEFAULT:-$((APP_PORT + 2))}"
+# **앱 포트 +2** — 인스턴스마다 앱 포트가 다르므로 번들의 mcp_port 는 기본 포트일 때만 맞는다.
+MCP_PORT_DEFAULT="$(bundle mcp_port)"
+[[ "$APP_PORT" == "$APP_PORT_DEFAULT" && -n "$MCP_PORT_DEFAULT" ]] || MCP_PORT_DEFAULT=$((APP_PORT + 2))
 MCP_HOST="${MCP_HOST:-$(unit_env MCP_HOST)}"
 # 이중화면 상대 서버의 nginx 도 이 MCP 에 붙어야 한다 — 로컬에만 열면 절반의 요청이 502 다.
 [[ -n "$HA_ROLE" ]] && MCP_HOST="${MCP_HOST:-0.0.0.0}"; MCP_HOST="${MCP_HOST:-127.0.0.1}"
@@ -170,7 +216,7 @@ ensure_dirs() {
     else
         as_op mkdir -p "$FILESTORE_HOST_DIR"
     fi
-    platform_save
+    instance_save
     ha_save
 }
 
@@ -207,6 +253,10 @@ SQL
         -e "s|REPLACE_DB_NAME|$DB_NAME|" \
         -e "s|@localhost:5432/|@$DB_HOST:5432/|" \
         -e "s|^PORT=.*|PORT=$APP_PORT|" \
+        -e "s|^APP_SLUG=.*|APP_SLUG=$APP_SLUG|" \
+        -e "s|^APP_NAME=.*|APP_NAME=$(sed_escape "$APP_NAME")|" \
+        -e "s|^APP_TAGLINE=.*|APP_TAGLINE=$(sed_escape "$APP_TAGLINE")|" \
+        -e "s|^EXTENSIONS=.*|EXTENSIONS=$EXTENSIONS|" \
         "$HERE/.env.example" > "$ENV_FILE"
     if [[ -n "$BACKUP_HOST_DIR" ]]; then
         # 컨테이너 안에서 보이는 경로다 — 유닛이 $BACKUP_HOST_DIR 를 /data/backup 에 건다.
@@ -229,6 +279,25 @@ EOF
     # 비밀키가 들어 있다. 남이 읽을 이유가 없다.
     chmod 600 "$ENV_FILE"
     warn "$ENV_FILE 를 만들었습니다 — 공개 전에 CORS·백업 경로를 확인하세요."
+}
+
+# 이름 · 설명 · 확장은 배포로 바꿀 수 있다 — `EXTENSIONS=hub,bom sudo ./deploy.sh update`.
+# **slug 만은 못 바꾼다** — DB · 쿠키 · 토큰 · 유닛 이름이 전부 거기서 나왔다.
+sync_env_identity() {
+    [[ -f "$ENV_FILE" ]] || return 0
+    local current; current="$(sed -n 's|^APP_SLUG=||p' "$ENV_FILE" | tail -n1)"
+    if [[ -n "$current" && "$current" != "$APP_SLUG" ]]; then
+        err ".env 의 APP_SLUG 는 $current 인데 지금은 $APP_SLUG 입니다 — slug 는 설치 뒤 바꿀 수 없습니다 (다른 인스턴스면 APP_SLUG=$current 로)"
+    fi
+    local key value
+    for key in APP_SLUG APP_NAME APP_TAGLINE EXTENSIONS; do
+        value="${!key}"
+        if grep -q "^$key=" "$ENV_FILE"; then
+            sed -i "s|^$key=.*|$key=$(sed_escape "$value")|" "$ENV_FILE"
+        else
+            printf '%s=%s\n' "$key" "$value" >> "$ENV_FILE"
+        fi
+    done
 }
 
 place_sif() {
@@ -305,6 +374,7 @@ render_mcp_service_unit() {
         -e "s|@@MCP_HOST@@|$MCP_HOST|g" \
         -e "s|@@MCP_PORT@@|$MCP_PORT|g" \
         -e "s|@@MCP_ALLOWED_HOSTS@@|$MCP_ALLOWED_HOSTS|g" \
+        -e "s|@@APP_SLUG@@|$APP_SLUG|g" \
         "$HERE/mcp.service.template" > "$MCP_SERVICE_UNIT"
     chmod 644 "$MCP_SERVICE_UNIT"
     systemctl daemon-reload
@@ -474,10 +544,11 @@ MSG
 
 cmd_install() {
     [[ -f "$HERE/app.sif" ]] || err "app.sif 가 없습니다 — 릴리스 번들을 풀고 그 안에서 실행하세요"
-    info "$APP_NAME $VERSION — 계정 $OPERATOR · 설치 경로 $INSTALL_DIR"
+    info "$APP_NAME ($APP_SLUG) $VERSION — 계정 $OPERATOR · 설치 경로 $INSTALL_DIR · 포트 $APP_PORT · 확장 ${EXTENSIONS:-없음}"
 
     ensure_dirs
     generate_env_if_missing
+    sync_env_identity
     place_sif
     run_migrations
     run_seed
@@ -508,7 +579,9 @@ MSG
 cmd_update() {
     [[ -f "$HERE/app.sif" ]]     || err "app.sif 가 $HERE 에 없습니다"
     [[ -f "$ENV_FILE" ]] || err "$ENV_FILE 가 없습니다 — 먼저 install 하세요"
+    info "$APP_NAME ($APP_SLUG) $VERSION — 포트 $APP_PORT · 확장 ${EXTENSIONS:-없음}"
     ensure_dirs
+    sync_env_identity
 
     info "$SERVICE_NAME 중지"
     systemctl stop "$SERVICE_NAME" || true
@@ -575,7 +648,7 @@ SQL
 }
 
 cmd_status() {
-    echo "== $APP_NAME ($APP_SLUG) =="
+    echo "== $APP_NAME ($APP_SLUG) · 확장 ${EXTENSIONS:-없음} =="
     echo "  설치 경로 : $INSTALL_DIR$( [[ -n "$DATA_DIR" ]] && echo "  · 공용 $DATA_DIR" )"
     echo "  DB        : $DB_NAME @ $DB_HOST"
     echo "  포트      : $APP_PORT"
@@ -611,6 +684,8 @@ cmd_render() {
     if [[ -z "${ETC:-}" ]]; then ETC="$(mktemp -d)"; show=1; fi
     local tpl unit
     mkdir -p "$ETC/etc/systemd/system"
+    # 설정 파일도 그 아래에 — 실제 배포가 남길 것과 같은 모양을 본다.
+    instance_save; ha_save
     for tpl in app.service sync.service backup.service; do
         [[ -f "$HERE/$tpl.template" ]] || continue
         case "$tpl" in app.service) unit="$SERVICE_NAME.service" ;; sync.service) unit="$SYNC_SERVICE_NAME.service" ;; *) unit="$BACKUP_SERVICE_NAME.service" ;; esac
@@ -655,6 +730,7 @@ $APP_NAME 배포 스크립트 ($VERSION)
   lb                      메인 서버용 nginx 조각 · keepalived(DB VIP)를 지금 설정으로 다시 만들고 반영
 
 지금 설정 (env 로 덮을 수 있음):
+  APP_SLUG    = $APP_SLUG   (APP_NAME="$APP_NAME" EXTENSIONS=${EXTENSIONS:-없음}) — 다른 인스턴스는 APP_SLUG=<slug>
   OPERATOR    = $OPERATOR
   INSTALL_DIR = $INSTALL_DIR
   DATA_DIR    = ${DATA_DIR:-(없음 — 단독 서버, 전부 INSTALL_DIR)}

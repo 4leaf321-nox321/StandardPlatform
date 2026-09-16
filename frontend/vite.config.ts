@@ -1,16 +1,64 @@
+import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 import tailwindcss from '@tailwindcss/vite'
 import react from '@vitejs/plugin-react'
 import { defineConfig } from 'vite'
+import type { Plugin } from 'vite'
 
 import pkg from './package.json' with { type: 'json' }
 
 const root = fileURLToPath(new URL('.', import.meta.url))
 
+/**
+ * 개발 서버에서도 **서버가 심는 것과 같은 meta** 를 심는다.
+ *
+ * 배포에서는 백엔드가 index.html 에 `<meta name="app-name">` 들을 넣어 화면이 자기 이름과
+ * 켠 확장을 안다(backend/app/main.py). Vite 는 index.html 을 직접 주므로 그 자리가 비고,
+ * 그러면 개발 화면은 늘 틀의 기본 이름에 확장 없음이 된다 — 그래서 같은 `backend/.env` 를
+ * 읽어 같은 meta 를 넣는다. 화면 코드는 두 경우를 구별하지 않는다.
+ */
+function devIdentity(): Plugin {
+  const envFile = path.resolve(root, '../backend/.env')
+  const read = (): Record<string, string> => {
+    if (!fs.existsSync(envFile)) return {}
+    const out: Record<string, string> = {}
+    for (const line of fs
+      .readFileSync(envFile, 'utf-8')
+      .replace(/^\uFEFF/, '')
+      .split(/\r?\n/)) {
+      const m = /^\s*([A-Z_][A-Z0-9_]*)\s*=\s*(.*)\s*$/.exec(line)
+      if (m) out[m[1]] = m[2].replace(/^["']|["']$/g, '')
+    }
+    return out
+  }
+  const escape = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  return {
+    name: 'dev-identity',
+    apply: 'serve',
+    transformIndexHtml(html) {
+      const env = read()
+      const pairs: [string, string | undefined][] = [
+        ['app-name', env.APP_NAME],
+        ['app-slug', env.APP_SLUG],
+        ['app-tagline', env.APP_TAGLINE],
+        ['app-extensions', env.EXTENSIONS],
+      ]
+      const tags = pairs
+        .filter(([, v]) => v)
+        .map(([k, v]) => `<meta name="${k}" content="${escape(v!)}" />`)
+      let out = html.replace('<head>', ['<head>', ...tags].join('\n    '))
+      if (env.APP_NAME)
+        out = out.replace(/<title>.*?<\/title>/, `<title>${escape(env.APP_NAME)}</title>`)
+      return out
+    },
+  }
+}
+
 export default defineConfig({
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), devIdentity()],
   // **상대 주소로 굽는다.** 배포마다 접두어(`/plm/`)가 다른데 그것을 빌드에 굽으면 이미지가
   // 접두어마다 하나씩 필요하다. 상대 주소 + 서버가 심는 `<base href>` 로 어느 접두어에서도 뜬다.
   base: './',

@@ -8,14 +8,15 @@
 
 from __future__ import annotations
 
+import re
 from functools import lru_cache
 from pathlib import Path
 from typing import Protocol
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.branding import APP_SLUG
+from app.branding import DEFAULT_APP_NAME, DEFAULT_APP_SLUG, DEFAULT_APP_TAGLINE
 
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPO_DIR = BACKEND_DIR.parent
@@ -33,17 +34,34 @@ class Settings(BaseSettings):
     app_env: str = "development"
     """development | production. 기동 방식과 로그 수준을 가른다."""
 
-    database_url: str = f"postgresql+psycopg://postgres:postgres@localhost:5432/{APP_SLUG}"
-    """**DB 이름은 `branding.APP_SLUG` 에서 나온다.** 포크해서 그 한 줄을 바꾸면
-    여기가 따라온다 — 따로 적으면 언젠가 안 바뀌고, 그러면 두 플랫폼이 같은 DB 를
-    보게 된다. 공통 틀에서 나온 표는 이름이 같아서(users·workspaces) **오류 없이
-    남의 계정 표를 읽는다.**
+    # ── 이 설치가 무슨 플랫폼인가 ─────────────────────────────────────────────
+    # **번들 하나로 여러 플랫폼을 띄운다.** 허브 · 그룹 쌍둥이들은 같은 코드에 `.env` 만
+    # 다르다 — 그래서 이름은 빌드가 아니라 여기(배포 설정)서 온다. 안 주면 틀의 기본값.
+    app_slug: str = DEFAULT_APP_SLUG
+    """기계가 읽는 이름 — **DB 이름 · 리프레시 쿠키 · 토큰 표식 · 화면 저장소 키가 여기서
+    나온다.** 소문자 · 숫자 한 덩어리, 32자 이내(`plmhub` · `simtools`). 같은 서버의 다른
+    플랫폼과 같으면 셋이 전부 조용히 부딪힌다(branding.py). 설치 뒤에는 바꾸지 않는다 —
+    바꾸면 쿠키 · 토큰이 다 무효가 되고 DB 이름이 어긋난다."""
+    app_name: str = DEFAULT_APP_NAME
+    """화면 제목 · API 문서 제목 · 기동 로그 · `/api/health` 의 `app`."""
+    app_tagline: str = DEFAULT_APP_TAGLINE
+    """한 줄 설명 — 로그인 화면과 사이드바."""
+    extensions: str = ""
+    """이 설치가 켜는 확장 모듈, 쉼표로(`hub,bom`). **코어는 확장을 모른다** — 이름으로
+    `app/extensions/<이름>` 을 찾아 라우터 · 훅을 붙이고, 화면에도 같은 목록을 심어 그쪽
+    메뉴 · 페이지가 붙는다. 개발에서는 전부 켜 두고, 운영 인스턴스는 자기 것만 켠다."""
 
-    접속 정보(사용자·비밀번호·호스트)는 설치마다 다르므로 `.env` 가 이 값을
-    통째로 덮는다. 여기 있는 것은 `.env` 가 없을 때의 기본값이다.
+    database_url: str = ""
+    """비우면 `postgresql+psycopg://postgres:postgres@localhost:5432/<app_slug>` — **DB 이름은
+    `app_slug` 에서 나온다.** 따로 적으면 언젠가 안 바뀌고, 그러면 두 플랫폼이 같은 DB 를
+    보게 된다. 공통 틀에서 나온 표는 이름이 같아서(users·workspaces) **오류 없이 남의 계정
+    표를 읽는다.**
 
-    시험은 이 이름에서 `_test` 를 파생해 쓴다(tests/conftest.py) — 접속 정보를
-    두 곳에 적으면 한쪽만 고쳐지고, 그때 시험이 어느 DB 에서 도는지 모른다."""
+    접속 정보(사용자·비밀번호·호스트)는 설치마다 다르므로 운영 `.env` 는 이 값을 통째로
+    적는다(deploy.sh 가 slug 로 DB 이름을 넣는다).
+
+    시험은 이 이름에서 `_test` 를 파생해 쓴다(tests/conftest.py) — 접속 정보를 두 곳에
+    적으면 한쪽만 고쳐지고, 그때 시험이 어느 DB 에서 도는지 모른다."""
 
     host: str = "0.0.0.0"
     port: int = 8040
@@ -115,13 +133,38 @@ class Settings(BaseSettings):
 
     access_token_minutes: int = 720  # 12시간
     refresh_token_days: int = 30
-    refresh_cookie_name: str = f"{APP_SLUG}_refresh"
-    """**이름도 `branding.APP_SLUG` 에서 나온다.** 쿠키는 포트를 구분하지 않아서,
+    refresh_cookie_name: str = ""
+    """비우면 `<app_slug>_refresh`. **이름도 slug 에서 나온다.** 쿠키는 포트를 구분하지 않아서,
     같은 서버에 두 플랫폼을 띄웠을 때 이름이 같으면 한쪽 로그인이 다른 쪽 세션을
     덮어쓴다 — 번갈아 로그아웃되는 상태가 되고, 그 원인은 코드 어디에도 없다."""
     refresh_cookie_secure: bool = False
     """사내망 http 배포가 기본이라 False. https 로 서비스하면 True 로 올린다.
     (True 인데 http 로 접속하면 브라우저가 쿠키를 버려 로그인이 유지되지 않는다)"""
+
+    @model_validator(mode="after")
+    def _derive_from_slug(self) -> Settings:
+        """slug 를 검사하고, 비워 둔 것들을 slug 에서 채운다."""
+        if not re.fullmatch(r"[a-z][a-z0-9]{0,31}", self.app_slug):
+            raise ValueError(
+                f"APP_SLUG 는 소문자·숫자 한 덩어리 32자 이내여야 합니다: {self.app_slug!r}"
+            )
+        if not self.database_url:
+            self.database_url = (
+                f"postgresql+psycopg://postgres:postgres@localhost:5432/{self.app_slug}"
+            )
+        if not self.refresh_cookie_name:
+            self.refresh_cookie_name = f"{self.app_slug}_refresh"
+        return self
+
+    @property
+    def extension_names(self) -> tuple[str, ...]:
+        """`EXTENSIONS=hub, bom` → `("hub", "bom")`. 순서는 적은 대로, 빈 것과 중복은 뺀다."""
+        seen: list[str] = []
+        for name in self.extensions.split(","):
+            cleaned = name.strip()
+            if cleaned and cleaned not in seen:
+                seen.append(cleaned)
+        return tuple(seen)
 
     @property
     def base_path(self) -> str:

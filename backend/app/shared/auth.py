@@ -75,10 +75,11 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     if token is None:
         raise AppError(code("AUTH", 100), _UNAUTHENTICATED, status=401)
 
-    if token.startswith(security.ACCEPTED_PAT_PREFIXES):
+    if token.startswith(security.accepted_pat_prefixes()):
         found = services.resolve_pat(db, token)
         if found is None:
-            logger.warning("PAT 인증 실패 (prefix=%s)", token[: len(security.PAT_PREFIX) + 6])
+            shown = token[: len(security.pat_prefix()) + 6]
+            logger.warning("PAT 인증 실패 (prefix=%s)", shown)
             raise AppError(code("AUTH", 101), "토큰이 유효하지 않습니다.", status=401)
         user, pat = found
         _enforce_token_scope(request, list(pat.scopes or []), request.url.path)

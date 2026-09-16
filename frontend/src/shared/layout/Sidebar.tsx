@@ -14,6 +14,7 @@ import { APP_NAME, APP_TAGLINE } from '@/shared/branding'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/shared/components/ui/sheet'
 import { useResource } from '@/shared/hooks/useResource'
 import { ontologyApi } from '@/modules/ontology/api'
+import { extensionNavGroups } from '@/extensions'
 import { itemHref, visibleGroups } from '@/shared/layout/navigation'
 import { cn } from '@/shared/lib/utils'
 
@@ -33,10 +34,7 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
   // 프로세스가 SPA 까지 서빙하므로 둘이 다를 수가 없고, 그 자리에 경고가 뜨면
   // 그것 자체가 거짓말이다.
   const stale =
-    import.meta.env.DEV &&
-    !!release &&
-    release !== UNKNOWN_VERSION &&
-    release !== __APP_VERSION__
+    import.meta.env.DEV && !!release && release !== UNKNOWN_VERSION && release !== __APP_VERSION__
 
   // **볼 수 있는 것만 보여 준다.** 눌러야 403 을 아는 메뉴는 "할 수 있는 일" 을
   // 알려 주지 못한다. 권한은 서버가 판정한다 — 여기는 표시일 뿐이다.
@@ -50,6 +48,7 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
       isAnyManager: isAnyManager(user),
     },
     dynamic.data ?? [],
+    extensionNavGroups(),
   )
 
   return (
@@ -85,9 +84,7 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
             {/* **제목이 없으면 자리도 안 남긴다.** 빈 문단을 두면 홈 위에 설명
                 없는 여백이 생겨 「뭔가 안 나온다」 로 읽힌다. */}
             {group.title && (
-              <p className="text-muted-foreground px-2 pb-1 text-xs font-medium">
-                {group.title}
-              </p>
+              <p className="text-muted-foreground px-2 pb-1 text-xs font-medium">{group.title}</p>
             )}
             <ul className="space-y-0.5">
               {group.items.map((item) => (
