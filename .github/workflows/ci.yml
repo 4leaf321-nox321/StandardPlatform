@@ -1,6 +1,6 @@
 # 검증 게이트.
 #
-# **DB 이름을 여기 박지 않는다.** `branding.py` 의 APP_SLUG 에서 읽는다 — 포크해서
+# **DB 이름을 여기 박지 않는다.** `branding.py` 의 DEFAULT_APP_SLUG(틀의 기본값)에서 읽는다 — 포크해서
 # 이름을 바꾼 사람이 CI 까지 고쳐야 한다면 그것을 빠뜨리는 날이 오고, 그날 CI 는
 # 옆 플랫폼의 DB 이름으로 돈다.
 #
@@ -56,11 +56,12 @@ jobs:
           import ast, pathlib
           tree = ast.parse(pathlib.Path('backend/app/branding.py').read_text(encoding='utf-8'))
           for node in tree.body:
-              if isinstance(node, ast.Assign) and node.targets[0].id == 'APP_SLUG':
+              # 설치의 slug 는 .env 가 정한다 — 여기서는 시험 DB 이름을 만들 **기본값**을 읽는다.
+              if isinstance(node, ast.Assign) and node.targets[0].id == 'DEFAULT_APP_SLUG':
                   print(ast.literal_eval(node.value))
           PY
           )
-          [ -n "$slug" ] || { echo "branding.py 에서 APP_SLUG 를 읽지 못했습니다"; exit 1; }
+          [ -n "$slug" ] || { echo "branding.py 에서 DEFAULT_APP_SLUG 를 읽지 못했습니다"; exit 1; }
           echo "APP_SLUG = $slug"
           echo "slug=$slug" >> "$GITHUB_OUTPUT"
 
