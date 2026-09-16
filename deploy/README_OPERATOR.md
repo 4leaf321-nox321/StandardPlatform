@@ -32,7 +32,7 @@ cd <slug>-<태그>
 ls
 #  app.sif  deploy.sh  ha.sh  pg-ha.sh  backup.sh  restore.sh
 #  app.service.template  mcp.service.template  sync.service.template  sync.timer.template
-#  backup.service.template  backup.timer.template  .env.example  BUILD_INFO  README.md
+#  backup.service.template  backup.timer.template  .env.example  BUILD_INFO  README.md  쉬운-설치.md
 #  mcp_server/   (Claude 연동 MCP 서버 + 오프라인 설치용 휠)
 ```
 
@@ -81,7 +81,8 @@ scp <slug>-<태그>.tar.gz <계정>@<서버>:~/ && \
 ```
 
 인자 없는 `./deploy.sh` 는 **설치된 흔적을 보고 스스로 고른다** — 처음이면
-`install`, 있으면 `update`.
+`install`, 있으면 `update`. **처음이고 리눅스가 낯설면 `sudo ./deploy.sh setup`** — 물어보며
+전부 한다([쉬운-설치.md](쉬운-설치.md)).
 
 ---
 
@@ -352,10 +353,21 @@ sudo systemctl restart <slug>
 
 ### 8.1 최초 설치 — A(주) 먼저, 그다음 B
 
-한 번 준 env 는 `/etc/platform-ha.conf` · `~/apps/<slug>/deploy.conf` 에 남아 **다음부터는 `sudo ./deploy.sh update` 만** 치면 된다.
+**가장 쉬운 길은 `setup` 이다.** 물음에 답하면 아래 단계를 순서대로 알아서 하고, 답한 값은
+`/etc/platform-instances/<slug>.conf` · `/etc/platform-ha.conf` 에 남아 **다음부터는
+`sudo ./deploy.sh update` 만** 치면 된다. 처음 하는 사람은 [번들의 「쉬운 설치」](쉬운-설치.md)를 본다.
 
 ```bash
-# ── 서버 A (주) ──  (APP_SLUG · APP_NAME · APP_PORT · EXTENSIONS 도 여기서 함께 — §0)
+# ── 서버 A ──   물음: 주(A) · 플랫폼 이름 · 화면 이름 · 포트 · 확장 · B 의 IP · 호스트명 · 공용 폴더
+sudo ./deploy.sh setup
+# ── 서버 B ──   물음: 대기(B) · 플랫폼 이름 · A 의 IP · 호스트명 · 공용 폴더 · A 의 계정
+sudo ./deploy.sh setup           # A 에서 .env · 복제 비밀번호를 scp 로 받아 온다(A 계정 비밀번호를 한 번 묻는다)
+```
+
+`setup` 이 하는 것을 손으로 하면 이렇다(환경 변수 이름은 §0):
+
+```bash
+# ── 서버 A (주) ──
 APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> EXTENSIONS=<확장> \
 HA_ROLE=master PEER_IP=<B의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
   sudo ./deploy.sh prepare         # 패키지(postgresql-16 · keepalived) · DB 역할
@@ -387,7 +399,7 @@ DB VIP 가 있으면 A 의 첫 명령부터 `DB_VIP=<주소>` 를 함께 준다.
 | 없는 것 | 대신 |
 | --- | --- |
 | **DB VIP** | `DB_VIP` 를 안 주면 keepalived 도 자동 승격도 없다. 앱은 A 의 IP 로 DB 에 붙는다. 승격은 손으로(8.3 「DB VIP 없이」). guard 는 VIP 없이도 상대에게 물어 동작한다. 받으면 8.5 |
-| **`/data/<slug>`** | `DATA_DIR` 를 안 주면 각 서버 `~/apps/<slug>` 에 전부 둔다. **B 의 `.env` 는 A 의 것을 복사**한다 — B 에서 만들 수 없다(대기 DB 는 비밀번호를 못 돌린다): `scp <A>:~/apps/<slug>/.env ~/apps/<slug>/.env` 뒤 `install`. 첨부는 서버마다 따로 쌓인다(리허설이면 그것으로 충분). 나중에 `/data` 가 오면 `~/apps/<slug>/{.env,filestore}` 를 옮기고 `DATA_DIR=/data/<slug> sudo ./deploy.sh update` — 양쪽 |
+| **`/data/<slug>`** | `DATA_DIR` 를 안 주면 각 서버 `~/apps/<slug>` 에 전부 둔다. **B 의 `.env` 와 복제 비밀번호는 A 의 것**이어야 한다 — `setup` 이 A 의 `~/apps/<slug>/handoff/` 에서 scp 로 받아 온다(손으로 하면 `scp <A>:~/apps/<slug>/handoff/.env ~/apps/<slug>/.env`, 복제 비밀번호는 `/etc/pg-ha.replpass` 에 root:postgres 640). 첨부는 서버마다 따로 쌓인다(리허설이면 그것으로 충분). 나중에 `/data` 가 오면 `~/apps/<slug>/{.env,filestore}` 를 옮기고 `DATA_DIR=/data/<slug> sudo ./deploy.sh update` — 양쪽 |
 
 리허설에서 볼 수 있는 것: 복제(`db-status` 의 지연), 손 승격 · demote · `db-standby` 재구성, guard(옛 주 부팅), 두 앱 동시 운영(동시 편집 · 타이머 한 대만 · 웹훅 한 번만), B→A 업데이트, 재부팅. 못 보는 것: 자동 승격, 공용 첨부, 백업 폴더, 메인 서버 경유.
 

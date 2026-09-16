@@ -7,6 +7,8 @@
 #   sudo ./deploy.sh reset     DB 통째로 초기화 (파괴적)
 #   sudo ./deploy.sh status    서비스 상태 + /api/health
 #   sudo ./deploy.sh           자동: 설치된 흔적이 없으면 install, 있으면 update
+#   sudo ./deploy.sh setup     **물어보고 알아서** — 이름 · 역할 · 상대 서버를 답하면 prepare → (DB 주/대기)
+#                              → install 을 순서대로. 서버 두 대 첫 설치는 이것 하나면 된다.
 #
 # 서버 두 대 이중화(ha.sh · pg-ha.sh — 자세한 것은 README 「이중화」):
 #   sudo ./deploy.sh db-primary | db-standby --from <IP> | db-promote | db-demote | db-status
@@ -42,6 +44,7 @@ VERSION="$(bundle version)"
 # ───────────────────────── 사전 확인 ─────────────────────────
 # 'render' 는 아무것도 바꾸지 않는다 — root 없이 유닛 · nginx · keepalived 설정을 보여 준다.
 RENDER_ONLY=0; [[ "${1:-}" =~ ^(render|-h|--help|help)$ ]] && RENDER_ONLY=1
+[[ "${1:-}" == "setup" && "${2:-}" == "--plan" ]] && RENDER_ONLY=1
 [[ $EUID -eq 0 || $RENDER_ONLY -eq 1 ]] || err "root 로 실행하세요 (sudo)"
 
 OPERATOR="${OPERATOR:-${SUDO_USER:-}}"
@@ -109,6 +112,7 @@ as_op() { sudo -u "$OPERATOR" "$@"; }
 [[ -f "$HERE/ha.sh" ]] || err "ha.sh 가 $HERE 에 없습니다 (릴리스 번들에서 실행하세요)"
 # shellcheck disable=SC1091
 source "$HERE/ha.sh"
+SELF_IP_GIVEN="${SELF_IP:-}"   # env 로 직접 준 것만 — setup 이 다시 잴 때 이것은 지킨다
 ha_load
 
 # **무엇이 공용이고 무엇이 로컬인가.** DATA_DIR(/data/<공통폴더>/<slug>)를 주면 첨부 · 백업 ·
@@ -678,6 +682,139 @@ cmd_status() {
     ha_status
 }
 
+# ───────────────────────── setup — 물어보고 알아서 ─────────────────────────
+# 운영자가 env 이름과 순서를 외우지 않게. 답한 값은 instance · ha 설정 파일에 남아 다음 배포가
+# 기억한다. 주(A)는 끝에 B 로 넘길 파일(.env · 복제 비밀번호)을 handoff/ 에 모아 두고, 대기(B)는
+# 그것을 A 에서 scp 로 받아 제자리에 둔다 — 사람이 파일을 손으로 옮기지 않는다.
+ask() {  # $1=변수 $2=질문 $3=기본값
+    local answer
+    if [[ -n "$3" ]]; then read -r -p "$2 [$3]: " answer; else read -r -p "$2: " answer; fi
+    printf -v "$1" '%s' "${answer:-$3}"
+}
+cmd_setup() {
+    local plan_only=0; [[ "${1:-}" == "--plan" ]] && plan_only=1
+    [[ -t 0 || $plan_only -eq 1 ]] || err "setup 은 물어보며 진행합니다 — 터미널에서 직접(원격이면 ssh -t) 실행하세요."
+    echo
+    echo "== $APP_NAME_DEFAULT 설치 안내 ($VERSION) — 물음에 답하면 나머지는 이 스크립트가 합니다. 비우면 [ ] 안의 값 =="
+    echo
+    local role
+    ask role "이 서버는 주(A) 입니까, 대기(B) 입니까? (A/B, 서버 한 대뿐이면 1)" "A"
+    case "${role^^}" in A) HA_ROLE=master ;; B) HA_ROLE=backup ;; 1) HA_ROLE="" ;; *) err "A, B, 1 중 하나로 답하세요." ;; esac
+    ask APP_SLUG "플랫폼 이름 — 기계용, 소문자·숫자만 (예: plmhub). 설치 뒤엔 못 바꿉니다" "${APP_SLUG:-}"
+    [[ "$APP_SLUG" =~ ^[a-z][a-z0-9]{0,31}$ ]] || err "소문자·숫자 한 덩어리 32자 이내여야 합니다: $APP_SLUG"
+    if [[ "$HA_ROLE" == backup ]]; then
+        # 이름 · 포트 · 확장은 A 의 .env 에 이미 있다 — 다시 묻지 않고 받아온 것을 쓴다.
+        APP_NAME="$(instance_conf_get "$APP_SLUG" APP_NAME)"; APP_NAME="${APP_NAME:-$APP_NAME_DEFAULT}"
+        APP_PORT="$(instance_conf_get "$APP_SLUG" APP_PORT)"; APP_PORT="${APP_PORT:-$APP_PORT_DEFAULT}"
+        EXTENSIONS="$(instance_conf_get "$APP_SLUG" EXTENSIONS)"
+    else
+        ask APP_NAME "화면에 보일 이름 (예: PLM 기준정보)" "$(instance_conf_get "$APP_SLUG" APP_NAME)"
+        APP_NAME="${APP_NAME:-$APP_NAME_DEFAULT}"
+        ask APP_PORT "앱 포트 — 같은 서버의 다른 플랫폼과 10 이상 벌립니다" "$(instance_conf_get "$APP_SLUG" APP_PORT)"
+        APP_PORT="${APP_PORT:-$APP_PORT_DEFAULT}"
+        ask EXTENSIONS "켤 확장 모듈, 쉼표로 (없으면 그냥 Enter)" "$(instance_conf_get "$APP_SLUG" EXTENSIONS)"
+    fi
+    local peer_account=""
+    if [[ -n "$HA_ROLE" ]]; then
+        ask PEER_IP "상대 서버의 IP ($( [[ "$HA_ROLE" == master ]] && echo 'B' || echo 'A' ))" "$PEER_IP"
+        [[ -n "$PEER_IP" ]] || err "상대 서버 IP 가 필요합니다."
+        ask PUBLIC_HOST "사용자가 브라우저에 치는 호스트명" "${PUBLIC_HOST:-hwax.sec.samsung.net}"
+        ask DATA_DIR "공용 스토리지 폴더 (예: /data/$APP_SLUG — 아직 없으면 그냥 Enter)" "$DATA_DIR"
+        [[ -n "$DATA_DIR" || "$HA_ROLE" != backup ]] || ask peer_account "A 서버의 계정 이름 — .env 와 복제 비밀번호를 거기서 받아옵니다" "$OPERATOR"
+    fi
+    # 답한 값으로 파생값을 다시 계산한다.
+    INSTALL_DIR="/home/$OPERATOR/apps/$APP_SLUG"; DB_NAME="$APP_SLUG"; DB_USER="$APP_SLUG"
+    SERVICE_NAME="$APP_SLUG"; SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
+    SYNC_SERVICE_NAME="${APP_SLUG}-sync"; SYNC_SERVICE_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.service"
+    SYNC_TIMER_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.timer"
+    MCP_SERVICE_NAME="${APP_SLUG}-mcp"; MCP_SERVICE_UNIT="/etc/systemd/system/${MCP_SERVICE_NAME}.service"
+    BACKUP_SERVICE_NAME="${APP_SLUG}-backup"; BACKUP_SERVICE_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.service"
+    BACKUP_TIMER_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.timer"
+    MCP_PORT=$((APP_PORT + 2)); MCP_API_BASE="http://127.0.0.1:$APP_PORT"
+    [[ -n "$HA_ROLE" ]] && MCP_HOST="0.0.0.0"
+    SELF_IP="${SELF_IP_GIVEN:-}"   # 상대 IP 를 이제 아니, 그쪽으로 나가는 내 주소를 다시 잰다
+    ha_load
+    if [[ -n "$DATA_DIR" ]]; then ENV_FILE="$DATA_DIR/.env"; FILESTORE_HOST_DIR="$DATA_DIR/filestore"; BACKUP_HOST_DIR="$DATA_DIR/backup"
+    else ENV_FILE="$INSTALL_DIR/.env"; FILESTORE_HOST_DIR="$INSTALL_DIR/filestore"; BACKUP_HOST_DIR=""; fi
+    LOG_HOST_DIR="$INSTALL_DIR/logs"
+    if [[ -n "$DB_VIP" ]]; then DB_HOST="$DB_VIP"; elif [[ "$HA_ROLE" == backup ]]; then DB_HOST="$PEER_IP"; elif [[ "$HA_ROLE" == master ]]; then DB_HOST="$SELF_IP"; else DB_HOST="localhost"; fi
+
+    cat <<PLAN
+
+── 할 일 ──────────────────────────────────────────────
+  플랫폼   : $( [[ "$HA_ROLE" == backup ]] && echo "($APP_SLUG) — 이름 · 포트 · 확장은 A 의 설정을 그대로 받습니다" || echo "$APP_NAME ($APP_SLUG) · 포트 $APP_PORT · 확장 ${EXTENSIONS:-없음}" )
+  이 서버  : $( case "$HA_ROLE" in master) echo "주(A) $SELF_IP — 상대 B $PEER_IP";; backup) echo "대기(B) $SELF_IP — 주 A $PEER_IP";; *) echo "단독";; esac )
+  DB       : 이름 $DB_NAME · 앱이 붙는 곳 $DB_HOST
+  파일     : 설치 $INSTALL_DIR$( [[ -n "$DATA_DIR" ]] && echo " · 공용 $DATA_DIR" )
+  순서     : 1) 패키지 · DB 역할 (prepare)$( case "$HA_ROLE" in master) echo "  2) PostgreSQL 주 (db-primary)  3) 앱 (install)  4) B 에 넘길 파일 모으기";; backup) echo "  2) A 에서 .env · 복제 비밀번호 받기  3) PostgreSQL 대기 (db-standby)  4) 앱 (install)";; *) echo "  2) 앱 (install)";; esac )
+  기록     : $INSTALL_DIR/setup.log (임시 관리자 비밀번호도 여기 남습니다)
+───────────────────────────────────────────────────────
+PLAN
+    [[ $plan_only -eq 1 ]] && return 0
+    local go; read -r -p "진행할까요? (y/N): " go; [[ "${go,,}" == "y" ]] || err "취소했습니다. 아무것도 바뀌지 않았습니다."
+
+    as_op mkdir -p "$INSTALL_DIR"
+    local log="$INSTALL_DIR/setup.log"
+    # 화면에 찍히는 것을 전부 파일에도 — 임시 비밀번호가 「한 번만」 찍히는 문제를 여기서 푼다.
+    exec > >(tee -a "$log") 2>&1
+    chown "$OPERATOR:$OPERATOR" "$log"; chmod 600 "$log"
+    echo "[$(date -Is)] setup 시작 — $APP_NAME ($APP_SLUG) $HA_ROLE"
+
+    cmd_prepare
+    case "$HA_ROLE" in
+        master)
+            cmd_db primary
+            cmd_install
+            # B 로 넘길 것 — 운영 계정이 읽을 수 있게 모아 둔다(B 의 setup 이 scp 로 집어 간다).
+            local handoff="$INSTALL_DIR/handoff"
+            mkdir -p "$handoff"
+            install -o "$OPERATOR" -g "$OPERATOR" -m 600 /etc/pg-ha.replpass "$handoff/pg-ha.replpass"
+            install -o "$OPERATOR" -g "$OPERATOR" -m 600 "$ENV_FILE" "$handoff/.env"
+            chown "$OPERATOR:$OPERATOR" "$handoff"; chmod 700 "$handoff"
+            cat <<MSG
+
+[OK] 주(A) 설치 끝. 다음은 **B 서버에서**  sudo ./deploy.sh setup  — 물음에 B 라고 답하면
+     A($SELF_IP) 의 $handoff/ 에서 .env 와 복제 비밀번호를 받아 갑니다(A 계정의 비밀번호를 한 번 묻습니다).
+     임시 관리자 비밀번호는 위에 찍혔고 $log 에도 있습니다.
+MSG
+            ;;
+        backup)
+            if [[ -z "$DATA_DIR" ]]; then
+                # 공용 폴더가 없으니 A 에서 직접 받는다(있으면 .env 도 복제 비밀번호도 거기 있다).
+                local handoff="$INSTALL_DIR/handoff"
+                info "A($PEER_IP) 에서 .env · 복제 비밀번호 받기 — $peer_account 계정의 비밀번호를 물으면 입력하세요"
+                as_op mkdir -p "$handoff"
+                as_op scp -q "$peer_account@$PEER_IP:apps/$APP_SLUG/handoff/pg-ha.replpass" \
+                    "$peer_account@$PEER_IP:apps/$APP_SLUG/handoff/.env" "$handoff/" \
+                    || err "A 에서 받지 못했습니다. A 에서 setup 이 끝났는지, 계정 · IP 가 맞는지 확인하세요."
+                install -o root -g postgres -m 640 "$handoff/pg-ha.replpass" /etc/pg-ha.replpass
+                install -o "$OPERATOR" -g "$OPERATOR" -m 600 "$handoff/.env" "$ENV_FILE"
+                rm -rf "$handoff"
+            fi
+            [[ -f "$ENV_FILE" ]] || err "$ENV_FILE 가 없습니다 — A 에서 setup 이 끝났나요?"
+            # A 의 .env 가 정한 이름 · 포트 · 확장을 그대로 — 두 서버는 같은 인스턴스다.
+            local v
+            v="$(sed -n 's|^APP_NAME=||p' "$ENV_FILE" | tail -n1)";    [[ -n "$v" ]] && APP_NAME="$v"
+            v="$(sed -n 's|^APP_TAGLINE=||p' "$ENV_FILE" | tail -n1)"; APP_TAGLINE="$v"
+            v="$(sed -n 's|^EXTENSIONS=||p' "$ENV_FILE" | tail -n1)";  EXTENSIONS="$v"
+            v="$(sed -n 's|^PORT=||p' "$ENV_FILE" | tail -n1)";        [[ -n "$v" ]] && APP_PORT="$v"
+            MCP_PORT=$((APP_PORT + 2)); MCP_API_BASE="http://127.0.0.1:$APP_PORT"
+            info "A 의 설정을 받았습니다 — $APP_NAME · 포트 $APP_PORT · 확장 ${EXTENSIONS:-없음}"
+            cmd_db standby
+            cmd_install
+            cat <<MSG
+
+[OK] 대기(B) 설치 끝. 양쪽에서  sudo ./deploy.sh status  로 확인하세요 —
+     이 서버는 「역할: 대기 · streaming ← $PEER_IP」 여야 합니다.
+MSG
+            ;;
+        *)
+            cmd_install
+            ;;
+    esac
+    echo "[$(date -Is)] setup 끝"
+}
+
 # 아무것도 바꾸지 않고 결과만 — ETC=<폴더> 를 주면 거기 쓰고, 없으면 임시 폴더에 쓴 뒤 화면에 보여 준다.
 cmd_render() {
     local show=0
@@ -713,8 +850,9 @@ usage() {
     cat <<MSG
 $APP_NAME 배포 스크립트 ($VERSION)
 
-  sudo ./deploy.sh [prepare|install|update|reset|status]
+  sudo ./deploy.sh [setup|prepare|install|update|reset|status]
 
+  setup     **처음이면 이것.** 물음에 답하면 prepare → (DB 주/대기) → install 을 알아서
   prepare   최초 1회: apt 패키지, apptainer(공식 PPA), postgres, DB 역할·DB
   install   SIF + .env + systemd, 마이그레이션, 시드, 기동
   update    SIF 교체 + 마이그레이션 + 재시작 (자료 그대로)
@@ -743,6 +881,7 @@ MSG
 }
 
 case "${1:-}" in
+    setup)          shift; cmd_setup "$@" ;;
     prepare)        cmd_prepare ;;
     install)        cmd_install ;;
     update)         cmd_update  ;;

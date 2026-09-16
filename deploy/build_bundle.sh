@@ -129,6 +129,7 @@ cp deploy/ha.sh                      "$STAGE/"
 cp deploy/pg-ha.sh                   "$STAGE/"
 cp deploy/.env.production.example    "$STAGE/.env.example"
 cp deploy/README_OPERATOR.md         "$STAGE/README.md"
+cp deploy/쉬운-설치.md               "$STAGE/쉬운-설치.md"
 chmod +x "$STAGE"/*.sh
 
 # ── 3b. MCP 서버 (별도 venv 로 운영 서버에서 돌아감) ──────────────────────────
