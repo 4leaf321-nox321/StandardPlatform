@@ -1,0 +1,164 @@
+"""배포 스크립트가 만드는 유닛 · nginx · keepalived 설정 — **root 없이 렌더만** 해서 본다.
+
+서버 두 대에 올리는 설정은 서버에 가서야 틀린 것이 드러난다(그리고 그때는 SSH 로 붙어 있는
+자리다). `deploy.sh render` 가 아무것도 바꾸지 않고 결과만 쓰므로, 여기서 모양을 잠근다."""
+
+from __future__ import annotations
+
+import os
+import shutil
+import subprocess
+from pathlib import Path
+
+import pytest
+
+REPO = Path(__file__).resolve().parents[3]
+DEPLOY = REPO / "deploy"
+
+HA_ENV = {
+    "HA_ROLE": "master",
+    "PEER_IP": "10.0.0.2",
+    "SELF_IP": "10.0.0.1",
+    "WEB_VIP": "10.0.0.10",
+    "DB_VIP": "10.0.0.11",
+    "PUBLIC_HOST": "portal.example.local",
+    "VRRP_IFACE": "eth0",
+    "DATA_DIR": "/data/common/testplatform",
+}
+
+
+@pytest.fixture
+def bundle(tmp_path: Path) -> Path:
+    """릴리스 번들의 모양 — build_bundle.sh 가 담는 것 중 렌더에 필요한 것만."""
+    stage = tmp_path / "bundle"
+    stage.mkdir()
+    for name in ["deploy.sh", "ha.sh", "pg-ha.sh", "backup.sh", "restore.sh"]:
+        shutil.copy(DEPLOY / name, stage / name)
+    for tpl in DEPLOY.glob("*.template"):
+        shutil.copy(tpl, stage / tpl.name)
+    (stage / "BUILD_INFO").write_text(
+        "app_name=Test Platform\napp_slug=testplatform\nport=8040\nmcp_port=8042\nversion=t\n",
+        encoding="utf-8",
+    )
+    return stage
+
+
+def read(etc: Path, rel: str) -> str:
+    return (etc / "etc" / rel).read_text(encoding="utf-8")
+
+
+def render(bundle: Path, etc: Path, **env: str) -> subprocess.CompletedProcess[str]:
+    full = {
+        **os.environ,
+        "OPERATOR": "ops",
+        "INSTALL_DIR": "/opt/testplatform",
+        "ETC": str(etc),
+        **env,
+    }
+    return subprocess.run(
+        ["bash", str(bundle / "deploy.sh"), "render"],
+        cwd=bundle,
+        env=full,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+
+
+def test_단독_서버는_설치_폴더_하나에_전부(bundle: Path, tmp_path: Path) -> None:
+    etc = tmp_path / "etc"
+    render(bundle, etc, INSTALL_DIR="/home/ops/apps/testplatform")
+    unit = (etc / "etc/systemd/system/testplatform.service").read_text(encoding="utf-8")
+    assert "--bind /home/ops/apps/testplatform/.env:/opt/app/backend/.env:ro" in unit
+    assert "--bind /home/ops/apps/testplatform/filestore:/data/filestore" in unit
+    assert "--bind /home/ops/apps/testplatform/logs:/data/logs" in unit
+    # 백업 폴더를 모르면 그 --bind 줄이 **아예 없다** — 빈 줄이면 ExecStart 가 거기서 끊긴다.
+    assert ":/data/backup" not in unit
+    assert "@@" not in unit
+    # 로컬 PostgreSQL 에 묶지 않는다 — 이중화에서는 DB 가 상대 서버에 있다.
+    assert not [x for x in unit.splitlines() if x.startswith("Requires=")]
+    assert not (etc / "etc/nginx").exists()
+    assert not (etc / "etc/keepalived").exists()
+
+
+def test_이중화는_공용_폴더와_로컬을_가른다(bundle: Path, tmp_path: Path) -> None:
+    etc = tmp_path / "etc"
+    render(bundle, etc, **HA_ENV)
+    unit = (etc / "etc/systemd/system/testplatform.service").read_text(encoding="utf-8")
+    assert "--bind /data/common/testplatform/.env:/opt/app/backend/.env:ro" in unit
+    assert "--bind /data/common/testplatform/filestore:/data/filestore" in unit
+    assert "--bind /opt/testplatform/logs:/data/logs" in unit
+    assert "--bind /data/common/testplatform/backup:/data/backup \\" in unit
+    lines = unit.splitlines()
+    exec_start = lines.index(next(x for x in lines if x.startswith("ExecStart=")))
+    # ExecStart 부터 app.sif 까지 빈 줄 없이 이어진다.
+    tail = lines[exec_start:]
+    end = tail.index(next(x for x in tail if x.strip().endswith("app.sif")))
+    assert all(x.strip() for x in tail[: end + 1])
+
+    sync = read(etc, "systemd/system/testplatform-sync.service")
+    assert "--bind /data/common/testplatform/.env" in sync
+    backup = read(etc, "systemd/system/testplatform-backup.service")
+    assert (
+        "backup.sh -e /data/common/testplatform/.env -f /data/common/testplatform/filestore"
+        " -o /data/common/testplatform/backup" in backup
+    )
+
+
+def test_nginx_는_접두어를_떼고_두_앱에_나눈다(bundle: Path, tmp_path: Path) -> None:
+    etc = tmp_path / "etc"
+    render(bundle, etc, **HA_ENV)
+    upstream = read(etc, "nginx/conf.d/testplatform-upstream.conf")
+    assert "server 10.0.0.1:8040" in upstream and "server 10.0.0.2:8040" in upstream
+    assert "server 10.0.0.1:8042" in upstream and "server 10.0.0.2:8042" in upstream
+
+    site = (etc / "etc/nginx/platforms.d/testplatform.conf").read_text(encoding="utf-8")
+    # 접두어를 떼고 넘긴다 — 앱은 PUBLIC_PATH 로 화면 · 쿠키만 맞춘다(FastAPI root_path).
+    assert "location /testplatform/ {" in site
+    assert "proxy_pass http://testplatform_app/;" in site
+    assert "location /testplatform/mcp {" in site
+    assert "proxy_pass http://testplatform_mcp/mcp;" in site
+    assert "proxy_buffering off;" in site
+    assert "X-Forwarded-Proto $scheme" in site
+
+    host = (etc / "etc/nginx/sites-available/platform-ha").read_text(encoding="utf-8")
+    assert "server_name portal.example.local 10.0.0.10 10.0.0.1 10.0.0.2 _;" in host
+    assert "return 301 https://$host$request_uri;" in host
+    assert "include /etc/nginx/platforms.d/*.conf;" in host
+    assert "listen 443 ssl http2 default_server;" in host
+    assert (etc / "etc/nginx/sites-enabled/platform-ha").is_symlink()
+
+
+def test_keepalived_는_주_DB_가_항상_이긴다(bundle: Path, tmp_path: Path) -> None:
+    etc = tmp_path / "etc"
+    render(bundle, etc, **HA_ENV)
+    conf = (etc / "etc/keepalived/keepalived.conf").read_text(encoding="utf-8")
+    assert "virtual_router_id 51" in conf and "virtual_ipaddress { 10.0.0.10 }" in conf
+    assert "virtual_router_id 52" in conf and "virtual_ipaddress { 10.0.0.11 }" in conf
+    assert "unicast_src_ip 10.0.0.1" in conf and "unicast_peer { 10.0.0.2 }" in conf
+    # 웹 VIP 는 master 역할이 150, DB VIP 는 101 + 주(check-primary) 50.
+    assert "priority 150" in conf and "priority 101" in conf
+    assert 'script "/usr/local/sbin/pg-ha check-primary"' in conf and "weight 50" in conf
+    assert 'notify_master "/usr/local/sbin/pg-ha on-master"' in conf
+    # keepalived 는 DB · nginx 뒤에 뜬다 — 재부팅이 승격이 되지 않게.
+    dropin = etc / "etc/systemd/system/keepalived.service.d/platform-ha.conf"
+    assert "After=postgresql.service nginx.service" in dropin.read_text(encoding="utf-8")
+
+    other = tmp_path / "etc-b"
+    swapped = {**HA_ENV, "HA_ROLE": "backup", "SELF_IP": "10.0.0.2", "PEER_IP": "10.0.0.1"}
+    render(bundle, other, **swapped)
+    conf_b = read(other, "keepalived/keepalived.conf")
+    assert "state BACKUP" in conf_b and "priority 100" in conf_b
+    assert "priority 150" not in conf_b
+
+
+def test_DB_VIP_가_없으면_자동_승격_인스턴스가_없다(bundle: Path, tmp_path: Path) -> None:
+    etc = tmp_path / "etc"
+    render(bundle, etc, **{**HA_ENV, "DB_VIP": ""})
+    conf = (etc / "etc/keepalived/keepalived.conf").read_text(encoding="utf-8")
+    assert "VI_WEB" in conf and "VI_DB" not in conf and "on-master" not in conf
+
+
+def test_스크립트_문법(bundle: Path) -> None:
+    for name in ["deploy.sh", "ha.sh", "pg-ha.sh", "backup.sh", "restore.sh"]:
+        subprocess.run(["bash", "-n", str(bundle / name)], check=True)

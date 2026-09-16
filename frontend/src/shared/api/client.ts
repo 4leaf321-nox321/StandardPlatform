@@ -10,9 +10,11 @@
  * 탈취된다. 새로고침하면 사라지지만, refresh 쿠키(httpOnly)로 다시 받아온다.
  */
 
+import { PUBLIC_PATH } from '@/shared/base'
 import { ERROR_PREFIX } from '@/shared/branding'
 
-const BASE = '/api'
+/** 접두어가 있으면 `/plm/api` — 서버가 index.html 에 심어 준 값이다. */
+const BASE = `${PUBLIC_PATH}/api`
 
 /** 클라이언트가 스스로 만드는 오류의 코드. **서버 코드와 같은 규약을 쓴다** —
  *  두 규약이 섞이면 사용자가 알려 준 코드로 어느 쪽을 볼지 알 수 없다. */
@@ -233,8 +235,7 @@ export const api = {
    * 필요한데 브라우저가 헤더를 만들 때 그것을 붙여 준다. `send` 가 FormData 를
    * 알아보고 헤더를 비운다.
    */
-  postForm: <T>(path: string, body: FormData) =>
-    request<T>(path, { method: 'POST', body }),
+  postForm: <T>(path: string, body: FormData) => request<T>(path, { method: 'POST', body }),
   /** 한 벌을 통째로 갈아 끼우는 자원에 쓴다(조건 한 칸 같은 것). */
   put: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'PUT', body: JSON.stringify(body ?? {}) }),

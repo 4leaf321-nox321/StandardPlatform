@@ -5,7 +5,7 @@
 #   ./deploy/build_bundle.sh v0.1.0     직접 지정
 #
 # 산출물: release/<slug>-<버전>.tar.gz
-#   app.sif · deploy.sh · app.service.template · mcp.service.template · .env.example
+#   app.sif · deploy.sh · ha.sh · pg-ha.sh · backup.sh · restore.sh · *.template · .env.example
 #   · BUILD_INFO · README.md · mcp_server/ (서버 + 오프라인 설치용 휠)
 #
 # **배포 스크립트를 번들에 함께 담는다.** 서버가 릴리스만 받는 환경이어도 tar 하나로
@@ -120,6 +120,12 @@ cp deploy/app.service.template       "$STAGE/"
 cp deploy/mcp.service.template       "$STAGE/"
 cp deploy/sync.service.template      "$STAGE/"
 cp deploy/sync.timer.template        "$STAGE/"
+cp deploy/backup.service.template    "$STAGE/"
+cp deploy/backup.timer.template      "$STAGE/"
+# 이중화 — deploy.sh 가 source 하는 ha.sh 와, 서버에 /usr/local/sbin/pg-ha 로 깔리는 pg-ha.sh.
+# **ha.sh 가 없으면 deploy.sh 가 단독 서버에서도 안 돈다**(첫 줄에서 찾는다).
+cp deploy/ha.sh                      "$STAGE/"
+cp deploy/pg-ha.sh                   "$STAGE/"
 cp deploy/.env.production.example    "$STAGE/.env.example"
 cp deploy/README_OPERATOR.md         "$STAGE/README.md"
 chmod +x "$STAGE"/*.sh

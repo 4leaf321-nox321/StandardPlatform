@@ -14,7 +14,7 @@ import logging
 
 from fastapi import APIRouter, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
 from app import version
@@ -181,11 +181,22 @@ def _mount_spa(app: FastAPI, settings: Settings) -> None:
     # 해시가 붙은 자산은 오래 캐시해도 안전하다.
     app.mount("/assets", StaticFiles(directory=dist / "assets"), name="assets")
 
+    # **접두어를 화면에 심는다.** 빌드는 접두어를 모르고(`base: "./"`), 브라우저는
+    # `<base href>` 로 자산 주소를, `<meta name="app-base">` 로 API · 라우터 주소를 푼다.
+    # 그래서 같은 이미지가 `/` 에서도 `/plm/` 에서도 뜬다 — 접두어는 배포 설정(.env)이지
+    # 빌드가 아니다.
+    base = settings.base_path
+    html = index.read_text(encoding="utf-8").replace(
+        "<head>",
+        f'<head>\n    <base href="{base}/" />\n    <meta name="app-base" content="{base}" />',
+        1,
+    )
+
     # response_model=None — 이 경로는 스키마에 나오지 않으므로 응답 모델이 필요
     # 없다. 반환 애노테이션에 Union 을 쓰면 FastAPI 가 모델을 만들려다 기동에
     # 실패하므로, 여기는 앞으로도 단일 Response 타입으로 둔다.
     @app.get("/{full_path:path}", include_in_schema=False, response_model=None)
-    def spa(full_path: str) -> FileResponse:
+    def spa(full_path: str) -> HTMLResponse:
         # /api 아래는 위에서 이미 매칭됐어야 한다. 여기 닿았다면 없는 엔드포인트다.
         # index.html 을 돌려주면 프론트가 200 HTML 을 JSON 으로 파싱하려다 실패해
         # 원인이 흐려지므로, 명시적으로 404 를 준다. 응답 본문은 직접 만들지 않고
@@ -198,7 +209,7 @@ def _mount_spa(app: FastAPI, settings: Settings) -> None:
             )
         # index.html 은 캐시하지 않는다. 배포 후 사용자가 옛 index 를 들고 있으면
         # 사라진 청크를 요청하게 된다.
-        return FileResponse(index, headers={"Cache-Control": "no-store"})
+        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
 
     logger.info("SPA 서빙: %s", dist)
 
@@ -261,6 +272,9 @@ def create_app() -> FastAPI:
         version=version.current(),
         docs_url=f"{API_PREFIX}/docs",
         openapi_url=f"{API_PREFIX}/openapi.json",
+        # 앞의 nginx 가 `/<slug>` 를 떼고 넘기므로 문서 · 리다이렉트가 만드는 주소에 접두어를
+        # 다시 붙여야 한다 — root_path 가 그 자리다.
+        root_path=settings.base_path,
     )
 
     # 순서가 중요하다. add_middleware 는 **나중에 더한 것이 바깥**이므로 아래 두

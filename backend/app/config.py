@@ -47,6 +47,18 @@ class Settings(BaseSettings):
 
     host: str = "0.0.0.0"
     port: int = 8040
+    public_path: str = ""
+    """브라우저가 보는 **주소 접두어** — 여러 플랫폼이 한 호스트명에 경로로 붙을 때
+    (`https://hwax.sec.samsung.net/<slug>/` 이면 `/<slug>`). 비우면 루트(`/`).
+
+    앞의 nginx 가 접두어를 **떼고** 앱에 넘긴다(`location /<slug>/ { proxy_pass http://…/; }`).
+    앱은 여전히 `/api` · `/assets` 로 받지만, 화면이 부를 주소 · 리프레시 쿠키의 path ·
+    문서(`/api/docs`)의 주소는 접두어를 알아야 한다 — `index.html` 에 심어 준다(main.py).
+    앞뒤 슬래시는 정리한다: `plm/` → `/plm`."""
+    trust_proxy: bool = False
+    """앞에 리버스 프록시(nginx)가 있어 `X-Forwarded-For` · `X-Forwarded-Proto` 를 **믿는다.**
+    켜면 접근 로그의 클라이언트 주소와 `https` 판정이 프록시가 준 값을 쓴다. 프록시 없이 켜면
+    아무나 그 헤더를 위조할 수 있으므로 기본은 끔."""
     """**플랫폼마다 10씩 벌린다** — MatNexus 8010, TestScope 8020, CrossAXTF 8030,
     이 틀이 8040.
     (8030 이었는데 CrossAXTF 가 먼저 운영에 올라가 있어 2026-09-12 에 8040 으로 옮겼다.
@@ -110,6 +122,12 @@ class Settings(BaseSettings):
     refresh_cookie_secure: bool = False
     """사내망 http 배포가 기본이라 False. https 로 서비스하면 True 로 올린다.
     (True 인데 http 로 접속하면 브라우저가 쿠키를 버려 로그인이 유지되지 않는다)"""
+
+    @property
+    def base_path(self) -> str:
+        """정리된 접두어 — `""` 또는 `/<slug>`."""
+        cleaned = self.public_path.strip().strip("/")
+        return f"/{cleaned}" if cleaned else ""
 
     login_delay_after: int = 5
     """같은 계정의 로그인 실패가 이 횟수부터 응답을 늦춘다. **잠그지 않는다** —

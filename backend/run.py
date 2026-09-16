@@ -122,6 +122,10 @@ def main() -> None:
             host=settings.host,
             port=port,
             workers=settings.uvicorn_workers,
+            # 앞에 nginx 가 있으면(TRUST_PROXY) 그것이 준 클라이언트 주소 · 스킴을 믿는다.
+            # 없으면 아무나 헤더를 위조할 수 있으니 안 믿는다.
+            proxy_headers=settings.trust_proxy,
+            forwarded_allow_ips="*" if settings.trust_proxy else None,
         )
 
 

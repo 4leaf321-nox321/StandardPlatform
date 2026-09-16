@@ -12,6 +12,8 @@
 import { lazy } from 'react'
 import { Navigate, createBrowserRouter } from 'react-router-dom'
 
+import { ROUTER_BASENAME } from '@/shared/base'
+
 import ForcePasswordChangePage from '@/modules/auth/ForcePasswordChangePage'
 import LoginPage from '@/modules/auth/LoginPage'
 import { useAuth } from '@/shared/auth/AuthContext'
@@ -73,81 +75,87 @@ function HomeRedirect() {
   return <Navigate to={`/w/${slug}`} replace />
 }
 
-export const router = createBrowserRouter([
-  { path: '/login', element: <LoginPage /> },
-  { path: '/signup', element: <SignupPage /> },
+export const router = createBrowserRouter(
+  [
+    { path: '/login', element: <LoginPage /> },
+    { path: '/signup', element: <SignupPage /> },
+    {
+      element: <ProtectedRoute />,
+      children: [
+        { path: '/force-password-change', element: <ForcePasswordChangePage /> },
+        {
+          path: '/',
+          element: <AppShell />,
+          children: [
+            { index: true, element: <HomeRedirect /> },
+
+            // --- 도메인 화면은 여기에 --------------------------------------
+            //
+            // 사이드바에 `pending: true` 로 적어 두면 아래 stubs 가 자리를 만든다.
+            // 실제 화면이 생기면 그 표시를 지우고 여기에 한 줄을 적는다.
+            ...stubs,
+
+            // 내 활동
+            { path: 'notifications', element: <NotificationsPage /> },
+            { path: 'me', element: <ProfilePage /> },
+
+            // 공통
+            // **정의를 그림으로.** 타입이 늘어도 경로는 하나다 — 구조와 탐색이 한 화면이다.
+            { path: 'graph', element: <GraphPage /> },
+            // **타입을 모르는 사람이 서는 자리.** 목록은 타입마다 따로다.
+            { path: 'search', element: <SearchPage /> },
+            { path: 'notices', element: <NoticesPage /> },
+            { path: 'audit', element: <AuditPage /> },
+            { path: 'quality', element: <QualityPage /> },
+
+            // **정의가 만드는 화면.** 타입이 늘어도 라우트는 안 늘어난다 —
+            // `navigation.ts` 가 정적 화면의 정본이라는 규칙이 그대로 선다.
+            { path: 'o/:typeSlug', element: <ObjectListPage /> },
+            { path: 'o/:typeSlug/:objectId', element: <ObjectProfilePage /> },
+
+            // 관리 (전사)
+            { path: 'admin/accounts', element: <AccountsAdminPage /> },
+            { path: 'admin/charts', element: <ChartGalleryPage /> },
+            // **두 번째 사이드바.** 묶음과 타입을 각각 제 화면에서 본다 —
+            // 한 화면에 쌓으면 「지금 어디를 보고 있나」 를 화면이 말해 주지 못한다.
+            {
+              path: 'admin/ontology',
+              element: <OntologyLayout />,
+              children: [
+                { index: true, element: <Navigate to="groups" replace /> },
+                { path: 'groups', element: <OntologyGroupsPage /> },
+                { path: 'types', element: <OntologyTypesPage /> },
+                { path: 'relations', element: <OntologyRelationsPage /> },
+                { path: 'import', element: <OntologyImportPage /> },
+              ],
+            },
+            { path: 'admin/workspaces', element: <WorkspacesAdminPage /> },
+            { path: 'admin/server', element: <ServerPage /> },
+            { path: 'admin/webhooks', element: <WebhooksPage /> },
+            { path: 'admin/datasources', element: <DataSourcesPage /> },
+
+            // 부서 스코프
+            {
+              path: 'w/:slug',
+              children: [
+                { index: true, element: <WorkspaceHomePage /> },
+                { path: 'members', element: <MembersPage /> },
+              ],
+            },
+
+            {
+              path: '*',
+              element: (
+                <Placeholder title="없는 페이지" phase="—" description="주소를 확인해 주세요." />
+              ),
+            },
+          ],
+        },
+      ],
+    },
+  ],
   {
-    element: <ProtectedRoute />,
-    children: [
-      { path: '/force-password-change', element: <ForcePasswordChangePage /> },
-      {
-        path: '/',
-        element: <AppShell />,
-        children: [
-          { index: true, element: <HomeRedirect /> },
-
-          // --- 도메인 화면은 여기에 --------------------------------------
-          //
-          // 사이드바에 `pending: true` 로 적어 두면 아래 stubs 가 자리를 만든다.
-          // 실제 화면이 생기면 그 표시를 지우고 여기에 한 줄을 적는다.
-          ...stubs,
-
-          // 내 활동
-          { path: 'notifications', element: <NotificationsPage /> },
-          { path: 'me', element: <ProfilePage /> },
-
-          // 공통
-          // **정의를 그림으로.** 타입이 늘어도 경로는 하나다 — 구조와 탐색이 한 화면이다.
-          { path: 'graph', element: <GraphPage /> },
-          // **타입을 모르는 사람이 서는 자리.** 목록은 타입마다 따로다.
-          { path: 'search', element: <SearchPage /> },
-          { path: 'notices', element: <NoticesPage /> },
-          { path: 'audit', element: <AuditPage /> },
-          { path: 'quality', element: <QualityPage /> },
-
-          // **정의가 만드는 화면.** 타입이 늘어도 라우트는 안 늘어난다 —
-          // `navigation.ts` 가 정적 화면의 정본이라는 규칙이 그대로 선다.
-          { path: 'o/:typeSlug', element: <ObjectListPage /> },
-          { path: 'o/:typeSlug/:objectId', element: <ObjectProfilePage /> },
-
-          // 관리 (전사)
-          { path: 'admin/accounts', element: <AccountsAdminPage /> },
-          { path: 'admin/charts', element: <ChartGalleryPage /> },
-          // **두 번째 사이드바.** 묶음과 타입을 각각 제 화면에서 본다 —
-          // 한 화면에 쌓으면 「지금 어디를 보고 있나」 를 화면이 말해 주지 못한다.
-          {
-            path: 'admin/ontology',
-            element: <OntologyLayout />,
-            children: [
-              { index: true, element: <Navigate to="groups" replace /> },
-              { path: 'groups', element: <OntologyGroupsPage /> },
-              { path: 'types', element: <OntologyTypesPage /> },
-              { path: 'relations', element: <OntologyRelationsPage /> },
-              { path: 'import', element: <OntologyImportPage /> },
-            ],
-          },
-          { path: 'admin/workspaces', element: <WorkspacesAdminPage /> },
-          { path: 'admin/server', element: <ServerPage /> },
-          { path: 'admin/webhooks', element: <WebhooksPage /> },
-          { path: 'admin/datasources', element: <DataSourcesPage /> },
-
-          // 부서 스코프
-          {
-            path: 'w/:slug',
-            children: [
-              { index: true, element: <WorkspaceHomePage /> },
-              { path: 'members', element: <MembersPage /> },
-            ],
-          },
-
-          {
-            path: '*',
-            element: (
-              <Placeholder title="없는 페이지" phase="—" description="주소를 확인해 주세요." />
-            ),
-          },
-        ],
-      },
-    ],
+    // 여러 플랫폼이 한 호스트명에 경로로 붙는다 — 서버가 심어 준 접두어 아래에서 돈다.
+    basename: ROUTER_BASENAME,
   },
-])
+)

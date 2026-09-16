@@ -36,7 +36,11 @@ from app.shared.errors import AppError, code
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
-COOKIE_PATH = "/api/auth"
+
+def _cookie_path() -> str:
+    """리프레시 쿠키의 path — 브라우저가 보는 주소 기준이라 접두어를 붙인다. 접두어 없이
+    `/api/auth` 로 두면 `/plm/api/auth/refresh` 요청에 쿠키가 안 실려 로그인이 안 이어진다."""
+    return f"{get_settings().base_path}/api/auth"
 
 
 def _set_refresh_cookie(response: Response, raw: str) -> None:
@@ -48,12 +52,12 @@ def _set_refresh_cookie(response: Response, raw: str) -> None:
         httponly=True,
         samesite="lax",
         secure=settings.refresh_cookie_secure,
-        path=COOKIE_PATH,
+        path=_cookie_path(),
     )
 
 
 def _clear_refresh_cookie(response: Response) -> None:
-    response.delete_cookie(get_settings().refresh_cookie_name, path=COOKIE_PATH)
+    response.delete_cookie(get_settings().refresh_cookie_name, path=_cookie_path())
 
 
 @router.post("/login", response_model=LoginResponse)

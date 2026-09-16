@@ -5,12 +5,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
 from app.branding import ERROR_PREFIX
+from app.config import get_settings
 from app.modules.workspaces.models import Workspace
 from tests.api.conftest import Signed
 
@@ -339,3 +342,40 @@ def test_상태를_바꾼_요청만_접근_로그에_남는다(client: TestClien
     assert all(row["path"] != "/api/notifications/unread-count" for row in rows)
     # 로그인은 남는다 — 사용자 지원에 필요한 것이 그것이다.
     assert any(row["action"] == "LOGIN" for row in rows)
+
+
+def test_주소_접두어는_빌드가_아니라_배포_설정이다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """여러 플랫폼이 한 호스트명에 경로로 붙는다(`/plm/`). 같은 이미지가 어느 접두어에서도
+    떠야 하므로 접두어는 `.env` 에서 오고, 화면에는 `<base href>` · `<meta name="app-base">` 로
+    심긴다. 리프레시 쿠키의 path 도 그 아래여야 로그인이 이어진다."""
+    from app.main import create_app
+
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text(
+        "<!doctype html><html><head><title>x</title></head><body></body></html>",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("PUBLIC_PATH", "plm/")
+    monkeypatch.setenv("FRONTEND_DIST", str(dist))
+    get_settings.cache_clear()
+    try:
+        settings = get_settings()
+        assert settings.base_path == "/plm"
+        prefixed = create_app()
+        with TestClient(prefixed) as web:
+            page = web.get("/o/anything").text
+            assert '<base href="/plm/" />' in page
+            assert '<meta name="app-base" content="/plm" />' in page
+            # 문서 주소도 접두어 아래(root_path).
+            assert web.get("/api/openapi.json").json()["servers"][0]["url"] == "/plm"
+        from app.modules.auth.routes import _cookie_path
+
+        assert _cookie_path() == "/plm/api/auth"
+        monkeypatch.setenv("PUBLIC_PATH", "")
+        get_settings.cache_clear()
+        assert get_settings().base_path == "" and _cookie_path() == "/api/auth"
+    finally:
+        get_settings.cache_clear()

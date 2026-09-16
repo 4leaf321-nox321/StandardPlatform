@@ -22,12 +22,13 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 import app.all_models
 import app.main  # noqa: F401  (레지스트리 조립 — 웹훅·원 표)
-from app.database import SessionLocal
 from app.modules.datasources import services
 from app.modules.datasources.models import DataSource
+from app.shared import singleton
 from app.shared.errors import AppError
 
 
@@ -40,37 +41,44 @@ def main() -> int:
     parser.add_argument("--plan", action="store_true", help="계획만 (적용 안 함)")
     args = parser.parse_args()
 
-    failed = 0
-    with SessionLocal() as db:
-        if args.slug:
-            found = db.scalar(select(DataSource).where(DataSource.slug == args.slug))
-            if found is None:
-                print(f"데이터 소스를 찾을 수 없습니다: {args.slug}", file=sys.stderr)
-                return 1
-            sources = [found]
-        elif args.all:
-            sources = list(
-                db.scalars(select(DataSource).where(DataSource.is_active.is_(True)))
-            )
-        else:
-            sources = services.due(db)
-        if not sources:
-            print("돌릴 것이 없습니다.")
+    # **두 서버의 타이머가 같은 시각에 돈다.** 잠금을 못 잡은 쪽은 조용히 물러난다 — 같은
+    # 원천이 두 번 들어가는 것보다 한 번 건너뛰는 것이 낫다(다음 차례에 잡는다).
+    with singleton.held("datasource-sync") as db:
+        if db is None:
+            print("다른 서버가 동기화 중입니다 — 이번 차례는 건너뜁니다.")
             return 0
-        for source in sources:
-            try:
-                result = services.sync(db, None, source, apply=not args.plan)
-            except AppError as caught:
-                failed += 1
-                print(f"{source.slug}: 오류 — {caught.message}", file=sys.stderr)
-                continue
-            run = result.run
-            counts = " ".join(f"{k}={v}" for k, v in (run.counts or {}).items())
-            print(f"{source.slug}: {run.status} 행 {run.rows_seen} {counts}")
-            for message in (run.errors or [])[:10]:
-                print(f"    {message}")
-            if run.status == "failed":
-                failed += 1
+        return _run(db, args)
+
+
+def _run(db: Session, args: argparse.Namespace) -> int:
+    failed = 0
+    if args.slug:
+        found = db.scalar(select(DataSource).where(DataSource.slug == args.slug))
+        if found is None:
+            print(f"데이터 소스를 찾을 수 없습니다: {args.slug}", file=sys.stderr)
+            return 1
+        sources = [found]
+    elif args.all:
+        sources = list(db.scalars(select(DataSource).where(DataSource.is_active.is_(True))))
+    else:
+        sources = services.due(db)
+    if not sources:
+        print("돌릴 것이 없습니다.")
+        return 0
+    for source in sources:
+        try:
+            result = services.sync(db, None, source, apply=not args.plan)
+        except AppError as caught:
+            failed += 1
+            print(f"{source.slug}: 오류 — {caught.message}", file=sys.stderr)
+            continue
+        run = result.run
+        counts = " ".join(f"{k}={v}" for k, v in (run.counts or {}).items())
+        print(f"{source.slug}: {run.status} 행 {run.rows_seen} {counts}")
+        for message in (run.errors or [])[:10]:
+            print(f"    {message}")
+        if run.status == "failed":
+            failed += 1
     return 1 if failed else 0
 
 

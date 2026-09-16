@@ -11,6 +11,9 @@ const root = fileURLToPath(new URL('.', import.meta.url))
 
 export default defineConfig({
   plugins: [react(), tailwindcss()],
+  // **상대 주소로 굽는다.** 배포마다 접두어(`/plm/`)가 다른데 그것을 빌드에 굽으면 이미지가
+  // 접두어마다 하나씩 필요하다. 상대 주소 + 서버가 심는 `<base href>` 로 어느 접두어에서도 뜬다.
+  base: './',
   // **이 빌드가 몇 번인지 굽는다.** 서버가 다른 버전이면 화면이 그것을 말할 수
   // 있어야 한다 — 개발과 운영이 가까운 포트를 쓰는 동안, 프론트가 옛 서버에 붙어
   // 있어도 아무 데도 티가 안 난다.

@@ -35,7 +35,7 @@ from app.modules.notifications import services as notifications
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology.models import ObjectType
 from app.modules.webhooks.models import Webhook, WebhookDelivery
-from app.shared import events, extensions
+from app.shared import events, extensions, singleton
 
 logger = logging.getLogger(__name__)
 
@@ -203,62 +203,72 @@ class Dispatcher:
         """pending 을 전부 한 번씩. **아직 남은(실패해서 다시 보낼) 수**를 돌려준다."""
         left = 0
         gave_up: set[uuid.UUID] = set()
-        with SessionLocal() as db:
-            rows = list(
-                db.scalars(
-                    select(WebhookDelivery)
-                    .where(
-                        WebhookDelivery.status == "pending",
-                        WebhookDelivery.attempts < MAX_ATTEMPTS,
-                    )
-                    .order_by(WebhookDelivery.created_at)
+        # **두 서버가 같은 pending 을 집지 않게** — 발송은 한 연결만 한다. 못 잡은 쪽은
+        # 물러나되, 남은 것이 있다고 보고해 제 쪽 재시도 타이머는 유지한다(잡은 쪽이
+        # 죽어도 누군가는 다시 온다).
+        with singleton.held("webhook-dispatch") as db:
+            if db is None:
+                return 1
+            left = self._deliver(db, gave_up)
+        return left
+
+    def _deliver(self, db: Session, gave_up: set[uuid.UUID]) -> int:
+        left = 0
+        rows = list(
+            db.scalars(
+                select(WebhookDelivery)
+                .where(
+                    WebhookDelivery.status == "pending",
+                    WebhookDelivery.attempts < MAX_ATTEMPTS,
                 )
+                .order_by(WebhookDelivery.created_at)
             )
-            hooks = {
-                hook.id: hook
-                for hook in db.scalars(
-                    select(Webhook).where(Webhook.id.in_({row.webhook_id for row in rows}))
-                )
-            }
-            for delivery in rows:
-                hook = hooks.get(delivery.webhook_id)
-                if hook is None:
-                    delivery.status = "failed"
-                    delivery.last_error = "웹훅이 지워졌습니다"
-                    continue
-                result = self.send(hook, delivery)
-                now = datetime.now(UTC)
-                delivery.attempts += 1
-                delivery.response_code = result.code
-                delivery.last_error = result.error
-                if result.ok:
-                    delivery.status = "ok"
-                    delivery.delivered_at = now
-                elif delivery.attempts >= MAX_ATTEMPTS:
-                    delivery.status = "failed"
-                    gave_up.add(hook.id)
-                else:
-                    left += 1
-                hook.last_status = "ok" if result.ok else "failed"
-                hook.last_at = now
-                db.commit()
-            # **웹훅 하나에 한 번만 알린다.** 받는 쪽이 죽으면 밀린 전송이 한꺼번에
-            # 포기하는데, 그때 건마다 알리면 종에 같은 말이 수십 개 쌓이고 사람은
-            # 그것을 통째로 지운다 — 정작 다른 웹훅의 알림도 함께 지워진다.
-            for hook_id in gave_up:
-                hook = hooks.get(hook_id)
-                if hook is None:
-                    continue
-                notifications.notify_system_admins(
-                    db,
-                    kind=notifications.WEBHOOK_FAILED,
-                    title=f"웹훅 「{hook.name}」 보내기를 포기했습니다",
-                    body=f"{MAX_ATTEMPTS}번 다 실패했습니다. 받는 쪽이 지금 못 받고 "
-                    "있습니다 — 고친 뒤 웹훅 화면에서 「다시 보내기」 를 누르세요.",
-                    link="/admin/webhooks",
-                )
-            if gave_up:
-                db.commit()
+        )
+        hooks = {
+            hook.id: hook
+            for hook in db.scalars(
+                select(Webhook).where(Webhook.id.in_({row.webhook_id for row in rows}))
+            )
+        }
+        for delivery in rows:
+            hook = hooks.get(delivery.webhook_id)
+            if hook is None:
+                delivery.status = "failed"
+                delivery.last_error = "웹훅이 지워졌습니다"
+                continue
+            result = self.send(hook, delivery)
+            now = datetime.now(UTC)
+            delivery.attempts += 1
+            delivery.response_code = result.code
+            delivery.last_error = result.error
+            if result.ok:
+                delivery.status = "ok"
+                delivery.delivered_at = now
+            elif delivery.attempts >= MAX_ATTEMPTS:
+                delivery.status = "failed"
+                gave_up.add(hook.id)
+            else:
+                left += 1
+            hook.last_status = "ok" if result.ok else "failed"
+            hook.last_at = now
+            db.commit()
+        # **웹훅 하나에 한 번만 알린다.** 받는 쪽이 죽으면 밀린 전송이 한꺼번에
+        # 포기하는데, 그때 건마다 알리면 종에 같은 말이 수십 개 쌓이고 사람은
+        # 그것을 통째로 지운다 — 정작 다른 웹훅의 알림도 함께 지워진다.
+        for hook_id in gave_up:
+            hook = hooks.get(hook_id)
+            if hook is None:
+                continue
+            notifications.notify_system_admins(
+                db,
+                kind=notifications.WEBHOOK_FAILED,
+                title=f"웹훅 「{hook.name}」 보내기를 포기했습니다",
+                body=f"{MAX_ATTEMPTS}번 다 실패했습니다. 받는 쪽이 지금 못 받고 "
+                "있습니다 — 고친 뒤 웹훅 화면에서 「다시 보내기」 를 누르세요.",
+                link="/admin/webhooks",
+            )
+        if gave_up:
+            db.commit()
         return left
 
 

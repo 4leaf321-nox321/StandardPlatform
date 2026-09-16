@@ -8,6 +8,10 @@
 #   sudo ./deploy.sh status    서비스 상태 + /api/health
 #   sudo ./deploy.sh           자동: 설치된 흔적이 없으면 install, 있으면 update
 #
+# 서버 두 대 이중화(ha.sh · pg-ha.sh — 자세한 것은 README 「이중화」):
+#   sudo ./deploy.sh db-primary | db-standby --from <IP> | db-promote | db-demote | db-status
+#   sudo ./deploy.sh lb        nginx · keepalived · 인증서를 env 에서 다시 만들고 반영
+#
 # **번들이 자기가 무슨 플랫폼인지 말한다**(BUILD_INFO). 앱 이름·slug·포트가 거기
 # 있으므로 이 스크립트에는 제품 이름이 박혀 있지 않다 — 박아 두면 포크할 때 바꿀
 # 자리가 하나 더 늘고, 안 바꾸면 두 플랫폼이 **같은 DB 와 같은 유닛 이름**을 쓴다.
@@ -34,16 +38,19 @@ VERSION="$(bundle version)"
 [[ -n "$APP_SLUG" && -n "$APP_NAME" ]] || err "BUILD_INFO 에 app_name/app_slug 가 없습니다."
 
 # ───────────────────────── 사전 확인 ─────────────────────────
-[[ $EUID -eq 0 ]] || err "root 로 실행하세요 (sudo)"
+# 'render' 는 아무것도 바꾸지 않는다 — root 없이 유닛 · nginx · keepalived 설정을 보여 준다.
+RENDER_ONLY=0; [[ "${1:-}" == "render" ]] && RENDER_ONLY=1
+[[ $EUID -eq 0 || $RENDER_ONLY -eq 1 ]] || err "root 로 실행하세요 (sudo)"
 
 OPERATOR="${OPERATOR:-${SUDO_USER:-}}"
 [[ -n "$OPERATOR" && "$OPERATOR" != "root" ]] \
     || err "운영 계정을 알 수 없습니다. 일반 사용자로 sudo 하거나 OPERATOR=<이름> 을 주세요."
-id "$OPERATOR" >/dev/null 2>&1 || err "그런 계정이 없습니다: $OPERATOR"
+[[ $RENDER_ONLY -eq 1 ]] || id "$OPERATOR" >/dev/null 2>&1 || err "그런 계정이 없습니다: $OPERATOR"
 
 # **설치 경로·DB·유닛 이름이 전부 slug 에서 나온다.** 한 서버에 여러 플랫폼을
 # 얹을 때 이것이 겹치면 서로를 덮어쓴다.
 INSTALL_DIR="${INSTALL_DIR:-/home/$OPERATOR/apps/$APP_SLUG}"
+PG_VERSION="${PG_VERSION:-16}"                          # 두 서버가 같아야 복제가 된다
 DB_NAME="${DB_NAME:-$APP_SLUG}"
 DB_USER="${DB_USER:-$APP_SLUG}"
 APP_PORT="${APP_PORT:-$APP_PORT_DEFAULT}"
@@ -51,6 +58,34 @@ SERVICE_NAME="$APP_SLUG"
 SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
 
 as_op() { sudo -u "$OPERATOR" "$@"; }
+
+# ───────────────────────── 이중화 · 공용 스토리지 ─────────────────────────
+# ha.sh 가 /etc/platform-ha.conf(호스트) 와 $INSTALL_DIR/deploy.conf(플랫폼) 를 읽어
+# HA_ROLE · PEER_IP · WEB_VIP · DB_VIP · PUBLIC_HOST · DATA_DIR 를 채운다(env 가 우선).
+[[ -f "$HERE/ha.sh" ]] || err "ha.sh 가 $HERE 에 없습니다 (릴리스 번들에서 실행하세요)"
+# shellcheck disable=SC1091
+source "$HERE/ha.sh"
+ha_load
+
+# **무엇이 공용이고 무엇이 로컬인가.** DATA_DIR(/data/<공통폴더>/<slug>)를 주면 첨부 · 백업 ·
+# 인증서 · .env 는 거기(두 서버가 같이 본다), 코드(SIF) · 로그는 이 서버($INSTALL_DIR)다.
+# 안 주면 지금까지처럼 전부 $INSTALL_DIR — 단독 서버.
+if [[ -n "$DATA_DIR" ]]; then
+    ENV_FILE="$DATA_DIR/.env"
+    FILESTORE_HOST_DIR="$DATA_DIR/filestore"
+    BACKUP_HOST_DIR="$DATA_DIR/backup"
+else
+    ENV_FILE="$INSTALL_DIR/.env"
+    FILESTORE_HOST_DIR="$INSTALL_DIR/filestore"
+    BACKUP_HOST_DIR="${BACKUP_HOST_DIR:-}"
+fi
+LOG_HOST_DIR="$INSTALL_DIR/logs"
+# 앱이 DB 를 찾는 주소 — DB VIP 가 있으면 그것, 이중화인데 아직 없으면 주(master) 서버, 아니면 로컬.
+if [[ -n "$DB_VIP" ]]; then DB_HOST="$DB_VIP"
+elif [[ "$HA_ROLE" == "backup" ]]; then DB_HOST="$PEER_IP"
+elif [[ "$HA_ROLE" == "master" ]]; then DB_HOST="$SELF_IP"
+else DB_HOST="localhost"; fi
+DB_HOST="${DB_HOST_OVERRIDE:-$DB_HOST}"
 
 # 데이터 소스 동기화 타이머 — 화면에서 간격을 정한 소스를 몇 분마다 돌린다. 앱과 같은 SIF.
 SYNC_SERVICE_NAME="${APP_SLUG}-sync"
@@ -74,13 +109,17 @@ MCP_ENABLED="${MCP_ENABLED:-1}"                        # 0 으로 두면 MCP 전
 # → 최초 한 번 'MCP_HOST=0.0.0.0 ./deploy.sh' 하면, 이후 './deploy.sh update' 가
 #   매번 다시 지정하지 않아도 같은 값을 유지한다(되돌리려면 그때만 env 로 덮어쓰기).
 MCP_PORT_DEFAULT="$(bundle mcp_port)"; MCP_PORT_DEFAULT="${MCP_PORT_DEFAULT:-$((APP_PORT + 2))}"
-MCP_HOST="${MCP_HOST:-$(unit_env MCP_HOST)}";  MCP_HOST="${MCP_HOST:-127.0.0.1}"
+MCP_HOST="${MCP_HOST:-$(unit_env MCP_HOST)}"
+# 이중화면 상대 서버의 nginx 도 이 MCP 에 붙어야 한다 — 로컬에만 열면 절반의 요청이 502 다.
+[[ -n "$HA_ROLE" ]] && MCP_HOST="${MCP_HOST:-0.0.0.0}"; MCP_HOST="${MCP_HOST:-127.0.0.1}"
 MCP_PORT="${MCP_PORT:-$(unit_env MCP_PORT)}";  MCP_PORT="${MCP_PORT:-$MCP_PORT_DEFAULT}"
 MCP_API_BASE="${MCP_API_BASE:-$(unit_env PLATFORM_API_BASE)}"
 MCP_API_BASE="${MCP_API_BASE:-http://127.0.0.1:$APP_PORT}"
 # DNS rebinding 보호 허용 Host(쉼표구분). 비우면 server.py 가 비-localhost 바인딩 시
 # 보호를 끈다(사내망). 외부 노출 시 도메인/IP 지정 권장. 이 값도 위처럼 기억된다.
 MCP_ALLOWED_HOSTS="${MCP_ALLOWED_HOSTS:-$(unit_env MCP_ALLOWED_HOSTS)}"
+# nginx 가 Host 를 그대로 넘기므로 공개 호스트명이 허용 목록에 있어야 한다.
+[[ -n "$HA_ROLE" && -z "$MCP_ALLOWED_HOSTS" ]] && MCP_ALLOWED_HOSTS="$PUBLIC_HOST,$WEB_VIP,$SELF_IP,$PEER_IP"
 
 # ───────────────────────── 조각들 ─────────────────────────
 # apptainer 는 **우분투 기본 저장소에 없다** — 공식 PPA 에만 있다. `apt-get install apptainer`
@@ -120,16 +159,28 @@ ensure_apptainer() {
 }
 
 ensure_dirs() {
-    info "설치 폴더 준비: $INSTALL_DIR"
+    info "설치 폴더 준비: $INSTALL_DIR$( [[ -n "$DATA_DIR" ]] && echo " · 공용 $DATA_DIR" )"
     # **운영 데이터는 SIF 밖이다.** 이미지가 통째로 교체돼도 살아남아야 한다.
-    as_op mkdir -p "$INSTALL_DIR"/{filestore,logs}
+    as_op mkdir -p "$INSTALL_DIR" "$LOG_HOST_DIR"
+    if [[ -n "$DATA_DIR" ]]; then
+        [[ -d "$(dirname "$DATA_DIR")" ]] || err "공용 폴더가 없습니다: $(dirname "$DATA_DIR") — /data 가 마운트됐는지 확인하세요"
+        mkdir -p "$DATA_DIR" "$FILESTORE_HOST_DIR" "$BACKUP_HOST_DIR" "$DATA_DIR/tls" "$DATA_DIR/db"
+        chown "$OPERATOR:$OPERATOR" "$DATA_DIR" "$FILESTORE_HOST_DIR" "$BACKUP_HOST_DIR"
+    else
+        as_op mkdir -p "$FILESTORE_HOST_DIR"
+    fi
+    platform_save
+    ha_save
 }
 
 generate_env_if_missing() {
     # **있으면 손대지 않는다.** 여기에 JWT 비밀키가 있어서, 덮으면 전원이 다시
     # 로그인한다. 그리고 그것은 배포가 할 일이 아니다.
-    [[ -f "$INSTALL_DIR/.env" ]] && { info ".env 가 이미 있습니다 — 그대로 둡니다."; return 0; }
+    [[ -f "$ENV_FILE" ]] && { info ".env 가 이미 있습니다($ENV_FILE) — 그대로 둡니다."; return 0; }
     [[ -f "$HERE/.env.example" ]] || err ".env.example 이 스크립트 옆에 없습니다 ($HERE)"
+    # 비밀번호는 **주 DB** 에서 돌린다. 대기 서버(읽기 전용)에서는 할 수 없다 — 이중화의 두 번째
+    # 서버는 공용 폴더의 .env 를 그대로 쓰므로 여기 올 일이 없다. 왔다면 순서가 틀린 것이다.
+    pg_in_recovery && err "이 서버의 DB 는 대기입니다. .env 는 주 서버에서 install 할 때 만들어집니다$( [[ -n "$DATA_DIR" ]] && echo " ($ENV_FILE — 주 서버에서 먼저 install)" )"
 
     local pw secret
     pw="$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')"
@@ -146,12 +197,30 @@ SQL
         -e "s|REPLACE_DB_USER|$DB_USER|" \
         -e "s|REPLACE_DB_PASSWORD|$pw|" \
         -e "s|REPLACE_DB_NAME|$DB_NAME|" \
+        -e "s|@localhost:5432/|@$DB_HOST:5432/|" \
         -e "s|^PORT=.*|PORT=$APP_PORT|" \
-        "$HERE/.env.example" > "$INSTALL_DIR/.env"
-    chown "$OPERATOR:$OPERATOR" "$INSTALL_DIR/.env"
+        "$HERE/.env.example" > "$ENV_FILE"
+    if [[ -n "$BACKUP_HOST_DIR" ]]; then
+        # 컨테이너 안에서 보이는 경로다 — 유닛이 $BACKUP_HOST_DIR 를 /data/backup 에 건다.
+        sed -i -e "s|^# BACKUP_DIR=.*|BACKUP_DIR=/data/backup|" "$ENV_FILE"
+    fi
+    if [[ -n "$HA_ROLE" ]]; then
+        # 프록시 뒤 · 경로 접두어 · https. nginx 가 /<slug>/ 를 떼고 넘기고, 앱은 화면 · 쿠키 ·
+        # API 주소를 이 접두어 아래로 맞춘다.
+        sed -i -e "s|^REFRESH_COOKIE_SECURE=.*|REFRESH_COOKIE_SECURE=true|" "$ENV_FILE"
+        cat >> "$ENV_FILE" <<EOF
+
+# --- 이중화 · 프록시 뒤 (deploy.sh 가 넣었다) ---
+# https://$PUBLIC_HOST/$APP_SLUG/ — nginx 가 접두어를 떼고 넘긴다. 화면 · 쿠키 · API 가 이 아래로 맞춰진다.
+PUBLIC_PATH=/$APP_SLUG
+# X-Forwarded-* 를 믿는다 — 프록시(nginx) 뒤에서만 켠다.
+TRUST_PROXY=true
+EOF
+    fi
+    chown "$OPERATOR:$OPERATOR" "$ENV_FILE"
     # 비밀키가 들어 있다. 남이 읽을 이유가 없다.
-    chmod 600 "$INSTALL_DIR/.env"
-    warn "$INSTALL_DIR/.env 를 만들었습니다 — 공개 전에 CORS·백업 경로를 확인하세요."
+    chmod 600 "$ENV_FILE"
+    warn "$ENV_FILE 를 만들었습니다 — 공개 전에 CORS·백업 경로를 확인하세요."
 }
 
 place_sif() {
@@ -163,10 +232,13 @@ place_sif() {
 # 컨테이너 안에서 한 번 실행. **웹 서비스와 같은 SIF·같은 .env 를 쓴다** —
 # 다른 파이썬으로 마이그레이션을 돌리면 그 둘이 다른 스키마를 볼 수 있다.
 in_container() {
+    local backup_bind=()
+    [[ -n "$BACKUP_HOST_DIR" ]] && backup_bind=(--bind "$BACKUP_HOST_DIR:/data/backup")
     as_op apptainer exec \
-        --bind "$INSTALL_DIR/.env:/opt/app/backend/.env:ro" \
-        --bind "$INSTALL_DIR/filestore:/data/filestore" \
-        --bind "$INSTALL_DIR/logs:/data/logs" \
+        --bind "$ENV_FILE:/opt/app/backend/.env:ro" \
+        --bind "$FILESTORE_HOST_DIR:/data/filestore" \
+        --bind "$LOG_HOST_DIR:/data/logs" \
+        ${backup_bind[@]+"${backup_bind[@]}"} \
         "$INSTALL_DIR/app.sif" "$@"
 }
 
@@ -182,13 +254,32 @@ run_seed() {
     in_container sh -c 'cd /opt/app/backend && /opt/app/venv/bin/python scripts/seed_install.py'
 }
 
-render_service_unit() {
-    [[ -f "$HERE/app.service.template" ]] || err "app.service.template 이 $HERE 에 없습니다"
-    info "systemd 유닛 렌더 → $SERVICE_UNIT"
+# 유닛 템플릿의 자리표시 — 세 유닛(앱 · 동기화 · 백업)이 같은 경로를 본다.
+# 백업 폴더가 없으면 그 --bind 줄을 통째로 뺀다(apptainer 는 없는 원본을 거부한다).
+render_unit_paths() {  # $1=template
+    # 줄 끝의 '\' 가 다음 줄로 잇는다 — 빈 줄로 두면 거기서 명령이 끊기므로 줄을 아예 지운다.
+    local backup_sed
+    if [[ -n "$BACKUP_HOST_DIR" ]]; then
+        backup_sed="s|^@@BACKUP_BIND@@.*|    --bind $BACKUP_HOST_DIR:/data/backup \\\\|"
+    else
+        backup_sed='/^@@BACKUP_BIND@@/d'
+    fi
     sed -e "s|@@USER@@|$OPERATOR|g" \
         -e "s|@@INSTALL_DIR@@|$INSTALL_DIR|g" \
         -e "s|@@APP_NAME@@|$APP_NAME|g" \
-        "$HERE/app.service.template" > "$SERVICE_UNIT"
+        -e "s|@@APP_SLUG@@|$APP_SLUG|g" \
+        -e "s|@@ENV_FILE@@|$ENV_FILE|g" \
+        -e "s|@@FILESTORE_DIR@@|$FILESTORE_HOST_DIR|g" \
+        -e "s|@@LOG_DIR@@|$LOG_HOST_DIR|g" \
+        -e "s|@@BACKUP_DIR@@|${BACKUP_HOST_DIR:-}|g" \
+        -e "$backup_sed" \
+        "$1"
+}
+
+render_service_unit() {
+    [[ -f "$HERE/app.service.template" ]] || err "app.service.template 이 $HERE 에 없습니다"
+    info "systemd 유닛 렌더 → $SERVICE_UNIT"
+    render_unit_paths "$HERE/app.service.template" > "$SERVICE_UNIT"
     chmod 644 "$SERVICE_UNIT"
     systemctl daemon-reload
 }
@@ -270,17 +361,35 @@ setup_sync_timer() {
     [[ -f "$HERE/sync.service.template" && -f "$HERE/sync.timer.template" ]] \
         || { warn "sync.*.template 없음 — 동기화 타이머 건너뜀"; return 0; }
     info "동기화 타이머 렌더 → $SYNC_TIMER_UNIT"
-    sed -e "s|@@USER@@|$OPERATOR|g" \
-        -e "s|@@INSTALL_DIR@@|$INSTALL_DIR|g" \
-        -e "s|@@APP_NAME@@|$APP_NAME|g" \
-        -e "s|@@APP_SLUG@@|$APP_SLUG|g" \
-        "$HERE/sync.service.template" > "$SYNC_SERVICE_UNIT"
+    render_unit_paths "$HERE/sync.service.template" > "$SYNC_SERVICE_UNIT"
     sed -e "s|@@APP_NAME@@|$APP_NAME|g" "$HERE/sync.timer.template" > "$SYNC_TIMER_UNIT"
     chmod 644 "$SYNC_SERVICE_UNIT" "$SYNC_TIMER_UNIT"
     systemctl daemon-reload
     systemctl enable --now "${SYNC_SERVICE_NAME}.timer" >/dev/null 2>&1 \
         || warn "동기화 타이머 기동 실패 — 'systemctl status ${SYNC_SERVICE_NAME}.timer' 확인"
     info "동기화 타이머: 5분마다 차례가 된 데이터 소스를 돌립니다 (journalctl -u $SYNC_SERVICE_NAME)"
+}
+
+# ── 백업 타이머 — 백업 폴더를 알 때만. 이중화면 두 서버 모두 걸리고, backup.sh 가 「오늘
+# 것이 이미 있으면」 건너뛴다(한 대가 죽어도 다른 대가 받는다). ──
+BACKUP_SERVICE_NAME="${APP_SLUG}-backup"
+BACKUP_SERVICE_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.service"
+BACKUP_TIMER_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.timer"
+setup_backup_timer() {
+    [[ -n "$BACKUP_HOST_DIR" ]] || return 0
+    [[ -f "$HERE/backup.service.template" && -f "$HERE/backup.timer.template" ]] \
+        || { warn "backup.*.template 없음 — 백업 타이머 건너뜀"; return 0; }
+    install -o "$OPERATOR" -g "$OPERATOR" -m 755 "$HERE/backup.sh" "$INSTALL_DIR/backup.sh"
+    install -o "$OPERATOR" -g "$OPERATOR" -m 755 "$HERE/restore.sh" "$INSTALL_DIR/restore.sh"
+    # 두 서버가 같은 시각에 같은 덤프를 받지 않게 — 대기(backup) 서버는 30분 뒤.
+    local at="03:00"; [[ "$HA_ROLE" == "backup" ]] && at="03:30"
+    info "백업 타이머 렌더 → $BACKUP_TIMER_UNIT (매일 $at → $BACKUP_HOST_DIR)"
+    render_unit_paths "$HERE/backup.service.template" > "$BACKUP_SERVICE_UNIT"
+    sed -e "s|@@APP_NAME@@|$APP_NAME|g" -e "s|@@AT@@|$at|g" "$HERE/backup.timer.template" > "$BACKUP_TIMER_UNIT"
+    chmod 644 "$BACKUP_SERVICE_UNIT" "$BACKUP_TIMER_UNIT"
+    systemctl daemon-reload
+    systemctl enable --now "${BACKUP_SERVICE_NAME}.timer" >/dev/null 2>&1 \
+        || warn "백업 타이머 기동 실패 — 'systemctl status ${BACKUP_SERVICE_NAME}.timer' 확인"
 }
 
 health_check() {
@@ -296,19 +405,34 @@ health_check() {
 
 # ───────────────────────── 명령 ─────────────────────────
 cmd_prepare() {
-    info "OS 패키지 설치 (postgresql, python3-venv)"
+    info "OS 패키지 설치 (postgresql-$PG_VERSION, python3-venv$( [[ -n "$HA_ROLE" ]] && echo ', nginx, keepalived' ))"
     # python3-venv: MCP 서버가 별도 venv 로 돈다. 없으면 install 때 MCP 만 조용히
     # 건너뛰어지고, 그 사실은 Claude 를 붙이는 날에야 드러난다.
     # apptainer 는 여기 없다 — 기본 저장소에 없어서, 맨 끝 `ensure_apptainer` 가 따로 깐다.
+    # **PostgreSQL 은 버전을 박아 깐다.** 두 서버의 버전이 다르면 복제가 안 된다 — 「postgresql」
+    # 메타패키지는 OS 가 주는 것을 깔아 서버마다 달라질 수 있다.
+    local ha_pkgs=(); [[ -n "$HA_ROLE" ]] && ha_pkgs=(nginx keepalived openssl)
     apt-get update
     apt-get install -y --no-install-recommends \
-        postgresql postgresql-contrib ca-certificates curl python3 python3-venv
+        "postgresql-$PG_VERSION" "postgresql-client-$PG_VERSION" postgresql-contrib \
+        ca-certificates curl python3 python3-venv rsync ${ha_pkgs[@]+"${ha_pkgs[@]}"}
 
     info "postgresql 기동"
     systemctl enable postgresql
-    systemctl start postgresql
+    systemctl start postgresql || warn "postgresql 이 뜨지 않았습니다 — 대기 서버라면 db-standby 뒤에 뜹니다"
 
     ensure_dirs
+
+    if pg_in_recovery; then
+        info "이 서버의 DB 는 대기(복제본) — 역할 · 데이터베이스는 주에서 만든 것이 넘어온다. 건너뜁니다."
+        ensure_apptainer
+        cat <<MSG
+
+[OK] 대기 서버 준비 완료.  ($APP_NAME · 주 $PEER_IP)
+  다음: sudo ./deploy.sh install
+MSG
+        return 0
+    fi
 
     info "DB 역할 확인: $DB_USER"
     if ! sudo -u postgres psql -tAc "SELECT 1 FROM pg_roles WHERE rolname='$DB_USER'" | grep -q 1; then
@@ -333,8 +457,8 @@ cmd_prepare() {
 
     cat <<MSG
 
-[OK] 서버 준비 완료.  ($APP_NAME · DB $DB_NAME · 포트 $APP_PORT)
-  다음: sudo ./deploy.sh install
+[OK] 서버 준비 완료.  ($APP_NAME · DB $DB_NAME · 포트 $APP_PORT$( [[ -n "$HA_ROLE" ]] && echo " · 이중화 $HA_ROLE" ))
+  다음: sudo ./deploy.sh install$( [[ "$HA_ROLE" == "master" ]] && printf '\n  이중화: sudo ./deploy.sh db-primary   (그 뒤 상대 서버에서 prepare → db-standby → install)' )
 MSG
 }
 
@@ -355,13 +479,15 @@ cmd_install() {
 
     setup_mcp || warn "MCP 설정 건너뜀(비치명적)"
     setup_sync_timer || warn "동기화 타이머 건너뜀(비치명적)"
+    setup_backup_timer || warn "백업 타이머 건너뜀(비치명적)"
+    setup_lb
 
     cat <<MSG
 
 [OK] 설치 완료.
   로그   : sudo journalctl -u $SERVICE_NAME -f
-  접속   : http://<서버주소>:$APP_PORT/
-  자료   : $INSTALL_DIR  (filestore·logs·.env — 백업 대상)
+  접속   : $( [[ -n "$HA_ROLE" ]] && echo "https://$PUBLIC_HOST/$APP_SLUG/  (직접: http://$SELF_IP:$APP_PORT/)" || echo "http://<서버주소>:$APP_PORT/" )
+  자료   : 첨부 $FILESTORE_HOST_DIR · 설정 $ENV_FILE · 로그 $LOG_HOST_DIR$( [[ -n "$BACKUP_HOST_DIR" ]] && echo " · 백업 $BACKUP_HOST_DIR" )
   MCP    : sudo systemctl status $MCP_SERVICE_NAME   (Claude 연동, 선택)
 
   위에 찍힌 관리자 임시 비밀번호는 **다시 표시되지 않습니다.**
@@ -371,7 +497,8 @@ MSG
 
 cmd_update() {
     [[ -f "$HERE/app.sif" ]]     || err "app.sif 가 $HERE 에 없습니다"
-    [[ -f "$INSTALL_DIR/.env" ]] || err "$INSTALL_DIR/.env 가 없습니다 — 먼저 install 하세요"
+    [[ -f "$ENV_FILE" ]] || err "$ENV_FILE 가 없습니다 — 먼저 install 하세요"
+    ensure_dirs
 
     info "$SERVICE_NAME 중지"
     systemctl stop "$SERVICE_NAME" || true
@@ -392,6 +519,8 @@ cmd_update() {
     # MCP 도 함께 갱신(소스 교체 + 유닛 재렌더 + 재기동). 비치명적.
     setup_mcp || warn "MCP 설정 건너뜀(비치명적)"
     setup_sync_timer || warn "동기화 타이머 건너뜀(비치명적)"
+    setup_backup_timer || warn "백업 타이머 건너뜀(비치명적)"
+    setup_lb
 
     cat <<MSG
 
@@ -410,13 +539,14 @@ cmd_reset() {
 
   ⚠ 초기화 — 다음이 **전부 사라집니다**:
       DB       : $DB_NAME 을 지우고 빈 상태로 다시 만듭니다
-      첨부     : $INSTALL_DIR/filestore/* 를 지웁니다
+      첨부     : $FILESTORE_HOST_DIR/* 를 지웁니다
   .env · DB 역할 · systemd 유닛은 그대로 둡니다.
 
 MSG
     read -r -p "정말 진행하려면 '$DB_NAME' 을 그대로 입력하세요: " confirm
     [[ "$confirm" == "$DB_NAME" ]] || err "취소했습니다. 아무것도 바뀌지 않았습니다."
 
+    pg_in_recovery && err "이 서버의 DB 는 대기입니다 — 초기화는 주 서버에서."
     systemctl stop "$SERVICE_NAME" 2>/dev/null || true
     info "데이터베이스 재생성: $DB_NAME"
     sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
@@ -424,7 +554,7 @@ DROP DATABASE IF EXISTS "$DB_NAME";
 CREATE DATABASE "$DB_NAME" OWNER "$DB_USER" ENCODING 'UTF8';
 SQL
     info "첨부 삭제"
-    as_op find "$INSTALL_DIR/filestore" -mindepth 1 -delete 2>/dev/null || true
+    as_op find "$FILESTORE_HOST_DIR" -mindepth 1 -delete 2>/dev/null || true
 
     run_migrations
     run_seed
@@ -436,8 +566,8 @@ SQL
 
 cmd_status() {
     echo "== $APP_NAME ($APP_SLUG) =="
-    echo "  설치 경로 : $INSTALL_DIR"
-    echo "  DB        : $DB_NAME"
+    echo "  설치 경로 : $INSTALL_DIR$( [[ -n "$DATA_DIR" ]] && echo "  · 공용 $DATA_DIR" )"
+    echo "  DB        : $DB_NAME @ $DB_HOST"
     echo "  포트      : $APP_PORT"
     [[ -f "$INSTALL_DIR/app.sif" ]] && echo "  SIF       : $(stat -c '%y' "$INSTALL_DIR/app.sif")"
     echo
@@ -455,10 +585,35 @@ cmd_status() {
         echo "== 동기화 타이머 ($SYNC_SERVICE_NAME.timer) =="
         systemctl --no-pager list-timers "${SYNC_SERVICE_NAME}.timer" || true
     fi
+    if [[ -f "$BACKUP_TIMER_UNIT" ]]; then
+        echo
+        echo "== 백업 타이머 ($BACKUP_SERVICE_NAME.timer → $BACKUP_HOST_DIR) =="
+        systemctl --no-pager list-timers "${BACKUP_SERVICE_NAME}.timer" || true
+        [[ -f "$BACKUP_HOST_DIR/LAST_BACKUP.txt" ]] && head -n1 "$BACKUP_HOST_DIR/LAST_BACKUP.txt"
+    fi
+    echo
+    ha_status
+}
+
+# 아무것도 바꾸지 않고 결과만 — ETC=<폴더> 를 주면 nginx · keepalived 설정도 거기 쓴다.
+cmd_render() {
+    local out="${ETC:-}"
+    local tpl unit
+    for tpl in app.service sync.service backup.service; do
+        [[ -f "$HERE/$tpl.template" ]] || continue
+        case "$tpl" in app.service) unit="$SERVICE_NAME.service" ;; sync.service) unit="$SYNC_SERVICE_NAME.service" ;; *) unit="$BACKUP_SERVICE_NAME.service" ;; esac
+        if [[ -n "$out" ]]; then
+            mkdir -p "$out/etc/systemd/system"
+            render_unit_paths "$HERE/$tpl.template" > "$out/etc/systemd/system/$unit"
+        else
+            echo "### $tpl"; render_unit_paths "$HERE/$tpl.template"; echo
+        fi
+    done
+    if [[ -n "$out" ]]; then render_lb; echo "렌더 결과: $out/etc"; else render_lb; fi
 }
 
 cmd_auto() {
-    if [[ -f "$INSTALL_DIR/app.sif" && -f "$INSTALL_DIR/.env" && -f "$SERVICE_UNIT" ]]; then
+    if [[ -f "$INSTALL_DIR/app.sif" && -f "$ENV_FILE" && -f "$SERVICE_UNIT" ]]; then
         info "기존 설치를 찾았습니다 → update"
         cmd_update
     else
@@ -477,16 +632,25 @@ $APP_NAME 배포 스크립트 ($VERSION)
   install   SIF + .env + systemd, 마이그레이션, 시드, 기동
   update    SIF 교체 + 마이그레이션 + 재시작 (자료 그대로)
   reset     DB·첨부 초기화 (파괴적)
-  status    서비스 상태 + health
+  status    서비스 상태 + health (+ 이중화 · DB 주/대기)
   (없으면)  자동: 처음이면 install, 아니면 update
+
+  이중화(서버 두 대) — README 「이중화」:
+  db-primary              이 서버의 PostgreSQL 을 주로 (복제 계정 · 감시 · 원복 잠금)
+  db-standby [--from IP]  이 서버의 PostgreSQL 을 대기로 (데이터는 주에서 새로 받는다)
+  db-promote              대기를 주로 (장애)      db-demote  주를 곱게 내림 (계획 전환)
+  db-status               역할 · 복제 지연 · VIP
+  lb                      nginx · keepalived · 인증서를 지금 설정으로 다시 만들고 반영
 
 지금 설정 (env 로 덮을 수 있음):
   OPERATOR    = $OPERATOR
   INSTALL_DIR = $INSTALL_DIR
-  DB_NAME     = $DB_NAME
+  DATA_DIR    = ${DATA_DIR:-(없음 — 단독 서버, 전부 INSTALL_DIR)}
+  DB_NAME     = $DB_NAME @ $DB_HOST
   DB_USER     = $DB_USER
   APP_PORT    = $APP_PORT
   MCP_ENABLED = $MCP_ENABLED   (MCP_HOST=$MCP_HOST MCP_PORT=$MCP_PORT MCP_API_BASE=$MCP_API_BASE)
+  HA_ROLE     = ${HA_ROLE:-(없음)}   PEER_IP=$PEER_IP WEB_VIP=$WEB_VIP DB_VIP=${DB_VIP:-(없음)} PUBLIC_HOST=$PUBLIC_HOST
 MSG
 }
 
@@ -496,6 +660,13 @@ case "${1:-}" in
     update)         cmd_update  ;;
     reset)          cmd_reset   ;;
     status)         cmd_status  ;;
+    db-primary)     shift; ensure_dirs; cmd_db primary "$@" ;;
+    db-standby)     shift; [[ "${1:-}" == "--from" ]] && shift; ensure_dirs; cmd_db standby "${1:-}" ;;
+    db-promote)     cmd_db promote ;;
+    db-demote)      cmd_db demote ;;
+    db-status)      cmd_db status ;;
+    lb)             ensure_dirs; setup_lb ;;
+    render)         cmd_render ;;
     ""|auto)        cmd_auto    ;;
     -h|--help|help) usage       ;;
     *)              usage; exit 1 ;;

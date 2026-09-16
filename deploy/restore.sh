@@ -3,6 +3,7 @@
 #
 #   ./restore.sh -b ~/backup/<slug> -d <slug>_restore_check          확인용 (기본)
 #   ./restore.sh -b ~/backup/<slug> -d <slug> -i ~/apps/<slug> -f    실제 복구
+#   ./restore.sh -b <백업> -d <slug> -F /data/<공통>/<slug>/filestore -f   첨부가 공용 스토리지에 있을 때
 #
 # `backup.sh` 의 마지막 줄은 "한 번은 실제로 복구해 보세요" 라고 말한다. 그런데 그
 # 「복구」 가 사람이 손으로 치는 명령 두 줄이면, 치다 틀렸을 때 **절반만 돌아온
@@ -28,13 +29,14 @@ set -euo pipefail
 err()  { echo "오류: $*" >&2; exit 1; }
 info() { echo "==> $*"; }
 
-BACKUP_ROOT=""; DB_NAME=""; INSTALL_DIR=""; DUMP_FILE=""; FORCE=0
+BACKUP_ROOT=""; DB_NAME=""; INSTALL_DIR=""; FILESTORE=""; DUMP_FILE=""; FORCE=0
 
-while getopts ":b:d:i:D:fh" opt; do
+while getopts ":b:d:i:F:D:fh" opt; do
     case "$opt" in
         b) BACKUP_ROOT="$OPTARG" ;;
         d) DB_NAME="$OPTARG" ;;
         i) INSTALL_DIR="$OPTARG" ;;
+        F) FILESTORE="$OPTARG" ;;
         D) DUMP_FILE="$OPTARG" ;;
         f) FORCE=1 ;;
         h) sed -n '2,30p' "$0"; exit 0 ;;
@@ -43,6 +45,8 @@ while getopts ":b:d:i:D:fh" opt; do
 done
 
 [[ -n "$BACKUP_ROOT" ]] || err "-b <백업 폴더> 가 필요합니다."
+# 첨부를 되돌릴 자리 — -F 로 직접, 또는 -i 의 설치 폴더 아래.
+[[ -n "$FILESTORE" || -z "$INSTALL_DIR" ]] || FILESTORE="$INSTALL_DIR/filestore"
 [[ -n "$DB_NAME" ]]     || err "-d <복구할 DB 이름> 이 필요합니다."
 
 # 접속 정보는 **백업이 함께 받아 둔 .env** 에서 읽는다. 앱이 살아 있지 않아도
@@ -93,15 +97,15 @@ info "복구된 표: $TABLES 개"
 
 # ── 첨부 ──────────────────────────────────────────────────────────────────────
 CHECK_ROOT=""
-if [[ -n "$INSTALL_DIR" ]]; then
+if [[ -n "$FILESTORE" ]]; then
     if [[ -d "$BACKUP_ROOT/filestore" ]]; then
-        info "첨부 복구: $BACKUP_ROOT/filestore -> $INSTALL_DIR/filestore"
-        mkdir -p "$INSTALL_DIR/filestore"
-        rsync -a --delete "$BACKUP_ROOT/filestore/" "$INSTALL_DIR/filestore/"
+        info "첨부 복구: $BACKUP_ROOT/filestore -> $FILESTORE"
+        mkdir -p "$FILESTORE"
+        rsync -a --delete "$BACKUP_ROOT/filestore/" "$FILESTORE/"
     else
         echo "경고: 백업에 filestore 가 없습니다." >&2
     fi
-    CHECK_ROOT="$INSTALL_DIR/filestore"
+    CHECK_ROOT="$FILESTORE"
 elif [[ -d "$BACKUP_ROOT/filestore" ]]; then
     # -i 없이 리허설만 할 때도 백업 안의 것으로 견줘 볼 수 있다.
     CHECK_ROOT="$BACKUP_ROOT/filestore"

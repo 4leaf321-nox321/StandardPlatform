@@ -241,6 +241,22 @@ sudo ./deploy.sh status
 원격에서만 걸리는 것들(root 로그인·임시 비밀번호·`ssh -t`)은
 [README_OPERATOR](deploy/README_OPERATOR.md) 의 §0 에 표로 있다.
 
+### 서버 두 대 · HTTPS · 경로 접두어
+
+같은 번들로 **두 대에 활성-활성**으로 올린다 — keepalived 의 웹 VIP 하나, 양쪽 nginx 가 두 앱에
+나누고, PostgreSQL 은 주/대기(스트리밍 복제 · DB VIP 로 자동 승격). 첨부 · 백업 · `.env` 는 공용
+스토리지(`DATA_DIR=/data/<공통폴더>/<slug>`), 코드와 로그는 각 서버. 여러 플랫폼이 같은 호스트명
+아래 `https://<호스트>/<slug>/` 로 갈린다(`PUBLIC_PATH`). 순서와 장애 대응은
+[README_OPERATOR §8](deploy/README_OPERATOR.md), 결정은
+[docs/이중화-배포-설계.md](docs/이중화-배포-설계.md).
+
+```bash
+HA_ROLE=master PEER_IP=<상대> WEB_VIP=<VIP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<공통>/<slug> \
+  sudo ./deploy.sh prepare && sudo ./deploy.sh db-primary && sudo ./deploy.sh install   # A
+HA_ROLE=backup PEER_IP=<상대> WEB_VIP=<VIP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<공통>/<slug> \
+  sudo ./deploy.sh prepare && sudo ./deploy.sh db-standby && sudo ./deploy.sh install   # B
+```
+
 `.env` 는 이미지에 굽지 않고 **bind-mount 로 넣는다.** 굽으면 비밀번호를 바꾸는 데
 이미지를 다시 만들어야 하고, 그러면 아무도 안 바꾼다.
 
