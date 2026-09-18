@@ -283,7 +283,10 @@ def inferred(schema: Graph, data: Graph) -> Graph:
     closed = Graph()
     for triple in before:
         closed.add(triple)
-    owlrl.DeductiveClosure(owlrl.OWLRL_Semantics, axiomatic_triples=False).expand(closed)
+    # 공리 · 데이터형 공리는 넣지 않는다 — 알고 싶은 것은 이 데이터에서 새로 나온 사실이다.
+    owlrl.DeductiveClosure(
+        owlrl.OWLRL_Semantics, axiomatic_triples=False, datatype_axioms=False
+    ).expand(closed)
     out = Graph()
     for prefix, ns in schema.namespaces():
         out.bind(prefix, ns)
@@ -293,10 +296,21 @@ def inferred(schema: Graph, data: Graph) -> Graph:
     return out
 
 
+#: 표준 어휘의 자리 — 추론기가 여기 것들끼리 잇는 것은 도메인 사실이 아니다.
+_VOCAB = (str(RDF), str(RDFS), str(OWL), str(XSD), str(SKOS), str(DCTERMS))
+
+
 def _noise(triple: tuple[Any, Any, Any]) -> bool:
     """추론기가 공리로 덧붙이는 자명한 것들(`x owl:sameAs x`, `rdfs:Resource` 분류 …)은
     뺀다."""
     subject, predicate, obj = triple
+    # 값(리터럴)에 「이것은 anyURI 다」 를 붙이는 것도 새로 안 것이 아니다.
+    if isinstance(subject, Literal):
+        return True
+    # **어휘 자신에 대한 이야기는 뺀다.** `rdf:HTML a rdfs:Datatype` 같은 것이 수백 줄 나오면
+    # 정작 새로 알게 된 도메인 사실(상속 분류 · 역관계 · 이행)이 그 속에 묻힌다(실측).
+    if isinstance(subject, URIRef) and str(subject).startswith(_VOCAB):
+        return True
     if predicate == OWL.sameAs and subject == obj:
         return True
     if predicate == RDF.type and obj in (RDFS.Resource, OWL.Thing, OWL.NamedIndividual):

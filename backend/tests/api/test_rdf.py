@@ -99,6 +99,13 @@ def test_정의와_데이터가_OWL_RDF_로_나가고_추론이_된다(
     assert (iri_t2, URIRef(f"{ns}{model}.task.inverse"), iri_m1) in inferred
     assert (iri_t1, rel, iri_t3) in inferred
     assert (iri_m1, RDF.type, cls_model) not in inferred  # 이미 있던 것은 안 되풀이한다
+    # **어휘 공리는 섞이지 않는다.** `rdf:HTML a rdfs:Datatype` 같은 것이 수백 줄 나오면 새로
+    # 알게 된 사실이 그 속에 묻힌다(실측).
+    vocab = (
+        "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
+        "http://www.w3.org/2000/01/rdf-schema#",
+    )
+    assert not [one for one in inferred.subjects() if str(one).startswith(vocab)]
 
     # 다른 형식도 같은 내용.
     jsonld = client.get("/api/rdf/schema?format=jsonld", headers=admin.headers)
