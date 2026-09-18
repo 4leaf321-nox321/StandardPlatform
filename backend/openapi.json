@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "StandardPlatform API",
+    "title": "PLM 기준정보 API",
     "version": "baseline"
   },
   "paths": {
@@ -4833,11 +4833,11 @@
             "required": false,
             "schema": {
               "type": "boolean",
-              "description": "어디에도 안 걸린 것만",
+              "description": "어디에도 연결되지 않은 것만",
               "default": false,
               "title": "Orphans"
             },
-            "description": "어디에도 안 걸린 것만"
+            "description": "어디에도 연결되지 않은 것만"
           }
         ],
         "responses": {
@@ -7368,6 +7368,31 @@
                   },
                   "type": "array",
                   "title": "Response Maintenance Api Server Maintenance Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/sample/ping": {
+      "get": {
+        "tags": [
+          "ext:sample"
+        ],
+        "summary": "Ping",
+        "operationId": "ping_api_ext_sample_ping_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Ping Api Ext Sample Ping Get"
                 }
               }
             }
