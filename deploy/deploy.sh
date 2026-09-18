@@ -190,6 +190,22 @@ ensure_apptainer() {
         info "apptainer 가 이미 있습니다: $(apptainer --version 2>/dev/null || echo '?')"
         return 0
     fi
+    # **번들에 동봉한 .deb 가 1순위.** 폐쇄망 서버는 PPA 에 못 닿아 사람이 .deb 를 구해 와야 했다
+    # (첫 서버 설치 때 실제로 겪었다). build_bundle.sh 가 빌드 머신(PPA 있음 · 운영과 같은
+    # 우분투 24.04/amd64)에서 apptainer 와 최소 서버에 없을 수 있는 의존성을 받아 둔다.
+    local debs="${HERE:-.}/apptainer_debs"
+    if compgen -G "$debs/*.deb" >/dev/null; then
+        info "apptainer 설치 (번들 동봉 .deb)"
+        # apt 가 닿으면 나머지 의존성까지 함께 풀고, 완전 차단이면 dpkg 로 바로.
+        if apt-get install -y "$debs"/*.deb 2>/dev/null \
+            || { dpkg -i "$debs"/*.deb 2>/dev/null && { apt-get install -y -f 2>/dev/null || true; }; }; then
+            if command -v apptainer >/dev/null 2>&1; then
+                info "apptainer 설치: $(apptainer --version 2>/dev/null || echo '?')"
+                return 0
+            fi
+        fi
+        warn "동봉 .deb 로는 설치되지 않았습니다 — 저장소 · PPA 를 차례로 시도합니다."
+    fi
     # 이미 닿는 저장소(사내 미러 등)에 있으면 그것을 쓴다 — PPA 를 굳이 더하지 않는다.
     if apt-cache policy apptainer 2>/dev/null | grep -q 'Candidate: [0-9]'; then
         info "apptainer 설치 (이미 닿는 저장소에서)"
@@ -203,7 +219,7 @@ ensure_apptainer() {
     if ! { apt-get install -y --no-install-recommends software-properties-common \
             && add-apt-repository -y "$APPTAINER_PPA" \
             && apt-get update; }; then
-        err "PPA 를 추가하지 못했습니다 — 서버가 ppa.launchpadcontent.net 에 닿지 않는 것 같습니다(폐쇄망·프록시). 닿는 PC 에서 apptainer .deb 를 받아($APPTAINER_DEBS) 옮기고 'sudo apt install ./apptainer_*.deb' 로 설치한 뒤 'sudo ./deploy.sh prepare' 를 다시 돌리세요 — 이미 만든 DB·폴더는 그대로 둡니다."
+        err "PPA 를 추가하지 못했습니다 — 서버가 ppa.launchpadcontent.net 에 닿지 않는 것 같습니다(폐쇄망·프록시). 이 번들에는 apptainer_debs/ 가 없습니다 — 새 릴리스 번들(.deb 동봉)을 쓰거나, 닿는 PC 에서 apptainer .deb 를 받아($APPTAINER_DEBS) 옮기고 'sudo apt install ./apptainer_*.deb' 로 설치한 뒤 'sudo ./deploy.sh prepare' 를 다시 돌리세요 — 이미 만든 DB·폴더는 그대로 둡니다."
     fi
     apt-get install -y --no-install-recommends apptainer \
         || err "PPA 를 더했는데 apptainer 를 설치하지 못했습니다 — 위의 apt 출력을 확인하세요."

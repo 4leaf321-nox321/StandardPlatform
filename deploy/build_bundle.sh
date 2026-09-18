@@ -6,7 +6,7 @@
 #
 # 산출물: release/<slug>-<버전>.tar.gz
 #   app.sif · deploy.sh · ha.sh · pg-ha.sh · backup.sh · restore.sh · *.template · .env.example
-#   · BUILD_INFO · README.md · mcp_server/ (서버 + 오프라인 설치용 휠)
+#   · BUILD_INFO · README.md · mcp_server/ (서버 + 오프라인 설치용 휠) · apptainer_debs/ (폐쇄망용)
 #
 # **배포 스크립트를 번들에 함께 담는다.** 서버가 릴리스만 받는 환경이어도 tar 하나로
 # 그다음 배포가 돌아야 한다 — 빠뜨리면 첫 배포에 저장소를 클론하는 수밖에 없고,
@@ -131,6 +131,22 @@ cp deploy/.env.production.example    "$STAGE/.env.example"
 cp deploy/README_OPERATOR.md         "$STAGE/README.md"
 cp deploy/쉬운-설치.md               "$STAGE/쉬운-설치.md"
 chmod +x "$STAGE"/*.sh
+
+# ── 3a. apptainer .deb 동봉 (폐쇄망 대비) ────────────────────────────────────
+# apptainer 는 우분투 기본 저장소에 없다(공식 PPA 전용). 운영 서버가 폐쇄망이면 prepare 가
+# 설치하지 못해 사람이 .deb 를 구해 와야 했다 — 첫 서버 설치 때 실제로 겪었다. 빌드 머신
+# (PPA 있음 · 운영과 같은 우분투 24.04/amd64)에서 미리 받아 두면 deploy.sh 의
+# ensure_apptainer 가 이것을 1순위로 깐다. uidmap · libfuse3-3 은 최소 설치 서버에 없을 수
+# 있는 의존성이다.
+echo "==> [3a/4] apptainer .deb 동봉 (오프라인 설치용)"
+mkdir -p "$STAGE/apptainer_debs"
+if (cd "$STAGE/apptainer_debs" && apt-get download apptainer uidmap libfuse3-3 >/dev/null 2>&1); then
+    echo "    동봉: $(ls "$STAGE/apptainer_debs" | tr '\n' ' ')"
+else
+    rm -rf "$STAGE/apptainer_debs"
+    echo "    ⚠ apt-get download 실패(빌드 머신에 apptainer PPA 가 없나?) — .deb 미동봉."
+    echo "      폐쇄망 서버에서는 ensure_apptainer 가 안내하는 수동 반입이 필요합니다."
+fi
 
 # ── 3b. MCP 서버 (별도 venv 로 운영 서버에서 돌아감) ──────────────────────────
 # 백엔드 SIF 와 의존성이 충돌해 컨테이너에 못 넣는다. 소스 + 오프라인 설치용 휠을

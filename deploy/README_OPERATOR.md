@@ -35,6 +35,7 @@ ls
 #  app.service.template  mcp.service.template  sync.service.template  sync.timer.template
 #  backup.service.template  backup.timer.template  .env.example  BUILD_INFO  README.md  쉬운-설치.md
 #  mcp_server/   (Claude 연동 MCP 서버 + 오프라인 설치용 휠)
+#  apptainer_debs/  (폐쇄망용 apptainer .deb — prepare 가 먼저 본다)
 ```
 
 > `/home` 에서 실행이 막히는 서버가 있다(noexec 마운트). 그때는 `/tmp` 에 풀어
@@ -72,7 +73,7 @@ sudo ./deploy.sh update
 | **`root` 로 바로 ssh 했다면** | 운영 계정을 알 수 없어 멈춘다(`sudo` 를 거치지 않아 `SUDO_USER` 가 없다). `OPERATOR=<계정> ./deploy.sh install` 로 준다 |
 | **임시 비밀번호는 한 번만 찍힌다** | 세션이 끊기면 잃는다. `sudo ./deploy.sh install 2>&1 \| tee ~/install-<태그>.log` 로 받아 둔다 |
 | **`reset` 은 되묻는다** | `ssh <서버> 'sudo ./deploy.sh reset'` 은 TTY 가 없어 그 물음에서 실패한다. `ssh -t` 로 붙는다 |
-| **`prepare` 는 apt 와 apptainer PPA 를 쓴다** | 서버가 우분투 저장소(또는 사내 미러)와 `ppa.launchpadcontent.net` 에 닿아야 한다. PPA 에 안 닿으면 `prepare` 가 DB·폴더까지 만든 뒤 **무엇을 먼저 깔지 말하고 멈춘다** — apptainer 를 `.deb` 로 깔고 `prepare` 를 다시 돌린다(앞 단계는 멱등하다) |
+| **`prepare` 는 apt 를 쓴다** | 서버가 우분투 저장소(또는 사내 미러)에 닿아야 한다. apptainer 는 번들에 동봉한 `.deb` 로 깔리므로 PPA 에 닿을 필요는 없다. 그래도 못 깔면 `prepare` 가 DB·폴더까지 만든 뒤 **무엇을 먼저 깔지 말하고 멈춘다** — 해결 뒤 `prepare` 를 다시 돌린다(앞 단계는 멱등하다) |
 
 번들 전체를 한 줄로 밀어 넣는 것도 된다:
 
@@ -99,11 +100,12 @@ apt 패키지(postgresql·python3-venv), **apptainer**, DB 역할과 데이터�
 **apptainer 는 우분투 기본 저장소에 없다.** 그래서 `prepare` 는 이 순서로 찾는다:
 
 1. 이미 깔려 있으면 그대로 쓴다.
-2. 닿는 저장소(사내 미러 등)에 있으면 거기서 받는다.
-3. 우분투면 **공식 PPA(`ppa:apptainer/ppa`)를 더해** 받는다 — CI 가 번들을 만들 때 쓰는 것과 같은 곳이다.
+2. **번들에 동봉한 `.deb`**(`apptainer_debs/` — 빌드가 받아 넣는다)가 있으면 그것을 깐다. **폐쇄망은 여기서 끝난다.**
+3. 닿는 저장소(사내 미러 등)에 있으면 거기서 받는다.
+4. 우분투면 **공식 PPA(`ppa:apptainer/ppa`)를 더해** 받는다 — CI 가 번들을 만들 때 쓰는 것과 같은 곳이다.
 
-PPA 에 닿지 않는 서버(폐쇄망·프록시)라면 `prepare` 가 **DB·폴더까지 만든 뒤** 멈추고 할 일을 말한다.
-닿는 PC 에서 `.deb` 를 받아 옮겨 깔고 다시 돌린다:
+2 가 없는 옛 번들(v0.4.4 이전)이고 PPA 에도 닿지 않는 서버라면 `prepare` 가 **DB·폴더까지 만든 뒤** 멈추고
+할 일을 말한다. 새 번들을 쓰거나, 닿는 PC 에서 `.deb` 를 받아 옮겨 깔고 다시 돌린다:
 
 ```bash
 # 닿는 PC 에서: https://github.com/apptainer/apptainer/releases 의 amd64 .deb 를 받아

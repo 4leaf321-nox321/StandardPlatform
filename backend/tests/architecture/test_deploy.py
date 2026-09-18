@@ -284,6 +284,7 @@ def _ensure_apptainer(
     candidate: str = "(none)",
     os_id: str = "ubuntu",
     ppa_reachable: bool = True,
+    bundled: bool = False,
 ) -> tuple[subprocess.CompletedProcess[str], list[str]]:
     text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
     constants = [
@@ -317,9 +318,16 @@ def _ensure_apptainer(
     _stub(
         bin_dir / "apt-get",
         f'echo "apt-get $*" >> "{log}"\n'
-        f'case "$*" in *" apptainer"*) printf \'{fake_apptainer}\' > "{bin_dir}/apptainer"; '
+        f'case "$*" in *" apptainer"*|*apptainer_*.deb*) '
+        f"printf '{fake_apptainer}' > \"{bin_dir}/apptainer\"; "
         f'chmod +x "{bin_dir}/apptainer";; esac\n',
     )
+    # 번들에 동봉한 .deb — 있으면 ensure_apptainer 가 이것을 1순위로 깐다.
+    here = tmp_path / "bundle"
+    here.mkdir()
+    if bundled:
+        (here / "apptainer_debs").mkdir()
+        (here / "apptainer_debs" / "apptainer_1.5.3-1~noble_amd64.deb").write_bytes(b"deb")
     _stub(
         bin_dir / "add-apt-repository",
         f'echo "add-apt-repository $*" >> "{log}"\nexit {0 if ppa_reachable else 1}\n',
@@ -333,7 +341,7 @@ def _ensure_apptainer(
     done = subprocess.run(
         # PATH 를 가짜 명령 자리로 좁히므로 bash 자신은 절대 경로로 부른다.
         [shutil.which("bash") or "bash", "-c", script],
-        env={"PATH": f"{bin_dir}:{tools}", "OS_RELEASE": str(os_release)},
+        env={"PATH": f"{bin_dir}:{tools}", "OS_RELEASE": str(os_release), "HERE": str(here)},
         capture_output=True,
         text=True,
         timeout=30,
@@ -362,6 +370,24 @@ def test_이미_깔려_있으면_아무것도_안_한다(tmp_path: Path) -> None
     done, calls = _ensure_apptainer(tmp_path, installed=True)
     assert done.returncode == 0, done.stderr
     assert calls == []
+
+
+@_no_bash
+def test_번들에_deb_가_있으면_그것을_먼저_깐다(tmp_path: Path) -> None:
+    """폐쇄망 — PPA 도 저장소도 안 닿는다. 사람이 .deb 를 구해 오지 않게 번들이 들고 간다."""
+    done, calls = _ensure_apptainer(tmp_path, bundled=True, ppa_reachable=False)
+    assert done.returncode == 0, done.stderr
+    assert any("install" in one and "apptainer_debs/" in one for one in calls)
+    assert not any(one.startswith("add-apt-repository") for one in calls)
+    assert "apptainer version" in done.stdout
+
+
+def test_번들이_apptainer_deb_를_동봉한다() -> None:
+    """build_bundle.sh 가 빌드 머신에서 받아 넣고, deploy.sh 가 그 폴더를 본다."""
+    builder = (DEPLOY / "build_bundle.sh").read_text(encoding="utf-8")
+    installer = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    assert "apt-get download apptainer" in builder and "apptainer_debs" in builder
+    assert "apptainer_debs" in _piece(installer, "ensure_apptainer")
 
 
 @_no_bash
