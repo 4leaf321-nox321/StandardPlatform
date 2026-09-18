@@ -43,15 +43,20 @@ def _cookie_path() -> str:
     return f"{get_settings().base_path}/api/auth"
 
 
-def _set_refresh_cookie(response: Response, raw: str) -> None:
+def _set_refresh_cookie(request: Request, response: Response, raw: str) -> None:
     settings = get_settings()
+    # **Secure 는 요청이 https 로 왔을 때 붙는다.** 설정으로 늘 켜 두면 메인 서버 없이 IP 로
+    # 직접(http) 확인할 때 브라우저가 쿠키를 버려 새로고침마다 로그인 화면이다(실측).
+    # 프록시 뒤에서는 TRUST_PROXY 가 X-Forwarded-Proto 를 읽어 https 로 판정한다. 설정은
+    # 「강제로 켬」.
+    secure = settings.refresh_cookie_secure or request.url.scheme == "https"
     response.set_cookie(
         settings.refresh_cookie_name,
         raw,
         max_age=settings.refresh_token_days * 24 * 3600,
         httponly=True,
         samesite="lax",
-        secure=settings.refresh_cookie_secure,
+        secure=secure,
         path=_cookie_path(),
     )
 
@@ -71,7 +76,7 @@ def login(
     access, expires_in, refresh_raw = services.issue_session(
         db, user, request.headers.get("user-agent")
     )
-    _set_refresh_cookie(response, refresh_raw)
+    _set_refresh_cookie(request, response, refresh_raw)
     return LoginResponse(
         access_token=access, expires_in=expires_in, user=services.user_out(db, user)
     )
@@ -88,7 +93,7 @@ def refresh(
     user, access, expires_in, new_raw = services.rotate_refresh(
         db, raw, request.headers.get("user-agent")
     )
-    _set_refresh_cookie(response, new_raw)
+    _set_refresh_cookie(request, response, new_raw)
     return LoginResponse(
         access_token=access, expires_in=expires_in, user=services.user_out(db, user)
     )

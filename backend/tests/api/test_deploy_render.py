@@ -241,7 +241,7 @@ def test_setup_은_물어보고_계획을_보여준다(bundle: Path, tmp_path: P
     assert "주(A) 10.0.0.1 — 상대 B 10.0.0.2" in out
     assert "db-primary" in out and "B 에 넘길 파일" in out
     # 대기는 이름 · 포트를 다시 묻지 않는다 — A 의 .env 를 그대로 받는다.
-    answers_b = "B\nplmhub\n10.0.0.1\n\n\nops\n"
+    answers_b = "B\nplmhub\n10.0.0.1\n\n\nops\n\n"
     out_b = subprocess.run(
         ["bash", str(bundle / "deploy.sh"), "setup", "--plan"],
         cwd=bundle,

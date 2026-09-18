@@ -268,9 +268,9 @@ SQL
         sed -i -e "s|^# BACKUP_DIR=.*|BACKUP_DIR=/data/backup|" "$ENV_FILE"
     fi
     if [[ -n "$HA_ROLE" ]]; then
-        # 프록시 뒤 · 경로 접두어 · https. nginx 가 /<slug>/ 를 떼고 넘기고, 앱은 화면 · 쿠키 ·
-        # API 주소를 이 접두어 아래로 맞춘다.
-        sed -i -e "s|^REFRESH_COOKIE_SECURE=.*|REFRESH_COOKIE_SECURE=true|" "$ENV_FILE"
+        # 프록시 뒤 · 경로 접두어. nginx 가 /<slug>/ 를 떼고 넘기고, 앱은 화면 · 쿠키 · API 주소를
+        # 이 접두어 아래로 맞춘다. 쿠키의 Secure 는 요청이 https 인지 보고 앱이 스스로 붙인다 —
+        # 여기서 강제로 켜면 메인 서버 없이 IP 로 확인하는 동안 새로고침마다 로그인 화면이다.
         cat >> "$ENV_FILE" <<EOF
 
 # --- 이중화 · 프록시 뒤 (deploy.sh 가 넣었다) ---
@@ -721,7 +721,10 @@ cmd_setup() {
         [[ -n "$PEER_IP" ]] || err "상대 서버 IP 가 필요합니다."
         ask PUBLIC_HOST "사용자가 브라우저에 치는 호스트명" "${PUBLIC_HOST:-hwax.sec.samsung.net}"
         ask DATA_DIR "공용 스토리지 폴더 (예: /data/$APP_SLUG — 아직 없으면 그냥 Enter)" "$DATA_DIR"
-        [[ -n "$DATA_DIR" || "$HA_ROLE" != backup ]] || ask peer_account "A 서버의 계정 이름 — .env 와 복제 비밀번호를 거기서 받아옵니다" "$OPERATOR"
+        if [[ -z "$DATA_DIR" && "$HA_ROLE" == backup ]]; then
+            ask peer_account "A 서버의 계정 이름 — .env 와 복제 비밀번호를 거기서 받아옵니다" "$OPERATOR"
+            ask SSH_PORT "A 서버의 ssh 포트" "${SSH_PORT:-22}"
+        fi
     fi
     # 답한 값으로 파생값을 다시 계산한다.
     INSTALL_DIR="/home/$OPERATOR/apps/$APP_SLUG"; DB_NAME="$APP_SLUG"; DB_USER="$APP_SLUG"
@@ -755,6 +758,23 @@ PLAN
     local go; read -r -p "진행할까요? (y/N): " go; [[ "${go,,}" == "y" ]] || err "취소했습니다. 아무것도 바뀌지 않았습니다."
 
     as_op mkdir -p "$INSTALL_DIR"
+    # **A 에서 받아오는 것은 로그 기록(tee) 전에.** 비밀번호를 묻는 scp 가 tee 뒤에서 터미널을
+    # 읽으면 셸이 작업을 정지시킨다(실측 — 「[2]+ Stopped」). 이미 제자리에 있으면 안 받는다.
+    if [[ "$HA_ROLE" == backup && -z "$DATA_DIR" ]]; then
+        if [[ -f "$ENV_FILE" && -f /etc/pg-ha.replpass ]]; then
+            info ".env 와 복제 비밀번호가 이미 있습니다 — A 에서 다시 받지 않습니다"
+        else
+            local handoff="$INSTALL_DIR/handoff"
+            info "A($PEER_IP) 에서 .env · 복제 비밀번호 받기 — $peer_account 계정의 비밀번호를 물으면 입력하세요"
+            as_op mkdir -p "$handoff"
+            as_op scp -q -P "${SSH_PORT:-22}" "$peer_account@$PEER_IP:apps/$APP_SLUG/handoff/pg-ha.replpass" \
+                "$peer_account@$PEER_IP:apps/$APP_SLUG/handoff/.env" "$handoff/" \
+                || err "A 에서 받지 못했습니다. A 에서 setup 이 끝났는지, 계정 · IP · ssh 포트가 맞는지 확인하세요."
+            install -o root -g postgres -m 640 "$handoff/pg-ha.replpass" /etc/pg-ha.replpass
+            install -o "$OPERATOR" -g "$OPERATOR" -m 600 "$handoff/.env" "$ENV_FILE"
+            rm -rf "$handoff"
+        fi
+    fi
     local log="$INSTALL_DIR/setup.log"
     # 화면에 찍히는 것을 전부 파일에도 — 임시 비밀번호가 「한 번만」 찍히는 문제를 여기서 푼다.
     # **파일은 tee 보다 먼저 만든다.** tee 는 뒤늦게 뜨므로 그 뒤에 chown 하면 「없는 파일」 이다(실측).
@@ -781,18 +801,6 @@ PLAN
 MSG
             ;;
         backup)
-            if [[ -z "$DATA_DIR" ]]; then
-                # 공용 폴더가 없으니 A 에서 직접 받는다(있으면 .env 도 복제 비밀번호도 거기 있다).
-                local handoff="$INSTALL_DIR/handoff"
-                info "A($PEER_IP) 에서 .env · 복제 비밀번호 받기 — $peer_account 계정의 비밀번호를 물으면 입력하세요"
-                as_op mkdir -p "$handoff"
-                as_op scp -q "$peer_account@$PEER_IP:apps/$APP_SLUG/handoff/pg-ha.replpass" \
-                    "$peer_account@$PEER_IP:apps/$APP_SLUG/handoff/.env" "$handoff/" \
-                    || err "A 에서 받지 못했습니다. A 에서 setup 이 끝났는지, 계정 · IP 가 맞는지 확인하세요."
-                install -o root -g postgres -m 640 "$handoff/pg-ha.replpass" /etc/pg-ha.replpass
-                install -o "$OPERATOR" -g "$OPERATOR" -m 600 "$handoff/.env" "$ENV_FILE"
-                rm -rf "$handoff"
-            fi
             [[ -f "$ENV_FILE" ]] || err "$ENV_FILE 가 없습니다 — A 에서 setup 이 끝났나요?"
             # A 의 .env 가 정한 이름 · 포트 · 확장을 그대로 — 두 서버는 같은 인스턴스다.
             local v

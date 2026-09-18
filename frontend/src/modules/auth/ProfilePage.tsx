@@ -24,6 +24,7 @@ import {
   TableRow,
 } from '@/shared/components/ui/table'
 import { useResource } from '@/shared/hooks/useResource'
+import { McpSetupGuide } from './McpSetupGuide'
 import { shownDate } from '@/shared/lib/datetime'
 
 export default function ProfilePage() {
@@ -118,6 +119,9 @@ export default function ProfilePage() {
             <p className="mt-1 font-mono text-xs break-all">{issued}</p>
           </div>
         )}
+
+        {/* 받아 든 토큰을 어디에 넣는지 — 발급한 자리에서 바로. */}
+        <McpSetupGuide token={issued} />
 
         <form onSubmit={createToken} className="space-y-3 rounded-md border p-4">
           <div className="flex gap-2">

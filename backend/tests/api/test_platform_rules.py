@@ -386,3 +386,17 @@ def test_주소_접두어는_빌드가_아니라_배포_설정이다(
         assert get_settings().base_path == "" and _cookie_path() == "/api/auth"
     finally:
         get_settings.cache_clear()
+
+
+def test_쿠키의_Secure_는_요청이_https_일_때만(client: TestClient, admin: Signed) -> None:
+    """설정으로 늘 켜 두면 메인 서버 없이 IP(http)로 확인하는 동안 브라우저가 쿠키를 버려
+    새로고침마다 로그인 화면이다(실측). 요청의 scheme 을 보고 붙인다."""
+    from app.main import app as fastapi_app
+    from tests.api.conftest import PASSWORD
+
+    body = {"email": admin.email, "password": PASSWORD}
+    plain = client.post("/api/auth/login", json=body).headers.get("set-cookie", "")
+    assert "refresh" in plain and "Secure" not in plain
+    with TestClient(fastapi_app, base_url="https://testserver") as https:
+        secure = https.post("/api/auth/login", json=body).headers.get("set-cookie", "")
+    assert "refresh" in secure and "Secure" in secure

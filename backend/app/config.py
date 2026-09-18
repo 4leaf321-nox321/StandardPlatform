@@ -139,8 +139,9 @@ class Settings(BaseSettings):
     같은 서버에 두 플랫폼을 띄웠을 때 이름이 같으면 한쪽 로그인이 다른 쪽 세션을
     덮어쓴다 — 번갈아 로그아웃되는 상태가 되고, 그 원인은 코드 어디에도 없다."""
     refresh_cookie_secure: bool = False
-    """사내망 http 배포가 기본이라 False. https 로 서비스하면 True 로 올린다.
-    (True 인데 http 로 접속하면 브라우저가 쿠키를 버려 로그인이 유지되지 않는다)"""
+    """False 면 **요청이 https 일 때만** Secure 를 붙인다(프록시 뒤는 TRUST_PROXY 가 판정).
+    True 는 강제 — http 로 접속하면 브라우저가 쿠키를 버려 로그인이 유지되지 않으므로, 메인
+    서버 없이 IP 로 확인하는 동안은 켜지 않는다."""
 
     @model_validator(mode="after")
     def _derive_from_slug(self) -> Settings:

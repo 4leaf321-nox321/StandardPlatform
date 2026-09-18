@@ -310,7 +310,7 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 | Claude 에서 MCP 가 421 `Invalid Host header` | 비-localhost 로 열었는데 `MCP_ALLOWED_HOSTS` 가 안 맞는다. 5b 참고 |
 | 이중화: postgres 가 안 뜨고 로그에 `pg-ha:` | 옛 주가 주로 뜨려 했다(guard). `sudo ./deploy.sh db-standby --from <지금 주>` |
 | 이중화: 화면이 `/<slug>/` 밑에서 API 404 | `.env` 에 `PUBLIC_PATH=/<slug>` 가 없거나 nginx 가 접두어를 안 뗐다. `sudo ./deploy.sh render` 로 설정을 본다 |
-| 이중화: 로그인이 유지되지 않는다 | `REFRESH_COOKIE_SECURE=true` 인데 http 로 들어왔거나, `TRUST_PROXY` 가 꺼져 앱이 https 인 줄 모른다 |
+| 이중화: 로그인이 유지되지 않는다(새로고침마다 로그인) | `.env` 에 `REFRESH_COOKIE_SECURE=true` 가 있는데 http 로 들어왔다 — 지우거나 false 로(앱이 https 일 때 스스로 붙인다). 또는 `TRUST_PROXY` 가 꺼져 앱이 https 인 줄 모른다 |
 | 이중화: B 의 `install` 이 「DB 는 대기입니다」 로 멈춘다 | `/data/…/.env` 가 없다 — A 에서 `install` 을 먼저 |
 | 이중화: 대기의 복제가 `끊김` | 주의 pg_hba 에 대기 IP 가 없거나 `/etc/pg-ha.replpass` 가 다르다. 주에서 `db-primary` 다시 → 대기에서 `db-standby` |
 
@@ -390,7 +390,7 @@ sudo ./deploy.sh status            # 앱 · 상대 앱 · 메인 서버 경유 h
 
 **메인 서버 쪽에 부탁할 것** — 조각에 그대로 있다: `X-Forwarded-Proto $scheme` (앱이 https 인 줄 알아야 쿠키가 산다). 접두어 `/<slug>/` 는 벗겨 넘기든 그대로 넘기든 앱이 둘 다 받는다. MCP 경로는 `proxy_buffering off` · 긴 타임아웃.
 
-**메인 서버가 아직 없어도** A · B 설치와 8.3 · 8.4 의 리허설은 전부 된다 — 화면은 `http://<A의 IP>:8040/<slug>/` 로 직접 본다(접두어를 붙여서). http 라 리프레시 쿠키(Secure)는 안 살아 12시간마다 다시 로그인하는 것만 다르다.
+**메인 서버가 아직 없어도** A · B 설치와 8.3 · 8.4 의 리허설은 전부 된다 — 화면은 `http://<A의 IP>:8040/<slug>/` 로 직접 본다(접두어를 붙여서). http 로 직접 보는 동안은 쿠키에 Secure 가 안 붙을 뿐 로그인 유지는 된다.
 
 DB VIP 가 있으면 A 의 첫 명령부터 `DB_VIP=<주소>` 를 함께 준다. **없으면** 앱은 A 의 IP 로 DB 에 붙고 자동 승격은 꺼진다 — 받은 뒤 「8.5」.
 
