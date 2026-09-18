@@ -6,10 +6,11 @@
  */
 
 import { useState } from 'react'
-import { ChevronDown, Plus, Settings2 } from 'lucide-react'
+import { ChevronDown, Eye, Plus, Settings2 } from 'lucide-react'
 
 import { PropertyEditDialog, DATA_TYPE_LABELS } from '@/modules/ontology/PropertyEditDialog'
 import { TypeEditDialog } from '@/modules/ontology/TypeEditDialog'
+import { TypeExamples } from '@/modules/ontology/TypeExamples'
 import { useOntology } from '@/modules/ontology/OntologyLayout'
 import { ontologyApi } from '@/modules/ontology/api'
 import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
@@ -46,11 +47,14 @@ export default function OntologyTypesPage() {
   const { schema, reload, setError } = useOntology()
   const [editing, setEditing] = useState<string | null>(null)
   const [openProperties, setOpenProperties] = useState<string | null>(null)
+  // 「객체 N」 을 누르면 그 타입의 예시가 아래에 선다 — 정의만으로는 칸의 뜻이 안 잡힌다.
+  const [openExamples, setOpenExamples] = useState<string | null>(null)
 
   const types = schema?.types ?? []
   const groups = schema?.groups ?? []
   const target = types.find((row) => row.slug === editing) ?? null
   const propertyTarget = types.find((row) => row.slug === openProperties) ?? null
+  const exampleTarget = types.find((row) => row.slug === openExamples) ?? null
 
   async function create(body: Record<string, unknown>) {
     setError(null)
@@ -92,7 +96,7 @@ export default function OntologyTypesPage() {
                   <TableHead>slug</TableHead>
                   <TableHead>분류</TableHead>
                   <TableHead>묶음</TableHead>
-                  <TableHead className="text-right">객체</TableHead>
+                  <TableHead className="text-right">객체 (예시)</TableHead>
                   {/* **열 이름이 「누르세요」 라고 말한다.** 숫자만 있으면 읽을 것으로
                       보이지 눌러 볼 것으로는 안 보인다. */}
                   <TableHead className="text-right">속성 정의</TableHead>
@@ -125,7 +129,21 @@ export default function OntologyTypesPage() {
                           「빠뜨렸나」 를 물을 자리가 없다. */}
                       {row.nav_group_slug ?? '사이드바에 없음'}
                     </TableCell>
-                    <TableCell className="text-right tabular-nums">{row.object_count}</TableCell>
+                    <TableCell className="text-right tabular-nums">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        aria-expanded={row.slug === openExamples}
+                        title="이 타입의 예시 객체"
+                        onClick={(event) => {
+                          event.stopPropagation()
+                          setOpenExamples(row.slug === openExamples ? null : row.slug)
+                        }}
+                      >
+                        <Eye className="mr-1 size-3.5" />
+                        {row.object_count}
+                      </Button>
+                    </TableCell>
                     <TableCell className="text-right">
                       {/* **눌러지는 것으로 보여야 누른다.** 행 클릭은 타입 설정이고
                           여기는 그 타입이 담는 값의 모양이라, 같은 표 안에서 두 길이
@@ -155,10 +173,21 @@ export default function OntologyTypesPage() {
             </Table>
           </div>
           <p className="text-muted-foreground text-xs">
-            <b>행</b>을 누르면 묶음·분류·식별자 정책을 고치거나 지웁니다. <b>「속성 정의」 단추</b>
-            를 누르면 그 타입이 담는 값의 모양이 아래에 열립니다.
+            <b>행</b>을 누르면 묶음·분류·식별자 정책을 고치거나 지웁니다. <b>「객체」 수</b>를
+            누르면 그 타입의 예시 객체가, <b>「속성 정의」 단추</b>를 누르면 그 타입이 담는 값의
+            모양이 아래에 열립니다.
           </p>
         </>
+      )}
+
+      {exampleTarget && (
+        <section className="space-y-3 rounded-md border p-4">
+          <h2 className="text-base font-semibold">
+            <TypeIcon name={exampleTarget.icon} className="mr-2 inline align-text-bottom" />
+            {exampleTarget.label} 의 예시
+          </h2>
+          <TypeExamples type={exampleTarget} />
+        </section>
       )}
 
       {propertyTarget && (
