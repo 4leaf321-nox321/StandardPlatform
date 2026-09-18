@@ -38,7 +38,7 @@ export default function OntologyGroupsPage() {
   const types = schema?.types ?? []
   const target = groups.find((row) => row.slug === editing) ?? null
 
-  /** 이 묶음에 걸린 타입 이름들. **삭제 전에 무엇이 걸렸는지 말하는 데 쓴다.** */
+  /** 이 묶음에 소속된 타입 이름들. **삭제 전에 무엇이 소속돼 있는지 말하는 데 쓴다.** */
   function attachedTo(group: NavGroupRow): string[] {
     return types.filter((row) => row.nav_group_slug === group.slug).map((row) => row.label)
   }
@@ -56,8 +56,8 @@ export default function OntologyGroupsPage() {
   return (
     <div className="space-y-4">
       <p className="text-muted-foreground text-sm">
-        「도메인」 처럼 화면을 묶는 이름입니다. 묶음이 없으면 타입을 만들어도 사이드바에
-        서지 않습니다.
+        「도메인」 처럼 화면을 묶는 이름입니다. 묶음이 없으면 타입을 만들어도 사이드바에 표시되지
+        않습니다.
       </p>
 
       <NewGroupForm onSubmit={create} />
@@ -65,7 +65,7 @@ export default function OntologyGroupsPage() {
       {groups.length === 0 ? (
         <EmptyState
           title="묶음이 없습니다"
-          hint="먼저 묶음 하나를 만드세요. 그다음 「타입」 에서 타입을 그 안에 넣습니다."
+          hint="먼저 묶음 하나를 만드세요. 그다음 「타입」 에서 타입을 그 안에 추가합니다."
         />
       ) : (
         <>
@@ -76,7 +76,7 @@ export default function OntologyGroupsPage() {
                   <TableHead>이름</TableHead>
                   <TableHead>slug</TableHead>
                   <TableHead>보이는 대상</TableHead>
-                  <TableHead className="text-right">걸린 타입</TableHead>
+                  <TableHead>소속 타입</TableHead>
                   <TableHead className="text-right">순서</TableHead>
                 </TableRow>
               </TableHeader>
@@ -95,8 +95,19 @@ export default function OntologyGroupsPage() {
                     </TableCell>
                     <TableCell className="font-mono text-xs">{group.slug}</TableCell>
                     <TableCell>{AUDIENCE_LABELS[group.audience] ?? group.audience}</TableCell>
-                    <TableCell className="text-right tabular-nums">
-                      {attachedTo(group).length}
+                    <TableCell>
+                      {/* 수만 보이면 「무엇이」 를 물을 자리가 없다 — 이름을 그대로 보인다. */}
+                      {attachedTo(group).length === 0 ? (
+                        <span className="text-muted-foreground text-xs">없음</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {attachedTo(group).map((label) => (
+                            <span key={label} className="rounded border px-1.5 py-0.5 text-xs">
+                              {label}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </TableCell>
                     <TableCell className="text-right tabular-nums">{group.sort_order}</TableCell>
                   </TableRow>
@@ -104,7 +115,7 @@ export default function OntologyGroupsPage() {
               </TableBody>
             </Table>
           </div>
-          <p className="text-muted-foreground text-xs">행을 누르면 고치거나 지웁니다.</p>
+          <p className="text-muted-foreground text-xs">행을 클릭하면 수정하거나 삭제합니다.</p>
         </>
       )}
 

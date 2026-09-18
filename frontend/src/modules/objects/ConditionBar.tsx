@@ -331,7 +331,7 @@ function ConditionEditor({ fields, onAdd, onNames }: ConditionEditorProps) {
       {needsValue && (
         <div className="space-y-1">
           <span className="text-muted-foreground text-xs">
-            값{multi ? ' — 여럿 고르면 「그 중 하나」' : ''}
+            값{multi ? ' — 여럿 선택하면 「그 중 하나」' : ''}
           </span>
           <ValueInput
             field={field}
@@ -477,7 +477,7 @@ function RefValueInput({
         ))}
         {rows.length === 0 && (
           <li className="text-muted-foreground px-1.5 py-1 text-xs">
-            {found.loading ? '찾는 중…' : '고를 것이 없습니다.'}
+            {found.loading ? '찾는 중…' : '선택할 것이 없습니다.'}
           </li>
         )}
       </ul>
@@ -525,7 +525,7 @@ function PlainValueInput({ field, multi, value, picked, onValue, onPicked }: Val
             </li>
           ))}
           {choices.length === 0 && (
-            <li className="text-muted-foreground px-1.5 py-1 text-xs">고를 것이 없습니다.</li>
+            <li className="text-muted-foreground px-1.5 py-1 text-xs">선택할 것이 없습니다.</li>
           )}
         </ul>
       )

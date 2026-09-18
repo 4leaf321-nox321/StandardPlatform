@@ -190,17 +190,17 @@ def _coerce_one(definition: PropertyDef, raw: Any) -> Any:
         if raw not in options:
             raise InvalidValue(
                 code("ONTOLOGY", 14),
-                f"{label}: {', '.join(options) or '(정의된 값 없음)'} 중에서 고르세요.",
+                f"{label}: {', '.join(options) or '(정의된 값 없음)'} 중에서 선택하세요.",
             )
         return raw
 
     if kind == "object_ref":
         if not isinstance(raw, str):
-            raise InvalidValue(code("ONTOLOGY", 15), f"{label}: 객체를 고르세요.")
+            raise InvalidValue(code("ONTOLOGY", 15), f"{label}: 객체를 선택하세요.")
         try:
             uuid.UUID(raw)
         except ValueError:
-            raise InvalidValue(code("ONTOLOGY", 15), f"{label}: 객체를 고르세요.") from None
+            raise InvalidValue(code("ONTOLOGY", 15), f"{label}: 객체를 선택하세요.") from None
         # **가리키는 객체가 실제로 있는지는 여기서 안 본다.** DB 를 알아야 하는
         # 일이라 objects 쪽 서비스가 본다 — 이 모듈은 세션을 모른다.
         return raw
@@ -231,7 +231,7 @@ def _check_pattern(definition: PropertyDef, raw: str) -> None:
         raise InvalidValue(
             code("ONTOLOGY", 33),
             f"{definition.label}: 속성 정의의 모양 규칙이 잘못됐습니다 ({caught}). "
-            "온톨로지 관리에서 고치세요.",
+            "온톨로지 관리에서 수정하세요.",
         ) from None
     if matched is None:
         raise InvalidValue(

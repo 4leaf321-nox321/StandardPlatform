@@ -122,7 +122,7 @@ export function RelationAddDialog({
           {usable.length === 0 ? (
             <p className="text-muted-foreground text-sm">
               이 타입에서 출발할 수 있는 관계 종류가 없습니다. 관리 → 온톨로지 → 관계 종류에서
-              만들거나, <b>허용 출발 타입</b>에 이 타입을 넣으세요.
+              만들거나, <b>허용 출발 타입</b>에 이 타입을 추가하세요.
             </p>
           ) : (
             <>
@@ -158,7 +158,7 @@ export function RelationAddDialog({
                   onQueryChange={found.setQuery}
                   value={target}
                   onChange={setTarget}
-                  placeholder="객체를 고르세요"
+                  placeholder="객체를 선택하세요"
                   searchPlaceholder="이름·식별자로 검색"
                   emptyText={
                     found.failed ? '고를 것을 불러오지 못했습니다' : '고를 객체가 없습니다'
@@ -166,8 +166,8 @@ export function RelationAddDialog({
                 />
                 <p className="text-muted-foreground text-xs">
                   {kind?.dst_type_slugs
-                    ? `${targetTypes.map((one) => one.label).join('·')} 만 고를 수 있습니다.`
-                    : '아무 타입이나 고를 수 있습니다.'}{' '}
+                    ? `${targetTypes.map((one) => one.label).join('·')} 만 선택할 수 있습니다.`
+                    : '아무 타입이나 선택할 수 있습니다.'}{' '}
                   남의 부서 것은 목록에 없습니다.
                 </p>
               </div>

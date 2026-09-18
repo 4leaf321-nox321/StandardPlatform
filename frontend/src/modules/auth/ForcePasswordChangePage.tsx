@@ -54,7 +54,7 @@ export default function ForcePasswordChangePage() {
         <div>
           <h1 className="text-xl font-semibold tracking-tight">비밀번호를 바꿔 주세요</h1>
           <p className="text-muted-foreground mt-1 text-sm">
-            임시 비밀번호로 로그인했습니다. 바꾸기 전에는 다른 화면을 쓸 수 없습니다.
+            임시 비밀번호로 로그인했습니다. 바꾸기 전에는 다른 화면을 사용할 수 없습니다.
           </p>
         </div>
 

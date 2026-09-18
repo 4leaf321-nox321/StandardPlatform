@@ -111,7 +111,7 @@ export function ObjectDeleteDialog({
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{object.label} 을(를) 지웁니다</DialogTitle>
+          <DialogTitle>{object.label} 을(를) 삭제합니다</DialogTitle>
           <DialogDescription>
             목록에서 사라집니다. <b>기록은 남습니다</b> — 첨부와 감사 기록이 밖에 있어서, 지운
             흔적까지 없애면 그것들이 무엇을 가리키는지 설명할 수 없게 됩니다.
@@ -193,7 +193,7 @@ export function ObjectDeleteDialog({
                   <span>
                     <span className="font-medium">그대로 두기</span>
                     <span className="text-muted-foreground block text-xs">
-                      지우지 않습니다. 위 목록에서 먼저 끊거나 고친 뒤 다시 옵니다.
+                      삭제하지 않습니다. 위 목록에서 먼저 해제하거나 수정한 뒤 다시 옵니다.
                     </span>
                   </span>
                 </label>

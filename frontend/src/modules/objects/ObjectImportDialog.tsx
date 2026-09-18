@@ -123,8 +123,8 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
         <DialogHeader>
           <DialogTitle>{type.label} 파일 가져오기</DialogTitle>
           <DialogDescription>
-            올리면 먼저 <strong>무엇이 바뀔지</strong>를 보여 줍니다. 한 행이라도 틀리면 아무것도 안
-            넣습니다 — 고쳐서 다시 올리세요.
+            업로드하면 먼저 <strong>무엇이 바뀔지</strong>를 보여 줍니다. 한 행이라도 틀리면
+            아무것도 추가하지 않습니다 — 수정해서 다시 업로드하세요.
           </DialogDescription>
         </DialogHeader>
 
@@ -147,7 +147,8 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
             <>
               <p>
                 열은 <code>key, label</code> 과 속성 키(또는 라벨). 같은 <code>key</code> 면 만들지
-                않고 고칩니다. <strong>파일에 없는 열은 안 건드리고, 빈 칸은 「안 보냄」</strong>
+                않고 수정합니다.{' '}
+                <strong>파일에 없는 열은 변경하지 않고, 빈 칸은 「안 보냄」</strong>
                 입니다 — 비우려면 <code>\null</code> 을 적습니다.
               </p>
               <p>
@@ -169,7 +170,7 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
                 onClick={() => download(() => objectApi.template(type.slug))}
               >
                 <Download className="mr-1 size-3" />
-                템플릿 받기
+                템플릿 다운로드
               </Button>
             )}
             <Button
@@ -184,7 +185,7 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
               }
             >
               <Download className="mr-1 size-3" />
-              지금 것 내려받기
+              현재 목록 다운로드
             </Button>
           </div>
         </div>
@@ -322,7 +323,7 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
               onClick={() => void run(true)}
               title={
                 !canApply
-                  ? '오류가 있으면 아무것도 안 넣습니다'
+                  ? '오류가 있으면 아무것도 추가하지 않습니다'
                   : nothingToDo
                     ? '바뀌는 것이 없습니다'
                     : undefined

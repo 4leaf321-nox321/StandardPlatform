@@ -152,7 +152,7 @@ export function AttachmentList({
               <Button
                 variant="ghost"
                 size="icon"
-                aria-label={`${one.original_name} 내려받기`}
+                aria-label={`${one.original_name} 다운로드`}
                 onClick={() => act(() => attachmentApi.download(one.id, one.original_name))}
               >
                 <Download className="size-4" />

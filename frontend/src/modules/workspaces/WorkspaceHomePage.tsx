@@ -171,8 +171,8 @@ export default function WorkspaceHomePage() {
           <h2 className="text-sm font-medium">이 아래가 부서의 자리입니다</h2>
           <p className="text-muted-foreground mt-1 mb-3 text-sm">
             {canAdd
-              ? '무엇을 띄울지 고르면 그 목록이 열립니다. 거기서 조건과 기준을 정하고 「홈에 올리기」 를 누르면 여기 섭니다.'
-              : '부서 관리자가 위젯을 올리면 여기 섭니다. 목록 화면의 「통계」 에서 올립니다.'}
+              ? '무엇을 표시할지 선택하면 그 목록이 열립니다. 거기서 조건과 기준을 정하고 「홈 게시」 를 클릭하면 여기에 표시됩니다.'
+              : '부서 관리자가 위젯을 올리면 여기에 표시됩니다. 목록 화면의 「통계」 에서 올립니다.'}
           </p>
           {canAdd && (
             <Button variant="outline" size="sm" onClick={() => setAdding(true)}>

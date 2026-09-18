@@ -52,7 +52,7 @@ const TYPES: [DataType, string][] = [
   ['date', '날짜'],
   ['datetime', '날짜·시각'],
   ['bool', '참/거짓'],
-  ['enum', '고를 값'],
+  ['enum', '선택할 값'],
   ['url', '주소'],
 ]
 
@@ -185,13 +185,13 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
           disabled={busy}
         >
           <FileUp className="mr-1 size-4" />
-          CSV·JSON 올리기
+          CSV·JSON 업로드
         </Button>
       </div>
       <p className="text-muted-foreground text-sm">
-        데이터 파일을 올리면 열을 보고 타입 정의를 제안합니다 — 역할(이름·식별자·속성)과 종류를 고친
-        뒤 적용하면 <b>타입이 생기고 행이 그 타입에 들어갑니다.</b> 애매한 열은 글자로 둡니다.
-        나중에 좁히는 것은 쉽고, 잘못 좁힌 것을 되돌리는 것은 어렵습니다.
+        데이터 파일을 업로드하면 열을 보고 타입 정의를 제안합니다 — 역할(이름·식별자·속성)과 종류를
+        수정한 뒤 적용하면 <b>타입이 생기고 행이 그 타입에 들어갑니다.</b> 애매한 열은 글자로
+        둡니다. 나중에 좁히는 것은 쉽고, 잘못 좁힌 것을 되돌리는 것은 어렵습니다.
       </p>
       {/* 붙여넣기 — 엑셀에서 복사하면 탭으로 온다. 사내 DRM 이 저장을 잠그면 이것이 유일한 길이다. */}
       <details className="text-sm">
@@ -221,7 +221,7 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
             }}
           >
             <Table2 className="mr-1 size-4" />
-            붙여 넣은 표 읽기
+            붙여넣기 표 분석
           </Button>
         </div>
       </details>

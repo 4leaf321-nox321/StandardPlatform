@@ -106,8 +106,8 @@ export default function ProfilePage() {
         <div>
           <h2 className="text-base font-semibold">액세스 토큰</h2>
           <p className="text-muted-foreground mt-1 text-sm">
-            스크립트나 연계 프로그램이 이 시스템의 API 를 부를 때 쓰는 자격입니다. 사람
-            세션과 달리 만료가 길고, 안 쓰면 지웁니다.
+            스크립트나 연계 프로그램이 이 시스템의 API 를 부를 때 사용하는 자격입니다. 사람 세션과
+            달리 만료가 길고, 안 쓰면 삭제합니다.
           </p>
         </div>
 
@@ -128,7 +128,7 @@ export default function ProfilePage() {
             <Input
               value={tokenName}
               onChange={(event) => setTokenName(event.target.value)}
-              placeholder="어디에 쓰는 토큰인지"
+              placeholder="토큰 용도 (예: 정제 스크립트)"
               className="max-w-sm"
               required
             />
@@ -155,7 +155,7 @@ export default function ProfilePage() {
           {/* **기본이 읽기뿐인 이유를 적는다.** 안 적으면 사람은 전부 켜 놓고
               「나중에 좁히자」 고 하는데, 나중은 오지 않는다. */}
           <p className="text-muted-foreground text-xs">
-            안 고르면 읽기만 됩니다. 필요한 것만 켜세요 — 계정 관리와 서버 설정은 어느
+            선택하지 않으면 읽기만 됩니다. 필요한 것만 켜세요 — 계정 관리와 서버 설정은 어느
             범위로도 열리지 않습니다.
           </p>
         </form>

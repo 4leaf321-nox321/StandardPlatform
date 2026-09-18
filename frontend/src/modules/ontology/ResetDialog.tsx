@@ -85,14 +85,14 @@ export function ResetDialog({ onClose, onDone }: Props) {
             온톨로지 초기화
           </DialogTitle>
           <DialogDescription>
-            정의와 <strong>그 정의에 매달린 데이터 전부</strong>를 지웁니다. 부서·계정·공지· 웹훅은
-            그대로 둡니다 — 그것들은 온톨로지가 아니라 이 설치 자체의 것입니다.
+            정의와 <strong>그 정의에 매달린 데이터 전부</strong>를 삭제합니다. 부서·계정·공지·
+            웹훅은 그대로 둡니다 — 그것들은 온톨로지가 아니라 이 설치 자체의 것입니다.
           </DialogDescription>
         </DialogHeader>
 
         {done ? (
           <div className="space-y-2 text-sm">
-            <p>비웠습니다. 이제 정의를 처음부터 세우거나, 가져오기로 한 번에 넣으면 됩니다.</p>
+            <p>비웠습니다. 이제 정의를 처음부터 구성하거나, 가져오기로 한 번에 추가하면 됩니다.</p>
             <p className="text-muted-foreground">
               직전의 정의는 아래 <strong>정의 이력</strong> 맨 위에 남아 있습니다. 되돌리면 정의는
               돌아오지만 <strong>객체와 관계는 안 돌아옵니다.</strong>

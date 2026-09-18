@@ -85,7 +85,7 @@ export default function WebhooksPage() {
               : 'text-destructive text-sm'
           }
         >
-          보내 보기: {lastTest.status === 'ok' ? '받았습니다' : '실패'}
+          시험 발송: {lastTest.status === 'ok' ? '받았습니다' : '실패'}
           {lastTest.response_code !== null && ` (HTTP ${lastTest.response_code})`}
           {lastTest.last_error && ` — ${lastTest.last_error}`}
         </p>
@@ -127,7 +127,7 @@ export default function WebhooksPage() {
                 <span className="ml-auto flex gap-1">
                   <Button size="sm" variant="outline" onClick={() => test(hook)}>
                     <Send className="mr-1 size-3.5" />
-                    보내 보기
+                    시험 발송
                   </Button>
                   <Button size="sm" variant="outline" onClick={() => setEditing(hook)}>
                     수정
@@ -171,8 +171,8 @@ export default function WebhooksPage() {
 
       <ConfirmDialog
         open={removing !== null}
-        title={`「${removing?.name}」 을 지웁니다`}
-        description="보낸 기록도 함께 사라집니다. 잠시 멈추려면 지우지 말고 「사용 안 함」 으로 두세요."
+        title={`「${removing?.name}」 을 삭제합니다`}
+        description="보낸 기록도 함께 사라집니다. 잠시 멈추려면 삭제하지 말고 「사용 안 함」 으로 두세요."
         confirmLabel="삭제"
         destructive
         onConfirm={async () => {
@@ -247,7 +247,7 @@ function Deliveries({ hook }: { hook: Webhook }) {
             </button>
             {one.status === 'failed' && (
               <Button size="sm" variant="outline" className="h-6" onClick={() => retry(one)}>
-                다시 보내기
+                재발송
               </Button>
             )}
             {shown === one.id && (
@@ -343,7 +343,7 @@ function EditDialog({
               onChange={(event) => setSecret(event.target.value)}
             />
             <p className="text-muted-foreground text-xs">
-              받는 쪽은 <code>X-Signature-256: sha256=HMAC(비밀, 본문)</code> 으로 확인합니다.
+              수신 측은 <code>X-Signature-256: sha256=HMAC(비밀, 본문)</code> 으로 확인합니다.
             </p>
           </div>
           <div className="space-y-1.5">
@@ -402,7 +402,7 @@ function EditDialog({
           </div>
           {typeSlugs.length > 0 && (
             <div className="space-y-1.5">
-              <Label>타입 (비우면 전부)</Label>
+              <Label>타입 (비워 두면 전체)</Label>
               <ul className="grid grid-cols-2 gap-1">
                 {typeSlugs.map((one) => (
                   <li key={one.slug}>

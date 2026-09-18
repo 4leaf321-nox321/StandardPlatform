@@ -154,7 +154,7 @@ function OneValue({
         disabled={disabled}
       >
         <SelectTrigger>
-          <SelectValue placeholder="고르세요" />
+          <SelectValue placeholder="선택하세요" />
         </SelectTrigger>
         <SelectContent>
           {options.map((option) => (
@@ -208,7 +208,7 @@ function ObjectRefPicker({
   if (!typeSlug) {
     return (
       <p className="text-muted-foreground text-sm">
-        가리킬 타입이 정해져 있지 않습니다. 속성 정의에서 대상 타입을 고르세요.
+        가리킬 타입이 정해져 있지 않습니다. 속성 정의에서 대상 타입을 선택하세요.
       </p>
     )
   }
@@ -225,7 +225,7 @@ function ObjectRefPicker({
       onQueryChange={found.setQuery}
       value={value}
       onChange={onChange}
-      placeholder="객체를 고르세요"
+      placeholder="객체를 선택하세요"
       searchPlaceholder="이름·식별자로 검색"
       emptyText="맞는 객체가 없습니다"
     />
@@ -365,7 +365,7 @@ export function PropertyFields({ defs, values, onChange, disabled, view }: Props
                화면에서 미리 올릴 자리가 없다. 빈 칸을 놓아 두면 「올렸는데 안
                붙었다」 가 되므로 무엇을 해야 하는지 적는다. */
                   <p className="text-muted-foreground text-sm">
-                    저장한 뒤 상세 화면에서 파일을 올립니다.
+                    저장한 뒤 상세 화면에서 파일을 업로드합니다.
                   </p>
                 ) : def.multi ? (
                   <ManyValues

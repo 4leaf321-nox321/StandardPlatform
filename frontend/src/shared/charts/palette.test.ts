@@ -18,14 +18,14 @@ import {
 } from '@/shared/charts/palette'
 
 describe('색', () => {
-  it('자리로 고르면 팔레트를 돌아가며 쓴다', () => {
+  it('자리로 선택하면 팔레트를 돌아가며 쓴다', () => {
     expect(colorAt(0)).toBe(SERIES_COLORS[0])
     expect(colorAt(SERIES_COLORS.length)).toBe(SERIES_COLORS[0])
     // 음수가 와도 팔레트 안이다 — 자리 계산이 어긋나도 그림이 색 없이 그려지지 않는다.
     expect(SERIES_COLORS).toContain(colorAt(-3))
   })
 
-  it('이름으로 고르면 언제나 같은 색이다', () => {
+  it('이름으로 선택하면 언제나 같은 색이다', () => {
     // **자리로만 주면** 「A 등급」 이 필터 전에는 첫째라 파랑, 거른 뒤에는 둘째라
     // 빨강이 된다. 사람은 그 변화를 데이터가 바뀐 것으로 읽는다.
     expect(colorFor('A 등급')).toBe(colorFor('A 등급'))

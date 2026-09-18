@@ -197,7 +197,7 @@ export default function DataSourcesPage() {
 
       <ConfirmDialog
         open={removing !== null}
-        title={`「${removing?.name}」 을 지웁니다`}
+        title={`「${removing?.name}」 을 삭제합니다`}
         description="가져온 객체는 남습니다. 그 객체에 남긴 바깥 식별자도 남아서, 같은 slug 로 다시 만들면 이어서 찾습니다."
         confirmLabel="삭제"
         destructive
@@ -321,7 +321,7 @@ function SyncDialog({
               .filter(([, n]) => n > 0)
               .map(([k, n]) => `${COUNT_LABEL[k] ?? k} ${n}`)
               .join(' · ')}
-            {!result.applied && !ok && ' — 오류가 있어 아무것도 안 넣습니다.'}
+            {!result.applied && !ok && ' — 오류가 있어 아무것도 추가하지 않습니다.'}
           </DialogDescription>
         </DialogHeader>
         {error && <ErrorNotice error={error} />}
@@ -349,8 +349,8 @@ function SyncDialog({
         )}
         {!result.applied && ok && (
           <p className="text-muted-foreground text-sm">
-            같은 객체(바깥 식별자·식별자·별칭·이름 순)는 고치고, 없으면 새로 만듭니다. 빈 칸은
-            건드리지 않습니다.
+            같은 객체(바깥 식별자·식별자·별칭·이름 순)는 수정하고, 없으면 새로 만듭니다. 빈 칸은
+            변경하지 않습니다.
           </p>
         )}
         <DialogFooter>
@@ -829,7 +829,7 @@ function EditDialog({
               </div>
               <p className="text-muted-foreground text-xs">
                 이 열의 값이 그 객체에 남아, 다음 동기화가 같은 객체를 다시 찾습니다 — 우리 쪽
-                이름·식별자를 고쳐도 안 끊깁니다.
+                이름·식별자를 수정해도 유지됩니다.
               </p>
             </div>
 
@@ -925,7 +925,7 @@ function EditDialog({
                 </Button>
               )}
               <p className="text-muted-foreground text-xs">
-                값 대응표에 없는 값이 오면 그 행은 오류입니다(조용히 통과시키면 고를 값이
+                값 대응표에 없는 값이 오면 그 행은 오류입니다(조용히 통과시키면 선택할 값이
                 오염됩니다). 참조 속성은 상대의 식별자·별칭·이름으로 풀리고, 못 풀면 오류 행입니다.
               </p>
             </div>
@@ -1003,7 +1003,7 @@ function EditDialog({
                   checked={deprecate}
                   onChange={(event) => setDeprecate(event.target.checked)}
                 />
-                바깥에서 사라진 행은 「사용 중지」 로 표시 (기본은 건드리지 않음)
+                바깥에서 사라진 행은 「사용 중지」 로 표시 (기본은 변경하지 않음)
               </label>
               <label className="flex cursor-pointer items-center gap-2 text-sm">
                 <input

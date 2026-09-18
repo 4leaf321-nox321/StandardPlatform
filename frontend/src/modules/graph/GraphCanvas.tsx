@@ -853,7 +853,7 @@ export function GraphCanvas({
                         className={`hover:text-foreground flex w-full items-center gap-1.5 rounded px-0.5 text-left ${
                           active ? 'text-foreground font-medium' : ''
                         }`}
-                        title="이 범주만 또렷하게 (다시 누르면 해제)"
+                        title="이 범주만 강조 (다시 클릭하면 해제)"
                         onClick={() => onLegendClick(item.key!)}
                       >
                         {swatch}

@@ -86,10 +86,10 @@ export function PinToHomeDialog({
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>부서 홈에 올리기</DialogTitle>
+          <DialogTitle>부서 홈 게시</DialogTitle>
           <DialogDescription>
             지금 조건 {query.conditions.length}개와 {summary ? '통계 기준을' : '검색 조건을'}{' '}
-            <strong>{workspaceSlug}</strong> 부서 뷰로 저장하고 그 부서 홈에 올립니다. 부서 사람
+            <strong>{workspaceSlug}</strong> 부서 뷰로 저장하고 그 부서 홈에 게시합니다. 부서 사람
             모두가 같은 것을 봅니다.
           </DialogDescription>
         </DialogHeader>
@@ -100,7 +100,7 @@ export function PinToHomeDialog({
             <Link to={`/w/${workspaceSlug}`} className="underline">
               홈에서 보기
             </Link>
-            . 내리는 것은 목록의 「뷰」 메뉴에서 합니다.
+            . 게시 해제는 목록의 「뷰」 메뉴에서 합니다.
           </p>
         ) : (
           <form
@@ -140,7 +140,7 @@ export function PinToHomeDialog({
                 </div>
                 <p className="text-muted-foreground text-xs">
                   「미승인 12건」 은 수가 낫고, 「최근 들어온 것」 은 이름이 보여야 합니다. 그림으로
-                  올리려면 닫고 통계 기준을 고른 뒤 다시 누르세요.
+                  게시하려면 닫고 통계 기준을 선택한 뒤 다시 클릭하세요.
                 </p>
               </div>
             )}
@@ -151,7 +151,7 @@ export function PinToHomeDialog({
               </Button>
               <Button type="submit" disabled={busy || !name.trim()}>
                 <House className="mr-1 size-4" />
-                {busy ? '올리는 중…' : '홈에 올리기'}
+                {busy ? '올리는 중…' : '홈 게시'}
               </Button>
             </DialogFooter>
           </form>

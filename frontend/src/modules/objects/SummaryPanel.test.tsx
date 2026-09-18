@@ -134,7 +134,7 @@ describe('통계', () => {
     expect(screen.getByText(/7종류 35건은 접혔습니다/)).toBeInTheDocument()
   })
 
-  it('막대를 누르면 **원래 값**으로 거른다 — 빈 칸은 거를 값이 없다', async () => {
+  it('막대를 클릭하면 **원래 값**으로 거른다 — 빈 칸은 거를 값이 없다', async () => {
     const { onPick } = await panel(BASE)
     await userEvent.click(screen.getByRole('button', { name: 'A' }))
     expect(onPick).toHaveBeenCalledWith('properties.grade', 'A')
@@ -167,11 +167,11 @@ describe('통계', () => {
   })
 })
 
-describe('홈에 올리기', () => {
+describe('홈 게시', () => {
   it('부서 관리자에게는 단추가, 아닌 사람에게는 누가 올리는지가 보인다', async () => {
     // **단추만 없으면 그 기능이 있는 줄도 모른다.**
     await panel(BASE)
-    expect(screen.getByRole('button', { name: '홈에 올리기' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '홈 게시' })).toBeInTheDocument()
 
     cleanup()
     auth.user = {
@@ -179,8 +179,8 @@ describe('홈에 올리기', () => {
       memberships: [{ slug: 'cae', role: 'member', name: '해석팀', path: '해석팀' }],
     }
     await panel(BASE)
-    expect(screen.queryByRole('button', { name: '홈에 올리기' })).not.toBeInTheDocument()
-    expect(screen.getByText('부서 관리자가 홈에 올립니다')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '홈 게시' })).not.toBeInTheDocument()
+    expect(screen.getByText('부서 관리자가 홈에 게시합니다')).toBeInTheDocument()
   })
 
   it('한 번에 부서 뷰로 저장하고 홈에 올린다', async () => {
@@ -192,12 +192,12 @@ describe('홈에 올리기', () => {
     }
     viewApi.create.mockResolvedValue({ id: 'v9' })
     await panel(BASE)
-    await userEvent.click(screen.getByRole('button', { name: '홈에 올리기' }))
+    await userEvent.click(screen.getByRole('button', { name: '홈 게시' }))
 
     // 이름이 미리 채워진다 — 무엇을 올리는지 사람이 이미 안다.
     const name = await screen.findByPlaceholderText(/홈에 뜰 이름/)
     expect(name).toHaveValue('등급별 건수')
-    await userEvent.click(screen.getByRole('button', { name: /홈에 올리기/ }))
+    await userEvent.click(screen.getByRole('button', { name: /홈 게시/ }))
 
     await waitFor(() =>
       expect(viewApi.create).toHaveBeenCalledWith(
@@ -253,7 +253,7 @@ describe('세부 기준', () => {
     expect(screen.getByText(/세부 기준 값 4가지는 빠졌습니다/)).toBeInTheDocument()
   })
 
-  it('세부 기준 없이 히트맵을 고르면 세부 기준이 필요하다고 말한다', async () => {
+  it('세부 기준 없이 히트맵을 선택하면 세부 기준이 필요하다고 말한다', async () => {
     // 세부 기준 없는 히트맵은 색칠한 막대 하나일 뿐이다.
     const { onSettings } = await panel(BASE)
     await userEvent.click(screen.getByRole('button', { name: '히트맵' }))
@@ -270,7 +270,7 @@ describe('개별 순위', () => {
 
   it('차례를 뒤집으면 「가장 낮은 것」 을 찾는다', async () => {
     const { onSettings } = await panel(BASE)
-    await userEvent.click(screen.getByRole('button', { name: '차례 바꾸기' }))
+    await userEvent.click(screen.getByRole('button', { name: '순서 변경' }))
     expect(onSettings).toHaveBeenCalledWith(expect.objectContaining({ order: 'asc' }))
   })
 
@@ -330,7 +330,7 @@ describe('개별 순위', () => {
     expect(screen.getAllByRole('option', { name: '개발사 › 국가' })).toHaveLength(2)
   })
 
-  it('이어진 것 너머의 기준도 막대를 누르면 그 주소로 거른다', async () => {
+  it('이어진 것 너머의 기준도 막대를 클릭하면 그 주소로 거른다', async () => {
     const { onPick } = await panel({ ...BASE, group_field: 'ref.vendor.country' })
     await userEvent.click(screen.getByRole('button', { name: 'A' }))
     expect(onPick).toHaveBeenCalledWith('ref.vendor.country', 'A')

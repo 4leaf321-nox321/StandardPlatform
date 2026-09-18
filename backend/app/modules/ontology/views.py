@@ -87,7 +87,7 @@ def validate_list_view(spec: dict[str, Any], defs: list[PropertyDef]) -> dict[st
     for field in spec.get("columns") or []:
         _require_field(field, keys, what="목록의 열")
     for field in spec.get("search") or []:
-        _require_field(field, keys, what="검색이 훑을 자리")
+        _require_field(field, keys, what="검색 대상 속성")
     for field in spec.get("filters") or []:
         _require_field(field, keys, what="거르기 칸")
 
@@ -104,7 +104,7 @@ def validate_list_view(spec: dict[str, Any], defs: list[PropertyDef]) -> dict[st
         if not tree.get("relation"):
             raise InvalidValue(
                 code("ONTOLOGY", 55),
-                "트리를 세우려면 어느 관계로 그릴지 골라야 합니다 — "
+                "트리를 표시하려면 어느 관계로 그릴지 선택해야 합니다 — "
                 "재귀로 펼치는 관계가 둘 이상일 수 있어서, 아무거나 그리면 그 트리는 "
                 "무엇을 보여 주는지 말할 수 없습니다.",
             )

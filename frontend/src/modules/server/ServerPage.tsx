@@ -40,16 +40,16 @@ export default function ServerPage() {
       {one.schema_behind && (
         <div className="border-destructive/40 bg-destructive/5 text-destructive rounded-md border p-3 text-sm">
           데이터베이스가 코드보다 뒤처져 있습니다 ({one.schema_current} → {one.schema_head}).
-          서버에서 <span className="font-mono">alembic upgrade head</span> 를 돌리세요.
-          그전까지는 새 칸을 읽는 화면이 오류를 냅니다.
+          서버에서 <span className="font-mono">alembic upgrade head</span> 를 실행하세요. 그전까지는
+          새 칸을 읽는 화면이 오류를 냅니다.
         </div>
       )}
 
       {nameMismatch && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
           화면은 <span className="font-mono">{APP_NAME}</span> 인데 서버는{' '}
-          <span className="font-mono">{one.app_name}</span> 이라고 합니다. 화면이 옛 index.html
-          을 들고 있거나(새로 고침), 개발 서버가 다른 백엔드에 붙어 있을 수 있습니다.
+          <span className="font-mono">{one.app_name}</span> 이라고 합니다. 화면이 옛 index.html 을
+          들고 있거나(새로 고침), 개발 서버가 다른 백엔드에 붙어 있을 수 있습니다.
         </div>
       )}
 
@@ -127,8 +127,8 @@ export default function ServerPage() {
           <div>
             <dt className="text-muted-foreground text-xs">디스크</dt>
             <dd className="text-sm">
-              {gib(one.disk.free_bytes)} 남음 / {gib(one.disk.total_bytes)} (
-              {one.disk.used_percent}% 사용)
+              {gib(one.disk.free_bytes)} 남음 / {gib(one.disk.total_bytes)} ({one.disk.used_percent}
+              % 사용)
             </dd>
           </div>
         )}

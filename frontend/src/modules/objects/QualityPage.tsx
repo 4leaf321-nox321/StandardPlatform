@@ -30,8 +30,8 @@ const KIND_ORDER: QualityFinding['kind'][] = [
 
 const KIND_HINT: Record<QualityFinding['kind'], string> = {
   broken_ref:
-    '가리키던 객체가 지워졌습니다. 그 칸을 비우거나 다른 것으로 바꾸세요 — 화면에는 뜻 모를 값으로 뜹니다.',
-  missing_required: '필수가 된 뒤에도 안 채운 옛 객체입니다. 고칠 때 거절되니 먼저 채우세요.',
+    '가리키던 객체가 지워졌습니다. 그 칸을 비우거나 다른 것으로 바꾸세요 — 화면에는 뜻 모를 값으로 표시됩니다.',
+  missing_required: '필수가 된 뒤에도 안 채운 옛 객체입니다. 수정할 때 거절되니 먼저 채우세요.',
   duplicate:
     '이름을 정규화(공백·대소문자·전각)하면 같은 것들입니다. 같은 것이면 한쪽 상세에서 「병합」 로 하나로.',
   orphan:
@@ -70,7 +70,7 @@ export default function QualityPage() {
       {report.error && <ErrorNotice error={report.error} />}
       {report.data && total === 0 && (
         <EmptyState
-          title="걸린 것이 없습니다"
+          title="해당 항목이 없습니다"
           hint="필수값이 빈 것, 관계 없는 것, 지워진 것을 가리키는 칸, 이름이 같은 것 — 넷 다 없습니다."
         />
       )}

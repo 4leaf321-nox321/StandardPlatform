@@ -264,7 +264,7 @@ class Dispatcher:
                 kind=notifications.WEBHOOK_FAILED,
                 title=f"웹훅 「{hook.name}」 보내기를 포기했습니다",
                 body=f"{MAX_ATTEMPTS}번 다 실패했습니다. 받는 쪽이 지금 못 받고 "
-                "있습니다 — 고친 뒤 웹훅 화면에서 「다시 보내기」 를 누르세요.",
+                "있습니다 — 수정한 뒤 웹훅 화면에서 「재발송」 을 클릭하세요.",
                 link="/admin/webhooks",
             )
         if gave_up:

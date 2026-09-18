@@ -549,7 +549,7 @@ def linked_fields(
 def object_tree(
     type_slug: str,
     parent: uuid.UUID | None = Query(default=None, description="펼칠 노드. 없으면 뿌리"),
-    orphans: bool = Query(default=False, description="어디에도 안 걸린 것만"),
+    orphans: bool = Query(default=False, description="어디에도 연결되지 않은 것만"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> TreeOut:
@@ -644,7 +644,7 @@ def _filtered(
             raise Conflict(
                 code("OBJECTS", 33),
                 f"{object_type.label}에는 트리가 정의돼 있지 않습니다. "
-                "타입의 「목록 화면」 에서 트리로 쓸 관계를 고르세요.",
+                "타입의 「목록 화면」 에서 트리로 사용할 관계를 선택하세요.",
             )
         wanted = [under]
         if deep:
@@ -1866,7 +1866,7 @@ def delete_object(
     require_owner_edit(
         db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 17)
     )
-    managed.require_objects_editable(object_type, what="지우지")
+    managed.require_objects_editable(object_type, what="삭제하지")
     if mode == "detach":
         lifecycle.delete_detaching(db, user, row, object_type)
     else:

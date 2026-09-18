@@ -42,8 +42,8 @@ export function AddWidgetDialog({ onClose }: { onClose: () => void }) {
         <DialogHeader>
           <DialogTitle>홈에 위젯 추가</DialogTitle>
           <DialogDescription>
-            무엇을 띄울지 고르면 그 목록이 <strong>통계를 펼친 채로</strong> 열립니다. 거기서 조건과
-            기준을 정하고 「홈에 올리기」 를 누르면 여기 섭니다.
+            무엇을 표시할지 선택하면 그 목록이 <strong>통계를 펼친 채로</strong> 열립니다. 거기서
+            조건과 기준을 정하고 「홈 게시」 를 클릭하면 여기에 표시됩니다.
           </DialogDescription>
         </DialogHeader>
 

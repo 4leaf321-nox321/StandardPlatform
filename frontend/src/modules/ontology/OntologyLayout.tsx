@@ -107,7 +107,7 @@ export default function OntologyLayout() {
       <div className="min-w-0 flex-1">
         <PageHeader
           title="온톨로지"
-          description="타입을 정의하면 사이드바와 화면이 생깁니다. 코드를 고치지 않습니다."
+          description="타입을 정의하면 사이드바와 화면이 생깁니다. 코드를 수정하지 않습니다."
         />
 
         {resource.error && <ErrorNotice error={resource.error} />}

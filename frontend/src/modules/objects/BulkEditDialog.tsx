@@ -104,7 +104,7 @@ export function BulkEditDialog({
     <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>고른 {ids.length}건의 한 칸 바꾸기</DialogTitle>
+          <DialogTitle>고른 {ids.length}건의 속성 변경</DialogTitle>
           <DialogDescription>
             바꿀 칸과 값을 정하고 <strong>먼저 계획을 봅니다</strong>. 이미 그 값인 것은 「그대로」
             고, 고칠 수 없는 것은 이유가 붙습니다.
@@ -149,7 +149,7 @@ export function BulkEditDialog({
             ) : field === 'workspace' ? (
               <Select value={String(value)} onValueChange={setValue}>
                 <SelectTrigger id="bulk-value">
-                  <SelectValue placeholder="부서를 고르세요" />
+                  <SelectValue placeholder="부서를 선택하세요" />
                 </SelectTrigger>
                 <SelectContent>
                   {workspaces.map((one) => (

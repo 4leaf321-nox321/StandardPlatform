@@ -52,7 +52,7 @@ export default function AuditPage() {
     <div className="space-y-6">
       <PageHeader
         title="변경 이력"
-        description="되돌릴 수 없거나 권한이 실린 변경만 남습니다. 여기서는 고칠 수 없습니다."
+        description="되돌릴 수 없거나 권한이 실린 변경만 남습니다. 여기서는 수정할 수 없습니다."
       />
 
       <ErrorNotice error={page.error} />

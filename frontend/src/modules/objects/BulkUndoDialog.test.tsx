@@ -52,7 +52,7 @@ describe('같이 바뀐 것 한 번에 복원', () => {
     expect(screen.getByText(/다시 바뀌었습니다.*\(지금: C\)/)).toBeInTheDocument()
   })
 
-  it('누르면 적용하고 목록을 다시 읽게 한다', async () => {
+  it('클릭하면 적용하고 목록을 다시 읽게 한다', async () => {
     objectApi.bulkEditUndo
       .mockResolvedValueOnce(PLAN)
       .mockResolvedValueOnce({ ...PLAN, applied: true, batch_id: 'batch-2' })

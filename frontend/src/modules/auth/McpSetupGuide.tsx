@@ -95,9 +95,9 @@ export function McpSetupGuide({ token }: { token: string | null }) {
   return (
     <section className="space-y-3 rounded-md border p-4">
       <div>
-        <h3 className="text-sm font-semibold">AI 도구에 넣기</h3>
+        <h3 className="text-sm font-semibold">AI 도구 연결</h3>
         <p className="text-muted-foreground mt-1 text-xs">
-          쓰는 도구의 탭을 골라 복사하세요. 네 도구 모두 <b>Node.js</b> 가 있어야 합니다 —{' '}
+          사용하는 도구의 탭을 선택해 복사하세요. 네 도구 모두 <b>Node.js</b> 가 있어야 합니다 —{' '}
           <span className="font-mono">npx mcp-remote</span> 다리로 붙습니다. MCP 주소:{' '}
           <span className="font-mono">{url}</span>
         </p>
@@ -118,8 +118,7 @@ export function McpSetupGuide({ token }: { token: string | null }) {
         </TabsList>
         <TabsContent value="claude-code" className="space-y-2">
           <p className="text-muted-foreground text-xs">
-            터미널에 붙여 넣으면 등록됩니다. 확인:{' '}
-            <span className="font-mono">claude mcp list</span>
+            터미널에 붙여넣으면 등록됩니다. 확인: <span className="font-mono">claude mcp list</span>
           </p>
           <Snippet text={s.claudeCode} label="명령" />
         </TabsContent>
@@ -127,7 +126,7 @@ export function McpSetupGuide({ token }: { token: string | null }) {
           <p className="text-muted-foreground text-xs">
             설정 → 개발자 → 「설정 편집」으로{' '}
             <span className="font-mono">claude_desktop_config.json</span> 을 열고, 아래 항목을{' '}
-            <span className="font-mono">{'"mcpServers": { }'}</span> 중괄호 안에 붙여 넣은 뒤 Claude
+            <span className="font-mono">{'"mcpServers": { }'}</span> 중괄호 안에 붙여넣은 뒤 Claude
             Desktop 을 완전히 종료했다가 다시 켭니다. 다른 항목이 이미 있으면 사이에 쉼표.
           </p>
           <Snippet text={s.desktop} label="항목" />
@@ -135,7 +134,7 @@ export function McpSetupGuide({ token }: { token: string | null }) {
         <TabsContent value="gemini" className="space-y-2">
           <p className="text-muted-foreground text-xs">
             <span className="font-mono">~/.gemini/settings.json</span> 의{' '}
-            <span className="font-mono">{'"mcpServers": { }'}</span> 안에 붙여 넣습니다(Claude
+            <span className="font-mono">{'"mcpServers": { }'}</span> 안에 붙여넣습니다(Claude
             Desktop 과 같은 모양). 확인: <span className="font-mono">gemini</span> 실행 후{' '}
             <span className="font-mono">/mcp</span>
           </p>
@@ -143,7 +142,7 @@ export function McpSetupGuide({ token }: { token: string | null }) {
         </TabsContent>
         <TabsContent value="codex" className="space-y-2">
           <p className="text-muted-foreground text-xs">
-            <span className="font-mono">~/.codex/config.toml</span> 끝에 붙여 넣습니다.
+            <span className="font-mono">~/.codex/config.toml</span> 끝에 붙여넣습니다.
           </p>
           <Snippet text={s.codex} label="설정" />
         </TabsContent>

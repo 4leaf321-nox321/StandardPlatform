@@ -69,7 +69,7 @@ export function SearchablePicker({
   options,
   value,
   onChange,
-  placeholder = '고르세요',
+  placeholder = '선택하세요',
   searchPlaceholder = '이름으로 검색',
   emptyText = '맞는 것이 없습니다',
   id,

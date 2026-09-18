@@ -504,7 +504,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
             variant="outline"
             size="sm"
             title={settings.order === 'desc' ? '큰 값부터' : '작은 값부터'}
-            aria-label="차례 바꾸기"
+            aria-label="순서 변경"
             onClick={() => patch({ order: settings.order === 'desc' ? 'asc' : 'desc' })}
           >
             <ArrowUpDown className="mr-1 size-4" />
@@ -554,11 +554,10 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
               적는다 — 단추만 없으면 그 기능이 있는 줄도 모른다. */}
           {canPin ? (
             <Button variant="outline" size="sm" onClick={() => setPinning(true)}>
-              <House className="mr-1 size-4" />
-              홈에 올리기
+              <House className="mr-1 size-4" />홈 게시
             </Button>
           ) : (
-            <span className="text-muted-foreground text-xs">부서 관리자가 홈에 올립니다</span>
+            <span className="text-muted-foreground text-xs">부서 관리자가 홈에 게시합니다</span>
           )}
           <Button variant="ghost" size="icon" aria-label="통계 닫기" onClick={onClose}>
             <X className="size-4" />
@@ -602,7 +601,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
                둘 다 집계로는 안 보이는 것이다. */
             points === null ? (
               <p className="text-muted-foreground py-8 text-center text-sm">
-                숫자 칸을 고르면 그립니다.
+                숫자 칸을 선택하면 그립니다.
               </p>
             ) : points.rows.length === 0 ? (
               <p className="text-muted-foreground py-8 text-center text-sm">
@@ -694,9 +693,9 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
               </>
             )}
             {data.metric !== 'count' && ' · 숫자로 안 읽히는 값은 셈에서 빠집니다'}
-            {canFilter && kind !== 'heatmap' && ' · 막대를 누르면 그것만 걸러집니다'}
+            {canFilter && kind !== 'heatmap' && ' · 막대를 클릭하면 그것만 걸러집니다'}
             {kind === 'heatmap' && data.splits.length === 0 && (
-              <> · 히트맵은 세부 기준이 필요합니다 — 「세부 기준」 을 고르세요</>
+              <> · 히트맵은 세부 기준이 필요합니다 — 「세부 기준」 을 선택하세요</>
             )}
             {data.group_field === 'label' && data.metric === 'count' && (
               <>

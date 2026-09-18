@@ -102,9 +102,7 @@ export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: 
       <Dialog open onOpenChange={(open) => !open && onClose()}>
         <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>
-              {editing ? `${relation?.label} 수정` : '관계 종류 생성'}
-            </DialogTitle>
+            <DialogTitle>{editing ? `${relation?.label} 수정` : '관계 종류 생성'}</DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
@@ -123,8 +121,8 @@ export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: 
               />
               {editing && (
                 <p className="text-muted-foreground text-xs">
-                  <b>바꿀 수 없습니다.</b> 이미 맺힌 관계가 이 값을 문자열로 들고 있어서,
-                  바꾸면 그 관계들이 통째로 고아가 됩니다.
+                  <b>바꿀 수 없습니다.</b> 이미 맺힌 관계가 이 값을 문자열로 들고 있어서, 바꾸면 그
+                  관계들이 통째로 고아가 됩니다.
                 </p>
               )}
             </div>
@@ -150,9 +148,9 @@ export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: 
               </div>
             </div>
             <p className="text-muted-foreground text-xs">
-              「A가 B에 <b>속함</b>」이면 B쪽 화면에는 「B가 A를 <b>포함</b>」으로 뜹니다.
-              <b> 역방향 이름을 안 적으면</b> 도착 쪽 화면이 말을 못 만들어 slug 를 그대로
-              보여 줍니다.
+              「A가 B에 <b>속함</b>」이면 B쪽 화면에는 「B가 A를 <b>포함</b>」으로 표시됩니다.
+              <b> 역방향 이름을 안 적으면</b> 도착 쪽 화면이 말을 못 만들어 slug 를 그대로 보여
+              줍니다.
             </p>
 
             <div className="space-y-1.5">
@@ -179,9 +177,8 @@ export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: 
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-xs">
-                {CARDINALITY_HINTS[cardinality as Cardinality]}{' '}
-                <b>나중에 조이기는 어렵습니다</b> — 이미 어긴 데이터가 쌓여 있으면 켤 수가
-                없습니다.
+                {CARDINALITY_HINTS[cardinality as Cardinality]} <b>나중에 조이기는 어렵습니다</b> —
+                이미 어긴 데이터가 쌓여 있으면 켤 수가 없습니다.
               </p>
             </div>
 
@@ -282,12 +279,11 @@ export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: 
         <ConfirmDialog
           open
           destructive
-          title={`${relation.label} 관계 종류를 지웁니다`}
+          title={`${relation.label} 관계 종류를 삭제합니다`}
           description={
             <>
-              이 종류의 <b>관계 속성 정의도 함께 사라집니다</b> — 안 지우면 같은 slug 로 다시
-              만들 때 옛 속성이 되살아납니다. 맺힌 관계를 막는 검사는 관계 맺기(2-b)가
-              생기면 붙습니다.
+              이 종류의 <b>관계 속성 정의도 함께 사라집니다</b> — 안 삭제하면 같은 slug 로 다시 만들
+              때 옛 속성이 되살아납니다. 맺힌 관계를 막는 검사는 관계 맺기(2-b)가 생기면 붙습니다.
             </>
           }
           confirmLabel="삭제"

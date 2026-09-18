@@ -106,7 +106,7 @@ describe('파일 가져오기', () => {
     )
   })
 
-  it('깨끗하면 적용이 서고, 누르면 apply=true 로 다시 보낸다', async () => {
+  it('깨끗하면 적용이 서고, 클릭하면 apply=true 로 다시 보낸다', async () => {
     objectApi.import.mockResolvedValueOnce(CLEAN).mockResolvedValueOnce({ ...CLEAN, applied: true })
     const onApplied = await mount()
     await upload()

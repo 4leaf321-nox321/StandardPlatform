@@ -191,7 +191,8 @@ export function TypeEditDialog({
                   </SelectContent>
                 </Select>
                 <p className="text-muted-foreground text-xs">
-                  안 세우면 화면은 있지만 메뉴에 안 뜹니다 — 어휘 축은 대개 그렇습니다.
+                  표시하지 않으면 화면은 있지만 메뉴에 표시되지 않습니다 — 어휘 축은 대개
+                  그렇습니다.
                 </p>
               </div>
 
@@ -332,7 +333,7 @@ export function TypeEditDialog({
         <ConfirmDialog
           open
           destructive
-          title={`${type.label} 타입을 지웁니다`}
+          title={`${type.label} 타입을 삭제합니다`}
           description={
             type.object_count > 0 ? (
               <>
@@ -341,8 +342,8 @@ export function TypeEditDialog({
               </>
             ) : (
               <>
-                들어 있는 것이 없어 지울 수 있습니다. <b>속성 정의도 함께 사라집니다</b> — 안 지우면
-                같은 slug 로 다시 만들 때 옛 속성이 되살아납니다.
+                들어 있는 것이 없어 삭제할 수 있습니다. <b>속성 정의도 함께 사라집니다</b> — 안
+                삭제하면 같은 slug 로 다시 만들 때 옛 속성이 되살아납니다.
               </>
             )
           }

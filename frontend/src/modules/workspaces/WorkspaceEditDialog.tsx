@@ -131,7 +131,7 @@ export function WorkspaceEditDialog({ workspace, all, onClose, onSaved }: Props)
               </Button>
             </div>
             <p className="text-muted-foreground text-xs">
-              고치는 것은 이 값과 상관없이 늘 소유 부서의 관리자만 합니다.
+              수정하는 것은 이 값과 상관없이 늘 소유 부서의 관리자만 합니다.
             </p>
           </div>
           <div className="space-y-2">
@@ -141,12 +141,12 @@ export function WorkspaceEditDialog({ workspace, all, onClose, onSaved }: Props)
               options={options}
               value={parent}
               onChange={setParent}
-              placeholder="상위 부서를 고르세요"
+              placeholder="상위 부서를 선택하세요"
               searchPlaceholder="부서 이름이나 주소로 검색"
             />
             {parentChanged && (
               <p className="text-muted-foreground text-xs">
-                옮겨도 자료는 하나도 안 움직입니다. 새 형제들의 맨 끝에 섭니다.
+                옮겨도 자료는 하나도 안 움직입니다. 새 형제들의 맨 끝에 놓입니다.
               </p>
             )}
           </div>

@@ -52,7 +52,7 @@ const DATA_TYPE_HINTS: Record<DataType, string> = {
   text: '한 줄. 이름·번호처럼 짧은 값. 모양 규칙을 걸 수 있습니다.',
   text_long: '여러 줄. 설명·메모 — 한 줄 칸에 넣으면 사람은 자기가 쓴 것을 못 봅니다.',
   number: '숫자만. 정렬과 집계가 됩니다 — 글로 넣으면 사전순으로 섞입니다.',
-  date: 'YYYY-MM-DD. 날짜 선택기가 뜹니다.',
+  date: 'YYYY-MM-DD. 날짜 선택기가 표시됩니다.',
   datetime: '날짜와 시각. 측정·기록 시각처럼 날짜만으로 부족한 자리에 씁니다.',
   bool: '예/아니오 하나.',
   enum: '정한 것 중에서 고릅니다. 스물이 넘으면 검색 가능한 picker 로 바뀝니다.',
@@ -218,7 +218,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
 
             {dataType === 'enum' && (
               <div className="space-y-1.5">
-                <Label htmlFor="prop-options">고를 값 (쉼표로)</Label>
+                <Label htmlFor="prop-options">선택할 값 (쉼표로)</Label>
                 <Input
                   id="prop-options"
                   value={options}
@@ -226,8 +226,9 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                   onChange={(event) => setOptions(event.target.value)}
                 />
                 <p className="text-muted-foreground text-xs">
-                  이미 쓰이는 값을 목록에서 빼면 <b>그 값을 가진 객체는 고칠 때 거절됩니다.</b>
-                  빼기 전에 그 값을 쓰는 것이 있는지 보세요.
+                  이미 사용되는 값을 목록에서 제외하면{' '}
+                  <b>그 값을 가진 객체는 수정할 때 거절됩니다.</b>
+                  제외하기 전에 그 값을 사용하는 것이 있는지 보세요.
                 </p>
               </div>
             )}
@@ -276,7 +277,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                   </SelectContent>
                 </Select>
                 <p className="text-muted-foreground text-xs">
-                  안 정하면 아무 객체나 고를 수 있습니다 — 고를 것이 많아지면 사람은 못 찾고, 못
+                  안 정하면 아무 객체나 선택할 수 있습니다 — 선택할 것이 많아지면 사람은 못 찾고, 못
                   찾으면 없는 줄 알고 새로 만듭니다.
                 </p>
                 <Label htmlFor="prop-inverse">상대 쪽에서 읽는 말</Label>
@@ -339,7 +340,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                 </div>
                 <p className="text-muted-foreground text-xs">
                   비우면 안 봅니다 — <b>그러면 두께가 -5mm 여도 통과합니다.</b> 소수 자릿수를 넘는
-                  값은 <b>반올림하지 않고 거절</b>합니다(조용히 바꾸면 넣은 값과 저장된 값이
+                  값은 <b>반올림하지 않고 거절</b>합니다(조용히 바꾸면 입력한 값과 저장된 값이
                   달라집니다).
                 </p>
               </div>
@@ -356,7 +357,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                   onChange={(event) => setPattern(event.target.value)}
                 />
                 <p className="text-muted-foreground text-xs">
-                  사번·도번처럼 <b>모양이 정해진 값</b>에 씁니다(정규식). 비우면 안 봅니다.
+                  사번·도번처럼 <b>모양이 정해진 값</b>에 사용합니다(정규식). 비우면 안 봅니다.
                 </p>
               </div>
             )}
@@ -369,7 +370,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                 onChange={(event) => setDefaultValue(event.target.value)}
               />
               <p className="text-muted-foreground text-xs">
-                <b>만들 때만</b> 채웁니다. 고칠 때도 채우면 사람이 방금 지운 값이 되살아나고, 그
+                <b>만들 때만</b> 채웁니다. 수정할 때도 채우면 사람이 방금 삭제한 값이 되살아나고, 그
                 되살아남은 저장한 사람 눈에 안 보입니다.
               </p>
             </div>
@@ -396,7 +397,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                   필수
                   <span className="text-muted-foreground ml-1 text-xs">
                     비어 있으면 저장이 거절됩니다. <b>이미 있는 객체는 그대로 둡니다</b> — 그 객체의{' '}
-                    <b>속성을 고칠 때</b> 걸립니다(이름만 고치는 것은 막지 않습니다).
+                    <b>속성을 수정할 때</b> 걸립니다(이름만 수정하는 것은 막지 않습니다).
                   </span>
                 </span>
               </label>
@@ -429,7 +430,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                   여러 값
                   <span className="text-muted-foreground ml-1 text-xs">
                     목록으로 저장합니다. <b>이미 값이 있는 속성에서 켜고 끄면</b> 그 값들이 새
-                    모양에 안 맞아 고칠 때 거절됩니다.
+                    모양에 안 맞아 수정할 때 거절됩니다.
                   </span>
                 </span>
               </label>
@@ -469,10 +470,10 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
         <ConfirmDialog
           open
           destructive
-          title={`${property.label} 속성을 지웁니다`}
+          title={`${property.label} 속성을 삭제합니다`}
           description={
             <>
-              지금 이 값을 가진 객체가 <b>{usage ?? 0}개</b> 있습니다. 정의를 지우면 그 값들은{' '}
+              지금 이 값을 가진 객체가 <b>{usage ?? 0}개</b> 있습니다. 정의를 삭제하면 그 값들은{' '}
               <b>화면에서 사라집니다</b> — 데이터는 남아 있어, 같은 키로 다시 정의하면 도로
               보입니다.
             </>

@@ -58,8 +58,8 @@ export function SectionViewEditor({ defs, value, onChange, what }: Props) {
   if (known.length === 0) {
     return (
       <p className="text-muted-foreground text-sm">
-        묶음이 하나도 없습니다. <b>속성 정의의 「묶음」</b> 에 이름을 적으면 여기서 순서와
-        열 수를 정할 수 있습니다 — 소속은 속성이 들고 있고, 여기는 모양만 정합니다.
+        묶음이 하나도 없습니다. <b>속성 정의의 「묶음」</b> 에 이름을 적으면 여기서 순서와 열 수를
+        정할 수 있습니다 — 소속은 속성이 들고 있고, 여기는 모양만 정합니다.
       </p>
     )
   }
@@ -67,12 +67,12 @@ export function SectionViewEditor({ defs, value, onChange, what }: Props) {
   return (
     <div className="space-y-3">
       <p className="text-muted-foreground text-xs">
-        {what}에서 묶음이 <b>서는 순서</b>와 <b>열 수·접힘</b>을 정합니다. 소속은 속성
-        정의의 「묶음」 이 들고 있습니다.
+        {what}에서 묶음이 <b>표시 순서</b>와 <b>열 수·접힘</b>을 정합니다. 소속은 속성 정의의
+        「묶음」 이 들고 있습니다.
         {loose > 0 && (
           <>
             {' '}
-            묶음을 안 정한 속성 <b>{loose}개</b>는 맨 위에 섭니다.
+            묶음을 안 정한 속성 <b>{loose}개</b>는 맨 위에 표시됩니다.
           </>
         )}
       </p>
@@ -93,9 +93,7 @@ export function SectionViewEditor({ defs, value, onChange, what }: Props) {
                 onValueChange={(next) =>
                   setSections(
                     listed.map((row) =>
-                      row.name === one.name
-                        ? { ...row, columns: Number(next) as 1 | 2 | 3 }
-                        : row,
+                      row.name === one.name ? { ...row, columns: Number(next) as 1 | 2 | 3 } : row,
                     ),
                   )
                 }
@@ -118,9 +116,7 @@ export function SectionViewEditor({ defs, value, onChange, what }: Props) {
                   onChange={(event) =>
                     setSections(
                       listed.map((row) =>
-                        row.name === one.name
-                          ? { ...row, collapsed: event.target.checked }
-                          : row,
+                        row.name === one.name ? { ...row, collapsed: event.target.checked } : row,
                       ),
                     )
                   }
@@ -155,7 +151,7 @@ export function SectionViewEditor({ defs, value, onChange, what }: Props) {
 
       {rest.length > 0 && (
         <div className="space-y-1.5">
-          <Label className="text-xs">순서를 안 정한 묶음</Label>
+          <Label className="text-xs">순서 미지정 묶음</Label>
           <div className="flex flex-wrap gap-1.5">
             {rest.map((name) => (
               <Button
@@ -172,8 +168,7 @@ export function SectionViewEditor({ defs, value, onChange, what }: Props) {
           {/* **여기 없는 묶음도 화면에는 뜬다.** 새 속성을 만들었는데 뷰를 안
               고쳤다고 그 속성이 사라지면, 만든 사람은 저장이 안 된 줄 안다. */}
           <p className="text-muted-foreground text-xs">
-            안 정해도 <b>맨 뒤에 1열로 섭니다</b> — 새로 만든 속성이 화면에서 사라지지
-            않게.
+            안 정해도 <b>맨 뒤에 1열로 표시됩니다</b> — 새로 만든 속성이 화면에서 사라지지 않게.
           </p>
         </div>
       )}

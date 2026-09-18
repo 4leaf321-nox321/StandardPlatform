@@ -132,7 +132,7 @@ export function GroupEditDialog({ group, attached, onClose, onChanged }: Props) 
               />
               사용함
               <span className="text-muted-foreground text-xs">
-                끄면 사이드바에서 이 묶음이 통째로 빠집니다.
+                끄면 사이드바에서 이 묶음이 통째로 제외됩니다.
               </span>
             </label>
           </div>
@@ -157,15 +157,15 @@ export function GroupEditDialog({ group, attached, onClose, onChanged }: Props) 
         <ConfirmDialog
           open
           destructive
-          title={`${group.label} 묶음을 지웁니다`}
+          title={`${group.label} 묶음을 삭제합니다`}
           description={
             attached.length > 0 ? (
               <>
-                <b>{attached.join(', ')}</b> 이(가) 걸려 있어 <b>지울 수 없습니다.</b> 그
-                타입들의 묶음을 먼저 바꾸세요 — 안 그러면 사이드바에서 조용히 사라집니다.
+                <b>{attached.join(', ')}</b> 이(가) 걸려 있어 <b>지울 수 없습니다.</b> 그 타입들의
+                묶음을 먼저 바꾸세요 — 안 그러면 사이드바에서 조용히 사라집니다.
               </>
             ) : (
-              <>걸린 타입이 없어 지울 수 있습니다.</>
+              <>소속 타입이 없어 삭제할 수 있습니다.</>
             )
           }
           confirmLabel="삭제"

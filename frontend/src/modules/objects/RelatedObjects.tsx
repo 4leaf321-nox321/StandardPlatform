@@ -172,7 +172,7 @@ export function RelatedObjects({
           title={`${cutting.object_label} 와(과)의 관계를 끊습니다`}
           description={
             <>
-              「{cutting.label}」 연결만 사라집니다. <b>양쪽 객체는 그대로 남습니다.</b> 끊은 기록은
+              「{cutting.label}」 연결만 사라집니다. <b>양쪽 객체는 그대로 남습니다.</b> 해제 기록은
               변경 이력에 남습니다.
             </>
           }

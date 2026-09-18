@@ -57,7 +57,7 @@ describe('SearchablePicker', () => {
     expect(screen.getByText('개발본부 / 품질팀')).toBeInTheDocument()
   })
 
-  it('고를 수 없는 줄은 이유를 적고, 눌러도 안 골라진다', async () => {
+  it('선택할 수 없는 줄은 이유를 적고, 눌러도 안 골라진다', async () => {
     // **비활성만 시키고 말 안 하면 버그로 읽힌다.**
     const onChange = vi.fn()
     render(<SearchablePicker options={OPTIONS} value={null} onChange={onChange} />)
@@ -67,7 +67,7 @@ describe('SearchablePicker', () => {
     expect(onChange).not.toHaveBeenCalled()
   })
 
-  it('고르면 값을 넘기고 닫힌다', async () => {
+  it('선택하면 값을 넘기고 닫힌다', async () => {
     const onChange = vi.fn()
     render(<SearchablePicker options={OPTIONS} value={null} onChange={onChange} />)
     await open()

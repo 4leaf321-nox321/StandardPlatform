@@ -109,7 +109,7 @@ describe('변경 이력', () => {
     expect(screen.getByText(/→ ACME/)).toBeInTheDocument()
   })
 
-  it('값 기록을 누르면 그때와 지금이 나란히 뜨고, 다른 칸 수를 말한다', async () => {
+  it('값 기록을 클릭하면 그때와 지금이 나란히 뜨고, 다른 칸 수를 말한다', async () => {
     objectApi.history.mockResolvedValue(ENTRIES)
     await mount()
     await userEvent.click(await screen.findByRole('button', { name: /이 .*1\.2/ }))
@@ -162,7 +162,7 @@ describe('변경 이력', () => {
     expect(screen.queryByRole('button', { name: '이 값으로 복원' })).not.toBeInTheDocument()
   })
 
-  it('여럿 골라 고친 기록이면 함께 바뀐 것을 한 번에 되돌리는 길이 선다', async () => {
+  it('여럿 골라 수정한 기록이면 함께 바뀐 것을 한 번에 되돌리는 길이 선다', async () => {
     // **한 건만 되돌리면 나머지는 틀린 값으로 남는다.** 틀린 값을 발견하는 자리가 대개
     // 이 이력이라 입구를 여기 둔다.
     objectApi.history.mockResolvedValue([
@@ -193,11 +193,11 @@ describe('변경 이력', () => {
         ...ENTRIES[0],
         id: 'e9',
         changes: {
-          description: { before: '처음 메모', after: '고친 메모' },
+          description: { before: '처음 메모', after: '수정한 메모' },
           valid_from_year: { before: null, after: 2020 },
           owner_workspace_id: { before: '해석팀', after: '(전역)' },
         },
-        snapshot: { ...CURRENT, description: '고친 메모', valid_from_year: 2020 },
+        snapshot: { ...CURRENT, description: '수정한 메모', valid_from_year: 2020 },
       },
     ])
     await mount()

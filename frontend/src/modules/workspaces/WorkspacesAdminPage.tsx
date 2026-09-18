@@ -106,12 +106,12 @@ export default function WorkspacesAdminPage() {
     <div className="space-y-6">
       <PageHeader
         title="부서 정보"
-        description="조직도를 만들고 고칩니다. 끌어 놓아 상하관계를 바꿔도 자료는 하나도 움직이지 않습니다."
+        description="조직도를 만들고 수정합니다. 끌어 놓아 상하관계를 바꿔도 자료는 하나도 움직이지 않습니다."
         actions={
           <div className="flex gap-2">
             <Button variant="outline" onClick={() => setImporting(true)}>
               <ClipboardPaste className="size-4" />
-              붙여 넣어 추가
+              붙여넣기 추가
             </Button>
             <Button
               variant="outline"
@@ -226,7 +226,7 @@ export default function WorkspacesAdminPage() {
           hint={
             query
               ? '다른 말로 찾아 보거나, 보관된 부서를 포함해 보세요.'
-              : '위에서 하나 만들거나, 다른 플랫폼의 부서 정보를 붙여 넣으세요.'
+              : '위에서 하나 만들거나, 다른 플랫폼의 부서 정보를 붙여넣으세요.'
           }
         />
       ) : (
@@ -251,7 +251,7 @@ export default function WorkspacesAdminPage() {
       <p className="text-muted-foreground text-xs">
         줄을 끌어 다른 줄 <strong>위의 가는 띠</strong>에 놓으면 그 부서 앞에 형제로 서고,{' '}
         <strong>줄 본체</strong>에 놓으면 그 부서의 막내가 됩니다. 마우스를 쓰지 않으면 ↑/↓ 단추로
-        같은 상위 안에서 순서를 바꾸고, 수정(✏️)에서 상위 부서를 고를 수 있습니다.
+        같은 상위 안에서 순서를 바꾸고, 수정(✏️)에서 상위 부서를 선택할 수 있습니다.
       </p>
 
       <ConfirmDialog
@@ -285,7 +285,7 @@ export default function WorkspacesAdminPage() {
               </>
             )}
             <p className="text-muted-foreground">
-              지우는 대신 <strong>보관</strong>으로 두면 자료는 남고 새 활동만 막힙니다.
+              삭제하는 대신 <strong>보관</strong>으로 두면 자료는 남고 새 활동만 막힙니다.
             </p>
           </div>
         }

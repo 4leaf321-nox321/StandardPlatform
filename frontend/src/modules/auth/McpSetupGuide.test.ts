@@ -23,7 +23,7 @@ describe('setupSnippets', () => {
     expect(s.claudeCode).not.toContain('undefined')
   })
 
-  it('Claude Desktop 항목은 붙여 넣을 수 있는 JSON 조각이고 Gemini 도 같다', () => {
+  it('Claude Desktop 항목은 붙여넣을 수 있는 JSON 조각이고 Gemini 도 같다', () => {
     const s = setupSnippets('t', url)
     const parsed = JSON.parse(`{${s.desktop}}`)
     const entry = Object.values(parsed)[0] as {

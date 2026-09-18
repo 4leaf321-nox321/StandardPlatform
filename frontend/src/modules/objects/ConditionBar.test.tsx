@@ -30,7 +30,7 @@ const DEFS = [
 ] as unknown as PropertyDef[]
 
 describe('조건 줄', () => {
-  it('칩은 읽히는 말로 서고, 참조 값은 이름으로, 지우면 빠진다', async () => {
+  it('칩은 읽히는 말로 서고, 참조 값은 이름으로, 삭제하면 빠진다', async () => {
     const { ConditionBar } = await import('@/modules/objects/ConditionBar')
     const onChange = vi.fn()
     render(

@@ -127,7 +127,7 @@ export default function ObjectProfilePage() {
                 aria-pressed={profile.data.watching}
                 title={
                   profile.data.watching
-                    ? '바뀌면 알림이 옵니다 — 내가 고친 것은 빼고'
+                    ? '바뀌면 알림이 옵니다 — 내가 수정한 것은 빼고'
                     : '이것이 바뀌면 알림을 받습니다'
                 }
                 disabled={watchBusy}
@@ -177,7 +177,7 @@ export default function ObjectProfilePage() {
       {managed && (
         <p className="text-muted-foreground text-sm">
           {objectType?.managed_by === 'hub' ? '허브' : objectType?.managed_by}가 내려준
-          기준정보입니다 — 값은 허브에서 고친 뒤 받습니다. 이 설치의 관계(산출 문서 · 참여 등)는
+          기준정보입니다 — 값은 허브에서 수정한 뒤 받습니다. 이 설치의 관계(산출 문서 · 참여 등)는
           여기서 잇습니다.
         </p>
       )}
@@ -192,7 +192,7 @@ export default function ObjectProfilePage() {
             </span>
           )}
           {!isSystem && (
-            <span className="text-muted-foreground">고친 때 {shownDateTime(row.updated_at)}</span>
+            <span className="text-muted-foreground">수정한 때 {shownDateTime(row.updated_at)}</span>
           )}
         </div>
 
@@ -248,7 +248,7 @@ export default function ObjectProfilePage() {
 
       {isSystem && (
         <p className="text-muted-foreground text-sm">
-          이 객체는 다른 표(원 표)를 비춥니다. 이름과 내용은 그 표의 화면에서 고칩니다 — 여기서는
+          이 객체는 다른 표(원 표)를 비춥니다. 이름과 내용은 그 표의 화면에서 수정합니다 — 여기서는
           이것을 가리키는 관계만 봅니다.
         </p>
       )}

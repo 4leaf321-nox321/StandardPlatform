@@ -173,13 +173,14 @@ def _target(
         return found, found.slug, found.label, False
     if not new_slug or not new_label:
         raise Conflict(
-            code("ONTOLOGY", 62), "붙일 코드표를 고르거나, 새 코드표의 slug 와 이름을 주세요."
+            code("ONTOLOGY", 62),
+            "연결할 코드표를 선택하거나, 새 코드표의 slug 와 이름을 주세요.",
         )
     slug = require_slug(new_slug, what="타입 slug")
     if db.scalar(select(ObjectType).where(ObjectType.slug == slug)) is not None:
         raise Conflict(
             code("ONTOLOGY", 63),
-            f"이미 있는 slug 입니다: {slug}. 「있는 코드표에 붙이기」 를 쓰세요.",
+            f"이미 있는 slug 입니다: {slug}. 「기존 코드표에 연결」 을 사용하세요.",
         )
     return None, slug, new_label.strip(), True
 
@@ -233,7 +234,7 @@ def plan_promote(
     if stray:
         plan.errors.append(
             f"고를 값에 없는 저장값이 있습니다: {', '.join(sorted(stray))}. "
-            "먼저 그 객체들을 고치거나 고를 값에 더하세요."
+            "먼저 그 객체들을 수정하거나 선택할 값에 추가하세요."
         )
     if target is not None and target.key_policy == "required":
         plan.errors.append(

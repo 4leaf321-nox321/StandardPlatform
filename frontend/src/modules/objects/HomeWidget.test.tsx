@@ -108,7 +108,7 @@ describe('홈 위젯', () => {
   })
 })
 
-describe('홈에서 내리기', () => {
+describe('홈 게시 해제', () => {
   it('부서 관리자에게만 메뉴가 보인다', async () => {
     objectApi.summary.mockResolvedValue(SUMMARY)
     await show(widget())
@@ -125,7 +125,7 @@ describe('홈에서 내리기', () => {
     const onChanged = await show(widget(), { canEdit: true })
 
     await userEvent.click(screen.getByRole('button', { name: '위젯 메뉴' }))
-    await userEvent.click(await screen.findByRole('menuitem', { name: /홈에서 내리기/ }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: /홈 게시 해제/ }))
 
     await waitFor(() =>
       expect(viewApi.update).toHaveBeenCalledWith('part', 'v1', { on_home: false }),

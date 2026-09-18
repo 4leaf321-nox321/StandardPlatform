@@ -289,7 +289,7 @@ describe('지식 그래프', () => {
     graphApi.overview.mockResolvedValue(OVERVIEW)
     await mount()
     await userEvent.click(screen.getByRole('tab', { name: '탐색' }))
-    expect(screen.getByText('시작점을 고르세요')).toBeInTheDocument()
+    expect(screen.getByText('시작점을 선택하세요')).toBeInTheDocument()
     expect(screen.getByText(/모든 타입을 한 번에 그리는 단추는 없습니다/)).toBeInTheDocument()
     expect(graphApi.neighborhood).not.toHaveBeenCalled()
   })
@@ -370,7 +370,7 @@ describe('지식 그래프', () => {
     )
   })
 
-  it('구조에서 타입을 고르면 그 인스턴스 전부를 그릴 수 있다', async () => {
+  it('구조에서 타입을 선택하면 그 인스턴스 전부를 그릴 수 있다', async () => {
     graphApi.overview.mockResolvedValue(OVERVIEW)
     graphApi.subgraph.mockResolvedValue(SUBGRAPH)
     await mount()
@@ -383,7 +383,7 @@ describe('지식 그래프', () => {
     await waitFor(() => expect(screen.getByText(/7개 중 1–2/)).toBeInTheDocument())
   })
 
-  it('타입에서 훑어 시작점을 고른다 — 검색어를 모르는 사람의 길', async () => {
+  it('타입에서 탐색해 시작점을 고른다 — 검색어를 모르는 사람의 길', async () => {
     graphApi.overview.mockResolvedValue(OVERVIEW)
     graphApi.neighborhood.mockResolvedValue(NEIGHBORHOOD)
     objectApi.list.mockResolvedValue({
@@ -404,7 +404,7 @@ describe('지식 그래프', () => {
     expect(graphApi.neighborhood).toHaveBeenCalledWith(expect.objectContaining({ focus: 'hub' }))
   })
 
-  it('타입을 여럿 고르면 한 그림에 전부 그린다', async () => {
+  it('타입을 여럿 선택하면 한 그림에 전부 그린다', async () => {
     graphApi.overview.mockResolvedValue(OVERVIEW)
     graphApi.subgraph.mockResolvedValue({ ...SUBGRAPH, total: 9 })
     objectApi.list.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 })
@@ -428,7 +428,7 @@ describe('지식 그래프', () => {
     )
   })
 
-  it('타입을 여럿 고르면 훑을 타입을 그 사이에서 고른다', async () => {
+  it('타입을 여럿 선택하면 훑을 타입을 그 사이에서 고른다', async () => {
     // 마지막에 고른 타입에 묶이면 앞서 고른 타입은 훑을 길이 없다.
     graphApi.overview.mockResolvedValue(OVERVIEW)
     objectApi.list.mockResolvedValue({ items: [], total: 0, limit: 20, offset: 0 })
@@ -494,7 +494,7 @@ describe('지식 그래프', () => {
     )
   })
 
-  it('조작 상태가 주소에 남는다 — 붙여 넣으면 같은 그림', async () => {
+  it('조작 상태가 주소에 남는다 — 붙여넣으면 같은 그림', async () => {
     graphApi.overview.mockResolvedValue(OVERVIEW)
     graphApi.neighborhood.mockResolvedValue(NEIGHBORHOOD)
     await mount('/graph?focus=hub&d=2&fo=100&rel=supplied_by&color=community')
@@ -527,7 +527,7 @@ describe('상한 선택', () => {
     )
   })
 
-  it('모르는 값은 기본으로 떨어진다 — 주소를 손으로 고쳐도 안 깨진다', async () => {
+  it('모르는 값은 기본으로 떨어진다 — 주소를 손으로 수정해도 안 깨진다', async () => {
     graphApi.overview.mockResolvedValue(OVERVIEW)
     graphApi.neighborhood.mockResolvedValue(NEIGHBORHOOD)
     await mount('/graph?focus=hub&d=99&fo=7&n=999999')
@@ -542,7 +542,7 @@ describe('상한 선택', () => {
 describe('구조 — 흐름(사케이)', () => {
   beforeEach(() => vi.clearAllMocks())
 
-  it('그물과 흐름을 오가고, 흐름에는 실제로 걸린 관계만 싣는다', async () => {
+  it('그물과 흐름을 오가고, 흐름에는 실제 연결된 관계만 싣는다', async () => {
     graphApi.overview.mockResolvedValue(OVERVIEW)
     await mount()
     await waitFor(() => expect(screen.getByText(/타입 2 · 관계 종류 2/)).toBeInTheDocument())

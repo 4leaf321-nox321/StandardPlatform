@@ -46,7 +46,13 @@ interface EnumOptionsPanelProps {
   onPromoted: () => void
 }
 
-export function EnumOptionsPanel({ type, property, types, onChanged, onPromoted }: EnumOptionsPanelProps) {
+export function EnumOptionsPanel({
+  type,
+  property,
+  types,
+  onChanged,
+  onPromoted,
+}: EnumOptionsPanelProps) {
   const [renaming, setRenaming] = useState<string | null>(null)
   const [promoting, setPromoting] = useState(false)
   // 바꾼 이름을 여기서도 바로 반영한다 — 부모가 정의를 다시 읽기 전에 옛 이름이 남으면
@@ -56,14 +62,20 @@ export function EnumOptionsPanel({ type, property, types, onChanged, onPromoted 
   return (
     <div className="space-y-2 rounded-md border p-3">
       <div className="flex items-center justify-between">
-        <span className="text-sm font-medium">저장된 고를 값 다루기</span>
-        <Button size="xs" variant="outline" onClick={() => setPromoting(true)} disabled={options.length === 0}>
+        <span className="text-sm font-medium">저장된 선택할 값 다루기</span>
+        <Button
+          size="xs"
+          variant="outline"
+          onClick={() => setPromoting(true)}
+          disabled={options.length === 0}
+        >
           <BookMarked className="mr-1 size-3" />
           코드표로 승격…
         </Button>
       </div>
       <p className="text-muted-foreground text-xs">
-        여기서 이름을 바꾸면 <b>이미 저장된 값도 함께</b> 바뀝니다. 위 칸에서 고치면 정의만 바뀝니다.
+        여기서 이름을 바꾸면 <b>이미 저장된 값도 함께</b> 바뀝니다. 위 칸에서 수정하면 정의만
+        바뀝니다.
       </p>
       <ul className="space-y-1">
         {options.map((value) => (
@@ -71,7 +83,7 @@ export function EnumOptionsPanel({ type, property, types, onChanged, onPromoted 
             <span className="flex-1 truncate">{value}</span>
             <Button size="xs" variant="ghost" onClick={() => setRenaming(value)}>
               <Pencil className="mr-1 size-3" />
-              이름 바꾸기
+              이름 변경
             </Button>
           </li>
         ))}
@@ -126,7 +138,11 @@ function RenameDialog({ typeSlug, propertyKey, from, onClose, onDone }: RenameDi
     setBusy(true)
     setError(null)
     try {
-      const result = await ontologyApi.renameOption(typeSlug, propertyKey, { from, to: to.trim(), apply })
+      const result = await ontologyApi.renameOption(typeSlug, propertyKey, {
+        from,
+        to: to.trim(),
+        apply,
+      })
       setPlan(result)
       if (result.applied) onDone(result.to_value)
     } catch (caught) {
@@ -143,8 +159,10 @@ function RenameDialog({ typeSlug, propertyKey, from, onClose, onDone }: RenameDi
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>「{from}」 이름 바꾸기</DialogTitle>
-          <DialogDescription>정의의 고를 값과, 이 값을 가진 객체의 저장값이 함께 바뀝니다.</DialogDescription>
+          <DialogTitle>「{from}」 이름 변경</DialogTitle>
+          <DialogDescription>
+            정의의 선택할 값과, 이 값을 가진 객체의 저장값이 함께 바뀝니다.
+          </DialogDescription>
         </DialogHeader>
         <div className="space-y-3">
           <div className="space-y-1.5">
@@ -168,8 +186,8 @@ function RenameDialog({ typeSlug, propertyKey, from, onClose, onDone }: RenameDi
           )}
           {previewed && (
             <p className="text-sm">
-              <Badge variant="secondary">저장된 값 {plan.objects_with_value}개</Badge> 가 「{plan.to_value}」 으로
-              함께 바뀝니다. 객체마다 변경 이력에 남습니다.
+              <Badge variant="secondary">저장된 값 {plan.objects_with_value}개</Badge> 가 「
+              {plan.to_value}」 으로 함께 바뀝니다. 객체마다 변경 이력에 남습니다.
             </p>
           )}
           {error && <ErrorNotice error={error} />}
@@ -180,8 +198,7 @@ function RenameDialog({ typeSlug, propertyKey, from, onClose, onDone }: RenameDi
           </Button>
           {!previewed ? (
             <Button disabled={!changed || busy} onClick={() => void run(false)}>
-              {busy && <Loader2 className="mr-1 size-3.5 animate-spin" />}
-              몇 개가 바뀌는지 보기
+              {busy && <Loader2 className="mr-1 size-3.5 animate-spin" />}몇 개가 바뀌는지 보기
             </Button>
           ) : (
             <Button disabled={busy} onClick={() => void run(true)}>
@@ -242,25 +259,46 @@ function PromoteDialog({ type, property, books, onClose, onDone }: PromoteDialog
         <DialogHeader>
           <DialogTitle>「{property.label}」 을 코드표로 승격</DialogTitle>
           <DialogDescription>
-            고를 값마다 객체가 생기고, 저장된 문자열이 그 객체를 가리키게 바뀝니다. 이 속성은
-            「객체 참조」 가 됩니다. 정의는 스냅샷으로 되돌릴 수 있지만 <b>옮긴 값은 안 돌아옵니다</b>
-            — 계획을 보고 누르세요.
+            선택할 값마다 객체가 생기고, 저장된 문자열이 그 객체를 가리키게 바뀝니다. 이 속성은
+            「객체 참조」 가 됩니다. 정의는 스냅샷으로 되돌릴 수 있지만{' '}
+            <b>옮긴 값은 안 돌아옵니다</b>— 계획을 보고 클릭하세요.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-3 text-sm">
           <div className="flex gap-2">
             <label className="flex cursor-pointer items-center gap-1.5">
-              <input type="radio" checked={mode === 'existing'} disabled={books.length === 0} onChange={() => { setMode('existing'); setPlan(null) }} />
-              있는 코드표에 붙이기
+              <input
+                type="radio"
+                checked={mode === 'existing'}
+                disabled={books.length === 0}
+                onChange={() => {
+                  setMode('existing')
+                  setPlan(null)
+                }}
+              />
+              기존 코드표에 연결
             </label>
             <label className="flex cursor-pointer items-center gap-1.5">
-              <input type="radio" checked={mode === 'new'} onChange={() => { setMode('new'); setPlan(null) }} />
+              <input
+                type="radio"
+                checked={mode === 'new'}
+                onChange={() => {
+                  setMode('new')
+                  setPlan(null)
+                }}
+              />
               새 코드표 생성
             </label>
           </div>
           {mode === 'existing' ? (
-            <Select value={target} onValueChange={(next) => { setTarget(next); setPlan(null) }}>
+            <Select
+              value={target}
+              onValueChange={(next) => {
+                setTarget(next)
+                setPlan(null)
+              }}
+            >
               <SelectTrigger size="sm" className="w-full">
                 <SelectValue placeholder="코드표 선택" />
               </SelectTrigger>
@@ -276,11 +314,25 @@ function PromoteDialog({ type, property, books, onClose, onDone }: PromoteDialog
             <div className="grid grid-cols-2 gap-2">
               <div className="space-y-1">
                 <Label htmlFor="promote-slug">slug</Label>
-                <Input id="promote-slug" value={newSlug} onChange={(event) => { setNewSlug(event.target.value); setPlan(null) }} />
+                <Input
+                  id="promote-slug"
+                  value={newSlug}
+                  onChange={(event) => {
+                    setNewSlug(event.target.value)
+                    setPlan(null)
+                  }}
+                />
               </div>
               <div className="space-y-1">
                 <Label htmlFor="promote-label">이름</Label>
-                <Input id="promote-label" value={newLabel} onChange={(event) => { setNewLabel(event.target.value); setPlan(null) }} />
+                <Input
+                  id="promote-label"
+                  value={newLabel}
+                  onChange={(event) => {
+                    setNewLabel(event.target.value)
+                    setPlan(null)
+                  }}
+                />
               </div>
             </div>
           )}
@@ -288,7 +340,8 @@ function PromoteDialog({ type, property, books, onClose, onDone }: PromoteDialog
           {plan && (
             <div className="space-y-2">
               <p>
-                {plan.target_new ? '새 코드표' : '있는 코드표'} <b>{plan.target_label}</b> ({plan.target_slug})
+                {plan.target_new ? '새 코드표' : '있는 코드표'} <b>{plan.target_label}</b> (
+                {plan.target_slug})
               </p>
               <table className="w-full text-xs">
                 <thead className="text-muted-foreground">
@@ -335,7 +388,11 @@ function PromoteDialog({ type, property, books, onClose, onDone }: PromoteDialog
             </Button>
           ) : (
             <Button disabled={busy} onClick={() => void run(true)}>
-              {busy ? <Loader2 className="mr-1 size-3.5 animate-spin" /> : <ArrowRight className="mr-1 size-3.5" />}
+              {busy ? (
+                <Loader2 className="mr-1 size-3.5 animate-spin" />
+              ) : (
+                <ArrowRight className="mr-1 size-3.5" />
+              )}
               승격 — 저장값 {moved}개 옮김
             </Button>
           )}

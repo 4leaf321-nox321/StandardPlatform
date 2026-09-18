@@ -119,7 +119,7 @@ describe('삭제 창', () => {
     expect(onDone).toHaveBeenCalledWith(null)
   })
 
-  it('「병합」 는 이긴 쪽을 고른 뒤에만 서고, 합친 곳으로 간다', async () => {
+  it('「병합」 는 이긴 쪽을 선택한 뒤에만 서고, 합친 곳으로 간다', async () => {
     objectApi.references.mockResolvedValue(SOME)
     objectApi.list.mockResolvedValue({
       items: [

@@ -129,7 +129,7 @@ export function ViewPicker({
               }}
             >
               <House className="mr-1 size-3.5" />
-              {active.home_order === null ? '부서 홈에 올리기' : '부서 홈에서 내리기'}
+              {active.home_order === null ? '부서 홈 게시' : '부서 홈 게시 해제'}
             </DropdownMenuItem>
           )}
           {active?.can_edit && (
@@ -215,7 +215,8 @@ function SaveViewDialog({ typeSlug, query, summary, onClose, onSaved }: SaveView
           <DialogDescription>
             지금 걸린 조건 {query.conditions.length}개{query.q ? `와 검색어 「${query.q}」` : ''}를
             이름 붙여 둡니다. 열·정렬은 타입 정의를 따릅니다.
-            {summary?.group_by && ' 통계 기준도 함께 담깁니다 — 불러오면 그림까지 그대로 뜹니다.'}
+            {summary?.group_by &&
+              ' 통계 기준도 함께 담깁니다 — 불러오면 그림까지 그대로 표시됩니다.'}
           </DialogDescription>
         </DialogHeader>
         <form
@@ -242,13 +243,13 @@ function SaveViewDialog({ typeSlug, query, summary, onClose, onSaved }: SaveView
               <span>
                 <span className="font-medium">{myWorkspace} 부서와 함께 쓰기</span>
                 <span className="text-muted-foreground block text-xs">
-                  부서 사람 모두의 목록에 뜹니다. 고치고 지우는 것은 부서 관리자만.
+                  부서 사람 모두의 목록에 표시됩니다. 수정하고 삭제하는 것은 부서 관리자만.
                 </span>
               </span>
             </label>
           ) : (
             <p className="text-muted-foreground text-xs">
-              내 것으로 저장됩니다. 부서와 함께 쓰는 뷰는 부서 관리자가 만듭니다.
+              내 것으로 저장됩니다. 부서와 함께 사용하는 뷰는 부서 관리자가 만듭니다.
             </p>
           )}
           {error && <ErrorNotice error={error} />}

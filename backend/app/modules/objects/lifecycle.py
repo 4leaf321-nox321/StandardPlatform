@@ -226,7 +226,7 @@ def delete_blocking(
         raise Conflict(
             code("OBJECTS", 50),
             f"{row.label}을 가리키는 것이 {refs.total}개 있어 그대로는 지울 수 없습니다. "
-            "참조를 비우고 지우거나, 다른 객체에 합치거나, 먼저 끊으세요.",
+            "참조를 비우고 삭제하거나, 다른 객체에 병합하거나, 먼저 해제하세요.",
             details={
                 "property_refs": len(refs.property_refs) + refs.hidden_property_refs,
                 "relations": len(refs.relations) + refs.hidden_relations,
@@ -296,7 +296,7 @@ def delete_detaching(
 ) -> dict[str, int]:
     """참조를 비우고 관계를 끊고 지운다. **가리키던 객체마다 감사 기록이 남는다** —
     그 객체의 화면에서 「왜 이 칸이 비었지」 를 물으면 답이 있어야 한다."""
-    reason = f"{row.label} 을 지우면서 참조를 비움"
+    reason = f"{row.label} 을 삭제하면서 참조를 비움"
     cleared = _rewrite_property_refs(db, user, row, object_type, new_id=None, reason=reason)
     edges = list(
         db.scalars(

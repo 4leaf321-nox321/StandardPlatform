@@ -212,8 +212,7 @@ export function HomeWidget({
                   act(() => viewApi.update(view.type_slug, view.id, { on_home: false }))
                 }
               >
-                <X className="mr-1 size-3.5" />
-                홈에서 내리기
+                <X className="mr-1 size-3.5" />홈 게시 해제
               </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>

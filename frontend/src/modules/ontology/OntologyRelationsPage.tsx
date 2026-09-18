@@ -60,7 +60,7 @@ export default function OntologyRelationsPage() {
       {relations.length === 0 ? (
         <EmptyState
           title="관계 종류가 없습니다"
-          hint="「속함」(트리를 만드는 관계) 하나부터 만들어 보세요. 재귀로 펼치는 관계라야 목록 왼쪽에 트리가 섭니다."
+          hint="「속함」(트리를 만드는 관계) 하나부터 만들어 보세요. 재귀로 펼치는 관계라야 목록 왼쪽에 트리가 표시됩니다."
         />
       ) : (
         <>
@@ -121,8 +121,8 @@ export default function OntologyRelationsPage() {
             </Table>
           </div>
           <p className="text-muted-foreground text-xs">
-            행을 누르면 고치거나 지웁니다. <b>「재귀」 인 관계라야</b> 목록 왼쪽에 트리를 세울 수
-            있습니다.
+            행을 클릭하면 수정하거나 삭제합니다. <b>「재귀」 인 관계라야</b> 목록 왼쪽에 트리를 세울
+            수 있습니다.
           </p>
         </>
       )}

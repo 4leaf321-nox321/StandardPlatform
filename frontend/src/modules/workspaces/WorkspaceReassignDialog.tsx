@@ -100,8 +100,8 @@ export function WorkspaceReassignDialog({ source, all, onClose, onDone }: Props)
         <DialogHeader>
           <DialogTitle>{source.name} 의 자료 이동</DialogTitle>
           <DialogDescription>
-            고른 것을 다른 부서로 통째 넘깁니다. 자료 자체는 그대로고 소유 부서만 바뀝니다. 다 넘긴
-            뒤에 이 부서를 보관하거나 지우면 통폐합이 끝납니다.
+            선택한 것을 다른 부서로 통째 넘깁니다. 자료 자체는 그대로고 소유 부서만 바뀝니다. 다
+            넘긴 뒤에 이 부서를 보관하거나 삭제하면 통폐합이 끝납니다.
           </DialogDescription>
         </DialogHeader>
 
@@ -161,7 +161,7 @@ export function WorkspaceReassignDialog({ source, all, onClose, onDone }: Props)
               {/* 관계 선과 속성으로 이 부서를 **가리키는** 것은 안 옮긴다 — 자동으로
                   바꾸면 「담당 부서」 가 사람 모르게 바뀐다. */}
               <p className="text-muted-foreground text-xs">
-                이 부서를 값으로 가리키는 객체(담당 부서 같은 칸)는 안 건드립니다. 그것은 옮기는
+                이 부서를 값으로 가리키는 객체(담당 부서 같은 칸)는 변경하지 않습니다. 그것은 옮기는
                 것이 아니라 고치는 일이라, 사람이 정해야 합니다.
               </p>
             </div>

@@ -102,7 +102,7 @@ function buildColumns(type: ObjectType, defs: PropertyDef[]): Column[] {
       if (id === 'label') return { id, label: '이름', render: (row) => row.label }
       if (id === 'status') return { id, label: '상태', render: (row) => row.status }
       if (id === 'updated_at')
-        return { id, label: '고친 때', render: (row) => shownDateTime(row.updated_at) }
+        return { id, label: '수정한 때', render: (row) => shownDateTime(row.updated_at) }
       if (id.startsWith('properties.')) {
         const key = id.slice('properties.'.length)
         const def = byKey.get(key)
@@ -505,14 +505,14 @@ export default function ObjectListPage() {
         {managed && (
           <p className="text-muted-foreground mb-4 text-sm">
             이 목록은 <b>{type?.managed_by === 'hub' ? '허브' : type?.managed_by}</b>가 내려준
-            기준정보입니다 — 여기서 만들거나 고치지 않고, 허브에서 고친 뒤 받습니다. 이 설치의
+            기준정보입니다 — 여기서 만들거나 수정하지 않고, 허브에서 수정한 뒤 받습니다. 이 설치의
             객체는 이것을 속성이나 관계로 가리킬 수 있습니다.
           </p>
         )}
 
         {isSystem && (
           <p className="text-muted-foreground mb-4 text-sm">
-            이 목록은 다른 표(원 표)를 비춥니다 — 여기서 만들거나 고치지 않고, 그 표의 화면에서
+            이 목록은 다른 표(원 표)를 비춥니다 — 여기서 만들거나 수정하지 않고, 그 표의 화면에서
             합니다. 객체는 이것을 속성이나 관계로 가리킬 수 있습니다.
           </p>
         )}
@@ -604,7 +604,8 @@ export default function ObjectListPage() {
               <strong>{picked.size}건</strong> 골랐습니다
             </span>
             <Button size="sm" onClick={() => setBulkEditing(true)}>
-              <Pencil className="mr-1 size-4" />한 칸 바꾸기
+              <Pencil className="mr-1 size-4" />
+              속성 변경
             </Button>
             <Button size="sm" variant="ghost" onClick={() => setPicked(new Set())}>
               선택 해제

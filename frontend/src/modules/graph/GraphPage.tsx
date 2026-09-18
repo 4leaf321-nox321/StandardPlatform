@@ -569,7 +569,7 @@ function SchemaView({
           </div>
           {flow.links.source.length === 0 ? (
             <p className="text-muted-foreground py-16 text-center text-sm">
-              이어진 관계가 아직 없습니다 — 흐름은 <strong>실제로 걸린</strong> 관계가 있어야
+              이어진 관계가 아직 없습니다 — 흐름은 <strong>실제 연결된</strong> 관계가 있어야
               그려집니다. 정의만 있는 관계는 굵기가 없어 그릴 것이 없습니다.
             </p>
           ) : (
@@ -693,7 +693,7 @@ function SchemaView({
           </div>
         ) : (
           <div className="text-muted-foreground rounded-md border border-dashed p-3">
-            타입을 누르면 걸린 관계와 수가 나오고, 그 타입의 인스턴스 전부를 그릴 수 있습니다.
+            타입을 클릭하면 연결된 관계와 수가 나오고, 그 타입의 인스턴스 전부를 그릴 수 있습니다.
             점선은 정의만 있고 아직 아무것도 안 이어진 관계입니다.
           </div>
         )}
@@ -1199,8 +1199,8 @@ function ExploreView({
         )}
         {!seed ? (
           <EmptyState
-            title="시작점을 고르세요"
-            hint="왼쪽에서 이름으로 객체를 찾거나, 타입에서 훑어 고르거나, 한 타입의 인스턴스를 전부 그립니다. 모든 타입을 한 번에 그리는 단추는 없습니다 — 전체 모양은 「구조」 에서 봅니다."
+            title="시작점을 선택하세요"
+            hint="왼쪽에서 이름으로 객체를 찾거나, 타입에서 탐색해 선택하거나, 한 타입의 인스턴스를 전부 그립니다. 모든 타입을 한 번에 그리는 단추는 없습니다 — 전체 모양은 「구조」 에서 봅니다."
           />
         ) : (
           <GraphCanvas
@@ -1312,7 +1312,7 @@ function ExploreView({
           />
         ) : (
           <div className="text-muted-foreground rounded-md border border-dashed p-3">
-            노드를 누르면 상세와 「여기서 확장」 가 나옵니다. 더블클릭은 「여기를 중심으로」. 주황
+            노드를 클릭하면 상세와 「여기서 확장」 가 나옵니다. 더블클릭은 「여기를 중심으로」. 주황
             링이 시작점, 「+N」 은 화면에 안 실린 관계의 수입니다.
           </div>
         )}

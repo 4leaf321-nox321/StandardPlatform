@@ -68,10 +68,10 @@ export function WorkspaceImportDialog({ onClose, onApplied }: Props) {
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-2xl">
         <DialogHeader>
-          <DialogTitle>부서 붙여 넣어 추가</DialogTitle>
+          <DialogTitle>부서 붙여넣기 추가</DialogTitle>
           <DialogDescription>
             ReportArchive 등 다른 플랫폼의 「부서 정보 CSV 내보내기」 를 엑셀에서 열어 복사해
-            붙입니다(탭 구분). 열 이름이 열쇠라 첫 줄은 그대로 두세요. 같은 slug 는 고치고, 개인
+            붙입니다(탭 구분). 열 이름이 열쇠라 첫 줄은 그대로 두세요. 같은 slug 는 수정하고, 개인
             공간은 건너뜁니다. 멤버·관리자는 안 읽습니다.
           </DialogDescription>
         </DialogHeader>

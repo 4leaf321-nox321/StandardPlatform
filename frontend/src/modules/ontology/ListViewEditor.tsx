@@ -39,7 +39,7 @@ const BUILT_IN: { id: string; label: string }[] = [
   { id: 'key', label: '식별자' },
   { id: 'label', label: '이름' },
   { id: 'status', label: '상태' },
-  { id: 'updated_at', label: '고친 때' },
+  { id: 'updated_at', label: '수정한 때' },
 ]
 
 /**
@@ -200,8 +200,8 @@ export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange 
         <Label>목록에 보일 열</Label>
         {chosen.length === 0 ? (
           <p className="text-muted-foreground text-sm">
-            안 고르면 <b>식별자 · 이름 · 고친 때</b>로 떨어집니다 — 빈 화면이 되지는 않지만, 정의한
-            속성은 안 보입니다.
+            선택하지 않으면 <b>식별자 · 이름 · 수정한 때</b>로 떨어집니다 — 빈 화면이 되지는 않지만,
+            정의한 속성은 안 보입니다.
           </p>
         ) : (
           <ul className="space-y-1">
@@ -319,8 +319,8 @@ export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange 
 
       {/* --- 검색·필터 ------------------------------------------------ */}
       <Toggles
-        title="검색이 훑을 자리"
-        hint="안 고르면 이름과 식별자를 봅니다 — 빈 결과보다 그럴듯한 기본이 낫습니다."
+        title="검색 대상 속성"
+        hint="선택하지 않으면 이름과 식별자를 봅니다 — 빈 결과보다 그럴듯한 기본이 낫습니다."
         options={searchable}
         chosen={value.search ?? []}
         onToggle={(id) => toggle('search', id)}
@@ -461,7 +461,7 @@ function TreeSection({
                 </SelectContent>
               </Select>
               <p className="text-muted-foreground text-xs">
-                <b>방향을 잘못 고르면 트리가 뒤집힌 채 그려지고</b>, 화면은 그것을 말해 주지
+                <b>방향을 잘못 선택하면 트리가 뒤집힌 채 그려지고</b>, 화면은 그것을 말해 주지
                 못합니다. 이은 뒤 목록에서 한번 확인하세요.
               </p>
             </>
@@ -568,9 +568,9 @@ function RollupSection({
             모을 것 추가
           </Button>
           <p className="text-muted-foreground text-xs">
-            상세 화면에 「아래 전부」 의 값이 뜹니다 — 어셈블리의 총 무게, 과제의 예산 합계처럼.
-            저장하지 않고 볼 때마다 세므로 부품을 고치면 바로 바뀝니다. 값이 빈 것은 몇 개인지 함께
-            보입니다.
+            상세 화면에 「아래 전부」 의 값이 표시됩니다 — 어셈블리의 총 무게, 과제의 예산 합계처럼.
+            저장하지 않고 볼 때마다 세므로 부품을 수정하면 바로 바뀝니다. 값이 빈 것은 몇 개인지
+            함께 보입니다.
           </p>
         </>
       )}

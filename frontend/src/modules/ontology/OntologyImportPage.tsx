@@ -99,7 +99,7 @@ export default function OntologyImportPage() {
     <div className="space-y-5">
       <p className="text-muted-foreground text-sm">
         정의를 통째로 받아 <b>한 트랜잭션으로</b> 적용합니다. 중간에 실패하면 반쯤 만들어진
-        온톨로지가 남지 않습니다. <b>더하고 수정만 합니다</b> — 스키마에 없다고 지우지
+        온톨로지가 남지 않습니다. <b>더하고 수정만 합니다</b> — 스키마에 없다고 삭제하지
         않습니다(부분 스키마를 한 번 보낸 날 그 타입의 객체가 갈 곳을 잃습니다).
       </p>
 
@@ -136,7 +136,7 @@ export default function OntologyImportPage() {
             />
             <Button variant="outline" size="sm" onClick={() => schemaFileRef.current?.click()}>
               <FileUp className="mr-1 size-4" />
-              정의 파일 올리기
+              정의 파일 업로드
             </Button>
             <Button variant="outline" size="sm" onClick={exportCurrent} disabled={!schema}>
               <Download className="mr-1 size-4" />
@@ -174,7 +174,7 @@ export default function OntologyImportPage() {
           {plan.applied && changed.length === 0 && (
             <p className="text-muted-foreground text-sm">
               <b>바뀐 것이 없습니다.</b> 그 시점의 정의가 지금과 같거나, 되돌리려던 것이 그때는 아직
-              없던 것일 수 있습니다 — 가져오기는 지우지 않습니다.
+              없던 것일 수 있습니다 — 가져오기는 삭제하지 않습니다.
             </p>
           )}
 
@@ -249,7 +249,8 @@ export default function OntologyImportPage() {
         </div>
         <p className="text-muted-foreground text-xs">
           가져오기 <b>직전</b>의 정의를 남깁니다. 복원은 그때의 정의를 다시 덮어씌우는 일이고,{' '}
-          <b>그 뒤에 새로 만든 것은 안 지웁니다</b> — 지우면 그 사이에 쌓인 객체가 갈 곳을 잃습니다.
+          <b>그 뒤에 새로 만든 것은 삭제하지 않습니다</b> — 삭제하면 그 사이에 쌓인 객체가 갈 곳을
+          잃습니다.
         </p>
 
         {(snapshots.data ?? []).length === 0 ? (
@@ -305,8 +306,8 @@ export default function OntologyImportPage() {
           description={
             <>
               그 시점의 묶음·타입·속성·관계를 <b>다시 덮어씌웁니다</b>. 그 뒤에 새로 만든 것은{' '}
-              <b>안 지웁니다</b> — 지우면 그 사이에 쌓인 객체가 갈 곳을 잃습니다. 복원 직전의
-              모습도 이력에 남습니다.
+              <b>삭제하지 않습니다</b> — 삭제하면 그 사이에 쌓인 객체가 갈 곳을 잃습니다. 복원
+              직전의 모습도 이력에 남습니다.
             </>
           }
           confirmLabel="복원"

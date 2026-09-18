@@ -21,7 +21,7 @@ def owner_of(row: ObjectType | RelationType) -> str:
 
 
 def objects_refusal(
-    object_type: ObjectType, *, source: str = "", what: str = "고치지"
+    object_type: ObjectType, *, source: str = "", what: str = "수정하지"
 ) -> str | None:
     """막아야 하면 사람에게 할 말, 아니면 None — 계획(행 오류)에 싣는 쪽이 쓴다."""
     owner = owner_of(object_type)
@@ -34,7 +34,7 @@ def objects_refusal(
 
 
 def require_objects_editable(
-    object_type: ObjectType, *, source: str = "", what: str = "고치지"
+    object_type: ObjectType, *, source: str = "", what: str = "수정하지"
 ) -> None:
     refused = objects_refusal(object_type, source=source, what=what)
     if refused:

@@ -30,7 +30,7 @@ const PLAN = {
       action: 'error',
       before: '',
       after: '',
-      message: '이 부서의 것은 고칠 수 없습니다.',
+      message: '이 부서의 것은 수정할 수 없습니다.',
     },
   ],
 }
@@ -52,7 +52,7 @@ async function open() {
   return onApplied
 }
 
-describe('여럿 골라 한 칸 바꾸기', () => {
+describe('여럿 골라 속성 변경', () => {
   it('계획을 먼저 보고, 바꿀 것이 있어야 적용할 수 있다', async () => {
     await open()
     // 계획 전에는 적용을 못 누른다 — 무엇이 바뀌는지 모른 채 누르는 일이 없어야 한다.
@@ -73,7 +73,7 @@ describe('여럿 골라 한 칸 바꾸기', () => {
   it('못 고치는 줄은 이유가 붙는다 — 조용히 빠지지 않는다', async () => {
     await open()
     await userEvent.click(screen.getByRole('button', { name: '계획 보기' }))
-    expect(await screen.findByText('이 부서의 것은 고칠 수 없습니다.')).toBeInTheDocument()
+    expect(await screen.findByText('이 부서의 것은 수정할 수 없습니다.')).toBeInTheDocument()
     expect(screen.getByText('사용 → 안 씀')).toBeInTheDocument()
   })
 

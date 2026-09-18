@@ -88,8 +88,8 @@ export function BulkUndoDialog({ typeSlug, batchId, onClose, onApplied }: Props)
           <DialogTitle>같이 바뀐 것 한 번에 복원</DialogTitle>
           <DialogDescription>
             {plan ? `「${plan.field_label}」 칸을 ` : ''}일괄 수정 전의 값으로 돌립니다.{' '}
-            <strong>그 뒤에 누가 또 고친 행은 건드리지 않습니다</strong> — 복원이 남의 새 작업을
-            지우면 안 되니까요.
+            <strong>그 뒤에 누가 또 수정한 행은 변경하지 않습니다</strong> — 복원이 남의 새 작업을
+            삭제하면 안 되니까요.
           </DialogDescription>
         </DialogHeader>
 

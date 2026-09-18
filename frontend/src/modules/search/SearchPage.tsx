@@ -149,7 +149,7 @@ export default function SearchPage() {
       {!q ? (
         <EmptyState
           title="무엇을 찾으시나요"
-          hint="이름 일부, 식별자, 또는 다른 시스템에서 쓰던 코드를 쳐 보세요. 타입은 안 골라도 됩니다."
+          hint="이름 일부, 식별자, 또는 다른 시스템에서 사용하던 코드를 입력해 보세요. 타입은 선택하지 않아도 됩니다."
         />
       ) : tooShort ? (
         <EmptyState

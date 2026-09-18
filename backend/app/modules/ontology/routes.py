@@ -1095,7 +1095,7 @@ def infer_from_file(
     if len(rows) > bulk.MAX_ROWS:
         raise Conflict(
             code("ONTOLOGY", 71),
-            f"한 번에 {bulk.MAX_ROWS}행까지입니다 (넣은 행 {len(rows)}). 나눠 올리세요.",
+            f"한 번에 {bulk.MAX_ROWS}행까지입니다 (보낸 행 {len(rows)}). 나눠 업로드하세요.",
         )
     inferred = inference.infer(rows)
     return InferOut(

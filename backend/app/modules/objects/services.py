@@ -44,7 +44,7 @@ def normalize_key(object_type: ObjectType, key: str | None) -> str | None:
         if key is not None:
             raise InvalidValue(
                 code("OBJECTS", 1),
-                f"{object_type.label}은 식별자를 쓰지 않는 타입입니다. 이름만 넣으세요.",
+                f"{object_type.label}은 식별자를 쓰지 않는 타입입니다. 이름만 입력하세요.",
             )
         return None
 
@@ -91,7 +91,7 @@ def require_key_free(
         raise Conflict(
             code("OBJECTS", 3),
             f"같은 식별자가 {where} 있습니다: {key}. "
-            "찾아서 고치는 편이 낫습니다 — 같은 것이 둘이 되면 둘 다 못 믿게 됩니다.",
+            "찾아서 수정하는 편이 낫습니다 — 같은 것이 둘이 되면 둘 다 못 믿게 됩니다.",
         )
 
 
@@ -156,7 +156,7 @@ def require_unique_properties(
             raise Conflict(
                 code("OBJECTS", 5),
                 f"{label}에 같은 값이 {where} 있습니다: {value}. "
-                "같은 것이 둘이 되면 둘 다 못 믿게 됩니다 — 찾아서 고치는 편이 낫습니다.",
+                "같은 것이 둘이 되면 둘 다 못 믿게 됩니다 — 찾아서 수정하는 편이 낫습니다.",
             )
 
 

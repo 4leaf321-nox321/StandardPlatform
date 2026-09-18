@@ -75,7 +75,7 @@ export default function OntologyTypesPage() {
       {groups.length === 0 && (
         <EmptyState
           title="묶음을 먼저 만드세요"
-          hint="타입은 만들 수 있지만, 들어갈 묶음이 없으면 사이드바에 서지 않습니다."
+          hint="타입은 만들 수 있지만, 들어갈 묶음이 없으면 사이드바에 표시되지 않습니다."
         />
       )}
 
@@ -84,7 +84,7 @@ export default function OntologyTypesPage() {
       {types.length === 0 ? (
         <EmptyState
           title="아직 타입이 없습니다"
-          hint="타입 하나를 만들면 그 순간 목록·상세 화면이 생깁니다. 사이드바에 세우려면 묶음을 함께 고르세요."
+          hint="타입 하나를 만들면 그 순간 목록·상세 화면이 생깁니다. 사이드바에 표시하려면 묶음을 함께 선택하세요."
         />
       ) : (
         <>
@@ -173,9 +173,9 @@ export default function OntologyTypesPage() {
             </Table>
           </div>
           <p className="text-muted-foreground text-xs">
-            <b>행</b>을 누르면 묶음·분류·식별자 정책을 고치거나 지웁니다. <b>「객체」 수</b>를
-            누르면 그 타입의 예시 객체가, <b>「속성 정의」 단추</b>를 누르면 그 타입이 담는 값의
-            모양이 아래에 열립니다.
+            <b>행</b>을 클릭하면 묶음·분류·식별자 정책을 수정하거나 삭제합니다. <b>「객체」 수</b>를
+            클릭하면 그 타입의 예시 객체가, <b>「속성 정의」 단추</b>를 클릭하면 그 타입이 포함하는
+            값의 모양이 아래에 열립니다.
           </p>
         </>
       )}
@@ -369,8 +369,8 @@ function PropertyEditor({
       <div className="flex items-center justify-between gap-3 border-t pt-3">
         <p className="text-muted-foreground text-xs">
           {readOnly
-            ? '허브가 내려준 타입이라 여기서 속성을 고치지 않습니다 — 허브에서 고친 뒤 받습니다.'
-            : `${type.properties.length > 0 ? '행을 누르면 이름·단위·안내·필수·여러 값을 고치거나 지웁니다. ' : ''}키와 종류는 만들 때만 정합니다.`}
+            ? '허브가 내려준 타입이라 여기서 속성을 수정하지 않습니다 — 허브에서 수정한 뒤 받습니다.'
+            : `${type.properties.length > 0 ? '행을 클릭하면 이름·단위·안내·필수·여러 값을 수정하거나 삭제합니다. ' : ''}키와 종류는 만들 때만 정합니다.`}
         </p>
         {!readOnly && (
           <Button size="sm" onClick={() => setCreating(true)}>
