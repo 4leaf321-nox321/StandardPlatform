@@ -26,7 +26,8 @@ const TOKEN_PLACEHOLDER = '‹발급받은_토큰›'
  * - 직접(접두어 없음): 앱 포트 +2. 개발(Vite)에서는 개발 MCP(8042).
  */
 export function mcpUrl(): string {
-  if (typeof window === 'undefined') return `http://localhost:8042/mcp`
+  // 브라우저 밖(시험)에서는 빈 주소 — 번들 검사가 「localhost:80…」 이 박힌 것을 막는다.
+  if (typeof window === 'undefined') return '/mcp'
   const { protocol, hostname, origin, port } = window.location
   if (PUBLIC_PATH) return `${origin}${PUBLIC_PATH}/mcp`
   if (import.meta.env.DEV) return `${protocol}//${hostname}:8042/mcp`
