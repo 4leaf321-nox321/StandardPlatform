@@ -15,7 +15,10 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
+import os
+from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
@@ -28,6 +31,7 @@ TOOLS = {
     "ontology_schema",
     "ontology_import",
     "objects_list",
+    "object_resolve",
     "objects_summary",
     "object_fields",
     "object_get",
@@ -234,3 +238,51 @@ def test_질의는_그대로_넘기고_본문을_돌려준다() -> None:
     seen = _serve(lambda _r: httpx.Response(200, text="sp:part a owl:Class ."))
     assert asyncio.run(server.rdf_schema(_ctx("Bearer t"))) == "sp:part a owl:Class ."
     assert seen[0].url.path == "/api/rdf/schema"
+
+
+def test_자취는_값을_안_남기고_모양만_남긴다() -> None:
+    """자취는 「AI 가 어디서 헤맸나」 를 보려는 것이지 데이터를 모으려는 게 아니다 —
+    객체 이름·속성 값이 파일에 쌓이면 그 파일 자체가 유출 경로가 된다."""
+    assert server._signal({"total": 0, "diagnosis": {"reason": "empty_type"}}) == {
+        "total": 0,
+        "outcome": "empty",
+        "reason": "empty_type",
+    }
+    assert server._signal({"match": "candidates", "candidates": [{"label": "한국소재"}]}) == {
+        "outcome": "ok",
+        "match": "candidates",
+    }
+    # 오류는 **코드만** — 문구에는 객체 이름이 들어간다.
+    assert server._signal({"error": "[APP-OBJ-0007] 출력은 500 kW 이하여야 합니다: 9000"}) == {
+        "outcome": "error",
+        "code": "APP-OBJ-0007",
+    }
+
+
+def test_자취를_켜도_도구는_그대로_선다(tmp_path: Any) -> None:
+    """감싸면 `FastMCP` 가 인자 모양을 못 읽을 수 있다 — 그러면 도구는 서는데
+    **인자가 없는 도구**가 되고, 그 사실은 붙여 보기 전까지 안 보인다."""
+    path = tmp_path / "trace.jsonl"
+    os.environ["MCP_TRACE_FILE"] = str(path)
+    try:
+        spec = importlib.util.spec_from_file_location(
+            "server_traced", Path(server.__file__).resolve()
+        )
+        assert spec is not None and spec.loader is not None
+        traced = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(traced)
+    finally:
+        del os.environ["MCP_TRACE_FILE"]
+
+    listed = asyncio.run(traced.mcp.list_tools())
+    assert {one.name for one in listed} == TOOLS
+    resolve = next(one for one in listed if one.name == "object_resolve")
+    assert {"type_slug", "name"} <= set(resolve.inputSchema["properties"])
+
+    traced._TRANSPORT = httpx.MockTransport(
+        lambda _r: httpx.Response(200, json={"match": "none", "hint": "없습니다"})
+    )
+    asyncio.run(traced.object_resolve(_ctx("Bearer t"), "vendor", "없는회사"))
+    line = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
+    assert line["tool"] == "object_resolve" and line["match"] == "none"
+    assert "없는회사" not in path.read_text(encoding="utf-8")

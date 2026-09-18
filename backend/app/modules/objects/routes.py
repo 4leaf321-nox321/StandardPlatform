@@ -31,6 +31,7 @@ from app.modules.objects import (
     paths,
     quality,
     refedges,
+    resolve,
     rollup,
     system,
     watches,
@@ -55,6 +56,7 @@ from app.modules.objects.schemas import (
     BulkEditRequest,
     BulkEditRow,
     BulkUndoRequest,
+    DiagnosisOut,
     FieldOptionOut,
     GroupOptionOut,
     HistoryBatchOut,
@@ -81,6 +83,7 @@ from app.modules.objects.schemas import (
     RelationCreateRequest,
     RelationHitOut,
     RelationPatchRequest,
+    ResolveOut,
     RestoreRequest,
     RollupOut,
     SavedViewOut,
@@ -120,7 +123,7 @@ from app.modules.ontology.services import (
 from app.modules.workspaces.models import Workspace
 from app.shared import audit, sheets
 from app.shared.auth import current_user
-from app.shared.errors import Conflict, Forbidden, NotFound, code
+from app.shared.errors import AppError, Conflict, Forbidden, NotFound, code
 from app.shared.pagination import Page, clamp_limit
 from app.shared.permissions import (
     my_workspace_ids,
@@ -622,20 +625,28 @@ def _filtered(
     year: int | None,
     under: uuid.UUID | None = None,
     deep: bool = True,
+    omit: str | None = None,
 ) -> Any:
     """목록과 내보내기가 **같은 거르기**를 쓴다. 따로 적으면 「화면에는 있는데 파일에는
-    없는」 줄이 생기고, 어느 쪽이 맞는지 아무도 모른다."""
+    없는」 줄이 생기고, 어느 쪽이 맞는지 아무도 모른다.
+
+    `omit` 은 **조건 하나만 빼고** 같은 질의를 세우는 자리다 — 0건일 때 「어느 조건을
+    빼면 몇 건인지」 를 말해 주려면 그 조건만 뺀 수를 세야 하고, 그 수를 여기 말고 다른
+    데서 세면 진단이 목록과 어긋난다(`resolve.diagnose`).
+    """
     stmt = select(ObjectInstance).where(
         ObjectInstance.type_id == object_type.id,
         ObjectInstance.deleted_at.is_(None),
         visible_owner_clause(user, ObjectInstance.owner_workspace_id),
     )
-    if status:
+    if status and omit != "status":
         stmt = stmt.where(ObjectInstance.status == status)
-    if q:
+    if q and omit != "q":
         stmt = apply_search(stmt, object_type, q)
-    if year is not None:
+    if year is not None and omit != "year":
         stmt = apply_year(db, stmt, object_type, year)
+    if under is not None and omit == "under":
+        under = None
     if under is not None:
         # **기본은 「아래 것까지 포함」 이다.** 안 그러면 상위 노드를 눌렀을 때
         # 목록이 비고, 그 빈 목록은 「없다」 로 읽힌다.
@@ -653,17 +664,54 @@ def _filtered(
             )
         stmt = stmt.where(ObjectInstance.id.in_(wanted))
     filters = {
-        key[2:]: value for key, value in request.query_params.items() if key.startswith("p.")
+        key[2:]: value
+        for key, value in request.query_params.items()
+        if key.startswith("p.") and key != omit
     }
     if filters:
         stmt = apply_property_filters(stmt, filters)
     # 조건 거르기 — `f.<칸>.<연산>=<값>`. 칸 안 OR, 칸끼리 AND.
-    asked = conditions.parse(request.query_params)
+    asked = [
+        one
+        for index, one in enumerate(conditions.parse(request.query_params))
+        if _condition_name(one, index) != omit
+    ]
     if asked:
         stmt = conditions.apply(
             stmt, properties_of(db, object_type.id), asked, paths.Resolver(db, object_type)
         )
     return stmt
+
+
+def _condition_name(one: conditions.Condition, index: int) -> str:
+    """조건 하나를 가리키는 이름. 같은 칸·같은 연산이 둘일 수 있어 차례를 붙인다."""
+    return f"f.{one.field}.{one.op}#{index}"
+
+
+def _filter_parts(
+    request: Request,
+    *,
+    q: str | None,
+    status: str | None,
+    year: int | None,
+    under: uuid.UUID | None,
+) -> list[tuple[str, str]]:
+    """걸린 거르기 전부 — (이름, 사람이 읽을 설명). 진단이 하나씩 떼어 본다."""
+    parts: list[tuple[str, str]] = []
+    if q:
+        parts.append(("q", f"검색어 「{q}」"))
+    if status:
+        parts.append(("status", f"상태 = {status}"))
+    if year is not None:
+        parts.append(("year", f"연도 = {year}"))
+    if under is not None:
+        parts.append(("under", "트리에서 고른 가지 아래"))
+    for key, value in request.query_params.items():
+        if key.startswith("p."):
+            parts.append((key, f"{key[2:]} = {value}"))
+    for index, one in enumerate(conditions.parse(request.query_params)):
+        parts.append((_condition_name(one, index), f"{one.field} {one.op} {one.value}"))
+    return parts
 
 
 # --- 저장된 뷰 ----------------------------------------------------------------
@@ -1477,6 +1525,106 @@ def list_objects(
         limit=capped,
         offset=offset,
     )
+
+
+# --- 해소 · 진단 --------------------------------------------------------------
+
+
+@router.get("/{type_slug}/resolve", response_model=ResolveOut)
+def resolve_name(
+    type_slug: str,
+    name: str = Query(description="이름·식별자·별칭 — 하나로 정해지는지 본다"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ResolveOut:
+    """이름 하나가 **어느 객체인지 정해지는가.**
+
+    목록이 아니라 판정을 준다 — `exact` 면 그 id 로 쓰고, `candidates` 면 쓰지 말고
+    사람에게 묻고, `none` 이면 없다. 이름으로 참조를 걸거나 관계를 잇기 **전에** 여기를
+    거치라고 두는 자리다(`resolve` 모듈의 설명).
+    """
+    object_type = _type(db, type_slug)
+    found = resolve.by_name(db, user, object_type, name)
+    return ResolveOut.model_validate(found)
+
+
+@router.get("/{type_slug}/diagnose", response_model=DiagnosisOut)
+def diagnose_list(
+    type_slug: str,
+    request: Request,
+    q: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    under: uuid.UUID | None = Query(default=None),
+    deep: bool = Query(default=True),
+    year: int | None = Query(default=None, ge=1900, le=2999),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> DiagnosisOut:
+    """목록이 0건일 때 **왜 0건인지.** 목록과 **같은 조건**을 그대로 넘긴다.
+
+    「없다」 와 「안 보인다」 와 「조건이 좁다」 를 가른다. 조건 때문이면 어느 조건을
+    빼면 몇 건인지, 그리고 그 중 **값이 비어 있어서** 빠진 것이 몇 건인지까지 말한다.
+    """
+    object_type = _type(db, type_slug)
+
+    def build(omit: str | None) -> Any:
+        return _filtered(
+            db,
+            user,
+            object_type,
+            request,
+            q=q,
+            status=status,
+            year=year,
+            under=under,
+            deep=deep,
+            omit=omit,
+        )
+
+    defs = properties_of(db, object_type.id)
+
+    def unknown(name: str) -> int | None:
+        """그 조건이 거는 칸에 **값이 없어서** 빠진 수. 셀 수 없으면 None.
+
+        `empty` 로 세지 않고 「`notempty` 가 아닌 것」 으로 센다. 다른 타입의 칸
+        (`ref.vendor.country`)은 **이어진 것이 아예 없는 객체**가 `empty` 에도 안
+        걸리기 때문이다 — 그것까지 「값 있음」 으로 치면 「아무도 안 채웠다」 를
+        놓친다.
+        """
+        if name.startswith("p."):
+            field = name[2:]
+        elif name.startswith("f."):
+            field = name[2:].rsplit("#", 1)[0].rsplit(".", 1)[0]
+        else:
+            return None
+        try:
+            rest = build(name)
+            known = conditions.apply(
+                rest,
+                defs,
+                [conditions.Condition(field=field, op="notempty", value="")],
+                paths.Resolver(db, object_type),
+            )
+            return max(count_of(db, rest) - count_of(db, known), 0)
+        except AppError:
+            return None
+
+    total = (
+        system.source_of(object_type).search(db, user, q, 1, 0)[1]
+        if system.is_system(object_type)
+        else count_of(db, build(None))
+    )
+    found = resolve.diagnose(
+        db,
+        user,
+        object_type,
+        total=total,
+        parts=_filter_parts(request, q=q, status=status, year=year, under=under),
+        without=build,
+        unknown=unknown,
+        count=lambda stmt: count_of(db, stmt),
+    )
+    return DiagnosisOut.model_validate(found)
 
 
 # --- 하나 -------------------------------------------------------------------

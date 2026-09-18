@@ -71,14 +71,15 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 
 스텁엔 안내 본문이 없으므로 **한 번 깔면 다시 복사할 일이 없다.**
 
-## 도구 열아홉
+## 도구 스물둘
 
 | 도구 | 무엇 |
 | --- | --- |
 | `get_guide` | 사용 안내 — **먼저 이것부터** |
 | `ontology_schema` | 묶음·타입·속성·관계 전부 |
 | `ontology_import` | 정의를 한 트랜잭션으로. **기본은 미리 보기**(`apply=false`) |
-| `objects_list` · `object_get` | 객체 읽기 — 화면과 같은 조건 거르기 (`object_get` 은 관련 객체까지) |
+| `object_resolve` | **이름 하나가 어느 객체인가** — `exact`/`candidates`/`none`. 이름으로 가리키기 전에 부른다 |
+| `objects_list` · `object_get` | 객체 읽기 — 화면과 같은 조건 거르기 (`object_get` 은 관련 객체까지). **0건이면 `diagnosis` 가 붙는다** |
 | `objects_summary` · `object_fields` | 통계(서버가 센다 — 화면의 「통계」 와 같다) · 다른 타입의 칸 주소(`ref.vendor.country` 등) |
 | `object_history` · `object_references` · `object_rollup` · `quality_report` | 이력 · 가리키는 것 · 아래 전부의 합 · 품질 — 화면의 읽기와 대칭 |
 | `object_create` · `object_update` | 객체 쓰기 (`update` 는 보낸 것만) |
@@ -90,11 +91,42 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 ### 왜 타입마다 도구를 안 만드나
 
 타입 20개에 도구가 80개가 되고, **도구 목록이 길수록 모델은 엉뚱한 것을 고른다.**
-도구는 열아홉으로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
+도구는 스물둘로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
 받는가」 를 말한다 — **동적인 것은 도구가 아니라 스키마다.**
 
 검증도 권한도 백엔드가 한다. 여기에 규칙을 두면 **MCP 로는 되는데 화면에서는 안
 되는** 상태가 생기고, 그때 어느 쪽이 맞는지 알 방법이 없다.
+
+## 헤매지 않게 두는 장치
+
+도구를 늘리는 것만으로는 AI 가 잘 돌지 않는다. **틀린 답을 그럴듯하게 내는 자리**를
+막는 장치가 따로 있다.
+
+| 겹 | 무엇 | 어디 |
+| --- | --- | --- |
+| 상시 문맥 | 「하려는 일 → 부를 것」 표와 지켜야 할 셋 | `server.py` 의 `instructions` |
+| 주문형 가이드 | 주제별 안내 — **서버가 최신본을 쥔다** | `get_guide` · `guide/GUIDE.md` |
+| 해소 강제 | 이름이 하나로 안 정해지면 **판정을 준다** | `object_resolve` |
+| 모름·빈 결과 구분 | 0건이 「없어서」 인지 「안 보여서」 인지 「조건이 좁아서」 인지 | `objects_list` 의 `diagnosis` |
+| 쓰기 방어 | 이름이 여럿에 맞으면 **거절한다** | 백엔드(`bulk.py` 의 참조 풀이) |
+| 측정 | 실제로 덜 헤매게 됐는지 | `eval/score.py` |
+
+## 측정 — `eval/`
+
+고친 것이 도움이 됐는지는 **수로만 안다.** 자취를 켜고(기본은 꺼짐) 시나리오를 시킨 뒤
+점수를 본다:
+
+```bash
+MCP_TRACE_FILE=~/mcp-trace.jsonl ./venv/bin/python server.py
+# 시나리오는 eval/cases.md — 고치기 전과 후에 같은 것을 시킨다
+./venv/bin/python eval/score.py ~/mcp-trace.jsonl --baseline 지난주.jsonl
+```
+
+자취에 남는 것은 **도구 이름 · 시간 · 판정 · 수**뿐이다. 객체 이름도 속성 값도 안
+남긴다 — 남기면 그 파일 자체가 유출 경로가 된다.
+
+**CI 에 넣지 않는다.** AI 의 답은 같은 물음에도 흔들리고, 흔들리는 수로 빌드를 막으면
+사람은 그 시험을 끄는 법부터 배운다.
 
 ## 운영 배포
 

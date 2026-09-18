@@ -601,3 +601,56 @@ class PointsOut(BaseModel):
     number_fields: list[GroupOptionOut]
     """숫자 칸 — 화면의 고르개가 이것만 보여 준다."""
     group_options: list[GroupOptionOut]
+
+
+# --- 해소 · 진단 --------------------------------------------------------------
+
+
+class ResolveHit(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    key: str | None
+    label: str
+    aliases: list[str] = Field(default_factory=list)
+    status: str
+    matched_by: str
+    """무엇으로 맞았나 — `id` · `key` · `alias` · `label` · `contains`."""
+    hint: str = ""
+
+
+class ResolveOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    match: str
+    """`exact` 면 `object` 를 쓴다. `candidates` 면 **쓰지 말고 사람에게 묻는다.**
+    `none` 이면 없다."""
+    object: ResolveHit | None = None
+    candidates: list[ResolveHit] = Field(default_factory=list)
+    hint: str = ""
+    truncated: bool = False
+
+
+class FilterEffectOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    name: str
+    label: str
+    remaining: int
+    """이 조건 하나만 빼면 몇 건."""
+    unknown: int | None = None
+    """그 칸에 **값이 없어서** 빠진 수 — 조건에 안 맞아 빠진 것과 다르다.
+    `null` 은 0 이 아니라 **못 셌다**는 뜻이다."""
+
+
+class DiagnosisOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    total: int
+    reason: str
+    """`has_rows` · `empty_type` · `not_visible` · `filters`."""
+    message: str
+    type_total: int
+    hidden: int
+    filters: list[FilterEffectOut] = Field(default_factory=list)
+    next_steps: list[str] = Field(default_factory=list)

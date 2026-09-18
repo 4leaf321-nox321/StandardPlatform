@@ -18,7 +18,8 @@ mcp__standardplatform__get_guide()
 최신본을 쥐고 있으므로** 이 파일이 오래돼도 안내는 항상 최신이다.
 
 - 인자 없이 부르면 **"하려는 일 → 어떤 도구" 표 + 기본 습관**이 온다. 대개 이걸로 충분하다.
-- 세부가 필요하면 그때 주제를 지정한다 — `schema` · `objects` · `bulk` · `relations`.
+- 세부가 필요하면 그때 주제를 지정한다 — `find` · `schema` · `objects` · `bulk` ·
+  `relations` · `sparql` · `modeling`.
 - 한 번에 다 받지 마라. 필요한 주제만 받는 게 싸다.
 
 ## 이 파일에 내용을 더 적지 마라
@@ -36,3 +37,7 @@ mcp__standardplatform__get_guide()
   경고를 사람에게 보여 주고 판단을 받은 뒤 `apply=true`.
 - **일괄 입력도 같다** — `objects_import`·`relations_import` 는 기본이 계획이다.
 - **관계에는 근거를 적는다** — `evidence_note`.
+- **이름은 해소하고 쓴다** — `object_resolve`. `candidates` 가 오면 고르지 말고
+  사람에게 묻는다. 목록의 첫 줄을 집으면 틀린 줄도 첫 줄이면 집힌다.
+- **0건은 「없다」 가 아니다** — 목록이 0건이면 응답의 `diagnosis` 를 읽고, 안 채운
+  타입인지·부서 밖이라 안 보이는지·조건이 좁은지 갈라 말한다.

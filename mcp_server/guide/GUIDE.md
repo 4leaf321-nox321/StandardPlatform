@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-09-14d
+GUIDE_VERSION: 2026-09-18a
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -15,7 +15,8 @@ GUIDE_VERSION: 2026-09-14d
 | 지금 무엇이 정의돼 있나 | `ontology_schema` | **다른 도구보다 먼저** |
 | 원천(엑셀 · PPT · PDF · Word)을 정제해 온톨로지로 만들기 전에 | `get_guide(topic="modeling")` | **무엇을 타입 · 속성 · 관계로 만드나** — 판단이 서지 않으면 만들지 않는다 |
 | 타입·속성·관계 종류를 만들거나 고치기 | `ontology_import(apply=false)` → 사람 확인 → `apply=true` | 미리 보기를 건너뛰지 않는다 |
-| 객체 찾기 | `objects_list(type_slug, q=, properties=, conditions=)` | 화면과 같은 거르기 |
+| **이름으로 무언가를 가리킨다** | `object_resolve(type_slug, name)` | `candidates` 면 **고르지 말고 사람에게 묻는다** |
+| 객체 찾기 | `objects_list(type_slug, q=, properties=, conditions=)` | 화면과 같은 거르기. **0건이면 `diagnosis` 를 읽는다** |
 | 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 한 걸음까지. 주소를 추측하지 않는다 |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | — |
@@ -43,6 +44,15 @@ GUIDE_VERSION: 2026-09-14d
   고쳐야 하는지 적혀 있다. 우회하지 말고 고쳐서 다시 부른다.
 - **권한은 토큰이 정한다.** `read` 만 있는 토큰으로는 쓰기가 거절된다 —
   사용자에게 범위(`objects:write`·`ontology:write`)를 알린다.
+- **이름은 해소하고 쓴다.** 참조 칸을 채우기 전에, 관계를 잇기 전에, 「그 부품」 이
+  무엇인지 정하기 전에 `object_resolve`. 목록에서 첫 줄을 집으면 **틀린 줄도 첫 줄이면
+  집힌다** — 그렇게 들어간 값은 사람 눈에 맞는 값처럼 보여서 아무도 안 고친다.
+- **0건은 「없다」 가 아니다.** 목록이 0건이면 응답에 `diagnosis` 가 붙는다. 안 채운
+  타입인지(`empty_type`), 부서 밖이라 안 보이는지(`not_visible`), 조건이 좁은지
+  (`filters`) 거기 적혀 있다. 읽기 전에 「없습니다」 라고 답하지 않는다.
+- **「모름」 과 「아님」 을 안 섞는다.** 조건에 안 맞아 빠진 것과 **값이 비어 있어서**
+  빠진 것은 다른 일이다. 진단의 `filters[].unknown` 이 그 수다 — 「조건에 맞는 것이
+  없다」 와 「그 칸을 아직 아무도 안 채웠다」 를 갈라 말한다.
 
 <!--@ schema -->
 ## 정의 읽기·바꾸기
@@ -85,6 +95,41 @@ GUIDE_VERSION: 2026-09-14d
 
 <!--@ find -->
 ## 찾기와 살피기
+
+### 먼저 — 이름 하나가 어느 객체인가: `object_resolve(type_slug, name)`
+
+돌아오는 `match` 가 셋 중 하나다.
+
+| `match` | 뜻 | 할 일 |
+|---|---|---|
+| `exact` | 하나로 정해졌다 | `object.id` 를 쓴다 |
+| `candidates` | 여럿이거나, 이름의 일부만 겹친다 | **쓰지 않는다.** 후보를 사람에게 보여 주고 묻는다 |
+| `none` | 없다 | 오타인지 아직 안 만든 것인지 사람에게 묻는다. **짐작해서 다른 것을 쓰지 않는다** |
+
+식별자 → 별칭 → 이름 → 포함 차례로 맞추고, 앞에서 정해지면 뒤는 안 본다. 별칭이 있으니
+「앤시스」 로 물어도 「Ansys」 가 나온다. **포함으로 하나만 걸려도 `exact` 가 아니다** —
+포함은 짐작이고, 짐작을 확정으로 부르면 그 짐작이 그대로 저장된다.
+
+### 0건일 때 — 목록에 붙어 오는 `diagnosis`
+
+`objects_list` 가 0건이면 응답에 `diagnosis` 가 붙는다:
+
+```json
+{"reason": "filters", "type_total": 240, "hidden": 0,
+ "message": "…「등급 = Z」 하나만 빼면 240건입니다. 그 중 180건은 그 칸이 비어 있어서…",
+ "filters": [{"label": "등급 = Z", "remaining": 240, "unknown": 180}],
+ "next_steps": ["…"]}
+```
+
+- `empty_type` — 그 타입에 객체가 하나도 없다. 조건 문제가 아니다.
+- `not_visible` — 있지만 내 부서 밖이라 안 보인다. **없는 것이 아니라 권한이 없는 것이다.**
+- `filters` — 조건이 좁다. `filters[].remaining` 이 「이 조건만 빼면 몇 건」,
+  `unknown` 이 「그 칸에 **값이 없어서**」 빠진 수다(다른 타입의 칸이면 **이어진 것이
+  아예 없는 것**도 여기 든다). `unknown` 이 `null` 이면 셀 수 없는 조건이다 —
+  0 이 아니라 **모른다**.
+
+사용자에게 옮길 때 셋을 섞지 않는다. 「없습니다」 와 「안 보입니다」 와 「조건에 맞는 것이
+없습니다」 와 「그 칸을 아직 아무도 안 채웠습니다」 는 **서로 다른 다음 행동**을 부른다.
 
 `objects_list(type_slug, q=, properties=, conditions=, status=, limit=, offset=)`:
 
@@ -147,6 +192,8 @@ GUIDE_VERSION: 2026-09-14d
 <!--@ objects -->
 ## 객체 하나씩
 
+- **만들기 전에 `object_resolve(type_slug, label)`.** 이미 있는 것을 다른 표기로 또
+  만들면 같은 것이 둘이 되고, 둘은 반드시 갈린다. `none` 일 때만 만든다.
 - `object_create(type_slug, label, key=, properties=, workspace_slug=)` —
   `workspace_slug` 를 비우면 **전역** 객체라 시스템 관리자만 만들 수 있다.
   `key_policy` 가 `required` 인 타입은 `key` 가 있어야 한다.
@@ -197,6 +244,9 @@ GUIDE_VERSION: 2026-09-14d
 - `relation_add(type_slug, object_id, relation, dst_object_id, evidence_note)` —
   `relation` 은 `ontology_schema` 의 `relation_types[].slug`. 출발 타입·도착 타입이
   정의와 맞아야 한다.
+- **양 끝은 id 다.** 이름밖에 없으면 `object_resolve` 로 먼저 푼다 — `candidates` 가
+  오면 잇지 말고 사람에게 묻는다. 틀리게 이은 선은 지워도 「왜 그렇게 이었는지」 를
+  본 사람의 기억에 남고, 그 기억이 다음 판단을 흔든다.
 - **근거를 적는다.** 어느 문서·어느 자료에서 이 연결이 나왔는지. 근거 없는 연결은
   시간이 지나면 아무도 못 믿고, 확인하려면 처음부터 다시 조사해야 한다.
 - 여러 줄이면 `relations_import(type_slug, rows, apply)` — 행은

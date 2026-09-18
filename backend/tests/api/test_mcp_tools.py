@@ -450,3 +450,68 @@ def test_묶음을_도구로_미리_본다(bot: Bot) -> None:
     assert seen["counts"]["objects_create"] == 1
     with pytest.raises(ToolError):
         bot.call(server.objects_list, slug)
+
+
+def test_이름은_해소하고_쓴다(bot: Bot) -> None:
+    """**AI 는 첫 줄을 집는다 — 틀린 줄도 첫 줄이면 집는다.** 그래서 이름으로 가리키는
+    자리에는 목록이 아니라 판정을 준다."""
+    slug = _uniq("vendor")
+    bot.call(
+        server.ontology_import,
+        {"types": [{"slug": slug, "label": "공급사", "key_policy": "optional"}]},
+        apply=True,
+    )
+    ansys = bot.call(server.object_create, slug, label="Ansys", key="V-001")
+    bot.call(server.object_create, slug, label="Ansys Korea")
+
+    exact = bot.call(server.object_resolve, slug, "V-001")
+    assert exact["match"] == "exact" and exact["object"]["id"] == ansys["id"]
+
+    # 포함으로 둘이 걸린다 — 하나를 고르지 않는다.
+    many = bot.call(server.object_resolve, slug, "Ans")
+    assert many["match"] == "candidates" and many["object"] is None
+    assert {one["label"] for one in many["candidates"]} == {"Ansys", "Ansys Korea"}
+
+    assert bot.call(server.object_resolve, slug, "없는회사")["match"] == "none"
+
+
+def test_빈_목록에는_이유가_붙는다(bot: Bot) -> None:
+    """0건을 「없다」 로 읽으면 사람은 없는 것을 새로 만든다. 무엇 때문에 0건인지
+    **목록과 같은 응답에** 붙어야 모델이 그것을 읽는다."""
+    slug = _uniq("part")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": slug,
+                    "label": "부품",
+                    "key_policy": "optional",
+                    "properties": [{"key": "grade", "label": "등급", "data_type": "text"}],
+                }
+            ]
+        },
+        apply=True,
+    )
+
+    empty = bot.call(server.objects_list, slug)
+    assert empty["total"] == 0
+    assert empty["diagnosis"]["reason"] == "empty_type"
+
+    bot.call(server.object_create, slug, label="볼트", properties={"grade": "A"})
+    bot.call(server.object_create, slug, label="너트")  # 등급이 비어 있다
+
+    narrow = bot.call(
+        server.objects_list,
+        slug,
+        conditions=[{"field": "grade", "op": "eq", "value": "Z"}],
+    )
+    assert narrow["total"] == 0
+    found = narrow["diagnosis"]
+    assert found["reason"] == "filters" and found["type_total"] == 2
+    # 「조건에 안 맞음」 과 「값이 없음」 을 가른다.
+    assert found["filters"][0]["remaining"] == 2
+    assert found["filters"][0]["unknown"] == 1
+
+    # 있으면 진단은 안 붙는다 — 덤이 답을 가리지 않는다.
+    assert "diagnosis" not in bot.call(server.objects_list, slug)

@@ -24,8 +24,12 @@ Claude Code 등록(사용자별 토큰):
 
 from __future__ import annotations
 
+import contextlib
+import functools
+import json
 import os
 import re
+import time
 from typing import Any
 
 import httpx
@@ -47,15 +51,109 @@ mcp = FastMCP(
     json_response=_JSON_RESPONSE,
     instructions=(
         "이 설치의 온톨로지를 읽고 쓴다. **`get_guide` 와 `ontology_schema` 를 먼저 "
-        "부른다** — 무엇을 만들 수 있고 각 타입이 어떤 값을 받는지가 거기 다 있다. "
-        "정의를 바꿀 때는 `ontology_import` 를 기본값(apply=false)으로 먼저 불러 "
-        "계획과 경고를 사람에게 보여 주고, 판단을 받은 뒤에 apply=true 로 부른다."
+        "부른다** — 무엇을 만들 수 있고 각 타입이 어떤 값을 받는지가 거기 다 있다.\n"
+        "\n"
+        "하려는 일 → 부를 것:\n"
+        "  이름으로 무언가를 가리킨다      object_resolve   ← 참조·관계·질문의 첫 걸음\n"
+        "  그 타입에 무엇이 있나           objects_list\n"
+        "  몇 건인가 · 어떻게 갈리나       objects_summary  (세려고 전부 받지 마라)\n"
+        "  이 객체의 모든 것               object_get · object_references · object_rollup\n"
+        "  여러 타입을 건너뛰는 물음       rdf_query (SPARQL)\n"
+        "  정의를 바꾼다                   ontology_import (apply=false 로 먼저)\n"
+        "\n"
+        "지켜야 할 셋:\n"
+        "1. **이름은 해소하고 쓴다.** `object_resolve` 가 `candidates` 를 주면 고르지 "
+        "말고 사람에게 묻는다 — 목록의 첫 줄을 집으면 틀린 줄도 집힌다.\n"
+        "2. **0건은 「없다」 가 아니다.** 목록이 0건이면 응답에 `diagnosis` 가 붙는다 "
+        "— 안 채운 타입인지, 부서 밖이라 안 보이는지, 조건이 좁은지 거기 적혀 있다. "
+        "그것을 읽기 전에 「없습니다」 라고 답하지 마라.\n"
+        "3. **정의를 바꿀 때는 미리 보기 먼저.** `ontology_import` 를 기본값"
+        "(apply=false)으로 불러 계획과 경고를 사람에게 보여 주고, 판단을 받은 뒤에 "
+        "apply=true 로 부른다."
     ),
 )
 
 #: 시험이 갈아 끼우는 자리 — 진짜 앱(ASGI)이나 가짜 응답을 여기로 붙인다.
 #: 운영에서는 None(실제 네트워크).
 _TRANSPORT: httpx.AsyncBaseTransport | None = None
+
+#: 자취를 남길 파일(JSONL). 비어 있으면 **아무것도 안 남긴다** — 기본은 끔이다.
+#: 켜면 도구 한 번이 한 줄이 되고, `eval/score.py` 가 그 줄들을 점수로 바꾼다.
+_TRACE_PATH = os.environ.get("MCP_TRACE_FILE")
+
+
+def _signal(got: Any) -> dict[str, Any]:
+    """자취에 남길 **모양만.** 값은 안 남긴다.
+
+    자취는 「AI 가 어디서 헤맸나」 를 보려고 남기는 것이지 데이터를 모으려는 게
+    아니다. 객체 이름·속성 값이 파일에 쌓이면 그 파일 자체가 유출 경로가 된다 —
+    그래서 남기는 것은 **수와 판정뿐**이다(몇 건인가, exact 인가, 왜 0건인가).
+    """
+    out: dict[str, Any] = {}
+    if not isinstance(got, dict):
+        return {"outcome": "ok"}
+    if "error" in got:
+        # 코드만 — 문구에는 객체 이름이 들어간다.
+        head = str(got["error"])
+        out["outcome"] = "error"
+        out["code"] = head[1 : head.find("]")] if head.startswith("[") else "?"
+        return out
+    if "total" in got:
+        out["total"] = got["total"]
+        out["outcome"] = "empty" if got["total"] == 0 else "ok"
+        found = got.get("diagnosis")
+        if isinstance(found, dict):
+            out["reason"] = found.get("reason")
+        return out
+    if "match" in got:
+        out["outcome"] = "ok"
+        out["match"] = got["match"]
+        return out
+    out["outcome"] = "ok"
+    return out
+
+
+def _traced(fn: Any) -> Any:
+    """도구 한 번 = 한 줄. `MCP_TRACE_FILE` 이 없으면 **감싸지도 않는다.**"""
+    if not _TRACE_PATH:
+        return fn
+
+    @functools.wraps(fn)
+    async def inner(ctx: Any, *args: Any, **kwargs: Any) -> Any:
+        started = time.monotonic()
+        try:
+            got = await fn(ctx, *args, **kwargs)
+        except Exception as caught:
+            _write_trace(fn, started, {"outcome": "raised", "code": type(caught).__name__})
+            raise
+        _write_trace(fn, started, _signal(got))
+        return got
+
+    return inner
+
+
+def _write_trace(fn: Any, started: float, signal: dict[str, Any]) -> None:
+    line = {
+        "ts": time.time(),
+        "tool": fn.__name__,
+        "ms": round((time.monotonic() - started) * 1000),
+        **signal,
+    }
+    with contextlib.suppress(OSError), open(str(_TRACE_PATH), "a", encoding="utf-8") as f:
+        f.write(json.dumps(line, ensure_ascii=False) + "\n")
+
+
+def tool() -> Any:
+    """`@tool()` 과 같되 자취를 남긴다 — 등록과 측정을 한 자리에서 정한다.
+
+    도구마다 따로 감싸면 새 도구를 넣은 사람이 그 한 줄을 잊고, 그러면 **그 도구만
+    측정에서 빠진다** — 빠진 줄은 「안 쓴 도구」 처럼 보인다.
+    """
+
+    def wrap(fn: Any) -> Any:
+        return mcp.tool()(_traced(fn))
+
+    return wrap
 
 
 def _forward_headers(ctx: Context) -> dict[str, str]:
@@ -172,7 +270,7 @@ def _guide_sections() -> tuple[str, dict[str, str]]:
     return version, {k: "\n".join(v).strip() for k, v in out.items()}
 
 
-@mcp.tool()
+@tool()
 async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
     """**StandardPlatform 작업을 시작하기 전에 먼저 부른다.** 무엇을 어떤 순서로
     쓸지, 정의를 바꿀 때 무엇을 조심할지 이 가이드가 정한다(서버가 최신본을 쥔다).
@@ -216,7 +314,7 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
 # --------------------------------------------------------------------------- #
 # 정의
 # --------------------------------------------------------------------------- #
-@mcp.tool()
+@tool()
 async def ontology_schema(ctx: Context) -> Any:
     """이 설치의 **정의 전부** — 묶음·타입·속성·관계 종류.
 
@@ -225,7 +323,7 @@ async def ontology_schema(ctx: Context) -> Any:
     return await _get(ctx, "/api/ontology/schema")
 
 
-@mcp.tool()
+@tool()
 async def ontology_import(
     ctx: Context,
     schema: dict[str, Any],
@@ -249,7 +347,7 @@ async def ontology_import(
 # --------------------------------------------------------------------------- #
 # 객체
 # --------------------------------------------------------------------------- #
-@mcp.tool()
+@tool()
 async def objects_list(
     ctx: Context,
     type_slug: str,
@@ -275,13 +373,25 @@ async def objects_list(
     - `status`: `active` · `deprecated`.
 
     응답의 `total` 이 전체 수다 — 한 쪽(limit ≤ 200)씩 `offset` 으로 넘긴다.
-    **몇 건인지 세려면 전부 받지 말고 `objects_summary`.**"""
-    params: list[tuple[str, Any]] = [
-        ("limit", limit),
-        ("offset", offset),
-        *_filter_params(q, status, properties, conditions),
-    ]
-    return await _get(ctx, f"/api/objects/{type_slug}", params=params)
+    **몇 건인지 세려면 전부 받지 말고 `objects_summary`.**
+
+    **0건이면 `diagnosis` 가 붙는다** — 「타입에 객체가 없음(empty_type)」 · 「부서 밖이라
+    안 보임(not_visible)」 · 「조건이 좁음(filters)」 중 무엇인지, 조건 때문이면 어느 조건을
+    빼면 몇 건인지, 그 중 **값이 비어 있어서** 빠진 것이 몇 건인지까지 있다. 읽지 않고
+    「없습니다」 라고 답하지 마라 — 있는 것을 없다고 하면 사람은 그것을 새로 만든다."""
+    filters = _filter_params(q, status, properties, conditions)
+    params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset), *filters]
+    found = await _get(ctx, f"/api/objects/{type_slug}", params=params)
+    if isinstance(found, dict) and found.get("total") == 0:
+        # **0건은 「없다」 가 아니다.** 안 채운 타입일 수도, 부서 밖이라 안 보일 수도,
+        # 조건이 좁을 뿐일 수도 있다. 셋을 안 가르면 모델은 「없다」 로 읽고 없는 것을
+        # 새로 만든다 — 그래서 0건일 때만 한 번 더 물어 이유를 붙인다.
+        # 진단이 실패해도 목록은 돌려준다 — 덤이 본래 답을 막으면 안 된다.
+        with contextlib.suppress(Exception):
+            found["diagnosis"] = await _get(
+                ctx, f"/api/objects/{type_slug}/diagnose", params=list(filters)
+            )
+    return found
 
 
 def _filter_params(
@@ -307,7 +417,23 @@ def _filter_params(
     return params
 
 
-@mcp.tool()
+@tool()
+async def object_resolve(ctx: Context, type_slug: str, name: str) -> Any:
+    """이름 하나가 **어느 객체인지 정해지는가** — 이름으로 무언가를 가리키기 전에 부른다.
+
+    참조 칸을 채우거나 관계를 잇거나 「그 부품 상태 알려줘」 를 풀 때, 목록에서 첫 줄을
+    집으면 **틀린 줄도 첫 줄이면 집힌다.** 그래서 목록이 아니라 판정을 준다:
+
+      - `exact`      → `object.id` 를 그대로 쓴다.
+      - `candidates` → **쓰지 마라.** 후보를 사람에게 보여 주고 어느 것인지 묻는다.
+      - `none`       → 없다. 오타인지 아직 안 만든 것인지 사람에게 묻는다. 짐작하지 마라.
+
+    식별자 → 별칭 → 이름 → 포함 차례로 맞춘다. 별칭이 있으므로 「앤시스」 로 물어도
+    「Ansys」 가 나온다. **포함으로 하나만 걸려도 `exact` 가 아니다** — 포함은 짐작이다."""
+    return await _get(ctx, f"/api/objects/{type_slug}/resolve", params=[("name", name)])
+
+
+@tool()
 async def objects_summary(
     ctx: Context,
     type_slug: str,
@@ -357,7 +483,7 @@ async def objects_summary(
     return await _get(ctx, f"/api/objects/{type_slug}/summary", params=params)
 
 
-@mcp.tool()
+@tool()
 async def object_fields(ctx: Context, type_slug: str) -> Any:
     """**다른 타입의 칸**을 쓰는 주소 — `conditions` 의 `field`, `objects_summary`
     의 `group_by` 에 그대로 넣는다. 자기 칸은 `ontology_schema` 에 있다.
@@ -374,13 +500,13 @@ async def object_fields(ctx: Context, type_slug: str) -> Any:
     return await _get(ctx, f"/api/objects/{type_slug}/fields")
 
 
-@mcp.tool()
+@tool()
 async def object_get(ctx: Context, type_slug: str, object_id: str) -> Any:
     """객체 하나 — 속성·첨부·**관련 객체**(양방향)까지."""
     return await _get(ctx, f"/api/objects/{type_slug}/{object_id}")
 
 
-@mcp.tool()
+@tool()
 async def object_history(ctx: Context, type_slug: str, object_id: str) -> Any:
     """객체의 **변경 이력** — 최근 것이 앞. 언제·누가·어느 칸을 전→후, 관계를 맺고 끊은 것.
 
@@ -389,7 +515,7 @@ async def object_history(ctx: Context, type_slug: str, object_id: str) -> Any:
     return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/history")
 
 
-@mcp.tool()
+@tool()
 async def object_rollup(ctx: Context, type_slug: str, object_id: str) -> Any:
     """이 객체 **「아래 전부」 의 숫자를 모은 것** — 어셈블리의 총 무게, 과제의 예산 합계.
 
@@ -399,7 +525,7 @@ async def object_rollup(ctx: Context, type_slug: str, object_id: str) -> Any:
     return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/rollup")
 
 
-@mcp.tool()
+@tool()
 async def object_references(ctx: Context, type_slug: str, object_id: str) -> Any:
     """이 객체를 **가리키는 것** — 속성으로 가리키는 객체들과 걸린 관계들.
 
@@ -408,7 +534,7 @@ async def object_references(ctx: Context, type_slug: str, object_id: str) -> Any
     return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/references")
 
 
-@mcp.tool()
+@tool()
 async def quality_report(ctx: Context, kind: str | None = None) -> Any:
     """데이터 품질 — **나빠지고 있는 것.** 홈 「남은 일」 과 같은 것.
 
@@ -419,7 +545,7 @@ async def quality_report(ctx: Context, kind: str | None = None) -> Any:
     return await _get(ctx, "/api/objects/quality/report", params=params)
 
 
-@mcp.tool()
+@tool()
 async def object_create(
     ctx: Context,
     type_slug: str,
@@ -446,7 +572,7 @@ async def object_create(
     )
 
 
-@mcp.tool()
+@tool()
 async def object_update(
     ctx: Context,
     type_slug: str,
@@ -484,7 +610,7 @@ async def object_update(
     return got if got is not None else {"ok": True, "message": "바꿀 것이 없었습니다"}
 
 
-@mcp.tool()
+@tool()
 async def objects_import(
     ctx: Context,
     type_slug: str,
@@ -511,7 +637,7 @@ async def objects_import(
 # --------------------------------------------------------------------------- #
 # 관계
 # --------------------------------------------------------------------------- #
-@mcp.tool()
+@tool()
 async def bundle_import(ctx: Context, bundle: dict[str, Any], apply: bool = False) -> Any:
     """**정의 · 객체 · 관계를 한 묶음으로** — 정제 도구(`pipeline/`)가 만든 결과물.
 
@@ -532,7 +658,7 @@ async def bundle_import(ctx: Context, bundle: dict[str, Any], apply: bool = Fals
     return await _post(ctx, "/api/bundles/import", {**bundle, "apply": apply})
 
 
-@mcp.tool()
+@tool()
 async def relation_add(
     ctx: Context,
     type_slug: str,
@@ -552,7 +678,7 @@ async def relation_add(
     )
 
 
-@mcp.tool()
+@tool()
 async def relations_import(
     ctx: Context,
     type_slug: str,
@@ -574,14 +700,14 @@ async def relations_import(
 # --------------------------------------------------------------------------- #
 # 데이터 소스 — 바깥 시스템(OData)에서 읽어 채우기. 정의는 화면에서, 돌리는 것은 여기서도.
 # --------------------------------------------------------------------------- #
-@mcp.tool()
+@tool()
 async def datasources_list(ctx: Context) -> Any:
     """정의된 **데이터 소스**(OData → 타입) 목록 — 어느 표를 어느 타입에 넣는지, 마지막 결과.
     시스템 관리자 토큰이어야 보인다."""
     return await _get(ctx, "/api/datasources")
 
 
-@mcp.tool()
+@tool()
 async def datasource_sync(ctx: Context, slug: str, apply: bool = False) -> Any:
     """데이터 소스를 **동기화**한다 — 바깥 표를 읽어 그 타입의 객체로.
 
@@ -603,7 +729,7 @@ async def datasource_sync(ctx: Context, slug: str, apply: bool = False) -> Any:
 # 목록 · 조건 · 통계는 한 타입 안에서 쉽다. 「코어를 건너뛰어 잇는 물음」(모델 → 과제 →
 # 프로젝트를 한 번에, 역관계로 거슬러, 상속으로 묶어)은 질의어가 낫다.
 # --------------------------------------------------------------------------- #
-@mcp.tool()
+@tool()
 async def rdf_schema(ctx: Context) -> str:
     """이 설치의 정의를 **OWL(Turtle)** 로 — 클래스 · 속성 · 관계와 그 뜻.
 
@@ -618,7 +744,7 @@ async def rdf_schema(ctx: Context) -> str:
         return response.text
 
 
-@mcp.tool()
+@tool()
 async def rdf_query(
     ctx: Context,
     query: str,
