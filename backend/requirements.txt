@@ -30,3 +30,7 @@ typing_extensions==4.16.0
 tzdata==2026.3
 uvicorn==0.52.3
 watchfiles==1.2.0
+# RDF/OWL 내보내기와 OWL-RL 추론 — 순수 파이썬(별도 서버 없음)
+rdflib==7.6.0
+owlrl==7.6.2
+pyparsing==3.3.2

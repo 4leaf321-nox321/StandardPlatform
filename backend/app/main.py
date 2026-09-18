@@ -42,6 +42,7 @@ from app.modules.objects import routes as objects_routes
 from app.modules.objects import services as objects_services
 from app.modules.objects import watches as objects_watches
 from app.modules.ontology import routes as ontology_routes
+from app.modules.rdf import routes as rdf_routes
 from app.modules.search import routes as search_routes
 from app.modules.server import routes as server_routes
 from app.modules.webhooks import routes as webhooks_routes
@@ -90,6 +91,8 @@ def _api_router(settings: Settings) -> APIRouter:
     # 정의 · 객체 · 관계를 한 묶음으로 — 로컬 정제 도구(pipeline/)가 부른다.
     router.include_router(bundles_routes.router)
     router.include_router(graph_routes.router)
+    # 정의 · 데이터를 RDF/OWL 로 — 추론은 바깥(또는 owlrl)이 한다. 플랫폼이 정본, RDF 는 사본.
+    router.include_router(rdf_routes.router)
     router.include_router(search_routes.router)
     router.include_router(server_routes.router)
 

@@ -58,6 +58,7 @@ TYPE_FIELDS = {
     "description",
     "sort_order",
     "nav_group_slug",
+    "parent_slug",
     "kind_class",
     "system_source",
     "entry_policy",
@@ -217,6 +218,13 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
         wanted = one.get("nav_group_slug")
         if wanted and wanted not in groups and wanted not in incoming:
             out.errors.append(f"타입 {slug}: 없는 묶음을 가리킵니다: {wanted}")
+        # 상위 타입도 같은 스키마 안에서 함께 오는 것을 인정한다. 자기 자신은 안 된다.
+        parent = one.get("parent_slug")
+        incoming_types = {t.get("slug") for t in payload.get("types") or []}
+        if parent == slug:
+            out.errors.append(f"타입 {slug}: 자기 자신을 상위 타입으로 가리킵니다")
+        elif parent and parent not in types and parent not in incoming_types:
+            out.errors.append(f"타입 {slug}: 없는 상위 타입을 가리킵니다: {parent}")
 
         # 투영 타입은 비출 표가 등록돼 있어야 한다 — 보낸 것과 있는 것을 합쳐 본다.
         kind = one.get("kind_class", object_type.kind_class if object_type else "record")

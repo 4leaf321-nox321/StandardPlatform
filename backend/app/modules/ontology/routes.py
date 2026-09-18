@@ -140,6 +140,7 @@ def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectType
         system_source=row.system_source,
         entry_policy=row.entry_policy,
         managed_by=row.managed_by,
+        parent_slug=row.parent_slug,
         key_policy=row.key_policy,
         key_scope=row.key_scope,
         temporal_kind=row.temporal_kind,
@@ -150,6 +151,26 @@ def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectType
         is_active=row.is_active,
         object_count=count,
     )
+
+
+def _parent_slug(db: Session, slug: str, wanted: str | None) -> str | None:
+    """상위 타입 — 있어야 하고, 자기 자신이나 자기 아래 것이면 안 된다(고리는 추론기를
+    돈다)."""
+    if not wanted:
+        return None
+    if wanted == slug:
+        raise Conflict(code("ONTOLOGY", 90), "타입이 자기 자신의 상위일 수 없습니다.")
+    by_slug = {row.slug: row for row in db.scalars(select(ObjectType))}
+    if wanted not in by_slug:
+        raise NotFound(code("ONTOLOGY", 91), f"없는 상위 타입입니다: {wanted}")
+    seen = {slug}
+    cursor: str | None = wanted
+    while cursor:
+        if cursor in seen:
+            raise Conflict(code("ONTOLOGY", 92), f"상위 타입이 고리를 이룹니다: {wanted}")
+        seen.add(cursor)
+        cursor = by_slug[cursor].parent_slug if cursor in by_slug else None
+    return wanted
 
 
 def _group_slugs(db: Session) -> dict[uuid.UUID, str]:
@@ -258,6 +279,7 @@ def create_type(
         raise Conflict(code("ONTOLOGY", 33), f"이미 있는 타입입니다: {slug}")
 
     group = _group(db, payload.nav_group_slug) if payload.nav_group_slug else None
+    parent = _parent_slug(db, slug, payload.parent_slug)
     # 새 타입에는 속성이 없다 — 뷰가 속성을 가리키면 그 자리에서 걸린다.
     views.validate_list_view(payload.list_view, [])
     views.validate_form_view(payload.form_view, [], what="폼 화면")
@@ -269,6 +291,7 @@ def create_type(
         description=payload.description,
         sort_order=payload.sort_order,
         nav_group_id=group.id if group else None,
+        parent_slug=parent,
         kind_class=payload.kind_class,
         system_source=payload.system_source,
         entry_policy=payload.entry_policy,
@@ -365,6 +388,8 @@ def update_type(
     if "nav_group_slug" in sent:
         group = _group(db, payload.nav_group_slug) if payload.nav_group_slug else None
         row.nav_group_id = group.id if group else None
+    if "parent_slug" in sent:
+        row.parent_slug = _parent_slug(db, row.slug, payload.parent_slug)
 
     _audit(
         db,

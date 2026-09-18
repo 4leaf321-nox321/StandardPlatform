@@ -7239,6 +7239,174 @@
         }
       }
     },
+    "/api/rdf/schema": {
+      "get": {
+        "tags": [
+          "rdf"
+        ],
+        "summary": "Schema",
+        "description": "정의(타입 · 속성 · 관계 종류) → OWL.",
+        "operationId": "schema_api_rdf_schema_get",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "description": "ttl · jsonld · xml",
+              "default": "ttl",
+              "title": "Format"
+            },
+            "description": "ttl · jsonld · xml"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rdf/data": {
+      "get": {
+        "tags": [
+          "rdf"
+        ],
+        "summary": "Data",
+        "description": "데이터(객체 · 값 · 관계) → RDF. 정의는 `/schema` 와 합쳐 쓴다.",
+        "operationId": "data_api_rdf_data_get",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "ttl",
+              "title": "Format"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 타입들만(비우면 전부)",
+              "title": "Type"
+            },
+            "description": "이 타입들만(비우면 전부)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/rdf/inferred": {
+      "get": {
+        "tags": [
+          "rdf"
+        ],
+        "summary": "Inferred",
+        "description": "OWL-RL 추론으로 **새로 생긴** 트리플만 — 상속으로 얻은 분류 · 역관계 · 이행 관계.\n\n플랫폼 안에서 돌리므로 별도 추론 서버가 없어도 「추론하면 무엇이 더 나오나」 를 본다.\n규모가 커지면 `/schema` + `/data` 를 트리플 스토어에 넣고 거기서 돌린다.",
+        "operationId": "inferred_api_rdf_inferred_get",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "ttl",
+              "title": "Format"
+            }
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Type"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/search": {
       "get": {
         "tags": [
@@ -10835,6 +11003,17 @@
             "title": "Managed By",
             "default": ""
           },
+          "parent_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Slug"
+          },
           "key_policy": {
             "type": "string",
             "title": "Key Policy"
@@ -10959,6 +11138,17 @@
               }
             ],
             "title": "Nav Group Slug"
+          },
+          "parent_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Slug"
           },
           "kind_class": {
             "anyOf": [
@@ -11156,6 +11346,17 @@
             "title": "Managed By",
             "default": ""
           },
+          "parent_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Slug"
+          },
           "key_policy": {
             "type": "string",
             "title": "Key Policy"
@@ -11268,6 +11469,17 @@
               }
             ],
             "title": "Nav Group Slug"
+          },
+          "parent_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Slug"
           },
           "kind_class": {
             "type": "string",

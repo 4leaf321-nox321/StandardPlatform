@@ -101,6 +101,8 @@ class ObjectTypeOut(BaseModel):
     entry_policy: str
     managed_by: str = ""
     """빈 값이면 이 설치의 정의, `hub` 면 허브가 내려준 것 — 화면은 고치는 단추를 감춘다."""
+    parent_slug: str | None = None
+    """상위 타입 — RDF/OWL 의 rdfs:subClassOf. 화면 동작은 바꾸지 않는다."""
     key_policy: str
     key_scope: str
     temporal_kind: str
@@ -122,6 +124,7 @@ class ObjectTypeWriteRequest(BaseModel):
     sort_order: int = 0
     nav_group_slug: str | None = None
     """NULL 이면 사이드바에 안 선다. 어휘 축은 대개 그렇다."""
+    parent_slug: str | None = None
     kind_class: str = "record"
     system_source: str = ""
     entry_policy: str = "open"
@@ -150,6 +153,8 @@ class ObjectTypePatchRequest(BaseModel):
     sort_order: int | None = None
     nav_group_slug: str | None = None
     """`null` 을 명시하면 사이드바에서 뺀다. 안 보내면 그대로 둔다."""
+    parent_slug: str | None = None
+    """상위 타입. `null` 을 명시하면 뗀다."""
     kind_class: str | None = None
     system_source: str | None = None
     entry_policy: str | None = None

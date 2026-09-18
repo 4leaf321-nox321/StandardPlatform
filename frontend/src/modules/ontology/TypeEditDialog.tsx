@@ -52,6 +52,8 @@ interface Props {
   /** 속성 정의까지 들고 온다 — **열로 고를 것이 그 목록에서 나온다.** */
   type: ObjectType & { properties: PropertyDef[] }
   groups: NavGroupRow[]
+  /** 상위 타입으로 고를 수 있는 것 — 자기 자신은 뺀다. 안 주면 상위 타입 칸이 없다. */
+  types?: ObjectType[]
   relationTypes: RelationType[]
   /** 투영이 비출 수 있는 원 표. 스키마가 준다 — 등록 안 된 표는 고를 수 없다. */
   systemSources?: SystemSource[]
@@ -62,6 +64,7 @@ interface Props {
 export function TypeEditDialog({
   type,
   groups,
+  types = [],
   relationTypes,
   systemSources = [],
   onClose,
@@ -71,6 +74,7 @@ export function TypeEditDialog({
   const [icon, setIcon] = useState(type.icon || 'LayoutGrid')
   const [description, setDescription] = useState(type.description)
   const [group, setGroup] = useState(type.nav_group_slug ?? NONE)
+  const [parent, setParent] = useState(type.parent_slug ?? NONE)
   const [kindClass, setKindClass] = useState<string>(type.kind_class)
   const [systemSource, setSystemSource] = useState<string>(
     type.system_source || systemSources[0]?.key || '',
@@ -99,6 +103,7 @@ export function TypeEditDialog({
         description,
         icon,
         nav_group_slug: group === NONE ? null : group,
+        parent_slug: parent === NONE ? null : parent,
         kind_class: kindClass,
         system_source: kindClass === 'system' ? systemSource : '',
         entry_policy: entryPolicy,
@@ -195,6 +200,32 @@ export function TypeEditDialog({
                   그렇습니다.
                 </p>
               </div>
+
+              {types.length > 0 && (
+                <div className="space-y-1.5">
+                  <Label htmlFor="type-edit-parent">상위 타입</Label>
+                  <Select value={parent} onValueChange={setParent}>
+                    <SelectTrigger id="type-edit-parent">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value={NONE}>없음</SelectItem>
+                      {types
+                        .filter((one) => one.slug !== type.slug)
+                        .map((one) => (
+                          <SelectItem key={one.slug} value={one.slug}>
+                            {one.label}
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-muted-foreground text-xs">
+                    「개발모델은 제품이다」 처럼 분류의 상속을 적습니다. 화면 동작은 바꾸지 않고,
+                    RDF/OWL 내보내기에서 <span className="font-mono">subClassOf</span> 가 되어
+                    추론기가 상속을 풉니다.
+                  </p>
+                </div>
+              )}
 
               <div className="grid grid-cols-2 gap-3">
                 <Field

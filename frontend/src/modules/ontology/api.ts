@@ -106,6 +106,8 @@ export interface ObjectType {
   managed_by?: string
   key_policy: 'none' | 'optional' | 'required'
   key_scope: 'global' | 'workspace'
+  /** 상위 타입 — RDF/OWL 의 rdfs:subClassOf. 화면 동작은 바꾸지 않는다. */
+  parent_slug?: string | null
   temporal_kind: 'evergreen' | 'lifecycle' | 'yearly' | 'derived'
   list_view: ListView
   /**

@@ -183,6 +183,9 @@ class ObjectType(Base):
     entry_policy: Mapped[str] = mapped_column(
         String(20), default="open", server_default="open"
     )
+    parent_slug: Mapped[str | None] = mapped_column(String(SLUG_MAX), nullable=True)
+    """상위 타입 — 「개발모델은 제품이다」. **화면 동작은 바꾸지 않는다**(목록 · 관계 허용은 그
+    타입 그대로). RDF/OWL 로 내보낼 때 `rdfs:subClassOf` 가 되어 추론기가 상속을 푼다."""
     managed_by: Mapped[str] = mapped_column(String(40), default="", server_default="")
     """**누가 이 정의와 그 객체를 관리하나** — 빈 값이면 이 설치, `hub` 면 허브. 허브 것은
     묶음 가져오기에 같은 `source` 를 적어서만 바뀐다(`ontology/managed.py`). 가져오기가

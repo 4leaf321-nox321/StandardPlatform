@@ -13,6 +13,7 @@ import { InferFromTablePanel } from '@/modules/ontology/InferFromTablePanel'
 import { ResetDialog } from '@/modules/ontology/ResetDialog'
 import { useOntology } from '@/modules/ontology/OntologyLayout'
 import { ontologyApi } from '@/modules/ontology/api'
+import { downloadFile } from '@/shared/api/client'
 import type { ImportPlan } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -298,6 +299,8 @@ export default function OntologyImportPage() {
           }}
         />
       )}
+      <RdfExportSection />
+
       {restoring && (
         <ConfirmDialog
           open
@@ -323,5 +326,70 @@ export default function OntologyImportPage() {
         />
       )}
     </div>
+  )
+}
+
+/**
+ * RDF/OWL 내보내기 — 정의는 OWL, 데이터는 RDF, 그리고 추론기가 더한 것.
+ *
+ * 플랫폼은 속성 그래프라 스스로 추론하지 않는다. 형식 온톨로지가 필요하면 여기서 사본을 받아
+ * Protégé · GraphDB · Jena 에 넣는다. 「추론 결과」 는 플랫폼 안의 OWL-RL 로 상속 · 역관계 · 이행
+ * 관계를 풀어 **새로 생긴 사실만** 보여 준다 — 저장된 것과 추론된 것을 가르는 자리.
+ */
+function RdfExportSection() {
+  const [busy, setBusy] = useState<string | null>(null)
+  const [error, setError] = useState<Error | null>(null)
+  async function get(path: string, filename: string) {
+    setBusy(path)
+    setError(null)
+    try {
+      await downloadFile(path, filename)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setBusy(null)
+    }
+  }
+  const rows: [string, string, string, string][] = [
+    ['정의 (OWL)', '/rdf/schema', 'schema', '타입 · 속성 · 관계 종류 → owl:Class · Property'],
+    ['데이터 (RDF)', '/rdf/data', 'data', '객체 · 값 · 관계 → 트리플'],
+    ['추론 결과', '/rdf/inferred', 'inferred', 'OWL-RL 이 더한 사실만 — 상속 · 역관계 · 이행'],
+  ]
+  return (
+    <section className="space-y-3 rounded-md border p-4">
+      <h2 className="text-base font-semibold">RDF/OWL 내보내기</h2>
+      <p className="text-muted-foreground text-sm">
+        정의와 데이터를 형식 온톨로지(Turtle · JSON-LD)로 내보냅니다. 정본은 이 플랫폼이고 RDF 는
+        사본입니다 — Protégé · GraphDB · Jena 에서 열거나 추론을 돌릴 때 씁니다. IRI 는 이 설치의
+        주소와 식별자에서 나와 안정적입니다.
+      </p>
+      <ErrorNotice error={error} />
+      <div className="space-y-2">
+        {rows.map(([label, path, name, hint]) => (
+          <div key={path} className="flex flex-wrap items-center gap-2 text-sm">
+            <span className="w-28 font-medium">{label}</span>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy !== null}
+              onClick={() => get(`${path}?format=ttl`, `${name}.ttl`)}
+            >
+              <Download className="mr-1 size-3.5" />
+              Turtle
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy !== null}
+              onClick={() => get(`${path}?format=jsonld`, `${name}.jsonld`)}
+            >
+              <Download className="mr-1 size-3.5" />
+              JSON-LD
+            </Button>
+            <span className="text-muted-foreground text-xs">{hint}</span>
+          </div>
+        ))}
+      </div>
+    </section>
   )
 }
