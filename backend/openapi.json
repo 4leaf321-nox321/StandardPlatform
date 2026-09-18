@@ -1,7 +1,7 @@
 {
   "openapi": "3.1.0",
   "info": {
-    "title": "PLM 기준정보 API",
+    "title": "StandardPlatform API",
     "version": "baseline"
   },
   "paths": {
@@ -7368,31 +7368,6 @@
                   },
                   "type": "array",
                   "title": "Response Maintenance Api Server Maintenance Get"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/ext/sample/ping": {
-      "get": {
-        "tags": [
-          "ext:sample"
-        ],
-        "summary": "Ping",
-        "operationId": "ping_api_ext_sample_ping_get",
-        "responses": {
-          "200": {
-            "description": "Successful Response",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "additionalProperties": {
-                    "type": "string"
-                  },
-                  "type": "object",
-                  "title": "Response Ping Api Ext Sample Ping Get"
                 }
               }
             }
