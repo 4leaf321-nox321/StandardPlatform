@@ -30,6 +30,7 @@ GUIDE_VERSION: 2026-09-14d
 | 객체 둘 잇기 | `relation_add` | **근거(evidence_note)를 적는다** |
 | 관계 여러 줄 한 번에 | `relations_import(apply=false)` → `apply=true` | 이미 이어진 건 그대로 |
 | 바깥 시스템(OData·REST·파일)에서 읽어 채우기 | `datasources_list` → `datasource_sync(apply=false)` → `apply=true` | 정의는 화면에서. 오류 행이 있으면 아무것도 안 넣음 |
+| 여러 타입을 건너뛰어 잇는 물음 · 역관계로 거슬러 세기 | `rdf_schema` → `rdf_query` | **먼저 `objects_summary` 로 되는 물음인지 본다.** 질의어는 그것으로 안 되는 자리에 |
 
 ## 기본 습관
 
@@ -201,6 +202,41 @@ GUIDE_VERSION: 2026-09-14d
 - 여러 줄이면 `relations_import(type_slug, rows, apply)` — 행은
   `{"src": "<key 또는 label>", "relation": "<slug>", "dst": "...", "evidence_note": "..."}`.
   이미 이어진 것은 `unchanged` 라 두 번 올려도 두 겹이 안 된다.
+
+<!--@ sparql -->
+## 질의어로 묻기 (SPARQL)
+
+**먼저 `objects_summary` · `objects_list` 로 되는지 본다.** 한 타입 안의 세기 · 거르기는 그쪽이
+빠르고 답도 화면과 같다. 질의어는 **그것으로 안 되는 물음**에 쓴다:
+
+- 타입을 둘 이상 건너뛰어 잇는 것 — 「이 프로젝트의 과제들에 달린 모델의 시험 진행」
+- 적어 두지 않은 방향 — 「이 과제를 가리키는 모델」(역관계)
+- 상속으로 묶어 보기 — 「제품인 것 전부」(개발모델 · 양산모델을 한 번에)
+
+절차는 둘뿐이다:
+
+1. `rdf_schema` — 클래스 · 속성 · 관계 이름을 **확인한다**(추측하지 않는다).
+   `sp:<타입slug>` · `sp:<타입>.<속성키>` · `sp:rel.<관계slug>`, 역관계는 `.inverse`.
+2. `rdf_query(query, types=[…], infer=False, limit=200)`.
+
+지켜야 하는 것:
+
+- **범위를 좁힌다**(`types`). 안 주면 설치 전체를 올린다 — 큰 설치에서는 느리다.
+- `infer=True` 는 상속 · 역관계 · 이행이 **필요할 때만**. 느리고, 큰 범위는 서버가 거절한다.
+  역관계만 필요하면 추론 없이 방향을 뒤집어 쓰는 편이 빠르다(`?t ^sp:plm_model.task ?m`).
+- 답의 `truncated` 가 참이면 **잘린 것이다.** 「전부 이것뿐」 으로 말하지 않는다.
+- 쓰기(INSERT · DELETE)와 바깥 호출(SERVICE)은 막혀 있다. 고치는 것은 `object_update` 등으로.
+- 사람에게 옮길 때는 IRI 가 아니라 **이름**으로 말한다 — `rdfs:label` 을 함께 SELECT 한다.
+
+```sparql
+PREFIX sp: <…/ns#>
+PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
+  ?m a sp:plm_model ; sp:plm_model.task ?t .
+  ?t rdfs:label ?task ; sp:plm_task.project ?p .
+  ?p rdfs:label ?project .
+} GROUP BY ?project ?task ORDER BY DESC(?models)
+```
 
 <!--@ modeling -->
 ## 모델링 규약 v0 — 무엇을 무엇으로 만드나

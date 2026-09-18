@@ -43,6 +43,8 @@ TOOLS = {
     "quality_report",
     "datasources_list",
     "datasource_sync",
+    "rdf_schema",
+    "rdf_query",
 }
 
 
@@ -214,3 +216,21 @@ def test_가이드는_서버가_쥔다() -> None:
 
     missing = asyncio.run(server.get_guide(_ctx(None), topic="없는주제"))
     assert "error" in missing and "bulk" in missing["topics"]
+
+
+def test_질의는_그대로_넘기고_본문을_돌려준다() -> None:
+    """SPARQL 은 서버가 검사한다 — MCP 는 고쳐 쓰지 않고 그대로 넘긴다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"columns": ["x"], "rows": []}))
+    got = asyncio.run(
+        server.rdf_query(_ctx("Bearer t"), "SELECT ?x WHERE { ?x ?y ?z }", types=["part"])
+    )
+    assert got == {"columns": ["x"], "rows": []}
+    assert seen[0].url.path == "/api/rdf/query"
+    body = json.loads(seen[0].content)
+    assert body["query"].startswith("SELECT") and body["types"] == ["part"]
+    assert body["infer"] is False and body["limit"] == 200
+
+    # 정의는 Turtle 본문 그대로 — JSON 이 아니다.
+    seen = _serve(lambda _r: httpx.Response(200, text="sp:part a owl:Class ."))
+    assert asyncio.run(server.rdf_schema(_ctx("Bearer t"))) == "sp:part a owl:Class ."
+    assert seen[0].url.path == "/api/rdf/schema"

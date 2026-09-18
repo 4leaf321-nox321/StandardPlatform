@@ -146,3 +146,76 @@ def test_상위_타입은_있어야_하고_고리를_이루지_않는다(
         for one in client.get("/api/ontology/schema", headers=admin.headers).json()["types"]
     }
     assert types[b]["parent_slug"] == a
+
+
+def test_SPARQL_로_묻는다(client: TestClient, admin: Signed) -> None:
+    """MCP 로 들어온 AI 가 쓰는 자리 — 여러 타입을 건너뛰어 잇는 물음. 읽기만 한다."""
+    project = _make_type(client, admin, label="프로젝트", key_policy="required")
+    task = _make_type(client, admin, label="과제", key_policy="required")
+    client.post(
+        f"/api/ontology/types/{task}/properties",
+        json={
+            "key": "project",
+            "label": "프로젝트",
+            "data_type": "object_ref",
+            "ref_type_slug": project,
+        },
+        headers=admin.headers,
+    ).raise_for_status()
+    p1 = _make_object(client, admin, project, label="프로젝트 1", key="P1")
+    for n in (1, 2):
+        _make_object(
+            client,
+            admin,
+            task,
+            label=f"과제 {n}",
+            key=f"T{n}",
+            properties={"project": p1["id"]},
+        )
+
+    ask = client.post(
+        "/api/rdf/query",
+        json={
+            "query": f"""PREFIX sp: <http://testserver/ns#>
+                PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+                SELECT ?name (COUNT(?t) AS ?n) WHERE {{
+                  ?t a sp:{task} ; sp:{task}.project ?p . ?p rdfs:label ?name
+                }} GROUP BY ?name""",
+            "types": [project, task],
+        },
+        headers=admin.headers,
+    )
+    assert ask.status_code == 200, ask.text
+    body = ask.json()
+    assert body["columns"] == ["name", "n"]
+    assert body["rows"] == [{"name": "프로젝트 1", "n": 2}]
+    assert body["truncated"] is False and body["triples"] > 0
+    assert body["prefixes"]["sp"] == "http://testserver/ns#"
+
+    # 잘리면 잘렸다고 말한다 — 「전부 이것뿐」 으로 읽으면 안 된다.
+    cut = client.post(
+        "/api/rdf/query",
+        json={
+            "query": f"SELECT ?t WHERE {{ ?t a <http://testserver/ns#{task}> }}",
+            "types": [task],
+            "limit": 1,
+        },
+        headers=admin.headers,
+    ).json()
+    assert len(cut["rows"]) == 1 and cut["truncated"] is True
+
+    # 쓰기 · 바깥 호출은 막는다.
+    for bad in (
+        "INSERT DATA { <http://x> <http://y> <http://z> }",
+        "SELECT ?x WHERE { SERVICE <http://evil.example/sparql> { ?x ?y ?z } }",
+    ):
+        refused = client.post(
+            "/api/rdf/query", json={"query": bad, "types": [task]}, headers=admin.headers
+        )
+        assert refused.status_code == 409, bad
+    broken = client.post(
+        "/api/rdf/query",
+        json={"query": "SELECT ?x WHERE {", "types": [task]},
+        headers=admin.headers,
+    )
+    assert broken.status_code == 409 and "이해하지" in broken.json()["error"]["message"]

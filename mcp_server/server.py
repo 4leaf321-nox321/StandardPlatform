@@ -135,7 +135,16 @@ async def _patch(ctx: Context, path: str, json_body: Any) -> Any:
 # 달라 낡는다. 로컬엔 짧은 스텁만 두고 본문은 여기서 읽어 준다.
 # --------------------------------------------------------------------------- #
 _GUIDE_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "guide", "GUIDE.md")
-_GUIDE_TOPICS = ("overview", "modeling", "schema", "find", "objects", "bulk", "relations")
+_GUIDE_TOPICS = (
+    "overview",
+    "modeling",
+    "schema",
+    "find",
+    "objects",
+    "bulk",
+    "relations",
+    "sparql",
+)
 
 
 def _guide_sections() -> tuple[str, dict[str, str]]:
@@ -176,6 +185,7 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
       - `objects` 객체 하나씩 만들고 고치기
       - `bulk` 여러 행 한 번에(upsert)
       - `relations` 객체 잇기(근거)
+      - `sparql` 여러 타입을 건너뛰어 잇는 물음 — 질의어로
 
     한 번에 다 받지 마라 — 필요한 주제만 받는 게 싸다."""
     version, secs = _guide_sections()
@@ -584,6 +594,61 @@ async def datasource_sync(ctx: Context, slug: str, apply: bool = False) -> Any:
         f"/api/datasources/{slug}/sync",
         None,
         params={"apply": "true" if apply else "false"},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# RDF/OWL — 정의와 데이터를 형식 온톨로지로, 그리고 **질의어(SPARQL)로 묻기.**
+#
+# 목록 · 조건 · 통계는 한 타입 안에서 쉽다. 「코어를 건너뛰어 잇는 물음」(모델 → 과제 →
+# 프로젝트를 한 번에, 역관계로 거슬러, 상속으로 묶어)은 질의어가 낫다.
+# --------------------------------------------------------------------------- #
+@mcp.tool()
+async def rdf_schema(ctx: Context) -> str:
+    """이 설치의 정의를 **OWL(Turtle)** 로 — 클래스 · 속성 · 관계와 그 뜻.
+
+    `rdf_query` 를 쓰기 전에 읽는다. 여기서 클래스 이름(`sp:<타입slug>`) · 속성
+    (`sp:<타입>.<속성키>`) · 관계(`sp:rel.<관계slug>`)와 상속(`rdfs:subClassOf`) ·
+    역관계(`owl:inverseOf`) · 이행(`owl:TransitiveProperty`)을 확인한다."""
+    async with _client(60) as client:
+        response = await client.get(
+            "/api/rdf/schema", params={"format": "ttl"}, headers=_forward_headers(ctx)
+        )
+        response.raise_for_status()
+        return response.text
+
+
+@mcp.tool()
+async def rdf_query(
+    ctx: Context,
+    query: str,
+    types: list[str] | None = None,
+    infer: bool = False,
+    limit: int = 200,
+) -> Any:
+    """**SPARQL 로 묻는다** — 여러 타입을 건너뛰어 잇는 물음에.
+
+    읽기만 한다(`SELECT` · `ASK`). 접두어는 답의 `prefixes` 에 오고, `sp:` 가 이 설치의 정의
+    자리다. 개체 주소는 `<base>o/<타입>/<식별자>` 다.
+
+    - `types` 로 **범위를 좁히면 빠르다** — 안 주면 전부 올린다.
+    - `infer=True` 면 OWL-RL 추론을 켠다: 상속으로 얻은 분류(「개발모델이면 제품이다」),
+      역관계(적은 것의 반대 방향), 이행(A→B, B→C 면 A→C)이 답에 들어온다. 느리므로 `types` 로
+      좁혀야 하고, 큰 범위는 서버가 거절한다.
+    - `truncated` 가 참이면 **잘린 것이다** — 「전부 이것뿐」 으로 읽지 않는다.
+
+    예: 과제마다 개발모델 수
+    ```sparql
+    PREFIX sp: <…/ns#>
+    PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
+    SELECT ?task (COUNT(?m) AS ?n) WHERE {
+      ?m a sp:plm_model ; sp:plm_model.task ?t . ?t rdfs:label ?task
+    } GROUP BY ?task ORDER BY DESC(?n)
+    ```"""
+    return await _post(
+        ctx,
+        "/api/rdf/query",
+        {"query": query, "types": types, "infer": infer, "limit": limit},
     )
 
 

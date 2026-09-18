@@ -22,6 +22,7 @@
 
 from __future__ import annotations
 
+import time
 import uuid
 from typing import Any
 
@@ -328,3 +329,83 @@ def _noise(triple: tuple[Any, Any, Any]) -> bool:
         RDFS.Literal,
     )
     return subject in builtins
+
+
+# --- 질의 (SPARQL) ------------------------------------------------------------------
+#
+# **그래프를 캐시한다.** 전체 데이터가 13만 트리플에 3.4초라(실측) 질의마다 다시 세우면 MCP 로
+# 들어온 AI 가 한 질문에 그만큼을 기다린다. 정의 · 객체가 바뀌면 판(version)이 달라져 저절로
+# 버려진다. 메모리를 위해 두 벌까지만 둔다 — 더 두면 워커 넷이 각자 들고 있게 된다.
+
+_CACHE: dict[tuple[str, tuple[str, ...], bool], tuple[tuple[Any, ...], float, Graph]] = {}
+_CACHE_MAX = 2
+#: 판(version)이 못 잡는 변화도 있다 — 속성 정의에는 `updated_at` 이 없어 이름만 고치면 수가
+#: 그대로다. 그래서 이 시간이 지나면 어차피 다시 세운다(질의는 3초 안이라 감당된다).
+_CACHE_TTL_SECONDS = 120.0
+
+#: 추론을 켤 수 있는 상한 — 5만 트리플에 20초(실측). 그 위는 범위를 좁히게 한다.
+INFER_MAX_TRIPLES = 20_000
+
+
+def version(db: Session) -> tuple[Any, ...]:
+    """지금 데이터의 판 — 정의 · 객체 · 관계가 바뀌면 값이 달라진다(속성 이름만 고친 것은
+    못 잡는다 — 그것은 TTL 이 받는다)."""
+    from sqlalchemy import func
+
+    return (
+        db.scalar(select(func.max(ObjectType.updated_at))),
+        db.scalar(select(func.count()).select_from(ObjectType)),
+        db.scalar(select(func.count()).select_from(PropertyDef)),
+        db.scalar(select(func.max(ObjectInstance.updated_at))),
+        db.scalar(select(func.count()).select_from(ObjectInstance)),
+        db.scalar(select(func.count()).select_from(ObjectRelation)),
+    )
+
+
+def graph_for(
+    db: Session, names: Names, type_slugs: list[str] | None, infer: bool
+) -> tuple[Graph, int, int]:
+    """질의할 그래프 — (그래프, 저장된 트리플 수, 추론이 더한 수).
+
+    같은 판이면 다시 세우지 않는다."""
+    key = (names.base, tuple(sorted(type_slugs or ())), infer)
+    now = version(db)
+    hit = _CACHE.get(key)
+    if hit and hit[0] == now and time.monotonic() - hit[1] < _CACHE_TTL_SECONDS:
+        graph = hit[2]
+        return graph, len(graph), 0
+
+    schema = schema_graph(db, names)
+    data = data_graph(db, names, type_slugs)
+    stored = len(data)
+    graph = Graph()
+    for prefix, ns in schema.namespaces():
+        graph.bind(prefix, ns)
+    for triple in schema:
+        graph.add(triple)
+    for triple in data:
+        graph.add(triple)
+    added = 0
+    if infer:
+        extra = inferred(schema, data)
+        added = len(extra)
+        for triple in extra:
+            graph.add(triple)
+    if len(_CACHE) >= _CACHE_MAX:
+        _CACHE.pop(next(iter(_CACHE)))
+    _CACHE[key] = (now, time.monotonic(), graph)
+    return graph, stored, added
+
+
+def shorten(graph: Graph, value: Any) -> Any:
+    """읽을 모양으로 — IRI 는 접두어로 줄이고, 리터럴은 파이썬 값으로."""
+    if isinstance(value, URIRef):
+        try:
+            return graph.namespace_manager.normalizeUri(value)
+        except Exception:  # pragma: no cover - 접두어가 없는 IRI
+            return str(value)
+    if isinstance(value, Literal):
+        return value.toPython()
+    if value is None:
+        return None
+    return str(value)
