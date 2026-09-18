@@ -36,6 +36,7 @@ import {
 } from 'lucide-react'
 
 import { graphApi } from '@/modules/graph/api'
+import { useFillHeight } from '@/modules/graph/useElementSize'
 import type {
   GraphEdge,
   GraphNode,
@@ -237,6 +238,10 @@ export default function GraphPage() {
   // 전체화면이 덮을 것 — 그림과 옆 판을 함께.
   const shellRef = useRef<HTMLDivElement>(null)
   const fullscreen = useFullscreen(shellRef)
+  // **화면을 딱 채운다.** 넓은 화면(lg)에서는 이 화면이 창 아래까지 차지하고, 옆 판은 각자
+  // 한 스크롤, 그림은 남은 높이 전부다 — 페이지 자체는 스크롤되지 않는다. 좁은 화면에서는
+  // 옆 판이 아래로 내려가므로 높이를 고정하지 않는다(max-lg 에서 h-auto).
+  const shellHeight = useFillHeight(shellRef, { min: 480, gap: 24 })
   const [params, setParams] = useSearchParams()
   // **주소가 곧 상태다.** 씨앗과 조작을 따로 들고 있으면 사이드바에서 같은 화면으로 다시
   // 올 때(재마운트 없음) 옛 그림이 남는다. 쪽(offset)만은 주소에 안 적어 여기 든다.
@@ -326,10 +331,11 @@ export default function GraphPage() {
      */
     <div
       ref={shellRef}
+      style={fullscreen.active ? undefined : { ['--fill' as string]: `${shellHeight}px` }}
       className={
         fullscreen.active
-          ? 'bg-background fixed inset-0 z-50 space-y-4 overflow-auto p-4'
-          : 'space-y-4'
+          ? 'bg-background fixed inset-0 z-50 flex flex-col gap-4 overflow-hidden p-4'
+          : 'flex flex-col gap-4 lg:h-(--fill) lg:overflow-hidden'
       }
     >
       <PageHeader
@@ -537,7 +543,7 @@ function SchemaView({
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[1fr_280px]">
+    <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[1fr_280px]">
       {/* **같은 정의를 두 모양으로 본다.** 그물은 「무엇이 무엇과 이어지나」 를, 흐름은
           「어디서 어디로 얼마나 가나」 를 보여 준다 — 관계가 단계로 이어지는 구조
           (접수 → 검토 → 승인)는 그물에서 잘 안 읽힌다. */}
@@ -634,7 +640,7 @@ function SchemaView({
           }
         />
       )}
-      <aside className="space-y-3 text-sm">
+      <aside className="min-h-0 space-y-3 overflow-y-auto text-sm lg:pr-1">
         {picked ? (
           <div className="space-y-3 rounded-md border p-3">
             <div className="flex items-start justify-between gap-2">
@@ -1032,9 +1038,10 @@ function ExploreView({
   }
 
   return (
-    <div className="grid gap-4 lg:grid-cols-[260px_1fr_280px]">
-      {/* 왼쪽 — 시작점과 상한 */}
-      <aside className="space-y-4 text-sm">
+    <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[260px_1fr_280px]">
+      {/* 왼쪽 — 시작점과 상한. **스크롤은 이 판 하나에** — 안의 목록마다 따로 두면 스크롤
+          안의 스크롤이 되어 어디를 굴려야 하는지 모른다. */}
+      <aside className="min-h-0 space-y-4 overflow-y-auto text-sm lg:pr-1">
         <SeedPanel
           seed={seed}
           current={explored?.focus ? (explored.nodes.get(explored.focus) ?? null) : null}
@@ -1158,8 +1165,8 @@ function ExploreView({
         </label>
       </aside>
 
-      {/* 가운데 — 그림 */}
-      <div className="space-y-2">
+      {/* 가운데 — 그림. 남은 높이를 전부 쓴다. */}
+      <div className="flex min-h-0 flex-col gap-2">
         {error && <ErrorNotice error={error} />}
         {seed && (
           <div className="flex items-center gap-2">
@@ -1295,7 +1302,7 @@ function ExploreView({
       </div>
 
       {/* 오른쪽 — 고른 노드 */}
-      <aside className="text-sm">
+      <aside className="min-h-0 overflow-y-auto text-sm lg:pr-1">
         {picked ? (
           <NodeDetail
             node={picked}
@@ -1659,7 +1666,7 @@ function SeedPanel({
         <p className="text-muted-foreground text-xs">맞는 것이 없습니다.</p>
       )}
       {hits.length > 0 && (
-        <ul className="max-h-56 space-y-0.5 overflow-y-auto rounded-md border p-1">
+        <ul className="space-y-0.5 rounded-md border p-1">
           {hits.map((hit) => (
             <li key={hit.id}>
               <button
@@ -1682,7 +1689,7 @@ function SeedPanel({
       <div className="space-y-1.5">
         <span className="text-muted-foreground text-xs">타입별 목록</span>
         {/* 드롭다운이 아니라 칩이다 — **무엇이 있는지가 열기 전에 보여야** 목록다. */}
-        <ul className="flex max-h-32 flex-wrap gap-1 overflow-y-auto">
+        <ul className="flex flex-wrap gap-1">
           {types
             .filter((one) => one.is_active)
             .map((one) => {
@@ -1760,7 +1767,7 @@ function SeedPanel({
                 {browsing ? '읽는 중…' : '보이는 객체가 없습니다.'}
               </p>
             ) : (
-              <ul className="max-h-64 space-y-0.5 overflow-y-auto rounded-md border p-1">
+              <ul className="space-y-0.5 rounded-md border p-1">
                 {rows.items.map((row) => (
                   <li key={row.id}>
                     <button
@@ -1845,7 +1852,7 @@ function FilterList({ title, options, picked, onToggle, onClear, swatch }: Filte
           </button>
         )}
       </div>
-      <ul className="max-h-44 space-y-0.5 overflow-y-auto">
+      <ul className="space-y-0.5">
         {options.map((one) => (
           <li key={one.slug}>
             <label className="hover:bg-muted flex cursor-pointer items-center gap-2 rounded px-1 py-0.5">
