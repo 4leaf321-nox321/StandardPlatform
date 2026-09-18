@@ -13,8 +13,16 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 from pathlib import Path
+
+# **틀의 기본 이름으로 만든다.** 개발 PC 의 .env 에 APP_NAME · EXTENSIONS 가 있으면 제목과
+# 확장 라우트가 섞여 들어가고, CI(기본값)가 만든 것과 달라 「생성물 최신성」 검사가 깨진다
+# (실측 — v0.4.5). 저장소의 openapi.json 은 설치가 아니라 코드의 산출물이다.
+os.environ.update(
+    APP_NAME="StandardPlatform", APP_SLUG="standardplatform", APP_TAGLINE="", EXTENSIONS=""
+)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
