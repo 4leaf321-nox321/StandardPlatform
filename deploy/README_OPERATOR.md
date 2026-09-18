@@ -11,7 +11,8 @@
 없다 — Apptainer 는 리눅스 전용이다. 받는 것은 만들어진 `tar.gz` 하나다.
 
 ```bash
-# 받는 PC 에서. Windows PowerShell 의 curl 도 같은 줄로 된다.
+# 받는 PC 에서 — 저장소의 deploy/pc/fetch-release.{bat,sh} 가 최신 버전을 골라 받고 체크섬까지 본다.
+# 손으로 받으면 (Windows PowerShell 의 curl 도 같은 줄로 된다):
 curl -LO https://github.com/<소유자>/<저장소>/releases/download/<태그>/<slug>-<태그>.tar.gz
 curl -LO https://github.com/<소유자>/<저장소>/releases/download/<태그>/<slug>-<태그>.tar.gz.sha256
 
