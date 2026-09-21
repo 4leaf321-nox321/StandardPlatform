@@ -28,11 +28,16 @@ _known: list[str] = [READ]
 #: (경로 앞머리, 그 아래 **쓰기**에 필요한 범위).
 _write: list[tuple[str, str]] = []
 
-#: POST 지만 **아무것도 안 바꾸는** 경로. 본문에 물음을 싣기 때문에 POST 일 뿐이다.
+#: POST 지만 **읽기인** 경로. 본문에 물음을 싣거나(검색) 결과를 만들어 주기만 하는
+#: 자리(내보내기)다.
 #:
 #: 이걸 빼먹으면 읽기 전용 토큰이 검색을 못 한다 — 그리고 검색은 대개 그 플랫폼이
 #: 존재하는 이유다. 도메인이 `/api/search/` 같은 것을 만들면 여기 등록한다.
 _read_only_posts: list[str] = []
+
+#: POST 지만 읽기인 경로 — **중간에 이름이 끼는 것**(`/api/objects/<타입>/export`).
+#: 앞머리로는 못 적는다: `/api/objects/` 로 열면 그 아래 쓰기까지 통째로 열린다.
+_read_only_post_suffixes: list[str] = []
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
@@ -59,14 +64,27 @@ def register_read_only_post(path_prefix: str) -> None:
         _read_only_posts.append(path_prefix)
 
 
+def register_read_only_post_suffix(suffix: str) -> None:
+    """끝이 이런 POST 는 읽기다 — `/api/objects/<타입>/export` 처럼 중간에 이름이 끼는 자리.
+
+    **내보내기는 읽기다.** 작업 한 줄을 남기므로 표로는 쓰기지만, 사람이 하는 일은 「가진
+    것을 파일로 받기」 다. 읽기 토큰으로 못 하게 두면 「허브에서 정의를 받아 가는」 길이
+    쓰기 권한을 요구하게 되고, 그러면 받아만 가면 되는 쪽에 쓰기 토큰을 주게 된다.
+    """
+    if suffix not in _read_only_post_suffixes:
+        _read_only_post_suffixes.append(suffix)
+
+
 def known_scopes() -> tuple[str, ...]:
     return tuple(_known)
 
 
 def is_reading(method: str, path: str) -> bool:
-    return method in SAFE_METHODS or any(
-        path.startswith(prefix) for prefix in _read_only_posts
-    )
+    if method in SAFE_METHODS:
+        return True
+    if any(path.startswith(prefix) for prefix in _read_only_posts):
+        return True
+    return any(path.endswith(suffix) for suffix in _read_only_post_suffixes)
 
 
 def needed_scope(path: str) -> str | None:

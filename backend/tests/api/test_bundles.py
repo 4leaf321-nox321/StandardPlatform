@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 
 from app.shared import events
 from tests.api.conftest import Signed, bundle_import
+from tests.api.test_ontology import _make_type
 
 
 def _uniq(base: str) -> str:
@@ -215,3 +216,36 @@ def test_토큰은_정의가_들면_ontology_범위도_필요하다(
 def test_빈_묶음은_거절한다(client: TestClient, admin: Signed) -> None:
     got = client.post("/api/bundles/import", json={}, headers=admin.headers)
     assert got.status_code == 409
+
+
+def test_내보내기는_읽기_토큰으로_된다(client: TestClient, admin: Signed) -> None:
+    """**내보내기는 읽기다.** 작업 한 줄을 남기니 표로는 쓰기지만, 하는 일은 「가진 것을 파일로
+    받기」 다 — 읽기 토큰으로 못 하게 두면 허브에서 정의를 **받아만 가는** 쌍둥이에게 쓰기
+    토큰을 주게 된다. 쌍둥이 리허설에서 403 으로 걸려 고쳤다."""
+    made = client.post(
+        "/api/auth/tokens",
+        json={"name": _uniq("reader"), "scopes": ["read"]},
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    reader = {"Authorization": f"Bearer {made.json()['token']}"}
+
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    group = client.post(
+        "/api/ontology/groups",
+        json={"slug": _uniq("g"), "label": "묶음"},
+        headers=admin.headers,
+    )
+    assert group.status_code == 201, group.text
+
+    for path, body in (
+        ("/api/bundles/export", {"group": group.json()["slug"]}),
+        (f"/api/objects/{part}/export", None),
+        (f"/api/objects/{part}/relations/export", None),
+    ):
+        got = client.post(path, json=body, headers=reader)
+        assert got.status_code == 202, f"{path}: {got.status_code} {got.text}"
+
+    # **넣는 것은 여전히 못 한다** — 읽기 토큰이 쓰기로 새면 범위를 가른 뜻이 없다.
+    denied = client.post("/api/bundles/import", json={"objects": []}, headers=reader)
+    assert denied.status_code in (403, 409), denied.text

@@ -178,6 +178,10 @@ def _register_extensions() -> None:
     # 작업은 파일로 객체를 넣거나 내는 일이다 — 같은 범위. 정의가 든 묶음의 적용은 넣을 때
     # 적어 둔 `needs_scope` 를 apply 라우트가 다시 묻는다.
     scopes.register_write_scope("/api/jobs", "objects:write")
+    # **내보내기는 읽기다.** 작업 한 줄을 남기니 표로는 쓰기지만, 하는 일은 「가진 것을 파일로
+    # 받기」 다 — 받아만 가는 쪽(허브에서 정의를 받는 쌍둥이 · 바깥 시스템)에 쓰기 토큰을
+    # 주게 하지 않는다. 실측: 쌍둥이 리허설에서 `read` 토큰이 묶음 내보내기에 403 을 받았다.
+    scopes.register_read_only_post_suffix("/export")
     # 동기화는 객체를 넣는 일이다 — 같은 범위. 소스 정의 자체는 시스템 관리자만.
     scopes.register_write_scope("/api/datasources", "objects:write")
     # `import` 는 POST 지만 `dry_run` 이면 아무것도 안 바꾼다. 그래도 **읽기로
