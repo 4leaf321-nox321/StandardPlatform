@@ -44,7 +44,7 @@ VERSION="$(bundle version)"
 
 # ───────────────────────── 사전 확인 ─────────────────────────
 # 'render' 는 아무것도 바꾸지 않는다 — root 없이 유닛 · nginx · keepalived 설정을 보여 준다.
-RENDER_ONLY=0; [[ "${1:-}" =~ ^(render|-h|--help|help)$ ]] && RENDER_ONLY=1
+RENDER_ONLY=0; [[ "${1:-}" =~ ^(render|units|-h|--help|help)$ ]] && RENDER_ONLY=1
 [[ "${1:-}" == "setup" && "${2:-}" == "--plan" ]] && RENDER_ONLY=1
 [[ $EUID -eq 0 || $RENDER_ONLY -eq 1 ]] || err "root 로 실행하세요 (sudo)"
 
@@ -691,6 +691,37 @@ SQL
     echo "[OK] 초기화 완료. 위에 찍힌 관리자 임시 비밀번호로 로그인하세요."
 }
 
+# ── 껐다 켜기 — **`.env` 를 고친 뒤 쓰는 자리.** ─────────────────────────────────
+#
+# `.env` 는 프로세스가 **뜰 때 한 번만** 읽는다. 파일만 고치면 도는 것은 옛 값을 그대로
+# 쓰고, 그 사실은 아무 데도 안 뜬다 — 사람은 고쳤는데 왜 그대로냐를 한참 찾는다.
+#
+# 유닛 이름(`<slug>` · `<slug>-worker` · `<slug>-mcp`)을 사람이 외울 이유가 없다. 스크립트는
+# 이미 slug 를 안다.
+units_of() {
+    # `$ETC` 는 시험이 쓰는 접두어다(render 와 같은 방식) — 운영에서는 비어 있어 실제 경로다.
+    local list=("$SERVICE_NAME")
+    [[ -f "$ETC$WORKER_SERVICE_UNIT" ]] && list+=("$WORKER_SERVICE_NAME")
+    [[ -f "$ETC$MCP_SERVICE_UNIT" ]] && list+=("$MCP_SERVICE_NAME")
+    printf '%s\n' "${list[@]}"
+}
+
+cmd_units() {
+    # **무엇을 껐다 켜는지 먼저 보여 준다.** root 없이도 볼 수 있어야 한다 — 「이 서버에 뭐가
+    # 깔려 있지」 는 고치기 전에 묻는 물음이다.
+    units_of
+}
+
+cmd_service() {  # $1 = start|stop|restart
+    local action="$1" unit
+    mapfile -t unit < <(units_of)
+    info "$action: ${unit[*]}"
+    systemctl "$action" "${unit[@]}"
+    [[ "$action" == "stop" ]] && return 0
+    health_check || warn "앱이 아직 응답하지 않습니다 — journalctl -u $SERVICE_NAME -n 50"
+    return 0
+}
+
 cmd_status() {
     echo "== $APP_NAME ($APP_SLUG) · 확장 ${EXTENSIONS:-없음} =="
     echo "  설치 경로 : $INSTALL_DIR$( [[ -n "$DATA_DIR" ]] && echo "  · 공용 $DATA_DIR" )"
@@ -952,7 +983,7 @@ usage() {
     cat <<MSG
 $APP_NAME 배포 스크립트 ($VERSION)
 
-  sudo ./deploy.sh [setup|prepare|install|update|reset|status]
+  sudo ./deploy.sh [setup|prepare|install|update|restart|reset|status]
 
   setup     **처음이면 이것.** 물음에 답하면 prepare → (DB 주/대기) → install 을 알아서
   prepare   최초 1회: apt 패키지, apptainer(공식 PPA), postgres, DB 역할·DB
@@ -961,6 +992,9 @@ $APP_NAME 배포 스크립트 ($VERSION)
   reset     DB·첨부 초기화 (파괴적)
   remove    이 인스턴스를 지운다 — 유닛 · DB · 설치 폴더 (공용 폴더는 남김, 파괴적)
   status    서비스 상태 + health (+ 이중화 · DB 주/대기)
+  restart   앱 · 작업 워커 · MCP 를 함께 재시작 — **`.env` 를 고쳤으면 이것**
+  start|stop  같은 묶음을 켜고 끈다
+  units     그 묶음에 무엇이 들어 있는지만 본다 (root 없이)
   (없으면)  자동: 처음이면 install, 아니면 update
 
   이중화(서버 두 대) — README 「이중화」:
@@ -991,6 +1025,10 @@ case "${1:-}" in
     update)         cmd_update  ;;
     reset)          cmd_reset   ;;
     status)         cmd_status  ;;
+    units)          cmd_units ;;
+    restart)        cmd_service restart ;;
+    start)          cmd_service start   ;;
+    stop)           cmd_service stop    ;;
     db-primary)     shift; ensure_dirs; cmd_db primary "$@" ;;
     db-standby)     shift; [[ "${1:-}" == "--from" ]] && shift; ensure_dirs; cmd_db standby "${1:-}" ;;
     db-promote)     cmd_db promote ;;

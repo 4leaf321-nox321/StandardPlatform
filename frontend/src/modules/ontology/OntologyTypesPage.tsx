@@ -8,6 +8,7 @@
 import { useState } from 'react'
 import { ChevronDown, Eye, Plus, Settings2 } from 'lucide-react'
 
+import { PropertyBulkDialog } from '@/modules/ontology/PropertyBulkDialog'
 import { PropertyEditDialog, DATA_TYPE_LABELS } from '@/modules/ontology/PropertyEditDialog'
 import { TypeEditDialog } from '@/modules/ontology/TypeEditDialog'
 import { TypeExamples } from '@/modules/ontology/TypeExamples'
@@ -326,6 +327,7 @@ function PropertyEditor({
 }) {
   const [editing, setEditing] = useState<PropertyDef | null>(null)
   const [creating, setCreating] = useState(false)
+  const [bulk, setBulk] = useState(false)
 
   return (
     <section className="space-y-3 rounded-md border p-4">
@@ -374,12 +376,23 @@ function PropertyEditor({
             : `${type.properties.length > 0 ? '행을 클릭하면 이름·단위·안내·필수·여러 값을 수정하거나 삭제합니다. ' : ''}키와 종류는 만들 때만 정합니다.`}
         </p>
         {!readOnly && (
-          <Button size="sm" onClick={() => setCreating(true)}>
-            <Plus className="mr-1 size-4" />
-            속성 추가
-          </Button>
+          <div className="flex gap-2">
+            {/* 타입을 세울 때 속성은 대여섯 개씩 함께 온다 — 창을 열 번 여닫게 하지 않는다. */}
+            <Button size="sm" variant="outline" onClick={() => setBulk(true)}>
+              <Plus className="mr-1 size-4" />
+              여러 속성 추가
+            </Button>
+            <Button size="sm" onClick={() => setCreating(true)}>
+              <Plus className="mr-1 size-4" />
+              속성 추가
+            </Button>
+          </div>
         )}
       </div>
+
+      {bulk && (
+        <PropertyBulkDialog type={type} onClose={() => setBulk(false)} onChanged={onChanged} />
+      )}
 
       {(creating || editing) && (
         <PropertyEditDialog

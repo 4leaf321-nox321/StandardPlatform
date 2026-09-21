@@ -336,15 +336,21 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 | Claude 에서 MCP 가 421 `Invalid Host header` | 비-localhost 로 열었는데 `MCP_ALLOWED_HOSTS` 가 안 맞는다. 5b 참고 |
 | 이중화: postgres 가 안 뜨고 로그에 `pg-ha:` | 옛 주가 주로 뜨려 했다(guard). `sudo ./deploy.sh db-standby --from <지금 주>` |
 | 이중화: 화면이 `/<slug>/` 밑에서 API 404 | `.env` 에 `PUBLIC_PATH=/<slug>` 가 없거나 nginx 가 접두어를 안 뗐다. `sudo ./deploy.sh render` 로 설정을 본다 |
-| 이중화: 로그인이 유지되지 않는다(새로고침마다 로그인) | `.env` 에 `REFRESH_COOKIE_SECURE=true` 가 있는데 http 로 들어왔다 — 지우거나 false 로(앱이 https 일 때 스스로 붙인다). 또는 `TRUST_PROXY` 가 꺼져 앱이 https 인 줄 모른다 |
+| 이중화: 로그인이 유지되지 않는다(새로고침마다 로그인) | `.env` 에 `REFRESH_COOKIE_SECURE=true` 가 있는데 http 로 들어왔다 — 지우거나 false 로(앱이 https 일 때 스스로 붙인다). **고친 뒤 `sudo ./deploy.sh restart`.** 또는 `TRUST_PROXY` 가 꺼져 앱이 https 인 줄 모른다 |
 | 이중화: B 의 `install` 이 「DB 는 대기입니다」 로 멈춘다 | `/data/…/.env` 가 없다 — A 에서 `install` 을 먼저 |
 | 이중화: 대기의 복제가 `끊김` | 주의 pg_hba 에 대기 IP 가 없거나 `/etc/pg-ha.replpass` 가 다르다. 주에서 `db-primary` 다시 → 대기에서 `db-standby` |
 
 ### `.env` 를 고친 뒤에는
 
+**`.env` 는 프로세스가 뜰 때 한 번만 읽는다.** 파일만 고치면 도는 것은 옛 값을 그대로 쓰고,
+그 사실은 아무 데도 안 뜬다 — 「고쳤는데 왜 그대로지」 를 한참 찾게 된다.
+
 ```bash
-sudo systemctl restart <slug>
+sudo ./deploy.sh restart      # 앱 · 작업 워커 · MCP 를 함께
 ```
+
+유닛 이름을 외울 필요가 없다 — 스크립트가 이 설치의 slug 를 안다. 무엇을 껐다 켜는지만
+보려면 `./deploy.sh units`(root 없이 된다). 켜고 끄기만 하려면 `start` · `stop`.
 
 포트를 바꿨으면 그것으로 충분하다 — **Apptainer 는 호스트 네트워크를 그대로 쓴다**
 (포트 매핑이 없다).

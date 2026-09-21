@@ -272,3 +272,45 @@ def test_setup_은_물어보고_계획을_보여준다(bundle: Path, tmp_path: P
         text=True,
     )
     assert bad.returncode != 0 and "소문자" in bad.stderr
+
+
+def test_도움말이_재시작을_말한다(bundle: Path) -> None:
+    """**`.env` 는 프로세스가 뜰 때 한 번만 읽는다.** 고치는 법만 알려 주고 다시 띄우는 법을
+    안 알려 주면, 사람은 고쳤는데 왜 그대로냐를 한참 찾는다."""
+    got = subprocess.run(
+        ["bash", str(bundle / "deploy.sh"), "--help"],
+        cwd=bundle,
+        env={**os.environ, "OPERATOR": "ops", "INSTALL_DIR": "/opt/testplatform"},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert "restart" in got.stdout
+    assert ".env" in got.stdout
+
+
+def test_재시작은_유닛_이름을_스스로_안다(bundle: Path, tmp_path: Path) -> None:
+    """유닛 이름(`<slug>` · `<slug>-worker` · `<slug>-mcp`)을 사람이 외울 이유가 없다 —
+    스크립트가 이미 slug 를 안다. 안 깐 것(여기서는 MCP)은 빼고 부른다.
+
+    `units` 로 본다: `restart` 는 root 가 있어야 하지만 **무엇을 껐다 켜는지**는 고치기 전에
+    묻는 물음이라 root 없이 볼 수 있어야 하고, 둘은 같은 목록을 쓴다.
+    """
+    etc = tmp_path / "etc"
+    (etc / "etc/systemd/system").mkdir(parents=True)
+    (etc / "etc/systemd/system/testplatform-worker.service").write_text("", encoding="utf-8")
+
+    got = subprocess.run(
+        ["bash", str(bundle / "deploy.sh"), "units"],
+        cwd=bundle,
+        env={
+            **os.environ,
+            "OPERATOR": "ops",
+            "INSTALL_DIR": "/opt/testplatform",
+            "ETC": str(etc),
+        },
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert got.stdout.split() == ["testplatform", "testplatform-worker"]
