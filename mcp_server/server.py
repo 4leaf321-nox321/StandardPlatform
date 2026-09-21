@@ -24,6 +24,7 @@ Claude Code 등록(사용자별 토큰):
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import functools
 import json
@@ -54,11 +55,18 @@ mcp = FastMCP(
         "부른다** — 무엇을 만들 수 있고 각 타입이 어떤 값을 받는지가 거기 다 있다.\n"
         "\n"
         "하려는 일 → 부를 것:\n"
-        "  이름으로 무언가를 가리킨다      object_resolve   ← 참조·관계·질문의 첫 걸음\n"
+        "  어느 타입에 있는지 모른다       search           ← 타입을 모를 때의 첫 걸음\n"
+        "  이름으로 무언가를 가리킨다      object_resolve   ← 참조·관계 잇기의 첫 걸음\n"
+        "  내 부서 · 내 권한               whoami           (create 의 workspace_slug)\n"
         "  그 타입에 무엇이 있나           objects_list\n"
         "  몇 건인가 · 어떻게 갈리나       objects_summary  (세려고 전부 받지 마라)\n"
         "  이 객체의 모든 것               object_get · object_references · object_rollup\n"
+        "  계층을 한 단계씩                object_tree\n"
+        "  누가 언제 무엇을 바꿨나         object_history(하나) · audit_recent(전체)\n"
+        "  여러 객체의 한 칸을 한 값으로   bulk_edit (apply=false 로 먼저 · undo 있음)\n"
+        "  잘못 이은 관계                  relation_update · relation_remove\n"
         "  여러 타입을 건너뛰는 물음       rdf_query (SPARQL)\n"
+        "  여러 행 · 묶음을 넣는다         objects_import · bundle_import → job_apply\n"
         "  정의를 바꾼다                   ontology_import (apply=false 로 먼저)\n"
         "\n"
         "지켜야 할 셋:\n"
@@ -228,6 +236,93 @@ async def _patch(ctx: Context, path: str, json_body: Any) -> Any:
         return _unwrap(await client.patch(path, json=json_body, headers=_forward_headers(ctx)))
 
 
+async def _delete(ctx: Context, path: str) -> Any:
+    async with _client(60) as client:
+        return _unwrap(await client.delete(path, headers=_forward_headers(ctx)))
+
+
+async def _post_form(
+    ctx: Context,
+    path: str,
+    fields: dict[str, Any],
+    file: tuple[str, bytes, str] | None,
+) -> Any:
+    async with _client(120) as client:
+        return _unwrap(
+            await client.post(
+                path,
+                data=fields,
+                files={"file": file} if file is not None else None,
+                headers=_forward_headers(ctx),
+            )
+        )
+
+
+JOB_WAIT_MAX = 25.0
+"""한 도구 호출이 작업을 기다리는 최대 초. 클라이언트의 도구 시간 한도(대개 60초)보다 넉넉히
+짧게 — 그 안에 안 끝나면 `job_status` 로 다시 묻는다. 작은 파일은 첫 호출 안에 끝난다."""
+
+
+async def _wait_job(ctx: Context, job: Any, wait_seconds: float) -> Any:
+    """작업이 끝나거나 `wait_seconds` 가 지날 때까지 본다. **끝났다는 말을 지어내지
+    않는다** — 안 끝났으면 `status` 가 `queued`/`running` 인 채로 돌려주고 `next` 가 무엇을
+    할지 말한다."""
+    if not isinstance(job, dict) or "id" not in job:
+        return job
+    deadline = time.monotonic() + max(0.0, min(wait_seconds, JOB_WAIT_MAX))
+    current = job
+    while current.get("status") in ("queued", "running") and time.monotonic() < deadline:
+        await asyncio.sleep(1.0)
+        current = await _get(ctx, f"/api/jobs/{job['id']}")
+        # 작업 행에는 `error` 칸이 늘 있다(없으면 null) — 오류 봉투는 `id` 가 없는 것으로
+        # 가른다.
+        if not isinstance(current, dict) or "id" not in current:
+            return current
+    return _job_view(current)
+
+
+def _job_view(job: Any) -> Any:
+    """AI 에게 주는 작업 모양 — 상태와 결과, 그리고 **다음에 할 일**."""
+    if not isinstance(job, dict) or "id" not in job:
+        return job
+    status = job.get("status")
+    out: dict[str, Any] = {
+        "job_id": job["id"],
+        "kind": job.get("kind"),
+        "status": status,
+        "progress": job.get("progress"),
+    }
+    if status == "done":
+        out["result"] = job.get("result")
+        result = job.get("result") or {}
+        applied = bool(result.get("applied"))
+        has_errors = (
+            bool(result.get("errors"))
+            or bool((result.get("counts") or {}).get("error"))
+            or result.get("ok") is False
+        )
+        if applied:
+            out["next"] = "적용됐다. 결과를 사용자에게 요약한다."
+        elif has_errors:
+            out["next"] = (
+                "오류가 있는 계획이다 — 적용할 수 없다. 오류를 사용자에게 보이고 고쳐서 다시 "
+                "넣는다."
+            )
+        else:
+            out["next"] = (
+                "계획이다 — 아직 아무것도 안 들어갔다. 사용자에게 보여 주고 판단을 받은 뒤 "
+                "job_apply(job_id) 로 적용한다."
+            )
+    elif status == "failed":
+        out["error"] = job.get("error")
+        out["next"] = "실패했다. 이유를 사용자에게 그대로 전한다 — 우회하지 않는다."
+    elif status == "cancelled":
+        out["next"] = "취소됐다."
+    else:
+        out["next"] = "아직 도는 중이다. 몇 초 뒤 job_status(job_id) 로 다시 묻는다."
+    return out
+
+
 # --------------------------------------------------------------------------- #
 # 사용 가이드 — **서버가 쥔다.** 로컬 스킬에 본문을 두면 사람마다 복사 시점이
 # 달라 낡는다. 로컬엔 짧은 스텁만 두고 본문은 여기서 읽어 준다.
@@ -309,6 +404,36 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
         ),
         "note": "세부가 필요하면 get_guide(topic=...) 로 그 주제만 받아라.",
     }
+
+
+# --------------------------------------------------------------------------- #
+# 나 · 찾기 — 타입을 모를 때의 첫 걸음
+# --------------------------------------------------------------------------- #
+@tool()
+async def whoami(ctx: Context) -> Any:
+    """**이 토큰의 주인** — 이름 · 내 부서(`home_workspace_slug`) · 속한 부서와 역할
+    (`memberships`) · 시스템 관리자인지.
+
+    `object_create` 의 `workspace_slug` 에 무엇을 넣을지는 여기서 안다. 비우면 전역이
+    되어 시스템 관리자가 아니면 거절된다 — **부서를 짐작해 넣지 말고 여기서 읽는다.**
+    쓰기가 거절되면 `memberships[].role` 을 보고 사용자에게 알린다."""
+    return await _get(ctx, "/api/auth/me")
+
+
+@tool()
+async def search(
+    ctx: Context, q: str, type_slug: str | None = None, limit: int = 20, offset: int = 0
+) -> Any:
+    """**타입을 모를 때** 이름·식별자·별칭으로 전부 찾는다 — 「앤시스 관련된 거 뭐 있어」.
+
+    `types[]` 가 타입별 건수라 **어느 타입에 있는지**가 먼저 보인다. 타입을 알면
+    `objects_list`(조건 거르기) · `object_resolve`(하나로 정하기)가 낫다 — 이것은
+    「어디 있나」 를 묻는 도구지 「어느 것인가」 를 정하는 도구가 아니다.
+    볼 수 있는 것만 나온다(남의 부서 것은 수에도 안 잡힌다)."""
+    params: list[tuple[str, Any]] = [("q", q), ("limit", limit), ("offset", offset)]
+    if type_slug:
+        params.append(("type", type_slug))
+    return await _get(ctx, "/api/search", params=params)
 
 
 # --------------------------------------------------------------------------- #
@@ -535,6 +660,79 @@ async def object_references(ctx: Context, type_slug: str, object_id: str) -> Any
 
 
 @tool()
+async def object_tree(
+    ctx: Context, type_slug: str, parent: str | None = None, orphans: bool = False
+) -> Any:
+    """계층(트리) **한 단계** — `parent` 없이 부르면 뿌리들, 있으면 그 아래 한 단계.
+
+    타입의 「목록 화면」 에 트리 관계가 정해져 있어야 한다(없으면 빈 트리). 통째로 안
+    온다 — 부품 5천 개짜리 트리를 한 번에 받으면 답이 잘린다. **깊이 전부가 필요하면
+    `rdf_query` 로 `+` 경로**(`ns:part_of+`)를 쓴다. `orphans=true` 는 어디에도 안 이어진
+    것만."""
+    params: list[tuple[str, Any]] = [("orphans", "true" if orphans else "false")]
+    if parent:
+        params.append(("parent", parent))
+    return await _get(ctx, f"/api/objects/{type_slug}/tree", params=params)
+
+
+@tool()
+async def bulk_edit(
+    ctx: Context,
+    type_slug: str,
+    ids: list[str],
+    field: str,
+    value: Any = None,
+    apply: bool = False,
+) -> Any:
+    """고른 객체들의 **한 칸**을 같은 값으로 — 「등급 A 인 것 전부 B 로」.
+
+    `field` 는 `status` · `description` · `workspace` · `properties.<칸>`. `apply=false`
+    (기본)면 계획만 — 몇 건이 바뀌고, 몇 건은 이미 그 값이고, 몇 건은 **왜 안 되나**
+    (남의 부서 것)가 행마다 온다. 사람이 보고 판단한 뒤 `apply=true`. 적용 응답의
+    `batch_id` 를 **사용자에게 알려 준다** — `bulk_edit_undo` 가 그것으로 한 번에
+    되돌린다. 한 칸씩인 이유: 여러 칸을 동시에 바꾸면 실수 한 번의 크기가 수백 배가 된다."""
+    return await _post(
+        ctx,
+        f"/api/objects/{type_slug}/bulk-edit",
+        {"ids": ids, "field": field, "value": value, "apply": apply},
+    )
+
+
+@tool()
+async def bulk_edit_undo(
+    ctx: Context, type_slug: str, batch_id: str, apply: bool = False
+) -> Any:
+    """`bulk_edit` 한 묶음을 **통째로 되돌린다.** `apply=false` 면 무엇이 되돌아갈지만.
+    그 뒤에 따로 고쳐진 객체는 되돌리지 않고 이유를 적는다 — 남의 손이 닿은 것을
+    덮으면 그 손실은 아무 데도 안 뜬다."""
+    return await _post(
+        ctx, f"/api/objects/{type_slug}/bulk-edit/{batch_id}/undo", {"apply": apply}
+    )
+
+
+@tool()
+async def audit_recent(
+    ctx: Context,
+    action: str | None = None,
+    target_table: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> Any:
+    """**누가 언제 무엇을 바꿨나** — 객체를 가리지 않고 최근 것부터.
+
+    `object_history` 는 객체 하나의 이력이고, 이것은 「어제 무슨 일이 있었나」 다.
+    `action`(예 `object.update` · `relation.add` · `ontology.import`) · `target_table` 로
+    거른다. 시간 · 사람으로는 못 거른다 — 최근 것부터 받아 여기서 본다.
+    **부서 관리자 이상만** 볼 수 있다. 거절되면 그렇게 알린다."""
+    params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset)]
+    if action:
+        params.append(("action", action))
+    if target_table:
+        params.append(("target_table", target_table))
+    return await _get(ctx, "/api/audit/entries", params=params)
+
+
+@tool()
 async def quality_report(ctx: Context, kind: str | None = None) -> Any:
     """데이터 품질 — **나빠지고 있는 것.** 홈 「남은 일」 과 같은 것.
 
@@ -616,38 +814,36 @@ async def objects_import(
     type_slug: str,
     rows: list[dict[str, Any]],
     workspace_slug: str | None = None,
-    apply: bool = False,
 ) -> Any:
     """객체를 **여러 행 한 번에** — 같은 식별자(`key`)면 만들지 않고 고친다(upsert).
 
-    `apply=False`(기본)면 **아무것도 안 바꾸고** 행마다 무엇이 될지(새로/고침/그대로/
-    오류)를 돌려준다. 사람에게 보여 주고 판단을 받은 뒤 `apply=True` 로 부른다.
-    **한 행이라도 오류면 아무것도 안 넣는다.**
+    **작업이 된다.** 워커가 계획(행마다 새로/고침/그대로/오류)을 세우고, 작은 것은 이 호출
+    안에 끝난다. 돌아온 `status` 가 `done` 이면 `result` 가 계획이다 — **아직 아무것도 안
+    들어갔다.** 사용자에게 보여 주고 판단을 받은 뒤 `job_apply(job_id)` 로 넣는다. 아직 도는
+    중이면 `job_status(job_id)` 로 다시 묻는다. **한 행이라도 오류면 아무것도 안 넣는다.**
 
     행은 `{"key": ..., "label": ..., <속성 키>: ...}` 꼴. 없는 키는 안 건드리고,
     비우려면 `null` 을 넣는다. 참조 속성은 상대의 식별자(없으면 이름)로 적어도 된다.
-    한 번에 5000행까지."""
-    return await _post(
-        ctx,
-        f"/api/objects/{type_slug}/import-rows",
-        {"rows": rows, "workspace_slug": workspace_slug, "apply": apply},
-    )
+    `workspace_slug` 는 `whoami` 에서 — 비우면 전역이라 시스템 관리자만 된다."""
+    fields: dict[str, Any] = {
+        "kind": "objects_import",
+        "params": json.dumps({"type_slug": type_slug}),
+    }
+    if workspace_slug:
+        fields["workspace_slug"] = workspace_slug
+    body = json.dumps({"rows": rows}, ensure_ascii=False).encode("utf-8")
+    job = await _post_form(ctx, "/api/jobs", fields, ("rows.json", body, "application/json"))
+    return await _wait_job(ctx, job, JOB_WAIT_MAX)
 
 
-# --------------------------------------------------------------------------- #
-# 관계
-# --------------------------------------------------------------------------- #
 @tool()
-async def bundle_import(ctx: Context, bundle: dict[str, Any], apply: bool = False) -> Any:
+async def bundle_import(ctx: Context, bundle: dict[str, Any]) -> Any:
     """**정의 · 객체 · 관계를 한 묶음으로** — 정제 도구(`pipeline/`)가 만든 결과물.
 
-    `apply=False`(기본)면 **아무것도 저장하지 않고 한 번에 미리 본다** — 정의를
-    먼저 적용하지 않아도 그 정의로 객체와 관계를 맞춰 본다. 만든 묶음이 어떻게
-    들어갈지 스스로 확인할 때 쓴다.
-
-    `apply=True` 는 **전부 아니면 무** — 한 곳이라도 오류면 아무것도 안 들어간다.
-    **넣는 것은 사람이 미리 보기를 확인한 뒤에만** 한다(보통은 `sp_pipeline.py
-    apply` 가 한다).
+    **작업이 된다.** 워커가 **한 번에 미리 본다** — 정의를 먼저 적용하지 않아도 그
+    정의로 객체와 관계를 맞춰 본다. 돌아온 `result` 는 계획이고 아직 아무것도 안 들어갔다.
+    사람이 확인한 뒤 `job_apply(job_id)` — **전부 아니면 무**, 한 곳이라도 오류면 아무것도
+    안 들어간다.
 
     모양: `{"ontology": <ontology_import 와 같은 스키마, 없으면 생략>,
     "objects": [{"type_slug", "workspace_slug", "rows": [...]}],
@@ -655,7 +851,8 @@ async def bundle_import(ctx: Context, bundle: dict[str, Any], apply: bool = Fals
     행은 `objects_import` · `relations_import` 와 같다. `objects` 는 **적은 차례대로**
     넣는다 — 참조하는 타입을 뒤에. 정의가 들면 시스템 관리자와 `ontology:write`
     범위가 필요하다."""
-    return await _post(ctx, "/api/bundles/import", {**bundle, "apply": apply})
+    job = await _post(ctx, "/api/bundles/import", {**bundle, "apply": False})
+    return await _wait_job(ctx, job, JOB_WAIT_MAX)
 
 
 @tool()
@@ -679,22 +876,90 @@ async def relation_add(
 
 
 @tool()
+async def relation_update(
+    ctx: Context,
+    type_slug: str,
+    object_id: str,
+    relation_id: str,
+    evidence_note: str | None = None,
+    properties: dict[str, Any] | None = None,
+) -> Any:
+    """관계의 **근거와 속성**을 고친다 — 보낸 것만. **양끝과 종류는 못 바꾼다** — 그건
+    다른 관계다(끊고 새로 잇는다). `relation_id` 는 `object_get` 의 `related[].relation_id`."""
+    body: dict[str, Any] = {}
+    if evidence_note is not None:
+        body["evidence_note"] = evidence_note
+    if properties is not None:
+        body["properties"] = properties
+    return await _patch(
+        ctx, f"/api/objects/{type_slug}/{object_id}/relations/{relation_id}", body
+    )
+
+
+@tool()
+async def relation_remove(
+    ctx: Context, type_slug: str, object_id: str, relation_id: str
+) -> Any:
+    """관계를 **끊는다.** 되돌리기가 없다 — 관계는 기록이 아니라 두 기록 사이의 말이라
+    진짜로 지운다(감사 기록에는 남는다). **틀리게 이은 것을 되돌리는 자리**다. 잘못
+    이었는지 확실하지 않으면 끊지 말고 사람에게 `object_get` 결과를 보여 준다."""
+    return await _delete(ctx, f"/api/objects/{type_slug}/{object_id}/relations/{relation_id}")
+
+
+@tool()
 async def relations_import(
     ctx: Context,
     type_slug: str,
     rows: list[dict[str, Any]],
-    apply: bool = False,
 ) -> Any:
-    """관계를 **여러 줄 한 번에** — `type_slug` 의 객체에서 출발하는 선들.
+    """관계를 **여러 줄 한 번에** — `type_slug` 의 객체에서 출발하는 선들. **작업이 된다.**
 
     행은 `{"src": ..., "relation": ..., "dst": ..., "evidence_note": ...}` 꼴. 끝점은
     식별자(없으면 이름). 이미 이어진 것은 「그대로」 라 두 번 올려도 두 겹이 안 된다.
-    `apply=False` 면 계획만. **근거(evidence_note)를 적는다** — 기계가 이은 것이면 더."""
-    return await _post(
-        ctx,
-        f"/api/objects/{type_slug}/relations/import-rows",
-        {"rows": rows, "apply": apply},
-    )
+    돌아온 `result` 는 계획이다 — 사람이 확인한 뒤 `job_apply(job_id)`.
+    **근거(evidence_note)를 적는다** — 기계가 이은 것이면 더."""
+    fields: dict[str, Any] = {
+        "kind": "relations_import",
+        "params": json.dumps({"type_slug": type_slug}),
+    }
+    body = json.dumps({"rows": rows}, ensure_ascii=False).encode("utf-8")
+    job = await _post_form(ctx, "/api/jobs", fields, ("rows.json", body, "application/json"))
+    return await _wait_job(ctx, job, JOB_WAIT_MAX)
+
+
+# --------------------------------------------------------------------------- #
+# 작업 — 오래 걸리는 일은 요청이 아니라 표에 산다(docs/작업-워커-설계.md)
+# --------------------------------------------------------------------------- #
+@tool()
+async def job_status(ctx: Context, job_id: str, wait_seconds: int = 20) -> Any:
+    """작업이 어디까지 됐나 — `objects_import` · `relations_import` · `bundle_import` 가 돌려준
+    `job_id` 로. `wait_seconds`(최대 25) 동안 끝나기를 기다렸다가 돌려준다 — 그래도 안 끝났으면
+    `status` 가 `running` 인 채로 오고, 그때 다시 부른다. **끝났다고 지어내지 않는다.**"""
+    job = await _get(ctx, f"/api/jobs/{job_id}")
+    return await _wait_job(ctx, job, float(wait_seconds))
+
+
+@tool()
+async def job_apply(ctx: Context, job_id: str, wait_seconds: int = 20) -> Any:
+    """계획을 **사람이 확인한 뒤** 적용한다 — 같은 파일 · 같은 지문으로 적용 작업을 만든다.
+
+    미리 본 뒤에 누군가 그 사이에 같은 것을 바꿨으면 서버가 거절한다(「미리 본 것과
+    달라졌습니다」) — 그러면 다시 미리 본다. 오류가 있는 계획은 적용 작업 자체가 안 만들어진다.
+    **사용자의 판단 없이 부르지 않는다.**"""
+    job = await _post(ctx, f"/api/jobs/{job_id}/apply", None)
+    return await _wait_job(ctx, job, float(wait_seconds))
+
+
+@tool()
+async def jobs_list(ctx: Context, limit: int = 20) -> Any:
+    """내 작업 최근 것부터 — 무엇이 돌고 있고 무엇이 실패했나. 워커가 살아 있는지도 함께
+    (`workers[].alive`) — 워커가 없으면 작업은 영영 대기다. 그때는 운영자에게 알린다."""
+    listed = await _get(ctx, "/api/jobs", params=[("limit", limit)])
+    workers = await _get(ctx, "/api/jobs/workers")
+    if isinstance(listed, dict) and "items" in listed:
+        listed["items"] = [_job_view(one) for one in listed["items"]]
+        listed["workers"] = workers
+    return listed
 
 
 # --------------------------------------------------------------------------- #
@@ -714,13 +979,17 @@ async def datasource_sync(ctx: Context, slug: str, apply: bool = False) -> Any:
     `apply=False`(기본)면 **계획만**: 행마다 새로/고침/그대로/오류와 그 이유. 사람에게 보여
     주고 판단을 받은 뒤 `apply=True`. **한 행이라도 오류면 아무것도 안 넣는다.** 같은 객체는
     바깥 식별자 → 식별자 → 별칭·이름 순으로 다시 찾고, 빈 칸은 안 건드린다. 값 대응표에 없는
-    값·못 푸는 참조는 오류 행이다 — 사용자에게 무엇을 고쳐야 하는지 말한다."""
-    return await _post(
+    값·못 푸는 참조는 오류 행이다 — 사용자에게 무엇을 고쳐야 하는지 말한다.
+
+    **작업이 된다** — 바깥 표를 읽는 시간은 그쪽이 정한다. 끝나기를 잠깐 기다렸다가 돌려주고,
+    아직이면 `job_status(job_id)` 로 다시 묻는다. 결과(`result`)가 계획 · 기록이다."""
+    job = await _post(
         ctx,
         f"/api/datasources/{slug}/sync",
         None,
         params={"apply": "true" if apply else "false"},
     )
+    return await _wait_job(ctx, job, JOB_WAIT_MAX)
 
 
 # --------------------------------------------------------------------------- #

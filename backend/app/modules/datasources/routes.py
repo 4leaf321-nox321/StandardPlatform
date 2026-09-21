@@ -23,9 +23,10 @@ from app.modules.datasources.schemas import (
     DataSourceWriteRequest,
     PreviewOut,
     RunOut,
-    SyncOut,
 )
-from app.modules.objects.schemas import ImportRowOut
+from app.modules.jobs import routes as jobs_routes
+from app.modules.jobs import services as job_services
+from app.modules.jobs.schemas import JobOut
 from app.modules.objects.services import properties_of
 from app.modules.ontology.models import ObjectType
 from app.modules.ontology.services import require_choice, require_slug
@@ -298,40 +299,31 @@ def preview_source(
     return PreviewOut(**services.preview(db, row, limit=limit))
 
 
-@router.post("/{slug}/sync", response_model=SyncOut)
+@router.post("/{slug}/sync", response_model=JobOut, status_code=202)
 def sync_source(
     slug: str,
     apply: bool = Query(default=False),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
-) -> SyncOut:
-    """계획(`apply=false`) 또는 적용. **한 행이라도 오류면 아무것도 안 넣는다** — 파일과 같다.
-    시스템 관리자만."""
+) -> JobOut:
+    """계획(`apply=false`) 또는 적용 — **작업이 된다**(202). 바깥 표를 읽는 시간은 그쪽이
+    정하므로 요청 안에서 기다리지 않는다. **한 행이라도 오류면 아무것도 안 넣는다** — 파일과
+    같다. 시스템 관리자만."""
     if not user.is_system_admin:
         raise AppError(
             code("DATASOURCES", 7), "동기화는 시스템 관리자만 돌립니다.", status=403
         )
     row = _source(db, slug)
-    result = services.sync(db, user, row, apply=apply)
-    return SyncOut(
-        run=RunOut.model_validate(result.run),
-        applied=result.run.applied,
-        counts=dict(result.run.counts or {}),
-        rows=[
-            ImportRowOut(
-                row=one.row,
-                action=one.action,
-                label=one.label,
-                key=one.key,
-                object_id=one.object_id,
-                changes=one.changes,
-                message=one.message,
-            )
-            for one in result.plan_rows
-        ],
-        errors=list(result.run.errors or []),
-        truncated=result.truncated,
+    job = job_services.enqueue(
+        db,
+        kind="datasource_sync",
+        params={"slug": row.slug, "apply": apply},
+        user=user,
+        workspace_id=None,
     )
+    db.commit()
+    db.refresh(job)
+    return jobs_routes._out(db, job)
 
 
 @router.get("/{slug}/runs", response_model=list[RunOut])

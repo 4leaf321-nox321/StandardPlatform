@@ -35,6 +35,8 @@ from app.modules.datasources import services as datasources_services
 from app.modules.files import routes as files_routes
 from app.modules.files import services as files_services
 from app.modules.graph import routes as graph_routes
+from app.modules.jobs import routes as jobs_routes
+from app.modules.jobs import services as jobs_services
 from app.modules.notices import routes as notices_routes
 from app.modules.notifications import routes as notifications_routes
 from app.modules.objects import quality as objects_quality
@@ -84,6 +86,8 @@ def _api_router(settings: Settings) -> APIRouter:
     router.include_router(notifications_routes.router)
     router.include_router(files_routes.router)
     router.include_router(audit_routes.router)
+    # 오래 걸리는 일(일괄 입력 · 내보내기)은 요청이 아니라 작업이다 — 워커가 돈다.
+    router.include_router(jobs_routes.router)
     # 메타모델과 그 객체. **도메인이 아니라 메커니즘이다**(ADR 0005) —
     # 도메인은 여전히 이 저장소에 없고, 여기 정의로 얹힌다.
     router.include_router(ontology_routes.router)
@@ -156,6 +160,10 @@ def _register_extensions() -> None:
     extensions.register_maintenance(datasources_services.maintenance)
     extensions.register_stats(datasources_services.stats)
     extensions.register_maintenance(webhooks_services.maintenance)
+    # 끝났는데 아무도 안 누른 계획 · 실패한 내 작업 · 멎은 워커. **워커가 죽으면 가져오기도
+    # 웹훅도 멎는다** — 그 사실이 「작업」 화면 안에만 있으면 아무도 제때 모른다.
+    extensions.register_maintenance(jobs_services.maintenance)
+    extensions.register_stats(jobs_services.stats)
 
     # **기계 자격으로 온톨로지를 채우는 길**(3-d). 안 열면 PAT 로는 못 고친다 —
     # 기본이 「막힘」 이고, 그것이 맞는 기본값이다(shared/scopes.py).
@@ -167,6 +175,9 @@ def _register_extensions() -> None:
     scopes.register_write_scope("/api/objects", "objects:write")
     # 묶음은 객체를 쓴다. 정의가 들면 라우트가 ontology:write 를 더 묻는다.
     scopes.register_write_scope("/api/bundles", "objects:write")
+    # 작업은 파일로 객체를 넣거나 내는 일이다 — 같은 범위. 정의가 든 묶음의 적용은 넣을 때
+    # 적어 둔 `needs_scope` 를 apply 라우트가 다시 묻는다.
+    scopes.register_write_scope("/api/jobs", "objects:write")
     # 동기화는 객체를 넣는 일이다 — 같은 범위. 소스 정의 자체는 시스템 관리자만.
     scopes.register_write_scope("/api/datasources", "objects:write")
     # `import` 는 POST 지만 `dry_run` 이면 아무것도 안 바꾼다. 그래도 **읽기로

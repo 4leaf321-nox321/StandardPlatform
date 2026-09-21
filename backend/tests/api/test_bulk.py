@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, export_file, import_file
 from tests.api.test_ontology import (
     _make_object,
     _make_property,
@@ -29,14 +29,9 @@ def _upload(
     path: str = "import",
     name: str = "rows.csv",
 ) -> Any:
-    response = client.post(
-        f"/api/objects/{type_slug}/{path}",
-        files={"file": (name, io.BytesIO(csv_text.encode("utf-8")), "text/csv")},
-        data={"workspace_slug": who.workspace, "apply": "true" if apply else "false"},
-        headers=who.headers,
-    )
-    assert response.status_code == 200, response.text
-    return response.json()
+    """일괄 입력은 **작업**이다 — 올리면 202, 워커가 계획을 세우고, 적용은
+    `/jobs/{id}/apply`. 시험은 그 워커를 이 프로세스에서 돌린다(`conftest.import_file`)."""
+    return import_file(client, who, type_slug, csv_text, apply=apply, path=path, name=name)
 
 
 def _part_type(client: TestClient, admin: Signed) -> str:
@@ -241,8 +236,7 @@ def test_내보낸_것을_그대로_다시_넣을_수_있다(client: TestClient,
         properties={"weight": 1.5, "ok": True, "vendor": acme["id"]},
     )
 
-    exported = client.get(f"/api/objects/{part}/export", headers=admin.headers)
-    assert exported.status_code == 200
+    exported = export_file(client, admin, f"{part}/export")
     text = exported.text.lstrip("﻿")
     assert "V-1" in text and acme["id"] not in text
     assert "예" in text
@@ -251,9 +245,7 @@ def test_내보낸_것을_그대로_다시_넣을_수_있다(client: TestClient,
     plan = _upload(client, admin, part, text, apply=True)
     assert plan["counts"] == {"create": 0, "update": 0, "unchanged": 1, "error": 0}
 
-    as_json = client.get(
-        f"/api/objects/{part}/export?format=json", headers=admin.headers
-    ).json()
+    as_json = export_file(client, admin, f"{part}/export", {"format": "json"}).json()
     assert as_json["rows"][0]["vendor"] == "V-1"
 
 
@@ -263,9 +255,7 @@ def test_내보내기는_목록과_같은_거르기를_쓴다(client: TestClient
     _make_object(
         client, admin, part, key="P-2", label="고무링", properties={"material": "고무"}
     )
-    exported = client.get(
-        f"/api/objects/{part}/export", params={"p.material": "고무"}, headers=admin.headers
-    )
+    exported = export_file(client, admin, f"{part}/export", {"p.material": "고무"})
     lines = exported.text.lstrip("﻿").splitlines()
     assert len(lines) == 2 and "고무링" in lines[1]
 
@@ -278,9 +268,10 @@ def test_부서를_고칠_수_없는_사람은_파일을_못_올린다(
     response = client.post(
         f"/api/objects/{part}/import",
         files={"file": ("rows.csv", io.BytesIO(b"key,label\nP-1,x\n"), "text/csv")},
-        data={"workspace_slug": member.workspace, "apply": "false"},
+        data={"workspace_slug": member.workspace},
         headers=member.headers,
     )
+    # 넣는 순간에 거절한다 — 워커가 돌 때 거절하면 사람은 몇 분 뒤에야 본다.
     assert response.status_code == 403
 
 
@@ -308,7 +299,7 @@ def test_관계_파일은_두_번_올려도_선이_한_겹이다(client: TestCli
     again = _upload(client, admin, part, csv_text, path="relations/import", apply=True)
     assert again["counts"]["unchanged"] == 1
 
-    exported = client.get(f"/api/objects/{part}/relations/export", headers=admin.headers)
+    exported = export_file(client, admin, f"{part}/relations/export")
     lines = exported.text.lstrip("﻿").splitlines()
     assert lines == ["src,relation,dst,evidence_note", f"P-1,{kind},V-1,카탈로그 12쪽"]
 
@@ -425,16 +416,9 @@ def test_uuid_모양이어도_없는_객체를_가리키면_거절한다(
 
 def test_붙여_넣은_탭_구분_표도_받는다(client: TestClient, admin: Signed) -> None:
     """엑셀에서 복사하면 탭으로 온다 — 사내 DRM 이 저장을 잠그면 붙여 넣기가 유일한 길이다."""
-    import io
 
     part = _part_type(client, admin)
     text = "key\tlabel\tweight\nP-1\t볼트\t1.5\nP-2\t너트\t0.5\n"
-    planned = client.post(
-        f"/api/objects/{part}/import",
-        files={"file": ("pasted.csv", io.BytesIO(text.encode("utf-8")), "text/csv")},
-        data={"workspace_slug": admin.workspace, "apply": "false"},
-        headers=admin.headers,
-    )
-    assert planned.status_code == 200, planned.text
-    assert [r["action"] for r in planned.json()["rows"]] == ["create", "create"]
-    assert planned.json()["rows"][0]["label"] == "볼트"
+    planned = import_file(client, admin, part, text, name="pasted.csv")
+    assert [r["action"] for r in planned["rows"]] == ["create", "create"]
+    assert planned["rows"][0]["label"] == "볼트"

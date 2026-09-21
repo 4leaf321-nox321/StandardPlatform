@@ -312,7 +312,7 @@ def _rows_from_xlsx(raw: bytes, sheet: str) -> list[dict[str, Any]]:
 
 
 def parse_file(raw: bytes, *, fmt: str, sheet: str = "") -> list[dict[str, Any]]:
-    """바이트 → 행. CSV·JSON 은 파일 가져오기와 같은 규칙(BOM 벗김, `{"rows": [...]}` 허용)."""
+    """바이트 → 행. CSV·JSON 은 일괄 입력와 같은 규칙(BOM 벗김, `{"rows": [...]}` 허용)."""
     if fmt == "xlsx":
         return _rows_from_xlsx(raw, sheet)
     text = raw.decode("utf-8-sig")

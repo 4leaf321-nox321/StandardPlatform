@@ -13,6 +13,7 @@
 # ## 배치
 #
 #   <BackupRoot>/db/db-<시각>.dump   pg_dump 커스텀 포맷 — 일 7벌 + 일요일분 4벌
+#                                   (작업 파일 내용 job_files.data 는 뺀다 — 임시물)
 #   <BackupRoot>/filestore/          첨부 미러 1벌
 #   <BackupRoot>/env/.env            접속 정보·JWT 비밀키
 #   <BackupRoot>/LAST_BACKUP.txt     무엇을 언제 받았는지
@@ -111,8 +112,11 @@ fi
 # 이름으로 남고, 그것을 「마지막 백업」 으로 읽게 된다.
 info "데이터베이스 백업: $DB_NAME"
 DUMP="$BACKUP_ROOT/db/db-$STAMP.dump"
+# **작업 파일의 내용(job_files.data)은 안 담는다.** 올린 CSV·만든 파일이라 7일 뒤 지워지는
+# 임시물이고, 100MB 짜리가 몇 개만 있어도 덤프가 그것으로 찬다. 표는 담기고 행만 빠지므로
+# 복구한 서버에서 「그 작업의 파일이 없다」 가 되고, 그때는 다시 올리면 된다.
 PGPASSWORD="$DB_PW" pg_dump --host="$DB_HOST" --port="$DB_PORT" --username="$DB_USER" \
-    --format=custom --file="$DUMP.part" "$DB_NAME"
+    --format=custom --exclude-table-data=job_files --file="$DUMP.part" "$DB_NAME"
 mv "$DUMP.part" "$DUMP"
 
 # ── 첨부 ──────────────────────────────────────────────────────────────────────

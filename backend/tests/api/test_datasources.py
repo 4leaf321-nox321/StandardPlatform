@@ -16,7 +16,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.modules.datasources import services
-from tests.api.conftest import Signed, maintenance_counts, notifications_of
+from tests.api.conftest import Signed, finish_job, maintenance_counts, notifications_of
 from tests.api.test_ontology import _make_object, _make_property, _make_type
 
 ROWS: list[dict[str, Any]] = [
@@ -85,6 +85,33 @@ class FakeOData:
                 f"http://plm.local/odata/Suppliers?$top={top}&$skip={skip + top}"
             )
         return httpx.Response(200, json=body)
+
+
+class _Done:
+    """옛 동기 응답 흉내 — 시험이 `.status_code` · `.text` · `.json()` 으로 읽는다."""
+
+    def __init__(self, status_code: int, body: Any) -> None:
+        self.status_code = status_code
+        self._body = body
+        self.text = str(body)
+
+    def json(self) -> Any:
+        return self._body
+
+
+def _sync(client: TestClient, who: Signed, slug: str, *, apply: bool = False) -> _Done:
+    """동기화는 **작업**이다 — 넣고(202), 워커를 이 프로세스에서 돌리고, 결과를 옛 모양으로."""
+    started = client.post(
+        f"/api/datasources/{slug}/sync",
+        params={"apply": "true" if apply else "false"},
+        headers=who.headers,
+    )
+    if started.status_code != 202:
+        return _Done(started.status_code, started.json())
+    done = finish_job(client, who, started.json())
+    if done["status"] != "done":
+        return _Done(500, {"error": done.get("error")})
+    return _Done(200, done["result"])
 
 
 @pytest.fixture
@@ -180,7 +207,7 @@ def test_계획을_보고_적용하면_같은_객체를_다시_찾는다(
     assert preview.json()["mapped"][0]["row"]["country"] == "미국"
 
     # 계획 — 아무것도 안 바뀐다. 쪽 넘김이 끝까지 따라간다(page_size 2, 3행).
-    planned = client.post(f"/api/datasources/{source['slug']}/sync", headers=admin.headers)
+    planned = _sync(client, admin, source["slug"])
     assert planned.status_code == 200, planned.text
     assert planned.json()["applied"] is False
     assert planned.json()["counts"] == {"create": 3, "update": 0, "unchanged": 0, "error": 0}
@@ -188,11 +215,7 @@ def test_계획을_보고_적용하면_같은_객체를_다시_찾는다(
     assert len(plm.requests) >= 2
 
     # 적용.
-    done = client.post(
-        f"/api/datasources/{source['slug']}/sync",
-        params={"apply": "true"},
-        headers=admin.headers,
-    ).json()
+    done = _sync(client, admin, source["slug"], apply=True).json()
     assert done["applied"] is True, done
     listed = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["items"]
     by_key = {one["key"]: one for one in listed}
@@ -208,11 +231,7 @@ def test_계획을_보고_적용하면_같은_객체를_다시_찾는다(
     )
     plm.rows[0]["Name"] = "ANSYS, Inc."
     plm.rows[0]["Rating"] = 95
-    again = client.post(
-        f"/api/datasources/{source['slug']}/sync",
-        params={"apply": "true"},
-        headers=admin.headers,
-    ).json()
+    again = _sync(client, admin, source["slug"], apply=True).json()
     assert again["counts"]["update"] == 1 and again["counts"]["create"] == 0
     changed = client.get(
         f"/api/objects/{vendor}/{by_key['V-001']['id']}", headers=admin.headers
@@ -233,11 +252,7 @@ def test_값_대응표에_없는_값은_오류_행이고_아무것도_안_넣는
     vendor = _vendor_type(client, admin)
     source = _source(client, admin, vendor)
     plm.rows[2]["CountryCd"] = "JP"
-    done = client.post(
-        f"/api/datasources/{source['slug']}/sync",
-        params={"apply": "true"},
-        headers=admin.headers,
-    ).json()
+    done = _sync(client, admin, source["slug"], apply=True).json()
     assert done["applied"] is False
     assert done["counts"]["error"] == 1
     assert any("JP" in e for e in done["errors"])
@@ -256,11 +271,7 @@ def test_처음_만날_때는_별칭과_이름으로_찾고_겹치면_거절한�
         headers=admin.headers,
     )
     source = _source(client, admin, vendor)
-    plan = client.post(
-        f"/api/datasources/{source['slug']}/sync",
-        params={"apply": "true"},
-        headers=admin.headers,
-    ).json()
+    plan = _sync(client, admin, source["slug"], apply=True).json()
     assert plan["applied"] is True, plan
     got = client.get(f"/api/objects/{vendor}/{ours['id']}", headers=admin.headers).json()[
         "object"
@@ -275,18 +286,10 @@ def test_사라진_행은_기본_그대로_켜면_사용_중지(
     vendor = _vendor_type(client, admin)
     source = _source(client, admin, vendor)
     manual = _make_object(client, admin, vendor, label="손으로 만든 것")
-    client.post(
-        f"/api/datasources/{source['slug']}/sync",
-        params={"apply": "true"},
-        headers=admin.headers,
-    )
+    _sync(client, admin, source["slug"], apply=True)
     plm.rows.pop()  # 마이다스가 바깥에서 사라짐
 
-    client.post(
-        f"/api/datasources/{source['slug']}/sync",
-        params={"apply": "true"},
-        headers=admin.headers,
-    )
+    _sync(client, admin, source["slug"], apply=True)
     rows = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["items"]
     assert all(one["status"] == "active" for one in rows)  # 기본: 건드리지 않는다
 
@@ -295,11 +298,7 @@ def test_사라진_행은_기본_그대로_켜면_사용_중지(
         json={"deprecate_missing": True},
         headers=admin.headers,
     )
-    done = client.post(
-        f"/api/datasources/{source['slug']}/sync",
-        params={"apply": "true"},
-        headers=admin.headers,
-    ).json()
+    done = _sync(client, admin, source["slug"], apply=True).json()
     assert done["counts"]["deprecated"] == 1
     rows = {
         one["label"]: one["status"]
@@ -323,11 +322,7 @@ def test_v2_봉투와_인증과_필터(client: TestClient, admin: Signed, plm: F
         filter="Rating ge 80",
     )
     assert source["has_secret"] is True and source["auth_kind"] == "bearer"
-    done = client.post(
-        f"/api/datasources/{source['slug']}/sync",
-        params={"apply": "true"},
-        headers=admin.headers,
-    ).json()
+    done = _sync(client, admin, source["slug"], apply=True).json()
     assert done["applied"] is True, done
     assert done["counts"]["create"] == 2
 
@@ -337,9 +332,7 @@ def test_v2_봉투와_인증과_필터(client: TestClient, admin: Signed, plm: F
         json={"auth_secret": "bad"},
         headers=admin.headers,
     )
-    failed = client.post(
-        f"/api/datasources/{source['slug']}/sync", headers=admin.headers
-    ).json()
+    failed = _sync(client, admin, source["slug"]).json()
     assert failed["run"]["status"] == "failed" and "인증" in failed["errors"][0]
 
 
@@ -348,11 +341,7 @@ def test_nextLink_없는_서버는_skip_으로_넘긴다(
 ) -> None:
     vendor = _vendor_type(client, admin)
     source = _source(client, admin, vendor, base_url="http://plm.local/plain")
-    done = client.post(
-        f"/api/datasources/{source['slug']}/sync",
-        params={"apply": "true"},
-        headers=admin.headers,
-    ).json()
+    done = _sync(client, admin, source["slug"], apply=True).json()
     assert done["run"]["rows_seen"] == 3 and done["counts"]["create"] == 3
     skips = [parse_qs(r.url.query.decode()).get("$skip", ["0"])[0] for r in plm.requests]
     assert skips == ["0", "2"]  # 2행씩: 꽉 찬 첫 쪽 → 다음, 덜 찬 둘째 쪽 → 끝
@@ -367,11 +356,7 @@ def test_타이머가_돌릴_차례(client: TestClient, admin: Signed, plm: Fake
     with SessionLocal() as db:
         slugs = {one.slug for one in services.due(db)}
     assert every["slug"] in slugs and manual["slug"] not in slugs
-    client.post(
-        f"/api/datasources/{every['slug']}/sync",
-        params={"apply": "true"},
-        headers=admin.headers,
-    )
+    _sync(client, admin, every["slug"], apply=True)
     with SessionLocal() as db:
         assert every["slug"] not in {one.slug for one in services.due(db)}
     json.dumps(ROWS)  # 자료가 JSON 으로 나가는 모양인지 — 가짜 서버가 그대로 쓴다
@@ -467,11 +452,7 @@ def test_REST_는_행_자리와_쪽_넘김을_정의가_적는다(
 ) -> None:
     vendor = _vendor_type(client, admin)
     source = _rest_source(client, admin, vendor, path, options)
-    done = client.post(
-        f"/api/datasources/{source['slug']}/sync",
-        params={"apply": "true"},
-        headers=admin.headers,
-    ).json()
+    done = _sync(client, admin, source["slug"], apply=True).json()
     assert done["applied"] is True, done
     assert done["run"]["rows_seen"] == 3 and done["counts"]["create"] == 3
     assert rest.requests[0].headers["X-API-Key"] == "k3y"
@@ -482,9 +463,7 @@ def test_REST_행_자리가_틀리면_무엇을_적어야_하는지_말한다(
 ) -> None:
     vendor = _vendor_type(client, admin)
     source = _rest_source(client, admin, vendor, "suppliers/offset", {"rows_path": "wrong"})
-    failed = client.post(
-        f"/api/datasources/{source['slug']}/sync", headers=admin.headers
-    ).json()
+    failed = _sync(client, admin, source["slug"]).json()
     assert failed["run"]["status"] == "failed" and "rows_path" in failed["errors"][0]
 
 
@@ -533,11 +512,7 @@ def test_파일_CSV_와_Excel_과_JSON(
             entity_set=f"erp/{name}",
             options=options,
         )
-        done = client.post(
-            f"/api/datasources/{source['slug']}/sync",
-            params={"apply": "true"},
-            headers=admin.headers,
-        ).json()
+        done = _sync(client, admin, source["slug"], apply=True).json()
         assert done["applied"] is True, (name, done)
         assert done["run"]["rows_seen"] == 3
     # 같은 세 행이 세 소스에서 왔으니 객체는 셋뿐이다 — 별칭·이름으로 합류했다.
@@ -553,9 +528,7 @@ def test_파일_CSV_와_Excel_과_JSON(
         entity_set="../../etc/passwd",
         options={"format": "csv"},
     )
-    failed = client.post(
-        f"/api/datasources/{outside['slug']}/sync", headers=admin.headers
-    ).json()
+    failed = _sync(client, admin, outside["slug"]).json()
     assert failed["run"]["status"] == "failed" and "아래에서만" in failed["errors"][0]
 
 
@@ -564,9 +537,7 @@ def test_파일_폴더가_안_정해졌으면_URL_로만(
 ) -> None:
     vendor = _vendor_type(client, admin)
     local = _source(client, admin, vendor, kind="file", base_url="", entity_set="x.csv")
-    failed = client.post(
-        f"/api/datasources/{local['slug']}/sync", headers=admin.headers
-    ).json()
+    failed = _sync(client, admin, local["slug"]).json()
     assert failed["run"]["status"] == "failed" and "DATASOURCE_DIR" in failed["errors"][0]
 
 
@@ -580,11 +551,7 @@ def test_파일을_URL_로_받는다(client: TestClient, admin: Signed, plm: Fak
         base_url="",
         entity_set="http://plm.local/export.csv",
     )
-    done = client.post(
-        f"/api/datasources/{source['slug']}/sync",
-        params={"apply": "true"},
-        headers=admin.headers,
-    ).json()
+    done = _sync(client, admin, source["slug"], apply=True).json()
     assert done["applied"] is True and done["counts"]["create"] == 3
 
 
@@ -603,7 +570,7 @@ def test_동기화가_실패하면_홈과_종이_말한다(
     # 시험 DB 는 스위트가 함께 쓴다 — 남이 남긴 실패가 이미 있을 수 있어 **차이로 본다.**
     quiet = maintenance_counts(client, admin).get("datasource_failed", 0)
     plm.auth_required = "Bearer 없는것"  # 서버가 401 을 낸다
-    failed = client.post(f"/api/datasources/{slug}/sync?apply=true", headers=admin.headers)
+    failed = _sync(client, admin, slug, apply=True)
     assert failed.status_code == 200, failed.text
     assert failed.json()["run"]["status"] == "failed"
 
@@ -614,12 +581,12 @@ def test_동기화가_실패하면_홈과_종이_말한다(
 
     # **같은 실패를 두 번 알리지 않는다.** 타이머가 5분마다 돌면 하루에 288개가 쌓이고,
     # 그러면 사람은 이 종류를 통째로 안 읽게 된다.
-    client.post(f"/api/datasources/{slug}/sync?apply=true", headers=admin.headers)
+    _sync(client, admin, slug, apply=True)
     assert len(notifications_of(client, admin, "datasource.failed")) == before + 1
 
     # 복구도 알린다 — 안 알리면 사람이 손으로 확인하러 간다.
     plm.auth_required = None
-    done = client.post(f"/api/datasources/{slug}/sync?apply=true", headers=admin.headers)
+    done = _sync(client, admin, slug, apply=True)
     assert done.json()["run"]["status"] == "ok", done.text
     assert notifications_of(client, admin, "datasource.recovered")
     assert maintenance_counts(client, admin).get("datasource_failed", 0) == quiet
@@ -632,7 +599,7 @@ def test_멎은_것은_시스템_관리자에게만_뜬다(
     vendor = _vendor_type(client, admin)
     slug = _source(client, admin, vendor)["slug"]
     plm.auth_required = "Bearer 없는것"
-    client.post(f"/api/datasources/{slug}/sync?apply=true", headers=admin.headers)
+    _sync(client, admin, slug, apply=True)
 
     assert maintenance_counts(client, admin).get("datasource_failed", 0) >= 1
     assert "datasource_failed" not in maintenance_counts(client, member)

@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, bundle_import, patched_pipeline
 
 PIPELINE = Path(__file__).resolve().parents[3] / "pipeline" / "sp_pipeline.py"
 SERVER = "http://platform.test"
@@ -42,19 +42,9 @@ def _uniq(base: str) -> str:
 
 @pytest.fixture
 def platform(client: TestClient) -> Iterator[None]:
-    def send(
-        method: str, url: str, headers: dict[str, str], body: bytes | None
-    ) -> tuple[int, Any]:
-        path = "/" + url.split("://", 1)[-1].split("/", 1)[1]
-        got = client.request(method, path, content=body, headers=headers)
-        return got.status_code, got.json()
-
-    before = pipeline.SEND
-    pipeline.SEND = send
-    try:
+    """정제 도구가 TestClient 앱에 말한다 — 작업을 물을 때마다 워커가 한 바퀴 돈다."""
+    with patched_pipeline(pipeline, client):
         yield
-    finally:
-        pipeline.SEND = before
 
 
 def _token(client: TestClient, admin: Signed) -> str:
@@ -292,9 +282,10 @@ def test_허브에서_받은_실행은_source_를_싣고_받은_타입은_허브
     """쌍둥이 쪽 한 바퀴 — 받기(pull) → 검증 → 미리 보기 → 적용. 시험 DB 하나가 허브도 된다."""
     tag = uuid.uuid4().hex[:6]
     group, kind = f"hg{tag}", f"hk{tag}"
-    made = client.post(
-        "/api/bundles/import",
-        json={
+    made = bundle_import(
+        client,
+        admin,
+        {
             "ontology": {
                 "groups": [{"slug": group, "label": "허브 묶음"}],
                 "types": [
@@ -310,9 +301,8 @@ def test_허브에서_받은_실행은_source_를_싣고_받은_타입은_허브
             "objects": [{"type_slug": kind, "rows": [{"key": "K-1", "label": "하나"}]}],
             "apply": True,
         },
-        headers=admin.headers,
     )
-    assert made.json()["applied"] is True, made.text
+    assert made["applied"] is True, made
     token = _token(client, admin)
 
     run = tmp_path / "pulled"
@@ -339,3 +329,30 @@ def test_허브에서_받은_실행은_source_를_싣고_받은_타입은_허브
 
     with pytest.raises(pipeline.Stop, match="거절"):
         pipeline.cmd_pull(tmp_path / "없음", hub=SERVER, hub_token=token, group="없는묶음")
+
+
+def test_아무도_집어_가지_않으면_멈추고_말한다(
+    client: TestClient, admin: Signed, tmp_path: Path
+) -> None:
+    """**워커가 꺼져 있으면 작업은 영영 대기다.** 말없이 계속 기다리면 사람은 제 묶음이
+    잘못된 줄 알고 몇 번을 다시 만든다 — 원인은 서버에 있는데."""
+    run = tmp_path / "run"
+    pipeline.cmd_init(run)
+    _fill(run, "cae")
+    token = _token(client, admin)
+
+    def send(
+        method: str, url: str, headers: dict[str, str], body: bytes | None
+    ) -> tuple[int, Any]:
+        # 워커를 **안 돌린다** — 넣은 작업이 계속 `queued` 다.
+        path = "/" + url.split("://", 1)[-1].split("/", 1)[1]
+        got = client.request(method, path, content=body, headers=headers)
+        return got.status_code, got.json()
+
+    before_send, before_wait = pipeline.SEND, pipeline.WAIT
+    pipeline.SEND, pipeline.WAIT = send, lambda _seconds: None
+    try:
+        with pytest.raises(pipeline.Stop, match="작업 워커가 꺼져 있는 것 같습니다"):
+            pipeline.cmd_preview(run, server=SERVER, token=token)
+    finally:
+        pipeline.SEND, pipeline.WAIT = before_send, before_wait

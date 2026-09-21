@@ -2318,7 +2318,7 @@
           "datasources"
         ],
         "summary": "Sync Source",
-        "description": "계획(`apply=false`) 또는 적용. **한 행이라도 오류면 아무것도 안 넣는다** — 파일과 같다.\n시스템 관리자만.",
+        "description": "계획(`apply=false`) 또는 적용 — **작업이 된다**(202). 바깥 표를 읽는 시간은 그쪽이\n정하므로 요청 안에서 기다리지 않는다. **한 행이라도 오류면 아무것도 안 넣는다** — 파일과\n같다. 시스템 관리자만.",
         "operationId": "sync_source_api_datasources__slug__sync_post",
         "parameters": [
           {
@@ -2342,12 +2342,12 @@
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SyncOut"
+                  "$ref": "#/components/schemas/JobOut"
                 }
               }
             }
@@ -2834,6 +2834,399 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/kinds": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "List Kinds",
+        "operationId": "list_kinds_api_jobs_kinds_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/KindOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Kinds Api Jobs Kinds Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/workers": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "List Workers",
+        "description": "워커가 살아 있나. **없으면 작업은 영영 대기다** — 화면이 그것을 말해 줘야 한다.",
+        "operationId": "list_workers_api_jobs_workers_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/WorkerOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Workers Api Jobs Workers Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Create Job",
+        "operationId": "create_job_api_jobs_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_create_job_api_jobs_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "List Jobs",
+        "operationId": "list_jobs_api_jobs_get",
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Status"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "작업 종류 — `/api/jobs/kinds` 의 이름",
+              "title": "Kind"
+            },
+            "description": "작업 종류 — `/api/jobs/kinds` 의 이름"
+          },
+          {
+            "name": "mine",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "내가 시킨 것만",
+              "default": false,
+              "title": "Mine"
+            },
+            "description": "내가 시킨 것만"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobListOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Get Job",
+        "operationId": "get_job_api_jobs__job_id__get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/apply": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Apply Job",
+        "description": "계획을 본 뒤 **사람이 누르는 자리.** 같은 파일 · 같은 지문으로 적용 작업을 만든다.",
+        "operationId": "apply_job_api_jobs__job_id__apply_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/cancel": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Cancel Job",
+        "operationId": "cancel_job_api_jobs__job_id__cancel_post",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/{job_id}/download": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Download Output",
+        "operationId": "download_output_api_jobs__job_id__download_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/maintenance/purge": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Purge Files",
+        "description": "기한 지난 작업 파일과 **끝난 작업 기록** 지우기 — 워커도 한 시간마다 한다.\n손으로 당길 때.",
+        "operationId": "purge_files_api_jobs_maintenance_purge_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "integer"
+                  },
+                  "type": "object",
+                  "title": "Response Purge Files Api Jobs Maintenance Purge Post"
                 }
               }
             }
@@ -5336,13 +5729,13 @@
       }
     },
     "/api/objects/{type_slug}/export": {
-      "get": {
+      "post": {
         "tags": [
           "objects"
         ],
         "summary": "Export Objects",
-        "description": "지금 거른 목록 **그대로** 파일로. 쪽 상한 없이 전부 — 목록의 상한은 화면을\n위한 것이고, 파일은 그 상한을 넘어서기 위해 있다.",
-        "operationId": "export_objects_api_objects__type_slug__export_get",
+        "description": "지금 거른 목록 **그대로** 파일로 — 작업이 된다(202). 쪽 상한 없이 전부 — 목록의 상한은\n화면을 위한 것이고, 파일은 그 상한을 넘어서기 위해 있다. 그래서 요청 안에서 만들면 큰\n타입에서 끊긴다. 워커가 만든 파일은 `GET /api/jobs/{id}/download`.\n\n거르기(`q` · `status` · `year` · `under` · `p.*` · `f.*`)는 목록과 같은 쿼리 문자열로\n온다 — 그대로 적어 두고 워커가 같은 `_filtered` 로 되돌린다.",
+        "operationId": "export_objects_api_objects__type_slug__export_post",
         "parameters": [
           {
             "name": "type_slug",
@@ -5363,91 +5756,16 @@
               "default": "csv",
               "title": "Format"
             }
-          },
-          {
-            "name": "q",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Q"
-            }
-          },
-          {
-            "name": "status",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Status"
-            }
-          },
-          {
-            "name": "year",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "integer",
-                  "maximum": 2999,
-                  "minimum": 1900
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Year"
-            }
-          },
-          {
-            "name": "under",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "anyOf": [
-                {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "title": "Under"
-            }
-          },
-          {
-            "name": "deep",
-            "in": "query",
-            "required": false,
-            "schema": {
-              "type": "boolean",
-              "default": true,
-              "title": "Deep"
-            }
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
               }
             }
           },
@@ -5470,7 +5788,7 @@
           "objects"
         ],
         "summary": "Import Objects",
-        "description": "파일로 넣기 — `apply=false` 면 **계획만**. 사람이 읽고 판단한 뒤 다시 부른다.",
+        "description": "파일로 넣기 — **작업이 된다**(202). 워커가 계획을 세우고, 사람이 보고,\n`POST /api/jobs/{id}/apply` 로 적용한다. 파일은 한 번만 올린다.\n\n요청 안에서 처리하던 때는 5,000행 상한이 있었고 계획과 적용에 같은 파일을 두 번 올려야\n했다 — 그 둘을 없애려고 작업으로 옮겼다(`docs/작업-워커-설계.md`).",
         "operationId": "import_objects_api_objects__type_slug__import_post",
         "parameters": [
           {
@@ -5494,12 +5812,12 @@
           }
         },
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/app__modules__objects__schemas__ImportPlanOut"
+                  "$ref": "#/components/schemas/JobOut"
                 }
               }
             }
@@ -5571,13 +5889,13 @@
       }
     },
     "/api/objects/{type_slug}/relations/export": {
-      "get": {
+      "post": {
         "tags": [
           "objects"
         ],
         "summary": "Export Relations",
-        "description": "이 타입에서 **출발하는** 관계 전부 — `src, relation, dst, evidence_note`.",
-        "operationId": "export_relations_api_objects__type_slug__relations_export_get",
+        "description": "이 타입에서 **출발하는** 관계 전부 — `src, relation, dst, evidence_note`. 작업이\n된다.",
+        "operationId": "export_relations_api_objects__type_slug__relations_export_post",
         "parameters": [
           {
             "name": "type_slug",
@@ -5601,11 +5919,13 @@
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
-                "schema": {}
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
               }
             }
           },
@@ -5628,6 +5948,7 @@
           "objects"
         ],
         "summary": "Import Relations",
+        "description": "관계 파일로 잇기 — 객체 파일과 같이 **작업이 된다.** 부서는 안 묻는다(관계는 양끝의\n것이다) — 고칠 권한은 워커가 행마다 본다.",
         "operationId": "import_relations_api_objects__type_slug__relations_import_post",
         "parameters": [
           {
@@ -5651,12 +5972,12 @@
           }
         },
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/app__modules__objects__schemas__ImportPlanOut"
+                  "$ref": "#/components/schemas/JobOut"
                 }
               }
             }
@@ -7013,7 +7334,7 @@
           "bundles"
         ],
         "summary": "Import Bundle",
-        "description": "정의 · 객체 · 관계를 **한 묶음으로** — `apply=false`(기본)면 아무것도 저장하지 않는다.\n\n**한 번에 미리 본다.** 정의를 먼저 적용하지 않아도 그 정의로 객체와 관계를 맞춰 본다.\n**적용은 전부 아니면 무** — 한 곳이라도 오류면 아무것도 안 들어간다. 규칙은 정의\n가져오기 · 파일로 넣기와 같다(그 서비스를 그대로 부른다).",
+        "description": "정의 · 객체 · 관계를 **한 묶음으로** — 작업이 된다.\n\n`apply=false`(기본)면 워커가 **한 번에 미리 본다** — 정의를 먼저 적용하지 않아도 그\n정의로 객체와 관계를 맞춰 본다. 계획을 본 뒤 `POST /api/jobs/{id}/apply` 로 넣는다(같은\n파일 · 같은 지문). `apply=true` 로 곧장 보내도 된다 — 정제 도구가 제 지문으로 미리 본\n것과 견준 뒤 그렇게 한다. **적용은 전부 아니면 무.**",
         "operationId": "import_bundle_api_bundles_import_post",
         "requestBody": {
           "content": {
@@ -7026,12 +7347,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BundleOut"
+                  "$ref": "#/components/schemas/JobOut"
                 }
               }
             }
@@ -7050,34 +7371,30 @@
       }
     },
     "/api/bundles/export": {
-      "get": {
+      "post": {
         "tags": [
           "bundles"
         ],
         "summary": "Export Bundle",
-        "description": "허브가 쌍둥이에 내려주는 묶음 — 사이드바 묶음 하나의 정의 · 객체 · 관계를 **가져오기와\n같은 모양으로.** 받는 쪽은 이것을 그대로 `POST /bundles/import` 에 `source` 를 붙여 보낸다.\n\n시스템 관리자만 — 허브의 기준정보 전부를 부서 가리지 않고 내보내기 때문이다.",
-        "operationId": "export_bundle_api_bundles_export_get",
-        "parameters": [
-          {
-            "name": "group",
-            "in": "query",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "minLength": 1,
-              "description": "사이드바 묶음 slug — 허브의 PLM 기준정보면 plm",
-              "title": "Group"
-            },
-            "description": "사이드바 묶음 slug — 허브의 PLM 기준정보면 plm"
-          }
-        ],
+        "description": "허브가 쌍둥이에 내려주는 묶음 — 작업이 되고, 결과 파일을 `GET /api/jobs/{id}/download`\n로 받는다. 받는 쪽은 그것을 그대로 `POST /bundles/import` 에 `source` 를 붙여 보낸다.\n\n시스템 관리자만 — 허브의 기준정보 전부를 부서 가리지 않고 내보내기 때문이다.",
+        "operationId": "export_bundle_api_bundles_export_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExportRequest"
+              }
+            }
+          },
+          "required": true
+        },
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/BundleExportOut"
+                  "$ref": "#/components/schemas/JobOut"
                 }
               }
             }
@@ -8279,34 +8596,47 @@
         "title": "BackupOut",
         "description": "마지막 백업이 언제였나. **「없다」 와 「설정이 없다」 를 구별한다** —\n같게 말하면 사람은 안 해도 되는 일을 하러 간다."
       },
-      "BatchOut": {
+      "Body_create_job_api_jobs_post": {
         "properties": {
-          "type_slug": {
+          "kind": {
             "type": "string",
-            "title": "Type Slug"
+            "title": "Kind"
           },
-          "plan": {
+          "params": {
+            "type": "string",
+            "title": "Params",
+            "description": "JSON",
+            "default": "{}"
+          },
+          "workspace_slug": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/app__modules__objects__schemas__ImportPlanOut"
+                "type": "string"
               },
               {
                 "type": "null"
               }
-            ]
+            ],
+            "title": "Workspace Slug"
           },
-          "error": {
-            "type": "string",
-            "title": "Error",
-            "default": ""
+          "file": {
+            "anyOf": [
+              {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "File"
           }
         },
         "type": "object",
         "required": [
-          "type_slug",
-          "plan"
+          "kind"
         ],
-        "title": "BatchOut"
+        "title": "Body_create_job_api_jobs_post"
       },
       "Body_import_objects_api_objects__type_slug__import_post": {
         "properties": {
@@ -8325,11 +8655,6 @@
               }
             ],
             "title": "Workspace Slug"
-          },
-          "apply": {
-            "type": "boolean",
-            "title": "Apply",
-            "default": false
           }
         },
         "type": "object",
@@ -8344,11 +8669,6 @@
             "type": "string",
             "contentMediaType": "application/octet-stream",
             "title": "File"
-          },
-          "apply": {
-            "type": "boolean",
-            "title": "Apply",
-            "default": false
           }
         },
         "type": "object",
@@ -8612,68 +8932,6 @@
         "type": "object",
         "title": "BulkUndoRequest"
       },
-      "BundleExportOut": {
-        "properties": {
-          "format": {
-            "type": "string",
-            "title": "Format"
-          },
-          "group": {
-            "type": "string",
-            "title": "Group"
-          },
-          "exported_at": {
-            "type": "string",
-            "title": "Exported At"
-          },
-          "ontology": {
-            "additionalProperties": true,
-            "type": "object",
-            "title": "Ontology"
-          },
-          "objects": {
-            "items": {
-              "$ref": "#/components/schemas/ObjectBatchIn"
-            },
-            "type": "array",
-            "title": "Objects"
-          },
-          "relations": {
-            "items": {
-              "$ref": "#/components/schemas/RelationBatchIn"
-            },
-            "type": "array",
-            "title": "Relations"
-          },
-          "counts": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Counts"
-          },
-          "warnings": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Warnings"
-          }
-        },
-        "type": "object",
-        "required": [
-          "format",
-          "group",
-          "exported_at",
-          "ontology",
-          "objects",
-          "relations",
-          "counts",
-          "warnings"
-        ],
-        "title": "BundleExportOut",
-        "description": "허브가 내려주는 묶음 — **가져오기와 같은 모양.** 받는 쪽은 `ontology` · `objects` ·\n`relations` 를 그대로 `POST /bundles/import` 에 `source` 를 붙여 보낸다."
-      },
       "BundleIn": {
         "properties": {
           "ontology": {
@@ -8716,81 +8974,6 @@
         },
         "type": "object",
         "title": "BundleIn"
-      },
-      "BundleOut": {
-        "properties": {
-          "applied": {
-            "type": "boolean",
-            "title": "Applied"
-          },
-          "ok": {
-            "type": "boolean",
-            "title": "Ok"
-          },
-          "ontology": {
-            "anyOf": [
-              {
-                "$ref": "#/components/schemas/app__modules__ontology__schemas__ImportPlanOut"
-              },
-              {
-                "type": "null"
-              }
-            ]
-          },
-          "objects": {
-            "items": {
-              "$ref": "#/components/schemas/BatchOut"
-            },
-            "type": "array",
-            "title": "Objects"
-          },
-          "relations": {
-            "items": {
-              "$ref": "#/components/schemas/BatchOut"
-            },
-            "type": "array",
-            "title": "Relations"
-          },
-          "errors": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Errors"
-          },
-          "snapshot_id": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "uuid"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Snapshot Id"
-          },
-          "counts": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Counts"
-          }
-        },
-        "type": "object",
-        "required": [
-          "applied",
-          "ok",
-          "ontology",
-          "objects",
-          "relations",
-          "errors",
-          "snapshot_id",
-          "counts"
-        ],
-        "title": "BundleOut",
-        "description": "묶음이 무엇을 할 것인가(또는 했나) — **전부 아니면 무.**"
       },
       "ChangeOut": {
         "properties": {
@@ -9569,6 +9752,21 @@
         ],
         "title": "EdgeOut"
       },
+      "ExportRequest": {
+        "properties": {
+          "group": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Group",
+            "description": "사이드바 묶음 slug — 허브의 PLM 기준정보면 plm"
+          }
+        },
+        "type": "object",
+        "required": [
+          "group"
+        ],
+        "title": "ExportRequest"
+      },
       "FieldOptionOut": {
         "properties": {
           "field": {
@@ -10151,6 +10349,236 @@
           "raw_rows"
         ],
         "title": "InferOut"
+      },
+      "JobListOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JobOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "JobListOut"
+      },
+      "JobOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "kind_label": {
+            "type": "string",
+            "title": "Kind Label"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "progress": {
+            "$ref": "#/components/schemas/JobProgress"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "input_file_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Input File Name"
+          },
+          "has_output": {
+            "type": "boolean",
+            "title": "Has Output"
+          },
+          "requested_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested By Name"
+          },
+          "workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Slug"
+          },
+          "cancel_requested": {
+            "type": "boolean",
+            "title": "Cancel Requested"
+          },
+          "attempts": {
+            "type": "integer",
+            "title": "Attempts"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "started_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "kind_label",
+          "status",
+          "params",
+          "progress",
+          "result",
+          "error",
+          "parent_id",
+          "input_file_name",
+          "has_output",
+          "requested_by_name",
+          "workspace_slug",
+          "cancel_requested",
+          "attempts",
+          "created_at",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "JobOut"
+      },
+      "JobProgress": {
+        "properties": {
+          "stage": {
+            "type": "string",
+            "title": "Stage",
+            "default": ""
+          },
+          "done": {
+            "type": "integer",
+            "title": "Done",
+            "default": 0
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "JobProgress"
+      },
+      "KindOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "needs_file": {
+            "type": "boolean",
+            "title": "Needs File"
+          },
+          "two_step": {
+            "type": "boolean",
+            "title": "Two Step"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label",
+          "needs_file",
+          "two_step"
+        ],
+        "title": "KindOut"
       },
       "LoginRequest": {
         "properties": {
@@ -14762,51 +15190,6 @@
         "title": "SummaryOut",
         "description": "묶어 센 결과. **막대의 합이 total 과 다르면 그 차이가 「그 밖에」 다** —\n숨기면 사람은 그 차이를 오류로 읽는다."
       },
-      "SyncOut": {
-        "properties": {
-          "run": {
-            "$ref": "#/components/schemas/RunOut"
-          },
-          "applied": {
-            "type": "boolean",
-            "title": "Applied"
-          },
-          "counts": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Counts"
-          },
-          "rows": {
-            "items": {
-              "$ref": "#/components/schemas/ImportRowOut"
-            },
-            "type": "array",
-            "title": "Rows"
-          },
-          "errors": {
-            "items": {},
-            "type": "array",
-            "title": "Errors"
-          },
-          "truncated": {
-            "type": "boolean",
-            "title": "Truncated"
-          }
-        },
-        "type": "object",
-        "required": [
-          "run",
-          "applied",
-          "counts",
-          "rows",
-          "errors",
-          "truncated"
-        ],
-        "title": "SyncOut",
-        "description": "계획(또는 적용) 결과 — 파일 가져오기의 계획과 같은 모양에 기록이 붙는다."
-      },
       "SystemAdminRequest": {
         "properties": {
           "is_system_admin": {
@@ -15463,6 +15846,60 @@
           "events"
         ],
         "title": "WebhookWriteRequest"
+      },
+      "WorkerOut": {
+        "properties": {
+          "worker_id": {
+            "type": "string",
+            "title": "Worker Id"
+          },
+          "host": {
+            "type": "string",
+            "title": "Host"
+          },
+          "pid": {
+            "type": "integer",
+            "title": "Pid"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "last_seen": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Seen"
+          },
+          "current_job_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Current Job Id"
+          },
+          "alive": {
+            "type": "boolean",
+            "title": "Alive",
+            "description": "심장박동이 최근인가"
+          }
+        },
+        "type": "object",
+        "required": [
+          "worker_id",
+          "host",
+          "pid",
+          "started_at",
+          "last_seen",
+          "current_job_id",
+          "alive"
+        ],
+        "title": "WorkerOut"
       },
       "WorkspaceContentOut": {
         "properties": {

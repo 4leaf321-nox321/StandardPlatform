@@ -5,13 +5,14 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import uuid
 from collections.abc import Iterator
 from typing import Any
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.modules.webhooks import services
@@ -227,3 +228,65 @@ def test_지우면_기록도_함께_사라지고_보내지_않는다(
         client.get(f"/api/webhooks/{hook['id']}/deliveries", headers=admin.headers).status_code
         == 404
     )
+
+
+def test_보내는_것은_워커의_작업이다(client: TestClient, admin: Signed, db: Session) -> None:
+    """전에는 앱 안의 스레드가 보내고 `threading.Timer` 로 재시도했다 — 앱을 재시작하면 그
+    타이머가 사라져 밀린 것이 다음 이벤트까지 안 나갔다. 이제 표에 남는다."""
+    from app.modules.jobs import services as job_services
+    from app.modules.jobs.models import Job
+    from app.modules.webhooks import services as webhook_services
+
+    _hook(client, admin, events=["object.*"])
+    part = _make_type(client, admin, label="부품")
+    services.dispatcher.sync = False  # 진짜 길 — 스레드가 아니라 작업을 넣는다
+    try:
+        _make_object(client, admin, part, label="볼트")
+        waiting = job_services.pending_for(db, "webhook_dispatch")
+        assert waiting is not None, "웹훅을 보낼 작업이 안 생겼다"
+        # **이벤트가 더 와도 작업은 한 줄이다** — 백 건을 고친 날 작업이 백 줄이 되면 안 된다.
+        _make_object(client, admin, part, label="너트")
+        assert (
+            len(
+                list(
+                    db.scalars(
+                        select(Job).where(
+                            Job.kind == "webhook_dispatch",
+                            Job.status.in_(("queued", "running")),
+                        )
+                    )
+                )
+            )
+            == 1
+        )
+        # 워커가 집어 돌리면 보낸다.
+        assert webhook_services.pending_count(db) >= 1
+        services.dispatcher.sync = True
+        job_services.process_one("test-worker")
+        db.expire_all()
+        done = db.scalar(select(Job).where(Job.id == waiting.id))
+        assert done is not None and done.status == "done"
+    finally:
+        services.dispatcher.sync = True
+
+
+def test_밀린_것은_워커가_다시_집는다(client: TestClient, admin: Signed, db: Session) -> None:
+    """전에는 재시도가 프로세스 안의 `threading.Timer` 였다 — 앱을 재시작하면 그 타이머가
+    사라져 밀린 것이 **다음 이벤트가 올 때까지** 안 나갔다. 이제 워커가 표를 보고 다시
+    넣는다."""
+    from app.modules.jobs import services as job_services
+    from app.modules.webhooks.models import WebhookDelivery
+    from app.worker import Worker
+
+    hook = _hook(client, admin)
+    db.add(
+        WebhookDelivery(
+            webhook_id=uuid.UUID(hook["id"]), event="object.create", payload={"x": 1}
+        )
+    )
+    db.commit()
+    assert services.pending_count(db) >= 1
+    # 작업이 없는 상태에서 — 워커가 살림살이를 한 바퀴 돌면 다시 넣는다.
+    assert job_services.pending_for(db, services.DISPATCH_KIND) is None
+    Worker()._tick_housekeeping()
+    assert job_services.pending_for(db, services.DISPATCH_KIND) is not None

@@ -20,6 +20,7 @@ import {
   DatabaseZap,
   Home,
   LayoutGrid,
+  ListChecks,
   Megaphone,
   ScrollText,
   ShieldCheck,
@@ -115,6 +116,9 @@ export const NAV_GROUPS: NavGroup[] = [
     title: '내 활동',
     items: [
       { label: '알림', icon: Bell, to: '/notifications' },
+      // **뒤에서 도는 일이 어디까지 됐나.** 일괄 입력는 올린 순간 작업이 되고, 대화상자를
+      // 닫아도 계속된다 — 그 진행과 실패 이유를 볼 자리가 없으면 「대기」 가 영영 대기다.
+      { label: '작업', icon: ListChecks, to: '/jobs' },
       { label: '내 정보', icon: UserCog, to: '/me' },
     ],
   },

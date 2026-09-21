@@ -1,5 +1,7 @@
 /** 객체 API. */
 
+import { jobsApi } from '@/modules/jobs/api'
+import type { Job } from '@/modules/jobs/api'
 import type { PropertyDef } from '@/modules/ontology/api'
 import { api, downloadFile } from '@/shared/api/client'
 import type { Page } from '@/shared/api/paging'
@@ -183,7 +185,12 @@ export interface HistoryEntry {
   kind: 'object' | 'relation'
   /** 칸별 `{before, after}`. 속성은 `properties.<키>`. */
   changes: Record<string, { before: unknown; after: unknown }>
-  relation: { relation: string; outgoing: boolean; other_id: string; other_label: string } | null
+  relation: {
+    relation: string
+    outgoing: boolean
+    other_id: string
+    other_label: string
+  } | null
   /** 값 기록에만 있다 — 복원의 목표. */
   snapshot: Snapshot | null
   /** 일괄 수정으로 **같이 바뀐** 기록이면 그 묶음. 한 번에 되돌리는 입구다. */
@@ -324,10 +331,9 @@ function queryString(query: ObjectQuery): string {
   return text ? `?${text}` : ''
 }
 
-function importForm(file: File, apply: boolean, workspaceSlug?: string | null): FormData {
+function importForm(file: File, workspaceSlug?: string | null): FormData {
   const form = new FormData()
   form.set('file', file)
-  form.set('apply', apply ? 'true' : 'false')
   if (workspaceSlug) form.set('workspace_slug', workspaceSlug)
   return form
 }
@@ -511,13 +517,16 @@ export const objectApi = {
   /** 빈 CSV — 헤더가 「무엇을 채워야 하는지」 를 말한다. */
   template: (typeSlug: string) =>
     downloadFile(`/objects/${typeSlug}/template`, `${typeSlug}-template.csv`),
-  /** 지금 거른 목록 그대로 — 쪽 상한 없이 전부. */
+  /** 지금 거른 목록 그대로 — 쪽 상한 없이 전부. **작업이 된다** — 워커가 파일을 만들면 받는다. */
   export: (typeSlug: string, format: 'csv' | 'json', query: ObjectQuery = {}) => {
     const params = new URLSearchParams(queryString(query).replace(/^\?/, ''))
     params.set('format', format)
-    return downloadFile(`/objects/${typeSlug}/export?${params.toString()}`, `${typeSlug}.${format}`)
+    return jobsApi.exportAndDownload(
+      () => api.post<Job>(`/objects/${typeSlug}/export?${params.toString()}`),
+      `${typeSlug}.${format}`,
+    )
   },
-  /** 파일 가져오기 — `apply=false` 면 계획만. */
+  /** 일괄 입력 — `apply=false` 면 계획만. */
   /** 파일 대신 JSON 행으로 — 표에서 타입 생성이 쓴다. 규칙은 파일과 같다. */
   importRows: (
     typeSlug: string,
@@ -529,18 +538,19 @@ export const objectApi = {
       apply: opts.apply,
       workspace_slug: opts.workspaceSlug ?? null,
     }),
-  import: (typeSlug: string, file: File, opts: { apply: boolean; workspaceSlug?: string | null }) =>
-    api.postForm<ImportPlan>(
-      `/objects/${typeSlug}/import`,
-      importForm(file, opts.apply, opts.workspaceSlug),
-    ),
+  /**
+   * 일괄 입력는 **작업이 된다**(202). 돌아오는 것은 계획이 아니라 작업이고, 계획은
+   * `jobsApi.waitFor` 로 기다린 뒤 `job.result` 에서 꺼낸다. 적용은 `jobsApi.apply(job.id)`.
+   */
+  import: (typeSlug: string, file: File, opts: { workspaceSlug?: string | null }) =>
+    api.postForm<Job>(`/objects/${typeSlug}/import`, importForm(file, opts.workspaceSlug)),
   exportRelations: (typeSlug: string, format: 'csv' | 'json') =>
-    downloadFile(
-      `/objects/${typeSlug}/relations/export?format=${format}`,
+    jobsApi.exportAndDownload(
+      () => api.post<Job>(`/objects/${typeSlug}/relations/export?format=${format}`),
       `${typeSlug}-relations.${format}`,
     ),
-  importRelations: (typeSlug: string, file: File, opts: { apply: boolean }) =>
-    api.postForm<ImportPlan>(`/objects/${typeSlug}/relations/import`, importForm(file, opts.apply)),
+  importRelations: (typeSlug: string, file: File) =>
+    api.postForm<Job>(`/objects/${typeSlug}/relations/import`, importForm(file)),
   /**
    * 고른 것들의 **한 칸**을 바꾼다 — `apply: false`(기본)면 계획만.
    *
@@ -557,7 +567,9 @@ export const objectApi = {
    * 그 뒤에 누가 또 고친 행은 덮어쓰지 않고 이유를 적는다.
    */
   bulkEditUndo: (typeSlug: string, batchId: string, apply: boolean) =>
-    api.post<BulkEditPlan>(`/objects/${typeSlug}/bulk-edit/${batchId}/undo`, { apply }),
+    api.post<BulkEditPlan>(`/objects/${typeSlug}/bulk-edit/${batchId}/undo`, {
+      apply,
+    }),
   /**
    * **안 센 값들** — 상자 그림과 산점도가 쓴다.
    *
@@ -638,7 +650,9 @@ export const objectApi = {
     api.get<HistoryEntry[]>(`/objects/${typeSlug}/${id}/history`),
   /** 그 시점 값으로 고친다 — 저장과 같은 검증을 거쳐서. */
   restore: (typeSlug: string, id: string, entryId: string) =>
-    api.post<ObjectRow>(`/objects/${typeSlug}/${id}/restore`, { entry_id: entryId }),
+    api.post<ObjectRow>(`/objects/${typeSlug}/${id}/restore`, {
+      entry_id: entryId,
+    }),
   /** 삭제 전에 — 이 객체를 가리키는 것. */
   references: (typeSlug: string, id: string) =>
     api.get<References>(`/objects/${typeSlug}/${id}/references`),

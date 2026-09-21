@@ -21,7 +21,10 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 from sqlalchemy import select
@@ -29,10 +32,14 @@ from sqlalchemy.orm import Session
 
 from app.database import engine
 from app.modules.accounts.models import User
-from app.modules.bundles.schemas import BundleIn
+from app.modules.bundles.schemas import BatchOut, BundleIn, BundleOut
 from app.modules.objects import bulk
+from app.modules.objects.schemas import ImportPlanOut as RowsPlanOut
+from app.modules.objects.schemas import ImportRowOut
 from app.modules.ontology import importer
 from app.modules.ontology.models import ObjectType
+from app.modules.ontology.schemas import ChangeOut
+from app.modules.ontology.schemas import ImportPlanOut as SchemaPlanOut
 from app.shared import audit, events
 from app.shared.errors import AppError, code
 from app.shared.permissions import resolve_owner_workspace
@@ -84,8 +91,18 @@ class Outcome:
         return out
 
 
-def run(user: User, bundle: BundleIn) -> Outcome:
-    """미리 보기(`apply` 거짓)는 늘 롤백, 적용은 **전부 괜찮을 때만** 커밋."""
+def run(
+    user: User,
+    bundle: BundleIn,
+    *,
+    max_rows: int = bulk.MAX_ROWS,
+    on_progress: bulk.Progress = None,
+    before_commit: Callable[[Outcome], None] | None = None,
+) -> Outcome:
+    """미리 보기(`apply` 거짓)는 늘 롤백, 적용은 **전부 괜찮을 때만** 커밋.
+
+    `before_commit` 은 적용 직전에 결과를 보는 자리다 — 워커가 미리 본 지문과 견준다.
+    거기서 예외가 나면 롤백된다."""
     connection = engine.connect()
     outer = connection.begin()
     db = Session(
@@ -97,7 +114,9 @@ def run(user: User, bundle: BundleIn) -> Outcome:
     events.hold(db)
     outcome = Outcome()
     try:
-        _stages(db, user, bundle, outcome)
+        _stages(db, user, bundle, outcome, max_rows=max_rows, on_progress=on_progress)
+        if bundle.apply and outcome.ok and before_commit is not None:
+            before_commit(outcome)
         if bundle.apply and outcome.ok:
             audit.record(
                 db,
@@ -132,7 +151,15 @@ def run(user: User, bundle: BundleIn) -> Outcome:
     return outcome
 
 
-def _stages(db: Session, user: User, bundle: BundleIn, out: Outcome) -> None:
+def _stages(
+    db: Session,
+    user: User,
+    bundle: BundleIn,
+    out: Outcome,
+    *,
+    max_rows: int = bulk.MAX_ROWS,
+    on_progress: bulk.Progress = None,
+) -> None:
     if bundle.source and not user.is_system_admin:
         out.errors.append(
             f"받은 묶음(source={bundle.source})은 시스템 관리자만 넣습니다 — "
@@ -190,6 +217,8 @@ def _stages(db: Session, user: User, bundle: BundleIn, out: Outcome) -> None:
                 batch.rows,
                 owner_workspace_id=owner,
                 source=bundle.source,
+                max_rows=max_rows,
+                on_progress=_staged(on_progress, f"객체 {batch.type_slug}"),
             )
         except AppError as caught:
             out.objects.append(Batch(batch.type_slug, None, caught.message))
@@ -205,9 +234,123 @@ def _stages(db: Session, user: User, bundle: BundleIn, out: Outcome) -> None:
             continue
         try:
             planned_links = bulk.apply_relations(
-                db, user, source_type, links.rows, source=bundle.source
+                db,
+                user,
+                source_type,
+                links.rows,
+                source=bundle.source,
+                max_rows=max_rows,
+                on_progress=_staged(on_progress, f"관계 {links.type_slug}"),
             )
         except AppError as caught:
             out.relations.append(Batch(links.type_slug, None, caught.message))
             continue
         out.relations.append(Batch(links.type_slug, planned_links))
+
+
+def _staged(on_progress: bulk.Progress, prefix: str) -> bulk.Progress:
+    """묶음은 타입마다 한 단계다 — 「객체 part · 계획 1,200 / 5,000」 처럼 어느 타입인지
+    붙인다."""
+    if on_progress is None:
+        return None
+
+    def tick(stage: str, done: int, total: int) -> None:
+        assert on_progress is not None
+        on_progress(f"{prefix} · {stage}", done, total)
+
+    return tick
+
+
+# --- 응답 모양 -------------------------------------------------------------------
+
+
+def outcome_out(outcome: Outcome) -> BundleOut:
+    """결과를 API 모양으로 — 라우터와 워커가 **같은 것**을 돌려준다."""
+    return BundleOut(
+        applied=outcome.applied,
+        ok=outcome.ok,
+        ontology=_schema_out(outcome) if outcome.ontology is not None else None,
+        objects=[_batch_out(one, outcome.applied) for one in outcome.objects],
+        relations=[_batch_out(one, outcome.applied) for one in outcome.relations],
+        errors=outcome.errors,
+        snapshot_id=outcome.snapshot_id,
+        counts=outcome.counts,
+    )
+
+
+def fingerprint(outcome: Outcome) -> str:
+    """미리 본 결과와 적용 직전 결과가 **같은 계획**인지. id · 스냅샷은 뺀다."""
+    body = {
+        "ontology": [
+            (c.kind, c.slug, c.action, sorted(c.fields))
+            for c in (outcome.ontology.changes if outcome.ontology else [])
+        ],
+        "objects": [
+            (
+                one.type_slug,
+                one.error,
+                [
+                    (r.row, r.action, r.label, r.key, sorted(r.changes), r.message)
+                    for r in (one.plan.rows if one.plan else [])
+                ],
+            )
+            for one in outcome.objects
+        ],
+        "relations": [
+            (
+                one.type_slug,
+                one.error,
+                [
+                    (r.row, r.action, r.label, r.key, sorted(r.changes), r.message)
+                    for r in (one.plan.rows if one.plan else [])
+                ],
+            )
+            for one in outcome.relations
+        ],
+        "errors": outcome.errors,
+    }
+    raw = json.dumps(body, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _schema_out(outcome: Outcome) -> SchemaPlanOut:
+    planned = outcome.ontology
+    assert planned is not None
+    return SchemaPlanOut(
+        applied=outcome.applied,
+        changes=[
+            ChangeOut(kind=c.kind, slug=c.slug, action=c.action, fields=c.fields)
+            for c in planned.changes
+        ],
+        warnings=planned.warnings,
+        errors=planned.errors,
+        snapshot_id=outcome.snapshot_id,
+    )
+
+
+def _batch_out(batch: Batch, applied: bool) -> BatchOut:
+    return BatchOut(
+        type_slug=batch.type_slug,
+        plan=_rows_out(batch.plan, applied) if batch.plan is not None else None,
+        error=batch.error,
+    )
+
+
+def _rows_out(plan: bulk.Plan, applied: bool) -> RowsPlanOut:
+    return RowsPlanOut(
+        applied=applied,
+        rows=[
+            ImportRowOut(
+                row=one.row,
+                action=one.action,
+                label=one.label,
+                key=one.key,
+                object_id=one.object_id,
+                changes=one.changes,
+                message=one.message,
+            )
+            for one in plan.rows
+        ],
+        errors=plan.errors,
+        counts=plan.counts,
+    )

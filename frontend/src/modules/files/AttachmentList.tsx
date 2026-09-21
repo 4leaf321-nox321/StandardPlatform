@@ -125,7 +125,7 @@ export function AttachmentList({
               onClick={() => fileRef.current?.click()}
             >
               <Upload className="size-4" />
-              {busy ? '올리는 중…' : '파일 올리기'}
+              {busy ? '업로드하는 중…' : '파일 업로드'}
             </Button>
           </>
         )}

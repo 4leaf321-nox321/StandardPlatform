@@ -33,6 +33,7 @@ mcp__standardplatform__get_guide()
 `get_guide()` 가 실패하면 이것만 지키고, 사용자에게 가이드를 못 받았다고 알린다.
 
 - **스키마부터 읽는다** — `ontology_schema`. 타입 slug·속성 키를 추측하지 않는다.
+- **타입을 모르면 `search`, 부서를 모르면 `whoami`** — 둘 다 짐작하지 않는다.
 - **정의를 바꾸는 일은 미리 보기부터** — `ontology_import(apply=false)` 의 계획과
   경고를 사람에게 보여 주고 판단을 받은 뒤 `apply=true`.
 - **일괄 입력도 같다** — `objects_import`·`relations_import` 는 기본이 계획이다.

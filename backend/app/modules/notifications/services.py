@@ -29,6 +29,11 @@ DATASOURCE_RECOVERED = "datasource.recovered"
 OBJECT_CHANGED = "object.changed"
 """지켜보는 객체가 바뀌었다. **내가 한 일은 나에게 안 온다** — 자기 행동을 돌려받으면
 그 종은 곧 잡음이 되고, 잡음이 된 종은 진짜 하나가 울려도 안 읽힌다."""
+JOB_DONE = "job.done"
+"""내가 시킨 작업이 끝났다. **짧게 끝난 것은 안 알린다** — 그때 사람은 아직 그 화면을 보고
+있었고, 본 것을 한 번 더 말하면 그 종은 잡음이 된다."""
+JOB_FAILED = "job.failed"
+"""내가 시킨 작업이 실패했다. 같은 이유로 짧게 끝난 것은 안 알린다 — 그 오류는 화면에 떴다."""
 WEBHOOK_FAILED = "webhook.failed"
 """보내기를 세 번 다 실패해 포기했다. 받는 쪽이 조용히 못 받고 있는 상태다."""
 

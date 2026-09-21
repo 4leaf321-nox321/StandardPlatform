@@ -79,7 +79,7 @@ jobs:
           tar tzf release/*.tar.gz | sed 's|^[^/]*/||' | sort > /tmp/have.txt
           cat /tmp/have.txt
           for f in app.sif deploy.sh ha.sh pg-ha.sh backup.sh restore.sh \
-                   app.service.template sync.service.template backup.service.template \
+                   app.service.template worker.service.template sync.service.template backup.service.template \
                    backup.timer.template .env.example BUILD_INFO README.md 쉬운-설치.md; do
             grep -qx "$f" /tmp/have.txt || { echo "번들에 $f 가 없습니다"; exit 1; }
           done

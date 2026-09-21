@@ -3,20 +3,61 @@
  *
  * 폭을 0으로 만들되 내부 래퍼는 고정폭을 유지한다. 그래야 접힐 때 글자가
  * 찌그러지지 않고 그대로 잘려 나간다.
+ *
+ * **묶음은 하나씩 접는다.** 타입이 늘면 사이드바가 길어지고, 그때 사람은 자기가 쓰는 묶음을
+ * 찾으려고 매번 스크롤한다 — 안 쓰는 묶음을 접어 두면 그 일이 없어진다. 접은 것은 브라우저에
+ * 기억한다(사람마다 쓰는 묶음이 다르니 서버가 알 일이 아니다).
  */
 
-import { NavLink } from 'react-router-dom'
+import { useCallback, useState } from 'react'
+import { ChevronRight } from 'lucide-react'
+import { NavLink, useLocation } from 'react-router-dom'
 
 import { UNKNOWN_VERSION, systemApi } from '@/shared/api/system'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isAnyManager, isSystemAdmin } from '@/shared/auth/roles'
-import { APP_NAME, APP_TAGLINE } from '@/shared/branding'
+import { APP_NAME, APP_TAGLINE, STORAGE_PREFIX } from '@/shared/branding'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/shared/components/ui/sheet'
 import { useResource } from '@/shared/hooks/useResource'
 import { ontologyApi } from '@/modules/ontology/api'
 import { extensionNavGroups } from '@/extensions'
 import { itemHref, visibleGroups } from '@/shared/layout/navigation'
 import { cn } from '@/shared/lib/utils'
+
+/** 접어 둔 묶음. **한 서버에 두 플랫폼이 있을 수 있어** 키에 slug 를 붙인다. */
+const STORAGE_KEY = `${STORAGE_PREFIX}.sidebar.folded`
+
+function readFolded(): string[] {
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    const parsed: unknown = raw ? JSON.parse(raw) : []
+    return Array.isArray(parsed)
+      ? parsed.filter((one): one is string => typeof one === 'string')
+      : []
+  } catch {
+    // 사생활 보호 창이나 저장을 막은 브라우저 — 접힘은 편의일 뿐이라 그냥 다 펼친다.
+    return []
+  }
+}
+
+/** 묶음 접기 상태. 제목이 열쇠다 — 동적 묶음은 서버가 준 이름을 쓴다. */
+function useFoldedGroups() {
+  const [folded, setFolded] = useState<string[]>(readFolded)
+  const toggle = useCallback((title: string) => {
+    setFolded((current) => {
+      const next = current.includes(title)
+        ? current.filter((one) => one !== title)
+        : [...current, title]
+      try {
+        window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
+      } catch {
+        // 위와 같다 — 이번 화면에서만 기억한다.
+      }
+      return next
+    })
+  }, [])
+  return { folded, toggle }
+}
 
 interface SidebarProps {
   collapsed: boolean
@@ -51,6 +92,9 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
     extensionNavGroups(),
   )
 
+  const { folded, toggle } = useFoldedGroups()
+  const { pathname } = useLocation()
+
   return (
     <div className="flex h-full w-60 flex-col">
       <div className="flex h-14 shrink-0 flex-col justify-center border-b px-4">
@@ -83,42 +127,74 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
       </div>
 
       <nav className="flex-1 space-y-5 overflow-y-auto px-2 py-4">
-        {groups.map((group) => (
-          <div key={group.title ?? group.items[0]?.label}>
-            {/* **제목이 없으면 자리도 안 남긴다.** 빈 문단을 두면 홈 위에 설명
+        {groups.map((group) => {
+          // **제목이 있어야 접을 수 있다.** 제목이 없는 묶음은 홈 하나뿐이라 접을 것도 없고,
+          // 접는 단추를 둘 자리도 없다.
+          const title = group.title
+          const isFolded = Boolean(title && folded.includes(title))
+          // 접힌 묶음 안에 **지금 보는 화면**이 있으면 점을 찍는다 — 접었다고 「어디 있는지」 를
+          // 모르게 두면, 사람은 묶음을 하나씩 펴 가며 찾는다.
+          const hasActive = group.items.some((item) => {
+            const href = itemHref(item, workspaceSlug)
+            return item.end ? pathname === href : pathname.startsWith(href)
+          })
+          return (
+            <div key={title ?? group.items[0]?.label}>
+              {/* **제목이 없으면 자리도 안 남긴다.** 빈 문단을 두면 홈 위에 설명
                 없는 여백이 생겨 「뭔가 안 나온다」 로 읽힌다. */}
-            {group.title && (
-              <p className="text-muted-foreground px-2 pb-1 text-xs font-medium">{group.title}</p>
-            )}
-            <ul className="space-y-0.5">
-              {group.items.map((item) => (
-                <li key={item.label}>
-                  <NavLink
-                    to={itemHref(item, workspaceSlug)}
-                    end={item.end}
-                    onClick={onNavigate}
-                    className={({ isActive }) =>
-                      cn(
-                        'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
-                        isActive
-                          ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
-                          : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
-                      )
-                    }
-                  >
-                    <item.icon className="size-4 shrink-0" />
-                    <span className="truncate">{item.label}</span>
-                    {item.pending && (
-                      <span className="text-muted-foreground/70 ml-auto shrink-0 rounded border px-1 text-[10px] leading-4">
-                        미구현
-                      </span>
-                    )}
-                  </NavLink>
-                </li>
-              ))}
-            </ul>
-          </div>
-        ))}
+              {title && (
+                <button
+                  type="button"
+                  aria-expanded={!isFolded}
+                  onClick={() => toggle(title)}
+                  className="text-muted-foreground hover:text-foreground flex w-full items-center gap-1 rounded px-2 pb-1 text-xs font-medium"
+                >
+                  <ChevronRight
+                    className={cn('size-3 shrink-0 transition-transform', !isFolded && 'rotate-90')}
+                  />
+                  <span className="truncate">{title}</span>
+                  {isFolded && hasActive && (
+                    <span
+                      className="bg-primary ml-auto size-1.5 shrink-0 rounded-full"
+                      title="지금 보는 화면이 이 묶음 안에 있습니다"
+                    />
+                  )}
+                </button>
+              )}
+              {/* **접으면 그리지 않는다.** CSS 로 숨기면 접힌 묶음의 링크가 탭 이동과 읽기
+                  프로그램에는 그대로 남아, 접었는데도 거기로 갈 수 있다. */}
+              {!isFolded && (
+                <ul className="space-y-0.5">
+                  {group.items.map((item) => (
+                    <li key={item.label}>
+                      <NavLink
+                        to={itemHref(item, workspaceSlug)}
+                        end={item.end}
+                        onClick={onNavigate}
+                        className={({ isActive }) =>
+                          cn(
+                            'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
+                            isActive
+                              ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
+                              : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                          )
+                        }
+                      >
+                        <item.icon className="size-4 shrink-0" />
+                        <span className="truncate">{item.label}</span>
+                        {item.pending && (
+                          <span className="text-muted-foreground/70 ml-auto shrink-0 rounded border px-1 text-[10px] leading-4">
+                            미구현
+                          </span>
+                        )}
+                      </NavLink>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )
+        })}
       </nav>
     </div>
   )

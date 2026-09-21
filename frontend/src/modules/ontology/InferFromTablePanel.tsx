@@ -1,9 +1,9 @@
 /**
  * 표에서 타입 생성 — **CSV·JSON 하나로 타입과 데이터가 함께 생긴다.**
  *
- * 파일 가져오기는 타입이 먼저 있어야 했다. 여기서는 열을 보고 정의를 제안하고(숫자·날짜·참/거짓·
+ * 일괄 입력은 타입이 먼저 있어야 했다. 여기서는 열을 보고 정의를 제안하고(숫자·날짜·참/거짓·
  * 고를 값·주소·글자), 사람이 역할과 종류를 고친 뒤 **정의를 만들고 행을 넣는다** — 둘 다 기존
- * 길(정의 가져오기·파일 가져오기)로 간다. 추론은 보수적이다: 애매하면 글자다.
+ * 길(정의 가져오기·일괄 입력)로 간다. 추론은 보수적이다: 애매하면 글자다.
  */
 
 import { useRef, useState } from 'react'
@@ -435,7 +435,7 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
               <p className="font-medium">
                 {rowsPlan.applied
                   ? `행을 넣었습니다 — 새로 ${rowsPlan.counts.create}, 고침 ${rowsPlan.counts.update}`
-                  : `행은 안 들어갔습니다 — 오류 ${rowsPlan.counts.error}개. 정의는 이미 생겼으니, 파일을 고쳐 「파일 가져오기」 로 넣으세요.`}
+                  : `행은 안 들어갔습니다 — 오류 ${rowsPlan.counts.error}개. 정의는 이미 생겼으니, 파일을 고쳐 「일괄 입력」 으로 넣으세요.`}
               </p>
               {rowsPlan.errors.map((one) => (
                 <p key={one} className="text-destructive text-xs">

@@ -22,7 +22,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, patched_pipeline
 from tests.api.test_table_cli import HEADER, ROWS, SERVER, SLUGS, _mapping, _ontology
 
 PIPELINE_DIR = Path(__file__).resolve().parents[3] / "pipeline"
@@ -84,19 +84,9 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 @pytest.fixture
 def platform(client: TestClient) -> Iterator[None]:
-    def send(
-        method: str, url: str, headers: dict[str, str], body: bytes | None
-    ) -> tuple[int, Any]:
-        path = "/" + url.split("://", 1)[-1].split("/", 1)[1]
-        got = client.request(method, path, content=body, headers=headers)
-        return got.status_code, got.json()
-
-    before = server.pipeline.SEND
-    server.pipeline.SEND = send
-    try:
+    """정제 도구가 TestClient 앱에 말한다 — 작업을 물을 때마다 워커가 한 바퀴 돈다."""
+    with patched_pipeline(server.pipeline, client):
         yield
-    finally:
-        server.pipeline.SEND = before
 
 
 def test_적용_도구는_없고_안내는_정본을_내려준다() -> None:

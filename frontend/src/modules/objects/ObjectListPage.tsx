@@ -7,7 +7,7 @@
 
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { BarChart3, Download, FileUp, Pencil, Plus } from 'lucide-react'
+import { BarChart3, Download, FileUp, Loader2, Pencil, Plus } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import { workspaceApi } from '@/modules/workspaces/api'
@@ -246,11 +246,20 @@ export default function ObjectListPage() {
   const [importing, setImporting] = useState(false)
   /** 내보내기 실패 — 새 탭이 아니라 이 화면에 떠야 한다. 조용히 실패하면 아무 일도 안 일어난 것처럼 보인다. */
   const [exportError, setExportError] = useState<Error | null>(null)
+  const [exporting, setExporting] = useState(false)
+  /**
+   * 내보내기는 **작업**이다 — 워커가 파일을 만드는 동안 여기서 기다린다. 그래서 누른 뒤
+   * 잠시 아무 일도 안 일어난 것처럼 보이고, 그때 사람은 한 번 더 누른다(작업이 둘이 된다).
+   * 단추를 잠그고 「만드는 중」 을 보여 준다.
+   */
   const download = (run: () => Promise<void>) => {
     setExportError(null)
-    run().catch((caught: unknown) =>
-      setExportError(caught instanceof Error ? caught : new Error('알 수 없는 오류')),
-    )
+    setExporting(true)
+    run()
+      .catch((caught: unknown) =>
+        setExportError(caught instanceof Error ? caught : new Error('알 수 없는 오류')),
+      )
+      .finally(() => setExporting(false))
   }
 
   const schema = useResource(() => ontologyApi.schema(), [])
@@ -365,9 +374,13 @@ export default function ObjectListPage() {
                 {/* 내보내기는 **지금 거른 목록 그대로** — 화면과 파일이 같은 것을 말한다. */}
                 <DropdownMenu>
                   <DropdownMenuTrigger asChild>
-                    <Button size="sm" variant="outline">
-                      <Download className="mr-1 size-4" />
-                      내보내기
+                    <Button size="sm" variant="outline" disabled={exporting}>
+                      {exporting ? (
+                        <Loader2 className="mr-1 size-4 animate-spin" />
+                      ) : (
+                        <Download className="mr-1 size-4" />
+                      )}
+                      {exporting ? '만드는 중…' : '내보내기'}
                     </Button>
                   </DropdownMenuTrigger>
                   <DropdownMenuContent align="end">
@@ -406,7 +419,7 @@ export default function ObjectListPage() {
                       <>
                         <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
                           <FileUp className="mr-1 size-4" />
-                          파일 가져오기
+                          일괄 입력
                         </Button>
                         <Button size="sm" onClick={() => setCreating(true)}>
                           <Plus className="mr-1 size-4" />

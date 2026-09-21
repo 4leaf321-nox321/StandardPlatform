@@ -96,6 +96,27 @@ class Settings(BaseSettings):
     **개발(reload)에서는 무시된다** — uvicorn 은 reload 와 다중 워커를 같이 못 쓴다.
     둘을 함께 주면 한쪽이 조용히 버려지므로 run.py 가 갈라서 준다."""
 
+    job_file_max_bytes: int = 100 * 1024 * 1024
+    """작업 파일 상한. 파일은 DB(`job_files.data`)에 들어간다 — 서버 두 대가 같이 읽어야
+    해서다(`docs/작업-워커-설계.md` 3장). 통째로 메모리에 올리므로 상한이 있어야 한다."""
+    job_file_ttl_days: int = 7
+    """작업 파일을 지우기까지. 임시물이 영구물이 되면 표가 DB 의 대부분이 된다."""
+    job_ttl_days: int = 30
+    """**끝난** 작업 기록을 지우기까지. 타이머가 소스마다 5분에 한 줄을 넣으므로 하루 288행이
+    쌓인다 — 안 지우면 사람이 올린 작업이 그 사이에 파묻혀 「작업」 화면이 못 쓰게 된다.
+    도는 것(`queued`·`running`)은 아무리 오래돼도 안 지운다."""
+    job_notify_after_seconds: int = 20
+    """이보다 오래 걸린 작업만 끝났을 때 알린다. 짧게 끝난 것은 사람이 그 화면에서 봤다 —
+    본 것을 한 번 더 말하면 그 종은 잡음이 되고, 잡음이 된 종은 진짜 하나가 울려도 안
+    읽힌다."""
+    job_max_rows: int = 100_000
+    """작업 경로의 행 상한. 요청 경로의 5,000(`bulk.MAX_ROWS`)은 요청 시간 때문이었다 —
+    워커에서는 트랜잭션 하나가 감당하는 크기만 남는다."""
+    worker_poll_seconds: float = 2.0
+    worker_stale_seconds: int = 300
+    """`running` 인데 이만큼 심장박동이 없으면 워커가 죽은 것으로 보고 되돌린다."""
+    worker_max_attempts: int = 3
+
     log_dir: Path = BACKEND_DIR / "logs"
     """개발에서는 저장소 안. **운영에서는 `.env` 가 `/data/logs` 로 덮는다** —
     컨테이너 루트는 읽기 전용이라 이미지 안에는 못 쓴다."""

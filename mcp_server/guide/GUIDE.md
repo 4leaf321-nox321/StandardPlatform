@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-09-18a
+GUIDE_VERSION: 2026-09-20a
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -13,6 +13,8 @@ GUIDE_VERSION: 2026-09-18a
 | 하려는 일 | 도구 | 주의 |
 |---|---|---|
 | 지금 무엇이 정의돼 있나 | `ontology_schema` | **다른 도구보다 먼저** |
+| 내가 누구고 어느 부서인가 | `whoami` | `object_create` 의 `workspace_slug` 는 여기서 — 짐작하지 않는다 |
+| **어느 타입에 있는지 모른다** | `search(q)` | `types[]` 가 타입별 건수. 타입을 알면 `objects_list` · `object_resolve` |
 | 원천(엑셀 · PPT · PDF · Word)을 정제해 온톨로지로 만들기 전에 | `get_guide(topic="modeling")` | **무엇을 타입 · 속성 · 관계로 만드나** — 판단이 서지 않으면 만들지 않는다 |
 | 타입·속성·관계 종류를 만들거나 고치기 | `ontology_import(apply=false)` → 사람 확인 → `apply=true` | 미리 보기를 건너뛰지 않는다 |
 | **이름으로 무언가를 가리킨다** | `object_resolve(type_slug, name)` | `candidates` 면 **고르지 말고 사람에게 묻는다** |
@@ -20,16 +22,21 @@ GUIDE_VERSION: 2026-09-18a
 | 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 한 걸음까지. 주소를 추측하지 않는다 |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | — |
-| 언제 누가 무엇을 바꿨나 | `object_history` | 되돌리기는 화면에서 |
+| 언제 누가 무엇을 바꿨나 — 이 객체 | `object_history` | 되돌리기는 화면에서 |
+| 어제 무슨 일이 있었나 — 전체 | `audit_recent` | **부서 관리자 이상.** 시간 · 사람으로는 못 거른다 — 최근 것부터 받아 본다 |
+| 계층(트리)을 한 단계씩 | `object_tree(parent=)` | 깊이 전부는 `rdf_query` 의 `+` 경로 |
 | 지우기·합치기 전에 무엇이 걸렸나 | `object_references` | 남의 부서 것은 수만 |
 | 어셈블리 총 무게처럼 「아래 전부」 의 합 | `object_rollup` | `missing` 을 함께 말한다 |
 | 무엇이 나빠지고 있나(필수값·고아·끊긴 참조·중복) | `quality_report` | 볼 수 있는 것만 |
 | 객체 하나 만들기 | `object_create` | 정의에 없는 속성 키는 거절된다 |
 | 객체 고치기 | `object_update` | **보낸 키만** 병합. 비우려면 `null` |
-| 정제 도구가 만든 묶음(정의 · 객체 · 관계)이 어떻게 들어갈지 | `bundle_import(bundle, apply=false)` | **넣는 것은 사람이 미리 보기를 본 뒤에만.** 원천을 곧바로 넣지 않는다 — `pipeline/AGENTS.md` |
-| 여러 행 한 번에(upsert) | `objects_import(apply=false)` → `apply=true` | 같은 `key` 면 고침. 한 행이라도 오류면 전부 안 넣음 |
+| 여러 객체의 **한 칸**을 같은 값으로 | `bulk_edit(apply=false)` → `apply=true` | `batch_id` 를 사용자에게 알린다 — `bulk_edit_undo` 가 통째로 되돌린다 |
+| 정제 도구가 만든 묶음(정의 · 객체 · 관계)이 어떻게 들어갈지 | `bundle_import(bundle)` → 사람 확인 → `job_apply` | **넣는 것은 사람이 미리 보기를 본 뒤에만.** 원천을 곧바로 넣지 않는다 — `pipeline/AGENTS.md` |
+| 여러 행 한 번에(upsert) | `objects_import` → 사람 확인 → `job_apply(job_id)` | **작업이 된다.** 같은 `key` 면 고침. 한 행이라도 오류면 전부 안 넣음 |
 | 객체 둘 잇기 | `relation_add` | **근거(evidence_note)를 적는다** |
-| 관계 여러 줄 한 번에 | `relations_import(apply=false)` → `apply=true` | 이미 이어진 건 그대로 |
+| 잘못 이은 관계 | `relation_update`(근거 · 속성) · `relation_remove`(끊기) | 양끝 · 종류는 못 바꾼다 — 끊고 새로 잇는다. 확실하지 않으면 끊지 말고 사람에게 |
+| 관계 여러 줄 한 번에 | `relations_import` → 사람 확인 → `job_apply` | 이미 이어진 건 그대로 |
+| 뒤에서 도는 작업이 어디까지 됐나 | `job_status(job_id)` · `jobs_list()` | 워커가 없으면 영영 대기 — `jobs_list` 의 `workers` 로 안다 |
 | 바깥 시스템(OData·REST·파일)에서 읽어 채우기 | `datasources_list` → `datasource_sync(apply=false)` → `apply=true` | 정의는 화면에서. 오류 행이 있으면 아무것도 안 넣음 |
 | 여러 타입을 건너뛰어 잇는 물음 · 역관계로 거슬러 세기 | `rdf_schema` → `rdf_query` | **먼저 `objects_summary` 로 되는 물음인지 본다.** 질의어는 그것으로 안 되는 자리에 |
 
@@ -39,7 +46,8 @@ GUIDE_VERSION: 2026-09-18a
 - **정의를 바꾸는 일은 두 단계다.** `apply=false` 로 계획과 경고를 받아 사람에게
   보여 주고, 판단을 받은 뒤에 `apply=true`. 에이전트의 실수는 기계 속도로 반영되고,
   온톨로지는 데이터의 모양이라 그 아래 쌓인 것이 전부 흔들린다.
-- **일괄 도구도 같다.** `objects_import`·`relations_import` 는 기본이 계획이다.
+- **일괄 도구도 같다.** `objects_import`·`relations_import`·`bundle_import` 는 **작업**이 되어
+  계획만 세운다 — 적용은 사람의 판단을 받은 뒤 `job_apply` 로만.
 - **오류는 서버의 말이다.** `{"error": "[코드] 문구"}` 가 오면 그 문구에 무엇을
   고쳐야 하는지 적혀 있다. 우회하지 말고 고쳐서 다시 부른다.
 - **권한은 토큰이 정한다.** `read` 만 있는 토큰으로는 쓰기가 거절된다 —
@@ -95,6 +103,13 @@ GUIDE_VERSION: 2026-09-18a
 
 <!--@ find -->
 ## 찾기와 살피기
+
+### 타입을 모를 때 — `search(q, type_slug=, limit=)`
+
+「앤시스 관련된 거 뭐 있어」 처럼 **어느 타입에 있는지 모르면** 여기서 시작한다. `types[]` 가
+타입별 건수라 어디 있는지가 먼저 보이고, `items[].matched` 가 무엇으로 걸렸는지(이름 · 식별자 ·
+별칭)다. 타입을 알고 나면 `objects_list`(조건) 나 `object_resolve`(하나로 정하기)로 간다 —
+`search` 는 「어디 있나」 를 묻는 도구지 「어느 것인가」 를 정하는 도구가 아니다.
 
 ### 먼저 — 이름 하나가 어느 객체인가: `object_resolve(type_slug, name)`
 
@@ -192,6 +207,8 @@ GUIDE_VERSION: 2026-09-18a
 <!--@ objects -->
 ## 객체 하나씩
 
+- **`workspace_slug` 는 `whoami` 의 `home_workspace_slug`(또는 `memberships[]`)에서.** 비우면
+  전역이 되어 시스템 관리자가 아니면 거절된다. 부서를 짐작해 넣지 않는다.
 - **만들기 전에 `object_resolve(type_slug, label)`.** 이미 있는 것을 다른 표기로 또
   만들면 같은 것이 둘이 되고, 둘은 반드시 갈린다. `none` 일 때만 만든다.
 - `object_create(type_slug, label, key=, properties=, workspace_slug=)` —
@@ -212,31 +229,60 @@ GUIDE_VERSION: 2026-09-18a
   못한다(그 표의 화면에서 한다). 파일·`objects_import` 에서는 그 표의 식별자(부서면
   slug, 계정이면 로그인 아이디)로 적는다.
 
-<!--@ bulk -->
-## 여러 행 한 번에
+### 여러 객체의 한 칸 — `bulk_edit(type_slug, ids, field, value, apply)`
 
-`objects_import(type_slug, rows, workspace_slug=, apply=false)`:
+「등급 A 인 것 전부 B 로」 는 `objects_list` 로 id 를 모아 여기로. `field` 는 `status` ·
+`description` · `workspace` · `properties.<칸>`. 기본은 계획이다 — 몇 건이 바뀌고 몇 건은
+**왜 안 되나**(남의 부서 것)가 행마다 온다. 적용하면 `batch_id` 가 오고, **그것을 사용자에게
+알려 준다** — `bulk_edit_undo(type_slug, batch_id, apply)` 가 그 묶음을 통째로 되돌린다.
+그 뒤에 따로 고쳐진 객체는 되돌리지 않고 이유를 적는다.
+
+<!--@ bulk -->
+## 여러 행 한 번에 — 작업이 된다
+
+`objects_import(type_slug, rows, workspace_slug=)`:
 
 ```json
 [{"key": "T-001", "label": "ANSYS Fluent", "vendor": "Ansys", "license": "상용"},
  {"key": "T-002", "label": "OpenFOAM", "vendor": null}]
 ```
 
-- 같은 `key` 가 이미 있으면 **고친다**(upsert). 없는 키는 안 건드린다.
-  `null` 이 비움이다.
+**돌아오는 것은 계획이 아니라 작업이다.** 워커가 뒤에서 계획을 세우고, 작은 것은 그 호출 안에
+끝난다:
+
+```json
+{"job_id": "…", "status": "done",
+ "result": {"applied": false, "rows": [...], "counts": {"create": 2, ...}},
+ "next": "계획이다 — 아직 아무것도 안 들어갔다. 사용자에게 보여 주고 판단을 받은 뒤 job_apply(job_id) 로 적용한다."}
+```
+
+- `status` 가 `queued`/`running` 이면 아직 도는 중 — `job_status(job_id)` 로 다시 묻는다.
+  **끝났다고 지어내지 않는다.**
+- `result.rows` 는 행마다 `create` / `update` / `unchanged` / `error`. **한 행이라도 `error`
+  면 적용 작업 자체가 안 만들어진다.** 오류를 고쳐 다시 보낸다.
+- 적용은 **사용자의 판단을 받은 뒤** `job_apply(job_id)`. 같은 파일 · 같은 지문으로 넣는다 —
+  미리 본 뒤 누가 그 사이에 바꿨으면 서버가 거절한다(「미리 본 것과 달라졌습니다」). 그때는
+  `objects_import` 부터 다시.
+- 같은 `key` 가 이미 있으면 **고친다**(upsert). 없는 키는 안 건드린다. `null` 이 비움이다.
 - 참조 속성은 상대의 **식별자(key)**, **별칭**, 없으면 **이름(label)** 순으로 풀린다.
   겹치면 거절된다 — 그때는 id 로 적는다.
 - `aliases` 열에 `;` 로 여럿 — 그 객체의 다른 이름을 함께 넣는다(통째로 바꿈).
-- 응답은 행마다 `create` / `update` / `unchanged` / `error`. **한 행이라도 `error`
-  면 `apply=true` 여도 아무것도 안 들어간다.** 오류를 고쳐 다시 보낸다.
-- 한 번에 5000행까지. 더 많으면 나눈다.
+- 한 번에 10만 행까지.
 
-### 묶음 — `bundle_import(bundle, apply=false)`
+### 묶음 — `bundle_import(bundle)`
 
 원천 데이터를 정제해 넣을 때는 **`pipeline/` 의 절차**를 따른다(실행 폴더 · 검증 · 미리 보기 ·
 적용). 이 도구는 그 묶음을 **한 번에 미리 보는** 자리다 — 정의를 먼저 적용하지 않아도 그 정의로
-객체 · 관계를 맞춰 본다. `apply=true` 는 전부 아니면 무. **사람이 미리 보기를 확인하기 전에는
-`apply=true` 로 부르지 않는다.**
+객체 · 관계를 맞춰 본다. 돌아오는 것은 위와 같은 작업이고 `result` 가 묶음의 계획(정의 · 타입마다의
+객체 · 관계)이다. **사람이 확인한 뒤** `job_apply(job_id)` — 전부 아니면 무.
+
+### 작업 셋 — `job_status` · `job_apply` · `jobs_list`
+
+| | |
+|---|---|
+| `job_status(job_id, wait_seconds=20)` | 어디까지 됐나. 끝나기를 잠깐 기다렸다가 준다 |
+| `job_apply(job_id)` | 계획을 **사람이 확인한 뒤** 적용. 사용자의 판단 없이 부르지 않는다 |
+| `jobs_list()` | 내 작업 최근 것부터 + 워커가 살아 있나. `workers[].alive` 가 전부 거짓이면 작업은 영영 대기다 — 운영자에게 알린다 |
 
 <!--@ relations -->
 ## 객체 잇기
@@ -244,12 +290,15 @@ GUIDE_VERSION: 2026-09-18a
 - `relation_add(type_slug, object_id, relation, dst_object_id, evidence_note)` —
   `relation` 은 `ontology_schema` 의 `relation_types[].slug`. 출발 타입·도착 타입이
   정의와 맞아야 한다.
+- 잘못 이었으면 `relation_update`(근거 · 속성만) 또는 `relation_remove`(끊기). `relation_id` 는
+  `object_get` 의 `related[].relation_id`. **끊기는 되돌리기가 없다** — 확실하지 않으면 끊지
+  말고 사람에게 `object_get` 결과를 보여 준다.
 - **양 끝은 id 다.** 이름밖에 없으면 `object_resolve` 로 먼저 푼다 — `candidates` 가
   오면 잇지 말고 사람에게 묻는다. 틀리게 이은 선은 지워도 「왜 그렇게 이었는지」 를
   본 사람의 기억에 남고, 그 기억이 다음 판단을 흔든다.
 - **근거를 적는다.** 어느 문서·어느 자료에서 이 연결이 나왔는지. 근거 없는 연결은
   시간이 지나면 아무도 못 믿고, 확인하려면 처음부터 다시 조사해야 한다.
-- 여러 줄이면 `relations_import(type_slug, rows, apply)` — 행은
+- 여러 줄이면 `relations_import(type_slug, rows)` — 작업이 된다(`bulk` 주제). 행은
   `{"src": "<key 또는 label>", "relation": "<slug>", "dst": "...", "evidence_note": "..."}`.
   이미 이어진 것은 `unchanged` 라 두 번 올려도 두 겹이 안 된다.
 

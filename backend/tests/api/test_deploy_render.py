@@ -81,6 +81,9 @@ def test_단독_서버는_설치_폴더_하나에_전부(bundle: Path, tmp_path:
     assert not [x for x in unit.splitlines() if x.startswith("Requires=")]
     assert not (etc / "etc/nginx").exists()
     assert not (etc / "etc/keepalived").exists()
+    # 단독 서버에도 워커는 선다 — 가져오기가 도는 곳이다.
+    worker = read(etc, "systemd/system/testplatform-worker.service")
+    assert "--bind /home/ops/apps/testplatform/.env:/opt/app/backend/.env:ro" in worker
 
 
 def test_이중화는_공용_폴더와_로컬을_가른다(bundle: Path, tmp_path: Path) -> None:
@@ -97,6 +100,12 @@ def test_이중화는_공용_폴더와_로컬을_가른다(bundle: Path, tmp_pat
     tail = lines[exec_start:]
     end = tail.index(next(x for x in tail if x.strip().endswith("app.sif")))
     assert all(x.strip() for x in tail[: end + 1])
+
+    # **워커가 유닛으로 서지 않으면 일괄 입력이 영영 대기다.** 앱과 같은 SIF · 같은 .env.
+    worker = read(etc, "systemd/system/testplatform-worker.service")
+    assert "--bind /data/common/testplatform/.env:/opt/app/backend/.env:ro" in worker
+    assert "python -m app.worker" in worker
+    assert "@@" not in worker
 
     sync = read(etc, "systemd/system/testplatform-sync.service")
     assert "--bind /data/common/testplatform/.env" in sync

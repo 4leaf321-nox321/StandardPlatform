@@ -13,7 +13,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from app.shared import events
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, bundle_import
 
 
 def _uniq(base: str) -> str:
@@ -98,11 +98,7 @@ def _bundle(workspace: str, *, bad_dst: bool = False) -> tuple[dict[str, Any], d
 def _send(
     client: TestClient, who: Signed, bundle: dict[str, Any], *, apply: bool = False
 ) -> dict[str, Any]:
-    got = client.post(
-        "/api/bundles/import", json={**bundle, "apply": apply}, headers=who.headers
-    )
-    assert got.status_code == 200, got.text
-    return dict(got.json())
+    return bundle_import(client, who, {**bundle, "apply": apply})
 
 
 def _exists(client: TestClient, who: Signed, type_slug: str) -> bool:
@@ -212,11 +208,8 @@ def test_토큰은_정의가_들면_ontology_범위도_필요하다(
     assert "BUNDLES-0001" in denied.json()["error"]["code"]
 
     # 정의가 없으면 경로의 범위(objects:write)로 통과한다 — 모르는 타입은 묶음의 오류로.
-    objects_only = client.post(
-        "/api/bundles/import", json={"objects": bundle["objects"]}, headers=token
-    )
-    assert objects_only.status_code == 200, objects_only.text
-    assert "찾을 수 없습니다" in objects_only.json()["objects"][0]["error"]
+    objects_only = bundle_import(client, admin, {"objects": bundle["objects"]}, headers=token)
+    assert "찾을 수 없습니다" in objects_only["objects"][0]["error"]
 
 
 def test_빈_묶음은_거절한다(client: TestClient, admin: Signed) -> None:

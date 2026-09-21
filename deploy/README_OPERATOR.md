@@ -32,7 +32,7 @@ tar xzf <slug>-<태그>.tar.gz
 cd <slug>-<태그>
 ls
 #  app.sif  deploy.sh  ha.sh  pg-ha.sh  backup.sh  restore.sh
-#  app.service.template  mcp.service.template  sync.service.template  sync.timer.template
+#  app.service.template  worker.service.template  mcp.service.template  sync.service.template  sync.timer.template
 #  backup.service.template  backup.timer.template  .env.example  BUILD_INFO  README.md  쉬운-설치.md
 #  mcp_server/   (Claude 연동 MCP 서버 + 오프라인 설치용 휠)
 #  apptainer_debs/  (폐쇄망용 apptainer .deb — prepare 가 먼저 본다)
@@ -255,11 +255,34 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 
 ---
 
+## 5b-2. 작업 워커 — 일괄 입력이 여기서 돈다
+
+`deploy.sh install`/`update` 가 `<slug>-worker.service` 를 함께 설치한다. 일괄 입력(객체 · 관계)은
+보내는 순간 **작업**이 되고, 이 워커가 집어 돌린다 — 앱과 **같은 SIF · 같은 .env**, `python -m app.worker`.
+설계는 저장소의 `docs/작업-워커-설계.md`.
+
+- **없으면 일괄 입력이 영영 「대기」 다.** 화면의 「작업」 이 「워커가 살아 있지 않습니다」 라고 띄운다.
+  `sudo systemctl status <slug>-worker` / 로그 `journalctl -u <slug>-worker -f`.
+- **웹훅도 여기서 나간다**(2026-09-21부터). 앱만 살아 있고 워커가 죽어 있으면 바깥 시스템으로
+  가는 알림이 멎는다 — 보낼 기록은 표에 쌓여 있다가 워커가 살아나면 그대로 나간다.
+- **이중화면 A · B 에 하나씩 뜬다.** 같은 작업을 두 번 안 집는다(DB 의 `SKIP LOCKED`). 한 대가 죽으면
+  그 대가 하던 작업은 5분 뒤 다른 대가 되살린다(3번까지, 그 뒤 「실패」 로 남긴다).
+- **워커가 한 시간마다 치운다**: 작업 파일 7일(`JOB_FILE_TTL_DAYS`) · **끝난 작업 기록 30일**
+  (`JOB_TTL_DAYS`). 도는 작업은 아무리 오래돼도 안 지운다. 손으로 당기려면
+  `POST /api/jobs/maintenance/purge`(시스템 관리자).
+- 작업 파일은 DB(`job_files`)에 든다 — 두 대가 같이 읽어야 해서다. 7일 뒤 지운다. 상한 100MB
+  (`.env` 의 `JOB_FILE_MAX_BYTES`). **백업 덤프에는 그 내용이 안 담긴다**(임시물이라 — `backup.sh` 의
+  `--exclude-table-data=job_files`). 복구한 서버에서는 그 작업의 파일이 없고, 그때는 다시 올린다.
+- `update` 는 앱과 워커를 함께 멈춘다(하던 작업은 최대 2분 기다린다) — 옛 코드가 새 마이그레이션 위에서
+  작업을 집으면 안 된다.
+
 ## 5c. 데이터 소스 동기화 타이머
 
 `deploy.sh install`/`update` 가 `<slug>-sync.timer` 를 함께 설치한다 — 5분마다 「몇 분마다」 가
-정해진 데이터 소스(관리 › 데이터 소스) 중 차례가 된 것을 돌린다. 앱과 **같은 SIF·같은 .env**
-로 `scripts/sync_datasources.py --due` 를 실행한다.
+정해진 데이터 소스(관리 › 데이터 소스) 중 차례가 된 것을 **작업으로 넣는다**(돌리는 것은 워커,
+5b-2). 앱과 **같은 SIF·같은 .env** 로 `scripts/sync_datasources.py --due` 를 실행한다. 진행 · 결과는
+화면 「작업」 과 소스 화면의 기록에 남는다. 워커를 거치지 않고 그 자리에서 돌려 보려면(진단)
+`--slug <소스> --now`.
 
 - **상태**: `systemctl list-timers <slug>-sync.timer` / 로그 `journalctl -u <slug>-sync`
 - **끄기**: `SYNC_ENABLED=0 sudo ./deploy.sh update` (유닛은 `systemctl disable --now <slug>-sync.timer`)

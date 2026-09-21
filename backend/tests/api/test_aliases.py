@@ -10,7 +10,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, export_file
 from tests.api.test_ontology import _make_object, _make_property, _make_type
 
 
@@ -92,9 +92,7 @@ def test_파일의_참조가_별칭으로_풀린다(client: TestClient, admin: S
     assert bolt["aliases"] == ["bolt", "볼트M6"]
 
     # 내보내면 별칭 열이 있고, 그대로 다시 넣으면 「그대로」 다.
-    exported = client.get(
-        f"/api/objects/{part}/export", params={"format": "json"}, headers=admin.headers
-    ).json()["rows"]
+    exported = export_file(client, admin, f"{part}/export", {"format": "json"}).json()["rows"]
     assert exported[0]["aliases"] == "bolt;볼트M6"
     again = client.post(
         f"/api/objects/{part}/import-rows",

@@ -25,6 +25,7 @@ import hashlib
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -73,6 +74,12 @@ def _urllib_send(
 
 
 SEND: Sender = _urllib_send
+#: 작업을 기다리는 사이의 잠. 시험이 no-op 으로 바꾼다.
+WAIT: Callable[[float], None] = time.sleep
+POLL_SECONDS = 1.5
+#: 「대기」 가 이만큼 이어지면 멈추고 말한다 — **집을 워커가 없다는 뜻이다.** 말없이 계속
+#: 기다리면 사람은 제 묶음이 잘못된 줄 알고 몇 번을 다시 만든다. 도는 중(running)이면 안 센다.
+QUEUED_LIMIT_SECONDS = 120.0
 
 
 # --------------------------------------------------------------------------
@@ -353,6 +360,11 @@ class Stop(Exception):
 
 
 def _post_bundle(server: str, token: str, body: dict[str, Any]) -> dict[str, Any]:
+    """묶음을 보내고 **작업이 끝날 때까지 기다린다.**
+
+    플랫폼은 묶음을 요청 안에서 처리하지 않는다 — 1만 객체에 44초라 클라이언트가 먼저 끊었다.
+    202 로 작업이 오고, 여기서 그 작업을 보다가 끝난 결과(옛 응답과 같은 모양)를 돌려준다.
+    """
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json",
@@ -361,45 +373,110 @@ def _post_bundle(server: str, token: str, body: dict[str, Any]) -> dict[str, Any
     }
     raw = json.dumps(body, ensure_ascii=False).encode("utf-8")
     url = f"{server.rstrip('/')}/api/bundles/import"
+    status, answer = _send(server, "POST", url, headers, raw, who="플랫폼")
+    if status != 202:
+        _refused("플랫폼", status, answer)
+    job = _wait_job(server, token, answer)
+    result = job.get("result")
+    if not isinstance(result, dict):
+        raise Stop(f"플랫폼 응답을 읽을 수 없습니다: {job!r}")
+    return result
+
+
+def _send(
+    server: str,
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes | None,
+    *,
+    who: str,
+) -> tuple[int, Any]:
     try:
-        status, answer = SEND("POST", url, headers, raw)
+        return SEND(method, url, headers, body)
     except (urllib.error.URLError, OSError) as failure:
         # **닿지 않은 것과 거절당한 것을 가른다.** 트레이스백을 보여 주면 사람은 무엇을
         # 고칠지(주소 · 서버가 떠 있나 · 사내망) 모른다.
         reason = getattr(failure, "reason", failure)
         raise Stop(
-            f"플랫폼에 닿지 않습니다: {server} ({reason}) — "
-            "주소(SP_SERVER)와 서버가 떠 있는지 확인하세요"
+            f"{who}에 닿지 않습니다: {server} ({reason}) — 주소와 서버가 떠 있는지 확인하세요"
         ) from failure
-    if status != 200:
-        error = answer.get("error", {}) if isinstance(answer, dict) else {}
-        raise Stop(
-            f"플랫폼이 거절했습니다 ({status}): [{error.get('code', '?')}] "
-            f"{error.get('message', answer)}"
+
+
+def _refused(who: str, status: int, answer: Any) -> None:
+    error = answer.get("error", {}) if isinstance(answer, dict) else {}
+    raise Stop(
+        f"{who}이 거절했습니다 ({status}): [{error.get('code', '?')}] "
+        f"{error.get('message', answer)}"
+    )
+
+
+def _wait_job(server: str, token: str, job: Any, *, who: str = "플랫폼") -> dict[str, Any]:
+    """작업이 끝날 때까지 본다. 실패 · 취소면 그 이유로 멈춘다 — 「끝났다」 로 얼버무리지
+    않는다."""
+    if not isinstance(job, dict) or not job.get("id"):
+        raise Stop(f"{who}이 작업을 돌려주지 않았습니다: {job!r}")
+    headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
+    url = f"{server.rstrip('/')}/api/jobs/{job['id']}"
+    shown = ""
+    queued_for = 0.0
+    while True:
+        status, current = _send(server, "GET", url, headers, None, who=who)
+        if status != 200:
+            _refused(who, status, current)
+        if not isinstance(current, dict):
+            raise Stop(f"{who} 응답을 읽을 수 없습니다: {current!r}")
+        state = str(current.get("status"))
+        progress = current.get("progress") or {}
+        line = (
+            f"{progress.get('stage', '')} {progress.get('done', 0)}/{progress.get('total', 0)}"
         )
-    if not isinstance(answer, dict):
-        raise Stop(f"플랫폼 응답을 읽을 수 없습니다: {answer!r}")
-    return answer
+        if line != shown and state == "running":
+            print(f"  … {line}", file=sys.stderr)
+            shown = line
+        if state == "done":
+            return current
+        if state in ("failed", "cancelled"):
+            raise Stop(
+                f"{who}의 작업이 {'실패했습니다' if state == 'failed' else '취소됐습니다'}: "
+                f"{current.get('error') or ''}"
+            )
+        queued_for = queued_for + POLL_SECONDS if state == "queued" else 0.0
+        if queued_for >= QUEUED_LIMIT_SECONDS:
+            raise Stop(
+                f"{who}의 작업(<{job['id']}>)을 {int(queued_for)}초 동안 아무도 집어 가지 "
+                "않았습니다 — 작업 워커가 꺼져 있는 것 같습니다. 운영자에게 "
+                "'systemctl status <slug>-worker' 를 확인해 달라고 하세요. "
+                "묶음은 서버에 남아 있으니 워커가 살아나면 그대로 이어집니다."
+            )
+        WAIT(POLL_SECONDS)
 
 
 def _get_json(server: str, token: str, path: str) -> Any:
     headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
-    url = f"{server.rstrip('/')}{path}"
-    try:
-        status, answer = SEND("GET", url, headers, None)
-    except (urllib.error.URLError, OSError) as failure:
-        reason = getattr(failure, "reason", failure)
-        raise Stop(
-            f"허브에 닿지 않습니다: {server} ({reason}) — "
-            "주소(SP_HUB_SERVER)와 서버를 확인하세요"
-        ) from failure
+    status, answer = _send(
+        server, "GET", f"{server.rstrip('/')}{path}", headers, None, who="허브"
+    )
     if status != 200:
-        error = answer.get("error", {}) if isinstance(answer, dict) else {}
-        raise Stop(
-            f"허브가 거절했습니다 ({status}): [{error.get('code', '?')}] "
-            f"{error.get('message', answer)}"
-        )
+        _refused("허브", status, answer)
     return answer
+
+
+def _export_bundle(hub: str, hub_token: str, group: str) -> Any:
+    """허브의 내보내기도 작업이다 — 넣고, 기다리고, 결과 파일을 받는다."""
+    headers = {
+        "Authorization": f"Bearer {hub_token}",
+        "Content-Type": "application/json",
+        "X-Client": CLIENT,
+    }
+    raw = json.dumps({"group": group}, ensure_ascii=False).encode("utf-8")
+    status, answer = _send(
+        hub, "POST", f"{hub.rstrip('/')}/api/bundles/export", headers, raw, who="허브"
+    )
+    if status != 202:
+        _refused("허브", status, answer)
+    job = _wait_job(hub, hub_token, answer, who="허브")
+    return _get_json(hub, hub_token, f"/api/jobs/{job['id']}/download")
 
 
 def fetch_keys(server: str, token: str, type_slug: str) -> set[str]:
@@ -526,8 +603,7 @@ def cmd_pull(path: Path, *, hub: str, hub_token: str, group: str, source: str = 
     """
     if not group.strip():
         raise Stop("받을 사이드바 묶음(--group)이 필요합니다 — PLM 기준정보면 plm")
-    query = urllib.parse.urlencode({"group": group.strip()})
-    body = _get_json(hub, hub_token, f"/api/bundles/export?{query}")
+    body = _export_bundle(hub, hub_token, group.strip())
     if not isinstance(body, dict) or body.get("format") != FORMAT:
         raise Stop(f"허브의 응답이 묶음이 아닙니다: {str(body)[:200]}")
     cmd_init(path, title=f"허브에서 받기 — {group}")

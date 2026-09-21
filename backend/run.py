@@ -72,6 +72,28 @@ def _start_mcp(api_port: int, mcp_port: int) -> subprocess.Popen[bytes] | None:
     return child
 
 
+def _start_worker() -> subprocess.Popen[bytes] | None:
+    """개발용 작업 워커를 자식으로. **없으면 일괄 입력가 영영 「대기」 다** — 그리고
+    그 사실은 화면의 「워커가 살아 있지 않습니다」 로만 드러난다. `WORKER_DEV=0` 이면 안
+    띄운다."""
+    if os.environ.get("WORKER_DEV") == "0":
+        return None
+    child = subprocess.Popen(
+        [sys.executable, "-m", "app.worker"], cwd=Path(__file__).resolve().parent
+    )
+    print("작업 워커: 일괄 입력를 뒤에서 돌립니다 (python -m app.worker)")
+    return child
+
+
+def _stop(child: subprocess.Popen[bytes] | None) -> None:
+    if child is not None and child.poll() is None:
+        child.terminate()
+        try:
+            child.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            child.kill()
+
+
 def _answering(host: str, port: int) -> bool:
     """그 포트에 이미 응답하는 것이 있나.
 
@@ -105,15 +127,12 @@ def main() -> None:
 
     if development:
         mcp = _start_mcp(port, settings.port + 2)
+        worker = _start_worker()
         try:
             uvicorn.run("app.main:app", host=settings.host, port=port, reload=True)
         finally:
-            if mcp is not None and mcp.poll() is None:
-                mcp.terminate()
-                try:
-                    mcp.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    mcp.kill()
+            _stop(mcp)
+            _stop(worker)
     else:
         # **앱을 문자열로 넘긴다.** 다중 워커는 uvicorn 이 프로세스를 새로 띄워
         # 앱을 다시 import 하므로, 객체를 넘기면 그 프로세스가 그것을 못 만든다.

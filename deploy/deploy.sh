@@ -142,6 +142,11 @@ SYNC_SERVICE_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.service"
 SYNC_TIMER_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.timer"
 SYNC_ENABLED="${SYNC_ENABLED:-1}"                      # 0 으로 두면 타이머 안 설치
 
+# 작업 워커 — 파일 가져오기처럼 오래 걸리는 일을 요청 밖에서 돌린다. 앱과 같은 SIF.
+# **없으면 파일 가져오기가 영영 「대기」 다.** 두 서버에 하나씩 뜬다(docs/작업-워커-설계.md).
+WORKER_SERVICE_NAME="${APP_SLUG}-worker"
+WORKER_SERVICE_UNIT="/etc/systemd/system/${WORKER_SERVICE_NAME}.service"
+
 # ───────────────────────── MCP 서버 (Claude 연동, 선택) ─────────────────────────
 # 별도 venv + 별도 systemd 유닛. 백엔드 SIF 와 의존성이 충돌해 컨테이너에 못 넣는다.
 MCP_SERVICE_NAME="${APP_SLUG}-mcp"
@@ -454,6 +459,18 @@ setup_mcp() {
     info "MCP 서버: http://$MCP_HOST:$MCP_PORT/mcp  → 백엔드 $MCP_API_BASE"
 }
 
+# ── 작업 워커 — 같은 SIF 재사용. **치명적이다**: 없으면 파일 가져오기가 안 돈다. ──
+setup_worker() {
+    [[ -f "$HERE/worker.service.template" ]] || err "worker.service.template 없음 — 번들이 깨졌습니다"
+    info "작업 워커 렌더 → $WORKER_SERVICE_UNIT"
+    render_unit_paths "$HERE/worker.service.template" > "$WORKER_SERVICE_UNIT"
+    chmod 644 "$WORKER_SERVICE_UNIT"
+    systemctl daemon-reload
+    systemctl enable "$WORKER_SERVICE_NAME" >/dev/null 2>&1 || true
+    systemctl restart "$WORKER_SERVICE_NAME" \
+        || warn "작업 워커 기동 실패 — 'journalctl -u $WORKER_SERVICE_NAME' 확인. 파일 가져오기가 「대기」 에 머뭅니다"
+}
+
 # ── 동기화 타이머 — 같은 SIF 재사용, 별도 venv 없음. 비치명적. ──
 setup_sync_timer() {
     [[ "$SYNC_ENABLED" == "1" ]] || { info "동기화 타이머 비활성(SYNC_ENABLED=0) — 건너뜀"; return 0; }
@@ -579,6 +596,7 @@ cmd_install() {
     systemctl restart "$SERVICE_NAME"
     health_check || true
 
+    setup_worker
     setup_mcp || warn "MCP 설정 건너뜀(비치명적)"
     setup_sync_timer || warn "동기화 타이머 건너뜀(비치명적)"
     setup_backup_timer || warn "백업 타이머 건너뜀(비치명적)"
@@ -588,6 +606,7 @@ cmd_install() {
 
 [OK] 설치 완료.
   로그   : sudo journalctl -u $SERVICE_NAME -f
+  워커   : sudo systemctl status $WORKER_SERVICE_NAME   (파일 가져오기가 여기서 돈다)
   접속   : $( [[ -n "$HA_ROLE" ]] && echo "https://$PUBLIC_HOST/$APP_SLUG/  (직접: http://$SELF_IP:$APP_PORT/)" || echo "http://<서버주소>:$APP_PORT/" )
   자료   : 첨부 $FILESTORE_HOST_DIR · 설정 $ENV_FILE · 로그 $LOG_HOST_DIR$( [[ -n "$BACKUP_HOST_DIR" ]] && echo " · 백업 $BACKUP_HOST_DIR" )
   MCP    : sudo systemctl status $MCP_SERVICE_NAME   (Claude 연동, 선택)
@@ -606,6 +625,9 @@ cmd_update() {
 
     info "$SERVICE_NAME 중지"
     systemctl stop "$SERVICE_NAME" || true
+    # 워커도 함께 — 옛 코드가 새 마이그레이션 위에서 작업을 집으면 안 된다. 하던 작업은
+    # 끝까지 기다린다(TimeoutStopSec). 못 끝낸 것은 다른 워커가 되살린다.
+    systemctl stop "$WORKER_SERVICE_NAME" 2>/dev/null || true
 
     if [[ -f "$INSTALL_DIR/app.sif" ]]; then
         # **직전 이미지를 남긴다.** 롤백은 이 파일을 되돌리는 것뿐이다.
@@ -620,6 +642,7 @@ cmd_update() {
     systemctl start "$SERVICE_NAME"
     health_check || true
 
+    setup_worker
     # MCP 도 함께 갱신(소스 교체 + 유닛 재렌더 + 재기동). 비치명적.
     setup_mcp || warn "MCP 설정 건너뜀(비치명적)"
     setup_sync_timer || warn "동기화 타이머 건너뜀(비치명적)"
@@ -632,9 +655,9 @@ cmd_update() {
 
   **파일만 되돌아간다 — 마이그레이션은 취소되지 않는다.**
   롤백:
-    sudo systemctl stop $SERVICE_NAME
+    sudo systemctl stop $SERVICE_NAME $WORKER_SERVICE_NAME
     sudo mv $INSTALL_DIR/app.sif.prev $INSTALL_DIR/app.sif
-    sudo systemctl start $SERVICE_NAME
+    sudo systemctl start $SERVICE_NAME $WORKER_SERVICE_NAME
 MSG
 }
 
@@ -679,6 +702,13 @@ cmd_status() {
     echo
     echo "== /api/health =="
     health_check || true
+    echo
+    echo "== 작업 워커 ($WORKER_SERVICE_NAME) =="
+    if [[ -f "$WORKER_SERVICE_UNIT" ]]; then
+        systemctl --no-pager --lines=3 status "$WORKER_SERVICE_NAME" || true
+    else
+        echo "  없음 — 파일 가져오기가 「대기」 에 머뭅니다. sudo ./deploy.sh update"
+    fi
     if [[ -f "$MCP_SERVICE_UNIT" ]]; then
         echo
         echo "== MCP ($MCP_SERVICE_NAME · http://$MCP_HOST:$MCP_PORT/mcp) =="
@@ -848,7 +878,7 @@ cmd_remove() {
     cat <<MSG
 
   ⚠ 인스턴스 삭제 — $APP_NAME ($APP_SLUG). 다음이 **전부 사라집니다**:
-      유닛     : $SERVICE_NAME · $MCP_SERVICE_NAME · $SYNC_SERVICE_NAME.timer · $BACKUP_SERVICE_NAME.timer
+      유닛     : $SERVICE_NAME · $WORKER_SERVICE_NAME · $MCP_SERVICE_NAME · $SYNC_SERVICE_NAME.timer · $BACKUP_SERVICE_NAME.timer
       DB       : $DB_NAME 과 역할 $DB_USER (이 서버의 PostgreSQL 이 주일 때)
       설치 폴더: $INSTALL_DIR (SIF · .env · 로그$( [[ -z "$DATA_DIR" ]] && echo ' · 첨부' ))
       기록     : $INSTANCES_DIR/$APP_SLUG.conf
@@ -859,7 +889,7 @@ MSG
     [[ "$confirm" == "$APP_SLUG" ]] || err "취소했습니다. 아무것도 바뀌지 않았습니다."
 
     local unit
-    for unit in "$SERVICE_NAME.service" "$MCP_SERVICE_NAME.service" "$SYNC_SERVICE_NAME.timer" \
+    for unit in "$SERVICE_NAME.service" "$WORKER_SERVICE_NAME.service" "$MCP_SERVICE_NAME.service" "$SYNC_SERVICE_NAME.timer" \
                 "$SYNC_SERVICE_NAME.service" "$BACKUP_SERVICE_NAME.timer" "$BACKUP_SERVICE_NAME.service"; do
         systemctl disable --now "$unit" >/dev/null 2>&1 || true
         rm -f "/etc/systemd/system/$unit"
@@ -890,9 +920,14 @@ cmd_render() {
     mkdir -p "$ETC/etc/systemd/system"
     # 설정 파일도 그 아래에 — 실제 배포가 남길 것과 같은 모양을 본다.
     instance_save; ha_save
-    for tpl in app.service sync.service backup.service; do
+    for tpl in app.service worker.service sync.service backup.service; do
         [[ -f "$HERE/$tpl.template" ]] || continue
-        case "$tpl" in app.service) unit="$SERVICE_NAME.service" ;; sync.service) unit="$SYNC_SERVICE_NAME.service" ;; *) unit="$BACKUP_SERVICE_NAME.service" ;; esac
+        case "$tpl" in
+            app.service)    unit="$SERVICE_NAME.service" ;;
+            worker.service) unit="$WORKER_SERVICE_NAME.service" ;;
+            sync.service)   unit="$SYNC_SERVICE_NAME.service" ;;
+            *)              unit="$BACKUP_SERVICE_NAME.service" ;;
+        esac
         render_unit_paths "$HERE/$tpl.template" > "$ETC/etc/systemd/system/$unit"
     done
     render_lb

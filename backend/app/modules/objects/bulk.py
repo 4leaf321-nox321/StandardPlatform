@@ -28,6 +28,7 @@ from __future__ import annotations
 import csv
 import io
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -77,6 +78,18 @@ FIXED_COLUMNS = (
 #: 한 파일의 상한. 넘으면 나눠 올린다 — 한 트랜잭션이 너무 커지면 실패했을 때
 #: 되돌리는 시간도 그만큼 길어진다.
 MAX_ROWS = 5000
+"""요청 경로의 행 상한. 워커 경로(`jobs`)는 `max_rows` 로 더 크게 넘긴다 — 이 수는
+요청 시간 때문이지 트랜잭션 크기 때문이 아니다."""
+
+#: (단계, 처리한 수, 전체) — 워커가 진행률을 표에 쓴다. 없으면 조용히.
+Progress = Callable[[str, int, int], None] | None
+PROGRESS_EVERY = 200
+
+
+def _tick(on_progress: Progress, stage: str, done: int, total: int) -> None:
+    if on_progress is not None and (done % PROGRESS_EVERY == 0 or done == total):
+        on_progress(stage, done, total)
+
 
 TRUE_WORDS = {"true", "1", "y", "yes", "예", "참", "o"}
 FALSE_WORDS = {"false", "0", "n", "no", "아니오", "거짓", "x"}
@@ -331,12 +344,14 @@ def plan_objects(
     *,
     owner_workspace_id: uuid.UUID | None,
     source: str = "",
+    max_rows: int = MAX_ROWS,
+    on_progress: Progress = None,
 ) -> Plan:
     """행마다 무엇이 될지 — **아무것도 안 바꾼다.** `source` 는 허브에서 받는 묶음만 적는다."""
     plan = Plan()
-    if len(rows) > MAX_ROWS:
+    if len(rows) > max_rows:
         plan.errors.append(
-            f"한 번에 {MAX_ROWS}행까지 넣습니다 (넣은 행 {len(rows)}). 나눠 올리세요."
+            f"한 번에 {max_rows}행까지 넣습니다 (넣은 행 {len(rows)}). 나눠 올리세요."
         )
         return plan
     if not object_type.is_active or object_type.kind_class == "system":
@@ -364,6 +379,7 @@ def plan_objects(
     seen_ids: dict[str, int] = {}
 
     for index, row in enumerate(rows, start=1):
+        _tick(on_progress, "계획", index, len(rows))
         try:
             plan.rows.append(
                 _plan_row(
@@ -601,17 +617,31 @@ def apply_objects(
     *,
     owner_workspace_id: uuid.UUID | None,
     source: str = "",
+    max_rows: int = MAX_ROWS,
+    on_progress: Progress = None,
+    before_apply: Callable[[Plan], None] | None = None,
 ) -> Plan:
     """계획을 다시 세우고, 오류가 없을 때만 **한 트랜잭션으로** 넣는다.
 
     계획을 다시 세우는 이유: 미리 보기와 적용 사이에 다른 사람이 무엇을 바꿨을 수
-    있다. 그때 옛 계획대로 넣으면 그 사람의 변경이 조용히 덮인다.
+    있다. 그때 옛 계획대로 넣으면 그 사람의 변경이 조용히 덮인다. `before_apply` 는
+    그 새 계획을 **쓰기 전에** 보는 자리다 — 워커가 미리 본 지문과 견준다. 끝에서
+    커밋하므로, 쓰고 난 뒤에 견주면 늦다.
     """
     plan = plan_objects(
-        db, user, object_type, rows, owner_workspace_id=owner_workspace_id, source=source
+        db,
+        user,
+        object_type,
+        rows,
+        owner_workspace_id=owner_workspace_id,
+        source=source,
+        max_rows=max_rows,
+        on_progress=on_progress,
     )
     if not plan.ok:
         return plan
+    if before_apply is not None:
+        before_apply(plan)
 
     defs = [d for d in properties_of(db, object_type.id) if d.data_type != "file"]
     by_key = {d.key: d for d in defs}
@@ -619,6 +649,7 @@ def apply_objects(
     refs = _Refs(db, user)
 
     for row_plan, row in zip(plan.rows, rows, strict=True):
+        _tick(on_progress, "적용", row_plan.row, len(rows))
         if row_plan.action == "unchanged":
             continue
         patch = _patch_of(row, mapping, by_key, refs)
@@ -902,15 +933,17 @@ def plan_relations(
     rows: list[dict[str, Any]],
     *,
     source: str = "",
+    max_rows: int = MAX_ROWS,
+    on_progress: Progress = None,
 ) -> Plan:
     """관계 파일 — `src, relation, dst, evidence_note`. 출발점은 이 타입이어야 한다.
 
     이미 이어진 것은 `unchanged`. 그래서 같은 파일을 두 번 올려도 선이 두 겹이 안 된다.
     """
     plan = Plan()
-    if len(rows) > MAX_ROWS:
+    if len(rows) > max_rows:
         plan.errors.append(
-            f"한 번에 {MAX_ROWS}행까지 넣습니다 (넣은 행 {len(rows)}). 나눠 올리세요."
+            f"한 번에 {max_rows}행까지 넣습니다 (넣은 행 {len(rows)}). 나눠 올리세요."
         )
         return plan
     headers = {key for row in rows for key in row} - {""}
@@ -925,6 +958,7 @@ def plan_relations(
     kinds = {row.slug: row for row in db.scalars(select(RelationType))}
     seen: set[tuple[uuid.UUID, str, uuid.UUID]] = set()
     for index, row in enumerate(rows, start=1):
+        _tick(on_progress, "계획", index, len(rows))
         try:
             plan.rows.append(
                 _plan_relation(db, user, object_type, kinds, row, index, seen, source)
@@ -1002,13 +1036,21 @@ def apply_relations(
     rows: list[dict[str, Any]],
     *,
     source: str = "",
+    max_rows: int = MAX_ROWS,
+    on_progress: Progress = None,
+    before_apply: Callable[[Plan], None] | None = None,
 ) -> Plan:
-    plan = plan_relations(db, user, object_type, rows, source=source)
+    plan = plan_relations(
+        db, user, object_type, rows, source=source, max_rows=max_rows, on_progress=on_progress
+    )
     if not plan.ok:
         return plan
+    if before_apply is not None:
+        before_apply(plan)
     kinds = {row.slug: row for row in db.scalars(select(RelationType))}
     by_label = {row.label: row for row in kinds.values()}
     for row_plan, row in zip(plan.rows, rows, strict=True):
+        _tick(on_progress, "적용", row_plan.row, len(rows))
         if row_plan.action != "create":
             continue
         slug = str(row.get("relation") or "").strip()

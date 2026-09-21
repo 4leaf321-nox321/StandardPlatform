@@ -6,7 +6,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, export_file
 from tests.api.test_ontology import _make_object, _make_property, _make_type
 
 
@@ -132,9 +132,7 @@ def test_없는_칸과_안_맞는_연산은_무엇이_틀렸는지_말한다(
 
 def test_내보내기도_같은_조건을_쓴다(client: TestClient, admin: Signed) -> None:
     part, _, _ = _world(client, admin)
-    exported = client.get(
-        f"/api/objects/{part}/export", params={"f.weight.gte": "10"}, headers=admin.headers
-    )
+    exported = export_file(client, admin, f"{part}/export", {"f.weight.gte": "10"})
     lines = exported.text.lstrip("﻿").splitlines()
     assert len(lines) == 3 and "볼트" not in exported.text
 

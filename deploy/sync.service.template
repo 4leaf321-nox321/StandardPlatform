@@ -1,5 +1,5 @@
 [Unit]
-Description=@@APP_NAME@@ 데이터 소스 동기화 (차례가 된 것)
+Description=@@APP_NAME@@ 데이터 소스 동기화 (차례가 된 것을 작업으로 넣는다)
 After=@@APP_SLUG@@.service
 # 로컬 PostgreSQL 에 묶지 않는다 — 이중화에서는 DB 가 상대 서버에 있을 수 있다(app.service 참고).
 
@@ -11,6 +11,7 @@ WorkingDirectory=@@INSTALL_DIR@@
 
 # 웹 서비스와 **같은 SIF·같은 .env** 로 돈다 — 다른 파이썬으로 돌리면 그 둘이 다른
 # 스키마를 볼 수 있다. 두 서버가 같은 시각에 돌아도 DB 의 자문 잠금이 한 대만 통과시킨다.
+# 여기서는 작업(jobs)만 넣는다 — 돌리는 것은 @@APP_SLUG@@-worker 다.
 ExecStart=/usr/bin/apptainer exec \
     --bind @@ENV_FILE@@:/opt/app/backend/.env:ro \
     --bind @@FILESTORE_DIR@@:/data/filestore \

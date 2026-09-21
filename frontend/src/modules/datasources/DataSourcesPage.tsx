@@ -1,7 +1,7 @@
 /**
  * 데이터 소스 — **바깥 시스템(OData)에서 읽어 온톨로지를 채운다.**
  *
- * 규칙은 파일 가져오기와 같다: 계획 먼저, 전부 아니면 무, 같은 객체면 고침, 빈 칸은 안 건드림.
+ * 규칙은 일괄 입력과 같다: 계획 먼저, 전부 아니면 무, 같은 객체면 고침, 빈 칸은 안 건드림.
  * 다른 것은 행이 어디서 오는가(OData)와 같은 객체를 어떻게 다시 찾는가(바깥 식별자를
  * 별칭으로 남김)뿐이다. 「미리 보기」 로 칸 대응을 맞추고, 「동기화」 는 계획을 보여 준 뒤
  * 적용한다.
@@ -82,7 +82,7 @@ export default function DataSourcesPage() {
     <div className="mx-auto max-w-5xl space-y-6">
       <PageHeader
         title="데이터 소스"
-        description="바깥 시스템(OData)에서 읽어 온톨로지를 채웁니다. 규칙은 파일 가져오기와 같습니다 — 계획 먼저, 전부 아니면 무."
+        description="바깥 시스템(OData)에서 읽어 온톨로지를 채웁니다. 규칙은 일괄 입력과 같습니다 — 계획 먼저, 전부 아니면 무."
         actions={
           <Button size="sm" onClick={() => setEditing('new')}>
             <Plus className="mr-1 size-4" />
@@ -280,7 +280,7 @@ const COUNT_LABEL: Record<string, string> = {
   deprecated: '사용 중지',
 }
 
-/** 계획을 보고 적용한다 — 파일 가져오기의 계획 창과 같은 무늬. */
+/** 계획을 보고 적용한다 — 일괄 입력의 계획 창과 같은 무늬. */
 function SyncDialog({
   source,
   result: initial,

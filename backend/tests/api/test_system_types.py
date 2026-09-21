@@ -19,7 +19,7 @@ from app.modules.ontology import promotion
 from app.modules.ontology.models import ObjectType
 from app.modules.workspaces.models import Workspace
 from app.shared import system_sources
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, export_file
 from tests.api.test_ontology import (
     _link,
     _make_object,
@@ -118,7 +118,7 @@ def test_투영에는_파일로_넣지도_내보내지도_않는다(client: Test
     assert (
         client.get(f"/api/objects/{dept}/template", headers=admin.headers).status_code == 403
     )
-    assert client.get(f"/api/objects/{dept}/export", headers=admin.headers).status_code == 403
+    assert client.post(f"/api/objects/{dept}/export", headers=admin.headers).status_code == 403
     planned = client.post(
         f"/api/objects/{dept}/import-rows",
         json={"rows": [{"label": "x"}], "apply": False},
@@ -372,10 +372,8 @@ def test_관계_파일의_도착점도_부서_slug_다(
     ).json()
     assert [r["action"] for r in again["rows"]] == ["unchanged"]
 
-    exported = client.get(
-        f"/api/objects/{w['part']}/relations/export",
-        params={"format": "json"},
-        headers=admin.headers,
+    exported = export_file(
+        client, admin, f"{w['part']}/relations/export", {"format": "json"}
     ).json()
     assert exported["rows"] == rows
 

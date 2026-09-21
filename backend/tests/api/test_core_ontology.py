@@ -15,7 +15,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, bundle_import
 
 REPO = Path(__file__).resolve().parents[3]
 PLM = REPO / "pipeline" / "core" / "plm-core.json"
@@ -38,9 +38,7 @@ def _both() -> dict[str, Any]:
 
 def test_코어가_오류_없이_들어간다(client: TestClient, admin: Signed) -> None:
     """미리 보기로만 본다 — 시험 DB 에 코어 slug 를 남기지 않는다."""
-    got = client.post("/api/bundles/import", json={"ontology": _both()}, headers=admin.headers)
-    assert got.status_code == 200, got.text
-    body = got.json()
+    body = bundle_import(client, admin, {"ontology": _both()})
     problems = {"ontology": (body["ontology"] or {}).get("errors"), "bundle": body["errors"]}
     assert body["ok"] is True, problems
     changed = {change["slug"] for change in body["ontology"]["changes"]}
@@ -50,10 +48,8 @@ def test_코어가_오류_없이_들어간다(client: TestClient, admin: Signed)
 
 def test_PLM_코어만으로도_들어간다(client: TestClient, admin: Signed) -> None:
     """허브는 업무 공통 없이 PLM 코어만 갖는다."""
-    got = client.post(
-        "/api/bundles/import", json={"ontology": _load(PLM)}, headers=admin.headers
-    )
-    assert got.status_code == 200 and got.json()["ok"] is True, got.text
+    got = bundle_import(client, admin, {"ontology": _load(PLM)})
+    assert got["ok"] is True, got
 
 
 def test_규약이_말하는_코어와_파일이_같다() -> None:

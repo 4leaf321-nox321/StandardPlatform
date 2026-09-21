@@ -1,15 +1,23 @@
-"""웹훅 보내기 — **기록을 먼저 남기고, 보내는 것은 스레드가.**
+"""웹훅 보내기 — **기록을 먼저 남기고, 보내는 것은 워커가.**
 
 `shared/events.py` 가 커밋 뒤에 `on_events` 를 부른다. 여기서는 (1) 어느 웹훅이 이
 이벤트를 원하는지 골라 (2) 보낼 기록(`webhook_deliveries`, pending)을 **먼저 표에 남기고**
-(3) 보내는 스레드를 깨운다. 표에 먼저 남기는 이유: 앱이 그 순간 죽어도 다음 기동에
-pending 이 남아 있고, 다시 보낼 수 있다. 세 번 실패하면 `failed` 로 두고 사람이 화면에서
-다시 보낸다.
+(3) 보내는 **작업**(`webhook_dispatch`)을 넣는다. 표에 먼저 남기는 이유: 앱이 그 순간
+죽어도 다음 기동에 pending 이 남아 있고, 다시 보낼 수 있다. 세 번 실패하면 `failed` 로 두고
+사람이 화면에서 다시 보낸다.
 
 **요청을 처리하는 스레드에서 밖으로 HTTP 를 쏘지 않는다.** 받는 쪽이 느리면 저장이 느려
 보이고, 그 이유는 화면 어디에도 안 뜬다.
 
-시험은 `dispatcher.sync = True` 와 `dispatcher.transport` 로 스레드 없이·소켓 없이 본다.
+## 왜 스레드에서 워커로 옮겼나 (2026-09-21)
+
+전에는 앱 프로세스 안의 데몬 스레드가 보내고 `threading.Timer` 로 재시도했다. 새는 것은
+없었지만 셋이 아쉬웠다: ① 앱을 재시작하면 보내던 것과 재시도 타이머가 함께 사라진다
+(다음 이벤트가 올 때까지 밀린 것이 안 나간다) ② uvicorn 워커 넷이 각자 스레드를 띄우고
+자문 잠금으로 셋이 물러난다 ③ 「지금 뭐가 도는가」 가 웹훅 화면에만 있다. 작업으로 옮기면
+셋 다 풀린다 — 재시도는 표에 남고, 집는 것은 워커 하나고, 「작업」 화면에 함께 선다.
+
+시험은 `dispatcher.sync = True` 와 `dispatcher.transport` 로 워커 없이·소켓 없이 본다.
 """
 
 from __future__ import annotations
@@ -19,7 +27,6 @@ import hashlib
 import hmac
 import json
 import logging
-import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -31,6 +38,7 @@ from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.modules.accounts.models import User
+from app.modules.jobs import services as job_services
 from app.modules.notifications import services as notifications
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology.models import ObjectType
@@ -39,9 +47,13 @@ from app.shared import events, extensions, singleton
 
 logger = logging.getLogger(__name__)
 
+#: 작업 종류 — 워커가 이 이름으로 집는다.
+DISPATCH_KIND = "webhook_dispatch"
 MAX_ATTEMPTS = 3
 TIMEOUT_SECONDS = 10.0
 #: 실패한 뒤 다시 보내기까지. 받는 쪽이 잠깐 죽은 것이 대부분이라 길게 기다린다.
+#: **워커가 이 간격으로 남은 pending 을 보고 작업을 다시 넣는다** — 전에는 프로세스 안의
+#: 타이머였고, 그래서 재시작하면 사라졌다.
 RETRY_AFTER_SECONDS = 60.0
 #: 화면에 보여 주는 최근 기록 수.
 RECENT = 50
@@ -127,6 +139,33 @@ def on_events(staged: list[events.ChangeEvent]) -> None:
         dispatcher.kick()
 
 
+def pending_count(db: Session) -> int:
+    """아직 보내야 할 것 — 워커가 이것을 보고 작업을 다시 넣는다."""
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(WebhookDelivery)
+            .where(
+                WebhookDelivery.status == "pending",
+                WebhookDelivery.attempts < MAX_ATTEMPTS,
+            )
+        )
+        or 0
+    )
+
+
+def enqueue_dispatch(db: Session) -> None:
+    """보내는 작업을 넣는다 — **이미 기다리는 것이 있으면 안 넣는다.**
+
+    이벤트 하나에 작업 하나씩 넣으면 백 건을 고친 날 작업이 백 줄이 되고, 그 백 줄은 전부
+    같은 일(보낼 것 전부 보내기)을 한다. 한 줄이면 족하다.
+    """
+    if job_services.pending_for(db, DISPATCH_KIND) is not None:
+        return
+    job_services.enqueue(db, kind=DISPATCH_KIND, params={}, user=None, workspace_id=None)
+    db.commit()
+
+
 def sign(secret: str, body: bytes) -> str:
     return "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
 
@@ -139,42 +178,23 @@ class SendResult:
 
 
 class Dispatcher:
-    """pending 을 보낸다 — 한 번에 한 스레드만. 시험에서는 `sync` 로 그 자리에서."""
+    """pending 을 보낸다. 부르는 것은 워커(`jobs/kinds.py` 의 `webhook_dispatch`)이고,
+    시험에서는 `sync` 로 그 자리에서."""
 
     def __init__(self) -> None:
         self.sync = False
         self.transport: httpx.BaseTransport | None = None
-        self._lock = threading.Lock()
-        self._running = False
-        self._retry_timer: threading.Timer | None = None
 
     def kick(self) -> None:
+        """보낼 것이 생겼다 — **작업을 넣기만 한다.** 보내는 것은 워커다.
+
+        시험(`sync`)에서는 그 자리에서 보낸다 — 워커 프로세스가 없기 때문이다.
+        """
         if self.sync:
             self.deliver_pending()
             return
-        with self._lock:
-            if self._running:
-                return
-            self._running = True
-        thread = threading.Thread(target=self._run, name="webhooks", daemon=True)
-        thread.start()
-
-    def _run(self) -> None:
-        try:
-            left = self.deliver_pending()
-        finally:
-            with self._lock:
-                self._running = False
-        if left:
-            self._schedule_retry()
-
-    def _schedule_retry(self) -> None:
-        with self._lock:
-            if self._retry_timer is not None and self._retry_timer.is_alive():
-                return
-            self._retry_timer = threading.Timer(RETRY_AFTER_SECONDS, self.kick)
-            self._retry_timer.daemon = True
-            self._retry_timer.start()
+        with SessionLocal() as db:
+            enqueue_dispatch(db)
 
     def send(self, hook: Webhook, delivery: WebhookDelivery) -> SendResult:
         body = json.dumps(
@@ -203,9 +223,9 @@ class Dispatcher:
         """pending 을 전부 한 번씩. **아직 남은(실패해서 다시 보낼) 수**를 돌려준다."""
         left = 0
         gave_up: set[uuid.UUID] = set()
-        # **두 서버가 같은 pending 을 집지 않게** — 발송은 한 연결만 한다. 못 잡은 쪽은
-        # 물러나되, 남은 것이 있다고 보고해 제 쪽 재시도 타이머는 유지한다(잡은 쪽이
-        # 죽어도 누군가는 다시 온다).
+        # **두 서버가 같은 pending 을 집지 않게** — 발송은 한 연결만 한다. 작업이 한 줄뿐이라
+        # 워커 둘이 동시에 집는 일은 없지만, 손으로 부르는 길(시험 · sync)이 있어 잠금은
+        # 남긴다. 못 잡은 쪽은 물러나되 남은 것이 있다고 보고한다.
         with singleton.held("webhook-dispatch") as db:
             if db is None:
                 return 1

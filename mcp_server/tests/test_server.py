@@ -28,6 +28,8 @@ import server
 
 TOOLS = {
     "get_guide",
+    "whoami",
+    "search",
     "ontology_schema",
     "ontology_import",
     "objects_list",
@@ -44,11 +46,20 @@ TOOLS = {
     "object_history",
     "object_references",
     "object_rollup",
+    "object_tree",
+    "bulk_edit",
+    "bulk_edit_undo",
+    "audit_recent",
+    "relation_update",
+    "relation_remove",
     "quality_report",
     "datasources_list",
     "datasource_sync",
     "rdf_schema",
     "rdf_query",
+    "job_status",
+    "job_apply",
+    "jobs_list",
 }
 
 
@@ -135,9 +146,16 @@ def test_미리_보기가_기본이다() -> None:
     asyncio.run(server.ontology_import(_ctx("Bearer t"), {"types": []}, apply=True))
     assert seen[1].url.params["dry_run"] == "false"
 
-    seen = _serve(lambda _r: httpx.Response(200, json={"applied": False}))
-    asyncio.run(server.objects_import(_ctx("Bearer t"), "mach", rows=[{"key": "M-1"}]))
-    assert json.loads(seen[0].content)["apply"] is False
+    # 여러 행 넣기는 **작업**이다 — 계획만 세우는 작업을 만들고, 적용은 job_apply 로만.
+    seen = _serve(
+        lambda _r: httpx.Response(
+            202, json={"id": "j1", "kind": "objects_import", "status": "done"}
+        )
+    )
+    got = asyncio.run(server.objects_import(_ctx("Bearer t"), "mach", rows=[{"key": "M-1"}]))
+    assert seen[0].url.path == "/api/jobs"
+    assert b'name="kind"' in seen[0].content and b"objects_import" in seen[0].content
+    assert got["job_id"] == "j1" and "job_apply" in got["next"]
 
 
 def test_조건은_화면과_같은_모양으로_건너간다() -> None:

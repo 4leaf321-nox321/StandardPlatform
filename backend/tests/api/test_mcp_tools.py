@@ -100,9 +100,22 @@ def bot(client: TestClient, admin: Signed) -> Iterator[Bot]:
     assert made.status_code == 201, made.text
     # 도구의 httpx 를 이 프로세스 안의 앱으로 돌린다. 진짜 HTTP 스택을 타되 소켓은 없다.
     server._TRANSPORT = httpx.ASGITransport(app=fastapi_app)
+    # 여러 행 넣기 · 묶음은 **작업**이라 도구가 `GET /api/jobs/{id}` 를 되풀이한다 — 시험에는
+    # 워커 프로세스가 없으니 물을 때마다 한 바퀴 돌린다(그것이 곧 워커다).
+    from app.modules.jobs import services as job_services
+
+    original_get = server._get
+
+    async def get_with_worker(ctx: Any, path: str, params: Any = None) -> Any:
+        if path.startswith("/api/jobs/") and not path.endswith("/workers"):
+            job_services.process_one("test-worker")
+        return await original_get(ctx, path, params)
+
+    server._get = get_with_worker
     try:
         yield Bot(made.json()["token"])
     finally:
+        server._get = original_get
         server._TRANSPORT = None
 
 
@@ -301,21 +314,30 @@ def test_여러_행은_계획이_먼저고_전부_아니면_무다(bot: Bot) -> 
         {"key": "M-001", "label": "1호기", "power": 10},
         {"key": "M-002", "label": "2호기", "power": 9000},
     ]
-    plan = bot.call(server.objects_import, slug, rows)
+    # 작업이 된다 — 도구는 끝나기를 기다렸다가 계획을 돌려준다. 아직 아무것도 안 들어갔다.
+    seen = bot.call(server.objects_import, slug, rows)
+    assert seen["status"] == "done" and "job_apply" not in seen["next"]
+    plan = seen["result"]
     assert plan["applied"] is False
     assert [r["action"] for r in plan["rows"]] == ["create", "error"]
 
-    refused = bot.call(server.objects_import, slug, rows, apply=True)
-    assert refused["applied"] is False
+    # 오류가 있는 계획은 적용 작업 자체가 안 만들어진다.
+    with pytest.raises(ToolError, match="JOBS-0011"):
+        bot.call(server.job_apply, seen["job_id"])
     assert bot.call(server.objects_list, slug)["items"] == []
 
     rows[1]["power"] = 20
-    done = bot.call(server.objects_import, slug, rows, apply=True)
-    assert done["applied"] is True
+    planned = bot.call(server.objects_import, slug, rows)
+    assert "job_apply" in planned["next"]
+    done = bot.call(server.job_apply, planned["job_id"])
+    assert done["status"] == "done" and done["result"]["applied"] is True
     assert {o["key"] for o in bot.call(server.objects_list, slug)["items"]} == {
         "M-001",
         "M-002",
     }
+    assert bot.call(server.job_status, planned["job_id"])["status"] == "done"
+    listed = bot.call(server.jobs_list)
+    assert any(one["job_id"] == done["job_id"] for one in listed["items"])
 
 
 def test_읽기_토큰으로는_못_쓴다(client: TestClient, admin: Signed) -> None:
@@ -446,8 +468,10 @@ def test_묶음을_도구로_미리_본다(bot: Bot) -> None:
         "objects": [{"type_slug": slug, "rows": [{"label": "첫 메모"}]}],
     }
     seen = bot.call(server.bundle_import, bundle)
-    assert seen["ok"] is True and seen["applied"] is False
-    assert seen["counts"]["objects_create"] == 1
+    assert seen["status"] == "done", seen
+    result = seen["result"]
+    assert result["ok"] is True and result["applied"] is False
+    assert result["counts"]["objects_create"] == 1
     with pytest.raises(ToolError):
         bot.call(server.objects_list, slug)
 
@@ -515,3 +539,112 @@ def test_빈_목록에는_이유가_붙는다(bot: Bot) -> None:
 
     # 있으면 진단은 안 붙는다 — 덤이 답을 가리지 않는다.
     assert "diagnosis" not in bot.call(server.objects_list, slug)
+
+
+def test_타입을_모르면_search_부서를_모르면_whoami(bot: Bot) -> None:
+    """`objects_list` 도 `object_resolve` 도 타입이 필수다 — 타입을 모르는 물음의 첫 걸음이
+    없으면 모델은 스키마를 읽고 타입마다 돈다. 부서도 같다 — 짐작해 넣으면 거절되거나
+    엉뚱한 부서 것이 된다."""
+    vendor = _uniq("vendor")
+    bot.call(
+        server.ontology_import,
+        {"types": [{"slug": vendor, "label": "공급사", "key_policy": "optional"}]},
+        apply=True,
+    )
+    me = bot.call(server.whoami)
+    assert me["home_workspace_slug"] and isinstance(me["memberships"], list)
+
+    bot.call(
+        server.object_create,
+        vendor,
+        label="Ansys",
+        workspace_slug=me["home_workspace_slug"],
+    )
+    found = bot.call(server.search, "ansys")
+    assert any(t["type_slug"] == vendor and t["count"] == 1 for t in found["types"])
+    assert any(one["label"] == "Ansys" for one in found["items"])
+
+
+def test_잘못_이은_관계는_고치고_끊는다(bot: Bot) -> None:
+    """잇기만 되고 고치지도 끊지도 못하면, 틀리게 이은 것을 되돌리려고 사람이 화면으로
+    가야 한다 — 그 사이 그 선은 「맞는 선」 으로 읽힌다."""
+    machine, site = _uniq("mach"), _uniq("site")
+    relation = _uniq("installed")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [{"slug": machine, "label": "설비"}, {"slug": site, "label": "현장"}],
+            "relation_types": [
+                {
+                    "slug": relation,
+                    "label": "설치",
+                    "src_type_slugs": [machine],
+                    "dst_type_slugs": [site],
+                }
+            ],
+        },
+        apply=True,
+    )
+    m = bot.call(server.object_create, machine, label="1호기")
+    s = bot.call(server.object_create, site, label="부산")
+    bot.call(server.relation_add, machine, m["id"], relation, s["id"], evidence_note="추정")
+    rid = bot.call(server.object_get, machine, m["id"])["related"][0]["relation_id"]
+
+    fixed = bot.call(
+        server.relation_update, machine, m["id"], rid, evidence_note="설치 대장 3쪽"
+    )
+    assert fixed["evidence_note"] == "설치 대장 3쪽"
+
+    cut = bot.call(server.relation_remove, machine, m["id"], rid)
+    assert cut["ok"] is True  # 204 를 빈 문자열로 흘리지 않는다
+    assert bot.call(server.object_get, machine, m["id"])["related"] == []
+
+
+def test_한_칸_일괄_수정은_계획_먼저고_묶음으로_되돌린다(bot: Bot) -> None:
+    part = _uniq("part")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": part,
+                    "label": "부품",
+                    "key_policy": "optional",
+                    "properties": [{"key": "grade", "label": "등급", "data_type": "text"}],
+                }
+            ]
+        },
+        apply=True,
+    )
+    ids = [
+        bot.call(server.object_create, part, label=name, properties={"grade": "A"})["id"]
+        for name in ("볼트", "너트")
+    ]
+
+    plan = bot.call(server.bulk_edit, part, ids, "properties.grade", "B")
+    assert plan["applied"] is False
+    assert {row["action"] for row in plan["rows"]} == {"change"}
+
+    done = bot.call(server.bulk_edit, part, ids, "properties.grade", "B", apply=True)
+    assert done["applied"] is True and done["batch_id"]
+    assert bot.call(server.object_get, part, ids[0])["object"]["properties"]["grade"] == "B"
+
+    back = bot.call(server.bulk_edit_undo, part, done["batch_id"], apply=True)
+    assert back["applied"] is True
+    assert bot.call(server.object_get, part, ids[0])["object"]["properties"]["grade"] == "A"
+
+
+def test_트리와_감사_기록을_도구로도_본다(bot: Bot) -> None:
+    part = _uniq("part")
+    bot.call(
+        server.ontology_import,
+        {"types": [{"slug": part, "label": "부품", "key_policy": "optional"}]},
+        apply=True,
+    )
+    # 트리 관계가 안 정해진 타입은 빈 트리 — 오류가 아니다.
+    assert bot.call(server.object_tree, part) == {"nodes": [], "orphan_count": 0}
+
+    bot.call(server.object_create, part, label="볼트")
+    recent = bot.call(server.audit_recent, action="object.create", limit=5)
+    assert recent["total"] >= 1
+    assert recent["items"][0]["action"] == "object.create"

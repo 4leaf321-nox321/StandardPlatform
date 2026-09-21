@@ -1,4 +1,4 @@
-"""동기화 — **바깥 행을 파일의 행으로 바꾸고, 나머지는 파일 가져오기가 한다.**
+"""동기화 — **바깥 행을 파일의 행으로 바꾸고, 나머지는 일괄 입력가 한다.**
 
 여기서 새로 하는 것은 셋뿐이다:
 
@@ -6,7 +6,7 @@
               (`values`)가 있으면 코드를 우리 고를 값으로(`"C" → "상용"`). 표에 없는 값은
               **오류 행**이다(`values_strict`, 기본 참) — 조용히 통과시키면 고를 값이 오염된다.
     다시 찾기 이 소스의 외부 식별자(별칭 `source:<slug>`) → 우리 식별자 → 별칭·이름. 겹치면
-              오류 행. 찾은 것은 행에 `id` 를 박아 파일 가져오기가 그 객체를 고치게 한다.
+              오류 행. 찾은 것은 행에 `id` 를 박아 일괄 입력가 그 객체를 고치게 한다.
     뒷정리    적용 뒤 외부 식별자를 별칭으로 남기고, 켜 두었으면 이번에 안 온 것을 「사용
               중지」 로.
 
@@ -27,9 +27,11 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.datasources import fetchers, odata
 from app.modules.datasources.models import DataSource, DataSourceRun
+from app.modules.datasources.schemas import RunOut, SyncOut
 from app.modules.notifications import services as notifications
 from app.modules.objects import aliases, bulk
 from app.modules.objects.models import ObjectAlias, ObjectInstance
+from app.modules.objects.schemas import ImportRowOut
 from app.modules.objects.services import properties_of
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared import audit, extensions
@@ -648,3 +650,26 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
 def stats(db: Session) -> list[extensions.StatItem]:
     total = db.scalar(select(func.count()).select_from(DataSource)) or 0
     return [extensions.StatItem(label="데이터 소스", count=int(total))]
+
+
+def sync_out(result: SyncResult) -> SyncOut:
+    """결과를 API 모양으로 — 라우터와 워커가 같은 것을 돌려준다."""
+    return SyncOut(
+        run=RunOut.model_validate(result.run),
+        applied=result.run.applied,
+        counts=dict(result.run.counts or {}),
+        rows=[
+            ImportRowOut(
+                row=one.row,
+                action=one.action,
+                label=one.label,
+                key=one.key,
+                object_id=one.object_id,
+                changes=one.changes,
+                message=one.message,
+            )
+            for one in result.plan_rows
+        ],
+        errors=list(result.run.errors or []),
+        truncated=result.truncated,
+    )

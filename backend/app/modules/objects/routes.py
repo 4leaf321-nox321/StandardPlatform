@@ -6,7 +6,6 @@
 
 from __future__ import annotations
 
-import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -19,6 +18,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.files.models import Attachment
+from app.modules.jobs import routes as jobs_routes
+from app.modules.jobs.schemas import JobOut
 from app.modules.objects import (
     aliases,
     bulk,
@@ -1115,13 +1116,6 @@ def _plan_out(plan: bulk.Plan, applied: bool) -> ImportPlanOut:
     )
 
 
-def _file_rows(upload: UploadFile) -> list[dict[str, Any]]:
-    name = upload.filename or "rows.csv"
-    if not name.lower().endswith((".csv", ".json")):
-        raise Conflict(code("OBJECTS", 48), "CSV 나 JSON 파일만 받습니다.")
-    return bulk.parse_file(name, upload.file.read())
-
-
 def _import_objects(
     db: Session,
     user: User,
@@ -1330,62 +1324,69 @@ def object_template(
     )
 
 
-@router.get("/{type_slug}/export")
+@router.post("/{type_slug}/export", response_model=JobOut, status_code=202)
 def export_objects(
     type_slug: str,
     request: Request,
     format: str = Query(default="csv", pattern="^(csv|json)$"),
-    q: str | None = Query(default=None),
-    status: str | None = Query(default=None),
-    year: int | None = Query(default=None, ge=1900, le=2999),
-    under: uuid.UUID | None = Query(default=None),
-    deep: bool = Query(default=True),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
-) -> Response:
-    """지금 거른 목록 **그대로** 파일로. 쪽 상한 없이 전부 — 목록의 상한은 화면을
-    위한 것이고, 파일은 그 상한을 넘어서기 위해 있다."""
+) -> JobOut:
+    """지금 거른 목록 **그대로** 파일로 — 작업이 된다(202). 쪽 상한 없이 전부 — 목록의 상한은
+    화면을 위한 것이고, 파일은 그 상한을 넘어서기 위해 있다. 그래서 요청 안에서 만들면 큰
+    타입에서 끊긴다. 워커가 만든 파일은 `GET /api/jobs/{id}/download`.
+
+    거르기(`q` · `status` · `year` · `under` · `p.*` · `f.*`)는 목록과 같은 쿼리 문자열로
+    온다 — 그대로 적어 두고 워커가 같은 `_filtered` 로 되돌린다.
+    """
     object_type = _type(db, type_slug)
     _not_system(object_type, "내보내지")
-    defs = properties_of(db, object_type.id)
-    stmt = _filtered(
-        db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
+    query: dict[str, list[str]] = {}
+    for key, value in request.query_params.multi_items():
+        if key != "format":
+            query.setdefault(key, []).append(value)
+    job = jobs_routes.submit(
+        db,
+        user,
+        kind="objects_export",
+        params={"type_slug": object_type.slug, "format": format, "query": query},
+        upload=None,
+        workspace_slug=None,
     )
-    rows = list(db.scalars(apply_sort(stmt, object_type)))
-    records = bulk.export_rows(db, defs, rows)
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
-    if format == "json":
-        payload = json.dumps({"rows": records}, ensure_ascii=False, indent=1)
-        return Response(
-            payload.encode("utf-8"),
-            media_type="application/json; charset=utf-8",
-            headers={
-                "Content-Disposition": f'attachment; filename="{type_slug}-{stamp}.json"'
-            },
-        )
-    body = bulk.to_csv(bulk.export_columns(defs), records)
-    return Response(
-        body,
-        media_type="text/csv; charset=utf-8",
-        headers={"Content-Disposition": f'attachment; filename="{type_slug}-{stamp}.csv"'},
-    )
+    return jobs_routes._out(db, job)
 
 
-@router.post("/{type_slug}/import", response_model=ImportPlanOut)
+@router.post("/{type_slug}/import", response_model=JobOut, status_code=202)
 def import_objects(
     type_slug: str,
     upload: UploadFile = File(alias="file"),
     workspace_slug: str | None = Form(default=None),
-    apply: bool = Form(default=False),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
-) -> ImportPlanOut:
-    """파일로 넣기 — `apply=false` 면 **계획만**. 사람이 읽고 판단한 뒤 다시 부른다."""
+) -> JobOut:
+    """파일로 넣기 — **작업이 된다**(202). 워커가 계획을 세우고, 사람이 보고,
+    `POST /api/jobs/{id}/apply` 로 적용한다. 파일은 한 번만 올린다.
+
+    요청 안에서 처리하던 때는 5,000행 상한이 있었고 계획과 적용에 같은 파일을 두 번 올려야
+    했다 — 그 둘을 없애려고 작업으로 옮겼다(`docs/작업-워커-설계.md`).
+    """
     object_type = _type(db, type_slug)
-    rows = _file_rows(upload)
-    return _import_objects(
-        db, user, object_type, rows, workspace_slug=workspace_slug, apply=apply
+    _require_file_name(upload)
+    job = jobs_routes.submit(
+        db,
+        user,
+        kind="objects_import",
+        params={"type_slug": object_type.slug},
+        upload=upload,
+        workspace_slug=workspace_slug,
     )
+    return jobs_routes._out(db, job)
+
+
+def _require_file_name(upload: UploadFile) -> None:
+    name = upload.filename or ""
+    if not name.lower().endswith((".csv", ".json", ".tsv", ".txt")):
+        raise Conflict(code("OBJECTS", 48), "CSV 나 JSON 파일만 받습니다.")
 
 
 @router.post("/{type_slug}/import-rows", response_model=ImportPlanOut)
@@ -1407,51 +1408,47 @@ def import_object_rows(
     )
 
 
-@router.get("/{type_slug}/relations/export")
+@router.post("/{type_slug}/relations/export", response_model=JobOut, status_code=202)
 def export_relations(
     type_slug: str,
     format: str = Query(default="csv", pattern="^(csv|json)$"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
-) -> Response:
-    """이 타입에서 **출발하는** 관계 전부 — `src, relation, dst, evidence_note`."""
+) -> JobOut:
+    """이 타입에서 **출발하는** 관계 전부 — `src, relation, dst, evidence_note`. 작업이
+    된다."""
     object_type = _type(db, type_slug)
-    records = bulk.export_relations(db, user, object_type)
-    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
-    if format == "json":
-        payload = json.dumps({"rows": records}, ensure_ascii=False, indent=1)
-        return Response(
-            payload.encode("utf-8"),
-            media_type="application/json; charset=utf-8",
-            headers={
-                "Content-Disposition": (
-                    f'attachment; filename="{type_slug}-relations-{stamp}.json"'
-                )
-            },
-        )
-    return Response(
-        bulk.to_csv(list(bulk.RELATION_COLUMNS), records),
-        media_type="text/csv; charset=utf-8",
-        headers={
-            "Content-Disposition": f'attachment; filename="{type_slug}-relations-{stamp}.csv"'
-        },
+    job = jobs_routes.submit(
+        db,
+        user,
+        kind="relations_export",
+        params={"type_slug": object_type.slug, "format": format},
+        upload=None,
+        workspace_slug=None,
     )
+    return jobs_routes._out(db, job)
 
 
-@router.post("/{type_slug}/relations/import", response_model=ImportPlanOut)
+@router.post("/{type_slug}/relations/import", response_model=JobOut, status_code=202)
 def import_relations(
     type_slug: str,
     upload: UploadFile = File(alias="file"),
-    apply: bool = Form(default=False),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
-) -> ImportPlanOut:
+) -> JobOut:
+    """관계 파일로 잇기 — 객체 파일과 같이 **작업이 된다.** 부서는 안 묻는다(관계는 양끝의
+    것이다) — 고칠 권한은 워커가 행마다 본다."""
     object_type = _type(db, type_slug)
-    rows = _file_rows(upload)
-    if apply:
-        plan = bulk.apply_relations(db, user, object_type, rows)
-        return _plan_out(plan, applied=plan.ok)
-    return _plan_out(bulk.plan_relations(db, user, object_type, rows), applied=False)
+    _require_file_name(upload)
+    job = jobs_routes.submit(
+        db,
+        user,
+        kind="relations_import",
+        params={"type_slug": object_type.slug},
+        upload=upload,
+        workspace_slug=None,
+    )
+    return jobs_routes._out(db, job)
 
 
 @router.post("/{type_slug}/relations/import-rows", response_model=ImportPlanOut)

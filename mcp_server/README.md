@@ -71,27 +71,31 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 
 스텁엔 안내 본문이 없으므로 **한 번 깔면 다시 복사할 일이 없다.**
 
-## 도구 스물둘
+## 도구 서른셋
 
 | 도구 | 무엇 |
 | --- | --- |
 | `get_guide` | 사용 안내 — **먼저 이것부터** |
+| `whoami` · `search` | 이 토큰의 주인(내 부서 · 역할) · **타입을 모를 때** 이름·식별자·별칭으로 전부 찾기 |
 | `ontology_schema` | 묶음·타입·속성·관계 전부 |
 | `ontology_import` | 정의를 한 트랜잭션으로. **기본은 미리 보기**(`apply=false`) |
 | `object_resolve` | **이름 하나가 어느 객체인가** — `exact`/`candidates`/`none`. 이름으로 가리키기 전에 부른다 |
 | `objects_list` · `object_get` | 객체 읽기 — 화면과 같은 조건 거르기 (`object_get` 은 관련 객체까지). **0건이면 `diagnosis` 가 붙는다** |
 | `objects_summary` · `object_fields` | 통계(서버가 센다 — 화면의 「통계」 와 같다) · 다른 타입의 칸 주소(`ref.vendor.country` 등) |
 | `object_history` · `object_references` · `object_rollup` · `quality_report` | 이력 · 가리키는 것 · 아래 전부의 합 · 품질 — 화면의 읽기와 대칭 |
+| `object_tree` · `audit_recent` | 계층 한 단계씩 · 누가 언제 무엇을 바꿨나(전체, 부서 관리자 이상) |
+| `bulk_edit` · `bulk_edit_undo` | 여러 객체의 **한 칸**을 같은 값으로 — 계획 먼저, `batch_id` 로 통째로 되돌리기 |
 | `object_create` · `object_update` | 객체 쓰기 (`update` 는 보낸 것만) |
-| `objects_import` | 여러 행 한 번에(upsert). 기본은 미리 보기 |
-| `bundle_import` | 정의 · 객체 · 관계를 한 묶음으로 — 한 번에 미리 보기, 적용은 전부 아니면 무(정제 도구 `pipeline/`) |
-| `relation_add` · `relations_import` | 객체 둘을 잇기 (**근거를 적는다**) |
+| `objects_import` | 여러 행 한 번에(upsert). **작업이 된다** — 계획을 돌려주고, 적용은 `job_apply` |
+| `bundle_import` | 정의 · 객체 · 관계를 한 묶음으로 — 작업이 되어 한 번에 미리 보기, 적용은 `job_apply`(전부 아니면 무) |
+| `job_status` · `job_apply` · `jobs_list` | 작업이 어디까지 됐나 · 사람이 확인한 계획 적용 · 내 작업과 워커 생존 |
+| `relation_add` · `relation_update` · `relation_remove` · `relations_import` | 객체 둘을 잇기 (**근거를 적는다**) · 근거 고치기 · 끊기(틀리게 이은 것을 되돌리는 자리) |
 | `datasources_list` · `datasource_sync` | 바깥 시스템(OData)에서 읽어 채우기 — 계획 먼저 |
 
 ### 왜 타입마다 도구를 안 만드나
 
 타입 20개에 도구가 80개가 되고, **도구 목록이 길수록 모델은 엉뚱한 것을 고른다.**
-도구는 스물둘로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
+도구는 서른셋으로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
 받는가」 를 말한다 — **동적인 것은 도구가 아니라 스키마다.**
 
 검증도 권한도 백엔드가 한다. 여기에 규칙을 두면 **MCP 로는 되는데 화면에서는 안

@@ -1,5 +1,7 @@
 /** 데이터 소스 API — OData 에서 읽어 온톨로지를 채운다. 시스템 관리자만. */
 
+import { jobsApi } from '@/modules/jobs/api'
+import type { Job } from '@/modules/jobs/api'
 import { api } from '@/shared/api/client'
 import type { ImportRow } from '@/modules/objects/api'
 
@@ -120,8 +122,24 @@ export const datasourceApi = {
   remove: (slug: string) => api.delete<void>(`/datasources/${slug}`),
   /** 앞의 몇 행을 그대로 + 대응한 뒤로. 아무것도 안 바꾼다. */
   preview: (slug: string) => api.post<Preview>(`/datasources/${slug}/preview?limit=5`),
-  /** 계획(apply=false) 또는 적용. 한 행이라도 오류면 아무것도 안 넣는다. */
-  sync: (slug: string, apply: boolean) =>
-    api.post<SyncResult>(`/datasources/${slug}/sync?apply=${apply ? 'true' : 'false'}`),
+  /**
+   * 계획(apply=false) 또는 적용. 한 행이라도 오류면 아무것도 안 넣는다.
+   *
+   * **작업이 된다** — 바깥 표를 읽는 시간은 그쪽이 정하므로 요청 안에서 기다리지 않는다.
+   * 여기서 끝나기를 기다려 옛 모양(`SyncResult`)으로 돌려주고, 실패하면 그 이유로 던진다.
+   */
+  sync: async (slug: string, apply: boolean): Promise<SyncResult> => {
+    const started = await api.post<Job>(
+      `/datasources/${slug}/sync?apply=${apply ? 'true' : 'false'}`,
+    )
+    const done = await jobsApi.waitFor(started.id)
+    if (done.status !== 'done' || !done.result) {
+      throw new Error(
+        done.error ??
+          (done.status === 'cancelled' ? '취소됐습니다.' : '동기화가 끝나지 않았습니다.'),
+      )
+    }
+    return done.result as unknown as SyncResult
+  },
   runs: (slug: string) => api.get<Run[]>(`/datasources/${slug}/runs`),
 }

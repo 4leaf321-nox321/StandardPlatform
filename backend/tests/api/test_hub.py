@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, bundle_export, bundle_import
 
 
 def _names(tag: str, side: str) -> dict[str, str]:
@@ -120,8 +120,8 @@ def _hub(client: TestClient, admin: Signed, tag: str) -> dict[str, str]:
         ],
         "apply": True,
     }
-    got = client.post("/api/bundles/import", json=body, headers=admin.headers)
-    assert got.status_code == 200 and got.json()["applied"] is True, got.text
+    got = bundle_import(client, admin, body)
+    assert got["applied"] is True, got
     return n
 
 
@@ -139,23 +139,13 @@ def _as_twin(exported: dict[str, Any], tag: str) -> dict[str, Any]:
 def _receive(
     client: TestClient, admin: Signed, bundle: dict[str, Any], **extra: Any
 ) -> dict[str, Any]:
-    got = client.post(
-        "/api/bundles/import",
-        json={**bundle, "source": "hub", "apply": True, **extra},
-        headers=admin.headers,
-    )
-    assert got.status_code == 200, got.text
-    return dict(got.json())
+    return bundle_import(client, admin, {**bundle, "source": "hub", "apply": True, **extra})
 
 
 def test_허브는_참조되는_것부터_식별자로_내보낸다(client: TestClient, admin: Signed) -> None:
     tag = uuid.uuid4().hex[:6]
     n = _hub(client, admin, tag)
-    got = client.get(
-        "/api/bundles/export", params={"group": n["group"]}, headers=admin.headers
-    )
-    assert got.status_code == 200, got.text
-    body = got.json()
+    body = bundle_export(client, admin, n["group"])
     # 적힌 차례는 모델 · 과제 · 프로젝트였지만, 참조되는 것이 먼저 간다.
     assert [one["type_slug"] for one in body["objects"]] == [
         n["project"],
@@ -188,8 +178,8 @@ def test_허브는_참조되는_것부터_식별자로_내보낸다(client: Test
     assert body["counts"] == {"types": 3, "relation_types": 1, "objects": 5, "relations": 1}
     assert body["warnings"] == []
 
-    missing = client.get(
-        "/api/bundles/export", params={"group": "없는묶음"}, headers=admin.headers
+    missing = client.post(
+        "/api/bundles/export", json={"group": "없는묶음"}, headers=admin.headers
     )
     assert missing.status_code == 404
 
@@ -198,8 +188,8 @@ def test_내보내기는_시스템_관리자만(
     client: TestClient, admin: Signed, manager: Signed
 ) -> None:
     n = _hub(client, admin, uuid.uuid4().hex[:6])
-    got = client.get(
-        "/api/bundles/export", params={"group": n["group"]}, headers=manager.headers
+    got = client.post(
+        "/api/bundles/export", json={"group": n["group"]}, headers=manager.headers
     )
     assert got.status_code == 403
 
@@ -209,9 +199,7 @@ def test_쌍둥이가_받으면_허브_관리가_되고_다시_받으면_그대�
 ) -> None:
     tag = uuid.uuid4().hex[:6]
     hub = _hub(client, admin, tag)
-    exported = client.get(
-        "/api/bundles/export", params={"group": hub["group"]}, headers=admin.headers
-    ).json()
+    exported = bundle_export(client, admin, hub["group"])
     twin = _names(tag, "twin")
 
     first = _receive(client, admin, _as_twin(exported, tag))
@@ -251,9 +239,7 @@ def test_쌍둥이가_받으면_허브_관리가_되고_다시_받으면_그대�
         headers=admin.headers,
     )
     assert patched.status_code == 200, patched.text
-    exported = client.get(
-        "/api/bundles/export", params={"group": hub["group"]}, headers=admin.headers
-    ).json()
+    exported = bundle_export(client, admin, hub["group"])
     third = _receive(client, admin, _as_twin(exported, tag))
     assert third["counts"]["objects_update"] == 1, third
     twin_task = next(
@@ -270,9 +256,7 @@ def test_쌍둥이가_받으면_허브_관리가_되고_다시_받으면_그대�
 def test_받은_것은_받는_쪽에서_못_고친다(client: TestClient, admin: Signed) -> None:
     tag = uuid.uuid4().hex[:6]
     hub = _hub(client, admin, tag)
-    exported = client.get(
-        "/api/bundles/export", params={"group": hub["group"]}, headers=admin.headers
-    ).json()
+    exported = bundle_export(client, admin, hub["group"])
     _receive(client, admin, _as_twin(exported, tag))
     twin = _names(tag, "twin")
     h = admin.headers
@@ -375,14 +359,7 @@ def test_받은_묶음은_시스템_관리자만_넣는다(
 ) -> None:
     tag = uuid.uuid4().hex[:6]
     hub = _hub(client, admin, tag)
-    exported = client.get(
-        "/api/bundles/export", params={"group": hub["group"]}, headers=admin.headers
-    ).json()
+    exported = bundle_export(client, admin, hub["group"])
     bundle = _as_twin(exported, tag)
-    got = client.post(
-        "/api/bundles/import",
-        json={"objects": bundle["objects"], "source": "hub"},
-        headers=manager.headers,
-    )
-    assert got.status_code == 200
-    assert any("시스템 관리자" in one for one in got.json()["errors"])
+    got = bundle_import(client, manager, {"objects": bundle["objects"], "source": "hub"})
+    assert any("시스템 관리자" in one for one in got["errors"])

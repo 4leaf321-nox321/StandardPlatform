@@ -18,6 +18,7 @@ from app.modules.audit.models import AccessLog, AuditEntry
 from app.modules.auth.models import PersonalAccessToken, RefreshToken
 from app.modules.datasources.models import DataSource, DataSourceRun
 from app.modules.files.models import Attachment
+from app.modules.jobs.models import Job, JobFile, WorkerHeartbeat
 from app.modules.notices.models import Notice, NoticeRead
 from app.modules.notifications.models import Notification
 from app.modules.objects.models import (
@@ -46,6 +47,8 @@ __all__ = [
     "Base",
     "DataSource",
     "DataSourceRun",
+    "Job",
+    "JobFile",
     "NavGroup",
     "Notice",
     "NoticeRead",
@@ -66,6 +69,7 @@ __all__ = [
     "User",
     "Webhook",
     "WebhookDelivery",
+    "WorkerHeartbeat",
     "Workspace",
     "WorkspaceMember",
 ]

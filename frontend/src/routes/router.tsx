@@ -31,6 +31,7 @@ import { DEFAULT_WORKSPACE, pendingItems } from '@/shared/layout/navigation'
  */
 const AccountsAdminPage = lazy(() => import('@/modules/accounts/AccountsAdminPage'))
 const AuditPage = lazy(() => import('@/modules/audit/AuditPage'))
+const JobsPage = lazy(() => import('@/modules/jobs/JobsPage'))
 const GraphPage = lazy(() => import('@/modules/graph/GraphPage'))
 const MembersPage = lazy(() => import('@/modules/workspaces/MembersPage'))
 const NoticesPage = lazy(() => import('@/modules/notices/NoticesPage'))
@@ -102,6 +103,7 @@ export const router = createBrowserRouter(
 
             // 내 활동
             { path: 'notifications', element: <NotificationsPage /> },
+            { path: 'jobs', element: <JobsPage /> },
             { path: 'me', element: <ProfilePage /> },
 
             // 공통

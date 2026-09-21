@@ -96,7 +96,7 @@ class RunOut(BaseModel):
 
 
 class SyncOut(BaseModel):
-    """계획(또는 적용) 결과 — 파일 가져오기의 계획과 같은 모양에 기록이 붙는다."""
+    """계획(또는 적용) 결과 — 일괄 입력의 계획과 같은 모양에 기록이 붙는다."""
 
     run: RunOut
     applied: bool

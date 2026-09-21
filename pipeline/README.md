@@ -38,7 +38,7 @@ python sp_pipeline.py apply    runs/2026-09-13-sim-tools   # 사람이 확인한
 | --- | --- | --- |
 | `init` | `bundle.json` · `ontology.json` · `objects/` · `relations/` · `unresolved.json` | 0 |
 | `validate` | JSON 모양, 식별자 겹침, 관계 행의 칸, 미해결 목록. 출처(`_source`) · 근거가 없으면 경고 | 오류 있으면 1 |
-| `preview` | 검증 → 플랫폼 `POST /api/bundles/import`(apply=false) → `preview.json` 에 결과와 **지문** | 계획에 오류 있으면 1 |
+| `preview` | 검증 → 플랫폼 `POST /api/bundles/import`(apply=false, 202 작업) → 끝나기를 기다려 `preview.json` 에 결과와 **지문** | 계획에 오류 있으면 1 |
 | `apply` | **미리 본 것과 지문이 같을 때만** 적용 → `applied.json` | 안 들어갔으면 1 |
 | `pull` | (쌍둥이) 허브가 내보낸 사이드바 묶음을 새 실행 폴더로 — `--group plm`, `SP_HUB_SERVER` · `SP_HUB_TOKEN`. 그 뒤는 `validate` → `preview` → `apply`(받는 플랫폼에) | 0 |
 

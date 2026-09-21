@@ -153,7 +153,9 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
   return (
     <>
       <Dialog open onOpenChange={(open) => !open && onClose()}>
-        <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+        {/* 타입 · 관계 종류 수정과 **같은 크기**. 스크롤은 `DialogContent` 가 쥔다 —
+            여기서 또 굴리면 스크롤바가 둘이 된다(`ui/dialog.tsx`). */}
+        <DialogContent className="h-[80vh] w-[80vw] sm:max-w-[80vw]">
           <DialogHeader>
             <DialogTitle>
               {type.label} · {editing ? `${property?.label} 수정` : '속성 추가'}
@@ -163,277 +165,298 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
           <div className="space-y-4">
             {error && <ErrorNotice error={error} />}
 
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="prop-key">키</Label>
-                <Input
-                  id="prop-key"
-                  value={key}
-                  readOnly={editing}
-                  disabled={editing}
-                  placeholder="vendor"
-                  className="font-mono"
-                  onChange={(event) => setKey(event.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="prop-label">이름</Label>
-                <Input
-                  id="prop-label"
-                  value={label}
-                  placeholder="공급사"
-                  onChange={(event) => setLabel(event.target.value)}
-                />
-              </div>
-            </div>
+            {/* 왼쪽은 **무엇을 담나**(키 · 이름 · 종류, 그리고 그 종류가 부르는 칸),
+                오른쪽은 **어떻게 담나**(단위 · 범위 · 규칙 · 안내). 종류를 바꾸면 왼쪽만
+                늘었다 줄었다 하고, 오른쪽은 제자리에 있다. */}
+            <div className="grid items-start gap-x-10 gap-y-6 xl:grid-cols-2">
+              <section className="space-y-4">
+                <h3 className="text-muted-foreground border-b pb-1 text-xs font-semibold">
+                  무엇을 담나
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="prop-key">키</Label>
+                    <Input
+                      id="prop-key"
+                      value={key}
+                      readOnly={editing}
+                      disabled={editing}
+                      placeholder="vendor"
+                      className="font-mono"
+                      onChange={(event) => setKey(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="prop-label">이름</Label>
+                    <Input
+                      id="prop-label"
+                      value={label}
+                      placeholder="공급사"
+                      onChange={(event) => setLabel(event.target.value)}
+                    />
+                  </div>
+                </div>
 
-            <div className="space-y-1.5">
-              <Label htmlFor="prop-type">종류</Label>
-              {editing ? (
-                <>
-                  <Input value={DATA_TYPE_LABELS[dataType]} readOnly disabled />
+                <div className="space-y-1.5">
+                  <Label htmlFor="prop-type">종류</Label>
+                  {editing ? (
+                    <>
+                      <Input value={DATA_TYPE_LABELS[dataType]} readOnly disabled />
+                      <p className="text-muted-foreground text-xs">
+                        <b>종류는 바꿀 수 없습니다.</b> 이미 저장된 값이 새 종류에 안 맞아도 화면이
+                        그것을 말해 주지 못합니다 — 바꾸려면 새 속성을 만들어 옮기세요.
+                      </p>
+                    </>
+                  ) : (
+                    <>
+                      <Select
+                        value={dataType}
+                        onValueChange={(next) => setDataType(next as DataType)}
+                      >
+                        <SelectTrigger id="prop-type">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {(Object.keys(DATA_TYPE_LABELS) as DataType[]).map((one) => (
+                            <SelectItem key={one} value={one}>
+                              {DATA_TYPE_LABELS[one]}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      <p className="text-muted-foreground text-xs">{DATA_TYPE_HINTS[dataType]}</p>
+                    </>
+                  )}
+                </div>
+
+                {dataType === 'enum' && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="prop-options">선택할 값 (쉼표로)</Label>
+                    <Input
+                      id="prop-options"
+                      value={options}
+                      placeholder="A, B, C"
+                      onChange={(event) => setOptions(event.target.value)}
+                    />
+                    <p className="text-muted-foreground text-xs">
+                      이미 사용되는 값을 목록에서 제외하면{' '}
+                      <b>그 값을 가진 객체는 수정할 때 거절됩니다.</b>
+                      제외하기 전에 그 값을 사용하는 것이 있는지 보세요.
+                    </p>
+                  </div>
+                )}
+
+                {/* 저장된 속성의 고를 값 — 이름을 바꾸면 저장값도 함께, 코드표로 승격. */}
+                {editing && property && property.data_type === 'enum' && dataType === 'enum' && (
+                  <EnumOptionsPanel
+                    type={type}
+                    property={property}
+                    types={types}
+                    onChanged={(renamed) => {
+                      if (renamed) {
+                        // 이 창의 「고를 값」 칸도 같이 — 안 그러면 「저장」 이 옛 목록을 다시 보낸다.
+                        setOptions((current) =>
+                          current
+                            .split(',')
+                            .map((one) => one.trim())
+                            .filter(Boolean)
+                            .map((one) => (one === renamed.from ? renamed.to : one))
+                            .join(', '),
+                        )
+                        setDefaultValue((current) =>
+                          current === renamed.from ? renamed.to : current,
+                        )
+                      }
+                      onChanged()
+                    }}
+                    onPromoted={() => {
+                      onChanged()
+                      onClose()
+                    }}
+                  />
+                )}
+
+                {dataType === 'object_ref' && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="prop-ref">가리킬 타입</Label>
+                    <Select value={refType} onValueChange={setRefType}>
+                      <SelectTrigger id="prop-ref">
+                        <SelectValue placeholder="아무 타입이나" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {types.map((one) => (
+                          <SelectItem key={one.slug} value={one.slug}>
+                            {one.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-muted-foreground text-xs">
+                      안 정하면 아무 객체나 선택할 수 있습니다 — 선택할 것이 많아지면 사람은 못
+                      찾고, 못 찾으면 없는 줄 알고 새로 만듭니다.
+                    </p>
+                    <Label htmlFor="prop-inverse">상대 쪽에서 읽는 말</Label>
+                    <Input
+                      id="prop-inverse"
+                      value={inverseLabel}
+                      placeholder="예: 「과제」 칸이면 과제 쪽에서는 「개발모델」"
+                      onChange={(event) => setInverseLabel(event.target.value)}
+                    />
+                    <p className="text-muted-foreground text-xs">
+                      참조 칸은 칸에 저장한 관계입니다 — 그래프와 「관련 객체」 가 상대 쪽에서는 이
+                      말로 읽습니다. 비우면 이 타입의 이름으로 읽습니다.
+                    </p>
+                  </div>
+                )}
+              </section>
+
+              <section className="space-y-4">
+                <h3 className="text-muted-foreground border-b pb-1 text-xs font-semibold">
+                  어떻게 담나
+                </h3>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="prop-unit">단위</Label>
+                    <Input
+                      id="prop-unit"
+                      value={unit}
+                      placeholder="mm"
+                      onChange={(event) => setUnit(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="prop-sort">순서</Label>
+                    <Input
+                      id="prop-sort"
+                      type="number"
+                      value={sortOrder}
+                      onChange={(event) => setSortOrder(event.target.value)}
+                    />
+                  </div>
+                </div>
+
+                {NUMERIC.has(dataType) && (
+                  <div className="space-y-1.5">
+                    <Label>값의 범위</Label>
+                    <div className="grid grid-cols-3 gap-3">
+                      <Input
+                        type="number"
+                        placeholder="아래 끝"
+                        value={minValue}
+                        onChange={(event) => setMinValue(event.target.value)}
+                      />
+                      <Input
+                        type="number"
+                        placeholder="위 끝"
+                        value={maxValue}
+                        onChange={(event) => setMaxValue(event.target.value)}
+                      />
+                      <Input
+                        type="number"
+                        placeholder="소수 자릿수"
+                        value={decimals}
+                        onChange={(event) => setDecimals(event.target.value)}
+                      />
+                    </div>
+                    <p className="text-muted-foreground text-xs">
+                      비우면 안 봅니다 — <b>그러면 두께가 -5mm 여도 통과합니다.</b> 소수 자릿수를
+                      넘는 값은 <b>반올림하지 않고 거절</b>합니다(조용히 바꾸면 입력한 값과 저장된
+                      값이 달라집니다).
+                    </p>
+                  </div>
+                )}
+
+                {PATTERNABLE.has(dataType) && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="prop-pattern">모양 규칙</Label>
+                    <Input
+                      id="prop-pattern"
+                      value={pattern}
+                      placeholder="^D-\\d{4}$"
+                      className="font-mono"
+                      onChange={(event) => setPattern(event.target.value)}
+                    />
+                    <p className="text-muted-foreground text-xs">
+                      사번·도번처럼 <b>모양이 정해진 값</b>에 사용합니다(정규식). 비우면 안 봅니다.
+                    </p>
+                  </div>
+                )}
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="prop-default">기본값</Label>
+                  <Input
+                    id="prop-default"
+                    value={defaultValue}
+                    onChange={(event) => setDefaultValue(event.target.value)}
+                  />
                   <p className="text-muted-foreground text-xs">
-                    <b>종류는 바꿀 수 없습니다.</b> 이미 저장된 값이 새 종류에 안 맞아도 화면이
-                    그것을 말해 주지 못합니다 — 바꾸려면 새 속성을 만들어 옮기세요.
+                    <b>만들 때만</b> 채웁니다. 수정할 때도 채우면 사람이 방금 삭제한 값이
+                    되살아나고, 그 되살아남은 저장한 사람 눈에 안 보입니다.
                   </p>
-                </>
-              ) : (
-                <>
-                  <Select value={dataType} onValueChange={(next) => setDataType(next as DataType)}>
-                    <SelectTrigger id="prop-type">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {(Object.keys(DATA_TYPE_LABELS) as DataType[]).map((one) => (
-                        <SelectItem key={one} value={one}>
-                          {DATA_TYPE_LABELS[one]}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <p className="text-muted-foreground text-xs">{DATA_TYPE_HINTS[dataType]}</p>
-                </>
-              )}
-            </div>
+                </div>
 
-            {dataType === 'enum' && (
-              <div className="space-y-1.5">
-                <Label htmlFor="prop-options">선택할 값 (쉼표로)</Label>
-                <Input
-                  id="prop-options"
-                  value={options}
-                  placeholder="A, B, C"
-                  onChange={(event) => setOptions(event.target.value)}
-                />
-                <p className="text-muted-foreground text-xs">
-                  이미 사용되는 값을 목록에서 제외하면{' '}
-                  <b>그 값을 가진 객체는 수정할 때 거절됩니다.</b>
-                  제외하기 전에 그 값을 사용하는 것이 있는지 보세요.
-                </p>
-              </div>
-            )}
-
-            {/* 저장된 속성의 고를 값 — 이름을 바꾸면 저장값도 함께, 코드표로 승격. */}
-            {editing && property && property.data_type === 'enum' && dataType === 'enum' && (
-              <EnumOptionsPanel
-                type={type}
-                property={property}
-                types={types}
-                onChanged={(renamed) => {
-                  if (renamed) {
-                    // 이 창의 「고를 값」 칸도 같이 — 안 그러면 「저장」 이 옛 목록을 다시 보낸다.
-                    setOptions((current) =>
-                      current
-                        .split(',')
-                        .map((one) => one.trim())
-                        .filter(Boolean)
-                        .map((one) => (one === renamed.from ? renamed.to : one))
-                        .join(', '),
-                    )
-                    setDefaultValue((current) => (current === renamed.from ? renamed.to : current))
-                  }
-                  onChanged()
-                }}
-                onPromoted={() => {
-                  onChanged()
-                  onClose()
-                }}
-              />
-            )}
-
-            {dataType === 'object_ref' && (
-              <div className="space-y-1.5">
-                <Label htmlFor="prop-ref">가리킬 타입</Label>
-                <Select value={refType} onValueChange={setRefType}>
-                  <SelectTrigger id="prop-ref">
-                    <SelectValue placeholder="아무 타입이나" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {types.map((one) => (
-                      <SelectItem key={one.slug} value={one.slug}>
-                        {one.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-muted-foreground text-xs">
-                  안 정하면 아무 객체나 선택할 수 있습니다 — 선택할 것이 많아지면 사람은 못 찾고, 못
-                  찾으면 없는 줄 알고 새로 만듭니다.
-                </p>
-                <Label htmlFor="prop-inverse">상대 쪽에서 읽는 말</Label>
-                <Input
-                  id="prop-inverse"
-                  value={inverseLabel}
-                  placeholder="예: 「과제」 칸이면 과제 쪽에서는 「개발모델」"
-                  onChange={(event) => setInverseLabel(event.target.value)}
-                />
-                <p className="text-muted-foreground text-xs">
-                  참조 칸은 칸에 저장한 관계입니다 — 그래프와 「관련 객체」 가 상대 쪽에서는 이 말로
-                  읽습니다. 비우면 이 타입의 이름으로 읽습니다.
-                </p>
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1.5">
-                <Label htmlFor="prop-unit">단위</Label>
-                <Input
-                  id="prop-unit"
-                  value={unit}
-                  placeholder="mm"
-                  onChange={(event) => setUnit(event.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="prop-sort">순서</Label>
-                <Input
-                  id="prop-sort"
-                  type="number"
-                  value={sortOrder}
-                  onChange={(event) => setSortOrder(event.target.value)}
-                />
-              </div>
-            </div>
-
-            {NUMERIC.has(dataType) && (
-              <div className="space-y-1.5">
-                <Label>값의 범위</Label>
-                <div className="grid grid-cols-3 gap-3">
+                <div className="space-y-1.5">
+                  <Label htmlFor="prop-help">안내</Label>
                   <Input
-                    type="number"
-                    placeholder="아래 끝"
-                    value={minValue}
-                    onChange={(event) => setMinValue(event.target.value)}
-                  />
-                  <Input
-                    type="number"
-                    placeholder="위 끝"
-                    value={maxValue}
-                    onChange={(event) => setMaxValue(event.target.value)}
-                  />
-                  <Input
-                    type="number"
-                    placeholder="소수 자릿수"
-                    value={decimals}
-                    onChange={(event) => setDecimals(event.target.value)}
+                    id="prop-help"
+                    value={help}
+                    placeholder="칸 아래에 뜨는 한 줄. 무엇을 넣는 자리인지 적습니다."
+                    onChange={(event) => setHelp(event.target.value)}
                   />
                 </div>
-                <p className="text-muted-foreground text-xs">
-                  비우면 안 봅니다 — <b>그러면 두께가 -5mm 여도 통과합니다.</b> 소수 자릿수를 넘는
-                  값은 <b>반올림하지 않고 거절</b>합니다(조용히 바꾸면 입력한 값과 저장된 값이
-                  달라집니다).
-                </p>
-              </div>
-            )}
+              </section>
 
-            {PATTERNABLE.has(dataType) && (
-              <div className="space-y-1.5">
-                <Label htmlFor="prop-pattern">모양 규칙</Label>
-                <Input
-                  id="prop-pattern"
-                  value={pattern}
-                  placeholder="^D-\\d{4}$"
-                  className="font-mono"
-                  onChange={(event) => setPattern(event.target.value)}
-                />
-                <p className="text-muted-foreground text-xs">
-                  사번·도번처럼 <b>모양이 정해진 값</b>에 사용합니다(정규식). 비우면 안 봅니다.
-                </p>
-              </div>
-            )}
-
-            <div className="space-y-1.5">
-              <Label htmlFor="prop-default">기본값</Label>
-              <Input
-                id="prop-default"
-                value={defaultValue}
-                onChange={(event) => setDefaultValue(event.target.value)}
-              />
-              <p className="text-muted-foreground text-xs">
-                <b>만들 때만</b> 채웁니다. 수정할 때도 채우면 사람이 방금 삭제한 값이 되살아나고, 그
-                되살아남은 저장한 사람 눈에 안 보입니다.
-              </p>
-            </div>
-
-            <div className="space-y-1.5">
-              <Label htmlFor="prop-help">안내</Label>
-              <Input
-                id="prop-help"
-                value={help}
-                placeholder="칸 아래에 뜨는 한 줄. 무엇을 넣는 자리인지 적습니다."
-                onChange={(event) => setHelp(event.target.value)}
-              />
-            </div>
-
-            <div className="space-y-2">
-              <label className="flex items-start gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 size-4"
-                  checked={required}
-                  onChange={(event) => setRequired(event.target.checked)}
-                />
-                <span>
-                  필수
-                  <span className="text-muted-foreground ml-1 text-xs">
-                    비어 있으면 저장이 거절됩니다. <b>이미 있는 객체는 그대로 둡니다</b> — 그 객체의{' '}
-                    <b>속성을 수정할 때</b> 걸립니다(이름만 수정하는 것은 막지 않습니다).
-                  </span>
-                </span>
-              </label>
-              {UNIQUEABLE.has(dataType) && (
+              {/* 규칙 셋은 설명이 길다 — 단 안에 두면 오른쪽만 길어진다. 두 단 아래 전폭으로. */}
+              <div className="space-y-2 border-t pt-3 xl:col-span-2">
                 <label className="flex items-start gap-2 text-sm">
                   <input
                     type="checkbox"
                     className="mt-0.5 size-4"
-                    checked={unique}
-                    onChange={(event) => setUnique(event.target.checked)}
+                    checked={required}
+                    onChange={(event) => setRequired(event.target.checked)}
                   />
                   <span>
-                    유일해야 함
+                    필수
                     <span className="text-muted-foreground ml-1 text-xs">
-                      시리얼·사번처럼 겹치면 안 되는 값. 범위는 타입의 <b>식별자 범위</b>를
-                      따릅니다. <b>같은 것이 둘이 되면 둘 다 못 믿게 됩니다.</b>
+                      비어 있으면 저장이 거절됩니다. <b>이미 있는 객체는 그대로 둡니다</b> — 그
+                      객체의 <b>속성을 수정할 때</b> 걸립니다(이름만 수정하는 것은 막지 않습니다).
                     </span>
                   </span>
                 </label>
-              )}
+                {UNIQUEABLE.has(dataType) && (
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 size-4"
+                      checked={unique}
+                      onChange={(event) => setUnique(event.target.checked)}
+                    />
+                    <span>
+                      유일해야 함
+                      <span className="text-muted-foreground ml-1 text-xs">
+                        시리얼·사번처럼 겹치면 안 되는 값. 범위는 타입의 <b>식별자 범위</b>를
+                        따릅니다. <b>같은 것이 둘이 되면 둘 다 못 믿게 됩니다.</b>
+                      </span>
+                    </span>
+                  </label>
+                )}
 
-              <label className="flex items-start gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="mt-0.5 size-4"
-                  checked={multi}
-                  onChange={(event) => setMulti(event.target.checked)}
-                />
-                <span>
-                  여러 값
-                  <span className="text-muted-foreground ml-1 text-xs">
-                    목록으로 저장합니다. <b>이미 값이 있는 속성에서 켜고 끄면</b> 그 값들이 새
-                    모양에 안 맞아 수정할 때 거절됩니다.
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 size-4"
+                    checked={multi}
+                    onChange={(event) => setMulti(event.target.checked)}
+                  />
+                  <span>
+                    여러 값
+                    <span className="text-muted-foreground ml-1 text-xs">
+                      목록으로 저장합니다. <b>이미 값이 있는 속성에서 켜고 끄면</b> 그 값들이 새
+                      모양에 안 맞아 수정할 때 거절됩니다.
+                    </span>
                   </span>
-                </span>
-              </label>
+                </label>
+              </div>
             </div>
           </div>
 

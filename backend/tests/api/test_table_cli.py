@@ -17,7 +17,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, bundle_import, patched_pipeline
 
 PIPELINE_DIR = Path(__file__).resolve().parents[3] / "pipeline"
 SERVER = "http://platform.test"
@@ -342,19 +342,9 @@ def test_두_갈래로_읽히는_이름은_고르지_않는다() -> None:
 
 @pytest.fixture
 def platform(client: TestClient) -> Iterator[None]:
-    def send(
-        method: str, url: str, headers: dict[str, str], body: bytes | None
-    ) -> tuple[int, Any]:
-        path = "/" + url.split("://", 1)[-1].split("/", 1)[1]
-        got = client.request(method, path, content=body, headers=headers)
-        return got.status_code, got.json()
-
-    before = table.pipeline.SEND
-    table.pipeline.SEND = send
-    try:
+    """정제 도구가 TestClient 앱에 말한다 — 작업을 물을 때마다 워커가 한 바퀴 돈다."""
+    with patched_pipeline(table.pipeline, client):
         yield
-    finally:
-        table.pipeline.SEND = before
 
 
 def _ontology(slugs: dict[str, str]) -> dict[str, Any]:
@@ -548,9 +538,10 @@ def test_참조_대조는_플랫폼에서_식별자를_받는다(
 ) -> None:
     tag = uuid.uuid4().hex[:6]
     kind = f"core_{tag}"
-    made = client.post(
-        "/api/bundles/import",
-        json={
+    made = bundle_import(
+        client,
+        admin,
+        {
             "ontology": {
                 "groups": [],
                 "types": [{"slug": kind, "label": "코어", "key_policy": "required"}],
@@ -565,9 +556,8 @@ def test_참조_대조는_플랫폼에서_식별자를_받는다(
             ],
             "apply": True,
         },
-        headers=admin.headers,
     )
-    assert made.json()["applied"] is True, made.text
+    assert made["applied"] is True, made
     token = client.post(
         "/api/auth/tokens",
         json={"name": f"match-{tag}", "scopes": ["read"]},
