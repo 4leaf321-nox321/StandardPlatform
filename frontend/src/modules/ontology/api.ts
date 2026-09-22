@@ -5,7 +5,9 @@
  * 읽기는 열려 있다.
  */
 
-import { api } from '@/shared/api/client'
+import { jobsApi } from '@/modules/jobs/api'
+import type { Job } from '@/modules/jobs/api'
+import { api, downloadFile } from '@/shared/api/client'
 
 export type DataType =
   | 'text'
@@ -312,6 +314,21 @@ export interface ResetPlan {
 export const ontologyApi = {
   /** **자기 설명적 스키마.** 화면도 MCP 도 이 하나를 읽는다. */
   schema: () => api.get<OntologySchema>('/ontology/schema'),
+  /**
+   * 구조만 파일로 — 정의는 작아서 그 자리에서 온다.
+   *
+   * JSON 은 가져오기가 받는 모양 그대로다(봉투를 씌우지 않는다).
+   */
+  exportStructure: (format: 'xlsx' | 'json', filename: string) =>
+    downloadFile(`/ontology/export?format=${format}`, filename),
+  /**
+   * **채워진 객체까지** 한 파일로 — 작업이 된다.
+   *
+   * 데이터가 붙으면 타입 수만큼 행을 읽으므로 요청 안에서 만들면 큰 설치에서 끊긴다.
+   * 워커가 만든 파일을 받아 오는 것까지 `jobsApi` 가 한다.
+   */
+  exportEverything: (format: 'xlsx' | 'json', filename: string) =>
+    jobsApi.exportAndDownload(() => api.post<Job>(`/ontology/export?format=${format}`), filename),
   nav: () => api.get<NavGroupNode[]>('/ontology/nav'),
 
   groups: () => api.get<NavGroupRow[]>('/ontology/groups'),

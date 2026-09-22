@@ -34,6 +34,7 @@ from app.modules.objects import bulk
 from app.modules.objects.schemas import ImportPlanOut, ImportRowOut
 from app.modules.objects.services import apply_sort, properties_of
 from app.modules.ontology.models import ObjectType
+from app.shared import sheets
 from app.shared.errors import Conflict, NotFound, code
 from app.shared.permissions import resolve_owner_workspace
 
@@ -362,6 +363,56 @@ def relations_export(work: Work) -> dict[str, Any]:
     return {"type_slug": object_type.slug, "rows": len(records), "format": fmt}
 
 
+# --- 온톨로지 통째로 ------------------------------------------------------------
+
+
+def ontology_export(work: Work) -> dict[str, Any]:
+    """구조와 **그 안에 채워진 객체까지** 한 파일로.
+
+    작업인 이유: 구조만이면 순식간이지만 데이터가 붙으면 타입 수만큼 행을 읽는다. 요청 안에서
+    만들면 큰 설치에서 먼저 끊기고, 끊긴 자리에는 아무것도 안 남는다.
+    """
+    from app.modules.ontology import export as ontology_service
+
+    user = _user(work)
+    fmt = str(work.params.get("format") or "xlsx")
+    stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
+    skipped: list[str] = []
+    if fmt == "json":
+        body = ontology_service.bundle(work.db, user, progress=work.progress, skipped=skipped)
+        work.emit(
+            name=f"ontology-full-{stamp}.json",
+            content_type="application/json",
+            data=json.dumps(body, ensure_ascii=False, indent=1).encode("utf-8"),
+        )
+        return {
+            "format": fmt,
+            "types": len(body["ontology"]["types"]),
+            "objects": sum(len(one["rows"]) for one in body["objects"]),
+            "relations": sum(len(one["rows"]) for one in body["relations"]),
+            # 건너뛴 것은 **작업 화면에 적힌다** — 조용히 빠지면
+            # 그 파일은 「관계가 없다」 로 읽힌다.
+            "skipped": skipped,
+        }
+
+    pages = ontology_service.data_pages(work.db, user, progress=work.progress)
+    work.progress("파일 만들기", 0, 0)
+    work.emit(
+        name=f"ontology-full-{stamp}.xlsx",
+        content_type=sheets.XLSX_TYPE,
+        data=sheets.to_workbook(pages),
+    )
+    return {
+        "format": fmt,
+        "sheets": len(pages),
+        "objects": sum(len(one.rows) for one in pages if one.name not in STRUCTURE_ONLY),
+    }
+
+
+#: 개요에 「내보낸 객체」 를 따로 세므로, 여기서는 구조 시트를 빼고 센다.
+STRUCTURE_ONLY = ("개요", "묶음", "타입", "속성", "관계 종류", "관계 속성", "참조 칸", "관계")
+
+
 # --- 데이터 소스 ----------------------------------------------------------------
 
 
@@ -403,6 +454,7 @@ register(Kind("relations_import", "관계 일괄 입력", True, True, relations_
 register(Kind("bundle_import", "묶음 가져오기", True, True, bundle_import))
 register(Kind("bundle_export", "묶음 내보내기", False, False, bundle_export))
 register(Kind("objects_export", "객체 내보내기", False, False, objects_export))
+register(Kind("ontology_export", "온톨로지 통째로 내보내기", False, False, ontology_export))
 register(Kind("relations_export", "관계 내보내기", False, False, relations_export))
 register(
     Kind(

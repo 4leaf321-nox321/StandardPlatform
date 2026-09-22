@@ -17,6 +17,8 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
+from app.modules.jobs import routes as jobs_routes
+from app.modules.jobs.schemas import JobOut
 from app.modules.objects import bulk, refedges
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.ontology import (
@@ -1014,6 +1016,35 @@ def export_structure(
             ext="json",
         )
     return sheets.workbook_response(schema_export.pages(db), stem="ontology")
+
+
+@router.post("/export", response_model=JobOut, status_code=202)
+def export_everything(
+    format: str = Query(default="xlsx", pattern="^(xlsx|json)$"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """구조와 **그 안에 채워진 객체까지** 한 파일로 — 작업이 된다(202).
+
+    결과는 `GET /api/jobs/{id}/download`. 구조만 필요하면 같은 경로의 `GET` 이 그 자리에서
+    준다 — 데이터가 붙으면 타입 수만큼 행을 읽으므로 요청 안에서 만들면 큰 설치에서 끊긴다.
+
+    엑셀은 구조 시트에 **타입마다 그 타입의 객체 행**이 붙는다(열은 일괄 입력이 받는 그대로).
+    JSON 은 `POST /bundles/import` 가 받는 묶음이고, 객체가 **소유 부서마다** 나뉘어 담겨
+    받는 쪽에서 부서까지 선다.
+
+    **볼 수 있는 것만 나간다** — 내보내기라고 남의 부서 것이 따라 나가면 화면에서 막은 것을
+    파일이 여는 셈이다.
+    """
+    job = jobs_routes.submit(
+        db,
+        user,
+        kind="ontology_export",
+        params={"format": format},
+        upload=None,
+        workspace_slug=None,
+    )
+    return jobs_routes._out(db, job)
 
 
 @router.get("/schema", response_model=OntologySchemaOut)
