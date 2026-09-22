@@ -4117,6 +4117,49 @@
         }
       }
     },
+    "/api/ontology/export": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Export Structure",
+        "description": "**지금 온톨로지 구조 전부**를 파일 하나로 — 엑셀(기본) 또는 JSON.\n\n엑셀은 시트가 여럿이다: 개요 · 묶음 · 타입 · 속성 · 관계 종류 · 관계 속성(있으면) ·\n참조 칸, 그리고 **타입마다 그 타입의 속성 표 하나.** 정의 검토는 회의에서 하고,\n회의에 들고 가는 것은 표다 — 화면을 스무 번 눌러 옮겨 적는 일을 없앤다.\n\nJSON 은 `POST /ontology/import` 가 받는 모양 **그대로**다. 내보낸 파일을 고쳐\n다시 넣거나, 쌍둥이에 그대로 심을 수 있다 — 그래서 봉투를 씌우지 않는다.",
+        "operationId": "export_structure_api_ontology_export_get",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(xlsx|json)$",
+              "default": "xlsx",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ontology/schema": {
       "get": {
         "tags": [

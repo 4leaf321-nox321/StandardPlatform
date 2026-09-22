@@ -6,11 +6,12 @@
 
 from __future__ import annotations
 
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Query, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -18,7 +19,17 @@ from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.objects import bulk, refedges
 from app.modules.objects.models import ObjectInstance, ObjectRelation
-from app.modules.ontology import codebook, importer, inference, managed, reset, views
+from app.modules.ontology import (
+    codebook,
+    importer,
+    inference,
+    managed,
+    reset,
+    views,
+)
+from app.modules.ontology import (
+    export as schema_export,
+)
 from app.modules.ontology.models import (
     CARDINALITIES,
     DATA_TYPES,
@@ -75,7 +86,7 @@ from app.modules.ontology.services import (
     require_slug,
     require_system_source,
 )
-from app.shared import system_sources
+from app.shared import sheets, system_sources
 from app.shared.audit import record as record_audit
 from app.shared.auth import current_user, require_system_admin
 from app.shared.errors import Conflict, NotFound, code
@@ -975,6 +986,34 @@ def _check_property_shape(payload: PropertyDefWriteRequest) -> None:
 
 
 # --- 스키마와 사이드바 ------------------------------------------------------
+
+
+@router.get("/export")
+def export_structure(
+    format: str = Query(default="xlsx", pattern="^(xlsx|json)$"),
+    _: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """**지금 온톨로지 구조 전부**를 파일 하나로 — 엑셀(기본) 또는 JSON.
+
+    엑셀은 시트가 여럿이다: 개요 · 묶음 · 타입 · 속성 · 관계 종류 · 관계 속성(있으면) ·
+    참조 칸, 그리고 **타입마다 그 타입의 속성 표 하나.** 정의 검토는 회의에서 하고,
+    회의에 들고 가는 것은 표다 — 화면을 스무 번 눌러 옮겨 적는 일을 없앤다.
+
+    JSON 은 `POST /ontology/import` 가 받는 모양 **그대로**다. 내보낸 파일을 고쳐
+    다시 넣거나, 쌍둥이에 그대로 심을 수 있다 — 그래서 봉투를 씌우지 않는다.
+    """
+    if format == "json":
+        body = json.dumps(
+            schema_export.structure(db), ensure_ascii=False, indent=2, default=str
+        )
+        return sheets.attachment(
+            body.encode("utf-8"),
+            media="application/json; charset=utf-8",
+            stem="ontology",
+            ext="json",
+        )
+    return sheets.workbook_response(schema_export.pages(db), stem="ontology")
 
 
 @router.get("/schema", response_model=OntologySchemaOut)

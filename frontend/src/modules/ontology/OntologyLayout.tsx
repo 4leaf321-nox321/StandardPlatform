@@ -14,6 +14,7 @@ import { useState } from 'react'
 import { NavLink, Outlet, useOutletContext } from 'react-router-dom'
 import { Boxes, LayoutList, Share2, Upload } from 'lucide-react'
 
+import { OntologyExportButton } from '@/modules/ontology/OntologyExportButton'
 import { ontologyApi } from '@/modules/ontology/api'
 import type { OntologySchema } from '@/modules/ontology/api'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -108,6 +109,7 @@ export default function OntologyLayout() {
         <PageHeader
           title="온톨로지"
           description="타입을 정의하면 사이드바와 화면이 생깁니다. 코드를 수정하지 않습니다."
+          actions={<OntologyExportButton onError={setError} />}
         />
 
         {resource.error && <ErrorNotice error={resource.error} />}
