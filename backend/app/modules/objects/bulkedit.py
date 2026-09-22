@@ -549,3 +549,136 @@ def apply_undo(
             rows=[row],
             planned=EditPlan(rows=[one]),
         )
+
+
+# --- 여러 건 삭제 ---------------------------------------------------------------
+#
+# 「속성 변경」 옆에 있어야 하는 짝이다. 고른 것을 한 번에 고칠 수 있는데 지우는 것만 한 건씩
+# 열어야 하면, 사람은 목록을 앞에 두고 창을 스무 번 연다.
+#
+# **무엇을 못 지우는지 먼저 말한다.** 가리키는 것이 있는 객체는 그대로 못 지운다(그 참조가
+# 화면에서 빈 칸이 된다) — 행마다 이유를 적고, 나머지만 지운다. 전부 아니면 무로 두지 않는
+# 이유: 스무 개 중 하나가 걸렸다고 열아홉을 못 지우면 사람은 그 하나를 찾아 빼고 다시 고른다.
+
+
+@dataclass
+class DeletePlan:
+    rows: list[RowPlan] = field(default_factory=list)
+    applied: bool = False
+    mode: str = "block"
+    """`block` — 가리키는 것이 있으면 그 행은 거절.
+    `detach` — 참조를 비우고 관계를 끊고 지움."""
+
+    @property
+    def counts(self) -> dict[str, int]:
+        out = {"delete": 0, "error": 0}
+        for one in self.rows:
+            out[one.action] = out.get(one.action, 0) + 1
+        return out
+
+    @property
+    def ok(self) -> bool:
+        return any(one.action == "delete" for one in self.rows)
+
+
+def delete_plan(
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    *,
+    ids: list[uuid.UUID],
+    rows: list[ObjectInstance],
+    mode: str,
+) -> DeletePlan:
+    """무엇이 지워지고 무엇이 왜 안 지워지나. **아무것도 안 지운다.**"""
+    from app.modules.objects import lifecycle
+
+    if len(ids) > MAX_ROWS:
+        raise AppError(
+            code("OBJECTS", 54),
+            f"한 번에 {MAX_ROWS}건까지입니다. 그보다 많으면 파일로 넣는 편이 낫습니다.",
+            status=422,
+        )
+    found = DeletePlan(mode=mode)
+    by_id = {row.id: row for row in rows}
+    for object_id in ids:
+        row = by_id.get(object_id)
+        if row is None:
+            found.rows.append(
+                RowPlan(
+                    id=object_id,
+                    label="(없음)",
+                    action="error",
+                    message="찾을 수 없습니다 — 지워졌거나 볼 수 없는 부서의 것입니다.",
+                )
+            )
+            continue
+        try:
+            require_owner_edit(
+                db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 17)
+            )
+        except AppError as caught:
+            found.rows.append(
+                RowPlan(id=row.id, label=row.label, action="error", message=caught.message)
+            )
+            continue
+        refs = lifecycle.references_of(db, user, row, object_type)
+        if refs.total and mode != "detach":
+            found.rows.append(
+                RowPlan(
+                    id=row.id,
+                    label=row.label,
+                    action="error",
+                    message=f"가리키는 것이 {refs.total}개 있습니다 — 「참조를 비우고 삭제」 "
+                    "를 선택하거나 먼저 해제하세요.",
+                )
+            )
+            continue
+        found.rows.append(
+            RowPlan(
+                id=row.id,
+                label=row.label,
+                action="delete",
+                before=f"가리키는 것 {refs.total}개" if refs.total else "",
+                message="참조를 비우고 지웁니다." if refs.total else "",
+            )
+        )
+    return found
+
+
+def apply_delete(
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    *,
+    rows: list[ObjectInstance],
+    planned: DeletePlan,
+) -> None:
+    """계획에서 `delete` 인 것만. **한 건씩 지우는 길과 같은 함수를 쓴다** — 규칙을 두 벌로
+    적으면 「목록에서 지운 것」 과 「상세에서 지운 것」 이 달라진다.
+
+    한 건씩 커밋한다. 계획을 세운 뒤 누가 참조를 걸었으면 그 행만 거절되고(`error` 로 바뀐다)
+    나머지는 지워진다 — 스무 개 중 하나 때문에 열아홉을 되돌리면 사람은 그 하나를 찾아 빼고
+    처음부터 다시 고른다.
+    """
+    from app.modules.objects import lifecycle
+
+    by_id = {row.id: row for row in rows}
+    for planned_row in planned.rows:
+        if planned_row.action != "delete":
+            continue
+        row = by_id.get(planned_row.id)
+        if row is None:
+            planned_row.action = "error"
+            planned_row.message = "그 사이에 사라졌습니다."
+            continue
+        try:
+            if planned.mode == "detach":
+                lifecycle.delete_detaching(db, user, row, object_type)
+            else:
+                lifecycle.delete_blocking(db, user, row, object_type)
+        except AppError as caught:
+            # 계획과 적용 사이에 누가 참조를 걸었다 — 그 행만 남기고 나머지는 지운다.
+            db.rollback()
+            planned_row.action = "error"
+            planned_row.message = caught.message

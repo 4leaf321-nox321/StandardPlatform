@@ -9,6 +9,8 @@ import { useState } from 'react'
 import { Plus } from 'lucide-react'
 
 import { accountApi } from '@/modules/accounts/api'
+import type { Account } from '@/modules/accounts/api'
+import { AccountWorkspacesDialog } from '@/modules/accounts/AccountWorkspacesDialog'
 import { workspaceApi } from '@/modules/workspaces/api'
 import { ApiError } from '@/shared/api/client'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
@@ -39,6 +41,7 @@ export default function AccountsAdminPage() {
   // 임시 비밀번호는 **한 번만** 나온다. 화면이 붙들고 있어야 관리자가 옮겨 적는다.
   const [issued, setIssued] = useState<{ email: string; password: string } | null>(null)
   const [rejecting, setRejecting] = useState<{ id: string; email: string } | null>(null)
+  const [editing, setEditing] = useState<Account | null>(null)
   const [note, setNote] = useState('')
 
   const [newEmail, setNewEmail] = useState('')
@@ -178,8 +181,15 @@ export default function AccountsAdminPage() {
                 <TableCell>
                   <StatusBadge kind="account" value={one.status} />
                 </TableCell>
+                {/* **이름으로 적는다.** slug(hq)는 주소지 부서 이름이 아니고, 사람은
+                    자기 부서를 「본사」 로 안다. 대표 소속을 앞에 두고 별표를 붙인다. */}
                 <TableCell className="text-sm">
-                  {one.memberships.join(', ') || one.requested_workspace_slug || '—'}
+                  {one.workspaces.length > 0
+                    ? [...one.workspaces]
+                        .sort((a, b) => Number(b.is_home) - Number(a.is_home))
+                        .map((room) => (room.is_home ? `★ ${room.name}` : room.name))
+                        .join(', ')
+                    : (one.requested_workspace_name ?? '—')}
                 </TableCell>
                 <TableCell className="text-sm">
                   {shownDate(one.decided_at ?? one.created_at)}
@@ -215,6 +225,9 @@ export default function AccountsAdminPage() {
                       >
                         비밀번호 초기화
                       </Button>
+                      <Button size="sm" variant="outline" onClick={() => setEditing(one)}>
+                        소속 변경
+                      </Button>
                       <Button
                         size="sm"
                         variant="outline"
@@ -244,6 +257,18 @@ export default function AccountsAdminPage() {
             ))}
           </TableBody>
         </Table>
+      )}
+
+      {editing && (
+        <AccountWorkspacesDialog
+          account={editing}
+          options={workspaces.data ?? []}
+          onClose={() => setEditing(null)}
+          onSaved={() => {
+            list.reload()
+            summary.reload()
+          }}
+        />
       )}
 
       {/* **사유를 반드시 받는다.** 메일이 없어 통보가 앱 안에서만 되므로, 안 적으면

@@ -188,7 +188,7 @@ export default function ObjectProfilePage() {
           {!isSystem && (
             <span className="text-muted-foreground">
               {/* **NULL 은 전역이다.** 빈 칸으로 두면 「부서가 없다」 로 읽힌다. */}
-              {row.owner_workspace_slug ? `${row.owner_workspace_slug} 부서` : '전역'}
+              {row.owner_workspace_name ?? row.owner_workspace_slug ?? '전역'}
             </span>
           )}
           {!isSystem && (

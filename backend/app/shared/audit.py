@@ -46,6 +46,7 @@ ACCOUNT_DECIDED = "account.decided"
 ACCOUNT_SUSPENDED = "account.suspended"
 ACCOUNT_ADMIN_CHANGED = "account.admin_changed"
 ACCOUNT_HOME_CHANGED = "account.home_changed"
+ACCOUNT_WORKSPACES_CHANGED = "account.workspaces_changed"
 ACCOUNT_DELETED = "account.deleted"
 LOGIN_THROTTLED = "auth.login_throttled"
 """같은 계정의 실패가 문턱을 넘어 응답을 늦추기 시작했다. 실패마다 남기면 넘치므로

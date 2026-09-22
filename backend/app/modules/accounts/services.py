@@ -14,9 +14,10 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import USER_STATUSES, User
-from app.modules.accounts.schemas import AccountOut
+from app.modules.accounts.schemas import AccountOut, AccountWorkspaceOut
 from app.modules.auth import security
 from app.modules.notifications import services as notifications
+from app.modules.workspaces import services as workspaces_services
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 from app.shared import audit, extensions, system_sources
 from app.shared.errors import AppError, Conflict, NotFound, code
@@ -29,14 +30,13 @@ def _now() -> datetime:
 
 
 def account_out(db: Session, user: User) -> AccountOut:
-    slugs = list(
-        db.scalars(
-            select(Workspace.slug)
-            .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
-            .where(WorkspaceMember.user_id == user.id)
-            .order_by(Workspace.name)
-        )
-    )
+    rows = db.execute(
+        select(Workspace, WorkspaceMember.role)
+        .join(WorkspaceMember, WorkspaceMember.workspace_id == Workspace.id)
+        .where(WorkspaceMember.user_id == user.id)
+        .order_by(Workspace.name)
+    ).all()
+    paths = workspaces_services.paths(db)
     home = db.get(Workspace, user.home_workspace_id) if user.home_workspace_id else None
     requested = (
         db.get(Workspace, user.requested_workspace_id) if user.requested_workspace_id else None
@@ -49,8 +49,20 @@ def account_out(db: Session, user: User) -> AccountOut:
         is_system_admin=user.is_system_admin,
         must_change_password=user.must_change_password,
         home_workspace_slug=home.slug if home else None,
+        home_workspace_name=home.name if home else None,
         requested_workspace_slug=requested.slug if requested else None,
-        memberships=slugs,
+        requested_workspace_name=requested.name if requested else None,
+        memberships=[workspace.slug for workspace, _ in rows],
+        workspaces=[
+            AccountWorkspaceOut(
+                slug=workspace.slug,
+                name=workspace.name,
+                path=paths.get(workspace.id, workspace.name),
+                role=role,
+                is_home=workspace.id == user.home_workspace_id,
+            )
+            for workspace, role in rows
+        ],
         created_at=user.created_at,
         decided_at=user.decided_at,
         decision_note=user.decision_note,
@@ -350,6 +362,101 @@ def set_home_workspace(
         target_label=user.email,
         workspace_id=workspace.id,
         changes={"home_workspace": {"before": str(before), "after": workspace.slug}},
+    )
+    db.commit()
+    db.refresh(user)
+    return user
+
+
+def set_memberships(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    workspace_slugs: list[str],
+    home_workspace_slug: str | None,
+    actor: User,
+) -> User:
+    """소속을 **통째로** 정한다 — 적힌 부서가 전부가 된다.
+
+    부서 화면에도 멤버 관리가 있는데 여기에도 두는 이유: 사람을 옮기는 일은 **사람에서
+    시작한다.** 「이 사람 소속을 바꿔라」 를 부서 화면에서 하려면 옛 부서를 먼저 찾아
+    빼고 새 부서를 찾아 넣어야 하고, 중간에 그만두면 두 부서에 걸쳐 있거나 어디에도
+    없는 계정이 남는다. 여기서는 한 번에 끝난다.
+
+    **역할은 그대로 둔다** — 남는 부서의 관리자를 소속 변경이 멤버로 떨어뜨리면 안 된다.
+    새로 들어가는 부서는 member 로 시작한다.
+    """
+    user = get_account(db, user_id)
+
+    wanted: list[Workspace] = []
+    seen: set[uuid.UUID] = set()
+    for slug in workspace_slugs:
+        workspace = workspace_by_slug(db, slug)
+        if workspace.id not in seen:
+            seen.add(workspace.id)
+            wanted.append(workspace)
+
+    current = {
+        row.workspace_id: row
+        for row in db.scalars(
+            select(WorkspaceMember).where(WorkspaceMember.user_id == user.id)
+        )
+    }
+
+    # **마지막 관리자를 조용히 빼지 않는다** — 그 부서는 아무도 못 고치는 상태가 된다.
+    for workspace_id, member in current.items():
+        if workspace_id in seen or member.role != "manager":
+            continue
+        if workspaces_services.manager_count(db, workspace_id) <= 1:
+            leaving = db.get(Workspace, workspace_id)
+            raise Conflict(
+                code("ACCOUNTS", 8),
+                f"{leaving.name if leaving else '그 부서'}의 마지막 관리자입니다. "
+                "다른 사람을 관리자로 올린 뒤에 빼세요.",
+            )
+
+    for workspace_id, member in current.items():
+        if workspace_id not in seen:
+            db.delete(member)
+    for workspace in wanted:
+        if workspace.id not in current:
+            db.add(WorkspaceMember(workspace_id=workspace.id, user_id=user.id, role="member"))
+
+    home = wanted[0]
+    if home_workspace_slug:
+        chosen = workspace_by_slug(db, home_workspace_slug)
+        if chosen.id not in seen:
+            raise Conflict(
+                code("ACCOUNTS", 9),
+                f"{chosen.name}은(는) 이 계정의 소속이 아닙니다 — 대표 소속은 소속 중에서 "
+                "고릅니다.",
+            )
+        home = chosen
+    elif user.home_workspace_id in seen:
+        found = db.get(Workspace, user.home_workspace_id)
+        if found is not None:
+            home = found
+
+    before = [
+        row.slug for row in db.scalars(select(Workspace).where(Workspace.id.in_(current)))
+    ]
+    before_home = user.home_workspace_id
+    user.home_workspace_id = home.id
+    audit.record(
+        db,
+        action=audit.ACCOUNT_WORKSPACES_CHANGED,
+        actor=actor,
+        target_table="users",
+        target_id=user.id,
+        target_label=user.email,
+        workspace_id=home.id,
+        changes={
+            "memberships": {
+                "before": ", ".join(sorted(before)),
+                "after": ", ".join(sorted(row.slug for row in wanted)),
+            },
+            "home_workspace": {"before": str(before_home), "after": home.slug},
+        },
     )
     db.commit()
     db.refresh(user)

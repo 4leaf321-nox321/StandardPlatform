@@ -33,6 +33,22 @@ class AccountSummaryOut(BaseModel):
     """승인 대기 수. 관리 화면에 들어가야만 보이면 대기가 며칠씩 방치된다."""
 
 
+class AccountWorkspaceOut(BaseModel):
+    """소속 한 줄 — **이름과 경로를 함께 준다.**
+
+    slug 만 주면 화면은 「hq」 라고 쓰게 된다. 그것은 주소지 부서 이름이 아니고,
+    사람은 자기 부서를 「본사」 로 안다.
+    """
+
+    slug: str
+    name: str
+    path: str
+    """개발본부 / 재료시험팀 — 같은 이름의 팀이 본부마다 있을 수 있다."""
+    role: str
+    is_home: bool
+    """대표 소속인가 — 이 사람이 로그인해서 처음 서는 부서."""
+
+
 class AccountOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -43,9 +59,13 @@ class AccountOut(BaseModel):
     is_system_admin: bool
     must_change_password: bool
     home_workspace_slug: str | None
+    home_workspace_name: str | None
     requested_workspace_slug: str | None
+    requested_workspace_name: str | None
     memberships: list[str]
     """부서 slug 목록. 상세 역할은 부서 멤버 화면에서 다룬다."""
+    workspaces: list[AccountWorkspaceOut]
+    """같은 소속을 이름·경로·역할까지. 화면은 이것으로 그린다."""
     created_at: datetime
     decided_at: datetime | None
     decision_note: str | None
@@ -81,6 +101,21 @@ class HomeWorkspaceRequest(BaseModel):
     """
 
     workspace_slug: str = Field(min_length=1, max_length=64)
+
+
+class MembershipsRequest(BaseModel):
+    """소속을 **통째로** 정한다 — 여기 적힌 부서가 소속의 전부가 된다.
+
+    「빼기」 와 「넣기」 를 따로 받지 않는 이유: 화면은 지금 소속을 보고 고친 결과를
+    보낸다. 차이를 화면이 계산하게 하면, 그 사이에 다른 관리자가 넣은 부서를 화면이
+    모른 채 지운다.
+    """
+
+    workspace_slugs: list[str] = Field(min_length=1, max_length=50)
+    """**비울 수 없다.** 소속 없는 계정은 로그인해도 설 자리가 없다 — 그럴 때
+    하려던 일은 대개 「정지」 다."""
+    home_workspace_slug: str | None = None
+    """비우면 지금 대표 소속을 유지하고, 그것이 빠졌으면 첫 부서가 된다."""
 
 
 class SystemAdminRequest(BaseModel):

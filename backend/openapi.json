@@ -749,6 +749,60 @@
         }
       }
     },
+    "/api/accounts/{account_id}/workspaces": {
+      "put": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Set Memberships",
+        "description": "소속을 **통째로** 정한다 — 적힌 부서가 소속의 전부가 된다.\n\n사람을 옮기는 일은 사람에서 시작한다. 부서 화면에서만 할 수 있으면 옛 부서를 찾아\n빼고 새 부서를 찾아 넣어야 하고, 중간에 그만두면 두 부서에 걸친 계정이 남는다.\n\n남는 부서의 역할은 그대로다. 마지막 관리자를 빼려 하면 거절한다.",
+        "operationId": "set_memberships_api_accounts__account_id__workspaces_put",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MembershipsRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AccountOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/accounts/{account_id}/system-admin": {
       "post": {
         "tags": [
@@ -5687,6 +5741,59 @@
         }
       }
     },
+    "/api/objects/{type_slug}/bulk-delete": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Bulk Delete",
+        "description": "고른 것들을 지운다 — `apply=false`(기본)면 계획만.\n\n「속성 변경」 의 짝이다. 고른 것을 한 번에 고칠 수 있는데 지우는 것만 한 건씩 열어야 하면,\n사람은 목록을 앞에 두고 창을 스무 번 연다.\n\n가리키는 것이 있는 객체는 기본(`block`)으로 **거절하고 몇 개가 걸렸는지 말한다** —\n조용히 지우면 다른 화면의 칸이 빈 채로 남는다. 그래도 지우려면 `detach` 로 부른다.\n한 건씩 지우는 길과 같은 규칙·같은 함수다.",
+        "operationId": "bulk_delete_api_objects__type_slug__bulk_delete_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkDeleteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDeletePlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/template": {
       "get": {
         "tags": [
@@ -8193,6 +8300,17 @@
             ],
             "title": "Home Workspace Slug"
           },
+          "home_workspace_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Workspace Name"
+          },
           "requested_workspace_slug": {
             "anyOf": [
               {
@@ -8204,12 +8322,30 @@
             ],
             "title": "Requested Workspace Slug"
           },
+          "requested_workspace_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested Workspace Name"
+          },
           "memberships": {
             "items": {
               "type": "string"
             },
             "type": "array",
             "title": "Memberships"
+          },
+          "workspaces": {
+            "items": {
+              "$ref": "#/components/schemas/AccountWorkspaceOut"
+            },
+            "type": "array",
+            "title": "Workspaces"
           },
           "created_at": {
             "type": "string",
@@ -8249,8 +8385,11 @@
           "is_system_admin",
           "must_change_password",
           "home_workspace_slug",
+          "home_workspace_name",
           "requested_workspace_slug",
+          "requested_workspace_name",
           "memberships",
+          "workspaces",
           "created_at",
           "decided_at",
           "decision_note"
@@ -8275,6 +8414,40 @@
         ],
         "title": "AccountSummaryOut",
         "description": "활성 시스템 관리자 수.\n\n**1명이면 그 사람이 잠기는 순간 복구 경로가 서버 콘솔뿐이다.** 목록은 쪽\n단위라 화면이 세면 틀린다 — 서버가 센다."
+      },
+      "AccountWorkspaceOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "role": {
+            "type": "string",
+            "title": "Role"
+          },
+          "is_home": {
+            "type": "boolean",
+            "title": "Is Home"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "name",
+          "path",
+          "role",
+          "is_home"
+        ],
+        "title": "AccountWorkspaceOut",
+        "description": "소속 한 줄 — **이름과 경로를 함께 준다.**\n\nslug 만 주면 화면은 「hq」 라고 쓰게 된다. 그것은 주소지 부서 이름이 아니고,\n사람은 자기 부서를 「본사」 로 안다."
       },
       "AliasesRequest": {
         "properties": {
@@ -8787,6 +8960,73 @@
           "count"
         ],
         "title": "BucketOut"
+      },
+      "BulkDeletePlanOut": {
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/BulkEditRow"
+            },
+            "type": "array",
+            "title": "Rows"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "mode",
+          "rows",
+          "counts"
+        ],
+        "title": "BulkDeletePlanOut",
+        "description": "**계획 먼저.** 몇 건이 지워지고, 몇 건은 왜 안 되나."
+      },
+      "BulkDeleteRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Ids"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "block",
+              "detach"
+            ],
+            "title": "Mode",
+            "default": "block"
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "BulkDeleteRequest"
       },
       "BulkEditPlanOut": {
         "properties": {
@@ -10738,6 +10978,36 @@
         ],
         "title": "MemberRoleRequest"
       },
+      "MembershipsRequest": {
+        "properties": {
+          "workspace_slugs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Workspace Slugs"
+          },
+          "home_workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Home Workspace Slug"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workspace_slugs"
+        ],
+        "title": "MembershipsRequest",
+        "description": "소속을 **통째로** 정한다 — 여기 적힌 부서가 소속의 전부가 된다.\n\n「빼기」 와 「넣기」 를 따로 받지 않는 이유: 화면은 지금 소속을 보고 고친 결과를\n보낸다. 차이를 화면이 계산하게 하면, 그 사이에 다른 관리자가 넣은 부서를 화면이\n모른 채 지운다."
+      },
       "MergeRequest": {
         "properties": {
           "into": {
@@ -11461,6 +11731,17 @@
               }
             ],
             "title": "Owner Workspace Slug"
+          },
+          "owner_workspace_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Workspace Name"
           },
           "valid_from_year": {
             "anyOf": [

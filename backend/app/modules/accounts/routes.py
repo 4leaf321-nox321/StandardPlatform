@@ -20,6 +20,7 @@ from app.modules.accounts.schemas import (
     ApproveRequest,
     CreateAccountRequest,
     HomeWorkspaceRequest,
+    MembershipsRequest,
     RejectRequest,
     SignupRequest,
     SystemAdminRequest,
@@ -148,6 +149,30 @@ def set_home_workspace(
     """대표 소속 — 이 사람이 로그인해서 처음 서는 부서."""
     user = services.set_home_workspace(
         db, user_id=account_id, workspace_slug=payload.workspace_slug, actor=admin
+    )
+    return services.account_out(db, user)
+
+
+@router.put("/{account_id}/workspaces", response_model=AccountOut)
+def set_memberships(
+    account_id: uuid.UUID,
+    payload: MembershipsRequest,
+    admin: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> AccountOut:
+    """소속을 **통째로** 정한다 — 적힌 부서가 소속의 전부가 된다.
+
+    사람을 옮기는 일은 사람에서 시작한다. 부서 화면에서만 할 수 있으면 옛 부서를 찾아
+    빼고 새 부서를 찾아 넣어야 하고, 중간에 그만두면 두 부서에 걸친 계정이 남는다.
+
+    남는 부서의 역할은 그대로다. 마지막 관리자를 빼려 하면 거절한다.
+    """
+    user = services.set_memberships(
+        db,
+        user_id=account_id,
+        workspace_slugs=payload.workspace_slugs,
+        home_workspace_slug=payload.home_workspace_slug,
+        actor=admin,
     )
     return services.account_out(db, user)
 

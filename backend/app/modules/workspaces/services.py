@@ -89,6 +89,12 @@ def ordered_tree(db: Session) -> list[tuple[Workspace, int, str]]:
     return out
 
 
+def paths(db: Session) -> dict[uuid.UUID, str]:
+    """부서 id → 「개발본부 / 재료시험팀」. 이름만 보여 주면 같은 이름의 팀이 본부마다
+    있을 때 어느 쪽인지 알 수 없다."""
+    return {node.id: path for node, _, path in ordered_tree(db)}
+
+
 def _descendant_ids(db: Session, workspace_id: uuid.UUID) -> set[uuid.UUID]:
     """자신 + 모든 하위. 부모를 바꿀 때 순환을 막는 데 쓴다."""
     rows = list(db.scalars(select(Workspace)))
@@ -586,7 +592,9 @@ def add_member(db: Session, *, workspace: Workspace, email: str, role: str) -> M
     return _member_out(db, member)
 
 
-def _manager_count(db: Session, workspace_id: uuid.UUID) -> int:
+def manager_count(db: Session, workspace_id: uuid.UUID) -> int:
+    """이 부서의 관리자 수. **마지막 한 명을 빼거나 강등하지 않으려고** 센다 —
+    계정 화면의 소속 변경도 같은 셈을 쓴다."""
     return (
         db.scalar(
             select(func.count())
@@ -610,11 +618,7 @@ def set_role(db: Session, *, workspace: Workspace, user_id: uuid.UUID, role: str
 
     # **마지막 관리자를 강등하지 않는다.** 그러면 그 부서는 아무도 못 고치는
     # 상태가 되고, 복구는 시스템 관리자를 찾아가는 길밖에 없다.
-    if (
-        member.role == "manager"
-        and role != "manager"
-        and _manager_count(db, workspace.id) <= 1
-    ):
+    if member.role == "manager" and role != "manager" and manager_count(db, workspace.id) <= 1:
         raise Conflict(
             code("WORKSPACES", 12),
             "부서의 마지막 관리자입니다. 다른 사람을 관리자로 올린 뒤에 바꾸세요.",
@@ -630,7 +634,7 @@ def remove_member(db: Session, *, workspace: Workspace, user_id: uuid.UUID) -> N
     member = membership_of(db, workspace_id=workspace.id, user_id=user_id)
     if member is None:
         raise NotFound(code("WORKSPACES", 11), "이 부서의 멤버가 아닙니다.")
-    if member.role == "manager" and _manager_count(db, workspace.id) <= 1:
+    if member.role == "manager" and manager_count(db, workspace.id) <= 1:
         raise Conflict(
             code("WORKSPACES", 12),
             "부서의 마지막 관리자입니다. 다른 사람을 관리자로 올린 뒤에 빼세요.",

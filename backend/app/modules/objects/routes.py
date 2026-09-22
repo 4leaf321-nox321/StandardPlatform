@@ -53,6 +53,8 @@ from app.modules.objects.schemas import (
     AliasesRequest,
     AttachmentBrief,
     BucketOut,
+    BulkDeletePlanOut,
+    BulkDeleteRequest,
     BulkEditPlanOut,
     BulkEditRequest,
     BulkEditRow,
@@ -162,8 +164,10 @@ def _not_system(object_type: ObjectType, what: str) -> None:
         )
 
 
-def _workspace_slugs(db: Session) -> dict[uuid.UUID, str]:
-    return {row.id: row.slug for row in db.scalars(select(Workspace))}
+def _workspace_slugs(db: Session) -> dict[uuid.UUID, Workspace]:
+    """부서 id → 부서. **이름도 실어야 한다** — slug(hq)는 주소지 부서 이름이 아니고,
+    사람은 자기 부서를 「본사」 로 안다."""
+    return {row.id: row for row in db.scalars(select(Workspace))}
 
 
 def _ref_labels(
@@ -181,7 +185,7 @@ def _ref_labels(
 def _out(
     row: ObjectInstance,
     type_slug: str,
-    workspaces: dict[uuid.UUID, str],
+    workspaces: dict[uuid.UUID, Workspace],
     ref_labels: dict[uuid.UUID, str] | None = None,
     alias_rows: list[ObjectAlias] | None = None,
 ) -> ObjectOut:
@@ -191,6 +195,9 @@ def _out(
         for one in (alias_rows or [])
         if one.kind.startswith("source:")
     }
+    owner_workspace = (
+        workspaces.get(row.owner_workspace_id) if row.owner_workspace_id else None
+    )
     return ObjectOut(
         id=row.id,
         type_slug=type_slug,
@@ -202,9 +209,8 @@ def _out(
         aliases=names,
         external_ids=external,
         status=row.status,
-        owner_workspace_slug=(
-            workspaces.get(row.owner_workspace_id) if row.owner_workspace_id else None
-        ),
+        owner_workspace_slug=(owner_workspace.slug if owner_workspace else None),
+        owner_workspace_name=(owner_workspace.name if owner_workspace else None),
         valid_from_year=row.valid_from_year,
         valid_to_year=row.valid_to_year,
         created_at=row.created_at,
@@ -728,7 +734,11 @@ def _view_out(db: Session, user: User, row: SavedView, type_slug: str) -> SavedV
         query=SavedViewQuery.model_validate(row.query or {}),
         owner_user_id=row.owner_user_id,
         owner_label=owner.display_name if owner else "",
-        workspace_slug=workspaces.get(row.workspace_id) if row.workspace_id else None,
+        workspace_slug=(
+            workspaces[row.workspace_id].slug
+            if row.workspace_id and row.workspace_id in workspaces
+            else None
+        ),
         summary=SavedViewSummary.model_validate(row.summary or {}),
         home_order=row.home_order,
         can_edit=_can_edit_view(db, user, row),
@@ -1296,6 +1306,51 @@ def bulk_edit_undo(
         db.commit()
         planned.applied = True
     return _bulk_out(db, object_type, planned, undo.field_name, new_batch)
+
+
+@router.post("/{type_slug}/bulk-delete", response_model=BulkDeletePlanOut)
+def bulk_delete(
+    type_slug: str,
+    payload: BulkDeleteRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> BulkDeletePlanOut:
+    """고른 것들을 지운다 — `apply=false`(기본)면 계획만.
+
+    「속성 변경」 의 짝이다. 고른 것을 한 번에 고칠 수 있는데 지우는 것만 한 건씩 열어야 하면,
+    사람은 목록을 앞에 두고 창을 스무 번 연다.
+
+    가리키는 것이 있는 객체는 기본(`block`)으로 **거절하고 몇 개가 걸렸는지 말한다** —
+    조용히 지우면 다른 화면의 칸이 빈 채로 남는다. 그래도 지우려면 `detach` 로 부른다.
+    한 건씩 지우는 길과 같은 규칙·같은 함수다.
+    """
+    object_type = _type(db, type_slug)
+    _not_system(object_type, "지우지")
+    managed.require_objects_editable(object_type, what="삭제하지")
+    ids = bulkedit.ids_of(payload.ids)
+    rows = _editable_rows(db, user, object_type, ids)
+    planned = bulkedit.delete_plan(
+        db, user, object_type, ids=ids, rows=rows, mode=payload.mode
+    )
+    if payload.apply and planned.ok:
+        bulkedit.apply_delete(db, user, object_type, rows=rows, planned=planned)
+        planned.applied = True
+    return BulkDeletePlanOut(
+        applied=planned.applied,
+        mode=planned.mode,
+        rows=[
+            BulkEditRow(
+                id=one.id,
+                label=one.label,
+                action=one.action,
+                before=one.before,
+                after=one.after,
+                message=one.message,
+            )
+            for one in planned.rows
+        ],
+        counts=planned.counts,
+    )
 
 
 def _not_bulk_editable(object_type: ObjectType) -> None:

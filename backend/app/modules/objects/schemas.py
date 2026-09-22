@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -35,6 +35,8 @@ class ObjectOut(BaseModel):
     status: str
     owner_workspace_slug: str | None
     """NULL 은 전역이다 — 여러 부서가 함께 쓰므로 고치는 것은 시스템 관리자뿐이다."""
+    owner_workspace_name: str | None = None
+    """부서 이름. **화면은 이것을 쓴다** — slug 만 주면 「hq 부서」 라고 쓰게 된다."""
     valid_from_year: int | None
     valid_to_year: int | None
     created_at: datetime
@@ -574,6 +576,27 @@ class BulkEditRequest(BaseModel):
 
 
 class BulkUndoRequest(BaseModel):
+    apply: bool = False
+
+
+# --- 여럿 골라 지우기 ---------------------------------------------------------
+
+
+class BulkDeletePlanOut(BaseModel):
+    """**계획 먼저.** 몇 건이 지워지고, 몇 건은 왜 안 되나."""
+
+    applied: bool
+    mode: str
+    """block · detach."""
+    rows: list[BulkEditRow]
+    counts: dict[str, int]
+
+
+class BulkDeleteRequest(BaseModel):
+    ids: list[uuid.UUID] = Field(min_length=1)
+    mode: Literal["block", "detach"] = "block"
+    """`block` — 가리키는 것이 있으면 그 행은 거절.
+    `detach` — 참조를 비우고 관계를 끊고 지운다. 한 건씩 지우는 길과 같은 두 갈래다."""
     apply: bool = False
 
 

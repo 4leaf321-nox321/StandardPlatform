@@ -91,6 +91,17 @@ export interface Member {
   joined_at: string
 }
 
+/** 소속 한 줄 — **이름과 경로를 함께.** slug 만 있으면 화면은 「hq」 라고 쓰게 된다. */
+export interface AccountWorkspace {
+  slug: string
+  name: string
+  /** 개발본부 / 재료시험팀 — 같은 이름의 팀이 본부마다 있을 수 있다. */
+  path: string
+  role: string
+  /** 대표 소속인가 — 이 사람이 로그인해서 처음 서는 부서. */
+  is_home: boolean
+}
+
 export interface Account {
   id: string
   email: string
@@ -99,8 +110,11 @@ export interface Account {
   is_system_admin: boolean
   must_change_password: boolean
   home_workspace_slug: string | null
+  home_workspace_name: string | null
   requested_workspace_slug: string | null
+  requested_workspace_name: string | null
   memberships: string[]
+  workspaces: AccountWorkspace[]
   created_at: string
   decided_at: string | null
   decision_note: string | null

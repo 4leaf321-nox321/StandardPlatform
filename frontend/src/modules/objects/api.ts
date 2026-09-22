@@ -21,6 +21,8 @@ export interface ObjectRow {
   external_ids?: Record<string, string>
   status: string
   owner_workspace_slug: string | null
+  /** 부서 **이름**. 화면은 이것을 쓴다 — slug(hq)는 주소지 부서 이름이 아니다. */
+  owner_workspace_name: string | null
   valid_from_year: number | null
   valid_to_year: number | null
   created_at: string
@@ -130,6 +132,15 @@ export interface BulkEditPlan {
   counts: Record<string, number>
   /** 고를 수 있는 칸 — 고르개가 이것만 보여 준다. */
   fields: { field: string; label: string }[]
+}
+
+/** 여럿 골라 지우기의 계획 — 행마다 지워지나, 안 지워지면 왜. */
+export interface BulkDeletePlan {
+  applied: boolean
+  mode: 'block' | 'detach'
+  /** action 은 delete · error 뿐이다 — 지우는 데 「그대로」 는 없다. */
+  rows: BulkEditRow[]
+  counts: Record<string, number>
 }
 
 /** 이 객체를 가리키는 것 — 삭제 전에 보는 것. */
@@ -561,6 +572,16 @@ export const objectApi = {
     typeSlug: string,
     body: { ids: string[]; field: string; value: unknown; apply: boolean },
   ) => api.post<BulkEditPlan>(`/objects/${typeSlug}/bulk-edit`, body),
+  /**
+   * 고른 것들을 지운다 — `apply: false`(기본)면 계획만.
+   *
+   * 가리키는 것이 있는 객체는 기본(`block`)으로 거절하고 몇 개가 걸렸는지 말한다.
+   * 그래도 지우려면 `mode: 'detach'` — 가리키던 칸이 비고 관계가 끊긴다.
+   */
+  bulkDelete: (
+    typeSlug: string,
+    body: { ids: string[]; mode: 'block' | 'detach'; apply: boolean },
+  ) => api.post<BulkDeletePlan>(`/objects/${typeSlug}/bulk-delete`, body),
   /**
    * 같이 바뀐 것을 **한 번에** 그때 값으로 — `apply: false` 면 계획만.
    *

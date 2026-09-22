@@ -7,7 +7,7 @@
 
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { BarChart3, Download, FileUp, Loader2, Pencil, Plus } from 'lucide-react'
+import { BarChart3, Download, FileUp, Loader2, Pencil, Plus, Trash2 } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import { workspaceApi } from '@/modules/workspaces/api'
@@ -27,6 +27,7 @@ import { ConditionBar } from '@/modules/objects/ConditionBar'
 import { ViewPicker } from '@/modules/objects/ViewPicker'
 import { propertyText } from '@/modules/objects/PropertyFields'
 import { ObjectCreateDialog } from '@/modules/objects/ObjectCreateDialog'
+import { BulkDeleteDialog } from '@/modules/objects/BulkDeleteDialog'
 import { BulkEditDialog } from '@/modules/objects/BulkEditDialog'
 import { BulkUndoDialog } from '@/modules/objects/BulkUndoDialog'
 import { ObjectImportDialog } from '@/modules/objects/ObjectImportDialog'
@@ -236,6 +237,7 @@ export default function ObjectListPage() {
    *  말과 눈에 보이는 것이 어긋나고, 그때 사람은 무엇을 바꾸는지 모른다. */
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [bulkEditing, setBulkEditing] = useState(false)
+  const [bulkDeleting, setBulkDeleting] = useState(false)
   /** 이어진 것 너머의 칸 — 조건 고르개가 자기 칸 아래에 붙인다. */
   const linked = useResource(() => objectApi.fields(typeSlug), [typeSlug])
   /** 되돌릴 묶음 — 일괄 수정을 적용한 직후 「복원」 로 연다. */
@@ -620,6 +622,10 @@ export default function ObjectListPage() {
               <Pencil className="mr-1 size-4" />
               속성 변경
             </Button>
+            <Button size="sm" variant="destructive" onClick={() => setBulkDeleting(true)}>
+              <Trash2 className="mr-1 size-4" />
+              삭제
+            </Button>
             <Button size="sm" variant="ghost" onClick={() => setPicked(new Set())}>
               선택 해제
             </Button>
@@ -746,7 +752,7 @@ export default function ObjectListPage() {
                     {!isSystem && (
                       <TableCell className="text-muted-foreground">
                         {/* **NULL 은 전역이다.** 빈 칸으로 두면 「부서가 없다」 로 읽힌다. */}
-                        {row.owner_workspace_slug ?? '전역'}
+                        {row.owner_workspace_name ?? row.owner_workspace_slug ?? '전역'}
                       </TableCell>
                     )}
                     <TableCell>
@@ -785,6 +791,19 @@ export default function ObjectListPage() {
           onUndo={(batchId) => {
             setBulkEditing(false)
             setUndoBatch(batchId)
+          }}
+        />
+      )}
+
+      {type && bulkDeleting && (
+        <BulkDeleteDialog
+          typeSlug={typeSlug}
+          typeLabel={type.label}
+          ids={[...picked]}
+          onClose={() => setBulkDeleting(false)}
+          onApplied={() => {
+            list.reload()
+            setPicked(new Set())
           }}
         />
       )}
