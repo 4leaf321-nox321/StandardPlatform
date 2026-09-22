@@ -26,9 +26,8 @@ def _three(client: TestClient, admin: Signed) -> tuple[str, list[str]]:
 
 
 def _alive(client: TestClient, who: Signed, slug: str, object_id: str) -> bool:
-    return (
-        client.get(f"/api/objects/{slug}/{object_id}", headers=who.headers).status_code == 200
-    )
+    got = client.get(f"/api/objects/{slug}/{object_id}", headers=who.headers)
+    return bool(got.status_code == 200)
 
 
 def test_계획이_먼저고_아무것도_안_지운다(client: TestClient, admin: Signed) -> None:

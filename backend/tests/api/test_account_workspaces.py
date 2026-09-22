@@ -9,6 +9,7 @@ from __future__ import annotations
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.modules.workspaces.models import Workspace, WorkspaceMember
@@ -84,7 +85,7 @@ def test_남는_부서의_역할은_그대로다(
     hq = _room(db, "본사", f"hq2-{workspace.slug}")
     one = _account(client, admin, "keeps-role@test.local", workspace.slug)
     db.execute(
-        WorkspaceMember.__table__.update()
+        update(WorkspaceMember)
         .where(WorkspaceMember.user_id == one["id"])
         .values(role="manager")
     )
@@ -103,7 +104,7 @@ def test_마지막_관리자는_빼지_않고_소속_아닌_부서는_대표가_
     hq = _room(db, "본사", f"hq3-{workspace.slug}")
     one = _account(client, admin, "last-manager@test.local", solo.slug)
     db.execute(
-        WorkspaceMember.__table__.update()
+        update(WorkspaceMember)
         .where(WorkspaceMember.user_id == one["id"])
         .values(role="manager")
     )
