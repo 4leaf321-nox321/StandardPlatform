@@ -85,6 +85,7 @@ export function TypeEditDialog({
   const [temporalKind, setTemporalKind] = useState<string>(type.temporal_kind)
   const [sortOrder, setSortOrder] = useState(String(type.sort_order))
   const [isActive, setIsActive] = useState(type.is_active)
+  const [core, setCore] = useState(type.core ?? false)
   const [listView, setListView] = useState<ListView>(type.list_view ?? {})
   const [formView, setFormView] = useState<SectionView>(type.form_view ?? {})
   const [detailView, setDetailView] = useState<SectionView>(type.detail_view ?? {})
@@ -112,6 +113,7 @@ export function TypeEditDialog({
         temporal_kind: temporalKind,
         sort_order: Number(sortOrder) || 0,
         is_active: isActive,
+        core,
         list_view: listView,
         form_view: formView,
         detail_view: detailView,
@@ -332,6 +334,28 @@ export function TypeEditDialog({
                     끄면 메뉴와 생성에서 빠집니다. <b>자료는 그대로 남습니다.</b>
                   </span>
                 </label>
+
+                {/* **공개는 화면 배치와 따로 정한다.** 사이드바 묶음을 공유 경계로 쓰면
+                    누가 메뉴를 옮기는 순간 바깥에 열린 범위가 조용히 바뀐다. */}
+                {kindClass !== 'system' && (
+                  <label className="flex items-start gap-2 border-t pt-3 text-sm xl:col-span-2">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 size-4"
+                      checked={core}
+                      onChange={(event) => setCore(event.target.checked)}
+                    />
+                    <span>
+                      코어 — 바깥 시스템에 연다
+                      <span className="text-muted-foreground ml-1 text-xs">
+                        켜면 이 타입이 <code>/api/core</code> 로 나가 다른 시스템이 주기적으로
+                        가져갑니다(볼 수 있는 것만). <b>켜는 순간 약속이 됩니다</b> — 타입 slug 와
+                        속성 key 가 남의 시스템 코드에 박히므로, 그 뒤로 이름을 바꾸면 그쪽이
+                        깨집니다.
+                      </span>
+                    </span>
+                  </label>
+                )}
               </div>
             </TabsContent>
 

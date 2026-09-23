@@ -11,12 +11,13 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Query, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
+from app.modules.coreapi.schemas import CoreStatusOut
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs.schemas import JobOut
 from app.modules.objects import bulk, refedges
@@ -152,6 +153,7 @@ def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectType
         kind_class=row.kind_class,
         system_source=row.system_source,
         entry_policy=row.entry_policy,
+        core=row.core,
         managed_by=row.managed_by,
         parent_slug=row.parent_slug,
         key_policy=row.key_policy,
@@ -316,6 +318,7 @@ def create_type(
         detail_view=payload.detail_view,
         title_template=payload.title_template,
         is_active=payload.is_active,
+        core=payload.core,
     )
     db.add(row)
     db.flush()
@@ -395,6 +398,15 @@ def update_type(
         row.title_template = payload.title_template
     if "is_active" in sent and payload.is_active is not None:
         row.is_active = payload.is_active
+    # **투영 타입은 못 연다.** 행이 원 표(부서 · 계정)에 있어 사람 정보가 그대로 나가고,
+    # 그것을 바깥에 여는 일은 온톨로지 공개가 아니라 다른 판단이다.
+    if "core" in sent and payload.core is not None:
+        if payload.core and row.kind_class == "system":
+            raise Conflict(
+                code("ONTOLOGY", 45),
+                f"{row.label}은(는) 다른 표를 비추는 타입이라 바깥에 열 수 없습니다.",
+            )
+        row.core = payload.core
 
     # **`null` 을 명시하면 사이드바에서 뺀다.** 안 보내면 그대로 둔다 — 그 둘을
     # 안 가르면 다른 칸 하나 고칠 때마다 메뉴에서 사라진다.
@@ -448,6 +460,15 @@ def delete_type(
     """
     row = _type(db, slug)
     managed.require_definition_editable(row)
+    if row.core:
+        # **끄는 것 자체가 알리는 행동이다.** 열린 채로 지우면 남의 동기화가 404 를 받고,
+        # 그쪽은 그것이 「잠깐 장애」 인지 「없어진 것」 인지 구별할 수 없다.
+        raise Conflict(
+            code("ONTOLOGY", 47),
+            f"{row.label}은(는) 바깥에 열려 있어 지울 수 없습니다. 먼저 「코어」 를 끄세요 — "
+            "그러면 받아 가던 쪽이 그날로 알게 됩니다.",
+            details={"core_consumers": _core_consumers(db, row)},
+        )
     count = db.scalar(
         select(func.count())
         .select_from(ObjectInstance)
@@ -903,6 +924,43 @@ def _promote_out(
     )
 
 
+def _core_consumers(db: Session, object_type: ObjectType) -> list[str]:
+    """이 타입이 바깥에 열려 있으면 **누가 읽을 수 있는지** 한 줄씩.
+
+    닫혀 있으면 빈 목록이다 — 열지 않은 타입에까지 경고를 세우면 그 경고는 곧 안 읽힌다.
+    """
+    if not object_type.core:
+        return []
+    from app.modules.coreapi import services as core_services
+
+    return [
+        f"{one.name} ({one.last_used_at:%Y-%m-%d} 사용)"
+        if one.last_used_at
+        else f"{one.name} (아직 안 씀)"
+        for one in core_services.consumers(db)
+    ]
+
+
+def _require_core_accepted(
+    db: Session, object_type: ObjectType, *, accepted: bool, what: str
+) -> None:
+    """**바깥에 연 타입의 약속을 말없이 깨지 않는다.**
+
+    이 칸(또는 값)의 이름은 남의 시스템 코드에 박혀 있다. 지우면 그쪽에서 조용히 사라지고,
+    그 사실은 이쪽 화면 어디에도 안 뜬다 — 그래서 한 번 더 묻는다. 막지는 않는다: 정말
+    지워야 할 때가 있고, 그때 「코어를 껐다 켜기」 를 강요하면 그 사이 동기화가 실패한다.
+    """
+    if not object_type.core or accepted:
+        return
+    who = _core_consumers(db, object_type)
+    raise Conflict(
+        code("ONTOLOGY", 46),
+        f"{object_type.label}은(는) 바깥에 열려 있어 {what} 전에 확인이 필요합니다 — "
+        f"쓸 수 있는 자격 {len(who)}개. 쓰는 쪽에 알린 뒤 다시 누르세요.",
+        details={"core_consumers": who},
+    )
+
+
 @router.get("/types/{slug}/properties/{key}/usage", response_model=PropertyUsage)
 def property_usage(
     slug: str, key: str, _: User = Depends(current_user), db: Session = Depends(get_db)
@@ -919,13 +977,22 @@ def property_usage(
             ObjectInstance.properties.has_key(key),
         )
     )
-    return PropertyUsage(key=row.key, label=row.label, objects_with_value=int(count or 0))
+    return PropertyUsage(
+        key=row.key,
+        label=row.label,
+        objects_with_value=int(count or 0),
+        core_open=owner.core,
+        core_consumers=_core_consumers(db, owner),
+    )
 
 
 @router.delete("/types/{slug}/properties/{key}", status_code=204)
 def delete_property(
     slug: str,
     key: str,
+    accept_core: bool = Query(
+        default=False, description="바깥에 연 타입의 칸을 지우는 것을 확인했나"
+    ),
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> None:
@@ -938,6 +1005,7 @@ def delete_property(
     row = _property(db, slug, key)
     owner = _type(db, slug)
     managed.require_definition_editable(owner)
+    _require_core_accepted(db, owner, accepted=accept_core, what="이 칸을 지우기")
     # **안 걷어내면 그 뒤로 타입을 고칠 때마다 「없는 속성」 이라고 거절당한다** —
     # 그리고 사람은 자기가 방금 고친 것과 상관없는 그 오류를 이해할 수 없다.
     owner.list_view = views.prune_field(owner.list_view or {}, key)
@@ -988,6 +1056,27 @@ def _check_property_shape(payload: PropertyDefWriteRequest) -> None:
 
 
 # --- 스키마와 사이드바 ------------------------------------------------------
+
+
+@router.get("/core-status", response_model=CoreStatusOut)
+def core_status(
+    request: Request,
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> CoreStatusOut:
+    """**무엇이 열려 있고, 누가 읽을 수 있고, 누가 받아 갔나** — 한 화면.
+
+    셋이 흩어져 있으면(타입 목록 · 토큰 목록 · 감사 기록) 「지금 바깥으로 뭐가 나가고 있지」
+    를 한눈에 답할 수 없고, 그러면 열어 둔 것을 잊는다.
+
+    **`/api/core` 아래에 두지 않는 이유**: 그 아래는 좁은 토큰(`core:read`)이 읽을 수 있어서,
+    거기 두면 받아 가는 쪽이 다른 연동의 이름까지 보게 된다. 여기는 시스템 관리자만.
+    """
+    from app.modules.coreapi import services as core_services
+
+    # 주소는 **요청이 안다** — 설정에서 읽으면 역방향 프록시 뒤에서 틀린 주소를 준다.
+    root = str(request.url).split("/ontology/core-status")[0].rstrip("/")
+    return core_services.status(db, _, base=f"{root}/core")
 
 
 @router.get("/export")

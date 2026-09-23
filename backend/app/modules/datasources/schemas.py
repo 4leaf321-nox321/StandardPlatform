@@ -30,6 +30,8 @@ class DataSourceOut(BaseModel):
     workspace_slug: str | None
     mapping: dict[str, Any]
     deprecate_missing: bool
+    since_mark: str = ""
+    """`sp_core` 가 지난번에 어디까지 받았나 — 비우면 다음 동기화가 처음부터 받는다."""
     interval_minutes: int
     is_active: bool
     last_run_at: datetime | None
@@ -77,8 +79,40 @@ class DataSourcePatchRequest(BaseModel):
     workspace_slug: str | None = None
     mapping: dict[str, Any] | None = None
     deprecate_missing: bool | None = None
+    since_mark: str | None = Field(default=None, max_length=64)
+    """빈 문자열을 보내면 **처음부터 다시** 받는다 — 상대를 갈아엎었거나 대응을 크게
+    고쳤을 때. 그 밖에는 손대지 않는다(동기화가 스스로 옮긴다)."""
     interval_minutes: int | None = Field(default=None, ge=0, le=60 * 24 * 30)
     is_active: bool | None = None
+
+
+class CoreSuggestProperty(BaseModel):
+    """상대의 칸 하나 — 우리 것과 어떻게 이어졌나."""
+
+    key: str
+    label: str
+    data_type: str
+    target: str | None = None
+    """이어진 자리(`properties.<키>`). 못 이었으면 None 이고 `note` 가 이유를 적는다."""
+    note: str = ""
+
+
+class CoreSuggestOut(BaseModel):
+    """상대의 카탈로그를 읽어 만든 **대응 초안.**
+
+    사람이 옮겨 적지 않게 하는 자리다 — 옮겨 적으면 상대가 칸을 하나 더하는 날 그 문서가
+    틀린 것이 된다. **저장은 사람이 한다**(이 응답은 제안일 뿐이다).
+    """
+
+    system: str
+    revision: str
+    type_slug: str
+    type_label: str
+    count: int
+    mapping: dict[str, Any]
+    properties: list[CoreSuggestProperty]
+    notes: list[str]
+    """이어지지 않은 것과 그 까닭 — 「우리 타입에 없는 칸」 이 여기 선다."""
 
 
 class RunOut(BaseModel):

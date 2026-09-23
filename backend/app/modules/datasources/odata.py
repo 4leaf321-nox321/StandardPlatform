@@ -49,6 +49,8 @@ class Fetched:
     pages: int = 0
     truncated: bool = False
     """MAX_ROWS 에서 끊었다 — 계획은 서지만 적용은 막는다."""
+    as_of: str | None = None
+    """증분 소스(`sp_core`)가 **끝까지 받았을 때만** 채운다 — 다음 호출의 `since`."""
 
 
 def _unwrap(body: Any) -> tuple[list[dict[str, Any]], str | None]:

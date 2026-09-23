@@ -8,11 +8,12 @@
  */
 
 import { useState } from 'react'
-import { Eye, Plus, RefreshCw, Trash2, X } from 'lucide-react'
+import { Eye, Plus, RefreshCw, Trash2, Wand2, X } from 'lucide-react'
 
 import { datasourceApi } from '@/modules/datasources/api'
 import type {
   AuthKind,
+  CoreSuggest,
   DataSource,
   SourceKind,
   SourceOptions,
@@ -51,7 +52,12 @@ import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
 const NONE = '__none__'
-const KIND_LABEL: Record<string, string> = { odata: 'OData', rest: 'REST', file: '파일' }
+const KIND_LABEL: Record<string, string> = {
+  odata: 'OData',
+  rest: 'REST',
+  file: '파일',
+  sp_core: '형제 코어',
+}
 
 export default function DataSourcesPage() {
   const list = useResource(() => datasourceApi.list(), [])
@@ -399,6 +405,7 @@ function EditDialog({
   const [interval, setInterval] = useState(String(source?.interval_minutes ?? 0))
   const [active, setActive] = useState(source?.is_active ?? true)
   const [preview, setPreview] = useState<Preview | null>(null)
+  const [suggested, setSuggested] = useState<CoreSuggest | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error | null>(null)
 
@@ -482,6 +489,33 @@ function EditDialog({
     }
   }
 
+  /**
+   * 형제 설치의 카탈로그를 읽어 **대응 초안**을 채운다.
+   *
+   * 저장한 뒤에 부른다 — 상대의 토큰이 저장돼 있어야 읽을 수 있고, 비밀을 화면이 들고
+   * 다니지 않게 한다. 채우기만 하고 **저장은 사람이 누른다**(초안을 보고 고칠 자리가 있어야
+   * 한다).
+   */
+  async function suggest() {
+    setBusy(true)
+    setError(null)
+    try {
+      const draft = body()
+      const complete = Boolean(externalKey.trim() && fixedOf('label'))
+      const payload = complete ? draft : { ...draft, mapping: {} }
+      if (source) await datasourceApi.update(source.slug, payload)
+      else await datasourceApi.create(payload)
+      const found = await datasourceApi.coreSuggest(slug.trim())
+      setSuggested(found)
+      setExternalKey(found.mapping.external_key ?? 'key')
+      setColumns(found.mapping.columns ?? [])
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setBusy(false)
+    }
+  }
+
   const sourceColumns = preview?.columns ?? []
 
   return (
@@ -521,6 +555,7 @@ function EditDialog({
                   <SelectItem value="odata">OData (v4 · v2)</SelectItem>
                   <SelectItem value="rest">REST JSON</SelectItem>
                   <SelectItem value="file">파일 (CSV · Excel · JSON)</SelectItem>
+                  <SelectItem value="sp_core">형제 Standard Platform (코어)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -568,7 +603,11 @@ function EditDialog({
             {kind !== 'file' && (
               <div className="space-y-1.5 sm:col-span-2">
                 <Label htmlFor="ds-url">
-                  {kind === 'odata' ? 'OData 서비스 루트' : 'API 루트'}
+                  {kind === 'odata'
+                    ? 'OData 서비스 루트'
+                    : kind === 'sp_core'
+                      ? '형제 설치의 API 루트'
+                      : 'API 루트'}
                 </Label>
                 <Input
                   id="ds-url"
@@ -576,7 +615,9 @@ function EditDialog({
                   placeholder={
                     kind === 'odata'
                       ? 'https://plm.example.com/odata/v4'
-                      : 'https://erp.example.com/api'
+                      : kind === 'sp_core'
+                        ? 'https://hub.example.com/api'
+                        : 'https://erp.example.com/api'
                   }
                   onChange={(event) => setBaseUrl(event.target.value)}
                 />
@@ -588,7 +629,9 @@ function EditDialog({
                   ? '엔티티 셋'
                   : kind === 'rest'
                     ? '경로'
-                    : '파일 위치 (URL 또는 서버 폴더 아래 경로)'}
+                    : kind === 'sp_core'
+                      ? '가져올 코어 타입'
+                      : '파일 위치 (URL 또는 서버 폴더 아래 경로)'}
               </Label>
               <Input
                 id="ds-set"
@@ -598,7 +641,9 @@ function EditDialog({
                     ? 'Suppliers'
                     : kind === 'rest'
                       ? '/v1/suppliers'
-                      : 'erp/suppliers.xlsx'
+                      : kind === 'sp_core'
+                        ? 'material'
+                        : 'erp/suppliers.xlsx'
                 }
                 onChange={(event) => setEntitySet(event.target.value)}
               />
@@ -779,6 +824,42 @@ function EditDialog({
                 미리 보기 (저장하고 앞 5행 읽기)
               </Button>
             </div>
+            {/* **옮겨 적게 하지 않는다** — 상대가 칸을 하나 더하는 날 그 대응이 조용히
+                뒤처진다. 카탈로그를 읽어 채우고, 못 이은 것은 아래에 까닭과 함께 선다. */}
+            {kind === 'sp_core' && (
+              <div className="space-y-2">
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  disabled={busy || !slug.trim() || !baseUrl.trim() || !entitySet.trim()}
+                  onClick={suggest}
+                >
+                  <Wand2 className="mr-1 size-3.5" />
+                  대응 자동 제안 (상대 카탈로그 읽기)
+                </Button>
+                {suggested && (
+                  <div className="space-y-1 rounded border p-2 text-xs">
+                    <p>
+                      <b>{suggested.system}</b> 의 「{suggested.type_label}」 — {suggested.count}건
+                      <span className="text-muted-foreground"> · 판 {suggested.revision}</span>
+                    </p>
+                    {suggested.notes.length > 0 ? (
+                      <ul className="text-muted-foreground list-inside list-disc">
+                        {suggested.notes.map((one) => (
+                          <li key={one}>{one}</li>
+                        ))}
+                      </ul>
+                    ) : (
+                      <p className="text-muted-foreground">상대의 칸이 모두 이어졌습니다.</p>
+                    )}
+                    <p className="text-muted-foreground">
+                      초안입니다 — 고칠 것이 있으면 아래에서 고친 뒤 저장하세요.
+                    </p>
+                  </div>
+                )}
+              </div>
+            )}
             {preview?.mapping_error && (
               <p className="text-destructive text-xs">{preview.mapping_error}</p>
             )}
@@ -994,17 +1075,32 @@ function EditDialog({
                 value={interval}
                 onChange={(event) => setInterval(event.target.value)}
               />
+              {/* 분으로만 적게 하면 「하루 한 번」 을 적으려고 계산기를 켠다. */}
+              <p className="text-muted-foreground text-xs">
+                1440 = 하루 한 번 · 60 = 한 시간마다. <b>0 이어도 목록의 「동기화」 로 언제든</b>{' '}
+                돌릴 수 있습니다.
+              </p>
             </div>
             <div className="space-y-2 pt-6">
-              <label className="flex cursor-pointer items-center gap-2 text-sm">
-                <input
-                  type="checkbox"
-                  className="size-4"
-                  checked={deprecate}
-                  onChange={(event) => setDeprecate(event.target.checked)}
-                />
-                바깥에서 사라진 행은 「사용 중지」 로 표시 (기본은 변경하지 않음)
-              </label>
+              {/* **증분 소스에는 이 규칙이 없다.** 코어는 지난번 이후만 오므로 「안 온 것」 이
+                  대부분이다 — 켜면 다음 날 멀쩡한 객체 전부가 사용 중지가 된다. 사라진 것은
+                  상대가 무덤으로 알려 준다. */}
+              {kind !== 'sp_core' ? (
+                <label className="flex cursor-pointer items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="size-4"
+                    checked={deprecate}
+                    onChange={(event) => setDeprecate(event.target.checked)}
+                  />
+                  바깥에서 사라진 행은 「사용 중지」 로 표시 (기본은 변경하지 않음)
+                </label>
+              ) : (
+                <p className="text-muted-foreground text-sm">
+                  상대에서 <b>지워진 것은 그쪽이 알려 줍니다</b> — 이쪽에서 자동으로 「사용 중지」
+                  가 됩니다(합쳐진 것이면 이긴 쪽이 이력에 남습니다).
+                </p>
+              )}
               <label className="flex cursor-pointer items-center gap-2 text-sm">
                 <input
                   type="checkbox"

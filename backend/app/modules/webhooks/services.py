@@ -59,15 +59,36 @@ RETRY_AFTER_SECONDS = 60.0
 RECENT = 50
 
 
-def wants(hook: Webhook, action: str, type_slug: str | None) -> bool:
-    """이 웹훅이 이 이벤트를 원하나 — 패턴과 타입으로."""
+def wants(
+    hook: Webhook, action: str, type_slug: str | None, core_slugs: set[str] | None = None
+) -> bool:
+    """이 웹훅이 이 이벤트를 원하나 — 패턴과 타입으로.
+
+    `core_slugs` 는 「지금 바깥에 연 타입」 이다. 코어만 받는 웹훅은 **목록이 아니라 그
+    규칙**을 저장하므로, 코어를 새로 열면 설정을 안 고쳐도 따라간다.
+    """
     if not hook.is_active:
         return False
     if not any(fnmatch.fnmatchcase(action, pattern) for pattern in hook.events or []):
         return False
     # 타입을 정해 뒀으면 그 타입의 객체 이벤트만. 객체가 아닌 이벤트(정의 변경)는 타입이
     # 없으므로 통과한다 — 타입 거르기는 객체에만 뜻이 있다.
+    if hook.core_types_only and type_slug is not None:
+        return type_slug in (core_slugs or set())
     return not (hook.type_slugs and type_slug is not None and type_slug not in hook.type_slugs)
+
+
+def core_slugs(db: Session) -> set[str]:
+    """지금 바깥에 연 타입들. **이벤트 한 묶음에 한 번만 읽는다.**"""
+    from app.modules.ontology.models import ObjectType
+
+    return set(
+        db.scalars(
+            select(ObjectType.slug).where(
+                ObjectType.core.is_(True), ObjectType.is_active.is_(True)
+            )
+        )
+    )
 
 
 def _type_slug_of(db: Session, one: events.ChangeEvent) -> str | None:
@@ -119,11 +140,14 @@ def on_events(staged: list[events.ChangeEvent]) -> None:
         hooks = list(db.scalars(select(Webhook).where(Webhook.is_active.is_(True))))
         if not hooks:
             return
+        # 코어 목록은 **한 묶음에 한 번만** 읽는다 — 이벤트마다 읽으면 한 번의 저장이
+        # 질의 수십 개가 된다.
+        opened = core_slugs(db) if any(hook.core_types_only for hook in hooks) else set()
         made = 0
         for one in staged:
             type_slug = _type_slug_of(db, one)
             for hook in hooks:
-                if not wants(hook, one.action, type_slug):
+                if not wants(hook, one.action, type_slug, opened):
                     continue
                 db.add(
                     WebhookDelivery(

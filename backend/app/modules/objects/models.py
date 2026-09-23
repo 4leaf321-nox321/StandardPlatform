@@ -58,6 +58,9 @@ class ObjectInstance(Base):
         # **JSONB 를 거르는 목록이 이 인덱스를 탄다.** 없으면 행이 몇만을 넘는
         # 순간 목록이 느려지고, 느려진 이유는 화면 어디에도 안 적힌다.
         Index("ix_objects_properties", "properties", postgresql_using="gin"),
+        # **「지난번 이후 바뀐 것」 이 이 인덱스를 탄다.** 바깥 시스템이 새벽마다 증분으로
+        # 물으므로, 없으면 그 질의가 타입 전체를 훑는다.
+        Index("ix_objects_type_updated", "type_id", "updated_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

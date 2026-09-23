@@ -12,6 +12,8 @@ export interface Webhook {
   events: string[]
   /** 객체 이벤트를 이 타입들로만. null 이면 전부. */
   type_slugs: string[] | null
+  /** **바깥에 연 타입(코어)만.** 켜면 코어를 새로 열어도 설정을 안 고쳐도 따라간다. */
+  core_types_only: boolean
   is_active: boolean
   last_status: 'ok' | 'failed' | null
   last_at: string | null
@@ -36,6 +38,7 @@ export interface WebhookWrite {
   secret?: string
   events: string[]
   type_slugs?: string[] | null
+  core_types_only?: boolean
   is_active?: boolean
 }
 

@@ -145,7 +145,9 @@ export default function WebhooksPage() {
               <p className="text-muted-foreground font-mono text-xs break-all">{hook.url}</p>
               <p className="text-muted-foreground text-xs">
                 이벤트 {hook.events.join(', ')}
-                {hook.type_slugs && ` · 타입 ${hook.type_slugs.join(', ')}`}
+                {hook.core_types_only
+                  ? ' · 코어 타입만'
+                  : hook.type_slugs && ` · 타입 ${hook.type_slugs.join(', ')}`}
                 {hook.has_secret ? ' · 서명함' : ' · 서명 없음'}
               </p>
               {opened === hook.id && <Deliveries hook={hook} />}
@@ -279,6 +281,8 @@ function EditDialog({
   const [events, setEvents] = useState<string[]>(hook?.events ?? ['object.*'])
   const [custom, setCustom] = useState('')
   const [types, setTypes] = useState<string[]>(hook?.type_slugs ?? [])
+  /** **목록이 아니라 규칙.** 코어를 새로 열면 여기를 안 고쳐도 따라간다. */
+  const [coreOnly, setCoreOnly] = useState(hook?.core_types_only ?? false)
   const [active, setActive] = useState(hook?.is_active ?? true)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error | null>(null)
@@ -295,7 +299,8 @@ function EditDialog({
         name: name.trim(),
         url: url.trim(),
         events,
-        type_slugs: types.length > 0 ? types : null,
+        type_slugs: coreOnly ? null : types.length > 0 ? types : null,
+        core_types_only: coreOnly,
         is_active: active,
       }
       // 비밀은 **적었을 때만** 보낸다 — 빈 값으로 보내면 있던 비밀이 지워진다.
@@ -400,7 +405,24 @@ function EditDialog({
               </Button>
             </div>
           </div>
-          {typeSlugs.length > 0 && (
+          {/* **코어를 새로 열 때마다 여기에 손으로 더해야 하면 언젠가 빠뜨린다** — 그리고
+              빠뜨린 타입은 조용히 알림이 안 가고, 그 침묵은 「안 바뀌었나 보다」 로 읽힌다. */}
+          <label className="flex cursor-pointer items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4"
+              checked={coreOnly}
+              onChange={(event) => setCoreOnly(event.target.checked)}
+            />
+            <span>
+              바깥에 연 타입(코어)만
+              <span className="text-muted-foreground ml-1 text-xs">
+                지금 코어인 타입을 <b>따라갑니다</b> — 나중에 새로 열어도 여기를 안 고쳐도 됩니다.
+                받는 쪽은 이 신호를 받고 <code>/api/core</code> 로 당겨 갑니다.
+              </span>
+            </span>
+          </label>
+          {!coreOnly && typeSlugs.length > 0 && (
             <div className="space-y-1.5">
               <Label>타입 (비워 두면 전체)</Label>
               <ul className="grid grid-cols-2 gap-1">

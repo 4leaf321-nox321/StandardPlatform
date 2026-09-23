@@ -44,6 +44,14 @@ class Webhook(Base):
     「전부」 는 `*` 로 명시한다."""
     type_slugs: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     """객체 이벤트를 이 타입들로만. NULL 이면 전부."""
+    core_types_only: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    """**바깥에 연 타입(코어)만.** 켜면 `type_slugs` 대신 이것이 판단한다.
+
+    목록 대신 규칙을 저장하는 이유: 코어를 새로 열 때마다 여기에 slug 를 손으로 더해야
+    하면 언젠가 빠뜨리고, 빠뜨린 타입은 **조용히** 알림이 안 간다. 그 침묵은 받는 쪽에서
+    「안 바뀌었나 보다」 로 읽힌다."""
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
 
     last_status: Mapped[str | None] = mapped_column(String(20), nullable=True)

@@ -28,6 +28,13 @@ _known: list[str] = [READ]
 #: (경로 앞머리, 그 아래 **쓰기**에 필요한 범위).
 _write: list[tuple[str, str]] = []
 
+#: (경로 앞머리, 그 아래를 **읽을 수 있는** 좁은 범위).
+#:
+#: 기본은 `read` 하나다 — 읽기를 경로마다 쪼개면 토큰 하나를 만들 때마다 목록을 다 훑어야
+#: 하고, 그러면 사람은 전부 켜 버린다. 그런데 **바깥 시스템에 주는 토큰**은 반대다: 사내
+#: 전부를 읽히면 안 되고 열어 준 자리만 읽혀야 한다. 그 자리에만 좁은 범위를 둔다.
+_narrow_reads: list[tuple[str, str]] = []
+
 #: POST 지만 **읽기인** 경로. 본문에 물음을 싣거나(검색) 결과를 만들어 주기만 하는
 #: 자리(내보내기)다.
 #:
@@ -56,6 +63,26 @@ def register_write_scope(path_prefix: str, scope: str) -> None:
     register_scope(scope)
     if (path_prefix, scope) not in _write:
         _write.append((path_prefix, scope))
+
+
+def register_read_scope(path_prefix: str, scope: str) -> None:
+    """이 경로 아래는 **이 좁은 범위로도** 읽을 수 있다(`read` 는 언제나 된다).
+
+    바깥 시스템에 주는 토큰을 위한 자리다 — `read` 하나를 주면 그 계정이 볼 수 있는 전부가
+    나간다. 여기 등록한 앞머리만 그 범위로 열린다.
+    """
+    register_scope(scope)
+    if (path_prefix, scope) not in _narrow_reads:
+        _narrow_reads.append((path_prefix, scope))
+
+
+def may_read(path: str, token_scopes: list[str]) -> bool:
+    """이 토큰이 이 경로를 읽어도 되나. `read` 가 있으면 전부, 없으면 좁은 범위의 자리만."""
+    if READ in token_scopes:
+        return True
+    return any(
+        path.startswith(prefix) and scope in token_scopes for prefix, scope in _narrow_reads
+    )
 
 
 def register_read_only_post(path_prefix: str) -> None:

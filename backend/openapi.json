@@ -2366,6 +2366,49 @@
         }
       }
     },
+    "/api/datasources/{slug}/core-suggest": {
+      "post": {
+        "tags": [
+          "datasources"
+        ],
+        "summary": "Suggest Core Mapping",
+        "description": "상대의 카탈로그를 읽어 **칸 대응 초안**을 만든다 — 저장은 사람이 한다.\n\n옮겨 적게 하면 상대가 칸을 하나 더하는 날 그 대응이 조용히 뒤처진다. 여기서는 상대의\n`GET /api/core` 를 그대로 읽어 같은 이름(키 → 키, 없으면 이름 → 이름)끼리 잇고,\n**못 이은 것은 까닭과 함께 돌려준다** — 조용히 빼면 사람은 그 칸이 온 줄 안다.",
+        "operationId": "suggest_core_mapping_api_datasources__slug__core_suggest_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreSuggestOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/datasources/{slug}/sync": {
       "post": {
         "tags": [
@@ -3288,6 +3331,119 @@
         }
       }
     },
+    "/api/core": {
+      "get": {
+        "tags": [
+          "core"
+        ],
+        "summary": "Core Catalog",
+        "description": "**무엇이 열려 있나** — 코어 타입 목록과 각 타입의 칸.\n\n받는 쪽은 이것을 읽고 필요한 칸만 집어 간다. 타입 slug 나 칸 이름을 문서에서 옮겨\n적게 하면 우리가 칸을 하나 더하는 날 그 문서가 틀린 것이 된다.\n\n`revision` 은 **열린 정의의 판**이다. 칸이 바뀌면 값이 바뀌므로, 받는 쪽이 「구조가\n달라졌네」 를 코드로 알아챌 수 있다.",
+        "operationId": "core_catalog_api_core_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreCatalogOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/core/{type_slug}": {
+      "get": {
+        "tags": [
+          "core"
+        ],
+        "summary": "Core Rows",
+        "description": "지난번 이후 **바뀐 것과 사라진 것.**\n\n받는 쪽의 반복문은 이렇다: `since` 없이 시작 → `next` 가 빌 때까지 이어 받기 →\n응답의 `as_of` 를 적어 두었다가 다음 주기에 `since` 로 넣기.\n\n**시각은 우리가 준다.** 받는 쪽 시계를 쓰면 몇 초 차이로 그 사이 행이 새고, 샌 줄은\n아무도 모른다. 쪽이 남아 있으면(`next` 가 있으면) `as_of` 를 옮기지 않는다 — 거기서\n멈춘 쪽이 남은 쪽을 영영 안 받게 되기 때문이다.\n\n`deleted: true` 인 행은 이 시스템에서 사라진 것이다. 합쳐져서 사라졌으면\n`merged_into` 에 이긴 쪽의 `key` 가 온다 — 받는 쪽이 제 참조를 옮길 수 있다.",
+        "operationId": "core_rows_api_core__type_slug__get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "지난 응답의 `as_of` 를 그대로. 비우면 처음부터(지워진 것은 빼고)",
+              "title": "Since"
+            },
+            "description": "지난 응답의 `as_of` 를 그대로. 비우면 처음부터(지워진 것은 빼고)"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "지난 응답의 `next`",
+              "title": "Cursor"
+            },
+            "description": "지난 응답의 `next`"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 2000,
+              "minimum": 1,
+              "default": 500,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CorePageOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ontology/groups": {
       "get": {
         "tags": [
@@ -3922,6 +4078,18 @@
               "type": "string",
               "title": "Key"
             }
+          },
+          {
+            "name": "accept_core",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "바깥에 연 타입의 칸을 지우는 것을 확인했나",
+              "default": false,
+              "title": "Accept Core"
+            },
+            "description": "바깥에 연 타입의 칸을 지우는 것을 확인했나"
           }
         ],
         "responses": {
@@ -4110,6 +4278,28 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/core-status": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Core Status",
+        "description": "**무엇이 열려 있고, 누가 읽을 수 있고, 누가 받아 갔나** — 한 화면.\n\n셋이 흩어져 있으면(타입 목록 · 토큰 목록 · 감사 기록) 「지금 바깥으로 뭐가 나가고 있지」\n를 한눈에 답할 수 없고, 그러면 열어 둔 것을 잊는다.\n\n**`/api/core` 아래에 두지 않는 이유**: 그 아래는 좁은 토큰(`core:read`)이 읽을 수 있어서,\n거기 두면 받아 가는 쪽이 다른 연동의 이름까지 보게 된다. 여기는 시스템 관리자만.",
+        "operationId": "core_status_api_ontology_core_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreStatusOut"
                 }
               }
             }
@@ -9377,6 +9567,491 @@
         ],
         "title": "ConditionOut"
       },
+      "CoreCatalogOut": {
+        "properties": {
+          "system": {
+            "type": "string",
+            "title": "System"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "as_of": {
+            "type": "string",
+            "title": "As Of"
+          },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/CoreTypeOut"
+            },
+            "type": "array",
+            "title": "Types"
+          }
+        },
+        "type": "object",
+        "required": [
+          "system",
+          "revision",
+          "as_of",
+          "types"
+        ],
+        "title": "CoreCatalogOut",
+        "description": "**무엇이 열려 있나.** 처음 붙는 쪽은 이것 하나만 읽으면 된다."
+      },
+      "CoreConsumerOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "owner": {
+            "type": "string",
+            "title": "Owner"
+          },
+          "last_used_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Used At"
+          },
+          "expires_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expires At"
+          },
+          "narrow": {
+            "type": "boolean",
+            "title": "Narrow",
+            "default": false
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "owner",
+          "created_at"
+        ],
+        "title": "CoreConsumerOut",
+        "description": "이 창구를 쓰는 자격 하나 — **누가 무엇을 가져가는지 사람이 볼 자리.**\n\n바깥에 연 이름은 남의 코드에 박힌다. 그것을 지우거나 바꾸려 할 때 「누가 쓰는가」 가\n화면에 없으면, 사람은 아무도 안 쓴다고 여기고 누른다."
+      },
+      "CorePageOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CoreRowOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "items"
+        ],
+        "title": "CorePageOut",
+        "description": "한 쪽 — `next` 가 빌 때까지 부른다."
+      },
+      "CorePropertyOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "data_type": {
+            "type": "string",
+            "title": "Data Type"
+          },
+          "unit": {
+            "type": "string",
+            "title": "Unit",
+            "default": ""
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required",
+            "default": false
+          },
+          "multi": {
+            "type": "boolean",
+            "title": "Multi",
+            "default": false
+          },
+          "enum_options": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Enum Options"
+          },
+          "ref_type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type Slug"
+          },
+          "help": {
+            "type": "string",
+            "title": "Help",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "data_type"
+        ],
+        "title": "CorePropertyOut",
+        "description": "칸 하나의 설명 — 받는 쪽이 **하드코딩하지 않게** 하는 자리."
+      },
+      "CorePullOut": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "since": {
+            "type": "string",
+            "title": "Since",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "at",
+          "actor",
+          "type_slug",
+          "rows"
+        ],
+        "title": "CorePullOut",
+        "description": "누가 언제 무엇을 받아 갔나 — 감사 기록의 `core.pull` 한 줄."
+      },
+      "CoreRowOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status",
+            "default": "active"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted",
+            "default": false
+          },
+          "merged_into": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Into"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "updated_at"
+        ],
+        "title": "CoreRowOut",
+        "description": "행 하나 — **봉투는 고정.**"
+      },
+      "CoreStatusOut": {
+        "properties": {
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/CoreTypeOut"
+            },
+            "type": "array",
+            "title": "Types"
+          },
+          "consumers": {
+            "items": {
+              "$ref": "#/components/schemas/CoreConsumerOut"
+            },
+            "type": "array",
+            "title": "Consumers"
+          },
+          "recent": {
+            "items": {
+              "$ref": "#/components/schemas/CorePullOut"
+            },
+            "type": "array",
+            "title": "Recent"
+          },
+          "base": {
+            "type": "string",
+            "title": "Base"
+          }
+        },
+        "type": "object",
+        "required": [
+          "types",
+          "consumers",
+          "recent",
+          "base"
+        ],
+        "title": "CoreStatusOut",
+        "description": "**무엇이 열려 있고, 누가 읽을 수 있고, 누가 받아 갔나** — 한 화면.\n\n셋이 흩어져 있으면(타입 목록 · 토큰 목록 · 감사 기록) 「지금 바깥에 뭐가 나가고 있지」 를\n아무도 한눈에 답할 수 없고, 그러면 열어 둔 것을 잊는다."
+      },
+      "CoreSuggestOut": {
+        "properties": {
+          "system": {
+            "type": "string",
+            "title": "System"
+          },
+          "revision": {
+            "type": "string",
+            "title": "Revision"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "mapping": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Mapping"
+          },
+          "properties": {
+            "items": {
+              "$ref": "#/components/schemas/CoreSuggestProperty"
+            },
+            "type": "array",
+            "title": "Properties"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "system",
+          "revision",
+          "type_slug",
+          "type_label",
+          "count",
+          "mapping",
+          "properties",
+          "notes"
+        ],
+        "title": "CoreSuggestOut",
+        "description": "상대의 카탈로그를 읽어 만든 **대응 초안.**\n\n사람이 옮겨 적지 않게 하는 자리다 — 옮겨 적으면 상대가 칸을 하나 더하는 날 그 문서가\n틀린 것이 된다. **저장은 사람이 한다**(이 응답은 제안일 뿐이다)."
+      },
+      "CoreSuggestProperty": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "data_type": {
+            "type": "string",
+            "title": "Data Type"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "data_type"
+        ],
+        "title": "CoreSuggestProperty",
+        "description": "상대의 칸 하나 — 우리 것과 어떻게 이어졌나."
+      },
+      "CoreTypeOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "properties": {
+            "items": {
+              "$ref": "#/components/schemas/CorePropertyOut"
+            },
+            "type": "array",
+            "title": "Properties"
+          },
+          "endpoint": {
+            "type": "string",
+            "title": "Endpoint"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "count",
+          "properties",
+          "endpoint"
+        ],
+        "title": "CoreTypeOut"
+      },
       "CreateAccountRequest": {
         "properties": {
           "email": {
@@ -9496,6 +10171,11 @@
           "deprecate_missing": {
             "type": "boolean",
             "title": "Deprecate Missing"
+          },
+          "since_mark": {
+            "type": "string",
+            "title": "Since Mark",
+            "default": ""
           },
           "interval_minutes": {
             "type": "integer",
@@ -9736,6 +10416,18 @@
               }
             ],
             "title": "Deprecate Missing"
+          },
+          "since_mark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since Mark"
           },
           "interval_minutes": {
             "anyOf": [
@@ -12090,6 +12782,11 @@
             "type": "string",
             "title": "Entry Policy"
           },
+          "core": {
+            "type": "boolean",
+            "title": "Core",
+            "default": false
+          },
           "managed_by": {
             "type": "string",
             "title": "Managed By",
@@ -12308,6 +13005,17 @@
             ],
             "title": "Temporal Kind"
           },
+          "core": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Core"
+          },
           "list_view": {
             "anyOf": [
               {
@@ -12432,6 +13140,11 @@
           "entry_policy": {
             "type": "string",
             "title": "Entry Policy"
+          },
+          "core": {
+            "type": "boolean",
+            "title": "Core",
+            "default": false
           },
           "managed_by": {
             "type": "string",
@@ -12602,6 +13315,11 @@
             "type": "string",
             "title": "Temporal Kind",
             "default": "evergreen"
+          },
+          "core": {
+            "type": "boolean",
+            "title": "Core",
+            "default": false
           },
           "list_view": {
             "additionalProperties": true,
@@ -13648,6 +14366,18 @@
           "objects_with_value": {
             "type": "integer",
             "title": "Objects With Value"
+          },
+          "core_open": {
+            "type": "boolean",
+            "title": "Core Open",
+            "default": false
+          },
+          "core_consumers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Core Consumers"
           }
         },
         "type": "object",
@@ -16025,6 +16755,11 @@
             ],
             "title": "Type Slugs"
           },
+          "core_types_only": {
+            "type": "boolean",
+            "title": "Core Types Only",
+            "default": false
+          },
           "is_active": {
             "type": "boolean",
             "title": "Is Active"
@@ -16142,6 +16877,17 @@
             ],
             "title": "Type Slugs"
           },
+          "core_types_only": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Core Types Only"
+          },
           "is_active": {
             "anyOf": [
               {
@@ -16199,6 +16945,11 @@
               }
             ],
             "title": "Type Slugs"
+          },
+          "core_types_only": {
+            "type": "boolean",
+            "title": "Core Types Only",
+            "default": false
           },
           "is_active": {
             "type": "boolean",

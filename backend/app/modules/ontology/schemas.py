@@ -99,6 +99,9 @@ class ObjectTypeOut(BaseModel):
     """`kind_class='system'` 이면 어느 원 표를 비추는가(`workspace` · `user` …).
     아니면 빈 값."""
     entry_policy: str
+    core: bool = False
+    """**바깥 시스템에 여는 타입인가** — 켜면 `/api/core` 로 나간다. 켜는 순간 이 타입의
+    slug 와 속성 key 가 남의 시스템 코드에 박히는 **약속**이 된다."""
     managed_by: str = ""
     """빈 값이면 이 설치의 정의, `hub` 면 허브가 내려준 것 — 화면은 고치는 단추를 감춘다."""
     parent_slug: str | None = None
@@ -131,6 +134,7 @@ class ObjectTypeWriteRequest(BaseModel):
     key_policy: str = "none"
     key_scope: str = "global"
     temporal_kind: str = "evergreen"
+    core: bool = False
     list_view: dict[str, Any] = Field(default_factory=dict)
     form_view: dict[str, Any] = Field(default_factory=dict)
     detail_view: dict[str, Any] = Field(default_factory=dict)
@@ -161,6 +165,7 @@ class ObjectTypePatchRequest(BaseModel):
     key_policy: str | None = None
     key_scope: str | None = None
     temporal_kind: str | None = None
+    core: bool | None = None
     list_view: dict[str, Any] | None = None
     form_view: dict[str, Any] | None = None
     detail_view: dict[str, Any] | None = None
@@ -291,6 +296,11 @@ class PropertyUsage(BaseModel):
     key: str
     label: str
     objects_with_value: int
+    core_open: bool = False
+    """이 타입이 **바깥에 열려 있나.** 켜져 있으면 이 칸은 남의 시스템 코드에 박혀 있다."""
+    core_consumers: list[str] = Field(default_factory=list)
+    """그 창구를 읽을 수 있는 자격 — 「이름(마지막 사용)」. **아무도 안 쓴다고 여기고 누르는
+    일을 막는 자리다.**"""
 
 
 class ChangeOut(BaseModel):

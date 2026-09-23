@@ -30,6 +30,7 @@ from app.modules.accounts import services as accounts_services
 from app.modules.audit import routes as audit_routes
 from app.modules.auth import routes as auth_routes
 from app.modules.bundles import routes as bundles_routes
+from app.modules.coreapi import routes as coreapi_routes
 from app.modules.datasources import routes as datasources_routes
 from app.modules.datasources import services as datasources_services
 from app.modules.files import routes as files_routes
@@ -88,6 +89,7 @@ def _api_router(settings: Settings) -> APIRouter:
     router.include_router(audit_routes.router)
     # 오래 걸리는 일(일괄 입력 · 내보내기)은 요청이 아니라 작업이다 — 워커가 돈다.
     router.include_router(jobs_routes.router)
+    router.include_router(coreapi_routes.router)
     # 메타모델과 그 객체. **도메인이 아니라 메커니즘이다**(ADR 0005) —
     # 도메인은 여전히 이 저장소에 없고, 여기 정의로 얹힌다.
     router.include_router(ontology_routes.router)
@@ -182,6 +184,9 @@ def _register_extensions() -> None:
     # 받기」 다 — 받아만 가는 쪽(허브에서 정의를 받는 쌍둥이 · 바깥 시스템)에 쓰기 토큰을
     # 주게 하지 않는다. 실측: 쌍둥이 리허설에서 `read` 토큰이 묶음 내보내기에 403 을 받았다.
     scopes.register_read_only_post_suffix("/export")
+    # **바깥 시스템에 주는 토큰은 코어만 읽는다.** `read` 를 주면 그 계정이 볼 수 있는 전부가
+    # 나간다 — 연동 하나 때문에 사내 전체를 여는 일이 된다.
+    scopes.register_read_scope("/api/core", coreapi_routes.SCOPE)
     # 동기화는 객체를 넣는 일이다 — 같은 범위. 소스 정의 자체는 시스템 관리자만.
     scopes.register_write_scope("/api/datasources", "objects:write")
     # `import` 는 POST 지만 `dry_run` 이면 아무것도 안 바꾼다. 그래도 **읽기로

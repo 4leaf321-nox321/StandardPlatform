@@ -6,7 +6,7 @@ import { api } from '@/shared/api/client'
 import type { ImportRow } from '@/modules/objects/api'
 
 export type AuthKind = 'none' | 'basic' | 'bearer' | 'header'
-export type SourceKind = 'odata' | 'rest' | 'file'
+export type SourceKind = 'odata' | 'rest' | 'file' | 'sp_core'
 export type RestPaging = 'none' | 'page' | 'offset' | 'cursor'
 
 /** 종류별 설정. REST: 행 자리·쪽 넘김. 파일: 형식·시트. */
@@ -58,6 +58,8 @@ export interface DataSource {
   workspace_slug: string | null
   mapping: Mapping
   deprecate_missing: boolean
+  /** `sp_core` 가 지난번에 어디까지 받았나 — 비우면 다음 동기화가 처음부터 받는다. */
+  since_mark: string
   interval_minutes: number
   is_active: boolean
   last_run_at: string | null
@@ -82,8 +84,29 @@ export interface DataSourceWrite {
   workspace_slug?: string | null
   mapping?: Mapping
   deprecate_missing?: boolean
+  /** **비우는 것만 보낸다**(`''`) — 처음부터 다시 받는다. 시계를 앞당기면 그 사이 것을 잃는다. */
+  since_mark?: string
   interval_minutes?: number
   is_active?: boolean
+}
+
+/** 형제 설치의 카탈로그를 읽어 만든 **대응 초안** — 저장은 사람이 한다. */
+export interface CoreSuggest {
+  system: string
+  revision: string
+  type_slug: string
+  type_label: string
+  count: number
+  mapping: Mapping
+  properties: {
+    key: string
+    label: string
+    data_type: string
+    /** 못 이었으면 null 이고 `note` 가 이유를 적는다. */
+    target: string | null
+    note: string
+  }[]
+  notes: string[]
 }
 
 export interface Run {
@@ -120,6 +143,12 @@ export const datasourceApi = {
   update: (slug: string, body: Partial<DataSourceWrite>) =>
     api.patch<DataSource>(`/datasources/${slug}`, body),
   remove: (slug: string) => api.delete<void>(`/datasources/${slug}`),
+  /**
+   * 형제 설치의 `/api/core` 를 읽어 **대응 초안**을 받는다 — 옮겨 적지 않게.
+   *
+   * 저장은 사람이 한다: 초안을 보고 고친 뒤 저장 단추를 누른다.
+   */
+  coreSuggest: (slug: string) => api.post<CoreSuggest>(`/datasources/${slug}/core-suggest`),
   /** 앞의 몇 행을 그대로 + 대응한 뒤로. 아무것도 안 바꾼다. */
   preview: (slug: string) => api.post<Preview>(`/datasources/${slug}/preview?limit=5`),
   /**

@@ -35,6 +35,7 @@ def _out(row: Webhook) -> WebhookOut:
         has_secret=bool(row.secret),
         events=list(row.events or []),
         type_slugs=list(row.type_slugs) if row.type_slugs else None,
+        core_types_only=row.core_types_only,
         is_active=row.is_active,
         last_status=row.last_status,
         last_at=row.last_at,
@@ -77,7 +78,8 @@ def create_webhook(
         url=_require_url(payload.url),
         secret=payload.secret,
         events=[one.strip() for one in payload.events if one.strip()],
-        type_slugs=payload.type_slugs or None,
+        type_slugs=None if payload.core_types_only else (payload.type_slugs or None),
+        core_types_only=payload.core_types_only,
         is_active=payload.is_active,
         created_by_id=user.id,
     )
@@ -115,7 +117,12 @@ def update_webhook(
         row.secret = payload.secret
     if "events" in sent and payload.events is not None:
         row.events = [one.strip() for one in payload.events if one.strip()]
-    if "type_slugs" in sent:
+    if "core_types_only" in sent and payload.core_types_only is not None:
+        row.core_types_only = payload.core_types_only
+        # **둘을 함께 켜 두지 않는다.** 무엇이 이기는지 화면만 보고는 알 수 없다.
+        if payload.core_types_only:
+            row.type_slugs = None
+    if "type_slugs" in sent and not row.core_types_only:
         row.type_slugs = payload.type_slugs or None
     if "is_active" in sent and payload.is_active is not None:
         row.is_active = payload.is_active

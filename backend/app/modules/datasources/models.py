@@ -37,7 +37,7 @@ AUTH_KINDS = ("none", "basic", "bearer", "header")
 #:   odata  OData v4(v2 봉투도). base_url + entity_set
 #:   rest   JSON 을 주는 REST. base_url + entity_set(경로), options 로 행 자리·쪽 넘김
 #:   file   CSV·Excel·JSON 파일 — URL 또는 `datasource_dir` 아래 경로. entity_set 이 그 위치
-SOURCE_KINDS = ("odata", "rest", "file")
+SOURCE_KINDS = ("odata", "rest", "file", "sp_core")
 #: 동기화 기록의 상태.
 RUN_STATUSES = ("planned", "ok", "failed")
 
@@ -81,6 +81,11 @@ class DataSource(Base):
     """새로 만드는 객체의 소유 부서. NULL 이면 전역."""
     mapping: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     """{external_key, columns: [{source, target, values, values_strict}]} — `services.py`."""
+
+    since_mark: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    """`sp_core` 만 쓴다 — 상대가 준 `as_of`. **끝까지 받고 적용에 성공했을 때만** 옮긴다.
+
+    비우면 처음부터 받는다. 상대 설치를 갈아엎었거나 대응을 크게 고쳤을 때 손으로 비운다."""
 
     deprecate_missing: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"

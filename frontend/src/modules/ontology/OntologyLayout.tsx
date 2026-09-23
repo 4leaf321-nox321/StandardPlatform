@@ -12,7 +12,7 @@
 
 import { useState } from 'react'
 import { NavLink, Outlet, useOutletContext } from 'react-router-dom'
-import { Boxes, LayoutList, Share2, Upload } from 'lucide-react'
+import { Boxes, LayoutList, Radio, Share2, Upload } from 'lucide-react'
 
 import { OntologyExportButton } from '@/modules/ontology/OntologyExportButton'
 import { ontologyApi } from '@/modules/ontology/api'
@@ -61,6 +61,14 @@ const SECTIONS = [
     label: '가져오기·이력',
     icon: Upload,
     count: () => undefined,
+  },
+  {
+    // **바깥으로 나가는 것.** 무엇이 열려 있는지 볼 자리가 없으면 열어 둔 것을 잊는다.
+    to: 'core',
+    label: '코어 (바깥에 열기)',
+    icon: Radio,
+    count: (schema: OntologySchema | null) =>
+      schema?.types.filter((one) => one.core).length || undefined,
   },
 ]
 

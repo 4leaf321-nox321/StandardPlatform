@@ -27,7 +27,12 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.datasources import fetchers, odata
 from app.modules.datasources.models import DataSource, DataSourceRun
-from app.modules.datasources.schemas import RunOut, SyncOut
+from app.modules.datasources.schemas import (
+    CoreSuggestOut,
+    CoreSuggestProperty,
+    RunOut,
+    SyncOut,
+)
 from app.modules.notifications import services as notifications
 from app.modules.objects import aliases, bulk
 from app.modules.objects.models import ObjectAlias, ObjectInstance
@@ -358,8 +363,12 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
         db.commit()
         return SyncResult(run=run, plan_rows=[], truncated=False)
 
-    mapped = [map_row(mapping, raw, source.slug) for raw in fetched.rows]
-    run.rows_seen = len(mapped)
+    # **무덤은 대응을 타지 않는다** — 값이 비어 있어서 「이름이 없다」 로 거절될 뿐이다.
+    # 가르고 나서 각자의 길로 보낸다.
+    graves = [one for one in fetched.rows if one.get(fetchers.CORE_DELETED)]
+    alive = [one for one in fetched.rows if not one.get(fetchers.CORE_DELETED)]
+    mapped = [map_row(mapping, raw, source.slug) for raw in alive]
+    run.rows_seen = len(mapped) + len(graves)
     _match(db, object_type, source.slug, mapped)
 
     # 대응에서 걸린 행은 계획에 오류로 싣고, 나머지를 bulk 에 넘긴다.
@@ -456,9 +465,14 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
         target = db.get(ObjectInstance, row_plan.object_id)
         if target is not None:
             aliases.set_external(db, target, object_type, source.slug, mapped_row.external_id)
-    deprecated = 0
+    deprecated = _bury(db, actor, object_type, source, graves, mapping.external_key)
     if source.deprecate_missing:
-        deprecated = _deprecate_missing(db, actor, object_type, source, seen)
+        deprecated += _deprecate_missing(db, actor, object_type, source, seen)
+
+    # **끝까지 받고 적용에 성공했을 때만 시계를 옮긴다.** 중간에 옮기면 그 사이 것을 영영
+    # 안 받고, 그 사실은 어디에도 안 뜬다.
+    if fetched.as_of and not fetched.truncated:
+        source.since_mark = fetched.as_of
 
     run.status = "ok"
     run.applied = True
@@ -506,6 +520,67 @@ def _actor(db: Session, user: User | None) -> User:
     return found
 
 
+def _bury(
+    db: Session,
+    actor: User,
+    object_type: ObjectType,
+    source: DataSource,
+    graves: list[dict[str, Any]],
+    external_key: str,
+) -> int:
+    """상대에서 **사라진 것**을 이쪽에서 사용 중지로.
+
+    지우지 않는 이유는 한 건씩 지울 때와 같다 — 이 객체를 가리키는 참조와 첨부가 밖에
+    남아 있다. 「그만 쓴다」 는 상태로 두면 가리키던 화면이 빈 칸이 되지 않는다.
+
+    합쳐져서 사라진 것(`merged_into`)은 **이긴 쪽을 기록에 적는다** — 나중에 「이건 왜
+    중지됐지」 를 물으면 답이 있어야 한다.
+    """
+    if not graves:
+        return 0
+    kind = aliases.source_kind(source.slug)
+    wanted = {compare_key(_text(one.get(external_key))) for one in graves}
+    wanted.discard("")
+    if not wanted:
+        return 0
+    rows = db.execute(
+        select(ObjectInstance, ObjectAlias.norm)
+        .join(ObjectAlias, ObjectAlias.object_id == ObjectInstance.id)
+        .where(
+            ObjectAlias.kind == kind,
+            ObjectAlias.norm.in_(wanted),
+            ObjectInstance.type_id == object_type.id,
+            ObjectInstance.deleted_at.is_(None),
+            ObjectInstance.status == "active",
+        )
+    )
+    merged_of = {
+        compare_key(_text(one.get(external_key))): _text(one.get("merged_into"))
+        for one in graves
+    }
+    count = 0
+    for row, norm in rows:
+        row.status = "deprecated"
+        count += 1
+        winner = merged_of.get(norm) or ""
+        audit.record(
+            db,
+            action="object.update",
+            actor=actor,
+            target_table="objects",
+            target_id=row.id,
+            target_label=f"{object_type.slug}:{row.label}",
+            workspace_id=row.owner_workspace_id,
+            changes={"status": {"before": "active", "after": "deprecated"}},
+            reason=(
+                f"{source.name} 에서 「{winner}」 에 합쳐져 사용 중지로 표시"
+                if winner
+                else f"{source.name} 에서 지워져 사용 중지로 표시"
+            ),
+        )
+    return count
+
+
 def _deprecate_missing(
     db: Session, actor: User, object_type: ObjectType, source: DataSource, seen: set[str]
 ) -> int:
@@ -540,6 +615,87 @@ def _deprecate_missing(
             reason=f"{source.name} 에서 사라져 사용 중지로 표시",
         )
     return count
+
+
+def suggest_core_mapping(
+    db: Session, source: DataSource, object_type: ObjectType
+) -> CoreSuggestOut:
+    """상대의 카탈로그 → **칸 대응 초안.**
+
+    잇는 규칙은 둘뿐이다: 키가 같으면 잇고, 아니면 이름(label)이 같은 칸에 잇는다.
+    **짐작은 여기까지다** — 「비슷해 보이는 이름」 까지 이으면 틀린 값이 조용히 들어가고,
+    그 값은 사람 눈에 맞는 값처럼 보여서 아무도 안 고친다. 못 이은 것은 까닭을 적는다.
+    """
+    body = fetchers.core_catalog(
+        base_url=source.base_url, auth=_auth(source), transport=transport
+    )
+    wanted = source.entity_set.strip()
+    remote = next(
+        (
+            one
+            for one in body.get("types") or []
+            if isinstance(one, dict) and one.get("slug") == wanted
+        ),
+        None,
+    )
+    if remote is None:
+        opened = ", ".join(
+            str(one.get("slug")) for one in body.get("types") or [] if isinstance(one, dict)
+        )
+        raise AppError(
+            code("DATASOURCES", 43),
+            f"그 설치가 연 코어 타입이 아닙니다: {wanted}. 열려 있는 것: {opened or '없음'}",
+            status=422,
+        )
+
+    defs = [one for one in properties_of(db, object_type.id) if one.data_type != "file"]
+    by_key = {one.key: one for one in defs}
+    by_label = {one.label.strip(): one for one in defs}
+    columns: list[dict[str, Any]] = [{"source": "label", "target": "label"}]
+    shown: list[CoreSuggestProperty] = []
+    notes: list[str] = []
+    for one in remote.get("properties") or []:
+        if not isinstance(one, dict):
+            continue
+        key = str(one.get("key") or "")
+        label = str(one.get("label") or "")
+        kind = str(one.get("data_type") or "")
+        found = by_key.get(key) or by_label.get(label.strip())
+        note = ""
+        if found is None:
+            note = "이쪽에 같은 이름의 칸이 없습니다 — 속성을 만들거나 그대로 두세요."
+            notes.append(f"{label or key}({kind}): 이쪽에 없는 칸")
+        elif found.data_type != kind:
+            # **자료형이 다르면 잇지 않는다.** 숫자 칸에 글자가 들어가면 정렬과 집계가
+            # 조용히 틀린다.
+            notes.append(
+                f"{label or key}: 자료형이 다릅니다(상대 {kind} · 이쪽 {found.data_type})"
+            )
+            note = "자료형이 달라 잇지 않았습니다."
+            found = None
+        else:
+            columns.append({"source": key, "target": f"properties.{found.key}"})
+        shown.append(
+            CoreSuggestProperty(
+                key=key,
+                label=label,
+                data_type=kind,
+                target=f"properties.{found.key}" if found else None,
+                note=note,
+            )
+        )
+
+    return CoreSuggestOut(
+        system=str(body.get("system") or ""),
+        revision=str(body.get("revision") or ""),
+        type_slug=wanted,
+        type_label=str(remote.get("label") or wanted),
+        count=int(remote.get("count") or 0),
+        # **식별자는 상대의 `key` 다.** 그것이 다음 동기화가 같은 객체를 다시 찾는 근거다.
+        mapping={"external_key": "key", "columns": columns},
+        properties=shown,
+        notes=notes,
+    )
 
 
 def due(db: Session, now: datetime | None = None) -> list[DataSource]:

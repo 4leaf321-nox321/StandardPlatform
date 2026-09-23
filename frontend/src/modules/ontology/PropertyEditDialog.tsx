@@ -103,6 +103,8 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
   const [error, setError] = useState<Error | null>(null)
   const [saving, setSaving] = useState(false)
   const [removing, setRemoving] = useState(false)
+  /** 바깥에 열린 타입이면 **누가 읽을 수 있는지** — 아무도 안 쓴다고 여기고 누르지 않게. */
+  const [opened, setOpened] = useState<string[] | null>(null)
   const [usage, setUsage] = useState<number | null>(null)
 
   function body(): Record<string, unknown> {
@@ -469,6 +471,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                   // **삭제 전에 몇 개가 안 보이게 되는지 먼저 읽는다.**
                   const found = await ontologyApi.propertyUsage(type.slug, property!.key)
                   setUsage(found.objects_with_value)
+                  setOpened(found.core_open ? found.core_consumers : null)
                   setRemoving(true)
                 }}
               >
@@ -495,21 +498,41 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
           destructive
           title={`${property.label} 속성을 삭제합니다`}
           description={
-            <>
-              지금 이 값을 가진 객체가 <b>{usage ?? 0}개</b> 있습니다. 정의를 삭제하면 그 값들은{' '}
-              <b>화면에서 사라집니다</b> — 데이터는 남아 있어, 같은 키로 다시 정의하면 도로
-              보입니다.
-            </>
+            <div className="space-y-2">
+              <p>
+                지금 이 값을 가진 객체가 <b>{usage ?? 0}개</b> 있습니다. 정의를 삭제하면 그 값들은{' '}
+                <b>화면에서 사라집니다</b> — 데이터는 남아 있어, 같은 키로 다시 정의하면 도로
+                보입니다.
+              </p>
+              {/* **바깥에 연 타입이면 약속을 깨는 일이다.** 그쪽 코드에 이 칸 이름이 박혀
+                  있으므로, 누가 읽을 수 있는지 이름을 들어 보여 준다. */}
+              {opened && (
+                <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-2">
+                  <p className="font-medium">이 타입은 바깥에 열려 있습니다(코어).</p>
+                  <p className="text-muted-foreground mt-1">
+                    지우면 받아 가는 쪽에서 <b>이 칸이 조용히 사라집니다.</b> 읽을 수 있는 자격{' '}
+                    {opened.length}개:
+                  </p>
+                  <ul className="text-muted-foreground mt-1 list-inside list-disc">
+                    {opened.map((one) => (
+                      <li key={one}>{one}</li>
+                    ))}
+                  </ul>
+                  <p className="mt-1">쓰는 쪽에 알린 뒤 진행하세요.</p>
+                </div>
+              )}
+            </div>
           }
           confirmLabel="삭제"
           onConfirm={async () => {
-            await ontologyApi.removeProperty(type.slug, property.key)
+            await ontologyApi.removeProperty(type.slug, property.key, opened !== null)
             onChanged()
             onClose()
           }}
           onClose={() => {
             setRemoving(false)
             setUsage(null)
+            setOpened(null)
           }}
         />
       )}

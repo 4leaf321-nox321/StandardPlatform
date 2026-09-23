@@ -290,3 +290,35 @@ def test_밀린_것은_워커가_다시_집는다(client: TestClient, admin: Sig
     assert job_services.pending_for(db, services.DISPATCH_KIND) is None
     Worker()._tick_housekeeping()
     assert job_services.pending_for(db, services.DISPATCH_KIND) is not None
+
+
+def test_코어_타입만_받는_웹훅은_목록이_아니라_규칙을_따라간다(
+    client: TestClient, admin: Signed, inbox: list[httpx.Request]
+) -> None:
+    """코어를 새로 열 때마다 slug 를 손으로 더해야 하면 언젠가 빠뜨리고, 빠뜨린 타입은
+    **조용히** 알림이 안 간다 — 그 침묵은 받는 쪽에서 「안 바뀌었나 보다」 로 읽힌다."""
+    opened = _make_type(client, admin, label=f"코어{uuid.uuid4().hex[:6]}")
+    closed = _make_type(client, admin, label=f"안연것{uuid.uuid4().hex[:6]}")
+    patched = client.patch(
+        f"/api/ontology/types/{opened}", json={"core": True}, headers=admin.headers
+    )
+    assert patched.status_code == 200, patched.text
+
+    _hook(client, admin, core_types_only=True)
+
+    _make_object(client, admin, closed, label="안 가는 것")
+    assert inbox == []
+
+    _make_object(client, admin, opened, label="가는 것")
+    assert len(inbox) == 1
+    assert json.loads(inbox[0].content)["target"]["type_slug"] == opened
+
+    # **나중에 연 타입도 설정을 안 고치고 따라온다.**
+    client.patch(f"/api/ontology/types/{closed}", json={"core": True}, headers=admin.headers)
+    _make_object(client, admin, closed, label="이제 가는 것")
+    assert len(inbox) == 2
+
+    # 닫으면 그날로 멎는다.
+    client.patch(f"/api/ontology/types/{opened}", json={"core": False}, headers=admin.headers)
+    _make_object(client, admin, opened, label="다시 안 가는 것")
+    assert len(inbox) == 2

@@ -186,6 +186,16 @@ class ObjectType(Base):
     parent_slug: Mapped[str | None] = mapped_column(String(SLUG_MAX), nullable=True)
     """상위 타입 — 「개발모델은 제품이다」. **화면 동작은 바꾸지 않는다**(목록 · 관계 허용은 그
     타입 그대로). RDF/OWL 로 내보낼 때 `rdfs:subClassOf` 가 되어 추론기가 상속을 푼다."""
+    core: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    """**바깥 시스템에 여는 타입인가.** 켜면 `/api/core` 로 나간다.
+
+    사이드바 묶음을 공유 경계로 쓰지 않는 이유: 묶음은 화면 정리용이라, 누가 메뉴를
+    옮기는 순간 바깥에 열린 범위가 조용히 바뀐다. 공개는 화면 배치와 따로 정한다.
+
+    **켜면 계약이 된다** — 이 타입의 slug 와 속성 key 가 남의 시스템 코드에 박힌다.
+    바꾸거나 지울 때 문턱이 서는 이유다.
+    """
+
     managed_by: Mapped[str] = mapped_column(String(40), default="", server_default="")
     """**누가 이 정의와 그 객체를 관리하나** — 빈 값이면 이 설치, `hub` 면 허브. 허브 것은
     묶음 가져오기에 같은 `source` 를 적어서만 바뀐다(`ontology/managed.py`). 가져오기가

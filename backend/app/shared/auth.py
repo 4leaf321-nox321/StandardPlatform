@@ -46,11 +46,13 @@ def _enforce_token_scope(request: Request, token_scopes: list[str], path: str) -
     있는 개념이고, 둘을 같은 축으로 섞으면 화면에서 되던 일이 이유 없이 막힌다.
     """
     if scopes.is_reading(request.method, path):
-        if scopes.READ in token_scopes:
+        if scopes.may_read(path, token_scopes):
             return
         raise Forbidden(
             code("AUTH", 104),
-            f"이 토큰에는 읽기 범위({scopes.READ})가 없습니다.",
+            f"이 토큰에는 이 경로를 읽을 범위가 없습니다({scopes.READ} 또는 그 자리의 "
+            "좁은 범위).",
+            details={"path": path, "granted": token_scopes},
         )
 
     needed = scopes.needed_scope(path)

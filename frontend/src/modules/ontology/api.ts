@@ -106,6 +106,12 @@ export interface ObjectType {
   entry_policy: 'open' | 'closed'
   /** 누가 관리하나 — 빈 값이면 이 설치, `hub` 면 허브가 내려준 것(여기서 못 고친다). */
   managed_by?: string
+  /**
+   * **바깥 시스템에 여는 타입인가** — 켜면 `/api/core` 로 나간다.
+   *
+   * 켜는 순간 약속이 된다: 이 타입의 slug 와 속성 key 가 남의 시스템 코드에 박힌다.
+   */
+  core?: boolean
   key_policy: 'none' | 'optional' | 'required'
   key_scope: 'global' | 'workspace'
   /** 상위 타입 — RDF/OWL 의 rdfs:subClassOf. 화면 동작은 바꾸지 않는다. */
@@ -288,10 +294,45 @@ export interface PromoteOut {
   snapshot_id: string | null
 }
 
+/** 코어 현황 — 무엇이 열려 있고, 누가 읽을 수 있고, 누가 받아 갔나. */
+export interface CoreStatus {
+  base: string
+  types: {
+    slug: string
+    label: string
+    description: string
+    count: number
+    updated_at: string | null
+    endpoint: string
+    properties: { key: string; label: string; data_type: string; multi: boolean }[]
+  }[]
+  consumers: {
+    name: string
+    owner: string
+    last_used_at: string | null
+    expires_at: string | null
+    /** `core:read` 만 가진 좁은 자격인가. 거짓이면 `read` 라 코어 밖도 읽는다. */
+    narrow: boolean
+    created_at: string
+  }[]
+  recent: {
+    at: string
+    actor: string
+    token: string | null
+    type_slug: string
+    rows: number
+    since: string
+  }[]
+}
+
 export interface PropertyUsage {
   key: string
   label: string
   objects_with_value: number
+  /** 이 타입이 **바깥에 열려 있나.** 켜져 있으면 이 칸은 남의 시스템 코드에 박혀 있다. */
+  core_open: boolean
+  /** 그 창구를 읽을 수 있는 자격 — 「이름(마지막 사용)」. */
+  core_consumers: string[]
 }
 
 /** 초기화 계획의 한 줄 — 사라질 것 하나. */
@@ -373,10 +414,15 @@ export const ontologyApi = {
       apply: boolean
     },
   ) => api.post<PromoteOut>(`/ontology/types/${slug}/properties/${key}/promote`, body),
+  /** 관리자만 — **코어 창구 밖에 둔다**(받아 가는 쪽이 다른 연동의 이름을 보면 안 된다). */
+  coreStatus: () => api.get<CoreStatus>('/ontology/core-status'),
   propertyUsage: (slug: string, key: string) =>
     api.get<PropertyUsage>(`/ontology/types/${slug}/properties/${key}/usage`),
-  removeProperty: (slug: string, key: string) =>
-    api.delete<void>(`/ontology/types/${slug}/properties/${key}`),
+  /** `acceptCore` 는 **바깥에 연 타입**의 칸을 지울 때만 — 확인 창에서 한 번 더 물은 뒤. */
+  removeProperty: (slug: string, key: string, acceptCore = false) =>
+    api.delete<void>(
+      `/ontology/types/${slug}/properties/${key}${acceptCore ? '?accept_core=true' : ''}`,
+    ),
 
   /** **기본이 미리 보기다.** 적용은 의도를 적어야 일어난다. */
   importSchema: (body: unknown, dryRun: boolean) =>

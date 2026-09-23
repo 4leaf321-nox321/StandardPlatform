@@ -1,5 +1,6 @@
 """행을 읽어 오는 조각 — **소스 종류마다 하나.** 나머지 파이프라인은 종류를 모른다.
 
+    sp_core 형제 Standard Platform 의 코어 창구(`/api/core/<타입>`) — **지난번 이후만.**
     odata   `odata.py` — v4/v2, 쪽 넘김
     rest    JSON 을 주는 REST. 행이 있는 자리(`rows_path`)와 쪽 넘김 방식(`paging`)을
             정의가 적는다
@@ -57,6 +58,16 @@ def fetch(
             max_rows=max_rows,
             transport=transport,
         )
+    if source.kind == "sp_core":
+        return fetch_sp_core(
+            base_url=source.base_url,
+            type_slug=source.entity_set,
+            since=source.since_mark,
+            auth=auth,
+            page_size=page_size or source.page_size,
+            max_rows=max_rows,
+            transport=transport,
+        )
     if source.kind == "file":
         return fetch_file(
             location=source.entity_set,
@@ -68,6 +79,155 @@ def fetch(
     raise AppError(
         code("DATASOURCES", 30), f"모르는 소스 종류입니다: {source.kind}", status=422
     )
+
+
+# --- 형제 Standard Platform 의 코어 ------------------------------------------------
+#
+# 다른 곳과 다른 점이 셋이다.
+#
+#   증분      `since` 에 지난번 `as_of` 를 넣으면 그 뒤에 바뀐 것만 온다. 새벽마다 전량을
+#             끌어오지 않아도 된다.
+#   무덤      지워진 것도 온다(`deleted: true`) — 그래야 받는 쪽이 사라진 것을 안다.
+#   봉투      값은 `properties` 안에 한 겹 들어 있다. 대응은 평평한 열 이름으로 적으므로
+#             여기서 펴 준다.
+#
+# **끝까지 받았을 때만 `as_of` 를 들고 나온다.** 쪽이 남았는데 시계를 옮기면 남은 쪽을 영영
+# 안 받는다 — 상대도 그래서 `next` 가 있으면 `as_of` 를 안 준다.
+
+#: 봉투의 자리. 펼친 행에서 **이 이름이 이긴다** — 같은 이름의 속성이 있으면 봉투가 남는다.
+CORE_ENVELOPE = ("key", "label", "status", "updated_at", "deleted", "merged_into")
+
+#: 무덤 표시 — `services.py` 가 이 열을 보고 「사라진 것」 으로 다룬다.
+CORE_DELETED = "deleted"
+
+
+def core_row(item: dict[str, Any]) -> dict[str, Any]:
+    """한 행을 평평하게 — `properties` 를 펴고 봉투를 위에 얹는다."""
+    values = item.get("properties")
+    out: dict[str, Any] = dict(values) if isinstance(values, dict) else {}
+    for name in CORE_ENVELOPE:
+        if name in item:
+            out[name] = item[name]
+    return out
+
+
+def fetch_sp_core(
+    *,
+    base_url: str,
+    type_slug: str,
+    since: str,
+    auth: Auth,
+    page_size: int,
+    max_rows: int,
+    transport: httpx.BaseTransport | None,
+) -> Fetched:
+    """형제 설치의 코어 창구에서 **지난번 이후**를 받는다."""
+    if not type_slug.strip():
+        raise AppError(
+            code("DATASOURCES", 36),
+            "가져올 코어 타입을 적으세요 — 상대의 `GET /api/core` 가 목록을 줍니다.",
+            status=422,
+        )
+    url = f"{base_url.rstrip('/')}/core/{type_slug.strip()}"
+    out = Fetched()
+    cursor: str | None = None
+    try:
+        with httpx.Client(
+            timeout=odata.TIMEOUT_SECONDS,
+            transport=transport,
+            headers={"Accept": "application/json", **auth.headers()},
+            auth=auth.basic(),
+            follow_redirects=True,
+        ) as client:
+            while out.pages < MAX_PAGES:
+                params = {"limit": str(page_size)}
+                if since:
+                    params["since"] = since
+                if cursor:
+                    params["cursor"] = cursor
+                response = client.get(url, params=params)
+                _raise_for_core(response)
+                body = response.json()
+                items = body.get("items") if isinstance(body, dict) else None
+                if not isinstance(items, list):
+                    raise AppError(
+                        code("DATASOURCES", 37),
+                        "코어 응답에 items 가 없습니다 — 주소가 그 설치의 "
+                        "`/api/core/<타입>` 인지 확인하세요.",
+                        status=502,
+                    )
+                out.rows.extend(core_row(one) for one in items if isinstance(one, dict))
+                out.pages += 1
+                if len(out.rows) >= max_rows:
+                    # **여기서 끊으면 시계를 안 옮긴다** — 다음 차례가 같은 자리에서 잇는다.
+                    out.truncated = True
+                    out.rows = out.rows[:max_rows]
+                    return out
+                cursor = body.get("next")
+                if not cursor:
+                    # 끝까지 받았다 — 이때만 시계가 온다.
+                    out.as_of = body.get("as_of")
+                    return out
+    except httpx.HTTPError as caught:
+        raise AppError(
+            code("DATASOURCES", 38), f"코어 창구에 닿지 못했습니다: {caught}", status=502
+        ) from caught
+    out.truncated = True
+    return out
+
+
+def _raise_for_core(response: httpx.Response) -> None:
+    """**상대의 말을 그대로 옮긴다.** 우리가 다시 쓴 문구는 상대 쪽 원인을 지운다."""
+    if response.status_code < 400:
+        return
+    said = ""
+    try:
+        body = response.json()
+        said = str((body.get("error") or {}).get("message") or "")
+    except ValueError:
+        said = response.text[:300]
+    if response.status_code in (401, 403):
+        raise AppError(
+            code("DATASOURCES", 11),
+            f"인증이 거절됐습니다 (HTTP {response.status_code}). 상대가 발급한 토큰인지, "
+            f"범위가 `core:read` 인지 확인하세요. 상대의 말: {said}",
+            status=502,
+        )
+    if response.status_code == 404:
+        raise AppError(
+            code("DATASOURCES", 39),
+            f"그 설치에 열려 있는 코어 타입이 아닙니다. 상대의 말: {said}",
+            status=502,
+        )
+    raise AppError(code("DATASOURCES", 12), f"HTTP {response.status_code}: {said}", status=502)
+
+
+def core_catalog(
+    *, base_url: str, auth: Auth, transport: httpx.BaseTransport | None
+) -> dict[str, Any]:
+    """상대가 **무엇을 열어 뒀나.** 대응을 손으로 옮겨 적지 않게 하는 자리."""
+    try:
+        with httpx.Client(
+            timeout=odata.TIMEOUT_SECONDS,
+            transport=transport,
+            headers={"Accept": "application/json", **auth.headers()},
+            auth=auth.basic(),
+            follow_redirects=True,
+        ) as client:
+            response = client.get(f"{base_url.rstrip('/')}/core")
+            _raise_for_core(response)
+            body = response.json()
+    except httpx.HTTPError as caught:
+        raise AppError(
+            code("DATASOURCES", 38), f"코어 창구에 닿지 못했습니다: {caught}", status=502
+        ) from caught
+    if not isinstance(body, dict) or not isinstance(body.get("types"), list):
+        raise AppError(
+            code("DATASOURCES", 37),
+            "코어 카탈로그를 읽지 못했습니다 — 주소가 그 설치의 `/api/core` 인지 확인하세요.",
+            status=502,
+        )
+    return body
 
 
 # --- REST -----------------------------------------------------------------------

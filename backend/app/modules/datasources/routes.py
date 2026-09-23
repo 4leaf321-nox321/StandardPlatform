@@ -18,6 +18,7 @@ from app.modules.datasources.models import (
     DataSourceRun,
 )
 from app.modules.datasources.schemas import (
+    CoreSuggestOut,
     DataSourceOut,
     DataSourcePatchRequest,
     DataSourceWriteRequest,
@@ -62,6 +63,7 @@ def _out(db: Session, row: DataSource) -> DataSourceOut:
         workspace_slug=workspace.slug if workspace else None,
         mapping=row.mapping or {},
         deprecate_missing=row.deprecate_missing,
+        since_mark=row.since_mark,
         interval_minutes=row.interval_minutes,
         is_active=row.is_active,
         last_run_at=row.last_run_at,
@@ -99,7 +101,7 @@ def _workspace(db: Session, slug: str | None) -> Workspace | None:
 
 
 def _require_url(url: str, *, kind: str) -> str:
-    """OData·REST 는 루트 주소가 있어야 한다. 파일은 없어도 된다(위치가 entity_set 에)."""
+    """OData·REST·코어는 루트 주소가 있어야 한다. 파일은 없어도 된다(위치가 entity_set 에)."""
     if kind == "file":
         return url.strip().rstrip("/")
     parsed = urlparse(url.strip())
@@ -110,6 +112,23 @@ def _require_url(url: str, *, kind: str) -> str:
             status=422,
         )
     return url.strip().rstrip("/")
+
+
+def _check_deprecate(kind: str, wanted: bool) -> bool:
+    """**증분 소스에서는 「이번에 안 온 것을 중지」 를 켤 수 없다.**
+
+    코어 창구는 지난번 이후 바뀐 것만 준다 — 안 온 것이 대부분이다. 그 규칙을 켜면 첫
+    동기화 다음 날 **멀쩡한 객체 전부가 사용 중지가 된다.** 사라진 것은 무덤(`deleted`)으로
+    오므로 그 규칙 자체가 필요 없다.
+    """
+    if wanted and kind == "sp_core":
+        raise AppError(
+            code("DATASOURCES", 40),
+            "코어 소스는 지난번 이후 바뀐 것만 받으므로 「이번에 안 온 것을 사용 중지」 를 "
+            "켤 수 없습니다 — 사라진 것은 상대가 무덤으로 알려 줍니다.",
+            status=422,
+        )
+    return wanted
 
 
 def _check_mapping(db: Session, object_type: ObjectType, mapping: dict[str, object]) -> None:
@@ -159,7 +178,7 @@ def create_source(
         type_id=object_type.id,
         workspace_id=workspace.id if workspace else None,
         mapping=payload.mapping,
-        deprecate_missing=payload.deprecate_missing,
+        deprecate_missing=_check_deprecate(payload.kind, payload.deprecate_missing),
         interval_minutes=payload.interval_minutes,
         is_active=payload.is_active,
         created_by_id=user.id,
@@ -242,7 +261,16 @@ def update_source(
         _check_mapping(db, object_type, payload.mapping)
         row.mapping = payload.mapping
     if "deprecate_missing" in sent and payload.deprecate_missing is not None:
-        row.deprecate_missing = payload.deprecate_missing
+        row.deprecate_missing = _check_deprecate(row.kind, payload.deprecate_missing)
+    # **비우는 것만 받는다** — 시계를 손으로 앞당기면 그 사이 것을 영영 안 받는다.
+    if "since_mark" in sent and payload.since_mark is not None:
+        if payload.since_mark.strip():
+            raise AppError(
+                code("DATASOURCES", 41),
+                "받은 자리(since)는 손으로 정하지 않습니다 — 비우면 처음부터 다시 받습니다.",
+                status=422,
+            )
+        row.since_mark = ""
     if "interval_minutes" in sent and payload.interval_minutes is not None:
         row.interval_minutes = payload.interval_minutes
     if "is_active" in sent and payload.is_active is not None:
@@ -297,6 +325,30 @@ def preview_source(
     """앞의 몇 행을 그대로 + 대응한 뒤로 — 칸 대응을 맞출 때 본다. 아무것도 안 바꾼다."""
     row = _source(db, slug)
     return PreviewOut(**services.preview(db, row, limit=limit))
+
+
+@router.post("/{slug}/core-suggest", response_model=CoreSuggestOut)
+def suggest_core_mapping(
+    slug: str,
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> CoreSuggestOut:
+    """상대의 카탈로그를 읽어 **칸 대응 초안**을 만든다 — 저장은 사람이 한다.
+
+    옮겨 적게 하면 상대가 칸을 하나 더하는 날 그 대응이 조용히 뒤처진다. 여기서는 상대의
+    `GET /api/core` 를 그대로 읽어 같은 이름(키 → 키, 없으면 이름 → 이름)끼리 잇고,
+    **못 이은 것은 까닭과 함께 돌려준다** — 조용히 빼면 사람은 그 칸이 온 줄 안다.
+    """
+    row = _source(db, slug)
+    if row.kind != "sp_core":
+        raise AppError(
+            code("DATASOURCES", 42),
+            "형제 설치의 코어 소스에서만 됩니다.",
+            status=422,
+        )
+    object_type = db.get(ObjectType, row.type_id)
+    assert object_type is not None
+    return services.suggest_core_mapping(db, row, object_type)
 
 
 @router.post("/{slug}/sync", response_model=JobOut, status_code=202)

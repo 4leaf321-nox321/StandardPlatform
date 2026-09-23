@@ -122,6 +122,13 @@ export default function OntologyTypesPage() {
                       {row.managed_by && (
                         <span className="ml-2 rounded border px-1.5 text-xs">허브 관리</span>
                       )}
+                      {/* **무엇이 바깥에 열려 있는지 목록에서 보여야 한다.** 창을 하나씩
+                          열어 봐야 알 수 있으면 열어 둔 것을 잊는다. */}
+                      {row.core && (
+                        <span className="ml-2 rounded border border-sky-500/50 bg-sky-500/10 px-1.5 text-xs">
+                          코어
+                        </span>
+                      )}
                     </TableCell>
                     <TableCell className="font-mono text-xs">{row.slug}</TableCell>
                     <TableCell>{KIND_LABELS[row.kind_class] ?? row.kind_class}</TableCell>

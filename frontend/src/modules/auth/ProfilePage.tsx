@@ -38,6 +38,8 @@ export default function ProfilePage() {
   // 사람은 있는 범위를 못 고른다.
   const scopes = useResource(() => api.get<{ scopes: string[] }>('/auth/token-scopes'), [])
   const [tokenName, setTokenName] = useState('')
+  /** 며칠 뒤에 스스로 끊기나. **비우면 만료가 없다** — 바깥에 주는 토큰에는 적는 편이 낫다. */
+  const [expiresDays, setExpiresDays] = useState('')
   const [granted, setGranted] = useState<string[]>(['read'])
   // 평문은 발급 응답에서 **한 번만** 나온다. 새로고침하면 다시 볼 수 없다.
   const [issued, setIssued] = useState<string | null>(null)
@@ -60,12 +62,16 @@ export default function ProfilePage() {
     event.preventDefault()
     setError(null)
     try {
+      const days = Number(expiresDays)
       const body = await api.post<{ token: string }>('/auth/tokens', {
         name: tokenName,
         scopes: granted,
+        // 빈 칸은 **만료 없음**이다. 0 을 보내면 서버가 거절하므로 아예 안 보낸다.
+        expires_in_days: Number.isFinite(days) && days > 0 ? days : null,
       })
       setIssued(body.token)
       setTokenName('')
+      setExpiresDays('')
       setGranted(['read'])
       tokens.reload()
     } catch (caught) {
@@ -132,6 +138,18 @@ export default function ProfilePage() {
               className="max-w-sm"
               required
             />
+            {/* **만료를 적을 자리가 없으면 아무도 안 적는다.** 바깥 시스템에 주는 토큰은
+                특히 — 연동이 끝난 뒤에도 살아 있는 자격이 가장 오래 남는 구멍이다. */}
+            <Input
+              type="number"
+              min={1}
+              max={3650}
+              value={expiresDays}
+              onChange={(event) => setExpiresDays(event.target.value)}
+              placeholder="만료 (일)"
+              className="w-32"
+              aria-label="만료까지 일수"
+            />
             <Button type="submit">발급</Button>
           </div>
           <div className="flex flex-wrap gap-3">
@@ -156,7 +174,8 @@ export default function ProfilePage() {
               「나중에 좁히자」 고 하는데, 나중은 오지 않는다. */}
           <p className="text-muted-foreground text-xs">
             선택하지 않으면 읽기만 됩니다. 필요한 것만 켜세요 — 계정 관리와 서버 설정은 어느
-            범위로도 열리지 않습니다.
+            범위로도 열리지 않습니다. <b>만료를 비우면 만료가 없습니다</b> — 바깥 시스템에 주는
+            토큰에는 일수를 적어 두세요.
           </p>
         </form>
 
@@ -167,6 +186,7 @@ export default function ProfilePage() {
               <TableHead>앞자리</TableHead>
               <TableHead>범위</TableHead>
               <TableHead>발급</TableHead>
+              <TableHead>만료</TableHead>
               <TableHead>마지막 사용</TableHead>
               <TableHead />
             </TableRow>
@@ -180,6 +200,18 @@ export default function ProfilePage() {
                     이것뿐이다. */}
                 <TableCell className="font-mono text-xs">{one.scopes.join(', ')}</TableCell>
                 <TableCell>{shownDate(one.created_at)}</TableCell>
+                {/* **만료가 목록에 없으면 아무도 안 본다.** 지난 토큰은 그 자리에서 보이게. */}
+                <TableCell>
+                  {one.expires_at ? (
+                    new Date(one.expires_at) < new Date() ? (
+                      <span className="text-destructive">{shownDate(one.expires_at)} 지남</span>
+                    ) : (
+                      shownDate(one.expires_at)
+                    )
+                  ) : (
+                    <span className="text-muted-foreground">없음</span>
+                  )}
+                </TableCell>
                 <TableCell>{shownDate(one.last_used_at)}</TableCell>
                 <TableCell className="text-right">
                   {!one.revoked_at && (
