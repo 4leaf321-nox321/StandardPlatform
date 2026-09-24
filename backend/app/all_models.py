@@ -17,7 +17,12 @@ from app.database import Base
 # **확장의 표도 여기 적는다.** 빠뜨리면 autogenerate 가 기존 표를 지우는 마이그레이션을
 # 만들고, 그 사실은 배포 뒤 마이그레이션에서만 터진다. 마이그레이션은 확장을 켰는지와
 # 무관하게 늘 전부 돈다 — 안 켠 설치에서는 그 표가 비어 있을 뿐이다.
-from app.extensions.caegroup.models import CaeDtPair, CaeDtSetting
+from app.extensions.caegroup.models import (
+    CaeDtAssessment,
+    CaeDtAssessmentHistory,
+    CaeDtPair,
+    CaeDtSetting,
+)
 from app.modules.accounts.models import User
 from app.modules.audit.models import AccessLog, AuditEntry
 from app.modules.auth.models import PersonalAccessToken, RefreshToken
@@ -51,6 +56,8 @@ __all__ = [
     "Attachment",
     "AuditEntry",
     "Base",
+    "CaeDtAssessment",
+    "CaeDtAssessmentHistory",
     "CaeDtPair",
     "CaeDtSetting",
     "DataSource",

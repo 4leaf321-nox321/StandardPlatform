@@ -8776,6 +8776,215 @@
         }
       }
     },
+    "/api/ext/caegroup/dt/pairs/{pair_id}/assessments": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Assessment List",
+        "description": "그 연계의 평가 — 축 순서대로. **안 매긴 축은 목록에 없다.**\n\n빈 줄을 만들어 내려 주면 화면이 「안 매긴 것」 과 「0 으로 매긴 것」 을 구별할 수 없다.",
+        "operationId": "assessment_list_api_ext_caegroup_dt_pairs__pair_id__assessments_get",
+        "parameters": [
+          {
+            "name": "pair_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pair Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssessmentOut"
+                  },
+                  "title": "Response Assessment List Api Ext Caegroup Dt Pairs  Pair Id  Assessments Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/pairs/{pair_id}/assessments/{axis}": {
+      "put": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Assessment Save",
+        "description": "평가를 적는다 — **그 부서 멤버만.**\n\n근거는 필수이고, 근거 등급이 「확인」 · 「검증」 이면 근거 자료도 필수다. 가상검증률의\n수준은 값이 정한다(보낸 수준은 무시한다).",
+        "operationId": "assessment_save_api_ext_caegroup_dt_pairs__pair_id__assessments__axis__put",
+        "parameters": [
+          {
+            "name": "pair_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pair Id"
+            }
+          },
+          {
+            "name": "axis",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Axis"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssessmentIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssessmentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/pairs/{pair_id}/history": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Assessment History",
+        "description": "평가가 바뀐 기록 — **담당자가 본다**(감사 기록은 시스템 관리자만 읽는다).",
+        "operationId": "assessment_history_api_ext_caegroup_dt_pairs__pair_id__history_get",
+        "parameters": [
+          {
+            "name": "pair_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pair Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HistoryOut"
+                  },
+                  "title": "Response Assessment History Api Ext Caegroup Dt Pairs  Pair Id  History Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/coverage": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Coverage",
+        "description": "축마다의 평가 완료율. 3단계 대시보드가 이것으로 그린다.",
+        "operationId": "coverage_api_ext_caegroup_dt_coverage_get",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Workspace"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoverageOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ext/sample/ping": {
       "get": {
         "tags": [
@@ -9106,6 +9315,163 @@
         },
         "type": "object",
         "title": "ApproveRequest"
+      },
+      "AssessmentIn": {
+        "properties": {
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "rung": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rung"
+          },
+          "rungs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rungs"
+          },
+          "defects": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Defects"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evidence"
+          },
+          "evidence_tier": {
+            "type": "string",
+            "title": "Evidence Tier"
+          },
+          "evidence_ref": {
+            "type": "string",
+            "title": "Evidence Ref",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "note",
+          "evidence_tier"
+        ],
+        "title": "AssessmentIn",
+        "description": "평가를 적을 때 보내는 것.\n\n**수준(`rung`)은 수치형 축에서 보내지 않는다** — 값이 정한다. 보내도 서버가 무시한다."
+      },
+      "AssessmentOut": {
+        "properties": {
+          "axis": {
+            "type": "string",
+            "title": "Axis"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "rung": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rung"
+          },
+          "rungs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rungs"
+          },
+          "defects": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Defects"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "evidence": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Evidence"
+          },
+          "evidence_tier": {
+            "type": "string",
+            "title": "Evidence Tier"
+          },
+          "evidence_ref": {
+            "type": "string",
+            "title": "Evidence Ref"
+          },
+          "assessed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Assessed At"
+          },
+          "assessed_by_label": {
+            "type": "string",
+            "title": "Assessed By Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "axis",
+          "value",
+          "rung",
+          "rungs",
+          "defects",
+          "note",
+          "evidence",
+          "evidence_tier",
+          "evidence_ref",
+          "assessed_at",
+          "assessed_by_label"
+        ],
+        "title": "AssessmentOut",
+        "description": "평가 한 줄 — **축 종류마다 채워진 칸이 다르다**(§정의)."
       },
       "AttachmentBrief": {
         "properties": {
@@ -10394,6 +10760,56 @@
         ],
         "title": "CoreTypeOut"
       },
+      "CoverageAxisOut": {
+        "properties": {
+          "axis": {
+            "type": "string",
+            "title": "Axis"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "assessed": {
+            "type": "integer",
+            "title": "Assessed"
+          },
+          "ratio": {
+            "type": "number",
+            "title": "Ratio"
+          }
+        },
+        "type": "object",
+        "required": [
+          "axis",
+          "label",
+          "assessed",
+          "ratio"
+        ],
+        "title": "CoverageAxisOut"
+      },
+      "CoverageOut": {
+        "properties": {
+          "pairs": {
+            "type": "integer",
+            "title": "Pairs"
+          },
+          "axes": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageAxisOut"
+            },
+            "type": "array",
+            "title": "Axes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pairs",
+          "axes"
+        ],
+        "title": "CoverageOut",
+        "description": "**평가 완료율** — 평가된 연계 ÷ 전체 연계. 축마다 따로 센다."
+      },
       "CreateAccountRequest": {
         "properties": {
           "email": {
@@ -11494,6 +11910,41 @@
           "snapshot"
         ],
         "title": "HistoryEntryOut"
+      },
+      "HistoryOut": {
+        "properties": {
+          "axis": {
+            "type": "string",
+            "title": "Axis"
+          },
+          "axis_label": {
+            "type": "string",
+            "title": "Axis Label"
+          },
+          "snapshot": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Snapshot"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          },
+          "changed_by_label": {
+            "type": "string",
+            "title": "Changed By Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "axis",
+          "axis_label",
+          "snapshot",
+          "changed_at",
+          "changed_by_label"
+        ],
+        "title": "HistoryOut"
       },
       "HomeWidgetOut": {
         "properties": {

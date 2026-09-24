@@ -40,6 +40,7 @@ import {
 } from '@/shared/components/ui/table'
 import { useResource } from '@/shared/hooks/useResource'
 
+import { AssessmentPanel } from './AssessmentPanel'
 import { dtApi, type Pair } from './api'
 
 /** 같은 시험 항목끼리 묶는다 — 표에서 첫 줄만 이름을 들고 나머지는 합쳐진다. */
@@ -69,6 +70,7 @@ export default function PairsPage() {
   const [subject, setSubject] = useState<string | null>(null)
   const [agent, setAgent] = useState<string | null>(null)
   const [unlinking, setUnlinking] = useState<Pair | null>(null)
+  const [picked, setPicked] = useState<string | null>(null)
 
   const ready = setup.data?.ready ?? false
   const subjectSlug = setup.data?.subject_type_slug ?? null
@@ -114,6 +116,13 @@ export default function PairsPage() {
   }
 
   const groups = groupBySubject(pairs.data ?? [])
+  const current = (pairs.data ?? []).find((one) => one.id === picked) ?? null
+  // **불량 유형은 시험 항목이 든 목록이다.** 수단에 두면 같은 시험인데 도구마다 목록이
+  // 갈려 「이 시험의 불량 중 아직 아무 데서도 재현 안 되는 것」 을 셀 수 없다.
+  const defectTypes = current
+    ? (((subjects.data?.items ?? []).find((one) => one.id === current.subject_id)?.properties
+        ?.defect_types as string[] | undefined) ?? [])
+    : []
   const subjectLabel = defs.data?.subject_label ?? '시험 항목'
   const agentLabel = defs.data?.agent_label ?? '시뮬레이션'
 
@@ -235,6 +244,7 @@ export default function PairsPage() {
               hint={`${subjectLabel}과 ${agentLabel}을 선택하여 연계를 등록합니다. 평가는 연계 단위로 수행합니다.`}
             />
           ) : (
+            <div className="grid gap-4 xl:grid-cols-[minmax(28rem,1fr)_minmax(0,1.1fr)]">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -246,7 +256,13 @@ export default function PairsPage() {
               <TableBody>
                 {groups.map((group) =>
                   group.rows.map((row, index) => (
-                    <TableRow key={row.id}>
+                    <TableRow
+                      key={row.id}
+                      onClick={() => setPicked(row.id)}
+                      className={
+                        picked === row.id ? 'bg-muted/60 cursor-pointer' : 'cursor-pointer'
+                      }
+                    >
                       {index === 0 && (
                         <TableCell rowSpan={group.rows.length} className="align-top font-medium">
                           {group.subject}
@@ -257,7 +273,14 @@ export default function PairsPage() {
                       )}
                       <TableCell>{row.agent_label}</TableCell>
                       <TableCell className="text-right">
-                        <Button variant="ghost" size="sm" onClick={() => setUnlinking(row)}>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setUnlinking(row)
+                          }}
+                        >
                           <Unlink className="size-4" /> 해제
                         </Button>
                       </TableCell>
@@ -266,6 +289,24 @@ export default function PairsPage() {
                 )}
               </TableBody>
             </Table>
+
+            {/* **오른쪽은 고른 연계의 평가다.** 모달로 띄우면 표와 값을 나란히 못 본다 —
+                한 시험의 해석 셋을 견주는 일이 이 화면의 일이다. */}
+            <div className="rounded-md border p-4">
+              {current && defs.data ? (
+                <AssessmentPanel
+                  pair={current}
+                  defs={defs.data}
+                  defectTypes={defectTypes}
+                  onSaved={() => pairs.reload()}
+                />
+              ) : (
+                <p className="text-muted-foreground text-sm">
+                  왼쪽 표에서 연계를 선택하면 축별 평가를 입력할 수 있습니다.
+                </p>
+              )}
+            </div>
+            </div>
           )}
         </>
       )}

@@ -10,11 +10,16 @@ import uuid
 from copy import deepcopy
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.extensions.caegroup import definitions as D
-from app.extensions.caegroup.models import CaeDtPair, CaeDtSetting
+from app.extensions.caegroup.models import (
+    CaeDtAssessment,
+    CaeDtAssessmentHistory,
+    CaeDtPair,
+    CaeDtSetting,
+)
 from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology import importer
@@ -318,3 +323,262 @@ def unlink(db: Session, user: User, *, pair_id: uuid.UUID) -> None:
     )
     db.delete(row)
     db.commit()
+
+
+# ── 평가 ────────────────────────────────────────────────────────────────
+
+
+def _pair_or_404(db: Session, pair_id: uuid.UUID) -> CaeDtPair:
+    row = db.get(CaeDtPair, pair_id)
+    if row is None:
+        raise NotFound(code("CAEGROUP", 6), "연계를 찾을 수 없습니다.")
+    return row
+
+
+def _axis_or_404(axis: str) -> dict[str, Any]:
+    found = D.AXIS_BY_KEY.get(axis)
+    if found is None:
+        raise NotFound(code("CAEGROUP", 8), f"이 부문에 없는 축입니다: {axis}")
+    return found
+
+
+def _out(row: CaeDtAssessment) -> dict[str, Any]:
+    return {
+        "axis": row.axis,
+        "value": row.value,
+        "rung": row.rung,
+        "rungs": list(row.rungs or []),
+        "defects": dict(row.defects or {}),
+        "note": row.note,
+        "evidence": dict(row.evidence or {}),
+        "evidence_tier": row.evidence_tier,
+        "evidence_ref": row.evidence_ref,
+        "assessed_at": row.assessed_at,
+        "assessed_by_label": row.assessed_by_label,
+    }
+
+
+def assessments(db: Session, *, pair_id: uuid.UUID) -> list[dict[str, Any]]:
+    """그 연계의 평가 — **축 순서대로.** 아직 안 매긴 축은 목록에 없다.
+
+    빈 줄을 만들어 내려 주지 않는다 — 「안 매긴 것」 과 「0 으로 매긴 것」 을 화면이 구별할
+    수 있어야 한다.
+    """
+    _pair_or_404(db, pair_id)
+    rows = {
+        one.axis: one
+        for one in db.scalars(
+            select(CaeDtAssessment).where(CaeDtAssessment.pair_id == pair_id)
+        )
+    }
+    return [_out(rows[key]) for key in D.AXIS_KEYS if key in rows]
+
+
+def history(db: Session, *, pair_id: uuid.UUID, limit: int = 50) -> list[dict[str, Any]]:
+    """평가가 바뀐 기록 — 최근 것부터."""
+    _pair_or_404(db, pair_id)
+    rows = db.scalars(
+        select(CaeDtAssessmentHistory)
+        .where(CaeDtAssessmentHistory.pair_id == pair_id)
+        .order_by(CaeDtAssessmentHistory.changed_at.desc())
+        .limit(limit)
+    )
+    return [
+        {
+            "axis": one.axis,
+            "axis_label": D.AXIS_BY_KEY.get(one.axis, {}).get("label", one.axis),
+            "snapshot": dict(one.snapshot or {}),
+            "changed_at": one.changed_at,
+            "changed_by_label": one.changed_by_label,
+        }
+        for one in rows
+    ]
+
+
+def _check_evidence(axis: dict[str, Any], payload: dict[str, Any]) -> None:
+    """근거 규칙 — 축 종류와 무관하게 같다."""
+    note = str(payload.get("note") or "").strip()
+    if not note:
+        # **근거 없는 평가는 다음 사람이 확인할 수 없다.** 수준만 남으면 그 숫자는
+        # 「누가 언젠가 그렇게 봤다」 는 말과 같아진다.
+        raise Conflict(code("CAEGROUP", 9), f"{axis['label']}: 근거를 적어야 저장됩니다.")
+    tier = str(payload.get("evidence_tier") or "")
+    if tier not in D.TIER_KEYS:
+        raise Conflict(
+            code("CAEGROUP", 10), f"{axis['label']}: 근거 등급을 고르세요(진술 · 확인 · 검증)."
+        )
+    if tier in D.TIERS_NEEDING_REF and not str(payload.get("evidence_ref") or "").strip():
+        named = {one["key"]: one["label"] for one in D.EVIDENCE_TIERS}[tier]
+        raise Conflict(
+            code("CAEGROUP", 11),
+            f"{axis['label']}: 「{named}」 은 근거 자료가 필요합니다"
+            "(문서번호 · 파일명 · 화면 경로).",
+        )
+
+
+def _apply_axis(
+    axis: dict[str, Any],
+    row: CaeDtAssessment,
+    payload: dict[str, Any],
+    *,
+    defect_types: list[str],
+) -> None:
+    """축 종류마다 채우는 칸이 다르다 — 그 갈림을 **한 곳**에서 한다."""
+    allowed = set(D.rung_keys(axis["key"]))
+    kind = axis["kind"]
+    row.value, row.rung, row.rungs, row.defects = None, None, [], {}
+
+    if kind == "value":
+        raw = payload.get("value")
+        if raw is None:
+            raise Conflict(code("CAEGROUP", 12), f"{axis['label']}: 값을 적어야 합니다.")
+        value = float(raw)
+        if not 0 <= value <= 100:
+            raise Conflict(code("CAEGROUP", 13), f"{axis['label']}: 0 ~ 100 사이여야 합니다.")
+        row.value = value
+        # **수준은 문턱이 정한다.** 화면이 보내는 수준은 받지 않는다 — 값과 수준을 따로
+        # 받으면 값을 고쳐도 수준이 안 따라오고, 그때 가상검증률이 둘이 된다.
+        row.rung = D.rung_for_value(value)
+    elif kind == "rung":
+        chosen = str(payload.get("rung") or "")
+        if chosen not in allowed:
+            raise Conflict(code("CAEGROUP", 14), f"{axis['label']}: 수준을 고르세요.")
+        row.rung = chosen
+    elif kind == "set":
+        picked = [one for one in (payload.get("rungs") or []) if one in allowed]
+        if not picked:
+            raise Conflict(code("CAEGROUP", 15), f"{axis['label']}: 하나 이상 고르세요.")
+        # 정의에 적힌 순서로 담는다 — 고른 순서대로 두면 같은 평가가 화면마다 다르게 보인다.
+        row.rungs = [one for one in D.rung_keys(axis["key"]) if one in picked]
+    else:  # matrix — 바탕 토글 + 불량 유형별 재현. **수준은 셈으로 접는다.**
+        base = {one["key"] for one in axis.get("base", [])}
+        row.rungs = [one for one in (payload.get("rungs") or []) if one in base]
+        columns = {one["key"] for one in axis.get("columns", [])}
+        defects = {
+            str(name): {
+                key: value for key, value in (marks or {}).items() if key in columns and value
+            }
+            for name, marks in (payload.get("defects") or {}).items()
+        }
+        row.defects = {name: marks for name, marks in defects.items() if marks}
+        if not row.rungs and not row.defects:
+            raise Conflict(
+                code("CAEGROUP", 16),
+                f"{axis['label']}: 바탕(형상 · 거동)을 켜거나 불량 유형의 재현을 표시하세요.",
+            )
+        row.rung = D.modeling_level(row.rungs, row.defects, defect_types)
+
+
+def _defect_types(db: Session, pair: CaeDtPair) -> list[str]:
+    """모델링 수준의 셈 기준 — **시험 항목이 든 불량 유형 목록.**
+
+    시뮬레이션이 아니라 시험에 붙는다. 수단에 두면 같은 시험인데 도구마다 목록이 갈려
+    「이 시험의 불량 중 아직 아무 데서도 재현 안 되는 것」 을 셀 수 없다.
+    """
+    subject = db.get(ObjectInstance, pair.subject_id)
+    raw = (subject.properties or {}).get("defect_types") if subject else None
+    if isinstance(raw, list):
+        return [str(one) for one in raw]
+    return [str(raw)] if isinstance(raw, str) and raw else []
+
+
+def save_assessment(
+    db: Session, user: User, *, pair_id: uuid.UUID, axis_key: str, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """평가를 적는다 — **그 부서 멤버만.** 바뀌면 이력에 한 줄 남는다."""
+    pair = _pair_or_404(db, pair_id)
+    workspace = db.get(Workspace, pair.workspace_id)
+    if workspace is None:
+        raise NotFound(code("CAEGROUP", 7), "부서를 찾을 수 없습니다.")
+    permissions.require_member(db, workspace=workspace, user=user)
+    axis = _axis_or_404(axis_key)
+    _check_evidence(axis, payload)
+
+    row = db.scalar(
+        select(CaeDtAssessment).where(
+            CaeDtAssessment.pair_id == pair_id, CaeDtAssessment.axis == axis_key
+        )
+    )
+    fresh = row is None
+    if row is None:
+        row = CaeDtAssessment(pair_id=pair_id, axis=axis_key)
+        db.add(row)
+    _apply_axis(axis, row, payload, defect_types=_defect_types(db, pair))
+    row.note = str(payload["note"]).strip()
+    row.evidence = dict(payload.get("evidence") or {})
+    row.evidence_tier = str(payload["evidence_tier"])
+    row.evidence_ref = str(payload.get("evidence_ref") or "").strip()
+    row.assessed_by_id = user.id
+    row.assessed_by_label = user.display_name or user.email
+    db.flush()
+
+    db.add(
+        CaeDtAssessmentHistory(
+            pair_id=pair_id,
+            axis=axis_key,
+            snapshot=_history_snapshot(row),
+            changed_by_id=user.id,
+            changed_by_label=row.assessed_by_label,
+        )
+    )
+    audit.record(
+        db,
+        action="caegroup.dt.assessment.save",
+        actor=user,
+        target_table="cae_dt_assessments",
+        target_id=row.id,
+        target_label=f"{pair_id} · {axis_key}",
+        workspace_id=pair.workspace_id,
+        changes={"axis": axis_key, "new": fresh, "tier": row.evidence_tier},
+    )
+    db.commit()
+    db.refresh(row)
+    return _out(row)
+
+
+def _history_snapshot(row: CaeDtAssessment) -> dict[str, Any]:
+    """이력에 남길 한 벌 — **값과 근거만.** 사람 이름은 줄 자신이 들고 있다."""
+    return {
+        "value": row.value,
+        "rung": row.rung,
+        "rungs": list(row.rungs or []),
+        "defects": dict(row.defects or {}),
+        "note": row.note,
+        "evidence": dict(row.evidence or {}),
+        "evidence_tier": row.evidence_tier,
+        "evidence_ref": row.evidence_ref,
+    }
+
+
+def coverage(db: Session, *, workspace: Workspace | None = None) -> dict[str, Any]:
+    """축마다 **평가 완료율** — 평가된 연계 ÷ 전체 연계.
+
+    3단계 대시보드가 이것으로 그린다. 여기 두는 이유는 화면 둘이 같은 셈을 두 번 하지
+    않게 하려는 것이다 — 두 번 하면 둘이 갈리고, 그때 어느 쪽이 맞는지 아무도 모른다.
+    """
+    pair_stmt = select(CaeDtPair.id)
+    if workspace is not None:
+        pair_stmt = pair_stmt.where(CaeDtPair.workspace_id == workspace.id)
+    ids = set(db.scalars(pair_stmt))
+    total = len(ids)
+    done: dict[str, int] = {key: 0 for key in D.AXIS_KEYS}
+    if ids:
+        for axis_key, count in db.execute(
+            select(CaeDtAssessment.axis, func.count())
+            .where(CaeDtAssessment.pair_id.in_(ids))
+            .group_by(CaeDtAssessment.axis)
+        ):
+            if axis_key in done:
+                done[axis_key] = int(count)
+    return {
+        "pairs": total,
+        "axes": [
+            {
+                "axis": key,
+                "label": D.AXIS_BY_KEY[key]["label"],
+                "assessed": done[key],
+                "ratio": round(done[key] / total, 3) if total else 0.0,
+            }
+            for key in D.AXIS_KEYS
+        ],
+    }

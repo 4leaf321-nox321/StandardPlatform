@@ -14,6 +14,10 @@
 ⚠️ **문구는 갈아 끼울 수 있지만 key 는 고정이다.** 이력과 평가가 key 로 묶여 있다.
    문구를 고치는 것과 칸을 지우는 것은 다른 일이다.
 
+⚠️ **key 는 원본(`dev_dt_maturity`)과 같게 둔다.** 우리 key 를 따로 지었던 것을 표본을
+   넣다가 되돌렸다(2026-09-24) — 다르게 두면 옮길 때마다 매핑표가 필요하고, 그 표는 한쪽만
+   고쳐지는 순간 같은 평가를 다른 수준으로 읽는다.
+
 ⚠️ **사업부 DX KPI 「가상 검증률」 과 이름이 같다.** 계산이 다르다 — 이쪽은 연계 하나의
    평가값이고 그쪽은 사업부가 보고하는 집계다. 화면 도움말이 그 관계를 한 줄로 말한다.
    안 적으면 언젠가 누가 이 표를 보고 KPI 를 고친다.
@@ -148,46 +152,41 @@ AXES: list[dict[str, Any]] = [
         "label": "모델링 수준",
         "kind": "matrix",
         "question": "어떤 불량까지 재현하나",
-        "evidence_label": "재현 근거",
-        # 줄은 **시험 항목의 불량 유형**이 아니라 재현의 종류다(원본 rows). 항목의 불량
-        # 유형은 근거(evidence.defects)의 키로 쓴다.
-        "rows": [
+        "evidence_label": "불량 유형별 재현(시험 · 시장)",
+        "hide_empty": True,
+        # **바탕은 켜고 끄는 토글**(형상 · 거동)이고, **열은 불량 유형마다의 재현**이다
+        # (시험 · 시장). 수준은 이 둘을 세어 접는다(`modeling_level`) — 사람이 고르지 않는다.
+        "base": [
             {
-                "key": "shape",
+                "key": "geometry",
                 "label": "형상 재현",
                 "description": "치수 · 재질 · 경계 조건의 실물 일치",
             },
             {
-                "key": "behavior",
+                "key": "performance",
                 "label": "거동 재현",
                 "description": "변형 · 온도 · 유동 등 물리 거동의 시험 일치",
             },
-            {
-                "key": "reliability",
-                "label": "신뢰성 시험 불량 재현",
-                "description": "신뢰성 시험 불량의 재현",
-            },
-            {
-                "key": "field",
-                "label": "시장 불량 재현",
-                "description": "시장 불량(사용 조건 · 누적 이력)의 재현",
-            },
+        ],
+        "columns": [
+            {"key": "test", "label": "신뢰성 시험 불량 재현", "short": "시험"},
+            {"key": "market", "label": "시장 불량 재현", "short": "시장"},
         ],
         "rungs": [
             {"key": "none", "label": "없음", "description": "재현 항목 없음"},
-            {"key": "shape", "label": "형상 재현", "description": "형상 재현에 한정"},
-            {"key": "behavior", "label": "거동 재현", "description": "물리 거동까지 재현"},
+            {"key": "geometry", "label": "형상 재현", "description": "형상 재현에 한정"},
+            {"key": "performance", "label": "거동 재현", "description": "물리 거동까지 재현"},
             {
-                "key": "defect_some",
+                "key": "test_some",
                 "label": "일부 불량 시험 재현",
                 "description": "일부 불량 유형의 시험 불량 재현",
             },
             {
-                "key": "defect_all",
+                "key": "test_all",
                 "label": "전 유형 시험 재현",
                 "description": "전 불량 유형의 시험 불량 재현",
             },
-            {"key": "field", "label": "시장 불량까지", "description": "시장 불량까지 재현"},
+            {"key": "market", "label": "시장 불량까지", "description": "시장 불량까지 재현"},
         ],
     },
     {
@@ -208,12 +207,12 @@ AXES: list[dict[str, Any]] = [
                 "description": "제품군 대표 모델 개발에 적용",
             },
             {
-                "key": "new_all",
+                "key": "derived_some",
                 "label": "신규 개발 전 모델",
                 "description": "전 신규 개발 과제에 적용",
             },
             {
-                "key": "derivative",
+                "key": "all",
                 "label": "파생 · 지역 변형까지",
                 "description": "파생 · 지역 변형 과제까지 적용",
             },
@@ -229,22 +228,22 @@ AXES: list[dict[str, Any]] = [
         "rungs": [
             {"key": "none", "label": "없음", "description": "시험 대체 미적용"},
             {
-                "key": "parallel",
+                "key": "reference",
                 "label": "시험 병행(참고)",
                 "description": "시험 유지, 참고 자료로만 활용",
             },
             {
-                "key": "cause",
+                "key": "cause_analysis",
                 "label": "원인 분석",
                 "description": "시험에서 난 문제의 시뮬레이션 기반 원인 분석",
             },
             {
-                "key": "pre_check",
+                "key": "screening",
                 "label": "사전 검증",
                 "description": "시험 전 자주 검증으로 활용",
             },
             {
-                "key": "gate",
+                "key": "cert_gate",
                 "label": "신뢰성 인증 게이트",
                 "description": "PLM 안 CAE 항목으로 관리되는 게이트",
             },
@@ -278,6 +277,42 @@ def rung_for_value(value: float | None) -> str | None:
         if float(value) >= float(step["min"]):
             chosen = str(step["rung"])
     return chosen
+
+
+def modeling_level(
+    flags: list[str], defects: dict[str, Any], defect_types: list[str]
+) -> str | None:
+    """모델링 수준 — **셈으로 접는다.** 사람이 수준을 고르지 않는다.
+
+        없음 → 형상 → 거동 → 일부 유형의 시험 불량 재현 → 전 유형 시험 재현 → 시장 불량까지
+
+    불량 유형은 **시험 항목이 든 목록**이 기준이다 — 지운 유형의 기록은 안 센다. 그래서
+    유형을 지우면 수준이 내려갈 수 있고, 그것이 맞다(세던 근거가 사라졌다).
+    """
+    picked = set(flags or [])
+    level = "none"
+    if "geometry" in picked:
+        level = "geometry"
+    if "performance" in picked:
+        level = "performance"
+    names = [one for one in (defect_types or []) if isinstance(one, str)]
+    seen = defects if isinstance(defects, dict) else {}
+    test = sum(1 for one in names if (seen.get(one) or {}).get("test"))
+    market = sum(1 for one in names if (seen.get(one) or {}).get("market"))
+    order = [one["key"] for one in AXIS_BY_KEY["modeling"]["rungs"]]
+
+    def raise_to(key: str) -> None:
+        nonlocal level
+        if order.index(key) > order.index(level):
+            level = key
+
+    if test > 0:
+        raise_to("test_some")
+    if names and test == len(names):
+        raise_to("test_all")
+    if market > 0:
+        raise_to("market")
+    return None if level == "none" and not picked else level
 
 
 def aggregate_accuracy(

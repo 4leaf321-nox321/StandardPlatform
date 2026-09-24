@@ -14,7 +14,16 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.extensions.caegroup import definitions as D
 from app.extensions.caegroup import services
-from app.extensions.caegroup.schemas import DefsOut, PairIn, PairOut, SetupStatusOut
+from app.extensions.caegroup.schemas import (
+    AssessmentIn,
+    AssessmentOut,
+    CoverageOut,
+    DefsOut,
+    HistoryOut,
+    PairIn,
+    PairOut,
+    SetupStatusOut,
+)
 from app.modules.accounts.models import User
 from app.shared import permissions
 from app.shared.auth import current_user, require_system_admin
@@ -92,3 +101,53 @@ def pair_delete(
     pair_id: uuid.UUID, user: User = Depends(current_user), db: Session = Depends(get_db)
 ) -> None:
     services.unlink(db, user, pair_id=pair_id)
+
+
+@router.get("/pairs/{pair_id}/assessments", response_model=list[AssessmentOut])
+def assessment_list(
+    pair_id: uuid.UUID, _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[AssessmentOut]:
+    """그 연계의 평가 — 축 순서대로. **안 매긴 축은 목록에 없다.**
+
+    빈 줄을 만들어 내려 주면 화면이 「안 매긴 것」 과 「0 으로 매긴 것」 을 구별할 수 없다.
+    """
+    return [AssessmentOut(**one) for one in services.assessments(db, pair_id=pair_id)]
+
+
+@router.put("/pairs/{pair_id}/assessments/{axis}", response_model=AssessmentOut)
+def assessment_save(
+    pair_id: uuid.UUID,
+    axis: str,
+    payload: AssessmentIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> AssessmentOut:
+    """평가를 적는다 — **그 부서 멤버만.**
+
+    근거는 필수이고, 근거 등급이 「확인」 · 「검증」 이면 근거 자료도 필수다. 가상검증률의
+    수준은 값이 정한다(보낸 수준은 무시한다).
+    """
+    return AssessmentOut(
+        **services.save_assessment(
+            db, user, pair_id=pair_id, axis_key=axis, payload=payload.model_dump()
+        )
+    )
+
+
+@router.get("/pairs/{pair_id}/history", response_model=list[HistoryOut])
+def assessment_history(
+    pair_id: uuid.UUID, _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[HistoryOut]:
+    """평가가 바뀐 기록 — **담당자가 본다**(감사 기록은 시스템 관리자만 읽는다)."""
+    return [HistoryOut(**one) for one in services.history(db, pair_id=pair_id)]
+
+
+@router.get("/coverage", response_model=CoverageOut)
+def coverage(
+    workspace: str | None = Query(default=None),
+    _: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> CoverageOut:
+    """축마다의 평가 완료율. 3단계 대시보드가 이것으로 그린다."""
+    chosen = permissions.workspace_by_slug(db, workspace) if workspace else None
+    return CoverageOut(**services.coverage(db, workspace=chosen))

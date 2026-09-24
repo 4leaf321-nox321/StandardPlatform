@@ -23,7 +23,10 @@ export interface AxisDef {
   evidence_label?: string
   hide_empty?: boolean
   rungs: AxisRung[]
-  rows?: AxisRung[]
+  /** 매트릭스 축의 바탕 토글(형상 · 거동). */
+  base?: AxisRung[]
+  /** 매트릭스 축의 열 — 불량 유형마다 무엇을 재현했나(시험 · 시장). */
+  columns?: (AxisRung & { short?: string })[]
 }
 
 export interface Defs {
@@ -44,6 +47,44 @@ export interface SetupStatus {
   agent_type_label: string | null
   /** 거짓이면 화면은 목록 대신 「기준 정보 만들기」 를 보여 준다. */
   ready: boolean
+}
+
+export interface Assessment {
+  axis: string
+  value: number | null
+  rung: string | null
+  rungs: string[]
+  defects: Record<string, Record<string, string>>
+  note: string
+  evidence: Record<string, unknown>
+  evidence_tier: string
+  evidence_ref: string
+  assessed_at: string
+  assessed_by_label: string
+}
+
+export interface AssessmentBody {
+  value?: number | null
+  rung?: string | null
+  rungs?: string[]
+  defects?: Record<string, Record<string, string>>
+  note: string
+  evidence?: Record<string, unknown>
+  evidence_tier: string
+  evidence_ref?: string
+}
+
+export interface HistoryRow {
+  axis: string
+  axis_label: string
+  snapshot: Record<string, unknown>
+  changed_at: string
+  changed_by_label: string
+}
+
+export interface Coverage {
+  pairs: number
+  axes: { axis: string; label: string; assessed: number; ratio: number }[]
 }
 
 export interface Pair {
@@ -67,4 +108,9 @@ export const dtApi = {
   link: (body: { subject_id: string; agent_id: string; workspace_slug: string }) =>
     api.post<Pair>(`${BASE}/pairs`, body),
   unlink: (id: string) => api.delete<void>(`${BASE}/pairs/${id}`),
+  assessments: (pairId: string) => api.get<Assessment[]>(`${BASE}/pairs/${pairId}/assessments`),
+  save: (pairId: string, axis: string, body: AssessmentBody) =>
+    api.put<Assessment>(`${BASE}/pairs/${pairId}/assessments/${axis}`, body),
+  history: (pairId: string) => api.get<HistoryRow[]>(`${BASE}/pairs/${pairId}/history`),
+  coverage: () => api.get<Coverage>(`${BASE}/coverage`),
 }

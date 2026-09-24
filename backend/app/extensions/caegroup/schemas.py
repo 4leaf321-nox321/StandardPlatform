@@ -48,3 +48,58 @@ class PairIn(BaseModel):
     agent_id: uuid.UUID
     workspace_slug: str = Field(min_length=1)
     """어느 부서의 연계인가. **권한과 집계의 단위**라 빠뜨릴 수 없다."""
+
+
+class AssessmentOut(BaseModel):
+    """평가 한 줄 — **축 종류마다 채워진 칸이 다르다**(§정의)."""
+
+    axis: str
+    value: float | None
+    rung: str | None
+    rungs: list[str]
+    defects: dict[str, dict[str, str]]
+    note: str
+    evidence: dict[str, Any]
+    evidence_tier: str
+    evidence_ref: str
+    assessed_at: datetime
+    assessed_by_label: str
+
+
+class AssessmentIn(BaseModel):
+    """평가를 적을 때 보내는 것.
+
+    **수준(`rung`)은 수치형 축에서 보내지 않는다** — 값이 정한다. 보내도 서버가 무시한다.
+    """
+
+    value: float | None = None
+    rung: str | None = None
+    rungs: list[str] = Field(default_factory=list)
+    defects: dict[str, dict[str, str]] = Field(default_factory=dict)
+    note: str
+    """근거 — **비우면 저장되지 않는다.**"""
+    evidence: dict[str, Any] = Field(default_factory=dict)
+    evidence_tier: str
+    evidence_ref: str = ""
+
+
+class HistoryOut(BaseModel):
+    axis: str
+    axis_label: str
+    snapshot: dict[str, Any]
+    changed_at: datetime
+    changed_by_label: str
+
+
+class CoverageAxisOut(BaseModel):
+    axis: str
+    label: str
+    assessed: int
+    ratio: float
+
+
+class CoverageOut(BaseModel):
+    """**평가 완료율** — 평가된 연계 ÷ 전체 연계. 축마다 따로 센다."""
+
+    pairs: int
+    axes: list[CoverageAxisOut]

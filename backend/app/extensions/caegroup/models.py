@@ -12,16 +12,20 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import (
     CheckConstraint,
     DateTime,
+    Float,
     ForeignKey,
     Integer,
     String,
+    Text,
     UniqueConstraint,
     func,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -88,3 +92,86 @@ class CaeDtPair(Base):
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+
+
+class CaeDtAssessment(Base):
+    """평가 — 연계의 축 하나. **축 종류마다 채우는 칸이 다르다.**
+
+    원본은 값과 선택을 한 칸(`rung`)에 쉼표로 쌓았다. 여기서는 종류마다 칸을 가른다 —
+    문자열을 갈라 읽는 코드가 화면 · API · 집계에 세 번 생기고, 그중 하나만 고쳐지는 날
+    같은 평가가 다르게 읽힌다.
+
+        수치형(가상검증률)      value + rung — **수준은 문턱이 정한다**(사람이 안 고른다)
+        수준 선택(적용 범위)     rung
+        선택형(자동화 · 시험 대체) rungs       — 켠 항목들. 서열은 켠 개수
+        매트릭스(모델링 수준)    rungs + defects — 바탕 토글과 불량 유형별 재현
+                                 (**수준은 셈이 접는다**)
+    """
+
+    __tablename__ = "cae_dt_assessments"
+    __table_args__ = (
+        # **축 하나에 평가는 하나다.** 둘이면 화면이 어느 것을 그릴지 정할 수 없다.
+        UniqueConstraint("pair_id", "axis", name="uq_cae_dt_assessment"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    pair_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("cae_dt_pairs.id", ondelete="CASCADE"), index=True
+    )
+    """**CASCADE** — 연계를 해제하면 평가도 함께 간다. 화면이 그 수를 확인 문구에 넣는다."""
+    axis: Mapped[str] = mapped_column(String(40))
+    value: Mapped[float | None] = mapped_column(Float, nullable=True)
+    rung: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    rungs: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
+    defects: Mapped[dict[str, dict[str, str]]] = mapped_column(
+        JSONB, default=dict, server_default="{}"
+    )
+    """매트릭스 축의 불량 유형별 재현 — `{불량 유형: {test: "2026-07", market: …}}`.
+    **수준은 이것을 세어 접는다**(`definitions.modeling_level`)."""
+    note: Mapped[str] = mapped_column(Text, default="")
+    """근거 — **비우면 저장하지 않는다.** 수준만 남은 평가는 다음 사람이 확인할 수 없다."""
+    evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """축이 정한 칸 — 비교 시험 건수 · 오차 · 단계별 소요 시간. 모양은 축마다 다르다."""
+    evidence_tier: Mapped[str] = mapped_column(String(20))
+    """무엇을 보고 매겼나 — 진술 · 확인 · 검증."""
+    evidence_ref: Mapped[str] = mapped_column(String(300), default="")
+    """근거 자료(문서번호 · 파일명 · 화면 경로). **확인 · 검증이면 비울 수 없다** — 등급만
+    받고 자료를 안 받으면 「검증」 이 말뿐이 된다."""
+    assessed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    assessed_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    assessed_by_label: Mapped[str] = mapped_column(String(100), default="")
+    """**그때의 이름을 박는다.** 계정이 지워지면 누가 매겼는지 모르게 되는데, 그것은 평가
+    이력이 존재하는 이유와 정면으로 어긋난다."""
+
+
+class CaeDtAssessmentHistory(Base):
+    """평가가 바뀐 기록.
+
+    **감사 기록으로 갈음하지 않는다.** 감사는 시스템 관리자만 읽는데, 이 이력은 그 자료를
+    채운 **담당자가** 봐야 한다 — 「지난번엔 왜 이렇게 적었나」 가 다음 평가의 근거다.
+    """
+
+    __tablename__ = "cae_dt_assessment_history"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    pair_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("cae_dt_pairs.id", ondelete="CASCADE"), index=True
+    )
+    axis: Mapped[str] = mapped_column(String(40), index=True)
+    snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """바뀐 뒤의 모습 한 벌. 이전 값은 그 앞 줄이 들고 있다."""
+    changed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    changed_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    changed_by_label: Mapped[str] = mapped_column(String(100), default="")
