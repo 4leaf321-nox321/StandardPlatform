@@ -207,6 +207,10 @@
   로 나온다. 그 파일이 리눅스에 닿으면 `bad interpreter: /usr/bin/env bash^M` 로
   죽는데, **파일도 있고 실행 비트도 있고 눈으로 보면 멀쩡하다.** 같은 시험이
   CRLF 를 검사한다.
+- **밀기 전에 `scripts/before_push.sh` 를 돌린다.** CI 가 보는 것을 **같은 환경에서**
+  본다 — 특히 `EXTENSIONS` 를 비우고(CI 에는 `.env` 가 없다) 생성물(`openapi.json`)
+  재생성을 **맨 끝에** 한다. 그 두 순서를 사람이 기억해야 했을 때 CI 가 두 번 깨졌다.
+  한 번에 4~6분으로, CI 왕복 한 번과 같다.
 - **릴리스는 태그에서 나온다**(`.github/workflows/release.yml`). 사람 PC 에서 만들어
   올리지 않는다 — `build_bundle.sh` 는 리눅스·apptainer·npm 을 요구하는데 **저장소를
   받는 기계가 Windows 면 아예 못 만들고**, 갖춘 PC 라도 갖춘 정도가 달라 **같은

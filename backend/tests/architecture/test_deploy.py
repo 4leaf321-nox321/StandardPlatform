@@ -17,10 +17,17 @@ import pytest
 
 REPO = Path(__file__).resolve().parents[3]
 DEPLOY = REPO / "deploy"
+#: 개발자용 스크립트(밀기 전 점검 등). 배포 자산은 아니지만 **같은 함정을 만난다** —
+#: Windows 체크아웃의 CRLF, 실행 비트, 엄격 모드.
+TOOLS = REPO / "scripts"
 
 
 def _scripts() -> list[Path]:
-    return sorted(DEPLOY.glob("*.sh")) if DEPLOY.exists() else []
+    found: list[Path] = []
+    for folder in (DEPLOY, TOOLS):
+        if folder.exists():
+            found += folder.glob("*.sh")
+    return sorted(found)
 
 
 def test_셸_스크립트는_실행_가능하고_shebang_이_있다() -> None:
