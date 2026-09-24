@@ -1,0 +1,19 @@
+"""확장 `caegroup` — CAE 그룹의 기능 묶음.
+
+첫 기능은 **디지털 트윈 역량**이다(`docs/디지털트윈-역량-이식-계획.md`). 기본 기능이
+아니므로 이 확장을 안 켠 설치에는 메뉴도 경로도 없다 — 켜짐은 관리 › 서버 › 「확장 모듈」
+에서 정한다.
+
+**코어는 이 확장을 모른다.** 여기서 코어를 부르되 그 반대는 없다 — 구조 시험이 지킨다.
+"""
+
+from __future__ import annotations
+
+from fastapi import APIRouter
+
+from app.extensions.caegroup import routes
+
+
+def register(api: APIRouter) -> None:
+    """코어가 부르는 유일한 자리 — 라우터 · 확장 지점 · PAT 범위를 여기서 연다."""
+    api.include_router(routes.router)

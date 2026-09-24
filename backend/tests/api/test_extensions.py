@@ -146,7 +146,9 @@ def test_번들에_없는_이름은_못_켠다(client: TestClient, admin: Signed
     )
     assert got.status_code == 404
     assert got.json()["error"]["code"].endswith("SERVER-0001")
-    assert got.json()["error"]["details"]["available"] == ["sample"]
+    # 번들에 든 확장 목록이 그대로 온다 — 화면이 「이 중에서 고르세요」 를 말할 수 있게.
+    available = got.json()["error"]["details"]["available"]
+    assert "sample" in available and "nope" not in available
 
 
 def test_시스템_관리자만_바꾼다(client: TestClient, member: Signed) -> None:

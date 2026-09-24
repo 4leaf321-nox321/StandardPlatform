@@ -8584,6 +8584,198 @@
         }
       }
     },
+    "/api/ext/caegroup/dt/defs": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Defs",
+        "description": "정의를 그대로 내려 준다 — **축 이름과 척도를 화면에 박지 않는다.**\n\n문구를 고치는 일이 배포 한 번으로 끝나고, 화면은 고칠 데가 없다.",
+        "operationId": "defs_api_ext_caegroup_dt_defs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DefsOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/setup": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Setup Status",
+        "operationId": "setup_status_api_ext_caegroup_dt_setup_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatusOut"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Setup",
+        "description": "기준 정보 타입·속성을 만든다 — **시스템 관리자만.**\n\n온톨로지 정의를 바꾸는 일이라 부서 권한으로 할 일이 아니다. 이미 있는 타입·속성은\n건드리지 않는다(가져오기는 더하고 고치기만 한다).",
+        "operationId": "setup_api_ext_caegroup_dt_setup_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatusOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/pairs": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Pair List",
+        "description": "연계 목록. 부서를 안 주면 **내가 속한 부서**의 것만.",
+        "operationId": "pair_list_api_ext_caegroup_dt_pairs_get",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Workspace"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PairOut"
+                  },
+                  "title": "Response Pair List Api Ext Caegroup Dt Pairs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Pair Create",
+        "operationId": "pair_create_api_ext_caegroup_dt_pairs_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/pairs/{pair_id}": {
+      "delete": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Pair Delete",
+        "operationId": "pair_delete_api_ext_caegroup_dt_pairs__pair_id__delete",
+        "parameters": [
+          {
+            "name": "pair_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pair Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ext/sample/ping": {
       "get": {
         "tags": [
@@ -10720,6 +10912,73 @@
           "type_slug"
         ],
         "title": "DataSourceWriteRequest"
+      },
+      "DefsOut": {
+        "properties": {
+          "sector": {
+            "type": "string",
+            "title": "Sector"
+          },
+          "sector_label": {
+            "type": "string",
+            "title": "Sector Label"
+          },
+          "subject_label": {
+            "type": "string",
+            "title": "Subject Label"
+          },
+          "agent_label": {
+            "type": "string",
+            "title": "Agent Label"
+          },
+          "axes": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Axes"
+          },
+          "evidence_tiers": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Evidence Tiers"
+          },
+          "accuracy_thresholds": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Accuracy Thresholds"
+          },
+          "accuracy_rules": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Accuracy Rules"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sector",
+          "sector_label",
+          "subject_label",
+          "agent_label",
+          "axes",
+          "evidence_tiers",
+          "accuracy_thresholds",
+          "accuracy_rules"
+        ],
+        "title": "DefsOut",
+        "description": "부문 · 축 · 척도 · 문턱 — **화면이 코드에 박지 않고 여기서 읽는다.**"
       },
       "DeliveryOut": {
         "properties": {
@@ -13742,6 +14001,80 @@
         ],
         "title": "Page[ObjectOut]"
       },
+      "PairIn": {
+        "properties": {
+          "subject_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Subject Id"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "workspace_slug": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Workspace Slug"
+          }
+        },
+        "type": "object",
+        "required": [
+          "subject_id",
+          "agent_id",
+          "workspace_slug"
+        ],
+        "title": "PairIn"
+      },
+      "PairOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Workspace Id"
+          },
+          "subject_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Subject Id"
+          },
+          "subject_label": {
+            "type": "string",
+            "title": "Subject Label"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "agent_label": {
+            "type": "string",
+            "title": "Agent Label"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "workspace_id",
+          "subject_id",
+          "subject_label",
+          "agent_id",
+          "agent_label",
+          "created_at"
+        ],
+        "title": "PairOut"
+      },
       "PartOut": {
         "properties": {
           "key": {
@@ -16300,6 +16633,68 @@
           "started_at"
         ],
         "title": "ServerStatusOut"
+      },
+      "SetupStatusOut": {
+        "properties": {
+          "subject_type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Type Slug"
+          },
+          "subject_type_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Type Label"
+          },
+          "agent_type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Type Slug"
+          },
+          "agent_type_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Type Label"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          }
+        },
+        "type": "object",
+        "required": [
+          "subject_type_slug",
+          "subject_type_label",
+          "agent_type_slug",
+          "agent_type_label",
+          "ready"
+        ],
+        "title": "SetupStatusOut",
+        "description": "기준 정보가 준비됐나 — 화면이 처음 묻는 것."
       },
       "SignupRequest": {
         "properties": {
