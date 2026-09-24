@@ -11,10 +11,10 @@ import { useState } from 'react'
 
 import { api } from '@/shared/api/client'
 import type { ExtensionState, ServerStatus } from '@/shared/api/types'
-import { missingExtensions } from '@/extensions'
+import { missingExtensions, useEnabledExtensions, useExtensionsReload } from '@/extensions'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isSystemAdmin } from '@/shared/auth/roles'
-import { APP_NAME, ENABLED_EXTENSIONS } from '@/shared/branding'
+import { APP_NAME } from '@/shared/branding'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Button } from '@/shared/components/ui/button'
@@ -32,19 +32,21 @@ function gib(bytes: number): string {
  * 보다가 오타로 기동이 막히던 길을 없앤 자리다. 메뉴와 경로는 `index.html` 이 들고 오므로
  * **새로 고침 뒤**에 바뀐다.
  */
-function Extensions({ running }: { running: string[] }) {
+function Extensions() {
   const list = useResource(() => api.get<ExtensionState[]>('/server/extensions'), [])
+  const reloadEnabled = useExtensionsReload()
   const [busy, setBusy] = useState<string | null>(null)
   const [failed, setFailed] = useState<Error | null>(null)
-  const [changed, setChanged] = useState(false)
 
   async function toggle(one: ExtensionState) {
     setBusy(one.name)
     setFailed(null)
     try {
       await api.patch<ExtensionState>(`/server/extensions/${one.name}`, { enabled: !one.enabled })
-      setChanged(true)
       list.reload()
+      // **사이드바도 같은 목록을 다시 받는다.** 안 부르면 껐는데 메뉴가 남고, 사람은
+      // 끈 것이 안 꺼진 줄로 읽는다 — 실측으로 그랬다.
+      reloadEnabled()
     } catch (caught) {
       setFailed(caught as Error)
     } finally {
@@ -56,24 +58,11 @@ function Extensions({ running }: { running: string[] }) {
     <section className="space-y-3">
       <h2 className="text-base font-semibold">확장 모듈</h2>
       <p className="text-muted-foreground text-sm">
-        이 번들에 들어 있는 확장입니다. 끄면 그 확장의 화면 · API 가 사라지고 <b>자료는 남습니다</b>{' '}
-        — 다시 켜면 그대로입니다. 켜고 끈 기록은 관리 › 감사 기록에서{' '}
+        이 번들에 들어 있는 확장입니다. 끄면 그 확장의 메뉴 · 화면 · API 가 <b>바로</b> 사라지고{' '}
+        <b>자료는 남습니다</b> — 다시 켜면 그대로입니다. 켜고 끈 기록은 관리 › 감사 기록에서{' '}
         <code>extension.toggle</code> 로 조회합니다.
       </p>
       <ErrorNotice error={failed ?? list.error} />
-      {changed && (
-        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-          메뉴와 경로는 새로 고침 뒤에 반영됩니다.
-          <Button
-            variant="outline"
-            size="sm"
-            className="ml-2"
-            onClick={() => window.location.reload()}
-          >
-            새로 고침
-          </Button>
-        </div>
-      )}
       {list.data?.length === 0 ? (
         <p className="text-muted-foreground text-sm">이 번들에 확장이 없습니다.</p>
       ) : (
@@ -89,7 +78,6 @@ function Extensions({ running }: { running: string[] }) {
                       ? ` · 화면에서 지정 (${shownDateTime(one.updated_at)})`
                       : ' · 화면에서 지정'
                     : ' · .env 기본값'}
-                  {one.enabled && !running.includes(one.name) && ' · 새로 고침 필요'}
                 </p>
               </div>
               <Button
@@ -110,6 +98,7 @@ function Extensions({ running }: { running: string[] }) {
 
 export default function ServerPage() {
   const { user } = useAuth()
+  const enabled = useEnabledExtensions()
   const status = useResource(() => api.get<ServerStatus>('/server/status'), [])
 
   if (status.error) return <ErrorNotice error={status.error} />
@@ -144,10 +133,10 @@ export default function ServerPage() {
 
       {/* **켰는데 화면 쪽 짝이 없는 확장.** 서버에는 있고 메뉴에는 없는 상태 — 사람은
           「안 켜졌다」 로 읽는다. */}
-      {missingExtensions(ENABLED_EXTENSIONS).length > 0 && (
+      {missingExtensions(enabled).length > 0 && (
         <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
-          확장 <span className="font-mono">{missingExtensions(ENABLED_EXTENSIONS).join(', ')}</span>{' '}
-          이 켜져 있지만 화면 쪽(<span className="font-mono">src/extensions</span>)에 짝이 없습니다.
+          확장 <span className="font-mono">{missingExtensions(enabled).join(', ')}</span> 이 켜져
+          있지만 화면 쪽(<span className="font-mono">src/extensions</span>)에 짝이 없습니다.
         </div>
       )}
 
@@ -233,7 +222,7 @@ export default function ServerPage() {
         )}
       </dl>
 
-      {isSystemAdmin(user) && <Extensions running={one.extensions} />}
+      {isSystemAdmin(user) && <Extensions />}
 
       <section className="space-y-3">
         <h2 className="text-base font-semibold">쌓인 것</h2>

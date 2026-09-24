@@ -8453,6 +8453,32 @@
         }
       }
     },
+    "/api/server/enabled-extensions": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Enabled Extensions",
+        "description": "지금 켜진 확장 이름 — **화면이 메뉴를 그릴 때 묻는 자리.**\n\n`index.html` 의 메타는 페이지를 받은 순간의 사진이라, 관리자가 켜고 끈 뒤에도 화면은\n새로 고침 전까지 옛 메뉴를 들고 있다. 개발 서버(Vite)는 `backend/.env` 를 심으므로\n아예 안 맞는다 — **실측으로 「껐는데 메뉴가 그대로」 가 나왔다.** 그래서 목록은 여기서\n받고, 메타는 첫 그림의 씨앗으로만 쓴다.\n\n시스템 관리자만이 아니라 **누구나** 읽는다. 메뉴는 모든 사람이 그린다.",
+        "operationId": "enabled_extensions_api_server_enabled_extensions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array",
+                  "title": "Response Enabled Extensions Api Server Enabled Extensions Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/server/extensions": {
       "get": {
         "tags": [

@@ -40,8 +40,9 @@ export const APP_TAGLINE =
   meta('app-tagline') ?? (APP_NAME === DEFAULT_APP_NAME ? DEFAULT_APP_TAGLINE : '')
 
 /**
- * 이 설치가 켠 확장(`.env` 의 EXTENSIONS). 화면은 이 목록에 있는 것의 메뉴 · 페이지만 붙인다
- * (`src/extensions/index.ts`). 서버가 같은 목록으로 라우터를 붙이므로 둘은 늘 같다.
+ * 이 설치가 켠 확장 — **첫 그림의 씨앗.** 진짜 목록은 서버가 답한다
+ * (`/api/server/enabled-extensions`, `extensions/EnabledProvider`). 켜짐이 화면에서 바뀌므로
+ * 메타만 믿으면 껐는데 메뉴가 남고, Vite 개발 서버는 `backend/.env` 를 심어 아예 안 맞는다.
  */
 export const ENABLED_EXTENSIONS: readonly string[] = (meta('app-extensions') ?? '')
   .split(',')

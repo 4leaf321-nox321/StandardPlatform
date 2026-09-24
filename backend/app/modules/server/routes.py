@@ -102,6 +102,22 @@ def status(
     )
 
 
+@router.get("/enabled-extensions", response_model=list[str])
+def enabled_extensions(
+    _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[str]:
+    """지금 켜진 확장 이름 — **화면이 메뉴를 그릴 때 묻는 자리.**
+
+    `index.html` 의 메타는 페이지를 받은 순간의 사진이라, 관리자가 켜고 끈 뒤에도 화면은
+    새로 고침 전까지 옛 메뉴를 들고 있다. 개발 서버(Vite)는 `backend/.env` 를 심으므로
+    아예 안 맞는다 — **실측으로 「껐는데 메뉴가 그대로」 가 나왔다.** 그래서 목록은 여기서
+    받고, 메타는 첫 그림의 씨앗으로만 쓴다.
+
+    시스템 관리자만이 아니라 **누구나** 읽는다. 메뉴는 모든 사람이 그린다.
+    """
+    return list(services.enabled_names(db))
+
+
 @router.get("/extensions", response_model=list[ExtensionOut])
 def extension_list(
     _: User = Depends(require_system_admin), db: Session = Depends(get_db)
@@ -125,7 +141,7 @@ def extension_toggle(
     끄면 그 확장의 API 는 404 가 되고 메뉴 · 경로가 사라진다. **자료는 남는다** —
     표는 확장과 무관하게 이미 있고(마이그레이션은 전부 돈다), 다시 켜면 그대로다.
 
-    화면의 메뉴는 `index.html` 이 들고 오므로 **새로 고침 뒤**에 바뀐다.
+    화면은 `/server/enabled-extensions` 를 다시 받아 **새로 고침 없이** 따라온다.
     """
     services.set_enabled(db, user, name, payload.enabled)
     row = next(one for one in services.states(db) if one[0] == name)

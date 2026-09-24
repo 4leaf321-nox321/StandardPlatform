@@ -125,6 +125,20 @@ def test_값이_안_바뀌면_감사에_안_남는다(client: TestClient, admin:
     assert after == before
 
 
+def test_켜진_목록은_누구나_읽는다(client: TestClient, admin: Signed, member: Signed) -> None:
+    """**메뉴는 모든 사람이 그린다.** 그래서 이 목록은 시스템 관리자만의 것이 아니다.
+
+    화면이 `index.html` 의 메타만 믿으면 관리자가 끈 뒤에도 새로 고침 전까지 옛 메뉴를
+    들고 있다 — 실측으로 「껐는데 본보기가 그대로」 가 나왔다. 그래서 목록을 여기서 받는다.
+    """
+    _patch(client, admin, True)
+    got = client.get("/api/server/enabled-extensions", headers=member.headers)
+    assert got.status_code == 200 and got.json() == ["sample"]
+
+    _patch(client, admin, False)
+    assert client.get("/api/server/enabled-extensions", headers=member.headers).json() == []
+
+
 def test_번들에_없는_이름은_못_켠다(client: TestClient, admin: Signed) -> None:
     """고를 수 있는 것은 코드에 있는 확장뿐이다 — `.env` 오타가 반복되지 않게."""
     got = client.patch(

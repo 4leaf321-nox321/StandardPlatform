@@ -8,6 +8,7 @@
 import { Suspense, useState } from 'react'
 import { Outlet, useLocation, useParams } from 'react-router-dom'
 
+import { ExtensionsProvider } from '@/extensions'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { ErrorBoundary } from '@/shared/components/ErrorBoundary'
 import { Skeleton } from '@/shared/components/ui/skeleton'
@@ -41,7 +42,10 @@ export function AppShell() {
     slug ?? user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? DEFAULT_WORKSPACE
 
   return (
-    <div className="flex h-svh overflow-hidden">
+    // **켜진 확장은 서버가 답한다**(ExtensionsProvider) — 사이드바와 확장 경로가 같은 목록을
+    // 보므로, 켜고 끈 것이 새로 고침 없이 따라온다.
+    <ExtensionsProvider>
+      <div className="flex h-svh overflow-hidden">
       <Sidebar collapsed={collapsed} workspaceSlug={workspaceSlug} />
       <SidebarDrawer open={drawer} onOpenChange={setDrawer} workspaceSlug={workspaceSlug} />
 
@@ -78,9 +82,10 @@ export function AppShell() {
         </main>
       </div>
 
-      {/* 읽지 않은 팝업 공지는 스스로 뜬다 — 공지 화면에 들어가야만 보이면
-          "배포 없이 안내를 전한다" 는 목적이 성립하지 않는다. */}
-      <NoticePopup />
-    </div>
+        {/* 읽지 않은 팝업 공지는 스스로 뜬다 — 공지 화면에 들어가야만 보이면
+            "배포 없이 안내를 전한다" 는 목적이 성립하지 않는다. */}
+        <NoticePopup />
+      </div>
+    </ExtensionsProvider>
   )
 }

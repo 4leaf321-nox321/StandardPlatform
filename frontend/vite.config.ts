@@ -44,6 +44,8 @@ function devIdentity(): Plugin {
         ['app-name', env.APP_NAME],
         ['app-slug', env.APP_SLUG],
         ['app-tagline', env.APP_TAGLINE],
+        // **씨앗일 뿐이다.** 켜짐은 DB 가 정하므로(관리 › 서버) 앱이
+        // `/api/server/enabled-extensions` 에서 받는다 — 여기 값은 첫 그림에만 쓰인다.
         ['app-extensions', env.EXTENSIONS],
       ]
       const tags = pairs

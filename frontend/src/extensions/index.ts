@@ -1,20 +1,25 @@
 /**
  * 확장 모듈의 화면 쪽 — **켠 것만 붙는다.**
  *
- * 백엔드 `app/extensions/<이름>` 의 짝이 `src/extensions/<이름>` 이다. 서버가 `.env` 의 EXTENSIONS 를
- * `<meta name="app-extensions">` 로 심어 주고(`shared/branding.ts` 의 ENABLED_EXTENSIONS), 여기서
- * 그 이름들의 메뉴 · 라우트만 사이드바와 라우터에 더한다. 안 켠 인스턴스에는 메뉴도 경로도 없다.
+ * 백엔드 `app/extensions/<이름>` 의 짝이 `src/extensions/<이름>` 이다. **켜진 목록은 서버가
+ * 답한다**(`/api/server/enabled-extensions`, `EnabledProvider`) — 메타(`app-extensions`)는 첫
+ * 그림의 씨앗일 뿐이다. 메뉴는 그 목록으로 그리고, 경로는 전부 등록해 꺼진 것을 문이 막는다.
  *
  * 새 확장: `src/extensions/<이름>/index.tsx` 에서 `ExtensionDef` 를 내보내고 아래 REGISTRY 에
  * 한 줄 더한다. **코어 화면(`modules` · `shared`)은 확장을 import 하지 않는다.**
  */
 
+import { createElement } from 'react'
 import type { RouteObject } from 'react-router-dom'
 
+import { ExtensionGate } from '@/extensions/ExtensionGate'
 import { ENABLED_EXTENSIONS } from '@/shared/branding'
 import type { NavGroup } from '@/shared/layout/navigation'
 
 import { sampleExtension } from './sample'
+
+export { ExtensionsProvider, useEnabledExtensions, useExtensionsReload } from './EnabledProvider'
+export { ExtensionGate } from './ExtensionGate'
 
 export interface ExtensionDef {
   /** 백엔드의 이름과 같다(EXTENSIONS 에 적는 값). */
@@ -42,6 +47,17 @@ export function extensionNavGroups(enabled?: readonly string[]): NavGroup[] {
   return enabledExtensions(enabled).flatMap((ext) => ext.nav)
 }
 
-export function extensionRoutes(enabled?: readonly string[]): RouteObject[] {
-  return enabledExtensions(enabled).flatMap((ext) => ext.routes)
+/**
+ * 확장의 경로 — **번들에 든 것 전부를 등록하고, 꺼진 것은 문이 답한다**(`ExtensionGate`).
+ *
+ * 켠 것만 등록하면 방금 켠 확장의 링크가 새로 고침 전까지 「없는 페이지」 가 된다. 사이드바는
+ * 서버에게 받은 목록으로 이미 살아 있으니, 링크는 있고 페이지는 없는 상태가 된다.
+ */
+export function extensionRoutes(): RouteObject[] {
+  return Object.values(REGISTRY).flatMap((ext) =>
+    ext.routes.map((route) => ({
+      ...route,
+      element: createElement(ExtensionGate, { name: ext.name }, route.element),
+    })),
+  )
 }

@@ -20,7 +20,7 @@ import { APP_NAME, APP_TAGLINE, STORAGE_PREFIX } from '@/shared/branding'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/shared/components/ui/sheet'
 import { useResource } from '@/shared/hooks/useResource'
 import { ontologyApi } from '@/modules/ontology/api'
-import { extensionNavGroups } from '@/extensions'
+import { extensionNavGroups, useEnabledExtensions } from '@/extensions'
 import { itemHref, visibleGroups } from '@/shared/layout/navigation'
 import { cn } from '@/shared/lib/utils'
 
@@ -82,6 +82,7 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
   // **정의가 만든 화면.** 못 불러와도 정적 메뉴는 그대로 선다 — 사이드바가
   // 통째로 비면 나갈 길까지 사라진다.
   const dynamic = useResource(() => ontologyApi.nav(), [])
+  const enabled = useEnabledExtensions()
 
   const groups = visibleGroups(
     {
@@ -89,7 +90,8 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
       isAnyManager: isAnyManager(user),
     },
     dynamic.data ?? [],
-    extensionNavGroups(),
+    // **켜진 목록은 서버가 답한다** — 메타만 믿으면 껐는데 메뉴가 남는다(실측).
+    extensionNavGroups(enabled),
   )
 
   const { folded, toggle } = useFoldedGroups()
