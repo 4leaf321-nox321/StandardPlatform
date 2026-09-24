@@ -7,12 +7,17 @@
  * "지금 서버 버전이 뭐냐" 와 "어느 DB 를 보고 있냐" 다.
  */
 
+import { useState } from 'react'
+
 import { api } from '@/shared/api/client'
-import type { ServerStatus } from '@/shared/api/types'
+import type { ExtensionState, ServerStatus } from '@/shared/api/types'
 import { missingExtensions } from '@/extensions'
+import { useAuth } from '@/shared/auth/AuthContext'
+import { isSystemAdmin } from '@/shared/auth/roles'
 import { APP_NAME, ENABLED_EXTENSIONS } from '@/shared/branding'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
+import { Button } from '@/shared/components/ui/button'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
@@ -20,7 +25,91 @@ function gib(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`
 }
 
+/**
+ * 확장 모듈 — **재배포 없이 켜고 끈다.**
+ *
+ * 고를 수 있는 것은 이 번들에 든 확장뿐이다(서버가 목록을 준다) — `.env` 에 이름을 적어
+ * 보다가 오타로 기동이 막히던 길을 없앤 자리다. 메뉴와 경로는 `index.html` 이 들고 오므로
+ * **새로 고침 뒤**에 바뀐다.
+ */
+function Extensions({ running }: { running: string[] }) {
+  const list = useResource(() => api.get<ExtensionState[]>('/server/extensions'), [])
+  const [busy, setBusy] = useState<string | null>(null)
+  const [failed, setFailed] = useState<Error | null>(null)
+  const [changed, setChanged] = useState(false)
+
+  async function toggle(one: ExtensionState) {
+    setBusy(one.name)
+    setFailed(null)
+    try {
+      await api.patch<ExtensionState>(`/server/extensions/${one.name}`, { enabled: !one.enabled })
+      setChanged(true)
+      list.reload()
+    } catch (caught) {
+      setFailed(caught as Error)
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  return (
+    <section className="space-y-3">
+      <h2 className="text-base font-semibold">확장 모듈</h2>
+      <p className="text-muted-foreground text-sm">
+        이 번들에 들어 있는 확장입니다. 끄면 그 확장의 화면 · API 가 사라지고 <b>자료는 남습니다</b>{' '}
+        — 다시 켜면 그대로입니다. 켜고 끈 기록은 관리 › 감사 기록에서{' '}
+        <code>extension.toggle</code> 로 조회합니다.
+      </p>
+      <ErrorNotice error={failed ?? list.error} />
+      {changed && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+          메뉴와 경로는 새로 고침 뒤에 반영됩니다.
+          <Button
+            variant="outline"
+            size="sm"
+            className="ml-2"
+            onClick={() => window.location.reload()}
+          >
+            새로 고침
+          </Button>
+        </div>
+      )}
+      {list.data?.length === 0 ? (
+        <p className="text-muted-foreground text-sm">이 번들에 확장이 없습니다.</p>
+      ) : (
+        <ul className="divide-y rounded-md border">
+          {(list.data ?? []).map((one) => (
+            <li key={one.name} className="flex items-center justify-between gap-4 p-3">
+              <div className="min-w-0">
+                <p className="font-mono text-sm">{one.name}</p>
+                <p className="text-muted-foreground text-xs">
+                  {one.enabled ? '사용 중' : '미사용'}
+                  {one.pinned
+                    ? one.updated_at
+                      ? ` · 화면에서 지정 (${shownDateTime(one.updated_at)})`
+                      : ' · 화면에서 지정'
+                    : ' · .env 기본값'}
+                  {one.enabled && !running.includes(one.name) && ' · 새로 고침 필요'}
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy === one.name}
+                onClick={() => void toggle(one)}
+              >
+                {one.enabled ? '끄기' : '켜기'}
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </section>
+  )
+}
+
 export default function ServerPage() {
+  const { user } = useAuth()
   const status = useResource(() => api.get<ServerStatus>('/server/status'), [])
 
   if (status.error) return <ErrorNotice error={status.error} />
@@ -62,6 +151,16 @@ export default function ServerPage() {
         </div>
       )}
 
+      {/* **`.env` 에 적혔는데 이 번들에 없는 이름.** 예전에는 이것이 기동을 막았다 —
+          운영 재시작 중이라면 오타 하나로 서비스가 안 뜬다. 지금은 뜨고, 여기서 말한다. */}
+      {one.extensions_unknown.length > 0 && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+          <span className="font-mono">{one.extensions_unknown.join(', ')}</span> 은 이 설치의{' '}
+          <span className="font-mono">EXTENSIONS</span> 에 적혀 있지만 번들에 없는 확장입니다. 아래
+          「확장 모듈」 목록에 있는 것만 켤 수 있습니다.
+        </div>
+      )}
+
       {/* **백업이 오래되면 여기서도 말한다.** 홈의 「남은 일」 에도 뜨지만,
           서버 화면은 「이 설치가 어떤 상태인가」 를 보러 오는 자리다. */}
       {one.backup.stale && (
@@ -87,7 +186,7 @@ export default function ServerPage() {
           <dd className="font-mono text-sm">{one.version}</dd>
         </div>
         <div>
-          <dt className="text-muted-foreground text-xs">켠 확장</dt>
+          <dt className="text-muted-foreground text-xs">켜진 확장</dt>
           <dd className="text-sm">
             {one.extensions.length === 0 ? (
               <span className="text-muted-foreground">없음</span>
@@ -133,6 +232,8 @@ export default function ServerPage() {
           </div>
         )}
       </dl>
+
+      {isSystemAdmin(user) && <Extensions running={one.extensions} />}
 
       <section className="space-y-3">
         <h2 className="text-base font-semibold">쌓인 것</h2>

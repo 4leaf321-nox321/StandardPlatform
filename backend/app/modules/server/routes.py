@@ -21,9 +21,12 @@ from app import schema_version, version
 from app.config import get_settings
 from app.database import engine, get_db
 from app.modules.accounts.models import User
+from app.modules.server import services
 from app.modules.server.schemas import (
     BackupOut,
     DiskOut,
+    ExtensionOut,
+    ExtensionPatchIn,
     MaintenanceItemOut,
     ServerStatusOut,
     TableCountOut,
@@ -81,7 +84,8 @@ def status(
     return ServerStatusOut(
         app_name=settings.app_name,
         app_slug=settings.app_slug,
-        extensions=list(settings.extension_names),
+        extensions=list(services.enabled_names(db)),
+        extensions_unknown=list(services.unknown_defaults()),
         version=version.current(),
         app_env=settings.app_env,
         database_url_safe=_safe_url(settings.database_url),
@@ -96,6 +100,36 @@ def status(
         ],
         started_at=STARTED_AT,
     )
+
+
+@router.get("/extensions", response_model=list[ExtensionOut])
+def extension_list(
+    _: User = Depends(require_system_admin), db: Session = Depends(get_db)
+) -> list[ExtensionOut]:
+    """이 번들에 든 확장과 그 켜짐. **고를 수 있는 것은 여기 있는 것뿐이다.**"""
+    return [
+        ExtensionOut(name=name, enabled=on, pinned=pinned, updated_at=at)
+        for name, on, pinned, at in services.states(db)
+    ]
+
+
+@router.patch("/extensions/{name}", response_model=ExtensionOut)
+def extension_toggle(
+    name: str,
+    payload: ExtensionPatchIn,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> ExtensionOut:
+    """확장을 켜거나 끈다 — **시스템 관리자만.**
+
+    끄면 그 확장의 API 는 404 가 되고 메뉴 · 경로가 사라진다. **자료는 남는다** —
+    표는 확장과 무관하게 이미 있고(마이그레이션은 전부 돈다), 다시 켜면 그대로다.
+
+    화면의 메뉴는 `index.html` 이 들고 오므로 **새로 고침 뒤**에 바뀐다.
+    """
+    services.set_enabled(db, user, name, payload.enabled)
+    row = next(one for one in services.states(db) if one[0] == name)
+    return ExtensionOut(name=row[0], enabled=row[1], pinned=row[2], updated_at=row[3])
 
 
 @router.get("/maintenance", response_model=list[MaintenanceItemOut])

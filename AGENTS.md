@@ -56,7 +56,7 @@
   `branding` 두 파일은 **아무것도 안 준 설치의 기본값**(개발 · 시험)과 `ERROR_PREFIX` 뿐이다.
   코드가 `branding` 에서 이름을 import 하면 모든 설치가 틀의 이름으로 보인다 — 구조 시험이 막는다.
 - **인스턴스만의 기능은 확장 모듈**(`app/extensions/<이름>` · `src/extensions/<이름>`)로,
-  `.env` 의 `EXTENSIONS` 가 켠다. **코어(`modules` · `shared`)는 확장을 import 하지 않는다** —
+  **시스템 관리자 › 서버 › 「확장 모듈」** 에서 켠다(`.env` 의 `EXTENSIONS` 는 기본값). **코어(`modules` · `shared`)는 확장을 import 하지 않는다** —
   끈 인스턴스에서 코어가 안 뜨거나 없는 메뉴를 부르게 되고, 그것은 확장을 켠 개발 PC 에서는
   안 드러난다. 확장의 표도 `all_models.py` 에 적고 마이그레이션은 늘 전부 돈다.
 - **DB 이름·refresh 쿠키 이름·PAT 표식은 따로 적지 않는다.** 셋 다 `APP_SLUG`

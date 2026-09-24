@@ -14,16 +14,18 @@ import logging
 import re
 from html import escape as html_escape
 
-from fastapi import APIRouter, FastAPI
+from fastapi import APIRouter, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.orm import Session
 from starlette.types import ASGIApp, Receive, Scope, Send
 
 from app import extensions as ext_loader
 from app import version
 from app.config import Settings, get_settings
-from app.database import SessionLocal, engine
+from app.database import SessionLocal, engine, get_db
 from app.logging_setup import setup_logging
 from app.modules.accounts import routes as accounts_routes
 from app.modules.accounts import services as accounts_services
@@ -48,6 +50,7 @@ from app.modules.ontology import routes as ontology_routes
 from app.modules.rdf import routes as rdf_routes
 from app.modules.search import routes as search_routes
 from app.modules.server import routes as server_routes
+from app.modules.server import services as server_services
 from app.modules.webhooks import routes as webhooks_routes
 from app.modules.webhooks import services as webhooks_services
 from app.modules.workspaces import routes as workspaces_routes
@@ -102,10 +105,19 @@ def _api_router(settings: Settings) -> APIRouter:
     router.include_router(search_routes.router)
     router.include_router(server_routes.router)
 
-    # --- 이 설치가 켠 확장의 라우터 --------------------------------------
-    # 코어는 확장을 import 하지 않는다. `.env` 의 EXTENSIONS 에 적힌 이름만 찾아 붙인다.
-    for name in settings.extension_names:
-        ext_loader.load(name).register(router)
+    # --- 확장의 라우터 ---------------------------------------------------
+    # 코어는 확장을 import 하지 않는다. 이름으로 찾아 붙이는 자리가 여기 하나다.
+    #
+    # **번들에 든 확장은 전부 붙이고, 켜짐은 문이 판단한다.** 켜고 끄는 일이 화면으로
+    # 옮겨 왔으므로(시스템 관리자 › 서버) 기동에서 라우터를 가릴 수 없다 — 운영은 워커가
+    # 넷이라, 한 프로세스가 기동 때 본 값을 들고 있으면 넷이 서로 다른 답을 한다.
+    # 꺼진 확장은 문이 404 로 답한다(`require_extension`).
+    names = ext_loader.available()
+    server_services.register_available(names)
+    for name in names:
+        gated = APIRouter(dependencies=[Depends(server_services.require_extension(name))])
+        ext_loader.load(name).register(gated)
+        router.include_router(gated)
 
     # --- 여기에 도메인 라우터를 더한다 -----------------------------------
     #
@@ -207,6 +219,23 @@ def _register_extensions() -> None:
     #   scopes.register_read_only_post("/api/search/")
 
 
+#: `index.html` 의 확장 메타에 박아 두고 요청마다 바꿔 끼우는 자리.
+_EXTENSIONS_TOKEN = "__APP_EXTENSIONS__"
+
+
+def _enabled_meta(db: Session, settings: Settings) -> str:
+    """화면에 심을 켜진 확장 목록.
+
+    **DB 를 못 읽어도 화면은 떠야 한다.** 여기서 터지면 로그인 화면조차 안 뜨고,
+    그러면 사람은 원인을 볼 자리가 없다 — 그때는 `.env` 의 기본값으로 그린다.
+    """
+    try:
+        return ",".join(server_services.enabled_names(db))
+    except SQLAlchemyError:
+        logger.warning("확장 켜짐을 DB 에서 못 읽었습니다 — .env 기본값으로 화면을 그립니다.")
+        return ",".join(settings.extension_names)
+
+
 def _mount_spa(app: FastAPI, settings: Settings) -> None:
     dist = settings.frontend_dist
     index = dist / "index.html"
@@ -232,7 +261,9 @@ def _mount_spa(app: FastAPI, settings: Settings) -> None:
             ("app-name", settings.app_name),
             ("app-slug", settings.app_slug),
             ("app-tagline", settings.app_tagline),
-            ("app-extensions", ",".join(settings.extension_names)),
+            # **이 자리는 요청마다 채운다.** 켜짐이 화면에서 바뀌므로(시스템 관리자 ›
+            # 서버) 기동 때 박아 두면 재시작까지 옛 메뉴가 붙는다.
+            ("app-extensions", _EXTENSIONS_TOKEN),
         )
     )
     html = index.read_text(encoding="utf-8").replace(
@@ -245,7 +276,7 @@ def _mount_spa(app: FastAPI, settings: Settings) -> None:
     # 없다. 반환 애노테이션에 Union 을 쓰면 FastAPI 가 모델을 만들려다 기동에
     # 실패하므로, 여기는 앞으로도 단일 Response 타입으로 둔다.
     @app.get("/{full_path:path}", include_in_schema=False, response_model=None)
-    def spa(full_path: str) -> HTMLResponse:
+    def spa(full_path: str, db: Session = Depends(get_db)) -> HTMLResponse:
         # /api 아래는 위에서 이미 매칭됐어야 한다. 여기 닿았다면 없는 엔드포인트다.
         # index.html 을 돌려주면 프론트가 200 HTML 을 JSON 으로 파싱하려다 실패해
         # 원인이 흐려지므로, 명시적으로 404 를 준다. 응답 본문은 직접 만들지 않고
@@ -258,7 +289,10 @@ def _mount_spa(app: FastAPI, settings: Settings) -> None:
             )
         # index.html 은 캐시하지 않는다. 배포 후 사용자가 옛 index 를 들고 있으면
         # 사라진 청크를 요청하게 된다.
-        return HTMLResponse(html, headers={"Cache-Control": "no-store"})
+        return HTMLResponse(
+            html.replace(_EXTENSIONS_TOKEN, _enabled_meta(db, settings)),
+            headers={"Cache-Control": "no-store"},
+        )
 
     logger.info("SPA 서빙: %s", dist)
 
@@ -382,10 +416,12 @@ def create_app() -> FastAPI:
     warn_if_behind(engine)
 
     logger.info(
-        "%s (%s) 기동 (env=%s, 확장=%s)",
+        "%s (%s) 기동 (env=%s, 확장 번들=%s, .env 기본=%s)",
         settings.app_name,
         settings.app_slug,
         settings.app_env,
+        ",".join(ext_loader.available()) or "없음",
+        # **켜짐은 DB 가 답한다** — 기동 때는 DB 를 안 보므로 기본값만 적는다.
         ",".join(settings.extension_names) or "없음",
     )
     return app

@@ -35,6 +35,9 @@ class ServerStatusOut(BaseModel):
     app_name: str
     app_slug: str
     extensions: list[str]
+    """지금 켜져 있는 확장 — `.env` 가 아니라 **화면에서 정한 것**이다."""
+    extensions_unknown: list[str]
+    """`.env` 에 적혔는데 이 번들에 없는 이름. **오타는 여기서만 드러난다.**"""
     version: str
     app_env: str
     database_url_safe: str
@@ -50,6 +53,21 @@ class ServerStatusOut(BaseModel):
     counts: list[TableCountOut]
     """`shared/extensions.py` 의 레지스트리가 채운다 — 도메인이 등록한 만큼 는다."""
     started_at: datetime
+
+
+class ExtensionOut(BaseModel):
+    """확장 하나의 켜짐 — **시스템 관리자 화면이 그리는 줄.**"""
+
+    name: str
+    enabled: bool
+    pinned: bool
+    """화면에서 지정했나. 거짓이면 `.env` 의 `EXTENSIONS` 가 답한 것이다 —
+    **아무것도 안 켜 본 설치는 예전과 똑같이 돈다.**"""
+    updated_at: datetime | None
+
+
+class ExtensionPatchIn(BaseModel):
+    enabled: bool
 
 
 class MaintenanceItemOut(BaseModel):

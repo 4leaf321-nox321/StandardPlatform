@@ -37,6 +37,7 @@ from app.modules.ontology.models import (
     PropertyDef,
     RelationType,
 )
+from app.modules.server.models import ExtensionState
 from app.modules.webhooks.models import Webhook, WebhookDelivery
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 
@@ -47,6 +48,7 @@ __all__ = [
     "Base",
     "DataSource",
     "DataSourceRun",
+    "ExtensionState",
     "Job",
     "JobFile",
     "NavGroup",

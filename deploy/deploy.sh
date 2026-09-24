@@ -16,7 +16,7 @@
 #   sudo ./deploy.sh lb        메인 서버용 nginx 조각 · keepalived(DB VIP)를 env 에서 다시 만들고 반영
 #
 # **번들 하나로 여러 플랫폼(인스턴스)을 설치한다.** 어느 플랫폼인지는 `APP_SLUG` 가 정한다 —
-# 처음 한 번 env 로 주면(`APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8040 EXTENSIONS=hub`)
+# 처음 한 번 env 로 주면(`APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8040`)
 # /etc/platform-instances/<slug>.conf 에 남아 다음부터는 `APP_SLUG=plmhub ./deploy.sh update` 로
 # 충분하고, 이 서버에 인스턴스가 하나뿐이면 그것마저 생략된다. 안 주면 번들의 기본값
 # (BUILD_INFO — 틀의 이름)으로 뜬다. slug 하나에서 DB · 유닛 · 경로 · 주소가 전부 나온다.
@@ -307,7 +307,9 @@ EOF
     warn "$ENV_FILE 를 만들었습니다 — 공개 전에 CORS·백업 경로를 확인하세요."
 }
 
-# 이름 · 설명 · 확장은 배포로 바꿀 수 있다 — `EXTENSIONS=hub,bom sudo ./deploy.sh update`.
+# 이름 · 설명은 배포로 바꿀 수 있다 — `APP_NAME=… sudo ./deploy.sh update`.
+# **확장은 화면에서 켠다**(시스템 관리자 › 서버 › 「확장 모듈」). 여기 EXTENSIONS 는
+# 아직 아무도 켜고 끈 적 없는 확장의 기본값일 뿐이다.
 # **slug 만은 못 바꾼다** — DB · 쿠키 · 토큰 · 유닛 이름이 전부 거기서 나왔다.
 sync_env_identity() {
     [[ -f "$ENV_FILE" ]] || return 0
@@ -582,7 +584,7 @@ MSG
 
 cmd_install() {
     [[ -f "$HERE/app.sif" ]] || err "app.sif 가 없습니다 — 릴리스 번들을 풀고 그 안에서 실행하세요"
-    info "$APP_NAME ($APP_SLUG) $VERSION — 계정 $OPERATOR · 설치 경로 $INSTALL_DIR · 포트 $APP_PORT · 확장 ${EXTENSIONS:-없음}"
+    info "$APP_NAME ($APP_SLUG) $VERSION — 계정 $OPERATOR · 설치 경로 $INSTALL_DIR · 포트 $APP_PORT · 확장 기본값 ${EXTENSIONS:-없음}"
 
     ensure_dirs
     generate_env_if_missing
@@ -619,7 +621,7 @@ MSG
 cmd_update() {
     [[ -f "$HERE/app.sif" ]]     || err "app.sif 가 $HERE 에 없습니다"
     [[ -f "$ENV_FILE" ]] || err "$ENV_FILE 가 없습니다 — 먼저 install 하세요"
-    info "$APP_NAME ($APP_SLUG) $VERSION — 포트 $APP_PORT · 확장 ${EXTENSIONS:-없음}"
+    info "$APP_NAME ($APP_SLUG) $VERSION — 포트 $APP_PORT · 확장 기본값 ${EXTENSIONS:-없음}"
     ensure_dirs
     sync_env_identity
 
@@ -723,7 +725,7 @@ cmd_service() {  # $1 = start|stop|restart
 }
 
 cmd_status() {
-    echo "== $APP_NAME ($APP_SLUG) · 확장 ${EXTENSIONS:-없음} =="
+    echo "== $APP_NAME ($APP_SLUG) · 확장 기본값 ${EXTENSIONS:-없음} =="
     echo "  설치 경로 : $INSTALL_DIR$( [[ -n "$DATA_DIR" ]] && echo "  · 공용 $DATA_DIR" )"
     echo "  DB        : $DB_NAME @ $DB_HOST"
     echo "  포트      : $APP_PORT"
@@ -790,7 +792,7 @@ cmd_setup() {
         APP_NAME="${APP_NAME:-$APP_NAME_DEFAULT}"
         ask APP_PORT "앱 포트 — 같은 서버의 다른 플랫폼과 10 이상 벌립니다" "$(instance_conf_get "$APP_SLUG" APP_PORT)"
         APP_PORT="${APP_PORT:-$APP_PORT_DEFAULT}"
-        ask EXTENSIONS "켤 확장 모듈, 쉼표로 (없으면 그냥 Enter)" "$(instance_conf_get "$APP_SLUG" EXTENSIONS)"
+        ask EXTENSIONS "확장 모듈 기본값, 쉼표로 (화면에서 켤 수 있으니 그냥 Enter)" "$(instance_conf_get "$APP_SLUG" EXTENSIONS)"
     fi
     local peer_account=""
     if [[ -n "$HA_ROLE" ]]; then
@@ -823,7 +825,7 @@ cmd_setup() {
     cat <<PLAN
 
 ── 할 일 ──────────────────────────────────────────────
-  플랫폼   : $( [[ "$HA_ROLE" == backup ]] && echo "($APP_SLUG) — 이름 · 포트 · 확장은 A 의 설정을 그대로 받습니다" || echo "$APP_NAME ($APP_SLUG) · 포트 $APP_PORT · 확장 ${EXTENSIONS:-없음}" )
+  플랫폼   : $( [[ "$HA_ROLE" == backup ]] && echo "($APP_SLUG) — 이름 · 포트 · 확장은 A 의 설정을 그대로 받습니다" || echo "$APP_NAME ($APP_SLUG) · 포트 $APP_PORT · 확장 기본값 ${EXTENSIONS:-없음}" )
   이 서버  : $( case "$HA_ROLE" in master) echo "주(A) $SELF_IP — 상대 B $PEER_IP";; backup) echo "대기(B) $SELF_IP — 주 A $PEER_IP";; *) echo "단독";; esac )
   DB       : 이름 $DB_NAME · 앱이 붙는 곳 $DB_HOST
   파일     : 설치 $INSTALL_DIR$( [[ -n "$DATA_DIR" ]] && echo " · 공용 $DATA_DIR" )
@@ -886,7 +888,7 @@ MSG
             v="$(sed -n 's|^EXTENSIONS=||p' "$ENV_FILE" | tail -n1)";  EXTENSIONS="$v"
             v="$(sed -n 's|^PORT=||p' "$ENV_FILE" | tail -n1)";        [[ -n "$v" ]] && APP_PORT="$v"
             MCP_PORT=$((APP_PORT + 2)); MCP_API_BASE="http://127.0.0.1:$APP_PORT"
-            info "A 의 설정을 받았습니다 — $APP_NAME · 포트 $APP_PORT · 확장 ${EXTENSIONS:-없음}"
+            info "A 의 설정을 받았습니다 — $APP_NAME · 포트 $APP_PORT · 확장 기본값 ${EXTENSIONS:-없음}"
             cmd_db standby
             cmd_install
             cat <<MSG

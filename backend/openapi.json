@@ -8453,6 +8453,85 @@
         }
       }
     },
+    "/api/server/extensions": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Extension List",
+        "description": "이 번들에 든 확장과 그 켜짐. **고를 수 있는 것은 여기 있는 것뿐이다.**",
+        "operationId": "extension_list_api_server_extensions_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExtensionOut"
+                  },
+                  "type": "array",
+                  "title": "Response Extension List Api Server Extensions Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/server/extensions/{name}": {
+      "patch": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Extension Toggle",
+        "description": "확장을 켜거나 끈다 — **시스템 관리자만.**\n\n끄면 그 확장의 API 는 404 가 되고 메뉴 · 경로가 사라진다. **자료는 남는다** —\n표는 확장과 무관하게 이미 있고(마이그레이션은 전부 돈다), 다시 켜면 그대로다.\n\n화면의 메뉴는 `index.html` 이 들고 오므로 **새로 고침 뒤**에 바뀐다.",
+        "operationId": "extension_toggle_api_server_extensions__name__patch",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExtensionPatchIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtensionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/server/maintenance": {
       "get": {
         "tags": [
@@ -8472,6 +8551,31 @@
                   },
                   "type": "array",
                   "title": "Response Maintenance Api Server Maintenance Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/sample/ping": {
+      "get": {
+        "tags": [
+          "ext:sample"
+        ],
+        "summary": "Ping",
+        "operationId": "ping_api_ext_sample_ping_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "additionalProperties": {
+                    "type": "string"
+                  },
+                  "type": "object",
+                  "title": "Response Ping Api Ext Sample Ping Get"
                 }
               }
             }
@@ -10804,6 +10908,56 @@
           "group"
         ],
         "title": "ExportRequest"
+      },
+      "ExtensionOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "pinned": {
+            "type": "boolean",
+            "title": "Pinned"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "enabled",
+          "pinned",
+          "updated_at"
+        ],
+        "title": "ExtensionOut",
+        "description": "확장 하나의 켜짐 — **시스템 관리자 화면이 그리는 줄.**"
+      },
+      "ExtensionPatchIn": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled"
+        ],
+        "title": "ExtensionPatchIn"
       },
       "FieldOptionOut": {
         "properties": {
@@ -16031,6 +16185,13 @@
             "type": "array",
             "title": "Extensions"
           },
+          "extensions_unknown": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Extensions Unknown"
+          },
           "version": {
             "type": "string",
             "title": "Version"
@@ -16100,6 +16261,7 @@
           "app_name",
           "app_slug",
           "extensions",
+          "extensions_unknown",
           "version",
           "app_env",
           "database_url_safe",

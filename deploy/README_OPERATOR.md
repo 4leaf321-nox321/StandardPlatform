@@ -47,7 +47,7 @@ ls
 
 ```bash
 # 처음 한 번 — 이름 · 포트 · 확장을 준다. /etc/platform-instances/<slug>.conf 에 남는다
-APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8040 EXTENSIONS=hub sudo ./deploy.sh prepare
+APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8040 sudo ./deploy.sh prepare
 APP_SLUG=plmhub sudo ./deploy.sh install
 # 그다음부터 — 이 서버에 인스턴스가 하나면 APP_SLUG 를 안 줘도 그것이다
 sudo ./deploy.sh update
@@ -58,7 +58,7 @@ sudo ./deploy.sh update
 | `APP_SLUG` | 기계가 읽는 이름. 소문자·숫자 한 덩어리, 32자 이내 | **바꾸지 않는다** — DB · 쿠키 · 토큰 · 유닛이 다 걸린다 |
 | `APP_NAME` · `APP_TAGLINE` | 화면에 보이는 이름 · 한 줄 설명 | `APP_NAME=… sudo ./deploy.sh update` 로 바꿀 수 있다 |
 | `APP_PORT` | 앱 포트(MCP 는 +2). 같은 서버의 인스턴스마다 10씩 벌린다 | 바꾸면 메인 서버 조각도 다시 넣어야 한다 |
-| `EXTENSIONS` | 이 인스턴스가 켜는 확장 모듈, 쉼표로 | `EXTENSIONS=hub,bom sudo ./deploy.sh update` |
+| `EXTENSIONS` | 확장 모듈의 **기본값**, 쉼표로. 안 줘도 된다 | **화면에서 켠다** — 시스템 관리자 › 서버 › 「확장 모듈」 |
 
 같은 서버에 두 번째 인스턴스는 다른 `APP_SLUG` · `APP_PORT` 로 같은 명령을 한 번 더. 인스턴스가
 여럿이면 `update` · `status` 에도 `APP_SLUG=<slug>` 를 붙인다(안 붙이면 어느 것인지 묻는다).
@@ -400,14 +400,14 @@ sudo ./deploy.sh setup           # A 에서 .env · 복제 비밀번호를 scp �
 
 ```bash
 # ── 서버 A (주) ──
-APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> EXTENSIONS=<확장> \
+APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> \
 HA_ROLE=master PEER_IP=<B의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
   sudo ./deploy.sh prepare         # 패키지(postgresql-16 · keepalived) · DB 역할
 sudo ./deploy.sh db-primary        # 복제 계정 · pg_hba · 감시 훅 · 원복 잠금. 비밀번호를 /data/…/db/ 에 둔다
 sudo ./deploy.sh install           # .env(/data 에) · SIF · 마이그레이션 · 시드 · 유닛 · 메인 서버용 nginx 조각
 
 # ── 서버 B (대기) ──  (같은 APP_* 값으로)
-APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> EXTENSIONS=<확장> \
+APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> \
 HA_ROLE=backup PEER_IP=<A의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
   sudo ./deploy.sh prepare
 sudo ./deploy.sh db-standby        # A 에서 pg_basebackup — 기존 로컬 DB 는 옆으로 치운다

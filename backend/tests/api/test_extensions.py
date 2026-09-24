@@ -2,14 +2,31 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from sqlalchemy import delete
+from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.modules.server.models import ExtensionState
 from tests.api.conftest import Signed
+
+
+@pytest.fixture(autouse=True)
+def _clean_states(db: Session) -> Iterator[None]:
+    """**켜짐은 전역 상태다.** 시험 DB 는 세션마다 한 번만 비워지므로, 여기서 지우지
+    않으면 다음 시험이 「꺼진 sample」 을 물려받는다 — 실측으로 그랬다(화면 메타를
+    보는 시험이 빈 목록을 받았다). 확장을 켜고 끄는 시험은 이 뒷정리를 함께 둔다.
+    """
+    db.execute(delete(ExtensionState))
+    db.commit()
+    yield
+    db.execute(delete(ExtensionState))
+    db.commit()
 
 
 def _app_with(monkeypatch: pytest.MonkeyPatch, extensions: str) -> FastAPI:
@@ -41,11 +58,160 @@ def test_켜면_있고_끄면_없다(admin: Signed, monkeypatch: pytest.MonkeyPa
         get_settings.cache_clear()
 
 
-def test_없는_확장은_기동에서_멈춘다(monkeypatch: pytest.MonkeyPatch) -> None:
-    """`.env` 의 오타가 「메뉴가 안 보이는」 조용한 고장으로 남지 않게."""
+def test_env_의_오타는_기동을_막지_않고_화면이_말한다(
+    admin: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**켜짐이 화면으로 옮겨 온 뒤의 실패 방식.**
+
+    예전에는 `.env` 의 오타가 기동을 막았다 — 운영 재시작 중이라면 오타 하나로 서비스가
+    안 뜬다. 지금은 붙는 것이 번들에 든 확장뿐이라 오타는 켜지지도 않고, 대신 서버 화면이
+    「이 번들에 없는 이름」 으로 말한다. 아무 데도 안 적으면 「켰는데 메뉴가 없다」 가 된다.
+    """
     try:
-        with pytest.raises(RuntimeError, match="확장 'nope' 이 없습니다"):
-            _app_with(monkeypatch, "nope")
+        with TestClient(_app_with(monkeypatch, "nope")) as web:
+            info = web.get("/api/server/status", headers=admin.headers).json()
+            assert info["extensions"] == []
+            assert info["extensions_unknown"] == ["nope"]
+            # 켜지지 않았으므로 본보기 확장도 없다.
+            assert web.get("/api/ext/sample/ping", headers=admin.headers).status_code == 404
+    finally:
+        get_settings.cache_clear()
+
+
+def test_화면에서_켜고_끈다(client: TestClient, admin: Signed) -> None:
+    """**시스템 관리자가 재배포 없이 켜고 끈다** — 그리고 그 일이 감사에 남는다."""
+    off = client.patch(
+        "/api/server/extensions/sample", json={"enabled": False}, headers=admin.headers
+    )
+    assert off.status_code == 200, off.text
+    assert off.json() == {
+        "name": "sample",
+        "enabled": False,
+        "pinned": True,
+        "updated_at": off.json()["updated_at"],
+    }
+    assert client.get("/api/ext/sample/ping", headers=admin.headers).status_code == 404
+
+    on = client.patch(
+        "/api/server/extensions/sample", json={"enabled": True}, headers=admin.headers
+    )
+    assert on.status_code == 200 and on.json()["enabled"] is True
+    assert client.get("/api/ext/sample/ping", headers=admin.headers).status_code == 200
+
+    entries = client.get(
+        "/api/audit/entries?action=extension.toggle&limit=10", headers=admin.headers
+    ).json()["items"]
+    changes = [one["changes"] for one in entries if one["target_label"] == "sample"]
+    assert {"enabled": False, "was": True} in changes
+    assert {"enabled": True, "was": False} in changes
+
+
+def test_값이_안_바뀌면_감사에_안_남는다(client: TestClient, admin: Signed) -> None:
+    """이미 켜진 것을 또 켜는 일이 이력에 쌓이면 그 목록은 곧 아무도 안 읽는다."""
+    before = client.get(
+        "/api/audit/entries?action=extension.toggle&limit=1", headers=admin.headers
+    ).json()["total"]
+    assert (
+        client.patch(
+            "/api/server/extensions/sample", json={"enabled": True}, headers=admin.headers
+        ).status_code
+        == 200
+    )
+    after = client.get(
+        "/api/audit/entries?action=extension.toggle&limit=1", headers=admin.headers
+    ).json()["total"]
+    assert after == before
+
+
+def test_번들에_없는_이름은_못_켠다(client: TestClient, admin: Signed) -> None:
+    """고를 수 있는 것은 코드에 있는 확장뿐이다 — `.env` 오타가 반복되지 않게."""
+    got = client.patch(
+        "/api/server/extensions/nope", json={"enabled": True}, headers=admin.headers
+    )
+    assert got.status_code == 404
+    assert got.json()["error"]["code"].endswith("SERVER-0001")
+    assert got.json()["error"]["details"]["available"] == ["sample"]
+
+
+def test_시스템_관리자만_바꾼다(client: TestClient, member: Signed) -> None:
+    """기능이 나타나고 사라지는 스위치다. 부서 권한으로 만질 자리가 아니다."""
+    assert client.get("/api/server/extensions", headers=member.headers).status_code == 403
+    assert (
+        client.patch(
+            "/api/server/extensions/sample", json={"enabled": False}, headers=member.headers
+        ).status_code
+        == 403
+    )
+
+
+def test_여럿_켜면_다_붙는다(admin: Signed, monkeypatch: pytest.MonkeyPatch) -> None:
+    """**둘 이상 켜는 것이 되는가** — 확장을 여러 개 개발하면 첫날 부딪히는 물음이다.
+
+    번들에 확장이 하나뿐이라 가짜 둘을 심어 확인한다(`sys.modules` 를 먼저 보는
+    importlib 의 성질). 순서는 이름 순이고, 각자 자기 경로에 붙는다.
+    """
+    import sys
+    import types
+
+    from fastapi import APIRouter
+
+    for name in ("alpha", "beta"):
+        module = types.ModuleType(f"app.extensions.{name}")
+        made = APIRouter(prefix=f"/ext/{name}")
+        made.add_api_route("/ping", (lambda n=name: {"extension": n}), methods=["GET"])
+        module.register = lambda api, made=made: api.include_router(made)  # type: ignore[attr-defined]
+        sys.modules[f"app.extensions.{name}"] = module
+
+    from app import extensions as loader
+
+    monkeypatch.setattr(loader, "available", lambda: ("alpha", "beta", "sample"))
+    try:
+        with TestClient(_app_with(monkeypatch, "alpha,beta,sample")) as web:
+            for name in ("alpha", "beta", "sample"):
+                got = web.get(f"/api/ext/{name}/ping", headers=admin.headers)
+                assert got.status_code == 200, f"{name}: {got.text}"
+            info = web.get("/api/server/status", headers=admin.headers).json()
+            assert info["extensions"] == ["alpha", "beta", "sample"]
+            # 하나만 끄면 그 하나만 사라진다.
+            web.patch(
+                "/api/server/extensions/beta", json={"enabled": False}, headers=admin.headers
+            )
+            assert web.get("/api/ext/alpha/ping", headers=admin.headers).status_code == 200
+            assert web.get("/api/ext/beta/ping", headers=admin.headers).status_code == 404
+    finally:
+        for name in ("alpha", "beta"):
+            sys.modules.pop(f"app.extensions.{name}", None)
+        get_settings.cache_clear()
+
+
+def test_화면의_확장_목록은_켜짐을_따른다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, admin: Signed, client: TestClient
+) -> None:
+    """**메뉴는 `index.html` 이 들고 온다** — 그래서 그 자리를 요청마다 채운다.
+
+    기동 때 박아 두면 화면에서 끈 확장의 메뉴가 재시작까지 남고, 사람은 끈 것이
+    안 꺼진 줄로 읽는다.
+    """
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text(
+        "<!doctype html><html><head></head></html>", encoding="utf-8"
+    )
+    monkeypatch.setenv("FRONTEND_DIST", str(dist))
+    monkeypatch.setenv("EXTENSIONS", "sample")
+    get_settings.cache_clear()
+    try:
+        from app.database import SessionLocal
+        from app.main import create_app
+
+        app = create_app()
+        app.state.session_factory = SessionLocal
+        with TestClient(app) as web:
+            assert '<meta name="app-extensions" content="sample" />' in web.get("/").text
+            web.patch(
+                "/api/server/extensions/sample", json={"enabled": False}, headers=admin.headers
+            )
+            assert '<meta name="app-extensions" content="" />' in web.get("/").text
     finally:
         get_settings.cache_clear()
 

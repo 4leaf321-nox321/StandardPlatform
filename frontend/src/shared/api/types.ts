@@ -205,12 +205,22 @@ export interface MaintenanceItem {
   severity: string
 }
 
+export interface ExtensionState {
+  name: string
+  enabled: boolean
+  /** 화면에서 지정했나. 거짓이면 `.env` 의 기본값이 답한 것이다. */
+  pinned: boolean
+  updated_at: string | null
+}
+
 export interface ServerStatus {
   app_name: string
   /** 기계가 읽는 이름 — DB · 쿠키 · 유닛 이름이 여기서 나온다. */
   app_slug: string
-  /** 이 설치가 켠 확장. 화면의 ENABLED_EXTENSIONS 와 같아야 한다. */
+  /** 지금 켜져 있는 확장. 화면의 ENABLED_EXTENSIONS 와 다르면 새로 고침 전이다. */
   extensions: string[]
+  /** `.env` 에 적혔는데 이 번들에 없는 이름 — **오타는 여기서만 드러난다.** */
+  extensions_unknown: string[]
   version: string
   app_env: string
   /** 비밀번호를 지운 접속 문자열. **어느 DB 를 보고 있는지가 첫 물음이다.** */
