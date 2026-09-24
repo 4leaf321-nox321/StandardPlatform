@@ -4085,11 +4085,11 @@
             "required": false,
             "schema": {
               "type": "boolean",
-              "description": "바깥에 연 타입의 칸을 지우는 것을 확인했나",
+              "description": "외부 공개 타입의 속성 삭제를 확인했는지 여부",
               "default": false,
               "title": "Accept Core"
             },
-            "description": "바깥에 연 타입의 칸을 지우는 것을 확인했나"
+            "description": "외부 공개 타입의 속성 삭제를 확인했는지 여부"
           }
         ],
         "responses": {
@@ -4301,6 +4301,26 @@
                 "schema": {
                   "$ref": "#/components/schemas/CoreStatusOut"
                 }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/core-kit": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Core Kit",
+        "description": "연동 키트 — 수신 측에 그대로 전달하는 한 벌(zip).\n\n안내서 · 설정 견본 · 수신 스크립트 · 연결 점검 스크립트가 들어 있고, **이 설치의\n주소와 공개 타입이 이미 채워져 있다.** 수신 측이 수정하는 것은 토큰 한 줄이다.\n\n코드를 작성할 수 있는 상대에게는 안내서만 전달해도 된다. 그렇지 않은 상대에게\n「개발해 주십시오」 라고 하면 대화가 몇 달 늘어나지만, 「이것을 실행하십시오」 는\n그날 끝난다.",
+        "operationId": "core_kit_api_ontology_core_kit_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
               }
             }
           }

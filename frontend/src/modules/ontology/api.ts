@@ -414,8 +414,10 @@ export const ontologyApi = {
       apply: boolean
     },
   ) => api.post<PromoteOut>(`/ontology/types/${slug}/properties/${key}/promote`, body),
-  /** 관리자만 — **코어 창구 밖에 둔다**(받아 가는 쪽이 다른 연동의 이름을 보면 안 된다). */
+  /** 관리자 전용 — **코어 창구 밖에 둔다**(수신 시스템이 다른 연동의 이름을 보면 안 된다). */
   coreStatus: () => api.get<CoreStatus>('/ontology/core-status'),
+  /** 연동 키트(zip) — 주소와 공개 타입이 채워진 상태로 내려온다. 수신 측에 그대로 전달한다. */
+  downloadCoreKit: () => downloadFile('/ontology/core-kit', 'sp-core-client.zip'),
   propertyUsage: (slug: string, key: string) =>
     api.get<PropertyUsage>(`/ontology/types/${slug}/properties/${key}/usage`),
   /** `acceptCore` 는 **바깥에 연 타입**의 칸을 지울 때만 — 확인 창에서 한 번 더 물은 뒤. */

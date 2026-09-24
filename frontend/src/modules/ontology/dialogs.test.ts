@@ -55,3 +55,23 @@ describe('온톨로지 수정 창', () => {
     }
   })
 })
+
+/**
+ * 온톨로지 레이아웃 — **두 번째 사이드바는 붙박이, 내용만 굴린다.**
+ *
+ * 바깥(AppShell 의 main)이 통째로 굴리면 목록을 내려 보는 동안 「지금 어느 화면인가」 를
+ * 말해 주던 줄과 제목이 화면 밖으로 사라진다. 눈으로만 확인하던 것이라 조용히 갈릴 수
+ * 있어 글자로 잡아 둔다.
+ */
+describe('온톨로지 레이아웃', () => {
+  const source = readFileSync('src/modules/ontology/OntologyLayout.tsx', 'utf8')
+
+  it('바깥 상자가 높이를 잡고 넘침을 가둔다', () => {
+    expect(source).toMatch(/<div className="flex h-full gap-6 overflow-hidden">/)
+  })
+
+  it('사이드바와 내용이 각자 굴린다 — 페이지 전체가 굴리지 않는다', () => {
+    expect(source).toMatch(/<aside className="[^"]*overflow-y-auto/)
+    expect(source).toMatch(/<div className="min-h-0 flex-1 overflow-y-auto/)
+  })
+})

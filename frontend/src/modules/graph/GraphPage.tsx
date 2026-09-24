@@ -759,6 +759,13 @@ function ExploreView({
   const [explored, setExplored] = useState<Explored | null>(null)
   const [selected, setSelected] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
+  /** 방금 확장으로 늘어난 노드 수 — 잠시 뒤 스스로 사라진다(0 이면 안 보인다). */
+  const [added, setAdded] = useState(0)
+  useEffect(() => {
+    if (added === 0) return
+    const timer = window.setTimeout(() => setAdded(0), 4000)
+    return () => window.clearTimeout(timer)
+  }, [added])
   const [error, setError] = useState<ApiError | Error | null>(null)
 
   const query = useCallback(
@@ -829,7 +836,14 @@ function ExploreView({
     try {
       const fresh = await query(id, 1)
       if (generation.current !== mine) return // 그새 씨앗·필터가 바뀌었다 — 이 응답은 옛것
-      setExplored((previous) => (previous ? mergeNeighborhood(previous, fresh) : previous))
+      setExplored((previous) => {
+        if (!previous) return previous
+        const merged = mergeNeighborhood(previous, fresh)
+        // **몇 개가 늘었는지 말한다.** 새 노드가 화면 밖에 놓이면 사람은 「아무 일도 안
+        // 일어났다」 로 읽는다 — 그때 볼 곳(화면 맞춤)까지 함께 적는다.
+        setAdded(merged.nodes.size - previous.nodes.size)
+        return merged
+      })
     } catch (caught: unknown) {
       if (generation.current === mine) {
         setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
@@ -1234,6 +1248,17 @@ function ExploreView({
                     <Loader2 className="text-muted-foreground size-5 animate-spin" />
                   </div>
                 )}
+                {/* **확장 결과를 그림 위에 말한다.** 새 노드가 화면 밖에 놓이면 「아무 일도
+                    안 일어났다」 로 읽힌다 — 늘어난 수와 볼 방법을 함께 적는다. 옆 판이 아니라
+                    여기 얹는 이유: 판의 높이가 바뀌면 캔버스가 크기를 다시 재고, 그때 배치는
+                    그대로인데 **배율과 위치가 흔들린다.** */}
+                {added > 0 && !loading && (
+                  <div className="absolute inset-x-0 top-3 flex justify-center">
+                    <p className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-2 py-1 text-xs shadow-sm">
+                      <b>{added}개</b> 추가됨(초록 링). 안 보이면 <b>「화면 맞춤」</b>(<kbd>F</kbd>)
+                    </p>
+                  </div>
+                )}
                 {explored && nodeList.length === 1 && !loading && (
                   <div className="text-muted-foreground absolute inset-x-0 top-3 text-center text-xs">
                     연결된 관계가 없습니다
@@ -1312,7 +1337,10 @@ function ExploreView({
             inGraph={(id) => Boolean(explored?.nodes.has(id))}
             color={typeColor(picked.type_slug)}
             typeLabel={typeLabel.get(picked.type_slug) ?? picked.type_label}
-            onExpand={() => void expand(picked.id)}
+            onExpand={() => {
+              setAdded(0)
+              void expand(picked.id)
+            }}
             onFocus={() => pickFocus(picked.id)}
             onSelect={selectAndGo}
             onClose={() => setSelected(null)}

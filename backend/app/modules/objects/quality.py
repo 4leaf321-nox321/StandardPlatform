@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -69,19 +70,40 @@ def _visible_objects(db: Session, user: User, object_type: ObjectType) -> Any:
     )
 
 
+#: 그 타입의 볼 수 있는 객체를 돌려주는 함수 — **처음 필요할 때 한 번만 읽는다.**
+Rows = Callable[[], list[ObjectInstance]]
+
+
+def _rows_once(db: Session, user: User, object_type: ObjectType) -> Rows:
+    """검사 넷이 **같은 행**을 본다(필수값 · 깨진 참조 · 중복 · 별칭 충돌).
+
+    각자 읽으면 한 타입을 네 번 읽는다 — 6천 건 타입에서 홈 「남은 일」 이 2초였고, 그
+    대부분이 같은 행을 다시 만드는 비용이었다(실측 2026-09-24). 그리고 **필요 없으면 읽지
+    않는다**: 필수 속성이 없는 타입에 필수값 검사를 위해 행을 읽을 이유가 없다.
+    """
+    holder: list[list[ObjectInstance]] = []
+
+    def get() -> list[ObjectInstance]:
+        if not holder:
+            holder.append(list(db.scalars(_visible_objects(db, user, object_type))))
+        return holder[0]
+
+    return get
+
+
 def _empty(raw: Any) -> bool:
     return raw is None or raw == "" or raw == []
 
 
 def _missing_required(
-    db: Session, user: User, object_type: ObjectType, defs: list[PropertyDef]
+    object_type: ObjectType, defs: list[PropertyDef], rows: Rows
 ) -> Finding | None:
     required = [d for d in defs if d.required and d.data_type != "file"]
     if not required:
         return None
     hits: list[Hit] = []
     count = 0
-    for row in db.scalars(_visible_objects(db, user, object_type)):
+    for row in rows():
         values = row.properties or {}
         blank = [d.label for d in required if _empty(values.get(d.key))]
         if not blank:
@@ -129,25 +151,50 @@ def _orphans(
     return _finding("orphan", object_type, int(count), hits)
 
 
+@dataclass(frozen=True)
+class _World:
+    """**이 설치의 모든 객체를 한 번만 읽은 것** — 살아 있는 id 와 이름.
+
+    깨진 참조 검사는 「이 값이 가리키는 객체가 아직 있나」 를 묻는데, 그 답은 타입과 무관한
+    전체 정보다. 타입마다 다시 읽으면 비용이 **타입 수만큼 곱해진다** — 실측으로 홈
+    「남은 일」 이 2.1초였고, 그중 전체 스캔 18회(타입 9개에 두 번씩)가 대부분이었다.
+    """
+
+    alive: set[str]
+    names: dict[uuid.UUID, str]
+
+    @classmethod
+    def read(cls, db: Session) -> _World:
+        alive: set[str] = set()
+        names: dict[uuid.UUID, str] = {}
+        # 한 질의로 둘을 만든다 — 살아 있는지와 이름을 따로 물을 이유가 없다.
+        for row_id, label, deleted_at in db.execute(
+            select(ObjectInstance.id, ObjectInstance.label, ObjectInstance.deleted_at)
+        ):
+            names[row_id] = label
+            if deleted_at is None:
+                alive.add(str(row_id))
+        return cls(alive=alive, names=names)
+
+
 def _broken_refs(
-    db: Session, user: User, object_type: ObjectType, defs: list[PropertyDef]
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    defs: list[PropertyDef],
+    world: _World,
+    rows_of: Rows,
 ) -> Finding | None:
+    """`world` 는 **부르는 쪽이 한 번 읽어 넘긴다** — 여기서 읽으면 타입마다 전체
+    스캔이 된다."""
     ref_defs = [d for d in defs if d.data_type == "object_ref"]
     if not ref_defs:
         return None
-    alive = {
-        str(one)
-        for one in db.scalars(
-            select(ObjectInstance.id).where(ObjectInstance.deleted_at.is_(None))
-        )
-    }
-    names: dict[uuid.UUID, str] = {
-        row_id: label
-        for row_id, label in db.execute(select(ObjectInstance.id, ObjectInstance.label))
-    }
+    alive = world.alive
+    names = world.names
     # 상대가 원 표(system)인 칸은 그 표에서 산 것을 본다 — 객체 표에는 없는 id 라서.
     types = system.types_by_slug(db)
-    rows = list(db.scalars(_visible_objects(db, user, object_type)))
+    rows = rows_of()
     system_alive: dict[str, set[str]] = {}
     # 원 표가 등록 안 된 타입을 가리키는 칸은 **안 본다.** 살아 있는지 물을 곳이 없는데
     # 객체 표에서 찾으면 그 값 전부가 「깨진 참조」 로 뜬다 — 없는 문제를 만들어 내고,
@@ -196,9 +243,9 @@ def _broken_refs(
     return _finding("broken_ref", object_type, count, hits)
 
 
-def _duplicates(db: Session, user: User, object_type: ObjectType) -> Finding | None:
+def _duplicates(object_type: ObjectType, rows: Rows) -> Finding | None:
     groups: dict[str, list[ObjectInstance]] = {}
-    for row in db.scalars(_visible_objects(db, user, object_type)):
+    for row in rows():
         groups.setdefault(compare_key(row.label), []).append(row)
     dupes = [members for members in groups.values() if len(members) > 1]
     if not dupes:
@@ -220,11 +267,11 @@ def _duplicates(db: Session, user: User, object_type: ObjectType) -> Finding | N
     return _finding("duplicate", object_type, count, hits)
 
 
-def _alias_clashes(db: Session, user: User, object_type: ObjectType) -> Finding | None:
+def _alias_clashes(db: Session, object_type: ObjectType, rows_of: Rows) -> Finding | None:
     """한 객체의 별칭이 **다른 객체의 이름·식별자**와 같다 — 같은 별칭끼리는 표가 막지만,
     이름과 별칭이 겹치는 것은 막을 자리가 없어서 여기서 센다. 그 표기로 찾으면 둘이 나오고,
     파일은 「여럿에 맞는다」 로 거절된다."""
-    rows = list(db.scalars(_visible_objects(db, user, object_type)))
+    rows = rows_of()
     by_norm: dict[str, list[ObjectInstance]] = {}
     for row in rows:
         by_norm.setdefault(compare_key(row.label), []).append(row)
@@ -281,19 +328,26 @@ def report(db: Session, user: User, *, kinds: tuple[str, ...] = KINDS) -> list[F
     for d in db.scalars(select(PropertyDef).where(PropertyDef.owner_kind == "type")):
         defs_by_type.setdefault(d.owner_id, []).append(d)
 
+    # **전체 객체는 한 번만 읽는다.** 깨진 참조를 안 볼 때는 읽지도 않는다.
+    world = _World.read(db) if "broken_ref" in kinds else _World(alive=set(), names={})
+
     out: list[Finding] = []
     for object_type in types:
         if object_type.kind_class == "system":
             continue
         defs = defs_by_type.get(object_type.id, [])
+        # **이 타입의 행은 한 번만 읽는다** — 검사 넷이 같은 것을 본다.
+        rows = _rows_once(db, user, object_type)
         found = [
-            _missing_required(db, user, object_type, defs)
+            _missing_required(object_type, defs, rows)
             if "missing_required" in kinds
             else None,
             _orphans(db, user, object_type, relation_kinds) if "orphan" in kinds else None,
-            _broken_refs(db, user, object_type, defs) if "broken_ref" in kinds else None,
-            _duplicates(db, user, object_type) if "duplicate" in kinds else None,
-            _alias_clashes(db, user, object_type) if "alias_clash" in kinds else None,
+            _broken_refs(db, user, object_type, defs, world, rows)
+            if "broken_ref" in kinds
+            else None,
+            _duplicates(object_type, rows) if "duplicate" in kinds else None,
+            _alias_clashes(db, object_type, rows) if "alias_clash" in kinds else None,
         ]
         out.extend(one for one in found if one is not None)
     return out

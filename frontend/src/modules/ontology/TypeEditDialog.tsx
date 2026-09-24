@@ -346,12 +346,12 @@ export function TypeEditDialog({
                       onChange={(event) => setCore(event.target.checked)}
                     />
                     <span>
-                      코어 — 바깥 시스템에 연다
+                      코어 — 외부 시스템에 공개
                       <span className="text-muted-foreground ml-1 text-xs">
-                        켜면 이 타입이 <code>/api/core</code> 로 나가 다른 시스템이 주기적으로
-                        가져갑니다(볼 수 있는 것만). <b>켜는 순간 약속이 됩니다</b> — 타입 slug 와
-                        속성 key 가 남의 시스템 코드에 박히므로, 그 뒤로 이름을 바꾸면 그쪽이
-                        깨집니다.
+                        지정하면 이 타입이 <code>/api/core</code> 로 공개되어 외부 시스템이
+                        주기적으로 조회합니다(조회 권한 범위 내). <b>지정하는 순간 약속이 됩니다</b>{' '}
+                        — 타입 slug 와 속성 key 가 외부 시스템 코드에 사용되므로, 이후 이름을
+                        변경하면 해당 시스템이 동작하지 않습니다.
                       </span>
                     </span>
                   </label>

@@ -322,7 +322,7 @@ function SyncDialog({
             {source.name} — {result.applied ? '적용했습니다' : '동기화 계획'}
           </DialogTitle>
           <DialogDescription>
-            바깥에서 {result.run.rows_seen}행을 읽었습니다.{' '}
+            외부에서 {result.run.rows_seen}행을 조회했습니다.{' '}
             {Object.entries(result.counts)
               .filter(([, n]) => n > 0)
               .map(([k, n]) => `${COUNT_LABEL[k] ?? k} ${n}`)
@@ -1093,7 +1093,7 @@ function EditDialog({
                     checked={deprecate}
                     onChange={(event) => setDeprecate(event.target.checked)}
                   />
-                  바깥에서 사라진 행은 「사용 중지」 로 표시 (기본은 변경하지 않음)
+                  외부에서 삭제된 행은 「사용 중지」 로 표시 (기본은 변경하지 않음)
                 </label>
               ) : (
                 <p className="text-muted-foreground text-sm">

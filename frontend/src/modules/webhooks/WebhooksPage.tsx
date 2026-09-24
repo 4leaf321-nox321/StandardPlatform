@@ -66,7 +66,7 @@ export default function WebhooksPage() {
     <div className="mx-auto max-w-4xl space-y-6">
       <PageHeader
         title="웹훅"
-        description="바뀐 것을 바깥 시스템에 알립니다. 감사 기록에 남는 변경이 곧 이벤트입니다."
+        description="변경 사항을 외부 시스템에 알립니다. 감사 기록에 남는 변경이 곧 이벤트입니다."
         actions={
           <Button size="sm" onClick={() => setEditing('new')}>
             <Plus className="mr-1 size-4" />
@@ -146,7 +146,7 @@ export default function WebhooksPage() {
               <p className="text-muted-foreground text-xs">
                 이벤트 {hook.events.join(', ')}
                 {hook.core_types_only
-                  ? ' · 코어 타입만'
+                  ? ' · 코어 공개 타입만'
                   : hook.type_slugs && ` · 타입 ${hook.type_slugs.join(', ')}`}
                 {hook.has_secret ? ' · 서명함' : ' · 서명 없음'}
               </p>
@@ -415,10 +415,11 @@ function EditDialog({
               onChange={(event) => setCoreOnly(event.target.checked)}
             />
             <span>
-              바깥에 연 타입(코어)만
+              코어 공개 타입만
               <span className="text-muted-foreground ml-1 text-xs">
-                지금 코어인 타입을 <b>따라갑니다</b> — 나중에 새로 열어도 여기를 안 고쳐도 됩니다.
-                받는 쪽은 이 신호를 받고 <code>/api/core</code> 로 당겨 갑니다.
+                현재 코어로 공개된 타입을 <b>자동으로 반영합니다</b> — 이후 타입을 추가로 공개해도
+                이 설정을 수정할 필요가 없습니다. 수신 시스템은 이 알림을 받은 뒤{' '}
+                <code>/api/core</code> 에서 조회합니다.
               </span>
             </span>
           </label>

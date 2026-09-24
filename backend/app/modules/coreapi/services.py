@@ -19,8 +19,11 @@
 
 from __future__ import annotations
 
+import io
 import uuid
+import zipfile
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy import func, select
@@ -153,23 +156,43 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
     types = core_types(db)
     out: list[CoreTypeOut] = []
     marks: list[str] = []
+
+    # **타입마다 세지 않는다 — 한 번에 센다.** 타입별로 질의를 돌리면 공개 타입이 늘어날수록
+    # 카탈로그가 느려지고, 느려진 이유는 화면 어디에도 안 적힌다.
+    #
+    # 그리고 **집계를 서브쿼리로 감싸지 않는다.** `select(max(objects.updated_at))
+    # .select_from(<objects 서브쿼리>)` 는 바깥 `objects` 와 조인 조건이 없어 **교차곱**이
+    # 된다 — 6천 행이 3천7백만 행이 되어 2초가 걸렸다(실측). 조건은 `where` 로 적는다.
+    visible = visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+    ids = [one.id for one in types]
+    counts: dict[uuid.UUID, int] = {}
+    latest_of: dict[uuid.UUID, datetime] = {}
+    if ids:
+        counts = {
+            type_id: total
+            for type_id, total in db.execute(
+                select(ObjectInstance.type_id, func.count())
+                .where(
+                    ObjectInstance.type_id.in_(ids),
+                    ObjectInstance.deleted_at.is_(None),
+                    visible,
+                )
+                .group_by(ObjectInstance.type_id)
+            )
+        }
+        latest_of = {
+            type_id: when
+            for type_id, when in db.execute(
+                select(ObjectInstance.type_id, func.max(ObjectInstance.updated_at))
+                .where(ObjectInstance.type_id.in_(ids), visible)
+                .group_by(ObjectInstance.type_id)
+            )
+        }
+
     for object_type in types:
         defs = _shown_defs(db, object_type)
-        rows = select(ObjectInstance).where(
-            ObjectInstance.type_id == object_type.id,
-            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
-        )
-        count = (
-            db.scalar(
-                select(func.count()).select_from(
-                    rows.where(ObjectInstance.deleted_at.is_(None)).subquery()
-                )
-            )
-            or 0
-        )
-        latest = db.scalar(
-            select(func.max(ObjectInstance.updated_at)).select_from(rows.subquery())
-        )
+        count = counts.get(object_type.id, 0)
+        latest = latest_of.get(object_type.id)
         out.append(
             CoreTypeOut(
                 slug=object_type.slug,
@@ -383,3 +406,55 @@ def status(db: Session, user: User, *, base: str, limit: int = 20) -> CoreStatus
         ],
         base=base,
     )
+
+
+# --- 연동 키트 --------------------------------------------------------------------
+#
+# 수신 측이 코드를 작성하지 못하는 경우가 많다. 그때 「개발해 주십시오」 는 대화를 몇 달
+# 늘리지만, 「이것을 실행하십시오」 는 그날 끝난다. 그래서 **주소와 공개 타입을 채워 넣은**
+# 한 벌을 우리가 만들어 준다 — 수신 측이 고치는 것은 토큰 한 줄이다.
+
+#: 키트 파일이 있는 자리. 패키지 안에 두어 배포본에 항상 포함된다.
+KIT_DIR = Path(__file__).resolve().parent / "kit"
+
+#: zip 에 담을 파일과 그 안에서의 이름.
+KIT_FILES = ("README.md", "config.example.ini", "sp_core_pull.py", "check.sh")
+
+
+def kit_zip(db: Session, user: User, *, base: str) -> bytes:
+    """연동 키트 한 벌 — **주소와 공개 타입이 이미 채워진 상태로.**
+
+    비워 두고 「여기에 주소를 적으십시오」 라고 하면, 수신 측은 그 주소를 메일에서 찾아
+    옮겨 적다가 오타를 낸다. 우리가 아는 값은 우리가 채운다.
+    """
+    catalog_out = catalog(db, user, base=base)
+    slugs = [one.slug for one in catalog_out.types]
+    # **키트가 쓰는 것은 API 루트다**(`…/api`). 클라이언트가 `{base}/core/<타입>` 으로
+    # 조립하므로 여기에 창구 주소(`…/api/core`)를 넣으면 `/core/core/…` 가 된다 — 실측으로
+    # 그렇게 나왔다.
+    api_root = base[: -len("/core")] if base.endswith("/core") else base
+    fill = {
+        "{BASE}": api_root,
+        "{SYSTEM}": catalog_out.system,
+        "{SYSTEM_NAME}": get_settings().app_name,
+        "{REVISION}": catalog_out.revision,
+        "{AT}": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
+        "{TYPES}": ", ".join(slugs),
+        "{TYPES_LONG}": (
+            ", ".join(
+                f"{one.label}(`{one.slug}`, {one.count:,}건)" for one in catalog_out.types
+            )
+            or "없음 — 공개된 타입이 없습니다"
+        ),
+    }
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
+        for name in KIT_FILES:
+            text = (KIT_DIR / name).read_text(encoding="utf-8")
+            for token, value in fill.items():
+                text = text.replace(token, value)
+            info = zipfile.ZipInfo(f"sp-core-client/{name}")
+            # 실행 권한을 살려 둔다 — 풀자마자 `./check.sh` 가 되게.
+            info.external_attr = (0o755 if name.endswith(".sh") else 0o644) << 16
+            bundle.writestr(info, text)
+    return buffer.getvalue()

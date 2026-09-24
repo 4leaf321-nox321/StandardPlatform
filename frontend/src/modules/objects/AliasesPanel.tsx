@@ -108,7 +108,7 @@ export function AliasesPanel({
       </div>
       {external.length > 0 && (
         <p className="text-muted-foreground text-xs">
-          바깥 식별자:{' '}
+          외부 식별자:{' '}
           {external.map(([source, value]) => (
             <span key={source} className="mr-2">
               <code>{source}</code> = <code>{value}</code>

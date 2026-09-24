@@ -348,6 +348,10 @@ describe('지식 그래프', () => {
     await userEvent.click(screen.getByRole('button', { name: '여기서 확장 (+3)' }))
     // 3 + 1 노드, 2 + 1 관계 — 앞서 든 잎A·잎B 가 사라지지 않는다.
     await waitFor(() => expect(screen.getByText(/노드 4 · 관계 3/)).toBeInTheDocument())
+    // **몇 개가 늘었는지 말한다.** 새 노드가 화면 밖에 놓이면 「아무 일도 안 일어났다」 로
+    // 읽히므로, 늘어난 수와 볼 방법(화면 맞춤)을 함께 적는다.
+    expect(screen.getByText(/1개/)).toBeInTheDocument()
+    expect(screen.getByText(/화면 맞춤/)).toBeInTheDocument()
     expect(graphApi.neighborhood).toHaveBeenLastCalledWith(
       expect.objectContaining({ focus: 'hub', depth: 1 }),
     )

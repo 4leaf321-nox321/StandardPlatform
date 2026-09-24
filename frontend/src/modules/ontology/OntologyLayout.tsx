@@ -63,9 +63,9 @@ const SECTIONS = [
     count: () => undefined,
   },
   {
-    // **바깥으로 나가는 것.** 무엇이 열려 있는지 볼 자리가 없으면 열어 둔 것을 잊는다.
+    // **외부로 나가는 자료.** 무엇을 공개했는지 확인할 자리가 없으면 공개 사실이 잊힌다.
     to: 'core',
-    label: '코어 (바깥에 열기)',
+    label: '코어 (외부 공개)',
     icon: Radio,
     count: (schema: OntologySchema | null) =>
       schema?.types.filter((one) => one.core).length || undefined,
@@ -83,8 +83,11 @@ export default function OntologyLayout() {
   }
 
   return (
-    <div className="flex min-h-full gap-6">
-      <aside className="w-48 shrink-0 border-r pr-3">
+    // **두 번째 사이드바는 고정하고 내용만 굴린다.** 바깥(AppShell 의 main)이 통째로
+    // 굴리면 목록을 내려 보는 동안 「지금 어느 화면인가」 를 말해 주던 줄이 화면 밖으로
+    // 사라진다 — 그러면 돌아가려고 매번 위로 올려야 한다.
+    <div className="flex h-full gap-6 overflow-hidden">
+      <aside className="w-48 shrink-0 overflow-y-auto border-r pr-3">
         <nav className="space-y-0.5">
           {SECTIONS.map((section) => {
             const count = section.count(resource.data)
@@ -113,7 +116,9 @@ export default function OntologyLayout() {
         </nav>
       </aside>
 
-      <div className="min-w-0 flex-1">
+      {/* 제목 줄과 오류는 붙박이다 — 오류가 화면 밖으로 밀려 나가면 무엇이 잘못됐는지
+          모른 채 같은 동작을 반복한다. */}
+      <div className="flex min-w-0 flex-1 flex-col overflow-hidden">
         <PageHeader
           title="온톨로지"
           description="타입을 정의하면 사이드바와 화면이 생깁니다. 코드를 수정하지 않습니다."
@@ -123,7 +128,9 @@ export default function OntologyLayout() {
         {resource.error && <ErrorNotice error={resource.error} />}
         {error && <ErrorNotice error={error} />}
 
-        <Outlet context={context} />
+        <div className="min-h-0 flex-1 overflow-y-auto pr-1">
+          <Outlet context={context} />
+        </div>
       </div>
     </div>
   )

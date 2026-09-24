@@ -62,6 +62,54 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/shared/components/ui/
 import { useTheme } from '@/shared/theme/ThemeProvider'
 
 /** 호스트가 넘기는 노드. 색·크기는 **호스트가 정한 것**이다 — 여기서 다시 고르지 않는다. */
+/**
+ * 옛 좌표를 이어받고, **확장 중에는 이미 놓인 노드를 붙박이로 둔다.**
+ *
+ * 좌표만 이어받으면 부족하다: 데이터가 바뀌면 라이브러리가 시뮬레이션을 다시 데우고, 그때
+ * **이미 자리를 잡은 노드까지 전부 다시 밀린다.** 카메라는 그대로인데 그림이 흘러가므로,
+ * 보고 있던 자리를 잃는다 — 「여기서 확장」 을 누르면 화면이 딴 데가 되는 이유가 이것이다.
+ *
+ * 그래서 새 노드가 하나라도 들어올 때는 옛 노드에 `fx`·`fy`(고정)를 걸어 **새 노드만 자리를
+ * 찾게** 한다. 고정은 배치가 식으면 부르는 쪽이 푼다(`onEngineStop`) — 안 풀면 그 뒤의 끌기와
+ * 다음 확장이 굳는다.
+ *
+ * 색만 바뀐 갱신처럼 **새 노드가 없으면 고정하지 않는다** — 고정할 이유가 없고, 굳은 채로
+ * 남을 위험만 생긴다.
+ */
+export function carryPositions<T extends CanvasNode>(
+  before: (T & { x?: number; y?: number })[],
+  incoming: T[],
+): { nodes: (T & { x?: number; y?: number; fx?: number; fy?: number })[]; arrived: string[] } {
+  const was = new Map(before.map((node) => [String(node.id), node]))
+  const arrived = incoming.filter((node) => !was.has(node.id)).map((node) => node.id)
+  const pin = arrived.length > 0
+  const nodes = incoming.map((node) => {
+    const old = was.get(node.id)
+    if (old && old.x !== undefined && old.y !== undefined) {
+      return {
+        ...node,
+        x: old.x,
+        y: old.y,
+        vx: 0,
+        vy: 0,
+        ...(pin ? { fx: old.x, fy: old.y } : {}),
+      }
+    }
+    const anchor = node.near ? was.get(node.near) : undefined
+    if (anchor && anchor.x !== undefined && anchor.y !== undefined) {
+      const angle = Math.random() * Math.PI * 2
+      const distance = LINK_DISTANCE_BASE * (0.6 + Math.random() * 0.6)
+      return {
+        ...node,
+        x: anchor.x + Math.cos(angle) * distance,
+        y: anchor.y + Math.sin(angle) * distance,
+      }
+    }
+    return { ...node }
+  })
+  return { nodes, arrived }
+}
+
 export interface CanvasNode {
   id: string
   label: string
@@ -209,6 +257,9 @@ const CANVAS_SHORTCUTS = [
  */
 const CHARGE_STRENGTH = -220
 const LINK_DISTANCE_BASE = 70
+/** 새로 들어온 노드에 링을 둘러 두는 시간과 그 색. */
+const ARRIVED_HIGHLIGHT_MS = 4000
+const ARRIVED_RING = '#22c55e'
 /** 라벨이 노드 아래 두 줄 붙으므로 반지름보다 넉넉히 띄운다. */
 const COLLIDE_PADDING = 14
 
@@ -288,30 +339,56 @@ export function GraphCanvas({
 
   // 라이브러리가 객체를 변형하므로 **매번 새 객체**를 만들되, 옛 객체의 좌표를 이어받는다.
   // 새 노드는 `near`(펼친 노드) 곁에서 시작 — 화면 반대편에서 날아오지 않게.
+  /**
+   * 마지막으로 사람이 둔 카메라(배율과 화면 중심).
+   *
+   * **배치를 그대로 둬도 카메라가 바뀌면 보던 자리를 잃는다.** 노드 목록을 갈아 끼우거나
+   * 캔버스 크기가 바뀌면(옆 판이 늘어나는 것도 그렇다) 라이브러리가 화면을 다시 잡는데,
+   * 그때 「배치는 같은데 위치와 배율만 달라졌다」 가 된다 — 확장 뒤에 사람이 겪는 것이 이것이다.
+   * 그래서 사람이 움직인 카메라를 기억해 두고, 갱신 뒤에 **그대로 되돌린다.**
+   */
+  const camera = useRef<{ zoom: number; x: number; y: number } | null>(null)
+  const rememberCamera = useCallback(() => {
+    const graph = graphRef.current
+    if (!graph) return
+    const center = graph.centerAt()
+    camera.current = { zoom: graph.zoom(), x: center.x, y: center.y }
+  }, [])
+  const restoreCamera = useCallback(() => {
+    const graph = graphRef.current
+    const kept = camera.current
+    if (!graph || !kept) return
+    graph.zoom(kept.zoom, 0)
+    graph.centerAt(kept.x, kept.y, 0)
+  }, [])
   const previous = useRef<{ nodes: Node[]; links: Link[] }>({ nodes: [], links: [] })
+  /** 이번 갱신에서 새로 들어온 노드 — 잠시 링을 둘러 「무엇이 늘었나」 를 보이게 한다. */
+  const [arrived, setArrived] = useState<Set<string>>(() => new Set())
+  const arrivedNow = useRef<string[]>([])
   const graphData = useMemo(() => {
-    const was = new Map(previous.current.nodes.map((node) => [String(node.id), node]))
-    const next: Node[] = nodes.map((node) => {
-      const old = was.get(node.id)
-      if (old && old.x !== undefined && old.y !== undefined) {
-        return { ...node, x: old.x, y: old.y, vx: 0, vy: 0 }
-      }
-      const anchor = node.near ? was.get(node.near) : undefined
-      if (anchor && anchor.x !== undefined && anchor.y !== undefined) {
-        const angle = Math.random() * Math.PI * 2
-        const distance = LINK_DISTANCE_BASE * (0.6 + Math.random() * 0.6)
-        return {
-          ...node,
-          x: anchor.x + Math.cos(angle) * distance,
-          y: anchor.y + Math.sin(angle) * distance,
-        }
-      }
-      return { ...node }
-    })
-    const data = { nodes: next, links: links.map((link) => ({ ...link })) as Link[] }
+    // **갈아 끼우기 직전의 카메라를 붙잡는다.** `onZoomEnd` 에만 기대면 사람이 줌·팬을 한 번도
+    // 건드리지 않은 화면에서는 기억이 없어(복원할 것이 없어) 라이브러리가 화면을 다시 잡는
+    // 것을 그대로 보게 된다 — 「전체가 한 화면에 들어오도록 맞춰진다」 가 그것이다.
+    rememberCamera()
+    const carried = carryPositions(previous.current.nodes, nodes)
+    const data = {
+      nodes: carried.nodes,
+      links: links.map((link) => ({ ...link })) as Link[],
+    }
     previous.current = data
+    arrivedNow.current = carried.arrived
     return data
-  }, [nodes, links])
+  }, [nodes, links, rememberCamera])
+
+  // 새로 들어온 것을 알린다 — 몇 초 뒤 스스로 사라진다. 계속 두면 다음 확장 때
+  // 「어느 것이 이번 것인지」 가 다시 흐려진다.
+  useEffect(() => {
+    if (arrivedNow.current.length === 0 || previous.current.nodes.length === 0) return
+    const ids = new Set(arrivedNow.current)
+    setArrived(ids)
+    const timer = window.setTimeout(() => setArrived(new Set()), ARRIVED_HIGHLIGHT_MS)
+    return () => window.clearTimeout(timer)
+  }, [graphData])
 
   // 이웃 — hover·선택 강조가 쓴다. 문자열 id 로 만든다(치환 전후 모두 안전).
   const adjacency = useMemo(() => {
@@ -389,25 +466,47 @@ export function GraphCanvas({
     }
   }, [graphData])
 
-  const fit = useCallback((animate: boolean) => {
-    const graph = graphRef.current
-    if (!graph) return
-    graph.zoomToFit(animate ? 300 : 0, 40)
-    // zoomToFit 은 노드가 둘이면 화면이 꽉 차도록 크게 확대한다 — 상한을 건다.
-    const clamp = () => {
-      const current = graphRef.current
-      if (current && current.zoom() > MAX_FIT_ZOOM) current.zoom(MAX_FIT_ZOOM, 0)
-    }
-    if (animate) window.setTimeout(clamp, 320)
-    else clamp()
-  }, [])
+  // 노드가 갈아 끼워진 뒤, 그리고 캔버스 크기가 바뀐 뒤 카메라를 되돌린다.
+  // **첫 그림에서는 되돌리지 않는다** — 그때는 화면 맞춤이 맞다.
+  useEffect(() => {
+    if (!hadPositions.current) return
+    const raf = requestAnimationFrame(restoreCamera)
+    return () => cancelAnimationFrame(raf)
+  }, [graphData, size.width, size.height, restoreCamera])
+
+  const fit = useCallback(
+    (animate: boolean) => {
+      const graph = graphRef.current
+      if (!graph) return
+      graph.zoomToFit(animate ? 300 : 0, 40)
+      // zoomToFit 은 노드가 둘이면 화면이 꽉 차도록 크게 확대한다 — 상한을 건다.
+      const clamp = () => {
+        const current = graphRef.current
+        if (current && current.zoom() > MAX_FIT_ZOOM) current.zoom(MAX_FIT_ZOOM, 0)
+      }
+      if (animate) window.setTimeout(clamp, 320)
+      else clamp()
+      // **맞춘 결과도 기억한다.** 안 기억하면 맞춘 직후의 갱신이 그 전 카메라로 되돌린다.
+      window.setTimeout(rememberCamera, animate ? 340 : 20)
+    },
+    [rememberCamera],
+  )
 
   const handleEngineStop = useCallback(() => {
+    // **고정을 푼다.** 확장하는 동안만 옛 노드를 붙박이로 뒀다(`carryPositions`) — 안 풀면
+    // 그 뒤의 끌기와 다음 확장이 굳은 자리에서 시작한다. 배치가 식은 뒤라 풀어도 안 움직인다.
+    for (const node of previous.current.nodes) {
+      if (node.fx !== undefined) node.fx = undefined
+      if (node.fy !== undefined) node.fy = undefined
+    }
     if (!fitPending.current) return // 드래그로 재가열됐다 식은 것 — 줌을 건드리지 않는다
     fitPending.current = false
     if (!hadPositions.current) fit(false)
+    // 자리를 이어받은 갱신(확장 · 색)은 **사람이 보던 카메라로 되돌린다.** 배치가 식는 동안
+    // 라이브러리가 화면을 다시 잡았을 수 있어, 식은 뒤에 한 번 더 맞춘다.
+    else restoreCamera()
     setReady(true)
-  }, [fit])
+  }, [fit, restoreCamera])
 
   // 더블클릭 — 라이브러리에 없어 시간으로 가른다.
   const lastClick = useRef<{ id: string; at: number }>({ id: '', at: 0 })
@@ -508,6 +607,17 @@ export function GraphCanvas({
         ctx.strokeStyle = ring
         ctx.stroke()
       }
+      // **이번에 늘어난 것**에 잠시 링을 두른다. 확장은 대개 여러 개를 한꺼번에 들이는데,
+      // 무엇이 새로 왔는지 표시가 없으면 사람은 그림 전체를 다시 읽는다.
+      if (arrived.has(id)) {
+        ctx.beginPath()
+        ctx.arc(x, y, r + Math.max(2.5, 4 / scale), 0, Math.PI * 2)
+        ctx.lineWidth = Math.max(1.2, 2 / scale)
+        ctx.strokeStyle = ARRIVED_RING
+        ctx.setLineDash([Math.max(2, 3 / scale), Math.max(2, 3 / scale)])
+        ctx.stroke()
+        ctx.setLineDash([])
+      }
 
       if (alwaysLabel || scale >= LABEL_MIN_SCALE || selected || id === hoveredId) {
         const fontSize = Math.max(3, Math.min(12, 11 / scale))
@@ -541,7 +651,7 @@ export function GraphCanvas({
       }
       ctx.restore()
     },
-    [alwaysLabel, palette, selectedId, hoveredId, isDim],
+    [alwaysLabel, palette, selectedId, hoveredId, isDim, arrived],
   )
 
   // 히트 영역 — 그린 모양보다 조금 크게, **화면 기준 최소 폭**을 보장한다.
@@ -732,6 +842,7 @@ export function GraphCanvas({
               linkCanvasObject={paintLinkLabel}
               // 자기 자신을 가리키는 선은 굽혀야 보인다.
               linkCurvature={(link: Link) => (idOf(link.source) === idOf(link.target) ? 0.6 : 0)}
+              onZoomEnd={rememberCamera}
               cooldownTicks={120}
               warmupTicks={nodes.length > 200 ? 40 : 0}
               onRenderFramePre={paintHulls}

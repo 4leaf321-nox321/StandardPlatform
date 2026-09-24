@@ -32,6 +32,11 @@ SCOPE = "core:read"
 
 
 @router.get("", response_model=CoreCatalogOut)
+# **끝 슬래시도 받는다.** FastAPI 의 기본 동작은 `/api/core/` 를 `/api/core` 로 307 보내는
+# 것인데, 받는 쪽 HTTP 클라이언트가 리다이렉트를 안 따라가게 해 두면(흔하다) 거기서 막힌다.
+# 그 하나로 남의 팀이 「창구가 없다」 를 보게 할 이유가 없다 — 여기서 받는다. 실측: RA 가
+# 첫 연결에서 이것으로 걸렸다.
+@router.get("/", response_model=CoreCatalogOut, include_in_schema=False)
 def core_catalog(
     request: Request,
     user: User = Depends(current_user),

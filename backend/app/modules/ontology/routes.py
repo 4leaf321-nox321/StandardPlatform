@@ -404,7 +404,7 @@ def update_type(
         if payload.core and row.kind_class == "system":
             raise Conflict(
                 code("ONTOLOGY", 45),
-                f"{row.label}은(는) 다른 표를 비추는 타입이라 바깥에 열 수 없습니다.",
+                f"{row.label}은(는) 다른 표를 비추는 타입이라 외부에 공개할 수 없습니다.",
             )
         row.core = payload.core
 
@@ -465,8 +465,8 @@ def delete_type(
         # 그쪽은 그것이 「잠깐 장애」 인지 「없어진 것」 인지 구별할 수 없다.
         raise Conflict(
             code("ONTOLOGY", 47),
-            f"{row.label}은(는) 바깥에 열려 있어 지울 수 없습니다. 먼저 「코어」 를 끄세요 — "
-            "그러면 받아 가던 쪽이 그날로 알게 됩니다.",
+            f"{row.label}은(는) 외부에 공개 중이라 삭제할 수 없습니다. 먼저 「코어」 를 "
+            "해제하십시오 — 해제 즉시 수신 시스템이 인지합니다.",
             details={"core_consumers": _core_consumers(db, row)},
         )
     count = db.scalar(
@@ -934,9 +934,9 @@ def _core_consumers(db: Session, object_type: ObjectType) -> list[str]:
     from app.modules.coreapi import services as core_services
 
     return [
-        f"{one.name} ({one.last_used_at:%Y-%m-%d} 사용)"
+        f"{one.name} ({one.last_used_at:%Y-%m-%d} 최종 사용)"
         if one.last_used_at
-        else f"{one.name} (아직 안 씀)"
+        else f"{one.name} (미사용)"
         for one in core_services.consumers(db)
     ]
 
@@ -955,8 +955,8 @@ def _require_core_accepted(
     who = _core_consumers(db, object_type)
     raise Conflict(
         code("ONTOLOGY", 46),
-        f"{object_type.label}은(는) 바깥에 열려 있어 {what} 전에 확인이 필요합니다 — "
-        f"쓸 수 있는 자격 {len(who)}개. 쓰는 쪽에 알린 뒤 다시 누르세요.",
+        f"{object_type.label}은(는) 외부에 공개 중이라 {what} 전에 확인이 필요합니다 — "
+        f"조회 가능한 토큰 {len(who)}개. 수신 시스템에 통보한 뒤 다시 실행하십시오.",
         details={"core_consumers": who},
     )
 
@@ -991,7 +991,7 @@ def delete_property(
     slug: str,
     key: str,
     accept_core: bool = Query(
-        default=False, description="바깥에 연 타입의 칸을 지우는 것을 확인했나"
+        default=False, description="외부 공개 타입의 속성 삭제를 확인했는지 여부"
     ),
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
@@ -1005,7 +1005,7 @@ def delete_property(
     row = _property(db, slug, key)
     owner = _type(db, slug)
     managed.require_definition_editable(owner)
-    _require_core_accepted(db, owner, accepted=accept_core, what="이 칸을 지우기")
+    _require_core_accepted(db, owner, accepted=accept_core, what="이 속성 삭제")
     # **안 걷어내면 그 뒤로 타입을 고칠 때마다 「없는 속성」 이라고 거절당한다** —
     # 그리고 사람은 자기가 방금 고친 것과 상관없는 그 오류를 이해할 수 없다.
     owner.list_view = views.prune_field(owner.list_view or {}, key)
@@ -1077,6 +1077,28 @@ def core_status(
     # 주소는 **요청이 안다** — 설정에서 읽으면 역방향 프록시 뒤에서 틀린 주소를 준다.
     root = str(request.url).split("/ontology/core-status")[0].rstrip("/")
     return core_services.status(db, _, base=f"{root}/core")
+
+
+@router.get("/core-kit")
+def core_kit(
+    request: Request,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> Response:
+    """연동 키트 — 수신 측에 그대로 전달하는 한 벌(zip).
+
+    안내서 · 설정 견본 · 수신 스크립트 · 연결 점검 스크립트가 들어 있고, **이 설치의
+    주소와 공개 타입이 이미 채워져 있다.** 수신 측이 수정하는 것은 토큰 한 줄이다.
+
+    코드를 작성할 수 있는 상대에게는 안내서만 전달해도 된다. 그렇지 않은 상대에게
+    「개발해 주십시오」 라고 하면 대화가 몇 달 늘어나지만, 「이것을 실행하십시오」 는
+    그날 끝난다.
+    """
+    from app.modules.coreapi import services as core_services
+
+    root = str(request.url).split("/ontology/core-kit")[0].rstrip("/")
+    body = core_services.kit_zip(db, user, base=f"{root}/core")
+    return sheets.attachment(body, media="application/zip", stem="sp-core-client", ext="zip")
 
 
 @router.get("/export")

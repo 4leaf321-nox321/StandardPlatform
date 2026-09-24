@@ -84,6 +84,20 @@ def test_연_타입만_카탈로그에_선다(client: TestClient, admin: Signed)
     assert client.get(f"/api/core/{part}", headers=admin.headers).status_code == 404
 
 
+def test_끝_슬래시도_받는다(client: TestClient, admin: Signed) -> None:
+    """받는 쪽 클라이언트가 리다이렉트를 안 따라가게 해 두면(흔하다) 슬래시 하나로 막힌다 —
+    그 하나로 남의 팀이 「창구가 없다」 를 보게 할 이유가 없다. 실측(RA 첫 연결)."""
+    _world(client, admin)
+    plain = client.get("/api/core", headers=admin.headers)
+    slashed = client.get("/api/core/", headers=admin.headers, follow_redirects=False)
+    assert plain.status_code == 200 and slashed.status_code == 200, slashed.text
+    assert {one["slug"] for one in slashed.json()["types"]} == {
+        one["slug"] for one in plain.json()["types"]
+    }
+    # 주소도 같아야 한다 — 끝 슬래시가 endpoint 에 묻어 나가면 받는 쪽이 이어 붙일 때 깨진다.
+    assert slashed.json()["types"][0]["endpoint"] == plain.json()["types"][0]["endpoint"]
+
+
 def test_행은_봉투와_알맹이로_나뉘고_참조는_식별자로_나간다(
     client: TestClient, admin: Signed
 ) -> None:
@@ -218,7 +232,7 @@ def test_투영_타입은_못_연다(client: TestClient, admin: Signed, db: Sess
         f"/api/ontology/types/{projected}", json={"core": True}, headers=admin.headers
     )
     assert denied.status_code == 409
-    assert "바깥에 열 수 없습니다" in denied.json()["error"]["message"]
+    assert "외부에 공개할 수 없습니다" in denied.json()["error"]["message"]
 
 
 # --- 연 뒤의 약속 -----------------------------------------------------------------
@@ -250,7 +264,7 @@ def test_연_타입의_칸은_한_번_더_묻고_지운다(client: TestClient, a
         f"/api/ontology/types/{part}/properties/grade", headers=admin.headers
     )
     assert denied.status_code == 409
-    assert "바깥에 열려 있어" in denied.json()["error"]["message"]
+    assert "외부에 공개 중" in denied.json()["error"]["message"]
     assert denied.json()["error"]["details"]["core_consumers"]
 
     # **막지는 않는다** — 정말 지워야 할 때가 있고, 확인했다고 말하면 지워진다.
@@ -282,7 +296,7 @@ def test_연_타입은_끄기_전에_못_지운다(client: TestClient, admin: Si
     vendor, _part = _world(client, admin)
     denied = client.delete(f"/api/ontology/types/{vendor}", headers=admin.headers)
     assert denied.status_code == 409
-    assert "먼저 「코어」 를 끄세요" in denied.json()["error"]["message"]
+    assert "먼저 「코어」 를 해제" in denied.json()["error"]["message"]
 
     _open(client, admin, vendor, on=False)
     assert (
@@ -358,3 +372,45 @@ def test_현황은_시스템_관리자만(client: TestClient, member: Signed, ad
         == 403
     )
     assert client.get("/api/ontology/core-status", headers=member.headers).status_code == 403
+
+
+def test_연동_키트에_주소와_공개_타입이_채워진다(client: TestClient, admin: Signed) -> None:
+    """비워 두고 「여기에 주소를 적으십시오」 라고 하면 수신 측이 메일에서 찾아 옮겨 적다가
+    오타를 낸다 — 우리가 아는 값은 우리가 채운다."""
+    import io as _io
+    import zipfile
+
+    vendor, _part = _world(client, admin)
+    got = client.get("/api/ontology/core-kit", headers=admin.headers)
+    assert got.status_code == 200, got.text
+    assert "zip" in got.headers["content-type"]
+
+    bundle = zipfile.ZipFile(_io.BytesIO(got.content))
+    names = set(bundle.namelist())
+    assert names == {
+        "sp-core-client/README.md",
+        "sp-core-client/config.example.ini",
+        "sp-core-client/sp_core_pull.py",
+        "sp-core-client/check.sh",
+    }
+
+    readme = bundle.read("sp-core-client/README.md").decode()
+    config = bundle.read("sp-core-client/config.example.ini").decode()
+    # **API 루트가 들어가야 한다** — 창구 주소(`…/api/core`)를 넣으면 클라이언트가
+    # `/core/core/<타입>` 을 부른다(실측).
+    assert "/api/core" in readme  # 카탈로그 예시
+    assert "base_url = " in config and config.rstrip().endswith("retries = 3")
+    base_line = next(one for one in config.splitlines() if one.startswith("base_url"))
+    assert base_line.strip().endswith("/api"), base_line
+    assert vendor in readme and vendor in config
+    # 자리표시가 남아 있으면 그대로 전달된다 — 받는 쪽은 그것을 주소로 읽는다.
+    assert "{BASE}" not in readme and "{TYPES}" not in config
+
+    # 스크립트는 **그대로 돌아가야 한다** — 문법이 깨진 채로 나가면 상대가 고치게 된다.
+    import ast
+
+    ast.parse(bundle.read("sp-core-client/sp_core_pull.py").decode())
+
+
+def test_키트는_시스템_관리자만(client: TestClient, member: Signed) -> None:
+    assert client.get("/api/ontology/core-kit", headers=member.headers).status_code == 403
