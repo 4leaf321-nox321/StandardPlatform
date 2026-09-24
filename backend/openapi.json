@@ -8653,7 +8653,7 @@
           "ext:caegroup"
         ],
         "summary": "Pair List",
-        "description": "연계 목록. 부서를 안 주면 **내가 속한 부서**의 것만.",
+        "description": "연계 목록 — **부서로 가리지 않는다**(전사 역량은 조직을 가로지르는 물음이다).\n\n부서를 주면 그 부서만 좁혀 본다. 고치는 것은 그 부서 멤버만이다.",
         "operationId": "pair_list_api_ext_caegroup_dt_pairs_get",
         "parameters": [
           {

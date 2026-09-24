@@ -65,10 +65,11 @@ def pair_list(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[PairOut]:
-    """연계 목록. 부서를 안 주면 **내가 속한 부서**의 것만."""
+    """연계 목록 — **부서로 가리지 않는다**(전사 역량은 조직을 가로지르는 물음이다).
+
+    부서를 주면 그 부서만 좁혀 본다. 고치는 것은 그 부서 멤버만이다.
+    """
     chosen = permissions.workspace_by_slug(db, workspace) if workspace else None
-    if chosen is not None:
-        permissions.require_member(db, workspace=chosen, user=user)
     return [PairOut(**one) for one in services.pairs(db, user, workspace=chosen)]
 
 

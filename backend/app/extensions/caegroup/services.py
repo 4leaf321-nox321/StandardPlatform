@@ -196,19 +196,20 @@ def _object_of(
 
 
 def pairs(db: Session, user: User, *, workspace: Workspace | None) -> list[dict[str, Any]]:
-    """연계 목록 — 화면의 왼쪽 표. **이름은 객체에서 온다.**"""
+    """연계 목록 — 화면의 왼쪽 표. **이름은 객체에서 온다.**
+
+    **조회는 부서로 가리지 않는다.** 이 화면이 답하는 물음은 「전사 역량이 지금 어디까지
+    왔나」 이고, 그것은 조직을 가로지른다 — 자기 부서 것만 보이면 그 물음에 아무도 답할 수
+    없다(`shared/permissions.open_owner_clause` 가 같은 까닭으로 있다). 홈 부서로 걸어
+    두었을 때 다른 부서에 등록한 연계가 화면에서 사라졌고, 사람은 그것을 「저장이 안
+    됐다」 로 읽었다(실측 2026-09-24).
+
+    **고치는 것은 부서 멤버만**이다(`link` · `unlink`) — 보는 것과 고치는 것은 다른 물음이다.
+    """
     stmt = select(CaeDtPair)
     if workspace is not None:
+        # 부서를 주면 그 부서만 — 가리는 것이 아니라 좁혀 보는 것이다.
         stmt = stmt.where(CaeDtPair.workspace_id == workspace.id)
-    elif not user.is_system_admin:
-        # 부서를 안 고르면 **내가 속한 부서만.** 시스템 관리자는 전부 본다 —
-        # 목록·조회가 이 플랫폼의 다른 화면과 같은 규칙을 따라야 한다
-        # (`visible_owner_clause`). 안 그러면 관리자가 방금 등록한 연계가 자기
-        # 화면에서 안 보이고, 그때 사람은 저장이 안 된 줄로 읽는다(실측).
-        mine = permissions.my_workspace_ids(db, user)
-        if not mine:
-            return []
-        stmt = stmt.where(CaeDtPair.workspace_id.in_(mine))
     rows = list(db.scalars(stmt))
     wanted = {one.subject_id for one in rows} | {one.agent_id for one in rows}
     names = (

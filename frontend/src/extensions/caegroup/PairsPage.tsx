@@ -13,6 +13,7 @@ import { Link2, Unlink } from 'lucide-react'
 import { useState } from 'react'
 
 import { objectApi } from '@/modules/objects/api'
+import { workspaceApi } from '@/modules/workspaces/api'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isSystemAdmin } from '@/shared/auth/roles'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
@@ -21,6 +22,13 @@ import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
 import { Button } from '@/shared/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/shared/components/ui/select'
 import {
   Table,
   TableBody,
@@ -46,10 +54,15 @@ function groupBySubject(rows: Pair[]): { subject: string; rows: Pair[] }[] {
 
 export default function PairsPage() {
   const { user } = useAuth()
-  const workspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
+  const home = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
+  const [target, setTarget] = useState<string>(home ?? '')
   const setup = useResource(() => dtApi.setupStatus(), [])
   const defs = useResource(() => dtApi.defs(), [])
-  const pairs = useResource(() => dtApi.pairs(workspace ?? undefined), [workspace])
+  const workspaces = useResource(() => workspaceApi.list(true), [])
+  // **목록은 부서로 걸지 않는다.** 홈 부서로 걸어 두었더니 다른 부서에 등록한 연계가
+  // 화면에서 사라졌고, 사람은 그것을 「저장이 안 됐다」 로 읽었다(실측 2026-09-24).
+  // 볼 수 있는 범위는 서버가 판정한다 — 화면이 한 번 더 좁히면 그 사실이 어디에도 안 적힌다.
+  const pairs = useResource(() => dtApi.pairs(), [])
   const [failed, setFailed] = useState<Error | null>(null)
   const [busy, setBusy] = useState(false)
   const [subject, setSubject] = useState<string | null>(null)
@@ -84,11 +97,11 @@ export default function PairsPage() {
   }
 
   async function link() {
-    if (!subject || !agent || !workspace) return
+    if (!subject || !agent || !target) return
     setBusy(true)
     setFailed(null)
     try {
-      await dtApi.link({ subject_id: subject, agent_id: agent, workspace_slug: workspace })
+      await dtApi.link({ subject_id: subject, agent_id: agent, workspace_slug: target })
       setSubject(null)
       setAgent(null)
       pairs.reload()
@@ -114,6 +127,12 @@ export default function PairsPage() {
 
       <ErrorNotice error={failed ?? setup.error ?? pairs.error} />
 
+      {ready && (
+        <p className="text-muted-foreground text-sm">
+          연계 <b className="text-foreground">{pairs.data?.length ?? 0}</b>건
+        </p>
+      )}
+
       {setup.data && !ready && (
         <div className="space-y-3 rounded-md border p-4">
           <p className="text-sm">
@@ -137,7 +156,7 @@ export default function PairsPage() {
         <>
           <section className="space-y-3 rounded-md border p-4">
             <h2 className="text-sm font-semibold">연계 등록</h2>
-            <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
+            <div className="grid gap-3 sm:grid-cols-[1fr_1fr_12rem_auto] sm:items-end">
               <div className="space-y-1">
                 <span className="text-muted-foreground text-xs">{subjectLabel}</span>
                 <SearchablePicker
@@ -166,7 +185,22 @@ export default function PairsPage() {
                   emptyText={`${agentLabel} 이 없습니다 — 해당 타입의 목록 화면에서 먼저 등록합니다.`}
                 />
               </div>
-              <Button onClick={() => void link()} disabled={busy || !subject || !agent}>
+              <div className="space-y-1">
+                <span className="text-muted-foreground text-xs">소속 부서</span>
+                <Select value={target} onValueChange={setTarget}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="부서 선택" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(workspaces.data ?? []).map((one) => (
+                      <SelectItem key={one.slug} value={one.slug}>
+                        {one.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <Button onClick={() => void link()} disabled={busy || !subject || !agent || !target}>
                 <Link2 className="size-4" /> 등록
               </Button>
             </div>

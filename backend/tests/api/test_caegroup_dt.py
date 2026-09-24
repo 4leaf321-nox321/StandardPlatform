@@ -152,6 +152,35 @@ def test_연계를_등록하고_해제한다(client: TestClient, admin: Signed) 
     assert client.get(f"{DT}/pairs", headers=admin.headers).json() == []
 
 
+def test_조회는_부서로_가리지_않는다(
+    client: TestClient, admin: Signed, member: Signed
+) -> None:
+    """**전사 역량은 조직을 가로지르는 물음이다.**
+
+    자기 부서 것만 보이면 「지금 어디까지 왔나」 에 아무도 답할 수 없다. 화면이 홈 부서로
+    걸어 두었을 때 다른 부서에 등록한 연계가 사라졌고, 사람은 그것을 「저장이 안 됐다」 로
+    읽었다(실측 2026-09-24). **고치는 것은 부서 멤버만**이라 권한은 그대로다.
+    """
+    _setup(client, admin)
+    subject = _make_object(client, admin, "sim_test_item", label="진동 시험")
+    agent = _make_object(client, admin, "sim_analysis", label="진동 해석")
+    made = client.post(
+        f"{DT}/pairs",
+        json={
+            "subject_id": subject["id"],
+            "agent_id": agent["id"],
+            "workspace_slug": admin.workspace,
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+
+    # 같은 부서 멤버가 아니어도 목록에는 뜬다.
+    seen = client.get(f"{DT}/pairs", headers=member.headers)
+    assert seen.status_code == 200
+    assert made.json()["id"] in [one["id"] for one in seen.json()]
+
+
 def test_다른_타입의_객체는_등록되지_않는다(client: TestClient, admin: Signed) -> None:
     """대상 자리에 시뮬레이션을 등록하면 화면이 그 줄을 그릴 수 없다 — 이름도 속성도 다르다."""
     _setup(client, admin)
