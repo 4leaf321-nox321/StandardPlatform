@@ -1,7 +1,7 @@
 """디지털 트윈 역량 — 기준 정보 설정과 연계.
 
 **기준 정보는 온톨로지가 들고 있다.** 이 확장이 하는 일은 「어느 타입을 시험 항목 ·
-시뮬레이션으로 쓸지」 를 기억하고, 없으면 만들어 주고, 그 객체들을 **연계**로 잇는 것이다.
+시뮬레이션으로 쓸지」 를 기억하고, 없으면 만들어 주고, 그 객체들의 **연계**를 등록하는 것이다.
 """
 
 from __future__ import annotations
@@ -33,10 +33,10 @@ SETUP_SCHEMA: dict[str, Any] = {
             "slug": SUBJECT_SLUG,
             "label": "시험 항목",
             "icon": "ClipboardCheck",
-            "description": "디지털 트윈 역량의 대상 — 이 시험을 시뮬레이션이 어디까지 보나.",
+            "description": "디지털 트윈 역량 평가의 대상 — 시뮬레이션이 대신 확인하는 시험.",
             "key_policy": "optional",
             "properties": [
-                {"key": "detail", "label": "세부", "data_type": "text"},
+                {"key": "detail", "label": "세부 내용", "data_type": "text"},
                 {
                     "key": "product_families",
                     "label": "제품군",
@@ -57,7 +57,7 @@ SETUP_SCHEMA: dict[str, Any] = {
                     "data_type": "enum",
                     "multi": True,
                     "enum_options": ["선행 검토", "DV", "PV", "양산"],
-                    "help": "사업부마다 말이 다르다 — 여기서 고쳐 쓴다.",
+                    "help": "사업부별로 명칭이 다릅니다 — 이 목록을 수정하여 사용합니다.",
                 },
                 {
                     "key": "accuracy_rule",
@@ -73,16 +73,16 @@ SETUP_SCHEMA: dict[str, Any] = {
             "slug": AGENT_SLUG,
             "label": "시뮬레이션",
             "icon": "Wrench",
-            "description": "디지털 트윈 역량의 수단 — 시험을 대신 보는 해석 · 도구.",
+            "description": "디지털 트윈 역량 평가의 수단 — 시험을 대신하는 해석 · 도구.",
             "key_policy": "optional",
             "properties": [
-                {"key": "kind", "label": "종류", "data_type": "text"},
+                {"key": "kind", "label": "시뮬레이션 종류", "data_type": "text"},
                 {
                     "key": "model_kind",
                     "label": "모델 종류",
                     "data_type": "enum",
                     "enum_options": ["물리 기반", "데이터 기반", "하이브리드"],
-                    "help": "데이터 기반은 부문이 아니라 이 속성이다 — 그래야 나란히 센다.",
+                    "help": "동일 기준 집계를 위해 속성으로 관리합니다.",
                 },
             ],
         },
@@ -129,7 +129,7 @@ def setup(db: Session, user: User) -> dict[str, Any]:
     plan = importer.apply(db, SETUP_SCHEMA)
     if plan.errors:
         raise Conflict(
-            code("CAEGROUP", 1), "기준 정보를 만들 수 없습니다: " + "; ".join(plan.errors)
+            code("CAEGROUP", 1), "기준 정보 생성에 실패했습니다: " + "; ".join(plan.errors)
         )
     row = setting(db)
     row.subject_type_slug = SUBJECT_SLUG
@@ -211,11 +211,11 @@ def link(
     agent_id: uuid.UUID,
     workspace: Workspace,
 ) -> CaeDtPair:
-    """연계를 잇는다 — **부서 멤버만.**"""
+    """연계 등록 — **부서 멤버만.**"""
     permissions.require_member(db, workspace=workspace, user=user)
     ready = status(db)
     if not ready["ready"]:
-        raise Conflict(code("CAEGROUP", 4), "먼저 기준 정보를 설정하세요.")
+        raise Conflict(code("CAEGROUP", 4), "기준 정보 설정이 필요합니다.")
     _object_of(db, subject_id, type_slug=str(ready["subject_type_slug"]), what="시험 항목")
     _object_of(db, agent_id, type_slug=str(ready["agent_type_slug"]), what="시뮬레이션")
     if db.scalar(
@@ -223,7 +223,7 @@ def link(
             CaeDtPair.subject_id == subject_id, CaeDtPair.agent_id == agent_id
         )
     ):
-        raise Conflict(code("CAEGROUP", 5), "이미 이어진 연계입니다.")
+        raise Conflict(code("CAEGROUP", 5), "이미 등록된 연계입니다.")
     row = CaeDtPair(
         workspace_id=workspace.id,
         subject_id=subject_id,
@@ -247,7 +247,7 @@ def link(
 
 
 def unlink(db: Session, user: User, *, pair_id: uuid.UUID) -> None:
-    """연계를 끊는다. **평가도 함께 간다** — 화면이 그 수를 확인 문구에 넣는다(2단계)."""
+    """연계 해제. **평가도 함께 삭제된다** — 화면이 그 수를 확인 문구에 넣는다(2단계)."""
     row = db.get(CaeDtPair, pair_id)
     if row is None:
         raise NotFound(code("CAEGROUP", 6), "연계를 찾을 수 없습니다.")

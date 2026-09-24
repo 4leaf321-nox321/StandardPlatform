@@ -12,7 +12,7 @@ export default function StaffPage() {
     <Placeholder
       title="인력"
       phase="4단계"
-      description="사람 줄과 FTE 가 이 자리에 섭니다. 투입률은 받지 않습니다 — 한 사람은 1.0 이고 몫은 1/n 으로 갈립니다."
+      description="인력 현황과 FTE 를 제공할 예정입니다. 투입률은 입력하지 않습니다 — 1인은 1.0 이며, n 개 항목에 배정된 경우 각 1/n 으로 산정됩니다."
     />
   )
 }

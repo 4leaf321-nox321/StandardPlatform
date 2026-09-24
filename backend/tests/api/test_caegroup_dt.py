@@ -1,7 +1,7 @@
 """확장 `caegroup` — 디지털 트윈 역량의 1단계(기준 정보와 연계).
 
 여기서 지키는 것: **확장을 켜야 보인다** · 정의를 화면이 받아 간다 · 기준 정보는 시스템
-관리자가 만든다 · 같은 짝을 두 번 잇지 못한다 · 다른 타입의 객체는 못 잇는다.
+관리자가 만든다 · 같은 조합을 두 번 등록하지 못한다 · 다른 타입의 객체는 등록되지 않는다.
 """
 
 from __future__ import annotations
@@ -95,7 +95,7 @@ def test_기준_정보는_시스템_관리자가_만든다(
     assert _setup(client, admin)["ready"] is True
 
 
-def test_연계를_잇고_끊는다(client: TestClient, admin: Signed) -> None:
+def test_연계를_등록하고_해제한다(client: TestClient, admin: Signed) -> None:
     _setup(client, admin)
     subject = _make_object(client, admin, "sim_test_item", label="낙하 시험")
     agent = _make_object(client, admin, "sim_tool", label="낙하 해석")
@@ -116,7 +116,7 @@ def test_연계를_잇고_끊는다(client: TestClient, admin: Signed) -> None:
     rows = client.get(f"{DT}/pairs", headers=admin.headers).json()
     assert [one["id"] for one in rows] == [made.json()["id"]]
 
-    # **같은 짝이 둘이면 평가가 갈린다** — 어느 쪽이 참인지 화면이 답할 수 없다.
+    # **같은 조합이 둘이면 평가가 갈린다** — 어느 쪽이 참인지 화면이 답할 수 없다.
     again = client.post(
         f"{DT}/pairs",
         json={
@@ -133,8 +133,8 @@ def test_연계를_잇고_끊는다(client: TestClient, admin: Signed) -> None:
     assert client.get(f"{DT}/pairs", headers=admin.headers).json() == []
 
 
-def test_다른_타입의_객체는_못_잇는다(client: TestClient, admin: Signed) -> None:
-    """대상 자리에 시뮬레이션을 넣으면 화면이 그 줄을 못 그린다 — 이름도 속성도 다르다."""
+def test_다른_타입의_객체는_등록되지_않는다(client: TestClient, admin: Signed) -> None:
+    """대상 자리에 시뮬레이션을 등록하면 화면이 그 줄을 그릴 수 없다 — 이름도 속성도 다르다."""
     _setup(client, admin)
     agent = _make_object(client, admin, "sim_tool", label="열 해석")
     got = client.post(
@@ -150,8 +150,8 @@ def test_다른_타입의_객체는_못_잇는다(client: TestClient, admin: Sig
     assert "타입이 설정과 다릅니다" in got.json()["error"]["message"]
 
 
-def test_기준_정보_없이는_못_잇는다(client: TestClient, admin: Signed) -> None:
-    """먼저 무엇이 시험 항목인지 정해야 한다 — 안 정하고 이으면 아무 객체나 들어온다."""
+def test_기준_정보_없이는_등록되지_않는다(client: TestClient, admin: Signed) -> None:
+    """무엇이 시험 항목인지 먼저 정해야 한다 — 안 정하면 아무 객체나 등록된다."""
     got = client.post(
         f"{DT}/pairs",
         json={

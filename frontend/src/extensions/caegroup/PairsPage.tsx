@@ -1,12 +1,12 @@
 /**
- * 디지털 트윈 › 역량 — **연계(시험 항목과 시뮬레이션의 짝)를 잇는 자리.**
+ * 디지털 트윈 › 역량 — **연계(시험 항목과 시뮬레이션의 조합)를 등록하고 평가하는 화면.**
  *
- * 1단계는 여기까지다: 기준 정보가 준비됐나 · 지금 어떤 짝이 있나 · 잇기 · 끊기.
+ * 1단계의 범위: 기준 정보 준비 상태 · 연계 목록 · 연계 등록 · 연계 해제.
  * 축 다섯을 매기는 오른쪽 판은 2단계에서 이 화면에 붙는다.
  *
  * ⚠️ **시험 칸은 같은 것끼리 합친다.** 한 시험을 여러 시뮬레이션이 보는 일이 흔해서, 안
  *    합치면 같은 이름이 열 줄 반복되고 「이 시험에 몇 개가 걸렸나」 가 안 읽힌다.
- * ⚠️ **끊으면 평가·이력이 같이 간다**(2단계부터). 확인 문구가 그 사실을 말한다.
+ * ⚠️ **연계를 해제하면 평가·이력이 함께 삭제된다**(2단계부터). 확인 문구가 그 사실을 말한다.
  */
 
 import { Link2, Unlink } from 'lucide-react'
@@ -107,7 +107,7 @@ export default function PairsPage() {
     <div className="space-y-6">
       <PageHeader
         title="역량"
-        description={`${subjectLabel}과 ${agentLabel}의 짝(연계)마다 수준을 매깁니다. 축은 ${
+        description={`${subjectLabel} · ${agentLabel} 연계별로 수준을 평가합니다. 평가 축은 ${
           defs.data?.axes.map((one) => one.label).join(' · ') ?? '…'
         } 입니다.`}
       />
@@ -117,17 +117,17 @@ export default function PairsPage() {
       {setup.data && !ready && (
         <div className="space-y-3 rounded-md border p-4">
           <p className="text-sm">
-            먼저 <b>기준 정보</b>를 정합니다 — 어느 온톨로지 타입을 {subjectLabel} ·{' '}
-            {agentLabel} 으로 쓸지입니다. 만들면 그 타입의 목록 · 일괄 입력 · 내보내기 화면이
-            바로 생깁니다.
+            <b>기준 정보 설정</b>이 필요합니다 — {subjectLabel} · {agentLabel} 으로 사용할
+            온톨로지 타입을 지정합니다. 생성 후에는 해당 타입의 목록 · 일괄 입력 · 내보내기
+            화면을 즉시 사용할 수 있습니다.
           </p>
           {isSystemAdmin(user) ? (
             <Button onClick={() => void makeSetup()} disabled={busy}>
-              기준 정보 만들기
+              기준 정보 생성
             </Button>
           ) : (
             <p className="text-muted-foreground text-sm">
-              시스템 관리자가 한 번 만들어야 합니다 — 온톨로지 정의를 바꾸는 일입니다.
+              시스템 관리자의 1회 생성이 필요합니다 — 온톨로지 정의 변경에 해당합니다.
             </p>
           )}
         </div>
@@ -136,7 +136,7 @@ export default function PairsPage() {
       {ready && (
         <>
           <section className="space-y-3 rounded-md border p-4">
-            <h2 className="text-sm font-semibold">잇기</h2>
+            <h2 className="text-sm font-semibold">연계 등록</h2>
             <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
               <div className="space-y-1">
                 <span className="text-muted-foreground text-xs">{subjectLabel}</span>
@@ -148,8 +148,8 @@ export default function PairsPage() {
                   }))}
                   value={subject}
                   onChange={setSubject}
-                  placeholder={`${subjectLabel} 고르기`}
-                  emptyText={`${subjectLabel} 이 없습니다 — 먼저 목록 화면에서 넣습니다.`}
+                  placeholder={`${subjectLabel} 선택`}
+                  emptyText={`${subjectLabel} 이 없습니다 — 해당 타입의 목록 화면에서 먼저 등록합니다.`}
                 />
               </div>
               <div className="space-y-1">
@@ -162,20 +162,20 @@ export default function PairsPage() {
                   }))}
                   value={agent}
                   onChange={setAgent}
-                  placeholder={`${agentLabel} 고르기`}
-                  emptyText={`${agentLabel} 이 없습니다 — 먼저 목록 화면에서 넣습니다.`}
+                  placeholder={`${agentLabel} 선택`}
+                  emptyText={`${agentLabel} 이 없습니다 — 해당 타입의 목록 화면에서 먼저 등록합니다.`}
                 />
               </div>
               <Button onClick={() => void link()} disabled={busy || !subject || !agent}>
-                <Link2 className="size-4" /> 잇기
+                <Link2 className="size-4" /> 등록
               </Button>
             </div>
           </section>
 
           {groups.length === 0 ? (
             <EmptyState
-              title="이어진 연계가 없습니다"
-              hint={`${subjectLabel}과 ${agentLabel}을 골라 잇습니다. 평가는 연계마다 매깁니다.`}
+              title="등록된 연계가 없습니다"
+              hint={`${subjectLabel}과 ${agentLabel}을 선택하여 연계를 등록합니다. 평가는 연계 단위로 수행합니다.`}
             />
           ) : (
             <Table>
@@ -201,7 +201,7 @@ export default function PairsPage() {
                       <TableCell>{row.agent_label}</TableCell>
                       <TableCell className="text-right">
                         <Button variant="ghost" size="sm" onClick={() => setUnlinking(row)}>
-                          <Unlink className="size-4" /> 끊기
+                          <Unlink className="size-4" /> 해제
                         </Button>
                       </TableCell>
                     </TableRow>
@@ -215,21 +215,21 @@ export default function PairsPage() {
 
       <ConfirmDialog
         open={unlinking !== null}
-        title="연계를 끊습니까?"
+        title="연계를 해제하시겠습니까?"
         description={
           unlinking ? (
             <>
               <b>
                 {unlinking.subject_label} · {unlinking.agent_label}
               </b>{' '}
-              의 연결을 끊습니다. 이 연계에 매긴 평가와 이력도 함께 사라집니다.
+              연계를 해제합니다. 해당 연계의 평가와 변경 이력도 함께 삭제됩니다.
             </>
           ) : (
             ''
           )
         }
         destructive
-        confirmLabel="끊기"
+        confirmLabel="해제"
         onConfirm={async () => {
           if (!unlinking) return
           await dtApi.unlink(unlinking.id)

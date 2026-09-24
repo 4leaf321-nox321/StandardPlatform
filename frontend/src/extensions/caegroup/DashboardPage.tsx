@@ -12,7 +12,7 @@ export default function DashboardPage() {
     <Placeholder
       title="대시보드"
       phase="3단계"
-      description="축마다의 타일 · 분포 · 커버리지가 이 자리에 섭니다. 먼저 「역량」 에서 연계를 잇고 평가를 채웁니다."
+      description="축별 타일 · 분포 · 평가 완료율을 제공할 예정입니다. 「역량」 화면에서 연계 등록과 평가 입력을 먼저 수행합니다."
     />
   )
 }

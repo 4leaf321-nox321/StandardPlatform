@@ -12,7 +12,7 @@ export default function InfraPage() {
     <Placeholder
       title="인프라"
       phase="4단계"
-      description="S/W 라이선스 · 계산 자원 · 물성이 이 자리에 섭니다. 전사 공유 자원은 합계에서 한 번만 셉니다."
+      description="S/W 라이선스 · 계산 자원 · 물성 정보를 제공할 예정입니다. 전사 공유 자원은 전사 합계에서 1회만 집계합니다."
     />
   )
 }
