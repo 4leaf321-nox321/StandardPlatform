@@ -8740,6 +8740,90 @@
         }
       }
     },
+    "/api/ext/caegroup/dt/pairs/bulk-move": {
+      "post": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Pair Bulk Move",
+        "description": "고른 연계를 한 부서로 옮긴다 — 권한은 **건마다** 본다.",
+        "operationId": "pair_bulk_move_api_ext_caegroup_dt_pairs_bulk_move_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairBulkIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairBulkOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/pairs/bulk-unlink": {
+      "post": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Pair Bulk Unlink",
+        "description": "고른 연계를 해제한다 — **평가와 이력도 함께 간다.**",
+        "operationId": "pair_bulk_unlink_api_ext_caegroup_dt_pairs_bulk_unlink_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairBulkIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairBulkOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ext/caegroup/dt/pairs/{pair_id}": {
       "patch": {
         "tags": [
@@ -8882,7 +8966,7 @@
           "ext:caegroup"
         ],
         "summary": "Assessment Save",
-        "description": "평가를 적는다 — **그 부서 멤버만.**\n\n근거는 필수이고, 근거 등급이 「확인」 · 「검증」 이면 근거 자료도 필수다. 가상검증률의\n수준은 값이 정한다(보낸 수준은 무시한다).",
+        "description": "평가를 적는다 — **그 부서 멤버만.**\n\n**근거(글)는 필수다.** 가상검증률의 수준은 값이 정한다(보낸 수준은 무시한다).",
         "operationId": "assessment_save_api_ext_caegroup_dt_pairs__pair_id__assessments__axis__put",
         "parameters": [
           {
@@ -9417,21 +9501,11 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Evidence"
-          },
-          "evidence_tier": {
-            "type": "string",
-            "title": "Evidence Tier"
-          },
-          "evidence_ref": {
-            "type": "string",
-            "title": "Evidence Ref",
-            "default": ""
           }
         },
         "type": "object",
         "required": [
-          "note",
-          "evidence_tier"
+          "note"
         ],
         "title": "AssessmentIn",
         "description": "평가를 적을 때 보내는 것.\n\n**수준(`rung`)은 수치형 축에서 보내지 않는다** — 값이 정한다. 보내도 서버가 무시한다."
@@ -9490,14 +9564,6 @@
             "type": "object",
             "title": "Evidence"
           },
-          "evidence_tier": {
-            "type": "string",
-            "title": "Evidence Tier"
-          },
-          "evidence_ref": {
-            "type": "string",
-            "title": "Evidence Ref"
-          },
           "assessed_at": {
             "type": "string",
             "format": "date-time",
@@ -9517,8 +9583,6 @@
           "defects",
           "note",
           "evidence",
-          "evidence_tier",
-          "evidence_ref",
           "assessed_at",
           "assessed_by_label"
         ],
@@ -11407,14 +11471,6 @@
             "type": "array",
             "title": "Axes"
           },
-          "evidence_tiers": {
-            "items": {
-              "additionalProperties": true,
-              "type": "object"
-            },
-            "type": "array",
-            "title": "Evidence Tiers"
-          },
           "accuracy_thresholds": {
             "items": {
               "additionalProperties": true,
@@ -11441,7 +11497,6 @@
           "subject_label",
           "agent_label",
           "axes",
-          "evidence_tiers",
           "accuracy_thresholds",
           "accuracy_rules"
         ],
@@ -14504,6 +14559,49 @@
         ],
         "title": "Page[ObjectOut]"
       },
+      "PairBulkIn": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Ids"
+          },
+          "workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Slug"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "PairBulkIn",
+        "description": "목록에서 고른 것들에 같은 일을 한다 — 서른 건을 서른 번 누르게 하지 않는다."
+      },
+      "PairBulkOut": {
+        "properties": {
+          "changed": {
+            "type": "integer",
+            "title": "Changed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "changed"
+        ],
+        "title": "PairBulkOut"
+      },
       "PairIn": {
         "properties": {
           "subject_id": {
@@ -14582,6 +14680,10 @@
             ],
             "title": "Agent Dept"
           },
+          "assessed": {
+            "type": "integer",
+            "title": "Assessed"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -14599,6 +14701,7 @@
           "agent_label",
           "agent_tools",
           "agent_dept",
+          "assessed",
           "created_at"
         ],
         "title": "PairOut"

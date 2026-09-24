@@ -20,6 +20,8 @@ from app.extensions.caegroup.schemas import (
     CoverageOut,
     DefsOut,
     HistoryOut,
+    PairBulkIn,
+    PairBulkOut,
     PairIn,
     PairOut,
     PairPatchIn,
@@ -28,6 +30,7 @@ from app.extensions.caegroup.schemas import (
 from app.modules.accounts.models import User
 from app.shared import permissions
 from app.shared.auth import current_user, require_system_admin
+from app.shared.errors import Conflict, code
 
 router = APIRouter(prefix="/ext/caegroup/dt", tags=["ext:caegroup"])
 
@@ -44,7 +47,6 @@ def defs(_: User = Depends(current_user)) -> DefsOut:
         subject_label=D.SUBJECT_LABEL,
         agent_label=D.AGENT_LABEL,
         axes=D.AXES,
-        evidence_tiers=D.EVIDENCE_TIERS,
         accuracy_thresholds=D.ACCURACY_THRESHOLDS,
         accuracy_rules=D.ACCURACY_RULES,
     )
@@ -97,6 +99,27 @@ def pair_create(
     return PairOut(**found[0])
 
 
+@router.post("/pairs/bulk-move", response_model=PairBulkOut)
+def pair_bulk_move(
+    payload: PairBulkIn, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> PairBulkOut:
+    """고른 연계를 한 부서로 옮긴다 — 권한은 **건마다** 본다."""
+    if not payload.workspace_slug:
+        raise Conflict(code("CAEGROUP", 17), "옮길 부서를 고르세요.")
+    workspace = permissions.workspace_by_slug(db, payload.workspace_slug)
+    return PairBulkOut(
+        changed=services.bulk_move(db, user, pair_ids=payload.ids, workspace=workspace)
+    )
+
+
+@router.post("/pairs/bulk-unlink", response_model=PairBulkOut)
+def pair_bulk_unlink(
+    payload: PairBulkIn, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> PairBulkOut:
+    """고른 연계를 해제한다 — **평가와 이력도 함께 간다.**"""
+    return PairBulkOut(changed=services.bulk_unlink(db, user, pair_ids=payload.ids))
+
+
 @router.patch("/pairs/{pair_id}", response_model=PairOut)
 def pair_update(
     pair_id: uuid.UUID,
@@ -143,8 +166,7 @@ def assessment_save(
 ) -> AssessmentOut:
     """평가를 적는다 — **그 부서 멤버만.**
 
-    근거는 필수이고, 근거 등급이 「확인」 · 「검증」 이면 근거 자료도 필수다. 가상검증률의
-    수준은 값이 정한다(보낸 수준은 무시한다).
+    **근거(글)는 필수다.** 가상검증률의 수준은 값이 정한다(보낸 수준은 무시한다).
     """
     return AssessmentOut(
         **services.save_assessment(

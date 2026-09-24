@@ -296,6 +296,7 @@ def pairs(db: Session, user: User, *, workspace: Workspace | None) -> list[dict[
             select(Workspace).where(Workspace.id.in_({one.workspace_id for one in rows}))
         )
     }
+    counts = assessed_counts(db, pair_ids=[one.id for one in rows])
     out: list[dict[str, Any]] = []
     for one in rows:
         subject = names.get(one.subject_id)
@@ -317,6 +318,7 @@ def pairs(db: Session, user: User, *, workspace: Workspace | None) -> list[dict[
                     (ref_names.get(str(value)) for value in _as_list(props.get("owner_dept"))),
                     None,
                 ),
+                "assessed": counts.get(one.id, 0),
                 "created_at": one.created_at,
             }
         )
@@ -402,6 +404,50 @@ def move(db: Session, user: User, *, pair_id: uuid.UUID, workspace: Workspace) -
     return row
 
 
+def bulk_move(
+    db: Session, user: User, *, pair_ids: list[uuid.UUID], workspace: Workspace
+) -> int:
+    """고른 연계를 한 부서로 옮긴다 — **한 건씩 같은 규칙으로.**
+
+    목록에서 서른 건을 고른 사람에게 서른 번을 누르게 하지 않는다. 다만 권한은 건마다
+    본다 — 「여럿이라서 한 번에 통과」 가 되면 그 예외가 곧 규칙이 된다.
+    """
+    moved = 0
+    for one in pair_ids:
+        before = db.get(CaeDtPair, one)
+        if before is None or before.workspace_id == workspace.id:
+            continue
+        move(db, user, pair_id=one, workspace=workspace)
+        moved += 1
+    return moved
+
+
+def bulk_unlink(db: Session, user: User, *, pair_ids: list[uuid.UUID]) -> int:
+    """고른 연계를 해제한다.
+
+    **평가와 이력도 함께 간다** — 화면이 그 수를 확인 문구에 넣는다.
+    """
+    gone = 0
+    for one in pair_ids:
+        if db.get(CaeDtPair, one) is None:
+            continue
+        unlink(db, user, pair_id=one)
+        gone += 1
+    return gone
+
+
+def assessed_counts(db: Session, *, pair_ids: list[uuid.UUID]) -> dict[uuid.UUID, int]:
+    """연계마다 **몇 개 축을 매겼나** — 목록이 「어디까지 채웠나」 를 바로 보여 준다."""
+    if not pair_ids:
+        return {}
+    rows = db.execute(
+        select(CaeDtAssessment.pair_id, func.count())
+        .where(CaeDtAssessment.pair_id.in_(pair_ids))
+        .group_by(CaeDtAssessment.pair_id)
+    )
+    return {one: int(count) for one, count in rows}
+
+
 def unlink(db: Session, user: User, *, pair_id: uuid.UUID) -> None:
     """연계 해제. **평가도 함께 삭제된다** — 화면이 그 수를 확인 문구에 넣는다(2단계)."""
     row = db.get(CaeDtPair, pair_id)
@@ -450,8 +496,6 @@ def _out(row: CaeDtAssessment) -> dict[str, Any]:
         "defects": dict(row.defects or {}),
         "note": row.note,
         "evidence": dict(row.evidence or {}),
-        "evidence_tier": row.evidence_tier,
-        "evidence_ref": row.evidence_ref,
         "assessed_at": row.assessed_at,
         "assessed_by_label": row.assessed_by_label,
     }
@@ -494,25 +538,19 @@ def history(db: Session, *, pair_id: uuid.UUID, limit: int = 50) -> list[dict[st
     ]
 
 
-def _check_evidence(axis: dict[str, Any], payload: dict[str, Any]) -> None:
-    """근거 규칙 — 축 종류와 무관하게 같다."""
+def _check_note(axis: dict[str, Any], payload: dict[str, Any]) -> str:
+    """근거 — **비우면 저장하지 않는다.**
+
+    수준만 남은 평가는 다음 사람이 확인할 방법이 없다. 「누가 언젠가 그렇게 봤다」 는 말과
+    같아지고, 그 숫자는 다음 회차에 아무도 못 고친다.
+
+    등급 · 자료 칸은 두었다가 걷었다(2026-09-24) — 칸이 늘수록 채우는 사람이 줄고, 안 채운
+    칸은 「모름」 과 구별되지 않는다. 무엇을 보고 매겼는지는 이 글에 적는다.
+    """
     note = str(payload.get("note") or "").strip()
     if not note:
-        # **근거 없는 평가는 다음 사람이 확인할 수 없다.** 수준만 남으면 그 숫자는
-        # 「누가 언젠가 그렇게 봤다」 는 말과 같아진다.
         raise Conflict(code("CAEGROUP", 9), f"{axis['label']}: 근거를 적어야 저장됩니다.")
-    tier = str(payload.get("evidence_tier") or "")
-    if tier not in D.TIER_KEYS:
-        raise Conflict(
-            code("CAEGROUP", 10), f"{axis['label']}: 근거 등급을 고르세요(진술 · 확인 · 검증)."
-        )
-    if tier in D.TIERS_NEEDING_REF and not str(payload.get("evidence_ref") or "").strip():
-        named = {one["key"]: one["label"] for one in D.EVIDENCE_TIERS}[tier]
-        raise Conflict(
-            code("CAEGROUP", 11),
-            f"{axis['label']}: 「{named}」 은 근거 자료가 필요합니다"
-            "(문서번호 · 파일명 · 화면 경로).",
-        )
+    return note
 
 
 def _apply_axis(
@@ -591,7 +629,7 @@ def save_assessment(
         raise NotFound(code("CAEGROUP", 7), "부서를 찾을 수 없습니다.")
     permissions.require_member(db, workspace=workspace, user=user)
     axis = _axis_or_404(axis_key)
-    _check_evidence(axis, payload)
+    note = _check_note(axis, payload)
 
     row = db.scalar(
         select(CaeDtAssessment).where(
@@ -603,10 +641,8 @@ def save_assessment(
         row = CaeDtAssessment(pair_id=pair_id, axis=axis_key)
         db.add(row)
     _apply_axis(axis, row, payload, defect_types=_defect_types(db, pair))
-    row.note = str(payload["note"]).strip()
+    row.note = note
     row.evidence = dict(payload.get("evidence") or {})
-    row.evidence_tier = str(payload["evidence_tier"])
-    row.evidence_ref = str(payload.get("evidence_ref") or "").strip()
     row.assessed_by_id = user.id
     row.assessed_by_label = user.display_name or user.email
     db.flush()
@@ -628,7 +664,7 @@ def save_assessment(
         target_id=row.id,
         target_label=f"{pair_id} · {axis_key}",
         workspace_id=pair.workspace_id,
-        changes={"axis": axis_key, "new": fresh, "tier": row.evidence_tier},
+        changes={"axis": axis_key, "new": fresh},
     )
     db.commit()
     db.refresh(row)
@@ -644,8 +680,6 @@ def _history_snapshot(row: CaeDtAssessment) -> dict[str, Any]:
         "defects": dict(row.defects or {}),
         "note": row.note,
         "evidence": dict(row.evidence or {}),
-        "evidence_tier": row.evidence_tier,
-        "evidence_ref": row.evidence_ref,
     }
 
 

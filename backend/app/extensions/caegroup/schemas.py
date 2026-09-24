@@ -28,7 +28,6 @@ class DefsOut(BaseModel):
     subject_label: str
     agent_label: str
     axes: list[dict[str, Any]]
-    evidence_tiers: list[dict[str, Any]]
     accuracy_thresholds: list[dict[str, Any]]
     accuracy_rules: list[dict[str, str]]
 
@@ -44,6 +43,8 @@ class PairOut(BaseModel):
     agent_tools: list[str]
     """해석이 쓰는 도구 이름 — 목록에서 「무엇으로 보나」 가 바로 읽히게."""
     agent_dept: str | None
+    assessed: int
+    """매긴 축 수 — 목록에서 「어디까지 채웠나」 가 바로 읽히게."""
     created_at: datetime
 
 
@@ -64,8 +65,6 @@ class AssessmentOut(BaseModel):
     defects: dict[str, dict[str, str]]
     note: str
     evidence: dict[str, Any]
-    evidence_tier: str
-    evidence_ref: str
     assessed_at: datetime
     assessed_by_label: str
 
@@ -83,8 +82,6 @@ class AssessmentIn(BaseModel):
     note: str
     """근거 — **비우면 저장되지 않는다.**"""
     evidence: dict[str, Any] = Field(default_factory=dict)
-    evidence_tier: str
-    evidence_ref: str = ""
 
 
 class PairPatchIn(BaseModel):
@@ -116,3 +113,15 @@ class CoverageOut(BaseModel):
 
     pairs: int
     axes: list[CoverageAxisOut]
+
+
+class PairBulkIn(BaseModel):
+    """목록에서 고른 것들에 같은 일을 한다 — 서른 건을 서른 번 누르게 하지 않는다."""
+
+    ids: list[uuid.UUID] = Field(min_length=1)
+    workspace_slug: str | None = None
+    """옮기기일 때만 준다."""
+
+
+class PairBulkOut(BaseModel):
+    changed: int

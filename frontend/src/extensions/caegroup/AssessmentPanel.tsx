@@ -10,8 +10,9 @@
  *   매트릭스(모델링 수준)    바탕 토글(형상 · 거동) + 불량 유형마다 시험 · 시장 재현
  *                           — **수준은 셈이 접는다**(사람이 고르지 않는다)
  *
- * ⚠️ 근거는 필수다. 근거 등급이 「확인」 · 「검증」 이면 근거 자료도 필수다 — 등급만 받고
- *    자료를 안 받으면 「검증」 이 말뿐이 된다. **서버가 같은 규칙으로 한 번 더 막는다.**
+ * ⚠️ **근거(글)는 필수다.** 수준만 남은 평가는 다음 사람이 확인할 방법이 없다. 등급 · 자료
+ *    칸을 두었다가 걷었다(2026-09-24) — 칸이 늘수록 채우는 사람이 줄고, 안 채운 칸은
+ *    「모름」 과 구별되지 않는다. 서버가 같은 규칙으로 한 번 더 막는다.
  */
 
 import { Check, History } from 'lucide-react'
@@ -87,7 +88,7 @@ export function AssessmentPanel({ pair, defs, defectTypes, onSaved }: Props) {
                 )}
                 {one && (
                   <span className="text-muted-foreground ml-auto text-xs">
-                    {tierLabel(defs, one.evidence_tier)} · {shownDateTime(one.assessed_at)}
+                    {one.assessed_by_label} · {shownDateTime(one.assessed_at)}
                   </span>
                 )}
               </button>
@@ -139,10 +140,6 @@ export function AssessmentPanel({ pair, defs, defectTypes, onSaved }: Props) {
   )
 }
 
-function tierLabel(defs: Defs, key: string): string {
-  return defs.evidence_tiers.find((one) => one.key === key)?.label ?? key
-}
-
 /** 접힌 줄에 한눈에 보일 한 마디. */
 function summary(axis: AxisDef, one: Assessment, defs: Defs): string {
   if (axis.kind === 'value') {
@@ -185,12 +182,9 @@ function AxisForm({
     current?.defects ?? {},
   )
   const [note, setNote] = useState(current?.note ?? '')
-  const [tier, setTier] = useState(current?.evidence_tier ?? 'stated')
-  const [ref, setRef] = useState(current?.evidence_ref ?? '')
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState<Error | null>(null)
 
-  const needsRef = defs.evidence_tiers.find((one) => one.key === tier)?.needs_ref ?? false
   // 「수동」 처럼 아무것도 안 켠 상태를 뜻하는 칸은 목록에서 뺀다(정의의 `hide_empty`).
   const options = axis.hide_empty ? axis.rungs.slice(1) : axis.rungs
 
@@ -200,8 +194,6 @@ function AxisForm({
     try {
       const body: AssessmentBody = {
         note,
-        evidence_tier: tier,
-        evidence_ref: ref,
         ...(axis.kind === 'value' ? { value: value === '' ? null : Number(value) } : {}),
         ...(axis.kind === 'rung' ? { rung } : {}),
         ...(axis.kind === 'set' ? { rungs } : {}),
@@ -379,31 +371,15 @@ function AxisForm({
           근거 <b>(필수)</b>
           {axis.evidence_label && ` — ${axis.evidence_label}`}
         </span>
-        <Textarea value={note} onChange={(event) => setNote(event.target.value)} rows={2} />
+        <Textarea
+          value={note}
+          onChange={(event) => setNote(event.target.value)}
+          rows={2}
+          placeholder="무엇을 보고 이렇게 매겼는지 적습니다 — 비교 건수 · 문서번호 · 확인한 화면."
+        />
       </div>
 
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="space-y-1">
-          <span className="text-muted-foreground text-xs">근거 등급</span>
-          <div className="flex gap-3">
-            {defs.evidence_tiers.map((one) => (
-              <label key={one.key} className="flex items-center gap-1 text-sm">
-                <input type="radio" checked={tier === one.key} onChange={() => setTier(one.key)} />
-                {one.label}
-              </label>
-            ))}
-          </div>
-        </div>
-        <div className="min-w-56 flex-1 space-y-1">
-          <span className="text-muted-foreground text-xs">
-            근거 자료{needsRef && <b> (필수)</b>}
-          </span>
-          <Input
-            value={ref}
-            onChange={(event) => setRef(event.target.value)}
-            placeholder="문서번호 · 파일명 · 화면 경로"
-          />
-        </div>
+      <div className="flex justify-end">
         <Button onClick={() => void save()} disabled={busy || !note.trim()}>
           <Check className="size-4" /> 저장
         </Button>

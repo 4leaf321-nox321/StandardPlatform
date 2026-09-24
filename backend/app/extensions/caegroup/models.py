@@ -134,11 +134,6 @@ class CaeDtAssessment(Base):
     """근거 — **비우면 저장하지 않는다.** 수준만 남은 평가는 다음 사람이 확인할 수 없다."""
     evidence: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     """축이 정한 칸 — 비교 시험 건수 · 오차 · 단계별 소요 시간. 모양은 축마다 다르다."""
-    evidence_tier: Mapped[str] = mapped_column(String(20))
-    """무엇을 보고 매겼나 — 진술 · 확인 · 검증."""
-    evidence_ref: Mapped[str] = mapped_column(String(300), default="")
-    """근거 자료(문서번호 · 파일명 · 화면 경로). **확인 · 검증이면 비울 수 없다** — 등급만
-    받고 자료를 안 받으면 「검증」 이 말뿐이 된다."""
     assessed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

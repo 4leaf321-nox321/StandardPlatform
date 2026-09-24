@@ -65,7 +65,7 @@ def test_정의를_화면이_받아_간다(client: TestClient, member: Signed) -
     assert axes["accuracy"]["label"] == "가상검증률"
     assert axes["accuracy"]["kind"] == "value"
     assert [one["min"] for one in body["accuracy_thresholds"]] == [0.0, 70.0, 90.0]
-    assert [one["key"] for one in body["evidence_tiers"]] == ["stated", "checked", "verified"]
+    assert "evidence_tiers" not in body  # 근거는 글 하나다(등급 · 자료 칸을 걷었다)
 
 
 def test_기준_정보는_시스템_관리자가_만든다(
@@ -332,8 +332,6 @@ def test_가상검증률의_수준은_값이_정한다(client: TestClient, admin
             "rung": "trend",  # 엉뚱한 수준을 보내도
             "note": "25년 낙하 32건 비교, 파손 위치 일치율 91%",
             "evidence": {"compared_tests": 32, "error_pct": 6},
-            "evidence_tier": "verified",
-            "evidence_ref": "CAE-2026-0312 낙하 상관성 보고서",
         },
         headers=admin.headers,
     )
@@ -347,8 +345,6 @@ def test_가상검증률의_수준은_값이_정한다(client: TestClient, admin
         json={
             "value": 72,
             "note": "재측정 — 일치율 72%",
-            "evidence_tier": "checked",
-            "evidence_ref": "결과 파일 확인",
         },
         headers=admin.headers,
     )
@@ -360,31 +356,34 @@ def test_근거가_없으면_저장되지_않는다(client: TestClient, admin: S
     pair = _pair(client, admin, "굽힘 시험", "굽힘 강성 해석")
     blank = client.put(
         f"{DT}/pairs/{pair}/assessments/scope",
-        json={"rung": "basic", "note": "   ", "evidence_tier": "stated"},
+        json={"rung": "basic", "note": "   "},
         headers=admin.headers,
     )
     assert blank.status_code == 409
     assert "근거를 적어야" in blank.json()["error"]["message"]
 
 
-def test_확인_검증은_근거_자료가_필요하다(client: TestClient, admin: Signed) -> None:
-    """등급만 받고 자료를 안 받으면 「검증」 이 말뿐이 된다."""
+def test_근거는_글_하나다(client: TestClient, admin: Signed) -> None:
+    """등급 · 자료 칸을 두었다가 걷었다(2026-09-24).
+
+    칸이 늘수록 채우는 사람이 줄고, 안 채운 칸은 「모름」 과 구별되지 않는다 — 무엇을 보고
+    매겼는지는 근거 글에 적는다. **보내도 받지 않는다.**
+    """
     pair = _pair(client, admin, "방수 시험", "실링 압력 해석")
     got = client.put(
         f"{DT}/pairs/{pair}/assessments/scope",
-        json={"rung": "basic", "note": "대표 모델에 적용 중", "evidence_tier": "verified"},
+        json={
+            "rung": "basic",
+            "note": "대표 모델에 적용 중 — 25년 상관성 보고서 확인",
+        },
         headers=admin.headers,
     )
-    assert got.status_code == 409
-    assert "근거 자료가 필요합니다" in got.json()["error"]["message"]
+    assert got.status_code == 200, got.text
+    assert "evidence_tier" not in got.json()
+    assert "evidence_ref" not in got.json()
 
-    # 진술이면 자료 없이 저장된다 — 「무엇을 보고 매겼나」 가 이미 적혀 있다.
-    ok = client.put(
-        f"{DT}/pairs/{pair}/assessments/scope",
-        json={"rung": "basic", "note": "대표 모델에 적용 중", "evidence_tier": "stated"},
-        headers=admin.headers,
-    )
-    assert ok.status_code == 200 and ok.json()["rung"] == "basic"
+    defs = client.get(f"{DT}/defs", headers=admin.headers).json()
+    assert "evidence_tiers" not in defs
 
 
 def test_선택형과_매트릭스를_저장한다(client: TestClient, admin: Signed) -> None:
@@ -399,8 +398,6 @@ def test_선택형과_매트릭스를_저장한다(client: TestClient, admin: Si
             "rungs": ["report", "pre", "run"],
             "note": "전처리·실행·보고 자동화",
             "evidence": {"hours_per_run": {"pre": 2, "run": 8}},
-            "evidence_tier": "checked",
-            "evidence_ref": "스크립트 저장소",
         },
         headers=admin.headers,
     )
@@ -440,7 +437,6 @@ def test_모델링_수준은_셈이_접는다(client: TestClient, admin: Signed)
         json={
             "rungs": ["geometry", "performance", "없는것"],
             "note": "형상 · 거동 일치 확인",
-            "evidence_tier": "stated",
         },
         headers=admin.headers,
     )
@@ -457,7 +453,6 @@ def test_모델링_수준은_셈이_접는다(client: TestClient, admin: Signed)
                 "프레임 찍힘": {"test": "2026-08"},
             },
             "note": "두 유형 모두 시험 불량 재현",
-            "evidence_tier": "stated",
         },
         headers=admin.headers,
     )
@@ -473,7 +468,6 @@ def test_모델링_수준은_셈이_접는다(client: TestClient, admin: Signed)
             "rungs": [],
             "defects": {"글라스 크랙": {"market": "2026-09"}},
             "note": "시장 불량까지 재현",
-            "evidence_tier": "stated",
         },
         headers=admin.headers,
     )
@@ -487,7 +481,7 @@ def test_평가가_바뀌면_이력이_남는다(client: TestClient, admin: Sign
     for value, note in ((60, "1차 비교"), (85, "메시 개선 후 재비교")):
         client.put(
             f"{DT}/pairs/{pair}/assessments/accuracy",
-            json={"value": value, "note": note, "evidence_tier": "stated"},
+            json={"value": value, "note": note},
             headers=admin.headers,
         )
     rows = client.get(f"{DT}/pairs/{pair}/history", headers=admin.headers).json()
@@ -500,7 +494,7 @@ def test_연계를_해제하면_평가도_간다(client: TestClient, admin: Sign
     pair = _pair(client, admin, "키 내구", "돔 스위치 피로 해석")
     client.put(
         f"{DT}/pairs/{pair}/assessments/scope",
-        json={"rung": "issue", "note": "이슈 대응 단계", "evidence_tier": "stated"},
+        json={"rung": "issue", "note": "이슈 대응 단계"},
         headers=admin.headers,
     )
     assert len(client.get(f"{DT}/pairs/{pair}/assessments", headers=admin.headers).json()) == 1
@@ -516,7 +510,7 @@ def test_평가_완료율(client: TestClient, admin: Signed) -> None:
     _pair(client, admin, "스피커 음향", "음향 해석")
     client.put(
         f"{DT}/pairs/{first}/assessments/accuracy",
-        json={"value": 80, "note": "비교 12건", "evidence_tier": "stated"},
+        json={"value": 80, "note": "비교 12건"},
         headers=admin.headers,
     )
     body = client.get(f"{DT}/coverage", headers=admin.headers).json()
@@ -562,7 +556,59 @@ def test_부서_멤버만_평가한다(client: TestClient, admin: Signed, member
     # 고치는 것은 막힌다.
     denied = client.put(
         f"{DT}/pairs/{made.json()['id']}/assessments/scope",
-        json={"rung": "issue", "note": "확인", "evidence_tier": "stated"},
+        json={"rung": "issue", "note": "확인"},
         headers=member.headers,
     )
     assert denied.status_code == 403
+
+
+def test_목록에서_여럿을_한_번에_옮기고_해제한다(client: TestClient, admin: Signed) -> None:
+    """목록에서 서른 건을 고른 사람에게 서른 번을 누르게 하지 않는다.
+
+    다만 권한은 **건마다** 본다 — 「여럿이라서 한 번에 통과」 가 되면 그 예외가 곧 규칙이 된다.
+    """
+    _setup(client, admin)
+    made: list[str] = []
+    for index in range(3):
+        subject = _make_object(
+            client, admin, "sim_test_item", label=f"묶음 시험{index} {uuid.uuid4().hex[:4]}"
+        )
+        agent = _make_object(
+            client, admin, "sim_analysis", label=f"묶음 해석{index} {uuid.uuid4().hex[:4]}"
+        )
+        got = client.post(
+            f"{DT}/pairs",
+            json={
+                "subject_id": subject["id"],
+                "agent_id": agent["id"],
+                "workspace_slug": admin.workspace,
+            },
+            headers=admin.headers,
+        )
+        made.append(got.json()["id"])
+
+    # 매긴 축 수가 목록에 함께 온다 — 「어디까지 채웠나」 가 바로 읽히게.
+    client.put(
+        f"{DT}/pairs/{made[0]}/assessments/scope",
+        json={"rung": "issue", "note": "이슈 대응"},
+        headers=admin.headers,
+    )
+    rows = {one["id"]: one for one in client.get(f"{DT}/pairs", headers=admin.headers).json()}
+    assert rows[made[0]]["assessed"] == 1 and rows[made[1]]["assessed"] == 0
+
+    other = client.post(
+        "/api/workspaces",
+        json={"slug": f"bulk{uuid.uuid4().hex[:6]}", "name": "일괄 부서"},
+        headers=admin.headers,
+    )
+    moved = client.post(
+        f"{DT}/pairs/bulk-move",
+        json={"ids": made[:2], "workspace_slug": other.json()["slug"]},
+        headers=admin.headers,
+    )
+    assert moved.status_code == 200 and moved.json()["changed"] == 2
+
+    gone = client.post(f"{DT}/pairs/bulk-unlink", json={"ids": made}, headers=admin.headers)
+    assert gone.status_code == 200 and gone.json()["changed"] == 3
+    left = {one["id"] for one in client.get(f"{DT}/pairs", headers=admin.headers).json()}
+    assert not (set(made) & left)

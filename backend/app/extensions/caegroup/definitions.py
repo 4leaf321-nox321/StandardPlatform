@@ -18,6 +18,10 @@
    넣다가 되돌렸다(2026-09-24) — 다르게 두면 옮길 때마다 매핑표가 필요하고, 그 표는 한쪽만
    고쳐지는 순간 같은 평가를 다른 수준으로 읽는다.
 
+⚠️ **근거는 한 줄의 글이다.** 등급(진술 · 확인 · 검증)과 자료 칸을 두었다가 걷었다
+   (2026-09-24) — 칸이 늘수록 채우는 사람이 줄고, 안 채운 칸은 「모름」 과 구별되지 않는다.
+   무엇을 보고 매겼는지는 근거 글에 적는다.
+
 ⚠️ **사업부 DX KPI 「가상 검증률」 과 이름이 같다.** 계산이 다르다 — 이쪽은 연계 하나의
    평가값이고 그쪽은 사업부가 보고하는 집계다. 화면 도움말이 그 관계를 한 줄로 말한다.
    안 적으면 언젠가 누가 이 표를 보고 KPI 를 고친다.
@@ -35,25 +39,6 @@ SUBJECT_LABEL = "시험 항목"
 AGENT_LABEL = "시뮬레이션"
 
 AxisKind = Literal["value", "set", "rung", "matrix"]
-
-#: 근거 등급 — **무엇을 보고 매겼나.** 등급만 받고 자료를 안 받으면 「검증」 이 말뿐이 된다.
-EVIDENCE_TIERS: list[dict[str, Any]] = [
-    {"key": "stated", "label": "진술", "description": "담당자 진술", "needs_ref": False},
-    {
-        "key": "checked",
-        "label": "확인",
-        "description": "결과 파일 · 화면의 직접 확인",
-        "needs_ref": True,
-    },
-    {
-        "key": "verified",
-        "label": "검증",
-        "description": "보고서 · 성적서로 확인",
-        "needs_ref": True,
-    },
-]
-TIER_KEYS = tuple(one["key"] for one in EVIDENCE_TIERS)
-TIERS_NEEDING_REF = tuple(one["key"] for one in EVIDENCE_TIERS if one["needs_ref"])
 
 #: 가상검증률 — **값 → 칸.** 낮은 칸부터, 값이 넘는 가장 높은 칸을 고른다.
 #: 경계는 「같으면 위 칸」 이다(90.0 은 현상 재현).

@@ -9,7 +9,7 @@
  * ⚠️ **연계를 해제하면 평가·이력이 함께 삭제된다**(2단계부터). 확인 문구가 그 사실을 말한다.
  */
 
-import { ExternalLink, Link2, Pencil, Unlink } from 'lucide-react'
+import { ExternalLink, Link2, Pencil, Search, Unlink } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -31,6 +31,7 @@ import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
 import { Button } from '@/shared/components/ui/button'
+import { Input } from '@/shared/components/ui/input'
 import {
   Select,
   SelectContent,
@@ -82,6 +83,10 @@ export default function PairsPage() {
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Pair | null>(null)
   const [editTarget, setEditTarget] = useState<string>('')
+  const [query, setQuery] = useState('')
+  const [chosen, setChosen] = useState<string[]>([])
+  const [bulkTarget, setBulkTarget] = useState('')
+  const [bulkUnlinking, setBulkUnlinking] = useState(false)
 
   const ready = setup.data?.ready ?? false
   const subjectSlug = setup.data?.subject_type_slug ?? null
@@ -103,6 +108,22 @@ export default function PairsPage() {
     try {
       await dtApi.setup()
       setup.reload()
+    } catch (caught) {
+      setFailed(caught as Error)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function moveChosen() {
+    if (!bulkTarget || chosen.length === 0) return
+    setBusy(true)
+    setFailed(null)
+    try {
+      await dtApi.bulkMove(chosen, bulkTarget)
+      setChosen([])
+      setBulkTarget('')
+      pairs.reload()
     } catch (caught) {
       setFailed(caught as Error)
     } finally {
@@ -142,7 +163,18 @@ export default function PairsPage() {
     }
   }
 
-  const groups = groupBySubject(pairs.data ?? [])
+  // **찾는 것은 이름으로 찾는다.** 스무 건이 넘어가면 눈으로 훑는 것이 가장 느리다.
+  const needle = query.trim().toLowerCase()
+  const shown = (pairs.data ?? []).filter((one) =>
+    needle
+      ? `${one.subject_label} ${one.agent_label} ${one.agent_tools.join(' ')} ${
+          one.agent_dept ?? ''
+        } ${one.workspace_name}`
+          .toLowerCase()
+          .includes(needle)
+      : true,
+  )
+  const groups = groupBySubject(shown)
   const current = (pairs.data ?? []).find((one) => one.id === picked) ?? null
   // **불량 유형은 시험 항목이 든 목록이다.** 수단에 두면 같은 시험인데 도구마다 목록이
   // 갈려 「이 시험의 불량 중 아직 아무 데서도 재현 안 되는 것」 을 셀 수 없다.
@@ -165,9 +197,56 @@ export default function PairsPage() {
       <ErrorNotice error={failed ?? setup.error ?? pairs.error} />
 
       {ready && (
-        <p className="text-muted-foreground text-sm">
-          연계 <b className="text-foreground">{pairs.data?.length ?? 0}</b>건
-        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="relative">
+            <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-4 -translate-y-1/2" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="시험 항목 · 해석 · 도구 · 부서로 검색"
+              className="w-72 pl-8"
+            />
+          </div>
+          <span className="text-muted-foreground text-sm">
+            {needle ? `${shown.length} / ${pairs.data?.length ?? 0}` : `연계 ${shown.length}`}건
+          </span>
+
+          {/* **고른 것이 있으면 할 수 있는 일을 옆에 둔다.** 서른 건을 고른 사람에게
+              서른 번을 누르게 하지 않는다. */}
+          {chosen.length > 0 && (
+            <div className="ml-auto flex flex-wrap items-center gap-2">
+              <span className="text-sm">{chosen.length}건 선택</span>
+              <Select value={bulkTarget} onValueChange={setBulkTarget}>
+                <SelectTrigger className="w-44">
+                  <SelectValue placeholder="부서 옮기기" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(workspaces.data ?? []).map((one) => (
+                    <SelectItem key={one.slug} value={one.slug}>
+                      {one.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy || !bulkTarget}
+                onClick={() => void moveChosen()}
+              >
+                옮기기
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={busy}
+                onClick={() => setBulkUnlinking(true)}
+              >
+                <Unlink className="size-4" /> 해제
+              </Button>
+            </div>
+          )}
+        </div>
       )}
 
       {setup.data && !ready && (
@@ -291,11 +370,22 @@ export default function PairsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  <TableHead className="w-8">
+                    <input
+                      type="checkbox"
+                      aria-label="모두 선택"
+                      checked={shown.length > 0 && chosen.length === shown.length}
+                      onChange={(event) =>
+                        setChosen(event.target.checked ? shown.map((one) => one.id) : [])
+                      }
+                    />
+                  </TableHead>
                   <TableHead>{subjectLabel}</TableHead>
                   <TableHead>{agentLabel}</TableHead>
                   <TableHead>사용 도구</TableHead>
                   <TableHead>담당 부서</TableHead>
                   <TableHead>소속 부서</TableHead>
+                  <TableHead className="text-right">평가</TableHead>
                   <TableHead className="w-36" />
                 </TableRow>
               </TableHeader>
@@ -309,6 +399,20 @@ export default function PairsPage() {
                         picked === row.id ? 'bg-muted/60 cursor-pointer' : 'cursor-pointer'
                       }
                     >
+                      <TableCell onClick={(event) => event.stopPropagation()}>
+                        <input
+                          type="checkbox"
+                          aria-label={`${row.subject_label} · ${row.agent_label} 선택`}
+                          checked={chosen.includes(row.id)}
+                          onChange={(event) =>
+                            setChosen((was) =>
+                              event.target.checked
+                                ? [...was, row.id]
+                                : was.filter((id) => id !== row.id),
+                            )
+                          }
+                        />
+                      </TableCell>
                       {index === 0 && (
                         <TableCell rowSpan={group.rows.length} className="align-top font-medium">
                           {group.subject}
@@ -326,6 +430,10 @@ export default function PairsPage() {
                       </TableCell>
                       <TableCell className="text-muted-foreground text-xs">
                         {row.workspace_name}
+                      </TableCell>
+                      {/* **어디까지 채웠나.** 다섯 축 중 몇 개를 매겼는지가 다음 할 일이다. */}
+                      <TableCell className="text-right text-xs tabular-nums">
+                        {row.assessed} / {defs.data?.axes.length ?? 5}
                       </TableCell>
                       <TableCell className="space-x-1 text-right whitespace-nowrap">
                         <Button
@@ -423,6 +531,21 @@ export default function PairsPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDialog
+        open={bulkUnlinking}
+        title={`연계 ${chosen.length}건을 해제합니까?`}
+        description="고른 연계와 그 평가 · 변경 이력이 함께 삭제됩니다."
+        destructive
+        confirmLabel="해제"
+        onConfirm={async () => {
+          await dtApi.bulkUnlink(chosen)
+          setChosen([])
+          setBulkUnlinking(false)
+          pairs.reload()
+        }}
+        onClose={() => setBulkUnlinking(false)}
+      />
 
       <ConfirmDialog
         open={unlinking !== null}

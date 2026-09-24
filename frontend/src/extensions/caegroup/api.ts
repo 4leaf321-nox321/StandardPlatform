@@ -35,7 +35,6 @@ export interface Defs {
   subject_label: string
   agent_label: string
   axes: AxisDef[]
-  evidence_tiers: { key: string; label: string; description: string; needs_ref: boolean }[]
   accuracy_thresholds: { rung: string; min: number }[]
   accuracy_rules: { key: string; label: string }[]
 }
@@ -57,8 +56,6 @@ export interface Assessment {
   defects: Record<string, Record<string, string>>
   note: string
   evidence: Record<string, unknown>
-  evidence_tier: string
-  evidence_ref: string
   assessed_at: string
   assessed_by_label: string
 }
@@ -70,8 +67,6 @@ export interface AssessmentBody {
   defects?: Record<string, Record<string, string>>
   note: string
   evidence?: Record<string, unknown>
-  evidence_tier: string
-  evidence_ref?: string
 }
 
 export interface HistoryRow {
@@ -98,6 +93,8 @@ export interface Pair {
   /** 해석이 쓰는 도구 이름 — 「무엇으로 보나」 가 목록에서 바로 읽히게. */
   agent_tools: string[]
   agent_dept: string | null
+  /** 매긴 축 수 — 「어디까지 채웠나」 가 목록에서 읽히게. */
+  assessed: number
   created_at: string
 }
 
@@ -115,6 +112,13 @@ export const dtApi = {
   move: (id: string, workspaceSlug: string) =>
     api.patch<Pair>(`${BASE}/pairs/${id}`, { workspace_slug: workspaceSlug }),
   unlink: (id: string) => api.delete<void>(`${BASE}/pairs/${id}`),
+  bulkMove: (ids: string[], workspaceSlug: string) =>
+    api.post<{ changed: number }>(`${BASE}/pairs/bulk-move`, {
+      ids,
+      workspace_slug: workspaceSlug,
+    }),
+  bulkUnlink: (ids: string[]) =>
+    api.post<{ changed: number }>(`${BASE}/pairs/bulk-unlink`, { ids }),
   assessments: (pairId: string) => api.get<Assessment[]>(`${BASE}/pairs/${pairId}/assessments`),
   save: (pairId: string, axis: string, body: AssessmentBody) =>
     api.put<Assessment>(`${BASE}/pairs/${pairId}/assessments/${axis}`, body),
