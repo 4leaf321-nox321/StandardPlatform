@@ -90,10 +90,14 @@ export interface Coverage {
 export interface Pair {
   id: string
   workspace_id: string
+  workspace_name: string
   subject_id: string
   subject_label: string
   agent_id: string
   agent_label: string
+  /** 해석이 쓰는 도구 이름 — 「무엇으로 보나」 가 목록에서 바로 읽히게. */
+  agent_tools: string[]
+  agent_dept: string | null
   created_at: string
 }
 

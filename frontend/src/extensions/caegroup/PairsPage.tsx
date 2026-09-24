@@ -18,6 +18,14 @@ import { workspaceApi } from '@/modules/workspaces/api'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isSystemAdmin } from '@/shared/auth/roles'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/shared/components/ui/dialog'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -71,6 +79,7 @@ export default function PairsPage() {
   const [agent, setAgent] = useState<string | null>(null)
   const [unlinking, setUnlinking] = useState<Pair | null>(null)
   const [picked, setPicked] = useState<string | null>(null)
+  const [adding, setAdding] = useState(false)
 
   const ready = setup.data?.ready ?? false
   const subjectSlug = setup.data?.subject_type_slug ?? null
@@ -107,6 +116,7 @@ export default function PairsPage() {
       await dtApi.link({ subject_id: subject, agent_id: agent, workspace_slug: target })
       setSubject(null)
       setAgent(null)
+      setAdding(false)
       pairs.reload()
     } catch (caught) {
       setFailed(caught as Error)
@@ -181,62 +191,78 @@ export default function PairsPage() {
             >
               {agentLabel} <ExternalLink className="size-3.5" />
             </Link>
-            <span className="text-muted-foreground text-xs">
-              추가 · 수정 · 일괄 입력 · 내보내기는 해당 타입 화면에서 수행합니다.
-            </span>
+            <Button size="sm" className="ml-auto" onClick={() => setAdding(true)}>
+              <Link2 className="size-4" /> 연계 등록
+            </Button>
           </section>
+          <p className="text-muted-foreground text-xs">
+            시험 항목 · 시뮬레이션 해석의 추가 · 수정 · 일괄 입력 · 내보내기는 해당 타입
+            화면에서 수행합니다.
+          </p>
 
-          <section className="space-y-3 rounded-md border p-4">
-            <h2 className="text-sm font-semibold">연계 등록</h2>
-            <div className="grid gap-3 sm:grid-cols-[1fr_1fr_12rem_auto] sm:items-end">
-              <div className="space-y-1">
-                <span className="text-muted-foreground text-xs">{subjectLabel}</span>
-                <SearchablePicker
-                  options={(subjects.data?.items ?? []).map((one) => ({
-                    value: one.id,
-                    label: one.label,
-                    hint: one.key ?? undefined,
-                  }))}
-                  value={subject}
-                  onChange={setSubject}
-                  placeholder={`${subjectLabel} 선택`}
-                  emptyText={`${subjectLabel} 이 없습니다 — 해당 타입의 목록 화면에서 먼저 등록합니다.`}
-                />
+          <Dialog open={adding} onOpenChange={setAdding}>
+            <DialogContent className="sm:max-w-2xl">
+              <DialogHeader>
+                <DialogTitle>연계 등록</DialogTitle>
+                <DialogDescription>
+                  {subjectLabel}과 {agentLabel}을 선택합니다. 평가는 연계 단위로 수행합니다.
+                </DialogDescription>
+              </DialogHeader>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <div className="space-y-1">
+                  <span className="text-muted-foreground text-xs">{subjectLabel}</span>
+                  <SearchablePicker
+                    options={(subjects.data?.items ?? []).map((one) => ({
+                      value: one.id,
+                      label: one.label,
+                      hint: one.key ?? undefined,
+                    }))}
+                    value={subject}
+                    onChange={setSubject}
+                    placeholder={`${subjectLabel} 선택`}
+                    emptyText={`${subjectLabel} 이 없습니다 — 해당 타입의 목록 화면에서 먼저 등록합니다.`}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground text-xs">{agentLabel}</span>
+                  <SearchablePicker
+                    options={(agents.data?.items ?? []).map((one) => ({
+                      value: one.id,
+                      label: one.label,
+                      hint: one.key ?? undefined,
+                    }))}
+                    value={agent}
+                    onChange={setAgent}
+                    placeholder={`${agentLabel} 선택`}
+                    emptyText={`${agentLabel} 이 없습니다 — 해당 타입의 목록 화면에서 먼저 등록합니다.`}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <span className="text-muted-foreground text-xs">소속 부서</span>
+                  <Select value={target} onValueChange={setTarget}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="부서 선택" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {(workspaces.data ?? []).map((one) => (
+                        <SelectItem key={one.slug} value={one.slug}>
+                          {one.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
               </div>
-              <div className="space-y-1">
-                <span className="text-muted-foreground text-xs">{agentLabel}</span>
-                <SearchablePicker
-                  options={(agents.data?.items ?? []).map((one) => ({
-                    value: one.id,
-                    label: one.label,
-                    hint: one.key ?? undefined,
-                  }))}
-                  value={agent}
-                  onChange={setAgent}
-                  placeholder={`${agentLabel} 선택`}
-                  emptyText={`${agentLabel} 이 없습니다 — 해당 타입의 목록 화면에서 먼저 등록합니다.`}
-                />
-              </div>
-              <div className="space-y-1">
-                <span className="text-muted-foreground text-xs">소속 부서</span>
-                <Select value={target} onValueChange={setTarget}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="부서 선택" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {(workspaces.data ?? []).map((one) => (
-                      <SelectItem key={one.slug} value={one.slug}>
-                        {one.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <Button onClick={() => void link()} disabled={busy || !subject || !agent || !target}>
-                <Link2 className="size-4" /> 등록
-              </Button>
-            </div>
-          </section>
+              <DialogFooter>
+                <Button
+                  onClick={() => void link()}
+                  disabled={busy || !subject || !agent || !target}
+                >
+                  <Link2 className="size-4" /> 등록
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
 
           {groups.length === 0 ? (
             <EmptyState
@@ -250,7 +276,9 @@ export default function PairsPage() {
                 <TableRow>
                   <TableHead>{subjectLabel}</TableHead>
                   <TableHead>{agentLabel}</TableHead>
-                  <TableHead className="w-24" />
+                  <TableHead>사용 도구</TableHead>
+                  <TableHead>담당 부서</TableHead>
+                  <TableHead className="w-20" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -272,6 +300,12 @@ export default function PairsPage() {
                         </TableCell>
                       )}
                       <TableCell>{row.agent_label}</TableCell>
+                      <TableCell className="text-muted-foreground text-xs">
+                        {row.agent_tools.filter(Boolean).join(' · ') || '—'}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground text-xs">
+                        {row.agent_dept ?? '—'}
+                      </TableCell>
                       <TableCell className="text-right">
                         <Button
                           variant="ghost"

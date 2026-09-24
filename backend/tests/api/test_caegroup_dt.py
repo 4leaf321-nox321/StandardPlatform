@@ -158,6 +158,36 @@ def test_연계를_등록하고_해제한다(client: TestClient, admin: Signed) 
     assert client.get(f"{DT}/pairs", headers=admin.headers).json() == []
 
 
+def test_목록이_사용_도구와_담당_부서를_함께_낸다(client: TestClient, admin: Signed) -> None:
+    """「무엇으로 보나」 · 「누가 들고 있나」 는 목록에서 바로 읽혀야 한다.
+
+    이름은 **플랫폼의 해석기**가 찾는다 — 부서처럼 다른 표를 비추는 타입은 객체 표에 행이
+    없어서, 직접 찾으면 이름이 영영 비어 있고 그 사실은 화면에서 「—」 로만 보인다
+    (실측 2026-09-24).
+    """
+    _setup(client, admin)
+    subject = _make_object(
+        client, admin, "sim_test_item", label=f"열 시험 {uuid.uuid4().hex[:4]}"
+    )
+    agent = _make_object(
+        client, admin, "sim_analysis", label=f"열 해석 {uuid.uuid4().hex[:4]}"
+    )
+    made = client.post(
+        f"{DT}/pairs",
+        json={
+            "subject_id": subject["id"],
+            "agent_id": agent["id"],
+            "workspace_slug": admin.workspace,
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    row = made.json()
+    # 이 시험 DB 에는 도구 카탈로그도 부서 타입도 없다 — **그래도 칸은 있고 비어 있다.**
+    assert row["agent_tools"] == [] and row["agent_dept"] is None
+    assert row["workspace_name"]
+
+
 def test_조회는_부서로_가리지_않는다(
     client: TestClient, admin: Signed, member: Signed
 ) -> None:

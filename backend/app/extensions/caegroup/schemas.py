@@ -36,10 +36,14 @@ class DefsOut(BaseModel):
 class PairOut(BaseModel):
     id: uuid.UUID
     workspace_id: uuid.UUID
+    workspace_name: str
     subject_id: uuid.UUID
     subject_label: str
     agent_id: uuid.UUID
     agent_label: str
+    agent_tools: list[str]
+    """해석이 쓰는 도구 이름 — 목록에서 「무엇으로 보나」 가 바로 읽히게."""
+    agent_dept: str | None
     created_at: datetime
 
 

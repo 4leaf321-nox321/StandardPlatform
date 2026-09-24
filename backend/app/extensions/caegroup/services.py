@@ -21,9 +21,10 @@ from app.extensions.caegroup.models import (
     CaeDtSetting,
 )
 from app.modules.accounts.models import User
+from app.modules.objects import system
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology import importer
-from app.modules.ontology.models import ObjectType
+from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.workspaces.models import Workspace
 from app.shared import audit, permissions
 from app.shared.errors import Conflict, NotFound, code
@@ -32,6 +33,8 @@ SUBJECT_SLUG = "sim_test_item"
 AGENT_SLUG = "sim_analysis"
 #: 도구 카탈로그(소프트웨어 제품)가 있는 설치에서는 해석이 그것을 가리킨다.
 TOOL_SLUG = "sim_tool"
+#: 부서를 비추는 타입이 있는 설치에서는 해석이 담당 부서를 가리킨다.
+DEPT_SLUG = "dept"
 
 #: 기준 정보가 들어갈 사이드바 묶음.
 #:
@@ -130,6 +133,17 @@ TOOL_PROPERTY: dict[str, Any] = {
 }
 
 
+#: 담당 부서 — **누가 이 해석을 들고 있나.** 없으면 낮은 수준이 「누구의 일인지」 조차
+#: 안 보이고, 그때 그 숫자는 아무도 자기 것으로 읽지 않는다.
+DEPT_PROPERTY: dict[str, Any] = {
+    "key": "owner_dept",
+    "label": "담당 부서",
+    "data_type": "object_ref",
+    "ref_type_slug": DEPT_SLUG,
+    "inverse_label": "이 부서가 담당하는 해석",
+}
+
+
 def setup_schema(db: Session) -> dict[str, Any]:
     """이 설치에 맞춘 정의.
 
@@ -137,9 +151,10 @@ def setup_schema(db: Session) -> dict[str, Any]:
     속성은 가져오기가 거절하고, 그러면 기준 정보 생성이 통째로 막힌다.
     """
     schema = deepcopy(SETUP_SCHEMA)
-    if db.scalar(select(ObjectType).where(ObjectType.slug == TOOL_SLUG)) is not None:
-        agent = next(one for one in schema["types"] if one["slug"] == AGENT_SLUG)
-        agent["properties"].append(deepcopy(TOOL_PROPERTY))
+    agent = next(one for one in schema["types"] if one["slug"] == AGENT_SLUG)
+    for slug, extra in ((TOOL_SLUG, TOOL_PROPERTY), (DEPT_SLUG, DEPT_PROPERTY)):
+        if db.scalar(select(ObjectType).where(ObjectType.slug == slug)) is not None:
+            agent["properties"].append(deepcopy(extra))
     return schema
 
 
@@ -216,6 +231,13 @@ def _object_of(
     return row
 
 
+def _as_list(raw: Any) -> list[Any]:
+    """참조 속성은 하나일 수도 여럿일 수도 있다 — 읽는 쪽을 한 모양으로 만든다."""
+    if raw is None or raw == "":
+        return []
+    return list(raw) if isinstance(raw, list) else [raw]
+
+
 def pairs(db: Session, user: User, *, workspace: Workspace | None) -> list[dict[str, Any]]:
     """연계 목록 — 화면의 왼쪽 표. **이름은 객체에서 온다.**
 
@@ -241,18 +263,60 @@ def pairs(db: Session, user: User, *, workspace: Workspace | None) -> list[dict[
         if wanted
         else {}
     )
+    # 해석이 가리키는 도구 · 담당 부서의 **이름**까지 한 번에 낸다. 화면이 참조마다 다시
+    # 물으면 줄 수만큼 왕복이 생기고, 그 느림은 목록이 길어진 뒤에야 드러난다.
+    #
+    # **이름은 플랫폼의 해석기가 찾는다**(`objects/system.ref_labels`). 부서처럼 다른 표를
+    # 비추는 타입은 객체 표에 행이 없다 — 직접 찾으면 이름이 영영 비어 있고, 그 사실은
+    # 화면에서 「—」 로만 보인다(실측 2026-09-24).
+    agent_type = _type_or_none(db, setting(db).agent_type_slug)
+    agent_defs = (
+        list(
+            db.scalars(
+                select(PropertyDef).where(
+                    PropertyDef.owner_kind == "type", PropertyDef.owner_id == agent_type.id
+                )
+            )
+        )
+        if agent_type is not None
+        else []
+    )
+    # `ref_labels` 는 **속성 사전 자체**를 받는다(`values.get(key)`).
+    agent_rows = [
+        dict(one.properties or {})
+        for one in names.values()
+        if agent_type is not None and one.type_id == agent_type.id
+    ]
+    ref_names = {
+        str(key): value for key, value in system.ref_labels(db, agent_defs, agent_rows).items()
+    }
+    workspaces = {
+        one.id: one.name
+        for one in db.scalars(
+            select(Workspace).where(Workspace.id.in_({one.workspace_id for one in rows}))
+        )
+    }
     out: list[dict[str, Any]] = []
     for one in rows:
         subject = names.get(one.subject_id)
         agent = names.get(one.agent_id)
+        props = (agent.properties or {}) if agent else {}
         out.append(
             {
                 "id": one.id,
                 "workspace_id": one.workspace_id,
+                "workspace_name": workspaces.get(one.workspace_id, ""),
                 "subject_id": one.subject_id,
                 "subject_label": subject.label if subject else "(지워짐)",
                 "agent_id": one.agent_id,
                 "agent_label": agent.label if agent else "(지워짐)",
+                "agent_tools": [
+                    ref_names.get(str(value), "") for value in _as_list(props.get("tools"))
+                ],
+                "agent_dept": next(
+                    (ref_names.get(str(value)) for value in _as_list(props.get("owner_dept"))),
+                    None,
+                ),
                 "created_at": one.created_at,
             }
         )

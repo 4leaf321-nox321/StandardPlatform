@@ -14490,6 +14490,10 @@
             "format": "uuid",
             "title": "Workspace Id"
           },
+          "workspace_name": {
+            "type": "string",
+            "title": "Workspace Name"
+          },
           "subject_id": {
             "type": "string",
             "format": "uuid",
@@ -14508,6 +14512,24 @@
             "type": "string",
             "title": "Agent Label"
           },
+          "agent_tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Agent Tools"
+          },
+          "agent_dept": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Dept"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -14518,10 +14540,13 @@
         "required": [
           "id",
           "workspace_id",
+          "workspace_name",
           "subject_id",
           "subject_label",
           "agent_id",
           "agent_label",
+          "agent_tools",
+          "agent_dept",
           "created_at"
         ],
         "title": "PairOut"
