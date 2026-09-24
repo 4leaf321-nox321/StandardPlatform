@@ -683,6 +683,65 @@ def _history_snapshot(row: CaeDtAssessment) -> dict[str, Any]:
     }
 
 
+def board(db: Session, user: User, *, limit_recent: int = 12) -> dict[str, Any]:
+    """대시보드가 그리는 한 벌 — **연계마다 축의 수준**과 최근 변경.
+
+    **분포와 타일은 같은 자료에서 나온다.** 서버가 분포를 따로 세어 내려 주면 타일과
+    분포가 갈릴 수 있고, 그때 어느 쪽이 맞는지 아무도 모른다 — 화면이 이 목록 하나로
+    둘을 그린다.
+    """
+    rows = pairs(db, user, workspace=None)
+    by_pair: dict[uuid.UUID, dict[str, Any]] = {}
+    ids = [one["id"] for one in rows]
+    if ids:
+        for one in db.scalars(select(CaeDtAssessment).where(CaeDtAssessment.pair_id.in_(ids))):
+            by_pair.setdefault(one.pair_id, {})[one.axis] = {
+                "rung": one.rung,
+                "rungs": list(one.rungs or []),
+                "value": one.value,
+                "note": one.note,
+            }
+    tiles = [
+        {
+            **one,
+            # 묶음은 **담당 부서**다 — 없으면 소속 부서. 「누가 들고 있나」 로 묶어야
+            # 벽이 조직의 그림이 된다.
+            "group": one["agent_dept"] or one["workspace_name"] or "(부서 없음)",
+            "levels": by_pair.get(one["id"], {}),
+        }
+        for one in rows
+    ]
+    recent = (
+        [
+            {
+                "pair_id": one.pair_id,
+                "axis": one.axis,
+                "axis_label": D.AXIS_BY_KEY.get(one.axis, {}).get("label", one.axis),
+                "label": next(
+                    (
+                        f"{row['subject_label']} · {row['agent_label']}"
+                        for row in rows
+                        if row["id"] == one.pair_id
+                    ),
+                    "(지워짐)",
+                ),
+                "note": (one.snapshot or {}).get("note", ""),
+                "changed_at": one.changed_at,
+                "changed_by_label": one.changed_by_label,
+            }
+            for one in db.scalars(
+                select(CaeDtAssessmentHistory)
+                .where(CaeDtAssessmentHistory.pair_id.in_(ids))
+                .order_by(CaeDtAssessmentHistory.changed_at.desc())
+                .limit(limit_recent)
+            )
+        ]
+        if ids
+        else []
+    )
+    return {"tiles": tiles, "recent": recent}
+
+
 def coverage(db: Session, *, workspace: Workspace | None = None) -> dict[str, Any]:
     """축마다 **평가 완료율** — 평가된 연계 ÷ 전체 연계.
 

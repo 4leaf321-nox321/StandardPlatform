@@ -77,6 +77,34 @@ export interface HistoryRow {
   changed_by_label: string
 }
 
+export interface TileLevel {
+  rung: string | null
+  rungs: string[]
+  value: number | null
+  note: string
+}
+
+export interface Tile extends Pair {
+  /** 벽에서 묶는 단위 — 담당 부서(없으면 소속 부서). */
+  group: string
+  levels: Record<string, TileLevel>
+}
+
+export interface RecentChange {
+  pair_id: string
+  axis: string
+  axis_label: string
+  label: string
+  note: string
+  changed_at: string
+  changed_by_label: string
+}
+
+export interface Board {
+  tiles: Tile[]
+  recent: RecentChange[]
+}
+
 export interface Coverage {
   pairs: number
   axes: { axis: string; label: string; assessed: number; ratio: number }[]
@@ -124,4 +152,5 @@ export const dtApi = {
     api.put<Assessment>(`${BASE}/pairs/${pairId}/assessments/${axis}`, body),
   history: (pairId: string) => api.get<HistoryRow[]>(`${BASE}/pairs/${pairId}/history`),
   coverage: () => api.get<Coverage>(`${BASE}/coverage`),
+  board: () => api.get<Board>(`${BASE}/board`),
 }

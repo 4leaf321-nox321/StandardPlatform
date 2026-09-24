@@ -96,3 +96,33 @@ export function shownNumber(value: number): string {
   if (!Number.isFinite(value)) return ''
   return Number.isInteger(value) ? value.toLocaleString() : value.toFixed(2)
 }
+
+/**
+ * 서열 색 — **한 색의 밝기 단계.** 순서가 있는 값(수준 · 등급 · 단계)에 쓴다.
+ *
+ * 계열 색(`SERIES_COLORS`)을 서열에 쓰면 안 된다. 그것은 「다른 것」 을 가리키는 색이라,
+ * 「낮음 → 높음」 에 쓰면 사람이 빨강을 경고로, 초록을 좋음으로 읽는다 — 순서가 아니라
+ * 뜻을 읽어 버린다.
+ *
+ * 다섯 단계이고 어두운 화면에서는 **높은 값이 밝다**(같은 램프를 뒤집지 않고 그 화면의
+ * 표면에서 다시 고른 것이다). 단계 사이 밝기 차와 표면 대비를 검증기로 확인했다 —
+ * 라이트·다크 모두 통과(2026-09-25).
+ */
+export const LEVEL_COLORS_LIGHT = ['#86b6ef', '#5598e7', '#2a78d6', '#1c5cab', '#104281'] as const
+export const LEVEL_COLORS_DARK = ['#184f95', '#256abf', '#3987e5', '#6da7ec', '#9ec5f4'] as const
+
+/** 미평가 — **색을 주지 않는다.** 값이 없는 것은 낮은 값이 아니다. */
+export const LEVEL_NONE_LIGHT = '#eef1f5'
+export const LEVEL_NONE_DARK = '#2a2a28'
+
+/**
+ * `index` 번째 수준의 색(전체 `total` 단계 중). 단계가 다섯보다 적으면 램프에서 고르게
+ * 뽑고, 많으면 위쪽으로 몰아 마지막 단계가 가장 진하다.
+ */
+export function levelColor(index: number, total: number, dark = false): string {
+  const ramp = dark ? LEVEL_COLORS_DARK : LEVEL_COLORS_LIGHT
+  if (index < 0) return dark ? LEVEL_NONE_DARK : LEVEL_NONE_LIGHT
+  if (total <= 1) return ramp[ramp.length - 1]
+  const slot = Math.round((index / (total - 1)) * (ramp.length - 1))
+  return ramp[Math.min(ramp.length - 1, Math.max(0, slot))]
+}

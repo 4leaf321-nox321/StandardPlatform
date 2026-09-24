@@ -386,7 +386,10 @@ def list_runs(
     runs = db.scalars(
         select(DataSourceRun)
         .where(DataSourceRun.source_id == row.id)
-        .order_by(DataSourceRun.started_at.desc())
+        # 시각이 같은 행이 남더라도 **한 순서로 고정한다**(어느 것이 위인지는 뜻이 없고,
+        # 질의마다 달라지지 않는 것이 뜻이다). 같은 시각 자체는 `clock_timestamp()` 로
+        # 거의 사라졌다 — 모델 주석 참고.
+        .order_by(DataSourceRun.started_at.desc(), DataSourceRun.id.desc())
         .limit(RECENT_RUNS)
     )
     return [RunOut.model_validate(one) for one in runs]

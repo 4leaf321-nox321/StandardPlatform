@@ -18,6 +18,10 @@ export {
   AXIS_COLOR,
   DOT_MAX_POINTS,
   GRID_COLOR,
+  LEVEL_COLORS_DARK,
+  LEVEL_COLORS_LIGHT,
+  LEVEL_NONE_DARK,
+  LEVEL_NONE_LIGHT,
   SERIES_COLORS,
   SERIES_CROWDED,
   TILT_LABELS_OVER,
@@ -25,5 +29,6 @@ export {
   colorFor,
   dotConfig,
   legendHeightFor,
+  levelColor,
   shownNumber,
 } from '@/shared/charts/palette'

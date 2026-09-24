@@ -9121,6 +9121,28 @@
         }
       }
     },
+    "/api/ext/caegroup/dt/board": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Board",
+        "description": "대시보드가 그리는 한 벌 — 연계마다의 수준과 최근 변경.\n\n**타일과 분포를 한 자료로 낸다.** 분포를 서버가 따로 세어 주면 둘이 갈릴 수 있고,\n그때 어느 쪽이 맞는지 아무도 답할 수 없다.",
+        "operationId": "board_api_ext_caegroup_dt_board_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BoardOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ext/sample/ping": {
       "get": {
         "tags": [
@@ -9868,6 +9890,31 @@
         ],
         "title": "BackupOut",
         "description": "마지막 백업이 언제였나. **「없다」 와 「설정이 없다」 를 구별한다** —\n같게 말하면 사람은 안 해도 되는 일을 하러 간다."
+      },
+      "BoardOut": {
+        "properties": {
+          "tiles": {
+            "items": {
+              "$ref": "#/components/schemas/TileOut"
+            },
+            "type": "array",
+            "title": "Tiles"
+          },
+          "recent": {
+            "items": {
+              "$ref": "#/components/schemas/RecentOut"
+            },
+            "type": "array",
+            "title": "Recent"
+          }
+        },
+        "type": "object",
+        "required": [
+          "tiles",
+          "recent"
+        ],
+        "title": "BoardOut",
+        "description": "대시보드 한 벌 — **타일과 분포가 같은 자료에서 나온다.**"
       },
       "Body_create_job_api_jobs_post": {
         "properties": {
@@ -15760,6 +15807,51 @@
         ],
         "title": "QueryRequest"
       },
+      "RecentOut": {
+        "properties": {
+          "pair_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Pair Id"
+          },
+          "axis": {
+            "type": "string",
+            "title": "Axis"
+          },
+          "axis_label": {
+            "type": "string",
+            "title": "Axis Label"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "changed_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Changed At"
+          },
+          "changed_by_label": {
+            "type": "string",
+            "title": "Changed By Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pair_id",
+          "axis",
+          "axis_label",
+          "label",
+          "note",
+          "changed_at",
+          "changed_by_label"
+        ],
+        "title": "RecentOut"
+      },
       "RefHitOut": {
         "properties": {
           "object_id": {
@@ -17603,6 +17695,143 @@
         ],
         "title": "TemporaryPasswordResponse",
         "description": "임시 비밀번호는 이 응답에서 한 번만 나온다.\n\n메일이 없어 보낼 수 없으므로 관리자가 화면에서 읽어 구두로 전달한다. 받는\n사람은 첫 로그인 때 변경이 강제된다."
+      },
+      "TileLevelOut": {
+        "properties": {
+          "rung": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rung"
+          },
+          "rungs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rungs"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rung",
+          "rungs",
+          "value",
+          "note"
+        ],
+        "title": "TileLevelOut",
+        "description": "타일 하나가 아는 축의 상태 — 수준 · 켠 항목 · 값 · 근거."
+      },
+      "TileOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Workspace Id"
+          },
+          "workspace_name": {
+            "type": "string",
+            "title": "Workspace Name"
+          },
+          "subject_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Subject Id"
+          },
+          "subject_label": {
+            "type": "string",
+            "title": "Subject Label"
+          },
+          "agent_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Agent Id"
+          },
+          "agent_label": {
+            "type": "string",
+            "title": "Agent Label"
+          },
+          "agent_tools": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Agent Tools"
+          },
+          "agent_dept": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Dept"
+          },
+          "assessed": {
+            "type": "integer",
+            "title": "Assessed"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "levels": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/TileLevelOut"
+            },
+            "type": "object",
+            "title": "Levels"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "workspace_id",
+          "workspace_name",
+          "subject_id",
+          "subject_label",
+          "agent_id",
+          "agent_label",
+          "agent_tools",
+          "agent_dept",
+          "assessed",
+          "created_at",
+          "group",
+          "levels"
+        ],
+        "title": "TileOut"
       },
       "TokenScopesOut": {
         "properties": {

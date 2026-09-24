@@ -17,6 +17,7 @@ from app.extensions.caegroup import services
 from app.extensions.caegroup.schemas import (
     AssessmentIn,
     AssessmentOut,
+    BoardOut,
     CoverageOut,
     DefsOut,
     HistoryOut,
@@ -192,3 +193,13 @@ def coverage(
     """축마다의 평가 완료율. 3단계 대시보드가 이것으로 그린다."""
     chosen = permissions.workspace_by_slug(db, workspace) if workspace else None
     return CoverageOut(**services.coverage(db, workspace=chosen))
+
+
+@router.get("/board", response_model=BoardOut)
+def board(user: User = Depends(current_user), db: Session = Depends(get_db)) -> BoardOut:
+    """대시보드가 그리는 한 벌 — 연계마다의 수준과 최근 변경.
+
+    **타일과 분포를 한 자료로 낸다.** 분포를 서버가 따로 세어 주면 둘이 갈릴 수 있고,
+    그때 어느 쪽이 맞는지 아무도 답할 수 없다.
+    """
+    return BoardOut(**services.board(db, user))

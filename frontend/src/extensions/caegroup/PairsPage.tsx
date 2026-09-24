@@ -11,7 +11,7 @@
 
 import { ExternalLink, Link2, Pencil, Search, Unlink } from 'lucide-react'
 import { useState } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 
 import { objectApi } from '@/modules/objects/api'
 import { workspaceApi } from '@/modules/workspaces/api'
@@ -79,7 +79,10 @@ export default function PairsPage() {
   const [subject, setSubject] = useState<string | null>(null)
   const [agent, setAgent] = useState<string | null>(null)
   const [unlinking, setUnlinking] = useState<Pair | null>(null)
-  const [picked, setPicked] = useState<string | null>(null)
+  // 대시보드의 액자를 누르면 `?pair=…` 로 온다 — **그 줄이 골라진 채로 열린다.**
+  // 안 그러면 사람이 방금 누른 것을 목록에서 다시 찾아야 한다.
+  const [params] = useSearchParams()
+  const [picked, setPicked] = useState<string | null>(params.get('pair'))
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Pair | null>(null)
   const [editTarget, setEditTarget] = useState<string>('')

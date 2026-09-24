@@ -125,3 +125,35 @@ class PairBulkIn(BaseModel):
 
 class PairBulkOut(BaseModel):
     changed: int
+
+
+class TileLevelOut(BaseModel):
+    """타일 하나가 아는 축의 상태 — 수준 · 켠 항목 · 값 · 근거."""
+
+    rung: str | None
+    rungs: list[str]
+    value: float | None
+    note: str
+
+
+class TileOut(PairOut):
+    group: str
+    """벽에서 묶는 단위 — 담당 부서(없으면 소속 부서)."""
+    levels: dict[str, TileLevelOut]
+
+
+class RecentOut(BaseModel):
+    pair_id: uuid.UUID
+    axis: str
+    axis_label: str
+    label: str
+    note: str
+    changed_at: datetime
+    changed_by_label: str
+
+
+class BoardOut(BaseModel):
+    """대시보드 한 벌 — **타일과 분포가 같은 자료에서 나온다.**"""
+
+    tiles: list[TileOut]
+    recent: list[RecentOut]

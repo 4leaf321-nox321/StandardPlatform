@@ -134,8 +134,12 @@ class DataSourceRun(Base):
     """행 오류(앞의 몇 개)와 연결 오류. 전부 담지 않는다 — 5,000줄을 표에 넣으면 아무도
     안 읽는다."""
     started_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
     )
+    """**`now()` 가 아니라 `clock_timestamp()` 다.** `now()` 는 트랜잭션이 시작한 시각이라
+    한 요청에서 실행을 두 번 남기면 **두 행의 시각이 같아진다** — 그러면 목록의 순서가
+    질의마다 달라지고, 화면은 그것을 「순서가 바뀌었다」 로 보여 준다(시험이 잡았다,
+    2026-09-25)."""
     finished_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

@@ -612,3 +612,31 @@ def test_목록에서_여럿을_한_번에_옮기고_해제한다(client: TestCl
     assert gone.status_code == 200 and gone.json()["changed"] == 3
     left = {one["id"] for one in client.get(f"{DT}/pairs", headers=admin.headers).json()}
     assert not (set(made) & left)
+
+
+def test_대시보드는_타일과_최근_변경을_한_번에_낸다(client: TestClient, admin: Signed) -> None:
+    """**분포와 벽은 같은 자료에서 나온다.**
+
+    서버가 분포를 따로 세어 내려 주면 둘이 갈릴 수 있고, 그때 어느 쪽이 맞는지 아무도
+    답할 수 없다 — 그래서 타일 목록 하나를 주고 화면이 그것으로 둘을 그린다.
+    """
+    pair = _pair(
+        client, admin, f"벽 시험 {uuid.uuid4().hex[:4]}", f"벽 해석 {uuid.uuid4().hex[:4]}"
+    )
+    client.put(
+        f"{DT}/pairs/{pair}/assessments/accuracy",
+        json={"value": 95, "note": "비교 20건, 일치율 95%"},
+        headers=admin.headers,
+    )
+    body = client.get(f"{DT}/board", headers=admin.headers).json()
+    tile = next(one for one in body["tiles"] if one["id"] == pair)
+    # 묶음은 담당 부서이고, 없으면 소속 부서다 — 「누가 들고 있나」 로 묶어야 벽이
+    # 조직의 그림이 된다.
+    assert tile["group"]
+    assert tile["levels"]["accuracy"]["rung"] == "correlated"
+    assert tile["levels"]["accuracy"]["value"] == 95
+    assert "automation" not in tile["levels"]  # 안 매긴 축은 없다(미평가와 0 을 가른다)
+
+    recent = next(one for one in body["recent"] if one["pair_id"] == pair)
+    assert recent["axis_label"] == "가상검증률"
+    assert "95%" in recent["note"]
