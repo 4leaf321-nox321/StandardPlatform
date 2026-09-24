@@ -10,6 +10,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
+import { Dialog, DialogContent, DialogTitle } from '@/shared/components/ui/dialog'
 import type { PickerOption } from '@/shared/components/SearchablePicker'
 
 const OPTIONS: PickerOption[] = [
@@ -96,5 +97,30 @@ describe('SearchablePicker', () => {
     await open()
     await userEvent.type(screen.getByPlaceholderText('이름으로 검색'), 'ａｓｔｍ')
     expect(screen.getByRole('button', { name: /ASTM E8/ })).toBeInTheDocument()
+  })
+})
+
+describe('SearchablePicker — 창 안에서', () => {
+  it('창(Dialog) 안에서도 목록이 잘리지 않고 뜨고, 고르면 닫힌다', async () => {
+    // **창은 넘칠 때를 대비해 안쪽을 잘라 둔다.** 목록을 그 안에 그리면 긴 목록이 창
+    // 경계에서 잘렸다(실측 2026-09-24) — 그래서 목록은 포털로 띄운다. 이 시험은
+    // 「창 안에서도 목록이 보이고 고를 수 있나」 를 지킨다.
+    const onChange = vi.fn()
+    render(
+      <Dialog open>
+        <DialogContent>
+          <DialogTitle>부서 선택</DialogTitle>
+          <SearchablePicker options={OPTIONS} value={null} onChange={onChange} />
+        </DialogContent>
+      </Dialog>,
+    )
+    await open()
+    // 목록이 창 바깥(포털)에 그려지고, 검색 칸에 바로 초점이 간다.
+    expect(screen.getByPlaceholderText('이름으로 검색')).toHaveFocus()
+    expect(screen.getAllByRole('button', { name: /팀/ })).toHaveLength(4)
+
+    await userEvent.click(screen.getByRole('button', { name: /재료시험팀/ }))
+    expect(onChange).toHaveBeenCalledWith('mat-lab')
+    expect(screen.queryByPlaceholderText('이름으로 검색')).not.toBeInTheDocument()
   })
 })

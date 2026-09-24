@@ -23,6 +23,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Check, ChevronsUpDown, Search } from 'lucide-react'
 
 import { Button } from '@/shared/components/ui/button'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/shared/components/ui/popover'
 import { Input } from '@/shared/components/ui/input'
 import { cn } from '@/shared/lib/utils'
 
@@ -81,7 +86,6 @@ export function SearchablePicker({
 }: SearchablePickerProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
-  const boxRef = useRef<HTMLDivElement>(null)
   const searchRef = useRef<HTMLInputElement>(null)
 
   const selected =
@@ -100,32 +104,14 @@ export function SearchablePicker({
     )
   }, [options, pinned, value, query, onQueryChange])
 
-  // 열면 검색 칸으로 바로 간다 — 열고 나서 한 번 더 클릭하게 하지 않는다.
+  // 닫히면 검색어를 비운다. **바깥 클릭 · Esc 는 팝오버가 맡는다** — 손으로 달아 두면
+  // 창 · 시트 안에서 어느 것이 먼저 닫히는지가 화면마다 달라진다.
   useEffect(() => {
-    if (open) searchRef.current?.focus()
-    else {
-      setQuery('')
-      onQueryChange?.('')
-    }
+    if (open) return
+    setQuery('')
+    onQueryChange?.('')
     // onQueryChange 는 호스트가 매 렌더 새로 만들 수 있다 — 열림/닫힘에만 반응한다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open])
-
-  // 바깥을 누르거나 Esc 면 닫는다.
-  useEffect(() => {
-    if (!open) return
-    function onPointerDown(event: MouseEvent) {
-      if (boxRef.current && !boxRef.current.contains(event.target as Node)) setOpen(false)
-    }
-    function onKeyDown(event: KeyboardEvent) {
-      if (event.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onPointerDown)
-    document.addEventListener('keydown', onKeyDown)
-    return () => {
-      document.removeEventListener('mousedown', onPointerDown)
-      document.removeEventListener('keydown', onKeyDown)
-    }
   }, [open])
 
   function pick(option: PickerOption) {
@@ -135,24 +121,38 @@ export function SearchablePicker({
   }
 
   return (
-    <div ref={boxRef} className={cn('relative', className)}>
-      <Button
-        id={id}
-        type="button"
-        variant="outline"
-        role="combobox"
-        aria-expanded={open}
-        onClick={() => setOpen((current) => !current)}
-        className="w-full justify-between font-normal"
-      >
-        <span className={cn('truncate', !selected && 'text-muted-foreground')}>
-          {selected ? (selected.hint ?? selected.label) : placeholder}
-        </span>
-        <ChevronsUpDown className="size-4 shrink-0 opacity-50" />
-      </Button>
+    // **목록은 포털로 띄운다.** 창(Dialog) 은 넘칠 때를 대비해 안쪽을 잘라 두는데, 목록을
+    // 그 안에 그리면 긴 목록이 창 경계에서 잘린다 — 실측으로 그랬다(2026-09-24).
+    // 팝오버는 화면 맨 위에 그리고 자리가 모자라면 스스로 접는다.
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          id={id}
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-expanded={open}
+          className={cn('w-full justify-between font-normal', className)}
+        >
+          <span className={cn('truncate', !selected && 'text-muted-foreground')}>
+            {selected ? (selected.hint ?? selected.label) : placeholder}
+          </span>
+          <ChevronsUpDown className="size-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
 
-      {open && (
-        <div className="bg-popover absolute z-50 mt-1 w-full rounded-md border shadow-md">
+      <PopoverContent
+        align="start"
+        // 단추와 같은 너비로 서고, **남은 높이만큼만** 차지한다.
+        className="w-(--radix-popover-trigger-width) max-h-(--radix-popover-content-available-height) overflow-hidden p-0"
+        collisionPadding={8}
+        onOpenAutoFocus={(event) => {
+          // 열면 검색 칸으로 바로 간다 — 열고 나서 한 번 더 클릭하게 하지 않는다.
+          event.preventDefault()
+          searchRef.current?.focus()
+        }}
+      >
+        <div className="flex max-h-[inherit] flex-col">
           <div className="relative border-b p-2">
             <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-4 size-4 -translate-y-1/2" />
             <Input
@@ -168,7 +168,7 @@ export function SearchablePicker({
           </div>
 
           {/* **열자마자 전부 보인다.** 무엇이 있는지 모르는 사람의 길이 이것이다. */}
-          <ul className="max-h-64 overflow-y-auto p-1">
+          <ul className="min-h-0 flex-1 overflow-y-auto p-1">
             {shown.length === 0 && (
               <li className="text-muted-foreground px-2 py-6 text-center text-sm">
                 {loading ? '찾는 중…' : emptyText}
@@ -226,7 +226,7 @@ export function SearchablePicker({
             </p>
           )}
         </div>
-      )}
-    </div>
+      </PopoverContent>
+    </Popover>
   )
 }
