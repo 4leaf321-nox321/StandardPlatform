@@ -9,7 +9,7 @@
  * ⚠️ **연계를 해제하면 평가·이력이 함께 삭제된다**(2단계부터). 확인 문구가 그 사실을 말한다.
  */
 
-import { ExternalLink, Link2, Unlink } from 'lucide-react'
+import { ExternalLink, Link2, Pencil, Unlink } from 'lucide-react'
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
 
@@ -80,6 +80,8 @@ export default function PairsPage() {
   const [unlinking, setUnlinking] = useState<Pair | null>(null)
   const [picked, setPicked] = useState<string | null>(null)
   const [adding, setAdding] = useState(false)
+  const [editing, setEditing] = useState<Pair | null>(null)
+  const [editTarget, setEditTarget] = useState<string>('')
 
   const ready = setup.data?.ready ?? false
   const subjectSlug = setup.data?.subject_type_slug ?? null
@@ -101,6 +103,21 @@ export default function PairsPage() {
     try {
       await dtApi.setup()
       setup.reload()
+    } catch (caught) {
+      setFailed(caught as Error)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function moveTo() {
+    if (!editing || !editTarget) return
+    setBusy(true)
+    setFailed(null)
+    try {
+      await dtApi.move(editing.id, editTarget)
+      setEditing(null)
+      pairs.reload()
     } catch (caught) {
       setFailed(caught as Error)
     } finally {
@@ -278,7 +295,8 @@ export default function PairsPage() {
                   <TableHead>{agentLabel}</TableHead>
                   <TableHead>사용 도구</TableHead>
                   <TableHead>담당 부서</TableHead>
-                  <TableHead className="w-20" />
+                  <TableHead>소속 부서</TableHead>
+                  <TableHead className="w-36" />
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -306,7 +324,25 @@ export default function PairsPage() {
                       <TableCell className="text-muted-foreground text-xs">
                         {row.agent_dept ?? '—'}
                       </TableCell>
-                      <TableCell className="text-right">
+                      <TableCell className="text-muted-foreground text-xs">
+                        {row.workspace_name}
+                      </TableCell>
+                      <TableCell className="space-x-1 text-right whitespace-nowrap">
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={(event) => {
+                            event.stopPropagation()
+                            setEditing(row)
+                            setEditTarget(
+                              (workspaces.data ?? []).find(
+                                (one) => one.name === row.workspace_name,
+                              )?.slug ?? '',
+                            )
+                          }}
+                        >
+                          <Pencil className="size-4" /> 수정
+                        </Button>
                         <Button
                           variant="ghost"
                           size="sm"
@@ -344,6 +380,49 @@ export default function PairsPage() {
           )}
         </>
       )}
+
+      <Dialog open={editing !== null} onOpenChange={(on) => !on && setEditing(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>연계 수정</DialogTitle>
+            <DialogDescription>
+              {editing?.subject_label} · {editing?.agent_label}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <span className="text-muted-foreground text-xs">소속 부서</span>
+              <Select value={editTarget} onValueChange={setEditTarget}>
+                <SelectTrigger>
+                  <SelectValue placeholder="부서 선택" />
+                </SelectTrigger>
+                <SelectContent>
+                  {(workspaces.data ?? []).map((one) => (
+                    <SelectItem key={one.slug} value={one.slug}>
+                      {one.name}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {/* **대상 · 수단은 못 바꾼다.** 바꾸면 다른 연계이고, 이미 매긴 평가가 엉뚱한
+                대상의 평가로 남는다 — 그 손실은 숫자에서만 드러난다. */}
+            <p className="text-muted-foreground text-sm">
+              {subjectLabel} · {agentLabel} 을 바꾸려면 이 연계를 <b>해제</b>하고 다시
+              등록합니다 — 다른 연계이기 때문입니다. 해제하면 이 연계의 평가와 이력도 함께
+              삭제됩니다.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              onClick={() => void moveTo()}
+              disabled={busy || !editTarget || editTarget === ''}
+            >
+              저장
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <ConfirmDialog
         open={unlinking !== null}

@@ -22,6 +22,7 @@ from app.extensions.caegroup.schemas import (
     HistoryOut,
     PairIn,
     PairOut,
+    PairPatchIn,
     SetupStatusOut,
 )
 from app.modules.accounts.models import User
@@ -93,6 +94,24 @@ def pair_create(
     found = [
         one for one in services.pairs(db, user, workspace=workspace) if one["id"] == row.id
     ]
+    return PairOut(**found[0])
+
+
+@router.patch("/pairs/{pair_id}", response_model=PairOut)
+def pair_update(
+    pair_id: uuid.UUID,
+    payload: PairPatchIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> PairOut:
+    """연계의 소속 부서를 옮긴다 — **양쪽 부서 멤버만.**
+
+    시험 항목 · 해석을 바꾸는 길은 두지 않는다. 그것은 다른 연계이고, 바꾸면 이미 매긴
+    평가가 엉뚱한 대상의 평가로 남는다 — 해제하고 다시 등록한다.
+    """
+    workspace = permissions.workspace_by_slug(db, payload.workspace_slug)
+    row = services.move(db, user, pair_id=pair_id, workspace=workspace)
+    found = [one for one in services.pairs(db, user, workspace=None) if one["id"] == row.id]
     return PairOut(**found[0])
 
 

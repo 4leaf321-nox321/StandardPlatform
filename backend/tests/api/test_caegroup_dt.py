@@ -120,6 +120,55 @@ def test_해석_타입은_도구_카탈로그와_다르다(client: TestClient, a
     assert "tools" not in keys
 
 
+def test_연계에서_고치는_것은_부서뿐이다(client: TestClient, admin: Signed) -> None:
+    """시험 항목이나 해석을 바꾸는 것은 **다른 연계**다.
+
+    바꾸는 길을 두면 이미 매긴 평가가 엉뚱한 대상의 평가로 남고, 그 손실은 숫자에서만
+    드러난다. 바꾸려면 해제하고 다시 등록한다 — 평가가 함께 사라진다는 것을 확인 문구가 말한다.
+    """
+    _setup(client, admin)
+    subject = _make_object(
+        client, admin, "sim_test_item", label=f"음향 시험 {uuid.uuid4().hex[:4]}"
+    )
+    agent = _make_object(
+        client, admin, "sim_analysis", label=f"음향 해석 {uuid.uuid4().hex[:4]}"
+    )
+    made = client.post(
+        f"{DT}/pairs",
+        json={
+            "subject_id": subject["id"],
+            "agent_id": agent["id"],
+            "workspace_slug": admin.workspace,
+        },
+        headers=admin.headers,
+    )
+    pair = made.json()["id"]
+
+    other = client.post(
+        "/api/workspaces",
+        json={"slug": f"move{uuid.uuid4().hex[:6]}", "name": "옮긴 부서"},
+        headers=admin.headers,
+    )
+    assert other.status_code == 201, other.text
+
+    moved = client.patch(
+        f"{DT}/pairs/{pair}",
+        json={"workspace_slug": other.json()["slug"]},
+        headers=admin.headers,
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["workspace_name"] == "옮긴 부서"
+
+    # 대상 · 수단을 바꾸는 길은 없다 — 보내도 받지 않는다.
+    refused = client.patch(
+        f"{DT}/pairs/{pair}",
+        json={"workspace_slug": other.json()["slug"], "agent_id": subject["id"]},
+        headers=admin.headers,
+    )
+    assert refused.status_code == 200
+    assert refused.json()["agent_id"] == agent["id"]
+
+
 def test_연계를_등록하고_해제한다(client: TestClient, admin: Signed) -> None:
     _setup(client, admin)
     subject = _make_object(client, admin, "sim_test_item", label="낙하 시험")

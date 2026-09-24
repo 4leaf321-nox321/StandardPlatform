@@ -367,6 +367,41 @@ def link(
     return row
 
 
+def move(db: Session, user: User, *, pair_id: uuid.UUID, workspace: Workspace) -> CaeDtPair:
+    """연계의 **소속 부서를 옮긴다.**
+
+    연계에서 고칠 수 있는 것은 이것뿐이다. 시험 항목이나 해석을 바꾸는 것은 **다른 연계**를
+    뜻하는데, 그때 이미 매긴 평가가 엉뚱한 대상의 평가로 남는다 — 그 손실은 숫자에서만
+    드러난다. 대상 · 수단을 바꾸려면 해제하고 다시 등록한다(평가가 함께 사라진다는 것을
+    확인 문구가 말한다).
+
+    **양쪽 부서 멤버여야 한다.** 남의 부서로 밀어 넣거나 남의 자료를 가져오는 일이 한쪽
+    권한으로 되면, 그 부서는 자기 숫자를 설명할 수 없게 된다.
+    """
+    row = _pair_or_404(db, pair_id)
+    if row.workspace_id == workspace.id:
+        return row
+    before = db.get(Workspace, row.workspace_id)
+    if before is None:
+        raise NotFound(code("CAEGROUP", 7), "부서를 찾을 수 없습니다.")
+    permissions.require_member(db, workspace=before, user=user)
+    permissions.require_member(db, workspace=workspace, user=user)
+    audit.record(
+        db,
+        action="caegroup.dt.pair.move",
+        actor=user,
+        target_table="cae_dt_pairs",
+        target_id=row.id,
+        target_label=f"{row.subject_id} - {row.agent_id}",
+        workspace_id=workspace.id,
+        changes={"from": before.slug, "to": workspace.slug},
+    )
+    row.workspace_id = workspace.id
+    db.commit()
+    db.refresh(row)
+    return row
+
+
 def unlink(db: Session, user: User, *, pair_id: uuid.UUID) -> None:
     """연계 해제. **평가도 함께 삭제된다** — 화면이 그 수를 확인 문구에 넣는다(2단계)."""
     row = db.get(CaeDtPair, pair_id)

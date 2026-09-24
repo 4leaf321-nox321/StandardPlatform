@@ -8741,6 +8741,58 @@
       }
     },
     "/api/ext/caegroup/dt/pairs/{pair_id}": {
+      "patch": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Pair Update",
+        "description": "연계의 소속 부서를 옮긴다 — **양쪽 부서 멤버만.**\n\n시험 항목 · 해석을 바꾸는 길은 두지 않는다. 그것은 다른 연계이고, 바꾸면 이미 매긴\n평가가 엉뚱한 대상의 평가로 남는다 — 해제하고 다시 등록한다.",
+        "operationId": "pair_update_api_ext_caegroup_dt_pairs__pair_id__patch",
+        "parameters": [
+          {
+            "name": "pair_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Pair Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PairPatchIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PairOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
       "delete": {
         "tags": [
           "ext:caegroup"
@@ -14550,6 +14602,21 @@
           "created_at"
         ],
         "title": "PairOut"
+      },
+      "PairPatchIn": {
+        "properties": {
+          "workspace_slug": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Workspace Slug"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workspace_slug"
+        ],
+        "title": "PairPatchIn",
+        "description": "연계에서 고칠 수 있는 것 — **소속 부서뿐이다.**\n\n시험 항목이나 해석을 바꾸는 것은 다른 연계를 뜻한다(§services.move)."
       },
       "PartOut": {
         "properties": {

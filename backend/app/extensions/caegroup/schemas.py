@@ -87,6 +87,15 @@ class AssessmentIn(BaseModel):
     evidence_ref: str = ""
 
 
+class PairPatchIn(BaseModel):
+    """연계에서 고칠 수 있는 것 — **소속 부서뿐이다.**
+
+    시험 항목이나 해석을 바꾸는 것은 다른 연계를 뜻한다(§services.move).
+    """
+
+    workspace_slug: str = Field(min_length=1)
+
+
 class HistoryOut(BaseModel):
     axis: str
     axis_label: str

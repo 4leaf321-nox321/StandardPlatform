@@ -111,6 +111,9 @@ export const dtApi = {
     api.get<Pair[]>(`${BASE}/pairs${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
   link: (body: { subject_id: string; agent_id: string; workspace_slug: string }) =>
     api.post<Pair>(`${BASE}/pairs`, body),
+  /** 연계에서 고칠 수 있는 것은 **소속 부서뿐**이다 — 대상 · 수단을 바꾸는 것은 다른 연계다. */
+  move: (id: string, workspaceSlug: string) =>
+    api.patch<Pair>(`${BASE}/pairs/${id}`, { workspace_slug: workspaceSlug }),
   unlink: (id: string) => api.delete<void>(`${BASE}/pairs/${id}`),
   assessments: (pairId: string) => api.get<Assessment[]>(`${BASE}/pairs/${pairId}/assessments`),
   save: (pairId: string, axis: string, body: AssessmentBody) =>
