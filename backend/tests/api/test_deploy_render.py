@@ -246,7 +246,8 @@ def test_setup_은_물어보고_계획을_보여준다(bundle: Path, tmp_path: P
         text=True,
         check=True,
     ).stdout
-    assert "PLM 기준정보 (plmhub) · 포트 8050 · 확장 sample" in out
+    # 확장은 화면에서 켠다 — 설치가 받는 값은 **기본값**이라 그렇게 적힌다.
+    assert "PLM 기준정보 (plmhub) · 포트 8050 · 확장 기본값 sample" in out
     assert "주(A) 10.0.0.1 — 상대 B 10.0.0.2" in out
     assert "db-primary" in out and "B 에 넘길 파일" in out
     # 대기는 이름 · 포트를 다시 묻지 않는다 — A 의 .env 를 그대로 받는다.

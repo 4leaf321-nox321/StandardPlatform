@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi import FastAPI
@@ -78,28 +79,33 @@ def test_env_의_오타는_기동을_막지_않고_화면이_말한다(
         get_settings.cache_clear()
 
 
-def test_화면에서_켜고_끈다(client: TestClient, admin: Signed) -> None:
-    """**시스템 관리자가 재배포 없이 켜고 끈다** — 그리고 그 일이 감사에 남는다."""
-    off = client.patch(
-        "/api/server/extensions/sample", json={"enabled": False}, headers=admin.headers
+def _patch(client: TestClient, admin: Signed, on: bool) -> dict[str, Any]:
+    got = client.patch(
+        "/api/server/extensions/sample", json={"enabled": on}, headers=admin.headers
     )
-    assert off.status_code == 200, off.text
-    assert off.json() == {
-        "name": "sample",
-        "enabled": False,
-        "pinned": True,
-        "updated_at": off.json()["updated_at"],
-    }
+    assert got.status_code == 200, got.text
+    return dict(got.json())
+
+
+def test_화면에서_켜고_끈다(client: TestClient, admin: Signed) -> None:
+    """**시스템 관리자가 재배포 없이 켜고 끈다** — 그리고 그 일이 감사에 남는다.
+
+    `.env` 의 기본값을 딛지 않는다. CI 에는 `.env` 가 없어서 기본값이 「꺼짐」 이고,
+    거기에 기댄 시험은 로컬에서만 통과한다 — 실측으로 그랬다. 그래서 먼저 켜 놓고
+    같은 자리에서 시작한다.
+    """
+    assert _patch(client, admin, True)["enabled"] is True
+    assert client.get("/api/ext/sample/ping", headers=admin.headers).status_code == 200
+
+    off = _patch(client, admin, False)
+    assert off["enabled"] is False and off["pinned"] is True
     assert client.get("/api/ext/sample/ping", headers=admin.headers).status_code == 404
 
-    on = client.patch(
-        "/api/server/extensions/sample", json={"enabled": True}, headers=admin.headers
-    )
-    assert on.status_code == 200 and on.json()["enabled"] is True
+    assert _patch(client, admin, True)["enabled"] is True
     assert client.get("/api/ext/sample/ping", headers=admin.headers).status_code == 200
 
     entries = client.get(
-        "/api/audit/entries?action=extension.toggle&limit=10", headers=admin.headers
+        "/api/audit/entries?action=extension.toggle&limit=20", headers=admin.headers
     ).json()["items"]
     changes = [one["changes"] for one in entries if one["target_label"] == "sample"]
     assert {"enabled": False, "was": True} in changes
@@ -108,15 +114,11 @@ def test_화면에서_켜고_끈다(client: TestClient, admin: Signed) -> None:
 
 def test_값이_안_바뀌면_감사에_안_남는다(client: TestClient, admin: Signed) -> None:
     """이미 켜진 것을 또 켜는 일이 이력에 쌓이면 그 목록은 곧 아무도 안 읽는다."""
+    _patch(client, admin, True)
     before = client.get(
         "/api/audit/entries?action=extension.toggle&limit=1", headers=admin.headers
     ).json()["total"]
-    assert (
-        client.patch(
-            "/api/server/extensions/sample", json={"enabled": True}, headers=admin.headers
-        ).status_code
-        == 200
-    )
+    assert _patch(client, admin, True)["enabled"] is True
     after = client.get(
         "/api/audit/entries?action=extension.toggle&limit=1", headers=admin.headers
     ).json()["total"]
