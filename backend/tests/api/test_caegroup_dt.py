@@ -86,6 +86,11 @@ def test_기준_정보는_시스템_관리자가_만든다(
         for one in client.get("/api/ontology/types", headers=admin.headers).json()
     }
     assert "sim_test_item" in types
+    # **묶음을 안 주면 타입이 메뉴에 안 뜬다** — 그러면 시험 항목을 넣을 자리를 주소로만
+    # 찾을 수 있고, 그 사실은 화면 어디에도 안 적힌다(실측 2026-09-24).
+    nav = client.get("/api/ontology/nav", headers=admin.headers).json()
+    master = next(one for one in nav if one["label"] == "디지털 트윈 기준정보")
+    assert {"시험 항목", "시뮬레이션 해석"} <= {one["label"] for one in master["items"]}
     schema = client.get("/api/ontology/schema", headers=admin.headers).json()
     subject = next(one for one in schema["types"] if one["slug"] == "sim_test_item")
     keys = {one["key"] for one in subject["properties"]}

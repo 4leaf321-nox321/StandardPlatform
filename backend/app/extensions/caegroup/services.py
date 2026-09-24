@@ -28,14 +28,29 @@ AGENT_SLUG = "sim_analysis"
 #: 도구 카탈로그(소프트웨어 제품)가 있는 설치에서는 해석이 그것을 가리킨다.
 TOOL_SLUG = "sim_tool"
 
+#: 기준 정보가 들어갈 사이드바 묶음.
+#:
+#: **묶음을 안 주면 타입이 메뉴에 안 뜬다.** 그러면 시험 항목을 넣을 자리를 주소로만 찾을 수
+#: 있고, 그 사실은 화면 어디에도 안 적힌다 — 실측으로 그렇게 됐다(2026-09-24).
+MASTER_GROUP = "dt_master"
+
 #: 첫 설정이 만드는 정의. **가져오기(importer)로 넣는다** — 더하고 고치기만 하므로
 #: 이미 있는 타입·속성은 건드리지 않고, 한 트랜잭션이라 반쯤 만들어진 정의가 안 남는다.
 SETUP_SCHEMA: dict[str, Any] = {
+    "groups": [
+        {
+            "slug": MASTER_GROUP,
+            "label": "디지털 트윈 기준정보",
+            "icon": "Database",
+            "sort_order": 50,
+        }
+    ],
     "types": [
         {
             "slug": SUBJECT_SLUG,
             "label": "시험 항목",
             "icon": "ClipboardCheck",
+            "nav_group_slug": MASTER_GROUP,
             "description": "디지털 트윈 역량 평가의 대상 — 시뮬레이션이 대신 확인하는 시험.",
             "key_policy": "optional",
             "properties": [
@@ -76,6 +91,7 @@ SETUP_SCHEMA: dict[str, Any] = {
             "slug": AGENT_SLUG,
             "label": "시뮬레이션 해석",
             "icon": "Wrench",
+            "nav_group_slug": MASTER_GROUP,
             "description": "디지털 트윈 역량 평가의 수단 — 시험을 대신 확인하는 해석.",
             "key_policy": "optional",
             "properties": [
@@ -89,7 +105,7 @@ SETUP_SCHEMA: dict[str, Any] = {
                 },
             ],
         },
-    ]
+    ],
 }
 
 #: 도구 카탈로그가 있을 때만 붙이는 참조 속성.

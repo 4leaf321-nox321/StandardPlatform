@@ -9,8 +9,9 @@
  * ⚠️ **연계를 해제하면 평가·이력이 함께 삭제된다**(2단계부터). 확인 문구가 그 사실을 말한다.
  */
 
-import { Link2, Unlink } from 'lucide-react'
+import { ExternalLink, Link2, Unlink } from 'lucide-react'
 import { useState } from 'react'
+import { Link } from 'react-router-dom'
 
 import { objectApi } from '@/modules/objects/api'
 import { workspaceApi } from '@/modules/workspaces/api'
@@ -154,6 +155,28 @@ export default function PairsPage() {
 
       {ready && (
         <>
+          {/* **기준 정보를 넣는 자리는 타입 화면이다.** 목록 · 상세 · 일괄 입력 ·
+              내보내기가 거기 이미 있어 확장이 다시 만들지 않는다. 다만 여기서 한 걸음에
+              갈 수 있어야 한다 — 없으면 주소를 외워야 한다. */}
+          <section className="flex flex-wrap items-center gap-3 rounded-md border p-4 text-sm">
+            <span className="text-muted-foreground">기준 정보 관리</span>
+            <Link
+              to={`/o/${setup.data?.subject_type_slug ?? ''}`}
+              className="inline-flex items-center gap-1 hover:underline"
+            >
+              {subjectLabel} <ExternalLink className="size-3.5" />
+            </Link>
+            <Link
+              to={`/o/${setup.data?.agent_type_slug ?? ''}`}
+              className="inline-flex items-center gap-1 hover:underline"
+            >
+              {agentLabel} <ExternalLink className="size-3.5" />
+            </Link>
+            <span className="text-muted-foreground text-xs">
+              추가 · 수정 · 일괄 입력 · 내보내기는 해당 타입 화면에서 수행합니다.
+            </span>
+          </section>
+
           <section className="space-y-3 rounded-md border p-4">
             <h2 className="text-sm font-semibold">연계 등록</h2>
             <div className="grid gap-3 sm:grid-cols-[1fr_1fr_12rem_auto] sm:items-end">
