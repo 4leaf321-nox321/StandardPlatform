@@ -79,7 +79,7 @@ def test_기준_정보는_시스템_관리자가_만든다(
     after = _setup(client, admin)
     assert after["ready"] is True
     assert after["subject_type_slug"] == "sim_test_item"
-    assert after["agent_type_slug"] == "sim_tool"
+    assert after["agent_type_slug"] == "sim_analysis"
 
     types = {
         one["slug"]: one
@@ -95,10 +95,29 @@ def test_기준_정보는_시스템_관리자가_만든다(
     assert _setup(client, admin)["ready"] is True
 
 
+def test_해석_타입은_도구_카탈로그와_다르다(client: TestClient, admin: Signed) -> None:
+    """**해석과 소프트웨어 제품은 다른 것이다.**
+
+    개발 설치의 `sim_tool` 은 해석 분야 · 라이선스를 필수로 받는 제품 카탈로그였다. 수단을
+    거기 합치면 해석 한 줄을 적을 때마다 라이선스를 입력해야 하고, 같은 제품을 쓰는 해석
+    열 개가 한 줄로 뭉쳐 「이 시험을 무엇으로 보나」 를 답할 수 없다 — 실측으로 표본을
+    넣다가 막혔다(2026-09-24).
+    """
+    _setup(client, admin)
+    schema = client.get("/api/ontology/schema", headers=admin.headers).json()
+    agent = next(one for one in schema["types"] if one["slug"] == "sim_analysis")
+    assert agent["label"] == "시뮬레이션 해석"
+    keys = {one["key"] for one in agent["properties"]}
+    assert {"kind", "model_kind"} <= keys
+    # 이 시험 DB 에는 도구 카탈로그가 없으므로 참조 속성은 안 붙는다 — 없는 타입을
+    # 가리키는 속성을 만들면 기준 정보 생성이 통째로 막힌다.
+    assert "tools" not in keys
+
+
 def test_연계를_등록하고_해제한다(client: TestClient, admin: Signed) -> None:
     _setup(client, admin)
     subject = _make_object(client, admin, "sim_test_item", label="낙하 시험")
-    agent = _make_object(client, admin, "sim_tool", label="낙하 해석")
+    agent = _make_object(client, admin, "sim_analysis", label="낙하 해석")
 
     made = client.post(
         f"{DT}/pairs",
@@ -136,7 +155,7 @@ def test_연계를_등록하고_해제한다(client: TestClient, admin: Signed) 
 def test_다른_타입의_객체는_등록되지_않는다(client: TestClient, admin: Signed) -> None:
     """대상 자리에 시뮬레이션을 등록하면 화면이 그 줄을 그릴 수 없다 — 이름도 속성도 다르다."""
     _setup(client, admin)
-    agent = _make_object(client, admin, "sim_tool", label="열 해석")
+    agent = _make_object(client, admin, "sim_analysis", label="열 해석")
     got = client.post(
         f"{DT}/pairs",
         json={

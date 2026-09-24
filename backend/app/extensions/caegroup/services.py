@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import uuid
+from copy import deepcopy
 from typing import Any
 
 from sqlalchemy import select
@@ -23,7 +24,9 @@ from app.shared import audit, permissions
 from app.shared.errors import Conflict, NotFound, code
 
 SUBJECT_SLUG = "sim_test_item"
-AGENT_SLUG = "sim_tool"
+AGENT_SLUG = "sim_analysis"
+#: 도구 카탈로그(소프트웨어 제품)가 있는 설치에서는 해석이 그것을 가리킨다.
+TOOL_SLUG = "sim_tool"
 
 #: 첫 설정이 만드는 정의. **가져오기(importer)로 넣는다** — 더하고 고치기만 하므로
 #: 이미 있는 타입·속성은 건드리지 않고, 한 트랜잭션이라 반쯤 만들어진 정의가 안 남는다.
@@ -71,12 +74,12 @@ SETUP_SCHEMA: dict[str, Any] = {
         },
         {
             "slug": AGENT_SLUG,
-            "label": "시뮬레이션",
+            "label": "시뮬레이션 해석",
             "icon": "Wrench",
-            "description": "디지털 트윈 역량 평가의 수단 — 시험을 대신하는 해석 · 도구.",
+            "description": "디지털 트윈 역량 평가의 수단 — 시험을 대신 확인하는 해석.",
             "key_policy": "optional",
             "properties": [
-                {"key": "kind", "label": "시뮬레이션 종류", "data_type": "text"},
+                {"key": "kind", "label": "해석 종류", "data_type": "text"},
                 {
                     "key": "model_kind",
                     "label": "모델 종류",
@@ -88,6 +91,35 @@ SETUP_SCHEMA: dict[str, Any] = {
         },
     ]
 }
+
+#: 도구 카탈로그가 있을 때만 붙이는 참조 속성.
+#:
+#: **해석과 소프트웨어 제품은 다른 것이다.** 제품 타입(`sim_tool`)은 해석 분야 · 수치 기법 ·
+#: 라이선스를 받는 카탈로그이고, 여기서 재는 수단은 「낙하 구조 해석」 처럼 **시험을 보는
+#: 행위**다. 하나로 합치면 해석 하나를 적을 때마다 라이선스를 입력해야 하고, 같은 제품을
+#: 쓰는 해석 열 개가 한 줄로 뭉쳐 「이 시험을 무엇으로 보나」 를 답할 수 없다.
+TOOL_PROPERTY: dict[str, Any] = {
+    "key": "tools",
+    "label": "사용 도구",
+    "data_type": "object_ref",
+    "ref_type_slug": TOOL_SLUG,
+    "multi": True,
+    "inverse_label": "이 도구를 쓰는 해석",
+    "help": "이 해석이 사용하는 소프트웨어입니다.",
+}
+
+
+def setup_schema(db: Session) -> dict[str, Any]:
+    """이 설치에 맞춘 정의.
+
+    도구 카탈로그가 없는 설치에서는 참조 속성을 빼고 만든다 — 없는 타입을 가리키는
+    속성은 가져오기가 거절하고, 그러면 기준 정보 생성이 통째로 막힌다.
+    """
+    schema = deepcopy(SETUP_SCHEMA)
+    if db.scalar(select(ObjectType).where(ObjectType.slug == TOOL_SLUG)) is not None:
+        agent = next(one for one in schema["types"] if one["slug"] == AGENT_SLUG)
+        agent["properties"].append(deepcopy(TOOL_PROPERTY))
+    return schema
 
 
 def setting(db: Session) -> CaeDtSetting:
@@ -126,7 +158,7 @@ def setup(db: Session, user: User) -> dict[str, Any]:
     **사람이 손으로 정의를 짜 맞추게 두지 않는다.** 그러면 설치마다 칸 이름이 갈리고,
     화면은 어느 칸이 불량 유형인지 알 방법이 없다.
     """
-    plan = importer.apply(db, SETUP_SCHEMA)
+    plan = importer.apply(db, setup_schema(db))
     if plan.errors:
         raise Conflict(
             code("CAEGROUP", 1), "기준 정보 생성에 실패했습니다: " + "; ".join(plan.errors)
@@ -168,8 +200,11 @@ def pairs(db: Session, user: User, *, workspace: Workspace | None) -> list[dict[
     stmt = select(CaeDtPair)
     if workspace is not None:
         stmt = stmt.where(CaeDtPair.workspace_id == workspace.id)
-    else:
-        # 부서를 안 고르면 **내가 속한 부서만.** 전사 조회는 다음 단계의 물음이다.
+    elif not user.is_system_admin:
+        # 부서를 안 고르면 **내가 속한 부서만.** 시스템 관리자는 전부 본다 —
+        # 목록·조회가 이 플랫폼의 다른 화면과 같은 규칙을 따라야 한다
+        # (`visible_owner_clause`). 안 그러면 관리자가 방금 등록한 연계가 자기
+        # 화면에서 안 보이고, 그때 사람은 저장이 안 된 줄로 읽는다(실측).
         mine = permissions.my_workspace_ids(db, user)
         if not mine:
             return []
