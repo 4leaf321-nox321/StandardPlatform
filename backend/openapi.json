@@ -8511,7 +8511,7 @@
           "server"
         ],
         "summary": "Extension Toggle",
-        "description": "확장을 켜거나 끈다 — **시스템 관리자만.**\n\n끄면 그 확장의 API 는 404 가 되고 메뉴 · 경로가 사라진다. **자료는 남는다** —\n표는 확장과 무관하게 이미 있고(마이그레이션은 전부 돈다), 다시 켜면 그대로다.\n\n화면의 메뉴는 `index.html` 이 들고 오므로 **새로 고침 뒤**에 바뀐다.",
+        "description": "확장을 켜거나 끈다 — **시스템 관리자만.**\n\n끄면 그 확장의 API 는 404 가 되고 메뉴 · 경로가 사라진다. **자료는 남는다** —\n표는 확장과 무관하게 이미 있고(마이그레이션은 전부 돈다), 다시 켜면 그대로다.\n\n화면은 `/server/enabled-extensions` 를 다시 받아 **새로 고침 없이** 따라온다.",
         "operationId": "extension_toggle_api_server_extensions__name__patch",
         "parameters": [
           {
