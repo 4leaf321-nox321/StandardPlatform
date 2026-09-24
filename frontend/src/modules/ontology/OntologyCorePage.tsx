@@ -148,6 +148,10 @@ export default function OntologyCorePage() {
               </TableBody>
             </Table>
           )}
+          <p className="text-muted-foreground text-sm">
+            공개 · 해제 기록은 관리 › 감사 기록에서 <code>ontology.type.core</code> 로 조회합니다 —
+            <b>언제 누가 공개했는지</b>는 이 목록이 아니라 그 기록이 답합니다.
+          </p>
         </TabsContent>
 
         <TabsContent value="tokens" className="space-y-2 pt-4">

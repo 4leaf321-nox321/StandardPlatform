@@ -333,6 +333,39 @@ def test_받아_간_것이_감사에_남는다(client: TestClient, admin: Signed
     assert after["total"] == before
 
 
+def test_공개를_켜고_끈_일이_감사에_남는다(client: TestClient, admin: Signed) -> None:
+    """「지금 무엇이 나가나」 는 코어 현황이 답한다.
+
+    **「언제 누가 공개했나」 는 여기서만 답한다.**
+
+    개발 설치에서 코어로 켜진 타입 하나의 사연을 아무도 댈 수 없었다 — 타입 수정 기록에
+    섞여 있으면 그 한 줄을 찾을 수 없다.
+    """
+    slug = _make_type(
+        client, admin, label=f"공개이력{uuid.uuid4().hex[:6]}", key_policy="optional"
+    )
+
+    def logged() -> list[dict[str, Any]]:
+        got = client.get(
+            "/api/audit/entries?action=ontology.type.core&limit=50", headers=admin.headers
+        ).json()
+        return [one for one in got["items"] if one["target_label"] == slug]
+
+    _open(client, admin, slug)
+    opened = logged()
+    assert len(opened) == 1
+    assert opened[0]["changes"] == {"core": True, "was": False}
+
+    # **값이 안 바뀌면 안 남긴다.** 이름만 고칠 때마다 공개 이력이 늘면 그 목록은 곧 안 읽힌다.
+    _open(client, admin, slug)
+    assert len(logged()) == 1
+
+    _open(client, admin, slug, on=False)
+    shut = logged()
+    assert len(shut) == 2
+    assert {"core": False, "was": True} in [one["changes"] for one in shut]
+
+
 def _rows_as(
     client: TestClient, headers: dict[str, str], slug: str, **params: Any
 ) -> dict[str, Any]:

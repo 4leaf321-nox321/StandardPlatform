@@ -400,12 +400,15 @@ def update_type(
         row.is_active = payload.is_active
     # **투영 타입은 못 연다.** 행이 원 표(부서 · 계정)에 있어 사람 정보가 그대로 나가고,
     # 그것을 바깥에 여는 일은 온톨로지 공개가 아니라 다른 판단이다.
+    core_flip: tuple[bool, bool] | None = None
     if "core" in sent and payload.core is not None:
         if payload.core and row.kind_class == "system":
             raise Conflict(
                 code("ONTOLOGY", 45),
                 f"{row.label}은(는) 다른 표를 비추는 타입이라 외부에 공개할 수 없습니다.",
             )
+        if payload.core != row.core:
+            core_flip = (row.core, payload.core)
         row.core = payload.core
 
     # **`null` 을 명시하면 사이드바에서 뺀다.** 안 보내면 그대로 둔다 — 그 둘을
@@ -424,6 +427,19 @@ def update_type(
         row_id=row.id,
         label=slug,
     )
+    if core_flip is not None:
+        # **공개를 켜고 끈 일은 따로 남긴다.** 타입 수정 기록에 섞으면 「지금 무엇이 나가고
+        # 있나」 는 코어 현황으로 알아도 「언제 누가 열었나」 를 물을 자리가 없다 — 실제로
+        # 개발 설치에서 코어로 켜진 타입 하나의 사연을 아무도 댈 수 없었다.
+        record_audit(
+            db,
+            action="ontology.type.core",
+            actor=user,
+            target_table="object_types",
+            target_id=row.id,
+            target_label=slug,
+            changes={"core": core_flip[1], "was": core_flip[0]},
+        )
     db.commit()
     db.refresh(row)
     return _type_out(
