@@ -58,7 +58,8 @@ function Extensions() {
     <section className="space-y-3">
       <h2 className="text-base font-semibold">확장 모듈</h2>
       <p className="text-muted-foreground text-sm">
-        이 번들에 들어 있는 확장입니다. 끄면 그 확장의 메뉴 · 화면 · API 가 <b>바로</b> 사라지고{' '}
+        이 번들에 들어 있는 확장입니다. 끄면 그 확장의 <b>메뉴 그룹 · 화면 · API 가 바로</b>{' '}
+        사라지고{' '}
         <b>자료는 남습니다</b> — 다시 켜면 그대로입니다. 켜고 끈 기록은 관리 › 감사 기록에서{' '}
         <code>extension.toggle</code> 로 조회합니다.
       </p>

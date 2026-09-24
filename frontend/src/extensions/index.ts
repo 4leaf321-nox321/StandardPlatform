@@ -24,7 +24,15 @@ export { ExtensionGate } from './ExtensionGate'
 export interface ExtensionDef {
   /** 백엔드의 이름과 같다(EXTENSIONS 에 적는 값). */
   name: string
-  /** 사이드바에 더할 그룹. 홈 바로 아래에 선다. */
+  /**
+   * 사이드바에 더할 그룹 — **제 이름으로 낸다.** 홈 바로 아래에 선다.
+   *
+   * 「확장」 이라는 바구니에 넣지 않는다. 켜고 끄는 일이 **기능 한 덩어리가 열리고 닫히는
+   * 일**이어야 하고, 사용자는 그것을 「설비 관리가 있다 / 없다」 로 읽는다 — 「확장 안에
+   * 무언가가 있다」 는 개발자의 사정이다.
+   *
+   * 기존 그룹과 제목이 같으면 그 그룹에 항목이 합쳐진다(`mergeExtensions`).
+   */
   nav: NavGroup[]
   /** AppShell 아래 라우트. 경로는 `ext/<이름>/…` 로 시작한다 — 코어 경로와 안 겹치게. */
   routes: RouteObject[]

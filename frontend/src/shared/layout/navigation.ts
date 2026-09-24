@@ -233,6 +233,29 @@ export function mergeDynamic(groups: NavGroup[], dynamic: DynamicGroup[]): NavGr
   return [withoutPlaceholder[0], ...converted, ...withoutPlaceholder.slice(1)]
 }
 
+/**
+ * 확장의 그룹을 사이드바에 세운다 — **켜면 그 그룹이 열리고, 끄면 닫힌다.**
+ *
+ * 확장은 자기 그룹을 제 이름으로 낸다(「확장」 이라는 바구니에 넣지 않는다). 그래야 켜는 일이
+ * 「기능 한 덩어리가 생기는 일」 로 읽힌다.
+ *
+ * **제목이 같으면 합친다.** 확장 둘이 같은 제목을 고르거나 공통 화면과 같은 제목을 쓰면 같은
+ * 이름의 그룹이 둘 서고, 사람은 어느 쪽에 무엇이 있는지 매번 다시 찾는다.
+ */
+export function mergeExtensions(groups: NavGroup[], extension: NavGroup[]): NavGroup[] {
+  if (extension.length === 0) return groups
+
+  const fresh: NavGroup[] = []
+  const out = groups.map((group) => ({ ...group, items: [...group.items] }))
+  for (const group of extension) {
+    const twin = group.title ? out.find((one) => one.title === group.title) : undefined
+    if (twin) twin.items.push(...group.items)
+    else fresh.push(group)
+  }
+  // 홈 바로 아래에 세운다 — 동선이 곧 순서여야 한다.
+  return fresh.length === 0 ? out : [out[0], ...fresh, ...out.slice(1)]
+}
+
 export function itemHref(item: NavItem, slug: string): string {
   return item.to ?? item.resolve?.(slug) ?? '/'
 }
@@ -259,8 +282,7 @@ export function visibleGroups(
 ): NavGroup[] {
   const merged = mergeDynamic(NAV_GROUPS, dynamic)
   // 확장은 동적 묶음 뒤, 공통 화면 앞 — 「이 설치만의 것」 이 「어디에나 있는 것」 보다 앞선다.
-  const withExtensions =
-    extension.length === 0 ? merged : [merged[0], ...extension, ...merged.slice(1)]
+  const withExtensions = mergeExtensions(merged, extension)
   return withExtensions
     .map((group) => ({
       ...group,

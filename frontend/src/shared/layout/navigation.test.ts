@@ -124,4 +124,24 @@ describe('사이드바', () => {
     // **못 불러와도 사이드바는 선다.** 통째로 비면 나갈 길까지 사라진다.
     expect(visibleGroups(ADMIN, [])).toEqual(visibleGroups(ADMIN))
   })
+
+  it('확장은 제 이름의 그룹으로 홈 바로 아래에 선다', () => {
+    // 확장을 켜는 일은 **기능 한 덩어리가 열리는 일**이다 — 「확장」 이라는 바구니 안에
+    // 숨기면 사용자는 그 말로 자기 일을 찾지 않는다.
+    const groups = visibleGroups(ADMIN, [], [
+      { title: '설비 관리', items: [{ label: '설비', icon: DEFAULT_ICON, to: '/ext/equip' }] },
+    ])
+    expect(groups[1].title).toBe('설비 관리')
+    expect(visibleGroups(ADMIN, [], []).map((one) => one.title)).not.toContain('설비 관리')
+  })
+
+  it('제목이 같으면 기존 그룹에 합친다', () => {
+    // 같은 이름의 그룹이 둘 서면 사람은 어느 쪽에 무엇이 있는지 매번 다시 찾는다.
+    const groups = visibleGroups(ADMIN, [], [
+      { title: '관리', items: [{ label: '설비 설정', icon: DEFAULT_ICON, to: '/ext/equip/설정' }] },
+    ])
+    const admin = groups.filter((one) => one.title === '관리')
+    expect(admin).toHaveLength(1)
+    expect(admin[0].items.map((one) => one.label)).toContain('설비 설정')
+  })
 })
