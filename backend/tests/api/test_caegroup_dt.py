@@ -862,6 +862,95 @@ def test_선택형도_이름으로_일괄_저장된다(client: TestClient, admin
     assert mine["rungs"] == ["전처리 자동화", "실행 자동화"]
 
 
+def test_선택형은_항목마다_체크로_온다(client: TestClient, admin: Signed) -> None:
+    """표는 **항목마다 한 열**이고, 체크한 열의 이름들이 목록으로 온다.
+
+    한 칸에 「전처리 자동화 · 실행 자동화」 를 적게 하면 이름을 정확히 외워야 하고, 엑셀에서
+    채우기도 어렵다. 글 하나도 계속 받는다 — 엑셀 한 칸에서 온 표가 있다.
+    """
+    pair = _pair(
+        client, admin, f"소음 {uuid.uuid4().hex[:4]}", f"소음 해석 {uuid.uuid4().hex[:4]}"
+    )
+    got = client.put(
+        f"{DT}/assessments/bulk",
+        json={
+            "axis": "automation",
+            "rows": [
+                {
+                    "pair_id": pair,
+                    "rungs": ["전처리 자동화", "보고서 자동화"],
+                    "note": "템플릿 · 보고서 생성",
+                },
+                {"pair_id": pair, "rungs": ["없는 항목"], "note": "x"},
+                {"pair_id": pair, "rungs": [], "note": "아무것도 안 켰다"},
+            ],
+        },
+        headers=admin.headers,
+    )
+    assert [one["status"] for one in got.json()] == ["ok", "error", "skipped"]
+    rows = client.get(f"{DT}/assessments/sheet?axis=automation", headers=admin.headers).json()
+    mine = next(one for one in rows["rows"] if one["pair_id"] == pair)
+    assert mine["rungs"] == ["전처리 자동화", "보고서 자동화"]
+
+
+def test_바탕을_일괄로_고쳐도_불량_재현은_남는다(client: TestClient, admin: Signed) -> None:
+    """일괄 입력은 **바탕(형상 · 거동)만** 고친다.
+
+    저장이 축 한 줄을 통째로 다시 쓰기 때문에, 지금 든 불량 유형별 재현을 같이 넘기지
+    않으면 바탕을 고치는 일이 「역량」 화면에서 채운 재현 표시를 지운다.
+    """
+    _setup(client, admin)
+    subject = _make_object(
+        client,
+        admin,
+        "sim_test_item",
+        label=f"낙하 시험 {uuid.uuid4().hex[:4]}",
+        properties={"defect_types": ["글라스 크랙", "프레임 찍힘"]},
+    )
+    agent = _make_object(
+        client, admin, "sim_analysis", label=f"낙하 해석 {uuid.uuid4().hex[:4]}"
+    )
+    pair = client.post(
+        f"{DT}/pairs",
+        json={
+            "subject_id": subject["id"],
+            "agent_id": agent["id"],
+            "workspace_slug": admin.workspace,
+        },
+        headers=admin.headers,
+    ).json()["id"]
+    client.put(
+        f"{DT}/pairs/{pair}/assessments/modeling",
+        json={
+            "rungs": ["geometry"],
+            "defects": {"글라스 크랙": {"test": "2026-07"}},
+            "note": "형상 일치 · 글라스 크랙 시험 재현",
+        },
+        headers=admin.headers,
+    )
+    got = client.put(
+        f"{DT}/assessments/bulk",
+        json={
+            "axis": "modeling",
+            "rows": [
+                {
+                    "pair_id": pair,
+                    "rungs": ["형상 재현", "거동 재현"],
+                    "note": "거동까지 일치 확인",
+                }
+            ],
+        },
+        headers=admin.headers,
+    )
+    assert [one["status"] for one in got.json()] == ["ok"], got.text
+    saved = client.get(f"{DT}/pairs/{pair}/assessments", headers=admin.headers).json()
+    after = next(one for one in saved if one["axis"] == "modeling")
+    assert after["rungs"] == ["geometry", "performance"]
+    assert after["defects"] == {"글라스 크랙": {"test": "2026-07"}}
+    # 수준은 셈이 접는다 — 바탕만 고쳐도 재현이 남아 있어 그 셈이 유지된다.
+    assert after["rung"] == "test_some"
+
+
 def test_현재값_표를_파일로_내려받는다(client: TestClient, admin: Signed) -> None:
     """엑셀에서 고치는 것이 가장 빠른 사람이 많다. 열 순서가 붙여넣기와 같아야 한다."""
     _pair(client, admin, f"방수 {uuid.uuid4().hex[:4]}", f"실링 해석 {uuid.uuid4().hex[:4]}")
@@ -877,6 +966,31 @@ def test_현재값_표를_파일로_내려받는다(client: TestClient, admin: S
     header = csv.splitlines()[0]
     assert header.split(",")[:2] == ["시험 항목", "시뮬레이션 해석"]
     assert "가상검증률" in header and "근거" in header
+
+    # 여러 항목을 고르는 축은 **항목마다 한 열**이고 켠 것은 `O` 다 — 화면의 표와 같은 모양
+    # 이어야 내려받아 고친 표를 그대로 붙여 넣을 수 있다.
+    pair = _pair(
+        client, admin, f"충격 {uuid.uuid4().hex[:4]}", f"충격 해석 {uuid.uuid4().hex[:4]}"
+    )
+    client.put(
+        f"{DT}/assessments/bulk",
+        json={
+            "axis": "automation",
+            "rows": [{"pair_id": pair, "rungs": ["실행 자동화"], "note": "템플릿"}],
+        },
+        headers=admin.headers,
+    )
+    picked = client.get(
+        f"{DT}/assessments/sheet/export?axis=automation&format=csv", headers=admin.headers
+    ).content.decode("utf-8-sig")
+    head = picked.splitlines()[0].split(",")
+    assert head[:3] == ["시험 항목", "시뮬레이션 해석", "담당 부서"]
+    assert "전처리 자동화" in head and "실행 자동화" in head
+    assert "수동" not in head  # 아무것도 안 켠 것이라 열이 없다
+    mine = next(one for one in picked.splitlines()[1:] if one.startswith("충격 "))
+    cells = mine.split(",")
+    assert cells[head.index("실행 자동화")] == "O"
+    assert cells[head.index("전처리 자동화")] == ""
 
 
 def test_인력도_표로_받아_한_번에_고친다(client: TestClient, admin: Signed) -> None:

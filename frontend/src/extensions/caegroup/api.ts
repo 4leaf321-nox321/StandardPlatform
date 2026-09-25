@@ -221,7 +221,8 @@ export interface BulkRow {
   agent_label?: string
   value?: string
   rung?: string
-  rungs?: string
+  /** 고른 항목의 **이름들** — 표는 항목마다 열이 있어 목록으로 보낸다. */
+  rungs?: string | string[]
   note?: string
 }
 

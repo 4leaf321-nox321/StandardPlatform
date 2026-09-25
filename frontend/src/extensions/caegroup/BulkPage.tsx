@@ -21,36 +21,41 @@ import { workspaceApi } from '@/modules/workspaces/api'
 import { downloadFile } from '@/shared/api/client'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
-import { PasteGrid, type GridColumn } from '@/shared/components/PasteGrid'
+import { PasteGrid, isChecked, type GridColumn } from '@/shared/components/PasteGrid'
 import { Button } from '@/shared/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { useResource } from '@/shared/hooks/useResource'
 
 import { dtApi, type AxisDef, type BulkResult, type Sheet } from './api'
 
+/** 이 축에서 **고르는 항목의 이름들** — 표는 항목마다 한 열을 둔다.
+ *
+ * 매트릭스는 **바탕**(형상 · 거동)만 고른다 — 불량 유형별 재현은 시험 항목마다 유형이
+ * 달라 열로 세울 수 없다. `hide_empty` 축의 첫 칸(수동 · 없음)은 「아무것도 안 켠 것」
+ * 이라 열이 없다.
+ */
+function picksOf(axis: AxisDef): string[] {
+  if (axis.kind === 'matrix') return (axis.base ?? []).map((one) => one.label)
+  return (axis.hide_empty ? axis.rungs.slice(1) : axis.rungs).map((one) => one.label)
+}
+
+/** 체크 열의 key — 열 순서가 축마다 달라, 저장할 때 **key 로 찾는다.** */
+const PICK = 'pick:'
+
 /** 축 종류마다 고치는 칸이 다르다 — 식별 칸 셋은 같다.
  *
  * **이름 칸에는 등록된 목록을 준다**(드롭다운). 손으로 치게 하면 「낙하시험」 과
  * 「낙하 시험」 이 섞이고, 그 줄은 저장 자리에서 「못 찾음」 이 된다.
+ *
+ * 여러 항목을 고르는 축(자동화 · 시험 대체 · 모델링 바탕)은 **항목마다 한 열**을 두고
+ * 체크한다 — 한 칸에 이름을 이어 적게 하면 이름을 정확히 외워야 하고, 엑셀에서 채우기도
+ * 어렵다.
  */
 function columnsFor(
   axis: AxisDef,
   known: { subjects: string[]; agents: string[] },
 ): GridColumn[] {
-  const levels = (axis.hide_empty ? axis.rungs.slice(1) : axis.rungs).map((one) => one.label)
-  const value: GridColumn =
-    axis.kind === 'value'
-      ? { key: 'value', header: axis.label, help: `숫자 ${axis.unit ?? ''}`.trim() }
-      : axis.kind === 'rung'
-        ? { key: 'rung', header: axis.label, help: '목록에서 고릅니다', options: levels }
-        : {
-            key: 'rungs',
-            header: axis.label,
-            help: '여럿이면 · 으로 이어 적습니다',
-            options: levels,
-            multi: true,
-          }
-  return [
+  const head: GridColumn[] = [
     {
       key: 'subject_label',
       header: '시험 항목',
@@ -59,19 +64,52 @@ function columnsFor(
     },
     { key: 'agent_label', header: '시뮬레이션 해석', options: known.agents },
     { key: 'dept', header: '담당 부서', help: '읽기용', readOnly: true },
-    value,
-    { key: 'note', header: '근거', help: '무엇을 보고 매겼는지 — 비우면 그 줄은 저장되지 않습니다' },
+  ]
+  const note: GridColumn = {
+    key: 'note',
+    header: '근거',
+    help: '무엇을 보고 매겼는지 — 비우면 그 줄은 저장되지 않습니다',
+  }
+  if (axis.kind === 'value') {
+    return [...head, { key: 'value', header: axis.label, help: `숫자 ${axis.unit ?? ''}`.trim() }, note]
+  }
+  if (axis.kind === 'rung') {
+    const levels = picksOf(axis)
+    return [
+      ...head,
+      { key: 'rung', header: axis.label, help: '목록에서 고릅니다', options: levels },
+      note,
+    ]
+  }
+  return [
+    ...head,
+    ...picksOf(axis).map((label) => ({ key: `${PICK}${label}`, header: label, check: true })),
+    note,
   ]
 }
 
-function rowsOf(sheet: Sheet): string[][] {
-  return sheet.rows.map((one) => [
-    one.subject_label,
-    one.agent_label,
-    one.agent_dept ?? '',
-    one.value !== null ? String(one.value) : one.rung || one.rungs.join(' · '),
-    one.note,
-  ])
+function rowsOf(sheet: Sheet, columns: GridColumn[]): string[][] {
+  return sheet.rows.map((one) =>
+    columns.map((column) => {
+      switch (column.key) {
+        case 'subject_label':
+          return one.subject_label
+        case 'agent_label':
+          return one.agent_label
+        case 'dept':
+          return one.agent_dept ?? ''
+        case 'value':
+          return one.value !== null ? String(one.value) : ''
+        case 'rung':
+          return one.rung
+        case 'note':
+          return one.note
+        default:
+          // 체크 열 — 지금 켜져 있으면 표시된 채로 시작한다.
+          return one.rungs.includes(column.key.slice(PICK.length)) ? 'O' : ''
+      }
+    }),
+  )
 }
 
 function staffColumns(known: { agents: string[]; workspaces: string[] }): GridColumn[] {
@@ -129,9 +167,11 @@ export default function BulkPage() {
   // **현재값 불러오기.** 축을 바꾸거나 다시 받으면 표가 그 값으로 채워진다.
   useEffect(() => {
     if (sheet.data) {
-      setRows(rowsOf(sheet.data))
+      setRows(rowsOf(sheet.data, columns))
       setResults(null)
     }
+    // 열은 축이 정한다 — 열이 바뀔 때마다 채우면 고치던 값이 지워진다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sheet.data])
 
   // 인력도 **현재값이 채워진 채로** 시작한다.
@@ -203,17 +243,26 @@ export default function BulkPage() {
     setBusy(true)
     setFailed(null)
     try {
+      // 열 순서가 축마다 다르다 — **key 로 찾는다**(자리로 세면 축을 늘릴 때 어긋난다).
+      const at = new Map(columns.map((one, index) => [one.key, index]))
+      const cell = (row: string[], key: string) => (row[at.get(key) ?? -1] ?? '').trim()
+      const checks = columns.filter((one) => one.check)
       const body = rows
-        .filter((row) => row.some((cell) => cell.trim() !== ''))
+        .filter((row) => row.some((one) => one.trim() !== ''))
         .map((row) => ({
-          subject_label: row[0] ?? '',
-          agent_label: row[1] ?? '',
+          subject_label: cell(row, 'subject_label'),
+          agent_label: cell(row, 'agent_label'),
           ...(axis.kind === 'value'
-            ? { value: row[3] ?? '' }
+            ? { value: cell(row, 'value') }
             : axis.kind === 'rung'
-              ? { rung: row[3] ?? '' }
-              : { rungs: row[3] ?? '' }),
-          note: row[4] ?? '',
+              ? { rung: cell(row, 'rung') }
+              : {
+                  // 체크한 열의 **이름**을 모아 보낸다. key 는 화면이 모른다.
+                  rungs: checks
+                    .filter((one) => isChecked(cell(row, one.key)))
+                    .map((one) => one.header),
+                }),
+          note: cell(row, 'note'),
         }))
       if (body.length === 0) return
       setResults(await dtApi.bulkAssess(axis.key, body))
@@ -319,7 +368,14 @@ export default function BulkPage() {
       {axis?.kind === 'matrix' && (
         <p className="text-muted-foreground rounded-md border p-3 text-sm">
           {axis.label} 은 바탕(형상 · 거동)만 이 표에서 고칩니다. 불량 유형별 재현은 「역량」
-          화면에서 표로 입력합니다 — 유형이 시험 항목마다 다르기 때문입니다.
+          화면에서 표로 입력하고, 이 표의 저장은 그 표시를 건드리지 않습니다 — 유형이 시험
+          항목마다 다르기 때문입니다.
+        </p>
+      )}
+      {(axis?.kind === 'set' || axis?.kind === 'matrix') && (
+        <p className="text-muted-foreground text-sm">
+          한 줄의 체크를 전부 끄는 것은 이 표에서 할 수 없습니다(빈 줄은 건너뜁니다) — 「역량」
+          화면에서 고칩니다.
         </p>
       )}
 
@@ -337,8 +393,12 @@ export default function BulkPage() {
         onRows={setRows}
         header={
           <p className="text-muted-foreground text-sm">
-            {sheet.data?.rows.length ?? 0}개 연계 · 값을 고치고 저장합니다. 수준은 이름으로 적습니다
-            {axis && axis.kind !== 'value' ? `(예: ${axis.rungs.at(-1)?.label})` : ''}.
+            {sheet.data?.rows.length ?? 0}개 연계 · 값을 고치고 저장합니다.{' '}
+            {axis?.kind === 'set' || axis?.kind === 'matrix'
+              ? '해당하는 항목의 칸을 체크합니다 — 엑셀에서는 그 칸에 O 를 적어 붙여 넣습니다.'
+              : axis?.kind === 'rung'
+                ? `수준은 이름으로 적습니다(예: ${axis.rungs.at(-1)?.label}).`
+                : ''}
           </p>
         }
       />

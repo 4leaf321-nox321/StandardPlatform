@@ -1160,6 +1160,20 @@ def bulk_save(
     by_id = {str(one["id"]): one for one in known}
     by_label = {(one["subject_label"], one["agent_label"]): one for one in known}
     by_name = _rung_by_name(axis)
+    # 매트릭스는 이 표에서 **바탕(형상 · 거동)만** 고친다. 저장은 축 한 줄을 통째로 다시
+    # 쓰기 때문에, 지금 든 불량 유형별 재현을 같이 넘기지 않으면 바탕을 고치는 일이
+    # 「역량」 화면에서 채운 재현 표시를 지운다.
+    held: dict[uuid.UUID, dict[str, Any]] = {}
+    if axis["kind"] == "matrix" and known:
+        held = {
+            one.pair_id: dict(one.defects or {})
+            for one in db.scalars(
+                select(CaeDtAssessment).where(
+                    CaeDtAssessment.pair_id.in_([one["id"] for one in known]),
+                    CaeDtAssessment.axis == axis_key,
+                )
+            )
+        }
 
     results: list[dict[str, Any]] = []
     for index, raw in enumerate(rows):
@@ -1232,6 +1246,9 @@ def bulk_save(
             if keys:
                 payload["rungs"] = keys
                 empty = False
+                marks = held.get(found["id"])
+                if marks:
+                    payload["defects"] = marks
 
         if empty:
             # **빈 줄은 건너뛴다.** 엑셀에서 일부만 채워 보내는 일이 흔하다.

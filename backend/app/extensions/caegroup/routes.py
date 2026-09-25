@@ -396,24 +396,22 @@ def assessment_sheet_export(
     채운 뒤 그대로 복사해 붙이면 열이 맞는다.
     """
     body = services.sheet(db, user, axis_key=axis)
-    header = [
-        "시험 항목",
-        "시뮬레이션 해석",
-        "담당 부서",
-        "소속 부서",
-        body["axis_label"],
-        "근거",
-    ]
+    # 열 순서는 **화면의 표와 같다** — 내려받아 고친 뒤 그대로 붙여 넣을 수 있게.
+    head = ["시험 항목", "시뮬레이션 해석", "담당 부서"]
+    # 여러 항목을 고르는 축은 **항목마다 한 열**이고 켠 것은 `O` 다 — 화면의 표와 같은 모양.
+    picks = D.pick_labels(axis) if body["kind"] in ("set", "matrix") else []
+    header = [*head, *(picks or [body["axis_label"]]), "근거"]
     rows = [
         [
             one["subject_label"],
             one["agent_label"],
             one["agent_dept"] or "",
-            one["workspace_name"],
-            # 축 종류마다 채워 넣는 칸이 다르다 — 표에서는 한 칸으로 모은다.
-            one["value"]
-            if one["value"] is not None
-            else (one["rung"] or " · ".join(one["rungs"])),
+            *(
+                ["O" if pick in one["rungs"] else "" for pick in picks]
+                if picks
+                # 축 종류마다 채워 넣는 칸이 다르다 — 값 · 수준은 한 칸이다.
+                else [one["value"] if one["value"] is not None else one["rung"]]
+            ),
             one["note"],
         ]
         for one in body["rows"]

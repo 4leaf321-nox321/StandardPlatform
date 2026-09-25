@@ -14,6 +14,7 @@ import {
   PasteGrid,
   emptyRows,
   filledRows,
+  isChecked,
   toLines,
   unknownParts,
 } from '@/shared/components/PasteGrid'
@@ -138,6 +139,53 @@ describe('PasteGrid — 등록된 목록', () => {
     expect(screen.getByLabelText('1번 줄 자동화')).toHaveAttribute('aria-invalid', 'false')
     expect(screen.getByLabelText('2번 줄 자동화')).toHaveAttribute('aria-invalid', 'true')
     expect(screen.getByText(/등록된 이름이 아닌 칸이 2개/)).toBeInTheDocument()
+  })
+})
+
+describe('PasteGrid — 체크 열', () => {
+  // 여러 항목을 고르는 축(자동화 · 시험 대체)은 **항목마다 한 열**이다. 한 칸에
+  // 「전처리 자동화 · 실행 자동화」 를 적게 하면 이름을 정확히 외워야 한다.
+  const COLUMNS: GridColumn[] = [
+    { key: 'subject', header: '시험 항목' },
+    { key: 'pick:전처리 자동화', header: '전처리 자동화', check: true },
+    { key: 'pick:실행 자동화', header: '실행 자동화', check: true },
+    { key: 'note', header: '근거' },
+  ]
+
+  function CheckHarness({ start }: { start: string[][] }) {
+    const [rows, setRows] = useState(start)
+    return <PasteGrid columns={COLUMNS} rows={rows} onRows={setRows} />
+  }
+
+  it('클릭으로 켜고 끈다 — 켠 칸은 O 로 남는다', async () => {
+    const onRows = vi.fn()
+    render(<PasteGrid columns={COLUMNS} rows={[['낙하 시험', '', '', '']]} onRows={onRows} />)
+    await userEvent.click(screen.getByLabelText('1번 줄 전처리 자동화'))
+    // 뒤에 빈 줄 하나가 따라온다(계속 칠 자리) — 고쳐진 줄만 본다.
+    expect((onRows.mock.calls[0][0] as string[][])[0]).toEqual(['낙하 시험', 'O', '', ''])
+  })
+
+  it('지금 켜진 항목은 체크된 채로 시작한다', () => {
+    render(<PasteGrid columns={COLUMNS} rows={[['낙하 시험', 'O', '', '']]} onRows={vi.fn()} />)
+    expect(screen.getByLabelText('1번 줄 전처리 자동화')).toBeChecked()
+    expect(screen.getByLabelText('1번 줄 실행 자동화')).not.toBeChecked()
+  })
+
+  it('엑셀에서 붙인 O · 예 · v 를 켜진 것으로 읽는다 — 사람마다 다른 글자를 쓴다', async () => {
+    render(<CheckHarness start={[['', '', '', '']]} />)
+    const cell = screen.getByLabelText('1번 줄 시험 항목')
+    cell.focus()
+    await userEvent.paste('낙하 시험\tO\t예\t시험 성적서')
+    expect(screen.getByLabelText('1번 줄 전처리 자동화')).toBeChecked()
+    expect(screen.getByLabelText('1번 줄 실행 자동화')).toBeChecked()
+    expect(screen.getByLabelText('1번 줄 근거')).toHaveValue('시험 성적서')
+  })
+
+  it('체크 열은 「등록된 이름」 검사에서 빠진다 — 켜짐 · 꺼짐으로만 읽는다', () => {
+    expect(isChecked('O')).toBe(true)
+    expect(isChecked(' 예 ')).toBe(true)
+    expect(isChecked('')).toBe(false)
+    expect(unknownParts({ key: 'a', header: 'A', check: true, options: ['O'] }, 'v')).toEqual([])
   })
 })
 

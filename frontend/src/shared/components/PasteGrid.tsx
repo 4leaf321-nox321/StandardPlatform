@@ -53,6 +53,15 @@ export interface GridColumn {
   multi?: boolean
   /** 읽기용 칸 — 고쳐도 서버로 안 간다(무엇을 고치는 줄인지 알려 주는 자리). */
   readOnly?: boolean
+  /**
+   * 체크 열 — **켜고 끄는 칸.** 여러 항목을 고르는 축(자동화 · 시험 대체)은 항목마다 열을
+   * 두고 체크한다. 한 칸에 「전처리 자동화 · 실행 자동화」 를 적게 하면 이름을 외워야 하고,
+   * 엑셀에서도 채우기 어렵다.
+   *
+   * 저장되는 값은 `O` 또는 빈 칸이고, 엑셀에서 붙여 넣은 `O` · `예` · `v` · `1` 도 켜진
+   * 것으로 읽는다 — 사람마다 다른 글자를 쓰기 때문이다.
+   */
+  check?: boolean
 }
 
 /** 빈 줄 하나로 시작한다 — 표가 아예 비어 있으면 어디에 붙여야 할지 모른다. */
@@ -75,9 +84,17 @@ export function filledRows(rows: string[][]): number {
   return rows.filter((row) => row.some((cell) => cell.trim())).length
 }
 
+/** 체크 열에서 「켜짐」 으로 읽는 글자 — 사람마다 다른 것을 쓴다. */
+const CHECKED = new Set(['o', 'O', '예', 'v', 'V', 'y', 'Y', '1', 'true', 'x', 'X', '✓'])
+
+export function isChecked(raw: string): boolean {
+  return CHECKED.has(raw.trim())
+}
+
 /** 이 칸의 값이 **등록된 것**인가. 목록이 없는 열은 늘 맞다고 본다. */
 export function unknownParts(column: GridColumn, raw: string): string[] {
-  if (!column.options || !raw.trim()) return []
+  // 체크 열은 무엇을 적어도 켜짐 · 꺼짐으로만 읽는다 — 틀릴 수가 없다.
+  if (column.check || !column.options || !raw.trim()) return []
   const allowed = new Set(column.options.map((one) => one.trim()))
   const parts = column.multi ? raw.split('·') : [raw]
   return parts.map((one) => one.trim()).filter((one) => one && !allowed.has(one))
@@ -183,7 +200,11 @@ export function PasteGrid({
               {columns.map((column) => (
                 <th
                   key={column.key}
-                  className="bg-muted/40 min-w-36 px-1.5 py-1 text-left align-top font-medium"
+                  className={cn(
+                    'bg-muted/40 px-1.5 py-1 align-top font-medium',
+                    // 체크 열은 좁게 — 이름이 길어도 열이 넓어질 이유가 없다.
+                    column.check ? 'w-16 text-center' : 'min-w-36 text-left',
+                  )}
                 >
                   <span className="block whitespace-nowrap">
                     {column.label ?? column.header}
@@ -211,6 +232,20 @@ export function PasteGrid({
                 <td className="text-muted-foreground px-1 text-right tabular-nums">{atRow + 1}</td>
                 {columns.map((column, atColumn) => {
                   const wrong = unknownParts(column, row[atColumn] ?? '')
+                  if (column.check) {
+                    return (
+                      <td key={column.key} className="w-16 p-0.5 text-center">
+                        <input
+                          type="checkbox"
+                          aria-label={`${atRow + 1}번 줄 ${column.header}`}
+                          checked={isChecked(row[atColumn] ?? '')}
+                          onChange={(event) =>
+                            edit(atRow, atColumn, event.target.checked ? 'O' : '')
+                          }
+                        />
+                      </td>
+                    )
+                  }
                   return (
                     <td key={column.key} className="min-w-36 p-0.5">
                       <Input

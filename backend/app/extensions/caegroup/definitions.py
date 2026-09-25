@@ -249,6 +249,23 @@ def rung_keys(axis_key: str) -> tuple[str, ...]:
     return tuple(one["key"] for one in AXIS_BY_KEY[axis_key]["rungs"])
 
 
+def pick_labels(axis_key: str) -> list[str]:
+    """이 축에서 **고르는 항목의 이름들** — 일괄 입력 표는 항목마다 한 열을 둔다.
+
+    한 칸에 「전처리 자동화 · 실행 자동화」 를 적게 하면 이름을 정확히 외워야 하고, 엑셀에서
+    채우기도 어렵다. 그래서 열로 펼치고 체크만 한다.
+
+    매트릭스는 **바탕**(형상 · 거동)만 고른다 — 불량 유형별 재현은 시험 항목마다 유형이 달라
+    열로 세울 수 없다. `hide_empty` 축의 첫 칸(수동 · 없음)은 「아무것도 안 켠 것」 이라 열이
+    없다.
+    """
+    axis = AXIS_BY_KEY[axis_key]
+    if axis["kind"] == "matrix":
+        return [str(one["label"]) for one in axis.get("base", [])]
+    rungs = axis["rungs"][1:] if axis.get("hide_empty") else axis["rungs"]
+    return [str(one["label"]) for one in rungs]
+
+
 def rung_for_value(value: float | None) -> str | None:
     """가상검증률 값 → 칸 key. 값이 없으면 `None`(미평가).
 

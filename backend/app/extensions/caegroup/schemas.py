@@ -271,8 +271,9 @@ class BulkRowIn(BaseModel):
     agent_label: str = ""
     value: str = ""
     rung: str = ""
-    rungs: str = ""
-    """수준 이름들을 `·` 로 이어 적는다."""
+    rungs: str | list[str] = ""
+    """고른 항목의 **이름들.** 표에서는 항목마다 열이 있어 목록으로 오고, 엑셀 한 칸에서
+    온 것은 `·` 로 이어 적힌 글 하나다 — 둘 다 받는다."""
     note: str = ""
 
 
