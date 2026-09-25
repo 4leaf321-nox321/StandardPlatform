@@ -14,13 +14,14 @@
  * (같은 장치가 MatNexus 에도 있다. 그쪽 것을 보고 이 저장소의 규약으로 옮겼다.)
  */
 
-import { useId, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import type { ClipboardEvent, ReactNode } from 'react'
-import { Check, Copy, Plus, Trash2 } from 'lucide-react'
+import { Check, Copy, ListChecks, Plus, Search, Trash2 } from 'lucide-react'
 
 import { Badge } from '@/shared/components/ui/badge'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/shared/components/ui/popover'
 import { copyText } from '@/shared/lib/clipboard'
 import { cn } from '@/shared/lib/utils'
 
@@ -98,6 +99,113 @@ export function unknownParts(column: GridColumn, raw: string): string[] {
   const allowed = new Set(column.options.map((one) => one.trim()))
   const parts = column.multi ? raw.split('·') : [raw]
   return parts.map((one) => one.trim()).filter((one) => one && !allowed.has(one))
+}
+
+/** 한 칸에 적힌 이름들 — `·` 로 갈린다. */
+function partsOf(raw: string): string[] {
+  return raw
+    .split('·')
+    .map((one) => one.trim())
+    .filter(Boolean)
+}
+
+/**
+ * 여럿 고르는 칸의 목록 — **여러 개를 눌러 담는다.**
+ *
+ * `<datalist>` 만 있으면 하나를 고르는 순간 칸이 그 이름으로 바뀌어, 둘째를 담을 길이
+ * 없다(실측). 여기서는 눌러서 켜고 끄고, 칸에는 정의된 순서로 `·` 로 이어 적힌다 —
+ * 고른 순서대로 두면 같은 줄이 사람마다 다르게 보인다.
+ *
+ * **포털로 띄운다**(`Popover`). 창 안에서 `absolute` 로 띄운 목록은 창 경계에서 잘린다.
+ */
+function MultiPick({
+  name,
+  options,
+  value,
+  onChange,
+}: {
+  /** 무엇을 고르는 칸인지 — 단추의 이름표에 들어간다. */
+  name: string
+  options: string[]
+  value: string
+  onChange: (next: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const picked = useMemo(() => new Set(partsOf(value)), [value])
+  const needle = query.trim().toLowerCase()
+  const shown = needle
+    ? options.filter((one) => one.toLowerCase().includes(needle))
+    : options
+
+  function toggle(one: string) {
+    const next = new Set(picked)
+    if (next.has(one)) next.delete(one)
+    else next.add(one)
+    // 목록에 없는 이름(손으로 친 것)은 지우지 않고 뒤에 남긴다 — 고르기가 남의 입력을
+    // 없애면 안 된다.
+    const extra = [...next].filter((each) => !options.includes(each))
+    onChange([...options.filter((each) => next.has(each)), ...extra].join(' · '))
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          size="icon"
+          variant="outline"
+          className="size-7 shrink-0"
+          aria-label={`${name} 고르기`}
+        >
+          <ListChecks className="size-3" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-64 p-0">
+        <div className="flex items-center gap-1 border-b px-2">
+          <Search className="text-muted-foreground size-3 shrink-0" />
+          <Input
+            autoFocus
+            aria-label={`${name} 검색`}
+            placeholder="이름으로 찾기"
+            className="h-8 border-0 px-1 text-xs shadow-none focus-visible:ring-0"
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
+          />
+        </div>
+        <div className="max-h-60 overflow-auto p-1">
+          {shown.length === 0 && (
+            <p className="text-muted-foreground px-2 py-3 text-xs">찾는 이름이 없습니다.</p>
+          )}
+          {shown.map((one) => (
+            <button
+              key={one}
+              type="button"
+              aria-pressed={picked.has(one)}
+              className="hover:bg-accent flex w-full items-center gap-2 rounded px-2 py-1 text-left text-xs"
+              onClick={() => toggle(one)}
+            >
+              <span
+                className={cn(
+                  'flex size-3.5 shrink-0 items-center justify-center rounded-[3px] border',
+                  picked.has(one) && 'bg-primary border-primary text-primary-foreground',
+                )}
+              >
+                {picked.has(one) && <Check className="size-2.5" />}
+              </span>
+              <span className="truncate">{one}</span>
+            </button>
+          ))}
+        </div>
+        <div className="flex items-center justify-between border-t px-2 py-1">
+          <span className="text-muted-foreground text-xs">{picked.size}개 고름</span>
+          <Button size="xs" variant="ghost" onClick={() => onChange('')}>
+            비우기
+          </Button>
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
 }
 
 export function PasteGrid({
@@ -192,16 +300,18 @@ export function PasteGrid({
           무엇이 어느 칸인지 읽기 어려워진다 — 차라리 가로로 스크롤한다. */}
       <div className="max-h-[50vh] overflow-auto rounded-md border">
         <table className="w-max min-w-full text-xs">
-          <thead className="bg-muted/40 sticky top-0 z-10">
+          {/* **머리는 불투명해야 한다.** 반투명하게 두면 스크롤할 때 아래 줄의 글자가
+              머리를 통해 비쳐 겹쳐 보인다(실측). 배경을 깔고 그 위에 회색을 얹는다. */}
+          <thead className="bg-background sticky top-0 z-20">
             <tr>
-              <th className="text-muted-foreground bg-muted/40 w-8 px-1 py-1 text-right font-normal">
+              <th className="text-muted-foreground bg-muted/40 w-8 border-b px-1 py-1 text-right font-normal">
                 #
               </th>
               {columns.map((column) => (
                 <th
                   key={column.key}
                   className={cn(
-                    'bg-muted/40 px-1.5 py-1 align-top font-medium',
+                    'bg-muted/40 border-b px-1.5 py-1 align-top font-medium',
                     // 체크 열은 좁게 — 이름이 길어도 열이 넓어질 이유가 없다.
                     column.check ? 'w-16 text-center' : 'min-w-36 text-left',
                   )}
@@ -221,7 +331,7 @@ export function PasteGrid({
                   </span>
                 </th>
               ))}
-              <th className="bg-muted/40 w-8" />
+              <th className="bg-muted/40 w-8 border-b" />
             </tr>
           </thead>
           <tbody>
@@ -248,27 +358,39 @@ export function PasteGrid({
                   }
                   return (
                     <td key={column.key} className="min-w-36 p-0.5">
-                      <Input
-                        className={cn(
-                          'h-7 text-xs',
-                          // **모르는 이름은 칸에서 보인다.** 저장을 눌러 봐야 아는 것은
-                          // 붙여넣기 스무 줄에서 스무 번 왕복하게 만든다.
-                          wrong.length > 0 && 'border-destructive text-destructive',
-                          column.readOnly && 'text-muted-foreground bg-muted/40',
-                        )}
-                        aria-label={`${atRow + 1}번 줄 ${column.header}`}
-                        aria-invalid={wrong.length > 0}
-                        title={
-                          wrong.length > 0 ? `등록된 이름이 아닙니다: ${wrong.join(', ')}` : undefined
-                        }
-                        // 목록이 있으면 **드롭다운**으로 고른다 — 손으로 치는 것도 막지
-                        // 않는다(엑셀에서 붙여넣기가 그대로 되어야 한다).
-                        list={column.options ? `${gridId}-${column.key}` : undefined}
-                        readOnly={column.readOnly}
-                        value={row[atColumn] ?? ''}
-                        onPaste={(event) => paste(event, atRow, atColumn)}
-                        onChange={(event) => edit(atRow, atColumn, event.target.value)}
-                      />
+                      <div className="flex items-center gap-1">
+                        <Input
+                          className={cn(
+                            'h-7 text-xs',
+                            // **모르는 이름은 칸에서 보인다.** 저장을 눌러 봐야 아는 것은
+                            // 붙여넣기 스무 줄에서 스무 번 왕복하게 만든다.
+                            wrong.length > 0 && 'border-destructive text-destructive',
+                            column.readOnly && 'text-muted-foreground bg-muted/40',
+                          )}
+                          aria-label={`${atRow + 1}번 줄 ${column.header}`}
+                          aria-invalid={wrong.length > 0}
+                          title={
+                            wrong.length > 0 ? `등록된 이름이 아닙니다: ${wrong.join(', ')}` : undefined
+                          }
+                          // 목록이 있으면 **드롭다운**으로 고른다 — 손으로 치는 것도 막지
+                          // 않는다(엑셀에서 붙여넣기가 그대로 되어야 한다).
+                          list={column.options ? `${gridId}-${column.key}` : undefined}
+                          readOnly={column.readOnly}
+                          value={row[atColumn] ?? ''}
+                          onPaste={(event) => paste(event, atRow, atColumn)}
+                          onChange={(event) => edit(atRow, atColumn, event.target.value)}
+                        />
+                        {/* 여럿 적는 칸은 **눌러서 담는다.** 드롭다운으로는 하나를 고르는
+                            순간 칸이 그 이름으로 바뀌어 둘째를 담을 길이 없다. */}
+                        {column.multi && column.options?.length && !column.readOnly ? (
+                          <MultiPick
+                            name={`${atRow + 1}번 줄 ${column.header}`}
+                            options={column.options}
+                            value={row[atColumn] ?? ''}
+                            onChange={(next) => edit(atRow, atColumn, next)}
+                          />
+                        ) : null}
+                      </div>
                     </td>
                   )
                 })}

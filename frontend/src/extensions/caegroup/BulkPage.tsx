@@ -119,12 +119,13 @@ function staffColumns(known: { agents: string[]; workspaces: string[] }): GridCo
     {
       key: 'agents',
       header: '담당 해석',
-      help: '여럿이면 · 으로 이어 적습니다 — 몫이 1/n 로 갈립니다',
+      // 목록 단추로 여러 개를 담는다 — 몫이 담당 수로 갈리므로 하나만 담기면 값이 틀린다.
+      help: '단추로 여럿 고릅니다 — 몫이 1/n 로 갈립니다',
       options: known.agents,
       multi: true,
     },
-    { key: 'outside', header: '조사 밖 업무', help: '있으면 「예」', options: ['예'] },
-    { key: 'skill_kinds', header: '역량 분야', help: '담당 해석이 없을 때' },
+    { key: 'outside', header: '조사 밖 업무', help: '있으면 체크', check: true },
+    { key: 'skill_kinds', header: '역량 분야', help: '담당 해석이 없을 때 · 으로 이어 적습니다' },
     { key: 'note', header: '메모' },
   ]
 }

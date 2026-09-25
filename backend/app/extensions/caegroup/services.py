@@ -1353,7 +1353,9 @@ def staff_bulk(db: Session, user: User, *, rows: list[dict[str, Any]]) -> list[d
                 for one in str(raw.get("skill_kinds") or "").split("·")
                 if one.strip()
             ],
-            "outside": str(raw.get("outside") or "").strip() in ("예", "y", "Y", "true", "1"),
+            # 체크 칸에서 오는 글자도 「있음」 으로 읽는다 — 사람마다 다른 것을 쓴다.
+            "outside": str(raw.get("outside") or "").strip()
+            in ("예", "y", "Y", "o", "O", "v", "V", "x", "X", "✓", "true", "1"),
             "note": str(raw.get("note") or "").strip(),
         }
         found = existing.get((name, workspace.id))

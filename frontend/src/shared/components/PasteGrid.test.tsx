@@ -142,6 +142,55 @@ describe('PasteGrid — 등록된 목록', () => {
   })
 })
 
+describe('PasteGrid — 여럿 고르는 칸', () => {
+  // 드롭다운(`<datalist>`)만 있으면 하나를 고르는 순간 칸이 그 이름으로 바뀌어, 둘째를
+  // 담을 길이 없다 — 담당 해석이 실제로 그랬다.
+  const COLUMNS: GridColumn[] = [
+    { key: 'name', header: '이름' },
+    { key: 'agents', header: '담당 해석', options: ['낙하 해석', '진동 해석', '열 해석'], multi: true },
+  ]
+
+  function PickHarness({ start }: { start: string[][] }) {
+    const [rows, setRows] = useState(start)
+    return <PasteGrid columns={COLUMNS} rows={rows} onRows={setRows} />
+  }
+
+  it('여러 개를 담는다 — 칸에는 정의된 순서로 이어 적힌다', async () => {
+    render(<PickHarness start={[['박해석', '']]} />)
+    await userEvent.click(screen.getByRole('button', { name: '1번 줄 담당 해석 고르기' }))
+    // 정의 순서로 담는다 — 고른 순서대로 두면 같은 줄이 사람마다 다르게 보인다.
+    await userEvent.click(screen.getByRole('button', { name: '열 해석' }))
+    await userEvent.click(screen.getByRole('button', { name: '낙하 해석' }))
+    expect(screen.getByLabelText('1번 줄 담당 해석')).toHaveValue('낙하 해석 · 열 해석')
+    expect(screen.getByText('2개 고름')).toBeInTheDocument()
+  })
+
+  it('다시 누르면 빼고, 비우기로 한 번에 지운다', async () => {
+    render(<PickHarness start={[['박해석', '낙하 해석 · 진동 해석']]} />)
+    await userEvent.click(screen.getByRole('button', { name: '1번 줄 담당 해석 고르기' }))
+    expect(screen.getByRole('button', { name: '낙하 해석' })).toHaveAttribute('aria-pressed', 'true')
+    await userEvent.click(screen.getByRole('button', { name: '낙하 해석' }))
+    expect(screen.getByLabelText('1번 줄 담당 해석')).toHaveValue('진동 해석')
+    await userEvent.click(screen.getByRole('button', { name: '비우기' }))
+    expect(screen.getByLabelText('1번 줄 담당 해석')).toHaveValue('')
+  })
+
+  it('목록에 없는 이름은 고르기가 지우지 않는다 — 남의 입력을 없애면 안 된다', async () => {
+    render(<PickHarness start={[['박해석', '없는 해석']]} />)
+    await userEvent.click(screen.getByRole('button', { name: '1번 줄 담당 해석 고르기' }))
+    await userEvent.click(screen.getByRole('button', { name: '진동 해석' }))
+    expect(screen.getByLabelText('1번 줄 담당 해석')).toHaveValue('진동 해석 · 없는 해석')
+  })
+
+  it('이름으로 찾아 좁힌다 — 해석이 백 개가 되는 날이 온다', async () => {
+    render(<PickHarness start={[['박해석', '']]} />)
+    await userEvent.click(screen.getByRole('button', { name: '1번 줄 담당 해석 고르기' }))
+    await userEvent.type(screen.getByLabelText('1번 줄 담당 해석 검색'), '진동')
+    expect(screen.getByRole('button', { name: '진동 해석' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '열 해석' })).not.toBeInTheDocument()
+  })
+})
+
 describe('PasteGrid — 체크 열', () => {
   // 여러 항목을 고르는 축(자동화 · 시험 대체)은 **항목마다 한 열**이다. 한 칸에
   // 「전처리 자동화 · 실행 자동화」 를 적게 하면 이름을 정확히 외워야 한다.
