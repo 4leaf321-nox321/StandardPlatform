@@ -15,7 +15,12 @@ from fastapi.testclient import TestClient
 from sqlalchemy import delete
 from sqlalchemy.orm import Session
 
-from app.extensions.caegroup.models import CaeDtPair, CaeDtSetting
+from app.extensions.caegroup.models import (
+    CaeDtCapacity,
+    CaeDtPair,
+    CaeDtSetting,
+    CaeDtStaff,
+)
 from app.modules.server.models import ExtensionState
 from tests.api.conftest import Signed
 from tests.api.test_ontology import _make_object
@@ -35,6 +40,10 @@ def _on(client: TestClient, admin: Signed, db: Session) -> Iterator[None]:
     )
     yield
     db.execute(delete(CaeDtPair))
+    # 인력 · 인프라도 지운다 — **남기면 전사 합계를 보는 시험이 남의 줄을 센다**(실측:
+    # 목록 시험이 앞서 돌면 그 줄의 단위가 「쓰이는 값」 이 되어 지울 수 없었다).
+    db.execute(delete(CaeDtStaff))
+    db.execute(delete(CaeDtCapacity))
     db.execute(delete(CaeDtSetting))
     db.execute(delete(ExtensionState))
     db.commit()
@@ -1125,6 +1134,103 @@ def test_남의_부서_인프라는_일괄로도_못_고친다(
     )
     assert [one["status"] for one in got.json()] == ["error"]
     assert "권한" in got.json()[0]["message"]
+
+
+def test_고를_수_있는_값은_화면에서_고친다(
+    client: TestClient, admin: Signed, member: Signed
+) -> None:
+    """**단위를 하나 더하는 일이 배포이면 그 목록은 안 고쳐진 채로 쓰인다.**
+
+    「대」 와 「코어」 중 무엇으로 셀지는 이 설치의 사정이다. 설정에 두고 시스템 관리자가
+    고치며, 정의 파일의 값은 기본값이다.
+    """
+    _setup(client, admin)
+    first = client.get(f"{DT}/catalogs", headers=admin.headers).json()
+    units = next(one for one in first if one["name"] == "sw_units")
+    assert units["is_default"] is True
+    assert [one["key"] for one in units["items"]] == ["copy", "token", "unit"]
+
+    # **고치는 것은 시스템 관리자만.** 화면이 메뉴를 가리는 것은 표시일 뿐이다.
+    denied = client.put(
+        f"{DT}/catalogs/sw_units",
+        json={"items": [{"key": "core", "label": "코어"}]},
+        headers=member.headers,
+    )
+    assert denied.status_code == 403, denied.text
+
+    # **있는 것을 지우지 않고 더한다** — 쓰이는 값을 지우는 것은 아래에서 따로 본다.
+    added = [*units["items"], {"key": "core", "label": "코어"}]
+    saved = client.put(f"{DT}/catalogs/sw_units", json={"items": added}, headers=admin.headers)
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["is_default"] is False
+
+    # 화면은 `/defs` 에서 이 목록을 받는다 — 인프라 화면과 일괄 입력 표가 같은 말을 쓴다.
+    body = client.get(f"{DT}/defs", headers=admin.headers).json()
+    assert [one["key"] for one in body["sw_units"]] == ["copy", "token", "unit", "core"]
+
+    # 표도 **더한 이름**을 받는다.
+    space = client.post(
+        "/api/workspaces",
+        json={"slug": f"cat{uuid.uuid4().hex[:6]}", "name": f"해석팀 {uuid.uuid4().hex[:6]}"},
+        headers=admin.headers,
+    ).json()
+    got = client.put(
+        f"{DT}/capacity/bulk",
+        json={
+            "what": "sw",
+            "rows": [
+                {
+                    "workspace_name": space["name"],
+                    "name": "병렬 솔버",
+                    "quantity": "64",
+                    "unit": "코어",
+                }
+            ],
+        },
+        headers=admin.headers,
+    )
+    assert [one["status"] for one in got.json()] == ["ok"], got.text
+    sheet = client.get(f"{DT}/capacity/sheet", headers=admin.headers).json()
+    mine = next(one for one in sheet["sw"] if one["workspace_name"] == space["name"])
+    assert mine["unit"] == "코어"
+
+    # **쓰이는 값은 지울 수 없다** — 지우면 그 줄의 값이 「모르는 값」 이 되고, 그 줄을
+    # 고칠 사람은 왜 비었는지 모른다. 방금 「코어」 로 적은 줄이 있다.
+    blocked = client.put(
+        f"{DT}/catalogs/sw_units",
+        json={"items": units["items"]},
+        headers=admin.headers,
+    )
+    assert blocked.status_code == 409, blocked.text
+    assert "쓰이는 값은 지울 수 없습니다" in blocked.json()["error"]["message"]
+
+    # 빈 목록은 **기본값으로** 돌아간다(쓰이는 값이 없는 목록으로 확인한다).
+    back = client.put(f"{DT}/catalogs/sw_purposes", json={"items": []}, headers=admin.headers)
+    assert back.status_code == 200, back.text
+    assert back.json()["is_default"] is True
+
+    # 키와 이름은 둘 다 있어야 하고, 키는 겹칠 수 없다.
+    half = client.put(
+        f"{DT}/catalogs/sw_purposes",
+        json={"items": [{"key": "solve", "label": ""}]},
+        headers=admin.headers,
+    )
+    assert half.status_code == 422, half.text
+    twice = client.put(
+        f"{DT}/catalogs/sw_purposes",
+        json={
+            "items": [
+                {"key": "solve", "label": "해석"},
+                {"key": "solve", "label": "해석(2)"},
+            ]
+        },
+        headers=admin.headers,
+    )
+    assert twice.status_code == 409 and "두 번" in twice.json()["error"]["message"]
+
+    # 없는 목록은 404 — 이름을 틀린 것을 조용히 만들어 두지 않는다.
+    missing = client.put(f"{DT}/catalogs/없는목록", json={"items": []}, headers=admin.headers)
+    assert missing.status_code == 404
 
 
 def test_이름이_겹치는_부서는_줄_오류다(client: TestClient, admin: Signed) -> None:

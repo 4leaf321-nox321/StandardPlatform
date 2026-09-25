@@ -35,6 +35,29 @@ class DefsOut(BaseModel):
     sw_purposes: list[dict[str, str]]
 
 
+class CatalogItemIn(BaseModel):
+    """목록의 한 줄 — **키는 저장되는 값**이고 이름은 보여 주는 말이다."""
+
+    key: str = Field(min_length=1, max_length=64)
+    label: str = Field(min_length=1, max_length=100)
+
+
+class CatalogIn(BaseModel):
+    """빈 목록을 보내면 **기본값으로 돌아간다**(설정에서 지운다)."""
+
+    items: list[CatalogItemIn] = Field(default_factory=list)
+
+
+class CatalogOut(BaseModel):
+    name: str
+    label: str
+    help: str
+    items: list[dict[str, str]]
+    in_use: dict[str, int]
+    """키마다 **지금 쓰이는 줄 수** — 쓰이는 값은 지울 수 없다."""
+    is_default: bool
+
+
 class PairOut(BaseModel):
     id: uuid.UUID
     workspace_id: uuid.UUID

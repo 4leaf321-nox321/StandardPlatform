@@ -258,6 +258,26 @@ SW_PURPOSES: list[dict[str, str]] = [
 ]
 
 
+#: 화면에서 고치는 목록들 — **여기 한 줄을 더하면 설정 화면에 그 표가 선다.**
+#:
+#: 값은 이 목록의 **기본값**이다(설정에 적힌 것이 있으면 그것을 쓴다). `where` 는 저장된
+#: 값이 어디에 들어 있는지 — 쓰이는 중인 키를 지우지 못하게 막는 자리가 그것을 읽는다.
+CATALOGS: dict[str, dict[str, Any]] = {
+    "sw_units": {
+        "label": "S/W 단위",
+        "help": "라이선스를 무엇으로 세나 — 카피 · 토큰 · 대",
+        "items": SW_UNITS,
+        "where": ("capacity_sw", "unit"),
+    },
+    "sw_purposes": {
+        "label": "S/W 용도",
+        "help": "그 라이선스를 무엇에 쓰나",
+        "items": SW_PURPOSES,
+        "where": ("capacity_sw", "purpose"),
+    },
+}
+
+
 def label_of(catalog: list[dict[str, str]], key: str) -> str:
     """키 → 이름. **모르는 키는 그대로 보여 준다** — 남이 넣은 자료일 수 있고, 그것을
     빈 칸으로 만들면 붙여넣기 한 번에 사라진다."""

@@ -27,7 +27,7 @@ describe('extensions', () => {
     expect(paths).toContain('ext/caegroup/dt')
   })
 
-  it('caegroup 은 「디지털 트윈」 그룹으로 화면 넷을 낸다', () => {
+  it('caegroup 은 「디지털 트윈」 그룹으로 화면 여섯을 낸다', () => {
     const groups = extensionNavGroups(['caegroup'])
     expect(groups.map((g) => g.title)).toEqual(['디지털 트윈'])
     expect(groups[0].items.map((i) => i.label)).toEqual([
@@ -36,7 +36,10 @@ describe('extensions', () => {
       '일괄 입력',
       '인력',
       '인프라',
+      '설정',
     ])
+    // 「설정」 은 시스템 관리자에게만 보인다 — **표시일 뿐 권한이 아니다**(서버가 막는다).
+    expect(groups[0].items.at(-1)?.audience).toBe('system_admin')
   })
 
   it('화면 쪽 짝이 없는 이름은 따로 알린다', () => {

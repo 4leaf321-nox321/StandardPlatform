@@ -8590,7 +8590,7 @@
           "ext:caegroup"
         ],
         "summary": "Defs",
-        "description": "정의를 그대로 내려 준다 — **축 이름과 척도를 화면에 박지 않는다.**\n\n문구를 고치는 일이 배포 한 번으로 끝나고, 화면은 고칠 데가 없다.",
+        "description": "정의를 그대로 내려 준다 — **축 이름과 척도를 화면에 박지 않는다.**\n\n문구를 고치는 일이 배포 한 번으로 끝나고, 화면은 고칠 데가 없다. 고칠 수 있는 목록\n(S/W 단위 · 용도)은 **이 설치의 설정**에서 오고, 없으면 정의의 기본값이다.",
         "operationId": "defs_api_ext_caegroup_dt_defs_get",
         "responses": {
           "200": {
@@ -8599,6 +8599,85 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DefsOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/catalogs": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Catalogs",
+        "description": "고칠 수 있는 목록들 — 항목과 **지금 쓰이는 수.**\n\n누구나 읽는다(드롭다운에 쓰는 값이다). 고치는 것은 시스템 관리자만이다.",
+        "operationId": "catalogs_api_ext_caegroup_dt_catalogs_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/CatalogOut"
+                  },
+                  "type": "array",
+                  "title": "Response Catalogs Api Ext Caegroup Dt Catalogs Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/catalogs/{name}": {
+      "put": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Catalog Save",
+        "description": "목록을 고친다 — **시스템 관리자만.**\n\n쓰이는 값은 지울 수 없다(그 줄의 값이 「모르는 값」 이 된다). 빈 목록을 보내면 정의\n파일의 기본값으로 돌아간다.",
+        "operationId": "catalog_save_api_ext_caegroup_dt_catalogs__name__put",
+        "parameters": [
+          {
+            "name": "name",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Name"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CatalogIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -11392,6 +11471,90 @@
         ],
         "title": "CapacitySummaryOut",
         "description": "전사 합계 — **공유 자원은 한 번만 센다.**"
+      },
+      "CatalogIn": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogItemIn"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "title": "CatalogIn",
+        "description": "빈 목록을 보내면 **기본값으로 돌아간다**(설정에서 지운다)."
+      },
+      "CatalogItemIn": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "CatalogItemIn",
+        "description": "목록의 한 줄 — **키는 저장되는 값**이고 이름은 보여 주는 말이다."
+      },
+      "CatalogOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "help": {
+            "type": "string",
+            "title": "Help"
+          },
+          "items": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "in_use": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "In Use"
+          },
+          "is_default": {
+            "type": "boolean",
+            "title": "Is Default"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label",
+          "help",
+          "items",
+          "in_use",
+          "is_default"
+        ],
+        "title": "CatalogOut"
       },
       "ChangeOut": {
         "properties": {

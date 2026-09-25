@@ -26,6 +26,8 @@ from app.extensions.caegroup.schemas import (
     CapacityOut,
     CapacitySheetOut,
     CapacitySummaryOut,
+    CatalogIn,
+    CatalogOut,
     CoverageOut,
     DefsOut,
     HistoryOut,
@@ -50,11 +52,13 @@ router = APIRouter(prefix="/ext/caegroup/dt", tags=["ext:caegroup"])
 
 
 @router.get("/defs", response_model=DefsOut)
-def defs(_: User = Depends(current_user)) -> DefsOut:
+def defs(_: User = Depends(current_user), db: Session = Depends(get_db)) -> DefsOut:
     """정의를 그대로 내려 준다 — **축 이름과 척도를 화면에 박지 않는다.**
 
-    문구를 고치는 일이 배포 한 번으로 끝나고, 화면은 고칠 데가 없다.
+    문구를 고치는 일이 배포 한 번으로 끝나고, 화면은 고칠 데가 없다. 고칠 수 있는 목록
+    (S/W 단위 · 용도)은 **이 설치의 설정**에서 오고, 없으면 정의의 기본값이다.
     """
+    words = services.catalogs(db)
     return DefsOut(
         sector=D.SECTOR,
         sector_label=D.SECTOR_LABEL,
@@ -64,8 +68,38 @@ def defs(_: User = Depends(current_user)) -> DefsOut:
         accuracy_thresholds=D.ACCURACY_THRESHOLDS,
         accuracy_rules=D.ACCURACY_RULES,
         # 인프라 칸의 말도 여기서 온다 — 화면과 엑셀이 같은 이름을 쓰게.
-        sw_units=D.SW_UNITS,
-        sw_purposes=D.SW_PURPOSES,
+        sw_units=words["sw_units"],
+        sw_purposes=words["sw_purposes"],
+    )
+
+
+@router.get("/catalogs", response_model=list[CatalogOut])
+def catalogs(
+    _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[CatalogOut]:
+    """고칠 수 있는 목록들 — 항목과 **지금 쓰이는 수.**
+
+    누구나 읽는다(드롭다운에 쓰는 값이다). 고치는 것은 시스템 관리자만이다.
+    """
+    return [CatalogOut(**one) for one in services.catalog_list(db)]
+
+
+@router.put("/catalogs/{name}", response_model=CatalogOut)
+def catalog_save(
+    name: str,
+    payload: CatalogIn,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> CatalogOut:
+    """목록을 고친다 — **시스템 관리자만.**
+
+    쓰이는 값은 지울 수 없다(그 줄의 값이 「모르는 값」 이 된다). 빈 목록을 보내면 정의
+    파일의 기본값으로 돌아간다.
+    """
+    return CatalogOut(
+        **services.save_catalog(
+            db, user, name=name, items=[one.model_dump() for one in payload.items]
+        )
     )
 
 
@@ -534,6 +568,7 @@ def capacity_sheet_export(
         )
     chosen = permissions.workspace_by_slug(db, workspace)
     row = services.capacity(db, workspace=chosen)
+    words = services.catalogs(db)
     return sheets.workbook_response(
         [
             sheets.Page(
@@ -544,8 +579,8 @@ def capacity_sheet_export(
                         one.get("name", ""),
                         one.get("quantity", 0),
                         # **이름으로 적는다**(「카피」) — 키(`copy`)를 엑셀에 내면 못 읽는다.
-                        D.label_of(D.SW_UNITS, str(one.get("unit") or "")),
-                        D.label_of(D.SW_PURPOSES, str(one.get("purpose") or "")),
+                        D.label_of(words["sw_units"], str(one.get("unit") or "")),
+                        D.label_of(words["sw_purposes"], str(one.get("purpose") or "")),
                         "예" if one.get("shared") else "",
                     ]
                     for one in row["sw"]

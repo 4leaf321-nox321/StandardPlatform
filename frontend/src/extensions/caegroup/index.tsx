@@ -8,7 +8,14 @@
  * 바꾸면 사람들이 즐겨찾기한 주소가 죽는다.
  */
 
-import { Gauge, HardDrive, LayoutDashboard, TableProperties, Users } from 'lucide-react'
+import {
+  Gauge,
+  HardDrive,
+  LayoutDashboard,
+  SlidersHorizontal,
+  TableProperties,
+  Users,
+} from 'lucide-react'
 import { lazy } from 'react'
 
 import type { ExtensionDef } from '@/extensions'
@@ -18,6 +25,7 @@ const PairsPage = lazy(() => import('./PairsPage'))
 const BulkPage = lazy(() => import('./BulkPage'))
 const StaffPage = lazy(() => import('./StaffPage'))
 const InfraPage = lazy(() => import('./InfraPage'))
+const SettingsPage = lazy(() => import('./SettingsPage'))
 
 export const caegroupExtension: ExtensionDef = {
   name: 'caegroup',
@@ -30,6 +38,14 @@ export const caegroupExtension: ExtensionDef = {
         { label: '일괄 입력', icon: TableProperties, to: '/ext/caegroup/dt/bulk' },
         { label: '인력', icon: Users, to: '/ext/caegroup/dt/staff' },
         { label: '인프라', icon: HardDrive, to: '/ext/caegroup/dt/infra' },
+        // 고를 수 있는 값(S/W 단위 · 용도)을 고치는 자리 — **보이는 사람만 다르다.**
+        // 막는 것은 서버다(`require_system_admin`).
+        {
+          label: '설정',
+          icon: SlidersHorizontal,
+          to: '/ext/caegroup/dt/settings',
+          audience: 'system_admin',
+        },
       ],
     },
   ],
@@ -39,5 +55,6 @@ export const caegroupExtension: ExtensionDef = {
     { path: 'ext/caegroup/dt/bulk', element: <BulkPage /> },
     { path: 'ext/caegroup/dt/staff', element: <StaffPage /> },
     { path: 'ext/caegroup/dt/infra', element: <InfraPage /> },
+    { path: 'ext/caegroup/dt/settings', element: <SettingsPage /> },
   ],
 }

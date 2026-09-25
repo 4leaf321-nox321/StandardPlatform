@@ -248,6 +248,22 @@ export interface StaffSheetRow {
   note: string
 }
 
+/**
+ * 고칠 수 있는 목록 하나 — **시스템 관리자가 화면에서 고친다.**
+ *
+ * 단위를 하나 더하는 일이 배포이면 그 목록은 안 고쳐진 채로 쓰인다. `in_use` 는 키마다
+ * 지금 쓰이는 줄 수다 — **쓰이는 값은 지울 수 없다.**
+ */
+export interface Catalog {
+  name: string
+  label: string
+  help: string
+  items: { key: string; label: string }[]
+  in_use: Record<string, number>
+  /** 참이면 정의 파일의 기본값 그대로다. */
+  is_default: boolean
+}
+
 /** 인프라의 어느 표인가 — 열이 달라 한 번에 하나씩 저장한다. */
 export type CapacityWhat = 'sw' | 'hw' | 'base'
 
@@ -325,6 +341,10 @@ export const dtApi = {
   staffFileUrl: (format: 'xlsx' | 'csv') => `${BASE}/staff/sheet/export?format=${format}`,
   capacityFileUrl: (workspace: string) =>
     `${BASE}/capacity/sheet/export?workspace=${encodeURIComponent(workspace)}`,
+  catalogs: () => api.get<Catalog[]>(`${BASE}/catalogs`),
+  /** 빈 목록을 보내면 **기본값으로 돌아간다.** */
+  catalogSave: (name: string, items: { key: string; label: string }[]) =>
+    api.put<Catalog>(`${BASE}/catalogs/${encodeURIComponent(name)}`, { items }),
   capacitySheet: () => api.get<CapacitySheet>(`${BASE}/capacity/sheet`),
   capacityBulk: (what: CapacityWhat, rows: Record<string, string>[]) =>
     api.put<BulkResult[]>(`${BASE}/capacity/bulk`, { what, rows }),

@@ -171,6 +171,134 @@ def setting(db: Session) -> CaeDtSetting:
     return row
 
 
+# ── 고치는 목록 ─────────────────────────────────────────────────────────
+#
+# **단위를 하나 더하는 일이 배포이면 그 목록은 안 고쳐진 채로 쓰인다.** 그래서 설정에 두고
+# 시스템 관리자가 화면에서 고친다. 정의 파일의 값은 **기본값**이다.
+
+
+def catalogs(db: Session) -> dict[str, list[dict[str, str]]]:
+    """이 설치의 목록들 — 설정에 적힌 것이 있으면 그것, 없으면 정의의 기본값.
+
+    **모양이 깨진 값은 기본값으로 떨어진다.** 설정은 JSON 칸이라 손으로 고쳐질 수 있고,
+    그때 목록이 비면 인프라 화면의 드롭다운이 통째로 사라진다.
+    """
+    saved = setting(db).catalogs or {}
+    out: dict[str, list[dict[str, str]]] = {}
+    for name, spec in D.CATALOGS.items():
+        rows = saved.get(name)
+        picked: list[dict[str, str]] = []
+        if isinstance(rows, list):
+            for one in rows:
+                if not isinstance(one, dict):
+                    continue
+                key = str(one.get("key") or "").strip()
+                if key:
+                    picked.append({"key": key, "label": str(one.get("label") or key).strip()})
+        out[name] = picked or [dict(one) for one in spec["items"]]
+    return out
+
+
+def catalog_usage(db: Session) -> dict[str, dict[str, int]]:
+    """목록마다 **지금 쓰이는 키와 그 수.**
+
+    쓰이는 키를 지우면 그 줄의 값이 「모르는 값」 이 된다 — 화면에서 지우려 할 때 막으려면
+    몇 줄이 걸리는지 알아야 하고, 사람은 그 수를 보고 판단한다.
+    """
+    used: dict[str, dict[str, int]] = {name: {} for name in D.CATALOGS}
+    rows = list(db.scalars(select(CaeDtCapacity)))
+    for name, spec in D.CATALOGS.items():
+        where, field = spec["where"]
+        if where != "capacity_sw":
+            continue
+        for row in rows:
+            for one in row.sw or []:
+                key = str(one.get(field) or "").strip()
+                if key:
+                    used[name][key] = used[name].get(key, 0) + 1
+    return used
+
+
+def catalog_list(db: Session) -> list[dict[str, Any]]:
+    """설정 화면이 그리는 것 — 목록마다 이름 · 설명 · 항목 · 쓰이는 수."""
+    now = catalogs(db)
+    used = catalog_usage(db)
+    return [
+        {
+            "name": name,
+            "label": str(spec["label"]),
+            "help": str(spec.get("help") or ""),
+            "items": now[name],
+            "in_use": used.get(name, {}),
+            # 기본값과 같은지 — 화면이 「기본값입니다」 를 말한다.
+            "is_default": now[name] == [dict(one) for one in spec["items"]],
+        }
+        for name, spec in D.CATALOGS.items()
+    ]
+
+
+def save_catalog(
+    db: Session, user: User, *, name: str, items: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """목록을 고친다 — **시스템 관리자만**(라우터가 막는다).
+
+    ⚠️ **쓰이는 키는 못 지운다.** 지우면 이미 적힌 줄의 값이 「모르는 값」 이 되고, 그 줄을
+       고칠 사람은 그것이 왜 비었는지 모른다.
+    ⚠️ **키는 저장되는 값이다.** 이름은 언제든 고쳐도 되지만 키를 고치는 것은 지우고 새로
+       만드는 것과 같다 — 그래서 같은 검사에 걸린다.
+    ⚠️ 빈 목록을 보내면 **기본값으로 돌아간다**(설정에서 지운다).
+    """
+    if name not in D.CATALOGS:
+        raise NotFound(code("CAEGROUP", 20), f"그런 목록이 없습니다: {name}")
+    cleaned: list[dict[str, str]] = []
+    seen: set[str] = set()
+    for one in items:
+        key = str(one.get("key") or "").strip()
+        label = str(one.get("label") or "").strip()
+        if not key and not label:
+            continue
+        if not key or not label:
+            raise Conflict(code("CAEGROUP", 21), "키와 이름을 모두 적어야 합니다.")
+        if key in seen:
+            raise Conflict(code("CAEGROUP", 21), f"키가 두 번 적혔습니다: {key}")
+        seen.add(key)
+        cleaned.append({"key": key, "label": label})
+
+    spec = D.CATALOGS[name]
+    # 빈 목록은 기본값으로 — **그 기본값을 기준으로** 쓰이는 키를 검사한다.
+    effective = cleaned or [dict(one) for one in spec["items"]]
+    keys = {one["key"] for one in effective}
+    missing = {
+        key: count for key, count in catalog_usage(db).get(name, {}).items() if key not in keys
+    }
+    if missing:
+        adrift = ", ".join(f"{key}({count}줄)" for key, count in sorted(missing.items()))
+        raise Conflict(
+            code("CAEGROUP", 22),
+            f"쓰이는 값은 지울 수 없습니다: {adrift}. 그 줄을 먼저 다른 값으로 고치세요.",
+        )
+
+    row = setting(db)
+    stored = dict(row.catalogs or {})
+    if cleaned:
+        stored[name] = cleaned
+    else:
+        stored.pop(name, None)
+    row.catalogs = stored
+    db.flush()
+    audit.record(
+        db,
+        action="caegroup.dt.catalog.save",
+        actor=user,
+        target_table="cae_dt_settings",
+        target_id=None,
+        target_label=str(spec["label"]),
+        changes={"name": name, "items": len(cleaned)},
+    )
+    db.commit()
+    return next(one for one in catalog_list(db) if one["name"] == name)
+
+
 def _type_or_none(db: Session, slug: str | None) -> ObjectType | None:
     if not slug:
         return None
@@ -1442,6 +1570,9 @@ def capacity_sheet(db: Session) -> dict[str, Any]:
     줄은 「모름」 과 구별되지 않고, 줄이 없으면 채울 자리도 없다.
     """
     saved = {one.workspace_id: one for one in db.scalars(select(CaeDtCapacity))}
+    # **이 설치의 목록**을 쓴다(설정에서 고친 것) — 기본값을 박으면 더한 단위가
+    # 표에서 키로 뜬다.
+    words = catalogs(db)
     spaces = list(
         db.scalars(
             select(Workspace)
@@ -1461,8 +1592,8 @@ def capacity_sheet(db: Session) -> dict[str, Any]:
                     "name": _as_text(one.get("name")),
                     "quantity": _as_text(one.get("quantity")),
                     # **이름으로 주고받는다**(「카피」) — 키를 적게 하면 아무도 못 채운다.
-                    "unit": D.label_of(D.SW_UNITS, str(one.get("unit") or "")),
-                    "purpose": D.label_of(D.SW_PURPOSES, str(one.get("purpose") or "")),
+                    "unit": D.label_of(words["sw_units"], str(one.get("unit") or "")),
+                    "purpose": D.label_of(words["sw_purposes"], str(one.get("purpose") or "")),
                     "shared": "예" if one.get("shared") else "",
                 }
             )
@@ -1503,6 +1634,7 @@ def capacity_bulk(
     """
     spaces, twins = _spaces_by_name(db)
     by_id = {one.id: one for one in spaces.values()}
+    words = catalogs(db)
     results: list[dict[str, Any]] = []
     built: dict[uuid.UUID, list[dict[str, Any]]] = {}
     fields: dict[uuid.UUID, dict[str, Any]] = {}
@@ -1556,8 +1688,8 @@ def capacity_bulk(
                 fail(index + 1, f"수량이 숫자가 아닙니다: {got.get('quantity')}")
                 blocked.add(space.id)
                 continue
-            unit = D.key_of(D.SW_UNITS, got.get("unit", ""))
-            purpose = D.key_of(D.SW_PURPOSES, got.get("purpose", ""))
+            unit = D.key_of(words["sw_units"], got.get("unit", ""))
+            purpose = D.key_of(words["sw_purposes"], got.get("purpose", ""))
             if unit is None or purpose is None:
                 wrong = got.get("unit") if unit is None else got.get("purpose")
                 fail(index + 1, f"모르는 값입니다: {wrong}")

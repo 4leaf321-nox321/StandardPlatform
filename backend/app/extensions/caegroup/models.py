@@ -50,6 +50,16 @@ class CaeDtSetting(Base):
     """시험 항목 타입. 비어 있으면 화면이 「먼저 기준 정보를 정하세요」 를 말한다."""
     agent_type_slug: Mapped[str | None] = mapped_column(String(64), nullable=True)
     """시뮬레이션 타입."""
+    catalogs: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """화면에서 고치는 목록들 — `{"sw_units": [{"key", "label"}, …], …}`.
+
+    단위를 하나 더하는 일이 배포이면 그 목록은 결국 안 고쳐진 채로 쓰인다. 시스템 관리자가
+    화면에서 고친다.
+
+    ⚠️ **비어 있으면 정의 파일의 기본값을 쓴다.** 기본값을 미리 심어 두면 코드의 기본값을
+       고쳐도 이미 깔린 설치는 옛 값을 계속 들고, 그 차이를 아무도 모른다.
+    ⚠️ **이름을 키로 둔다** — 어떤 목록이 더 필요해질지 몰라서다. 목록마다 칸을 만들면
+       다음 목록에서 또 마이그레이션을 한다."""
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
