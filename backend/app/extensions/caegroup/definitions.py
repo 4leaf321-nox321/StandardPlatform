@@ -241,6 +241,43 @@ AXES: list[dict[str, Any]] = [
     },
 ]
 
+# ── 인프라 칸의 말 ──────────────────────────────────────────────────────
+#
+# **키를 저장하고 이름을 보여 준다.** 표와 엑셀에는 사람이 읽는 이름이 적히고(「카피」),
+# 저장되는 값은 키다(`copy`) — 이름을 저장하면 문구를 고치는 날 자료가 둘로 갈린다.
+# 화면이 이 목록을 `/defs` 에서 받으므로 카탈로그는 여기 한 벌이다.
+SW_UNITS: list[dict[str, str]] = [
+    {"key": "copy", "label": "카피"},
+    {"key": "token", "label": "토큰"},
+    {"key": "unit", "label": "대"},
+]
+SW_PURPOSES: list[dict[str, str]] = [
+    {"key": "solve", "label": "해석"},
+    {"key": "parallel", "label": "병렬"},
+    {"key": "prepost", "label": "전후처리"},
+]
+
+
+def label_of(catalog: list[dict[str, str]], key: str) -> str:
+    """키 → 이름. **모르는 키는 그대로 보여 준다** — 남이 넣은 자료일 수 있고, 그것을
+    빈 칸으로 만들면 붙여넣기 한 번에 사라진다."""
+    for one in catalog:
+        if one["key"] == key:
+            return one["label"]
+    return key
+
+
+def key_of(catalog: list[dict[str, str]], raw: str) -> str | None:
+    """이름 · 키 → 키. 빈 칸은 빈 글자, **모르는 것은 `None`**(줄 오류로 돌려준다)."""
+    text = raw.strip()
+    if not text:
+        return ""
+    for one in catalog:
+        if text in (one["key"], one["label"]):
+            return one["key"]
+    return None
+
+
 AXIS_BY_KEY = {one["key"]: one for one in AXES}
 AXIS_KEYS = tuple(one["key"] for one in AXES)
 

@@ -993,6 +993,174 @@ def test_현재값_표를_파일로_내려받는다(client: TestClient, admin: S
     assert cells[head.index("전처리 자동화")] == ""
 
 
+def test_인프라도_표로_받아_한_번에_고친다(client: TestClient, admin: Signed) -> None:
+    """**목록은 표대로 맞춘다.** S/W · 계산 자원은 목록이라 빈 칸을 건너뛰면 줄을 없앨 길이
+    사라진다(라이선스를 반납한 날 표에서 지울 수 없다).
+
+    표에 없는 부서는 손대지 않고, 고치는 표가 아닌 부분(다른 목록 · 부서 기준)도 남는다 —
+    저장이 부서 한 줄을 통째로 다시 쓰기 때문이다.
+    """
+    _setup(client, admin)
+    # **이름으로 부서를 찾는 자리라 이름이 유일해야 한다** — 같은 이름이 둘이면 줄 오류다.
+    mine = client.post(
+        "/api/workspaces",
+        json={"slug": f"cap{uuid.uuid4().hex[:6]}", "name": f"해석팀 {uuid.uuid4().hex[:6]}"},
+        headers=admin.headers,
+    ).json()
+    dept, slug = mine["name"], mine["slug"]
+    client.put(
+        f"{DT}/capacity?workspace={slug}",
+        json={
+            "sw": [{"name": "예전 솔버", "quantity": 1, "unit": "copy"}],
+            "hw": [{"name": "예전 워크스테이션", "cpu_cores": 16, "ram_gb": 64}],
+            "material_types": 30,
+            "has_process_std": True,
+            "note": "지난 조사",
+        },
+        headers=admin.headers,
+    )
+
+    # 표에는 **이름**이 적힌다(「카피」) — 키(`copy`)를 적게 하면 아무도 못 채운다.
+    got = client.put(
+        f"{DT}/capacity/bulk",
+        json={
+            "what": "sw",
+            "rows": [
+                {
+                    "workspace_name": dept,
+                    "name": "Abaqus",
+                    "quantity": "4",
+                    "unit": "카피",
+                    "purpose": "해석",
+                    "shared": "O",
+                },
+                {"workspace_name": dept, "name": "ROM 도구", "quantity": "2", "unit": "토큰"},
+                {"workspace_name": "없는 팀", "name": "x", "quantity": "1"},
+            ],
+        },
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    assert [one["status"] for one in got.json()] == ["ok", "error"]
+    assert "부서를 찾을 수 없습니다" in got.json()[1]["message"]
+
+    row = client.get(f"{DT}/capacity?workspace={slug}", headers=admin.headers).json()
+    # 목록은 **표대로** 바뀐다 — 「예전 솔버」 는 표에 없으므로 사라진다.
+    assert [one["name"] for one in row["sw"]] == ["Abaqus", "ROM 도구"]
+    assert row["sw"][0]["unit"] == "copy" and row["sw"][0]["shared"] is True
+    # 고치지 않은 부분은 남는다.
+    assert [one["name"] for one in row["hw"]] == ["예전 워크스테이션"]
+    assert row["material_types"] == 30 and row["note"] == "지난 조사"
+
+    # **한 줄이 틀리면 그 부서는 저장하지 않는다** — 틀린 줄만 빼면 그것이 곧 지우기다.
+    bad = client.put(
+        f"{DT}/capacity/bulk",
+        json={
+            "what": "sw",
+            "rows": [
+                {"workspace_name": dept, "name": "Abaqus", "quantity": "넷"},
+                {"workspace_name": dept, "name": "ROM 도구", "quantity": "2"},
+            ],
+        },
+        headers=admin.headers,
+    )
+    assert [one["status"] for one in bad.json()] == ["error", "error"]
+    assert "숫자가 아닙니다" in bad.json()[0]["message"]
+    kept = client.get(f"{DT}/capacity?workspace={slug}", headers=admin.headers).json()
+    assert [one["name"] for one in kept["sw"]] == ["Abaqus", "ROM 도구"]
+
+    # 부서 기준은 그 줄대로 맞춘다 — 물성 종수의 빈 칸은 **모름**이다(0 종이 아니다).
+    base = client.put(
+        f"{DT}/capacity/bulk",
+        json={
+            "what": "base",
+            "rows": [
+                {
+                    "workspace_name": dept,
+                    "material_types": "100",
+                    "has_process_std": "",
+                    "note": "물성 DB 이관",
+                }
+            ],
+        },
+        headers=admin.headers,
+    )
+    assert [one["status"] for one in base.json()] == ["ok"]
+    after = client.get(f"{DT}/capacity?workspace={slug}", headers=admin.headers).json()
+    assert after["material_types"] == 100
+    assert after["has_process_std"] is False  # 끈 것이 반영된다
+    assert after["note"] == "물성 DB 이관"
+
+    # 현재값 표 — 부서 기준은 **아직 안 적은 부서도 빈 줄로** 선다.
+    sheet = client.get(f"{DT}/capacity/sheet", headers=admin.headers).json()
+    mine = [one for one in sheet["sw"] if one["workspace_name"] == dept]
+    assert [one["name"] for one in mine] == ["Abaqus", "ROM 도구"]
+    assert mine[0]["unit"] == "카피" and mine[0]["shared"] == "예"
+    assert mine[0]["quantity"] == "4"  # 「4.0 카피」 로 보이지 않는다
+    assert any(one["workspace_name"] == dept for one in sheet["base"])
+
+    # 전사 표를 엑셀로 — 부서 열이 앞에 선다(일괄 입력 표와 같은 순서).
+    book = client.get(f"{DT}/capacity/sheet/export", headers=admin.headers)
+    assert book.status_code == 200, book.text
+    assert len(book.content) > 100
+
+
+def test_남의_부서_인프라는_일괄로도_못_고친다(
+    client: TestClient, admin: Signed, member: Signed
+) -> None:
+    """쓰기는 **그 부서 멤버만**이다 — 표로 들어오는 길에 구멍이 나면 안 된다."""
+    _setup(client, admin)
+    other = client.post(
+        "/api/workspaces",
+        json={"slug": f"cap{uuid.uuid4().hex[:6]}", "name": f"옆 팀 {uuid.uuid4().hex[:4]}"},
+        headers=admin.headers,
+    ).json()
+    got = client.put(
+        f"{DT}/capacity/bulk",
+        json={
+            "what": "sw",
+            "rows": [{"workspace_name": other["name"], "name": "Abaqus", "quantity": "1"}],
+        },
+        headers=member.headers,
+    )
+    assert [one["status"] for one in got.json()] == ["error"]
+    assert "권한" in got.json()[0]["message"]
+
+
+def test_이름이_겹치는_부서는_줄_오류다(client: TestClient, admin: Signed) -> None:
+    """**부서 이름은 유일하지 않다** — 본부마다 품질팀이 있을 수 있다.
+
+    겹치는 이름에서 하나를 골라 쓰면 남의 부서에 조용히 적힌다. 못 가리는 것은 못 가린다고
+    말한다.
+    """
+    _setup(client, admin)
+    twin = f"품질팀 {uuid.uuid4().hex[:6]}"
+    for _ in range(2):
+        client.post(
+            "/api/workspaces",
+            json={"slug": f"twin{uuid.uuid4().hex[:6]}", "name": twin},
+            headers=admin.headers,
+        )
+    got = client.put(
+        f"{DT}/capacity/bulk",
+        json={
+            "what": "sw",
+            "rows": [{"workspace_name": twin, "name": "Abaqus", "quantity": "1"}],
+        },
+        headers=admin.headers,
+    )
+    assert [one["status"] for one in got.json()] == ["error"]
+    assert "이름이 겹쳐" in got.json()[0]["message"]
+
+    people = client.put(
+        f"{DT}/staff/bulk",
+        json={"rows": [{"name": "김해석", "workspace_name": twin}]},
+        headers=admin.headers,
+    )
+    assert [one["status"] for one in people.json()] == ["error"]
+    assert "이름이 겹쳐" in people.json()[0]["message"]
+
+
 def test_인력도_표로_받아_한_번에_고친다(client: TestClient, admin: Signed) -> None:
     """**이름과 부서로 그 줄을 찾는다.** 새 이름이면 새로 만든다.
 
@@ -1003,12 +1171,13 @@ def test_인력도_표로_받아_한_번에_고친다(client: TestClient, admin:
         client, admin, "sim_analysis", label=f"열 해석 {uuid.uuid4().hex[:4]}"
     )
     name = f"박해석{uuid.uuid4().hex[:4]}"
-    # 표에는 **부서 이름**이 적힌다(slug 가 아니다) — 사람이 읽고 적는 값이다.
-    dept = next(
-        one["name"]
-        for one in client.get("/api/workspaces", headers=admin.headers).json()
-        if one["slug"] == admin.workspace
-    )
+    # 표에는 **부서 이름**이 적힌다(slug 가 아니다) — 사람이 읽고 적는 값이다. 그래서
+    # 이름이 유일해야 하고, 겹치면 그 줄은 오류다(아래 시험).
+    dept = client.post(
+        "/api/workspaces",
+        json={"slug": f"stf{uuid.uuid4().hex[:6]}", "name": f"해석팀 {uuid.uuid4().hex[:6]}"},
+        headers=admin.headers,
+    ).json()["name"]
     got = client.put(
         f"{DT}/staff/bulk",
         json={

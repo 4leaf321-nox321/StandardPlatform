@@ -37,6 +37,9 @@ export interface Defs {
   axes: AxisDef[]
   accuracy_thresholds: { rung: string; min: number }[]
   accuracy_rules: { key: string; label: string }[]
+  /** 인프라 S/W 의 단위 · 용도 — **키를 저장하고 이름을 보여 준다.** */
+  sw_units: { key: string; label: string }[]
+  sw_purposes: { key: string; label: string }[]
 }
 
 export interface SetupStatus {
@@ -245,6 +248,21 @@ export interface StaffSheetRow {
   note: string
 }
 
+/** 인프라의 어느 표인가 — 열이 달라 한 번에 하나씩 저장한다. */
+export type CapacityWhat = 'sw' | 'hw' | 'base'
+
+/**
+ * 인프라 현재값 표 — **모든 칸이 글자다**(표가 주고받는 모양).
+ *
+ * 단위 · 용도는 사람이 읽는 이름으로 오고 간다(「카피」). 키(`copy`)를 적게 하면 아무도
+ * 못 채운다 — 바꿔 주는 것은 서버가 한다.
+ */
+export interface CapacitySheet {
+  sw: Record<string, string>[]
+  hw: Record<string, string>[]
+  base: Record<string, string>[]
+}
+
 export interface StaffBulkRow {
   name?: string
   workspace_name?: string
@@ -307,4 +325,9 @@ export const dtApi = {
   staffFileUrl: (format: 'xlsx' | 'csv') => `${BASE}/staff/sheet/export?format=${format}`,
   capacityFileUrl: (workspace: string) =>
     `${BASE}/capacity/sheet/export?workspace=${encodeURIComponent(workspace)}`,
+  capacitySheet: () => api.get<CapacitySheet>(`${BASE}/capacity/sheet`),
+  capacityBulk: (what: CapacityWhat, rows: Record<string, string>[]) =>
+    api.put<BulkResult[]>(`${BASE}/capacity/bulk`, { what, rows }),
+  /** 부서를 안 주면 **전사** 표다 — 부서 열이 앞에 서고, 일괄 입력 표와 열이 같다. */
+  capacityAllFileUrl: () => `${BASE}/capacity/sheet/export`,
 }

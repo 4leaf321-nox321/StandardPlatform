@@ -26,21 +26,15 @@ import { useResource } from '@/shared/hooks/useResource'
 
 import { dtApi, type HwRow, type SwRow } from './api'
 
-const UNITS = [
-  { key: 'copy', label: '카피' },
-  { key: 'token', label: '토큰' },
-  { key: 'unit', label: '대' },
-]
-const PURPOSES = [
-  { key: 'solve', label: '해석' },
-  { key: 'parallel', label: '병렬' },
-  { key: 'prepost', label: '전후처리' },
-]
-
 export default function InfraPage() {
   const { user } = useAuth()
   const home = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? ''
   const workspaces = useResource(() => workspaceApi.list(true), [])
+  // **단위 · 용도는 서버가 정한다.** 화면마다 목록을 두면 일괄 입력 표와 여기가 갈라지고,
+  // 그때 「대」 로 고른 것이 표에서는 없는 값이 된다.
+  const defs = useResource(() => dtApi.defs(), [])
+  const units = defs.data?.sw_units ?? []
+  const purposes = defs.data?.sw_purposes ?? []
   const [target, setTarget] = useState(home)
   const current = useResource(() => (target ? dtApi.capacity(target) : Promise.resolve(null)), [
     target,
@@ -94,7 +88,7 @@ export default function InfraPage() {
         description="S/W 라이선스 · 계산 자원 · 물성입니다. 전사 공유 자원은 전사 합계에서 1회만 집계합니다."
       />
 
-      <ErrorNotice error={failed ?? current.error ?? summary.error} />
+      <ErrorNotice error={failed ?? defs.error ?? current.error ?? summary.error} />
 
       {/* 전사 합계 — 공유를 한 번만 센 값이다. */}
       <section className="grid gap-3 sm:grid-cols-4">
@@ -208,7 +202,7 @@ export default function InfraPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {UNITS.map((one) => (
+                    {units.map((one) => (
                       <SelectItem key={one.key} value={one.key}>
                         {one.label}
                       </SelectItem>
@@ -227,7 +221,7 @@ export default function InfraPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {PURPOSES.map((one) => (
+                    {purposes.map((one) => (
                       <SelectItem key={one.key} value={one.key}>
                         {one.label}
                       </SelectItem>

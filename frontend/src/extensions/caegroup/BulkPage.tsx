@@ -26,7 +26,13 @@ import { Button } from '@/shared/components/ui/button'
 import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { useResource } from '@/shared/hooks/useResource'
 
-import { dtApi, type AxisDef, type BulkResult, type Sheet } from './api'
+import {
+  dtApi,
+  type AxisDef,
+  type BulkResult,
+  type CapacityWhat,
+  type Sheet,
+} from './api'
 
 /** 이 축에서 **고르는 항목의 이름들** — 표는 항목마다 한 열을 둔다.
  *
@@ -130,9 +136,63 @@ function staffColumns(known: { agents: string[]; workspaces: string[] }): GridCo
   ]
 }
 
+/** 인프라 표 셋 — **열이 서로 다르다.** 한 표에 섞으면 라이선스 수가 CPU 코어 칸에 들어간다. */
+const INFRA_TABS: { key: CapacityWhat; label: string }[] = [
+  { key: 'sw', label: 'S/W 라이선스' },
+  { key: 'hw', label: '계산 자원' },
+  { key: 'base', label: '부서 기준' },
+]
+
+function infraColumns(
+  kind: CapacityWhat,
+  known: { workspaces: string[]; units: string[]; purposes: string[] },
+): GridColumn[] {
+  const dept: GridColumn = {
+    key: 'workspace_name',
+    header: '부서',
+    help: '이 이름으로 부서를 찾습니다',
+    required: true,
+    options: known.workspaces,
+  }
+  if (kind === 'sw') {
+    return [
+      dept,
+      { key: 'name', header: '툴', help: '이 이름으로 전사 합계가 묶입니다', required: true },
+      { key: 'quantity', header: '수량', help: '숫자' },
+      { key: 'unit', header: '단위', options: known.units },
+      { key: 'purpose', header: '용도', options: known.purposes },
+      // 공유 자원은 전사 합계에서 **한 번만** 센다 — 부서마다 더하면 이미 있는 것을 또 산다.
+      { key: 'shared', header: '전사 공유', help: '합계에서 한 번만 셉니다', check: true },
+    ]
+  }
+  if (kind === 'hw') {
+    return [
+      dept,
+      { key: 'name', header: '자원', help: '이 이름으로 공유를 가립니다', required: true },
+      { key: 'cpu_cores', header: 'CPU 코어', help: '숫자' },
+      { key: 'ram_gb', header: 'RAM GB', help: '숫자' },
+      // GPU 는 **글**이다(「A100 4장」) — 숫자로 강제하면 적을 수 있는 것을 못 적게 만든다.
+      { key: 'gpu', header: 'GPU', help: '사양을 글로 적습니다 — 「A100 4장」' },
+      { key: 'shared', header: '전사 공유', help: '합계에서 한 번만 셉니다', check: true },
+    ]
+  }
+  return [
+    dept,
+    { key: 'material_types', header: '물성 종수', help: '숫자 · 비우면 모름(0 종이 아닙니다)' },
+    { key: 'has_process_std', header: '공정 표준', help: '있으면 체크', check: true },
+    { key: 'note', header: '메모' },
+  ]
+}
+
+/** 열의 key 는 한 곳에서 나온다 — 표를 채울 때도 저장할 때도 이것으로 찾는다. */
+function infraKeys(kind: CapacityWhat): string[] {
+  return infraColumns(kind, { workspaces: [], units: [], purposes: [] }).map((one) => one.key)
+}
+
 export default function BulkPage() {
   const defs = useResource(() => dtApi.defs(), [])
-  const [what, setWhat] = useState<'axis' | 'staff'>('axis')
+  const [what, setWhat] = useState<'axis' | 'staff' | 'infra'>('axis')
+  const [infraKind, setInfraKind] = useState<CapacityWhat>('sw')
   const [axisKey, setAxisKey] = useState<string | null>(null)
   const axis = defs.data?.axes.find((one) => one.key === (axisKey ?? defs.data?.axes[0]?.key)) ?? null
   const sheet = useResource(
@@ -159,8 +219,15 @@ export default function BulkPage() {
     agents: (agentList.data?.items ?? []).map((one) => one.label),
     workspaces: (workspaces.data ?? []).map((one) => one.name),
   }
+  const capacitySheet = useResource(() => dtApi.capacitySheet(), [])
   const [rows, setRows] = useState<string[][]>([])
   const [staffRows, setStaffRows] = useState<string[][]>([])
+  // 표마다 따로 든다 — 탭을 옮겨도 고치던 값이 남는다(표마다 따로 저장한다).
+  const [infraRows, setInfraRows] = useState<Record<CapacityWhat, string[][]>>({
+    sw: [],
+    hw: [],
+    base: [],
+  })
   const [results, setResults] = useState<BulkResult[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState<Error | null>(null)
@@ -191,6 +258,19 @@ export default function BulkPage() {
     }
   }, [staffSheet.data])
 
+  // 인프라도 **현재값이 채워진 채로** 시작한다.
+  useEffect(() => {
+    const body = capacitySheet.data
+    if (!body) return
+    const fill = (kind: CapacityWhat, source: Record<string, string>[]) =>
+      source.map((one) => infraKeys(kind).map((key) => one[key] ?? ''))
+    setInfraRows({
+      sw: fill('sw', body.sw),
+      hw: fill('hw', body.hw),
+      base: fill('base', body.base),
+    })
+  }, [capacitySheet.data])
+
   const columns = useMemo(
     () => (axis ? columnsFor(axis, known) : []),
     // 목록은 불러온 뒤 바뀌지 않는다 — 길이로만 본다(매 렌더 새 배열이라 값 비교가 안 된다).
@@ -201,6 +281,17 @@ export default function BulkPage() {
     () => staffColumns(known),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [known.agents.length, known.workspaces.length],
+  )
+  const infraCols = useMemo(
+    () =>
+      infraColumns(infraKind, {
+        workspaces: known.workspaces,
+        // 단위 · 용도의 **이름**은 서버가 내려 준다(키를 저장하고 이름을 보여 준다).
+        units: (defs.data?.sw_units ?? []).map((one) => one.label),
+        purposes: (defs.data?.sw_purposes ?? []).map((one) => one.label),
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [infraKind, known.workspaces.length, defs.data],
   )
 
   // **같은 연계가 두 줄이면 알린다.** 붙여넣기에서 흔하고, 그대로 저장하면 뒤 줄이 앞 줄을
@@ -232,6 +323,24 @@ export default function BulkPage() {
       if (body.length === 0) return
       setResults(await dtApi.staffBulk(body))
       staffSheet.reload()
+    } catch (caught) {
+      setFailed(caught as Error)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveInfra() {
+    setBusy(true)
+    setFailed(null)
+    try {
+      const keys = infraKeys(infraKind)
+      const body = (infraRows[infraKind] ?? [])
+        .filter((row) => row.some((one) => one.trim() !== ''))
+        .map((row) => Object.fromEntries(keys.map((key, at) => [key, (row[at] ?? '').trim()])))
+      if (body.length === 0) return
+      setResults(await dtApi.capacityBulk(infraKind, body))
+      capacitySheet.reload()
     } catch (caught) {
       setFailed(caught as Error)
     } finally {
@@ -288,16 +397,76 @@ export default function BulkPage() {
         description="현재값이 채워진 표를 고쳐 한 번에 저장합니다. 엑셀에서 복사해 붙여 넣어도 됩니다 — 빈 칸은 건너뜁니다(지우기가 아닙니다)."
       />
 
-      <ErrorNotice error={failed ?? defs.error ?? sheet.error} />
+      <ErrorNotice error={failed ?? defs.error ?? sheet.error ?? capacitySheet.error} />
 
-      <Tabs value={what} onValueChange={(value) => setWhat(value as 'axis' | 'staff')}>
+      <Tabs value={what} onValueChange={(value) => setWhat(value as typeof what)}>
         <TabsList>
           <TabsTrigger value="axis">평가</TabsTrigger>
           <TabsTrigger value="staff">인력</TabsTrigger>
+          <TabsTrigger value="infra">인프라</TabsTrigger>
         </TabsList>
       </Tabs>
 
-      {what === 'staff' ? (
+      {what === 'infra' ? (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <Tabs value={infraKind} onValueChange={(value) => setInfraKind(value as CapacityWhat)}>
+              <TabsList>
+                {INFRA_TABS.map((one) => (
+                  <TabsTrigger key={one.key} value={one.key}>
+                    {one.label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => capacitySheet.reload()}
+              disabled={busy}
+            >
+              <RefreshCw className="size-4" /> 현재값 불러오기
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() =>
+                void downloadFile(dtApi.capacityAllFileUrl(), '인프라-현재값.xlsx')
+              }
+            >
+              <Download className="size-4" /> 엑셀로 내려받기
+            </Button>
+            <Button
+              className="ml-auto"
+              onClick={() => void saveInfra()}
+              disabled={busy || (infraRows[infraKind] ?? []).length === 0}
+            >
+              <Save className="size-4" /> 저장
+            </Button>
+          </div>
+
+          {/* **규칙이 평가 · 인력과 다르다.** 목록이라 빈 칸을 건너뛰면 줄을 없앨 길이 없다. */}
+          <p className="text-muted-foreground rounded-md border p-3 text-sm">
+            표에 나온 부서를 <b>표대로 맞춥니다</b> — 줄을 지우면 그 부서에서 없어집니다(표에
+            없는 부서는 그대로 둡니다). 한 줄이 틀리면 그 부서는 저장하지 않습니다. 쓰기는 그
+            부서 멤버만 할 수 있습니다.
+          </p>
+
+          <PasteGrid
+            columns={infraCols}
+            rows={infraRows[infraKind] ?? []}
+            onRows={(next) => setInfraRows((was) => ({ ...was, [infraKind]: next }))}
+            header={
+              <p className="text-muted-foreground text-sm">
+                {(infraRows[infraKind] ?? []).length}줄 ·{' '}
+                {infraKind === 'base'
+                  ? '부서마다 한 줄입니다 — 물성 종수를 비우면 모름입니다(0 종이 아닙니다).'
+                  : '전사 공유 자원은 전사 합계에서 한 번만 셉니다 — 그 칸을 체크합니다.'}
+              </p>
+            }
+          />
+        </>
+      ) : what === 'staff' ? (
         <>
           <div className="flex flex-wrap items-center gap-2">
             <Button

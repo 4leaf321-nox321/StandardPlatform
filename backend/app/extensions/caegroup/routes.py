@@ -21,8 +21,10 @@ from app.extensions.caegroup.schemas import (
     BoardOut,
     BulkAssessIn,
     BulkResultOut,
+    CapacityBulkIn,
     CapacityIn,
     CapacityOut,
+    CapacitySheetOut,
     CapacitySummaryOut,
     CoverageOut,
     DefsOut,
@@ -61,6 +63,9 @@ def defs(_: User = Depends(current_user)) -> DefsOut:
         axes=D.AXES,
         accuracy_thresholds=D.ACCURACY_THRESHOLDS,
         accuracy_rules=D.ACCURACY_RULES,
+        # 인프라 칸의 말도 여기서 온다 — 화면과 엑셀이 같은 이름을 쓰게.
+        sw_units=D.SW_UNITS,
+        sw_purposes=D.SW_PURPOSES,
     )
 
 
@@ -357,6 +362,32 @@ def capacity_save(
     )
 
 
+@router.get("/capacity/sheet", response_model=CapacitySheetOut)
+def capacity_sheet(
+    _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> CapacitySheetOut:
+    """인프라 **현재값 표** — 부서마다, 목록은 줄마다. 화면이 이것을 표에 채운다.
+
+    한 부서씩 창을 열어 고치는 길만 있으면 물성 100종 · 라이선스 열 줄이 갱신되지 않는다.
+    """
+    return CapacitySheetOut(**services.capacity_sheet(db))
+
+
+@router.put("/capacity/bulk", response_model=list[BulkResultOut])
+def capacity_bulk(
+    payload: CapacityBulkIn, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[BulkResultOut]:
+    """인프라 표를 한 번에 저장한다 — **표에 나온 부서를 표대로 맞춘다.**
+
+    S/W 와 계산 자원은 목록이라 빈 칸을 건너뛰면 줄을 없앨 길이 사라진다. 표에 없는 부서는
+    손대지 않고, 한 줄이 틀리면 그 부서는 저장하지 않는다(틀린 줄만 빼면 그것이 곧 지우기다).
+    """
+    return [
+        BulkResultOut(**one)
+        for one in services.capacity_bulk(db, user, what=payload.what, rows=payload.rows)
+    ]
+
+
 @router.get("/capacity/summary", response_model=CapacitySummaryOut)
 def capacity_summary(
     _: User = Depends(current_user), db: Session = Depends(get_db)
@@ -441,14 +472,66 @@ def assessment_bulk(
 
 @router.get("/capacity/sheet/export")
 def capacity_sheet_export(
-    workspace: str = Query(...),
+    workspace: str | None = Query(default=None),
     _: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    """인프라 현재값을 엑셀로 — **S/W 와 계산 자원을 각각 한 시트로.**
+    """인프라 현재값을 엑셀로 — **표마다 한 시트.**
 
-    한 시트에 섞으면 열이 서로 달라 붙여넣기에서 어긋난다.
+    한 시트에 섞으면 열이 서로 달라 붙여넣기에서 어긋난다. 부서를 주면 그 부서만, 안 주면
+    **전사**다(부서 열이 앞에 선다) — 일괄 입력 표와 같은 열 · 같은 순서라, 고쳐서 그대로
+    붙여 넣을 수 있다.
     """
+    if workspace is None:
+        body = services.capacity_sheet(db)
+        return sheets.workbook_response(
+            [
+                sheets.Page(
+                    name="S_W",
+                    header=["부서", "툴", "수량", "단위", "용도", "전사 공유"],
+                    rows=[
+                        [
+                            one["workspace_name"],
+                            one["name"],
+                            one["quantity"],
+                            one["unit"],
+                            one["purpose"],
+                            one["shared"],
+                        ]
+                        for one in body["sw"]
+                    ],
+                ),
+                sheets.Page(
+                    name="계산 자원",
+                    header=["부서", "자원", "CPU 코어", "RAM GB", "GPU", "전사 공유"],
+                    rows=[
+                        [
+                            one["workspace_name"],
+                            one["name"],
+                            one["cpu_cores"],
+                            one["ram_gb"],
+                            one["gpu"],
+                            one["shared"],
+                        ]
+                        for one in body["hw"]
+                    ],
+                ),
+                sheets.Page(
+                    name="부서 기준",
+                    header=["부서", "물성 종수", "공정 표준", "메모"],
+                    rows=[
+                        [
+                            one["workspace_name"],
+                            one["material_types"],
+                            one["has_process_std"],
+                            one["note"],
+                        ]
+                        for one in body["base"]
+                    ],
+                ),
+            ],
+            stem="dt-capacity",
+        )
     chosen = permissions.workspace_by_slug(db, workspace)
     row = services.capacity(db, workspace=chosen)
     return sheets.workbook_response(
@@ -460,8 +543,9 @@ def capacity_sheet_export(
                     [
                         one.get("name", ""),
                         one.get("quantity", 0),
-                        one.get("unit", ""),
-                        one.get("purpose", ""),
+                        # **이름으로 적는다**(「카피」) — 키(`copy`)를 엑셀에 내면 못 읽는다.
+                        D.label_of(D.SW_UNITS, str(one.get("unit") or "")),
+                        D.label_of(D.SW_PURPOSES, str(one.get("purpose") or "")),
                         "예" if one.get("shared") else "",
                     ]
                     for one in row["sw"]

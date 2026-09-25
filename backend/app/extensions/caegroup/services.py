@@ -1056,7 +1056,8 @@ def capacity_summary(db: Session) -> dict[str, Any]:
     for row in rows:
         for one in row.sw or []:
             name = str(one.get("name") or "")
-            amount = float(one.get("quantity") or 0)
+            # 수량도 사람이 적는 칸이다 — GPU 칸이 글이어서 터진 것과 같은 자리.
+            amount = as_number(one.get("quantity"))
             if one.get("shared"):
                 if name in shared_seen:
                     continue
@@ -1093,6 +1094,59 @@ def capacity_summary(db: Session) -> dict[str, Any]:
 # **현재값을 내려 주고, 고쳐서 한 번에 되돌려 받는다.** 한 줄씩 창을 열어 고치는 길만
 # 있으면 스무 건이 넘는 순간 아무도 최신으로 유지하지 않는다 — 그리고 안 채운 자료는
 # 「모름」 과 구별되지 않는다.
+
+
+#: 체크 칸에서 「켜짐」 으로 읽는 글자 — 사람마다 다른 것을 쓴다(화면의 `isChecked` 와 같다).
+CHECKED_TEXT = ("예", "y", "Y", "o", "O", "v", "V", "x", "X", "✓", "true", "1")
+
+
+def _truthy(raw: Any) -> bool:
+    return str(raw or "").strip() in CHECKED_TEXT
+
+
+def _number_or_none(raw: Any) -> float | None:
+    """숫자로 읽는다. **못 읽으면 `None`** — 줄 오류로 돌려준다(0 으로 넘기면 사람이
+    적은 값이 조용히 사라진다)."""
+    text = str(raw or "").strip()
+    if not text:
+        return 0.0
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def _as_text(raw: Any) -> str:
+    """표에 적을 글자. 정수는 `.0` 없이 적는다 — 「4.0 카피」 로 보이면 안 된다."""
+    if raw is None or raw == "":
+        return ""
+    if isinstance(raw, bool):
+        return "예" if raw else ""
+    if isinstance(raw, int | float):
+        return str(int(raw)) if float(raw).is_integer() else str(raw)
+    return str(raw)
+
+
+def _spaces_by_name(db: Session) -> tuple[dict[str, Workspace], set[str]]:
+    """부서 이름 → 부서. 겹치는 이름은 따로 모아 **줄 오류로 돌려준다.**
+
+    ⚠️ **부서 이름은 유일하지 않다** — 본부마다 품질팀이 있을 수 있다(`workspaces/models.py`).
+       겹치는 이름에서 하나를 골라 쓰면 **남의 부서에 조용히 적힌다.** 표는 사람이 읽는
+       이름으로 주고받는 자리라, 못 가리는 것은 못 가린다고 말하는 편이 낫다.
+    """
+    found: dict[str, list[Workspace]] = {}
+    for one in db.scalars(select(Workspace)):
+        found.setdefault(one.name.strip(), []).append(one)
+    unique = {name: rows[0] for name, rows in found.items() if len(rows) == 1}
+    twins = {name for name, rows in found.items() if len(rows) > 1}
+    return unique, twins
+
+
+def _space_error(wanted: str, twins: set[str]) -> str:
+    """부서를 못 찾은 줄의 말 — 왜 못 찾았는지 가른다."""
+    if wanted in twins:
+        return f"부서 이름이 둘 이상입니다: {wanted} — 이름이 겹쳐 가릴 수 없습니다."
+    return f"부서를 찾을 수 없습니다: {wanted or '(비어 있음)'}"
 
 
 def _rung_by_name(axis: dict[str, Any]) -> dict[str, str]:
@@ -1298,7 +1352,7 @@ def staff_bulk(db: Session, user: User, *, rows: list[dict[str, Any]]) -> list[d
     같은 부서에 같은 이름이 둘이면 첫 줄을 고친다. 이름이 사람의 식별자인 자리라, 동명이인은
     메모로 가른다 — 계정을 붙이는 길은 다음 층이다(겹침 탐지가 그때 정확해진다).
     """
-    workspaces = {one.name: one for one in db.scalars(select(Workspace))}
+    workspaces, twins = _spaces_by_name(db)
     setting_row = setting(db)
     agent_ids: dict[str, str] = {}
     if setting_row.agent_type_slug:
@@ -1329,7 +1383,7 @@ def staff_bulk(db: Session, user: User, *, rows: list[dict[str, Any]]) -> list[d
                 {
                     "line": index + 1,
                     "status": "error",
-                    "message": f"부서를 찾을 수 없습니다: {wanted or '(비어 있음)'}",
+                    "message": _space_error(wanted, twins),
                 }
             )
             continue
@@ -1353,9 +1407,7 @@ def staff_bulk(db: Session, user: User, *, rows: list[dict[str, Any]]) -> list[d
                 for one in str(raw.get("skill_kinds") or "").split("·")
                 if one.strip()
             ],
-            # 체크 칸에서 오는 글자도 「있음」 으로 읽는다 — 사람마다 다른 것을 쓴다.
-            "outside": str(raw.get("outside") or "").strip()
-            in ("예", "y", "Y", "o", "O", "v", "V", "x", "X", "✓", "true", "1"),
+            "outside": _truthy(raw.get("outside")),
             "note": str(raw.get("note") or "").strip(),
         }
         found = existing.get((name, workspace.id))
@@ -1377,6 +1429,195 @@ def staff_bulk(db: Session, user: User, *, rows: list[dict[str, Any]]) -> list[d
                 "message": f"{workspace.name} · {len(picked_agents)}담당",
             }
         )
+    return results
+
+
+def capacity_sheet(db: Session) -> dict[str, Any]:
+    """인프라 **현재값 표** — S/W · 계산 자원 · 부서 기준.
+
+    한 시트에 섞지 않는다. 열이 서로 달라 붙여넣기에서 어긋나고, 그때 라이선스 수가 CPU
+    코어 칸에 들어간다.
+
+    부서 기준(물성 종수 · 공정 표준 · 메모)은 **아직 안 적은 부서도 빈 줄로 선다** — 없는
+    줄은 「모름」 과 구별되지 않고, 줄이 없으면 채울 자리도 없다.
+    """
+    saved = {one.workspace_id: one for one in db.scalars(select(CaeDtCapacity))}
+    spaces = list(
+        db.scalars(
+            select(Workspace)
+            .where(Workspace.is_active.is_(True))
+            .order_by(Workspace.sort_order, Workspace.name)
+        )
+    )
+    sw: list[dict[str, Any]] = []
+    hw: list[dict[str, Any]] = []
+    base: list[dict[str, Any]] = []
+    for space in spaces:
+        row = saved.get(space.id)
+        for one in (row.sw if row else None) or []:
+            sw.append(
+                {
+                    "workspace_name": space.name,
+                    "name": _as_text(one.get("name")),
+                    "quantity": _as_text(one.get("quantity")),
+                    # **이름으로 주고받는다**(「카피」) — 키를 적게 하면 아무도 못 채운다.
+                    "unit": D.label_of(D.SW_UNITS, str(one.get("unit") or "")),
+                    "purpose": D.label_of(D.SW_PURPOSES, str(one.get("purpose") or "")),
+                    "shared": "예" if one.get("shared") else "",
+                }
+            )
+        for one in (row.hw if row else None) or []:
+            hw.append(
+                {
+                    "workspace_name": space.name,
+                    "name": _as_text(one.get("name")),
+                    "cpu_cores": _as_text(one.get("cpu_cores")),
+                    "ram_gb": _as_text(one.get("ram_gb")),
+                    # GPU 는 **글**이다(「A100 4장」) — 숫자로 강제하면 못 적는다.
+                    "gpu": _as_text(one.get("gpu")),
+                    "shared": "예" if one.get("shared") else "",
+                }
+            )
+        base.append(
+            {
+                "workspace_name": space.name,
+                "material_types": _as_text(row.material_types if row else None),
+                "has_process_std": "예" if row and row.has_process_std else "",
+                "note": row.note if row else "",
+            }
+        )
+    return {"sw": sw, "hw": hw, "base": base}
+
+
+def capacity_bulk(
+    db: Session, user: User, *, what: str, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """인프라 표를 한 번에 저장한다 — **표에 나온 부서를 표대로 맞춘다.**
+
+    ⚠️ 평가 · 인력과 규칙이 다르다. S/W 와 계산 자원은 **목록**이라 「빈 칸은 건너뜀」 으로
+       두면 줄을 없애는 길이 사라진다(라이선스를 반납한 날 표에서 지울 수 없다). 그래서 표에
+       나온 부서의 목록은 표대로 바뀐다 — **표에 없는 부서는 손대지 않는다.**
+    ⚠️ **한 줄이 틀리면 그 부서는 저장하지 않는다.** 목록을 통째로 바꾸는 자리라, 틀린 줄만
+       빼고 저장하면 그것이 곧 「그 줄을 지움」 이 된다.
+    ⚠️ 쓰기는 **그 부서 멤버만**(`save_capacity`). 남의 부서 줄은 오류로 돌아온다.
+    """
+    spaces, twins = _spaces_by_name(db)
+    by_id = {one.id: one for one in spaces.values()}
+    results: list[dict[str, Any]] = []
+    built: dict[uuid.UUID, list[dict[str, Any]]] = {}
+    fields: dict[uuid.UUID, dict[str, Any]] = {}
+    order: list[uuid.UUID] = []
+    first_line: dict[uuid.UUID, int] = {}
+    blocked: set[uuid.UUID] = set()
+
+    def fail(line: int, message: str) -> None:
+        results.append({"line": line, "status": "error", "message": message})
+
+    for index, raw in enumerate(rows):
+        got = {key: str(value or "").strip() for key, value in raw.items()}
+        if not any(got.values()):
+            continue  # 다 빈 줄은 없는 줄이다 — 표 끝에 늘 하나 있다.
+        wanted = got.get("workspace_name", "")
+        space = spaces.get(wanted)
+        if space is None:
+            fail(index + 1, _space_error(wanted, twins))
+            continue
+        if space.id not in built:
+            built[space.id] = []
+            order.append(space.id)
+            first_line[space.id] = index + 1
+
+        if what == "base":
+            if space.id in fields:
+                fail(index + 1, f"{space.name} 이 두 줄입니다 — 부서마다 한 줄입니다.")
+                blocked.add(space.id)
+                continue
+            materials = _number_or_none(got.get("material_types", ""))
+            if materials is None:
+                fail(index + 1, f"물성 종수가 숫자가 아닙니다: {got.get('material_types')}")
+                blocked.add(space.id)
+                continue
+            fields[space.id] = {
+                # 빈 칸은 **모름**이다 — 0 종과 다르다.
+                "material_types": int(materials) if got.get("material_types") else None,
+                "has_process_std": _truthy(got.get("has_process_std")),
+                "note": got.get("note", ""),
+            }
+            continue
+
+        name = got.get("name", "")
+        if not name:
+            fail(index + 1, "이름이 비어 있습니다.")
+            blocked.add(space.id)
+            continue
+        if what == "sw":
+            amount = _number_or_none(got.get("quantity", ""))
+            if amount is None:
+                fail(index + 1, f"수량이 숫자가 아닙니다: {got.get('quantity')}")
+                blocked.add(space.id)
+                continue
+            unit = D.key_of(D.SW_UNITS, got.get("unit", ""))
+            purpose = D.key_of(D.SW_PURPOSES, got.get("purpose", ""))
+            if unit is None or purpose is None:
+                wrong = got.get("unit") if unit is None else got.get("purpose")
+                fail(index + 1, f"모르는 값입니다: {wrong}")
+                blocked.add(space.id)
+                continue
+            built[space.id].append(
+                {
+                    "name": name,
+                    "quantity": int(amount) if float(amount).is_integer() else amount,
+                    "unit": unit,
+                    "purpose": purpose,
+                    "shared": _truthy(got.get("shared")),
+                }
+            )
+            continue
+        cores = _number_or_none(got.get("cpu_cores", ""))
+        ram = _number_or_none(got.get("ram_gb", ""))
+        if cores is None or ram is None:
+            fail(index + 1, "CPU 코어 · RAM 이 숫자가 아닙니다.")
+            blocked.add(space.id)
+            continue
+        built[space.id].append(
+            {
+                "name": name,
+                "cpu_cores": int(cores),
+                "ram_gb": int(ram),
+                "gpu": got.get("gpu", ""),
+                "shared": _truthy(got.get("shared")),
+            }
+        )
+
+    for space_id in order:
+        space = by_id[space_id]
+        line = first_line[space_id]
+        if space_id in blocked:
+            fail(line, f"{space.name} — 틀린 줄이 있어 이 부서는 저장하지 않았습니다.")
+            continue
+        # **고치는 부분만 바꾼다.** 저장이 부서 한 줄을 통째로 다시 쓰기 때문에, 지금 든
+        # 나머지(다른 목록 · 부서 기준)를 같이 넘기지 않으면 그것이 지워진다.
+        now = capacity(db, workspace=space)
+        payload: dict[str, Any] = {
+            "sw": now["sw"],
+            "hw": now["hw"],
+            "material_types": now["material_types"],
+            "has_process_std": now["has_process_std"],
+            "note": now["note"],
+        }
+        if what == "base":
+            payload.update(fields.get(space_id, {}))
+            done = f"물성 {_as_text(payload['material_types']) or '—'}종"
+        else:
+            payload[what] = built[space_id]
+            done = f"{len(built[space_id])}줄"
+        try:
+            save_capacity(db, user, workspace=space, payload=payload)
+        except AppError as failed:
+            fail(line, failed.message)
+            continue
+        results.append({"line": line, "status": "ok", "message": f"{space.name} · {done}"})
+    results.sort(key=lambda one: one["line"])
     return results
 
 

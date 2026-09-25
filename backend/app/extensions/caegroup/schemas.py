@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field
 
@@ -30,6 +30,9 @@ class DefsOut(BaseModel):
     axes: list[dict[str, Any]]
     accuracy_thresholds: list[dict[str, Any]]
     accuracy_rules: list[dict[str, str]]
+    sw_units: list[dict[str, str]]
+    """인프라 S/W 의 단위 · 용도 — **키를 저장하고 이름을 보여 준다.**"""
+    sw_purposes: list[dict[str, str]]
 
 
 class PairOut(BaseModel):
@@ -239,6 +242,25 @@ class CapacitySummaryOut(BaseModel):
     """
     material_types: int
     process_std: int
+
+
+class CapacitySheetOut(BaseModel):
+    """인프라 현재값 표 — **목록 둘과 부서 기준.**
+
+    한 표에 섞지 않는다. 열이 서로 달라 붙여넣기에서 어긋나고, 그때 라이선스 수가 CPU
+    코어 칸에 들어간다.
+    """
+
+    sw: list[dict[str, Any]]
+    hw: list[dict[str, Any]]
+    base: list[dict[str, Any]]
+
+
+class CapacityBulkIn(BaseModel):
+    """어느 표를 저장하나 — 한 번에 하나다(열이 다르다)."""
+
+    what: Literal["sw", "hw", "base"]
+    rows: list[dict[str, Any]] = Field(min_length=1)
 
 
 class SheetRowOut(BaseModel):

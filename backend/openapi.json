@@ -9583,6 +9583,74 @@
         }
       }
     },
+    "/api/ext/caegroup/dt/capacity/sheet": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Capacity Sheet",
+        "description": "인프라 **현재값 표** — 부서마다, 목록은 줄마다. 화면이 이것을 표에 채운다.\n\n한 부서씩 창을 열어 고치는 길만 있으면 물성 100종 · 라이선스 열 줄이 갱신되지 않는다.",
+        "operationId": "capacity_sheet_api_ext_caegroup_dt_capacity_sheet_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacitySheetOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/capacity/bulk": {
+      "put": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Capacity Bulk",
+        "description": "인프라 표를 한 번에 저장한다 — **표에 나온 부서를 표대로 맞춘다.**\n\nS/W 와 계산 자원은 목록이라 빈 칸을 건너뛰면 줄을 없앨 길이 사라진다. 표에 없는 부서는\n손대지 않고, 한 줄이 틀리면 그 부서는 저장하지 않는다(틀린 줄만 빼면 그것이 곧 지우기다).",
+        "operationId": "capacity_bulk_api_ext_caegroup_dt_capacity_bulk_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapacityBulkIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BulkResultOut"
+                  },
+                  "type": "array",
+                  "title": "Response Capacity Bulk Api Ext Caegroup Dt Capacity Bulk Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ext/caegroup/dt/capacity/summary": {
       "get": {
         "tags": [
@@ -9752,15 +9820,22 @@
           "ext:caegroup"
         ],
         "summary": "Capacity Sheet Export",
-        "description": "인프라 현재값을 엑셀로 — **S/W 와 계산 자원을 각각 한 시트로.**\n\n한 시트에 섞으면 열이 서로 달라 붙여넣기에서 어긋난다.",
+        "description": "인프라 현재값을 엑셀로 — **표마다 한 시트.**\n\n한 시트에 섞으면 열이 서로 달라 붙여넣기에서 어긋난다. 부서를 주면 그 부서만, 안 주면\n**전사**다(부서 열이 앞에 선다) — 일괄 입력 표와 같은 열 · 같은 순서라, 고쳐서 그대로\n붙여 넣을 수 있다.",
         "operationId": "capacity_sheet_export_api_ext_caegroup_dt_capacity_sheet_export_get",
         "parameters": [
           {
             "name": "workspace",
             "in": "query",
-            "required": true,
+            "required": false,
             "schema": {
-              "type": "string",
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
               "title": "Workspace"
             }
           }
@@ -11110,6 +11185,35 @@
         "type": "object",
         "title": "BundleIn"
       },
+      "CapacityBulkIn": {
+        "properties": {
+          "what": {
+            "type": "string",
+            "enum": [
+              "sw",
+              "hw",
+              "base"
+            ],
+            "title": "What"
+          },
+          "rows": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "what",
+          "rows"
+        ],
+        "title": "CapacityBulkIn",
+        "description": "어느 표를 저장하나 — 한 번에 하나다(열이 다르다)."
+      },
       "CapacityIn": {
         "properties": {
           "sw": {
@@ -11211,6 +11315,42 @@
           "note"
         ],
         "title": "CapacityOut"
+      },
+      "CapacitySheetOut": {
+        "properties": {
+          "sw": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Sw"
+          },
+          "hw": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Hw"
+          },
+          "base": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Base"
+          }
+        },
+        "type": "object",
+        "required": [
+          "sw",
+          "hw",
+          "base"
+        ],
+        "title": "CapacitySheetOut",
+        "description": "인프라 현재값 표 — **목록 둘과 부서 기준.**\n\n한 표에 섞지 않는다. 열이 서로 달라 붙여넣기에서 어긋나고, 그때 라이선스 수가 CPU\n코어 칸에 들어간다."
       },
       "CapacitySummaryOut": {
         "properties": {
@@ -12426,6 +12566,26 @@
             },
             "type": "array",
             "title": "Accuracy Rules"
+          },
+          "sw_units": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Sw Units"
+          },
+          "sw_purposes": {
+            "items": {
+              "additionalProperties": {
+                "type": "string"
+              },
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Sw Purposes"
           }
         },
         "type": "object",
@@ -12436,7 +12596,9 @@
           "agent_label",
           "axes",
           "accuracy_thresholds",
-          "accuracy_rules"
+          "accuracy_rules",
+          "sw_units",
+          "sw_purposes"
         ],
         "title": "DefsOut",
         "description": "부문 · 축 · 척도 · 문턱 — **화면이 코드에 박지 않고 여기서 읽는다.**"
