@@ -8,9 +8,15 @@
 import { useState } from 'react'
 import { render, screen } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { PasteGrid, emptyRows, filledRows, toLines } from '@/shared/components/PasteGrid'
+import {
+  PasteGrid,
+  emptyRows,
+  filledRows,
+  toLines,
+  unknownParts,
+} from '@/shared/components/PasteGrid'
 import type { GridColumn } from '@/shared/components/PasteGrid'
 
 const COLUMNS: GridColumn[] = [
@@ -93,5 +99,56 @@ describe('표로 붙여넣기', () => {
     ]
     expect(toLines(COLUMNS, rows)).toEqual(['key\tlabel\tweight', 'P-1\t볼트\t1.5', 'P-2\t너트\t'])
     expect(filledRows(rows)).toBe(2)
+  })
+})
+
+describe('PasteGrid — 등록된 목록', () => {
+  const COLUMNS: GridColumn[] = [
+    { key: 'subject', header: '시험 항목', options: ['낙하 시험', '굽힘 시험'] },
+    { key: 'levels', header: '자동화', options: ['전처리 자동화', '실행 자동화'], multi: true },
+    { key: 'note', header: '근거' },
+  ]
+
+  it('목록이 있는 열은 드롭다운으로 고른다', () => {
+    render(<PasteGrid columns={COLUMNS} rows={[['', '', '']]} onRows={vi.fn()} />)
+    // `<datalist>` 라 붙여넣기 · 손 입력을 막지 않는다 — 목록은 거기 붙는다.
+    const cell = screen.getByLabelText('1번 줄 시험 항목')
+    const listId = cell.getAttribute('list')
+    expect(listId).toBeTruthy()
+    const list = document.getElementById(listId as string)
+    expect([...(list?.querySelectorAll('option') ?? [])].map((one) => one.getAttribute('value'))).toEqual(
+      ['낙하 시험', '굽힘 시험'],
+    )
+  })
+
+  it('등록된 이름이 아니면 그 칸이 표시된다 — 저장을 눌러 보고 알지 않는다', () => {
+    render(
+      <PasteGrid
+        columns={COLUMNS}
+        rows={[
+          ['낙하 시험', '전처리 자동화 · 실행 자동화', '맞는 줄'],
+          ['낙하시험', '없는 항목', '틀린 줄'],
+        ]}
+        onRows={vi.fn()}
+      />,
+    )
+    expect(screen.getByLabelText('2번 줄 시험 항목')).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByLabelText('1번 줄 시험 항목')).toHaveAttribute('aria-invalid', 'false')
+    // 여럿을 적는 열은 **토큰마다** 본다.
+    expect(screen.getByLabelText('1번 줄 자동화')).toHaveAttribute('aria-invalid', 'false')
+    expect(screen.getByLabelText('2번 줄 자동화')).toHaveAttribute('aria-invalid', 'true')
+    expect(screen.getByText(/등록된 이름이 아닌 칸이 2개/)).toBeInTheDocument()
+  })
+})
+
+describe('unknownParts', () => {
+  it('목록이 없는 열은 늘 맞다고 본다 — 자유롭게 적는 칸이다', () => {
+    expect(unknownParts({ key: 'note', header: '근거' }, '아무 글')).toEqual([])
+  })
+
+  it('여럿 적는 칸은 토큰마다 가른다', () => {
+    const column: GridColumn = { key: 'a', header: 'A', options: ['가', '나'], multi: true }
+    expect(unknownParts(column, '가 · 나')).toEqual([])
+    expect(unknownParts(column, '가 · 다')).toEqual(['다'])
   })
 })

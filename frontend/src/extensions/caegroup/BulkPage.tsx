@@ -16,6 +16,8 @@
 import { Check, Download, RefreshCw, Save, TriangleAlert } from 'lucide-react'
 import { useEffect, useMemo, useState } from 'react'
 
+import { objectApi } from '@/modules/objects/api'
+import { workspaceApi } from '@/modules/workspaces/api'
 import { downloadFile } from '@/shared/api/client'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -26,28 +28,37 @@ import { useResource } from '@/shared/hooks/useResource'
 
 import { dtApi, type AxisDef, type BulkResult, type Sheet } from './api'
 
-/** 축 종류마다 고치는 칸이 다르다 — 식별 칸 셋은 같다. */
-function columnsFor(axis: AxisDef): GridColumn[] {
+/** 축 종류마다 고치는 칸이 다르다 — 식별 칸 셋은 같다.
+ *
+ * **이름 칸에는 등록된 목록을 준다**(드롭다운). 손으로 치게 하면 「낙하시험」 과
+ * 「낙하 시험」 이 섞이고, 그 줄은 저장 자리에서 「못 찾음」 이 된다.
+ */
+function columnsFor(
+  axis: AxisDef,
+  known: { subjects: string[]; agents: string[] },
+): GridColumn[] {
+  const levels = (axis.hide_empty ? axis.rungs.slice(1) : axis.rungs).map((one) => one.label)
   const value: GridColumn =
     axis.kind === 'value'
-      ? { key: 'value', header: axis.label, help: `숫자 ${axis.unit ?? ''}`.trim(), required: false }
+      ? { key: 'value', header: axis.label, help: `숫자 ${axis.unit ?? ''}`.trim() }
       : axis.kind === 'rung'
-        ? {
-            key: 'rung',
-            header: axis.label,
-            help: axis.rungs.map((one) => one.label).join(' / '),
-          }
+        ? { key: 'rung', header: axis.label, help: '목록에서 고릅니다', options: levels }
         : {
             key: 'rungs',
             header: axis.label,
-            help: `여럿이면 · 으로 이어 적습니다 — ${(axis.hide_empty ? axis.rungs.slice(1) : axis.rungs)
-              .map((one) => one.label)
-              .join(' / ')}`,
+            help: '여럿이면 · 으로 이어 적습니다',
+            options: levels,
+            multi: true,
           }
   return [
-    { key: 'subject_label', header: '시험 항목', help: '이 이름으로 연계를 찾습니다' },
-    { key: 'agent_label', header: '시뮬레이션 해석' },
-    { key: 'dept', header: '담당 부서', help: '읽기용 — 고쳐도 반영되지 않습니다' },
+    {
+      key: 'subject_label',
+      header: '시험 항목',
+      help: '이 이름으로 연계를 찾습니다',
+      options: known.subjects,
+    },
+    { key: 'agent_label', header: '시뮬레이션 해석', options: known.agents },
+    { key: 'dept', header: '담당 부서', help: '읽기용', readOnly: true },
     value,
     { key: 'note', header: '근거', help: '무엇을 보고 매겼는지 — 비우면 그 줄은 저장되지 않습니다' },
   ]
@@ -63,14 +74,22 @@ function rowsOf(sheet: Sheet): string[][] {
   ])
 }
 
-const STAFF_COLUMNS: GridColumn[] = [
-  { key: 'name', header: '이름', help: '이 이름과 부서로 그 줄을 찾습니다', required: true },
-  { key: 'workspace_name', header: '부서', required: true },
-  { key: 'agents', header: '담당 해석', help: '여럿이면 · 으로 이어 적습니다 — 몫이 1/n 로 갈립니다' },
-  { key: 'outside', header: '조사 밖 업무', help: '있으면 「예」' },
-  { key: 'skill_kinds', header: '역량 분야', help: '담당 해석이 없을 때' },
-  { key: 'note', header: '메모' },
-]
+function staffColumns(known: { agents: string[]; workspaces: string[] }): GridColumn[] {
+  return [
+    { key: 'name', header: '이름', help: '이 이름과 부서로 그 줄을 찾습니다', required: true },
+    { key: 'workspace_name', header: '부서', required: true, options: known.workspaces },
+    {
+      key: 'agents',
+      header: '담당 해석',
+      help: '여럿이면 · 으로 이어 적습니다 — 몫이 1/n 로 갈립니다',
+      options: known.agents,
+      multi: true,
+    },
+    { key: 'outside', header: '조사 밖 업무', help: '있으면 「예」', options: ['예'] },
+    { key: 'skill_kinds', header: '역량 분야', help: '담당 해석이 없을 때' },
+    { key: 'note', header: '메모' },
+  ]
+}
 
 export default function BulkPage() {
   const defs = useResource(() => dtApi.defs(), [])
@@ -83,6 +102,24 @@ export default function BulkPage() {
   )
 
   const staffSheet = useResource(() => dtApi.staffSheet(), [])
+  // **등록된 목록**을 드롭다운에 준다. 표의 이름 칸은 이 목록에서 고른다.
+  const setup = useResource(() => dtApi.setupStatus(), [])
+  const subjectSlug = setup.data?.subject_type_slug ?? null
+  const agentSlug = setup.data?.agent_type_slug ?? null
+  const subjects = useResource(
+    () => (subjectSlug ? objectApi.list(subjectSlug, { limit: 500 }) : Promise.resolve(null)),
+    [subjectSlug],
+  )
+  const agentList = useResource(
+    () => (agentSlug ? objectApi.list(agentSlug, { limit: 500 }) : Promise.resolve(null)),
+    [agentSlug],
+  )
+  const workspaces = useResource(() => workspaceApi.list(true), [])
+  const known = {
+    subjects: (subjects.data?.items ?? []).map((one) => one.label),
+    agents: (agentList.data?.items ?? []).map((one) => one.label),
+    workspaces: (workspaces.data ?? []).map((one) => one.name),
+  }
   const [rows, setRows] = useState<string[][]>([])
   const [staffRows, setStaffRows] = useState<string[][]>([])
   const [results, setResults] = useState<BulkResult[] | null>(null)
@@ -113,7 +150,29 @@ export default function BulkPage() {
     }
   }, [staffSheet.data])
 
-  const columns = useMemo(() => (axis ? columnsFor(axis) : []), [axis])
+  const columns = useMemo(
+    () => (axis ? columnsFor(axis, known) : []),
+    // 목록은 불러온 뒤 바뀌지 않는다 — 길이로만 본다(매 렌더 새 배열이라 값 비교가 안 된다).
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [axis, known.subjects.length, known.agents.length],
+  )
+  const staffCols = useMemo(
+    () => staffColumns(known),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [known.agents.length, known.workspaces.length],
+  )
+
+  // **같은 연계가 두 줄이면 알린다.** 붙여넣기에서 흔하고, 그대로 저장하면 뒤 줄이 앞 줄을
+  // 덮어 「내가 적은 값이 아닌 값」 이 남는다.
+  const duplicated = useMemo(() => {
+    const seen = new Map<string, number>()
+    for (const row of rows) {
+      const key = `${(row[0] ?? '').trim()}|${(row[1] ?? '').trim()}`
+      if (key === '|') continue
+      seen.set(key, (seen.get(key) ?? 0) + 1)
+    }
+    return [...seen.entries()].filter(([, count]) => count > 1).map(([key]) => key.replace('|', ' · '))
+  }, [rows])
 
   async function saveStaff() {
     setBusy(true)
@@ -215,7 +274,7 @@ export default function BulkPage() {
             </Button>
           </div>
           <PasteGrid
-            columns={STAFF_COLUMNS}
+            columns={staffCols}
             rows={staffRows}
             onRows={setStaffRows}
             header={
@@ -261,6 +320,14 @@ export default function BulkPage() {
         <p className="text-muted-foreground rounded-md border p-3 text-sm">
           {axis.label} 은 바탕(형상 · 거동)만 이 표에서 고칩니다. 불량 유형별 재현은 「역량」
           화면에서 표로 입력합니다 — 유형이 시험 항목마다 다르기 때문입니다.
+        </p>
+      )}
+
+      {duplicated.length > 0 && (
+        <p className="text-sm text-amber-600 dark:text-amber-500">
+          같은 연계가 두 번 적힌 줄이 있습니다 — {duplicated.slice(0, 3).join(', ')}
+          {duplicated.length > 3 && ` 외 ${duplicated.length - 3}건`}. 그대로 저장하면 뒤 줄이 앞
+          줄을 덮습니다.
         </p>
       )}
 

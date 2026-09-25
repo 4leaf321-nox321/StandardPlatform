@@ -14,7 +14,7 @@
  * (같은 장치가 MatNexus 에도 있다. 그쪽 것을 보고 이 저장소의 규약으로 옮겼다.)
  */
 
-import { useState } from 'react'
+import { useId, useState } from 'react'
 import type { ClipboardEvent, ReactNode } from 'react'
 import { Check, Copy, Plus, Trash2 } from 'lucide-react'
 
@@ -22,6 +22,7 @@ import { Badge } from '@/shared/components/ui/badge'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
 import { copyText } from '@/shared/lib/clipboard'
+import { cn } from '@/shared/lib/utils'
 
 /**
  * 표의 한 열.
@@ -40,6 +41,18 @@ export interface GridColumn {
   help?: string | null
   /** 비면 그 줄이 안 나간다. 머리에 「필수」 로 보인다. */
   required?: boolean
+  /**
+   * 고를 수 있는 값 — **등록된 것에서 고르게 한다.**
+   *
+   * 빈 칸에 이름을 손으로 치게 하면 「낙하시험」 과 「낙하 시험」 이 섞이고, 그 줄은 저장
+   * 자리에서 「못 찾음」 이 된다. 목록을 주면 드롭다운으로 고를 수 있고(붙여넣기는 그대로
+   * 되므로 엑셀 흐름도 살아 있다), **목록에 없는 값은 칸에 표시된다.**
+   */
+  options?: string[]
+  /** 한 칸에 여럿을 적는 열(`·` 로 이어 적는다). 검사도 토큰마다 한다. */
+  multi?: boolean
+  /** 읽기용 칸 — 고쳐도 서버로 안 간다(무엇을 고치는 줄인지 알려 주는 자리). */
+  readOnly?: boolean
 }
 
 /** 빈 줄 하나로 시작한다 — 표가 아예 비어 있으면 어디에 붙여야 할지 모른다. */
@@ -62,6 +75,14 @@ export function filledRows(rows: string[][]): number {
   return rows.filter((row) => row.some((cell) => cell.trim())).length
 }
 
+/** 이 칸의 값이 **등록된 것**인가. 목록이 없는 열은 늘 맞다고 본다. */
+export function unknownParts(column: GridColumn, raw: string): string[] {
+  if (!column.options || !raw.trim()) return []
+  const allowed = new Set(column.options.map((one) => one.trim()))
+  const parts = column.multi ? raw.split('·') : [raw]
+  return parts.map((one) => one.trim()).filter((one) => one && !allowed.has(one))
+}
+
 export function PasteGrid({
   columns,
   rows,
@@ -76,6 +97,13 @@ export function PasteGrid({
 }) {
   /** 복사 결과. **눌렀는데 아무 일도 안 일어나면 됐는지 알 수 없다.** */
   const [copied, setCopied] = useState<'yes' | 'no' | null>(null)
+  // 드롭다운 목록의 id — 한 화면에 표가 둘 있어도 섞이지 않게.
+  const gridId = useId()
+  const wrongCount = rows.reduce(
+    (sum, row) =>
+      sum + columns.reduce((each, column, at) => each + unknownParts(column, row[at] ?? '').length, 0),
+    0,
+  )
 
   async function copy() {
     // 헤더까지 함께 — 엑셀에 붙이면 그대로 표가 되고, 채워서 다시 붙여넣으면 열이 맞는다.
@@ -125,6 +153,24 @@ export function PasteGrid({
     <div className="space-y-2">
       {header}
 
+      {/* 목록이 있는 열의 드롭다운. `<datalist>` 라 붙여넣기 · 손 입력을 막지 않는다. */}
+      {columns
+        .filter((column) => column.options?.length)
+        .map((column) => (
+          <datalist key={column.key} id={`${gridId}-${column.key}`}>
+            {(column.options ?? []).map((one) => (
+              <option key={one} value={one} />
+            ))}
+          </datalist>
+        ))}
+
+      {wrongCount > 0 && (
+        <p className="text-destructive text-sm">
+          등록된 이름이 아닌 칸이 {wrongCount}개 있습니다 — 붉은 칸을 고치세요. 그 줄은 저장되지
+          않습니다.
+        </p>
+      )}
+
       {/* **접지 않고 옆으로 민다.** 열이 좁아 머리가 줄바꿈되면 표가 세로로 부풀고, 그때
           무엇이 어느 칸인지 읽기 어려워진다 — 차라리 가로로 스크롤한다. */}
       <div className="max-h-[50vh] overflow-auto rounded-md border">
@@ -163,17 +209,34 @@ export function PasteGrid({
               // eslint-disable-next-line react/no-array-index-key
               <tr key={atRow} className="border-t">
                 <td className="text-muted-foreground px-1 text-right tabular-nums">{atRow + 1}</td>
-                {columns.map((column, atColumn) => (
-                  <td key={column.key} className="min-w-36 p-0.5">
-                    <Input
-                      className="h-7 text-xs"
-                      aria-label={`${atRow + 1}번 줄 ${column.header}`}
-                      value={row[atColumn] ?? ''}
-                      onPaste={(event) => paste(event, atRow, atColumn)}
-                      onChange={(event) => edit(atRow, atColumn, event.target.value)}
-                    />
-                  </td>
-                ))}
+                {columns.map((column, atColumn) => {
+                  const wrong = unknownParts(column, row[atColumn] ?? '')
+                  return (
+                    <td key={column.key} className="min-w-36 p-0.5">
+                      <Input
+                        className={cn(
+                          'h-7 text-xs',
+                          // **모르는 이름은 칸에서 보인다.** 저장을 눌러 봐야 아는 것은
+                          // 붙여넣기 스무 줄에서 스무 번 왕복하게 만든다.
+                          wrong.length > 0 && 'border-destructive text-destructive',
+                          column.readOnly && 'text-muted-foreground bg-muted/40',
+                        )}
+                        aria-label={`${atRow + 1}번 줄 ${column.header}`}
+                        aria-invalid={wrong.length > 0}
+                        title={
+                          wrong.length > 0 ? `등록된 이름이 아닙니다: ${wrong.join(', ')}` : undefined
+                        }
+                        // 목록이 있으면 **드롭다운**으로 고른다 — 손으로 치는 것도 막지
+                        // 않는다(엑셀에서 붙여넣기가 그대로 되어야 한다).
+                        list={column.options ? `${gridId}-${column.key}` : undefined}
+                        readOnly={column.readOnly}
+                        value={row[atColumn] ?? ''}
+                        onPaste={(event) => paste(event, atRow, atColumn)}
+                        onChange={(event) => edit(atRow, atColumn, event.target.value)}
+                      />
+                    </td>
+                  )
+                })}
                 <td className="p-0.5">
                   {rows.length > 1 && (
                     <Button
