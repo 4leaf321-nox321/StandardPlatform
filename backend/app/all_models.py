@@ -20,8 +20,10 @@ from app.database import Base
 from app.extensions.caegroup.models import (
     CaeDtAssessment,
     CaeDtAssessmentHistory,
+    CaeDtCapacity,
     CaeDtPair,
     CaeDtSetting,
+    CaeDtStaff,
 )
 from app.modules.accounts.models import User
 from app.modules.audit.models import AccessLog, AuditEntry
@@ -58,8 +60,10 @@ __all__ = [
     "Base",
     "CaeDtAssessment",
     "CaeDtAssessmentHistory",
+    "CaeDtCapacity",
     "CaeDtPair",
     "CaeDtSetting",
+    "CaeDtStaff",
     "DataSource",
     "DataSourceRun",
     "ExtensionState",

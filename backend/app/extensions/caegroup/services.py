@@ -17,8 +17,10 @@ from app.extensions.caegroup import definitions as D
 from app.extensions.caegroup.models import (
     CaeDtAssessment,
     CaeDtAssessmentHistory,
+    CaeDtCapacity,
     CaeDtPair,
     CaeDtSetting,
+    CaeDtStaff,
 )
 from app.modules.accounts.models import User
 from app.modules.objects import system
@@ -773,4 +775,313 @@ def coverage(db: Session, *, workspace: Workspace | None = None) -> dict[str, An
             }
             for key in D.AXIS_KEYS
         ],
+    }
+
+
+# ── 인력 ────────────────────────────────────────────────────────────────
+
+#: 가명 — **표에 서는 이름.** 실명은 고칠 수 있는 사람에게만 보인다.
+ALIAS_LETTERS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+
+
+def _alias(index: int) -> str:
+    """담당 A · B · … Z · AA. 부서 안에서 만든 순서대로."""
+    if index < len(ALIAS_LETTERS):
+        return f"담당 {ALIAS_LETTERS[index]}"
+    first, second = divmod(index, len(ALIAS_LETTERS))
+    return f"담당 {ALIAS_LETTERS[first - 1]}{ALIAS_LETTERS[second]}"
+
+
+def _may_see_names(db: Session, user: User, workspace_id: uuid.UUID) -> bool:
+    """실명을 볼 수 있나 — **그 부서를 고칠 수 있는 사람과 시스템 관리자만.**
+
+    사람을 세는 자리이지 사람을 평가하는 자리가 아니다. 전사에 실명을 열면 이 표는
+    「누가 느린가」 로 읽히고, 그때 부서는 자료를 방어적으로 적는다.
+    """
+    if user.is_system_admin:
+        return True
+    workspace = db.get(Workspace, workspace_id)
+    if workspace is None:
+        return False
+    return (
+        permissions.membership_of(db, workspace_id=workspace.id, user_id=user.id) is not None
+    )
+
+
+def _staff_rows(db: Session, *, workspace: Workspace | None) -> list[CaeDtStaff]:
+    stmt = select(CaeDtStaff).order_by(CaeDtStaff.workspace_id, CaeDtStaff.created_at)
+    if workspace is not None:
+        stmt = stmt.where(CaeDtStaff.workspace_id == workspace.id)
+    return list(db.scalars(stmt))
+
+
+def _share_of(row: CaeDtStaff) -> float:
+    """한 사람이 담당 해석 **하나**에 주는 몫 — 반올림하지 않은 값.
+
+    **한 사람은 1.0 이다.** 담당이 n 개면 각 1/n 이고, 이 조사 밖 업무가 있으면 n+1 로
+    나눈다 — 없는 일까지 이 조사에 넣지 않는다. 담당이 없으면(지원 조직) 0 이다:
+    그 사람의 역량은 종류로 세고 FTE 로는 세지 않는다.
+
+    ⚠️ **반올림은 내보낼 때 한 번만 한다.** 몫을 먼저 반올림해 더하면 담당 셋짜리 한
+       사람이 0.9999 가 되고, 그 숫자를 본 사람은 「왜 1 이 아니지」 를 묻는다(실측).
+    """
+    parts = len(row.agents or []) + (1 if row.outside else 0)
+    if not row.agents or not parts:
+        return 0.0
+    return 1 / parts
+
+
+def staff(db: Session, user: User, *, workspace: Workspace | None) -> list[dict[str, Any]]:
+    """인력 목록 — **가명이 기본, 실명은 권한이 있을 때만.**
+
+    `_share` 는 반올림하지 않은 몫이다(집계가 쓴다). 응답 스키마에 없으므로 바깥으로
+    나가지 않는다 — 나가면 화면이 그 값을 다시 반올림해 표와 합계가 갈린다.
+    """
+    rows = _staff_rows(db, workspace=workspace)
+    agent_ids = {
+        uuid.UUID(str(one)) for row in rows for one in (row.agents or []) if str(one).strip()
+    }
+    labels = (
+        {
+            str(one.id): one.label
+            for one in db.scalars(
+                select(ObjectInstance).where(ObjectInstance.id.in_(agent_ids))
+            )
+        }
+        if agent_ids
+        else {}
+    )
+    workspaces = {
+        one.id: one.name
+        for one in db.scalars(
+            select(Workspace).where(Workspace.id.in_({row.workspace_id for row in rows}))
+        )
+    }
+    seen: dict[uuid.UUID, int] = {}
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        index = seen.get(row.workspace_id, 0)
+        seen[row.workspace_id] = index + 1
+        share = _share_of(row)
+        out.append(
+            {
+                "id": row.id,
+                "workspace_id": row.workspace_id,
+                "workspace_name": workspaces.get(row.workspace_id, ""),
+                "alias": _alias(index),
+                "name": row.name if _may_see_names(db, user, row.workspace_id) else None,
+                "agents": [
+                    {"id": str(one), "label": labels.get(str(one), "(지워짐)")}
+                    for one in (row.agents or [])
+                ],
+                "skill_kinds": list(row.skill_kinds or []),
+                "outside": row.outside,
+                "note": row.note,
+                "share": round(share, 4),
+                # 사람의 몫은 **나눈 값을 그대로 곱한 뒤** 한 번만 반올림한다.
+                "fte": round(share * len(row.agents or []), 4),
+                "_share": share,
+            }
+        )
+    return out
+
+
+def staff_summary(db: Session, user: User, *, workspace: Workspace | None) -> dict[str, Any]:
+    """사람 수 · FTE 합 · 해석별 FTE · 종류별 사람 수.
+
+    **파생값은 저장하지 않는다** — 물을 때마다 인력 줄에서 다시 센다. 표를 하나 더 두면
+    줄과 어긋나는 순간 어느 쪽이 참인지 말할 수 없다.
+    """
+    rows = staff(db, user, workspace=workspace)
+    by_agent: dict[str, dict[str, Any]] = {}
+    by_kind: dict[str, int] = {}
+    for one in rows:
+        for agent in one["agents"]:
+            bucket = by_agent.setdefault(
+                agent["id"],
+                {"id": agent["id"], "label": agent["label"], "fte": 0.0, "people": 0},
+            )
+            bucket["fte"] += float(one["_share"])
+            bucket["people"] += 1
+        for kind in one["skill_kinds"]:
+            by_kind[kind] = by_kind.get(kind, 0) + 1
+    return {
+        "head_count": len(rows),
+        # **합이 사람 수를 넘지 않는다.** 한 사람의 몫은 담당에 갈려 들어가고, 조사 밖
+        # 업무가 있는 사람은 그만큼 덜 잡힌다.
+        "fte": round(sum(float(one["_share"]) * len(one["agents"]) for one in rows), 4),
+        "by_agent": sorted(
+            ({**one, "fte": round(one["fte"], 4)} for one in by_agent.values()),
+            key=lambda one: -one["fte"],
+        ),
+        "by_kind": [{"kind": key, "people": value} for key, value in sorted(by_kind.items())],
+    }
+
+
+def save_staff(
+    db: Session,
+    user: User,
+    *,
+    staff_id: uuid.UUID | None,
+    workspace: Workspace,
+    payload: dict[str, Any],
+) -> uuid.UUID:
+    """인력 줄을 넣거나 고친다 — **그 부서 멤버만.**"""
+    permissions.require_member(db, workspace=workspace, user=user)
+    name = str(payload.get("name") or "").strip()
+    if not name:
+        raise Conflict(code("CAEGROUP", 18), "이름을 적어야 합니다(화면에는 가명으로 섭니다).")
+    row = db.get(CaeDtStaff, staff_id) if staff_id else None
+    if staff_id and row is None:
+        raise NotFound(code("CAEGROUP", 19), "인력 줄을 찾을 수 없습니다.")
+    if row is None:
+        row = CaeDtStaff(workspace_id=workspace.id)
+        db.add(row)
+    row.name = name
+    row.agents = [str(one) for one in (payload.get("agents") or [])]
+    row.skill_kinds = [str(one) for one in (payload.get("skill_kinds") or [])]
+    row.outside = bool(payload.get("outside"))
+    row.note = str(payload.get("note") or "").strip()
+    db.flush()
+    audit.record(
+        db,
+        action="caegroup.dt.staff.save",
+        actor=user,
+        target_table="cae_dt_staff",
+        target_id=row.id,
+        # **감사에도 실명을 안 남긴다.** 세는 자리이지 평가하는 자리가 아니다.
+        target_label=f"인력 {len(row.agents)}담당",
+        workspace_id=workspace.id,
+        changes={"agents": len(row.agents), "outside": row.outside},
+    )
+    db.commit()
+    return row.id
+
+
+def delete_staff(db: Session, user: User, *, staff_id: uuid.UUID) -> None:
+    row = db.get(CaeDtStaff, staff_id)
+    if row is None:
+        raise NotFound(code("CAEGROUP", 19), "인력 줄을 찾을 수 없습니다.")
+    workspace = db.get(Workspace, row.workspace_id)
+    if workspace is None:
+        raise NotFound(code("CAEGROUP", 7), "부서를 찾을 수 없습니다.")
+    permissions.require_member(db, workspace=workspace, user=user)
+    audit.record(
+        db,
+        action="caegroup.dt.staff.delete",
+        actor=user,
+        target_table="cae_dt_staff",
+        target_id=row.id,
+        target_label=f"인력 {len(row.agents or [])}담당",
+        workspace_id=workspace.id,
+    )
+    db.delete(row)
+    db.commit()
+
+
+# ── 인프라 ──────────────────────────────────────────────────────────────
+
+
+def capacity(db: Session, *, workspace: Workspace) -> dict[str, Any]:
+    """그 부서의 인프라 한 줄 — 없으면 빈 줄을 그려 준다(만들지는 않는다)."""
+    row = db.scalar(select(CaeDtCapacity).where(CaeDtCapacity.workspace_id == workspace.id))
+    return {
+        "workspace_id": workspace.id,
+        "workspace_name": workspace.name,
+        "sw": list(row.sw or []) if row else [],
+        "hw": list(row.hw or []) if row else [],
+        "material_types": row.material_types if row else None,
+        "has_process_std": row.has_process_std if row else False,
+        "note": row.note if row else "",
+    }
+
+
+def save_capacity(
+    db: Session, user: User, *, workspace: Workspace, payload: dict[str, Any]
+) -> dict[str, Any]:
+    """인프라를 적는다 — **그 부서 멤버만.**"""
+    permissions.require_member(db, workspace=workspace, user=user)
+    row = db.scalar(select(CaeDtCapacity).where(CaeDtCapacity.workspace_id == workspace.id))
+    if row is None:
+        row = CaeDtCapacity(workspace_id=workspace.id)
+        db.add(row)
+    row.sw = [dict(one) for one in (payload.get("sw") or [])]
+    row.hw = [dict(one) for one in (payload.get("hw") or [])]
+    row.material_types = payload.get("material_types")
+    row.has_process_std = bool(payload.get("has_process_std"))
+    row.note = str(payload.get("note") or "").strip()
+    db.flush()
+    audit.record(
+        db,
+        action="caegroup.dt.capacity.save",
+        actor=user,
+        target_table="cae_dt_capacity",
+        target_id=row.id,
+        target_label=workspace.name,
+        workspace_id=workspace.id,
+        changes={"sw": len(row.sw), "hw": len(row.hw)},
+    )
+    db.commit()
+    return capacity(db, workspace=workspace)
+
+
+def capacity_summary(db: Session) -> dict[str, Any]:
+    """전사 합계 — **공유 자원은 한 번만 센다.**
+
+    부서마다 적힌 공유 라이선스 · 공유 계산 자원을 그대로 더하면 전사 합이 실제보다
+    커지고, 그 숫자로 투자를 판단하면 이미 있는 것을 또 산다.
+    """
+    rows = list(db.scalars(select(CaeDtCapacity)))
+    sw_total: dict[str, float] = {}
+    shared_seen: set[str] = set()
+    hw_cores = 0
+    hw_ram = 0
+    hw_gpu = 0
+    hw_shared_seen: set[str] = set()
+    materials = 0
+
+    def as_number(raw: Any) -> float:
+        """숫자로 못 읽는 값은 0 으로 본다 — **합계 때문에 화면이 죽지 않게.**
+
+        사람이 적는 칸이라 「256(예정)」 처럼 들어온다. 그것을 숫자로 강제하면 합계가
+        500 을 내고, 그때 사람은 자기가 적은 칸 때문인 줄 모른다 — 실측으로 GPU 칸의
+        「A100 4장」 가 그렇게 터졌다(2026-09-25).
+        """
+        try:
+            return float(str(raw).strip())
+        except (TypeError, ValueError):
+            return 0.0
+
+    for row in rows:
+        for one in row.sw or []:
+            name = str(one.get("name") or "")
+            amount = float(one.get("quantity") or 0)
+            if one.get("shared"):
+                if name in shared_seen:
+                    continue
+                shared_seen.add(name)
+            sw_total[name] = sw_total.get(name, 0.0) + amount
+        for one in row.hw or []:
+            name = str(one.get("name") or "")
+            if one.get("shared"):
+                if name in hw_shared_seen:
+                    continue
+                hw_shared_seen.add(name)
+            hw_cores += int(as_number(one.get("cpu_cores")))
+            hw_ram += int(as_number(one.get("ram_gb")))
+            # **GPU 는 글이다**(「A100 4장」). 원본도 사양을 글로 적는다 — 숫자로 강제하면
+            # 사람이 적을 수 있는 것을 못 적게 만든다. 그래서 개수를 더하지 않고
+            # **GPU 를 가진 자원이 몇인지** 센다.
+            if str(one.get("gpu") or "").strip():
+                hw_gpu += 1
+        materials += int(as_number(row.material_types))
+    return {
+        "departments": len(rows),
+        "sw": [
+            {"name": key, "quantity": round(value, 2)}
+            for key, value in sorted(sw_total.items(), key=lambda one: -one[1])
+        ],
+        "hw": {"cpu_cores": hw_cores, "ram_gb": hw_ram, "gpu_units": hw_gpu},
+        "material_types": materials,
+        "process_std": sum(1 for row in rows if row.has_process_std),
     }

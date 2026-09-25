@@ -126,6 +126,75 @@ export interface Pair {
   created_at: string
 }
 
+export interface Staff {
+  id: string
+  workspace_id: string
+  workspace_name: string
+  /** 표에 서는 이름(담당 A · B). */
+  alias: string
+  /** 실명 — 그 부서를 고칠 수 있는 사람에게만 온다. 없으면 `null`. */
+  name: string | null
+  agents: { id: string; label: string }[]
+  skill_kinds: string[]
+  outside: boolean
+  note: string
+  /** 담당 하나에 주는 몫(1/n). */
+  share: number
+  /** 이 조사에 잡히는 이 사람의 몫. */
+  fte: number
+}
+
+export interface StaffBody {
+  workspace_slug: string
+  name: string
+  agents?: string[]
+  skill_kinds?: string[]
+  outside?: boolean
+  note?: string
+}
+
+export interface StaffSummary {
+  head_count: number
+  fte: number
+  by_agent: { id: string; label: string; fte: number; people: number }[]
+  by_kind: { kind: string; people: number }[]
+}
+
+export interface SwRow {
+  name: string
+  quantity: number
+  unit?: string
+  purpose?: string
+  shared?: boolean
+}
+
+export interface HwRow {
+  name: string
+  cpu_cores?: number
+  ram_gb?: number
+  /** **사양을 글로 적는다**(「A100 4장」) — 숫자로 강제하면 적을 수 있는 것을 못 적게 만든다. */
+  gpu?: string
+  shared?: boolean
+}
+
+export interface Capacity {
+  workspace_id: string
+  workspace_name: string
+  sw: SwRow[]
+  hw: HwRow[]
+  material_types: number | null
+  has_process_std: boolean
+  note: string
+}
+
+export interface CapacitySummary {
+  departments: number
+  sw: { name: string; quantity: number }[]
+  hw: { cpu_cores: number; ram_gb: number; gpu_units: number }
+  material_types: number
+  process_std: number
+}
+
 const BASE = '/ext/caegroup/dt'
 
 export const dtApi = {
@@ -153,4 +222,18 @@ export const dtApi = {
   history: (pairId: string) => api.get<HistoryRow[]>(`${BASE}/pairs/${pairId}/history`),
   coverage: () => api.get<Coverage>(`${BASE}/coverage`),
   board: () => api.get<Board>(`${BASE}/board`),
+  staff: (workspace?: string) =>
+    api.get<Staff[]>(`${BASE}/staff${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
+  staffSummary: (workspace?: string) =>
+    api.get<StaffSummary>(
+      `${BASE}/staff/summary${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`,
+    ),
+  staffCreate: (body: StaffBody) => api.post<Staff>(`${BASE}/staff`, body),
+  staffUpdate: (id: string, body: StaffBody) => api.put<Staff>(`${BASE}/staff/${id}`, body),
+  staffDelete: (id: string) => api.delete<void>(`${BASE}/staff/${id}`),
+  capacity: (workspace: string) =>
+    api.get<Capacity>(`${BASE}/capacity?workspace=${encodeURIComponent(workspace)}`),
+  capacitySave: (workspace: string, body: Omit<Capacity, 'workspace_id' | 'workspace_name'>) =>
+    api.put<Capacity>(`${BASE}/capacity?workspace=${encodeURIComponent(workspace)}`, body),
+  capacitySummary: () => api.get<CapacitySummary>(`${BASE}/capacity/summary`),
 }

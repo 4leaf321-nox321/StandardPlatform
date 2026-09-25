@@ -15,6 +15,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    Boolean,
     CheckConstraint,
     DateTime,
     Float,
@@ -170,3 +171,84 @@ class CaeDtAssessmentHistory(Base):
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
     changed_by_label: Mapped[str] = mapped_column(String(100), default="")
+
+
+class CaeDtStaff(Base):
+    """인력 한 줄 = 사람 하나. **역량을 떠받치는 조건**이다.
+
+    축은 전부 **결과**(그 시험을 어디까지 보나)를 잰다. 그 결과를 만든 조건(사람 · 도구 ·
+    계산 자원)이 옆에 서야 「전담 0.5 FTE 라 여기까지」 가 자료로 말해지고, 낮은 수준이
+    변명이 아니라 설명이 된다.
+
+    ⚠️ **투입률을 받지 않는다.** 한 사람은 1.0 이고, 담당 해석이 n 개면 각 1/n 이다 —
+       퍼센트를 사람이 적으면 정의가 흔들리고 합이 사람 수를 넘는다. 셈은 서버가 한다.
+    ⚠️ **사람은 담당 해석에 붙는다** — 종류가 아니다. 종류로 이으면 같은 종류의 해석 열
+       개가 한 덩이로 뭉쳐 「이 해석 뒤에 몇 명」 이 안 나온다. 시험 · 지원 조직처럼 해석에
+       붙을 것이 없는 인력은 `skill_kinds`(다루는 종류)로 적는다.
+    ⚠️ **이름은 화면에 안 나간다.** 표에 서는 것은 가명(담당 A · B)이고, 실명은 그 부서를
+       고칠 수 있는 사람과 시스템 관리자에게만 보인다 — 사람을 세는 자리이지 사람을
+       평가하는 자리가 아니다.
+    """
+
+    __tablename__ = "cae_dt_staff"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="RESTRICT"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(100))
+    """실명. **응답에서 권한 없는 사람에게는 빼고 내려 준다.**"""
+    user_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    """계정이 있으면 겹침(같은 사람이 두 부서에)을 계정으로 잡는다. 협력사 · 타 법인은 없다."""
+    agents: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
+    """담당 시뮬레이션 해석 객체 id 목록."""
+    skill_kinds: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
+    """해석에 붙을 것이 없는 인력의 역량 분야(해석 종류). **FTE 는 안 가른다** — 투입이
+    아니라 보유의 문제라서, 「몇 명이 이 기술을 다루나」 로만 센다."""
+    outside: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    """이 조사 밖 업무가 있나. 있으면 몫을 n+1 로 나눈다 — 없는 일까지 이 조사에
+    넣지 않는다."""
+    note: Mapped[str] = mapped_column(String(300), default="")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp()
+    )
+    """**`clock_timestamp()` 다.** 가명(담당 A · B)이 이 순서로 붙으므로, 한 요청에서 둘을
+    넣었을 때 시각이 같으면 가명이 질의마다 바뀐다."""
+
+
+class CaeDtCapacity(Base):
+    """인프라 — 사람 아닌 것. 부서마다 한 줄.
+
+    S/W 는 **툴별 라이선스 수**, H/W 는 **자원별 사양**이다. 연 해석 건수 · 교육 이수는
+    부서마다 셈이 갈려 집계가 안 되므로 받지 않는다.
+
+    ⚠️ **공유 자원은 전사 합계에서 한 번만 센다.** 부서마다 적으면 전사 합이 실제보다
+       커지고, 그 숫자로 투자를 판단하면 이미 있는 것을 또 산다.
+    """
+
+    __tablename__ = "cae_dt_capacity"
+    __table_args__ = (UniqueConstraint("workspace_id", name="uq_cae_dt_capacity_workspace"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="RESTRICT"), index=True
+    )
+    sw: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, server_default="[]")
+    """`[{name, quantity, unit, purpose, shared}]` — 툴별 라이선스."""
+    hw: Mapped[list[dict[str, Any]]] = mapped_column(JSONB, default=list, server_default="[]")
+    """`[{name, cpu_cores, ram_gb, gpu, shared}]` — 계산 자원."""
+    material_types: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    """물성 종수. 목록 · 출처 · 검증 상태는 다음 층이다 — 종수 하나로 시작한다."""
+    has_process_std: Mapped[bool] = mapped_column(
+        Boolean, default=False, server_default="false"
+    )
+    note: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )

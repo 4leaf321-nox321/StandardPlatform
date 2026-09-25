@@ -18,6 +18,9 @@ from app.extensions.caegroup.schemas import (
     AssessmentIn,
     AssessmentOut,
     BoardOut,
+    CapacityIn,
+    CapacityOut,
+    CapacitySummaryOut,
     CoverageOut,
     DefsOut,
     HistoryOut,
@@ -27,6 +30,9 @@ from app.extensions.caegroup.schemas import (
     PairOut,
     PairPatchIn,
     SetupStatusOut,
+    StaffIn,
+    StaffOut,
+    StaffSummaryOut,
 )
 from app.modules.accounts.models import User
 from app.shared import permissions
@@ -203,3 +209,102 @@ def board(user: User = Depends(current_user), db: Session = Depends(get_db)) -> 
     그때 어느 쪽이 맞는지 아무도 답할 수 없다.
     """
     return BoardOut(**services.board(db, user))
+
+
+@router.get("/staff", response_model=list[StaffOut])
+def staff_list(
+    workspace: str | None = Query(default=None),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[StaffOut]:
+    """인력 목록 — 부서를 안 주면 전부.
+
+    **가명이 기본이다.** 실명은 그 부서를 고칠 수 있는 사람과 시스템 관리자에게만 온다 —
+    사람을 세는 자리이지 사람을 평가하는 자리가 아니다.
+    """
+    chosen = permissions.workspace_by_slug(db, workspace) if workspace else None
+    return [StaffOut(**one) for one in services.staff(db, user, workspace=chosen)]
+
+
+@router.get("/staff/summary", response_model=StaffSummaryOut)
+def staff_summary(
+    workspace: str | None = Query(default=None),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> StaffSummaryOut:
+    """사람 수 · FTE 합 · 해석별 FTE · 종류별 사람 수. **파생값은 저장하지 않는다.**"""
+    chosen = permissions.workspace_by_slug(db, workspace) if workspace else None
+    return StaffSummaryOut(**services.staff_summary(db, user, workspace=chosen))
+
+
+@router.post("/staff", response_model=StaffOut, status_code=201)
+def staff_create(
+    payload: StaffIn, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> StaffOut:
+    workspace = permissions.workspace_by_slug(db, payload.workspace_slug)
+    made = services.save_staff(
+        db, user, staff_id=None, workspace=workspace, payload=payload.model_dump()
+    )
+    found = [one for one in services.staff(db, user, workspace=workspace) if one["id"] == made]
+    return StaffOut(**found[0])
+
+
+@router.put("/staff/{staff_id}", response_model=StaffOut)
+def staff_update(
+    staff_id: uuid.UUID,
+    payload: StaffIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> StaffOut:
+    workspace = permissions.workspace_by_slug(db, payload.workspace_slug)
+    services.save_staff(
+        db, user, staff_id=staff_id, workspace=workspace, payload=payload.model_dump()
+    )
+    found = [
+        one for one in services.staff(db, user, workspace=workspace) if one["id"] == staff_id
+    ]
+    return StaffOut(**found[0])
+
+
+@router.delete("/staff/{staff_id}", status_code=204)
+def staff_delete(
+    staff_id: uuid.UUID, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> None:
+    services.delete_staff(db, user, staff_id=staff_id)
+
+
+@router.get("/capacity", response_model=CapacityOut)
+def capacity_get(
+    workspace: str = Query(...),
+    _: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> CapacityOut:
+    """그 부서의 인프라 — 없으면 빈 줄이 온다(만들지는 않는다)."""
+    chosen = permissions.workspace_by_slug(db, workspace)
+    return CapacityOut(**services.capacity(db, workspace=chosen))
+
+
+@router.put("/capacity", response_model=CapacityOut)
+def capacity_save(
+    payload: CapacityIn,
+    workspace: str = Query(...),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> CapacityOut:
+    """인프라를 적는다 — **그 부서 멤버만.**"""
+    chosen = permissions.workspace_by_slug(db, workspace)
+    return CapacityOut(
+        **services.save_capacity(db, user, workspace=chosen, payload=payload.model_dump())
+    )
+
+
+@router.get("/capacity/summary", response_model=CapacitySummaryOut)
+def capacity_summary(
+    _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> CapacitySummaryOut:
+    """전사 합계 — **공유 자원은 한 번만 센다.**
+
+    부서마다 적힌 공유 라이선스를 그대로 더하면 전사 합이 실제보다 커지고, 그 숫자로
+    투자를 판단하면 이미 있는 것을 또 산다.
+    """
+    return CapacitySummaryOut(**services.capacity_summary(db))

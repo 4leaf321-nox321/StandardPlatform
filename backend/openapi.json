@@ -9143,6 +9143,352 @@
         }
       }
     },
+    "/api/ext/caegroup/dt/staff": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Staff List",
+        "description": "인력 목록 — 부서를 안 주면 전부.\n\n**가명이 기본이다.** 실명은 그 부서를 고칠 수 있는 사람과 시스템 관리자에게만 온다 —\n사람을 세는 자리이지 사람을 평가하는 자리가 아니다.",
+        "operationId": "staff_list_api_ext_caegroup_dt_staff_get",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Workspace"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/StaffOut"
+                  },
+                  "title": "Response Staff List Api Ext Caegroup Dt Staff Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Staff Create",
+        "operationId": "staff_create_api_ext_caegroup_dt_staff_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StaffIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/staff/summary": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Staff Summary",
+        "description": "사람 수 · FTE 합 · 해석별 FTE · 종류별 사람 수. **파생값은 저장하지 않는다.**",
+        "operationId": "staff_summary_api_ext_caegroup_dt_staff_summary_get",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Workspace"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffSummaryOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/staff/{staff_id}": {
+      "put": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Staff Update",
+        "operationId": "staff_update_api_ext_caegroup_dt_staff__staff_id__put",
+        "parameters": [
+          {
+            "name": "staff_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Staff Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StaffIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StaffOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Staff Delete",
+        "operationId": "staff_delete_api_ext_caegroup_dt_staff__staff_id__delete",
+        "parameters": [
+          {
+            "name": "staff_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Staff Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/capacity": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Capacity Get",
+        "description": "그 부서의 인프라 — 없으면 빈 줄이 온다(만들지는 않는다).",
+        "operationId": "capacity_get_api_ext_caegroup_dt_capacity_get",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workspace"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Capacity Save",
+        "description": "인프라를 적는다 — **그 부서 멤버만.**",
+        "operationId": "capacity_save_api_ext_caegroup_dt_capacity_put",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workspace"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapacityIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/capacity/summary": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Capacity Summary",
+        "description": "전사 합계 — **공유 자원은 한 번만 센다.**\n\n부서마다 적힌 공유 라이선스를 그대로 더하면 전사 합이 실제보다 커지고, 그 숫자로\n투자를 판단하면 이미 있는 것을 또 산다.",
+        "operationId": "capacity_summary_api_ext_caegroup_dt_capacity_summary_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacitySummaryOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ext/sample/ping": {
       "get": {
         "tags": [
@@ -10361,6 +10707,149 @@
         },
         "type": "object",
         "title": "BundleIn"
+      },
+      "CapacityIn": {
+        "properties": {
+          "sw": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Sw"
+          },
+          "hw": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Hw"
+          },
+          "material_types": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Material Types"
+          },
+          "has_process_std": {
+            "type": "boolean",
+            "title": "Has Process Std",
+            "default": false
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "CapacityIn"
+      },
+      "CapacityOut": {
+        "properties": {
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Workspace Id"
+          },
+          "workspace_name": {
+            "type": "string",
+            "title": "Workspace Name"
+          },
+          "sw": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Sw"
+          },
+          "hw": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Hw"
+          },
+          "material_types": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Material Types"
+          },
+          "has_process_std": {
+            "type": "boolean",
+            "title": "Has Process Std"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workspace_id",
+          "workspace_name",
+          "sw",
+          "hw",
+          "material_types",
+          "has_process_std",
+          "note"
+        ],
+        "title": "CapacityOut"
+      },
+      "CapacitySummaryOut": {
+        "properties": {
+          "departments": {
+            "type": "integer",
+            "title": "Departments"
+          },
+          "sw": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Sw"
+          },
+          "hw": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Hw"
+          },
+          "material_types": {
+            "type": "integer",
+            "title": "Material Types"
+          },
+          "process_std": {
+            "type": "integer",
+            "title": "Process Std"
+          }
+        },
+        "type": "object",
+        "required": [
+          "departments",
+          "sw",
+          "hw",
+          "material_types",
+          "process_std"
+        ],
+        "title": "CapacitySummaryOut",
+        "description": "전사 합계 — **공유 자원은 한 번만 센다.**"
       },
       "ChangeOut": {
         "properties": {
@@ -17469,6 +17958,211 @@
           "workspace_slug"
         ],
         "title": "SignupRequest"
+      },
+      "StaffAgentFteOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "fte": {
+            "type": "number",
+            "title": "Fte"
+          },
+          "people": {
+            "type": "integer",
+            "title": "People"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "fte",
+          "people"
+        ],
+        "title": "StaffAgentFteOut"
+      },
+      "StaffAgentOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "StaffAgentOut"
+      },
+      "StaffIn": {
+        "properties": {
+          "workspace_slug": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Workspace Slug"
+          },
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "agents": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Agents"
+          },
+          "skill_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skill Kinds"
+          },
+          "outside": {
+            "type": "boolean",
+            "title": "Outside",
+            "default": false
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "workspace_slug",
+          "name"
+        ],
+        "title": "StaffIn"
+      },
+      "StaffOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "workspace_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Workspace Id"
+          },
+          "workspace_name": {
+            "type": "string",
+            "title": "Workspace Name"
+          },
+          "alias": {
+            "type": "string",
+            "title": "Alias"
+          },
+          "name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "agents": {
+            "items": {
+              "$ref": "#/components/schemas/StaffAgentOut"
+            },
+            "type": "array",
+            "title": "Agents"
+          },
+          "skill_kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skill Kinds"
+          },
+          "outside": {
+            "type": "boolean",
+            "title": "Outside"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "share": {
+            "type": "number",
+            "title": "Share"
+          },
+          "fte": {
+            "type": "number",
+            "title": "Fte"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "workspace_id",
+          "workspace_name",
+          "alias",
+          "name",
+          "agents",
+          "skill_kinds",
+          "outside",
+          "note",
+          "share",
+          "fte"
+        ],
+        "title": "StaffOut",
+        "description": "인력 한 줄 — **가명이 기본, 실명은 권한이 있을 때만.**"
+      },
+      "StaffSummaryOut": {
+        "properties": {
+          "head_count": {
+            "type": "integer",
+            "title": "Head Count"
+          },
+          "fte": {
+            "type": "number",
+            "title": "Fte"
+          },
+          "by_agent": {
+            "items": {
+              "$ref": "#/components/schemas/StaffAgentFteOut"
+            },
+            "type": "array",
+            "title": "By Agent"
+          },
+          "by_kind": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "By Kind"
+          }
+        },
+        "type": "object",
+        "required": [
+          "head_count",
+          "fte",
+          "by_agent",
+          "by_kind"
+        ],
+        "title": "StaffSummaryOut"
       },
       "SubgraphOut": {
         "properties": {

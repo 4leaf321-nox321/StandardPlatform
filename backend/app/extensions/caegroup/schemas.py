@@ -157,3 +157,85 @@ class BoardOut(BaseModel):
 
     tiles: list[TileOut]
     recent: list[RecentOut]
+
+
+class StaffAgentOut(BaseModel):
+    id: str
+    label: str
+
+
+class StaffOut(BaseModel):
+    """인력 한 줄 — **가명이 기본, 실명은 권한이 있을 때만.**"""
+
+    id: uuid.UUID
+    workspace_id: uuid.UUID
+    workspace_name: str
+    alias: str
+    """표에 서는 이름(담당 A · B). 부서 안에서 만든 순서로 붙는다."""
+    name: str | None
+    """실명. 그 부서를 고칠 수 있는 사람과 시스템 관리자에게만 온다 — **없으면 `null`.**"""
+    agents: list[StaffAgentOut]
+    skill_kinds: list[str]
+    outside: bool
+    note: str
+    share: float
+    """담당 하나에 주는 몫(1/n). 조사 밖 업무가 있으면 n+1 로 나눈 값이다."""
+    fte: float
+    """이 조사에 잡히는 이 사람의 몫 — 담당 수에 `share` 를 곱한 값."""
+
+
+class StaffIn(BaseModel):
+    workspace_slug: str = Field(min_length=1)
+    name: str = Field(min_length=1, max_length=100)
+    """실명을 받는다. **화면에는 가명으로 선다** — 투입률은 받지 않는다."""
+    agents: list[str] = Field(default_factory=list)
+    skill_kinds: list[str] = Field(default_factory=list)
+    outside: bool = False
+    note: str = ""
+
+
+class StaffAgentFteOut(BaseModel):
+    id: str
+    label: str
+    fte: float
+    people: int
+
+
+class StaffSummaryOut(BaseModel):
+    head_count: int
+    fte: float
+    """합이 사람 수를 넘지 않는다 — 한 사람은 1.0 이고 담당에 갈려 들어간다."""
+    by_agent: list[StaffAgentFteOut]
+    by_kind: list[dict[str, Any]]
+
+
+class CapacityOut(BaseModel):
+    workspace_id: uuid.UUID
+    workspace_name: str
+    sw: list[dict[str, Any]]
+    hw: list[dict[str, Any]]
+    material_types: int | None
+    has_process_std: bool
+    note: str
+
+
+class CapacityIn(BaseModel):
+    sw: list[dict[str, Any]] = Field(default_factory=list)
+    hw: list[dict[str, Any]] = Field(default_factory=list)
+    material_types: int | None = None
+    has_process_std: bool = False
+    note: str = ""
+
+
+class CapacitySummaryOut(BaseModel):
+    """전사 합계 — **공유 자원은 한 번만 센다.**"""
+
+    departments: int
+    sw: list[dict[str, Any]]
+    hw: dict[str, int]
+    """`cpu_cores` · `ram_gb` 합과 `gpu_units`(GPU 사양이 적힌 자원 수).
+
+    **GPU 는 개수를 더하지 않는다** — 사양을 글로 적기 때문이다(「A100 4장」).
+    """
+    material_types: int
+    process_std: int

@@ -640,3 +640,129 @@ def test_대시보드는_타일과_최근_변경을_한_번에_낸다(client: Te
     recent = next(one for one in body["recent"] if one["pair_id"] == pair)
     assert recent["axis_label"] == "가상검증률"
     assert "95%" in recent["note"]
+
+
+# --- 4단계: 인력 · 인프라 --------------------------------------------------
+
+
+def test_한_사람은_하나이고_몫은_담당에_갈린다(client: TestClient, admin: Signed) -> None:
+    """**투입률을 받지 않는다.**
+
+    퍼센트를 사람이 적으면 정의가 흔들리고 합이 사람 수를 넘는다 — 셈은 서버가 한다.
+    담당이 셋이면 각 1/3, 조사 밖 업무가 있으면 n+1 로 나눈다(없는 일까지 넣지 않는다).
+    """
+    _setup(client, admin)
+    agents = [
+        _make_object(
+            client, admin, "sim_analysis", label=f"해석{index} {uuid.uuid4().hex[:4]}"
+        )["id"]
+        for index in range(3)
+    ]
+    made = client.post(
+        f"{DT}/staff",
+        json={
+            "workspace_slug": admin.workspace,
+            "name": "홍길동",
+            "agents": agents,
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    assert made.json()["share"] == round(1 / 3, 4)
+    assert made.json()["fte"] == 1.0
+
+    # 조사 밖 업무가 있으면 이 조사에는 3/4 만 잡힌다.
+    moved = client.put(
+        f"{DT}/staff/{made.json()['id']}",
+        json={
+            "workspace_slug": admin.workspace,
+            "name": "홍길동",
+            "agents": agents,
+            "outside": True,
+        },
+        headers=admin.headers,
+    )
+    assert moved.json()["share"] == 0.25
+    assert moved.json()["fte"] == 0.75
+
+    summary = client.get(f"{DT}/staff/summary", headers=admin.headers).json()
+    assert summary["head_count"] == 1
+    # **합이 사람 수를 넘지 않는다.**
+    assert summary["fte"] <= summary["head_count"]
+    assert len(summary["by_agent"]) == 3
+    assert summary["by_agent"][0]["fte"] == 0.25
+
+
+def test_실명은_권한_있는_사람에게만(
+    client: TestClient, admin: Signed, member: Signed
+) -> None:
+    """표에 서는 것은 가명(담당 A)이다.
+
+    전사에 실명을 열면 이 표는 「누가 느린가」 로 읽히고, 그때 부서는 자료를 방어적으로
+    적는다 — 사람을 세는 자리이지 사람을 평가하는 자리가 아니다.
+    """
+    _setup(client, admin)
+    other = client.post(
+        "/api/workspaces",
+        json={"slug": f"staff{uuid.uuid4().hex[:6]}", "name": "다른 팀"},
+        headers=admin.headers,
+    )
+    client.post(
+        f"{DT}/staff",
+        json={"workspace_slug": other.json()["slug"], "name": "김해석"},
+        headers=admin.headers,
+    )
+    rows = client.get(f"{DT}/staff", headers=member.headers).json()
+    theirs = [one for one in rows if one["workspace_name"] == "다른 팀"]
+    assert theirs, rows
+    assert theirs[0]["alias"] == "담당 A"
+    assert theirs[0]["name"] is None  # 남의 부서 사람의 실명은 안 온다
+
+    mine = client.get(f"{DT}/staff", headers=admin.headers).json()
+    seen = next(one for one in mine if one["workspace_name"] == "다른 팀")
+    assert seen["name"] == "김해석"
+
+
+def test_공유_자원은_전사에서_한_번만_센다(client: TestClient, admin: Signed) -> None:
+    """부서마다 적힌 공유 라이선스를 그대로 더하면 전사 합이 실제보다 커지고, 그 숫자로
+    투자를 판단하면 이미 있는 것을 또 산다."""
+    _setup(client, admin)
+    other = client.post(
+        "/api/workspaces",
+        json={"slug": f"cap{uuid.uuid4().hex[:6]}", "name": "옆 팀"},
+        headers=admin.headers,
+    )
+    for slug in (admin.workspace, other.json()["slug"]):
+        got = client.put(
+            f"{DT}/capacity?workspace={slug}",
+            json={
+                "sw": [
+                    {"name": "전사 공유 솔버", "quantity": 10, "unit": "copy", "shared": True},
+                    {"name": "부서 전용 툴", "quantity": 2, "unit": "copy", "shared": False},
+                ],
+                "hw": [
+                    {
+                        "name": "공용 클러스터",
+                        "cpu_cores": 256,
+                        "ram_gb": 1024,
+                        # **GPU 는 글이다.** 숫자로 강제했더니 표본의 「A100 4장」 이
+                        # 합계에서 500 을 냈다(2026-09-25).
+                        "gpu": "A100 4장",
+                        "shared": True,
+                    }
+                ],
+                "material_types": 30,
+                "has_process_std": True,
+            },
+            headers=admin.headers,
+        )
+        assert got.status_code == 200, got.text
+
+    body = client.get(f"{DT}/capacity/summary", headers=admin.headers).json()
+    by_name = {one["name"]: one["quantity"] for one in body["sw"]}
+    assert by_name["전사 공유 솔버"] == 10  # 두 부서가 적었어도 한 번
+    assert by_name["부서 전용 툴"] == 4  # 2 + 2
+    assert body["hw"]["cpu_cores"] == 256  # 공용 클러스터도 한 번
+    # GPU 는 개수를 더하지 않고 **사양이 적힌 자원 수**를 센다.
+    assert body["hw"]["gpu_units"] == 1
+    assert body["material_types"] == 60 and body["process_std"] == 2
