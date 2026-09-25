@@ -195,6 +195,64 @@ export interface CapacitySummary {
   process_std: number
 }
 
+export interface SheetRow {
+  pair_id: string
+  subject_label: string
+  agent_label: string
+  agent_dept: string | null
+  workspace_name: string
+  value: number | null
+  /** 수준 **이름**(key 가 아니다) — 사람이 읽고 고치는 값이다. */
+  rung: string
+  rungs: string[]
+  note: string
+}
+
+export interface Sheet {
+  axis: string
+  axis_label: string
+  kind: 'value' | 'set' | 'rung' | 'matrix'
+  rows: SheetRow[]
+}
+
+export interface BulkRow {
+  pair_id?: string
+  subject_label?: string
+  agent_label?: string
+  value?: string
+  rung?: string
+  rungs?: string
+  note?: string
+}
+
+export interface BulkResult {
+  line: number
+  /** ok · skipped(값이 비어 있음) · error. */
+  status: 'ok' | 'skipped' | 'error'
+  message: string
+}
+
+export interface StaffSheetRow {
+  staff_id: string
+  name: string
+  alias: string
+  workspace_name: string
+  /** 담당 해석 이름들 — `·` 로 이어 적는다. */
+  agents: string
+  outside: string
+  skill_kinds: string
+  note: string
+}
+
+export interface StaffBulkRow {
+  name?: string
+  workspace_name?: string
+  agents?: string
+  outside?: string
+  skill_kinds?: string
+  note?: string
+}
+
 const BASE = '/ext/caegroup/dt'
 
 export const dtApi = {
@@ -236,4 +294,16 @@ export const dtApi = {
   capacitySave: (workspace: string, body: Omit<Capacity, 'workspace_id' | 'workspace_name'>) =>
     api.put<Capacity>(`${BASE}/capacity?workspace=${encodeURIComponent(workspace)}`, body),
   capacitySummary: () => api.get<CapacitySummary>(`${BASE}/capacity/summary`),
+  /** 현재값 표 — 화면이 이것을 그대로 표에 채운다(현재값 불러오기). */
+  sheet: (axis: string) => api.get<Sheet>(`${BASE}/assessments/sheet?axis=${axis}`),
+  bulkAssess: (axis: string, rows: BulkRow[]) =>
+    api.put<BulkResult[]>(`${BASE}/assessments/bulk`, { axis, rows }),
+  sheetFileUrl: (axis: string, format: 'xlsx' | 'csv') =>
+    `${BASE}/assessments/sheet/export?axis=${axis}&format=${format}`,
+  staffSheet: () => api.get<StaffSheetRow[]>(`${BASE}/staff/sheet`),
+  staffBulk: (rows: StaffBulkRow[]) =>
+    api.put<BulkResult[]>(`${BASE}/staff/bulk`, { rows }),
+  staffFileUrl: (format: 'xlsx' | 'csv') => `${BASE}/staff/sheet/export?format=${format}`,
+  capacityFileUrl: (workspace: string) =>
+    `${BASE}/capacity/sheet/export?workspace=${encodeURIComponent(workspace)}`,
 }

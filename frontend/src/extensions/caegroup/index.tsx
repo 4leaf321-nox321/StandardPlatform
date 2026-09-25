@@ -8,13 +8,14 @@
  * 바꾸면 사람들이 즐겨찾기한 주소가 죽는다.
  */
 
-import { Gauge, HardDrive, LayoutDashboard, Users } from 'lucide-react'
+import { Gauge, HardDrive, LayoutDashboard, TableProperties, Users } from 'lucide-react'
 import { lazy } from 'react'
 
 import type { ExtensionDef } from '@/extensions'
 
 const DashboardPage = lazy(() => import('./DashboardPage'))
 const PairsPage = lazy(() => import('./PairsPage'))
+const BulkPage = lazy(() => import('./BulkPage'))
 const StaffPage = lazy(() => import('./StaffPage'))
 const InfraPage = lazy(() => import('./InfraPage'))
 
@@ -26,6 +27,7 @@ export const caegroupExtension: ExtensionDef = {
       items: [
         { label: '대시보드', icon: LayoutDashboard, to: '/ext/caegroup/dt' },
         { label: '역량', icon: Gauge, to: '/ext/caegroup/dt/pairs' },
+        { label: '일괄 입력', icon: TableProperties, to: '/ext/caegroup/dt/bulk' },
         { label: '인력', icon: Users, to: '/ext/caegroup/dt/staff' },
         { label: '인프라', icon: HardDrive, to: '/ext/caegroup/dt/infra' },
       ],
@@ -34,6 +36,7 @@ export const caegroupExtension: ExtensionDef = {
   routes: [
     { path: 'ext/caegroup/dt', element: <DashboardPage /> },
     { path: 'ext/caegroup/dt/pairs', element: <PairsPage /> },
+    { path: 'ext/caegroup/dt/bulk', element: <BulkPage /> },
     { path: 'ext/caegroup/dt/staff', element: <StaffPage /> },
     { path: 'ext/caegroup/dt/infra', element: <InfraPage /> },
   ],

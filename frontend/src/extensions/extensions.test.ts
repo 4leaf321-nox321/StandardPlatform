@@ -30,7 +30,13 @@ describe('extensions', () => {
   it('caegroup 은 「디지털 트윈」 그룹으로 화면 넷을 낸다', () => {
     const groups = extensionNavGroups(['caegroup'])
     expect(groups.map((g) => g.title)).toEqual(['디지털 트윈'])
-    expect(groups[0].items.map((i) => i.label)).toEqual(['대시보드', '역량', '인력', '인프라'])
+    expect(groups[0].items.map((i) => i.label)).toEqual([
+      '대시보드',
+      '역량',
+      '일괄 입력',
+      '인력',
+      '인프라',
+    ])
   })
 
   it('화면 쪽 짝이 없는 이름은 따로 알린다', () => {

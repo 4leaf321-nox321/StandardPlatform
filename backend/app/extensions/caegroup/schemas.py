@@ -239,3 +239,67 @@ class CapacitySummaryOut(BaseModel):
     """
     material_types: int
     process_std: int
+
+
+class SheetRowOut(BaseModel):
+    """일괄 입력 표의 한 줄 — **현재값이 채워져 온다.**"""
+
+    pair_id: uuid.UUID
+    subject_label: str
+    agent_label: str
+    agent_dept: str | None
+    workspace_name: str
+    value: float | None
+    rung: str
+    """수준 **이름**(key 가 아니다) — 엑셀에서 사람이 읽고 고치는 값이다."""
+    rungs: list[str]
+    note: str
+
+
+class SheetOut(BaseModel):
+    axis: str
+    axis_label: str
+    kind: str
+    rows: list[SheetRowOut]
+
+
+class BulkRowIn(BaseModel):
+    """한 줄 — `pair_id` 가 없으면 **이름으로 찾는다**(엑셀에서 붙여 넣은 표)."""
+
+    pair_id: uuid.UUID | None = None
+    subject_label: str = ""
+    agent_label: str = ""
+    value: str = ""
+    rung: str = ""
+    rungs: str = ""
+    """수준 이름들을 `·` 로 이어 적는다."""
+    note: str = ""
+
+
+class BulkAssessIn(BaseModel):
+    axis: str
+    rows: list[BulkRowIn] = Field(min_length=1)
+
+
+class BulkResultOut(BaseModel):
+    line: int
+    status: str
+    """ok · skipped(값이 비어 있음) · error."""
+    message: str
+
+
+class StaffBulkRowIn(BaseModel):
+    """인력 표의 한 줄 — **이름과 부서로 그 줄을 찾는다.**"""
+
+    name: str = ""
+    workspace_name: str = ""
+    agents: str = ""
+    """담당 해석 이름들을 `·` 로 이어 적는다."""
+    outside: str = ""
+    """「예」 면 조사 밖 업무가 있다."""
+    skill_kinds: str = ""
+    note: str = ""
+
+
+class StaffBulkIn(BaseModel):
+    rows: list[StaffBulkRowIn] = Field(min_length=1)

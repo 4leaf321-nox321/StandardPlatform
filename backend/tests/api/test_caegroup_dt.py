@@ -766,3 +766,206 @@ def test_공유_자원은_전사에서_한_번만_센다(client: TestClient, adm
     # GPU 는 개수를 더하지 않고 **사양이 적힌 자원 수**를 센다.
     assert body["hw"]["gpu_units"] == 1
     assert body["material_types"] == 60 and body["process_std"] == 2
+
+
+# --- 5단계: 일괄 입력 -------------------------------------------------------
+
+
+def test_현재값을_표로_내려_주고_고쳐서_한_번에_받는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """**한 줄씩 창을 여는 길만 있으면 아무도 최신으로 유지하지 않는다.**
+
+    현재값을 표로 내려 주고, 고친 것을 한 번에 되돌려 받는다. 줄마다 결과를 준다 —
+    한 줄이 틀려도 나머지는 저장한다.
+    """
+    first = _pair(
+        client, admin, f"낙하 {uuid.uuid4().hex[:4]}", f"낙하 해석 {uuid.uuid4().hex[:4]}"
+    )
+    second = _pair(
+        client, admin, f"굽힘 {uuid.uuid4().hex[:4]}", f"굽힘 해석 {uuid.uuid4().hex[:4]}"
+    )
+    client.put(
+        f"{DT}/pairs/{first}/assessments/accuracy",
+        json={"value": 70, "note": "1차 비교"},
+        headers=admin.headers,
+    )
+
+    sheet = client.get(f"{DT}/assessments/sheet?axis=accuracy", headers=admin.headers).json()
+    assert sheet["axis_label"] == "가상검증률" and sheet["kind"] == "value"
+    rows = {one["pair_id"]: one for one in sheet["rows"]}
+    # 현재값이 채워져 온다 — 아직 안 매긴 줄은 비어 있다(0 이 아니다).
+    assert rows[first]["value"] == 70 and rows[first]["note"] == "1차 비교"
+    assert rows[second]["value"] is None and rows[second]["rung"] == ""
+
+    saved = client.put(
+        f"{DT}/assessments/bulk",
+        json={
+            "axis": "accuracy",
+            "rows": [
+                {"pair_id": first, "value": "93", "note": "재비교 — 일치율 93%"},
+                # **이름으로도 찾는다** — 엑셀에서 붙여 넣은 표에는 id 가 없다.
+                {
+                    "subject_label": rows[second]["subject_label"],
+                    "agent_label": rows[second]["agent_label"],
+                    "value": "80",
+                    "note": "첫 비교 12건",
+                },
+                {
+                    "subject_label": "없는 시험",
+                    "agent_label": "없는 해석",
+                    "value": "50",
+                    "note": "x",
+                },
+                {"pair_id": first, "value": "", "note": "값이 없으면 건너뛴다"},
+                {"pair_id": first, "value": "구십", "note": "숫자가 아니다"},
+            ],
+        },
+        headers=admin.headers,
+    )
+    assert saved.status_code == 200, saved.text
+    got = saved.json()
+    assert [one["status"] for one in got] == ["ok", "ok", "error", "skipped", "error"]
+    assert "연계를 찾을 수 없습니다" in got[2]["message"]
+    assert "숫자가 아닙니다" in got[4]["message"]
+
+    after = client.get(f"{DT}/assessments/sheet?axis=accuracy", headers=admin.headers).json()
+    done = {one["pair_id"]: one for one in after["rows"]}
+    assert done[first]["value"] == 93 and done[first]["rung"] == "현상 재현"
+    assert done[second]["value"] == 80 and done[second]["rung"] == "우열 판정"
+
+
+def test_선택형도_이름으로_일괄_저장된다(client: TestClient, admin: Signed) -> None:
+    """엑셀에는 **이름**이 적힌다 — key 를 적게 하면 아무도 못 채운다."""
+    pair = _pair(
+        client, admin, f"진동 {uuid.uuid4().hex[:4]}", f"진동 해석 {uuid.uuid4().hex[:4]}"
+    )
+    got = client.put(
+        f"{DT}/assessments/bulk",
+        json={
+            "axis": "automation",
+            "rows": [
+                {
+                    "pair_id": pair,
+                    "rungs": "전처리 자동화 · 실행 자동화",
+                    "note": "템플릿 적용",
+                },
+                {"pair_id": pair, "rungs": "없는 항목", "note": "x"},
+            ],
+        },
+        headers=admin.headers,
+    )
+    assert [one["status"] for one in got.json()] == ["ok", "error"]
+    assert "모르는 항목입니다" in got.json()[1]["message"]
+    rows = client.get(f"{DT}/assessments/sheet?axis=automation", headers=admin.headers).json()
+    mine = next(one for one in rows["rows"] if one["pair_id"] == pair)
+    assert mine["rungs"] == ["전처리 자동화", "실행 자동화"]
+
+
+def test_현재값_표를_파일로_내려받는다(client: TestClient, admin: Signed) -> None:
+    """엑셀에서 고치는 것이 가장 빠른 사람이 많다. 열 순서가 붙여넣기와 같아야 한다."""
+    _pair(client, admin, f"방수 {uuid.uuid4().hex[:4]}", f"실링 해석 {uuid.uuid4().hex[:4]}")
+    for kind in ("csv", "xlsx"):
+        got = client.get(
+            f"{DT}/assessments/sheet/export?axis=accuracy&format={kind}", headers=admin.headers
+        )
+        assert got.status_code == 200, got.text
+        assert len(got.content) > 100
+    csv = client.get(
+        f"{DT}/assessments/sheet/export?axis=accuracy&format=csv", headers=admin.headers
+    ).content.decode("utf-8-sig")
+    header = csv.splitlines()[0]
+    assert header.split(",")[:2] == ["시험 항목", "시뮬레이션 해석"]
+    assert "가상검증률" in header and "근거" in header
+
+
+def test_인력도_표로_받아_한_번에_고친다(client: TestClient, admin: Signed) -> None:
+    """**이름과 부서로 그 줄을 찾는다.** 새 이름이면 새로 만든다.
+
+    사람마다 창을 여는 길만 있으면 조사가 끝나지 않는다 — 스무 명이면 스무 번이다.
+    """
+    _setup(client, admin)
+    agent = _make_object(
+        client, admin, "sim_analysis", label=f"열 해석 {uuid.uuid4().hex[:4]}"
+    )
+    name = f"박해석{uuid.uuid4().hex[:4]}"
+    # 표에는 **부서 이름**이 적힌다(slug 가 아니다) — 사람이 읽고 적는 값이다.
+    dept = next(
+        one["name"]
+        for one in client.get("/api/workspaces", headers=admin.headers).json()
+        if one["slug"] == admin.workspace
+    )
+    got = client.put(
+        f"{DT}/staff/bulk",
+        json={
+            "rows": [
+                {
+                    "name": name,
+                    "workspace_name": dept,
+                    "agents": agent["label"],
+                    "outside": "예",
+                    "note": "표에서 넣음",
+                },
+                {"name": "", "workspace_name": dept},
+                {"name": "김없음", "workspace_name": "없는 부서"},
+                {
+                    "name": f"최해석{uuid.uuid4().hex[:4]}",
+                    "workspace_name": dept,
+                    "agents": "없는 해석",
+                },
+            ]
+        },
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    assert [one["status"] for one in got.json()] == ["ok", "skipped", "error", "error"]
+    assert "부서를 찾을 수 없습니다" in got.json()[2]["message"]
+    assert "모르는 해석입니다" in got.json()[3]["message"]
+
+    sheet = client.get(f"{DT}/staff/sheet", headers=admin.headers).json()
+    mine = next(one for one in sheet if one["name"] == name)
+    assert mine["agents"] == agent["label"] and mine["outside"] == "예"
+
+    # 같은 이름 · 부서로 다시 보내면 **고친다**(새로 만들지 않는다).
+    again = client.put(
+        f"{DT}/staff/bulk",
+        json={
+            "rows": [
+                {
+                    "name": name,
+                    "workspace_name": dept,
+                    "agents": agent["label"],
+                    "note": "고침",
+                }
+            ]
+        },
+        headers=admin.headers,
+    )
+    assert again.json()[0]["status"] == "ok"
+    rows = [
+        one
+        for one in client.get(f"{DT}/staff/sheet", headers=admin.headers).json()
+        if one["name"] == name
+    ]
+    assert len(rows) == 1 and rows[0]["note"] == "고침" and rows[0]["outside"] == ""
+
+
+def test_안_채운_것이_홈의_남은_일에_오른다(client: TestClient, admin: Signed) -> None:
+    """**대시보드를 열어야만 보이는 자료는 안 채워진다.**
+
+    0 건인 항목은 안 낸다(레지스트리가 거른다) — 다 0 인 목록을 매일 보면 사람은 그 자리를
+    아예 안 읽게 되고, 그때 진짜 하나가 떠도 눈에 안 들어온다.
+    """
+    pair = _pair(
+        client, admin, f"음향 {uuid.uuid4().hex[:4]}", f"음향 해석 {uuid.uuid4().hex[:4]}"
+    )
+    client.put(
+        f"{DT}/pairs/{pair}/assessments/accuracy",
+        json={"value": 60, "note": "첫 비교"},
+        headers=admin.headers,
+    )
+    home = client.get("/api/server/maintenance", headers=admin.headers).json()
+    mine = {one["label"]: one for one in home if "디지털 트윈" in one["label"]}
+    # 가상검증률은 매겼고 자동화는 안 매겼다 — 안 매긴 것만 뜬다.
+    assert "디지털 트윈 — 자동화 미평가" in mine
+    assert mine["디지털 트윈 — 자동화 미평가"]["link"] == "/ext/caegroup/dt/bulk"

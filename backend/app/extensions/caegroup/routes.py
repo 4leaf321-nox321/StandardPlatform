@@ -7,8 +7,9 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -18,6 +19,8 @@ from app.extensions.caegroup.schemas import (
     AssessmentIn,
     AssessmentOut,
     BoardOut,
+    BulkAssessIn,
+    BulkResultOut,
     CapacityIn,
     CapacityOut,
     CapacitySummaryOut,
@@ -30,12 +33,14 @@ from app.extensions.caegroup.schemas import (
     PairOut,
     PairPatchIn,
     SetupStatusOut,
+    SheetOut,
+    StaffBulkIn,
     StaffIn,
     StaffOut,
     StaffSummaryOut,
 )
 from app.modules.accounts.models import User
-from app.shared import permissions
+from app.shared import permissions, sheets
 from app.shared.auth import current_user, require_system_admin
 from app.shared.errors import Conflict, code
 
@@ -249,6 +254,60 @@ def staff_create(
     return StaffOut(**found[0])
 
 
+# ⚠️ **`/staff/{staff_id}` 보다 먼저 선언한다.** 경로는 적은 순서로 맞춰지므로, 뒤에 두면
+# 「bulk」 · 「sheet」 가 id 로 읽혀 422 가 난다(실측 2026-09-25).
+@router.get("/staff/sheet", response_model=list[dict[str, Any]])
+def staff_sheet(
+    user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[dict[str, Any]]:
+    """인력의 **현재값 표** — 이름 · 부서 · 담당 해석 · 조사 밖 업무 · 역량 분야 · 메모."""
+    return services.staff_sheet(db, user)
+
+
+@router.get("/staff/sheet/export")
+def staff_sheet_export(
+    format: str = Query(default="xlsx", pattern="^(xlsx|csv)$"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """인력 현재값을 파일로 — 고쳐서 붙여넣기로 되돌리는 길."""
+    rows = services.staff_sheet(db, user)
+    header = ["이름", "부서", "담당 해석", "조사 밖 업무", "역량 분야", "메모"]
+    return sheets.file_response(
+        header,
+        [
+            [
+                one["name"],
+                one["workspace_name"],
+                one["agents"],
+                one["outside"],
+                one["skill_kinds"],
+                one["note"],
+            ]
+            for one in rows
+        ],
+        fmt=format,
+        stem="dt-staff",
+        sheet="인력",
+    )
+
+
+@router.put("/staff/bulk", response_model=list[BulkResultOut])
+def staff_bulk(
+    payload: StaffBulkIn, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[BulkResultOut]:
+    """인력 표를 한 번에 저장한다 — **이름과 부서로 그 줄을 찾는다.**
+
+    빈 이름은 건너뛴다. 한 줄이 틀려도 나머지는 저장한다 — 줄마다 결과를 돌려준다.
+    """
+    return [
+        BulkResultOut(**one)
+        for one in services.staff_bulk(
+            db, user, rows=[one.model_dump() for one in payload.rows]
+        )
+    ]
+
+
 @router.put("/staff/{staff_id}", response_model=StaffOut)
 def staff_update(
     staff_id: uuid.UUID,
@@ -308,3 +367,122 @@ def capacity_summary(
     투자를 판단하면 이미 있는 것을 또 산다.
     """
     return CapacitySummaryOut(**services.capacity_summary(db))
+
+
+@router.get("/assessments/sheet", response_model=SheetOut)
+def assessment_sheet(
+    axis: str = Query(...),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> SheetOut:
+    """축 하나의 **현재값 표** — 화면이 이것을 표에 채운다(현재값 불러오기).
+
+    한 줄씩 창을 열어 고치는 길만 있으면 스무 건이 넘는 순간 아무도 최신으로 유지하지
+    않는다 — 그리고 안 채운 자료는 「모름」 과 구별되지 않는다.
+    """
+    return SheetOut(**services.sheet(db, user, axis_key=axis))
+
+
+@router.get("/assessments/sheet/export")
+def assessment_sheet_export(
+    axis: str = Query(...),
+    format: str = Query(default="xlsx", pattern="^(xlsx|csv)$"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """현재값 표를 파일로 — **고쳐서 붙여넣기로 되돌리는 길.**
+
+    엑셀에서 고치는 것이 가장 빠른 사람이 많다. 내려받은 표의 열 순서가 붙여넣기와 같아서,
+    채운 뒤 그대로 복사해 붙이면 열이 맞는다.
+    """
+    body = services.sheet(db, user, axis_key=axis)
+    header = [
+        "시험 항목",
+        "시뮬레이션 해석",
+        "담당 부서",
+        "소속 부서",
+        body["axis_label"],
+        "근거",
+    ]
+    rows = [
+        [
+            one["subject_label"],
+            one["agent_label"],
+            one["agent_dept"] or "",
+            one["workspace_name"],
+            # 축 종류마다 채워 넣는 칸이 다르다 — 표에서는 한 칸으로 모은다.
+            one["value"]
+            if one["value"] is not None
+            else (one["rung"] or " · ".join(one["rungs"])),
+            one["note"],
+        ]
+        for one in body["rows"]
+    ]
+    # 파일 이름은 **ASCII** 다 — 헤더에 한글을 그대로 넣으면 깨지는 프록시가 있다
+    # (`shared/sheets` 의 규칙). 사람이 읽는 이름은 시트 이름과 표의 머리글이 말한다.
+    return sheets.file_response(
+        header, rows, fmt=format, stem=f"dt-{axis}", sheet=body["axis_label"]
+    )
+
+
+@router.put("/assessments/bulk", response_model=list[BulkResultOut])
+def assessment_bulk(
+    payload: BulkAssessIn, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[BulkResultOut]:
+    """표를 한 번에 저장한다 — **줄마다 결과를 돌려준다.**
+
+    빈 값은 건너뛴다(지우기가 아니다). 한 줄이 틀려도 나머지는 저장한다 — 통째로 되돌리면
+    스무 줄 중 하나의 오타가 열아홉 줄의 일을 없앤다.
+    """
+    rows = [one.model_dump() for one in payload.rows]
+    return [
+        BulkResultOut(**one)
+        for one in services.bulk_save(db, user, axis_key=payload.axis, rows=rows)
+    ]
+
+
+@router.get("/capacity/sheet/export")
+def capacity_sheet_export(
+    workspace: str = Query(...),
+    _: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """인프라 현재값을 엑셀로 — **S/W 와 계산 자원을 각각 한 시트로.**
+
+    한 시트에 섞으면 열이 서로 달라 붙여넣기에서 어긋난다.
+    """
+    chosen = permissions.workspace_by_slug(db, workspace)
+    row = services.capacity(db, workspace=chosen)
+    return sheets.workbook_response(
+        [
+            sheets.Page(
+                name="S_W",
+                header=["툴", "수량", "단위", "용도", "전사 공유"],
+                rows=[
+                    [
+                        one.get("name", ""),
+                        one.get("quantity", 0),
+                        one.get("unit", ""),
+                        one.get("purpose", ""),
+                        "예" if one.get("shared") else "",
+                    ]
+                    for one in row["sw"]
+                ],
+            ),
+            sheets.Page(
+                name="계산 자원",
+                header=["자원", "CPU 코어", "RAM GB", "GPU", "전사 공유"],
+                rows=[
+                    [
+                        one.get("name", ""),
+                        one.get("cpu_cores", 0),
+                        one.get("ram_gb", 0),
+                        one.get("gpu", ""),
+                        "예" if one.get("shared") else "",
+                    ]
+                    for one in row["hw"]
+                ],
+            ),
+        ],
+        stem="dt-capacity",
+    )

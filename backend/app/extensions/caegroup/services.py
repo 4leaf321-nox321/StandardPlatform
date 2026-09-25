@@ -29,7 +29,8 @@ from app.modules.ontology import importer
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.workspaces.models import Workspace
 from app.shared import audit, permissions
-from app.shared.errors import Conflict, NotFound, code
+from app.shared import extensions as extension_points
+from app.shared.errors import AppError, Conflict, NotFound, code
 
 SUBJECT_SLUG = "sim_test_item"
 AGENT_SLUG = "sim_analysis"
@@ -1085,3 +1086,316 @@ def capacity_summary(db: Session) -> dict[str, Any]:
         "material_types": materials,
         "process_std": sum(1 for row in rows if row.has_process_std),
     }
+
+
+# ── 일괄 입력 ───────────────────────────────────────────────────────────
+#
+# **현재값을 내려 주고, 고쳐서 한 번에 되돌려 받는다.** 한 줄씩 창을 열어 고치는 길만
+# 있으면 스무 건이 넘는 순간 아무도 최신으로 유지하지 않는다 — 그리고 안 채운 자료는
+# 「모름」 과 구별되지 않는다.
+
+
+def _rung_by_name(axis: dict[str, Any]) -> dict[str, str]:
+    """사람이 읽는 이름 → 수준 key. **엑셀에는 이름이 적힌다** — key 를 적게 하면 안 된다."""
+    out: dict[str, str] = {}
+    for one in axis["rungs"]:
+        out[str(one["label"]).strip()] = one["key"]
+        out[str(one["key"]).strip()] = one["key"]
+        if one.get("short"):
+            out[str(one["short"]).strip()] = one["key"]
+    return out
+
+
+def sheet(db: Session, user: User, *, axis_key: str) -> dict[str, Any]:
+    """축 하나의 **현재값 표** — 연계마다 한 줄.
+
+    화면은 이것을 그대로 표에 채우고(현재값 불러오기), 사람이 고친 뒤 한 번에 되돌려 준다.
+    """
+    axis = _axis_or_404(axis_key)
+    rows = pairs(db, user, workspace=None)
+    ids = [one["id"] for one in rows]
+    saved: dict[uuid.UUID, CaeDtAssessment] = {}
+    if ids:
+        saved = {
+            one.pair_id: one
+            for one in db.scalars(
+                select(CaeDtAssessment).where(
+                    CaeDtAssessment.pair_id.in_(ids), CaeDtAssessment.axis == axis_key
+                )
+            )
+        }
+    names = {one["key"]: one["label"] for one in axis["rungs"]}
+    out: list[dict[str, Any]] = []
+    for one in rows:
+        row = saved.get(one["id"])
+        out.append(
+            {
+                "pair_id": one["id"],
+                "subject_label": one["subject_label"],
+                "agent_label": one["agent_label"],
+                "agent_dept": one["agent_dept"],
+                "workspace_name": one["workspace_name"],
+                "value": row.value if row else None,
+                # **수준은 이름으로 준다.** 엑셀에서 사람이 읽고 고치는 값이다.
+                "rung": names.get(row.rung or "", "") if row else "",
+                "rungs": [names.get(key, key) for key in (row.rungs or [])] if row else [],
+                "note": row.note if row else "",
+            }
+        )
+    return {"axis": axis_key, "axis_label": axis["label"], "kind": axis["kind"], "rows": out}
+
+
+def bulk_save(
+    db: Session, user: User, *, axis_key: str, rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """표를 한 번에 저장한다 — **줄마다 같은 규칙, 줄마다 결과.**
+
+    ⚠️ **빈 값은 건너뛴다**(지우기가 아니다). 엑셀에서 일부만 채워 보내는 일이 흔한데,
+       빈 칸을 「지움」 으로 읽으면 한 번의 붙여넣기가 남의 평가를 지운다.
+    ⚠️ 한 줄이 틀려도 나머지는 저장한다. 통째로 되돌리면 스무 줄 중 하나의 오타가 열아홉
+       줄의 일을 없앤다 — 대신 **어느 줄이 왜 막혔는지** 돌려준다.
+    """
+    axis = _axis_or_404(axis_key)
+    known = pairs(db, user, workspace=None)
+    by_id = {str(one["id"]): one for one in known}
+    by_label = {(one["subject_label"], one["agent_label"]): one for one in known}
+    by_name = _rung_by_name(axis)
+
+    results: list[dict[str, Any]] = []
+    for index, raw in enumerate(rows):
+        found = by_id.get(str(raw.get("pair_id") or "")) or by_label.get(
+            (
+                str(raw.get("subject_label") or "").strip(),
+                str(raw.get("agent_label") or "").strip(),
+            )
+        )
+        if found is None:
+            results.append(
+                {
+                    "line": index + 1,
+                    "status": "error",
+                    "message": "연계를 찾을 수 없습니다 — 시험 항목과 해석 이름을 확인하세요.",
+                }
+            )
+            continue
+
+        payload: dict[str, Any] = {"note": str(raw.get("note") or "").strip()}
+        empty = True
+        if axis["kind"] == "value":
+            text = str(raw.get("value") or "").strip()
+            if text:
+                try:
+                    payload["value"] = float(text)
+                except ValueError:
+                    results.append(
+                        {
+                            "line": index + 1,
+                            "status": "error",
+                            "message": f"값이 숫자가 아닙니다: {text}",
+                        }
+                    )
+                    continue
+                empty = False
+        elif axis["kind"] == "rung":
+            text = str(raw.get("rung") or "").strip()
+            if text:
+                key = by_name.get(text)
+                if key is None:
+                    results.append(
+                        {
+                            "line": index + 1,
+                            "status": "error",
+                            "message": f"모르는 수준입니다: {text}",
+                        }
+                    )
+                    continue
+                payload["rung"] = key
+                empty = False
+        else:  # set · matrix 의 바탕
+            picked = raw.get("rungs")
+            names = (
+                [one.strip() for one in str(picked).split("·")]
+                if isinstance(picked, str)
+                else [str(one).strip() for one in (picked or [])]
+            )
+            keys = [by_name[one] for one in names if one and one in by_name]
+            unknown = [one for one in names if one and one not in by_name]
+            if unknown:
+                results.append(
+                    {
+                        "line": index + 1,
+                        "status": "error",
+                        "message": f"모르는 항목입니다: {', '.join(unknown)}",
+                    }
+                )
+                continue
+            if keys:
+                payload["rungs"] = keys
+                empty = False
+
+        if empty:
+            # **빈 줄은 건너뛴다.** 엑셀에서 일부만 채워 보내는 일이 흔하다.
+            results.append(
+                {"line": index + 1, "status": "skipped", "message": "값이 비어 있습니다."}
+            )
+            continue
+        try:
+            save_assessment(db, user, pair_id=found["id"], axis_key=axis_key, payload=payload)
+        except AppError as failed:
+            results.append({"line": index + 1, "status": "error", "message": failed.message})
+            continue
+        results.append(
+            {
+                "line": index + 1,
+                "status": "ok",
+                "message": f"{found['subject_label']} · {found['agent_label']}",
+            }
+        )
+    return results
+
+
+def staff_sheet(db: Session, user: User) -> list[dict[str, Any]]:
+    """인력의 **현재값 표** — 이름 · 부서 · 담당 해석 · 조사 밖 업무 · 역량 분야 · 메모.
+
+    실명이 안 보이는 사람에게는 빈 칸으로 온다 — 그 줄은 고칠 수도 없다(부서 멤버가 아니다).
+    """
+    rows = staff(db, user, workspace=None)
+    return [
+        {
+            "staff_id": one["id"],
+            "name": one["name"] or "",
+            "alias": one["alias"],
+            "workspace_name": one["workspace_name"],
+            "agents": " · ".join(agent["label"] for agent in one["agents"]),
+            "outside": "예" if one["outside"] else "",
+            "skill_kinds": " · ".join(one["skill_kinds"]),
+            "note": one["note"],
+        }
+        for one in rows
+    ]
+
+
+def staff_bulk(db: Session, user: User, *, rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """인력 표를 한 번에 저장한다 — **이름과 부서로 그 줄을 찾는다.**
+
+    같은 부서에 같은 이름이 둘이면 첫 줄을 고친다. 이름이 사람의 식별자인 자리라, 동명이인은
+    메모로 가른다 — 계정을 붙이는 길은 다음 층이다(겹침 탐지가 그때 정확해진다).
+    """
+    workspaces = {one.name: one for one in db.scalars(select(Workspace))}
+    setting_row = setting(db)
+    agent_ids: dict[str, str] = {}
+    if setting_row.agent_type_slug:
+        kind = _type_or_none(db, setting_row.agent_type_slug)
+        if kind is not None:
+            agent_ids = {
+                one.label: str(one.id)
+                for one in db.scalars(
+                    select(ObjectInstance).where(
+                        ObjectInstance.type_id == kind.id, ObjectInstance.deleted_at.is_(None)
+                    )
+                )
+            }
+    existing = {(one.name, one.workspace_id): one for one in db.scalars(select(CaeDtStaff))}
+
+    results: list[dict[str, Any]] = []
+    for index, raw in enumerate(rows):
+        name = str(raw.get("name") or "").strip()
+        if not name:
+            results.append(
+                {"line": index + 1, "status": "skipped", "message": "이름이 비어 있습니다."}
+            )
+            continue
+        wanted = str(raw.get("workspace_name") or "").strip()
+        workspace = workspaces.get(wanted)
+        if workspace is None:
+            results.append(
+                {
+                    "line": index + 1,
+                    "status": "error",
+                    "message": f"부서를 찾을 수 없습니다: {wanted or '(비어 있음)'}",
+                }
+            )
+            continue
+        names = [one.strip() for one in str(raw.get("agents") or "").split("·") if one.strip()]
+        unknown = [one for one in names if one not in agent_ids]
+        if unknown:
+            results.append(
+                {
+                    "line": index + 1,
+                    "status": "error",
+                    "message": f"모르는 해석입니다: {', '.join(unknown)}",
+                }
+            )
+            continue
+        picked_agents = [agent_ids[one] for one in names]
+        payload: dict[str, Any] = {
+            "name": name,
+            "agents": picked_agents,
+            "skill_kinds": [
+                one.strip()
+                for one in str(raw.get("skill_kinds") or "").split("·")
+                if one.strip()
+            ],
+            "outside": str(raw.get("outside") or "").strip() in ("예", "y", "Y", "true", "1"),
+            "note": str(raw.get("note") or "").strip(),
+        }
+        found = existing.get((name, workspace.id))
+        try:
+            save_staff(
+                db,
+                user,
+                staff_id=found.id if found else None,
+                workspace=workspace,
+                payload=payload,
+            )
+        except AppError as failed:
+            results.append({"line": index + 1, "status": "error", "message": failed.message})
+            continue
+        results.append(
+            {
+                "line": index + 1,
+                "status": "ok",
+                "message": f"{workspace.name} · {len(picked_agents)}담당",
+            }
+        )
+    return results
+
+
+def maintenance(db: Session, user: User) -> list[extension_points.MaintenanceItem]:
+    """홈의 「남은 일」 — **대시보드를 열어야만 보이는 자료는 안 채워진다.**
+
+    0 건인 항목은 안 낸다(레지스트리가 거른다) — 다 0 인 목록을 매일 보면 사람은 그 자리를
+    아예 안 읽게 되고, 그때 진짜 하나가 떠도 눈에 안 들어온다.
+    """
+    del user  # 이 목록은 사람에 따라 다르지 않다 — 전사 자료다.
+    ready = status(db)
+    if not ready["ready"]:
+        return []
+    out: list[extension_points.MaintenanceItem] = []
+    spread = coverage(db)
+    for one in spread["axes"]:
+        missing = spread["pairs"] - one["assessed"]
+        if missing > 0:
+            out.append(
+                extension_points.MaintenanceItem(
+                    key=f"caegroup.dt.axis.{one['axis']}",
+                    label=f"디지털 트윈 — {one['label']} 미평가",
+                    count=missing,
+                    link="/ext/caegroup/dt/bulk",
+                )
+            )
+    # 인프라를 아직 안 적은 부서 — 인력이 있는 부서만 센다(아무 부서나 다 세면 목록이 곧
+    # 무의미해진다).
+    with_staff = {row.workspace_id for row in db.scalars(select(CaeDtStaff))}
+    with_capacity = {row.workspace_id for row in db.scalars(select(CaeDtCapacity))}
+    blank = len(with_staff - with_capacity)
+    if blank:
+        out.append(
+            extension_points.MaintenanceItem(
+                key="caegroup.dt.capacity",
+                label="디지털 트윈 — 인프라 미입력 부서",
+                count=blank,
+                link="/ext/caegroup/dt/infra",
+            )
+        )
+    return out

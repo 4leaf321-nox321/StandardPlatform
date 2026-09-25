@@ -9286,6 +9286,122 @@
         }
       }
     },
+    "/api/ext/caegroup/dt/staff/sheet": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Staff Sheet",
+        "description": "인력의 **현재값 표** — 이름 · 부서 · 담당 해석 · 조사 밖 업무 · 역량 분야 · 메모.",
+        "operationId": "staff_sheet_api_ext_caegroup_dt_staff_sheet_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "additionalProperties": true,
+                    "type": "object"
+                  },
+                  "type": "array",
+                  "title": "Response Staff Sheet Api Ext Caegroup Dt Staff Sheet Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/staff/sheet/export": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Staff Sheet Export",
+        "description": "인력 현재값을 파일로 — 고쳐서 붙여넣기로 되돌리는 길.",
+        "operationId": "staff_sheet_export_api_ext_caegroup_dt_staff_sheet_export_get",
+        "parameters": [
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(xlsx|csv)$",
+              "default": "xlsx",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/staff/bulk": {
+      "put": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Staff Bulk",
+        "description": "인력 표를 한 번에 저장한다 — **이름과 부서로 그 줄을 찾는다.**\n\n빈 이름은 건너뛴다. 한 줄이 틀려도 나머지는 저장한다 — 줄마다 결과를 돌려준다.",
+        "operationId": "staff_bulk_api_ext_caegroup_dt_staff_bulk_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StaffBulkIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BulkResultOut"
+                  },
+                  "type": "array",
+                  "title": "Response Staff Bulk Api Ext Caegroup Dt Staff Bulk Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ext/caegroup/dt/staff/{staff_id}": {
       "put": {
         "tags": [
@@ -9482,6 +9598,188 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CapacitySummaryOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/assessments/sheet": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Assessment Sheet",
+        "description": "축 하나의 **현재값 표** — 화면이 이것을 표에 채운다(현재값 불러오기).\n\n한 줄씩 창을 열어 고치는 길만 있으면 스무 건이 넘는 순간 아무도 최신으로 유지하지\n않는다 — 그리고 안 채운 자료는 「모름」 과 구별되지 않는다.",
+        "operationId": "assessment_sheet_api_ext_caegroup_dt_assessments_sheet_get",
+        "parameters": [
+          {
+            "name": "axis",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Axis"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SheetOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/assessments/sheet/export": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Assessment Sheet Export",
+        "description": "현재값 표를 파일로 — **고쳐서 붙여넣기로 되돌리는 길.**\n\n엑셀에서 고치는 것이 가장 빠른 사람이 많다. 내려받은 표의 열 순서가 붙여넣기와 같아서,\n채운 뒤 그대로 복사해 붙이면 열이 맞는다.",
+        "operationId": "assessment_sheet_export_api_ext_caegroup_dt_assessments_sheet_export_get",
+        "parameters": [
+          {
+            "name": "axis",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Axis"
+            }
+          },
+          {
+            "name": "format",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(xlsx|csv)$",
+              "default": "xlsx",
+              "title": "Format"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/assessments/bulk": {
+      "put": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Assessment Bulk",
+        "description": "표를 한 번에 저장한다 — **줄마다 결과를 돌려준다.**\n\n빈 값은 건너뛴다(지우기가 아니다). 한 줄이 틀려도 나머지는 저장한다 — 통째로 되돌리면\n스무 줄 중 하나의 오타가 열아홉 줄의 일을 없앤다.",
+        "operationId": "assessment_bulk_api_ext_caegroup_dt_assessments_bulk_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkAssessIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/BulkResultOut"
+                  },
+                  "type": "array",
+                  "title": "Response Assessment Bulk Api Ext Caegroup Dt Assessments Bulk Put"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/caegroup/dt/capacity/sheet/export": {
+      "get": {
+        "tags": [
+          "ext:caegroup"
+        ],
+        "summary": "Capacity Sheet Export",
+        "description": "인프라 현재값을 엑셀로 — **S/W 와 계산 자원을 각각 한 시트로.**\n\n한 시트에 섞으면 열이 서로 달라 붙여넣기에서 어긋난다.",
+        "operationId": "capacity_sheet_export_api_ext_caegroup_dt_capacity_sheet_export_get",
+        "parameters": [
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Workspace"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -10454,6 +10752,28 @@
         ],
         "title": "BucketOut"
       },
+      "BulkAssessIn": {
+        "properties": {
+          "axis": {
+            "type": "string",
+            "title": "Axis"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/BulkRowIn"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "axis",
+          "rows"
+        ],
+        "title": "BulkAssessIn"
+      },
       "BulkDeletePlanOut": {
         "properties": {
           "applied": {
@@ -10653,6 +10973,78 @@
           "message"
         ],
         "title": "BulkEditRow"
+      },
+      "BulkResultOut": {
+        "properties": {
+          "line": {
+            "type": "integer",
+            "title": "Line"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "line",
+          "status",
+          "message"
+        ],
+        "title": "BulkResultOut"
+      },
+      "BulkRowIn": {
+        "properties": {
+          "pair_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pair Id"
+          },
+          "subject_label": {
+            "type": "string",
+            "title": "Subject Label",
+            "default": ""
+          },
+          "agent_label": {
+            "type": "string",
+            "title": "Agent Label",
+            "default": ""
+          },
+          "value": {
+            "type": "string",
+            "title": "Value",
+            "default": ""
+          },
+          "rung": {
+            "type": "string",
+            "title": "Rung",
+            "default": ""
+          },
+          "rungs": {
+            "type": "string",
+            "title": "Rungs",
+            "default": ""
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "BulkRowIn",
+        "description": "한 줄 — `pair_id` 가 없으면 **이름으로 찾는다**(엑셀에서 붙여 넣은 표)."
       },
       "BulkUndoRequest": {
         "properties": {
@@ -17923,6 +18315,109 @@
         "title": "SetupStatusOut",
         "description": "기준 정보가 준비됐나 — 화면이 처음 묻는 것."
       },
+      "SheetOut": {
+        "properties": {
+          "axis": {
+            "type": "string",
+            "title": "Axis"
+          },
+          "axis_label": {
+            "type": "string",
+            "title": "Axis Label"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/SheetRowOut"
+            },
+            "type": "array",
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "axis",
+          "axis_label",
+          "kind",
+          "rows"
+        ],
+        "title": "SheetOut"
+      },
+      "SheetRowOut": {
+        "properties": {
+          "pair_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Pair Id"
+          },
+          "subject_label": {
+            "type": "string",
+            "title": "Subject Label"
+          },
+          "agent_label": {
+            "type": "string",
+            "title": "Agent Label"
+          },
+          "agent_dept": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Agent Dept"
+          },
+          "workspace_name": {
+            "type": "string",
+            "title": "Workspace Name"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "rung": {
+            "type": "string",
+            "title": "Rung"
+          },
+          "rungs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Rungs"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "pair_id",
+          "subject_label",
+          "agent_label",
+          "agent_dept",
+          "workspace_name",
+          "value",
+          "rung",
+          "rungs",
+          "note"
+        ],
+        "title": "SheetRowOut",
+        "description": "일괄 입력 표의 한 줄 — **현재값이 채워져 온다.**"
+      },
       "SignupRequest": {
         "properties": {
           "email": {
@@ -18004,6 +18499,60 @@
           "label"
         ],
         "title": "StaffAgentOut"
+      },
+      "StaffBulkIn": {
+        "properties": {
+          "rows": {
+            "items": {
+              "$ref": "#/components/schemas/StaffBulkRowIn"
+            },
+            "type": "array",
+            "minItems": 1,
+            "title": "Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows"
+        ],
+        "title": "StaffBulkIn"
+      },
+      "StaffBulkRowIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name",
+            "default": ""
+          },
+          "workspace_name": {
+            "type": "string",
+            "title": "Workspace Name",
+            "default": ""
+          },
+          "agents": {
+            "type": "string",
+            "title": "Agents",
+            "default": ""
+          },
+          "outside": {
+            "type": "string",
+            "title": "Outside",
+            "default": ""
+          },
+          "skill_kinds": {
+            "type": "string",
+            "title": "Skill Kinds",
+            "default": ""
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "StaffBulkRowIn",
+        "description": "인력 표의 한 줄 — **이름과 부서로 그 줄을 찾는다.**"
       },
       "StaffIn": {
         "properties": {
