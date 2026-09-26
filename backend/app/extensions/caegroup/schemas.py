@@ -299,6 +299,12 @@ class SheetRowOut(BaseModel):
     """수준 **이름**(key 가 아니다) — 엑셀에서 사람이 읽고 고치는 값이다."""
     rungs: list[str]
     note: str
+    defect_types: list[str] = Field(default_factory=list)
+    """이 줄의 **시험 항목이 든 불량 유형 목록** — 유형은 시험에 붙어 줄마다 다르다.
+    화면은 이것을 그 줄의 드롭다운에 쓴다."""
+    defects: dict[str, str] = Field(default_factory=dict)
+    """재현 열(시험 · 시장)마다 **표시된 불량 유형 이름들**(`·` 로 이어 적힌다).
+    적힌 연월은 내지 않는다 — 표에서 고치는 값이 아니다."""
 
 
 class SheetOut(BaseModel):
@@ -319,6 +325,11 @@ class BulkRowIn(BaseModel):
     rungs: str | list[str] = ""
     """고른 항목의 **이름들.** 표에서는 항목마다 열이 있어 목록으로 오고, 엑셀 한 칸에서
     온 것은 `·` 로 이어 적힌 글 하나다 — 둘 다 받는다."""
+    defects: dict[str, str | list[str]] | None = None
+    """매트릭스의 **불량 유형별 재현** — 재현 열 key → 그 열에 표시할 유형 이름들.
+
+    ⚠️ **안 보내면 지금 든 표시를 그대로 둔다**(바탕만 고치는 길). 보내면 그 줄은 표대로
+       맞춰진다 — 체크를 지우는 길이 있어야 한다."""
     note: str = ""
 
 

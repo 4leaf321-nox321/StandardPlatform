@@ -960,6 +960,108 @@ def test_바탕을_일괄로_고쳐도_불량_재현은_남는다(client: TestCl
     assert after["rung"] == "test_some"
 
 
+def test_불량_유형별_재현도_표에서_고친다(client: TestClient, admin: Signed) -> None:
+    """**재현마다 한 열이고, 칸에서 그 줄의 불량 유형을 골라 담는다.**
+
+    유형은 시험 항목에 붙어 줄마다 다르다 — 유형마다 열을 펼치면 열이 줄마다 달라지고,
+    한 줄에 유형 하나를 두면 시험 · 시장을 같은 줄에서 두 번 표시하게 된다.
+    """
+    _setup(client, admin)
+    subject = _make_object(
+        client,
+        admin,
+        "sim_test_item",
+        label=f"낙하 시험 {uuid.uuid4().hex[:4]}",
+        properties={"defect_types": ["글라스 크랙", "프레임 찍힘"]},
+    )
+    agent = _make_object(
+        client, admin, "sim_analysis", label=f"낙하 해석 {uuid.uuid4().hex[:4]}"
+    )
+    pair = client.post(
+        f"{DT}/pairs",
+        json={
+            "subject_id": subject["id"],
+            "agent_id": agent["id"],
+            "workspace_slug": admin.workspace,
+        },
+        headers=admin.headers,
+    ).json()["id"]
+    # 「역량」 화면에서 하나를 먼저 적어 둔다 — **적힌 연월은 그대로 남아야 한다.**
+    client.put(
+        f"{DT}/pairs/{pair}/assessments/modeling",
+        json={
+            "rungs": ["geometry"],
+            "defects": {"글라스 크랙": {"test": "2026-03"}},
+            "note": "형상 일치 · 글라스 크랙 시험 재현",
+        },
+        headers=admin.headers,
+    )
+
+    # 표는 **그 줄의 유형 목록**과 지금 표시된 이름을 함께 준다.
+    sheet = client.get(f"{DT}/assessments/sheet?axis=modeling", headers=admin.headers).json()
+    mine = next(one for one in sheet["rows"] if one["pair_id"] == pair)
+    assert mine["defect_types"] == ["글라스 크랙", "프레임 찍힘"]
+    assert mine["defects"] == {"test": "글라스 크랙", "market": ""}
+
+    got = client.put(
+        f"{DT}/assessments/bulk",
+        json={
+            "axis": "modeling",
+            "rows": [
+                {
+                    "pair_id": pair,
+                    "rungs": ["형상 재현", "거동 재현"],
+                    # 시험 · 시장을 **열로 나눠** 보낸다 — 한 유형이 둘 다일 수 있다.
+                    "defects": {
+                        "test": "글라스 크랙 · 프레임 찍힘",
+                        "market": "글라스 크랙",
+                    },
+                    "note": "전 유형 시험 재현 · 시장 불량 하나",
+                },
+                {
+                    "pair_id": pair,
+                    "rungs": ["형상 재현"],
+                    "defects": {"test": "없는 불량"},
+                    "note": "x",
+                },
+            ],
+        },
+        headers=admin.headers,
+    )
+    assert [one["status"] for one in got.json()] == ["ok", "error"], got.text
+    assert "이 시험 항목의 불량 유형이 아닙니다" in got.json()[1]["message"]
+
+    saved = client.get(f"{DT}/pairs/{pair}/assessments", headers=admin.headers).json()
+    after = next(one for one in saved if one["axis"] == "modeling")
+    # **적힌 연월은 그대로**, 새로 표시된 것은 이번 달이다.
+    assert after["defects"]["글라스 크랙"]["test"] == "2026-03"
+    assert after["defects"]["글라스 크랙"]["market"]
+    assert after["defects"]["프레임 찍힘"]["test"]
+    # 수준은 셈이 접는다 — 전 유형 시험 + 시장 불량이면 「시장 불량까지」 다.
+    assert after["rung"] == "market"
+
+    # **보낸 줄은 표대로 맞춘다** — 칸에서 이름을 빼면 그 표시가 없어진다.
+    client.put(
+        f"{DT}/assessments/bulk",
+        json={
+            "axis": "modeling",
+            "rows": [
+                {
+                    "pair_id": pair,
+                    "rungs": ["형상 재현", "거동 재현"],
+                    "defects": {"test": "글라스 크랙", "market": ""},
+                    "note": "시장 불량 표시를 뺐다",
+                }
+            ],
+        },
+        headers=admin.headers,
+    )
+    again = client.get(f"{DT}/pairs/{pair}/assessments", headers=admin.headers).json()
+    row = next(one for one in again if one["axis"] == "modeling")
+    assert row["defects"] == {"글라스 크랙": {"test": "2026-03"}}
+    assert row["rung"] == "test_some"
+
+
 def test_현재값_표를_파일로_내려받는다(client: TestClient, admin: Signed) -> None:
     """엑셀에서 고치는 것이 가장 빠른 사람이 많다. 열 순서가 붙여넣기와 같아야 한다."""
     _pair(client, admin, f"방수 {uuid.uuid4().hex[:4]}", f"실링 해석 {uuid.uuid4().hex[:4]}")

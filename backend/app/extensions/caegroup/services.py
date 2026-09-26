@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import uuid
 from copy import deepcopy
+from datetime import UTC, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -1277,6 +1278,47 @@ def _space_error(wanted: str, twins: set[str]) -> str:
     return f"부서를 찾을 수 없습니다: {wanted or '(비어 있음)'}"
 
 
+def _names_of(raw: Any) -> list[str]:
+    """`·` 로 이어 적힌 이름들, 또는 이름 목록. **표는 둘 다 보낸다** — 한 칸에서 온 것은
+    글 하나이고, 열로 펼친 칸에서 온 것은 목록이다."""
+    if isinstance(raw, str):
+        return [one.strip() for one in raw.split("·") if one.strip()]
+    return [str(one).strip() for one in (raw or []) if str(one).strip()]
+
+
+def _this_month() -> str:
+    """재현 표시의 값 — **언제 재현됐나**(연월). 화면의 위젯도 이것을 적는다."""
+    return datetime.now(UTC).strftime("%Y-%m")
+
+
+def _defect_types_by_pair(
+    db: Session, rows: list[dict[str, Any]]
+) -> dict[uuid.UUID, list[str]]:
+    """연계마다 **시험 항목이 든 불량 유형 목록.**
+
+    유형은 시험에 붙는다(수단이 아니다) — 그래서 연계마다 다르고, 표에서 한 열로 세울 수
+    없다. 줄마다 목록을 실어 보내고, 화면은 그 줄의 드롭다운에 쓴다.
+    """
+    if not rows:
+        return {}
+    props = {
+        one.id: (one.properties or {})
+        for one in db.scalars(
+            select(ObjectInstance).where(
+                ObjectInstance.id.in_([one["subject_id"] for one in rows])
+            )
+        )
+    }
+    out: dict[uuid.UUID, list[str]] = {}
+    for one in rows:
+        raw = props.get(one["subject_id"], {}).get("defect_types")
+        if isinstance(raw, list):
+            out[one["id"]] = [str(each) for each in raw]
+        else:
+            out[one["id"]] = [str(raw)] if raw else []
+    return out
+
+
 def _rung_by_name(axis: dict[str, Any]) -> dict[str, str]:
     """사람이 읽는 이름 → 수준 key. **엑셀에는 이름이 적힌다** — key 를 적게 하면 안 된다."""
     out: dict[str, str] = {}
@@ -1307,9 +1349,13 @@ def sheet(db: Session, user: User, *, axis_key: str) -> dict[str, Any]:
             )
         }
     names = {one["key"]: one["label"] for one in axis["rungs"]}
+    # 매트릭스는 **불량 유형별 재현**도 함께 준다 — 유형 목록이 줄마다 다르므로 줄에 싣는다.
+    columns = axis.get("columns", []) if axis["kind"] == "matrix" else []
+    types = _defect_types_by_pair(db, rows) if columns else {}
     out: list[dict[str, Any]] = []
     for one in rows:
         row = saved.get(one["id"])
+        marks = (row.defects or {}) if row else {}
         out.append(
             {
                 "pair_id": one["id"],
@@ -1322,6 +1368,16 @@ def sheet(db: Session, user: User, *, axis_key: str) -> dict[str, Any]:
                 "rung": names.get(row.rung or "", "") if row else "",
                 "rungs": [names.get(key, key) for key in (row.rungs or [])] if row else [],
                 "note": row.note if row else "",
+                "defect_types": types.get(one["id"], []),
+                # 재현도 **이름으로** 준다 — 적힌 연월은 표에 내지 않는다(고치는 값이 아니다).
+                "defects": {
+                    str(col["key"]): " · ".join(
+                        name
+                        for name in types.get(one["id"], [])
+                        if (marks.get(name) or {}).get(col["key"])
+                    )
+                    for col in columns
+                },
             }
         )
     return {"axis": axis_key, "axis_label": axis["label"], "kind": axis["kind"], "rows": out}
@@ -1342,6 +1398,7 @@ def bulk_save(
     by_id = {str(one["id"]): one for one in known}
     by_label = {(one["subject_label"], one["agent_label"]): one for one in known}
     by_name = _rung_by_name(axis)
+    types = _defect_types_by_pair(db, known) if axis["kind"] == "matrix" else {}
     # 매트릭스는 이 표에서 **바탕(형상 · 거동)만** 고친다. 저장은 축 한 줄을 통째로 다시
     # 쓰기 때문에, 지금 든 불량 유형별 재현을 같이 넘기지 않으면 바탕을 고치는 일이
     # 「역량」 화면에서 채운 재현 표시를 지운다.
@@ -1408,14 +1465,9 @@ def bulk_save(
                 payload["rung"] = key
                 empty = False
         else:  # set · matrix 의 바탕
-            picked = raw.get("rungs")
-            names = (
-                [one.strip() for one in str(picked).split("·")]
-                if isinstance(picked, str)
-                else [str(one).strip() for one in (picked or [])]
-            )
-            keys = [by_name[one] for one in names if one and one in by_name]
-            unknown = [one for one in names if one and one not in by_name]
+            names = _names_of(raw.get("rungs"))
+            keys = [by_name[one] for one in names if one in by_name]
+            unknown = [one for one in names if one not in by_name]
             if unknown:
                 results.append(
                     {
@@ -1428,9 +1480,44 @@ def bulk_save(
             if keys:
                 payload["rungs"] = keys
                 empty = False
-                marks = held.get(found["id"])
-                if marks:
-                    payload["defects"] = marks
+            if axis["kind"] == "matrix":
+                marks = dict(held.get(found["id"]) or {})
+                sent = raw.get("defects")
+                if sent is None:
+                    # **안 보낸 줄은 지금 든 표시를 그대로 둔다.** 바탕만 고치는 길이 있고,
+                    # 저장이 축 한 줄을 통째로 다시 쓰기 때문에 같이 넘겨야 남는다.
+                    if keys and marks:
+                        payload["defects"] = marks
+                else:
+                    allowed = set(types.get(found["id"], []))
+                    built: dict[str, dict[str, str]] = {}
+                    strange: list[str] = []
+                    for col in axis.get("columns", []):
+                        for name in _names_of(sent.get(str(col["key"]))):
+                            if name not in allowed:
+                                strange.append(name)
+                                continue
+                            # **이미 있던 표시는 적힌 연월을 그대로 둔다** — 값은 「언제
+                            # 재현됐나」 이고, 표를 한 번 저장하는 일이 그것을 오늘로
+                            # 바꿔 버리면 안 된다.
+                            was = str((marks.get(name) or {}).get(str(col["key"])) or "")
+                            built.setdefault(name, {})[str(col["key"])] = was or _this_month()
+                    if strange:
+                        results.append(
+                            {
+                                "line": index + 1,
+                                "status": "error",
+                                "message": (
+                                    "이 시험 항목의 불량 유형이 아닙니다: "
+                                    f"{', '.join(sorted(set(strange)))}"
+                                ),
+                            }
+                        )
+                        continue
+                    # **보낸 줄은 표대로 맞춘다** — 체크를 지우는 길이 있어야 한다.
+                    payload["defects"] = built
+                    if built:
+                        empty = False
 
         if empty:
             # **빈 줄은 건너뛴다.** 엑셀에서 일부만 채워 보내는 일이 흔하다.

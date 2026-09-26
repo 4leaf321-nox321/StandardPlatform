@@ -465,7 +465,14 @@ def assessment_sheet_export(
     head = ["시험 항목", "시뮬레이션 해석", "담당 부서"]
     # 여러 항목을 고르는 축은 **항목마다 한 열**이고 켠 것은 `O` 다 — 화면의 표와 같은 모양.
     picks = D.pick_labels(axis) if body["kind"] in ("set", "matrix") else []
-    header = [*head, *(picks or [body["axis_label"]]), "근거"]
+    # 매트릭스는 **재현 열**(시험 · 시장)이 뒤에 선다 — 칸에는 불량 유형 이름을 이어 적는다.
+    marks = D.AXIS_BY_KEY[axis].get("columns", []) if body["kind"] == "matrix" else []
+    header = [
+        *head,
+        *(picks or [body["axis_label"]]),
+        *(f"{one['label']}" for one in marks),
+        "근거",
+    ]
     rows = [
         [
             one["subject_label"],
@@ -477,6 +484,7 @@ def assessment_sheet_export(
                 # 축 종류마다 채워 넣는 칸이 다르다 — 값 · 수준은 한 칸이다.
                 else [one["value"] if one["value"] is not None else one["rung"]]
             ),
+            *(one["defects"].get(str(col["key"]), "") for col in marks),
             one["note"],
         ]
         for one in body["rows"]

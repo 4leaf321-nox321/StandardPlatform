@@ -47,6 +47,8 @@ function picksOf(axis: AxisDef): string[] {
 
 /** 체크 열의 key — 열 순서가 축마다 달라, 저장할 때 **key 로 찾는다.** */
 const PICK = 'pick:'
+/** 재현 열의 key(시험 · 시장) — 칸에는 그 줄의 불량 유형 이름이 담긴다. */
+const MARK = 'mark:'
 
 /** 축 종류마다 고치는 칸이 다르다 — 식별 칸 셋은 같다.
  *
@@ -56,10 +58,16 @@ const PICK = 'pick:'
  * 여러 항목을 고르는 축(자동화 · 시험 대체 · 모델링 바탕)은 **항목마다 한 열**을 두고
  * 체크한다 — 한 칸에 이름을 이어 적게 하면 이름을 정확히 외워야 하고, 엑셀에서 채우기도
  * 어렵다.
+ *
+ * 매트릭스의 **불량 유형별 재현**은 재현마다(시험 · 시장) 한 열이고, 칸에서 **그 줄의**
+ * 불량 유형을 골라 담는다. 유형은 시험 항목에 붙어 줄마다 다르므로 열로 펼칠 수 없다 —
+ * 펼치면 열이 줄마다 달라지고, 한 표에 다 세우면 대부분이 빈 칸인 넓은 표가 된다.
  */
 function columnsFor(
   axis: AxisDef,
   known: { subjects: string[]; agents: string[] },
+  /** 시험 항목 이름 → 그 항목이 든 불량 유형 목록. 재현 칸의 드롭다운이 이것을 쓴다. */
+  defectTypes: Map<string, string[]> = new Map(),
 ): GridColumn[] {
   const head: GridColumn[] = [
     {
@@ -90,6 +98,14 @@ function columnsFor(
   return [
     ...head,
     ...picksOf(axis).map((label) => ({ key: `${PICK}${label}`, header: label, check: true })),
+    // 재현 열 — 칸에서 **그 줄의** 불량 유형을 고른다(첫 열이 시험 항목이다).
+    ...(axis.columns ?? []).map((col) => ({
+      key: `${MARK}${col.key}`,
+      header: col.label,
+      help: '불량 유형을 고릅니다',
+      multi: true,
+      optionsFor: (row: string[]) => defectTypes.get((row[0] ?? '').trim()) ?? [],
+    })),
     note,
   ]
 }
@@ -111,6 +127,8 @@ function rowsOf(sheet: Sheet, columns: GridColumn[]): string[][] {
         case 'note':
           return one.note
         default:
+          // 재현 열 — 지금 표시된 불량 유형 이름들.
+          if (column.key.startsWith(MARK)) return one.defects[column.key.slice(MARK.length)] ?? ''
           // 체크 열 — 지금 켜져 있으면 표시된 채로 시작한다.
           return one.rungs.includes(column.key.slice(PICK.length)) ? 'O' : ''
       }
@@ -271,11 +289,20 @@ export default function BulkPage() {
     })
   }, [capacitySheet.data])
 
+  // **시험 항목마다 불량 유형이 다르다** — 표가 줄마다 그 목록을 쓴다(서버가 줄에 실어 준다).
+  const defectTypes = useMemo(() => {
+    const out = new Map<string, string[]>()
+    for (const one of sheet.data?.rows ?? []) {
+      if (one.defect_types.length > 0) out.set(one.subject_label, one.defect_types)
+    }
+    return out
+  }, [sheet.data])
+
   const columns = useMemo(
-    () => (axis ? columnsFor(axis, known) : []),
+    () => (axis ? columnsFor(axis, known, defectTypes) : []),
     // 목록은 불러온 뒤 바뀌지 않는다 — 길이로만 본다(매 렌더 새 배열이라 값 비교가 안 된다).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [axis, known.subjects.length, known.agents.length],
+    [axis, known.subjects.length, known.agents.length, defectTypes],
   )
   const staffCols = useMemo(
     () => staffColumns(known),
@@ -357,6 +384,7 @@ export default function BulkPage() {
       const at = new Map(columns.map((one, index) => [one.key, index]))
       const cell = (row: string[], key: string) => (row[at.get(key) ?? -1] ?? '').trim()
       const checks = columns.filter((one) => one.check)
+      const marks = columns.filter((one) => one.key.startsWith(MARK))
       const body = rows
         .filter((row) => row.some((one) => one.trim() !== ''))
         .map((row) => ({
@@ -371,6 +399,14 @@ export default function BulkPage() {
                   rungs: checks
                     .filter((one) => isChecked(cell(row, one.key)))
                     .map((one) => one.header),
+                  // 재현은 **표대로 맞춘다** — 칸을 비우면 그 열의 표시가 없어진다.
+                  ...(marks.length > 0
+                    ? {
+                        defects: Object.fromEntries(
+                          marks.map((one) => [one.key.slice(MARK.length), cell(row, one.key)]),
+                        ),
+                      }
+                    : {}),
                 }),
           note: cell(row, 'note'),
         }))
@@ -537,9 +573,9 @@ export default function BulkPage() {
 
       {axis?.kind === 'matrix' && (
         <p className="text-muted-foreground rounded-md border p-3 text-sm">
-          {axis.label} 은 바탕(형상 · 거동)만 이 표에서 고칩니다. 불량 유형별 재현은 「역량」
-          화면에서 표로 입력하고, 이 표의 저장은 그 표시를 건드리지 않습니다 — 유형이 시험
-          항목마다 다르기 때문입니다.
+          바탕(형상 · 거동)은 체크하고, 재현은 열마다 <b>그 줄의 불량 유형</b>을 골라 담습니다
+          — 유형은 시험 항목에 붙어 줄마다 다릅니다. 재현이 처음 표시되는 줄에는 이번 달이
+          적히고, 이미 적힌 달은 그대로 둡니다. 수준은 이 표를 세어 정해집니다.
         </p>
       )}
       {(axis?.kind === 'set' || axis?.kind === 'matrix') && (

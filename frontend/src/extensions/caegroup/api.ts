@@ -209,6 +209,10 @@ export interface SheetRow {
   rung: string
   rungs: string[]
   note: string
+  /** 이 줄의 **시험 항목이 든 불량 유형 목록** — 유형은 시험에 붙어 줄마다 다르다. */
+  defect_types: string[]
+  /** 재현 열(시험 · 시장) key → 표시된 불량 유형 이름들(`·` 로 이어 적힌다). */
+  defects: Record<string, string>
 }
 
 export interface Sheet {
@@ -226,6 +230,12 @@ export interface BulkRow {
   rung?: string
   /** 고른 항목의 **이름들** — 표는 항목마다 열이 있어 목록으로 보낸다. */
   rungs?: string | string[]
+  /**
+   * 매트릭스의 **불량 유형별 재현** — 재현 열 key → 그 열에 표시할 유형 이름들.
+   *
+   * 안 보내면 지금 든 표시를 그대로 둔다. 보내면 그 줄은 표대로 맞춰진다.
+   */
+  defects?: Record<string, string>
   note?: string
 }
 

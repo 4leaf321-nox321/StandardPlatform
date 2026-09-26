@@ -50,6 +50,17 @@ export interface GridColumn {
    * 되므로 엑셀 흐름도 살아 있다), **목록에 없는 값은 칸에 표시된다.**
    */
   options?: string[]
+  /**
+   * **줄마다 고를 것이 다른 열** — 그 줄의 값으로 목록을 낸다.
+   *
+   * 불량 유형이 그렇다: 유형은 시험 항목에 붙어 있어 낙하 시험과 방수 시험이 서로 다른
+   * 목록을 낸다. 그런 열은 `options` 로 고정할 수 없다(고정하면 남의 유형이 목록에 뜨고,
+   * 그것을 고를 수 있으면 저장 자리에서 막힌다).
+   *
+   * `options` 보다 이것이 우선한다. 목록이 줄마다 달라 **드롭다운(`datalist`)은 붙지
+   * 않는다** — 고르기는 목록 단추가 한다.
+   */
+  optionsFor?: (row: string[]) => string[]
   /** 한 칸에 여럿을 적는 열(`·` 로 이어 적는다). 검사도 토큰마다 한다. */
   multi?: boolean
   /** 읽기용 칸 — 고쳐도 서버로 안 간다(무엇을 고치는 줄인지 알려 주는 자리). */
@@ -85,6 +96,11 @@ export function filledRows(rows: string[][]): number {
   return rows.filter((row) => row.some((cell) => cell.trim())).length
 }
 
+/** 이 줄에서 고를 수 있는 것 — 줄마다 다른 열(`optionsFor`)이 먼저다. */
+export function choicesOf(column: GridColumn, row: string[] = []): string[] | undefined {
+  return column.optionsFor ? column.optionsFor(row) : column.options
+}
+
 /** 체크 열에서 「켜짐」 으로 읽는 글자 — 사람마다 다른 것을 쓴다. */
 const CHECKED = new Set(['o', 'O', '예', 'v', 'V', 'y', 'Y', '1', 'true', 'x', 'X', '✓'])
 
@@ -93,10 +109,11 @@ export function isChecked(raw: string): boolean {
 }
 
 /** 이 칸의 값이 **등록된 것**인가. 목록이 없는 열은 늘 맞다고 본다. */
-export function unknownParts(column: GridColumn, raw: string): string[] {
+export function unknownParts(column: GridColumn, raw: string, row: string[] = []): string[] {
+  const choices = choicesOf(column, row)
   // 체크 열은 무엇을 적어도 켜짐 · 꺼짐으로만 읽는다 — 틀릴 수가 없다.
-  if (column.check || !column.options || !raw.trim()) return []
-  const allowed = new Set(column.options.map((one) => one.trim()))
+  if (column.check || !choices || !raw.trim()) return []
+  const allowed = new Set(choices.map((one) => one.trim()))
   const parts = column.multi ? raw.split('·') : [raw]
   return parts.map((one) => one.trim()).filter((one) => one && !allowed.has(one))
 }
@@ -226,7 +243,8 @@ export function PasteGrid({
   const gridId = useId()
   const wrongCount = rows.reduce(
     (sum, row) =>
-      sum + columns.reduce((each, column, at) => each + unknownParts(column, row[at] ?? '').length, 0),
+      sum +
+      columns.reduce((each, column, at) => each + unknownParts(column, row[at] ?? '', row).length, 0),
     0,
   )
 
@@ -278,9 +296,10 @@ export function PasteGrid({
     <div className="space-y-2">
       {header}
 
-      {/* 목록이 있는 열의 드롭다운. `<datalist>` 라 붙여넣기 · 손 입력을 막지 않는다. */}
+      {/* 목록이 있는 열의 드롭다운. `<datalist>` 라 붙여넣기 · 손 입력을 막지 않는다.
+          **줄마다 다른 열은 여기 없다** — 목록이 줄마다 달라 하나로 못 묶는다. */}
       {columns
-        .filter((column) => column.options?.length)
+        .filter((column) => !column.optionsFor && column.options?.length)
         .map((column) => (
           <datalist key={column.key} id={`${gridId}-${column.key}`}>
             {(column.options ?? []).map((one) => (
@@ -341,7 +360,8 @@ export function PasteGrid({
               <tr key={atRow} className="border-t">
                 <td className="text-muted-foreground px-1 text-right tabular-nums">{atRow + 1}</td>
                 {columns.map((column, atColumn) => {
-                  const wrong = unknownParts(column, row[atColumn] ?? '')
+                  const wrong = unknownParts(column, row[atColumn] ?? '', row)
+                  const choices = choicesOf(column, row)
                   if (column.check) {
                     return (
                       <td key={column.key} className="w-16 p-0.5 text-center">
@@ -374,7 +394,11 @@ export function PasteGrid({
                           }
                           // 목록이 있으면 **드롭다운**으로 고른다 — 손으로 치는 것도 막지
                           // 않는다(엑셀에서 붙여넣기가 그대로 되어야 한다).
-                          list={column.options ? `${gridId}-${column.key}` : undefined}
+                          list={
+                          column.options && !column.optionsFor
+                            ? `${gridId}-${column.key}`
+                            : undefined
+                        }
                           readOnly={column.readOnly}
                           value={row[atColumn] ?? ''}
                           onPaste={(event) => paste(event, atRow, atColumn)}
@@ -382,10 +406,10 @@ export function PasteGrid({
                         />
                         {/* 여럿 적는 칸은 **눌러서 담는다.** 드롭다운으로는 하나를 고르는
                             순간 칸이 그 이름으로 바뀌어 둘째를 담을 길이 없다. */}
-                        {column.multi && column.options?.length && !column.readOnly ? (
+                        {column.multi && choices?.length && !column.readOnly ? (
                           <MultiPick
                             name={`${atRow + 1}번 줄 ${column.header}`}
-                            options={column.options}
+                            options={choices}
                             value={row[atColumn] ?? ''}
                             onChange={(next) => edit(atRow, atColumn, next)}
                           />

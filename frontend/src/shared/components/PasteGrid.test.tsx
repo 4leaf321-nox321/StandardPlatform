@@ -191,6 +191,59 @@ describe('PasteGrid — 여럿 고르는 칸', () => {
   })
 })
 
+describe('PasteGrid — 줄마다 다른 목록', () => {
+  // 불량 유형은 **시험 항목에 붙는다** — 낙하 시험과 방수 시험이 서로 다른 목록을 낸다.
+  // 열로 고정하면 남의 유형이 목록에 뜨고, 그것을 고를 수 있으면 저장 자리에서 막힌다.
+  const TYPES: Record<string, string[]> = {
+    '낙하 시험': ['글라스 크랙', '프레임 찍힘'],
+    '방수 시험': ['실링 누수'],
+  }
+  const COLUMNS: GridColumn[] = [
+    { key: 'subject', header: '시험 항목' },
+    {
+      key: 'mark',
+      header: '시험 재현',
+      multi: true,
+      optionsFor: (row) => TYPES[(row[0] ?? '').trim()] ?? [],
+    },
+  ]
+
+  it('그 줄의 목록만 뜬다', async () => {
+    render(
+      <PasteGrid
+        columns={COLUMNS}
+        rows={[
+          ['낙하 시험', ''],
+          ['방수 시험', ''],
+        ]}
+        onRows={vi.fn()}
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: '1번 줄 시험 재현 고르기' }))
+    expect(screen.getByRole('button', { name: '글라스 크랙' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '실링 누수' })).not.toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(screen.getByRole('button', { name: '2번 줄 시험 재현 고르기' }))
+    expect(screen.getByRole('button', { name: '실링 누수' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '글라스 크랙' })).not.toBeInTheDocument()
+  })
+
+  it('그 줄의 것이 아닌 이름은 칸에서 붉게 표시된다', () => {
+    render(
+      <PasteGrid
+        columns={COLUMNS}
+        rows={[
+          ['낙하 시험', '글라스 크랙'],
+          ['방수 시험', '글라스 크랙'],
+        ]}
+        onRows={vi.fn()}
+      />,
+    )
+    expect(screen.getByLabelText('1번 줄 시험 재현')).toHaveAttribute('aria-invalid', 'false')
+    expect(screen.getByLabelText('2번 줄 시험 재현')).toHaveAttribute('aria-invalid', 'true')
+  })
+})
+
 describe('PasteGrid — 체크 열', () => {
   // 여러 항목을 고르는 축(자동화 · 시험 대체)은 **항목마다 한 열**이다. 한 칸에
   // 「전처리 자동화 · 실행 자동화」 를 적게 하면 이름을 정확히 외워야 한다.

@@ -11200,6 +11200,30 @@
             "title": "Rungs",
             "default": ""
           },
+          "defects": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "items": {
+                        "type": "string"
+                      },
+                      "type": "array"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Defects"
+          },
           "note": {
             "type": "string",
             "title": "Note",
@@ -18736,6 +18760,20 @@
           "note": {
             "type": "string",
             "title": "Note"
+          },
+          "defect_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Defect Types"
+          },
+          "defects": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Defects"
           }
         },
         "type": "object",
