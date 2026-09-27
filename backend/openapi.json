@@ -8479,6 +8479,32 @@
         }
       }
     },
+    "/api/server/extension-api": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Extension Api",
+        "description": "켠 확장의 **부를 수 있는 자리 목록** — 이름 · 경로 · 한 줄 설명 · 받는 칸.\n\n확장마다 도구를 만들지 않기 위해 있다(MCP 의 `extensions_schema` 가 이것을 읽는다).\n도구 목록이 길어질수록 그것을 읽는 쪽은 엉뚱한 것을 고르므로, **부를 수 있는 것이\n무엇인지는 목록 하나가 말하고** 부르는 일은 한 도구가 한다.\n\n**꺼진 확장은 안 나온다.** 번들에는 다 들어 있고 문이 404 로 답하는데, 목록에 보이면\n그것을 부르는 쪽이 「있는데 안 된다」 로 읽는다.\n\n누구나 읽는다 — 목록을 아는 것이 권한을 넓히지 않는다. 그 자리를 부를 수 있는지는\n부를 때 서버가 판정한다.",
+        "operationId": "extension_api_api_server_extension_api_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ExtensionApiOut"
+                  },
+                  "type": "array",
+                  "title": "Response Extension Api Api Server Extension Api Get"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/server/extensions": {
       "get": {
         "tags": [
@@ -13003,6 +13029,66 @@
           "group"
         ],
         "title": "ExportRequest"
+      },
+      "ExtensionApiOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "endpoints": {
+            "items": {
+              "$ref": "#/components/schemas/ExtensionEndpointOut"
+            },
+            "type": "array",
+            "title": "Endpoints"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "endpoints"
+        ],
+        "title": "ExtensionApiOut",
+        "description": "켠 확장 하나와 그 자리들."
+      },
+      "ExtensionEndpointOut": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "query": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Query"
+          },
+          "body": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Body"
+          }
+        },
+        "type": "object",
+        "required": [
+          "method",
+          "path",
+          "summary"
+        ],
+        "title": "ExtensionEndpointOut",
+        "description": "확장의 부를 수 있는 자리 하나 — **경로는 확장 뿌리부터.**"
       },
       "ExtensionOut": {
         "properties": {

@@ -12,8 +12,9 @@ DB 플래그 · 시스템 관리자 화면 · 감사 기록.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
+from typing import Any
 
 from fastapi import Depends, Request
 from sqlalchemy import select
@@ -48,6 +49,74 @@ def _rows(db: Session) -> dict[str, ExtensionState]:
 def _default_on(name: str) -> bool:
     """행이 없을 때의 답 — `.env` 의 `EXTENSIONS`."""
     return name in get_settings().extension_names
+
+
+#: 확장 경로의 뿌리 — `/api/ext/<이름>/…`.
+EXTENSION_ROOT = "/api/ext/"
+
+
+def _fields(schema: dict[str, Any], components: dict[str, Any]) -> list[str]:
+    """본문 칸 이름들 — 필수는 뒤에 `*`. **한 단만 펼친다.**
+
+    스키마를 전부 펼쳐 내려 주면 목록이 본문보다 길어지고, 도구를 부르는 쪽은 그것을 다
+    읽지 않는다. 이름과 필수 여부까지가 「무엇을 보내야 하나」 에 답하고, 나머지는 서버가
+    거절하며 말해 준다(오류 문구에 무엇을 고칠지 적혀 있다).
+    """
+    ref = schema.get("$ref")
+    if isinstance(ref, str):
+        schema = components.get(ref.rsplit("/", 1)[-1], {})
+    if schema.get("type") == "array":
+        return ["[목록]"]
+    required = set(schema.get("required") or [])
+    return [
+        f"{name}*" if name in required else name for name in (schema.get("properties") or {})
+    ]
+
+
+def extension_api(schema: dict[str, Any], names: Sequence[str]) -> list[dict[str, Any]]:
+    """켠 확장의 엔드포인트 목록 — **OpenAPI 에서 깎아 낸다.**
+
+    확장마다 도구를 만들지 않는 이유와 같다: 도구 목록이 길어질수록 그것을 읽는 쪽은
+    엉뚱한 것을 고른다. 부를 수 있는 것이 무엇인지는 **목록 하나**가 말하고, 부르는 일은
+    한 도구가 한다(MCP 의 `extensions_schema` · `extension_call`).
+
+    **꺼진 확장은 내지 않는다.** 번들에는 다 들어 있고 문이 404 로 답하는데, 목록에 보이면
+    그것을 부르는 쪽이 「있는데 안 된다」 로 읽는다.
+    """
+    components = (schema.get("components") or {}).get("schemas") or {}
+    out: list[dict[str, Any]] = []
+    for name in names:
+        root = f"{EXTENSION_ROOT}{name}/"
+        endpoints: list[dict[str, Any]] = []
+        for path, methods in (schema.get("paths") or {}).items():
+            if not path.startswith(root):
+                continue
+            for method, one in methods.items():
+                if method.upper() not in ("GET", "POST", "PUT", "PATCH", "DELETE"):
+                    continue
+                # 독스트링 **첫 줄**이 그 자리의 한 줄 설명이다(summary 는 함수 이름이다).
+                told = str(one.get("description") or "").strip().split("\n")[0]
+                body = one.get("requestBody") or {}
+                json_body = ((body.get("content") or {}).get("application/json") or {}).get(
+                    "schema"
+                ) or {}
+                endpoints.append(
+                    {
+                        "method": method.upper(),
+                        # 확장 뿌리부터 적는다 — 부르는 쪽이 이름을 두 번 적지 않게.
+                        "path": path[len(root) :],
+                        "summary": told or str(one.get("summary") or ""),
+                        "query": [
+                            f"{each['name']}*" if each.get("required") else str(each["name"])
+                            for each in (one.get("parameters") or [])
+                            if each.get("in") == "query"
+                        ],
+                        "body": _fields(json_body, components) if json_body else [],
+                    }
+                )
+        endpoints.sort(key=lambda one: (one["path"], one["method"]))
+        out.append({"name": name, "endpoints": endpoints})
+    return out
 
 
 def enabled_names(db: Session) -> tuple[str, ...]:

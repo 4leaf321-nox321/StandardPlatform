@@ -14,7 +14,7 @@ from __future__ import annotations
 import shutil
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Request
 from sqlalchemy.orm import Session
 
 from app import schema_version, version
@@ -25,6 +25,7 @@ from app.modules.server import services
 from app.modules.server.schemas import (
     BackupOut,
     DiskOut,
+    ExtensionApiOut,
     ExtensionOut,
     ExtensionPatchIn,
     MaintenanceItemOut,
@@ -116,6 +117,30 @@ def enabled_extensions(
     시스템 관리자만이 아니라 **누구나** 읽는다. 메뉴는 모든 사람이 그린다.
     """
     return list(services.enabled_names(db))
+
+
+@router.get("/extension-api", response_model=list[ExtensionApiOut])
+def extension_api(
+    request: Request,
+    _: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[ExtensionApiOut]:
+    """켠 확장의 **부를 수 있는 자리 목록** — 이름 · 경로 · 한 줄 설명 · 받는 칸.
+
+    확장마다 도구를 만들지 않기 위해 있다(MCP 의 `extensions_schema` 가 이것을 읽는다).
+    도구 목록이 길어질수록 그것을 읽는 쪽은 엉뚱한 것을 고르므로, **부를 수 있는 것이
+    무엇인지는 목록 하나가 말하고** 부르는 일은 한 도구가 한다.
+
+    **꺼진 확장은 안 나온다.** 번들에는 다 들어 있고 문이 404 로 답하는데, 목록에 보이면
+    그것을 부르는 쪽이 「있는데 안 된다」 로 읽는다.
+
+    누구나 읽는다 — 목록을 아는 것이 권한을 넓히지 않는다. 그 자리를 부를 수 있는지는
+    부를 때 서버가 판정한다.
+    """
+    return [
+        ExtensionApiOut(**one)
+        for one in services.extension_api(request.app.openapi(), services.enabled_names(db))
+    ]
 
 
 @router.get("/extensions", response_model=list[ExtensionOut])

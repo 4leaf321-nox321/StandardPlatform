@@ -16,6 +16,15 @@ REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BACKEND="$REPO/backend"
 FRONT="$REPO/frontend"
 PY="${PY:-$BACKEND/.venv/bin/python}"
+# MCP 는 환경을 가른다(`mcp` 를 백엔드에 깔면 시험이 쓰는 HTTP 스택이 바뀐다). 저장소
+# 안의 것을 먼저 본다 — `/tmp` 에 두면 날이 바뀔 때 사라지고, 그때 이 시험이 조용히
+# 건너뛰어진다(실측).
+MCP_PY="${MCP_PY:-}"
+if [ -z "$MCP_PY" ]; then
+  for candidate in "$REPO/mcp_server/venv/bin/python" /tmp/mcpvenv/bin/python; do
+    [ -x "$candidate" ] && MCP_PY="$candidate" && break
+  done
+fi
 MCP_PY="${MCP_PY:-/tmp/mcpvenv/bin/python}"
 LOGS="$(mktemp -d)"
 FAILED=()
@@ -87,7 +96,7 @@ if [ -x "$MCP_PY" ]; then
   mcp_tests() { cd "$REPO" && "$MCP_PY" -m pytest mcp_server/tests pipeline/tests -q; }
   step "pytest (mcp_server · pipeline)" mcp_tests
 else
-  printf '  – 건너뜀 (%s 없음 — python -m venv /tmp/mcpvenv 로 만든다)\n' "$MCP_PY"
+  printf '  – 건너뜀 (%s 없음 — mcp_server 에서 python3 -m venv venv 로 만든다)\n' "$MCP_PY"
   SKIPPED+=("mcp_server · pipeline 시험")
 fi
 

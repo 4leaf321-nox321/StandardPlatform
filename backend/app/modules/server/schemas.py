@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class DiskOut(BaseModel):
@@ -68,6 +68,27 @@ class ExtensionOut(BaseModel):
 
 class ExtensionPatchIn(BaseModel):
     enabled: bool
+
+
+class ExtensionEndpointOut(BaseModel):
+    """확장의 부를 수 있는 자리 하나 — **경로는 확장 뿌리부터.**"""
+
+    method: str
+    path: str
+    """`dt/pairs` 처럼 확장 이름 뒤부터. 앞에 `/api/ext/<이름>/` 이 붙는다."""
+    summary: str
+    """그 자리의 한 줄 설명(독스트링 첫 줄)."""
+    query: list[str] = Field(default_factory=list)
+    """물음표 뒤에 붙는 것들 — 필수는 뒤에 `*`."""
+    body: list[str] = Field(default_factory=list)
+    """본문 칸 이름들 — 필수는 뒤에 `*`. 한 단만 펼친다."""
+
+
+class ExtensionApiOut(BaseModel):
+    """켠 확장 하나와 그 자리들."""
+
+    name: str
+    endpoints: list[ExtensionEndpointOut]
 
 
 class MaintenanceItemOut(BaseModel):

@@ -648,3 +648,77 @@ def test_트리와_감사_기록을_도구로도_본다(bot: Bot) -> None:
     recent = bot.call(server.audit_recent, action="object.create", limit=5)
     assert recent["total"] >= 1
     assert recent["items"][0]["action"] == "object.create"
+
+
+def test_확장_기능도_도구_둘로_닿는다(client: TestClient, admin: Signed, bot: Bot) -> None:
+    """**확장마다 도구를 만들지 않는다.** 도구 목록이 길어질수록 그것을 읽는 쪽은 엉뚱한
+    것을 고른다 — 부를 수 있는 것은 목록 하나가 말하고(`extensions_schema`), 부르는 일은
+    한 도구가 한다(`extension_call`).
+
+    꺼진 확장은 목록에 없고 불러도 404 다. 쓰기는 그 확장의 범위를 가진 토큰만 한다.
+    """
+    client.patch(
+        "/api/server/extensions/caegroup", json={"enabled": True}, headers=admin.headers
+    )
+    try:
+        listed = bot.call(server.extensions_schema)
+        mine = next(one for one in listed if one["name"] == "caegroup")
+        paths = {(one["method"], one["path"]) for one in mine["endpoints"]}
+        assert ("GET", "dt/pairs") in paths and ("PUT", "dt/assessments/bulk") in paths
+        # 한 줄 설명은 **독스트링 첫 줄**이다(자동 생성된 summary 가 아니다).
+        defs_line = next(
+            one
+            for one in mine["endpoints"]
+            if one["path"] == "dt/defs" and one["method"] == "GET"
+        )
+        assert "정의" in defs_line["summary"]
+        # 받는 칸도 함께 온다 — 무엇을 보내야 하는지 짐작하지 않게.
+        bulk = next(one for one in mine["endpoints"] if one["path"] == "dt/assessments/bulk")
+        assert "axis*" in bulk["body"] and "rows*" in bulk["body"]
+        pairs = next(
+            one
+            for one in mine["endpoints"]
+            if one["path"] == "dt/pairs" and one["method"] == "GET"
+        )
+        assert pairs["query"] == ["workspace"]
+
+        # 읽기는 `read` 로 된다.
+        body = bot.call(server.extension_call, "caegroup", "dt/defs")
+        assert body["sector"] == "simulation"
+
+        # **쓰기는 그 확장의 범위가 있어야 한다** — 등록하지 않은 경로는 아무 범위로도 못
+        # 고친다(모르는 것은 막는다).
+        with pytest.raises(ToolError) as denied:
+            bot.call(server.extension_call, "caegroup", "dt/setup", method="POST", body={})
+        assert "caegroup:write" in str(denied.value)
+
+        made = client.post(
+            "/api/auth/tokens",
+            json={"name": _uniq("dt"), "scopes": ["read", "caegroup:write"]},
+            headers=admin.headers,
+        )
+        assert made.status_code == 201, made.text
+        writer = Bot(made.json()["token"])
+        ready = writer.call(server.extension_call, "caegroup", "dt/setup", method="POST")
+        assert ready["ready"] is True
+
+        # 꺼면 목록에서도 사라지고, 불러도 문이 404 로 답한다.
+        client.patch(
+            "/api/server/extensions/caegroup", json={"enabled": False}, headers=admin.headers
+        )
+        assert all(one["name"] != "caegroup" for one in bot.call(server.extensions_schema))
+        with pytest.raises(ToolError) as gone:
+            bot.call(server.extension_call, "caegroup", "dt/defs")
+        assert "404" in str(gone.value) or "없" in str(gone.value)
+    finally:
+        client.patch(
+            "/api/server/extensions/caegroup", json={"enabled": False}, headers=admin.headers
+        )
+
+
+def test_확장_호출은_뿌리_밖으로_안_나간다(bot: Bot) -> None:
+    """경로를 글자로 받는 도구다 — `..` 나 절대 주소가 통하면 이 도구가 확장과 무관한
+    자리를 부르는 문이 된다(코어의 쓰기까지 닿는다)."""
+    for bad in ("../../ontology/schema", "https://example.test/x", "dt/pairs?workspace=x"):
+        got = asyncio.run(server.extension_call(bot.ctx, "caegroup", bad))
+        assert "error" in got, bad

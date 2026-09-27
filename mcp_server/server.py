@@ -68,6 +68,7 @@ mcp = FastMCP(
         "  여러 타입을 건너뛰는 물음       rdf_query (SPARQL)\n"
         "  여러 행 · 묶음을 넣는다         objects_import · bundle_import → job_apply\n"
         "  정의를 바꾼다                   ontology_import (apply=false 로 먼저)\n"
+        "  이 설치에만 있는 기능           extensions_schema → extension_call\n"
         "\n"
         "지켜야 할 셋:\n"
         "1. **이름은 해소하고 쓴다.** `object_resolve` 가 `candidates` 를 주면 고르지 "
@@ -379,6 +380,7 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
       - `bulk` 여러 행 한 번에(upsert)
       - `relations` 객체 잇기(근거)
       - `sparql` 여러 타입을 건너뛰어 잇는 물음 — 질의어로
+      - `extensions` 이 설치에만 있는 기능(확장) — 무엇을 부를 수 있나
 
     한 번에 다 받지 마라 — 필요한 주제만 받는 게 싸다."""
     version, secs = _guide_sections()
@@ -1081,3 +1083,88 @@ if __name__ == "__main__":
             )
 
     mcp.run(transport="streamable-http")
+
+
+# --- 확장 기능 ---------------------------------------------------------------
+#
+# **확장마다 도구를 만들지 않는다.** 도구 20개에 확장 셋이 붙으면 목록이 40개가 되고,
+# 목록이 길어질수록 모델은 엉뚱한 것을 고른다 — 이 파일 머리의 규칙과 같은 이유다.
+# 부를 수 있는 것이 무엇인지는 `extensions_schema` 가 말하고, 부르는 일은 한 도구가 한다.
+
+#: 확장 이름에 허용되는 글자 — 경로를 짓는 값이라 좁게 본다.
+_EXT_NAME = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
+
+#: 부를 수 있는 메서드. 이 밖은 거절한다 — 도구가 무엇이든 보낼 수 있으면 안 된다.
+_EXT_METHODS = ("GET", "POST", "PUT", "PATCH", "DELETE")
+
+
+@tool()
+async def extensions_schema(ctx: Context) -> Any:
+    """이 설치에서 **켠 확장**과 그 안에서 부를 수 있는 자리 — 확장 기능의 첫 걸음.
+
+    확장은 이 설치에만 있는 기능 묶음이다(예: 디지털 트윈 역량 — 연계 · 평가 · 인력 ·
+    인프라). **`extension_call` 로 부르기 전에 여기서 경로를 본다** — 짐작한 경로는 404 다.
+
+    돌려주는 것: 확장 이름마다 `endpoints[]` = `{method, path, summary, query, body}`.
+    `path` 는 확장 뿌리부터이고(`dt/pairs`), 이름 뒤에 `*` 는 **필수**다.
+
+    꺼진 확장은 목록에 없다 — 부를 수도 없다(문이 404 로 답한다).
+    """
+    return await _get(ctx, "/api/server/extension-api")
+
+
+@tool()
+async def extension_call(
+    ctx: Context,
+    extension: str,
+    path: str,
+    method: str = "GET",
+    query: dict[str, Any] | None = None,
+    body: dict[str, Any] | None = None,
+) -> Any:
+    """확장의 자리 하나를 부른다 — **경로는 `extensions_schema` 가 말한 그대로.**
+
+    `extension` 은 확장 이름(`caegroup`), `path` 는 그 뿌리부터의 경로(`dt/pairs`)다.
+    `query` 는 물음표 뒤에 붙고, `body` 는 본문이 있는 메서드에만 쓴다.
+
+    - **검증 · 권한은 서버가 한다.** 내 토큰의 권한으로 도는 것이고, 오류 문구에 무엇을
+      고쳐야 하는지가 적혀 있다 — 그것을 그대로 사람에게 전한다.
+    - **되돌릴 수 없는 것은 사람에게 먼저 묻는다**(DELETE, 그리고 「일괄」 이 붙은 자리).
+      표를 한 번에 저장하는 자리는 한 번에 여러 줄을 바꾼다.
+    - 파일을 주는 자리(내려받기)는 여기서 받지 않는다 — 화면에서 내려받는다.
+    """
+    name = (extension or "").strip()
+    if not _EXT_NAME.match(name):
+        return {"error": f"확장 이름이 아닙니다: {extension!r}"}
+    way = (method or "GET").strip().upper()
+    if way not in _EXT_METHODS:
+        allowed = ", ".join(_EXT_METHODS)
+        return {"error": f"부를 수 없는 메서드입니다: {method!r} (쓸 수 있는 것: {allowed})"}
+    # **뿌리 밖으로 못 나간다.** 경로를 문자로 받는 자리라, `..` 나 절대 주소가 들어오면
+    # 이 도구가 확장과 무관한 자리를 부르는 길이 된다.
+    tail = (path or "").strip().lstrip("/")
+    if "://" in tail or ".." in tail or "?" in tail:
+        return {
+            "error": f"경로에 쓸 수 없는 것이 들어 있습니다: {path!r}"
+            " (물음표 뒤는 query 로 줍니다)"
+        }
+    target = f"/api/ext/{name}/{tail}".rstrip("/")
+
+    async with _client(120) as client:
+        response = await client.request(
+            way,
+            target,
+            params=query or None,
+            json=body if way in ("POST", "PUT", "PATCH") else None,
+            headers=_forward_headers(ctx),
+        )
+    kind = response.headers.get("content-type", "")
+    if response.status_code < 400 and "json" not in kind:
+        # 엑셀 · CSV 를 주는 자리다. 바이트를 도구 결과로 흘리면 대화가 쓰레기로 찬다.
+        size = len(response.content)
+        return {
+            "ok": True,
+            "message": f"파일 응답입니다({kind or '형식 미지정'}, {size}바이트)"
+            " — 내려받기는 화면에서 합니다.",
+        }
+    return _unwrap(response)

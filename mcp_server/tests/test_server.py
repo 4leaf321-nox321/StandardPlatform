@@ -60,6 +60,8 @@ TOOLS = {
     "job_status",
     "job_apply",
     "jobs_list",
+    "extensions_schema",
+    "extension_call",
 }
 
 
@@ -304,3 +306,62 @@ def test_자취를_켜도_도구는_그대로_선다(tmp_path: Any) -> None:
     line = json.loads(path.read_text(encoding="utf-8").splitlines()[0])
     assert line["tool"] == "object_resolve" and line["match"] == "none"
     assert "없는회사" not in path.read_text(encoding="utf-8")
+
+
+def test_확장_호출은_그_확장_뿌리로만_간다() -> None:
+    """경로를 글자로 받는 도구다 — **뿌리 밖으로 나가는 길이 있으면** 이 도구가 확장과
+    무관한 자리를 부르는 문이 된다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"rows": []}))
+    got = asyncio.run(
+        server.extension_call(
+            _ctx("Bearer t"), "caegroup", "dt/pairs", query={"workspace": "cae"}
+        )
+    )
+    assert got == {"rows": []}
+    assert seen[0].url.path == "/api/ext/caegroup/dt/pairs"
+    assert seen[0].url.params["workspace"] == "cae"
+    assert seen[0].headers["authorization"] == "Bearer t"
+
+    for bad in ("../../objects/mach", "https://elsewhere/x", "dt/pairs?workspace=cae"):
+        got = asyncio.run(server.extension_call(_ctx("Bearer t"), "caegroup", bad))
+        assert "error" in got, bad
+    # 이름도 경로를 짓는 값이다.
+    assert "error" in asyncio.run(server.extension_call(_ctx("Bearer t"), "cae/group", "dt"))
+    # 메서드는 표에 있는 것만.
+    assert "error" in asyncio.run(
+        server.extension_call(_ctx("Bearer t"), "caegroup", "dt/pairs", method="OPTIONS")
+    )
+    # 막힌 것은 **부르기 전에** 막는다 — 위 다섯 번에 요청이 나가지 않았다.
+    assert len(seen) == 1
+
+
+def test_본문은_본문_있는_메서드에만_실린다() -> None:
+    """GET 에 본문을 실으면 프록시가 자르거나 서버가 거절한다 — 부르는 쪽이 그것을 모른다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"ok": True}))
+    asyncio.run(
+        server.extension_call(
+            _ctx("Bearer t"),
+            "caegroup",
+            "dt/assessments/bulk",
+            method="PUT",
+            body={"axis": "a"},
+        )
+    )
+    assert json.loads(seen[0].content) == {"axis": "a"}
+    asyncio.run(
+        server.extension_call(_ctx("Bearer t"), "caegroup", "dt/defs", body={"버릴": "것"})
+    )
+    assert not seen[1].content
+
+
+def test_파일을_주는_자리는_바이트를_안_흘린다() -> None:
+    """엑셀을 주는 자리다. 바이트를 도구 결과로 흘리면 대화가 쓰레기로 찬다."""
+    _serve(
+        lambda _r: httpx.Response(
+            200, content=b"a,b\n1,2\n", headers={"content-type": "text/csv; charset=utf-8"}
+        )
+    )
+    got = asyncio.run(
+        server.extension_call(_ctx("Bearer t"), "caegroup", "dt/assessments/sheet/export")
+    )
+    assert got["ok"] is True and "파일 응답" in got["message"]

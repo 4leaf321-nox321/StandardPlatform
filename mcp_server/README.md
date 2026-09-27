@@ -71,7 +71,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 
 스텁엔 안내 본문이 없으므로 **한 번 깔면 다시 복사할 일이 없다.**
 
-## 도구 서른셋
+## 도구 서른다섯
 
 | 도구 | 무엇 |
 | --- | --- |
@@ -91,6 +91,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `job_status` · `job_apply` · `jobs_list` | 작업이 어디까지 됐나 · 사람이 확인한 계획 적용 · 내 작업과 워커 생존 |
 | `relation_add` · `relation_update` · `relation_remove` · `relations_import` | 객체 둘을 잇기 (**근거를 적는다**) · 근거 고치기 · 끊기(틀리게 이은 것을 되돌리는 자리) |
 | `datasources_list` · `datasource_sync` | 바깥 시스템(OData)에서 읽어 채우기 — 계획 먼저 |
+| `extensions_schema` · `extension_call` | **이 설치에만 있는 기능**(확장)의 자리 목록 · 그 자리 부르기. 쓰기는 그 확장의 범위를 가진 토큰만 |
 
 ### 왜 타입마다 도구를 안 만드나
 
