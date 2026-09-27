@@ -207,9 +207,44 @@ function infraKeys(kind: CapacityWhat): string[] {
   return infraColumns(kind, { workspaces: [], units: [], purposes: [] }).map((one) => one.key)
 }
 
+/**
+ * 불량 유형 표 — **목록을 늘리는 자리.** 시험 항목마다 한 줄이다.
+ *
+ * 유형은 시험 항목의 속성이라 저장은 **코어의 객체 저장**이 한다(검증 · 이력 · 권한이 거기
+ * 있다). 이 표는 그 속성을 여러 건 한 번에 고치는 길일 뿐이다.
+ *
+ * 「불량 유형」 칸의 목록은 **이미 쓰는 이름**이다 — 고르기 편하려고 있는 것이고, 새 이름도
+ * 그냥 적는다(그래서 붉게 뜨지 않는다).
+ */
+function defectColumns(known: { subjects: string[]; types: string[] }): GridColumn[] {
+  return [
+    {
+      key: 'subject_label',
+      header: '시험 항목',
+      help: '이 이름으로 찾습니다',
+      required: true,
+      options: known.subjects,
+    },
+    {
+      key: 'defect_types',
+      header: '불량 유형',
+      help: '단추로 이미 쓰는 이름을 고르거나 새로 적습니다',
+      options: known.types,
+      multi: true,
+      free: true,
+    },
+    {
+      key: 'marked',
+      header: '재현 표시',
+      help: '읽기용 — 표시가 있는 유형입니다. 지우면 그 표시는 셈에서 빠집니다',
+      readOnly: true,
+    },
+  ]
+}
+
 export default function BulkPage() {
   const defs = useResource(() => dtApi.defs(), [])
-  const [what, setWhat] = useState<'axis' | 'staff' | 'infra'>('axis')
+  const [what, setWhat] = useState<'axis' | 'staff' | 'infra' | 'defects'>('axis')
   const [infraKind, setInfraKind] = useState<CapacityWhat>('sw')
   const [axisKey, setAxisKey] = useState<string | null>(null)
   const axis = defs.data?.axes.find((one) => one.key === (axisKey ?? defs.data?.axes[0]?.key)) ?? null
@@ -238,6 +273,12 @@ export default function BulkPage() {
     workspaces: (workspaces.data ?? []).map((one) => one.name),
   }
   const capacitySheet = useResource(() => dtApi.capacitySheet(), [])
+  // 불량 유형 탭에서만 받는다 — **어느 유형에 재현 표시가 있나**를 알려 주려고(지우면 셈에서
+  // 빠진다). 다른 탭에서는 부르지 않는다.
+  const marksSheet = useResource(
+    () => (what === 'defects' ? dtApi.sheet('modeling') : Promise.resolve(null)),
+    [what],
+  )
   const [rows, setRows] = useState<string[][]>([])
   const [staffRows, setStaffRows] = useState<string[][]>([])
   // 표마다 따로 든다 — 탭을 옮겨도 고치던 값이 남는다(표마다 따로 저장한다).
@@ -246,6 +287,7 @@ export default function BulkPage() {
     hw: [],
     base: [],
   })
+  const [defectRows, setDefectRows] = useState<string[][]>([])
   const [results, setResults] = useState<BulkResult[] | null>(null)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState<Error | null>(null)
@@ -297,6 +339,56 @@ export default function BulkPage() {
     }
     return out
   }, [sheet.data])
+
+  // **어느 유형에 재현 표시가 있나** — 시험 항목 이름마다 모은다(지우면 셈에서 빠진다).
+  const markedTypes = useMemo(() => {
+    const out = new Map<string, string[]>()
+    for (const one of marksSheet.data?.rows ?? []) {
+      const names = Object.values(one.defects)
+        .flatMap((each) => each.split('·').map((name) => name.trim()))
+        .filter(Boolean)
+      if (names.length === 0) continue
+      const was = out.get(one.subject_label) ?? []
+      out.set(one.subject_label, [...new Set([...was, ...names])])
+    }
+    return out
+  }, [marksSheet.data])
+
+  // 불량 유형 표 — **시험 항목마다 한 줄**, 지금 든 유형이 채워진 채로 시작한다.
+  const subjectRows = subjects.data?.items ?? []
+  useEffect(() => {
+    setDefectRows(
+      subjectRows.map((one) => [
+        one.label,
+        (Array.isArray(one.properties.defect_types)
+          ? (one.properties.defect_types as unknown[]).map((each) => String(each))
+          : []
+        ).join(' · '),
+        (markedTypes.get(one.label) ?? []).join(' · '),
+      ]),
+    )
+    // 줄은 시험 항목 목록이 정한다 — 재현 표시는 읽기용 칸이라 같이 다시 그린다.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [subjects.data, markedTypes])
+
+  const defectCols = useMemo(
+    () =>
+      defectColumns({
+        subjects: known.subjects,
+        // 이미 쓰는 이름 전부 — 철자가 갈리지 않게 고르는 자리다.
+        types: [
+          ...new Set(
+            subjectRows.flatMap((one) =>
+              Array.isArray(one.properties.defect_types)
+                ? (one.properties.defect_types as unknown[]).map((each) => String(each))
+                : [],
+            ),
+          ),
+        ].sort(),
+      }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [known.subjects.length, subjects.data],
+  )
 
   const columns = useMemo(
     () => (axis ? columnsFor(axis, known, defectTypes) : []),
@@ -350,6 +442,87 @@ export default function BulkPage() {
       if (body.length === 0) return
       setResults(await dtApi.staffBulk(body))
       staffSheet.reload()
+    } catch (caught) {
+      setFailed(caught as Error)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  /** 지울 유형에 재현 표시가 있나 — **셈에서 빠진다**고 미리 말한다. */
+  const droppingMarked = useMemo(() => {
+    const out: string[] = []
+    for (const row of defectRows) {
+      const label = (row[0] ?? '').trim()
+      const next = new Set(
+        (row[1] ?? '')
+          .split('·')
+          .map((one) => one.trim())
+          .filter(Boolean),
+      )
+      for (const name of markedTypes.get(label) ?? []) {
+        if (!next.has(name)) out.push(`${label} · ${name}`)
+      }
+    }
+    return out
+  }, [defectRows, markedTypes])
+
+  async function saveDefects() {
+    if (!subjectSlug) return
+    setBusy(true)
+    setFailed(null)
+    try {
+      // 이름이 겹치면 가릴 수 없다 — 부서와 같은 이유로 그 줄은 오류다.
+      const byLabel = new Map<string, typeof subjectRows>()
+      for (const one of subjectRows) {
+        byLabel.set(one.label, [...(byLabel.get(one.label) ?? []), one])
+      }
+      const out: BulkResult[] = []
+      for (const [index, row] of defectRows.entries()) {
+        const line = index + 1
+        const label = (row[0] ?? '').trim()
+        if (!label) continue
+        const found = byLabel.get(label) ?? []
+        if (found.length === 0) {
+          out.push({ line, status: 'error', message: `시험 항목을 찾을 수 없습니다: ${label}` })
+          continue
+        }
+        if (found.length > 1) {
+          out.push({
+            line,
+            status: 'error',
+            message: `시험 항목 이름이 둘 이상입니다: ${label} — 이름이 겹쳐 가릴 수 없습니다.`,
+          })
+          continue
+        }
+        const next = [
+          ...new Set(
+            (row[1] ?? '')
+              .split('·')
+              .map((one) => one.trim())
+              .filter(Boolean),
+          ),
+        ]
+        const was = Array.isArray(found[0].properties.defect_types)
+          ? (found[0].properties.defect_types as unknown[]).map((each) => String(each))
+          : []
+        if (was.join('\u0000') === next.join('\u0000')) {
+          out.push({ line, status: 'skipped', message: '그대로입니다.' })
+          continue
+        }
+        try {
+          // **코어의 객체 저장**을 부른다 — 검증 · 이력 · 권한이 거기 있다.
+          await objectApi.update(subjectSlug, found[0].id, {
+            properties: { defect_types: next },
+          })
+          out.push({ line, status: 'ok', message: `${label} · ${next.length}종` })
+        } catch (caught) {
+          out.push({ line, status: 'error', message: (caught as Error).message })
+        }
+      }
+      setResults(out)
+      subjects.reload()
+      marksSheet.reload()
     } catch (caught) {
       setFailed(caught as Error)
     } finally {
@@ -440,10 +613,60 @@ export default function BulkPage() {
           <TabsTrigger value="axis">평가</TabsTrigger>
           <TabsTrigger value="staff">인력</TabsTrigger>
           <TabsTrigger value="infra">인프라</TabsTrigger>
+          <TabsTrigger value="defects">불량 유형</TabsTrigger>
         </TabsList>
       </Tabs>
 
-      {what === 'infra' ? (
+      {what === 'defects' ? (
+        <>
+          <div className="flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                subjects.reload()
+                marksSheet.reload()
+              }}
+              disabled={busy}
+            >
+              <RefreshCw className="size-4" /> 현재값 불러오기
+            </Button>
+            <Button
+              className="ml-auto"
+              onClick={() => void saveDefects()}
+              disabled={busy || !subjectSlug || defectRows.length === 0}
+            >
+              <Save className="size-4" /> 저장
+            </Button>
+          </div>
+
+          <p className="text-muted-foreground rounded-md border p-3 text-sm">
+            시험 항목마다 <b>재현 대상 불량 유형</b>을 적습니다 — 「신뢰성 시험 불량 재현」 ·
+            「시장 불량 재현」 칸에서 고를 수 있는 것이 이 목록입니다. 목록은 이미 쓰는 이름이고,
+            새 이름은 그냥 적습니다. 저장은 기준 정보(시험 항목)를 고치는 일이라 그 부서의
+            관리자만 할 수 있습니다.
+          </p>
+
+          {droppingMarked.length > 0 && (
+            <p className="text-sm text-amber-600 dark:text-amber-500">
+              재현 표시가 있는 유형을 지웁니다 — {droppingMarked.slice(0, 3).join(', ')}
+              {droppingMarked.length > 3 && ` 외 ${droppingMarked.length - 3}건`}. 그 표시는 모델링
+              수준의 셈에서 빠집니다(기록은 남습니다).
+            </p>
+          )}
+
+          <PasteGrid
+            columns={defectCols}
+            rows={defectRows}
+            onRows={setDefectRows}
+            header={
+              <p className="text-muted-foreground text-sm">
+                시험 항목 {defectRows.length}개 · 바뀐 줄만 저장됩니다.
+              </p>
+            }
+          />
+        </>
+      ) : what === 'infra' ? (
         <>
           <div className="flex flex-wrap items-center gap-2">
             <Tabs value={infraKind} onValueChange={(value) => setInfraKind(value as CapacityWhat)}>

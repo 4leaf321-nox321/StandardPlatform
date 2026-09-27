@@ -296,6 +296,11 @@ describe('unknownParts', () => {
     expect(unknownParts({ key: 'note', header: '근거' }, '아무 글')).toEqual([])
   })
 
+  it('목록이 고르기용인 열은 새 이름을 붉게 표시하지 않는다 — 목록을 늘리는 표다', () => {
+    const column: GridColumn = { key: 'a', header: 'A', options: ['가'], multi: true, free: true }
+    expect(unknownParts(column, '가 · 새 이름')).toEqual([])
+  })
+
   it('여럿 적는 칸은 토큰마다 가른다', () => {
     const column: GridColumn = { key: 'a', header: 'A', options: ['가', '나'], multi: true }
     expect(unknownParts(column, '가 · 나')).toEqual([])

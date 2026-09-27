@@ -61,6 +61,14 @@ export interface GridColumn {
    * 않는다** — 고르기는 목록 단추가 한다.
    */
   optionsFor?: (row: string[]) => string[]
+  /**
+   * 목록은 **고르기 편하려고** 있을 뿐이다 — 새 이름도 맞다(검사하지 않는다).
+   *
+   * 불량 유형 목록을 **늘리는** 표가 그렇다. 등록된 것만 맞다고 보면 새 유형을 적는 칸이
+   * 늘 붉게 뜨고, 그러면 사람은 그 표시를 아예 안 읽게 된다. 이미 쓰는 이름을 단추로 고를
+   * 수 있게 해 두는 것이 목록의 일이다(철자가 갈리지 않게).
+   */
+  free?: boolean
   /** 한 칸에 여럿을 적는 열(`·` 로 이어 적는다). 검사도 토큰마다 한다. */
   multi?: boolean
   /** 읽기용 칸 — 고쳐도 서버로 안 간다(무엇을 고치는 줄인지 알려 주는 자리). */
@@ -112,7 +120,8 @@ export function isChecked(raw: string): boolean {
 export function unknownParts(column: GridColumn, raw: string, row: string[] = []): string[] {
   const choices = choicesOf(column, row)
   // 체크 열은 무엇을 적어도 켜짐 · 꺼짐으로만 읽는다 — 틀릴 수가 없다.
-  if (column.check || !choices || !raw.trim()) return []
+  // 목록이 고르기용인 열(`free`)도 검사하지 않는다 — 새 이름을 적는 것이 그 표의 일이다.
+  if (column.check || column.free || !choices || !raw.trim()) return []
   const allowed = new Set(choices.map((one) => one.trim()))
   const parts = column.multi ? raw.split('·') : [raw]
   return parts.map((one) => one.trim()).filter((one) => one && !allowed.has(one))
