@@ -413,8 +413,14 @@ class OntologySnapshot(Base):
         PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
     )
     taken_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False, index=True
+        DateTime(timezone=True),
+        server_default=func.clock_timestamp(),
+        nullable=False,
+        index=True,
     )
+    """**`clock_timestamp()` 다**(`now()` 가 아니다). 복원은 한 요청에서 스냅샷을 둘 남기고
+    (「복원 직전 …」 과 가져오기), `now()` 는 트랜잭션 시작 시각이라 그 둘이 같은 시각이 된다 —
+    그러면 「최근 것부터」 목록의 순서가 질의마다 달라진다(실측 2026-09-28)."""
     actor_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
