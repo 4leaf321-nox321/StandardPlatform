@@ -27,10 +27,13 @@ import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { useResource } from '@/shared/hooks/useResource'
 
 import {
+  axesFor,
   dtApi,
+  markColumnsFor,
   type AxisDef,
   type BulkResult,
   type CapacityWhat,
+  type PairKind,
   type Sheet,
 } from './api'
 
@@ -66,13 +69,15 @@ const MARK = 'mark:'
 function columnsFor(
   axis: AxisDef,
   known: { subjects: string[]; agents: string[] },
-  /** 시험 항목 이름 → 그 항목이 든 불량 유형 목록. 재현 칸의 드롭다운이 이것을 쓴다. */
+  /** 대상 이름 → 그 항목이 든 불량 유형 목록. 재현 칸의 드롭다운이 이것을 쓴다. */
   defectTypes: Map<string, string[]> = new Map(),
+  kind: PairKind = 'test',
 ): GridColumn[] {
   const head: GridColumn[] = [
     {
       key: 'subject_label',
-      header: '시험 항목',
+      // 대상의 이름은 **종류마다 다르다** — 전용 검토의 대상은 시험이 아니다.
+      header: kind === 'sim_only' ? '전용 검토 항목' : '시험 항목',
       help: '이 이름으로 연계를 찾습니다',
       options: known.subjects,
     },
@@ -99,7 +104,7 @@ function columnsFor(
     ...head,
     ...picksOf(axis).map((label) => ({ key: `${PICK}${label}`, header: label, check: true })),
     // 재현 열 — 칸에서 **그 줄의** 불량 유형을 고른다(첫 열이 시험 항목이다).
-    ...(axis.columns ?? []).map((col) => ({
+    ...markColumnsFor(axis, kind).map((col) => ({
       key: `${MARK}${col.key}`,
       header: col.label,
       help: '불량 유형을 고릅니다',
@@ -220,7 +225,7 @@ function defectColumns(known: { subjects: string[]; types: string[] }): GridColu
   return [
     {
       key: 'subject_label',
-      header: '시험 항목',
+      header: '대상',
       help: '이 이름으로 찾습니다',
       required: true,
       options: known.subjects,
@@ -245,18 +250,24 @@ function defectColumns(known: { subjects: string[]; types: string[] }): GridColu
 export default function BulkPage() {
   const defs = useResource(() => dtApi.defs(), [])
   const [what, setWhat] = useState<'axis' | 'staff' | 'infra' | 'defects'>('axis')
+  // 평가 표는 **종류마다** 다르다 — 가상검증률 표에 전용 검토 줄이 뜨면 채울 수 없는 칸이다.
+  const [pairKind, setPairKind] = useState<PairKind>('test')
   const [infraKind, setInfraKind] = useState<CapacityWhat>('sw')
   const [axisKey, setAxisKey] = useState<string | null>(null)
-  const axis = defs.data?.axes.find((one) => one.key === (axisKey ?? defs.data?.axes[0]?.key)) ?? null
+  const axes = axesFor(defs.data, pairKind)
+  // 종류를 바꾸면 그 종류에 없는 축이 골라져 있을 수 있다 — 그때는 첫 축으로 떨어진다.
+  const axis = axes.find((one) => one.key === axisKey) ?? axes[0] ?? null
   const sheet = useResource(
-    () => (axis ? dtApi.sheet(axis.key) : Promise.resolve(null)),
-    [axis?.key],
+    () => (axis ? dtApi.sheet(axis.key, pairKind) : Promise.resolve(null)),
+    [axis?.key, pairKind],
   )
 
   const staffSheet = useResource(() => dtApi.staffSheet(), [])
   // **등록된 목록**을 드롭다운에 준다. 표의 이름 칸은 이 목록에서 고른다.
   const setup = useResource(() => dtApi.setupStatus(), [])
-  const subjectSlug = setup.data?.subject_type_slug ?? null
+  const subjectSlug =
+    (pairKind === 'sim_only' ? setup.data?.sim_only_type_slug : setup.data?.subject_type_slug) ??
+    null
   const agentSlug = setup.data?.agent_type_slug ?? null
   const subjects = useResource(
     () => (subjectSlug ? objectApi.list(subjectSlug, { limit: 500 }) : Promise.resolve(null)),
@@ -276,8 +287,8 @@ export default function BulkPage() {
   // 불량 유형 탭에서만 받는다 — **어느 유형에 재현 표시가 있나**를 알려 주려고(지우면 셈에서
   // 빠진다). 다른 탭에서는 부르지 않는다.
   const marksSheet = useResource(
-    () => (what === 'defects' ? dtApi.sheet('modeling') : Promise.resolve(null)),
-    [what],
+    () => (what === 'defects' ? dtApi.sheet('modeling', pairKind) : Promise.resolve(null)),
+    [what, pairKind],
   )
   const [rows, setRows] = useState<string[][]>([])
   const [staffRows, setStaffRows] = useState<string[][]>([])
@@ -391,10 +402,10 @@ export default function BulkPage() {
   )
 
   const columns = useMemo(
-    () => (axis ? columnsFor(axis, known, defectTypes) : []),
+    () => (axis ? columnsFor(axis, known, defectTypes, pairKind) : []),
     // 목록은 불러온 뒤 바뀌지 않는다 — 길이로만 본다(매 렌더 새 배열이라 값 비교가 안 된다).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [axis, known.subjects.length, known.agents.length, defectTypes],
+    [axis, known.subjects.length, known.agents.length, defectTypes, pairKind],
   )
   const staffCols = useMemo(
     () => staffColumns(known),
@@ -484,14 +495,14 @@ export default function BulkPage() {
         if (!label) continue
         const found = byLabel.get(label) ?? []
         if (found.length === 0) {
-          out.push({ line, status: 'error', message: `시험 항목을 찾을 수 없습니다: ${label}` })
+          out.push({ line, status: 'error', message: `대상을 찾을 수 없습니다: ${label}` })
           continue
         }
         if (found.length > 1) {
           out.push({
             line,
             status: 'error',
-            message: `시험 항목 이름이 둘 이상입니다: ${label} — 이름이 겹쳐 가릴 수 없습니다.`,
+            message: `대상 이름이 둘 이상입니다: ${label} — 이름이 겹쳐 가릴 수 없습니다.`,
           })
           continue
         }
@@ -584,7 +595,7 @@ export default function BulkPage() {
           note: cell(row, 'note'),
         }))
       if (body.length === 0) return
-      setResults(await dtApi.bulkAssess(axis.key, body))
+      setResults(await dtApi.bulkAssess(axis.key, body, pairKind))
       sheet.reload()
     } catch (caught) {
       setFailed(caught as Error)
@@ -619,6 +630,18 @@ export default function BulkPage() {
 
       {what === 'defects' ? (
         <>
+          {/* 불량 유형도 **대상마다** 있다 — 시험 항목과 전용 검토 항목은 다른 목록이다. */}
+          {(defs.data?.pair_kinds ?? []).length > 1 && setup.data?.sim_only_type_slug && (
+            <Tabs value={pairKind} onValueChange={(value) => setPairKind(value as PairKind)}>
+              <TabsList>
+                {(defs.data?.pair_kinds ?? []).map((one) => (
+                  <TabsTrigger key={one.key} value={one.key}>
+                    {one.subject_label}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            </Tabs>
+          )}
           <div className="flex flex-wrap items-center gap-2">
             <Button
               variant="outline"
@@ -641,7 +664,7 @@ export default function BulkPage() {
           </div>
 
           <p className="text-muted-foreground rounded-md border p-3 text-sm">
-            시험 항목마다 <b>재현 대상 불량 유형</b>을 적습니다 — 「신뢰성 시험 불량 재현」 ·
+            대상마다 <b>재현 대상 불량 유형</b>을 적습니다 — 「신뢰성 시험 불량 재현」 ·
             「시장 불량 재현」 칸에서 고를 수 있는 것이 이 목록입니다. 목록은 이미 쓰는 이름이고,
             새 이름은 그냥 적습니다. 저장은 기준 정보(시험 항목)를 고치는 일이라 그 부서의
             관리자만 할 수 있습니다.
@@ -661,7 +684,8 @@ export default function BulkPage() {
             onRows={setDefectRows}
             header={
               <p className="text-muted-foreground text-sm">
-                시험 항목 {defectRows.length}개 · 바뀐 줄만 저장됩니다.
+                {pairKind === 'sim_only' ? '전용 검토 항목' : '시험 항목'} {defectRows.length}개 ·
+                바뀐 줄만 저장됩니다.
               </p>
             }
           />
@@ -765,10 +789,23 @@ export default function BulkPage() {
         </>
       ) : (
       <>
+      {/* **종류가 표를 가른다.** 섞으면 채울 수 없는 칸이 생긴다(가상검증률은 시험이
+          있어야 한다). 전용 검토 항목 타입이 없는 설치에는 이 줄이 안 선다. */}
+      {(defs.data?.pair_kinds ?? []).length > 1 && setup.data?.sim_only_type_slug && (
+        <Tabs value={pairKind} onValueChange={(value) => setPairKind(value as PairKind)}>
+          <TabsList>
+            {(defs.data?.pair_kinds ?? []).map((one) => (
+              <TabsTrigger key={one.key} value={one.key}>
+                {one.label}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <Tabs value={axis?.key ?? ''} onValueChange={setAxisKey}>
           <TabsList>
-            {(defs.data?.axes ?? []).map((one) => (
+            {axes.map((one) => (
               <TabsTrigger key={one.key} value={one.key}>
                 {one.label}
               </TabsTrigger>
@@ -784,7 +821,10 @@ export default function BulkPage() {
           disabled={!axis}
           onClick={() =>
             axis &&
-            void downloadFile(dtApi.sheetFileUrl(axis.key, 'xlsx'), `${axis.label}-현재값.xlsx`)
+            void downloadFile(
+              dtApi.sheetFileUrl(axis.key, 'xlsx', pairKind),
+              `${axis.label}-현재값.xlsx`,
+            )
           }
         >
           <Download className="size-4" /> 엑셀로 내려받기

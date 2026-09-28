@@ -24,6 +24,7 @@ const AXIS: AxisDef = {
 function tile(id: string, group: string, subject: string): Tile {
   return {
     id,
+    kind: 'test',
     workspace_id: 'w',
     workspace_name: '해석팀',
     subject_id: `s${id}`,

@@ -65,6 +65,7 @@ def defs(_: User = Depends(current_user), db: Session = Depends(get_db)) -> Defs
         subject_label=D.SUBJECT_LABEL,
         agent_label=D.AGENT_LABEL,
         axes=D.AXES,
+        pair_kinds=D.PAIR_KINDS,
         accuracy_thresholds=D.ACCURACY_THRESHOLDS,
         accuracy_rules=D.ACCURACY_RULES,
         # 인프라 칸의 말도 여기서 온다 — 화면과 엑셀이 같은 이름을 쓰게.
@@ -125,15 +126,19 @@ def setup(
 @router.get("/pairs", response_model=list[PairOut])
 def pair_list(
     workspace: str | None = Query(default=None),
+    kind: str | None = Query(default=None),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[PairOut]:
     """연계 목록 — **부서로 가리지 않는다**(전사 역량은 조직을 가로지르는 물음이다).
 
     부서를 주면 그 부서만 좁혀 본다. 고치는 것은 그 부서 멤버만이다.
+
+    `kind` 는 **목록을 가른다** — `test`(시험 연계) · `sim_only`(전용 검토). 안 주면 둘 다
+    온다(둘을 한 화면에 섞어 그리지는 않는다 — 재는 축이 다르다).
     """
     chosen = permissions.workspace_by_slug(db, workspace) if workspace else None
-    return [PairOut(**one) for one in services.pairs(db, user, workspace=chosen)]
+    return [PairOut(**one) for one in services.pairs(db, user, workspace=chosen, kind=kind)]
 
 
 @router.post("/pairs", response_model=PairOut, status_code=201)
@@ -142,7 +147,12 @@ def pair_create(
 ) -> PairOut:
     workspace = permissions.workspace_by_slug(db, payload.workspace_slug)
     row = services.link(
-        db, user, subject_id=payload.subject_id, agent_id=payload.agent_id, workspace=workspace
+        db,
+        user,
+        subject_id=payload.subject_id,
+        agent_id=payload.agent_id,
+        workspace=workspace,
+        kind=payload.kind,
     )
     found = [
         one for one in services.pairs(db, user, workspace=workspace) if one["id"] == row.id
@@ -237,22 +247,27 @@ def assessment_history(
 @router.get("/coverage", response_model=CoverageOut)
 def coverage(
     workspace: str | None = Query(default=None),
+    kind: str = Query(default=D.DEFAULT_PAIR_KIND),
     _: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> CoverageOut:
     """축마다의 평가 완료율. 3단계 대시보드가 이것으로 그린다."""
     chosen = permissions.workspace_by_slug(db, workspace) if workspace else None
-    return CoverageOut(**services.coverage(db, workspace=chosen))
+    return CoverageOut(**services.coverage(db, workspace=chosen, kind=kind))
 
 
 @router.get("/board", response_model=BoardOut)
-def board(user: User = Depends(current_user), db: Session = Depends(get_db)) -> BoardOut:
+def board(
+    kind: str = Query(default=D.DEFAULT_PAIR_KIND),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> BoardOut:
     """대시보드가 그리는 한 벌 — 연계마다의 수준과 최근 변경.
 
     **타일과 분포를 한 자료로 낸다.** 분포를 서버가 따로 세어 주면 둘이 갈릴 수 있고,
     그때 어느 쪽이 맞는지 아무도 답할 수 없다.
     """
-    return BoardOut(**services.board(db, user))
+    return BoardOut(**services.board(db, user, kind=kind))
 
 
 @router.get("/staff", response_model=list[StaffOut])
@@ -437,6 +452,7 @@ def capacity_summary(
 @router.get("/assessments/sheet", response_model=SheetOut)
 def assessment_sheet(
     axis: str = Query(...),
+    kind: str = Query(default=D.DEFAULT_PAIR_KIND),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> SheetOut:
@@ -445,12 +461,13 @@ def assessment_sheet(
     한 줄씩 창을 열어 고치는 길만 있으면 스무 건이 넘는 순간 아무도 최신으로 유지하지
     않는다 — 그리고 안 채운 자료는 「모름」 과 구별되지 않는다.
     """
-    return SheetOut(**services.sheet(db, user, axis_key=axis))
+    return SheetOut(**services.sheet(db, user, axis_key=axis, kind=kind))
 
 
 @router.get("/assessments/sheet/export")
 def assessment_sheet_export(
     axis: str = Query(...),
+    kind: str = Query(default=D.DEFAULT_PAIR_KIND),
     format: str = Query(default="xlsx", pattern="^(xlsx|csv)$"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
@@ -460,13 +477,21 @@ def assessment_sheet_export(
     엑셀에서 고치는 것이 가장 빠른 사람이 많다. 내려받은 표의 열 순서가 붙여넣기와 같아서,
     채운 뒤 그대로 복사해 붙이면 열이 맞는다.
     """
-    body = services.sheet(db, user, axis_key=axis)
+    body = services.sheet(db, user, axis_key=axis, kind=kind)
     # 열 순서는 **화면의 표와 같다** — 내려받아 고친 뒤 그대로 붙여 넣을 수 있게.
     head = ["시험 항목", "시뮬레이션 해석", "담당 부서"]
     # 여러 항목을 고르는 축은 **항목마다 한 열**이고 켠 것은 `O` 다 — 화면의 표와 같은 모양.
     picks = D.pick_labels(axis) if body["kind"] in ("set", "matrix") else []
     # 매트릭스는 **재현 열**(시험 · 시장)이 뒤에 선다 — 칸에는 불량 유형 이름을 이어 적는다.
-    marks = D.AXIS_BY_KEY[axis].get("columns", []) if body["kind"] == "matrix" else []
+    marks = (
+        [
+            one
+            for one in D.AXIS_BY_KEY[axis].get("columns", [])
+            if str(one["key"]) in D.defect_columns(kind)
+        ]
+        if body["kind"] == "matrix"
+        else []
+    )
     header = [
         *head,
         *(picks or [body["axis_label"]]),
@@ -508,7 +533,9 @@ def assessment_bulk(
     rows = [one.model_dump() for one in payload.rows]
     return [
         BulkResultOut(**one)
-        for one in services.bulk_save(db, user, axis_key=payload.axis, rows=rows)
+        for one in services.bulk_save(
+            db, user, axis_key=payload.axis, rows=rows, kind=payload.kind
+        )
     ]
 
 

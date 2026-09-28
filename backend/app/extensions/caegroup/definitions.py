@@ -38,6 +38,33 @@ SECTOR_LABEL = "시뮬레이션"
 SUBJECT_LABEL = "시험 항목"
 AGENT_LABEL = "시뮬레이션"
 
+#: 연계의 **종류** — 무엇을 평가하나. 목록은 둘로 갈리고 자료는 한 벌이다.
+#:
+#: 대응 시험이 없는데 상시로 하는 판단이 있다(시뮬레이션만으로 시장 불량을 판단한다).
+#: 그것을 시험 연계에 섞으면 **가상검증률이 오염된다** — 그 값은 「시험 결과와의 일치율」
+#: 로 전사에서 취합하는 지표라, 비교할 시험이 없는 줄이 같은 분모에 들면 뜻이 달라진다.
+#: 그래서 축의 적용 범위를 종류로 가른다(`kinds`) — 전용 검토에는 그 축의 줄이 서지 않는다.
+PAIR_KINDS: list[dict[str, Any]] = [
+    {
+        "key": "test",
+        "label": "시험 연계",
+        "subject_label": SUBJECT_LABEL,
+        "description": "시험을 시뮬레이션이 대신 확인하는 것 — 축 다섯을 다 잰다.",
+    },
+    {
+        "key": "sim_only",
+        "label": "전용 검토",
+        "subject_label": "시뮬레이션 전용 검토 항목",
+        "description": (
+            "대응 시험이 없어 시뮬레이션만으로 판단하는 것(시장 불량 판단 등). "
+            "가상검증률 · 시험 대체는 재지 않는다 — 비교할 시험이 없다."
+        ),
+    },
+]
+PAIR_KIND_KEYS = tuple(one["key"] for one in PAIR_KINDS)
+PAIR_KIND_BY_KEY = {one["key"]: one for one in PAIR_KINDS}
+DEFAULT_PAIR_KIND = "test"
+
 AxisKind = Literal["value", "set", "rung", "matrix"]
 
 #: 가상검증률 — **값 → 칸.** 낮은 칸부터, 값이 넘는 가장 높은 칸을 고른다.
@@ -60,6 +87,9 @@ ACCURACY_RULE_KEYS = tuple(one["key"] for one in ACCURACY_RULES)
 AXES: list[dict[str, Any]] = [
     {
         "key": "accuracy",
+        # **시험 결과와의 일치율이다.** 전사에서 이 이름으로 취합하는 지표라 뜻을 넓히지
+        # 않는다 — 비교할 시험이 없는 줄은 이 축에 서지 않는다.
+        "kinds": ("test",),
         # 원본은 「정확도」 였다. 화면에 나가는 이름만 바꾼다(2026-09-24) — key 는 고정.
         "label": "가상검증률",
         "kind": "value",
@@ -88,6 +118,7 @@ AXES: list[dict[str, Any]] = [
     },
     {
         "key": "automation",
+        "kinds": PAIR_KIND_KEYS,
         "label": "자동화",
         "kind": "set",
         "question": "해석 파이프라인의 단계별 자동화 범위",
@@ -134,6 +165,7 @@ AXES: list[dict[str, Any]] = [
     },
     {
         "key": "modeling",
+        "kinds": PAIR_KIND_KEYS,
         "label": "모델링 수준",
         "kind": "matrix",
         "question": "어떤 불량까지 재현하나",
@@ -153,8 +185,14 @@ AXES: list[dict[str, Any]] = [
                 "description": "변형 · 온도 · 유동 등 물리 거동의 시험 일치",
             },
         ],
+        # 열도 종류로 갈린다 — 전용 검토에는 **시험 불량 재현이 없다**(시험이 없다).
         "columns": [
-            {"key": "test", "label": "신뢰성 시험 불량 재현", "short": "시험"},
+            {
+                "key": "test",
+                "label": "신뢰성 시험 불량 재현",
+                "short": "시험",
+                "kinds": ("test",),
+            },
             {"key": "market", "label": "시장 불량 재현", "short": "시장"},
         ],
         "rungs": [
@@ -176,6 +214,7 @@ AXES: list[dict[str, Any]] = [
     },
     {
         "key": "scope",
+        "kinds": PAIR_KIND_KEYS,
         "label": "적용 범위",
         "kind": "rung",
         "question": "어디까지 적용됐나",
@@ -205,6 +244,8 @@ AXES: list[dict[str, Any]] = [
     },
     {
         "key": "substitution",
+        # 대신할 시험이 없는 곳에서는 뜻이 없다.
+        "kinds": ("test",),
         "label": "시험 대체",
         "kind": "set",
         "question": "시험을 얼마나 대신하나",
@@ -306,6 +347,46 @@ def rung_keys(axis_key: str) -> tuple[str, ...]:
     return tuple(one["key"] for one in AXIS_BY_KEY[axis_key]["rungs"])
 
 
+def applies(axis_key: str, kind: str) -> bool:
+    """이 축이 그 종류에 해당하나. **`kinds` 를 안 적은 축은 둘 다**에 해당한다."""
+    kinds = AXIS_BY_KEY[axis_key].get("kinds")
+    return True if not kinds else kind in kinds
+
+
+def axis_keys_for(kind: str) -> tuple[str, ...]:
+    """그 종류가 재는 축들 — 화면 · 완료율 · 표가 이것으로 좁힌다."""
+    return tuple(key for key in AXIS_KEYS if applies(key, kind))
+
+
+def axes_for(kind: str) -> list[dict[str, Any]]:
+    """그 종류의 축 정의 — **해당 없는 열은 아예 빼서** 내려 준다.
+
+    빈 칸으로 내려 주면 화면은 그것을 미평가로 그리고, 사람은 채울 수 없는 칸을 채우려
+    한다. 매트릭스의 열도 같은 이유로 걸러 낸다(전용 검토에 시험 불량 재현이 없다).
+    """
+    out: list[dict[str, Any]] = []
+    for axis in AXES:
+        if not applies(str(axis["key"]), kind):
+            continue
+        one = dict(axis)
+        columns = one.get("columns")
+        if columns:
+            one["columns"] = [
+                dict(col) for col in columns if not col.get("kinds") or kind in col["kinds"]
+            ]
+        out.append(one)
+    return out
+
+
+def defect_columns(kind: str) -> tuple[str, ...]:
+    """모델링 수준의 재현 열 key — 그 종류에 해당하는 것만."""
+    return tuple(
+        str(col["key"])
+        for col in AXIS_BY_KEY["modeling"].get("columns", [])
+        if not col.get("kinds") or kind in col["kinds"]
+    )
+
+
 def pick_labels(axis_key: str) -> list[str]:
     """이 축에서 **고르는 항목의 이름들** — 일괄 입력 표는 항목마다 한 열을 둔다.
 
@@ -339,7 +420,11 @@ def rung_for_value(value: float | None) -> str | None:
 
 
 def modeling_level(
-    flags: list[str], defects: dict[str, Any], defect_types: list[str]
+    flags: list[str],
+    defects: dict[str, Any],
+    defect_types: list[str],
+    *,
+    kind: str = DEFAULT_PAIR_KIND,
 ) -> str | None:
     """모델링 수준 — **셈으로 접는다.** 사람이 수준을 고르지 않는다.
 
@@ -365,10 +450,13 @@ def modeling_level(
         if order.index(key) > order.index(level):
             level = key
 
-    if test > 0:
-        raise_to("test_some")
-    if names and test == len(names):
-        raise_to("test_all")
+    # **전용 검토는 시험 단계를 건너뛴다** — 시험이 없으니 「일부 유형 시험 재현」 이
+    # 뜻을 갖지 않는다. 형상 · 거동 다음이 바로 시장 불량이다.
+    if "test" in defect_columns(kind):
+        if test > 0:
+            raise_to("test_some")
+        if names and test == len(names):
+            raise_to("test_all")
     if market > 0:
         raise_to("market")
     return None if level == "none" and not picked else level

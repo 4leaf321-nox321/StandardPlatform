@@ -14,10 +14,29 @@ export interface AxisRung {
   short?: string
 }
 
+/**
+ * 연계의 **종류** — 목록을 가르는 축.
+ *
+ * 대응 시험이 없는데 상시로 하는 판단이 있다(시뮬레이션만으로 시장 불량을 판단한다).
+ * 시험 연계에 섞으면 **가상검증률이 오염된다** — 전사에서 「시험 결과와의 일치율」 로
+ * 취합하는 지표라, 비교할 시험이 없는 줄이 같은 분모에 들면 뜻이 달라진다.
+ */
+export type PairKind = 'test' | 'sim_only'
+
+export interface PairKindDef {
+  key: PairKind
+  label: string
+  /** 그 종류의 대상을 무엇이라 부르나 — 창 · 안내 문구가 이 말을 쓴다. */
+  subject_label: string
+  description: string
+}
+
 export interface AxisDef {
   key: string
   label: string
   kind: 'value' | 'set' | 'rung' | 'matrix'
+  /** 이 축이 해당하는 **연계 종류** — 없으면 둘 다에 해당한다. */
+  kinds?: PairKind[]
   unit?: string
   question?: string
   evidence_label?: string
@@ -26,7 +45,7 @@ export interface AxisDef {
   /** 매트릭스 축의 바탕 토글(형상 · 거동). */
   base?: AxisRung[]
   /** 매트릭스 축의 열 — 불량 유형마다 무엇을 재현했나(시험 · 시장). */
-  columns?: (AxisRung & { short?: string })[]
+  columns?: (AxisRung & { short?: string; kinds?: PairKind[] })[]
 }
 
 export interface Defs {
@@ -35,6 +54,7 @@ export interface Defs {
   subject_label: string
   agent_label: string
   axes: AxisDef[]
+  pair_kinds: PairKindDef[]
   accuracy_thresholds: { rung: string; min: number }[]
   accuracy_rules: { key: string; label: string }[]
   /** 인프라 S/W 의 단위 · 용도 — **키를 저장하고 이름을 보여 준다.** */
@@ -43,6 +63,9 @@ export interface Defs {
 }
 
 export interface SetupStatus {
+  /** 전용 검토 항목 타입 — 없으면 그 탭이 서지 않는다(설정을 다시 누르면 만들어진다). */
+  sim_only_type_slug: string | null
+  sim_only_type_label: string | null
   subject_type_slug: string | null
   subject_type_label: string | null
   agent_type_slug: string | null
@@ -104,17 +127,20 @@ export interface RecentChange {
 }
 
 export interface Board {
+  kind: PairKind
   tiles: Tile[]
   recent: RecentChange[]
 }
 
 export interface Coverage {
+  kind: PairKind
   pairs: number
   axes: { axis: string; label: string; assessed: number; ratio: number }[]
 }
 
 export interface Pair {
   id: string
+  kind: PairKind
   workspace_id: string
   workspace_name: string
   subject_id: string
@@ -218,7 +244,9 @@ export interface SheetRow {
 export interface Sheet {
   axis: string
   axis_label: string
+  /** **축**의 종류. 연계의 종류는 `pair_kind`. */
   kind: 'value' | 'set' | 'rung' | 'matrix'
+  pair_kind: PairKind
   rows: SheetRow[]
 }
 
@@ -298,16 +326,37 @@ export interface StaffBulkRow {
   note?: string
 }
 
+/**
+ * 그 종류가 재는 축들 — **한 규칙이 화면 전부를 정한다.**
+ *
+ * 축마다 `kinds` 가 붙어 오고(없으면 둘 다), 화면이 그것으로 좁힌다. 화면마다 따로 고르면
+ * 역량 · 대시보드 · 일괄 입력이 서로 다른 축을 보여 주고, 그때 어느 쪽이 맞는지 모른다.
+ */
+export function axesFor(defs: Defs | null, kind: PairKind): AxisDef[] {
+  return (defs?.axes ?? []).filter((one) => !one.kinds || one.kinds.includes(kind))
+}
+
+/** 매트릭스 축의 재현 열 — 그 종류의 것만(전용 검토에 시험 불량 재현은 없다). */
+export function markColumnsFor(axis: AxisDef, kind: PairKind): NonNullable<AxisDef['columns']> {
+  return (axis.columns ?? []).filter((one) => !one.kinds || one.kinds.includes(kind))
+}
+
 const BASE = '/ext/caegroup/dt'
 
 export const dtApi = {
   defs: () => api.get<Defs>(`${BASE}/defs`),
   setupStatus: () => api.get<SetupStatus>(`${BASE}/setup`),
   setup: () => api.post<SetupStatus>(`${BASE}/setup`),
-  pairs: (workspace?: string) =>
-    api.get<Pair[]>(`${BASE}/pairs${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
-  link: (body: { subject_id: string; agent_id: string; workspace_slug: string }) =>
-    api.post<Pair>(`${BASE}/pairs`, body),
+  pairs: (kind: PairKind, workspace?: string) =>
+    api.get<Pair[]>(
+      `${BASE}/pairs?kind=${kind}${workspace ? `&workspace=${encodeURIComponent(workspace)}` : ''}`,
+    ),
+  link: (body: {
+    kind: PairKind
+    subject_id: string
+    agent_id: string
+    workspace_slug: string
+  }) => api.post<Pair>(`${BASE}/pairs`, body),
   /** 연계에서 고칠 수 있는 것은 **소속 부서뿐**이다 — 대상 · 수단을 바꾸는 것은 다른 연계다. */
   move: (id: string, workspaceSlug: string) =>
     api.patch<Pair>(`${BASE}/pairs/${id}`, { workspace_slug: workspaceSlug }),
@@ -323,8 +372,8 @@ export const dtApi = {
   save: (pairId: string, axis: string, body: AssessmentBody) =>
     api.put<Assessment>(`${BASE}/pairs/${pairId}/assessments/${axis}`, body),
   history: (pairId: string) => api.get<HistoryRow[]>(`${BASE}/pairs/${pairId}/history`),
-  coverage: () => api.get<Coverage>(`${BASE}/coverage`),
-  board: () => api.get<Board>(`${BASE}/board`),
+  coverage: (kind: PairKind = 'test') => api.get<Coverage>(`${BASE}/coverage?kind=${kind}`),
+  board: (kind: PairKind = 'test') => api.get<Board>(`${BASE}/board?kind=${kind}`),
   staff: (workspace?: string) =>
     api.get<Staff[]>(`${BASE}/staff${workspace ? `?workspace=${encodeURIComponent(workspace)}` : ''}`),
   staffSummary: (workspace?: string) =>
@@ -340,11 +389,12 @@ export const dtApi = {
     api.put<Capacity>(`${BASE}/capacity?workspace=${encodeURIComponent(workspace)}`, body),
   capacitySummary: () => api.get<CapacitySummary>(`${BASE}/capacity/summary`),
   /** 현재값 표 — 화면이 이것을 그대로 표에 채운다(현재값 불러오기). */
-  sheet: (axis: string) => api.get<Sheet>(`${BASE}/assessments/sheet?axis=${axis}`),
-  bulkAssess: (axis: string, rows: BulkRow[]) =>
-    api.put<BulkResult[]>(`${BASE}/assessments/bulk`, { axis, rows }),
-  sheetFileUrl: (axis: string, format: 'xlsx' | 'csv') =>
-    `${BASE}/assessments/sheet/export?axis=${axis}&format=${format}`,
+  sheet: (axis: string, kind: PairKind = 'test') =>
+    api.get<Sheet>(`${BASE}/assessments/sheet?axis=${axis}&kind=${kind}`),
+  bulkAssess: (axis: string, rows: BulkRow[], kind: PairKind = 'test') =>
+    api.put<BulkResult[]>(`${BASE}/assessments/bulk`, { axis, kind, rows }),
+  sheetFileUrl: (axis: string, format: 'xlsx' | 'csv', kind: PairKind = 'test') =>
+    `${BASE}/assessments/sheet/export?axis=${axis}&kind=${kind}&format=${format}`,
   staffSheet: () => api.get<StaffSheetRow[]>(`${BASE}/staff/sheet`),
   staffBulk: (rows: StaffBulkRow[]) =>
     api.put<BulkResult[]>(`${BASE}/staff/bulk`, { rows }),

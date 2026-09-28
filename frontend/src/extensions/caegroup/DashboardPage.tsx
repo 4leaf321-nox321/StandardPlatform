@@ -28,7 +28,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
-import { dtApi, type AxisDef, type Defs, type Tile } from './api'
+import { axesFor, dtApi, type AxisDef, type Defs, type PairKind, type Tile } from './api'
 import type { WallItem } from './TileWall'
 
 // 벽은 `d3-hierarchy` 를 쓴다 — 대시보드를 안 여는 사람이 그만큼을 받지 않게 매단다.
@@ -56,15 +56,24 @@ function levelOf(axis: AxisDef, tile: Tile): { index: number; label: string; ste
 export default function DashboardPage() {
   const navigate = useNavigate()
   const defs = useResource(() => dtApi.defs(), [])
-  const board = useResource(() => dtApi.board(), [])
-  const coverage = useResource(() => dtApi.coverage(), [])
+  const setup = useResource(() => dtApi.setupStatus(), [])
+  // **섞어 그리지 않는다.** 시험 연계와 전용 검토는 재는 축이 달라, 한 그림에 담으면
+  // 가상검증률 완료율이 영영 100% 가 안 된다 — 그러면 사람은 그 숫자를 안 본다.
+  const [kind, setKind] = useState<PairKind>('test')
+  const board = useResource(() => dtApi.board(kind), [kind])
+  const coverage = useResource(() => dtApi.coverage(kind), [kind])
   const [axisKey, setAxisKey] = useState<string | null>(null)
   // 화면이 어두운가 — 서열 램프는 그 화면의 표면에서 다시 고른다.
   const dark =
     typeof document !== 'undefined' && document.documentElement.classList.contains('dark')
 
   const defsData: Defs | null = defs.data
-  const axis = defsData?.axes.find((one) => one.key === (axisKey ?? defsData.axes[0]?.key)) ?? null
+  const axes = axesFor(defsData, kind)
+  const kinds = (defsData?.pair_kinds ?? []).filter(
+    (one) => one.key !== 'sim_only' || setup.data?.sim_only_type_slug,
+  )
+  // 종류를 바꾸면 그 종류에 없는 축이 골라져 있을 수 있다 — 그때는 첫 축으로 떨어진다.
+  const axis = axes.find((one) => one.key === axisKey) ?? axes[0] ?? null
   const tiles = board.data?.tiles ?? []
 
   const items: WallItem[] = axis
@@ -93,6 +102,23 @@ export default function DashboardPage() {
       />
 
       <ErrorNotice error={defs.error ?? board.error ?? coverage.error} />
+
+      {kinds.length > 1 && (
+        <div className="space-y-1">
+          <Tabs value={kind} onValueChange={(value) => setKind(value as PairKind)}>
+            <TabsList>
+              {kinds.map((one) => (
+                <TabsTrigger key={one.key} value={one.key}>
+                  {one.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          <p className="text-muted-foreground text-sm">
+            {kinds.find((one) => one.key === kind)?.description}
+          </p>
+        </div>
+      )}
 
       {/* 1. 평가 완료율 — 숫자가 먼저, 막대는 그 옆에서 크기를 말한다. */}
       <section className="grid gap-3 sm:grid-cols-3 lg:grid-cols-5">
@@ -134,7 +160,7 @@ export default function DashboardPage() {
           <div className="flex flex-wrap items-center gap-3">
             <Tabs value={axis?.key ?? ''} onValueChange={setAxisKey}>
               <TabsList>
-                {(defsData?.axes ?? []).map((one) => (
+                {axes.map((one) => (
                   <TabsTrigger key={one.key} value={one.key}>
                     {one.label}
                   </TabsTrigger>

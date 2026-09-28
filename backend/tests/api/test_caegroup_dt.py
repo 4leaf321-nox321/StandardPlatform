@@ -483,6 +483,113 @@ def test_모델링_수준은_셈이_접는다(client: TestClient, admin: Signed)
     assert third.json()["rung"] == "market"
 
 
+def test_전용_검토는_가상검증률을_재지_않는다(client: TestClient, admin: Signed) -> None:
+    """**대응 시험이 없는데 상시로 하는 판단**이 있다(시뮬레이션만으로 시장 불량을 판단).
+
+    그것을 시험 연계에 섞으면 가상검증률이 오염된다 — 전사에서 「시험 결과와의 일치율」 로
+    취합하는 지표라, 비교할 시험이 없는 줄이 같은 분모에 들면 뜻이 달라진다. 그래서 목록을
+    둘로 가르고, 축의 적용 범위를 종류가 정한다.
+    """
+    _setup(client, admin)
+    ready = client.get(f"{DT}/setup", headers=admin.headers).json()
+    assert ready["sim_only_type_slug"] == "sim_only_item"
+
+    subject = _make_object(
+        client,
+        admin,
+        "sim_only_item",
+        label=f"시장 불량 판단 {uuid.uuid4().hex[:4]}",
+        properties={"defect_types": ["글라스 크랙"]},
+    )
+    agent = _make_object(
+        client, admin, "sim_analysis", label=f"충격 해석 {uuid.uuid4().hex[:4]}"
+    )
+    made = client.post(
+        f"{DT}/pairs",
+        json={
+            "kind": "sim_only",
+            "subject_id": subject["id"],
+            "agent_id": agent["id"],
+            "workspace_slug": admin.workspace,
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    pair = made.json()["id"]
+    assert made.json()["kind"] == "sim_only"
+
+    # **시험 항목 타입은 전용 검토에 못 쓴다**(그 반대도 마찬가지다).
+    wrong = _make_object(
+        client, admin, "sim_test_item", label=f"낙하 시험 {uuid.uuid4().hex[:4]}"
+    )
+    refused = client.post(
+        f"{DT}/pairs",
+        json={
+            "kind": "sim_only",
+            "subject_id": wrong["id"],
+            "agent_id": agent["id"],
+            "workspace_slug": admin.workspace,
+        },
+        headers=admin.headers,
+    )
+    assert refused.status_code == 409, refused.text
+
+    # 목록은 종류로 갈린다.
+    only = client.get(f"{DT}/pairs?kind=sim_only", headers=admin.headers).json()
+    assert [one["id"] for one in only] == [pair]
+    tests = client.get(f"{DT}/pairs?kind=test", headers=admin.headers).json()
+    assert all(one["id"] != pair for one in tests)
+
+    # **가상검증률 · 시험 대체는 저장 자리에서 막힌다** — 화면이 안 그려도 API 는 열려 있다.
+    for axis in ("accuracy", "substitution"):
+        denied = client.put(
+            f"{DT}/pairs/{pair}/assessments/{axis}",
+            json={"value": 95, "rung": "cert_gate", "note": "x"},
+            headers=admin.headers,
+        )
+        assert denied.status_code == 409, (axis, denied.text)
+        assert "재지 않습니다" in denied.json()["error"]["message"]
+
+    # 모델링 수준은 **시험 단계를 건너뛴다** — 형상 다음이 바로 시장 불량이다.
+    got = client.put(
+        f"{DT}/pairs/{pair}/assessments/modeling",
+        json={
+            "rungs": ["geometry"],
+            # 시험 열은 없다 — 들어와도 버린다.
+            "defects": {"글라스 크랙": {"test": "2026-01", "market": "2026-02"}},
+            "note": "시장 불량 이력과 대조",
+        },
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    assert got.json()["defects"] == {"글라스 크랙": {"market": "2026-02"}}
+    assert got.json()["rung"] == "market"
+
+    # 완료율은 **종류마다 분모가 다르다** — 전용 검토에는 가상검증률 줄이 없다.
+    spread = client.get(f"{DT}/coverage?kind=sim_only", headers=admin.headers).json()
+    assert spread["kind"] == "sim_only"
+    assert [one["axis"] for one in spread["axes"]] == ["automation", "modeling", "scope"]
+    assert spread["pairs"] == 1
+
+    # 표도 그 종류의 줄만 — 가상검증률 표는 전용 검토에서 아예 열리지 않는다.
+    sheet = client.get(
+        f"{DT}/assessments/sheet?axis=modeling&kind=sim_only", headers=admin.headers
+    ).json()
+    assert sheet["pair_kind"] == "sim_only"
+    assert [one["pair_id"] for one in sheet["rows"]] == [pair]
+    # 재현 열도 시장만 온다.
+    assert list(sheet["rows"][0]["defects"]) == ["market"]
+    blocked = client.get(
+        f"{DT}/assessments/sheet?axis=accuracy&kind=sim_only", headers=admin.headers
+    )
+    assert blocked.status_code == 409, blocked.text
+
+    # 남은 일에는 종류 이름이 붙는다 — 시험 연계 쪽은 붙지 않는다(흔한 쪽이다).
+    items = client.get("/api/server/maintenance", headers=admin.headers).json()
+    labels = [one["label"] for one in items]
+    assert any("디지털 트윈 전용 검토 — " in one for one in labels), labels
+
+
 def test_평가가_바뀌면_이력이_남는다(client: TestClient, admin: Signed) -> None:
     """**담당자가 본다** — 감사 기록은 시스템 관리자만 읽는다. 「지난번엔 왜 이렇게
     적었나」 가 다음 평가의 근거다."""

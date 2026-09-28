@@ -26,11 +26,23 @@ import { Textarea } from '@/shared/components/ui/textarea'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
-import { dtApi, type Assessment, type AssessmentBody, type AxisDef, type Defs, type Pair } from './api'
+import {
+  axesFor,
+  dtApi,
+  markColumnsFor,
+  type Assessment,
+  type AssessmentBody,
+  type AxisDef,
+  type Defs,
+  type Pair,
+  type PairKind,
+} from './api'
 
 interface Props {
   pair: Pair
   defs: Defs
+  /** 연계의 종류 — **재는 축이 이것으로 갈린다**(전용 검토는 셋). */
+  kind: PairKind
   /** 이 시험 항목의 불량 유형 — 모델링 수준의 셈 기준이다. */
   defectTypes: string[]
   /** 저장이 끝나면 부른다 — 평가 완료율이 바뀐다. */
@@ -50,7 +62,7 @@ function rungLabel(axis: AxisDef, key: string | null): string {
   return axis.rungs.find((one) => one.key === key)?.label ?? key
 }
 
-export function AssessmentPanel({ pair, defs, defectTypes, onSaved }: Props) {
+export function AssessmentPanel({ pair, defs, kind, defectTypes, onSaved }: Props) {
   const rows = useResource(() => dtApi.assessments(pair.id), [pair.id])
   const past = useResource(() => dtApi.history(pair.id), [pair.id])
   const [open, setOpen] = useState<string | null>(null)
@@ -64,14 +76,17 @@ export function AssessmentPanel({ pair, defs, defectTypes, onSaved }: Props) {
           {pair.subject_label} · {pair.agent_label}
         </h2>
         <p className="text-muted-foreground text-sm">
-          축마다 수준과 근거를 적습니다. 가상검증률의 수준은 값이 정합니다.
+          축마다 수준과 근거를 적습니다.{' '}
+          {kind === 'sim_only'
+            ? '대응 시험이 없어 가상검증률 · 시험 대체는 재지 않습니다.'
+            : '가상검증률의 수준은 값이 정합니다.'}
         </p>
       </div>
 
       <ErrorNotice error={rows.error} />
 
       <ul className="space-y-2">
-        {defs.axes.map((axis) => {
+        {axesFor(defs, kind).map((axis) => {
           const one = saved.get(axis.key)
           return (
             <li key={axis.key} className="rounded-md border">
@@ -96,6 +111,7 @@ export function AssessmentPanel({ pair, defs, defectTypes, onSaved }: Props) {
                 <AxisForm
                   axis={axis}
                   defs={defs}
+                  kind={kind}
                   current={one}
                   pairId={pair.id}
                   defectTypes={defectTypes}
@@ -163,6 +179,7 @@ function thisMonth(): string {
 function AxisForm({
   axis,
   defs,
+  kind,
   current,
   pairId,
   defectTypes,
@@ -170,6 +187,7 @@ function AxisForm({
 }: {
   axis: AxisDef
   defs: Defs
+  kind: PairKind
   current?: Assessment
   pairId: string
   defectTypes: string[]
@@ -326,7 +344,7 @@ function AxisForm({
               <thead>
                 <tr className="text-muted-foreground text-xs">
                   <th className="py-1 text-left font-medium">불량 유형</th>
-                  {(axis.columns ?? []).map((col) => (
+                  {markColumnsFor(axis, kind).map((col) => (
                     <th key={col.key} className="py-1 text-left font-medium">
                       {col.short ?? col.label}
                     </th>
@@ -337,7 +355,7 @@ function AxisForm({
                 {defectTypes.map((name) => (
                   <tr key={name} className="border-t">
                     <td className="py-1">{name}</td>
-                    {(axis.columns ?? []).map((col) => (
+                    {markColumnsFor(axis, kind).map((col) => (
                       <td key={col.key} className="py-1">
                         <input
                           type="checkbox"

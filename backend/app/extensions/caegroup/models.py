@@ -87,10 +87,20 @@ class CaeDtPair(Base):
     )
     """어느 부서의 연계인가 — 권한과 집계의 단위다. **RESTRICT** 다: 부서를 지우려 할 때
     걸린 연계가 목록에 뜨고(확장 지점), 모르고 지워 평가가 사라지는 일을 막는다."""
+    kind: Mapped[str] = mapped_column(String(16), default="test", server_default="test")
+    """이 연계가 **무엇을 평가하나** — `test`(시험 연계) · `sim_only`(전용 검토).
+
+    대응 시험이 없는데 상시로 하는 판단이 있다(시뮬레이션만으로 시장 불량을 판단한다).
+    그것을 시험 연계에 섞으면 **가상검증률이 오염된다** — 전사에서 「시험 결과와의
+    일치율」 로 취합하는 지표라, 비교할 시험이 없는 줄이 같은 분모에 들면 뜻이 달라진다.
+    그래서 목록을 둘로 가르고 자료는 한 벌로 둔다 — 축의 적용 범위는 정의가 정한다
+    (`definitions.PAIR_KINDS`)."""
     subject_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE"), index=True
     )
-    """시험 항목 객체. **CASCADE** 다 — 객체를 지우면 그 연계와 평가도 함께 간다. 객체가
+    """대상 객체 — 종류에 따라 시험 항목이거나 시뮬레이션 전용 검토 항목이다.
+
+    **CASCADE** 다 — 객체를 지우면 그 연계와 평가도 함께 간다. 객체가
     병합되면(`merged_into`) 이긴 쪽으로 옮긴다. 안 옮기면 평가가 사라진 객체를 가리키고,
     그 손실은 집계 숫자에서만 드러난다."""
     agent_id: Mapped[uuid.UUID] = mapped_column(

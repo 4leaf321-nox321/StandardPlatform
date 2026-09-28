@@ -16,6 +16,9 @@ class SetupStatusOut(BaseModel):
     subject_type_label: str | None
     agent_type_slug: str | None
     agent_type_label: str | None
+    sim_only_type_slug: str | None
+    """전용 검토 항목 타입 — 없으면 그 탭이 서지 않는다(설정을 다시 누르면 만들어진다)."""
+    sim_only_type_label: str | None
     ready: bool
     """거짓이면 화면은 목록 대신 「기준 정보 만들기」 를 보여 준다."""
 
@@ -28,6 +31,9 @@ class DefsOut(BaseModel):
     subject_label: str
     agent_label: str
     axes: list[dict[str, Any]]
+    """축마다 `kinds` 가 붙는다 — 그 축이 어느 **연계 종류**에 해당하나."""
+    pair_kinds: list[dict[str, Any]]
+    """연계의 종류 — 목록을 가르는 축. 화면이 탭으로 그린다."""
     accuracy_thresholds: list[dict[str, Any]]
     accuracy_rules: list[dict[str, str]]
     sw_units: list[dict[str, str]]
@@ -60,6 +66,8 @@ class CatalogOut(BaseModel):
 
 class PairOut(BaseModel):
     id: uuid.UUID
+    kind: str
+    """`test`(시험 연계) · `sim_only`(전용 검토) — 재는 축이 다르다."""
     workspace_id: uuid.UUID
     workspace_name: str
     subject_id: uuid.UUID
@@ -75,6 +83,8 @@ class PairOut(BaseModel):
 
 
 class PairIn(BaseModel):
+    kind: Literal["test", "sim_only"] = "test"
+    """종류가 **대상 타입을 정한다** — 시험 연계는 시험 항목, 전용 검토는 전용 검토 항목."""
     subject_id: uuid.UUID
     agent_id: uuid.UUID
     workspace_slug: str = Field(min_length=1)
@@ -137,6 +147,8 @@ class CoverageAxisOut(BaseModel):
 class CoverageOut(BaseModel):
     """**평가 완료율** — 평가된 연계 ÷ 전체 연계. 축마다 따로 센다."""
 
+    kind: str
+    """이 완료율이 어느 종류의 것인가 — **분모가 종류마다 다르다.**"""
     pairs: int
     axes: list[CoverageAxisOut]
 
@@ -181,6 +193,7 @@ class RecentOut(BaseModel):
 class BoardOut(BaseModel):
     """대시보드 한 벌 — **타일과 분포가 같은 자료에서 나온다.**"""
 
+    kind: str
     tiles: list[TileOut]
     recent: list[RecentOut]
 
@@ -311,6 +324,9 @@ class SheetOut(BaseModel):
     axis: str
     axis_label: str
     kind: str
+    """**축**의 종류(value · set · rung · matrix)."""
+    pair_kind: str
+    """**연계**의 종류(test · sim_only) — 이 표가 어느 목록의 것인가."""
     rows: list[SheetRowOut]
 
 
@@ -335,6 +351,7 @@ class BulkRowIn(BaseModel):
 
 class BulkAssessIn(BaseModel):
     axis: str
+    kind: Literal["test", "sim_only"] = "test"
     rows: list[BulkRowIn] = Field(min_length=1)
 
 

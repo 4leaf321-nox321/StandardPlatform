@@ -8758,7 +8758,7 @@
           "ext:caegroup"
         ],
         "summary": "Pair List",
-        "description": "연계 목록 — **부서로 가리지 않는다**(전사 역량은 조직을 가로지르는 물음이다).\n\n부서를 주면 그 부서만 좁혀 본다. 고치는 것은 그 부서 멤버만이다.",
+        "description": "연계 목록 — **부서로 가리지 않는다**(전사 역량은 조직을 가로지르는 물음이다).\n\n부서를 주면 그 부서만 좁혀 본다. 고치는 것은 그 부서 멤버만이다.\n\n`kind` 는 **목록을 가른다** — `test`(시험 연계) · `sim_only`(전용 검토). 안 주면 둘 다\n온다(둘을 한 화면에 섞어 그리지는 않는다 — 재는 축이 다르다).",
         "operationId": "pair_list_api_ext_caegroup_dt_pairs_get",
         "parameters": [
           {
@@ -8775,6 +8775,22 @@
                 }
               ],
               "title": "Workspace"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
             }
           }
         ],
@@ -9200,6 +9216,16 @@
               ],
               "title": "Workspace"
             }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "test",
+              "title": "Kind"
+            }
           }
         ],
         "responses": {
@@ -9234,6 +9260,18 @@
         "summary": "Board",
         "description": "대시보드가 그리는 한 벌 — 연계마다의 수준과 최근 변경.\n\n**타일과 분포를 한 자료로 낸다.** 분포를 서버가 따로 세어 주면 둘이 갈릴 수 있고,\n그때 어느 쪽이 맞는지 아무도 답할 수 없다.",
         "operationId": "board_api_ext_caegroup_dt_board_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "test",
+              "title": "Kind"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Successful Response",
@@ -9241,6 +9279,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/BoardOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -9795,6 +9843,16 @@
               "type": "string",
               "title": "Axis"
             }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "test",
+              "title": "Kind"
+            }
           }
         ],
         "responses": {
@@ -9837,6 +9895,16 @@
             "schema": {
               "type": "string",
               "title": "Axis"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "default": "test",
+              "title": "Kind"
             }
           },
           {
@@ -10717,6 +10785,10 @@
       },
       "BoardOut": {
         "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
           "tiles": {
             "items": {
               "$ref": "#/components/schemas/TileOut"
@@ -10734,6 +10806,7 @@
         },
         "type": "object",
         "required": [
+          "kind",
           "tiles",
           "recent"
         ],
@@ -10937,6 +11010,15 @@
           "axis": {
             "type": "string",
             "title": "Axis"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "test",
+              "sim_only"
+            ],
+            "title": "Kind",
+            "default": "test"
           },
           "rows": {
             "items": {
@@ -12197,6 +12279,10 @@
       },
       "CoverageOut": {
         "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
           "pairs": {
             "type": "integer",
             "title": "Pairs"
@@ -12211,6 +12297,7 @@
         },
         "type": "object",
         "required": [
+          "kind",
           "pairs",
           "axes"
         ],
@@ -12762,6 +12849,14 @@
             "type": "array",
             "title": "Axes"
           },
+          "pair_kinds": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Pair Kinds"
+          },
           "accuracy_thresholds": {
             "items": {
               "additionalProperties": true,
@@ -12808,6 +12903,7 @@
           "subject_label",
           "agent_label",
           "axes",
+          "pair_kinds",
           "accuracy_thresholds",
           "accuracy_rules",
           "sw_units",
@@ -15977,6 +16073,15 @@
       },
       "PairIn": {
         "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "test",
+              "sim_only"
+            ],
+            "title": "Kind",
+            "default": "test"
+          },
           "subject_id": {
             "type": "string",
             "format": "uuid",
@@ -16007,6 +16112,10 @@
             "type": "string",
             "format": "uuid",
             "title": "Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
           },
           "workspace_id": {
             "type": "string",
@@ -16066,6 +16175,7 @@
         "type": "object",
         "required": [
           "id",
+          "kind",
           "workspace_id",
           "workspace_name",
           "subject_id",
@@ -18744,6 +18854,28 @@
             ],
             "title": "Agent Type Label"
           },
+          "sim_only_type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sim Only Type Slug"
+          },
+          "sim_only_type_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sim Only Type Label"
+          },
           "ready": {
             "type": "boolean",
             "title": "Ready"
@@ -18755,6 +18887,8 @@
           "subject_type_label",
           "agent_type_slug",
           "agent_type_label",
+          "sim_only_type_slug",
+          "sim_only_type_label",
           "ready"
         ],
         "title": "SetupStatusOut",
@@ -18774,6 +18908,10 @@
             "type": "string",
             "title": "Kind"
           },
+          "pair_kind": {
+            "type": "string",
+            "title": "Pair Kind"
+          },
           "rows": {
             "items": {
               "$ref": "#/components/schemas/SheetRowOut"
@@ -18787,6 +18925,7 @@
           "axis",
           "axis_label",
           "kind",
+          "pair_kind",
           "rows"
         ],
         "title": "SheetOut"
@@ -19451,6 +19590,10 @@
             "format": "uuid",
             "title": "Id"
           },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
           "workspace_id": {
             "type": "string",
             "format": "uuid",
@@ -19520,6 +19663,7 @@
         "type": "object",
         "required": [
           "id",
+          "kind",
           "workspace_id",
           "workspace_name",
           "subject_id",

@@ -680,7 +680,7 @@ def test_확장_기능도_도구_둘로_닿는다(client: TestClient, admin: Sig
             for one in mine["endpoints"]
             if one["path"] == "dt/pairs" and one["method"] == "GET"
         )
-        assert pairs["query"] == ["workspace"]
+        assert pairs["query"] == ["workspace", "kind"]
 
         # 읽기는 `read` 로 된다.
         body = bot.call(server.extension_call, "caegroup", "dt/defs")

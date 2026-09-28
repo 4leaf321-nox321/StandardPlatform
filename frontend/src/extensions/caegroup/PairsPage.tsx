@@ -39,6 +39,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select'
+import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import {
   Table,
   TableBody,
@@ -50,7 +51,7 @@ import {
 import { useResource } from '@/shared/hooks/useResource'
 
 import { AssessmentPanel } from './AssessmentPanel'
-import { dtApi, type Pair } from './api'
+import { axesFor, dtApi, type Pair, type PairKind } from './api'
 
 /** 같은 시험 항목끼리 묶는다 — 표에서 첫 줄만 이름을 들고 나머지는 합쳐진다. */
 function groupBySubject(rows: Pair[]): { subject: string; rows: Pair[] }[] {
@@ -67,13 +68,16 @@ export default function PairsPage() {
   const { user } = useAuth()
   const home = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
   const [target, setTarget] = useState<string>(home ?? '')
+  // **목록은 종류로 갈린다.** 시험 연계와 전용 검토는 재는 축이 달라, 한 표에 섞으면
+  // 채울 수 없는 칸이 생긴다(가상검증률은 비교할 시험이 있어야 한다).
+  const [kind, setKind] = useState<PairKind>('test')
   const setup = useResource(() => dtApi.setupStatus(), [])
   const defs = useResource(() => dtApi.defs(), [])
   const workspaces = useResource(() => workspaceApi.list(true), [])
   // **목록은 부서로 걸지 않는다.** 홈 부서로 걸어 두었더니 다른 부서에 등록한 연계가
   // 화면에서 사라졌고, 사람은 그것을 「저장이 안 됐다」 로 읽었다(실측 2026-09-24).
   // 볼 수 있는 범위는 서버가 판정한다 — 화면이 한 번 더 좁히면 그 사실이 어디에도 안 적힌다.
-  const pairs = useResource(() => dtApi.pairs(), [])
+  const pairs = useResource(() => dtApi.pairs(kind), [kind])
   const [failed, setFailed] = useState<Error | null>(null)
   const [busy, setBusy] = useState(false)
   const [subject, setSubject] = useState<string | null>(null)
@@ -92,8 +96,16 @@ export default function PairsPage() {
   const [bulkUnlinking, setBulkUnlinking] = useState(false)
 
   const ready = setup.data?.ready ?? false
-  const subjectSlug = setup.data?.subject_type_slug ?? null
+  // 대상 타입이 **종류마다 다르다** — 전용 검토의 대상은 시험 항목이 아니다.
+  const subjectSlug =
+    (kind === 'sim_only' ? setup.data?.sim_only_type_slug : setup.data?.subject_type_slug) ?? null
   const agentSlug = setup.data?.agent_type_slug ?? null
+  const axes = axesFor(defs.data, kind)
+  const kinds = (defs.data?.pair_kinds ?? []).filter(
+    // 전용 검토 항목 타입이 없는 설치에는 그 탭을 세우지 않는다 — 등록할 대상이 없다.
+    (one) => one.key !== 'sim_only' || setup.data?.sim_only_type_slug,
+  )
+  const kindNow = kinds.find((one) => one.key === kind) ?? null
 
   // 기준 정보가 정해진 뒤에만 후보를 받는다 — 어느 타입인지 모르면 물을 데가 없다.
   const subjects = useResource(
@@ -154,7 +166,7 @@ export default function PairsPage() {
     setBusy(true)
     setFailed(null)
     try {
-      await dtApi.link({ subject_id: subject, agent_id: agent, workspace_slug: target })
+      await dtApi.link({ kind, subject_id: subject, agent_id: agent, workspace_slug: target })
       setSubject(null)
       setAgent(null)
       setAdding(false)
@@ -185,7 +197,7 @@ export default function PairsPage() {
     ? (((subjects.data?.items ?? []).find((one) => one.id === current.subject_id)?.properties
         ?.defect_types as string[] | undefined) ?? [])
     : []
-  const subjectLabel = defs.data?.subject_label ?? '시험 항목'
+  const subjectLabel = kindNow?.subject_label ?? defs.data?.subject_label ?? '시험 항목'
   const agentLabel = defs.data?.agent_label ?? '시뮬레이션'
 
   return (
@@ -193,11 +205,28 @@ export default function PairsPage() {
       <PageHeader
         title="역량"
         description={`${subjectLabel} · ${agentLabel} 연계별로 수준을 평가합니다. 평가 축은 ${
-          defs.data?.axes.map((one) => one.label).join(' · ') ?? '…'
+          axes.map((one) => one.label).join(' · ') || '…'
         } 입니다.`}
       />
 
       <ErrorNotice error={failed ?? setup.error ?? pairs.error} />
+
+      {/* **탭이 곧 종류다.** 그래서 등록 창에 종류를 고르는 칸이 따로 없다 — 이 탭에서
+          등록하면 그 종류로 선다. 탭을 옮기면 열이 달라지는 것으로 규칙이 드러난다. */}
+      {ready && kinds.length > 1 && (
+        <div className="space-y-1">
+          <Tabs value={kind} onValueChange={(value) => setKind(value as PairKind)}>
+            <TabsList>
+              {kinds.map((one) => (
+                <TabsTrigger key={one.key} value={one.key}>
+                  {one.label}
+                </TabsTrigger>
+              ))}
+            </TabsList>
+          </Tabs>
+          {kindNow && <p className="text-muted-foreground text-sm">{kindNow.description}</p>}
+        </div>
+      )}
 
       {ready && (
         <div className="flex flex-wrap items-center gap-2">
@@ -436,7 +465,7 @@ export default function PairsPage() {
                       </TableCell>
                       {/* **어디까지 채웠나.** 다섯 축 중 몇 개를 매겼는지가 다음 할 일이다. */}
                       <TableCell className="text-right text-xs tabular-nums">
-                        {row.assessed} / {defs.data?.axes.length ?? 5}
+                        {row.assessed} / {axes.length || 5}
                       </TableCell>
                       <TableCell className="space-x-1 text-right whitespace-nowrap">
                         <Button
@@ -478,6 +507,7 @@ export default function PairsPage() {
                 <AssessmentPanel
                   pair={current}
                   defs={defs.data}
+                  kind={kind}
                   defectTypes={defectTypes}
                   onSaved={() => pairs.reload()}
                 />

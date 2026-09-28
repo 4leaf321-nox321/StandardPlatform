@@ -34,6 +34,10 @@ from app.shared import extensions as extension_points
 from app.shared.errors import AppError, Conflict, NotFound, code
 
 SUBJECT_SLUG = "sim_test_item"
+#: 대응 시험이 없는데 **상시로 하는 판단**의 대상(시뮬레이션만으로 시장 불량을 판단한다).
+#: 시험 항목 목록에 섞지 않는다 — 시험이 아닌 것이 그 목록에 들면 이름이 자료와 어긋나고,
+#: 가상검증률(시험 결과와의 일치율)을 잴 수 없는 줄이 그 분모에 든다.
+SIM_ONLY_SLUG = "sim_only_item"
 AGENT_SLUG = "sim_analysis"
 #: 도구 카탈로그(소프트웨어 제품)가 있는 설치에서는 해석이 그것을 가리킨다.
 TOOL_SLUG = "sim_tool"
@@ -96,6 +100,34 @@ SETUP_SCHEMA: dict[str, Any] = {
                     "enum_options": [one["key"] for one in D.ACCURACY_RULES],
                     "default_value": "auto",
                     "help": "여러 시뮬레이션의 값에서 항목 값을 어떻게 셈하나.",
+                },
+            ],
+        },
+        {
+            "slug": SIM_ONLY_SLUG,
+            "label": "시뮬레이션 전용 검토 항목",
+            "icon": "ScanSearch",
+            "nav_group_slug": MASTER_GROUP,
+            "description": (
+                "대응 시험이 없어 시뮬레이션만으로 판단하는 것 — 시장 불량 판단 등. "
+                "가상검증률 · 시험 대체는 재지 않는다."
+            ),
+            "key_policy": "optional",
+            "properties": [
+                {"key": "detail", "label": "세부 내용", "data_type": "text"},
+                {
+                    "key": "product_families",
+                    "label": "제품군",
+                    "data_type": "text",
+                    "multi": True,
+                },
+                # 모델링 수준의 **시장 불량 재현**이 이 목록을 쓴다 — 시험 항목과 같은 칸
+                # 이름이다(화면 · 일괄 입력이 한 규칙으로 다룬다).
+                {
+                    "key": "defect_types",
+                    "label": "불량 유형",
+                    "data_type": "text",
+                    "multi": True,
                 },
             ],
         },
@@ -311,13 +343,23 @@ def status(db: Session) -> dict[str, Any]:
     row = setting(db)
     subject = _type_or_none(db, row.subject_type_slug)
     agent = _type_or_none(db, row.agent_type_slug)
+    # 전용 검토의 대상 타입은 **있으면 그 탭이 열린다.** 없어도 시험 연계는 돈다 —
+    # 이 확장을 먼저 깐 설치에는 그 타입이 없다(설정을 다시 누르면 만들어진다).
+    sim_only = _type_or_none(db, SIM_ONLY_SLUG)
     return {
         "subject_type_slug": row.subject_type_slug,
         "subject_type_label": subject.label if subject else None,
         "agent_type_slug": row.agent_type_slug,
         "agent_type_label": agent.label if agent else None,
+        "sim_only_type_slug": SIM_ONLY_SLUG if sim_only else None,
+        "sim_only_type_label": sim_only.label if sim_only else None,
         "ready": subject is not None and agent is not None,
     }
+
+
+def subject_slug_for(kind: str) -> str:
+    """그 종류의 **대상 타입** — 시험 연계는 시험 항목, 전용 검토는 전용 검토 항목."""
+    return SIM_ONLY_SLUG if kind == "sim_only" else SUBJECT_SLUG
 
 
 def setup(db: Session, user: User) -> dict[str, Any]:
@@ -370,7 +412,9 @@ def _as_list(raw: Any) -> list[Any]:
     return list(raw) if isinstance(raw, list) else [raw]
 
 
-def pairs(db: Session, user: User, *, workspace: Workspace | None) -> list[dict[str, Any]]:
+def pairs(
+    db: Session, user: User, *, workspace: Workspace | None, kind: str | None = None
+) -> list[dict[str, Any]]:
     """연계 목록 — 화면의 왼쪽 표. **이름은 객체에서 온다.**
 
     **조회는 부서로 가리지 않는다.** 이 화면이 답하는 물음은 「전사 역량이 지금 어디까지
@@ -385,6 +429,10 @@ def pairs(db: Session, user: User, *, workspace: Workspace | None) -> list[dict[
     if workspace is not None:
         # 부서를 주면 그 부서만 — 가리는 것이 아니라 좁혀 보는 것이다.
         stmt = stmt.where(CaeDtPair.workspace_id == workspace.id)
+    if kind is not None:
+        # **종류는 목록을 가른다.** 시험 연계와 전용 검토는 재는 축이 달라 한 표에 섞으면
+        # 채울 수 없는 칸이 생긴다.
+        stmt = stmt.where(CaeDtPair.kind == kind)
     rows = list(db.scalars(stmt))
     wanted = {one.subject_id for one in rows} | {one.agent_id for one in rows}
     names = (
@@ -437,6 +485,7 @@ def pairs(db: Session, user: User, *, workspace: Workspace | None) -> list[dict[
         out.append(
             {
                 "id": one.id,
+                "kind": one.kind,
                 "workspace_id": one.workspace_id,
                 "workspace_name": workspaces.get(one.workspace_id, ""),
                 "subject_id": one.subject_id,
@@ -465,13 +514,22 @@ def link(
     subject_id: uuid.UUID,
     agent_id: uuid.UUID,
     workspace: Workspace,
+    kind: str = D.DEFAULT_PAIR_KIND,
 ) -> CaeDtPair:
-    """연계 등록 — **부서 멤버만.**"""
+    """연계 등록 — **부서 멤버만.** 종류가 대상 타입을 정한다."""
     permissions.require_member(db, workspace=workspace, user=user)
     ready = status(db)
     if not ready["ready"]:
         raise Conflict(code("CAEGROUP", 4), "기준 정보 설정이 필요합니다.")
-    _object_of(db, subject_id, type_slug=str(ready["subject_type_slug"]), what="시험 항목")
+    if kind not in D.PAIR_KIND_KEYS:
+        raise Conflict(code("CAEGROUP", 23), f"그런 종류가 없습니다: {kind}")
+    if kind == "sim_only" and ready["sim_only_type_slug"] is None:
+        raise Conflict(
+            code("CAEGROUP", 24),
+            "전용 검토 항목 타입이 없습니다 — 기준 정보 만들기를 다시 누르세요.",
+        )
+    subject_what = str(D.PAIR_KIND_BY_KEY[kind]["subject_label"])
+    _object_of(db, subject_id, type_slug=subject_slug_for(kind), what=subject_what)
     _object_of(db, agent_id, type_slug=str(ready["agent_type_slug"]), what="시뮬레이션")
     if db.scalar(
         select(CaeDtPair).where(
@@ -481,6 +539,7 @@ def link(
         raise Conflict(code("CAEGROUP", 5), "이미 등록된 연계입니다.")
     row = CaeDtPair(
         workspace_id=workspace.id,
+        kind=kind,
         subject_id=subject_id,
         agent_id=agent_id,
         created_by_id=user.id,
@@ -691,8 +750,13 @@ def _apply_axis(
     payload: dict[str, Any],
     *,
     defect_types: list[str],
+    pair_kind: str = D.DEFAULT_PAIR_KIND,
 ) -> None:
-    """축 종류마다 채우는 칸이 다르다 — 그 갈림을 **한 곳**에서 한다."""
+    """축 종류마다 채우는 칸이 다르다 — 그 갈림을 **한 곳**에서 한다.
+
+    ⚠️ 이 함수의 `kind` 는 **축**의 종류다(value · set · rung · matrix). 연계의 종류는
+       `pair_kind` — 이름이 겹쳐 한 번 틀렸다(전용 검토 규칙이 시험 연계에 걸렸다).
+    """
     allowed = set(D.rung_keys(axis["key"]))
     kind = axis["kind"]
     row.value, row.rung, row.rungs, row.defects = None, None, [], {}
@@ -722,7 +786,8 @@ def _apply_axis(
     else:  # matrix — 바탕 토글 + 불량 유형별 재현. **수준은 셈으로 접는다.**
         base = {one["key"] for one in axis.get("base", [])}
         row.rungs = [one for one in (payload.get("rungs") or []) if one in base]
-        columns = {one["key"] for one in axis.get("columns", [])}
+        # **그 종류의 열만 받는다** — 전용 검토에 시험 불량 재현은 없다. 들어와도 버린다.
+        columns = set(D.defect_columns(pair_kind))
         defects = {
             str(name): {
                 key: value for key, value in (marks or {}).items() if key in columns and value
@@ -735,7 +800,7 @@ def _apply_axis(
                 code("CAEGROUP", 16),
                 f"{axis['label']}: 바탕(형상 · 거동)을 켜거나 불량 유형의 재현을 표시하세요.",
             )
-        row.rung = D.modeling_level(row.rungs, row.defects, defect_types)
+        row.rung = D.modeling_level(row.rungs, row.defects, defect_types, kind=pair_kind)
 
 
 def _defect_types(db: Session, pair: CaeDtPair) -> list[str]:
@@ -761,6 +826,13 @@ def save_assessment(
         raise NotFound(code("CAEGROUP", 7), "부서를 찾을 수 없습니다.")
     permissions.require_member(db, workspace=workspace, user=user)
     axis = _axis_or_404(axis_key)
+    # **해당 없는 축은 저장 자리에서 막는다.** 화면이 그 칸을 안 그려도 API 는 열려 있고,
+    # 한 줄이라도 들어가면 그 축의 완료율과 전사 평균이 흔들린다.
+    if not D.applies(axis_key, pair.kind):
+        raise Conflict(
+            code("CAEGROUP", 25),
+            f"{D.PAIR_KIND_BY_KEY[pair.kind]['label']}에서는 {axis['label']}을 재지 않습니다.",
+        )
     note = _check_note(axis, payload)
 
     row = db.scalar(
@@ -772,7 +844,7 @@ def save_assessment(
     if row is None:
         row = CaeDtAssessment(pair_id=pair_id, axis=axis_key)
         db.add(row)
-    _apply_axis(axis, row, payload, defect_types=_defect_types(db, pair))
+    _apply_axis(axis, row, payload, defect_types=_defect_types(db, pair), pair_kind=pair.kind)
     row.note = note
     row.evidence = dict(payload.get("evidence") or {})
     row.assessed_by_id = user.id
@@ -815,14 +887,16 @@ def _history_snapshot(row: CaeDtAssessment) -> dict[str, Any]:
     }
 
 
-def board(db: Session, user: User, *, limit_recent: int = 12) -> dict[str, Any]:
+def board(
+    db: Session, user: User, *, limit_recent: int = 12, kind: str = D.DEFAULT_PAIR_KIND
+) -> dict[str, Any]:
     """대시보드가 그리는 한 벌 — **연계마다 축의 수준**과 최근 변경.
 
     **분포와 타일은 같은 자료에서 나온다.** 서버가 분포를 따로 세어 내려 주면 타일과
     분포가 갈릴 수 있고, 그때 어느 쪽이 맞는지 아무도 모른다 — 화면이 이 목록 하나로
     둘을 그린다.
     """
-    rows = pairs(db, user, workspace=None)
+    rows = pairs(db, user, workspace=None, kind=kind)
     by_pair: dict[uuid.UUID, dict[str, Any]] = {}
     ids = [one["id"] for one in rows]
     if ids:
@@ -871,21 +945,29 @@ def board(db: Session, user: User, *, limit_recent: int = 12) -> dict[str, Any]:
         if ids
         else []
     )
-    return {"tiles": tiles, "recent": recent}
+    return {"kind": kind, "tiles": tiles, "recent": recent}
 
 
-def coverage(db: Session, *, workspace: Workspace | None = None) -> dict[str, Any]:
+def coverage(
+    db: Session,
+    *,
+    workspace: Workspace | None = None,
+    kind: str = D.DEFAULT_PAIR_KIND,
+) -> dict[str, Any]:
     """축마다 **평가 완료율** — 평가된 연계 ÷ 전체 연계.
 
     3단계 대시보드가 이것으로 그린다. 여기 두는 이유는 화면 둘이 같은 셈을 두 번 하지
     않게 하려는 것이다 — 두 번 하면 둘이 갈리고, 그때 어느 쪽이 맞는지 아무도 모른다.
     """
-    pair_stmt = select(CaeDtPair.id)
+    # **분모는 그 종류의 연계다.** 전용 검토가 시험 연계의 분모에 들면 가상검증률 완료율이
+    # 영영 100% 가 안 되고, 그러면 사람은 그 숫자를 안 본다.
+    pair_stmt = select(CaeDtPair.id).where(CaeDtPair.kind == kind)
     if workspace is not None:
         pair_stmt = pair_stmt.where(CaeDtPair.workspace_id == workspace.id)
     ids = set(db.scalars(pair_stmt))
     total = len(ids)
-    done: dict[str, int] = {key: 0 for key in D.AXIS_KEYS}
+    keys = D.axis_keys_for(kind)
+    done: dict[str, int] = {key: 0 for key in keys}
     if ids:
         for axis_key, count in db.execute(
             select(CaeDtAssessment.axis, func.count())
@@ -895,6 +977,7 @@ def coverage(db: Session, *, workspace: Workspace | None = None) -> dict[str, An
             if axis_key in done:
                 done[axis_key] = int(count)
     return {
+        "kind": kind,
         "pairs": total,
         "axes": [
             {
@@ -903,7 +986,7 @@ def coverage(db: Session, *, workspace: Workspace | None = None) -> dict[str, An
                 "assessed": done[key],
                 "ratio": round(done[key] / total, 3) if total else 0.0,
             }
-            for key in D.AXIS_KEYS
+            for key in keys
         ],
     }
 
@@ -1330,13 +1413,23 @@ def _rung_by_name(axis: dict[str, Any]) -> dict[str, str]:
     return out
 
 
-def sheet(db: Session, user: User, *, axis_key: str) -> dict[str, Any]:
-    """축 하나의 **현재값 표** — 연계마다 한 줄.
+def sheet(
+    db: Session, user: User, *, axis_key: str, kind: str = D.DEFAULT_PAIR_KIND
+) -> dict[str, Any]:
+    """축 하나의 **현재값 표** — 그 종류의 연계마다 한 줄.
 
     화면은 이것을 그대로 표에 채우고(현재값 불러오기), 사람이 고친 뒤 한 번에 되돌려 준다.
+
+    **해당 없는 종류의 줄은 서지 않는다** — 가상검증률 표에 전용 검토 줄이 뜨면 채울 수
+    없는 빈 칸을 사람에게 보여 주는 셈이다.
     """
     axis = _axis_or_404(axis_key)
-    rows = pairs(db, user, workspace=None)
+    if not D.applies(axis_key, kind):
+        raise Conflict(
+            code("CAEGROUP", 25),
+            f"{D.PAIR_KIND_BY_KEY[kind]['label']}에서는 {axis['label']}을 재지 않습니다.",
+        )
+    rows = pairs(db, user, workspace=None, kind=kind)
     ids = [one["id"] for one in rows]
     saved: dict[uuid.UUID, CaeDtAssessment] = {}
     if ids:
@@ -1350,7 +1443,12 @@ def sheet(db: Session, user: User, *, axis_key: str) -> dict[str, Any]:
         }
     names = {one["key"]: one["label"] for one in axis["rungs"]}
     # 매트릭스는 **불량 유형별 재현**도 함께 준다 — 유형 목록이 줄마다 다르므로 줄에 싣는다.
-    columns = axis.get("columns", []) if axis["kind"] == "matrix" else []
+    # 열은 **그 종류의 것만**(전용 검토에 시험 불량 재현은 없다).
+    columns = (
+        [one for one in axis.get("columns", []) if str(one["key"]) in D.defect_columns(kind)]
+        if axis["kind"] == "matrix"
+        else []
+    )
     types = _defect_types_by_pair(db, rows) if columns else {}
     out: list[dict[str, Any]] = []
     for one in rows:
@@ -1380,11 +1478,23 @@ def sheet(db: Session, user: User, *, axis_key: str) -> dict[str, Any]:
                 },
             }
         )
-    return {"axis": axis_key, "axis_label": axis["label"], "kind": axis["kind"], "rows": out}
+    return {
+        "axis": axis_key,
+        "axis_label": axis["label"],
+        # `kind` 는 **축의 종류**(value · set · rung · matrix)다. 연계의 종류는 `pair_kind`.
+        "kind": axis["kind"],
+        "pair_kind": kind,
+        "rows": out,
+    }
 
 
 def bulk_save(
-    db: Session, user: User, *, axis_key: str, rows: list[dict[str, Any]]
+    db: Session,
+    user: User,
+    *,
+    axis_key: str,
+    rows: list[dict[str, Any]],
+    kind: str = D.DEFAULT_PAIR_KIND,
 ) -> list[dict[str, Any]]:
     """표를 한 번에 저장한다 — **줄마다 같은 규칙, 줄마다 결과.**
 
@@ -1394,7 +1504,8 @@ def bulk_save(
        줄의 일을 없앤다 — 대신 **어느 줄이 왜 막혔는지** 돌려준다.
     """
     axis = _axis_or_404(axis_key)
-    known = pairs(db, user, workspace=None)
+    # **그 종류의 연계만 찾는다** — 이름이 같은 다른 종류의 줄로 새지 않게.
+    known = pairs(db, user, workspace=None, kind=kind)
     by_id = {str(one["id"]): one for one in known}
     by_label = {(one["subject_label"], one["agent_label"]): one for one in known}
     by_name = _rung_by_name(axis)
@@ -1493,6 +1604,9 @@ def bulk_save(
                     built: dict[str, dict[str, str]] = {}
                     strange: list[str] = []
                     for col in axis.get("columns", []):
+                        # 그 종류에 없는 열은 아예 안 본다 — 전용 검토에 시험 열은 없다.
+                        if str(col["key"]) not in D.defect_columns(kind):
+                            continue
                         for name in _names_of(sent.get(str(col["key"]))):
                             if name not in allowed:
                                 strange.append(name)
@@ -1851,18 +1965,30 @@ def maintenance(db: Session, user: User) -> list[extension_points.MaintenanceIte
     if not ready["ready"]:
         return []
     out: list[extension_points.MaintenanceItem] = []
-    spread = coverage(db)
-    for one in spread["axes"]:
-        missing = spread["pairs"] - one["assessed"]
-        if missing > 0:
-            out.append(
-                extension_points.MaintenanceItem(
-                    key=f"caegroup.dt.axis.{one['axis']}",
-                    label=f"디지털 트윈 — {one['label']} 미평가",
-                    count=missing,
-                    link="/ext/caegroup/dt/bulk",
+    # **종류마다 센다.** 한 덩어리로 세면 전용 검토의 줄이 가상검증률 미평가로 잡히고, 그
+    # 숫자는 영영 안 줄어든다 — 그러면 사람은 이 목록을 아예 안 읽게 된다.
+    for pair_kind in D.PAIR_KIND_KEYS:
+        spread = coverage(db, kind=pair_kind)
+        if spread["pairs"] == 0:
+            continue
+        # 흔한 쪽(시험 연계)에는 종류를 안 붙인다 — 목록의 모든 줄에 같은 말이 붙으면
+        # 읽는 눈이 그 말을 건너뛰고, 그때 다른 종류가 섞여도 눈에 안 들어온다.
+        told = (
+            ""
+            if pair_kind == D.DEFAULT_PAIR_KIND
+            else f" {D.PAIR_KIND_BY_KEY[pair_kind]['label']}"
+        )
+        for one in spread["axes"]:
+            missing = spread["pairs"] - one["assessed"]
+            if missing > 0:
+                out.append(
+                    extension_points.MaintenanceItem(
+                        key=f"caegroup.dt.axis.{pair_kind}.{one['axis']}",
+                        label=f"디지털 트윈{told} — {one['label']} 미평가",
+                        count=missing,
+                        link="/ext/caegroup/dt/bulk",
+                    )
                 )
-            )
     # 인프라를 아직 안 적은 부서 — 인력이 있는 부서만 센다(아무 부서나 다 세면 목록이 곧
     # 무의미해진다).
     with_staff = {row.workspace_id for row in db.scalars(select(CaeDtStaff))}
