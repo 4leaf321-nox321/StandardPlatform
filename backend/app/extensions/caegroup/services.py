@@ -714,7 +714,7 @@ def history(db: Session, *, pair_id: uuid.UUID, limit: int = 50) -> list[dict[st
     rows = db.scalars(
         select(CaeDtAssessmentHistory)
         .where(CaeDtAssessmentHistory.pair_id == pair_id)
-        .order_by(CaeDtAssessmentHistory.changed_at.desc())
+        .order_by(CaeDtAssessmentHistory.changed_at.desc(), CaeDtAssessmentHistory.id.desc())
         .limit(limit)
     )
     return [
@@ -938,7 +938,9 @@ def board(
             for one in db.scalars(
                 select(CaeDtAssessmentHistory)
                 .where(CaeDtAssessmentHistory.pair_id.in_(ids))
-                .order_by(CaeDtAssessmentHistory.changed_at.desc())
+                .order_by(
+                    CaeDtAssessmentHistory.changed_at.desc(), CaeDtAssessmentHistory.id.desc()
+                )
                 .limit(limit_recent)
             )
         ]

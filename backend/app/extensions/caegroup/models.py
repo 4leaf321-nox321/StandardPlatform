@@ -185,8 +185,12 @@ class CaeDtAssessmentHistory(Base):
     snapshot: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     """바뀐 뒤의 모습 한 벌. 이전 값은 그 앞 줄이 들고 있다."""
     changed_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now()
+        DateTime(timezone=True), server_default=func.clock_timestamp()
     )
+    """**`clock_timestamp()` 다** — `now()` 는 트랜잭션이 시작한 시각이라, 한 요청에서 두 축을
+    고치면 두 줄이 같은 값이 되고 **차례가 질의마다 달라진다**(시험이 간헐로 잡았다).
+    이력은 차례가 곧 뜻이다 — 뒤집히면 「무엇이 무엇으로 바뀌었나」 가 거꾸로 읽힌다.
+    같은 이유로 데이터 소스 실행(0032) · 정의 스냅샷(0036) · 별칭(0040)이 이것을 쓴다."""
     changed_by_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
