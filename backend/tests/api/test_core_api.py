@@ -10,7 +10,7 @@ import uuid
 from typing import Any
 
 from fastapi.testclient import TestClient
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from tests.api.conftest import Signed
@@ -620,3 +620,42 @@ def test_도는_적재보다_앞선_시각을_주지_않는다(
     assert after >= mark
     body = _rows(client, admin, vendor)
     assert body["as_of"]
+
+
+def test_긴_백필도_기준_시각에서_빠지지_않는다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """**시간으로만 자르면 긴 백필이 셈에서 빠져 그 구멍이 그대로 돌아온다.**
+
+    기준 시각은 「도는 트랜잭션보다 앞」 인데, 붙잡힌 세션이 그것을 영영 묶지 않게 오래된
+    것은 뺀다. 그 자를 **시간으로만** 두면 한 시간 도는 백필이 빠지고, 그 사이에 받아 간
+    쪽은 백필분을 다시 잃는다. 그래서 자는 **`idle in transaction`** 에만 걸린다 —
+    정말 일하는 중(`active`)은 얼마나 오래됐든 센다.
+    """
+    from app.config import get_settings
+    from app.database import SessionLocal
+    from app.modules.coreapi import services
+
+    vendor, _part = _world(client, admin)
+    settings = get_settings()
+    was = settings.core_watermark_floor_seconds
+    # 자를 1초로 둔다 — 「오래된 것은 뺀다」 를 가장 좁게 켠 경우다. 트랜잭션을 **아주 오래
+    # 전에 시작**했더라도, 방금 무엇이라도 했다면 셈에 들어야 한다.
+    settings.core_watermark_floor_seconds = 1
+    other = SessionLocal()
+    try:
+        other.execute(text("SELECT 1"))
+        started = other.scalar(select(func.now()))
+        assert started is not None
+        # 이 세션은 지금 `idle in transaction` 이다(문장이 끝났다) — 백필의 문장 사이가
+        # 그 상태다. 그때 빠지면 그 적재분을 잃는다.
+        assert services.watermark(db) < started, "도는 적재가 셈에서 빠졌다"
+
+        status = client.get("/api/ontology/core-status", headers=admin.headers)
+        assert status.status_code == 200, status.text
+        assert status.json()["watermark_lag_seconds"] >= 0
+    finally:
+        settings.core_watermark_floor_seconds = was
+        other.rollback()
+        other.close()
+    assert vendor

@@ -129,12 +129,17 @@ class ObjectInstance(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
-    renamed_from: Mapped[str | None] = mapped_column(String(120), nullable=True)
-    """**옛 식별자** — 키 체계가 바뀌어 `key` 를 고쳤을 때 그 앞의 값.
+    previous_keys: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False
+    )
+    """**옛 식별자들** — 키를 고칠 때마다 앞의 값을 뒤에 붙인다(오래된 것부터).
 
     이것이 없으면 밖(쌍둥이 · 코어 API)에서는 새 식별자가 **처음 보는 것**이라 같은 것이
     둘이 된다. 받는 쪽은 이 값으로 제가 가진 행을 찾아 식별자를 옮긴다 — 합쳐져 사라진
-    것에 `merged_into` 를 주는 것과 같은 이유다."""
+    것에 `merged_into` 를 주는 것과 같은 이유다.
+
+    ⚠️ **하나가 아니라 목록이다.** 동기화 사이에 키가 두 번 바뀌면(A→B→C) 받는 쪽이 가진
+       것은 A 인데 마지막 값만 보내면 B 밖에 말하지 못해 따라오지 못한다."""
 
     merged_into_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="SET NULL"), nullable=True

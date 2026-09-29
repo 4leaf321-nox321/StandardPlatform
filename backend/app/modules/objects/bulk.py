@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.objects import aliases, links, system
+from app.modules.objects import keys as key_history
 from app.modules.objects import relations as rel
 from app.modules.objects.models import (
     OBJECT_STATUSES,
@@ -74,6 +75,7 @@ FIXED_COLUMNS = (
     "valid_from_year",
     "valid_to_year",
     "renamed_from",
+    "previous_keys",
 )
 
 RELATION_MODES = ("add", "replace", "replace_type")
@@ -167,12 +169,50 @@ def parse_file(name: str, raw: bytes) -> list[dict[str, Any]]:
 # --- 값 읽기 -------------------------------------------------------------------
 
 
+class MissingRef(Exception):
+    """가리키는 것을 **못 찾았다** — 그 칸만 비우고 줄에 적기로 했을 때.
+
+    기본은 줄 오류다(전부 아니면 무). 그런데 백필에서는 **한 줄이 묶음 전체를 막는다** —
+    PLM 에 없는 모델을 가리키는 행 하나 때문에 수만 줄이 안 들어간다. 별칭이 겹칠 때와 같은
+    규칙으로, 그 칸만 비우고 무엇이 빠졌는지 적는다.
+    """
+
+    def __init__(self, text: str, label: str) -> None:
+        super().__init__(text)
+        self.text = text
+        self.label = label
+
+
+class PendingRef(Exception):
+    """**이 묶음이 만들 객체**를 가리킨다 — 지금은 없지만 적용할 때 풀린다.
+
+    가벼운 미리 보기(계획만)에서 쓴다. 예전에는 미리 보기가 **적용을 끝까지 돌린 뒤
+    되돌렸다** — 그래야 뒤 묶음이 앞 묶음의 객체를 찾는데, 그 때문에 대량 백필은 시간이
+    두 배였다(실측). 계획만 볼 때는 「이 묶음이 만든다」 를 아는 것으로 충분하다.
+    """
+
+    def __init__(self, text: str, type_slug: str) -> None:
+        super().__init__(text)
+        self.text = text
+        self.type_slug = type_slug
+
+
 class _Refs:
     """참조 풀이 — 상대 타입의 식별자·이름을 id 로. 타입마다 한 번만 읽는다."""
 
-    def __init__(self, db: Session, user: User) -> None:
+    def __init__(
+        self,
+        db: Session,
+        user: User,
+        pending: dict[str, set[str]] | None = None,
+        blank_missing: bool = False,
+    ) -> None:
         self.db = db
         self.user = user
+        self.pending = pending or {}
+        """타입 slug → **이 묶음이 만들 것**의 식별자 · 이름. 계획만 볼 때만 채운다."""
+        self.blank_missing = blank_missing
+        """참이면 못 찾은 참조를 **줄 오류로 만들지 않고** 그 칸만 비운다(`MissingRef`)."""
         self.notes: list[str] = []
         """줄에 적을 말 — **별칭으로 풀렸는데 그 글자가 다른 객체의 이름이기도** 할 때.
         부르는 쪽이 줄마다 비우고 읽는다(`_plan_row`)."""
@@ -273,6 +313,10 @@ class _Refs:
         # 참조가 저장되고, 화면에는 빈 칸으로 뜬다.
         if text in ids:
             return text
+        if text in self.pending.get(target, set()):
+            raise PendingRef(text, target)
+        if self.blank_missing:
+            raise MissingRef(text, definition.label)
         raise InvalidValue(
             code("OBJECTS", 41),
             f"{definition.label}: 「{text}」 을 {target} 에서 찾을 수 없습니다.",
@@ -420,6 +464,26 @@ def _is_blank(raw: Any) -> bool:
     return raw is None or (isinstance(raw, str) and raw.strip() == "")
 
 
+def renamed_history(object_type: ObjectType, row: dict[str, Any]) -> list[str]:
+    """이 행이 말하는 **옛 식별자 전부** — 오래된 것부터.
+
+    `renamed_from` 한 칸과 `previous_keys` 목록을 함께 읽는다. 받는 쪽이 오래 잠들어
+    있었으면 가진 것은 마지막 옛 식별자가 아니다(A→B→C 에서 A 를 들고 있다).
+    """
+    out: list[str] = []
+    raw = row.get("previous_keys")
+    if isinstance(raw, list | tuple):
+        out.extend(
+            one
+            for one in (normalize_key(object_type, str(x)) for x in raw if str(x).strip())
+            if one
+        )
+    last = renamed_from(object_type, row)
+    if last and last not in out:
+        out.append(last)
+    return out
+
+
 def renamed_from(object_type: ObjectType, row: dict[str, Any]) -> str | None:
     """이 행이 **바꾸려는 옛 식별자** — 없으면 None.
 
@@ -453,7 +517,18 @@ def _patch_of(
             continue
         if isinstance(raw, str) and raw.strip() == "":
             continue
-        patch[prop_key] = cell_to_value(by_key[prop_key], raw, refs)
+        try:
+            patch[prop_key] = cell_to_value(by_key[prop_key], raw, refs)
+        except PendingRef as later:
+            # **이 묶음이 만들 것**을 가리킨다 — 계획만 볼 때는 오류가 아니다. 그 칸은
+            # 여기서 빼고(값을 지어내지 않는다) 줄에 적는다.
+            refs.notes.append(
+                f"{by_key[prop_key].label}: 「{later.text}」 은 이 묶음이 만드는 "
+                "객체입니다 — 적용할 때 풀립니다"
+            )
+        except MissingRef as gone:
+            # **한 줄이 묶음 전체를 막지 않게** 그 칸만 비운다 — 무엇이 빠졌는지는 적는다.
+            refs.notes.append(f"{gone.label}: 「{gone.text}」 을 찾지 못해 비웁니다")
     return patch
 
 
@@ -518,8 +593,7 @@ def _read_index(
             wanted = normalize_key(object_type, str(raw_key))
             if wanted:
                 keys.add(wanted)
-        old = renamed_from(object_type, row)
-        if old:
+        for old in renamed_history(object_type, row):
             keys.add(old)
         raw_id = _fixed(row, "id")
         if raw_id not in (_MISSING, None):
@@ -761,6 +835,8 @@ def plan_objects(
     owner_workspace_id: uuid.UUID | None,
     source: str = "",
     aliases_mode: str = "add",
+    pending: dict[str, set[str]] | None = None,
+    blank_missing: bool = False,
     max_rows: int = MAX_ROWS,
     on_progress: Progress = None,
 ) -> Plan:
@@ -789,7 +865,7 @@ def plan_objects(
         )
         return plan
     by_key = {d.key: d for d in defs}
-    refs = _Refs(db, user)
+    refs = _Refs(db, user, pending, blank_missing)
 
     # 이 파일 안에서 같은 식별자가 둘이면 어느 쪽이 맞는지 알 수 없다.
     seen_keys: dict[str, int] = {}
@@ -927,14 +1003,19 @@ def _plan_row(
             # 같은 식별자가 남의 부서에 있다 — 없는 것과 같은 말로 답하되 만들지도 못한다.
             raise InvalidValue(code("OBJECTS", 3), f"같은 식별자가 이미 있습니다: {key}")
 
-    old_key = renamed_from(object_type, row)
+    old_keys = renamed_history(object_type, row)
+    old_key = old_keys[-1] if old_keys else None
     if old_key is not None:
         if key is None:
             raise InvalidValue(
                 code("OBJECTS", 90),
                 "renamed_from 을 적으면 key 에 **새 식별자**를 적어야 합니다.",
             )
-        previous = index_data.by_key.get(old_key)
+        # **이력을 거꾸로 훑는다** — 받는 쪽이 들고 있는 것이 어느 판인지 모른다.
+        previous = next(
+            (found for one in reversed(old_keys) if (found := index_data.by_key.get(one))),
+            None,
+        )
         if previous is not None and previous.id not in index_data.visible:
             raise InvalidValue(
                 code("OBJECTS", 90), f"옛 식별자의 객체를 볼 수 없습니다: {old_key}"
@@ -1098,6 +1179,7 @@ def apply_objects(
     owner_workspace_id: uuid.UUID | None,
     source: str = "",
     aliases_mode: str = "add",
+    blank_missing: bool = False,
     max_rows: int = MAX_ROWS,
     on_progress: Progress = None,
     before_apply: Callable[[Plan], None] | None = None,
@@ -1117,6 +1199,7 @@ def apply_objects(
         owner_workspace_id=owner_workspace_id,
         source=source,
         aliases_mode=aliases_mode,
+        blank_missing=blank_missing,
         max_rows=max_rows,
         on_progress=on_progress,
     )
@@ -1128,7 +1211,7 @@ def apply_objects(
     defs = [d for d in properties_of(db, object_type.id) if d.data_type != "file"]
     by_key = {d.key: d for d in defs}
     mapping, _ = _column_map(defs, {key for row in rows for key in row})
-    refs = _Refs(db, user)
+    refs = _Refs(db, user, blank_missing=blank_missing)
     # 계획이 미리 읽은 것을 그대로 쓴다 — 방금 세운 계획이라 같은 트랜잭션의 같은 사실이다.
     index_data = plan.index if isinstance(plan.index, _Index) else _Index()
     # 새로 만든 객체의 별칭은 **모았다가 한 번에** 넣는다(아래) — 둘 사이에 ORM 관계가
@@ -1210,9 +1293,9 @@ def apply_objects(
         if row_plan.key is not None and "key" in row_plan.changes:
             if target.key:
                 # **옛 식별자를 남긴다.** 별칭으로(그 번호로 적힌 문서 · 사람의 기억이 있다)
-                # 그리고 칸으로도 — 그래야 쌍둥이 · 코어 API 가 같은 것이 둘이 되지 않게
-                # 제 식별자를 옮긴다.
-                target.renamed_from = target.key
+                # 그리고 목록으로도 — 그래야 쌍둥이 · 코어 API 가 같은 것이 둘이 되지 않게
+                # 제 식별자를 옮긴다. 목록인 이유: 동기화 사이에 두 번 바뀔 수 있다.
+                key_history.remember(target, target.key)
                 if renamed_from(object_type, row) is not None:
                     keep_old_key = target.key
             target.key = row_plan.key
@@ -1277,9 +1360,9 @@ def apply_objects(
 
 
 def export_columns(defs: list[PropertyDef]) -> list[str]:
-    # `renamed_from` 은 템플릿 · 내보내기에 안 넣는다 — 늘 비는 열이 하나 늘고, 내보낸 것을
-    # 그대로 올리면 뜻 없는 칸이 된다. 키를 바꿀 때만 손으로 더하는 열이다.
-    fixed = [one for one in FIXED_COLUMNS if one != "renamed_from"]
+    # `renamed_from` · `previous_keys` 는 템플릿 · 내보내기에 안 넣는다 — 늘 비는 열이 늘고,
+    # 내보낸 것을 그대로 올리면 뜻 없는 칸이 된다. 키를 바꿀 때만 손으로 더하는 열이다.
+    fixed = [one for one in FIXED_COLUMNS if one not in ("renamed_from", "previous_keys")]
     return [*fixed, *(d.key for d in defs if d.data_type != "file")]
 
 
@@ -1456,9 +1539,17 @@ class _RelIndex:
     edges: dict[tuple[uuid.UUID, str, uuid.UUID], ObjectRelation] = field(default_factory=dict)
     """이미 이어진 선 — (출발 · 종류 · 도착)."""
     editable: dict[uuid.UUID | None, AppError | None] = field(default_factory=dict)
-    loaded_edges: bool = False
+    loaded_src: set[uuid.UUID] = field(default_factory=set)
+    """선을 **미리 읽어 둔** 출발점들. 여기 있는 출발점은 `edges` 에 없으면 정말 없는 것이다
+    — 예전에는 그때도 한 번 더 물어서, **새로 잇는 선마다** 질의가 하나씩 붙었다(백필의
+    대부분이 새 선이다)."""
     types: dict[str, ObjectType] = field(default_factory=dict)
     """slug → 타입. 끝 타입 검사와 원 표 찾기가 줄마다 이 표를 읽던 자리다."""
+    pending: dict[str, set[str]] = field(default_factory=dict)
+    """타입 slug → **이 묶음이 만들 것**의 식별자 · 이름(가벼운 미리 보기에서만)."""
+    skip_missing: bool = False
+    """참이면 끝점을 못 찾은 줄을 **오류로 만들지 않고 건너뛴다**(줄에 적는다). 선은 값이
+    아니라 있음/없음이라 「빈칸으로 넣기」 가 없다 — 건너뛰는 것이 그에 해당한다."""
 
 
 def _existing_edge(
@@ -1468,7 +1559,10 @@ def _existing_edge(
     key = (src_id, slug, dst_id)
     if key in memo.edges:
         return memo.edges[key]
-    # 미리 읽은 자리에 없으면 **한 번 더 묻는다** — 그 출발점이 나중에 나왔을 수 있다.
+    if src_id in memo.loaded_src:
+        # 그 출발점의 선은 **전부** 읽어 뒀다 — 여기 없으면 정말 없다. 다시 묻지 않는다.
+        return None
+    # 미리 읽지 못한 출발점(나중에 알게 된 것)만 한 번 묻는다.
     found = db.scalar(
         select(ObjectRelation).where(
             ObjectRelation.src_object_id == src_id,
@@ -1516,6 +1610,28 @@ def _load_pool(
         memo.pool[key] = _ends_of(db, user, list(key) or None, texts)
 
 
+def _pending_end(
+    memo: _RelIndex,
+    object_type: ObjectType,
+    kind: RelationType,
+    src_text: str,
+    dst_text: str,
+) -> str:
+    """이 묶음이 **만들** 끝점을 가리키나 — 그러면 그 까닭을 한 줄로, 아니면 빈 글."""
+    if not memo.pending:
+        return ""
+    waiting: list[str] = []
+    if src_text in memo.pending.get(object_type.slug, set()):
+        waiting.append(src_text)
+    for slug in kind.dst_type_slugs or list(memo.pending):
+        if dst_text in memo.pending.get(slug, set()):
+            waiting.append(dst_text)
+            break
+    if not waiting:
+        return ""
+    return f"끝점 {', '.join(waiting)} 은 이 묶음이 만드는 객체입니다 — 적용할 때 이어집니다"
+
+
 def _endpoint_maker(
     db: Session,
     user: User,
@@ -1534,7 +1650,6 @@ def _endpoint_maker(
 
 def _load_edges(db: Session, memo: _RelIndex) -> None:
     """미리 찾아 둔 출발점들의 선을 **한 질의로** 읽는다."""
-    memo.loaded_edges = True
     starts = {one.id for one in memo.ends.values() if isinstance(one, ObjectInstance)}
     if not starts:
         return
@@ -1542,6 +1657,7 @@ def _load_edges(db: Session, memo: _RelIndex) -> None:
         select(ObjectRelation).where(ObjectRelation.src_object_id.in_(starts))
     ):
         memo.edges[(edge.src_object_id, edge.relation, edge.dst_object_id)] = edge
+    memo.loaded_src |= starts
 
 
 def _memo_end(index: _RelIndex, key: tuple[str, str], make: Callable[[], Any]) -> Any:
@@ -1715,6 +1831,8 @@ def plan_relations(
     *,
     source: str = "",
     mode: str = "add",
+    pending: dict[str, set[str]] | None = None,
+    skip_missing: bool = False,
     max_rows: int = MAX_ROWS,
     on_progress: Progress = None,
 ) -> Plan:
@@ -1736,6 +1854,8 @@ def plan_relations(
     kinds = {row.slug: row for row in db.scalars(select(RelationType))}
     # **속성 정의는 한 번에 읽는다** — 줄마다 읽으면 오천 줄에 오천 질의다.
     index_data = _RelIndex(defs=_relation_defs_all(db, list(kinds.values())))
+    index_data.pending = pending or {}
+    index_data.skip_missing = skip_missing
     known_props = {one.key for rows in index_data.defs.values() for one in rows}
     headers = {key for row in rows for key in row} - {""}
     unknown = sorted(headers - set(RELATION_RESERVED) - known_props)
@@ -1776,6 +1896,7 @@ def plan_relations(
             plan.rows.append(RowPlan(row=index, action="error", message=caught.message))
     if mode in ("replace", "replace_type") and plan.ok:
         plan.rows.extend(_unlinks(db, user, object_type, seen, wide=mode == "replace_type"))
+    plan.index = index_data
     return plan
 
 
@@ -1874,13 +1995,33 @@ def _plan_relation(
     managed.require_relation_editable(kind, source=source)
 
     memo = index_data if index_data is not None else _RelIndex()
+    later = _pending_end(memo, object_type, kind, src_text, dst_text)
+    if later:
+        # **이 묶음이 만들 끝점**을 가리킨다 — 계획만 볼 때는 오류가 아니다.
+        return RowPlan(
+            row=index,
+            action="create",
+            label=f"{src_text} -{kind.label}-> {dst_text}",
+            message=later,
+        )
     # **같은 끝점은 한 번만 찾는다** — 한 과제에 모델이 여럿이면 그 과제를 수십 번 찾는다.
-    src = _memo_end(
-        memo, ("src", src_text), _endpoint_maker(db, user, object_type, src_text, memo)
-    )
-    dst = _memo_end(
-        memo, (f"dst:{kind.slug}", dst_text), _dst_maker(db, user, dst_text, kind, memo)
-    )
+    try:
+        src = _memo_end(
+            memo, ("src", src_text), _endpoint_maker(db, user, object_type, src_text, memo)
+        )
+        dst = _memo_end(
+            memo, (f"dst:{kind.slug}", dst_text), _dst_maker(db, user, dst_text, kind, memo)
+        )
+    except AppError as gone:
+        if not memo.skip_missing:
+            raise
+        # **한 줄이 묶음 전체를 막지 않게** 건너뛴다 — 무엇이 빠졌는지는 줄에 적는다.
+        return RowPlan(
+            row=index,
+            action="unchanged",
+            label=f"{src_text} -{kind.label}-> {dst_text}",
+            message=f"끝점을 찾지 못해 건너뜁니다 — {gone.message}",
+        )
     if src.owner_workspace_id not in memo.editable:
         try:
             require_owner_edit(
@@ -1945,6 +2086,7 @@ def apply_relations(
     *,
     source: str = "",
     mode: str = "add",
+    skip_missing: bool = False,
     max_rows: int = MAX_ROWS,
     on_progress: Progress = None,
     before_apply: Callable[[Plan], None] | None = None,
@@ -1956,6 +2098,7 @@ def apply_relations(
         rows,
         source=source,
         mode=mode,
+        skip_missing=skip_missing,
         max_rows=max_rows,
         on_progress=on_progress,
     )
@@ -1965,6 +2108,10 @@ def apply_relations(
         before_apply(plan)
     kinds = {row.slug: row for row in db.scalars(select(RelationType))}
     by_label = {row.label: row for row in kinds.values()}
+    # **계획이 미리 읽은 것을 그대로 쓴다** — 끝점 · 속성 정의 · 이미 이어진 선. 예전에는
+    # 적용이 그것을 처음부터 다시 물었다(줄마다 넷). 방금 세운 계획이라 같은 사실이다.
+    memo = plan.index if isinstance(plan.index, _RelIndex) else _RelIndex()
+    refs = _Refs(db, user)
     for row_plan in plan.rows:
         _tick(on_progress, "적용", row_plan.row, len(rows))
         if row_plan.action == "unlink" and row_plan.object_id is not None:
@@ -1991,15 +2138,13 @@ def apply_relations(
                 continue
             kind = kinds.get(edge.relation) or by_label[edge.relation]
             before = dict(edge.properties or {})
-            wanted = _relation_properties(db, kind, row, _Refs(db, user), fresh=False)
+            defs = memo.defs.get(kind.slug) or relation_defs(db, kind)
+            wanted = _relation_properties(db, kind, row, refs, fresh=False, defs=defs)
             if wanted:
-                edge.properties = validate_properties(
-                    relation_defs(db, kind), {**before, **wanted}
-                )
+                edge.properties = validate_properties(defs, {**before, **wanted})
             note = str(row.get("evidence_note") or "").strip()
             if note:
                 edge.evidence_note = note
-            db.flush()
             audit.record(
                 db,
                 action="object.relation.update",
@@ -2015,8 +2160,14 @@ def apply_relations(
             continue
         slug = str(row.get("relation") or "").strip()
         kind = kinds.get(slug) or by_label[slug]
-        src = _find_endpoint(db, user, str(row.get("src") or "").strip(), [object_type.id])
-        dst = _find_dst(db, user, str(row.get("dst") or "").strip(), kind)
+        src_text = str(row.get("src") or "").strip()
+        dst_text = str(row.get("dst") or "").strip()
+        src = _memo_end(
+            memo, ("src", src_text), _endpoint_maker(db, user, object_type, src_text, memo)
+        )
+        dst = _memo_end(
+            memo, (f"dst:{kind.slug}", dst_text), _dst_maker(db, user, dst_text, kind, memo)
+        )
         if dst.is_system:
             # `links.add` 가 개수 제약을 넣기 직전에 다시 본다 — 앞 행이 채웠을 수 있다.
             link = links.add(
@@ -2034,16 +2185,22 @@ def apply_relations(
         rel.require_cardinality(db, kind, src.id, dst.id)
         rel.require_no_cycle(db, kind, src.id, dst.id)
         edge = ObjectRelation(
+            # **id 를 여기서 정한다** — 감사 기록이 flush 를 기다리지 않는다. 줄마다 flush
+            # 하면 수만 줄에 왕복이 수만 번이다.
+            id=uuid.uuid4(),
             src_object_id=src.id,
             dst_object_id=dst.id,
             relation=kind.slug,
-            properties=_relation_properties(db, kind, row, _Refs(db, user)),
+            properties=_relation_properties(
+                db, kind, row, refs, defs=memo.defs.get(kind.slug)
+            ),
             evidence_note=str(row.get("evidence_note") or "").strip(),
             created_by_id=user.id,
         )
         db.add(edge)
-        db.flush()
         row_plan.object_id = edge.id
+        # 뒤 줄이 「이미 있다」 로 보게 한다 — 같은 파일에 같은 선이 두 번 나올 수 있다.
+        memo.edges[(src.id, kind.slug, dst.id)] = edge
         audit.record(
             db,
             action="object.relation.add",

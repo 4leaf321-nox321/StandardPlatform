@@ -21,7 +21,8 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import func, select, union
+from sqlalchemy import cast, func, or_, select, union
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -50,6 +51,14 @@ LABELS = {
 }
 #: 종류·타입마다 목록에 싣는 상한. 수는 전부 세고, 목록만 자른다.
 SAMPLE = 50
+
+#: 이 수를 넘는 타입은 **행을 파이썬으로 훑지 않는다.**
+#:
+#: 검사 다섯 중 셋(중복 · 별칭 충돌 · 깨진 참조)은 값을 정규화해 견주므로 SQL 로 옮길 수
+#: 없다 — 그 규칙이 파이썬 함수(`compare_key`)에 있다. 그래서 큰 타입에서는 그 셋을 건너뛰고
+#: **건너뛴 사실을 말한다.** 백필로 객체가 몇십만이 되면 홈 「남은 일」 이 그것 때문에
+#: 멎는데, 멎은 이유는 화면 어디에도 안 적힌다 — 그것이 더 나쁘다.
+SCAN_MAX_ROWS = 50_000
 
 
 @dataclass
@@ -104,28 +113,43 @@ def _empty(raw: Any) -> bool:
 
 
 def _missing_required(
-    object_type: ObjectType, defs: list[PropertyDef], rows: Rows
+    db: Session, user: User, object_type: ObjectType, defs: list[PropertyDef]
 ) -> Finding | None:
+    """필수인데 빈 칸 — **세는 것은 SQL 이 한다.**
+
+    이 검사는 값을 정규화하지 않으니 옮길 수 있었다. 전량을 파이썬으로 읽던 때는 객체가
+    몇십만이 되면 홈 「남은 일」 이 이것 하나 때문에 멎었다.
+    """
     required = [d for d in defs if d.required and d.data_type != "file"]
     if not required:
         return None
-    hits: list[Hit] = []
-    count = 0
-    for row in rows():
-        values = row.properties or {}
-        blank = [d.label for d in required if _empty(values.get(d.key))]
-        if not blank:
-            continue
-        count += 1
-        if len(hits) < SAMPLE:
-            hits.append(
-                Hit(
-                    id=row.id,
-                    label=row.label,
-                    key=row.key,
-                    detail=f"비어 있음: {', '.join(blank)}",
-                )
+    blank = or_(
+        *[
+            or_(
+                ~ObjectInstance.properties.has_key(one.key),
+                ObjectInstance.properties[one.key].astext == "",
+                ObjectInstance.properties[one.key] == cast("[]", JSONB),
+                ObjectInstance.properties[one.key] == cast("null", JSONB),
             )
+            for one in required
+        ]
+    )
+    base = _visible_objects(db, user, object_type).where(blank)
+    count = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    if not count:
+        return None
+    hits = [
+        Hit(
+            id=row.id,
+            label=row.label,
+            key=row.key,
+            detail="비어 있음: "
+            + ", ".join(
+                one.label for one in required if _empty((row.properties or {}).get(one.key))
+            ),
+        )
+        for row in db.scalars(base.limit(SAMPLE))
+    ]
     return _finding("missing_required", object_type, count, hits)
 
 
@@ -342,8 +366,19 @@ def _finding(
     )
 
 
-def report(db: Session, user: User, *, kinds: tuple[str, ...] = KINDS) -> list[Finding]:
-    """전부 — 타입마다, 종류마다. 화면과 홈 「남은 일」 이 같은 것을 읽는다."""
+def report(
+    db: Session,
+    user: User,
+    *,
+    kinds: tuple[str, ...] = KINDS,
+    skipped: list[str] | None = None,
+) -> list[Finding]:
+    """전부 — 타입마다, 종류마다. 화면과 홈 「남은 일」 이 같은 것을 읽는다.
+
+    `skipped` 를 주면 **너무 커서 훑지 않은 타입**을 거기 적는다 — 화면이 그것을 말해야
+    사람이 「이 타입은 안 세고 있다」 를 안다.
+    """
+    skipped = skipped if skipped is not None else []
     types = list(
         db.scalars(
             select(ObjectType)
@@ -364,21 +399,36 @@ def report(db: Session, user: User, *, kinds: tuple[str, ...] = KINDS) -> list[F
         if object_type.kind_class == "system":
             continue
         defs = defs_by_type.get(object_type.id, [])
-        # **이 타입의 행은 한 번만 읽는다** — 검사 넷이 같은 것을 본다.
+        # **큰 타입은 행을 훑지 않는다** — 훑는 검사 셋은 값을 정규화해 견주므로 SQL 로
+        # 옮길 수 없다. 건너뛴 사실은 아래에서 말한다.
+        total = (
+            db.scalar(
+                select(func.count()).select_from(
+                    _visible_objects(db, user, object_type).subquery()
+                )
+            )
+            or 0
+        )
+        big = total > SCAN_MAX_ROWS
+        # **이 타입의 행은 한 번만 읽는다** — 훑는 검사들이 같은 것을 본다.
         rows = _rows_once(db, user, object_type)
         found = [
-            _missing_required(object_type, defs, rows)
+            _missing_required(db, user, object_type, defs)
             if "missing_required" in kinds
             else None,
             _orphans(db, user, object_type, relation_kinds) if "orphan" in kinds else None,
             _broken_refs(db, user, object_type, defs, world, rows)
-            if "broken_ref" in kinds
+            if "broken_ref" in kinds and not big
             else None,
-            _duplicates(object_type, rows) if "duplicate" in kinds else None,
-            _alias_clashes(db, object_type, rows) if "alias_clash" in kinds else None,
+            _duplicates(object_type, rows) if "duplicate" in kinds and not big else None,
+            _alias_clashes(db, object_type, rows)
+            if "alias_clash" in kinds and not big
+            else None,
             _alias_pending(db, user, object_type) if "alias_pending" in kinds else None,
         ]
         out.extend(one for one in found if one is not None)
+        if big:
+            skipped.append(f"{object_type.label}({total:,}건)")
     return out
 
 

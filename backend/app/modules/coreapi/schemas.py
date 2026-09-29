@@ -104,8 +104,11 @@ class CoreRowOut(BaseModel):
     merged_into: str | None = None
     """다른 것에 합쳐져서 사라졌으면 이긴 쪽의 `key`. **받는 쪽이 제 참조를 옮길 수 있다.**"""
     renamed_from: str | None = None
-    """식별자가 바뀌었으면 **옛 식별자**. 받는 쪽은 이 값으로 제가 가진 행을 찾아 키를
-    옮긴다 — 없으면 새 식별자가 처음 보는 것이라 같은 것이 둘이 된다."""
+    """식별자가 바뀌었으면 **가장 마지막 옛 식별자**. 받는 쪽은 이 값으로 제가 가진 행을
+    찾아 키를 옮긴다 — 없으면 새 식별자가 처음 보는 것이라 같은 것이 둘이 된다."""
+    previous_keys: list[str] = Field(default_factory=list)
+    """옛 식별자 **전부**(오래된 것부터). 받는 쪽이 오래 잠들어 있었으면 가진 것이 마지막
+    것이 아니다 — 두 번 바뀌었으면(A→B→C) 이 목록으로만 A 를 따라갈 수 있다."""
     properties: dict[str, Any] = Field(default_factory=dict)
     """타입이 정한 칸. 참조는 상대의 `key`, 여러 값은 배열, 날짜는 `YYYY-MM-DD`,
     일시는 `...Z`. **빈 값은 키를 뺀다.**"""
@@ -152,6 +155,12 @@ class CoreRelationPageOut(BaseModel):
     since: str | None = None
     next: str | None = None
     items: list[CoreRelationOut]
+    reset: bool = False
+    """**처음부터 다시 받아야 한다.** 끊긴 선의 기록(무덤)은 한동안만 들고 있으므로, 그보다
+    오래 안 받아 간 쪽에는 「그 사이에 무엇이 끊겼나」 를 말해 줄 수 없다. 그때 빈 쪽을
+    주면 받는 쪽은 「바뀐 것 없음」 으로 읽고 **끊긴 선을 영영 들고 있는다.**"""
+    reset_reason: str = ""
+    """왜 다시 받아야 하나 — 사람이 읽는 한 줄."""
 
 
 class CorePullOut(BaseModel):
@@ -178,3 +187,9 @@ class CoreStatusOut(BaseModel):
     recent: list[CorePullOut]
     base: str
     """이 설치의 코어 창구 주소 — 상대에게 그대로 건넨다."""
+    watermark_lag_seconds: int = 0
+    """**받아 가는 쪽이 지금 어디까지 볼 수 있나** — 지금과 `as_of` 의 차이(초).
+
+    `as_of` 는 도는 적재보다 앞서지 않는다(그래야 그 적재분을 안 잃는다). 그래서 긴 백필
+    동안 이 값이 커지고, 백필이 끝나면 0 으로 돌아온다. **줄지 않고 계속 커지면** 열어 두고
+    잊은 세션이 있다는 뜻이다 — 그때는 받아 가는 쪽이 새 값을 못 본다."""

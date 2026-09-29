@@ -75,6 +75,13 @@ export default function QualityPage() {
         description="검증은 넣을 때만 걸립니다. 그 뒤에 나빠진 것을 여기서 셉니다 — 내가 볼 수 있는 것만."
       />
       {report.error && <ErrorNotice error={report.error} />}
+      {(report.data?.skipped?.length ?? 0) > 0 && (
+        <p className="text-muted-foreground text-sm">
+          너무 큰 타입은 <strong>훑지 않았습니다</strong> — {report.data?.skipped?.join(' · ')}.
+          값을 맞춰 보는 검사(중복 · 별칭 충돌 · 깨진 참조)는 행을 하나씩 읽어야 해서, 그
+          타입에서는 필수값과 검수 대기만 셉니다.
+        </p>
+      )}
       {report.data && total === 0 && (
         <EmptyState
           title="해당 항목이 없습니다"

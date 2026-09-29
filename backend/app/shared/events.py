@@ -79,10 +79,15 @@ def hold(db: Session) -> None:
     db.info[_HOLD] = []
 
 
-def release(db: Session) -> None:
-    """모아 둔 것을 내보낸다. **바깥 트랜잭션이 커밋된 뒤에만** 부른다."""
+def release(db: Session, summary: ChangeEvent | None = None) -> None:
+    """모아 둔 것을 내보낸다. **바깥 트랜잭션이 커밋된 뒤에만** 부른다.
+
+    `summary` 를 주면 모아 둔 것을 **버리고 그 한 건만** 보낸다 — 백필처럼 수만 줄이 한
+    묶음일 때. 줄마다 보내면 웹훅 수신 측이 수만 번 두드려 맞고, 그때 받는 쪽은 「무슨
+    일이 났나」 를 알 수 없다(무엇이 몇 건인지는 이 한 건이 말한다).
+    """
     held: list[ChangeEvent] = [*db.info.pop(_HOLD, []), *db.info.pop(_KEY, [])]
-    _dispatch(held)
+    _dispatch([summary] if summary is not None else held)
 
 
 def drop_held(db: Session) -> None:

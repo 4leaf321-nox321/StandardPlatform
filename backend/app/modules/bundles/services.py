@@ -128,6 +128,8 @@ def run(
         if bundle.apply and outcome.ok:
             audit.record(
                 db,
+                # 묶음 한 줄 — `audit="summary"` 로 줄마다 남기기를 멈춰도 이것은 남는다.
+                summary=True,
                 action="bundle.import",
                 actor=user,
                 target_table="bundles",
@@ -142,7 +144,7 @@ def run(
             db.commit()
             outer.commit()
             outcome.applied = True
-            events.release(db)
+            events.release(db, _summary_event(user, bundle, outcome))
         else:
             events.drop_held(db)
             outer.rollback()
@@ -157,6 +159,44 @@ def run(
         # 롤백된 스냅샷을 가리키면 없는 되돌릴 자리를 약속하는 것이다.
         outcome.snapshot_id = None
     return outcome
+
+
+def _summary_event(
+    user: User, bundle: BundleIn, outcome: Outcome
+) -> events.ChangeEvent | None:
+    """`events="summary"` 면 **묶음 한 건**으로 알린다 — 아니면 None(줄마다 그대로)."""
+    if bundle.events != "summary":
+        return None
+    return events.ChangeEvent(
+        action="bundle.import",
+        target_table="bundles",
+        target_id=None,
+        target_label=", ".join(sorted({one.type_slug for one in outcome.objects})) or "정의",
+        workspace_id=None,
+        actor_id=user.id,
+        actor_label=user.display_name or user.email,
+        actor_client=None,
+        actor_token=None,
+        changes=dict(outcome.counts),
+    )
+
+
+def _pending_of(bundle: BundleIn) -> dict[str, set[str]]:
+    """이 묶음이 **만들** 것의 식별자 · 이름 — 타입마다.
+
+    가벼운 미리 보기(`preview="plan"`)가 쓴다. 그것을 가리키는 칸 · 끝점은 지금 없어도
+    오류가 아니다 — 적용할 때 앞 단계가 만든다.
+    """
+    out: dict[str, set[str]] = {}
+    for batch in bundle.objects:
+        for row in batch.rows:
+            if not isinstance(row, dict):
+                continue
+            for name in ("key", "label"):
+                value = str(row.get(name) or "").strip()
+                if value:
+                    out.setdefault(batch.type_slug, set()).add(value)
+    return out
 
 
 def _stages(
@@ -204,6 +244,13 @@ def _stages(
         # 뒤 단계가 새 정의를 보게 한다 — 이 세션은 스스로 flush 하지 않는다.
         db.flush()
 
+    # **가벼운 미리 보기**인가 — 적용이 아니고, 부르는 쪽이 계획만 보자고 했을 때.
+    light = not bundle.apply and bundle.preview == "plan"
+    pending = _pending_of(bundle) if light else None
+    if bundle.audit == "summary":
+        # **줄마다 남기지 않는다** — 아래 `bundle.import` 한 줄이 무엇이 몇 건인지 말한다.
+        audit.quiet(db)
+
     types = {row.slug: row for row in db.scalars(select(ObjectType))}
     for batch in bundle.objects:
         object_type = types.get(batch.type_slug)
@@ -217,17 +264,35 @@ def _stages(
                 db, user, batch.workspace_slug, what="객체", code_value=code("BUNDLES", 10)
             )
             # 미리 보기에서도 **적용한다** — 그래야 뒤 묶음(참조 · 관계)이 이 객체를 찾는다.
-            # 바깥이 롤백되므로 남지 않는다.
-            planned_rows = bulk.apply_objects(
-                db,
-                user,
-                object_type,
-                batch.rows,
-                owner_workspace_id=owner,
-                source=bundle.source,
-                aliases_mode=batch.aliases_mode,
-                max_rows=max_rows,
-                on_progress=_staged(on_progress, f"객체 {batch.type_slug}"),
+            # 바깥이 롤백되므로 남지 않는다. 다만 대량 백필은 그 때문에 시간이 두 배라,
+            # `preview="plan"` 은 계획만 본다(만들 것을 가리키는 칸은 줄에 적는다).
+            planned_rows = (
+                bulk.plan_objects(
+                    db,
+                    user,
+                    object_type,
+                    batch.rows,
+                    owner_workspace_id=owner,
+                    source=bundle.source,
+                    aliases_mode=batch.aliases_mode,
+                    pending=pending,
+                    blank_missing=bundle.missing_refs == "blank",
+                    max_rows=max_rows,
+                    on_progress=_staged(on_progress, f"객체 {batch.type_slug}"),
+                )
+                if light
+                else bulk.apply_objects(
+                    db,
+                    user,
+                    object_type,
+                    batch.rows,
+                    owner_workspace_id=owner,
+                    source=bundle.source,
+                    aliases_mode=batch.aliases_mode,
+                    blank_missing=bundle.missing_refs == "blank",
+                    max_rows=max_rows,
+                    on_progress=_staged(on_progress, f"객체 {batch.type_slug}"),
+                )
             )
         except AppError as caught:
             out.objects.append(Batch(batch.type_slug, None, caught.message))
@@ -242,15 +307,31 @@ def _stages(
             )
             continue
         try:
-            planned_links = bulk.apply_relations(
-                db,
-                user,
-                source_type,
-                links.rows,
-                source=bundle.source,
-                mode=links.mode,
-                max_rows=max_rows,
-                on_progress=_staged(on_progress, f"관계 {links.type_slug}"),
+            planned_links = (
+                bulk.plan_relations(
+                    db,
+                    user,
+                    source_type,
+                    links.rows,
+                    source=bundle.source,
+                    mode=links.mode,
+                    pending=pending,
+                    skip_missing=bundle.missing_refs == "blank",
+                    max_rows=max_rows,
+                    on_progress=_staged(on_progress, f"관계 {links.type_slug}"),
+                )
+                if light
+                else bulk.apply_relations(
+                    db,
+                    user,
+                    source_type,
+                    links.rows,
+                    source=bundle.source,
+                    mode=links.mode,
+                    skip_missing=bundle.missing_refs == "blank",
+                    max_rows=max_rows,
+                    on_progress=_staged(on_progress, f"관계 {links.type_slug}"),
+                )
             )
         except AppError as caught:
             out.relations.append(Batch(links.type_slug, None, caught.message))

@@ -1011,7 +1011,7 @@ def _ask_platform(mapping: Mapping, server: str, token: str) -> None:
     """
     if not server or not token or not mapping.matchers:
         return
-    for spec in _match_columns(mapping):
+    for spec in _match_columns(mapping) + _match_ends(mapping):
         target = str(spec["keys"]).strip()
         matcher = mapping.matchers.get(target)
         if matcher is None or target.startswith("@"):
@@ -1036,6 +1036,24 @@ def _ask_platform(mapping: Mapping, server: str, token: str) -> None:
             matcher.resolved[text] = (
                 str(picked["key"]) if picked and picked.get("key") else None
             )
+
+
+def _match_ends(mapping: Mapping) -> list[dict[str, Any]]:
+    """**관계 끝점**의 참조 대조 — `relations[].src` · `dst` 에 적은 것.
+
+    ⚠️ 예전에는 별칭 · 이름 풀이가 객체 칸에만 걸렸다. 그래서 끝점에 그룹 표기(「앤시스」)가
+       적혀 있으면 「없음」 으로 비워졌고, **선이 조용히 빠졌다** — 객체는 들어가 있어서
+       사람은 다 들어간 줄 안다.
+    """
+    out: list[dict[str, Any]] = []
+    for one in mapping.relations:
+        for name in ("src", "dst"):
+            spec = one.get(name)
+            if isinstance(spec, dict) and "match" in spec and "column" in spec:
+                out.append(
+                    {**spec["match"], "column": spec["column"], "upper": spec.get("upper")}
+                )
+    return out
 
 
 def _match_columns(mapping: Mapping) -> list[dict[str, Any]]:

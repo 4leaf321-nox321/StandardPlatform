@@ -22,7 +22,7 @@ from __future__ import annotations
 import io
 import uuid
 import zipfile
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -45,6 +45,7 @@ from app.modules.coreapi.schemas import (
     CoreTypeOut,
 )
 from app.modules.objects import aliases
+from app.modules.objects import keys as key_history
 from app.modules.objects.models import (
     ObjectInstance,
     ObjectRelation,
@@ -77,8 +78,17 @@ def watermark(db: Session) -> datetime:
     그래서 지금 도는 트랜잭션 중 **가장 먼저 시작한 것보다 한 틱 앞**을 준다. 받는 쪽은
     같은 행을 한 번 더 받을 뿐이고(덮어쓰기라 해가 없다), 잃지는 않는다.
 
-    붙잡힌 트랜잭션 하나가 이 시각을 영영 묶어 두지 않게 `core_watermark_floor_seconds`
-    보다 오래된 것은 셈에서 뺀다 — 그런 세션은 운영이 따로 볼 문제다.
+    ⚠️ **도는 것과 붙잡힌 것을 가른다.** 트랜잭션이 얼마나 **오래됐나**로 자르면(예: 10분)
+       한 시간 도는 백필이 셈에서 빠져 **그 구멍이 그대로 돌아온다.** 그래서 자를 「시작한
+       때」 가 아니라 **「마지막으로 무엇이라도 한 때」**(`state_change`)에 건다 — 백필은
+       문장 사이가 밀리초이므로 늘 센다. 열어 두고 잊은 세션만 빠진다.
+
+       (`state='active'` 하나로 가를 수는 없다 — 문장이 도는 순간에만 그렇고, 백필은 문장
+       사이에 `idle in transaction` 이 된다. 그 순간에 물으면 빠진다.)
+
+    그래서 **긴 백필 동안 받기를 멈출 필요가 없다.** `as_of` 가 그 자리에 머물러 있으므로
+    받는 쪽은 같은 지점을 되풀이해 물을 뿐이고, 백필이 끝나면 그때부터 전부 따라온다.
+    얼마나 뒤처져 있는지는 **코어 현황**(`watermark_lag_seconds`)이 말한다.
     """
     floor = get_settings().core_watermark_floor_seconds
     found = db.execute(
@@ -91,7 +101,11 @@ def watermark(db: Session) -> datetime:
                   FROM pg_stat_activity
                  WHERE datname = current_database()
                    AND xact_start IS NOT NULL
-                   AND xact_start > clock_timestamp() - make_interval(secs => :floor)
+                   AND (
+                     state = 'active'
+                     OR coalesce(state_change, xact_start)
+                        > clock_timestamp() - make_interval(secs => :floor)
+                   )
               ), clock_timestamp())
             )
             """
@@ -362,7 +376,8 @@ def page(
             updated_at=_stamp(one.updated_at) or "",
             deleted=one.deleted_at is not None,
             merged_into=merged_keys.get(one.merged_into_id) if one.merged_into_id else None,
-            renamed_from=one.renamed_from or None,
+            renamed_from=key_history.latest(one),
+            previous_keys=[x for x in (one.previous_keys or []) if x and x != one.key],
             properties=(
                 {}
                 if one.deleted_at is not None
@@ -451,6 +466,22 @@ def relations(
     if not kinds:
         return CoreRelationPageOut(
             type_slug=object_type.slug, as_of=_stamp(now), since=_stamp(since), items=[]
+        )
+    horizon = now - timedelta(days=get_settings().tombstone_ttl_days)
+    if since is not None and since < horizon:
+        # **모른다고 말한다.** 그 시각 이후에 끊긴 선 중 일부는 이미 정리됐다(무덤은 한동안만
+        # 들고 있다). 빈 쪽을 주면 받는 쪽은 「바뀐 것 없음」 으로 읽고 끊긴 선을 영영 들고
+        # 있는다 — 그것이 가장 나쁜 답이다.
+        return CoreRelationPageOut(
+            type_slug=object_type.slug,
+            as_of=None,
+            since=_stamp(since),
+            items=[],
+            reset=True,
+            reset_reason=(
+                f"{get_settings().tombstone_ttl_days}일보다 오래된 시점부터는 "
+                "끊긴 선을 알려 줄 수 없습니다 — `since` 를 비우고 처음부터 받으세요."
+            ),
         )
     slugs = [one.slug for one in kinds]
     visible = visible_owner_clause(user, ObjectInstance.owner_workspace_id)
@@ -634,6 +665,17 @@ def status(db: Session, user: User, *, base: str, limit: int = 20) -> CoreStatus
             for one in rows
         ],
         base=base,
+        # **받아 가는 쪽이 지금 어디까지 볼 수 있나.** 긴 적재가 도는 동안 커지고 끝나면
+        # 0 으로 돌아온다 — 줄지 않으면 열어 두고 잊은 세션이 있다는 뜻이다.
+        watermark_lag_seconds=max(
+            0,
+            int(
+                (
+                    (db.scalar(select(func.clock_timestamp())) or datetime.now(UTC))
+                    - watermark(db)
+                ).total_seconds()
+            ),
+        ),
     )
 
 

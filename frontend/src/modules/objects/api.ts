@@ -298,6 +298,8 @@ export interface QualityFinding {
 export interface QualityReport {
   findings: QualityFinding[]
   sample_limit: number
+  /** **너무 커서 훑지 않은 타입** — 안 센 것을 말하지 않으면 「걸린 것이 없다」 로 읽힌다. */
+  skipped?: string[]
 }
 
 export interface Rollup {

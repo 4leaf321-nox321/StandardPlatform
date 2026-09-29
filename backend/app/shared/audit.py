@@ -87,6 +87,23 @@ def relation_endpoints(edge: Any, src_label: str, dst_label: str) -> dict[str, A
     }
 
 
+_QUIET = "audit_quiet"
+
+
+def quiet(db: Session, on: bool = True) -> None:
+    """줄마다 남기는 기록을 **잠시 멈춘다** — 백필처럼 한 묶음이 수만 줄일 때.
+
+    ⚠️ 켜는 쪽은 **묶음 한 줄을 반드시 남긴다**(`summary=True`). 아무것도 안 남기면
+       「아무도 안 했는데 몇만 건이 바뀌었다」 가 되고, 그것이 가장 설명하기 어려운 상태다.
+       백필 수만 줄이 로그를 뒤덮으면 사람이 한 일을 그 사이에서 못 찾는 것도 같은 문제라,
+       둘 중 하나를 고르게 한다.
+    """
+    if on:
+        db.info[_QUIET] = True
+    else:
+        db.info.pop(_QUIET, None)
+
+
 def record(
     db: Session,
     *,
@@ -98,11 +115,15 @@ def record(
     workspace_id: uuid.UUID | None = None,
     changes: dict[str, Any] | None = None,
     reason: str | None = None,
+    summary: bool = False,
 ) -> AuditEntry:
     """감사 기록 하나. **부르는 쪽이 커밋한다.**
 
     actor 가 없을 수 있다(시스템이 한 일). 그때도 남긴다 — 안 남기면 "아무도 안
     했는데 바뀌었다" 가 되고, 그것이 가장 설명하기 어려운 상태다.
+
+    `summary` 는 **묶음 한 줄**이라는 표시다 — `quiet` 로 줄마다 남기기를 멈춘 동안에도
+    이것은 남는다.
     """
     entry = AuditEntry(
         action=action,
@@ -122,6 +143,10 @@ def record(
         reason=reason,
         request_id=get_request_id(),
     )
+    if db.info.get(_QUIET) and not summary:
+        # **줄마다 남기지 않는 동안이다.** 표에도 안 넣고 바깥에도 안 알린다 — 켠 쪽이
+        # 묶음 한 줄을 남긴다. 만들어서 돌려주기는 한다(부르는 쪽이 값을 쓴다).
+        return entry
     db.add(entry)
     # 커밋되면 바깥(웹훅)에 알린다 — 감사가 곧 「알릴 만한 변경」 의 정의다.
     events.stage(

@@ -17,7 +17,7 @@ from app.database import engine
 from app.modules.accounts.models import User
 from app.modules.objects import bulk
 from app.modules.ontology.models import ObjectType
-from tests.api.conftest import Signed, export_file, import_file
+from tests.api.conftest import Signed, bundle_import, export_file, import_file
 from tests.api.test_ontology import (
     _make_object,
     _make_property,
@@ -963,7 +963,7 @@ def test_관계도_줄마다_묻지_않는다(client: TestClient, admin: Signed,
     user = db.scalar(select(User).where(User.email == admin.email))
     assert object_type is not None and user is not None
 
-    def queries(count: int) -> int:
+    def queries(count: int, *, apply: bool = False) -> int:
         seen = 0
 
         def tick(*_args: Any, **_kw: Any) -> None:
@@ -976,14 +976,108 @@ def test_관계도_줄마다_묻지_않는다(client: TestClient, admin: Signed,
         ]
         event.listen(engine, "before_cursor_execute", tick)
         try:
-            plan = bulk.plan_relations(db, user, object_type, rows)
+            plan = (
+                bulk.apply_relations(db, user, object_type, rows)
+                if apply
+                else bulk.plan_relations(db, user, object_type, rows)
+            )
         finally:
             event.remove(engine, "before_cursor_execute", tick)
         assert plan.ok, [one.message for one in plan.rows if one.action == "error"]
         return seen
 
     small, big = queries(5), queries(50)
-    # 줄이 45개 늘 때 질의는 **줄당 한 번을 넘지 않는다.** 남은 한 번은 새로 잇는 선의
-    # 개수 제약 검사다 — 그것은 앞줄이 방금 채웠을 수 있어 넣기 직전에 봐야 한다.
-    # (고치기 전에는 줄당 넷이었다: 끝점 찾기 둘 · 속성 정의 · 이미 이어진 선.)
-    assert big - small <= 50, (small, big)
+    # **줄 수와 무관해야 한다.** 고치기 전에는 줄당 넷이었다(끝점 찾기 둘 · 속성 정의 ·
+    # 이미 이어진 선), 그러고도 새로 잇는 선마다 하나가 더 붙었다.
+    assert big - small <= 3, (small, big)
+
+    # **적용도 같은 색인을 쓴다** — 계획이 방금 읽은 것을 다시 묻지 않고, 줄마다 flush 하지
+    # 않는다(넣기는 한 문장으로 묶인다).
+    applied = queries(50, apply=True)
+    assert applied <= 20, applied
+    left = client.get(
+        f"/api/objects/{cause}/{_id_of(client, admin, cause, f'C-{tag}')}",
+        headers=admin.headers,
+    ).json()["related"]
+    assert len(left) == 50, len(left)
+
+
+def test_키를_두_번_바꿔도_받는_쪽이_따라온다(client: TestClient, admin: Signed) -> None:
+    """**동기화 사이에 키가 두 번 바뀌면**(A→B→C) 마지막 값만으로는 따라오지 못한다.
+
+    받는 쪽이 가진 것은 A 인데 「B 였던 것」 이라고만 말하면 찾을 수가 없다. 그래서 이력을
+    목록으로 들고, 받는 쪽은 그 목록을 거꾸로 훑어 제 것을 찾는다. **화면에서 고쳐도**
+    같이 남는다 — 파일로 바꿀 때만 남기던 때는 화면에서 고친 키가 밖에서 새 객체가 됐다.
+    """
+    mode = _make_type(client, admin, label="고장 모드", key_policy="required")
+    client.post(
+        f"/api/objects/{mode}/import-rows",
+        json={"rows": [{"key": "A-1", "label": "박리"}], "apply": True},
+        headers=admin.headers,
+    )
+    made = _id_of(client, admin, mode, "A-1")
+
+    # ① 화면에서 한 번 바꾼다.
+    patched = client.patch(
+        f"/api/objects/{mode}/{made}", json={"key": "B-1"}, headers=admin.headers
+    )
+    assert patched.status_code == 200, patched.text
+    # ② 파일로 또 바꾼다.
+    client.post(
+        f"/api/objects/{mode}/import-rows",
+        json={
+            "rows": [{"renamed_from": "B-1", "key": "C-1", "label": "박리"}],
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+    detail = client.get(f"/api/objects/{mode}/{made}", headers=admin.headers).json()
+    assert detail["object"]["key"] == "C-1"
+
+    # **A 를 들고 있는 쪽도 따라온다** — 이력을 거꾸로 훑는다.
+    plan = client.post(
+        f"/api/objects/{mode}/import-rows",
+        json={"rows": [{"previous_keys": ["A-1", "B-1"], "key": "C-1", "label": "박리"}]},
+        headers=admin.headers,
+    ).json()
+    assert plan["rows"][0]["action"] == "unchanged", plan
+    assert len(client.get(f"/api/objects/{mode}", headers=admin.headers).json()["items"]) == 1
+
+
+def test_못_찾은_참조를_비우고_넣는_길이_있다(client: TestClient, admin: Signed) -> None:
+    """**한 줄이 묶음 전체를 막는다** — PLM 에 없는 모델을 가리키는 행 하나 때문에 수만 줄이
+    안 들어갔다. 별칭이 겹칠 때와 같은 규칙으로, 그 칸만 비우고 줄에 적는 길을 둔다."""
+    vendor = _make_type(client, admin, label="공급사", key_policy="required")
+    tool = _make_type(client, admin, label="툴", key_policy="required")
+    _make_property(
+        client,
+        admin,
+        tool,
+        key="vendor",
+        label="개발사",
+        data_type="object_ref",
+        ref_type_slug=vendor,
+    )
+    body = {
+        "objects": [
+            {
+                "type_slug": tool,
+                "workspace_slug": admin.workspace,
+                "rows": [{"key": "T-1", "label": "툴1", "vendor": "없는공급사"}],
+            }
+        ],
+    }
+    # 기본은 오류다 — 전부 아니면 무.
+    strict = bundle_import(client, admin, {**body, "apply": True})
+    assert strict["ok"] is False, strict
+
+    # 비우고 넣으면 들어가고, 그 사실이 줄에 적힌다.
+    loose = bundle_import(client, admin, {**body, "apply": True, "missing_refs": "blank"})
+    assert loose["ok"] is True, [
+        one for batch in loose["objects"] for one in (batch["plan"] or {}).get("rows", [])
+    ]
+    row = loose["objects"][0]["plan"]["rows"][0]
+    assert row["action"] == "create" and "찾지 못해 비웁니다" in row["message"]
+    made = _id_of(client, admin, tool, "T-1")
+    detail = client.get(f"/api/objects/{tool}/{made}", headers=admin.headers).json()
+    assert detail["object"]["properties"].get("vendor") in (None, "")

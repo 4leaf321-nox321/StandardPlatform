@@ -37,6 +37,7 @@ from app.modules.objects import (
     system,
     watches,
 )
+from app.modules.objects import keys as key_history
 from app.modules.objects import relations as rel
 from app.modules.objects import summary as summary_service
 from app.modules.objects.models import (
@@ -278,6 +279,7 @@ def quality_report(
 ) -> QualityReportOut:
     """필수값 빈 것 · 고아 · 깨진 참조 · 이름 같은 것. **볼 수 있는 것만 센다.**"""
     kinds = (kind,) if kind in quality.KINDS else quality.KINDS
+    skipped: list[str] = []
     return QualityReportOut(
         findings=[
             QualityFindingOut(
@@ -288,9 +290,10 @@ def quality_report(
                 count=one.count,
                 hits=[QualityHitOut(**vars(hit)) for hit in one.hits],
             )
-            for one in quality.report(db, user, kinds=kinds)
+            for one in quality.report(db, user, kinds=kinds, skipped=skipped)
         ],
         sample_limit=quality.SAMPLE,
+        skipped=skipped,
     )
 
 
@@ -1895,6 +1898,10 @@ def update_object(
         require_key_free(
             db, object_type, key, owner_workspace_id=row.owner_workspace_id, exclude_id=row.id
         )
+        if row.key and key and row.key != key:
+            # **화면에서 고쳐도 옛 식별자를 남긴다.** 파일로 바꿀 때만 남기던 때는, 화면에서
+            # 고친 키가 밖에서는 처음 보는 것이라 **같은 객체가 둘**이 됐다(실측).
+            key_history.remember(row, row.key)
         row.key = key
     if payload.label is not None:
         row.label = payload.label

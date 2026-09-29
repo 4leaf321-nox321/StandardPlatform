@@ -11905,6 +11905,42 @@
             "type": "boolean",
             "title": "Apply",
             "default": false
+          },
+          "preview": {
+            "type": "string",
+            "enum": [
+              "full",
+              "plan"
+            ],
+            "title": "Preview",
+            "default": "full"
+          },
+          "events": {
+            "type": "string",
+            "enum": [
+              "each",
+              "summary"
+            ],
+            "title": "Events",
+            "default": "each"
+          },
+          "audit": {
+            "type": "string",
+            "enum": [
+              "each",
+              "summary"
+            ],
+            "title": "Audit",
+            "default": "each"
+          },
+          "missing_refs": {
+            "type": "string",
+            "enum": [
+              "error",
+              "blank"
+            ],
+            "title": "Missing Refs",
+            "default": "error"
           }
         },
         "type": "object",
@@ -12621,6 +12657,16 @@
             },
             "type": "array",
             "title": "Items"
+          },
+          "reset": {
+            "type": "boolean",
+            "title": "Reset",
+            "default": false
+          },
+          "reset_reason": {
+            "type": "string",
+            "title": "Reset Reason",
+            "default": ""
           }
         },
         "type": "object",
@@ -12677,6 +12723,13 @@
             ],
             "title": "Renamed From"
           },
+          "previous_keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Previous Keys"
+          },
           "properties": {
             "additionalProperties": true,
             "type": "object",
@@ -12718,6 +12771,11 @@
           "base": {
             "type": "string",
             "title": "Base"
+          },
+          "watermark_lag_seconds": {
+            "type": "integer",
+            "title": "Watermark Lag Seconds",
+            "default": 0
           }
         },
         "type": "object",
@@ -17933,6 +17991,13 @@
           "sample_limit": {
             "type": "integer",
             "title": "Sample Limit"
+          },
+          "skipped": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skipped"
           }
         },
         "type": "object",

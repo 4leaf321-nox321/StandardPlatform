@@ -332,9 +332,13 @@ def _row(
     human: list[ObjectAlias],
 ) -> dict[str, Any]:
     out: dict[str, Any] = {"key": row.key or None, "label": row.label, "status": row.status}
-    if row.renamed_from and row.renamed_from != row.key:
+    history = [one for one in (row.previous_keys or []) if one and one != row.key]
+    if history:
         # 받는 쪽은 이 값으로 제가 가진 행을 찾아 식별자를 옮긴다(`renamed_from` 열).
-        out["renamed_from"] = row.renamed_from
+        # **목록으로도 보낸다** — 두 번 바뀌었으면 받는 쪽이 가진 것은 마지막 것이 아니다.
+        out["renamed_from"] = history[-1]
+        if len(history) > 1:
+            out["previous_keys"] = history
     if row.description:
         out["description"] = row.description
     if row.valid_from_year is not None:

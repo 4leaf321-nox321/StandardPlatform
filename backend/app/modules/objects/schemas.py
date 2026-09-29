@@ -494,6 +494,10 @@ class QualityFindingOut(BaseModel):
 class QualityReportOut(BaseModel):
     findings: list[QualityFindingOut]
     sample_limit: int
+    skipped: list[str] = Field(default_factory=list)
+    """**너무 커서 훑지 않은 타입**(이름과 건수). 검사 셋(중복 · 별칭 충돌 · 깨진 참조)은
+    값을 정규화해 견주므로 행을 파이썬으로 읽어야 한다 — 몇십만이면 화면이 멎는다.
+    안 센 것을 말하지 않으면 사람은 「걸린 것이 없다」 로 읽는다."""
 
 
 # --- 통계 ----------------------------------------------------------------

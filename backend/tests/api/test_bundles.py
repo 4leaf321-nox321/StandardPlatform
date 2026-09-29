@@ -249,3 +249,44 @@ def test_내보내기는_읽기_토큰으로_된다(client: TestClient, admin: S
     # **넣는 것은 여전히 못 한다** — 읽기 토큰이 쓰기로 새면 범위를 가른 뜻이 없다.
     denied = client.post("/api/bundles/import", json={"objects": []}, headers=reader)
     assert denied.status_code in (403, 409), denied.text
+
+
+def test_가벼운_미리보기는_적용을_돌리지_않는다(client: TestClient, admin: Signed) -> None:
+    """**미리 보기가 적용을 끝까지 돌린 뒤 되돌렸다** — 그래야 뒤 묶음이 앞 묶음의 객체를
+    찾는데, 그 때문에 대량 백필은 시간이 두 배였다.
+
+    `preview="plan"` 은 계획만 본다. 이 묶음이 **만들** 객체를 가리키는 칸 · 끝점은 오류가
+    아니라 「적용할 때 풀린다」 로 줄에 적는다 — 그것을 오류로 내면 백필은 미리 볼 수가 없다.
+    """
+    bundle, names = _bundle(admin.workspace)
+    light = bundle_import(client, admin, {**bundle, "preview": "plan"})
+    assert light["ok"] is True, light
+    assert light["applied"] is False
+
+    # 툴은 같은 묶음이 만드는 기업을 가리킨다 — 그 사실이 줄에 적혔다.
+    tools = next(one for one in light["objects"] if one["type_slug"] == names["tool"])
+    row = tools["plan"]["rows"][0]
+    assert row["action"] == "create"
+    assert "이 묶음이 만드는 객체입니다" in row["message"], row
+
+    # 관계의 끝점도 마찬가지다.
+    if light["relations"]:
+        edge = light["relations"][0]["plan"]["rows"][0]
+        assert edge["action"] == "create"
+        assert "이 묶음이 만드는 객체입니다" in edge["message"], edge
+
+    # **아무것도 안 남았다** — 미리 보기다.
+    assert (
+        client.get(f"/api/objects/{names['tool']}", headers=admin.headers).status_code == 404
+    )
+
+    # 그대로 적용하면 들어간다.
+    done = bundle_import(client, admin, {**bundle, "apply": True})
+    assert done["applied"] is True, done
+    rows = client.get(f"/api/objects/{names['tool']}", headers=admin.headers).json()["items"]
+    made = next(one for one in rows if one["key"] == "T-1")
+    # 계획에서 비워 뒀던 참조가 적용에서는 풀렸다.
+    detail = client.get(
+        f"/api/objects/{names['tool']}/{made['id']}", headers=admin.headers
+    ).json()
+    assert detail["object"]["properties"]["vendor"]
