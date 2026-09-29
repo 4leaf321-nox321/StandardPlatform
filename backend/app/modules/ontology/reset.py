@@ -44,6 +44,7 @@ from app.modules.objects.models import (
     ObjectInstance,
     ObjectLink,
     ObjectRelation,
+    ObjectRelationTombstone,
     ObjectYear,
     SavedView,
 )
@@ -128,6 +129,8 @@ def apply(db: Session, *, confirm: str) -> ResetPlan:
         db.execute(delete(ObjectAlias))
         db.execute(delete(ObjectLink))
         db.execute(delete(ObjectRelation))
+        # 통째로 지우는 자리다 — 무덤을 남기면 받는 쪽이 「끊겼다」 를 6천 줄 받는다.
+        db.execute(delete(ObjectRelationTombstone))
         # merged_into_id 가 objects 를 가리킨다(SET NULL) — 통째로 지우므로 순서 문제는
         # 없지만, 남은 참조가 있으면 여기서 걸린다.
         db.execute(delete(ObjectInstance))

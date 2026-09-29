@@ -74,7 +74,17 @@ FIXED_COLUMNS = (
     "status",
     "valid_from_year",
     "valid_to_year",
+    "renamed_from",
 )
+
+RELATION_MODES = ("add", "replace")
+"""관계 파일을 **더할지 맞출지.** 기본은 `add` — 가져오기는 더하기만 했다. `replace` 는
+파일에 나온 (출발 객체 · 관계 종류) 범위에서 **파일에 없는 선을 끊는다**(계획에 `unlink` 로
+올라오고, 사람이 보고 적용한다). 원 표면 선(`object_links`)은 건드리지 않는다."""
+
+ALIAS_MODES = ("add", "replace")
+"""별칭 칸을 **더할지 맞출지.** 기본은 `add` — 다시 적재할 때 사람이 화면에서 붙인 별칭이
+조용히 사라지지 않게. 파일을 정본으로 보는 자리(허브 → 쌍둥이)만 `replace` 를 적는다."""
 #: 한 파일의 상한. 넘으면 나눠 올린다 — 한 트랜잭션이 너무 커지면 실패했을 때
 #: 되돌리는 시간도 그만큼 길어진다.
 MAX_ROWS = 5000
@@ -100,7 +110,9 @@ class RowPlan:
     row: int
     """파일의 몇 번째 행인가(헤더 다음이 1)."""
     action: str
-    """`create` · `update` · `unchanged` · `error`."""
+    """`create` · `update` · `unchanged` · `unlink` · `error`.
+
+    `unlink` 는 **파일에 없어 끊을 선**이다 — 파일에서 온 줄이 아니라 `row` 가 0 이다."""
     label: str = ""
     key: str | None = None
     object_id: uuid.UUID | None = None
@@ -116,9 +128,12 @@ class Plan:
 
     @property
     def counts(self) -> dict[str, int]:
-        out = {"create": 0, "update": 0, "unchanged": 0, "error": 0}
+        # 네 가지는 **없어도 0 으로** 온다 — 화면이 「새로 0 · 고침 0」 을 그리려면 키가
+        # 있어야 한다. 그 밖의 것(`merge` · `deprecate` 처럼 무덤 단계가 쓰는 말)은 있을
+        # 때만 붙는다 — 여기에 다 적어 두면 새 말을 더할 때마다 이 줄을 고쳐야 한다.
+        out = {"create": 0, "update": 0, "unchanged": 0, "unlink": 0, "error": 0}
         for one in self.rows:
-            out[one.action] += 1
+            out[one.action] = out.get(one.action, 0) + 1
         return out
 
     @property
@@ -267,8 +282,55 @@ def cell_to_value(definition: PropertyDef, raw: Any, refs: _Refs) -> Any:
     return raw
 
 
+def _alias_note(taken: list[str], long: list[str]) -> str:
+    """빠진 별칭을 계획에 적는 말 — **조용히 버리지 않는다.**
+
+    사람은 넣은 것이 다 들어간 줄 알고, 나중에 「그 이름으로 검색이 안 된다」 로 만난다.
+    막지는 않는다(파일 하나가 한 별칭 때문에 통째로 거절되면 수백 줄이 안 들어간다) —
+    대신 뺀 것을 줄마다 적는다.
+    """
+    parts: list[str] = []
+    if taken:
+        parts.append(
+            f"별칭 {len(taken)}개는 다른 객체가 쓰고 있어 건너뜁니다: {', '.join(taken)}"
+        )
+    if long:
+        parts.append(
+            f"별칭 {len(long)}개는 {aliases.MAX_VALUE}자를 넘어 건너뜁니다: "
+            + ", ".join(f"{one[:20]}…({len(one)}자)" for one in long)
+        )
+    return " / ".join(parts)
+
+
+def alias_values(raw: Any) -> tuple[list[str], list[str]]:
+    """별칭 칸 → (쓸 수 있는 것, 너무 길어 뺀 것).
+
+    ⚠️ **목록으로 오면 쪼개지 않는다.** 예전에는 `str(raw).split(";")` 이라, JSON 으로 온
+       `["박리", "코팅 박리"]` 가 `"['박리', '코팅 박리']"` **한 덩어리**로 저장됐다(실측).
+    ⚠️ 글 하나로 오면 `;` 로 가른다(CSV 한 칸에 여럿을 적는 길). 그래서 **별칭 안에 `;` 가
+       든 것은 목록으로 보내야 살아남는다** — 고장 모드 80건 · 메커니즘 482건이 그렇다.
+    """
+    if raw is None:
+        return [], []
+    if isinstance(raw, list | tuple):
+        return aliases.split_long(aliases.clean([str(one) for one in raw]))
+    return aliases.split_long(aliases.clean(str(raw).split(MULTI_SEP)))
+
+
 def _is_blank(raw: Any) -> bool:
     return raw is None or (isinstance(raw, str) and raw.strip() == "")
+
+
+def renamed_from(object_type: ObjectType, row: dict[str, Any]) -> str | None:
+    """이 행이 **바꾸려는 옛 식별자** — 없으면 None.
+
+    키 체계가 바뀌는 일은 실제로 일어난다(`FM-001` → `FM-BRK-001`). 옛 식별자로 찾을 길이
+    없으면 같은 것이 새 객체로 하나 더 생기고, 그때 관계 · 참조는 옛 쪽에 남는다.
+    """
+    raw = _fixed(row, "renamed_from")
+    if raw in (_MISSING, None) or not str(raw).strip():
+        return None
+    return normalize_key(object_type, str(raw))
 
 
 def _patch_of(
@@ -344,6 +406,7 @@ def plan_objects(
     *,
     owner_workspace_id: uuid.UUID | None,
     source: str = "",
+    aliases_mode: str = "add",
     max_rows: int = MAX_ROWS,
     on_progress: Progress = None,
 ) -> Plan:
@@ -393,6 +456,7 @@ def plan_objects(
                     row,
                     index,
                     owner_workspace_id=owner_workspace_id,
+                    aliases_mode=aliases_mode,
                     seen_keys=seen_keys,
                     seen_ids=seen_ids,
                 )
@@ -421,6 +485,7 @@ def _plan_row(
     index: int,
     *,
     owner_workspace_id: uuid.UUID | None,
+    aliases_mode: str,
     seen_keys: dict[str, int],
     seen_ids: dict[str, int],
 ) -> RowPlan:
@@ -434,11 +499,10 @@ def _plan_row(
     raw_from = _fixed(row, "valid_from_year")
     raw_to = _fixed(row, "valid_to_year")
     raw_aliases = _fixed(row, "aliases")
-    wanted_aliases: list[str] | None = (
-        None
-        if raw_aliases is _MISSING
-        else aliases.clean([] if raw_aliases is None else str(raw_aliases).split(MULTI_SEP))
-    )
+    wanted_aliases: list[str] | None = None
+    long_aliases: list[str] = []
+    if raw_aliases is not _MISSING:
+        wanted_aliases, long_aliases = alias_values(raw_aliases)
 
     if (
         raw_status is not _MISSING
@@ -505,6 +569,33 @@ def _plan_row(
             # 같은 식별자가 남의 부서에 있다 — 없는 것과 같은 말로 답하되 만들지도 못한다.
             raise InvalidValue(code("OBJECTS", 3), f"같은 식별자가 이미 있습니다: {key}")
 
+    old_key = renamed_from(object_type, row)
+    if old_key is not None:
+        if key is None:
+            raise InvalidValue(
+                code("OBJECTS", 90),
+                "renamed_from 을 적으면 key 에 **새 식별자**를 적어야 합니다.",
+            )
+        previous = db.scalar(
+            select(ObjectInstance).where(
+                ObjectInstance.type_id == object_type.id,
+                ObjectInstance.key == old_key,
+                ObjectInstance.deleted_at.is_(None),
+            )
+        )
+        if previous is not None and not _can_see(db, user, previous):
+            raise InvalidValue(
+                code("OBJECTS", 90), f"옛 식별자의 객체를 볼 수 없습니다: {old_key}"
+            )
+        if existing is not None and previous is not None and previous.id != existing.id:
+            # 둘을 하나로 만드는 것은 **합치기**가 할 일이다 — 파일이 조용히 하면 안 된다.
+            raise InvalidValue(
+                code("OBJECTS", 90),
+                f"{old_key} 와 {key} 가 서로 다른 객체입니다 — 합치기(merge)로 하세요.",
+            )
+        if existing is None and previous is not None:
+            existing = previous
+
     if existing is None:
         if raw_label is _MISSING or raw_label is None or not str(raw_label).strip():
             raise InvalidValue(
@@ -517,14 +608,18 @@ def _plan_row(
         require_unique_properties(
             db, object_type, defs, properties, owner_workspace_id=owner_workspace_id
         )
+        skipped: list[str] = []
         if wanted_aliases:
-            aliases.require_free(db, object_type, wanted_aliases, exclude_id=None)
+            wanted_aliases, skipped = aliases.split_free(
+                db, object_type, wanted_aliases, exclude_id=None
+            )
         return RowPlan(
             row=index,
             action="create",
             label=str(raw_label).strip(),
             key=key,
             changes=sorted(properties) + (["aliases"] if wanted_aliases else []),
+            message=_alias_note(skipped, long_aliases),
         )
 
     # 고침 — 보낸 것만.
@@ -554,13 +649,21 @@ def _plan_row(
         and (None if raw_to is None else int(raw_to)) != existing.valid_to_year
     ):
         changes.append("valid_to_year")
+    alias_skipped: list[str] = []
     if wanted_aliases is not None:
+        wanted_aliases, alias_skipped = aliases.split_free(
+            db, object_type, wanted_aliases, exclude_id=existing.id
+        )
         current_aliases = aliases.human_of(db, [existing.id]).get(existing.id, [])
-        if [compare_key(a) for a in wanted_aliases] != [
+        if aliases_mode == "add":
+            have = {compare_key(one) for one in current_aliases}
+            if [one for one in wanted_aliases if compare_key(one) not in have]:
+                changes.append("aliases")
+        elif [compare_key(a) for a in wanted_aliases] != [
             compare_key(a) for a in current_aliases
         ]:
-            aliases.require_free(db, object_type, wanted_aliases, exclude_id=existing.id)
             changes.append("aliases")
+    rename_note = ""
     if key is not None and key != existing.key:
         require_key_free(
             db,
@@ -570,6 +673,10 @@ def _plan_row(
             exclude_id=existing.id,
         )
         changes.append("key")
+        if old_key is not None:
+            rename_note = (
+                f"식별자를 {existing.key} → {key} 로 바꾸고 옛 것을 별칭으로 남깁니다"
+            )
     if patch:
         merged = merge_properties(existing.properties or {}, patch)
         cleaned = validate_properties(defs, merged)
@@ -594,6 +701,9 @@ def _plan_row(
         key=key if key is not None else existing.key,
         object_id=existing.id,
         changes=changes,
+        message=" / ".join(
+            one for one in (rename_note, _alias_note(alias_skipped, long_aliases)) if one
+        ),
     )
 
 
@@ -617,6 +727,7 @@ def apply_objects(
     *,
     owner_workspace_id: uuid.UUID | None,
     source: str = "",
+    aliases_mode: str = "add",
     max_rows: int = MAX_ROWS,
     on_progress: Progress = None,
     before_apply: Callable[[Plan], None] | None = None,
@@ -635,6 +746,7 @@ def apply_objects(
         rows,
         owner_workspace_id=owner_workspace_id,
         source=source,
+        aliases_mode=aliases_mode,
         max_rows=max_rows,
         on_progress=on_progress,
     )
@@ -682,8 +794,13 @@ def apply_objects(
             db.flush()
             row_plan.object_id = target.id
             raw_aliases = _fixed(row, "aliases")
-            if raw_aliases not in (_MISSING, None) and str(raw_aliases).strip():
-                aliases.set_human(db, target, object_type, str(raw_aliases).split(MULTI_SEP))
+            if raw_aliases is not _MISSING and raw_aliases is not None:
+                # 계획에서 가른 대로 — 남이 쓰는 별칭은 여기서도 빠진다.
+                free, _taken = aliases.split_free(
+                    db, object_type, alias_values(raw_aliases)[0], exclude_id=target.id
+                )
+                if free:
+                    aliases.set_human(db, target, object_type, free)
             audit.record(
                 db,
                 action="object.create",
@@ -711,16 +828,25 @@ def apply_objects(
             target.valid_from_year = None if raw_from is None else int(raw_from)
         if raw_to is not _MISSING:
             target.valid_to_year = None if raw_to is None else int(raw_to)
+        keep_old_key: str | None = None
         if row_plan.key is not None and "key" in row_plan.changes:
+            if renamed_from(object_type, row) is not None and target.key:
+                # **옛 식별자를 별칭으로 남긴다** — 그 번호로 적힌 문서 · 사람의 기억이 있다.
+                keep_old_key = target.key
             target.key = row_plan.key
         if "aliases" in row_plan.changes:
             raw_aliases = _fixed(row, "aliases")
-            aliases.set_human(
-                db,
-                target,
-                object_type,
-                [] if raw_aliases in (_MISSING, None) else str(raw_aliases).split(MULTI_SEP),
+            free, _taken = aliases.split_free(
+                db, object_type, alias_values(raw_aliases)[0], exclude_id=target.id
             )
+            aliases.set_human(db, target, object_type, free, mode=aliases_mode)
+        if keep_old_key is not None:
+            # 별칭을 맞춘 **뒤에** 더한다 — `replace` 면 앞에서 더한 것이 지워진다.
+            free, _taken = aliases.split_free(
+                db, object_type, [keep_old_key], exclude_id=target.id
+            )
+            if free:
+                aliases.set_human(db, target, object_type, free, mode="add")
         if patch:
             target.properties = validate_properties(
                 defs, merge_properties(target.properties or {}, patch)
@@ -757,7 +883,10 @@ def apply_objects(
 
 
 def export_columns(defs: list[PropertyDef]) -> list[str]:
-    return [*FIXED_COLUMNS, *(d.key for d in defs if d.data_type != "file")]
+    # `renamed_from` 은 템플릿 · 내보내기에 안 넣는다 — 늘 비는 열이 하나 늘고, 내보낸 것을
+    # 그대로 올리면 뜻 없는 칸이 된다. 키를 바꿀 때만 손으로 더하는 열이다.
+    fixed = [one for one in FIXED_COLUMNS if one != "renamed_from"]
+    return [*fixed, *(d.key for d in defs if d.data_type != "file")]
 
 
 def export_rows(
@@ -831,6 +960,58 @@ def to_csv(columns: list[str], rows: list[dict[str, Any]]) -> bytes:
 # --- 관계 -----------------------------------------------------------------------
 
 RELATION_COLUMNS = ("src", "relation", "dst", "evidence_note")
+"""관계 파일의 **고정 열.** 그 밖의 열은 **관계 종류의 속성**으로 읽는다 —
+`property_defs.owner_kind='relation'` 이 모양을 정한다(근거 건수 · 근거 종류처럼)."""
+
+RELATION_RESERVED = (*RELATION_COLUMNS, "properties")
+"""속성으로 읽지 않는 이름 — CSV 는 칸을 펼쳐 적고(`n`, `basis`), JSON · 허브 묶음은
+`properties` 객체로 적는다. **같은 정의로 같게 검사한다.**"""
+
+
+def relation_defs(db: Session, kind: RelationType) -> list[PropertyDef]:
+    """이 관계 종류의 속성 정의 — 적은 차례로."""
+    return list(
+        db.scalars(
+            select(PropertyDef)
+            .where(PropertyDef.owner_kind == "relation", PropertyDef.owner_id == kind.id)
+            .order_by(PropertyDef.sort_order, PropertyDef.id)
+        )
+    )
+
+
+def _relation_properties(
+    db: Session, kind: RelationType, row: dict[str, Any], refs: _Refs
+) -> dict[str, Any]:
+    """관계 한 줄의 속성 — 고정 열 밖의 칸을 그 종류의 정의로 읽는다.
+
+    **모르는 키는 거절한다**(정의가 없는 칸). 조용히 버리면 넣은 사람은 들어간 줄 알고,
+    그 사실은 아무 데도 안 적힌다.
+    """
+    defs = relation_defs(db, kind)
+    nested = row.get("properties")
+    if nested is not None and not isinstance(nested, dict):
+        raise InvalidValue(
+            code("OBJECTS", 47), "properties 는 키와 값을 담은 객체여야 합니다."
+        )
+    flat = {key: value for key, value in row.items() if key and key not in RELATION_RESERVED}
+    # 펼친 칸이 이긴다 — CSV 에서 온 것이라 사람이 눈으로 본 값이다.
+    extra: dict[str, Any] = {**(nested or {}), **flat}
+    if not extra:
+        return {}
+    by_key = {one.key: one for one in defs}
+    unknown = sorted(key for key in extra if key not in by_key)
+    if unknown:
+        raise InvalidValue(
+            code("OBJECTS", 47),
+            f"{kind.label}에 없는 속성입니다: {', '.join(unknown)}. "
+            f"쓸 수 있는 것: {', '.join(by_key) or '(없음)'}",
+        )
+    values = {
+        key: cell_to_value(by_key[key], value, refs)
+        for key, value in extra.items()
+        if not _is_blank(value)
+    }
+    return validate_properties(defs, values, apply_defaults=True)
 
 
 def _find_endpoint(
@@ -933,12 +1114,18 @@ def plan_relations(
     rows: list[dict[str, Any]],
     *,
     source: str = "",
+    mode: str = "add",
     max_rows: int = MAX_ROWS,
     on_progress: Progress = None,
 ) -> Plan:
-    """관계 파일 — `src, relation, dst, evidence_note`. 출발점은 이 타입이어야 한다.
+    """관계 파일 — `src, relation, dst, evidence_note` 와 그 종류의 속성 열.
 
-    이미 이어진 것은 `unchanged`. 그래서 같은 파일을 두 번 올려도 선이 두 겹이 안 된다.
+    이미 이어진 것은 `unchanged`(속성·근거가 다르면 `update`). 그래서 같은 파일을 두 번
+    올려도 선이 두 겹이 안 된다.
+
+    `mode="replace"` 면 **파일에 나온 (출발 객체 · 관계 종류) 범위**에서 파일에 없는 선을
+    `unlink` 로 계획에 올린다 — 사라진 관계를 정리할 길이 이것 말고 없었다(하나씩 화면에서
+    끊는 것뿐).
     """
     plan = Plan()
     if len(rows) > max_rows:
@@ -946,16 +1133,18 @@ def plan_relations(
             f"한 번에 {max_rows}행까지 넣습니다 (넣은 행 {len(rows)}). 나눠 올리세요."
         )
         return plan
+    kinds = {row.slug: row for row in db.scalars(select(RelationType))}
+    # 관계 종류의 속성 키도 열로 받는다 — 어느 종류의 것인지는 줄마다 다시 본다.
+    known_props = {one.key for kind in kinds.values() for one in relation_defs(db, kind)}
     headers = {key for row in rows for key in row} - {""}
-    unknown = sorted(headers - set(RELATION_COLUMNS))
+    unknown = sorted(headers - set(RELATION_RESERVED) - known_props)
     if unknown:
         plan.errors.append(
             f"모르는 열: {', '.join(unknown)}. "
-            f"관계 파일의 열은 {', '.join(RELATION_COLUMNS)} 입니다."
+            f"관계 파일의 열은 {', '.join(RELATION_COLUMNS)} 과 관계 종류의 속성입니다."
         )
         return plan
 
-    kinds = {row.slug: row for row in db.scalars(select(RelationType))}
     seen: set[tuple[uuid.UUID, str, uuid.UUID]] = set()
     for index, row in enumerate(rows, start=1):
         _tick(on_progress, "계획", index, len(rows))
@@ -965,7 +1154,56 @@ def plan_relations(
             )
         except AppError as caught:
             plan.rows.append(RowPlan(row=index, action="error", message=caught.message))
+    if mode == "replace" and plan.ok:
+        plan.rows.extend(_unlinks(db, seen))
     return plan
+
+
+def _unlinks(db: Session, seen: set[tuple[uuid.UUID, str, uuid.UUID]]) -> list[RowPlan]:
+    """파일에 없어 **끊을 선** — 파일에 나온 (출발 객체 · 관계 종류) 범위만 본다.
+
+    범위를 그 쌍으로 잡는 이유: 파일에 아예 안 나온 객체의 선을 끊으면, 한 타입의 일부만
+    담은 파일이 나머지 전부를 지운다. 그것은 되돌릴 수 없는 종류의 사고다.
+    """
+    pairs = {(src, kind) for src, kind, _ in seen}
+    if not pairs:
+        return []
+    edges = db.scalars(
+        select(ObjectRelation).where(
+            ObjectRelation.src_object_id.in_({src for src, _ in pairs}),
+            ObjectRelation.relation.in_({kind for _, kind in pairs}),
+        )
+    )
+    doomed = [
+        edge
+        for edge in edges
+        if (edge.src_object_id, edge.relation) in pairs
+        and (edge.src_object_id, edge.relation, edge.dst_object_id) not in seen
+    ]
+    if not doomed:
+        return []
+    names = {
+        row.id: row.label
+        for row in db.scalars(
+            select(ObjectInstance).where(
+                ObjectInstance.id.in_(
+                    [one.src_object_id for one in doomed]
+                    + [one.dst_object_id for one in doomed]
+                )
+            )
+        )
+    }
+    return [
+        RowPlan(
+            row=0,
+            action="unlink",
+            label=f"{names.get(edge.src_object_id, '?')} -{edge.relation}-> "
+            f"{names.get(edge.dst_object_id, '?')}",
+            object_id=edge.id,
+            message="파일에 없어 끊습니다",
+        )
+        for edge in doomed
+    ]
 
 
 def _plan_relation(
@@ -1008,22 +1246,36 @@ def _plan_relation(
         raise InvalidValue(code("OBJECTS", 44), "같은 관계가 이 파일에 두 번 있습니다.")
     seen.add(triple)
     label = f"{src.label} -{kind.label}-> {dst.label}"
+    wanted = _relation_properties(db, kind, row, _Refs(db, user))
     if dst.is_system:
-        # 한쪽 끝이 원 표면 선은 `object_links` 에 있다.
+        # 한쪽 끝이 원 표면 선은 `object_links` 에 있다(속성은 안 받는다).
         found = links.existing(db, src.id, dst.id, kind.slug)
         if found is not None:
             return RowPlan(row=index, action="unchanged", label=label, object_id=found.id)
         rel.require_cardinality(db, kind, src.id, dst.id)
         return RowPlan(row=index, action="create", label=label)
-    existing = db.scalar(
-        select(ObjectRelation.id).where(
+    found_edge = db.scalar(
+        select(ObjectRelation).where(
             ObjectRelation.src_object_id == src.id,
             ObjectRelation.dst_object_id == dst.id,
             ObjectRelation.relation == kind.slug,
         )
     )
-    if existing is not None:
-        return RowPlan(row=index, action="unchanged", label=label, object_id=existing)
+    if found_edge is not None:
+        # **이미 이어진 선이라도 속성 · 근거가 다르면 고친다.** 예전에는 늘 `unchanged` 라,
+        # 근거 건수처럼 관계에 붙는 값을 나중에 채울 길이 없었다.
+        note = str(row.get("evidence_note") or "").strip()
+        current = found_edge.properties or {}
+        changed = [key for key, value in wanted.items() if current.get(key) != value]
+        if note and note != (found_edge.evidence_note or ""):
+            changed.append("evidence_note")
+        return RowPlan(
+            row=index,
+            action="update" if changed else "unchanged",
+            label=label,
+            object_id=found_edge.id,
+            changes=sorted(changed),
+        )
     rel.require_cardinality(db, kind, src.id, dst.id)
     rel.require_no_cycle(db, kind, src.id, dst.id)
     return RowPlan(row=index, action="create", label=label)
@@ -1036,12 +1288,20 @@ def apply_relations(
     rows: list[dict[str, Any]],
     *,
     source: str = "",
+    mode: str = "add",
     max_rows: int = MAX_ROWS,
     on_progress: Progress = None,
     before_apply: Callable[[Plan], None] | None = None,
 ) -> Plan:
     plan = plan_relations(
-        db, user, object_type, rows, source=source, max_rows=max_rows, on_progress=on_progress
+        db,
+        user,
+        object_type,
+        rows,
+        source=source,
+        mode=mode,
+        max_rows=max_rows,
+        on_progress=on_progress,
     )
     if not plan.ok:
         return plan
@@ -1049,8 +1309,52 @@ def apply_relations(
         before_apply(plan)
     kinds = {row.slug: row for row in db.scalars(select(RelationType))}
     by_label = {row.label: row for row in kinds.values()}
-    for row_plan, row in zip(plan.rows, rows, strict=True):
+    for row_plan in plan.rows:
         _tick(on_progress, "적용", row_plan.row, len(rows))
+        if row_plan.action == "unlink" and row_plan.object_id is not None:
+            edge = db.get(ObjectRelation, row_plan.object_id)
+            if edge is None:  # pragma: no cover - 방금 계획에서 찾았다
+                continue
+            audit.record(
+                db,
+                action="object.relation.remove",
+                actor=user,
+                target_table="object_relations",
+                target_id=edge.id,
+                target_label=row_plan.label,
+                changes={"reason": "파일에 없어 끊음"},
+                reason="일괄 가져오기 — 파일대로 맞춤",
+            )
+            db.delete(edge)
+            continue
+        # 파일에서 온 줄이다 — `row` 는 1부터.
+        row = rows[row_plan.row - 1]
+        if row_plan.action == "update" and row_plan.object_id is not None:
+            edge = db.get(ObjectRelation, row_plan.object_id)
+            if edge is None:  # pragma: no cover - 방금 계획에서 찾았다
+                continue
+            kind = kinds.get(edge.relation) or by_label[edge.relation]
+            before = dict(edge.properties or {})
+            wanted = _relation_properties(db, kind, row, _Refs(db, user))
+            if wanted:
+                edge.properties = validate_properties(
+                    relation_defs(db, kind), {**before, **wanted}
+                )
+            note = str(row.get("evidence_note") or "").strip()
+            if note:
+                edge.evidence_note = note
+            db.flush()
+            audit.record(
+                db,
+                action="object.relation.update",
+                actor=user,
+                target_table="object_relations",
+                target_id=edge.id,
+                target_label=row_plan.label,
+                changes={"properties": {"before": before, "after": edge.properties}},
+                reason="일괄 가져오기",
+            )
+            continue
         if row_plan.action != "create":
             continue
         slug = str(row.get("relation") or "").strip()
@@ -1077,7 +1381,7 @@ def apply_relations(
             src_object_id=src.id,
             dst_object_id=dst.id,
             relation=kind.slug,
-            properties={},
+            properties=_relation_properties(db, kind, row, _Refs(db, user)),
             evidence_note=str(row.get("evidence_note") or "").strip(),
             created_by_id=user.id,
         )
@@ -1141,12 +1445,21 @@ def export_relations(db: Session, user: User, object_type: ObjectType) -> list[d
         target = dsts.get(edge.dst_object_id)
         if target is None:
             continue
+        # **관계에 붙은 속성도 함께 낸다.** 안 실으면 내려받아 고쳐 다시 넣는 길에서
+        # 그 값만 조용히 사라진다(근거 건수 · 근거 종류처럼).
         out.append(
             {
                 "src": source.key or source.label,
                 "relation": edge.relation,
                 "dst": target.key or target.label,
                 "evidence_note": edge.evidence_note or "",
+                **{
+                    key: MULTI_SEP.join(str(one) for one in value)
+                    if isinstance(value, list)
+                    else value
+                    for key, value in (edge.properties or {}).items()
+                    if value is not None and value != []
+                },
             }
         )
     # 원 표(system)로 가는 선도 같은 파일에 — 도착점은 그 표의 식별자(부서 slug 등)로.

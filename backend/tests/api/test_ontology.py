@@ -1922,3 +1922,41 @@ def test_기계_자격은_범위가_있어야_고친다(client: TestClient, admi
         ).status_code
         == 201
     )
+
+
+def test_정의_가져오기로_코어를_한_번에_연다(client: TestClient, admin: Signed) -> None:
+    """**코어로 열 타입이 열 개를 넘는 설치가 있다.**
+
+    화면에서 하나씩 켜게 하면 열두 번 누르는 동안 하나가 빠지고, 빠진 것은 아무 데도 안
+    적힌다 — 바깥 시스템이 「그 타입이 없다」 를 볼 때까지. 정의 파일이 그것을 말할 수
+    있어야 하고, 내보낸 정의에도 그 칸이 실려야 한다(다시 넣으면 같은 상태가 된다).
+    """
+    slug = f"opened_{uuid.uuid4().hex[:6]}"
+    made = client.post(
+        "/api/ontology/import",
+        json={"types": [{"slug": slug, "label": "열린 타입", "core": True}]},
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+    types = {
+        one["slug"]: one
+        for one in client.get("/api/ontology/types", headers=admin.headers).json()
+    }
+    assert types[slug]["core"] is True
+
+    # 카탈로그에 그대로 선다 — 화면을 거치지 않았다.
+    catalog = client.get("/api/core", headers=admin.headers).json()
+    assert slug in {one["slug"] for one in catalog["types"]}
+
+    # 끄는 것도 파일로 — 다시 넣으면 그 상태가 된다.
+    off = client.post(
+        "/api/ontology/import",
+        json={"types": [{"slug": slug, "label": "열린 타입", "core": False}]},
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    assert off.status_code == 200, off.text
+    assert "core" in [one["fields"] for one in off.json()["changes"] if one["slug"] == slug][0]
+    catalog = client.get("/api/core", headers=admin.headers).json()
+    assert slug not in {one["slug"] for one in catalog["types"]}

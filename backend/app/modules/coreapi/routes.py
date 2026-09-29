@@ -4,8 +4,9 @@
 플랫폼의 화면이 쓰는 길이라 사정에 따라 바뀌지만, 이 아래는 남의 시스템 코드에 박히므로
 함부로 못 바꾼다. 경계를 주소로 그어 두면 그 차이가 코드에서도 보인다.
 
-    GET /api/core             무엇이 열려 있나 — 처음 붙는 쪽은 이것 하나만 읽는다
-    GET /api/core/{type}      지난번 이후 바뀐 것(+ 사라진 것)
+    GET /api/core                        무엇이 열려 있나 — 처음 붙는 쪽은 이것만 읽는다
+    GET /api/core/{type}                 지난번 이후 바뀐 것(+ 사라진 것)
+    GET /api/core/{type}/relations       그 타입에서 출발하는 선(+ 끊긴 선)
 
 읽기다. 좁은 범위(`core:read`)로도 열리므로, 바깥에 주는 토큰에 사내 전부를 읽는 `read` 를
 줄 필요가 없다.
@@ -21,7 +22,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.coreapi import services
-from app.modules.coreapi.schemas import CoreCatalogOut, CorePageOut
+from app.modules.coreapi.schemas import CoreCatalogOut, CorePageOut, CoreRelationPageOut
 from app.shared.auth import current_user
 from app.shared.errors import AppError, code
 
@@ -53,6 +54,49 @@ def core_catalog(
     return services.catalog(db, user, base=str(request.url).split("?")[0].rstrip("/"))
 
 
+def _moment(since: str | None) -> datetime | None:
+    """`since` 를 시각으로 — **지난 응답의 `as_of` 를 그대로** 넣게 한다."""
+    if not since:
+        return None
+    try:
+        moment = datetime.fromisoformat(since.replace("Z", "+00:00"))
+    except ValueError:
+        raise AppError(
+            code("CORE", 3),
+            f"`since` 는 지난 응답의 `as_of` 를 그대로 넣습니다: {since!r}",
+            status=422,
+        ) from None
+    return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment
+
+
+@router.get("/{type_slug}/relations", response_model=CoreRelationPageOut)
+def core_relations(
+    type_slug: str,
+    since: str | None = Query(
+        default=None, description="지난 응답의 `as_of` 를 그대로. 비우면 지금 있는 선 전부"
+    ),
+    cursor: str | None = Query(default=None, description="지난 응답의 `next`"),
+    limit: int = Query(default=services.DEFAULT_LIMIT, ge=1, le=services.MAX_LIMIT),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> CoreRelationPageOut:
+    """이 타입에서 **출발하는 선** — 바뀐 것과 **끊긴 것**을 함께.
+
+    객체만 받아 가면 받는 쪽은 점만 있고 선이 없다. 그것을 자기 쪽에서 다시 만들려면 우리가
+    이미 쥔 관계를 추측해야 한다.
+
+    끝점은 `key` 로 온다. `dst_type` 은 도착점의 타입 slug 다 — 어느 표에서 찾을지 알려
+    준다. `deleted: true` 인 줄은 **끊긴 선**이다(받는 쪽도 끊는다).
+
+    **양끝이 모두 열린 관계 종류만** 온다 — 한쪽이 안 열렸으면 받는 쪽이 못 찾는 끝점을
+    쥐게 된다. 무엇이 오는지는 카탈로그의 `relations` 가 말한다.
+    """
+    object_type = services.find_core_type(db, type_slug)
+    return services.relations(
+        db, user, object_type, since=_moment(since), cursor=cursor, limit=limit
+    )
+
+
 @router.get("/{type_slug}", response_model=CorePageOut)
 def core_rows(
     type_slug: str,
@@ -78,16 +122,6 @@ def core_rows(
     `merged_into` 에 이긴 쪽의 `key` 가 온다 — 받는 쪽이 제 참조를 옮길 수 있다.
     """
     object_type = services.find_core_type(db, type_slug)
-    moment: datetime | None = None
-    if since:
-        try:
-            moment = datetime.fromisoformat(since.replace("Z", "+00:00"))
-        except ValueError:
-            raise AppError(
-                code("CORE", 3),
-                f"`since` 는 지난 응답의 `as_of` 를 그대로 넣습니다: {since!r}",
-                status=422,
-            ) from None
-        if moment.tzinfo is None:
-            moment = moment.replace(tzinfo=UTC)
-    return services.page(db, user, object_type, since=moment, cursor=cursor, limit=limit)
+    return services.page(
+        db, user, object_type, since=_moment(since), cursor=cursor, limit=limit
+    )

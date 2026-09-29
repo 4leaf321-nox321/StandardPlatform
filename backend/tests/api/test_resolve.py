@@ -160,3 +160,38 @@ def test_다른_타입의_칸으로_건_조건도_진단이_선다(client: TestC
     assert got["reason"] == "filters"
     assert got["filters"][0]["remaining"] == 2
     assert got["filters"][0]["unknown"] == 1
+
+
+def test_이름_여럿을_한_번에_푼다(client: TestClient, admin: Signed) -> None:
+    """**한 줄에 한 번 물으면 이천 줄짜리 파일에 왕복이 이천 번이다.**
+
+    판정 규칙은 낱개와 같다 — 한 벌로 두어야 「낱개로는 되는데 묶음으로는 안 되는」 상태가
+    안 생긴다. 답에는 **물은 이름**이 붙는다: 차례로만 맞추면 중간에 하나가 어긋날 때
+    전부가 한 칸씩 밀린다.
+    """
+    vendor = _make_type(client, admin, label="공급사", key_policy="optional")
+    ansys = _make_object(client, admin, vendor, label="Ansys", key="V-001")
+    client.put(
+        f"/api/objects/{vendor}/{ansys['id']}/aliases",
+        json={"aliases": ["앤시스"]},
+        headers=admin.headers,
+    )
+    _make_object(client, admin, vendor, label="한화정밀", key="V-002")
+    _make_object(client, admin, vendor, label="한화중공업", key="V-003")
+
+    got = client.post(
+        f"/api/objects/{vendor}/resolve-many",
+        json={"names": ["V-001", "앤시스", "한화", "없는이름"]},
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert [one["name"] for one in body["items"]] == ["V-001", "앤시스", "한화", "없는이름"]
+    assert [one["match"] for one in body["items"]] == [
+        "exact",
+        "exact",
+        "candidates",
+        "none",
+    ]
+    assert body["items"][1]["object"]["matched_by"] == "alias"
+    assert body["counts"] == {"exact": 2, "candidates": 1, "none": 1}

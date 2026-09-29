@@ -12,6 +12,7 @@ const ACTION_LABEL: Record<ImportRow['action'], string> = {
   create: '새로',
   update: '고침',
   unchanged: '그대로',
+  unlink: '끊음',
   error: '오류',
 }
 
@@ -22,6 +23,7 @@ const ACTION_VARIANT: Record<
   create: 'default',
   update: 'secondary',
   unchanged: 'outline',
+  unlink: 'destructive',
   error: 'destructive',
 }
 
@@ -35,7 +37,7 @@ export function planIsClean(plan: ImportPlan): boolean {
 
 /** 바뀌는 것이 있나 — 없으면 적용해도 아무 일이 없다. */
 export function planChangesSomething(plan: ImportPlan): boolean {
-  return plan.counts.create + plan.counts.update > 0
+  return plan.counts.create + plan.counts.update + (plan.counts.unlink ?? 0) > 0
 }
 
 export function ImportPlanTable({ plan }: { plan: ImportPlan }) {
@@ -48,6 +50,9 @@ export function ImportPlanTable({ plan }: { plan: ImportPlan }) {
         <Badge>새로 {plan.counts.create}</Badge>
         <Badge variant="secondary">고침 {plan.counts.update}</Badge>
         <Badge variant="outline">그대로 {plan.counts.unchanged}</Badge>
+        {(plan.counts.unlink ?? 0) > 0 && (
+          <Badge variant="destructive">끊음 {plan.counts.unlink}</Badge>
+        )}
         {plan.counts.error > 0 && <Badge variant="destructive">오류 {plan.counts.error}</Badge>}
         {plan.applied && (
           <span className="text-emerald-600 dark:text-emerald-400">적용했습니다.</span>
@@ -72,10 +77,12 @@ export function ImportPlanTable({ plan }: { plan: ImportPlan }) {
               </tr>
             </thead>
             <tbody>
-              {rows.map((one) => (
-                <tr key={one.row} className="border-t">
+              {/* **행 번호를 키로 쓰지 않는다.** 「끊음」 줄은 파일에서 온 것이 아니라
+                  번호가 0 이고, 여럿이면 키가 겹친다. */}
+              {rows.map((one, at) => (
+                <tr key={`${one.row}-${at}`} className="border-t">
                   <td className="text-muted-foreground px-2 py-1 text-right tabular-nums">
-                    {one.row}
+                    {one.row || '—'}
                   </td>
                   <td className="px-2 py-1">
                     <Badge variant={ACTION_VARIANT[one.action]}>{ACTION_LABEL[one.action]}</Badge>
@@ -90,7 +97,9 @@ export function ImportPlanTable({ plan }: { plan: ImportPlan }) {
                     {one.action === 'error' ? (
                       <span className="text-destructive">{one.message}</span>
                     ) : (
-                      <span className="text-muted-foreground">{one.changes.join(', ')}</span>
+                      <span className="text-muted-foreground">
+                        {one.changes.join(', ') || one.message}
+                      </span>
                     )}
                   </td>
                 </tr>

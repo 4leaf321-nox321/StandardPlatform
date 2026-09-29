@@ -70,8 +70,12 @@ TYPE_FIELDS = {
     "detail_view",
     "title_template",
     "is_active",
+    "core",
     "properties",
 }
+"""⚠️ `core` 가 여기 있는 이유: 코어로 열 타입이 열 개를 넘는 설치가 있고, 그때 화면에서
+하나씩 켜게 하면 열두 번 누르는 동안 하나가 빠진다 — 그리고 **빠진 것은 아무 데도 안
+적힌다**(바깥 시스템이 「그 타입이 없다」 를 볼 때까지)."""
 PROPERTY_FIELDS = {
     "key",
     "label",
@@ -105,6 +109,9 @@ RELATION_FIELDS = {
     "dst_type_slugs",
     "sort_order",
     "is_active",
+    # 관계 자체에 붙는 값(근거 건수 · 근거 종류 …). 타입의 `properties` 와 같은 모양이고,
+    # `_diff` · `_assign` 은 이 키를 건너뛴다(목록이라 칸이 아니다).
+    "properties",
 }
 
 CHOICES = {
@@ -271,6 +278,9 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
                 Change("relation_type", slug, "update" if fields else "unchanged", fields)
             )
             _warn_relation_risks(db, relation, one, out)
+        _plan_properties(
+            db, slug, relation, one.get("properties") or [], out, owner_kind="relation"
+        )
 
     _refuse_managed(out, types, relations, source)
     return out
@@ -315,17 +325,24 @@ def _refuse_managed(
 def _plan_properties(
     db: Session,
     type_slug: str,
-    owner: ObjectType | None,
+    owner: ObjectType | RelationType | None,
     payloads: list[dict[str, Any]],
     out: Plan,
+    *,
+    owner_kind: str = "type",
 ) -> None:
+    """속성 정의의 계획 — **타입과 관계 종류가 같은 길을 쓴다.**
+
+    관계에도 붙는 값이 있다(인과 관계의 근거 건수 · 근거 종류). 정의 자리를 따로 만들면
+    두 벌이 되고, 언젠가 한쪽만 고쳐진다.
+    """
     existing: dict[str, PropertyDef] = {}
     if owner is not None:
         existing = {
             row.key: row
             for row in db.scalars(
                 select(PropertyDef).where(
-                    PropertyDef.owner_kind == "type", PropertyDef.owner_id == owner.id
+                    PropertyDef.owner_kind == owner_kind, PropertyDef.owner_id == owner.id
                 )
             )
         }
@@ -353,7 +370,9 @@ def _plan_properties(
         out.changes.append(
             Change("property", name, "update" if fields else "unchanged", fields)
         )
-        _warn_property_risks(db, owner, found, one, out)
+        if isinstance(owner, ObjectType):
+            # 저장된 값이 걸리는 위험은 타입 속성에서만 센다(관계 속성은 셈이 다르다).
+            _warn_property_risks(db, owner, found, one, out)
 
 
 def _count_with_value(db: Session, type_id: uuid.UUID, key: str) -> int:
@@ -521,10 +540,19 @@ def capture(db: Session) -> dict[str, Any]:
         ]
         types.append(one)
 
-    relations = [
-        {name: getattr(row, name) for name in sorted(RELATION_FIELDS)}
-        for row in db.scalars(select(RelationType).order_by(RelationType.sort_order))
-    ]
+    relations: list[dict[str, Any]] = []
+    for kind in db.scalars(select(RelationType).order_by(RelationType.sort_order)):
+        one = {name: getattr(kind, name) for name in sorted(RELATION_FIELDS - {"properties"})}
+        # 관계에 붙은 속성 정의도 함께 담는다 — 안 담으면 되돌릴 때 그것만 안 돌아온다.
+        one["properties"] = [
+            {name: getattr(prop, name) for name in sorted(PROPERTY_FIELDS)}
+            for prop in db.scalars(
+                select(PropertyDef)
+                .where(PropertyDef.owner_kind == "relation", PropertyDef.owner_id == kind.id)
+                .order_by(PropertyDef.sort_order)
+            )
+        ]
+        relations.append(one)
     return {"groups": groups, "types": types, "relation_types": relations}
 
 
@@ -629,6 +657,29 @@ def apply(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
             relation = RelationType(slug=slug, label=one.get("label", slug))
             db.add(relation)
         _assign(relation, one, RELATION_FIELDS, position=index if fresh else None)
+        db.flush()
+        # **관계에도 속성이 붙는다** — 근거 건수 · 근거 종류처럼 선 자체에 딸린 값.
+        for at, prop in enumerate(one.get("properties") or []):
+            key = prop["key"]
+            prop_row = db.scalar(
+                select(PropertyDef).where(
+                    PropertyDef.owner_kind == "relation",
+                    PropertyDef.owner_id == relation.id,
+                    PropertyDef.key == key,
+                )
+            )
+            if prop_row is None:
+                prop_row = PropertyDef(
+                    owner_kind="relation",
+                    owner_id=relation.id,
+                    key=key,
+                    label=prop.get("label", key),
+                    data_type=prop.get("data_type", "text"),
+                )
+                db.add(prop_row)
+                _assign(prop_row, prop, PROPERTY_FIELDS, position=at)
+            else:
+                _assign(prop_row, prop, PROPERTY_FIELDS)
         if source:
             relation.managed_by = source
 

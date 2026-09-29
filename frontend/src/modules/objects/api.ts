@@ -95,7 +95,7 @@ export interface TreeOut {
 /** 일괄 계획의 한 줄 — 행마다 무엇이 되는지. */
 export interface ImportRow {
   row: number
-  action: 'create' | 'update' | 'unchanged' | 'error'
+  action: 'create' | 'update' | 'unchanged' | 'unlink' | 'error'
   label: string
   key: string | null
   object_id: string | null
@@ -109,7 +109,7 @@ export interface ImportPlan {
   rows: ImportRow[]
   /** 행과 무관한 오류(모르는 열, 상한). **하나라도 있으면 아무것도 안 넣는다.** */
   errors: string[]
-  counts: Record<'create' | 'update' | 'unchanged' | 'error', number>
+  counts: Record<'create' | 'update' | 'unchanged' | 'unlink' | 'error', number>
 }
 
 /** 여럿 골라 한 칸 바꾸기의 계획 — 행마다 무엇이 되는지. */
@@ -342,10 +342,16 @@ function queryString(query: ObjectQuery): string {
   return text ? `?${text}` : ''
 }
 
-function importForm(file: File, workspaceSlug?: string | null): FormData {
+function importForm(
+  file: File,
+  workspaceSlug?: string | null,
+  modes?: { aliasesMode?: 'add' | 'replace'; relationsMode?: 'add' | 'replace' },
+): FormData {
   const form = new FormData()
   form.set('file', file)
   if (workspaceSlug) form.set('workspace_slug', workspaceSlug)
+  if (modes?.aliasesMode) form.set('aliases_mode', modes.aliasesMode)
+  if (modes?.relationsMode) form.set('relations_mode', modes.relationsMode)
   return form
 }
 
@@ -553,15 +559,25 @@ export const objectApi = {
    * 일괄 입력는 **작업이 된다**(202). 돌아오는 것은 계획이 아니라 작업이고, 계획은
    * `jobsApi.waitFor` 로 기다린 뒤 `job.result` 에서 꺼낸다. 적용은 `jobsApi.apply(job.id)`.
    */
-  import: (typeSlug: string, file: File, opts: { workspaceSlug?: string | null }) =>
-    api.postForm<Job>(`/objects/${typeSlug}/import`, importForm(file, opts.workspaceSlug)),
+  import: (
+    typeSlug: string,
+    file: File,
+    opts: { workspaceSlug?: string | null; aliasesMode?: 'add' | 'replace' },
+  ) =>
+    api.postForm<Job>(
+      `/objects/${typeSlug}/import`,
+      importForm(file, opts.workspaceSlug, { aliasesMode: opts.aliasesMode }),
+    ),
   exportRelations: (typeSlug: string, format: 'csv' | 'json') =>
     jobsApi.exportAndDownload(
       () => api.post<Job>(`/objects/${typeSlug}/relations/export?format=${format}`),
       `${typeSlug}-relations.${format}`,
     ),
-  importRelations: (typeSlug: string, file: File) =>
-    api.postForm<Job>(`/objects/${typeSlug}/relations/import`, importForm(file)),
+  importRelations: (typeSlug: string, file: File, mode: 'add' | 'replace' = 'add') =>
+    api.postForm<Job>(
+      `/objects/${typeSlug}/relations/import`,
+      importForm(file, null, { relationsMode: mode }),
+    ),
   /**
    * 고른 것들의 **한 칸**을 바꾼다 — `apply: false`(기본)면 계획만.
    *

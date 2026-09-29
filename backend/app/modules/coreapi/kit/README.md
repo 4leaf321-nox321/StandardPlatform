@@ -41,8 +41,13 @@ python sp_core_pull.py --config config.ini --full   # 처음부터 다시 수신
 | 파일 | 내용 |
 | --- | --- |
 | `out/<타입>.csv` | **수신 이력** — 받은 행을 이어 적습니다(같은 `key` 가 여러 번 나옵니다) |
-| `out/sp_core.sqlite` | **현재 상태** — `key` 기준으로 갱신됩니다. 삭제 행은 `deleted=1` |
+| `out/<타입>-relations.csv` | 그 타입에서 **출발하는 선**의 수신 이력(관계가 열린 타입만) |
+| `out/sp_core.sqlite` | **현재 상태** — 객체는 `key` 기준, 선은 `src·relation·dst` 기준으로 갱신됩니다. 삭제 행은 `deleted=1`, **끊긴 선은 지웁니다** |
 | `out/state.json` | 어디까지 받았는지(수신 기준 시각) |
+
+객체만 받으면 점만 있고 **선이 없습니다.** 카탈로그의 `relations` 에 값이 있는 타입은
+`GET /core/<타입>/relations` 도 같은 규칙(`since` · `next` · `as_of`)으로 받습니다 —
+클라이언트가 이미 그렇게 합니다.
 
 ## 4. 자동 실행
 
@@ -93,6 +98,25 @@ def save_rows(cfg, type_slug, rows):
   ]
 }
 ```
+
+선은 이렇게 옵니다(`GET /core/<타입>/relations`).
+
+```json
+{
+  "as_of": "2026-09-24T02:00:00.000000Z",
+  "next": null,
+  "items": [
+    { "src": "P-1", "relation": "supplies", "dst": "ACME-001", "dst_type": "vendor",
+      "evidence_note": "계약서 3.2", "properties": { "n": 2 },
+      "updated_at": "2026-09-23T08:11:00.000000Z", "deleted": false },
+    { "src": "P-1", "relation": "supplies", "dst": "HAN-002", "dst_type": "vendor",
+      "updated_at": "2026-09-24T01:00:00.000000Z", "deleted": true }
+  ]
+}
+```
+
+`deleted: true` 인 선은 **끊긴 선**입니다 — 자기 쪽에서도 끊으십시오. 양끝이 모두 공개된
+관계 종류만 옵니다(한쪽이 공개되지 않았으면 찾을 수 없는 끝점을 받게 되므로).
 
 | 값 | 표기 |
 | --- | --- |

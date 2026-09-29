@@ -26,6 +26,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import false as sa_false
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
@@ -37,14 +38,20 @@ from app.modules.coreapi.schemas import (
     CorePageOut,
     CorePropertyOut,
     CorePullOut,
+    CoreRelationOut,
+    CoreRelationPageOut,
     CoreRowOut,
     CoreStatusOut,
     CoreTypeOut,
 )
 from app.modules.objects import aliases
-from app.modules.objects.models import ObjectInstance
+from app.modules.objects.models import (
+    ObjectInstance,
+    ObjectRelation,
+    ObjectRelationTombstone,
+)
 from app.modules.objects.services import properties_of
-from app.modules.ontology.models import ObjectType, PropertyDef
+from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared import audit
 from app.shared.errors import NotFound, code
 from app.shared.permissions import visible_owner_clause
@@ -189,10 +196,12 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
             )
         }
 
+    open_slugs = {one.slug for one in types}
     for object_type in types:
         defs = _shown_defs(db, object_type)
         count = counts.get(object_type.id, 0)
         latest = latest_of.get(object_type.id)
+        kinds = [one.slug for one in open_relation_kinds(db, object_type, open_slugs)]
         out.append(
             CoreTypeOut(
                 slug=object_type.slug,
@@ -202,6 +211,8 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
                 updated_at=_stamp(latest),
                 properties=[_property_out(one) for one in defs],
                 endpoint=f"{base}/{object_type.slug}",
+                relations_endpoint=(f"{base}/{object_type.slug}/relations" if kinds else None),
+                relations=kinds,
             )
         )
         marks.append(f"{object_type.slug}:" + ",".join(f"{d.key}:{d.data_type}" for d in defs))
@@ -269,7 +280,10 @@ def page(
     limit: int,
 ) -> CorePageOut:
     """한 쪽 — 바뀐 것과 **사라진 것**을 함께."""
-    now = datetime.now(UTC)
+    # **시계는 DB 것을 쓴다.** `updated_at` 은 DB 가 찍고(`now()`), `as_of` 를 앱 프로세스의
+    # 시계로 찍으면 둘이 미세하게 어긋난다 — DB 가 한 틱 앞서면 방금 받은 행이 다음 호출에
+    # 「그 뒤에 바뀐 것」 으로 또 온다(시험이 간헐로 잡았다). 같은 시계에서 재야 경계가 선다.
+    now = db.scalar(select(func.clock_timestamp())) or datetime.now(UTC)
     defs = _shown_defs(db, object_type)
     stmt = select(ObjectInstance).where(
         ObjectInstance.type_id == object_type.id,
@@ -355,6 +369,138 @@ def page(
         next=(
             f"{last_row.updated_at.isoformat()}|{last_row.id}" if more and last_row else None
         ),
+        items=items,
+    )
+
+
+def open_relation_kinds(
+    db: Session, object_type: ObjectType, open_slugs: set[str]
+) -> list[RelationType]:
+    """이 타입에서 **출발하는, 양끝이 모두 열린** 관계 종류.
+
+    한쪽 끝이 안 열린 타입이면 보내지 않는다 — 받는 쪽은 찾을 수 없는 끝점을 쥐게 되고,
+    그것은 「우리 쪽 데이터가 이상하다」 로 읽힌다. 끝 타입을 안 적은 종류(NULL = 제약
+    없음)도 보내지 않는다: 무엇이 올지 우리도 모르는 선을 밖으로 내보낼 수는 없다.
+    """
+    out: list[RelationType] = []
+    for kind in db.scalars(select(RelationType).order_by(RelationType.slug)):
+        if not kind.is_active or not kind.src_type_slugs or not kind.dst_type_slugs:
+            continue
+        if object_type.slug not in kind.src_type_slugs:
+            continue
+        if not set(kind.src_type_slugs) <= open_slugs:
+            continue
+        if not set(kind.dst_type_slugs) <= open_slugs:
+            continue
+        out.append(kind)
+    return out
+
+
+def relations(
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    *,
+    since: datetime | None,
+    cursor: str | None,
+    limit: int,
+) -> CoreRelationPageOut:
+    """이 타입에서 출발하는 선 — **바뀐 것과 끊긴 것**을 한 흐름으로.
+
+    객체 쪽과 같은 규칙이다(`since` · `next` · `as_of`, 시계는 DB 것). 끊긴 선은 무덤
+    (`object_relation_tombstones`)에서 온다 — 선은 행을 정말 지우기 때문이다. 둘을 시각으로
+    한 줄에 세워 보내므로, 받는 쪽은 **온 차례대로 적용하면** 마지막 상태가 맞는다.
+    """
+    now = db.scalar(select(func.clock_timestamp())) or datetime.now(UTC)
+    open_slugs = {one.slug for one in core_types(db)}
+    kinds = open_relation_kinds(db, object_type, open_slugs)
+    if not kinds:
+        return CoreRelationPageOut(
+            type_slug=object_type.slug, as_of=_stamp(now), since=_stamp(since), items=[]
+        )
+    slugs = [one.slug for one in kinds]
+    visible = visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+    src = ObjectInstance
+    # 출발점이 이 타입인 것만. 보이는 부서의 것만(객체 쪽과 같은 규칙).
+    live = (
+        select(ObjectRelation)
+        .join(src, src.id == ObjectRelation.src_object_id)
+        .where(
+            ObjectRelation.relation.in_(slugs),
+            src.type_id == object_type.id,
+            src.deleted_at.is_(None),
+            visible,
+        )
+    )
+    if since is not None:
+        live = live.where(ObjectRelation.updated_at > since)
+    graves = select(ObjectRelationTombstone).where(ObjectRelationTombstone.relation.in_(slugs))
+    if since is not None:
+        graves = graves.where(ObjectRelationTombstone.removed_at > since)
+    else:
+        # 처음 받는 쪽에 무덤을 보내지 않는다 — 없던 선을 끊으라고 할 이유가 없다.
+        graves = graves.where(sa_false())
+
+    # 시각 · id 로 한 줄에 세운다. 커서는 그 둘이다(객체 쪽과 같은 모양).
+    marks: list[tuple[datetime, uuid.UUID, bool, Any]] = [
+        (one.updated_at, one.id, False, one) for one in db.scalars(live)
+    ] + [(one.removed_at, one.id, True, one) for one in db.scalars(graves)]
+    marks.sort(key=lambda one: (one[0], one[1]))
+    if cursor:
+        at, _, tail = cursor.partition("|")
+        try:
+            mark = datetime.fromisoformat(at)
+            last = uuid.UUID(tail)
+        except ValueError:
+            raise NotFound(
+                code("CORE", 2), "커서를 읽을 수 없습니다. 처음부터 받으세요."
+            ) from None
+        marks = [one for one in marks if (one[0], one[1]) > (mark, last)]
+    more = len(marks) > limit
+    marks = marks[:limit]
+
+    wanted: set[uuid.UUID] = set()
+    for _, _, _, row in marks:
+        wanted.add(row.src_object_id)
+        wanted.add(row.dst_object_id)
+    ends = {
+        one.id: one
+        for one in db.scalars(
+            select(ObjectInstance).where(ObjectInstance.id.in_(wanted or {uuid.uuid4()}))
+        )
+    }
+    type_slugs = {
+        one.id: one.slug
+        for one in db.scalars(
+            select(ObjectType).where(
+                ObjectType.id.in_({one.type_id for one in ends.values()} or {uuid.uuid4()})
+            )
+        )
+    }
+    items: list[CoreRelationOut] = []
+    for when, _, gone, row in marks:
+        start, end = ends.get(row.src_object_id), ends.get(row.dst_object_id)
+        if start is None or end is None:
+            # 끝점까지 정말 사라진 줄 — 그 객체의 무덤이 이미 그것을 말한다.
+            continue
+        items.append(
+            CoreRelationOut(
+                src=start.key or start.label,
+                relation=row.relation,
+                dst=end.key or end.label,
+                dst_type=type_slugs.get(end.type_id, ""),
+                evidence_note="" if gone else (row.evidence_note or ""),
+                properties={} if gone else {k: v for k, v in (row.properties or {}).items()},
+                updated_at=_stamp(when) or "",
+                deleted=gone,
+            )
+        )
+    last_mark = marks[-1] if marks else None
+    return CoreRelationPageOut(
+        type_slug=object_type.slug,
+        as_of=None if more else _stamp(now),
+        since=_stamp(since),
+        next=(f"{last_mark[0].isoformat()}|{last_mark[1]}" if more and last_mark else None),
         items=items,
     )
 

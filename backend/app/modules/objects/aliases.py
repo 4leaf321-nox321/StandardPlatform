@@ -21,6 +21,9 @@ from app.shared.text import compare_key
 
 HUMAN = "alias"
 
+MAX_VALUE = 200
+"""별칭 하나의 글자 수 — `object_aliases.value` 칸의 크기다."""
+
 
 def source_kind(slug: str) -> str:
     return f"source:{slug}"
@@ -38,8 +41,20 @@ def clean(values: list[str]) -> list[str]:
         if norm in seen:
             continue
         seen.add(norm)
-        out.append(text[:200])
+        out.append(text)
     return out
+
+
+def split_long(values: list[str]) -> tuple[list[str], list[str]]:
+    """쓸 수 있는 것과 **너무 긴 것**으로 가른다 — `(ok, long)`.
+
+    ⚠️ 예전에는 여기서 `value[:200]` 으로 **조용히 잘랐다.** 잘린 것은 다른 이름이라 원래
+       이름으로는 검색이 안 되고, 앞 200자가 같은 둘은 서로 충돌한다. 넣은 사람은 둘 다
+       모른다 — 그래서 자르지 않고, 뺀 것을 말한다.
+    """
+    ok = [one for one in values if len(one) <= MAX_VALUE]
+    long = [one for one in values if len(one) > MAX_VALUE]
+    return ok, long
 
 
 def of(db: Session, ids: list[uuid.UUID]) -> dict[uuid.UUID, list[ObjectAlias]]:
@@ -80,6 +95,34 @@ def taken_by(
     return {norm: object_id for norm, object_id in rows}
 
 
+def split_free(
+    db: Session,
+    object_type: ObjectType,
+    values: list[str],
+    *,
+    exclude_id: uuid.UUID | None,
+    kind: str = HUMAN,
+) -> tuple[list[str], list[str]]:
+    """쓸 수 있는 것과 **남이 쓰는 것**으로 가른다 — `(free, taken)`.
+
+    가져오기가 쓴다. 별칭 하나가 겹친다고 파일 전체를 물리면(전부 아니면 무) **한 줄 때문에
+    수백 줄이 안 들어간다** — 실측으로 고장 모드 적재가 그렇게 통째로 막혔다. 별칭은 이름을
+    거드는 값이지 정체성이 아니므로, 겹치는 것만 빼고 넣되 **어느 것이 빠졌는지 계획에
+    적는다.** 사람이 손으로 붙일 때는 여전히 거절한다(`require_free`) — 그 자리에서는 고칠
+    사람이 화면 앞에 있다.
+    """
+    taken_map = taken_by(db, object_type, kind, values)
+    free: list[str] = []
+    taken: list[str] = []
+    for value in values:
+        holder = taken_map.get(compare_key(value))
+        if holder is not None and holder != exclude_id:
+            taken.append(value)
+        else:
+            free.append(value)
+    return free, taken
+
+
 def require_free(
     db: Session,
     object_type: ObjectType,
@@ -102,11 +145,28 @@ def require_free(
 
 
 def set_human(
-    db: Session, row: ObjectInstance, object_type: ObjectType, values: list[str]
+    db: Session,
+    row: ObjectInstance,
+    object_type: ObjectType,
+    values: list[str],
+    *,
+    mode: str = "replace",
 ) -> tuple[list[str], list[str]]:
-    """사람이 붙인 별칭을 통째로 바꾼다. **부르는 쪽이 커밋하고 감사 기록을 남긴다.**
-    (전, 후) 를 돌려준다."""
-    wanted = clean(values)
+    """사람이 붙인 별칭. **부르는 쪽이 커밋하고 감사 기록을 남긴다.** (전, 후) 를 돌려준다.
+
+    `mode="add"` 는 **있는 것을 지우지 않고 더한다.** 파일로 다시 적재할 때 이것이 아니면,
+    사람이 화면에서 붙여 둔 별칭이 조용히 사라진다 — 그 사실은 아무 데도 안 적히고, 몇 달 뒤
+    「그 이름으로 검색이 안 된다」 로 만난다(실측). `replace` 는 파일을 정본으로 보는 자리
+    (허브 → 쌍둥이)에서 쓴다 — 허브에서 뺀 별칭이 받는 쪽에 남으면 둘이 갈린다.
+    """
+    wanted, long = split_long(clean(values))
+    if long:
+        # 손으로 넣는 자리다 — 사람이 바로 고칠 수 있으니 자르지 말고 거절한다.
+        raise InvalidValue(
+            code("OBJECTS", 89),
+            f"별칭이 {MAX_VALUE}자를 넘습니다: 「{long[0][:40]}…」 "
+            f"({len(long[0])}자). 잘라서 넣으면 원래 이름으로는 검색이 안 됩니다.",
+        )
     require_free(db, object_type, wanted, exclude_id=row.id)
     current = [
         one
@@ -118,9 +178,13 @@ def set_human(
     ]
     before = [one.value for one in current]
     keep = {compare_key(one) for one in wanted}
-    for one in current:
-        if one.norm not in keep:
-            db.delete(one)
+    if mode == "replace":
+        for one in current:
+            if one.norm not in keep:
+                db.delete(one)
+    else:
+        before_norms = {one.norm for one in current}
+        wanted = [*before, *(one for one in wanted if compare_key(one) not in before_norms)]
     have = {one.norm for one in current}
     for value in wanted:
         norm = compare_key(value)

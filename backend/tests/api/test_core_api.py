@@ -450,3 +450,136 @@ def test_연동_키트에_주소와_공개_타입이_채워진다(client: TestCl
 
 def test_키트는_시스템_관리자만(client: TestClient, member: Signed) -> None:
     assert client.get("/api/ontology/core-kit", headers=member.headers).status_code == 403
+
+
+def _relations(client: TestClient, who: Signed, slug: str, **params: Any) -> dict[str, Any]:
+    got = client.get(f"/api/core/{slug}/relations", params=params, headers=who.headers)
+    assert got.status_code == 200, got.text
+    return dict(got.json())
+
+
+def test_선도_받아_간다_바뀐_것과_끊긴_것(client: TestClient, admin: Signed) -> None:
+    """**객체만 주면 받는 쪽은 점만 있고 선이 없다.**
+
+    그것을 자기 쪽에서 다시 만들려면 우리가 이미 쥔 관계를 추측해야 한다. 그리고 선은 행을
+    정말 지우므로, 무덤이 없으면 받는 쪽은 **끊긴 것을 영영 모른다** — 허브에서 끊은 선이
+    쌍둥이에 남고 둘은 그때부터 갈린다.
+    """
+    vendor, part = _world(client, admin)
+    kind = f"supplies_{uuid.uuid4().hex[:6]}"
+    made = client.post(
+        "/api/ontology/import",
+        json={
+            "relation_types": [
+                {
+                    "slug": kind,
+                    "label": "공급",
+                    "src_type_slugs": [part],
+                    "dst_type_slugs": [vendor],
+                    "properties": [{"key": "n", "label": "근거 건수", "data_type": "number"}],
+                }
+            ]
+        },
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+
+    acme = _make_object(client, admin, vendor, label="ACME", key="ACME-001")
+    han = _make_object(client, admin, vendor, label="한화", key="HAN-002")
+    bolt = _make_object(client, admin, part, label="볼트", key="P-1")
+
+    # 카탈로그가 **무엇이 오는지** 말한다 — 주소를 짐작하게 하지 않는다.
+    catalog = client.get("/api/core", headers=admin.headers).json()
+    entry = next(one for one in catalog["types"] if one["slug"] == part)
+    assert entry["relations"] == [kind]
+    assert entry["relations_endpoint"].endswith(f"/core/{part}/relations")
+
+    rows = [
+        {"src": "P-1", "relation": kind, "dst": "ACME-001", "properties": {"n": 2}},
+        {"src": "P-1", "relation": kind, "dst": "HAN-002"},
+    ]
+    applied = client.post(
+        f"/api/objects/{part}/relations/import-rows",
+        json={"rows": rows, "apply": True},
+        headers=admin.headers,
+    )
+    assert applied.status_code == 200, applied.text
+
+    first = _relations(client, admin, part)
+    assert {(one["src"], one["dst"]) for one in first["items"]} == {
+        ("P-1", "ACME-001"),
+        ("P-1", "HAN-002"),
+    }
+    edge = next(one for one in first["items"] if one["dst"] == "ACME-001")
+    assert edge["properties"] == {"n": 2} and edge["dst_type"] == vendor
+    assert all(not one["deleted"] for one in first["items"])
+    mark = first["as_of"]
+
+    # 아무것도 안 바뀌었으면 빈 쪽.
+    assert _relations(client, admin, part, since=mark)["items"] == []
+
+    # 근거를 채우면 **바뀐 선**으로 온다 — 예전에는 `created_at` 만 있어 안 걸렸다.
+    client.post(
+        f"/api/objects/{part}/relations/import-rows",
+        json={
+            "rows": [{"src": "P-1", "relation": kind, "dst": "ACME-001", "n": 5}],
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+    changed = _relations(client, admin, part, since=mark)
+    assert [one["dst"] for one in changed["items"]] == ["ACME-001"]
+    assert changed["items"][0]["properties"] == {"n": 5}
+
+    # 「파일대로 맞춤」 으로 하나를 끊으면 **무덤이 온다.**
+    cut = client.post(
+        f"/api/objects/{part}/relations/import-rows",
+        json={
+            "rows": [{"src": "P-1", "relation": kind, "dst": "ACME-001"}],
+            "relations_mode": "replace",
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+    assert cut.status_code == 200, cut.text
+    after = _relations(client, admin, part, since=changed["as_of"])
+    grave = next(one for one in after["items"] if one["dst"] == "HAN-002")
+    assert grave["deleted"] is True and grave["properties"] == {}
+
+    # 처음 받는 쪽에는 무덤을 안 보낸다 — 없던 선을 끊으라고 할 이유가 없다.
+    fresh = _relations(client, admin, part)
+    assert all(not one["deleted"] for one in fresh["items"])
+    assert {one["dst"] for one in fresh["items"]} == {"ACME-001"}
+    assert acme["id"] and han["id"] and bolt["id"]
+
+
+def test_한쪽_끝이_안_열린_선은_안_나간다(client: TestClient, admin: Signed) -> None:
+    """받는 쪽이 **못 찾는 끝점**을 쥐게 하지 않는다 — 그것은 「저쪽 데이터가 이상하다」 로
+    읽힌다."""
+    vendor, part = _world(client, admin)
+    hidden = _make_type(client, admin, label=f"비공개{uuid.uuid4().hex[:6]}")
+    kind = f"tested_{uuid.uuid4().hex[:6]}"
+    made = client.post(
+        "/api/ontology/import",
+        json={
+            "relation_types": [
+                {
+                    "slug": kind,
+                    "label": "시험",
+                    "src_type_slugs": [part],
+                    "dst_type_slugs": [hidden],
+                }
+            ]
+        },
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+
+    catalog = client.get("/api/core", headers=admin.headers).json()
+    entry = next(one for one in catalog["types"] if one["slug"] == part)
+    assert kind not in entry["relations"]
+    assert entry["relations_endpoint"] is None
+    assert _relations(client, admin, part)["items"] == []
+    assert vendor

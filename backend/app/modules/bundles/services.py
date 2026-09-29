@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.database import engine
 from app.modules.accounts.models import User
+from app.modules.bundles import tombstones as graves
 from app.modules.bundles.schemas import BatchOut, BundleIn, BundleOut
 from app.modules.objects import bulk
 from app.modules.objects.schemas import ImportPlanOut as RowsPlanOut
@@ -61,6 +62,8 @@ class Outcome:
     ontology: importer.Plan | None = None
     objects: list[Batch] = field(default_factory=list)
     relations: list[Batch] = field(default_factory=list)
+    tombstones: bulk.Plan | None = None
+    """허브에서 사라진 것 — 사용 중지 · 합치기 · 끊기."""
     errors: list[str] = field(default_factory=list)
     snapshot_id: uuid.UUID | None = None
     applied: bool = False
@@ -68,6 +71,8 @@ class Outcome:
     @property
     def ok(self) -> bool:
         if self.errors or (self.ontology is not None and self.ontology.errors):
+            return False
+        if self.tombstones is not None and not self.tombstones.ok:
             return False
         return all(one.ok for one in [*self.objects, *self.relations])
 
@@ -88,6 +93,9 @@ class Outcome:
                     out[f"{name}_{action}"] = out.get(f"{name}_{action}", 0) + count
                 if one.error:
                     out[f"{name}_error"] = out.get(f"{name}_error", 0) + 1
+        for action, count in (self.tombstones.counts if self.tombstones else {}).items():
+            if count:
+                out[f"tombstones_{action}"] = count
         return out
 
 
@@ -217,6 +225,7 @@ def _stages(
                 batch.rows,
                 owner_workspace_id=owner,
                 source=bundle.source,
+                aliases_mode=batch.aliases_mode,
                 max_rows=max_rows,
                 on_progress=_staged(on_progress, f"객체 {batch.type_slug}"),
             )
@@ -239,6 +248,7 @@ def _stages(
                 source_type,
                 links.rows,
                 source=bundle.source,
+                mode=links.mode,
                 max_rows=max_rows,
                 on_progress=_staged(on_progress, f"관계 {links.type_slug}"),
             )
@@ -246,6 +256,11 @@ def _stages(
             out.relations.append(Batch(links.type_slug, None, caught.message))
             continue
         out.relations.append(Batch(links.type_slug, planned_links))
+
+    if bundle.tombstones is not None:
+        # **맨 뒤다.** 합치기는 이긴 쪽이 이미 있어야 하고, 그것은 앞의 객체 단계가 넣는다.
+        # 미리 보기에서도 적용한다(바깥이 롤백한다) — 안 그러면 「무엇이 될지」 를 못 본다.
+        out.tombstones = graves.run(db, user, bundle.tombstones, apply=True)
 
 
 def _staged(on_progress: bulk.Progress, prefix: str) -> bulk.Progress:
@@ -272,6 +287,11 @@ def outcome_out(outcome: Outcome) -> BundleOut:
         ontology=_schema_out(outcome) if outcome.ontology is not None else None,
         objects=[_batch_out(one, outcome.applied) for one in outcome.objects],
         relations=[_batch_out(one, outcome.applied) for one in outcome.relations],
+        tombstones=(
+            _rows_out(outcome.tombstones, outcome.applied)
+            if outcome.tombstones is not None
+            else None
+        ),
         errors=outcome.errors,
         snapshot_id=outcome.snapshot_id,
         counts=outcome.counts,
@@ -306,6 +326,10 @@ def fingerprint(outcome: Outcome) -> str:
                 ],
             )
             for one in outcome.relations
+        ],
+        "tombstones": [
+            (r.row, r.action, r.label, r.message)
+            for r in (outcome.tombstones.rows if outcome.tombstones else [])
         ],
         "errors": outcome.errors,
     }

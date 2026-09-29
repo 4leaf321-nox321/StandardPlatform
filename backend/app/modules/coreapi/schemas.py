@@ -50,6 +50,11 @@ class CoreTypeOut(BaseModel):
     properties: list[CorePropertyOut]
     endpoint: str
     """이 타입의 행을 가져가는 자리. 주소를 짐작하지 않게 **우리가 적어 준다.**"""
+    relations_endpoint: str | None = None
+    """이 타입에서 **출발하는 선**을 가져가는 자리 — 열린 관계 종류가 있을 때만."""
+    relations: list[str] = Field(default_factory=list)
+    """그 창구에 오는 관계 종류의 slug 들. **양끝이 모두 열린 타입인 것만 온다** — 한쪽이
+    안 열린 선을 보내면 받는 쪽이 못 찾는 끝점을 쥔다."""
 
 
 class CoreCatalogOut(BaseModel):
@@ -117,6 +122,33 @@ class CorePageOut(BaseModel):
     next: str | None = None
     """다음 쪽의 커서. 없으면 끝이다."""
     items: list[CoreRowOut]
+
+
+class CoreRelationOut(BaseModel):
+    """선 하나 — **끝점은 `key` 로.** 받는 쪽의 uuid 는 우리 것과 다르다."""
+
+    src: str
+    relation: str
+    """관계 종류의 slug."""
+    dst: str
+    dst_type: str
+    """도착점의 타입 slug — 받는 쪽이 어느 표에서 찾을지 안다."""
+    evidence_note: str = ""
+    properties: dict[str, Any] = Field(default_factory=dict)
+    """선 자체에 붙은 값(근거 건수처럼). **빈 값은 키를 뺀다.**"""
+    updated_at: str
+    deleted: bool = False
+    """참이면 **끊긴 선**이다 — 받는 쪽은 자기 쪽에서도 끊는다."""
+
+
+class CoreRelationPageOut(BaseModel):
+    """한 쪽 — 객체 쪽과 같은 규칙(`since` · `next` · `as_of`)."""
+
+    type_slug: str
+    as_of: str | None = None
+    since: str | None = None
+    next: str | None = None
+    items: list[CoreRelationOut]
 
 
 class CorePullOut(BaseModel):

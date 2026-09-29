@@ -185,6 +185,7 @@ def objects_import(work: Work) -> dict[str, Any]:
         code_value=code("OBJECTS", 15),
     )
     max_rows = get_settings().job_max_rows
+    aliases_mode = str(work.params.get("aliases_mode") or "add")
     if work.params.get("apply"):
         plan = bulk.apply_objects(
             work.db,
@@ -192,6 +193,7 @@ def objects_import(work: Work) -> dict[str, Any]:
             object_type,
             rows,
             owner_workspace_id=owner,
+            aliases_mode=aliases_mode,
             max_rows=max_rows,
             on_progress=work.progress,
             before_apply=_fingerprint_guard(work),
@@ -203,6 +205,7 @@ def objects_import(work: Work) -> dict[str, Any]:
         object_type,
         rows,
         owner_workspace_id=owner,
+        aliases_mode=aliases_mode,
         max_rows=max_rows,
         on_progress=work.progress,
     )
@@ -213,19 +216,27 @@ def relations_import(work: Work) -> dict[str, Any]:
     object_type = _type(work.db, str(work.params.get("type_slug") or ""))
     rows = _rows(work)
     max_rows = get_settings().job_max_rows
+    mode = str(work.params.get("relations_mode") or "add")
     if work.params.get("apply"):
         plan = bulk.apply_relations(
             work.db,
             _user(work),
             object_type,
             rows,
+            mode=mode,
             max_rows=max_rows,
             on_progress=work.progress,
             before_apply=_fingerprint_guard(work),
         )
         return _plan_result(plan, applied=plan.ok)
     plan = bulk.plan_relations(
-        work.db, _user(work), object_type, rows, max_rows=max_rows, on_progress=work.progress
+        work.db,
+        _user(work),
+        object_type,
+        rows,
+        mode=mode,
+        max_rows=max_rows,
+        on_progress=work.progress,
     )
     return _plan_result(plan, applied=False)
 
@@ -265,20 +276,29 @@ def bundle_import(work: Work) -> dict[str, Any]:
 
 
 def bundle_export(work: Work) -> dict[str, Any]:
-    group = str(work.params.get("group") or "")
+    wanted = [str(one) for one in (work.params.get("groups") or []) if str(one).strip()]
+    if not wanted:
+        wanted = [str(work.params.get("group") or "")]
     work.progress("내보내기", 0, 0)
-    body = bundle_export_service.export_group(work.db, group)
+    body = bundle_export_service.export_group(
+        work.db, wanted, allow_outside_refs=bool(work.params.get("allow_outside_refs"))
+    )
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
     work.emit(
-        name=f"bundle-{group}-{stamp}.json",
+        # 파일 이름이 묶음 이름 열 개로 길어지지 않게 — 셋까지만 적고 나머지는 수로.
+        name=f"bundle-{_short(wanted)}-{stamp}.json",
         content_type="application/json",
         data=json.dumps(body, ensure_ascii=False, indent=1).encode("utf-8"),
     )
     return {
-        "group": group,
+        "group": ",".join(wanted),
         "counts": body.get("counts") or {},
         "exported_at": body.get("exported_at"),
     }
+
+
+def _short(slugs: list[str]) -> str:
+    return "-".join(slugs) if len(slugs) <= 3 else f"{slugs[0]}-외{len(slugs) - 1}"
 
 
 # --- 내보내기 — 목록 그대로 파일로 ---------------------------------------------------
@@ -355,10 +375,13 @@ def relations_export(work: Work) -> dict[str, Any]:
             data=payload,
         )
     else:
+        # **열은 나온 줄에서 모은다.** 고정 넷만 적으면 관계에 붙은 값(근거 건수 · 근거
+        # 종류 …)이 파일에서 조용히 빠지고, 그 파일을 다시 넣으면 그 값이 사라진다.
+        extra = sorted({key for one in records for key in one} - set(bulk.RELATION_COLUMNS))
         work.emit(
             name=f"{object_type.slug}-relations-{stamp}.csv",
             content_type="text/csv; charset=utf-8",
-            data=bulk.to_csv(list(bulk.RELATION_COLUMNS), records),
+            data=bulk.to_csv([*bulk.RELATION_COLUMNS, *extra], records),
         )
     return {"type_slug": object_type.slug, "rows": len(records), "format": fmt}
 

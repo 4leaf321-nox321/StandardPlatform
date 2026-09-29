@@ -7,8 +7,9 @@
 무엇을 하나
     1. 카탈로그(GET /core)로 공개 타입과 칸을 읽는다.
     2. 타입마다 GET /core/<타입>?since=... 를 next 가 빌 때까지 이어 받는다.
-    3. 받은 행을 CSV 와 SQLite 에 저장한다(save_rows 를 고치면 자기 DB 로 간다).
-    4. 마지막에 온 as_of 를 state.json 에 적어 두고, 다음 실행에서 그대로 돌려준다.
+    3. 그 타입에 열린 관계가 있으면 GET /core/<타입>/relations 도 같은 식으로 받는다.
+    4. 받은 행을 CSV 와 SQLite 에 저장한다(save_rows 를 고치면 자기 DB 로 간다).
+    5. 마지막에 온 as_of 를 state.json 에 적어 두고, 다음 실행에서 그대로 돌려준다.
 
 지켜야 할 것 다섯 — 이 파일은 이미 지키고 있다
     · as_of 는 서버가 준 값을 그대로 돌려준다(자기 시계로 만들지 않는다)
@@ -175,6 +176,102 @@ def save_rows(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -
         db.close()
 
 
+def save_relations(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -> None:
+    """선 저장 — CSV 는 수신 이력, SQLite 는 현재 상태(세 끝이 키다).
+
+    `deleted` 인 줄은 **지운다** — 선은 상태가 아니라 있음/없음이다.
+    """
+    if not rows:
+        return
+    cfg["out_dir"].mkdir(parents=True, exist_ok=True)
+    columns = ["src", "relation", "dst", "dst_type", "evidence_note", "updated_at", "deleted"]
+    flat = [
+        {
+            **{name: one.get(name) for name in columns},
+            **{
+                key: ";".join(str(item) for item in value)
+                if isinstance(value, list)
+                else value
+                for key, value in (one.get("properties") or {}).items()
+            },
+        }
+        for one in rows
+    ]
+    names: list[str] = list(columns)
+    for one in flat:
+        for name in one:
+            if name not in names:
+                names.append(name)
+    csv_path = cfg["out_dir"] / f"{type_slug}-relations.csv"
+    exists = csv_path.exists()
+    with csv_path.open("a" if exists else "w", encoding="utf-8-sig", newline="") as fh:
+        writer = csv.DictWriter(fh, fieldnames=names, extrasaction="ignore")
+        if not exists:
+            writer.writeheader()
+        writer.writerows(flat)
+
+    table = f"{type_slug}__relations"
+    db = sqlite3.connect(cfg["out_dir"] / "sp_core.sqlite")
+    try:
+        db.execute(
+            f'CREATE TABLE IF NOT EXISTS "{table}" '
+            "(src TEXT, relation TEXT, dst TEXT, dst_type TEXT, evidence_note TEXT, "
+            "updated_at TEXT, properties TEXT, PRIMARY KEY (src, relation, dst))"
+        )
+        for one in rows:
+            keys = (one.get("src"), one.get("relation"), one.get("dst"))
+            if one.get("deleted"):
+                db.execute(
+                    f'DELETE FROM "{table}" WHERE src=? AND relation=? AND dst=?', keys
+                )
+                continue
+            db.execute(
+                f'INSERT INTO "{table}" '
+                "(src,relation,dst,dst_type,evidence_note,updated_at,properties) "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(src,relation,dst) DO UPDATE SET "
+                "dst_type=excluded.dst_type, evidence_note=excluded.evidence_note, "
+                "updated_at=excluded.updated_at, properties=excluded.properties",
+                (
+                    *keys,
+                    one.get("dst_type"),
+                    one.get("evidence_note"),
+                    one.get("updated_at"),
+                    json.dumps(one.get("properties") or {}, ensure_ascii=False),
+                ),
+            )
+        db.commit()
+    finally:
+        db.close()
+
+
+def pull_relations(
+    cfg: dict[str, Any], type_slug: str, state: dict[str, str]
+) -> dict[str, int]:
+    """그 타입에서 출발하는 선 — 객체와 **같은 규칙**(since · next · as_of)."""
+    mark = f"{type_slug}#relations"
+    since = state.get(mark, "")
+    cursor: str | None = None
+    counts = {"rows": 0, "deleted": 0, "pages": 0}
+    while True:
+        params: dict[str, Any] = {"limit": cfg["page_size"]}
+        if since:
+            params["since"] = since
+        if cursor:
+            params["cursor"] = cursor
+        body = request_json(cfg, f"/core/{type_slug}/relations", params)
+        items = body.get("items") or []
+        save_relations(cfg, type_slug, items)
+        counts["rows"] += len(items)
+        counts["deleted"] += sum(1 for one in items if one.get("deleted"))
+        counts["pages"] += 1
+        cursor = body.get("next")
+        if cursor:
+            continue
+        if body.get("as_of"):
+            state[mark] = str(body["as_of"])
+        return counts
+
+
 def pull_type(cfg: dict[str, Any], type_slug: str, state: dict[str, str]) -> dict[str, int]:
     since = state.get(type_slug, "")
     cursor: str | None = None
@@ -217,6 +314,10 @@ def main() -> int:
     if unknown:
         sys.exit(f"공개된 타입이 아닙니다: {unknown}. 공개 측 관리자에게 확인하세요.")
 
+    has_relations = {
+        one["slug"]: bool(one.get("relations"))
+        for one in catalog.get("types") or []
+    }
     state = {} if args.full else load_state(cfg)
     for type_slug in wanted:
         counts = pull_type(cfg, type_slug, state)
@@ -224,6 +325,12 @@ def main() -> int:
             f"  {type_slug}: {counts['rows']}건 수신"
             f"(삭제 {counts['deleted']}) · {counts['pages']}페이지"
         )
+        if has_relations.get(type_slug):
+            edges = pull_relations(cfg, type_slug, state)
+            print(
+                f"  {type_slug} 관계: {edges['rows']}건 수신"
+                f"(끊김 {edges['deleted']}) · {edges['pages']}페이지"
+            )
         save_state(cfg, state)
     print(f"저장 위치: {cfg['out_dir'].resolve()}")
     return 0

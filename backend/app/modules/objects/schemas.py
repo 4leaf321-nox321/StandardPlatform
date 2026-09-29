@@ -226,6 +226,12 @@ class ImportRowsRequest(BaseModel):
     rows: list[dict[str, Any]]
     workspace_slug: str | None = None
     apply: bool = False
+    aliases_mode: Literal["add", "replace"] = "add"
+    """별칭 칸을 **더할지 맞출지.** 기본은 더하기 — 다시 적재할 때 사람이 화면에서 붙인
+    별칭이 사라지지 않게. `replace` 는 파일을 정본으로 볼 때만(허브 → 쌍둥이)."""
+    relations_mode: Literal["add", "replace"] = "add"
+    """관계 파일을 **더할지 맞출지.** `replace` 면 파일에 나온 (출발 객체 · 관계 종류)
+    범위에서 파일에 없는 선이 계획에 「끊음」 으로 올라온다."""
 
 
 # --- 지우기 전에 -------------------------------------------------------------
@@ -652,6 +658,25 @@ class ResolveOut(BaseModel):
     candidates: list[ResolveHit] = Field(default_factory=list)
     hint: str = ""
     truncated: bool = False
+
+
+class ResolveManyIn(BaseModel):
+    """이름 여럿을 **한 번에** — 한 줄에 한 번 물으면 왕복이 줄 수만큼 늘어난다."""
+
+    names: list[str] = Field(min_length=1, max_length=500)
+
+
+class ResolveOneOut(ResolveOut):
+    """`ResolveOut` 에 **무엇을 물었는지**를 붙인다 — 차례로만 맞추면 어긋난다."""
+
+    name: str
+
+
+class ResolveManyOut(BaseModel):
+    items: list[ResolveOneOut]
+    counts: dict[str, int]
+    """`exact` · `candidates` · `none` 이 각각 몇 개인가 — 「몇 개가 안 풀렸나」 가
+    한 줄로 보여야 한다."""
 
 
 class FilterEffectOut(BaseModel):

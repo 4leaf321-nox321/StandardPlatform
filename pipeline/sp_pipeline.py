@@ -555,6 +555,16 @@ def summarize(result: dict[str, Any], *, limit: int = 20) -> str:
                 )
             if len(bad) > limit:
                 lines.append(f"  … 외 {len(bad) - limit}행")
+    graves = result.get("tombstones") or {}
+    if graves.get("rows"):
+        counts = " · ".join(f"{k} {v}" for k, v in sorted((graves.get("counts") or {}).items()))
+        lines.append(f"사라진 것: {counts or '-'}")
+        for row in graves["rows"][:limit]:
+            lines.append(
+                f"  {row.get('action')} {row.get('label') or ''}: {row.get('message') or ''}"
+            )
+        if len(graves["rows"]) > limit:
+            lines.append(f"  … 외 {len(graves['rows']) - limit}줄")
     for error in result.get("errors", []):
         lines.append(f"오류: {error}")
     return "\n".join(lines)

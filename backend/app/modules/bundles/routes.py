@@ -83,9 +83,27 @@ def import_bundle(
 
 
 class ExportRequest(BaseModel):
-    group: str = Field(
-        min_length=1, description="사이드바 묶음 slug — 허브의 PLM 기준정보면 plm"
+    group: str | None = Field(
+        default=None, description="사이드바 묶음 slug 하나 — 허브의 PLM 기준정보면 plm"
     )
+    groups: list[str] = Field(
+        default_factory=list,
+        description='여럿을 한 봉투로 — `["plm", "core"]`. `group` 과 함께 적어도 된다',
+    )
+    allow_outside_refs: bool = Field(
+        default=False,
+        description="묶음 **밖을 가리키는 참조**를 막지 않는다 — 받는 쪽이 그 타입을 이미 "
+        "다른 묶음으로 받아 뒀을 때만 켠다",
+    )
+
+    def wanted(self) -> list[str]:
+        """적은 차례대로, 겹치는 것은 한 번만."""
+        out: list[str] = []
+        for one in [self.group, *self.groups]:
+            slug = (one or "").strip()
+            if slug and slug not in out:
+                out.append(slug)
+        return out
 
 
 @router.post("/export", response_model=JobOut, status_code=202)
@@ -97,17 +115,29 @@ def export_bundle(
     """허브가 쌍둥이에 내려주는 묶음 — 작업이 되고, 결과 파일을 `GET /api/jobs/{id}/download`
     로 받는다. 받는 쪽은 그것을 그대로 `POST /bundles/import` 에 `source` 를 붙여 보낸다.
 
+    **묶음을 여럿 골라도 된다**(`groups`). 코어를 축별로 나눠 둔 설치에서 하나씩 내보내면
+    축끼리 가리키는 참조 때문에 어느 쪽도 못 보낸다.
+
     시스템 관리자만 — 허브의 기준정보 전부를 부서 가리지 않고 내보내기 때문이다.
     """
-    group = payload.group.strip()
-    if db.scalar(select(NavGroup).where(NavGroup.slug == group)) is None:
-        # 넣는 순간 말한다 — 워커가 돌아서야 「없는 묶음」 이라 하면 정제 도구는 몇 초를
-        # 기다린 뒤에야 듣는다.
-        raise NotFound(code("BUNDLES", 20), f"사이드바 묶음을 찾을 수 없습니다: {group}")
+    wanted = payload.wanted()
+    if not wanted:
+        raise Conflict(
+            code("BUNDLES", 21), "내보낼 사이드바 묶음을 하나는 골라야 합니다(group · groups)."
+        )
+    for slug in wanted:
+        if db.scalar(select(NavGroup).where(NavGroup.slug == slug)) is None:
+            # 넣는 순간 말한다 — 워커가 돌아서야 「없는 묶음」 이라 하면 정제 도구는 몇 초를
+            # 기다린 뒤에야 듣는다.
+            raise NotFound(code("BUNDLES", 20), f"사이드바 묶음을 찾을 수 없습니다: {slug}")
     job = job_services.enqueue(
         db,
         kind="bundle_export",
-        params={"group": group},
+        params={
+            "group": wanted[0],
+            "groups": wanted,
+            "allow_outside_refs": payload.allow_outside_refs,
+        },
         user=user,
         workspace_id=None,
     )

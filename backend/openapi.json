@@ -3445,6 +3445,97 @@
         }
       }
     },
+    "/api/core/{type_slug}/relations": {
+      "get": {
+        "tags": [
+          "core"
+        ],
+        "summary": "Core Relations",
+        "description": "이 타입에서 **출발하는 선** — 바뀐 것과 **끊긴 것**을 함께.\n\n객체만 받아 가면 받는 쪽은 점만 있고 선이 없다. 그것을 자기 쪽에서 다시 만들려면 우리가\n이미 쥔 관계를 추측해야 한다.\n\n끝점은 `key` 로 온다. `dst_type` 은 도착점의 타입 slug 다 — 어느 표에서 찾을지 알려\n준다. `deleted: true` 인 줄은 **끊긴 선**이다(받는 쪽도 끊는다).\n\n**양끝이 모두 열린 관계 종류만** 온다 — 한쪽이 안 열렸으면 받는 쪽이 못 찾는 끝점을\n쥐게 된다. 무엇이 오는지는 카탈로그의 `relations` 가 말한다.",
+        "operationId": "core_relations_api_core__type_slug__relations_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "since",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "지난 응답의 `as_of` 를 그대로. 비우면 지금 있는 선 전부",
+              "title": "Since"
+            },
+            "description": "지난 응답의 `as_of` 를 그대로. 비우면 지금 있는 선 전부"
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "지난 응답의 `next`",
+              "title": "Cursor"
+            },
+            "description": "지난 응답의 `next`"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 2000,
+              "minimum": 1,
+              "default": 500,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CoreRelationPageOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/core/{type_slug}": {
       "get": {
         "tags": [
@@ -6801,6 +6892,59 @@
         }
       }
     },
+    "/api/objects/{type_slug}/resolve-many": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Resolve Names",
+        "description": "이름 여럿을 **한 번에** 푼다 — 정제 도구가 파일 하나의 끝점을 미리 맞춰 보는 자리.\n\n한 줄에 한 번 물으면 이천 줄짜리 파일에 왕복이 이천 번이다(실측으로 그것이 가장 느린\n구간이었다). 판정 규칙은 `GET …/resolve` 와 **같다** — 한 벌로 두어야 「낱개로는 되는데\n묶음으로는 안 되는」 상태가 안 생긴다.\n\n답은 **보낸 차례대로** 오고 줄마다 물은 이름(`name`)이 붙는다 — 차례로만 맞추면 중간에\n빈 이름 하나가 섞였을 때 전부 한 칸씩 어긋난다.",
+        "operationId": "resolve_names_api_objects__type_slug__resolve_many_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveManyIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolveManyOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/diagnose": {
       "get": {
         "tags": [
@@ -7871,7 +8015,7 @@
           "bundles"
         ],
         "summary": "Export Bundle",
-        "description": "허브가 쌍둥이에 내려주는 묶음 — 작업이 되고, 결과 파일을 `GET /api/jobs/{id}/download`\n로 받는다. 받는 쪽은 그것을 그대로 `POST /bundles/import` 에 `source` 를 붙여 보낸다.\n\n시스템 관리자만 — 허브의 기준정보 전부를 부서 가리지 않고 내보내기 때문이다.",
+        "description": "허브가 쌍둥이에 내려주는 묶음 — 작업이 되고, 결과 파일을 `GET /api/jobs/{id}/download`\n로 받는다. 받는 쪽은 그것을 그대로 `POST /bundles/import` 에 `source` 를 붙여 보낸다.\n\n**묶음을 여럿 골라도 된다**(`groups`). 코어를 축별로 나눠 둔 설치에서 하나씩 내보내면\n축끼리 가리키는 참조 때문에 어느 쪽도 못 보낸다.\n\n시스템 관리자만 — 허브의 기준정보 전부를 부서 가리지 않고 내보내기 때문이다.",
         "operationId": "export_bundle_api_bundles_export_post",
         "requestBody": {
           "content": {
@@ -10964,6 +11108,12 @@
               }
             ],
             "title": "Workspace Slug"
+          },
+          "aliases_mode": {
+            "type": "string",
+            "pattern": "^(add|replace)$",
+            "title": "Aliases Mode",
+            "default": "add"
           }
         },
         "type": "object",
@@ -10978,6 +11128,12 @@
             "type": "string",
             "contentMediaType": "application/octet-stream",
             "title": "File"
+          },
+          "relations_mode": {
+            "type": "string",
+            "pattern": "^(add|replace)$",
+            "title": "Relations Mode",
+            "default": "add"
           }
         },
         "type": "object",
@@ -11472,6 +11628,16 @@
             },
             "type": "array",
             "title": "Relations"
+          },
+          "tombstones": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TombstonesIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "source": {
             "type": "string",
@@ -12105,6 +12271,110 @@
         "title": "CorePullOut",
         "description": "누가 언제 무엇을 받아 갔나 — 감사 기록의 `core.pull` 한 줄."
       },
+      "CoreRelationOut": {
+        "properties": {
+          "src": {
+            "type": "string",
+            "title": "Src"
+          },
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "dst": {
+            "type": "string",
+            "title": "Dst"
+          },
+          "dst_type": {
+            "type": "string",
+            "title": "Dst Type"
+          },
+          "evidence_note": {
+            "type": "string",
+            "title": "Evidence Note",
+            "default": ""
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          },
+          "updated_at": {
+            "type": "string",
+            "title": "Updated At"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "src",
+          "relation",
+          "dst",
+          "dst_type",
+          "updated_at"
+        ],
+        "title": "CoreRelationOut",
+        "description": "선 하나 — **끝점은 `key` 로.** 받는 쪽의 uuid 는 우리 것과 다르다."
+      },
+      "CoreRelationPageOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since"
+          },
+          "next": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CoreRelationOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "items"
+        ],
+        "title": "CoreRelationPageOut",
+        "description": "한 쪽 — 객체 쪽과 같은 규칙(`since` · `next` · `as_of`)."
+      },
       "CoreRowOut": {
         "properties": {
           "key": {
@@ -12329,6 +12599,24 @@
           "endpoint": {
             "type": "string",
             "title": "Endpoint"
+          },
+          "relations_endpoint": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relations Endpoint"
+          },
+          "relations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Relations"
           }
         },
         "type": "object",
@@ -13206,16 +13494,33 @@
       "ExportRequest": {
         "properties": {
           "group": {
-            "type": "string",
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Group",
-            "description": "사이드바 묶음 slug — 허브의 PLM 기준정보면 plm"
+            "description": "사이드바 묶음 slug 하나 — 허브의 PLM 기준정보면 plm"
+          },
+          "groups": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Groups",
+            "description": "여럿을 한 봉투로 — `[\"plm\", \"core\"]`. `group` 과 함께 적어도 된다"
+          },
+          "allow_outside_refs": {
+            "type": "boolean",
+            "title": "Allow Outside Refs",
+            "description": "묶음 **밖을 가리키는 참조**를 막지 않는다 — 받는 쪽이 그 타입을 이미 다른 묶음으로 받아 뒀을 때만 켠다",
+            "default": false
           }
         },
         "type": "object",
-        "required": [
-          "group"
-        ],
         "title": "ExportRequest"
       },
       "ExtensionApiOut": {
@@ -13749,6 +14054,24 @@
             "type": "boolean",
             "title": "Apply",
             "default": false
+          },
+          "aliases_mode": {
+            "type": "string",
+            "enum": [
+              "add",
+              "replace"
+            ],
+            "title": "Aliases Mode",
+            "default": "add"
+          },
+          "relations_mode": {
+            "type": "string",
+            "enum": [
+              "add",
+              "replace"
+            ],
+            "title": "Relations Mode",
+            "default": "add"
           }
         },
         "type": "object",
@@ -14996,6 +15319,15 @@
             },
             "type": "array",
             "title": "Rows"
+          },
+          "aliases_mode": {
+            "type": "string",
+            "enum": [
+              "add",
+              "replace"
+            ],
+            "title": "Aliases Mode",
+            "default": "add"
           }
         },
         "type": "object",
@@ -15354,6 +15686,38 @@
         ],
         "title": "ObjectProfileOut",
         "description": "객체 하나에 착지하면 **연결된 것이 모인다.**\n\n타입 정의를 함께 주는 이유: 화면이 폼을 그리려면 속성 정의가 필요한데, 따로\n받게 하면 두 번 왕복하고 그 사이에 정의가 바뀔 수 있다."
+      },
+      "ObjectTombstoneIn": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Type Slug"
+          },
+          "key": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Key"
+          },
+          "merged_into": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Merged Into"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "key"
+        ],
+        "title": "ObjectTombstoneIn",
+        "description": "허브에서 **사라진 객체** 하나."
       },
       "ObjectTypeOut": {
         "properties": {
@@ -17697,6 +18061,15 @@
             },
             "type": "array",
             "title": "Rows"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "add",
+              "replace"
+            ],
+            "title": "Mode",
+            "default": "add"
           }
         },
         "type": "object",
@@ -17806,6 +18179,39 @@
         "type": "object",
         "title": "RelationPatchRequest",
         "description": "**보낸 것만 바꾼다.** 양끝과 종류는 못 바꾼다 — 그건 다른 관계다."
+      },
+      "RelationTombstoneIn": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Type Slug"
+          },
+          "src": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Src"
+          },
+          "relation": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Relation"
+          },
+          "dst": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Dst"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "src",
+          "relation",
+          "dst"
+        ],
+        "title": "RelationTombstoneIn",
+        "description": "허브에서 **끊긴 선** 하나 — 세 끝으로 찾는다."
       },
       "RelationTypeOut": {
         "properties": {
@@ -18329,6 +18735,95 @@
           "matched_by"
         ],
         "title": "ResolveHit"
+      },
+      "ResolveManyIn": {
+        "properties": {
+          "names": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Names"
+          }
+        },
+        "type": "object",
+        "required": [
+          "names"
+        ],
+        "title": "ResolveManyIn",
+        "description": "이름 여럿을 **한 번에** — 한 줄에 한 번 물으면 왕복이 줄 수만큼 늘어난다."
+      },
+      "ResolveManyOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ResolveOneOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "counts"
+        ],
+        "title": "ResolveManyOut"
+      },
+      "ResolveOneOut": {
+        "properties": {
+          "match": {
+            "type": "string",
+            "title": "Match"
+          },
+          "object": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ResolveHit"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "candidates": {
+            "items": {
+              "$ref": "#/components/schemas/ResolveHit"
+            },
+            "type": "array",
+            "title": "Candidates"
+          },
+          "hint": {
+            "type": "string",
+            "title": "Hint",
+            "default": ""
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated",
+            "default": false
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          }
+        },
+        "type": "object",
+        "required": [
+          "match",
+          "name"
+        ],
+        "title": "ResolveOneOut",
+        "description": "`ResolveOut` 에 **무엇을 물었는지**를 붙인다 — 차례로만 맞추면 어긋난다."
       },
       "ResolveOut": {
         "properties": {
@@ -19844,6 +20339,26 @@
         ],
         "title": "TokenScopesOut",
         "description": "이 설치가 아는 범위. **화면이 목록을 손으로 들지 않는다** — 도메인이 범위를\n더하면 화면은 아무것도 안 고쳐도 새 범위를 보여 준다."
+      },
+      "TombstonesIn": {
+        "properties": {
+          "objects": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectTombstoneIn"
+            },
+            "type": "array",
+            "title": "Objects"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/RelationTombstoneIn"
+            },
+            "type": "array",
+            "title": "Relations"
+          }
+        },
+        "type": "object",
+        "title": "TombstonesIn"
       },
       "TreeNodeOut": {
         "properties": {

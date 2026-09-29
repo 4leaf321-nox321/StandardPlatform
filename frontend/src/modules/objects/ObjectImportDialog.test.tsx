@@ -86,7 +86,7 @@ const WITH_ERROR: ImportPlan = {
     },
   ],
   errors: [],
-  counts: { create: 1, update: 0, unchanged: 0, error: 1 },
+  counts: { create: 1, update: 0, unchanged: 0, unlink: 0, error: 1 },
 }
 
 const CLEAN: ImportPlan = {
@@ -112,7 +112,7 @@ const CLEAN: ImportPlan = {
     },
   ],
   errors: [],
-  counts: { create: 1, update: 1, unchanged: 0, error: 0 },
+  counts: { create: 1, update: 1, unchanged: 0, unlink: 0, error: 0 },
 }
 
 async function mount() {
@@ -233,7 +233,7 @@ describe('일괄 입력', () => {
       job('j1', {
         ...CLEAN,
         rows: [],
-        counts: { create: 0, update: 0, unchanged: 0, error: 0 },
+        counts: { create: 0, update: 0, unchanged: 0, unlink: 0, error: 0 },
       }),
     )
     await mount()

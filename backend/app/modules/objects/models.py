@@ -30,7 +30,9 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     func,
+    insert,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
@@ -157,6 +159,8 @@ class ObjectRelation(Base):
         # 양방향으로 훑는다 — 「이것이 가리키는 것」 과 「이것을 가리키는 것」.
         Index("ix_object_relations_src", "src_object_id", "relation"),
         Index("ix_object_relations_dst", "dst_object_id", "relation"),
+        # 코어 API 의 「지난번 이후」 — 종류로 좁히고 시각으로 훑는다.
+        Index("ix_object_relations_updated", "relation", "updated_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -191,6 +195,58 @@ class ObjectRelation(Base):
     )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    """**언제 바뀌었나.** 코어 API 가 「지난번 이후」 를 이 칸으로 가른다 — 없을 때는 선에
+    붙은 근거·속성을 고쳐도 받는 쪽이 영영 몰랐다."""
+
+
+class ObjectRelationTombstone(Base):
+    """**끊어진 선의 무덤.**
+
+    선은 행을 정말 지운다(객체와 달리 `deleted_at` 이 없다). 그러면 받는 쪽은 **끊긴 것을
+    영영 모른다** — 허브에서 끊은 선이 쌍둥이에 남고, 둘은 그때부터 갈린다. 지울 때 여기에
+    한 줄을 남겨 「그 선은 사라졌다」 를 말한다.
+
+    끝점은 **id 로** 남긴다(식별자는 그 뒤에 바뀔 수 있다). 읽는 자리에서 식별자로 바꾸고,
+    객체까지 사라져 못 바꾸는 줄은 뺀다 — 그 객체의 무덤이 이미 그것을 말한다.
+    """
+
+    __tablename__ = "object_relation_tombstones"
+    __table_args__ = (Index("ix_relation_tombstones_removed", "removed_at"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    src_object_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), index=True)
+    dst_object_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True))
+    relation: Mapped[str] = mapped_column(String(SLUG_MAX), index=True)
+    removed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
+    )
+    """**`clock_timestamp()` 다** — `now()` 는 트랜잭션이 **시작한** 시각이라, 한 요청에서
+    선을 여럿 끊으면 전부 같은 시각이 되고 순서가 질의마다 달라진다(0032 · 0036 과 같은
+    이유)."""
+
+
+@event.listens_for(ObjectRelation, "after_delete")
+def _leave_tombstone(_mapper: Any, connection: Any, target: ObjectRelation) -> None:
+    """선을 지울 때 **무덤을 남긴다** — 여기 하나에 둔 이유는 끊는 길이 여럿이라서다
+    (화면 · 일괄 「맞춤」 · 합치기 · 지우기 · 사용 중지). 부르는 쪽에 맡기면 한 길이 빠지고,
+    그 길로 끊긴 선만 받는 쪽에 영영 남는다.
+
+    통째로 지우는 자리(정의 초기화)는 ORM 을 안 거치므로 여기가 안 돈다 — 그쪽은 무덤도
+    함께 비운다(`ontology/reset.py`).
+    """
+    connection.execute(
+        insert(ObjectRelationTombstone).values(
+            id=uuid.uuid4(),
+            src_object_id=target.src_object_id,
+            dst_object_id=target.dst_object_id,
+            relation=target.relation,
+        )
     )
 
 

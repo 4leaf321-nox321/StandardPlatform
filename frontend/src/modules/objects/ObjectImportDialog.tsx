@@ -131,6 +131,12 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
   /** 「대기」 가 길어졌나 — 워커가 안 떠 있다는 뜻일 수 있다. */
   const [stuck, setStuck] = useState(false)
   const [busy, setBusy] = useState(false)
+  /** 별칭을 **파일대로 맞출지**(파일에 없는 별칭은 지운다). 기본은 더하기 — 그 사이에 사람이
+   *  화면에서 붙여 둔 별칭이 다시 적재할 때 조용히 사라지지 않게. */
+  const [replaceAliases, setReplaceAliases] = useState(false)
+  /** 관계를 **파일대로 맞출지** — 파일에 나온 (출발 객체 · 관계 종류) 범위에서 파일에 없는
+   *  선은 계획에 「끊음」 으로 올라온다. 사라진 관계를 정리할 다른 길이 없었다. */
+  const [replaceRelations, setReplaceRelations] = useState(false)
   const [error, setError] = useState<Error | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
 
@@ -203,8 +209,13 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
         kind === 'objects'
           ? await objectApi.import(type.slug, sending, {
               workspaceSlug: myWorkspace,
+              aliasesMode: replaceAliases ? 'replace' : 'add',
             })
-          : await objectApi.importRelations(type.slug, sending)
+          : await objectApi.importRelations(
+              type.slug,
+              sending,
+              replaceRelations ? 'replace' : 'add',
+            )
       setPlanJob(started)
       const result = await settle(started)
       if (result) setPlan(result)
@@ -319,6 +330,32 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
             <TabsTrigger value="file">파일 업로드</TabsTrigger>
           </TabsList>
         </Tabs>
+
+        {kind === 'objects' ? (
+          <label className="text-muted-foreground flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={replaceAliases}
+              onChange={(event) => setReplaceAliases(event.target.checked)}
+            />
+            별칭을 파일대로 맞춤 — 파일에 없는 별칭은 지웁니다. 끄면 <strong>더하기</strong>라,
+            화면에서 붙여 둔 별칭이 남습니다.
+          </label>
+        ) : (
+          <label className="text-muted-foreground flex items-center gap-2 text-xs">
+            <input
+              type="checkbox"
+              checked={replaceRelations}
+              onChange={(event) => {
+                setReplaceRelations(event.target.checked)
+                setPlan(null)
+                setPlanJob(null)
+              }}
+            />
+            관계를 파일대로 맞춤 — 파일에 <strong>나온 객체</strong>의 그 관계 중 파일에 없는
+            선은 <strong>끊습니다</strong>(계획에서 먼저 보여 줍니다).
+          </label>
+        )}
 
         {source === 'file' ? (
           <div className="flex items-center gap-2">

@@ -65,7 +65,7 @@ const CLEAN_PLAN = {
     },
   ],
   errors: [],
-  counts: { create: 1, update: 0, unchanged: 0, error: 0 },
+  counts: { create: 1, update: 0, unchanged: 0, unlink: 0, error: 0 },
 }
 
 async function mount(jobs: Job[], alive = true) {
@@ -116,7 +116,7 @@ describe('작업 화면', () => {
     const broken = {
       ...CLEAN_PLAN,
       rows: [{ ...CLEAN_PLAN.rows[0], action: 'error' as const, message: '무게: 숫자여야 합니다' }],
-      counts: { create: 0, update: 0, unchanged: 0, error: 1 },
+      counts: { create: 0, update: 0, unchanged: 0, unlink: 0, error: 1 },
     }
     await mount([job({ result: broken })])
     await userEvent.click(screen.getByRole('button', { name: '펼치기' }))
@@ -179,7 +179,7 @@ describe('작업 화면 · 고른 것을 한 번에', () => {
     const clean = job({ id: 'j1', result: CLEAN_PLAN })
     const broken = job({
       id: 'j2',
-      result: { ...CLEAN_PLAN, counts: { create: 0, update: 0, unchanged: 0, error: 1 } },
+      result: { ...CLEAN_PLAN, counts: { create: 0, update: 0, unchanged: 0, unlink: 0, error: 1 } },
     })
     jobsApi.applyMany.mockResolvedValue([
       { id: 'j1', status: 'ok', message: 'objects_import 적용을 시작했습니다.', job_id: 'j3' },

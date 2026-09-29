@@ -86,6 +86,9 @@ from app.modules.objects.schemas import (
     RelationCreateRequest,
     RelationHitOut,
     RelationPatchRequest,
+    ResolveManyIn,
+    ResolveManyOut,
+    ResolveOneOut,
     ResolveOut,
     RestoreRequest,
     RollupOut,
@@ -1134,17 +1137,28 @@ def _import_objects(
     *,
     workspace_slug: str | None,
     apply: bool,
+    aliases_mode: str = "add",
 ) -> ImportPlanOut:
     owner_workspace_id = resolve_owner_workspace(
         db, user, workspace_slug, what="객체", code_value=code("OBJECTS", 15)
     )
     if apply:
         plan = bulk.apply_objects(
-            db, user, object_type, rows, owner_workspace_id=owner_workspace_id
+            db,
+            user,
+            object_type,
+            rows,
+            owner_workspace_id=owner_workspace_id,
+            aliases_mode=aliases_mode,
         )
         return _plan_out(plan, applied=plan.ok)
     plan = bulk.plan_objects(
-        db, user, object_type, rows, owner_workspace_id=owner_workspace_id
+        db,
+        user,
+        object_type,
+        rows,
+        owner_workspace_id=owner_workspace_id,
+        aliases_mode=aliases_mode,
     )
     return _plan_out(plan, applied=False)
 
@@ -1416,6 +1430,7 @@ def import_objects(
     type_slug: str,
     upload: UploadFile = File(alias="file"),
     workspace_slug: str | None = Form(default=None),
+    aliases_mode: str = Form(default="add", pattern="^(add|replace)$"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> JobOut:
@@ -1431,7 +1446,7 @@ def import_objects(
         db,
         user,
         kind="objects_import",
-        params={"type_slug": object_type.slug},
+        params={"type_slug": object_type.slug, "aliases_mode": aliases_mode},
         upload=upload,
         workspace_slug=workspace_slug,
     )
@@ -1460,6 +1475,7 @@ def import_object_rows(
         payload.rows,
         workspace_slug=payload.workspace_slug,
         apply=payload.apply,
+        aliases_mode=payload.aliases_mode,
     )
 
 
@@ -1488,6 +1504,7 @@ def export_relations(
 def import_relations(
     type_slug: str,
     upload: UploadFile = File(alias="file"),
+    relations_mode: str = Form(default="add", pattern="^(add|replace)$"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> JobOut:
@@ -1499,7 +1516,7 @@ def import_relations(
         db,
         user,
         kind="relations_import",
-        params={"type_slug": object_type.slug},
+        params={"type_slug": object_type.slug, "relations_mode": relations_mode},
         upload=upload,
         workspace_slug=None,
     )
@@ -1515,9 +1532,14 @@ def import_relation_rows(
 ) -> ImportPlanOut:
     object_type = _type(db, type_slug)
     if payload.apply:
-        plan = bulk.apply_relations(db, user, object_type, payload.rows)
+        plan = bulk.apply_relations(
+            db, user, object_type, payload.rows, mode=payload.relations_mode
+        )
         return _plan_out(plan, applied=plan.ok)
-    return _plan_out(bulk.plan_relations(db, user, object_type, payload.rows), applied=False)
+    return _plan_out(
+        bulk.plan_relations(db, user, object_type, payload.rows, mode=payload.relations_mode),
+        applied=False,
+    )
 
 
 # --- 목록 -------------------------------------------------------------------
@@ -1598,6 +1620,33 @@ def resolve_name(
     object_type = _type(db, type_slug)
     found = resolve.by_name(db, user, object_type, name)
     return ResolveOut.model_validate(found)
+
+
+@router.post("/{type_slug}/resolve-many", response_model=ResolveManyOut)
+def resolve_names(
+    type_slug: str,
+    payload: ResolveManyIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ResolveManyOut:
+    """이름 여럿을 **한 번에** 푼다 — 정제 도구가 파일 하나의 끝점을 미리 맞춰 보는 자리.
+
+    한 줄에 한 번 물으면 이천 줄짜리 파일에 왕복이 이천 번이다(실측으로 그것이 가장 느린
+    구간이었다). 판정 규칙은 `GET …/resolve` 와 **같다** — 한 벌로 두어야 「낱개로는 되는데
+    묶음으로는 안 되는」 상태가 안 생긴다.
+
+    답은 **보낸 차례대로** 오고 줄마다 물은 이름(`name`)이 붙는다 — 차례로만 맞추면 중간에
+    빈 이름 하나가 섞였을 때 전부 한 칸씩 어긋난다.
+    """
+    object_type = _type(db, type_slug)
+    items = [
+        ResolveOneOut(name=one, **resolve.by_name(db, user, object_type, one).__dict__)
+        for one in payload.names
+    ]
+    counts: dict[str, int] = {"exact": 0, "candidates": 0, "none": 0}
+    for one in items:
+        counts[one.match] = counts.get(one.match, 0) + 1
+    return ResolveManyOut(items=items, counts=counts)
 
 
 @router.get("/{type_slug}/diagnose", response_model=DiagnosisOut)
