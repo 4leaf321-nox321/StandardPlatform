@@ -3177,6 +3177,98 @@
         }
       }
     },
+    "/api/jobs/apply": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Apply Many",
+        "description": "고른 계획들을 **한 번에 적용한다** — 줄마다 결과를 돌려준다.\n\n스무 건을 스무 번 펼쳐 누르게 하면 아무도 끝까지 안 한다. 검사는 한 건 적용과 **같다**\n— 오류가 있는 계획, 이미 적용한 것, 남의 계획, 파일이 지워진 것은 그 줄만 막힌다.\n작업끼리는 서로 독립이라 하나가 막혀도 나머지는 간다.",
+        "operationId": "apply_many_api_jobs_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobBulkIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobBulkResultOut"
+                  },
+                  "type": "array",
+                  "title": "Response Apply Many Api Jobs Apply Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/jobs/cancel": {
+      "post": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Cancel Many",
+        "description": "고른 작업들을 **한 번에 취소한다** — 줄마다 결과를 돌려준다.\n\n취소는 **부탁**이다(`cancel_requested`). 워커가 다음 묶음에서 그것을 보고 멈춘다 —\n이미 끝난 것은 그 줄만 막힌다.",
+        "operationId": "cancel_many_api_jobs_cancel_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JobBulkIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/JobBulkResultOut"
+                  },
+                  "type": "array",
+                  "title": "Response Cancel Many Api Jobs Cancel Post"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/apply": {
       "post": {
         "tags": [
@@ -13853,6 +13945,63 @@
           "raw_rows"
         ],
         "title": "InferOut"
+      },
+      "JobBulkIn": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 50,
+            "minItems": 1,
+            "title": "Ids"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "JobBulkIn",
+        "description": "목록에서 고른 작업들 — **한 번에 적용하거나 한 번에 취소한다.**\n\n스무 건을 스무 번 펼쳐 누르게 하면 아무도 끝까지 안 한다. 상한을 두는 이유는 한\n요청이 워커 큐를 통째로 채우지 않게 하기 위해서다 — 나눠 보내면 된다."
+      },
+      "JobBulkResultOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "message"
+        ],
+        "title": "JobBulkResultOut",
+        "description": "줄마다 결과 — **하나가 막혀도 나머지는 간다.**\n\n통째로 되돌리면 스무 건 중 하나의 문제가 열아홉 건의 일을 없앤다. 대신 어느 것이\n왜 막혔는지 돌려준다(작업끼리는 서로 독립이다)."
       },
       "JobListOut": {
         "properties": {

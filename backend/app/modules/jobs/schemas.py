@@ -45,6 +45,30 @@ class JobListOut(BaseModel):
     total: int
 
 
+class JobBulkIn(BaseModel):
+    """목록에서 고른 작업들 — **한 번에 적용하거나 한 번에 취소한다.**
+
+    스무 건을 스무 번 펼쳐 누르게 하면 아무도 끝까지 안 한다. 상한을 두는 이유는 한
+    요청이 워커 큐를 통째로 채우지 않게 하기 위해서다 — 나눠 보내면 된다.
+    """
+
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=50)
+
+
+class JobBulkResultOut(BaseModel):
+    """줄마다 결과 — **하나가 막혀도 나머지는 간다.**
+
+    통째로 되돌리면 스무 건 중 하나의 문제가 열아홉 건의 일을 없앤다. 대신 어느 것이
+    왜 막혔는지 돌려준다(작업끼리는 서로 독립이다)."""
+
+    id: uuid.UUID
+    status: str
+    """`ok` · `error`."""
+    message: str
+    job_id: uuid.UUID | None = None
+    """적용이 만든 **새 작업**의 id. 취소는 비어 있다."""
+
+
 class KindOut(BaseModel):
     name: str
     label: str

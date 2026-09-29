@@ -23,6 +23,8 @@ from app.modules.accounts.models import User
 from app.modules.jobs import kinds, services
 from app.modules.jobs.models import Job, JobFile, WorkerHeartbeat
 from app.modules.jobs.schemas import (
+    JobBulkIn,
+    JobBulkResultOut,
     JobListOut,
     JobOut,
     JobProgress,
@@ -199,15 +201,12 @@ def get_job(
     return _out(db, services.get_visible(db, user, job_id))
 
 
-@router.post("/{job_id}/apply", response_model=JobOut, status_code=202)
-def apply_job(
-    job_id: uuid.UUID,
-    request: Request,
-    user: User = Depends(current_user),
-    db: Session = Depends(get_db),
-) -> JobOut:
-    """계획을 본 뒤 **사람이 누르는 자리.** 같은 파일 · 같은 지문으로 적용 작업을 만든다."""
-    plan_job = services.get_visible(db, user, job_id)
+def _require_apply_scope(request: Request, plan_job: Job) -> None:
+    """이 계획을 적용할 범위가 토큰에 있나 — **사람 세션에는 범위가 없다**(None 이면 통과).
+
+    넣을 때 적어 둔 `needs_scope` 를 적용 자리에서 다시 묻는다. 계획은 아무것도 안 바꾸니
+    읽기 범위로도 세울 수 있고, 바꾸는 것은 여기이기 때문이다.
+    """
     needed = (plan_job.params or {}).get("needs_scope")
     granted: list[str] | None = getattr(request.state, "token_scopes", None)
     if needed and granted is not None and needed not in granted:
@@ -217,6 +216,80 @@ def apply_job(
             status=403,
             details={"needed": needed, "granted": granted},
         )
+
+
+@router.post("/apply", response_model=list[JobBulkResultOut])
+def apply_many(
+    payload: JobBulkIn,
+    request: Request,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[JobBulkResultOut]:
+    """고른 계획들을 **한 번에 적용한다** — 줄마다 결과를 돌려준다.
+
+    스무 건을 스무 번 펼쳐 누르게 하면 아무도 끝까지 안 한다. 검사는 한 건 적용과 **같다**
+    — 오류가 있는 계획, 이미 적용한 것, 남의 계획, 파일이 지워진 것은 그 줄만 막힌다.
+    작업끼리는 서로 독립이라 하나가 막혀도 나머지는 간다.
+    """
+    out: list[JobBulkResultOut] = []
+    for job_id in payload.ids:
+        try:
+            plan_job = services.get_visible(db, user, job_id)
+            _require_apply_scope(request, plan_job)
+            made = services.make_apply(db, user, plan_job)
+            db.commit()
+            db.refresh(made)
+            out.append(
+                JobBulkResultOut(
+                    id=job_id,
+                    status="ok",
+                    message=f"{made.kind} 적용을 시작했습니다.",
+                    job_id=made.id,
+                )
+            )
+        except AppError as failed:
+            db.rollback()
+            out.append(JobBulkResultOut(id=job_id, status="error", message=failed.message))
+    return out
+
+
+@router.post("/cancel", response_model=list[JobBulkResultOut])
+def cancel_many(
+    payload: JobBulkIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[JobBulkResultOut]:
+    """고른 작업들을 **한 번에 취소한다** — 줄마다 결과를 돌려준다.
+
+    취소는 **부탁**이다(`cancel_requested`). 워커가 다음 묶음에서 그것을 보고 멈춘다 —
+    이미 끝난 것은 그 줄만 막힌다.
+    """
+    out: list[JobBulkResultOut] = []
+    for job_id in payload.ids:
+        try:
+            job = services.request_cancel(db, user, services.get_visible(db, user, job_id))
+            db.commit()
+            out.append(
+                JobBulkResultOut(
+                    id=job_id, status="ok", message=f"{job.kind} 취소를 요청했습니다."
+                )
+            )
+        except AppError as failed:
+            db.rollback()
+            out.append(JobBulkResultOut(id=job_id, status="error", message=failed.message))
+    return out
+
+
+@router.post("/{job_id}/apply", response_model=JobOut, status_code=202)
+def apply_job(
+    job_id: uuid.UUID,
+    request: Request,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """계획을 본 뒤 **사람이 누르는 자리.** 같은 파일 · 같은 지문으로 적용 작업을 만든다."""
+    plan_job = services.get_visible(db, user, job_id)
+    _require_apply_scope(request, plan_job)
     job = services.make_apply(db, user, plan_job)
     db.commit()
     db.refresh(job)

@@ -105,6 +105,74 @@ def test_오류가_있는_계획은_적용_작업이_안_만들어진다(
     assert refused.status_code == 409 and "JOBS-0011" in refused.text
 
 
+def test_고른_계획을_한_번에_적용한다(client: TestClient, admin: Signed) -> None:
+    """**스무 건을 스무 번 펼쳐 누르게 하면 아무도 끝까지 안 한다.**
+
+    검사는 한 건 적용과 같다 — 오류가 있는 계획은 그 줄만 막히고, 나머지는 간다.
+    작업끼리는 서로 독립이라 통째로 되돌릴 이유가 없다.
+    """
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    first = finish_job(client, admin, _submit(client, admin, part, "key,label\nP-1,볼트\n"))
+    second = finish_job(client, admin, _submit(client, admin, part, "key,label\nP-2,너트\n"))
+    broken = finish_job(client, admin, _submit(client, admin, part, "key,label\nP-3,\n"))
+    assert broken["result"]["counts"]["error"] == 1
+
+    got = client.post(
+        "/api/jobs/apply",
+        json={"ids": [first["id"], broken["id"], second["id"]]},
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    rows = {one["id"]: one for one in got.json()}
+    assert rows[first["id"]]["status"] == "ok" and rows[first["id"]]["job_id"]
+    assert rows[second["id"]]["status"] == "ok"
+    # 오류가 있는 계획은 **그 줄만** 막힌다 — 나머지는 적용 작업이 섰다.
+    assert rows[broken["id"]]["status"] == "error"
+    assert "오류가 있는 계획" in rows[broken["id"]]["message"]
+
+    for one in (first, second):
+        finish_job(client, admin, {"id": rows[one["id"]]["job_id"]})
+    assert client.get(f"/api/objects/{part}", headers=admin.headers).json()["total"] == 2
+
+    # 같은 계획을 또 골라도 **두 번 들어가지 않는다** — 적용 작업은 서지만, 미리 본 뒤
+    # 자료가 달라졌으므로 그 작업이 지문 검사에서 실패한다.
+    again = client.post("/api/jobs/apply", json={"ids": [first["id"]]}, headers=admin.headers)
+    assert again.json()[0]["status"] == "ok"
+    twice = finish_job(client, admin, {"id": again.json()[0]["job_id"]})
+    assert twice["status"] == "failed"
+    assert client.get(f"/api/objects/{part}", headers=admin.headers).json()["total"] == 2
+
+
+def test_고른_작업을_한_번에_취소한다(client: TestClient, admin: Signed) -> None:
+    """취소는 **부탁**이다 — 워커가 다음 묶음에서 그것을 보고 멈춘다. 이미 끝난 것은 막힌다."""
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    done = finish_job(client, admin, _submit(client, admin, part, "key,label\nP-8,핀\n"))
+    # **워커를 돌리기 전에** 고른다 — 돌리면 이 줄까지 집어 끝나 버린다(시험의 워커는
+    # 가장 오래된 대기 작업을 집는다).
+    waiting = _submit(client, admin, part, "key,label\nP-9,와셔\n")
+
+    got = client.post(
+        "/api/jobs/cancel",
+        json={"ids": [waiting["id"], done["id"]]},
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    rows = {one["id"]: one for one in got.json()}
+    assert rows[waiting["id"]]["status"] == "ok"
+    assert rows[done["id"]]["status"] == "error"
+
+
+def test_남의_계획은_일괄로도_적용되지_않는다(
+    client: TestClient, admin: Signed, member: Signed
+) -> None:
+    """**계획을 본 사람이 적용한다.** 목록에서 고를 수 있다고 해서 남의 것까지 가면 안 된다."""
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    mine = finish_job(client, admin, _submit(client, admin, part, "key,label\nP-7,너트\n"))
+    got = client.post("/api/jobs/apply", json={"ids": [mine["id"]]}, headers=member.headers)
+    assert got.status_code == 200, got.text
+    assert got.json()[0]["status"] == "error"
+
+
 def test_내_것과_내_부서_것만_보인다(
     client: TestClient, admin: Signed, member: Signed, db: Session
 ) -> None:

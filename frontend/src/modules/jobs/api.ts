@@ -87,6 +87,14 @@ export interface JobKind {
   two_step: boolean
 }
 
+/** 일괄 처리의 한 줄 결과 — `ok` 면 `job_id` 가 새로 선 작업이다. */
+export interface JobBulkResult {
+  id: string
+  status: 'ok' | 'error'
+  message: string
+  job_id: string | null
+}
+
 export const jobsApi = {
   get: (id: string) => api.get<Job>(`/jobs/${id}`),
   /**
@@ -111,6 +119,13 @@ export const jobsApi = {
   /** 계획을 본 뒤 **사람이 누르는 자리** — 같은 파일 · 같은 지문으로 적용 작업을 만든다. */
   apply: (id: string) => api.post<Job>(`/jobs/${id}/apply`),
   cancel: (id: string) => api.post<Job>(`/jobs/${id}/cancel`),
+  /**
+   * 고른 것들을 **한 번에** — 줄마다 결과가 온다(하나가 막혀도 나머지는 간다).
+   *
+   * 스무 건을 스무 번 펼쳐 누르게 하면 아무도 끝까지 안 한다. 검사는 한 건과 같다.
+   */
+  applyMany: (ids: string[]) => api.post<JobBulkResult[]>('/jobs/apply', { ids }),
+  cancelMany: (ids: string[]) => api.post<JobBulkResult[]>('/jobs/cancel', { ids }),
   /**
    * 끝날 때까지 본다. 매 바퀴 `onTick` 으로 진행률을 준다.
    *

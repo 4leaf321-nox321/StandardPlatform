@@ -6,7 +6,7 @@
  * 이유를 사람이 알 길이 없다.
  */
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
@@ -18,6 +18,8 @@ const jobsApi = vi.hoisted(() => ({
   workers: vi.fn(),
   apply: vi.fn(),
   cancel: vi.fn(),
+  applyMany: vi.fn(),
+  cancelMany: vi.fn(),
   download: vi.fn(),
 }))
 vi.mock('@/modules/jobs/api', async (importOriginal) => ({
@@ -91,7 +93,8 @@ async function mount(jobs: Job[], alive = true) {
   render(<JobsPage />)
   // **줄이 그려질 때까지 기다린다.** 요청이 나간 것만 보고 넘어가면, 느린 기계에서 표가
   // 아직 비어 있는 채로 단추를 찾는다.
-  if (jobs.length) await screen.findByRole('button', { name: /펼치기|접기/ })
+  // 줄이 여럿일 수 있다 — 하나만 찾으면 「여러 개」 로 터진다.
+  if (jobs.length) await screen.findAllByRole('button', { name: /펼치기|접기/ })
   else await waitFor(() => expect(jobsApi.list).toHaveBeenCalled())
 }
 
@@ -167,5 +170,47 @@ describe('작업 화면', () => {
     await waitFor(() => expect(screen.getByText('워커가 살아 있지 않습니다')).toBeInTheDocument())
     // 도는 중인 작업은 펼칠 것이 없다.
     expect(screen.getByRole('button', { name: '펼치기' })).toBeDisabled()
+  })
+})
+
+
+describe('작업 화면 · 고른 것을 한 번에', () => {
+  it('오류 없는 계획만 적용에 들어간다 — 고른 수와 갈 수를 함께 말한다', async () => {
+    const clean = job({ id: 'j1', result: CLEAN_PLAN })
+    const broken = job({
+      id: 'j2',
+      result: { ...CLEAN_PLAN, counts: { create: 0, update: 0, unchanged: 0, error: 1 } },
+    })
+    jobsApi.applyMany.mockResolvedValue([
+      { id: 'j1', status: 'ok', message: 'objects_import 적용을 시작했습니다.', job_id: 'j3' },
+    ])
+    await mount([clean, broken])
+
+    await userEvent.click(screen.getByRole('checkbox', { name: '이 쪽 전부 선택' }))
+    expect(screen.getByText('2건 선택')).toBeInTheDocument()
+    // **고른 것과 갈 것이 다르면 그 차이를 말한다.**
+    expect(screen.getByText(/1건은 빠집니다/)).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /선택 적용/ }))
+    // 확인 전에는 아무 일도 없다.
+    expect(jobsApi.applyMany).not.toHaveBeenCalled()
+    const dialog = screen.getByRole('dialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: '적용' }))
+
+    await waitFor(() => expect(jobsApi.applyMany).toHaveBeenCalledWith(['j1']))
+    expect(await screen.findByText(/성공 1 · 오류 0/)).toBeInTheDocument()
+  })
+
+  it('끝난 작업은 취소에 안 들어간다', async () => {
+    const running = job({ id: 'j9', status: 'running', result: null })
+    const finished = job({ id: 'j8', status: 'done', result: CLEAN_PLAN })
+    jobsApi.cancelMany.mockResolvedValue([{ id: 'j9', status: 'ok', message: '취소를 요청했습니다.', job_id: null }])
+    await mount([running, finished])
+
+    await userEvent.click(screen.getByRole('checkbox', { name: '이 쪽 전부 선택' }))
+    await userEvent.click(screen.getByRole('button', { name: /선택 취소/ }))
+    const dialog = screen.getByRole('dialog')
+    await userEvent.click(within(dialog).getByRole('button', { name: '취소 요청' }))
+    await waitFor(() => expect(jobsApi.cancelMany).toHaveBeenCalledWith(['j9']))
   })
 })

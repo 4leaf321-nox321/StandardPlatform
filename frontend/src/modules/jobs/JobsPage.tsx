@@ -14,13 +14,14 @@ import { Fragment, useEffect, useState } from 'react'
 import { ChevronDown, ChevronRight, Download, Loader2 } from 'lucide-react'
 
 import { jobsApi, isTerminal, STATUS_LABEL } from '@/modules/jobs/api'
-import type { Job, JobStatus } from '@/modules/jobs/api'
+import type { Job, JobBulkResult, JobStatus } from '@/modules/jobs/api'
 import type { ImportPlan } from '@/modules/objects/api'
 import {
   ImportPlanTable,
   planChangesSomething,
   planIsClean,
 } from '@/modules/objects/ImportPlanTable'
+import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -195,6 +196,11 @@ export default function JobsPage() {
   const [offset, setOffset] = useState(0)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [opened, setOpened] = useState<string | null>(null)
+  // **하나씩 펼쳐 누르는 길만 있으면 스무 건에서 아무도 끝까지 안 한다.**
+  const [picked, setPicked] = useState<Set<string>>(new Set())
+  const [confirming, setConfirming] = useState<'apply' | 'cancel' | null>(null)
+  const [bulkBusy, setBulkBusy] = useState(false)
+  const [results, setResults] = useState<JobBulkResult[] | null>(null)
   const [actionError, setActionError] = useState<Error | null>(null)
   const [kind, setKind] = useState('')
   const [status, setStatus] = useState('')
@@ -236,6 +242,28 @@ export default function JobsPage() {
       setActionError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     } finally {
       setBusyId(null)
+    }
+  }
+
+  /** 목록에서 고른 것들 — **한 번에 적용하거나 한 번에 취소한다.** */
+  const chosen = (page.data?.items ?? []).filter((one) => picked.has(one.id))
+  const applicable = chosen.filter(waitingForApply)
+  const cancellable = chosen.filter((one) => !isTerminal(one) && !one.cancel_requested)
+
+  async function runMany(what: 'apply' | 'cancel') {
+    setActionError(null)
+    setBulkBusy(true)
+    try {
+      const ids = (what === 'apply' ? applicable : cancellable).map((one) => one.id)
+      const rows = what === 'apply' ? await jobsApi.applyMany(ids) : await jobsApi.cancelMany(ids)
+      setResults(rows)
+      setPicked(new Set())
+      page.reload()
+    } catch (caught) {
+      setActionError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      setBulkBusy(false)
+      setConfirming(null)
     }
   }
 
@@ -316,6 +344,83 @@ export default function JobsPage() {
       <ErrorNotice error={page.error} />
       <ErrorNotice error={actionError} />
 
+      {picked.size > 0 && (
+        <div className="flex flex-wrap items-center gap-2 rounded-md border p-2">
+          <span className="text-sm">{picked.size}건 선택</span>
+          <Button
+            size="sm"
+            disabled={bulkBusy || applicable.length === 0}
+            onClick={() => setConfirming('apply')}
+          >
+            선택 적용 {applicable.length > 0 && `(${applicable.length})`}
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={bulkBusy || cancellable.length === 0}
+            onClick={() => setConfirming('cancel')}
+          >
+            선택 취소 {cancellable.length > 0 && `(${cancellable.length})`}
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setPicked(new Set())}>
+            선택 해제
+          </Button>
+          {/* **고른 것과 할 수 있는 것이 다를 수 있다.** 그 차이를 말해 주지 않으면
+              사람은 「왜 다섯을 골랐는데 셋만 갔나」 를 묻게 된다. */}
+          {applicable.length < picked.size && (
+            <span className="text-muted-foreground text-xs">
+              적용은 오류 없는 계획만 — {picked.size - applicable.length}건은 빠집니다
+            </span>
+          )}
+        </div>
+      )}
+
+      <ConfirmDialog
+        open={confirming !== null}
+        title={
+          confirming === 'apply'
+            ? `계획 ${applicable.length}건을 적용합니다`
+            : `작업 ${cancellable.length}건을 취소합니다`
+        }
+        description={
+          confirming === 'apply' ? (
+            <>
+              고른 계획마다 <b>적용 작업</b>이 서고 워커가 차례로 넣습니다. 오류가 있는 계획과
+              이미 적용한 것은 빠집니다 — 한 건이 막혀도 나머지는 갑니다. 넣은 뒤 되돌리려면
+              객체 화면의 <b>일괄 되돌리기</b>를 씁니다.
+            </>
+          ) : (
+            <>
+              도는 중인 작업에 <b>멈춤을 부탁</b>합니다. 워커가 다음 묶음에서 보고 멈추므로,
+              이미 넣은 행은 그대로 남습니다 — 끝난 작업은 빠집니다.
+            </>
+          )
+        }
+        confirmLabel={confirming === 'apply' ? '적용' : '취소 요청'}
+        destructive={confirming === 'cancel'}
+        onConfirm={() => runMany(confirming === 'apply' ? 'apply' : 'cancel')}
+        onClose={() => setConfirming(null)}
+      />
+
+      {results && (
+        <div className="space-y-1 rounded-md border p-3">
+          <p className="text-sm font-semibold">
+            결과 — 성공 {results.filter((one) => one.status === 'ok').length} · 오류{' '}
+            {results.filter((one) => one.status === 'error').length}
+          </p>
+          {results
+            .filter((one) => one.status === 'error')
+            .map((one) => (
+              <p key={one.id} className="text-destructive text-sm">
+                {one.message}
+              </p>
+            ))}
+          <Button size="xs" variant="ghost" onClick={() => setResults(null)}>
+            닫기
+          </Button>
+        </div>
+      )}
+
       {page.data && page.data.items.length === 0 ? (
         <EmptyState
           title="작업이 없습니다"
@@ -329,6 +434,23 @@ export default function JobsPage() {
         <Table>
           <TableHeader>
             <TableRow>
+              <TableHead className="w-8">
+                <input
+                  type="checkbox"
+                  aria-label="이 쪽 전부 선택"
+                  checked={
+                    (page.data?.items ?? []).length > 0 &&
+                    (page.data?.items ?? []).every((one) => picked.has(one.id))
+                  }
+                  onChange={(event) =>
+                    setPicked(
+                      event.target.checked
+                        ? new Set((page.data?.items ?? []).map((one) => one.id))
+                        : new Set(),
+                    )
+                  }
+                />
+              </TableHead>
               <TableHead className="w-8" />
               <TableHead>시각</TableHead>
               <TableHead>무엇</TableHead>
@@ -342,6 +464,21 @@ export default function JobsPage() {
             {(page.data?.items ?? []).map((one) => (
               <Fragment key={one.id}>
                 <TableRow>
+                  <TableCell className="pr-0">
+                    <input
+                      type="checkbox"
+                      aria-label={`${one.kind_label} 선택`}
+                      checked={picked.has(one.id)}
+                      onChange={(event) =>
+                        setPicked((was) => {
+                          const next = new Set(was)
+                          if (event.target.checked) next.add(one.id)
+                          else next.delete(one.id)
+                          return next
+                        })
+                      }
+                    />
+                  </TableCell>
                   <TableCell className="pr-0">
                     {/* **끝난 작업은 펼쳐 본다.** 계획을 여기서 읽고 여기서 적용한다. */}
                     <Button
@@ -409,7 +546,7 @@ export default function JobsPage() {
                 </TableRow>
                 {opened === one.id && (
                   <TableRow>
-                    <TableCell colSpan={7} className="p-0">
+                    <TableCell colSpan={8} className="p-0">
                       <Detail
                         job={one}
                         busy={busyId === one.id}
