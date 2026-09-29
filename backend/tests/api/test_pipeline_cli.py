@@ -356,3 +356,66 @@ def test_아무도_집어_가지_않으면_멈추고_말한다(
             pipeline.cmd_preview(run, server=SERVER, token=token)
     finally:
         pipeline.SEND, pipeline.WAIT = before_send, before_wait
+
+
+def test_검증이_끝점을_플랫폼에_미리_묻는다(
+    client: TestClient, admin: Signed, platform: None, tmp_path: Path
+) -> None:
+    """**끝점이 풀리는지는 미리 보기에서야 알았다.**
+
+    미리 보기는 계획을 세우느라 몇 분이 걸리고, 그 몇 분 뒤에 「가리키는 것이 없다」 를
+    듣는다. 물어서 아는 것은 먼저 묻는다 — 주소와 토큰이 있으면 검증이 판정을 받아 온다.
+    판정은 **플랫폼의 것**을 쓴다(식별자 → 별칭 → 이름 순서와 겹침 규칙이 거기 있다).
+    """
+    token = _token(client, admin)
+    run = tmp_path / "run"
+    pipeline.cmd_init(run)
+    names = _fill(run, admin.workspace)
+    made = client.post(
+        "/api/ontology/import",
+        json={
+            "types": [{"slug": names["company"], "label": "기업", "key_policy": "required"}]
+        },
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+
+    # 이 실행이 기업도 함께 만든다 — 아직 플랫폼에 없어도 끝점은 풀린 것으로 본다.
+    ok, text = pipeline.cmd_validate(run, server=SERVER, token=token)
+    assert ok is True, text
+    assert "끝점 확인함" in text
+
+    # 같은 실행에서 기업을 빼면 — 가리키는 것이 플랫폼에도 없다.
+    (run / "objects" / "b_company.json").unlink()
+    manifest = json.loads((run / "bundle.json").read_text(encoding="utf-8"))
+    manifest["objects_order"] = [names["tool"]]
+    _write(run / "bundle.json", manifest)
+    ok, text = pipeline.cmd_validate(run, server=SERVER, token=token)
+    assert ok is False, text
+    assert "가리키는 것이 플랫폼에 없습니다" in text and "C-1" in text
+
+    # 주소가 없으면 모양만 본다 — 예전과 같다(오프라인에서도 돌아야 한다).
+    ok, text = pipeline.cmd_validate(run)
+    assert ok is True, text
+    assert "끝점 확인함" not in text
+
+    # 이름이 여럿과 맞으면 막는다 — 플랫폼은 그때 고르지 않는다.
+    for label in ("한화정밀", "한화중공업"):
+        got = client.post(
+            f"/api/objects/{names['company']}/import-rows",
+            json={"rows": [{"key": label, "label": label}], "apply": True},
+            headers=admin.headers,
+        )
+        assert got.status_code == 200, got.text
+    _write(
+        run / "objects" / "a_tool.json",
+        {
+            "type_slug": names["tool"],
+            "workspace_slug": admin.workspace,
+            "rows": [{"key": "T-1", "label": "툴1", "vendor": "한화"}],
+        },
+    )
+    ok, text = pipeline.cmd_validate(run, server=SERVER, token=token)
+    assert ok is False, text
+    assert "이름이 여럿과 맞습니다" in text

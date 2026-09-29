@@ -7295,6 +7295,129 @@
         }
       }
     },
+    "/api/objects/{type_slug}/aliases/pending": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Pending Aliases",
+        "description": "**사람이 아직 안 본 별칭** — 기계가 붙인 것이 그대로 정본처럼 쓰이지 않게.\n\n적재는 별칭을 수천 개 붙인다. 그 안에는 오타 표기와 남의 이름이 섞이는데, 가르는 칸이\n없으면 전부 정본처럼 쓰인다. 화면에서 사람이 붙인 것은 붙이는 순간 확인한 것으로 두고,\n여기 남는 것은 **기계가 붙인 것**뿐이다.",
+        "operationId": "pending_aliases_api_objects__type_slug__aliases_pending_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasReviewPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/aliases/review": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Review Aliases",
+        "description": "고른 별칭을 **한 번에** 확인하거나 지운다.\n\n한 줄씩 누르게 하면 수백 줄을 끝까지 보는 사람이 없다 — 그러면 검수는 안 한 것과 같다.\n지우기도 여기 둔다: 확인만 되면 「아니다」 를 말할 자리가 없어 사람은 둘 다 안 한다.",
+        "operationId": "review_aliases_api_objects__type_slug__aliases_review_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasReviewRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasReviewResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/{object_id}/watch": {
       "put": {
         "tags": [
@@ -10561,6 +10684,139 @@
         ],
         "title": "AccountWorkspaceOut",
         "description": "소속 한 줄 — **이름과 경로를 함께 준다.**\n\nslug 만 주면 화면은 「hq」 라고 쓰게 된다. 그것은 주소지 부서 이름이 아니고,\n사람은 자기 부서를 「본사」 로 안다."
+      },
+      "AliasReviewOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "object_label": {
+            "type": "string",
+            "title": "Object Label"
+          },
+          "object_key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Key"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": ""
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "object_id",
+          "object_label",
+          "object_key",
+          "value",
+          "kind",
+          "created_at"
+        ],
+        "title": "AliasReviewOut",
+        "description": "검수 대기 별칭 한 줄 — **어느 객체의 무엇이고 어디서 왔나.**"
+      },
+      "AliasReviewPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AliasReviewOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "AliasReviewPage"
+      },
+      "AliasReviewRequest": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Ids"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "approve",
+              "remove"
+            ],
+            "title": "Action",
+            "default": "approve"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "AliasReviewRequest"
+      },
+      "AliasReviewResult": {
+        "properties": {
+          "done": {
+            "type": "integer",
+            "title": "Done"
+          },
+          "refused": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Refused"
+          }
+        },
+        "type": "object",
+        "required": [
+          "done"
+        ],
+        "title": "AliasReviewResult"
       },
       "AliasesRequest": {
         "properties": {

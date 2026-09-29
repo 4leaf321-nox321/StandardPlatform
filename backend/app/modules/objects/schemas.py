@@ -234,6 +234,42 @@ class ImportRowsRequest(BaseModel):
     범위에서 파일에 없는 선이 계획에 「끊음」 으로 올라온다."""
 
 
+# --- 별칭 검수 ---------------------------------------------------------------
+
+
+class AliasReviewOut(BaseModel):
+    """검수 대기 별칭 한 줄 — **어느 객체의 무엇이고 어디서 왔나.**"""
+
+    id: uuid.UUID
+    object_id: uuid.UUID
+    object_label: str
+    object_key: str | None
+    value: str
+    kind: str
+    source: str = ""
+    """어디서 온 이름인가 — 적재가 적어 둔다(「고장모드 리스트 v3」)."""
+    note: str = ""
+    created_at: datetime
+
+
+class AliasReviewPage(BaseModel):
+    items: list[AliasReviewOut]
+    total: int
+
+
+class AliasReviewRequest(BaseModel):
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
+    action: Literal["approve", "remove"] = "approve"
+    """확인하거나 지운다. **둘 다 둔다** — 확인만 되면 「아니다」 를 말할 자리가 없어
+    사람은 둘 다 안 한다."""
+
+
+class AliasReviewResult(BaseModel):
+    done: int
+    refused: list[str] = Field(default_factory=list)
+    """못 한 줄과 이유 — 하나가 막혀도 나머지는 간다."""
+
+
 # --- 지우기 전에 -------------------------------------------------------------
 
 

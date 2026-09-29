@@ -32,13 +32,21 @@ from app.shared import extensions
 from app.shared.permissions import is_any_manager, visible_owner_clause
 from app.shared.text import compare_key
 
-KINDS = ("missing_required", "orphan", "broken_ref", "duplicate", "alias_clash")
+KINDS = (
+    "missing_required",
+    "orphan",
+    "broken_ref",
+    "duplicate",
+    "alias_clash",
+    "alias_pending",
+)
 LABELS = {
     "missing_required": "필수값이 빈 객체",
     "orphan": "관계 없는 객체",
     "broken_ref": "지워진 것을 가리키는 칸",
     "duplicate": "이름이 같은 객체",
     "alias_clash": "별칭이 다른 객체의 이름과 같음",
+    "alias_pending": "사람이 아직 안 본 별칭",
 }
 #: 종류·타입마다 목록에 싣는 상한. 수는 전부 세고, 목록만 자른다.
 SAMPLE = 50
@@ -300,6 +308,26 @@ def _alias_clashes(db: Session, object_type: ObjectType, rows_of: Rows) -> Findi
     return _finding("alias_clash", object_type, count, hits)
 
 
+def _alias_pending(db: Session, user: User, object_type: ObjectType) -> Finding | None:
+    """**기계가 붙였고 사람이 아직 안 본 별칭.**
+
+    적재는 별칭을 수천 개 붙인다. 그 안에는 오타 표기와 남의 이름이 섞이는데, 본 것과 안 본
+    것을 가르는 칸이 없으면 전부 정본처럼 쓰인다. 화면에서 사람이 붙인 것은 붙이는 순간
+    확인한 것이라 여기 안 뜬다 — 그래야 이 수가 읽을 만한 크기로 남는다.
+    """
+    rows, count = aliases.pending(db, user, object_type, limit=SAMPLE, offset=0)
+    hits = [
+        Hit(
+            id=one.object_id,
+            label=label,
+            key=key,
+            detail=f"별칭 「{one.value}」" + (f" · 출처 {one.source}" if one.source else ""),
+        )
+        for one, label, key in rows
+    ]
+    return _finding("alias_pending", object_type, count, hits)
+
+
 def _finding(
     kind: str, object_type: ObjectType, count: int, hits: list[Hit]
 ) -> Finding | None:
@@ -348,6 +376,7 @@ def report(db: Session, user: User, *, kinds: tuple[str, ...] = KINDS) -> list[F
             else None,
             _duplicates(object_type, rows) if "duplicate" in kinds else None,
             _alias_clashes(db, object_type, rows) if "alias_clash" in kinds else None,
+            _alias_pending(db, user, object_type) if "alias_pending" in kinds else None,
         ]
         out.extend(one for one in found if one is not None)
     return out

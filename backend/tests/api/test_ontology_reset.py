@@ -63,7 +63,8 @@ def test_비우면_정의와_데이터가_함께_사라지고_스냅샷이_남�
     # **수를 세지 않는다.** 목록은 50개까지만 오므로, 스냅샷이 쌓인 DB 에서는 새로 하나가
     # 생겨도 수가 그대로다(`50 > 50` 으로 간헐 실패했다). 새 id 가 왔는지를 본다.
     before = {
-        one["id"] for one in client.get("/api/ontology/snapshots", headers=admin.headers).json()
+        one["id"]
+        for one in client.get("/api/ontology/snapshots", headers=admin.headers).json()
     }
 
     done = _reset(client, admin, apply=True, confirm=CONFIRM_PHRASE)

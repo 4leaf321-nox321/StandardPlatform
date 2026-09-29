@@ -1957,6 +1957,7 @@ def test_정의_가져오기로_코어를_한_번에_연다(client: TestClient, 
         headers=admin.headers,
     )
     assert off.status_code == 200, off.text
-    assert "core" in [one["fields"] for one in off.json()["changes"] if one["slug"] == slug][0]
+    changed = next(one for one in off.json()["changes"] if one["slug"] == slug)
+    assert "core" in changed["fields"]
     catalog = client.get("/api/core", headers=admin.headers).json()
     assert slug not in {one["slug"] for one in catalog["types"]}

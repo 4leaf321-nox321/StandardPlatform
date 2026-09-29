@@ -51,6 +51,10 @@ from app.modules.objects.models import (
 )
 from app.modules.objects.schemas import (
     AliasesRequest,
+    AliasReviewOut,
+    AliasReviewPage,
+    AliasReviewRequest,
+    AliasReviewResult,
     AttachmentBrief,
     BucketOut,
     BulkDeletePlanOut,
@@ -1951,7 +1955,9 @@ def set_aliases(
     require_owner_edit(
         db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 12)
     )
-    before, after = aliases.set_human(db, row, object_type, payload.aliases)
+    # **화면에서 사람이 붙인 것은 곧 확인한 것이다** — 검수 대기로 남는 것은 기계가 붙인
+    # 것뿐이어야 한다. 안 그러면 그 목록은 곧 수천 줄이 되어 아무도 안 읽는다.
+    before, after = aliases.set_human(db, row, object_type, payload.aliases, verified=user)
     if before != after:
         audit.record(
             db,
@@ -1971,6 +1977,65 @@ def set_aliases(
         _ref_labels(db, properties_of(db, object_type.id), [row]),
         aliases.of(db, [row.id]).get(row.id),
     )
+
+
+@router.get("/{type_slug}/aliases/pending", response_model=AliasReviewPage)
+def pending_aliases(
+    type_slug: str,
+    limit: int | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> AliasReviewPage:
+    """**사람이 아직 안 본 별칭** — 기계가 붙인 것이 그대로 정본처럼 쓰이지 않게.
+
+    적재는 별칭을 수천 개 붙인다. 그 안에는 오타 표기와 남의 이름이 섞이는데, 가르는 칸이
+    없으면 전부 정본처럼 쓰인다. 화면에서 사람이 붙인 것은 붙이는 순간 확인한 것으로 두고,
+    여기 남는 것은 **기계가 붙인 것**뿐이다.
+    """
+    object_type = _type(db, type_slug)
+    rows, total = aliases.pending(
+        db, user, object_type, limit=clamp_limit(limit), offset=offset
+    )
+    return AliasReviewPage(
+        items=[
+            AliasReviewOut(
+                id=one.id,
+                object_id=one.object_id,
+                object_label=label,
+                object_key=key,
+                value=one.value,
+                kind=one.kind,
+                source=one.source,
+                note=one.note,
+                created_at=one.created_at,
+            )
+            for one, label, key in rows
+        ],
+        total=total,
+    )
+
+
+@router.post("/{type_slug}/aliases/review", response_model=AliasReviewResult)
+def review_aliases(
+    type_slug: str,
+    payload: AliasReviewRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> AliasReviewResult:
+    """고른 별칭을 **한 번에** 확인하거나 지운다.
+
+    한 줄씩 누르게 하면 수백 줄을 끝까지 보는 사람이 없다 — 그러면 검수는 안 한 것과 같다.
+    지우기도 여기 둔다: 확인만 되면 「아니다」 를 말할 자리가 없어 사람은 둘 다 안 한다.
+    """
+    object_type = _type(db, type_slug)
+    _not_system(object_type, "별칭을 검수하지")
+    managed.require_objects_editable(object_type, what="별칭을 고치지")
+    done, refused = aliases.review(
+        db, user, object_type, payload.ids, approve=payload.action == "approve"
+    )
+    db.commit()
+    return AliasReviewResult(done=done, refused=refused)
 
 
 @router.put("/{type_slug}/{object_id}/watch", response_model=WatchOut)

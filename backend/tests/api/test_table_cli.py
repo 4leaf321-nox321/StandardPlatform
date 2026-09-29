@@ -604,3 +604,127 @@ def test_말로_전할_요약은_수와_열_이름뿐이다(tmp_path: Path) -> N
     assert len(short.splitlines()) <= 12
     for secret in ("SM-X", "TK-00", "알파", "SKT"):
         assert secret not in short
+
+
+def _relations(run: Path, slug: str) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    for file in sorted((run / "relations").glob(f"{slug}*.json")):
+        rows.extend(json.loads(file.read_text(encoding="utf-8"))["rows"])
+    return rows
+
+
+def test_표에서_선도_만들고_같은_선은_한_줄로_모은다(tmp_path: Path) -> None:
+    """**표 변환 도구가 선을 만들지 못했다** — 객체만 나와서, 관계는 사람이 따로 파일을
+    만들어야 했다(같은 원천을 두 번 읽는 자리).
+
+    한 행에 여러 타입이 섞인 표에서는 같은 선이 수십 행에 되풀이된다 — 세 끝이 같으면
+    한 줄로 모으고, 붙는 값이 행마다 다르면 **짐작하지 않고** 미해결에 올린다.
+    """
+    mapping = _mapping(SLUGS)
+    mapping["relations"] = [
+        {
+            "relation": "tested_at",
+            "type_slug": SLUGS["task"],
+            "src": {"key_of": SLUGS["task"]},
+            "dst": {"key_of": SLUGS["site"]},
+            "evidence_note": {"value": "PLM 표"},
+            "properties": {"progress": {"column": "Test진행상태"}},
+        }
+    ]
+    mapping_path, source = _files(tmp_path, mapping)
+    run = tmp_path / "run"
+    ok, report = table.convert(mapping_path, source, run)
+
+    manifest = json.loads((run / "bundle.json").read_text(encoding="utf-8"))
+    assert manifest["relations_order"] == ["tested_at"]
+    rows = _relations(run, "tested_at")
+    # 과제 여섯에 시험장 하나씩 — 같은 과제의 여러 모델 행이 한 선으로 모였다.
+    assert len(rows) == 6
+    assert {one["src"] for one in rows} == {f"TK-00{n}" for n in range(1, 7)}
+    assert all(one["dst"] == "T100" and one["relation"] == "tested_at" for one in rows)
+    assert all(one["evidence_note"] == "PLM 표" for one in rows)
+
+    # TK-001 은 두 행에 걸쳐 진행 상태가 다르다(완료 · 진행) — 짐작하지 않는다.
+    graves = json.loads((run / "unresolved.json").read_text(encoding="utf-8"))
+    assert any("tested_at" in one["what"] and "TK-001" in one["what"] for one in graves)
+    assert ok is False
+    conflicted = next(one for one in rows if one["src"] == "TK-001")
+    assert "properties" not in conflicted
+    settled = next(one for one in rows if one["src"] == "TK-002")
+    assert settled["properties"] == {"progress": "완료"}
+
+    # 보고서가 선 수와 갈린 선 수를 말한다.
+    assert "[관계 tested_at] 선 6" in report and "값이 갈린 선 1" in report
+
+
+def test_관계_절이_틀리면_무엇이_틀렸는지_말하고_멈춘다(tmp_path: Path) -> None:
+    mapping = _mapping(SLUGS)
+    mapping["relations"] = [
+        {
+            "relation": "tested_at",
+            "type_slug": "없는타입",
+            "src": {"value": "a"},
+            "dst": {"value": "b"},
+        }
+    ]
+    mapping_path, source = _files(tmp_path, mapping)
+    with pytest.raises(table.Stop, match="types 에 없습니다"):
+        table.convert(mapping_path, source, tmp_path / "run")
+
+    mapping["relations"] = [
+        {"relation": "tested_at", "type_slug": SLUGS["task"], "src": {"value": "a"}}
+    ]
+    mapping_path, source = _files(tmp_path, mapping)
+    with pytest.raises(table.Stop, match="dst 이\\(가\\) 있어야 합니다"):
+        table.convert(mapping_path, source, tmp_path / "run2")
+
+    mapping["relations"] = [
+        {
+            "relation": "tested_at",
+            "type_slug": SLUGS["task"],
+            "src": {"value": "a"},
+            "dst": {"column": "없는열"},
+        }
+    ]
+    mapping_path, source = _files(tmp_path, mapping)
+    with pytest.raises(table.Stop, match="없는열"):
+        table.convert(mapping_path, source, tmp_path / "run3")
+
+
+def test_갈려도_되는_칸은_모으거나_잇는다(tmp_path: Path) -> None:
+    """**값이 갈리는 것이 답인 칸이 있다** — 별칭 여럿, 줄마다 다른 메모.
+
+    예전에는 그런 칸도 미해결로 올라가, 사람이 한 줄씩 답을 정하거나 원천을 고쳐야 했다.
+    `collect` 는 목록으로(플랫폼의 여러 값 칸 · 별칭), `join` 은 한 글로 잇는다.
+    """
+    mapping = _mapping(SLUGS)
+    task = next(one for one in mapping["types"] if one["type_slug"] == SLUGS["task"])
+    task["fields"]["aliases"] = {"collect": {"column": "개발모델명"}}
+    task["fields"]["memo"] = {"join": {"column": "개발모델유형"}, "separator": " | "}
+    mapping_path, source = _files(tmp_path, mapping)
+    run = tmp_path / "run"
+    ok, report = table.convert(mapping_path, source, run)
+    assert ok is True, report
+
+    tasks = _objects(run, "t_task")
+    # TK-001 은 두 행 — 모델명이 둘이다. 별칭은 **목록으로** 간다(`;` 로 이으면 이름 안에
+    # `;` 가 든 것이 받는 쪽에서 갈린다).
+    assert tasks["TK-001"]["aliases"] == ["SM-X100A_KOR_SKT", "SM-X100A_D1_KOR_KTF"]
+    assert tasks["TK-001"]["memo"] == "Basic | RC"
+    # 한 행뿐인 과제도 목록이다 — 칸의 모양이 행 수에 따라 달라지면 받는 쪽이 둘을 다룬다.
+    assert tasks["TK-002"]["aliases"] == ["SM-X100A_EUR_12_MEA"]
+    assert json.loads((run / "unresolved.json").read_text(encoding="utf-8")) == []
+
+
+def test_모으는_칸을_잘못_적으면_말하고_멈춘다(tmp_path: Path) -> None:
+    mapping = _mapping(SLUGS)
+    task = next(one for one in mapping["types"] if one["type_slug"] == SLUGS["task"])
+    task["fields"]["aliases"] = {"collect": {"column": "없는열"}}
+    mapping_path, source = _files(tmp_path, mapping)
+    with pytest.raises(table.Stop, match="없는열"):
+        table.convert(mapping_path, source, tmp_path / "run")
+
+    task["fields"]["aliases"] = {"collect": {"column": "과제명"}, "upper": True}
+    mapping_path, source = _files(tmp_path, mapping)
+    with pytest.raises(table.Stop, match="collect 안에 값 뽑기를 적습니다"):
+        table.convert(mapping_path, source, tmp_path / "run2")

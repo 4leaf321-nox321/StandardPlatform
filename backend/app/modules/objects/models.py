@@ -311,6 +311,8 @@ class ObjectAlias(Base):
         UniqueConstraint("type_id", "kind", "norm", name="uq_object_aliases_value"),
         Index("ix_object_aliases_object", "object_id"),
         Index("ix_object_aliases_lookup", "type_id", "norm"),
+        # 검수 대기 목록 — 타입 안에서 「아직 안 본 것」 을 훑는다.
+        Index("ix_object_aliases_verified", "type_id", "verified_at"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -326,6 +328,26 @@ class ObjectAlias(Base):
     kind: Mapped[str] = mapped_column(String(80), default="alias", server_default="alias")
     value: Mapped[str] = mapped_column(String(200))
     norm: Mapped[str] = mapped_column(String(200))
+
+    source: Mapped[str] = mapped_column(String(80), default="", server_default="")
+    """**어디서 온 이름인가** — 「고장모드 리스트 v3」 「표준어집」 처럼. `kind` 와 다르다:
+    `kind` 는 그 이름이 무엇인지(사람 별칭 · 외부 식별자)를 말하고, 이것은 출처다.
+
+    적재가 수천 개를 붙이면 「이건 어디서 온 이름이냐」 를 물을 자리가 없다 — 그때 사람은
+    지워도 되는지 판단할 수 없어서 아무것도 안 지운다."""
+
+    note: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    """사람이 남기는 한 줄 — 「오타 표기」 「구 사내 코드」."""
+
+    verified_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    verified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """**사람이 확인했나.** 비어 있으면 검수 대기다 — 기계가 붙인 이름과 사람이 본 이름을
+    가르는 칸이 없으면, 자동으로 붙은 오타까지 정본처럼 쓰인다."""
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

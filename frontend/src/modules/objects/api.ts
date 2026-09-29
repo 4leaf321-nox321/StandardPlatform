@@ -280,7 +280,13 @@ export interface Watched {
 
 /** 품질 — 한 종류·한 타입의 걸린 것들. */
 export interface QualityFinding {
-  kind: 'missing_required' | 'orphan' | 'broken_ref' | 'duplicate' | 'alias_clash'
+  kind:
+    | 'missing_required'
+    | 'orphan'
+    | 'broken_ref'
+    | 'duplicate'
+    | 'alias_clash'
+    | 'alias_pending'
   kind_label: string
   type_slug: string
   type_label: string
@@ -358,6 +364,35 @@ function importForm(
 export const qualityApi = {
   report: (kind?: string) =>
     api.get<QualityReport>(`/objects/quality/report${kind ? `?kind=${kind}` : ''}`),
+}
+
+/** 검수 대기 별칭 한 줄 — 기계가 붙였고 사람이 아직 안 본 것. */
+export interface PendingAlias {
+  id: string
+  object_id: string
+  object_label: string
+  object_key: string | null
+  value: string
+  kind: string
+  source: string
+  note: string
+  created_at: string
+}
+
+export const aliasReviewApi = {
+  pending: (typeSlug: string, limit = 200) =>
+    api.get<{ items: PendingAlias[]; total: number }>(
+      `/objects/${typeSlug}/aliases/pending?limit=${limit}`,
+    ),
+  /**
+   * 고른 별칭을 **한 번에** 확인하거나 지운다. 한 줄씩 누르게 하면 수백 줄을 끝까지 보는
+   * 사람이 없다 — 그러면 검수는 안 한 것과 같다.
+   */
+  review: (typeSlug: string, ids: string[], action: 'approve' | 'remove') =>
+    api.post<{ done: number; refused: string[] }>(`/objects/${typeSlug}/aliases/review`, {
+      ids,
+      action,
+    }),
 }
 
 export const viewApi = {

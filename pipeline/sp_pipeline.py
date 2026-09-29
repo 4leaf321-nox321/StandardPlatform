@@ -48,7 +48,9 @@ APPLIED = "applied.json"
 CLIENT = "sp-pipeline"
 #: 플랫폼이 한 번에 받는 행 수(파일로 넣기와 같다).
 MAX_ROWS = 5000
-RELATION_FIELDS = ("src", "relation", "dst", "evidence_note")
+RELATION_FIELDS = ("src", "relation", "dst", "evidence_note", "properties")
+"""관계 한 줄의 칸. `properties` 는 **그 관계 종류의 속성**이다(인과 관계의 근거 건수처럼) —
+모양은 플랫폼이 관계 종류의 정의로 본다."""
 #: 이보다 낮은 확신도의 행은 넣지 않는다 — 모델링 규약 5장. unresolved.json 으로 간다.
 LOW_CONFIDENCE = 0.7
 ONTOLOGY_KEYS = {"groups", "types", "relation_types"}
@@ -284,6 +286,10 @@ def validate(run: Run, *, allow_unresolved: bool = False) -> Report:
                     f"{batch.file} {index}행: 관계 행에 없는 칸 {', '.join(extra)}"
                     f" (쓸 수 있는 것: {', '.join(RELATION_FIELDS)})"
                 )
+            if "properties" in row and not isinstance(row["properties"], dict):
+                report.errors.append(
+                    f"{batch.file} {index}행: properties 는 {{키: 값}} 이어야 합니다"
+                )
             if not row.get("evidence_note"):
                 no_evidence += 1
         if no_evidence and not received:
@@ -479,6 +485,36 @@ def _export_bundle(hub: str, hub_token: str, group: str) -> Any:
     return _get_json(hub, hub_token, f"/api/jobs/{job['id']}/download")
 
 
+def resolve_names(
+    server: str, token: str, type_slug: str, names: list[str]
+) -> dict[str, dict[str, Any]] | None:
+    """이름 여럿을 **플랫폼의 판정으로** 푼다 — `POST /objects/{타입}/resolve-many`.
+
+    도구가 스스로 맞추지 않는 이유: 식별자 → 별칭 → 이름 순서와 겹침 규칙은 플랫폼의 것이고,
+    두 벌로 두면 「도구는 된다는데 넣으면 안 되는」 상태가 생긴다.
+    """
+    out: dict[str, dict[str, Any]] = {}
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "X-Client": CLIENT,
+    }
+    unique = list(dict.fromkeys(one for one in names if one))
+    url = f"{server.rstrip('/')}/api/objects/{urllib.parse.quote(type_slug)}/resolve-many"
+    for at in range(0, len(unique), 500):
+        raw = json.dumps({"names": unique[at : at + 500]}, ensure_ascii=False).encode("utf-8")
+        status, body = _send(server, "POST", url, headers, raw, who="플랫폼")
+        if status == 404:
+            # **그 타입이 플랫폼에 아직 없다.** 같은 묶음의 정의가 만들 것일 수 있으므로
+            # 여기서 멈추지 않는다 — 부르는 쪽이 판단한다.
+            return None
+        if status != 200:
+            _refused("플랫폼", status, body)
+        for one in (body or {}).get("items") or []:
+            out[str(one.get("name"))] = one
+    return out
+
+
 def fetch_keys(server: str, token: str, type_slug: str) -> set[str]:
     """플랫폼에서 그 타입의 식별자를 전부 받는다(쪽마다) — 원천의 코드가 코어에 붙나를
     볼 때."""
@@ -557,7 +593,9 @@ def summarize(result: dict[str, Any], *, limit: int = 20) -> str:
                 lines.append(f"  … 외 {len(bad) - limit}행")
     graves = result.get("tombstones") or {}
     if graves.get("rows"):
-        counts = " · ".join(f"{k} {v}" for k, v in sorted((graves.get("counts") or {}).items()))
+        counts = " · ".join(
+            f"{k} {v}" for k, v in sorted((graves.get("counts") or {}).items())
+        )
         lines.append(f"사라진 것: {counts or '-'}")
         for row in graves["rows"][:limit]:
             lines.append(
@@ -653,9 +691,118 @@ def cmd_pull(path: Path, *, hub: str, hub_token: str, group: str, source: str = 
     return "\n".join(lines)
 
 
-def cmd_validate(path: Path, *, allow_unresolved: bool = False) -> tuple[bool, str]:
+def check_endpoints(run: Run, server: str, token: str) -> Report:
+    """**끝점이 풀리나** — 플랫폼에 물어 미리 본다(검증의 선택 단계).
+
+    예전에는 이것을 `preview` 에서야 알았다. 미리 보기는 계획을 세우느라 몇 분이 걸리고,
+    그 몇 분 뒤에 「이름이 여럿과 맞는다」 를 듣는다. 물어서 아는 것은 먼저 묻는다.
+
+    보는 것 셋:
+    - 관계의 출발점(`src`)이 그 타입에서 **하나로 정해지나**
+    - 객체 행이 가리키는 참조 칸(실행 폴더의 `ontology.json` 이 말하는 `object_ref`)이 풀리나
+    - **별칭으로 풀린 것**은 경고로 — 다른 객체의 이름과 같은 별칭이 있으면 조용히 그쪽에
+      붙는다(그 사실은 아무 데도 안 적힌다)
+    """
+    report = Report()
+    defined: set[str] = {
+        str(one.get("slug"))
+        for one in (((run.ontology or {}).get("types") or []) if run.ontology else [])
+        if isinstance(one, dict)
+    }
+    ref_of: dict[str, dict[str, str]] = {}
+    for one in ((run.ontology or {}).get("types") or []) if run.ontology else []:
+        if not isinstance(one, dict):
+            continue
+        fields = {
+            str(prop.get("key")): str(prop.get("ref_type_slug") or "")
+            for prop in (one.get("properties") or [])
+            if isinstance(prop, dict) and prop.get("data_type") == "object_ref"
+        }
+        if fields:
+            ref_of[str(one.get("slug"))] = fields
+
+    asked: dict[str, set[str]] = {}
+    for batch in run.relations:
+        for row in batch.rows:
+            if isinstance(row, dict) and row.get("src"):
+                asked.setdefault(batch.type_slug, set()).add(str(row["src"]))
+    for batch in run.objects:
+        for key, target in (ref_of.get(batch.type_slug) or {}).items():
+            if not target:
+                continue
+            for row in batch.rows:
+                if not isinstance(row, dict):
+                    continue
+                value = row.get(key)
+                for item in value if isinstance(value, list) else [value]:
+                    if isinstance(item, str) and item.strip():
+                        asked.setdefault(target, set()).add(item.strip())
+    if not asked:
+        return report
+
+    # **이 실행이 만드는 것은 아직 없어도 된다** — 같은 묶음의 객체 단계가 넣는다.
+    making: dict[str, set[str]] = {}
+    for batch in run.objects:
+        for row in batch.rows:
+            if not isinstance(row, dict):
+                continue
+            for name in ("key", "label"):
+                if row.get(name):
+                    making.setdefault(batch.type_slug, set()).add(str(row[name]))
+
+    for type_slug, names in sorted(asked.items()):
+        left = sorted(names - (making.get(type_slug) or set()))
+        if not left:
+            continue
+        found = resolve_names(server, token, type_slug, left)
+        if found is None:
+            where = report.warnings if type_slug in defined else report.errors
+            where.append(
+                f"{type_slug}: 이 타입이 플랫폼에 아직 없어 끝점을 못 봤습니다 "
+                f"({len(left)}건) — 이 묶음의 정의가 만드는 타입이면 정상입니다"
+            )
+            continue
+        missing = [one for one in left if (found.get(one) or {}).get("match") == "none"]
+        several = [one for one in left if (found.get(one) or {}).get("match") == "candidates"]
+        by_alias = [
+            one
+            for one in left
+            if ((found.get(one) or {}).get("object") or {}).get("matched_by") == "alias"
+        ]
+        if missing:
+            report.errors.append(
+                f"{type_slug}: 가리키는 것이 플랫폼에 없습니다 {len(missing)}건 — "
+                + ", ".join(missing[:10])
+                + (" …" if len(missing) > 10 else "")
+            )
+        if several:
+            report.errors.append(
+                f"{type_slug}: 이름이 여럿과 맞습니다 {len(several)}건(그때 플랫폼은 "
+                "고르지 않는다) — " + ", ".join(several[:10])
+            )
+        if by_alias:
+            report.warnings.append(
+                f"{type_slug}: 별칭으로 풀린 것 {len(by_alias)}건 — 다른 객체의 이름과 같은 "
+                "별칭이면 그쪽에 붙습니다: " + ", ".join(by_alias[:10])
+            )
+    return report
+
+
+def cmd_validate(
+    path: Path,
+    *,
+    allow_unresolved: bool = False,
+    server: str = "",
+    token: str = "",
+) -> tuple[bool, str]:
     run = load(path)
     report = validate(run, allow_unresolved=allow_unresolved)
+    asked = ""
+    if server and token:
+        remote = check_endpoints(run, server, token)
+        report.errors.extend(remote.errors)
+        report.warnings.extend(remote.warnings)
+        asked = " · 끝점 확인함"
     lines = [f"오류: {one}" for one in report.errors] + [
         f"경고: {one}" for one in report.warnings
     ]
@@ -663,7 +810,7 @@ def cmd_validate(path: Path, *, allow_unresolved: bool = False) -> tuple[bool, s
     links = sum(len(one.rows) for one in run.relations)
     head = (
         f"정의 {'있음' if run.ontology else '없음'} · 객체 {total}행({len(run.objects)}파일)"
-        f" · 관계 {links}줄 · 오류 {len(report.errors)} · 경고 {len(report.warnings)}"
+        f" · 관계 {links}줄{asked} · 오류 {len(report.errors)} · 경고 {len(report.warnings)}"
     )
     return not report.errors, "\n".join([head, *lines])
 
@@ -723,6 +870,9 @@ def main(argv: list[str] | None = None) -> int:
     check = sub.add_parser("validate", help="서버에 보내기 전에 모양을 본다")
     check.add_argument("run", type=Path)
     check.add_argument("--allow-unresolved", action="store_true")
+    # **주소와 토큰이 있으면 끝점을 미리 묻는다.** 없으면 모양만 본다(예전과 같다).
+    check.add_argument("--server", default=os.environ.get("SP_SERVER", ""))
+    check.add_argument("--token", default=os.environ.get("SP_TOKEN", ""))
 
     pull = sub.add_parser("pull", help="허브가 내보낸 묶음을 새 실행 폴더로 받는다")
     pull.add_argument("run", type=Path)
@@ -746,7 +896,12 @@ def main(argv: list[str] | None = None) -> int:
             print(cmd_init(args.run, title=args.title))
             return 0
         if args.command == "validate":
-            ok, text = cmd_validate(args.run, allow_unresolved=args.allow_unresolved)
+            ok, text = cmd_validate(
+                args.run,
+                allow_unresolved=args.allow_unresolved,
+                server=args.server,
+                token=args.token,
+            )
             print(text)
             return 0 if ok else 1
         if args.command == "pull":

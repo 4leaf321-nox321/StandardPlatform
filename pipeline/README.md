@@ -37,7 +37,7 @@ python sp_pipeline.py apply    runs/2026-09-13-sim-tools   # 사람이 확인한
 | 명령 | 하는 일 | 종료 코드 |
 | --- | --- | --- |
 | `init` | `bundle.json` · `ontology.json` · `objects/` · `relations/` · `unresolved.json` | 0 |
-| `validate` | JSON 모양, 식별자 겹침, 관계 행의 칸, 미해결 목록. 출처(`_source`) · 근거가 없으면 경고 | 오류 있으면 1 |
+| `validate` | JSON 모양, 식별자 겹침, 관계 행의 칸, 미해결 목록. 출처(`_source`) · 근거가 없으면 경고. **`SP_SERVER` · `SP_TOKEN` 이 있으면 끝점도 플랫폼에 묻는다**(없는 것 · 이름이 여럿과 맞는 것 · 별칭으로 풀린 것) | 오류 있으면 1 |
 | `preview` | 검증 → 플랫폼 `POST /api/bundles/import`(apply=false, 202 작업) → 끝나기를 기다려 `preview.json` 에 결과와 **지문** | 계획에 오류 있으면 1 |
 | `apply` | **미리 본 것과 지문이 같을 때만** 적용 → `applied.json` | 안 들어갔으면 1 |
 | `pull` | (쌍둥이) 허브가 내보낸 사이드바 묶음을 새 실행 폴더로 — `--group plm`, `SP_HUB_SERVER` · `SP_HUB_TOKEN`. 그 뒤는 `validate` → `preview` → `apply`(받는 플랫폼에) | 0 |
@@ -57,6 +57,7 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models    # 그 뒤는 위와
 | 하는 일 | |
 | --- | --- |
 | 같은 식별자는 한 객체로 | 칸 값이 행마다 다르면 **짐작하지 않고** `unresolved.json` 으로 |
+| **선(관계)도 만든다** | `relations` 절 — 세 끝이 같으면 한 줄로 모으고, 붙는 값이 갈리면 미해결로 |
 | 이름에 박힌 조각을 칸으로 | 해석기 — 자리 + 사전 · 정규식. 두 갈래로 읽히면 고르지 않는다. 못 읽은 행은 넣고 조각 칸만 비운다 |
 | 보고서 `table-report.txt` | 값을 **가린 패턴**(`A` · `9` · `가`)으로만 — 사내 밖에서 규칙을 의논할 수 있다 |
 | 종료 코드 | 0 미해결 없음 · 1 미해결 있음 · 2 대응 파일 · 원천 오류 |

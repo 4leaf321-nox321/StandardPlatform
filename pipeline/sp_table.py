@@ -49,6 +49,10 @@ BOUNDARIES = "_-/. "
 """참조 대조에서 「앞부분」 을 가르는 자리 — 코드가 끊기는 글자."""
 MATCH_OUTCOMES = ("그대로", "대소문자만 다름", "앞부분이 하나", "여러 개", "없음")
 ON_MISSING = ("blank", "unresolved", "keep")
+AGGREGATES = ("collect", "join")
+"""**여러 행의 값을 하나로 모으는 칸.** 같은 식별자가 여러 행에 나올 때, 값이 갈리는 것이
+오류가 아니라 **그것이 답인** 칸이 있다 — 별칭 여럿, 담당자 여럿, 줄마다 다른 메모.
+`collect` 는 목록으로, `join` 은 한 글로 잇는다."""
 
 Stop = pipeline.Stop
 
@@ -446,6 +450,7 @@ class Mapping:
         self.types: list[dict[str, Any]] = list(spec.get("types") or [])
         if not self.types:
             raise Stop("대응 파일: types 가 비어 있습니다")
+        self.relations: list[dict[str, Any]] = list(spec.get("relations") or [])
         self.by_slug: dict[str, dict[str, Any]] = {}
         for index, one in enumerate(self.types, start=1):
             slug = str(one.get("type_slug") or "")
@@ -465,11 +470,39 @@ class Mapping:
                         " — 참조 칸에 쓴다"
                     )
                 self._check(value, where=f"{slug}.{name}")
+        for index, one in enumerate(self.relations, start=1):
+            where = f"relations[{index}]"
+            for name in ("relation", "type_slug", "src", "dst"):
+                if name not in one:
+                    raise Stop(f"대응 파일: {where} 에 {name} 이(가) 있어야 합니다")
+            if str(one["type_slug"]) not in self.by_slug:
+                raise Stop(
+                    f"대응 파일: {where} 의 type_slug {one['type_slug']!r} 가 "
+                    "types 에 없습니다"
+                )
+            slug = str(one["relation"])
+            for name in ("src", "dst"):
+                self._check(one[name], where=f"{where}.{name}")
+            if "evidence_note" in one:
+                self._check(one["evidence_note"], where=f"{where}.evidence_note")
+            for key, value in (one.get("properties") or {}).items():
+                self._check(value, where=f"{where}.properties.{key}")
         self.stats: dict[tuple[str, str], FieldStats] = {}
 
     def _check(self, spec: Any, *, where: str) -> None:
         if not isinstance(spec, dict):
             raise Stop(f"대응 파일: {where} 는 {{...}} 여야 합니다")
+        for mode in AGGREGATES:
+            if mode in spec:
+                if len(spec) > (2 if mode == "join" else 1) or (
+                    mode == "join" and set(spec) - {"join", "separator"}
+                ):
+                    raise Stop(
+                        f"대응 파일: {where} 의 {mode} 안에 값 뽑기를 적습니다 — "
+                        f'{{"{mode}": {{"column": "열"}}}}'
+                    )
+                self._check(spec[mode], where=f"{where}.{mode}")
+                return
         if "column" in spec:
             _column(spec, self.table.header, where=where)
             if "match" in spec:
@@ -533,6 +566,10 @@ class Mapping:
     def value(
         self, spec: dict[str, Any], number: int, row: dict[str, str], *, at: tuple[str, str]
     ) -> Any:
+        for mode in AGGREGATES:
+            if mode in spec:
+                # 한 행의 값만 읽는다 — 행들을 하나로 만드는 것은 `gather` 의 몫이다.
+                return self.value(spec[mode], number, row, at=at)
         if "value" in spec:
             return spec["value"]
         if "key_of" in spec:
@@ -609,10 +646,23 @@ class TypeResult:
     unresolved: list[dict[str, Any]]
 
 
+def _aggregate_of(spec: Any) -> tuple[str, str] | None:
+    """모으는 칸인가 — `(모드, 잇는 글자)`. 아니면 None."""
+    if not isinstance(spec, dict):
+        return None
+    for mode in AGGREGATES:
+        if mode in spec:
+            return mode, str(spec.get("separator") or "; ")
+    return None
+
+
 def gather(mapping: Mapping, one: dict[str, Any]) -> TypeResult:
     slug = str(one["type_slug"])
     specs: dict[str, Any] = {"label": one.get("label") or one["key"]}
     specs.update(one.get("fields") or {})
+    aggregates = {
+        name: found for name, spec in specs.items() if (found := _aggregate_of(spec))
+    }
     found: dict[str, Gathered] = {}
     blank_keys = 0
     for number, row in mapping.table.rows:
@@ -640,6 +690,18 @@ def gather(mapping: Mapping, one: dict[str, Any]) -> TypeResult:
     for entry in found.values():
         out: dict[str, Any] = {"key": entry.key}
         for name, seen in entry.values.items():
+            if name in aggregates:
+                # **갈리는 것이 답인 칸이다** — 별칭 여럿, 담당 여럿. 순서는 나온 차례,
+                # 같은 값은 한 번만.
+                mode, separator = aggregates[name]
+                values = [value for value, _ in seen.values() if value not in (None, "")]
+                if not values:
+                    out[name] = None
+                elif mode == "collect":
+                    out[name] = values
+                else:
+                    out[name] = separator.join(str(value) for value in values)
+                continue
             if len(seen) == 1:
                 out[name] = next(iter(seen.values()))[0]
                 continue
@@ -675,6 +737,105 @@ def gather(mapping: Mapping, one: dict[str, Any]) -> TypeResult:
 # --------------------------------------------------------------------------
 # 명령
 # --------------------------------------------------------------------------
+
+
+@dataclass
+class EdgeResult:
+    """관계 종류 하나의 결과 — 출발 타입마다 한 파일로 나간다."""
+
+    relation: str
+    type_slug: str
+    rows: list[dict[str, Any]]
+    blank_ends: int
+    """출발점이나 도착점이 빈 행 — 그 행은 선을 만들지 않는다."""
+    conflicts: int
+    unresolved: list[dict[str, Any]]
+
+
+def gather_edges(mapping: Mapping, one: dict[str, Any]) -> EdgeResult:
+    """표 한 장에서 선을 모은다 — **같은 세 끝은 한 줄로.**
+
+    한 행에 여러 타입이 섞인 표에서는 같은 선이 수십 행에 되풀이된다(모델이 여러 줄이면
+    그 과제로 가는 선도 여러 줄). 세 끝(출발 · 종류 · 도착)이 같으면 한 줄로 모으고,
+    **붙는 값이 행마다 다르면 짐작하지 않고** 미해결에 올린다 — 객체 칸과 같은 규칙이다.
+    """
+    slug = str(one["relation"])
+    type_slug = str(one["type_slug"])
+    at = (f"관계 {slug}", "")
+    note_spec = one.get("evidence_note")
+    props: dict[str, Any] = one.get("properties") or {}
+    found: dict[tuple[str, str], dict[str, dict[str, tuple[Any, list[int]]]]] = {}
+    order: list[tuple[str, str]] = []
+    blank_ends = 0
+    for number, row in mapping.table.rows:
+        src = mapping.value(one["src"], number, row, at=(f"관계 {slug}", "src"))
+        dst = mapping.value(one["dst"], number, row, at=(f"관계 {slug}", "dst"))
+        if src in (None, "") or dst in (None, ""):
+            blank_ends += 1
+            continue
+        ends = (str(src), str(dst))
+        values = found.get(ends)
+        if values is None:
+            values = found[ends] = {}
+            order.append(ends)
+        specs = dict(props)
+        if note_spec is not None:
+            specs["evidence_note"] = note_spec
+        for name, spec in specs.items():
+            value = mapping.value(spec, number, row, at=(f"관계 {slug}", name))
+            fingerprint = json.dumps(value, ensure_ascii=False, sort_keys=True)
+            seen = values.setdefault(name, {})
+            if fingerprint in seen:
+                seen[fingerprint][1].append(number)
+            else:
+                seen[fingerprint] = (value, [number])
+
+    rows: list[dict[str, Any]] = []
+    conflicts = 0
+    unresolved: list[dict[str, Any]] = []
+    for ends in order:
+        src, dst = ends
+        out: dict[str, Any] = {"src": src, "relation": slug, "dst": dst}
+        properties: dict[str, Any] = {}
+        for name, seen in found[ends].items():
+            if len(seen) > 1:
+                conflicts += 1
+                unresolved.append(
+                    {
+                        "what": f"관계 {src} -{slug}-> {dst} 의 칸 {name}",
+                        "question": "같은 선인데 행마다 값이 다릅니다 — 어느 값이 맞나요?",
+                        "options": [
+                            {"value": value, "rows": numbers[:10]}
+                            for value, numbers in seen.values()
+                        ],
+                        "_source": {
+                            "file": mapping.table.name,
+                            "rows": sorted(
+                                number for _, numbers in seen.values() for number in numbers
+                            )[:20],
+                        },
+                    }
+                )
+                continue
+            value = next(iter(seen.values()))[0]
+            if value in (None, ""):
+                continue
+            if name == "evidence_note":
+                out["evidence_note"] = str(value)
+            else:
+                properties[name] = value
+        if properties:
+            out["properties"] = properties
+        rows.append(out)
+    assert at
+    return EdgeResult(
+        relation=slug,
+        type_slug=type_slug,
+        rows=rows,
+        blank_ends=blank_ends,
+        conflicts=conflicts,
+        unresolved=unresolved,
+    )
 
 
 def _load_mapping(path: Path) -> dict[str, Any]:
@@ -748,6 +909,7 @@ def convert(
         ontology = loaded
 
     results = [gather(mapping, one) for one in mapping.types]
+    edges = [gather_edges(mapping, one) for one in mapping.relations]
 
     pipeline.cmd_init(run, title=str(spec.get("title") or table.name))
     manifest_path = run / pipeline.MANIFEST
@@ -762,6 +924,8 @@ def convert(
         }
     ]
     manifest["objects_order"] = [result.slug for result in results]
+    if edges:
+        manifest["relations_order"] = [one.relation for one in edges]
     manifest["notes"] = _mapping_notes(mapping, mapping_path, mapping_digest)
     pipeline._write(manifest_path, manifest)
     if ontology is not None:
@@ -784,6 +948,22 @@ def convert(
                 },
             )
         unresolved.extend(result.unresolved)
+    for result_edges in edges:
+        chunks = [
+            result_edges.rows[at : at + pipeline.MAX_ROWS]
+            for at in range(0, len(result_edges.rows), pipeline.MAX_ROWS)
+        ]
+        for index, chunk in enumerate(chunks, start=1):
+            name = (
+                result_edges.relation
+                if len(chunks) == 1
+                else f"{result_edges.relation}-{index:03d}"
+            )
+            pipeline._write(
+                run / pipeline.RELATIONS_DIR / f"{name}.json",
+                {"type_slug": result_edges.type_slug, "rows": chunk},
+            )
+        unresolved.extend(result_edges.unresolved)
     for (slug, name, text), numbers in mapping.match_unresolved.items():
         unresolved.append(
             {
@@ -796,7 +976,7 @@ def convert(
         )
     pipeline._write(run / pipeline.UNRESOLVED, unresolved)
 
-    text = _report(mapping, mapping_path, results, run, len(unresolved))
+    text = _report(mapping, mapping_path, results, run, len(unresolved), edges)
     (run / REPORT).write_text(text + "\n", encoding="utf-8")
     return not unresolved, text
 
@@ -823,7 +1003,12 @@ def brief(report: str) -> str:
 
 
 def _report(
-    mapping: Mapping, mapping_path: Path, results: list[TypeResult], run: Path, unresolved: int
+    mapping: Mapping,
+    mapping_path: Path,
+    results: list[TypeResult],
+    run: Path,
+    unresolved: int,
+    edges: list[EdgeResult] | None = None,
 ) -> str:
     table = mapping.table
     lines = [
@@ -850,6 +1035,20 @@ def _report(
                     f"  칸 {name} — {what} {sum(patterns.values())}: {_top(patterns)}"
                 )
     if mapping.match_stats:
+        lines.append("")
+    for one in edges or []:
+        lines.append(
+            f"[관계 {one.relation}] 선 {len(one.rows)} · 끝이 빈 행 {one.blank_ends}"
+            f" · 값이 갈린 선 {one.conflicts} → {one.type_slug}"
+        )
+        for (where, field_name), field_stats in sorted(mapping.stats.items()):
+            if where != f"관계 {one.relation}":
+                continue
+            for what, patterns in sorted(field_stats.problems.items()):
+                lines.append(
+                    f"  칸 {field_name} — {what} {sum(patterns.values())}: {_top(patterns)}"
+                )
+    if edges:
         lines.append("")
     for (slug, name), stats in sorted(mapping.match_stats.items()):
         total = sum(stats.outcomes.values())

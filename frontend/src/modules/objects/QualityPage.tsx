@@ -8,16 +8,18 @@
  * **볼 수 있는 것만 센다.** 남의 부서 것을 세어 주면 수가 새고, 고칠 수도 없다.
  */
 
-import { useEffect, useMemo } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useLocation } from 'react-router-dom'
 import { AlertTriangle, ShieldCheck } from 'lucide-react'
 
+import { AliasReviewDialog } from '@/modules/objects/AliasReviewDialog'
 import { qualityApi } from '@/modules/objects/api'
 import type { QualityFinding } from '@/modules/objects/api'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Badge } from '@/shared/components/ui/badge'
+import { Button } from '@/shared/components/ui/button'
 import { useResource } from '@/shared/hooks/useResource'
 
 const KIND_ORDER: QualityFinding['kind'][] = [
@@ -25,6 +27,7 @@ const KIND_ORDER: QualityFinding['kind'][] = [
   'missing_required',
   'duplicate',
   'alias_clash',
+  'alias_pending',
   'orphan',
 ]
 
@@ -38,11 +41,15 @@ const KIND_HINT: Record<QualityFinding['kind'], string> = {
     '관계가 하나도 안 걸린 객체입니다. 관계가 정의된 타입에서만 셉니다 — 정말 홀로 있는 것인지 보세요.',
   alias_clash:
     '한 객체의 별칭이 다른 객체의 이름·식별자와 같습니다. 그 표기로 찾으면 둘이 나옵니다 — 같은 것이면 합치고, 다른 것이면 별칭을 지우세요.',
+  alias_pending:
+    '적재가 붙였고 사람이 아직 안 본 이름입니다. 「검수」 로 한 번에 확인하거나 지우세요 — 확인한 것만 정본으로 씁니다.',
 }
 
 export default function QualityPage() {
   const report = useResource(() => qualityApi.report(), [])
   const location = useLocation()
+  /** 검수 창을 연 타입 — 「검수 대기 별칭」 줄에서만 연다. */
+  const [reviewing, setReviewing] = useState<{ slug: string; label: string } | null>(null)
 
   // 홈에서 `#kind` 로 들어오면 그 묶음으로 내려간다.
   useEffect(() => {
@@ -97,9 +104,18 @@ export default function QualityPage() {
                   <Link to={`/o/${one.type_slug}`} className="font-medium hover:underline">
                     {one.type_label}
                   </Link>
-                  <span className="text-muted-foreground">
+                  <span className="text-muted-foreground flex items-center gap-2">
                     {one.count}개
                     {one.count > one.hits.length && ` · 아래는 ${one.hits.length}개까지`}
+                    {kind === 'alias_pending' && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setReviewing({ slug: one.type_slug, label: one.type_label })}
+                      >
+                        검수
+                      </Button>
+                    )}
                   </span>
                 </div>
                 <ul className="divide-y text-sm">
@@ -127,6 +143,14 @@ export default function QualityPage() {
           </section>
         )
       })}
+      {reviewing && (
+        <AliasReviewDialog
+          typeSlug={reviewing.slug}
+          typeLabel={reviewing.label}
+          onClose={() => setReviewing(null)}
+          onDone={() => report.reload()}
+        />
+      )}
     </div>
   )
 }

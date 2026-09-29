@@ -162,6 +162,9 @@ class _Refs:
     def __init__(self, db: Session, user: User) -> None:
         self.db = db
         self.user = user
+        self.notes: list[str] = []
+        """줄에 적을 말 — **별칭으로 풀렸는데 그 글자가 다른 객체의 이름이기도** 할 때.
+        부르는 쪽이 줄마다 비우고 읽는다(`_plan_row`)."""
         self.cache: dict[
             str,
             tuple[
@@ -219,7 +222,16 @@ class _Refs:
         if text in by_key:
             return str(by_key[text])
         if compare_key(text) in by_alias:
-            return str(by_alias[compare_key(text)])
+            found = by_alias[compare_key(text)]
+            if [one for one in by_label.get(text, []) if one != found]:
+                # **조용히 별칭 쪽에 붙는다** — 이름 풀이는 식별자 → 별칭 → 이름 차례이기
+                # 때문이다. 어느 쪽인지 사람이 정해야 할 자리라 줄에 적는다(품질 보고서의
+                # `alias_clash` 가 같은 사실을 목록으로 본다).
+                self.notes.append(
+                    f"{definition.label}: 「{text}」 은 다른 객체의 **이름**이기도 합니다 — "
+                    "별칭 쪽에 붙였습니다"
+                )
+            return str(found)
         hits = by_label.get(text, [])
         if len(hits) == 1:
             return str(hits[0])
@@ -302,8 +314,24 @@ def _alias_note(taken: list[str], long: list[str]) -> str:
     return " / ".join(parts)
 
 
-def alias_values(raw: Any) -> tuple[list[str], list[str]]:
+def _only(asked: list[aliases.Incoming], values: list[str]) -> list[aliases.Incoming]:
+    """이 값들만 남긴다 — 겹침 판정은 글자로 하고(`split_free`), 출처 · 메모는 여기서
+    다시 잇는다."""
+    keep = {compare_key(one) for one in values}
+    return [one for one in asked if compare_key(one.value) in keep]
+
+
+def _joined(*parts: str) -> str:
+    """줄에 적을 말 여럿을 한 줄로 — 빈 것은 뺀다."""
+    return " / ".join(one for one in parts if one)
+
+
+def alias_values(raw: Any) -> tuple[list[aliases.Incoming], list[str]]:
     """별칭 칸 → (쓸 수 있는 것, 너무 길어 뺀 것).
+
+    한 칸은 **글자**이거나 **`{value, source, note}`** 다. 뒤쪽은 적재가 「어디서 온
+    이름인가」 를 남기는 자리다 — 수천 개가 붙은 뒤에 그것을 물을 자리가 없으면, 사람은
+    지워도 되는지 판단할 수 없어서 아무것도 안 지운다.
 
     ⚠️ **목록으로 오면 쪼개지 않는다.** 예전에는 `str(raw).split(";")` 이라, JSON 으로 온
        `["박리", "코팅 박리"]` 가 `"['박리', '코팅 박리']"` **한 덩어리**로 저장됐다(실측).
@@ -312,9 +340,44 @@ def alias_values(raw: Any) -> tuple[list[str], list[str]]:
     """
     if raw is None:
         return [], []
-    if isinstance(raw, list | tuple):
-        return aliases.split_long(aliases.clean([str(one) for one in raw]))
-    return aliases.split_long(aliases.clean(str(raw).split(MULTI_SEP)))
+    items = raw if isinstance(raw, list | tuple) else str(raw).split(MULTI_SEP)
+    asked: list[aliases.Incoming] = []
+    for one in items:
+        if isinstance(one, dict):
+            value = str(one.get("value") or "").strip()
+            kind = str(one.get("kind") or aliases.HUMAN).strip()
+            if kind != aliases.HUMAN:
+                # 외부 식별자(`source:<slug>`)는 **동기화가 남긴다** — 파일로 받으면 다음
+                # 동기화가 그것으로 엉뚱한 객체를 찾는다.
+                raise InvalidValue(
+                    code("OBJECTS", 91),
+                    f"별칭의 kind 는 {aliases.HUMAN} 만 받습니다: {kind}. "
+                    "외부 식별자는 데이터 소스가 남깁니다.",
+                )
+            if value:
+                asked.append(
+                    aliases.Incoming(
+                        value=value,
+                        source=str(one.get("source") or "").strip(),
+                        note=str(one.get("note") or "").strip(),
+                    )
+                )
+            continue
+        asked.append(aliases.Incoming(value=str(one)))
+    # 빈 것 · 겹치는 것을 거르는 규칙은 한 곳이다(`aliases.clean`) — 여기서 따로 적으면
+    # 화면과 파일이 다르게 판정한다.
+    keep = {compare_key(one) for one in aliases.clean([one.value for one in asked])}
+    kept = [one for one in asked if compare_key(one.value) in keep]
+    seen: set[str] = set()
+    unique: list[aliases.Incoming] = []
+    for one in kept:
+        norm = compare_key(one.value)
+        if norm in seen:
+            continue
+        seen.add(norm)
+        unique.append(one)
+    long = [one.value for one in unique if len(one.value) > aliases.MAX_VALUE]
+    return [one for one in unique if len(one.value) <= aliases.MAX_VALUE], long
 
 
 def _is_blank(raw: Any) -> bool:
@@ -489,6 +552,7 @@ def _plan_row(
     seen_keys: dict[str, int],
     seen_ids: dict[str, int],
 ) -> RowPlan:
+    refs.notes.clear()
     patch = _patch_of(row, mapping, by_key, refs)
 
     raw_id = _fixed(row, "id")
@@ -499,7 +563,7 @@ def _plan_row(
     raw_from = _fixed(row, "valid_from_year")
     raw_to = _fixed(row, "valid_to_year")
     raw_aliases = _fixed(row, "aliases")
-    wanted_aliases: list[str] | None = None
+    wanted_aliases: list[aliases.Incoming] | None = None
     long_aliases: list[str] = []
     if raw_aliases is not _MISSING:
         wanted_aliases, long_aliases = alias_values(raw_aliases)
@@ -610,16 +674,17 @@ def _plan_row(
         )
         skipped: list[str] = []
         if wanted_aliases:
-            wanted_aliases, skipped = aliases.split_free(
-                db, object_type, wanted_aliases, exclude_id=None
+            free, skipped = aliases.split_free(
+                db, object_type, [one.value for one in wanted_aliases], exclude_id=None
             )
+            wanted_aliases = _only(wanted_aliases, free)
         return RowPlan(
             row=index,
             action="create",
             label=str(raw_label).strip(),
             key=key,
             changes=sorted(properties) + (["aliases"] if wanted_aliases else []),
-            message=_alias_note(skipped, long_aliases),
+            message=_joined(*refs.notes, _alias_note(skipped, long_aliases)),
         )
 
     # 고침 — 보낸 것만.
@@ -651,15 +716,16 @@ def _plan_row(
         changes.append("valid_to_year")
     alias_skipped: list[str] = []
     if wanted_aliases is not None:
-        wanted_aliases, alias_skipped = aliases.split_free(
-            db, object_type, wanted_aliases, exclude_id=existing.id
+        free, alias_skipped = aliases.split_free(
+            db, object_type, [one.value for one in wanted_aliases], exclude_id=existing.id
         )
+        wanted_aliases = _only(wanted_aliases, free)
         current_aliases = aliases.human_of(db, [existing.id]).get(existing.id, [])
         if aliases_mode == "add":
             have = {compare_key(one) for one in current_aliases}
-            if [one for one in wanted_aliases if compare_key(one) not in have]:
+            if [one for one in wanted_aliases if compare_key(one.value) not in have]:
                 changes.append("aliases")
-        elif [compare_key(a) for a in wanted_aliases] != [
+        elif [compare_key(a.value) for a in wanted_aliases] != [
             compare_key(a) for a in current_aliases
         ]:
             changes.append("aliases")
@@ -701,9 +767,7 @@ def _plan_row(
         key=key if key is not None else existing.key,
         object_id=existing.id,
         changes=changes,
-        message=" / ".join(
-            one for one in (rename_note, _alias_note(alias_skipped, long_aliases)) if one
-        ),
+        message=_joined(rename_note, *refs.notes, _alias_note(alias_skipped, long_aliases)),
     )
 
 
@@ -796,11 +860,12 @@ def apply_objects(
             raw_aliases = _fixed(row, "aliases")
             if raw_aliases is not _MISSING and raw_aliases is not None:
                 # 계획에서 가른 대로 — 남이 쓰는 별칭은 여기서도 빠진다.
+                asked = alias_values(raw_aliases)[0]
                 free, _taken = aliases.split_free(
-                    db, object_type, alias_values(raw_aliases)[0], exclude_id=target.id
+                    db, object_type, [one.value for one in asked], exclude_id=target.id
                 )
                 if free:
-                    aliases.set_human(db, target, object_type, free)
+                    aliases.set_human(db, target, object_type, _only(asked, free))
             audit.record(
                 db,
                 action="object.create",
@@ -836,10 +901,11 @@ def apply_objects(
             target.key = row_plan.key
         if "aliases" in row_plan.changes:
             raw_aliases = _fixed(row, "aliases")
+            asked = alias_values(raw_aliases)[0]
             free, _taken = aliases.split_free(
-                db, object_type, alias_values(raw_aliases)[0], exclude_id=target.id
+                db, object_type, [one.value for one in asked], exclude_id=target.id
             )
-            aliases.set_human(db, target, object_type, free, mode=aliases_mode)
+            aliases.set_human(db, target, object_type, _only(asked, free), mode=aliases_mode)
         if keep_old_key is not None:
             # 별칭을 맞춘 **뒤에** 더한다 — `replace` 면 앞에서 더한 것이 지워진다.
             free, _taken = aliases.split_free(

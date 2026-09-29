@@ -369,10 +369,19 @@ def hub_pull(work: str, group: str, name: str = "") -> str:
 
 
 @mcp.tool()
-def run_validate(work: str, run: str) -> dict[str, Any]:
-    """보내기 전 모양 검사 — 식별자 겹침 · 관계 행의 칸 · 확신도 · 출처 · 미해결."""
+def run_validate(work: str, run: str, ask_platform: bool = True) -> dict[str, Any]:
+    """보내기 전 검사 — 식별자 겹침 · 관계 행의 칸 · 확신도 · 출처 · 미해결.
+
+    `ask_platform` 이면(기본) **끝점이 풀리는지도 플랫폼에 묻는다** — 가리키는 것이 없거나
+    이름이 여럿과 맞는 것을 여기서 잡는다. 예전에는 미리 보기에서야 알았고, 미리 보기는
+    계획을 세우느라 몇 분이 걸린다. `SP_SERVER` · `SP_TOKEN` 이 없으면 모양만 본다.
+    """
     folder = _work(work)
-    ok, report = pipeline.cmd_validate(_run(folder, run))
+    server, token = "", ""
+    if ask_platform:
+        server = os.environ.get("SP_SERVER", "").strip()
+        token = os.environ.get("SP_TOKEN", "").strip()
+    ok, report = pipeline.cmd_validate(_run(folder, run), server=server, token=token)
     return {"ok": ok, "report": report}
 
 

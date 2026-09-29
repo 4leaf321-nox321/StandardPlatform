@@ -218,6 +218,12 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models      # 그 뒤는 여�
        "region": {"parser": "model_name", "slot": "region"},
        "revision_kind": {"parser": "model_name", "slot": "revision", "part": "kind"}
      }}
+  ],
+  "relations": [
+    {"relation": "tested_at", "type_slug": "plm_task",
+     "src": {"key_of": "plm_task"}, "dst": {"key_of": "plm_site"},
+     "evidence_note": {"value": "PLM 표"},
+     "properties": {"progress": {"column": "Test진행상태"}}}
   ]
 }
 ```
@@ -232,6 +238,11 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models      # 그 뒤는 여�
   | `{"key_of": "<type_slug>"}` | 그 타입의 식별자를 **같은 규칙으로** — 참조 칸에 쓴다. 따로 적으면 대문자 · 공백 처리가 어긋난다 |
   | `{"parser": "<이름>", "slot": "<조각>", "part": "kind"?}` | 해석기의 조각 값, `part: "kind"` 면 그 조각의 종류 이름 |
   | `{"value": ...}` | 고정값 |
+  | `{"collect": {...}}` | **여러 행의 값을 목록으로** — 같은 식별자가 여러 행에 나올 때 값이 갈리는 것이 **답인** 칸(별칭 여럿, 담당 여럿). 같은 값은 한 번, 순서는 나온 차례 |
+  | `{"join": {...}, "separator": "; "}` | 여러 행의 값을 **한 글로** 잇는다(줄마다 다른 메모) |
+
+  `collect` · `join` 이 없으면 값이 갈리는 것은 **미해결**이다 — 어느 쪽이 맞는지 도구가
+  모르기 때문이다. 갈려도 되는 칸은 그 둘로 적어 둔다.
 
   `column` 에 붙는 것: `upper`(대문자로) · `blank`(빈 칸으로 볼 값들) · `date`(`YYYY-MM-DD` ·
   `.` · `/` → ISO, 아니면 비우고 보고서에) · `map`(값 → 값. `<date>` 는 날짜 모양, `<blank>` 는 빈 칸.
@@ -246,6 +257,24 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models      # 그 뒤는 여�
   - `on_missing`: `blank`(기본 — 비워 넣고 보고서에) · `unresolved`(미해결로 올려 사람에게) · `keep`
     (그대로 보냄 — 플랫폼이 거절하면 묶음 전체가 막힌다).
   - 보고서 `[참조 대조]` 에 그대로 · 대소문자 · 앞부분 · 여러 개 · 없음의 건수와 못 맞춘 것의 가린 패턴.
+
+### 선(관계) — `relations`
+
+객체만 만들면 관계는 사람이 같은 원천을 **두 번 읽어** 따로 파일을 만들어야 했다.
+
+| 칸 | 뜻 |
+| --- | --- |
+| `relation` | 관계 종류 slug |
+| `type_slug` | **출발 타입**(파일이 그 타입으로 나간다). `types` 에 있어야 한다 |
+| `src` · `dst` | 끝점 — 칸 하나를 얻는 법 넷을 그대로 쓴다(`key_of` 를 주로 쓴다) |
+| `evidence_note` | 선택 — **왜 이었나.** 고정값(`{"value": …}`)이나 열 |
+| `properties` | 선택 — 선에 붙는 값(근거 건수처럼). 모양은 플랫폼이 관계 종류의 정의로 본다 |
+
+- **세 끝(출발 · 종류 · 도착)이 같으면 한 줄로 모은다** — 한 행에 여러 타입이 섞인 표에서는
+  같은 선이 수십 행에 되풀이된다.
+- 붙는 값이 행마다 다르면 **짐작하지 않고** `unresolved.json` 에 올린다(객체 칸과 같은 규칙).
+  그 선은 값 없이 나간다 — 플랫폼의 빈 칸은 「안 건드림」 이라 옛 값이 남는다.
+- 끝점이 빈 행은 선을 만들지 않는다(보고서에 건수).
 
 ### 해석기 — 이름에 박힌 조각
 

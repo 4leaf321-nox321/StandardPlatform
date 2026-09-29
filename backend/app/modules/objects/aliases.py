@@ -9,20 +9,44 @@ from __future__ import annotations
 
 import uuid
 from collections import defaultdict
+from collections.abc import Sequence
+from dataclasses import dataclass
+from datetime import UTC, datetime
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
+from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectAlias, ObjectInstance
 from app.modules.ontology.models import ObjectType
 from app.modules.ontology.services import InvalidValue
-from app.shared.errors import code
+from app.shared import audit
+from app.shared.errors import AppError, code
+from app.shared.permissions import require_owner_edit, visible_owner_clause
 from app.shared.text import compare_key
 
 HUMAN = "alias"
 
 MAX_VALUE = 200
 """별칭 하나의 글자 수 — `object_aliases.value` 칸의 크기다."""
+
+
+@dataclass(frozen=True)
+class Incoming:
+    """붙일 별칭 하나 — **어디서 왔고 무슨 메모가 붙나.**
+
+    글자만 받으면 수천 개가 붙은 뒤에 「이건 어디서 온 이름이냐」 를 물을 자리가 없다.
+    그때 사람은 지워도 되는지 판단할 수 없어서 아무것도 안 지운다.
+    """
+
+    value: str
+    source: str = ""
+    note: str = ""
+
+
+def incoming(values: Sequence[str | Incoming]) -> list[Incoming]:
+    """글자와 `Incoming` 이 섞여 와도 하나로 — 부르는 쪽이 둘을 가르지 않게."""
+    return [one if isinstance(one, Incoming) else Incoming(value=str(one)) for one in values]
 
 
 def source_kind(slug: str) -> str:
@@ -148,9 +172,10 @@ def set_human(
     db: Session,
     row: ObjectInstance,
     object_type: ObjectType,
-    values: list[str],
+    values: Sequence[str | Incoming],
     *,
     mode: str = "replace",
+    verified: User | None = None,
 ) -> tuple[list[str], list[str]]:
     """사람이 붙인 별칭. **부르는 쪽이 커밋하고 감사 기록을 남긴다.** (전, 후) 를 돌려준다.
 
@@ -159,7 +184,9 @@ def set_human(
     「그 이름으로 검색이 안 된다」 로 만난다(실측). `replace` 는 파일을 정본으로 보는 자리
     (허브 → 쌍둥이)에서 쓴다 — 허브에서 뺀 별칭이 받는 쪽에 남으면 둘이 갈린다.
     """
-    wanted, long = split_long(clean(values))
+    asked = incoming(values)
+    meta = {compare_key(one.value): one for one in asked}
+    wanted, long = split_long(clean([one.value for one in asked]))
     if long:
         # 손으로 넣는 자리다 — 사람이 바로 고칠 수 있으니 자르지 말고 거절한다.
         raise InvalidValue(
@@ -186,18 +213,36 @@ def set_human(
         before_norms = {one.norm for one in current}
         wanted = [*before, *(one for one in wanted if compare_key(one) not in before_norms)]
     have = {one.norm for one in current}
+    now = datetime.now(UTC)
     for value in wanted:
         norm = compare_key(value)
-        if norm not in have:
-            db.add(
-                ObjectAlias(
-                    object_id=row.id,
-                    type_id=object_type.id,
-                    kind=HUMAN,
-                    value=value,
-                    norm=norm,
-                )
+        if norm in have:
+            # 이미 있는 것에 **출처 · 메모만 채운다** — 비어 있을 때만(사람이 적은 것을
+            # 기계가 덮어쓰지 않게).
+            found = next((one for one in current if one.norm == norm), None)
+            asked_one = meta.get(norm)
+            if found is not None and asked_one is not None:
+                if asked_one.source and not found.source:
+                    found.source = asked_one.source[:80]
+                if asked_one.note and not found.note:
+                    found.note = asked_one.note[:200]
+            continue
+        asked_one = meta.get(norm) or Incoming(value=value)
+        db.add(
+            ObjectAlias(
+                object_id=row.id,
+                type_id=object_type.id,
+                kind=HUMAN,
+                value=value,
+                norm=norm,
+                source=asked_one.source[:80],
+                note=asked_one.note[:200],
+                # **사람이 화면에서 붙인 것은 곧 확인한 것이다.** 기계가 붙인 것만 검수
+                # 대기로 남는다 — 그것을 가르지 않으면 목록이 곧 수천 줄이 되어 안 읽힌다.
+                verified_by_id=verified.id if verified is not None else None,
+                verified_at=now if verified is not None else None,
             )
+        )
     db.flush()
     return before, wanted
 
@@ -220,6 +265,103 @@ def set_external(
             object_id=row.id, type_id=object_type.id, kind=kind, value=value[:200], norm=norm
         )
     )
+
+
+def pending(
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    *,
+    limit: int,
+    offset: int,
+) -> tuple[list[tuple[ObjectAlias, str, str | None]], int]:
+    """검수 대기 별칭 — `(별칭, 객체 이름, 객체 식별자)` 와 전체 수.
+
+    **사람 별칭만** 본다(외부 식별자는 동기화가 관리한다). 오래된 것부터 — 먼저 붙은 것이
+    먼저 쓰인다.
+    """
+    base = (
+        select(ObjectAlias, ObjectInstance.label, ObjectInstance.key)
+        .join(ObjectInstance, ObjectInstance.id == ObjectAlias.object_id)
+        .where(
+            ObjectAlias.type_id == object_type.id,
+            ObjectAlias.kind == HUMAN,
+            ObjectAlias.verified_at.is_(None),
+            ObjectInstance.deleted_at.is_(None),
+            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+        )
+    )
+    total = db.scalar(select(func.count()).select_from(base.subquery())) or 0
+    rows = db.execute(
+        base.order_by(ObjectAlias.created_at, ObjectAlias.id).limit(limit).offset(offset)
+    ).all()
+    return [(one, label, key) for one, label, key in rows], total
+
+
+def review(
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    ids: list[uuid.UUID],
+    *,
+    approve: bool,
+) -> tuple[int, list[str]]:
+    """고른 별칭을 확인하거나 지운다 — `(한 것, 못 한 줄의 이유)`.
+
+    **부르는 쪽이 커밋한다.** 못 한 것은 그 줄만 남긴다(남의 부서 것, 이미 없는 것) —
+    하나가 막혀 나머지가 안 되면 사람은 그 목록을 다시 안 본다.
+    """
+    if not ids:
+        return 0, []
+    rows = db.execute(
+        select(ObjectAlias, ObjectInstance)
+        .join(ObjectInstance, ObjectInstance.id == ObjectAlias.object_id)
+        .where(
+            ObjectAlias.id.in_(ids),
+            ObjectAlias.type_id == object_type.id,
+            ObjectAlias.kind == HUMAN,
+        )
+    ).all()
+    found = {one.id for one, _ in rows}
+    refused = [f"{one} 은 이미 없습니다" for one in ids if one not in found]
+    done = 0
+    now = datetime.now(UTC)
+    for alias_row, owner in rows:
+        try:
+            require_owner_edit(
+                db,
+                user,
+                owner.owner_workspace_id,
+                what="객체",
+                code_value=code("OBJECTS", 12),
+            )
+        except AppError as denied:
+            # **그 줄만 막는다** — 하나가 막혀 나머지가 안 되면 사람은 목록을 다시 안 본다.
+            refused.append(f"「{alias_row.value}」: {denied.message}")
+            continue
+        if approve:
+            alias_row.verified_by_id = user.id
+            alias_row.verified_at = now
+        else:
+            db.delete(alias_row)
+        done += 1
+        audit.record(
+            db,
+            action="object.update",
+            actor=user,
+            target_table="objects",
+            target_id=owner.id,
+            target_label=f"{object_type.slug}:{owner.label}",
+            workspace_id=owner.owner_workspace_id,
+            changes={
+                "aliases": {
+                    "before": alias_row.value,
+                    "after": alias_row.value if approve else None,
+                }
+            },
+            reason="별칭 검수 — 확인" if approve else "별칭 검수 — 지움",
+        )
+    return done, refused
 
 
 def lookup(
