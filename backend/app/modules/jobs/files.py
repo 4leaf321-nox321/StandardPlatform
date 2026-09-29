@@ -15,6 +15,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.modules.jobs.models import Job, JobFile
+from app.modules.objects.models import ObjectRelationTombstone
 from app.shared.errors import AppError, code
 
 
@@ -47,6 +48,24 @@ def purge_expired(db: Session) -> int:
     """기한 지난 파일을 지운다. 작업 행의 참조는 SET NULL — 작업 기록은 남고 파일만 없다."""
     now = datetime.now(UTC)
     gone = db.execute(delete(JobFile).where(JobFile.expires_at < now).returning(JobFile.id))
+    count = len(gone.all())
+    db.commit()
+    return count
+
+
+def purge_old_tombstones(db: Session) -> int:
+    """기한 지난 **끊긴 선의 무덤**을 지운다.
+
+    무덤은 영영 쌓이고 내보내기는 그 이력을 통째로 싣는다 — 몇 해가 지나면 봉투의 대부분이
+    「없어진 것」 이 된다. 받는 쪽이 이 기간보다 오래 잠들어 있었다면 무덤으로 따라잡을 게
+    아니라 **처음부터 다시 받아야** 한다.
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=get_settings().tombstone_ttl_days)
+    gone = db.execute(
+        delete(ObjectRelationTombstone)
+        .where(ObjectRelationTombstone.removed_at < cutoff)
+        .returning(ObjectRelationTombstone.id)
+    )
     count = len(gone.all())
     db.commit()
     return count

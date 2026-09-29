@@ -45,10 +45,18 @@ def import_bundle(
     파일 · 같은 지문). `apply=true` 로 곧장 보내도 된다 — 정제 도구가 제 지문으로 미리 본
     것과 견준 뒤 그렇게 한다. **적용은 전부 아니면 무.**
     """
-    if payload.ontology is None and not payload.objects and not payload.relations:
+    graves = payload.tombstones
+    has_graves = graves is not None and bool(graves.objects or graves.relations)
+    if (
+        payload.ontology is None
+        and not payload.objects
+        and not payload.relations
+        and not has_graves
+    ):
         raise Conflict(
             code("BUNDLES", 2),
-            "묶음이 비어 있습니다 — ontology · objects · relations 중 하나는 있어야 합니다.",
+            "묶음이 비어 있습니다 — ontology · objects · relations · tombstones 중 "
+            "하나는 있어야 합니다.",
         )
     granted: list[str] | None = getattr(request.state, "token_scopes", None)
     if payload.ontology is not None and granted is not None and ONTOLOGY_SCOPE not in granted:
@@ -89,6 +97,11 @@ class ExportRequest(BaseModel):
     groups: list[str] = Field(
         default_factory=list,
         description='여럿을 한 봉투로 — `["plm", "core"]`. `group` 과 함께 적어도 된다',
+    )
+    since: str | None = Field(
+        default=None,
+        description="**사라진 것**을 이 시각 뒤의 것만 싣는다(지난 봉투의 `exported_at`). "
+        "살아 있는 것은 늘 전량이다",
     )
     allow_outside_refs: bool = Field(
         default=False,
@@ -137,6 +150,7 @@ def export_bundle(
             "group": wanted[0],
             "groups": wanted,
             "allow_outside_refs": payload.allow_outside_refs,
+            "since": payload.since,
         },
         user=user,
         workspace_id=None,

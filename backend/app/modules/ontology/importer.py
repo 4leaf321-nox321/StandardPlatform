@@ -45,6 +45,7 @@ from app.modules.ontology.models import (
     RelationType,
 )
 from app.modules.ontology.services import require_key, require_slug, system_source_error
+from app.shared import audit
 
 #: 스키마가 담을 수 있는 것. **모르는 것이 오면 거절한다** — 조용히 무시하면
 #: 보낸 쪽은 적용된 줄 안다.
@@ -573,7 +574,9 @@ def _assign(
         row.sort_order = position * 10
 
 
-def apply(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
+def apply(
+    db: Session, payload: dict[str, Any], *, source: str = "", actor: User | None = None
+) -> Plan:
     """**한 트랜잭션으로** 적용한다. 부르는 쪽이 커밋한다.
 
     중간에 실패하면 반쯤 만들어진 온톨로지가 남지 않는다 — 그것이 이 함수가
@@ -602,7 +605,22 @@ def apply(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
         if object_type is None:
             object_type = ObjectType(slug=slug, label=one.get("label", slug))
             db.add(object_type)
+        core_was = bool(object_type.core)
         _assign(object_type, one, TYPE_FIELDS, position=index if fresh else None)
+        if "core" in one and bool(object_type.core) != core_was:
+            # **공개를 켜고 끈 일은 화면과 같은 기록을 남긴다**(`ontology.type.core`).
+            # 파일로 켠 것만 기록이 없으면, 「언제 누가 이 타입을 밖에 열었나」 를 물었을 때
+            # 어떤 길로 열렸느냐에 따라 답이 있기도 없기도 하다.
+            audit.record(
+                db,
+                action="ontology.type.core",
+                actor=actor,
+                target_table="object_types",
+                target_id=object_type.id,
+                target_label=slug,
+                changes={"core": bool(object_type.core), "was": core_was},
+                reason="정의 가져오기",
+            )
         if source:
             object_type.managed_by = source
         if "nav_group_slug" in one:

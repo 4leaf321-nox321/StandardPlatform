@@ -103,6 +103,9 @@ class CoreRowOut(BaseModel):
     """참이면 이 시스템에서 사라졌다 — 받는 쪽은 자기 것을 비활성으로 둔다."""
     merged_into: str | None = None
     """다른 것에 합쳐져서 사라졌으면 이긴 쪽의 `key`. **받는 쪽이 제 참조를 옮길 수 있다.**"""
+    renamed_from: str | None = None
+    """식별자가 바뀌었으면 **옛 식별자**. 받는 쪽은 이 값으로 제가 가진 행을 찾아 키를
+    옮긴다 — 없으면 새 식별자가 처음 보는 것이라 같은 것이 둘이 된다."""
     properties: dict[str, Any] = Field(default_factory=dict)
     """타입이 정한 칸. 참조는 상대의 `key`, 여러 값은 배열, 날짜는 `YYYY-MM-DD`,
     일시는 `...Z`. **빈 값은 키를 뺀다.**"""

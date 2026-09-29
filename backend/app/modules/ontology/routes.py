@@ -1375,7 +1375,9 @@ def import_schema(
     한 번 보낸 날 그 타입의 객체가 통째로 갈 곳을 잃는다.
     """
     try:
-        prepared = importer.plan(db, payload) if dry_run else importer.apply(db, payload)
+        prepared = (
+            importer.plan(db, payload) if dry_run else importer.apply(db, payload, actor=user)
+        )
     except ValueError as caught:
         # **모르는 항목은 거절한다.** 조용히 무시하면 보낸 쪽은 적용된 줄 안다.
         raise Conflict(code("ONTOLOGY", 70), str(caught)) from None
@@ -1389,7 +1391,7 @@ def import_schema(
     # 되돌려 주지는 않는다.
     db.rollback()
     snapshot = _snapshot(db, user, reason="가져오기")
-    prepared = importer.apply(db, payload)
+    prepared = importer.apply(db, payload, actor=user)
     _audit(
         db,
         user,

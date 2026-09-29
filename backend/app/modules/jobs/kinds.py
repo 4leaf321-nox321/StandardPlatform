@@ -280,8 +280,23 @@ def bundle_export(work: Work) -> dict[str, Any]:
     if not wanted:
         wanted = [str(work.params.get("group") or "")]
     work.progress("내보내기", 0, 0)
+    raw_since = str(work.params.get("since") or "").strip()
+    since = None
+    if raw_since:
+        try:
+            since = datetime.fromisoformat(raw_since.replace("Z", "+00:00"))
+        except ValueError:
+            raise Conflict(
+                code("BUNDLES", 23),
+                f"since 는 지난 봉투의 exported_at 을 그대로 넣습니다: {raw_since!r}",
+            ) from None
+        if since.tzinfo is None:
+            since = since.replace(tzinfo=UTC)
     body = bundle_export_service.export_group(
-        work.db, wanted, allow_outside_refs=bool(work.params.get("allow_outside_refs"))
+        work.db,
+        wanted,
+        allow_outside_refs=bool(work.params.get("allow_outside_refs")),
+        since=since,
     )
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
     work.emit(

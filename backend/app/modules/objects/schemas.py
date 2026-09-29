@@ -229,9 +229,10 @@ class ImportRowsRequest(BaseModel):
     aliases_mode: Literal["add", "replace"] = "add"
     """별칭 칸을 **더할지 맞출지.** 기본은 더하기 — 다시 적재할 때 사람이 화면에서 붙인
     별칭이 사라지지 않게. `replace` 는 파일을 정본으로 볼 때만(허브 → 쌍둥이)."""
-    relations_mode: Literal["add", "replace"] = "add"
-    """관계 파일을 **더할지 맞출지.** `replace` 면 파일에 나온 (출발 객체 · 관계 종류)
-    범위에서 파일에 없는 선이 계획에 「끊음」 으로 올라온다."""
+    relations_mode: Literal["add", "replace", "replace_type"] = "add"
+    """관계 파일을 **더할지 맞출지.** `replace` 는 파일에 나온 (출발 객체 · 관계 종류)
+    범위에서, `replace_type` 은 (출발 타입 · 관계 종류) **전체**에서 파일에 없는 선을
+    계획에 「끊음」 으로 올린다. 넓은 쪽은 파일이 그 타입의 전부일 때만 쓴다."""
 
 
 # --- 별칭 검수 ---------------------------------------------------------------

@@ -27,7 +27,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import false as sa_false
-from sqlalchemy import func, select
+from sqlalchemy import func, literal, select, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -64,6 +64,41 @@ MAX_LIMIT = 2_000
 #: 이 창구를 읽는 범위. 좁은 것과 넓은 것 둘 다 읽을 수 있으므로 둘 다 센다.
 CORE_SCOPE = "core:read"
 READ_SCOPE = "read"
+
+
+def watermark(db: Session) -> datetime:
+    """밖에 주는 「여기까지 봤다」(`as_of`) — **아직 안 끝난 적재보다 앞서지 않는다.**
+
+    ⚠️ 왜 그냥 지금이 아닌가: `objects.updated_at` 은 `now()`, 곧 **트랜잭션이 시작한**
+       시각이다. 2만 줄 적재가 T0 에 시작해 T2 에 끝나면 그 행들의 시각은 전부 T0 다.
+       그 사이(T1)에 받아 간 쪽은 **그 적재를 못 보고** `as_of=T1` 을 적어 둔다 — 다음
+       호출은 `updated_at > T1` 이라, **그 적재분을 영영 못 받는다**(0.4.16 부터 있던 구멍).
+
+    그래서 지금 도는 트랜잭션 중 **가장 먼저 시작한 것보다 한 틱 앞**을 준다. 받는 쪽은
+    같은 행을 한 번 더 받을 뿐이고(덮어쓰기라 해가 없다), 잃지는 않는다.
+
+    붙잡힌 트랜잭션 하나가 이 시각을 영영 묶어 두지 않게 `core_watermark_floor_seconds`
+    보다 오래된 것은 셈에서 뺀다 — 그런 세션은 운영이 따로 볼 문제다.
+    """
+    floor = get_settings().core_watermark_floor_seconds
+    found = db.execute(
+        text(
+            """
+            SELECT least(
+              clock_timestamp(),
+              coalesce((
+                SELECT min(xact_start) - interval '1 microsecond'
+                  FROM pg_stat_activity
+                 WHERE datname = current_database()
+                   AND xact_start IS NOT NULL
+                   AND xact_start > clock_timestamp() - make_interval(secs => :floor)
+              ), clock_timestamp())
+            )
+            """
+        ),
+        {"floor": float(floor)},
+    ).scalar()
+    return found if isinstance(found, datetime) else datetime.now(UTC)
 
 
 def _stamp(when: datetime | None) -> str | None:
@@ -280,10 +315,8 @@ def page(
     limit: int,
 ) -> CorePageOut:
     """한 쪽 — 바뀐 것과 **사라진 것**을 함께."""
-    # **시계는 DB 것을 쓴다.** `updated_at` 은 DB 가 찍고(`now()`), `as_of` 를 앱 프로세스의
-    # 시계로 찍으면 둘이 미세하게 어긋난다 — DB 가 한 틱 앞서면 방금 받은 행이 다음 호출에
-    # 「그 뒤에 바뀐 것」 으로 또 온다(시험이 간헐로 잡았다). 같은 시계에서 재야 경계가 선다.
-    now = db.scalar(select(func.clock_timestamp())) or datetime.now(UTC)
+    # **시계는 DB 것을 쓰고, 도는 적재보다 앞서지 않는다**(`watermark` 의 설명).
+    now = watermark(db)
     defs = _shown_defs(db, object_type)
     stmt = select(ObjectInstance).where(
         ObjectInstance.type_id == object_type.id,
@@ -329,6 +362,7 @@ def page(
             updated_at=_stamp(one.updated_at) or "",
             deleted=one.deleted_at is not None,
             merged_into=merged_keys.get(one.merged_into_id) if one.merged_into_id else None,
+            renamed_from=one.renamed_from or None,
             properties=(
                 {}
                 if one.deleted_at is not None
@@ -411,7 +445,7 @@ def relations(
     (`object_relation_tombstones`)에서 온다 — 선은 행을 정말 지우기 때문이다. 둘을 시각으로
     한 줄에 세워 보내므로, 받는 쪽은 **온 차례대로 적용하면** 마지막 상태가 맞는다.
     """
-    now = db.scalar(select(func.clock_timestamp())) or datetime.now(UTC)
+    now = watermark(db)
     open_slugs = {one.slug for one in core_types(db)}
     kinds = open_relation_kinds(db, object_type, open_slugs)
     if not kinds:
@@ -423,7 +457,11 @@ def relations(
     src = ObjectInstance
     # 출발점이 이 타입인 것만. 보이는 부서의 것만(객체 쪽과 같은 규칙).
     live = (
-        select(ObjectRelation)
+        select(
+            ObjectRelation.id.label("id"),
+            ObjectRelation.updated_at.label("at"),
+            literal(False).label("gone"),
+        )
         .join(src, src.id == ObjectRelation.src_object_id)
         .where(
             ObjectRelation.relation.in_(slugs),
@@ -434,18 +472,31 @@ def relations(
     )
     if since is not None:
         live = live.where(ObjectRelation.updated_at > since)
-    graves = select(ObjectRelationTombstone).where(ObjectRelationTombstone.relation.in_(slugs))
+    # **무덤도 출발 타입으로 거른다.** 안 그러면 같은 관계 종류를 쓰는 다른 타입의 끊긴 선이
+    # 섞여 오고, 받는 쪽은 제 것이 아닌 선을 끊으려다 「없다」 만 본다.
+    graves = (
+        select(
+            ObjectRelationTombstone.id.label("id"),
+            ObjectRelationTombstone.removed_at.label("at"),
+            literal(True).label("gone"),
+        )
+        .join(src, src.id == ObjectRelationTombstone.src_object_id)
+        .where(
+            ObjectRelationTombstone.relation.in_(slugs),
+            src.type_id == object_type.id,
+            visible,
+        )
+    )
     if since is not None:
         graves = graves.where(ObjectRelationTombstone.removed_at > since)
     else:
         # 처음 받는 쪽에 무덤을 보내지 않는다 — 없던 선을 끊으라고 할 이유가 없다.
         graves = graves.where(sa_false())
 
-    # 시각 · id 로 한 줄에 세운다. 커서는 그 둘이다(객체 쪽과 같은 모양).
-    marks: list[tuple[datetime, uuid.UUID, bool, Any]] = [
-        (one.updated_at, one.id, False, one) for one in db.scalars(live)
-    ] + [(one.removed_at, one.id, True, one) for one in db.scalars(graves)]
-    marks.sort(key=lambda one: (one[0], one[1]))
+    # **쪽 넘김은 SQL 이 한다.** 예전에는 둘을 전부 읽어 파이썬에서 세웠다 — 쪽을 넘길
+    # 때마다 처음부터 다시 읽는 셈이라, 선이 몇만이면 마지막 쪽이 가장 느렸다.
+    stream = live.union_all(graves).subquery()
+    ordered = select(stream).order_by(stream.c.at, stream.c.id)
     if cursor:
         at, _, tail = cursor.partition("|")
         try:
@@ -455,9 +506,41 @@ def relations(
             raise NotFound(
                 code("CORE", 2), "커서를 읽을 수 없습니다. 처음부터 받으세요."
             ) from None
-        marks = [one for one in marks if (one[0], one[1]) > (mark, last)]
-    more = len(marks) > limit
-    marks = marks[:limit]
+        ordered = ordered.where(
+            (stream.c.at > mark) | ((stream.c.at == mark) & (stream.c.id > last))
+        )
+    picked = db.execute(ordered.limit(limit + 1)).all()
+    more = len(picked) > limit
+    picked = picked[:limit]
+
+    rows_by_id: dict[uuid.UUID, Any] = {}
+    live_ids = [one.id for one in picked if not one.gone]
+    grave_ids = [one.id for one in picked if one.gone]
+    if live_ids:
+        rows_by_id.update(
+            {
+                one.id: one
+                for one in db.scalars(
+                    select(ObjectRelation).where(ObjectRelation.id.in_(live_ids))
+                )
+            }
+        )
+    if grave_ids:
+        rows_by_id.update(
+            {
+                one.id: one
+                for one in db.scalars(
+                    select(ObjectRelationTombstone).where(
+                        ObjectRelationTombstone.id.in_(grave_ids)
+                    )
+                )
+            }
+        )
+    marks: list[tuple[datetime, uuid.UUID, bool, Any]] = [
+        (one.at, one.id, bool(one.gone), rows_by_id[one.id])
+        for one in picked
+        if one.id in rows_by_id
+    ]
 
     wanted: set[uuid.UUID] = set()
     for _, _, _, row in marks:

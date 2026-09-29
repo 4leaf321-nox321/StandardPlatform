@@ -196,6 +196,10 @@ def _register_extensions() -> None:
     # 받기」 다 — 받아만 가는 쪽(허브에서 정의를 받는 쌍둥이 · 바깥 시스템)에 쓰기 토큰을
     # 주게 하지 않는다. 실측: 쌍둥이 리허설에서 `read` 토큰이 묶음 내보내기에 403 을 받았다.
     scopes.register_read_only_post_suffix("/export")
+    # **이름 풀기도 읽기다.** POST 인 이유는 이름을 오백 개까지 담기 때문이고(주소에 넣을 수
+    # 없다), 하는 일은 「이 이름이 어느 것인지 묻기」 다. 쓰기로 두면 **보내기 전에 미리
+    # 물어보는** 도구가 쓰기 토큰을 들어야 한다 — 그 토큰은 실수로 넣을 수도 있다.
+    scopes.register_read_only_post_suffix("/resolve-many")
     # **바깥 시스템에 주는 토큰은 코어만 읽는다.** `read` 를 주면 그 계정이 볼 수 있는 전부가
     # 나간다 — 연동 하나 때문에 사내 전체를 여는 일이 된다.
     scopes.register_read_scope("/api/core", coreapi_routes.SCOPE)

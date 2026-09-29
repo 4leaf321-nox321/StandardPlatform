@@ -30,7 +30,7 @@ class RelationBatchIn(BaseModel):
     type_slug: str = Field(min_length=1)
     """출발 타입. 행은 `src · relation · dst · evidence_note` 와 그 종류의 속성."""
     rows: list[dict[str, Any]]
-    mode: Literal["add", "replace"] = "add"
+    mode: Literal["add", "replace", "replace_type"] = "add"
     """`replace` 면 이 묶음에 나온 (출발 객체 · 관계 종류) 범위에서 **오지 않은 선을 끊는다.**
     허브 내보내기가 이것을 적는다 — 허브에서 끊은 선이 받는 쪽에 남으면 둘이 갈린다."""
 

@@ -15,6 +15,12 @@
 - 선은 **끊는다.** 선은 상태가 아니라 있음/없음이다.
 
 계획은 다른 단계와 같은 모양(`bulk.Plan`)으로 나간다 — 한 표로 읽는다.
+
+## 누가 할 수 있나
+
+**허브에서 받은 묶음**(`source`)만 여기 온다 — 그 묶음은 시스템 관리자만 넣는다
+(`bundles/services.py` 가 앞에서 막는다). 그리고 줄마다 **그 객체를 고칠 수 있는지**
+다시 본다: 앞의 문이 언젠가 헐거워져도 남의 부서 것이 조용히 사용 중지되지 않게.
 """
 
 from __future__ import annotations
@@ -30,9 +36,31 @@ from app.modules.bundles.schemas import (
 )
 from app.modules.objects import bulk, lifecycle
 from app.modules.objects.models import ObjectInstance, ObjectRelation
+from app.modules.ontology import managed
 from app.modules.ontology.models import ObjectType
 from app.shared import audit
-from app.shared.errors import AppError
+from app.shared.errors import AppError, code
+from app.shared.permissions import require_owner_edit
+
+
+def _refusal(
+    db: Session, user: User, object_type: ObjectType, row: ObjectInstance, source: str
+) -> str:
+    """이 객체를 여기서 고칠 수 있나 — 못 하면 그 까닭(빈 글이면 된다).
+
+    **줄마다 본다.** 허브 묶음은 시스템 관리자만 넣지만, 그 문 하나에 기대면 문이 헐거워진
+    날 남의 부서 객체가 조용히 사용 중지된다 — 그 사실은 아무 데도 안 적힌다.
+    """
+    refused = managed.objects_refusal(object_type, source=source, what="고치지")
+    if refused:
+        return refused
+    try:
+        require_owner_edit(
+            db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 12)
+        )
+    except AppError as denied:
+        return denied.message
+    return ""
 
 
 def run(
@@ -40,6 +68,7 @@ def run(
     user: User,
     data: TombstonesIn,
     *,
+    source: str = "",
     apply: bool = False,
 ) -> bulk.Plan:
     """무덤을 계획으로 — `apply` 면 그대로 적용한다.
@@ -56,7 +85,9 @@ def run(
         if object_type is None:
             plan.rows.append(_no_type(index, grave.key, grave.type_slug))
             continue
-        plan.rows.append(_object_row(db, user, object_type, grave, index, apply=apply))
+        plan.rows.append(
+            _object_row(db, user, object_type, grave, index, source=source, apply=apply)
+        )
     for edge in data.relations:
         index += 1
         object_type = types.get(edge.type_slug)
@@ -64,7 +95,9 @@ def run(
         if object_type is None:
             plan.rows.append(_no_type(index, label, edge.type_slug))
             continue
-        plan.rows.append(_relation_row(db, user, object_type, edge, index, apply=apply))
+        plan.rows.append(
+            _relation_row(db, user, object_type, edge, index, source=source, apply=apply)
+        )
     return plan
 
 
@@ -94,6 +127,7 @@ def _object_row(
     grave: ObjectTombstoneIn,
     index: int,
     *,
+    source: str,
     apply: bool,
 ) -> bulk.RowPlan:
     row = _find(db, object_type, grave.key)
@@ -102,6 +136,9 @@ def _object_row(
         return bulk.RowPlan(
             row=index, action="unchanged", label=grave.key, message="이미 없습니다"
         )
+    refused = _refusal(db, user, object_type, row, source)
+    if refused:
+        return bulk.RowPlan(row=index, action="error", label=grave.key, message=refused)
     if grave.merged_into:
         winner = _find(db, object_type, grave.merged_into)
         if winner is None:
@@ -161,6 +198,7 @@ def _relation_row(
     grave: RelationTombstoneIn,
     index: int,
     *,
+    source: str,
     apply: bool,
 ) -> bulk.RowPlan:
     label = f"{grave.src} -{grave.relation}-> {grave.dst}"
@@ -169,6 +207,9 @@ def _relation_row(
         return bulk.RowPlan(
             row=index, action="unchanged", label=label, message="출발점이 이미 없습니다"
         )
+    refused = _refusal(db, user, object_type, src, source)
+    if refused:
+        return bulk.RowPlan(row=index, action="error", label=label, message=refused)
     found: ObjectRelation | None = None
     for one in db.scalars(
         select(ObjectRelation).where(

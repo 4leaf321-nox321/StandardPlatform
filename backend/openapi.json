@@ -11387,7 +11387,7 @@
           },
           "relations_mode": {
             "type": "string",
-            "pattern": "^(add|replace)$",
+            "pattern": "^(add|replace|replace_type)$",
             "title": "Relations Mode",
             "default": "add"
           }
@@ -12666,6 +12666,17 @@
             ],
             "title": "Merged Into"
           },
+          "renamed_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Renamed From"
+          },
           "properties": {
             "additionalProperties": true,
             "type": "object",
@@ -13769,6 +13780,18 @@
             "title": "Groups",
             "description": "여럿을 한 봉투로 — `[\"plm\", \"core\"]`. `group` 과 함께 적어도 된다"
           },
+          "since": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Since",
+            "description": "**사라진 것**을 이 시각 뒤의 것만 싣는다(지난 봉투의 `exported_at`). 살아 있는 것은 늘 전량이다"
+          },
           "allow_outside_refs": {
             "type": "boolean",
             "title": "Allow Outside Refs",
@@ -14324,7 +14347,8 @@
             "type": "string",
             "enum": [
               "add",
-              "replace"
+              "replace",
+              "replace_type"
             ],
             "title": "Relations Mode",
             "default": "add"
@@ -18322,7 +18346,8 @@
             "type": "string",
             "enum": [
               "add",
-              "replace"
+              "replace",
+              "replace_type"
             ],
             "title": "Mode",
             "default": "add"

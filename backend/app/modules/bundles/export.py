@@ -34,6 +34,7 @@ from sqlalchemy.orm import Session
 from app.modules.objects import aliases
 from app.modules.objects.bulk import MAX_ROWS, relation_defs
 from app.modules.objects.models import (
+    ObjectAlias,
     ObjectInstance,
     ObjectRelation,
     ObjectRelationTombstone,
@@ -47,13 +48,21 @@ FORMAT = "sp-bundle/1"
 
 
 def export_group(
-    db: Session, group_slug: str | list[str], *, allow_outside_refs: bool = False
+    db: Session,
+    group_slug: str | list[str],
+    *,
+    allow_outside_refs: bool = False,
+    since: datetime | None = None,
 ) -> dict[str, Any]:
     """고른 묶음(하나 또는 여럿)을 한 봉투로.
 
     `allow_outside_refs` 는 **밖을 가리키는 참조를 막지 않는다** — 받는 쪽이 그 타입을 이미
     다른 묶음으로 받아 뒀을 때 쓴다. 기본은 막는다: 없는 타입을 가리키면 받는 쪽에서 묶음
     **전체**가 거절되고(전부 아니면 무), 그때 사람은 왜 아무것도 안 들어갔는지 모른다.
+
+    `since` 는 **사라진 것**에만 걸린다 — 그 시각 뒤에 지워진 것만 싣는다. 무덤은 쌓이기만
+    하므로, 안 자르면 몇 해가 지난 뒤 봉투의 대부분이 「없어진 것」 이 된다. 살아 있는 것은
+    늘 전량이다(받는 쪽이 그것으로 제 상태를 맞춘다).
     """
     wanted = [group_slug] if isinstance(group_slug, str) else list(group_slug)
     if not wanted:
@@ -128,7 +137,10 @@ def export_group(
         )
     )
     names = {row.id: row.key or row.label for row in rows}
-    human = aliases.human_of(db, [row.id for row in rows])
+    human = {
+        object_id: [one for one in found if one.kind == aliases.HUMAN]
+        for object_id, found in aliases.of(db, [row.id for row in rows]).items()
+    }
     warnings: list[str] = []
     if outside:
         warnings.append(
@@ -168,10 +180,22 @@ def export_group(
                 )
 
     kind_slugs = [one["slug"] for one in relation_types]
-    tombstones = _tombstones(db, type_of, kind_slugs)
     type_by_object = {row.id: type_of[row.type_id].slug for row in rows}
     relations = _relations(
         db, [one["slug"] for one in relation_types], type_by_object, names, warnings
+    )
+    # **살아 있는 것과 겹치는 무덤은 빼고 보낸다** — 아래에서 왜 그런지 적는다.
+    tombstones = _tombstones(
+        db,
+        type_of,
+        kind_slugs,
+        alive_keys={(type_of[row.type_id].slug, row.key or row.label) for row in rows},
+        alive_edges={
+            (batch["type_slug"], str(one["src"]), str(one["relation"]), str(one["dst"]))
+            for batch in relations
+            for one in batch["rows"]
+        },
+        since=since,
     )
 
     return {
@@ -195,23 +219,31 @@ def export_group(
 
 
 def _tombstones(
-    db: Session, type_of: dict[uuid.UUID, ObjectType], kind_slugs: list[str]
+    db: Session,
+    type_of: dict[uuid.UUID, ObjectType],
+    kind_slugs: list[str],
+    *,
+    alive_keys: set[tuple[str, str]],
+    alive_edges: set[tuple[str, str, str, str]],
+    since: datetime | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """**사라진 것.** 지운 객체(합쳐진 것은 이긴 쪽의 식별자와 함께)와 끊긴 선.
 
     끝점은 식별자로 — 받는 쪽의 uuid 는 우리 것과 다르다. 끝점까지 정말 사라져 식별자를
     못 만드는 선은 뺀다(그 객체의 무덤이 이미 그것을 말한다).
+
+    ⚠️ **살아 있는 것과 겹치는 무덤은 빼고 보낸다.** 무덤은 식별자 · 세 끝으로만 말하므로,
+       같은 식별자를 다시 만들거나 같은 선을 다시 이으면 받는 쪽에서는 옛 무덤과 새것이
+       구별되지 않는다 — 방금 받은 것을 그 자리에서 다시 사용 중지 · 끊기 한다(실측).
+       이 봉투에 **살아서 실려 가는 것**이 정본이다.
     """
-    gone = list(
-        db.scalars(
-            select(ObjectInstance)
-            .where(
-                ObjectInstance.type_id.in_(list(type_of)),
-                ObjectInstance.deleted_at.is_not(None),
-            )
-            .order_by(ObjectInstance.deleted_at)
-        )
+    dead = select(ObjectInstance).where(
+        ObjectInstance.type_id.in_(list(type_of)),
+        ObjectInstance.deleted_at.is_not(None),
     )
+    if since is not None:
+        dead = dead.where(ObjectInstance.deleted_at > since)
+    gone = list(db.scalars(dead.order_by(ObjectInstance.deleted_at)))
     won_ids = {one.merged_into_id for one in gone if one.merged_into_id}
     winners = {
         one.id: one.key or one.label
@@ -225,17 +257,17 @@ def _tombstones(
             "at": one.deleted_at.isoformat() if one.deleted_at else None,
         }
         for one in gone
+        if (type_of[one.type_id].slug, one.key or one.label) not in alive_keys
     ]
 
     edges: list[dict[str, Any]] = []
     if kind_slugs:
-        graves = list(
-            db.scalars(
-                select(ObjectRelationTombstone)
-                .where(ObjectRelationTombstone.relation.in_(kind_slugs))
-                .order_by(ObjectRelationTombstone.removed_at)
-            )
+        cut = select(ObjectRelationTombstone).where(
+            ObjectRelationTombstone.relation.in_(kind_slugs)
         )
+        if since is not None:
+            cut = cut.where(ObjectRelationTombstone.removed_at > since)
+        graves = list(db.scalars(cut.order_by(ObjectRelationTombstone.removed_at)))
         end_ids = {one.src_object_id for one in graves} | {one.dst_object_id for one in graves}
         ends = {
             one.id: one
@@ -245,12 +277,21 @@ def _tombstones(
             start, end = ends.get(grave.src_object_id), ends.get(grave.dst_object_id)
             if start is None or end is None or start.type_id not in type_of:
                 continue
+            edge = (
+                type_of[start.type_id].slug,
+                start.key or start.label,
+                grave.relation,
+                end.key or end.label,
+            )
+            if edge in alive_edges:
+                # 다시 이은 선이다 — 무덤을 보내면 받는 쪽이 방금 받은 선을 끊는다.
+                continue
             edges.append(
                 {
-                    "type_slug": type_of[start.type_id].slug,
-                    "src": start.key or start.label,
-                    "relation": grave.relation,
-                    "dst": end.key or end.label,
+                    "type_slug": edge[0],
+                    "src": edge[1],
+                    "relation": edge[2],
+                    "dst": edge[3],
                     "at": grave.removed_at.isoformat(),
                 }
             )
@@ -288,9 +329,12 @@ def _row(
     row: ObjectInstance,
     defs: list[PropertyDef],
     names: dict[uuid.UUID, str],
-    human: list[str],
+    human: list[ObjectAlias],
 ) -> dict[str, Any]:
     out: dict[str, Any] = {"key": row.key or None, "label": row.label, "status": row.status}
+    if row.renamed_from and row.renamed_from != row.key:
+        # 받는 쪽은 이 값으로 제가 가진 행을 찾아 식별자를 옮긴다(`renamed_from` 열).
+        out["renamed_from"] = row.renamed_from
     if row.description:
         out["description"] = row.description
     if row.valid_from_year is not None:
@@ -298,8 +342,18 @@ def _row(
     if row.valid_to_year is not None:
         out["valid_to_year"] = row.valid_to_year
     if human:
-        # **배열로.** 이름 안에 `;` 가 들면 이어 보낸 것은 받는 쪽에서 둘로 갈린다.
-        out["aliases"] = list(human)
+        # **배열로, 그리고 붙은 것까지.** 이름만 보내면 받는 쪽에서는 그것이 어디서 왔는지
+        # · 사람이 봤는지 알 수 없어, 허브에서 확인한 것이 쌍둥이에는 **영영 검수 대기**로
+        # 남는다(실측). 이름 안에 `;` 가 들면 이어 보낸 것은 받는 쪽에서 둘로 갈린다.
+        out["aliases"] = [
+            {
+                "value": one.value,
+                **({"source": one.source} if one.source else {}),
+                **({"note": one.note} if one.note else {}),
+                **({"verified": True} if one.verified_at is not None else {}),
+            }
+            for one in human
+        ]
     values = row.properties or {}
     for definition in defs:
         raw = values.get(definition.key)

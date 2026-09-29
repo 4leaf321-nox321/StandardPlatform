@@ -915,3 +915,75 @@ def test_계획은_줄마다_묻지_않는다(client: TestClient, admin: Signed,
     # 미리 읽는 질의가 값이 늘어서다.
     assert big <= small + 2, (small, big)
     assert big < 20, big
+
+
+def test_관계도_줄마다_묻지_않는다(client: TestClient, admin: Signed, db: Session) -> None:
+    """**관계 계획도 줄마다 대여섯 번 물었다.**
+
+    끝점을 찾고(식별자 → 별칭 → 이름), 관계 종류의 속성 정의를 다시 읽고, 이미 이어진 선을
+    또 물었다. 한 출발점이 수십 줄에 되풀이되는 파일(한 과제에 모델 여럿)에서는 그 대부분이
+    같은 물음이다. 객체 쪽과 같이 **시간이 아니라 질의 수**를 센다.
+    """
+    cause = _make_type(client, admin, label="원인", key_policy="required")
+    effect = _make_type(client, admin, label="결과", key_policy="required")
+    kind = f"causes_{uuid.uuid4().hex[:6]}"
+    made = client.post(
+        "/api/ontology/import",
+        json={
+            "relation_types": [
+                {
+                    "slug": kind,
+                    "label": "일으킴",
+                    "src_type_slugs": [cause],
+                    "dst_type_slugs": [effect],
+                    "properties": [{"key": "n", "label": "근거 건수", "data_type": "number"}],
+                }
+            ]
+        },
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+
+    tag = uuid.uuid4().hex[:6]
+    client.post(
+        f"/api/objects/{cause}/import-rows",
+        json={"rows": [{"key": f"C-{tag}", "label": "진동"}], "apply": True},
+        headers=admin.headers,
+    )
+    client.post(
+        f"/api/objects/{effect}/import-rows",
+        json={
+            "rows": [{"key": f"E-{tag}-{n}", "label": f"결과 {n}"} for n in range(60)],
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+    object_type = db.scalar(select(ObjectType).where(ObjectType.slug == cause))
+    user = db.scalar(select(User).where(User.email == admin.email))
+    assert object_type is not None and user is not None
+
+    def queries(count: int) -> int:
+        seen = 0
+
+        def tick(*_args: Any, **_kw: Any) -> None:
+            nonlocal seen
+            seen += 1
+
+        rows = [
+            {"src": f"C-{tag}", "relation": kind, "dst": f"E-{tag}-{n}", "n": n}
+            for n in range(count)
+        ]
+        event.listen(engine, "before_cursor_execute", tick)
+        try:
+            plan = bulk.plan_relations(db, user, object_type, rows)
+        finally:
+            event.remove(engine, "before_cursor_execute", tick)
+        assert plan.ok, [one.message for one in plan.rows if one.action == "error"]
+        return seen
+
+    small, big = queries(5), queries(50)
+    # 줄이 45개 늘 때 질의는 **줄당 한 번을 넘지 않는다.** 남은 한 번은 새로 잇는 선의
+    # 개수 제약 검사다 — 그것은 앞줄이 방금 채웠을 수 있어 넣기 직전에 봐야 한다.
+    # (고치기 전에는 줄당 넷이었다: 끝점 찾기 둘 · 속성 정의 · 이미 이어진 선.)
+    assert big - small <= 50, (small, big)

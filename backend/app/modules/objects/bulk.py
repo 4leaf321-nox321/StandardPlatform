@@ -25,6 +25,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import csv
 import io
 import uuid
@@ -75,10 +76,19 @@ FIXED_COLUMNS = (
     "renamed_from",
 )
 
-RELATION_MODES = ("add", "replace")
-"""관계 파일을 **더할지 맞출지.** 기본은 `add` — 가져오기는 더하기만 했다. `replace` 는
-파일에 나온 (출발 객체 · 관계 종류) 범위에서 **파일에 없는 선을 끊는다**(계획에 `unlink` 로
-올라오고, 사람이 보고 적용한다). 원 표면 선(`object_links`)은 건드리지 않는다."""
+RELATION_MODES = ("add", "replace", "replace_type")
+"""관계 파일을 **더할지 맞출지.**
+
+    add            기본 — 더하기만 한다(예전 동작)
+    replace        파일에 나온 **(출발 객체 · 관계 종류)** 범위에서 파일에 없는 선을 끊는다
+    replace_type   파일에 나온 **(출발 타입 · 관계 종류)** 전체에서 끊는다
+
+`replace` 는 파일에서 **통째로 빠진 객체**의 옛 선을 남긴다 — 그 객체가 파일에 없으니
+범위에 안 들어온다. 원천에서 그 객체의 선이 다 사라진 경우가 그것이고, 그때는
+`replace_type` 이 맞다. **범위가 넓은 만큼 위험도 크다** — 일부만 담은 파일로 돌리면
+나머지 전부가 끊긴다. 그래서 기본이 아니고, 계획에 `unlink` 로 먼저 보인다.
+
+원 표면 선(`object_links`)은 어느 쪽도 건드리지 않는다."""
 
 ALIAS_MODES = ("add", "replace")
 """별칭 칸을 **더할지 맞출지.** 기본은 `add` — 다시 적재할 때 사람이 화면에서 붙인 별칭이
@@ -339,6 +349,13 @@ def _only(asked: list[aliases.Incoming], values: list[str]) -> list[aliases.Inco
     return [one for one in asked if compare_key(one.value) in keep]
 
 
+def _same_file_note(double: list[str]) -> str:
+    """같은 파일의 앞줄이 먼저 쓴 별칭 — **미리 보기에서 말해야** 사람이 파일을 고친다."""
+    if not double:
+        return ""
+    return f"별칭 {len(double)}개는 이 파일의 앞줄이 먼저 씁니다: {', '.join(double)}"
+
+
 def _joined(*parts: str) -> str:
     """줄에 적을 말 여럿을 한 줄로 — 빈 것은 뺀다."""
     return " / ".join(one for one in parts if one)
@@ -378,6 +395,7 @@ def alias_values(raw: Any) -> tuple[list[aliases.Incoming], list[str]]:
                         value=value,
                         source=str(one.get("source") or "").strip(),
                         note=str(one.get("note") or "").strip(),
+                        verified=bool(one.get("verified")),
                     )
                 )
             continue
@@ -459,7 +477,9 @@ class _Index:
     by_id: dict[uuid.UUID, ObjectInstance] = field(default_factory=dict)
     visible: set[uuid.UUID] = field(default_factory=set)
     """이 사람이 볼 수 있는 것 — 목록과 같은 규칙."""
-    human: dict[uuid.UUID, list[str]] = field(default_factory=dict)
+    human: dict[uuid.UUID, list[ObjectAlias]] = field(default_factory=dict)
+    """객체 → 지금 붙어 있는 사람 별칭(행 그대로). **값만 들고 있으면** 「검수했다」 가
+    바뀐 것을 못 본다 — 허브에서 확인한 줄이 쌍둥이에 영영 검수 대기로 남는다."""
     alias_owner: dict[str, uuid.UUID] = field(default_factory=dict)
     """별칭 비교키 → 그것을 쓰는 객체(사람 별칭만)."""
     unique: dict[str, dict[str, list[tuple[uuid.UUID, uuid.UUID | None]]]] = field(
@@ -469,6 +489,12 @@ class _Index:
     범위(`key_scope`)가 줄마다 다른 객체를 가리킬 수 있어서다."""
     editable: dict[uuid.UUID | None, AppError | None] = field(default_factory=dict)
     """부서마다 한 번만 판정한다 — 같은 부서의 오천 줄에 오천 번 물을 이유가 없다."""
+    claimed: dict[str, int] = field(default_factory=dict)
+    """이 파일의 **앞줄이 먼저 쓴 별칭** — 비교키 → 그 줄 번호.
+
+    ⚠️ 표의 유일 제약은 「한 별칭은 한 객체」 다. 같은 파일에 같은 별칭이 둘이면 뒷줄 것이
+       조용히 빠지는데, 예전에는 **미리 보기에 그 말이 없었다** — 적용하고 나서야 없는 것을
+       본다(실측)."""
 
 
 def _read_index(
@@ -541,7 +567,10 @@ def _read_index(
                 )
             )
         )
-        index.human = aliases.human_of(db, [one.id for one in found])
+        index.human = {
+            object_id: [one for one in rows if one.kind == aliases.HUMAN]
+            for object_id, rows in aliases.of(db, [one.id for one in found]).items()
+        }
 
     values: list[str] = []
     for row in rows:
@@ -587,6 +616,12 @@ def _remember(index: _Index, values: list[str], object_id: uuid.UUID) -> None:
         index.alias_owner[compare_key(value)] = object_id
 
 
+def _forget(index: _Index, values: list[str]) -> None:
+    """이 파일에서 **뺀** 별칭을 미리 읽은 목록에서도 지운다 — 뒷줄이 그것을 가져간다."""
+    for value in values:
+        index.alias_owner.pop(compare_key(value), None)
+
+
 def _require_refs(refs: _Refs, defs: list[PropertyDef], values: dict[str, Any]) -> None:
     """가리키는 것이 있나 — 캐시로 본다. 없는 것을 가리키면 화면에 빈 칸으로 나오고,
     그것이 「값 없음」 인지 「사라짐」 인지 구별할 수 없다."""
@@ -598,21 +633,33 @@ def _require_refs(refs: _Refs, defs: list[PropertyDef], values: dict[str, Any]) 
 
 
 def _split_free(
-    index: _Index, asked: list[aliases.Incoming], *, exclude_id: uuid.UUID | None
-) -> tuple[list[str], list[str]]:
-    """쓸 수 있는 별칭과 남이 쓰는 별칭 — 미리 읽은 것으로(질의 없음).
+    index: _Index,
+    asked: list[aliases.Incoming],
+    *,
+    exclude_id: uuid.UUID | None,
+    row: int = 0,
+) -> tuple[list[str], list[str], list[str]]:
+    """쓸 수 있는 별칭 · 남이 쓰는 별칭 · **이 파일의 앞줄이 먼저 쓴 별칭.**
 
     판정은 `aliases.split_free` 와 **같아야 한다**(비교키로 보고, 자기 것은 뺀다).
+    `row` 를 주면 같은 파일 안의 겹침도 가른다 — 계획이 그것을 말해야 사람이 파일을 고친다.
     """
     free: list[str] = []
     taken: list[str] = []
+    mine: list[str] = []
     for one in asked:
-        holder = index.alias_owner.get(compare_key(one.value))
+        norm = compare_key(one.value)
+        holder = index.alias_owner.get(norm)
+        earlier = index.claimed.get(norm)
         if holder is not None and holder != exclude_id:
             taken.append(one.value)
+        elif row and earlier is not None and earlier != row:
+            mine.append(f"{one.value}({earlier}행)")
         else:
+            if row:
+                index.claimed[norm] = row
             free.append(one.value)
-    return free, taken
+    return free, taken, mine
 
 
 def _require_editable(
@@ -919,8 +966,11 @@ def _plan_row(
             exclude_id=None,
         )
         skipped: list[str] = []
+        double: list[str] = []
         if wanted_aliases:
-            free, skipped = _split_free(index_data, wanted_aliases, exclude_id=None)
+            free, skipped, double = _split_free(
+                index_data, wanted_aliases, exclude_id=None, row=index
+            )
             wanted_aliases = _only(wanted_aliases, free)
         return RowPlan(
             row=index,
@@ -928,7 +978,9 @@ def _plan_row(
             label=str(raw_label).strip(),
             key=key,
             changes=sorted(properties) + (["aliases"] if wanted_aliases else []),
-            message=_joined(*refs.notes, _alias_note(skipped, long_aliases)),
+            message=_joined(
+                *refs.notes, _alias_note(skipped, long_aliases), _same_file_note(double)
+            ),
         )
 
     # 고침 — 보낸 것만.
@@ -957,17 +1009,26 @@ def _plan_row(
     ):
         changes.append("valid_to_year")
     alias_skipped: list[str] = []
+    alias_double: list[str] = []
     if wanted_aliases is not None:
-        free, alias_skipped = _split_free(index_data, wanted_aliases, exclude_id=existing.id)
+        free, alias_skipped, alias_double = _split_free(
+            index_data, wanted_aliases, exclude_id=existing.id, row=index
+        )
         wanted_aliases = _only(wanted_aliases, free)
         current_aliases = index_data.human.get(existing.id, [])
+        have = {compare_key(one.value) for one in current_aliases}
+        unseen = {compare_key(one.value) for one in current_aliases if one.verified_at is None}
         if aliases_mode == "add":
-            have = {compare_key(one) for one in current_aliases}
             if [one for one in wanted_aliases if compare_key(one.value) not in have]:
                 changes.append("aliases")
         elif [compare_key(a.value) for a in wanted_aliases] != [
-            compare_key(a) for a in current_aliases
+            compare_key(a.value) for a in current_aliases
         ]:
+            changes.append("aliases")
+        if "aliases" not in changes and [
+            one for one in wanted_aliases if one.verified and compare_key(one.value) in unseen
+        ]:
+            # **보낸 쪽에서 사람이 본 것**이 이쪽에는 아직 검수 대기다 — 값은 같아도 바뀐다.
             changes.append("aliases")
     rename_note = ""
     if key is not None and key != existing.key:
@@ -1007,7 +1068,12 @@ def _plan_row(
         key=key if key is not None else existing.key,
         object_id=existing.id,
         changes=changes,
-        message=_joined(rename_note, *refs.notes, _alias_note(alias_skipped, long_aliases)),
+        message=_joined(
+            rename_note,
+            *refs.notes,
+            _alias_note(alias_skipped, long_aliases),
+            _same_file_note(alias_double),
+        ),
     )
 
 
@@ -1109,7 +1175,7 @@ def apply_objects(
                 # 계획에서 가른 대로 — 남이 쓰는 별칭은 여기서도 빠진다. **미리 읽은 것으로**
                 # 가르고, 붙인 것은 거기에 적어 둔다: 같은 파일의 뒷줄이 그것을 봐야 한다.
                 asked = alias_values(raw_aliases)[0]
-                free, _taken = _split_free(index_data, asked, exclude_id=target.id)
+                free, _taken, _double = _split_free(index_data, asked, exclude_id=target.id)
                 if free:
                     fresh_aliases.append((target, _only(asked, free)))
                     _remember(index_data, free, target.id)
@@ -1142,19 +1208,28 @@ def apply_objects(
             target.valid_to_year = None if raw_to is None else int(raw_to)
         keep_old_key: str | None = None
         if row_plan.key is not None and "key" in row_plan.changes:
-            if renamed_from(object_type, row) is not None and target.key:
-                # **옛 식별자를 별칭으로 남긴다** — 그 번호로 적힌 문서 · 사람의 기억이 있다.
-                keep_old_key = target.key
+            if target.key:
+                # **옛 식별자를 남긴다.** 별칭으로(그 번호로 적힌 문서 · 사람의 기억이 있다)
+                # 그리고 칸으로도 — 그래야 쌍둥이 · 코어 API 가 같은 것이 둘이 되지 않게
+                # 제 식별자를 옮긴다.
+                target.renamed_from = target.key
+                if renamed_from(object_type, row) is not None:
+                    keep_old_key = target.key
             target.key = row_plan.key
         if "aliases" in row_plan.changes:
             raw_aliases = _fixed(row, "aliases")
             asked = alias_values(raw_aliases)[0]
-            free, _taken = _split_free(index_data, asked, exclude_id=target.id)
+            free, _taken, _double = _split_free(index_data, asked, exclude_id=target.id)
+            before_names = [one.value for one in index_data.human.get(target.id, [])]
             aliases.set_human(db, target, object_type, _only(asked, free), mode=aliases_mode)
             _remember(index_data, free, target.id)
+            if aliases_mode == "replace":
+                # **뺀 별칭은 미리 읽은 목록에서도 뺀다** — 같은 파일의 뒷줄이 그것을
+                # 가져갈 수 있어야 한다(예전에는 두 번 넣어야 옮겨졌다).
+                _forget(index_data, [one for one in before_names if one not in free])
         if keep_old_key is not None:
             # 별칭을 맞춘 **뒤에** 더한다 — `replace` 면 앞에서 더한 것이 지워진다.
-            free, _taken = _split_free(
+            free, _taken, _double = _split_free(
                 index_data, [aliases.Incoming(value=keep_old_key)], exclude_id=target.id
             )
             if free:
@@ -1287,6 +1362,21 @@ RELATION_RESERVED = (*RELATION_COLUMNS, "properties")
 `properties` 객체로 적는다. **같은 정의로 같게 검사한다.**"""
 
 
+def _relation_defs_all(db: Session, kinds: list[RelationType]) -> dict[str, list[PropertyDef]]:
+    """관계 종류들의 속성 정의를 **한 질의로** — slug → 정의(적은 차례)."""
+    out: dict[str, list[PropertyDef]] = {one.slug: [] for one in kinds}
+    if not kinds:
+        return out
+    by_id = {one.id: one.slug for one in kinds}
+    for row in db.scalars(
+        select(PropertyDef)
+        .where(PropertyDef.owner_kind == "relation", PropertyDef.owner_id.in_(list(by_id)))
+        .order_by(PropertyDef.sort_order, PropertyDef.id)
+    ):
+        out[by_id[row.owner_id]].append(row)
+    return out
+
+
 def relation_defs(db: Session, kind: RelationType) -> list[PropertyDef]:
     """이 관계 종류의 속성 정의 — 적은 차례로."""
     return list(
@@ -1299,14 +1389,26 @@ def relation_defs(db: Session, kind: RelationType) -> list[PropertyDef]:
 
 
 def _relation_properties(
-    db: Session, kind: RelationType, row: dict[str, Any], refs: _Refs
+    db: Session,
+    kind: RelationType,
+    row: dict[str, Any],
+    refs: _Refs,
+    *,
+    fresh: bool = True,
+    defs: list[PropertyDef] | None = None,
 ) -> dict[str, Any]:
     """관계 한 줄의 속성 — 고정 열 밖의 칸을 그 종류의 정의로 읽는다.
 
     **모르는 키는 거절한다**(정의가 없는 칸). 조용히 버리면 넣은 사람은 들어간 줄 알고,
     그 사실은 아무 데도 안 적힌다.
+
+    ⚠️ **빈 칸은 그 종류의 칸이 아니어도 된다.** 한 파일에 여러 관계 종류가 섞이면 열은
+       합집합이라, 다른 종류의 열은 그 줄에서 빈 칸으로 온다 — 그것을 「없는 속성」 으로
+       거절하면 섞인 파일을 아예 못 넣는다(실측).
+    ⚠️ `fresh` 가 거짓이면(고칠 때) **기본값을 넣지 않는다.** 넣으면 사람이 화면에서 고쳐
+       둔 값을 기본값이 조용히 덮는다 — 파일에 그 칸이 없는데도.
     """
-    defs = relation_defs(db, kind)
+    defs = relation_defs(db, kind) if defs is None else defs
     nested = row.get("properties")
     if nested is not None and not isinstance(nested, dict):
         raise InvalidValue(
@@ -1314,9 +1416,9 @@ def _relation_properties(
         )
     flat = {key: value for key, value in row.items() if key and key not in RELATION_RESERVED}
     # 펼친 칸이 이긴다 — CSV 에서 온 것이라 사람이 눈으로 본 값이다.
-    extra: dict[str, Any] = {**(nested or {}), **flat}
-    if not extra:
-        return {}
+    merged: dict[str, Any] = {**(nested or {}), **flat}
+    # **빈 칸을 먼저 걷는다** — 그래야 다른 종류의 열이 이 줄을 막지 않는다.
+    extra = {key: value for key, value in merged.items() if not _is_blank(value)}
     by_key = {one.key: one for one in defs}
     unknown = sorted(key for key in extra if key not in by_key)
     if unknown:
@@ -1325,62 +1427,225 @@ def _relation_properties(
             f"{kind.label}에 없는 속성입니다: {', '.join(unknown)}. "
             f"쓸 수 있는 것: {', '.join(by_key) or '(없음)'}",
         )
-    values = {
-        key: cell_to_value(by_key[key], value, refs)
-        for key, value in extra.items()
-        if not _is_blank(value)
-    }
-    return validate_properties(defs, values, apply_defaults=True)
+    values = {key: cell_to_value(by_key[key], value, refs) for key, value in extra.items()}
+    if not fresh and not values:
+        # 고칠 때 보낸 칸이 없으면 **아무것도 바꾸지 않는다.**
+        return {}
+    # 새로 이을 때는 빈 값으로도 부른다 — 필수 속성을 그때 본다(예전에는 칸이 하나도
+    # 없으면 검사 자체를 건너뛰어, 필수가 빈 선이 들어갔다).
+    return validate_properties(defs, values, apply_defaults=fresh)
 
 
-def _find_endpoint(
-    db: Session, user: User, text: str, allowed_types: list[uuid.UUID] | None
-) -> ObjectInstance:
-    """식별자 → 이름 → uuid. 이름이 여럿에 맞으면 거절."""
+@dataclass
+class _RelIndex:
+    """관계 파일 한 장이 물을 것을 **한 번만** 묻는다.
+
+    ⚠️ 왜: 줄마다 끝점을 찾고(식별자 → 별칭 → 이름, 최대 네 질의씩 둘), 관계 종류의 속성
+       정의를 다시 읽고, 이미 이어진 선을 또 물었다. 같은 출발점이 수십 줄에 되풀이되는
+       파일(한 과제에 모델 여럿)에서는 그 대부분이 **같은 물음**이다.
+    """
+
+    defs: dict[str, list[PropertyDef]] = field(default_factory=dict)
+    """관계 종류 slug → 그 종류의 속성 정의."""
+    ends: dict[tuple[str, str], Any] = field(default_factory=dict)
+    """(무엇을 찾았나, 어디서) → 찾은 것. 못 찾은 것도 기억한다(그 줄의 오류로 다시 낸다)."""
+    pool: dict[tuple[uuid.UUID, ...], dict[str, list[ObjectInstance]]] = field(
+        default_factory=dict
+    )
+    """허용 타입 묶음 → **파일에 나온 글자들**로 미리 읽어 둔 끝점 후보(`_ends_of`)."""
+    edges: dict[tuple[uuid.UUID, str, uuid.UUID], ObjectRelation] = field(default_factory=dict)
+    """이미 이어진 선 — (출발 · 종류 · 도착)."""
+    editable: dict[uuid.UUID | None, AppError | None] = field(default_factory=dict)
+    loaded_edges: bool = False
+    types: dict[str, ObjectType] = field(default_factory=dict)
+    """slug → 타입. 끝 타입 검사와 원 표 찾기가 줄마다 이 표를 읽던 자리다."""
+
+
+def _existing_edge(
+    db: Session, memo: _RelIndex, src_id: uuid.UUID, slug: str, dst_id: uuid.UUID
+) -> ObjectRelation | None:
+    """이미 이어진 선 — **이 파일의 출발점들 것을 한 번에 읽어**(`_load_edges`) 두고 본다."""
+    key = (src_id, slug, dst_id)
+    if key in memo.edges:
+        return memo.edges[key]
+    # 미리 읽은 자리에 없으면 **한 번 더 묻는다** — 그 출발점이 나중에 나왔을 수 있다.
+    found = db.scalar(
+        select(ObjectRelation).where(
+            ObjectRelation.src_object_id == src_id,
+            ObjectRelation.dst_object_id == dst_id,
+            ObjectRelation.relation == slug,
+        )
+    )
+    if found is not None:
+        memo.edges[key] = found
+    return found
+
+
+def _load_pool(
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    kinds: dict[str, RelationType],
+    rows: list[dict[str, Any]],
+    memo: _RelIndex,
+) -> None:
+    """파일에 나온 끝점 글자를 **허용 타입 묶음마다 한 질의로** 미리 읽는다."""
+    wanted: dict[tuple[uuid.UUID, ...], set[str]] = {}
+    by_slug = {one.slug: one for one in db.scalars(select(ObjectType))}
+    memo.types = by_slug
+    for row in rows:
+        src_text = str(row.get("src") or "").strip()
+        if src_text:
+            wanted.setdefault((object_type.id,), set()).add(src_text)
+        dst_text = str(row.get("dst") or "").strip()
+        slug = str(row.get("relation") or "").strip()
+        kind = kinds.get(slug)
+        if not dst_text or kind is None:
+            continue
+        allowed = kind.dst_type_slugs or []
+        plain = tuple(
+            sorted(
+                by_slug[one].id
+                for one in allowed
+                if one in by_slug and not system.is_system(by_slug[one])
+            )
+        )
+        # 도착 타입을 안 정한 관계는 **아무 타입이나** 될 수 있다 — 빈 묶음으로 담는다.
+        wanted.setdefault(plain, set()).add(dst_text)
+    for key, texts in wanted.items():
+        memo.pool[key] = _ends_of(db, user, list(key) or None, texts)
+
+
+def _endpoint_maker(
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    text: str,
+    memo: _RelIndex | None = None,
+) -> Callable[[], Any]:
+    """출발점을 찾는 일 하나 — 미리 한 바퀴 돌 때와 줄에서 볼 때가 **같은 것**이어야 한다."""
+
+    def find() -> Any:
+        pool = memo.pool.get((object_type.id,)) if memo is not None else None
+        return _find_endpoint(db, user, text, [object_type.id], pool)
+
+    return find
+
+
+def _load_edges(db: Session, memo: _RelIndex) -> None:
+    """미리 찾아 둔 출발점들의 선을 **한 질의로** 읽는다."""
+    memo.loaded_edges = True
+    starts = {one.id for one in memo.ends.values() if isinstance(one, ObjectInstance)}
+    if not starts:
+        return
+    for edge in db.scalars(
+        select(ObjectRelation).where(ObjectRelation.src_object_id.in_(starts))
+    ):
+        memo.edges[(edge.src_object_id, edge.relation, edge.dst_object_id)] = edge
+
+
+def _memo_end(index: _RelIndex, key: tuple[str, str], make: Callable[[], Any]) -> Any:
+    """같은 물음은 한 번만 — 못 찾은 것(예외)도 기억해 그 줄에서 다시 낸다."""
+    if key not in index.ends:
+        try:
+            index.ends[key] = make()
+        except AppError as caught:
+            index.ends[key] = caught
+    found = index.ends[key]
+    if isinstance(found, AppError):
+        raise found
+    return found
+
+
+def _ends_of(
+    db: Session,
+    user: User,
+    allowed_types: list[uuid.UUID] | None,
+    texts: set[str],
+) -> dict[str, list[ObjectInstance]]:
+    """이 글자들에 맞을 수 있는 객체를 **한 질의로** — `"key:<값>"` · `"alias:<비교키>"` ·
+    `"label:<값>"` · `"id:<uuid>"` 로 나눠 담는다.
+
+    ⚠️ 줄마다 최대 네 질의를 돌던 자리다. 관계 파일은 도착점이 줄마다 다르므로 기억해 두는
+       것만으로는 줄지 않았다 — **파일에 나온 글자 전부**를 한 번에 묻는다.
+    """
+    out: dict[str, list[ObjectInstance]] = {}
+    if not texts:
+        return out
+    norms = {compare_key(one) for one in texts}
+    ids: set[uuid.UUID] = set()
+    for one in texts:
+        try:
+            ids.add(uuid.UUID(one))
+        except ValueError:
+            continue
+    alias_owners = select(ObjectAlias.object_id).where(ObjectAlias.norm.in_(norms))
     stmt = select(ObjectInstance).where(
         ObjectInstance.deleted_at.is_(None),
         visible_owner_clause(user, ObjectInstance.owner_workspace_id),
     )
     if allowed_types:
         stmt = stmt.where(ObjectInstance.type_id.in_(allowed_types))
-    by_key = list(db.scalars(stmt.where(ObjectInstance.key == text)))
-    if len(by_key) == 1:
-        return by_key[0]
-    if len(by_key) > 1:
-        raise InvalidValue(
-            code("OBJECTS", 46),
-            f"「{text}」 식별자가 {len(by_key)}개 타입에 있습니다. "
-            "관계 종류의 타입을 좁히세요.",
+    wanted = [
+        ObjectInstance.key.in_(texts),
+        ObjectInstance.label.in_(texts),
+        ObjectInstance.id.in_(alias_owners),
+    ]
+    if ids:
+        wanted.append(ObjectInstance.id.in_(ids))
+    rows = list(db.scalars(stmt.where(or_(*wanted))))
+    if not rows:
+        return out
+    by_object: dict[uuid.UUID, set[str]] = {}
+    for object_id, norm in db.execute(
+        select(ObjectAlias.object_id, ObjectAlias.norm).where(
+            ObjectAlias.object_id.in_([one.id for one in rows]), ObjectAlias.norm.in_(norms)
         )
-    # 별칭(외부 식별자 포함)으로도 — 「앤시스」 로 적어도 「Ansys」 로 풀린다.
-    alias_stmt = stmt.where(
-        ObjectInstance.id.in_(
-            select(ObjectAlias.object_id).where(ObjectAlias.norm == compare_key(text))
-        )
-    )
-    by_alias = list(db.scalars(alias_stmt))
-    if len(by_alias) == 1:
-        return by_alias[0]
-    if len(by_alias) > 1:
-        raise InvalidValue(
-            code("OBJECTS", 46),
-            f"「{text}」 별칭이 {len(by_alias)}개에 맞습니다. 식별자로 적으세요.",
-        )
-    by_label = list(db.scalars(stmt.where(ObjectInstance.label == text)))
-    if len(by_label) == 1:
-        return by_label[0]
-    if len(by_label) > 1:
-        raise InvalidValue(
-            code("OBJECTS", 46),
-            f"「{text}」 이름이 {len(by_label)}개에 맞습니다. 식별자로 적으세요.",
-        )
-    try:
-        found = db.scalar(stmt.where(ObjectInstance.id == uuid.UUID(text)))
-    except ValueError:
-        found = None
-    if found is None:
-        raise InvalidValue(code("OBJECTS", 46), f"「{text}」 을 찾을 수 없습니다.")
-    return found
+    ):
+        by_object.setdefault(object_id, set()).add(norm)
+    for row in rows:
+        if row.key:
+            out.setdefault(f"key:{row.key}", []).append(row)
+        out.setdefault(f"label:{row.label}", []).append(row)
+        out.setdefault(f"id:{row.id}", []).append(row)
+        for norm in by_object.get(row.id, set()):
+            out.setdefault(f"alias:{norm}", []).append(row)
+    return out
+
+
+def _pick_end(ends: dict[str, list[ObjectInstance]], text: str) -> ObjectInstance:
+    """식별자 → 별칭 → 이름 → uuid. **순서와 말은 예전 그대로다** — 판정이 달라지면
+    「파일로는 되는데 화면으로는 안 되는」 상태가 생긴다."""
+    for prefix, what, hint in (
+        (f"key:{text}", "식별자", "관계 종류의 타입을 좁히세요."),
+        (f"alias:{compare_key(text)}", "별칭", "식별자로 적으세요."),
+        (f"label:{text}", "이름", "식별자로 적으세요."),
+        (f"id:{text}", "id", ""),
+    ):
+        found = ends.get(prefix) or []
+        if len(found) == 1:
+            return found[0]
+        if len(found) > 1:
+            where = "개 타입에 있습니다" if what == "식별자" else "개에 맞습니다"
+            raise InvalidValue(
+                code("OBJECTS", 46), f"「{text}」 {what}가 {len(found)}{where}. {hint}".strip()
+            )
+    raise InvalidValue(code("OBJECTS", 46), f"「{text}」 을 찾을 수 없습니다.")
+
+
+def _find_endpoint(
+    db: Session,
+    user: User,
+    text: str,
+    allowed_types: list[uuid.UUID] | None,
+    ends: dict[str, list[ObjectInstance]] | None = None,
+) -> ObjectInstance:
+    """식별자 → 별칭 → 이름 → uuid. 이름이 여럿에 맞으면 거절.
+
+    `ends` 는 **파일 전체를 미리 읽어 둔 것**(`_ends_of`) — 없으면 이 글자 하나만 읽는다.
+    """
+    found = ends if ends is not None else _ends_of(db, user, allowed_types, {text})
+    return _pick_end(found, text)
 
 
 def _type_ids(db: Session, slugs: list[str] | None) -> list[uuid.UUID] | None:
@@ -1389,19 +1654,35 @@ def _type_ids(db: Session, slugs: list[str] | None) -> list[uuid.UUID] | None:
     return list(db.scalars(select(ObjectType.id).where(ObjectType.slug.in_(slugs))))
 
 
-def _find_dst(db: Session, user: User, text: str, kind: RelationType) -> system.End:
+def _dst_maker(
+    db: Session, user: User, text: str, kind: RelationType, memo: _RelIndex
+) -> Callable[[], Any]:
+    def find() -> Any:
+        return _find_dst(db, user, text, kind, memo)
+
+    return find
+
+
+def _find_dst(
+    db: Session,
+    user: User,
+    text: str,
+    kind: RelationType,
+    memo: _RelIndex | None = None,
+) -> system.End:
     """도착점 — 객체 표 먼저, 그다음 관계가 허용한 system 타입의 원 표.
 
     system 끝은 관계 종류가 도착 타입을 **정해 뒀을 때만** 본다. 안 정했으면 원 표를
     전부 뒤지게 되고, 「부서 slug 를 적었더니 계정이 걸렸다」 같은 일이 생긴다.
     """
-    types = system.types_by_slug(db)
+    types = memo.types if memo is not None and memo.types else system.types_by_slug(db)
     allowed = kind.dst_type_slugs or []
     plain = [types[s].id for s in allowed if s in types and not system.is_system(types[s])]
     systemic = [types[s] for s in allowed if s in types and system.is_system(types[s])]
     if not allowed or plain:
+        pool = memo.pool.get(tuple(sorted(plain))) if memo is not None else None
         try:
-            found = _find_endpoint(db, user, text, plain or None)
+            found = _find_endpoint(db, user, text, plain or None, pool)
             found_type = next(t for t in types.values() if t.id == found.type_id)
             return system.end_of(found, found_type)
         except InvalidValue:
@@ -1453,8 +1734,9 @@ def plan_relations(
         )
         return plan
     kinds = {row.slug: row for row in db.scalars(select(RelationType))}
-    # 관계 종류의 속성 키도 열로 받는다 — 어느 종류의 것인지는 줄마다 다시 본다.
-    known_props = {one.key for kind in kinds.values() for one in relation_defs(db, kind)}
+    # **속성 정의는 한 번에 읽는다** — 줄마다 읽으면 오천 줄에 오천 질의다.
+    index_data = _RelIndex(defs=_relation_defs_all(db, list(kinds.values())))
+    known_props = {one.key for rows in index_data.defs.values() for one in rows}
     headers = {key for row in rows for key in row} - {""}
     unknown = sorted(headers - set(RELATION_RESERVED) - known_props)
     if unknown:
@@ -1464,39 +1746,76 @@ def plan_relations(
         )
         return plan
 
+    # **끝점을 파일 단위로 미리 읽는다.** 출발점은 이 타입에서, 도착점은 그 관계 종류가
+    # 허락한 타입에서 — 도착점은 줄마다 다르므로 기억해 두는 것만으로는 안 준다.
+    _load_pool(db, user, object_type, kinds, rows, index_data)
+    # 그러고 나서 출발점을 한 바퀴 찾는다 — 그래야 이미 이어진 선을 한 번에 읽는다.
+    # 줄마다 나는 오류는 아래에서 그 줄의 것으로 다시 난다(`_memo_end` 가 기억한다).
+    for row in rows:
+        text = str(row.get("src") or "").strip()
+        if not text:
+            continue
+        with contextlib.suppress(AppError):
+            _memo_end(
+                index_data,
+                ("src", text),
+                _endpoint_maker(db, user, object_type, text, index_data),
+            )
+    _load_edges(db, index_data)
+
     seen: set[tuple[uuid.UUID, str, uuid.UUID]] = set()
     for index, row in enumerate(rows, start=1):
         _tick(on_progress, "계획", index, len(rows))
         try:
             plan.rows.append(
-                _plan_relation(db, user, object_type, kinds, row, index, seen, source)
+                _plan_relation(
+                    db, user, object_type, kinds, row, index, seen, source, index_data
+                )
             )
         except AppError as caught:
             plan.rows.append(RowPlan(row=index, action="error", message=caught.message))
-    if mode == "replace" and plan.ok:
-        plan.rows.extend(_unlinks(db, seen))
+    if mode in ("replace", "replace_type") and plan.ok:
+        plan.rows.extend(_unlinks(db, user, object_type, seen, wide=mode == "replace_type"))
     return plan
 
 
-def _unlinks(db: Session, seen: set[tuple[uuid.UUID, str, uuid.UUID]]) -> list[RowPlan]:
-    """파일에 없어 **끊을 선** — 파일에 나온 (출발 객체 · 관계 종류) 범위만 본다.
+def _unlinks(
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    seen: set[tuple[uuid.UUID, str, uuid.UUID]],
+    *,
+    wide: bool,
+) -> list[RowPlan]:
+    """파일에 없어 **끊을 선.**
 
-    범위를 그 쌍으로 잡는 이유: 파일에 아예 안 나온 객체의 선을 끊으면, 한 타입의 일부만
-    담은 파일이 나머지 전부를 지운다. 그것은 되돌릴 수 없는 종류의 사고다.
+    좁은 범위(기본)는 파일에 나온 **(출발 객체 · 관계 종류)** 만 본다 — 파일에 아예 안 나온
+    객체의 선을 끊으면, 한 타입의 일부만 담은 파일이 나머지 전부를 지운다. 그것은 되돌릴 수
+    없는 종류의 사고다.
+
+    `wide` 면 **(출발 타입 · 관계 종류)** 전체를 본다 — 원천에서 어떤 객체의 선이 통째로
+    사라진 경우가 그것이다. 파일이 그 타입의 **전부**일 때만 쓴다.
     """
     pairs = {(src, kind) for src, kind, _ in seen}
     if not pairs:
         return []
-    edges = db.scalars(
-        select(ObjectRelation).where(
-            ObjectRelation.src_object_id.in_({src for src, _ in pairs}),
-            ObjectRelation.relation.in_({kind for _, kind in pairs}),
+    kinds = {kind for _, kind in pairs}
+    stmt = select(ObjectRelation).where(ObjectRelation.relation.in_(kinds))
+    if wide:
+        stmt = stmt.join(
+            ObjectInstance, ObjectInstance.id == ObjectRelation.src_object_id
+        ).where(
+            ObjectInstance.type_id == object_type.id,
+            ObjectInstance.deleted_at.is_(None),
+            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
         )
-    )
+    else:
+        stmt = stmt.where(ObjectRelation.src_object_id.in_({src for src, _ in pairs}))
+    edges = db.scalars(stmt)
     doomed = [
         edge
         for edge in edges
-        if (edge.src_object_id, edge.relation) in pairs
+        if (wide or (edge.src_object_id, edge.relation) in pairs)
         and (edge.src_object_id, edge.relation, edge.dst_object_id) not in seen
     ]
     if not doomed:
@@ -1534,6 +1853,7 @@ def _plan_relation(
     index: int,
     seen: set[tuple[uuid.UUID, str, uuid.UUID]],
     source: str = "",
+    index_data: _RelIndex | None = None,
 ) -> RowPlan:
     src_text = str(row.get("src") or "").strip()
     dst_text = str(row.get("dst") or "").strip()
@@ -1553,19 +1873,42 @@ def _plan_relation(
         )
     managed.require_relation_editable(kind, source=source)
 
-    src = _find_endpoint(db, user, src_text, [object_type.id])
-    dst = _find_dst(db, user, dst_text, kind)
-    require_owner_edit(
-        db, user, src.owner_workspace_id, what="객체", code_value=code("OBJECTS", 27)
+    memo = index_data if index_data is not None else _RelIndex()
+    # **같은 끝점은 한 번만 찾는다** — 한 과제에 모델이 여럿이면 그 과제를 수십 번 찾는다.
+    src = _memo_end(
+        memo, ("src", src_text), _endpoint_maker(db, user, object_type, src_text, memo)
     )
-    rel.require_end_types_allowed(db, kind, object_type.slug, dst.type_slug)
+    dst = _memo_end(
+        memo, (f"dst:{kind.slug}", dst_text), _dst_maker(db, user, dst_text, kind, memo)
+    )
+    if src.owner_workspace_id not in memo.editable:
+        try:
+            require_owner_edit(
+                db, user, src.owner_workspace_id, what="객체", code_value=code("OBJECTS", 27)
+            )
+        except AppError as caught:
+            memo.editable[src.owner_workspace_id] = caught
+        else:
+            memo.editable[src.owner_workspace_id] = None
+    refused = memo.editable[src.owner_workspace_id]
+    if refused is not None:
+        raise refused
+    rel.require_end_types_allowed(
+        db,
+        kind,
+        object_type.slug,
+        dst.type_slug,
+        {slug: one.label for slug, one in memo.types.items()} or None,
+    )
 
     triple = (src.id, kind.slug, dst.id)
     if triple in seen:
         raise InvalidValue(code("OBJECTS", 44), "같은 관계가 이 파일에 두 번 있습니다.")
     seen.add(triple)
     label = f"{src.label} -{kind.label}-> {dst.label}"
-    wanted = _relation_properties(db, kind, row, _Refs(db, user))
+    wanted = _relation_properties(
+        db, kind, row, _Refs(db, user), defs=memo.defs.get(kind.slug)
+    )
     if dst.is_system:
         # 한쪽 끝이 원 표면 선은 `object_links` 에 있다(속성은 안 받는다).
         found = links.existing(db, src.id, dst.id, kind.slug)
@@ -1573,13 +1916,7 @@ def _plan_relation(
             return RowPlan(row=index, action="unchanged", label=label, object_id=found.id)
         rel.require_cardinality(db, kind, src.id, dst.id)
         return RowPlan(row=index, action="create", label=label)
-    found_edge = db.scalar(
-        select(ObjectRelation).where(
-            ObjectRelation.src_object_id == src.id,
-            ObjectRelation.dst_object_id == dst.id,
-            ObjectRelation.relation == kind.slug,
-        )
-    )
+    found_edge = _existing_edge(db, memo, src.id, kind.slug, dst.id)
     if found_edge is not None:
         # **이미 이어진 선이라도 속성 · 근거가 다르면 고친다.** 예전에는 늘 `unchanged` 라,
         # 근거 건수처럼 관계에 붙는 값을 나중에 채울 길이 없었다.
@@ -1654,7 +1991,7 @@ def apply_relations(
                 continue
             kind = kinds.get(edge.relation) or by_label[edge.relation]
             before = dict(edge.properties or {})
-            wanted = _relation_properties(db, kind, row, _Refs(db, user))
+            wanted = _relation_properties(db, kind, row, _Refs(db, user), fresh=False)
             if wanted:
                 edge.properties = validate_properties(
                     relation_defs(db, kind), {**before, **wanted}

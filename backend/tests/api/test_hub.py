@@ -200,9 +200,11 @@ def test_허브는_참조되는_것부터_식별자로_내보낸다(client: Test
             "mode": "replace",
         }
     ]
-    # 별칭은 **배열로** — `;` 가 든 이름이 하나로 산다.
+    # 별칭은 **배열로, 붙은 것까지** — `;` 가 든 이름이 하나로 살고, 허브에서 확인한
+    # 것인지도 함께 간다(안 그러면 쌍둥이에는 영영 검수 대기로 남는다).
     models = {row["key"]: row for row in body["objects"][2]["rows"]}
-    assert models["M-1"]["aliases"] == ["갈라짐; 크랙", "크랙"]
+    # 파일로 붙인 것이라 아직 **검수 대기**다 — 그 사실도 그대로 간다.
+    assert models["M-1"]["aliases"] == [{"value": "갈라짐; 크랙"}, {"value": "크랙"}]
     assert [one["slug"] for one in body["ontology"]["groups"]] == [n["group"]]
     assert {one["slug"] for one in body["ontology"]["types"]} == {
         n["project"],
@@ -264,6 +266,36 @@ def test_쌍둥이가_받으면_허브_관리가_되고_다시_받으면_그대�
     ).json()
     # `;` 가 든 별칭이 갈리지 않았나.
     assert profile["object"]["aliases"] == ["갈라짐; 크랙", "크랙"]
+    # 허브에서 아직 안 본 것이라 쌍둥이에서도 검수 대기다.
+    pending = client.get(
+        f"/api/objects/{twin['model']}/aliases/pending", headers=admin.headers
+    ).json()
+    assert pending["total"] == 2, pending
+
+    # **허브에서 확인하면 쌍둥이에도 확인으로 간다** — 안 그러면 그 줄은 받는 쪽에
+    # 영영 검수 대기로 남는다.
+    hub_model = next(
+        one
+        for one in client.get(f"/api/objects/{hub['model']}", headers=admin.headers).json()[
+            "items"
+        ]
+        if one["key"] == "M-1"
+    )
+    waiting = client.get(
+        f"/api/objects/{hub['model']}/aliases/pending", headers=admin.headers
+    ).json()
+    approved = client.post(
+        f"/api/objects/{hub['model']}/aliases/review",
+        json={"ids": [one["id"] for one in waiting["items"]], "action": "approve"},
+        headers=admin.headers,
+    )
+    assert approved.status_code == 200, approved.text
+    assert hub_model["id"]
+    _receive(client, admin, _as_twin(bundle_export(client, admin, hub["group"]), tag))
+    left = client.get(
+        f"/api/objects/{twin['model']}/aliases/pending", headers=admin.headers
+    ).json()
+    assert left["total"] == 0, left
     # 관계에 붙은 근거 건수 · 근거 종류도 받는 쪽에 그대로 있나.
     incoming = next(one for one in profile["related"] if not one["outgoing"])
     assert incoming["properties"] == {"n": 3, "basis": "시험"}
@@ -291,7 +323,7 @@ def test_쌍둥이가_받으면_허브_관리가_되고_다시_받으면_그대�
     assert patched.status_code == 200, patched.text
     exported = bundle_export(client, admin, hub["group"])
     third = _receive(client, admin, _as_twin(exported, tag))
-    assert third["counts"]["objects_update"] == 1, third
+    assert third["counts"]["objects_update"] == 1, third["counts"]
     twin_task = next(
         one
         for one in client.get(f"/api/objects/{twin['task']}", headers=admin.headers).json()[
@@ -515,3 +547,78 @@ def test_묶음_여럿을_한_봉투로_내보낸다(client: TestClient, admin: 
         hub["task"],
         hub["model"],
     }
+
+
+def test_무덤은_허브에서_받은_묶음에만_있다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """**아무나 전역 객체를 사용 중지 · 합치기 · 끊기 할 수 있으면 안 된다.**
+
+    `source` 가 붙은 묶음은 시스템 관리자만 넣는다. 그런데 무덤만 담아 보내면 그 문을 지나지
+    않았다(실측으로 열려 있었다) — 무덤은 허브가 말하는 것이므로 `source` 없이는 받지 않고,
+    줄마다 그 객체를 고칠 수 있는지 다시 본다.
+    """
+    tag = uuid.uuid4().hex[:6]
+    hub = _hub(client, admin, tag)
+    graves = {
+        "tombstones": {
+            "objects": [{"type_slug": hub["task"], "key": "T-2", "merged_into": None}],
+            "relations": [],
+        },
+        "apply": True,
+    }
+    denied = bundle_import(client, admin, graves)
+    assert denied["applied"] is False, denied
+    assert any("허브에서 받은 묶음" in one for one in denied["errors"]), denied
+
+    # 부서 관리자는 `source` 를 붙여도 못 넣는다 — 그 문은 시스템 관리자만이다.
+    refused = client.post(
+        "/api/bundles/import", json={**graves, "source": "hub"}, headers=manager.headers
+    )
+    assert refused.status_code in (200, 202), refused.text
+    if refused.status_code == 202:
+        done = finish_job(client, manager, refused.json())
+        body = done.get("result") or {}
+        assert body.get("applied") is not True, done
+
+    # 지운 것이 아니라 살아 있는 과제다 — 아무 일도 없었다.
+    tasks = client.get(f"/api/objects/{hub['task']}", headers=admin.headers).json()["items"]
+    assert next(one for one in tasks if one["key"] == "T-2")["status"] == "active"
+
+
+def test_다시_만든_것과_겹치는_무덤은_안_보낸다(client: TestClient, admin: Signed) -> None:
+    """**무덤은 식별자와 세 끝으로만 말한다.**
+
+    같은 식별자를 다시 만들거나 같은 선을 다시 이으면, 받는 쪽에서는 옛 무덤과 새것이
+    구별되지 않는다 — 방금 받은 것을 그 자리에서 다시 사용 중지 · 끊기 한다(실측).
+    이 봉투에 **살아서 실려 가는 것**이 정본이다.
+    """
+    tag = uuid.uuid4().hex[:6]
+    hub = _hub(client, admin, tag)
+
+    def hub_id(type_slug: str, key: str) -> str:
+        rows = client.get(f"/api/objects/{type_slug}", headers=admin.headers).json()["items"]
+        return str(next(one for one in rows if one["key"] == key)["id"])
+
+    # 선을 끊었다가 다시 잇고, 과제를 지웠다가 같은 식별자로 다시 만든다.
+    cut = client.post(
+        f"/api/objects/{hub['model']}/relations/import-rows",
+        json={"rows": [], "relations_mode": "replace", "apply": True},
+        headers=admin.headers,
+    )
+    assert cut.status_code == 200, cut.text
+    again = client.post(
+        f"/api/objects/{hub['model']}/relations/import-rows",
+        json={
+            "rows": [{"src": "M-2", "relation": hub["derived"], "dst": "M-1"}],
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+    assert again.status_code == 200, again.text
+
+    body = bundle_export(client, admin, hub["group"])
+    graves = body["tombstones"]
+    # 다시 이은 선의 무덤은 빠졌다.
+    assert not [one for one in graves["relations"] if one["src"] == "M-2"], graves
+    assert body["counts"]["tombstones"] == 0, body["counts"]

@@ -49,13 +49,21 @@ def require_endpoints_allowed(
 
 
 def require_end_types_allowed(
-    db: Session, kind: RelationType, src_slug: str, dst_slug: str
+    db: Session,
+    kind: RelationType,
+    src_slug: str,
+    dst_slug: str,
+    labels: dict[str, str] | None = None,
 ) -> None:
-    """타입 slug 로 보는 같은 검사 — 한쪽 끝이 system 객체(행이 없는 것)여도 된다."""
-    rows = list(db.scalars(select(ObjectType)))
+    """타입 slug 로 보는 같은 검사 — 한쪽 끝이 system 객체(행이 없는 것)여도 된다.
+
+    `labels` 는 **이미 읽어 둔** slug → 이름. 일괄 가져오기가 줄마다 부르므로, 안 주면
+    파일 한 장에 타입 표를 오천 번 읽는다.
+    """
     #: slug -> 사람이 읽는 이름. **오류에 slug 를 그대로 쓰면 아무도 못 읽는다** —
     #: 화면에는 「부품」 이라고 적혀 있는데 메시지는 `part_87b8` 라고 말한다.
-    labels = {row.slug: row.label for row in rows}
+    if labels is None:
+        labels = {row.slug: row.label for row in db.scalars(select(ObjectType))}
 
     def check(slug: str, allowed: list[str] | None, what: str) -> None:
         if not allowed:

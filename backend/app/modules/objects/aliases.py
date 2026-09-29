@@ -42,6 +42,9 @@ class Incoming:
     value: str
     source: str = ""
     note: str = ""
+    verified: bool = False
+    """**보낸 쪽에서 사람이 이미 확인한 것**인가(허브 → 쌍둥이). 참이면 받는 쪽에서도
+    검수 대기로 두지 않는다 — 안 그러면 허브에서 본 것이 쌍둥이에는 영영 남는다."""
 
 
 def incoming(values: Sequence[str | Incoming]) -> list[Incoming]:
@@ -89,7 +92,10 @@ def of(db: Session, ids: list[uuid.UUID]) -> dict[uuid.UUID, list[ObjectAlias]]:
     for row in db.scalars(
         select(ObjectAlias)
         .where(ObjectAlias.object_id.in_(ids))
-        .order_by(ObjectAlias.created_at)
+        # **id 까지 보고 세운다.** 한 번에 붙인 별칭은 `created_at` 이 같아(트랜잭션 시작
+        # 시각) 차례가 질의마다 달라졌다 — 그러면 허브와 쌍둥이를 견주는 자리에서 **매번
+        # 「별칭이 바뀌었다」** 가 되어, 바뀐 것이 없는데도 다시 쓴다(실측).
+        .order_by(ObjectAlias.created_at, ObjectAlias.id)
     ):
         out[row.object_id].append(row)
     return out
@@ -214,6 +220,8 @@ def set_human(
         wanted = [*before, *(one for one in wanted if compare_key(one) not in before_norms)]
     have = {one.norm for one in current}
     now = datetime.now(UTC)
+    if [one.value for one in current] != wanted:
+        _touch(row)
     for value in wanted:
         norm = compare_key(value)
         if norm in have:
@@ -226,6 +234,11 @@ def set_human(
                     found.source = asked_one.source[:80]
                 if asked_one.note and not found.note:
                     found.note = asked_one.note[:200]
+                if (asked_one.verified or verified is not None) and found.verified_at is None:
+                    # **보낸 쪽에서 이미 본 것**은 여기서 다시 묻지 않는다 — 안 그러면
+                    # 허브에서 확인한 줄이 쌍둥이에는 영영 검수 대기로 남는다.
+                    found.verified_by_id = verified.id if verified is not None else None
+                    found.verified_at = now
             continue
         asked_one = meta.get(norm) or Incoming(value=value)
         db.add(
@@ -239,8 +252,9 @@ def set_human(
                 note=asked_one.note[:200],
                 # **사람이 화면에서 붙인 것은 곧 확인한 것이다.** 기계가 붙인 것만 검수
                 # 대기로 남는다 — 그것을 가르지 않으면 목록이 곧 수천 줄이 되어 안 읽힌다.
+                # 보낸 쪽에서 이미 확인한 것(`verified`)도 여기서 다시 묻지 않는다.
                 verified_by_id=verified.id if verified is not None else None,
-                verified_at=now if verified is not None else None,
+                verified_at=now if verified is not None or asked_one.verified else None,
             )
         )
     db.flush()
@@ -269,6 +283,8 @@ def add_fresh(
         )
     meta = {compare_key(one.value): one for one in asked}
     now = datetime.now(UTC)
+    if wanted:
+        _touch(row)
     for value in wanted:
         norm = compare_key(value)
         one = meta.get(norm) or Incoming(value=value)
@@ -282,10 +298,20 @@ def add_fresh(
                 source=one.source[:80],
                 note=one.note[:200],
                 verified_by_id=verified.id if verified is not None else None,
-                verified_at=now if verified is not None else None,
+                verified_at=now if verified is not None or one.verified else None,
             )
         )
     return wanted
+
+
+def _touch(row: ObjectInstance) -> None:
+    """객체의 **바뀐 때**를 지금으로 — 별칭만 바뀌어도.
+
+    ⚠️ 별칭은 다른 표에 있어서, 그것만 바꾸면 객체 행은 손대지 않는다. 그러면
+       `objects.updated_at` 이 그대로고, **코어 API 의 「지난번 이후」 가 그 객체를 안 준다**
+       — 받는 쪽은 새 이름을 영영 모른다(실측). 시계는 DB 것을 쓴다(`now()`).
+    """
+    row.updated_at = func.now()
 
 
 def set_external(
@@ -385,6 +411,8 @@ def review(
             alias_row.verified_at = now
         else:
             db.delete(alias_row)
+            # 지운 별칭은 이름 풀이에서 빠진다 — 밖도 그것을 알아야 한다.
+            _touch(owner)
         done += 1
         audit.record(
             db,

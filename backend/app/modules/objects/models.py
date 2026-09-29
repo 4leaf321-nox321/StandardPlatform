@@ -129,6 +129,13 @@ class ObjectInstance(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    renamed_from: Mapped[str | None] = mapped_column(String(120), nullable=True)
+    """**옛 식별자** — 키 체계가 바뀌어 `key` 를 고쳤을 때 그 앞의 값.
+
+    이것이 없으면 밖(쌍둥이 · 코어 API)에서는 새 식별자가 **처음 보는 것**이라 같은 것이
+    둘이 된다. 받는 쪽은 이 값으로 제가 가진 행을 찾아 식별자를 옮긴다 — 합쳐져 사라진
+    것에 `merged_into` 를 주는 것과 같은 이유다."""
+
     merged_into_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="SET NULL"), nullable=True
     )
@@ -349,8 +356,10 @@ class ObjectAlias(Base):
     가르는 칸이 없으면, 자동으로 붙은 오타까지 정본처럼 쓰인다."""
 
     created_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
+        DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
     )
+    """**`clock_timestamp()` 다** — 별칭은 **적은 차례**로 보여야 하는데, `now()`(트랜잭션
+    시작 시각)로 찍으면 한 번에 붙인 것이 전부 같은 값이라 차례가 질의마다 달라진다."""
 
 
 class ObjectYear(Base):

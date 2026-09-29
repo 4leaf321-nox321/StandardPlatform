@@ -62,8 +62,15 @@ class Worker:
                 # 기록도 함께 — 타이머가 하루 288행을 넣는다. 안 지우면 사람이 올린 작업이
                 # 그 사이에 파묻힌다.
                 old_jobs = services.purge_old_jobs(db)
-            if gone or old_jobs:
-                log.info("정리: 작업 파일 %d개 · 끝난 작업 기록 %d개", gone, old_jobs)
+                # 끊긴 선의 무덤도 — 안 지우면 내보내기가 몇 해치 이력을 통째로 보낸다.
+                old_graves = services.purge_old_tombstones(db)
+            if gone or old_jobs or old_graves:
+                log.info(
+                    "정리: 작업 파일 %d개 · 끝난 작업 기록 %d개 · 끊긴 선의 무덤 %d개",
+                    gone,
+                    old_jobs,
+                    old_graves,
+                )
             self._last_purge = now
 
     def run_forever(self) -> None:

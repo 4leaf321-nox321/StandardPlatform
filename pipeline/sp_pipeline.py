@@ -40,6 +40,7 @@ MANIFEST = "bundle.json"
 ONTOLOGY = "ontology.json"
 OBJECTS_DIR = "objects"
 RELATIONS_DIR = "relations"
+TOMBSTONES = "tombstones.json"
 UNRESOLVED = "unresolved.json"
 PREVIEW = "preview.json"
 APPLIED = "applied.json"
@@ -95,6 +96,10 @@ class Batch:
     file: str
     rows: list[Any]
     workspace_slug: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
+    """묶음에 붙은 **그 밖의 것** — `aliases_mode`(별칭을 더할지 맞출지) · `mode`(관계를
+    더할지 맞출지). 허브가 적어 보낸 것을 **그대로 전해야** 한다: 여기서 떨어뜨리면 허브에서
+    뺀 별칭과 끊은 선이 받는 쪽에 남아 둘이 갈린다."""
 
 
 @dataclass
@@ -104,6 +109,9 @@ class Run:
     ontology: dict[str, Any] | None = None
     objects: list[Batch] = field(default_factory=list)
     relations: list[Batch] = field(default_factory=list)
+    tombstones: dict[str, Any] | None = None
+    """허브에서 **사라진 것** — 지운 객체와 끊긴 선. 받는 쪽이 사용 중지 · 합치기 · 끊기를
+    계획에 올린다."""
     unresolved: list[Any] = field(default_factory=list)
     problems: list[str] = field(default_factory=list)
     """파일을 읽다가 난 문제 — 모양을 검사하기도 전에 막힌 것."""
@@ -137,6 +145,9 @@ def _batches(run: Run, folder: str) -> list[Batch]:
             file=f"{folder}/{file.name}",
             rows=body["rows"],
             workspace_slug=body.get("workspace_slug"),
+            extra={
+                key: body[key] for key in ("aliases_mode", "mode") if body.get(key) is not None
+            },
         )
     # **적는 차례대로 넣는다.** 참조하는 타입은 참조되는 타입 뒤에 와야 한다.
     order = [str(one) for one in run.manifest.get(f"{folder}_order") or []]
@@ -160,6 +171,11 @@ def load(path: Path) -> Run:
         run.problems.append(f"{ONTOLOGY}: 객체({{...}})여야 합니다")
     run.objects = _batches(run, OBJECTS_DIR)
     run.relations = _batches(run, RELATIONS_DIR)
+    graves = _read_json(path / TOMBSTONES, run.problems)
+    if isinstance(graves, dict) and (graves.get("objects") or graves.get("relations")):
+        run.tombstones = graves
+    elif graves is not None and not isinstance(graves, dict):
+        run.problems.append(f"{TOMBSTONES}: 객체({{...}})여야 합니다")
     unresolved = _read_json(path / UNRESOLVED, run.problems)
     run.unresolved = unresolved if isinstance(unresolved, list) else []
     return run
@@ -186,6 +202,7 @@ def payload(run: Run) -> dict[str, Any]:
                 "type_slug": one.type_slug,
                 "workspace_slug": one.workspace_slug,
                 "rows": [_clean(row) for row in one.rows if isinstance(row, dict)],
+                **one.extra,
             }
             for one in run.objects
         ],
@@ -193,10 +210,13 @@ def payload(run: Run) -> dict[str, Any]:
             {
                 "type_slug": one.type_slug,
                 "rows": [_clean(row) for row in one.rows if isinstance(row, dict)],
+                **one.extra,
             }
             for one in run.relations
         ],
     }
+    if run.tombstones:
+        body["tombstones"] = run.tombstones
     source = str(run.manifest.get("source") or "").strip()
     if source:
         body["source"] = source
@@ -468,14 +488,18 @@ def _get_json(server: str, token: str, path: str) -> Any:
     return answer
 
 
-def _export_bundle(hub: str, hub_token: str, group: str) -> Any:
-    """허브의 내보내기도 작업이다 — 넣고, 기다리고, 결과 파일을 받는다."""
+def _export_bundle(hub: str, hub_token: str, groups: list[str]) -> Any:
+    """허브의 내보내기도 작업이다 — 넣고, 기다리고, 결과 파일을 받는다.
+
+    **묶음을 여럿 받는다.** 코어를 축별로 나눠 둔 설치에서 하나씩 받으면, 축끼리 가리키는
+    참조 때문에 어느 쪽도 못 내보낸다(허브가 거절한다).
+    """
     headers = {
         "Authorization": f"Bearer {hub_token}",
         "Content-Type": "application/json",
         "X-Client": CLIENT,
     }
-    raw = json.dumps({"group": group}, ensure_ascii=False).encode("utf-8")
+    raw = json.dumps({"groups": groups}, ensure_ascii=False).encode("utf-8")
     status, answer = _send(
         hub, "POST", f"{hub.rstrip('/')}/api/bundles/export", headers, raw, who="허브"
     )
@@ -591,6 +615,24 @@ def summarize(result: dict[str, Any], *, limit: int = 20) -> str:
                 )
             if len(bad) > limit:
                 lines.append(f"  … 외 {len(bad) - limit}행")
+            # **끊을 선은 따로 센다** — 수에만 섞어 두면 「무엇이 끊기나」 를 보려고 사람이
+            # 표를 펴야 하는데, 그 자리에서 사람이 보는 것은 이 요약뿐이다.
+            cut = [row for row in plan.get("rows", []) if row.get("action") == "unlink"]
+            for row in cut[:limit]:
+                lines.append(f"  끊음: {row.get('label') or ''} — {row.get('message') or ''}")
+            if len(cut) > limit:
+                lines.append(f"  … 외 {len(cut) - limit}줄 끊음")
+            # 오류가 아닌 **말**(별칭이 빠졌다 · 같은 파일 앞줄이 먼저 쓴다 …)도 보인다.
+            notes = [
+                row
+                for row in plan.get("rows", [])
+                if row.get("message") and row.get("action") not in ("error", "unlink")
+            ]
+            for row in notes[:limit]:
+                where = f"{row.get('row')}행 {row.get('label') or ''}"
+                lines.append(f"  알림: {where}: {row.get('message')}")
+            if len(notes) > limit:
+                lines.append(f"  … 외 {len(notes) - limit}행 알림")
     graves = result.get("tombstones") or {}
     if graves.get("rows"):
         counts = " · ".join(
@@ -643,24 +685,37 @@ def cmd_init(path: Path, *, title: str = "") -> str:
     return f"실행 폴더를 만들었습니다: {path}"
 
 
-def cmd_pull(path: Path, *, hub: str, hub_token: str, group: str, source: str = "hub") -> str:
-    """허브가 내보낸 묶음(사이드바 묶음 하나)을 **새 실행 폴더로** 받는다.
+def cmd_pull(
+    path: Path,
+    *,
+    hub: str,
+    hub_token: str,
+    group: str | list[str],
+    source: str = "hub",
+) -> str:
+    """허브가 내보낸 묶음을 **새 실행 폴더로** 받는다(사이드바 묶음 여럿도 한 번에).
 
     받은 것도 여느 실행과 같다 — `validate` → `preview`(받는 플랫폼) → 사람이 확인 → `apply`.
     `bundle.json` 의 `source` 가 실려 가므로, 받는 플랫폼은 그 타입들을 허브 관리로 둔다.
+
+    **허브가 적어 보낸 것을 떨어뜨리지 않는다** — 별칭·관계의 「맞춤」(`aliases_mode` ·
+    `mode`)과 사라진 것(`tombstones`). 떨어뜨리면 허브에서 뺀 별칭 · 끊은 선 · 지운 객체가
+    받는 쪽에 남고, 두 설치는 그때부터 조용히 갈린다.
     """
-    if not group.strip():
+    wanted = [group] if isinstance(group, str) else list(group)
+    groups = [one.strip() for one in wanted if one and one.strip()]
+    if not groups:
         raise Stop("받을 사이드바 묶음(--group)이 필요합니다 — PLM 기준정보면 plm")
-    body = _export_bundle(hub, hub_token, group.strip())
+    body = _export_bundle(hub, hub_token, groups)
     if not isinstance(body, dict) or body.get("format") != FORMAT:
         raise Stop(f"허브의 응답이 묶음이 아닙니다: {str(body)[:200]}")
-    cmd_init(path, title=f"허브에서 받기 — {group}")
+    cmd_init(path, title=f"허브에서 받기 — {', '.join(groups)}")
     manifest = json.loads((path / MANIFEST).read_text(encoding="utf-8"))
     manifest["source"] = source
     manifest["sources"] = [
         {
             "name": hub,
-            "group": group,
+            "group": ",".join(groups),
             "exported_at": body.get("exported_at"),
             "counts": body.get("counts") or {},
         }
@@ -674,14 +729,20 @@ def cmd_pull(path: Path, *, hub: str, hub_token: str, group: str, source: str = 
         _write(path / OBJECTS_DIR / f"{index:03d}-{batch['type_slug']}.json", batch)
     for index, batch in enumerate(body.get("relations") or [], start=1):
         _write(path / RELATIONS_DIR / f"{index:03d}-{batch['type_slug']}.json", batch)
+    graves = body.get("tombstones") or {}
+    if graves.get("objects") or graves.get("relations"):
+        _write(path / TOMBSTONES, graves)
     counts = body.get("counts") or {}
     lines = [
         f"받았습니다: {path}",
-        f"허브 {hub} · 묶음 {group} · 내보낸 때 {body.get('exported_at')}",
-        "타입 {types} · 관계 종류 {relation_types} · 객체 {objects} · 관계 {relations}".format(
+        f"허브 {hub} · 묶음 {', '.join(groups)} · 내보낸 때 {body.get('exported_at')}",
+        (
+            "타입 {types} · 관계 종류 {relation_types} · 객체 {objects} · 관계 {relations}"
+            " · 사라진 것 {tombstones}"
+        ).format(
             **{
                 key: counts.get(key, 0)
-                for key in ("types", "relation_types", "objects", "relations")
+                for key in ("types", "relation_types", "objects", "relations", "tombstones")
             }
         ),
         *[f"경고: {one}" for one in body.get("warnings") or []],
@@ -697,8 +758,10 @@ def check_endpoints(run: Run, server: str, token: str) -> Report:
     예전에는 이것을 `preview` 에서야 알았다. 미리 보기는 계획을 세우느라 몇 분이 걸리고,
     그 몇 분 뒤에 「이름이 여럿과 맞는다」 를 듣는다. 물어서 아는 것은 먼저 묻는다.
 
-    보는 것 셋:
+    보는 것 넷:
     - 관계의 출발점(`src`)이 그 타입에서 **하나로 정해지나**
+    - 관계의 **도착점(`dst`)** 도 — 관계 종류가 허락한 타입에서(여럿이면 그 중 하나에서).
+      예전에는 출발점만 봐서, 도착점이 없는 파일이 미리 보기까지 가서야 막혔다
     - 객체 행이 가리키는 참조 칸(실행 폴더의 `ontology.json` 이 말하는 `object_ref`)이 풀리나
     - **별칭으로 풀린 것**은 경고로 — 다른 객체의 이름과 같은 별칭이 있으면 조용히 그쪽에
       붙는다(그 사실은 아무 데도 안 적힌다)
@@ -721,11 +784,42 @@ def check_endpoints(run: Run, server: str, token: str) -> Report:
         if fields:
             ref_of[str(one.get("slug"))] = fields
 
+    # 관계 종류 → 도착 타입들. 실행 폴더의 정의가 먼저고, 없으면 플랫폼에 묻는다.
+    dst_types: dict[str, list[str]] = {
+        str(one.get("slug")): [str(x) for x in (one.get("dst_type_slugs") or [])]
+        for one in (((run.ontology or {}).get("relation_types") or []) if run.ontology else [])
+        if isinstance(one, dict)
+    }
+    missing_kinds = {
+        str(row.get("relation"))
+        for batch in run.relations
+        for row in batch.rows
+        if isinstance(row, dict)
+        and row.get("relation")
+        and row.get("relation") not in dst_types
+    }
+    if missing_kinds:
+        for one in _get_json(server, token, "/api/ontology/relation-types") or []:
+            if isinstance(one, dict) and str(one.get("slug")) in missing_kinds:
+                dst_types[str(one["slug"])] = [
+                    str(x) for x in (one.get("dst_type_slugs") or [])
+                ]
+
     asked: dict[str, set[str]] = {}
+    # 도착점은 **여러 타입 중 하나**에 있으면 된다 — 그 판정은 아래에서 따로 한다.
+    either: list[tuple[str, list[str]]] = []
     for batch in run.relations:
         for row in batch.rows:
-            if isinstance(row, dict) and row.get("src"):
+            if not isinstance(row, dict):
+                continue
+            if row.get("src"):
                 asked.setdefault(batch.type_slug, set()).add(str(row["src"]))
+            ends = dst_types.get(str(row.get("relation") or ""))
+            if row.get("dst") and ends:
+                if len(ends) == 1:
+                    asked.setdefault(ends[0], set()).add(str(row["dst"]))
+                else:
+                    either.append((str(row["dst"]), ends))
     for batch in run.objects:
         for key, target in (ref_of.get(batch.type_slug) or {}).items():
             if not target:
@@ -750,6 +844,11 @@ def check_endpoints(run: Run, server: str, token: str) -> Report:
                 if row.get(name):
                     making.setdefault(batch.type_slug, set()).add(str(row[name]))
 
+    for text, ends in either:
+        for one in ends:
+            asked.setdefault(one, set()).add(text)
+
+    settled: dict[str, set[str]] = {}
     for type_slug, names in sorted(asked.items()):
         left = sorted(names - (making.get(type_slug) or set()))
         if not left:
@@ -769,6 +868,14 @@ def check_endpoints(run: Run, server: str, token: str) -> Report:
             for one in left
             if ((found.get(one) or {}).get("object") or {}).get("matched_by") == "alias"
         ]
+        settled[type_slug] = {
+            one for one in left if (found.get(one) or {}).get("match") == "exact"
+        }
+        # 도착 타입이 여럿인 관계는 **그 중 하나**에서 풀리면 된다 — 나머지에서 「없다」 가
+        # 나오는 것은 당연하므로 여기서 빼고 아래에서 함께 본다.
+        forgiving = {one for one, ends in either if type_slug in ends}
+        missing = [one for one in missing if one not in forgiving]
+        several = [one for one in several if one not in forgiving]
         if missing:
             report.errors.append(
                 f"{type_slug}: 가리키는 것이 플랫폼에 없습니다 {len(missing)}건 — "
@@ -785,6 +892,24 @@ def check_endpoints(run: Run, server: str, token: str) -> Report:
                 f"{type_slug}: 별칭으로 풀린 것 {len(by_alias)}건 — 다른 객체의 이름과 같은 "
                 "별칭이면 그쪽에 붙습니다: " + ", ".join(by_alias[:10])
             )
+
+    # 도착 타입이 여럿인 줄 — **어느 타입에서도** 안 풀린 것만 오류다.
+    homeless = sorted(
+        {
+            text
+            for text, ends in either
+            if not any(
+                text in settled.get(one, set()) or text in (making.get(one) or set())
+                for one in ends
+            )
+        }
+    )
+    if homeless:
+        report.errors.append(
+            f"관계의 도착점을 플랫폼에서 찾지 못했습니다 {len(homeless)}건 — "
+            + ", ".join(homeless[:10])
+            + (" …" if len(homeless) > 10 else "")
+        )
     return report
 
 
@@ -876,7 +1001,12 @@ def main(argv: list[str] | None = None) -> int:
 
     pull = sub.add_parser("pull", help="허브가 내보낸 묶음을 새 실행 폴더로 받는다")
     pull.add_argument("run", type=Path)
-    pull.add_argument("--group", required=True, help="사이드바 묶음 slug — PLM 기준정보면 plm")
+    pull.add_argument(
+        "--group",
+        required=True,
+        action="append",
+        help="사이드바 묶음 slug — PLM 기준정보면 plm. **여러 번 적어도 된다**",
+    )
     pull.add_argument("--hub", default=os.environ.get("SP_HUB_SERVER", ""))
     pull.add_argument("--hub-token", default=os.environ.get("SP_HUB_TOKEN", ""))
     pull.add_argument("--source", default="hub")

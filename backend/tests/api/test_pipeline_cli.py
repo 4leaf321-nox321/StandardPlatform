@@ -419,3 +419,70 @@ def test_검증이_끝점을_플랫폼에_미리_묻는다(
     ok, text = pipeline.cmd_validate(run, server=SERVER, token=token)
     assert ok is False, text
     assert "이름이 여럿과 맞습니다" in text
+
+
+def test_받을_때_허브가_적은_것을_떨어뜨리지_않는다(
+    client: TestClient, admin: Signed, platform: None, tmp_path: Path
+) -> None:
+    """**허브가 적어 보낸 것을 도구가 버리면 두 설치가 갈린다.**
+
+    별칭·관계의 「맞춤」(`aliases_mode` · `mode`)과 **사라진 것**(`tombstones`)이 그것이다.
+    떨어뜨리면 허브에서 뺀 별칭 · 끊은 선 · 지운 객체가 받는 쪽에 그대로 남는다.
+    묶음도 여럿 받는다 — 코어를 축별로 나눈 허브에서 하나씩 받으면 축끼리 가리키는 참조
+    때문에 어느 쪽도 못 받는다.
+    """
+    tag = uuid.uuid4().hex[:6]
+    group, other, kind = f"hg{tag}", f"hg2{tag}", f"hk{tag}"
+    made = bundle_import(
+        client,
+        admin,
+        {
+            "ontology": {
+                "groups": [
+                    {"slug": group, "label": "허브 묶음"},
+                    {"slug": other, "label": "다른 묶음"},
+                ],
+                "types": [
+                    {
+                        "slug": kind,
+                        "label": "기준",
+                        "nav_group_slug": group,
+                        "key_policy": "required",
+                    }
+                ],
+                "relation_types": [],
+            },
+            "objects": [
+                {
+                    "type_slug": kind,
+                    "rows": [
+                        {"key": "K-1", "label": "하나", "aliases": ["첫째"]},
+                        {"key": "K-2", "label": "둘", "aliases": ["둘째"]},
+                    ],
+                }
+            ],
+            "apply": True,
+        },
+    )
+    assert made["applied"] is True, made
+    token = _token(client, admin)
+
+    # 허브에서 하나를 지운다 — 그것이 무덤으로 간다.
+    rows = client.get(f"/api/objects/{kind}", headers=admin.headers).json()["items"]
+    gone = next(one for one in rows if one["key"] == "K-2")
+    dropped = client.delete(f"/api/objects/{kind}/{gone['id']}", headers=admin.headers)
+    assert dropped.status_code in (200, 204), dropped.text
+
+    run = tmp_path / "pulled"
+    text = pipeline.cmd_pull(run, hub=SERVER, hub_token=token, group=[group, other])
+    assert "사라진 것 1" in text, text
+
+    # 파일로 남아 있고, 보낼 때 **그대로** 실린다.
+    graves = json.loads((run / "tombstones.json").read_text(encoding="utf-8"))
+    assert [one["key"] for one in graves["objects"]] == ["K-2"]
+    body = pipeline.payload(pipeline.load(run))
+    assert body["tombstones"] == graves
+    assert body["objects"][0]["aliases_mode"] == "replace"
+
+    ok, report = pipeline.cmd_validate(run)
+    assert ok is True, report

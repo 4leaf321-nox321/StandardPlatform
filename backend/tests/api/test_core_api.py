@@ -10,6 +10,7 @@ import uuid
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from tests.api.conftest import Signed
@@ -583,3 +584,39 @@ def test_한쪽_끝이_안_열린_선은_안_나간다(client: TestClient, admin
     assert entry["relations_endpoint"] is None
     assert _relations(client, admin, part)["items"] == []
     assert vendor
+
+
+def test_도는_적재보다_앞선_시각을_주지_않는다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """**긴 적재가 도는 동안 받아 가면 그 적재분을 영영 놓쳤다.**
+
+    `objects.updated_at` 은 `now()`, 곧 트랜잭션이 **시작한** 시각이다. 2만 줄 적재가 T0 에
+    시작해 T2 에 끝나면 그 행들의 시각은 전부 T0 이고, 그 사이에 받아 간 쪽은 그것을 못 본
+    채 `as_of=T1` 을 적어 둔다 — 다음 호출은 `updated_at > T1` 이라 그 적재를 건너뛴다.
+
+    그래서 `as_of` 는 **지금 도는 트랜잭션 중 가장 먼저 시작한 것보다 앞**이어야 한다.
+    """
+    from sqlalchemy.orm import Session as RawSession
+
+    from app.database import SessionLocal
+    from app.modules.coreapi import services
+
+    vendor, _part = _world(client, admin)
+    # 다른 세션이 트랜잭션을 열어 두고 아직 안 끝냈다 — 긴 적재가 도는 상황이다.
+    other: RawSession = SessionLocal()
+    try:
+        other.execute(select(1))  # 트랜잭션을 연다(xact_start 가 생긴다).
+        started = other.scalar(select(func.now()))
+        assert started is not None
+        mark = services.watermark(db)
+        assert mark < started, (mark, started)
+    finally:
+        other.rollback()
+        other.close()
+
+    # 열린 트랜잭션이 없으면 지금이다 — 늦추기만 하고 멈추지는 않는다.
+    after = services.watermark(db)
+    assert after >= mark
+    body = _rows(client, admin, vendor)
+    assert body["as_of"]

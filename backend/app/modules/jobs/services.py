@@ -52,6 +52,10 @@ def purge_old_jobs(db: Session) -> int:
     return files.purge_old_jobs(db)
 
 
+def purge_old_tombstones(db: Session) -> int:
+    return files.purge_old_tombstones(db)
+
+
 # --- 넣기 · 보기 ----------------------------------------------------------------
 
 

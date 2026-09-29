@@ -1508,7 +1508,7 @@ def export_relations(
 def import_relations(
     type_slug: str,
     upload: UploadFile = File(alias="file"),
-    relations_mode: str = Form(default="add", pattern="^(add|replace)$"),
+    relations_mode: str = Form(default="add", pattern="^(add|replace|replace_type)$"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> JobOut:

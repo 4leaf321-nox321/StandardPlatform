@@ -47,7 +47,14 @@ DATE = "<date>"
 TOP = 10
 BOUNDARIES = "_-/. "
 """참조 대조에서 「앞부분」 을 가르는 자리 — 코드가 끊기는 글자."""
-MATCH_OUTCOMES = ("그대로", "대소문자만 다름", "앞부분이 하나", "여러 개", "없음")
+MATCH_OUTCOMES = (
+    "그대로",
+    "대소문자만 다름",
+    "앞부분이 하나",
+    "별칭·이름으로",
+    "여러 개",
+    "없음",
+)
 ON_MISSING = ("blank", "unresolved", "keep")
 AGGREGATES = ("collect", "join")
 """**여러 행의 값을 하나로 모으는 칸.** 같은 식별자가 여러 행에 나올 때, 값이 갈리는 것이
@@ -393,6 +400,13 @@ class KeyMatch:
         self.exact = set(keys)
         self.upper: dict[str, set[str]] = defaultdict(set)
         self.fronts: dict[str, set[str]] = defaultdict(set)
+        self.resolved: dict[str, str | None] = {}
+        """플랫폼이 풀어 준 것 — 글자 → 식별자(못 풀었으면 None).
+
+        ⚠️ 식별자만 보면 「앤시스」 라고 적힌 원천이 통째로 안 맞는다. 별칭과 이름으로도
+           찾아야 하는데, **그 판정은 플랫폼의 것**이다(식별자 → 별칭 → 이름 차례와 겹침
+           규칙). 도구가 따로 맞추면 「도구는 된다는데 넣으면 안 되는」 상태가 생긴다."""
+
         for key in keys:
             self.upper[key.upper()].add(key)
             for index, char in enumerate(key):
@@ -413,6 +427,9 @@ class KeyMatch:
                 return next(iter(found)), "앞부분이 하나"
             if len(found) > 1:
                 return None, "여러 개"
+        picked = self.resolved.get(text)
+        if picked:
+            return picked, "별칭·이름으로"
         return None, "없음"
 
 
@@ -448,9 +465,12 @@ class Mapping:
         self.match_stats: dict[tuple[str, str], MatchStats] = {}
         self.match_unresolved: dict[tuple[str, str, str], list[int]] = {}
         self.types: list[dict[str, Any]] = list(spec.get("types") or [])
-        if not self.types:
-            raise Stop("대응 파일: types 가 비어 있습니다")
         self.relations: list[dict[str, Any]] = list(spec.get("relations") or [])
+        if not self.types and not self.relations:
+            # **선만 담은 대응 파일도 있다** — 객체는 이미 들어가 있고 이 표는 그것들을 잇기만
+            # 할 때. 그때 끝점은 `column`(식별자 · 이름)으로 적는다(`key_of` 는 타입이 있어야
+            # 한다).
+            raise Stop("대응 파일: types 나 relations 중 하나는 있어야 합니다")
         self.by_slug: dict[str, dict[str, Any]] = {}
         for index, one in enumerate(self.types, start=1):
             slug = str(one.get("type_slug") or "")
@@ -475,7 +495,7 @@ class Mapping:
             for name in ("relation", "type_slug", "src", "dst"):
                 if name not in one:
                     raise Stop(f"대응 파일: {where} 에 {name} 이(가) 있어야 합니다")
-            if str(one["type_slug"]) not in self.by_slug:
+            if self.types and str(one["type_slug"]) not in self.by_slug:
                 raise Stop(
                     f"대응 파일: {where} 의 type_slug {one['type_slug']!r} 가 "
                     "types 에 없습니다"
@@ -902,6 +922,7 @@ def convert(
         return cache[target]
 
     mapping = Mapping(spec, table, keys=keys)
+    _ask_platform(mapping, server, token)
     ontology: dict[str, Any] | None = None
     if spec.get("ontology"):
         ontology_path = (mapping_path.parent / str(spec["ontology"])).resolve()
@@ -979,6 +1000,58 @@ def convert(
     text = _report(mapping, mapping_path, results, run, len(unresolved), edges)
     (run / REPORT).write_text(text + "\n", encoding="utf-8")
     return not unresolved, text
+
+
+def _ask_platform(mapping: Mapping, server: str, token: str) -> None:
+    """식별자로 못 맞춘 값을 **플랫폼에 한 번에 물어** 별칭 · 이름으로도 푼다.
+
+    ⚠️ 판정은 플랫폼의 것을 쓴다(`resolve-many`) — 식별자 → 별칭 → 이름 차례와 겹침 규칙이
+       거기 있고, 도구가 따로 맞추면 「도구는 된다는데 넣으면 안 되는」 상태가 생긴다.
+       주소 · 토큰이 없으면(그리고 `@파일` 로 맞출 때는) 예전처럼 식별자만 본다.
+    """
+    if not server or not token or not mapping.matchers:
+        return
+    for spec in _match_columns(mapping):
+        target = str(spec["keys"]).strip()
+        matcher = mapping.matchers.get(target)
+        if matcher is None or target.startswith("@"):
+            continue
+        left: list[str] = []
+        for _number, row in mapping.table.rows:
+            text = str(row.get(str(spec["column"])) or "").strip()
+            if spec.get("upper"):
+                text = text.upper()
+            if not text or text in matcher.exact or text in matcher.resolved:
+                continue
+            found, _outcome = matcher.find(text, prefix=bool(spec.get("prefix")))
+            if found is None:
+                left.append(text)
+        if not left:
+            continue
+        answered = pipeline.resolve_names(server, token, target, sorted(set(left)))
+        if answered is None:
+            continue
+        for text, verdict in answered.items():
+            picked = (verdict or {}).get("object") if verdict.get("match") == "exact" else None
+            matcher.resolved[text] = (
+                str(picked["key"]) if picked and picked.get("key") else None
+            )
+
+
+def _match_columns(mapping: Mapping) -> list[dict[str, Any]]:
+    """참조 대조(`match`)를 쓰는 칸들 — 대조 규칙에 그 칸(`column` · `upper`)을 붙여서."""
+    out: list[dict[str, Any]] = []
+    for one in mapping.types:
+        for spec in (one.get("fields") or {}).values():
+            inner = spec
+            for mode in AGGREGATES:
+                if isinstance(inner, dict) and mode in inner:
+                    inner = inner[mode]
+            if isinstance(inner, dict) and "match" in inner:
+                out.append(
+                    {**inner["match"], "column": inner["column"], "upper": inner.get("upper")}
+                )
+    return out
 
 
 def brief(report: str) -> str:

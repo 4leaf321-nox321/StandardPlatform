@@ -351,11 +351,14 @@ def run_init(work: str, name: str, title: str = "") -> str:
 
 
 @mcp.tool()
-def hub_pull(work: str, group: str, name: str = "") -> str:
+def hub_pull(work: str, group: str | list[str], name: str = "") -> str:
     """허브가 내보낸 사이드바 묶음(PLM 기준정보면 `plm`)을 **새 실행 폴더로** 받는다 — 이 PC 가
     쌍둥이 플랫폼에 넣을 때. 그 뒤는 `run_validate` → `run_preview` → 사람이 적용. 받은 타입은
     받는 플랫폼에서 허브 관리가 되어 거기서는 못 고친다. env 에 SP_HUB_SERVER · SP_HUB_TOKEN 이
-    있어야 한다."""
+    있어야 한다.
+
+    **묶음을 여럿 적어도 된다**(`["plm", "core"]`) — 코어를 축별로 나눠 둔 허브에서 하나씩
+    받으면 축끼리 가리키는 참조 때문에 어느 쪽도 못 받는다."""
     folder = _work(work)
     hub = os.environ.get("SP_HUB_SERVER", "").strip()
     token = os.environ.get("SP_HUB_TOKEN", "").strip()
@@ -363,8 +366,9 @@ def hub_pull(work: str, group: str, name: str = "") -> str:
         raise Stop(
             "허브에서 받으려면 MCP 설정의 env 에 SP_HUB_SERVER · SP_HUB_TOKEN 이 있어야 합니다"
         )
-    run = sp_work.new_run(folder, name or f"허브-{group}")
-    text = pipeline.cmd_pull(run, hub=hub, hub_token=token, group=group)
+    wanted = [group] if isinstance(group, str) else list(group)
+    run = sp_work.new_run(folder, name or f"허브-{'-'.join(wanted)}")
+    text = pipeline.cmd_pull(run, hub=hub, hub_token=token, group=wanted)
     return f"{text}\n실행: {run.relative_to(folder).as_posix()}"
 
 

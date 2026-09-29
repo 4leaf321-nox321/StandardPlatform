@@ -184,7 +184,7 @@ def _stages(
         if bundle.apply:
             out.snapshot_id = importer.take_snapshot(db, user, reason="묶음 가져오기").id
         try:
-            planned = importer.apply(db, bundle.ontology, source=bundle.source)
+            planned = importer.apply(db, bundle.ontology, source=bundle.source, actor=user)
         except ValueError as caught:
             out.errors.append(f"정의: {caught}")
             return
@@ -257,10 +257,23 @@ def _stages(
             continue
         out.relations.append(Batch(links.type_slug, planned_links))
 
-    if bundle.tombstones is not None:
+    if bundle.tombstones is not None and (
+        bundle.tombstones.objects or bundle.tombstones.relations
+    ):
+        if not bundle.source:
+            # **무덤은 허브가 말하는 것이다.** `source` 가 붙은 묶음은 시스템 관리자만
+            # 넣을 수 있는데(위), 무덤만 담아 보내면 그 문을 지나지 않는다 — 그러면 아무나
+            # 전역 객체를 사용 중지 · 합치기 · 끊기 할 수 있다(실측으로 열려 있었다).
+            out.errors.append(
+                "사라진 것(tombstones)은 **허브에서 받은 묶음**에만 있습니다 — "
+                "`source` 를 붙여 보내세요(시스템 관리자)."
+            )
+            return
         # **맨 뒤다.** 합치기는 이긴 쪽이 이미 있어야 하고, 그것은 앞의 객체 단계가 넣는다.
         # 미리 보기에서도 적용한다(바깥이 롤백한다) — 안 그러면 「무엇이 될지」 를 못 본다.
-        out.tombstones = graves.run(db, user, bundle.tombstones, apply=True)
+        out.tombstones = graves.run(
+            db, user, bundle.tombstones, source=bundle.source, apply=True
+        )
 
 
 def _staged(on_progress: bulk.Progress, prefix: str) -> bulk.Progress:
