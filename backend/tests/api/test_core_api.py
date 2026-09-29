@@ -379,14 +379,17 @@ def test_코어_현황이_한_화면에_모인다(client: TestClient, admin: Sig
     있지」 를 아무도 한눈에 답할 수 없다."""
     vendor, _part = _world(client, admin)
     _make_object(client, admin, vendor, label="ACME", key="ACME-001")
-    raw = _token(client, admin, f"matnexus-{uuid.uuid4().hex[:6]}", ["core:read"])
+    # **이름을 통째로 맞춘다.** 앞부분만 보면 다른 시험이 만든 같은 접두어 토큰이 먼저
+    # 걸리고(목록은 만든 차례다), 그것은 쓴 적이 없어 `last_used_at` 이 비어 있다.
+    name = f"matnexus-{uuid.uuid4().hex[:6]}"
+    raw = _token(client, admin, name, ["core:read"])
     _rows_as(client, {"Authorization": f"Bearer {raw}"}, vendor)
 
     body = client.get("/api/ontology/core-status", headers=admin.headers).json()
     assert body["base"].endswith("/core")
     assert vendor in {one["slug"] for one in body["types"]}
 
-    mine = next(one for one in body["consumers"] if "matnexus" in one["name"])
+    mine = next(one for one in body["consumers"] if one["name"] == name)
     # **좁은 자격인지 보인다** — `read` 토큰은 코어 밖도 읽으므로 무게가 다르다.
     assert mine["narrow"] is True and mine["last_used_at"]
 

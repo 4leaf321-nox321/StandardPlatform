@@ -62,6 +62,7 @@ mcp = FastMCP(
         "  몇 건인가 · 어떻게 갈리나       objects_summary  (세려고 전부 받지 마라)\n"
         "  이 객체의 모든 것               object_get · object_references · object_rollup\n"
         "  계층을 한 단계씩                object_tree\n"
+        "  이것과 이어진 것들              graph_neighbors  (타입 지형은 graph_overview)\n"
         "  누가 언제 무엇을 바꿨나         object_history(하나) · audit_recent(전체)\n"
         "  여러 객체의 한 칸을 한 값으로   bulk_edit (apply=false 로 먼저 · undo 있음)\n"
         "  잘못 이은 관계                  relation_update · relation_remove\n"
@@ -675,6 +676,57 @@ async def object_tree(
     if parent:
         params.append(("parent", parent))
     return await _get(ctx, f"/api/objects/{type_slug}/tree", params=params)
+
+
+@tool()
+async def graph_neighbors(
+    ctx: Context,
+    object_id: str,
+    depth: int = 1,
+    relations: list[str] | None = None,
+    types: list[str] | None = None,
+    fanout: int | None = None,
+    limit: int | None = None,
+) -> Any:
+    """이 객체에서 **몇 단계 안에 무엇이 이어져 있나** — 질의어 없이 그래프를 훑는다.
+
+    「이것과 연결된 것들」 은 `objects_list` 로는 한 걸음까지이고, 그보다 멀면 질의어를
+    써야 했다. 이 도구가 그 사이를 메운다 — **화면의 지식 그래프가 쓰는 것과 같은 길**이라
+    답도 화면과 같다.
+
+    - `depth` 는 몇 단계까지(서버가 상한을 강제한다). 1 이면 바로 이웃.
+    - `relations` · `types` 로 좁힌다 — 안 좁히면 온갖 관계가 함께 온다.
+    - **잘리면 잘렸다고 말한다**(`truncated`, 노드의 `degree`). 「이게 전부」 로 읽지 않는다 —
+      좁혀서 다시 부르거나 그 노드에서 다시 펼친다.
+
+    돌려주는 것: `nodes`(id · 이름 · 식별자 · 타입 · 상태 · 부서 · degree)와 `edges`
+    (관계 slug · 양끝 · 방향). 값이 필요하면 그 id 로 `object_get` 을 부른다.
+
+    깊이 전부를 한 번에(부품 트리 밑바닥까지) 봐야 하면 `rdf_query` 의 `+` 경로를 쓴다.
+    """
+    params: list[tuple[str, Any]] = [("focus", object_id), ("depth", depth)]
+    if fanout is not None:
+        params.append(("fanout", fanout))
+    if limit is not None:
+        params.append(("limit", limit))
+    if relations:
+        params.append(("relations", ",".join(relations)))
+    if types:
+        params.append(("types", ",".join(types)))
+    return await _get(ctx, "/api/graph/neighborhood", params=params)
+
+
+@tool()
+async def graph_overview(ctx: Context) -> Any:
+    """**무엇이 무엇과 이어져 있나** — 타입 사이의 지형 한 장(객체가 아니라 타입 수준).
+
+    어느 타입에서 출발해 어디로 갈 수 있는지를 먼저 보고 나서 `graph_neighbors` ·
+    `rdf_query` 로 들어간다. 관계 이름을 짐작해 질의를 쓰면 대개 0건이 나오고, 그 0건은
+    「없다」 로 잘못 읽힌다.
+
+    돌려주는 것: 타입마다 객체 수, 타입 사이의 관계 종류와 그 수.
+    """
+    return await _get(ctx, "/api/graph/overview")
 
 
 @tool()

@@ -47,6 +47,8 @@ TOOLS = {
     "object_references",
     "object_rollup",
     "object_tree",
+    "graph_neighbors",
+    "graph_overview",
     "bulk_edit",
     "bulk_edit_undo",
     "audit_recent",

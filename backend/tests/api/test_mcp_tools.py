@@ -722,3 +722,54 @@ def test_확장_호출은_뿌리_밖으로_안_나간다(bot: Bot) -> None:
     for bad in ("../../ontology/schema", "https://example.test/x", "dt/pairs?workspace=x"):
         got = asyncio.run(server.extension_call(bot.ctx, "caegroup", bad))
         assert "error" in got, bad
+
+
+def test_이어진_것을_질의어_없이_훑는다(bot: Bot) -> None:
+    """**「이것과 이어진 것들」 은 목록으로는 한 걸음까지다.** 그보다 멀면 질의어를 써야
+    했고, 질의문을 틀리면 0건이 나와 「없다」 로 잘못 읽힌다.
+
+    화면의 지식 그래프가 쓰는 길을 도구로도 연다 — 답이 화면과 같다.
+    """
+    part = _uniq("part")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [{"slug": part, "label": "부품", "key_policy": "required"}],
+            "relation_types": [
+                {"slug": _uniq("uses"), "label": "사용", "inverse_label": "쓰임"}
+            ],
+        },
+        apply=True,
+    )
+    schema = bot.call(server.ontology_schema)
+    relation = next(one["slug"] for one in schema["relation_types"] if one["label"] == "사용")
+    top = bot.call(server.object_create, part, label="상위", key="P-TOP")
+    middle = bot.call(server.object_create, part, label="중간", key="P-MID")
+    leaf = bot.call(server.object_create, part, label="말단", key="P-LEAF")
+    bot.call(
+        server.relation_add, part, top["id"], relation, middle["id"], evidence_note="도면"
+    )
+    bot.call(
+        server.relation_add, part, middle["id"], relation, leaf["id"], evidence_note="도면"
+    )
+
+    # 한 걸음 — 바로 이웃만.
+    near = bot.call(server.graph_neighbors, top["id"], depth=1)
+    assert {one["label"] for one in near["nodes"]} == {"상위", "중간"}
+
+    # 두 걸음 — 목록 도구로는 닿지 않던 자리.
+    far = bot.call(server.graph_neighbors, top["id"], depth=2)
+    assert {one["label"] for one in far["nodes"]} == {"상위", "중간", "말단"}
+    assert all(one["relation"] == relation for one in far["edges"])
+    # **잘렸으면 잘렸다고 말한다** — 「이게 전부」 로 읽지 않게.
+    assert far["truncated"] is False
+
+    # 관계로 좁히면 그 관계만 — 이름을 틀리면 이웃이 안 온다(짐작하지 말라는 뜻).
+    only = bot.call(server.graph_neighbors, top["id"], depth=2, relations=[relation])
+    assert len(only["nodes"]) == 3
+    none = bot.call(server.graph_neighbors, top["id"], depth=2, relations=["없는관계"])
+    assert [one["label"] for one in none["nodes"]] == ["상위"]
+
+    # 타입 지형 — 질의를 쓰기 전에 어디로 갈 수 있는지 본다.
+    shape = bot.call(server.graph_overview)
+    assert any(one["slug"] == part for one in shape["nodes"])
