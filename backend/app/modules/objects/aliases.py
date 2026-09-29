@@ -247,6 +247,47 @@ def set_human(
     return before, wanted
 
 
+def add_fresh(
+    db: Session,
+    row: ObjectInstance,
+    object_type: ObjectType,
+    values: Sequence[str | Incoming],
+    *,
+    verified: User | None = None,
+) -> list[str]:
+    """**방금 만든 객체**에 별칭을 붙인다 — 있던 것을 묻지 않는다(없다).
+
+    ⚠️ 부르는 쪽이 겹침을 이미 가린 자리에서만 쓴다(일괄 가져오기의 `split_free`).
+       `set_human` 은 줄마다 세 번 묻는다(있던 것 · 겹침 · 넣기) — 2만 줄이면 그것이
+       6만 번이고, 실측으로 적용 시간의 대부분이 거기였다.
+    """
+    asked = incoming(values)
+    wanted, long = split_long(clean([one.value for one in asked]))
+    if long:  # pragma: no cover - 부르는 쪽이 이미 걸렀다
+        raise InvalidValue(
+            code("OBJECTS", 89), f"별칭이 {MAX_VALUE}자를 넘습니다: 「{long[0][:40]}…」"
+        )
+    meta = {compare_key(one.value): one for one in asked}
+    now = datetime.now(UTC)
+    for value in wanted:
+        norm = compare_key(value)
+        one = meta.get(norm) or Incoming(value=value)
+        db.add(
+            ObjectAlias(
+                object_id=row.id,
+                type_id=object_type.id,
+                kind=HUMAN,
+                value=value,
+                norm=norm,
+                source=one.source[:80],
+                note=one.note[:200],
+                verified_by_id=verified.id if verified is not None else None,
+                verified_at=now if verified is not None else None,
+            )
+        )
+    return wanted
+
+
 def set_external(
     db: Session, row: ObjectInstance, object_type: ObjectType, slug: str, value: str
 ) -> None:

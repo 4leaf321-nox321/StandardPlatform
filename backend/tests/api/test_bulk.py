@@ -10,7 +10,13 @@ import uuid
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy import event, select
+from sqlalchemy.orm import Session
 
+from app.database import engine
+from app.modules.accounts.models import User
+from app.modules.objects import bulk
+from app.modules.ontology.models import ObjectType
 from tests.api.conftest import Signed, export_file, import_file
 from tests.api.test_ontology import (
     _make_object,
@@ -855,3 +861,57 @@ def test_붙여_넣은_탭_구분_표도_받는다(client: TestClient, admin: Si
     planned = import_file(client, admin, part, text, name="pasted.csv")
     assert [r["action"] for r in planned["rows"]] == ["create", "create"]
     assert planned["rows"][0]["label"] == "볼트"
+
+
+def test_계획은_줄마다_묻지_않는다(client: TestClient, admin: Signed, db: Session) -> None:
+    """**질의 수가 줄 수를 따라가면 안 된다.**
+
+    예전에는 줄마다 대여섯 번 물었다 — 2만 줄에서 계획 29초 · 다시 적재 193초였고(실측),
+    표가 커질수록 더 느려졌다. 재적재는 흔한 일이라 그 수는 그대로 사람이 기다리는 시간이
+    된다. 지금은 파일에 나온 것을 **한 번에 미리 읽는다.**
+
+    시간을 재지 않고 **질의 수**를 센다 — 시간은 기계에 따라 달라지지만, 「줄마다 묻나」 는
+    달라지지 않는다.
+    """
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    _make_property(
+        client, admin, part, key="serial", label="일련", data_type="text", unique=True
+    )
+    object_type = db.scalar(select(ObjectType).where(ObjectType.slug == part))
+    user = db.scalar(select(User).where(User.email == admin.email))
+    assert object_type is not None and user is not None
+
+    def rows_of(count: int) -> list[dict[str, Any]]:
+        tag = uuid.uuid4().hex[:6]
+        return [
+            {
+                "key": f"P-{tag}-{n}",
+                "label": f"부품 {n}",
+                "serial": f"S-{tag}-{n}",
+                "aliases": [f"별칭{tag}{n}"],
+            }
+            for n in range(count)
+        ]
+
+    def queries(count: int) -> int:
+        seen = 0
+
+        def tick(*_args: Any, **_kw: Any) -> None:
+            nonlocal seen
+            seen += 1
+
+        event.listen(engine, "before_cursor_execute", tick)
+        try:
+            plan = bulk.plan_objects(
+                db, user, object_type, rows_of(count), owner_workspace_id=None
+            )
+        finally:
+            event.remove(engine, "before_cursor_execute", tick)
+        assert plan.ok, plan.errors
+        return seen
+
+    small, big = queries(20), queries(200)
+    # 열 배 긴 파일이 질의를 열 배 쓰지 않는다 — 몇 번 더 쓰는 것은 상한 없는 `IN` 이 아니라
+    # 미리 읽는 질의가 값이 늘어서다.
+    assert big <= small + 2, (small, big)
+    assert big < 20, big

@@ -32,7 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -50,14 +50,12 @@ from app.modules.objects.services import (
     normalize_key,
     properties_of,
     require_key_free,
-    require_refs_exist,
-    require_unique_properties,
 )
 from app.modules.ontology import managed
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.services import InvalidValue, merge_properties, validate_properties
 from app.shared import audit, tabular
-from app.shared.errors import AppError, code
+from app.shared.errors import AppError, Conflict, code
 from app.shared.permissions import require_owner_edit, visible_owner_clause
 from app.shared.text import compare_key
 
@@ -125,6 +123,9 @@ class Plan:
     rows: list[RowPlan] = field(default_factory=list)
     errors: list[str] = field(default_factory=list)
     """행과 무관한 오류(모르는 열, 상한 초과). 하나라도 있으면 안 적용한다."""
+    index: Any = None
+    """계획이 미리 읽은 것(`_Index`) — **적용이 그대로 쓴다.** 밖으로는 안 나간다
+    (API 는 `rows` · `errors` · `counts` 만 본다)."""
 
     @property
     def counts(self) -> dict[str, int]:
@@ -213,6 +214,23 @@ class _Refs:
                     by_label.setdefault(row.label.strip(), []).append(row.id)
             self.cache[type_slug] = (by_key, by_alias, by_label, ids)
         return self.cache[type_slug]
+
+    def missing(self, defs: list[PropertyDef], values: dict[str, Any]) -> list[str]:
+        """가리키는 것이 **없는** 값들 — 캐시로 본다(질의 없음).
+
+        예전에는 줄마다 `require_refs_exist` 가 질의를 돌았다. 이 캐시는 그 타입의 살아
+        있는 id 를 이미 들고 있다(이름 풀이가 그것으로 맞춘다) — 같은 사실을 두 번 묻던
+        셈이다.
+        """
+        out: list[str] = []
+        for definition in defs:
+            if definition.data_type != "object_ref" or definition.key not in values:
+                continue
+            raw = values[definition.key]
+            items = raw if isinstance(raw, list) else [raw]
+            _, _, _, ids = self._load(definition.ref_type_slug or "")
+            out.extend(str(one) for one in items if one and str(one) not in ids)
+        return out
 
     def resolve(self, definition: PropertyDef, raw: str) -> str:
         """식별자 → 별칭 → 이름 → uuid 순으로 맞춘다. 이름이 여럿에 맞으면 거절."""
@@ -424,6 +442,232 @@ def _patch_of(
 # --- 객체 -----------------------------------------------------------------------
 
 
+@dataclass
+class _Index:
+    """파일 한 장을 판정하는 데 필요한 것을 **한 번에 미리 읽는다.**
+
+    ⚠️ 왜 있나: 줄마다 개수 질의를 돌았다 — 2만 줄에서 계획 29초 · 새로 적용 92초 ·
+       **다시 적용(전부 그대로) 193초**(실측). 표가 커질수록 느려지고, 재적재는 흔한 일이라
+       그 수는 그대로 사람이 기다리는 시간이 된다.
+
+    담는 것은 **이 파일에 나온 것**뿐이다(식별자 · 별칭 값 · 유일 속성 값) — 표 전체를
+    들고 오면 객체가 몇십만인 날 이쪽이 죽는다.
+    """
+
+    by_key: dict[str, ObjectInstance] = field(default_factory=dict)
+    """식별자 → 객체. **부서 범위까지 맞춘 것**(`key_scope`)."""
+    by_id: dict[uuid.UUID, ObjectInstance] = field(default_factory=dict)
+    visible: set[uuid.UUID] = field(default_factory=set)
+    """이 사람이 볼 수 있는 것 — 목록과 같은 규칙."""
+    human: dict[uuid.UUID, list[str]] = field(default_factory=dict)
+    alias_owner: dict[str, uuid.UUID] = field(default_factory=dict)
+    """별칭 비교키 → 그것을 쓰는 객체(사람 별칭만)."""
+    unique: dict[str, dict[str, list[tuple[uuid.UUID, uuid.UUID | None]]]] = field(
+        default_factory=dict
+    )
+    """유일 속성 키 → 값 → [(객체, 그 객체의 부서)]. **부서는 파이썬에서 가른다** —
+    범위(`key_scope`)가 줄마다 다른 객체를 가리킬 수 있어서다."""
+    editable: dict[uuid.UUID | None, AppError | None] = field(default_factory=dict)
+    """부서마다 한 번만 판정한다 — 같은 부서의 오천 줄에 오천 번 물을 이유가 없다."""
+
+
+def _read_index(
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    rows: list[dict[str, Any]],
+    defs: list[PropertyDef],
+    patches: list[dict[str, Any] | AppError],
+    *,
+    owner_workspace_id: uuid.UUID | None,
+) -> _Index:
+    """계획이 물을 것을 미리 한 번에 — 줄마다 돌던 질의를 없앤다."""
+    index = _Index()
+
+    keys: set[str] = set()
+    ids: set[uuid.UUID] = set()
+    for row in rows:
+        raw_key = _fixed(row, "key")
+        if raw_key not in (_MISSING, None):
+            wanted = normalize_key(object_type, str(raw_key))
+            if wanted:
+                keys.add(wanted)
+        old = renamed_from(object_type, row)
+        if old:
+            keys.add(old)
+        raw_id = _fixed(row, "id")
+        if raw_id not in (_MISSING, None):
+            try:
+                ids.add(uuid.UUID(str(raw_id)))
+            except ValueError:
+                continue
+
+    found: list[ObjectInstance] = []
+    wanted_clause: list[Any] = []
+    if keys:
+        by_key_clause: Any = ObjectInstance.key.in_(keys)
+        if object_type.key_scope == "workspace":
+            # 범위가 부서면 **그 부서 안에서만** 같은 식별자다.
+            by_key_clause = and_(
+                by_key_clause,
+                ObjectInstance.owner_workspace_id.is_(None)
+                if owner_workspace_id is None
+                else ObjectInstance.owner_workspace_id == owner_workspace_id,
+            )
+        wanted_clause.append(by_key_clause)
+    if ids:
+        wanted_clause.append(ObjectInstance.id.in_(ids))
+    if wanted_clause:
+        found = list(
+            db.scalars(
+                select(ObjectInstance)
+                .where(
+                    ObjectInstance.type_id == object_type.id,
+                    ObjectInstance.deleted_at.is_(None),
+                )
+                .where(or_(*wanted_clause))
+            )
+        )
+    for one in found:
+        index.by_id[one.id] = one
+        if one.key:
+            index.by_key.setdefault(one.key, one)
+    if found:
+        index.visible = set(
+            db.scalars(
+                select(ObjectInstance.id).where(
+                    ObjectInstance.id.in_([one.id for one in found]),
+                    visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+                )
+            )
+        )
+        index.human = aliases.human_of(db, [one.id for one in found])
+
+    values: list[str] = []
+    for row in rows:
+        try:
+            asked, _ = alias_values(_fixed(row, "aliases"))
+        except AppError:
+            # 모양이 틀린 칸은 **줄 오류**다 — 여기서 터뜨리면 파일 전체가 거절되고,
+            # 그 줄이 어느 줄인지 아무 데도 안 적힌다. 계획이 줄마다 다시 읽는다.
+            continue
+        values.extend(one.value for one in asked)
+    if values:
+        index.alias_owner = aliases.taken_by(db, object_type, aliases.HUMAN, values)
+
+    for definition in [one for one in defs if one.unique]:
+        wanted_values = {
+            str(patch[definition.key])
+            for patch in patches
+            if isinstance(patch, dict) and patch.get(definition.key) not in (None, "", [])
+        }
+        if not wanted_values:
+            continue
+        hits: dict[str, list[tuple[uuid.UUID, uuid.UUID | None]]] = {}
+        for object_id, workspace_id, value in db.execute(
+            select(
+                ObjectInstance.id,
+                ObjectInstance.owner_workspace_id,
+                ObjectInstance.properties[definition.key].astext,
+            ).where(
+                ObjectInstance.type_id == object_type.id,
+                ObjectInstance.deleted_at.is_(None),
+                ObjectInstance.properties[definition.key].astext.in_(wanted_values),
+            )
+        ):
+            hits.setdefault(str(value), []).append((object_id, workspace_id))
+        index.unique[definition.key] = hits
+    return index
+
+
+def _remember(index: _Index, values: list[str], object_id: uuid.UUID) -> None:
+    """방금 붙인 별칭을 미리 읽은 것에 적어 둔다 — **같은 파일의 뒷줄이 그것을 봐야 한다.**
+    안 적으면 한 파일에 같은 별칭이 둘일 때 둘 다 붙이려다 표의 유일 제약에 걸린다."""
+    for value in values:
+        index.alias_owner[compare_key(value)] = object_id
+
+
+def _require_refs(refs: _Refs, defs: list[PropertyDef], values: dict[str, Any]) -> None:
+    """가리키는 것이 있나 — 캐시로 본다. 없는 것을 가리키면 화면에 빈 칸으로 나오고,
+    그것이 「값 없음」 인지 「사라짐」 인지 구별할 수 없다."""
+    missing = refs.missing(defs, values)
+    if missing:
+        raise InvalidValue(
+            code("OBJECTS", 4), f"가리키는 객체를 찾을 수 없습니다: {', '.join(missing)}"
+        )
+
+
+def _split_free(
+    index: _Index, asked: list[aliases.Incoming], *, exclude_id: uuid.UUID | None
+) -> tuple[list[str], list[str]]:
+    """쓸 수 있는 별칭과 남이 쓰는 별칭 — 미리 읽은 것으로(질의 없음).
+
+    판정은 `aliases.split_free` 와 **같아야 한다**(비교키로 보고, 자기 것은 뺀다).
+    """
+    free: list[str] = []
+    taken: list[str] = []
+    for one in asked:
+        holder = index.alias_owner.get(compare_key(one.value))
+        if holder is not None and holder != exclude_id:
+            taken.append(one.value)
+        else:
+            free.append(one.value)
+    return free, taken
+
+
+def _require_editable(
+    db: Session, user: User, index: _Index, owner_workspace_id: uuid.UUID | None
+) -> None:
+    """고칠 수 있나 — **부서마다 한 번만** 판정하고 그 답을 되쓴다."""
+    if owner_workspace_id not in index.editable:
+        try:
+            require_owner_edit(
+                db, user, owner_workspace_id, what="객체", code_value=code("OBJECTS", 16)
+            )
+        except AppError as caught:
+            index.editable[owner_workspace_id] = caught
+        else:
+            index.editable[owner_workspace_id] = None
+    refused = index.editable[owner_workspace_id]
+    if refused is not None:
+        raise refused
+
+
+def _unique_clash(
+    object_type: ObjectType,
+    defs: list[PropertyDef],
+    index: _Index,
+    values: dict[str, Any],
+    *,
+    owner_workspace_id: uuid.UUID | None,
+    exclude_id: uuid.UUID | None,
+) -> None:
+    """유일 속성이 이미 쓰이고 있나 — 미리 읽은 것으로 본다(질의 없음).
+
+    판정 규칙은 `services.require_unique_properties` 와 **같아야 한다** — 범위는
+    `key_scope` 를 따르고, 자기 자신은 뺀다.
+    """
+    for definition in defs:
+        if not definition.unique or definition.key not in values:
+            continue
+        value = values.get(definition.key)
+        if value in (None, "", []):
+            continue
+        for other_id, other_workspace in index.unique.get(definition.key, {}).get(
+            str(value), []
+        ):
+            if exclude_id is not None and other_id == exclude_id:
+                continue
+            if object_type.key_scope == "workspace" and other_workspace != owner_workspace_id:
+                continue
+            where = "이 부서에" if object_type.key_scope == "workspace" else "이미"
+            raise Conflict(
+                code("OBJECTS", 5),
+                f"{definition.label}에 같은 값이 {where} 있습니다: {value}. "
+                "같은 것이 둘이 되면 둘 다 못 믿게 됩니다 — 찾아서 수정하는 편이 낫습니다.",
+            )
+
+
 def _column_map(
     defs: list[PropertyDef], headers: set[str]
 ) -> tuple[dict[str, str], list[str]]:
@@ -504,9 +748,25 @@ def plan_objects(
     seen_keys: dict[str, int] = {}
     seen_ids: dict[str, int] = {}
 
-    for index, row in enumerate(rows, start=1):
+    # **칸 값을 먼저 한 바퀴 읽는다** — 그래야 유일 속성을 미리 물을 수 있다. 줄마다
+    # 나는 오류(값 모양 · 참조 못 찾음)는 그 줄의 것으로 들고 있다가 아래에서 낸다.
+    patches: list[dict[str, Any] | AppError] = []
+    for row in rows:
+        refs.notes.clear()
+        try:
+            patches.append(_patch_of(row, mapping, by_key, refs))
+        except AppError as caught:
+            patches.append(caught)
+    index_data = _read_index(
+        db, user, object_type, rows, defs, patches, owner_workspace_id=owner_workspace_id
+    )
+    plan.index = index_data
+
+    for index, (row, patch) in enumerate(zip(rows, patches, strict=True), start=1):
         _tick(on_progress, "계획", index, len(rows))
         try:
+            if isinstance(patch, AppError):
+                raise patch
             plan.rows.append(
                 _plan_row(
                     db,
@@ -518,6 +778,8 @@ def plan_objects(
                     refs,
                     row,
                     index,
+                    patch=patch,
+                    index_data=index_data,
                     owner_workspace_id=owner_workspace_id,
                     aliases_mode=aliases_mode,
                     seen_keys=seen_keys,
@@ -547,13 +809,16 @@ def _plan_row(
     row: dict[str, Any],
     index: int,
     *,
+    patch: dict[str, Any],
+    index_data: _Index,
     owner_workspace_id: uuid.UUID | None,
     aliases_mode: str,
     seen_keys: dict[str, int],
     seen_ids: dict[str, int],
 ) -> RowPlan:
+    # 칸 값은 이미 읽었다 — 그때 붙은 말(별칭이 남의 이름이기도 하다)만 다시 모은다.
     refs.notes.clear()
-    patch = _patch_of(row, mapping, by_key, refs)
+    _patch_of(row, mapping, by_key, refs)
 
     raw_id = _fixed(row, "id")
     raw_key = _fixed(row, "key")
@@ -600,15 +865,8 @@ def _plan_row(
                 code("OBJECTS", 44), f"같은 id 가 {seen_ids[str(wanted)]}행에도 있습니다."
             )
         seen_ids[str(wanted)] = index
-        existing = db.scalar(
-            select(ObjectInstance).where(
-                ObjectInstance.id == wanted,
-                ObjectInstance.type_id == object_type.id,
-                ObjectInstance.deleted_at.is_(None),
-                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
-            )
-        )
-        if existing is None:
+        existing = index_data.by_id.get(wanted)
+        if existing is None or existing.id not in index_data.visible:
             raise InvalidValue(code("OBJECTS", 43), f"id 에 맞는 객체가 없습니다: {raw_id}")
     key = normalize_key(object_type, None if raw_key in (_MISSING, None) else str(raw_key))
     if existing is None and key is not None:
@@ -617,19 +875,8 @@ def _plan_row(
                 code("OBJECTS", 44), f"같은 식별자가 {seen_keys[key]}행에도 있습니다: {key}"
             )
         seen_keys[key] = index
-        stmt = select(ObjectInstance).where(
-            ObjectInstance.type_id == object_type.id,
-            ObjectInstance.key == key,
-            ObjectInstance.deleted_at.is_(None),
-        )
-        if object_type.key_scope == "workspace":
-            stmt = (
-                stmt.where(ObjectInstance.owner_workspace_id.is_(None))
-                if owner_workspace_id is None
-                else stmt.where(ObjectInstance.owner_workspace_id == owner_workspace_id)
-            )
-        existing = db.scalar(stmt)
-        if existing is not None and not _can_see(db, user, existing):
+        existing = index_data.by_key.get(key)
+        if existing is not None and existing.id not in index_data.visible:
             # 같은 식별자가 남의 부서에 있다 — 없는 것과 같은 말로 답하되 만들지도 못한다.
             raise InvalidValue(code("OBJECTS", 3), f"같은 식별자가 이미 있습니다: {key}")
 
@@ -640,14 +887,8 @@ def _plan_row(
                 code("OBJECTS", 90),
                 "renamed_from 을 적으면 key 에 **새 식별자**를 적어야 합니다.",
             )
-        previous = db.scalar(
-            select(ObjectInstance).where(
-                ObjectInstance.type_id == object_type.id,
-                ObjectInstance.key == old_key,
-                ObjectInstance.deleted_at.is_(None),
-            )
-        )
-        if previous is not None and not _can_see(db, user, previous):
+        previous = index_data.by_key.get(old_key)
+        if previous is not None and previous.id not in index_data.visible:
             raise InvalidValue(
                 code("OBJECTS", 90), f"옛 식별자의 객체를 볼 수 없습니다: {old_key}"
             )
@@ -668,15 +909,18 @@ def _plan_row(
         properties = validate_properties(
             defs, {k: v for k, v in patch.items() if v is not None}, apply_defaults=True
         )
-        require_refs_exist(db, defs, properties)
-        require_unique_properties(
-            db, object_type, defs, properties, owner_workspace_id=owner_workspace_id
+        _require_refs(refs, defs, properties)
+        _unique_clash(
+            object_type,
+            defs,
+            index_data,
+            properties,
+            owner_workspace_id=owner_workspace_id,
+            exclude_id=None,
         )
         skipped: list[str] = []
         if wanted_aliases:
-            free, skipped = aliases.split_free(
-                db, object_type, [one.value for one in wanted_aliases], exclude_id=None
-            )
+            free, skipped = _split_free(index_data, wanted_aliases, exclude_id=None)
             wanted_aliases = _only(wanted_aliases, free)
         return RowPlan(
             row=index,
@@ -688,9 +932,7 @@ def _plan_row(
         )
 
     # 고침 — 보낸 것만.
-    require_owner_edit(
-        db, user, existing.owner_workspace_id, what="객체", code_value=code("OBJECTS", 16)
-    )
+    _require_editable(db, user, index_data, existing.owner_workspace_id)
     changes: list[str] = []
     if (
         raw_label is not _MISSING
@@ -716,11 +958,9 @@ def _plan_row(
         changes.append("valid_to_year")
     alias_skipped: list[str] = []
     if wanted_aliases is not None:
-        free, alias_skipped = aliases.split_free(
-            db, object_type, [one.value for one in wanted_aliases], exclude_id=existing.id
-        )
+        free, alias_skipped = _split_free(index_data, wanted_aliases, exclude_id=existing.id)
         wanted_aliases = _only(wanted_aliases, free)
-        current_aliases = aliases.human_of(db, [existing.id]).get(existing.id, [])
+        current_aliases = index_data.human.get(existing.id, [])
         if aliases_mode == "add":
             have = {compare_key(one) for one in current_aliases}
             if [one for one in wanted_aliases if compare_key(one.value) not in have]:
@@ -746,11 +986,11 @@ def _plan_row(
     if patch:
         merged = merge_properties(existing.properties or {}, patch)
         cleaned = validate_properties(defs, merged)
-        require_refs_exist(db, defs, cleaned)
-        require_unique_properties(
-            db,
+        _require_refs(refs, defs, cleaned)
+        _unique_clash(
             object_type,
             defs,
+            index_data,
             cleaned,
             owner_workspace_id=existing.owner_workspace_id,
             exclude_id=existing.id,
@@ -823,6 +1063,11 @@ def apply_objects(
     by_key = {d.key: d for d in defs}
     mapping, _ = _column_map(defs, {key for row in rows for key in row})
     refs = _Refs(db, user)
+    # 계획이 미리 읽은 것을 그대로 쓴다 — 방금 세운 계획이라 같은 트랜잭션의 같은 사실이다.
+    index_data = plan.index if isinstance(plan.index, _Index) else _Index()
+    # 새로 만든 객체의 별칭은 **모았다가 한 번에** 넣는다(아래) — 둘 사이에 ORM 관계가
+    # 없어 차례를 우리가 정해 줘야 한다(객체가 먼저 들어가야 외래키가 선다).
+    fresh_aliases: list[tuple[ObjectInstance, list[aliases.Incoming]]] = []
 
     for row_plan, row in zip(plan.rows, rows, strict=True):
         _tick(on_progress, "적용", row_plan.row, len(rows))
@@ -837,6 +1082,9 @@ def apply_objects(
 
         if row_plan.action == "create":
             target = ObjectInstance(
+                # **id 를 여기서 정한다** — 그래야 별칭 · 감사 기록이 flush 를 기다리지
+                # 않는다. 줄마다 flush 하면 2만 줄에 왕복이 2만 번이다(실측).
+                id=uuid.uuid4(),
                 type_id=object_type.id,
                 key=row_plan.key,
                 label=row_plan.label,
@@ -855,17 +1103,16 @@ def apply_objects(
                 created_by_id=user.id,
             )
             db.add(target)
-            db.flush()
             row_plan.object_id = target.id
             raw_aliases = _fixed(row, "aliases")
             if raw_aliases is not _MISSING and raw_aliases is not None:
-                # 계획에서 가른 대로 — 남이 쓰는 별칭은 여기서도 빠진다.
+                # 계획에서 가른 대로 — 남이 쓰는 별칭은 여기서도 빠진다. **미리 읽은 것으로**
+                # 가르고, 붙인 것은 거기에 적어 둔다: 같은 파일의 뒷줄이 그것을 봐야 한다.
                 asked = alias_values(raw_aliases)[0]
-                free, _taken = aliases.split_free(
-                    db, object_type, [one.value for one in asked], exclude_id=target.id
-                )
+                free, _taken = _split_free(index_data, asked, exclude_id=target.id)
                 if free:
-                    aliases.set_human(db, target, object_type, _only(asked, free))
+                    fresh_aliases.append((target, _only(asked, free)))
+                    _remember(index_data, free, target.id)
             audit.record(
                 db,
                 action="object.create",
@@ -902,17 +1149,17 @@ def apply_objects(
         if "aliases" in row_plan.changes:
             raw_aliases = _fixed(row, "aliases")
             asked = alias_values(raw_aliases)[0]
-            free, _taken = aliases.split_free(
-                db, object_type, [one.value for one in asked], exclude_id=target.id
-            )
+            free, _taken = _split_free(index_data, asked, exclude_id=target.id)
             aliases.set_human(db, target, object_type, _only(asked, free), mode=aliases_mode)
+            _remember(index_data, free, target.id)
         if keep_old_key is not None:
             # 별칭을 맞춘 **뒤에** 더한다 — `replace` 면 앞에서 더한 것이 지워진다.
-            free, _taken = aliases.split_free(
-                db, object_type, [keep_old_key], exclude_id=target.id
+            free, _taken = _split_free(
+                index_data, [aliases.Incoming(value=keep_old_key)], exclude_id=target.id
             )
             if free:
                 aliases.set_human(db, target, object_type, free, mode="add")
+                _remember(index_data, free, target.id)
         if patch:
             target.properties = validate_properties(
                 defs, merge_properties(target.properties or {}, patch)
@@ -929,6 +1176,12 @@ def apply_objects(
             changes=audit.diff(before, after),
             reason="일괄 가져오기",
         )
+
+    if fresh_aliases:
+        # **객체를 먼저 넣고** 별칭을 넣는다.
+        db.flush()
+        for made, values in fresh_aliases:
+            aliases.add_fresh(db, made, object_type, values)
 
     counts = plan.counts
     audit.record(
