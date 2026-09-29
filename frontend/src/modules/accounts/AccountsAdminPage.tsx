@@ -42,6 +42,9 @@ export default function AccountsAdminPage() {
   const [issued, setIssued] = useState<{ email: string; password: string } | null>(null)
   const [rejecting, setRejecting] = useState<{ id: string; email: string } | null>(null)
   const [editing, setEditing] = useState<Account | null>(null)
+  // **시스템 관리자 지정은 한 번 누르면 끝나는 일이 아니다.** 그 계정은 전 부서의 자료와
+  // 계정 · 서버 설정을 다루게 된다 — 잘못 누른 것을 알아채는 자리가 어디에도 없다.
+  const [promoting, setPromoting] = useState<Account | null>(null)
   const [note, setNote] = useState('')
 
   const [newEmail, setNewEmail] = useState('')
@@ -65,7 +68,7 @@ export default function AccountsAdminPage() {
     <div className="space-y-6">
       <PageHeader
         title="계정"
-        description="가입 승인과 권한을 다룹니다. 부서 멤버 관리는 부서 화면에서 합니다."
+        description="가입 승인과 권한을 다룹니다. 부서 멤버 관리는 부서 화면에서 하고, 승인 대기 계정은 승인한 뒤에 관리자 지정 · 소속 변경을 할 수 있습니다."
       />
 
       {/* **관리자가 하나뿐이면 말한다.** 그 사람이 잠기는 순간 복구 경로가 서버
@@ -231,9 +234,7 @@ export default function AccountsAdminPage() {
                       <Button
                         size="sm"
                         variant="outline"
-                        onClick={() =>
-                          act(() => accountApi.setSystemAdmin(one.id, !one.is_system_admin))
-                        }
+                        onClick={() => setPromoting(one)}
                       >
                         {one.is_system_admin ? '관리자 해제' : '관리자 지정'}
                       </Button>
@@ -275,6 +276,37 @@ export default function AccountsAdminPage() {
           신청한 사람은 이유를 영영 모른다. window.prompt 를 쓰지 않는 이유는
           그것이 오류를 보여 줄 자리가 없기 때문이다 — 서버가 거절하면 그 말이
           어디에도 안 뜬다. */}
+      <ConfirmDialog
+        open={promoting !== null}
+        title={
+          promoting?.is_system_admin
+            ? `${promoting?.email} 의 시스템 관리자를 해제합니다`
+            : `${promoting?.email} 를 시스템 관리자로 지정합니다`
+        }
+        description={
+          promoting?.is_system_admin ? (
+            <>
+              이 계정은 더 이상 계정 · 서버 설정 · 확장 모듈을 다루지 못하고, 부서 밖 자료를
+              고치지 못합니다. <b>마지막 관리자는 해제되지 않습니다</b> — 서버가 막습니다.
+            </>
+          ) : (
+            <>
+              이 계정은 <b>모든 부서의 자료</b>를 보고 고칠 수 있게 됩니다. 계정을 만들고
+              지우고, 서버 설정과 확장 모듈을 켜고 끄며, 감사 기록을 읽습니다. 되돌리려면 같은
+              자리에서 해제합니다.
+            </>
+          )
+        }
+        confirmLabel={promoting?.is_system_admin ? '관리자 해제' : '관리자 지정'}
+        destructive={Boolean(promoting?.is_system_admin)}
+        onConfirm={async () => {
+          if (!promoting) return
+          await act(() => accountApi.setSystemAdmin(promoting.id, !promoting.is_system_admin))
+          setPromoting(null)
+        }}
+        onClose={() => setPromoting(null)}
+      />
+
       <ConfirmDialog
         open={rejecting !== null}
         title="가입 거절"

@@ -106,7 +106,7 @@ export default function ProfilePage() {
         </Button>
       </form>
 
-      <ErrorNotice error={error} />
+      <ErrorNotice error={error ?? scopes.error ?? tokens.error} />
 
       <section className="space-y-3">
         <div>
@@ -152,8 +152,16 @@ export default function ProfilePage() {
             />
             <Button type="submit">발급</Button>
           </div>
+          {/* **못 받았으면 못 받았다고 말한다.** 예전에는 실패해도 `read` 하나만 그려서,
+              화면은 「이 설치에는 읽기 범위뿐」 처럼 보였다 — 사람은 고칠 자리를 못 찾는다. */}
+          {scopes.error && (
+            <p className="text-destructive text-sm">
+              범위 목록을 받지 못했습니다 — 지금 발급하면 읽기(read)만 들어갑니다. 새로 고쳐
+              보고, 그래도 같으면 서버 상태를 확인하세요.
+            </p>
+          )}
           <div className="flex flex-wrap gap-3">
-            {(scopes.data?.scopes ?? ['read']).map((one) => (
+            {(scopes.data?.scopes ?? []).map((one) => (
               <label key={one} className="text-muted-foreground flex items-center gap-1.5 text-sm">
                 <input
                   type="checkbox"
