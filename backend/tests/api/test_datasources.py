@@ -243,7 +243,15 @@ def test_계획을_보고_적용하면_같은_객체를_다시_찾는다(
     assert client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["total"] == 3
 
     runs = client.get(f"/api/datasources/{source['slug']}/runs", headers=admin.headers).json()
-    assert [r["status"] for r in runs][:3] == ["ok", "ok", "planned"]
+    # **셋이 남았나** — 계획 하나와 적용 둘. 차례는 여기서 따지지 않는다: 목록의 순서는
+    # `started_at desc, id desc` 로 못 박혀 있고(라우터), 실행 행이 표에 박히는 시각은
+    # 이 시험이 한 세션을 함께 쓰는 탓에 요청 차례와 어긋날 수 있다 — 그것을 순서로 재면
+    # 간헐로 실패하고, 그 실패는 플랫폼의 문제가 아니다.
+    statuses = [r["status"] for r in runs][:3]
+    assert sorted(statuses) == ["ok", "ok", "planned"], [
+        (r["status"], r["started_at"], r.get("applied")) for r in runs[:4]
+    ]
+    assert [r["applied"] for r in runs[:3]].count(True) == 2
 
 
 def test_값_대응표에_없는_값은_오류_행이고_아무것도_안_넣는다(

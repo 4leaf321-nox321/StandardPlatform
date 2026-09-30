@@ -40,6 +40,7 @@ python sp_pipeline.py apply    runs/2026-09-13-sim-tools   # 사람이 확인한
 | `validate` | JSON 모양, 식별자 겹침, 관계 행의 칸, 미해결 목록. 출처(`_source`) · 근거가 없으면 경고. **`SP_SERVER` · `SP_TOKEN` 이 있으면 끝점도 플랫폼에 묻는다**(없는 것 · 이름이 여럿과 맞는 것 · 별칭으로 풀린 것) | 오류 있으면 1 |
 | `preview` | 검증 → 플랫폼 `POST /api/bundles/import`(apply=false, 202 작업) → 끝나기를 기다려 `preview.json` 에 결과와 **지문** | 계획에 오류 있으면 1 |
 | `apply` | **미리 본 것과 지문이 같을 때만** 적용 → `applied.json` | 안 들어갔으면 1 |
+| `init --backfill` | 대량 적재용 실행 폴더 — 미리 보기는 **계획만**(적용을 두 번 돌지 않는다) · 웹훅과 감사는 묶음 한 건 · 못 찾은 참조는 그 칸만 비움. `preview`/`apply` 에 `--backfill` 을 줘도 그때 켜진다 | 0 |
 | `pull` | (쌍둥이) 허브가 내보낸 사이드바 묶음을 새 실행 폴더로 — `--group plm`(**여러 번 적어도 된다**), `SP_HUB_SERVER` · `SP_HUB_TOKEN`. 별칭·관계의 「맞춤」 과 **사라진 것**(`tombstones.json`)을 그대로 나른다. 그 뒤는 `validate` → `preview` → `apply`(받는 플랫폼에) | 0 |
 
 도구가 막고 멈추면 종료 코드 2 와 함께 이유를 적는다(검증 실패 · 미리 본 뒤 바뀜 · 서버 거절).

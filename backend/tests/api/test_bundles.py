@@ -13,7 +13,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from app.shared import events
-from tests.api.conftest import Signed, bundle_import
+from tests.api.conftest import Signed, bundle_import, finish_job
 from tests.api.test_ontology import _make_type
 
 
@@ -289,4 +289,37 @@ def test_가벼운_미리보기는_적용을_돌리지_않는다(client: TestCli
     detail = client.get(
         f"/api/objects/{names['tool']}/{made['id']}", headers=admin.headers
     ).json()
+    assert detail["object"]["properties"]["vendor"]
+
+
+def test_가벼운_미리보기_뒤에도_적용이_된다(client: TestClient, admin: Signed) -> None:
+    """**지문이 거의 항상 안 맞았다.**
+
+    지문은 「미리 본 것과 같은가」 를 묻는 자리인데, 계획만 본 것은 판정 자체가 적용과 다르다
+    (이 묶음이 만들 객체를 가리키는 칸은 계획에서 비워 두고 적용에서 푼다). 그래서 가벼운
+    미리 보기에는 지문을 붙이지 않고, **적용이 그 시점에 다시 판정한다** — 전부 아니면 무는
+    그대로다. 백필이 같은 묶음 안의 객체를 가리키면 예전에는 여기서 늘 막혔다.
+    """
+    bundle, names = _bundle(admin.workspace)
+    started = client.post(
+        "/api/bundles/import", json={**bundle, "preview": "plan"}, headers=admin.headers
+    )
+    assert started.status_code == 202, started.text
+    done = finish_job(client, admin, started.json())
+    assert done["status"] == "done", done
+    assert done["result"]["preview"] == "plan"
+    assert "다시 판정합니다" in done["result"]["note"]
+
+    # **그 계획으로 그대로 적용된다** — 예전에는 「그 사이에 누군가 바꿨습니다」 였다.
+    applied = client.post(f"/api/jobs/{done['id']}/apply", headers=admin.headers)
+    assert applied.status_code == 202, applied.text
+    finished = finish_job(client, admin, applied.json())
+    assert finished["status"] == "done", finished
+    assert finished["result"]["applied"] is True, finished["result"]
+    rows = client.get(f"/api/objects/{names['tool']}", headers=admin.headers).json()["items"]
+    made = next(one for one in rows if one["key"] == "T-1")
+    detail = client.get(
+        f"/api/objects/{names['tool']}/{made['id']}", headers=admin.headers
+    ).json()
+    # 계획에서 비워 뒀던 참조가 적용에서 풀렸다.
     assert detail["object"]["properties"]["vendor"]

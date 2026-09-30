@@ -486,3 +486,47 @@ def test_받을_때_허브가_적은_것을_떨어뜨리지_않는다(
 
     ok, report = pipeline.cmd_validate(run)
     assert ok is True, report
+
+
+def test_백필_칸을_실행_폴더에서_켠다(
+    client: TestClient, admin: Signed, platform: None, tmp_path: Path
+) -> None:
+    """**도구로 넣는 백필이 기본값으로 돌았다.**
+
+    네 칸(`preview` · `events` · `audit` · `missing_refs`)을 보내는 쪽이 API 뿐이라, 정제
+    도구로 수만 줄을 넣으면 미리 보기가 적용을 두 번 돌고 웹훅이 수만 번 나갔다. 실행
+    폴더(`bundle.json`)가 그것을 정하고, `--backfill` 이 넷을 한꺼번에 켠다.
+    """
+    run = tmp_path / "run"
+    pipeline.cmd_init(run, backfill=True)
+    names = _fill(run, admin.workspace)
+    body = pipeline.payload(pipeline.load(run))
+    assert body["preview"] == "plan"
+    assert body["events"] == "summary"
+    assert body["audit"] == "summary"
+    assert body["missing_refs"] == "blank"
+
+    # 켜지 않으면 안 실린다 — 평소 적재는 기본값이 더 엄하다.
+    plain = tmp_path / "plain"
+    pipeline.cmd_init(plain)
+    _fill(plain, admin.workspace)
+    assert "preview" not in pipeline.payload(pipeline.load(plain))
+
+    # 한 칸만 켜도 된다. 값이 틀리면 검증이 잡는다.
+    manifest = json.loads((plain / "bundle.json").read_text(encoding="utf-8"))
+    manifest["audit"] = "summary"
+    _write(plain / "bundle.json", manifest)
+    assert pipeline.payload(pipeline.load(plain))["audit"] == "summary"
+    manifest["audit"] = "없는값"
+    _write(plain / "bundle.json", manifest)
+    ok, report = pipeline.cmd_validate(plain)
+    assert ok is False and "audit 은" in report, report
+
+    # 그대로 보내면 플랫폼이 받는다 — 가벼운 미리 보기로 돈다.
+    token = _token(client, admin)
+    ok, summary = pipeline.cmd_preview(run, server=SERVER, token=token)
+    assert ok is True, summary
+    ok, summary = pipeline.cmd_apply(run, server=SERVER, token=token)
+    assert ok is True, summary
+    tools = client.get(f"/api/objects/{names['tool']}", headers=admin.headers).json()
+    assert [one["key"] for one in tools["items"]] == ["T-1"]

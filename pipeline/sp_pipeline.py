@@ -56,6 +56,25 @@ RELATION_FIELDS = ("src", "relation", "dst", "evidence_note", "properties")
 LOW_CONFIDENCE = 0.7
 ONTOLOGY_KEYS = {"groups", "types", "relation_types"}
 
+#: 대량 적재(백필)에 켜는 칸들 — `bundle.json` 의 `backfill` 에 적거나 `--backfill` 로 켠다.
+#:
+#: 넷 다 기본값이 아닌 이유: 평소 적재에서는 기본값이 맞다(전부 아니면 무 · 줄마다 기록).
+#: 수만 줄에서는 그 기본값이 발목을 잡는다 — 미리 보기가 적용을 두 번 돌고, 웹훅이 수만 번
+#: 나가고, 감사 로그가 뒤덮이고, 한 줄이 전체를 막는다.
+BACKFILL = {
+    "preview": "plan",
+    "events": "summary",
+    "audit": "summary",
+    "missing_refs": "blank",
+}
+#: 묶음에 실을 수 있는 칸과 그 값 — 실행 폴더가 적은 것을 여기서 검사한다.
+BUNDLE_OPTIONS = {
+    "preview": ("full", "plan"),
+    "events": ("each", "summary"),
+    "audit": ("each", "summary"),
+    "missing_refs": ("error", "blank"),
+}
+
 #: (method, url, headers, body) -> (status, json). 시험이 갈아 끼운다.
 Sender = Callable[[str, str, dict[str, str], bytes | None], tuple[int, Any]]
 
@@ -220,7 +239,27 @@ def payload(run: Run) -> dict[str, Any]:
     source = str(run.manifest.get("source") or "").strip()
     if source:
         body["source"] = source
+    # **백필 칸을 그대로 싣는다** — 실행 폴더가 정한다(`bundle.json`). 여기서 떨어뜨리면
+    # 그 넷은 API 로 직접 부르는 쪽만 쓸 수 있고, 도구로 넣는 백필은 기본값으로 돈다.
+    body.update(bundle_options(run.manifest))
     return body
+
+
+def bundle_options(manifest: dict[str, Any]) -> dict[str, str]:
+    """`bundle.json` 이 정한 묶음 칸 — `backfill: true` 면 넷을 한꺼번에 켠다."""
+    out: dict[str, str] = {}
+    if manifest.get("backfill"):
+        out.update(BACKFILL)
+    for name, allowed in BUNDLE_OPTIONS.items():
+        value = manifest.get(name)
+        if value is None:
+            continue
+        if str(value) not in allowed:
+            raise Stop(
+                f"{MANIFEST}: {name} 은 {' · '.join(allowed)} 중 하나입니다 ({value!r})"
+            )
+        out[name] = str(value)
+    return out
 
 
 def digest(body: dict[str, Any]) -> str:
@@ -242,6 +281,11 @@ class Report:
 
 def validate(run: Run, *, allow_unresolved: bool = False) -> Report:
     report = Report(errors=list(run.problems))
+    if run.manifest:
+        try:
+            bundle_options(run.manifest)
+        except Stop as bad:
+            report.errors.append(str(bad))
     if run.manifest and run.manifest.get("format") != FORMAT:
         report.errors.append(
             f"{MANIFEST}: format 이 {FORMAT} 가 아닙니다 ({run.manifest.get('format')!r})"
@@ -663,7 +707,7 @@ def _write(path: Path, body: Any) -> None:
 # --------------------------------------------------------------------------
 
 
-def cmd_init(path: Path, *, title: str = "") -> str:
+def cmd_init(path: Path, *, title: str = "", backfill: bool = False) -> str:
     if (path / MANIFEST).exists():
         raise Stop(f"이미 실행 폴더입니다: {path} — 새 실행은 새 폴더로")
     (path / OBJECTS_DIR).mkdir(parents=True, exist_ok=True)
@@ -678,6 +722,9 @@ def cmd_init(path: Path, *, title: str = "") -> str:
             "objects_order": [],
             "relations_order": [],
             "notes": "",
+            # **대량 적재인가.** 켜면 넷이 함께 켜진다(`BACKFILL`) — 미리 보기는 계획만,
+            # 웹훅 · 감사는 묶음 한 건, 못 찾은 참조는 그 칸만 비운다.
+            "backfill": backfill,
         },
     )
     _write(path / ONTOLOGY, {"groups": [], "types": [], "relation_types": []})
@@ -991,6 +1038,11 @@ def main(argv: list[str] | None = None) -> int:
     init = sub.add_parser("init", help="빈 실행 폴더를 만든다")
     init.add_argument("run", type=Path)
     init.add_argument("--title", default="")
+    init.add_argument(
+        "--backfill",
+        action="store_true",
+        help="대량 적재 — 미리 보기는 계획만 · 웹훅과 감사는 묶음 한 건 · 못 찾은 참조는 비움",
+    )
 
     check = sub.add_parser("validate", help="서버에 보내기 전에 모양을 본다")
     check.add_argument("run", type=Path)
@@ -1019,11 +1071,16 @@ def main(argv: list[str] | None = None) -> int:
         one.add_argument("run", type=Path)
         one.add_argument("--server", default=os.environ.get("SP_SERVER", ""))
         one.add_argument("--token", default=os.environ.get("SP_TOKEN", ""))
+        one.add_argument(
+            "--backfill",
+            action="store_true",
+            help="이 실행을 대량 적재로 — `bundle.json` 에 적어 둔다(다음부터도 그렇게 간다)",
+        )
 
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
-            print(cmd_init(args.run, title=args.title))
+            print(cmd_init(args.run, title=args.title, backfill=args.backfill))
             return 0
         if args.command == "validate":
             ok, text = cmd_validate(
@@ -1054,6 +1111,15 @@ def main(argv: list[str] | None = None) -> int:
             raise Stop(
                 "서버와 토큰이 필요합니다 — SP_SERVER · SP_TOKEN 또는 --server · --token"
             )
+        if args.backfill:
+            # **실행 폴더에 적어 둔다** — 미리 보기와 적용이 같은 칸으로 가야 한다(미리 본
+            # 것과 넣는 것이 다르면 미리 본 뜻이 없다).
+            mark = args.run / MANIFEST
+            body = _read_json(mark, [])
+            if not isinstance(body, dict):
+                raise Stop(f"{MANIFEST} 을 읽을 수 없습니다: {args.run}")
+            body["backfill"] = True
+            _write(mark, body)
         command = cmd_preview if args.command == "preview" else cmd_apply
         ok, text = command(args.run, server=args.server, token=args.token)
         print(text)

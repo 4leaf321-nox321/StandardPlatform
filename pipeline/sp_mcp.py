@@ -342,11 +342,16 @@ def table_convert(work: str, mapping: str, source: str, name: str = "") -> dict[
 
 
 @mcp.tool()
-def run_init(work: str, name: str, title: str = "") -> str:
-    """빈 실행 폴더 — 문서에서 뽑은 행을 `work_write` 로 채울 때."""
+def run_init(work: str, name: str, title: str = "", backfill: bool = False) -> str:
+    """빈 실행 폴더 — 문서에서 뽑은 행을 `work_write` 로 채울 때.
+
+    `backfill` 은 **수만 줄을 한 번에 넣을 때** 켠다 — 미리 보기는 계획만 보고(적용을 두 번
+    돌지 않는다), 웹훅 · 감사는 묶음 한 건으로, 못 찾은 참조는 그 칸만 비운다. 평소 적재에는
+    켜지 않는다(기본값이 더 엄하다: 전부 아니면 무 · 줄마다 기록).
+    """
     folder = _work(work)
     run = sp_work.new_run(folder, name)
-    pipeline.cmd_init(run, title=title or name)
+    pipeline.cmd_init(run, title=title or name, backfill=backfill)
     return f"만들었습니다: {run.relative_to(folder).as_posix()}"
 
 

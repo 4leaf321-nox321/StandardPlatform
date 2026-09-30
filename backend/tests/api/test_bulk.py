@@ -1081,3 +1081,78 @@ def test_못_찾은_참조를_비우고_넣는_길이_있다(client: TestClient,
     made = _id_of(client, admin, tool, "T-1")
     detail = client.get(f"/api/objects/{tool}/{made}", headers=admin.headers).json()
     assert detail["object"]["properties"].get("vendor") in (None, "")
+
+
+def test_한_파일_안에서도_개수_제약이_선다(client: TestClient, admin: Signed) -> None:
+    """**앞 줄이 만든 선이 검사에 보여야 한다.**
+
+    개수 제약과 순환 금지는 표를 본다. 줄마다 쓰던 것을 없애면서(빠르게 하려고) 아직 안 쓴
+    선을 검사가 못 보게 됐다 — 「하나만」 인 관계가 **한 파일 안에서** 둘이 될 수 있었다.
+    계획은 표에 아무것도 없으니 `seen` 으로 보고, 적용은 제약이 걸린 종류에서만 먼저 쓴다.
+    """
+    model = _make_type(client, admin, label="모델", key_policy="required")
+    kind = f"derived_{uuid.uuid4().hex[:6]}"
+    made = client.post(
+        "/api/ontology/import",
+        json={
+            "relation_types": [
+                {
+                    "slug": kind,
+                    "label": "원 모델",
+                    "src_type_slugs": [model],
+                    "dst_type_slugs": [model],
+                    # **하나만** 맺는다 — 계층이다.
+                    "cardinality": "many_to_one",
+                    "acyclic": True,
+                }
+            ]
+        },
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+    tag = uuid.uuid4().hex[:6]
+    client.post(
+        f"/api/objects/{model}/import-rows",
+        json={
+            "rows": [{"key": f"M-{tag}-{n}", "label": f"모델 {n}"} for n in range(3)],
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+
+    # 한 파일에서 같은 출발점이 둘을 가리킨다 — **계획에서** 걸려야 한다.
+    doubled = [
+        {"src": f"M-{tag}-0", "relation": kind, "dst": f"M-{tag}-1"},
+        {"src": f"M-{tag}-0", "relation": kind, "dst": f"M-{tag}-2"},
+    ]
+    plan = client.post(
+        f"/api/objects/{model}/relations/import-rows",
+        json={"rows": doubled},
+        headers=admin.headers,
+    ).json()
+    assert [one["action"] for one in plan["rows"]] == ["create", "error"], [
+        (one["action"], one["message"]) for one in plan["rows"]
+    ]
+    assert "앞 줄이 이미 맺었습니다" in plan["rows"][1]["message"]
+
+    # 적용도 막는다 — 계획이 막으므로 아무것도 안 들어간다.
+    applied = client.post(
+        f"/api/objects/{model}/relations/import-rows",
+        json={"rows": doubled, "apply": True},
+        headers=admin.headers,
+    ).json()
+    assert applied["applied"] is False, applied
+    detail = client.get(
+        f"/api/objects/{model}/{_id_of(client, admin, model, f'M-{tag}-0')}",
+        headers=admin.headers,
+    ).json()
+    assert detail["related"] == []
+
+    # 한 줄씩이면 들어간다(제약을 안 어긴다).
+    ok = client.post(
+        f"/api/objects/{model}/relations/import-rows",
+        json={"rows": doubled[:1], "apply": True},
+        headers=admin.headers,
+    ).json()
+    assert ok["applied"] is True, ok

@@ -1550,6 +1550,9 @@ class _RelIndex:
     skip_missing: bool = False
     """참이면 끝점을 못 찾은 줄을 **오류로 만들지 않고 건너뛴다**(줄에 적는다). 선은 값이
     아니라 있음/없음이라 「빈칸으로 넣기」 가 없다 — 건너뛰는 것이 그에 해당한다."""
+    pending_seen: set[tuple[str, str, str]] = field(default_factory=set)
+    """아직 없는 끝점으로 세운 줄들의 **글자 세 끝** — 같은 선이 파일에 두 번 있는지 본다
+    (id 로는 볼 수 없다, 그 객체가 아직 없으므로)."""
 
 
 def _existing_edge(
@@ -1616,20 +1619,29 @@ def _pending_end(
     kind: RelationType,
     src_text: str,
     dst_text: str,
-) -> str:
-    """이 묶음이 **만들** 끝점을 가리키나 — 그러면 그 까닭을 한 줄로, 아니면 빈 글."""
+) -> tuple[str, str]:
+    """이 묶음이 **만들** 끝점을 가리키나 — `(까닭, 도착 타입 slug)`, 아니면 `("", "")`.
+
+    도착 타입을 함께 돌려주는 이유: 그 객체가 아직 없어도 **어느 타입이 될지는 안다**(묶음의
+    그 배치가 말한다). 그러면 끝 타입 검사를 지금 할 수 있다.
+    """
     if not memo.pending:
-        return ""
+        return "", ""
     waiting: list[str] = []
+    dst_slug = ""
     if src_text in memo.pending.get(object_type.slug, set()):
         waiting.append(src_text)
     for slug in kind.dst_type_slugs or list(memo.pending):
         if dst_text in memo.pending.get(slug, set()):
             waiting.append(dst_text)
+            dst_slug = slug
             break
     if not waiting:
-        return ""
-    return f"끝점 {', '.join(waiting)} 은 이 묶음이 만드는 객체입니다 — 적용할 때 이어집니다"
+        return "", ""
+    return (
+        f"끝점 {', '.join(waiting)} 은 이 묶음이 만드는 객체입니다 — 적용할 때 이어집니다",
+        dst_slug,
+    )
 
 
 def _endpoint_maker(
@@ -1646,6 +1658,44 @@ def _endpoint_maker(
         return _find_endpoint(db, user, text, [object_type.id], pool)
 
     return find
+
+
+def _require_file_cardinality(
+    kind: RelationType,
+    seen: set[tuple[uuid.UUID, str, uuid.UUID]],
+    src_id: uuid.UUID,
+    dst_id: uuid.UUID,
+) -> None:
+    """**이 파일의 앞 줄이 이미 채웠나** — 개수 제약을 표만 보고 판정하면 못 본다.
+
+    계획은 아무것도 쓰지 않으므로 표에는 앞 줄의 선이 없다. 그 줄들은 `seen` 에 있다 —
+    적용은 쓰면서 보지만(그래서 거기서 거절된다), **계획이 통과시키면 사람은 되는 줄 안다.**
+    """
+    # **제 줄은 뺀다** — 이 줄의 세 끝은 이미 `seen` 에 있다(파일 안 중복 검사가 넣는다).
+    if kind.cardinality in ("one_to_one", "many_to_one") and any(
+        src == src_id and slug == kind.slug and dst != dst_id for src, slug, dst in seen
+    ):
+        raise Conflict(
+            code("OBJECTS", 23),
+            f"{kind.label}은 하나만 맺을 수 있습니다 — 이 파일의 앞 줄이 이미 맺었습니다.",
+        )
+    if kind.cardinality in ("one_to_one", "one_to_many") and any(
+        slug == kind.slug and dst == dst_id and src != src_id for src, slug, dst in seen
+    ):
+        raise Conflict(
+            code("OBJECTS", 24),
+            f"{kind.label}의 도착 쪽은 하나만 받을 수 있습니다 — 이 파일의 앞 줄이 "
+            "이미 맺었습니다.",
+        )
+
+
+def _guarded(kind: RelationType) -> bool:
+    """이 관계 종류에 **표를 봐야 하는 제약**이 있나 — 개수 제약이나 순환 금지.
+
+    있으면 넣기 전에 쌓인 것을 먼저 쓴다(그래야 검사가 앞 줄의 선을 본다). 없으면 쓰지
+    않는다 — 대다수(`many_to_many` · 순환 허용)가 그쪽이고, 그 길이 빨라야 백필이 돈다.
+    """
+    return kind.cardinality != "many_to_many" or bool(kind.acyclic)
 
 
 def _load_edges(db: Session, memo: _RelIndex) -> None:
@@ -1995,15 +2045,26 @@ def _plan_relation(
     managed.require_relation_editable(kind, source=source)
 
     memo = index_data if index_data is not None else _RelIndex()
-    later = _pending_end(memo, object_type, kind, src_text, dst_text)
+    later, dst_slug = _pending_end(memo, object_type, kind, src_text, dst_text)
     if later:
-        # **이 묶음이 만들 끝점**을 가리킨다 — 계획만 볼 때는 오류가 아니다.
-        return RowPlan(
-            row=index,
-            action="create",
-            label=f"{src_text} -{kind.label}-> {dst_text}",
-            message=later,
+        # **이 묶음이 만들 끝점**을 가리킨다 — 계획만 볼 때는 「없다」 가 아니다.
+        # 그래도 **볼 수 있는 것은 본다**: 끝 타입이 되는지, 붙는 값의 모양이 맞는지,
+        # 이 파일 안에 같은 선이 두 번 있지 않은지. 예전에는 여기서 바로 통과시켜 관계줄이
+        # 사실상 검사되지 않았고, 오류는 적용에서 묶음 전체를 되돌렸다(실측).
+        label = f"{src_text} -{kind.label}-> {dst_text}"
+        rel.require_end_types_allowed(
+            db,
+            kind,
+            object_type.slug,
+            dst_slug or object_type.slug,
+            {slug: one.label for slug, one in memo.types.items()} or None,
         )
+        _relation_properties(db, kind, row, _Refs(db, user), defs=memo.defs.get(kind.slug))
+        triple_text = (src_text, kind.slug, dst_text)
+        if triple_text in memo.pending_seen:
+            raise InvalidValue(code("OBJECTS", 44), "같은 관계가 이 파일에 두 번 있습니다.")
+        memo.pending_seen.add(triple_text)
+        return RowPlan(row=index, action="create", label=label, message=later)
     # **같은 끝점은 한 번만 찾는다** — 한 과제에 모델이 여럿이면 그 과제를 수십 번 찾는다.
     try:
         src = _memo_end(
@@ -2075,6 +2136,7 @@ def _plan_relation(
         )
     rel.require_cardinality(db, kind, src.id, dst.id)
     rel.require_no_cycle(db, kind, src.id, dst.id)
+    _require_file_cardinality(kind, seen, src.id, dst.id)
     return RowPlan(row=index, action="create", label=label)
 
 
@@ -2181,7 +2243,11 @@ def apply_relations(
             )
             row_plan.object_id = link.id
             continue
-        # 앞 행이 만든 관계가 카디널리티를 채웠을 수 있다 — 넣기 직전에 한 번 더.
+        # **앞 행이 만든 선이 제약을 어길 수 있다.** 검사는 표를 보므로, 아직 안 쓴 선이
+        # 있으면 그것을 못 본다 — 줄마다 쓰던 것을 없앤 뒤 이 구멍이 생겼다(실측).
+        # 제약이 걸린 종류에서만 먼저 쓴다(대다수는 제약이 없어 그대로 빠르다).
+        if _guarded(kind):
+            db.flush()
         rel.require_cardinality(db, kind, src.id, dst.id)
         rel.require_no_cycle(db, kind, src.id, dst.id)
         edge = ObjectRelation(

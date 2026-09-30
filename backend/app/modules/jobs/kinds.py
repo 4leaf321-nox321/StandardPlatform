@@ -271,7 +271,19 @@ def bundle_import(work: Work) -> dict[str, Any]:
         before_commit=guard,
     )
     out = bundle_services.outcome_out(outcome).model_dump(mode="json")
-    out["fingerprint"] = bundle_services.fingerprint(outcome)
+    if bundle.apply or bundle.preview != "plan":
+        out["fingerprint"] = bundle_services.fingerprint(outcome)
+    else:
+        # **가벼운 미리 보기에는 지문을 붙이지 않는다.** 지문은 「미리 본 것과 같은가」 를
+        # 묻는 자리인데, 계획만 본 것은 판정 자체가 적용과 다르다(이 묶음이 만들 객체를
+        # 가리키는 칸은 계획에서 비워 두고 적용에서 푼다). 지문을 붙이면 **거의 항상**
+        # 「그 사이에 누군가 바꿨습니다」 가 되어 적용을 못 한다(실측).
+        out["preview"] = "plan"
+        out["note"] = (
+            "계획만 본 미리 보기입니다 — 적용은 그 시점에 **다시 판정합니다**"
+            "(전부 아니면 무는 그대로입니다). 판정까지 똑같이 보려면 preview 를 비우고"
+            " 다시 미리 보세요."
+        )
     return out
 
 
