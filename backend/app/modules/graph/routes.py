@@ -568,12 +568,13 @@ def subgraph(
     all_types = {row.id: row for row in db.scalars(select(ObjectType))}
     systems = _system_types(all_types)
     wanted = _csv(types) or []
-    wanted_systems = [row for slug, row in systems.items() if slug in wanted]
-    type_ids = [
-        row.id
-        for row in all_types.values()
-        if row.slug in wanted and not system.is_system(row)
-    ]
+    # **부른 순서대로 쌓는다.** 타입 목록에는 순서가 없어(질의에 order by 가 없다) 같은
+    # 물음에 쪽마다 다른 순서가 오고, 쪽을 타입마다 나누는 아래의 셈이 쪽 사이에서
+    # 어긋난다 — 한 객체가 두 쪽에 나오거나 아무 쪽에도 안 나온다.
+    asked = list(dict.fromkeys(wanted))
+    wanted_systems = [systems[slug] for slug in asked if slug in systems]
+    rows_by_slug = {row.slug: row for row in all_types.values() if not system.is_system(row)}
+    type_ids = [rows_by_slug[slug].id for slug in asked if slug in rows_by_slug]
     if not type_ids and not wanted_systems:
         raise NotFound(code("GRAPH", 2), f"타입을 찾을 수 없습니다: {types}")
     if not type_ids:

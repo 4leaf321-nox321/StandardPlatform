@@ -34,6 +34,9 @@ TOOLS = {
     "ontology_import",
     "objects_list",
     "object_resolve",
+    "objects_resolve_many",
+    "aliases_pending",
+    "aliases_review",
     "objects_summary",
     "object_fields",
     "object_get",
@@ -239,6 +242,11 @@ def test_가이드는_서버가_쥔다() -> None:
 
     bulk = asyncio.run(server.get_guide(_ctx(None), topic="bulk"))
     assert bulk["topic"] == "bulk" and "upsert" in bulk["content"]
+    # 지우는 모드와 검수는 **가이드에 적혀 있어야** AI 가 묻기 전에 안다.
+    assert "aliases_mode" in bulk["content"] and "aliases_review" in bulk["content"]
+
+    relations = asyncio.run(server.get_guide(_ctx(None), topic="relations"))
+    assert "replace_type" in relations["content"] and "unlink" in relations["content"]
 
     missing = asyncio.run(server.get_guide(_ctx(None), topic="없는주제"))
     assert "error" in missing and "bulk" in missing["topics"]
@@ -367,3 +375,49 @@ def test_파일을_주는_자리는_바이트를_안_흘린다() -> None:
         server.extension_call(_ctx("Bearer t"), "caegroup", "dt/assessments/sheet/export")
     )
     assert got["ok"] is True and "파일 응답" in got["message"]
+
+
+def test_적재_도구가_맞춤과_검수를_보낸다() -> None:
+    """**새 옵션이 도구에 없으면 MCP 로 넣는 사람은 그 길을 못 쓴다.**
+
+    별칭을 파일대로 맞추기 · 사라진 관계 끊기 · 이름 여럿 풀기 · 별칭 검수 — 넷 다 API 에는
+    있었지만 도구에 안 붙어 있어서, AI 로 적재하면 기본값으로만 돌았다.
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/resolve-many"):
+            return httpx.Response(200, json={"items": [], "counts": {}})
+        if request.url.path.endswith("/aliases/pending"):
+            return httpx.Response(200, json={"items": [], "total": 0})
+        if request.url.path.endswith("/aliases/review"):
+            return httpx.Response(200, json={"done": 1, "refused": []})
+        return httpx.Response(202, json={"id": "j1", "kind": "x", "status": "done"})
+
+    seen = _serve(handler)
+
+    asyncio.run(
+        server.objects_import(
+            _ctx("Bearer t"), "mach", rows=[{"key": "M-1"}], aliases_mode="replace"
+        )
+    )
+    assert b'"aliases_mode": "replace"' in seen[-1].content.replace(b",", b", ")
+
+    asyncio.run(
+        server.relations_import(
+            _ctx("Bearer t"),
+            "mach",
+            rows=[{"src": "a", "relation": "r", "dst": "b"}],
+            mode="replace_type",
+        )
+    )
+    assert b"replace_type" in seen[-1].content
+
+    asyncio.run(server.objects_resolve_many(_ctx("Bearer t"), "mach", ["가", "나"]))
+    assert seen[-1].url.path.endswith("/mach/resolve-many")
+    assert b'"names"' in seen[-1].content
+
+    asyncio.run(server.aliases_pending(_ctx("Bearer t"), "mach", limit=5))
+    assert seen[-1].url.path.endswith("/mach/aliases/pending")
+
+    asyncio.run(server.aliases_review(_ctx("Bearer t"), "mach", ["a1"], action="remove"))
+    assert b'"action":"remove"' in seen[-1].content

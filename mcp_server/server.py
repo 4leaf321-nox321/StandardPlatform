@@ -562,6 +562,56 @@ async def object_resolve(ctx: Context, type_slug: str, name: str) -> Any:
 
 
 @tool()
+async def objects_resolve_many(ctx: Context, type_slug: str, names: list[str]) -> Any:
+    """이름 **여럿을 한 번에** 푼다 — 판정 규칙은 `object_resolve` 와 같다.
+
+    한 줄에 한 번 물으면 이천 줄짜리 원천에 왕복이 이천 번이다. **넣기 전에** 이것으로
+    한 번 물어 「없는 것」 과 「여럿과 맞는 것」 을 먼저 걸러라 — 그러면 묶음 전체가
+    거절되는 일이 줄고, 사람에게 물을 것만 남는다.
+
+    답은 **보낸 차례대로** 오고 줄마다 물은 이름(`name`)이 붙는다. `counts` 가 몇 개가
+    `exact` · `candidates` · `none` 인지 한 줄로 말한다. 한 번에 500개까지.
+
+    `candidates` 는 **쓰지 마라** — 어느 것인지 사람에게 묻는다. `none` 도 짐작하지 마라."""
+    return await _post(ctx, f"/api/objects/{type_slug}/resolve-many", {"names": names})
+
+
+@tool()
+async def aliases_pending(ctx: Context, type_slug: str, limit: int = 100) -> Any:
+    """**사람이 아직 안 본 별칭** — 기계가 붙인 것이 그대로 정본처럼 쓰이지 않게.
+
+    적재는 별칭을 수천 개 붙인다. 그 안에는 오타 표기와 남의 이름이 섞이는데, 본 것과 안 본
+    것을 가르는 칸이 없으면 전부 정본처럼 쓰인다. 화면에서 사람이 붙인 것은 붙이는 순간
+    확인한 것이라 여기 안 뜬다 — 여기 남는 것은 **파일 · 기계가 붙인 것**뿐이다.
+
+    줄마다 그 별칭이 **어디서 왔는지**(`source`)와 메모가 온다. 사람에게 보여 주고 판단을
+    받은 뒤 `aliases_review` 로 확인하거나 지운다. **네가 스스로 확인해 주지 마라** —
+    그러면 검수라는 자리가 없는 것과 같다."""
+    return await _get(
+        ctx, f"/api/objects/{type_slug}/aliases/pending", params=[("limit", str(limit))]
+    )
+
+
+@tool()
+async def aliases_review(
+    ctx: Context, type_slug: str, alias_ids: list[str], action: str = "approve"
+) -> Any:
+    """고른 별칭을 **한 번에** 확인(`approve`)하거나 지운다(`remove`).
+
+    `aliases_pending` 이 준 `id` 들을 넣는다. **사람이 고른 것만 넣어라** — 한 줄씩 누르게
+    하면 수백 줄을 끝까지 보는 사람이 없어서 한 번에 하게 둔 자리이고, 그 판단은 사람의
+    것이다. 확인한 것만 정본으로 쓰인다.
+
+    못 한 줄은 `refused` 에 이유와 함께 온다(남의 부서 것, 이미 없는 것) — 하나가 막혀도
+    나머지는 간다."""
+    return await _post(
+        ctx,
+        f"/api/objects/{type_slug}/aliases/review",
+        {"ids": alias_ids, "action": action},
+    )
+
+
+@tool()
 async def objects_summary(
     ctx: Context,
     type_slug: str,
@@ -868,6 +918,7 @@ async def objects_import(
     type_slug: str,
     rows: list[dict[str, Any]],
     workspace_slug: str | None = None,
+    aliases_mode: str = "add",
 ) -> Any:
     """객체를 **여러 행 한 번에** — 같은 식별자(`key`)면 만들지 않고 고친다(upsert).
 
@@ -878,10 +929,22 @@ async def objects_import(
 
     행은 `{"key": ..., "label": ..., <속성 키>: ...}` 꼴. 없는 키는 안 건드리고,
     비우려면 `null` 을 넣는다. 참조 속성은 상대의 식별자(없으면 이름)로 적어도 된다.
-    `workspace_slug` 는 `whoami` 에서 — 비우면 전역이라 시스템 관리자만 된다."""
+    `workspace_slug` 는 `whoami` 에서 — 비우면 전역이라 시스템 관리자만 된다.
+
+    **별칭**(`aliases`)은 글자 목록이거나 `{"value","source","note"}` 목록이다. 출처를 적어
+    두면 나중에 「이건 어디서 온 이름이냐」 를 물을 수 있다 — 모르면 지워도 되는지 판단할 수
+    없어 아무것도 못 지운다. 기계가 붙인 별칭은 **검수 대기**로 남는다
+    (`aliases_pending` · `aliases_review`).
+
+    `aliases_mode` 는 별칭 칸을 **더할지 맞출지**다. 기본 `add` — 다시 넣어도 사람이 화면에서
+    붙여 둔 별칭이 남는다. `replace` 는 **파일에 없는 별칭을 지운다**: 그 파일을 정본으로 볼
+    때만 쓴다(허브가 쌍둥이에 보낼 때가 그렇다).
+
+    **키를 바꿀 때**는 행에 `renamed_from`(옛 식별자)을 적는다 — 없으면 같은 것이 새 객체로
+    하나 더 생긴다. 두 번 바뀌었으면 `previous_keys` 에 전부 적는다(오래된 것부터)."""
     fields: dict[str, Any] = {
         "kind": "objects_import",
-        "params": json.dumps({"type_slug": type_slug}),
+        "params": json.dumps({"type_slug": type_slug, "aliases_mode": aliases_mode}),
     }
     if workspace_slug:
         fields["workspace_slug"] = workspace_slug
@@ -965,16 +1028,30 @@ async def relations_import(
     ctx: Context,
     type_slug: str,
     rows: list[dict[str, Any]],
+    mode: str = "add",
 ) -> Any:
     """관계를 **여러 줄 한 번에** — `type_slug` 의 객체에서 출발하는 선들. **작업이 된다.**
 
     행은 `{"src": ..., "relation": ..., "dst": ..., "evidence_note": ...}` 꼴. 끝점은
-    식별자(없으면 이름). 이미 이어진 것은 「그대로」 라 두 번 올려도 두 겹이 안 된다.
-    돌아온 `result` 는 계획이다 — 사람이 확인한 뒤 `job_apply(job_id)`.
-    **근거(evidence_note)를 적는다** — 기계가 이은 것이면 더."""
+    식별자(없으면 이름). 이미 이어진 것은 「그대로」 이고, **근거나 붙은 값이 다르면 「고침」**
+    이다. 돌아온 `result` 는 계획이다 — 사람이 확인한 뒤 `job_apply(job_id)`.
+    **근거(evidence_note)를 적는다** — 기계가 이은 것이면 더.
+
+    선에 붙는 값은 `{"properties": {...}}` 로(인과 관계의 근거 건수처럼). 모양은 그 **관계
+    종류의 속성 정의**로 본다 — 정의에 없는 키는 그 줄이 오류다.
+
+    `mode` 는 **더할지 맞출지**다. 사라진 관계를 정리할 길이 이것뿐이다:
+
+      - `add`(기본)      더하기만 한다.
+      - `replace`        이 파일에 나온 **(출발 객체 · 관계 종류)** 범위에서, 파일에 없는
+                         선을 「끊음」 으로 계획에 올린다.
+      - `replace_type`   **(출발 타입 · 관계 종류) 전체**에서. 파일이 그 타입의 **전부**일
+                         때만 쓴다 — 일부만 담은 파일로 돌리면 나머지가 다 끊긴다.
+
+    끊는 것은 계획에 `unlink` 로 먼저 보인다 — 사람이 보고 적용한다."""
     fields: dict[str, Any] = {
         "kind": "relations_import",
-        "params": json.dumps({"type_slug": type_slug}),
+        "params": json.dumps({"type_slug": type_slug, "relations_mode": mode}),
     }
     body = json.dumps({"rows": rows}, ensure_ascii=False).encode("utf-8")
     job = await _post_form(ctx, "/api/jobs", fields, ("rows.json", body, "application/json"))

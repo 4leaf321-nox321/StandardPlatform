@@ -18,6 +18,7 @@ GUIDE_VERSION: 2026-09-29a
 | 원천(엑셀 · PPT · PDF · Word)을 정제해 온톨로지로 만들기 전에 | `get_guide(topic="modeling")` | **무엇을 타입 · 속성 · 관계로 만드나** — 판단이 서지 않으면 만들지 않는다 |
 | 타입·속성·관계 종류를 만들거나 고치기 | `ontology_import(apply=false)` → 사람 확인 → `apply=true` | 미리 보기를 건너뛰지 않는다 |
 | **이름으로 무언가를 가리킨다** | `object_resolve(type_slug, name)` | `candidates` 면 **고르지 말고 사람에게 묻는다** |
+| 이름 **여럿**을 한 번에 | `objects_resolve_many(type_slug, names)` | 여러 줄을 넣기 전에 한 번. 왕복이 줄 수만큼 늘지 않는다 |
 | 객체 찾기 | `objects_list(type_slug, q=, properties=, conditions=)` | 화면과 같은 거르기. **0건이면 `diagnosis` 를 읽는다** |
 | 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 한 걸음까지. 주소를 추측하지 않는다 |
@@ -37,7 +38,8 @@ GUIDE_VERSION: 2026-09-29a
 | 여러 행 한 번에(upsert) | `objects_import` → 사람 확인 → `job_apply(job_id)` | **작업이 된다.** 같은 `key` 면 고침. 한 행이라도 오류면 전부 안 넣음 |
 | 객체 둘 잇기 | `relation_add` | **근거(evidence_note)를 적는다** |
 | 잘못 이은 관계 | `relation_update`(근거 · 속성) · `relation_remove`(끊기) | 양끝 · 종류는 못 바꾼다 — 끊고 새로 잇는다. 확실하지 않으면 끊지 말고 사람에게 |
-| 관계 여러 줄 한 번에 | `relations_import` → 사람 확인 → `job_apply` | 이미 이어진 건 그대로 |
+| 관계 여러 줄 한 번에 | `relations_import(mode=)` → 사람 확인 → `job_apply` | 이미 이어진 건 그대로. `replace`·`replace_type` 은 **파일에 없는 선을 끊는다** |
+| 기계가 붙인 별칭 검수 | `aliases_pending` → 사람 확인 → `aliases_review` | **스스로 승인하지 않는다** |
 | 뒤에서 도는 작업이 어디까지 됐나 | `job_status(job_id)` · `jobs_list()` | 워커가 없으면 영영 대기 — `jobs_list` 의 `workers` 로 안다 |
 | 바깥 시스템(OData·REST·파일)에서 읽어 채우기 | `datasources_list` → `datasource_sync(apply=false)` → `apply=true` | 정의는 화면에서. 오류 행이 있으면 아무것도 안 넣음 |
 | **이 설치에만 있는 기능**(디지털 트윈 역량 등) | `extensions_schema` → `extension_call` | 경로를 짐작하지 않는다. 쓰기는 그 확장의 범위를 가진 토큰만 |
@@ -127,6 +129,11 @@ GUIDE_VERSION: 2026-09-29a
 식별자 → 별칭 → 이름 → 포함 차례로 맞추고, 앞에서 정해지면 뒤는 안 본다. 별칭이 있으니
 「앤시스」 로 물어도 「Ansys」 가 나온다. **포함으로 하나만 걸려도 `exact` 가 아니다** —
 포함은 짐작이고, 짐작을 확정으로 부르면 그 짐작이 그대로 저장된다.
+
+**여러 개를 넣기 전에는 `objects_resolve_many(type_slug, names)` 로 한 번에 묻는다.**
+한 줄에 한 번 물으면 이천 줄짜리 원천에 왕복이 이천 번이고, 그러고도 「없는 것」 하나가
+묶음 전체를 거절시킨다. `counts` 가 몇 개가 안 풀렸는지 한 줄로 말하니, 사람에게 물을 것만
+모아서 한 번에 묻는다.
 
 ### 0건일 때 — 목록에 붙어 오는 `diagnosis`
 
@@ -269,8 +276,26 @@ GUIDE_VERSION: 2026-09-29a
 - 같은 `key` 가 이미 있으면 **고친다**(upsert). 없는 키는 안 건드린다. `null` 이 비움이다.
 - 참조 속성은 상대의 **식별자(key)**, **별칭**, 없으면 **이름(label)** 순으로 풀린다.
   겹치면 거절된다 — 그때는 id 로 적는다.
-- `aliases` 열에 `;` 로 여럿 — 그 객체의 다른 이름을 함께 넣는다(통째로 바꿈).
+- `aliases` 열에 `;` 로 여럿, 또는 `{"value": "…", "source": "…", "note": "…"}` 로도 적는다 —
+  어디서 온 표기인지가 남아야 나중에 사람이 검수할 수 있다.
+- `aliases_mode` 가 별칭을 **더할지 파일대로 맞출지**다. 기본 `add` — 파일에 없는 별칭은
+  그대로 둔다. `replace` 는 **파일에 없는 별칭을 지운다**: 원천이 그 객체의 별칭 전부를
+  가지고 있을 때만 쓴다. 한 열에서 뽑아 온 조각을 `replace` 로 보내면 사람이 손으로 붙인
+  표기가 사라진다.
+- 키를 바꿨으면 `renamed_from`(직전 키) · `previous_keys`(이력) 를 함께 적는다 — 받아 가는
+  쪽이 「없어진 것」 과 「이름이 바뀐 것」 을 구별하는 자리다.
 - 한 번에 10만 행까지.
+
+### 기계가 붙인 별칭은 검수를 기다린다
+
+도구로 넣은 별칭은 **검수 대기**로 남는다. 사람이 승인한 표기와 기계가 짐작한 표기가 같은
+무게로 섞이면, 틀린 짐작 하나가 그 뒤의 모든 이름풀이를 조용히 끌고 간다.
+
+- `aliases_pending(type_slug, limit=)` — 아직 검수 안 된 것들. 품질 화면의
+  `alias_pending` 과 같은 목록이다.
+- `aliases_review(type_slug, alias_ids, action=)` — `approve`(맞다) 또는 `remove`(아니다).
+- **스스로 승인하지 않는다.** 내가 붙인 것을 내가 승인하면 검수가 아니라 서식이다. 목록을
+  사람에게 보여 주고, 사람이 고른 것만 이 도구로 보낸다.
 
 ### 묶음 — `bundle_import(bundle)`
 
@@ -301,9 +326,15 @@ GUIDE_VERSION: 2026-09-29a
   본 사람의 기억에 남고, 그 기억이 다음 판단을 흔든다.
 - **근거를 적는다.** 어느 문서·어느 자료에서 이 연결이 나왔는지. 근거 없는 연결은
   시간이 지나면 아무도 못 믿고, 확인하려면 처음부터 다시 조사해야 한다.
-- 여러 줄이면 `relations_import(type_slug, rows)` — 작업이 된다(`bulk` 주제). 행은
+- 여러 줄이면 `relations_import(type_slug, rows, mode=)` — 작업이 된다(`bulk` 주제). 행은
   `{"src": "<key 또는 label>", "relation": "<slug>", "dst": "...", "evidence_note": "..."}`.
-  이미 이어진 것은 `unchanged` 라 두 번 올려도 두 겹이 안 된다.
+  이미 이어진 것은 `unchanged` 라 두 번 올려도 두 겹이 안 된다. 관계에 속성이 있으면
+  같은 행에 `"properties": {...}`.
+- `mode` 가 **없어진 선을 어떻게 할지**다. 기본 `add` — 파일에 없는 선은 그대로 둔다.
+  `replace` 는 파일에 나온 **출발 객체 · 관계마다** 그 밖의 선을 끊고, `replace_type` 은
+  **타입 전체 · 관계마다** 끊는다. 원천이 그 범위를 통째로 가지고 있을 때만 쓴다 — 조각을
+  `replace_type` 으로 보내면 나머지가 전부 지워진다. 끊을 선은 계획에 `unlink` 로 오니,
+  **적용 전에 그 수를 사람에게 보여 준다.**
 
 <!--@ sparql -->
 ## 질의어로 묻기 (SPARQL)

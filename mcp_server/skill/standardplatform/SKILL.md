@@ -38,8 +38,14 @@ mcp__standardplatform__get_guide()
   경고를 사람에게 보여 주고 판단을 받은 뒤 `apply=true`.
 - **일괄 입력도 같다** — `objects_import`·`relations_import` 는 기본이 계획이다.
 - **관계에는 근거를 적는다** — `evidence_note`.
-- **이름은 해소하고 쓴다** — `object_resolve`. `candidates` 가 오면 고르지 말고
-  사람에게 묻는다. 목록의 첫 줄을 집으면 틀린 줄도 첫 줄이면 집힌다.
+- **이름은 해소하고 쓴다** — `object_resolve`(여러 개면 `objects_resolve_many`).
+  `candidates` 가 오면 고르지 말고 사람에게 묻는다. 목록의 첫 줄을 집으면 틀린 줄도
+  첫 줄이면 집힌다.
+- **「파일대로 맞춤」 은 지우는 것이다** — `aliases_mode="replace"`,
+  `relations_import(mode="replace"|"replace_type")` 는 파일에 없는 것을 끊고 지운다.
+  원천이 그 범위를 통째로 가지고 있을 때만 쓰고, 끊을 수를 사람에게 먼저 보여 준다.
+- **기계가 붙인 별칭은 스스로 승인하지 않는다** — `aliases_pending` 으로 목록을 사람에게
+  보여 주고, 사람이 고른 것만 `aliases_review` 로 보낸다.
 - **0건은 「없다」 가 아니다** — 목록이 0건이면 응답의 `diagnosis` 를 읽고, 안 채운
   타입인지·부서 밖이라 안 보이는지·조건이 좁은지 갈라 말한다.
 - **이 설치에만 있는 기능은 `extensions_schema` 로 본다** — 그 목록에 없는 경로는

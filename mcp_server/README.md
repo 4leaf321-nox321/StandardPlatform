@@ -80,6 +80,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `ontology_schema` | 묶음·타입·속성·관계 전부 |
 | `ontology_import` | 정의를 한 트랜잭션으로. **기본은 미리 보기**(`apply=false`) |
 | `object_resolve` | **이름 하나가 어느 객체인가** — `exact`/`candidates`/`none`. 이름으로 가리키기 전에 부른다 |
+| `objects_resolve_many` | 이름 **여럿을 한 번에**(500개까지) — 넣기 전에 「없는 것 · 여럿과 맞는 것」 을 먼저 걸러 묶음 전체가 거절되지 않게 |
 | `objects_list` · `object_get` | 객체 읽기 — 화면과 같은 조건 거르기 (`object_get` 은 관련 객체까지). **0건이면 `diagnosis` 가 붙는다** |
 | `objects_summary` · `object_fields` | 통계(서버가 센다 — 화면의 「통계」 와 같다) · 다른 타입의 칸 주소(`ref.vendor.country` 등) |
 | `object_history` · `object_references` · `object_rollup` · `quality_report` | 이력 · 가리키는 것 · 아래 전부의 합 · 품질 — 화면의 읽기와 대칭 |
@@ -87,10 +88,11 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `object_tree` · `audit_recent` | 계층 한 단계씩 · 누가 언제 무엇을 바꿨나(전체, 부서 관리자 이상) |
 | `bulk_edit` · `bulk_edit_undo` | 여러 객체의 **한 칸**을 같은 값으로 — 계획 먼저, `batch_id` 로 통째로 되돌리기 |
 | `object_create` · `object_update` | 객체 쓰기 (`update` 는 보낸 것만) |
-| `objects_import` | 여러 행 한 번에(upsert). **작업이 된다** — 계획을 돌려주고, 적용은 `job_apply` |
+| `objects_import` | 여러 행 한 번에(upsert). **작업이 된다** — 계획을 돌려주고, 적용은 `job_apply`. `aliases_mode="replace"` 면 파일에 없는 별칭을 지운다(기본은 더하기), 행의 `renamed_from`·`previous_keys` 로 **키를 바꾼다** |
+| `aliases_pending` · `aliases_review` | **사람이 아직 안 본 별칭**(기계가 붙인 것) 목록 · 고른 것을 한 번에 확인/지우기. **확인은 사람의 판단이다** |
 | `bundle_import` | 정의 · 객체 · 관계를 한 묶음으로 — 작업이 되어 한 번에 미리 보기, 적용은 `job_apply`(전부 아니면 무) |
 | `job_status` · `job_apply` · `jobs_list` | 작업이 어디까지 됐나 · 사람이 확인한 계획 적용 · 내 작업과 워커 생존 |
-| `relation_add` · `relation_update` · `relation_remove` · `relations_import` | 객체 둘을 잇기 (**근거를 적는다**) · 근거 고치기 · 끊기(틀리게 이은 것을 되돌리는 자리) |
+| `relation_add` · `relation_update` · `relation_remove` · `relations_import` | 객체 둘을 잇기 (**근거를 적는다**) · 근거 고치기 · 끊기(틀리게 이은 것을 되돌리는 자리). `relations_import(mode="replace")` 는 **파일에 없는 선을 끊음으로** 계획에 올린다(`replace_type` 은 그 타입 전체에서) |
 | `datasources_list` · `datasource_sync` | 바깥 시스템(OData)에서 읽어 채우기 — 계획 먼저 |
 | `extensions_schema` · `extension_call` | **이 설치에만 있는 기능**(확장)의 자리 목록 · 그 자리 부르기. 쓰기는 그 확장의 범위를 가진 토큰만 |
 
