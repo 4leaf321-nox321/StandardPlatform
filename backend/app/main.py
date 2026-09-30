@@ -265,6 +265,9 @@ def _mount_spa(app: FastAPI, settings: Settings) -> None:
             ("app-name", settings.app_name),
             ("app-slug", settings.app_slug),
             ("app-tagline", settings.app_tagline),
+            # **MCP 주소.** 비어 있으면 화면이 짐작한다(앱 포트 +2 · 프록시 뒤면 접두어).
+            # 짐작이 안 되는 구성에서만 `.env` 의 `MCP_PUBLIC_URL` 이 채운다.
+            ("app-mcp", settings.mcp_public_url),
             # **이 자리는 요청마다 채운다.** 켜짐이 화면에서 바뀌므로(시스템 관리자 ›
             # 서버) 기동 때 박아 두면 재시작까지 옛 메뉴가 붙는다.
             ("app-extensions", _EXTENSIONS_TOKEN),

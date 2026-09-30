@@ -231,6 +231,32 @@ def test_번들_하나로_인스턴스_여럿(bundle: Path, tmp_path: Path) -> N
     assert "APP_SLUG=<slug>" in failed.value.stderr
 
 
+def test_쌍둥이를_한_서버에_얹을_때_포트가_겹치면_멈춘다(bundle: Path, tmp_path: Path) -> None:
+    """**MCP 포트는 앱 포트 +2 로 딸려 온다.**
+
+    그래서 두 번째 플랫폼이 앞 플랫폼의 MCP 포트를 앱 포트로 고르면(8050 · 8052) 조용히
+    겹치고, 늦게 뜨는 쪽이 「주소가 이미 사용 중」 으로 죽는다 — 그 사실은 systemd 로그에만
+    남는다. 10 씩 벌리라는 안내만으로는 몇 달 뒤 다른 사람이 그 규칙을 모른다.
+    """
+    etc = tmp_path / "etc"
+    render(bundle, etc, **{**HA_ENV, "APP_SLUG": "plmhub", "APP_PORT": "8050"})
+    assert "MCP_PORT=8052" in read(etc, "platform-instances/plmhub.conf")
+
+    # 앞 플랫폼의 MCP 포트를 앱 포트로 고른다.
+    with pytest.raises(subprocess.CalledProcessError) as clash:
+        render(bundle, etc, **{**HA_ENV, "APP_SLUG": "simtools", "APP_PORT": "8052"})
+    assert "plmhub" in clash.value.stderr and "겹칩니다" in clash.value.stderr
+
+    # 거꾸로도 — 내 MCP 포트가 앞 플랫폼의 앱 포트다.
+    with pytest.raises(subprocess.CalledProcessError) as other:
+        render(bundle, etc, **{**HA_ENV, "APP_SLUG": "simtools", "APP_PORT": "8048"})
+    assert "겹칩니다" in other.value.stderr
+
+    # 10 벌리면 된다.
+    render(bundle, etc, **{**HA_ENV, "APP_SLUG": "simtools", "APP_PORT": "8060"})
+    assert "MCP_PORT=8062" in read(etc, "platform-instances/simtools.conf")
+
+
 def test_setup_은_물어보고_계획을_보여준다(bundle: Path, tmp_path: Path) -> None:
     """운영자가 env 이름과 순서를 외우지 않게 — 답한 것으로 계획을 만들고, --plan 은
     거기서 멈춘다."""

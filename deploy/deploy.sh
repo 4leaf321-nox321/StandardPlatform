@@ -97,6 +97,7 @@ instance_save() {
 APP_NAME=$APP_NAME
 APP_TAGLINE=$APP_TAGLINE
 APP_PORT=$APP_PORT
+MCP_PORT=${MCP_PORT:-}
 EXTENSIONS=$EXTENSIONS
 INSTALL_DIR=$INSTALL_DIR
 DATA_DIR=${DATA_DIR:-}
@@ -177,6 +178,66 @@ MCP_ALLOWED_HOSTS="${MCP_ALLOWED_HOSTS:-$(unit_env MCP_ALLOWED_HOSTS)}"
 # 우리 nginx(LB_MODE=local)는 Host 를 그대로 넘기므로 공개 호스트명이 허용 목록에 있어야 한다.
 # 메인 서버의 nginx 가 무엇을 넘기는지는 모르므로 그때는 비워 둔다(0.0.0.0 이면 보호를 끈다 — 사내망).
 [[ "$HA_ROLE" != "" && "$LB_MODE" == "local" && -z "$MCP_ALLOWED_HOSTS" ]] && MCP_ALLOWED_HOSTS="$PUBLIC_HOST,$WEB_VIP,$SELF_IP,$PEER_IP"
+
+# ───────────────────────── 포트가 겹치지 않나 ─────────────────────────
+# 한 서버에 쌍둥이를 여럿 얹는다. 앱 포트는 사람이 정하고 **MCP 는 앱 포트 +2 로 딸려 온다** —
+# 그래서 두 번째 플랫폼이 앞 플랫폼의 MCP 포트를 앱 포트로 고르면(8040 · 8042) 조용히 겹친다.
+# 늦게 뜨는 쪽이 「주소가 이미 사용 중」 으로 죽고, 그 사실은 systemd 로그에만 남는다.
+#
+# **물어보지 않고 막는다** — 이미 설치된 인스턴스의 기록(그리고 그 MCP 유닛)을 보고 겹치면
+# 멈춘다. 10 씩 벌리라는 안내만으로는 몇 달 뒤 다른 사람이 그 규칙을 모른다.
+other_mcp_port() {  # $1=slug — 그 인스턴스의 MCP 포트(유닛 > 기록 > 앱 포트 +2)
+    local slug="$1" unit="/etc/systemd/system/${slug}-mcp.service" got=""
+    [[ -f "$unit" ]] && got="$(sed -n 's|^Environment=MCP_PORT=||p' "$unit" | tail -n1)"
+    [[ -z "$got" ]] && got="$(instance_conf_get "$slug" MCP_PORT)"
+    local app; app="$(instance_conf_get "$slug" APP_PORT)"
+    [[ -z "$got" && -n "$app" ]] && got=$((app + 2))
+    printf '%s' "$got"
+}
+
+# 이 서버에 이미 있는 인스턴스들 **다음 10 자리** — 설치 마법사가 기본값으로 보여 준다.
+free_port() {
+    local file slug taken=0 got="$APP_PORT_DEFAULT"
+    for file in "$INSTANCES_DIR"/*.conf; do
+        [[ -f "$file" ]] || continue
+        slug="$(basename "$file" .conf)"
+        [[ "$slug" == "$APP_SLUG" ]] && continue
+        taken="$(instance_conf_get "$slug" APP_PORT)"
+        [[ -n "$taken" && "$taken" -ge "$got" ]] && got=$((taken + 10))
+    done
+    printf '%s' "$got"
+}
+
+# 화면에 찍을 호스트 — 바인딩이 `0.0.0.0` 이면 그것은 주소가 아니다.
+mcp_shown_host() {
+    case "$MCP_HOST" in
+        0.0.0.0|"::"|"") printf '%s' "${SELF_IP:-${PUBLIC_HOST:-이-서버}}" ;;
+        *) printf '%s' "$MCP_HOST" ;;
+    esac
+}
+
+check_port_clash() {
+    local file slug oapp omcp mine
+    for file in "$INSTANCES_DIR"/*.conf; do
+        [[ -f "$file" ]] || continue
+        slug="$(basename "$file" .conf)"
+        [[ "$slug" == "$APP_SLUG" ]] && continue
+        oapp="$(instance_conf_get "$slug" APP_PORT)"
+        omcp="$(other_mcp_port "$slug")"
+        for mine in "$APP_PORT:앱" "$MCP_PORT:MCP"; do
+            local port="${mine%%:*}" what="${mine##*:}"
+            if [[ -n "$oapp" && "$port" == "$oapp" ]] || [[ -n "$omcp" && "$port" == "$omcp" ]]; then
+                err "$APP_SLUG 의 $what 포트 $port 가 이미 설치된 $slug 와 겹칩니다" \
+                    "($slug: 앱 ${oapp:-?} · MCP ${omcp:-?})." \
+                    "MCP 는 앱 포트 +2 로 딸려 옵니다 — 앱 포트를 10 이상 벌려 주세요:" \
+                    "APP_SLUG=$APP_SLUG APP_PORT=<다른 포트> sudo ./deploy.sh update"
+            fi
+        done
+    done
+    [[ "$APP_PORT" == "$MCP_PORT" ]] && err "앱 포트와 MCP 포트가 같습니다($APP_PORT) — MCP_PORT 를 다시 주세요."
+    return 0
+}
+check_port_clash
 
 # ───────────────────────── 조각들 ─────────────────────────
 # apptainer 는 **우분투 기본 저장소에 없다** — 공식 PPA 에만 있다. `apt-get install apptainer`
@@ -458,7 +519,10 @@ setup_mcp() {
     systemctl enable "$MCP_SERVICE_NAME" >/dev/null 2>&1 || true
     systemctl restart "$MCP_SERVICE_NAME" \
         || warn "MCP 서비스 기동 실패 — 'journalctl -u $MCP_SERVICE_NAME' 확인"
-    info "MCP 서버: http://$MCP_HOST:$MCP_PORT/mcp  → 백엔드 $MCP_API_BASE"
+    # **사람이 칠 주소로 찍는다.** `0.0.0.0` 은 주소가 아니다 — 그대로 찍으면 그것을 복사해
+    # 등록하고 안 붙는다. 그리고 앱 주소와 **다른 포트**라는 것을 여기서 한 번 말해 준다.
+    info "MCP 서버: http://$(mcp_shown_host):$MCP_PORT/mcp  → 백엔드 $MCP_API_BASE"
+    info "  (앱은 $APP_PORT, MCP 는 +2 다. 접두어(/$APP_SLUG)는 메인 서버 nginx 뒤에서만 붙는다)"
 }
 
 # ── 작업 워커 — 같은 SIF 재사용. **치명적이다**: 없으면 파일 가져오기가 안 돈다. ──
@@ -744,7 +808,7 @@ cmd_status() {
     fi
     if [[ -f "$MCP_SERVICE_UNIT" ]]; then
         echo
-        echo "== MCP ($MCP_SERVICE_NAME · http://$MCP_HOST:$MCP_PORT/mcp) =="
+        echo "== MCP ($MCP_SERVICE_NAME · http://$(mcp_shown_host):$MCP_PORT/mcp) =="
         systemctl --no-pager --lines=5 status "$MCP_SERVICE_NAME" || true
     fi
     if [[ -f "$SYNC_TIMER_UNIT" ]]; then
@@ -790,7 +854,10 @@ cmd_setup() {
     else
         ask APP_NAME "화면에 보일 이름 (예: PLM 기준정보)" "$(instance_conf_get "$APP_SLUG" APP_NAME)"
         APP_NAME="${APP_NAME:-$APP_NAME_DEFAULT}"
-        ask APP_PORT "앱 포트 — 같은 서버의 다른 플랫폼과 10 이상 벌립니다" "$(instance_conf_get "$APP_SLUG" APP_PORT)"
+        # **빈 자리를 미리 골라 준다** — MCP 가 앱 포트 +2 를 쓰므로 겹치면 뒤에서 멈춘다.
+        local port_default; port_default="$(instance_conf_get "$APP_SLUG" APP_PORT)"
+        [[ -n "$port_default" ]] || port_default="$(free_port)"
+        ask APP_PORT "앱 포트 — 10 씩 벌립니다(MCP 가 +2 를 씁니다)" "$port_default"
         APP_PORT="${APP_PORT:-$APP_PORT_DEFAULT}"
         ask EXTENSIONS "확장 모듈 기본값, 쉼표로 (화면에서 켤 수 있으니 그냥 Enter)" "$(instance_conf_get "$APP_SLUG" EXTENSIONS)"
     fi

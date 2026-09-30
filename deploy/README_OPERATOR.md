@@ -235,8 +235,21 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 - **상태**: `sudo systemctl status <slug>-mcp` / 로그 `journalctl -u <slug>-mcp -f`
   (`sudo ./deploy.sh status` 도 함께 보여 준다)
 - **끄기**: `MCP_ENABLED=0 sudo ./deploy.sh update` (유닛은 별도 `systemctl disable --now <slug>-mcp`)
+- **주소**: `http://<서버>:<앱포트+2>/mcp` — **`<slug>` 접두어가 붙지 않는다.** 접두어가 붙는
+  형태(`https://<도메인>/<slug>/mcp`)는 **메인 서버 nginx 뒤에서만** 성립한다(조각이 그 길을
+  MCP 로 넘긴다). 앱 포트에 `/<slug>/mcp` 를 물으면 앱이 404 로 답한다.
+  화면(「내 정보」)이 보여 주는 주소는 **들어온 주소로 판단한다**: 표준 포트(80 · 443)면
+  접두어 형태, 앱 포트로 직접이면 `+2` 형태. 표준이 아닌 포트의 프록시 뒤라면 그 둘 다
+  아니므로 `.env` 에 `MCP_PUBLIC_URL=https://<도메인>:<포트>/<slug>/mcp` 를 적어 정본을 준다.
 - **포트**: `BUILD_INFO` 의 `mcp_port` — **앱 포트 +2** (운영 +0 · 개발 +1 다음 자리).
   바꾸려면 `MCP_PORT=<포트> sudo ./deploy.sh update`.
+  한 서버에 쌍둥이를 여럿 얹을 때 **앱 포트를 10 씩 벌린다** — MCP 가 +2 를 쓰므로 8040 과
+  8042 를 나란히 고르면 겹친다. `deploy.sh` 가 이미 설치된 인스턴스와 견줘 **겹치면 멈춘다**
+  (`/etc/platform-instances/<slug>.conf` 의 `APP_PORT` · `MCP_PORT`), `setup` 은 빈 자리를
+  기본값으로 보여 준다.
+- **살아 있나 보기**: `curl -s -o /dev/null -w '%{http_code}\n' http://127.0.0.1:<mcp포트>/mcp`
+  → **406 · 400 이면 정상**(스트리밍 규약이라 평범한 GET 에는 그렇게 답한다), `404` 면 앱에
+  물은 것, 연결 실패면 `MCP_HOST` 가 `127.0.0.1` 이라 밖에 안 열린 것이다.
 - **외부 노출**: 기본 `127.0.0.1` (로컬만). 사내망에 열려면 **한 번만**
   `MCP_HOST=0.0.0.0 sudo ./deploy.sh update` — 이후 `./deploy.sh update` 는 설치된 유닛에서
   값을 읽어 **자동으로 유지**하므로 매번 다시 붙일 필요 없다(되돌릴 땐 그때만 `MCP_HOST=127.0.0.1 …`).

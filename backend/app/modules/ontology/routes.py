@@ -1454,7 +1454,11 @@ def list_snapshots(
     _: User = Depends(require_system_admin), db: Session = Depends(get_db)
 ) -> list[SnapshotOut]:
     rows = db.scalars(
-        select(OntologySnapshot).order_by(OntologySnapshot.taken_at.desc()).limit(50)
+        # **id 까지 보고 세운다.** 시각이 같은 둘(한 요청이 남기는 「복원 직전」 과 복원)은
+        # 순서가 질의마다 달라지고, 그러면 목록의 첫 줄이 매번 다른 것을 가리킨다.
+        select(OntologySnapshot)
+        .order_by(OntologySnapshot.taken_at.desc(), OntologySnapshot.id.desc())
+        .limit(50)
     )
     return [
         SnapshotOut(

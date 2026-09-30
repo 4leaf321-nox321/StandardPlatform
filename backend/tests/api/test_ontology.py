@@ -1804,11 +1804,17 @@ def test_되돌려도_그_뒤에_만든_것은_안_지운다(client: TestClient,
 
 
 def test_스냅샷_목록이_남는다(client: TestClient, admin: Signed) -> None:
-    _import(client, admin, {"types": [{"slug": _uniq("x"), "label": "x"}]}, dry_run=False)
+    """**자기가 만든 것을 id 로 찾는다.** 목록의 첫 줄을 보면 같은 DB 에서 도는 다른 시험이
+    그 사이에 남긴 스냅샷(복원 직전 …)을 보게 된다."""
+    made = _import(
+        client, admin, {"types": [{"slug": _uniq("x"), "label": "x"}]}, dry_run=False
+    )
+    wanted = made.json()["snapshot_id"]
     rows = client.get("/api/ontology/snapshots", headers=admin.headers).json()
-    assert rows
-    assert rows[0]["reason"] == "가져오기"
-    assert rows[0]["actor_label"]
+    mine = next((one for one in rows if one["id"] == wanted), None)
+    assert mine is not None, [one["reason"] for one in rows[:5]]
+    assert mine["reason"] == "가져오기"
+    assert mine["actor_label"]
 
 
 def test_가져오기는_시스템_관리자만(client: TestClient, admin: Signed, member: Signed) -> None:

@@ -21,18 +21,49 @@ import { copyText } from '@/shared/lib/clipboard'
 const TOKEN_PLACEHOLDER = '‹발급받은_토큰›'
 
 /**
- * 이 설치의 MCP 주소.
- * - 메인 서버(접두어) 뒤: `https://<호스트>/<slug>/mcp` — 조각이 `/<slug>/mcp` 를 MCP 로 넘긴다.
- * - 직접(접두어 없음): 앱 포트 +2. 개발(Vite)에서는 개발 MCP(8042).
+ * 이 설치의 MCP 주소 — **MCP 는 앱과 다른 프로세스 · 다른 포트다.**
+ *
+ * ⚠️ 접두어(`/<slug>`)가 있으면 늘 `<origin><접두어>/mcp` 를 보여 줬다. 그 길은 **메인 서버의
+ *    nginx 에만** 있다(조각이 `/<slug>/mcp` 를 MCP 로 넘긴다) — 앱 포트로 직접 들어온 사람에게는
+ *    앱에 없는 길을 알려 준 것이고, 앱은 404 로 답한다. 토큰을 받은 사람은 그 주소로 등록하고
+ *    「MCP 서버가 없다」 를 MCP 쪽에서 찾는다(실측).
+ *
+ * 그래서 **어디로 들어왔는지**로 가른다:
+ * - 표준 포트(80 · 443) → 앞에 프록시가 있다 → `<origin><접두어>/mcp`
+ * - 앱 포트로 직접 → `<호스트>:<앱포트+2>/mcp` (접두어 없음)
+ * - 그 둘로 안 되는 구성(표준이 아닌 포트의 프록시)에서는 서버가 `<meta name="app-mcp">` 로
+ *   정본을 내려 준다(`.env` 의 `MCP_PUBLIC_URL`).
  */
+export interface Where {
+  protocol: string
+  hostname: string
+  origin: string
+  port: string
+}
+
+/** 규칙만 — 창 없이도 부를 수 있게 갈라 뒀다(시험이 두 모양을 다 본다). */
+export function mcpUrlFrom(
+  where: Where,
+  told?: string | null,
+  prefix: string = PUBLIC_PATH,
+  dev = false,
+): string {
+  if (told) return told
+  const { protocol, hostname, origin, port } = where
+  if (dev) return `${protocol}//${hostname}:8042/mcp`
+  if (!port || port === '80' || port === '443') return `${origin}${prefix}/mcp`
+  return `${protocol}//${hostname}:${Number(port) + 2}/mcp`
+}
+
 export function mcpUrl(): string {
   // 브라우저 밖(시험)에서는 빈 주소 — 번들 검사가 「localhost:80…」 이 박힌 것을 막는다.
   if (typeof window === 'undefined') return '/mcp'
-  const { protocol, hostname, origin, port } = window.location
-  if (PUBLIC_PATH) return `${origin}${PUBLIC_PATH}/mcp`
-  if (import.meta.env.DEV) return `${protocol}//${hostname}:8042/mcp`
-  const app = Number(port || (protocol === 'https:' ? 443 : 80))
-  return `${protocol}//${hostname}:${app + 2}/mcp`
+  return mcpUrlFrom(
+    window.location,
+    document.querySelector('meta[name="app-mcp"]')?.getAttribute('content'),
+    PUBLIC_PATH,
+    import.meta.env.DEV,
+  )
 }
 
 export function setupSnippets(token: string | null, url = mcpUrl()) {
