@@ -22,6 +22,8 @@ class NavGroupOut(BaseModel):
     label: str
     icon: str
     audience: str
+    parent_slug: str | None = None
+    """상위 묶음 — 사이드바를 두 단계로 세운다. 없으면 맨 위 묶음이다."""
     sort_order: int
     is_active: bool
 
@@ -31,6 +33,8 @@ class NavGroupWriteRequest(BaseModel):
     label: str = Field(min_length=1, max_length=64)
     icon: str = Field(default="", max_length=40)
     audience: str = "everyone"
+    parent_slug: str | None = None
+    """상위 묶음의 slug. **두 단계까지다** — 상위가 이미 상위를 가졌으면 거절한다."""
     sort_order: int = 0
     is_active: bool = True
 
@@ -179,6 +183,8 @@ class NavGroupPatchRequest(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=64)
     icon: str | None = Field(default=None, max_length=40)
     audience: str | None = None
+    parent_slug: str | None = None
+    """빈 문자열(`""`)을 보내면 **맨 위로 올린다** — null 은 「안 보냄」 과 구별되지 않는다."""
     sort_order: int | None = None
     is_active: bool | None = None
 
@@ -283,6 +289,11 @@ class NavGroupNode(BaseModel):
     label: str
     icon: str
     audience: str
+    parent: str | None = None
+    """상위 묶음의 slug — 화면이 이것으로 두 단계를 세운다. 없으면 맨 위다.
+
+    **평평한 목록으로 보낸다**(트리로 감싸지 않는다) — 단계가 늘어나도 응답의 모양이
+    그대로이고, 화면이 그리는 깊이만 정한다."""
     items: list[dict[str, str]]
 
 

@@ -20,6 +20,7 @@ import type { OntologySchema } from '@/modules/ontology/api'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { useResource } from '@/shared/hooks/useResource'
+import { navChanged } from '@/shared/layout/navSignal'
 import { cn } from '@/shared/lib/utils'
 
 export interface OntologyContext {
@@ -78,7 +79,12 @@ export default function OntologyLayout() {
 
   const context: OntologyContext = {
     schema: resource.data,
-    reload: resource.reload,
+    // **사이드바에도 알린다.** 정의를 고치면 메뉴가 그 자리에서 따라와야 한다 — 관리 화면들이
+    // 무엇을 바꾸든 이 `reload` 를 부르므로, 신호를 여기 한 곳에 둔다.
+    reload: () => {
+      resource.reload()
+      navChanged()
+    },
     setError,
   }
 

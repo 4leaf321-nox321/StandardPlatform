@@ -75,6 +75,8 @@ export interface DynamicGroup {
   label: string
   icon: string
   audience: string
+  /** 상위 묶음의 slug — 없으면 맨 위. 평평하게 와서 `mergeDynamic` 이 두 단계로 세운다. */
+  parent?: string | null
   items: { label: string; icon: string; to: string; slug: string }[]
 }
 
@@ -85,6 +87,16 @@ export interface NavGroup {
   items: NavItem[]
   /** 그룹 전체가 안 보이는 조건. 항목이 하나도 안 보이면 제목도 지운다. */
   audience?: NavAudience
+  /**
+   * 하위 묶음 — **한 단계까지다**(상위 묶음 › 묶음 › 타입). 타입이 백 개가 되면 묶음이 평평하게
+   * 열 개 늘어서고, 그때 「어디에 속한 것인가」 를 화면이 말해 주지 못한다.
+   */
+  children?: NavGroup[]
+  /**
+   * 접힘을 기억할 열쇠. 없으면 제목을 쓴다 — 동적 묶음은 **이름이 겹칠 수 있어**(상위가 다른
+   * 두 묶음이 같은 이름) slug 를 준다. 겹치면 한쪽을 접을 때 둘이 함께 접힌다.
+   */
+  foldKey?: string
 }
 
 export const NAV_GROUPS: NavGroup[] = [
@@ -132,6 +144,10 @@ export const NAV_GROUPS: NavGroup[] = [
       // **검색은 맨 위다.** 무엇을 찾을 때 그것이 어느 타입인지 아는 경우는 드물고,
       // 그때 사람이 먼저 보는 곳이 여기여야 한다.
       { label: '검색', icon: Search, to: '/search' },
+      // **타입이 백 개가 되면 사이드바는 색인이 못 된다** — 240px 에는 검색 · 건수를 둘 자리가
+      // 없고, 제목까지 세면 백열 줄이다. 색인은 이 화면이 지고 사이드바는 자주 가는 길만 진다.
+      // 묶음에 안 걸린 타입도 여기서만 보인다(사이드바는 걸 자리가 없어 아예 안 그린다).
+      { label: '객체 타입 전부', icon: LayoutGrid, to: '/o', end: true },
       { label: '지식 그래프', icon: Waypoints, to: '/graph' },
       { label: '공지', icon: Megaphone, to: '/notices' },
     ],
@@ -212,8 +228,9 @@ export const NAV_GROUPS: NavGroup[] = [
 export function mergeDynamic(groups: NavGroup[], dynamic: DynamicGroup[]): NavGroup[] {
   if (dynamic.length === 0) return groups
 
-  const converted: NavGroup[] = dynamic.map((group) => ({
+  const asGroup = (group: DynamicGroup): NavGroup => ({
     title: group.label,
+    foldKey: group.slug,
     audience: (group.audience as NavAudience) ?? 'everyone',
     items: group.items.map((item) => ({
       label: item.label,
@@ -224,7 +241,29 @@ export function mergeDynamic(groups: NavGroup[], dynamic: DynamicGroup[]): NavGr
       icon: iconOf(item.icon),
       to: item.to,
     })),
-  }))
+  })
+
+  // **두 단계로 세운다.** 서버는 평평하게 주고 상위 slug 만 붙여 준다.
+  //
+  // ⚠️ **먼저 전부 만들고 그다음 붙인다.** 한 바퀴로 하면 상위가 목록에서 **뒤에 오는**
+  //    경우(순서는 `sort_order`·이름이 정한다 — 상위를 나중에 만들면 흔하다) 그 자식이
+  //    상위를 못 찾아 맨 위에 그대로 섰다. 화면에서는 「상위를 정했는데 사이드바가 안
+  //    바뀐다」 로 보인다(실측).
+  const made = new Map<string, NavGroup>()
+  for (const group of dynamic) made.set(group.slug, asGroup(group))
+  const converted: NavGroup[] = []
+  for (const group of dynamic) {
+    const node = made.get(group.slug)
+    if (!node) continue
+    const up = group.parent ? made.get(group.parent) : undefined
+    // 상위가 목록에 없으면(또는 자기 자신이면) 맨 위로 둔다 — 없는 부모를 기다리다 그 묶음이
+    // 화면에서 사라지는 것이 가장 나쁘다.
+    if (up && up !== node) {
+      up.children = [...(up.children ?? []), node]
+      continue
+    }
+    converted.push(node)
+  }
 
   const withoutPlaceholder = groups.filter(
     (group) => !group.items.every((item) => item.pending && item.to === '/domain'),
@@ -283,12 +322,18 @@ export function visibleGroups(
   const merged = mergeDynamic(NAV_GROUPS, dynamic)
   // 확장은 동적 묶음 뒤, 공통 화면 앞 — 「이 설치만의 것」 이 「어디에나 있는 것」 보다 앞선다.
   const withExtensions = mergeExtensions(merged, extension)
-  return withExtensions
-    .map((group) => ({
-      ...group,
-      items: group.items.filter((item) => canSee(item.audience, viewer)),
-    }))
-    .filter((group) => canSee(group.audience, viewer) && group.items.length > 0)
+  // **자식에도 같은 규칙을 적용한다** — 안 그러면 안 보여야 할 묶음이 상위 밑에서 그대로 뜬다.
+  const prune = (group: NavGroup): NavGroup | null => {
+    if (!canSee(group.audience, viewer)) return null
+    const items = group.items.filter((item) => canSee(item.audience, viewer))
+    const children = (group.children ?? [])
+      .map(prune)
+      .filter((one): one is NavGroup => one !== null)
+    // 제 항목도 없고 아래도 비면 제목만 남는다 — 그 제목은 「여기 있다」 는 거짓말이다.
+    if (items.length === 0 && children.length === 0) return null
+    return children.length > 0 ? { ...group, items, children } : { ...group, items }
+  }
+  return withExtensions.map(prune).filter((one): one is NavGroup => one !== null)
 }
 
 /** 아직 화면이 없는 항목들. 라우터가 이것으로 stub 경로를 만든다 — **사이드바가

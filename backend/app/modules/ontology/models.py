@@ -41,7 +41,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
-from sqlalchemy.orm import Mapped, mapped_column
+from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.database import Base
 
@@ -140,6 +140,32 @@ class NavGroup(Base):
     audience: Mapped[str] = mapped_column(
         String(20), default="everyone", server_default="everyone"
     )
+    parent_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("nav_groups.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    """상위 묶음 — 사이드바를 **두 단계로** 세운다(「설계 기준정보 › 기계 부품 › 부품」).
+
+    타입이 백 개가 되면 묶음 열 개가 평평하게 늘어서고, 그때 「어디에 속한 것인가」 를
+    화면이 말해 주지 못한다. 계층으로 찾는 사람에게는 그 말이 지도다.
+
+    ⚠️ **한 단계만이다.** 부모의 부모는 막는다(`parent_error`): 접힘 상태 · 현재 경로 표시 ·
+       들여쓰기가 단계마다 곱해지고, 무엇보다 「이건 어디에 넣지」 가 애매해지기 시작하는
+       지점이 3단계다. 타입까지 세면 화면에 보이는 단계는 이미 셋이다.
+
+    이것은 **화면 정리**다. 타입끼리의 `parent_slug`(「개발모델은 제품이다」)와는 다른
+    것이다 — 그쪽은 뜻의 계층이고 RDF 로 나간다."""
+    parent: Mapped[NavGroup | None] = relationship(
+        remote_side=[id], lazy="joined", foreign_keys=[parent_id]
+    )
+
+    @property
+    def parent_slug(self) -> str | None:
+        """API · 정의 파일이 쓰는 이름 — 사람과 문서는 slug 로 가리킨다."""
+        return self.parent.slug if self.parent else None
+
     sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     """지우지 않는다. 이 그룹에 걸린 타입들이 밖에 남아 있다."""

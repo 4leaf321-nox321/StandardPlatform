@@ -9,7 +9,7 @@
  * 기억한다(사람마다 쓰는 묶음이 다르니 서버가 알 일이 아니다).
  */
 
-import { useCallback, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { ChevronRight } from 'lucide-react'
 import { NavLink, useLocation } from 'react-router-dom'
 
@@ -21,7 +21,9 @@ import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/shared/component
 import { useResource } from '@/shared/hooks/useResource'
 import { ontologyApi } from '@/modules/ontology/api'
 import { extensionNavGroups, useEnabledExtensions } from '@/extensions'
+import type { NavGroup } from '@/shared/layout/navigation'
 import { itemHref, visibleGroups } from '@/shared/layout/navigation'
+import { onNavChanged } from '@/shared/layout/navSignal'
 import { cn } from '@/shared/lib/utils'
 
 /** 접어 둔 묶음. **한 서버에 두 플랫폼이 있을 수 있어** 키에 slug 를 붙인다. */
@@ -59,6 +61,130 @@ function useFoldedGroups() {
   return { folded, toggle }
 }
 
+/** 이 묶음(또는 그 아래)에 **지금 보는 화면**이 있나 — 접었을 때 점을 찍는 근거. */
+function holdsActive(group: NavGroup, pathname: string, workspaceSlug: string): boolean {
+  const mine = group.items.some((item) => {
+    const href = itemHref(item, workspaceSlug)
+    return item.end ? pathname === href : pathname.startsWith(href)
+  })
+  return mine || (group.children ?? []).some((one) => holdsActive(one, pathname, workspaceSlug))
+}
+
+/**
+ * 묶음 한 덩어리 — 제 항목과 **하위 묶음**을 그린다.
+ *
+ * 깊이는 **한 단계까지**다(상위 묶음 › 묶음 › 타입). 더 깊이 가면 접힘 상태 · 현재 경로 표시 ·
+ * 들여쓰기가 단계마다 곱해지고, 사이드바는 고장나면 **나갈 길이 통째로 사라지는** 자리다.
+ */
+function GroupBlock({
+  group,
+  depth,
+  folded,
+  toggle,
+  pathname,
+  workspaceSlug,
+  onNavigate,
+}: {
+  group: NavGroup
+  depth: number
+  folded: string[]
+  toggle: (key: string) => void
+  pathname: string
+  workspaceSlug: string
+  onNavigate?: () => void
+}) {
+  // **제목이 있어야 접을 수 있다.** 제목이 없는 묶음은 홈 하나뿐이라 접을 것도 없고,
+  // 접는 단추를 둘 자리도 없다.
+  const title = group.title
+  const key = group.foldKey ?? title
+  const isFolded = Boolean(key && folded.includes(key))
+  // 접힌 묶음 안에 **지금 보는 화면**이 있으면 점을 찍는다 — 접었다고 「어디 있는지」 를
+  // 모르게 두면, 사람은 묶음을 하나씩 펴 가며 찾는다.
+  const hasActive = holdsActive(group, pathname, workspaceSlug)
+  const children = group.children ?? []
+  return (
+    <div className={cn(depth > 0 && 'mt-2 ml-2 border-l pl-2')}>
+      {/* **제목이 없으면 자리도 안 남긴다.** 빈 문단을 두면 홈 위에 설명 없는 여백이
+          생겨 「뭔가 안 나온다」 로 읽힌다. */}
+      {title && key && (
+        <button
+          type="button"
+          aria-expanded={!isFolded}
+          onClick={() => toggle(key)}
+          className={cn(
+            // **글자 크기는 한 벌이다**(`text-sm` — 항목과 같다). 제목만 작게 두면 한 열에
+            // 크기가 둘 섞이고, 단계가 둘이 되면서 그것이 세 줄마다 번갈아 나온다 — 단계는
+            // **들여쓰기 · 굵기 · 색**으로 가른다.
+            'hover:text-foreground flex w-full items-center gap-1 rounded px-2 py-1 text-sm',
+            depth === 0 && children.length > 0
+              ? // 상위 묶음은 그 구역의 머리다 — 굵기로 선다.
+                'text-foreground/80 font-semibold'
+              : 'text-muted-foreground font-medium',
+          )}
+        >
+          <ChevronRight
+            className={cn('size-3.5 shrink-0 transition-transform', !isFolded && 'rotate-90')}
+          />
+          <span className="truncate">{title}</span>
+          {isFolded && hasActive && (
+            <span
+              className="bg-primary ml-auto size-1.5 shrink-0 rounded-full"
+              title="지금 보는 화면이 이 묶음 안에 있습니다"
+            />
+          )}
+        </button>
+      )}
+      {/* **접으면 그리지 않는다.** CSS 로 숨기면 접힌 묶음의 링크가 탭 이동과 읽기
+          프로그램에는 그대로 남아, 접었는데도 거기로 갈 수 있다. */}
+      {!isFolded && (
+        <>
+          {group.items.length > 0 && (
+            <ul className="space-y-0.5">
+              {group.items.map((item) => (
+                <li key={item.label}>
+                  <NavLink
+                    to={itemHref(item, workspaceSlug)}
+                    end={item.end}
+                    onClick={onNavigate}
+                    className={({ isActive }) =>
+                      cn(
+                        'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
+                        isActive
+                          ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
+                          : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                      )
+                    }
+                  >
+                    <item.icon className="size-4 shrink-0" />
+                    <span className="truncate">{item.label}</span>
+                    {item.pending && (
+                      <span className="text-muted-foreground/70 ml-auto shrink-0 rounded border px-1 text-[10px] leading-4">
+                        미구현
+                      </span>
+                    )}
+                  </NavLink>
+                </li>
+              ))}
+            </ul>
+          )}
+          {children.map((child) => (
+            <GroupBlock
+              key={child.foldKey ?? child.title}
+              group={child}
+              depth={depth + 1}
+              folded={folded}
+              toggle={toggle}
+              pathname={pathname}
+              workspaceSlug={workspaceSlug}
+              onNavigate={onNavigate}
+            />
+          ))}
+        </>
+      )}
+    </div>
+  )
+}
+
 interface SidebarProps {
   collapsed: boolean
   workspaceSlug: string
@@ -82,6 +208,9 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
   // **정의가 만든 화면.** 못 불러와도 정적 메뉴는 그대로 선다 — 사이드바가
   // 통째로 비면 나갈 길까지 사라진다.
   const dynamic = useResource(() => ontologyApi.nav(), [])
+  // **정의를 고치면 그 자리에서 따라온다.** 안 들으면 새로 고칠 때까지 옛 메뉴가 남고,
+  // 상위 묶음을 정한 사람은 「정했는데 안 바뀐다」 를 본다.
+  useEffect(() => onNavChanged(dynamic.reload), [dynamic.reload])
   const enabled = useEnabledExtensions()
 
   const groups = visibleGroups(
@@ -129,74 +258,18 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
       </div>
 
       <nav className="flex-1 space-y-5 overflow-y-auto px-2 py-4">
-        {groups.map((group) => {
-          // **제목이 있어야 접을 수 있다.** 제목이 없는 묶음은 홈 하나뿐이라 접을 것도 없고,
-          // 접는 단추를 둘 자리도 없다.
-          const title = group.title
-          const isFolded = Boolean(title && folded.includes(title))
-          // 접힌 묶음 안에 **지금 보는 화면**이 있으면 점을 찍는다 — 접었다고 「어디 있는지」 를
-          // 모르게 두면, 사람은 묶음을 하나씩 펴 가며 찾는다.
-          const hasActive = group.items.some((item) => {
-            const href = itemHref(item, workspaceSlug)
-            return item.end ? pathname === href : pathname.startsWith(href)
-          })
-          return (
-            <div key={title ?? group.items[0]?.label}>
-              {/* **제목이 없으면 자리도 안 남긴다.** 빈 문단을 두면 홈 위에 설명
-                없는 여백이 생겨 「뭔가 안 나온다」 로 읽힌다. */}
-              {title && (
-                <button
-                  type="button"
-                  aria-expanded={!isFolded}
-                  onClick={() => toggle(title)}
-                  className="text-muted-foreground hover:text-foreground flex w-full items-center gap-1 rounded px-2 pb-1 text-xs font-medium"
-                >
-                  <ChevronRight
-                    className={cn('size-3 shrink-0 transition-transform', !isFolded && 'rotate-90')}
-                  />
-                  <span className="truncate">{title}</span>
-                  {isFolded && hasActive && (
-                    <span
-                      className="bg-primary ml-auto size-1.5 shrink-0 rounded-full"
-                      title="지금 보는 화면이 이 묶음 안에 있습니다"
-                    />
-                  )}
-                </button>
-              )}
-              {/* **접으면 그리지 않는다.** CSS 로 숨기면 접힌 묶음의 링크가 탭 이동과 읽기
-                  프로그램에는 그대로 남아, 접었는데도 거기로 갈 수 있다. */}
-              {!isFolded && (
-                <ul className="space-y-0.5">
-                  {group.items.map((item) => (
-                    <li key={item.label}>
-                      <NavLink
-                        to={itemHref(item, workspaceSlug)}
-                        end={item.end}
-                        onClick={onNavigate}
-                        className={({ isActive }) =>
-                          cn(
-                            'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
-                            isActive
-                              ? 'bg-sidebar-accent text-sidebar-accent-foreground font-medium'
-                              : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
-                          )
-                        }
-                      >
-                        <item.icon className="size-4 shrink-0" />
-                        <span className="truncate">{item.label}</span>
-                        {item.pending && (
-                          <span className="text-muted-foreground/70 ml-auto shrink-0 rounded border px-1 text-[10px] leading-4">
-                            미구현
-                          </span>
-                        )}
-                      </NavLink>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          )
-        })}
+        {groups.map((group) => (
+          <GroupBlock
+            key={group.foldKey ?? group.title ?? group.items[0]?.label}
+            group={group}
+            depth={0}
+            folded={folded}
+            toggle={toggle}
+            pathname={pathname}
+            workspaceSlug={workspaceSlug}
+            onNavigate={onNavigate}
+          />
+        ))}
       </nav>
     </div>
   )

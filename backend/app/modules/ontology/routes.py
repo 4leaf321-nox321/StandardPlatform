@@ -84,6 +84,7 @@ from app.modules.ontology.schemas import (
 )
 from app.modules.ontology.services import (
     InvalidValue,
+    group_parent_error,
     require_choice,
     require_key,
     require_slug,
@@ -202,6 +203,27 @@ def list_groups(
     return list(db.scalars(select(NavGroup).order_by(NavGroup.sort_order, NavGroup.label)))
 
 
+def _parent_id(db: Session, slug: str, parent: str) -> uuid.UUID:
+    """상위 묶음의 id — **화면과 파일이 같은 규칙으로 막는다**(`group_parent_error`)."""
+    rows = list(db.scalars(select(NavGroup)))
+    parents_of = {one.slug: one.parent_slug for one in rows}
+    children_of: dict[str, list[str]] = {}
+    for child, up in parents_of.items():
+        if up:
+            children_of.setdefault(up, []).append(child)
+    wrong = group_parent_error(
+        slug=slug,
+        parent=parent,
+        known={one.slug for one in rows},
+        parents_of=parents_of,
+        children_of=children_of,
+    )
+    if wrong:
+        raise Conflict(code("ONTOLOGY", 33), wrong)
+    found = next(one for one in rows if one.slug == parent)
+    return found.id
+
+
 @router.post("/groups", response_model=NavGroupOut, status_code=201)
 def create_group(
     payload: NavGroupWriteRequest,
@@ -221,6 +243,8 @@ def create_group(
         sort_order=payload.sort_order,
         is_active=payload.is_active,
     )
+    if payload.parent_slug:
+        row.parent_id = _parent_id(db, slug, payload.parent_slug)
     db.add(row)
     db.flush()
     _audit(
@@ -249,6 +273,11 @@ def update_group(
         row.label = payload.label
     if "icon" in sent and payload.icon is not None:
         row.icon = payload.icon
+    if "parent_slug" in sent:
+        # 빈 문자열이 「맨 위로」 다 — null 은 「안 보냄」 과 구별되지 않는다.
+        row.parent_id = (
+            _parent_id(db, slug, payload.parent_slug) if payload.parent_slug else None
+        )
     if "sort_order" in sent and payload.sort_order is not None:
         row.sort_order = payload.sort_order
     if "is_active" in sent and payload.is_active is not None:
@@ -1254,22 +1283,37 @@ def dynamic_nav(
         )
     )
 
-    out: list[NavGroupNode] = []
-    for group in groups:
-        items = [
+    items_of = {
+        group.id: [
             {"label": t.label, "icon": t.icon, "to": f"/o/{t.slug}", "slug": t.slug}
             for t in types
             if t.nav_group_id == group.id
         ]
-        if not items:
+        for group in groups
+    }
+    # **아래에 항목이 있으면 상위 묶음도 보낸다.** 상위는 보통 제 타입이 없다(자식만 있다) —
+    # 빈 묶음 규칙에 그대로 걸리면 자식들이 부모 없이 떠서 두 단계가 무너진다.
+    alive = {group.id for group in groups if items_of[group.id]}
+    for group in groups:
+        if group.parent_id and group.id in alive:
+            alive.add(group.parent_id)
+
+    out: list[NavGroupNode] = []
+    by_id = {group.id: group for group in groups}
+    for group in groups:
+        if group.id not in alive:
             continue
+        parent = by_id.get(group.parent_id) if group.parent_id else None
         out.append(
             NavGroupNode(
                 slug=group.slug,
                 label=group.label,
                 icon=group.icon,
                 audience=group.audience,
-                items=items,
+                # 상위가 안 보이는 대상이면(또는 껐으면) 붙이지 않는다 — 없는 부모를 가리키면
+                # 화면에서 그 묶음이 사라진다.
+                parent=parent.slug if parent is not None and parent.id in alive else None,
+                items=items_of[group.id],
             )
         )
     return out

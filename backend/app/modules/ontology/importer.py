@@ -44,14 +44,30 @@ from app.modules.ontology.models import (
     PropertyDef,
     RelationType,
 )
-from app.modules.ontology.services import require_key, require_slug, system_source_error
+from app.modules.ontology.services import (
+    group_parent_error,
+    require_key,
+    require_slug,
+    system_source_error,
+)
 from app.shared import audit
 
 #: 스키마가 담을 수 있는 것. **모르는 것이 오면 거절한다** — 조용히 무시하면
 #: 보낸 쪽은 적용된 줄 안다.
 TOP_KEYS = {"groups", "types", "relation_types"}
 
-GROUP_FIELDS = {"slug", "label", "icon", "audience", "sort_order", "is_active"}
+GROUP_FIELDS = {
+    "slug",
+    "label",
+    "icon",
+    "audience",
+    # **상위 묶음** — 사이드바를 두 단계로. 행에는 `parent_id` 가 있어 `_assign` 이 건드리지
+    # 않고(`DERIVED`) 아래에서 slug 로 푼다. 타입의 `parent_slug`(뜻의 계층)와 이름은 같지만
+    # 가리키는 것이 다르다: 이쪽은 묶음, 그쪽은 타입이다.
+    "parent_slug",
+    "sort_order",
+    "is_active",
+}
 TYPE_FIELDS = {
     "slug",
     "label",
@@ -201,15 +217,41 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
     #: 행에는 `nav_group_id` 가 있고 스키마에는 slug 가 온다 — 비교할 값을 만든다.
     group_slug_of = {row.id: row.slug for row in groups.values()}
 
+    # 상위 묶음 검사에 쓸 지도 — **있는 것과 이 파일이 함께 보내는 것을 합쳐** 본다.
+    incoming_groups = [one for one in payload.get("groups") or [] if one.get("slug")]
+    known_groups = {row.slug for row in groups.values()} | {
+        str(one["slug"]) for one in incoming_groups
+    }
+    parents_of: dict[str, str | None] = {row.slug: row.parent_slug for row in groups.values()}
+    for one in incoming_groups:
+        if "parent_slug" in one:
+            parents_of[str(one["slug"])] = one["parent_slug"] or None
+    children_of: dict[str, list[str]] = {}
+    for child, parent in parents_of.items():
+        if parent:
+            children_of.setdefault(parent, []).append(child)
+
     for one in payload.get("groups") or []:
         _reject_unknown(one, GROUP_FIELDS, what="묶음")
         slug = require_slug(one.get("slug", ""), what="묶음 slug")
         _check_choices(one, what=f"묶음 {slug}", errors=out.errors)
+        if "parent_slug" in one:
+            wrong = group_parent_error(
+                slug=slug,
+                parent=str(one["parent_slug"] or ""),
+                known=known_groups,
+                parents_of=parents_of,
+                children_of=children_of,
+            )
+            if wrong:
+                out.errors.append(wrong)
         group = groups.get(slug)
         if group is None:
             out.changes.append(Change("group", slug, "create"))
         else:
-            fields = _diff(group, one, GROUP_FIELDS)
+            fields = _diff(
+                group, one, GROUP_FIELDS, current={"parent_slug": group.parent_slug}
+            )
             out.changes.append(
                 Change("group", slug, "update" if fields else "unchanged", fields)
             )
@@ -520,6 +562,8 @@ def capture(db: Session) -> dict[str, Any]:
     """지금 정의 전부를 한 덩어리로 — **되돌릴 자리에 담을 것.**"""
     groups = [
         {name: getattr(row, name) for name in sorted(GROUP_FIELDS)}
+        # `parent_slug` 는 모델의 property 라 위 한 줄로 함께 담긴다 — 되돌릴 때 그대로
+        # 다시 읽힌다(`apply` 가 slug 로 푼다).
         for row in db.scalars(select(NavGroup).order_by(NavGroup.sort_order))
     ]
     group_slugs = {row.id: row.slug for row in db.scalars(select(NavGroup))}
@@ -558,7 +602,12 @@ def capture(db: Session) -> dict[str, Any]:
 
 
 def _assign(
-    row: Any, payload: dict[str, Any], fields: set[str], *, position: int | None = None
+    row: Any,
+    payload: dict[str, Any],
+    fields: set[str],
+    *,
+    position: int | None = None,
+    derived: tuple[str, ...] = (),
 ) -> None:
     """**보낸 것만 바꾼다.** 안 보낸 칸은 그대로다.
 
@@ -567,8 +616,10 @@ def _assign(
     사람이 읽는 차례)가 조용히 뒤집힌다 — 기계가 200개를 보내면서 매번 번호를
     매기게 하는 것도 답이 아니다.
     """
+    # `derived` 는 **스키마에는 slug 로 오고 행에는 id 로 있는** 칸이다(묶음의 `parent_slug`,
+    # 타입의 `nav_group_slug`). 여기서 그대로 대입하면 없는 칸에 값을 넣는다.
     for name in fields:
-        if name in payload and name not in ("slug", "key", "properties", "nav_group_slug"):
+        if name in payload and name not in ("slug", "key", "properties", *derived):
             setattr(row, name, payload[name])
     if position is not None and "sort_order" not in payload:
         row.sort_order = position * 10
@@ -593,10 +644,26 @@ def apply(
         if group_row is None:
             group_row = NavGroup(slug=slug, label=one.get("label", slug))
             db.add(group_row)
-        _assign(group_row, one, GROUP_FIELDS, position=index if fresh else None)
+        _assign(
+            group_row,
+            one,
+            GROUP_FIELDS,
+            position=index if fresh else None,
+            derived=("parent_slug",),
+        )
     db.flush()
 
     groups = {row.slug: row for row in db.scalars(select(NavGroup))}
+    # **상위는 두 번째 바퀴에 앉힌다** — 상위 묶음이 파일에서 뒤에 올 수 있다(한 번에 보내는
+    # 것이 이 엔드포인트의 요점이라 순서를 사람이 맞추게 하지 않는다).
+    for one in payload.get("groups") or []:
+        if "parent_slug" not in one:
+            continue
+        row = groups[one["slug"]]
+        wanted = one["parent_slug"]
+        parent = groups.get(wanted) if wanted else None
+        row.parent_id = parent.id if parent else None
+    db.flush()
 
     for index, one in enumerate(payload.get("types") or []):
         slug = one["slug"]
@@ -606,7 +673,13 @@ def apply(
             object_type = ObjectType(slug=slug, label=one.get("label", slug))
             db.add(object_type)
         core_was = bool(object_type.core)
-        _assign(object_type, one, TYPE_FIELDS, position=index if fresh else None)
+        _assign(
+            object_type,
+            one,
+            TYPE_FIELDS,
+            position=index if fresh else None,
+            derived=("nav_group_slug",),
+        )
         if "core" in one and bool(object_type.core) != core_was:
             # **공개를 켜고 끈 일은 화면과 같은 기록을 남긴다**(`ontology.type.core`).
             # 파일로 켠 것만 기록이 없으면, 「언제 누가 이 타입을 밖에 열었나」 를 물었을 때

@@ -36,6 +36,7 @@ const GraphPage = lazy(() => import('@/modules/graph/GraphPage'))
 const MembersPage = lazy(() => import('@/modules/workspaces/MembersPage'))
 const NoticesPage = lazy(() => import('@/modules/notices/NoticesPage'))
 const ObjectListPage = lazy(() => import('@/modules/objects/ObjectListPage'))
+const ObjectTypesPage = lazy(() => import('@/modules/objects/ObjectTypesPage'))
 const SearchPage = lazy(() => import('@/modules/search/SearchPage'))
 const ObjectProfilePage = lazy(() => import('@/modules/objects/ObjectProfilePage'))
 const QualityPage = lazy(() => import('@/modules/objects/QualityPage'))
@@ -118,6 +119,8 @@ export const router = createBrowserRouter(
 
             // **정의가 만드는 화면.** 타입이 늘어도 라우트는 안 늘어난다 —
             // `navigation.ts` 가 정적 화면의 정본이라는 규칙이 그대로 선다.
+            // 타입이 백 개가 되면 사이드바는 색인이 못 된다 — 그 색인이 `o` 다.
+            { path: 'o', element: <ObjectTypesPage /> },
             { path: 'o/:typeSlug', element: <ObjectListPage /> },
             { path: 'o/:typeSlug/:objectId', element: <ObjectProfilePage /> },
 

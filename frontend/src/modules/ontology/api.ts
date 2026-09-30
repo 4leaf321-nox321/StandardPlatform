@@ -175,6 +175,8 @@ export interface NavGroupRow {
   label: string
   icon: string
   audience: string
+  /** 상위 묶음의 slug — 사이드바를 두 단계로. 없으면 맨 위 묶음이다. */
+  parent_slug?: string | null
   sort_order: number
   is_active: boolean
 }
@@ -185,6 +187,13 @@ export interface NavGroupNode {
   label: string
   icon: string
   audience: string
+  /**
+   * 상위 묶음의 slug — 화면이 이것으로 두 단계를 세운다. 없으면 맨 위다.
+   *
+   * **평평한 목록으로 온다**(트리로 감싸지 않는다) — 응답의 모양은 그대로고, 그리는 깊이만
+   * 화면이 정한다.
+   */
+  parent?: string | null
   items: { label: string; icon: string; to: string; slug: string }[]
 }
 

@@ -34,7 +34,14 @@ export default function OntologyGroupsPage() {
   const { schema, reload, setError } = useOntology()
   const [editing, setEditing] = useState<string | null>(null)
 
-  const groups = schema?.groups ?? []
+  const raw = schema?.groups ?? []
+  // **부모 바로 아래에 그 자식들을 세운다.** 서버는 순서(sort_order)대로 평평하게 주므로,
+  // 그대로 그리면 자식이 남의 묶음 사이에 끼어 계층이 안 읽힌다.
+  const groups = raw
+    .filter((one) => !one.parent_slug)
+    .flatMap((top) => [top, ...raw.filter((one) => one.parent_slug === top.slug)])
+    // 상위가 없어진(또는 안 보이는) 자식도 빠뜨리지 않는다.
+    .concat(raw.filter((one) => one.parent_slug && !raw.some((up) => up.slug === one.parent_slug)))
   const types = schema?.types ?? []
   const target = groups.find((row) => row.slug === editing) ?? null
 
@@ -73,6 +80,8 @@ export default function OntologyGroupsPage() {
             <Table>
               <TableHeader>
                 <TableRow>
+                  {/* **계층을 표에서도 보인다** — 상위 밑의 묶음은 한 눈금 들여 쓴다.
+                      사이드바에서만 보이면 여기서 무엇을 고치는지가 안 잡힌다. */}
                   <TableHead>이름</TableHead>
                   <TableHead>slug</TableHead>
                   <TableHead>보이는 대상</TableHead>
@@ -87,7 +96,8 @@ export default function OntologyGroupsPage() {
                     className="cursor-pointer"
                     onClick={() => setEditing(group.slug)}
                   >
-                    <TableCell className="font-medium">
+                    <TableCell className={group.parent_slug ? 'pl-8 font-medium' : 'font-medium'}>
+                      {group.parent_slug && <span className="text-muted-foreground mr-1">└</span>}
                       {group.label}
                       {!group.is_active && (
                         <span className="text-muted-foreground ml-2 text-xs">사용 안 함</span>
@@ -123,6 +133,7 @@ export default function OntologyGroupsPage() {
         <GroupEditDialog
           group={target}
           attached={attachedTo(target)}
+          groups={groups}
           onClose={() => setEditing(null)}
           onChanged={reload}
         />

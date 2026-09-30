@@ -74,11 +74,14 @@ GUIDE_VERSION: 2026-09-29a
 `ontology_schema` 가 돌려주는 것: `groups`(묶음) · `types`(타입, 각각 `properties`
 와 `key_policy`) · `relation_types` · `data_types`(속성이 받는 값의 종류).
 
-`ontology_import(schema, apply)` 의 `schema` 는 같은 모양이다:
+`ontology_import(schema, apply)` 의 `schema` 는 같은 모양이다. 묶음은 `parent_slug` 로
+**두 단계**까지 세운다 — 타입이 백 개가 되면 묶음이 평평하게 늘어서고, 그때 「어디에 속한
+것인가」 를 화면이 말해 주지 못한다. **세 단계는 거절된다**(상위의 상위는 만들지 않는다).
 
 ```json
 {
-  "groups": [{"slug": "sim", "label": "시뮬레이션"}],
+  "groups": [{"slug": "sim", "label": "시뮬레이션"},
+             {"slug": "sim_run", "label": "해석 실행", "parent_slug": "sim"}],
   "types": [
     {"slug": "sim_tool", "label": "시뮬레이션 툴", "nav_group_slug": "sim",
      "key_policy": "required", "icon": "Cog",

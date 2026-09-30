@@ -15245,6 +15245,17 @@
             "type": "string",
             "title": "Audience"
           },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
           "items": {
             "items": {
               "additionalProperties": {
@@ -15289,6 +15300,17 @@
           "audience": {
             "type": "string",
             "title": "Audience"
+          },
+          "parent_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Slug"
           },
           "sort_order": {
             "type": "integer",
@@ -15349,6 +15371,17 @@
             ],
             "title": "Audience"
           },
+          "parent_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Slug"
+          },
           "sort_order": {
             "anyOf": [
               {
@@ -15398,6 +15431,17 @@
             "type": "string",
             "title": "Audience",
             "default": "everyone"
+          },
+          "parent_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Slug"
           },
           "sort_order": {
             "type": "integer",

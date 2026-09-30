@@ -20,9 +20,9 @@ vi.mock('@/shared/api/system', async (importOriginal) => ({
 const ontologyApi = vi.hoisted(() => ({ nav: vi.fn() }))
 vi.mock('@/modules/ontology/api', () => ({ ontologyApi }))
 
-async function mount(path = '/w/hq') {
+async function mount(path = '/w/hq', nav: unknown[] = []) {
   systemApi.health.mockResolvedValue({ status: 'ok', version: '0.0.0' })
-  ontologyApi.nav.mockResolvedValue([])
+  ontologyApi.nav.mockResolvedValue(nav)
   const { Sidebar } = await import('@/shared/layout/Sidebar')
   render(
     <MemoryRouter initialEntries={[path]}>
@@ -67,6 +67,40 @@ describe('사이드바 묶음 접기', () => {
     expect(
       within(screen.getByRole('button', { name: /공통/ })).queryByTitle(/지금 보는 화면/),
     ).not.toBeInTheDocument()
+  })
+
+  it('상위 묶음 아래에 자식이 들어간다 — 정의가 그렇게 오면', async () => {
+    const group = (slug: string, label: string, parent: string | null, item: string) => ({
+      slug,
+      label,
+      icon: '',
+      audience: 'everyone',
+      parent,
+      items: item ? [{ label: item, icon: '', to: `/o/${item}`, slug: item }] : [],
+    })
+    // **자식이 먼저 온다** — 순서는 sort_order · 이름이 정한다(상위를 나중에 만들면 흔하다).
+    await mount('/w/hq', [
+      group('machine', '기계 부품', 'baseinfo', 'part'),
+      group('baseinfo', '설계 기준정보', null, ''),
+    ])
+    const top = await screen.findByRole('button', { name: /설계 기준정보/ })
+    expect(top).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /기계 부품/ })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'part' })).toBeInTheDocument()
+
+    // 상위를 접으면 그 아래가 통째로 사라진다(그리지 않는다 — 탭 이동으로도 못 간다).
+    await userEvent.click(top)
+    expect(screen.queryByRole('button', { name: /기계 부품/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('link', { name: 'part' })).not.toBeInTheDocument()
+  })
+
+  it('정의가 바뀌면 그 자리에서 다시 읽는다', async () => {
+    await mount()
+    expect(ontologyApi.nav).toHaveBeenCalledTimes(1)
+    const { navChanged } = await import('@/shared/layout/navSignal')
+    navChanged()
+    // 안 읽으면 새로 고칠 때까지 옛 메뉴가 남는다 — 「정했는데 안 바뀐다」 가 된다.
+    await waitFor(() => expect(ontologyApi.nav).toHaveBeenCalledTimes(2))
   })
 
   it('제목 없는 묶음(홈)은 접는 단추가 없다', async () => {

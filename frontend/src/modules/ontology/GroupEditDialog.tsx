@@ -29,19 +29,31 @@ import {
   SelectValue,
 } from '@/shared/components/ui/select'
 
+/** 「맨 위」 를 고르는 값 — 빈 문자열은 Select 가 값 없음으로 읽는다. */
+const TOP = '__top__'
+
 interface Props {
   group: NavGroupRow
   /** 이 묶음에 걸린 타입 이름들. **삭제 전에 무엇이 걸렸는지 말한다.** */
   attached: string[]
+  /** 상위로 고를 수 있는 묶음들 — **두 단계까지라** 이미 상위가 있는 것과 내 자식은 빠진다. */
+  groups?: NavGroupRow[]
   onClose: () => void
   onChanged: () => void
 }
 
-export function GroupEditDialog({ group, attached, onClose, onChanged }: Props) {
+export function GroupEditDialog({ group, attached, groups = [], onClose, onChanged }: Props) {
   const [label, setLabel] = useState(group.label)
   const [audience, setAudience] = useState(group.audience)
+  const [parent, setParent] = useState(group.parent_slug || TOP)
   const [sortOrder, setSortOrder] = useState(String(group.sort_order))
   const [isActive, setIsActive] = useState(group.is_active)
+
+  // 내 아래에 묶음이 있으면 나는 남의 아래로 못 간다(3단계가 된다) — 그때는 고르지 못하게 한다.
+  const hasChildren = groups.some((one) => one.parent_slug === group.slug)
+  const candidates = groups.filter(
+    (one) => one.slug !== group.slug && !one.parent_slug && !hasChildren,
+  )
 
   const [error, setError] = useState<Error | null>(null)
   const [saving, setSaving] = useState(false)
@@ -54,6 +66,8 @@ export function GroupEditDialog({ group, attached, onClose, onChanged }: Props) 
       await ontologyApi.updateGroup(group.slug, {
         label,
         audience,
+        // 빈 문자열이 「맨 위로」 다 — null 은 서버에서 「안 보냄」 과 구별되지 않는다.
+        parent_slug: parent === TOP ? '' : parent,
         sort_order: Number(sortOrder) || 0,
         is_active: isActive,
       })
@@ -122,6 +136,36 @@ export function GroupEditDialog({ group, attached, onClose, onChanged }: Props) 
             <p className="text-muted-foreground text-xs">
               보이는 대상은 <b>표시일 뿐 권한이 아닙니다.</b> 권한은 서버가 판정합니다.
             </p>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="group-edit-parent">상위 묶음</Label>
+              <Select value={parent} onValueChange={setParent} disabled={hasChildren}>
+                <SelectTrigger id="group-edit-parent">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={TOP}>(맨 위)</SelectItem>
+                  {candidates.map((one) => (
+                    <SelectItem key={one.slug} value={one.slug}>
+                      {one.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-muted-foreground text-xs">
+                {hasChildren ? (
+                  <>
+                    이 묶음 <b>아래에 이미 묶음이 있어</b> 상위로 옮길 수 없습니다 — 묶음은 두
+                    단계까지입니다(상위 묶음 › 묶음 › 타입).
+                  </>
+                ) : (
+                  <>
+                    사이드바를 <b>두 단계</b>로 세웁니다. 이미 상위가 있는 묶음은 후보에서
+                    빠집니다 — 세 단계는 만들지 않습니다.
+                  </>
+                )}
+              </p>
+            </div>
 
             <label className="flex items-center gap-2 text-sm">
               <input

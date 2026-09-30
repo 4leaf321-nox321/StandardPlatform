@@ -97,6 +97,44 @@ def require_system_source(kind_class: str, source: str) -> None:
         raise InvalidValue(code("ONTOLOGY", 3), message)
 
 
+def group_parent_error(
+    *,
+    slug: str,
+    parent: str,
+    known: set[str],
+    parents_of: dict[str, str | None],
+    children_of: dict[str, list[str]],
+) -> str | None:
+    """묶음의 상위 묶음이 **될 수 있는 값인가** — 아니면 무엇이 틀렸는지.
+
+    화면(그룹 관리)과 파일(정의 가져오기)이 **같은 규칙**을 써야 한다. 두 벌로 두면 한쪽으로만
+    3단계가 들어오고, 그 상태를 만든 사람은 다른 쪽에서 왜 막히는지 모른다.
+
+    `known` 은 있는(또는 같은 파일에 함께 오는) 묶음 slug, `parents_of` 는 그것들의 상위,
+    `children_of` 는 그것들의 하위다 — 부르는 쪽이 표에서 읽어 넘긴다.
+    """
+    if not parent:
+        return None
+    if parent == slug:
+        return f"묶음 {slug}: 자기 자신을 상위 묶음으로 가리킵니다"
+    if parent not in known:
+        return f"묶음 {slug}: 없는 상위 묶음을 가리킵니다: {parent}"
+    # **한 단계만.** 부모가 이미 부모를 가졌으면 3단계가 된다.
+    if parents_of.get(parent):
+        return (
+            f"묶음 {slug}: 상위 묶음 {parent} 에 이미 상위가 있습니다 — "
+            "묶음은 두 단계까지입니다(상위 묶음 › 묶음 › 타입)."
+        )
+    # 내 아래에 이미 묶음이 있으면 나는 상위가 될 수 없다(역시 3단계).
+    if children_of.get(slug):
+        kids = ", ".join(sorted(children_of[slug])[:3])
+        return (
+            f"묶음 {slug}: 이 묶음 아래에 이미 묶음이 있습니다({kids}) — "
+            "묶음은 두 단계까지입니다."
+        )
+    return None
+
+
 # --- 값 하나 ----------------------------------------------------------------
 
 

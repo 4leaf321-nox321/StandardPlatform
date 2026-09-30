@@ -441,6 +441,104 @@ def test_사이드바는_그룹에_걸린_타입만_낸다(client: TestClient, a
     assert [item["to"] for item in group["items"]] == [f"/o/{part}"]
 
 
+def test_묶음은_두_단계로_선다(client: TestClient, admin: Signed) -> None:
+    """**타입이 백 개면 묶음 열 개가 평평하게 늘어선다** — 그때 「어디에 속한 것인가」 를
+    화면이 말해 주지 못한다. 상위 묶음이 그 말이다.
+
+    상위는 보통 제 타입이 없다(자식만 있다) — 빈 묶음 규칙에 그대로 걸리면 자식들이 부모 없이
+    떠서 두 단계가 무너진다. 그래서 **아래에 항목이 있으면 상위도 내보낸다.**
+    """
+    top, child = _uniq("baseinfo"), _uniq("machine")
+    made = client.post(
+        "/api/ontology/groups",
+        json={"slug": top, "label": "설계 기준정보"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    made = client.post(
+        "/api/ontology/groups",
+        json={"slug": child, "label": "기계 부품", "parent_slug": top},
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    assert made.json()["parent_slug"] == top
+
+    part = _make_type(client, admin, label="부품", nav_group_slug=child)
+    nav = client.get("/api/ontology/nav", headers=admin.headers).json()
+    by_slug = {one["slug"]: one for one in nav}
+    # 상위는 제 타입이 없어도 온다 — 아래에 있기 때문이다.
+    assert by_slug[top]["items"] == [] and by_slug[top]["parent"] is None
+    assert by_slug[child]["parent"] == top
+    assert [item["to"] for item in by_slug[child]["items"]] == [f"/o/{part}"]
+
+
+def test_묶음은_세_단계를_막는다(client: TestClient, admin: Signed) -> None:
+    """**한 단계만이다.** 접힘 · 현재 경로 표시 · 들여쓰기가 단계마다 곱해지고, 무엇보다
+    「이건 어디에 넣지」 가 애매해지기 시작하는 지점이 3단계다."""
+    top, mid, deep = _uniq("top"), _uniq("mid"), _uniq("deep")
+    for slug, label, parent in ((top, "위", None), (mid, "가운데", top), (deep, "아래", None)):
+        body = {"slug": slug, "label": label}
+        if parent:
+            body["parent_slug"] = parent
+        made = client.post("/api/ontology/groups", json=body, headers=admin.headers)
+        assert made.status_code == 201, made.text
+
+    # 이미 상위가 있는 묶음을 상위로 삼을 수 없다.
+    denied = client.patch(
+        f"/api/ontology/groups/{deep}", json={"parent_slug": mid}, headers=admin.headers
+    )
+    assert denied.status_code == 409, denied.text
+    assert "두 단계" in denied.json()["error"]["message"]
+
+    # 아래에 묶음이 있는 묶음은 남의 아래로 못 간다.
+    denied = client.patch(
+        f"/api/ontology/groups/{top}", json={"parent_slug": deep}, headers=admin.headers
+    )
+    assert denied.status_code == 409, denied.text
+
+    # 자기 자신도 안 된다.
+    denied = client.patch(
+        f"/api/ontology/groups/{mid}", json={"parent_slug": mid}, headers=admin.headers
+    )
+    assert denied.status_code == 409, denied.text
+
+    # 빈 문자열은 「맨 위로」 다.
+    up = client.patch(
+        f"/api/ontology/groups/{mid}", json={"parent_slug": ""}, headers=admin.headers
+    )
+    assert up.status_code == 200 and up.json()["parent_slug"] is None, up.text
+
+
+def test_정의_파일로도_상위_묶음을_보낸다(client: TestClient, admin: Signed) -> None:
+    """화면과 파일이 **같은 규칙**을 쓴다 — 두 벌로 두면 한쪽으로만 3단계가 들어온다."""
+    top, child = _uniq("gtop"), _uniq("gchild")
+    # **상위가 뒤에 와도 된다** — 한 번에 보내는 것이 이 엔드포인트의 요점이다.
+    body = {
+        "groups": [
+            {"slug": child, "label": "자식", "parent_slug": top},
+            {"slug": top, "label": "부모"},
+        ]
+    }
+    applied = _import(client, admin, body, dry_run=False)
+    assert applied.status_code == 200, applied.text
+    schema = client.get("/api/ontology/schema", headers=admin.headers).json()
+    rows = {one["slug"]: one for one in schema["groups"]}
+    assert rows[child]["parent_slug"] == top and rows[top]["parent_slug"] is None
+
+    # 같은 것을 다시 보내면 **바뀐 것이 없다**(늘 바뀐다고 나오면 사람이 계획을 안 읽는다).
+    again = _import(client, admin, body).json()
+    for slug in (top, child):
+        change = next(one for one in again["changes"] if one["slug"] == slug)
+        assert change["action"] == "unchanged", change
+
+    # 3단계는 파일로도 막힌다.
+    deep = _uniq("gdeep")
+    refused = _import(
+        client, admin, {"groups": [{"slug": deep, "label": "손자", "parent_slug": child}]}
+    ).json()
+    assert any("두 단계" in one for one in refused["errors"]), refused
+
+
 def test_부서_삭제_확인에_객체가_뜬다(client: TestClient, admin: Signed) -> None:
     """**안 걸면 부서를 지울 때 이 표가 목록에 안 나타나고**, 사람은 아무것도
     안 걸린 줄 안다 — 그리고 FK 가 RESTRICT 라 서버가 500 을 낸다."""

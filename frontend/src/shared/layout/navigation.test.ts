@@ -8,6 +8,7 @@ import { describe, expect, it } from 'vitest'
 
 import { DEFAULT_ICON, iconOf } from '@/shared/icons'
 
+import type { DynamicGroup } from '@/shared/layout/navigation'
 import {
   NAV_GROUPS,
   canSee,
@@ -143,5 +144,67 @@ describe('사이드바', () => {
     const admin = groups.filter((one) => one.title === '관리')
     expect(admin).toHaveLength(1)
     expect(admin[0].items.map((one) => one.label)).toContain('설비 설정')
+  })
+})
+
+describe('두 단계 묶음', () => {
+  const dynamic = (
+    slug: string,
+    label: string,
+    parent: string | null,
+    items: string[],
+  ): DynamicGroup => ({
+    slug,
+    label,
+    icon: '',
+    audience: 'everyone',
+    parent,
+    items: items.map((one) => ({ label: one, icon: '', to: `/o/${one}`, slug: one })),
+  })
+
+  it('상위 묶음 아래에 자식이 들어간다 — 제 항목도 함께 선다', () => {
+    const groups = visibleGroups(
+      { isSystemAdmin: false, isAnyManager: false },
+      [
+        dynamic('baseinfo', '설계 기준정보', null, ['spec']),
+        dynamic('machine', '기계 부품', 'baseinfo', ['part', 'material']),
+        dynamic('sim', '시뮬레이션', null, ['run']),
+      ],
+    )
+    const top = groups.find((one) => one.title === '설계 기준정보')
+    expect(top?.items.map((one) => one.label)).toEqual(['spec'])
+    expect(top?.children?.map((one) => one.title)).toEqual(['기계 부품'])
+    expect(top?.children?.[0].items.map((one) => one.label)).toEqual(['part', 'material'])
+    // 자식은 맨 위 목록에 또 서지 않는다 — 두 번 보이면 어느 쪽을 눌러야 하는지 묻게 된다.
+    expect(groups.some((one) => one.title === '기계 부품')).toBe(false)
+    expect(groups.some((one) => one.title === '시뮬레이션')).toBe(true)
+  })
+
+  it('상위가 목록에서 **뒤에 와도** 그 아래로 들어간다', () => {
+    // 순서는 sort_order · 이름이 정한다 — 상위 묶음을 나중에 만들면 자식이 먼저 온다.
+    // 한 바퀴로 붙이면 그때 자식이 맨 위에 그대로 서서 「정했는데 안 바뀐다」 가 된다.
+    const groups = visibleGroups({ isSystemAdmin: false, isAnyManager: false }, [
+      dynamic('machine', '기계 부품', 'baseinfo', ['part']),
+      dynamic('baseinfo', '설계 기준정보', null, []),
+    ])
+    expect(groups.some((one) => one.title === '기계 부품')).toBe(false)
+    const top = groups.find((one) => one.title === '설계 기준정보')
+    expect(top?.children?.map((one) => one.title)).toEqual(['기계 부품'])
+  })
+
+  it('상위가 목록에 없으면 맨 위로 세운다 — 기다리다 사라지는 것이 가장 나쁘다', () => {
+    const groups = visibleGroups({ isSystemAdmin: false, isAnyManager: false }, [
+      dynamic('machine', '기계 부품', 'gone', ['part']),
+    ])
+    expect(groups.some((one) => one.title === '기계 부품')).toBe(true)
+  })
+
+  it('접힘 열쇠는 slug 다 — 이름이 겹쳐도 한쪽만 접힌다', () => {
+    const groups = visibleGroups({ isSystemAdmin: false, isAnyManager: false }, [
+      dynamic('a', '부품', null, ['x']),
+      dynamic('b', '부품', null, ['y']),
+    ])
+    const keys = groups.filter((one) => one.title === '부품').map((one) => one.foldKey)
+    expect(keys).toEqual(['a', 'b'])
   })
 })
