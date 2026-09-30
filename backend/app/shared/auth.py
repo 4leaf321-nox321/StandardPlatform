@@ -39,6 +39,25 @@ def _bearer(request: Request) -> str | None:
     return header[7:].strip() or None
 
 
+def scope_path(request: Request) -> str:
+    """범위 표와 견줄 경로 — **접두어를 뺀다.**
+
+    ⚠️ 이 한 줄이 없어서, 접두어 아래 설치(`/rootdesign`)에서는 **어떤 범위를 켜도 모든
+       쓰기가 막혔다**(`APP-AUTH-0105` 「이 경로를 고칠 수 없습니다」 — 실측 운영 서버).
+       `request.url.path` 에는 접두어가 붙어 있다(앞의 nginx 가 떼고 넘겨도 `PrefixMiddleware`
+       가 다시 붙인다 — 정적 파일 마운트가 그것을 요구한다). 범위 표는 `/api/…` 로 적혀 있으니
+       앞머리가 맞을 수가 없고, 못 찾은 것은 「모르는 경로」 로 막힌다. 범위 문제가 아닌데
+       범위를 고치러 다니게 되는 자리다.
+
+    ASGI 의 `root_path` 가 그 접두어다 — 라우팅도 같은 값을 떼고 길을 찾는다.
+    """
+    path = request.url.path
+    root = request.scope.get("root_path") or ""
+    if root and path.startswith(root):
+        return path[len(root) :] or "/"
+    return path
+
+
 def _enforce_token_scope(request: Request, token_scopes: list[str], path: str) -> None:
     """기계 자격의 쓰기를 범위로 막는다.
 
@@ -84,7 +103,7 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
             logger.warning("PAT 인증 실패 (prefix=%s)", shown)
             raise AppError(code("AUTH", 101), "토큰이 유효하지 않습니다.", status=401)
         user, pat = found
-        _enforce_token_scope(request, list(pat.scopes or []), request.url.path)
+        _enforce_token_scope(request, list(pat.scopes or []), scope_path(request))
         # 한 요청이 **범위 둘**을 요구할 때(정의가 든 묶음) 라우트가 더 물을 수 있게 남긴다.
         # 사람 세션에는 없다 — 범위는 기계 자격에만 있는 개념이다.
         request.state.token_scopes = list(pat.scopes or [])
