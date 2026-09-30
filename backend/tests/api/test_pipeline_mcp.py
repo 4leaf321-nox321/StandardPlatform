@@ -105,9 +105,13 @@ def test_적용_도구는_없고_안내는_정본을_내려준다() -> None:
         "hub_pull",
         "run_validate",
         "run_preview",
+        "runs_list",
+        "run_undo",
     }
-    # **사람이 확인한 뒤에만 넣는다** — 도구의 모양으로.
+    # **사람이 확인한 뒤에만 넣는다** — 도구의 모양으로. 되돌리기도 같다: 계획을 보여 주는
+    # 도구만 있고, 되돌리는 것은 사람이 `undo_command` 로 한다.
     assert not any("apply" in name for name in REGISTERED)
+    assert "계획만" in (server.run_undo.__doc__ or "")
 
     overview = server.pipeline_guide()
     assert "work_status" in overview["content"]

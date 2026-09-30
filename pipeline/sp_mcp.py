@@ -413,5 +413,33 @@ def run_preview(work: str, run: str) -> dict[str, Any]:
     }
 
 
+@mcp.tool()
+def runs_list(limit: int = 20) -> dict[str, Any]:
+    """**넣은 판들** — 되돌릴 번호를 여기서 찾는다(적용한 것만, 최근 것부터)."""
+    server, token = _server()
+    ok, text = pipeline.cmd_runs(server=server, token=token, limit=limit)
+    return {"ok": ok, "runs": text}
+
+
+@mcp.tool()
+def run_undo(run_id: str) -> dict[str, Any]:
+    """넣은 판 하나를 되돌리면 **무엇이 되돌아가나** — 계획만. 아무것도 안 바뀐다.
+
+    요약을 사람에게 보이고, 되돌릴지는 사람이 `undo_command` 를 실행해 정한다(이 서버에는
+    되돌리는 도구가 없다 — 적용과 같은 규칙이다). 건너뛰는 줄의 이유도 함께 보인다.
+    """
+    server, token = _server()
+    ok, summary = pipeline.cmd_undo(run_id, server=server, token=token)
+    return {
+        "ok": ok,
+        "summary": summary,
+        "undo_command": (
+            f'python "{HERE / "sp_pipeline.py"}" undo {run_id} --apply' if ok else None
+        ),
+        "note": "되돌리려면 SP_SERVER · SP_TOKEN 이 설정된 창에서 "
+        "사람이 undo_command 를 실행한다.",
+    }
+
+
 if __name__ == "__main__":
     mcp.run()

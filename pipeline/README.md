@@ -32,6 +32,8 @@ python sp_pipeline.py init     runs/2026-09-13-sim-tools   # 빈 실행 폴더
 python sp_pipeline.py validate runs/2026-09-13-sim-tools   # 보내기 전 모양 검사
 python sp_pipeline.py preview  runs/2026-09-13-sim-tools   # 아무것도 저장하지 않고 미리 보기
 python sp_pipeline.py apply    runs/2026-09-13-sim-tools   # 사람이 확인한 뒤 — 전부 아니면 무
+python sp_pipeline.py runs                                 # 넣은 판들 — 되돌릴 번호
+python sp_pipeline.py undo <판번호>                          # 되돌리기 계획(--apply 로 되돌림)
 ```
 
 | 명령 | 하는 일 | 종료 코드 |
@@ -41,6 +43,8 @@ python sp_pipeline.py apply    runs/2026-09-13-sim-tools   # 사람이 확인한
 | `preview` | 검증 → 플랫폼 `POST /api/bundles/import`(apply=false, 202 작업) → 끝나기를 기다려 `preview.json` 에 결과와 **지문** | 계획에 오류 있으면 1 |
 | `apply` | **미리 본 것과 지문이 같을 때만** 적용 → `applied.json` | 안 들어갔으면 1 |
 | `init --backfill` | 대량 적재용 실행 폴더 — 미리 보기는 **계획만**(적용을 두 번 돌지 않는다) · 웹훅과 감사는 묶음 한 건 · 못 찾은 참조는 그 칸만 비움. `preview`/`apply` 에 `--backfill` 을 줘도 그때 켜진다 | 0 |
+| `runs` | 넣은 판들(적용한 것만) — 최근 것부터. 되돌릴 번호를 여기서 찾는다. 「되돌릴 수 없음」 은 이미 되돌렸거나 기록 보관 기간(30일)이 지난 것 | 0 |
+| `undo <판번호>` | 그 판을 **통째로 되돌린다** — 기본은 계획이다. 사람이 읽은 뒤 `--apply`. 그 사이 남이 고친 줄 · 밖에서 가리키는 것이 생긴 객체 · 합치기는 되돌리지 않고 이유를 적는다 | 오류 있으면 1 |
 | `pull` | (쌍둥이) 허브가 내보낸 사이드바 묶음을 새 실행 폴더로 — `--group plm`(**여러 번 적어도 된다**), `SP_HUB_SERVER` · `SP_HUB_TOKEN`. 별칭·관계의 「맞춤」 과 **사라진 것**(`tombstones.json`)을 그대로 나른다. 그 뒤는 `validate` → `preview` → `apply`(받는 플랫폼에) | 0 |
 
 도구가 막고 멈추면 종료 코드 2 와 함께 이유를 적는다(검증 실패 · 미리 본 뒤 바뀜 · 서버 거절).
@@ -121,8 +125,10 @@ python sp_setup.py --work-root "D:\온톨로지작업" --server http://<플랫�
 | `decision_record` | 사람이 정한 것 — 정의 확정 · 미해결의 답 |
 | `table_convert` · `run_init` · `run_validate` · `run_preview` | 변환 · 빈 실행 · 검증 · 미리 보기 |
 | `hub_pull` | (쌍둥이) 허브의 PLM 기준정보를 새 실행 폴더로 받는다 — env 에 `SP_HUB_SERVER` · `SP_HUB_TOKEN`(설치: `--hub-server` · `--hub-token`) |
+| `runs_list` · `run_undo` | 넣은 판들 · **되돌리기 계획**(되돌리는 것은 사람이 `undo_command` 로) |
 
-**적용 도구는 없다.** `run_preview` 가 돌려주는 `apply_command` 를 사람이 확인한 뒤 직접 실행한다.
+**적용 도구도 되돌리는 도구도 없다.** `run_preview` 의 `apply_command` 와 `run_undo` 의
+`undo_command` 를 사람이 확인한 뒤 직접 실행한다.
 
 **결과를 밖으로 못 들고 나오는 자리** — `source_profile` 의 끝과 `table_convert` 의 `brief` 에 **「말로
 전할 요약」**(수와 열 이름만, 값 없음)이 있다. 그것을 읽어 전하면 규칙을 고칠 수 있다.

@@ -37,6 +37,7 @@ from sqlalchemy import and_, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.bundles import journal
 from app.modules.objects import aliases, links, system
 from app.modules.objects import keys as key_history
 from app.modules.objects import relations as rel
@@ -59,6 +60,7 @@ from app.modules.ontology.services import InvalidValue, merge_properties, valida
 from app.shared import audit, tabular
 from app.shared.errors import AppError, Conflict, code
 from app.shared.permissions import require_owner_edit, visible_owner_clause
+from app.shared.system_sources import SystemRef
 from app.shared.text import compare_key
 
 #: 비움 표시. 빈 칸은 「안 보냄」 이라, 지우려면 이것을 적는다.
@@ -216,6 +218,11 @@ class _Refs:
         self.notes: list[str] = []
         """줄에 적을 말 — **별칭으로 풀렸는데 그 글자가 다른 객체의 이름이기도** 할 때.
         부르는 쪽이 줄마다 비우고 읽는다(`_plan_row`)."""
+        self.blanked_required: list[tuple[str, str]] = []
+        """**필수 참조 칸**인데 가리키는 것을 못 찾았다 — (속성 키, 사람이 읽는 말).
+
+        빈 값으로 둘 수 없는 칸이라(「값이 필요합니다」) 비우기로는 안 풀린다. 부르는 쪽이
+        그 줄을 건너뛸지(새로 만드는 줄) 그대로 둘지(이미 값이 있는 줄) 정한다."""
         self.cache: dict[
             str,
             tuple[
@@ -527,6 +534,13 @@ def _patch_of(
                 "객체입니다 — 적용할 때 풀립니다"
             )
         except MissingRef as gone:
+            if by_key[prop_key].required:
+                # **필수 칸은 비울 수 없다.** 비우면 그 줄이 「값이 필요합니다」 오류가 되고,
+                # 오류 한 줄이 묶음 전체를 막는다 — `missing_refs=blank` 는 바로 그것을
+                # 막으려고 켠 것인데 필수 칸에서는 아무 소용이 없었다(실측). 여기서는 그
+                # 칸을 **안 보낸 것으로** 두고, 부르는 쪽이 줄을 건너뛸지 정한다.
+                refs.blanked_required.append((prop_key, f"{gone.label}: 「{gone.text}」"))
+                continue
             # **한 줄이 묶음 전체를 막지 않게** 그 칸만 비운다 — 무엇이 빠졌는지는 적는다.
             refs.notes.append(f"{gone.label}: 「{gone.text}」 을 찾지 못해 비웁니다")
     return patch
@@ -876,6 +890,7 @@ def plan_objects(
     patches: list[dict[str, Any] | AppError] = []
     for row in rows:
         refs.notes.clear()
+        refs.blanked_required.clear()
         try:
             patches.append(_patch_of(row, mapping, by_key, refs))
         except AppError as caught:
@@ -941,6 +956,7 @@ def _plan_row(
 ) -> RowPlan:
     # 칸 값은 이미 읽었다 — 그때 붙은 말(별칭이 남의 이름이기도 하다)만 다시 모은다.
     refs.notes.clear()
+    refs.blanked_required.clear()
     _patch_of(row, mapping, by_key, refs)
 
     raw_id = _fixed(row, "id")
@@ -1034,6 +1050,19 @@ def _plan_row(
             raise InvalidValue(
                 code("OBJECTS", 45), "새로 만들 행에는 label(이름)이 있어야 합니다."
             )
+        if refs.blanked_required:
+            # 새로 만드는 줄은 그 칸에 들어갈 값이 없다 — **이 줄만 건너뛴다.**
+            return RowPlan(
+                row=index,
+                action="unchanged",
+                label=str(raw_label).strip(),
+                key=key,
+                message=_joined(
+                    "필수 참조를 찾지 못해 이 줄을 건너뜁니다 — "
+                    + " · ".join(text for _key, text in refs.blanked_required),
+                    *refs.notes,
+                ),
+            )
         properties = validate_properties(
             defs, {k: v for k, v in patch.items() if v is not None}, apply_defaults=True
         )
@@ -1066,6 +1095,31 @@ def _plan_row(
 
     # 고침 — 보낸 것만.
     _require_editable(db, user, index_data, existing.owner_workspace_id)
+    if refs.blanked_required:
+        current_props = existing.properties or {}
+        empty = [
+            text
+            for prop_key, text in refs.blanked_required
+            if current_props.get(prop_key) in (None, "", [])
+        ]
+        if empty:
+            # 지금도 비어 있고 채울 것도 못 찾았다 — **이 줄만 건너뛴다**(필수 칸이라
+            # 빈 채로는 저장이 안 된다).
+            return RowPlan(
+                row=index,
+                action="unchanged",
+                label=existing.label,
+                key=existing.key,
+                object_id=existing.id,
+                message=_joined(
+                    "필수 참조를 찾지 못해 이 줄을 건너뜁니다 — " + " · ".join(empty),
+                    *refs.notes,
+                ),
+            )
+        refs.notes.append(
+            "찾지 못한 필수 참조는 그대로 둡니다 — "
+            + " · ".join(text for _key, text in refs.blanked_required)
+        )
     changes: list[str] = []
     if (
         raw_label is not _MISSING
@@ -1253,6 +1307,11 @@ def apply_objects(
             )
             db.add(target)
             row_plan.object_id = target.id
+            # **되돌릴 자리를 적는다** — 판이 열려 있을 때만(묶음). `audit="summary"` 로
+            # 줄마다의 기록을 끈 백필도 이것으로 되돌린다.
+            journal.created(
+                db, "objects", target.id, label=f"{object_type.slug}:{target.label}"
+            )
             raw_aliases = _fixed(row, "aliases")
             if raw_aliases is not _MISSING and raw_aliases is not None:
                 # 계획에서 가른 대로 — 남이 쓰는 별칭은 여기서도 빠진다. **미리 읽은 것으로**
@@ -1304,7 +1363,21 @@ def apply_objects(
             asked = alias_values(raw_aliases)[0]
             free, _taken, _double = _split_free(index_data, asked, exclude_id=target.id)
             before_names = [one.value for one in index_data.human.get(target.id, [])]
-            aliases.set_human(db, target, object_type, _only(asked, free), mode=aliases_mode)
+            kept = aliases.dump(index_data.human.get(target.id, []))
+            _was, became = aliases.set_human(
+                db, target, object_type, _only(asked, free), mode=aliases_mode
+            )
+            # 별칭은 다른 표의 행이라 `audit_state` 에 없다 — 되돌릴 기록에 따로 적는다.
+            # 출처 · 메모 · 검수 여부까지 적어야 되돌린 별칭이 「기계가 방금 붙인 것」 으로
+            # 되살아나지 않는다.
+            journal.changed(
+                db,
+                "object_aliases",
+                target.id,
+                before={"aliases": kept},
+                after={"aliases": became},
+                label=f"{object_type.slug}:{target.label} 별칭",
+            )
             _remember(index_data, free, target.id)
             if aliases_mode == "replace":
                 # **뺀 별칭은 미리 읽은 목록에서도 뺀다** — 같은 파일의 뒷줄이 그것을
@@ -1323,6 +1396,15 @@ def apply_objects(
                 defs, merge_properties(target.properties or {}, patch)
             )
         after = audit_state(target)
+        moved = audit.diff(before, after)
+        journal.changed(
+            db,
+            "objects",
+            target.id,
+            before={key: one["before"] for key, one in moved.items()},
+            after={key: one["after"] for key, one in moved.items()},
+            label=f"{object_type.slug}:{target.label}",
+        )
         audit.record(
             db,
             action="object.update",
@@ -1331,7 +1413,7 @@ def apply_objects(
             target_id=target.id,
             target_label=f"{object_type.slug}:{target.label}",
             workspace_id=target.owner_workspace_id,
-            changes=audit.diff(before, after),
+            changes=moved,
             reason="일괄 가져오기",
         )
 
@@ -1550,9 +1632,21 @@ class _RelIndex:
     skip_missing: bool = False
     """참이면 끝점을 못 찾은 줄을 **오류로 만들지 않고 건너뛴다**(줄에 적는다). 선은 값이
     아니라 있음/없음이라 「빈칸으로 넣기」 가 없다 — 건너뛰는 것이 그에 해당한다."""
-    pending_seen: set[tuple[str, str, str]] = field(default_factory=set)
-    """아직 없는 끝점으로 세운 줄들의 **글자 세 끝** — 같은 선이 파일에 두 번 있는지 본다
-    (id 로는 볼 수 없다, 그 객체가 아직 없으므로)."""
+    type_labels: dict[str, str] = field(default_factory=dict)
+    """slug → 사람이 읽는 이름. 끝 타입 오류 문구가 줄마다 이 표를 만들던 자리다."""
+    system_refs: dict[str, list[SystemRef]] = field(default_factory=dict)
+    """원 표(부서 · 계정)를 비추는 타입 slug → 그 표 전부. **글자마다 한 질의**를 돌던
+    자리다 — 도착 타입에 원 표가 섞여 있으면 객체 표에서 못 찾은 글자마다 그 표를 다시
+    읽었다(백필에서는 아직 없는 객체가 대부분이라 거의 모든 줄이 그쪽으로 떨어진다)."""
+    file_by_src: dict[tuple[str, str], set[str]] = field(default_factory=dict)
+    """(관계 종류, 출발 표) → 이 파일이 그 출발점에 이은 **도착 표**들.
+
+    ⚠️ 줄마다 앞줄 전체를 훑던 자리다 — 2만 줄이면 마지막 줄이 1만 9999줄을 본다(제곱).
+       표는 풀린 끝점이면 `id:<uuid>`, 아직 없는 끝점이면 `txt:<글자>` 다. 아직 없는 것은
+       id 가 없어 글자로 세는데, 같은 객체를 한 줄은 식별자로 한 줄은 이름으로 적으면 둘로
+       센다 — 적용은 표를 보고 다시 판정하므로 잘못 들어가지는 않는다."""
+    file_by_dst: dict[tuple[str, str], set[str]] = field(default_factory=dict)
+    """(관계 종류, 도착 표) → 그 도착점을 받은 **출발 표**들. 도착 쪽 개수 제약이 본다."""
 
 
 def _existing_edge(
@@ -1590,6 +1684,9 @@ def _load_pool(
     wanted: dict[tuple[uuid.UUID, ...], set[str]] = {}
     by_slug = {one.slug: one for one in db.scalars(select(ObjectType))}
     memo.types = by_slug
+    # 끝 타입 오류 문구가 쓰는 이름표 — **파일마다 한 번**. 줄마다 만들면 타입 마흔 개짜리
+    # 설치에서 2만 줄에 80만 번 담는다.
+    memo.type_labels = {slug: one.label for slug, one in by_slug.items()}
     for row in rows:
         src_text = str(row.get("src") or "").strip()
         if src_text:
@@ -1620,7 +1717,11 @@ def _pending_end(
     src_text: str,
     dst_text: str,
 ) -> tuple[str, str]:
-    """이 묶음이 **만들** 끝점을 가리키나 — `(까닭, 도착 타입 slug)`, 아니면 `("", "")`.
+    """**못 찾은 끝점**이 이 묶음이 만들 것인가 — `(까닭, 도착 타입 slug)`, 아니면 `("", "")`.
+
+    찾은 끝점의 글자는 빈 값으로 온다 — 부르는 쪽이 먼저 풀어 보고, **안 풀린 것만** 여기서
+    묻는다. 하나라도 이 묶음이 만드는 것이 아니면 `("", "")` 다: 그때는 정말 없는 것이고,
+    그 줄은 오류(또는 `skip_missing` 이면 건너뛰기)다.
 
     도착 타입을 함께 돌려주는 이유: 그 객체가 아직 없어도 **어느 타입이 될지는 안다**(묶음의
     그 배치가 말한다). 그러면 끝 타입 검사를 지금 할 수 있다.
@@ -1629,13 +1730,18 @@ def _pending_end(
         return "", ""
     waiting: list[str] = []
     dst_slug = ""
-    if src_text in memo.pending.get(object_type.slug, set()):
+    if src_text:
+        if src_text not in memo.pending.get(object_type.slug, set()):
+            return "", ""
         waiting.append(src_text)
-    for slug in kind.dst_type_slugs or list(memo.pending):
-        if dst_text in memo.pending.get(slug, set()):
-            waiting.append(dst_text)
-            dst_slug = slug
-            break
+    if dst_text:
+        for slug in kind.dst_type_slugs or list(memo.pending):
+            if dst_text in memo.pending.get(slug, set()):
+                dst_slug = slug
+                break
+        if not dst_slug:
+            return "", ""
+        waiting.append(dst_text)
     if not waiting:
         return "", ""
     return (
@@ -1660,33 +1766,72 @@ def _endpoint_maker(
     return find
 
 
-def _require_file_cardinality(
-    kind: RelationType,
-    seen: set[tuple[uuid.UUID, str, uuid.UUID]],
-    src_id: uuid.UUID,
-    dst_id: uuid.UUID,
-) -> None:
-    """**이 파일의 앞 줄이 이미 채웠나** — 개수 제약을 표만 보고 판정하면 못 본다.
+def _require_file_twice(kind: RelationType, memo: _RelIndex, src: str, dst: str) -> None:
+    """같은 선이 이 파일에 두 번 있나 — **표로 본다**(앞줄을 훑지 않는다)."""
+    if dst in memo.file_by_src.get((kind.slug, src), frozenset()):
+        raise InvalidValue(code("OBJECTS", 44), "같은 관계가 이 파일에 두 번 있습니다.")
 
-    계획은 아무것도 쓰지 않으므로 표에는 앞 줄의 선이 없다. 그 줄들은 `seen` 에 있다 —
-    적용은 쓰면서 보지만(그래서 거기서 거절된다), **계획이 통과시키면 사람은 되는 줄 안다.**
+
+def _require_file_limits(kind: RelationType, memo: _RelIndex, src: str, dst: str) -> None:
+    """**이 파일의 앞 줄이 이미 채웠나** — 개수 제약과 순환을 표만 보고 판정하면 못 본다.
+
+    계획은 아무것도 쓰지 않으므로 표에는 앞 줄의 선이 없다. 그 줄들은 `file_by_src` ·
+    `file_by_dst` 에 있다 — 적용은 쓰면서 보지만(그래서 거기서 거절된다), **계획이
+    통과시키면 사람은 되는 줄 안다.**
+
+    ⚠️ 순환은 **이 파일 안의 길만** 본다. 표에 있는 선을 거쳐 돌아오는 길은 풀린 끝점에서
+       `require_no_cycle` 가 보고, 파일과 표를 번갈아 지나는 길은 적용이 쓰면서 본다
+       (`_guarded` 가 먼저 flush 한다) — 계획에 안 보일 수는 있어도 들어가지는 않는다.
     """
-    # **제 줄은 뺀다** — 이 줄의 세 끝은 이미 `seen` 에 있다(파일 안 중복 검사가 넣는다).
-    if kind.cardinality in ("one_to_one", "many_to_one") and any(
-        src == src_id and slug == kind.slug and dst != dst_id for src, slug, dst in seen
+    if kind.cardinality in ("one_to_one", "many_to_one") and memo.file_by_src.get(
+        (kind.slug, src)
     ):
         raise Conflict(
             code("OBJECTS", 23),
             f"{kind.label}은 하나만 맺을 수 있습니다 — 이 파일의 앞 줄이 이미 맺었습니다.",
         )
-    if kind.cardinality in ("one_to_one", "one_to_many") and any(
-        slug == kind.slug and dst == dst_id and src != src_id for src, slug, dst in seen
+    if kind.cardinality in ("one_to_one", "one_to_many") and memo.file_by_dst.get(
+        (kind.slug, dst)
     ):
         raise Conflict(
             code("OBJECTS", 24),
             f"{kind.label}의 도착 쪽은 하나만 받을 수 있습니다 — 이 파일의 앞 줄이 "
             "이미 맺었습니다.",
         )
+    if not kind.acyclic:
+        return
+    if src == dst:
+        raise Conflict(code("OBJECTS", 25), "자기 자신과는 맺을 수 없습니다.")
+    if _file_reaches(memo, kind.slug, dst, src):
+        raise Conflict(
+            code("OBJECTS", 26),
+            f"이으면 {kind.label}에 순환이 생깁니다 — 이 파일 안에 돌아오는 길이 있습니다.",
+        )
+
+
+def _file_reaches(memo: _RelIndex, slug: str, start: str, goal: str) -> bool:
+    """이 파일의 선만 따라 `start` 에서 `goal` 에 닿나."""
+    seen = {start}
+    stack = [start]
+    while stack:
+        for nxt in memo.file_by_src.get((slug, stack.pop()), ()):
+            if nxt == goal:
+                return True
+            if nxt not in seen:
+                seen.add(nxt)
+                stack.append(nxt)
+    return False
+
+
+def _remember_file_edge(kind: RelationType, memo: _RelIndex, src: str, dst: str) -> None:
+    """뒷줄이 보게 남긴다 — **검사를 지난 뒤에** 넣는다(제 줄을 세지 않게)."""
+    memo.file_by_src.setdefault((kind.slug, src), set()).add(dst)
+    memo.file_by_dst.setdefault((kind.slug, dst), set()).add(src)
+
+
+def _end_token(text: str, end: Any) -> str:
+    """끝점 하나의 **표** — 있는 것은 id 로, 이 묶음이 만들 것은 글자로."""
+    return f"txt:{text}" if isinstance(end, AppError) else f"id:{end.id}"
 
 
 def _guarded(kind: RelationType) -> bool:
@@ -1710,14 +1855,23 @@ def _load_edges(db: Session, memo: _RelIndex) -> None:
     memo.loaded_src |= starts
 
 
-def _memo_end(index: _RelIndex, key: tuple[str, str], make: Callable[[], Any]) -> Any:
-    """같은 물음은 한 번만 — 못 찾은 것(예외)도 기억해 그 줄에서 다시 낸다."""
+def _try_end(index: _RelIndex, key: tuple[str, str], make: Callable[[], Any]) -> Any:
+    """같은 물음은 한 번만 — 못 찾았으면 **그 오류를 돌려준다**(내지 않는다).
+
+    부르는 쪽이 먼저 볼 것이 있다: 이 묶음이 만들 끝점인가(가벼운 미리 보기), 건너뛸
+    것인가. 예외로 내 버리면 그 판단이 `except` 안으로 밀려 들어간다.
+    """
     if key not in index.ends:
         try:
             index.ends[key] = make()
         except AppError as caught:
             index.ends[key] = caught
-    found = index.ends[key]
+    return index.ends[key]
+
+
+def _memo_end(index: _RelIndex, key: tuple[str, str], make: Callable[[], Any]) -> Any:
+    """같은 물음은 한 번만 — 못 찾은 것(예외)도 기억해 그 줄에서 다시 낸다."""
+    found = _try_end(index, key, make)
     if isinstance(found, AppError):
         raise found
     return found
@@ -1842,6 +1996,15 @@ def _find_dst(
     전부 뒤지게 되고, 「부서 slug 를 적었더니 계정이 걸렸다」 같은 일이 생긴다.
     """
     types = memo.types if memo is not None and memo.types else system.types_by_slug(db)
+
+    def all_of(target: ObjectType) -> list[SystemRef]:
+        """원 표 전부 — **타입마다 한 번**(같은 파일 안에서)."""
+        if memo is None:
+            return system.source_of(target).list_all(db)
+        if target.slug not in memo.system_refs:
+            memo.system_refs[target.slug] = system.source_of(target).list_all(db)
+        return memo.system_refs[target.slug]
+
     allowed = kind.dst_type_slugs or []
     plain = [types[s].id for s in allowed if s in types and not system.is_system(types[s])]
     systemic = [types[s] for s in allowed if s in types and system.is_system(types[s])]
@@ -1855,7 +2018,7 @@ def _find_dst(
             if not systemic:
                 raise
     for target in systemic:
-        refs = system.source_of(target).list_all(db)
+        refs = all_of(target)
         by_key = [r for r in refs if r.key == text]
         by_label = [r for r in refs if r.label.strip() == text]
         hit = by_key[0] if len(by_key) == 1 else by_label[0] if len(by_label) == 1 else None
@@ -2045,37 +2208,55 @@ def _plan_relation(
     managed.require_relation_editable(kind, source=source)
 
     memo = index_data if index_data is not None else _RelIndex()
-    later, dst_slug = _pending_end(memo, object_type, kind, src_text, dst_text)
-    if later:
-        # **이 묶음이 만들 끝점**을 가리킨다 — 계획만 볼 때는 「없다」 가 아니다.
-        # 그래도 **볼 수 있는 것은 본다**: 끝 타입이 되는지, 붙는 값의 모양이 맞는지,
-        # 이 파일 안에 같은 선이 두 번 있지 않은지. 예전에는 여기서 바로 통과시켜 관계줄이
-        # 사실상 검사되지 않았고, 오류는 적용에서 묶음 전체를 되돌렸다(실측).
-        label = f"{src_text} -{kind.label}-> {dst_text}"
-        rel.require_end_types_allowed(
-            db,
+    # **먼저 있는 것으로 풀어 본다.** 예전에는 「이 묶음이 만들 것」 목록을 먼저 봐서 두 가지가
+    # 틀렸다: 새 출발점에 **이미 있는 도착점**을 이은 줄이 도착 타입을 출발 타입으로 짐작해
+    # 거짓 오류가 났고, 같은 파일을 두 번째로 넣을 때는(객체가 이미 있는데) 전부 「새로
+    # 만든다」 로 나왔다 — 그 계획으로 「파일대로 맞춤」 을 미리 보면 있는 선을 전부 끊는
+    # 것으로 보였다. **같은 끝점은 한 번만 찾는다** — 한 과제에 모델이 여럿이면 그 과제를
+    # 수십 번 찾는다.
+    src_end = _try_end(
+        memo, ("src", src_text), _endpoint_maker(db, user, object_type, src_text, memo)
+    )
+    dst_end = _try_end(
+        memo, (f"dst:{kind.slug}", dst_text), _dst_maker(db, user, dst_text, kind, memo)
+    )
+    src_gone = src_end if isinstance(src_end, AppError) else None
+    dst_gone = dst_end if isinstance(dst_end, AppError) else None
+    if src_gone is not None or dst_gone is not None:
+        later, pending_slug = _pending_end(
+            memo,
+            object_type,
             kind,
-            object_type.slug,
-            dst_slug or object_type.slug,
-            {slug: one.label for slug, one in memo.types.items()} or None,
+            src_text if src_gone is not None else "",
+            dst_text if dst_gone is not None else "",
         )
-        _relation_properties(db, kind, row, _Refs(db, user), defs=memo.defs.get(kind.slug))
-        triple_text = (src_text, kind.slug, dst_text)
-        if triple_text in memo.pending_seen:
-            raise InvalidValue(code("OBJECTS", 44), "같은 관계가 이 파일에 두 번 있습니다.")
-        memo.pending_seen.add(triple_text)
-        return RowPlan(row=index, action="create", label=label, message=later)
-    # **같은 끝점은 한 번만 찾는다** — 한 과제에 모델이 여럿이면 그 과제를 수십 번 찾는다.
-    try:
-        src = _memo_end(
-            memo, ("src", src_text), _endpoint_maker(db, user, object_type, src_text, memo)
-        )
-        dst = _memo_end(
-            memo, (f"dst:{kind.slug}", dst_text), _dst_maker(db, user, dst_text, kind, memo)
-        )
-    except AppError as gone:
+        if later:
+            # **이 묶음이 만들 끝점**을 가리킨다 — 계획만 볼 때는 「없다」 가 아니다.
+            # 그래도 **볼 수 있는 것은 본다**: 끝 타입이 되는지, 붙는 값의 모양이 맞는지,
+            # 이 파일 안에 같은 선이 두 번 있거나 개수 제약 · 순환을 깨지 않는지. 예전에는
+            # 여기서 바로 통과시켜 관계줄이 사실상 검사되지 않았고, 오류는 적용에서 묶음
+            # 전체를 되돌렸다(실측).
+            src_name = src_text if src_gone is not None else src_end.label
+            dst_name = dst_text if dst_gone is not None else dst_end.label
+            label = f"{src_name} -{kind.label}-> {dst_name}"
+            rel.require_end_types_allowed(
+                db,
+                kind,
+                object_type.slug,
+                pending_slug or dst_end.type_slug,
+                memo.type_labels or None,
+            )
+            _relation_properties(db, kind, row, _Refs(db, user), defs=memo.defs.get(kind.slug))
+            src_token = _end_token(src_text, src_end)
+            dst_token = _end_token(dst_text, dst_end)
+            _require_file_twice(kind, memo, src_token, dst_token)
+            _require_file_limits(kind, memo, src_token, dst_token)
+            _remember_file_edge(kind, memo, src_token, dst_token)
+            return RowPlan(row=index, action="create", label=label, message=later)
+        gone = src_gone or dst_gone
+        assert gone is not None
         if not memo.skip_missing:
-            raise
+            raise gone
         # **한 줄이 묶음 전체를 막지 않게** 건너뛴다 — 무엇이 빠졌는지는 줄에 적는다.
         return RowPlan(
             row=index,
@@ -2083,6 +2264,7 @@ def _plan_relation(
             label=f"{src_text} -{kind.label}-> {dst_text}",
             message=f"끝점을 찾지 못해 건너뜁니다 — {gone.message}",
         )
+    src, dst = src_end, dst_end
     if src.owner_workspace_id not in memo.editable:
         try:
             require_owner_edit(
@@ -2096,17 +2278,13 @@ def _plan_relation(
     if refused is not None:
         raise refused
     rel.require_end_types_allowed(
-        db,
-        kind,
-        object_type.slug,
-        dst.type_slug,
-        {slug: one.label for slug, one in memo.types.items()} or None,
+        db, kind, object_type.slug, dst.type_slug, memo.type_labels or None
     )
 
-    triple = (src.id, kind.slug, dst.id)
-    if triple in seen:
-        raise InvalidValue(code("OBJECTS", 44), "같은 관계가 이 파일에 두 번 있습니다.")
-    seen.add(triple)
+    src_token, dst_token = f"id:{src.id}", f"id:{dst.id}"
+    _require_file_twice(kind, memo, src_token, dst_token)
+    # **파일에 있는 선**이다 — 「파일대로 맞춤」 이 끊지 않는다(이미 이어진 것도 여기 든다).
+    seen.add((src.id, kind.slug, dst.id))
     label = f"{src.label} -{kind.label}-> {dst.label}"
     wanted = _relation_properties(
         db, kind, row, _Refs(db, user), defs=memo.defs.get(kind.slug)
@@ -2115,8 +2293,11 @@ def _plan_relation(
         # 한쪽 끝이 원 표면 선은 `object_links` 에 있다(속성은 안 받는다).
         found = links.existing(db, src.id, dst.id, kind.slug)
         if found is not None:
+            _remember_file_edge(kind, memo, src_token, dst_token)
             return RowPlan(row=index, action="unchanged", label=label, object_id=found.id)
         rel.require_cardinality(db, kind, src.id, dst.id)
+        _require_file_limits(kind, memo, src_token, dst_token)
+        _remember_file_edge(kind, memo, src_token, dst_token)
         return RowPlan(row=index, action="create", label=label)
     found_edge = _existing_edge(db, memo, src.id, kind.slug, dst.id)
     if found_edge is not None:
@@ -2127,6 +2308,7 @@ def _plan_relation(
         changed = [key for key, value in wanted.items() if current.get(key) != value]
         if note and note != (found_edge.evidence_note or ""):
             changed.append("evidence_note")
+        _remember_file_edge(kind, memo, src_token, dst_token)
         return RowPlan(
             row=index,
             action="update" if changed else "unchanged",
@@ -2136,7 +2318,8 @@ def _plan_relation(
         )
     rel.require_cardinality(db, kind, src.id, dst.id)
     rel.require_no_cycle(db, kind, src.id, dst.id)
-    _require_file_cardinality(kind, seen, src.id, dst.id)
+    _require_file_limits(kind, memo, src_token, dst_token)
+    _remember_file_edge(kind, memo, src_token, dst_token)
     return RowPlan(row=index, action="create", label=label)
 
 
@@ -2190,6 +2373,13 @@ def apply_relations(
                 changes={"reason": "파일에 없어 끊음"},
                 reason="일괄 가져오기 — 파일대로 맞춤",
             )
+            journal.removed(
+                db,
+                "object_relations",
+                edge.id,
+                before=_edge_state(edge),
+                label=row_plan.label,
+            )
             db.delete(edge)
             continue
         # 파일에서 온 줄이다 — `row` 는 1부터.
@@ -2200,6 +2390,7 @@ def apply_relations(
                 continue
             kind = kinds.get(edge.relation) or by_label[edge.relation]
             before = dict(edge.properties or {})
+            was_note = edge.evidence_note or ""
             defs = memo.defs.get(kind.slug) or relation_defs(db, kind)
             wanted = _relation_properties(db, kind, row, refs, fresh=False, defs=defs)
             if wanted:
@@ -2207,6 +2398,17 @@ def apply_relations(
             note = str(row.get("evidence_note") or "").strip()
             if note:
                 edge.evidence_note = note
+            journal.changed(
+                db,
+                "object_relations",
+                edge.id,
+                before={"properties": before, "evidence_note": was_note},
+                after={
+                    "properties": dict(edge.properties or {}),
+                    "evidence_note": edge.evidence_note or "",
+                },
+                label=row_plan.label,
+            )
             audit.record(
                 db,
                 action="object.relation.update",
@@ -2242,6 +2444,7 @@ def apply_relations(
                 reason="일괄 가져오기",
             )
             row_plan.object_id = link.id
+            journal.created(db, "object_links", link.id, label=row_plan.label)
             continue
         # **앞 행이 만든 선이 제약을 어길 수 있다.** 검사는 표를 보므로, 아직 안 쓴 선이
         # 있으면 그것을 못 본다 — 줄마다 쓰던 것을 없앤 뒤 이 구멍이 생겼다(실측).
@@ -2265,6 +2468,7 @@ def apply_relations(
         )
         db.add(edge)
         row_plan.object_id = edge.id
+        journal.created(db, "object_relations", edge.id, label=row_plan.label)
         # 뒤 줄이 「이미 있다」 로 보게 한다 — 같은 파일에 같은 선이 두 번 나올 수 있다.
         memo.edges[(src.id, kind.slug, dst.id)] = edge
         audit.record(
@@ -2289,6 +2493,17 @@ def apply_relations(
     )
     db.commit()
     return plan
+
+
+def _edge_state(edge: ObjectRelation) -> dict[str, Any]:
+    """선 하나를 **되살릴 수 있는 만큼** — 되돌릴 기록에 담는 모양."""
+    return {
+        "src": str(edge.src_object_id),
+        "dst": str(edge.dst_object_id),
+        "relation": edge.relation,
+        "properties": dict(edge.properties or {}),
+        "evidence_note": edge.evidence_note or "",
+    }
 
 
 def export_relations(db: Session, user: User, object_type: ObjectType) -> list[dict[str, Any]]:

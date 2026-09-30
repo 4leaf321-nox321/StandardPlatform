@@ -28,6 +28,7 @@ from app.extensions.caegroup.models import (
 from app.modules.accounts.models import User
 from app.modules.audit.models import AccessLog, AuditEntry
 from app.modules.auth.models import PersonalAccessToken, RefreshToken
+from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.datasources.models import DataSource, DataSourceRun
 from app.modules.files.models import Attachment
 from app.modules.jobs.models import Job, JobFile, WorkerHeartbeat
@@ -59,6 +60,8 @@ __all__ = [
     "Attachment",
     "AuditEntry",
     "Base",
+    "BundleRun",
+    "BundleUndoEntry",
     "CaeDtAssessment",
     "CaeDtAssessmentHistory",
     "CaeDtCapacity",

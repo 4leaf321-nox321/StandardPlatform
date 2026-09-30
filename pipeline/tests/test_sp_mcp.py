@@ -36,6 +36,8 @@ TOOLS = {
     "hub_pull",
     "run_validate",
     "run_preview",
+    "runs_list",
+    "run_undo",
 }
 
 

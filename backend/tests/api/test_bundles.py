@@ -323,3 +323,211 @@ def test_가벼운_미리보기_뒤에도_적용이_된다(client: TestClient, a
     ).json()
     # 계획에서 비워 뒀던 참조가 적용에서 풀렸다.
     assert detail["object"]["properties"]["vendor"]
+
+
+def _pair(workspace: str, *, acyclic: bool = False) -> tuple[dict[str, Any], dict[str, str]]:
+    """타입 둘(기업 · 툴)과 **타입이 다른** 관계(툴 → 기업) 하나. 객체는 안 넣는다."""
+    company, tool, made_by = _uniq("company"), _uniq("tool"), _uniq("madeby")
+    ontology: dict[str, Any] = {
+        "types": [
+            {"slug": company, "label": "기업", "key_policy": "required"},
+            {"slug": tool, "label": "툴", "key_policy": "required"},
+        ],
+        "relation_types": [
+            {
+                "slug": made_by,
+                "label": "만든 곳",
+                "src_type_slugs": [tool],
+                "dst_type_slugs": [company] if not acyclic else [tool],
+                "acyclic": acyclic,
+            }
+        ],
+    }
+    return {"ontology": ontology}, {"company": company, "tool": tool, "made_by": made_by}
+
+
+def test_가벼운_미리보기가_새_출발점의_기존_도착점을_막지_않는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """**새로 만드는 출발점 + 이미 있는 도착점**이 거짓 오류로 막혔다.
+
+    계획만 볼 때 「이 묶음이 만들 것」 목록을 먼저 봤기 때문이다. 못 찾은 끝점이 하나라도
+    있으면 도착 타입을 **출발 타입으로 짐작**해 끝 타입 검사를 했고, 타입이 다른 관계
+    (툴 → 기업)는 전부 「도착은 기업만 됩니다」 로 걸렸다. 백필의 거의 모든 줄이 그 모양이다.
+    """
+    base, names = _pair(admin.workspace)
+    first = _send(
+        client,
+        admin,
+        {
+            **base,
+            "objects": [
+                {
+                    "type_slug": names["company"],
+                    "workspace_slug": admin.workspace,
+                    "rows": [{"key": "C-1", "label": "미국사"}],
+                }
+            ],
+        },
+        apply=True,
+    )
+    assert first["applied"] is True, first
+
+    light = bundle_import(
+        client,
+        admin,
+        {
+            "objects": [
+                {
+                    "type_slug": names["tool"],
+                    "workspace_slug": admin.workspace,
+                    "rows": [{"key": "T-9", "label": "툴9"}],
+                }
+            ],
+            "relations": [
+                {
+                    "type_slug": names["tool"],
+                    "rows": [{"src": "T-9", "relation": names["made_by"], "dst": "C-1"}],
+                }
+            ],
+            "preview": "plan",
+        },
+    )
+    assert light["ok"] is True, light
+    edge = light["relations"][0]["plan"]["rows"][0]
+    assert edge["action"] == "create", edge
+    assert "이 묶음이 만드는 객체입니다" in edge["message"], edge
+
+
+def test_재적재는_가벼운_미리보기에서도_그대로다(client: TestClient, admin: Signed) -> None:
+    """**두 번째로 넣는 같은 파일**이 전부 「새로 만든다」 로 보였다.
+
+    객체가 이미 있는데도 「이 묶음이 만들 것」 목록을 먼저 봤기 때문이다. 그래서 백필을 다시
+    돌릴 때 계획이 거짓말을 했고, 「파일대로 맞춤」 을 미리 보면 **이미 있는 선을 전부
+    끊는 것**으로 보였다(그 계획에는 살아남을 선이 하나도 없다).
+    """
+    bundle, _names = _bundle(admin.workspace)
+    assert _send(client, admin, bundle, apply=True)["applied"] is True
+
+    again = bundle_import(client, admin, {**bundle, "preview": "plan"})
+    assert again["ok"] is True, again
+    assert again["counts"].get("objects_create", 0) == 0, again["counts"]
+    assert again["counts"].get("relations_create", 0) == 0, again["counts"]
+    assert again["counts"]["objects_unchanged"] == 3, again["counts"]
+    assert again["counts"]["relations_unchanged"] == 1, again["counts"]
+
+    # 「파일대로 맞춤」 이어도 파일에 있는 선은 끊지 않는다.
+    replaced = bundle_import(
+        client,
+        admin,
+        {
+            **bundle,
+            "preview": "plan",
+            "relations": [{**bundle["relations"][0], "mode": "replace"}],
+        },
+    )
+    assert replaced["ok"] is True, replaced
+    assert replaced["counts"].get("relations_unlink", 0) == 0, replaced["counts"]
+
+
+def test_가벼운_미리보기가_파일_안_순환을_본다(client: TestClient, admin: Signed) -> None:
+    """아직 없는 끝점끼리도 고리를 만들 수 있다 — 계획이 그것을 봐야 한다.
+
+    못 보면 계획은 「둘 다 새로 잇습니다」 라고 말하고, 적용이 마지막 줄에서 터져 묶음
+    전체가 롤백된다. 사람은 통과한 계획을 보고 적용을 누른 것이다.
+    """
+    base, names = _pair(admin.workspace, acyclic=True)
+    light = bundle_import(
+        client,
+        admin,
+        {
+            **base,
+            "objects": [
+                {
+                    "type_slug": names["tool"],
+                    "workspace_slug": admin.workspace,
+                    "rows": [
+                        {"key": "M-1", "label": "모델1"},
+                        {"key": "M-2", "label": "모델2"},
+                    ],
+                }
+            ],
+            "relations": [
+                {
+                    "type_slug": names["tool"],
+                    "rows": [
+                        {"src": "M-1", "relation": names["made_by"], "dst": "M-2"},
+                        {"src": "M-2", "relation": names["made_by"], "dst": "M-1"},
+                    ],
+                }
+            ],
+            "preview": "plan",
+        },
+    )
+    assert light["ok"] is False, light
+    rows = light["relations"][0]["plan"]["rows"]
+    assert [one["action"] for one in rows] == ["create", "error"], rows
+    assert "순환" in rows[1]["message"], rows
+
+
+def test_필수_참조를_못_찾으면_그_줄만_건너뛴다(client: TestClient, admin: Signed) -> None:
+    """`missing_refs=blank` 가 **필수 참조 칸에는 아무 소용이 없었다.**
+
+    빈 값으로 두면 「값이 필요합니다」 가 되어 그 줄이 오류가 되고, 오류 한 줄이 묶음 전체를
+    막는다 — 막으려고 켠 옵션인데 정작 필수 칸에서 안 들었다. 이제 그 줄만 건너뛴다.
+    """
+    company, tool = _uniq("company"), _uniq("tool")
+    body = bundle_import(
+        client,
+        admin,
+        {
+            "ontology": {
+                "types": [
+                    {"slug": company, "label": "기업", "key_policy": "required"},
+                    {
+                        "slug": tool,
+                        "label": "툴",
+                        "key_policy": "required",
+                        "properties": [
+                            {
+                                "key": "vendor",
+                                "label": "개발사",
+                                "data_type": "object_ref",
+                                "ref_type_slug": company,
+                                "required": True,
+                            }
+                        ],
+                    },
+                ]
+            },
+            "objects": [
+                {
+                    "type_slug": company,
+                    "workspace_slug": admin.workspace,
+                    "rows": [{"key": "C-1", "label": "미국사"}],
+                },
+                {
+                    "type_slug": tool,
+                    "workspace_slug": admin.workspace,
+                    "rows": [
+                        {"key": "T-1", "label": "툴1", "vendor": "C-1"},
+                        {"key": "T-2", "label": "툴2", "vendor": "없는기업"},
+                    ],
+                },
+            ],
+            "missing_refs": "blank",
+            "apply": True,
+        },
+    )
+    assert body["ok"] is True and body["applied"] is True, body
+    tools = next(one for one in body["objects"] if one["type_slug"] == tool)
+    rows = tools["plan"]["rows"]
+    assert rows[0]["action"] == "create", rows
+    assert rows[1]["action"] == "unchanged", rows
+    assert "필수 참조를 찾지 못해 이 줄을 건너뜁니다" in rows[1]["message"], rows
+
+    keys = {
+        one["key"]
+        for one in client.get(f"/api/objects/{tool}", headers=admin.headers).json()["items"]
+    }
+    assert keys == {"T-1"}, keys

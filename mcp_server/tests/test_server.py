@@ -45,6 +45,8 @@ TOOLS = {
     "relation_add",
     "objects_import",
     "bundle_import",
+    "bundle_runs",
+    "bundle_undo",
     "relations_import",
     "object_history",
     "object_references",

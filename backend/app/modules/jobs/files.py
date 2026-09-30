@@ -10,10 +10,11 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, datetime, timedelta
 
-from sqlalchemy import delete
+from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.jobs.models import Job, JobFile
 from app.modules.objects.models import ObjectRelationTombstone
 from app.shared.errors import AppError, code
@@ -65,6 +66,25 @@ def purge_old_tombstones(db: Session) -> int:
         delete(ObjectRelationTombstone)
         .where(ObjectRelationTombstone.removed_at < cutoff)
         .returning(ObjectRelationTombstone.id)
+    )
+    count = len(gone.all())
+    db.commit()
+    return count
+
+
+def purge_old_undo_journals(db: Session) -> int:
+    """기한 지난 **되돌릴 기록**을 지운다 — 판은 남기고 줄만.
+
+    바뀐 줄마다 한 줄이라 백필 한 번이 수만 줄을 남긴다. 판을 함께 지우면 「그때 무엇이
+    들어갔나」 까지 사라진다 — 그것은 남기고, 되돌릴 수 없다는 사실만 목록에서 드러나게
+    한다(줄이 0개면 「되돌릴 수 없음」).
+    """
+    cutoff = datetime.now(UTC) - timedelta(days=get_settings().undo_journal_ttl_days)
+    old_runs = select(BundleRun.id).where(BundleRun.at < cutoff)
+    gone = db.execute(
+        delete(BundleUndoEntry)
+        .where(BundleUndoEntry.run_id.in_(old_runs))
+        .returning(BundleUndoEntry.id)
     )
     count = len(gone.all())
     db.commit()

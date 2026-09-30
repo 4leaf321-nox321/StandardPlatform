@@ -10,6 +10,7 @@ from __future__ import annotations
 import logging
 import os
 import socket
+import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -54,6 +55,10 @@ def purge_old_jobs(db: Session) -> int:
 
 def purge_old_tombstones(db: Session) -> int:
     return files.purge_old_tombstones(db)
+
+
+def purge_old_undo_journals(db: Session) -> int:
+    return files.purge_old_undo_journals(db)
 
 
 # --- 넣기 · 보기 ----------------------------------------------------------------
@@ -173,9 +178,10 @@ def make_apply(db: Session, user: User, plan_job: Job) -> Job:
         )
     if not user.is_system_admin and plan_job.requested_by_id != user.id:
         raise Forbidden(code("JOBS", 12), "계획을 본 사람이 적용합니다.")
-    if plan_job.input_file_id is None:
+    if spec.needs_file and plan_job.input_file_id is None:
         raise Conflict(code("JOBS", 13), "파일이 이미 지워졌습니다. 다시 올리세요.")
-    input_file = db.get(JobFile, plan_job.input_file_id)
+    # 파일이 없는 두 단계 작업도 있다(묶음 되돌리기 — 인자가 판 번호 하나뿐이다).
+    input_file = db.get(JobFile, plan_job.input_file_id) if plan_job.input_file_id else None
     params = {**plan_job.params, "apply": True, "fingerprint": result.get("fingerprint")}
     return enqueue(
         db,
@@ -265,6 +271,12 @@ def recover_stale(db: Session) -> int:
 
     워커가 죽으면 그 작업은 영영 `running` 으로 남고, 화면은 「진행 중」 을 보여 준다 —
     아무도 다시 안 돌린다. 그래서 **다른 워커가** 그것을 본다.
+
+    ⚠️ **살아 있는 워커의 것은 안 빼앗는다.** 예전에는 작업의 박동만 봤다 — 그 박동은 진행
+       보고가 올려 주므로, 말없이 오래 걸리는 단계(수만 줄 커밋)에서 5분이 지나면 다른
+       워커가 **같은 작업을 한 번 더 돌렸다**(실측: 백필이 두 벌 들어갔다). 워커 자신의
+       박동(`worker_heartbeats`)이 아직 뛰고 그 작업을 쥐고 있으면, 늦은 것이지 죽은 것이
+       아니다. 그 워커가 죽으면 박동이 멎고 다음 바퀴에 여기서 잡힌다.
     """
     settings = get_settings()
     cutoff = datetime.now(UTC) - timedelta(seconds=settings.worker_stale_seconds)
@@ -275,6 +287,21 @@ def recover_stale(db: Session) -> int:
             .with_for_update(skip_locked=True)
         )
     )
+    busy = {
+        row.current_job_id
+        for row in db.scalars(
+            select(WorkerHeartbeat).where(WorkerHeartbeat.last_seen >= cutoff)
+        )
+        if row.current_job_id is not None
+    }
+    held = [job for job in stale if job.id in busy]
+    for job in held:
+        log.warning(
+            "작업 %s 은 워커 %s 가 아직 쥐고 있습니다 — 안 빼앗습니다(박동만 늦음)",
+            job.id,
+            job.worker_id,
+        )
+    stale = [job for job in stale if job.id not in busy]
     for job in stale:
         if job.attempts >= settings.worker_max_attempts:
             job.status = "failed"
@@ -430,6 +457,41 @@ def announce(db: Session, job: Job) -> None:
     )
 
 
+HEARTBEAT_EVERY = 30.0
+"""작업이 도는 동안 몇 초마다 박동을 남기나. `worker_stale_seconds`(300) 보다 훨씬 짧아야
+한다 — 그 사이에 한 번도 못 남기면 남의 워커가 이 작업을 「멎었다」 고 본다."""
+
+
+class _Beating:
+    """작업이 도는 동안 **심장박동을 따로 뛴다.**
+
+    예전에는 진행 보고(`report_progress`)가 그 일을 겸했다 — 그래서 말없이 오래 걸리는
+    단계에서 박동이 멎었고, 다른 워커가 같은 작업을 한 번 더 돌렸다. 박동은 「이 워커가 아직
+    살아서 이 작업을 쥐고 있다」 는 사실이고, 그 사실은 진행 보고와 따로 뛰어야 한다.
+    """
+
+    def __init__(self, worker_id: str, job_id: uuid.UUID) -> None:
+        self.worker_id = worker_id
+        self.job_id = job_id
+        self.done = threading.Event()
+        self.thread = threading.Thread(target=self._beat, name="job-heartbeat", daemon=True)
+
+    def _beat(self) -> None:
+        while not self.done.wait(HEARTBEAT_EVERY):
+            try:
+                heartbeat(self.worker_id, self.job_id)
+            except Exception:  # 박동 하나 못 남긴 것으로 작업을 죽이지 않는다.
+                log.warning("심장박동을 남기지 못했습니다 (작업 %s)", self.job_id)
+
+    def __enter__(self) -> _Beating:
+        self.thread.start()
+        return self
+
+    def __exit__(self, *_exc: object) -> None:
+        self.done.set()
+        self.thread.join(timeout=5.0)
+
+
 def process_one(worker_id: str) -> bool:
     """집어서 돌리고 적는다. 집은 것이 없으면 False."""
     with SessionLocal() as db:
@@ -440,7 +502,8 @@ def process_one(worker_id: str) -> bool:
         db.expunge(job)
     heartbeat(worker_id, job_id)
     log.info("작업 시작: %s (%s)", job_id, kind)
-    outcome = run(job, worker_id=worker_id)
+    with _Beating(worker_id, job_id):
+        outcome = run(job, worker_id=worker_id)
     settle(job_id, outcome)
     heartbeat(worker_id, None)
     log.info("작업 끝: %s (%s) → %s", job_id, kind, outcome.status)

@@ -32,6 +32,7 @@ from sqlalchemy.orm import Session
 
 from app.database import engine
 from app.modules.accounts.models import User
+from app.modules.bundles import journal
 from app.modules.bundles import tombstones as graves
 from app.modules.bundles.schemas import BatchOut, BundleIn, BundleOut
 from app.modules.objects import bulk
@@ -66,6 +67,8 @@ class Outcome:
     """허브에서 사라진 것 — 사용 중지 · 합치기 · 끊기."""
     errors: list[str] = field(default_factory=list)
     snapshot_id: uuid.UUID | None = None
+    run_id: uuid.UUID | None = None
+    """적용한 판의 번호 — 되돌릴 자리(`bundles/undo.py`)."""
     applied: bool = False
 
     @property
@@ -122,6 +125,11 @@ def run(
     events.hold(db)
     outcome = Outcome()
     try:
+        if bundle.apply:
+            # **넣으면서 되돌릴 것을 적는다.** 미리 보기에는 안 켠다(아무것도 안 바뀐다).
+            # 백필은 `audit="summary"` 로 도니 줄마다의 감사 기록으로는 되돌릴 수 없다 —
+            # 그것이 이 기록이 따로 있는 이유다.
+            journal.start(db, user, source=bundle.source, label=_label_of(bundle))
         _stages(db, user, bundle, outcome, max_rows=max_rows, on_progress=on_progress)
         if bundle.apply and outcome.ok and before_commit is not None:
             before_commit(outcome)
@@ -141,14 +149,17 @@ def run(
                     **({"source": bundle.source} if bundle.source else {}),
                 },
             )
+            outcome.run_id = journal.finish(db, counts=outcome.counts)
             db.commit()
             outer.commit()
             outcome.applied = True
             events.release(db, _summary_event(user, bundle, outcome))
         else:
+            journal.drop(db)
             events.drop_held(db)
             outer.rollback()
     except Exception:
+        journal.drop(db)
         events.drop_held(db)
         outer.rollback()
         raise
@@ -159,6 +170,16 @@ def run(
         # 롤백된 스냅샷을 가리키면 없는 되돌릴 자리를 약속하는 것이다.
         outcome.snapshot_id = None
     return outcome
+
+
+def _label_of(bundle: BundleIn) -> str:
+    """이 판을 목록에서 알아보는 줄 — 들어간 타입들."""
+    slugs = sorted(
+        {one.type_slug for one in bundle.objects} | {one.type_slug for one in bundle.relations}
+    )
+    if not slugs:
+        return "정의" if bundle.ontology is not None else "사라진 것"
+    return ", ".join(slugs)
 
 
 def _summary_event(
@@ -388,6 +409,7 @@ def outcome_out(outcome: Outcome) -> BundleOut:
         ),
         errors=outcome.errors,
         snapshot_id=outcome.snapshot_id,
+        run_id=outcome.run_id,
         counts=outcome.counts,
     )
 

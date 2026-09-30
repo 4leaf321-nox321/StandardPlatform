@@ -29,6 +29,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.bundles import journal
 from app.modules.bundles.schemas import (
     ObjectTombstoneIn,
     RelationTombstoneIn,
@@ -170,6 +171,14 @@ def _object_row(
     if apply:
         was = row.status
         row.status = "deprecated"
+        journal.changed(
+            db,
+            "objects",
+            row.id,
+            before={"status": was},
+            after={"status": "deprecated"},
+            label=f"{object_type.slug}:{row.label}",
+        )
         db.flush()
         audit.record(
             db,
@@ -235,6 +244,9 @@ def _relation_row(
             target_label=label,
             changes={"reason": "허브에서 끊김"},
             reason="묶음 가져오기 — 허브에서 끊김",
+        )
+        journal.removed(
+            db, "object_relations", found.id, before=bulk._edge_state(found), label=label
         )
         db.delete(found)
         db.flush()

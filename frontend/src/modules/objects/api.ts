@@ -95,7 +95,7 @@ export interface TreeOut {
 /** 일괄 계획의 한 줄 — 행마다 무엇이 되는지. */
 export interface ImportRow {
   row: number
-  action: 'create' | 'update' | 'unchanged' | 'unlink' | 'error'
+  action: 'create' | 'update' | 'unchanged' | 'unlink' | 'delete' | 'error'
   label: string
   key: string | null
   object_id: string | null
@@ -109,7 +109,8 @@ export interface ImportPlan {
   rows: ImportRow[]
   /** 행과 무관한 오류(모르는 열, 상한). **하나라도 있으면 아무것도 안 넣는다.** */
   errors: string[]
-  counts: Record<'create' | 'update' | 'unchanged' | 'unlink' | 'error', number>
+  counts: Record<'create' | 'update' | 'unchanged' | 'unlink' | 'error', number> &
+    Partial<Record<'delete' | 'merge' | 'deprecate', number>>
 }
 
 /** 여럿 골라 한 칸 바꾸기의 계획 — 행마다 무엇이 되는지. */

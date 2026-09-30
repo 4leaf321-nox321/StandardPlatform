@@ -13,6 +13,7 @@ const ACTION_LABEL: Record<ImportRow['action'], string> = {
   update: '고침',
   unchanged: '그대로',
   unlink: '끊음',
+  delete: '지움',
   error: '오류',
 }
 
@@ -24,6 +25,7 @@ const ACTION_VARIANT: Record<
   update: 'secondary',
   unchanged: 'outline',
   unlink: 'destructive',
+  delete: 'destructive',
   error: 'destructive',
 }
 
@@ -37,7 +39,10 @@ export function planIsClean(plan: ImportPlan): boolean {
 
 /** 바뀌는 것이 있나 — 없으면 적용해도 아무 일이 없다. */
 export function planChangesSomething(plan: ImportPlan): boolean {
-  return plan.counts.create + plan.counts.update + (plan.counts.unlink ?? 0) > 0
+  return (
+    plan.counts.create + plan.counts.update + (plan.counts.unlink ?? 0) + (plan.counts.delete ?? 0) >
+    0
+  )
 }
 
 export function ImportPlanTable({ plan }: { plan: ImportPlan }) {
@@ -52,6 +57,9 @@ export function ImportPlanTable({ plan }: { plan: ImportPlan }) {
         <Badge variant="outline">그대로 {plan.counts.unchanged}</Badge>
         {(plan.counts.unlink ?? 0) > 0 && (
           <Badge variant="destructive">끊음 {plan.counts.unlink}</Badge>
+        )}
+        {(plan.counts.delete ?? 0) > 0 && (
+          <Badge variant="destructive">지움 {plan.counts.delete}</Badge>
         )}
         {plan.counts.error > 0 && <Badge variant="destructive">오류 {plan.counts.error}</Badge>}
         {plan.applied && (

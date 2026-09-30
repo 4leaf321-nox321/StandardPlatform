@@ -1031,6 +1031,65 @@ def cmd_apply(path: Path, *, server: str, token: str) -> tuple[bool, str]:
     return bool(result.get("applied")), summarize(result)
 
 
+def cmd_runs(*, server: str, token: str, limit: int = 20) -> tuple[bool, str]:
+    """넣은 판들 — **되돌릴 번호를 여기서 찾는다.**"""
+    headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
+    url = f"{server.rstrip('/')}/api/bundles/runs?limit={max(1, min(limit, 100))}"
+    status, answer = _send(server, "GET", url, headers, None, who="플랫폼")
+    if status != 200:
+        _refused("플랫폼", status, answer)
+    if not isinstance(answer, list) or not answer:
+        return True, "넣은 판이 없습니다."
+    lines = ["판 번호                               넣은 때        누가      무엇"]
+    for one in answer:
+        at = str(one.get("at") or "")[:16].replace("T", " ")
+        mark = "" if one.get("undoable") else "  (되돌릴 수 없음)"
+        lines.append(
+            f"{one.get('id')}  {at}  {str(one.get('actor') or '')[:8]:8}  "
+            f"{str(one.get('label') or '')[:40]}{mark}"
+        )
+    return True, "\n".join(lines)
+
+
+def cmd_undo(run_id: str, *, server: str, token: str, apply: bool = False) -> tuple[bool, str]:
+    """그 판을 되돌린다 — 기본은 계획이다(아무것도 안 바뀐다).
+
+    **계획을 사람이 읽은 뒤** `--apply` 로 되돌린다. 그 사이 남이 고친 줄은 되돌리지 않고
+    이유가 줄에 적혀 온다 — 남의 변경을 조용히 덮지 않는다.
+    """
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json",
+        "X-Client": CLIENT,
+    }
+    url = (
+        f"{server.rstrip('/')}/api/bundles/runs/{run_id}/undo"
+        f"?apply={'true' if apply else 'false'}"
+    )
+    status, answer = _send(server, "POST", url, headers, b"", who="플랫폼")
+    if status != 202:
+        _refused("플랫폼", status, answer)
+    job = _wait_job(server, token, answer)
+    result = job.get("result")
+    if not isinstance(result, dict):
+        raise Stop(f"플랫폼 응답을 읽을 수 없습니다: {job!r}")
+    counts = result.get("counts") or {}
+    did = "되돌렸습니다" if result.get("applied") else "계획입니다 — 아무것도 안 바뀌었습니다"
+    head = (
+        f"{did}"
+        f" · 지움 {counts.get('delete', 0)} · 되돌림 {counts.get('update', 0)}"
+        f" · 다시 이음 {counts.get('create', 0)} · 건너뜀 {counts.get('unchanged', 0)}"
+        f" · 오류 {counts.get('error', 0)}"
+    )
+    skipped = [
+        f"  건너뜀: {one.get('label')} — {one.get('message')}"
+        for one in (result.get("rows") or [])
+        if one.get("action") == "unchanged" and one.get("message")
+    ][:20]
+    errors = [f"  오류: {one}" for one in (result.get("errors") or [])]
+    return bool(result.get("ok")), "\n".join([head, *errors, *skipped])
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sp_pipeline", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1062,6 +1121,19 @@ def main(argv: list[str] | None = None) -> int:
     pull.add_argument("--hub", default=os.environ.get("SP_HUB_SERVER", ""))
     pull.add_argument("--hub-token", default=os.environ.get("SP_HUB_TOKEN", ""))
     pull.add_argument("--source", default="hub")
+
+    runs = sub.add_parser("runs", help="넣은 판들 — 되돌릴 번호를 찾는다")
+    runs.add_argument("--server", default=os.environ.get("SP_SERVER", ""))
+    runs.add_argument("--token", default=os.environ.get("SP_TOKEN", ""))
+    runs.add_argument("--limit", type=int, default=20)
+
+    undo = sub.add_parser("undo", help="넣은 판 하나를 통째로 되돌린다(기본은 계획)")
+    undo.add_argument("run_id", help="`runs` 가 보여 준 판 번호")
+    undo.add_argument("--server", default=os.environ.get("SP_SERVER", ""))
+    undo.add_argument("--token", default=os.environ.get("SP_TOKEN", ""))
+    undo.add_argument(
+        "--apply", action="store_true", help="계획을 읽은 뒤 — 이것 없이는 아무것도 안 바뀐다"
+    )
 
     for name, what in (
         ("preview", "아무것도 저장하지 않고 미리 본다"),
@@ -1111,6 +1183,16 @@ def main(argv: list[str] | None = None) -> int:
             raise Stop(
                 "서버와 토큰이 필요합니다 — SP_SERVER · SP_TOKEN 또는 --server · --token"
             )
+        if args.command == "runs":
+            ok, text = cmd_runs(server=args.server, token=args.token, limit=args.limit)
+            print(text)
+            return 0 if ok else 1
+        if args.command == "undo":
+            ok, text = cmd_undo(
+                args.run_id, server=args.server, token=args.token, apply=args.apply
+            )
+            print(text)
+            return 0 if ok else 1
         if args.backfill:
             # **실행 폴더에 적어 둔다** — 미리 보기와 적용이 같은 칸으로 가야 한다(미리 본
             # 것과 넣는 것이 다르면 미리 본 뜻이 없다).

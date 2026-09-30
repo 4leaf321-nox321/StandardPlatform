@@ -64,12 +64,16 @@ class Worker:
                 old_jobs = services.purge_old_jobs(db)
                 # 끊긴 선의 무덤도 — 안 지우면 내보내기가 몇 해치 이력을 통째로 보낸다.
                 old_graves = services.purge_old_tombstones(db)
-            if gone or old_jobs or old_graves:
+                # 되돌릴 기록은 바뀐 줄마다 한 줄이다 — 안 지우면 데이터보다 커진다.
+                old_undo = services.purge_old_undo_journals(db)
+            if gone or old_jobs or old_graves or old_undo:
                 log.info(
-                    "정리: 작업 파일 %d개 · 끝난 작업 기록 %d개 · 끊긴 선의 무덤 %d개",
+                    "정리: 작업 파일 %d개 · 끝난 작업 기록 %d개 · 끊긴 선의 무덤 %d개 · "
+                    "되돌릴 기록 %d줄",
                     gone,
                     old_jobs,
                     old_graves,
+                    old_undo,
                 )
             self._last_purge = now
 

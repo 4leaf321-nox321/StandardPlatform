@@ -2488,7 +2488,7 @@
                 "schema": {
                   "type": "array",
                   "items": {
-                    "$ref": "#/components/schemas/RunOut"
+                    "$ref": "#/components/schemas/app__modules__datasources__schemas__RunOut"
                   },
                   "title": "Response List Runs Api Datasources  Slug  Runs Get"
                 }
@@ -8108,6 +8108,108 @@
           },
           "required": true
         },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/bundles/runs": {
+      "get": {
+        "tags": [
+          "bundles"
+        ],
+        "summary": "List Runs",
+        "description": "**넣은 판들** — 최근 것부터. 시스템 관리자는 전부, 나머지는 자기가 넣은 것.\n\n되돌리려면 여기서 번호를 찾는다. 적용한 판만 있다(미리 보기는 아무것도 안 바꾼다).",
+        "operationId": "list_runs_api_bundles_runs_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "default": 30,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/app__modules__bundles__routes__RunOut"
+                  },
+                  "title": "Response List Runs Api Bundles Runs Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/bundles/runs/{run_id}/undo": {
+      "post": {
+        "tags": [
+          "bundles"
+        ],
+        "summary": "Undo Run",
+        "description": "그 판을 **통째로 되돌린다** — 작업이 된다.\n\n기본은 계획이다: 무엇이 지워지고 무엇이 어느 값으로 돌아가는지 줄마다 보여 준다. 사람이\n읽은 뒤 `POST /api/jobs/{id}/apply`(또는 여기에 `apply=true`) 로 되돌린다. **그 사이\n남이 고친 줄은 되돌리지 않고 이유를 적는다** — 남의 변경을 조용히 덮지 않는다.",
+        "operationId": "undo_run_api_bundles_runs__run_id__undo_post",
+        "parameters": [
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Run Id"
+            }
+          },
+          {
+            "name": "apply",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Apply"
+            }
+          }
+        ],
         "responses": {
           "202": {
             "description": "Successful Response",
@@ -19276,73 +19378,6 @@
         "title": "RollupOut",
         "description": "「아래 전부」 를 모은 수 하나 — 볼 때마다 센다(저장하지 않는다)."
       },
-      "RunOut": {
-        "properties": {
-          "id": {
-            "type": "string",
-            "format": "uuid",
-            "title": "Id"
-          },
-          "status": {
-            "type": "string",
-            "title": "Status"
-          },
-          "applied": {
-            "type": "boolean",
-            "title": "Applied"
-          },
-          "actor_label": {
-            "type": "string",
-            "title": "Actor Label"
-          },
-          "rows_seen": {
-            "type": "integer",
-            "title": "Rows Seen"
-          },
-          "counts": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Counts"
-          },
-          "errors": {
-            "items": {},
-            "type": "array",
-            "title": "Errors"
-          },
-          "started_at": {
-            "type": "string",
-            "format": "date-time",
-            "title": "Started At"
-          },
-          "finished_at": {
-            "anyOf": [
-              {
-                "type": "string",
-                "format": "date-time"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Finished At"
-          }
-        },
-        "type": "object",
-        "required": [
-          "id",
-          "status",
-          "applied",
-          "actor_label",
-          "rows_seen",
-          "counts",
-          "errors",
-          "started_at",
-          "finished_at"
-        ],
-        "title": "RunOut"
-      },
       "SavedViewOut": {
         "properties": {
           "id": {
@@ -21853,6 +21888,136 @@
         "type": "object",
         "title": "WorkspaceUpdateRequest",
         "description": "**안 보낸 것과 비운 것을 구별한다.** None 은 \"안 바꿈\" 이다.\n\n구별하지 않으면 이름만 고칠 때마다 공개 설정이 함께 초기화되고, 그 손실은\n저장한 사람 눈에 안 보인다."
+      },
+      "app__modules__bundles__routes__RunOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "actor": {
+            "type": "string",
+            "title": "Actor"
+          },
+          "source": {
+            "type": "string",
+            "title": "Source",
+            "default": ""
+          },
+          "label": {
+            "type": "string",
+            "title": "Label",
+            "default": ""
+          },
+          "counts": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Counts"
+          },
+          "undoable": {
+            "type": "boolean",
+            "title": "Undoable",
+            "default": true
+          },
+          "undone_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undone At"
+          },
+          "undo_note": {
+            "type": "string",
+            "title": "Undo Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "at",
+          "actor"
+        ],
+        "title": "RunOut",
+        "description": "적용한 한 판 — **되돌릴 자리.**"
+      },
+      "app__modules__datasources__schemas__RunOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "actor_label": {
+            "type": "string",
+            "title": "Actor Label"
+          },
+          "rows_seen": {
+            "type": "integer",
+            "title": "Rows Seen"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "errors": {
+            "items": {},
+            "type": "array",
+            "title": "Errors"
+          },
+          "started_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Started At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "applied",
+          "actor_label",
+          "rows_seen",
+          "counts",
+          "errors",
+          "started_at",
+          "finished_at"
+        ],
+        "title": "RunOut"
       },
       "app__modules__graph__schemas__SearchHitOut": {
         "properties": {

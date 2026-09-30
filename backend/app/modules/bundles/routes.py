@@ -8,6 +8,8 @@
 from __future__ import annotations
 
 import json
+import uuid
+from datetime import datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, Request
@@ -17,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
+from app.modules.bundles import undo
 from app.modules.bundles.schemas import BundleIn
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs import services as job_services
@@ -84,6 +87,80 @@ def import_bundle(
         user=user,
         workspace_id=None,
         input_file=stored,
+    )
+    db.commit()
+    db.refresh(job)
+    return jobs_routes._out(db, job)
+
+
+class RunOut(BaseModel):
+    """적용한 한 판 — **되돌릴 자리.**"""
+
+    id: uuid.UUID
+    at: datetime
+    actor: str
+    source: str = ""
+    label: str = ""
+    counts: dict[str, Any] = Field(default_factory=dict)
+    undoable: bool = True
+    """거짓이면 되돌릴 수 없다 — 이미 되돌렸거나 보관 기간이 지나 기록을 지웠다."""
+    undone_at: datetime | None = None
+    undo_note: str = ""
+
+
+@router.get("/runs", response_model=list[RunOut])
+def list_runs(
+    limit: int = 30,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[RunOut]:
+    """**넣은 판들** — 최근 것부터. 시스템 관리자는 전부, 나머지는 자기가 넣은 것.
+
+    되돌리려면 여기서 번호를 찾는다. 적용한 판만 있다(미리 보기는 아무것도 안 바꾼다).
+    """
+    rows = undo.recent(db, user, limit=max(1, min(limit, 100)))
+    counted = undo.undo_counts(db, [one.id for one in rows])
+    return [
+        RunOut(
+            id=one.id,
+            at=one.at,
+            actor=one.actor_label,
+            source=one.source,
+            label=one.label,
+            counts=dict(one.counts or {}),
+            undoable=one.undone_at is None and counted.get(one.id, 0) > 0,
+            undone_at=one.undone_at,
+            undo_note=one.undo_note,
+        )
+        for one in rows
+    ]
+
+
+@router.post("/runs/{run_id}/undo", response_model=JobOut, status_code=202)
+def undo_run(
+    run_id: uuid.UUID,
+    apply: bool = False,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """그 판을 **통째로 되돌린다** — 작업이 된다.
+
+    기본은 계획이다: 무엇이 지워지고 무엇이 어느 값으로 돌아가는지 줄마다 보여 준다. 사람이
+    읽은 뒤 `POST /api/jobs/{id}/apply`(또는 여기에 `apply=true`) 로 되돌린다. **그 사이
+    남이 고친 줄은 되돌리지 않고 이유를 적는다** — 남의 변경을 조용히 덮지 않는다.
+    """
+    run = undo.find(db, user, run_id)
+    if run.undone_at is not None:
+        raise Conflict(
+            code("BUNDLES", 32),
+            f"이미 되돌린 판입니다({run.undone_at:%Y-%m-%d %H:%M}). {run.undo_note}".strip(),
+        )
+    job = job_services.enqueue(
+        db,
+        kind="bundle_undo",
+        params={"run_id": str(run_id), "apply": apply},
+        user=user,
+        workspace_id=None,
     )
     db.commit()
     db.refresh(job)

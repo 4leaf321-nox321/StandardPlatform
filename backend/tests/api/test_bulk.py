@@ -1156,3 +1156,63 @@ def test_한_파일_안에서도_개수_제약이_선다(client: TestClient, adm
         headers=admin.headers,
     ).json()
     assert ok["applied"] is True, ok
+
+
+def test_한_파일_안의_순환도_계획에서_걸린다(client: TestClient, admin: Signed) -> None:
+    """**계획은 표를 보는데, 파일 안의 선은 표에 없다.**
+
+    개수 제약은 이미 파일 안을 봤지만 순환은 안 봤다 — 세 줄로 고리를 만들면 계획이 「셋 다
+    새로 잇습니다」 라고 말하고, 적용이 마지막 줄에서 터져 **묶음 전체가 롤백**됐다. 사람은
+    통과한 계획을 보고 적용을 눌렀는데 아무것도 안 들어간다.
+    """
+    model = _make_type(client, admin, label="모델", key_policy="required")
+    kind = f"parent_{uuid.uuid4().hex[:6]}"
+    made = client.post(
+        "/api/ontology/import",
+        json={
+            "relation_types": [
+                {
+                    "slug": kind,
+                    "label": "상위",
+                    "src_type_slugs": [model],
+                    "dst_type_slugs": [model],
+                    "acyclic": True,
+                }
+            ]
+        },
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+    tag = uuid.uuid4().hex[:6]
+    client.post(
+        f"/api/objects/{model}/import-rows",
+        json={
+            "rows": [{"key": f"P-{tag}-{n}", "label": f"모델 {n}"} for n in range(3)],
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+
+    looped = [
+        {"src": f"P-{tag}-0", "relation": kind, "dst": f"P-{tag}-1"},
+        {"src": f"P-{tag}-1", "relation": kind, "dst": f"P-{tag}-2"},
+        {"src": f"P-{tag}-2", "relation": kind, "dst": f"P-{tag}-0"},
+    ]
+    plan = client.post(
+        f"/api/objects/{model}/relations/import-rows",
+        json={"rows": looped},
+        headers=admin.headers,
+    ).json()
+    assert [one["action"] for one in plan["rows"]] == ["create", "create", "error"], [
+        (one["action"], one["message"]) for one in plan["rows"]
+    ]
+    assert "순환" in plan["rows"][2]["message"]
+
+    # 고리를 안 만드는 두 줄은 그대로 들어간다.
+    ok = client.post(
+        f"/api/objects/{model}/relations/import-rows",
+        json={"rows": looped[:2], "apply": True},
+        headers=admin.headers,
+    ).json()
+    assert ok["applied"] is True, ok

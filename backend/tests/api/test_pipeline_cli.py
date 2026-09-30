@@ -530,3 +530,40 @@ def test_백필_칸을_실행_폴더에서_켠다(
     assert ok is True, summary
     tools = client.get(f"/api/objects/{names['tool']}", headers=admin.headers).json()
     assert [one["key"] for one in tools["items"]] == ["T-1"]
+
+
+def test_넣은_판을_도구로_되돌린다(
+    client: TestClient, admin: Signed, platform: None, tmp_path: Path
+) -> None:
+    """**백필을 되돌릴 길이 도구에 없었다.**
+
+    수만 줄을 넣은 뒤 원천을 잘못 맞춘 것을 알아도 화면에서 하나씩 고치는 길밖에 없었다.
+    `runs` 가 판 번호를 보여 주고, `undo` 가 그 판만 되돌린다 — 기본은 계획이다.
+    """
+    run = tmp_path / "run"
+    pipeline.cmd_init(run, backfill=True)
+    names = _fill(run, admin.workspace)
+    token = _token(client, admin)
+    assert pipeline.cmd_preview(run, server=SERVER, token=token)[0] is True
+    ok, summary = pipeline.cmd_apply(run, server=SERVER, token=token)
+    assert ok is True, summary
+
+    ok, listed = pipeline.cmd_runs(server=SERVER, token=token)
+    assert ok is True and names["tool"] in listed, listed
+    run_id = next(
+        line.split()[0]
+        for line in listed.splitlines()[1:]
+        if names["tool"] in line or names["company"] in line
+    )
+
+    # 계획 — 아직 그대로다.
+    ok, text = pipeline.cmd_undo(run_id, server=SERVER, token=token)
+    assert ok is True and "계획입니다" in text, text
+    tools = client.get(f"/api/objects/{names['tool']}", headers=admin.headers).json()
+    assert [one["key"] for one in tools["items"]] == ["T-1"]
+
+    # 되돌린다.
+    ok, text = pipeline.cmd_undo(run_id, server=SERVER, token=token, apply=True)
+    assert ok is True and "되돌렸습니다" in text, text
+    tools = client.get(f"/api/objects/{names['tool']}", headers=admin.headers).json()
+    assert tools["items"] == [], tools

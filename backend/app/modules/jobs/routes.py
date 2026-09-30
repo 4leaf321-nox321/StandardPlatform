@@ -333,4 +333,5 @@ def purge_files(
         "files": services.purge_expired_files(db),
         "jobs": services.purge_old_jobs(db),
         "tombstones": services.purge_old_tombstones(db),
+        "undo_journals": services.purge_old_undo_journals(db),
     }

@@ -129,6 +129,9 @@ class BundleOut(BaseModel):
     """묶음 전체에 걸린 오류(권한 등)."""
     snapshot_id: uuid.UUID | None
     """정의를 적용했으면 그 직전의 스냅샷 — 되돌릴 자리."""
+    run_id: uuid.UUID | None = None
+    """적용한 판의 번호 — **이 판을 통째로 되돌리는 자리**다
+    (`POST /bundles/runs/{run_id}/undo`). 미리 보기에는 없다(아무것도 안 바뀐다)."""
     counts: dict[str, int]
 
 

@@ -12,6 +12,7 @@ from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
@@ -98,6 +99,44 @@ def of(db: Session, ids: list[uuid.UUID]) -> dict[uuid.UUID, list[ObjectAlias]]:
         .order_by(ObjectAlias.created_at, ObjectAlias.id)
     ):
         out[row.object_id].append(row)
+    return out
+
+
+def dump(rows: Sequence[ObjectAlias]) -> list[dict[str, Any]]:
+    """별칭 행 → 되돌릴 기록에 담을 모양. **출처 · 메모 · 검수 여부까지** 담는다 —
+    값만 담으면 되돌린 별칭이 「기계가 방금 붙인 것」 으로 되살아나고, 사람이 본 것이
+    다시 검수 대기가 된다."""
+    return [
+        {
+            "value": one.value,
+            "source": one.source or "",
+            "note": one.note or "",
+            "verified": one.verified_at is not None,
+        }
+        for one in rows
+        if one.kind == HUMAN
+    ]
+
+
+def load(dumped: list[Any]) -> list[Incoming]:
+    """`dump` 의 되돌림 — 글자만 있는 옛 기록도 받는다."""
+    out: list[Incoming] = []
+    for one in dumped:
+        if isinstance(one, str):
+            out.append(Incoming(value=one))
+            continue
+        if not isinstance(one, dict):
+            continue
+        value = str(one.get("value") or "").strip()
+        if value:
+            out.append(
+                Incoming(
+                    value=value,
+                    source=str(one.get("source") or ""),
+                    note=str(one.get("note") or ""),
+                    verified=bool(one.get("verified")),
+                )
+            )
     return out
 
 

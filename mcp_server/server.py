@@ -973,6 +973,33 @@ async def bundle_import(ctx: Context, bundle: dict[str, Any]) -> Any:
 
 
 @tool()
+async def bundle_runs(ctx: Context, limit: int = 20) -> Any:
+    """**넣은 판들** — 되돌릴 번호를 여기서 찾는다. 최근 것부터.
+
+    적용한 묶음만 있다(미리 보기는 아무것도 안 바꾼다). `undoable` 이 거짓이면 되돌릴 수
+    없다 — 이미 되돌렸거나 보관 기간(30일)이 지나 기록을 지웠다."""
+    return await _get(ctx, "/api/bundles/runs", {"limit": limit})
+
+
+@tool()
+async def bundle_undo(ctx: Context, run_id: str, apply: bool = False) -> Any:
+    """넣은 판 하나를 **통째로 되돌린다** — 백필이 틀렸을 때의 길.
+
+    **작업이 된다. 기본은 계획이다** — 무엇이 지워지고 무엇이 어느 값으로 돌아가는지 줄마다
+    온다(`delete` · `update` · `create`). 그 계획을 **사람에게 보여 주고 판단을 받은 뒤**
+    `apply=True`(또는 `job_apply(job_id)`) 로 되돌린다. 스스로 되돌리지 않는다 — 되돌리기는
+    남의 하루를 지우는 일일 수 있다.
+
+    되돌리지 않는 줄은 `unchanged` 로 이유가 적혀 온다: 그 사이 남이 고친 줄, 밖에서
+    가리키는 것이 생긴 객체, 합치기(참조를 옮긴 것이라 손으로 되돌린다). 그 목록도 함께
+    사람에게 보여 준다 — 「되돌렸다」 만 말하면 남은 것을 아무도 모른다."""
+    job = await _post(
+        ctx, f"/api/bundles/runs/{run_id}/undo", None, {"apply": str(apply).lower()}
+    )
+    return await _wait_job(ctx, job, JOB_WAIT_MAX)
+
+
+@tool()
 async def relation_add(
     ctx: Context,
     type_slug: str,

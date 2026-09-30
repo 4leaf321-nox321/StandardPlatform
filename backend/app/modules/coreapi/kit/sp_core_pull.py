@@ -11,12 +11,19 @@
     4. 받은 행을 CSV 와 SQLite 에 저장한다(save_rows 를 고치면 자기 DB 로 간다).
     5. 마지막에 온 as_of 를 state.json 에 적어 두고, 다음 실행에서 그대로 돌려준다.
 
-지켜야 할 것 다섯 — 이 파일은 이미 지키고 있다
+지켜야 할 것 여섯 — 이 파일은 이미 지키고 있다
     · as_of 는 서버가 준 값을 그대로 돌려준다(자기 시계로 만들지 않는다)
     · next 가 있으면 as_of 를 저장하지 않는다(끝까지 받은 뒤에만)
     · key 를 저장한다(다음 수신이 수정이 되는 근거)
     · deleted 행은 비활성 처리한다(삭제하지 않는다)
     · 모르는 칸은 무시한다(공개 측이 칸을 추가해도 깨지지 않는다)
+    · reset 이 오면 그 타입을 비우고 처음부터 받는다(아래)
+
+reset 은 무엇인가
+    오래 안 받아 갔으면 서버가 「그 시점부터는 **끊긴 것을 알려 줄 수 없다**」 고 말한다
+    (끊긴 선의 기록은 한동안만 들고 있다). 그때 빈 쪽을 「바뀐 것 없음」 으로 읽으면 이미
+    끊긴 선을 영영 들고 있게 된다 — 그래서 저장한 시각을 버리고, 그 타입의 현재 상태를
+    비우고, 처음부터 다시 받는다. 비우지 않으면 그 사이에 사라진 것이 그대로 남는다.
 """
 from __future__ import annotations
 
@@ -244,14 +251,34 @@ def save_relations(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any
         db.close()
 
 
+def forget(cfg: dict[str, Any], table: str) -> None:
+    """그 표의 **현재 상태를 비운다** — 처음부터 다시 받기 전에.
+
+    CSV(수신 이력)는 그대로 둔다. 「무엇이 언제 왔나」 는 지우면 안 되는 기록이고, 현재
+    상태는 SQLite 쪽이다 — 비우지 않으면 그 사이에 사라진 행 · 선이 영영 남는다.
+    """
+    path = cfg["out_dir"] / "sp_core.sqlite"
+    if not path.exists():
+        return
+    db = sqlite3.connect(path)
+    try:
+        db.execute(f'DELETE FROM "{table}"')
+        db.commit()
+    except sqlite3.OperationalError:
+        # 아직 만들지도 않은 표다 — 비울 것이 없다.
+        pass
+    finally:
+        db.close()
+
+
 def pull_relations(
     cfg: dict[str, Any], type_slug: str, state: dict[str, str]
 ) -> dict[str, int]:
-    """그 타입에서 출발하는 선 — 객체와 **같은 규칙**(since · next · as_of)."""
+    """그 타입에서 출발하는 선 — 객체와 **같은 규칙**(since · next · as_of · reset)."""
     mark = f"{type_slug}#relations"
     since = state.get(mark, "")
     cursor: str | None = None
-    counts = {"rows": 0, "deleted": 0, "pages": 0}
+    counts = {"rows": 0, "deleted": 0, "pages": 0, "reset": 0}
     while True:
         params: dict[str, Any] = {"limit": cfg["page_size"]}
         if since:
@@ -259,6 +286,20 @@ def pull_relations(
         if cursor:
             params["cursor"] = cursor
         body = request_json(cfg, f"/core/{type_slug}/relations", params)
+        if body.get("reset"):
+            # **처음부터 다시 받으라는 말이다.** 빈 쪽을 「바뀐 것 없음」 으로 읽으면 이미
+            # 끊긴 선을 영영 들고 있는다.
+            if counts["reset"]:
+                sys.exit(
+                    f"{type_slug} 관계: since 를 비웠는데도 reset 이 옵니다 — "
+                    f"공개 측에 문의하세요: {body.get('reset_reason') or ''}"
+                )
+            print(f"    처음부터 다시 받습니다 — {body.get('reset_reason') or 'reset'}")
+            forget(cfg, f"{type_slug}__relations")
+            state.pop(mark, None)
+            since, cursor = "", None
+            counts["reset"] = 1
+            continue
         items = body.get("items") or []
         save_relations(cfg, type_slug, items)
         counts["rows"] += len(items)
@@ -275,7 +316,7 @@ def pull_relations(
 def pull_type(cfg: dict[str, Any], type_slug: str, state: dict[str, str]) -> dict[str, int]:
     since = state.get(type_slug, "")
     cursor: str | None = None
-    counts = {"rows": 0, "deleted": 0, "pages": 0}
+    counts = {"rows": 0, "deleted": 0, "pages": 0, "reset": 0}
     while True:
         params: dict[str, Any] = {"limit": cfg["page_size"]}
         if since:
@@ -283,6 +324,20 @@ def pull_type(cfg: dict[str, Any], type_slug: str, state: dict[str, str]) -> dic
         if cursor:
             params["cursor"] = cursor
         body = request_json(cfg, f"/core/{type_slug}", params)
+        if body.get("reset"):
+            # 오늘은 선 쪽만 이 말을 하지만, **말이 오면 따른다** — 나중에 객체 쪽이
+            # 같은 말을 하기 시작할 때 받는 쪽을 고치러 다니지 않는다.
+            if counts["reset"]:
+                sys.exit(
+                    f"{type_slug}: since 를 비웠는데도 reset 이 옵니다 — "
+                    f"공개 측에 문의하세요: {body.get('reset_reason') or ''}"
+                )
+            print(f"    처음부터 다시 받습니다 — {body.get('reset_reason') or 'reset'}")
+            forget(cfg, type_slug)
+            state.pop(type_slug, None)
+            since, cursor = "", None
+            counts["reset"] = 1
+            continue
         items = body.get("items") or []
         save_rows(cfg, type_slug, items)
         counts["rows"] += len(items)
@@ -324,12 +379,14 @@ def main() -> int:
         print(
             f"  {type_slug}: {counts['rows']}건 수신"
             f"(삭제 {counts['deleted']}) · {counts['pages']}페이지"
+            + (" · 처음부터 다시 받음" if counts["reset"] else "")
         )
         if has_relations.get(type_slug):
             edges = pull_relations(cfg, type_slug, state)
             print(
                 f"  {type_slug} 관계: {edges['rows']}건 수신"
                 f"(끊김 {edges['deleted']}) · {edges['pages']}페이지"
+                + (" · 처음부터 다시 받음" if edges["reset"] else "")
             )
         save_state(cfg, state)
     print(f"저장 위치: {cfg['out_dir'].resolve()}")

@@ -262,6 +262,40 @@ def test_심장박동이_멎은_작업은_되돌리고_시도가_다하면_실�
     assert gave_up.error is not None and "3번" in gave_up.error
 
 
+def test_살아_있는_워커의_작업은_안_빼앗는다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """**같은 백필이 두 벌 돌던 자리다.**
+
+    작업의 박동은 진행 보고가 올려 준다 — 말없이 오래 걸리는 단계(수만 줄 커밋)가 5분을
+    넘으면 그 박동이 멎은 것처럼 보이고, 다른 워커가 그 작업을 집어 처음부터 다시 돌렸다.
+    워커 자신의 박동이 아직 뛰고 그 작업을 쥐고 있으면 **늦은 것이지 죽은 것이 아니다.**
+    """
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    job = _submit(client, admin, part, "key,label\nP-1,볼트\n")
+    job_id = uuid.UUID(job["id"])
+
+    # 워커는 살아 있고 이 작업을 쥐고 있다 — 작업의 박동만 오래됐다.
+    services.heartbeat("slow-worker", job_id)
+    db.execute(
+        update(Job)
+        .where(Job.id == job_id)
+        .values(
+            status="running",
+            worker_id="slow-worker",
+            attempts=1,
+            heartbeat_at=datetime.now(UTC) - timedelta(hours=1),
+        )
+    )
+    db.commit()
+
+    services.recover_stale(db)
+    db.expire_all()
+    still = db.scalar(select(Job).where(Job.id == job_id))
+    assert still is not None, "작업이 사라졌다"
+    assert still.status == "running" and still.worker_id == "slow-worker", still.status
+
+
 def test_너무_큰_파일은_넣는_순간_거절한다(
     client: TestClient, admin: Signed, monkeypatch: Any
 ) -> None:

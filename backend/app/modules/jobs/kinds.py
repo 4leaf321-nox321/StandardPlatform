@@ -27,6 +27,7 @@ from app.config import get_settings
 from app.modules.accounts.models import User
 from app.modules.bundles import export as bundle_export_service
 from app.modules.bundles import services as bundle_services
+from app.modules.bundles import undo as bundle_undo_service
 from app.modules.bundles.schemas import BundleIn
 from app.modules.jobs import files
 from app.modules.jobs.models import Job, JobFile
@@ -287,6 +288,42 @@ def bundle_import(work: Work) -> dict[str, Any]:
     return out
 
 
+def bundle_undo(work: Work) -> dict[str, Any]:
+    """묶음 한 판을 **통째로 되돌린다** — 계획 → 사람 확정 → 적용, 다른 일괄 작업과 같다.
+
+    수만 줄짜리 판을 요청 안에서 되돌리면 클라이언트가 먼저 끊는다. 그래서 작업이다.
+    지문이 안 맞으면 여기서 오류를 내고, 그러면 `services.run` 이 롤백한다 — 되돌리기도
+    전부 아니면 무다.
+    """
+    raw = str(work.params.get("run_id") or "")
+    try:
+        run_id = uuid.UUID(raw)
+    except ValueError:
+        raise Conflict(code("BUNDLES", 33), f"되돌릴 판의 번호가 아닙니다: {raw!r}") from None
+    user = _user(work)
+    run = bundle_undo_service.find(work.db, user, run_id)
+    outcome = bundle_undo_service.run_undo(
+        work.db, user, run, apply=bool(work.params.get("apply")), on_progress=work.progress
+    )
+    out = _plan_result(outcome.plan, applied=outcome.applied)
+    wanted = work.params.get("fingerprint")
+    if wanted and out["fingerprint"] != wanted:
+        raise Conflict(
+            code("JOBS", 20),
+            "미리 본 것과 달라졌습니다 — 그 사이에 누군가 바꿨습니다. 아무것도 되돌리지 "
+            "않았으니 다시 미리 보고 되돌리세요.",
+        )
+    out.update(
+        {
+            "ok": outcome.ok,
+            "run_id": str(run.id),
+            "ran_at": run.at.isoformat(),
+            "label": run.label,
+        }
+    )
+    return out
+
+
 def bundle_export(work: Work) -> dict[str, Any]:
     wanted = [str(one) for one in (work.params.get("groups") or []) if str(one).strip()]
     if not wanted:
@@ -502,6 +539,7 @@ def webhook_dispatch(work: Work) -> dict[str, Any]:
 register(Kind("objects_import", "객체 일괄 입력", True, True, objects_import, True))
 register(Kind("relations_import", "관계 일괄 입력", True, True, relations_import))
 register(Kind("bundle_import", "묶음 가져오기", True, True, bundle_import))
+register(Kind("bundle_undo", "묶음 되돌리기", False, True, bundle_undo))
 register(Kind("bundle_export", "묶음 내보내기", False, False, bundle_export))
 register(Kind("objects_export", "객체 내보내기", False, False, objects_export))
 register(Kind("ontology_export", "온톨로지 통째로 내보내기", False, False, ontology_export))
