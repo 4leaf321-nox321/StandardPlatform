@@ -242,6 +242,10 @@ def test_가이드는_서버가_쥔다() -> None:
     modeling = asyncio.run(server.get_guide(_ctx(None), topic="modeling"))
     assert "plm-core.json" in modeling["content"] and "work-core.json" in modeling["content"]
 
+    # 인터페이스(ADR 0006) — 같은 개념을 여러 타입이 따로 적지 않게, 정의를 바꾸는 AI 가 안다.
+    schema = asyncio.run(server.get_guide(_ctx(None), topic="schema"))
+    assert "interface_slugs" in schema["content"] and "parent_slug" in schema["content"]
+
     bulk = asyncio.run(server.get_guide(_ctx(None), topic="bulk"))
     assert bulk["topic"] == "bulk" and "upsert" in bulk["content"]
     # 지우는 모드와 검수는 **가이드에 적혀 있어야** AI 가 묻기 전에 안다.

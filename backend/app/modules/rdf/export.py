@@ -6,10 +6,13 @@
 | --- | --- |
 | 타입 · 인터페이스 | `owl:Class` (+ 구현 · 상위 인터페이스는 `rdfs:subClassOf`) |
 | 속성 정의(문자 · 숫자 · 날짜 · 선택값 …) | `owl:DatatypeProperty` + `rdfs:range` xsd 형 |
+| 공통 속성(인터페이스) | 같은 모양, domain 은 인터페이스 — |
+|  | 구현 타입의 속성은 그 `rdfs:subPropertyOf` |
 | 참조 속성(`object_ref`) | `owl:ObjectProperty` + `rdfs:range` 대상 타입, 역방향 inverseOf |
 | 관계 종류 | `owl:ObjectProperty` + domain/range(허용 타입이 하나일 때), 이행 → Transitive, |
 |  | 무방향 → Symmetric, 역방향 이름 → `owl:inverseOf` |
-| 객체 | 개체(`rdf:type` 타입), `rdfs:label` 이름, `dcterms:identifier` 식별자, 별칭 altLabel |
+| 객체 | 개체(`rdf:type` 타입 + 구현 인터페이스), `rdfs:label` 이름, |
+|  | `dcterms:identifier` 식별자, 별칭 altLabel |
 | 값 · 관계 | 트리플 |
 
 ## IRI
@@ -33,6 +36,7 @@ from sqlalchemy.orm import Session
 from app.modules.objects import aliases
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.objects.services import properties_of
+from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef, RelationType
 
 XSD_OF: dict[str, URIRef] = {
@@ -114,6 +118,13 @@ def schema_graph(db: Session, names: Names) -> Graph:
         for up in iface.extends_slugs or []:
             if up in known_ifaces:
                 graph.add((cls, RDFS.subClassOf, names.type_(up)))
+        for prop in db.scalars(
+            select(PropertyDef)
+            .where(PropertyDef.owner_kind == "interface", PropertyDef.owner_id == iface.id)
+            .order_by(PropertyDef.sort_order, PropertyDef.key)
+        ):
+            _add_property(graph, names, iface.slug, prop)
+    catalog = interfaces.load(db)
 
     types = list(
         db.scalars(select(ObjectType).order_by(ObjectType.sort_order, ObjectType.slug))
@@ -128,7 +139,11 @@ def schema_graph(db: Session, names: Names) -> Graph:
             if iface_slug in known_ifaces:
                 graph.add((cls, RDFS.subClassOf, names.type_(iface_slug)))
         for prop in properties_of(db, row.id):
-            _add_property(graph, names, row, prop)
+            _add_property(graph, names, row.slug, prop)
+        # **타입의 속성은 공통 속성의 하위 속성이다** — 같은 키라도 IRI 는 타입마다라
+        # (`<타입>.<키>`), 이것이 있어야 「설비의 제조사」 를 구현 타입 전부에서 묻는다.
+        for key, owner in interfaces.bound_keys(catalog, row.slug).items():
+            graph.add((names.prop(row.slug, key), RDFS.subPropertyOf, names.prop(owner, key)))
 
     relations = list(db.scalars(select(RelationType).order_by(RelationType.slug)))
     for rel in relations:
@@ -136,10 +151,11 @@ def schema_graph(db: Session, names: Names) -> Graph:
     return graph
 
 
-def _add_property(graph: Graph, names: Names, row: ObjectType, prop: PropertyDef) -> None:
-    node = names.prop(row.slug, prop.key)
+def _add_property(graph: Graph, names: Names, owner_slug: str, prop: PropertyDef) -> None:
+    """타입의 속성이든 인터페이스의 공통 속성이든 같은 모양으로 — 주인이 domain 이다."""
+    node = names.prop(owner_slug, prop.key)
     graph.add((node, RDFS.label, Literal(prop.label, lang="ko")))
-    graph.add((node, RDFS.domain, names.type_(row.slug)))
+    graph.add((node, RDFS.domain, names.type_(owner_slug)))
     if prop.help:
         graph.add((node, RDFS.comment, Literal(prop.help, lang="ko")))
     if prop.data_type == "object_ref":
@@ -150,7 +166,7 @@ def _add_property(graph: Graph, names: Names, row: ObjectType, prop: PropertyDef
             # 참조 칸은 「칸에 저장한 많대일 관계」 — 하나만 가리킨다.
             graph.add((node, RDF.type, OWL.FunctionalProperty))
         if prop.inverse_label:
-            inverse = names.prop_inverse(row.slug, prop.key)
+            inverse = names.prop_inverse(owner_slug, prop.key)
             graph.add((inverse, RDF.type, OWL.ObjectProperty))
             graph.add((inverse, RDFS.label, Literal(prop.inverse_label, lang="ko")))
             graph.add((inverse, OWL.inverseOf, node))
@@ -193,8 +209,21 @@ def data_graph(db: Session, names: Names, type_slugs: list[str] | None = None) -
     _bind(graph, names)
 
     types = {row.id: row for row in db.scalars(select(ObjectType))}
-    wanted = {row.id for row in types.values() if not type_slugs or row.slug in type_slugs}
+    catalog = interfaces.load(db)
+    extends_of = catalog.extends_of()
+    # 인터페이스 slug 로 고르면 **구현 타입 전부**다(ADR 0006).
+    chosen = set(type_slugs or [])
+    for slug in list(chosen):
+        if slug in catalog.interfaces:
+            chosen |= set(interfaces.implementers(catalog, slug))
+    wanted = {row.id for row in types.values() if not type_slugs or row.slug in chosen}
     props_of = {row.id: properties_of(db, row.id) for row in types.values()}
+    #: 객체가 무엇이기도 한가 — 타입이 구현한 인터페이스(상위까지). **직접 싣는다**: 추론
+    #: 없이도 `?x a sp:<인터페이스>` 가 답하게(추론은 트리플 상한이 있다).
+    kinds_of = {
+        row.id: interfaces.closure(row.interface_slugs or [], extends_of)
+        for row in types.values()
+    }
 
     stmt = select(ObjectInstance).where(
         ObjectInstance.deleted_at.is_(None), ObjectInstance.merged_into_id.is_(None)
@@ -217,6 +246,8 @@ def data_graph(db: Session, names: Names, type_slugs: list[str] | None = None) -
         object_type = types[row.type_id]
         node = iri_of[row.id]
         graph.add((node, RDF.type, names.type_(object_type.slug)))
+        for iface_slug in kinds_of[row.type_id]:
+            graph.add((node, RDF.type, names.type_(iface_slug)))
         graph.add((node, RDFS.label, Literal(row.label, lang="ko")))
         if row.key:
             graph.add((node, DCTERMS.identifier, Literal(row.key)))

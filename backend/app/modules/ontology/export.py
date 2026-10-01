@@ -37,8 +37,14 @@ from app.modules.objects import bulk, refedges
 from app.modules.objects.bulk import MULTI_SEP
 from app.modules.objects.models import ObjectInstance
 from app.modules.objects.services import properties_of
-from app.modules.ontology import importer
-from app.modules.ontology.models import NavGroup, ObjectType, PropertyDef, RelationType
+from app.modules.ontology import importer, interfaces
+from app.modules.ontology.models import (
+    NavGroup,
+    ObjectInterface,
+    ObjectType,
+    PropertyDef,
+    RelationType,
+)
 from app.modules.workspaces.models import Workspace
 from app.shared.errors import AppError
 from app.shared.permissions import visible_owner_clause
@@ -58,7 +64,17 @@ MAX_TYPE_SHEETS = 1000
 MAX_DATA_ROWS = 50_000
 
 #: 구조 시트의 이름. 데이터까지 낼 때는 이것만 남기고 **타입 시트를 객체 행으로 바꾼다.**
-STRUCTURE_SHEETS = ("개요", "묶음", "타입", "속성", "관계 종류", "관계 속성", "참조 칸")
+STRUCTURE_SHEETS = (
+    "개요",
+    "묶음",
+    "인터페이스",
+    "공통 속성",
+    "타입",
+    "속성",
+    "관계 종류",
+    "관계 속성",
+    "참조 칸",
+)
 
 #: (단계, 처리한 수, 전체). 워커가 진행률을 표에 쓴다. 없으면 조용히.
 Progress = Callable[[str, int, int], None] | None
@@ -127,6 +143,12 @@ def _property_row(one: PropertyDef) -> list[Any]:
 def pages(db: Session) -> list[Page]:
     """엑셀에 담을 표 전부."""
     groups = list(db.scalars(select(NavGroup).order_by(NavGroup.sort_order, NavGroup.label)))
+    ifaces = list(
+        db.scalars(
+            select(ObjectInterface).order_by(ObjectInterface.sort_order, ObjectInterface.label)
+        )
+    )
+    catalog = interfaces.load(db)
     types = list(
         db.scalars(select(ObjectType).order_by(ObjectType.sort_order, ObjectType.label))
     )
@@ -151,12 +173,16 @@ def pages(db: Session) -> list[Page]:
     }
     edges = refedges.kinds(db)
     type_props = {one.id: props.get(one.id, []) for one in types}
+    iface_props = {one.id: props.get(one.id, []) for one in ifaces}
+    #: 타입의 속성 중 공통 속성인 것 — 어느 인터페이스가 정했나(모양은 거기서 고친다).
+    bound = {one.slug: interfaces.bound_keys(catalog, one.slug) for one in types}
     relation_props = {one.id: props.get(one.id, []) for one in relation_types}
     shown = types[:MAX_TYPE_SHEETS]
 
     overview: list[list[Any]] = [
         ["내보낸 때", datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC")],
         ["사이드바 묶음", len(groups)],
+        ["인터페이스", len(ifaces)],
         ["타입", len(types)],
         ["속성", sum(len(one) for one in type_props.values())],
         ["관계 종류", len(relation_types)],
@@ -173,11 +199,12 @@ def pages(db: Session) -> list[Page]:
         Page("개요", ["항목", "값"], overview),
         Page(
             "묶음",
-            ["slug", "이름", "아이콘", "대상", "순서", "쓰임", "타입 수"],
+            ["slug", "이름", "상위 묶음", "아이콘", "대상", "순서", "쓰임", "타입 수"],
             [
                 [
                     one.slug,
                     one.label,
+                    one.parent_slug or "",
                     one.icon,
                     one.audience,
                     one.sort_order,
@@ -185,6 +212,40 @@ def pages(db: Session) -> list[Page]:
                     sum(1 for t in types if t.nav_group_id == one.id),
                 ]
                 for one in groups
+            ],
+        ),
+        # **인터페이스는 타입 앞에** — 타입이 그것을 구현한다(가져오기와 같은 차례).
+        Page(
+            "인터페이스",
+            [
+                "slug",
+                "이름",
+                "상위 인터페이스",
+                "구현 타입",
+                "공통 속성 수",
+                "관리 주체",
+                "설명",
+            ],
+            [
+                [
+                    one.slug,
+                    one.label,
+                    _joined(one.extends_slugs),
+                    _joined(interfaces.implementers(catalog, one.slug)),
+                    len(iface_props[one.id]),
+                    one.managed_by,
+                    one.description,
+                ]
+                for one in ifaces
+            ],
+        ),
+        Page(
+            "공통 속성",
+            ["인터페이스", "인터페이스 이름", *PROPERTY_HEADER],
+            [
+                [one.slug, one.label, *_property_row(definition)]
+                for one in ifaces
+                for definition in iface_props[one.id]
             ],
         ),
         Page(
@@ -229,9 +290,14 @@ def pages(db: Session) -> list[Page]:
         ),
         Page(
             "속성",
-            ["타입", "타입 이름", *PROPERTY_HEADER],
+            ["타입", "타입 이름", *PROPERTY_HEADER, "공통 속성"],
             [
-                [one.slug, one.label, *_property_row(definition)]
+                [
+                    one.slug,
+                    one.label,
+                    *_property_row(definition),
+                    bound[one.slug].get(definition.key, ""),
+                ]
                 for one in types
                 for definition in type_props[one.id]
             ],

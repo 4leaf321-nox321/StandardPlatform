@@ -95,13 +95,15 @@ def test_정의와_데이터가_OWL_RDF_로_나가고_추론이_된다(
     assert (iri_m1, RDF.type, cls_model) in data
     assert (iri_m1, ref, iri_t2) in data
     assert (iri_t1, rel, iri_t2) in data and (iri_t2, rel, iri_t3) in data
-    # 저장된 것만 — 추론은 여기 없다.
-    assert (iri_m1, RDF.type, cls_product) not in data
+    # 구현한 인터페이스는 **직접 실린다** — 추론 없이도 「제품인 것 전부」 가 답한다(ADR 0006).
+    assert (iri_m1, RDF.type, cls_product) in data
+    # 이행은 저장된 것만 — 추론은 여기 없다.
     assert (iri_t1, rel, iri_t3) not in data
 
     inferred = _turtle(client, admin, f"/api/rdf/inferred?type={model}&type={task}")
-    # 상속: 개발모델이면 제품이다. 역관계: 과제 2 의 개발모델은 모델 A. 이행: 1 → 3.
-    assert (iri_m1, RDF.type, cls_product) in inferred
+    # 역관계: 과제 2 의 개발모델은 모델 A. 이행: 1 → 3.
+    # (제품인 것은 이미 실려 있어 추론이 되풀이하지 않는다.)
+    assert (iri_m1, RDF.type, cls_product) not in inferred
     assert (iri_t2, URIRef(f"{ns}{model}.task.inverse"), iri_m1) in inferred
     assert (iri_t1, rel, iri_t3) in inferred
     assert (iri_m1, RDF.type, cls_model) not in inferred  # 이미 있던 것은 안 되풀이한다
@@ -145,3 +147,77 @@ def test_상위_타입은_없어졌다_이유를_말하고_거절한다(
     }
     assert "parent_slug" not in types[a]
     assert types[a]["interface_slugs"] == []
+
+
+def test_인터페이스는_클래스이고_공통_속성은_구현_타입_속성의_상위다(
+    client: TestClient, admin: Signed
+) -> None:
+    """**추론 없이도** 「설비인 것 전부」 와 「설비의 제조사」 가 답한다 — 객체에 인터페이스
+    `rdf:type` 이 직접 실리고, 타입의 속성은 공통 속성의 `rdfs:subPropertyOf` 다(ADR 0006)."""
+    equip = _uniq("equip")
+    client.post(
+        "/api/ontology/interfaces",
+        json={"slug": equip, "label": "설비"},
+        headers=admin.headers,
+    ).raise_for_status()
+    client.post(
+        f"/api/ontology/interfaces/{equip}/properties",
+        json={"key": "maker", "label": "제조사", "data_type": "text"},
+        headers=admin.headers,
+    ).raise_for_status()
+    tester = _make_type(client, admin, label="시험장비", interface_slugs=[equip])
+    meter = _make_type(client, admin, label="계측기", interface_slugs=[equip])
+    _make_object(client, admin, tester, label="시험기 1", properties={"maker": "A사"})
+    _make_object(client, admin, meter, label="계측기 1", properties={"maker": "B사"})
+
+    ns = "http://testserver/ns#"
+    schema = _turtle(client, admin, "/api/rdf/schema")
+    assert (URIRef(ns + equip), RDF.type, OWL.Class) in schema
+    assert (URIRef(f"{ns}{equip}.maker"), RDFS.domain, URIRef(ns + equip)) in schema
+    for kind in (tester, meter):
+        assert (URIRef(ns + kind), RDFS.subClassOf, URIRef(ns + equip)) in schema
+        assert (
+            URIRef(f"{ns}{kind}.maker"),
+            RDFS.subPropertyOf,
+            URIRef(f"{ns}{equip}.maker"),
+        ) in schema
+
+    # 인터페이스 slug 로 고르면 구현 타입 전부 — 추론 없이 `a sp:<인터페이스>`.
+    asked = client.post(
+        "/api/rdf/query",
+        json={
+            "query": (
+                f"PREFIX sp: <{ns}>\n"
+                "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+                "SELECT ?name ?maker WHERE { "
+                f"?x a sp:{equip} ; rdfs:label ?name ; ?p ?maker . "
+                f"?p rdfs:subPropertyOf sp:{equip}.maker }} ORDER BY ?name"
+            ),
+            "types": [equip],
+        },
+        headers=admin.headers,
+    )
+    assert asked.status_code == 200, asked.text
+    rows = asked.json()["rows"]
+    assert [(str(one["name"]), str(one["maker"])) for one in rows] == [
+        ("계측기 1", "B사"),
+        ("시험기 1", "A사"),
+    ]
+
+    # **이름을 바꾸면 다음 질의가 새 이름을 본다** — 캐시 판에 인터페이스가 들어 있다.
+    client.patch(
+        f"/api/ontology/interfaces/{equip}", json={"label": "장비"}, headers=admin.headers
+    ).raise_for_status()
+    renamed = client.post(
+        "/api/rdf/query",
+        json={
+            "query": (
+                f"PREFIX sp: <{ns}>\n"
+                "PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>\n"
+                f"SELECT ?label WHERE {{ sp:{equip} rdfs:label ?label }}"
+            ),
+            "types": [equip],
+        },
+        headers=admin.headers,
+    )
+    assert [str(one["label"]) for one in renamed.json()["rows"]] == ["장비"]

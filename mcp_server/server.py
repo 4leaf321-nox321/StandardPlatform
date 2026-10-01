@@ -444,10 +444,12 @@ async def search(
 # --------------------------------------------------------------------------- #
 @tool()
 async def ontology_schema(ctx: Context) -> Any:
-    """이 설치의 **정의 전부** — 묶음·타입·속성·관계 종류.
+    """이 설치의 **정의 전부** — 묶음·인터페이스·타입·속성·관계 종류.
 
     무엇을 만들 수 있고 각 타입이 어떤 값을 받는지가 여기 다 있다. **다른 도구를
-    부르기 전에 이것부터 읽는다.**"""
+    부르기 전에 이것부터 읽는다.** 인터페이스는 여러 타입이 따르는 공통 모양이다 —
+    타입의 `interface_slugs` 가 구현이고, 속성의 `interface_slug` 가 붙어 있으면 공통
+    속성이다."""
     return await _get(ctx, "/api/ontology/schema")
 
 
@@ -463,7 +465,10 @@ async def ontology_import(
     생기고, 무엇이 바뀌고, **무엇을 조용히 잃는지**(경고). 사람이 그 계획을 읽고
     판단할 자리다.
 
-    더하고 고치기만 한다. **스키마에 없다고 지우지 않는다.**"""
+    더하고 고치기만 한다. **스키마에 없다고 지우지 않는다.** 여러 타입이 같은 개념이면
+    `interfaces` 에 공통 속성을 적고 타입이 `interface_slugs` 로 구현한다 — 모양이 다른
+    같은 키가 있으면 `errors` 가 무엇이 다른지 말한다(짐작으로 맞추지 말고 사람에게 보인다).
+    자세한 것은 `get_guide("schema")`."""
     return await _post(
         ctx,
         "/api/ontology/import",
@@ -1161,8 +1166,9 @@ async def rdf_schema(ctx: Context) -> str:
     """이 설치의 정의를 **OWL(Turtle)** 로 — 클래스 · 속성 · 관계와 그 뜻.
 
     `rdf_query` 를 쓰기 전에 읽는다. 여기서 클래스 이름(`sp:<타입slug>`) · 속성
-    (`sp:<타입>.<속성키>`) · 관계(`sp:rel.<관계slug>`)와 상속(`rdfs:subClassOf`) ·
-    역관계(`owl:inverseOf`) · 이행(`owl:TransitiveProperty`)을 확인한다."""
+    (`sp:<타입>.<속성키>`) · 관계(`sp:rel.<관계slug>`)와 인터페이스 구현(`rdfs:subClassOf`,
+    공통 속성은 `rdfs:subPropertyOf`) · 역관계(`owl:inverseOf`) ·
+    이행(`owl:TransitiveProperty`)을 확인한다."""
     async with _client(60) as client:
         response = await client.get(
             "/api/rdf/schema", params={"format": "ttl"}, headers=_forward_headers(ctx)

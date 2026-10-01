@@ -8,9 +8,11 @@
 
 from __future__ import annotations
 
+import io
 from typing import Any
 
 from fastapi.testclient import TestClient
+from openpyxl import load_workbook
 from sqlalchemy.orm import Session
 
 from app.modules.ontology.models import OntologySnapshot
@@ -525,3 +527,30 @@ def test_인터페이스에서_고를_값_이름을_바꾸면_구현_타입_전�
         got = client.get(f"/api/objects/{kind}/{made['id']}", headers=admin.headers).json()
         assert got["object"]["properties"]["country"] == "한국"
         assert _props(client, admin, kind)["country"]["enum_options"] == ["한국", "US"]
+
+
+def test_정의_엑셀에_인터페이스와_공통_속성이_실린다(
+    client: TestClient, admin: Signed
+) -> None:
+    """회의에 들고 가는 것은 표다 — 어느 속성이 공통 속성인지 표에서 보여야 한다."""
+    iface = _make_interface(client, admin)
+    _add_common(client, admin, iface, **COUNTRY).raise_for_status()
+    kind = _make_type(client, admin, interface_slugs=[iface])
+
+    got = client.get("/api/ontology/export?format=xlsx", headers=admin.headers)
+    assert got.status_code == 200, got.text
+    book = load_workbook(io.BytesIO(got.content), read_only=True)
+    names = book.sheetnames
+    assert names.index("묶음") < names.index("인터페이스") < names.index("타입")
+
+    ifaces = {row[0]: row for row in book["인터페이스"].iter_rows(min_row=2, values_only=True)}
+    assert ifaces[iface][3] == kind  # 구현 타입
+    common = [row for row in book["공통 속성"].iter_rows(min_row=2, values_only=True)]
+    assert (iface, "country") in {(row[0], row[2]) for row in common}
+
+    header = next(book["속성"].iter_rows(max_row=1, values_only=True))
+    assert header[-1] == "공통 속성"
+    bound = [
+        row for row in book["속성"].iter_rows(min_row=2, values_only=True) if row[0] == kind
+    ]
+    assert [(row[2], row[-1]) for row in bound] == [("country", iface)]
