@@ -8,6 +8,7 @@
  * - 인터페이스 목록의 열에는 「타입」 이 있고, 트리 · 필터 칸은 없다(서버가 받는 범위와 같다).
  * - 관계 종류의 끝에 인터페이스를 고를 수 있고, 구현한 타입이 없는 것을 고르면 그 자리에서
  *   「아무것도 못 잇는다」 고 말한다.
+ * - 참조 속성의 대상이 인터페이스면 그것을 구현한 타입 전부에서 고른다고 적는다.
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -264,5 +265,29 @@ describe('관계 종류의 끝에 인터페이스', () => {
         expect.objectContaining({ slug: 'calibrates', dst_type_slugs: ['equip'] }),
       ),
     )
+  })
+})
+
+describe('참조 대상에 인터페이스', () => {
+  it('대상이 인터페이스면 구현한 타입 전부에서 고른다고 적는다', async () => {
+    const { PropertyEditDialog } = await import('@/modules/ontology/PropertyEditDialog')
+    render(
+      <PropertyEditDialog
+        owner={{ kind: 'type', row: TYPE as never }}
+        property={{
+          ...COUNTRY,
+          key: 'equipment',
+          label: '사용 설비',
+          data_type: 'object_ref',
+          enum_options: [],
+          ref_type_slug: 'equip',
+        }}
+        types={[TYPE as never]}
+        interfaces={[{ ...IFACE, implementers: ['tester'] }]}
+        onClose={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    )
+    expect(screen.getByText(/구현한 타입 전부의 객체에서 고릅니다/)).toBeInTheDocument()
   })
 })

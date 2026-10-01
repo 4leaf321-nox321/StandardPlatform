@@ -147,6 +147,7 @@ export default function OntologyInterfacesPage() {
             owner={{ kind: 'interface', row: propertyTarget }}
             properties={propertyTarget.properties}
             types={types}
+            interfaces={interfaces}
             onChanged={reload}
             readOnly={Boolean(propertyTarget.managed_by)}
           />

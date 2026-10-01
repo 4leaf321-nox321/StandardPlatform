@@ -45,12 +45,12 @@ const PROFILE = {
   watcher_count: 0,
 }
 
-async function open(profile: object) {
+async function open(profile: object, at = '/o/part/bolt') {
   objectApi.profile.mockResolvedValue(profile)
   ontologyApi.schema.mockResolvedValue({ types: [{ slug: 'part', label: '부품' }] })
   const { default: ObjectProfilePage } = await import('@/modules/objects/ObjectProfilePage')
   render(
-    <MemoryRouter initialEntries={['/o/part/bolt']}>
+    <MemoryRouter initialEntries={[at]}>
       <Routes>
         <Route path="/o/:typeSlug/:objectId" element={<ObjectProfilePage />} />
       </Routes>
@@ -75,5 +75,17 @@ describe('알림 구독', () => {
     const button = await screen.findByRole('button', { name: /지켜보는 중/ })
     expect(button).toHaveAttribute('aria-pressed', 'true')
     expect(button).toHaveTextContent('3')
+  })
+})
+
+describe('인터페이스 주소로 연 상세', () => {
+  it('객체의 실제 타입 주소로 옮겨 그 타입으로 고친다', async () => {
+    objectApi.setWatch.mockResolvedValue({ watching: true, watcher_count: 1 })
+    // 「설비」 를 가리키는 칸에서 누르면 /o/<인터페이스>/<id> 가 된다.
+    await open(PROFILE, '/o/equip/bolt')
+    const button = await screen.findByRole('button', { name: /알림 구독/ })
+    expect(objectApi.profile).toHaveBeenLastCalledWith('part', 'bolt')
+    await userEvent.click(button)
+    await waitFor(() => expect(objectApi.setWatch).toHaveBeenCalledWith('part', 'bolt', true))
   })
 })

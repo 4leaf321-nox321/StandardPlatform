@@ -199,8 +199,25 @@ class PendingRef(Exception):
         self.type_slug = type_slug
 
 
+@dataclass
+class _RefIndex:
+    """한 참조 대상(타입, 또는 인터페이스의 구현 타입 전부)의 식별자 · 별칭 · 이름 → id."""
+
+    by_key: dict[str, uuid.UUID] = field(default_factory=dict)
+    by_alias: dict[str, uuid.UUID] = field(default_factory=dict)
+    by_label: dict[str, list[uuid.UUID]] = field(default_factory=dict)
+    ids: set[str] = field(default_factory=set)
+    clashing: set[str] = field(default_factory=set)
+    """**두 구현 타입에 같은 식별자**가 있다 — 식별자는 타입마다 따로라 그 글자만으로는 어느
+    것인지 정해지지 않는다. 짐작하지 않고 그 줄을 거절한다."""
+
+
 class _Refs:
-    """참조 풀이 — 상대 타입의 식별자·이름을 id 로. 타입마다 한 번만 읽는다."""
+    """참조 풀이 — 상대 타입의 식별자·이름을 id 로. 대상마다 한 번만 읽는다.
+
+    대상이 인터페이스면 그것을 구현한 타입 전부에서 찾는다(ADR 0006). 저장할 때의 대상 검사와
+    같은 범위다 — 여기서 넓게 찾아 놓고 저장에서 거절하면 사람은 왜 막혔는지 모른다.
+    """
 
     def __init__(
         self,
@@ -223,59 +240,76 @@ class _Refs:
 
         빈 값으로 둘 수 없는 칸이라(「값이 필요합니다」) 비우기로는 안 풀린다. 부르는 쪽이
         그 줄을 건너뛸지(새로 만드는 줄) 그대로 둘지(이미 값이 있는 줄) 정한다."""
-        self.cache: dict[
-            str,
-            tuple[
-                dict[str, uuid.UUID],
-                dict[str, uuid.UUID],
-                dict[str, list[uuid.UUID]],
-                set[str],
-            ],
-        ] = {}
+        self.cache: dict[str, _RefIndex] = {}
+        self._ends: interfaces.Ends | None = None
 
-    def _load(
-        self, type_slug: str
-    ) -> tuple[
-        dict[str, uuid.UUID], dict[str, uuid.UUID], dict[str, list[uuid.UUID]], set[str]
-    ]:
-        if type_slug not in self.cache:
-            object_type = self.db.scalar(
-                select(ObjectType).where(ObjectType.slug == type_slug)
-            )
-            by_key: dict[str, uuid.UUID] = {}
-            by_alias: dict[str, uuid.UUID] = {}
-            by_label: dict[str, list[uuid.UUID]] = {}
-            ids: set[str] = set()
-            if object_type is not None and system.is_system(object_type):
-                # 원 표를 비추는 타입 — 식별자는 그 표의 것(부서 slug · 로그인 아이디).
-                for ref in system.source_of(object_type).list_all(self.db):
-                    ids.add(str(ref.id))
-                    by_key[ref.key] = ref.id
-                    by_label.setdefault(ref.label.strip(), []).append(ref.id)
-            elif object_type is not None:
-                # 별칭·외부 식별자도 식별자처럼 — 「앤시스」 로 적어도 「Ansys」 로 풀린다.
-                for norm, hits in aliases.index_of(self.db, object_type).items():
-                    if len(hits) == 1 and norm not in by_key:
-                        by_alias[norm] = hits[0]
-                rows = self.db.scalars(
-                    select(ObjectInstance).where(
-                        ObjectInstance.type_id == object_type.id,
-                        ObjectInstance.deleted_at.is_(None),
-                        visible_owner_clause(self.user, ObjectInstance.owner_workspace_id),
-                    )
+    def _members(self, target: str) -> list[str]:
+        """대상이 담는 타입들 — 타입이면 그것 하나, 인터페이스면 구현 타입 전부."""
+        if self._ends is None:
+            self._ends = interfaces.load_ends(self.db)
+        if target in self._ends.interfaces:
+            return sorted(self._ends.expand([target]) or ())
+        return [target]
+
+    def _load_type(self, type_slug: str) -> _RefIndex:
+        out = _RefIndex()
+        object_type = self.db.scalar(select(ObjectType).where(ObjectType.slug == type_slug))
+        if object_type is not None and system.is_system(object_type):
+            # 원 표를 비추는 타입 — 식별자는 그 표의 것(부서 slug · 로그인 아이디).
+            for ref in system.source_of(object_type).list_all(self.db):
+                out.ids.add(str(ref.id))
+                out.by_key[ref.key] = ref.id
+                out.by_label.setdefault(ref.label.strip(), []).append(ref.id)
+        elif object_type is not None:
+            # 별칭·외부 식별자도 식별자처럼 — 「앤시스」 로 적어도 「Ansys」 로 풀린다.
+            for norm, hits in aliases.index_of(self.db, object_type).items():
+                if len(hits) == 1 and norm not in out.by_key:
+                    out.by_alias[norm] = hits[0]
+            rows = self.db.scalars(
+                select(ObjectInstance).where(
+                    ObjectInstance.type_id == object_type.id,
+                    ObjectInstance.deleted_at.is_(None),
+                    visible_owner_clause(self.user, ObjectInstance.owner_workspace_id),
                 )
-                for row in rows:
-                    ids.add(str(row.id))
-                    if row.key:
-                        by_key[row.key] = row.id
-                    by_label.setdefault(row.label.strip(), []).append(row.id)
-            self.cache[type_slug] = (by_key, by_alias, by_label, ids)
-        return self.cache[type_slug]
+            )
+            for row in rows:
+                out.ids.add(str(row.id))
+                if row.key:
+                    out.by_key[row.key] = row.id
+                out.by_label.setdefault(row.label.strip(), []).append(row.id)
+        return out
+
+    def _load(self, target: str) -> _RefIndex:
+        if target not in self.cache:
+            members = self._members(target)
+            if len(members) == 1:
+                self.cache[target] = self._load_type(members[0])
+            else:
+                merged = _RefIndex()
+                shared_aliases: set[str] = set()
+                for one in members:
+                    part = self._load_type(one)
+                    for key, found in part.by_key.items():
+                        if key in merged.by_key and merged.by_key[key] != found:
+                            merged.clashing.add(key)
+                        merged.by_key.setdefault(key, found)
+                    for norm, found in part.by_alias.items():
+                        if norm in merged.by_alias and merged.by_alias[norm] != found:
+                            shared_aliases.add(norm)
+                        merged.by_alias.setdefault(norm, found)
+                    for label, hits in part.by_label.items():
+                        merged.by_label.setdefault(label, []).extend(hits)
+                    merged.ids |= part.ids
+                # 두 타입에 같은 별칭이면 별칭으로는 안 정해진다 — 이름 풀이로 넘긴다.
+                for norm in shared_aliases:
+                    merged.by_alias.pop(norm, None)
+                self.cache[target] = merged
+        return self.cache[target]
 
     def missing(self, defs: list[PropertyDef], values: dict[str, Any]) -> list[str]:
-        """가리키는 것이 **없는** 값들 — 캐시로 본다(질의 없음).
+        """가리키는 것이 **없는**(또는 대상 밖인) 값들 — 캐시로 본다(질의 없음).
 
-        예전에는 줄마다 `require_refs_exist` 가 질의를 돌았다. 이 캐시는 그 타입의 살아
+        예전에는 줄마다 `require_refs_exist` 가 질의를 돌았다. 이 캐시는 그 대상의 살아
         있는 id 를 이미 들고 있다(이름 풀이가 그것으로 맞춘다) — 같은 사실을 두 번 묻던
         셈이다.
         """
@@ -285,20 +319,27 @@ class _Refs:
                 continue
             raw = values[definition.key]
             items = raw if isinstance(raw, list) else [raw]
-            _, _, _, ids = self._load(definition.ref_type_slug or "")
+            ids = self._load(definition.ref_type_slug or "").ids
             out.extend(str(one) for one in items if one and str(one) not in ids)
         return out
 
     def resolve(self, definition: PropertyDef, raw: str) -> str:
         """식별자 → 별칭 → 이름 → uuid 순으로 맞춘다. 이름이 여럿에 맞으면 거절."""
         target = definition.ref_type_slug or ""
-        by_key, by_alias, by_label, ids = self._load(target)
+        index = self._load(target)
         text = raw.strip()
-        if text in by_key:
-            return str(by_key[text])
-        if compare_key(text) in by_alias:
-            found = by_alias[compare_key(text)]
-            if [one for one in by_label.get(text, []) if one != found]:
+        if text in index.clashing:
+            raise InvalidValue(
+                code("OBJECTS", 41),
+                f"{definition.label}: 식별자 「{text}」 이 {target} 를 구현한 타입 여럿에 "
+                "있습니다 — 식별자는 타입마다 따로라 어느 것인지 정해지지 않습니다. id 로 "
+                "적으세요.",
+            )
+        if text in index.by_key:
+            return str(index.by_key[text])
+        if compare_key(text) in index.by_alias:
+            found = index.by_alias[compare_key(text)]
+            if [one for one in index.by_label.get(text, []) if one != found]:
                 # **조용히 별칭 쪽에 붙는다** — 이름 풀이는 식별자 → 별칭 → 이름 차례이기
                 # 때문이다. 어느 쪽인지 사람이 정해야 할 자리라 줄에 적는다(품질 보고서의
                 # `alias_clash` 가 같은 사실을 목록으로 본다).
@@ -307,7 +348,7 @@ class _Refs:
                     "별칭 쪽에 붙였습니다"
                 )
             return str(found)
-        hits = by_label.get(text, [])
+        hits = index.by_label.get(text, [])
         if len(hits) == 1:
             return str(hits[0])
         if len(hits) > 1:
@@ -318,9 +359,9 @@ class _Refs:
             )
         # uuid 로 적었어도 **있는 것이어야** 한다 — 모양만 보고 받으면 없는 것을 가리키는
         # 참조가 저장되고, 화면에는 빈 칸으로 뜬다.
-        if text in ids:
+        if text in index.ids:
             return text
-        if text in self.pending.get(target, set()):
+        if any(text in self.pending.get(one, set()) for one in self._members(target)):
             raise PendingRef(text, target)
         if self.blank_missing:
             raise MissingRef(text, definition.label)

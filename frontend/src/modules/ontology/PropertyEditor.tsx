@@ -11,7 +11,7 @@ import { Plus } from 'lucide-react'
 import { PropertyBulkDialog } from '@/modules/ontology/PropertyBulkDialog'
 import { DATA_TYPE_LABELS, PropertyEditDialog } from '@/modules/ontology/PropertyEditDialog'
 import type { PropertyOwner } from '@/modules/ontology/PropertyEditDialog'
-import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
+import type { ObjectInterface, ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { Button } from '@/shared/components/ui/button'
 import {
   Table,
@@ -26,6 +26,7 @@ export function PropertyEditor({
   owner,
   properties,
   types,
+  interfaces = [],
   onChanged,
   readOnly = false,
 }: {
@@ -33,6 +34,8 @@ export function PropertyEditor({
   properties: PropertyDef[]
   /** 「객체 참조」 가 가리킬 수 있는 타입들. */
   types: ObjectType[]
+  /** 「객체 참조」 가 가리킬 수 있는 인터페이스 — 그것을 구현한 타입의 객체를 고른다. */
+  interfaces?: ObjectInterface[]
   onChanged: () => void
   /** 허브가 내려준 정의 — 속성을 보이기만 한다. */
   readOnly?: boolean
@@ -138,6 +141,7 @@ export function PropertyEditor({
           owner={owner}
           property={editing}
           types={types}
+          interfaces={interfaces}
           onClose={() => {
             setCreating(false)
             setEditing(null)

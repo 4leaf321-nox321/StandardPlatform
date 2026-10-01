@@ -33,7 +33,9 @@ import { Label } from '@/shared/components/ui/label'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select'
@@ -80,11 +82,20 @@ interface Props {
   property?: PropertyDef | null
   /** 「객체 참조」 가 가리킬 수 있는 타입들. */
   types: ObjectType[]
+  /** 「객체 참조」 가 가리킬 수 있는 인터페이스 — 그것을 구현한 타입의 객체를 고른다. */
+  interfaces?: ObjectInterface[]
   onClose: () => void
   onChanged: () => void
 }
 
-export function PropertyEditDialog({ owner, property, types, onClose, onChanged }: Props) {
+export function PropertyEditDialog({
+  owner,
+  property,
+  types,
+  interfaces = [],
+  onClose,
+  onChanged,
+}: Props) {
   const editing = Boolean(property)
   const isInterface = owner.kind === 'interface'
   /** 타입 쪽에서 연 공통 속성 — 모양은 그 인터페이스에서 고친다. */
@@ -342,17 +353,32 @@ export function PropertyEditDialog({ owner, property, types, onClose, onChanged 
                         <SelectValue placeholder={isInterface ? '선택하세요' : '아무 타입이나'} />
                       </SelectTrigger>
                       <SelectContent>
-                        {types.map((one) => (
-                          <SelectItem key={one.slug} value={one.slug}>
-                            {one.label}
-                          </SelectItem>
-                        ))}
+                        <SelectGroup>
+                          <SelectLabel>타입</SelectLabel>
+                          {types.map((one) => (
+                            <SelectItem key={one.slug} value={one.slug}>
+                              {one.label}
+                            </SelectItem>
+                          ))}
+                        </SelectGroup>
+                        {interfaces.length > 0 && (
+                          <SelectGroup>
+                            <SelectLabel>인터페이스 — 구현한 타입 중에서</SelectLabel>
+                            {interfaces.map((one) => (
+                              <SelectItem key={one.slug} value={one.slug}>
+                                {one.label} (구현 타입 {one.implementers.length})
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        )}
                       </SelectContent>
                     </Select>
                     <p className="text-muted-foreground text-xs">
                       {isInterface
                         ? '공통 속성은 가리킬 타입을 정해야 합니다 — 구현 타입마다 다른 것을 가리키면 같은 속성이 아닙니다.'
                         : '안 정하면 아무 객체나 선택할 수 있습니다 — 선택할 것이 많아지면 사람은 못 찾고, 못 찾으면 없는 줄 알고 새로 만듭니다.'}
+                      {interfaces.some((one) => one.slug === refType) &&
+                        ' 인터페이스를 고르면 그것을 구현한 타입 전부의 객체에서 고릅니다 — 구현 타입이 늘어도 여기는 그대로입니다.'}
                     </p>
                   </div>
                 )}

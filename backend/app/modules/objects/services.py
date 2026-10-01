@@ -98,11 +98,18 @@ def require_key_free(
         )
 
 
-def require_refs_exist(db: Session, defs: list[PropertyDef], values: dict[str, Any]) -> None:
-    """참조가 가리키는 객체가 실제로 있는가.
+def require_refs_exist(
+    db: Session,
+    defs: list[PropertyDef],
+    values: dict[str, Any],
+    before: dict[str, Any] | None = None,
+) -> None:
+    """참조가 가리키는 객체가 실제로 있고, **그 칸의 대상 타입인가.**
 
     **없는 것을 가리키는 참조를 저장하면 화면에 빈 칸으로 나오고**, 그것이
-    「값이 없음」 인지 「가리키던 것이 사라짐」 인지 구별할 수 없다.
+    「값이 없음」 인지 「가리키던 것이 사라짐」 인지 구별할 수 없다. 대상 밖의 것을
+    가리키면 「공급사」 칸에 부품이 들어가고, 그 칸으로 거르거나 세는 모든 답이 틀린다.
+    대상 검사는 **새로 적힌 값만** 본다(`before` — 고치기 전 값).
     """
     if not object_ref_ids(defs, values):
         return
@@ -112,6 +119,11 @@ def require_refs_exist(db: Session, defs: list[PropertyDef], values: dict[str, A
         raise InvalidValue(
             code("OBJECTS", 4),
             f"가리키는 객체를 찾을 수 없습니다: {', '.join(missing)}",
+        )
+    wrong = system.wrong_type_refs(db, defs, values, before)
+    if wrong:
+        raise InvalidValue(
+            code("OBJECTS", 94), f"참조 칸의 대상이 아닌 것을 가리킵니다: {'; '.join(wrong)}"
         )
 
 

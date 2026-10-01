@@ -398,14 +398,22 @@ INFER_MAX_TRIPLES = 20_000
 
 def version(db: Session) -> tuple[Any, ...]:
     """지금 데이터의 판 — 정의 · 객체 · 관계가 바뀌면 값이 달라진다(속성 이름만 고친 것은
-    못 잡는다 — 그것은 TTL 이 받는다)."""
+    못 잡는다 — 그것은 TTL 이 받는다).
+
+    정의(타입 · 인터페이스)는 `updated_at` 의 **합**으로 본다 — 최댓값으로 보면 시계가 뒤로
+    가는 순간(WSL 에서 실측: 「Time jumped backwards」) 고친 시각이 옛 최댓값보다 작아져 고친
+    것이 판에 안 잡히고, 120초 동안 옛 이름이 나온다. 합은 어느 행이 어느 쪽으로 바뀌든
+    달라진다. 행이 수십 개라 값싸다."""
     from sqlalchemy import func
 
+    def stamp(column: Any) -> Any:
+        return db.scalar(select(func.sum(func.extract("epoch", column))))
+
     return (
-        db.scalar(select(func.max(ObjectType.updated_at))),
+        stamp(ObjectType.updated_at),
         db.scalar(select(func.count()).select_from(ObjectType)),
-        # 인터페이스 — 공통 속성만 고쳐도 `updated_at` 이 오른다(라우트 · 가져오기가 올린다).
-        db.scalar(select(func.max(ObjectInterface.updated_at))),
+        # 인터페이스 — 공통 속성만 고쳐도 `updated_at` 이 바뀐다(라우트 · 가져오기가 고친다).
+        stamp(ObjectInterface.updated_at),
         db.scalar(select(func.count()).select_from(ObjectInterface)),
         db.scalar(select(func.count()).select_from(PropertyDef)),
         db.scalar(select(func.max(ObjectInstance.updated_at))),

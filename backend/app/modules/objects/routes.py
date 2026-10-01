@@ -1990,7 +1990,7 @@ def update_object(
         defs = properties_of(db, object_type.id)
         merged = merge_properties(row.properties or {}, payload.properties)
         cleaned = validate_properties(defs, merged)
-        require_refs_exist(db, defs, cleaned)
+        require_refs_exist(db, defs, cleaned, row.properties or {})
         require_unique_properties(
             db,
             object_type,

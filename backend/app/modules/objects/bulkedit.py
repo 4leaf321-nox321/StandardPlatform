@@ -197,7 +197,7 @@ def _one(
     merged = {**(row.properties or {}), key: value}
     try:
         cleaned = validate_properties(defs, merged)
-        require_refs_exist(db, defs, cleaned)
+        require_refs_exist(db, defs, cleaned, row.properties or {})
         require_unique_properties(
             db,
             object_type,

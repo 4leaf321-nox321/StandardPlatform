@@ -13,6 +13,8 @@
   (`parent_end='dst'`).
 - 원 표를 비추는 타입(부서 · 계정)을 가리키는 칸은 여기서 안 다룬다 — 그 선은 `object_links`
   다.
+- 대상이 **인터페이스**인 칸은 그것을 구현한 타입 전부를 가리킨다(ADR 0006) — 정의에는 적힌
+  대로(인터페이스 slug), 그림의 선과 「나를 가리키는 것」 은 구현 타입마다.
 
 조건 · 통계의 `ref.<칸>.<칸>` 은 이미 참조 칸을 「이어진 칸」 으로 다루므로 손대지 않는다.
 """
@@ -29,6 +31,7 @@ from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance
+from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared.permissions import visible_owner_clause
 
@@ -56,7 +59,10 @@ class RefKind:
     label: str
     inverse_label: str
     src_type: ObjectType
-    dst_type: ObjectType
+    target_slug: str
+    """칸이 적은 대상 — 타입 또는 인터페이스."""
+    dst_types: tuple[ObjectType, ...]
+    """가리킬 수 있는 타입 — 대상이 인터페이스면 그 구현 타입 전부(없으면 비어 있다)."""
     key: str
     multi: bool
     directed: bool = True
@@ -67,13 +73,16 @@ class RefKind:
 
     @property
     def dst_type_slugs(self) -> list[str]:
-        return [self.dst_type.slug]
+        """적힌 대로 — 관계 종류의 끝처럼 읽는 쪽이 인터페이스를 편다(`interfaces.Ends`)."""
+        return [self.target_slug]
 
 
 def kinds(db: Session) -> dict[str, RefKind]:
-    """이 설치의 참조 칸 전부 — 양 끝이 **객체 타입**(원 표 아님)인 것만."""
+    """이 설치의 참조 칸 전부 — 양 끝이 **객체 타입**(원 표 아님)인 것만. 대상이 인터페이스면
+    그 구현 타입들이 끝이다."""
     types = {row.slug: row for row in db.scalars(select(ObjectType))}
     by_id = {row.id: row for row in types.values()}
+    ends = interfaces.load_ends(db)
     out: dict[str, RefKind] = {}
     for definition in db.scalars(
         select(PropertyDef).where(
@@ -81,10 +90,16 @@ def kinds(db: Session) -> dict[str, RefKind]:
         )
     ):
         owner = by_id.get(definition.owner_id)
-        target = types.get(definition.ref_type_slug or "")
-        if owner is None or target is None:
+        target = definition.ref_type_slug or ""
+        if owner is None or owner.kind_class == "system":
             continue
-        if owner.kind_class == "system" or target.kind_class == "system":
+        if target in ends.interfaces:
+            dst_types = tuple(types[one] for one in sorted(ends.expand([target]) or ()))
+        elif target in types:
+            dst_types = (types[target],)
+        else:
+            continue
+        if any(one.kind_class == "system" for one in dst_types):
             continue
         slug = slug_of(owner.slug, definition.key)
         out[slug] = RefKind(
@@ -93,7 +108,8 @@ def kinds(db: Session) -> dict[str, RefKind]:
             # 역방향 이름이 없으면 「가리키는 타입 이름」 — 빈 말보다 낫고, 대개 맞다.
             inverse_label=definition.inverse_label or owner.label,
             src_type=owner,
-            dst_type=target,
+            target_slug=target,
+            dst_types=dst_types,
             key=definition.key,
             multi=definition.multi,
         )
@@ -182,14 +198,16 @@ def _incoming(
     wanted = [str(one) for one in ids]
     sources: set[uuid.UUID] = set()
     found: list[tuple[RefKind, uuid.UUID, uuid.UUID]] = []
-    for kind_list in kinds_by_dst.values():
-        for kind in kind_list:
-            rows = db.execute(
-                _INCOMING, {"key": kind.key, "owner": str(kind.src_type.id), "ids": wanted}
-            )
-            for row in rows:
-                found.append((kind, row.src, uuid.UUID(row.dst)))
-                sources.add(row.src)
+    # 대상이 인터페이스인 칸은 구현 타입마다 걸려 있다 — 한 번씩만 묻는다(두 번 물으면 선이
+    # 두 겹이 된다).
+    unique = {kind.slug: kind for kind_list in kinds_by_dst.values() for kind in kind_list}
+    for kind in unique.values():
+        rows = db.execute(
+            _INCOMING, {"key": kind.key, "owner": str(kind.src_type.id), "ids": wanted}
+        )
+        for row in rows:
+            found.append((kind, row.src, uuid.UUID(row.dst)))
+            sources.add(row.src)
     visible = _visible_ids(db, user, sources)
     for kind, src, dst in found:
         if src in visible:
@@ -228,7 +246,8 @@ def neighbor_edges(
     by_dst: dict[uuid.UUID, list[RefKind]] = {}
     for kind in all_kinds.values():
         if wanted is None or kind.slug in wanted:
-            by_dst.setdefault(kind.dst_type.id, []).append(kind)
+            for one in kind.dst_types:
+                by_dst.setdefault(one.id, []).append(kind)
     row_types = {row.id: row.type_id for row in rows}
     relevant = {
         type_id: kind_list
@@ -291,8 +310,9 @@ def degree_counts(db: Session, *, ids: list[uuid.UUID], user: User) -> dict[uuid
     by_dst: dict[uuid.UUID, list[RefKind]] = {}
     row_types = {row.type_id for row in rows}
     for kind in all_kinds.values():
-        if kind.dst_type.id in row_types:
-            by_dst.setdefault(kind.dst_type.id, []).append(kind)
+        for one in kind.dst_types:
+            if one.id in row_types:
+                by_dst.setdefault(one.id, []).append(kind)
     for edge in _incoming(db, user, ids, by_dst):
         counts[edge.dst] += 1
     return dict(counts)
@@ -313,7 +333,9 @@ def type_edge_counts(db: Session, *, user: User) -> list[TypeRefEdge]:
     out: list[TypeRefEdge] = []
     source = aliased(ObjectInstance)
     target = aliased(ObjectInstance)
-    for kind in kinds(db).values():
+    pairs = [(kind, dst) for kind in kinds(db).values() for dst in kind.dst_types]
+    for kind, dst in pairs:
+        # 대상이 인터페이스면 **구현 타입마다** 한 선 — 그림에는 타입만 선다.
         column = source.properties[kind.key]
         values = (
             func.jsonb_array_elements_text(column).table_valued("value").lateral("ref_values")
@@ -321,6 +343,7 @@ def type_edge_counts(db: Session, *, user: User) -> list[TypeRefEdge]:
         where = [
             source.type_id == kind.src_type.id,
             source.deleted_at.is_(None),
+            target.type_id == dst.id,
             target.deleted_at.is_(None),
             visible_owner_clause(user, source.owner_workspace_id),
             visible_owner_clause(user, target.owner_workspace_id),
@@ -339,7 +362,7 @@ def type_edge_counts(db: Session, *, user: User) -> list[TypeRefEdge]:
             .where(*where, func.jsonb_typeof(column) == "array")
         )
         count = int(db.scalar(single) or 0) + int(db.scalar(many) or 0)
-        out.append(TypeRefEdge(kind.slug, kind.src_type.id, kind.dst_type.id, count))
+        out.append(TypeRefEdge(kind.slug, kind.src_type.id, dst.id, count))
     return out
 
 

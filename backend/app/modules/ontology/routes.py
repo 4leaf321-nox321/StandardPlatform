@@ -262,10 +262,17 @@ def _interface_slugs(db: Session) -> set[str]:
     return set(db.scalars(select(ObjectInterface.slug)))
 
 
-def _refuse_interface_target(db: Session, slug: str | None, *, what: str) -> None:
-    wrong = interfaces.target_error(slug, _interface_slugs(db), what=what)
-    if wrong:
-        raise InvalidValue(code("ONTOLOGY", 24), wrong)
+def _check_ref_target(db: Session, slug: str | None) -> None:
+    """참조 대상이 **실재하는 타입 · 인터페이스인가.** 인터페이스면 그것을 구현한 타입의
+    객체를 가리킨다(ADR 0006). 없는 것을 대상으로 두면 그 칸은 아무것도 못 고르는데, 화면은
+    「고를 것이 없습니다」 라고만 말한다 — 오타인지 데이터가 없는 것인지 구별되지 않는다."""
+    if not slug:
+        return
+    if db.scalar(select(ObjectType.id).where(ObjectType.slug == slug)) is not None:
+        return
+    if slug in _interface_slugs(db):
+        return
+    raise NotFound(code("ONTOLOGY", 41), f"참조 대상에 없는 타입 · 인터페이스입니다: {slug}")
 
 
 # --- 그룹 -------------------------------------------------------------------
@@ -1202,7 +1209,7 @@ def _check_interface_property(db: Session, key: str, payload: PropertyDefWriteRe
     wrong = interfaces.interface_property_error(key, payload.model_dump())
     if wrong:
         raise InvalidValue(code("ONTOLOGY", 24), wrong)
-    _refuse_interface_target(db, payload.ref_type_slug, what="참조 대상")
+    _check_ref_target(db, payload.ref_type_slug)
 
 
 def _with_property(
@@ -1500,7 +1507,7 @@ def create_property(
     key = require_key(payload.key)
     require_choice(payload.data_type, DATA_TYPES, what="속성 종류")
     _check_property_shape(payload)
-    _refuse_interface_target(db, payload.ref_type_slug, what="참조 대상")
+    _check_ref_target(db, payload.ref_type_slug)
 
     exists = db.scalar(
         select(PropertyDef).where(
@@ -1561,7 +1568,7 @@ def update_property(
     managed.require_definition_editable(_type(db, slug))
     require_choice(payload.data_type, DATA_TYPES, what="속성 종류")
     _check_property_shape(payload)
-    _refuse_interface_target(db, payload.ref_type_slug, what="참조 대상")
+    _check_ref_target(db, payload.ref_type_slug)
     wanted = _contract_of(db, slug)
     if key in wanted and payload.data_type == row.data_type:
         # **공통 속성의 모양은 인터페이스에서만 바뀐다.** 이름 · 도움말 · 묶음 · 순서 ·
@@ -1994,7 +2001,7 @@ def ontology_schema(
                 label=kind.label,
                 inverse_label=kind.inverse_label,
                 src_type_slug=kind.src_type.slug,
-                dst_type_slug=kind.dst_type.slug,
+                dst_type_slug=kind.target_slug,
                 field_key=kind.key,
                 multi=kind.multi,
             )

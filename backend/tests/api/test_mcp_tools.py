@@ -778,19 +778,18 @@ def test_이어진_것을_질의어_없이_훑는다(bot: Bot) -> None:
 
     화면의 지식 그래프가 쓰는 길을 도구로도 연다 — 답이 화면과 같다.
     """
-    part = _uniq("part")
+    part, relation = _uniq("part"), _uniq("uses")
     bot.call(
         server.ontology_import,
         {
             "types": [{"slug": part, "label": "부품", "key_policy": "required"}],
-            "relation_types": [
-                {"slug": _uniq("uses"), "label": "사용", "inverse_label": "쓰임"}
-            ],
+            "relation_types": [{"slug": relation, "label": "사용", "inverse_label": "쓰임"}],
         },
         apply=True,
     )
+    # 이름(「사용」)으로 찾지 않는다 — 시험 DB 는 스위트가 함께 써서 같은 이름이 여럿이다.
     schema = bot.call(server.ontology_schema)
-    relation = next(one["slug"] for one in schema["relation_types"] if one["label"] == "사용")
+    assert relation in {one["slug"] for one in schema["relation_types"]}
     top = bot.call(server.object_create, part, label="상위", key="P-TOP")
     middle = bot.call(server.object_create, part, label="중간", key="P-MID")
     leaf = bot.call(server.object_create, part, label="말단", key="P-LEAF")

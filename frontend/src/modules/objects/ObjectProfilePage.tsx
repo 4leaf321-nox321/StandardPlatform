@@ -79,10 +79,21 @@ export default function ObjectProfilePage() {
     if (mergedInto) navigate(`/o/${typeSlug}/${mergedInto}`, { replace: true })
   }, [mergedInto, navigate, typeSlug])
 
+  // **인터페이스 주소로 열었으면 객체의 실제 타입으로 간다**(ADR 0006) — 「설비」 를 가리키는
+  // 칸에서 누르면 이 주소가 된다. 고치기 · 이력 · 연도는 타입의 길이라 주소가 타입이어야 한다.
+  const actualType = row?.type_slug
+  useEffect(() => {
+    if (actualType && actualType !== typeSlug) {
+      navigate(`/o/${actualType}/${objectId}`, { replace: true })
+    }
+  }, [actualType, navigate, typeSlug, objectId])
+
   if (profile.error) return <ErrorNotice error={profile.error} />
   if (!profile.data || !row) {
     return profile.loading ? null : <EmptyState title="객체를 찾을 수 없습니다" />
   }
+  // 실제 타입의 주소로 옮기는 중 — 인터페이스 주소로 아래 패널(이력 · 연도)을 부르지 않는다.
+  if (row.type_slug !== typeSlug) return null
 
   const fileDefs = defs.filter((def) => def.data_type === 'file')
   const valueDefs = defs.filter((def) => def.data_type !== 'file')

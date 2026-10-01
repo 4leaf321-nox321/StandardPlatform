@@ -256,6 +256,8 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
         str(i["slug"]) for i in payload.get("interfaces") or [] if i.get("slug")
     }
     known_ifaces = set(iface_rows) | incoming_ifaces
+    #: 참조 대상이 될 수 있는 것 — 타입 · 인터페이스(있는 것과 이 파일이 보내는 것).
+    ref_targets = set(types) | incoming_types | known_ifaces
 
     # 상위 묶음 검사에 쓸 지도 — **있는 것과 이 파일이 함께 보내는 것을 합쳐** 본다.
     incoming_groups = [one for one in payload.get("groups") or [] if one.get("slug")]
@@ -361,7 +363,7 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
             object_type,
             one.get("properties") or [],
             out,
-            interface_slugs=known_ifaces,
+            ref_targets=ref_targets,
         )
         _overlay_type(after, slug, one, normalized, source)
 
@@ -390,7 +392,7 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
             one.get("properties") or [],
             out,
             owner_kind="relation",
-            interface_slugs=known_ifaces,
+            ref_targets=ref_targets,
         )
 
     # **인터페이스를 따라 바뀌는 구현 타입의 속성** — 파일에 없던 타입도 걸린다.
@@ -454,7 +456,7 @@ def _plan_interfaces(
             one.get("properties") or [],
             out,
             owner_kind="interface",
-            interface_slugs=known,
+            ref_targets=type_slugs | known,
         )
 
         existing = (
@@ -611,7 +613,7 @@ def _plan_properties(
     out: Plan,
     *,
     owner_kind: str = "type",
-    interface_slugs: set[str] | None = None,
+    ref_targets: set[str] | None = None,
 ) -> None:
     """속성 정의의 계획 — **타입 · 관계 종류 · 인터페이스가 같은 길을 쓴다.**
 
@@ -640,11 +642,13 @@ def _plan_properties(
         _check_choices(one, what=f"속성 {type_slug}.{key}", errors=out.errors)
         found = existing.get(key)
         name = f"{type_slug}.{key}"
-        wrong = interfaces.target_error(
-            one.get("ref_type_slug"), interface_slugs or set(), what="참조 대상"
-        )
-        if wrong:
-            out.errors.append(f"속성 {name}: {wrong}")
+        target = one.get("ref_type_slug")
+        if ref_targets is not None and target and target not in ref_targets:
+            # **경고만** — 옛 스냅샷을 되돌릴 때 사라진 대상 하나가 복원 전체를 막으면 안 된다.
+            out.warnings.append(
+                f"속성 {name}: 참조 대상 {target} 은(는) 없는 타입 · 인터페이스입니다 — "
+                "이 칸은 아무것도 고르지 못합니다."
+            )
 
         if found is None:
             out.changes.append(Change(kind_name, name, "create"))

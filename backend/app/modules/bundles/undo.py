@@ -36,6 +36,7 @@ from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.objects import aliases, bulk, lifecycle
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.objects.services import audit_state
+from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared import audit
 from app.shared.errors import AppError, Forbidden, NotFound, code
@@ -340,7 +341,10 @@ def _pointing(db: Session, row: ObjectInstance, doomed: set[uuid.UUID]) -> int:
             select(PropertyDef).where(
                 PropertyDef.owner_kind == "type",
                 PropertyDef.data_type == "object_ref",
-                PropertyDef.ref_type_slug == object_type.slug,
+                # 이 타입이 구현한 인터페이스를 대상으로 둔 칸도 이것을 가리킬 수 있다.
+                PropertyDef.ref_type_slug.in_(
+                    interfaces.load_ends(db).reach_of(object_type.slug)
+                ),
             )
         )
     )

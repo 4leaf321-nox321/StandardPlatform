@@ -25,6 +25,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance, ObjectLink
 from app.modules.objects.schemas import ObjectOut
+from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared import system_sources
 from app.shared.errors import Conflict, code
@@ -165,6 +166,62 @@ def missing_refs(db: Session, defs: list[PropertyDef], values: dict[str, Any]) -
             )
             missing.extend(str(one) for one in sorted(ids) if one not in alive)
     return missing
+
+
+def _ids_of(raw: Any) -> set[uuid.UUID]:
+    out: set[uuid.UUID] = set()
+    for item in raw if isinstance(raw, list) else [raw]:
+        if isinstance(item, str) and item:
+            try:
+                out.add(uuid.UUID(item))
+            except ValueError:
+                continue
+    return out
+
+
+def wrong_type_refs(
+    db: Session,
+    defs: list[PropertyDef],
+    values: dict[str, Any],
+    before: dict[str, Any] | None = None,
+) -> list[str]:
+    """가리키는 객체가 **그 칸의 대상 타입이 아닌** 값들 — 사람이 읽는 말로.
+
+    대상이 인터페이스면 그것을 구현한 타입이면 된다(ADR 0006). **새로 적힌 값만** 본다
+    (`before` 에 이미 있던 id 는 건너뛴다) — 이 검사가 생기기 전에 저장된 값이 대상 밖이어도,
+    그 칸을 안 건드리는 저장까지 막으면 사람은 무엇을 고쳐야 할지 모른다. 없는 것은 여기서
+    안 센다(`missing_refs` 가 말한다). 원 표를 비추는 대상은 원 표에서 찾으므로 안 본다.
+    """
+    wanted: dict[uuid.UUID, list[PropertyDef]] = {}
+    for definition in defs:
+        target = definition.ref_type_slug
+        if definition.data_type != "object_ref" or not target:
+            continue
+        fresh = _ids_of(values.get(definition.key)) - _ids_of(
+            (before or {}).get(definition.key)
+        )
+        for one in fresh:
+            wanted.setdefault(one, []).append(definition)
+    if not wanted:
+        return []
+    types = types_by_slug(db)
+    slug_of = {one.id: one.slug for one in types.values()}
+    ends = interfaces.load_ends(db)
+    out: list[str] = []
+    for row in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(list(wanted)))):
+        for definition in wanted[row.id]:
+            target = definition.ref_type_slug or ""
+            projected = types.get(target)
+            if projected is not None and is_system(projected):
+                continue
+            actual = slug_of.get(row.type_id, "")
+            if ends.allows([target], actual):
+                continue
+            out.append(
+                f"{definition.label} — 「{row.label}」({ends.labels.get(actual, actual)})는 "
+                f"대상이 아닙니다. {ends.describe([target])} 만 됩니다"
+            )
+    return sorted(out)
 
 
 # --- 끝점 --------------------------------------------------------------------

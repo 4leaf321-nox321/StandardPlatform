@@ -205,6 +205,7 @@ export default function OntologyTypesPage() {
             owner={{ kind: 'type', row: propertyTarget }}
             properties={propertyTarget.properties}
             types={types}
+            interfaces={schema?.interfaces ?? []}
             onChanged={reload}
             readOnly={Boolean(propertyTarget.managed_by)}
           />

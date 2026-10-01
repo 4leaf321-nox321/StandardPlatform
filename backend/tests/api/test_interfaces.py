@@ -353,9 +353,7 @@ def test_가리키는_것이_있으면_인터페이스를_못_지운다(
     assert "country" in _props(client, admin, kind)
 
 
-def test_공통_속성이_될_수_없는_것과_아직_대상이_될_수_없는_것(
-    client: TestClient, admin: Signed
-) -> None:
+def test_공통_속성이_될_수_없는_것(client: TestClient, admin: Signed) -> None:
     iface = _make_interface(client, admin)
     for body in (
         {"key": "drawing", "label": "도면", "data_type": "file"},
@@ -366,16 +364,8 @@ def test_공통_속성이_될_수_없는_것과_아직_대상이_될_수_없는_
         refused = _add_common(client, admin, iface, **body)
         assert refused.status_code == 422, (body, refused.text)
         assert _code(refused).endswith("ONTOLOGY-0024")
-
-    # 인터페이스를 참조 대상으로 쓰는 것은 아직 막는다(말하고 막는다). 관계 끝은 된다 —
+    # 인터페이스를 참조 대상 · 관계 끝으로 쓰는 것은 된다 — `test_interface_refs.py` ·
     # `test_interface_relations.py`.
-    kind = _make_type(client, admin)
-    ref = client.post(
-        f"/api/ontology/types/{kind}/properties",
-        json={"key": "eq", "label": "장비", "data_type": "object_ref", "ref_type_slug": iface},
-        headers=admin.headers,
-    )
-    assert ref.status_code == 422 and _code(ref).endswith("ONTOLOGY-0024")
 
 
 # --- 파일 · 스냅샷 · 묶음 ---------------------------------------------------------

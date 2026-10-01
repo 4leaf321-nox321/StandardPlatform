@@ -281,7 +281,7 @@ def restore(
     properties = validate_properties(
         defs, {k: v for k, v in wanted.properties.items() if k in known}
     )
-    require_refs_exist(db, defs, properties)
+    require_refs_exist(db, defs, properties, row.properties or {})
     require_unique_properties(
         db,
         object_type,

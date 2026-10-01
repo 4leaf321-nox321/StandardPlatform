@@ -30,6 +30,7 @@ from app.modules.accounts.models import User
 from app.modules.objects import aliases, links, system
 from app.modules.objects import relations as rel
 from app.modules.objects.models import ObjectInstance, ObjectRelation
+from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared import audit
 from app.shared.errors import AppError, Conflict, code
@@ -80,14 +81,16 @@ class References:
 def _ref_defs(db: Session, type_slug: str) -> list[tuple[ObjectType, PropertyDef]]:
     """이 타입을 가리키는 `object_ref` 속성 정의 전부.
 
-    어느 타입의 어느 칸이 나를 가리킬 수 있나.
+    어느 타입의 어느 칸이 나를 가리킬 수 있나. 대상이 이 타입이 구현한 인터페이스(상위까지)인
+    칸도 든다 — 「설비」 를 가리키는 칸은 시험장비도 가리킨다. 빼면 지우기 전 확인이 「걸린 것
+    없음」 이라 하고, 지운 뒤 그 칸은 사라진 것을 가리킨다.
     """
     defs = list(
         db.scalars(
             select(PropertyDef).where(
                 PropertyDef.owner_kind == "type",
                 PropertyDef.data_type == "object_ref",
-                PropertyDef.ref_type_slug == type_slug,
+                PropertyDef.ref_type_slug.in_(interfaces.load_ends(db).reach_of(type_slug)),
             )
         )
     )

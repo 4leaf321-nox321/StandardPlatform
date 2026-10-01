@@ -357,7 +357,7 @@ def pages(db: Session) -> list[Page]:
                     kind.src_type.slug,
                     kind.key,
                     kind.label,
-                    kind.dst_type.slug,
+                    kind.target_slug,
                     _yes(kind.multi),
                     kind.inverse_label,
                 ]
