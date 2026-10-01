@@ -432,7 +432,8 @@ async def search(
     `types[]` 가 타입별 건수라 **어느 타입에 있는지**가 먼저 보인다. 타입을 알면
     `objects_list`(조건 거르기) · `object_resolve`(하나로 정하기)가 낫다 — 이것은
     「어디 있나」 를 묻는 도구지 「어느 것인가」 를 정하는 도구가 아니다.
-    볼 수 있는 것만 나온다(남의 부서 것은 수에도 안 잡힌다)."""
+    볼 수 있는 것만 나온다(남의 부서 것은 수에도 안 잡힌다). `type_slug` 에 인터페이스를
+    주면 구현 타입 전부에서 찾는다."""
     params: list[tuple[str, Any]] = [("q", q), ("limit", limit), ("offset", offset)]
     if type_slug:
         params.append(("type", type_slug))
@@ -493,6 +494,10 @@ async def objects_list(
 ) -> Any:
     """그 타입의 객체 목록 — 화면의 목록과 **같은 거르기**다.
 
+    `type_slug` 에 **인터페이스**를 주면 구현 타입 전부가 한 목록으로 온다(읽기만) —
+    줄마다 `type_slug` 가 그 객체의 실제 타입이고, 상세 · 고치기는 그 타입으로 한다.
+    조건은 공통 속성(키가 같다)과 `label`·`key`·`status` 로 건다.
+
     - `q`: 이름·식별자·검색 속성.
     - `properties`: `{"grade": "A"}` 처럼 속성 키로 「같음」 거르기(짧은 꼴).
     - `conditions`: `[{"field": "power", "op": "gte", "value": "10"}, ...]` — 칸끼리 AND,
@@ -510,7 +515,8 @@ async def objects_list(
 
     **0건이면 `diagnosis` 가 붙는다** — 「타입에 객체가 없음(empty_type)」 · 「부서 밖이라
     안 보임(not_visible)」 · 「조건이 좁음(filters)」 중 무엇인지, 조건 때문이면 어느 조건을
-    빼면 몇 건인지, 그 중 **값이 비어 있어서** 빠진 것이 몇 건인지까지 있다. 읽지 않고
+    빼면 몇 건인지, 그 중 **값이 비어 있어서** 빠진 것이 몇 건인지까지 있다(인터페이스는
+    「구현한 타입이 없음(no_implementers)」 도 있다). 읽지 않고
     「없습니다」 라고 답하지 마라 — 있는 것을 없다고 하면 사람은 그것을 새로 만든다."""
     filters = _filter_params(q, status, properties, conditions)
     params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset), *filters]
@@ -562,7 +568,10 @@ async def object_resolve(ctx: Context, type_slug: str, name: str) -> Any:
       - `none`       → 없다. 오타인지 아직 안 만든 것인지 사람에게 묻는다. 짐작하지 마라.
 
     식별자 → 별칭 → 이름 → 포함 차례로 맞춘다. 별칭이 있으므로 「앤시스」 로 물어도
-    「Ansys」 가 나온다. **포함으로 하나만 걸려도 `exact` 가 아니다** — 포함은 짐작이다."""
+    「Ansys」 가 나온다. **포함으로 하나만 걸려도 `exact` 가 아니다** — 포함은 짐작이다.
+
+    `type_slug` 에 인터페이스를 주면 구현 타입 전부에서 찾는다. 식별자는 타입마다 따로라
+    **같은 식별자가 두 타입에 있으면 `candidates`** 다 — 후보의 `type_slug` 로 가른다."""
     return await _get(ctx, f"/api/objects/{type_slug}/resolve", params=[("name", name)])
 
 
@@ -639,6 +648,7 @@ async def objects_summary(
     - `group_by` 기준: `label`·`key`·`status`·`workspace`(소유 부서)·
       `created_year`, 속성은 `properties.<키>`, 다른 타입의 칸은
       `object_fields` 의 주소. 날짜는 해로 센다. 긴 글·파일은 안 된다.
+      `type_slug` 가 인터페이스면 `type`(어느 구현 타입인가)도 된다.
       쓸 수 있는 기준 전부가 응답의 `group_options` 다.
     - `split_by` 세부 기준(같은 규칙). 주면 칸마다 `parts` 로 나뉜다.
     - `metric`: `count`(기본)·`sum`·`avg`·`min`·`max`. `count` 가 아니면
@@ -679,7 +689,7 @@ async def object_fields(ctx: Context, type_slug: str) -> Any:
 
     뜻: 이어진 것이 여럿이면 **그중 하나라도** 맞으면 걸린다. 이어진 것이 없는
     객체는 그 너머의 칸 조건에 안 걸린다(`ne` 도) — 그것은 참조 칸이나 관계의
-    `empty` 로 묻는다."""
+    `empty` 로 묻는다. 인터페이스 slug 도 받는다 — 공통 속성에서 나가는 걸음이다."""
     return await _get(ctx, f"/api/objects/{type_slug}/fields")
 
 

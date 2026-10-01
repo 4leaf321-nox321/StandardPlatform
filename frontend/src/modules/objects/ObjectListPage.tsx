@@ -3,6 +3,8 @@
  *
  * 경로는 `/o/:typeSlug` 하나뿐이다. 타입이 늘어도 라우트는 안 늘어나므로
  * `navigation.ts` 가 정적 화면의 정본이라는 규칙과 `router.test.tsx` 가 그대로 선다.
+ * 인터페이스도 같은 주소로 연다 — 타입과 slug 를 함께 쓰므로(ADR 0006) 스키마를 보고
+ * `InterfaceListPage` 로 가른다.
  */
 
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
@@ -10,12 +12,12 @@ import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
 import { BarChart3, Download, FileUp, Loader2, Pencil, Plus, Trash2 } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
+import type { OntologySchema } from '@/modules/ontology/api'
 import { workspaceApi } from '@/modules/workspaces/api'
 import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
 import type {
   Condition,
-  ConditionOp,
   ObjectQuery,
   LinkedField,
   ObjectRow,
@@ -31,7 +33,9 @@ import { BulkDeleteDialog } from '@/modules/objects/BulkDeleteDialog'
 import { BulkEditDialog } from '@/modules/objects/BulkEditDialog'
 import { BulkUndoDialog } from '@/modules/objects/BulkUndoDialog'
 import { ObjectImportDialog } from '@/modules/objects/ObjectImportDialog'
+import { InterfaceListPage } from '@/modules/objects/InterfaceListPage'
 import { ObjectTree } from '@/modules/objects/ObjectTree'
+import { conditionsFromParams, withConditions } from '@/modules/objects/urlConditions'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -62,6 +66,7 @@ import {
 } from '@/shared/components/ui/table'
 import { TypeIcon } from '@/shared/components/TypeIcon'
 import { useResource } from '@/shared/hooks/useResource'
+import type { Resource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
 /**
@@ -159,19 +164,29 @@ function PropertyFilter({
   )
 }
 
-/** 주소 ↔ 조건. `f.<칸>.<연산>=<값>` — 붙여 넣으면 같은 목록이 선다. */
-function conditionsFromParams(params: URLSearchParams): Condition[] {
-  const out: Condition[] = []
-  for (const [key, value] of params.entries()) {
-    if (!key.startsWith('f.')) continue
-    const dot = key.lastIndexOf('.')
-    if (dot <= 2) continue
-    out.push({ field: key.slice(2, dot), op: key.slice(dot + 1) as ConditionOp, value })
+/**
+ * `/o/:typeSlug` — 타입이면 타입 목록, 인터페이스면 인터페이스 목록. 스키마는 여기서 한 번 받아
+ * 넘긴다(두 번 받으면 한쪽이 옛것을 본다).
+ */
+export default function ObjectListPage() {
+  const { typeSlug = '' } = useParams()
+  const schema = useResource(() => ontologyApi.schema(), [])
+  const iface = schema.data?.interfaces?.find((one) => one.slug === typeSlug)
+  if (schema.data && iface) {
+    return (
+      <InterfaceListPage
+        // 다른 인터페이스로 옮기면 쪽 · 연도 · 통계를 새로 — 같은 화면이 재사용된다.
+        key={iface.slug}
+        iface={iface}
+        interfaces={schema.data.interfaces ?? []}
+        types={schema.data.types}
+      />
+    )
   }
-  return out
+  return <TypeListPage schema={schema} />
 }
 
-export default function ObjectListPage() {
+function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
   const { typeSlug = '' } = useParams()
   const [params, setParams] = useSearchParams()
   const navigate = useNavigate()
@@ -185,13 +200,8 @@ export default function ObjectListPage() {
     const q = next.q ?? query
     const list = next.conditions ?? conditions
     const view = next.view === undefined ? null : next.view
-    const copy = new URLSearchParams(params)
-    // 지우면서 돌면 건너뛰는 키가 생긴다 — 먼저 복사해 둔다.
-    for (const key of Array.from(copy.keys())) if (key.startsWith('f.')) copy.delete(key)
-    copy.delete('q')
+    const copy = withConditions(params, { q, conditions: list })
     copy.delete('view')
-    if (q) copy.set('q', q)
-    for (const one of list) copy.append(`f.${one.field}.${one.op}`, one.value)
     if (view) copy.set('view', view)
     setParams(copy, { replace: true })
   }
@@ -264,7 +274,6 @@ export default function ObjectListPage() {
       .finally(() => setExporting(false))
   }
 
-  const schema = useResource(() => ontologyApi.schema(), [])
   const foundType = schema.data?.types.find((row) => row.slug === typeSlug)
   /** 연도가 뜻을 갖는 축인가. `evergreen` 이면 토글을 안 그린다 — **없는 것을
    *  있는 척하지 않는다.** */
@@ -363,6 +372,17 @@ export default function ObjectListPage() {
                     확인이 없으면, 타입이 여럿일 때 「내가 뭘 열었지」 를 묻게 된다. */}
                 <TypeIcon name={type.icon} className="size-5" />
                 {type.label}
+                {/* 구현한 인터페이스 — 누르면 다른 타입과 함께 보는 목록으로 간다. */}
+                {(type.interface_slugs ?? []).map((slug) => (
+                  <Link
+                    key={slug}
+                    to={`/o/${slug}`}
+                    title="이 인터페이스를 구현한 타입 전부의 목록"
+                    className="text-muted-foreground hover:text-foreground rounded border px-1.5 text-xs font-normal"
+                  >
+                    {schema.data?.interfaces?.find((one) => one.slug === slug)?.label ?? slug}
+                  </Link>
+                ))}
               </span>
             ) : (
               '…'

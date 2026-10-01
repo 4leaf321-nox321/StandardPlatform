@@ -20206,6 +20206,11 @@
             "type": "string",
             "title": "Hint",
             "default": ""
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug",
+            "default": ""
           }
         },
         "type": "object",

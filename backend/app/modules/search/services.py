@@ -43,6 +43,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.objects import system
 from app.modules.objects.models import ObjectAlias, ObjectInstance
+from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType
 from app.shared import system_sources
 from app.shared.permissions import visible_owner_clause
@@ -209,14 +210,24 @@ def search(
     if len(q) < MIN_QUERY:
         return found
 
+    types = {row.slug: row for row in db.scalars(select(ObjectType))}
+    # 인터페이스로 좁히면 **구현 타입 전부**다(ADR 0006) — 「설비」 로 찾으면 시험장비 ·
+    # 계측기가 함께 나온다. 타입과 인터페이스는 slug 를 함께 쓰므로 둘 중 하나다.
+    among: set[str] | None = None
+    if type_slug and type_slug not in types:
+        catalog = interfaces.load(db)
+        if type_slug in catalog.interfaces:
+            among = set(interfaces.implementers(catalog, type_slug))
+
     found.types = counts(db, user, q)
-    if type_slug:
+    if among is not None:
+        found.types = [one for one in found.types if one.type_slug in among]
+    elif type_slug:
         found.types = [one for one in found.types if one.type_slug == type_slug]
     found.total = sum(one.count for one in found.types)
 
-    types = {row.slug: row for row in db.scalars(select(ObjectType))}
     target = types.get(type_slug) if type_slug else None
-    if type_slug and target is None:
+    if type_slug and target is None and among is None:
         return found
 
     # 투영 타입으로 좁혔으면 원 표가 자기 쪽 넘김을 한다.
@@ -230,6 +241,8 @@ def search(
     where = _where(user, q)
     if target is not None:
         where = (*where, ObjectInstance.type_id == target.id)
+    elif among is not None:
+        where = (*where, ObjectInstance.type_id.in_([types[one].id for one in among]))
     rows = list(
         db.scalars(
             select(ObjectInstance)
@@ -256,8 +269,9 @@ def search(
                 matched_text=text,
             )
         )
-    # 섞어 볼 때는 투영 타입의 것도 첫 쪽에 몇 개 얹는다.
-    if target is None and offset == 0:
+    # 섞어 볼 때는 투영 타입의 것도 첫 쪽에 몇 개 얹는다(인터페이스로 좁혔으면 안 얹는다 —
+    # 투영 타입은 인터페이스를 구현하지 않는다).
+    if target is None and among is None and offset == 0:
         for object_type in types.values():
             source = _projection(object_type)
             if source is None:

@@ -460,6 +460,54 @@ def test_통계와_다른_타입의_칸을_도구로도_센다(bot: Bot) -> None
     assert narrowed["total"] == listed["total"] == 2
 
 
+def test_인터페이스로_여러_타입을_한_번에_읽고_쓰기는_타입으로_한다(bot: Bot) -> None:
+    """「설비 중 한국산」 — 시험장비 · 계측기를 따로 묻고 더하게 두면 하나를 빠뜨린다. 화면의
+    인터페이스 목록과 **같은 서버의 범위**를 도구가 받는다(ADR 0006)."""
+    equip, tester, meter = _uniq("equip"), _uniq("tester"), _uniq("meter")
+    bot.call(
+        server.ontology_import,
+        {
+            "interfaces": [
+                {
+                    "slug": equip,
+                    "label": "설비",
+                    "properties": [
+                        {
+                            "key": "country",
+                            "label": "국가",
+                            "data_type": "enum",
+                            "enum_options": ["KR", "US"],
+                        }
+                    ],
+                }
+            ],
+            "types": [
+                {"slug": tester, "label": "시험장비", "interface_slugs": [equip]},
+                {"slug": meter, "label": "계측기", "interface_slugs": [equip]},
+            ],
+        },
+        apply=True,
+    )
+    bot.call(server.object_create, tester, label="시험기", properties={"country": "KR"})
+    bot.call(server.object_create, meter, label="계측기", properties={"country": "KR"})
+    bot.call(server.object_create, meter, label="수입 계측기", properties={"country": "US"})
+
+    korean = [{"field": "country", "op": "eq", "value": "KR"}]
+    listed = bot.call(server.objects_list, equip, conditions=korean)
+    assert {(one["label"], one["type_slug"]) for one in listed["items"]} == {
+        ("시험기", tester),
+        ("계측기", meter),
+    }
+    by_type = bot.call(server.objects_summary, equip, group_by="type")
+    assert {one["label"]: one["count"] for one in by_type["buckets"]} == {
+        "시험장비": 1,
+        "계측기": 2,
+    }
+    # **쓰기는 타입으로** — 어느 타입에 넣을지 서버가 짐작하지 않는다.
+    with pytest.raises(ToolError, match="OBJECTS-0092"):
+        bot.call(server.object_create, equip, label="새 설비")
+
+
 def test_묶음을_도구로_미리_본다(bot: Bot) -> None:
     """AI 가 만든 묶음이 어떻게 들어갈지 **스스로** 확인하는 자리 — 아무것도 안 남는다."""
     slug = _uniq("memo")

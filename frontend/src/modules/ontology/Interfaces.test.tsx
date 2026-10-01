@@ -5,6 +5,7 @@
  *   충돌 문구가 그대로 보이며 저장 단추가 막힌다.
  * - 타입 쪽에서 공통 속성을 열면 모양 칸이 잠기고 어느 인터페이스에서 고치는지 적힌다.
  * - 인터페이스의 공통 속성에는 타입마다 정하는 칸(유일 · 기본값)이 없고, 파일 종류도 없다.
+ * - 인터페이스 목록의 열에는 「타입」 이 있고, 트리 · 필터 칸은 없다(서버가 받는 범위와 같다).
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -17,8 +18,12 @@ const ontologyApi = vi.hoisted(() => ({
   updateProperty: vi.fn(),
   createInterfaceProperty: vi.fn(),
   propertyUsage: vi.fn(),
+  updateInterface: vi.fn(),
 }))
-vi.mock('@/modules/ontology/api', () => ({ ontologyApi }))
+vi.mock('@/modules/ontology/api', async (original) => {
+  const real = await original<typeof import('@/modules/ontology/api')>()
+  return { ...real, ontologyApi }
+})
 
 const TYPE = {
   id: 't1',
@@ -191,6 +196,36 @@ describe('공통 속성을 여는 창', () => {
       expect(ontologyApi.createInterfaceProperty).toHaveBeenCalledWith(
         'equip',
         expect.objectContaining({ key: 'maker', unique: false, default_value: null }),
+      ),
+    )
+  })
+})
+
+describe('인터페이스 목록 화면', () => {
+  it('열에 「타입」 을 담을 수 있고, 트리 · 필터 칸은 없으며, 저장하면 list_view 로 나간다', async () => {
+    ontologyApi.updateInterface.mockResolvedValue({})
+    const { InterfaceEditDialog } = await import('@/modules/ontology/InterfaceEditDialog')
+    const equip = { ...IFACE, properties: [{ ...COUNTRY, owner_kind: 'interface' }] }
+    render(
+      <InterfaceEditDialog
+        iface={equip as never}
+        interfaces={[equip as never]}
+        onClose={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('인터페이스 목록 화면')).toBeInTheDocument()
+    // 기본 열이 무엇인지 말한다 — 타입 목록의 기본과 다르다.
+    expect(screen.getByText(/이름 · 타입 · 식별자/)).toBeInTheDocument()
+    expect(screen.queryByText('목록 왼쪽 트리')).not.toBeInTheDocument()
+    expect(screen.queryByText('목록 위에 세울 필터 칸')).not.toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: '타입' }))
+    await userEvent.click(screen.getByRole('button', { name: '저장' }))
+    await waitFor(() =>
+      expect(ontologyApi.updateInterface).toHaveBeenCalledWith(
+        'equip',
+        expect.objectContaining({ list_view: { columns: ['type'] } }),
       ),
     )
   })

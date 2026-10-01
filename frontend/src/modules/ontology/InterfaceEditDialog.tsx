@@ -2,8 +2,8 @@
  * 인터페이스 하나 — 생성과 수정을 **같은 창이 한다**(ADR 0006).
  *
  * 인터페이스는 여러 타입이 따르는 공통 모양이다. 여기서 정하는 것은 이름 · 설명 · **상위
- * 인터페이스**(그 공통 속성을 이어받는다)이고, 공통 속성은 목록 화면 아래의 편집기가 정한다 —
- * 타입과 같은 길이다.
+ * 인터페이스**(그 공통 속성을 이어받는다) · **인터페이스 목록**(`/o/<인터페이스>`)의 열과 정렬이고,
+ * 공통 속성은 관리 목록 아래의 편집기가 정한다 — 타입과 같은 길이다.
  *
  * **지우기 전에 무엇이 가리키는지 먼저 본다**(`/usage`). 구현 타입이 남은 채로 지우면 그
  * 타입은 없는 인터페이스를 구현하게 되고, 그 사실은 그 타입을 고치는 날에야 드러난다.
@@ -12,7 +12,10 @@
 import { useState } from 'react'
 
 import { ontologyApi } from '@/modules/ontology/api'
-import type { InterfaceUsage, ObjectInterface } from '@/modules/ontology/api'
+import type { InterfaceUsage, ListView } from '@/modules/ontology/api'
+import { commonProperties } from '@/modules/ontology/interfaces'
+import type { InterfaceWithProperties } from '@/modules/ontology/interfaces'
+import { ListViewEditor } from '@/modules/ontology/ListViewEditor'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { IconPickerButton } from '@/shared/components/IconPicker'
@@ -30,9 +33,9 @@ import { Textarea } from '@/shared/components/ui/textarea'
 
 interface Props {
   /** 고칠 인터페이스. 없으면 생성이다. */
-  iface?: ObjectInterface | null
+  iface?: InterfaceWithProperties | null
   /** 상위로 고를 수 있는 것 — 자기 자신은 화면이 뺀다(고리는 서버가 막는다). */
-  interfaces: ObjectInterface[]
+  interfaces: InterfaceWithProperties[]
   onClose: () => void
   onChanged: () => void
 }
@@ -45,6 +48,7 @@ export function InterfaceEditDialog({ iface, interfaces, onClose, onChanged }: P
   const [description, setDescription] = useState(iface?.description ?? '')
   const [sortOrder, setSortOrder] = useState(String(iface?.sort_order ?? 0))
   const [extendsSlugs, setExtendsSlugs] = useState<string[]>(iface?.extends_slugs ?? [])
+  const [listView, setListView] = useState<ListView>(iface?.list_view ?? {})
 
   const [error, setError] = useState<Error | null>(null)
   const [saving, setSaving] = useState(false)
@@ -70,6 +74,8 @@ export function InterfaceEditDialog({ iface, interfaces, onClose, onChanged }: P
         description,
         sort_order: Number(sortOrder) || 0,
         extends_slugs: extendsSlugs,
+        // 만들 때는 공통 속성이 아직 없다 — 열은 속성을 정한 뒤 고친다.
+        ...(iface ? { list_view: listView } : {}),
       }
       if (iface) await ontologyApi.updateInterface(iface.slug, body)
       else await ontologyApi.createInterface({ slug, ...body })
@@ -197,6 +203,23 @@ export function InterfaceEditDialog({ iface, interfaces, onClose, onChanged }: P
                       : '아직 없습니다 — 타입 창의 「구현 인터페이스」 에서 고릅니다.'}
                   </p>
                 </div>
+              )}
+
+              {/* 목록 화면 — 공통 속성이 서야 고를 열이 있다. 그래서 고칠 때만. */}
+              {iface && (
+                <section className="space-y-4 border-t pt-3 xl:col-span-2">
+                  <h3 className="text-muted-foreground border-b pb-1 text-xs font-semibold">
+                    인터페이스 목록 화면
+                  </h3>
+                  <ListViewEditor
+                    owner="interface"
+                    defs={commonProperties(iface, interfaces)}
+                    relationTypes={[]}
+                    typeSlug={iface.slug}
+                    value={listView}
+                    onChange={setListView}
+                  />
+                </section>
               )}
             </div>
           </div>

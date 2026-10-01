@@ -48,7 +48,8 @@ from sqlalchemy.orm import Session, aliased
 
 from app.modules.objects import paths, system
 from app.modules.objects.models import ObjectInstance
-from app.modules.objects.services import count_of, properties_of
+from app.modules.objects.scope import Scope, as_scope
+from app.modules.objects.services import count_of
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.workspaces.models import Workspace
 from app.shared.errors import AppError, code
@@ -75,6 +76,10 @@ FIXED_FIELDS = {
     "workspace": "소유 부서",
     "created_year": "만든 해",
 }
+
+#: 인터페이스 목록에만 있는 축 — 그 줄이 **어느 타입의 객체인가**(ADR 0006). 「설비가 타입별로
+#: 몇 대」 는 인터페이스 목록에서 가장 먼저 나오는 물음이다.
+TYPE_FIELD = ("type", "타입")
 
 #: 묶을 수 있는 속성 종류. **긴 글과 파일은 없다** — 그룹이 행 수만큼 나온다.
 GROUPABLE = ("text", "enum", "bool", "url", "number", "date", "datetime", "object_ref")
@@ -193,7 +198,7 @@ class Axis:
 
 
 def group_options(
-    object_type: ObjectType,
+    target: ObjectType | Scope,
     defs: list[PropertyDef],
     resolver: paths.Resolver | None = None,
 ) -> list[GroupOption]:
@@ -202,8 +207,10 @@ def group_options(
         for key, label in FIXED_FIELDS.items()
         # 식별자를 안 쓰는 타입에서는 그 축이 「(비어 있음)」 한 칸이 된다 — 고를 수
         # 있다고 보여 주고 나서 빈 그림을 주지 않는다.
-        if not (key == "key" and object_type.key_policy == "none")
+        if not (key == "key" and target.key_policy == "none")
     ]
+    if isinstance(target, Scope) and target.is_interface:
+        out.insert(0, GroupOption(field=TYPE_FIELD[0], label=TYPE_FIELD[1], kind="fixed"))
     for one in defs:
         if one.data_type not in GROUPABLE:
             continue
@@ -274,6 +281,21 @@ def _group_expr(
                 code("OBJECTS", 41), f"기준으로 쓸 수 없는 칸입니다: {field_name}", status=422
             )
         return _hop_axis(resolver, resolver.parse(field_name), alias)
+    if field_name == TYPE_FIELD[0]:
+        scope = resolver.scope if resolver is not None else None
+        if scope is None or not scope.is_interface:
+            raise AppError(
+                code("OBJECTS", 41),
+                "「타입」 축은 인터페이스 목록에서만 씁니다 — 타입 목록은 한 타입뿐입니다.",
+                status=422,
+            )
+        names = {str(one.id): one.label for one in scope.types}
+        return Axis(
+            cast(ObjectInstance.type_id, String),
+            TYPE_FIELD[1],
+            "type",
+            namer=lambda keys: {one: names.get(one, one) for one in keys},
+        )
     if field_name in FIXED_FIELDS:
         label = FIXED_FIELDS[field_name]
         if field_name == "label":
@@ -459,7 +481,7 @@ def _is_uuid(raw: str) -> bool:
 
 def summarize(
     db: Session,
-    object_type: ObjectType,
+    target: ObjectType | Scope,
     filtered: Select[Any],
     *,
     group_by: str,
@@ -486,8 +508,9 @@ def summarize(
             f"차례는 {', '.join(ORDERS)} 중 하나여야 합니다: {order}",
             status=422,
         )
-    defs = properties_of(db, object_type.id)
-    resolver = paths.Resolver(db, object_type)
+    scope = as_scope(db, target)
+    defs = scope.defs
+    resolver = paths.Resolver(db, scope)
     group = _group_expr(defs, group_by, "g", resolver)
     key_expr = group.expr
     value_expr = _metric_expr(defs, metric, metric_field)
@@ -710,7 +733,7 @@ def _number_def(defs: list[PropertyDef], field_name: str) -> PropertyDef:
 
 def points(
     db: Session,
-    object_type: ObjectType,
+    target: ObjectType | Scope,
     filtered: Select[Any],
     *,
     x: str,
@@ -718,12 +741,11 @@ def points(
     group_by: str | None = None,
 ) -> Points:
     """고른 것들의 **원값**을 그대로. 상자 그림은 x 하나와 기준, 산점도는 x·y 둘."""
-    defs = properties_of(db, object_type.id)
+    scope = as_scope(db, target)
+    defs = scope.defs
     x_def = _number_def(defs, x)
     y_def = _number_def(defs, y) if y else None
-    axis = (
-        _group_expr(defs, group_by, "g", paths.Resolver(db, object_type)) if group_by else None
-    )
+    axis = _group_expr(defs, group_by, "g", paths.Resolver(db, scope)) if group_by else None
     group_expr = axis.expr if axis else None
     group_label = axis.label if axis else ""
 

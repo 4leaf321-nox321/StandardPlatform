@@ -11,11 +11,16 @@
  * 그려지는 목록을 위에 붙인다** — 열을 담으면 그 자리에서 표 머리가 바뀌고,
  * 필터를 켜면 위에 칸이 선다. 이 저장소가 「빈 목록은 이유를 말한다」 로 푸는
  * 것과 같은 방식이다: **화면이 스스로를 설명하게 한다.**
+ *
+ * **인터페이스 목록도 이것으로 정한다**(`owner="interface"`). 열에 「타입」 이 더해지고, 트리 ·
+ * 롤업 · 필터 칸은 없다 — 트리를 그릴 관계와 모을 숫자는 타입마다 다르고, 거르기는 조건 줄이
+ * 한다(서버의 `views.INTERFACE_LIST_KEYS` 와 같은 범위).
  */
 
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react'
 
 import { ROLLUP_FNS } from '@/modules/ontology/api'
+import { defaultInterfaceColumns } from '@/modules/ontology/interfaces'
 import type {
   ListView,
   PropertyDef,
@@ -57,6 +62,11 @@ const NO_TREE = '__none__'
 /** 열을 안 골랐을 때 목록이 떨어지는 기본. `ObjectListPage` 와 같아야 한다. */
 const FALLBACK_PREVIEW = ['key', 'label', 'updated_at']
 
+/** 인터페이스 목록에만 있는 열 — 그 줄이 어느 타입의 객체인가. */
+const TYPE_COLUMN = { id: 'type', label: '타입' }
+
+type Owner = 'type' | 'interface'
+
 /** 필터·검색에 쓸 수 있는 종류. 문자열 비교만 하므로 글과 선택뿐이다. */
 const FILTERABLE = new Set(['text', 'enum', 'url'])
 
@@ -68,10 +78,13 @@ interface Props {
   typeSlug: string
   value: ListView
   onChange: (next: ListView) => void
+  /** 누구의 목록인가. 기본은 타입. */
+  owner?: Owner
 }
 
-function fieldOptions(defs: PropertyDef[]): { id: string; label: string }[] {
+function fieldOptions(defs: PropertyDef[], owner: Owner = 'type'): { id: string; label: string }[] {
   return [
+    ...(owner === 'interface' ? [TYPE_COLUMN] : []),
     ...BUILT_IN,
     ...defs
       .filter((def) => !NOT_A_GOOD_COLUMN.has(def.data_type))
@@ -85,10 +98,14 @@ function fieldOptions(defs: PropertyDef[]): { id: string; label: string }[] {
  * 진짜 데이터를 끌어오면 「비어 있는 타입」 에서는 미리보기가 비고, 그러면 설정이
  * 잘못된 것인지 데이터가 없는 것인지 구별되지 않는다.
  */
-function Preview({ defs, value }: { defs: PropertyDef[]; value: ListView }) {
-  const all = fieldOptions(defs)
-  const columns = value.columns?.length ? value.columns : FALLBACK_PREVIEW
-  const filters = value.filters ?? []
+function Preview({ defs, value, owner }: { defs: PropertyDef[]; value: ListView; owner: Owner }) {
+  const all = fieldOptions(defs, owner)
+  const columns = value.columns?.length
+    ? value.columns
+    : owner === 'interface'
+      ? defaultInterfaceColumns(defs)
+      : FALLBACK_PREVIEW
+  const filters = owner === 'interface' ? [] : (value.filters ?? [])
 
   function labelOf(id: string): string {
     return all.find((one) => one.id === id)?.label ?? id
@@ -97,9 +114,11 @@ function Preview({ defs, value }: { defs: PropertyDef[]; value: ListView }) {
   return (
     <div className="bg-muted/30 space-y-2 rounded-md border border-dashed p-3">
       <p className="text-muted-foreground text-xs">
-        이 타입의 목록 화면(
+        이 {owner === 'interface' ? '인터페이스' : '타입'}의 목록 화면(
         <code>
-          /o/{'{'}타입{'}'}
+          /o/{'{'}
+          {owner === 'interface' ? '인터페이스' : '타입'}
+          {'}'}
         </code>
         )이 이렇게 그려집니다.
       </p>
@@ -151,8 +170,15 @@ function Preview({ defs, value }: { defs: PropertyDef[]; value: ListView }) {
   )
 }
 
-export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange }: Props) {
-  const all = fieldOptions(defs)
+export function ListViewEditor({
+  defs,
+  relationTypes,
+  typeSlug,
+  value,
+  onChange,
+  owner = 'type',
+}: Props) {
+  const all = fieldOptions(defs, owner)
   const chosen = value.columns ?? []
   const rest = all.filter((one) => !chosen.includes(one.id))
 
@@ -193,15 +219,23 @@ export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange 
 
   return (
     <div className="space-y-5">
-      <Preview defs={defs} value={value} />
+      <Preview defs={defs} value={value} owner={owner} />
 
       {/* --- 열 --------------------------------------------------------- */}
       <div className="space-y-2">
         <Label>목록에 보일 열</Label>
         {chosen.length === 0 ? (
           <p className="text-muted-foreground text-sm">
-            선택하지 않으면 <b>식별자 · 이름 · 수정한 때</b>로 떨어집니다 — 빈 화면이 되지는 않지만,
-            정의한 속성은 안 보입니다.
+            {owner === 'interface' ? (
+              <>
+                선택하지 않으면 <b>이름 · 타입 · 식별자 · 공통 속성 앞의 셋</b>으로 떨어집니다.
+              </>
+            ) : (
+              <>
+                선택하지 않으면 <b>식별자 · 이름 · 수정한 때</b>로 떨어집니다 — 빈 화면이 되지는
+                않지만, 정의한 속성은 안 보입니다.
+              </>
+            )}
           </p>
         ) : (
           <ul className="space-y-1">
@@ -279,11 +313,14 @@ export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange 
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {all.map((one) => (
-                <SelectItem key={one.id} value={one.id}>
-                  {one.label}
-                </SelectItem>
-              ))}
+              {/* 「타입」 으로는 정렬하지 않는다 — 서버가 받지 않는다(열로만 선다). */}
+              {all
+                .filter((one) => one.id !== TYPE_COLUMN.id)
+                .map((one) => (
+                  <SelectItem key={one.id} value={one.id}>
+                    {one.label}
+                  </SelectItem>
+                ))}
             </SelectContent>
           </Select>
           <Select
@@ -306,16 +343,18 @@ export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange 
         </div>
       </div>
 
-      {/* --- 트리 ------------------------------------------------------- */}
-      <TreeSection
-        relationTypes={relationTypes}
-        typeSlug={typeSlug}
-        value={value}
-        onChange={onChange}
-      />
-
-      {/* --- 롤업 ------------------------------------------------------- */}
-      {value.tree?.relation && <RollupSection defs={defs} value={value} onChange={onChange} />}
+      {/* --- 트리 · 롤업 — 타입만 ------------------------------------- */}
+      {owner === 'type' && (
+        <TreeSection
+          relationTypes={relationTypes}
+          typeSlug={typeSlug}
+          value={value}
+          onChange={onChange}
+        />
+      )}
+      {owner === 'type' && value.tree?.relation && (
+        <RollupSection defs={defs} value={value} onChange={onChange} />
+      )}
 
       {/* --- 검색·필터 ------------------------------------------------ */}
       <Toggles
@@ -326,13 +365,15 @@ export function ListViewEditor({ defs, relationTypes, typeSlug, value, onChange 
         onToggle={(id) => toggle('search', id)}
       />
 
-      <Toggles
-        title="목록 위에 세울 필터 칸"
-        hint="글과 선택 속성만 됩니다 — 지금은 문자열 비교만 하고, 범위 질의는 없습니다. 없는 것을 있는 척하지 않습니다."
-        options={filterable}
-        chosen={value.filters ?? []}
-        onToggle={(id) => toggle('filters', id)}
-      />
+      {owner === 'type' && (
+        <Toggles
+          title="목록 위에 세울 필터 칸"
+          hint="글과 선택 속성만 됩니다 — 지금은 문자열 비교만 하고, 범위 질의는 없습니다. 없는 것을 있는 척하지 않습니다."
+          options={filterable}
+          chosen={value.filters ?? []}
+          onToggle={(id) => toggle('filters', id)}
+        />
+      )}
     </div>
   )
 }

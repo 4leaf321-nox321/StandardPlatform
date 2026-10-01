@@ -37,6 +37,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.objects import system
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
+from app.modules.objects.scope import Scope, as_scope
 from app.modules.objects.services import properties_of
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared.errors import AppError, code
@@ -113,12 +114,22 @@ def _no_path(path: str, why: str) -> AppError:
 
 
 class Resolver:
-    """한 타입에서 한 걸음에 닿는 것들. 요청 하나에서 한 번 만들어 여러 번 쓴다."""
+    """한 타입(또는 인터페이스의 구현 타입 전부)에서 한 걸음에 닿는 것들. 요청 하나에서 한 번
+    만들어 여러 번 쓴다.
 
-    def __init__(self, db: Session, object_type: ObjectType) -> None:
+    인터페이스 목록이면 참조 칸은 **공통 속성**에서, 관계는 **구현 타입 중 하나라도** 끝에 설
+    수 있는 것에서 나온다 — 관계로 이어진 것을 찾는 질의는 객체 id 로 묶이므로 타입을 안
+    가린다.
+    """
+
+    def __init__(self, db: Session, target: ObjectType | Scope) -> None:
         self.db = db
-        self.object_type = object_type
+        self.scope = as_scope(db, target)
         self._hops: list[Hop] | None = None
+
+    def _touches(self, allowed: list[str] | None) -> bool:
+        """이 범위의 객체가 그 끝에 설 수 있나. 비어 있으면(None) 제약이 없다."""
+        return allowed is None or bool(self.scope.match_slugs & set(allowed))
 
     def hops(self) -> list[Hop]:
         if self._hops is None:
@@ -126,7 +137,7 @@ class Resolver:
         return self._hops
 
     def _load(self) -> list[Hop]:
-        db, me = self.db, self.object_type
+        db = self.db
         types = {row.slug: row for row in db.scalars(select(ObjectType))}
 
         def fields_of(slug: str | None) -> tuple[ObjectType | None, list[PropertyDef]]:
@@ -136,7 +147,7 @@ class Resolver:
             return target, properties_of(db, target.id)
 
         out: list[Hop] = []
-        for one in properties_of(db, me.id):
+        for one in self.scope.defs:
             if one.data_type != "object_ref":
                 continue
             target, defs = fields_of(one.ref_type_slug)
@@ -165,16 +176,16 @@ class Resolver:
             src, dst = relation.src_type_slugs, relation.dst_type_slugs
             sides: list[tuple[str, list[str] | None, str]] = []
             if relation.directed:
-                if src is None or me.slug in src:
+                if self._touches(src):
                     sides.append(("out", dst, relation.label))
-                if dst is None or me.slug in dst:
+                if self._touches(dst):
                     sides.append(
                         ("in", src, relation.inverse_label or f"{relation.label} (반대)")
                     )
-            elif src is None or me.slug in src:
+            elif self._touches(src):
                 # 방향이 없으면 한 줄만 선다 — 양쪽이 같은 말로 읽힌다.
                 sides.append(("out", dst, relation.label))
-            elif dst is None or me.slug in dst:
+            elif self._touches(dst):
                 sides.append(("out", src, relation.label))
             for kind, theirs, label in sides:
                 slugs = list(theirs or [])
@@ -266,7 +277,7 @@ class Resolver:
         relation = hop.relation
         if relation is None:  # pragma: no cover - 참조 칸 걸음에는 부르지 않는다
             raise ValueError("관계가 아닌 걸음입니다")
-        me = self.object_type.slug
+        mine = self.scope.type_slugs
         parts: list[Any] = []
         if hop.kind == "out" or not relation.directed:
             parts += [
@@ -277,7 +288,7 @@ class Resolver:
                 select(
                     ObjectLink.src_id.label("me"),
                     cast(ObjectLink.dst_id, String).label("other"),
-                ).where(ObjectLink.relation == relation.slug, ObjectLink.src_type == me),
+                ).where(ObjectLink.relation == relation.slug, ObjectLink.src_type.in_(mine)),
             ]
         if hop.kind == "in" or not relation.directed:
             parts += [
@@ -288,7 +299,7 @@ class Resolver:
                 select(
                     ObjectLink.dst_id.label("me"),
                     cast(ObjectLink.src_id, String).label("other"),
-                ).where(ObjectLink.relation == relation.slug, ObjectLink.dst_type == me),
+                ).where(ObjectLink.relation == relation.slug, ObjectLink.dst_type.in_(mine)),
             ]
         return union_all(*parts).subquery(name)
 

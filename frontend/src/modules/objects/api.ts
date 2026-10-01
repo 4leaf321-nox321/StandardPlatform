@@ -281,13 +281,7 @@ export interface Watched {
 
 /** 품질 — 한 종류·한 타입의 걸린 것들. */
 export interface QualityFinding {
-  kind:
-    | 'missing_required'
-    | 'orphan'
-    | 'broken_ref'
-    | 'duplicate'
-    | 'alias_clash'
-    | 'alias_pending'
+  kind: 'missing_required' | 'orphan' | 'broken_ref' | 'duplicate' | 'alias_clash' | 'alias_pending'
   kind_label: string
   type_slug: string
   type_label: string
@@ -330,6 +324,8 @@ export interface ObjectQuery {
   /** 조건 필터. 칸 안 OR, 칸끼리 AND. */
   conditions?: Condition[]
   status?: string | null
+  /** 인터페이스 목록에서 그중 몇 타입만(ADR 0006). `types=a|b` 로 나간다. */
+  types?: string[]
 }
 
 function queryString(query: ObjectQuery): string {
@@ -344,6 +340,7 @@ function queryString(query: ObjectQuery): string {
     if (value) params.set(`p.${key}`, value)
   }
   if (query.status) params.set('status', query.status)
+  if (query.types?.length) params.set('types', query.types.join('|'))
   for (const one of query.conditions ?? []) {
     params.append(`f.${one.field}.${one.op}`, one.value)
   }

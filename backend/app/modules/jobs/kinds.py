@@ -403,7 +403,7 @@ def objects_export(work: Work) -> dict[str, Any]:
     object_type, stmt = _list_query(work)
     defs = properties_of(work.db, object_type.id)
     work.progress("읽기", 0, 0)
-    rows = list(work.db.scalars(apply_sort(stmt, object_type)))
+    rows = list(work.db.scalars(apply_sort(stmt, object_type.list_view or {})))
     work.progress("변환", 0, len(rows))
     records = bulk.export_rows(work.db, defs, rows)
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")

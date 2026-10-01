@@ -39,6 +39,7 @@ from app.modules.objects import (
 )
 from app.modules.objects import keys as key_history
 from app.modules.objects import relations as rel
+from app.modules.objects import scope as scopes
 from app.modules.objects import summary as summary_service
 from app.modules.objects.models import (
     OBJECT_STATUSES,
@@ -110,6 +111,7 @@ from app.modules.objects.schemas import (
     WatchOut,
     WatchRequest,
 )
+from app.modules.objects.scope import Scope
 from app.modules.objects.services import (
     apply_property_filters,
     apply_search,
@@ -124,7 +126,7 @@ from app.modules.objects.services import (
     require_unique_properties,
 )
 from app.modules.ontology import managed
-from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
+from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef, RelationType
 from app.modules.ontology.schemas import PropertyDefOut
 from app.modules.ontology.services import (
     merge_properties,
@@ -153,8 +155,33 @@ router = APIRouter(prefix="/objects", tags=["objects"])
 def _type(db: Session, slug: str) -> ObjectType:
     row = db.scalar(select(ObjectType).where(ObjectType.slug == slug))
     if row is None:
+        iface = db.scalar(select(ObjectInterface).where(ObjectInterface.slug == slug))
+        if iface is not None:
+            # **인터페이스 목록은 읽기만 한다**(ADR 0006) — 만들기 · 고치기 · 가져오기 · 트리 ·
+            # 저장된 뷰는 타입의 일이다. 어느 타입에 넣을지 모르는 채로 받으면 짐작이 된다.
+            raise Conflict(
+                code("OBJECTS", 92),
+                f"{iface.label}은(는) 인터페이스라 여기서는 읽기만 합니다 — 만들기 · 수정 · "
+                "가져오기 · 트리 · 저장된 뷰는 구현 타입의 목록에서 하세요.",
+                details={"interface": slug},
+            )
         raise NotFound(code("OBJECTS", 10), f"타입을 찾을 수 없습니다: {slug}")
     return row
+
+
+def _scope(db: Session, slug: str) -> Scope:
+    """읽기의 범위 — 타입이면 그 타입, 인터페이스면 구현 타입 전부(ADR 0006)."""
+    found = scopes.find(db, slug)
+    if found is None:
+        raise NotFound(code("OBJECTS", 10), f"타입을 찾을 수 없습니다: {slug}")
+    return found
+
+
+def _projection(scope: Scope) -> ObjectType | None:
+    """원 표를 비추는 타입이면 그 타입 — 행이 없어 목록 · 통계를 원 표에 묻는다."""
+    if scope.object_type is not None and system.is_system(scope.object_type):
+        return scope.object_type
+    return None
 
 
 #: 상세의 「관련 객체」 에 참조 칸으로 실을 상한 — 프로젝트 하나를 5천 개 과제가 가리키면 그
@@ -330,18 +357,18 @@ def summary(
     투영(system) 타입은 행이 없어 못 센다 — 원 표에 물어야 하는 일이고, 그 표의 축을
     이 틀은 모른다.
     """
-    object_type = _type(db, type_slug)
-    if system.is_system(object_type):
+    scope = _scope(db, type_slug)
+    if _projection(scope) is not None:
         raise Conflict(
             code("OBJECTS", 47),
-            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 세지 않습니다.",
+            f"{scope.label}은(는) 다른 표를 비추는 타입이라 여기서 세지 않습니다.",
         )
     stmt = _filtered(
-        db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
+        db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
     )
     found = summary_service.summarize(
         db,
-        object_type,
+        scope,
         stmt,
         group_by=group_by,
         split_by=split_by,
@@ -349,7 +376,7 @@ def summary(
         metric_field=metric_field,
         order=order,
     )
-    defs = properties_of(db, object_type.id)
+    defs = scope.defs
     return SummaryOut(
         group_field=found.group_field,
         group_label=found.group_label,
@@ -386,9 +413,7 @@ def summary(
                 multi=one.multi,
                 heading=one.heading,
             )
-            for one in summary_service.group_options(
-                object_type, defs, paths.Resolver(db, object_type)
-            )
+            for one in summary_service.group_options(scope, defs, paths.Resolver(db, scope))
         ],
         metric_options=[
             GroupOptionOut(field=one.field, label=one.label, kind=one.kind)
@@ -420,17 +445,17 @@ def points(
     거르기는 목록과 똑같이 온다. 값이 없는 행은 빠진다 — 0 으로 채우면 없는 점이
     원점에 모여 그림이 거짓말을 한다.
     """
-    object_type = _type(db, type_slug)
-    if system.is_system(object_type):
+    scope = _scope(db, type_slug)
+    if _projection(scope) is not None:
         raise Conflict(
             code("OBJECTS", 58),
-            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 못 그립니다.",
+            f"{scope.label}은(는) 다른 표를 비추는 타입이라 여기서 못 그립니다.",
         )
     stmt = _filtered(
-        db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
+        db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
     )
-    found = summary_service.points(db, object_type, stmt, x=x, y=y, group_by=group_by)
-    defs = properties_of(db, object_type.id)
+    found = summary_service.points(db, scope, stmt, x=x, y=y, group_by=group_by)
+    defs = scope.defs
     return PointsOut(
         x_label=found.x_label,
         y_label=found.y_label,
@@ -453,9 +478,7 @@ def points(
                 multi=one.multi,
                 heading=one.heading,
             )
-            for one in summary_service.group_options(
-                object_type, defs, paths.Resolver(db, object_type)
-            )
+            for one in summary_service.group_options(scope, defs, paths.Resolver(db, scope))
         ],
     )
 
@@ -483,18 +506,18 @@ def summary_export(
     묶어 본 숫자는 결국 보고서로 옮겨진다. 막대를 보고 손으로 옮겨 적으면 그 사이에
     틀리고, 틀린 숫자가 회의에 들어간다. 거르기·축은 `/summary` 와 똑같이 받는다.
     """
-    object_type = _type(db, type_slug)
-    if system.is_system(object_type):
+    scope = _scope(db, type_slug)
+    if _projection(scope) is not None:
         raise Conflict(
             code("OBJECTS", 47),
-            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 세지 않습니다.",
+            f"{scope.label}은(는) 다른 표를 비추는 타입이라 여기서 세지 않습니다.",
         )
     stmt = _filtered(
-        db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
+        db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
     )
     found = summary_service.summarize(
         db,
-        object_type,
+        scope,
         stmt,
         group_by=group_by,
         split_by=split_by,
@@ -529,16 +552,16 @@ def points_export(
     그림과 같은 상한(`MAX_POINTS`)을 쓴다. 잘렸으면 파일 맨 끝에 그렇다고 적는다 —
     안 적으면 파일은 「이게 전부」 로 읽힌다.
     """
-    object_type = _type(db, type_slug)
-    if system.is_system(object_type):
+    scope = _scope(db, type_slug)
+    if _projection(scope) is not None:
         raise Conflict(
             code("OBJECTS", 58),
-            f"{object_type.label}은(는) 다른 표를 비추는 타입이라 여기서 못 그립니다.",
+            f"{scope.label}은(는) 다른 표를 비추는 타입이라 여기서 못 그립니다.",
         )
     stmt = _filtered(
-        db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
+        db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
     )
-    found = summary_service.points(db, object_type, stmt, x=x, y=y, group_by=group_by)
+    found = summary_service.points(db, scope, stmt, x=x, y=y, group_by=group_by)
     header, rows = summary_service.points_table(found)
     return sheets.file_response(
         header, rows, fmt=format, stem=f"{type_slug}-points", sheet="값"
@@ -556,12 +579,12 @@ def linked_fields(
     조건 고르개가 이 타입 자신의 칸 아래에 제목별로 붙인다. 통계 기준은 `/summary` 의
     `group_options` 에 같은 주소로 실린다. 한 걸음까지다 — 두 걸음부터는 조건을 읽을 수 없다.
     """
-    object_type = _type(db, type_slug)
-    if system.is_system(object_type):
+    scope = _scope(db, type_slug)
+    if _projection(scope) is not None:
         return []
     return [
         FieldOptionOut(**vars(one))
-        for one in paths.Resolver(db, object_type).options(for_group=False)
+        for one in paths.Resolver(db, scope).options(for_group=False)
     ]
 
 
@@ -634,7 +657,7 @@ def object_tree(
 def _filtered(
     db: Session,
     user: User,
-    object_type: ObjectType,
+    target: ObjectType | Scope,
     request: Request,
     *,
     q: str | None,
@@ -650,28 +673,53 @@ def _filtered(
     `omit` 은 **조건 하나만 빼고** 같은 질의를 세우는 자리다 — 0건일 때 「어느 조건을
     빼면 몇 건인지」 를 말해 주려면 그 조건만 뺀 수를 세야 하고, 그 수를 여기 말고 다른
     데서 세면 진단이 목록과 어긋난다(`resolve.diagnose`).
+
+    인터페이스 목록이면 구현 타입 전부가 범위다(ADR 0006) — `types=a|b` 로 그중 몇 타입만
+    본다. 트리는 타입의 것이라 인터페이스에서는 거절한다.
     """
+    scope = scopes.as_scope(db, target)
     stmt = select(ObjectInstance).where(
-        ObjectInstance.type_id == object_type.id,
+        scope.clause(),
         ObjectInstance.deleted_at.is_(None),
         visible_owner_clause(user, ObjectInstance.owner_workspace_id),
     )
+    narrow = request.query_params.get("types")
+    if narrow and omit != "types":
+        wanted_types = [one for one in narrow.split("|") if one]
+        strangers = sorted(set(wanted_types) - set(scope.type_slugs))
+        if strangers:
+            raise AppError(
+                code("OBJECTS", 93),
+                f"{scope.label}의 타입이 아닙니다: {', '.join(strangers)}. "
+                f"고를 수 있는 것: {', '.join(scope.type_slugs) or '(없음)'}",
+                status=422,
+            )
+        stmt = stmt.where(
+            ObjectInstance.type_id.in_(
+                [one.id for one in scope.types if one.slug in wanted_types]
+            )
+        )
     if status and omit != "status":
         stmt = stmt.where(ObjectInstance.status == status)
     if q and omit != "q":
-        stmt = apply_search(stmt, object_type, q)
+        stmt = apply_search(stmt, scope, q)
     if year is not None and omit != "year":
-        stmt = apply_year(db, stmt, object_type, year)
+        stmt = apply_year(db, stmt, scope, year)
     if under is not None and omit == "under":
         under = None
     if under is not None:
         # **기본은 「아래 것까지 포함」 이다.** 안 그러면 상위 노드를 눌렀을 때
         # 목록이 비고, 그 빈 목록은 「없다」 로 읽힌다.
-        relation, parent_end = _tree_spec(object_type)
+        if scope.object_type is None:
+            raise Conflict(
+                code("OBJECTS", 92),
+                f"{scope.label}은(는) 인터페이스라 트리가 없습니다 — 트리는 타입의 것입니다.",
+            )
+        relation, parent_end = _tree_spec(scope.object_type)
         if relation is None:
             raise Conflict(
                 code("OBJECTS", 33),
-                f"{object_type.label}에는 트리가 정의돼 있지 않습니다. "
+                f"{scope.label}에는 트리가 정의돼 있지 않습니다. "
                 "타입의 「목록 화면」 에서 트리로 사용할 관계를 선택하세요.",
             )
         wanted = [under]
@@ -694,9 +742,7 @@ def _filtered(
         if _condition_name(one, index) != omit
     ]
     if asked:
-        stmt = conditions.apply(
-            stmt, properties_of(db, object_type.id), asked, paths.Resolver(db, object_type)
-        )
+        stmt = conditions.apply(stmt, scope.defs, asked, paths.Resolver(db, scope))
     return stmt
 
 
@@ -715,6 +761,8 @@ def _filter_parts(
 ) -> list[tuple[str, str]]:
     """걸린 거르기 전부 — (이름, 사람이 읽을 설명). 진단이 하나씩 떼어 본다."""
     parts: list[tuple[str, str]] = []
+    if request.query_params.get("types"):
+        parts.append(("types", f"타입 = {request.query_params['types']}"))
     if q:
         parts.append(("q", f"검색어 「{q}」"))
     if status:
@@ -1573,34 +1621,44 @@ def list_objects(
     거르기는 `?p.<속성키>=<값>` 으로 온다. `list_view` 가 열·정렬·검색 자리를
     정하고, 안 정해 뒀으면 기본형으로 떨어진다 — **빈 화면이 되지는 않는다.**
     """
-    object_type = _type(db, type_slug)
+    scope = _scope(db, type_slug)
     capped = clamp_limit(limit)
 
-    if system.is_system(object_type):
+    projected = _projection(scope)
+    if projected is not None:
         # 행이 없다 — 원 표를 그대로 투영한다. 거르기는 검색어뿐이다(속성이 없으므로).
-        refs, total = system.source_of(object_type).search(db, user, q, capped, offset)
+        refs, total = system.source_of(projected).search(db, user, q, capped, offset)
         now = datetime.now(UTC)
         return Page(
-            items=[system.projected(ref, object_type.slug, now) for ref in refs],
+            items=[system.projected(ref, projected.slug, now) for ref in refs],
             total=total,
             limit=capped,
             offset=offset,
         )
 
     stmt = _filtered(
-        db, user, object_type, request, q=q, status=status, year=year, under=under, deep=deep
+        db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
     )
 
     total = count_of(db, stmt)
-    rows = db.scalars(apply_sort(stmt, object_type).limit(capped).offset(offset))
+    rows = db.scalars(apply_sort(stmt, scope.list_view).limit(capped).offset(offset))
 
     found = list(rows)
     workspaces = _workspace_slugs(db)
-    labels = _ref_labels(db, properties_of(db, object_type.id), found)
+    labels = _ref_labels(db, scope.defs, found)
     names = aliases.of(db, [row.id for row in found])
+    # **줄마다 제 타입** — 인터페이스 목록은 여러 타입이 섞인다(링크가 그 타입의 상세로 간다).
+    slug_of = {one.id: one.slug for one in scope.types}
     return Page(
         items=[
-            _out(row, object_type.slug, workspaces, labels, names.get(row.id)) for row in found
+            _out(
+                row,
+                slug_of.get(row.type_id, scope.slug),
+                workspaces,
+                labels,
+                names.get(row.id),
+            )
+            for row in found
         ],
         total=total,
         limit=capped,
@@ -1624,8 +1682,7 @@ def resolve_name(
     사람에게 묻고, `none` 이면 없다. 이름으로 참조를 걸거나 관계를 잇기 **전에** 여기를
     거치라고 두는 자리다(`resolve` 모듈의 설명).
     """
-    object_type = _type(db, type_slug)
-    found = resolve.by_name(db, user, object_type, name)
+    found = resolve.by_name(db, user, _scope(db, type_slug), name)
     return ResolveOut.model_validate(found)
 
 
@@ -1645,9 +1702,9 @@ def resolve_names(
     답은 **보낸 차례대로** 오고 줄마다 물은 이름(`name`)이 붙는다 — 차례로만 맞추면 중간에
     빈 이름 하나가 섞였을 때 전부 한 칸씩 어긋난다.
     """
-    object_type = _type(db, type_slug)
+    scope = _scope(db, type_slug)
     items = [
-        ResolveOneOut(name=one, **resolve.by_name(db, user, object_type, one).__dict__)
+        ResolveOneOut(name=one, **resolve.by_name(db, user, scope, one).__dict__)
         for one in payload.names
     ]
     counts: dict[str, int] = {"exact": 0, "candidates": 0, "none": 0}
@@ -1673,13 +1730,13 @@ def diagnose_list(
     「없다」 와 「안 보인다」 와 「조건이 좁다」 를 가른다. 조건 때문이면 어느 조건을
     빼면 몇 건인지, 그리고 그 중 **값이 비어 있어서** 빠진 것이 몇 건인지까지 말한다.
     """
-    object_type = _type(db, type_slug)
+    scope = _scope(db, type_slug)
 
     def build(omit: str | None) -> Any:
         return _filtered(
             db,
             user,
-            object_type,
+            scope,
             request,
             q=q,
             status=status,
@@ -1689,7 +1746,7 @@ def diagnose_list(
             omit=omit,
         )
 
-    defs = properties_of(db, object_type.id)
+    defs = scope.defs
 
     def unknown(name: str) -> int | None:
         """그 조건이 거는 칸에 **값이 없어서** 빠진 수. 셀 수 없으면 None.
@@ -1711,21 +1768,22 @@ def diagnose_list(
                 rest,
                 defs,
                 [conditions.Condition(field=field, op="notempty", value="")],
-                paths.Resolver(db, object_type),
+                paths.Resolver(db, scope),
             )
             return max(count_of(db, rest) - count_of(db, known), 0)
         except AppError:
             return None
 
+    projected = _projection(scope)
     total = (
-        system.source_of(object_type).search(db, user, q, 1, 0)[1]
-        if system.is_system(object_type)
+        system.source_of(projected).search(db, user, q, 1, 0)[1]
+        if projected is not None
         else count_of(db, build(None))
     )
     found = resolve.diagnose(
         db,
         user,
-        object_type,
+        scope,
         total=total,
         parts=_filter_parts(request, q=q, status=status, year=year, under=under),
         without=build,
@@ -1738,6 +1796,20 @@ def diagnose_list(
 # --- 하나 -------------------------------------------------------------------
 
 
+def _profile_type(db: Session, slug: str, object_id: uuid.UUID) -> ObjectType:
+    """상세의 타입 — 인터페이스 slug 로 열었으면 **그 객체의 실제 타입**(구현 타입이어야 한다).
+    인터페이스 목록 · 참조가 객체를 인터페이스로 가리킬 수 있어서다(응답의 `type_slug` 가
+    실제 타입을 말한다)."""
+    found = _scope(db, slug)
+    if found.object_type is not None:
+        return found.object_type
+    row = db.get(ObjectInstance, object_id)
+    kind = found.type_of(row.type_id) if row is not None else None
+    if kind is None:
+        raise NotFound(code("OBJECTS", 11), "객체를 찾을 수 없습니다.")
+    return kind
+
+
 @router.get("/{type_slug}/{object_id}", response_model=ObjectProfileOut)
 def object_profile(
     type_slug: str,
@@ -1745,7 +1817,7 @@ def object_profile(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> ObjectProfileOut:
-    object_type = _type(db, type_slug)
+    object_type = _profile_type(db, type_slug, object_id)
     if system.is_system(object_type):
         ref = system.find(db, object_type, object_id)
         if ref is None:

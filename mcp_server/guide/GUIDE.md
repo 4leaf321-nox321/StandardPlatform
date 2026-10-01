@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-01a
+GUIDE_VERSION: 2026-10-01b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -20,6 +20,7 @@ GUIDE_VERSION: 2026-10-01a
 | **이름으로 무언가를 가리킨다** | `object_resolve(type_slug, name)` | `candidates` 면 **고르지 말고 사람에게 묻는다** |
 | 이름 **여럿**을 한 번에 | `objects_resolve_many(type_slug, names)` | 여러 줄을 넣기 전에 한 번. 왕복이 줄 수만큼 늘지 않는다 |
 | 객체 찾기 | `objects_list(type_slug, q=, properties=, conditions=)` | 화면과 같은 거르기. **0건이면 `diagnosis` 를 읽는다** |
+| 여러 타입을 한 개념으로 — 「설비 전부」 | `objects_list(<인터페이스 slug>)` · `objects_summary(<인터페이스>, group_by="type")` | **읽기만.** 줄의 `type_slug` 가 실제 타입 — 상세 · 고치기는 그것으로 |
 | 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 한 걸음까지. 주소를 추측하지 않는다 |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | — |
@@ -156,6 +157,26 @@ GUIDE_VERSION: 2026-10-01a
 한 줄에 한 번 물으면 이천 줄짜리 원천에 왕복이 이천 번이고, 그러고도 「없는 것」 하나가
 묶음 전체를 거절시킨다. `counts` 가 몇 개가 안 풀렸는지 한 줄로 말하니, 사람에게 물을 것만
 모아서 한 번에 묻는다.
+
+### 여러 타입을 한 개념으로 — 인터페이스 slug
+
+`objects_list` · `objects_summary` · `object_fields` · `object_resolve` · `objects_resolve_many` ·
+`search(type_slug=)` 는 **인터페이스 slug** 도 받는다. 구현 타입 전부를 한 목록으로 묻는다 —
+「설비 중 한국산」 이면 시험장비 · 계측기를 따로 묻고 더하지 않는다:
+
+```
+objects_list("equip", conditions=[{"field": "country", "op": "eq", "value": "KR"}])
+objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
+```
+
+- **읽기만이다.** 만들기 · 고치기 · 일괄 입력 · 트리는 타입으로 한다 — 인터페이스로 부르면
+  `[OBJECTS-0092]` 로 거절된다. 줄마다 `type_slug` 가 그 객체의 실제 타입이다.
+- 조건 · 기준은 **공통 속성**(구현 타입이 같은 키 · 같은 모양으로 가진다)으로 건다. 한 타입에만
+  있는 칸은 그 타입으로 묻는다.
+- 식별자는 타입마다 따로다 — `object_resolve` 가 두 타입에서 같은 식별자를 찾으면
+  `candidates` 다. 후보의 `type_slug` 를 보고 사람에게 묻는다.
+- 0건이고 `diagnosis.reason` 이 `no_implementers` 면 그 인터페이스를 **구현한 타입이 아직 없다** —
+  객체가 없는 것과 다르다.
 
 ### 0건일 때 — 목록에 붙어 오는 `diagnosis`
 

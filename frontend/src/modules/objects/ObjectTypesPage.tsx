@@ -11,6 +11,11 @@
  * 「개발모델은 제품이다」 같은 **뜻**의 계층은 인터페이스가 말한다(ADR 0006) — 옛 상위 타입
  * (`parent_slug`)은 없어졌다.
  *
+ * ## 인터페이스
+ *
+ *     인터페이스 › 구현 타입. 줄을 누르면 구현 타입 전부를 한 목록으로 본다(`/o/<인터페이스>`).
+ *     인터페이스가 하나도 없으면 탭을 안 그린다 — 빈 탭은 「무언가 빠졌다」 로 읽힌다.
+ *
  * **묶음에 안 걸린 타입도 여기 나온다.** 사이드바는 그것을 아예 안 그리므로(묶음이 없으면
  * 걸 자리가 없다), 만들어 놓고 묶음을 안 정한 타입은 주소를 직접 쳐야만 갈 수 있었다.
  */
@@ -20,7 +25,7 @@ import { Link } from 'react-router-dom'
 import { Search } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
-import type { ObjectType } from '@/modules/ontology/api'
+import type { ObjectInterface, ObjectType } from '@/modules/ontology/api'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -68,6 +73,38 @@ function TypeRow({ type, depth = 0 }: { type: ObjectType; depth?: number }) {
   )
 }
 
+function InterfaceRow({ iface, types }: { iface: ObjectInterface; types: ObjectType[] }) {
+  const Icon = iconOf(iface.icon)
+  const implementers = types.filter((one) => iface.implementers.includes(one.slug))
+  return (
+    <div>
+      <Link
+        to={`/o/${iface.slug}`}
+        className="hover:bg-accent/60 flex items-center gap-2 rounded-md px-2 py-1.5 text-sm"
+      >
+        <Icon className="text-muted-foreground size-4 shrink-0" />
+        <span className="truncate font-medium">{iface.label}</span>
+        <span className="text-muted-foreground/70 truncate font-mono text-xs">{iface.slug}</span>
+        <span className="text-muted-foreground ml-auto shrink-0 text-xs tabular-nums">
+          {iface.object_count.toLocaleString()}
+        </span>
+      </Link>
+      {implementers.length > 0 ? (
+        <div className="ml-3 border-l pl-3">
+          {implementers.map((one) => (
+            <TypeRow key={one.slug} type={one} />
+          ))}
+        </div>
+      ) : (
+        /* 비어 있는 이유를 그 자리에서 — 줄을 눌러 빈 목록을 보고 나서야 알면 늦다. */
+        <p className="text-muted-foreground ml-3 border-l py-1 pl-5 text-xs">
+          구현한 타입이 없습니다 — 관리 › 온톨로지에서 타입의 「구현 인터페이스」 로 정합니다.
+        </p>
+      )}
+    </div>
+  )
+}
+
 function Section({
   title,
   hint,
@@ -100,6 +137,7 @@ function Section({
 export default function ObjectTypesPage() {
   const types = useResource(() => ontologyApi.types(), [])
   const groups = useResource(() => ontologyApi.groups(), [])
+  const interfaces = useResource(() => ontologyApi.interfaces(), [])
   const [needle, setNeedle] = useState('')
 
   const rows = useMemo(() => types.data ?? [], [types.data])
@@ -118,6 +156,17 @@ export default function ObjectTypesPage() {
     return { tops, ofGroup, childrenOf, loose }
   }, [groups.data, shown])
 
+  /** 인터페이스 — 제 이름이 맞거나, 구현 타입 중 하나가 찾기에 걸리면 선다. */
+  const shownInterfaces = useMemo(() => {
+    const needleLower = needle.toLowerCase()
+    return (interfaces.data ?? []).filter(
+      (one) =>
+        !needle ||
+        `${one.label} ${one.slug} ${one.description}`.toLowerCase().includes(needleLower) ||
+        shown.some((type) => one.implementers.includes(type.slug)),
+    )
+  }, [interfaces.data, needle, shown])
+
   return (
     <div className="space-y-5">
       <PageHeader
@@ -129,7 +178,7 @@ export default function ObjectTypesPage() {
         }
       />
 
-      <ErrorNotice error={types.error ?? groups.error} />
+      <ErrorNotice error={types.error ?? groups.error ?? interfaces.error} />
 
       <div className="relative max-w-sm">
         <Search className="text-muted-foreground absolute top-2.5 left-2 size-4" />
@@ -153,6 +202,9 @@ export default function ObjectTypesPage() {
         <Tabs defaultValue="groups">
           <TabsList>
             <TabsTrigger value="groups">묶음별</TabsTrigger>
+            {(interfaces.data ?? []).length > 0 && (
+              <TabsTrigger value="interfaces">인터페이스</TabsTrigger>
+            )}
           </TabsList>
 
           <TabsContent value="groups" className="space-y-5 pt-3">
@@ -202,6 +254,20 @@ export default function ObjectTypesPage() {
             )}
           </TabsContent>
 
+          <TabsContent value="interfaces" className="space-y-3 pt-3">
+            <p className="text-muted-foreground text-sm">
+              여러 타입이 같은 모양으로 따르는 공통 속성의 묶음입니다. 인터페이스를 누르면 구현 타입
+              전부의 객체를 한 목록으로 봅니다.
+            </p>
+            {shownInterfaces.map((one) => (
+              <InterfaceRow key={one.slug} iface={one} types={rows} />
+            ))}
+            {shownInterfaces.length === 0 && (
+              <p className="text-muted-foreground text-sm">
+                「{needle}」 에 맞는 인터페이스가 없습니다.
+              </p>
+            )}
+          </TabsContent>
         </Tabs>
       )}
     </div>

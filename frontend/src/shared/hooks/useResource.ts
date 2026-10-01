@@ -9,7 +9,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 import { ApiError } from '@/shared/api/client'
 
-interface Resource<T> {
+export interface Resource<T> {
   data: T | null
   error: ApiError | Error | null
   loading: boolean

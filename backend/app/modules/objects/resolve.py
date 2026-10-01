@@ -44,6 +44,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.objects import aliases, system
 from app.modules.objects.models import ObjectAlias, ObjectInstance
+from app.modules.objects.scope import Scope, as_scope
 from app.modules.ontology.models import ObjectType
 from app.shared.permissions import visible_owner_clause
 from app.shared.text import compare_key
@@ -62,6 +63,8 @@ class Hit:
     status: str = "active"
     matched_by: str = "label"
     hint: str = ""
+    type_slug: str = ""
+    """어느 타입의 객체인가 — 인터페이스로 물으면 후보가 여러 타입에서 온다."""
 
 
 @dataclass
@@ -74,7 +77,7 @@ class Resolution:
     truncated: bool = False
 
 
-def _hit(row: ObjectInstance, how: str, names: list[str]) -> Hit:
+def _hit(row: ObjectInstance, how: str, names: list[str], type_slug: str = "") -> Hit:
     return Hit(
         id=row.id,
         key=row.key,
@@ -82,25 +85,41 @@ def _hit(row: ObjectInstance, how: str, names: list[str]) -> Hit:
         aliases=names,
         status=row.status,
         matched_by=how,
+        type_slug=type_slug,
     )
 
 
-def _hits(db: Session, rows: list[ObjectInstance], how: str) -> list[Hit]:
+def _hits(
+    db: Session, rows: list[ObjectInstance], how: str, scope: Scope | None = None
+) -> list[Hit]:
     names = aliases.human_of(db, [row.id for row in rows])
-    return [_hit(row, how, names.get(row.id, [])) for row in rows]
+    slug_of = {one.id: one.slug for one in scope.types} if scope is not None else {}
+    return [
+        _hit(row, how, names.get(row.id, []), slug_of.get(row.type_id, "")) for row in rows
+    ]
 
 
-def _visible(user: User, object_type: ObjectType) -> Any:
+def _visible(user: User, scope: Scope) -> Any:
     return select(ObjectInstance).where(
-        ObjectInstance.type_id == object_type.id,
+        scope.clause(),
         ObjectInstance.deleted_at.is_(None),
         visible_owner_clause(user, ObjectInstance.owner_workspace_id),
     )
 
 
-def _decide(db: Session, rows: list[ObjectInstance], how: str, *, sure: bool) -> Resolution:
-    """한 단계의 결과를 판정으로. `sure=False` 면 하나뿐이어도 후보다(포함 단계)."""
-    hits = _hits(db, rows[:CANDIDATE_CAP], how)
+def _decide(
+    db: Session,
+    rows: list[ObjectInstance],
+    how: str,
+    *,
+    sure: bool,
+    scope: Scope | None = None,
+) -> Resolution:
+    """한 단계의 결과를 판정으로. `sure=False` 면 하나뿐이어도 후보다(포함 단계).
+
+    인터페이스로 물으면 **식별자가 타입마다 유일**이라 같은 식별자가 두 타입에 있을 수 있다 —
+    그때도 짐작하지 않고 후보로 돌려준다(어느 타입의 것인지 `type_slug` 에 적힌다)."""
+    hits = _hits(db, rows[:CANDIDATE_CAP], how, scope)
     if len(rows) == 1 and sure:
         return Resolution(match="exact", object=hits[0], hint="하나로 정해졌습니다.")
     return Resolution(
@@ -161,16 +180,22 @@ def _system(db: Session, user: User, object_type: ObjectType, text: str) -> Reso
     )
 
 
-def by_name(db: Session, user: User, object_type: ObjectType, text: str) -> Resolution:
-    """이름 하나를 객체 하나로. **정해지지 않으면 정해지지 않았다고 말한다.**"""
+def by_name(db: Session, user: User, target: ObjectType | Scope, text: str) -> Resolution:
+    """이름 하나를 객체 하나로. **정해지지 않으면 정해지지 않았다고 말한다.**
+
+    인터페이스로 물으면 구현 타입 전부에서 찾는다."""
     text = (text or "").strip()
     if not text:
         return Resolution(match="none", hint="찾을 이름이 비어 있습니다.")
-    if system.is_system(object_type):
-        return _system(db, user, object_type, text)
+    scope = as_scope(db, target)
+    if scope.object_type is not None and system.is_system(scope.object_type):
+        return _system(db, user, scope.object_type, text)
 
-    base = _visible(user, object_type)
+    base = _visible(user, scope)
     norm = compare_key(text)
+
+    def decide(rows: list[ObjectInstance], how: str, *, sure: bool) -> Resolution:
+        return _decide(db, rows, how, sure=sure, scope=scope)
 
     # 0) 이미 id 로 왔다 — 있는 것인지만 확인한다(모양만 보고 받으면 없는 것을 가리킨다).
     try:
@@ -180,10 +205,8 @@ def by_name(db: Session, user: User, object_type: ObjectType, text: str) -> Reso
     if as_id is not None:
         row = db.scalar(base.where(ObjectInstance.id == as_id))
         if row is not None:
-            return _decide(db, [row], "id", sure=True)
-        return Resolution(
-            match="none", hint=f"그 id 의 {object_type.label}이(가) 없습니다: {text}"
-        )
+            return decide([row], "id", sure=True)
+        return Resolution(match="none", hint=f"그 id 의 {scope.label}이(가) 없습니다: {text}")
 
     # 1) 식별자 — 가장 좁다.
     rows = list(db.scalars(base.where(ObjectInstance.key == text)))
@@ -194,14 +217,14 @@ def by_name(db: Session, user: User, object_type: ObjectType, text: str) -> Reso
             if compare_key(one.key or "") == norm
         ]
     if rows:
-        return _decide(db, rows, "key", sure=True)
+        return decide(rows, "key", sure=True)
 
     # 2) 별칭·외부 식별자 — 「앤시스」 로 적어도 「Ansys」 로 풀린다.
-    found = aliases.lookup(db, object_type, text)
+    found = [one for kind in scope.types for one in aliases.lookup(db, kind, text)]
     if found:
         rows = list(db.scalars(base.where(ObjectInstance.id.in_(found))))
         if rows:
-            return _decide(db, rows, "alias", sure=True)
+            return decide(rows, "alias", sure=True)
 
     # 3) 이름이 그대로 같은 것.
     rows = [
@@ -210,7 +233,7 @@ def by_name(db: Session, user: User, object_type: ObjectType, text: str) -> Reso
         if compare_key(one.label) == norm
     ]
     if rows:
-        return _decide(db, rows, "label", sure=True)
+        return decide(rows, "label", sure=True)
 
     # 4) 포함 — 여기서 나온 것은 하나여도 짐작이다.
     pattern = f"%{text}%"
@@ -222,7 +245,7 @@ def by_name(db: Session, user: User, object_type: ObjectType, text: str) -> Reso
                     ObjectInstance.key.ilike(pattern),
                     ObjectInstance.id.in_(
                         select(ObjectAlias.object_id).where(
-                            ObjectAlias.type_id == object_type.id,
+                            scope.clause(ObjectAlias.type_id),
                             ObjectAlias.value.ilike(pattern),
                         )
                     ),
@@ -231,11 +254,11 @@ def by_name(db: Session, user: User, object_type: ObjectType, text: str) -> Reso
         )
     )
     if rows:
-        return _decide(db, rows, "contains", sure=False)
+        return decide(rows, "contains", sure=False)
 
     return Resolution(
         match="none",
-        hint=f"{object_type.label}에 「{text}」 이(가) 없습니다. 오타인지, 아직 안 만든 "
+        hint=f"{scope.label}에 「{text}」 이(가) 없습니다. 오타인지, 아직 안 만든 "
         "것인지 사람에게 확인하세요 — **짐작해서 다른 것을 쓰지 마세요.**",
     )
 
@@ -273,7 +296,7 @@ class Diagnosis:
 def diagnose(
     db: Session,
     user: User,
-    object_type: ObjectType,
+    target: ObjectType | Scope,
     *,
     total: int,
     parts: list[tuple[str, str]],
@@ -284,22 +307,31 @@ def diagnose(
     """0건이 **왜** 0건인지. `without(name)` 은 그 조건만 뺀 질의, `unknown(name)` 은
     그 칸이 비어 있어 빠진 수, `count(stmt)` 는 세기다 — 목록과 **같은 거르기**를
     쓰려고 부르는 쪽이 넘긴다(따로 적으면 진단이 목록과 어긋난다)."""
-    if system.is_system(object_type):
+    scope = as_scope(db, target)
+    label = scope.label
+    if scope.object_type is not None and system.is_system(scope.object_type):
         return Diagnosis(
             total=total,
             reason="has_rows" if total else "empty_type",
-            message=(
-                f"{object_type.label}은(는) 원 표를 그대로 비춥니다 — 조건은 검색어뿐입니다."
-            ),
+            message=f"{label}은(는) 원 표를 그대로 비춥니다 — 조건은 검색어뿐입니다.",
             type_total=total,
             hidden=0,
         )
-
-    visible_total = count(_visible(user, object_type))
-    everything = count(
-        select(ObjectInstance).where(
-            ObjectInstance.type_id == object_type.id, ObjectInstance.deleted_at.is_(None)
+    if scope.is_interface and not scope.types:
+        # **구현 타입이 없으면 비는 것이 맞다** — 「데이터가 없다」 와 다른 일이다.
+        return Diagnosis(
+            total=0,
+            reason="no_implementers",
+            message=f"인터페이스 {label}을(를) 구현한 타입이 **없습니다** — 객체가 없는 것이 "
+            "아니라 이 목록에 담을 타입이 아직 없습니다.",
+            type_total=0,
+            hidden=0,
+            next_steps=["관리 › 온톨로지에서 타입의 「구현 인터페이스」 에 이것을 고른다."],
         )
+
+    visible_total = count(_visible(user, scope))
+    everything = count(
+        select(ObjectInstance).where(scope.clause(), ObjectInstance.deleted_at.is_(None))
     )
     hidden = max(everything - visible_total, 0)
 
@@ -316,7 +348,7 @@ def diagnose(
         return Diagnosis(
             total=0,
             reason="empty_type",
-            message=f"{object_type.label}에 객체가 **하나도 없습니다** — 조건 때문이 "
+            message=f"{label}에 객체가 **하나도 없습니다** — 조건 때문이 "
             "아닙니다. 아직 안 채운 타입입니다.",
             type_total=0,
             hidden=0,
@@ -330,7 +362,7 @@ def diagnose(
         return Diagnosis(
             total=0,
             reason="not_visible",
-            message=f"{object_type.label}에 {hidden}건이 있지만 **내 부서 밖이라 "
+            message=f"{label}에 {hidden}건이 있지만 **내 부서 밖이라 "
             "안 보입니다** — 없는 것이 아니라 권한이 없는 것입니다.",
             type_total=0,
             hidden=hidden,
@@ -364,7 +396,7 @@ def diagnose(
     return Diagnosis(
         total=0,
         reason="filters",
-        message=f"{object_type.label}에 보이는 것은 {visible_total}건인데 조건이 좁아 "
+        message=f"{label}에 보이는 것은 {visible_total}건인데 조건이 좁아 "
         f"0건이 됐습니다. 「{top.label}」 하나만 빼면 {top.remaining}건입니다.{tail}",
         type_total=visible_total,
         hidden=hidden,

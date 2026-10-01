@@ -7,9 +7,9 @@ JSONB 안에 있다. 둘 다 DB 가 안 잡아 주므로 여기서 잡는다.
 from __future__ import annotations
 
 import uuid
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Select, Text, func, or_, select, update
+from sqlalchemy import Select, Text, and_, func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.objects import system
@@ -24,6 +24,9 @@ from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.ontology.services import InvalidValue, object_ref_ids
 from app.shared import extensions
 from app.shared.errors import Conflict, code
+
+if TYPE_CHECKING:  # 실행 때는 안 읽는다 — scope 가 이 모듈을 읽는다(방향은 한쪽).
+    from app.modules.objects.scope import Scope
 
 
 def properties_of(db: Session, type_id: uuid.UUID) -> list[PropertyDef]:
@@ -160,12 +163,13 @@ def require_unique_properties(
             )
 
 
-def apply_search(stmt: Select[Any], object_type: ObjectType, term: str) -> Select[Any]:
+def apply_search(stmt: Select[Any], scope: Scope, term: str) -> Select[Any]:
     """`list_view.search` 가 가리키는 자리들을 훑는다.
 
-    안 정해 뒀으면 이름과 식별자를 본다 — **빈 결과보다 그럴듯한 기본이 낫다.**
+    안 정해 뒀으면 이름과 식별자를 본다 — **빈 결과보다 그럴듯한 기본이 낫다.** 인터페이스
+    목록이면 그 인터페이스의 `list_view` 와 구현 타입 전부의 별칭을 본다.
     """
-    view = object_type.list_view or {}
+    view = scope.list_view
     fields = view.get("search") or ["label", "key"]
     pattern = f"%{term}%"
 
@@ -184,7 +188,7 @@ def apply_search(stmt: Select[Any], object_type: ObjectType, term: str) -> Selec
     clauses.append(
         ObjectInstance.id.in_(
             select(ObjectAlias.object_id).where(
-                ObjectAlias.type_id == object_type.id, ObjectAlias.value.ilike(pattern)
+                scope.clause(ObjectAlias.type_id), ObjectAlias.value.ilike(pattern)
             )
         )
     )
@@ -199,9 +203,8 @@ def apply_property_filters(stmt: Select[Any], filters: dict[str, str]) -> Select
     return stmt
 
 
-def apply_sort(stmt: Select[Any], object_type: ObjectType) -> Select[Any]:
+def apply_sort(stmt: Select[Any], view: dict[str, Any]) -> Select[Any]:
     """`list_view.sort` 대로. 안 정해 뒀으면 이름순."""
-    view = object_type.list_view or {}
     sort = view.get("sort") or {}
     field = sort.get("field") or "label"
     descending = (sort.get("dir") or "asc") == "desc"
@@ -360,9 +363,7 @@ def workspace_content(
     ]
 
 
-def apply_year(
-    db: Session, stmt: Select[Any], object_type: ObjectType, year: int
-) -> Select[Any]:
+def apply_year(db: Session, stmt: Select[Any], scope: Scope, year: int) -> Select[Any]:
     """축의 **시간 정책**대로 연도를 거른다.
 
         evergreen  필터를 무시한다 (기본값)
@@ -373,11 +374,30 @@ def apply_year(
     **`derived` 에서 등록이 없을 때 빈 목록을 주지 않는 이유**: 빈 목록은
     「데이터가 없다」 로 읽히고, 그러면 사람은 없는 것을 새로 만든다. 필터가
     작동하지 않는 것과 데이터가 없는 것은 다른 일이다.
-    """
-    kind = object_type.temporal_kind
 
+    **인터페이스 목록은 구현 타입마다 정책이 다를 수 있다** — 정책별로 그 타입들의 조건을 세워
+    OR 로 묶는다(상시 타입은 거르지 않고 그대로 든다). 하나로 몰면 상시 타입이 통째로 빠지거나,
+    기간 타입이 거르지 않은 채 섞인다.
+    """
+    by_kind: dict[str, list[uuid.UUID]] = {}
+    for one in scope.types:
+        by_kind.setdefault(one.temporal_kind, []).append(one.id)
+    if len(by_kind) <= 1:
+        kind = next(iter(by_kind), "evergreen")
+        clause = _year_clause(db, stmt, kind, year)
+        return stmt if clause is None else stmt.where(clause)
+    parts = []
+    for kind, ids in by_kind.items():
+        mine = ObjectInstance.type_id.in_(ids)
+        clause = _year_clause(db, stmt.where(mine), kind, year)
+        parts.append(mine if clause is None else and_(mine, clause))
+    return stmt.where(or_(*parts))
+
+
+def _year_clause(db: Session, stmt: Select[Any], kind: str, year: int) -> Any:
+    """그 정책의 연도 조건 — 거르지 않으면 None."""
     if kind == "lifecycle":
-        return stmt.where(
+        return and_(
             or_(
                 ObjectInstance.valid_from_year.is_(None),
                 ObjectInstance.valid_from_year <= year,
@@ -390,16 +410,16 @@ def apply_year(
 
     if kind == "yearly":
         assigned = select(ObjectYear.object_id).where(ObjectYear.year == year)
-        return stmt.where(ObjectInstance.id.in_(assigned))
+        return ObjectInstance.id.in_(assigned)
 
     if kind == "derived":
         # 도메인이 등록한 것이 없으면 **거르지 않는다.**
         if not extensions.has_temporal_source():
-            return stmt
+            return None
         candidates = list(db.scalars(stmt.with_only_columns(ObjectInstance.id)))
         years = extensions.temporal_years(db, candidates)
         wanted = [one for one in candidates if year in years.get(one, set())]
-        return stmt.where(ObjectInstance.id.in_(wanted))
+        return ObjectInstance.id.in_(wanted)
 
     # evergreen — 연도 무관.
-    return stmt
+    return None

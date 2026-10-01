@@ -122,6 +122,11 @@ interface Props {
   /** 막대를 눌렀을 때 — 걸 수 있는 축이면 부른다. */
   onPick: (field: string, key: string | null) => void
   onClose: () => void
+  /**
+   * 홈 게시를 낼 수 있나 — **인터페이스 목록은 안 된다**(게시는 저장된 뷰라 타입의 것이다).
+   * 단추를 세운 뒤 서버가 거절하게 두면, 누른 사람은 왜 안 되는지 거절문으로야 안다.
+   */
+  pinnable?: boolean
 }
 
 /**
@@ -179,7 +184,15 @@ function filterable(field: string): boolean {
   return field === 'status' || field.startsWith('properties.') || /^(ref|out|in)\./.test(field)
 }
 
-export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, onClose }: Props) {
+export function SummaryPanel({
+  typeSlug,
+  query,
+  settings,
+  onSettings,
+  onPick,
+  onClose,
+  pinnable = true,
+}: Props) {
   const { groupBy, metric, metricField, chart: kind } = settings
   const patch = (next: Partial<SummarySettings>) => onSettings({ ...settings, ...next })
   const [data, setData] = useState<Summary | null>(null)
@@ -191,7 +204,7 @@ export function SummaryPanel({ typeSlug, query, settings, onSettings, onPick, on
   const { user } = useAuth()
   // 올릴 곳은 내 대표 소속이다 — 뷰를 부서와 함께 쓸 때와 같은 규칙(`ViewPicker`).
   const myWorkspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
-  const canPin = Boolean(myWorkspace && isManagerOf(user, myWorkspace))
+  const canPin = pinnable && Boolean(myWorkspace && isManagerOf(user, myWorkspace))
 
   // 필터가 바뀌면 다시 센다. `query` 는 매 렌더 새 객체라 **내용**으로 비교한다 —
   // 안 그러면 이 효과가 끝없이 돈다.

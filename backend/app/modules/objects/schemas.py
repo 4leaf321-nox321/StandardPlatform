@@ -687,6 +687,8 @@ class ResolveHit(BaseModel):
     matched_by: str
     """무엇으로 맞았나 — `id` · `key` · `alias` · `label` · `contains`."""
     hint: str = ""
+    type_slug: str = ""
+    """어느 타입의 객체인가 — 인터페이스로 물으면 후보가 여러 타입에서 온다."""
 
 
 class ResolveOut(BaseModel):
@@ -737,7 +739,8 @@ class DiagnosisOut(BaseModel):
 
     total: int
     reason: str
-    """`has_rows` · `empty_type` · `not_visible` · `filters`."""
+    """`has_rows` · `empty_type` · `not_visible` · `filters` · `no_implementers`(인터페이스를
+    구현한 타입이 없다)."""
     message: str
     type_total: int
     hidden: int
