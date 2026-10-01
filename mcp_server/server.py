@@ -469,6 +469,8 @@ async def ontology_import(
     더하고 고치기만 한다. **스키마에 없다고 지우지 않는다.** 여러 타입이 같은 개념이면
     `interfaces` 에 공통 속성을 적고 타입이 `interface_slugs` 로 구현한다 — 모양이 다른
     같은 키가 있으면 `errors` 가 무엇이 다른지 말한다(짐작으로 맞추지 말고 사람에게 보인다).
+    속성의 `data_type` 을 바꾸면 저장된 값도 변환된다 — 변환할 수 없는 값은 `errors` 가 값과
+    함께 말한다(대체 값은 사람이 화면의 「종류 변경」 에서 정한다).
     자세한 것은 `get_guide("schema")`."""
     return await _post(
         ctx,

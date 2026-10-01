@@ -172,6 +172,9 @@ describe('공통 속성을 여는 창', () => {
     expect(screen.getByText(/공통 속성/, { selector: 'b' })).toBeInTheDocument()
     expect(screen.getByLabelText('선택할 값 (쉼표로)')).toBeDisabled()
     expect(screen.getByLabelText('단위')).toBeDisabled()
+    // 종류 변경도 인터페이스에서 — 잠그고 그 까닭을 적는다.
+    expect(screen.getByRole('button', { name: '종류 변경' })).toBeDisabled()
+    expect(screen.getByText(/종류는 인터페이스에서 변경합니다/)).toBeInTheDocument()
     // 이름은 타입마다 — 고칠 수 있다.
     expect(screen.getByLabelText('이름')).not.toBeDisabled()
     // 삭제 대신 이유가 선다.
@@ -289,5 +292,21 @@ describe('참조 대상에 인터페이스', () => {
       />,
     )
     expect(screen.getByText(/구현한 타입 전부의 객체에서 고릅니다/)).toBeInTheDocument()
+  })
+})
+
+describe('공통 속성의 종류 변경', () => {
+  it('인터페이스 쪽에서 열면 종류 변경을 할 수 있다(구현 타입 전부가 함께 바뀐다)', async () => {
+    const { PropertyEditDialog } = await import('@/modules/ontology/PropertyEditDialog')
+    render(
+      <PropertyEditDialog
+        owner={{ kind: 'interface', row: IFACE }}
+        property={{ ...COUNTRY, owner_kind: 'interface' }}
+        types={[]}
+        onClose={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('button', { name: '종류 변경' })).toBeEnabled()
   })
 })

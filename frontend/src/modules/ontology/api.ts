@@ -362,6 +362,64 @@ export interface PromoteOut {
   snapshot_id: string | null
 }
 
+/** 종류 변경의 요청 — 새 종류와 그 종류의 칸, 그리고 값마다의 대체 값(ADR 0007). */
+export interface RetypeRequest {
+  data_type: DataType
+  enum_options?: string[] | null
+  min_value?: number | null
+  max_value?: number | null
+  decimals?: number | null
+  pattern?: string | null
+  unit?: string | null
+  /** {변환할 수 없는 값: 대체 값 | null(값 삭제)} — 열쇠는 계획이 준 `failures[].value` 그대로. */
+  mapping: Record<string, string | null>
+  /** 공개 타입이면 수신 시스템에 통보했다는 확인. */
+  accept_core: boolean
+  apply: boolean
+}
+
+export interface RetypeSample {
+  type_slug: string
+  /** 기본값이면 `null`(견본 이름이 「(기본값)」). */
+  object_id: string | null
+  label: string
+}
+
+export interface RetypeValue {
+  value: string
+  count: number
+  reason: string
+  /** 대체 값 목록에서만 — `null` 이면 값 삭제. */
+  to: string | null
+  samples: RetypeSample[]
+}
+
+export interface RetypeOut {
+  applied: boolean
+  data_type_before: DataType
+  data_type_after: DataType
+  /** 타입마다(인터페이스면 구현 타입 전부) 무엇이 되는지. */
+  types: {
+    type_slug: string
+    type_label: string
+    key: string
+    via: string
+    with_value: number
+    converted: number
+    unchanged: number
+    cleared: number
+  }[]
+  failures: RetypeValue[]
+  /** 변환할 수 없는 값의 종류 수 — 목록(`failures`)은 앞의 몇백 개까지다. */
+  failures_total: number
+  mapped: RetypeValue[]
+  errors: string[]
+  warnings: string[]
+  /** 공개 타입이면 조회 가능한 토큰들 — 비어 있지 않으면 확인을 받아야 적용된다. */
+  core_consumers: string[]
+  snapshot_id: string | null
+}
+
 /** 코어 현황 — 무엇이 열려 있고, 누가 읽을 수 있고, 누가 받아 갔나. */
 export interface CoreStatus {
   base: string
@@ -482,6 +540,12 @@ export const ontologyApi = {
       apply: boolean
     },
   ) => api.post<PromoteOut>(`/ontology/types/${slug}/properties/${key}/promote`, body),
+  /** 종류 변경 — 저장값을 새 종류로 변환한다. `apply=false` 면 계획만(ADR 0007). */
+  retypeProperty: (slug: string, key: string, body: RetypeRequest) =>
+    api.post<RetypeOut>(`/ontology/types/${slug}/properties/${key}/retype`, body),
+  /** 공통 속성의 종류 변경 — 구현 타입 전부의 저장값을 한 번에. */
+  retypeInterfaceProperty: (slug: string, key: string, body: RetypeRequest) =>
+    api.post<RetypeOut>(`/ontology/interfaces/${slug}/properties/${key}/retype`, body),
   /** 관리자 전용 — **코어 창구 밖에 둔다**(수신 시스템이 다른 연동의 이름을 보면 안 된다). */
   coreStatus: () => api.get<CoreStatus>('/ontology/core-status'),
   /** 연동 키트(zip) — 주소와 공개 타입이 채워진 상태로 내려온다. 수신 측에 그대로 전달한다. */

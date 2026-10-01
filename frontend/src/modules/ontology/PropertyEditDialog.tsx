@@ -5,8 +5,9 @@
  * 정할 수 있는데 고칠 때는 없는 칸」 이 생기고, 그것을 고치려면 지웠다 다시
  * 만들어야 한다 — 그 순간 그 속성의 값이 전부 화면에서 사라진다.
  *
- * **키와 종류는 만들 때만 정한다.** 키를 바꾸면 이미 저장된 값이 전부 고아가
- * 되고, 종류를 바꾸면 그 값들이 새 종류에 안 맞는데 화면은 아무 말도 안 한다.
+ * **키는 만들 때만 정한다** — 바꾸면 이미 저장된 값이 전부 고아가 된다. **종류는 저장으로
+ * 바꾸지 않는다**: 종류만 바뀌면 그 값들이 새 종류에 안 맞는데 화면은 아무 말도 안 한다. 바꾸는
+ * 길은 「종류 변경」(ADR 0007) — 저장값을 변환하는 계획을 먼저 본다(`RetypeDialog`).
  *
  * **인터페이스의 공통 속성도 이 창이다**(ADR 0006) — 두 벌이면 위젯이 갈린다. 다른 점은 둘:
  * 공통 속성에는 타입마다 정하는 칸(유일 · 기본값 · 역방향 이름)이 없고, 타입 쪽에서 공통 속성을
@@ -17,6 +18,7 @@ import { useState } from 'react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import { EnumOptionsPanel } from '@/modules/ontology/EnumOptionsPanel'
+import { RETYPE_KINDS, RetypeDialog } from '@/modules/ontology/RetypeDialog'
 import type { DataType, ObjectInterface, ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -101,6 +103,18 @@ export function PropertyEditDialog({
   /** 타입 쪽에서 연 공통 속성 — 모양은 그 인터페이스에서 고친다. */
   const boundTo = owner.kind === 'type' ? (property?.interface_slug ?? null) : null
   const locked = boundTo !== null
+  /** 종류 변경을 못 하는 까닭 — 단추를 잠그고 그 자리에 적는다(잠그기만 하면 버그로 읽힌다). */
+  const retypeBlocked: string | null = !property
+    ? null
+    : locked
+      ? `인터페이스 ${boundTo} 의 공통 속성이라 종류는 인터페이스에서 변경합니다.`
+      : owner.row.managed_by
+        ? `${owner.row.managed_by} 가 관리하는 정의라 여기서 변경하지 않습니다.`
+        : !RETYPE_KINDS.includes(property.data_type)
+          ? property.data_type === 'file'
+            ? '파일 속성은 값이 첨부라 종류를 변경하지 않습니다.'
+            : '객체 참조는 종류를 변경하지 않습니다 — 저장값이 객체 id 입니다.'
+          : null
 
   const [key, setKey] = useState(property?.key ?? '')
   const [label, setLabel] = useState(property?.label ?? '')
@@ -125,6 +139,7 @@ export function PropertyEditDialog({
   const [error, setError] = useState<Error | null>(null)
   const [saving, setSaving] = useState(false)
   const [removing, setRemoving] = useState(false)
+  const [retyping, setRetyping] = useState(false)
   /** 바깥에 열린 타입이면 **누가 읽을 수 있는지** — 아무도 안 쓴다고 여기고 누르지 않게. */
   const [opened, setOpened] = useState<string[] | null>(null)
   const [usage, setUsage] = useState<number | null>(null)
@@ -259,12 +274,22 @@ export function PropertyEditDialog({
 
                 <div className="space-y-1.5">
                   <Label htmlFor="prop-type">종류</Label>
-                  {editing ? (
+                  {editing && property ? (
                     <>
-                      <Input value={DATA_TYPE_LABELS[dataType]} readOnly disabled />
+                      <div className="flex gap-2">
+                        <Input value={DATA_TYPE_LABELS[dataType]} readOnly disabled />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={Boolean(retypeBlocked)}
+                          onClick={() => setRetyping(true)}
+                        >
+                          종류 변경
+                        </Button>
+                      </div>
                       <p className="text-muted-foreground text-xs">
-                        <b>종류는 바꿀 수 없습니다.</b> 이미 저장된 값이 새 종류에 안 맞아도 화면이
-                        그것을 말해 주지 못합니다 — 바꾸려면 새 속성을 만들어 옮기세요.
+                        {retypeBlocked ??
+                          '종류는 저장으로 바뀌지 않습니다 — 「종류 변경」 이 저장된 값을 새 종류로 변환하는 계획을 먼저 보여 줍니다.'}
                       </p>
                     </>
                   ) : (
@@ -591,6 +616,19 @@ export function PropertyEditDialog({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {retyping && property && (
+        <RetypeDialog
+          owner={owner}
+          property={property}
+          onClose={() => setRetyping(false)}
+          onDone={() => {
+            // 이 창이 들고 있는 정의는 옛 종류다 — 「저장」 을 누르면 옛 종류를 다시 보낸다.
+            onChanged()
+            onClose()
+          }}
+        />
+      )}
 
       {removing && property && (
         <ConfirmDialog

@@ -109,7 +109,7 @@ export function PropertyEditor({
         <p className="text-muted-foreground text-xs">
           {readOnly
             ? '허브가 내려준 정의라 여기서 속성을 수정하지 않습니다 — 허브에서 수정한 뒤 받습니다.'
-            : `${properties.length > 0 ? '행을 클릭하면 이름·단위·안내·필수·여러 값을 수정하거나 삭제합니다. ' : ''}키와 종류는 만들 때만 정합니다.`}
+            : `${properties.length > 0 ? '행을 클릭하면 이름·단위·안내·필수·여러 값을 수정하거나 삭제합니다. ' : ''}키는 만들 때만 정합니다. 종류는 속성 창의 「종류 변경」 으로 저장된 값과 함께 변경합니다.`}
         </p>
         {!readOnly && (
           <div className="flex gap-2">
