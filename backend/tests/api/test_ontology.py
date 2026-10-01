@@ -1826,25 +1826,6 @@ def test_위험한_것을_미리_말한다(client: TestClient, admin: Signed) ->
     assert "필수로 바꿉니다" in joined
 
 
-def test_종류_변경은_계획에서_막는다(client: TestClient, admin: Signed) -> None:
-    part = _make_type(client, admin, label="부품")
-    _make_property(client, admin, part, key="w", label="폭", data_type="number")
-    plan = _import(
-        client,
-        admin,
-        {
-            "types": [
-                {
-                    "slug": part,
-                    "label": "부품",
-                    "properties": [{"key": "w", "label": "폭", "data_type": "text"}],
-                }
-            ]
-        },
-    ).json()
-    assert any("종류는 바꿀 수 없습니다" in one for one in plan["errors"])
-
-
 def test_안_바뀌는_것은_unchanged_로_적는다(client: TestClient, admin: Signed) -> None:
     """**안 바뀌는 것을 바뀐다고 적으면 사람은 그 목록을 안 읽게 되고, 그때 진짜
     하나가 묻힌다.**"""

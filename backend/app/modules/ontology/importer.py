@@ -29,7 +29,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance, ObjectRelation
-from app.modules.ontology import interfaces, managed, views
+from app.modules.ontology import interfaces, managed, retype, views
 from app.modules.ontology.models import (
     CARDINALITIES,
     DATA_TYPES,
@@ -180,6 +180,9 @@ class Plan:
     """적용하면 실패할 것. 하나라도 있으면 안 적용한다."""
     bindings: list[interfaces.Binding] = field(default_factory=list)
     """구현 타입마다 할 일 — 적용이 계획을 **다시 세지 않고** 그대로 옮긴다."""
+    retypes: list[retype.Target] = field(default_factory=list)
+    """**종류가 바뀌는** 타입 속성 — 파일이 바꾼 것과 인터페이스를 따라 바뀌는 것(ADR 0007).
+    적용이 정의를 고친 뒤 저장값을 같은 규칙으로 변환한다."""
 
 
 def _reject_unknown(payload: dict[str, Any], allowed: set[str], *, what: str) -> None:
@@ -364,6 +367,7 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
             one.get("properties") or [],
             out,
             ref_targets=ref_targets,
+            source=source,
         )
         _overlay_type(after, slug, one, normalized, source)
 
@@ -416,8 +420,60 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
         )
     out.warnings.extend(interfaces.risks(db, out.bindings))
 
+    # **종류가 바뀌는 속성의 저장값** — 파일이 바꾼 것과 인터페이스를 따라 바뀌는 것을 함께
+    # 센다.
+    following, notes = retype.targets_from_bindings(
+        db, out.bindings, skip={one.name for one in out.retypes}, source=source
+    )
+    out.retypes.extend(following)
+    out.warnings.extend(notes)
+    _plan_retypes(db, payload, out)
+
     _refuse_managed(out, types, relations, iface_rows, source)
     return out
+
+
+def _plan_retypes(db: Session, payload: dict[str, Any], out: Plan) -> None:
+    """종류 변경의 계획 — 화면과 **같은 함수**(`retype.plan`). 가져오기에는 대체 값을 적을
+    자리가 없으니 변환할 수 없는 값은 오류다(화면의 「종류 변경」 에서 대체 값을 정한 뒤
+    다시)."""
+    if not out.retypes:
+        return
+    planned = retype.plan(db, out.retypes)
+    for count in planned.counts:
+        target = next(
+            one for one in out.retypes if one.name == f"{count.type_slug}.{count.key}"
+        )
+        out.warnings.append(
+            f"속성 {target.name}: 종류를 {retype.kind_label(target.before)} → "
+            f"{retype.kind_label(target.after.data_type)}(으)로 바꿉니다 — 저장값 "
+            f"{count.converted}개 변환 · {count.unchanged}개 그대로 · {count.cleared}개 비움"
+            + (f"(인터페이스 {target.via} 를 따라)" if target.via else "")
+            + "."
+        )
+    out.errors.extend(
+        f"{one} 화면의 「종류 변경」 에서 대체 값을 정한 뒤 다시 가져오세요."
+        for one in planned.errors
+        if "변환할 수 없는 값" in one
+    )
+    out.errors.extend(one for one in planned.errors if "변환할 수 없는 값" not in one)
+    out.warnings.extend(planned.warnings)
+
+    # 파일이 **명시한** 롤업이 숫자가 아니게 되는 칸을 모으면 오류 — 조용히 걷으면 보낸 것이
+    # 사라진다.
+    numeric_gone = {
+        one.name
+        for one in out.retypes
+        if one.before == "number" and one.after.data_type != "number"
+    }
+    for one in payload.get("types") or []:
+        for rollup in (one.get("list_view") or {}).get("rollups") or []:
+            name = f"{one.get('slug')}.{(rollup or {}).get('property')}"
+            if name in numeric_gone:
+                out.errors.append(
+                    f"타입 {one.get('slug')}: 롤업이 {name} 을(를) 모으는데 그 속성이 숫자가 "
+                    "아니게 됩니다 — 롤업을 빼고 보내세요."
+                )
 
 
 def _plan_interfaces(
@@ -614,6 +670,7 @@ def _plan_properties(
     *,
     owner_kind: str = "type",
     ref_targets: set[str] | None = None,
+    source: str = "",
 ) -> None:
     """속성 정의의 계획 — **타입 · 관계 종류 · 인터페이스가 같은 길을 쓴다.**
 
@@ -654,20 +711,34 @@ def _plan_properties(
             out.changes.append(Change(kind_name, name, "create"))
             continue
 
-        if one.get("data_type") and one["data_type"] != found.data_type:
-            # **이미 저장된 값이 새 종류에 안 맞아도 화면은 아무 말도 안 한다.**
-            out.errors.append(
-                f"속성 {name}: 종류는 바꿀 수 없습니다 "
-                f"({found.data_type} -> {one['data_type']}). 새 속성을 만들어 옮기세요."
-            )
-            continue
+        retyping = bool(one.get("data_type")) and one["data_type"] != found.data_type
+        if retyping:
+            # **종류 변경**(ADR 0007) — 저장값을 같은 규칙으로 변환한다. 안 되는 쌍 · 관계
+            # 속성은 오류다(관계 속성의 값은 객체가 아니라 관계 줄에 있다).
+            wrong = retype.unsupported(found.data_type, str(one["data_type"]))
+            if owner_kind == "relation":
+                wrong = "관계 종류의 속성은 종류를 바꾸지 않습니다(값이 관계 줄에 있습니다)."
+            if wrong:
+                out.errors.append(f"속성 {name}: {wrong}")
+                continue
+            if isinstance(owner, ObjectType):
+                target, notes = retype.target_for(
+                    owner,
+                    found,
+                    one,
+                    clear_failures=bool(source) and owner.managed_by == source,
+                )
+                out.retypes.append(target)
+                out.warnings.extend(notes)
 
         fields = _diff(found, one, PROPERTY_FIELDS)
         out.changes.append(
             Change(kind_name, name, "update" if fields else "unchanged", fields)
         )
-        if isinstance(owner, ObjectType):
-            # 저장된 값이 걸리는 위험은 타입 속성에서만 센다(관계 속성은 셈이 다르다).
+        if isinstance(owner, ObjectType) and not retyping:
+            # 저장된 값이 걸리는 위험은 타입 속성에서만 센다(관계 속성은 셈이 다르다). 종류가
+            # 바뀌면 종류 변경의 계획이 말한다 — 「고를 값에서 뺍니다」 는 거기서는 틀린
+            # 말이다.
             _warn_property_risks(db, owner, found, one, out)
 
 
@@ -955,7 +1026,12 @@ def _apply_properties(
 
 
 def apply(
-    db: Session, payload: dict[str, Any], *, source: str = "", actor: User | None = None
+    db: Session,
+    payload: dict[str, Any],
+    *,
+    source: str = "",
+    actor: User | None = None,
+    reason: str = "정의 가져오기",
 ) -> Plan:
     """**한 트랜잭션으로** 적용한다. 부르는 쪽이 커밋한다.
 
@@ -1077,6 +1153,14 @@ def apply(
     # **인터페이스를 따라 바뀌는 속성** — 계획이 낸 그대로. 파일에 없던 구현 타입도 여기서
     # 바뀐다.
     interfaces.apply_bindings(db, prepared.bindings)
+
+    # **종류가 바뀐 속성의 저장값** — 정의를 다 고친 뒤, 화면 모양을 검증하기 전에(숫자가
+    # 아니게 된 칸의 롤업을 여기서 걷는다).
+    if prepared.retypes:
+        converted = retype.apply(db, actor, prepared.retypes, reason=reason)
+        if converted.errors:
+            prepared.errors.extend(converted.errors)
+            return prepared
 
     # **속성을 다 세우고 뷰를 검증한다** — 뷰가 그 속성(구현으로 생긴 것까지)을 가리킨다.
     for object_type in written_types:

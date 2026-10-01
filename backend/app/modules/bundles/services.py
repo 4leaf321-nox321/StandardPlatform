@@ -245,7 +245,9 @@ def _stages(
         if bundle.apply:
             out.snapshot_id = importer.take_snapshot(db, user, reason="묶음 가져오기").id
         try:
-            planned = importer.apply(db, bundle.ontology, source=bundle.source, actor=user)
+            planned = importer.apply(
+                db, bundle.ontology, source=bundle.source, actor=user, reason="묶음 가져오기"
+            )
         except ValueError as caught:
             out.errors.append(f"정의: {caught}")
             return

@@ -215,11 +215,33 @@ def prune_field(spec: dict[str, Any], key: str) -> dict[str, Any]:
     그리고 사람은 자기가 방금 고친 것과 상관없는 그 오류를 이해할 수 없다.
     """
     field = f"properties.{key}"
-    out = dict(spec)
+    out = prune_rollups(spec, key)
     for name in ("columns", "search", "filters"):
         if name in out and isinstance(out[name], list):
             out[name] = [one for one in out[name] if one != field]
     sort = out.get("sort")
     if isinstance(sort, dict) and sort.get("field") == field:
         out.pop("sort")
+    return out
+
+
+def prune_rollups(spec: dict[str, Any], key: str) -> dict[str, Any]:
+    """그 속성을 모으는 롤업을 걷어낸다 — 속성이 지워졌거나 숫자가 아니게 됐을 때.
+
+    롤업은 `properties.<키>` 가 아니라 키로 가리킨다. 그래서 열 · 거르기를 걷는 자리에서 빠져
+    있었고, 남은 롤업은 **다음 타입 수정을 거절시켰다**(「숫자 칸이 아닙니다」) — 그 사람이
+    방금 고친 것과 상관없는 오류다.
+    """
+    out = dict(spec)
+    rollups = out.get("rollups")
+    if isinstance(rollups, list):
+        kept = [
+            one
+            for one in rollups
+            if not (isinstance(one, dict) and one.get("property") == key)
+        ]
+        if kept:
+            out["rollups"] = kept
+        else:
+            out.pop("rollups")
     return out

@@ -255,6 +255,10 @@ def _coerce_one(definition: PropertyDef, raw: Any) -> Any:
     raise InvalidValue(code("ONTOLOGY", 17), f"{label}: 모르는 속성 종류입니다: {kind}")
 
 
+#: 값 하나의 검사 — 종류 변경(`conversion`)이 변환한 값을 **저장할 때와 같은 검사**에 건다.
+check_value = _coerce_one
+
+
 def _check_pattern(definition: PropertyDef, raw: str) -> None:
     """모양이 정해진 값(사번·도번)을 지킨다.
 

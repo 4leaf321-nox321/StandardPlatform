@@ -35,6 +35,7 @@ from sqlalchemy.orm import aliased
 
 from app.modules.objects import paths
 from app.modules.objects.models import ObjectInstance
+from app.modules.ontology import conversion
 from app.modules.ontology.models import PropertyDef
 from app.modules.ontology.services import InvalidValue
 from app.shared.errors import AppError, code
@@ -175,7 +176,8 @@ def _clause(
         }[op]
 
     if data_type == "bool":
-        wanted = raw.strip().lower() in ("true", "1", "예", "y", "yes")
+        # 참/거짓 어휘는 일괄 입력 · 종류 변경과 한 벌이다(`conversion.TRUE_WORDS`).
+        wanted = raw.strip().lower() in conversion.TRUE_WORDS
         return column == ("true" if wanted else "false")
 
     if multi:

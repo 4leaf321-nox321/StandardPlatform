@@ -54,7 +54,7 @@ from app.modules.objects.services import (
     properties_of,
     require_key_free,
 )
-from app.modules.ontology import interfaces, managed
+from app.modules.ontology import conversion, interfaces, managed
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.services import InvalidValue, merge_properties, validate_properties
 from app.shared import audit, tabular
@@ -113,8 +113,10 @@ def _tick(on_progress: Progress, stage: str, done: int, total: int) -> None:
         on_progress(stage, done, total)
 
 
-TRUE_WORDS = {"true", "1", "y", "yes", "예", "참", "o"}
-FALSE_WORDS = {"false", "0", "n", "no", "아니오", "거짓", "x"}
+#: 참/거짓 어휘 · 숫자 해석은 종류 변경과 **한 벌**이다(`ontology/conversion.py`) — 두 벌이면
+#: 같은 「1,234」 가 파일로는 거절되고 종류 변경으로는 받아진다.
+TRUE_WORDS = conversion.TRUE_WORDS
+FALSE_WORDS = conversion.FALSE_WORDS
 
 
 @dataclass
@@ -379,12 +381,11 @@ def _one_from_text(definition: PropertyDef, raw: Any, refs: _Refs) -> Any:
     kind = definition.data_type
     if kind == "number":
         try:
-            number = float(text)
-        except ValueError:
+            return conversion.parse_number(text)
+        except conversion.Unconvertible:
             raise InvalidValue(
                 code("ONTOLOGY", 11), f"{definition.label}: 숫자여야 합니다: {text!r}"
             ) from None
-        return int(number) if number.is_integer() else number
     if kind == "bool":
         low = text.lower()
         if low in TRUE_WORDS:

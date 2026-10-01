@@ -2175,24 +2175,25 @@ def import_schema(
     **더하고 고치기만 한다.** 「스키마에 없으니 지운다」 로 만들면 부분 스키마를
     한 번 보낸 날 그 타입의 객체가 통째로 갈 곳을 잃는다.
     """
+    # **적용 직전의 모습을 남긴다.** 감사 로그는 누가 뭘 했는지는 알려 주지만
+    # 되돌려 주지는 않는다. 적용은 **한 번만** 한다 — 예전에는 한 번 적용해 오류를 보고
+    # 되돌린 뒤 다시 적용했는데, 종류 변경이 저장값까지 바꾸게 되면서 그 두 번이 값 변환
+    # 두 번이 됐다.
+    snapshot = None if dry_run else _snapshot(db, user, reason="가져오기")
     try:
         prepared = (
             importer.plan(db, payload) if dry_run else importer.apply(db, payload, actor=user)
         )
     except ValueError as caught:
         # **모르는 항목은 거절한다.** 조용히 무시하면 보낸 쪽은 적용된 줄 안다.
+        db.rollback()
         raise Conflict(code("ONTOLOGY", 70), str(caught)) from None
 
-    if dry_run or prepared.errors:
-        # 오류가 하나라도 있으면 **아무것도 안 바꾼다.**
+    if snapshot is None or prepared.errors:
+        # 오류가 하나라도 있으면 **아무것도 안 바꾼다**(남긴 스냅샷도 함께 되돌린다).
         db.rollback()
         return _plan_out(prepared, applied=False, snapshot_id=None)
 
-    # **적용 직전의 모습을 남긴다.** 감사 로그는 누가 뭘 했는지는 알려 주지만
-    # 되돌려 주지는 않는다.
-    db.rollback()
-    snapshot = _snapshot(db, user, reason="가져오기")
-    prepared = importer.apply(db, payload, actor=user)
     _audit(
         db,
         user,
@@ -2295,7 +2296,8 @@ def restore_snapshot(
     # **옛 스냅샷도 되돌려진다** — 인터페이스 전의 것은 타입에 `parent_slug` 를 담고 있다.
     schema, notes = importer.upgrade_snapshot(row.schema or {})
     try:
-        prepared = importer.apply(db, schema)
+        # 누가 되돌렸는지가 값 변환의 이력에도 남는다(종류가 바뀐 뒤의 복원은 값도 변환한다).
+        prepared = importer.apply(db, schema, actor=user, reason="스냅샷 복원")
     except ValueError as caught:
         db.rollback()
         raise Conflict(code("ONTOLOGY", 70), str(caught)) from None

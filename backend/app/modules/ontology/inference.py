@@ -50,6 +50,8 @@ ENUM_MAX_RATIO = 0.3
 LONG_TEXT = 200
 SAMPLES = 5
 
+# **짐작하는 어휘는 좁다** — 변환(`conversion.TRUE_WORDS`)은 1 · 0 · o · x 도 참/거짓으로
+# 읽지만, 열을 보고 종류를 짐작할 때 그것까지 넣으면 0/1 로 채운 숫자 열이 예/아니오로 잡힌다.
 _TRUE = {"true", "yes", "y", "예", "참"}
 _FALSE = {"false", "no", "n", "아니오", "거짓"}
 _URL_RE = re.compile(r"^https?://\S+$", re.IGNORECASE)

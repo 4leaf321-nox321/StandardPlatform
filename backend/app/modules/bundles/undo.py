@@ -35,9 +35,10 @@ from app.modules.accounts.models import User
 from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.objects import aliases, bulk, lifecycle
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
-from app.modules.objects.services import audit_state
+from app.modules.objects.services import audit_state, properties_of
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef
+from app.modules.ontology.services import InvalidValue, check_value
 from app.shared import audit
 from app.shared.errors import AppError, Forbidden, NotFound, code
 from app.shared.permissions import require_owner_edit
@@ -254,6 +255,18 @@ def _object(
             object_id=row.id,
             message=f"그 뒤에 {', '.join(stale)} 이(가) 바뀌어 안 되돌립니다",
         )
+    wrong = _wrong_kind(db, row, entry.before.get("properties"))
+    if wrong:
+        return bulk.RowPlan(
+            row=index,
+            action="error",
+            label=entry.label,
+            object_id=row.id,
+            message=(
+                "그 뒤 속성 정의가 바뀌어(속성 종류 변경 등) 그때 값이 지금 정의에 맞지 "
+                f"않습니다 — {wrong}"
+            ),
+        )
     if apply:
         before = audit_state(row)
         for key, value in entry.before.items():
@@ -278,6 +291,29 @@ def _object(
         changes=sorted(entry.before),
         message="넣기 전 값으로 되돌립니다",
     )
+
+
+def _wrong_kind(db: Session, row: ObjectInstance, properties: Any) -> str:
+    """되돌릴 값이 **지금 속성 종류에 맞나** — 안 맞으면 그 까닭.
+
+    그 뒤 속성 종류가 변경됐으면(ADR 0007) 옛 종류의 값이다. 되돌리기는 정의를 안 되돌리므로,
+    검사 없이 넣으면 숫자 칸에 글이 들어간다. 값의 모양만 본다 — 그 사이 지워진 속성 · 필수가
+    된 속성은 예전처럼 되돌리기를 막지 않는다.
+    """
+    if not isinstance(properties, dict):
+        return ""
+    for definition in properties_of(db, row.type_id):
+        if definition.key not in properties:
+            continue
+        raw = properties[definition.key]
+        items = raw if definition.multi and isinstance(raw, list) else [raw]
+        try:
+            for item in items:
+                if item is not None and item != "":
+                    check_value(definition, item)
+        except InvalidValue as caught:
+            return caught.message
+    return ""
 
 
 def _restore(row: ObjectInstance, key: str, value: Any) -> None:

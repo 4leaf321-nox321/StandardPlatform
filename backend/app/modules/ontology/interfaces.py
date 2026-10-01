@@ -741,10 +741,16 @@ def risks(db: Session, bindings: Iterable[Binding]) -> list[str]:
     """**적용은 되지만 조용히 무언가를 잃는 것** — 이미 저장된 값이 새 모양에 안 맞게 되는 일.
 
     정의 가져오기의 경고(`importer._warn_property_risks`)와 같은 말이다. 구현 타입의 속성이
-    인터페이스를 따라 바뀔 때 나온다.
+    인터페이스를 따라 바뀔 때 나온다. **종류가 바뀌는 속성은 빼고 센다** — 그 저장값은 종류
+    변경(`retype`)이 변환하고 그 계획이 말한다. 여기서 「고를 값에서 뺍니다」 를 또 말하면
+    틀린 말이 된다(고를 값이 통째로 없어지는 것이 아니라 종류가 바뀌는 것이다).
     """
     out: list[str] = []
-    todo = [one for one in bindings if one.action == "sync" and one.shape is not None]
+    todo = [
+        one
+        for one in bindings
+        if one.action == "sync" and one.shape is not None and "data_type" not in one.changed
+    ]
     if not todo:
         return out
     types = {
