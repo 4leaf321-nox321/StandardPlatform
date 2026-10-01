@@ -1,5 +1,5 @@
 /**
- * 온톨로지를 고치는 창 셋(타입 · 속성 · 관계 종류)이 **같은 크기로 서고, 스크롤은 하나다.**
+ * 온톨로지를 고치는 창 넷(타입 · 속성 · 관계 종류 · 인터페이스)이 **같은 크기로 서고, 스크롤은 하나다.**
  *
  * 속성 하나를 고치러 들어갔는데 창 크기가 달라지면 사람은 어디를 보고 있었는지 잃는다. 그리고
  * `DialogContent` 가 이미 머리·바닥을 붙박이로 두고 가운데를 굴리므로(`ui/dialog.tsx`), 창이
@@ -14,6 +14,7 @@ const FILES = [
   'src/modules/ontology/TypeEditDialog.tsx',
   'src/modules/ontology/PropertyEditDialog.tsx',
   'src/modules/ontology/RelationTypeEditDialog.tsx',
+  'src/modules/ontology/InterfaceEditDialog.tsx',
 ]
 
 function contentClass(source: string): string {

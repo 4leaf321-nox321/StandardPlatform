@@ -91,9 +91,7 @@ export default function OntologyImportPage() {
   function exportCurrent() {
     if (!schema) return
     const propertiesOf = (rows: PropertyDef[]) =>
-      rows.map(
-        ({ id: _p, owner_id: _o, owner_kind: _k, interface_slug: _s, ...one }) => one,
-      )
+      rows.map(({ id: _p, owner_id: _o, owner_kind: _k, interface_slug: _s, ...one }) => one)
     const body = {
       groups: schema.groups.map(({ id: _id, ...rest }) => rest),
       interfaces: (schema.interfaces ?? []).map(
@@ -245,6 +243,13 @@ export default function OntologyImportPage() {
                     <TableCell>{ACTION_LABELS[one.action] ?? one.action}</TableCell>
                     <TableCell className="text-muted-foreground text-xs">
                       {one.fields.join(', ') || '—'}
+                      {/* **파일에 없던 타입이 왜 바뀌나** — 인터페이스를 따라서다. 안 적으면
+                          보낸 사람은 자기가 그 타입을 건드린 줄 모른다. */}
+                      {one.via && (
+                        <span className="ml-2 rounded border border-sky-500/50 bg-sky-500/10 px-1.5">
+                          인터페이스 {one.via} 를 따라
+                        </span>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))}

@@ -35,7 +35,13 @@ import {
 } from '@/shared/components/ui/select'
 
 interface EnumOptionsPanelProps {
-  type: ObjectType
+  /** 타입의 속성이면 그 타입. */
+  type?: ObjectType
+  /**
+   * 인터페이스의 **공통 속성**이면 그 인터페이스 — 이름을 바꾸면 구현 타입 전부의 저장값이
+   * 함께 바뀌고, 코드표 승격은 없다(구현 타입마다 다른 코드표를 가리키면 같은 속성이 아니다).
+   */
+  interfaceSlug?: string
   property: PropertyDef
   /** 코드표로 쓸 수 있는 타입(kind_class=reference). */
   types: ObjectType[]
@@ -48,6 +54,7 @@ interface EnumOptionsPanelProps {
 
 export function EnumOptionsPanel({
   type,
+  interfaceSlug,
   property,
   types,
   onChanged,
@@ -63,19 +70,21 @@ export function EnumOptionsPanel({
     <div className="space-y-2 rounded-md border p-3">
       <div className="flex items-center justify-between">
         <span className="text-sm font-medium">저장된 선택할 값 다루기</span>
-        <Button
-          size="xs"
-          variant="outline"
-          onClick={() => setPromoting(true)}
-          disabled={options.length === 0}
-        >
-          <BookMarked className="mr-1 size-3" />
-          코드표로 승격…
-        </Button>
+        {type && !interfaceSlug && (
+          <Button
+            size="xs"
+            variant="outline"
+            onClick={() => setPromoting(true)}
+            disabled={options.length === 0}
+          >
+            <BookMarked className="mr-1 size-3" />
+            코드표로 승격…
+          </Button>
+        )}
       </div>
       <p className="text-muted-foreground text-xs">
-        여기서 이름을 바꾸면 <b>이미 저장된 값도 함께</b> 바뀝니다. 위 칸에서 수정하면 정의만
-        바뀝니다.
+        여기서 이름을 바꾸면 <b>이미 저장된 값도 함께</b> 바뀝니다
+        {interfaceSlug ? ' — 구현 타입 전부에서 한 번에' : ''}. 위 칸에서 수정하면 정의만 바뀝니다.
       </p>
       <ul className="space-y-1">
         {options.map((value) => (
@@ -91,8 +100,11 @@ export function EnumOptionsPanel({
 
       {renaming !== null && (
         <RenameDialog
-          typeSlug={type.slug}
-          propertyKey={property.key}
+          rename={(body) =>
+            interfaceSlug
+              ? ontologyApi.renameInterfaceOption(interfaceSlug, property.key, body)
+              : ontologyApi.renameOption(type?.slug ?? '', property.key, body)
+          }
           from={renaming}
           onClose={() => setRenaming(null)}
           onDone={(to) => {
@@ -103,7 +115,7 @@ export function EnumOptionsPanel({
           }}
         />
       )}
-      {promoting && (
+      {promoting && type && (
         <PromoteDialog
           type={type}
           property={property}
@@ -120,15 +132,16 @@ export function EnumOptionsPanel({
 }
 
 interface RenameDialogProps {
-  typeSlug: string
-  propertyKey: string
+  /** 계획(`apply=false`)과 적용을 같은 길로 — 타입의 속성이면 그 타입만, 공통 속성이면 구현 타입
+   *  전부. */
+  rename: (body: { from: string; to: string; apply: boolean }) => Promise<RenameOptionOut>
   from: string
   onClose: () => void
   /** 바뀐 새 이름. */
   onDone: (to: string) => void
 }
 
-function RenameDialog({ typeSlug, propertyKey, from, onClose, onDone }: RenameDialogProps) {
+function RenameDialog({ rename, from, onClose, onDone }: RenameDialogProps) {
   const [to, setTo] = useState(from)
   const [plan, setPlan] = useState<RenameOptionOut | null>(null)
   const [busy, setBusy] = useState(false)
@@ -138,11 +151,7 @@ function RenameDialog({ typeSlug, propertyKey, from, onClose, onDone }: RenameDi
     setBusy(true)
     setError(null)
     try {
-      const result = await ontologyApi.renameOption(typeSlug, propertyKey, {
-        from,
-        to: to.trim(),
-        apply,
-      })
+      const result = await rename({ from, to: to.trim(), apply })
       setPlan(result)
       if (result.applied) onDone(result.to_value)
     } catch (caught) {

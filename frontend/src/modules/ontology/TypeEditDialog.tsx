@@ -14,8 +14,10 @@ import { ListViewEditor } from '@/modules/ontology/ListViewEditor'
 import { SectionViewEditor } from '@/modules/ontology/SectionViewEditor'
 import { ontologyApi } from '@/modules/ontology/api'
 import type {
+  ImplementPlan,
   ListView,
   NavGroupRow,
+  ObjectInterface,
   ObjectType,
   PropertyDef,
   RelationType,
@@ -52,6 +54,8 @@ interface Props {
   /** 속성 정의까지 들고 온다 — **열로 고를 것이 그 목록에서 나온다.** */
   type: ObjectType & { properties: PropertyDef[] }
   groups: NavGroupRow[]
+  /** 구현할 수 있는 인터페이스(ADR 0006). 없으면 「구현 인터페이스」 칸이 안 선다. */
+  interfaces?: ObjectInterface[]
   relationTypes: RelationType[]
   /** 투영이 비출 수 있는 원 표. 스키마가 준다 — 등록 안 된 표는 고를 수 없다. */
   systemSources?: SystemSource[]
@@ -62,6 +66,7 @@ interface Props {
 export function TypeEditDialog({
   type,
   groups,
+  interfaces = [],
   relationTypes,
   systemSources = [],
   onClose,
@@ -72,6 +77,10 @@ export function TypeEditDialog({
   const [description, setDescription] = useState(type.description)
   const [group, setGroup] = useState(type.nav_group_slug ?? NONE)
   const [kindClass, setKindClass] = useState<string>(type.kind_class)
+  const [implemented, setImplemented] = useState<string[]>(type.interface_slugs ?? [])
+  /** 구현을 바꾸면 **저장 전에** 무엇이 되는지 — 만들 속성 · 채택할 속성 · 충돌. */
+  const [implementPlan, setImplementPlan] = useState<ImplementPlan | null>(null)
+  const implementChanged = !sameSet(implemented, type.interface_slugs ?? [])
   const [systemSource, setSystemSource] = useState<string>(
     type.system_source || systemSources[0]?.key || '',
   )
@@ -100,6 +109,8 @@ export function TypeEditDialog({
         description,
         icon,
         nav_group_slug: group === NONE ? null : group,
+        // **바꾼 때만 보낸다** — 보내면 구현을 다시 맞추고 기록을 남긴다.
+        ...(implementChanged ? { interface_slugs: implemented } : {}),
         kind_class: kindClass,
         system_source: kindClass === 'system' ? systemSource : '',
         entry_policy: entryPolicy,
@@ -162,8 +173,8 @@ export function TypeEditDialog({
                     <Label>slug</Label>
                     <Input value={type.slug} readOnly disabled className="font-mono" />
                     <p className="text-muted-foreground text-xs">
-                      <b>바꿀 수 없습니다.</b> 주소(<code>/o/{type.slug}</code>)와 관계·MCP 도구
-                      이름이 여기 물려 있어, 바꾸면 그 셋이 조용히 어긋납니다.
+                      <b>바꿀 수 없습니다.</b> 주소(<code>/o/{type.slug}</code>
+                      )와 관계·MCP 도구 이름이 여기 물려 있어, 바꾸면 그 셋이 조용히 어긋납니다.
                     </p>
                   </div>
 
@@ -192,6 +203,49 @@ export function TypeEditDialog({
                     이름을 한 자씩 읽어야 한다 — 눈은 모양을 먼저 잡는다. */}
                     <IconPicker id="type-edit-icon" value={icon} onChange={setIcon} />
                   </div>
+
+                  {interfaces.length > 0 && (
+                    <div className="space-y-1.5">
+                      <Label>구현 인터페이스</Label>
+                      <div className="flex flex-wrap gap-3">
+                        {interfaces.map((one) => (
+                          <label key={one.slug} className="flex items-center gap-1.5 text-sm">
+                            <input
+                              type="checkbox"
+                              className="size-4"
+                              disabled={kindClass === 'system'}
+                              checked={implemented.includes(one.slug)}
+                              onChange={() => {
+                                const next = implemented.includes(one.slug)
+                                  ? implemented.filter((s) => s !== one.slug)
+                                  : [...implemented, one.slug]
+                                setImplemented(next)
+                                setImplementPlan(null)
+                                if (sameSet(next, type.interface_slugs ?? [])) return
+                                ontologyApi
+                                  .implementPlan(type.slug, next)
+                                  .then(setImplementPlan)
+                                  .catch((caught) =>
+                                    setError(
+                                      caught instanceof Error
+                                        ? caught
+                                        : new Error('알 수 없는 오류'),
+                                    ),
+                                  )
+                              }}
+                            />
+                            {one.label}
+                          </label>
+                        ))}
+                      </div>
+                      <p className="text-muted-foreground text-xs">
+                        {kindClass === 'system'
+                          ? '다른 표를 비추는 타입(투영)은 인터페이스를 구현하지 않습니다 — 속성이 없습니다.'
+                          : '인터페이스의 공통 속성을 같은 키 · 같은 모양으로 갖습니다. 없는 속성은 만들고, 같은 모양이면 그대로 채택하고, 다르면 저장되지 않습니다. 해제해도 속성은 남습니다.'}
+                      </p>
+                      {implementPlan && <ImplementPreview plan={implementPlan} />}
+                    </div>
+                  )}
                 </section>
 
                 <section className="space-y-4">
@@ -369,7 +423,10 @@ export function TypeEditDialog({
               <Button variant="outline" onClick={onClose} disabled={saving}>
                 취소
               </Button>
-              <Button onClick={save} disabled={saving || !label.trim()}>
+              <Button
+                onClick={save}
+                disabled={saving || !label.trim() || (implementPlan?.conflicts.length ?? 0) > 0}
+              >
                 저장
               </Button>
             </div>
@@ -434,6 +491,45 @@ function Field({
           ))}
         </SelectContent>
       </Select>
+    </div>
+  )
+}
+
+function sameSet(a: string[], b: string[]): boolean {
+  return a.length === b.length && a.every((one) => b.includes(one))
+}
+
+/** 구현하면 무엇이 되는지 — **충돌은 서버가 적은 그대로** 보인다(무엇이 다른지가 거기 있다). */
+function ImplementPreview({ plan }: { plan: ImplementPlan }) {
+  const keys = (rows: { key: string }[]) => rows.map((one) => one.key).join(', ')
+  return (
+    <div className="space-y-1 rounded-md border p-2 text-xs" role="status">
+      {plan.creates.length > 0 && (
+        <p>
+          <b>새로 만들 속성</b> {keys(plan.creates)}
+        </p>
+      )}
+      {plan.adopts.length > 0 && (
+        <p>
+          <b>그대로 채택할 속성</b> {keys(plan.adopts)}
+        </p>
+      )}
+      {plan.creates.length === 0 && plan.adopts.length === 0 && plan.conflicts.length === 0 && (
+        <p className="text-muted-foreground">바뀌는 속성이 없습니다.</p>
+      )}
+      {plan.warnings.map((one) => (
+        <p key={one} className="text-amber-700 dark:text-amber-400">
+          {one}
+        </p>
+      ))}
+      {plan.conflicts.length > 0 && (
+        <div className="text-destructive space-y-0.5">
+          <p className="font-medium">구현할 수 없습니다 — 모양이 다릅니다</p>
+          {plan.conflicts.map((one) => (
+            <p key={one}>{one}</p>
+          ))}
+        </div>
+      )}
     </div>
   )
 }

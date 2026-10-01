@@ -227,6 +227,36 @@ export interface ObjectInterface {
   object_count: number
 }
 
+/** 지우기 전에 무엇이 가리키는지 — 하나라도 있으면 지우지 않는다. */
+export interface InterfaceUsage {
+  slug: string
+  /** 직접 구현한 타입 — 해제해야 지울 수 있다. */
+  implementers: string[]
+  sub_interfaces: string[]
+  /** 이 인터페이스를 참조 대상으로 적은 속성(`타입.키`). */
+  referenced_by: string[]
+  relation_types: string[]
+}
+
+export interface ImplementItem {
+  key: string
+  interface: string
+  /** 맞추려고 바꾸는 칸(고를 값의 순서 · 필수 등). */
+  changed: string[]
+}
+
+/** 구현하면 무엇이 되는가 — 저장 전에 보는 것. 아무것도 안 바꾼다. */
+export interface ImplementPlan {
+  /** 없어서 새로 만드는 속성. */
+  creates: ImplementItem[]
+  /** 이미 같은 모양이라 그대로 채택하는 속성. */
+  adopts: ImplementItem[]
+  syncs: ImplementItem[]
+  /** 모양이 달라 구현할 수 없는 곳 — 무엇이 다른지 적혀 있다. 있으면 저장이 거절된다. */
+  conflicts: string[]
+  warnings: string[]
+}
+
 export interface OntologySchema {
   groups: NavGroupRow[]
   /** 여러 타입이 따르는 공통 모양 — 구현 타입은 `types[].interface_slugs`. */
@@ -284,6 +314,8 @@ export interface ImportChange {
   slug: string
   action: 'create' | 'update' | 'unchanged'
   fields: string[]
+  /** 이 변경을 부른 인터페이스 — 파일에 없던 타입의 속성이 인터페이스를 따라 바뀔 때. */
+  via?: string
 }
 
 export interface ImportPlan {
@@ -461,6 +493,42 @@ export const ontologyApi = {
     api.delete<void>(
       `/ontology/types/${slug}/properties/${key}${acceptCore ? '?accept_core=true' : ''}`,
     ),
+
+  // --- 인터페이스 (ADR 0006) ---
+  interfaces: () => api.get<ObjectInterface[]>('/ontology/interfaces'),
+  createInterface: (body: Record<string, unknown>) =>
+    api.post<ObjectInterface>('/ontology/interfaces', body),
+  /** **보낸 것만 바뀐다.** 상위 인터페이스를 바꾸면 구현 타입 전부가 걸린다. */
+  updateInterface: (slug: string, body: Record<string, unknown>) =>
+    api.patch<ObjectInterface>(`/ontology/interfaces/${slug}`, body),
+  removeInterface: (slug: string) => api.delete<void>(`/ontology/interfaces/${slug}`),
+  /** **지우기 전에 무엇이 가리키는지.** */
+  interfaceUsage: (slug: string) => api.get<InterfaceUsage>(`/ontology/interfaces/${slug}/usage`),
+  interfaceProperties: (slug: string) =>
+    api.get<PropertyDef[]>(`/ontology/interfaces/${slug}/properties`),
+  /** 공통 속성을 더한다 — 구현 타입 전부에 같은 키의 속성이 선다. */
+  createInterfaceProperty: (slug: string, body: Record<string, unknown>) =>
+    api.post<PropertyDef>(`/ontology/interfaces/${slug}/properties`, body),
+  /** 공통 속성을 고친다 — 구현 타입들의 속성도 같은 트랜잭션에서 바뀐다. */
+  updateInterfaceProperty: (slug: string, key: string, body: Record<string, unknown>) =>
+    api.patch<PropertyDef>(`/ontology/interfaces/${slug}/properties/${key}`, body),
+  interfacePropertyUsage: (slug: string, key: string) =>
+    api.get<PropertyUsage>(`/ontology/interfaces/${slug}/properties/${key}/usage`),
+  /** 공통 속성을 뺀다 — 구현 타입의 속성은 남는다. */
+  removeInterfaceProperty: (slug: string, key: string) =>
+    api.delete<void>(`/ontology/interfaces/${slug}/properties/${key}`),
+  /** 고를 값 이름을 **구현 타입 전부에서 한 번에** — 저장된 값까지. */
+  renameInterfaceOption: (
+    slug: string,
+    key: string,
+    body: { from: string; to: string; apply: boolean },
+  ) =>
+    api.post<RenameOptionOut>(`/ontology/interfaces/${slug}/properties/${key}/rename-option`, body),
+  /** 구현하면 무엇이 되는가 — 아무것도 안 바꾼다. */
+  implementPlan: (typeSlug: string, interfaceSlugs: string[]) =>
+    api.post<ImplementPlan>(`/ontology/types/${typeSlug}/interfaces/plan`, {
+      interface_slugs: interfaceSlugs,
+    }),
 
   /** **기본이 미리 보기다.** 적용은 의도를 적어야 일어난다. */
   importSchema: (body: unknown, dryRun: boolean) =>

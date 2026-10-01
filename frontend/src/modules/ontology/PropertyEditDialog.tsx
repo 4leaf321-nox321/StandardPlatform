@@ -7,13 +7,17 @@
  *
  * **키와 종류는 만들 때만 정한다.** 키를 바꾸면 이미 저장된 값이 전부 고아가
  * 되고, 종류를 바꾸면 그 값들이 새 종류에 안 맞는데 화면은 아무 말도 안 한다.
+ *
+ * **인터페이스의 공통 속성도 이 창이다**(ADR 0006) — 두 벌이면 위젯이 갈린다. 다른 점은 둘:
+ * 공통 속성에는 타입마다 정하는 칸(유일 · 기본값 · 역방향 이름)이 없고, 타입 쪽에서 공통 속성을
+ * 열면 **모양 칸이 잠기고 왜 잠겼는지 적힌다**(비활성만 시키면 버그로 읽힌다).
  */
 
 import { useState } from 'react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import { EnumOptionsPanel } from '@/modules/ontology/EnumOptionsPanel'
-import type { DataType, ObjectType, PropertyDef } from '@/modules/ontology/api'
+import type { DataType, ObjectInterface, ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
@@ -66,10 +70,13 @@ const NUMERIC = new Set<DataType>(['number'])
 const PATTERNABLE = new Set<DataType>(['text', 'text_long', 'url'])
 const UNIQUEABLE = new Set<DataType>(['text', 'number', 'url', 'date', 'datetime'])
 
+/** 속성이 붙는 자리 — 타입이거나 인터페이스(공통 속성). */
+export type PropertyOwner =
+  { kind: 'type'; row: ObjectType } | { kind: 'interface'; row: ObjectInterface }
+
 interface Props {
-  /** 이 속성이 붙는 타입. */
-  type: ObjectType
-  /** 고칠 속성. 없으면 생성다. */
+  owner: PropertyOwner
+  /** 고칠 속성. 없으면 생성이다. */
   property?: PropertyDef | null
   /** 「객체 참조」 가 가리킬 수 있는 타입들. */
   types: ObjectType[]
@@ -77,8 +84,12 @@ interface Props {
   onChanged: () => void
 }
 
-export function PropertyEditDialog({ type, property, types, onClose, onChanged }: Props) {
+export function PropertyEditDialog({ owner, property, types, onClose, onChanged }: Props) {
   const editing = Boolean(property)
+  const isInterface = owner.kind === 'interface'
+  /** 타입 쪽에서 연 공통 속성 — 모양은 그 인터페이스에서 고친다. */
+  const boundTo = owner.kind === 'type' ? (property?.interface_slug ?? null) : null
+  const locked = boundTo !== null
 
   const [key, setKey] = useState(property?.key ?? '')
   const [label, setLabel] = useState(property?.label ?? '')
@@ -122,9 +133,10 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
       decimals: NUMERIC.has(dataType) && decimals !== '' ? Number(decimals) : null,
       pattern: PATTERNABLE.has(dataType) && pattern ? pattern : null,
       // **빈 칸은 「기본값 없음」 이다.** 빈 문자열을 넣으면 그것이 기본값이 되고,
-      // 그러면 필수 검사가 통과해 버린다.
-      default_value: defaultValue === '' ? null : coerceDefault(dataType, defaultValue),
-      unique: UNIQUEABLE.has(dataType) ? unique : false,
+      // 그러면 필수 검사가 통과해 버린다. 공통 속성에는 기본값 · 유일이 없다(타입마다다).
+      default_value:
+        isInterface || defaultValue === '' ? null : coerceDefault(dataType, defaultValue),
+      unique: !isInterface && UNIQUEABLE.has(dataType) ? unique : false,
       enum_options:
         dataType === 'enum'
           ? options
@@ -133,16 +145,35 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
               .filter(Boolean)
           : null,
       ref_type_slug: dataType === 'object_ref' ? refType || null : null,
-      inverse_label: dataType === 'object_ref' ? inverseLabel.trim() : '',
+      inverse_label: !isInterface && dataType === 'object_ref' ? inverseLabel.trim() : '',
     }
   }
+
+  const calls =
+    owner.kind === 'interface'
+      ? {
+          create: (b: Record<string, unknown>) =>
+            ontologyApi.createInterfaceProperty(owner.row.slug, b),
+          update: (k: string, b: Record<string, unknown>) =>
+            ontologyApi.updateInterfaceProperty(owner.row.slug, k, b),
+          usage: (k: string) => ontologyApi.interfacePropertyUsage(owner.row.slug, k),
+          remove: (k: string) => ontologyApi.removeInterfaceProperty(owner.row.slug, k),
+        }
+      : {
+          create: (b: Record<string, unknown>) => ontologyApi.createProperty(owner.row.slug, b),
+          update: (k: string, b: Record<string, unknown>) =>
+            ontologyApi.updateProperty(owner.row.slug, k, b),
+          usage: (k: string) => ontologyApi.propertyUsage(owner.row.slug, k),
+          remove: (k: string, acceptCore: boolean) =>
+            ontologyApi.removeProperty(owner.row.slug, k, acceptCore),
+        }
 
   async function save() {
     setError(null)
     setSaving(true)
     try {
-      if (property) await ontologyApi.updateProperty(type.slug, property.key, body())
-      else await ontologyApi.createProperty(type.slug, body())
+      if (property) await calls.update(property.key, body())
+      else await calls.create(body())
       onChanged()
       onClose()
     } catch (caught) {
@@ -160,12 +191,28 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
         <DialogContent className="h-[80vh] w-[80vw] sm:max-w-[80vw]">
           <DialogHeader>
             <DialogTitle>
-              {type.label} · {editing ? `${property?.label} 수정` : '속성 추가'}
+              {owner.row.label}
+              {isInterface ? ' (인터페이스)' : ''} ·{' '}
+              {editing ? `${property?.label} 수정` : isInterface ? '공통 속성 추가' : '속성 추가'}
             </DialogTitle>
           </DialogHeader>
 
           <div className="space-y-4">
             {error && <ErrorNotice error={error} />}
+            {locked && (
+              <p className="rounded-md border border-sky-500/40 bg-sky-500/5 p-2 text-sm">
+                인터페이스 <b className="font-mono">{boundTo}</b> 의 <b>공통 속성</b>입니다 — 종류 ·
+                선택할 값 · 단위 · 범위 · 규칙 · 여러 값은 <b>인터페이스에서 수정</b>합니다(한
+                타입만 바뀌면 같은 속성이 타입마다 갈립니다). 이름 · 안내 · 순서 · 기본값 · 유일은
+                이 타입에서 정합니다.
+              </p>
+            )}
+            {isInterface && (
+              <p className="text-muted-foreground text-xs">
+                공통 속성은 <b>구현 타입 전부에 같은 키로</b> 섭니다. 여기서 모양을 고치면 구현
+                타입들의 속성도 함께 바뀝니다.
+              </p>
+            )}
 
             {/* 왼쪽은 **무엇을 담나**(키 · 이름 · 종류, 그리고 그 종류가 부르는 칸),
                 오른쪽은 **어떻게 담나**(단위 · 범위 · 규칙 · 안내). 종류를 바꾸면 왼쪽만
@@ -219,11 +266,14 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                           <SelectValue />
                         </SelectTrigger>
                         <SelectContent>
-                          {(Object.keys(DATA_TYPE_LABELS) as DataType[]).map((one) => (
-                            <SelectItem key={one} value={one}>
-                              {DATA_TYPE_LABELS[one]}
-                            </SelectItem>
-                          ))}
+                          {(Object.keys(DATA_TYPE_LABELS) as DataType[])
+                            // 파일은 값이 속성 칸에 없어 여러 타입을 한 목록으로 묻지 못한다.
+                            .filter((one) => !(isInterface && one === 'file'))
+                            .map((one) => (
+                              <SelectItem key={one} value={one}>
+                                {DATA_TYPE_LABELS[one]}
+                              </SelectItem>
+                            ))}
                         </SelectContent>
                       </Select>
                       <p className="text-muted-foreground text-xs">{DATA_TYPE_HINTS[dataType]}</p>
@@ -237,6 +287,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                     <Input
                       id="prop-options"
                       value={options}
+                      disabled={locked}
                       placeholder="A, B, C"
                       onChange={(event) => setOptions(event.target.value)}
                     />
@@ -249,41 +300,46 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                 )}
 
                 {/* 저장된 속성의 고를 값 — 이름을 바꾸면 저장값도 함께, 코드표로 승격. */}
-                {editing && property && property.data_type === 'enum' && dataType === 'enum' && (
-                  <EnumOptionsPanel
-                    type={type}
-                    property={property}
-                    types={types}
-                    onChanged={(renamed) => {
-                      if (renamed) {
-                        // 이 창의 「고를 값」 칸도 같이 — 안 그러면 「저장」 이 옛 목록을 다시 보낸다.
-                        setOptions((current) =>
-                          current
-                            .split(',')
-                            .map((one) => one.trim())
-                            .filter(Boolean)
-                            .map((one) => (one === renamed.from ? renamed.to : one))
-                            .join(', '),
-                        )
-                        setDefaultValue((current) =>
-                          current === renamed.from ? renamed.to : current,
-                        )
-                      }
-                      onChanged()
-                    }}
-                    onPromoted={() => {
-                      onChanged()
-                      onClose()
-                    }}
-                  />
-                )}
+                {editing &&
+                  !locked &&
+                  property &&
+                  property.data_type === 'enum' &&
+                  dataType === 'enum' && (
+                    <EnumOptionsPanel
+                      type={owner.kind === 'type' ? owner.row : undefined}
+                      interfaceSlug={owner.kind === 'interface' ? owner.row.slug : undefined}
+                      property={property}
+                      types={types}
+                      onChanged={(renamed) => {
+                        if (renamed) {
+                          // 이 창의 「고를 값」 칸도 같이 — 안 그러면 「저장」 이 옛 목록을 다시 보낸다.
+                          setOptions((current) =>
+                            current
+                              .split(',')
+                              .map((one) => one.trim())
+                              .filter(Boolean)
+                              .map((one) => (one === renamed.from ? renamed.to : one))
+                              .join(', '),
+                          )
+                          setDefaultValue((current) =>
+                            current === renamed.from ? renamed.to : current,
+                          )
+                        }
+                        onChanged()
+                      }}
+                      onPromoted={() => {
+                        onChanged()
+                        onClose()
+                      }}
+                    />
+                  )}
 
                 {dataType === 'object_ref' && (
                   <div className="space-y-1.5">
                     <Label htmlFor="prop-ref">가리킬 타입</Label>
-                    <Select value={refType} onValueChange={setRefType}>
+                    <Select value={refType} onValueChange={setRefType} disabled={locked}>
                       <SelectTrigger id="prop-ref">
-                        <SelectValue placeholder="아무 타입이나" />
+                        <SelectValue placeholder={isInterface ? '선택하세요' : '아무 타입이나'} />
                       </SelectTrigger>
                       <SelectContent>
                         {types.map((one) => (
@@ -294,9 +350,15 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                       </SelectContent>
                     </Select>
                     <p className="text-muted-foreground text-xs">
-                      안 정하면 아무 객체나 선택할 수 있습니다 — 선택할 것이 많아지면 사람은 못
-                      찾고, 못 찾으면 없는 줄 알고 새로 만듭니다.
+                      {isInterface
+                        ? '공통 속성은 가리킬 타입을 정해야 합니다 — 구현 타입마다 다른 것을 가리키면 같은 속성이 아닙니다.'
+                        : '안 정하면 아무 객체나 선택할 수 있습니다 — 선택할 것이 많아지면 사람은 못 찾고, 못 찾으면 없는 줄 알고 새로 만듭니다.'}
                     </p>
+                  </div>
+                )}
+
+                {dataType === 'object_ref' && !isInterface && (
+                  <div className="space-y-1.5">
                     <Label htmlFor="prop-inverse">상대 쪽에서 읽는 말</Label>
                     <Input
                       id="prop-inverse"
@@ -322,6 +384,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                     <Input
                       id="prop-unit"
                       value={unit}
+                      disabled={locked}
                       placeholder="mm"
                       onChange={(event) => setUnit(event.target.value)}
                     />
@@ -343,18 +406,21 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                     <div className="grid grid-cols-3 gap-3">
                       <Input
                         type="number"
+                        disabled={locked}
                         placeholder="아래 끝"
                         value={minValue}
                         onChange={(event) => setMinValue(event.target.value)}
                       />
                       <Input
                         type="number"
+                        disabled={locked}
                         placeholder="위 끝"
                         value={maxValue}
                         onChange={(event) => setMaxValue(event.target.value)}
                       />
                       <Input
                         type="number"
+                        disabled={locked}
                         placeholder="소수 자릿수"
                         value={decimals}
                         onChange={(event) => setDecimals(event.target.value)}
@@ -374,6 +440,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                     <Input
                       id="prop-pattern"
                       value={pattern}
+                      disabled={locked}
                       placeholder="^D-\\d{4}$"
                       className="font-mono"
                       onChange={(event) => setPattern(event.target.value)}
@@ -384,18 +451,20 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                   </div>
                 )}
 
-                <div className="space-y-1.5">
-                  <Label htmlFor="prop-default">기본값</Label>
-                  <Input
-                    id="prop-default"
-                    value={defaultValue}
-                    onChange={(event) => setDefaultValue(event.target.value)}
-                  />
-                  <p className="text-muted-foreground text-xs">
-                    <b>만들 때만</b> 채웁니다. 수정할 때도 채우면 사람이 방금 삭제한 값이
-                    되살아나고, 그 되살아남은 저장한 사람 눈에 안 보입니다.
-                  </p>
-                </div>
+                {!isInterface && (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="prop-default">기본값</Label>
+                    <Input
+                      id="prop-default"
+                      value={defaultValue}
+                      onChange={(event) => setDefaultValue(event.target.value)}
+                    />
+                    <p className="text-muted-foreground text-xs">
+                      <b>만들 때만</b> 채웁니다. 수정할 때도 채우면 사람이 방금 삭제한 값이
+                      되살아나고, 그 되살아남은 저장한 사람 눈에 안 보입니다.
+                    </p>
+                  </div>
+                )}
 
                 <div className="space-y-1.5">
                   <Label htmlFor="prop-help">안내</Label>
@@ -425,7 +494,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                     </span>
                   </span>
                 </label>
-                {UNIQUEABLE.has(dataType) && (
+                {!isInterface && UNIQUEABLE.has(dataType) && (
                   <label className="flex items-start gap-2 text-sm">
                     <input
                       type="checkbox"
@@ -448,6 +517,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
                     type="checkbox"
                     className="mt-0.5 size-4"
                     checked={multi}
+                    disabled={locked}
                     onChange={(event) => setMulti(event.target.checked)}
                   />
                   <span>
@@ -463,13 +533,17 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
           </div>
 
           <DialogFooter className="justify-between sm:justify-between">
-            {editing ? (
+            {editing && locked ? (
+              <span className="text-muted-foreground text-xs">
+                공통 속성은 여기서 삭제하지 않습니다 — 구현을 해제하면 이 타입의 속성이 됩니다.
+              </span>
+            ) : editing ? (
               <Button
                 variant="ghost"
                 disabled={saving}
                 onClick={async () => {
                   // **삭제 전에 몇 개가 안 보이게 되는지 먼저 읽는다.**
-                  const found = await ontologyApi.propertyUsage(type.slug, property!.key)
+                  const found = await calls.usage(property!.key)
                   setUsage(found.objects_with_value)
                   setOpened(found.core_open ? found.core_consumers : null)
                   setRemoving(true)
@@ -496,14 +570,22 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
         <ConfirmDialog
           open
           destructive
-          title={`${property.label} 속성을 삭제합니다`}
+          title={`${property.label} ${isInterface ? '공통 속성' : '속성'}을 삭제합니다`}
           description={
             <div className="space-y-2">
-              <p>
-                지금 이 값을 가진 객체가 <b>{usage ?? 0}개</b> 있습니다. 정의를 삭제하면 그 값들은{' '}
-                <b>화면에서 사라집니다</b> — 데이터는 남아 있어, 같은 키로 다시 정의하면 도로
-                보입니다.
-              </p>
+              {isInterface ? (
+                <p>
+                  구현 타입들에서 이 값을 가진 객체가 <b>{usage ?? 0}개</b> 있습니다. 공통 속성에서
+                  빼도 <b>구현 타입의 속성은 남습니다</b> — 그 타입의 것이 되어, 그 뒤로는 타입에서
+                  수정합니다.
+                </p>
+              ) : (
+                <p>
+                  지금 이 값을 가진 객체가 <b>{usage ?? 0}개</b> 있습니다. 정의를 삭제하면 그 값들은{' '}
+                  <b>화면에서 사라집니다</b> — 데이터는 남아 있어, 같은 키로 다시 정의하면 도로
+                  보입니다.
+                </p>
+              )}
               {/* **바깥에 연 타입이면 약속을 깨는 일이다.** 그쪽 코드에 이 칸 이름이 박혀
                   있으므로, 누가 읽을 수 있는지 이름을 들어 보여 준다. */}
               {opened && (
@@ -525,7 +607,7 @@ export function PropertyEditDialog({ type, property, types, onClose, onChanged }
           }
           confirmLabel="삭제"
           onConfirm={async () => {
-            await ontologyApi.removeProperty(type.slug, property.key, opened !== null)
+            await calls.remove(property.key, opened !== null)
             onChanged()
             onClose()
           }}

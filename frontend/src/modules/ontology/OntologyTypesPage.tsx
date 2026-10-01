@@ -6,15 +6,13 @@
  */
 
 import { useState } from 'react'
-import { ChevronDown, Eye, Plus, Settings2 } from 'lucide-react'
+import { ChevronDown, Eye, Settings2 } from 'lucide-react'
 
-import { PropertyBulkDialog } from '@/modules/ontology/PropertyBulkDialog'
-import { PropertyEditDialog, DATA_TYPE_LABELS } from '@/modules/ontology/PropertyEditDialog'
+import { PropertyEditor } from '@/modules/ontology/PropertyEditor'
 import { TypeEditDialog } from '@/modules/ontology/TypeEditDialog'
 import { TypeExamples } from '@/modules/ontology/TypeExamples'
 import { useOntology } from '@/modules/ontology/OntologyLayout'
 import { ontologyApi } from '@/modules/ontology/api'
-import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { IconPickerButton } from '@/shared/components/IconPicker'
 import { TypeIcon } from '@/shared/components/TypeIcon'
@@ -204,7 +202,8 @@ export default function OntologyTypesPage() {
           {/* 오류는 이 창 안에 선다 — 화면 맨 위로 올리면 아래를 보고 있던
               사람 눈에 안 들어온다. */}
           <PropertyEditor
-            type={propertyTarget}
+            owner={{ kind: 'type', row: propertyTarget }}
+            properties={propertyTarget.properties}
             types={types}
             onChanged={reload}
             readOnly={Boolean(propertyTarget.managed_by)}
@@ -216,6 +215,7 @@ export default function OntologyTypesPage() {
         <TypeEditDialog
           type={target}
           groups={groups}
+          interfaces={schema?.interfaces ?? []}
           relationTypes={schema?.relation_types ?? []}
           systemSources={schema?.system_sources ?? []}
           onClose={() => setEditing(null)}
@@ -312,106 +312,9 @@ function NewTypeForm({
         타입 생성
       </Button>
       <p className="text-muted-foreground w-full text-xs">
-        slug 는 <b>나중에 바꿀 수 없습니다</b> — 주소(<code>/o/&lt;slug&gt;</code>)와 관계·MCP 도구
-        이름이 여기 물립니다.
+        slug 는 <b>나중에 바꿀 수 없습니다</b> — 주소(
+        <code>/o/&lt;slug&gt;</code>)와 관계·MCP 도구 이름이 여기 물립니다.
       </p>
     </div>
-  )
-}
-
-function PropertyEditor({
-  type,
-  types,
-  onChanged,
-  readOnly = false,
-}: {
-  type: ObjectType & { properties: PropertyDef[] }
-  types: ObjectType[]
-  onChanged: () => void
-  /** 허브가 내려준 타입 — 속성을 보이기만 한다. */
-  readOnly?: boolean
-}) {
-  const [editing, setEditing] = useState<PropertyDef | null>(null)
-  const [creating, setCreating] = useState(false)
-  const [bulk, setBulk] = useState(false)
-
-  return (
-    <section className="space-y-3 rounded-md border p-4">
-      {type.properties.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
-          아직 속성이 없습니다. 하나 정의하면{' '}
-          <b>{type.label} 생성·상세 화면의 폼에 칸이 생깁니다.</b>
-        </p>
-      ) : (
-        <Table>
-          <TableHeader>
-            <TableRow>
-              <TableHead>이름</TableHead>
-              <TableHead>키</TableHead>
-              <TableHead>종류</TableHead>
-              <TableHead>단위</TableHead>
-              <TableHead>필수</TableHead>
-              <TableHead>여러 값</TableHead>
-              <TableHead className="text-right">순서</TableHead>
-            </TableRow>
-          </TableHeader>
-          <TableBody>
-            {type.properties.map((def) => (
-              <TableRow
-                key={def.key}
-                className={readOnly ? undefined : 'cursor-pointer'}
-                onClick={() => !readOnly && setEditing(def)}
-              >
-                <TableCell className="font-medium">{def.label}</TableCell>
-                <TableCell className="font-mono text-xs">{def.key}</TableCell>
-                <TableCell>{DATA_TYPE_LABELS[def.data_type]}</TableCell>
-                <TableCell className="text-muted-foreground">{def.unit || '—'}</TableCell>
-                <TableCell>{def.required ? '예' : '—'}</TableCell>
-                <TableCell>{def.multi ? '예' : '—'}</TableCell>
-                <TableCell className="text-right tabular-nums">{def.sort_order}</TableCell>
-              </TableRow>
-            ))}
-          </TableBody>
-        </Table>
-      )}
-
-      <div className="flex items-center justify-between gap-3 border-t pt-3">
-        <p className="text-muted-foreground text-xs">
-          {readOnly
-            ? '허브가 내려준 타입이라 여기서 속성을 수정하지 않습니다 — 허브에서 수정한 뒤 받습니다.'
-            : `${type.properties.length > 0 ? '행을 클릭하면 이름·단위·안내·필수·여러 값을 수정하거나 삭제합니다. ' : ''}키와 종류는 만들 때만 정합니다.`}
-        </p>
-        {!readOnly && (
-          <div className="flex gap-2">
-            {/* 타입을 세울 때 속성은 대여섯 개씩 함께 온다 — 창을 열 번 여닫게 하지 않는다. */}
-            <Button size="sm" variant="outline" onClick={() => setBulk(true)}>
-              <Plus className="mr-1 size-4" />
-              여러 속성 추가
-            </Button>
-            <Button size="sm" onClick={() => setCreating(true)}>
-              <Plus className="mr-1 size-4" />
-              속성 추가
-            </Button>
-          </div>
-        )}
-      </div>
-
-      {bulk && (
-        <PropertyBulkDialog type={type} onClose={() => setBulk(false)} onChanged={onChanged} />
-      )}
-
-      {(creating || editing) && (
-        <PropertyEditDialog
-          type={type}
-          property={editing}
-          types={types}
-          onClose={() => {
-            setCreating(false)
-            setEditing(null)
-          }}
-          onChanged={onChanged}
-        />
-      )}
-    </section>
   )
 }

@@ -12,7 +12,7 @@
 
 import { useState } from 'react'
 import { NavLink, Outlet, useOutletContext } from 'react-router-dom'
-import { Boxes, LayoutList, Radio, Share2, Upload } from 'lucide-react'
+import { Boxes, LayoutList, Radio, Shapes, Share2, Upload } from 'lucide-react'
 
 import { OntologyExportButton } from '@/modules/ontology/OntologyExportButton'
 import { ontologyApi } from '@/modules/ontology/api'
@@ -47,6 +47,13 @@ const SECTIONS = [
     label: '타입',
     icon: LayoutList,
     count: (schema: OntologySchema | null) => schema?.types.length,
+  },
+  {
+    // 타입 다음이다 — **여러 타입이 따르는 공통 모양**(ADR 0006). 따를 타입이 먼저 있다.
+    to: 'interfaces',
+    label: '인터페이스',
+    icon: Shapes,
+    count: (schema: OntologySchema | null) => schema?.interfaces?.length,
   },
   {
     // 타입 다음이다 — **관계는 타입과 타입을 잇는다.** 이을 것이 없으면 먼저

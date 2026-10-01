@@ -43,6 +43,7 @@ const QualityPage = lazy(() => import('@/modules/objects/QualityPage'))
 const OntologyLayout = lazy(() => import('@/modules/ontology/OntologyLayout'))
 const OntologyGroupsPage = lazy(() => import('@/modules/ontology/OntologyGroupsPage'))
 const OntologyTypesPage = lazy(() => import('@/modules/ontology/OntologyTypesPage'))
+const OntologyInterfacesPage = lazy(() => import('@/modules/ontology/OntologyInterfacesPage'))
 const OntologyRelationsPage = lazy(() => import('@/modules/ontology/OntologyRelationsPage'))
 const OntologyImportPage = lazy(() => import('@/modules/ontology/OntologyImportPage'))
 const OntologyCorePage = lazy(() => import('@/modules/ontology/OntologyCorePage'))
@@ -136,6 +137,7 @@ export const router = createBrowserRouter(
                 { index: true, element: <Navigate to="groups" replace /> },
                 { path: 'groups', element: <OntologyGroupsPage /> },
                 { path: 'types', element: <OntologyTypesPage /> },
+                { path: 'interfaces', element: <OntologyInterfacesPage /> },
                 { path: 'relations', element: <OntologyRelationsPage /> },
                 { path: 'import', element: <OntologyImportPage /> },
                 { path: 'core', element: <OntologyCorePage /> },
