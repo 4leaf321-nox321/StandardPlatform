@@ -14,7 +14,7 @@ import { ResetDialog } from '@/modules/ontology/ResetDialog'
 import { useOntology } from '@/modules/ontology/OntologyLayout'
 import { ontologyApi } from '@/modules/ontology/api'
 import { downloadFile } from '@/shared/api/client'
-import type { ImportPlan } from '@/modules/ontology/api'
+import type { ImportPlan, PropertyDef } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -39,6 +39,8 @@ const ACTION_LABELS: Record<string, string> = {
 
 const KIND_LABELS: Record<string, string> = {
   group: '묶음',
+  interface: '인터페이스',
+  interface_property: '공통 속성',
   type: '타입',
   property: '속성',
   relation_type: '관계 종류',
@@ -80,16 +82,33 @@ export default function OntologyImportPage() {
     }
   }
 
-  /** 지금 정의를 그대로 꺼내 준다 — **고쳐서 다시 넣는 것이 가장 흔한 일이다.** */
+  /**
+   * 지금 정의를 그대로 꺼내 준다 — **고쳐서 다시 넣는 것이 가장 흔한 일이다.**
+   *
+   * 화면용으로 붙은 칸(건수 · 관리 주체 · 구현 타입 · 공통 속성 표시)은 뗀다 — 남기면 가져오기가
+   * 「모르는 항목」 으로 거절하고, 꺼낸 것을 그대로 넣었는데 안 들어가는 일이 된다.
+   */
   function exportCurrent() {
     if (!schema) return
+    const propertiesOf = (rows: PropertyDef[]) =>
+      rows.map(
+        ({ id: _p, owner_id: _o, owner_kind: _k, interface_slug: _s, ...one }) => one,
+      )
     const body = {
       groups: schema.groups.map(({ id: _id, ...rest }) => rest),
-      types: schema.types.map(({ id: _id, object_count: _c, nav_group_id: _g, ...rest }) => ({
-        ...rest,
-        properties: rest.properties.map(({ id: _p, owner_id: _o, owner_kind: _k, ...one }) => one),
-      })),
-      relation_types: schema.relation_types.map(({ id: _id, ...rest }) => rest),
+      interfaces: (schema.interfaces ?? []).map(
+        ({ id: _id, implementers: _i, object_count: _c, managed_by: _m, ...rest }) => ({
+          ...rest,
+          properties: propertiesOf(rest.properties),
+        }),
+      ),
+      types: schema.types.map(
+        ({ id: _id, object_count: _c, nav_group_id: _g, managed_by: _m, ...rest }) => ({
+          ...rest,
+          properties: propertiesOf(rest.properties),
+        }),
+      ),
+      relation_types: schema.relation_types.map(({ id: _id, managed_by: _m, ...rest }) => rest),
     }
     setText(JSON.stringify(body, null, 2))
   }

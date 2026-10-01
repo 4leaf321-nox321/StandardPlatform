@@ -4,14 +4,12 @@
  * 사이드바는 240px 짜리 한 줄 목록이라 검색·건수·설명을 둘 자리가 없고, 타입이 백 개면
  * 제목까지 백열 줄이 된다. 그래서 색인은 이 화면이 지고, 사이드바는 「자주 가는 길」 만 진다.
  *
- * ## 보기 둘 — 계층이 둘이기 때문이다
+ * ## 묶음별
  *
- *     묶음별     상위 묶음 › 묶음 › 타입. **화면 정리**의 계층이다(`nav_groups.parent_id`)
- *     뜻의 계층  「개발모델은 제품이다」. **뜻**의 계층이고 RDF 의 rdfs:subClassOf 다
- *                (`object_types.parent_slug`) — 지금까지 어느 화면에도 안 보였다
+ *     상위 묶음 › 묶음 › 타입. **화면 정리**의 계층이다(`nav_groups.parent_id`)
  *
- * 둘이 서로 안 맞는 것은 정상이다(상위 타입이 다른 묶음에 있을 수 있다). 다른 질문에
- * 답하므로 이름을 갈라 붙인다.
+ * 「개발모델은 제품이다」 같은 **뜻**의 계층은 인터페이스가 말한다(ADR 0006) — 옛 상위 타입
+ * (`parent_slug`)은 없어졌다.
  *
  * **묶음에 안 걸린 타입도 여기 나온다.** 사이드바는 그것을 아예 안 그리므로(묶음이 없으면
  * 걸 자리가 없다), 만들어 놓고 묶음을 안 정한 타입은 주소를 직접 쳐야만 갈 수 있었다.
@@ -120,44 +118,6 @@ export default function ObjectTypesPage() {
     return { tops, ofGroup, childrenOf, loose }
   }, [groups.data, shown])
 
-  /** 뜻의 계층 — 상위 타입이 없는 것(또는 그 상위가 여기 없는 것)이 뿌리다. */
-  const bySense = useMemo(() => {
-    const known = new Set(rows.map((one) => one.slug))
-    const kids = new Map<string, ObjectType[]>()
-    for (const one of rows) {
-      const up = one.parent_slug && known.has(one.parent_slug) ? one.parent_slug : null
-      if (up) kids.set(up, [...(kids.get(up) ?? []), one])
-    }
-    const roots = rows.filter((one) => !one.parent_slug || !known.has(one.parent_slug))
-    return { kids, roots, nested: kids.size > 0 }
-  }, [rows])
-
-  const senseTree = (type: ObjectType, depth: number, seen: Set<string>): React.ReactNode => {
-    // 자기를 다시 만나면 멈춘다 — 정의 쪽에서 막지만, 화면이 무한히 돌지는 않게.
-    if (seen.has(type.slug)) return null
-    const next = new Set(seen).add(type.slug)
-    const kids = bySense.kids.get(type.slug) ?? []
-    const mine = matches(type, needle)
-    const below = kids.map((one) => senseTree(one, depth + 1, next)).filter(Boolean)
-    if (!mine && below.length === 0) return null
-    return (
-      <div key={type.slug}>
-        {mine ? (
-          <TypeRow type={type} depth={depth} />
-        ) : (
-          // 자식이 걸렸으면 부모는 **길로만** 남긴다 — 찾는 사람에게 위치를 알려 준다.
-          <div
-            className="text-muted-foreground/70 truncate px-2 py-1 text-xs"
-            style={depth > 0 ? { paddingLeft: `${depth * 1.25 + 0.5}rem` } : undefined}
-          >
-            {type.label}
-          </div>
-        )}
-        {below}
-      </div>
-    )
-  }
-
   return (
     <div className="space-y-5">
       <PageHeader
@@ -193,8 +153,6 @@ export default function ObjectTypesPage() {
         <Tabs defaultValue="groups">
           <TabsList>
             <TabsTrigger value="groups">묶음별</TabsTrigger>
-            {/* 뜻의 계층이 하나도 없으면 탭을 안 만든다 — 빈 탭은 「뭔가 안 나온다」 로 읽힌다. */}
-            {bySense.nested && <TabsTrigger value="sense">뜻의 계층</TabsTrigger>}
           </TabsList>
 
           <TabsContent value="groups" className="space-y-5 pt-3">
@@ -244,16 +202,6 @@ export default function ObjectTypesPage() {
             )}
           </TabsContent>
 
-          {bySense.nested && (
-            <TabsContent value="sense" className="space-y-1 pt-3">
-              <p className="text-muted-foreground pb-2 text-xs">
-                「개발모델은 제품의 한 종류다」 — 타입끼리의 상위·하위입니다. 화면 동작은 바꾸지
-                않고, 밖으로 내보낼 때 <span className="font-mono">rdfs:subClassOf</span> 가
-                됩니다. 묶음별 보기와 안 맞을 수 있습니다(다른 질문에 답하는 계층입니다).
-              </p>
-              {bySense.roots.map((one) => senseTree(one, 0, new Set()))}
-            </TabsContent>
-          )}
         </Tabs>
       )}
     </div>

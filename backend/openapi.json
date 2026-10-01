@@ -3929,6 +3929,59 @@
         }
       }
     },
+    "/api/ontology/types/{slug}/interfaces/plan": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Implement Plan",
+        "description": "구현하면 무엇이 되는가 — **아무것도 안 바꾼다.** 화면이 저장 전에 이것을 보여 준다:\n만들 속성 · 채택할 속성 · 모양이 달라 구현할 수 없는 곳(무엇이 다른지).",
+        "operationId": "implement_plan_api_ontology_types__slug__interfaces_plan_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImplementPlanRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ImplementPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ontology/relation-types": {
       "get": {
         "tags": [
@@ -4066,6 +4119,516 @@
         "responses": {
           "204": {
             "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/interfaces": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "List Interfaces",
+        "operationId": "list_interfaces_api_ontology_interfaces_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/ObjectInterfaceOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Interfaces Api Ontology Interfaces Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Create Interface",
+        "operationId": "create_interface_api_ontology_interfaces_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObjectInterfaceWriteRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectInterfaceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/interfaces/{slug}": {
+      "patch": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Update Interface",
+        "description": "**보낸 것만 바꾼다.** 상위 인터페이스를 바꾸면 공통 속성이 늘거나 줄어 구현 타입 전부가\n걸린다 — 모양이 안 맞는 곳이 하나라도 있으면 아무것도 안 바꾼다.",
+        "operationId": "update_interface_api_ontology_interfaces__slug__patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ObjectInterfacePatchRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObjectInterfaceOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Delete Interface",
+        "description": "인터페이스를 지운다 — **가리키는 것이 없을 때만.**\n\n구현한 타입이 남아 있는데 지우면 그 타입은 없는 인터페이스를 구현하게 되고, 그 사실은 그\n타입을 고치는 날에야 오류로 드러난다. 무엇이 걸렸는지 말하며 막는다. 지우면 공통 속성\n정의도 함께 지운다 — **구현 타입의 속성은 남는다**(그 타입의 것이다).",
+        "operationId": "delete_interface_api_ontology_interfaces__slug__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/interfaces/{slug}/usage": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Interface Usage",
+        "description": "**지우기 전에 무엇이 가리키는지.** 화면의 확인 창이 이것을 읽어 말한다.",
+        "operationId": "interface_usage_api_ontology_interfaces__slug__usage_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InterfaceUsageOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/interfaces/{slug}/properties": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "List Interface Properties",
+        "operationId": "list_interface_properties_api_ontology_interfaces__slug__properties_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PropertyDefOut"
+                  },
+                  "title": "Response List Interface Properties Api Ontology Interfaces  Slug  Properties Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Create Interface Property",
+        "description": "공통 속성을 더한다 — **구현 타입 전부에** 같은 키의 속성이 선다(있으면 모양이 같아야\n한다).",
+        "operationId": "create_interface_property_api_ontology_interfaces__slug__properties_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PropertyDefWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyDefOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/interfaces/{slug}/properties/{key}": {
+      "patch": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Update Interface Property",
+        "description": "공통 속성을 고친다 — **구현 타입들의 속성도 같은 트랜잭션에서** 바뀐다(모양만. 이름 ·\n묶음 · 순서는 타입마다 그대로다).",
+        "operationId": "update_interface_property_api_ontology_interfaces__slug__properties__key__patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PropertyDefWriteRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyDefOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Delete Interface Property",
+        "description": "공통 속성을 뺀다. **구현 타입의 속성은 남는다** — 그 타입의 것이 되고, 그 뒤로는\n타입에서 고칠 수 있다.",
+        "operationId": "delete_interface_property_api_ontology_interfaces__slug__properties__key__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/interfaces/{slug}/properties/{key}/usage": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Interface Property Usage",
+        "description": "구현 타입 전부에서 이 값을 가진 객체 수 — 모양을 바꾸기 전에 무엇이 걸리는지.",
+        "operationId": "interface_property_usage_api_ontology_interfaces__slug__properties__key__usage_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PropertyUsage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/interfaces/{slug}/properties/{key}/rename-option": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Rename Interface Option",
+        "description": "고를 값의 이름을 **구현 타입 전부에서 한 번에** 바꾼다 — 정의와 저장된 값까지.\n\n한 타입만 바뀌고 멈추면 같은 공통 속성이 타입마다 다른 이름을 갖는다. 그래서 한\n트랜잭션이다.\n`apply=false` 면 몇 개가 함께 바뀔지만 말한다.",
+        "operationId": "rename_interface_option_api_ontology_interfaces__slug__properties__key__rename_option_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RenameOptionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenameOptionOut"
+                }
+              }
+            }
           },
           "422": {
             "description": "Validation Error",
@@ -12360,6 +12923,11 @@
             },
             "type": "array",
             "title": "Fields"
+          },
+          "via": {
+            "type": "string",
+            "title": "Via",
+            "default": ""
           }
         },
         "type": "object",
@@ -14407,6 +14975,96 @@
         "title": "HomeWorkspaceRequest",
         "description": "대표 소속을 정한다.\n\n**비우는 길은 두지 않는다.** 대표 소속이 없으면 로그인이 소속 중 첫 부서로\n떨어지는데 그것은 사람이 정한 값이 아니다. 지우고 싶은 상황은 실제로는\n\"다른 부서로 옮긴다\" 이므로 그때도 새 값을 준다."
       },
+      "ImplementItemOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "interface": {
+            "type": "string",
+            "title": "Interface"
+          },
+          "changed": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Changed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "interface"
+        ],
+        "title": "ImplementItemOut"
+      },
+      "ImplementPlanOut": {
+        "properties": {
+          "creates": {
+            "items": {
+              "$ref": "#/components/schemas/ImplementItemOut"
+            },
+            "type": "array",
+            "title": "Creates"
+          },
+          "adopts": {
+            "items": {
+              "$ref": "#/components/schemas/ImplementItemOut"
+            },
+            "type": "array",
+            "title": "Adopts"
+          },
+          "syncs": {
+            "items": {
+              "$ref": "#/components/schemas/ImplementItemOut"
+            },
+            "type": "array",
+            "title": "Syncs"
+          },
+          "conflicts": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Conflicts"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          }
+        },
+        "type": "object",
+        "required": [
+          "creates",
+          "adopts",
+          "syncs",
+          "conflicts",
+          "warnings"
+        ],
+        "title": "ImplementPlanOut",
+        "description": "구현하면 무엇이 되는가 — **저장 전에 보는 것.** 아무것도 안 바꾼다."
+      },
+      "ImplementPlanRequest": {
+        "properties": {
+          "interface_slugs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Interface Slugs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "interface_slugs"
+        ],
+        "title": "ImplementPlanRequest"
+      },
       "ImportRowOut": {
         "properties": {
           "row": {
@@ -14708,6 +15366,52 @@
           "raw_rows"
         ],
         "title": "InferOut"
+      },
+      "InterfaceUsageOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "implementers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Implementers"
+          },
+          "sub_interfaces": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Sub Interfaces"
+          },
+          "referenced_by": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Referenced By"
+          },
+          "relation_types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Relation Types"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "implementers",
+          "sub_interfaces",
+          "referenced_by",
+          "relation_types"
+        ],
+        "title": "InterfaceUsageOut",
+        "description": "**지우기 전에 무엇이 가리키는지.** 하나라도 있으면 지우지 않는다."
       },
       "JobBulkIn": {
         "properties": {
@@ -15890,6 +16594,283 @@
         ],
         "title": "ObjectCreateRequest"
       },
+      "ObjectInterfaceOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "icon": {
+            "type": "string",
+            "title": "Icon"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order"
+          },
+          "extends_slugs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Extends Slugs"
+          },
+          "list_view": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "List View"
+          },
+          "managed_by": {
+            "type": "string",
+            "title": "Managed By",
+            "default": ""
+          },
+          "implementers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Implementers"
+          },
+          "object_count": {
+            "type": "integer",
+            "title": "Object Count",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "label",
+          "icon",
+          "description",
+          "sort_order",
+          "extends_slugs",
+          "list_view"
+        ],
+        "title": "ObjectInterfaceOut",
+        "description": "여러 타입이 따르는 공통 모양."
+      },
+      "ObjectInterfacePatchRequest": {
+        "properties": {
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
+          },
+          "icon": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Icon"
+          },
+          "description": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Description"
+          },
+          "sort_order": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sort Order"
+          },
+          "extends_slugs": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extends Slugs"
+          },
+          "list_view": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "List View"
+          }
+        },
+        "type": "object",
+        "title": "ObjectInterfacePatchRequest",
+        "description": "**보낸 것만 바꾼다.** slug 는 안 바꾼다 — 구현 타입 · 참조가 그 값을 들고 있다."
+      },
+      "ObjectInterfaceSchema": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "icon": {
+            "type": "string",
+            "title": "Icon"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order"
+          },
+          "extends_slugs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Extends Slugs"
+          },
+          "list_view": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "List View"
+          },
+          "managed_by": {
+            "type": "string",
+            "title": "Managed By",
+            "default": ""
+          },
+          "implementers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Implementers"
+          },
+          "object_count": {
+            "type": "integer",
+            "title": "Object Count",
+            "default": 0
+          },
+          "properties": {
+            "items": {
+              "$ref": "#/components/schemas/PropertyDefOut"
+            },
+            "type": "array",
+            "title": "Properties"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "slug",
+          "label",
+          "icon",
+          "description",
+          "sort_order",
+          "extends_slugs",
+          "list_view",
+          "properties"
+        ],
+        "title": "ObjectInterfaceSchema"
+      },
+      "ObjectInterfaceWriteRequest": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Label"
+          },
+          "icon": {
+            "type": "string",
+            "maxLength": 40,
+            "title": "Icon",
+            "default": ""
+          },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
+          "sort_order": {
+            "type": "integer",
+            "title": "Sort Order",
+            "default": 0
+          },
+          "extends_slugs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Extends Slugs"
+          },
+          "list_view": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "List View"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label"
+        ],
+        "title": "ObjectInterfaceWriteRequest"
+      },
       "ObjectOut": {
         "properties": {
           "id": {
@@ -16275,16 +17256,12 @@
             "title": "Managed By",
             "default": ""
           },
-          "parent_slug": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent Slug"
+          "interface_slugs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Interface Slugs"
           },
           "key_policy": {
             "type": "string",
@@ -16411,16 +17388,19 @@
             ],
             "title": "Nav Group Slug"
           },
-          "parent_slug": {
+          "interface_slugs": {
             "anyOf": [
               {
-                "type": "string"
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
               },
               {
                 "type": "null"
               }
             ],
-            "title": "Parent Slug"
+            "title": "Interface Slugs"
           },
           "kind_class": {
             "anyOf": [
@@ -16634,16 +17614,12 @@
             "title": "Managed By",
             "default": ""
           },
-          "parent_slug": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent Slug"
+          "interface_slugs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Interface Slugs"
           },
           "key_policy": {
             "type": "string",
@@ -16758,16 +17734,12 @@
             ],
             "title": "Nav Group Slug"
           },
-          "parent_slug": {
-            "anyOf": [
-              {
-                "type": "string"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Parent Slug"
+          "interface_slugs": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Interface Slugs"
           },
           "kind_class": {
             "type": "string",
@@ -16845,6 +17817,13 @@
             },
             "type": "array",
             "title": "Groups"
+          },
+          "interfaces": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectInterfaceSchema"
+            },
+            "type": "array",
+            "title": "Interfaces"
           },
           "types": {
             "items": {
@@ -17835,6 +18814,17 @@
           "sort_order": {
             "type": "integer",
             "title": "Sort Order"
+          },
+          "interface_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Interface Slug"
           }
         },
         "type": "object",
@@ -22283,6 +23273,11 @@
           "relation_count": {
             "type": "integer",
             "title": "Relation Count"
+          },
+          "interface_count": {
+            "type": "integer",
+            "title": "Interface Count",
+            "default": 0
           }
         },
         "type": "object",

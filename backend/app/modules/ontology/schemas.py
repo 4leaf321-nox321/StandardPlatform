@@ -12,6 +12,7 @@ from datetime import datetime
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
+from pydantic.json_schema import SkipJsonSchema
 
 
 class NavGroupOut(BaseModel):
@@ -64,6 +65,9 @@ class PropertyDefOut(BaseModel):
     unique: bool
     section: str
     sort_order: int
+    interface_slug: str | None = None
+    """이 속성이 **공통 속성**이면 그것을 정한 인터페이스 — 모양(종류 · 고를 값 · 규칙)은
+    거기서 수정한다. 타입의 속성에만 붙는다."""
 
 
 class PropertyDefWriteRequest(BaseModel):
@@ -108,8 +112,8 @@ class ObjectTypeOut(BaseModel):
     slug 와 속성 key 가 남의 시스템 코드에 박히는 **약속**이 된다."""
     managed_by: str = ""
     """빈 값이면 이 설치의 정의, `hub` 면 허브가 내려준 것 — 화면은 고치는 단추를 감춘다."""
-    parent_slug: str | None = None
-    """상위 타입 — RDF/OWL 의 rdfs:subClassOf. 화면 동작은 바꾸지 않는다."""
+    interface_slugs: list[str] = Field(default_factory=list)
+    """구현하는 인터페이스(ADR 0006) — 그 공통 속성을 같은 키 · 같은 모양으로 가진다."""
     key_policy: str
     key_scope: str
     temporal_kind: str
@@ -131,7 +135,12 @@ class ObjectTypeWriteRequest(BaseModel):
     sort_order: int = 0
     nav_group_slug: str | None = None
     """NULL 이면 사이드바에 안 선다. 어휘 축은 대개 그렇다."""
-    parent_slug: str | None = None
+    interface_slugs: list[str] = Field(default_factory=list)
+    """구현할 인터페이스. 없는 공통 속성은 만들고, 같은 모양이면 채택하고, **다르면
+    거절한다.**"""
+    parent_slug: SkipJsonSchema[str | None] = None
+    """**없어진 칸**(상위 타입) — 받으면 이유를 말하고 거절한다(ONTOLOGY-28). 조용히 무시하면
+    보낸 쪽은 계층이 적용된 줄 안다. 스키마에는 안 싣는다."""
     kind_class: str = "record"
     system_source: str = ""
     entry_policy: str = "open"
@@ -161,8 +170,10 @@ class ObjectTypePatchRequest(BaseModel):
     sort_order: int | None = None
     nav_group_slug: str | None = None
     """`null` 을 명시하면 사이드바에서 뺀다. 안 보내면 그대로 둔다."""
-    parent_slug: str | None = None
-    """상위 타입. `null` 을 명시하면 뗀다."""
+    interface_slugs: list[str] | None = None
+    """구현할 인터페이스 전부(보낸 목록으로 바뀐다). 빼면 **구현 해제** — 속성은 남는다."""
+    parent_slug: SkipJsonSchema[str | None] = None
+    """없어진 칸 — 받으면 거절한다(ONTOLOGY-28)."""
     kind_class: str | None = None
     system_source: str | None = None
     entry_policy: str | None = None
@@ -245,6 +256,94 @@ class ObjectTypeSchema(ObjectTypeOut):
     properties: list[PropertyDefOut]
 
 
+# --- 인터페이스 (ADR 0006) ------------------------------------------------------
+
+
+class ObjectInterfaceOut(BaseModel):
+    """여러 타입이 따르는 공통 모양."""
+
+    id: uuid.UUID
+    slug: str
+    label: str
+    icon: str
+    description: str
+    sort_order: int
+    extends_slugs: list[str]
+    """상위 인터페이스 — 그 공통 속성을 이어받는다."""
+    list_view: dict[str, Any]
+    managed_by: str = ""
+    implementers: list[str] = Field(default_factory=list)
+    """구현한 타입 — 상위 인터페이스를 거쳐 구현한 것까지."""
+    object_count: int = 0
+    """구현 타입들의 객체 수 합. 인터페이스 목록이 보여 줄 수."""
+
+
+class ObjectInterfaceSchema(ObjectInterfaceOut):
+    properties: list[PropertyDefOut]
+    """이 인터페이스가 직접 정한 공통 속성(상위에서 이어받은 것은 그쪽에 있다)."""
+
+
+class ObjectInterfaceWriteRequest(BaseModel):
+    slug: str
+    label: str = Field(min_length=1, max_length=64)
+    icon: str = Field(default="", max_length=40)
+    description: str = ""
+    sort_order: int = 0
+    extends_slugs: list[str] = Field(default_factory=list)
+    list_view: dict[str, Any] = Field(default_factory=dict)
+
+
+class ObjectInterfacePatchRequest(BaseModel):
+    """**보낸 것만 바꾼다.** slug 는 안 바꾼다 — 구현 타입 · 참조가 그 값을 들고 있다."""
+
+    label: str | None = Field(default=None, min_length=1, max_length=64)
+    icon: str | None = Field(default=None, max_length=40)
+    description: str | None = None
+    sort_order: int | None = None
+    extends_slugs: list[str] | None = None
+    list_view: dict[str, Any] | None = None
+
+
+class InterfaceUsageOut(BaseModel):
+    """**지우기 전에 무엇이 가리키는지.** 하나라도 있으면 지우지 않는다."""
+
+    slug: str
+    implementers: list[str]
+    """직접 구현한 타입 — 해제해야 지울 수 있다."""
+    sub_interfaces: list[str]
+    """이 인터페이스를 이어받는 인터페이스."""
+    referenced_by: list[str]
+    """이 인터페이스를 참조 대상으로 적은 속성(`타입.키`)."""
+    relation_types: list[str]
+    """관계 끝에 이 인터페이스를 적은 관계 종류."""
+
+
+class ImplementPlanRequest(BaseModel):
+    interface_slugs: list[str]
+
+
+class ImplementItemOut(BaseModel):
+    key: str
+    interface: str
+    changed: list[str] = Field(default_factory=list)
+    """맞추려고 바꾸는 칸(고를 값의 순서 · 필수 등)."""
+
+
+class ImplementPlanOut(BaseModel):
+    """구현하면 무엇이 되는가 — **저장 전에 보는 것.** 아무것도 안 바꾼다."""
+
+    creates: list[ImplementItemOut]
+    """없어서 새로 만드는 속성."""
+    adopts: list[ImplementItemOut]
+    """이미 같은 모양이라 그대로 채택하는 속성."""
+    syncs: list[ImplementItemOut]
+    """이미 묶여 있고 인터페이스를 따라 바뀌는 속성."""
+    conflicts: list[str]
+    """모양이 달라 **구현할 수 없는** 곳 — 무엇이 다른지 적혀 있다. 하나라도 있으면 저장이
+    거절된다."""
+    warnings: list[str]
+
+
 class ReferenceEdgeOut(BaseModel):
     """참조 칸을 관계처럼 읽은 것 — **길 목록이 한 벌**이 되게. AI 와 그래프가 관계 종류와 함께
     본다. slug 는 `ref:<타입>.<칸>`, 조건 · 통계에서는 `ref.<칸>.…` 로 건넌다."""
@@ -266,6 +365,8 @@ class OntologySchemaOut(BaseModel):
     """
 
     groups: list[NavGroupOut]
+    interfaces: list[ObjectInterfaceSchema] = Field(default_factory=list)
+    """여러 타입이 따르는 공통 모양(ADR 0006) — 구현 타입은 `types[].interface_slugs`."""
     types: list[ObjectTypeSchema]
     relation_types: list[RelationTypeOut]
     reference_edges: list[ReferenceEdgeOut] = Field(default_factory=list)
@@ -319,6 +420,8 @@ class ChangeOut(BaseModel):
     slug: str
     action: str
     fields: list[str]
+    via: str = ""
+    """이 변경을 부른 인터페이스 — 파일에 없던 타입의 속성이 인터페이스를 따라 바뀔 때."""
 
 
 class ImportPlanOut(BaseModel):
@@ -348,6 +451,7 @@ class SnapshotOut(BaseModel):
     reason: str
     type_count: int
     relation_count: int
+    interface_count: int = 0
 
 
 # --- 코드표 -------------------------------------------------------------------

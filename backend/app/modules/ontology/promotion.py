@@ -53,6 +53,14 @@ def plan(db: Session, object_type: ObjectType, source_key: str) -> PromotionPlan
     if object_type.kind_class == "system":
         out.errors.append(f"{object_type.label}은 이미 투영(system) 타입입니다.")
         return out
+    if object_type.interface_slugs:
+        # 투영 타입은 속성이 없다 — 구현한 공통 속성을 가질 자리가 사라진다(ADR 0006).
+        out.errors.append(
+            f"{object_type.label}은(는) 인터페이스"
+            f"({', '.join(object_type.interface_slugs)})를 구현하고 있어 투영으로 승격하지 "
+            "않습니다 — 먼저 구현을 해제하세요."
+        )
+        return out
     source = system_sources.system_source(source_key)
     if source is None:
         known = ", ".join(system_sources.known_source_keys()) or "(없음)"

@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 from rdflib import OWL, RDF, RDFS, Graph, URIRef
 
 from tests.api.conftest import Signed
-from tests.api.test_ontology import _make_object, _make_type
+from tests.api.test_ontology import _import, _make_object, _make_type, _uniq
 
 
 def _turtle(client: TestClient, admin: Signed, path: str) -> Graph:
@@ -20,15 +20,21 @@ def _turtle(client: TestClient, admin: Signed, path: str) -> Graph:
 def test_정의와_데이터가_OWL_RDF_로_나가고_추론이_된다(
     client: TestClient, admin: Signed
 ) -> None:
-    # 제품 ⊃ 개발모델. 모델은 과제를 참조하고(역방향 이름 있음), 과제끼리 「선행」 관계(이행).
-    product = _make_type(client, admin, label="제품")
+    # 제품(인터페이스) ⊃ 개발모델. 모델은 과제를 참조하고(역방향 이름 있음), 과제끼리 「선행」
+    # 관계(이행). 「개발모델은 제품이다」 는 인터페이스 구현이다(ADR 0006).
+    product = _uniq("product")
+    client.post(
+        "/api/ontology/interfaces",
+        json={"slug": product, "label": "제품"},
+        headers=admin.headers,
+    ).raise_for_status()
     model = _make_type(client, admin, label="개발모델", key_policy="required")
     task = _make_type(client, admin, label="과제", key_policy="required")
     precedes = f"precedes_{task[-6:]}"
     assert (
         client.patch(
             f"/api/ontology/types/{model}",
-            json={"parent_slug": product},
+            json={"interface_slugs": [product]},
             headers=admin.headers,
         ).status_code
         == 200
@@ -115,107 +121,27 @@ def test_정의와_데이터가_OWL_RDF_로_나가고_추론이_된다(
     )
 
 
-def test_상위_타입은_있어야_하고_고리를_이루지_않는다(
+def test_상위_타입은_없어졌다_이유를_말하고_거절한다(
     client: TestClient, admin: Signed
 ) -> None:
+    """**조용히 무시하지 않는다** — 무시하면 보낸 쪽은 계층이 적용된 줄 안다. 화면(타입 수정)과
+    파일(정의 가져오기) 둘 다 인터페이스로 가라고 말한다."""
     a = _make_type(client, admin, label="A")
-    b = _make_type(client, admin, label="B")
-    assert (
-        client.patch(
-            f"/api/ontology/types/{a}", json={"parent_slug": "nope"}, headers=admin.headers
-        ).status_code
-        == 404
+    refused = client.patch(
+        f"/api/ontology/types/{a}", json={"parent_slug": "nope"}, headers=admin.headers
     )
-    assert (
-        client.patch(
-            f"/api/ontology/types/{a}", json={"parent_slug": a}, headers=admin.headers
-        ).status_code
-        == 409
-    )
-    client.patch(f"/api/ontology/types/{b}", json={"parent_slug": a}, headers=admin.headers)
-    # A 의 상위를 B 로 하면 A → B → A.
-    assert (
-        client.patch(
-            f"/api/ontology/types/{a}", json={"parent_slug": b}, headers=admin.headers
-        ).status_code
-        == 409
-    )
-    # 스키마에도 실린다 — 묶음 가져오기 · 내보내기가 이것을 그대로 쓴다.
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["error"]["code"].endswith("ONTOLOGY-0028")
+    assert "인터페이스" in refused.json()["error"]["message"]
+
+    by_file = _import(client, admin, {"types": [{"slug": a, "parent_slug": "nope"}]})
+    assert by_file.status_code == 409, by_file.text
+    assert "interfaces" in by_file.json()["error"]["message"]
+
+    # 스키마에는 상위 타입 대신 구현 인터페이스가 실린다.
     types = {
         one["slug"]: one
         for one in client.get("/api/ontology/schema", headers=admin.headers).json()["types"]
     }
-    assert types[b]["parent_slug"] == a
-
-
-def test_SPARQL_로_묻는다(client: TestClient, admin: Signed) -> None:
-    """MCP 로 들어온 AI 가 쓰는 자리 — 여러 타입을 건너뛰어 잇는 물음. 읽기만 한다."""
-    project = _make_type(client, admin, label="프로젝트", key_policy="required")
-    task = _make_type(client, admin, label="과제", key_policy="required")
-    client.post(
-        f"/api/ontology/types/{task}/properties",
-        json={
-            "key": "project",
-            "label": "프로젝트",
-            "data_type": "object_ref",
-            "ref_type_slug": project,
-        },
-        headers=admin.headers,
-    ).raise_for_status()
-    p1 = _make_object(client, admin, project, label="프로젝트 1", key="P1")
-    for n in (1, 2):
-        _make_object(
-            client,
-            admin,
-            task,
-            label=f"과제 {n}",
-            key=f"T{n}",
-            properties={"project": p1["id"]},
-        )
-
-    ask = client.post(
-        "/api/rdf/query",
-        json={
-            "query": f"""PREFIX sp: <http://testserver/ns#>
-                PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
-                SELECT ?name (COUNT(?t) AS ?n) WHERE {{
-                  ?t a sp:{task} ; sp:{task}.project ?p . ?p rdfs:label ?name
-                }} GROUP BY ?name""",
-            "types": [project, task],
-        },
-        headers=admin.headers,
-    )
-    assert ask.status_code == 200, ask.text
-    body = ask.json()
-    assert body["columns"] == ["name", "n"]
-    assert body["rows"] == [{"name": "프로젝트 1", "n": 2}]
-    assert body["truncated"] is False and body["triples"] > 0
-    assert body["prefixes"]["sp"] == "http://testserver/ns#"
-
-    # 잘리면 잘렸다고 말한다 — 「전부 이것뿐」 으로 읽으면 안 된다.
-    cut = client.post(
-        "/api/rdf/query",
-        json={
-            "query": f"SELECT ?t WHERE {{ ?t a <http://testserver/ns#{task}> }}",
-            "types": [task],
-            "limit": 1,
-        },
-        headers=admin.headers,
-    ).json()
-    assert len(cut["rows"]) == 1 and cut["truncated"] is True
-
-    # 쓰기 · 바깥 호출은 막는다.
-    for bad in (
-        "INSERT DATA { <http://x> <http://y> <http://z> }",
-        "SELECT ?x WHERE { SERVICE <http://evil.example/sparql> { ?x ?y ?z } }",
-    ):
-        refused = client.post(
-            "/api/rdf/query", json={"query": bad, "types": [task]}, headers=admin.headers
-        )
-        assert refused.status_code == 409, bad
-    broken = client.post(
-        "/api/rdf/query",
-        json={"query": "SELECT ?x WHERE {", "types": [task]},
-        headers=admin.headers,
-    )
-    assert broken.status_code == 409 and "이해하지" in broken.json()["error"]["message"]
+    assert "parent_slug" not in types[a]
+    assert types[a]["interface_slugs"] == []

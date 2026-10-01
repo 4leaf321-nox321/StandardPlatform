@@ -26,6 +26,7 @@ from app.modules.ontology import (
     codebook,
     importer,
     inference,
+    interfaces,
     managed,
     reset,
     views,
@@ -43,6 +44,7 @@ from app.modules.ontology.models import (
     NAV_AUDIENCES,
     TEMPORAL_KINDS,
     NavGroup,
+    ObjectInterface,
     ObjectType,
     OntologySnapshot,
     PropertyDef,
@@ -50,15 +52,23 @@ from app.modules.ontology.models import (
 )
 from app.modules.ontology.schemas import (
     ChangeOut,
+    ImplementItemOut,
+    ImplementPlanOut,
+    ImplementPlanRequest,
     ImportPlanOut,
     InferBuildOut,
     InferBuildRequest,
     InferColumnOut,
     InferOut,
+    InterfaceUsageOut,
     NavGroupNode,
     NavGroupOut,
     NavGroupPatchRequest,
     NavGroupWriteRequest,
+    ObjectInterfaceOut,
+    ObjectInterfacePatchRequest,
+    ObjectInterfaceSchema,
+    ObjectInterfaceWriteRequest,
     ObjectTypeOut,
     ObjectTypePatchRequest,
     ObjectTypeSchema,
@@ -156,7 +166,7 @@ def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectType
         entry_policy=row.entry_policy,
         core=row.core,
         managed_by=row.managed_by,
-        parent_slug=row.parent_slug,
+        interface_slugs=list(row.interface_slugs or []),
         key_policy=row.key_policy,
         key_scope=row.key_scope,
         temporal_kind=row.temporal_kind,
@@ -169,28 +179,93 @@ def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectType
     )
 
 
-def _parent_slug(db: Session, slug: str, wanted: str | None) -> str | None:
-    """상위 타입 — 있어야 하고, 자기 자신이나 자기 아래 것이면 안 된다(고리는 추론기를
-    돈다)."""
-    if not wanted:
-        return None
-    if wanted == slug:
-        raise Conflict(code("ONTOLOGY", 90), "타입이 자기 자신의 상위일 수 없습니다.")
-    by_slug = {row.slug: row for row in db.scalars(select(ObjectType))}
-    if wanted not in by_slug:
-        raise NotFound(code("ONTOLOGY", 91), f"없는 상위 타입입니다: {wanted}")
-    seen = {slug}
-    cursor: str | None = wanted
-    while cursor:
-        if cursor in seen:
-            raise Conflict(code("ONTOLOGY", 92), f"상위 타입이 고리를 이룹니다: {wanted}")
-        seen.add(cursor)
-        cursor = by_slug[cursor].parent_slug if cursor in by_slug else None
-    return wanted
+PARENT_GONE = (
+    "상위 타입(parent_slug)은 없어졌습니다 — 「A 는 B 의 일종」 은 인터페이스로 적습니다. "
+    "관리 › 온톨로지 › 인터페이스에서 만들고, 타입의 「구현 인터페이스」 에 적으세요."
+)
+
+
+def _refuse_parent(sent: set[str]) -> None:
+    """**없어진 칸을 조용히 무시하지 않는다** — 무시하면 보낸 쪽은 계층이 적용된 줄 안다."""
+    if "parent_slug" in sent:
+        raise InvalidValue(code("ONTOLOGY", 28), PARENT_GONE)
 
 
 def _group_slugs(db: Session) -> dict[uuid.UUID, str]:
     return {row.id: row.slug for row in db.scalars(select(NavGroup))}
+
+
+# --- 인터페이스 도우미 (ADR 0006) --------------------------------------------
+
+
+def _require_no_conflicts(bindings: list[interfaces.Binding]) -> None:
+    """모양이 안 맞는 곳이 하나라도 있으면 **아무것도 안 바꾼다** — 무엇이 다른지 전부
+    싣는다."""
+    found = interfaces.conflicts(bindings)
+    if not found:
+        return
+    head = found[0] if len(found) == 1 else f"{found[0]} (외 {len(found) - 1}건)"
+    raise Conflict(code("ONTOLOGY", 7), head, details={"conflicts": found})
+
+
+def _implementation(
+    catalog: interfaces.Catalog,
+    *,
+    slug: str,
+    label: str,
+    kind_class: str,
+    wanted: list[str],
+) -> list[interfaces.Binding]:
+    """이 타입이 `wanted` 를 구현하면 할 일. 없는 인터페이스 · 투영 타입은 먼저 말한다."""
+    unknown = sorted(set(wanted) - set(catalog.interfaces))
+    if unknown:
+        raise NotFound(code("ONTOLOGY", 4), f"없는 인터페이스입니다: {', '.join(unknown)}")
+    if wanted and kind_class == "system":
+        raise Conflict(
+            code("ONTOLOGY", 25),
+            "다른 표를 비추는 타입(system)은 인터페이스를 구현하지 않습니다 — 속성도 행도 "
+            "없는 타입이라 공통 속성을 가질 자리가 없습니다.",
+        )
+    after = catalog.clone()
+    entry = after.types.get(slug)
+    if entry is None:
+        entry = interfaces.TypeDef(slug=slug, label=label)
+        after.types[slug] = entry
+    entry.kind_class = kind_class
+    entry.interfaces = list(wanted)
+    return interfaces.plan_bindings(catalog, after, only={slug})
+
+
+def _contract_of(db: Session, slug: str) -> dict[str, tuple[interfaces.Prop, str]]:
+    """이 타입이 가져야 할 공통 속성 — 키 → (속성, 인터페이스)."""
+    catalog = interfaces.load(db)
+    one = catalog.types.get(slug)
+    if one is None or not one.interfaces:
+        return {}
+    return interfaces.contract(catalog, one.interfaces)[0]
+
+
+def _refuse_bound(db: Session, slug: str, key: str, *, what: str) -> None:
+    """공통 속성은 **타입에서 못 바꾼다** — 한 타입만 바뀌면 같은 속성이 타입마다 갈린다."""
+    wanted = _contract_of(db, slug)
+    if key in wanted:
+        iface = wanted[key][1]
+        raise Conflict(
+            code("ONTOLOGY", 8),
+            f"{slug}.{key} 는 인터페이스 {iface} 의 공통 속성이라 {what} — 인터페이스에서 "
+            "수정하세요. 이 타입에서만 바꾸려면 먼저 구현을 해제합니다.",
+            details={"interface": iface},
+        )
+
+
+def _interface_slugs(db: Session) -> set[str]:
+    return set(db.scalars(select(ObjectInterface.slug)))
+
+
+def _refuse_interface_target(db: Session, slug: str | None, *, what: str) -> None:
+    wrong = interfaces.target_error(slug, _interface_slugs(db), what=what)
+    if wrong:
+        raise InvalidValue(code("ONTOLOGY", 24), wrong)
 
 
 # --- 그룹 -------------------------------------------------------------------
@@ -317,17 +392,24 @@ def create_type(
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> ObjectTypeOut:
+    _refuse_parent(payload.model_fields_set)
     slug = require_slug(payload.slug, what="타입 slug")
     _check_type_choices(payload)
     if db.scalar(select(ObjectType).where(ObjectType.slug == slug)) is not None:
         raise Conflict(code("ONTOLOGY", 33), f"이미 있는 타입입니다: {slug}")
+    catalog = interfaces.load(db)
+    clash = interfaces.namespace_error(
+        slug, as_kind="type", types=(), interfaces=catalog.interfaces
+    )
+    if clash:
+        raise Conflict(code("ONTOLOGY", 5), clash)
+    wanted = interfaces.normalized_slugs(payload.interface_slugs)
+    bindings = _implementation(
+        catalog, slug=slug, label=payload.label, kind_class=payload.kind_class, wanted=wanted
+    )
+    _require_no_conflicts(bindings)
 
     group = _group(db, payload.nav_group_slug) if payload.nav_group_slug else None
-    parent = _parent_slug(db, slug, payload.parent_slug)
-    # 새 타입에는 속성이 없다 — 뷰가 속성을 가리키면 그 자리에서 걸린다.
-    views.validate_list_view(payload.list_view, [])
-    views.validate_form_view(payload.form_view, [], what="폼 화면")
-    views.validate_form_view(payload.detail_view, [], what="상세 화면")
     row = ObjectType(
         slug=slug,
         label=payload.label,
@@ -335,22 +417,26 @@ def create_type(
         description=payload.description,
         sort_order=payload.sort_order,
         nav_group_id=group.id if group else None,
-        parent_slug=parent,
+        interface_slugs=wanted,
         kind_class=payload.kind_class,
         system_source=payload.system_source,
         entry_policy=payload.entry_policy,
         key_policy=payload.key_policy,
         key_scope=payload.key_scope,
         temporal_kind=payload.temporal_kind,
-        list_view=payload.list_view,
-        form_view=payload.form_view,
-        detail_view=payload.detail_view,
         title_template=payload.title_template,
         is_active=payload.is_active,
         core=payload.core,
     )
     db.add(row)
     db.flush()
+    # 구현한 인터페이스의 공통 속성이 **먼저 서고** 뷰를 검증한다 — 뷰가 그 속성을 가리킬 수
+    # 있다.
+    interfaces.apply_bindings(db, bindings)
+    defs = _properties_of(db, row.id)
+    row.list_view = views.validate_list_view(payload.list_view, defs)
+    row.form_view = views.validate_form_view(payload.form_view, defs, what="폼 화면")
+    row.detail_view = views.validate_form_view(payload.detail_view, defs, what="상세 화면")
     _audit(
         db,
         user,
@@ -382,6 +468,7 @@ def update_type(
     row = _type(db, slug)
     managed.require_definition_editable(row)
     sent = payload.model_fields_set
+    _refuse_parent(sent)
 
     choices = (
         ("kind_class", payload.kind_class, KIND_CLASSES, "객체 분류"),
@@ -397,6 +484,17 @@ def update_type(
         row.system_source = payload.system_source.strip()
     if "kind_class" in sent or "system_source" in sent:
         require_system_source(row.kind_class, row.system_source)
+        keeps = (
+            interfaces.normalized_slugs(payload.interface_slugs)
+            if "interface_slugs" in sent
+            else list(row.interface_slugs or [])
+        )
+        if row.kind_class == "system" and keeps:
+            raise Conflict(
+                code("ONTOLOGY", 25),
+                f"{row.label}은(는) 인터페이스를 구현하고 있어 투영(system)으로 바꿀 수 "
+                "없습니다 — 먼저 구현을 해제하세요.",
+            )
         if row.kind_class == "system" and _counts(db).get(row.id, 0):
             # 행이 있는 타입을 투영으로 돌리면 그 행이 **화면에서 사라진다** —
             # 지워진 것이 아닌데 안 보이고, 그 사실은 아무 데도 안 적힌다.
@@ -414,6 +512,32 @@ def update_type(
         row.description = payload.description
     if "sort_order" in sent and payload.sort_order is not None:
         row.sort_order = payload.sort_order
+    # **구현 인터페이스** — 없는 공통 속성은 만들고, 같은 모양이면 채택하고, 다르면 거절한다.
+    # 뷰 검증보다 먼저다: 뷰가 구현으로 생기는 속성을 가리킬 수 있다.
+    implemented: dict[str, list[str]] | None = None
+    if "interface_slugs" in sent:
+        wanted = interfaces.normalized_slugs(payload.interface_slugs)
+        bindings = _implementation(
+            interfaces.load(db),
+            slug=row.slug,
+            label=row.label,
+            kind_class=row.kind_class,
+            wanted=wanted,
+        )
+        _require_no_conflicts(bindings)
+        was = list(row.interface_slugs or [])
+        row.interface_slugs = wanted
+        db.flush()
+        interfaces.apply_bindings(db, bindings)
+        implemented = {
+            "added": sorted(set(wanted) - set(was)),
+            "removed": sorted(set(was) - set(wanted)),
+            "created": sorted(one.key for one in bindings if one.action == "create"),
+            "adopted": sorted(
+                one.key for one in bindings if one.fresh and one.action in ("adopt", "sync")
+            ),
+        }
+
     # **모르는 키가 오면 거절한다 — 조용히 무시하지 않는다.** 무시하면 「스펙에는
     # 있는데 안 그려지는 필드」 가 쌓이고, 적은 쪽은 적용된 줄 안다(ADR 0005).
     defs = _properties_of(db, row.id)
@@ -445,8 +569,6 @@ def update_type(
     if "nav_group_slug" in sent:
         group = _group(db, payload.nav_group_slug) if payload.nav_group_slug else None
         row.nav_group_id = group.id if group else None
-    if "parent_slug" in sent:
-        row.parent_slug = _parent_slug(db, row.slug, payload.parent_slug)
 
     _audit(
         db,
@@ -469,12 +591,56 @@ def update_type(
             target_label=slug,
             changes={"core": core_flip[1], "was": core_flip[0]},
         )
+    if implemented and (implemented["added"] or implemented["removed"]):
+        # **구현을 더하고 뺀 일은 따로 남긴다** — 속성이 생기거나 묶이는 일이라, 「이 속성은 왜
+        # 여기 있나」 를 물을 자리가 있어야 한다.
+        record_audit(
+            db,
+            action="ontology.type.implement",
+            actor=user,
+            target_table="object_types",
+            target_id=row.id,
+            target_label=slug,
+            changes=implemented,
+        )
     db.commit()
     db.refresh(row)
     return _type_out(
         row,
         _group_slugs(db).get(row.nav_group_id) if row.nav_group_id else None,
         _counts(db).get(row.id, 0),
+    )
+
+
+@router.post("/types/{slug}/interfaces/plan", response_model=ImplementPlanOut)
+def implement_plan(
+    slug: str,
+    payload: ImplementPlanRequest,
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> ImplementPlanOut:
+    """구현하면 무엇이 되는가 — **아무것도 안 바꾼다.** 화면이 저장 전에 이것을 보여 준다:
+    만들 속성 · 채택할 속성 · 모양이 달라 구현할 수 없는 곳(무엇이 다른지)."""
+    row = _type(db, slug)
+    bindings = _implementation(
+        interfaces.load(db),
+        slug=row.slug,
+        label=row.label,
+        kind_class=row.kind_class,
+        wanted=interfaces.normalized_slugs(payload.interface_slugs),
+    )
+
+    def item(one: interfaces.Binding) -> ImplementItemOut:
+        return ImplementItemOut(key=one.key, interface=one.interface, changed=one.changed)
+
+    return ImplementPlanOut(
+        creates=[item(one) for one in bindings if one.action == "create"],
+        adopts=[
+            item(one) for one in bindings if one.fresh and one.action in ("adopt", "sync")
+        ],
+        syncs=[item(one) for one in bindings if not one.fresh and one.action == "sync"],
+        conflicts=interfaces.conflicts(bindings),
+        warnings=interfaces.risks(db, bindings),
     )
 
 
@@ -598,6 +764,11 @@ def _check_type_slugs(db: Session, slugs: list[str] | None, *, what: str) -> Non
     """
     if not slugs:
         return
+    known_ifaces = _interface_slugs(db)
+    for one in slugs:
+        wrong = interfaces.target_error(one, known_ifaces, what="관계 끝")
+        if wrong:
+            raise InvalidValue(code("ONTOLOGY", 24), wrong)
     known = {row.slug for row in db.scalars(select(ObjectType))}
     missing = sorted(set(slugs) - known)
     if missing:
@@ -760,15 +931,551 @@ def delete_relation_type(
     db.commit()
 
 
+# --- 인터페이스 (ADR 0006) ----------------------------------------------------
+
+
+def _interface(db: Session, slug: str) -> ObjectInterface:
+    row = db.scalar(select(ObjectInterface).where(ObjectInterface.slug == slug))
+    if row is None:
+        raise NotFound(code("ONTOLOGY", 4), f"인터페이스를 찾을 수 없습니다: {slug}")
+    return row
+
+
+def _interface_properties(db: Session, owner_id: uuid.UUID) -> list[PropertyDef]:
+    return list(
+        db.scalars(
+            select(PropertyDef)
+            .where(PropertyDef.owner_kind == "interface", PropertyDef.owner_id == owner_id)
+            .order_by(PropertyDef.sort_order, PropertyDef.label)
+        )
+    )
+
+
+def _interface_out(
+    row: ObjectInterface,
+    catalog: interfaces.Catalog,
+    counts: dict[uuid.UUID, int],
+    type_ids: dict[str, uuid.UUID],
+) -> ObjectInterfaceOut:
+    implementers = interfaces.implementers(catalog, row.slug)
+    return ObjectInterfaceOut(
+        id=row.id,
+        slug=row.slug,
+        label=row.label,
+        icon=row.icon,
+        description=row.description,
+        sort_order=row.sort_order,
+        extends_slugs=list(row.extends_slugs or []),
+        list_view=row.list_view or {},
+        managed_by=row.managed_by,
+        implementers=implementers,
+        object_count=sum(
+            counts.get(type_ids[one], 0) for one in implementers if one in type_ids
+        ),
+    )
+
+
+def _type_ids(db: Session) -> dict[str, uuid.UUID]:
+    return {row.slug: row.id for row in db.scalars(select(ObjectType))}
+
+
+def _touch(row: ObjectInterface) -> None:
+    """공통 속성만 바뀌어도 인터페이스가 바뀐 것이다 — RDF 캐시가 이 시각으로 안다."""
+    row.updated_at = datetime.now(UTC)
+
+
+def _check_list_view_of(
+    catalog: interfaces.Catalog, slug: str, spec: dict[str, Any]
+) -> dict[str, Any]:
+    return views.validate_list_view(
+        spec,
+        interfaces.interface_fields(catalog, slug),
+        allowed=views.INTERFACE_LIST_KEYS,
+        extra_fields=views.INTERFACE_FIELDS,
+    )
+
+
+@router.get("/interfaces", response_model=list[ObjectInterfaceOut])
+def list_interfaces(
+    _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[ObjectInterfaceOut]:
+    catalog = interfaces.load(db)
+    counts = _counts(db)
+    type_ids = _type_ids(db)
+    rows = db.scalars(
+        select(ObjectInterface).order_by(ObjectInterface.sort_order, ObjectInterface.label)
+    )
+    return [_interface_out(row, catalog, counts, type_ids) for row in rows]
+
+
+@router.post("/interfaces", response_model=ObjectInterfaceOut, status_code=201)
+def create_interface(
+    payload: ObjectInterfaceWriteRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> ObjectInterfaceOut:
+    slug = require_slug(payload.slug, what="인터페이스 slug")
+    catalog = interfaces.load(db)
+    if slug in catalog.interfaces:
+        raise Conflict(code("ONTOLOGY", 5), f"이미 있는 인터페이스입니다: {slug}")
+    clash = interfaces.namespace_error(
+        slug, as_kind="interface", types=catalog.types, interfaces=()
+    )
+    if clash:
+        raise Conflict(code("ONTOLOGY", 5), clash)
+    extends = interfaces.normalized_slugs(payload.extends_slugs)
+    wrong = interfaces.extends_error(
+        slug, extends, catalog.extends_of(), set(catalog.interfaces)
+    )
+    if wrong:
+        raise Conflict(code("ONTOLOGY", 6), wrong)
+    after = catalog.clone()
+    after.interfaces[slug] = interfaces.Iface(slug=slug, label=payload.label, extends=extends)
+    row = ObjectInterface(
+        slug=slug,
+        label=payload.label,
+        icon=payload.icon,
+        description=payload.description,
+        sort_order=payload.sort_order,
+        extends_slugs=extends,
+        list_view=_check_list_view_of(after, slug, payload.list_view),
+    )
+    db.add(row)
+    db.flush()
+    _audit(
+        db,
+        user,
+        action="ontology.interface.create",
+        table="object_interfaces",
+        row_id=row.id,
+        label=slug,
+    )
+    db.commit()
+    db.refresh(row)
+    return _interface_out(row, interfaces.load(db), _counts(db), _type_ids(db))
+
+
+@router.patch("/interfaces/{slug}", response_model=ObjectInterfaceOut)
+def update_interface(
+    slug: str,
+    payload: ObjectInterfacePatchRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> ObjectInterfaceOut:
+    """**보낸 것만 바꾼다.** 상위 인터페이스를 바꾸면 공통 속성이 늘거나 줄어 구현 타입 전부가
+    걸린다 — 모양이 안 맞는 곳이 하나라도 있으면 아무것도 안 바꾼다."""
+    row = _interface(db, slug)
+    managed.require_definition_editable(row)
+    sent = payload.model_fields_set
+    for name in ("label", "icon", "description", "sort_order"):
+        value = getattr(payload, name)
+        if name in sent and value is not None:
+            setattr(row, name, value)
+
+    catalog = interfaces.load(db)
+    after = catalog.clone()
+    if "extends_slugs" in sent:
+        extends = interfaces.normalized_slugs(payload.extends_slugs)
+        wrong = interfaces.extends_error(
+            slug, extends, catalog.extends_of(), set(catalog.interfaces)
+        )
+        if wrong:
+            raise Conflict(code("ONTOLOGY", 6), wrong)
+        after.interfaces[slug].extends = extends
+        bindings = interfaces.plan_bindings(catalog, after)
+        _require_no_conflicts(bindings)
+        row.extends_slugs = extends
+        db.flush()
+        interfaces.apply_bindings(db, bindings)
+    if "list_view" in sent and payload.list_view is not None:
+        row.list_view = _check_list_view_of(after, slug, payload.list_view)
+    _touch(row)
+    _audit(
+        db,
+        user,
+        action="ontology.interface.update",
+        table="object_interfaces",
+        row_id=row.id,
+        label=slug,
+    )
+    db.commit()
+    db.refresh(row)
+    return _interface_out(row, interfaces.load(db), _counts(db), _type_ids(db))
+
+
+def _interface_usage(db: Session, slug: str) -> InterfaceUsageOut:
+    catalog = interfaces.load(db)
+    return InterfaceUsageOut(
+        slug=slug,
+        implementers=sorted(
+            one.slug for one in catalog.types.values() if slug in one.interfaces
+        ),
+        sub_interfaces=sorted(
+            one.slug for one in catalog.interfaces.values() if slug in one.extends
+        ),
+        referenced_by=sorted(
+            f"{owner}.{key}"
+            for owner, one in catalog.types.items()
+            for key, prop in one.props.items()
+            if prop.shape.ref_type_slug == slug
+        ),
+        relation_types=sorted(
+            kind.slug
+            for kind in _relation_types(db)
+            if slug in (kind.src_type_slugs or []) or slug in (kind.dst_type_slugs or [])
+        ),
+    )
+
+
+@router.get("/interfaces/{slug}/usage", response_model=InterfaceUsageOut)
+def interface_usage(
+    slug: str, _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> InterfaceUsageOut:
+    """**지우기 전에 무엇이 가리키는지.** 화면의 확인 창이 이것을 읽어 말한다."""
+    _interface(db, slug)
+    return _interface_usage(db, slug)
+
+
+@router.delete("/interfaces/{slug}", status_code=204)
+def delete_interface(
+    slug: str,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    """인터페이스를 지운다 — **가리키는 것이 없을 때만.**
+
+    구현한 타입이 남아 있는데 지우면 그 타입은 없는 인터페이스를 구현하게 되고, 그 사실은 그
+    타입을 고치는 날에야 오류로 드러난다. 무엇이 걸렸는지 말하며 막는다. 지우면 공통 속성
+    정의도 함께 지운다 — **구현 타입의 속성은 남는다**(그 타입의 것이다).
+    """
+    row = _interface(db, slug)
+    managed.require_definition_editable(row)
+    usage = _interface_usage(db, slug)
+    blocking = [
+        *(f"구현 타입 {one}" for one in usage.implementers),
+        *(f"상위로 이어받는 인터페이스 {one}" for one in usage.sub_interfaces),
+        *(f"참조 대상으로 적은 속성 {one}" for one in usage.referenced_by),
+        *(f"관계 끝에 적은 관계 종류 {one}" for one in usage.relation_types),
+    ]
+    if blocking:
+        raise Conflict(
+            code("ONTOLOGY", 9),
+            f"{row.label}을(를) 가리키는 것이 {len(blocking)}개 있어 지울 수 없습니다 — "
+            f"{', '.join(blocking[:5])}{' …' if len(blocking) > 5 else ''}. 먼저 해제하세요.",
+            details=usage.model_dump(),
+        )
+    _audit(
+        db,
+        user,
+        action="ontology.interface.delete",
+        table="object_interfaces",
+        row_id=row.id,
+        label=slug,
+    )
+    db.query(PropertyDef).filter(
+        PropertyDef.owner_kind == "interface", PropertyDef.owner_id == row.id
+    ).delete(synchronize_session=False)
+    db.delete(row)
+    db.commit()
+
+
+# --- 공통 속성 ---------------------------------------------------------------
+
+
+def _interface_property(db: Session, slug: str, key: str) -> PropertyDef:
+    owner = _interface(db, slug)
+    row = db.scalar(
+        select(PropertyDef).where(
+            PropertyDef.owner_kind == "interface",
+            PropertyDef.owner_id == owner.id,
+            PropertyDef.key == key,
+        )
+    )
+    if row is None:
+        raise NotFound(code("ONTOLOGY", 36), f"공통 속성을 찾을 수 없습니다: {slug}.{key}")
+    return row
+
+
+def _check_interface_property(db: Session, key: str, payload: PropertyDefWriteRequest) -> None:
+    require_choice(payload.data_type, DATA_TYPES, what="속성 종류")
+    _check_property_shape(payload)
+    wrong = interfaces.interface_property_error(key, payload.model_dump())
+    if wrong:
+        raise InvalidValue(code("ONTOLOGY", 24), wrong)
+    _refuse_interface_target(db, payload.ref_type_slug, what="참조 대상")
+
+
+def _with_property(
+    catalog: interfaces.Catalog, slug: str, key: str, payload: PropertyDefWriteRequest
+) -> interfaces.Catalog:
+    after = catalog.clone()
+    after.interfaces[slug].props[key] = interfaces.Prop(
+        key=key,
+        shape=interfaces.shape_of(payload.model_dump()),
+        label=payload.label,
+        help=payload.help,
+        section=payload.section,
+        sort_order=payload.sort_order,
+    )
+    return after
+
+
+@router.get("/interfaces/{slug}/properties", response_model=list[PropertyDefOut])
+def list_interface_properties(
+    slug: str, _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[PropertyDef]:
+    return _interface_properties(db, _interface(db, slug).id)
+
+
+@router.post("/interfaces/{slug}/properties", response_model=PropertyDefOut, status_code=201)
+def create_interface_property(
+    slug: str,
+    payload: PropertyDefWriteRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> PropertyDef:
+    """공통 속성을 더한다 — **구현 타입 전부에** 같은 키의 속성이 선다(있으면 모양이 같아야
+    한다)."""
+    owner = _interface(db, slug)
+    managed.require_definition_editable(owner)
+    key = require_key(payload.key)
+    _check_interface_property(db, key, payload)
+    catalog = interfaces.load(db)
+    if key in catalog.interfaces[slug].props:
+        raise Conflict(code("ONTOLOGY", 34), f"이미 있는 공통 속성입니다: {key}")
+    bindings = interfaces.plan_bindings(catalog, _with_property(catalog, slug, key, payload))
+    _require_no_conflicts(bindings)
+
+    row = PropertyDef(owner_kind="interface", owner_id=owner.id, key=key, data_type="text")
+    _write_interface_property(row, payload)
+    db.add(row)
+    db.flush()
+    interfaces.apply_bindings(db, bindings)
+    _touch(owner)
+    _audit(
+        db,
+        user,
+        action="ontology.interface_property.create",
+        table="property_defs",
+        row_id=row.id,
+        label=f"{slug}.{key}",
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+def _write_interface_property(row: PropertyDef, payload: PropertyDefWriteRequest) -> None:
+    """공통 속성에 적는 것 — 타입마다 정하는 칸(유일 · 기본값 · 역방향 이름)은 비워 둔다."""
+    row.label = payload.label
+    row.data_type = payload.data_type
+    row.unit = payload.unit
+    row.help = payload.help
+    row.required = payload.required
+    row.multi = payload.multi
+    row.enum_options = payload.enum_options
+    row.ref_type_slug = payload.ref_type_slug
+    row.min_value = payload.min_value
+    row.max_value = payload.max_value
+    row.decimals = payload.decimals
+    row.pattern = payload.pattern
+    row.section = payload.section
+    row.sort_order = payload.sort_order
+
+
+@router.patch("/interfaces/{slug}/properties/{key}", response_model=PropertyDefOut)
+def update_interface_property(
+    slug: str,
+    key: str,
+    payload: PropertyDefWriteRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> PropertyDef:
+    """공통 속성을 고친다 — **구현 타입들의 속성도 같은 트랜잭션에서** 바뀐다(모양만. 이름 ·
+    묶음 · 순서는 타입마다 그대로다)."""
+    owner = _interface(db, slug)
+    managed.require_definition_editable(owner)
+    row = _interface_property(db, slug, key)
+    _check_interface_property(db, key, payload)
+    if payload.data_type != row.data_type:
+        raise Conflict(
+            code("ONTOLOGY", 35),
+            f"속성 종류는 바꿀 수 없습니다({row.data_type} → {payload.data_type}). "
+            "구현 타입마다 저장된 값이 새 종류에 안 맞아도 화면이 그것을 말해 주지 못합니다. "
+            "새 공통 속성을 만들어 옮기세요.",
+        )
+    catalog = interfaces.load(db)
+    bindings = interfaces.plan_bindings(catalog, _with_property(catalog, slug, key, payload))
+    _require_no_conflicts(bindings)
+    _write_interface_property(row, payload)
+    db.flush()
+    interfaces.apply_bindings(db, bindings)
+    _touch(owner)
+    _audit(
+        db,
+        user,
+        action="ontology.interface_property.update",
+        table="property_defs",
+        row_id=row.id,
+        label=f"{slug}.{key}",
+    )
+    db.commit()
+    db.refresh(row)
+    return row
+
+
+@router.get("/interfaces/{slug}/properties/{key}/usage", response_model=PropertyUsage)
+def interface_property_usage(
+    slug: str, key: str, _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> PropertyUsage:
+    """구현 타입 전부에서 이 값을 가진 객체 수 — 모양을 바꾸기 전에 무엇이 걸리는지."""
+    row = _interface_property(db, slug, key)
+    implementers = interfaces.implementers(interfaces.load(db), slug)
+    ids = [one for name, one in _type_ids(db).items() if name in implementers]
+    count = (
+        db.scalar(
+            select(func.count())
+            .select_from(ObjectInstance)
+            .where(
+                ObjectInstance.type_id.in_(ids),
+                ObjectInstance.deleted_at.is_(None),
+                ObjectInstance.properties.has_key(key),
+            )
+        )
+        if ids
+        else 0
+    )
+    return PropertyUsage(key=row.key, label=row.label, objects_with_value=int(count or 0))
+
+
+@router.delete("/interfaces/{slug}/properties/{key}", status_code=204)
+def delete_interface_property(
+    slug: str,
+    key: str,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> None:
+    """공통 속성을 뺀다. **구현 타입의 속성은 남는다** — 그 타입의 것이 되고, 그 뒤로는
+    타입에서 고칠 수 있다."""
+    owner = _interface(db, slug)
+    managed.require_definition_editable(owner)
+    row = _interface_property(db, slug, key)
+    owner.list_view = views.prune_field(owner.list_view or {}, key)
+    _touch(owner)
+    _audit(
+        db,
+        user,
+        action="ontology.interface_property.delete",
+        table="property_defs",
+        row_id=row.id,
+        label=f"{slug}.{key}",
+    )
+    db.delete(row)
+    db.commit()
+
+
+@router.post(
+    "/interfaces/{slug}/properties/{key}/rename-option", response_model=RenameOptionOut
+)
+def rename_interface_option(
+    slug: str,
+    key: str,
+    payload: RenameOptionRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> RenameOptionOut:
+    """고를 값의 이름을 **구현 타입 전부에서 한 번에** 바꾼다 — 정의와 저장된 값까지.
+
+    한 타입만 바뀌고 멈추면 같은 공통 속성이 타입마다 다른 이름을 갖는다. 그래서 한
+    트랜잭션이다.
+    `apply=false` 면 몇 개가 함께 바뀔지만 말한다.
+    """
+    owner = _interface(db, slug)
+    managed.require_definition_editable(owner)
+    definition = _interface_property(db, slug, key)
+    options = definition.enum_options or []
+    errors: list[str] = []
+    if definition.data_type != "enum":
+        errors.append("고를 값이 있는 속성(enum)에만 씁니다.")
+    elif payload.from_value not in options:
+        errors.append(f"「{payload.from_value}」 은 고를 값에 없습니다.")
+    elif payload.to_value in options and payload.to_value != payload.from_value:
+        errors.append(
+            f"「{payload.to_value}」 은 이미 있는 값입니다. 둘을 합치려면 먼저 저장된 값을 "
+            "옮기세요."
+        )
+    implementers = [
+        one
+        for one in db.scalars(select(ObjectType))
+        if one.slug in interfaces.implementers(interfaces.load(db), slug)
+    ]
+    total = 0
+    for one in implementers:
+        prop = db.scalar(
+            select(PropertyDef).where(
+                PropertyDef.owner_kind == "type",
+                PropertyDef.owner_id == one.id,
+                PropertyDef.key == key,
+            )
+        )
+        if prop is None:
+            continue
+        if errors or not payload.apply:
+            found = codebook.plan_rename(db, one, prop, payload.from_value, payload.to_value)
+        else:
+            found = codebook.rename_values(
+                db, user, one, prop, payload.from_value, payload.to_value
+            )
+        errors.extend(f"{one.slug}: {message}" for message in found.errors)
+        total += found.objects_with_value
+    applied = bool(payload.apply and not errors)
+    if applied:
+        definition.enum_options = [
+            payload.to_value if one == payload.from_value else one for one in options
+        ]
+        _touch(owner)
+        _audit(
+            db,
+            user,
+            action="ontology.interface_property.update",
+            table="property_defs",
+            row_id=definition.id,
+            label=f"{slug}.{key}",
+        )
+        db.commit()
+    else:
+        db.rollback()
+    return RenameOptionOut(
+        applied=applied,
+        from_value=payload.from_value,
+        to_value=payload.to_value,
+        objects_with_value=total,
+        errors=errors,
+    )
+
+
 # --- 속성 정의 --------------------------------------------------------------
 
 
 @router.get("/types/{slug}/properties", response_model=list[PropertyDefOut])
 def list_properties(
     slug: str, _: User = Depends(current_user), db: Session = Depends(get_db)
-) -> list[PropertyDef]:
+) -> list[PropertyDefOut]:
     row = _type(db, slug)
-    return _properties_of(db, row.id)
+    return _marked(_properties_of(db, row.id), _contract_of(db, slug))
+
+
+def _marked(
+    rows: list[PropertyDef], wanted: dict[str, tuple[interfaces.Prop, str]]
+) -> list[PropertyDefOut]:
+    """공통 속성에 **어느 인터페이스의 것인지** 적는다 — 화면이 모양 칸을 잠그고 이유를
+    말한다."""
+    return [
+        PropertyDefOut.model_validate(one).model_copy(
+            update={"interface_slug": wanted[one.key][1] if one.key in wanted else None}
+        )
+        for one in rows
+    ]
 
 
 def _properties_of(db: Session, owner_id: uuid.UUID) -> list[PropertyDef]:
@@ -793,6 +1500,7 @@ def create_property(
     key = require_key(payload.key)
     require_choice(payload.data_type, DATA_TYPES, what="속성 종류")
     _check_property_shape(payload)
+    _refuse_interface_target(db, payload.ref_type_slug, what="참조 대상")
 
     exists = db.scalar(
         select(PropertyDef).where(
@@ -853,6 +1561,29 @@ def update_property(
     managed.require_definition_editable(_type(db, slug))
     require_choice(payload.data_type, DATA_TYPES, what="속성 종류")
     _check_property_shape(payload)
+    _refuse_interface_target(db, payload.ref_type_slug, what="참조 대상")
+    wanted = _contract_of(db, slug)
+    if key in wanted and payload.data_type == row.data_type:
+        # **공통 속성의 모양은 인터페이스에서만 바뀐다.** 이름 · 도움말 · 묶음 · 순서 ·
+        # 기본값 · 유일은 타입마다 정하므로 그대로 받는다.
+        iprop, iface = wanted[key]
+        sent = interfaces.shape_of(payload.model_dump())
+        now = interfaces.shape_of(row)
+        moved = [
+            name
+            for name in interfaces.SHAPE_FIELDS
+            if getattr(sent, name) != getattr(now, name)
+        ]
+        if iprop.shape.required and not payload.required:
+            moved.append("required")
+        if moved:
+            said = ", ".join(interfaces.FIELD_LABELS[name] for name in moved)
+            raise Conflict(
+                code("ONTOLOGY", 8),
+                f"{slug}.{key} 는 인터페이스 {iface} 의 공통 속성이라 모양({said})은 "
+                "인터페이스에서 수정합니다.",
+                details={"interface": iface, "fields": moved},
+            )
 
     # **키와 종류는 안 바꾼다.** 키를 바꾸면 이미 저장된 값이 전부 고아가 되고,
     # 종류를 바꾸면 그 값들이 새 종류에 안 맞는데 **화면은 아무 말도 안 한다.**
@@ -909,6 +1640,7 @@ def rename_option(
     owner = _type(db, slug)
     managed.require_definition_editable(owner)
     definition = _property(db, slug, key)
+    _refuse_bound(db, slug, key, what="고를 값 이름을 여기서 바꾸지 않습니다")
     if payload.apply:
         plan = codebook.apply_rename(
             db, user, owner, definition, payload.from_value, payload.to_value
@@ -935,6 +1667,7 @@ def promote_property(
     owner = _type(db, slug)
     managed.require_definition_editable(owner)
     definition = _property(db, slug, key)
+    _refuse_bound(db, slug, key, what="코드표로 승격하지 않습니다")
     args = {
         "existing_slug": payload.target_type_slug,
         "new_slug": payload.new_slug,
@@ -1050,6 +1783,7 @@ def delete_property(
     row = _property(db, slug, key)
     owner = _type(db, slug)
     managed.require_definition_editable(owner)
+    _refuse_bound(db, slug, key, what="삭제하지 않습니다")
     _require_core_accepted(db, owner, accepted=accept_core, what="이 속성 삭제")
     # **안 걷어내면 그 뒤로 타입을 고칠 때마다 「없는 속성」 이라고 거절당한다** —
     # 그리고 사람은 자기가 방금 고친 것과 상관없는 그 오류를 이해할 수 없다.
@@ -1215,6 +1949,8 @@ def ontology_schema(
     counts = _counts(db)
     groups = list(db.scalars(select(NavGroup).order_by(NavGroup.sort_order, NavGroup.label)))
     group_slugs = {g.id: g.slug for g in groups}
+    catalog = interfaces.load(db)
+    type_ids = _type_ids(db)
 
     types: list[ObjectTypeSchema] = []
     for row in db.scalars(
@@ -1225,17 +1961,31 @@ def ontology_schema(
             group_slugs.get(row.nav_group_id) if row.nav_group_id else None,
             counts.get(row.id, 0),
         )
+        wanted = (
+            interfaces.contract(catalog, row.interface_slugs)[0] if row.interface_slugs else {}
+        )
         types.append(
             ObjectTypeSchema(
                 **base.model_dump(),
-                properties=[
-                    PropertyDefOut.model_validate(p) for p in _properties_of(db, row.id)
-                ],
+                properties=_marked(_properties_of(db, row.id), wanted),
             )
         )
 
+    ifaces = [
+        ObjectInterfaceSchema(
+            **_interface_out(row, catalog, counts, type_ids).model_dump(),
+            properties=[
+                PropertyDefOut.model_validate(one) for one in _interface_properties(db, row.id)
+            ],
+        )
+        for row in db.scalars(
+            select(ObjectInterface).order_by(ObjectInterface.sort_order, ObjectInterface.label)
+        )
+    ]
+
     return OntologySchemaOut(
         groups=[NavGroupOut.model_validate(g) for g in groups],
+        interfaces=ifaces,
         types=types,
         relation_types=[RelationTypeOut.model_validate(r) for r in _relation_types(db)],
         reference_edges=[
@@ -1333,7 +2083,7 @@ def _plan_out(
     return ImportPlanOut(
         applied=applied,
         changes=[
-            ChangeOut(kind=c.kind, slug=c.slug, action=c.action, fields=c.fields)
+            ChangeOut(kind=c.kind, slug=c.slug, action=c.action, fields=c.fields, via=c.via)
             for c in prepared.changes
         ],
         warnings=prepared.warnings,
@@ -1512,6 +2262,7 @@ def list_snapshots(
             reason=row.reason,
             type_count=len((row.schema or {}).get("types") or []),
             relation_count=len((row.schema or {}).get("relation_types") or []),
+            interface_count=len((row.schema or {}).get("interfaces") or []),
         )
         for row in rows
     ]
@@ -1534,7 +2285,14 @@ def restore_snapshot(
 
     # 되돌리기 **직전**도 남긴다 — 되돌린 것을 되돌릴 수 있어야 한다.
     before = _snapshot(db, user, reason=f"복원 직전 ({row.taken_at:%Y-%m-%d %H:%M})")
-    prepared = importer.apply(db, row.schema or {})
+    # **옛 스냅샷도 되돌려진다** — 인터페이스 전의 것은 타입에 `parent_slug` 를 담고 있다.
+    schema, notes = importer.upgrade_snapshot(row.schema or {})
+    try:
+        prepared = importer.apply(db, schema)
+    except ValueError as caught:
+        db.rollback()
+        raise Conflict(code("ONTOLOGY", 70), str(caught)) from None
+    prepared.warnings.extend(notes)
     if prepared.errors:
         db.rollback()
         return _plan_out(prepared, applied=False, snapshot_id=None)

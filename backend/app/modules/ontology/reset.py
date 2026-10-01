@@ -48,7 +48,13 @@ from app.modules.objects.models import (
     ObjectYear,
     SavedView,
 )
-from app.modules.ontology.models import NavGroup, ObjectType, PropertyDef, RelationType
+from app.modules.ontology.models import (
+    NavGroup,
+    ObjectInterface,
+    ObjectType,
+    PropertyDef,
+    RelationType,
+)
 from app.shared.errors import AppError, Conflict, code
 
 #: 확인 문구 — **계획에 뜬 그대로 쳐야 한다.** 실수로 누르는 것과 작정하고 하는 것
@@ -87,6 +93,7 @@ def plan(db: Session) -> ResetPlan:
     return ResetPlan(
         items=[
             ResetItem("object_types", "타입", _count(db, ObjectType)),
+            ResetItem("object_interfaces", "인터페이스", _count(db, ObjectInterface)),
             ResetItem("property_defs", "속성 정의", _count(db, PropertyDef)),
             ResetItem("relation_types", "관계 종류", _count(db, RelationType)),
             ResetItem("nav_groups", "사이드바 묶음", _count(db, NavGroup)),
@@ -137,6 +144,7 @@ def apply(db: Session, *, confirm: str) -> ResetPlan:
         db.execute(delete(PropertyDef))
         db.execute(delete(RelationType))
         db.execute(delete(ObjectType))
+        db.execute(delete(ObjectInterface))
         db.execute(delete(NavGroup))
         db.flush()
     except IntegrityError as caught:

@@ -19,7 +19,8 @@
 
 from __future__ import annotations
 
-from typing import Any
+from collections.abc import Sequence
+from typing import Any, Protocol
 
 from app.modules.ontology.models import PropertyDef
 from app.modules.ontology.services import InvalidValue
@@ -27,6 +28,11 @@ from app.shared.errors import code
 
 #: 목록 화면이 아는 것.
 LIST_KEYS = {"columns", "sort", "filters", "search", "tree", "rollups"}
+#: 인터페이스 목록이 아는 것 — **트리 · 롤업은 없다.** 트리를 그릴 관계와 모을 숫자는 타입마다
+#: 다르다(ADR 0006).
+INTERFACE_LIST_KEYS = {"columns", "sort", "filters", "search"}
+#: 인터페이스 목록에만 있는 자리 — 그 줄이 어느 타입의 객체인가.
+INTERFACE_FIELDS = frozenset({"type"})
 SORT_KEYS = {"field", "dir"}
 TREE_KEYS = {"relation", "parent"}
 ROLLUP_KEYS = {"property", "fn", "label"}
@@ -41,6 +47,16 @@ SECTION_KEYS = {"name", "columns", "collapsed"}
 BUILT_IN_FIELDS = {"key", "label", "status", "updated_at", "created_at", "owner_workspace"}
 
 
+class FieldDef(Protocol):
+    """뷰 검증이 속성에서 읽는 것 — 키와 종류. 공통 속성(인터페이스)도 같은 말로 건넨다."""
+
+    @property
+    def key(self) -> str: ...
+
+    @property
+    def data_type(self) -> str: ...
+
+
 def _reject_unknown(spec: dict[str, Any], allowed: set[str], *, what: str) -> None:
     unknown = sorted(set(spec) - allowed)
     if unknown:
@@ -52,7 +68,9 @@ def _reject_unknown(spec: dict[str, Any], allowed: set[str], *, what: str) -> No
         )
 
 
-def _require_field(field: Any, keys: set[str], *, what: str) -> None:
+def _require_field(
+    field: Any, keys: set[str], *, what: str, extra: frozenset[str] = frozenset()
+) -> None:
     """`properties.<키>` 또는 기본 자리인가.
 
     **가리키는 속성이 없으면 빈 열이 서고, 빈 열은 「값이 없다」 로 읽힌다.**
@@ -60,7 +78,7 @@ def _require_field(field: Any, keys: set[str], *, what: str) -> None:
     """
     if not isinstance(field, str):
         raise InvalidValue(code("ONTOLOGY", 51), f"{what}: 이름은 글자여야 합니다.")
-    if field in BUILT_IN_FIELDS:
+    if field in BUILT_IN_FIELDS or field in extra:
         return
     if field.startswith("properties."):
         key = field.split(".", 1)[1]
@@ -73,23 +91,30 @@ def _require_field(field: Any, keys: set[str], *, what: str) -> None:
     raise InvalidValue(
         code("ONTOLOGY", 53),
         f"{what}: 모르는 자리입니다: {field}. "
-        f"속성은 properties.<키>, 그 밖에는 {', '.join(sorted(BUILT_IN_FIELDS))}.",
+        f"속성은 properties.<키>, 그 밖에는 {', '.join(sorted(BUILT_IN_FIELDS | extra))}.",
     )
 
 
-def validate_list_view(spec: dict[str, Any], defs: list[PropertyDef]) -> dict[str, Any]:
-    """목록 화면 스펙."""
+def validate_list_view(
+    spec: dict[str, Any],
+    defs: Sequence[FieldDef],
+    *,
+    allowed: set[str] = LIST_KEYS,
+    extra_fields: frozenset[str] = frozenset(),
+) -> dict[str, Any]:
+    """목록 화면 스펙. 인터페이스 목록은 `allowed=INTERFACE_LIST_KEYS`,
+    `extra_fields=INTERFACE_FIELDS` 로 부른다 — 같은 규칙을 두 벌로 두지 않는다."""
     if not spec:
         return {}
-    _reject_unknown(spec, LIST_KEYS, what="목록 화면")
+    _reject_unknown(spec, allowed, what="목록 화면")
     keys = {d.key for d in defs}
 
     for field in spec.get("columns") or []:
-        _require_field(field, keys, what="목록의 열")
+        _require_field(field, keys, what="목록의 열", extra=extra_fields)
     for field in spec.get("search") or []:
         _require_field(field, keys, what="검색 대상 속성")
     for field in spec.get("filters") or []:
-        _require_field(field, keys, what="거르기 칸")
+        _require_field(field, keys, what="거르기 칸", extra=extra_fields)
 
     sort = spec.get("sort")
     if sort:

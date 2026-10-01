@@ -54,7 +54,7 @@ RELATION_FIELDS = ("src", "relation", "dst", "evidence_note", "properties")
 모양은 플랫폼이 관계 종류의 정의로 본다."""
 #: 이보다 낮은 확신도의 행은 넣지 않는다 — 모델링 규약 5장. unresolved.json 으로 간다.
 LOW_CONFIDENCE = 0.7
-ONTOLOGY_KEYS = {"groups", "types", "relation_types"}
+ONTOLOGY_KEYS = {"groups", "interfaces", "types", "relation_types"}
 
 #: 대량 적재(백필)에 켜는 칸들 — `bundle.json` 의 `backfill` 에 적거나 `--backfill` 로 켠다.
 #:

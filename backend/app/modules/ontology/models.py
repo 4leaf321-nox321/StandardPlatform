@@ -111,8 +111,9 @@ DATA_TYPES = (
 )
 
 #: 속성 정의가 무엇에 붙는가. **타입의 폼과 관계의 폼이 같은 컴포넌트여야 한다** —
-#: 두 벌로 만들면 위젯이 갈리고, 갈린 것은 한쪽만 고쳐진다.
-PROPERTY_OWNER_KINDS = ("type", "relation")
+#: 두 벌로 만들면 위젯이 갈리고, 갈린 것은 한쪽만 고쳐진다. 인터페이스의 공통 속성도 같은
+#: 표 · 같은 편집기를 쓴다(ADR 0006).
+PROPERTY_OWNER_KINDS = ("type", "relation", "interface")
 
 #: slug 는 **바뀌면 안 되는 식별자**다. 관계·URL·MCP 도구 이름이 여기 물린다.
 SLUG_MAX = 32
@@ -155,8 +156,8 @@ class NavGroup(Base):
        들여쓰기가 단계마다 곱해지고, 무엇보다 「이건 어디에 넣지」 가 애매해지기 시작하는
        지점이 3단계다. 타입까지 세면 화면에 보이는 단계는 이미 셋이다.
 
-    이것은 **화면 정리**다. 타입끼리의 `parent_slug`(「개발모델은 제품이다」)와는 다른
-    것이다 — 그쪽은 뜻의 계층이고 RDF 로 나간다."""
+    이것은 **화면 정리**다. 「개발모델은 제품이다」 같은 뜻의 계층은 인터페이스가 말한다
+    (`ObjectType.interface_slugs`, ADR 0006) — 메뉴를 옮겨도 뜻은 안 바뀐다."""
     parent: Mapped[NavGroup | None] = relationship(
         remote_side=[id], lazy="joined", foreign_keys=[parent_id]
     )
@@ -209,9 +210,17 @@ class ObjectType(Base):
     entry_policy: Mapped[str] = mapped_column(
         String(20), default="open", server_default="open"
     )
-    parent_slug: Mapped[str | None] = mapped_column(String(SLUG_MAX), nullable=True)
-    """상위 타입 — 「개발모델은 제품이다」. **화면 동작은 바꾸지 않는다**(목록 · 관계 허용은 그
-    타입 그대로). RDF/OWL 로 내보낼 때 `rdfs:subClassOf` 가 되어 추론기가 상속을 푼다."""
+    interface_slugs: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False
+    )
+    """구현하는 인터페이스 — 「시험장비는 설비이고 교정 대상이다」(ADR 0006). **여럿이다.**
+
+    구현하면 그 인터페이스(와 상위 인터페이스)의 공통 속성을 **같은 키 · 같은 모양**으로 이
+    타입이 가진다(`ontology/interfaces.py`). 정렬하고 겹친 것을 빼서 담는다 — 순서만 다른
+    목록이 「바뀌었다」 로 읽히면 계획을 아무도 안 읽는다.
+
+    옛 `parent_slug`(상위 타입 하나, RDF 에만 쓰이던 것)를 대신한다 — 계층을 적는 자리가 둘이면
+    사람마다 다른 쪽에 적는다."""
     core: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     """**바깥 시스템에 여는 타입인가.** 켜면 `/api/core` 로 나간다.
 
@@ -270,8 +279,59 @@ class ObjectType(Base):
     )
 
 
+class ObjectInterface(Base):
+    """여러 타입이 따르는 **공통 모양** — 공통 속성의 묶음(ADR 0006).
+
+    **객체를 갖지 않는다.** 타입이 구현하면(`ObjectType.interface_slugs`) 이 인터페이스의 공통
+    속성과 **같은 키 · 같은 모양**의 속성을 그 타입이 가진다 — 그래서 타입의 속성을 읽는 곳
+    (검증 · 폼 · 일괄 · 코어 · RDF)은 그대로 돌고, 여러 타입을 묻는 곳만 `type_id IN (…)` 으로
+    넓힌다. 모양의 정본은 여기다: 공통 속성을 고치면 구현 타입들의 속성도 함께 바뀐다.
+
+    slug 는 타입과 **한 이름 공간**을 쓴다 — 참조 대상 · 관계 끝 · 주소(`/o/<slug>`) · RDF
+    클래스가 전부 「slug 하나」 를 받으므로, 겹치면 어느 쪽인지 말할 수 없다.
+    """
+
+    __tablename__ = "object_interfaces"
+    __table_args__ = (UniqueConstraint("slug", name="uq_object_interfaces_slug"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    slug: Mapped[str] = mapped_column(String(SLUG_MAX))
+    """**바뀌면 안 된다.** 구현한 타입 · 참조 대상 · 관계 끝이 이 값을 문자열로 들고 있다."""
+
+    label: Mapped[str] = mapped_column(String(64))
+    icon: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    description: Mapped[str] = mapped_column(Text, default="", server_default="")
+    sort_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+
+    extends_slugs: Mapped[list[str]] = mapped_column(
+        JSONB, default=list, server_default="[]", nullable=False
+    )
+    """상위 인터페이스 — 그 공통 속성을 이어받는다. 순환은 막는다(자기 자신을 이어받으면
+    공통 속성을 모으는 셈이 끝나지 않는다). 정렬해서 담는다."""
+
+    list_view: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """인터페이스 목록의 모양 — 열 · 정렬 · 검색 · 거르기. 타입의 `list_view` 와 같은 말이되
+    트리 · 롤업은 없고(타입마다 다르다), 「타입」 열이 하나 더 있다."""
+
+    managed_by: Mapped[str] = mapped_column(String(40), default="", server_default="")
+    """누가 이 정의를 관리하나 — `ObjectType.managed_by` 와 같다. 허브의 인터페이스는 허브
+    묶음으로만 바뀌고, 그때 **이 설치의 구현 타입도 따라 바뀐다**(구현한 쪽이 계약을
+    받아들인 것이다)."""
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+    """공통 속성을 고칠 때도 올린다 — RDF 캐시가 이것으로 「바뀌었나」 를 안다(속성 행만
+    바뀌면 인터페이스 행은 그대로라 안 올라간다)."""
+
+
 class PropertyDef(Base):
-    """속성 정의 — **폴리모픽**. 타입에도 붙고 관계 종류에도 붙는다.
+    """속성 정의 — **폴리모픽**. 타입 · 관계 종류 · 인터페이스에 붙는다.
 
     `owner_kind='relation'` 은 2단계에서 쓰인다. 칸을 지금 두는 이유는, 나중에
     더하면 **이미 쌓인 정의를 옮겨야** 하기 때문이다.
@@ -287,8 +347,8 @@ class PropertyDef(Base):
     )
     owner_kind: Mapped[str] = mapped_column(String(20), default="type", server_default="type")
     owner_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), index=True)
-    """FK 를 걸지 않는다 — 가리키는 표가 둘(object_types · relation_types)이라
-    걸 수 없다. 정합은 서비스 레이어가 지킨다."""
+    """FK 를 걸지 않는다 — 가리키는 표가 셋(object_types · relation_types ·
+    object_interfaces)이라 걸 수 없다. 정합은 서비스 레이어가 지킨다."""
 
     key: Mapped[str] = mapped_column(String(48))
     """`properties` JSONB 의 키. **바뀌면 안 된다** — 바꾸면 이미 저장된 값이
@@ -306,7 +366,8 @@ class PropertyDef(Base):
     """`data_type='enum'` 일 때의 고를 것들."""
 
     ref_type_slug: Mapped[str | None] = mapped_column(String(SLUG_MAX), nullable=True)
-    """`data_type='object_ref'` 일 때 가리키는 타입. NULL 이면 아무 타입이나."""
+    """`data_type='object_ref'` 일 때 가리키는 타입. NULL 이면 아무 타입이나. 인터페이스를
+    가리키는 것은 아직 막는다(ADR 0006 — 저장할 때 대상 타입을 확인하는 길이 먼저다)."""
 
     inverse_label: Mapped[str] = mapped_column(String(64), default="", server_default="")
     """`object_ref` 의 **역방향 이름** — 「과제」 칸을 과제 쪽에서 읽으면 「개발모델」. 참조

@@ -91,6 +91,23 @@ def apply_rename(
     to_value: str,
 ) -> RenamePlan:
     """옵션 이름과 **저장된 값을 한 트랜잭션에** 바꾼다. 객체마다 기록이 남는다."""
+    plan = rename_values(db, user, owner, definition, from_value, to_value)
+    if not plan.errors:
+        db.commit()
+    return plan
+
+
+def rename_values(
+    db: Session,
+    user: User,
+    owner: ObjectType,
+    definition: PropertyDef,
+    from_value: str,
+    to_value: str,
+) -> RenamePlan:
+    """`apply_rename` 의 몸 — **커밋하지 않는다.** 인터페이스의 고를 값 이름을 바꿀 때 구현
+    타입 전부를 **한 트랜잭션에** 바꾸려고 떼어 두었다(한 타입만 바뀌고 멈추면 같은 공통 속성이
+    타입마다 다른 이름을 갖는다)."""
     plan = plan_rename(db, owner, definition, from_value, to_value)
     if plan.errors:
         return plan
@@ -126,7 +143,6 @@ def apply_rename(
         changes={"enum_option": {"before": from_value, "after": to_value}},
         reason=f"저장된 값 {plan.objects_with_value}개도 함께",
     )
-    db.commit()
     return plan
 
 

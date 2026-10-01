@@ -4,7 +4,7 @@
 
 | 플랫폼 | RDF/OWL |
 | --- | --- |
-| 타입 | `owl:Class` (+ 상위 타입은 `rdfs:subClassOf`) |
+| 타입 · 인터페이스 | `owl:Class` (+ 구현 · 상위 인터페이스는 `rdfs:subClassOf`) |
 | 속성 정의(문자 · 숫자 · 날짜 · 선택값 …) | `owl:DatatypeProperty` + `rdfs:range` xsd 형 |
 | 참조 속성(`object_ref`) | `owl:ObjectProperty` + `rdfs:range` 대상 타입, 역방향 inverseOf |
 | 관계 종류 | `owl:ObjectProperty` + domain/range(허용 타입이 하나일 때), 이행 → Transitive, |
@@ -33,7 +33,7 @@ from sqlalchemy.orm import Session
 from app.modules.objects import aliases
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.objects.services import properties_of
-from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
+from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef, RelationType
 
 XSD_OF: dict[str, URIRef] = {
     "text": XSD.string,
@@ -97,18 +97,36 @@ def schema_graph(db: Session, names: Names) -> Graph:
     ontology = URIRef(names.base + "ns")
     graph.add((ontology, RDF.type, OWL.Ontology))
 
+    # **인터페이스는 클래스다** — 구현한 타입은 그 하위 클래스라, 추론기가 「시험장비는
+    # 설비」 를 푼다(ADR 0006). 타입과 slug 를 함께 쓰므로 IRI 가 겹치지 않는다.
+    ifaces = list(
+        db.scalars(
+            select(ObjectInterface).order_by(ObjectInterface.sort_order, ObjectInterface.slug)
+        )
+    )
+    known_ifaces = {one.slug for one in ifaces}
+    for iface in ifaces:
+        cls = names.type_(iface.slug)
+        graph.add((cls, RDF.type, OWL.Class))
+        graph.add((cls, RDFS.label, Literal(iface.label, lang="ko")))
+        if iface.description:
+            graph.add((cls, RDFS.comment, Literal(iface.description, lang="ko")))
+        for up in iface.extends_slugs or []:
+            if up in known_ifaces:
+                graph.add((cls, RDFS.subClassOf, names.type_(up)))
+
     types = list(
         db.scalars(select(ObjectType).order_by(ObjectType.sort_order, ObjectType.slug))
     )
-    by_slug = {row.slug: row for row in types}
     for row in types:
         cls = names.type_(row.slug)
         graph.add((cls, RDF.type, OWL.Class))
         graph.add((cls, RDFS.label, Literal(row.label, lang="ko")))
         if row.description:
             graph.add((cls, RDFS.comment, Literal(row.description, lang="ko")))
-        if row.parent_slug and row.parent_slug in by_slug:
-            graph.add((cls, RDFS.subClassOf, names.type_(row.parent_slug)))
+        for iface_slug in row.interface_slugs or []:
+            if iface_slug in known_ifaces:
+                graph.add((cls, RDFS.subClassOf, names.type_(iface_slug)))
         for prop in properties_of(db, row.id):
             _add_property(graph, names, row, prop)
 
@@ -355,6 +373,9 @@ def version(db: Session) -> tuple[Any, ...]:
     return (
         db.scalar(select(func.max(ObjectType.updated_at))),
         db.scalar(select(func.count()).select_from(ObjectType)),
+        # 인터페이스 — 공통 속성만 고쳐도 `updated_at` 이 오른다(라우트 · 가져오기가 올린다).
+        db.scalar(select(func.max(ObjectInterface.updated_at))),
+        db.scalar(select(func.count()).select_from(ObjectInterface)),
         db.scalar(select(func.count()).select_from(PropertyDef)),
         db.scalar(select(func.max(ObjectInstance.updated_at))),
         db.scalar(select(func.count()).select_from(ObjectInstance)),

@@ -5,18 +5,18 @@ PLM 기준정보는 허브 플랫폼이 원천(PLM)에서 받아 쌍둥이 플�
 그래서 **고치는 길 자체를 막는다.** 받기는 묶음 가져오기에 `source` 를 적어서만 한다.
 
 - 막는 것: 그 타입의 객체 만들기 · 고치기 · 지우기 · 합치기 · 되돌리기 · 별칭 · 연도, 파일로
-  넣기 · 여럿 고치기 · 데이터 소스 동기화, 그 관계 종류의 줄, 정의(타입 · 속성 · 관계 종류)
-  고치기.
+  넣기 · 여럿 고치기 · 데이터 소스 동기화, 그 관계 종류의 줄, 정의(타입 · 속성 · 관계 종류 ·
+  인터페이스) 고치기.
 - 막지 않는 것: 이 설치의 관계가 그 객체를 **가리키는 것**(참여 과제 · 근거 문서), 지켜보기.
 """
 
 from __future__ import annotations
 
-from app.modules.ontology.models import ObjectType, RelationType
+from app.modules.ontology.models import ObjectInterface, ObjectType, RelationType
 from app.shared.errors import Conflict, code
 
 
-def owner_of(row: ObjectType | RelationType) -> str:
+def owner_of(row: ObjectType | RelationType | ObjectInterface) -> str:
     return (row.managed_by or "").strip()
 
 
@@ -54,7 +54,7 @@ def require_relation_editable(kind: RelationType, *, source: str = "") -> None:
         )
 
 
-def require_definition_editable(row: ObjectType | RelationType) -> None:
+def require_definition_editable(row: ObjectType | RelationType | ObjectInterface) -> None:
     owner = owner_of(row)
     if owner:
         raise Conflict(

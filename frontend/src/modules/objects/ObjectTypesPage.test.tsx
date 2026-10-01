@@ -2,7 +2,7 @@
  * 객체 타입 전부 — **백 개짜리 색인이 지켜야 하는 것.**
  *
  * 계층대로 묶이나, 묶음에 안 걸린 타입이 드러나나(사이드바는 그것을 아예 안 그린다),
- * 찾기가 이름·식별자를 다 보나, 뜻의 계층이 없으면 그 탭을 안 만드나.
+ * 찾기가 이름·식별자를 다 보나.
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -93,23 +93,5 @@ describe('객체 타입 전부', () => {
     await userEvent.type(screen.getByLabelText('타입 찾기'), 'vend')
     await waitFor(() => expect(screen.queryByText('부품')).not.toBeInTheDocument())
     expect(screen.getByText('공급사')).toBeInTheDocument()
-  })
-
-  it('뜻의 계층이 있으면 그 탭이 서고, 없으면 안 선다', async () => {
-    ontologyApi.groups.mockResolvedValue([group('base', '기준정보')])
-    ontologyApi.types.mockResolvedValue([type('part', '부품', 'base')])
-    await open()
-    await waitFor(() => expect(screen.getByText('부품')).toBeInTheDocument())
-    expect(screen.queryByRole('tab', { name: '뜻의 계층' })).not.toBeInTheDocument()
-
-    vi.resetModules()
-    ontologyApi.types.mockResolvedValue([
-      type('product', '제품', 'base'),
-      type('model', '개발모델', 'base', { parent_slug: 'product' }),
-    ])
-    await open()
-    const tab = await screen.findByRole('tab', { name: '뜻의 계층' })
-    await userEvent.click(tab)
-    await waitFor(() => expect(screen.getByText(/rdfs:subClassOf/)).toBeInTheDocument())
   })
 })

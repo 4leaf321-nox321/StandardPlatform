@@ -40,7 +40,7 @@ from app.modules.objects.models import (
     ObjectRelationTombstone,
 )
 from app.modules.objects.services import properties_of
-from app.modules.ontology import importer
+from app.modules.ontology import importer, interfaces
 from app.modules.ontology.models import NavGroup, ObjectType, PropertyDef, RelationType
 from app.shared.errors import Conflict, NotFound, code
 
@@ -118,8 +118,17 @@ def export_group(
         and set(one["src_type_slugs"]) <= slugs
         and set(one["dst_type_slugs"]) <= slugs
     ]
+    # **타입이 구현한 인터페이스를 함께 싣는다**(상위 인터페이스까지) — 안 실으면 받는 쪽에서
+    # 「없는 인터페이스를 구현한다」 로 묶음 전체가 거절된다.
+    carried = set(
+        interfaces.closure(
+            {name for one in types for name in one.interface_slugs or []},
+            interfaces.load(db).extends_of(),
+        )
+    )
     ontology = {
         "groups": [one for one in schema["groups"] if one["slug"] in set(wanted)],
+        "interfaces": [one for one in schema["interfaces"] if one["slug"] in carried],
         "types": [one for one in schema["types"] if one["slug"] in slugs],
         "relation_types": relation_types,
     }

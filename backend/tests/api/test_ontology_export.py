@@ -120,7 +120,7 @@ def test_내보낸_JSON_은_그대로_다시_넣을_수_있다(client: TestClien
     assert ".json" in got.headers["content-disposition"]
 
     body = json.loads(got.content)
-    assert set(body) == {"groups", "types", "relation_types"}
+    assert set(body) == {"groups", "interfaces", "types", "relation_types"}
     assert any(one["slug"] == part for one in body["types"])
 
     again = client.post("/api/ontology/import?dry_run=true", json=body, headers=admin.headers)

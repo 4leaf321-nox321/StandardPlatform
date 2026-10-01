@@ -50,6 +50,11 @@ export interface PropertyDef {
   /** 속성 묶음. 폼과 상세가 함께 쓴다(3단계). */
   section: string
   sort_order: number
+  /**
+   * 이 속성이 **공통 속성**이면 그것을 정한 인터페이스(ADR 0006) — 모양(종류 · 고를 값 · 규칙)은
+   * 인터페이스에서 수정한다. 타입의 속성에만 붙는다.
+   */
+  interface_slug?: string | null
 }
 
 /** 목록 화면의 모양. **없으면 모든 목록이 똑같아지고, 똑같으면 아무도 안 쓴다.** */
@@ -114,8 +119,11 @@ export interface ObjectType {
   core?: boolean
   key_policy: 'none' | 'optional' | 'required'
   key_scope: 'global' | 'workspace'
-  /** 상위 타입 — RDF/OWL 의 rdfs:subClassOf. 화면 동작은 바꾸지 않는다. */
-  parent_slug?: string | null
+  /**
+   * 구현하는 인터페이스(ADR 0006) — 그 공통 속성을 같은 키 · 같은 모양으로 가진다. 「개발모델은
+   * 제품이다」 같은 뜻의 계층은 이것으로 적는다(옛 `parent_slug` 를 대신한다).
+   */
+  interface_slugs?: string[]
   temporal_kind: 'evergreen' | 'lifecycle' | 'yearly' | 'derived'
   list_view: ListView
   /**
@@ -202,8 +210,27 @@ export interface SystemSource {
   label: string
 }
 
+/** 여러 타입이 따르는 공통 모양(ADR 0006). 객체를 갖지 않는다. */
+export interface ObjectInterface {
+  id: string
+  slug: string
+  label: string
+  icon: string
+  description: string
+  sort_order: number
+  /** 상위 인터페이스 — 그 공통 속성을 이어받는다. */
+  extends_slugs: string[]
+  list_view: ListView
+  managed_by?: string
+  /** 구현한 타입 — 상위 인터페이스를 거쳐 구현한 것까지. */
+  implementers: string[]
+  object_count: number
+}
+
 export interface OntologySchema {
   groups: NavGroupRow[]
+  /** 여러 타입이 따르는 공통 모양 — 구현 타입은 `types[].interface_slugs`. */
+  interfaces?: (ObjectInterface & { properties: PropertyDef[] })[]
   types: (ObjectType & { properties: PropertyDef[] })[]
   relation_types: RelationType[]
   /** 참조 칸을 관계 모양으로 — 타입 사이의 길은 이것과 relation_types 를 합친 것. */

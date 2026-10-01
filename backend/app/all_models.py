@@ -46,6 +46,7 @@ from app.modules.objects.models import (
 )
 from app.modules.ontology.models import (
     NavGroup,
+    ObjectInterface,
     ObjectType,
     OntologySnapshot,
     PropertyDef,
@@ -79,6 +80,7 @@ __all__ = [
     "Notification",
     "ObjectAlias",
     "ObjectInstance",
+    "ObjectInterface",
     "ObjectLink",
     "ObjectRelation",
     "ObjectRelationTombstone",
