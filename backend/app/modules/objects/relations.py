@@ -3,7 +3,8 @@
 엣지 표에는 유니크 하나뿐이다. 나머지 셋은 관계 **종류**가 정하는 규칙이라
 데이터에 있고, 그래서 여기서 본다:
 
-    허용 타입    「공급사를 시험함」 같은 말이 안 되는 관계를 막는다
+    허용 타입    「공급사를 시험함」 같은 말이 안 되는 관계를 막는다. 끝에는 인터페이스도
+                 적힌다 — 그 인터페이스를 구현한 타입이면 된다(ADR 0006)
     개수 제약    「한 부품의 공급사는 하나」 를 지킨다
     순환 가드    자기 조상을 자식으로 넣으면 트리가 무한히 돈다
 
@@ -19,6 +20,7 @@ from sqlalchemy import select, text
 from sqlalchemy.orm import Session
 
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
+from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, RelationType
 from app.shared.errors import Conflict, NotFound, code
 
@@ -53,28 +55,27 @@ def require_end_types_allowed(
     kind: RelationType,
     src_slug: str,
     dst_slug: str,
-    labels: dict[str, str] | None = None,
+    ends: interfaces.Ends | None = None,
 ) -> None:
     """타입 slug 로 보는 같은 검사 — 한쪽 끝이 system 객체(행이 없는 것)여도 된다.
 
-    `labels` 는 **이미 읽어 둔** slug → 이름. 일괄 가져오기가 줄마다 부르므로, 안 주면
-    파일 한 장에 타입 표를 오천 번 읽는다.
+    `ends` 는 **이미 읽어 둔** 정의(`interfaces.load_ends`). 일괄 가져오기가 줄마다 부르므로,
+    안 주면 파일 한 장에 타입 표를 오천 번 읽는다.
     """
-    #: slug -> 사람이 읽는 이름. **오류에 slug 를 그대로 쓰면 아무도 못 읽는다** —
-    #: 화면에는 「부품」 이라고 적혀 있는데 메시지는 `part_87b8` 라고 말한다.
-    if labels is None:
-        labels = {row.slug: row.label for row in db.scalars(select(ObjectType))}
+    if not kind.src_type_slugs and not kind.dst_type_slugs:
+        return
+    #: 이름 — **오류에 slug 를 그대로 쓰면 아무도 못 읽는다.** 화면에는 「부품」 이라고 적혀
+    #: 있는데 메시지는 `part_87b8` 라고 말한다.
+    known = ends if ends is not None else interfaces.load_ends(db)
 
     def check(slug: str, allowed: list[str] | None, what: str) -> None:
-        if not allowed:
+        if known.allows(allowed, slug):
             return
-        if slug not in allowed:
-            names = ", ".join(labels.get(one, one) for one in allowed)
-            raise Conflict(
-                code("OBJECTS", 22),
-                f"{kind.label}의 {what}은 {names} 만 됩니다. "
-                f"{labels.get(slug, '알 수 없는 타입')}은 안 됩니다.",
-            )
+        raise Conflict(
+            code("OBJECTS", 22),
+            f"{kind.label}의 {what}은 {known.describe(allowed or [])} 만 됩니다. "
+            f"{known.labels.get(slug, '알 수 없는 타입')}은 안 됩니다.",
+        )
 
     check(src_slug, kind.src_type_slugs, "출발")
     check(dst_slug, kind.dst_type_slugs, "도착")

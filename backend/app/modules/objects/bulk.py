@@ -54,7 +54,7 @@ from app.modules.objects.services import (
     properties_of,
     require_key_free,
 )
-from app.modules.ontology import managed
+from app.modules.ontology import interfaces, managed
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.services import InvalidValue, merge_properties, validate_properties
 from app.shared import audit, tabular
@@ -1632,8 +1632,9 @@ class _RelIndex:
     skip_missing: bool = False
     """참이면 끝점을 못 찾은 줄을 **오류로 만들지 않고 건너뛴다**(줄에 적는다). 선은 값이
     아니라 있음/없음이라 「빈칸으로 넣기」 가 없다 — 건너뛰는 것이 그에 해당한다."""
-    type_labels: dict[str, str] = field(default_factory=dict)
-    """slug → 사람이 읽는 이름. 끝 타입 오류 문구가 줄마다 이 표를 만들던 자리다."""
+    end_types: interfaces.Ends | None = None
+    """끝에 적힌 slug(타입 · 인터페이스)를 타입으로 펴는 표와 그 이름. 끝 타입 검사 · 오류
+    문구가 줄마다 이 표를 만들던 자리다."""
     system_refs: dict[str, list[SystemRef]] = field(default_factory=dict)
     """원 표(부서 · 계정)를 비추는 타입 slug → 그 표 전부. **글자마다 한 질의**를 돌던
     자리다 — 도착 타입에 원 표가 섞여 있으면 객체 표에서 못 찾은 글자마다 그 표를 다시
@@ -1684,9 +1685,9 @@ def _load_pool(
     wanted: dict[tuple[uuid.UUID, ...], set[str]] = {}
     by_slug = {one.slug: one for one in db.scalars(select(ObjectType))}
     memo.types = by_slug
-    # 끝 타입 오류 문구가 쓰는 이름표 — **파일마다 한 번**. 줄마다 만들면 타입 마흔 개짜리
-    # 설치에서 2만 줄에 80만 번 담는다.
-    memo.type_labels = {slug: one.label for slug, one in by_slug.items()}
+    # 끝 타입 표와 이름 — **파일마다 한 번**. 줄마다 만들면 타입 마흔 개짜리 설치에서 2만 줄에
+    # 80만 번 담는다.
+    memo.end_types = ends = interfaces.load_ends(db)
     for row in rows:
         src_text = str(row.get("src") or "").strip()
         if src_text:
@@ -1696,14 +1697,18 @@ def _load_pool(
         kind = kinds.get(slug)
         if not dst_text or kind is None:
             continue
-        allowed = kind.dst_type_slugs or []
+        allowed = ends.expand(kind.dst_type_slugs)
         plain = tuple(
             sorted(
                 by_slug[one].id
-                for one in allowed
+                for one in allowed or ()
                 if one in by_slug and not system.is_system(by_slug[one])
             )
         )
+        if allowed is not None and not plain:
+            # 객체 표에서 찾을 것이 없다(원 표만, 또는 구현 타입이 없는 인터페이스) — 빈 묶음은
+            # 「아무 타입이나」 라서 담으면 안 된다.
+            continue
         # 도착 타입을 안 정한 관계는 **아무 타입이나** 될 수 있다 — 빈 묶음으로 담는다.
         wanted.setdefault(plain, set()).add(dst_text)
     for key, texts in wanted.items():
@@ -1735,8 +1740,9 @@ def _pending_end(
             return "", ""
         waiting.append(src_text)
     if dst_text:
-        for slug in kind.dst_type_slugs or list(memo.pending):
-            if dst_text in memo.pending.get(slug, set()):
+        ends = memo.end_types or interfaces.Ends()
+        for slug in memo.pending:
+            if ends.allows(kind.dst_type_slugs, slug) and dst_text in memo.pending[slug]:
                 dst_slug = slug
                 break
         if not dst_slug:
@@ -1996,6 +2002,7 @@ def _find_dst(
     전부 뒤지게 되고, 「부서 slug 를 적었더니 계정이 걸렸다」 같은 일이 생긴다.
     """
     types = memo.types if memo is not None and memo.types else system.types_by_slug(db)
+    ends = memo.end_types if memo is not None and memo.end_types else interfaces.load_ends(db)
 
     def all_of(target: ObjectType) -> list[SystemRef]:
         """원 표 전부 — **타입마다 한 번**(같은 파일 안에서)."""
@@ -2005,10 +2012,19 @@ def _find_dst(
             memo.system_refs[target.slug] = system.source_of(target).list_all(db)
         return memo.system_refs[target.slug]
 
-    allowed = kind.dst_type_slugs or []
-    plain = [types[s].id for s in allowed if s in types and not system.is_system(types[s])]
-    systemic = [types[s] for s in allowed if s in types and system.is_system(types[s])]
-    if not allowed or plain:
+    # 끝에 적힌 인터페이스는 구현 타입으로 편다. **`None` 만 「아무 타입이나」 다** — 구현
+    # 타입이 없는 인터페이스는 빈 집합이고, 그것을 「제약 없음」 으로 읽으면 아무것이나 잇는다.
+    allowed = ends.expand(kind.dst_type_slugs)
+    if allowed is not None and not allowed:
+        raise InvalidValue(
+            code("OBJECTS", 46),
+            f"「{text}」 을 이을 수 없습니다 — {kind.label}의 도착"
+            f"({ends.describe(kind.dst_type_slugs or [])})에 해당하는 타입이 없습니다.",
+        )
+    candidates = [types[one] for one in sorted(allowed or ()) if one in types]
+    plain = [one.id for one in candidates if not system.is_system(one)]
+    systemic = [one for one in candidates if system.is_system(one)]
+    if allowed is None or plain:
         pool = memo.pool.get(tuple(sorted(plain))) if memo is not None else None
         try:
             found = _find_endpoint(db, user, text, plain or None, pool)
@@ -2244,7 +2260,7 @@ def _plan_relation(
                 kind,
                 object_type.slug,
                 pending_slug or dst_end.type_slug,
-                memo.type_labels or None,
+                memo.end_types,
             )
             _relation_properties(db, kind, row, _Refs(db, user), defs=memo.defs.get(kind.slug))
             src_token = _end_token(src_text, src_end)
@@ -2277,9 +2293,7 @@ def _plan_relation(
     refused = memo.editable[src.owner_workspace_id]
     if refused is not None:
         raise refused
-    rel.require_end_types_allowed(
-        db, kind, object_type.slug, dst.type_slug, memo.type_labels or None
-    )
+    rel.require_end_types_allowed(db, kind, object_type.slug, dst.type_slug, memo.end_types)
 
     src_token, dst_token = f"id:{src.id}", f"id:{dst.id}"
     _require_file_twice(kind, memo, src_token, dst_token)

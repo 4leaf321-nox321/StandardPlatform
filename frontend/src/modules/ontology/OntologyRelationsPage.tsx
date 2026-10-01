@@ -14,6 +14,7 @@ import {
   RelationTypeEditDialog,
 } from '@/modules/ontology/RelationTypeEditDialog'
 import type { RelationType } from '@/modules/ontology/api'
+import { endLabel } from '@/modules/ontology/interfaces'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { Button } from '@/shared/components/ui/button'
 import {
@@ -32,13 +33,14 @@ export default function OntologyRelationsPage() {
 
   const relations = schema?.relation_types ?? []
   const types = schema?.types ?? []
+  const interfaces = schema?.interfaces ?? []
   const target = relations.find((row) => row.slug === editing) ?? null
 
   /** 「부품 → 공급사」 처럼 무엇과 무엇을 잇는지. 비어 있으면 제약이 없다는 뜻이다. */
   function endpoints(row: RelationType): string {
     const label = (slugs: string[] | null) =>
       slugs && slugs.length > 0
-        ? slugs.map((s) => types.find((t) => t.slug === s)?.label ?? s).join('·')
+        ? slugs.map((s) => endLabel(s, types, interfaces)).join('·')
         : '아무 타입'
     return `${label(row.src_type_slugs)} → ${label(row.dst_type_slugs)}`
   }
@@ -131,6 +133,7 @@ export default function OntologyRelationsPage() {
         <RelationTypeEditDialog
           relation={target}
           types={types}
+          interfaces={interfaces}
           onClose={() => {
             setCreating(false)
             setEditing(null)

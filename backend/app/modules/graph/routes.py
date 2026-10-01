@@ -35,6 +35,7 @@ from app.modules.graph.schemas import (
 )
 from app.modules.objects import graph, refedges, system
 from app.modules.objects.models import ObjectAlias, ObjectInstance
+from app.modules.ontology import interfaces
 from app.modules.ontology.models import NavGroup, ObjectType, RelationType
 from app.modules.workspaces.models import Workspace
 from app.shared import system_sources
@@ -269,14 +270,16 @@ def overview(user: User = Depends(current_user), db: Session = Depends(get_db)) 
             )
         )
     active_slugs = {row.slug for row in types}
+    # 끝에 인터페이스가 적힌 관계는 **구현 타입마다** 선을 긋는다 — 그림에는 타입만 선다.
+    ends = interfaces.load_ends(db)
     for kind in sorted(
         (one for one in kinds.values() if isinstance(one, RelationType)),
         key=lambda one: (one.sort_order, one.slug),
     ):
         if not kind.is_active or not kind.src_type_slugs or not kind.dst_type_slugs:
             continue
-        for src_slug in kind.src_type_slugs:
-            for dst_slug in kind.dst_type_slugs:
+        for src_slug in ends.types_of(kind.src_type_slugs):
+            for dst_slug in ends.types_of(kind.dst_type_slugs):
                 if src_slug not in active_slugs or dst_slug not in active_slugs:
                     continue
                 if (kind.slug, src_slug, dst_slug) in seen:
@@ -372,7 +375,9 @@ def neighborhood(
     ),
     limit: int | None = Query(default=None, description=f"노드 상한. 최대 {MAX_NODES}"),
     relations: str | None = Query(default=None, description="관계 slug, 쉼표로"),
-    types: str | None = Query(default=None, description="이웃 타입 slug, 쉼표로"),
+    types: str | None = Query(
+        default=None, description="이웃 타입 slug, 쉼표로. 인터페이스면 그 구현 타입 전부"
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> NeighborhoodOut:
@@ -409,7 +414,8 @@ def neighborhood(
 
     type_ids: list[uuid.UUID] | None = None
     type_slugs: list[str] | None = None
-    if wanted := _csv(types):
+    if asked_types := _csv(types):
+        wanted = interfaces.load_ends(db).types_of(asked_types)
         type_ids = [row.id for row in all_types.values() if row.slug in wanted]
         type_slugs = list(wanted)
         # 시작점의 타입은 거르기와 무관하게 늘 들어간다 — 안 그러면 「부품만」 을
@@ -548,7 +554,7 @@ def neighborhood(
 
 @router.get("/subgraph", response_model=SubgraphOut)
 def subgraph(
-    types: str = Query(description="타입 slug, 쉼표로"),
+    types: str = Query(description="타입 slug, 쉼표로. 인터페이스면 그 구현 타입 전부"),
     relations: str | None = Query(default=None, description="관계 slug, 쉼표로"),
     q: str | None = Query(default=None, description="이름·식별자의 일부"),
     limit: int | None = Query(default=None, description=f"노드 상한. 최대 {MAX_NODES}"),
@@ -571,7 +577,7 @@ def subgraph(
     # **부른 순서대로 쌓는다.** 타입 목록에는 순서가 없어(질의에 order by 가 없다) 같은
     # 물음에 쪽마다 다른 순서가 오고, 쪽을 타입마다 나누는 아래의 셈이 쪽 사이에서
     # 어긋난다 — 한 객체가 두 쪽에 나오거나 아무 쪽에도 안 나온다.
-    asked = list(dict.fromkeys(wanted))
+    asked = interfaces.load_ends(db).types_of(wanted)
     wanted_systems = [systems[slug] for slug in asked if slug in systems]
     rows_by_slug = {row.slug: row for row in all_types.values() if not system.is_system(row)}
     type_ids = [rows_by_slug[slug].id for slug in asked if slug in rows_by_slug]

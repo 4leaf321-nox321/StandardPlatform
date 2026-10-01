@@ -387,6 +387,7 @@ export function TypeEditDialog({
               <ListViewEditor
                 defs={type.properties}
                 relationTypes={relationTypes}
+                interfaces={interfaces}
                 typeSlug={type.slug}
                 value={listView}
                 onChange={setListView}

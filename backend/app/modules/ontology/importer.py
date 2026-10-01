@@ -374,11 +374,6 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
                 f"관계 {slug}: 재귀로 펼치는 관계는 순환을 막아야 합니다 — "
                 "안 그러면 트리가 무한히 돕니다."
             )
-        for name in ("src_type_slugs", "dst_type_slugs"):
-            for end in one.get(name) or []:
-                wrong = interfaces.target_error(end, known_ifaces, what="관계 끝")
-                if wrong:
-                    out.errors.append(f"관계 {slug}: {wrong}")
         relation = relations.get(slug)
         if relation is None:
             out.changes.append(Change("relation_type", slug, "create"))
@@ -761,6 +756,15 @@ def _warn_type_risks(db: Session, found: ObjectType, one: dict[str, Any], out: P
         out.warnings.append(
             f"타입 {found.slug}: 식별자를 필수로 바꿉니다. **식별자가 없는 기존 객체는 "
             "고칠 때 걸립니다.**"
+        )
+    if "interface_slugs" in one:
+        out.warnings.extend(
+            interfaces.unimplement_risks(
+                db,
+                found.slug,
+                found.interface_slugs or [],
+                interfaces.normalized_slugs(one["interface_slugs"]),
+            )
         )
 
 

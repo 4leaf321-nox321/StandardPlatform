@@ -9017,10 +9017,10 @@
                   "type": "null"
                 }
               ],
-              "description": "이웃 타입 slug, 쉼표로",
+              "description": "이웃 타입 slug, 쉼표로. 인터페이스면 그 구현 타입 전부",
               "title": "Types"
             },
-            "description": "이웃 타입 slug, 쉼표로"
+            "description": "이웃 타입 slug, 쉼표로. 인터페이스면 그 구현 타입 전부"
           }
         ],
         "responses": {
@@ -9062,10 +9062,10 @@
             "required": true,
             "schema": {
               "type": "string",
-              "description": "타입 slug, 쉼표로",
+              "description": "타입 slug, 쉼표로. 인터페이스면 그 구현 타입 전부",
               "title": "Types"
             },
-            "description": "타입 slug, 쉼표로"
+            "description": "타입 slug, 쉼표로. 인터페이스면 그 구현 타입 전부"
           },
           {
             "name": "relations",

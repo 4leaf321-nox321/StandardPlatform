@@ -367,7 +367,8 @@ def test_공통_속성이_될_수_없는_것과_아직_대상이_될_수_없는_
         assert refused.status_code == 422, (body, refused.text)
         assert _code(refused).endswith("ONTOLOGY-0024")
 
-    # 인터페이스를 참조 대상 · 관계 끝으로 쓰는 것은 아직 막는다(말하고 막는다).
+    # 인터페이스를 참조 대상으로 쓰는 것은 아직 막는다(말하고 막는다). 관계 끝은 된다 —
+    # `test_interface_relations.py`.
     kind = _make_type(client, admin)
     ref = client.post(
         f"/api/ontology/types/{kind}/properties",
@@ -375,12 +376,6 @@ def test_공통_속성이_될_수_없는_것과_아직_대상이_될_수_없는_
         headers=admin.headers,
     )
     assert ref.status_code == 422 and _code(ref).endswith("ONTOLOGY-0024")
-    rel = client.post(
-        "/api/ontology/relation-types",
-        json={"slug": _uniq("uses"), "label": "사용", "dst_type_slugs": [iface]},
-        headers=admin.headers,
-    )
-    assert rel.status_code == 422 and _code(rel).endswith("ONTOLOGY-0024")
 
 
 # --- 파일 · 스냅샷 · 묶음 ---------------------------------------------------------

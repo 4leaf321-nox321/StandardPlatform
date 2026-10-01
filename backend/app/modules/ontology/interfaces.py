@@ -37,8 +37,8 @@ from typing import Any
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
-from app.modules.objects.models import ObjectInstance
-from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef
+from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
+from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef, RelationType
 
 #: 같아야 하는 칸. **필수(`required`)는 따로 본다** — 한 방향이라서.
 SHAPE_FIELDS: tuple[str, ...] = (
@@ -244,7 +244,7 @@ def namespace_error(
 
 
 def target_error(slug: str | None, interfaces: Iterable[str], *, what: str) -> str | None:
-    """인터페이스를 **참조 대상 · 관계 끝**으로 쓰는 것은 아직 막는다.
+    """인터페이스를 **참조 대상**으로 쓰는 것은 아직 막는다(관계 끝은 된다 — `Ends`).
 
     받아들이려면 저장할 때 대상 타입을 확인하는 길 · 일괄 입력의 이름 풀이 · 지우기 전 확인이
     인터페이스를 알아야 한다(ADR 0006 의 다음 단계). 그 전에 받으면 조용히 「제약 없음」 으로
@@ -256,6 +256,81 @@ def target_error(slug: str | None, interfaces: Iterable[str], *, what: str) -> s
             "아직 안 됩니다. 구현 타입을 적으세요."
         )
     return None
+
+
+# --- 끝에 적힌 slug — 타입 또는 인터페이스 ---------------------------------------
+
+
+@dataclass
+class Ends:
+    """관계 끝(그리고 7단계부터 참조 대상)에 적힌 slug 를 **타입으로 편다.**
+
+    끝에는 타입과 인터페이스가 섞여 적힌다. 「설비」 는 그것을 구현한 타입 전부(상위
+    인터페이스를 거쳐 구현한 것까지)다. 정의 한 벌을 한 번 읽어 여러 줄에 쓴다 — 일괄 입력이
+    줄마다 부른다.
+
+    **비어 있는 것과 아무것도 없는 것은 다르다.** 끝을 안 적었으면(`None` · 빈 목록) 제약이
+    없고, 구현 타입이 없는 인터페이스만 적었으면 **아무 타입도 안 된다**(`set()`). 둘을 섞으면
+    구현 타입이 없는 인터페이스를 끝으로 둔 관계가 아무것이나 잇는다.
+    """
+
+    labels: dict[str, str] = field(default_factory=dict)
+    """타입 · 인터페이스 slug → 이름 — 오류 문구가 쓴다."""
+    interfaces: set[str] = field(default_factory=set)
+    reach: dict[str, set[str]] = field(default_factory=dict)
+    """타입 slug → 그 타입이 설 수 있는 끝의 slug(자기 · 구현한 인터페이스와 그 위)."""
+
+    def reach_of(self, type_slug: str) -> set[str]:
+        return self.reach.get(type_slug, {type_slug})
+
+    def expand(self, slugs: Iterable[str] | None) -> set[str] | None:
+        """적힌 끝 → 설 수 있는 타입 slug. 안 적었으면 `None`(제약 없음)."""
+        wanted = set(slugs or ())
+        if not wanted:
+            return None
+        return {slug for slug, reach in self.reach.items() if reach & wanted}
+
+    def types_of(self, slugs: Iterable[str]) -> list[str]:
+        """적힌 순서대로 펴서 — 인터페이스 자리에 그 구현 타입들이 선다. 모르는 slug 는 그대로
+        둔다(부르는 쪽이 「없는 타입」 을 말한다)."""
+        out: list[str] = []
+        for one in slugs:
+            if one in self.interfaces:
+                out += sorted(slug for slug, reach in self.reach.items() if one in reach)
+            else:
+                out.append(one)
+        return list(dict.fromkeys(out))
+
+    def allows(self, slugs: Iterable[str] | None, type_slug: str) -> bool:
+        wanted = set(slugs or ())
+        return not wanted or bool(self.reach_of(type_slug) & wanted)
+
+    def describe(self, slugs: Iterable[str]) -> str:
+        """사람이 읽는 끝 — 인터페이스는 「설비를 구현한 타입」 으로."""
+        return ", ".join(
+            f"{self.labels.get(one, one)}을(를) 구현한 타입"
+            if one in self.interfaces
+            else self.labels.get(one, one)
+            for one in slugs
+        )
+
+
+def load_ends(db: Session) -> Ends:
+    """`Ends` 를 한 벌 — 속성은 안 읽는다(`load` 보다 가볍다). 관계를 맺을 때마다 부른다."""
+    out = Ends()
+    extends_of: dict[str, list[str]] = {}
+    for slug, label, extends in db.execute(
+        select(ObjectInterface.slug, ObjectInterface.label, ObjectInterface.extends_slugs)
+    ):
+        out.labels[slug] = label
+        out.interfaces.add(slug)
+        extends_of[slug] = list(extends or [])
+    for slug, label, declared in db.execute(
+        select(ObjectType.slug, ObjectType.label, ObjectType.interface_slugs)
+    ):
+        out.labels[slug] = label
+        out.reach[slug] = {slug, *closure(declared or [], extends_of)}
+    return out
 
 
 # --- 상위 인터페이스 ------------------------------------------------------------
@@ -738,4 +813,56 @@ def risks(db: Session, bindings: Iterable[Binding]) -> list[str]:
                     f"{', '.join(removed)} 을(를) 뺍니다. 그 값을 가진 객체는 "
                     "**고칠 때 거절**됩니다."
                 )
+    return out
+
+
+def unimplement_risks(
+    db: Session, type_slug: str, before: Iterable[str], after: Iterable[str]
+) -> list[str]:
+    """구현을 해제하면 **관계 끝에서 빠지는 것** — 이미 이은 선은 남지만 새로 잇지 못한다.
+
+    끝에 인터페이스를 적은 관계는 그 인터페이스를 구현한 타입을 받는다. 구현을 해제한 타입의
+    선은 지우지 않는다(그 선이 틀렸다는 뜻이 아니다) — 대신 그 사실을 저장 전에 말한다.
+    """
+    extends_of = {
+        slug: list(extends or [])
+        for slug, extends in db.execute(
+            select(ObjectInterface.slug, ObjectInterface.extends_slugs)
+        )
+    }
+    reach_after = {type_slug, *closure(after, extends_of)}
+    lost = {type_slug, *closure(before, extends_of)} - reach_after
+    if not lost:
+        return []
+    mine = select(ObjectInstance.id).join(ObjectType, ObjectType.id == ObjectInstance.type_id)
+    mine = mine.where(ObjectType.slug == type_slug)
+    out: list[str] = []
+    for kind in db.scalars(select(RelationType).order_by(RelationType.slug)):
+        for side, ends, edge_end, link_type in (
+            ("출발", kind.src_type_slugs, ObjectRelation.src_object_id, ObjectLink.src_type),
+            ("도착", kind.dst_type_slugs, ObjectRelation.dst_object_id, ObjectLink.dst_type),
+        ):
+            named = set(ends or ())
+            if not named & lost or named & reach_after:
+                continue
+            count = int(
+                db.scalar(
+                    select(func.count())
+                    .select_from(ObjectRelation)
+                    .where(ObjectRelation.relation == kind.slug, edge_end.in_(mine))
+                )
+                or 0
+            ) + int(
+                db.scalar(
+                    select(func.count())
+                    .select_from(ObjectLink)
+                    .where(ObjectLink.relation == kind.slug, link_type == type_slug)
+                )
+                or 0
+            )
+            out.append(
+                f"관계 {kind.slug}: 구현을 해제하면 타입 {type_slug} 은(는) {side} 끝"
+                f"({', '.join(sorted(named & lost))})에 더는 안 맞습니다 — 이미 이은 "
+                f"{count}건은 남지만 새로 잇지는 못합니다."
+            )
     return out

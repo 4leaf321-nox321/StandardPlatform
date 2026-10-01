@@ -4,12 +4,15 @@
  * **여기서 정하는 것이 관계의 의미다.** 코드에 암묵이면 화면도 MCP 도 그 뜻을
  * 알 방법이 없다 — 어느 쪽으로 읽는지, 재귀로 펼치는지, 무엇과 무엇을 이을 수
  * 있는지를 데이터가 들고 있어야 한다.
+ *
+ * 끝에는 **인터페이스**도 고른다(ADR 0006) — 「설비를 교정함」 이면 설비를 구현한 타입 전부가
+ * 도착점이 되고, 구현 타입이 늘어도 이 관계 종류는 안 고친다.
  */
 
 import { useState } from 'react'
 
 import { ontologyApi } from '@/modules/ontology/api'
-import type { Cardinality, ObjectType, RelationType } from '@/modules/ontology/api'
+import type { Cardinality, ObjectInterface, ObjectType, RelationType } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
@@ -47,11 +50,19 @@ const CARDINALITY_HINTS: Record<Cardinality, string> = {
 interface Props {
   relation?: RelationType | null
   types: ObjectType[]
+  /** 끝으로 고를 수 있는 인터페이스. */
+  interfaces?: ObjectInterface[]
   onClose: () => void
   onChanged: () => void
 }
 
-export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: Props) {
+export function RelationTypeEditDialog({
+  relation,
+  types,
+  interfaces = [],
+  onClose,
+  onChanged,
+}: Props) {
   const editing = Boolean(relation)
 
   const [slug, setSlug] = useState(relation?.slug ?? '')
@@ -201,6 +212,7 @@ export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: 
                   title="출발 타입"
                   hint="비우면 아무 타입이나 출발점이 됩니다."
                   types={types}
+                  interfaces={interfaces}
                   chosen={src}
                   onChange={setSrc}
                 />
@@ -208,6 +220,7 @@ export function RelationTypeEditDialog({ relation, types, onClose, onChanged }: 
                   title="도착 타입"
                   hint="비우면 아무 타입이나 도착점이 됩니다. 안 정하면 「공급사를 시험함」 같은 말이 안 되는 관계가 남습니다."
                   types={types}
+                  interfaces={interfaces}
                   chosen={dst}
                   onChange={setDst}
                 />
@@ -322,15 +335,23 @@ function TypePicker({
   title,
   hint,
   types,
+  interfaces,
   chosen,
   onChange,
 }: {
   title: string
   hint: string
   types: ObjectType[]
+  interfaces: ObjectInterface[]
   chosen: string[]
   onChange: (next: string[]) => void
 }) {
+  const toggle = (slug: string) =>
+    onChange(chosen.includes(slug) ? chosen.filter((s) => s !== slug) : [...chosen, slug])
+  /** 구현한 타입이 없는 인터페이스 — 고르면 **아무것도 못 잇는다.** 고른 자리에서 말한다. */
+  const empty = interfaces.filter(
+    (one) => chosen.includes(one.slug) && one.implementers.length === 0,
+  )
   return (
     <div className="space-y-1.5">
       <Label>{title}</Label>
@@ -344,22 +365,48 @@ function TypePicker({
                 type="checkbox"
                 className="size-4"
                 checked={chosen.includes(one.slug)}
-                onChange={() =>
-                  onChange(
-                    chosen.includes(one.slug)
-                      ? chosen.filter((s) => s !== one.slug)
-                      : [...chosen, one.slug],
-                  )
-                }
+                onChange={() => toggle(one.slug)}
               />
               {one.label}
             </label>
           ))}
         </div>
       )}
+      {interfaces.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 border-t border-dashed pt-1.5">
+          <span className="text-muted-foreground text-xs">인터페이스</span>
+          {interfaces.map((one) => (
+            <label key={one.slug} className="flex items-center gap-1.5 text-sm">
+              <input
+                type="checkbox"
+                className="size-4"
+                checked={chosen.includes(one.slug)}
+                onChange={() => toggle(one.slug)}
+              />
+              {one.label}
+              <span className="text-muted-foreground text-xs">
+                (구현 타입 {one.implementers.length})
+              </span>
+            </label>
+          ))}
+        </div>
+      )}
       <p className="text-muted-foreground text-xs">
         {chosen.length === 0 ? <b>제약 없음 — {hint}</b> : hint}
+        {interfaces.length > 0 && (
+          <>
+            {' '}
+            인터페이스를 고르면 그것을 구현한 타입이 됩니다 — 구현 타입이 늘어도 여기는
+            그대로입니다.
+          </>
+        )}
       </p>
+      {empty.length > 0 && (
+        <p className="text-destructive text-xs">
+          {empty.map((one) => one.label).join(' · ')}을(를) 구현한 타입이 없어, 지금은 그쪽으로
+          아무것도 잇지 못합니다.
+        </p>
+      )}
     </div>
   )
 }

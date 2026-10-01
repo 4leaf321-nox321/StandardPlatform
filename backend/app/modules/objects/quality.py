@@ -28,6 +28,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.objects import aliases, system
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
+from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared import extensions
 from app.shared.permissions import is_any_manager, visible_owner_clause
@@ -154,14 +155,19 @@ def _missing_required(
 
 
 def _orphans(
-    db: Session, user: User, object_type: ObjectType, kinds: list[RelationType]
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    kinds: list[RelationType],
+    ends: interfaces.Ends,
 ) -> Finding | None:
-    # 이 타입이 끝점이 될 수 있는 관계 종류가 하나라도 있어야 「고아」 가 뜻을 갖는다.
+    # 이 타입이 끝점이 될 수 있는 관계 종류가 하나라도 있어야 「고아」 가 뜻을 갖는다. 끝에
+    # 인터페이스가 적혔으면 그것을 구현한 타입도 끝점이 된다.
     applies = any(
         one.is_active
         and (
-            (one.src_type_slugs is None or object_type.slug in one.src_type_slugs)
-            or (one.dst_type_slugs is None or object_type.slug in one.dst_type_slugs)
+            ends.allows(one.src_type_slugs, object_type.slug)
+            or ends.allows(one.dst_type_slugs, object_type.slug)
         )
         for one in kinds
     )
@@ -387,6 +393,7 @@ def report(
         )
     )
     relation_kinds = list(db.scalars(select(RelationType)))
+    ends = interfaces.load_ends(db)
     defs_by_type: dict[uuid.UUID, list[PropertyDef]] = {}
     for d in db.scalars(select(PropertyDef).where(PropertyDef.owner_kind == "type")):
         defs_by_type.setdefault(d.owner_id, []).append(d)
@@ -416,7 +423,9 @@ def report(
             _missing_required(db, user, object_type, defs)
             if "missing_required" in kinds
             else None,
-            _orphans(db, user, object_type, relation_kinds) if "orphan" in kinds else None,
+            _orphans(db, user, object_type, relation_kinds, ends)
+            if "orphan" in kinds
+            else None,
             _broken_refs(db, user, object_type, defs, world, rows)
             if "broken_ref" in kinds and not big
             else None,

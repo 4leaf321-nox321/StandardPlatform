@@ -52,3 +52,48 @@ export function defaultInterfaceColumns(defs: PropertyDef[]): string[] {
       .map((one) => `properties.${one.key}`),
   ]
 }
+
+/**
+ * 관계 끝(출발 · 도착)에 적힌 slug — **타입 또는 인터페이스.** 인터페이스면 그것을 구현한 타입이
+ * 선다(서버의 `interfaces.Ends` 와 같은 규칙). 끝을 안 적었으면 제약이 없다.
+ */
+export function endAllows(
+  slugs: string[] | null | undefined,
+  typeSlug: string,
+  interfaces: ObjectInterface[],
+): boolean {
+  if (!slugs || slugs.length === 0) return true
+  return slugs.some(
+    (slug) =>
+      slug === typeSlug ||
+      Boolean(interfaces.find((one) => one.slug === slug)?.implementers.includes(typeSlug)),
+  )
+}
+
+/**
+ * 끝에 적힌 slug 를 타입으로 편다. 안 적었으면 `null`(아무 타입이나). **구현한 타입이 없는
+ * 인터페이스만 적혔으면 빈 목록이다** — 그것을 「제약 없음」 으로 읽으면 아무것이나 고르게 된다.
+ */
+export function endTypeSlugs(
+  slugs: string[] | null | undefined,
+  interfaces: ObjectInterface[],
+): string[] | null {
+  if (!slugs || slugs.length === 0) return null
+  const out: string[] = []
+  for (const slug of slugs) {
+    const iface = interfaces.find((one) => one.slug === slug)
+    for (const one of iface ? iface.implementers : [slug]) if (!out.includes(one)) out.push(one)
+  }
+  return out
+}
+
+/** 끝 하나의 이름 — 인터페이스는 그렇다고 적는다(「설비(인터페이스)」). */
+export function endLabel(
+  slug: string,
+  types: { slug: string; label: string }[],
+  interfaces: ObjectInterface[],
+): string {
+  const iface = interfaces.find((one) => one.slug === slug)
+  if (iface) return `${iface.label}(인터페이스)`
+  return types.find((one) => one.slug === slug)?.label ?? slug
+}

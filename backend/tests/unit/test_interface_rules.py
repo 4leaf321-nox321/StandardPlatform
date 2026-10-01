@@ -152,3 +152,32 @@ def test_두_인터페이스가_같은_키를_다르게_정하면_구현할_수_
     both.types["t"].interfaces = ["a", "c"]
     [made] = rules.plan_bindings(before, both)
     assert made.action == "create" and made.shape is not None and made.shape.required
+
+
+def _ends() -> rules.Ends:
+    """설비(equip) ⊂ 자산(asset). 시험장비는 설비를 구현, 부품은 아무것도, 외톨이(lonely)는
+    구현한 타입이 없다."""
+    return rules.Ends(
+        labels={"equip": "설비", "asset": "자산", "lonely": "외톨이", "tester": "시험장비"},
+        interfaces={"equip", "asset", "lonely"},
+        reach={"tester": {"tester", "equip", "asset"}, "part": {"part"}},
+    )
+
+
+def test_끝을_안_적은_것과_아무것도_없는_것은_다르다() -> None:
+    ends = _ends()
+    assert ends.expand(None) is None and ends.expand([]) is None
+    # 구현한 타입이 없는 인터페이스 — **빈 집합**이다. 「제약 없음」 이 아니다.
+    assert ends.expand(["lonely"]) == set()
+    assert not ends.allows(["lonely"], "part")
+    assert ends.allows(None, "part")
+
+
+def test_인터페이스_끝은_상위를_거쳐_구현한_타입까지_편다() -> None:
+    ends = _ends()
+    assert ends.expand(["asset"]) == {"tester"}
+    assert ends.expand(["asset", "part"]) == {"tester", "part"}
+    assert ends.allows(["asset"], "tester") and not ends.allows(["asset"], "part")
+    # 순서대로 — 인터페이스 자리에 구현 타입이. 모르는 slug 는 그대로(부르는 쪽이 말한다).
+    assert ends.types_of(["part", "equip", "ghost"]) == ["part", "tester", "ghost"]
+    assert ends.describe(["equip", "part"]) == "설비을(를) 구현한 타입, part"

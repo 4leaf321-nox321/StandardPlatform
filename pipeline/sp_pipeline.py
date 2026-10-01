@@ -21,6 +21,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import hashlib
 import json
 import os
@@ -814,9 +815,11 @@ def check_endpoints(run: Run, server: str, token: str) -> Report:
       붙는다(그 사실은 아무 데도 안 적힌다)
     """
     report = Report()
+    # 이 실행의 정의가 만드는 타입 · 인터페이스 — 플랫폼에 아직 없어도 된다.
     defined: set[str] = {
         str(one.get("slug"))
-        for one in (((run.ontology or {}).get("types") or []) if run.ontology else [])
+        for key in ("types", "interfaces")
+        for one in (((run.ontology or {}).get(key) or []) if run.ontology else [])
         if isinstance(one, dict)
     }
     ref_of: dict[str, dict[str, str]] = {}
@@ -895,9 +898,27 @@ def check_endpoints(run: Run, server: str, token: str) -> Report:
         for one in ends:
             asked.setdefault(one, set()).add(text)
 
+    # 끝에 **인터페이스**가 적혔으면 그것을 구현한 타입이 만드는 것도 「이 실행이 만드는 것」
+    # 이다. 구현은 실행 폴더의 정의가 먼저고, 플랫폼에 이미 있는 것은 물어서 안다.
+    members: dict[str, set[str]] = {}
+    for one in ((run.ontology or {}).get("types") or []) if run.ontology else []:
+        if isinstance(one, dict):
+            for name in one.get("interface_slugs") or []:
+                members.setdefault(str(name), set()).add(str(one.get("slug")))
+    if set(asked) - defined - {batch.type_slug for batch in run.objects}:
+        with contextlib.suppress(Stop):
+            for one in _get_json(server, token, "/api/ontology/interfaces") or []:
+                if isinstance(one, dict):
+                    members.setdefault(str(one.get("slug")), set()).update(
+                        str(x) for x in one.get("implementers") or []
+                    )
+
     settled: dict[str, set[str]] = {}
     for type_slug, names in sorted(asked.items()):
-        left = sorted(names - (making.get(type_slug) or set()))
+        made_here = set(making.get(type_slug) or set())
+        for member in members.get(type_slug) or ():
+            made_here |= making.get(member) or set()
+        left = sorted(names - made_here)
         if not left:
             continue
         found = resolve_names(server, token, type_slug, left)

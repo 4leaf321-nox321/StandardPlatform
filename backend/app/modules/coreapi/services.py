@@ -429,7 +429,8 @@ def open_relation_kinds(
 
     한쪽 끝이 안 열린 타입이면 보내지 않는다 — 받는 쪽은 찾을 수 없는 끝점을 쥐게 되고,
     그것은 「우리 쪽 데이터가 이상하다」 로 읽힌다. 끝 타입을 안 적은 종류(NULL = 제약
-    없음)도 보내지 않는다: 무엇이 올지 우리도 모르는 선을 밖으로 내보낼 수는 없다.
+    없음)도 보내지 않는다: 무엇이 올지 우리도 모르는 선을 밖으로 내보낼 수는 없다. 끝에
+    **인터페이스**를 적은 종류도 아직 안 연다 — 코어는 타입만 약속한다(ADR 0006).
     """
     out: list[RelationType] = []
     for kind in db.scalars(select(RelationType).order_by(RelationType.slug)):

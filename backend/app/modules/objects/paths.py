@@ -38,7 +38,7 @@ from sqlalchemy.orm import Session
 from app.modules.objects import system
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.objects.scope import Scope, as_scope
-from app.modules.objects.services import properties_of
+from app.modules.objects.scope import find as find_scope
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared.errors import AppError, code
 
@@ -66,9 +66,10 @@ class Hop:
     name: str
     label: str
     target_slugs: list[str]
-    target: ObjectType | None
-    """칸을 고를 수 있는 상대 타입 — **하나로 정해지고 원 표를 비추지 않을 때만.** 여럿이면
-    「국가」 가 어느 타입의 국가인지 정해지지 않는다."""
+    target: Scope | None
+    """칸을 고를 수 있는 상대 — **하나로 정해지고 원 표를 비추지 않을 때만.** 여럿이면
+    「국가」 가 어느 타입의 국가인지 정해지지 않는다. 인터페이스 하나면 그 공통 속성을 고른다 —
+    구현 타입이 같은 키 · 같은 모양으로 가지므로 어느 타입의 「국가」 든 같은 칸이다."""
     target_defs: list[PropertyDef]
     many: bool
     """한 객체에 여럿이 이어질 수 있나. 그러면 한 행이 여러 막대에 든다."""
@@ -138,13 +139,21 @@ class Resolver:
 
     def _load(self) -> list[Hop]:
         db = self.db
-        types = {row.slug: row for row in db.scalars(select(ObjectType))}
+        targets: dict[str, Scope | None] = {}
 
-        def fields_of(slug: str | None) -> tuple[ObjectType | None, list[PropertyDef]]:
-            target = types.get(slug or "")
-            if target is None or system.is_system(target):
+        def fields_of(slug: str | None) -> tuple[Scope | None, list[PropertyDef]]:
+            """상대 하나 — 타입이면 그 속성, 인터페이스면 공통 속성. 걸음마다 안 읽는다."""
+            if not slug:
                 return None, []
-            return target, properties_of(db, target.id)
+            if slug not in targets:
+                found = find_scope(db, slug)
+                one_type = found.object_type if found is not None else None
+                # 원 표를 비추는 타입(부서 · 계정)은 칸 정의가 없다.
+                if one_type is not None and system.is_system(one_type):
+                    found = None
+                targets[slug] = found
+            target = targets[slug]
+            return (target, target.defs) if target is not None else (None, [])
 
         out: list[Hop] = []
         for one in self.scope.defs:

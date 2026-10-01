@@ -20,9 +20,10 @@
 import { ArrowDown, ArrowUp, Plus, X } from 'lucide-react'
 
 import { ROLLUP_FNS } from '@/modules/ontology/api'
-import { defaultInterfaceColumns } from '@/modules/ontology/interfaces'
+import { defaultInterfaceColumns, endAllows } from '@/modules/ontology/interfaces'
 import type {
   ListView,
+  ObjectInterface,
   PropertyDef,
   RelationType,
   RollupFn,
@@ -80,6 +81,8 @@ interface Props {
   onChange: (next: ListView) => void
   /** 누구의 목록인가. 기본은 타입. */
   owner?: Owner
+  /** 인터페이스 — 끝이 인터페이스인 관계도 트리로 고를 수 있게(구현 타입이면 된다). */
+  interfaces?: ObjectInterface[]
 }
 
 function fieldOptions(defs: PropertyDef[], owner: Owner = 'type'): { id: string; label: string }[] {
@@ -177,6 +180,7 @@ export function ListViewEditor({
   value,
   onChange,
   owner = 'type',
+  interfaces = [],
 }: Props) {
   const all = fieldOptions(defs, owner)
   const chosen = value.columns ?? []
@@ -347,6 +351,7 @@ export function ListViewEditor({
       {owner === 'type' && (
         <TreeSection
           relationTypes={relationTypes}
+          interfaces={interfaces}
           typeSlug={typeSlug}
           value={value}
           onChange={onChange}
@@ -425,11 +430,13 @@ function Toggles({
  */
 function TreeSection({
   relationTypes,
+  interfaces,
   typeSlug,
   value,
   onChange,
 }: {
   relationTypes: RelationType[]
+  interfaces: ObjectInterface[]
   typeSlug: string
   value: ListView
   onChange: (next: ListView) => void
@@ -438,9 +445,9 @@ function TreeSection({
     (one) =>
       one.is_active &&
       one.transitive &&
-      // 양끝 중 어느 쪽이든 이 타입이 낄 수 있어야 트리가 그려진다.
-      (!one.src_type_slugs || one.src_type_slugs.includes(typeSlug)) &&
-      (!one.dst_type_slugs || one.dst_type_slugs.includes(typeSlug)),
+      // 양끝 다 이 타입이 낄 수 있어야 트리가 그려진다. 끝이 인터페이스면 구현 타입이면 된다.
+      endAllows(one.src_type_slugs, typeSlug, interfaces) &&
+      endAllows(one.dst_type_slugs, typeSlug, interfaces),
   )
   const chosen = value.tree?.relation ?? NO_TREE
   const parent = value.tree?.parent ?? 'dst'

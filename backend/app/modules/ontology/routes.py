@@ -622,12 +622,13 @@ def implement_plan(
     """구현하면 무엇이 되는가 — **아무것도 안 바꾼다.** 화면이 저장 전에 이것을 보여 준다:
     만들 속성 · 채택할 속성 · 모양이 달라 구현할 수 없는 곳(무엇이 다른지)."""
     row = _type(db, slug)
+    wanted = interfaces.normalized_slugs(payload.interface_slugs)
     bindings = _implementation(
         interfaces.load(db),
         slug=row.slug,
         label=row.label,
         kind_class=row.kind_class,
-        wanted=interfaces.normalized_slugs(payload.interface_slugs),
+        wanted=wanted,
     )
 
     def item(one: interfaces.Binding) -> ImplementItemOut:
@@ -640,7 +641,10 @@ def implement_plan(
         ],
         syncs=[item(one) for one in bindings if not one.fresh and one.action == "sync"],
         conflicts=interfaces.conflicts(bindings),
-        warnings=interfaces.risks(db, bindings),
+        warnings=[
+            *interfaces.risks(db, bindings),
+            *interfaces.unimplement_risks(db, row.slug, row.interface_slugs or [], wanted),
+        ],
     )
 
 
@@ -757,23 +761,19 @@ def _relation_type(db: Session, slug: str) -> RelationType:
 
 
 def _check_type_slugs(db: Session, slugs: list[str] | None, *, what: str) -> None:
-    """허용 타입이 **실재하는 타입인가.**
+    """허용 타입이 **실재하는 타입 · 인터페이스인가.** 인터페이스면 그것을 구현한 타입이 된다.
 
     없는 slug 를 넣어 두면 그 관계는 아무것도 못 맺는데, 화면은 「고를 것이
     없습니다」 라고만 말한다 — 오타인지 데이터가 없는 것인지 구별되지 않는다.
     """
     if not slugs:
         return
-    known_ifaces = _interface_slugs(db)
-    for one in slugs:
-        wrong = interfaces.target_error(one, known_ifaces, what="관계 끝")
-        if wrong:
-            raise InvalidValue(code("ONTOLOGY", 24), wrong)
-    known = {row.slug for row in db.scalars(select(ObjectType))}
+    known = {row.slug for row in db.scalars(select(ObjectType))} | _interface_slugs(db)
     missing = sorted(set(slugs) - known)
     if missing:
         raise NotFound(
-            code("ONTOLOGY", 41), f"{what}에 없는 타입이 있습니다: {', '.join(missing)}"
+            code("ONTOLOGY", 41),
+            f"{what}에 없는 타입 · 인터페이스가 있습니다: {', '.join(missing)}",
         )
 
 

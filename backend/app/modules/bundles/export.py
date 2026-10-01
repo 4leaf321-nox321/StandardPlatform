@@ -110,14 +110,6 @@ def export_group(
         )
 
     schema = importer.capture(db)
-    relation_types = [
-        one
-        for one in schema["relation_types"]
-        if one.get("src_type_slugs")
-        and one.get("dst_type_slugs")
-        and set(one["src_type_slugs"]) <= slugs
-        and set(one["dst_type_slugs"]) <= slugs
-    ]
     # **타입이 구현한 인터페이스를 함께 싣는다**(상위 인터페이스까지) — 안 실으면 받는 쪽에서
     # 「없는 인터페이스를 구현한다」 로 묶음 전체가 거절된다.
     carried = set(
@@ -126,6 +118,16 @@ def export_group(
             interfaces.load(db).extends_of(),
         )
     )
+    # 관계 종류는 **양끝이 다 실릴 때만** — 끝에 적힌 인터페이스도 함께 실리면 된다.
+    inside = slugs | carried
+    relation_types = [
+        one
+        for one in schema["relation_types"]
+        if one.get("src_type_slugs")
+        and one.get("dst_type_slugs")
+        and set(one["src_type_slugs"]) <= inside
+        and set(one["dst_type_slugs"]) <= inside
+    ]
     ontology = {
         "groups": [one for one in schema["groups"] if one["slug"] in set(wanted)],
         "interfaces": [one for one in schema["interfaces"] if one["slug"] in carried],

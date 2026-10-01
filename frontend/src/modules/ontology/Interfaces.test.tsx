@@ -6,6 +6,8 @@
  * - 타입 쪽에서 공통 속성을 열면 모양 칸이 잠기고 어느 인터페이스에서 고치는지 적힌다.
  * - 인터페이스의 공통 속성에는 타입마다 정하는 칸(유일 · 기본값)이 없고, 파일 종류도 없다.
  * - 인터페이스 목록의 열에는 「타입」 이 있고, 트리 · 필터 칸은 없다(서버가 받는 범위와 같다).
+ * - 관계 종류의 끝에 인터페이스를 고를 수 있고, 구현한 타입이 없는 것을 고르면 그 자리에서
+ *   「아무것도 못 잇는다」 고 말한다.
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -19,6 +21,7 @@ const ontologyApi = vi.hoisted(() => ({
   createInterfaceProperty: vi.fn(),
   propertyUsage: vi.fn(),
   updateInterface: vi.fn(),
+  createRelationType: vi.fn(),
 }))
 vi.mock('@/modules/ontology/api', async (original) => {
   const real = await original<typeof import('@/modules/ontology/api')>()
@@ -226,6 +229,39 @@ describe('인터페이스 목록 화면', () => {
       expect(ontologyApi.updateInterface).toHaveBeenCalledWith(
         'equip',
         expect.objectContaining({ list_view: { columns: ['type'] } }),
+      ),
+    )
+  })
+})
+
+describe('관계 종류의 끝에 인터페이스', () => {
+  it('고르면 그 slug 로 나가고, 구현한 타입이 없으면 고른 자리에서 말한다', async () => {
+    ontologyApi.createRelationType.mockResolvedValue({})
+    const { RelationTypeEditDialog } = await import('@/modules/ontology/RelationTypeEditDialog')
+    render(
+      <RelationTypeEditDialog
+        types={[TYPE as never]}
+        interfaces={[
+          { ...IFACE, implementers: ['tester'] },
+          { ...IFACE, slug: 'lonely', label: '외톨이' },
+        ]}
+        onClose={vi.fn()}
+        onChanged={vi.fn()}
+      />,
+    )
+    await userEvent.type(screen.getByLabelText('slug'), 'calibrates')
+    await userEvent.type(screen.getByLabelText('이름 (→ 방향)'), '교정')
+    // 두 번째 고르개가 도착이다.
+    await userEvent.click(screen.getAllByRole('checkbox', { name: /설비/ })[1])
+    expect(screen.queryByText(/아무것도 잇지 못합니다/)).not.toBeInTheDocument()
+    await userEvent.click(screen.getAllByRole('checkbox', { name: /외톨이/ })[1])
+    expect(screen.getByText(/외톨이을\(를\) 구현한 타입이 없어/)).toBeInTheDocument()
+    await userEvent.click(screen.getAllByRole('checkbox', { name: /외톨이/ })[1])
+
+    await userEvent.click(screen.getByRole('button', { name: '생성' }))
+    await waitFor(() =>
+      expect(ontologyApi.createRelationType).toHaveBeenCalledWith(
+        expect.objectContaining({ slug: 'calibrates', dst_type_slugs: ['equip'] }),
       ),
     )
   })
