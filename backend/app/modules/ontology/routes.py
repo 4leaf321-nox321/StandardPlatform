@@ -29,6 +29,7 @@ from app.modules.ontology import (
     interfaces,
     managed,
     reset,
+    retype,
     views,
 )
 from app.modules.ontology import (
@@ -89,6 +90,11 @@ from app.modules.ontology.schemas import (
     ResetItemOut,
     ResetPlanOut,
     ResetRequest,
+    RetypeOut,
+    RetypeRequest,
+    RetypeSampleOut,
+    RetypeTypeOut,
+    RetypeValueOut,
     SnapshotOut,
     SystemSourceOut,
 )
@@ -1307,9 +1313,9 @@ def update_interface_property(
     if payload.data_type != row.data_type:
         raise Conflict(
             code("ONTOLOGY", 35),
-            f"속성 종류는 바꿀 수 없습니다({row.data_type} → {payload.data_type}). "
-            "구현 타입마다 저장된 값이 새 종류에 안 맞아도 화면이 그것을 말해 주지 못합니다. "
-            "새 공통 속성을 만들어 옮기세요.",
+            f"속성 종류는 수정으로 바꾸지 않습니다({row.data_type} → {payload.data_type}) — "
+            "「종류 변경」(POST …/retype)이 구현 타입마다 저장된 값을 변환하는 계획을 먼저 "
+            "보여 줍니다.",
         )
     catalog = interfaces.load(db)
     bindings = interfaces.plan_bindings(catalog, _with_property(catalog, slug, key, payload))
@@ -1592,15 +1598,14 @@ def update_property(
                 details={"interface": iface, "fields": moved},
             )
 
-    # **키와 종류는 안 바꾼다.** 키를 바꾸면 이미 저장된 값이 전부 고아가 되고,
-    # 종류를 바꾸면 그 값들이 새 종류에 안 맞는데 **화면은 아무 말도 안 한다.**
-    # 바꾸려면 새 속성을 만들고 옮긴다.
+    # **키와 종류는 수정으로 안 바꾼다.** 키를 바꾸면 이미 저장된 값이 전부 고아가 되고,
+    # 종류만 바꾸면 그 값들이 새 종류에 안 맞는데 **화면은 아무 말도 안 한다.** 종류는
+    # 「종류 변경」(`retype_property`)이 저장값을 변환하는 계획을 먼저 보여 주고 바꾼다.
     if payload.data_type != row.data_type:
         raise Conflict(
             code("ONTOLOGY", 35),
-            f"속성 종류는 바꿀 수 없습니다({row.data_type} → {payload.data_type}). "
-            "이미 저장된 값이 새 종류에 안 맞아도 화면이 그것을 말해 주지 못합니다. "
-            "새 속성을 만들어 옮기세요.",
+            f"속성 종류는 수정으로 바꾸지 않습니다({row.data_type} → {payload.data_type}) — "
+            "「종류 변경」(POST …/retype)이 저장된 값을 변환하는 계획을 먼저 보여 줍니다.",
         )
     row.label = payload.label
     row.unit = payload.unit
@@ -1692,6 +1697,265 @@ def promote_property(
         db.rollback()
         return _promote_out(plan, applied=False, snapshot_id=None)
     return _promote_out(plan, applied=True, snapshot_id=snapshot_id)
+
+
+# --- 종류 변경 -------------------------------------------------------------------
+
+#: 대체 값 상한 — 계획이 보여 주는 변환할 수 없는 값(300종)보다 넉넉히.
+MAPPING_MAX = 1000
+MAPPING_TEXT_MAX = 500
+
+
+def _retype_wanted(payload: RetypeRequest, *, with_unique: bool) -> dict[str, Any]:
+    """종류 변경이 덮을 칸 — 보낸 것만(`None` 이면 지금 그대로)."""
+    wanted: dict[str, Any] = {
+        "data_type": payload.data_type,
+        "enum_options": payload.enum_options,
+        "min_value": payload.min_value,
+        "max_value": payload.max_value,
+        "decimals": payload.decimals,
+        "pattern": payload.pattern,
+    }
+    if payload.unit is not None:
+        wanted["unit"] = payload.unit.strip()
+    if with_unique and payload.unique is not None:
+        wanted["unique"] = payload.unique
+    return wanted
+
+
+def _check_retype(before: str, payload: RetypeRequest, *, name: str) -> None:
+    require_choice(payload.data_type, DATA_TYPES, what="속성 종류")
+    wrong = retype.unsupported(before, payload.data_type)
+    if wrong:
+        raise Conflict(code("ONTOLOGY", 64), f"{name}: {wrong}")
+    _check_shape_fields(
+        payload.data_type, payload.enum_options, payload.min_value, payload.max_value
+    )
+    too_long = [
+        key
+        for key, value in payload.mapping.items()
+        if len(key) > MAPPING_TEXT_MAX or (value is not None and len(value) > MAPPING_TEXT_MAX)
+    ]
+    if len(payload.mapping) > MAPPING_MAX or too_long:
+        raise InvalidValue(
+            code("ONTOLOGY", 65),
+            f"대체 값은 {MAPPING_MAX}개까지, 값마다 {MAPPING_TEXT_MAX}자까지입니다 — 그보다 "
+            "많으면 객체를 먼저 고치세요.",
+        )
+
+
+def _retype_out(
+    planned: retype.RetypePlan,
+    *,
+    before: str,
+    after: str,
+    applied: bool,
+    core_consumers: list[str],
+    snapshot_id: uuid.UUID | None,
+) -> RetypeOut:
+    def value(row: retype.ValueRow) -> RetypeValueOut:
+        return RetypeValueOut(
+            value=row.value,
+            count=row.count,
+            reason=row.reason,
+            to=row.to,
+            samples=[
+                RetypeSampleOut(
+                    type_slug=one.type_slug, object_id=one.object_id, label=one.label
+                )
+                for one in row.samples
+            ],
+        )
+
+    return RetypeOut(
+        applied=applied,
+        data_type_before=before,
+        data_type_after=after,
+        types=[
+            RetypeTypeOut(
+                type_slug=one.type_slug,
+                type_label=one.type_label,
+                key=one.key,
+                via=one.via,
+                with_value=one.with_value,
+                converted=one.converted,
+                unchanged=one.unchanged,
+                cleared=one.cleared,
+            )
+            for one in planned.counts
+        ],
+        failures=[value(one) for one in planned.failures],
+        failures_total=planned.failures_total,
+        mapped=[value(one) for one in planned.mapped],
+        errors=planned.errors,
+        warnings=planned.warnings,
+        core_consumers=core_consumers,
+        snapshot_id=snapshot_id,
+    )
+
+
+@router.post("/types/{slug}/properties/{key}/retype", response_model=RetypeOut)
+def retype_property(
+    slug: str,
+    key: str,
+    payload: RetypeRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> RetypeOut:
+    """**종류 변경** — 속성 종류를 바꾸면서 저장된 값도 새 종류로 변환한다(ADR 0007).
+
+    `apply=false` 면 계획만: 타입의 건수 · 변환할 수 없는 값(값마다 건수 · 견본 · 까닭) · 경고.
+    변환할 수 없는 값이 하나라도 남아 있으면 적용하지 않는다 — `mapping` 으로 값마다 대체 값을
+    적거나 값 삭제(`null`)를 고른다. 적용 직전 정의를 스냅샷으로 남기고, 객체마다 이력이
+    남는다.
+    """
+    owner = _type(db, slug)
+    managed.require_definition_editable(owner)
+    row = _property(db, slug, key)
+    _refuse_bound(db, slug, key, what="종류를 여기서 변경하지 않습니다")
+    _check_retype(row.data_type, payload, name=f"{slug}.{key}")
+    target, notes = retype.target_for(owner, row, _retype_wanted(payload, with_unique=True))
+    before, after = row.data_type, payload.data_type
+    consumers = _core_consumers(db, owner)
+
+    planned = retype.plan(db, [target], payload.mapping)
+    planned.warnings[:0] = notes
+    planned.warnings.extend(retype.downstream(db, [target]))
+    if not payload.apply or planned.errors:
+        db.rollback()
+        return _retype_out(
+            planned,
+            before=before,
+            after=after,
+            applied=False,
+            core_consumers=consumers,
+            snapshot_id=None,
+        )
+
+    _require_core_accepted(db, owner, accepted=payload.accept_core, what="속성 종류 변경")
+    snapshot = _snapshot(db, user, reason=f"종류 변경 직전: {slug}.{key}")
+    done = retype.apply(db, user, [target], payload.mapping)
+    if done.errors:
+        db.rollback()
+        return _retype_out(
+            done,
+            before=before,
+            after=after,
+            applied=False,
+            core_consumers=consumers,
+            snapshot_id=None,
+        )
+    done.warnings = planned.warnings
+    db.commit()
+    return _retype_out(
+        done,
+        before=before,
+        after=after,
+        applied=True,
+        core_consumers=consumers,
+        snapshot_id=snapshot.id,
+    )
+
+
+@router.post("/interfaces/{slug}/properties/{key}/retype", response_model=RetypeOut)
+def retype_interface_property(
+    slug: str,
+    key: str,
+    payload: RetypeRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> RetypeOut:
+    """공통 속성의 **종류 변경** — 구현 타입 전부의 저장값을 **한 트랜잭션에서** 변환한다.
+
+    한 타입이라도 변환할 수 없는 값이 남아 있거나 모양이 안 맞으면 아무것도 안 바뀐다 — 한
+    타입만 바뀌면 같은 공통 속성이 타입마다 다른 종류를 갖는다. 대체 값은 구현 타입 전부에
+    걸린다.
+    """
+    owner = _interface(db, slug)
+    managed.require_definition_editable(owner)
+    row = _interface_property(db, slug, key)
+    _check_retype(row.data_type, payload, name=f"{slug}.{key}")
+    wanted = _retype_wanted(payload, with_unique=False)
+    shape = interfaces.shape_of(wanted, interfaces.shape_of(row))
+    wrong = interfaces.interface_property_error(key, {**shape.written(), "unique": False})
+    if wrong:
+        raise InvalidValue(code("ONTOLOGY", 24), wrong)
+
+    catalog = interfaces.load(db)
+    after_catalog = catalog.clone()
+    have = after_catalog.interfaces[slug].props[key]
+    after_catalog.interfaces[slug].props[key] = interfaces.Prop(
+        key=key,
+        shape=shape,
+        label=have.label,
+        help=have.help,
+        section=have.section,
+        sort_order=have.sort_order,
+    )
+    bindings = interfaces.plan_bindings(catalog, after_catalog)
+    targets, notes = retype.targets_from_bindings(db, bindings)
+    before, after = row.data_type, payload.data_type
+    implementers = list(
+        db.scalars(
+            select(ObjectType).where(ObjectType.id.in_({one.type_id for one in targets}))
+        )
+    )
+    consumers = sorted({one for kind in implementers for one in _core_consumers(db, kind)})
+
+    planned = retype.plan(db, targets, payload.mapping)
+    planned.errors[:0] = interfaces.conflicts(bindings)
+    planned.warnings[:0] = notes
+    planned.warnings.extend(retype.downstream(db, targets))
+    if not payload.apply or planned.errors:
+        db.rollback()
+        return _retype_out(
+            planned,
+            before=before,
+            after=after,
+            applied=False,
+            core_consumers=consumers,
+            snapshot_id=None,
+        )
+
+    for kind in implementers:
+        _require_core_accepted(db, kind, accepted=payload.accept_core, what="속성 종류 변경")
+    snapshot = _snapshot(db, user, reason=f"종류 변경 직전: 인터페이스 {slug}.{key}")
+    for name, value in shape.written().items():
+        setattr(row, name, value)
+    db.flush()
+    interfaces.apply_bindings(db, bindings)
+    done = retype.apply(db, user, targets, payload.mapping)
+    if done.errors:
+        db.rollback()
+        return _retype_out(
+            done,
+            before=before,
+            after=after,
+            applied=False,
+            core_consumers=consumers,
+            snapshot_id=None,
+        )
+    _touch(owner)
+    record_audit(
+        db,
+        action="ontology.interface_property.retype",
+        actor=user,
+        target_table="property_defs",
+        target_id=row.id,
+        target_label=f"{slug}.{key}",
+        changes={"data_type": {"before": before, "after": after}},
+        reason=f"구현 타입 {len(targets)}개의 저장값도 함께",
+    )
+    done.warnings = planned.warnings
+    db.commit()
+    return _retype_out(
+        done,
+        before=before,
+        after=after,
+        applied=True,
+        core_consumers=consumers,
+        snapshot_id=snapshot.id,
+    )
 
 
 def _promote_out(
@@ -1822,19 +2086,27 @@ def _property(db: Session, slug: str, key: str) -> PropertyDef:
 
 
 def _check_property_shape(payload: PropertyDefWriteRequest) -> None:
-    if (
-        payload.min_value is not None
-        and payload.max_value is not None
-        and payload.min_value > payload.max_value
-    ):
+    _check_shape_fields(
+        payload.data_type, payload.enum_options, payload.min_value, payload.max_value
+    )
+
+
+def _check_shape_fields(
+    data_type: str,
+    enum_options: list[str] | None,
+    min_value: float | None,
+    max_value: float | None,
+) -> None:
+    """속성 정의 · 종류 변경이 함께 쓰는 모양 검사."""
+    if min_value is not None and max_value is not None and min_value > max_value:
         # **뒤집힌 범위는 아무 값도 안 받는다.** 그런데 화면에는 「값이 틀렸다」
         # 로만 뜨므로, 정의가 잘못된 것을 아무도 못 찾는다.
         raise Conflict(
             code("ONTOLOGY", 38),
-            f"아래 끝({payload.min_value})이 위 끝({payload.max_value})보다 큽니다. "
+            f"아래 끝({min_value})이 위 끝({max_value})보다 큽니다. "
             "이러면 어떤 값도 못 넣습니다.",
         )
-    if payload.data_type == "enum" and not payload.enum_options:
+    if data_type == "enum" and not enum_options:
         raise Conflict(
             code("ONTOLOGY", 37),
             "고를 값 목록이 비어 있습니다. 선택 속성은 고를 것이 있어야 합니다.",

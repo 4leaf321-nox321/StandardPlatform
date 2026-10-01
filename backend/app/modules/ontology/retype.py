@@ -542,3 +542,122 @@ def apply(
         )
     db.flush()
     return planned
+
+
+# --- 딸린 것 --------------------------------------------------------------------
+
+
+def downstream(db: Session, targets: list[Target]) -> list[str]:
+    """이 변경에 **딸려 깨지는 것** — 저장된 뷰 · 홈 위젯, 데이터 소스, 수신 시스템. 고치지
+    않고 말한다(뷰는 사람의 것이고, 데이터 소스 · 수신 시스템은 바깥의 일이다)."""
+    out = _views_breaking(db, targets)
+    out.extend(_sources_touching(db, targets))
+    for target in targets:
+        owner = db.get(ObjectType, target.type_id)
+        if owner is not None and owner.core:
+            out.append(
+                f"속성 {target.name}: 공개 타입이라 수신 시스템이 이 속성의 종류를 다시 맞출 "
+                "때까지 그쪽에서 행 오류가 날 수 있습니다."
+            )
+    return out
+
+
+def _sources_touching(db: Session, targets: list[Target]) -> list[str]:
+    from app.modules.datasources.models import DataSource
+
+    by_type: dict[uuid.UUID, list[Target]] = {}
+    for target in targets:
+        by_type.setdefault(target.type_id, []).append(target)
+    out: list[str] = []
+    for source in db.scalars(select(DataSource).where(DataSource.type_id.in_(list(by_type)))):
+        for column in (source.mapping or {}).get("columns") or []:
+            if not isinstance(column, dict):
+                continue
+            for target in by_type[source.type_id]:
+                if column.get("target") != f"properties.{target.key}":
+                    continue
+                values = (
+                    " — 열 값 대응(values)도 새 종류에 맞는지 보세요"
+                    if column.get("values")
+                    else ""
+                )
+                out.append(
+                    f"데이터 소스 「{source.name}」 이 {target.name} 에 넣습니다 — 다음 "
+                    f"동기화부터 {kind_label(target.after.data_type)}(으)로 읽습니다{values}."
+                )
+    return out
+
+
+def _view_error(db: Session, view: Any) -> str | None:
+    """저장된 뷰를 지금 정의로 열면 나는 오류 — 없으면 None. 저장할 때의 검사와 같은 함수다."""
+    from app.modules.objects import conditions, paths, summary
+    from app.modules.objects.services import properties_of
+    from app.shared.errors import AppError
+
+    owner = db.get(ObjectType, view.type_id)
+    if owner is None:
+        return None
+    defs = properties_of(db, owner.id)
+    resolver = paths.Resolver(db, owner)
+    asked = [
+        conditions.Condition(
+            str(one.get("field", "")), str(one.get("op", "")), str(one.get("value", ""))
+        )
+        for one in (view.query or {}).get("conditions") or []
+        if isinstance(one, dict)
+    ]
+    shape = view.summary or {}
+    try:
+        conditions.apply(select(ObjectInstance), defs, asked, resolver)
+        if shape.get("group_by"):
+            summary.check_group(defs, str(shape["group_by"]), resolver)
+            if shape.get("split_by"):
+                summary.check_group(defs, str(shape["split_by"]), resolver)
+            summary.check_metric(
+                defs, str(shape.get("metric") or "count"), shape.get("metric_field")
+            )
+    except AppError as caught:
+        return caught.message
+    return None
+
+
+def _views_breaking(db: Session, targets: list[Target]) -> list[str]:
+    """저장된 뷰 · 홈 위젯 가운데 **이 변경으로 새로** 깨지는 것.
+
+    손으로 견주지 않고 **흉내 낸다** — 세이브포인트 안에서 새 정의를 적고, 저장할 때와 같은
+    검사를 다시 돌린 뒤 되돌린다. 칸은 이어진 칸 주소(`ref.개발사.국가`)일 수도 있어서, 손으로
+    견주면 다른 타입의 뷰를 놓친다. 원래 깨져 있던 뷰는 이 변경 탓이 아니라 말하지 않는다.
+    """
+    from app.modules.objects.models import SavedView
+
+    saved = list(db.scalars(select(SavedView)))
+    if not saved:
+        return []
+    before = {one.id: _view_error(db, one) for one in saved}
+    savepoint = db.begin_nested()
+    try:
+        for target in targets:
+            definition = db.scalar(
+                select(PropertyDef).where(
+                    PropertyDef.owner_kind == "type",
+                    PropertyDef.owner_id == target.type_id,
+                    PropertyDef.key == target.key,
+                )
+            )
+            if definition is None:
+                continue
+            for name, value in interfaces.shape_of(target.after).written().items():
+                setattr(definition, name, value)
+        db.flush()
+        after = {one.id: _view_error(db, one) for one in saved}
+    finally:
+        savepoint.rollback()
+    broken = [one for one in saved if before[one.id] is None and after[one.id] is not None]
+    out = [
+        f"저장된 뷰 「{one.name}」{'(홈 게시)' if one.home_order is not None else ''} 은(는) "
+        f"이 변경 뒤 열면 오류가 납니다 — {after[one.id]}"
+        for one in broken[:10]
+    ]
+    if len(broken) > 10:
+        out.append(f"그 밖에 저장된 뷰 {len(broken) - 10}개도 이 변경 뒤 열면 오류가 납니다.")
+    return out

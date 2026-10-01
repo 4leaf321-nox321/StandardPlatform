@@ -4979,6 +4979,130 @@
         }
       }
     },
+    "/api/ontology/types/{slug}/properties/{key}/retype": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Retype Property",
+        "description": "**종류 변경** — 속성 종류를 바꾸면서 저장된 값도 새 종류로 변환한다(ADR 0007).\n\n`apply=false` 면 계획만: 타입의 건수 · 변환할 수 없는 값(값마다 건수 · 견본 · 까닭) · 경고.\n변환할 수 없는 값이 하나라도 남아 있으면 적용하지 않는다 — `mapping` 으로 값마다 대체 값을\n적거나 값 삭제(`null`)를 고른다. 적용 직전 정의를 스냅샷으로 남기고, 객체마다 이력이\n남는다.",
+        "operationId": "retype_property_api_ontology_types__slug__properties__key__retype_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetypeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetypeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/interfaces/{slug}/properties/{key}/retype": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Retype Interface Property",
+        "description": "공통 속성의 **종류 변경** — 구현 타입 전부의 저장값을 **한 트랜잭션에서** 변환한다.\n\n한 타입이라도 변환할 수 없는 값이 남아 있거나 모양이 안 맞으면 아무것도 안 바뀐다 — 한\n타입만 바뀌면 같은 공통 속성이 타입마다 다른 종류를 갖는다. 대체 값은 구현 타입 전부에\n걸린다.",
+        "operationId": "retype_interface_property_api_ontology_interfaces__slug__properties__key__retype_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetypeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RetypeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ontology/types/{slug}/properties/{key}/usage": {
       "get": {
         "tags": [
@@ -20365,6 +20489,339 @@
           "entry_id"
         ],
         "title": "RestoreRequest"
+      },
+      "RetypeOut": {
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "data_type_before": {
+            "type": "string",
+            "title": "Data Type Before"
+          },
+          "data_type_after": {
+            "type": "string",
+            "title": "Data Type After"
+          },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/RetypeTypeOut"
+            },
+            "type": "array",
+            "title": "Types"
+          },
+          "failures": {
+            "items": {
+              "$ref": "#/components/schemas/RetypeValueOut"
+            },
+            "type": "array",
+            "title": "Failures"
+          },
+          "failures_total": {
+            "type": "integer",
+            "title": "Failures Total"
+          },
+          "mapped": {
+            "items": {
+              "$ref": "#/components/schemas/RetypeValueOut"
+            },
+            "type": "array",
+            "title": "Mapped"
+          },
+          "errors": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Errors"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "core_consumers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Core Consumers"
+          },
+          "snapshot_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Snapshot Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "data_type_before",
+          "data_type_after",
+          "types",
+          "failures",
+          "failures_total",
+          "mapped",
+          "errors",
+          "warnings",
+          "core_consumers",
+          "snapshot_id"
+        ],
+        "title": "RetypeOut"
+      },
+      "RetypeRequest": {
+        "properties": {
+          "data_type": {
+            "type": "string",
+            "title": "Data Type"
+          },
+          "enum_options": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Enum Options"
+          },
+          "min_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Value"
+          },
+          "max_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Value"
+          },
+          "decimals": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "maximum": 10.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decimals"
+          },
+          "pattern": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pattern"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 24
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "unique": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unique"
+          },
+          "mapping": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Mapping"
+          },
+          "accept_core": {
+            "type": "boolean",
+            "title": "Accept Core",
+            "default": false
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "data_type"
+        ],
+        "title": "RetypeRequest",
+        "description": "종류 변경 — 새 종류와 그 종류의 칸, 그리고 값마다의 대체 값(ADR 0007).\n\n**보낸 칸만 바꾼다**(`None` 은 지금 그대로). 다른 종류에서 남은 칸(패턴 · 최소 · 고를 값)은\n서버가 지운다 — 새 종류에 뜻이 없다."
+      },
+      "RetypeSampleOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "object_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "object_id",
+          "label"
+        ],
+        "title": "RetypeSampleOut"
+      },
+      "RetypeTypeOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "via": {
+            "type": "string",
+            "title": "Via"
+          },
+          "with_value": {
+            "type": "integer",
+            "title": "With Value"
+          },
+          "converted": {
+            "type": "integer",
+            "title": "Converted"
+          },
+          "unchanged": {
+            "type": "integer",
+            "title": "Unchanged"
+          },
+          "cleared": {
+            "type": "integer",
+            "title": "Cleared"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "type_label",
+          "key",
+          "via",
+          "with_value",
+          "converted",
+          "unchanged",
+          "cleared"
+        ],
+        "title": "RetypeTypeOut"
+      },
+      "RetypeValueOut": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To"
+          },
+          "samples": {
+            "items": {
+              "$ref": "#/components/schemas/RetypeSampleOut"
+            },
+            "type": "array",
+            "title": "Samples"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value",
+          "count",
+          "reason",
+          "to",
+          "samples"
+        ],
+        "title": "RetypeValueOut"
       },
       "RollupOut": {
         "properties": {

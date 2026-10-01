@@ -93,8 +93,9 @@ def test_같은_slug_는_두_번_안_만들어진다(client: TestClient, admin: 
     assert again.status_code == 409
 
 
-def test_속성_종류는_바꿀_수_없다(client: TestClient, admin: Signed) -> None:
-    """이미 저장된 값이 새 종류에 안 맞아도 **화면은 아무 말도 안 한다.**"""
+def test_속성_종류는_수정으로_바꾸지_않는다(client: TestClient, admin: Signed) -> None:
+    """이미 저장된 값이 새 종류에 안 맞아도 **수정은 아무 말도 안 한다** — 종류는 저장값을
+    변환하는 계획을 먼저 보여 주는 「종류 변경」(`…/retype`, ADR 0007)으로만 바뀐다."""
     part = _make_type(client, admin, label="부품")
     _make_property(client, admin, part, key="qty", label="수량", data_type="number")
 
@@ -104,7 +105,7 @@ def test_속성_종류는_바꿀_수_없다(client: TestClient, admin: Signed) -
         headers=admin.headers,
     )
     assert response.status_code == 409
-    assert "바꿀 수 없습니다" in response.json()["error"]["message"]
+    assert "종류 변경" in response.json()["error"]["message"]
 
 
 def test_선택_속성은_고를_것이_있어야_한다(client: TestClient, admin: Signed) -> None:

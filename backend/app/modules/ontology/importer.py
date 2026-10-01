@@ -458,6 +458,7 @@ def _plan_retypes(db: Session, payload: dict[str, Any], out: Plan) -> None:
     )
     out.errors.extend(one for one in planned.errors if "변환할 수 없는 값" not in one)
     out.warnings.extend(planned.warnings)
+    out.warnings.extend(retype.downstream(db, out.retypes))
 
     # 파일이 **명시한** 롤업이 숫자가 아니게 되는 칸을 모으면 오류 — 조용히 걷으면 보낸 것이
     # 사라진다.

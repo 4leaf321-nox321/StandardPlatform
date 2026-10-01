@@ -503,6 +503,76 @@ class PromoteOut(BaseModel):
     snapshot_id: uuid.UUID | None
 
 
+# --- 종류 변경 -------------------------------------------------------------------
+
+
+class RetypeRequest(BaseModel):
+    """종류 변경 — 새 종류와 그 종류의 칸, 그리고 값마다의 대체 값(ADR 0007).
+
+    **보낸 칸만 바꾼다**(`None` 은 지금 그대로). 다른 종류에서 남은 칸(패턴 · 최소 · 고를 값)은
+    서버가 지운다 — 새 종류에 뜻이 없다.
+    """
+
+    data_type: str
+    enum_options: list[str] | None = None
+    min_value: float | None = None
+    max_value: float | None = None
+    decimals: int | None = Field(default=None, ge=0, le=10)
+    pattern: str | None = Field(default=None, max_length=200)
+    unit: str | None = Field(default=None, max_length=24)
+    unique: bool | None = None
+    """타입의 속성만. 새 종류가 유일을 못 두면(선택 · 예/아니오 · 여러 줄) 꺼진다."""
+    mapping: dict[str, str | None] = Field(default_factory=dict)
+    """{변환할 수 없는 값: 대체 값 | null(값 삭제)} — 열쇠는 계획이 준 값 그대로."""
+    accept_core: bool = False
+    """공개 타입이면 수신 시스템에 통보했다는 확인."""
+    apply: bool = False
+
+
+class RetypeSampleOut(BaseModel):
+    type_slug: str
+    object_id: uuid.UUID | None
+    """기본값이면 없다(이름이 「(기본값)」)."""
+    label: str
+
+
+class RetypeValueOut(BaseModel):
+    value: str
+    count: int
+    reason: str
+    to: str | None
+    """대체 값 목록에서만 뜻이 있다 — `None` 이면 값 삭제."""
+    samples: list[RetypeSampleOut]
+
+
+class RetypeTypeOut(BaseModel):
+    type_slug: str
+    type_label: str
+    key: str
+    via: str
+    """인터페이스를 따라 바뀌면 그 인터페이스."""
+    with_value: int
+    converted: int
+    unchanged: int
+    cleared: int
+
+
+class RetypeOut(BaseModel):
+    applied: bool
+    data_type_before: str
+    data_type_after: str
+    types: list[RetypeTypeOut]
+    failures: list[RetypeValueOut]
+    failures_total: int
+    """변환할 수 없는 값의 종류 수 — 목록은 앞의 몇백 개까지다."""
+    mapped: list[RetypeValueOut]
+    errors: list[str]
+    warnings: list[str]
+    core_consumers: list[str]
+    """공개 타입이면 조회 가능한 토큰들 — 비어 있지 않으면 `accept_core` 를 받아야 적용된다."""
+    snapshot_id: uuid.UUID | None
+
+
 # --- 표에서 타입 추론 ---------------------------------------------------------
 
 

@@ -40,11 +40,12 @@ from app.modules.objects.services import (
     require_refs_exist,
     require_unique_properties,
 )
-from app.modules.ontology.models import ObjectType
-from app.modules.ontology.services import validate_properties
+from app.modules.ontology import conversion
+from app.modules.ontology.models import ObjectType, PropertyDef
+from app.modules.ontology.services import InvalidValue, validate_properties
 from app.modules.workspaces.models import Workspace
 from app.shared import audit
-from app.shared.errors import Conflict, NotFound, code
+from app.shared.errors import AppError, Conflict, NotFound, code
 
 #: 값 기록에서 스냅샷을 구성하는 칸. 기록의 `changes` 키와 같다.
 STATE_FIELDS = (
@@ -255,6 +256,61 @@ def snapshot_at(
     raise NotFound(code("OBJECTS", 61), "그 기록을 찾을 수 없습니다.")
 
 
+#: 저장값의 파이썬 모양 — 종류마다. 그때 값이 지금 종류의 모양이 아니면 종류가 바뀐 것이다.
+_SHAPE_OF: dict[str, tuple[type, ...]] = {
+    "number": (int, float),
+    "bool": (bool,),
+}
+
+
+def _kind_changed(definition: PropertyDef, raw: Any) -> bool:
+    """그때 값이 **지금 종류의 모양이 아닌가** — 그러면 그 사이 종류가 변경된 것이다
+    (ADR 0007)."""
+    items = raw if isinstance(raw, list) else [raw]
+    wanted = _SHAPE_OF.get(definition.data_type, (str,))
+    for item in items:
+        if item is None:
+            continue
+        if isinstance(item, bool) and bool not in wanted:
+            return True
+        if not isinstance(item, wanted):
+            return True
+    return False
+
+
+def _then_values(defs: list[PropertyDef], values: dict[str, Any]) -> dict[str, Any]:
+    """그때 값을 **지금 정의로** 검사한다. 그 사이 종류가 변경됐으면(글 → 숫자) 종류 변경과
+    같은 규칙으로 변환해 넣는다 — 안 그러면 종류를 바꾼 뒤로는 그 전 이력으로 되돌릴 수 없다.
+
+    변환할 수 없으면 그렇다고 말한다(OBJECTS-95). 종류가 그대로인데 안 맞는 것(고를 값에서 빠진
+    값 등)은 예전처럼 저장할 때의 오류를 그대로 낸다.
+    """
+    try:
+        return validate_properties(defs, values)
+    except InvalidValue as original:
+        converted = dict(values)
+        for definition in defs:
+            if definition.key not in values or not _kind_changed(
+                definition, values[definition.key]
+            ):
+                continue
+            result = conversion.convert_stored(definition, values[definition.key])
+            if result.failures:
+                raise AppError(
+                    code("OBJECTS", 95),
+                    f"{definition.label}: 그때 값 {values[definition.key]!r} 은(는) 지금 종류"
+                    f"로 변환할 수 없습니다 — {result.failures[0][1]}",
+                    status=422,
+                ) from None
+            if result.remove:
+                converted.pop(definition.key, None)
+            else:
+                converted[definition.key] = result.value
+        if converted == values:
+            raise original from None
+        return validate_properties(defs, converted)
+
+
 def restore(
     db: Session,
     user: User,
@@ -278,9 +334,7 @@ def restore(
     # 그 값을 더는 안 쓴다는 뜻이고, 되살리면 어느 화면에도 안 나오는 값이 된다.
     known = {d.key for d in defs if d.data_type != "file"}
     dropped = sorted(set(wanted.properties) - known)
-    properties = validate_properties(
-        defs, {k: v for k, v in wanted.properties.items() if k in known}
-    )
+    properties = _then_values(defs, {k: v for k, v in wanted.properties.items() if k in known})
     require_refs_exist(db, defs, properties, row.properties or {})
     require_unique_properties(
         db,
