@@ -33,11 +33,14 @@ from rdflib import DCTERMS, OWL, RDF, RDFS, SKOS, XSD, Graph, Literal, Namespace
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from app.modules.accounts.models import User
 from app.modules.objects import aliases
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.objects.services import properties_of
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef, RelationType
+from app.modules.workspaces.models import WorkspaceMember
+from app.shared.permissions import visible_owner_clause
 
 XSD_OF: dict[str, URIRef] = {
     "text": XSD.string,
@@ -203,8 +206,14 @@ def _add_relation(graph: Graph, names: Names, rel: RelationType) -> None:
         graph.add((inverse, OWL.inverseOf, node))
 
 
-def data_graph(db: Session, names: Names, type_slugs: list[str] | None = None) -> Graph:
-    """데이터 → RDF. 지워진 것 · 병합돼 사라진 것은 안 낸다. 관계는 양 끝이 나갈 때만."""
+def data_graph(
+    db: Session, names: Names, type_slugs: list[str] | None = None, *, user: User
+) -> Graph:
+    """데이터 → RDF. 지워진 것 · 병합돼 사라진 것은 안 낸다. 관계는 양 끝이 나갈 때만.
+
+    **목록과 같은 것만 낸다**(`visible_owner_clause`) — 남의 부서 객체가 목록에서는 안 보이는데
+    RDF · SPARQL 로는 읽히면, 가린 것이 가린 게 아니다. 참조 · 관계의 상대도 보이는 것만 IRI 를
+    받는다(IRI 에 식별자가 들어 있어 이름만 숨겨도 무엇이 있는지 드러난다)."""
     graph = Graph()
     _bind(graph, names)
 
@@ -225,20 +234,30 @@ def data_graph(db: Session, names: Names, type_slugs: list[str] | None = None) -
         for row in types.values()
     }
 
-    stmt = select(ObjectInstance).where(
-        ObjectInstance.deleted_at.is_(None), ObjectInstance.merged_into_id.is_(None)
+    seen = (
+        ObjectInstance.deleted_at.is_(None),
+        ObjectInstance.merged_into_id.is_(None),
+        visible_owner_clause(user, ObjectInstance.owner_workspace_id),
     )
-    rows = [row for row in db.scalars(stmt) if row.type_id in wanted]
+    # 타입은 **SQL 에서** 고른다 — 파이썬에서 거르면 범위를 좁혀도 표 전체를 읽는다.
+    rows = list(
+        db.scalars(select(ObjectInstance).where(*seen, ObjectInstance.type_id.in_(wanted)))
+    )
     iri_of: dict[uuid.UUID, URIRef] = {}
     for row in rows:
         iri_of[row.id] = names.individual(types[row.type_id].slug, row.key, row.id)
-    # 참조가 가리키는 상대는 범위 밖 타입이어도 IRI 가 필요하다 — 전부 미리 알아 둔다.
+    # 참조가 가리키는 상대는 범위 밖 타입이어도 IRI 가 필요하다 — 보이는 것만 미리 알아 둔다.
     all_iri: dict[uuid.UUID, URIRef] = dict(iri_of)
     if type_slugs:
-        for other in db.scalars(stmt):
-            if other.id not in all_iri and other.type_id in types:
-                all_iri[other.id] = names.individual(
-                    types[other.type_id].slug, other.key, other.id
+        others = db.execute(
+            select(ObjectInstance.id, ObjectInstance.type_id, ObjectInstance.key).where(
+                *seen, ObjectInstance.type_id.not_in(wanted)
+            )
+        )
+        for other_id, other_type, other_key in others:
+            if other_type in types:
+                all_iri[other_id] = names.individual(
+                    types[other_type].slug, other_key, other_id
                 )
 
     alias_of = aliases.human_of(db, [row.id for row in rows]) if rows else {}
@@ -386,7 +405,8 @@ def _noise(triple: tuple[Any, Any, Any]) -> bool:
 # 들어온 AI 가 한 질문에 그만큼을 기다린다. 정의 · 객체가 바뀌면 판(version)이 달라져 저절로
 # 버려진다. 메모리를 위해 두 벌까지만 둔다 — 더 두면 워커 넷이 각자 들고 있게 된다.
 
-_CACHE: dict[tuple[str, tuple[str, ...], bool], tuple[tuple[Any, ...], float, Graph]] = {}
+#: (설치 주소, 타입들, 추론, **보이는 범위**) → (판, 세운 시각, 그래프).
+_CACHE: dict[tuple[str, tuple[str, ...], bool, str], tuple[tuple[Any, ...], float, Graph]] = {}
 _CACHE_MAX = 2
 #: 판(version)이 못 잡는 변화도 있다 — 속성 정의에는 `updated_at` 이 없어 이름만 고치면 수가
 #: 그대로다. 그래서 이 시간이 지나면 어차피 다시 세운다(질의는 3초 안이라 감당된다).
@@ -422,13 +442,26 @@ def version(db: Session) -> tuple[Any, ...]:
     )
 
 
+def scope_of(db: Session, user: User) -> str:
+    """이 사람이 **무엇을 볼 수 있나**를 한 글자로 — 캐시 열쇠다.
+
+    시스템 관리자는 전부, 그 밖은 속한 부서의 id 들(가시성은 전역 + 내 부서다). 열쇠에 이것이
+    없으면 관리자가 세운 그래프를 다음 사람이 받아 간다."""
+    if user.is_system_admin:
+        return "*"
+    mine = db.scalars(
+        select(WorkspaceMember.workspace_id).where(WorkspaceMember.user_id == user.id)
+    )
+    return ",".join(sorted(str(one) for one in mine))
+
+
 def graph_for(
-    db: Session, names: Names, type_slugs: list[str] | None, infer: bool
+    db: Session, names: Names, type_slugs: list[str] | None, infer: bool, *, user: User
 ) -> tuple[Graph, int, int]:
     """질의할 그래프 — (그래프, 저장된 트리플 수, 추론이 더한 수).
 
-    같은 판이면 다시 세우지 않는다."""
-    key = (names.base, tuple(sorted(type_slugs or ())), infer)
+    같은 판 · 같은 보이는 범위면 다시 세우지 않는다."""
+    key = (names.base, tuple(sorted(type_slugs or ())), infer, scope_of(db, user))
     now = version(db)
     hit = _CACHE.get(key)
     if hit and hit[0] == now and time.monotonic() - hit[1] < _CACHE_TTL_SECONDS:
@@ -436,7 +469,7 @@ def graph_for(
         return graph, len(graph), 0
 
     schema = schema_graph(db, names)
-    data = data_graph(db, names, type_slugs)
+    data = data_graph(db, names, type_slugs, user=user)
     stored = len(data)
     graph = Graph()
     for prefix, ns in schema.namespaces():

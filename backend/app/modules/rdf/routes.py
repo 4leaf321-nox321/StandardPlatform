@@ -63,11 +63,13 @@ def data(
     request: Request,
     format: str = Query(default="ttl"),
     type: list[str] | None = Query(default=None, description="이 타입들만(비우면 전부)"),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Response:
-    """데이터(객체 · 값 · 관계) → RDF. 정의는 `/schema` 와 합쳐 쓴다."""
-    return _respond(export.data_graph(db, _names(request), type), _fmt(format), "data")
+    """데이터(객체 · 값 · 관계) → RDF. 정의는 `/schema` 와 합쳐 쓴다. **목록과 같은 것만**."""
+    return _respond(
+        export.data_graph(db, _names(request), type, user=user), _fmt(format), "data"
+    )
 
 
 class QueryRequest(BaseModel):
@@ -99,7 +101,7 @@ _BLOCKED = ("insert", "delete", "load", "clear", "drop", "create", "service", "w
 def query(
     payload: QueryRequest,
     request: Request,
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> QueryOut:
     """SPARQL 로 묻는다 — **MCP 로 들어온 AI 가 쓰는 자리.**
@@ -115,7 +117,7 @@ def query(
             raise Conflict(code("RDF", 2), f"질의에 쓸 수 없는 말입니다: {word}")
 
     names = _names(request)
-    graph, stored, added = export.graph_for(db, names, payload.types, payload.infer)
+    graph, stored, added = export.graph_for(db, names, payload.types, payload.infer, user=user)
     if payload.infer and stored > export.INFER_MAX_TRIPLES:
         raise Conflict(
             code("RDF", 3),
@@ -184,7 +186,7 @@ def inferred(
     request: Request,
     format: str = Query(default="ttl"),
     type: list[str] | None = Query(default=None),
-    _: User = Depends(current_user),
+    user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Response:
     """OWL-RL 추론으로 **새로 생긴** 트리플만 — 상속으로 얻은 분류 · 역관계 · 이행 관계.
@@ -192,5 +194,7 @@ def inferred(
     플랫폼 안에서 돌리므로 별도 추론 서버가 없어도 「추론하면 무엇이 더 나오나」 를 본다.
     규모가 커지면 `/schema` + `/data` 를 트리플 스토어에 넣고 거기서 돌린다."""
     names = _names(request)
-    graph = export.inferred(export.schema_graph(db, names), export.data_graph(db, names, type))
+    graph = export.inferred(
+        export.schema_graph(db, names), export.data_graph(db, names, type, user=user)
+    )
     return _respond(graph, _fmt(format), "inferred")

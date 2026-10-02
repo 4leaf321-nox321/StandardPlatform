@@ -3,9 +3,13 @@
 
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
-from rdflib import OWL, RDF, RDFS, Graph, URIRef
+import uuid
 
+from fastapi.testclient import TestClient
+from rdflib import DCTERMS, OWL, RDF, RDFS, Graph, URIRef
+from sqlalchemy.orm import Session
+
+from app.modules.workspaces.models import Workspace
 from tests.api.conftest import Signed
 from tests.api.test_ontology import _import, _make_object, _make_type, _uniq
 
@@ -221,3 +225,47 @@ def test_인터페이스는_클래스이고_공통_속성은_구현_타입_속�
         headers=admin.headers,
     )
     assert [str(one["label"]) for one in renamed.json()["rows"]] == ["장비"]
+
+
+def test_목록에서_안_보이는_남의_부서_객체는_RDF_로도_안_나간다(
+    client: TestClient, admin: Signed, member: Signed, db: Session
+) -> None:
+    """**가린 것은 어느 길로도 가려져야 한다.** 예전에는 `/rdf/data` · `/rdf/query` 가 로그인만
+    보고 전부 내서, 목록에서 안 보이는 남의 부서 객체가 RDF · SPARQL(MCP `rdf_query`)로는
+    읽혔다."""
+    other = Workspace(slug=f"o-{uuid.uuid4().hex[:6]}", name="다른 부서")
+    db.add(other)
+    db.commit()
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    for workspace, key in (
+        (other.slug, "HIDDEN-1"),
+        (member.workspace, "MINE-1"),
+        (None, "ALL-1"),
+    ):
+        made = client.post(
+            f"/api/objects/{part}",
+            json={"workspace_slug": workspace, "key": key, "label": key},
+            headers=admin.headers,
+        )
+        assert made.status_code == 201, made.text
+
+    def keys(who: Signed) -> set[str]:
+        graph = _turtle(client, who, f"/api/rdf/data?type={part}")
+        return {str(one) for one in graph.objects(None, DCTERMS.identifier)}
+
+    assert keys(member) == {"MINE-1", "ALL-1"}
+    assert keys(admin) == {"HIDDEN-1", "MINE-1", "ALL-1"}
+
+    query = {
+        "query": "SELECT ?k WHERE { ?x <http://purl.org/dc/terms/identifier> ?k }",
+        "types": [part],
+    }
+
+    def asked(who: Signed) -> set[str]:
+        got = client.post("/api/rdf/query", json=query, headers=who.headers)
+        assert got.status_code == 200, got.text
+        return {row["k"] for row in got.json()["rows"]}
+
+    # 관리자가 먼저 세운 그래프를 멤버가 받아 가지 않는다(캐시 열쇠에 보이는 범위가 있다).
+    assert asked(admin) == {"HIDDEN-1", "MINE-1", "ALL-1"}
+    assert asked(member) == {"MINE-1", "ALL-1"}

@@ -9431,7 +9431,7 @@
           "rdf"
         ],
         "summary": "Data",
-        "description": "데이터(객체 · 값 · 관계) → RDF. 정의는 `/schema` 와 합쳐 쓴다.",
+        "description": "데이터(객체 · 값 · 관계) → RDF. 정의는 `/schema` 와 합쳐 쓴다. **목록과 같은 것만**.",
         "operationId": "data_api_rdf_data_get",
         "parameters": [
           {
