@@ -1252,14 +1252,25 @@ async def objects_delete(
     `detach` 는 참조를 비우고 관계를 끊고 지운다 — 사람이 그 목록(`object_references`)을
     보고 고른 뒤에만.
     같은 것이 둘이면 지우지 말고 `object_merge`. 그만 쓰는 것이면 지우기보다
-    `object_update(status="deprecated")`. 권한은 화면과 같다(부서 관리자는 자기 부서 것)."""
+    `object_update(status="deprecated")`. 권한은 화면과 같다(부서 관리자는 자기 부서 것).
+
+    가리키는 기록이 많은 객체(2만 건 넘음 — 인기 모델)는 `detach` 로 지울 때 **작업으로**
+    돈다 — 도구가 그 줄을 작업으로 넣고 기다린다(`rows[].job`)."""
     if mode not in ("block", "detach"):
         return {"error": f"mode 는 block · detach 중 하나입니다: {mode}"}
-    return await _post(
+    got = await _post(
         ctx,
         f"/api/objects/{type_slug}/bulk-delete",
         {"ids": ids, "mode": mode, "apply": apply},
     )
+    if apply and isinstance(got, dict):
+        for row in got.get("rows") or []:
+            # 요청 안에서 못 한 줄 — 서버가 준 작업 주소로 넣고 기다린다(같은 검사 · 같은
+            # 함수).
+            if isinstance(row, dict) and row.get("job_path"):
+                job = await _post(ctx, str(row["job_path"]), {})
+                row["job"] = await _wait_job(ctx, job, JOB_WAIT_MAX)
+    return got
 
 
 @tool()
@@ -1283,7 +1294,7 @@ async def object_merge(
 
     `apply=False`(기본)면 **아무것도 안 바꾸고** 두 객체와 지는 쪽을 가리키는 것
     (`references`)을 돌려준다 — 사람에게 보이고 어느 쪽이 남을지 확인받는다. 되돌리기가
-    없다."""
+    없다. 가리키는 기록이 많으면(2만 건 넘음) 작업으로 돌고 도구가 기다린다."""
     if not apply:
         loser = await _get(ctx, f"/api/objects/{type_slug}/{object_id}")
         if not isinstance(loser, dict) or "error" in loser:
@@ -1298,7 +1309,14 @@ async def object_merge(
             "references": await _get(ctx, f"/api/objects/{type_slug}/{object_id}/references"),
             "next": "사람에게 보이고 어느 쪽이 남을지 확인받은 뒤 apply=True 로 부른다.",
         }
-    return await _post(ctx, f"/api/objects/{type_slug}/{object_id}/merge", {"into": into})
+    path = f"/api/objects/{type_slug}/{object_id}/merge"
+    got = await _post(ctx, path, {"into": into})
+    if isinstance(got, dict) and "OBJECTS-0096" in str(got.get("error", "")):
+        # 가리키는 기록이 많다(인기 모델) — 요청 안에서 안 끝나 작업으로 합친다.
+        return await _wait_job(
+            ctx, await _post(ctx, f"{path}/job", {"into": into}), JOB_WAIT_MAX
+        )
+    return got
 
 
 def _brief(detail: dict[str, Any]) -> dict[str, Any]:

@@ -31,11 +31,11 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.objects import bulk
+from app.modules.objects import bulk, rewrite
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology import conversion, interfaces, views
 from app.modules.ontology.models import ObjectType, PropertyDef
@@ -66,8 +66,6 @@ FAILURE_CAP = 300
 FAILURE_TRACK = 10_000
 #: 값마다 견본 객체 수.
 SAMPLES = 3
-#: 적용할 때 한 번에 읽어 고치는 행 수 — 덩어리 하나가 갱신 문장 하나다.
-CHUNK = 5_000
 #: 계획이 한 번에 읽는 행 수 — 칸 하나만 읽으니 넉넉히. 200만 건을 한 목록으로 싣지 않는다.
 READ_CHUNK = 5_000
 #: 값이 있는 객체가 이보다 많으면 요청 안에서 하지 않고 **작업**으로 돈다 — 기록 200만 건의
@@ -144,6 +142,14 @@ class RefLinker:
                 }
             for one in missing:
                 self.names[one] = self._system.get(one)
+
+    def ready(self, target: Target, values: list[Any]) -> None:
+        """덩어리 하나의 값을 미리 물어 둔다 — 참조였으면 상대의 글자를, 참조가 되면 이름
+        풀이를(큰 대상은 통째로 안 읽으므로 덩어리째 묻는다, `bulk.Refs.prefetch`)."""
+        if target.before == "object_ref":
+            self.prefetch(_elements(values))
+        if target.after.data_type == "object_ref":
+            self.refs.prefetch(target.after.ref_type_slug or "", _elements(values))
 
     def text_of(self, object_id: str) -> str:
         if object_id not in self.names:
@@ -514,8 +520,8 @@ def plan(
             if on_progress is not None:
                 on_progress("계획", seen, total)
                 seen += len(row_chunk)
-            if linker is not None and target.before == "object_ref":
-                linker.prefetch(_elements(raw for *_, raw in row_chunk))
+            if linker is not None:
+                linker.ready(target, [raw for *_, raw in row_chunk])
             for object_id, label, workspace_id, raw in row_chunk:
                 counts.with_value += 1
                 result = _convert(target, raw, mapping, linker)
@@ -641,32 +647,6 @@ def plan(
 # --- 적용 -----------------------------------------------------------------------
 
 
-#: 칸 하나를 덩어리째 고친다 — 다른 칸은 손대지 않는다(`jsonb_set` · `-`).
-_SET_ONE = text(
-    """
-    UPDATE objects AS o
-    SET properties = CASE WHEN v.gone THEN o.properties - CAST(:key AS text)
-                          ELSE jsonb_set(o.properties, ARRAY[CAST(:key AS text)], v.val) END,
-        updated_at = now()
-    FROM unnest(CAST(:ids AS uuid[]), CAST(:vals AS jsonb[]), CAST(:gone AS boolean[]))
-         AS v(id, val, gone)
-    WHERE o.id = v.id
-    """
-)
-
-
-def changed_property(key: str, before: Any, after: dict[str, Any]) -> dict[str, Any]:
-    """칸 **하나만** 바뀐 이력 — `keys` 가 그 칸이다. 이력 화면(`history_of`)은 `keys` 가
-    있으면 그 칸만 되짚고 나머지는 그대로 둔다."""
-    return {
-        "properties": {
-            "before": {key: before},
-            "after": {key: after[key]} if key in after else {},
-            "keys": [key],
-        }
-    }
-
-
 def apply(
     db: Session,
     user: User | None,
@@ -723,7 +703,7 @@ def apply(
                     ObjectInstance.properties.has_key(target.key),
                 )
                 .order_by(ObjectInstance.id)
-                .limit(CHUNK)
+                .limit(rewrite.CHUNK)
                 .with_for_update()
             )
             if last is not None:
@@ -734,24 +714,19 @@ def apply(
             if on_progress is not None:
                 on_progress("적용", seen, total)
                 seen += len(rows)
-            if linker is not None and target.before == "object_ref":
-                linker.prefetch(_elements(old for *_, old in rows))
-            ids: list[uuid.UUID] = []
-            values: list[str | None] = []
-            gone: list[bool] = []
+            if linker is not None:
+                linker.ready(target, [old for *_, old in rows])
+            writes: list[tuple[uuid.UUID, bool, Any]] = []
             history: list[tuple[uuid.UUID, str, uuid.UUID | None, dict[str, Any]]] = []
             for object_id, label, workspace_id, old in rows:
                 result = _converted(target, old, mapping, linker)
                 if result.failures or not result.changed:
                     continue
-                ids.append(object_id)
-                gone.append(result.remove)
+                writes.append((object_id, result.remove, result.value))
                 if result.remove:
-                    values.append(None)
                     cleared += 1
                     after: dict[str, Any] = {}
                 else:
-                    values.append(json.dumps(result.value, ensure_ascii=False))
                     converted += 1
                     after = {target.key: result.value}
                 history.append(
@@ -759,15 +734,13 @@ def apply(
                         object_id,
                         f"{owner.slug}:{label}",
                         workspace_id,
-                        changed_property(target.key, old, after),
+                        rewrite.changed_property(target.key, old, after),
                     )
                 )
-            if ids:
+            if writes:
                 # **덩어리 하나에 문장 하나** — 행마다 보내면 참조 색인 트리거가 행마다 돌았다
                 # (실측: 200만 건 38분).
-                db.execute(
-                    _SET_ONE, {"key": target.key, "ids": ids, "vals": values, "gone": gone}
-                )
+                rewrite.write_key(db, target.key, writes)
                 audit.record_rows(
                     db,
                     action="object.update",

@@ -8685,6 +8685,122 @@
         }
       }
     },
+    "/api/objects/{type_slug}/{object_id}/merge/job": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Merge Object Job",
+        "description": "합치기를 **작업으로** — 가리키는 기록이 많은 객체(OBJECTS-96). 같은 검사를 먼저 하고,\n워커가 같은 함수(`lifecycle.merge_into`)를 부른다.",
+        "operationId": "merge_object_job_api_objects__type_slug___object_id__merge_job_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/MergeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/{object_id}/detach/job": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Detach Object Job",
+        "description": "참조를 비우고 지우기를 **작업으로** — 가리키는 기록이 많은 객체(OBJECTS-96).",
+        "operationId": "detach_object_job_api_objects__type_slug___object_id__detach_job_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/{object_id}/relations": {
       "post": {
         "tags": [
@@ -12758,6 +12874,17 @@
           "message": {
             "type": "string",
             "title": "Message"
+          },
+          "job_path": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Path"
           }
         },
         "type": "object",

@@ -27,7 +27,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.objects import aliases, links, system
+from app.modules.objects import aliases, links, rewrite, system
 from app.modules.objects import relations as rel
 from app.modules.objects.models import ObjectInstance, ObjectRef, ObjectRelation
 from app.modules.ontology import interfaces
@@ -120,13 +120,6 @@ def _pointing(definition: PropertyDef, target_id: uuid.UUID) -> Any:
             ObjectRef.key == definition.key,
         )
     )
-
-
-def _pointing_rows(
-    db: Session, definition: PropertyDef, target_id: uuid.UUID
-) -> list[ObjectInstance]:
-    """전부 — **고치는 자리**(참조 비우기 · 병합)만 쓴다. 보여 주는 자리는 상한을 둔다."""
-    return list(db.scalars(_pointing(definition, target_id)))
 
 
 def references_of(
@@ -261,6 +254,32 @@ def delete_blocking(
     db.commit()
 
 
+#: 가리키는 것이 이보다 많으면 요청 안에서 고치지 않는다 — 작업으로 돈다(ADR 0010). 인기 모델
+#: (기록 10만 건)의 병합이 31초였다 — 클라이언트 · 프록시가 먼저 끊는다.
+REWRITE_INLINE = 20_000
+
+
+def _require_inline(
+    db: Session, row: ObjectInstance, object_type: ObjectType, *, what: str, job: str
+) -> None:
+    """가리키는 것이 많으면 작업으로 가라고 말한다(OBJECTS-96, `details.job_path`)."""
+    bounded = (
+        select(ObjectRef.src_id)
+        .where(ObjectRef.dst_id == row.id)
+        .limit(REWRITE_INLINE + 1)
+        .subquery()
+    )
+    if int(db.scalar(select(func.count()).select_from(bounded)) or 0) <= REWRITE_INLINE:
+        return
+    path = f"/api/objects/{object_type.slug}/{row.id}/{job}/job"
+    raise Conflict(
+        code("OBJECTS", 96),
+        f"{row.label}을(를) 가리키는 것이 {REWRITE_INLINE:,}건을 넘어 {what}을(를) 작업으로 "
+        f"돌립니다 — POST {path}.",
+        details={"limit": REWRITE_INLINE, "job_path": path},
+    )
+
+
 def _rewrite_ref(
     values: dict[str, Any], key: str, old: str, new: str | None
 ) -> dict[str, Any]:
@@ -293,34 +312,84 @@ def _rewrite_property_refs(
     reason: str,
 ) -> int:
     """이 객체를 가리키는 모든 칸을 고친다 — **보이지 않는 것까지.** 반쯤 고치면 남의
-    부서 화면에만 uuid 가 남고, 그것은 이 사람이 알 수 없다."""
+    부서 화면에만 uuid 가 남고, 그것은 이 사람이 알 수 없다.
+
+    인기 모델은 기록 10만 건이 가리킨다 — 덩어리마다 그 칸만 읽어 잠그고, 문장 하나로 그 칸만
+    고치고, 이력은 바뀐 칸만 덩어리째 남긴다(`objects.rewrite`). 바깥 알림은 합치기 · 지우기
+    한 줄로 간다. 예전에는 가리키는 객체를 하나씩 실어 고쳤다."""
+    # 이 세션에 실린 변경을 먼저 쓴다 — 아래는 ORM 을 거치지 않는다.
+    db.flush()
+    old = str(row.id)
+    new = None if new_id is None else str(new_id)
     touched = 0
     for owner_type, definition in ref_defs(db, object_type.slug):
-        for other in _pointing_rows(db, definition, row.id):
-            before = dict(other.properties or {})
-            other.properties = _rewrite_ref(
-                before, definition.key, str(row.id), None if new_id is None else str(new_id)
+        last: uuid.UUID | None = None
+        while True:
+            stmt = (
+                select(
+                    ObjectInstance.id,
+                    ObjectInstance.label,
+                    ObjectInstance.owner_workspace_id,
+                    ObjectInstance.properties[definition.key],
+                )
+                .join(ObjectRef, ObjectRef.src_id == ObjectInstance.id)
+                .where(
+                    ObjectRef.dst_id == row.id,
+                    ObjectRef.src_type_id == definition.owner_id,
+                    ObjectRef.key == definition.key,
+                )
+                .order_by(ObjectInstance.id)
+                .limit(rewrite.CHUNK)
+                .with_for_update(of=ObjectInstance)
             )
-            touched += 1
-            audit.record(
+            if last is not None:
+                stmt = stmt.where(ObjectInstance.id > last)
+            found = [(one[0], one[1], one[2], one[3]) for one in db.execute(stmt)]
+            if not found:
+                break
+            writes: list[tuple[uuid.UUID, bool, Any]] = []
+            history: list[tuple[uuid.UUID, str, uuid.UUID | None, dict[str, Any]]] = []
+            for other_id, label, workspace_id, raw in found:
+                after = _rewrite_ref({definition.key: raw}, definition.key, old, new)
+                writes.append(
+                    (other_id, definition.key not in after, after.get(definition.key))
+                )
+                history.append(
+                    (
+                        other_id,
+                        f"{owner_type.slug}:{label}",
+                        workspace_id,
+                        rewrite.changed_property(definition.key, raw, after),
+                    )
+                )
+            rewrite.write_key(db, definition.key, writes)
+            audit.record_rows(
                 db,
                 action="object.update",
                 actor=user,
                 target_table="objects",
-                target_id=other.id,
-                target_label=f"{owner_type.slug}:{other.label}",
-                workspace_id=other.owner_workspace_id,
-                changes=audit.diff({"properties": before}, {"properties": other.properties}),
+                rows=history,
                 reason=reason,
             )
+            touched += len(found)
+            last = found[-1][0]
+    # 세션에 실린 객체(이긴 쪽이 진 쪽을 가리키던 칸 등)는 옛 값을 든다 — 다시 읽게 한다.
+    db.expire_all()
     return touched
 
 
 def delete_detaching(
-    db: Session, user: User, row: ObjectInstance, object_type: ObjectType
+    db: Session,
+    user: User,
+    row: ObjectInstance,
+    object_type: ObjectType,
+    *,
+    inline: bool = True,
 ) -> dict[str, int]:
     """참조를 비우고 관계를 끊고 지운다. **가리키던 객체마다 감사 기록이 남는다** —
     그 객체의 화면에서 「왜 이 칸이 비었지」 를 물으면 답이 있어야 한다."""
+    if inline:
+        _require_inline(db, row, object_type, what="참조를 비우고 지우기", job="detach")
     reason = f"{row.label} 을 삭제하면서 참조를 비움"
     cleared = _rewrite_property_refs(db, user, row, object_type, new_id=None, reason=reason)
     edges = list(
@@ -365,6 +434,8 @@ def merge_into(
     row: ObjectInstance,
     object_type: ObjectType,
     target: ObjectInstance,
+    *,
+    inline: bool = True,
 ) -> dict[str, int]:
     """row 를 target 에 합친다 — 참조·관계를 옮기고 row 는 `merged_into` 로 남긴다.
 
@@ -381,6 +452,8 @@ def merge_into(
     require_owner_edit(
         db, user, target.owner_workspace_id, what="객체", code_value=code("OBJECTS", 53)
     )
+    if inline:
+        _require_inline(db, row, object_type, what="합치기", job="merge")
     reason = f"{row.label} 을 {target.label} 에 합침"
     moved_refs = _rewrite_property_refs(
         db, user, row, object_type, new_id=target.id, reason=reason

@@ -622,6 +622,8 @@ class BulkEditRow(BaseModel):
     before: str
     after: str
     message: str
+    job_path: str | None = None
+    """여기서 못 하고 작업으로 해야 하는 행 — 그 주소(가리키는 기록이 많은 객체의 지우기)."""
 
 
 class BulkEditPlanOut(BaseModel):

@@ -9,9 +9,9 @@
 들어가 아무도 안 고친다. 실측(개발 DB): 개발모델의 판(`01` · `02` …)이 Northwind 공급사
 식별자와 65% 맞았다.
 
-두 단계로 센다. 먼저 SQL 로 「이 값을 식별자 · 이름 · 별칭 · id 로 가진 타입」 을 넉넉히 거르고
-(인덱스를 탄다), 걸린 타입만 이름 풀이를 세워 값마다 판정한다 — 타입마다 풀이를 다 세우면
-기록 타입의 식별자 · 이름을 통째로 읽는다.
+두 단계로 센다. 먼저 SQL 로 「이 값을 식별자 · 이름 · 별칭 · id 로 가진 타입」 을 거르고
+(인덱스를 탄다), 걸린 타입만 이름 풀이를 세워 값마다 판정한다. 큰 대상(기록 200만 건)은 그
+타입을 통째로 읽지 않고 이 열의 값만 덩어리째 묻는다(`bulk.Refs.prefetch`).
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ from collections import Counter, defaultdict
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -36,9 +36,6 @@ from app.shared.batches import chunks
 from app.shared.permissions import visible_owner_clause
 from app.shared.text import compare_key
 
-HUGE = 200_000
-"""이보다 큰 타입은 후보로 보지 않는다 — 이름 풀이가 그 타입의 식별자 · 이름을 통째로 읽는다.
-축은 수천 ~ 수만 건이고, 이만큼 큰 것은 기록이다(ADR 0010)."""
 DISTINCT_CAP = 2_000
 """열마다 많이 나온 값부터 이만큼만 본다."""
 PROPOSE_SHARE = 0.9
@@ -90,73 +87,48 @@ def _values(rows: list[dict[str, Any]], column: ColumnGuess) -> Counter[str]:
     return counts
 
 
-def _sizes(db: Session) -> dict[uuid.UUID, int]:
-    """타입마다 살아 있는 객체 수 — **`HUGE` 를 넘으면 거기서 멈추고 센다**(200만 건을 다
-    세지 않는다. 실측 0.09초)."""
-    out: dict[uuid.UUID, int] = {}
-    for type_id in db.scalars(select(ObjectType.id).where(ObjectType.kind_class != "system")):
-        bounded = (
-            select(ObjectInstance.id)
-            .where(ObjectInstance.type_id == type_id, ObjectInstance.deleted_at.is_(None))
-            .limit(HUGE + 1)
-            .subquery()
-        )
-        out[type_id] = int(db.scalar(select(func.count()).select_from(bounded)) or 0)
-    return out
-
-
 def _hits(
-    db: Session, user: User, values: set[str], small: list[uuid.UUID]
+    db: Session, user: User, values: set[str], regular: list[uuid.UUID]
 ) -> dict[str, set[uuid.UUID]]:
-    """값 → 그 값을 식별자 · 이름 · 별칭 · id 로 가진 타입들. **넉넉하게** 거른다(이름은
-    대소문자 무시) — 정확한 판정은 뒤에서 이름 풀이가 한다.
+    """값 → 그 값을 식별자 · 이름 · 별칭 · id 로 가진 타입들 — 인덱스로 거른다(식별자 ·
+    이름 · id 는 모든 타입, 별칭은 `objects` 의 타입들). 정확한 판정은 뒤에서 이름 풀이가 한다.
 
-    식별자는 모든 타입에서 찾는다(큰 타입이 걸렸다는 것도 알려 줄 말이다). 이름 · 별칭은 큰
-    타입을 빼고 찾는다 — `(type_id, lower(label))` 인덱스가 타입을 앞에 두기 때문이다."""
+    이름은 이름 풀이와 같은 **정확한 일치**다(`ix_objects_label`) — 대소문자를 넓혀 걸러 봐야
+    판정에서 다시 떨어진다."""
     out: dict[str, set[uuid.UUID]] = defaultdict(set)
     visible = visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+    alive = ObjectInstance.deleted_at.is_(None)
     texts = sorted(values)
     for batch in chunks(texts):
         for type_id, key in db.execute(
             select(ObjectInstance.type_id, ObjectInstance.key).where(
-                ObjectInstance.key.in_(batch), ObjectInstance.deleted_at.is_(None), visible
+                ObjectInstance.key.in_(batch), alive, visible
             )
         ):
             out[key].add(type_id)
+        for type_id, label in db.execute(
+            select(ObjectInstance.type_id, ObjectInstance.label).where(
+                ObjectInstance.label.in_(batch), alive, visible
+            )
+        ):
+            out[label].add(type_id)
     ids = [one for one in texts if _UUID.match(one)]
     for batch in chunks(ids):
         for type_id, found in db.execute(
             select(ObjectInstance.type_id, ObjectInstance.id).where(
-                ObjectInstance.id.in_([uuid.UUID(one) for one in batch]),
-                ObjectInstance.deleted_at.is_(None),
-                visible,
+                ObjectInstance.id.in_([uuid.UUID(one) for one in batch]), alive, visible
             )
         ):
             out[str(found)].add(type_id)
-    if not small:
+    if not regular:
         return out
-    lowered: dict[str, list[str]] = defaultdict(list)
-    for one in texts:
-        lowered[one.lower()].append(one)
-    lower_label = func.lower(ObjectInstance.label)
-    for batch in chunks(list(lowered)):
-        for type_id, label in db.execute(
-            select(ObjectInstance.type_id, lower_label).where(
-                ObjectInstance.type_id.in_(small),
-                lower_label.in_(batch),
-                ObjectInstance.deleted_at.is_(None),
-                visible,
-            )
-        ):
-            for original in lowered.get(label, []):
-                out[original].add(type_id)
     normed: dict[str, list[str]] = defaultdict(list)
     for one in texts:
         normed[compare_key(one)].append(one)
     for batch in chunks(list(normed)):
         for type_id, norm in db.execute(
             select(ObjectAlias.type_id, ObjectAlias.norm).where(
-                ObjectAlias.type_id.in_(small), ObjectAlias.norm.in_(batch)
+                ObjectAlias.type_id.in_(regular), ObjectAlias.norm.in_(batch)
             )
         ):
             for original in normed.get(norm, []):
@@ -264,10 +236,9 @@ def attach(db: Session, user: User, inferred: Inferred, rows: list[dict[str, Any
         return
 
     kinds = {one.id: one for one in db.scalars(select(ObjectType))}
-    sizes = _sizes(db)
-    small = [type_id for type_id, size in sizes.items() if size <= HUGE]
+    regular = [one.id for one in kinds.values() if not system.is_system(one)]
     every = {text for pairs in counted.values() for text, _ in pairs}
-    hits = _hits(db, user, every, small)
+    hits = _hits(db, user, every, regular)
     ends = interfaces.load_ends(db)
     targets: dict[str, _Target] = {
         one.slug: _Target(one.slug, one.label, "type", {one.slug}, log=one.usage == "log")
@@ -296,16 +267,10 @@ def attach(db: Session, user: User, inferred: Inferred, rows: list[dict[str, Any
                 weight[type_id] += n
         checked = sum(n for _, n in counts)
         floor = LIST_SHARE * checked
-        huge = [
-            kinds[type_id]
-            for type_id, w in weight.items()
-            if w >= floor and sizes.get(type_id, 0) > HUGE
-        ]
-
         chosen = [
             kinds[type_id].slug
             for type_id, w in weight.most_common()
-            if w >= floor and sizes.get(type_id, 0) <= HUGE and type_id in kinds
+            if w >= floor and type_id in kinds
         ][:PRECISE_MAX]
         # 인터페이스 — 구현 타입 **둘 이상**에 걸리면 그 인터페이스도 본다(값이 여러 타입에
         # 나뉘어 있으면 어느 한 타입으로는 90% 가 안 된다).
@@ -317,16 +282,17 @@ def attach(db: Session, user: User, inferred: Inferred, rows: list[dict[str, Any
         ]
         # 원 표(부서 · 계정)는 `objects` 에 없어 거르기에 안 걸린다 — 늘 본다(작다).
         candidates = [targets[slug] for slug in [*chosen, *shared, *systems]]
+        for one in candidates:
+            # 큰 대상(기록 200만 건)은 통째로 안 읽는다 — 이 열의 값만 덩어리째 묻는다.
+            refs.prefetch(one.slug, [text for text, _ in counts])
         measured = [_measure(refs, one, counts) for one in candidates]
         found = sorted(
             (one for one in measured if one.one and one.one >= floor),
             key=lambda one: (-one.one, one.target_kind == "interface", one.target_slug),
         )[:MAX_CANDIDATES]
         column.ref_candidates = found
-        notes = [
-            f"{one.label}({HUGE:,}건 넘음)은 너무 커서 후보로 보지 않았습니다" for one in huge
-        ]
-        if (found or huge) and column.header in capped:
+        notes: list[str] = []
+        if found and column.header in capped:
             # 아무것도 안 가리키는 열(메모 · 일련번호)에는 안 붙인다 — 할 말이 없는데 붙으면
             # 정작 읽어야 할 말이 묻힌다.
             total = capped[column.header]

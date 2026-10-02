@@ -11,16 +11,19 @@
 
 from __future__ import annotations
 
+import csv
 import hashlib
+import io
 import json
 import uuid
+import zipfile
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -58,7 +61,9 @@ class Work:
 
     def emit(self, *, name: str, content_type: str, data: bytes) -> JobFile:
         """결과 파일 — 사람은 `GET /api/jobs/{id}/download` 로 받는다."""
-        stored = files.store(self.db, name=name, content_type=content_type, data=data)
+        stored = files.store(
+            self.db, name=name, content_type=content_type, data=data, output=True
+        )
         self.output_file_id = stored.id
         return stored
 
@@ -403,30 +408,74 @@ def _list_query(work: Work) -> tuple[ObjectType, Any]:
     return object_type, stmt
 
 
+#: 내보내기가 한 번에 읽는 행 수 — 기록 200만 건을 한 목록으로 싣지 않는다.
+EXPORT_CHUNK = 2_000
+#: 이보다 많으면 zip 으로 묶어 낸다 — 작업 결과 파일은 DB 에 들고(Postgres 한 값은 1GB 까지),
+#: 기록 200만 건의 CSV 는 그것을 넘는다. 압축하면 열에 하나쯤이다.
+EXPORT_PLAIN_MAX = 100_000
+
+
 def objects_export(work: Work) -> dict[str, Any]:
+    """목록과 같은 거르기 · 정렬로 **덩어리마다 읽어 쓴다**(`yield_per`). 예전에는 타입 전체를
+    객체로 싣고 파일을 한 번에 만들어, 기록 200만 건이면 워커의 메모리가 먼저 바닥났다."""
     object_type, stmt = _list_query(work)
     defs = properties_of(work.db, object_type.id)
-    work.progress("읽기", 0, 0)
-    rows = list(work.db.scalars(apply_sort(stmt, object_type.list_view or {})))
-    work.progress("변환", 0, len(rows))
-    records = bulk.export_rows(work.db, defs, rows)
+    total = int(
+        work.db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
+    )
+    work.progress("읽기", 0, total)
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
-    fmt = str(work.params.get("format") or "csv")
+    fmt = "json" if str(work.params.get("format") or "csv") == "json" else "csv"
+    name = f"{object_type.slug}-{stamp}.{fmt}"
+    zipped = total > EXPORT_PLAIN_MAX
+    columns = bulk.export_columns(defs)
+
+    buffer = io.BytesIO()
+    archive = zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) if zipped else None
+    out = archive.open(name, "w") if archive is not None else buffer
+    out.write(("﻿" + _csv_line(columns, None)).encode() if fmt == "csv" else b'{"rows": [\n')
+    done = 0
+    rows = work.db.scalars(
+        apply_sort(stmt, object_type.list_view or {}).execution_options(yield_per=EXPORT_CHUNK)
+    )
+    for part in rows.partitions():
+        records = bulk.export_rows(work.db, defs, list(part))
+        if fmt == "csv":
+            out.write("".join(_csv_line(columns, one) for one in records).encode("utf-8"))
+        else:
+            out.write(
+                ",\n".join(json.dumps(one, ensure_ascii=False) for one in records).encode()
+                if not done
+                else "".join(
+                    ",\n" + json.dumps(one, ensure_ascii=False) for one in records
+                ).encode()
+            )
+        done += len(records)
+        work.progress("변환", done, total)
     if fmt == "json":
-        payload = json.dumps({"rows": records}, ensure_ascii=False, indent=1).encode("utf-8")
-        work.emit(
-            name=f"{object_type.slug}-{stamp}.json",
-            content_type="application/json",
-            data=payload,
-        )
+        out.write(b"\n]}\n")
+    if archive is not None:
+        out.close()
+        archive.close()
+    work.emit(
+        name=f"{name}.zip" if zipped else name,
+        content_type="application/zip"
+        if zipped
+        else ("application/json" if fmt == "json" else "text/csv; charset=utf-8"),
+        data=buffer.getvalue(),
+    )
+    return {"type_slug": object_type.slug, "rows": done, "format": fmt, "zipped": zipped}
+
+
+def _csv_line(columns: list[str], record: dict[str, Any] | None) -> str:
+    """CSV 한 줄 — `record` 가 없으면 머리줄. 엑셀이 읽는 그대로(`bulk.to_csv` 와 같은 꼴)."""
+    line = io.StringIO()
+    writer = csv.DictWriter(line, fieldnames=columns, extrasaction="ignore")
+    if record is None:
+        writer.writeheader()
     else:
-        work.emit(
-            name=f"{object_type.slug}-{stamp}.csv",
-            content_type="text/csv; charset=utf-8",
-            data=bulk.to_csv(bulk.export_columns(defs), records),
-        )
-    work.progress("변환", len(rows), len(rows))
-    return {"type_slug": object_type.slug, "rows": len(rows), "format": fmt}
+        writer.writerow(record)
+    return line.getvalue()
 
 
 def relations_export(work: Work) -> dict[str, Any]:
@@ -552,7 +601,17 @@ def ontology_retype(work: Work) -> dict[str, Any]:
     return ontology_routes.run_retype_job(work.db, user, work.params, work.progress)
 
 
+def objects_rewrite(work: Work) -> dict[str, Any]:
+    """병합 · 참조 비우고 지우기 — 가리키는 기록이 많은 객체(인기 모델은 10만 건). 요청 경로와
+    같은 검사 · 같은 함수(`objects.routes.run_rewrite_job`)."""
+    # 객체 라우터가 이 모듈을 거쳐 작업을 넣는다 — 서로 부르므로 여기서 늦게 읽는다.
+    from app.modules.objects import routes as objects_routes
+
+    return objects_routes.run_rewrite_job(work.db, _user(work), work.params, work.progress)
+
+
 register(Kind("objects_import", "객체 일괄 입력", True, True, objects_import, True))
+register(Kind("objects_rewrite", "병합 · 참조 비우고 지우기", False, False, objects_rewrite))
 register(Kind("ontology_retype", "속성 종류 변경", False, True, ontology_retype))
 register(Kind("relations_import", "관계 일괄 입력", True, True, relations_import))
 register(Kind("bundle_import", "묶음 가져오기", True, True, bundle_import))

@@ -20,14 +20,19 @@ from app.modules.objects.models import ObjectRelationTombstone
 from app.shared.errors import AppError, code
 
 
-def store(db: Session, *, name: str, content_type: str, data: bytes) -> JobFile:
+def store(
+    db: Session, *, name: str, content_type: str, data: bytes, output: bool = False
+) -> JobFile:
+    """`output` 이면 작업이 만든 결과 파일 — 상한이 따로다(`job_output_max_bytes`)."""
     settings = get_settings()
-    if len(data) > settings.job_file_max_bytes:
-        limit = settings.job_file_max_bytes // (1024 * 1024)
+    cap = settings.job_output_max_bytes if output else settings.job_file_max_bytes
+    if len(data) > cap:
+        limit = cap // (1024 * 1024)
+        advice = "조건으로 좁혀 나눠 내보내세요" if output else "나눠 올리세요"
         raise AppError(
             code("JOBS", 1),
             f"파일이 너무 큽니다({len(data) // (1024 * 1024)}MB). 한 번에 {limit}MB 까지 — "
-            "나눠 올리세요.",
+            f"{advice}.",
             status=413,
         )
     if not data:

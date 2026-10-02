@@ -1155,3 +1155,54 @@ def test_값이_많은_타입의_종류_변경은_작업이_되고_job_apply_로
     assert done["status"] == "done" and done["result"]["applied"] is True, done
     values = {one["properties"]["qty"] for one in bot.call(server.objects_list, case)["items"]}
     assert values == {1, 2}
+
+
+def test_가리키는_기록이_많은_객체의_합치기와_지우기는_작업으로_한다(
+    bot: Bot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.modules.objects import lifecycle
+
+    monkeypatch.setattr(lifecycle, "REWRITE_INLINE", 1)
+    model, case = _uniq("model"), _uniq("case")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {"slug": model, "label": "개발모델", "key_policy": "required"},
+                {
+                    "slug": case,
+                    "label": "시장 서비스",
+                    "usage": "log",
+                    "properties": [
+                        {
+                            "key": "model",
+                            "label": "모델",
+                            "data_type": "object_ref",
+                            "ref_type_slug": model,
+                        }
+                    ],
+                },
+            ]
+        },
+        apply=True,
+    )
+    old = bot.call(server.object_create, model, key="OLD", label="옛 모델")
+    new = bot.call(server.object_create, model, key="NEW", label="새 모델")
+    gone = bot.call(server.object_create, model, key="GONE", label="지울 모델")
+    for n in range(2):
+        bot.call(server.object_create, case, label=f"건 {n}", properties={"model": old["id"]})
+        bot.call(
+            server.object_create, case, label=f"건 {n}b", properties={"model": gone["id"]}
+        )
+
+    merged = bot.call(server.object_merge, model, old["id"], new["id"], apply=True)
+    assert merged["kind"] == "objects_rewrite" and merged["status"] == "done", merged
+    assert merged["result"]["property_refs"] == 2
+
+    deleted = bot.call(server.objects_delete, model, [gone["id"]], mode="detach", apply=True)
+    row = deleted["rows"][0]
+    assert row["job"]["status"] == "done" and row["job"]["result"]["op"] == "detach", deleted
+    pointed = {
+        one["properties"].get("model") for one in bot.call(server.objects_list, case)["items"]
+    }
+    assert pointed == {new["id"], None}

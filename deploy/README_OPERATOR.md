@@ -283,8 +283,9 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 - **워커가 한 시간마다 치운다**: 작업 파일 7일(`JOB_FILE_TTL_DAYS`) · **끝난 작업 기록 30일**
   (`JOB_TTL_DAYS`). 도는 작업은 아무리 오래돼도 안 지운다. 손으로 당기려면
   `POST /api/jobs/maintenance/purge`(시스템 관리자).
-- 작업 파일은 DB(`job_files`)에 든다 — 두 대가 같이 읽어야 해서다. 7일 뒤 지운다. 상한 100MB
-  (`.env` 의 `JOB_FILE_MAX_BYTES`). **백업 덤프에는 그 내용이 안 담긴다**(임시물이라 — `backup.sh` 의
+- 작업 파일은 DB(`job_files`)에 든다 — 두 대가 같이 읽어야 해서다. 7일 뒤 지운다. 올리는 파일의 상한
+  100MB(`.env` 의 `JOB_FILE_MAX_BYTES`), 작업이 만드는 결과 파일(내보내기)의 상한 512MB
+  (`JOB_OUTPUT_MAX_BYTES` — 10만 행이 넘는 내보내기는 zip 으로 나간다). **백업 덤프에는 그 내용이 안 담긴다**(임시물이라 — `backup.sh` 의
   `--exclude-table-data=job_files`). 복구한 서버에서는 그 작업의 파일이 없고, 그때는 다시 올린다.
 - `update` 는 앱과 워커를 함께 멈춘다(하던 작업은 최대 2분 기다린다) — 옛 코드가 새 마이그레이션 위에서
   작업을 집으면 안 된다.

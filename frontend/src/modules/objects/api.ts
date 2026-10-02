@@ -763,6 +763,14 @@ export const objectApi = {
   /** 다른 객체에 합치고 지운다 — 참조·관계가 이긴 쪽으로. */
   merge: (typeSlug: string, id: string, into: string) =>
     api.post<MergeResult>(`/objects/${typeSlug}/${id}/merge`, { into }),
+  /**
+   * 가리키는 기록이 많은 객체(OBJECTS-96 — 인기 모델은 10만 건)는 합치기 · 참조 비우고 지우기를
+   * **작업으로** 한다. 작업의 결과는 같은 모양이다.
+   */
+  mergeJob: (typeSlug: string, id: string, into: string) =>
+    api.post<Job>(`/objects/${typeSlug}/${id}/merge/job`, { into }),
+  detachJob: (typeSlug: string, id: string) =>
+    api.post<Job>(`/objects/${typeSlug}/${id}/detach/job`, {}),
 
   addRelation: (typeSlug: string, id: string, body: Record<string, unknown>) =>
     api.post<RelatedObject>(`/objects/${typeSlug}/${id}/relations`, body),

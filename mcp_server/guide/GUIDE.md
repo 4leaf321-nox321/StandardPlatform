@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-03d
+GUIDE_VERSION: 2026-10-03f
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -205,8 +205,8 @@ GUIDE_VERSION: 2026-10-03d
 4. `table_build(slug, label, columns, rows)` → `schema` · `import_rows`. `ontology_import(schema)` 로
    계획을 보이고 `apply=True`, 그다음 `objects_import(slug, import_rows)` → `job_apply`.
 
-후보에서 빠지는 것: 20만 건이 넘는 타입(기록)은 보지 않는다(`ref_note` 가 말한다). 원 표(부서 ·
-계정)는 늘 본다.
+기록 타입(`usage="log"`)은 후보로 보이되 제안하지 않는다(`ref_note` 가 말한다). 원 표(부서 · 계정)는
+늘 본다.
 
 ### 지우기 — `ontology_delete(kind, slug, key=)`
 
@@ -385,11 +385,13 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   `object_update(aliases=[...])` 로 다른 이름을 붙인다. 그 뒤로 파일·참조·찾기가 그 표기로도
   같은 객체를 찾는다. **같은 것을 새로 만들지 말고 별칭을 붙인다.** 이미 둘이 됐으면
   `object_merge(object_id, into=)` — 미리 보기로 두 객체와 지는 쪽을 가리키는 것을 사람에게 보이고,
-  어느 쪽이 남을지 확인받은 뒤 `apply=true`. 지는 쪽 이름이 자동으로 별칭이 된다.
+  어느 쪽이 남을지 확인받은 뒤 `apply=true`. 지는 쪽 이름이 자동으로 별칭이 된다. 지는 쪽을 가리키는
+  기록이 2만 건을 넘으면(인기 모델) 작업으로 돌고 도구가 기다린다 — 돌아온 `status` · `result` 를 전한다.
 - **지우기** — `objects_delete(type_slug, ids, mode=)`. 미리 보기가 줄마다 지울지 · 거절할지를
   말한다. 적용은 **지울 수 있는 줄만 지우고 막힌 줄은 남긴다** — 무엇이 남았는지 사람에게 전한다.
   다른 것이 가리키는 객체는 기본(`block`)으로 거절된다 — `object_references` 를 사람에게
-  보이고, 그가 「참조를 비우고 지운다」 고 정하면 `mode="detach"`. 그만 쓰는 것이면 지우지 말고
+  보이고, 그가 「참조를 비우고 지운다」 고 정하면 `mode="detach"`(가리키는 기록이 2만 건 넘는 객체는 그
+  줄이 작업으로 돌고 `rows[].job` 에 결과가 온다). 그만 쓰는 것이면 지우지 말고
   `object_update(status="deprecated")`. 지운 행도 기록으로 남는다.
 - `object_get` 은 `object` · `properties_schema` · `related`(양방향) 를 함께 준다 —
   화면의 상세와 같은 것이다.

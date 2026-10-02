@@ -110,6 +110,10 @@ class Settings(BaseSettings):
     job_file_max_bytes: int = 100 * 1024 * 1024
     """작업 파일 상한. 파일은 DB(`job_files.data`)에 들어간다 — 서버 두 대가 같이 읽어야
     해서다(`docs/작업-워커-설계.md` 3장). 통째로 메모리에 올리므로 상한이 있어야 한다."""
+    job_output_max_bytes: int = 512 * 1024 * 1024
+    """작업이 **만드는** 결과 파일의 상한 — 올리는 파일(`job_file_max_bytes`)과 따로 둔다. 기록
+    200만 건 내보내기는 zip 으로도 128MB 였다(실측). Postgres 한 값은 1GB 까지라 그 아래에서
+    멈춘다 — 넘으면 조건으로 좁혀 나눠 내보내라고 말한다."""
     job_file_ttl_days: int = 7
     """작업 파일을 지우기까지. 임시물이 영구물이 되면 표가 DB 의 대부분이 된다."""
     job_ttl_days: int = 30

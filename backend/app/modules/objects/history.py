@@ -237,7 +237,7 @@ def history_of(db: Session, row: ObjectInstance) -> list[Entry]:
 
 def _properties_before(now: dict[str, Any], change: dict[str, Any]) -> dict[str, Any]:
     """속성 기록 하나 앞의 값. 보통은 기록이 속성 전체를 담는다. **바뀐 칸만** 담은 기록
-    (`keys` — 종류 변경, `retype.changed_property`)은 그 칸만 되짚고 나머지는 지금 값
+    (`keys` — 종류 변경 · 병합, `rewrite.changed_property`)은 그 칸만 되짚고 나머지는 지금 값
     그대로다."""
     keys = change.get("keys")
     if not isinstance(keys, list):

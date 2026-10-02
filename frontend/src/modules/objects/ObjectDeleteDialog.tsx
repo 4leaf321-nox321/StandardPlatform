@@ -16,6 +16,8 @@ import { useMemo, useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Loader2 } from 'lucide-react'
 
+import { jobsApi } from '@/modules/jobs/api'
+import type { Job } from '@/modules/jobs/api'
 import { objectApi } from '@/modules/objects/api'
 import { useObjectOptions } from '@/modules/objects/useObjectOptions'
 import type { ObjectRow } from '@/modules/objects/api'
@@ -58,6 +60,8 @@ export function ObjectDeleteDialog({
   const [choice, setChoice] = useState<Choice>('keep')
   const [into, setInto] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  /** 작업으로 도는 중 — 가리키는 기록이 많아 수십 초 걸린다. */
+  const [waiting, setWaiting] = useState(false)
   const [error, setError] = useState<ApiError | Error | null>(null)
 
   const blocked = Boolean(refs.data && refs.data.total > 0)
@@ -77,6 +81,20 @@ export function ObjectDeleteDialog({
     return { props, rels, hidden: data.hidden_property_refs + data.hidden_relations }
   }, [refs.data])
 
+  /** 가리키는 기록이 많으면 서버가 작업으로 가라고 한다(OBJECTS-96) — 넣고 끝까지 기다린다. */
+  async function viaJob(start: () => Promise<Job>): Promise<void> {
+    setWaiting(true)
+    try {
+      const done = await jobsApi.waitFor((await start()).id)
+      if (done.status !== 'done') throw new Error(done.error ?? '작업이 끝나지 않았습니다.')
+    } finally {
+      setWaiting(false)
+    }
+  }
+
+  const tooMany = (caught: unknown) =>
+    caught instanceof ApiError && caught.code.endsWith('OBJECTS-0096')
+
   async function run() {
     setBusy(true)
     setError(null)
@@ -85,11 +103,22 @@ export function ObjectDeleteDialog({
         await objectApi.remove(typeSlug, object.id, 'block')
         onDone(null)
       } else if (choice === 'detach') {
-        await objectApi.remove(typeSlug, object.id, 'detach')
+        try {
+          await objectApi.remove(typeSlug, object.id, 'detach')
+        } catch (caught) {
+          if (!tooMany(caught)) throw caught
+          await viaJob(() => objectApi.detachJob(typeSlug, object.id))
+        }
         onDone(null)
       } else if (choice === 'merge' && into) {
-        const result = await objectApi.merge(typeSlug, object.id, into)
-        onDone(result.into)
+        try {
+          const result = await objectApi.merge(typeSlug, object.id, into)
+          onDone(result.into)
+        } catch (caught) {
+          if (!tooMany(caught)) throw caught
+          await viaJob(() => objectApi.mergeJob(typeSlug, object.id, into))
+          onDone(into)
+        }
       }
     } catch (caught) {
       // **창을 닫지 않는다.** 닫으면 오류가 어디에도 안 남고, 사람은 일이 된 줄 안다.
@@ -266,6 +295,12 @@ export function ObjectDeleteDialog({
           </div>
         )}
 
+        {waiting && (
+          <p className="text-muted-foreground flex items-center gap-1.5 text-xs">
+            <Loader2 className="size-3.5 animate-spin" />
+            가리키는 기록이 많아 작업으로 돕니다 — 끝날 때까지 기다립니다.
+          </p>
+        )}
         {error && <ErrorNotice error={error} />}
 
         <DialogFooter>

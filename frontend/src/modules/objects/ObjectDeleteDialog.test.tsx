@@ -8,14 +8,19 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { ObjectRow, References } from '@/modules/objects/api'
+import { ApiError } from '@/shared/api/client'
 
 const objectApi = vi.hoisted(() => ({
   references: vi.fn(),
   remove: vi.fn(),
   merge: vi.fn(),
   list: vi.fn(),
+  detachJob: vi.fn(),
+  mergeJob: vi.fn(),
 }))
 vi.mock('@/modules/objects/api', () => ({ objectApi }))
+const jobsApi = vi.hoisted(() => ({ waitFor: vi.fn() }))
+vi.mock('@/modules/jobs/api', () => ({ jobsApi }))
 
 const ACME = { id: 'acme', label: 'ACME', key: null, status: 'active', properties: {} } as ObjectRow
 
@@ -166,5 +171,22 @@ describe('삭제 창', () => {
     await userEvent.click(screen.getByRole('button', { name: '병합 후 삭제' }))
     await waitFor(() => expect(objectApi.merge).toHaveBeenCalledWith('vendor', 'acme', 'other'))
     expect(onDone).toHaveBeenCalledWith('other')
+  })
+
+  it('가리키는 기록이 많으면 서버가 말하는 대로 작업으로 지우고 끝까지 기다린다', async () => {
+    objectApi.references.mockResolvedValue(SOME)
+    objectApi.remove.mockRejectedValue(
+      new ApiError(409, { error: { code: 'APP-OBJECTS-0096', message: '작업으로 돌립니다' } }),
+    )
+    objectApi.detachJob.mockResolvedValue({ id: 'j1' })
+    jobsApi.waitFor.mockResolvedValue({ id: 'j1', status: 'done', error: null })
+    const onDone = await mount()
+    await userEvent.click(
+      await screen.findByRole('radio', { name: /참조를 참조를 비우고 관계를 해제한 뒤 삭제/ }),
+    )
+    await userEvent.click(screen.getByRole('button', { name: '참조 해제 후 삭제' }))
+    await waitFor(() => expect(onDone).toHaveBeenCalledWith(null))
+    expect(objectApi.detachJob).toHaveBeenCalledWith('vendor', 'acme')
+    expect(jobsApi.waitFor).toHaveBeenCalledWith('j1')
   })
 })

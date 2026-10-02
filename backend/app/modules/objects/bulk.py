@@ -28,12 +28,13 @@ from __future__ import annotations
 import contextlib
 import csv
 import io
+import re
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import and_, or_, select, true
+from sqlalchemy import and_, func, or_, select, true
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -229,6 +230,22 @@ class _RefIndex:
     clashing: set[str] = field(default_factory=set)
     """**두 구현 타입에 같은 식별자**가 있다 — 식별자는 타입마다 따로라 그 글자만으로는 어느
     것인지 정해지지 않는다. 짐작하지 않고 그 줄을 거절한다."""
+    lazy: bool = False
+    """대상이 **큰 타입**이다(`BIG_TARGET` 넘음) — 통째로 안 읽고, 물은 글자만 채운다
+    (`Refs.prefetch`). 위 사전들은 물은 글자에 대해서만 맞다."""
+    member_ids: list[uuid.UUID] = field(default_factory=list)
+    """나중에 물을 타입들(원 표가 아닌 것)."""
+    asked: set[str] = field(default_factory=set)
+    """이미 물은 글자."""
+
+
+#: 이보다 큰 참조 대상은 통째로 안 읽는다 — 넣을 값만 덩어리로 묻는다. 기록이 기록(200만 건)을
+#: 가리키면 그 식별자 · 이름을 다 읽어 메모리에 들게 된다.
+BIG_TARGET = 100_000
+
+_UUID_SHAPE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
 
 
 class Refs:
@@ -236,6 +253,9 @@ class Refs:
 
     대상이 인터페이스면 그것을 구현한 타입 전부에서 찾는다(ADR 0006). 저장할 때의 대상 검사와
     같은 범위다 — 여기서 넓게 찾아 놓고 저장에서 거절하면 사람은 왜 막혔는지 모른다.
+
+    대상이 **큰 타입**(`BIG_TARGET` 넘음)이면 통째로 안 읽는다 — 부르는 쪽이 넣을 값을 모아
+    `prefetch` 로 덩어리째 묻고, 묻지 않은 글자가 오면 그것만 묻는다. 판정(`classify`)은 같다.
     """
 
     def __init__(
@@ -263,6 +283,7 @@ class Refs:
         그 줄을 건너뛸지(새로 만드는 줄) 그대로 둘지(이미 값이 있는 줄) 정한다."""
         self.cache: dict[str, _RefIndex] = {}
         self._ends: interfaces.Ends | None = None
+        self._big: dict[uuid.UUID, bool] = {}
 
     def _members(self, target: str) -> list[str]:
         """대상이 담는 타입들 — 타입이면 그것 하나, 인터페이스면 구현 타입 전부."""
@@ -304,10 +325,118 @@ class Refs:
                 out.by_label.setdefault(row_label.strip(), []).append(row_id)
         return out
 
+    def _visible(self) -> Any:
+        if self.user is None:
+            return true()
+        return visible_owner_clause(self.user, ObjectInstance.owner_workspace_id)
+
+    def _is_big(self, object_type: ObjectType) -> bool:
+        """`BIG_TARGET` 를 넘나 — 거기서 멈추고 센다(200만 건을 다 세지 않는다)."""
+        if object_type.id not in self._big:
+            bounded = (
+                select(ObjectInstance.id)
+                .where(
+                    ObjectInstance.type_id == object_type.id,
+                    ObjectInstance.deleted_at.is_(None),
+                )
+                .limit(BIG_TARGET + 1)
+                .subquery()
+            )
+            size = self.db.scalar(select(func.count()).select_from(bounded)) or 0
+            self._big[object_type.id] = size > BIG_TARGET
+        return self._big[object_type.id]
+
+    def _load_lazy(self, kinds: list[ObjectType]) -> _RefIndex | None:
+        """구현 타입 중 하나라도 크면 **물을 때 채우는** 사전 — 원 표(부서 · 계정)는 작아서
+        그대로 읽어 넣는다."""
+        regular = [one for one in kinds if not system.is_system(one)]
+        if not any(self._is_big(one) for one in regular):
+            return None
+        out = _RefIndex(lazy=True, member_ids=[one.id for one in regular])
+        for one in kinds:
+            if system.is_system(one):
+                part = self._load_type(one.slug)
+                out.by_key.update(part.by_key)
+                for label, hits in part.by_label.items():
+                    out.by_label.setdefault(label, []).extend(hits)
+                out.ids |= part.ids
+        return out
+
+    def prefetch(self, target: str, texts: Iterable[str]) -> None:
+        """큰 대상이면 이 글자들을 **덩어리째** 물어 둔다 — 식별자 · 이름 · 별칭 · id. 작은
+        대상은 이미 다 읽었으니 아무것도 안 한다."""
+        index = self._load(target)
+        if not index.lazy:
+            return
+        wanted = sorted({one.strip() for one in texts if one and one.strip()} - index.asked)
+        for batch in chunks(wanted):
+            index.asked.update(batch)
+            self._fetch(index, batch)
+
+    def _fetch(self, index: _RefIndex, batch: list[str]) -> None:
+        where = (
+            ObjectInstance.type_id.in_(index.member_ids),
+            ObjectInstance.deleted_at.is_(None),
+            self._visible(),
+        )
+        for row_id, row_key in self.db.execute(
+            select(ObjectInstance.id, ObjectInstance.key).where(
+                *where, ObjectInstance.key.in_(batch)
+            )
+        ):
+            index.ids.add(str(row_id))
+            if row_key in index.by_key and index.by_key[row_key] != row_id:
+                index.clashing.add(row_key)
+            index.by_key.setdefault(row_key, row_id)
+        for row_id, row_label in self.db.execute(
+            select(ObjectInstance.id, ObjectInstance.label).where(
+                *where, ObjectInstance.label.in_(batch)
+            )
+        ):
+            index.ids.add(str(row_id))
+            hits = index.by_label.setdefault(row_label.strip(), [])
+            if row_id not in hits:
+                hits.append(row_id)
+        # 별칭 — 통째로 읽을 때와 같은 규칙: 한 타입 안에서 그 별칭이 객체 하나여야 하고, 두
+        # 타입이 서로 다른 것을 가리키면 별칭으로는 안 정해진다.
+        norms = {compare_key(one) for one in batch}
+        by_type: dict[tuple[str, uuid.UUID], set[uuid.UUID]] = {}
+        for norm, object_id, type_id in self.db.execute(
+            select(ObjectAlias.norm, ObjectAlias.object_id, ObjectAlias.type_id)
+            .join(ObjectInstance, ObjectInstance.id == ObjectAlias.object_id)
+            .where(
+                ObjectAlias.type_id.in_(index.member_ids),
+                ObjectAlias.norm.in_(norms),
+                ObjectInstance.deleted_at.is_(None),
+            )
+        ):
+            by_type.setdefault((norm, type_id), set()).add(object_id)
+        single: dict[str, set[uuid.UUID]] = {}
+        for (norm, _type_id), found in by_type.items():
+            if len(found) == 1:
+                single.setdefault(norm, set()).update(found)
+        for norm, found in single.items():
+            if len(found) == 1:
+                index.by_alias[norm] = next(iter(found))
+        shaped = [uuid.UUID(one) for one in batch if _UUID_SHAPE.match(one)]
+        if shaped:
+            index.ids.update(
+                str(one)
+                for one in self.db.scalars(
+                    select(ObjectInstance.id).where(*where, ObjectInstance.id.in_(shaped))
+                )
+            )
+
     def _load(self, target: str) -> _RefIndex:
         if target not in self.cache:
             members = self._members(target)
-            if len(members) == 1:
+            kinds = list(
+                self.db.scalars(select(ObjectType).where(ObjectType.slug.in_(members)))
+            )
+            lazy = self._load_lazy(kinds)
+            if lazy is not None:
+                self.cache[target] = lazy
+            elif len(members) == 1:
                 self.cache[target] = self._load_type(members[0])
             else:
                 merged = _RefIndex()
@@ -344,8 +473,12 @@ class Refs:
                 continue
             raw = values[definition.key]
             items = raw if isinstance(raw, list) else [raw]
-            ids = self._load(definition.ref_type_slug or "").ids
-            out.extend(str(one) for one in items if one and str(one) not in ids)
+            index = self._load(definition.ref_type_slug or "")
+            if index.lazy:
+                # 큰 대상 — 모르는 id 만 물어 본다(풀이로 얻은 id 는 이미 들어 있다).
+                unknown = [str(one) for one in items if one and str(one) not in index.ids]
+                self.prefetch(definition.ref_type_slug or "", unknown)
+            out.extend(str(one) for one in items if one and str(one) not in index.ids)
         return out
 
     def classify(self, target: str, raw: str) -> RefMatch:
@@ -356,6 +489,9 @@ class Refs:
         거절된다(ADR 0009)."""
         index = self._load(target)
         text = raw.strip()
+        if index.lazy and text not in index.asked:
+            # 미리 묻지 않은 글자 — 그것만 묻는다(부르는 쪽이 `prefetch` 하면 오지 않는다).
+            self.prefetch(target, [text])
         if text in index.clashing:
             return RefMatch("many", how="key")
         if text in index.by_key:
@@ -412,6 +548,35 @@ class Refs:
             code("OBJECTS", 41),
             f"{definition.label}: 「{text}」 을 {target} 에서 찾을 수 없습니다.",
         )
+
+
+def prefetch_cells(
+    refs: Refs,
+    by_key: dict[str, PropertyDef],
+    mapping: dict[str, str],
+    rows: list[dict[str, Any]],
+) -> None:
+    """이 파일의 참조 칸 글자를 **대상마다 모아 한 번에** 묻는다 — 큰 대상은 통째로 안 읽으니,
+    줄마다 묻지 않게 미리 덩어리로(작은 대상은 아무것도 안 한다)."""
+    wanted: dict[str, set[str]] = {}
+    for header, prop_key in mapping.items():
+        definition = by_key.get(prop_key)
+        if definition is None or definition.data_type != "object_ref":
+            continue
+        bucket = wanted.setdefault(definition.ref_type_slug or "", set())
+        for row in rows:
+            raw = row.get(header)
+            for item in raw if isinstance(raw, list) else [raw]:
+                if not isinstance(item, str):
+                    continue
+                parts = item.split(MULTI_SEP) if definition.multi else [item]
+                bucket.update(
+                    part.strip()
+                    for part in parts
+                    if part.strip() and part.strip() != NULL_MARK
+                )
+    for target, texts in wanted.items():
+        refs.prefetch(target, texts)
 
 
 def _one_from_text(definition: PropertyDef, raw: Any, refs: Refs) -> Any:
@@ -967,6 +1132,7 @@ def plan_objects(
         return plan
     by_key = {d.key: d for d in defs}
     refs = Refs(db, user, pending, blank_missing)
+    prefetch_cells(refs, by_key, mapping, rows)
 
     # 이 파일 안에서 같은 식별자가 둘이면 어느 쪽이 맞는지 알 수 없다.
     seen_keys: dict[str, int] = {}
@@ -1383,6 +1549,7 @@ def apply_objects(
     by_key = {d.key: d for d in defs}
     mapping, _ = _column_map(defs, {key for row in rows for key in row})
     refs = Refs(db, user, blank_missing=blank_missing)
+    prefetch_cells(refs, by_key, mapping, rows)
     # 계획이 미리 읽은 것을 그대로 쓴다 — 방금 세운 계획이라 같은 트랜잭션의 같은 사실이다.
     index_data = plan.index if isinstance(plan.index, _Index) else _Index()
     # 새로 만든 객체의 별칭은 **모았다가 한 번에** 넣는다(아래) — 둘 사이에 ORM 관계가
@@ -1601,9 +1768,14 @@ def export_rows(
                     except ValueError:
                         continue
     names: dict[str, str] = {}
-    if wanted:
-        for found in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(wanted))):
-            names[str(found.id)] = found.key or found.label
+    # 칸 셋만, 나눠서 — 덩어리 하나가 가리키는 상대가 수만 개일 수 있다.
+    for batch in chunks(wanted):
+        for found_id, found_key, found_label in db.execute(
+            select(ObjectInstance.id, ObjectInstance.key, ObjectInstance.label).where(
+                ObjectInstance.id.in_(batch)
+            )
+        ):
+            names[str(found_id)] = found_key or found_label
 
     names_of = aliases.human_of(db, [row.id for row in rows])
     out: list[dict[str, Any]] = []

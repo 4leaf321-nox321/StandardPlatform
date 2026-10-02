@@ -79,6 +79,8 @@ class RowPlan:
     before: str = ""
     after: str = ""
     message: str = ""
+    job_path: str | None = None
+    """이 행은 여기서 못 하고 작업으로 해야 한다 — 그 주소(가리키는 기록이 많은 객체)."""
 
 
 @dataclass
@@ -685,3 +687,5 @@ def apply_delete(
             db.rollback()
             planned_row.action = "error"
             planned_row.message = caught.message
+            job_path = (caught.details or {}).get("job_path")
+            planned_row.job_path = str(job_path) if job_path else None

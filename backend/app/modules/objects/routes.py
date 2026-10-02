@@ -19,6 +19,7 @@ from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.files.models import Attachment
 from app.modules.jobs import routes as jobs_routes
+from app.modules.jobs import services as job_services
 from app.modules.jobs.schemas import JobOut
 from app.modules.objects import (
     aliases,
@@ -1259,6 +1260,7 @@ def _bulk_out(
                 before=one.before,
                 after=one.after,
                 message=one.message,
+                job_path=one.job_path,
             )
             for one in planned.rows
         ],
@@ -1420,6 +1422,7 @@ def bulk_delete(
                 before=one.before,
                 after=one.after,
                 message=one.message,
+                job_path=one.job_path,
             )
             for one in planned.rows
         ],
@@ -2311,6 +2314,95 @@ def merge_object(
     target = _visible(db, user, object_type, payload.into)
     result = lifecycle.merge_into(db, user, row, object_type, target)
     return MergeResultOut(into=target.id, **result)
+
+
+@router.post("/{type_slug}/{object_id}/merge/job", response_model=JobOut, status_code=202)
+def merge_object_job(
+    type_slug: str,
+    object_id: uuid.UUID,
+    payload: MergeRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """합치기를 **작업으로** — 가리키는 기록이 많은 객체(OBJECTS-96). 같은 검사를 먼저 하고,
+    워커가 같은 함수(`lifecycle.merge_into`)를 부른다."""
+    object_type, row = _rewritable(db, user, type_slug, object_id, what="합치지")
+    _visible(db, user, object_type, payload.into)
+    return _rewrite_job(db, user, "merge", object_type, row.id, into=payload.into)
+
+
+@router.post("/{type_slug}/{object_id}/detach/job", response_model=JobOut, status_code=202)
+def detach_object_job(
+    type_slug: str,
+    object_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """참조를 비우고 지우기를 **작업으로** — 가리키는 기록이 많은 객체(OBJECTS-96)."""
+    object_type, row = _rewritable(db, user, type_slug, object_id, what="삭제하지")
+    return _rewrite_job(db, user, "detach", object_type, row.id)
+
+
+def _rewritable(
+    db: Session, user: User, type_slug: str, object_id: uuid.UUID, *, what: str
+) -> tuple[ObjectType, ObjectInstance]:
+    object_type = _type(db, type_slug)
+    row = _visible(db, user, object_type, object_id)
+    require_owner_edit(
+        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 17)
+    )
+    managed.require_objects_editable(object_type, what=what)
+    return object_type, row
+
+
+def _rewrite_job(
+    db: Session,
+    user: User,
+    op: str,
+    object_type: ObjectType,
+    object_id: uuid.UUID,
+    *,
+    into: uuid.UUID | None = None,
+) -> JobOut:
+    params: dict[str, Any] = {
+        "op": op,
+        "type_slug": object_type.slug,
+        "object_id": str(object_id),
+    }
+    if into is not None:
+        params["into"] = str(into)
+    job = job_services.enqueue(
+        db,
+        kind="objects_rewrite",
+        params=params,
+        user=user,
+        workspace_id=None,
+        input_file=None,
+    )
+    db.commit()
+    db.refresh(job)
+    return jobs_routes._out(db, job)
+
+
+def run_rewrite_job(
+    db: Session, user: User, params: dict[str, Any], progress: Any
+) -> dict[str, Any]:
+    """작업(`objects_rewrite`)의 몸 — 요청 경로와 **같은 검사 · 같은 함수**다."""
+    op = str(params.get("op") or "")
+    object_type, row = _rewritable(
+        db,
+        user,
+        str(params.get("type_slug") or ""),
+        uuid.UUID(str(params.get("object_id"))),
+        what="합치지" if op == "merge" else "삭제하지",
+    )
+    progress("고치는 중", 0, 0)
+    if op == "merge":
+        target = _visible(db, user, object_type, uuid.UUID(str(params.get("into"))))
+        merged = lifecycle.merge_into(db, user, row, object_type, target, inline=False)
+        return {"op": op, "into": str(target.id), **merged}
+    detached = lifecycle.delete_detaching(db, user, row, object_type, inline=False)
+    return {"op": "detach", **detached}
 
 
 # --- 관련 객체 --------------------------------------------------------------
