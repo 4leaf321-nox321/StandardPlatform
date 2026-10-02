@@ -187,6 +187,8 @@ def objects_import(work: Work) -> dict[str, Any]:
     )
     max_rows = get_settings().job_max_rows
     aliases_mode = str(work.params.get("aliases_mode") or "add")
+    # **사람이 화면에서 고친 칸**을 덮을지. 기본은 비켜 가는 것이다(`keep`).
+    human_edits = str(work.params.get("human_edits") or "keep")
     if work.params.get("apply"):
         plan = bulk.apply_objects(
             work.db,
@@ -195,6 +197,7 @@ def objects_import(work: Work) -> dict[str, Any]:
             rows,
             owner_workspace_id=owner,
             aliases_mode=aliases_mode,
+            human_edits=human_edits,
             max_rows=max_rows,
             on_progress=work.progress,
             before_apply=_fingerprint_guard(work),
@@ -207,6 +210,7 @@ def objects_import(work: Work) -> dict[str, Any]:
         rows,
         owner_workspace_id=owner,
         aliases_mode=aliases_mode,
+        human_edits=human_edits,
         max_rows=max_rows,
         on_progress=work.progress,
     )

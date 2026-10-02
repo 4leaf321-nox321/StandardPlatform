@@ -129,6 +129,22 @@ class ObjectInstance(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
     )
+    human_edits: Mapped[dict[str, str]] = mapped_column(
+        JSONB, default=dict, server_default="{}", nullable=False
+    )
+    """**사람이 화면에서 고친 칸** — 칸 이름 → 고친 시각.
+
+    파일로 넣기는 같은 식별자면 덮는다. 그래서 원천을 다시 정제해 넣으면 **사람이 화면에서
+    고친 값이 사라지고**, 고친 사람은 그 사실을 모른다 — 다음 적재가 조용히 되돌린다.
+    이 칸이 그 자리를 표시해 두면 적재가 그 칸만 비켜 간다(계획에 「그대로 둡니다」 로 적는다).
+
+    칸 이름은 고정 칸은 그대로(`label` · `status` …), 속성은 `properties.<키>` 다 — 목록 열
+    (`list_view.columns`)이 쓰는 표기와 같은 것이다. 이름이 겹치지 않게 하려는 것이기도 하다
+    (`label` 이라는 속성이 있을 수 있다).
+
+    **식별자(`key`)는 표시하지 않는다** — 파일이 그 값으로 이 객체를 찾기 때문이다. 못 바꾸게
+    두면 파일과 플랫폼이 영영 다른 식별자를 들고 간다.
+    """
     previous_keys: Mapped[list[str]] = mapped_column(
         JSONB, default=list, server_default="[]", nullable=False
     )

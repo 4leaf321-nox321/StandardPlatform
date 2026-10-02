@@ -12159,6 +12159,12 @@
             "pattern": "^(add|replace)$",
             "title": "Aliases Mode",
             "default": "add"
+          },
+          "human_edits": {
+            "type": "string",
+            "pattern": "^(keep|overwrite)$",
+            "title": "Human Edits",
+            "default": "keep"
           }
         },
         "type": "object",
@@ -12721,6 +12727,15 @@
             ],
             "title": "Audit",
             "default": "each"
+          },
+          "human_edits": {
+            "type": "string",
+            "enum": [
+              "keep",
+              "overwrite"
+            ],
+            "title": "Human Edits",
+            "default": "keep"
           },
           "missing_refs": {
             "type": "string",
@@ -15284,6 +15299,15 @@
             ],
             "title": "Aliases Mode",
             "default": "add"
+          },
+          "human_edits": {
+            "type": "string",
+            "enum": [
+              "keep",
+              "overwrite"
+            ],
+            "title": "Human Edits",
+            "default": "keep"
           },
           "relations_mode": {
             "type": "string",

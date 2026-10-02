@@ -134,6 +134,9 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
   /** 별칭을 **파일대로 맞출지**(파일에 없는 별칭은 지운다). 기본은 더하기 — 그 사이에 사람이
    *  화면에서 붙여 둔 별칭이 다시 적재할 때 조용히 사라지지 않게. */
   const [replaceAliases, setReplaceAliases] = useState(false)
+  /** 사람이 화면에서 고친 칸을 덮을지. **기본은 안 덮는다** — 적재가 사람의 수정을 조용히
+   *  되돌리면 사람은 고치기를 그만둔다. */
+  const [overwriteHuman, setOverwriteHuman] = useState(false)
   /** 관계를 **파일대로 맞출지** — 파일에 나온 (출발 객체 · 관계 종류) 범위에서 파일에 없는
    *  선은 계획에 「끊음」 으로 올라온다. 사라진 관계를 정리할 다른 길이 없었다. */
   const [replaceRelations, setReplaceRelations] = useState(false)
@@ -210,6 +213,7 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
           ? await objectApi.import(type.slug, sending, {
               workspaceSlug: myWorkspace,
               aliasesMode: replaceAliases ? 'replace' : 'add',
+              humanEdits: overwriteHuman ? 'overwrite' : 'keep',
             })
           : await objectApi.importRelations(
               type.slug,
@@ -332,15 +336,28 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
         </Tabs>
 
         {kind === 'objects' ? (
-          <label className="text-muted-foreground flex items-center gap-2 text-xs">
-            <input
-              type="checkbox"
-              checked={replaceAliases}
-              onChange={(event) => setReplaceAliases(event.target.checked)}
-            />
-            별칭을 파일대로 맞춤 — 파일에 없는 별칭은 지웁니다. 끄면 <strong>더하기</strong>라,
-            화면에서 붙여 둔 별칭이 남습니다.
-          </label>
+          <div className="space-y-1.5">
+            <label className="text-muted-foreground flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={replaceAliases}
+                onChange={(event) => setReplaceAliases(event.target.checked)}
+              />
+              별칭을 파일대로 맞춤 — 파일에 없는 별칭은 지웁니다. 끄면{' '}
+              <strong>더하기</strong>라, 화면에서 붙여 둔 별칭이 남습니다.
+            </label>
+            {/* **기본은 안 덮는다.** 적재가 사람의 수정을 조용히 되돌리면, 그 사람은 다음부터
+                안 고친다 — 그러면 플랫폼은 원천의 사본이 된다. */}
+            <label className="text-muted-foreground flex items-center gap-2 text-xs">
+              <input
+                type="checkbox"
+                checked={overwriteHuman}
+                onChange={(event) => setOverwriteHuman(event.target.checked)}
+              />
+              사람이 화면에서 고친 칸도 덮음 — 끄면 그 칸은 <strong>비켜 가고</strong> 계획에
+              무엇을 안 덮었는지 적습니다. 원천을 정본으로 볼 때만 켜세요.
+            </label>
+          </div>
         ) : (
           <label className="text-muted-foreground flex items-center gap-2 text-xs">
             <input

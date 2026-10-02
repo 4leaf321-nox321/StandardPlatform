@@ -27,6 +27,7 @@ from app.modules.objects import (
     conditions,
     graph,
     history,
+    humanedits,
     lifecycle,
     links,
     paths,
@@ -1193,6 +1194,7 @@ def _import_objects(
     workspace_slug: str | None,
     apply: bool,
     aliases_mode: str = "add",
+    human_edits: str = "keep",
 ) -> ImportPlanOut:
     owner_workspace_id = resolve_owner_workspace(
         db, user, workspace_slug, what="객체", code_value=code("OBJECTS", 15)
@@ -1205,6 +1207,7 @@ def _import_objects(
             rows,
             owner_workspace_id=owner_workspace_id,
             aliases_mode=aliases_mode,
+            human_edits=human_edits,
         )
         return _plan_out(plan, applied=plan.ok)
     plan = bulk.plan_objects(
@@ -1214,6 +1217,7 @@ def _import_objects(
         rows,
         owner_workspace_id=owner_workspace_id,
         aliases_mode=aliases_mode,
+        human_edits=human_edits,
     )
     return _plan_out(plan, applied=False)
 
@@ -1486,6 +1490,7 @@ def import_objects(
     upload: UploadFile = File(alias="file"),
     workspace_slug: str | None = Form(default=None),
     aliases_mode: str = Form(default="add", pattern="^(add|replace)$"),
+    human_edits: str = Form(default="keep", pattern="^(keep|overwrite)$"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> JobOut:
@@ -1501,7 +1506,11 @@ def import_objects(
         db,
         user,
         kind="objects_import",
-        params={"type_slug": object_type.slug, "aliases_mode": aliases_mode},
+        params={
+            "type_slug": object_type.slug,
+            "aliases_mode": aliases_mode,
+            "human_edits": human_edits,
+        },
         upload=upload,
         workspace_slug=workspace_slug,
     )
@@ -1531,6 +1540,7 @@ def import_object_rows(
         workspace_slug=payload.workspace_slug,
         apply=payload.apply,
         aliases_mode=payload.aliases_mode,
+        human_edits=payload.human_edits,
     )
 
 
@@ -2002,6 +2012,9 @@ def update_object(
         row.properties = cleaned
 
     after = audit_state(row)
+    # **사람이 고친 칸을 표시한다** — 다음 적재가 조용히 되돌리지 않게. 기계 자격(PAT)으로
+    # 같은 경로를 부르면 아무 일도 안 한다(그 값은 덮어도 되는 값이다).
+    humanedits.record(row, before, after)
     audit.record(
         db,
         action="object.update",

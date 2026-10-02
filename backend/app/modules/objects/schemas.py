@@ -229,6 +229,9 @@ class ImportRowsRequest(BaseModel):
     aliases_mode: Literal["add", "replace"] = "add"
     """별칭 칸을 **더할지 맞출지.** 기본은 더하기 — 다시 적재할 때 사람이 화면에서 붙인
     별칭이 사라지지 않게. `replace` 는 파일을 정본으로 볼 때만(허브 → 쌍둥이)."""
+    human_edits: Literal["keep", "overwrite"] = "keep"
+    """**사람이 화면에서 고친 칸**을 비켜 갈지 덮을지. 기본은 비켜 가고 줄에 적는다 —
+    적재가 사람의 수정을 조용히 되돌리면, 사람은 고치기를 그만둔다."""
     relations_mode: Literal["add", "replace", "replace_type"] = "add"
     """관계 파일을 **더할지 맞출지.** `replace` 는 파일에 나온 (출발 객체 · 관계 종류)
     범위에서, `replace_type` 은 (출발 타입 · 관계 종류) **전체**에서 파일에 없는 선을

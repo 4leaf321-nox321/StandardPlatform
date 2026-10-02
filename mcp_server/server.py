@@ -936,6 +936,7 @@ async def objects_import(
     rows: list[dict[str, Any]],
     workspace_slug: str | None = None,
     aliases_mode: str = "add",
+    human_edits: str = "keep",
 ) -> Any:
     """객체를 **여러 행 한 번에** — 같은 식별자(`key`)면 만들지 않고 고친다(upsert).
 
@@ -958,10 +959,22 @@ async def objects_import(
     때만 쓴다(허브가 쌍둥이에 보낼 때가 그렇다).
 
     **키를 바꿀 때**는 행에 `renamed_from`(옛 식별자)을 적는다 — 없으면 같은 것이 새 객체로
-    하나 더 생긴다. 두 번 바뀌었으면 `previous_keys` 에 전부 적는다(오래된 것부터)."""
+    하나 더 생긴다. 두 번 바뀌었으면 `previous_keys` 에 전부 적는다(오래된 것부터).
+
+    `human_edits` 는 **사람이 화면에서 고친 칸**을 어떻게 할지다. 기본 `keep` — 비켜 가고
+    계획의 그 줄에 「사람이 고친 칸은 그대로 둡니다 — 이름 · 공급사」 로 적는다. 칸 단위라
+    사람이 안 건드린 칸은 그대로 들어간다. **`overwrite` 를 스스로 고르지 않는다** — 사람의
+    수정을 되돌리는 일이고, 되돌린 사실은 그 사람에게 안 보인다. 사용자가 「원천이 정본이다」
+    라고 말했을 때만 쓴다."""
     fields: dict[str, Any] = {
         "kind": "objects_import",
-        "params": json.dumps({"type_slug": type_slug, "aliases_mode": aliases_mode}),
+        "params": json.dumps(
+            {
+                "type_slug": type_slug,
+                "aliases_mode": aliases_mode,
+                "human_edits": human_edits,
+            }
+        ),
     }
     if workspace_slug:
         fields["workspace_slug"] = workspace_slug

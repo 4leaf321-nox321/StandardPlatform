@@ -37,7 +37,7 @@ GUIDE_VERSION: 2026-10-01e
 | 여러 객체의 **한 칸**을 같은 값으로 | `bulk_edit(apply=false)` → `apply=true` | `batch_id` 를 사용자에게 알린다 — `bulk_edit_undo` 가 통째로 되돌린다 |
 | 정제 도구가 만든 묶음(정의 · 객체 · 관계)이 어떻게 들어갈지 | `bundle_import(bundle)` → 사람 확인 → `job_apply` | **넣는 것은 사람이 미리 보기를 본 뒤에만.** 원천을 곧바로 넣지 않는다 — `pipeline/AGENTS.md` |
 | 넣은 묶음이 틀렸다 — 통째로 되돌리기 | `bundle_runs` → 번호 → `bundle_undo(run_id)` → 사람 확인 → `apply=True` | **스스로 되돌리지 않는다.** 건너뛴 줄의 이유도 함께 보여 준다 |
-| 여러 행 한 번에(upsert) | `objects_import` → 사람 확인 → `job_apply(job_id)` | **작업이 된다.** 같은 `key` 면 고침. 한 행이라도 오류면 전부 안 넣음 |
+| 여러 행 한 번에(upsert) | `objects_import` → 사람 확인 → `job_apply(job_id)` | **작업이 된다.** 같은 `key` 면 고침. 한 행이라도 오류면 전부 안 넣음. **사람이 화면에서 고친 칸은 비켜 간다** — 계획의 그 말을 사용자에게 보여 준다 |
 | 객체 둘 잇기 | `relation_add` | **근거(evidence_note)를 적는다** |
 | 잘못 이은 관계 | `relation_update`(근거 · 속성) · `relation_remove`(끊기) | 양끝 · 종류는 못 바꾼다 — 끊고 새로 잇는다. 확실하지 않으면 끊지 말고 사람에게 |
 | 관계 여러 줄 한 번에 | `relations_import(mode=)` → 사람 확인 → `job_apply` | 이미 이어진 건 그대로. `replace`·`replace_type` 은 **파일에 없는 선을 끊는다** |
@@ -344,6 +344,11 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   표기가 사라진다.
 - 키를 바꿨으면 `renamed_from`(직전 키) · `previous_keys`(이력) 를 함께 적는다 — 받아 가는
   쪽이 「없어진 것」 과 「이름이 바뀐 것」 을 구별하는 자리다.
+- **사람이 화면에서 고친 칸은 적재가 비켜 간다**(`human_edits` 기본 `keep`). 계획의 그 줄에
+  「사람이 고친 칸은 그대로 둡니다 — 이름 · 공급사」 로 온다 — 그것을 **사용자에게 그대로
+  보여 준다.** 칸 단위라 사람이 안 건드린 칸은 그대로 들어간다.
+  **`overwrite` 를 스스로 고르지 않는다**: 사람의 수정을 되돌리는 일이고, 되돌린 사실은 그
+  사람에게 안 보인다. 사용자가 「원천이 정본이다」 라고 말했을 때만 쓴다.
 - 한 번에 10만 행까지.
 
 ### 기계가 붙인 별칭은 검수를 기다린다

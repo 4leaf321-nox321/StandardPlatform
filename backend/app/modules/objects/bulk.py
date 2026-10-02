@@ -38,7 +38,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.bundles import journal
-from app.modules.objects import aliases, links, system
+from app.modules.objects import aliases, humanedits, links, system
 from app.modules.objects import keys as key_history
 from app.modules.objects import relations as rel
 from app.modules.objects.models import (
@@ -893,10 +893,16 @@ def plan_objects(
     aliases_mode: str = "add",
     pending: dict[str, set[str]] | None = None,
     blank_missing: bool = False,
+    human_edits: str = "keep",
     max_rows: int = MAX_ROWS,
     on_progress: Progress = None,
 ) -> Plan:
-    """행마다 무엇이 될지 — **아무것도 안 바꾼다.** `source` 는 허브에서 받는 묶음만 적는다."""
+    """행마다 무엇이 될지 — **아무것도 안 바꾼다.** `source` 는 허브에서 받는 묶음만 적는다.
+
+    `human_edits` 는 **사람이 화면에서 고친 칸**을 어떻게 할지다. 기본 `keep` 은 비켜 가고 줄에
+    적는다 — 원천을 다시 정제해 넣을 때마다 사람의 수정이 사라지면, 사람은 고치기를 그만둔다.
+    `overwrite` 는 덮고 표시를 지운다(사람이 그렇게 정했을 때만).
+    """
     plan = Plan()
     if len(rows) > max_rows:
         plan.errors.append(
@@ -964,6 +970,7 @@ def plan_objects(
                     aliases_mode=aliases_mode,
                     seen_keys=seen_keys,
                     seen_ids=seen_ids,
+                    human_edits=human_edits,
                 )
             )
         except AppError as caught:
@@ -995,6 +1002,7 @@ def _plan_row(
     aliases_mode: str,
     seen_keys: dict[str, int],
     seen_ids: dict[str, int],
+    human_edits: str = "keep",
 ) -> RowPlan:
     # 칸 값은 이미 읽었다 — 그때 붙은 말(별칭이 남의 이름이기도 하다)만 다시 모은다.
     refs.notes.clear()
@@ -1237,6 +1245,15 @@ def _plan_row(
         for prop_key in patch:
             if current.get(prop_key) != cleaned.get(prop_key):
                 changes.append(prop_key)
+    # **사람이 고친 칸은 비켜 간다.** 파일로 넣기는 같은 식별자면 덮으므로, 원천을 다시 정제해
+    # 넣으면 사람이 화면에서 고친 값이 조용히 사라진다 — 고친 사람은 그 사실을 모른다.
+    # 무엇을 안 덮었는지 줄에 적는다(수만 말하면 자기 칸이 그중에 있는지 알 수 없다).
+    kept: list[str] = []
+    if human_edits == "keep" and changes:
+        kept = humanedits.protected(existing, _markers(changes, by_key))
+        if kept:
+            bare = {_bare(one) for one in kept}
+            changes = [one for one in changes if one not in bare]
     return RowPlan(
         row=index,
         action="update" if changes else "unchanged",
@@ -1248,10 +1265,27 @@ def _plan_row(
         message=_joined(
             rename_note,
             *refs.notes,
+            humanedits.note(kept, defs),
             _alias_note(alias_skipped, long_aliases),
             _same_file_note(alias_double),
         ),
     )
+
+
+def _markers(changes: list[str], by_key: dict[str, PropertyDef]) -> list[str]:
+    """바뀔 칸 이름 → **표시의 이름**(`properties.<키>`). 고정 칸 이름이 이긴다 —
+    `label` 이라는 속성이 있으면 둘이 같은 글자가 되는데, 그때는 고정 칸 쪽으로 읽는다."""
+    out: list[str] = []
+    for one in changes:
+        if one in humanedits.FIXED:
+            out.append(one)
+        elif one in by_key:
+            out.append(f"{humanedits.PROP}{one}")
+    return out
+
+
+def _bare(marker: str) -> str:
+    return marker[len(humanedits.PROP) :] if marker.startswith(humanedits.PROP) else marker
 
 
 def _can_see(db: Session, user: User, row: ObjectInstance) -> bool:
@@ -1276,6 +1310,7 @@ def apply_objects(
     source: str = "",
     aliases_mode: str = "add",
     blank_missing: bool = False,
+    human_edits: str = "keep",
     max_rows: int = MAX_ROWS,
     on_progress: Progress = None,
     before_apply: Callable[[Plan], None] | None = None,
@@ -1296,6 +1331,7 @@ def apply_objects(
         source=source,
         aliases_mode=aliases_mode,
         blank_missing=blank_missing,
+        human_edits=human_edits,
         max_rows=max_rows,
         on_progress=on_progress,
     )
@@ -1380,15 +1416,25 @@ def apply_objects(
             continue
         target = found
         before = audit_state(target)
-        if raw_label not in (_MISSING, None):
+        # **계획과 같은 판정을 한다.** 계획이 「그대로 둡니다」 라고 적은 칸을 적용이 덮으면,
+        # 사람이 읽은 계획과 들어간 것이 다르다 — 그것이 가장 나쁜 어긋남이다.
+        guard: set[str] = set()
+        if human_edits == "keep":
+            guard = set(
+                humanedits.protected(
+                    target,
+                    [*humanedits.FIXED, *(f"{humanedits.PROP}{one}" for one in patch)],
+                )
+            )
+        if "label" not in guard and raw_label not in (_MISSING, None):
             target.label = str(raw_label).strip()
-        if raw_description is not _MISSING:
+        if "description" not in guard and raw_description is not _MISSING:
             target.description = raw_description or ""
-        if raw_status not in (_MISSING, None):
+        if "status" not in guard and raw_status not in (_MISSING, None):
             target.status = str(raw_status)
-        if raw_from is not _MISSING:
+        if "valid_from_year" not in guard and raw_from is not _MISSING:
             target.valid_from_year = None if raw_from is None else int(raw_from)
-        if raw_to is not _MISSING:
+        if "valid_to_year" not in guard and raw_to is not _MISSING:
             target.valid_to_year = None if raw_to is None else int(raw_to)
         keep_old_key: str | None = None
         if row_plan.key is not None and "key" in row_plan.changes:
@@ -1434,10 +1480,17 @@ def apply_objects(
                 aliases.set_human(db, target, object_type, free, mode="add")
                 _remember(index_data, free, target.id)
         if patch:
-            target.properties = validate_properties(
-                defs, merge_properties(target.properties or {}, patch)
-            )
+            guarded = {_bare(one) for one in guard if one.startswith(humanedits.PROP)}
+            sending = {key: value for key, value in patch.items() if key not in guarded}
+            if sending:
+                target.properties = validate_properties(
+                    defs, merge_properties(target.properties or {}, sending)
+                )
         after = audit_state(target)
+        if human_edits == "overwrite":
+            # 사람이 「덮어라」 고 정했다 — 덮은 칸은 이제 파일의 값이니 표시를 지운다.
+            # 안 지우면 다음 적재가 또 「사람이 고친 칸」 으로 보고 비켜 간다.
+            humanedits.release(target, humanedits.changed_fields(before, after))
         moved = audit.diff(before, after)
         journal.changed(
             db,

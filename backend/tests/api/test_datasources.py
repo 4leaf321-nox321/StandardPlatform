@@ -223,7 +223,7 @@ def test_계획을_보고_적용하면_같은_객체를_다시_찾는다(
     assert by_key["V-001"]["properties"] == {"country": "미국", "rating": 92}
     assert by_key["V-001"]["external_ids"] == {source["slug"]: "V-001"}
 
-    # 바깥에서 이름이 바뀌고 우리 쪽 식별자를 고쳐도 — 외부 식별자로 같은 객체를 찾는다.
+    # 바깥에서 이름이 바뀌고 우리 쪽 이름을 사람이 고쳐도 — 외부 식별자로 같은 객체를 찾는다.
     client.patch(
         f"/api/objects/{vendor}/{by_key['V-001']['id']}",
         json={"label": "Ansys(우리 이름)"},
@@ -236,8 +236,11 @@ def test_계획을_보고_적용하면_같은_객체를_다시_찾는다(
     changed = client.get(
         f"/api/objects/{vendor}/{by_key['V-001']['id']}", headers=admin.headers
     ).json()
+    # **사람이 화면에서 고친 이름은 동기화가 되돌리지 않는다**(2026-10-02 · 계획 ⑮).
+    # 밤마다 도는 동기화가 사람의 수정을 지우면 그 사람은 다음부터 안 고친다. 칸 단위라
+    # 사람이 안 건드린 Rating 은 그대로 따라온다 — 객체가 통째로 잠기는 것이 아니다.
     assert (
-        changed["object"]["label"] == "ANSYS, Inc."
+        changed["object"]["label"] == "Ansys(우리 이름)"
         and changed["object"]["properties"]["rating"] == 95
     )
     assert client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["total"] == 3

@@ -300,6 +300,7 @@ def _stages(
                     aliases_mode=batch.aliases_mode,
                     pending=pending,
                     blank_missing=bundle.missing_refs == "blank",
+                    human_edits=bundle.human_edits,
                     max_rows=max_rows,
                     on_progress=_staged(on_progress, f"객체 {batch.type_slug}"),
                 )
@@ -313,6 +314,7 @@ def _stages(
                     source=bundle.source,
                     aliases_mode=batch.aliases_mode,
                     blank_missing=bundle.missing_refs == "blank",
+                    human_edits=bundle.human_edits,
                     max_rows=max_rows,
                     on_progress=_staged(on_progress, f"객체 {batch.type_slug}"),
                 )

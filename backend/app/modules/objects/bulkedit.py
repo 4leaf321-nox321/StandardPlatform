@@ -33,6 +33,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.audit.models import AuditEntry
+from app.modules.objects import humanedits
 from app.modules.objects.models import OBJECT_STATUSES, ObjectInstance
 from app.modules.objects.services import (
     audit_state,
@@ -380,6 +381,8 @@ def record(
     for row in rows:
         if row.id not in changed:
             continue
+        # 화면에서 사람이 고른 묶음이다 — 고친 칸을 표시해 다음 적재가 비켜 가게 한다.
+        humanedits.record(row, before_state[row.id], state_of(row))
         audit.record(
             db,
             action="object.update",

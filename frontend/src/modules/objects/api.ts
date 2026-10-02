@@ -351,13 +351,19 @@ function queryString(query: ObjectQuery): string {
 function importForm(
   file: File,
   workspaceSlug?: string | null,
-  modes?: { aliasesMode?: 'add' | 'replace'; relationsMode?: 'add' | 'replace' },
+  modes?: {
+    aliasesMode?: 'add' | 'replace'
+    relationsMode?: 'add' | 'replace'
+    /** 사람이 화면에서 고친 칸을 비켜 갈지(`keep`, 기본) 덮을지(`overwrite`). */
+    humanEdits?: 'keep' | 'overwrite'
+  },
 ): FormData {
   const form = new FormData()
   form.set('file', file)
   if (workspaceSlug) form.set('workspace_slug', workspaceSlug)
   if (modes?.aliasesMode) form.set('aliases_mode', modes.aliasesMode)
   if (modes?.relationsMode) form.set('relations_mode', modes.relationsMode)
+  if (modes?.humanEdits) form.set('human_edits', modes.humanEdits)
   return form
 }
 
@@ -597,11 +603,18 @@ export const objectApi = {
   import: (
     typeSlug: string,
     file: File,
-    opts: { workspaceSlug?: string | null; aliasesMode?: 'add' | 'replace' },
+    opts: {
+      workspaceSlug?: string | null
+      aliasesMode?: 'add' | 'replace'
+      humanEdits?: 'keep' | 'overwrite'
+    },
   ) =>
     api.postForm<Job>(
       `/objects/${typeSlug}/import`,
-      importForm(file, opts.workspaceSlug, { aliasesMode: opts.aliasesMode }),
+      importForm(file, opts.workspaceSlug, {
+        aliasesMode: opts.aliasesMode,
+        humanEdits: opts.humanEdits,
+      }),
     ),
   exportRelations: (typeSlug: string, format: 'csv' | 'json') =>
     jobsApi.exportAndDownload(

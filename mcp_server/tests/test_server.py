@@ -383,6 +383,25 @@ def test_파일을_주는_자리는_바이트를_안_흘린다() -> None:
     assert got["ok"] is True and "파일 응답" in got["message"]
 
 
+def test_적재가_사람이_고친_칸을_기본으로_지킨다() -> None:
+    """**적재가 사람의 수정을 조용히 되돌리면 사람은 고치기를 그만둔다.** 기본이 지키는
+    쪽이어야 하고, 덮는 것은 사용자가 그렇게 정했을 때만이다."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"id": "job-1", "status": "done", "result": {}})
+
+    seen = _serve(handler)
+    asyncio.run(server.objects_import(_ctx("Bearer t"), "part", rows=[{"key": "P-1"}]))
+    asyncio.run(
+        server.objects_import(
+            _ctx("Bearer t"), "part", rows=[{"key": "P-1"}], human_edits="overwrite"
+        )
+    )
+    bodies = [one.read() for one in seen if one.url.path == "/api/jobs"]
+    assert b'"human_edits":"keep"' in bodies[0].replace(b" ", b""), bodies[0][:400]
+    assert b'"human_edits":"overwrite"' in bodies[1].replace(b" ", b""), bodies[1][:400]
+
+
 def test_적재_도구가_맞춤과_검수를_보낸다() -> None:
     """**새 옵션이 도구에 없으면 MCP 로 넣는 사람은 그 길을 못 쓴다.**
 

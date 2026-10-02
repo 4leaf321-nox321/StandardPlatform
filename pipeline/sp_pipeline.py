@@ -74,6 +74,9 @@ BUNDLE_OPTIONS = {
     "events": ("each", "summary"),
     "audit": ("each", "summary"),
     "missing_refs": ("error", "blank"),
+    # **사람이 화면에서 고친 칸**을 비켜 갈지 덮을지. 기본(안 적으면)은 비켜 가는 것이고,
+    # 백필에서도 그대로다 — 수만 줄을 넣는다고 사람의 수정을 되돌릴 이유는 없다.
+    "human_edits": ("keep", "overwrite"),
 }
 
 #: (method, url, headers, body) -> (status, json). 시험이 갈아 끼운다.

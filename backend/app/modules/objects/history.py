@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.audit.models import AuditEntry
+from app.modules.objects import humanedits
 from app.modules.objects.models import ObjectInstance
 from app.modules.objects.services import (
     audit_state,
@@ -353,6 +354,8 @@ def restore(
     row.valid_from_year = wanted.valid_from_year
     row.valid_to_year = wanted.valid_to_year
     after = audit_state(row)
+    # 되돌리기도 **사람이 고친 것**이다 — 그 값이 다음 적재에 또 덮이면 되돌린 뜻이 없다.
+    humanedits.record(row, before, after)
     stamp = entry.at.strftime("%Y-%m-%d %H:%M")
     note = f"{stamp} 시점 값으로 되돌림"
     if dropped:
