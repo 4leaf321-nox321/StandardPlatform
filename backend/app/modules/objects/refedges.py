@@ -241,9 +241,13 @@ def neighbor_edges(
     fanout: int,
     relations: list[str] | None = None,
     type_ids: list[uuid.UUID] | None = None,
+    skip_logs: bool = False,
 ) -> list[RefEdge]:
     """frontier 의 각 노드에서 참조 칸으로 이어진 이웃 — 가리키는 것과 나를 가리키는 것.
-    노드마다 fanout 개까지(관계의 이웃과 같은 상한)."""
+    노드마다 fanout 개까지(관계의 이웃과 같은 상한).
+
+    `skip_logs` 면 **나를 가리키는 기록**(ADR 0011)은 뺀다 — 인기 모델은 기록 10만 건이
+    가리킨다. 그것은 줄 대신 `log_counts` 의 수로 선다."""
     if not frontier:
         return []
     all_kinds = kinds(db)
@@ -263,6 +267,8 @@ def neighbor_edges(
     edges = [edge for edge in outgoing if edge.dst in visible_targets]
     by_dst: dict[uuid.UUID, list[RefKind]] = {}
     for kind in all_kinds.values():
+        if skip_logs and kind.src_type.usage == "log":
+            continue
         if wanted is None or kind.slug in wanted:
             for one in kind.dst_types:
                 by_dst.setdefault(one.id, []).append(kind)
@@ -316,8 +322,11 @@ def induced_edges(
     return [edge for edge in _outgoing(rows, by_src) if edge.dst in inside][:limit]
 
 
-def degree_counts(db: Session, *, ids: list[uuid.UUID], user: User) -> dict[uuid.UUID, int]:
-    """각 노드에 걸린 보이는 참조의 수(가리키는 것 + 나를 가리키는 것)."""
+def degree_counts(
+    db: Session, *, ids: list[uuid.UUID], user: User, skip_logs: bool = False
+) -> dict[uuid.UUID, int]:
+    """각 노드에 걸린 보이는 참조의 수(가리키는 것 + 나를 가리키는 것). `skip_logs` 면
+    나를 가리키는 기록은 안 센다 — 이웃에서 뺀 것을 「+N 더」 로 세면 펼쳐도 안 나온다."""
     if not ids:
         return {}
     all_kinds = kinds(db)
@@ -328,6 +337,8 @@ def degree_counts(db: Session, *, ids: list[uuid.UUID], user: User) -> dict[uuid
     by_dst: dict[uuid.UUID, list[RefKind]] = {}
     row_types = {row.type_id for row in rows}
     for kind in all_kinds.values():
+        if skip_logs and kind.src_type.usage == "log":
+            continue
         for one in kind.dst_types:
             if one.id in row_types:
                 by_dst.setdefault(one.id, []).append(kind)
@@ -348,6 +359,46 @@ def degree_counts(db: Session, *, ids: list[uuid.UUID], user: User) -> dict[uuid
             for dst, count in pointing:
                 counts[dst] += int(count)
     return dict(counts)
+
+
+@dataclass(frozen=True)
+class LogCount:
+    """이 객체를 가리키는 기록 — 타입 · 칸 하나의 수."""
+
+    kind: RefKind
+    count: int
+
+
+def log_counts(db: Session, *, target: uuid.UUID, user: User) -> list[LogCount]:
+    """이 객체를 가리키는 **기록**(ADR 0011)의 수 — 타입 · 칸마다, 보이는 것만.
+
+    축의 상세 · 그래프는 기록을 줄로 싣지 않고 이 수로 보인다(「시장 서비스 100,000건」 →
+    걸러진 목록). 색인의 `(dst_id, key)` 로 센다 — 시스템 관리자면 객체 표를 거치지 않는다
+    (색인에는 살아 있는 것만 있다)."""
+    by_pair = {
+        (kind.src_type.id, kind.key): kind
+        for kind in kinds(db).values()
+        if kind.src_type.usage == "log"
+    }
+    if not by_pair:
+        return []
+    stmt = select(ObjectRef.src_type_id, ObjectRef.key, func.count()).where(
+        ObjectRef.dst_id == target,
+        ObjectRef.src_type_id.in_({type_id for type_id, _ in by_pair}),
+    )
+    if not user.is_system_admin:
+        stmt = stmt.join(ObjectInstance, ObjectInstance.id == ObjectRef.src_id).where(
+            visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+        )
+    out = [
+        LogCount(by_pair[(type_id, key)], int(count))
+        for type_id, key, count in db.execute(
+            stmt.group_by(ObjectRef.src_type_id, ObjectRef.key)
+        )
+        if (type_id, key) in by_pair
+    ]
+    out.sort(key=lambda one: (-one.count, one.kind.slug))
+    return out
 
 
 @dataclass(frozen=True)

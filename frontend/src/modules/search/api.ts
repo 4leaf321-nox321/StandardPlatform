@@ -7,6 +7,8 @@ export interface SearchTypeCount {
   type_label: string
   icon: string
   count: number
+  /** `log` 면 기록(ADR 0011) — 섞어 볼 때 줄에 안 섞고 이 수로만 선다. */
+  usage?: 'axis' | 'log'
 }
 
 export interface SearchHit {
@@ -23,8 +25,11 @@ export interface SearchHit {
 
 export interface SearchResult {
   q: string
+  /** 줄로 볼 수 있는 수 — 섞어 볼 때는 기록을 뺀 수. */
   total: number
   types: SearchTypeCount[]
+  /** 섞어 볼 때 줄에 안 섞은 기록의 수 — 그 타입을 고르면 나온다. */
+  records?: number
   items: SearchHit[]
   limit: number
   offset: number

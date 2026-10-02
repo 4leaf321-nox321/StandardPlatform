@@ -39,6 +39,7 @@ from app.modules.ontology.models import (
     KIND_CLASSES,
     NAV_AUDIENCES,
     TEMPORAL_KINDS,
+    USAGES,
     NavGroup,
     ObjectInterface,
     ObjectType,
@@ -89,6 +90,7 @@ TYPE_FIELDS = {
     "key_policy",
     "key_scope",
     "temporal_kind",
+    "usage",
     "list_view",
     "form_view",
     "detail_view",
@@ -157,6 +159,7 @@ CHOICES = {
     "key_policy": KEY_POLICIES,
     "key_scope": KEY_SCOPES,
     "temporal_kind": TEMPORAL_KINDS,
+    "usage": USAGES,
     "cardinality": CARDINALITIES,
     "data_type": DATA_TYPES,
 }

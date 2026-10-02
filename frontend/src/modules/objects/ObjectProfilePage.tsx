@@ -14,6 +14,7 @@ import { ontologyApi } from '@/modules/ontology/api'
 import { ObjectYears } from '@/modules/objects/ObjectYears'
 import { AliasesPanel } from '@/modules/objects/AliasesPanel'
 import { RelatedObjects } from '@/modules/objects/RelatedObjects'
+import { LogCounts } from '@/modules/objects/LogCounts'
 import { RollupPanel } from '@/modules/objects/RollupPanel'
 import type { PropertyDef, SectionView } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
@@ -287,6 +288,8 @@ export default function ObjectProfilePage() {
       {objectType?.list_view?.tree?.relation && (objectType.list_view.rollups?.length ?? 0) > 0 && (
         <RollupPanel typeSlug={typeSlug} objectId={objectId} reloadKey={profile.data} />
       )}
+
+      <LogCounts objectId={objectId} counts={profile.data.log_counts ?? []} />
 
       <RelatedObjects
         typeSlug={typeSlug}

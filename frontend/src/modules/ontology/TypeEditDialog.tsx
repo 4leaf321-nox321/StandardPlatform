@@ -88,6 +88,7 @@ export function TypeEditDialog({
   const [keyPolicy, setKeyPolicy] = useState<string>(type.key_policy)
   const [keyScope, setKeyScope] = useState<string>(type.key_scope)
   const [temporalKind, setTemporalKind] = useState<string>(type.temporal_kind)
+  const [usage, setUsage] = useState<string>(type.usage ?? 'axis')
   const [sortOrder, setSortOrder] = useState(String(type.sort_order))
   const [isActive, setIsActive] = useState(type.is_active)
   const [core, setCore] = useState(type.core ?? false)
@@ -117,6 +118,7 @@ export function TypeEditDialog({
         key_policy: keyPolicy,
         key_scope: keyScope,
         temporal_kind: temporalKind,
+        usage,
         sort_order: Number(sortOrder) || 0,
         is_active: isActive,
         core,
@@ -320,6 +322,15 @@ export function TypeEditDialog({
                       options={[
                         ['global', '전사에서 하나'],
                         ['workspace', '부서에서 하나'],
+                      ]}
+                    />
+                    <Field
+                      label="축 · 기록"
+                      value={usage}
+                      onChange={setUsage}
+                      options={[
+                        ['axis', '축 — 가리켜지는 쪽'],
+                        ['log', '기록 — 가리키는 쪽'],
                       ]}
                     />
                     <Field

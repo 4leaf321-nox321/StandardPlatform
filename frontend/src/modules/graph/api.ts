@@ -5,6 +5,7 @@
  * 「그림에서 선을 지웠는데 상세에는 남아 있는」 어긋남이 생긴다.
  */
 
+import type { LogCount } from '@/modules/objects/api'
 import { api } from '@/shared/api/client'
 
 /** 정의 그래프의 노드 — 타입 하나. */
@@ -70,6 +71,8 @@ export interface Neighborhood {
   node_limit: number
   /** 상한 때문에 어딘가가 잘렸다. */
   truncated: boolean
+  /** 시작점을 가리키는 **기록**(ADR 0011) — 이웃으로 안 싣고 수로 온다. */
+  log_counts?: LogCount[]
 }
 
 /** 한 타입(들)의 인스턴스 전부 — 쪽 단위, 상한 안에서. */

@@ -275,8 +275,10 @@ def schema_of(
     label: str,
     nav_group_slug: str | None,
     key_policy: str,
+    usage: str = "log",
 ) -> dict[str, Any]:
-    """추론을 `importer` 가 받는 스키마로."""
+    """추론을 `importer` 가 받는 스키마로. 표에서 만든 타입은 **기본이 기록**이다(ADR 0011) —
+    표는 대개 무엇을 가리키는 쪽이다."""
     properties: list[dict[str, Any]] = []
     for column in inferred.columns:
         if column.role != "property":
@@ -298,6 +300,7 @@ def schema_of(
         "slug": slug,
         "label": label,
         "key_policy": key_policy,
+        "usage": usage,
         "properties": properties,
     }
     if nav_group_slug:

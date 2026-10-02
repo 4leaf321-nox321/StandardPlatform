@@ -45,19 +45,14 @@ import type {
   SearchHit,
   Subgraph,
 } from '@/modules/graph/api'
-import {
-  colorScale,
-  groupColorScale,
-  typeColorScale,
-  withAlpha,
-} from '@/modules/graph/colors'
+import { colorScale, groupColorScale, typeColorScale, withAlpha } from '@/modules/graph/colors'
 import { GraphCanvas } from '@/modules/graph/GraphCanvas'
 import type { CanvasLink, CanvasNode } from '@/modules/graph/GraphCanvas'
 import { COMMUNITY_MIN_NODES, useCommunities } from '@/modules/graph/useCommunities'
 import { useFullscreen } from '@/modules/graph/useFullscreen'
 import { useShortcuts } from '@/modules/graph/useShortcuts'
 import { objectApi } from '@/modules/objects/api'
-import type { ObjectRow, RelatedObject } from '@/modules/objects/api'
+import type { LogCount, ObjectRow, RelatedObject } from '@/modules/objects/api'
 import { propertyText } from '@/modules/objects/PropertyFields'
 import { ontologyApi } from '@/modules/ontology/api'
 import { ApiError } from '@/shared/api/client'
@@ -118,6 +113,8 @@ interface Explored {
   page: { total: number; offset: number; limit: number; shown: number } | null
   /** 어느 노드를 펼쳐서 들어왔나(id → 펼친 노드 id). 캔버스가 새 노드를 그 곁에 놓는다. */
   origin: Map<string, string>
+  /** 시작점을 가리키는 기록(ADR 0011) — 그림에 안 싣고 수와 목록 고리로 보인다. */
+  logCounts: LogCount[]
 }
 
 function mergeNodes(
@@ -147,6 +144,8 @@ function mergeNeighborhood(previous: Explored | null, fresh: Neighborhood): Expl
       node_limit: fresh.node_limit,
     },
     page: previous?.page ?? null,
+    // 펼친 노드의 기록 수는 안 받는다 — 안내줄은 시작점의 것만 말한다.
+    logCounts: previous?.logCounts ?? fresh.log_counts ?? [],
   }
 }
 
@@ -161,6 +160,7 @@ function fromSubgraph(fresh: Subgraph): Explored {
       limit: fresh.limit,
       shown: fresh.nodes.length,
     },
+    logCounts: [],
   }
 }
 
@@ -330,9 +330,7 @@ export default function GraphPage() {
    * 그림의 색이 어긋나지 않는다.
    */
   const groupOfType = useMemo(() => {
-    const labels = new Map(
-      (schema.data?.groups ?? []).map((one) => [one.slug, one.label] as const),
-    )
+    const labels = new Map((schema.data?.groups ?? []).map((one) => [one.slug, one.label] as const))
     const out = new Map<string, { key: string; label: string }>()
     for (const one of schema.data?.types ?? []) {
       const group = one.nav_group_slug
@@ -1359,6 +1357,19 @@ function ExploreView({
                         · 일부만 실었습니다 — 「+N」 이 붙은 노드에서 더 펼칩니다
                       </span>
                     )}
+                    {/* 기록은 그림에 안 싣는다 — 인기 모델은 10만 건이 가리킨다. 수와 목록 고리로. */}
+                    {explored.focus &&
+                      explored.logCounts.map((one) => (
+                        <Link
+                          key={`${one.type_slug}.${one.key}`}
+                          to={`/o/${one.type_slug}?${new URLSearchParams({
+                            [`f.${one.key}.eq`]: explored.focus ?? '',
+                          })}`}
+                          className="underline-offset-2 hover:underline"
+                        >
+                          · 가리키는 기록 {one.type_label} {one.count.toLocaleString()}건
+                        </Link>
+                      ))}
                   </div>
                 )}
               </>

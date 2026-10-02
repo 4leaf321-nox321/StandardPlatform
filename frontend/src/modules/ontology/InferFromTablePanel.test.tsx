@@ -127,6 +127,8 @@ describe('표에서 타입 생성 — 참조 후보', () => {
 
     const sent = await sentColumns()
     expect(sent['모델']).toMatchObject({ data_type: 'object_ref', ref_type_slug: 'plm_model' })
+    // 표에서 만든 타입은 기본이 기록이다(ADR 0011) — 표는 대개 축을 가리키는 쪽이다.
+    expect(ontologyApi.inferBuild.mock.calls[0][0]).toMatchObject({ usage: 'log' })
   })
 
   it('제안되지 않은 열도 후보를 누르면 그 타입을 가리키는 참조 열이 된다', async () => {

@@ -64,6 +64,8 @@ class _Target:
     """`type` · `interface`."""
     members: set[str] = field(default_factory=set)
     """인터페이스면 구현 타입 slug, 타입이면 자기."""
+    log: bool = False
+    """기록 타입이다(ADR 0011) — 후보로 보이되 제안하지 않는다. 기록은 대개 가리키는 쪽이다."""
 
 
 def _linkable(column: ColumnGuess) -> bool:
@@ -221,7 +223,12 @@ def _decide(
         and not _related(best, other, targets)
     ]
     reasons: list[str] = []
-    if best.short:
+    if targets[best.target_slug].log:
+        reasons.append(
+            f"{best.target_label} 은(는) 기록이라 제안하지 않습니다 — 기록을 가리키는 열이 "
+            "맞으면 후보를 고르세요"
+        )
+    elif best.short:
         reasons.append("맞은 값이 전부 짧은 숫자라 우연일 수 있어 제안하지 않습니다")
     elif best.one_values < PROPOSE_MIN_VALUES:
         reasons.append(f"맞은 값이 {best.one_values}종뿐이라 제안하지 않습니다")
@@ -263,13 +270,20 @@ def attach(db: Session, user: User, inferred: Inferred, rows: list[dict[str, Any
     hits = _hits(db, user, every, small)
     ends = interfaces.load_ends(db)
     targets: dict[str, _Target] = {
-        one.slug: _Target(one.slug, one.label, "type", {one.slug}) for one in kinds.values()
+        one.slug: _Target(one.slug, one.label, "type", {one.slug}, log=one.usage == "log")
+        for one in kinds.values()
     }
     for slug in ends.interfaces:
         targets[slug] = _Target(
             slug, ends.labels.get(slug, slug), "interface", set(ends.expand([slug]) or ())
         )
-    systems = [one.slug for one in kinds.values() if system.is_system(one)]
+    # 등록이 빠진 원 표를 비추는 타입은 건너뛴다 — 모든 타입을 훑는 자리라, 그 하나 때문에
+    # 표 추론 전체가 멈추면 안 된다(`system.source_or_none`).
+    systems = [
+        one.slug
+        for one in kinds.values()
+        if system.is_system(one) and one.is_active and system.source_or_none(one) is not None
+    ]
     refs = Refs(db, user)
 
     for column in columns:

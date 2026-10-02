@@ -162,6 +162,11 @@ function GroupBlock({
                         미구현
                       </span>
                     )}
+                    {item.badge && !item.pending && (
+                      <span className="text-muted-foreground/70 ml-auto shrink-0 rounded border px-1 text-[10px] leading-4">
+                        {item.badge}
+                      </span>
+                    )}
                   </NavLink>
                 </li>
               ))}

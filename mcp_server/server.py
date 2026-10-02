@@ -440,7 +440,11 @@ async def search(
     `objects_list`(조건 거르기) · `object_resolve`(하나로 정하기)가 낫다 — 이것은
     「어디 있나」 를 묻는 도구지 「어느 것인가」 를 정하는 도구가 아니다.
     볼 수 있는 것만 나온다(남의 부서 것은 수에도 안 잡힌다). `type_slug` 에 인터페이스를
-    주면 구현 타입 전부에서 찾는다."""
+    주면 구현 타입 전부에서 찾는다.
+
+    **기록**(`usage="log"` — 시장 서비스 건 · 시험 결과)은 섞어 찾을 때 줄로 안 오고
+    `types[]` 의 건수와 `records` 로만 온다. 기록에서 찾으려면 그 타입을 `type_slug` 로
+    준다."""
     params: list[tuple[str, Any]] = [("q", q), ("limit", limit), ("offset", offset)]
     if type_slug:
         params.append(("type", type_slug))
@@ -523,9 +527,11 @@ async def table_build(
     rows: list[dict[str, Any]],
     key_policy: str = "optional",
     nav_group_slug: str | None = None,
+    usage: str = "log",
 ) -> Any:
     """`table_infer` 의 열(사람이 고친 것)과 같은 행 → **정의 스키마**와 **넣을 행**.
-    아무것도 안 바꾼다.
+    아무것도 안 바꾼다. `usage` 는 기본 `log`(기록) — 표는 대개 축을 가리키는 쪽이다. 개발모델
+    · 과제처럼 **가리켜지는 쪽**을 표로 만들면 `axis`(축).
 
     `columns` 는 `table_infer` 가 준 열 그대로에서 고칠 것만 고친다 — `role` · `key` ·
     `label` · `data_type` · `multi` · `enum_options`, 참조로 둘 열은
@@ -543,6 +549,7 @@ async def table_build(
             "label": label,
             "key_policy": key_policy,
             "nav_group_slug": nav_group_slug,
+            "usage": usage,
             "columns": columns,
             "raw_rows": rows,
         },
@@ -1032,6 +1039,7 @@ async def graph_neighbors(
     types: list[str] | None = None,
     fanout: int | None = None,
     limit: int | None = None,
+    records: bool = False,
 ) -> Any:
     """이 객체에서 **몇 단계 안에 무엇이 이어져 있나** — 질의어 없이 그래프를 훑는다.
 
@@ -1047,6 +1055,10 @@ async def graph_neighbors(
     돌려주는 것: `nodes`(id · 이름 · 식별자 · 타입 · 상태 · 부서 · degree)와 `edges`
     (관계 slug · 양끝 · 방향). 값이 필요하면 그 id 로 `object_get` 을 부른다.
 
+    **나를 가리키는 기록**(`usage="log"`)은 기본으로 이웃에 안 싣고 `log_counts`(타입 · 칸 ·
+    수)로 준다 — 인기 모델은 기록 10만 건이 가리킨다. 기록 자체를 보려면 `objects_list(기록
+    타입, conditions=[칸 = 이 객체])`, 이웃으로 싣고 싶으면 `records=True`.
+
     깊이 전부를 한 번에(부품 트리 밑바닥까지) 봐야 하면 `rdf_query` 의 `+` 경로를 쓴다.
     """
     params: list[tuple[str, Any]] = [("focus", object_id), ("depth", depth)]
@@ -1058,6 +1070,8 @@ async def graph_neighbors(
         params.append(("relations", ",".join(relations)))
     if types:
         params.append(("types", ",".join(types)))
+    if records:
+        params.append(("records", "true"))
     return await _get(ctx, "/api/graph/neighborhood", params=params)
 
 

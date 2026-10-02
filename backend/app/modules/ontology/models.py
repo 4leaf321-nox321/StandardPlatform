@@ -88,6 +88,17 @@ KEY_SCOPES = ("global", "workspace")
 #: 데이터가 이미 쌓여 있다.
 TEMPORAL_KINDS = ("evergreen", "lifecycle", "yearly", "derived")
 
+#: 타입의 **쓰임새** — 축인가 기록인가(ADR 0011).
+#:
+#:   axis  가리켜지는 쪽 — 개발모델 · 과제 · 부서. 사람이 이름으로 찾고 그래프의 마디가 된다
+#:   log   가리키는 쪽 — 시장 서비스 건 · 시험 결과. 수십만 ~ 수백만 건이 쌓인다
+#:
+#: 저장 · 권한 · 값은 똑같다(둘 다 `objects` 의 행이다). 다른 것은 **기본 동작**뿐이다 — 기록은
+#: 통합 검색에서 건수로, 축의 상세 · 그래프에서는 「가리키는 기록」 건수로 서고, 참조 후보로
+#: 제안되지 않는다. 크기로 자동으로 가르지 않는다: 문턱을 넘는 순간 화면이 말없이 바뀌고,
+#: 시험 결과 300건도 기록이다.
+USAGES = ("axis", "log")
+
 #: 속성의 값 종류 일곱.
 #:
 #: `file` 은 첨부 모듈을 재사용한다(`attachments.owner_field`). JSONB 에 첨부 id 를
@@ -251,6 +262,8 @@ class ObjectType(Base):
     temporal_kind: Mapped[str] = mapped_column(
         String(20), default="evergreen", server_default="evergreen"
     )
+    usage: Mapped[str] = mapped_column(String(16), default="axis", server_default="axis")
+    """축(`axis`)인가 기록(`log`)인가 — `USAGES`. 표에서 만든 타입은 기본이 기록이다."""
 
     list_view: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     """목록 화면의 모양 — 열·정렬·검색·필터.

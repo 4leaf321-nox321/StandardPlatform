@@ -120,6 +120,13 @@ export default function OntologyTypesPage() {
                       {row.managed_by && (
                         <span className="ml-2 rounded border px-1.5 text-xs">허브 관리</span>
                       )}
+                      {/* 기록은 검색 · 상세 · 그래프에서 다르게 선다(ADR 0011) — 목록에서 보여야
+                          「왜 검색에 안 나오지」 를 여기서 푼다. */}
+                      {row.usage === 'log' && (
+                        <span className="text-muted-foreground ml-2 rounded border px-1.5 text-xs">
+                          기록
+                        </span>
+                      )}
                       {/* **무엇이 바깥에 열려 있는지 목록에서 보여야 한다.** 창을 하나씩
                           열어 봐야 알 수 있으면 열어 둔 것을 잊는다. */}
                       {row.core && (
@@ -238,6 +245,7 @@ function NewTypeForm({
   const [label, setLabel] = useState('')
   const [group, setGroup] = useState<string>('')
   const [keyPolicy, setKeyPolicy] = useState('none')
+  const [usage, setUsage] = useState('axis')
   // **만들 때 고른다.** 만들고 나면 그 타입은 곧 쓰이기 시작하고, 사이드바를 다듬으러
   // 다시 오는 사람은 없다 — 그래서 전부 같은 네모로 남는다.
   const [icon, setIcon] = useState('LayoutGrid')
@@ -296,6 +304,18 @@ function NewTypeForm({
           </SelectContent>
         </Select>
       </div>
+      <div className="space-y-1.5">
+        <Label htmlFor="type-usage">축 · 기록</Label>
+        <Select value={usage} onValueChange={setUsage}>
+          <SelectTrigger id="type-usage" className="w-44">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value="axis">축 — 가리켜지는 쪽</SelectItem>
+            <SelectItem value="log">기록 — 가리키는 쪽</SelectItem>
+          </SelectContent>
+        </Select>
+      </div>
       <Button
         disabled={!slug.trim() || !label.trim()}
         onClick={() => {
@@ -305,6 +325,7 @@ function NewTypeForm({
             icon,
             nav_group_slug: group || null,
             key_policy: keyPolicy,
+            usage,
           })
           setSlug('')
           setLabel('')
@@ -314,7 +335,9 @@ function NewTypeForm({
       </Button>
       <p className="text-muted-foreground w-full text-xs">
         slug 는 <b>나중에 바꿀 수 없습니다</b> — 주소(
-        <code>/o/&lt;slug&gt;</code>)와 관계·MCP 도구 이름이 여기 물립니다.
+        <code>/o/&lt;slug&gt;</code>)와 관계·MCP 도구 이름이 여기 물립니다. <b>기록</b>(시장 서비스
+        건 · 시험 결과처럼 축을 가리키며 쌓이는 것)은 통합 검색에서 건수로, 축의 상세 · 그래프에서는
+        「가리키는 기록」 의 수로 섭니다.
       </p>
     </div>
   )

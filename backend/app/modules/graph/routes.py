@@ -35,6 +35,7 @@ from app.modules.graph.schemas import (
 )
 from app.modules.objects import graph, refedges, system
 from app.modules.objects.models import ObjectAlias, ObjectInstance
+from app.modules.objects.schemas import LogCountOut
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import NavGroup, ObjectType, RelationType
 from app.modules.workspaces.models import Workspace
@@ -170,15 +171,22 @@ def _system_nodes(
 
 
 def _degrees(
-    db: Session, ids: list[uuid.UUID], user: User, systems: dict[str, ObjectType]
+    db: Session,
+    ids: list[uuid.UUID],
+    user: User,
+    systems: dict[str, ObjectType],
+    *,
+    skip_logs: bool = False,
 ) -> dict[uuid.UUID, int]:
-    """관계와 링크를 합친 차수 — 「+N 더」 의 근거."""
+    """관계와 링크를 합친 차수 — 「+N 더」 의 근거. 이웃에서 기록을 뺐으면 기록도 안 센다."""
     out = graph.degree_counts(db, ids=ids, user=user)
     for node_id, n in graph.link_degree_counts(
         db, ids=ids, user=user, systems=list(systems)
     ).items():
         out[node_id] = out.get(node_id, 0) + n
-    for node_id, n in refedges.degree_counts(db, ids=ids, user=user).items():
+    for node_id, n in refedges.degree_counts(
+        db, ids=ids, user=user, skip_logs=skip_logs
+    ).items():
         out[node_id] = out.get(node_id, 0) + n
     return out
 
@@ -378,6 +386,10 @@ def neighborhood(
     types: str | None = Query(
         default=None, description="이웃 타입 slug, 쉼표로. 인터페이스면 그 구현 타입 전부"
     ),
+    records: bool = Query(
+        default=False,
+        description="나를 가리키는 기록(ADR 0011)도 이웃으로 싣는다. 기본은 수로만",
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> NeighborhoodOut:
@@ -386,6 +398,10 @@ def neighborhood(
     **한 단계씩, 노드마다 fanout 개까지, 전체 node_limit 개까지.** 셋 다 서버가
     상한을 강제한다. 잘리면 `truncated` 와 노드의 `degree` 로 **잘렸다고 말한다** —
     화면은 그 노드에 「+N 더」 를 적고, 사람은 거기서 다시 펼친다.
+
+    **나를 가리키는 기록은 기본으로 안 싣는다**(ADR 0011) — 인기 모델은 기록 10만 건이
+    가리키고, 그중 30개를 늘어놓으면 축의 모양이 묻힌다. 시작점을 가리키는 기록은
+    `log_counts` 에 수로 온다. `records=true` 거나 `types` 로 고르면 싣는다.
     """
     depth_n = _clamp(depth, default=DEFAULT_DEPTH, maximum=MAX_DEPTH)
     fanout_n = _clamp(fanout, default=DEFAULT_FANOUT, maximum=MAX_FANOUT)
@@ -424,6 +440,7 @@ def neighborhood(
             type_ids.append(start_type.id)
             type_slugs.append(start_type.slug)
 
+    skip_logs = not records and type_ids is None
     seen: set[uuid.UUID] = {focus}
     order: list[uuid.UUID] = [focus]
     edges: dict[uuid.UUID, graph.Edge | refedges.RefEdge] = {}
@@ -459,6 +476,7 @@ def neighborhood(
                 fanout=fanout_n,
                 relations=wanted_relations,
                 type_ids=type_ids,
+                skip_logs=skip_logs,
             )
         )
         next_frontier: list[uuid.UUID] = []
@@ -490,7 +508,7 @@ def neighborhood(
         row.id: row
         for row in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(order)))
     }
-    degrees = _degrees(db, order, user, systems)
+    degrees = _degrees(db, order, user, systems, skip_logs=skip_logs)
     shown: dict[uuid.UUID, int] = {}
     for edge in edges.values():
         shown[edge.src] = shown.get(edge.src, 0) + 1
@@ -549,6 +567,21 @@ def neighborhood(
         fanout=fanout_n,
         node_limit=node_limit,
         truncated=truncated,
+        log_counts=[
+            LogCountOut(
+                type_slug=one.kind.src_type.slug,
+                type_label=one.kind.src_type.label,
+                key=one.kind.key,
+                label=one.kind.label,
+                inverse_label=one.kind.inverse_label,
+                count=one.count,
+            )
+            for one in (
+                refedges.log_counts(db, target=focus, user=user)
+                if skip_logs and start is not None
+                else []
+            )
+        ],
     )
 
 

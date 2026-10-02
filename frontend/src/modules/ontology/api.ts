@@ -125,6 +125,11 @@ export interface ObjectType {
    */
   interface_slugs?: string[]
   temporal_kind: 'evergreen' | 'lifecycle' | 'yearly' | 'derived'
+  /**
+   * 축(`axis` — 가리켜지는 쪽)인가 기록(`log` — 가리키는 쪽)인가(ADR 0011). 기록은 통합 검색에서
+   * 건수로, 축의 상세 · 그래프에서는 「가리키는 기록」 의 수로 선다.
+   */
+  usage?: 'axis' | 'log'
   list_view: ListView
   /**
    * 폼·상세의 묶음 순서와 모양.
@@ -327,6 +332,8 @@ export interface InferBuildRequest {
   label: string
   nav_group_slug?: string | null
   key_policy?: 'none' | 'optional' | 'required'
+  /** 기본 `log`(기록) — 표는 대개 무엇을 가리키는 쪽이다. */
+  usage?: 'axis' | 'log'
   columns: InferColumn[]
   raw_rows: Record<string, unknown>[]
 }

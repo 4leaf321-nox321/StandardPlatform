@@ -44,9 +44,11 @@ def search(
                 type_label=one.type_label,
                 icon=one.icon,
                 count=one.count,
+                usage=one.usage,
             )
             for one in found.types
         ],
+        records=found.records,
         items=[
             SearchHitOut(
                 id=one.id,

@@ -141,9 +141,20 @@ export default function SearchPage() {
             >
               <TypeIcon name={one.icon} />
               {one.type_label} {one.count}
+              {one.usage === 'log' && (
+                <span className="text-muted-foreground rounded border px-1 text-[10px]">기록</span>
+              )}
             </Button>
           ))}
         </div>
+      )}
+      {/* 기록(시장 서비스 건 · 시험 결과)은 수백만 건이라 섞으면 찾던 것이 묻힌다 — 수만 말하고
+          그 타입을 고르면 줄을 보인다(ADR 0011). */}
+      {data && !type && (data.records ?? 0) > 0 && (
+        <p className="text-muted-foreground mb-3 text-xs">
+          기록 {(data.records ?? 0).toLocaleString()}건은 여기 섞지 않았습니다 — 위에서 그 타입을
+          고르면 봅니다.
+        </p>
       )}
 
       {!q ? (

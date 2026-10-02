@@ -121,6 +121,22 @@ describe('사이드바', () => {
     expect(old.icon).toBe(DEFAULT_ICON)
   })
 
+  it('기록 타입은 「기록」 표를 단다 — 이름만으로는 찾는 것인지 쌓이는 건인지 안 갈린다', () => {
+    const groups = visibleGroups(ADMIN, [
+      {
+        slug: 'quality',
+        label: '품질',
+        icon: '',
+        audience: 'everyone',
+        items: [
+          { label: '개발모델', icon: '', to: '/o/model', slug: 'model', usage: 'axis' },
+          { label: '시장 서비스', icon: '', to: '/o/case', slug: 'case', usage: 'log' },
+        ],
+      },
+    ])
+    expect(groups[1].items.map((item) => item.badge)).toEqual([undefined, '기록'])
+  })
+
   it('정의가 없으면 정적 메뉴 그대로다', () => {
     // **못 불러와도 사이드바는 선다.** 통째로 비면 나갈 길까지 사라진다.
     expect(visibleGroups(ADMIN, [])).toEqual(visibleGroups(ADMIN))
@@ -129,18 +145,27 @@ describe('사이드바', () => {
   it('확장은 제 이름의 그룹으로 홈 바로 아래에 선다', () => {
     // 확장을 켜는 일은 **기능 한 덩어리가 열리는 일**이다 — 「확장」 이라는 바구니 안에
     // 숨기면 사용자는 그 말로 자기 일을 찾지 않는다.
-    const groups = visibleGroups(ADMIN, [], [
-      { title: '설비 관리', items: [{ label: '설비', icon: DEFAULT_ICON, to: '/ext/equip' }] },
-    ])
+    const groups = visibleGroups(
+      ADMIN,
+      [],
+      [{ title: '설비 관리', items: [{ label: '설비', icon: DEFAULT_ICON, to: '/ext/equip' }] }],
+    )
     expect(groups[1].title).toBe('설비 관리')
     expect(visibleGroups(ADMIN, [], []).map((one) => one.title)).not.toContain('설비 관리')
   })
 
   it('제목이 같으면 기존 그룹에 합친다', () => {
     // 같은 이름의 그룹이 둘 서면 사람은 어느 쪽에 무엇이 있는지 매번 다시 찾는다.
-    const groups = visibleGroups(ADMIN, [], [
-      { title: '관리', items: [{ label: '설비 설정', icon: DEFAULT_ICON, to: '/ext/equip/설정' }] },
-    ])
+    const groups = visibleGroups(
+      ADMIN,
+      [],
+      [
+        {
+          title: '관리',
+          items: [{ label: '설비 설정', icon: DEFAULT_ICON, to: '/ext/equip/설정' }],
+        },
+      ],
+    )
     const admin = groups.filter((one) => one.title === '관리')
     expect(admin).toHaveLength(1)
     expect(admin[0].items.map((one) => one.label)).toContain('설비 설정')
@@ -163,14 +188,11 @@ describe('두 단계 묶음', () => {
   })
 
   it('상위 묶음 아래에 자식이 들어간다 — 제 항목도 함께 선다', () => {
-    const groups = visibleGroups(
-      { isSystemAdmin: false, isAnyManager: false },
-      [
-        dynamic('baseinfo', '설계 기준정보', null, ['spec']),
-        dynamic('machine', '기계 부품', 'baseinfo', ['part', 'material']),
-        dynamic('sim', '시뮬레이션', null, ['run']),
-      ],
-    )
+    const groups = visibleGroups({ isSystemAdmin: false, isAnyManager: false }, [
+      dynamic('baseinfo', '설계 기준정보', null, ['spec']),
+      dynamic('machine', '기계 부품', 'baseinfo', ['part', 'material']),
+      dynamic('sim', '시뮬레이션', null, ['run']),
+    ])
     const top = groups.find((one) => one.title === '설계 기준정보')
     expect(top?.items.map((one) => one.label)).toEqual(['spec'])
     expect(top?.children?.map((one) => one.title)).toEqual(['기계 부품'])

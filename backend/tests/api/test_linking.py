@@ -206,3 +206,43 @@ def test_참조_열은_대상이_있어야_만든다(client: TestClient, admin: 
         headers=admin.headers,
     )
     assert unknown.status_code == 404, unknown.text
+
+
+def test_등록이_빠진_원_표를_비추는_타입이_있어도_추론은_선다(
+    client: TestClient, admin: Signed
+) -> None:
+    """도메인을 떼면 그 원 표를 비추던 투영 타입이 정의에 남는다 — 모든 타입을 훑는 참조
+    후보가 그 하나 때문에 멈추면 표에서 타입을 아무도 못 만든다."""
+    ghost = client.post(
+        "/api/ontology/types",
+        json={
+            "slug": f"ghost_{uuid.uuid4().hex[:6]}",
+            "label": "떼어 낸 원 표",
+            "kind_class": "system",
+            "system_source": "workspace",
+        },
+        headers=admin.headers,
+    )
+    assert ghost.status_code == 201, ghost.text
+    from sqlalchemy import update
+
+    from app.database import SessionLocal
+    from app.modules.ontology.models import ObjectType
+
+    def point_at(source: str) -> None:
+        with SessionLocal() as db:
+            db.execute(
+                update(ObjectType)
+                .where(ObjectType.slug == ghost.json()["slug"])
+                .values(system_source=source)
+            )
+            db.commit()
+
+    point_at("no_such_source")
+    try:
+        got = _infer(client, admin, ["이름,모델", "건 1,A", "건 2,B"])
+        assert _column(got, "모델")["data_type"] == "text"
+    finally:
+        # 시험 DB 는 스위트가 함께 쓴다 — 남겨 두면 정의 전체를 되돌리는 다른 시험이 이
+        # 타입에서 막힌다.
+        point_at("workspace")

@@ -24,6 +24,12 @@
 한 줄로 늘어놓으면 상한에 걸린 순간 나머지가 어디 있는지 알 수 없다. 타입별 수를 함께
 주면 「부품에 30건」 을 보고 그 타입으로 좁힐 수 있다.
 
+## 기록은 섞지 않고 센다
+
+시장 서비스 건 · 시험 결과 같은 **기록**(ADR 0011)은 수백만 건이라, 섞어 늘어놓으면
+「BT-2041」 을 친 사람이 찾던 부품이 기록 줄 사이에 묻힌다. 섞어 볼 때는 기록을 **건수로만**
+보이고(`records`), 그 타입으로 좁히면 줄이 나온다.
+
 ## 투영 타입도 찾는다
 
 부서와 계정은 `objects` 에 행이 없지만 **사람이 찾는 것은 그 둘이 가장 많다.** 원 표가
@@ -78,13 +84,17 @@ class TypeCount:
     type_label: str
     icon: str
     count: int
+    usage: str = "axis"
 
 
 @dataclass
 class Result:
     total: int = 0
+    """줄로 볼 수 있는 수 — 섞어 볼 때는 기록을 뺀 수."""
     types: list[TypeCount] = field(default_factory=list)
     hits: list[Hit] = field(default_factory=list)
+    records: int = 0
+    """섞어 볼 때 줄에 안 섞은 기록의 수 — 그 타입으로 좁히면 나온다."""
 
 
 def _needle(q: str) -> str:
@@ -169,6 +179,7 @@ def _count_of(object_type: ObjectType, count: int) -> TypeCount:
         type_label=object_type.label,
         icon=object_type.icon,
         count=count,
+        usage=object_type.usage,
     )
 
 
@@ -218,7 +229,9 @@ def search(
         found.types = [one for one in found.types if one.type_slug in among]
     elif type_slug:
         found.types = [one for one in found.types if one.type_slug == type_slug]
-    found.total = sum(one.count for one in found.types)
+    mixed = not type_slug
+    found.total = sum(one.count for one in found.types if not (mixed and one.usage == "log"))
+    found.records = sum(one.count for one in found.types if mixed and one.usage == "log")
 
     target = types.get(type_slug) if type_slug else None
     if type_slug and target is None and among is None:
@@ -237,6 +250,10 @@ def search(
         where = (*where, ObjectInstance.type_id == target.id)
     elif among is not None:
         where = (*where, ObjectInstance.type_id.in_([types[one].id for one in among]))
+    else:
+        logs = [one.id for one in types.values() if one.usage == "log"]
+        if logs:
+            where = (*where, ObjectInstance.type_id.not_in(logs))
     rows = list(
         db.scalars(
             select(ObjectInstance)

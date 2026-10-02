@@ -112,4 +112,20 @@ describe('검색', () => {
     await open('/search?q=ansys')
     await waitFor(() => expect(screen.getByText(/120건 중 2건/)).toBeInTheDocument())
   })
+
+  it('기록은 섞지 않고 수로 말하며, 그 타입을 고르면 본다', async () => {
+    searchApi.find.mockResolvedValue({
+      ...RESULT,
+      types: [
+        ...RESULT.types,
+        { type_slug: 'case', type_label: '시장 서비스', icon: '', count: 900, usage: 'log' },
+      ],
+      records: 900,
+    })
+    await open('/search?q=ansys')
+    await waitFor(() =>
+      expect(screen.getByText(/기록 900건은 여기 섞지 않았습니다/)).toBeInTheDocument(),
+    )
+    expect(screen.getByRole('button', { name: /시장 서비스 900/ })).toHaveTextContent('기록')
+  })
 })

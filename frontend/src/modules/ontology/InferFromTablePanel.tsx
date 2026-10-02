@@ -141,6 +141,8 @@ export function InferFromTablePanel({ groups, types, interfaces, onChanged }: Pr
   const [label, setLabel] = useState('')
   const [group, setGroup] = useState(NONE)
   const [keyPolicy, setKeyPolicy] = useState<'none' | 'optional' | 'required'>('optional')
+  // 표는 대개 축을 가리키는 쪽이다 — 기본은 기록(ADR 0011).
+  const [usage, setUsage] = useState<'axis' | 'log'>('log')
   const [workspace, setWorkspace] = useState(user?.home_workspace_slug ?? NONE)
   const [schemaPlan, setSchemaPlan] = useState<ImportPlan | null>(null)
   const [rowsPlan, setRowsPlan] = useState<RowsPlan | null>(null)
@@ -182,6 +184,7 @@ export function InferFromTablePanel({ groups, types, interfaces, onChanged }: Pr
         label: label.trim(),
         nav_group_slug: group === NONE ? null : group,
         key_policy: keyPolicy,
+        usage,
         columns,
         raw_rows: result.raw_rows,
       })
@@ -205,6 +208,7 @@ export function InferFromTablePanel({ groups, types, interfaces, onChanged }: Pr
         label: label.trim(),
         nav_group_slug: group === NONE ? null : group,
         key_policy: keyPolicy,
+        usage,
         columns,
         raw_rows: result.raw_rows,
       })
@@ -306,7 +310,7 @@ export function InferFromTablePanel({ groups, types, interfaces, onChanged }: Pr
           <p className="text-sm">
             <b>{fileName}</b> — {result.rows}행, 열 {columns.length}개
           </p>
-          <div className="grid gap-3 sm:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-5">
             <div className="space-y-1.5">
               <Label htmlFor="inf-slug">타입 slug</Label>
               <Input
@@ -353,6 +357,18 @@ export function InferFromTablePanel({ groups, types, interfaces, onChanged }: Pr
                   <SelectItem value="none">안 씀</SelectItem>
                   <SelectItem value="optional">선택</SelectItem>
                   <SelectItem value="required">필수</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>축 · 기록</Label>
+              <Select value={usage} onValueChange={(next) => setUsage(next as typeof usage)}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="log">기록 — 가리키는 쪽</SelectItem>
+                  <SelectItem value="axis">축 — 가리켜지는 쪽</SelectItem>
                 </SelectContent>
               </Select>
             </div>

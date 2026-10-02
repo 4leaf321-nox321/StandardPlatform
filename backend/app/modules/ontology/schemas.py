@@ -122,6 +122,9 @@ class ObjectTypeOut(BaseModel):
     key_policy: str
     key_scope: str
     temporal_kind: str
+    usage: str = "axis"
+    """`axis`(축) · `log`(기록, ADR 0011) — 기록은 통합 검색 · 축의 상세 · 그래프에서 건수로
+    선다."""
     list_view: dict[str, Any]
     form_view: dict[str, Any]
     detail_view: dict[str, Any]
@@ -152,6 +155,8 @@ class ObjectTypeWriteRequest(BaseModel):
     key_policy: str = "none"
     key_scope: str = "global"
     temporal_kind: str = "evergreen"
+    usage: str = "axis"
+    """`axis`(축) · `log`(기록)."""
     core: bool = False
     list_view: dict[str, Any] = Field(default_factory=dict)
     form_view: dict[str, Any] = Field(default_factory=dict)
@@ -185,6 +190,7 @@ class ObjectTypePatchRequest(BaseModel):
     key_policy: str | None = None
     key_scope: str | None = None
     temporal_kind: str | None = None
+    usage: str | None = None
     core: bool | None = None
     list_view: dict[str, Any] | None = None
     form_view: dict[str, Any] | None = None
@@ -689,6 +695,8 @@ class InferBuildRequest(BaseModel):
     label: str = Field(min_length=1, max_length=64)
     nav_group_slug: str | None = None
     key_policy: str = "optional"
+    usage: str = "log"
+    """`log`(기록, 기본) · `axis`(축) — 표는 대개 무엇을 가리키는 쪽이다(ADR 0011)."""
     columns: list[InferColumnOut]
     raw_rows: list[dict[str, Any]]
 

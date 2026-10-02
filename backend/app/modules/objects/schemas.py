@@ -148,6 +148,21 @@ class RelationPatchRequest(BaseModel):
     evidence_note: str | None = Field(default=None, max_length=500)
 
 
+class LogCountOut(BaseModel):
+    """이 객체를 가리키는 **기록**(ADR 0011) — 타입 · 칸 하나의 수. 축의 상세는 기록을 줄로
+    싣지 않는다(인기 모델은 10만 건). 화면은 그 칸으로 걸러진 목록으로 잇는다."""
+
+    type_slug: str
+    type_label: str
+    key: str
+    """가리키는 칸 — 목록 거르기 `f.<key>.eq=<이 객체 id>`."""
+    label: str
+    """칸 이름(「모델」)."""
+    inverse_label: str
+    """상대 쪽에서 읽는 말(「시장 서비스」) — 비어 있을 수 있다."""
+    count: int
+
+
 class ObjectProfileOut(BaseModel):
     """객체 하나에 착지하면 **연결된 것이 모인다.**
 
@@ -161,7 +176,10 @@ class ObjectProfileOut(BaseModel):
     attachments: list[AttachmentBrief]
     related: list[RelatedObjectOut]
     """이 객체에 걸린 관계들. **양방향 다 온다** — 「이것이 가리키는 것」 만 주면
-    「이것을 가리키는 것」 을 물을 자리가 없어진다."""
+    「이것을 가리키는 것」 을 물을 자리가 없어진다. 나를 가리키는 **기록**은 여기 없고
+    `log_counts` 에 수로 온다."""
+    log_counts: list[LogCountOut] = []
+    """이 객체를 가리키는 기록 — 타입 · 칸마다의 수(ADR 0011)."""
 
     can_edit: bool
     can_link: bool = False

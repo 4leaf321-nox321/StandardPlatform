@@ -49,6 +49,7 @@ from app.modules.ontology.models import (
     KIND_CLASSES,
     NAV_AUDIENCES,
     TEMPORAL_KINDS,
+    USAGES,
     NavGroup,
     ObjectInterface,
     ObjectType,
@@ -218,6 +219,7 @@ def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectType
         key_policy=row.key_policy,
         key_scope=row.key_scope,
         temporal_kind=row.temporal_kind,
+        usage=row.usage,
         list_view=row.list_view or {},
         form_view=row.form_view or {},
         detail_view=row.detail_view or {},
@@ -482,6 +484,7 @@ def create_type(
         key_policy=payload.key_policy,
         key_scope=payload.key_scope,
         temporal_kind=payload.temporal_kind,
+        usage=payload.usage,
         title_template=payload.title_template,
         is_active=payload.is_active,
         core=payload.core,
@@ -534,6 +537,7 @@ def update_type(
         ("key_policy", payload.key_policy, KEY_POLICIES, "식별자 정책"),
         ("key_scope", payload.key_scope, KEY_SCOPES, "식별자 범위"),
         ("temporal_kind", payload.temporal_kind, TEMPORAL_KINDS, "시간 정책"),
+        ("usage", payload.usage, USAGES, "축 · 기록"),
     )
     for field, value, allowed, what in choices:
         if field in sent and value is not None:
@@ -714,6 +718,7 @@ def _check_type_choices(payload: ObjectTypeWriteRequest) -> None:
     require_choice(payload.key_policy, KEY_POLICIES, what="식별자 정책")
     require_choice(payload.key_scope, KEY_SCOPES, what="식별자 범위")
     require_choice(payload.temporal_kind, TEMPORAL_KINDS, what="시간 정책")
+    require_choice(payload.usage, USAGES, what="축 · 기록")
 
 
 def _type_deletion(db: Session, row: ObjectType) -> _Deletion:
@@ -2688,9 +2693,17 @@ def dynamic_nav(
         )
     )
 
+    # 묶음 안에서 **축이 먼저, 기록이 뒤**다(ADR 0011) — 기록은 「기록」 표를 달고 선다.
+    types.sort(key=lambda t: t.usage == "log")
     items_of = {
         group.id: [
-            {"label": t.label, "icon": t.icon, "to": f"/o/{t.slug}", "slug": t.slug}
+            {
+                "label": t.label,
+                "icon": t.icon,
+                "to": f"/o/{t.slug}",
+                "slug": t.slug,
+                "usage": t.usage,
+            }
             for t in types
             if t.nav_group_id == group.id
         ]
@@ -2790,6 +2803,7 @@ def build_from_inferred(
     """사람이 고친 열 정의를 **정의 스키마**와 **가져올 행**으로 — 둘 다 기존 길로 넣는다."""
     slug = require_slug(payload.slug, what="타입 slug")
     require_choice(payload.key_policy, KEY_POLICIES, what="식별자 정책")
+    require_choice(payload.usage, USAGES, what="축 · 기록")
     columns = [
         inference.ColumnGuess(**one.model_dump(exclude={"ref_candidates"}))
         for one in payload.columns
@@ -2819,6 +2833,7 @@ def build_from_inferred(
             label=payload.label,
             nav_group_slug=payload.nav_group_slug,
             key_policy=payload.key_policy,
+            usage=payload.usage,
         ),
         import_rows=inference.rows_of(inferred, payload.raw_rows),
     )

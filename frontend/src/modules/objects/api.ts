@@ -57,13 +57,27 @@ export interface RelatedObject {
   field_key?: string | null
 }
 
+/** 이 객체를 가리키는 기록 — 타입 · 칸 하나의 수(ADR 0011). */
+export interface LogCount {
+  type_slug: string
+  type_label: string
+  /** 가리키는 칸 — 목록 거르기 `f.<key>.eq=<이 객체 id>`. */
+  key: string
+  /** 칸 이름(「모델」). */
+  label: string
+  inverse_label: string
+  count: number
+}
+
 export interface ObjectProfile {
   object: ObjectRow
   type_label: string
   properties_schema: PropertyDef[]
   attachments: AttachmentBrief[]
-  /** 이 객체에 걸린 관계들. **양방향 다 온다.** */
+  /** 이 객체에 걸린 관계들. **양방향 다 온다.** 나를 가리키는 기록은 `log_counts` 에. */
   related: RelatedObject[]
+  /** 이 객체를 가리키는 **기록**(ADR 0011) — 타입 · 칸마다의 수. */
+  log_counts?: LogCount[]
   /** **서버가 판정한 것이다.** 화면이 스스로 정하면 화면마다 단추가 달라진다. */
   can_edit: boolean
   /**

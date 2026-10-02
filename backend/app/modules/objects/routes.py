@@ -75,6 +75,7 @@ from app.modules.objects.schemas import (
     ImportPlanOut,
     ImportRowOut,
     ImportRowsRequest,
+    LogCountOut,
     MergeRequest,
     MergeResultOut,
     ObjectCreateRequest,
@@ -1893,6 +1894,17 @@ def object_profile(
         properties_schema=[PropertyDefOut.model_validate(p) for p in defs],
         attachments=[AttachmentBrief.model_validate(a) for a in attachments],
         related=_related(db, user, row),
+        log_counts=[
+            LogCountOut(
+                type_slug=one.kind.src_type.slug,
+                type_label=one.kind.src_type.label,
+                key=one.kind.key,
+                label=one.kind.label,
+                inverse_label=one.kind.inverse_label,
+                count=one.count,
+            )
+            for one in refedges.log_counts(db, target=row.id, user=user)
+        ],
         can_edit=_can_edit(db, user, row) and not managed.owner_of(object_type),
         can_link=_can_edit(db, user, row),
         watching=watches.watching(db, object_id=row.id, user_id=user.id),
@@ -2385,7 +2397,10 @@ def _related_refs(db: Session, user: User, row: ObjectInstance) -> list[RelatedO
     가리키는 것(다른 객체의 칸 값) 둘 다. 이 줄은 관계 줄이 아니라 끊는 단추가 없다 — 칸을
     비우거나 상대 객체의 칸을 고친다."""
     kinds = refedges.kinds(db)
-    found = refedges.neighbor_edges(db, frontier=[row.id], user=user, fanout=REF_RELATED_LIMIT)
+    # 나를 가리키는 기록은 줄로 안 싣는다 — `log_counts` 가 수로 보인다(ADR 0011).
+    found = refedges.neighbor_edges(
+        db, frontier=[row.id], user=user, fanout=REF_RELATED_LIMIT, skip_logs=True
+    )
     if not found:
         return []
     other_ids = {edge.dst if edge.src == row.id else edge.src for edge in found}

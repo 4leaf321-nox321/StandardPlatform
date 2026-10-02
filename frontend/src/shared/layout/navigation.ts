@@ -67,6 +67,8 @@ export interface NavItem {
   phase?: string
   /** 한 줄 설명. 개요 화면과 stub 화면이 같은 말을 하도록 여기 한 번만 적는다. */
   summary?: string
+  /** 이름 옆의 작은 표 — 기록 타입이면 「기록」(ADR 0011). */
+  badge?: string
 }
 
 /** 서버가 주는 동적 묶음 (`modules/ontology/api` 의 NavGroupNode 와 짝). */
@@ -77,7 +79,8 @@ export interface DynamicGroup {
   audience: string
   /** 상위 묶음의 slug — 없으면 맨 위. 평평하게 와서 `mergeDynamic` 이 두 단계로 세운다. */
   parent?: string | null
-  items: { label: string; icon: string; to: string; slug: string }[]
+  /** 서버가 묶음 안에서 **축을 먼저, 기록을 뒤에** 세워 보낸다(`usage`). */
+  items: { label: string; icon: string; to: string; slug: string; usage?: string }[]
 }
 
 export interface NavGroup {
@@ -240,6 +243,9 @@ export function mergeDynamic(groups: NavGroup[], dynamic: DynamicGroup[]): NavGr
       // 된다. 눈은 모양을 먼저 잡는데, 모양이 하나뿐이면 그 능력이 안 쓰인다.
       icon: iconOf(item.icon),
       to: item.to,
+      // 기록은 축과 같은 묶음에 서되 표를 단다 — 이름만 보고는 「찾는 그것」 인지 「쌓이는
+      // 건」 인지 안 갈린다.
+      badge: item.usage === 'log' ? '기록' : undefined,
     })),
   })
 

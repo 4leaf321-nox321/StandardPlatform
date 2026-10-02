@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-03c
+GUIDE_VERSION: 2026-10-03d
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -171,6 +171,19 @@ GUIDE_VERSION: 2026-10-03c
   함께. 정의만 고치면(`ontology_import`) 옛 이름의 값이 거르기에서 조용히 빠진다.
 - `ontology_promote(slug, key, new_slug=, new_label=)` — 고를 값을 코드표(참조 타입)로. 값 이전은
   스냅샷이 못 되돌린다.
+
+### 축과 기록 — 타입의 `usage`
+
+타입은 **축**(`axis` — 개발모델 · 과제 · 부서처럼 가리켜지는 쪽)이거나 **기록**(`log` — 시장 서비스 건 ·
+시험 결과처럼 가리키는 쪽, 수십만 ~ 수백만 건)이다(ADR 0011). 저장 · 권한 · 값은 같고 기본 동작만 다르다.
+
+- `search` 를 섞어 부르면 기록은 줄로 안 오고 `types[]` 의 건수 · `records` 로만 온다 — 기록에서 찾으려면
+  `type_slug` 로 그 타입을 준다.
+- `object_get`(축) · `graph_neighbors` 는 나를 가리키는 기록을 줄로 안 싣고 `log_counts`(타입 · 칸 · 수)로
+  준다. 기록 자체는 `objects_list(기록 타입, conditions=[칸 = 그 축의 id])` 로 거르고, 세기는
+  `objects_summary` 로.
+- 기록은 참조 후보로 제안되지 않는다(`table_infer`). 표에서 만든 타입은 기본이 기록이다(`table_build(usage=)`).
+- 축인지 기록인지는 사람이 정한다 — 크기로 가르지 않는다. 바꾸는 것은 `ontology_import` 의 `usage`.
 
 ### 표에서 기록 타입 — `table_infer(rows)` → `table_build(...)`
 

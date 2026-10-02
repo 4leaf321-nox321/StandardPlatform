@@ -10,6 +10,8 @@ import uuid
 
 from pydantic import BaseModel
 
+from app.modules.objects.schemas import LogCountOut
+
 # --- 정의 그래프 --------------------------------------------------------------
 
 
@@ -78,6 +80,8 @@ class NeighborhoodOut(BaseModel):
     node_limit: int
     truncated: bool
     """상한 때문에 어딘가가 잘렸다. 잘렸는데 말 안 하면 그림은 「이게 전부」 로 읽힌다."""
+    log_counts: list[LogCountOut] = []
+    """시작점을 가리키는 **기록**(ADR 0011) — 이웃으로 안 싣고 수로 보인다."""
 
 
 class SubgraphOut(BaseModel):
