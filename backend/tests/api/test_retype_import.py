@@ -116,19 +116,13 @@ def test_종류가_바뀐_뒤에도_그_전_스냅샷을_복원하면_값도_돌
 
 def test_안_되는_쌍과_관계_속성은_여전히_막는다(client: TestClient, admin: Signed) -> None:
     part = _make_type(client, admin)
-    _make_property(
-        client,
-        admin,
-        part,
-        key="grade",
-        label="등급",
-        data_type="enum",
-        enum_options=["A", "B"],
-    )
+    _make_property(client, admin, part, key="weight", label="무게", data_type="number")
+    # 참조는 글 · 긴 글 · 선택과만 오간다(ADR 0009) — 숫자를 거치면 식별자 「007」 이 「7」
+    # 이 된다.
     plan = _import(
-        client, admin, _retype(part, "grade", "object_ref", ref_type_slug=part)
+        client, admin, _retype(part, "weight", "object_ref", ref_type_slug=part)
     ).json()
-    assert any("코드표 승격" in one for one in plan["errors"]), plan
+    assert any("에서만 바꿉니다" in one for one in plan["errors"]), plan
 
     # 관계 종류의 속성은 값이 관계 줄에 있어 이번 범위 밖이다.
     relation = _uniq("uses")

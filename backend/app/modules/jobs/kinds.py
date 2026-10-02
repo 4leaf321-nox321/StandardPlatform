@@ -36,7 +36,7 @@ from app.modules.objects.schemas import ImportPlanOut, ImportRowOut
 from app.modules.objects.services import apply_sort, properties_of
 from app.modules.ontology.models import ObjectType
 from app.shared import sheets
-from app.shared.errors import Conflict, NotFound, code
+from app.shared.errors import Conflict, Forbidden, NotFound, code
 from app.shared.permissions import resolve_owner_workspace
 
 
@@ -540,7 +540,20 @@ def webhook_dispatch(work: Work) -> dict[str, Any]:
     return {"left": left}
 
 
+def ontology_retype(work: Work) -> dict[str, Any]:
+    """속성 종류 변경 — 값이 있는 객체가 많은 타입(기록 200만 건, ADR 0009). 계획 → 사람 확정
+    → 적용. 화면과 **같은 함수**(`ontology.routes.run_retype_job`)를 부른다."""
+    user = _user(work)
+    if not user.is_system_admin:
+        raise Forbidden(code("JOBS", 21), "종류 변경은 시스템 관리자만 합니다.")
+    # 온톨로지 라우터가 이 모듈을 거쳐 작업을 넣는다 — 서로 부르므로 여기서 늦게 읽는다.
+    from app.modules.ontology import routes as ontology_routes
+
+    return ontology_routes.run_retype_job(work.db, user, work.params, work.progress)
+
+
 register(Kind("objects_import", "객체 일괄 입력", True, True, objects_import, True))
+register(Kind("ontology_retype", "속성 종류 변경", False, True, ontology_retype))
 register(Kind("relations_import", "관계 일괄 입력", True, True, relations_import))
 register(Kind("bundle_import", "묶음 가져오기", True, True, bundle_import))
 register(Kind("bundle_undo", "묶음 되돌리기", False, True, bundle_undo))

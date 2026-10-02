@@ -13,25 +13,34 @@
 **변환할 수 없는 값이 하나라도 있으면 적용하지 않는다** — 대체 값(`mapping`)으로 값마다 정해야
 한다. 예외는 허브가 관리하는 타입(`clear_failures`): 그 묶음으로 바뀔 때만 비우고 경고한다 —
 쌍둥이는 그 객체를 못 고치고, 허브가 변환한 값은 같은 묶음의 객체 단계가 다시 보낸다.
+
+**글 ↔ 참조**(ADR 0009) — 이미 넣은 기록을 축에 잇는 길이다. 글 → 참조는 값마다 일괄 입력과
+같은 이름 풀이로 바꾸고(못 푼 값은 대체 값), 참조 → 글은 상대의 식별자(없으면 이름)로 읽는다.
+객체마다의 이력에는 **바뀐 칸만** 남긴다 — 기록 200만 건의 속성 전체를 두 번 담으면 이력 표가
+기록보다 커진다.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
+import re
 import uuid
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.objects import bulk
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology import conversion, interfaces, views
 from app.modules.ontology.models import ObjectType, PropertyDef
-from app.shared import audit
+from app.shared import audit, system_sources
+from app.shared.batches import chunks
 
 #: 화면과 같은 이름 — 문구가 화면의 종류 이름과 같아야 사람이 같은 것으로 읽는다.
 KIND_LABELS = {
@@ -52,10 +61,21 @@ UNIQUEABLE = ("text", "number", "url", "date", "datetime")
 
 #: 변환할 수 없는 값은 이만큼까지(건수가 많은 것부터) — 더 있으면 수만 말한다.
 FAILURE_CAP = 300
+#: 계획이 값마다 세는 변환할 수 없는 값의 종류 — 넘으면 건수만 센다. 엉뚱한 열을 참조로 바꾸면
+#: 200만 건이 전부 실패하고, 값마다 견본을 들면 워커의 메모리가 먼저 바닥난다.
+FAILURE_TRACK = 10_000
 #: 값마다 견본 객체 수.
 SAMPLES = 3
 #: 적용할 때 한 번에 읽어 고치는 행 수.
 CHUNK = 500
+#: 계획이 한 번에 읽는 행 수 — 칸 하나만 읽으니 넉넉히. 200만 건을 한 목록으로 싣지 않는다.
+READ_CHUNK = 5_000
+#: 값이 있는 객체가 이보다 많으면 요청 안에서 하지 않고 **작업**으로 돈다 — 기록 200만 건의
+#: 변환은 분 단위라 클라이언트가 먼저 끊는다(ADR 0009).
+RETYPE_INLINE = 20_000
+
+Progress = Callable[[str, int, int], None]
+"""(단계, 처리한 수, 전체) — 작업이 진행률을 적고, 취소 요청이면 여기서 멈춘다."""
 #: 정의 이력에 남기는 대체 값 수.
 MAPPED_IN_AUDIT = 50
 
@@ -69,6 +89,83 @@ _LOSSY = {
 
 def kind_label(kind: str) -> str:
     return KIND_LABELS.get(kind, kind)
+
+
+_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.I)
+
+
+class RefLinker:
+    """종류 변경의 이름 풀이(`conversion.Linker`).
+
+    글 → 참조는 일괄 입력과 **같은 판정**(`bulk.Refs.classify`) — 넣을 때 풀리는 글자가
+    여기서도 풀린다. 참조 → 글은 상대의 식별자(없으면 이름) — 그 글자를 다시 참조로 바꾸면
+    같은 객체로 풀린다. 보이는 범위를 안 건다: 종류 변경은 시스템 관리자 · 허브의 일이다.
+    """
+
+    def __init__(self, db: Session) -> None:
+        self.db = db
+        self.refs = bulk.Refs(db, None)
+        self.names: dict[str, str | None] = {}
+        self._system: dict[str, str] | None = None
+
+    def resolve(self, target: str, text: str) -> str:
+        match = self.refs.classify(target, text)
+        if match.kind == "one" and match.id is not None:
+            return match.id
+        if match.kind == "many" and match.how == "key":
+            raise conversion.Unconvertible(
+                f"식별자 「{text.strip()}」 이 구현 타입 여럿에 있습니다 — id 로 적으세요"
+            )
+        if match.kind == "many":
+            raise conversion.Unconvertible(
+                f"이름 「{text.strip()}」 이 {match.count}개에 맞습니다 — 식별자로 적으세요"
+            )
+        raise conversion.Unconvertible(
+            f"{target} 에서 「{text.strip()}」 을(를) 찾지 못했습니다"
+        )
+
+    def prefetch(self, ids: Iterable[str]) -> None:
+        """id 들의 글자를 한 번에 — 행마다 묻지 않게. 원 표(부서 · 계정)의 id 도 찾는다."""
+        wanted = sorted({one for one in ids if one not in self.names and _UUID.match(one)})
+        for batch in chunks(wanted):
+            for found, key, label in self.db.execute(
+                select(ObjectInstance.id, ObjectInstance.key, ObjectInstance.label).where(
+                    ObjectInstance.id.in_([uuid.UUID(one) for one in batch])
+                )
+            ):
+                self.names[str(found)] = key or label
+        missing = [one for one in wanted if one not in self.names]
+        if missing:
+            if self._system is None:
+                self._system = {
+                    str(ref.id): ref.key or ref.label
+                    for source in system_sources.system_sources()
+                    for ref in source.list_all(self.db)
+                }
+            for one in missing:
+                self.names[one] = self._system.get(one)
+
+    def text_of(self, object_id: str) -> str:
+        if object_id not in self.names:
+            self.prefetch([object_id])
+        found = self.names.get(object_id)
+        if not found:
+            raise conversion.Unconvertible("가리키던 객체가 없습니다(지웠거나 없는 id)")
+        return found
+
+
+def _elements(values: Iterable[Any]) -> Iterator[str]:
+    for value in values:
+        for one in value if isinstance(value, list) else [value]:
+            if one is not None:
+                yield str(one)
+
+
+def _touches_refs(targets: Iterable[Target]) -> bool:
+    return any(
+        target.before == "object_ref" or target.after.data_type == "object_ref"
+        for target in targets
+    )
 
 
 @dataclass
@@ -146,16 +243,21 @@ def unsupported(before: str, after: str) -> str | None:
     """종류 변경이 안 되는 쌍이면 그 까닭 — 되면 None."""
     if before == after:
         return f"이미 {kind_label(after)} 입니다."
-    if before == "enum" and after == "object_ref":
-        return "선택 → 객체 참조는 코드표 승격으로 합니다(속성 창의 「코드표로 승격」)."
-    if before == "object_ref":
-        return (
-            "객체 참조의 종류는 바꾸지 않습니다 — 저장값이 객체 id 라서 글로 읽어도 뜻이 "
-            "없습니다"
-            "(코드표 승격의 반대는 하지 않습니다)."
-        )
     if "file" in (before, after):
         return "파일 속성은 값이 첨부라 종류를 바꾸지 않습니다."
+    linkable = " · ".join(kind_label(one) for one in conversion.LINKABLE)
+    if after == "object_ref":
+        # 있는 축에 잇는다(ADR 0009) — 선택을 **새** 코드표로 만드는 것은 코드표 승격이다.
+        if before not in conversion.LINKABLE:
+            return f"객체 참조로는 {linkable} 에서만 바꿉니다."
+        return None
+    if before == "object_ref":
+        if after not in conversion.LINKABLE:
+            return (
+                f"객체 참조는 {linkable} (으)로만 바꿉니다 — 상대의 식별자(없으면 이름)가 "
+                "됩니다."
+            )
+        return None
     if after not in conversion.SUPPORTED or before not in conversion.SUPPORTED:
         names = " · ".join(kind_label(one) for one in conversion.SUPPORTED)
         return f"종류 변경은 {names} 사이에서만 합니다."
@@ -183,6 +285,11 @@ def target_def(found: PropertyDef, wanted: Mapping[str, Any]) -> tuple[PropertyD
         label=str(wanted.get("label") or found.label),
         unique=unique,
         default_value=wanted.get("default_value", found.default_value),
+        inverse_label=(
+            str(wanted.get("inverse_label") or found.inverse_label or "")
+            if shape.data_type == "object_ref"
+            else ""
+        ),
         **shape.written(),
     )
     return after, notes
@@ -258,33 +365,113 @@ def targets_from_bindings(
 # --- 계획 -----------------------------------------------------------------------
 
 
-def _rows(db: Session, target: Target) -> list[tuple[uuid.UUID, str, uuid.UUID | None, Any]]:
-    """그 키에 값이 있는 살아 있는 객체 — 계획은 그 칸만 읽는다(행 전체를 안 싣는다)."""
-    return [
-        (row[0], row[1], row[2], row[3])
-        for row in db.execute(
+def _with_value(target: Target) -> Any:
+    return select(ObjectInstance.id).where(
+        ObjectInstance.type_id == target.type_id,
+        ObjectInstance.deleted_at.is_(None),
+        ObjectInstance.properties.has_key(target.key),
+    )
+
+
+def count_rows(db: Session, targets: Iterable[Target], *, cap: int | None = None) -> int:
+    """값이 있는 객체 수. `cap` 을 주면 거기서 멈추고 센다(넘었는지만 알면 될 때)."""
+    total = 0
+    for target in targets:
+        stmt = _with_value(target)
+        if cap is not None:
+            stmt = stmt.limit(cap + 1 - total)
+        total += int(db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+        if cap is not None and total > cap:
+            break
+    return total
+
+
+def fingerprint(planned: RetypePlan) -> str:
+    """계획의 지문 — 미리 본 계획과 적용할 때의 계획이 같은가. 그 사이 누가 값을 바꿨으면
+    다르다(작업의 적용이 본다)."""
+    return fingerprint_of(
+        [
+            (one.type_slug, one.key, one.with_value, one.converted, one.unchanged, one.cleared)
+            for one in planned.counts
+        ],
+        [(one.value, one.count) for one in planned.failures],
+        planned.failures_total,
+        [(one.value, one.count, one.to) for one in planned.mapped],
+    )
+
+
+def fingerprint_of(
+    counts: Iterable[tuple[Any, ...]],
+    failures: Iterable[tuple[Any, ...]],
+    failures_total: int,
+    mapped: Iterable[tuple[Any, ...]],
+) -> str:
+    """지문의 몸 — 계획(`RetypePlan`)에서도 응답(`RetypeOut`)에서도 같은 값을 낸다."""
+    shape = {
+        "counts": [list(one) for one in counts],
+        "failures": [list(one) for one in failures],
+        "failures_total": failures_total,
+        "mapped": [list(one) for one in mapped],
+    }
+    raw = json.dumps(shape, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:32]
+
+
+def _rows(
+    db: Session, target: Target
+) -> Iterator[list[tuple[uuid.UUID, str, uuid.UUID | None, Any]]]:
+    """그 키에 값이 있는 살아 있는 객체를 **덩어리로** — 계획은 그 칸만 읽고(행 전체를 안
+    싣는다), 200만 건을 한 목록으로 들지 않는다."""
+    last: uuid.UUID | None = None
+    while True:
+        stmt = (
             select(
                 ObjectInstance.id,
                 ObjectInstance.label,
                 ObjectInstance.owner_workspace_id,
                 ObjectInstance.properties[target.key],
-            ).where(
+            )
+            .where(
                 ObjectInstance.type_id == target.type_id,
                 ObjectInstance.deleted_at.is_(None),
                 ObjectInstance.properties.has_key(target.key),
             )
+            .order_by(ObjectInstance.id)
+            .limit(READ_CHUNK)
         )
-    ]
+        if last is not None:
+            stmt = stmt.where(ObjectInstance.id > last)
+        rows = [(row[0], row[1], row[2], row[3]) for row in db.execute(stmt)]
+        if not rows:
+            return
+        yield rows
+        last = rows[-1][0]
+
+
+def _convert(
+    target: Target,
+    raw: Any,
+    mapping: Mapping[str, str | None] | None,
+    linker: RefLinker | None,
+) -> conversion.Converted:
+    """값 하나를 새 정의로 — 참조였으면 상대의 식별자로 읽고, 참조가 되면 이름을 푼다."""
+    return conversion.convert_stored(
+        target.after, raw, mapping, linker=linker, from_ref=target.before == "object_ref"
+    )
 
 
 def _converted(
-    target: Target, raw: Any, mapping: Mapping[str, str | None] | None
+    target: Target,
+    raw: Any,
+    mapping: Mapping[str, str | None] | None,
+    linker: RefLinker | None = None,
 ) -> conversion.Converted:
-    """값 하나 — 허브가 관리하는 타입이면 변환할 수 없는 원소를 지운다(경고는 계획이 낸다)."""
-    out = conversion.convert_stored(target.after, raw, mapping)
+    """적용할 값 — 허브가 관리하는 타입이면 변환할 수 없는 원소를 지운다(경고는 계획이
+    낸다)."""
+    out = _convert(target, raw, mapping, linker)
     if out.failures and target.clear_failures:
         dropped = {**(mapping or {}), **{key: None for key, _ in out.failures}}
-        out = conversion.convert_stored(target.after, raw, dropped)
+        out = _convert(target, raw, dropped, linker)
     return out
 
 
@@ -296,12 +483,19 @@ def plan(
     db: Session,
     targets: list[Target],
     mapping: Mapping[str, str | None] | None = None,
+    *,
+    linker: RefLinker | None = None,
+    on_progress: Progress | None = None,
 ) -> RetypePlan:
     """무엇이 변환되고 무엇이 안 되는지 — **아무것도 안 바꾼다.**"""
     out = RetypePlan()
     failures: dict[str, ValueRow] = {}
     mapped: dict[str, ValueRow] = {}
     used: set[str] = set()
+    if linker is None and _touches_refs(targets):
+        linker = RefLinker(db)
+    total = count_rows(db, targets) if on_progress is not None else 0
+    seen = 0
 
     for target in targets:
         counts = TypeCount(target.type_slug, target.type_label, target.key, target.via)
@@ -309,39 +503,55 @@ def plan(
         mine: dict[str, ValueRow] = {}
         before_groups: dict[tuple[Any, str], list[str]] = {}
         after_groups: dict[tuple[Any, str], list[str]] = {}
-        for object_id, label, workspace_id, raw in _rows(db, target):
-            counts.with_value += 1
-            result = conversion.convert_stored(target.after, raw, mapping)
-            for name in result.lossy:
-                lossy[name] = lossy.get(name, 0) + 1
-            for key in result.mapped:
-                used.add(key)
-                row = mapped.setdefault(key, ValueRow(key, 0, to=(mapping or {}).get(key)))
-                row.count += 1
-            if result.failures:
-                for key, reason in result.failures:
-                    row = mine.setdefault(key, ValueRow(key, 0, reason))
+        untracked = 0  # `FAILURE_TRACK` 종을 넘어 값마다 세지 않은 실패 건수
+        name = f"속성 {target.name}"
+        if target.after.data_type == "object_ref" and not target.after.ref_type_slug:
+            # 「아무 타입이나」 로는 이름을 풀 곳이 없다 — 어디서 찾을지 사람이 정한다.
+            out.errors.append(f"{name}: 객체 참조로 바꾸려면 가리킬 타입을 정해야 합니다.")
+            out.counts.append(counts)
+            continue
+        for row_chunk in _rows(db, target):
+            if on_progress is not None:
+                on_progress("계획", seen, total)
+                seen += len(row_chunk)
+            if linker is not None and target.before == "object_ref":
+                linker.prefetch(_elements(raw for *_, raw in row_chunk))
+            for object_id, label, workspace_id, raw in row_chunk:
+                counts.with_value += 1
+                result = _convert(target, raw, mapping, linker)
+                for kind in result.lossy:
+                    lossy[kind] = lossy.get(kind, 0) + 1
+                for key in result.mapped:
+                    used.add(key)
+                    row = mapped.setdefault(key, ValueRow(key, 0, to=(mapping or {}).get(key)))
                     row.count += 1
-                    if len(row.samples) < SAMPLES:
-                        row.samples.append(Sample(target.type_slug, object_id, label))
-                if target.clear_failures:
+                if result.failures:
+                    for key, reason in result.failures:
+                        if key not in mine and len(mine) >= FAILURE_TRACK:
+                            untracked += 1
+                            continue
+                        row = mine.setdefault(key, ValueRow(key, 0, reason))
+                        row.count += 1
+                        if len(row.samples) < SAMPLES:
+                            row.samples.append(Sample(target.type_slug, object_id, label))
+                    if target.clear_failures:
+                        counts.cleared += 1
+                    continue
+                if result.remove:
                     counts.cleared += 1
-                continue
-            if result.remove:
-                counts.cleared += 1
-            elif result.changed:
-                counts.converted += 1
-            else:
-                counts.unchanged += 1
-            if target.after.unique and not target.after.multi and not result.remove:
-                scope = workspace_id if target.key_scope == "workspace" else None
-                before_groups.setdefault((scope, _json(raw)), []).append(label)
-                after_groups.setdefault((scope, _json(result.value)), []).append(label)
+                elif result.changed:
+                    counts.converted += 1
+                else:
+                    counts.unchanged += 1
+                if target.after.unique and not target.after.multi and not result.remove:
+                    scope = workspace_id if target.key_scope == "workspace" else None
+                    before_groups.setdefault((scope, _json(raw)), []).append(label)
+                    after_groups.setdefault((scope, _json(result.value)), []).append(label)
 
         # 기본값도 같은 길 — 안 되면 견본 「(기본값)」 으로 같은 표에 선다.
         default = target.after.default_value
         if default is not None:
-            result = conversion.convert_stored(target.after, default, mapping)
+            result = _convert(target, default, mapping, linker)
             if result.failures:
                 for key, reason in result.failures:
                     row = mine.setdefault(key, ValueRow(key, 0, reason))
@@ -354,13 +564,13 @@ def plan(
                     None if result.remove else result.value
                 )
 
-        name = f"속성 {target.name}"
         if mine:
             listed = ", ".join(
                 f"「{row.value}」({row.count})"
                 for row in sorted(mine.values(), key=lambda one: -one.count)[:5]
             )
-            total = sum(row.count for row in mine.values())
+            total = sum(row.count for row in mine.values()) + untracked
+            kinds = f"{len(mine):,}종 넘게" if untracked else f"{len(mine)}종"
             if target.clear_failures:
                 out.warnings.append(
                     f"{name}: 허브가 관리하는 타입이라 "
@@ -372,7 +582,7 @@ def plan(
                 out.errors.append(
                     f"{name}: {kind_label(target.before)} → "
                     f"{kind_label(target.after.data_type)}(으)로 변환할 수 없는 값이 "
-                    f"{len(mine)}종 {total}건 있습니다 — {listed}."
+                    f"{kinds} {total}건 있습니다 — {listed}."
                 )
             for key, row in mine.items():
                 shared = failures.setdefault(key, ValueRow(key, 0, row.reason))
@@ -431,6 +641,18 @@ def plan(
 # --- 적용 -----------------------------------------------------------------------
 
 
+def changed_property(key: str, before: Any, after: dict[str, Any]) -> dict[str, Any]:
+    """칸 **하나만** 바뀐 이력 — `keys` 가 그 칸이다. 이력 화면(`history_of`)은 `keys` 가
+    있으면 그 칸만 되짚고 나머지는 그대로 둔다."""
+    return {
+        "properties": {
+            "before": {key: before},
+            "after": {key: after[key]} if key in after else {},
+            "keys": [key],
+        }
+    }
+
+
 def apply(
     db: Session,
     user: User | None,
@@ -438,16 +660,25 @@ def apply(
     mapping: Mapping[str, str | None] | None = None,
     *,
     reason: str = "",
+    before_apply: Callable[[RetypePlan], None] | None = None,
+    on_progress: Progress | None = None,
 ) -> RetypePlan:
     """계획을 다시 세워 오류가 없으면 **값과 정의를 함께** 고친다. 커밋하지 않는다.
 
-    객체마다 이력을 남긴다(`object.update`) — 이력 화면이 그것으로 그때 값을 되짚는다. 묶음
-    일지에는 안 적는다: 묶음 되돌리기는 정의를 안 되돌리므로, 옛 종류의 값을 새 정의에 다시
-    넣게 된다.
+    객체마다 이력을 남긴다(`object.update`) — 이력 화면이 그것으로 그때 값을 되짚는다. **바뀐
+    칸만** 담는다(`keys`): 속성 전체를 두 번 담으면 기록 200만 건의 종류 변경이 이력 표를
+    기록보다 크게 만든다. 묶음 일지에는 안 적는다: 묶음 되돌리기는 정의를 안 되돌리므로, 옛
+    종류의 값을 새 정의에 다시 넣게 된다.
     """
-    planned = plan(db, targets, mapping)
+    linker = RefLinker(db) if _touches_refs(targets) else None
+    planned = plan(db, targets, mapping, linker=linker, on_progress=on_progress)
     if planned.errors:
         return planned
+    if before_apply is not None:
+        # 쓰기 **전에** — 미리 본 계획과 다르면 여기서 멈춘다(작업의 지문).
+        before_apply(planned)
+    total = sum(one.with_value for one in planned.counts)
+    seen = 0
     now = datetime.now(UTC)
     for target in targets:
         owner = db.get(ObjectType, target.type_id)
@@ -480,12 +711,19 @@ def apply(
             rows = list(db.scalars(stmt))
             if not rows:
                 break
+            if on_progress is not None:
+                on_progress("적용", seen, total)
+                seen += len(rows)
+            if linker is not None and target.before == "object_ref":
+                linker.prefetch(
+                    _elements((one.properties or {}).get(target.key) for one in rows)
+                )
             for row in rows:
-                result = _converted(target, (row.properties or {}).get(target.key), mapping)
+                old = (row.properties or {}).get(target.key)
+                result = _converted(target, old, mapping, linker)
                 if result.failures or not result.changed:
                     continue
-                before = dict(row.properties or {})
-                after = dict(before)
+                after = dict(row.properties or {})
                 if result.remove:
                     after.pop(target.key, None)
                     cleared += 1
@@ -501,7 +739,7 @@ def apply(
                     target_id=row.id,
                     target_label=f"{owner.slug}:{row.label}",
                     workspace_id=row.owner_workspace_id,
-                    changes=audit.diff({"properties": before}, {"properties": after}),
+                    changes=changed_property(target.key, old, after),
                     reason=why,
                 )
             db.flush()
@@ -519,6 +757,7 @@ def apply(
         for name, value in interfaces.shape_of(target.after).written().items():
             setattr(definition, name, value)
         definition.unique = bool(target.after.unique)
+        definition.inverse_label = target.after.inverse_label or ""
         definition.default_value = planned.defaults.get((target.type_id, target.key))
         if target.before == "number" and target.after.data_type != "number":
             owner.list_view = views.prune_rollups(owner.list_view or {}, target.key)

@@ -1089,3 +1089,69 @@ def test_표에서_기록_타입을_만들고_축에_잇는다(bot: Bot) -> None
     pointed = {str(one["properties"][column["key"]]) for one in items}
     assert len(items) == 10 and len(pointed) == 5
     assert all(uuid.UUID(one) for one in pointed), "글자가 아니라 모델의 id 로 들어갔다"
+
+
+def test_글로_넣은_기록을_종류_변경으로_축에_잇는다(bot: Bot) -> None:
+    """이미 글로 넣은 칸을 `ontology_retype(data_type="object_ref", ref_type_slug=)` 로 —
+    못 찾은 값은 계획의 `failures` 로 오고, 사람이 정한 대체 값으로만 적용된다(ADR 0009)."""
+    model, case, tag = _uniq("model"), _uniq("case"), _uniq("M")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {"slug": model, "label": "개발모델", "key_policy": "required"},
+                {
+                    "slug": case,
+                    "label": "시장 서비스",
+                    "properties": [{"key": "model", "label": "모델", "data_type": "text"}],
+                },
+            ]
+        },
+        apply=True,
+    )
+    made = bot.call(server.object_create, model, key=f"{tag}-1", label="모델 1")
+    hit = bot.call(server.object_create, case, label="건 1", properties={"model": f"{tag}-1"})
+    bot.call(server.object_create, case, label="건 2", properties={"model": "없는 모델"})
+
+    asked = {"data_type": "object_ref", "ref_type_slug": model}
+    plan = bot.call(server.ontology_retype, case, "model", **asked)
+    assert [one["value"] for one in plan["failures"]] == ["없는 모델"], plan
+    done = bot.call(
+        server.ontology_retype, case, "model", mapping={"없는 모델": None}, apply=True, **asked
+    )
+    assert done["applied"] is True, done
+    got = bot.call(server.object_get, case, hit["id"])
+    assert got["object"]["properties"]["model"] == made["id"]
+
+
+def test_값이_많은_타입의_종류_변경은_작업이_되고_job_apply_로_적용한다(
+    bot: Bot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from app.modules.ontology import retype
+
+    monkeypatch.setattr(retype, "RETYPE_INLINE", 1)
+    case = _uniq("case")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": case,
+                    "label": "시장 서비스",
+                    "properties": [{"key": "qty", "label": "수량", "data_type": "text"}],
+                }
+            ]
+        },
+        apply=True,
+    )
+    for n in ("1", "2"):
+        bot.call(server.object_create, case, label=f"건 {n}", properties={"qty": n})
+
+    # apply=True 로 불러도 계획부터 — 사람이 결과를 본 뒤에 적용한다.
+    planned = bot.call(server.ontology_retype, case, "qty", "number", apply=True)
+    assert planned["kind"] == "ontology_retype" and planned["status"] == "done", planned
+    assert planned["result"]["applied"] is False and "job_apply" in planned["next"]
+    done = bot.call(server.job_apply, planned["job_id"])
+    assert done["status"] == "done" and done["result"]["applied"] is True, done
+    values = {one["properties"]["qty"] for one in bot.call(server.objects_list, case)["items"]}
+    assert values == {1, 2}

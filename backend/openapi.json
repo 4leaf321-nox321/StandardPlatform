@@ -4997,7 +4997,7 @@
           "ontology"
         ],
         "summary": "Retype Property",
-        "description": "**종류 변경** — 속성 종류를 바꾸면서 저장된 값도 새 종류로 변환한다(ADR 0007).\n\n`apply=false` 면 계획만: 타입의 건수 · 변환할 수 없는 값(값마다 건수 · 견본 · 까닭) · 경고.\n변환할 수 없는 값이 하나라도 남아 있으면 적용하지 않는다 — `mapping` 으로 값마다 대체 값을\n적거나 값 삭제(`null`)를 고른다. 적용 직전 정의를 스냅샷으로 남기고, 객체마다 이력이\n남는다.",
+        "description": "**종류 변경** — 속성 종류를 바꾸면서 저장된 값도 새 종류로 변환한다(ADR 0007).\n\n`apply=false` 면 계획만: 타입의 건수 · 변환할 수 없는 값(값마다 건수 · 견본 · 까닭) · 경고.\n변환할 수 없는 값이 하나라도 남아 있으면 적용하지 않는다 — `mapping` 으로 값마다 대체 값을\n적거나 값 삭제(`null`)를 고른다. 적용 직전 정의를 스냅샷으로 남기고, 객체마다 이력이\n남는다.\n\n값이 있는 객체가 2만 건을 넘으면 ONTOLOGY-67 — `…/retype/job` 으로 작업을 만든다(기록 200만\n건의 변환은 요청 안에서 끝나지 않는다).",
         "operationId": "retype_property_api_ontology_types__slug__properties__key__retype_post",
         "parameters": [
           {
@@ -5053,13 +5053,75 @@
         }
       }
     },
+    "/api/ontology/types/{slug}/properties/{key}/retype/job": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Retype Property Job",
+        "description": "종류 변경을 **작업으로** — 계획 작업을 만든다. 사람이 결과를 보고 `POST\n/api/jobs/{id}/apply` 로 적용한다(그 사이 값이 바뀌었으면 지문이 막는다).",
+        "operationId": "retype_property_job_api_ontology_types__slug__properties__key__retype_job_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetypeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ontology/interfaces/{slug}/properties/{key}/retype": {
       "post": {
         "tags": [
           "ontology"
         ],
         "summary": "Retype Interface Property",
-        "description": "공통 속성의 **종류 변경** — 구현 타입 전부의 저장값을 **한 트랜잭션에서** 변환한다.\n\n한 타입이라도 변환할 수 없는 값이 남아 있거나 모양이 안 맞으면 아무것도 안 바뀐다 — 한\n타입만 바뀌면 같은 공통 속성이 타입마다 다른 종류를 갖는다. 대체 값은 구현 타입 전부에\n걸린다.",
+        "description": "공통 속성의 **종류 변경** — 구현 타입 전부의 저장값을 **한 트랜잭션에서** 변환한다.\n\n한 타입이라도 변환할 수 없는 값이 남아 있거나 모양이 안 맞으면 아무것도 안 바뀐다 — 한\n타입만 바뀌면 같은 공통 속성이 타입마다 다른 종류를 갖는다. 대체 값은 구현 타입 전부에\n걸린다. 값이 있는 객체가 구현 타입을 통틀어 2만 건을 넘으면 ONTOLOGY-67(`…/retype/job`).",
         "operationId": "retype_interface_property_api_ontology_interfaces__slug__properties__key__retype_post",
         "parameters": [
           {
@@ -5098,6 +5160,68 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RetypeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ontology/interfaces/{slug}/properties/{key}/retype/job": {
+      "post": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Retype Interface Property Job",
+        "description": "공통 속성의 종류 변경을 **작업으로** — 계획 작업을 만든다.",
+        "operationId": "retype_interface_property_job_api_ontology_interfaces__slug__properties__key__retype_job_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetypeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
                 }
               }
             }
@@ -21028,6 +21152,30 @@
               }
             ],
             "title": "Unique"
+          },
+          "ref_type_slug": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type Slug"
+          },
+          "inverse_label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 64
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Inverse Label"
           },
           "mapping": {
             "additionalProperties": {

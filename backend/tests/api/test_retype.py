@@ -91,8 +91,11 @@ def test_막는_자리마다_코드가_있다(client: TestClient, admin: Signed)
     _make_property(client, admin, part, key="ref", label="참조", data_type="object_ref")
     _make_property(client, admin, part, key="t", label="글", data_type="text")
 
-    pair = _retype(client, admin, part, "ref", data_type="text")
+    # 참조는 글 · 긴 글 · 선택과만 오간다(ADR 0009) — 숫자로는 안 된다.
+    pair = _retype(client, admin, part, "ref", data_type="number")
     assert pair.status_code == 409 and _code(pair).endswith("ONTOLOGY-0064")
+    aimless = _retype(client, admin, part, "t", data_type="object_ref")
+    assert aimless.status_code == 422 and _code(aimless).endswith("ONTOLOGY-0066")
     same = _retype(client, admin, part, "t", data_type="text")
     assert same.status_code == 409 and _code(same).endswith("ONTOLOGY-0064")
     many = _retype(

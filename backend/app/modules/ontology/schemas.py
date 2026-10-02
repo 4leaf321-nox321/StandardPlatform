@@ -571,8 +571,14 @@ class RetypeRequest(BaseModel):
     unit: str | None = Field(default=None, max_length=24)
     unique: bool | None = None
     """타입의 속성만. 새 종류가 유일을 못 두면(선택 · 예/아니오 · 여러 줄) 꺼진다."""
+    ref_type_slug: str | None = Field(default=None, max_length=64)
+    """객체 참조로 바꿀 때 가리킬 타입 · 인터페이스 — 값마다 그 안에서 이름 풀이를 한다
+    (식별자 → 별칭 → 이름 → id, ADR 0009)."""
+    inverse_label: str | None = Field(default=None, max_length=64)
+    """객체 참조로 바꿀 때 상대 쪽에서 읽는 말(「이 모델의 시장 서비스」)."""
     mapping: dict[str, str | None] = Field(default_factory=dict)
-    """{변환할 수 없는 값: 대체 값 | null(값 삭제)} — 열쇠는 계획이 준 값 그대로."""
+    """{변환할 수 없는 값: 대체 값 | null(값 삭제)} — 열쇠는 계획이 준 값 그대로. 참조로 바꿀
+    때 대체 값은 상대의 식별자 · 이름 · id, 참조에서 바꿀 때 열쇠는 상대의 id."""
     accept_core: bool = False
     """공개 타입이면 수신 시스템에 통보했다는 확인."""
     apply: bool = False

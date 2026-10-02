@@ -14,6 +14,10 @@
                       지워진다. 시간대가 붙은 값은 변환할 수 없다
     참/거짓           한 어휘(아래 `TRUE_WORDS` · `FALSE_WORDS`)
     고를 값           앞뒤 공백을 뗀 **정확한 일치**
+    참조              글 · 긴 글 · 고를 값과 오간다(ADR 0009). 글 → 참조는 일괄 입력과
+                      같은 이름 풀이(식별자 → 별칭 → 이름 → id, 이름이 여럿이면 실패),
+                      참조 → 글은 상대의 식별자(없으면 이름) — 되돌리면 같은 객체로 다시
+                      풀린다. 이름 풀이는 DB 를 아는 쪽(`retype.RefLinker`)이 준다
 
 빈 글자 · 빈 목록은 실패가 아니라 **값이 없는 것**이다 — 키를 지운다(남기면 숫자 조건의
 cast 가 빈 글자에서 터진다). 여러 값은 원소마다 변환하고, 빈 결과는 빼고, 변환으로 생긴
@@ -29,7 +33,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
-from typing import Any
+from typing import Any, Protocol
 
 from app.modules.ontology.models import PropertyDef
 from app.modules.ontology.services import InvalidValue, check_value
@@ -40,7 +44,7 @@ FALSE_WORDS: frozenset[str] = frozenset(
     {"false", "0", "n", "no", "아니오", "아니요", "거짓", "x"}
 )
 
-#: 종류 변경이 오가는 종류. 참조 · 파일은 양쪽 다 아니다 — 고를 값 → 참조는 코드표 승격이 한다.
+#: 종류 변경이 오가는 값의 종류. 참조는 `LINKABLE` 과만 오가고, 파일은 양쪽 다 아니다.
 SUPPORTED: tuple[str, ...] = (
     "text",
     "text_long",
@@ -51,6 +55,10 @@ SUPPORTED: tuple[str, ...] = (
     "bool",
     "enum",
 )
+
+#: 참조와 오가는 종류 — 글자로 읽히는 것만. 숫자 · 날짜를 거치면 식별자 「007」 이 「7」 이
+#: 된다.
+LINKABLE: tuple[str, ...] = ("text", "text_long", "enum")
 
 #: 화면(JavaScript)의 숫자가 정확히 담는 정수의 끝. 넘으면 화면에서 끝자리가 깎인다.
 SAFE_INTEGER = 2**53
@@ -209,6 +217,18 @@ def parse_datetime(text: str) -> tuple[str, bool]:
 # --- 값 하나 · 저장값 하나 --------------------------------------------------------
 
 
+class Linker(Protocol):
+    """참조를 오가는 변환의 이름 풀이 — 세션을 아는 쪽이 준다(`retype.RefLinker`)."""
+
+    def resolve(self, target: str, text: str) -> str:
+        """글자 → `target`(타입 · 인터페이스)의 객체 id. 하나로 안 풀리면 `Unconvertible`."""
+        ...
+
+    def text_of(self, object_id: str) -> str:
+        """객체 id → 식별자(없으면 이름). 가리키던 것이 없으면 `Unconvertible`."""
+        ...
+
+
 @dataclass
 class Converted:
     """저장값 하나(여러 값이면 그 목록)를 바꾼 결과."""
@@ -230,7 +250,18 @@ def _blank(raw: Any) -> bool:
     return raw is None or (isinstance(raw, str) and raw.strip() == "")
 
 
-def _one(target: PropertyDef, text: str, lossy: list[str]) -> Any:
+def _read(raw: Any, linker: Linker | None, from_ref: bool) -> str:
+    """저장된 원소를 글자로 — 참조였으면 상대의 식별자(없으면 이름)."""
+    if not from_ref:
+        return as_text(raw)
+    if linker is None:
+        raise Unconvertible("참조는 이름 풀이와 함께만 바꿉니다")
+    return linker.text_of(as_text(raw))
+
+
+def _one(
+    target: PropertyDef, text: str, lossy: list[str], linker: Linker | None = None
+) -> Any:
     """글자 하나를 대상 종류로 해석하고 정의로 검사한다. 안 되면 `Unconvertible`."""
     kind = target.data_type
     value: Any
@@ -254,6 +285,10 @@ def _one(target: PropertyDef, text: str, lossy: list[str]) -> Any:
             lossy.append("subsecond")
     elif kind == "enum":
         value = text.strip()
+    elif kind == "object_ref":
+        if linker is None:
+            raise Unconvertible("참조로는 이름 풀이와 함께만 바꿉니다")
+        value = linker.resolve(target.ref_type_slug or "", text)
     else:
         raise Unconvertible(f"{kind} 로는 바꾸지 않습니다")
     try:
@@ -263,32 +298,44 @@ def _one(target: PropertyDef, text: str, lossy: list[str]) -> Any:
 
 
 def convert_element(
-    target: PropertyDef, raw: Any, mapping: Mapping[str, str | None] | None = None
+    target: PropertyDef,
+    raw: Any,
+    mapping: Mapping[str, str | None] | None = None,
+    *,
+    linker: Linker | None = None,
+    from_ref: bool = False,
 ) -> tuple[Any, bool, str]:
     """원소 하나 — (새 값 · 지우나 · 쓴 대체 값 열쇠).
 
-    안 되면 `Unconvertible`(열쇠는 `key_of`)."""
+    안 되면 `Unconvertible`(열쇠는 `key_of` — 참조였으면 상대의 id). 대체 값은 **새 종류의
+    글자**다 — 참조로 바꿀 때는 상대의 식별자 · 이름 · id."""
     key = key_of(raw)
     if mapping and key in mapping:
         replacement = mapping[key]
         if replacement is None or replacement.strip() == "":
             return None, True, key
         try:
-            return _one(target, replacement, []), False, key
+            return _one(target, replacement, [], linker), False, key
         except Unconvertible as caught:
             raise Unconvertible(
                 f"대체 값 「{replacement}」 도 변환할 수 없습니다 — {caught.reason}"
             ) from None
     if _blank(raw):
         return None, True, ""
-    text = as_text(raw)
-    return _one(target, text, []), False, ""
+    return _one(target, _read(raw, linker, from_ref), [], linker), False, ""
 
 
 def convert_stored(
-    target: PropertyDef, raw: Any, mapping: Mapping[str, str | None] | None = None
+    target: PropertyDef,
+    raw: Any,
+    mapping: Mapping[str, str | None] | None = None,
+    *,
+    linker: Linker | None = None,
+    from_ref: bool = False,
 ) -> Converted:
-    """저장값 하나를 새 정의로. 원소 하나라도 실패하면 `failures` 가 찬다(값은 쓰지 않는다)."""
+    """저장값 하나를 새 정의로. 원소 하나라도 실패하면 `failures` 가 찬다(값은 쓰지 않는다).
+
+    `from_ref` 면 저장값이 참조(상대의 id)다 — 원소마다 상대의 식별자로 읽은 뒤 바꾼다."""
     out = Converted()
     items: list[Any]
     if target.multi:
@@ -305,12 +352,15 @@ def convert_stored(
         key = key_of(item)
         try:
             if mapping and key in mapping:
-                value, drop, used = convert_element(target, item, mapping)
+                value, drop, used = convert_element(
+                    target, item, mapping, linker=linker, from_ref=from_ref
+                )
             else:
                 if _blank(item):
                     continue
                 notes: list[str] = []
-                value, drop, used = _one(target, as_text(item), notes), False, ""
+                text = _read(item, linker, from_ref)
+                value, drop, used = _one(target, text, notes, linker), False, ""
                 out.lossy.extend(notes)
         except Unconvertible as caught:
             out.failures.append((key, caught.reason))

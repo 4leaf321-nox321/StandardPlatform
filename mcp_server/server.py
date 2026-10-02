@@ -625,11 +625,23 @@ async def ontology_retype(
     pattern: str | None = None,
     unit: str | None = None,
     unique: bool | None = None,
+    ref_type_slug: str | None = None,
+    inverse_label: str | None = None,
     accept_core: bool = False,
     apply: bool = False,
 ) -> Any:
     """속성의 **종류를 바꾼다** — 저장값도 같은 규칙으로 변환된다(종류 변경, ADR 0007).
     `owner="interface"` 면 공통 속성이고 구현 타입 전부가 한 번에 바뀐다.
+
+    **글 → 참조**(`data_type="object_ref"`, `ref_type_slug` 필수)는 이미 넣은 기록을 축에
+    잇는다(ADR 0009) — 값마다 일괄 입력과 같은 이름 풀이(식별자 → 별칭 → 이름 → id)로
+    바꾸고, 이름이 여럿에 맞거나 못 찾은 값이 `failures` 로 온다(대체 값은 상대의 식별자 ·
+    이름 · id). **참조 → 글**은 상대의 식별자(없으면 이름)가 된다. 참조는 글 · 긴 글 ·
+    선택과만 오간다.
+
+    값이 있는 객체가 2만 건을 넘으면 **작업이 된다**(`apply` 와 상관없이 계획 작업) — 돌아온
+    `result` 가 계획이다. 사용자에게 보여 주고 판단을 받은 뒤 `job_apply(job_id)` 로 적용한다.
+    대체 값을 고치면 이 도구를 다시 부른다(새 계획 작업).
 
     `apply=False`(기본)면 계획: 타입별 변환 건수 · `failures`(변환할 수 없는 값 · 건수 ·
     견본) · `warnings` · `errors`. 변환할 수 없는 값이 하나라도 남으면 **적용되지
@@ -656,10 +668,18 @@ async def ontology_retype(
         ("pattern", pattern),
         ("unit", unit),
         ("unique", unique),
+        ("ref_type_slug", ref_type_slug),
+        ("inverse_label", inverse_label),
     ):
         if value is not None:
             body[name] = value
-    return await _post(ctx, f"/api/ontology/{base}/{slug}/properties/{key}/retype", body)
+    path = f"/api/ontology/{base}/{slug}/properties/{key}/retype"
+    got = await _post(ctx, path, body)
+    if isinstance(got, dict) and "ONTOLOGY-0067" in str(got.get("error", "")):
+        # 값이 많은 타입(기록) — 요청 안에서 안 끝나 작업이 된다. 작업은 늘 계획부터다.
+        job = await _post(ctx, f"{path}/job", {**body, "apply": False})
+        return await _wait_job(ctx, job, JOB_WAIT_MAX)
+    return got
 
 
 @tool()

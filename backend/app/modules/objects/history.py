@@ -41,7 +41,7 @@ from app.modules.objects.services import (
     require_refs_exist,
     require_unique_properties,
 )
-from app.modules.ontology import conversion
+from app.modules.ontology import conversion, retype
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.ontology.services import InvalidValue, validate_properties
 from app.modules.workspaces.models import Workspace
@@ -199,7 +199,7 @@ def history_of(db: Session, row: ObjectInstance) -> list[Entry]:
                 change = changes.get(name)
                 if isinstance(change, dict) and "before" in change:
                     running[name] = (
-                        dict(change["before"] or {})
+                        _properties_before(running["properties"], change)
                         if name == "properties"
                         else change["before"]
                     )
@@ -232,6 +232,23 @@ def history_of(db: Session, row: ObjectInstance) -> list[Entry]:
                 batch=_batch_of(changes) if is_object else None,
             )
         )
+    return out
+
+
+def _properties_before(now: dict[str, Any], change: dict[str, Any]) -> dict[str, Any]:
+    """속성 기록 하나 앞의 값. 보통은 기록이 속성 전체를 담는다. **바뀐 칸만** 담은 기록
+    (`keys` — 종류 변경, `retype.changed_property`)은 그 칸만 되짚고 나머지는 지금 값
+    그대로다."""
+    keys = change.get("keys")
+    if not isinstance(keys, list):
+        return dict(change["before"] or {})
+    before = change["before"] or {}
+    out = dict(now)
+    for key in keys:
+        if key in before:
+            out[key] = before[key]
+        else:
+            out.pop(key, None)
     return out
 
 
@@ -268,6 +285,9 @@ def _kind_changed(definition: PropertyDef, raw: Any) -> bool:
     """그때 값이 **지금 종류의 모양이 아닌가** — 그러면 그 사이 종류가 변경된 것이다
     (ADR 0007)."""
     items = raw if isinstance(raw, list) else [raw]
+    if definition.data_type == "object_ref":
+        # 참조 칸에 id 가 아닌 글자 — 그 사이 글 → 참조로 바뀌었다(ADR 0009).
+        return any(item is not None and not _is_id(item) for item in items)
     wanted = _SHAPE_OF.get(definition.data_type, (str,))
     for item in items:
         if item is None:
@@ -279,13 +299,62 @@ def _kind_changed(definition: PropertyDef, raw: Any) -> bool:
     return False
 
 
-def _then_values(defs: list[PropertyDef], values: dict[str, Any]) -> dict[str, Any]:
+def _is_id(value: Any) -> bool:
+    try:
+        uuid.UUID(str(value))
+    except ValueError:
+        return False
+    return True
+
+
+def _then_converted(
+    definition: PropertyDef,
+    raw: Any,
+    values: dict[str, Any],
+    linker: retype.RefLinker,
+    *,
+    from_ref: bool = False,
+) -> None:
+    """그때 값 하나를 지금 종류로 — `values` 를 고친다. 안 되면 OBJECTS-95."""
+    result = conversion.convert_stored(definition, raw, linker=linker, from_ref=from_ref)
+    if result.failures:
+        raise AppError(
+            code("OBJECTS", 95),
+            f"{definition.label}: 그때 값 {raw!r} 은(는) 지금 종류"
+            f"로 변환할 수 없습니다 — {result.failures[0][1]}",
+            status=422,
+        ) from None
+    if result.remove:
+        values.pop(definition.key, None)
+    else:
+        values[definition.key] = result.value
+
+
+def _then_values(
+    db: Session,
+    defs: list[PropertyDef],
+    values: dict[str, Any],
+    *,
+    from_ref: set[str] | None = None,
+) -> dict[str, Any]:
     """그때 값을 **지금 정의로** 검사한다. 그 사이 종류가 변경됐으면(글 → 숫자) 종류 변경과
     같은 규칙으로 변환해 넣는다 — 안 그러면 종류를 바꾼 뒤로는 그 전 이력으로 되돌릴 수 없다.
+
+    글 → 참조로 바뀐 칸은 그때 글자를 이름 풀이로, 참조 → 글로 바뀐 칸(`from_ref` — 그때 값은
+    상대의 id 라 글로도 검사를 통과한다)은 상대의 식별자로 바꾼다(ADR 0009).
 
     변환할 수 없으면 그렇다고 말한다(OBJECTS-95). 종류가 그대로인데 안 맞는 것(고를 값에서 빠진
     값 등)은 예전처럼 저장할 때의 오류를 그대로 낸다.
     """
+    linker = retype.RefLinker(db)
+    values = dict(values)
+    for definition in defs:
+        if (
+            definition.key in (from_ref or set())
+            and definition.data_type in conversion.LINKABLE
+            and definition.key in values
+        ):
+            _then_converted(definition, values[definition.key], values, linker, from_ref=True)
     try:
         return validate_properties(defs, values)
     except InvalidValue as original:
@@ -295,21 +364,26 @@ def _then_values(defs: list[PropertyDef], values: dict[str, Any]) -> dict[str, A
                 definition, values[definition.key]
             ):
                 continue
-            result = conversion.convert_stored(definition, values[definition.key])
-            if result.failures:
-                raise AppError(
-                    code("OBJECTS", 95),
-                    f"{definition.label}: 그때 값 {values[definition.key]!r} 은(는) 지금 종류"
-                    f"로 변환할 수 없습니다 — {result.failures[0][1]}",
-                    status=422,
-                ) from None
-            if result.remove:
-                converted.pop(definition.key, None)
-            else:
-                converted[definition.key] = result.value
+            _then_converted(definition, values[definition.key], converted, linker)
         if converted == values:
             raise original from None
         return validate_properties(defs, converted)
+
+
+def _retyped_from_ref(db: Session, object_type: ObjectType, entry_id: uuid.UUID) -> set[str]:
+    """그 기록 **뒤에** 참조 → 다른 종류로 바뀐 이 타입의 속성 키 — 그때 값은 상대의 id 다."""
+    since = db.scalar(select(AuditEntry.seq).where(AuditEntry.id == entry_id))
+    if since is None:
+        return set()
+    labels = db.scalars(
+        select(AuditEntry.target_label).where(
+            AuditEntry.action == "ontology.property.retype",
+            AuditEntry.seq > since,
+            AuditEntry.target_label.startswith(f"{object_type.slug}."),
+            AuditEntry.changes["data_type"]["before"].astext == "object_ref",
+        )
+    )
+    return {label.split(".", 1)[1] for label in labels if label}
 
 
 def restore(
@@ -335,7 +409,12 @@ def restore(
     # 그 값을 더는 안 쓴다는 뜻이고, 되살리면 어느 화면에도 안 나오는 값이 된다.
     known = {d.key for d in defs if d.data_type != "file"}
     dropped = sorted(set(wanted.properties) - known)
-    properties = _then_values(defs, {k: v for k, v in wanted.properties.items() if k in known})
+    properties = _then_values(
+        db,
+        defs,
+        {k: v for k, v in wanted.properties.items() if k in known},
+        from_ref=_retyped_from_ref(db, object_type, entry.id),
+    )
     require_refs_exist(db, defs, properties, row.properties or {})
     require_unique_properties(
         db,

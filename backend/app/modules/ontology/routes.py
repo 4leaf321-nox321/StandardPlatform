@@ -22,6 +22,7 @@ from app.modules.accounts.models import User
 from app.modules.coreapi.schemas import CoreStatusOut
 from app.modules.datasources.models import DataSource
 from app.modules.jobs import routes as jobs_routes
+from app.modules.jobs import services as job_services
 from app.modules.jobs.schemas import JobOut
 from app.modules.objects import bulk, purge, refedges
 from app.modules.objects.models import ObjectInstance, ObjectRelation
@@ -1915,14 +1916,26 @@ def _retype_wanted(payload: RetypeRequest, *, with_unique: bool) -> dict[str, An
         wanted["unit"] = payload.unit.strip()
     if with_unique and payload.unique is not None:
         wanted["unique"] = payload.unique
+    if payload.data_type == "object_ref":
+        wanted["ref_type_slug"] = payload.ref_type_slug
+        if payload.inverse_label is not None:
+            wanted["inverse_label"] = payload.inverse_label.strip()
     return wanted
 
 
-def _check_retype(before: str, payload: RetypeRequest, *, name: str) -> None:
+def _check_retype(db: Session, before: str, payload: RetypeRequest, *, name: str) -> None:
     require_choice(payload.data_type, DATA_TYPES, what="속성 종류")
     wrong = retype.unsupported(before, payload.data_type)
     if wrong:
         raise Conflict(code("ONTOLOGY", 64), f"{name}: {wrong}")
+    if payload.data_type == "object_ref":
+        # 이름을 풀 곳 — 「아무 타입이나」 로는 값마다 어디서 찾을지 정해지지 않는다.
+        if not payload.ref_type_slug:
+            raise InvalidValue(
+                code("ONTOLOGY", 66),
+                f"{name}: 객체 참조로 바꾸려면 가리킬 타입(ref_type_slug)을 정하세요.",
+            )
+        _check_ref_target(db, payload.ref_type_slug)
     _check_shape_fields(
         payload.data_type, payload.enum_options, payload.min_value, payload.max_value
     )
@@ -2003,53 +2016,86 @@ def retype_property(
     변환할 수 없는 값이 하나라도 남아 있으면 적용하지 않는다 — `mapping` 으로 값마다 대체 값을
     적거나 값 삭제(`null`)를 고른다. 적용 직전 정의를 스냅샷으로 남기고, 객체마다 이력이
     남는다.
+
+    값이 있는 객체가 2만 건을 넘으면 ONTOLOGY-67 — `…/retype/job` 으로 작업을 만든다(기록 200만
+    건의 변환은 요청 안에서 끝나지 않는다).
     """
+    return _retype_type(db, user, slug, key, payload)
+
+
+@router.post(
+    "/types/{slug}/properties/{key}/retype/job", response_model=JobOut, status_code=202
+)
+def retype_property_job(
+    slug: str,
+    key: str,
+    payload: RetypeRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """종류 변경을 **작업으로** — 계획 작업을 만든다. 사람이 결과를 보고 `POST
+    /api/jobs/{id}/apply` 로 적용한다(그 사이 값이 바뀌었으면 지문이 막는다)."""
+    _type(db, slug)
+    row = _property(db, slug, key)
+    _check_retype(db, row.data_type, payload, name=f"{slug}.{key}")
+    return _retype_job(db, user, owner="type", slug=slug, key=key, payload=payload)
+
+
+def _retype_type(
+    db: Session,
+    user: User,
+    slug: str,
+    key: str,
+    payload: RetypeRequest,
+    *,
+    inline: bool = True,
+    before_apply: Callable[[retype.RetypePlan], None] | None = None,
+    on_progress: retype.Progress | None = None,
+) -> RetypeOut:
     owner = _type(db, slug)
     managed.require_definition_editable(owner)
     row = _property(db, slug, key)
     _refuse_bound(db, slug, key, what="종류를 여기서 변경하지 않습니다")
-    _check_retype(row.data_type, payload, name=f"{slug}.{key}")
+    _check_retype(db, row.data_type, payload, name=f"{slug}.{key}")
     target, notes = retype.target_for(owner, row, _retype_wanted(payload, with_unique=True))
+    if inline:
+        _refuse_large(db, [target], path=f"/api/ontology/types/{slug}/properties/{key}")
     before, after = row.data_type, payload.data_type
     consumers = _core_consumers(db, owner)
 
-    planned = retype.plan(db, [target], payload.mapping)
-    planned.warnings[:0] = notes
-    planned.warnings.extend(retype.downstream(db, [target]))
-    if not payload.apply or planned.errors:
-        db.rollback()
+    def out(planned: retype.RetypePlan, **more: Any) -> RetypeOut:
         return _retype_out(
-            planned,
-            before=before,
-            after=after,
-            applied=False,
-            core_consumers=consumers,
-            snapshot_id=None,
+            planned, before=before, after=after, core_consumers=consumers, **more
         )
 
+    downstream = retype.downstream(db, [target])
+    if not (payload.apply and not inline):
+        planned = retype.plan(db, [target], payload.mapping, on_progress=on_progress)
+        planned.warnings[:0] = notes
+        planned.warnings.extend(downstream)
+        if not payload.apply or planned.errors:
+            db.rollback()
+            return out(planned, applied=False, snapshot_id=None)
+
+    # 작업의 적용은 계획을 다시 따로 세우지 않는다 — 사람이 본 계획은 지문이 지킨다
+    # (`before_apply`). 200만 건을 세 번 읽지 않게.
     _require_core_accepted(db, owner, accepted=payload.accept_core, what="속성 종류 변경")
     snapshot = _snapshot(db, user, reason=f"종류 변경 직전: {slug}.{key}")
-    done = retype.apply(db, user, [target], payload.mapping)
+    done = retype.apply(
+        db,
+        user,
+        [target],
+        payload.mapping,
+        before_apply=before_apply,
+        on_progress=on_progress,
+    )
+    done.warnings[:0] = notes
+    done.warnings.extend(downstream)
     if done.errors:
         db.rollback()
-        return _retype_out(
-            done,
-            before=before,
-            after=after,
-            applied=False,
-            core_consumers=consumers,
-            snapshot_id=None,
-        )
-    done.warnings = planned.warnings
+        return out(done, applied=False, snapshot_id=None)
     db.commit()
-    return _retype_out(
-        done,
-        before=before,
-        after=after,
-        applied=True,
-        core_consumers=consumers,
-        snapshot_id=snapshot.id,
-    )
+    return out(done, applied=True, snapshot_id=snapshot.id)
 
 
 @router.post("/interfaces/{slug}/properties/{key}/retype", response_model=RetypeOut)
@@ -2064,12 +2110,43 @@ def retype_interface_property(
 
     한 타입이라도 변환할 수 없는 값이 남아 있거나 모양이 안 맞으면 아무것도 안 바뀐다 — 한
     타입만 바뀌면 같은 공통 속성이 타입마다 다른 종류를 갖는다. 대체 값은 구현 타입 전부에
-    걸린다.
+    걸린다. 값이 있는 객체가 구현 타입을 통틀어 2만 건을 넘으면 ONTOLOGY-67(`…/retype/job`).
     """
+    return _retype_interface(db, user, slug, key, payload)
+
+
+@router.post(
+    "/interfaces/{slug}/properties/{key}/retype/job", response_model=JobOut, status_code=202
+)
+def retype_interface_property_job(
+    slug: str,
+    key: str,
+    payload: RetypeRequest,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """공통 속성의 종류 변경을 **작업으로** — 계획 작업을 만든다."""
+    _interface(db, slug)
+    row = _interface_property(db, slug, key)
+    _check_retype(db, row.data_type, payload, name=f"{slug}.{key}")
+    return _retype_job(db, user, owner="interface", slug=slug, key=key, payload=payload)
+
+
+def _retype_interface(
+    db: Session,
+    user: User,
+    slug: str,
+    key: str,
+    payload: RetypeRequest,
+    *,
+    inline: bool = True,
+    before_apply: Callable[[retype.RetypePlan], None] | None = None,
+    on_progress: retype.Progress | None = None,
+) -> RetypeOut:
     owner = _interface(db, slug)
     managed.require_definition_editable(owner)
     row = _interface_property(db, slug, key)
-    _check_retype(row.data_type, payload, name=f"{slug}.{key}")
+    _check_retype(db, row.data_type, payload, name=f"{slug}.{key}")
     wanted = _retype_wanted(payload, with_unique=False)
     shape = interfaces.shape_of(wanted, interfaces.shape_of(row))
     wrong = interfaces.interface_property_error(key, {**shape.written(), "unique": False})
@@ -2089,6 +2166,8 @@ def retype_interface_property(
     )
     bindings = interfaces.plan_bindings(catalog, after_catalog)
     targets, notes = retype.targets_from_bindings(db, bindings)
+    if inline:
+        _refuse_large(db, targets, path=f"/api/ontology/interfaces/{slug}/properties/{key}")
     before, after = row.data_type, payload.data_type
     implementers = list(
         db.scalars(
@@ -2097,20 +2176,21 @@ def retype_interface_property(
     )
     consumers = sorted({one for kind in implementers for one in _core_consumers(db, kind)})
 
-    planned = retype.plan(db, targets, payload.mapping)
-    planned.errors[:0] = interfaces.conflicts(bindings)
-    planned.warnings[:0] = notes
-    planned.warnings.extend(retype.downstream(db, targets))
-    if not payload.apply or planned.errors:
-        db.rollback()
+    def out(planned: retype.RetypePlan, **more: Any) -> RetypeOut:
         return _retype_out(
-            planned,
-            before=before,
-            after=after,
-            applied=False,
-            core_consumers=consumers,
-            snapshot_id=None,
+            planned, before=before, after=after, core_consumers=consumers, **more
         )
+
+    conflicts = interfaces.conflicts(bindings)
+    downstream = retype.downstream(db, targets)
+    if not (payload.apply and not inline) or conflicts:
+        planned = retype.plan(db, targets, payload.mapping, on_progress=on_progress)
+        planned.errors[:0] = conflicts
+        planned.warnings[:0] = notes
+        planned.warnings.extend(downstream)
+        if not payload.apply or planned.errors:
+            db.rollback()
+            return out(planned, applied=False, snapshot_id=None)
 
     for kind in implementers:
         _require_core_accepted(db, kind, accepted=payload.accept_core, what="속성 종류 변경")
@@ -2119,17 +2199,19 @@ def retype_interface_property(
         setattr(row, name, value)
     db.flush()
     interfaces.apply_bindings(db, bindings)
-    done = retype.apply(db, user, targets, payload.mapping)
+    done = retype.apply(
+        db,
+        user,
+        targets,
+        payload.mapping,
+        before_apply=before_apply,
+        on_progress=on_progress,
+    )
+    done.warnings[:0] = notes
+    done.warnings.extend(downstream)
     if done.errors:
         db.rollback()
-        return _retype_out(
-            done,
-            before=before,
-            after=after,
-            applied=False,
-            core_consumers=consumers,
-            snapshot_id=None,
-        )
+        return out(done, applied=False, snapshot_id=None)
     _touch(owner)
     record_audit(
         db,
@@ -2141,16 +2223,84 @@ def retype_interface_property(
         changes={"data_type": {"before": before, "after": after}},
         reason=f"구현 타입 {len(targets)}개의 저장값도 함께",
     )
-    done.warnings = planned.warnings
     db.commit()
-    return _retype_out(
-        done,
-        before=before,
-        after=after,
-        applied=True,
-        core_consumers=consumers,
-        snapshot_id=snapshot.id,
+    return out(done, applied=True, snapshot_id=snapshot.id)
+
+
+def _refuse_large(db: Session, targets: list[retype.Target], *, path: str) -> None:
+    """값이 있는 객체가 많으면 요청 안에서 하지 않는다 — 작업으로 가라고 말한다."""
+    if retype.count_rows(db, targets, cap=retype.RETYPE_INLINE) <= retype.RETYPE_INLINE:
+        return
+    raise Conflict(
+        code("ONTOLOGY", 67),
+        f"값이 있는 객체가 {retype.RETYPE_INLINE:,}건을 넘습니다 — 종류 변경을 작업으로 "
+        f"돌립니다(POST {path}/retype/job). 계획을 본 뒤 적용합니다.",
+        details={"limit": retype.RETYPE_INLINE, "job_path": f"{path}/retype/job"},
     )
+
+
+def _retype_job(
+    db: Session, user: User, *, owner: str, slug: str, key: str, payload: RetypeRequest
+) -> JobOut:
+    job = job_services.enqueue(
+        db,
+        kind="ontology_retype",
+        params={
+            "owner": owner,
+            "slug": slug,
+            "key": key,
+            "request": payload.model_dump(mode="json", exclude={"apply"}),
+            # 적용 작업을 만드는 토큰이 다를 수 있다 — 그때 다시 묻도록 범위를 적어 둔다.
+            "needs_scope": "ontology:write",
+        },
+        user=user,
+        workspace_id=None,
+        input_file=None,
+    )
+    db.commit()
+    db.refresh(job)
+    return jobs_routes._out(db, job)
+
+
+def run_retype_job(
+    db: Session, user: User, params: dict[str, Any], progress: retype.Progress
+) -> dict[str, Any]:
+    """작업(`ontology_retype`)의 몸 — 화면과 **같은 함수**를 부른다. 적용이면 미리 본 계획의
+    지문이 지금 계획과 같아야 쓴다."""
+    payload = RetypeRequest(**params.get("request", {}), apply=bool(params.get("apply")))
+    wanted = params.get("fingerprint")
+
+    def guard(planned: retype.RetypePlan) -> None:
+        if wanted and retype.fingerprint(planned) != wanted:
+            raise Conflict(
+                code("JOBS", 20),
+                "미리 본 것과 달라졌습니다 — 그 사이에 누군가 바꿨습니다. 아무것도 바꾸지 "
+                "않았으니 다시 계획을 보고 적용하세요.",
+            )
+
+    runner = _retype_type if params.get("owner") == "type" else _retype_interface
+    result = runner(
+        db,
+        user,
+        str(params.get("slug") or ""),
+        str(params.get("key") or ""),
+        payload,
+        inline=False,
+        before_apply=guard,
+        on_progress=progress,
+    )
+    body = result.model_dump(mode="json")
+    # 적용 작업이 이 지문을 들고 간다(`make_apply`) — 화면의 계획과 같은 값으로 센 것이다.
+    body["fingerprint"] = retype.fingerprint_of(
+        [
+            (one.type_slug, one.key, one.with_value, one.converted, one.unchanged, one.cleared)
+            for one in result.types
+        ],
+        [(one.value, one.count) for one in result.failures],
+        result.failures_total,
+        [(one.value, one.count, one.to) for one in result.mapped],
+    )
+    return body
 
 
 def _promote_out(

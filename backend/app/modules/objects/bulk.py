@@ -33,7 +33,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import and_, or_, select
+from sqlalchemy import and_, or_, select, true
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -241,12 +241,14 @@ class Refs:
     def __init__(
         self,
         db: Session,
-        user: User,
+        user: User | None,
         pending: dict[str, set[str]] | None = None,
         blank_missing: bool = False,
     ) -> None:
         self.db = db
         self.user = user
+        """`None` 이면 보이는 범위를 안 건다 — 종류 변경(시스템 관리자 · 허브의 일)만 그렇게
+        쓴다."""
         self.pending = pending or {}
         """타입 slug → **이 묶음이 만들 것**의 식별자 · 이름. 계획만 볼 때만 채운다."""
         self.blank_missing = blank_missing
@@ -290,7 +292,9 @@ class Refs:
                 select(ObjectInstance.id, ObjectInstance.key, ObjectInstance.label).where(
                     ObjectInstance.type_id == object_type.id,
                     ObjectInstance.deleted_at.is_(None),
-                    visible_owner_clause(self.user, ObjectInstance.owner_workspace_id),
+                    true()
+                    if self.user is None
+                    else visible_owner_clause(self.user, ObjectInstance.owner_workspace_id),
                 )
             )
             for row_id, row_key, row_label in rows:
