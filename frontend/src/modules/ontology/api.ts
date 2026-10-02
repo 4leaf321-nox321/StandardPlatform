@@ -453,6 +453,26 @@ export interface CoreStatus {
   }[]
 }
 
+/** 정의 삭제의 미리 보기 — **삭제 경로와 같은 함수가 센다**(`GET /ontology/delete-plan`). */
+export interface DeletePlan {
+  kind: 'group' | 'type' | 'interface' | 'relation_type' | 'property' | 'interface_property'
+  slug: string
+  key: string | null
+  label: string
+  /** 막는 것이 없다. */
+  allowed: boolean
+  /** 먼저 할 일 — 첫째가 지금 삭제하면 받는 거절 그대로다. */
+  blocking: { code: string; message: string }[]
+  /** 함께 사라지는 것. */
+  removes: string[]
+  /** 삭제해도 남는 것. */
+  keeps: string[]
+  warnings: string[]
+  core_consumers: string[]
+  /** 타입에 지운 객체만 남았으면 그 수 — 함께 **영구 삭제**되고 되돌릴 수 없다(ADR 0008). */
+  purge_deleted: number
+}
+
 export interface PropertyUsage {
   key: string
   label: string
@@ -512,7 +532,13 @@ export const ontologyApi = {
   /** **보낸 것만 바뀐다.** `nav_group_slug: null` 을 명시하면 사이드바에서 뺀다. */
   updateType: (slug: string, body: Record<string, unknown>) =>
     api.patch<ObjectType>(`/ontology/types/${slug}`, body),
-  removeType: (slug: string) => api.delete<void>(`/ontology/types/${slug}`),
+  /** `purgeDeleted` — 지운 객체만 남은 타입이면 그것까지 영구 삭제함을 확인했다(ADR 0008). */
+  removeType: (slug: string, purgeDeleted = false) =>
+    api.delete<void>(`/ontology/types/${slug}${purgeDeleted ? '?purge_deleted=true' : ''}`),
+  deletePlan: (kind: DeletePlan['kind'], slug: string, key?: string) =>
+    api.get<DeletePlan>(
+      `/ontology/delete-plan?${new URLSearchParams({ kind, slug, ...(key ? { key } : {}) })}`,
+    ),
 
   relationTypes: () => api.get<RelationType[]>('/ontology/relation-types'),
   createRelationType: (body: Record<string, unknown>) =>

@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-01e
+GUIDE_VERSION: 2026-10-02b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -17,6 +17,9 @@ GUIDE_VERSION: 2026-10-01e
 | **어느 타입에 있는지 모른다** | `search(q)` | `types[]` 가 타입별 건수. 타입을 알면 `objects_list` · `object_resolve` |
 | 원천(엑셀 · PPT · PDF · Word)을 정제해 온톨로지로 만들기 전에 | `get_guide(topic="modeling")` | **무엇을 타입 · 속성 · 관계로 만드나** — 판단이 서지 않으면 만들지 않는다 |
 | 타입·속성·관계 종류를 만들거나 고치기 | `ontology_import(apply=false)` → 사람 확인 → `apply=true` | 미리 보기를 건너뛰지 않는다 |
+| 정의 지우기(묶음 · 타입 · 인터페이스 · 관계 종류 · 속성) | `ontology_delete(apply=false)` → 사람 확인 → `apply=true` | **시스템 관리자만.** `blocking` 은 우회하지 않는다 — 먼저 할 일을 사람에게 |
+| 속성 종류 변경 · 고를 값 이름 변경 · 코드표 승격 | `ontology_retype` · `ontology_rename_option` · `ontology_promote` — 모두 `apply=false` 먼저 | 저장값도 함께 바뀐다. 대체 값은 **사람이 정한 것만** |
+| 정의를 그때로 되돌리기 | `ontology_restore()` → 스냅샷 고르기 → `ontology_restore(id)` → 사람 확인 → `apply=true` | 그 뒤에 새로 만든 정의는 안 지운다 |
 | **이름으로 무언가를 가리킨다** | `object_resolve(type_slug, name)` | `candidates` 면 **고르지 말고 사람에게 묻는다** |
 | 이름 **여럿**을 한 번에 | `objects_resolve_many(type_slug, names)` | 여러 줄을 넣기 전에 한 번. 왕복이 줄 수만큼 늘지 않는다 |
 | 객체 찾기 | `objects_list(type_slug, q=, properties=, conditions=)` | 화면과 같은 거르기. **0건이면 `diagnosis` 를 읽는다** |
@@ -24,7 +27,7 @@ GUIDE_VERSION: 2026-10-01e
 | 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 한 걸음까지. 주소를 추측하지 않는다 |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | — |
-| 언제 누가 무엇을 바꿨나 — 이 객체 | `object_history` | 되돌리기는 화면에서 |
+| 언제 누가 무엇을 바꿨나 — 이 객체 | `object_history` | 되돌리기는 `object_restore(entry_id)` — **시점은 사람이 정한다** |
 | 어제 무슨 일이 있었나 — 전체 | `audit_recent` | **부서 관리자 이상.** 시간 · 사람으로는 못 거른다 — 최근 것부터 받아 본다 |
 | 계층(트리)을 한 단계씩 | `object_tree(parent=)` | 깊이 전부는 `rdf_query` 의 `+` 경로 |
 | **이것과 이어진 것들**(한 걸음 너머) | `graph_neighbors(object_id, depth=, relations=, types=)` | 화면의 지식 그래프와 같은 길. **`truncated` 면 잘린 것** — 좁혀서 다시 |
@@ -33,7 +36,9 @@ GUIDE_VERSION: 2026-10-01e
 | 어셈블리 총 무게처럼 「아래 전부」 의 합 | `object_rollup` | `missing` 을 함께 말한다 |
 | 무엇이 나빠지고 있나(필수값·고아·끊긴 참조·중복) | `quality_report` | 볼 수 있는 것만 |
 | 객체 하나 만들기 | `object_create` | 정의에 없는 속성 키는 거절된다 |
-| 객체 고치기 | `object_update` | **보낸 키만** 병합. 비우려면 `null` |
+| 객체 고치기 | `object_update` | **보낸 키만** 병합. 비우려면 `null`. 식별자 · 상태 · 유효 연도 · 별칭도 |
+| 객체 지우기(하나 · 여럿) | `objects_delete(apply=false)` → 사람 확인 → `apply=true` | 가리키는 것이 있으면 그 줄은 거절(`block`). `detach` 는 사람이 고른 뒤에만. 그만 쓰는 것이면 `status="deprecated"` |
+| 같은 것이 둘 — 합치기 | `object_merge(apply=false)` → 사람 확인 → `apply=true` | **되돌리기 없음.** 어느 쪽이 남을지는 사람이 정한다 |
 | 여러 객체의 **한 칸**을 같은 값으로 | `bulk_edit(apply=false)` → `apply=true` | `batch_id` 를 사용자에게 알린다 — `bulk_edit_undo` 가 통째로 되돌린다 |
 | 정제 도구가 만든 묶음(정의 · 객체 · 관계)이 어떻게 들어갈지 | `bundle_import(bundle)` → 사람 확인 → `job_apply` | **넣는 것은 사람이 미리 보기를 본 뒤에만.** 원천을 곧바로 넣지 않는다 — `pipeline/AGENTS.md` |
 | 넣은 묶음이 틀렸다 — 통째로 되돌리기 | `bundle_runs` → 번호 → `bundle_undo(run_id)` → 사람 확인 → `apply=True` | **스스로 되돌리지 않는다.** 건너뛴 줄의 이유도 함께 보여 준다 |
@@ -135,18 +140,57 @@ GUIDE_VERSION: 2026-10-01e
   관계 종류는 그대로다. **구현한 타입이 없는 인터페이스만 적힌 끝은 아무것도 못 잇는다**
   (「아무 타입이나」 가 아니다). 구현을 해제하면 그 끝에서 빠진다는 경고가 `warnings` 에 온다 —
   이미 이은 선은 남는다.
-- **더하고 고치기만 한다.** 스키마에 없다고 지우지 않는다.
+- **더하고 고치기만 한다.** 스키마에 없다고 지우지 않는다. 지우는 것은 `ontology_delete`(아래).
 - `apply=false` 응답의 `warnings` 가 **조용히 잃는 것**이다(고를 값을 빼서 저장값이 안 맞게
   되는 것, 종류 변경으로 시각을 버리는 값 등). 반드시 사람에게 보여 준다.
 - **속성의 `data_type` 을 바꾸면 저장된 값도 변환된다**(종류 변경, ADR 0007) — 글 · 여러 줄 글 ·
   주소 · 숫자 · 날짜 · 날짜와 시각 · 예/아니오 · 선택 사이. 계획의 `warnings` 에 「저장값 N개 변환」 이,
   변환할 수 없는 값(「12 kg」 → 숫자)이 있으면 `errors` 에 그 값들이 온다. 가져오기에는 대체 값을 적을
-  자리가 없다 — **값을 짐작해 고치지 말고** 사람에게 보여 주고, 사람이 화면의 「종류 변경」 에서 값마다
-  대체 값을 정하게 한다(또는 사람이 정해 준 값으로 `object_update` 한 뒤 다시 가져온다). 참조 · 파일 ·
+  자리가 없다 — **값을 짐작해 고치지 말고** 사람에게 보여 주고, 사람이 정한 대체 값으로
+  `ontology_retype(mapping=)` 을 부른다(아래). 화면의 「종류 변경」 도 같은 길이다. 참조 · 파일 ·
   관계 종류의 속성은 종류를 바꾸지 않는다. 인터페이스의 공통 속성을 바꾸면 구현 타입 전부의 값이
   함께 변환된다.
-- `apply=true` 응답의 `snapshot_id` 가 되돌릴 자리다. 되돌리기는 화면의
-  **관리 → 온톨로지 → 가져오기·이력**에서 한다.
+- `apply=true` 응답의 `snapshot_id` 가 되돌릴 자리다. 되돌리기는 `ontology_restore`(아래) 또는
+  화면의 **관리 → 온톨로지 → 가져오기·이력**.
+
+### 종류 변경 · 고를 값 이름 · 승격 — 저장값까지 바꾸는 수정
+
+- `ontology_retype(slug, key, data_type, owner=, mapping=)` — 종류를 바꾸고 저장값을 변환한다.
+  계획의 `failures` 가 변환할 수 없는 값(값 · 건수 · 견본)이다. 하나라도 남으면 적용되지 않는다 —
+  **값마다 사람에게 대체 값을 묻고** `mapping={"12 kg": "12", "모름": null}` 로 다시 계획을 본다
+  (`null` 은 값 삭제). 열쇠는 계획의 `value` 그대로. `owner="interface"` 면 구현 타입 전부가 한 번에.
+- `ontology_rename_option(slug, key, from_value, to_value)` — 고를 값의 이름을 바꾸면서 저장값도
+  함께. 정의만 고치면(`ontology_import`) 옛 이름의 값이 거르기에서 조용히 빠진다.
+- `ontology_promote(slug, key, new_slug=, new_label=)` — 고를 값을 코드표(참조 타입)로. 값 이전은
+  스냅샷이 못 되돌린다.
+
+### 지우기 — `ontology_delete(kind, slug, key=)`
+
+**시스템 관리자만 된다.** `kind` 는 `group` · `type` · `interface` · `relation_type` · `property`
+(타입의 속성) · `interface_property`(공통 속성). 기본(`apply=false`)은 계획이다:
+
+- `blocking` — 먼저 할 일. 하나라도 있으면 지금은 못 지운다. **우회하지 않는다.**
+  - 살아 있는 객체가 든 타입 · 관계가 맺힌 관계 종류 · 타입이 걸린 묶음 · 무엇이 가리키는
+    인터페이스 · 데이터 소스가 넣고 있는 타입은 못 지운다. 그만 쓰려는 것이면
+    `ontology_import` 로 `is_active: false` — 자료는 남고 화면에서만 빠진다. 관계 종류는 맺힌
+    관계를 끊으면(`relation_remove`) 지울 수 있다.
+  - 살아 있는 객체가 타입의 **지운 객체를 가리키면** 막는다 — `quality_report` 의 「지워진 것을
+    가리키는 칸」 을 사람에게 보이고 먼저 비운다.
+  - 공통 속성은 타입에서 못 지운다 — 인터페이스에서(`interface_property`).
+  - 허브가 관리하는 정의는 허브에서 고쳐 받는다.
+- `removes` · `keeps` — 함께 사라지는 것과 남는 것. **속성을 지워도 저장값은 남는다**(같은 키로
+  정의를 되살리면 돌아온다).
+- `purge_deleted` — 타입에 **지운 객체만** 남았으면 그 수. 지운 객체도 기록으로 남아 타입을
+  붙들므로, 타입을 지우려면 그것까지 **영구 삭제**해야 한다(ADR 0008) — 그 객체들의 관계 · 별칭 ·
+  첨부 행이 함께 사라지고 **되돌릴 수 없다**(감사 기록은 남는다). `removes` 를 사람에게 그대로
+  보이고 확인받은 뒤에만 `apply=true, purge_deleted=true`. 영구 삭제는 타입 삭제에서만 된다 —
+  객체 하나를 영구 삭제하는 길은 없다.
+- `warnings` — 지울 수는 있지만 알아야 할 것(이 타입을 참조 대상으로 적은 칸 등).
+- 외부 공개 타입의 속성이면 `core_consumers` 를 사람에게 보이고 통보를 확인받아 `accept_core=true`.
+
+지우기 직전의 정의는 스냅샷으로 남는다(「삭제 직전: …」) — `ontology_restore` 로 되살린다. 속성
+정의를 되살리면 남아 있던 저장값도 다시 보인다. **객체는 스냅샷에 없다** — `objects_delete` 로 지운
+객체는 이것으로 안 돌아온다.
 
 <!--@ find -->
 ## 찾기와 살피기
@@ -267,7 +311,8 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   면 field `<키>`, 다른 타입의 칸이면 그 주소, key 가 null 이면 `empty`.
 
 `object_history(type_slug, object_id)` — 언제·누가·어느 칸을 전→후. 값 기록의
-`snapshot` 이 그 시점의 값 전체다. 되돌리기는 사람이 화면에서 한다.
+`snapshot` 이 그 시점의 값 전체다. 되돌리기는 `object_restore(entry_id)` — 그 `snapshot` 을
+사람에게 보이고 그가 고른 시점으로만.
 
 `object_references(type_slug, object_id)` — 이 객체를 가리키는 속성·관계. 지우거나
 합치기 전에 본다. `hidden_*` 는 남의 부서 것이라 수만 온다 — 0 이 아니면 지우지 않는다.
@@ -294,8 +339,14 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   대상이 인터페이스면 `objects_list(<인터페이스>)` · `object_resolve(<인터페이스>, 이름)` 로 찾는다.
 - **별칭** — 같은 것을 다르게 부르면(「Ansys」 「앤시스」 「ANSYS Inc.」)
   `object_update(aliases=[...])` 로 다른 이름을 붙인다. 그 뒤로 파일·참조·찾기가 그 표기로도
-  같은 객체를 찾는다. **같은 것을 새로 만들지 말고 별칭을 붙인다.** 이미 둘이 됐으면 사람이
-  화면에서 「합치기」 — 지는 쪽 이름이 자동으로 별칭이 된다.
+  같은 객체를 찾는다. **같은 것을 새로 만들지 말고 별칭을 붙인다.** 이미 둘이 됐으면
+  `object_merge(object_id, into=)` — 미리 보기로 두 객체와 지는 쪽을 가리키는 것을 사람에게 보이고,
+  어느 쪽이 남을지 확인받은 뒤 `apply=true`. 지는 쪽 이름이 자동으로 별칭이 된다.
+- **지우기** — `objects_delete(type_slug, ids, mode=)`. 미리 보기가 줄마다 지울지 · 거절할지를
+  말한다. 적용은 **지울 수 있는 줄만 지우고 막힌 줄은 남긴다** — 무엇이 남았는지 사람에게 전한다.
+  다른 것이 가리키는 객체는 기본(`block`)으로 거절된다 — `object_references` 를 사람에게
+  보이고, 그가 「참조를 비우고 지운다」 고 정하면 `mode="detach"`. 그만 쓰는 것이면 지우지 말고
+  `object_update(status="deprecated")`. 지운 행도 기록으로 남는다.
 - `object_get` 은 `object` · `properties_schema` · `related`(양방향) 를 함께 준다 —
   화면의 상세와 같은 것이다.
 - `kind_class` 가 `system` 인 타입(부서·계정 등)은 **행이 없다** — 다른 표를 비춘다.

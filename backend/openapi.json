@@ -3899,7 +3899,7 @@
           "ontology"
         ],
         "summary": "Delete Type",
-        "description": "타입을 지운다 — **객체가 하나도 없을 때만.**\n\n행이 있는데 지우면 그 데이터가 통째로 고아가 된다. 그런데 그것은 화면의 실수\n한 번으로 일어날 일이 아니다. 그래서 몇 개가 걸려 있는지 말하며 막고,\n**그만 쓰려는 것이면 비활성으로 두라고** 알려 준다 — 이 저장소는 지우지 않는다.\n\n비어 있으면 진짜로 지운다. 잘못 만든 타입이 목록에 영원히 남으면, 그 목록은\n곧 아무도 안 읽는다.",
+        "description": "타입을 지운다 — **살아 있는 객체가 하나도 없을 때만.**\n\n행이 있는데 지우면 그 데이터가 통째로 고아가 된다. 그런데 그것은 화면의 실수\n한 번으로 일어날 일이 아니다. 그래서 몇 개가 걸려 있는지 말하며 막고,\n**그만 쓰려는 것이면 비활성으로 두라고** 알려 준다 — 이 저장소는 지우지 않는다.\n\n비어 있으면 진짜로 지운다. 잘못 만든 타입이 목록에 영원히 남으면, 그 목록은\n곧 아무도 안 읽는다. **지운 객체만 남았으면** 그것까지 영구 삭제해야 지워진다 — 행이\n타입을 RESTRICT 로 붙든다. 되돌릴 수 없으니 `purge_deleted` 로 확인을 받는다(ADR 0008).",
         "operationId": "delete_type_api_ontology_types__slug__delete",
         "parameters": [
           {
@@ -3910,6 +3910,18 @@
               "type": "string",
               "title": "Slug"
             }
+          },
+          {
+            "name": "purge_deleted",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "지운 객체만 남은 타입이면 그것까지 영구 삭제함을 확인했는지(ADR 0008)",
+              "default": false,
+              "title": "Purge Deleted"
+            },
+            "description": "지운 객체만 남은 타입이면 그것까지 영구 삭제함을 확인했는지(ADR 0008)"
           }
         ],
         "responses": {
@@ -5473,6 +5485,82 @@
         }
       }
     },
+    "/api/ontology/delete-plan": {
+      "get": {
+        "tags": [
+          "ontology"
+        ],
+        "summary": "Delete Plan",
+        "description": "**지우기 전에** — 무엇이 막고, 무엇이 함께 사라지고, 무엇이 남는지. 아무것도 안 바꾼다.\n\n삭제 경로와 **같은 함수**가 센다(`_Deletion`). 기계(MCP)가 지우기 전에 사람에게 보일\n자리다 — 「정말 삭제하시겠습니까」 만 묻는 창은 아무도 안 읽는다. `property` ·\n`interface_property` 는 `key` 가 있어야 한다.",
+        "operationId": "delete_plan_api_ontology_delete_plan_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "enum": [
+                "group",
+                "type",
+                "interface",
+                "relation_type",
+                "property",
+                "interface_property"
+              ],
+              "type": "string",
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "slug",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "key",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeletePlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ontology/reset": {
       "post": {
         "tags": [
@@ -5546,7 +5634,7 @@
           "ontology"
         ],
         "summary": "Restore Snapshot",
-        "description": "그때의 정의를 다시 덮어씌운다.\n\n**그 뒤에 새로 만든 것은 안 지운다.** 지우면 그 사이에 쌓인 객체가 통째로 갈\n곳을 잃는다 — 되돌리기가 그것까지 하면 되돌리기 자체가 위험해진다.",
+        "description": "그때의 정의를 다시 덮어씌운다.\n\n**그 뒤에 새로 만든 것은 안 지운다.** 지우면 그 사이에 쌓인 객체가 통째로 갈\n곳을 잃는다 — 되돌리기가 그것까지 하면 되돌리기 자체가 위험해진다.\n\n`dry_run` 은 가져오기의 미리 보기와 같은 계획이다(기계가 되돌리기 전에 사람에게 보일\n자리). 기본이 적용인 것은 화면이 확인 창을 거친 뒤에 부르기 때문이다.",
         "operationId": "restore_snapshot_api_ontology_snapshots__snapshot_id__restore_post",
         "parameters": [
           {
@@ -5558,6 +5646,18 @@
               "format": "uuid",
               "title": "Snapshot Id"
             }
+          },
+          {
+            "name": "dry_run",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "되돌리지 않고 계획만 본다 — 무엇이 바뀌고 무엇을 잃는지",
+              "default": false,
+              "title": "Dry Run"
+            },
+            "description": "되돌리지 않고 계획만 본다 — 무엇이 바뀌고 무엇을 잃는지"
           }
         ],
         "responses": {
@@ -14430,6 +14530,117 @@
         ],
         "title": "DefsOut",
         "description": "부문 · 축 · 척도 · 문턱 — **화면이 코드에 박지 않고 여기서 읽는다.**"
+      },
+      "DeleteBlockOut": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "title": "DeleteBlockOut",
+        "description": "지금 지우면 거절되는 이유 하나 — **삭제 경로가 내는 오류 그대로**(코드 · 문구)."
+      },
+      "DeletePlanOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "group",
+              "type",
+              "interface",
+              "relation_type",
+              "property",
+              "interface_property"
+            ],
+            "title": "Kind"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "allowed": {
+            "type": "boolean",
+            "title": "Allowed"
+          },
+          "blocking": {
+            "items": {
+              "$ref": "#/components/schemas/DeleteBlockOut"
+            },
+            "type": "array",
+            "title": "Blocking"
+          },
+          "removes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Removes"
+          },
+          "keeps": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keeps"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "core_consumers": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Core Consumers"
+          },
+          "purge_deleted": {
+            "type": "integer",
+            "title": "Purge Deleted",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "slug",
+          "label",
+          "allowed",
+          "blocking",
+          "removes",
+          "keeps",
+          "warnings"
+        ],
+        "title": "DeletePlanOut",
+        "description": "**지우기 전에 무엇이 막고, 무엇이 함께 사라지고, 무엇이 남는지.**\n\n삭제 경로와 같은 함수가 센다 — 미리 보기가 따로 세면 「미리 보기는 된다는데 지우면 거절」\n이 되고, 그때 어느 쪽이 맞는지 알 방법이 없다."
       },
       "DeliveryOut": {
         "properties": {

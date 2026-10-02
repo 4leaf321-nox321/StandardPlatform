@@ -6,8 +6,10 @@
 
 from __future__ import annotations
 
+import dataclasses
 import json
 import uuid
+from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Any
 
@@ -18,9 +20,10 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.coreapi.schemas import CoreStatusOut
+from app.modules.datasources.models import DataSource
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs.schemas import JobOut
-from app.modules.objects import bulk, refedges
+from app.modules.objects import bulk, purge, refedges
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.ontology import (
     codebook,
@@ -53,6 +56,9 @@ from app.modules.ontology.models import (
 )
 from app.modules.ontology.schemas import (
     ChangeOut,
+    DeleteBlockOut,
+    DeleteKind,
+    DeletePlanOut,
     ImplementItemOut,
     ImplementPlanOut,
     ImplementPlanRequest,
@@ -110,7 +116,7 @@ from app.modules.ontology.services import (
 from app.shared import sheets, system_sources
 from app.shared.audit import record as record_audit
 from app.shared.auth import current_user, require_system_admin
-from app.shared.errors import Conflict, NotFound, code
+from app.shared.errors import AppError, Conflict, NotFound, code
 
 router = APIRouter(prefix="/ontology", tags=["ontology"])
 
@@ -128,6 +134,39 @@ def _audit(
         target_id=row_id,
         target_label=label,
     )
+
+
+@dataclasses.dataclass
+class _Deletion:
+    """지우기 전에 셀 것 — **삭제 경로와 미리 보기(`GET /delete-plan`)가 같은 것을 읽는다.**
+
+    막는 것은 그 경로가 낼 오류 그대로 담는다. 둘이 따로 세면 「미리 보기는 된다는데 지우면
+    거절」 이 되고, 그때 어느 쪽이 맞는지 알 방법이 없다.
+
+    지우는 경로는 **직전 정의를 스냅샷으로 남긴다** — 지운 정의를 되살릴 자리다(속성 정의를
+    되살리면 남아 있던 저장값도 다시 보인다). 기계가 지울 수 있게 된 뒤로는 더 그렇다.
+    """
+
+    label: str
+    blocking: list[AppError] = dataclasses.field(default_factory=list)
+    removes: list[str] = dataclasses.field(default_factory=list)
+    keeps: list[str] = dataclasses.field(default_factory=list)
+    warnings: list[str] = dataclasses.field(default_factory=list)
+    core_consumers: list[str] = dataclasses.field(default_factory=list)
+    doomed: purge.Purge = dataclasses.field(default_factory=purge.Purge)
+    """타입 삭제가 함께 영구 삭제할 지운 객체(ADR 0008) — 다른 정의는 늘 비어 있다."""
+
+    def check(self, guard: Callable[[], None]) -> None:
+        """막는 검사 하나 — 거절하면 그 오류를 담는다. 순서가 곧 삭제 경로의 순서다."""
+        try:
+            guard()
+        except AppError as caught:
+            self.blocking.append(caught)
+
+    def require(self) -> None:
+        """삭제 경로 — 막는 것이 있으면 **첫째를 그대로** 낸다."""
+        if self.blocking:
+            raise self.blocking[0]
 
 
 # --- 조회 헬퍼 --------------------------------------------------------------
@@ -675,52 +714,155 @@ def _check_type_choices(payload: ObjectTypeWriteRequest) -> None:
     require_choice(payload.temporal_kind, TEMPORAL_KINDS, what="시간 정책")
 
 
+def _type_deletion(db: Session, row: ObjectType) -> _Deletion:
+    found = _Deletion(label=row.label)
+    found.check(lambda: managed.require_definition_editable(row))
+    if row.core:
+        # **끄는 것 자체가 알리는 행동이다.** 열린 채로 지우면 남의 동기화가 404 를 받고,
+        # 그쪽은 그것이 「잠깐 장애」 인지 「없어진 것」 인지 구별할 수 없다.
+        found.blocking.append(
+            Conflict(
+                code("ONTOLOGY", 47),
+                f"{row.label}은(는) 외부에 공개 중이라 삭제할 수 없습니다. 먼저 「코어」 를 "
+                "해제하십시오 — 해제 즉시 수신 시스템이 인지합니다.",
+                details={"core_consumers": _core_consumers(db, row)},
+            )
+        )
+    live = db.scalar(
+        select(func.count())
+        .select_from(ObjectInstance)
+        .where(ObjectInstance.type_id == row.id, ObjectInstance.deleted_at.is_(None))
+    )
+    if live:
+        found.blocking.append(
+            Conflict(
+                code("ONTOLOGY", 38),
+                f"{row.label}에 {live}개가 들어 있어 지울 수 없습니다. "
+                "그만 쓰려는 것이면 「사용 안 함」 으로 두세요 — "
+                "자료는 남고 화면에서만 빠집니다.",
+                details={"object_count": int(live)},
+            )
+        )
+    sources = list(db.scalars(select(DataSource.name).where(DataSource.type_id == row.id)))
+    if sources:
+        # FK 가 RESTRICT 다 — 안 막으면 지우는 자리에서 500 이 난다.
+        found.blocking.append(
+            Conflict(
+                code("ONTOLOGY", 86),
+                f"데이터 소스 {', '.join(sources)} 이(가) {row.label}에 넣고 있습니다. "
+                "데이터 소스를 먼저 삭제하거나 넣을 타입을 바꾸세요.",
+                details={"data_sources": sources},
+            )
+        )
+    if not live:
+        # **지운 객체만 남았으면 함께 영구 삭제한다**(ADR 0008) — 행이 타입을 RESTRICT 로
+        # 붙들어, 안 그러면 객체를 한 번이라도 넣어 본 타입은 영영 못 지운다. 확인은 삭제
+        # 경로가 따로 받는다(`purge_deleted`).
+        found.doomed = purge.plan(db, row)
+        if found.doomed.pointing:
+            found.blocking.append(
+                Conflict(
+                    code("ONTOLOGY", 85),
+                    f"살아 있는 객체가 {row.label}의 지운 객체를 가리킵니다 — "
+                    f"{', '.join(found.doomed.pointing)}. 품질 화면의 "
+                    "「지워진 것을 가리키는 칸」 에서 먼저 비우세요 — 영구 삭제하면 그 칸은 "
+                    "무엇을 가리켰는지조차 모르게 됩니다.",
+                    details={"pointing": found.doomed.pointing},
+                )
+            )
+        found.removes.extend(found.doomed.removes())
+        if found.doomed.objects:
+            found.keeps.append("감사 기록 — 누가 언제 무엇을 했는지(이름과 함께)")
+    owned = _owned_properties(db, "type", row.id)
+    if owned:
+        found.removes.append(f"속성 정의 {owned}개")
+    # **가리키는 정의는 막지 않는다** — 객체가 없으니 끊길 값은 없다. 그러나 그 칸은 고를 곳을
+    # 잃고, 그 정의를 다음에 고칠 때 「참조 대상이 없다」 로 거절된다. 누르기 전에 안다.
+    catalog = interfaces.load(db)
+    owners: list[tuple[str, dict[str, interfaces.Prop]]] = [
+        *((slug, one.props) for slug, one in catalog.types.items()),
+        *((slug, one.props) for slug, one in catalog.interfaces.items()),
+    ]
+    for owner, props in owners:
+        for key, prop in props.items():
+            if prop.shape.ref_type_slug == row.slug and owner != row.slug:
+                found.warnings.append(
+                    f"속성 {owner}.{key} 가 이 타입을 참조 대상으로 적고 있습니다 — "
+                    "지우면 그 칸은 가리킬 곳이 없어집니다(참조 대상을 먼저 바꾸세요)."
+                )
+    for kind in _relation_types(db):
+        if row.slug in (kind.src_type_slugs or []) or row.slug in (kind.dst_type_slugs or []):
+            found.warnings.append(
+                f"관계 종류 {kind.slug} 의 끝에 이 타입이 있습니다 — "
+                "지우면 그 끝에서 빠집니다."
+            )
+    return found
+
+
+def _owned_properties(db: Session, owner_kind: str, owner_id: uuid.UUID) -> int:
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(PropertyDef)
+            .where(PropertyDef.owner_kind == owner_kind, PropertyDef.owner_id == owner_id)
+        )
+        or 0
+    )
+
+
 @router.delete("/types/{slug}", status_code=204)
 def delete_type(
     slug: str,
+    purge_deleted: bool = Query(
+        default=False,
+        description="지운 객체만 남은 타입이면 그것까지 영구 삭제함을 확인했는지(ADR 0008)",
+    ),
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> None:
-    """타입을 지운다 — **객체가 하나도 없을 때만.**
+    """타입을 지운다 — **살아 있는 객체가 하나도 없을 때만.**
 
     행이 있는데 지우면 그 데이터가 통째로 고아가 된다. 그런데 그것은 화면의 실수
     한 번으로 일어날 일이 아니다. 그래서 몇 개가 걸려 있는지 말하며 막고,
     **그만 쓰려는 것이면 비활성으로 두라고** 알려 준다 — 이 저장소는 지우지 않는다.
 
     비어 있으면 진짜로 지운다. 잘못 만든 타입이 목록에 영원히 남으면, 그 목록은
-    곧 아무도 안 읽는다.
+    곧 아무도 안 읽는다. **지운 객체만 남았으면** 그것까지 영구 삭제해야 지워진다 — 행이
+    타입을 RESTRICT 로 붙든다. 되돌릴 수 없으니 `purge_deleted` 로 확인을 받는다(ADR 0008).
     """
     row = _type(db, slug)
-    managed.require_definition_editable(row)
-    if row.core:
-        # **끄는 것 자체가 알리는 행동이다.** 열린 채로 지우면 남의 동기화가 404 를 받고,
-        # 그쪽은 그것이 「잠깐 장애」 인지 「없어진 것」 인지 구별할 수 없다.
+    found = _type_deletion(db, row)
+    found.require()
+    doomed = found.doomed
+    if doomed.objects and not purge_deleted:
         raise Conflict(
-            code("ONTOLOGY", 47),
-            f"{row.label}은(는) 외부에 공개 중이라 삭제할 수 없습니다. 먼저 「코어」 를 "
-            "해제하십시오 — 해제 즉시 수신 시스템이 인지합니다.",
-            details={"core_consumers": _core_consumers(db, row)},
+            code("ONTOLOGY", 84),
+            f"{row.label}에 지운 객체 {doomed.objects}개가 기록으로 남아 있습니다 — 함께 영구 "
+            "삭제해야 타입을 지울 수 있고, 되돌릴 수 없습니다. 무엇이 사라지는지 확인한 뒤 "
+            "「영구 삭제」 로 다시 실행하십시오.",
+            details={"deleted_objects": doomed.objects, "removes": doomed.removes()},
         )
-    count = db.scalar(
-        select(func.count())
-        .select_from(ObjectInstance)
-        .where(ObjectInstance.type_id == row.id)
-    )
-    if count:
-        raise Conflict(
-            code("ONTOLOGY", 38),
-            f"{row.label}에 {count}개가 들어 있어 지울 수 없습니다. "
-            "그만 쓰려는 것이면 「사용 안 함」 으로 두세요 — 자료는 남고 화면에서만 빠집니다.",
-            details={"object_count": int(count)},
-        )
+    _snapshot(db, user, reason=f"삭제 직전: 타입 {slug}")
+    purge.apply(db, doomed)
 
-    _audit(
+    record_audit(
         db,
-        user,
         action="ontology.type.delete",
-        table="object_types",
-        row_id=row.id,
-        label=slug,
+        actor=user,
+        target_table="object_types",
+        target_id=row.id,
+        target_label=slug,
+        # 영구 삭제한 것은 **수로** 남긴다 — 무엇이었는지는 그 객체들의 감사 기록이 말한다.
+        changes=(
+            {
+                "purged_objects": doomed.objects,
+                "purged_relations": doomed.relations,
+                "purged_attachments": doomed.attachments,
+            }
+            if doomed.objects
+            else None
+        ),
+        reason=f"지운 객체 {doomed.objects}개 영구 삭제" if doomed.objects else None,
     )
     # 속성 정의는 FK 가 없다(가리키는 표가 둘이라 걸 수 없다) — 여기서 함께 지운다.
     # 안 지우면 같은 slug 로 타입을 다시 만들 때 **옛 속성이 되살아난다.**
@@ -729,6 +871,27 @@ def delete_type(
     ).delete(synchronize_session=False)
     db.delete(row)
     db.commit()
+
+
+def _group_deletion(db: Session, row: NavGroup) -> _Deletion:
+    found = _Deletion(label=row.label)
+    attached = list(
+        db.scalars(select(ObjectType.label).where(ObjectType.nav_group_id == row.id))
+    )
+    if attached:
+        found.blocking.append(
+            Conflict(
+                code("ONTOLOGY", 39),
+                f"{row.label}에 {', '.join(attached)} 이(가) 걸려 있습니다. "
+                "그 타입들의 묶음을 먼저 바꾸세요 — 안 그러면 사이드바에서 조용히 사라집니다.",
+                details={"types": attached},
+            )
+        )
+    # 하위 묶음은 FK 가 SET NULL 이라 **최상위로 올라온다** — 사라지지는 않으니 막지 않는다.
+    children = list(db.scalars(select(NavGroup.label).where(NavGroup.parent_id == row.id)))
+    if children:
+        found.warnings.append(f"하위 묶음 {', '.join(children)} 은(는) 최상위 묶음이 됩니다.")
+    return found
 
 
 @router.delete("/groups/{slug}", status_code=204)
@@ -743,16 +906,8 @@ def delete_group(
     사이드바에서 사라진다.** 없어진 이유를 물을 자리가 없으므로 여기서 막는다.
     """
     row = _group(db, slug)
-    attached = list(
-        db.scalars(select(ObjectType.label).where(ObjectType.nav_group_id == row.id))
-    )
-    if attached:
-        raise Conflict(
-            code("ONTOLOGY", 39),
-            f"{row.label}에 {', '.join(attached)} 이(가) 걸려 있습니다. "
-            "그 타입들의 묶음을 먼저 바꾸세요 — 안 그러면 사이드바에서 조용히 사라집니다.",
-            details={"types": attached},
-        )
+    _group_deletion(db, row).require()
+    _snapshot(db, user, reason=f"삭제 직전: 묶음 {slug}")
 
     _audit(
         db, user, action="ontology.group.delete", table="nav_groups", row_id=row.id, label=slug
@@ -906,6 +1061,30 @@ def update_relation_type(
     return row
 
 
+def _relation_type_deletion(db: Session, row: RelationType) -> _Deletion:
+    found = _Deletion(label=row.label)
+    found.check(lambda: managed.require_definition_editable(row))
+    edges = db.scalar(
+        select(func.count())
+        .select_from(ObjectRelation)
+        .where(ObjectRelation.relation == row.slug)
+    )
+    if edges:
+        found.blocking.append(
+            Conflict(
+                code("ONTOLOGY", 44),
+                f"{row.label}으로 맺힌 관계가 {edges}개 있어 지울 수 없습니다. "
+                "그만 쓰려는 것이면 「사용함」 을 끄세요 — "
+                "맺힌 것은 남고 새로 맺지만 못합니다.",
+                details={"relation_count": int(edges)},
+            )
+        )
+    owned = _owned_properties(db, "relation", row.id)
+    if owned:
+        found.removes.append(f"관계 속성 정의 {owned}개")
+    return found
+
+
 @router.delete("/relation-types/{slug}", status_code=204)
 def delete_relation_type(
     slug: str,
@@ -922,17 +1101,8 @@ def delete_relation_type(
     옛 속성이 되살아난다.
     """
     row = _relation_type(db, slug)
-    managed.require_definition_editable(row)
-    edges = db.scalar(
-        select(func.count()).select_from(ObjectRelation).where(ObjectRelation.relation == slug)
-    )
-    if edges:
-        raise Conflict(
-            code("ONTOLOGY", 44),
-            f"{row.label}으로 맺힌 관계가 {edges}개 있어 지울 수 없습니다. "
-            "그만 쓰려는 것이면 「사용함」 을 끄세요 — 맺힌 것은 남고 새로 맺지만 못합니다.",
-            details={"relation_count": int(edges)},
-        )
+    _relation_type_deletion(db, row).require()
+    _snapshot(db, user, reason=f"삭제 직전: 관계 종류 {slug}")
     _audit(
         db,
         user,
@@ -1153,6 +1323,32 @@ def interface_usage(
     return _interface_usage(db, slug)
 
 
+def _interface_deletion(db: Session, row: ObjectInterface) -> _Deletion:
+    found = _Deletion(label=row.label)
+    found.check(lambda: managed.require_definition_editable(row))
+    usage = _interface_usage(db, row.slug)
+    blocking = [
+        *(f"구현 타입 {one}" for one in usage.implementers),
+        *(f"상위로 이어받는 인터페이스 {one}" for one in usage.sub_interfaces),
+        *(f"참조 대상으로 적은 속성 {one}" for one in usage.referenced_by),
+        *(f"관계 끝에 적은 관계 종류 {one}" for one in usage.relation_types),
+    ]
+    if blocking:
+        found.blocking.append(
+            Conflict(
+                code("ONTOLOGY", 9),
+                f"{row.label}을(를) 가리키는 것이 {len(blocking)}개 있어 지울 수 없습니다 — "
+                f"{', '.join(blocking[:5])}{' …' if len(blocking) > 5 else ''}. "
+                "먼저 해제하세요.",
+                details=usage.model_dump(),
+            )
+        )
+    owned = _owned_properties(db, "interface", row.id)
+    if owned:
+        found.removes.append(f"공통 속성 정의 {owned}개")
+    return found
+
+
 @router.delete("/interfaces/{slug}", status_code=204)
 def delete_interface(
     slug: str,
@@ -1166,21 +1362,8 @@ def delete_interface(
     정의도 함께 지운다 — **구현 타입의 속성은 남는다**(그 타입의 것이다).
     """
     row = _interface(db, slug)
-    managed.require_definition_editable(row)
-    usage = _interface_usage(db, slug)
-    blocking = [
-        *(f"구현 타입 {one}" for one in usage.implementers),
-        *(f"상위로 이어받는 인터페이스 {one}" for one in usage.sub_interfaces),
-        *(f"참조 대상으로 적은 속성 {one}" for one in usage.referenced_by),
-        *(f"관계 끝에 적은 관계 종류 {one}" for one in usage.relation_types),
-    ]
-    if blocking:
-        raise Conflict(
-            code("ONTOLOGY", 9),
-            f"{row.label}을(를) 가리키는 것이 {len(blocking)}개 있어 지울 수 없습니다 — "
-            f"{', '.join(blocking[:5])}{' …' if len(blocking) > 5 else ''}. 먼저 해제하세요.",
-            details=usage.model_dump(),
-        )
+    _interface_deletion(db, row).require()
+    _snapshot(db, user, reason=f"삭제 직전: 인터페이스 {slug}")
     _audit(
         db,
         user,
@@ -1349,20 +1532,26 @@ def interface_property_usage(
     row = _interface_property(db, slug, key)
     implementers = interfaces.implementers(interfaces.load(db), slug)
     ids = [one for name, one in _type_ids(db).items() if name in implementers]
-    count = (
-        db.scalar(
-            select(func.count())
-            .select_from(ObjectInstance)
-            .where(
-                ObjectInstance.type_id.in_(ids),
-                ObjectInstance.deleted_at.is_(None),
-                ObjectInstance.properties.has_key(key),
-            )
-        )
-        if ids
-        else 0
+    return PropertyUsage(
+        key=row.key, label=row.label, objects_with_value=_objects_with_value(db, ids, key)
     )
-    return PropertyUsage(key=row.key, label=row.label, objects_with_value=int(count or 0))
+
+
+def _interface_property_deletion(
+    db: Session, owner: ObjectInterface, row: PropertyDef
+) -> _Deletion:
+    found = _Deletion(label=f"{owner.label} · {row.label}")
+    found.check(lambda: managed.require_definition_editable(owner))
+    found.removes.append("공통 속성 정의")
+    if views.prune_field(owner.list_view or {}, row.key) != (owner.list_view or {}):
+        found.removes.append("인터페이스 목록의 열")
+    implementers = interfaces.implementers(interfaces.load(db), owner.slug)
+    if implementers:
+        found.keeps.append(
+            f"구현 타입의 속성 — {', '.join(implementers)} 의 것이 되어 그 뒤로는 타입에서 "
+            "수정합니다(저장값은 그대로)"
+        )
+    return found
 
 
 @router.delete("/interfaces/{slug}/properties/{key}", status_code=204)
@@ -1375,8 +1564,9 @@ def delete_interface_property(
     """공통 속성을 뺀다. **구현 타입의 속성은 남는다** — 그 타입의 것이 되고, 그 뒤로는
     타입에서 고칠 수 있다."""
     owner = _interface(db, slug)
-    managed.require_definition_editable(owner)
     row = _interface_property(db, slug, key)
+    _interface_property_deletion(db, owner, row).require()
+    _snapshot(db, user, reason=f"삭제 직전: 공통 속성 {slug}.{key}")
     owner.list_view = views.prune_field(owner.list_view or {}, key)
     _touch(owner)
     _audit(
@@ -2021,21 +2211,52 @@ def property_usage(
     """**지우기 전에 무엇이 사라지는지.** 화면의 확인 창이 이것을 읽어 말한다."""
     row = _property(db, slug, key)
     owner = _type(db, slug)
-    count = db.scalar(
-        select(func.count())
-        .select_from(ObjectInstance)
-        .where(
-            ObjectInstance.type_id == owner.id,
-            ObjectInstance.deleted_at.is_(None),
-            ObjectInstance.properties.has_key(key),
-        )
-    )
     return PropertyUsage(
         key=row.key,
         label=row.label,
-        objects_with_value=int(count or 0),
+        objects_with_value=_objects_with_value(db, [owner.id], key),
         core_open=owner.core,
         core_consumers=_core_consumers(db, owner),
+    )
+
+
+def _property_deletion(db: Session, owner: ObjectType, row: PropertyDef) -> _Deletion:
+    found = _Deletion(label=f"{owner.label} · {row.label}")
+    found.check(lambda: managed.require_definition_editable(owner))
+    found.check(lambda: _refuse_bound(db, owner.slug, row.key, what="삭제하지 않습니다"))
+    found.removes.append("속성 정의")
+    if views.prune_field(owner.list_view or {}, row.key) != (owner.list_view or {}):
+        found.removes.append("목록의 열")
+    count = _objects_with_value(db, [owner.id], row.key)
+    if count:
+        found.keeps.append(
+            f"저장값 {count}개 — 화면에서는 안 보이고, 같은 키로 정의를 되살리면 돌아옵니다"
+        )
+    # 막지는 않는다 — 확인을 받는다(`accept_core`). 그 확인은 삭제 경로가 따로 묻는다.
+    found.core_consumers = _core_consumers(db, owner)
+    if owner.core:
+        found.warnings.append(
+            f"{owner.label}은(는) 외부에 공개 중입니다 — 이 칸의 이름은 "
+            "수신 시스템 코드에 박혀 있으니 통보한 뒤 지웁니다."
+        )
+    return found
+
+
+def _objects_with_value(db: Session, type_ids: list[uuid.UUID], key: str) -> int:
+    """이 키에 값을 가진 살아 있는 객체 수 — 지우거나 모양을 바꾸기 전에 무엇이 걸리는지."""
+    if not type_ids:
+        return 0
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(ObjectInstance)
+            .where(
+                ObjectInstance.type_id.in_(type_ids),
+                ObjectInstance.deleted_at.is_(None),
+                ObjectInstance.properties.has_key(key),
+            )
+        )
+        or 0
     )
 
 
@@ -2057,9 +2278,9 @@ def delete_property(
     """
     row = _property(db, slug, key)
     owner = _type(db, slug)
-    managed.require_definition_editable(owner)
-    _refuse_bound(db, slug, key, what="삭제하지 않습니다")
+    _property_deletion(db, owner, row).require()
     _require_core_accepted(db, owner, accepted=accept_core, what="이 속성 삭제")
+    _snapshot(db, user, reason=f"삭제 직전: 속성 {slug}.{key}")
     # **안 걷어내면 그 뒤로 타입을 고칠 때마다 「없는 속성」 이라고 거절당한다** —
     # 그리고 사람은 자기가 방금 고친 것과 상관없는 그 오류를 이해할 수 없다.
     owner.list_view = views.prune_field(owner.list_view or {}, key)
@@ -2482,6 +2703,58 @@ def import_schema(
     return _plan_out(prepared, applied=True, snapshot_id=snapshot.id)
 
 
+@router.get("/delete-plan", response_model=DeletePlanOut)
+def delete_plan(
+    kind: DeleteKind,
+    slug: str,
+    key: str | None = None,
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> DeletePlanOut:
+    """**지우기 전에** — 무엇이 막고, 무엇이 함께 사라지고, 무엇이 남는지. 아무것도 안 바꾼다.
+
+    삭제 경로와 **같은 함수**가 센다(`_Deletion`). 기계(MCP)가 지우기 전에 사람에게 보일
+    자리다 — 「정말 삭제하시겠습니까」 만 묻는 창은 아무도 안 읽는다. `property` ·
+    `interface_property` 는 `key` 가 있어야 한다.
+    """
+    found: _Deletion
+    if kind in ("property", "interface_property") and not key:
+        raise Conflict(
+            code("ONTOLOGY", 83), f"{kind} 를 지우려면 속성 키(key)가 있어야 합니다."
+        )
+    if kind == "group":
+        found = _group_deletion(db, _group(db, slug))
+    elif kind == "type":
+        found = _type_deletion(db, _type(db, slug))
+    elif kind == "relation_type":
+        found = _relation_type_deletion(db, _relation_type(db, slug))
+    elif kind == "interface":
+        found = _interface_deletion(db, _interface(db, slug))
+    elif kind == "property":
+        assert key is not None
+        found = _property_deletion(db, _type(db, slug), _property(db, slug, key))
+    else:
+        assert key is not None
+        found = _interface_property_deletion(
+            db, _interface(db, slug), _interface_property(db, slug, key)
+        )
+    return DeletePlanOut(
+        kind=kind,
+        slug=slug,
+        key=key,
+        label=found.label,
+        allowed=not found.blocking,
+        blocking=[
+            DeleteBlockOut(code=one.code, message=one.message) for one in found.blocking
+        ],
+        removes=found.removes,
+        keeps=found.keeps,
+        warnings=found.warnings,
+        core_consumers=found.core_consumers,
+        purge_deleted=found.doomed.objects,
+    )
+
+
 @router.post("/reset", response_model=ResetPlanOut)
 def reset_ontology(
     payload: ResetRequest,
@@ -2555,6 +2828,9 @@ def list_snapshots(
 @router.post("/snapshots/{snapshot_id}/restore", response_model=ImportPlanOut)
 def restore_snapshot(
     snapshot_id: uuid.UUID,
+    dry_run: bool = Query(
+        default=False, description="되돌리지 않고 계획만 본다 — 무엇이 바뀌고 무엇을 잃는지"
+    ),
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> ImportPlanOut:
@@ -2562,15 +2838,28 @@ def restore_snapshot(
 
     **그 뒤에 새로 만든 것은 안 지운다.** 지우면 그 사이에 쌓인 객체가 통째로 갈
     곳을 잃는다 — 되돌리기가 그것까지 하면 되돌리기 자체가 위험해진다.
+
+    `dry_run` 은 가져오기의 미리 보기와 같은 계획이다(기계가 되돌리기 전에 사람에게 보일
+    자리). 기본이 적용인 것은 화면이 확인 창을 거친 뒤에 부르기 때문이다.
     """
     row = db.get(OntologySnapshot, snapshot_id)
     if row is None:
         raise NotFound(code("ONTOLOGY", 71), "스냅샷을 찾을 수 없습니다.")
 
-    # 되돌리기 **직전**도 남긴다 — 되돌린 것을 되돌릴 수 있어야 한다.
-    before = _snapshot(db, user, reason=f"복원 직전 ({row.taken_at:%Y-%m-%d %H:%M})")
     # **옛 스냅샷도 되돌려진다** — 인터페이스 전의 것은 타입에 `parent_slug` 를 담고 있다.
     schema, notes = importer.upgrade_snapshot(row.schema or {})
+    if dry_run:
+        try:
+            planned = importer.plan(db, schema)
+        except ValueError as caught:
+            db.rollback()
+            raise Conflict(code("ONTOLOGY", 70), str(caught)) from None
+        planned.warnings.extend(notes)
+        db.rollback()
+        return _plan_out(planned, applied=False, snapshot_id=None)
+
+    # 되돌리기 **직전**도 남긴다 — 되돌린 것을 되돌릴 수 있어야 한다.
+    before = _snapshot(db, user, reason=f"복원 직전 ({row.taken_at:%Y-%m-%d %H:%M})")
     try:
         # 누가 되돌렸는지가 값 변환의 이력에도 남는다(종류가 바뀐 뒤의 복원은 값도 변환한다).
         prepared = importer.apply(db, schema, actor=user, reason="스냅샷 복원")

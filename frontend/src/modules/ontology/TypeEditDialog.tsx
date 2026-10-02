@@ -12,6 +12,7 @@ import { useState } from 'react'
 
 import { ListViewEditor } from '@/modules/ontology/ListViewEditor'
 import { SectionViewEditor } from '@/modules/ontology/SectionViewEditor'
+import { TypeDeleteDialog } from '@/modules/ontology/TypeDeleteDialog'
 import { ontologyApi } from '@/modules/ontology/api'
 import type {
   ImplementPlan,
@@ -24,7 +25,6 @@ import type {
   SectionView,
   SystemSource,
 } from '@/modules/ontology/api'
-import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { IconPicker } from '@/shared/components/IconPicker'
 import { Button } from '@/shared/components/ui/button'
@@ -436,26 +436,9 @@ export function TypeEditDialog({
       </Dialog>
 
       {removing && (
-        <ConfirmDialog
-          open
-          destructive
-          title={`${type.label} 타입을 삭제합니다`}
-          description={
-            type.object_count > 0 ? (
-              <>
-                지금 <b>{type.object_count}개</b>가 들어 있어 <b>지울 수 없습니다.</b> 그만 쓰려는
-                것이면 「사용함」 을 끄세요 — 자료는 남고 화면에서만 빠집니다.
-              </>
-            ) : (
-              <>
-                들어 있는 것이 없어 삭제할 수 있습니다. <b>속성 정의도 함께 사라집니다</b> — 안
-                삭제하면 같은 slug 로 다시 만들 때 옛 속성이 되살아납니다.
-              </>
-            )
-          }
-          confirmLabel="삭제"
-          onConfirm={async () => {
-            await ontologyApi.removeType(type.slug)
+        <TypeDeleteDialog
+          type={type}
+          onDone={() => {
             onChanged()
             onClose()
           }}

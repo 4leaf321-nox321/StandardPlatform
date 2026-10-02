@@ -78,7 +78,7 @@ class References:
         )
 
 
-def _ref_defs(db: Session, type_slug: str) -> list[tuple[ObjectType, PropertyDef]]:
+def ref_defs(db: Session, type_slug: str) -> list[tuple[ObjectType, PropertyDef]]:
     """이 타입을 가리키는 `object_ref` 속성 정의 전부.
 
     어느 타입의 어느 칸이 나를 가리킬 수 있나. 대상이 이 타입이 구현한 인터페이스(상위까지)인
@@ -122,7 +122,7 @@ def references_of(
 ) -> References:
     """이 객체를 가리키는 것 전부 — 속성 참조와 관계."""
     out = References()
-    for owner_type, definition in _ref_defs(db, object_type.slug):
+    for owner_type, definition in ref_defs(db, object_type.slug):
         for other in _pointing_rows(db, definition, row.id):
             if _visible(db, user, other):
                 out.property_refs.append(
@@ -273,7 +273,7 @@ def _rewrite_property_refs(
     """이 객체를 가리키는 모든 칸을 고친다 — **보이지 않는 것까지.** 반쯤 고치면 남의
     부서 화면에만 uuid 가 남고, 그것은 이 사람이 알 수 없다."""
     touched = 0
-    for owner_type, definition in _ref_defs(db, object_type.slug):
+    for owner_type, definition in ref_defs(db, object_type.slug):
         for other in _pointing_rows(db, definition, row.id):
             before = dict(other.properties or {})
             other.properties = _rewrite_ref(

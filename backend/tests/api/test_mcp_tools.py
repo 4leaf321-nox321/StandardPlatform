@@ -820,3 +820,231 @@ def test_이어진_것을_질의어_없이_훑는다(bot: Bot) -> None:
     # 타입 지형 — 질의를 쓰기 전에 어디로 갈 수 있는지 본다.
     shape = bot.call(server.graph_overview)
     assert any(one["slug"] == part for one in shape["nodes"])
+
+
+# --- 지우기 · 되돌리기 · 값까지 바꾸는 수정 ------------------------------------------
+#
+# 시스템 관리자는 MCP 로도 지우고 고친다 — **화면과 같은 규칙 · 같은 권한**으로. 미리 보기가
+# 기본이고, 서버가 막는 것은 MCP 도 막는다(서버의 말 그대로).
+
+
+def _part_type(bot: Bot, **extra: Any) -> str:
+    slug = _uniq("part")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": slug,
+                    "label": "부품",
+                    "properties": [
+                        {"key": "w", "label": "무게", "data_type": "text"},
+                        {
+                            "key": "grade",
+                            "label": "등급",
+                            "data_type": "enum",
+                            "enum_options": ["상", "하"],
+                        },
+                    ],
+                    **extra,
+                }
+            ]
+        },
+        apply=True,
+    )
+    return slug
+
+
+def test_정의_지우기는_미리_보기가_먼저고_지운_것은_스냅샷이_되살린다(bot: Bot) -> None:
+    kind = _part_type(bot)
+    bolt = bot.call(server.object_create, kind, label="볼트", properties={"w": "3"})
+
+    # 객체가 든 타입은 계획이 막고, 적용해도 서버의 말 그대로 거절된다.
+    plan = bot.call(server.ontology_delete, "type", kind)
+    assert plan["allowed"] is False and plan["blocking"][0]["code"].endswith("ONTOLOGY-0038")
+    with pytest.raises(ToolError, match="ONTOLOGY-0038"):
+        bot.call(server.ontology_delete, "type", kind, apply=True)
+
+    # 속성은 지울 수 있다 — 저장값이 남는다는 것을 미리 말한다. 미리 보기는 아무것도 안 바꾼다.
+    planned = bot.call(server.ontology_delete, "property", kind, key="w")
+    assert planned["allowed"] is True and planned["keeps"][0].startswith("저장값 1개")
+    assert "w" in {
+        p["key"] for p in bot.call(server.object_get, kind, bolt["id"])["properties_schema"]
+    }
+    done = bot.call(server.ontology_delete, "property", kind, key="w", apply=True)
+    assert done["ok"] is True
+    assert "w" not in {
+        p["key"] for p in bot.call(server.object_get, kind, bolt["id"])["properties_schema"]
+    }
+
+    # 되살릴 자리 — 지우기 직전 스냅샷. 미리 보기 → 적용.
+    snapshots = bot.call(server.ontology_restore)["snapshots"]
+    assert snapshots[0]["reason"] == f"삭제 직전: 속성 {kind}.w"
+    preview = bot.call(server.ontology_restore, snapshots[0]["id"])
+    assert preview["applied"] is False
+    back = bot.call(server.ontology_restore, snapshots[0]["id"], apply=True)
+    assert back["applied"] is True
+    got = bot.call(server.object_get, kind, bolt["id"])
+    assert got["object"]["properties"]["w"] == "3", "되살린 정의로 남아 있던 값이 다시 보인다"
+
+    # 지운 객체만 남은 타입 — 계획이 수를 말하고, 확인을 적어야 영구 삭제하며 지운다.
+    bot.call(server.objects_delete, kind, [bolt["id"]], apply=True)
+    plan = bot.call(server.ontology_delete, "type", kind)
+    assert plan["allowed"] is True and plan["purge_deleted"] == 1
+    with pytest.raises(ToolError, match="ONTOLOGY-0084"):
+        bot.call(server.ontology_delete, "type", kind, apply=True)
+    gone = bot.call(server.ontology_delete, "type", kind, apply=True, purge_deleted=True)
+    assert gone["ok"] is True
+    assert kind not in {one["slug"] for one in bot.call(server.ontology_schema)["types"]}
+
+    with pytest.raises(ToolError, match="key"):
+        bot.call(server.ontology_delete, "property", kind)
+    with pytest.raises(ToolError, match="kind"):
+        bot.call(server.ontology_delete, "table", kind)
+
+
+def test_종류_변경은_사람이_정한_대체_값으로_적용된다(bot: Bot) -> None:
+    kind = _part_type(bot)
+    light = bot.call(server.object_create, kind, label="볼트", properties={"w": "1,200"})
+    odd = bot.call(server.object_create, kind, label="너트", properties={"w": "12 kg"})
+
+    plan = bot.call(server.ontology_retype, kind, "w", "number")
+    assert plan["applied"] is False
+    assert [one["value"] for one in plan["failures"]] == ["12 kg"]
+    # 대체 값 없이 적용하면 아무것도 안 바뀐다.
+    refused = bot.call(server.ontology_retype, kind, "w", "number", apply=True)
+    assert refused["applied"] is False and refused["errors"]
+
+    done = bot.call(
+        server.ontology_retype, kind, "w", "number", mapping={"12 kg": "12"}, apply=True
+    )
+    assert done["applied"] is True and done["snapshot_id"]
+    assert bot.call(server.object_get, kind, light["id"])["object"]["properties"]["w"] == 1200
+    assert bot.call(server.object_get, kind, odd["id"])["object"]["properties"]["w"] == 12
+
+    with pytest.raises(ToolError, match="owner"):
+        bot.call(server.ontology_retype, kind, "w", "text", owner="relation")
+
+
+def test_고를_값_이름은_저장값과_함께_바뀐다(bot: Bot) -> None:
+    kind = _part_type(bot)
+    bolt = bot.call(server.object_create, kind, label="볼트", properties={"grade": "상"})
+
+    plan = bot.call(server.ontology_rename_option, kind, "grade", "상", "A")
+    assert plan["applied"] is False and plan["objects_with_value"] == 1
+    assert (
+        bot.call(server.object_get, kind, bolt["id"])["object"]["properties"]["grade"] == "상"
+    )
+
+    done = bot.call(server.ontology_rename_option, kind, "grade", "상", "A", apply=True)
+    assert done["applied"] is True
+    assert (
+        bot.call(server.object_get, kind, bolt["id"])["object"]["properties"]["grade"] == "A"
+    )
+
+
+def test_객체_지우기는_계획이_먼저고_가리키는_것이_있으면_막는다(bot: Bot) -> None:
+    kind = _part_type(bot)
+    holder = _uniq("asm")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": holder,
+                    "label": "조립",
+                    "properties": [
+                        {
+                            "key": "part",
+                            "label": "부품",
+                            "data_type": "object_ref",
+                            "ref_type_slug": kind,
+                        }
+                    ],
+                }
+            ]
+        },
+        apply=True,
+    )
+    bolt = bot.call(server.object_create, kind, label="볼트")
+    loose = bot.call(server.object_create, kind, label="와셔")
+    bot.call(server.object_create, holder, label="조립1", properties={"part": bolt["id"]})
+
+    plan = bot.call(server.objects_delete, kind, [bolt["id"], loose["id"]])
+    assert plan["applied"] is False
+    assert {one["label"]: one["action"] for one in plan["rows"]} == {
+        "볼트": "error",
+        "와셔": "delete",
+    }
+    assert len(bot.call(server.objects_list, kind)["items"]) == 2, "미리 보기는 안 지운다"
+
+    # 적용은 지울 수 있는 줄만 — 가리키는 것이 있는 줄은 남고 이유가 줄에 남는다.
+    partial = bot.call(server.objects_delete, kind, [bolt["id"], loose["id"]], apply=True)
+    assert partial["applied"] is True and partial["counts"] == {"delete": 1, "error": 1}
+    assert [one["label"] for one in bot.call(server.objects_list, kind)["items"]] == ["볼트"]
+
+    # 사람이 「참조를 비우고 지운다」 고 정했을 때만.
+    done = bot.call(server.objects_delete, kind, [bolt["id"]], mode="detach", apply=True)
+    assert done["applied"] is True
+    assert bot.call(server.objects_list, kind)["items"] == []
+
+    with pytest.raises(ToolError, match="mode"):
+        bot.call(server.objects_delete, kind, [bolt["id"]], mode="force")
+
+
+def test_합치기는_미리_보기가_두_객체와_걸린_것을_보인다(bot: Bot) -> None:
+    kind = _part_type(bot)
+    keep = bot.call(server.object_create, kind, label="볼트 M8")
+    dup = bot.call(server.object_create, kind, label="M8 볼트")
+
+    preview = bot.call(server.object_merge, kind, dup["id"], keep["id"])
+    assert preview["applied"] is False
+    assert (preview["from"]["label"], preview["into"]["label"]) == ("M8 볼트", "볼트 M8")
+    assert "references" in preview
+    assert len(bot.call(server.objects_list, kind)["items"]) == 2
+
+    merged = bot.call(server.object_merge, kind, dup["id"], keep["id"], apply=True)
+    assert merged["into"] == keep["id"]
+    assert [one["label"] for one in bot.call(server.objects_list, kind)["items"]] == [
+        "볼트 M8"
+    ]
+
+
+def test_이력의_그_값으로_되돌리고_상태도_고친다(bot: Bot) -> None:
+    kind = _part_type(bot, key_policy="optional")
+    bolt = bot.call(server.object_create, kind, label="볼트", properties={"w": "3"})
+    bot.call(server.object_update, kind, bolt["id"], label="볼트(수정)", properties={"w": "4"})
+
+    first = bot.call(server.object_history, kind, bolt["id"])[-1]
+    back = bot.call(server.object_restore, kind, bolt["id"], first["id"])
+    assert (back["label"], back["properties"]["w"]) == ("볼트", "3")
+
+    retired = bot.call(server.object_update, kind, bolt["id"], status="deprecated", key="B-1")
+    assert (retired["status"], retired["key"]) == ("deprecated", "B-1")
+
+
+def test_권한은_화면과_같다_부서_관리자는_자기_부서_객체만_정의는_못_지운다(
+    client: TestClient, admin: Signed, manager: Signed, bot: Bot
+) -> None:
+    kind = _part_type(bot)
+    made = client.post(
+        "/api/auth/tokens",
+        json={"name": _uniq("mgr"), "scopes": ["read", "objects:write", "ontology:write"]},
+        headers=manager.headers,
+    )
+    assert made.status_code == 201, made.text
+    hand = Bot(made.json()["token"])
+    mine = hand.call(
+        server.object_create, kind, label="볼트", workspace_slug=manager.workspace
+    )
+    shared = bot.call(server.object_create, kind, label="전역 볼트")
+
+    assert hand.call(server.objects_delete, kind, [mine["id"]], apply=True)["applied"] is True
+    # 전역 객체는 보이지만 고치는 것은 시스템 관리자뿐이다 — 화면과 같은 이유로 그 줄이 막힌다.
+    refused = hand.call(server.objects_delete, kind, [shared["id"]], apply=True)
+    assert refused["applied"] is False and refused["rows"][0]["action"] == "error"
+    assert [one["label"] for one in bot.call(server.objects_list, kind)["items"]] == [
+        "전역 볼트"
+    ]
+    with pytest.raises(ToolError, match="AUTH-0103"):
+        hand.call(server.ontology_delete, "property", kind, key="w")

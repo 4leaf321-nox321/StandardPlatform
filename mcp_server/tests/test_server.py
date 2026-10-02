@@ -32,6 +32,11 @@ TOOLS = {
     "search",
     "ontology_schema",
     "ontology_import",
+    "ontology_delete",
+    "ontology_retype",
+    "ontology_rename_option",
+    "ontology_promote",
+    "ontology_restore",
     "objects_list",
     "object_resolve",
     "objects_resolve_many",
@@ -42,6 +47,9 @@ TOOLS = {
     "object_get",
     "object_create",
     "object_update",
+    "objects_delete",
+    "object_restore",
+    "object_merge",
     "relation_add",
     "objects_import",
     "bundle_import",
@@ -165,6 +173,68 @@ def test_미리_보기가_기본이다() -> None:
     assert seen[0].url.path == "/api/jobs"
     assert b'name="kind"' in seen[0].content and b"objects_import" in seen[0].content
     assert got["job_id"] == "j1" and "job_apply" in got["next"]
+
+
+def test_지우기와_값까지_바꾸는_수정도_미리_보기가_기본이다() -> None:
+    """지우기 · 종류 변경 · 이름 변경 · 승격 · 복원 · 합치기 — **안 바꾸는 쪽이 기본**이다.
+    기계의 실수는 기계 속도로 반영되고, 지운 것은 대개 되돌리기 어렵다."""
+    ctx = _ctx("Bearer t")
+    seen = _serve(lambda _r: httpx.Response(200, json={"applied": False, "object": {}}))
+
+    asyncio.run(server.ontology_delete(ctx, "property", "part", key="w"))
+    assert seen[-1].method == "GET" and seen[-1].url.path == "/api/ontology/delete-plan"
+    assert dict(seen[-1].url.params) == {"kind": "property", "slug": "part", "key": "w"}
+
+    asyncio.run(server.ontology_retype(ctx, "equip", "maker", "enum", owner="interface"))
+    assert seen[-1].url.path == "/api/ontology/interfaces/equip/properties/maker/retype"
+    assert json.loads(seen[-1].content)["apply"] is False
+
+    asyncio.run(server.ontology_rename_option(ctx, "part", "grade", "상", "A"))
+    assert json.loads(seen[-1].content) == {"from": "상", "to": "A", "apply": False}
+
+    asyncio.run(server.ontology_promote(ctx, "part", "grade", new_slug="grade"))
+    assert json.loads(seen[-1].content)["apply"] is False
+
+    asyncio.run(server.ontology_restore(ctx, "s1"))
+    assert seen[-1].url.path == "/api/ontology/snapshots/s1/restore"
+    assert seen[-1].url.params["dry_run"] == "true"
+
+    asyncio.run(server.objects_delete(ctx, "part", ["o1"]))
+    assert json.loads(seen[-1].content) == {"ids": ["o1"], "mode": "block", "apply": False}
+
+    before = len(seen)
+    asyncio.run(server.object_merge(ctx, "part", "o1", "o2"))
+    assert [one.method for one in seen[before:]] == ["GET", "GET", "GET"], "읽기만 한다"
+
+    # 적용은 **의도를 적어야** 일어난다 — 그때 각자의 자리로 간다.
+    seen = _serve(lambda _r: httpx.Response(204))
+    got = asyncio.run(
+        server.ontology_delete(ctx, "property", "part", key="w", apply=True, accept_core=True)
+    )
+    assert seen[-1].method == "DELETE"
+    assert seen[-1].url.path == "/api/ontology/types/part/properties/w"
+    assert seen[-1].url.params["accept_core"] == "true"
+    assert got["ok"] is True and "part.w" in got["message"]
+
+    asyncio.run(server.ontology_delete(ctx, "relation_type", "uses", apply=True))
+    assert seen[-1].url.path == "/api/ontology/relation-types/uses"
+    assert "accept_core" not in seen[-1].url.params
+
+    # 영구 삭제는 **타입에만**, 확인을 적었을 때만 실린다(ADR 0008).
+    asyncio.run(server.ontology_delete(ctx, "type", "part", apply=True))
+    assert "purge_deleted" not in seen[-1].url.params
+    asyncio.run(server.ontology_delete(ctx, "type", "part", apply=True, purge_deleted=True))
+    assert seen[-1].url.params["purge_deleted"] == "true"
+    asyncio.run(server.ontology_delete(ctx, "group", "g", apply=True, purge_deleted=True))
+    assert "purge_deleted" not in seen[-1].url.params
+
+    # 모르는 것은 보내지 않는다 — 짐작해서 다른 자리로 보내면 엉뚱한 것이 지워진다.
+    count = len(seen)
+    assert "error" in asyncio.run(server.ontology_delete(ctx, "table", "part", apply=True))
+    assert "error" in asyncio.run(server.ontology_delete(ctx, "property", "part", apply=True))
+    assert "error" in asyncio.run(server.ontology_retype(ctx, "p", "k", "text", owner="x"))
+    assert "error" in asyncio.run(server.objects_delete(ctx, "p", ["o1"], mode="force"))
+    assert len(seen) == count
 
 
 def test_조건은_화면과_같은_모양으로_건너간다() -> None:

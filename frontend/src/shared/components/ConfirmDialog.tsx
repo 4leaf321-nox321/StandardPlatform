@@ -27,6 +27,8 @@ interface ConfirmDialogProps {
   description: ReactNode
   confirmLabel?: string
   destructive?: boolean
+  /** 아직 누를 수 없다 — 셀 것을 세는 중이거나 막는 것이 있다. 그 이유는 `description` 에 적는다. */
+  confirmDisabled?: boolean
   onConfirm: () => Promise<void>
   onClose: () => void
 }
@@ -37,6 +39,7 @@ export function ConfirmDialog({
   description,
   confirmLabel = '확인',
   destructive = false,
+  confirmDisabled = false,
   onConfirm,
   onClose,
 }: ConfirmDialogProps) {
@@ -74,7 +77,7 @@ export function ConfirmDialog({
           <Button
             variant={destructive ? 'destructive' : 'default'}
             onClick={run}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
           >
             {busy ? '처리 중…' : confirmLabel}
           </Button>

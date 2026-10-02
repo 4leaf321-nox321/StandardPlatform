@@ -65,10 +65,16 @@ mcp = FastMCP(
         "  이것과 이어진 것들              graph_neighbors  (타입 지형은 graph_overview)\n"
         "  누가 언제 무엇을 바꿨나         object_history(하나) · audit_recent(전체)\n"
         "  여러 객체의 한 칸을 한 값으로   bulk_edit (apply=false 로 먼저 · undo 있음)\n"
+        "  객체를 지운다 · 둘을 합친다     objects_delete · object_merge (apply=false 먼저)\n"
+        "  객체를 이력의 그 값으로         object_restore\n"
         "  잘못 이은 관계                  relation_update · relation_remove\n"
         "  여러 타입을 건너뛰는 물음       rdf_query (SPARQL)\n"
         "  여러 행 · 묶음을 넣는다         objects_import · bundle_import → job_apply\n"
         "  정의를 바꾼다                   ontology_import (apply=false 로 먼저)\n"
+        "  정의를 지운다                   ontology_delete (apply=false 로 먼저)\n"
+        "  속성 종류 · 고를 값 이름 · 승격  ontology_retype · ontology_rename_option · "
+        "ontology_promote\n"
+        "  정의를 그때로 되돌린다          ontology_restore\n"
         "  이 설치에만 있는 기능           extensions_schema → extension_call\n"
         "\n"
         "지켜야 할 셋:\n"
@@ -77,9 +83,10 @@ mcp = FastMCP(
         "2. **0건은 「없다」 가 아니다.** 목록이 0건이면 응답에 `diagnosis` 가 붙는다 "
         "— 안 채운 타입인지, 부서 밖이라 안 보이는지, 조건이 좁은지 거기 적혀 있다. "
         "그것을 읽기 전에 「없습니다」 라고 답하지 마라.\n"
-        "3. **정의를 바꿀 때는 미리 보기 먼저.** `ontology_import` 를 기본값"
-        "(apply=false)으로 불러 계획과 경고를 사람에게 보여 주고, 판단을 받은 뒤에 "
-        "apply=true 로 부른다."
+        "3. **바꾸거나 지울 때는 미리 보기 먼저.** `ontology_import` · `ontology_delete` · "
+        "`objects_delete` 같은 도구를 기본값(apply=false)으로 불러 계획과 경고를 사람에게 "
+        "보여 주고, 판단을 받은 뒤에 apply=true 로 부른다. 계획이 막는 것(`blocking` · "
+        "`errors`)은 우회하지 않는다 — 먼저 할 일을 사람에게 말한다."
     ),
 )
 
@@ -238,9 +245,9 @@ async def _patch(ctx: Context, path: str, json_body: Any) -> Any:
         return _unwrap(await client.patch(path, json=json_body, headers=_forward_headers(ctx)))
 
 
-async def _delete(ctx: Context, path: str) -> Any:
+async def _delete(ctx: Context, path: str, params: dict[str, Any] | None = None) -> Any:
     async with _client(60) as client:
-        return _unwrap(await client.delete(path, headers=_forward_headers(ctx)))
+        return _unwrap(await client.delete(path, params=params, headers=_forward_headers(ctx)))
 
 
 async def _post_form(
@@ -480,6 +487,195 @@ async def ontology_import(
     )
 
 
+#: 지울 수 있는 정의와 그 자리. 미리 보기(`GET /api/ontology/delete-plan`)도 같은 이름이다.
+_DELETE_PATHS = {
+    "group": "/api/ontology/groups/{slug}",
+    "type": "/api/ontology/types/{slug}",
+    "interface": "/api/ontology/interfaces/{slug}",
+    "relation_type": "/api/ontology/relation-types/{slug}",
+    "property": "/api/ontology/types/{slug}/properties/{key}",
+    "interface_property": "/api/ontology/interfaces/{slug}/properties/{key}",
+}
+
+
+@tool()
+async def ontology_delete(
+    ctx: Context,
+    kind: str,
+    slug: str,
+    key: str | None = None,
+    apply: bool = False,
+    accept_core: bool = False,
+    purge_deleted: bool = False,
+) -> Any:
+    """정의 하나를 **지운다.** `kind` 는 `group`(묶음) · `type` · `interface` ·
+    `relation_type` · `property`(타입의 속성) · `interface_property`(공통 속성) — 속성
+    둘은 `key` 가 있어야 한다. 시스템 관리자만 된다.
+
+    `apply=False`(기본)면 **아무것도 안 지우고** 계획만 온다: `blocking`(먼저 할 일 —
+    하나라도 있으면 지금은 못 지운다) · `removes`(함께 사라지는 것) · `keeps`(남는 것 —
+    속성을 지워도 저장값은 남는다) · `warnings`. 사람에게 보이고 판단을 받은 뒤
+    `apply=True`.
+
+    **막는 것을 우회하지 않는다.** 살아 있는 객체가 든 타입 · 관계가 맺힌 관계 종류는 못
+    지운다 — 그만 쓰려는 것이면 `ontology_import` 로 `is_active: false`(자료는 남고 화면에서만
+    빠진다). 타입에 **지운 객체만** 남았으면 계획의 `purge_deleted` 가 그 수다 — 함께
+    **영구 삭제**되고 되돌릴 수 없으니, `removes` 를 사람에게 보이고 확인받아
+    `purge_deleted=True`(ADR 0008). 외부 공개 타입의 속성은 `core_consumers` 를 보이고
+    통보를 확인받아 `accept_core=True`. 지우기 직전 정의는 스냅샷으로 남는다 — 되살리기는
+    `ontology_restore`(객체는 스냅샷에 없다)."""
+    if kind not in _DELETE_PATHS:
+        return {"error": f"kind 는 {' · '.join(_DELETE_PATHS)} 중 하나입니다: {kind}"}
+    if kind.endswith("property") and not key:
+        return {"error": f"{kind} 를 지우려면 key(속성 키)가 있어야 합니다."}
+    if not apply:
+        asked = {"kind": kind, "slug": slug, **({"key": key} if key else {})}
+        return await _get(ctx, "/api/ontology/delete-plan", params=asked)
+    path = _DELETE_PATHS[kind].format(slug=slug, key=key)
+    params: dict[str, Any] = {}
+    if accept_core and kind == "property":
+        params["accept_core"] = "true"
+    if purge_deleted and kind == "type":
+        params["purge_deleted"] = "true"
+    got = await _delete(ctx, path, params=params or None)
+    if isinstance(got, dict) and got.get("ok"):
+        return {"ok": True, "message": f"지웠습니다 — {kind} {slug}{f'.{key}' if key else ''}"}
+    return got
+
+
+def _property_owner(owner: str) -> str | None:
+    """`type` · `interface` → 경로의 자리. 모르는 것은 None — 짐작해 다른 데로 안 보낸다."""
+    return {"type": "types", "interface": "interfaces"}.get(owner)
+
+
+@tool()
+async def ontology_retype(
+    ctx: Context,
+    slug: str,
+    key: str,
+    data_type: str,
+    owner: str = "type",
+    mapping: dict[str, str | None] | None = None,
+    enum_options: list[str] | None = None,
+    min_value: float | None = None,
+    max_value: float | None = None,
+    decimals: int | None = None,
+    pattern: str | None = None,
+    unit: str | None = None,
+    unique: bool | None = None,
+    accept_core: bool = False,
+    apply: bool = False,
+) -> Any:
+    """속성의 **종류를 바꾼다** — 저장값도 같은 규칙으로 변환된다(종류 변경, ADR 0007).
+    `owner="interface"` 면 공통 속성이고 구현 타입 전부가 한 번에 바뀐다.
+
+    `apply=False`(기본)면 계획: 타입별 변환 건수 · `failures`(변환할 수 없는 값 · 건수 ·
+    견본) · `warnings` · `errors`. 변환할 수 없는 값이 하나라도 남으면 **적용되지
+    않는다** — 값마다 `mapping={값: 대체 값 | null(값 삭제)}` 을 적는다(열쇠는 계획의
+    `value` 그대로). **대체 값을 짐작하지 않는다** — 목록을 사람에게 보이고 그가 정한
+    값만 적는다. 적용하면 직전 정의가 스냅샷으로 남는다(`snapshot_id`). 공개 타입이면
+    `core_consumers` 를 보이고 `accept_core=True`.
+
+    `ontology_import` 도 종류를 바꾸지만 대체 값을 적을 자리가 없다 — 그때 이 도구다."""
+    base = _property_owner(owner)
+    if base is None:
+        return {"error": f"owner 는 type · interface 중 하나입니다: {owner}"}
+    body: dict[str, Any] = {
+        "data_type": data_type,
+        "mapping": mapping or {},
+        "accept_core": accept_core,
+        "apply": apply,
+    }
+    for name, value in (
+        ("enum_options", enum_options),
+        ("min_value", min_value),
+        ("max_value", max_value),
+        ("decimals", decimals),
+        ("pattern", pattern),
+        ("unit", unit),
+        ("unique", unique),
+    ):
+        if value is not None:
+            body[name] = value
+    return await _post(ctx, f"/api/ontology/{base}/{slug}/properties/{key}/retype", body)
+
+
+@tool()
+async def ontology_rename_option(
+    ctx: Context,
+    slug: str,
+    key: str,
+    from_value: str,
+    to_value: str,
+    owner: str = "type",
+    apply: bool = False,
+) -> Any:
+    """고를 값(enum)의 **이름을 바꾼다 — 저장된 값까지 함께.** 이름만 바꾸면 옛 이름으로 저장된
+    값이 거르기에서 빠지고, 그 사실은 아무 데도 안 뜬다. `owner="interface"` 면 구현 타입 전부.
+
+    `apply=False`(기본)면 몇 개가 함께 바뀌는지(`objects_with_value`)만 말한다."""
+    base = _property_owner(owner)
+    if base is None:
+        return {"error": f"owner 는 type · interface 중 하나입니다: {owner}"}
+    return await _post(
+        ctx,
+        f"/api/ontology/{base}/{slug}/properties/{key}/rename-option",
+        {"from": from_value, "to": to_value, "apply": apply},
+    )
+
+
+@tool()
+async def ontology_promote(
+    ctx: Context,
+    slug: str,
+    key: str,
+    target_type_slug: str | None = None,
+    new_slug: str | None = None,
+    new_label: str | None = None,
+    nav_group_slug: str | None = None,
+    apply: bool = False,
+) -> Any:
+    """고를 값(enum) 속성을 **코드표(참조 타입)로 승격한다** — 고를 값마다 객체가
+    생기고(또는 `target_type_slug` 의 있는 객체에 붙고), 저장된 글자가 그 객체를
+    가리키게 바뀐다. 새 코드표면 `new_slug` · `new_label`.
+
+    `apply=False`(기본)면 계획(값마다 새로 만들지 · 붙일지). 값 이전은 스냅샷이 못 되돌린다 —
+    사람의 판단을 받은 뒤에만 `apply=True`."""
+    return await _post(
+        ctx,
+        f"/api/ontology/types/{slug}/properties/{key}/promote",
+        {
+            "target_type_slug": target_type_slug,
+            "new_slug": new_slug,
+            "new_label": new_label,
+            "nav_group_slug": nav_group_slug,
+            "apply": apply,
+        },
+    )
+
+
+@tool()
+async def ontology_restore(
+    ctx: Context, snapshot_id: str | None = None, apply: bool = False
+) -> Any:
+    """정의를 **그때의 모습으로 되돌린다**(스냅샷). `snapshot_id` 를 비우면 되돌릴 수
+    있는 스냅샷 목록(최근 50개 — 언제 · 누가 · 왜)이 온다. 가져오기 · 종류 변경 · 승격 ·
+    삭제 · 되돌리기 직전마다 하나씩 남는다.
+
+    `apply=False`(기본)면 계획(가져오기의 미리 보기와 같은 모양). **그 뒤에 새로 만든
+    정의는 안 지운다.** 종류가 바뀐 뒤의 복원은 저장값도 다시 변환한다. 되돌리기
+    직전도 스냅샷으로 남는다. 객체는 스냅샷에 없다."""
+    if snapshot_id is None:
+        listed = await _get(ctx, "/api/ontology/snapshots")
+        return {"snapshots": listed} if isinstance(listed, list) else listed
+    return await _post(
+        ctx,
+        f"/api/ontology/snapshots/{snapshot_id}/restore",
+        None,
+        params={"dry_run": "false" if apply else "true"},
+    )
+
+
 # --------------------------------------------------------------------------- #
 # 객체
 # --------------------------------------------------------------------------- #
@@ -705,8 +901,8 @@ async def object_get(ctx: Context, type_slug: str, object_id: str) -> Any:
 async def object_history(ctx: Context, type_slug: str, object_id: str) -> Any:
     """객체의 **변경 이력** — 최근 것이 앞. 언제·누가·어느 칸을 전→후, 관계를 맺고 끊은 것.
 
-    값 기록에는 `snapshot`(그 시점의 값 전체)이 붙는다. **되돌리기는 여기서 하지 않는다**
-    — 사람이 화면에서 「이 값으로 되돌리기」 를 누른다(저장과 같은 검증을 거친다)."""
+    값 기록에는 `snapshot`(그 시점의 값 전체)이 붙는다. 되돌리기는 `object_restore(entry_id)` —
+    **어느 시점으로 갈지는 사람이 정한다**(저장과 같은 검증을 거친다)."""
     return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/history")
 
 
@@ -900,22 +1096,36 @@ async def object_update(
     properties: dict[str, Any] | None = None,
     description: str | None = None,
     aliases: list[str] | None = None,
+    key: str | None = None,
+    status: str | None = None,
+    valid_from_year: int | None = None,
+    valid_to_year: int | None = None,
 ) -> Any:
     """객체를 고친다 — **보낸 것만.**
 
     `properties` 는 보낸 키만 병합한다. 값을 지우려면 그 키에 `null` 을 넣는다 —
     통째로 덮으면 다른 속성이 함께 날아가고 **그 손실은 아무 데도 안 뜬다.**
 
+    `key` 는 식별자(타입의 식별자 정책을 따른다), `status` 는 `active` ·
+    `deprecated`(그만 쓰지만 남긴다 — 지우기 전에 먼저 생각할 자리),
+    `valid_from_year` · `valid_to_year` 는 유효 연도.
+
     `aliases` 는 **다른 이름 전부**(통째로 바꿈). 「Ansys」 를 「앤시스」 로도 부르면 여기
     적는다 — 그 뒤로 찾기·참조·파일이 그 이름으로도 같은 객체를 찾는다. 같은 타입의 다른
     객체가 쓰는 별칭이면 거절된다."""
-    body: dict[str, Any] = {}
-    if label is not None:
-        body["label"] = label
-    if description is not None:
-        body["description"] = description
-    if properties is not None:
-        body["properties"] = properties
+    body: dict[str, Any] = {
+        name: value
+        for name, value in (
+            ("label", label),
+            ("description", description),
+            ("properties", properties),
+            ("key", key),
+            ("status", status),
+            ("valid_from_year", valid_from_year),
+            ("valid_to_year", valid_to_year),
+        )
+        if value is not None
+    }
     got = await _patch(ctx, f"/api/objects/{type_slug}/{object_id}", body) if body else None
     if aliases is not None:
         async with _client(60) as client:
@@ -927,6 +1137,81 @@ async def object_update(
                 )
             )
     return got if got is not None else {"ok": True, "message": "바꿀 것이 없었습니다"}
+
+
+@tool()
+async def objects_delete(
+    ctx: Context,
+    type_slug: str,
+    ids: list[str],
+    mode: str = "block",
+    apply: bool = False,
+) -> Any:
+    """객체를 **지운다** — 하나든 여럿이든(같은 타입). 지워도 행은 남는다
+    (`deleted_at` — 몇 년 뒤에도 무엇이었는지 물을 수 있다).
+
+    `apply=False`(기본)면 계획: 줄마다 지울지 · 거절할지와 이유. `apply=True` 는 **지울 수
+    있는 줄만 지우고** 막힌 줄은 남긴다(그 이유가 `rows` 에) — 그 결과를 사람에게 전한다.
+    `mode="block"`(기본)은 **다른 것이 가리키는 객체를 거절**하고 몇 개가 걸렸는지 말한다.
+    `detach` 는 참조를 비우고 관계를 끊고 지운다 — 사람이 그 목록(`object_references`)을
+    보고 고른 뒤에만.
+    같은 것이 둘이면 지우지 말고 `object_merge`. 그만 쓰는 것이면 지우기보다
+    `object_update(status="deprecated")`. 권한은 화면과 같다(부서 관리자는 자기 부서 것)."""
+    if mode not in ("block", "detach"):
+        return {"error": f"mode 는 block · detach 중 하나입니다: {mode}"}
+    return await _post(
+        ctx,
+        f"/api/objects/{type_slug}/bulk-delete",
+        {"ids": ids, "mode": mode, "apply": apply},
+    )
+
+
+@tool()
+async def object_restore(ctx: Context, type_slug: str, object_id: str, entry_id: str) -> Any:
+    """객체를 **이력의 그 시점 값으로 되돌린다**(`entry_id` 는 `object_history` 의 값 기록).
+
+    저장과 같은 검증을 거친다 — 그때 가리키던 것이 지워졌거나 규칙(종류)이 바뀌어 맞출 수
+    없으면 거절하고 이유를 말한다. 되돌린 것도 이력에 한 줄로 남는다. **어느 시점으로
+    갈지는 사람이 정한다** — 그 기록의 `snapshot` 을 보이고 확인을 받는다."""
+    return await _post(
+        ctx, f"/api/objects/{type_slug}/{object_id}/restore", {"entry_id": entry_id}
+    )
+
+
+@tool()
+async def object_merge(
+    ctx: Context, type_slug: str, object_id: str, into: str, apply: bool = False
+) -> Any:
+    """같은 것이 둘일 때 **합친다** — `object_id`(지는 쪽)를 `into`(이기는 쪽, 같은 타입)에.
+    가리키던 참조 · 관계가 이긴 쪽으로 옮겨 가고, 지는 쪽은 지워져 옛 링크가 새 것으로 간다.
+
+    `apply=False`(기본)면 **아무것도 안 바꾸고** 두 객체와 지는 쪽을 가리키는 것
+    (`references`)을 돌려준다 — 사람에게 보이고 어느 쪽이 남을지 확인받는다. 되돌리기가
+    없다."""
+    if not apply:
+        loser = await _get(ctx, f"/api/objects/{type_slug}/{object_id}")
+        if not isinstance(loser, dict) or "error" in loser:
+            return loser
+        winner = await _get(ctx, f"/api/objects/{type_slug}/{into}")
+        if not isinstance(winner, dict) or "error" in winner:
+            return winner
+        return {
+            "applied": False,
+            "from": _brief(loser),
+            "into": _brief(winner),
+            "references": await _get(ctx, f"/api/objects/{type_slug}/{object_id}/references"),
+            "next": "사람에게 보이고 어느 쪽이 남을지 확인받은 뒤 apply=True 로 부른다.",
+        }
+    return await _post(ctx, f"/api/objects/{type_slug}/{object_id}/merge", {"into": into})
+
+
+def _brief(detail: dict[str, Any]) -> dict[str, Any]:
+    """합치기 미리 보기에 실을 객체 한 줄 — 무엇을 견주는지 알 만큼만(상세의 `object`)."""
+    row = detail.get("object") or {}
+    return {
+        name: row.get(name)
+        for name in ("id", "key", "label", "owner_workspace_slug", "status", "properties")
+    }
 
 
 @tool()

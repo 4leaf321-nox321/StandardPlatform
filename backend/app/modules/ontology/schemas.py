@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 from pydantic.json_schema import SkipJsonSchema
@@ -323,6 +323,48 @@ class InterfaceUsageOut(BaseModel):
     """이 인터페이스를 참조 대상으로 적은 속성(`타입.키`)."""
     relation_types: list[str]
     """관계 끝에 이 인터페이스를 적은 관계 종류."""
+
+
+DeleteKind = Literal[
+    "group", "type", "interface", "relation_type", "property", "interface_property"
+]
+"""지울 수 있는 정의의 종류 — `property` 는 타입의 속성, `interface_property` 는 공통 속성."""
+
+
+class DeleteBlockOut(BaseModel):
+    """지금 지우면 거절되는 이유 하나 — **삭제 경로가 내는 오류 그대로**(코드 · 문구)."""
+
+    code: str
+    message: str
+
+
+class DeletePlanOut(BaseModel):
+    """**지우기 전에 무엇이 막고, 무엇이 함께 사라지고, 무엇이 남는지.**
+
+    삭제 경로와 같은 함수가 센다 — 미리 보기가 따로 세면 「미리 보기는 된다는데 지우면 거절」
+    이 되고, 그때 어느 쪽이 맞는지 알 방법이 없다.
+    """
+
+    kind: DeleteKind
+    slug: str
+    key: str | None = None
+    label: str
+    allowed: bool
+    """막는 것이 없다. 외부 공개 타입의 속성이면 `core_consumers` 를 보이고 확인을 받아
+    `accept_core` 와 함께 지운다."""
+    blocking: list[DeleteBlockOut]
+    """먼저 할 일 — 첫째가 지금 지우면 받는 거절이다."""
+    removes: list[str]
+    """함께 사라지는 것."""
+    keeps: list[str]
+    """지워도 남는 것(속성의 저장값 · 구현 타입의 속성 …)."""
+    warnings: list[str]
+    """지울 수는 있지만 사람이 알아야 할 것."""
+    core_consumers: list[str] = Field(default_factory=list)
+    """외부 공개 타입의 속성이면 그 창구를 읽는 자격 — 비어 있지 않으면 확인이 필요하다."""
+    purge_deleted: int = 0
+    """타입이 지운 객체만 남겼으면 그 수 — 0 이 아니면 함께 **영구 삭제**되고 되돌릴 수 없다.
+    삭제 요청에 `purge_deleted=true` 를 함께 보내야 한다(ADR 0008)."""
 
 
 class ImplementPlanRequest(BaseModel):
