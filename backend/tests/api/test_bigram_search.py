@@ -18,7 +18,7 @@ from tests.api.test_ontology import _make_object, _make_type
 
 
 def test_두_글자_조각을_소문자로_만든다(db: Session) -> None:
-    got = db.execute(text("select sp_bigrams('AB 소음')")).scalar()
+    got = db.execute(text("select sp_bigrams('AB 소음')")).scalar_one()
     assert sorted(got) == sorted(["ab", "b ", " 소", "소음"])
     assert db.execute(text("select sp_bigrams('가')")).scalar() == []
     assert db.execute(text("select sp_bigrams(NULL)")).scalar() is None
