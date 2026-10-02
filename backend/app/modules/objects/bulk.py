@@ -202,6 +202,22 @@ class PendingRef(Exception):
         self.type_slug = type_slug
 
 
+@dataclass(frozen=True)
+class RefMatch:
+    """글자 하나를 참조 대상에서 찾은 결과 — 하나로 풀림 · 여럿에 맞음 · 못 찾음."""
+
+    kind: str
+    """`one` · `many` · `none`."""
+    id: str | None = None
+    how: str = ""
+    """어디로 맞았나 — `key` · `alias` · `label` · `id`(여럿이면 `key` 는 구현 타입 여럿의
+    식별자, `label` 은 같은 이름 여럿)."""
+    count: int = 0
+    """이름이 여럿에 맞을 때 몇 개에."""
+    shadowed: bool = False
+    """별칭으로 풀렸는데 그 글자가 **다른 객체의 이름**이기도 하다."""
+
+
 @dataclass
 class _RefIndex:
     """한 참조 대상(타입, 또는 인터페이스의 구현 타입 전부)의 식별자 · 별칭 · 이름 → id."""
@@ -215,7 +231,7 @@ class _RefIndex:
     것인지 정해지지 않는다. 짐작하지 않고 그 줄을 거절한다."""
 
 
-class _Refs:
+class Refs:
     """참조 풀이 — 상대 타입의 식별자·이름을 id 로. 대상마다 한 번만 읽는다.
 
     대상이 인터페이스면 그것을 구현한 타입 전부에서 찾는다(ADR 0006). 저장할 때의 대상 검사와
@@ -328,23 +344,41 @@ class _Refs:
             out.extend(str(one) for one in items if one and str(one) not in ids)
         return out
 
-    def resolve(self, definition: PropertyDef, raw: str) -> str:
-        """식별자 → 별칭 → 이름 → uuid 순으로 맞춘다. 이름이 여럿에 맞으면 거절."""
-        target = definition.ref_type_slug or ""
+    def classify(self, target: str, raw: str) -> RefMatch:
+        """`raw` 가 `target` 의 무엇으로 풀리나 — 식별자 → 별칭 → 이름 → uuid 차례.
+
+        **판정은 여기 한 벌이다.** 넣을 때(`resolve`)도, 표에서 타입을 만들 때 열이 어느 타입을
+        가리키나 셀 때(`ontology.linking`)도 이것을 쓴다 — 따로 세면 후보는 97% 라는데 넣으면
+        거절된다(ADR 0009)."""
         index = self._load(target)
         text = raw.strip()
         if text in index.clashing:
-            raise InvalidValue(
-                code("OBJECTS", 41),
-                f"{definition.label}: 식별자 「{text}」 이 {target} 를 구현한 타입 여럿에 "
-                "있습니다 — 식별자는 타입마다 따로라 어느 것인지 정해지지 않습니다. id 로 "
-                "적으세요.",
-            )
+            return RefMatch("many", how="key")
         if text in index.by_key:
-            return str(index.by_key[text])
-        if compare_key(text) in index.by_alias:
-            found = index.by_alias[compare_key(text)]
-            if [one for one in index.by_label.get(text, []) if one != found]:
+            return RefMatch("one", str(index.by_key[text]), how="key")
+        norm = compare_key(text)
+        if norm in index.by_alias:
+            found = index.by_alias[norm]
+            shadowed = any(one != found for one in index.by_label.get(text, []))
+            return RefMatch("one", str(found), how="alias", shadowed=shadowed)
+        hits = index.by_label.get(text, [])
+        if len(hits) == 1:
+            return RefMatch("one", str(hits[0]), how="label")
+        if len(hits) > 1:
+            return RefMatch("many", how="label", count=len(hits))
+        # uuid 로 적었어도 **있는 것이어야** 한다 — 모양만 보고 받으면 없는 것을 가리키는
+        # 참조가 저장되고, 화면에는 빈 칸으로 뜬다.
+        if text in index.ids:
+            return RefMatch("one", text, how="id")
+        return RefMatch("none")
+
+    def resolve(self, definition: PropertyDef, raw: str) -> str:
+        """식별자 → 별칭 → 이름 → uuid 순으로 맞춘다. 이름이 여럿에 맞으면 거절."""
+        target = definition.ref_type_slug or ""
+        text = raw.strip()
+        match = self.classify(target, text)
+        if match.kind == "one" and match.id is not None:
+            if match.shadowed:
                 # **조용히 별칭 쪽에 붙는다** — 이름 풀이는 식별자 → 별칭 → 이름 차례이기
                 # 때문이다. 어느 쪽인지 사람이 정해야 할 자리라 줄에 적는다(품질 보고서의
                 # `alias_clash` 가 같은 사실을 목록으로 본다).
@@ -352,20 +386,20 @@ class _Refs:
                     f"{definition.label}: 「{text}」 은 다른 객체의 **이름**이기도 합니다 — "
                     "별칭 쪽에 붙였습니다"
                 )
-            return str(found)
-        hits = index.by_label.get(text, [])
-        if len(hits) == 1:
-            return str(hits[0])
-        if len(hits) > 1:
+            return match.id
+        if match.kind == "many" and match.how == "key":
             raise InvalidValue(
                 code("OBJECTS", 41),
-                f"{definition.label}: 「{text}」 이름이 {len(hits)}개에 맞습니다. "
+                f"{definition.label}: 식별자 「{text}」 이 {target} 를 구현한 타입 여럿에 "
+                "있습니다 — 식별자는 타입마다 따로라 어느 것인지 정해지지 않습니다. id 로 "
+                "적으세요.",
+            )
+        if match.kind == "many":
+            raise InvalidValue(
+                code("OBJECTS", 41),
+                f"{definition.label}: 「{text}」 이름이 {match.count}개에 맞습니다. "
                 "식별자로 적으세요.",
             )
-        # uuid 로 적었어도 **있는 것이어야** 한다 — 모양만 보고 받으면 없는 것을 가리키는
-        # 참조가 저장되고, 화면에는 빈 칸으로 뜬다.
-        if text in index.ids:
-            return text
         if any(text in self.pending.get(one, set()) for one in self._members(target)):
             raise PendingRef(text, target)
         if self.blank_missing:
@@ -376,7 +410,7 @@ class _Refs:
         )
 
 
-def _one_from_text(definition: PropertyDef, raw: Any, refs: _Refs) -> Any:
+def _one_from_text(definition: PropertyDef, raw: Any, refs: Refs) -> Any:
     """칸 하나를 그 속성의 모양으로. JSON 으로 온 값(이미 숫자·불)은 그대로 둔다."""
     if not isinstance(raw, str):
         return raw
@@ -403,7 +437,7 @@ def _one_from_text(definition: PropertyDef, raw: Any, refs: _Refs) -> Any:
     return text
 
 
-def cell_to_value(definition: PropertyDef, raw: Any, refs: _Refs) -> Any:
+def cell_to_value(definition: PropertyDef, raw: Any, refs: Refs) -> Any:
     """칸 → 저장할 값. 빈 칸은 「안 보냄」(생략), `\\null` 은 「비움」(None)."""
     if isinstance(raw, str):
         text = raw.strip()
@@ -552,7 +586,7 @@ def _patch_of(
     row: dict[str, Any],
     mapping: dict[str, str],
     by_key: dict[str, PropertyDef],
-    refs: _Refs,
+    refs: Refs,
 ) -> dict[str, Any]:
     """행 → 속성 패치. **없는 열과 빈 칸은 「안 보냄」, JSON 의 null 과 `\\null` 은 「비움」.**
 
@@ -753,7 +787,7 @@ def _forget(index: _Index, values: list[str]) -> None:
         index.alias_owner.pop(compare_key(value), None)
 
 
-def _require_refs(refs: _Refs, defs: list[PropertyDef], values: dict[str, Any]) -> None:
+def _require_refs(refs: Refs, defs: list[PropertyDef], values: dict[str, Any]) -> None:
     """가리키는 것이 있나 — 캐시로 본다. 없는 것을 가리키면 화면에 빈 칸으로 나오고,
     그것이 「값 없음」 인지 「사라짐」 인지 구별할 수 없다."""
     missing = refs.missing(defs, values)
@@ -928,7 +962,7 @@ def plan_objects(
         )
         return plan
     by_key = {d.key: d for d in defs}
-    refs = _Refs(db, user, pending, blank_missing)
+    refs = Refs(db, user, pending, blank_missing)
 
     # 이 파일 안에서 같은 식별자가 둘이면 어느 쪽이 맞는지 알 수 없다.
     seen_keys: dict[str, int] = {}
@@ -993,7 +1027,7 @@ def _plan_row(
     defs: list[PropertyDef],
     by_key: dict[str, PropertyDef],
     mapping: dict[str, str],
-    refs: _Refs,
+    refs: Refs,
     row: dict[str, Any],
     index: int,
     *,
@@ -1344,7 +1378,7 @@ def apply_objects(
     defs = [d for d in properties_of(db, object_type.id) if d.data_type != "file"]
     by_key = {d.key: d for d in defs}
     mapping, _ = _column_map(defs, {key for row in rows for key in row})
-    refs = _Refs(db, user, blank_missing=blank_missing)
+    refs = Refs(db, user, blank_missing=blank_missing)
     # 계획이 미리 읽은 것을 그대로 쓴다 — 방금 세운 계획이라 같은 트랜잭션의 같은 사실이다.
     index_data = plan.index if isinstance(plan.index, _Index) else _Index()
     # 새로 만든 객체의 별칭은 **모았다가 한 번에** 넣는다(아래) — 둘 사이에 ORM 관계가
@@ -1653,7 +1687,7 @@ def _relation_properties(
     db: Session,
     kind: RelationType,
     row: dict[str, Any],
-    refs: _Refs,
+    refs: Refs,
     *,
     fresh: bool = True,
     defs: list[PropertyDef] | None = None,
@@ -2358,7 +2392,7 @@ def _plan_relation(
                 pending_slug or dst_end.type_slug,
                 memo.end_types,
             )
-            _relation_properties(db, kind, row, _Refs(db, user), defs=memo.defs.get(kind.slug))
+            _relation_properties(db, kind, row, Refs(db, user), defs=memo.defs.get(kind.slug))
             src_token = _end_token(src_text, src_end)
             dst_token = _end_token(dst_text, dst_end)
             _require_file_twice(kind, memo, src_token, dst_token)
@@ -2396,9 +2430,7 @@ def _plan_relation(
     # **파일에 있는 선**이다 — 「파일대로 맞춤」 이 끊지 않는다(이미 이어진 것도 여기 든다).
     seen.add((src.id, kind.slug, dst.id))
     label = f"{src.label} -{kind.label}-> {dst.label}"
-    wanted = _relation_properties(
-        db, kind, row, _Refs(db, user), defs=memo.defs.get(kind.slug)
-    )
+    wanted = _relation_properties(db, kind, row, Refs(db, user), defs=memo.defs.get(kind.slug))
     if dst.is_system:
         # 한쪽 끝이 원 표면 선은 `object_links` 에 있다(속성은 안 받는다).
         found = links.existing(db, src.id, dst.id, kind.slug)
@@ -2466,7 +2498,7 @@ def apply_relations(
     # **계획이 미리 읽은 것을 그대로 쓴다** — 끝점 · 속성 정의 · 이미 이어진 선. 예전에는
     # 적용이 그것을 처음부터 다시 물었다(줄마다 넷). 방금 세운 계획이라 같은 사실이다.
     memo = plan.index if isinstance(plan.index, _RelIndex) else _RelIndex()
-    refs = _Refs(db, user)
+    refs = Refs(db, user)
     for row_plan in plan.rows:
         _tick(on_progress, "적용", row_plan.row, len(rows))
         if row_plan.action == "unlink" and row_plan.object_id is not None:

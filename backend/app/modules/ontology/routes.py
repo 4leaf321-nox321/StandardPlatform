@@ -30,6 +30,7 @@ from app.modules.ontology import (
     importer,
     inference,
     interfaces,
+    linking,
     managed,
     reset,
     retype,
@@ -2599,12 +2600,16 @@ def _plan_out(
 @router.post("/infer", response_model=InferOut)
 def infer_from_file(
     upload: UploadFile = File(alias="file"),
-    _: User = Depends(require_system_admin),
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
 ) -> InferOut:
     """CSV·JSON **데이터** 파일에서 타입 정의를 추론한다 — 열마다 역할과 종류를 제안.
 
     아무것도 안 바꾼다. 사람이 제안을 고쳐 `infer/build` → `import` → `objects/import-rows`
-    로 이어 간다. 추론은 보수적이다 — 애매하면 글자로 둔다."""
+    로 이어 간다. 추론은 보수적이다 — 애매하면 글자로 둔다.
+
+    열마다 **참조 후보**도 단다 — 값이 어느 있는 타입의 객체로 풀리나(`ref_candidates`).
+    일괄 입력과 같은 이름 풀이로 세고, 확실할 때만 종류를 참조로 제안한다(ADR 0009)."""
     raw = upload.file.read()
     try:
         rows = bulk.parse_file(upload.filename or "rows.csv", raw)
@@ -2618,9 +2623,10 @@ def infer_from_file(
             f"한 번에 {bulk.MAX_ROWS}행까지입니다 (보낸 행 {len(rows)}). 나눠 업로드하세요.",
         )
     inferred = inference.infer(rows)
+    linking.attach(db, user, inferred, rows)
     return InferOut(
         rows=inferred.rows,
-        columns=[InferColumnOut(**one.__dict__) for one in inferred.columns],
+        columns=[InferColumnOut(**dataclasses.asdict(one)) for one in inferred.columns],
         raw_rows=rows,
     )
 
@@ -2629,11 +2635,15 @@ def infer_from_file(
 def build_from_inferred(
     payload: InferBuildRequest,
     _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
 ) -> InferBuildOut:
     """사람이 고친 열 정의를 **정의 스키마**와 **가져올 행**으로 — 둘 다 기존 길로 넣는다."""
     slug = require_slug(payload.slug, what="타입 slug")
     require_choice(payload.key_policy, KEY_POLICIES, what="식별자 정책")
-    columns = [inference.ColumnGuess(**one.model_dump()) for one in payload.columns]
+    columns = [
+        inference.ColumnGuess(**one.model_dump(exclude={"ref_candidates"}))
+        for one in payload.columns
+    ]
     taken: set[str] = set()
     for column in columns:
         if column.role == "property":
@@ -2642,6 +2652,13 @@ def build_from_inferred(
                 raise Conflict(code("ONTOLOGY", 72), f"속성 키가 겹칩니다: {column.key}")
             taken.add(column.key)
             require_choice(column.data_type, DATA_TYPES, what="속성 종류")
+            if column.data_type == "object_ref":
+                if not column.ref_type_slug:
+                    raise Conflict(
+                        code("ONTOLOGY", 72),
+                        f"참조 열 「{column.label}」 이 가리킬 타입을 고르세요.",
+                    )
+                _check_ref_target(db, column.ref_type_slug)
     if sum(one.role == "label" for one in columns) != 1:
         raise Conflict(code("ONTOLOGY", 72), "이름(label) 역할의 열이 정확히 하나여야 합니다.")
     inferred = inference.Inferred(rows=len(payload.raw_rows), columns=columns)

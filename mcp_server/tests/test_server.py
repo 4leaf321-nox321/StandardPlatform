@@ -32,6 +32,8 @@ TOOLS = {
     "search",
     "ontology_schema",
     "ontology_import",
+    "table_infer",
+    "table_build",
     "ontology_delete",
     "ontology_retype",
     "ontology_rename_option",

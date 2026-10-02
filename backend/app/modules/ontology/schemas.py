@@ -625,6 +625,28 @@ class RetypeOut(BaseModel):
 # --- 표에서 타입 추론 ---------------------------------------------------------
 
 
+class RefCandidateOut(BaseModel):
+    """열의 값이 이 타입(또는 인터페이스)의 객체로 얼마나 풀리나 — 값 단위, 일괄 입력의 이름
+    풀이 그대로(ADR 0009)."""
+
+    target_slug: str
+    target_label: str
+    target_kind: str
+    """type · interface."""
+    checked: int
+    one: int
+    """하나로 풀린 값."""
+    many: int
+    """여럿에 맞은 값 — 넣으면 거절된다(식별자로 적어야 한다)."""
+    none: int
+    """못 찾은 값."""
+    one_values: int
+    many_samples: list[str]
+    none_samples: list[str]
+    short: bool
+    """맞은 값이 전부 짧은 숫자 — 우연일 수 있다."""
+
+
 class InferColumnOut(BaseModel):
     header: str
     role: str
@@ -639,6 +661,12 @@ class InferColumnOut(BaseModel):
     distinct: int
     samples: list[str]
     note: str
+    ref_type_slug: str | None = None
+    """종류가 참조(`object_ref`)면 가리키는 타입 · 인터페이스."""
+    ref_candidates: list[RefCandidateOut] = []
+    """가리킬 법한 있는 타입 — 하나로 풀리는 값이 많은 것부터, 셋까지. `build` 는 안 읽는다."""
+    ref_note: str = ""
+    """참조로 제안하지 않은 까닭 · 안 본 것."""
 
 
 class InferOut(BaseModel):

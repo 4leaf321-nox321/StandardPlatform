@@ -1054,3 +1054,38 @@ def test_권한은_화면과_같다_부서_관리자는_자기_부서_객체만_
     ]
     with pytest.raises(ToolError, match="AUTH-0103"):
         hand.call(server.ontology_delete, "property", kind, key="w")
+
+
+def test_표에서_기록_타입을_만들고_축에_잇는다(bot: Bot) -> None:
+    """`table_infer` 가 열이 가리키는 축을 찾아 제안하고, 그 열 그대로 `table_build` →
+    `ontology_import` → `objects_import` 로 이어진다 — 기록마다 따로 개발하지 않는다
+    (ADR 0009)."""
+    model, tag = _uniq("model"), _uniq("M")
+    bot.call(
+        server.ontology_import,
+        {"types": [{"slug": model, "label": "개발모델", "key_policy": "required"}]},
+        apply=True,
+    )
+    seeded = bot.call(
+        server.objects_import,
+        model,
+        [{"key": f"{tag}-{i}", "label": f"모델 {tag} {i}"} for i in range(1, 6)],
+    )
+    bot.call(server.job_apply, seeded["job_id"])
+
+    rows = [{"이름": f"건 {i}", "모델": f"{tag}-{i % 5 + 1}"} for i in range(10)]
+    got = bot.call(server.table_infer, rows)
+    assert "raw_rows" not in got, "보낸 행을 되돌려 받지 않는다"
+    column = next(one for one in got["columns"] if one["header"] == "모델")
+    assert column["data_type"] == "object_ref" and column["ref_type_slug"] == model
+    assert column["ref_candidates"][0]["one"] == 10
+
+    case = _uniq("case")
+    built = bot.call(server.table_build, case, "시장 서비스", got["columns"], rows)
+    bot.call(server.ontology_import, built["schema"], apply=True)
+    planned = bot.call(server.objects_import, case, built["import_rows"])
+    assert bot.call(server.job_apply, planned["job_id"])["result"]["applied"] is True
+    items = bot.call(server.objects_list, case)["items"]
+    pointed = {str(one["properties"][column["key"]]) for one in items}
+    assert len(items) == 10 and len(pointed) == 5
+    assert all(uuid.UUID(one) for one in pointed), "글자가 아니라 모델의 id 로 들어갔다"

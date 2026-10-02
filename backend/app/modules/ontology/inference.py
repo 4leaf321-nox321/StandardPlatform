@@ -59,6 +59,33 @@ _NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
 
 
 @dataclass
+class RefCandidate:
+    """열의 값이 이 타입(또는 인터페이스)의 객체로 얼마나 풀리나 — `ontology.linking` 이 센다.
+
+    수는 **값 단위**다(여러 값 칸이면 `;` 로 나눈 항목 하나하나). 판정은 일괄 입력의 이름
+    풀이 그대로라, 여기서 「하나로」 인 값은 넣을 때도 풀린다(ADR 0009)."""
+
+    target_slug: str
+    target_label: str
+    target_kind: str
+    """`type` · `interface`(구현 타입 전부에서 찾는다)."""
+    checked: int
+    """본 값의 수 — 많이 나온 값부터 `linking.DISTINCT_CAP` 종까지."""
+    one: int
+    """하나로 풀린 값."""
+    many: int
+    """여럿에 맞은 값 — 같은 이름이 여럿이거나, 구현 타입 여럿에 같은 식별자."""
+    none: int
+    """못 찾은 값."""
+    one_values: int
+    """하나로 풀린 **서로 다른** 값의 수."""
+    many_samples: list[str] = field(default_factory=list)
+    none_samples: list[str] = field(default_factory=list)
+    short: bool = False
+    """맞은 값이 전부 짧은 숫자다 — 우연히 맞았을 수 있다(그래서 제안하지 않는다)."""
+
+
+@dataclass
 class ColumnGuess:
     header: str
     role: str
@@ -73,6 +100,12 @@ class ColumnGuess:
     samples: list[str] = field(default_factory=list)
     note: str = ""
     """왜 이렇게 맞혔나 — 사람이 계획에서 읽고 고칠 근거."""
+    ref_type_slug: str | None = None
+    """종류가 참조면 가리키는 타입 · 인터페이스."""
+    ref_candidates: list[RefCandidate] = field(default_factory=list)
+    """이 열이 가리킬 법한 있는 타입들 — 하나로 풀리는 값이 많은 것부터."""
+    ref_note: str = ""
+    """후보를 왜 제안하지 않았나 · 무엇을 안 보았나."""
 
 
 @dataclass
@@ -258,6 +291,8 @@ def schema_of(
             one["enum_options"] = column.enum_options
         if column.decimals:
             one["decimals"] = column.decimals
+        if column.data_type == "object_ref":
+            one["ref_type_slug"] = column.ref_type_slug
         properties.append(one)
     body: dict[str, Any] = {
         "slug": slug,

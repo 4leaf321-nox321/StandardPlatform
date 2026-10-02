@@ -487,6 +487,68 @@ async def ontology_import(
     )
 
 
+@tool()
+async def table_infer(ctx: Context, rows: list[dict[str, Any]]) -> Any:
+    """**표(행 목록)에서 기록 타입의 정의를 제안받는다** — 열마다 역할 · 종류, 그리고 **어느
+    있는 타입을 가리키나**(참조 후보). 아무것도 안 바꾼다. 시스템 관리자만 된다.
+
+    `rows` 는 `{열 이름: 값}` 목록(한 번에 5,000행까지 — 견본으로 충분하다). 열마다:
+    `role`(label · key · description · aliases · property · ignore) · `key` · `data_type` ·
+    `note`(왜 그렇게 맞혔나), 그리고 `ref_candidates` — 값이 그 타입의 객체로 **하나로 풀림
+    (`one`) · 여럿에 맞음(`many`) · 못 찾음(`none`)** 의 수와 견본. 넣을 때와 같은 이름 풀이
+    (식별자 → 별칭 → 이름)로 셌다 — 여기서 하나로 풀린 값은 넣을 때도 풀린다.
+
+    확실할 때만(하나로 90% 이상 · 3종 이상 · 짧은 숫자 아님) `data_type` 이 `object_ref` 로
+    바뀌어 온다(`ref_type_slug`). 아니면 글자 그대로고 `ref_note` 가 왜인지 말한다. **후보를
+    스스로 확정하지 않는다** — 열 · 후보 · 못 찾은 견본을 사람에게 보이고, 그가 고친 열로
+    `table_build` 를 부른다. 여럿에 맞는 값은 넣을 때 거절된다(식별자로 적어야 한다).
+
+    다음: `table_build` → `ontology_import`(계획 → 적용) → `objects_import`."""
+    body = json.dumps({"rows": rows}, ensure_ascii=False).encode("utf-8")
+    got = await _post_form(
+        ctx, "/api/ontology/infer", {}, ("rows.json", body, "application/json")
+    )
+    if isinstance(got, dict):
+        # 보낸 행을 그대로 돌려받을 까닭이 없다 — `table_build` 에 같은 행을 다시 넘긴다.
+        got.pop("raw_rows", None)
+    return got
+
+
+@tool()
+async def table_build(
+    ctx: Context,
+    slug: str,
+    label: str,
+    columns: list[dict[str, Any]],
+    rows: list[dict[str, Any]],
+    key_policy: str = "optional",
+    nav_group_slug: str | None = None,
+) -> Any:
+    """`table_infer` 의 열(사람이 고친 것)과 같은 행 → **정의 스키마**와 **넣을 행**.
+    아무것도 안 바꾼다.
+
+    `columns` 는 `table_infer` 가 준 열 그대로에서 고칠 것만 고친다 — `role` · `key` ·
+    `label` · `data_type` · `multi` · `enum_options`, 참조로 둘 열은
+    `data_type="object_ref"` 와 `ref_type_slug`(있는 타입 · 인터페이스). 이름(label) 역할
+    열이 정확히 하나여야 한다.
+
+    돌아온 `schema` 를 `ontology_import` 로(계획을 보이고 `apply=True`), `import_rows` 를
+    `objects_import(type_slug=slug, rows=import_rows, …)` 로 넣는다. 참조 칸의 값은 글자
+    그대로 가고 넣을 때 풀린다."""
+    return await _post(
+        ctx,
+        "/api/ontology/infer/build",
+        {
+            "slug": slug,
+            "label": label,
+            "key_policy": key_policy,
+            "nav_group_slug": nav_group_slug,
+            "columns": columns,
+            "raw_rows": rows,
+        },
+    )
+
+
 #: 지울 수 있는 정의와 그 자리. 미리 보기(`GET /api/ontology/delete-plan`)도 같은 이름이다.
 _DELETE_PATHS = {
     "group": "/api/ontology/groups/{slug}",

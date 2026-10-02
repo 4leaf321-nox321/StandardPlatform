@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-03a
+GUIDE_VERSION: 2026-10-03b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -17,6 +17,7 @@ GUIDE_VERSION: 2026-10-03a
 | **어느 타입에 있는지 모른다** | `search(q)` | `types[]` 가 타입별 건수. 타입을 알면 `objects_list` · `object_resolve` |
 | 원천(엑셀 · PPT · PDF · Word)을 정제해 온톨로지로 만들기 전에 | `get_guide(topic="modeling")` | **무엇을 타입 · 속성 · 관계로 만드나** — 판단이 서지 않으면 만들지 않는다 |
 | 타입·속성·관계 종류를 만들거나 고치기 | `ontology_import(apply=false)` → 사람 확인 → `apply=true` | 미리 보기를 건너뛰지 않는다 |
+| **표(엑셀 · CSV)로 기록 타입을 만들고 축에 잇기** | `table_infer(rows)` → 사람 확인 → `table_build` → `ontology_import` → `objects_import` | **시스템 관리자만.** 참조 후보를 스스로 확정하지 않는다 — `one` · `many` · `none` 과 못 찾은 견본을 보인다 |
 | 정의 지우기(묶음 · 타입 · 인터페이스 · 관계 종류 · 속성) | `ontology_delete(apply=false)` → 사람 확인 → `apply=true` | **시스템 관리자만.** `blocking` 은 우회하지 않는다 — 먼저 할 일을 사람에게 |
 | 속성 종류 변경 · 고를 값 이름 변경 · 코드표 승격 | `ontology_retype` · `ontology_rename_option` · `ontology_promote` — 모두 `apply=false` 먼저 | 저장값도 함께 바뀐다. 대체 값은 **사람이 정한 것만** |
 | 정의를 그때로 되돌리기 | `ontology_restore()` → 스냅샷 고르기 → `ontology_restore(id)` → 사람 확인 → `apply=true` | 그 뒤에 새로 만든 정의는 안 지운다 |
@@ -163,6 +164,29 @@ GUIDE_VERSION: 2026-10-03a
   함께. 정의만 고치면(`ontology_import`) 옛 이름의 값이 거르기에서 조용히 빠진다.
 - `ontology_promote(slug, key, new_slug=, new_label=)` — 고를 값을 코드표(참조 타입)로. 값 이전은
   스냅샷이 못 되돌린다.
+
+### 표에서 기록 타입 — `table_infer(rows)` → `table_build(...)`
+
+시장 서비스 건 · 시험 결과처럼 **축(개발모델 · 과제 · 부서)을 가리키는 기록**을 표에서 만든다.
+기록마다 정의를 손으로 짜지 않는다(ADR 0009).
+
+1. `table_infer(rows)` — 견본 행(5,000행까지)을 보낸다. 열마다 `role` · `data_type` · `note`, 그리고
+   `ref_candidates`: 값이 그 타입의 객체로 **하나로 풀림(`one`) · 여럿에 맞음(`many`) · 못 찾음
+   (`none`)** 의 수와 견본. 넣을 때와 **같은 이름 풀이**(식별자 → 별칭 → 이름)로 셌다.
+2. 확실한 열만(하나로 90% 이상 · 3종 이상 · 짧은 숫자 아님) `data_type="object_ref"` ·
+   `ref_type_slug` 로 온다. 아니면 글자 그대로이고 `ref_note` 가 까닭을 말한다(짧은 숫자는 우연히
+   맞는다 — 판 번호 `01` · `02` 가 공급사 식별자와 65% 맞은 일이 있다).
+3. **열 표를 사람에게 보인다** — 어느 열을 무엇에 이을지, 못 찾은 견본, 여럿에 맞는 값. 사람이
+   정한 대로 `columns` 를 고친다(참조로 둘 열은 `data_type="object_ref"` · `ref_type_slug`).
+   - **여럿에 맞는 값은 넣을 때 거절된다**(같은 이름이 여럿). 원천에서 식별자로 적게 하거나, 그
+     수준의 축을 먼저 만든다. 축의 **다른 칸**(예: `base_code`)으로 잇지 않는다 — 넣을 때 다시
+     풀 수 없다.
+   - 못 찾은 값이 있으면 그 행은 넣을 때 오류다 — 축에 먼저 만들지, 그 칸을 비울지 사람이 정한다.
+4. `table_build(slug, label, columns, rows)` → `schema` · `import_rows`. `ontology_import(schema)` 로
+   계획을 보이고 `apply=True`, 그다음 `objects_import(slug, import_rows)` → `job_apply`.
+
+후보에서 빠지는 것: 20만 건이 넘는 타입(기록)은 보지 않는다(`ref_note` 가 말한다). 원 표(부서 ·
+계정)는 늘 본다.
 
 ### 지우기 — `ontology_delete(kind, slug, key=)`
 

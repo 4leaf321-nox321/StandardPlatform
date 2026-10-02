@@ -5349,7 +5349,7 @@
           "ontology"
         ],
         "summary": "Infer From File",
-        "description": "CSV·JSON **데이터** 파일에서 타입 정의를 추론한다 — 열마다 역할과 종류를 제안.\n\n아무것도 안 바꾼다. 사람이 제안을 고쳐 `infer/build` → `import` → `objects/import-rows`\n로 이어 간다. 추론은 보수적이다 — 애매하면 글자로 둔다.",
+        "description": "CSV·JSON **데이터** 파일에서 타입 정의를 추론한다 — 열마다 역할과 종류를 제안.\n\n아무것도 안 바꾼다. 사람이 제안을 고쳐 `infer/build` → `import` → `objects/import-rows`\n로 이어 간다. 추론은 보수적이다 — 애매하면 글자로 둔다.\n\n열마다 **참조 후보**도 단다 — 값이 어느 있는 타입의 객체로 풀리나(`ref_candidates`).\n일괄 입력과 같은 이름 풀이로 세고, 확실할 때만 종류를 참조로 제안한다(ADR 0009).",
         "operationId": "infer_from_file_api_ontology_infer_post",
         "requestBody": {
           "content": {
@@ -15682,6 +15682,30 @@
           "note": {
             "type": "string",
             "title": "Note"
+          },
+          "ref_type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ref Type Slug"
+          },
+          "ref_candidates": {
+            "items": {
+              "$ref": "#/components/schemas/RefCandidateOut"
+            },
+            "type": "array",
+            "title": "Ref Candidates",
+            "default": []
+          },
+          "ref_note": {
+            "type": "string",
+            "title": "Ref Note",
+            "default": ""
           }
         },
         "type": "object",
@@ -19666,6 +19690,76 @@
           "changed_by_label"
         ],
         "title": "RecentOut"
+      },
+      "RefCandidateOut": {
+        "properties": {
+          "target_slug": {
+            "type": "string",
+            "title": "Target Slug"
+          },
+          "target_label": {
+            "type": "string",
+            "title": "Target Label"
+          },
+          "target_kind": {
+            "type": "string",
+            "title": "Target Kind"
+          },
+          "checked": {
+            "type": "integer",
+            "title": "Checked"
+          },
+          "one": {
+            "type": "integer",
+            "title": "One"
+          },
+          "many": {
+            "type": "integer",
+            "title": "Many"
+          },
+          "none": {
+            "type": "integer",
+            "title": "None"
+          },
+          "one_values": {
+            "type": "integer",
+            "title": "One Values"
+          },
+          "many_samples": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Many Samples"
+          },
+          "none_samples": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "None Samples"
+          },
+          "short": {
+            "type": "boolean",
+            "title": "Short"
+          }
+        },
+        "type": "object",
+        "required": [
+          "target_slug",
+          "target_label",
+          "target_kind",
+          "checked",
+          "one",
+          "many",
+          "none",
+          "one_values",
+          "many_samples",
+          "none_samples",
+          "short"
+        ],
+        "title": "RefCandidateOut",
+        "description": "열의 값이 이 타입(또는 인터페이스)의 객체로 얼마나 풀리나 — 값 단위, 일괄 입력의 이름\n풀이 그대로(ADR 0009)."
       },
       "RefHitOut": {
         "properties": {

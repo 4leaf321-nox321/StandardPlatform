@@ -464,6 +464,8 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
 
     if not only or "import" in (only or ""):
         results.append(_import_plan(client, admin, url, 100_000))
+    if not only or "infer" in (only or ""):
+        results.append(_infer_plan(client, admin, url, 5_000))
 
     print("\n| 영역 | 무엇 | 중앙값 | 비고 |\n| --- | --- | --- | --- |")
     for area, label, took, note in results:
@@ -541,6 +543,68 @@ def _import_plan(
         note += f" — {counts}"
     print(f"{took:8.2f}초  일괄 입력 계획 {count:,}행  {note}", flush=True)
     return ("import", f"일괄 입력 계획 {count:,}행", f"{took:.2f}초", note)
+
+
+def _infer_plan(
+    client: Any, headers: dict[str, str], url: str, count: int
+) -> tuple[str, str, str, str]:
+    """표에서 타입 추론 + 참조 후보(ADR 0009) — 모델 · 과제 · **200만 건 기록**을 가리키는 열과
+    아무것도 안 가리키는 글 열이 섞인 표."""
+    with create_engine(url).connect() as connection:
+
+        def keys(slug: str) -> list[str]:
+            return [
+                row[0]
+                for row in connection.execute(
+                    text(
+                        "SELECT o.key FROM objects o JOIN object_types t ON t.id = o.type_id "
+                        "WHERE t.slug = :slug ORDER BY o.key LIMIT 3000"
+                    ),
+                    {"slug": slug},
+                )
+            ]
+
+        models, tasks, cases = keys("plm_model"), keys("plm_task"), keys("svc_case")
+    header = ["건번호", "이름", "모델", "과제", "원건", "증상", "비용"] + [
+        f"메모{n}" for n in range(10)
+    ]
+    lines = [",".join(header)]
+    for n in range(count):
+        memo = [f"메모 {n * 7 + m} 번" for m in range(10)]
+        lines.append(
+            ",".join(
+                [
+                    f"R{n:06d}",
+                    f"건 {n}",
+                    models[n % len(models)],
+                    tasks[n % len(tasks)],
+                    cases[n % len(cases)],
+                    SYMPTOMS[n % 40],
+                    str(n % 1000),
+                    *memo,
+                ]
+            )
+        )
+    body = "\n".join(lines).encode("utf-8")
+    started = time.perf_counter()
+    response = client.post(
+        "/api/ontology/infer",
+        files={"file": ("rows.csv", body, "text/csv")},
+        headers=headers,
+    )
+    took = time.perf_counter() - started
+    label = f"표 추론 + 참조 후보 {count:,}행 · {len(header)}열"
+    if response.status_code >= 400:
+        return ("infer", label, f"{took:.2f}초", f"HTTP {response.status_code}")
+    found = []
+    for column in response.json()["columns"]:
+        if column["data_type"] == "object_ref":
+            found.append(f"{column['header']}→{column['ref_type_slug']}")
+        elif column["ref_note"]:
+            found.append(f"{column['header']}: {column['ref_note'][:40]}")
+    note = " · ".join(found)
+    print(f"{took:8.2f}초  {label}  {note}", flush=True)
+    return ("infer", label, f"{took:.2f}초", note)
 
 
 def _explain(engine: Any, model_id: Any) -> None:
