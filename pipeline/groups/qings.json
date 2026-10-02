@@ -1,0 +1,491 @@
+{
+  "groups": [
+    {
+      "slug": "qings",
+      "label": "QINGS",
+      "icon": "Wrench",
+      "sort_order": 30
+    }
+  ],
+  "types": [
+    {
+      "slug": "qings_service_case",
+      "label": "시장 서비스 데이터",
+      "nav_group_slug": "qings",
+      "icon": "ClipboardList",
+      "kind_class": "record",
+      "key_policy": "required",
+      "key_scope": "global",
+      "description": "시장에서 접수된 서비스(수리) 건 하나. **식별자는 접수번호**다 — 같은 건을 다시 올리면 새로 만들지 않고 고친다(upsert). 이름(label)에도 접수번호를 적는다: 목록 · 참조가 그 글자로 그 건을 가리킨다.",
+      "list_view": {
+        "columns": [
+          "key",
+          "properties.service_date",
+          "properties.corporation",
+          "properties.marketing_model",
+          "properties.symptom_major",
+          "properties.symptom_name",
+          "properties.handling_type",
+          "properties.repair_name"
+        ],
+        "sort": {
+          "field": "properties.service_date",
+          "dir": "desc"
+        },
+        "filters": [
+          "properties.corporation",
+          "properties.country",
+          "properties.service_type",
+          "properties.symptom_major",
+          "properties.handling_type"
+        ],
+        "search": [
+          "key",
+          "properties.serial_no",
+          "properties.model_code",
+          "properties.symptom_name"
+        ]
+      },
+      "form_view": {
+        "sections": [
+          {
+            "name": "접수",
+            "columns": 3
+          },
+          {
+            "name": "제품",
+            "columns": 3
+          },
+          {
+            "name": "증상",
+            "columns": 2
+          },
+          {
+            "name": "발생 상황",
+            "columns": 2
+          },
+          {
+            "name": "수리",
+            "columns": 2
+          },
+          {
+            "name": "통신 점검",
+            "columns": 3,
+            "collapsed": true
+          },
+          {
+            "name": "부속품",
+            "columns": 3,
+            "collapsed": true
+          },
+          {
+            "name": "소프트웨어",
+            "columns": 3,
+            "collapsed": true
+          },
+          {
+            "name": "기타",
+            "columns": 2,
+            "collapsed": true
+          }
+        ]
+      },
+      "properties": [
+        {
+          "key": "division",
+          "label": "총괄",
+          "data_type": "text",
+          "section": "접수"
+        },
+        {
+          "key": "corporation",
+          "label": "법인명",
+          "data_type": "text",
+          "section": "접수",
+          "help": "서비스를 접수한 법인. 반복되는 값이라 나중에 코드표·참조로 승격할 자리다."
+        },
+        {
+          "key": "country",
+          "label": "국가",
+          "data_type": "text",
+          "section": "접수"
+        },
+        {
+          "key": "marketing_model",
+          "label": "마케팅 모델명",
+          "data_type": "text",
+          "section": "제품",
+          "help": "시장에 쓰는 모델명. 모델코드와 다르다."
+        },
+        {
+          "key": "service_date",
+          "label": "서비스일자",
+          "data_type": "date",
+          "section": "접수"
+        },
+        {
+          "key": "production_date",
+          "label": "생산일자",
+          "data_type": "date",
+          "section": "제품"
+        },
+        {
+          "key": "term",
+          "label": "Term",
+          "data_type": "text",
+          "section": "접수",
+          "help": "원천의 Term 열 그대로."
+        },
+        {
+          "key": "symptom_major",
+          "label": "증상(대)",
+          "data_type": "text",
+          "section": "증상"
+        },
+        {
+          "key": "symptom_middle",
+          "label": "증상(중)",
+          "data_type": "text",
+          "section": "증상"
+        },
+        {
+          "key": "symptom_minor",
+          "label": "증상(소)",
+          "data_type": "text",
+          "section": "증상"
+        },
+        {
+          "key": "symptom_reclassified",
+          "label": "재분류증상명",
+          "data_type": "text",
+          "section": "증상",
+          "help": "원천이 뒤에 다시 분류한 증상명."
+        },
+        {
+          "key": "handling_type",
+          "label": "처리유형",
+          "data_type": "text",
+          "section": "수리"
+        },
+        {
+          "key": "symptom_name",
+          "label": "증상명",
+          "data_type": "text",
+          "section": "증상"
+        },
+        {
+          "key": "part_name",
+          "label": "부위명",
+          "data_type": "text",
+          "section": "수리"
+        },
+        {
+          "key": "repair_name",
+          "label": "수리명",
+          "data_type": "text",
+          "section": "수리"
+        },
+        {
+          "key": "repair_detail",
+          "label": "수리 세부 내용",
+          "data_type": "text_long",
+          "section": "수리"
+        },
+        {
+          "key": "extra_info",
+          "label": "기타정보",
+          "data_type": "text_long",
+          "section": "기타"
+        },
+        {
+          "key": "repair_detail_translated",
+          "label": "수리 세부 내용(번역)",
+          "data_type": "text_long",
+          "section": "수리",
+          "help": "현지 언어를 옮긴 것. 원문은 `수리 세부 내용`."
+        },
+        {
+          "key": "detail_content",
+          "label": "상세내용",
+          "data_type": "text_long",
+          "section": "증상",
+          "help": "원천의 「상세내용」(붙여 쓴 것). 발생 상황의 「상세 내용」과 다른 열이다 — 원천이 둘을 따로 쓴다."
+        },
+        {
+          "key": "defect_photo",
+          "label": "불량사진",
+          "data_type": "text",
+          "section": "기타",
+          "help": "사진의 파일명·링크. **파일 자체는 객체 상세의 첨부로 올린다** — 파일 칸은 파일로 적재할 수 없다."
+        },
+        {
+          "key": "production_site",
+          "label": "생산법인",
+          "data_type": "text",
+          "section": "제품"
+        },
+        {
+          "key": "warranty",
+          "label": "워런티",
+          "data_type": "text",
+          "section": "접수",
+          "help": "유상·무상 구분 등 원천 값 그대로."
+        },
+        {
+          "key": "center_code",
+          "label": "센터코드",
+          "data_type": "text",
+          "section": "접수"
+        },
+        {
+          "key": "model_code",
+          "label": "모델코드",
+          "data_type": "text",
+          "section": "제품",
+          "help": "개발모델과 잇는 자리 — 코어(PLM 개발모델)가 들어오면 참조로 승격한다."
+        },
+        {
+          "key": "service_type",
+          "label": "Service Type",
+          "data_type": "text",
+          "section": "접수"
+        },
+        {
+          "key": "characteristic",
+          "label": "특성",
+          "data_type": "text",
+          "section": "접수"
+        },
+        {
+          "key": "progress_type",
+          "label": "진행구분",
+          "data_type": "text",
+          "section": "접수"
+        },
+        {
+          "key": "serial_no",
+          "label": "S/N",
+          "data_type": "text",
+          "section": "제품",
+          "help": "제품 일련번호. 같은 제품의 접수가 여럿일 수 있어 유일값으로 두지 않는다."
+        },
+        {
+          "key": "symptom_code",
+          "label": "증상코드",
+          "data_type": "text",
+          "section": "증상"
+        },
+        {
+          "key": "repair_code",
+          "label": "수리코드",
+          "data_type": "text",
+          "section": "수리"
+        },
+        {
+          "key": "remark",
+          "label": "비고",
+          "data_type": "text_long",
+          "section": "기타"
+        },
+        {
+          "key": "sub_category",
+          "label": "세부구분",
+          "data_type": "text",
+          "section": "접수"
+        },
+        {
+          "key": "occur_place",
+          "label": "발생장소",
+          "data_type": "text",
+          "section": "발생 상황"
+        },
+        {
+          "key": "occur_situation",
+          "label": "발생상황",
+          "data_type": "text_long",
+          "section": "발생 상황"
+        },
+        {
+          "key": "occur_function_app",
+          "label": "발생기능 및 APP",
+          "data_type": "text",
+          "section": "발생 상황"
+        },
+        {
+          "key": "occur_frequency",
+          "label": "발생빈도",
+          "data_type": "text",
+          "section": "발생 상황"
+        },
+        {
+          "key": "reproduced",
+          "label": "재현여부",
+          "data_type": "text",
+          "section": "발생 상황",
+          "help": "원천 값 그대로 받는다(Y·N 외의 값이 섞여도 줄이 막히지 않게) — 값이 둘뿐인 것이 확인되면 참·거짓으로 조인다."
+        },
+        {
+          "key": "reproduce_path",
+          "label": "재현경로",
+          "data_type": "text_long",
+          "section": "발생 상황"
+        },
+        {
+          "key": "occur_detail",
+          "label": "상세 내용",
+          "data_type": "text_long",
+          "section": "발생 상황",
+          "help": "원천의 「상세 내용」(띄어 쓴 것) — 증상의 「상세내용」과 다른 열이다."
+        },
+        {
+          "key": "log_id",
+          "label": "LOG ID",
+          "data_type": "text",
+          "section": "발생 상황"
+        },
+        {
+          "key": "symptom_detail",
+          "label": "상세 증상",
+          "data_type": "text_long",
+          "section": "증상"
+        },
+        {
+          "key": "action_detail",
+          "label": "조치 내용",
+          "data_type": "text_long",
+          "section": "수리"
+        },
+        {
+          "key": "repaired",
+          "label": "수리 여부",
+          "data_type": "text",
+          "section": "수리",
+          "help": "원천 값 그대로 — `재현여부` 와 같은 이유."
+        },
+        {
+          "key": "network_carrier",
+          "label": "점검망(통신사)",
+          "data_type": "text",
+          "section": "통신 점검"
+        },
+        {
+          "key": "network_type",
+          "label": "점검망(망)",
+          "data_type": "text",
+          "section": "통신 점검"
+        },
+        {
+          "key": "network_band",
+          "label": "점검망(BAND)",
+          "data_type": "text",
+          "section": "통신 점검"
+        },
+        {
+          "key": "network_pci",
+          "label": "점검망(PCI)",
+          "data_type": "text",
+          "section": "통신 점검"
+        },
+        {
+          "key": "network_state1",
+          "label": "망상태1",
+          "data_type": "text",
+          "section": "통신 점검"
+        },
+        {
+          "key": "network_state2",
+          "label": "망상태2",
+          "data_type": "text",
+          "section": "통신 점검"
+        },
+        {
+          "key": "dispatch_area",
+          "label": "출동지역",
+          "data_type": "text",
+          "section": "기타"
+        },
+        {
+          "key": "quotation",
+          "label": "견적서",
+          "data_type": "text",
+          "section": "기타",
+          "help": "견적 번호·금액 등 원천 값 그대로."
+        },
+        {
+          "key": "protective_cover",
+          "label": "보호커버",
+          "data_type": "text",
+          "section": "부속품"
+        },
+        {
+          "key": "sw_before",
+          "label": "수리전 S/W",
+          "data_type": "text",
+          "section": "소프트웨어"
+        },
+        {
+          "key": "sw_after",
+          "label": "수리 S/W",
+          "data_type": "text",
+          "section": "소프트웨어"
+        },
+        {
+          "key": "fw_ap_ver",
+          "label": "F/W AP Ver",
+          "data_type": "text",
+          "section": "소프트웨어"
+        },
+        {
+          "key": "activation_date",
+          "label": "개통일자",
+          "data_type": "date",
+          "section": "제품"
+        },
+        {
+          "key": "buds_serial_left",
+          "label": "Buds Serial(좌)",
+          "data_type": "text",
+          "section": "부속품"
+        },
+        {
+          "key": "buds_serial_right",
+          "label": "Buds Serial(우)",
+          "data_type": "text",
+          "section": "부속품"
+        },
+        {
+          "key": "buds_sw_left",
+          "label": "Buds S/W VER(좌)",
+          "data_type": "text",
+          "section": "부속품"
+        },
+        {
+          "key": "buds_sw_right",
+          "label": "Buds S/W VER(우)",
+          "data_type": "text",
+          "section": "부속품"
+        },
+        {
+          "key": "protective_film",
+          "label": "보호 필름",
+          "data_type": "text",
+          "section": "부속품"
+        },
+        {
+          "key": "sw_iqc",
+          "label": "S/W IQC",
+          "data_type": "text",
+          "section": "소프트웨어"
+        },
+        {
+          "key": "operating_time",
+          "label": "Operating Time",
+          "data_type": "text",
+          "section": "기타",
+          "help": "원천 형식 그대로(숫자만 오는 것이 확인되면 숫자로 조인다)."
+        }
+      ]
+    }
+  ],
+  "relation_types": []
+}

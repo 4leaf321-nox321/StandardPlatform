@@ -8,6 +8,9 @@
 - 무엇을 무엇으로 만드나: 모델링 규약 — MCP `get_guide(topic="modeling")` (본문 `mcp_server/guide/GUIDE.md`)
 - 공통 코어: [core/plm-core.json](core/plm-core.json)(PLM 기준정보 — 허브가 내려준다) ·
   [core/work-core.json](core/work-core.json)(업무 공통 — 그룹의 일이 PLM 과제에 붙는 자리)
+- 그룹 전용 정의: [groups/](groups/) — 한 그룹의 일을 담는 타입(`<그룹코드>_`). 코어와 다른
+  자리다(코어는 어느 설치에나, 이쪽은 그 그룹을 켠 설치만). 넣는 법과 원천 표를 옮기는 길은
+  [groups/README.md](groups/README.md)
 - 그룹이 시작 전에 채우는 것: [templates/파일럿-그룹-정리.md](templates/파일럿-그룹-정리.md)
 - 사내 AI 에게 단계마다 붙여 넣는 지시문: [templates/사내-AI-지시문.md](templates/사내-AI-지시문.md)
 

@@ -1,0 +1,212 @@
+{
+  "format": "sp-table/1",
+  "title": "QINGS 시장 서비스 데이터",
+  "workspace_slug": "<이-그룹의-부서-slug>",
+  "ontology": "../groups/qings.json",
+  "source": {
+    "encoding": "auto",
+    "delimiter": ","
+  },
+  "types": [
+    {
+      "type_slug": "qings_service_case",
+      "key": {
+        "column": "접수번호"
+      },
+      "fields": {
+        "division": {
+          "column": "총괄"
+        },
+        "corporation": {
+          "column": "법인명"
+        },
+        "country": {
+          "column": "국가"
+        },
+        "marketing_model": {
+          "column": "마케팅 모델명"
+        },
+        "service_date": {
+          "column": "서비스일자",
+          "date": true
+        },
+        "production_date": {
+          "column": "생산일자",
+          "date": true
+        },
+        "term": {
+          "column": "Term"
+        },
+        "symptom_major": {
+          "column": "증상(대)"
+        },
+        "symptom_middle": {
+          "column": "증상(중)"
+        },
+        "symptom_minor": {
+          "column": "증상(소)"
+        },
+        "symptom_reclassified": {
+          "column": "재분류증상명"
+        },
+        "handling_type": {
+          "column": "처리유형"
+        },
+        "symptom_name": {
+          "column": "증상명"
+        },
+        "part_name": {
+          "column": "부위명"
+        },
+        "repair_name": {
+          "column": "수리명"
+        },
+        "repair_detail": {
+          "column": "수리 세부 내용"
+        },
+        "extra_info": {
+          "column": "기타정보"
+        },
+        "repair_detail_translated": {
+          "column": "수리 세부 내용(번역)"
+        },
+        "detail_content": {
+          "column": "상세내용"
+        },
+        "defect_photo": {
+          "column": "불량사진"
+        },
+        "production_site": {
+          "column": "생산법인"
+        },
+        "warranty": {
+          "column": "워런티"
+        },
+        "center_code": {
+          "column": "센터코드"
+        },
+        "model_code": {
+          "column": "모델코드"
+        },
+        "service_type": {
+          "column": "Service Type"
+        },
+        "characteristic": {
+          "column": "특성"
+        },
+        "progress_type": {
+          "column": "진행구분"
+        },
+        "serial_no": {
+          "column": "S/N"
+        },
+        "symptom_code": {
+          "column": "증상코드"
+        },
+        "repair_code": {
+          "column": "수리코드"
+        },
+        "remark": {
+          "column": "비고"
+        },
+        "sub_category": {
+          "column": "세부구분"
+        },
+        "occur_place": {
+          "column": "발생장소"
+        },
+        "occur_situation": {
+          "column": "발생상황"
+        },
+        "occur_function_app": {
+          "column": "발생기능 및 APP"
+        },
+        "occur_frequency": {
+          "column": "발생빈도"
+        },
+        "reproduced": {
+          "column": "재현여부"
+        },
+        "reproduce_path": {
+          "column": "재현경로"
+        },
+        "occur_detail": {
+          "column": "상세 내용"
+        },
+        "log_id": {
+          "column": "LOG ID"
+        },
+        "symptom_detail": {
+          "column": "상세 증상"
+        },
+        "action_detail": {
+          "column": "조치 내용"
+        },
+        "repaired": {
+          "column": "수리 여부"
+        },
+        "network_carrier": {
+          "column": "점검망(통신사)"
+        },
+        "network_type": {
+          "column": "점검망(망)"
+        },
+        "network_band": {
+          "column": "점검망(BAND)"
+        },
+        "network_pci": {
+          "column": "점검망(PCI)"
+        },
+        "network_state1": {
+          "column": "망상태1"
+        },
+        "network_state2": {
+          "column": "망상태2"
+        },
+        "dispatch_area": {
+          "column": "출동지역"
+        },
+        "quotation": {
+          "column": "견적서"
+        },
+        "protective_cover": {
+          "column": "보호커버"
+        },
+        "sw_before": {
+          "column": "수리전 S/W"
+        },
+        "sw_after": {
+          "column": "수리 S/W"
+        },
+        "fw_ap_ver": {
+          "column": "F/W AP Ver"
+        },
+        "activation_date": {
+          "column": "개통일자",
+          "date": true
+        },
+        "buds_serial_left": {
+          "column": "Buds Serial(좌)"
+        },
+        "buds_serial_right": {
+          "column": "Buds Serial(우)"
+        },
+        "buds_sw_left": {
+          "column": "Buds S/W VER(좌)"
+        },
+        "buds_sw_right": {
+          "column": "Buds S/W VER(우)"
+        },
+        "protective_film": {
+          "column": "보호 필름"
+        },
+        "sw_iqc": {
+          "column": "S/W IQC"
+        },
+        "operating_time": {
+          "column": "Operating Time"
+        }
+      }
+    }
+  ]
+}
