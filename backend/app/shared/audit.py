@@ -27,6 +27,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+from sqlalchemy import insert
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -168,3 +169,47 @@ def record(
         ),
     )
     return entry
+
+
+def record_rows(
+    db: Session,
+    *,
+    action: str,
+    actor: User | None,
+    target_table: str,
+    rows: list[tuple[uuid.UUID, str, uuid.UUID | None, dict[str, Any]]],
+    reason: str | None = None,
+) -> None:
+    """같은 일의 기록 여럿을 **한 번에** — (대상 id, 이름표, 부서, 바뀐 것) 줄마다.
+
+    정의 하나가 객체 수백만 개를 고치는 일(종류 변경)에 쓴다. 객체마다 이력은 남기되 **바깥
+    (웹훅 · 지켜보기)에는 줄마다 알리지 않는다** — 부르는 쪽이 정의 한 줄(`record`)로 알린다.
+    줄마다 알리면 200만 건의 알림을 아무도 못 읽고, 그 이벤트가 커밋까지 메모리에 쌓인다
+    (실측: 4.6GB). `quiet` 동안에는 남기지 않는다(`record` 와 같다).
+    """
+    if not rows or db.info.get(_QUIET):
+        return
+    actor_id = actor.id if actor else None
+    actor_label = (actor.display_name or actor.email) if actor else "시스템"
+    client, token, request_id = get_actor_client(), get_actor_token(), get_request_id()
+    db.execute(
+        insert(AuditEntry),
+        [
+            {
+                "id": uuid.uuid4(),
+                "action": action,
+                "actor_id": actor_id,
+                "actor_label": actor_label,
+                "actor_client": client,
+                "actor_token": token,
+                "target_table": target_table,
+                "target_id": target_id,
+                "target_label": label[:300],
+                "workspace_id": workspace_id,
+                "changes": changes,
+                "reason": reason,
+                "request_id": request_id,
+            }
+            for target_id, label, workspace_id, changes in rows
+        ],
+    )

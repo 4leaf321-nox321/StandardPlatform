@@ -63,9 +63,10 @@ class ObjectInstance(Base):
     __table_args__ = (
         # 목록은 거의 항상 「이 타입의 것」 으로 시작한다.
         Index("ix_objects_type_status", "type_id", "status"),
-        # **JSONB 를 거르는 목록이 이 인덱스를 탄다.** 없으면 행이 몇만을 넘는
-        # 순간 목록이 느려지고, 느려진 이유는 화면 어디에도 안 적힌다.
-        Index("ix_objects_properties", "properties", postgresql_using="gin"),
+        # **`properties` 통째 GIN 인덱스는 두지 않는다**(0052, ADR 0010). 거르기는 칸 하나씩
+        # (`properties->>'k'`)이라 그것을 못 타고, 「값 있음」(`?`)은 늘 타입으로 먼저 좁힌다
+        # — 실측 사용이 거의 0 이었다. 그런데 속성을 고칠 때마다 행의 모든 칸을 다시 넣어,
+        # 기록 200만 건 종류 변경 시간의 87% 가 이 인덱스였다(크기 1.3GB).
         # **「지난번 이후 바뀐 것」 이 이 인덱스를 탄다.** 바깥 시스템이 새벽마다 증분으로
         # 물으므로, 없으면 그 질의가 타입 전체를 훑는다.
         Index("ix_objects_type_updated", "type_id", "updated_at"),

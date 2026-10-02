@@ -34,6 +34,7 @@ from app.modules.notifications import services as notifications
 from app.modules.objects.models import ObjectInstance, ObjectWatch
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared import events
+from app.shared.batches import chunks
 
 logger = logging.getLogger(__name__)
 
@@ -95,11 +96,12 @@ def watch_own(db: Session, *, object_id: uuid.UUID, user_id: uuid.UUID) -> None:
 
 
 def watchers(db: Session, object_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[uuid.UUID]]:
+    """객체 → 지켜보는 사람. **나눠 묻는다** — 10만 행 일괄 입력의 커밋 뒤에 한 `IN` 으로
+    물으면 바인드 한도(65,535)에 걸려 알림이 통째로 빠졌다(실측)."""
     out: dict[uuid.UUID, list[uuid.UUID]] = {}
-    if not object_ids:
-        return out
-    for row in db.scalars(select(ObjectWatch).where(ObjectWatch.object_id.in_(object_ids))):
-        out.setdefault(row.object_id, []).append(row.user_id)
+    for batch in chunks(dict.fromkeys(object_ids)):
+        for row in db.scalars(select(ObjectWatch).where(ObjectWatch.object_id.in_(batch))):
+            out.setdefault(row.object_id, []).append(row.user_id)
     return out
 
 
@@ -189,9 +191,12 @@ def on_events(staged: list[events.ChangeEvent]) -> None:
             if not by_object:
                 return
             types = {row.id: row for row in db.scalars(select(ObjectType))}
+            # 지켜보는 사람이 있는 것만 읽는다 — 변경이 수만 건이어도 그런 객체는 몇 개다.
             objects = {
                 row.id: row
-                for row in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(ids)))
+                for row in db.scalars(
+                    select(ObjectInstance).where(ObjectInstance.id.in_(list(by_object)))
+                )
             }
             labels = _property_labels(db, {row.type_id for row in objects.values()})
             sent = 0

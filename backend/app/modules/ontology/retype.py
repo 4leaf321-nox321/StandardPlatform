@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -66,8 +66,8 @@ FAILURE_CAP = 300
 FAILURE_TRACK = 10_000
 #: 값마다 견본 객체 수.
 SAMPLES = 3
-#: 적용할 때 한 번에 읽어 고치는 행 수.
-CHUNK = 500
+#: 적용할 때 한 번에 읽어 고치는 행 수 — 덩어리 하나가 갱신 문장 하나다.
+CHUNK = 5_000
 #: 계획이 한 번에 읽는 행 수 — 칸 하나만 읽으니 넉넉히. 200만 건을 한 목록으로 싣지 않는다.
 READ_CHUNK = 5_000
 #: 값이 있는 객체가 이보다 많으면 요청 안에서 하지 않고 **작업**으로 돈다 — 기록 200만 건의
@@ -641,6 +641,20 @@ def plan(
 # --- 적용 -----------------------------------------------------------------------
 
 
+#: 칸 하나를 덩어리째 고친다 — 다른 칸은 손대지 않는다(`jsonb_set` · `-`).
+_SET_ONE = text(
+    """
+    UPDATE objects AS o
+    SET properties = CASE WHEN v.gone THEN o.properties - CAST(:key AS text)
+                          ELSE jsonb_set(o.properties, ARRAY[CAST(:key AS text)], v.val) END,
+        updated_at = now()
+    FROM unnest(CAST(:ids AS uuid[]), CAST(:vals AS jsonb[]), CAST(:gone AS boolean[]))
+         AS v(id, val, gone)
+    WHERE o.id = v.id
+    """
+)
+
+
 def changed_property(key: str, before: Any, after: dict[str, Any]) -> dict[str, Any]:
     """칸 **하나만** 바뀐 이력 — `keys` 가 그 칸이다. 이력 화면(`history_of`)은 `keys` 가
     있으면 그 칸만 되짚고 나머지는 그대로 둔다."""
@@ -695,8 +709,14 @@ def apply(
         converted = cleared = 0
         last: uuid.UUID | None = None
         while True:
+            # 그 칸만 읽고 잠근다 — 행 전체(속성 30여 칸)를 ORM 객체로 싣지 않는다.
             stmt = (
-                select(ObjectInstance)
+                select(
+                    ObjectInstance.id,
+                    ObjectInstance.label,
+                    ObjectInstance.owner_workspace_id,
+                    ObjectInstance.properties[target.key],
+                )
                 .where(
                     ObjectInstance.type_id == target.type_id,
                     ObjectInstance.deleted_at.is_(None),
@@ -708,42 +728,55 @@ def apply(
             )
             if last is not None:
                 stmt = stmt.where(ObjectInstance.id > last)
-            rows = list(db.scalars(stmt))
+            rows = [(row[0], row[1], row[2], row[3]) for row in db.execute(stmt)]
             if not rows:
                 break
             if on_progress is not None:
                 on_progress("적용", seen, total)
                 seen += len(rows)
             if linker is not None and target.before == "object_ref":
-                linker.prefetch(
-                    _elements((one.properties or {}).get(target.key) for one in rows)
-                )
-            for row in rows:
-                old = (row.properties or {}).get(target.key)
+                linker.prefetch(_elements(old for *_, old in rows))
+            ids: list[uuid.UUID] = []
+            values: list[str | None] = []
+            gone: list[bool] = []
+            history: list[tuple[uuid.UUID, str, uuid.UUID | None, dict[str, Any]]] = []
+            for object_id, label, workspace_id, old in rows:
                 result = _converted(target, old, mapping, linker)
                 if result.failures or not result.changed:
                     continue
-                after = dict(row.properties or {})
+                ids.append(object_id)
+                gone.append(result.remove)
                 if result.remove:
-                    after.pop(target.key, None)
+                    values.append(None)
                     cleared += 1
+                    after: dict[str, Any] = {}
                 else:
-                    after[target.key] = result.value
+                    values.append(json.dumps(result.value, ensure_ascii=False))
                     converted += 1
-                row.properties = after
-                audit.record(
+                    after = {target.key: result.value}
+                history.append(
+                    (
+                        object_id,
+                        f"{owner.slug}:{label}",
+                        workspace_id,
+                        changed_property(target.key, old, after),
+                    )
+                )
+            if ids:
+                # **덩어리 하나에 문장 하나** — 행마다 보내면 참조 색인 트리거가 행마다 돌았다
+                # (실측: 200만 건 38분).
+                db.execute(
+                    _SET_ONE, {"key": target.key, "ids": ids, "vals": values, "gone": gone}
+                )
+                audit.record_rows(
                     db,
                     action="object.update",
                     actor=user,
                     target_table="objects",
-                    target_id=row.id,
-                    target_label=f"{owner.slug}:{row.label}",
-                    workspace_id=row.owner_workspace_id,
-                    changes=changed_property(target.key, old, after),
+                    rows=history,
                     reason=why,
                 )
-            db.flush()
-            last = rows[-1].id
+            last = rows[-1][0]
 
         definition = db.scalar(
             select(PropertyDef).where(

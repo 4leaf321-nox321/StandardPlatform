@@ -129,3 +129,25 @@ def test_알림이_사람의_말로_적힌다(client: TestClient, admin: Signed,
     assert "properties.weight" not in got["body"]
     # 어느 타입의 것인지도 한 줄에.
     assert "부품" in got["body"]
+
+
+def test_종류_변경은_객체마다_알리지_않고_이력에만_남긴다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """정의 하나가 객체 수백만 개를 고치는 일이다 — 줄마다 알리면 아무도 못 읽고, 그 알림이
+    커밋까지 메모리에 쌓였다(실측: 기록 200만 건 4.6GB). 이력에는 객체마다 남는다(ADR 0009)."""
+    part = _make_type(client, admin, label="부품")
+    _make_property(client, admin, part, key="qty", label="수량", data_type="text")
+    bolt = _make_object(client, admin, part, label="볼트", properties={"qty": "3"})
+    _watch(client, manager, part, bolt["id"], True)
+    before = len(notifications_of(client, manager, "object.changed"))
+
+    done = client.post(
+        f"/api/ontology/types/{part}/properties/qty/retype",
+        json={"data_type": "number", "apply": True},
+        headers=admin.headers,
+    )
+    assert done.status_code == 200 and done.json()["applied"] is True, done.text
+    assert len(notifications_of(client, manager, "object.changed")) == before
+    history = client.get(f"/api/objects/{part}/{bolt['id']}/history", headers=admin.headers)
+    assert history.json()[0]["changes"]["properties.qty"] == {"before": "3", "after": 3}

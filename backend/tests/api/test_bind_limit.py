@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.objects import aliases, refedges
+from app.modules.objects import aliases, refedges, watches
 from app.modules.ontology.models import ObjectType
 from app.shared.batches import chunks
 from tests.api.conftest import Signed
@@ -41,3 +41,5 @@ def test_칠만_개의_id_로도_질의가_나간다(
     assert aliases.of(db, ids) == {}
     assert refedges._visible_ids(db, user, set(ids)) == set()
     assert aliases.taken_by(db, kind, aliases.HUMAN, [str(one) for one in ids]) == {}
+    # 커밋 뒤 지켜보기 알림 — 10만 행 일괄 입력이 한 `IN` 으로 묻다가 통째로 빠졌다.
+    assert watches.watchers(db, ids) == {}
