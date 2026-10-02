@@ -18,7 +18,7 @@ import { useState } from 'react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import { EnumOptionsPanel } from '@/modules/ontology/EnumOptionsPanel'
-import { RETYPE_KINDS, RetypeDialog } from '@/modules/ontology/RetypeDialog'
+import { RetypeDialog, retypeChoices } from '@/modules/ontology/RetypeDialog'
 import type { DataType, ObjectInterface, ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -110,10 +110,8 @@ export function PropertyEditDialog({
       ? `인터페이스 ${boundTo} 의 공통 속성이라 종류는 인터페이스에서 변경합니다.`
       : owner.row.managed_by
         ? `${owner.row.managed_by} 가 관리하는 정의라 여기서 변경하지 않습니다.`
-        : !RETYPE_KINDS.includes(property.data_type)
-          ? property.data_type === 'file'
-            ? '파일 속성은 값이 첨부라 종류를 변경하지 않습니다.'
-            : '객체 참조는 종류를 변경하지 않습니다 — 저장값이 객체 id 입니다.'
+        : retypeChoices(property.data_type).length === 0
+          ? '파일 속성은 값이 첨부라 종류를 변경하지 않습니다.'
           : null
 
   const [key, setKey] = useState(property?.key ?? '')
@@ -621,6 +619,8 @@ export function PropertyEditDialog({
         <RetypeDialog
           owner={owner}
           property={property}
+          types={types}
+          interfaces={interfaces}
           onClose={() => setRetyping(false)}
           onDone={() => {
             // 이 창이 들고 있는 정의는 옛 종류다 — 「저장」 을 누르면 옛 종류를 다시 보낸다.

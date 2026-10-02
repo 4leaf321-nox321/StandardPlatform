@@ -398,6 +398,10 @@ export interface RetypeRequest {
   decimals?: number | null
   pattern?: string | null
   unit?: string | null
+  /** 객체 참조로 바꿀 때 가리킬 타입 · 인터페이스 — 값마다 그 안에서 이름을 푼다(ADR 0009). */
+  ref_type_slug?: string | null
+  /** 객체 참조로 바꿀 때 상대 쪽에서 읽는 말. */
+  inverse_label?: string | null
   /** {변환할 수 없는 값: 대체 값 | null(값 삭제)} — 열쇠는 계획이 준 `failures[].value` 그대로. */
   mapping: Record<string, string | null>
   /** 공개 타입이면 수신 시스템에 통보했다는 확인. */
@@ -599,6 +603,14 @@ export const ontologyApi = {
   /** 공통 속성의 종류 변경 — 구현 타입 전부의 저장값을 한 번에. */
   retypeInterfaceProperty: (slug: string, key: string, body: RetypeRequest) =>
     api.post<RetypeOut>(`/ontology/interfaces/${slug}/properties/${key}/retype`, body),
+  /**
+   * 종류 변경을 **작업으로** — 값이 있는 객체가 많으면(ONTOLOGY-67) 요청 안에서 안 끝난다.
+   * 계획 작업이 서고, 결과(`RetypeOut` + 지문)를 본 뒤 `jobsApi.apply` 로 적용한다.
+   */
+  retypePropertyJob: (slug: string, key: string, body: RetypeRequest) =>
+    api.post<Job>(`/ontology/types/${slug}/properties/${key}/retype/job`, body),
+  retypeInterfacePropertyJob: (slug: string, key: string, body: RetypeRequest) =>
+    api.post<Job>(`/ontology/interfaces/${slug}/properties/${key}/retype/job`, body),
   /** 관리자 전용 — **코어 창구 밖에 둔다**(수신 시스템이 다른 연동의 이름을 보면 안 된다). */
   coreStatus: () => api.get<CoreStatus>('/ontology/core-status'),
   /** 연동 키트(zip) — 주소와 공개 타입이 채워진 상태로 내려온다. 수신 측에 그대로 전달한다. */

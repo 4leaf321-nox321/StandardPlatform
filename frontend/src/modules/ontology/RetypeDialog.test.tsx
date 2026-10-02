@@ -6,6 +6,9 @@
  * - 값 삭제는 `null` 로 나간다.
  * - 공개 타입이면 수신 시스템 확인 전에는 적용하지 않는다.
  * - 적용되면 창을 닫게 한다(속성 창이 옛 종류를 들고 있다).
+ * - 글 ↔ 참조(ADR 0009): 참조로 바꿀 때는 가리킬 타입을 골라야 계획을 본다. 참조에서는 글 ·
+ *   긴 글 · 선택으로만 간다.
+ * - 값이 많은 타입은 작업으로 계획하고, 그 작업을 적용한다(진행률을 보이며 기다린다).
  */
 
 import { render, screen, waitFor } from '@testing-library/react'
@@ -14,14 +17,21 @@ import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { PropertyDef, RetypeOut } from '@/modules/ontology/api'
+import { ApiError } from '@/shared/api/client'
 
 const ontologyApi = vi.hoisted(() => ({
   retypeProperty: vi.fn(),
   retypeInterfaceProperty: vi.fn(),
+  retypePropertyJob: vi.fn(),
 }))
 vi.mock('@/modules/ontology/api', async (original) => {
   const real = await original<typeof import('@/modules/ontology/api')>()
   return { ...real, ontologyApi }
+})
+const jobsApi = vi.hoisted(() => ({ apply: vi.fn(), waitFor: vi.fn() }))
+vi.mock('@/modules/jobs/api', async (original) => {
+  const real = await original<typeof import('@/modules/jobs/api')>()
+  return { ...real, jobsApi }
 })
 
 const WEIGHT = {
@@ -85,13 +95,14 @@ function plan(extra: Partial<RetypeOut> = {}): RetypeOut {
   }
 }
 
-async function open(onDone = vi.fn()) {
+async function open(onDone = vi.fn(), property: PropertyDef = WEIGHT) {
   const { RetypeDialog } = await import('@/modules/ontology/RetypeDialog')
   render(
     <MemoryRouter>
       <RetypeDialog
         owner={{ kind: 'type', row: TYPE as never }}
-        property={WEIGHT}
+        property={property}
+        types={[{ slug: 'plm_model', label: '개발모델' }]}
         onClose={vi.fn()}
         onDone={onDone}
       />
@@ -99,6 +110,14 @@ async function open(onDone = vi.fn()) {
   )
   return onDone
 }
+
+const MODEL_REF = {
+  ...WEIGHT,
+  key: 'model',
+  label: '모델',
+  data_type: 'object_ref',
+  ref_type_slug: 'plm_model',
+} as unknown as PropertyDef
 
 beforeEach(() => {
   vi.clearAllMocks()
@@ -162,5 +181,81 @@ describe('종류 변경 창', () => {
 
     await userEvent.click(screen.getByRole('checkbox', { name: /통보했습니다/ }))
     expect(screen.getByRole('button', { name: /종류 변경 —/ })).toBeInTheDocument()
+  })
+
+  it('글을 참조로 바꿀 때는 가리킬 타입을 골라야 계획을 보고, 그 타입으로 이름을 푼다', async () => {
+    ontologyApi.retypeProperty.mockResolvedValue(
+      plan({ data_type_after: 'object_ref', failures: [], errors: [], warnings: [] }),
+    )
+    await open()
+    await userEvent.click(screen.getAllByRole('combobox')[0])
+    await userEvent.click(await screen.findByRole('option', { name: '객체 참조' }))
+    expect(screen.getByRole('button', { name: '계획 보기' })).toBeDisabled()
+
+    await userEvent.click(screen.getAllByRole('combobox')[1])
+    await userEvent.click(await screen.findByRole('option', { name: '개발모델' }))
+    await userEvent.type(screen.getByLabelText(/상대 쪽에서 읽는 말/), '시장 서비스')
+    await userEvent.click(screen.getByRole('button', { name: '계획 보기' }))
+    await waitFor(() =>
+      expect(ontologyApi.retypeProperty).toHaveBeenCalledWith(
+        'part',
+        'w',
+        expect.objectContaining({
+          data_type: 'object_ref',
+          ref_type_slug: 'plm_model',
+          inverse_label: '시장 서비스',
+          apply: false,
+        }),
+      ),
+    )
+  })
+
+  it('참조는 글로 가고, 가리키던 객체의 식별자가 남는다고 말한다', async () => {
+    ontologyApi.retypeProperty.mockResolvedValue(
+      plan({ data_type_before: 'object_ref', failures: [], errors: [], warnings: [] }),
+    )
+    await open(vi.fn(), MODEL_REF)
+    expect(screen.getByText(/가리키던 객체의/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '계획 보기' }))
+    await waitFor(() =>
+      expect(ontologyApi.retypeProperty).toHaveBeenCalledWith(
+        'part',
+        'model',
+        expect.objectContaining({ data_type: 'text', ref_type_slug: null }),
+      ),
+    )
+    await userEvent.click(screen.getAllByRole('combobox')[0])
+    const offered = (await screen.findAllByRole('option')).map((one) => one.textContent)
+    expect(offered).toEqual(['글 (한 줄)', '글 (여러 줄)', '선택'])
+  })
+
+  it('값이 많은 타입은 작업으로 계획하고, 그 작업을 적용한다', async () => {
+    ontologyApi.retypeProperty.mockRejectedValue(
+      new ApiError(409, { error: { code: 'APP-ONTOLOGY-0067', message: '작업으로 돌립니다' } }),
+    )
+    ontologyApi.retypePropertyJob.mockResolvedValue({ id: 'plan-job' })
+    jobsApi.apply.mockResolvedValue({ id: 'apply-job' })
+    jobsApi.waitFor.mockImplementation(async (id: string, onTick?: (job: unknown) => void) => {
+      onTick?.({ progress: { stage: '계획', done: 5000, total: 2000000 } })
+      const applied = id === 'apply-job'
+      return {
+        id,
+        status: 'done',
+        error: null,
+        result: plan({ applied, failures: [], failures_total: 0, errors: [], warnings: [] }),
+      }
+    })
+    const onDone = await open()
+    await userEvent.click(screen.getByRole('button', { name: '계획 보기' }))
+    await userEvent.click(await screen.findByRole('button', { name: /종류 변경 — 저장값/ }))
+    await waitFor(() => expect(onDone).toHaveBeenCalled())
+    expect(ontologyApi.retypePropertyJob).toHaveBeenCalledWith(
+      'part',
+      'w',
+      expect.objectContaining({ apply: false }),
+    )
+    expect(jobsApi.apply).toHaveBeenCalledWith('plan-job')
+    // 적용은 계획 작업으로 — 요청 경로를 다시 부르지 않는다.
+    expect(ontologyApi.retypeProperty).toHaveBeenCalledTimes(1)
   })
 })
