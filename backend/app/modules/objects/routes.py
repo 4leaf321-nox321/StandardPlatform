@@ -704,7 +704,7 @@ def _filtered(
     if status and omit != "status":
         stmt = stmt.where(ObjectInstance.status == status)
     if q and omit != "q":
-        stmt = apply_search(stmt, scope, q)
+        stmt = apply_search(db, stmt, scope, q)
     if year is not None and omit != "year":
         stmt = apply_year(db, stmt, scope, year)
     if under is not None and omit == "under":

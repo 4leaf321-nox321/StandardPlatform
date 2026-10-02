@@ -49,7 +49,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.objects import system
 from app.modules.objects.models import ObjectAlias, ObjectInstance
-from app.modules.objects.services import containing_ids
+from app.modules.objects.services import bigram_plan, containing_ids
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType
 from app.shared import system_sources
@@ -104,13 +104,13 @@ def _needle(q: str) -> str:
     return f"%{escaped}%"
 
 
-def _where(user: User, q: str) -> tuple[Any, ...]:
+def _where(db: Session, user: User, q: str) -> tuple[Any, ...]:
     needle = _needle(q)
     return (
         ObjectInstance.deleted_at.is_(None),
         visible_owner_clause(user, ObjectInstance.owner_workspace_id),
         # 이름 · 식별자 · 별칭을 따로 묻고 합친다 — 한 OR 로 묶으면 trigram 인덱스를 못 탄다.
-        ObjectInstance.id.in_(containing_ids(needle, escape="\\")),
+        ObjectInstance.id.in_(containing_ids(needle, escape="\\", bigrams=bigram_plan(db, q))),
     )
 
 
@@ -153,7 +153,7 @@ def counts(db: Session, user: User, q: str) -> list[TypeCount]:
     types = {row.id: row for row in db.scalars(select(ObjectType))}
     rows = db.execute(
         select(ObjectInstance.type_id, func.count())
-        .where(*_where(user, q))
+        .where(*_where(db, user, q))
         .group_by(ObjectInstance.type_id)
     )
     out: list[TypeCount] = []
@@ -245,7 +245,7 @@ def search(
             found.hits = [_hit_of(target, ref, q) for ref in refs]
             return found
 
-    where = _where(user, q)
+    where = _where(db, user, q)
     if target is not None:
         where = (*where, ObjectInstance.type_id == target.id)
     elif among is not None:

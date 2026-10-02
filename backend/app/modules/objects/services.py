@@ -9,7 +9,8 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Select, Text, and_, func, or_, select, union, update
+from sqlalchemy import Select, Text, and_, cast, func, or_, select, text, union, update
+from sqlalchemy.dialects.postgresql import ARRAY, array
 from sqlalchemy.orm import Session
 
 from app.modules.objects import system
@@ -175,6 +176,53 @@ def require_unique_properties(
             )
 
 
+#: 두 글자 조각이 이 비율보다 많은 행에 들어 있으면 조각 인덱스를 안 건다 — 어차피 표를 다
+#: 읽는데, 거기에 칸마다 조각을 만드는 값이 더해져 두 배로 느려졌다(실측: 「C0」 이 기록 200만
+#: 건 전부에 들어 있어 3.1 → 12.8초).
+BIGRAM_BROAD = 0.02
+
+_BIGRAM_INDEX = {
+    "label": "ix_objects_label_bigram",
+    "key": "ix_objects_key_bigram",
+    "alias": "ix_object_aliases_value_bigram",
+}
+_BIGRAM_FREQ = text(
+    """
+    SELECT s.tablename, x.f
+    FROM pg_stats s,
+         unnest(s.most_common_elems::text::text[], s.most_common_elem_freqs) AS x(e, f)
+    WHERE s.schemaname = current_schema() AND s.tablename = ANY(:names) AND x.e = :pair
+    """
+)
+
+
+def bigram_plan(db: Session, term: str | None) -> dict[str, str]:
+    """두 글자로 찾을 때 조각 인덱스를 걸 자리 — {`label` · `key` · `alias`: 조각}.
+
+    trigram 은 세 글자부터라 두 글자는 조각 인덱스(`sp_bigrams`, 0054)로 거른다. 다만 **흔한
+    조각**이면 안 건다 — 그 비율은 Postgres 가 그 인덱스에 모아 둔 통계(`pg_stats` 의 자주
+    나오는 원소)로 안다. 통계에 없으면 드문 것이다."""
+    pair = (term or "").strip().lower()
+    if len(pair) != 2:
+        return {}
+    broad = {
+        name
+        for name, freq in db.execute(
+            _BIGRAM_FREQ, {"names": list(_BIGRAM_INDEX.values()), "pair": pair}
+        )
+        if freq is not None and freq > BIGRAM_BROAD
+    }
+    return {where: pair for where, index in _BIGRAM_INDEX.items() if index not in broad}
+
+
+def _bigram(column: Any, pair: str | None) -> tuple[Any, ...]:
+    """두 글자로 찾을 때 — 두 글자 조각 인덱스로 먼저 거른다(`sp_bigrams`, 0054). 같은 말을
+    `ILIKE` 가 다시 본다."""
+    if pair is None:
+        return ()
+    return (func.sp_bigrams(column).op("@>")(cast(array([pair]), ARRAY(Text))),)
+
+
 def containing_ids(
     pattern: str,
     *,
@@ -182,38 +230,50 @@ def containing_ids(
     alias_type_clause: Any = None,
     fields: tuple[str, ...] = ("label", "key"),
     escape: str | None = None,
+    bigrams: dict[str, str] | None = None,
 ) -> Any:
     """「이 글자가 들어간 것」 의 id — 이름 · 식별자 · 속성 칸 · 별칭을 **따로 묻고
     합친다**(UNION).
 
     한 `WHERE` 에 `label ILIKE … OR key ILIKE … OR id IN (별칭)` 으로 묶으면 Postgres 가
     trigram 인덱스를 못 쓰고 표 전체를 읽는다 — 별칭 부분 질의가 비트맵 OR 을 막아서다
-    (실측: 기록 200만 건에서 627ms, 따로 묻고 합치면 9ms, ADR 0010)."""
+    (실측: 기록 200만 건에서 627ms, 따로 묻고 합치면 9ms, ADR 0010).
+
+    `bigrams`(`bigram_plan`)가 있으면 두 글자 조각 인덱스를 함께 건다 — trigram 은 세
+    글자부터라 「소음」 은 표 전체를 읽었다."""
+    plan = bigrams or {}
     where = () if type_clause is None else (type_clause,)
     parts: list[Any] = []
     for field in fields:
         if field == "label":
             column: Any = ObjectInstance.label
+            indexed = _bigram(column, plan.get("label"))
         elif field == "key":
             column = ObjectInstance.key
+            indexed = _bigram(column, plan.get("key"))
         elif field.startswith("properties."):
             column = ObjectInstance.properties[field.split(".", 1)[1]].astext
+            indexed = ()
         else:
             continue
         parts.append(
-            select(ObjectInstance.id).where(*where, column.ilike(pattern, escape=escape))
+            select(ObjectInstance.id).where(
+                *where, *indexed, column.ilike(pattern, escape=escape)
+            )
         )
     # 별칭에도 걸린다 — 「앤시스」 로 찾아도 「Ansys」 가 나와야 새로 만들지 않는다.
     alias_where = () if alias_type_clause is None else (alias_type_clause,)
     parts.append(
         select(ObjectAlias.object_id).where(
-            *alias_where, ObjectAlias.value.ilike(pattern, escape=escape)
+            *alias_where,
+            *_bigram(ObjectAlias.value, plan.get("alias")),
+            ObjectAlias.value.ilike(pattern, escape=escape),
         )
     )
     return union(*parts)
 
 
-def apply_search(stmt: Select[Any], scope: Scope, term: str) -> Select[Any]:
+def apply_search(db: Session, stmt: Select[Any], scope: Scope, term: str) -> Select[Any]:
     """`list_view.search` 가 가리키는 자리들을 훑는다.
 
     안 정해 뒀으면 이름과 식별자를 본다 — **빈 결과보다 그럴듯한 기본이 낫다.** 인터페이스
@@ -228,6 +288,7 @@ def apply_search(stmt: Select[Any], scope: Scope, term: str) -> Select[Any]:
         type_clause=scope.clause(),
         alias_type_clause=scope.clause(ObjectAlias.type_id),
         fields=fields,
+        bigrams=bigram_plan(db, term),
     )
     return stmt.where(ObjectInstance.id.in_(matched))
 

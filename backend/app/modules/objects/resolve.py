@@ -46,7 +46,7 @@ from app.modules.accounts.models import User
 from app.modules.objects import aliases, system
 from app.modules.objects.models import NORMALIZED_KEY_SQL, ObjectAlias, ObjectInstance
 from app.modules.objects.scope import Scope, as_scope
-from app.modules.objects.services import containing_ids
+from app.modules.objects.services import bigram_plan, containing_ids
 from app.modules.ontology.models import ObjectType
 from app.shared.permissions import visible_owner_clause
 from app.shared.text import clean, compare_key
@@ -258,6 +258,7 @@ def by_name(db: Session, user: User, target: ObjectType | Scope, text: str) -> R
         pattern,
         type_clause=scope.clause(),
         alias_type_clause=scope.clause(ObjectAlias.type_id),
+        bigrams=bigram_plan(db, text),
     )
     rows = list(
         db.scalars(

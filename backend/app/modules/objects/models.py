@@ -47,6 +47,17 @@ from app.modules.ontology.models import SLUG_MAX
 #: 인덱스와 질의가 **같은 글자**를 써야 인덱스를 탄다(`objects.resolve`).
 NORMALIZED_KEY_SQL = "lower(normalize(regexp_replace(btrim(key), '\\s+', ' ', 'g'), NFKC))"
 
+#: 글자의 **두 글자 조각** — 「발열 소음」 → {발열, 열 , 소, 소음}. 두 글자 검색이 인덱스를
+#: 타는 자리다(trigram 은 세 글자부터). 소문자로 — `ILIKE` 와 같은 대소문자 무시. 바꾸면
+#: 인덱스를 다시 세워야 하므로 새 이름으로 만든다(0054 가 운영의 사본이다).
+BIGRAMS_SQL = """
+CREATE OR REPLACE FUNCTION sp_bigrams(t text) RETURNS text[]
+LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
+  SELECT coalesce(array_agg(DISTINCT substr(lower(t), i, 2)), '{}'::text[])
+  FROM generate_series(1, char_length(t) - 1) AS i
+$$
+"""
+
 #: 객체의 상태.
 #:   active      picker 와 목록에 나온다
 #:   deprecated  picker 에서 숨되 **이미 걸린 관계와 값은 그대로 남는다**
@@ -99,6 +110,11 @@ class ObjectInstance(Base):
             postgresql_using="gin",
             postgresql_ops={"key": "gin_trgm_ops"},
         ),
+        # **두 글자** 「들어간 것」 — 「소음」 「볼트」 처럼 두 글자 낱말이 흔하다(한글).
+        # trigram 은 조각이 없어 못 탄다 — 두 글자 조각 배열로 거른 뒤 `ILIKE` 로 다시
+        # 본다(0054).
+        Index("ix_objects_label_bigram", text("sp_bigrams(label)"), postgresql_using="gin"),
+        Index("ix_objects_key_bigram", text("sp_bigrams(key)"), postgresql_using="gin"),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -347,6 +363,8 @@ def _need_trigram(_target: Any, connection: Any, **_kw: Any) -> None:
     """`gin_trgm_ops` 인덱스가 서려면 확장이 **표보다 먼저** 있어야 한다(모델로 세우는 길 —
     시험은 스키마를 통째로 지우고 다시 세우므로 확장도 함께 사라진다). 운영은 0051 이 건다."""
     connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+    # 두 글자 조각 함수도 인덱스보다 먼저(운영은 0054).
+    connection.exec_driver_sql(BIGRAMS_SQL)
 
 
 event.listen(Base.metadata, "before_create", _need_trigram)
@@ -421,6 +439,11 @@ class ObjectAlias(Base):
             "value",
             postgresql_using="gin",
             postgresql_ops={"value": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_object_aliases_value_bigram",
+            text("sp_bigrams(value)"),
+            postgresql_using="gin",
         ),
     )
 

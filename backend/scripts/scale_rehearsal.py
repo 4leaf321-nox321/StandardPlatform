@@ -284,6 +284,7 @@ def _schema() -> dict[str, Any]:
                 "slug": "svc_case",
                 "label": "시장 서비스",
                 "key_policy": "required",
+                "usage": "log",
                 "temporal_kind": "evergreen",
                 "properties": case_props,
             },
@@ -415,6 +416,14 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
             get(f"{cases_path}/summary", group_by="ref.model.series"),
         ),
         ("search", "통합 검색", get("/api/search", q="C0012345")),
+        # 두 글자 — trigram 은 세 글자부터라 조각 인덱스(0054)가 탄다. 흔한 조각(「C0」)은
+        # 안 건다.
+        ("search", "통합 검색 — 두 글자(과제)", get("/api/search", q="과제")),
+        (
+            "search",
+            "과제 목록 — 두 글자 검색",
+            get("/api/objects/plm_task", limit=50, q="과제"),
+        ),
         (
             "search",
             "이름 풀이(MCP object_resolve)",
