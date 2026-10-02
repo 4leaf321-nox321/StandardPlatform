@@ -52,7 +52,9 @@ export default function ObjectProfilePage() {
   const [confirming, setConfirming] = useState(false)
 
   // 매 렌더 새 배열이면 관계도가 글자 하나 칠 때마다 다시 흔들린다 — 정의가 바뀔 때만.
-  const typeSlugs = useMemo(() => (schema.data?.types ?? []).map((one) => one.slug), [schema.data])
+  // **색의 근거는 묶음이다** — 타입 순서로 주면 열셋째부터 전부 회색이다.
+  const colorTypes = useMemo(() => schema.data?.types ?? [], [schema.data])
+  const colorGroups = useMemo(() => schema.data?.groups ?? [], [schema.data])
   const row = profile.data?.object
   const defs = profile.data?.properties_schema ?? []
   /** 원 표를 비추는 객체 — 속성·첨부·이력·연도가 없고, 고치는 곳은 그 표의 화면이다. */
@@ -298,7 +300,7 @@ export default function ObjectProfilePage() {
       />
 
       {/* 상세를 떠나지 않고 보는 관계도 — 관계가 없으면 안 그린다. */}
-      <GraphPanel objectId={objectId} typeSlugs={typeSlugs} />
+      <GraphPanel objectId={objectId} types={colorTypes} groups={colorGroups} />
 
       {/* 이 값이 어디서 왔나 — 상세가 다시 읽힐 때마다 이력도 다시(관계 변경은 updated_at 을
           안 건드리므로 응답 객체 자체를 키로 쓴다). 원 표의 객체는 이력이 그 표에 있다. */}

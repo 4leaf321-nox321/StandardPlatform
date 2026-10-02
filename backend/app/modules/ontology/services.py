@@ -135,6 +135,35 @@ def group_parent_error(
     return None
 
 
+#: 묶음의 색 — `#rrggbb` 만. 화면이 이 값을 그대로 캔버스에 넘긴다.
+COLOR_RE = re.compile(r"^#[0-9a-fA-F]{6}$")
+
+
+def group_color_error(slug: str, value: object) -> str | None:
+    """묶음의 색이 **쓸 수 있는 값인가** — 아니면 무엇이 틀렸는지.
+
+    **아무 글자나 받으면 캔버스가 조용히 검정으로 그린다** — 그때는 색을 정한 사람도 왜 안
+    되는지 모른다. 화면과 파일이 같은 규칙을 써야 한다(상위 묶음과 같은 이유다).
+    """
+    text = str(value or "").strip()
+    if not text:
+        return None
+    if not COLOR_RE.match(text):
+        return f"묶음 {slug}: 색은 `#rrggbb` 로 적습니다: {value!r}"
+    return None
+
+
+def group_color(slug: str, value: object) -> str:
+    """빈 값(순서대로 받기) 또는 소문자 `#rrggbb`. 틀리면 거절한다.
+
+    대소문자는 하나로 모은다 — 같은 색이 두 글자로 저장되면 비교가 안 된다.
+    """
+    wrong = group_color_error(slug, value)
+    if wrong:
+        raise InvalidValue(code("ONTOLOGY", 34), wrong)
+    return str(value or "").strip().lower()
+
+
 # --- 값 하나 ----------------------------------------------------------------
 
 

@@ -16169,6 +16169,11 @@
             ],
             "title": "Parent Slug"
           },
+          "color": {
+            "type": "string",
+            "title": "Color",
+            "default": ""
+          },
           "sort_order": {
             "type": "integer",
             "title": "Sort Order"
@@ -16239,6 +16244,17 @@
             ],
             "title": "Parent Slug"
           },
+          "color": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Color"
+          },
           "sort_order": {
             "anyOf": [
               {
@@ -16299,6 +16315,11 @@
               }
             ],
             "title": "Parent Slug"
+          },
+          "color": {
+            "type": "string",
+            "title": "Color",
+            "default": ""
           },
           "sort_order": {
             "type": "integer",

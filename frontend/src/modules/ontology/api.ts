@@ -185,6 +185,8 @@ export interface NavGroupRow {
   audience: string
   /** 상위 묶음의 slug — 사이드바를 두 단계로. 없으면 맨 위 묶음이다. */
   parent_slug?: string | null
+  /** 그래프에서 이 묶음의 색(`#rrggbb`). 비우면 순서대로 팔레트에서 받는다. */
+  color?: string | null
   sort_order: number
   is_active: boolean
 }

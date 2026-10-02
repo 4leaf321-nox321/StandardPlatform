@@ -540,6 +540,67 @@ def test_정의_파일로도_상위_묶음을_보낸다(client: TestClient, admi
     assert any("두 단계" in one for one in refused["errors"]), refused
 
 
+def test_묶음이_그래프_색을_쥔다(client: TestClient, admin: Signed) -> None:
+    """색은 **묶음**의 것이다 — 타입마다 주면 팔레트가 열둘이라 열셋째부터 회색이 된다.
+
+    아무 글자나 받으면 캔버스가 조용히 검정으로 그리고, 그때는 색을 정한 사람도 왜 안 되는지
+    모른다. 그래서 `#rrggbb` 만 받는다 — **화면과 파일이 같은 규칙으로.**
+    """
+    slug = _uniq("gcolor")
+    made = client.post(
+        "/api/ontology/groups",
+        headers=admin.headers,
+        json={"slug": slug, "label": "색 묶음", "color": "#8B5CF6"},
+    )
+    assert made.status_code in (200, 201), made.text
+    # 대소문자는 하나로 모은다 — 같은 색이 두 글자로 저장되면 비교가 안 된다.
+    assert made.json()["color"] == "#8b5cf6"
+
+    bad = client.patch(
+        f"/api/ontology/groups/{slug}", headers=admin.headers, json={"color": "purple"}
+    )
+    assert bad.status_code == 422, bad.text
+
+    # 비우면 「순서대로 받기」 로 돌아간다 — 안 보냄과 구별돼야 색을 뗄 수 있다.
+    cleared = client.patch(
+        f"/api/ontology/groups/{slug}", headers=admin.headers, json={"color": ""}
+    )
+    assert cleared.status_code == 200 and cleared.json()["color"] == ""
+
+    # 정의 파일로도 같은 자리다(묶음은 데이터로 들어온다).
+    applied = _import(
+        client,
+        admin,
+        {"groups": [{"slug": slug, "label": "색 묶음", "color": "#10b981"}]},
+        dry_run=False,
+    )
+    assert applied.status_code == 200, applied.text
+    schema = client.get("/api/ontology/schema", headers=admin.headers).json()
+    assert next(one for one in schema["groups"] if one["slug"] == slug)["color"] == "#10b981"
+
+    refused = _import(
+        client, admin, {"groups": [{"slug": slug, "label": "색", "color": "초록"}]}
+    )
+    assert any("rrggbb" in one for one in refused.json()["errors"]), refused.text
+
+    # 파일로 온 대문자도 소문자로 모인다 — 안 그러면 화면과 파일이 같은 색을 다르게 적어 두고,
+    # 그때부터 「바뀐 것 없음」 이 매번 「바뀜」 으로 나온다.
+    upper = _import(
+        client,
+        admin,
+        {"groups": [{"slug": slug, "label": "색 묶음", "color": "#8B5CF6"}]},
+        dry_run=False,
+    )
+    assert upper.status_code == 200, upper.text
+    schema = client.get("/api/ontology/schema", headers=admin.headers).json()
+    assert next(one for one in schema["groups"] if one["slug"] == slug)["color"] == "#8b5cf6"
+    again = _import(
+        client, admin, {"groups": [{"slug": slug, "label": "색 묶음", "color": "#8B5CF6"}]}
+    )
+    change = next(one for one in again.json()["changes"] if one["slug"] == slug)
+    assert change["action"] == "unchanged", change
+
+
 def test_부서_삭제_확인에_객체가_뜬다(client: TestClient, admin: Signed) -> None:
     """**안 걸면 부서를 지울 때 이 표가 목록에 안 나타나고**, 사람은 아무것도
     안 걸린 줄 안다 — 그리고 FK 가 RESTRICT 라 서버가 500 을 낸다."""

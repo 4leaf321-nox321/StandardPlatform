@@ -48,6 +48,8 @@ from app.modules.ontology.models import (
 )
 from app.modules.ontology.services import (
     InvalidValue,
+    group_color,
+    group_color_error,
     group_parent_error,
     require_key,
     require_slug,
@@ -64,6 +66,8 @@ GROUP_FIELDS = {
     "label",
     "icon",
     "audience",
+    # 묶음의 색(`#rrggbb`) — 비우면 순서대로 받는다. 색은 타입이 아니라 **묶음**에 준다.
+    "color",
     # **상위 묶음** — 사이드바를 두 단계로. 행에는 `parent_id` 가 있어 `_assign` 이 건드리지
     # 않고(`DERIVED`) 아래에서 slug 로 푼다. 뜻의 계층(「개발모델은 제품이다」)은 묶음이 아니라
     # 인터페이스가 말한다(ADR 0006).
@@ -280,6 +284,16 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
         _reject_unknown(one, GROUP_FIELDS, what="묶음")
         slug = require_slug(one.get("slug", ""), what="묶음 slug")
         _check_choices(one, what=f"묶음 {slug}", errors=out.errors)
+        if "color" in one:
+            # 화면이 막는 것을 파일이 통과시키면, 그 색은 캔버스에서 검정으로 나온다.
+            wrong_color = group_color_error(slug, one["color"])
+            if wrong_color:
+                out.errors.append(wrong_color)
+            else:
+                # **담을 꼴로 여기서 한 번** 맞춘다(소문자). `apply` 는 이 `plan` 을 지나온
+                # 같은 payload 를 읽으므로, 두 번 맞추지 않는다 — 안 맞추면 파일의 `#8B5CF6`
+                # 이 저장된 `#8b5cf6` 과 달라 보여 매번 「바뀜」 으로 나온다.
+                one["color"] = group_color(slug, one["color"])
         if "parent_slug" in one:
             wrong = group_parent_error(
                 slug=slug,

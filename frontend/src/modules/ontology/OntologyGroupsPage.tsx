@@ -7,6 +7,7 @@
 
 import { useState } from 'react'
 
+import { groupColorScale } from '@/modules/graph/colors'
 import { GroupEditDialog } from '@/modules/ontology/GroupEditDialog'
 import { useOntology } from '@/modules/ontology/OntologyLayout'
 import { ontologyApi } from '@/modules/ontology/api'
@@ -43,6 +44,8 @@ export default function OntologyGroupsPage() {
     // 상위가 없어진(또는 안 보이는) 자식도 빠뜨리지 않는다.
     .concat(raw.filter((one) => one.parent_slug && !raw.some((up) => up.slug === one.parent_slug)))
   const types = schema?.types ?? []
+  // 표에서도 색을 보인다 — 그래프를 열지 않고 「무엇이 무슨 색인가」 를 여기서 끝낸다.
+  const colorOf = groupColorScale(raw)
   const target = groups.find((row) => row.slug === editing) ?? null
 
   /** 이 묶음에 소속된 타입 이름들. **삭제 전에 무엇이 소속돼 있는지 말하는 데 쓴다.** */
@@ -98,6 +101,11 @@ export default function OntologyGroupsPage() {
                   >
                     <TableCell className={group.parent_slug ? 'pl-8 font-medium' : 'font-medium'}>
                       {group.parent_slug && <span className="text-muted-foreground mr-1">└</span>}
+                      <span
+                        aria-hidden
+                        className="mr-1.5 inline-block size-2.5 rounded-full align-middle"
+                        style={{ background: colorOf(group.slug) }}
+                      />
                       {group.label}
                       {!group.is_active && (
                         <span className="text-muted-foreground ml-2 text-xs">사용 안 함</span>

@@ -25,6 +25,9 @@ class NavGroupOut(BaseModel):
     audience: str
     parent_slug: str | None = None
     """상위 묶음 — 사이드바를 두 단계로 세운다. 없으면 맨 위 묶음이다."""
+    color: str = ""
+    """이 묶음의 색(`#rrggbb`) — 비우면 화면이 순서대로 팔레트에서 준다. 그래프의 색은
+    타입이 아니라 **묶음**이 정한다(타입이 백 개면 색 백 개를 구별할 수 없다)."""
     sort_order: int
     is_active: bool
 
@@ -36,6 +39,8 @@ class NavGroupWriteRequest(BaseModel):
     audience: str = "everyone"
     parent_slug: str | None = None
     """상위 묶음의 slug. **두 단계까지다** — 상위가 이미 상위를 가졌으면 거절한다."""
+    color: str = ""
+    """`#rrggbb` 또는 빈 값(순서대로 받음)."""
     sort_order: int = 0
     is_active: bool = True
 
@@ -196,6 +201,8 @@ class NavGroupPatchRequest(BaseModel):
     audience: str | None = None
     parent_slug: str | None = None
     """빈 문자열(`""`)을 보내면 **맨 위로 올린다** — null 은 「안 보냄」 과 구별되지 않는다."""
+    color: str | None = None
+    """`#rrggbb`, 또는 빈 문자열로 보내면 **순서대로 받기**로 되돌린다."""
     sort_order: int | None = None
     is_active: bool | None = None
 

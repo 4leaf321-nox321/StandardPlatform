@@ -100,6 +100,7 @@ from app.modules.ontology.schemas import (
 )
 from app.modules.ontology.services import (
     InvalidValue,
+    group_color,
     group_parent_error,
     require_choice,
     require_key,
@@ -333,6 +334,7 @@ def create_group(
     )
     if payload.parent_slug:
         row.parent_id = _parent_id(db, slug, payload.parent_slug)
+    row.color = group_color(slug, payload.color)
     db.add(row)
     db.flush()
     _audit(
@@ -361,6 +363,8 @@ def update_group(
         row.label = payload.label
     if "icon" in sent and payload.icon is not None:
         row.icon = payload.icon
+    if "color" in sent and payload.color is not None:
+        row.color = group_color(slug, payload.color)
     if "parent_slug" in sent:
         # 빈 문자열이 「맨 위로」 다 — null 은 「안 보냄」 과 구별되지 않는다.
         row.parent_id = (

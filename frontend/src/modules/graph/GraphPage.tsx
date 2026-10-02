@@ -45,7 +45,12 @@ import type {
   SearchHit,
   Subgraph,
 } from '@/modules/graph/api'
-import { colorScale, withAlpha } from '@/modules/graph/colors'
+import {
+  colorScale,
+  groupColorScale,
+  typeColorScale,
+  withAlpha,
+} from '@/modules/graph/colors'
 import { GraphCanvas } from '@/modules/graph/GraphCanvas'
 import type { CanvasLink, CanvasNode } from '@/modules/graph/GraphCanvas'
 import { COMMUNITY_MIN_NODES, useCommunities } from '@/modules/graph/useCommunities'
@@ -76,7 +81,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { useResource } from '@/shared/hooks/useResource'
 
 type Mode = 'schema' | 'explore'
-type ColorBy = 'type' | 'workspace' | 'status' | 'community'
+type ColorBy = 'type' | 'group' | 'workspace' | 'status' | 'community'
 
 /** 탐색의 씨앗 — 어디서 시작하나. */
 export type Seed = { kind: 'focus'; id: string } | { kind: 'type'; slugs: string[]; offset: number }
@@ -311,11 +316,31 @@ export default function GraphPage() {
   const schema = useResource(() => ontologyApi.schema(), [])
   const overview = useResource(() => graphApi.overview(), [])
 
-  // 타입 색은 정의 순서로 — 구조 그림과 탐색 그림이 **같은 색**을 쓴다.
+  // **색은 묶음이 정한다** — 타입 순서로 주면 열셋째부터 전부 회색이고, 타입이 백 개인
+  // 설치에서는 거의 다 회색이다. 색은 「어느 영역의 것인가」 를 말하고 타입은 라벨이 말한다.
+  // 구조 그림과 탐색 그림이 **같은 색**을 쓴다.
   const typeColor = useMemo(
-    () => colorScale((schema.data?.types ?? []).map((one) => one.slug)),
+    () => typeColorScale(schema.data?.types ?? [], schema.data?.groups ?? []),
     [schema.data],
   )
+  /**
+   * 타입 → 그 묶음(색과 범례가 쓴다). 묶음이 없으면 없는 것으로 둔다.
+   *
+   * `key` 는 **묶음의 slug** 다 — 색을 주는 `groupColor` 가 받는 값과 같아야, 범례의 한 줄과
+   * 그림의 색이 어긋나지 않는다.
+   */
+  const groupOfType = useMemo(() => {
+    const labels = new Map(
+      (schema.data?.groups ?? []).map((one) => [one.slug, one.label] as const),
+    )
+    const out = new Map<string, { key: string; label: string }>()
+    for (const one of schema.data?.types ?? []) {
+      const group = one.nav_group_slug
+      if (group) out.set(one.slug, { key: group, label: labels.get(group) ?? group })
+    }
+    return out
+  }, [schema.data])
+  const groupColor = useMemo(() => groupColorScale(schema.data?.groups ?? []), [schema.data])
   const typeLabel = useMemo(
     () => new Map((schema.data?.types ?? []).map((one) => [one.slug, one.label])),
     [schema.data],
@@ -377,6 +402,8 @@ export default function GraphPage() {
           onControls={setControls}
           typeColor={typeColor}
           typeLabel={typeLabel}
+          groupOfType={groupOfType}
+          groupColor={groupColor}
           relationTypes={schema.data?.relation_types ?? []}
           types={schema.data?.types ?? []}
         />
@@ -720,6 +747,9 @@ interface ExploreViewProps {
   onControls: (patch: Partial<Controls>) => void
   typeColor: (slug: string) => string
   typeLabel: Map<string, string>
+  /** 타입 → 그 묶음(색 기준 「묶음별」 과 범례가 쓴다). `key` 는 묶음의 slug 다. */
+  groupOfType: Map<string, { key: string; label: string }>
+  groupColor: (slug: string | null | undefined) => string
   relationTypes: { slug: string; label: string; is_active: boolean }[]
   types: { slug: string; label: string; is_active: boolean; object_count: number }[]
 }
@@ -733,6 +763,8 @@ function ExploreView({
   onControls,
   typeColor,
   typeLabel,
+  groupOfType,
+  groupColor,
   relationTypes,
   types,
 }: ExploreViewProps) {
@@ -889,12 +921,18 @@ function ExploreView({
           : { key: '__global__', label: '전역' }
       }
       if (colorBy === 'status') return { key: one.status, label: one.status }
+      if (colorBy === 'group') {
+        const found = groupOfType.get(one.type_slug)
+        return found ?? { key: '__nogroup__', label: '묶음 없음' }
+      }
       return { key: one.type_slug, label: one.type_label }
     },
-    [colorBy],
+    [colorBy, groupOfType],
   )
   const categoryScale = useMemo(() => {
     if (colorBy === 'type') return typeColor
+    // 묶음별이면 묶음이 쥔 색 그대로 — 타입별과 **같은 색**이라야 기준을 바꿔도 같은 그림이다.
+    if (colorBy === 'group') return groupColor
     const keys: string[] = []
     for (const one of nodeList) {
       const { key } = nodeCategory(one)
@@ -1166,6 +1204,9 @@ function ExploreView({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="type">타입별</SelectItem>
+              {/* **타입이 백 개면 타입별 범례는 백 줄이다.** 묶음별로 보면 열 줄로 읽히고,
+                  색의 뜻도 그것이다(어느 영역의 것인가). */}
+              <SelectItem value="group">묶음별</SelectItem>
               <SelectItem value="workspace">부서별</SelectItem>
               <SelectItem value="status">상태별</SelectItem>
               <SelectItem value="community">

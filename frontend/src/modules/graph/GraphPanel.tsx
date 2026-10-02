@@ -13,7 +13,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Waypoints } from 'lucide-react'
 
 import { graphApi } from '@/modules/graph/api'
-import { colorScale } from '@/modules/graph/colors'
+import { typeColorScale } from '@/modules/graph/colors'
 import { GraphCanvas } from '@/modules/graph/GraphCanvas'
 import type { CanvasLink, CanvasNode } from '@/modules/graph/GraphCanvas'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -27,17 +27,22 @@ const FANOUT = 20
 
 interface GraphPanelProps {
   objectId: string
-  /** 색을 정의 순서로 — 지식 그래프와 같은 색. */
-  typeSlugs: string[]
+  /**
+   * 색의 근거 — **묶음이 색을 쥐고 타입은 그 색을 받는다**(지식 그래프와 같은 색).
+   *
+   * 타입 순서로 색을 주던 때는 열셋째부터 전부 회색이었다.
+   */
+  types: { slug: string; nav_group_slug?: string | null }[]
+  groups: { slug: string; color?: string | null; parent_slug?: string | null }[]
 }
 
-export function GraphPanel({ objectId, typeSlugs }: GraphPanelProps) {
+export function GraphPanel({ objectId, types, groups }: GraphPanelProps) {
   const navigate = useNavigate()
   const graph = useResource(
     () => graphApi.neighborhood({ focus: objectId, depth: DEPTH, fanout: FANOUT }),
     [objectId],
   )
-  const typeColor = useMemo(() => colorScale(typeSlugs), [typeSlugs])
+  const typeColor = useMemo(() => typeColorScale(types, groups), [types, groups])
 
   const { nodes, links } = useMemo(() => {
     const data = graph.data

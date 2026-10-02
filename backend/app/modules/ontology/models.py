@@ -158,6 +158,15 @@ class NavGroup(Base):
 
     이것은 **화면 정리**다. 「개발모델은 제품이다」 같은 뜻의 계층은 인터페이스가 말한다
     (`ObjectType.interface_slugs`, ADR 0006) — 메뉴를 옮겨도 뜻은 안 바뀐다."""
+    color: Mapped[str] = mapped_column(String(7), default="", server_default="")
+    """이 묶음의 색 — `#rrggbb`. 비우면 **순서대로** 팔레트에서 받는다.
+
+    색은 **타입이 아니라 묶음에 준다.** 타입이 백 개면 색 백 개가 필요한데 사람은 그만큼을
+    구별하지 못한다(열둘도 많은 편이다) — 그래서 색은 「어느 영역의 것인가」 만 말하고, 어느
+    타입인지는 라벨이 말한다. 그 영역이 바로 묶음이다.
+
+    적어 두면 사내 관례를 고정할 수 있다(「시뮬레이션은 늘 주황」). 상위 묶음이 있으면 그
+    색을 물려받고 농도만 달라진다 — 같은 계열로 보여야 한 영역으로 읽힌다."""
     parent: Mapped[NavGroup | None] = relationship(
         remote_side=[id], lazy="joined", foreign_keys=[parent_id]
     )

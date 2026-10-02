@@ -7,6 +7,7 @@
 
 import { useState } from 'react'
 
+import { groupColorScale } from '@/modules/graph/colors'
 import { ontologyApi } from '@/modules/ontology/api'
 import type { NavGroupRow } from '@/modules/ontology/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
@@ -46,8 +47,23 @@ export function GroupEditDialog({ group, attached, groups = [], onClose, onChang
   const [label, setLabel] = useState(group.label)
   const [audience, setAudience] = useState(group.audience)
   const [parent, setParent] = useState(group.parent_slug || TOP)
+  const [color, setColor] = useState(group.color || '')
   const [sortOrder, setSortOrder] = useState(String(group.sort_order))
   const [isActive, setIsActive] = useState(group.is_active)
+
+  /**
+   * 비워 뒀을 때 그래프가 **실제로** 쓰는 색 — `<input type="color">` 는 빈 값을 못 보인다.
+   *
+   * 고른 상위를 반영해 계산한다: 상위를 바꾸면 물려받는 색도 바뀌는데, 저장 전에 그게 안
+   * 보이면 사람은 저장한 뒤 그래프를 보고 다시 여기로 돌아온다.
+   */
+  const auto = groupColorScale(
+    groups.map((one) =>
+      one.slug === group.slug
+        ? { ...one, color: '', parent_slug: parent === TOP ? '' : parent }
+        : one,
+    ),
+  )(group.slug)
 
   // 내 아래에 묶음이 있으면 나는 남의 아래로 못 간다(3단계가 된다) — 그때는 고르지 못하게 한다.
   const hasChildren = groups.some((one) => one.parent_slug === group.slug)
@@ -68,6 +84,7 @@ export function GroupEditDialog({ group, attached, groups = [], onClose, onChang
         audience,
         // 빈 문자열이 「맨 위로」 다 — null 은 서버에서 「안 보냄」 과 구별되지 않는다.
         parent_slug: parent === TOP ? '' : parent,
+        color,
         sort_order: Number(sortOrder) || 0,
         is_active: isActive,
       })
@@ -164,6 +181,33 @@ export function GroupEditDialog({ group, attached, groups = [], onClose, onChang
                     빠집니다 — 세 단계는 만들지 않습니다.
                   </>
                 )}
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="group-edit-color">그래프 색</Label>
+              <div className="flex items-center gap-2">
+                <input
+                  id="group-edit-color"
+                  type="color"
+                  aria-label="그래프 색"
+                  className="size-9 cursor-pointer rounded border bg-transparent p-0.5"
+                  value={color || auto}
+                  onChange={(event) => setColor(event.target.value)}
+                />
+                <span className="font-mono text-xs">{color || auto}</span>
+                {color ? (
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setColor('')}>
+                    자동으로
+                  </Button>
+                ) : (
+                  <span className="text-muted-foreground text-xs">자동</span>
+                )}
+              </div>
+              <p className="text-muted-foreground text-xs">
+                그래프에서 <b>이 묶음의 타입들이 이 색</b>으로 그려집니다. 비워 두면(자동) 순서대로
+                팔레트에서 받고, 상위 묶음이 있으면 그 색의 농도만 달라집니다 — 같은 영역이 같은
+                계열로 읽혀야 합니다.
               </p>
             </div>
 
