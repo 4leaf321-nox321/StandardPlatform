@@ -83,6 +83,21 @@ class ObjectInstance(Base):
         ),
         # 이름이 그대로 같은 것 — 대소문자 무시.
         Index("ix_objects_type_label_lower", "type_id", text("lower(label)")),
+        # 「이 글자가 들어간 것」(`ILIKE '%q%'`) — 검색 · 목록 글 검색 · 이름 풀이의 포함 단계.
+        # trigram 이라 **세 글자 이상**에서 탄다(두 글자는 조각이 없어 못 탄다). 기록 200만
+        # 건에서 검색이 2.7초였다(실측, ADR 0010).
+        Index(
+            "ix_objects_label_trgm",
+            "label",
+            postgresql_using="gin",
+            postgresql_ops={"label": "gin_trgm_ops"},
+        ),
+        Index(
+            "ix_objects_key_trgm",
+            "key",
+            postgresql_using="gin",
+            postgresql_ops={"key": "gin_trgm_ops"},
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -327,6 +342,15 @@ class ObjectRef(Base):
 refindex.attach(Base.metadata)
 
 
+def _need_trigram(_target: Any, connection: Any, **_kw: Any) -> None:
+    """`gin_trgm_ops` 인덱스가 서려면 확장이 **표보다 먼저** 있어야 한다(모델로 세우는 길 —
+    시험은 스키마를 통째로 지우고 다시 세우므로 확장도 함께 사라진다). 운영은 0051 이 건다."""
+    connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS pg_trgm")
+
+
+event.listen(Base.metadata, "before_create", _need_trigram)
+
+
 class ObjectLink(Base):
     """한쪽 끝이 `objects` 밖인 관계 — **`system` 객체(부서·계정·승격한 표)와 잇는 선.**
 
@@ -390,6 +414,13 @@ class ObjectAlias(Base):
         Index("ix_object_aliases_lookup", "type_id", "norm"),
         # 검수 대기 목록 — 타입 안에서 「아직 안 본 것」 을 훑는다.
         Index("ix_object_aliases_verified", "type_id", "verified_at"),
+        # 「이 글자가 들어간 별칭」 — 검색이 별칭에도 걸린다(trigram, 세 글자 이상).
+        Index(
+            "ix_object_aliases_value_trgm",
+            "value",
+            postgresql_using="gin",
+            postgresql_ops={"value": "gin_trgm_ops"},
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(

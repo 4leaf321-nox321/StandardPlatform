@@ -9,7 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Select, Text, and_, func, or_, select, update
+from sqlalchemy import Select, Text, and_, func, or_, select, union, update
 from sqlalchemy.orm import Session
 
 from app.modules.objects import system
@@ -175,6 +175,44 @@ def require_unique_properties(
             )
 
 
+def containing_ids(
+    pattern: str,
+    *,
+    type_clause: Any = None,
+    alias_type_clause: Any = None,
+    fields: tuple[str, ...] = ("label", "key"),
+    escape: str | None = None,
+) -> Any:
+    """「이 글자가 들어간 것」 의 id — 이름 · 식별자 · 속성 칸 · 별칭을 **따로 묻고
+    합친다**(UNION).
+
+    한 `WHERE` 에 `label ILIKE … OR key ILIKE … OR id IN (별칭)` 으로 묶으면 Postgres 가
+    trigram 인덱스를 못 쓰고 표 전체를 읽는다 — 별칭 부분 질의가 비트맵 OR 을 막아서다
+    (실측: 기록 200만 건에서 627ms, 따로 묻고 합치면 9ms, ADR 0010)."""
+    where = () if type_clause is None else (type_clause,)
+    parts: list[Any] = []
+    for field in fields:
+        if field == "label":
+            column: Any = ObjectInstance.label
+        elif field == "key":
+            column = ObjectInstance.key
+        elif field.startswith("properties."):
+            column = ObjectInstance.properties[field.split(".", 1)[1]].astext
+        else:
+            continue
+        parts.append(
+            select(ObjectInstance.id).where(*where, column.ilike(pattern, escape=escape))
+        )
+    # 별칭에도 걸린다 — 「앤시스」 로 찾아도 「Ansys」 가 나와야 새로 만들지 않는다.
+    alias_where = () if alias_type_clause is None else (alias_type_clause,)
+    parts.append(
+        select(ObjectAlias.object_id).where(
+            *alias_where, ObjectAlias.value.ilike(pattern, escape=escape)
+        )
+    )
+    return union(*parts)
+
+
 def apply_search(stmt: Select[Any], scope: Scope, term: str) -> Select[Any]:
     """`list_view.search` 가 가리키는 자리들을 훑는다.
 
@@ -182,29 +220,16 @@ def apply_search(stmt: Select[Any], scope: Scope, term: str) -> Select[Any]:
     목록이면 그 인터페이스의 `list_view` 와 구현 타입 전부의 별칭을 본다.
     """
     view = scope.list_view
-    fields = view.get("search") or ["label", "key"]
-    pattern = f"%{term}%"
-
-    clauses = []
-    for field in fields:
-        if field == "label":
-            clauses.append(ObjectInstance.label.ilike(pattern))
-        elif field == "key":
-            clauses.append(ObjectInstance.key.ilike(pattern))
-        elif field.startswith("properties."):
-            key = field.split(".", 1)[1]
-            clauses.append(ObjectInstance.properties[key].astext.ilike(pattern))
-    if not clauses:
+    fields = tuple(view.get("search") or ["label", "key"])
+    if not any(one in ("label", "key") or one.startswith("properties.") for one in fields):
         return stmt
-    # 별칭에도 걸린다 — 「앤시스」 로 찾아도 「Ansys」 가 나와야 새로 만들지 않는다.
-    clauses.append(
-        ObjectInstance.id.in_(
-            select(ObjectAlias.object_id).where(
-                scope.clause(ObjectAlias.type_id), ObjectAlias.value.ilike(pattern)
-            )
-        )
+    matched = containing_ids(
+        f"%{term}%",
+        type_clause=scope.clause(),
+        alias_type_clause=scope.clause(ObjectAlias.type_id),
+        fields=fields,
     )
-    return stmt.where(or_(*clauses))
+    return stmt.where(ObjectInstance.id.in_(matched))
 
 
 def apply_property_filters(stmt: Select[Any], filters: dict[str, str]) -> Select[Any]:

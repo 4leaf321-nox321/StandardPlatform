@@ -33,6 +33,19 @@ def _names(request: Request) -> export.Names:
     return export.Names(str(request.base_url))
 
 
+def _require_size(db: Session, types: list[str] | None, user: User) -> None:
+    """그래프를 **세우기 전에** 크기를 본다 — 세운 뒤에 거절하면 이미 메모리를 다 쓴 뒤다."""
+    count = export.size_of(db, types, user=user)
+    if count > export.MAX_OBJECTS:
+        raise Conflict(
+            code("RDF", 5),
+            f"그래프로 올리기에는 큽니다(객체 {count:,}건, 상한 {export.MAX_OBJECTS:,}). "
+            "`types` 로 범위를 좁히세요 — 한 타입 안의 세기 · 거르기는 목록 · 통계가 "
+            "빠릅니다.",
+            details={"objects": count, "limit": export.MAX_OBJECTS},
+        )
+
+
 def _fmt(value: str) -> str:
     return FORMATS.get(value.lower(), "ttl")
 
@@ -67,6 +80,7 @@ def data(
     db: Session = Depends(get_db),
 ) -> Response:
     """데이터(객체 · 값 · 관계) → RDF. 정의는 `/schema` 와 합쳐 쓴다. **목록과 같은 것만**."""
+    _require_size(db, type, user)
     return _respond(
         export.data_graph(db, _names(request), type, user=user), _fmt(format), "data"
     )
@@ -117,6 +131,7 @@ def query(
             raise Conflict(code("RDF", 2), f"질의에 쓸 수 없는 말입니다: {word}")
 
     names = _names(request)
+    _require_size(db, payload.types, user)
     graph, stored, added = export.graph_for(db, names, payload.types, payload.infer, user=user)
     if payload.infer and stored > export.INFER_MAX_TRIPLES:
         raise Conflict(
@@ -194,6 +209,7 @@ def inferred(
     플랫폼 안에서 돌리므로 별도 추론 서버가 없어도 「추론하면 무엇이 더 나오나」 를 본다.
     규모가 커지면 `/schema` + `/data` 를 트리플 스토어에 넣고 거기서 돌린다."""
     names = _names(request)
+    _require_size(db, type, user)
     graph = export.inferred(
         export.schema_graph(db, names), export.data_graph(db, names, type, user=user)
     )

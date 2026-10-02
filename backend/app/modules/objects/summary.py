@@ -527,15 +527,25 @@ def summarize(
     # 그룹이 몇 개인지, 그리고 **센 줄이 모두 몇인지** 먼저 센다. 상한을 넘는 축(자유
     # 글자 칸)에서 전부 읽어 오면 응답이 수만 줄이 된다. 센 줄의 합은 여러 값 칸이면
     # 전체 행 수보다 크다 — 「그 밖에 M건」 은 그 합에서 뺀다.
+    #
+    # **한 번에 센다** — 그룹 수와 합을 창 함수로 같이 낸다. 예전에는 같은 조인을 두 번 돌았고,
+    # 참조 너머 칸으로 묶으면 기록 200만 건에서 그 한 번이 3초였다(실측, ADR 0010).
     every = grouped.order_by(None).subquery()
-    distinct, counted_rows = db.execute(
-        select(func.count(), func.coalesce(func.sum(every.c.n), 0)).select_from(every)
-    ).one()
-    measured = counted if value_expr is None else columns[-1]
+    measured = every.c.n if value_expr is None else every.c.v
     ordering = measured.asc() if order == "asc" else measured.desc()
     rows = list(
-        db.execute(grouped.order_by(nulls_last(ordering), key_expr).limit(MAX_BUCKETS))
+        db.execute(
+            select(
+                every,
+                func.count().over().label("groups"),
+                func.sum(every.c.n).over().label("all_rows"),
+            )
+            .order_by(nulls_last(ordering), every.c.k)
+            .limit(MAX_BUCKETS)
+        )
     )
+    distinct = int(rows[0].groups) if rows else 0
+    counted_rows = int(rows[0].all_rows or 0) if rows else 0
 
     keys = [str(row.k) for row in rows if row.k is not None]
     names = _labels(db, group, keys)

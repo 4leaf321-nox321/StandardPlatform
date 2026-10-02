@@ -39,13 +39,14 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import String, func, literal_column, or_, select
+from sqlalchemy import String, func, literal_column, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.objects import aliases, system
 from app.modules.objects.models import NORMALIZED_KEY_SQL, ObjectAlias, ObjectInstance
 from app.modules.objects.scope import Scope, as_scope
+from app.modules.objects.services import containing_ids
 from app.modules.ontology.models import ObjectType
 from app.shared.permissions import visible_owner_clause
 from app.shared.text import clean, compare_key
@@ -250,21 +251,19 @@ def by_name(db: Session, user: User, target: ObjectType | Scope, text: str) -> R
         return decide(rows, "label", sure=True)
 
     # 4) 포함 — 여기서 나온 것은 하나여도 짐작이다.
+    # 이름 · 식별자 · 별칭을 따로 묻고 합친다(trigram 인덱스를 타게). 후보는 상한까지만 —
+    # 「그」 처럼 짧은 말은 수만 건에 걸리고, 그것을 다 읽어 고르라고 할 수는 없다.
     pattern = f"%{text}%"
+    matched = containing_ids(
+        pattern,
+        type_clause=scope.clause(),
+        alias_type_clause=scope.clause(ObjectAlias.type_id),
+    )
     rows = list(
         db.scalars(
-            base.where(
-                or_(
-                    ObjectInstance.label.ilike(pattern),
-                    ObjectInstance.key.ilike(pattern),
-                    ObjectInstance.id.in_(
-                        select(ObjectAlias.object_id).where(
-                            scope.clause(ObjectAlias.type_id),
-                            ObjectAlias.value.ilike(pattern),
-                        )
-                    ),
-                )
-            ).order_by(ObjectInstance.label)
+            base.where(ObjectInstance.id.in_(matched))
+            .order_by(ObjectInstance.label)
+            .limit(CANDIDATE_CAP * 10)
         )
     )
     if rows:

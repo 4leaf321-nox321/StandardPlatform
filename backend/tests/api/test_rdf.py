@@ -5,11 +5,13 @@ from __future__ import annotations
 
 import uuid
 
+import pytest
 from fastapi.testclient import TestClient
 from rdflib import DCTERMS, OWL, RDF, RDFS, Graph, URIRef
 from sqlalchemy.orm import Session
 
 from app.modules.workspaces.models import Workspace
+from app.shared.errors import code
 from tests.api.conftest import Signed
 from tests.api.test_ontology import _import, _make_object, _make_type, _uniq
 
@@ -269,3 +271,25 @@ def test_목록에서_안_보이는_남의_부서_객체는_RDF_로도_안_나�
     # 관리자가 먼저 세운 그래프를 멤버가 받아 가지 않는다(캐시 열쇠에 보이는 범위가 있다).
     assert asked(admin) == {"HIDDEN-1", "MINE-1", "ALL-1"}
     assert asked(member) == {"MINE-1", "ALL-1"}
+
+
+def test_너무_큰_그래프는_세우기_전에_거절하고_좁히라고_한다(
+    client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """그래프는 메모리에 선다 — 기록 200만 건 타입을 그대로 올리면 질의 하나가 서버 메모리를
+    다 쓴다. **세우기 전에** 세어 거절하고, 무엇으로 좁힐지 말한다(ADR 0010)."""
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    for key in ("P-1", "P-2"):
+        _make_object(client, admin, part, key=key, label=key)
+    monkeypatch.setattr("app.modules.rdf.export.MAX_OBJECTS", 1)
+
+    asked = client.post(
+        "/api/rdf/query",
+        json={"query": "SELECT ?x WHERE { ?x ?p ?o }", "types": [part]},
+        headers=admin.headers,
+    )
+    assert asked.status_code == 409
+    assert asked.json()["error"]["code"] == code("RDF", 5)
+    assert asked.json()["error"]["details"] == {"objects": 2, "limit": 1}
+    data = client.get("/api/rdf/data", params={"type": part}, headers=admin.headers)
+    assert data.status_code == 409

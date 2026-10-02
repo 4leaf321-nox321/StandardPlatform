@@ -206,6 +206,42 @@ def _add_relation(graph: Graph, names: Names, rel: RelationType) -> None:
         graph.add((inverse, OWL.inverseOf, node))
 
 
+#: 그래프를 세울 수 있는 객체 수 — 넘으면 **세우기 전에** 거절한다. 그래프는 메모리에 선다
+#: (13만 트리플에 3.4초, 실측) — 기록 200만 건 타입을 그대로 올리면 질의 하나가 서버 메모리를
+#: 다 쓴다. 넘으면 `types` 로 좁히거나 `/rdf/data` 를 트리플 스토어에 넣고 거기서 묻는다.
+MAX_OBJECTS = 50_000
+
+
+def _chosen_ids(db: Session, type_slugs: list[str] | None) -> set[uuid.UUID]:
+    """고른 타입(인터페이스면 구현 타입 전부)의 id. 비우면 전부."""
+    types = {row.id: row for row in db.scalars(select(ObjectType))}
+    catalog = interfaces.load(db)
+    chosen = set(type_slugs or [])
+    for slug in list(chosen):
+        if slug in catalog.interfaces:
+            chosen |= set(interfaces.implementers(catalog, slug))
+    return {row.id for row in types.values() if not type_slugs or row.slug in chosen}
+
+
+def size_of(db: Session, type_slugs: list[str] | None, *, user: User) -> int:
+    """그래프에 오를 객체 수 — 세우기 전에 상한을 본다."""
+    from sqlalchemy import func
+
+    return int(
+        db.scalar(
+            select(func.count())
+            .select_from(ObjectInstance)
+            .where(
+                ObjectInstance.deleted_at.is_(None),
+                ObjectInstance.merged_into_id.is_(None),
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+                ObjectInstance.type_id.in_(_chosen_ids(db, type_slugs)),
+            )
+        )
+        or 0
+    )
+
+
 def data_graph(
     db: Session, names: Names, type_slugs: list[str] | None = None, *, user: User
 ) -> Graph:

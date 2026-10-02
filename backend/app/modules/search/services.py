@@ -37,12 +37,13 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.objects import system
 from app.modules.objects.models import ObjectAlias, ObjectInstance
+from app.modules.objects.services import containing_ids
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType
 from app.shared import system_sources
@@ -98,15 +99,8 @@ def _where(user: User, q: str) -> tuple[Any, ...]:
     return (
         ObjectInstance.deleted_at.is_(None),
         visible_owner_clause(user, ObjectInstance.owner_workspace_id),
-        or_(
-            ObjectInstance.label.ilike(needle, escape="\\"),
-            ObjectInstance.key.ilike(needle, escape="\\"),
-            ObjectInstance.id.in_(
-                select(ObjectAlias.object_id).where(
-                    ObjectAlias.value.ilike(needle, escape="\\")
-                )
-            ),
-        ),
+        # 이름 · 식별자 · 별칭을 따로 묻고 합친다 — 한 OR 로 묶으면 trigram 인덱스를 못 탄다.
+        ObjectInstance.id.in_(containing_ids(needle, escape="\\")),
     )
 
 
