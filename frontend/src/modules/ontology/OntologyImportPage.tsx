@@ -125,6 +125,8 @@ export default function OntologyImportPage() {
 
       <InferFromTablePanel
         groups={schema?.groups ?? []}
+        types={schema?.types ?? []}
+        interfaces={schema?.interfaces ?? []}
         onChanged={() => {
           reload()
           snapshots.reload()

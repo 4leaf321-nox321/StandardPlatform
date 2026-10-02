@@ -289,6 +289,31 @@ export interface InferColumn {
   samples: string[]
   /** 왜 이렇게 맞혔나 — 사람이 읽고 고칠 근거. */
   note: string
+  /** 종류가 참조면 가리키는 타입 · 인터페이스. */
+  ref_type_slug?: string | null
+  /** 가리킬 법한 있는 타입 — 하나로 풀리는 값이 많은 것부터(ADR 0009). */
+  ref_candidates?: RefCandidate[]
+  /** 참조로 제안하지 않은 까닭 · 안 본 것. */
+  ref_note?: string
+}
+
+/** 열의 값이 그 타입의 객체로 얼마나 풀리나 — 값 단위, 일괄 입력의 이름 풀이 그대로. */
+export interface RefCandidate {
+  target_slug: string
+  target_label: string
+  target_kind: 'type' | 'interface'
+  checked: number
+  /** 하나로 풀린 값 — 넣을 때도 풀린다. */
+  one: number
+  /** 여럿에 맞은 값 — 넣으면 거절된다(식별자로 적어야 한다). */
+  many: number
+  /** 못 찾은 값. */
+  none: number
+  one_values: number
+  many_samples: string[]
+  none_samples: string[]
+  /** 맞은 값이 전부 짧은 숫자 — 우연일 수 있다. */
+  short: boolean
 }
 
 export interface InferResult {

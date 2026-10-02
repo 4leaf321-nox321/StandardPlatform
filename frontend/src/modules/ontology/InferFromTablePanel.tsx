@@ -4,6 +4,10 @@
  * 일괄 입력은 타입이 먼저 있어야 했다. 여기서는 열을 보고 정의를 제안하고(숫자·날짜·참/거짓·
  * 고를 값·주소·글자), 사람이 역할과 종류를 고친 뒤 **정의를 만들고 행을 넣는다** — 둘 다 기존
  * 길(정의 가져오기·일괄 입력)로 간다. 추론은 보수적이다: 애매하면 글자다.
+ *
+ * 열마다 **참조 후보**도 보인다 — 값이 어느 있는 타입의 객체로 풀리나(ADR 0009). 넣을 때와 같은
+ * 이름 풀이로 센 것이라, 「하나로 97%」 면 넣을 때도 97% 가 풀린다. 확실할 때만 서버가 참조로
+ * 제안하고, 나머지는 후보를 눌러 사람이 고른다.
  */
 
 import { useRef, useState } from 'react'
@@ -19,6 +23,7 @@ import type {
   InferResult,
   InferRole,
   NavGroupRow,
+  RefCandidate,
 } from '@/modules/ontology/api'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -29,7 +34,9 @@ import { Textarea } from '@/shared/components/ui/textarea'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select'
@@ -54,15 +61,76 @@ const TYPES: [DataType, string][] = [
   ['bool', '참/거짓'],
   ['enum', '선택할 값'],
   ['url', '주소'],
+  ['object_ref', '참조'],
 ]
+
+interface Target {
+  slug: string
+  label: string
+}
 
 interface Props {
   groups: NavGroupRow[]
+  /** 참조 열이 가리킬 수 있는 것 — 있는 타입과 인터페이스. */
+  types: Target[]
+  interfaces: (Target & { implementers: string[] })[]
   /** 정의를 적용한 뒤 — 사이드바·스키마를 다시 읽게. */
   onChanged: () => void
 }
 
-export function InferFromTablePanel({ groups, onChanged }: Props) {
+function share(candidate: RefCandidate): number {
+  return candidate.checked ? Math.round((candidate.one / candidate.checked) * 100) : 0
+}
+
+/** 열 하나의 참조 후보 — 누르면 그 타입을 가리키는 참조 열이 된다. 고른 후보면 넣을 때 막힐
+ *  값(여럿에 맞음 · 못 찾음)을 견본으로 보인다 — 모르고 넣으면 그 행들이 오류로 돌아온다. */
+function RefCandidates({
+  column,
+  onPick,
+}: {
+  column: InferColumn
+  onPick: (slug: string) => void
+}) {
+  const candidates = column.ref_candidates ?? []
+  if (!candidates.length && !column.ref_note) return null
+  const picked = column.data_type === 'object_ref' ? column.ref_type_slug : null
+  return (
+    <div className="mt-1 space-y-0.5">
+      {candidates.map((one) => {
+        const chosen = picked === one.target_slug
+        return (
+          <div key={one.target_slug}>
+            <button
+              type="button"
+              title={one.target_slug}
+              className={`text-left underline-offset-2 hover:underline ${chosen ? 'text-foreground font-medium' : ''}`}
+              onClick={() => onPick(one.target_slug)}
+            >
+              {one.target_label}
+              {one.target_kind === 'interface' && ' (인터페이스)'} — 하나로 {share(one)}%
+              {one.many > 0 && ` · 여럿에 맞음 ${one.many}`}
+              {one.none > 0 && ` · 못 찾음 ${one.none}`}
+              {one.short && ' · 짧은 숫자'}
+            </button>
+            {chosen && one.many_samples.length > 0 && (
+              <p className="text-amber-700 dark:text-amber-400">
+                여럿에 맞음: {one.many_samples.join(' · ')} — 넣을 때 거절됩니다. 식별자로 적으세요.
+              </p>
+            )}
+            {chosen && one.none_samples.length > 0 && (
+              <p className="text-amber-700 dark:text-amber-400">
+                못 찾음: {one.none_samples.join(' · ')} — 그 행은 넣을 때 오류입니다.
+              </p>
+            )}
+          </div>
+        )
+      })}
+      {column.ref_note && <p>{column.ref_note}</p>}
+    </div>
+  )
+}
+
+export function InferFromTablePanel({ groups, types, interfaces, onChanged }: Props) {
   const { user } = useAuth()
   const fileRef = useRef<HTMLInputElement>(null)
   const [fileName, setFileName] = useState('')
@@ -158,7 +226,12 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
   }
 
   const labelCount = columns.filter((one) => one.role === 'label').length
-  const ready = Boolean(result && slug.trim() && label.trim() && labelCount === 1)
+  const aimless = columns.filter(
+    (one) => one.role === 'property' && one.data_type === 'object_ref' && !one.ref_type_slug,
+  )
+  const ready = Boolean(
+    result && slug.trim() && label.trim() && labelCount === 1 && aimless.length === 0,
+  )
 
   return (
     <section className="space-y-3 rounded-md border p-4">
@@ -336,6 +409,11 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
                               patch(index, {
                                 data_type: next as DataType,
                                 enum_options: next === 'enum' ? column.enum_options : [],
+                                // 참조로 바꾸면 가장 많이 풀리는 후보부터 — 없으면 사람이 고른다.
+                                ref_type_slug:
+                                  column.ref_type_slug ??
+                                  column.ref_candidates?.[0]?.target_slug ??
+                                  null,
                               })
                             }
                           >
@@ -360,6 +438,39 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
                           {column.enum_options.join(' · ')}
                         </p>
                       )}
+                      {column.role === 'property' && column.data_type === 'object_ref' && (
+                        <Select
+                          value={column.ref_type_slug ?? ''}
+                          onValueChange={(next) => patch(index, { ref_type_slug: next })}
+                        >
+                          <SelectTrigger
+                            className="mt-1 h-8 w-40"
+                            aria-label={`${column.header} 가리킬 타입`}
+                          >
+                            <SelectValue placeholder="가리킬 타입" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectGroup>
+                              <SelectLabel>타입</SelectLabel>
+                              {types.map((one) => (
+                                <SelectItem key={one.slug} value={one.slug}>
+                                  {one.label}
+                                </SelectItem>
+                              ))}
+                            </SelectGroup>
+                            {interfaces.length > 0 && (
+                              <SelectGroup>
+                                <SelectLabel>인터페이스 — 구현한 타입 중에서</SelectLabel>
+                                {interfaces.map((one) => (
+                                  <SelectItem key={one.slug} value={one.slug}>
+                                    {one.label} (구현 타입 {one.implementers.length})
+                                  </SelectItem>
+                                ))}
+                              </SelectGroup>
+                            )}
+                          </SelectContent>
+                        </Select>
+                      )}
                     </td>
                     <td className="text-muted-foreground max-w-48 truncate px-2 py-1.5 text-xs">
                       {column.samples.join(' · ')}
@@ -367,8 +478,21 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
                         {column.filled}/{result.rows} 채움 · 서로 다른 값 {column.distinct}
                       </span>
                     </td>
-                    <td className="text-muted-foreground max-w-56 px-2 py-1.5 text-xs">
+                    <td className="text-muted-foreground max-w-64 px-2 py-1.5 text-xs">
                       {column.note}
+                      {column.role === 'property' && (
+                        <RefCandidates
+                          column={column}
+                          onPick={(target) =>
+                            patch(index, {
+                              data_type: 'object_ref',
+                              ref_type_slug: target,
+                              enum_options: [],
+                              decimals: null,
+                            })
+                          }
+                        />
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -378,6 +502,11 @@ export function InferFromTablePanel({ groups, onChanged }: Props) {
           {labelCount !== 1 && (
             <p className="text-destructive text-xs">
               이름 역할의 열이 정확히 하나여야 합니다 (지금 {labelCount}개).
+            </p>
+          )}
+          {aimless.length > 0 && (
+            <p className="text-destructive text-xs">
+              참조 열이 가리킬 타입을 고르세요 — {aimless.map((one) => one.header).join(', ')}
             </p>
           )}
 
