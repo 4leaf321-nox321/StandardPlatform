@@ -18,6 +18,7 @@ from __future__ import annotations
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from typing import Any
 
 import httpx
@@ -25,6 +26,10 @@ from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+
+# **무덤의 규칙을 그대로 쓴다** — 끊긴 선을 끊는 길이 둘이 되면 한쪽에만 권한 검사가 남는다.
+from app.modules.bundles import tombstones as graves
+from app.modules.bundles.schemas import RelationTombstoneIn, TombstonesIn
 from app.modules.datasources import fetchers, odata
 from app.modules.datasources.models import DataSource, DataSourceRun
 from app.modules.datasources.schemas import (
@@ -52,6 +57,88 @@ FIXED_TARGETS = ("key", "label", "description", "alias")
 transport: httpx.BaseTransport | None = None
 
 
+def _one_of(raw: Any, what: str) -> tuple[str, str]:
+    """`{"column": "열"}` 또는 `{"value": "고정값"}` — `(열, 값)` 중 하나만 채워 돌려준다."""
+    if not isinstance(raw, dict):
+        raise AppError(
+            code("DATASOURCES", 20),
+            f'{what} 은 {{"column": "열"}} 또는 {{"value": "고정값"}} 으로 적습니다.',
+            status=422,
+        )
+    column = str(raw.get("column") or "").strip()
+    value = str(raw.get("value") or "").strip()
+    if bool(column) == bool(value):
+        raise AppError(
+            code("DATASOURCES", 20),
+            f"{what} 에는 column 과 value 중 **하나만** 적습니다.",
+            status=422,
+        )
+    return column, value
+
+
+def _parse_edges(raw: dict[str, Any]) -> EdgeMap:
+    """관계 대응을 읽는다 — **한 행이 선 하나**인 원천."""
+    out = EdgeMap()
+    kind = raw.get("relation")
+    if isinstance(kind, str) and kind.strip():
+        out.relation = kind.strip()
+    elif isinstance(kind, dict):
+        out.relation_column, out.relation = _one_of(kind, "relation")
+    if not out.relation and not out.relation_column:
+        raise AppError(
+            code("DATASOURCES", 20),
+            "관계 대응에 relation(관계 종류 slug, 또는 그것이 든 열)이 있어야 합니다.",
+            status=422,
+        )
+    for name in ("src", "dst"):
+        column, value = _one_of(raw.get(name) or {}, name)
+        if value:
+            raise AppError(
+                code("DATASOURCES", 20),
+                f"{name} 은 열이어야 합니다 — 고정값으로 선을 긋지 않습니다.",
+                status=422,
+            )
+        setattr(out, name, column)
+    note = raw.get("evidence_note")
+    if isinstance(note, dict) and note:
+        out.evidence_note, out.evidence_value = _one_of(note, "evidence_note")
+    props = raw.get("properties")
+    if isinstance(props, dict):
+        out.properties = {
+            str(key): str(one.get("column") or "").strip()
+            for key, one in props.items()
+            if isinstance(one, dict) and str(one.get("column") or "").strip()
+        }
+    mode = str(raw.get("mode") or "add").strip()
+    if mode not in ("add", "replace"):
+        raise AppError(
+            code("DATASOURCES", 20),
+            f"관계 대응의 mode 는 add · replace 중 하나입니다 ({mode!r}).",
+            status=422,
+        )
+    out.mode = mode
+    return out
+
+
+def edge_row(spec: EdgeMap, raw: dict[str, Any]) -> dict[str, Any]:
+    """원천 한 행 → 관계 적재의 한 줄. **빈 끝점은 그 줄의 오류로 남긴다**(짐작하지 않는다)."""
+    out: dict[str, Any] = {
+        "src": _text(raw.get(spec.src)),
+        "dst": _text(raw.get(spec.dst)),
+        "relation": (
+            _text(raw.get(spec.relation_column)) if spec.relation_column else spec.relation
+        ),
+    }
+    note = _text(raw.get(spec.evidence_note)) if spec.evidence_note else spec.evidence_value
+    if note:
+        out["evidence_note"] = note
+    for key, column in spec.properties.items():
+        value = raw.get(column)
+        if value not in (None, ""):
+            out[key] = value
+    return out
+
+
 @dataclass
 class Column:
     source: str
@@ -61,13 +148,50 @@ class Column:
 
 
 @dataclass
+class EdgeMap:
+    """**한 행이 선 하나**인 원천(BOM · 매핑 표)의 대응.
+
+    객체 소스와 **갈라 둔다**: 한 소스가 객체도 만들고 선도 만들면 계획이 두 겹이 되고,
+    「무엇이 몇 건인가」 를 한 표로 못 읽는다. 원천 하나가 둘 다 담고 있으면 소스를 둘로
+    만든다(같은 주소 · 다른 대응) — 그러면 각자의 계획을 각자 읽는다.
+
+    모양은 정제 도구의 관계 파일(`sp_table.py` 의 `relations`)과 **같은 말**을 쓴다.
+    """
+
+    relation: str = ""
+    """관계 종류 slug. 비우고 `relation_column` 을 적으면 행마다 다르다."""
+    relation_column: str = ""
+    src: str = ""
+    """출발점을 담은 열 — 값은 그 객체의 식별자(없으면 별칭 · 이름)다."""
+    dst: str = ""
+    evidence_note: str = ""
+    """근거를 담은 열. 비어 있으면 `evidence_value` 를 쓴다."""
+    evidence_value: str = ""
+    properties: dict[str, str] = field(default_factory=dict)
+    """관계에 붙는 속성 — {속성 키: 열 이름}."""
+    mode: str = "add"
+    """`add`(기본) — 온 선만 잇는다. `replace` — 온 목록에 나온 (출발 객체 · 관계 종류)
+    범위에서 **안 온 선을 끊는다**. 그 표가 그 범위의 정본일 때만."""
+
+    def columns(self) -> list[str]:
+        """원천에서 청할 열 — `$select` 가 이것으로 좁힌다."""
+        wanted = [self.src, self.dst, self.relation_column, self.evidence_note]
+        return [one for one in [*wanted, *self.properties.values()] if one]
+
+
+@dataclass
 class Mapping:
     external_key: str
     columns: list[Column]
+    relations: EdgeMap | None = None
+    """있으면 이 소스는 **선을 가져온다**(객체가 아니라). 둘을 섞지 않는다."""
 
     @classmethod
     def parse(cls, raw: dict[str, Any], defs: list[PropertyDef]) -> Mapping:
         """정의를 읽고 **틀린 곳을 말한다** — 없는 속성, 모르는 자리, 빈 외부 식별자."""
+        edges = raw.get("relations")
+        if isinstance(edges, dict) and edges:
+            return cls(external_key="", columns=[], relations=_parse_edges(edges))
         external_key = str(raw.get("external_key") or "").strip()
         if not external_key:
             raise AppError(
@@ -123,7 +247,12 @@ class Mapping:
     def select_clause(self) -> str:
         """`$select` 를 안 적었으면 대응에 쓰인 열만 청한다 — 표 전체를 끌어오지 않게."""
         wanted: list[str] = []
-        for name in [self.external_key, *(c.source for c in self.columns)]:
+        used = (
+            self.relations.columns()
+            if self.relations is not None
+            else [self.external_key, *(c.source for c in self.columns)]
+        )
+        for name in used:
             top = name.replace(".", "/").split("/")[0]
             if top not in wanted:
                 wanted.append(top)
@@ -363,6 +492,50 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
         db.commit()
         return SyncResult(run=run, plan_rows=[], truncated=False)
 
+    if mapping.relations is not None:
+        # **선을 가져오는 소스다** — 한 행이 선 하나다(BOM · 매핑 표). 객체 쪽 길(대응 · 다시
+        # 찾기 · 무덤)은 타지 않는다: 이 소스는 객체를 만들지 않는다.
+        run.rows_seen = len(fetched.rows)
+        edges = [edge_row(mapping.relations, raw) for raw in fetched.rows]
+        only_counts, only_errors = _apply_edges(
+            db,
+            user,
+            source,
+            object_type,
+            edges,
+            [],
+            mode=mapping.relations.mode,
+            apply=apply,
+        )
+        if fetched.truncated:
+            only_errors.append(
+                f"행이 {odata.MAX_ROWS}개를 넘어 끊었습니다 — `$filter` 로 나눠 동기화하세요."
+            )
+        ok = not only_errors and not any(
+            name.endswith("_error") and value for name, value in only_counts.items()
+        )
+        run.counts = only_counts
+        run.errors = only_errors[:ERROR_SAMPLE]
+        run.status = "ok" if (apply and ok) else ("planned" if ok else "failed")
+        run.applied = bool(apply and ok)
+        run.finished_at = datetime.now(UTC)
+        if apply or not ok:
+            source.last_run_at = run.finished_at
+            source.last_status = run.status
+        if run.applied:
+            audit.record(
+                db,
+                action="datasource.sync",
+                actor=user,
+                target_table="data_sources",
+                target_id=source.id,
+                target_label=source.slug,
+                workspace_id=source.workspace_id,
+                changes={"rows": run.rows_seen, **only_counts},
+            )
+        db.commit()
+        return SyncResult(run=run, plan_rows=[], truncated=fetched.truncated)
+
     # **무덤은 대응을 타지 않는다** — 값이 비어 있어서 「이름이 없다」 로 거절될 뿐이다.
     # 가르고 나서 각자의 길로 보낸다.
     graves = [one for one in fetched.rows if one.get(fetchers.CORE_DELETED)]
@@ -414,6 +587,17 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     counts = _counts(plan_rows)
 
     if not apply or not ok:
+        if wants_relations(source):
+            # **선도 미리 세어 본다** — 계획에 객체만 나오면 사람은 선이 올 줄 모른다.
+            edge_counts: dict[str, int]
+            edge_counts, edge_errors = _sync_relations(
+                db, user, source, object_type, apply=False
+            )
+            counts = {**counts, **edge_counts}
+            errors.extend(edge_errors)
+            ok = ok and not any(
+                name.endswith("_error") and value for name, value in edge_counts.items()
+            )
         run.status = "planned" if ok else "failed"
         run.counts = counts
         run.errors = (
@@ -469,6 +653,12 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     if source.deprecate_missing:
         deprecated += _deprecate_missing(db, actor, object_type, source, seen)
 
+    # **선은 객체 뒤에** — 선은 양 끝이 있어야 선다. 같은 실행 · 같은 트랜잭션이다.
+    edge_counts = {}
+    if wants_relations(source):
+        edge_counts, edge_errors = _sync_relations(db, user, source, object_type, apply=True)
+        errors.extend(edge_errors)
+
     # **끝까지 받고 적용에 성공했을 때만 시계를 옮긴다.** 중간에 옮기면 그 사이 것을 영영
     # 안 받고, 그 사실은 어디에도 안 뜬다.
     if fetched.as_of and not fetched.truncated:
@@ -476,7 +666,11 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
 
     run.status = "ok"
     run.applied = True
-    run.counts = {**counts, "deprecated": deprecated}
+    run.counts = {**counts, "deprecated": deprecated, **edge_counts}
+    if errors:
+        # 선 쪽의 말(처음부터 다시 받음 · 끊김 거절)은 **성공한 실행에도 남긴다** — 사람이
+        # 「무엇이 더 있었나」 를 그 기록에서 읽는다.
+        run.errors = errors[:ERROR_SAMPLE]
     run.finished_at = datetime.now(UTC)
     source.last_run_at = run.finished_at
     source.last_status = "ok"
@@ -492,6 +686,141 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     )
     db.commit()
     return SyncResult(run=run, plan_rows=applied_rows, truncated=fetched.truncated)
+
+
+#: 선까지 받는 소스 — 코어 창구가 객체와 선을 같은 규칙으로 열어 주는 종류.
+RELATION_KINDS = ("sp_core",)
+#: 관계 적재가 아는 칸 — 코어 봉투에서 그 밖의 것(도착 타입 · 끊김 표시)은 떼고 보낸다.
+EDGE_SKIP = ("dst_type", fetchers.CORE_DELETED)
+
+
+def wants_relations(source: DataSource) -> bool:
+    """이 소스가 **선도 받나.** 종류가 코어 창구일 때만 — 그쪽이 선을 열어 준다."""
+    return source.kind in RELATION_KINDS and bool((source.options or {}).get("relations"))
+
+
+def _edge_row(raw: dict[str, Any]) -> dict[str, Any]:
+    """코어의 선 한 줄 → 관계 적재의 한 줄. **봉투 이름이 그대로 칸 이름이다.**"""
+    return {key: value for key, value in raw.items() if key not in EDGE_SKIP}
+
+
+def _apply_edges(
+    db: Session,
+    user: User | None,
+    source: DataSource,
+    object_type: ObjectType,
+    rows: list[dict[str, Any]],
+    gone: list[dict[str, Any]],
+    *,
+    mode: str,
+    apply: bool,
+) -> tuple[dict[str, int], list[str]]:
+    """선을 계획하고(또는 넣고) **셈과 오류 줄**을 돌려준다 — 코어 쪽과 대응 쪽이 함께 쓴다.
+
+    끊긴 선은 무덤과 같은 규칙으로 끊는다(`bundles/tombstones.py` — 줄마다 그 객체를 고칠
+    수 있는지 다시 본다). 규칙을 두 벌로 적지 않으려고 그 모듈을 그대로 쓴다.
+    """
+    actor = _actor(db, user)
+    errors: list[str] = []
+    plan = bulk.plan_relations(db, actor, object_type, rows, mode=mode)
+    counts = {f"relations_{name}": value for name, value in plan.counts.items()}
+    errors.extend(plan.errors)
+    errors.extend(
+        f"선 {one.row}줄 {one.label}: {one.message}"
+        for one in plan.rows
+        if one.action == "error"
+    )
+    cut = graves.run(
+        db,
+        actor,
+        TombstonesIn(
+            relations=[
+                RelationTombstoneIn(
+                    type_slug=object_type.slug,
+                    src=str(one.get("src") or ""),
+                    relation=str(one.get("relation") or ""),
+                    dst=str(one.get("dst") or ""),
+                )
+                for one in gone
+                if one.get("src") and one.get("relation") and one.get("dst")
+            ]
+        ),
+        source=source.slug,
+        apply=apply and plan.ok,
+    )
+    unlinked = cut.counts.get("unlink", 0)
+    errors.extend(
+        f"끊김 {one.label}: {one.message}" for one in cut.rows if one.action == "error"
+    )
+    if not apply or not plan.ok or not cut.ok:
+        counts["relations_unlink"] = counts.get("relations_unlink", 0) + unlinked
+        return counts, errors
+
+    done = bulk.apply_relations(db, actor, object_type, rows, mode=mode)
+    counts = {f"relations_{name}": value for name, value in done.counts.items()}
+    counts["relations_unlink"] = counts.get("relations_unlink", 0) + unlinked
+    if not done.ok:
+        errors.extend(
+            f"선 {one.row}줄 {one.label}: {one.message}"
+            for one in done.rows
+            if one.action == "error"
+        )
+    return counts, errors
+
+
+def _sync_relations(
+    db: Session,
+    user: User | None,
+    source: DataSource,
+    object_type: ObjectType,
+    *,
+    apply: bool,
+) -> tuple[dict[str, int], list[str]]:
+    """형제 설치의 **선**을 받는다 — `(셈, 오류 줄)`.
+
+    **객체를 넣은 뒤에 부른다** — 선은 양 끝이 있어야 선다. 끊긴 선(`deleted`)은 무덤과 같은
+    규칙으로 끊는다(`bundles/tombstones.py` — 줄마다 그 객체를 고칠 수 있는지 다시 본다).
+    규칙을 두 벌로 적지 않으려고 그 모듈을 그대로 쓴다.
+
+    상대가 `reset` 을 주면 시계를 비우고 **전량을 다시 받아 「파일대로 맞춤」** 으로 넣는다 —
+    그 시각부터 끊긴 선을 알려 줄 수 없다는 말이므로, 온 것만 믿고 나머지는 끊는다. 범위는
+    **온 목록에 나온 (출발 객체 · 관계 종류)** 뿐이다(파일에 아예 안 나온 객체는 안 건드린다).
+    """
+    fetch = partial(
+        fetchers.fetch_sp_core_relations,
+        base_url=source.base_url,
+        type_slug=source.entity_set,
+        auth=_auth(source),
+        page_size=source.page_size,
+        max_rows=odata.MAX_ROWS,
+        transport=transport,
+    )
+    got = fetch(since=source.relations_since_mark)
+    mode = "add"
+    errors: list[str] = []
+    if got.reset:
+        why = got.reset_reason or "상대가 reset 을 보냈습니다"
+        errors.append(f"선은 처음부터 다시 받았습니다 — {why}")
+        source.relations_since_mark = ""
+        got = fetch(since="")
+        mode = "replace"
+    if got.truncated:
+        errors.append(
+            f"선이 {odata.MAX_ROWS}줄을 넘어 끊었습니다 — "
+            "다음 동기화가 같은 자리에서 잇습니다."
+        )
+
+    rows = [_edge_row(one) for one in got.rows if not one.get(fetchers.CORE_DELETED)]
+    gone = [one for one in got.rows if one.get(fetchers.CORE_DELETED)]
+    counts, more = _apply_edges(
+        db, user, source, object_type, rows, gone, mode=mode, apply=apply
+    )
+    errors.extend(more)
+    ok = not any(name.endswith("_error") and value for name, value in counts.items())
+    # **끝까지 받고 넣은 뒤에만** 시계를 옮긴다 — 중간에 옮기면 그 사이 선을 영영 안 받는다.
+    if apply and ok and got.as_of and not got.truncated:
+        source.relations_since_mark = got.as_of
+    return counts, errors
 
 
 def _counts(rows: list[bulk.RowPlan]) -> dict[str, int]:

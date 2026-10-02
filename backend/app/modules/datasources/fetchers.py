@@ -176,6 +176,92 @@ def fetch_sp_core(
     return out
 
 
+#: 코어 선 한 줄의 봉투 — 그대로 관계 적재의 칸 이름이 된다(`src` · `relation` · `dst`).
+CORE_EDGE = ("src", "relation", "dst", "dst_type", "evidence_note", "deleted")
+
+
+def core_edge(item: dict[str, Any]) -> dict[str, Any]:
+    """선 한 줄을 평평하게 — 관계에 붙은 속성을 펴고 봉투를 위에 얹는다.
+
+    봉투의 이름이 **관계 적재의 칸 이름과 같다**(`src` · `relation` · `dst` ·
+    `evidence_note`) — 그래서 대응 표가 필요 없다. 코어 창구가 그 약속을 지킨다.
+    """
+    values = item.get("properties")
+    out: dict[str, Any] = dict(values) if isinstance(values, dict) else {}
+    for name in CORE_EDGE:
+        if name in item:
+            out[name] = item[name]
+    return out
+
+
+def fetch_sp_core_relations(
+    *,
+    base_url: str,
+    type_slug: str,
+    since: str,
+    auth: Auth,
+    page_size: int,
+    max_rows: int,
+    transport: httpx.BaseTransport | None,
+) -> Fetched:
+    """형제 설치의 **선**을 받는다 — `/api/core/<타입>/relations`.
+
+    객체 쪽과 같은 규칙(`since` · `next` · `as_of`)이고, 끊긴 선은 `deleted: true` 로 온다.
+    상대가 **`reset: true`** 를 주면(그 시각부터는 끊긴 선을 알려 줄 수 없다 — 무덤의 보관
+    기간이 지났다) 받은 것을 버리고 `reset` 만 표시해 돌려준다: 부르는 쪽이 시계를 비우고
+    처음부터 다시 받는다. 빈 쪽을 「바뀐 것 없음」 으로 읽으면 이미 끊긴 선을 영영 들고 있다.
+    """
+    url = f"{base_url.rstrip('/')}/core/{type_slug.strip()}/relations"
+    out = Fetched()
+    cursor: str | None = None
+    try:
+        with httpx.Client(
+            timeout=odata.TIMEOUT_SECONDS,
+            transport=transport,
+            headers={"Accept": "application/json", **auth.headers()},
+            auth=auth.basic(),
+            follow_redirects=True,
+        ) as client:
+            while out.pages < MAX_PAGES:
+                params = {"limit": str(page_size)}
+                if since:
+                    params["since"] = since
+                if cursor:
+                    params["cursor"] = cursor
+                response = client.get(url, params=params)
+                _raise_for_core(response)
+                body = response.json()
+                if isinstance(body, dict) and body.get("reset"):
+                    out.reset = True
+                    out.reset_reason = str(body.get("reset_reason") or "")
+                    out.rows = []
+                    return out
+                items = body.get("items") if isinstance(body, dict) else None
+                if not isinstance(items, list):
+                    raise AppError(
+                        code("DATASOURCES", 37),
+                        "코어 응답에 items 가 없습니다 — 주소가 그 설치의 "
+                        "`/api/core/<타입>/relations` 인지 확인하세요.",
+                        status=502,
+                    )
+                out.rows.extend(core_edge(one) for one in items if isinstance(one, dict))
+                out.pages += 1
+                if len(out.rows) >= max_rows:
+                    out.truncated = True
+                    out.rows = out.rows[:max_rows]
+                    return out
+                cursor = body.get("next")
+                if not cursor:
+                    out.as_of = body.get("as_of")
+                    return out
+    except httpx.HTTPError as caught:
+        raise AppError(
+            code("DATASOURCES", 38), f"코어 창구에 닿지 못했습니다: {caught}", status=502
+        ) from caught
+    out.truncated = True
+    return out
+
+
 def _raise_for_core(response: httpx.Response) -> None:
     """**상대의 말을 그대로 옮긴다.** 우리가 다시 쓴 문구는 상대 쪽 원인을 지운다."""
     if response.status_code < 400:

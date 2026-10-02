@@ -274,6 +274,14 @@ def test_setup_은_물어보고_계획을_보여준다(bundle: Path, tmp_path: P
     ).stdout
     # 확장은 화면에서 켠다 — 설치가 받는 값은 **기본값**이라 그렇게 적힌다.
     assert "PLM 기준정보 (plmhub) · 포트 8050 · 확장 기본값 sample" in out
+    # **유닛 이름이 전부 답한 slug 에서 나온다.** 파생 목록이 두 벌이던 때 설치 마법사 쪽에
+    # 워커만 빠져 있었고, 그래서 한 서버의 두 번째 플랫폼이 **첫 플랫폼의 워커 유닛을
+    # 덮어썼다**(실측). 두 플랫폼이 한 워커를 공유하면 그 워커는 한쪽 DB 만 본다.
+    for unit in ("plmhub", "plmhub-worker", "plmhub-mcp", "plmhub-sync", "plmhub-backup"):
+        assert unit in out, unit
+    # 번들의 기본 slug(이 시험의 BUILD_INFO 는 `testplatform`)가 남아 있으면 안 된다 —
+    # 그것이 앞 플랫폼의 유닛을 덮어쓰던 바로 그 자리다.
+    assert "testplatform-worker" not in out, "번들 기본 slug 가 남았다"
     assert "주(A) 10.0.0.1 — 상대 B 10.0.0.2" in out
     assert "db-primary" in out and "B 에 넘길 파일" in out
     # 대기는 이름 · 포트를 다시 묻지 않는다 — A 의 .env 를 그대로 받는다.

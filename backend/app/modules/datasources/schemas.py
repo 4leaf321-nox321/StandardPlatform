@@ -31,6 +31,10 @@ class DataSourceOut(BaseModel):
     mapping: dict[str, Any]
     deprecate_missing: bool
     since_mark: str = ""
+    relations_since_mark: str = ""
+    """**선의 시계** — 객체와 따로 움직인다(`options.relations` 를 켠 형제 코어 소스).
+
+    `since_mark` 를 비우면 이것도 함께 비운다 — 하나만 처음부터 받으면 점과 선이 어긋난다."""
     """`sp_core` 가 지난번에 어디까지 받았나 — 비우면 다음 동기화가 처음부터 받는다."""
     interval_minutes: int
     is_active: bool

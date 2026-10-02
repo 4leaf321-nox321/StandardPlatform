@@ -22,6 +22,13 @@ export interface SourceOptions {
   params?: Record<string, string>
   format?: 'csv' | 'xlsx' | 'json'
   sheet?: string
+  /**
+   * 형제 코어(`sp_core`)에서 **선까지** 받는다 — `/core/<타입>/relations`.
+   *
+   * 객체만 받으면 받는 쪽은 점만 있고 선이 없다. 끊긴 선은 상대가 `deleted` 로 말해 주고,
+   * 무덤의 보관 기간이 지났으면 `reset` 으로 「처음부터 다시 받아라」 고 한다.
+   */
+  relations?: boolean
 }
 
 export interface MappingColumn {
@@ -34,10 +41,30 @@ export interface MappingColumn {
   values_strict?: boolean
 }
 
+/**
+ * **한 행이 선 하나**인 원천(BOM · 매핑 표)의 대응.
+ *
+ * 있으면 이 소스는 **선을 가져온다**(객체가 아니라). 둘을 섞지 않는다 — 한 소스가 객체도
+ * 만들고 선도 만들면 계획이 두 겹이 되어 「무엇이 몇 건인가」 를 한 표로 못 읽는다. 원천
+ * 하나가 둘 다 담고 있으면 소스를 둘로 만든다(같은 주소 · 다른 대응).
+ */
+export interface MappingRelations {
+  /** 관계 종류 slug. 행마다 다르면 `{"column": "열"}` 로 적는다(화면은 고정만 받는다). */
+  relation?: string | { column?: string; value?: string }
+  src?: { column?: string }
+  dst?: { column?: string }
+  evidence_note?: { column?: string; value?: string }
+  /** 선에 붙는 속성 — {속성 키: {column}}. */
+  properties?: Record<string, { column?: string }>
+  /** `add`(기본) · `replace`(온 목록의 출발 객체 · 관계 종류 범위에서 안 온 선을 끊음). */
+  mode?: 'add' | 'replace'
+}
+
 export interface Mapping {
   /** 바깥 식별자 열 — 다음 동기화가 같은 객체를 다시 찾는 근거. */
   external_key?: string
   columns?: MappingColumn[]
+  relations?: MappingRelations
 }
 
 export interface DataSource {
@@ -60,6 +87,8 @@ export interface DataSource {
   deprecate_missing: boolean
   /** `sp_core` 가 지난번에 어디까지 받았나 — 비우면 다음 동기화가 처음부터 받는다. */
   since_mark: string
+  /** 선의 시계 — 객체와 따로 움직인다(형제 코어에서 선까지 받을 때). */
+  relations_since_mark?: string
   interval_minutes: number
   is_active: boolean
   last_run_at: string | null

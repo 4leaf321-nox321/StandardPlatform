@@ -181,6 +181,7 @@ export default function DataSourcesPage() {
         <EditDialog
           source={editing === 'new' ? null : editing}
           types={(schema.data?.types ?? []).filter((one) => one.kind_class !== 'system')}
+          relationTypes={schema.data?.relation_types ?? []}
           workspaceSlugs={(workspaces.data ?? []).map((one) => one.slug)}
           onClose={() => setEditing(null)}
           onSaved={() => {
@@ -377,12 +378,15 @@ function SyncDialog({
 function EditDialog({
   source,
   types,
+  relationTypes,
   workspaceSlugs,
   onClose,
   onSaved,
 }: {
   source: DataSource | null
   types: { slug: string; label: string; properties: PropertyDef[] }[]
+  /** 이 설치의 관계 종류 — 선을 가져오는 소스가 그중 하나를 고른다. */
+  relationTypes: { slug: string; label: string }[]
   workspaceSlugs: string[]
   onClose: () => void
   onSaved: () => void
@@ -401,6 +405,19 @@ function EditDialog({
   const [workspace, setWorkspace] = useState(source?.workspace_slug ?? NONE)
   const [externalKey, setExternalKey] = useState(source?.mapping.external_key ?? '')
   const [columns, setColumns] = useState<MappingColumn[]>(source?.mapping.columns ?? [])
+  /**
+   * **이 소스가 무엇을 가져오나** — 객체인가 선인가. 둘을 섞지 않는다: 한 소스가 둘 다 만들면
+   * 계획이 두 겹이 되어 「무엇이 몇 건인가」 를 한 표로 못 읽는다.
+   */
+  const edges = source?.mapping.relations
+  const [edgeMode, setEdgeMode] = useState(Boolean(edges))
+  const [edgeRelation, setEdgeRelation] = useState(
+    typeof edges?.relation === 'string' ? edges.relation : '',
+  )
+  const [edgeSrc, setEdgeSrc] = useState(edges?.src?.column ?? '')
+  const [edgeDst, setEdgeDst] = useState(edges?.dst?.column ?? '')
+  const [edgeNote, setEdgeNote] = useState(edges?.evidence_note?.value ?? '')
+  const [edgeReplace, setEdgeReplace] = useState(edges?.mode === 'replace')
   const [deprecate, setDeprecate] = useState(source?.deprecate_missing ?? false)
   const [interval, setInterval] = useState(String(source?.interval_minutes ?? 0))
   const [active, setActive] = useState(source?.is_active ?? true)
@@ -442,10 +459,20 @@ function EditDialog({
       type_slug: typeSlug,
       workspace_slug: workspace === NONE ? null : workspace,
       // 빈 줄(열 이름을 아직 안 적은 속성 줄)은 보내지 않는다 — 서버가 「source 가 없다」 로 거절한다.
-      mapping: {
-        external_key: externalKey.trim(),
-        columns: columns.filter((one) => one.source.trim() && one.target),
-      },
+      mapping: edgeMode
+        ? {
+            relations: {
+              relation: edgeRelation,
+              src: { column: edgeSrc.trim() },
+              dst: { column: edgeDst.trim() },
+              ...(edgeNote.trim() ? { evidence_note: { value: edgeNote.trim() } } : {}),
+              mode: edgeReplace ? ('replace' as const) : ('add' as const),
+            },
+          }
+        : {
+            external_key: externalKey.trim(),
+            columns: columns.filter((one) => one.source.trim() && one.target),
+          },
       deprecate_missing: deprecate,
       interval_minutes: Number(interval) || 0,
       is_active: active,
@@ -879,169 +906,281 @@ function EditDialog({
               ))}
             </datalist>
 
-            {/* ① 같은 것 검색 */}
+            {/* **무엇을 가져오나** — 객체인가 선인가. 원천 하나가 둘 다 담고 있으면 소스를
+                둘로 만든다(같은 주소 · 다른 대응): 그러면 각자의 계획을 각자 읽는다. */}
             <div className="space-y-1.5">
-              <p className="text-sm font-medium">① 같은 것 검색</p>
-              <div className="flex flex-wrap items-end gap-3">
-                <div className="space-y-1">
-                  <Label htmlFor="ds-ext" className="text-xs">
-                    바깥 식별자 열
-                  </Label>
-                  <Input
-                    id="ds-ext"
-                    value={externalKey}
-                    placeholder="SupplierID"
-                    list="ds-columns"
-                    className="w-48"
-                    onChange={(event) => setExternalKey(event.target.value)}
-                  />
+              <p className="text-sm font-medium">무엇을 가져오나</p>
+              <div className="flex flex-wrap gap-4 text-sm">
+                {(
+                  [
+                    ['objects', '객체 — 한 행이 객체 하나'],
+                    ['edges', '선(관계) — 한 행이 선 하나 (BOM · 매핑 표)'],
+                  ] as const
+                ).map(([value, text]) => (
+                  <label key={value} className="flex cursor-pointer items-center gap-2">
+                    <input
+                      type="radio"
+                      className="size-4"
+                      checked={edgeMode === (value === 'edges')}
+                      onChange={() => setEdgeMode(value === 'edges')}
+                    />
+                    {text}
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {edgeMode && (
+              <div className="space-y-2">
+                <p className="text-sm font-medium">선 대응</p>
+                {relationTypes.length === 0 && (
+                  <p className="text-muted-foreground text-xs">
+                    관계 종류가 없습니다. 관리 › 온톨로지 › 관계에서 먼저 만드세요.
+                  </p>
+                )}
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">관계 종류</Label>
+                    <Select value={edgeRelation} onValueChange={setEdgeRelation}>
+                      <SelectTrigger className="w-52">
+                        <SelectValue placeholder="무슨 선인가" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {relationTypes.map((one) => (
+                          <SelectItem key={one.slug} value={one.slug}>
+                            {one.label}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="ds-edge-src" className="text-xs">
+                      출발점 열
+                    </Label>
+                    <Input
+                      id="ds-edge-src"
+                      value={edgeSrc}
+                      placeholder="PartNo"
+                      list="ds-columns"
+                      className="w-40"
+                      onChange={(event) => setEdgeSrc(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="ds-edge-dst" className="text-xs">
+                      도착점 열
+                    </Label>
+                    <Input
+                      id="ds-edge-dst"
+                      value={edgeDst}
+                      placeholder="VendorNo"
+                      list="ds-columns"
+                      className="w-40"
+                      onChange={(event) => setEdgeDst(event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="ds-edge-note" className="text-xs">
+                      근거 (고정 문구)
+                    </Label>
+                    <Input
+                      id="ds-edge-note"
+                      value={edgeNote}
+                      placeholder="ERP BOM 표"
+                      className="w-48"
+                      onChange={(event) => setEdgeNote(event.target.value)}
+                    />
+                  </div>
                 </div>
-                <label className="flex cursor-pointer items-center gap-2 pb-2 text-sm">
+                <label className="text-muted-foreground flex items-center gap-2 text-xs">
                   <input
                     type="checkbox"
                     className="size-4"
-                    checked={fixedOf('key') === externalKey.trim() && externalKey.trim() !== ''}
-                    onChange={(event) =>
-                      setFixed('key', event.target.checked ? externalKey.trim() : '')
-                    }
+                    checked={edgeReplace}
+                    onChange={(event) => setEdgeReplace(event.target.checked)}
                   />
-                  우리 식별자(key)로도 쓴다
+                  이 표를 정본으로 — <strong>온 목록에 나온 출발점</strong>의 그 관계 중 안 온
+                  선을 끊습니다. 표에 아예 안 나온 객체의 선은 건드리지 않습니다.
                 </label>
-              </div>
-              <p className="text-muted-foreground text-xs">
-                이 열의 값이 그 객체에 남아, 다음 동기화가 같은 객체를 다시 찾습니다 — 우리 쪽
-                이름·식별자를 수정해도 유지됩니다.
-              </p>
-            </div>
-
-            {/* ② 이름 */}
-            <div className="space-y-1.5">
-              <p className="text-sm font-medium">② 이름</p>
-              <div className="space-y-1">
-                <Label htmlFor="ds-label" className="text-xs">
-                  이름 열 (필수)
-                </Label>
-                <Input
-                  id="ds-label"
-                  value={fixedOf('label')}
-                  placeholder="CompanyName"
-                  list="ds-columns"
-                  className="w-48"
-                  onChange={(event) => setFixed('label', event.target.value)}
-                />
-              </div>
-            </div>
-
-            {/* ③ 속성 */}
-            <div className="space-y-1.5">
-              <p className="text-sm font-medium">③ 속성</p>
-              {propertyTargets.length === 0 && (
                 <p className="text-muted-foreground text-xs">
-                  이 타입에 속성이 없습니다. 관리 › 온톨로지에서 먼저 만드세요.
+                  출발점·도착점 열의 값은 그 객체의 <strong>식별자(없으면 별칭·이름)</strong>로
+                  풀립니다 — 못 풀면 그 줄이 오류이고 아무것도 안 들어갑니다. 선에 붙는 속성은
+                  지금 화면에서 못 정합니다(API 의 <code>mapping.relations.properties</code>).
                 </p>
-              )}
-              {propertyColumns.map(({ column, index }) => (
-                <div key={index} className="flex flex-wrap items-start gap-2">
-                  <Input
-                    value={column.source}
-                    placeholder="바깥 열"
-                    list="ds-columns"
-                    className="w-40"
-                    onChange={(event) => patchColumn(index, { source: event.target.value })}
-                  />
-                  <span className="text-muted-foreground pt-2 text-sm">→</span>
-                  <Select
-                    value={column.target}
-                    onValueChange={(next) => patchColumn(index, { target: next })}
-                  >
-                    <SelectTrigger className="w-52">
-                      <SelectValue placeholder="어느 속성으로" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {propertyTargets.map(([key, text]) => (
-                        <SelectItem key={key} value={key}>
-                          {text}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <Textarea
-                    defaultValue={column.values ? JSON.stringify(column.values) : ''}
-                    placeholder='값 대응표 (선택) {"US": "미국"}'
-                    rows={1}
-                    className="min-h-9 flex-1 font-mono text-xs"
-                    onBlur={(event) => {
-                      const text = event.target.value.trim()
-                      try {
-                        patchColumn(index, {
-                          values: text ? (JSON.parse(text) as Record<string, unknown>) : undefined,
-                        })
-                      } catch {
-                        setError(new Error(`값 대응표가 JSON 이 아닙니다: ${text.slice(0, 40)}`))
+              </div>
+            )}
+
+            {/* 객체 소스의 대응 — **선 소스에는 그리지 않는다.** 뜻 없는 칸을 남겨 두면
+                사람은 그것을 채워야 하는 줄 알고, 서버는 그 값을 무시한다. */}
+            {!edgeMode && (
+              <>
+              {/* ① 같은 것 검색 */}
+              <div className="space-y-1.5">
+                <p className="text-sm font-medium">① 같은 것 검색</p>
+                <div className="flex flex-wrap items-end gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="ds-ext" className="text-xs">
+                      바깥 식별자 열
+                    </Label>
+                    <Input
+                      id="ds-ext"
+                      value={externalKey}
+                      placeholder="SupplierID"
+                      list="ds-columns"
+                      className="w-48"
+                      onChange={(event) => setExternalKey(event.target.value)}
+                    />
+                  </div>
+                  <label className="flex cursor-pointer items-center gap-2 pb-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="size-4"
+                      checked={fixedOf('key') === externalKey.trim() && externalKey.trim() !== ''}
+                      onChange={(event) =>
+                        setFixed('key', event.target.checked ? externalKey.trim() : '')
                       }
-                    }}
+                    />
+                    우리 식별자(key)로도 쓴다
+                  </label>
+                </div>
+                <p className="text-muted-foreground text-xs">
+                  이 열의 값이 그 객체에 남아, 다음 동기화가 같은 객체를 다시 찾습니다 — 우리 쪽
+                  이름·식별자를 수정해도 유지됩니다.
+                </p>
+              </div>
+
+              {/* ② 이름 */}
+              <div className="space-y-1.5">
+                <p className="text-sm font-medium">② 이름</p>
+                <div className="space-y-1">
+                  <Label htmlFor="ds-label" className="text-xs">
+                    이름 열 (필수)
+                  </Label>
+                  <Input
+                    id="ds-label"
+                    value={fixedOf('label')}
+                    placeholder="CompanyName"
+                    list="ds-columns"
+                    className="w-48"
+                    onChange={(event) => setFixed('label', event.target.value)}
                   />
+                </div>
+              </div>
+
+              {/* ③ 속성 */}
+              <div className="space-y-1.5">
+                <p className="text-sm font-medium">③ 속성</p>
+                {propertyTargets.length === 0 && (
+                  <p className="text-muted-foreground text-xs">
+                    이 타입에 속성이 없습니다. 관리 › 온톨로지에서 먼저 만드세요.
+                  </p>
+                )}
+                {propertyColumns.map(({ column, index }) => (
+                  <div key={index} className="flex flex-wrap items-start gap-2">
+                    <Input
+                      value={column.source}
+                      placeholder="바깥 열"
+                      list="ds-columns"
+                      className="w-40"
+                      onChange={(event) => patchColumn(index, { source: event.target.value })}
+                    />
+                    <span className="text-muted-foreground pt-2 text-sm">→</span>
+                    <Select
+                      value={column.target}
+                      onValueChange={(next) => patchColumn(index, { target: next })}
+                    >
+                      <SelectTrigger className="w-52">
+                        <SelectValue placeholder="어느 속성으로" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {propertyTargets.map(([key, text]) => (
+                          <SelectItem key={key} value={key}>
+                            {text}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <Textarea
+                      defaultValue={column.values ? JSON.stringify(column.values) : ''}
+                      placeholder='값 대응표 (선택) {"US": "미국"}'
+                      rows={1}
+                      className="min-h-9 flex-1 font-mono text-xs"
+                      onBlur={(event) => {
+                        const text = event.target.value.trim()
+                        try {
+                          patchColumn(index, {
+                            values: text ? (JSON.parse(text) as Record<string, unknown>) : undefined,
+                          })
+                        } catch {
+                          setError(new Error(`값 대응표가 JSON 이 아닙니다: ${text.slice(0, 40)}`))
+                        }
+                      }}
+                    />
+                    <Button
+                      type="button"
+                      size="icon"
+                      variant="ghost"
+                      aria-label="속성 대응 삭제"
+                      onClick={() => setColumns(columns.filter((_one, i) => i !== index))}
+                    >
+                      <X className="size-4" />
+                    </Button>
+                  </div>
+                ))}
+                {propertyTargets.length > 0 && (
                   <Button
                     type="button"
-                    size="icon"
-                    variant="ghost"
-                    aria-label="속성 대응 삭제"
-                    onClick={() => setColumns(columns.filter((_one, i) => i !== index))}
+                    size="sm"
+                    variant="outline"
+                    onClick={() =>
+                      setColumns([...columns, { source: '', target: propertyTargets[0][0] }])
+                    }
                   >
-                    <X className="size-4" />
+                    <Plus className="mr-1 size-4" />
+                    속성 추가
                   </Button>
-                </div>
-              ))}
-              {propertyTargets.length > 0 && (
-                <Button
-                  type="button"
-                  size="sm"
-                  variant="outline"
-                  onClick={() =>
-                    setColumns([...columns, { source: '', target: propertyTargets[0][0] }])
-                  }
-                >
-                  <Plus className="mr-1 size-4" />
-                  속성 추가
-                </Button>
-              )}
-              <p className="text-muted-foreground text-xs">
-                값 대응표에 없는 값이 오면 그 행은 오류입니다(조용히 통과시키면 선택할 값이
-                오염됩니다). 참조 속성은 상대의 식별자·별칭·이름으로 풀리고, 못 풀면 오류 행입니다.
-              </p>
-            </div>
+                )}
+                <p className="text-muted-foreground text-xs">
+                  값 대응표에 없는 값이 오면 그 행은 오류입니다(조용히 통과시키면 선택할 값이
+                  오염됩니다). 참조 속성은 상대의 식별자·별칭·이름으로 풀리고, 못 풀면 오류 행입니다.
+                </p>
+              </div>
 
-            {/* ④ 그 밖에 */}
-            <div className="space-y-1.5">
-              <p className="text-sm font-medium">④ 그 밖에 (선택)</p>
-              <div className="flex flex-wrap gap-3">
-                <div className="space-y-1">
-                  <Label htmlFor="ds-desc" className="text-xs">
-                    설명 열
-                  </Label>
-                  <Input
-                    id="ds-desc"
-                    value={fixedOf('description')}
-                    list="ds-columns"
-                    className="w-48"
-                    onChange={(event) => setFixed('description', event.target.value)}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <Label htmlFor="ds-alias" className="text-xs">
-                    다른 이름(별칭) 열
-                  </Label>
-                  <Input
-                    id="ds-alias"
-                    value={fixedOf('alias')}
-                    placeholder="ShortName"
-                    list="ds-columns"
-                    className="w-48"
-                    onChange={(event) => setFixed('alias', event.target.value)}
-                  />
+              {/* ④ 그 밖에 */}
+              <div className="space-y-1.5">
+                <p className="text-sm font-medium">④ 그 밖에 (선택)</p>
+                <div className="flex flex-wrap gap-3">
+                  <div className="space-y-1">
+                    <Label htmlFor="ds-desc" className="text-xs">
+                      설명 열
+                    </Label>
+                    <Input
+                      id="ds-desc"
+                      value={fixedOf('description')}
+                      list="ds-columns"
+                      className="w-48"
+                      onChange={(event) => setFixed('description', event.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label htmlFor="ds-alias" className="text-xs">
+                      다른 이름(별칭) 열
+                    </Label>
+                    <Input
+                      id="ds-alias"
+                      value={fixedOf('alias')}
+                      placeholder="ShortName"
+                      list="ds-columns"
+                      className="w-48"
+                      onChange={(event) => setFixed('alias', event.target.value)}
+                    />
+                  </div>
                 </div>
               </div>
-            </div>
+
+              </>
+            )}
 
             {preview && preview.mapped.length > 0 && (
               <div className="max-h-40 overflow-auto rounded border text-xs">

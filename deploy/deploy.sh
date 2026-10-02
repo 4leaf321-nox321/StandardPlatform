@@ -83,8 +83,27 @@ INSTALL_DIR="${INSTALL_DIR:-/home/$OPERATOR/apps/$APP_SLUG}"
 PG_VERSION="${PG_VERSION:-16}"                          # 두 서버가 같아야 복제가 된다
 DB_NAME="${DB_NAME:-$APP_SLUG}"
 DB_USER="${DB_USER:-$APP_SLUG}"
-SERVICE_NAME="$APP_SLUG"
-SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
+# slug 에서 나오는 **유닛 이름들을 한 곳에서** 만든다.
+#
+# ⚠️ 두 벌로 적어 두었더니 설치 마법사(`cmd_setup`)가 답을 받아 다시 계산하는 목록에서
+#    **워커만 빠졌다.** 그래서 한 서버에 두 번째 플랫폼을 깔 때 첫 플랫폼의 워커 유닛을
+#    덮어썼다(실측) — 두 플랫폼이 한 워커를 공유하게 되고, 그 워커는 한쪽 DB 만 본다.
+#    유닛이 하나 늘 때 고칠 자리가 둘이면 한쪽은 언젠가 빠진다.
+derive_unit_names() {
+    SERVICE_NAME="$APP_SLUG"
+    SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
+    WORKER_SERVICE_NAME="${APP_SLUG}-worker"
+    WORKER_SERVICE_UNIT="/etc/systemd/system/${WORKER_SERVICE_NAME}.service"
+    SYNC_SERVICE_NAME="${APP_SLUG}-sync"
+    SYNC_SERVICE_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.service"
+    SYNC_TIMER_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.timer"
+    MCP_SERVICE_NAME="${APP_SLUG}-mcp"
+    MCP_SERVICE_UNIT="/etc/systemd/system/${MCP_SERVICE_NAME}.service"
+    BACKUP_SERVICE_NAME="${APP_SLUG}-backup"
+    BACKUP_SERVICE_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.service"
+    BACKUP_TIMER_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.timer"
+}
+derive_unit_names
 
 # sed 치환값에 들어가면 뜻을 갖는 글자(& | \)를 막는다 — 이름에 '&' 가 있으면 매치 전체가 들어간다.
 sed_escape() { printf '%s' "$1" | sed -e 's/[&|\\]/\\&/g'; }
@@ -138,20 +157,15 @@ else DB_HOST="localhost"; fi
 DB_HOST="${DB_HOST_OVERRIDE:-$DB_HOST}"
 
 # 데이터 소스 동기화 타이머 — 화면에서 간격을 정한 소스를 몇 분마다 돌린다. 앱과 같은 SIF.
-SYNC_SERVICE_NAME="${APP_SLUG}-sync"
-SYNC_SERVICE_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.service"
-SYNC_TIMER_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.timer"
+# 이름은 `derive_unit_names` 가 만든다(위).
 SYNC_ENABLED="${SYNC_ENABLED:-1}"                      # 0 으로 두면 타이머 안 설치
 
 # 작업 워커 — 파일 가져오기처럼 오래 걸리는 일을 요청 밖에서 돌린다. 앱과 같은 SIF.
 # **없으면 파일 가져오기가 영영 「대기」 다.** 두 서버에 하나씩 뜬다(docs/작업-워커-설계.md).
-WORKER_SERVICE_NAME="${APP_SLUG}-worker"
-WORKER_SERVICE_UNIT="/etc/systemd/system/${WORKER_SERVICE_NAME}.service"
 
 # ───────────────────────── MCP 서버 (Claude 연동, 선택) ─────────────────────────
 # 별도 venv + 별도 systemd 유닛. 백엔드 SIF 와 의존성이 충돌해 컨테이너에 못 넣는다.
-MCP_SERVICE_NAME="${APP_SLUG}-mcp"
-MCP_SERVICE_UNIT="/etc/systemd/system/${MCP_SERVICE_NAME}.service"
+# 유닛 이름은 `derive_unit_names` 가 만든다(위).
 # 설치된 systemd 유닛에서 Environment=KEY=VALUE 값을 읽는다(없으면 빈 문자열).
 # → 한 번 배포한 MCP 설정을 다음 배포가 자동으로 기억하게 하는 장치.
 unit_env() {  # $1=key
@@ -554,9 +568,6 @@ setup_sync_timer() {
 
 # ── 백업 타이머 — 백업 폴더를 알 때만. 이중화면 두 서버 모두 걸리고, backup.sh 가 「오늘
 # 것이 이미 있으면」 건너뛴다(한 대가 죽어도 다른 대가 받는다). ──
-BACKUP_SERVICE_NAME="${APP_SLUG}-backup"
-BACKUP_SERVICE_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.service"
-BACKUP_TIMER_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.timer"
 setup_backup_timer() {
     [[ -n "$BACKUP_HOST_DIR" ]] || return 0
     [[ -f "$HERE/backup.service.template" && -f "$HERE/backup.timer.template" ]] \
@@ -872,14 +883,10 @@ cmd_setup() {
             ask SSH_PORT "A 서버의 ssh 포트" "${SSH_PORT:-22}"
         fi
     fi
-    # 답한 값으로 파생값을 다시 계산한다.
+    # 답한 값으로 파생값을 다시 계산한다. **유닛 이름은 그 함수가 만든다** — 여기 손으로
+    # 적었더니 워커가 빠져 두 번째 플랫폼이 첫 플랫폼의 워커를 덮어썼다(실측).
     INSTALL_DIR="/home/$OPERATOR/apps/$APP_SLUG"; DB_NAME="$APP_SLUG"; DB_USER="$APP_SLUG"
-    SERVICE_NAME="$APP_SLUG"; SERVICE_UNIT="/etc/systemd/system/${SERVICE_NAME}.service"
-    SYNC_SERVICE_NAME="${APP_SLUG}-sync"; SYNC_SERVICE_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.service"
-    SYNC_TIMER_UNIT="/etc/systemd/system/${SYNC_SERVICE_NAME}.timer"
-    MCP_SERVICE_NAME="${APP_SLUG}-mcp"; MCP_SERVICE_UNIT="/etc/systemd/system/${MCP_SERVICE_NAME}.service"
-    BACKUP_SERVICE_NAME="${APP_SLUG}-backup"; BACKUP_SERVICE_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.service"
-    BACKUP_TIMER_UNIT="/etc/systemd/system/${BACKUP_SERVICE_NAME}.timer"
+    derive_unit_names
     MCP_PORT=$((APP_PORT + 2)); MCP_API_BASE="http://127.0.0.1:$APP_PORT"
     [[ -n "$HA_ROLE" ]] && MCP_HOST="0.0.0.0"
     SELF_IP="${SELF_IP_GIVEN:-}"   # 상대 IP 를 이제 아니, 그쪽으로 나가는 내 주소를 다시 잰다
@@ -898,6 +905,8 @@ cmd_setup() {
   파일     : 설치 $INSTALL_DIR$( [[ -n "$DATA_DIR" ]] && echo " · 공용 $DATA_DIR" )
   순서     : 1) 패키지 · DB 역할 (prepare)$( case "$HA_ROLE" in master) echo "  2) PostgreSQL 주 (db-primary)  3) 앱 (install)  4) B 에 넘길 파일 모으기";; backup) echo "  2) A 에서 .env · 복제 비밀번호 받기  3) PostgreSQL 대기 (db-standby)  4) 앱 (install)";; *) echo "  2) 앱 (install)";; esac )
   기록     : $INSTALL_DIR/setup.log (임시 관리자 비밀번호도 여기 남습니다)
+  유닛     : $SERVICE_NAME · $WORKER_SERVICE_NAME · $MCP_SERVICE_NAME · $SYNC_SERVICE_NAME.timer · $BACKUP_SERVICE_NAME.timer
+             (한 서버에 두 번째 플랫폼이면 **이 이름들이 앞 플랫폼과 달라야** 합니다 — slug 에서 나옵니다)
 ───────────────────────────────────────────────────────
 PLAN
     [[ $plan_only -eq 1 ]] && return 0

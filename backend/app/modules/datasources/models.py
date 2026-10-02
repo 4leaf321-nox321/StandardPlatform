@@ -87,6 +87,15 @@ class DataSource(Base):
 
     비우면 처음부터 받는다. 상대 설치를 갈아엎었거나 대응을 크게 고쳤을 때 손으로 비운다."""
 
+    relations_since_mark: Mapped[str] = mapped_column(
+        String(64), default="", server_default=""
+    )
+    """**선의 시계** — 객체와 따로 둔다(`sp_core` + `options.relations`).
+
+    한 칸을 둘이 나눠 쓰면 객체를 받고 옮긴 시각이 선의 시작점이 되어 그 사이에 바뀐 선을
+    영영 안 받는다. 상대가 `reset` 을 주면(무덤의 보관 기간이 지났다) 이 값을 비우고 전량을
+    다시 받는다."""
+
     deprecate_missing: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )

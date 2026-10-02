@@ -614,3 +614,144 @@ def test_멎은_것은_시스템_관리자에게만_뜬다(
 
     assert maintenance_counts(client, admin).get("datasource_failed", 0) >= 1
     assert "datasource_failed" not in maintenance_counts(client, member)
+
+
+def test_한_행이_선_하나인_원천도_받는다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """**객체만 받으면 점만 있고 선이 없다.**
+
+    BOM · 매핑 표처럼 한 행이 선 하나인 원천이 사내에 많다. 그것을 객체 소스로 받으면 사람이
+    같은 표를 두 번 읽어 관계 파일을 따로 만들어야 했다. 관계 대응(`mapping.relations`)을
+    적으면 같은 길(검증 · 권한 · 감사)로 선이 들어온다 — 말은 정제 도구의 관계 파일과 같다.
+    """
+    vendor = _vendor_type(client, admin)
+    kind = f"partner_{uuid.uuid4().hex[:6]}"
+    made = client.post(
+        "/api/ontology/import",
+        json={
+            "relation_types": [
+                {
+                    "slug": kind,
+                    "label": "협력",
+                    "src_type_slugs": [vendor],
+                    "dst_type_slugs": [vendor],
+                    "properties": [{"key": "share", "label": "지분", "data_type": "number"}],
+                }
+            ]
+        },
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+
+    # 양 끝이 될 객체를 먼저 넣는다 — 선은 양 끝이 있어야 선다.
+    for key, label in (("V-001", "ANSYS Inc."), ("V-002", "Altair Engineering")):
+        _make_object(client, admin, vendor, label=label, key=key)
+
+    # 원천의 한 행이 선 하나다(출발 · 도착 · 지분).
+    plm.rows = [
+        {"VendorNo": "V-001", "Name": "V-002", "Short": "", "CountryCd": "", "Rating": 30}
+    ]
+    source = _source(
+        client,
+        admin,
+        vendor,
+        mapping={
+            "relations": {
+                "relation": kind,
+                "src": {"column": "VendorNo"},
+                "dst": {"column": "Name"},
+                "evidence_note": {"value": "PLM 협력사 표"},
+                "properties": {"share": {"column": "Rating"}},
+            }
+        },
+    )
+
+    planned = _sync(client, admin, source["slug"]).json()
+    assert planned["counts"]["relations_create"] == 1, planned["counts"]
+    # 계획은 아무것도 안 바꾼다.
+    listed = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["items"]
+    one = next(row for row in listed if row["key"] == "V-001")
+    detail = client.get(f"/api/objects/{vendor}/{one['id']}", headers=admin.headers).json()
+    assert detail["related"] == []
+
+    done = _sync(client, admin, source["slug"], apply=True).json()
+    assert done["counts"]["relations_create"] == 1, done["counts"]
+    detail = client.get(f"/api/objects/{vendor}/{one['id']}", headers=admin.headers).json()
+    edge = next(row for row in detail["related"] if row["relation"] == kind)
+    assert edge["evidence_note"] == "PLM 협력사 표"
+    assert edge["properties"] == {"share": 30}
+
+    # 두 번 받아도 두 겹이 안 된다.
+    again = _sync(client, admin, source["slug"], apply=True).json()
+    assert again["counts"]["relations_create"] == 0, again["counts"]
+    assert again["counts"]["relations_unchanged"] == 1, again["counts"]
+
+
+def test_선_소스의_맞춤은_그_출발점_범위만_끊는다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """`mode: replace` 는 **온 목록에 나온 (출발 객체 · 관계 종류)** 범위에서만 끊는다 —
+    표에 아예 안 나온 객체의 선을 끊으면, 일부만 담은 표가 나머지 전부를 지운다."""
+    vendor = _vendor_type(client, admin)
+    kind = f"partner_{uuid.uuid4().hex[:6]}"
+    client.post(
+        "/api/ontology/import",
+        json={
+            "relation_types": [
+                {
+                    "slug": kind,
+                    "label": "협력",
+                    "src_type_slugs": [vendor],
+                    "dst_type_slugs": [vendor],
+                }
+            ]
+        },
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    rows = {}
+    for key, label in (("V-001", "ANSYS"), ("V-002", "Altair"), ("V-003", "마이다스")):
+        rows[key] = _make_object(client, admin, vendor, label=label, key=key)
+
+    plm.rows = [
+        {"VendorNo": "V-001", "Name": "V-002", "Short": "", "CountryCd": "", "Rating": 0},
+        {"VendorNo": "V-003", "Name": "V-002", "Short": "", "CountryCd": "", "Rating": 0},
+    ]
+    source = _source(
+        client,
+        admin,
+        vendor,
+        mapping={
+            "relations": {
+                "relation": kind,
+                "src": {"column": "VendorNo"},
+                "dst": {"column": "Name"},
+                "mode": "replace",
+            }
+        },
+    )
+    assert (
+        _sync(client, admin, source["slug"], apply=True).json()["counts"]["relations_create"]
+        == 2
+    )
+
+    # 원천에서 V-001 의 상대가 바뀌었다 — 그 출발점의 옛 선은 끊기고, V-003 것은 그대로.
+    plm.rows = [
+        {"VendorNo": "V-001", "Name": "V-003", "Short": "", "CountryCd": "", "Rating": 0},
+        {"VendorNo": "V-003", "Name": "V-002", "Short": "", "CountryCd": "", "Rating": 0},
+    ]
+    done = _sync(client, admin, source["slug"], apply=True).json()
+    assert done["counts"]["relations_unlink"] == 1, done["counts"]
+
+    first = client.get(
+        f"/api/objects/{vendor}/{rows['V-001']['id']}", headers=admin.headers
+    ).json()
+    assert [one["object_label"] for one in first["related"] if one["relation"] == kind] == [
+        "마이다스"
+    ]
+    third = client.get(
+        f"/api/objects/{vendor}/{rows['V-003']['id']}", headers=admin.headers
+    ).json()
+    assert any(one["relation"] == kind for one in third["related"]), "안 나온 출발점은 그대로"

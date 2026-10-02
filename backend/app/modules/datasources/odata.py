@@ -51,6 +51,11 @@ class Fetched:
     """MAX_ROWS 에서 끊었다 — 계획은 서지만 적용은 막는다."""
     as_of: str | None = None
     """증분 소스(`sp_core`)가 **끝까지 받았을 때만** 채운다 — 다음 호출의 `since`."""
+    reset: bool = False
+    """**처음부터 다시 받아야 한다.** 상대가 「그 시점부터는 끊긴 것을 알려 줄 수 없다」 고
+    말했다(무덤의 보관 기간이 지났다). 빈 쪽을 「바뀐 것 없음」 으로 읽으면 이미 끊긴 선을
+    영영 들고 있는다 — 부르는 쪽이 시계를 비우고 전량을 다시 받는다."""
+    reset_reason: str = ""
 
 
 def _unwrap(body: Any) -> tuple[list[dict[str, Any]], str | None]:
