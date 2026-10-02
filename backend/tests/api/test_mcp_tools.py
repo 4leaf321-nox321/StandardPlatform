@@ -26,9 +26,11 @@ from typing import Any
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
 from app.main import app as fastapi_app
 from tests.api.conftest import Signed
+from tests.api.test_delete_plan import _only
 
 SERVER_PY = Path(__file__).resolve().parents[3] / "mcp_server" / "server.py"
 
@@ -855,7 +857,9 @@ def _part_type(bot: Bot, **extra: Any) -> str:
     return slug
 
 
-def test_정의_지우기는_미리_보기가_먼저고_지운_것은_스냅샷이_되살린다(bot: Bot) -> None:
+def test_정의_지우기는_미리_보기가_먼저고_지운_것은_스냅샷이_되살린다(
+    bot: Bot, db: Session
+) -> None:
     kind = _part_type(bot)
     bolt = bot.call(server.object_create, kind, label="볼트", properties={"w": "3"})
 
@@ -877,12 +881,14 @@ def test_정의_지우기는_미리_보기가_먼저고_지운_것은_스냅샷�
         p["key"] for p in bot.call(server.object_get, kind, bolt["id"])["properties_schema"]
     }
 
-    # 되살릴 자리 — 지우기 직전 스냅샷. 미리 보기 → 적용.
+    # 되살릴 자리 — 지우기 직전 스냅샷. 미리 보기 → 적용. (시험 DB 는 스위트가 함께 써서
+    # 통째 스냅샷은 남의 정의에 걸린다 — 그 스냅샷에서 이 타입만 덜어 되돌린다.)
     snapshots = bot.call(server.ontology_restore)["snapshots"]
     assert snapshots[0]["reason"] == f"삭제 직전: 속성 {kind}.w"
-    preview = bot.call(server.ontology_restore, snapshots[0]["id"])
+    only = _only(db, snapshots[0]["id"], kind)
+    preview = bot.call(server.ontology_restore, only)
     assert preview["applied"] is False
-    back = bot.call(server.ontology_restore, snapshots[0]["id"], apply=True)
+    back = bot.call(server.ontology_restore, only, apply=True)
     assert back["applied"] is True
     got = bot.call(server.object_get, kind, bolt["id"])
     assert got["object"]["properties"]["w"] == "3", "되살린 정의로 남아 있던 값이 다시 보인다"

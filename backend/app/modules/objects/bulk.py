@@ -58,6 +58,7 @@ from app.modules.ontology import conversion, interfaces, managed
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.services import InvalidValue, merge_properties, validate_properties
 from app.shared import audit, tabular
+from app.shared.batches import chunks
 from app.shared.errors import AppError, Conflict, code
 from app.shared.permissions import require_owner_edit, visible_owner_clause
 from app.shared.system_sources import SystemRef
@@ -267,18 +268,20 @@ class _Refs:
             for norm, hits in aliases.index_of(self.db, object_type).items():
                 if len(hits) == 1 and norm not in out.by_key:
                     out.by_alias[norm] = hits[0]
-            rows = self.db.scalars(
-                select(ObjectInstance).where(
+            # 칸 셋만 읽는다 — 행 전체(속성 JSONB)를 읽으면 대상이 큰 타입일 때 메모리가 먼저
+            # 바닥난다.
+            rows = self.db.execute(
+                select(ObjectInstance.id, ObjectInstance.key, ObjectInstance.label).where(
                     ObjectInstance.type_id == object_type.id,
                     ObjectInstance.deleted_at.is_(None),
                     visible_owner_clause(self.user, ObjectInstance.owner_workspace_id),
                 )
             )
-            for row in rows:
-                out.ids.add(str(row.id))
-                if row.key:
-                    out.by_key[row.key] = row.id
-                out.by_label.setdefault(row.label.strip(), []).append(row.id)
+            for row_id, row_key, row_label in rows:
+                out.ids.add(str(row_id))
+                if row_key:
+                    out.by_key[row_key] = row_id
+                out.by_label.setdefault(row_label.strip(), []).append(row_id)
         return out
 
     def _load(self, target: str) -> _RefIndex:
@@ -658,10 +661,12 @@ def _read_index(
             except ValueError:
                 continue
 
-    found: list[ObjectInstance] = []
-    wanted_clause: list[Any] = []
-    if keys:
-        by_key_clause: Any = ObjectInstance.key.in_(keys)
+    # **나눠 묻는다** — 10만 행 파일이면 식별자 · id 가 바인드 한도(65,535)를 넘어 질의가
+    # 보내지지도 않았다(실측).
+    alive = (ObjectInstance.type_id == object_type.id, ObjectInstance.deleted_at.is_(None))
+    by_id_found: dict[uuid.UUID, ObjectInstance] = {}
+    for batch in chunks(sorted(keys)):
+        by_key_clause: Any = ObjectInstance.key.in_(batch)
         if object_type.key_scope == "workspace":
             # 범위가 부서면 **그 부서 안에서만** 같은 식별자다.
             by_key_clause = and_(
@@ -670,33 +675,28 @@ def _read_index(
                 if owner_workspace_id is None
                 else ObjectInstance.owner_workspace_id == owner_workspace_id,
             )
-        wanted_clause.append(by_key_clause)
-    if ids:
-        wanted_clause.append(ObjectInstance.id.in_(ids))
-    if wanted_clause:
-        found = list(
-            db.scalars(
-                select(ObjectInstance)
-                .where(
-                    ObjectInstance.type_id == object_type.id,
-                    ObjectInstance.deleted_at.is_(None),
-                )
-                .where(or_(*wanted_clause))
-            )
-        )
+        for one in db.scalars(select(ObjectInstance).where(*alive, by_key_clause)):
+            by_id_found[one.id] = one
+    for id_batch in chunks(sorted(ids)):
+        for one in db.scalars(
+            select(ObjectInstance).where(*alive, ObjectInstance.id.in_(id_batch))
+        ):
+            by_id_found[one.id] = one
+    found = list(by_id_found.values())
     for one in found:
         index.by_id[one.id] = one
         if one.key:
             index.by_key.setdefault(one.key, one)
     if found:
-        index.visible = set(
-            db.scalars(
-                select(ObjectInstance.id).where(
-                    ObjectInstance.id.in_([one.id for one in found]),
-                    visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+        for found_batch in chunks([one.id for one in found]):
+            index.visible.update(
+                db.scalars(
+                    select(ObjectInstance.id).where(
+                        ObjectInstance.id.in_(found_batch),
+                        visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+                    )
                 )
             )
-        )
         index.human = {
             object_id: [one for one in rows if one.kind == aliases.HUMAN]
             for object_id, rows in aliases.of(db, [one.id for one in found]).items()
@@ -723,18 +723,19 @@ def _read_index(
         if not wanted_values:
             continue
         hits: dict[str, list[tuple[uuid.UUID, uuid.UUID | None]]] = {}
-        for object_id, workspace_id, value in db.execute(
-            select(
-                ObjectInstance.id,
-                ObjectInstance.owner_workspace_id,
-                ObjectInstance.properties[definition.key].astext,
-            ).where(
-                ObjectInstance.type_id == object_type.id,
-                ObjectInstance.deleted_at.is_(None),
-                ObjectInstance.properties[definition.key].astext.in_(wanted_values),
-            )
-        ):
-            hits.setdefault(str(value), []).append((object_id, workspace_id))
+        for batch in chunks(sorted(wanted_values)):
+            for object_id, workspace_id, value in db.execute(
+                select(
+                    ObjectInstance.id,
+                    ObjectInstance.owner_workspace_id,
+                    ObjectInstance.properties[definition.key].astext,
+                ).where(
+                    ObjectInstance.type_id == object_type.id,
+                    ObjectInstance.deleted_at.is_(None),
+                    ObjectInstance.properties[definition.key].astext.in_(batch),
+                )
+            ):
+                hits.setdefault(str(value), []).append((object_id, workspace_id))
         index.unique[definition.key] = hits
     return index
 

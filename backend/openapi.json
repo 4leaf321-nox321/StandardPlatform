@@ -19787,6 +19787,11 @@
             "type": "integer",
             "title": "Hidden Relations"
           },
+          "more_property_refs": {
+            "type": "integer",
+            "title": "More Property Refs",
+            "default": 0
+          },
           "total": {
             "type": "integer",
             "title": "Total"

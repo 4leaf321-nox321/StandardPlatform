@@ -21,16 +21,17 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import cast, func, or_, select, union
+from sqlalchemy import String, cast, func, literal, or_, select, union, union_all
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
 from app.modules.objects import aliases, system
-from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
+from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRef, ObjectRelation
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared import extensions
+from app.shared.batches import chunks
 from app.shared.permissions import is_any_manager, visible_owner_clause
 from app.shared.text import compare_key
 
@@ -189,95 +190,100 @@ def _orphans(
     return _finding("orphan", object_type, int(count), hits)
 
 
-@dataclass(frozen=True)
-class _World:
-    """**이 설치의 모든 객체를 한 번만 읽은 것** — 살아 있는 id 와 이름.
-
-    깨진 참조 검사는 「이 값이 가리키는 객체가 아직 있나」 를 묻는데, 그 답은 타입과 무관한
-    전체 정보다. 타입마다 다시 읽으면 비용이 **타입 수만큼 곱해진다** — 실측으로 홈
-    「남은 일」 이 2.1초였고, 그중 전체 스캔 18회(타입 9개에 두 번씩)가 대부분이었다.
-    """
-
-    alive: set[str]
-    names: dict[uuid.UUID, str]
-
-    @classmethod
-    def read(cls, db: Session) -> _World:
-        alive: set[str] = set()
-        names: dict[uuid.UUID, str] = {}
-        # 한 질의로 둘을 만든다 — 살아 있는지와 이름을 따로 물을 이유가 없다.
-        for row_id, label, deleted_at in db.execute(
-            select(ObjectInstance.id, ObjectInstance.label, ObjectInstance.deleted_at)
-        ):
-            names[row_id] = label
-            if deleted_at is None:
-                alive.add(str(row_id))
-        return cls(alive=alive, names=names)
-
-
 def _broken_refs(
-    db: Session,
-    user: User,
-    object_type: ObjectType,
-    defs: list[PropertyDef],
-    world: _World,
-    rows_of: Rows,
+    db: Session, user: User, object_type: ObjectType, defs: list[PropertyDef]
 ) -> Finding | None:
-    """`world` 는 **부르는 쪽이 한 번 읽어 넘긴다** — 여기서 읽으면 타입마다 전체
-    스캔이 된다."""
+    """참조 칸이 지워졌거나 없는 것을 가리키는 객체 — **참조 색인으로** 센다(ADR 0010).
+
+    예전에는 설치의 객체 전부를 파이썬으로 읽었다 — 기록 200만 건에서 품질 보고가 10초였고, 큰
+    타입은 아예 건너뛰었다. 색인은 (누가 · 칸 · 누구를) 한 줄씩이라 「가리키는 상대가 살아
+    있나」 가 조인 하나다. 원 표(부서 · 계정)를 가리키는 칸은 그 표에 묻는다 — 객체 표에는 없는
+    id 라서. 원 표가 등록 안 된 칸은 **안 본다**: 물을 곳이 없는데 객체 표에서 찾으면 그 값
+    전부가 「깨진 참조」 로 뜬다.
+    """
     ref_defs = [d for d in defs if d.data_type == "object_ref"]
     if not ref_defs:
         return None
-    alive = world.alive
-    names = world.names
-    # 상대가 원 표(system)인 칸은 그 표에서 산 것을 본다 — 객체 표에는 없는 id 라서.
     types = system.types_by_slug(db)
-    rows = rows_of()
-    system_alive: dict[str, set[str]] = {}
-    # 원 표가 등록 안 된 타입을 가리키는 칸은 **안 본다.** 살아 있는지 물을 곳이 없는데
-    # 객체 표에서 찾으면 그 값 전부가 「깨진 참조」 로 뜬다 — 없는 문제를 만들어 내고,
-    # 사람은 멀쩡한 값을 지우러 간다.
-    unchecked: set[str] = set()
+    labels = {d.key: d.label for d in ref_defs}
+    object_keys: list[str] = []
+    system_keys: dict[str, ObjectType] = {}
     for d in ref_defs:
         target = types.get(d.ref_type_slug or "")
-        if target is None or not system.is_system(target):
+        if target is not None and system.is_system(target):
+            if system.source_or_none(target) is not None:
+                system_keys[d.key] = target
             continue
-        if system.source_or_none(target) is None:
-            unchecked.add(d.key)
-            continue
-        wanted: set[uuid.UUID] = set()
-        for row in rows:
-            raw = (row.properties or {}).get(d.key)
-            for item in raw if isinstance(raw, list) else [raw]:
-                if isinstance(item, str) and item:
-                    try:
-                        wanted.add(uuid.UUID(item))
-                    except ValueError:
-                        continue
-        found = system.source_of(target).lookup(db, sorted(wanted)) if wanted else {}
-        system_alive[d.key] = {str(one) for one in found}
-    hits: list[Hit] = []
-    count = 0
-    for row in rows:
-        values = row.properties or {}
-        broken: list[str] = []
-        for d in ref_defs:
-            if d.key in unchecked:
-                continue
-            raw = values.get(d.key)
-            living = system_alive.get(d.key, alive)
-            for item in raw if isinstance(raw, list) else [raw]:
-                if isinstance(item, str) and item and item not in living:
-                    try:
-                        name = names.get(uuid.UUID(item))
-                    except ValueError:
-                        name = None
-                    broken.append(f"{d.label} → {name + ' (지워짐)' if name else '없는 객체'}")
-        if not broken:
-            continue
-        count += 1
-        if len(hits) < SAMPLE:
-            hits.append(Hit(id=row.id, label=row.label, key=row.key, detail="; ".join(broken)))
+        object_keys.append(d.key)
+
+    source = aliased(ObjectInstance, name="broken_src")
+    seen = visible_owner_clause(user, source.owner_workspace_id)
+    mine = (ObjectRef.src_type_id == object_type.id,)
+    parts: list[Any] = []
+    if object_keys:
+        dst = aliased(ObjectInstance, name="broken_dst")
+        parts.append(
+            select(
+                ObjectRef.src_id.label("src"),
+                ObjectRef.key.label("key"),
+                dst.label.label("dst_label"),
+            )
+            .join(source, source.id == ObjectRef.src_id)
+            .outerjoin(dst, dst.id == ObjectRef.dst_id)
+            .where(
+                *mine,
+                ObjectRef.key.in_(object_keys),
+                seen,
+                or_(dst.id.is_(None), dst.deleted_at.is_not(None)),
+            )
+        )
+    for key, target in system_keys.items():
+        pointed = list(
+            db.scalars(select(ObjectRef.dst_id).where(*mine, ObjectRef.key == key).distinct())
+        )
+        alive = system.source_of(target).lookup(db, pointed) if pointed else {}
+        dead = [one for one in pointed if one not in alive]
+        for batch in chunks(dead):
+            parts.append(
+                select(
+                    ObjectRef.src_id.label("src"),
+                    ObjectRef.key.label("key"),
+                    literal(None, String).label("dst_label"),
+                )
+                .join(source, source.id == ObjectRef.src_id)
+                .where(*mine, ObjectRef.key == key, ObjectRef.dst_id.in_(batch), seen)
+            )
+    if not parts:
+        return None
+    broken = union_all(*parts).subquery("broken")
+    count = int(db.scalar(select(func.count(func.distinct(broken.c.src)))) or 0)
+    if not count:
+        return None
+    first = db.execute(
+        select(
+            broken.c.src,
+            broken.c.key,
+            broken.c.dst_label,
+            ObjectInstance.label,
+            ObjectInstance.key,
+        )
+        .join(ObjectInstance, ObjectInstance.id == broken.c.src)
+        .order_by(ObjectInstance.label, broken.c.src)
+        .limit(SAMPLE * 5)
+    )
+    details: dict[uuid.UUID, list[str]] = {}
+    names: dict[uuid.UUID, tuple[str, str | None]] = {}
+    for src, key, dst_label, label, object_key in first:
+        if src not in details and len(details) >= SAMPLE:
+            break
+        names[src] = (label, object_key)
+        details.setdefault(src, []).append(
+            f"{labels.get(key, key)} → {dst_label + ' (지워짐)' if dst_label else '없는 객체'}"
+        )
+    hits = [
+        Hit(id=src, label=names[src][0], key=names[src][1], detail="; ".join(found))
+        for src, found in details.items()
+    ]
     return _finding("broken_ref", object_type, count, hits)
 
 
@@ -398,9 +404,6 @@ def report(
     for d in db.scalars(select(PropertyDef).where(PropertyDef.owner_kind == "type")):
         defs_by_type.setdefault(d.owner_id, []).append(d)
 
-    # **전체 객체는 한 번만 읽는다.** 깨진 참조를 안 볼 때는 읽지도 않는다.
-    world = _World.read(db) if "broken_ref" in kinds else _World(alive=set(), names={})
-
     out: list[Finding] = []
     for object_type in types:
         if object_type.kind_class == "system":
@@ -426,9 +429,8 @@ def report(
             _orphans(db, user, object_type, relation_kinds, ends)
             if "orphan" in kinds
             else None,
-            _broken_refs(db, user, object_type, defs, world, rows)
-            if "broken_ref" in kinds and not big
-            else None,
+            # 깨진 참조는 색인으로 세므로 **큰 타입도 본다**.
+            _broken_refs(db, user, object_type, defs) if "broken_ref" in kinds else None,
             _duplicates(object_type, rows) if "duplicate" in kinds and not big else None,
             _alias_clashes(db, object_type, rows)
             if "alias_clash" in kinds and not big

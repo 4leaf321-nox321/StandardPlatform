@@ -166,6 +166,8 @@ export interface References {
   /** 볼 수 없는 부서의 것 — **수만 온다.** */
   hidden_property_refs: number
   hidden_relations: number
+  /** 보이지만 목록에 다 싣지 않은 속성 참조 — 인기 객체는 수만 건이 가리킨다. */
+  more_property_refs: number
   total: number
 }
 

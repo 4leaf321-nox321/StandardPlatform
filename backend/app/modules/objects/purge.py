@@ -21,9 +21,9 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
+from typing import Any
 
-from sqlalchemy import Text, and_, delete, func, or_, select
-from sqlalchemy.dialects.postgresql import array
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
@@ -33,6 +33,7 @@ from app.modules.objects.models import (
     ObjectAlias,
     ObjectInstance,
     ObjectLink,
+    ObjectRef,
     ObjectRelation,
     ObjectWatch,
     ObjectYear,
@@ -43,9 +44,13 @@ from app.shared.errors import AppError, code
 
 @dataclass
 class Purge:
-    """영구 삭제할 것 — 미리 보기와 적용이 같은 것을 센다."""
+    """영구 삭제할 것 — 미리 보기와 적용이 같은 것을 센다.
 
-    object_ids: list[uuid.UUID] = field(default_factory=list)
+    지운 객체의 id 를 **목록으로 들고 다니지 않는다** — 수만 건이면 `IN (...)` 이 바인드 한도
+    (65,535)에 걸려 질의가 아예 안 나간다. 「이 타입의 지운 객체」 를 부분 질의로 묻는다."""
+
+    type_id: uuid.UUID | None = None
+    objects: int = 0
     relations: int = 0
     links: int = 0
     aliases: int = 0
@@ -54,13 +59,9 @@ class Purge:
     pointing: list[str] = field(default_factory=list)
     """살아 있는 객체가 지운 객체를 가리키는 자리 — 「타입.칸 N개」. 있으면 하지 않는다."""
 
-    @property
-    def objects(self) -> int:
-        return len(self.object_ids)
-
     def removes(self) -> list[str]:
         """함께 사라지는 것 — 0 인 것은 안 적는다(읽을 것만 남긴다)."""
-        if not self.object_ids:
+        if not self.objects:
             return []
         lines = [f"지운 객체 {self.objects}개 — 영구 삭제(되돌릴 수 없습니다)"]
         for count, what in (
@@ -82,20 +83,27 @@ def _count(db: Session, model: type, *where: object) -> int:
     return int(db.scalar(stmt) or 0)
 
 
+def _doomed(type_id: uuid.UUID) -> Any:
+    """이 타입의 지운 객체 — 부분 질의(바인드 변수 없음)."""
+    return select(ObjectInstance.id).where(
+        ObjectInstance.type_id == type_id, ObjectInstance.deleted_at.is_not(None)
+    )
+
+
 def plan(db: Session, object_type: ObjectType) -> Purge:
     """이 타입의 지운 객체와 거기 매달린 것. **아무것도 안 지운다.**"""
-    ids = list(
-        db.scalars(
-            select(ObjectInstance.id).where(
-                ObjectInstance.type_id == object_type.id,
-                ObjectInstance.deleted_at.is_not(None),
-            )
-        )
+    ids = _doomed(object_type.id)
+    objects = _count(
+        db,
+        ObjectInstance,
+        ObjectInstance.type_id == object_type.id,
+        ObjectInstance.deleted_at.is_not(None),
     )
-    if not ids:
+    if not objects:
         return Purge()
     return Purge(
-        object_ids=ids,
+        type_id=object_type.id,
+        objects=objects,
         relations=_count(
             db,
             ObjectRelation,
@@ -113,28 +121,22 @@ def plan(db: Session, object_type: ObjectType) -> Purge:
     )
 
 
-def _pointing(db: Session, object_type: ObjectType, ids: list[uuid.UUID]) -> list[str]:
+def _pointing(db: Session, object_type: ObjectType, ids: Any) -> list[str]:
     """살아 있는 객체가 이 지운 객체들을 가리키는 칸 — **보이지 않는 부서 것까지** 센다.
 
-    반쯤만 세면 「걸린 것 없음」 이라 하고 지운 뒤 남의 칸이 뜻 없는 값이 된다. 칸마다 한 번
-    묻는다(객체마다 물으면 지운 객체 수만큼 질의가 붙는다).
-    """
-    wanted = [str(one) for one in ids]
+    반쯤만 세면 「걸린 것 없음」 이라 하고 지운 뒤 남의 칸이 뜻 없는 값이 된다. 참조 색인으로
+    칸마다 한 번 묻는다(ADR 0010)."""
     out: list[str] = []
     for owner, definition in lifecycle.ref_defs(db, object_type.slug):
-        column = ObjectInstance.properties[definition.key]
-        count = _count(
-            db,
-            ObjectInstance,
-            ObjectInstance.type_id == definition.owner_id,
-            ObjectInstance.deleted_at.is_(None),
-            or_(
-                column.astext.in_(wanted),
-                and_(
-                    func.jsonb_typeof(column) == "array",
-                    column.has_any(array(wanted, type_=Text)),
-                ),
-            ),
+        count = int(
+            db.scalar(
+                select(func.count(func.distinct(ObjectRef.src_id))).where(
+                    ObjectRef.src_type_id == definition.owner_id,
+                    ObjectRef.key == definition.key,
+                    ObjectRef.dst_id.in_(ids),
+                )
+            )
+            or 0
         )
         if count:
             out.append(f"{owner.slug}.{definition.key} {count}개")
@@ -144,9 +146,9 @@ def _pointing(db: Session, object_type: ObjectType, ids: list[uuid.UUID]) -> lis
 def apply(db: Session, found: Purge) -> None:
     """지운다. **커밋하지 않는다** — 타입 삭제와 한 트랜잭션이어야 반쯤 지워진 타입이
     안 남는다."""
-    ids = found.object_ids
-    if not ids:
+    if found.type_id is None or not found.objects:
         return
+    ids = _doomed(found.type_id)
     try:
         db.execute(
             delete(Attachment).where(
@@ -170,7 +172,11 @@ def apply(db: Session, found: Purge) -> None:
             )
         )
         # merged_into_id 는 SET NULL 이다 — 합쳐진 쪽도 같은 타입이라 함께 지워진다.
-        db.execute(delete(ObjectInstance).where(ObjectInstance.id.in_(ids)))
+        db.execute(
+            delete(ObjectInstance).where(
+                ObjectInstance.type_id == found.type_id, ObjectInstance.deleted_at.is_not(None)
+            )
+        )
         db.flush()
     except IntegrityError as caught:
         db.rollback()

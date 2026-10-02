@@ -34,20 +34,21 @@
 
 from __future__ import annotations
 
+import unicodedata
 import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import String, func, literal_column, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.objects import aliases, system
-from app.modules.objects.models import ObjectAlias, ObjectInstance
+from app.modules.objects.models import NORMALIZED_KEY_SQL, ObjectAlias, ObjectInstance
 from app.modules.objects.scope import Scope, as_scope
 from app.modules.ontology.models import ObjectType
 from app.shared.permissions import visible_owner_clause
-from app.shared.text import compare_key
+from app.shared.text import clean, compare_key
 
 CANDIDATE_CAP = 20
 """후보를 몇 개까지 보여 줄지. 더 많으면 고르라는 말 자체가 무의미하다 —
@@ -180,6 +181,11 @@ def _system(db: Session, user: User, object_type: ObjectType, text: str) -> Reso
     )
 
 
+def _lowered(raw: str) -> str:
+    """DB 의 비교키 식(`NORMALIZED_KEY_SQL`)과 같은 글자 — NFKC · 공백 정리 · 소문자."""
+    return unicodedata.normalize("NFKC", clean(raw)).lower()
+
+
 def by_name(db: Session, user: User, target: ObjectType | Scope, text: str) -> Resolution:
     """이름 하나를 객체 하나로. **정해지지 않으면 정해지지 않았다고 말한다.**
 
@@ -208,12 +214,20 @@ def by_name(db: Session, user: User, target: ObjectType | Scope, text: str) -> R
             return decide([row], "id", sure=True)
         return Resolution(match="none", hint=f"그 id 의 {scope.label}이(가) 없습니다: {text}")
 
-    # 1) 식별자 — 가장 좁다.
+    # 1) 식별자 — 가장 좁다. 글자 그대로가 아니면 **비교키 인덱스**로 후보를 좁힌 뒤 같은
+    # 규칙(`compare_key`)으로 견준다. 예전에는 키 있는 행을 전부 파이썬으로 읽었다 — 기록
+    # 200만 건에서 107초(실측).
     rows = list(db.scalars(base.where(ObjectInstance.key == text)))
     if not rows:
         rows = [
             one
-            for one in db.scalars(base.where(ObjectInstance.key.isnot(None)))
+            for one in db.scalars(
+                base.where(
+                    ObjectInstance.key.isnot(None),
+                    literal_column(NORMALIZED_KEY_SQL.replace("key", "objects.key"), String)
+                    == _lowered(text),
+                )
+            )
             if compare_key(one.key or "") == norm
         ]
     if rows:
@@ -226,10 +240,10 @@ def by_name(db: Session, user: User, target: ObjectType | Scope, text: str) -> R
         if rows:
             return decide(rows, "alias", sure=True)
 
-    # 3) 이름이 그대로 같은 것.
+    # 3) 이름이 그대로 같은 것 — 대소문자 무시 인덱스(`lower(label)`)를 탄다.
     rows = [
         one
-        for one in db.scalars(base.where(ObjectInstance.label.ilike(text)))
+        for one in db.scalars(base.where(func.lower(ObjectInstance.label) == text.lower()))
         if compare_key(one.label) == norm
     ]
     if rows:

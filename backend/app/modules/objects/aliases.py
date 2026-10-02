@@ -22,6 +22,7 @@ from app.modules.objects.models import ObjectAlias, ObjectInstance
 from app.modules.ontology.models import ObjectType
 from app.modules.ontology.services import InvalidValue
 from app.shared import audit
+from app.shared.batches import chunks
 from app.shared.errors import AppError, code
 from app.shared.permissions import require_owner_edit, visible_owner_clause
 from app.shared.text import compare_key
@@ -88,17 +89,17 @@ def split_long(values: list[str]) -> tuple[list[str], list[str]]:
 def of(db: Session, ids: list[uuid.UUID]) -> dict[uuid.UUID, list[ObjectAlias]]:
     """객체별 별칭 전부 — 목록 한 쪽을 한 질의로."""
     out: dict[uuid.UUID, list[ObjectAlias]] = defaultdict(list)
-    if not ids:
-        return out
-    for row in db.scalars(
-        select(ObjectAlias)
-        .where(ObjectAlias.object_id.in_(ids))
-        # **id 까지 보고 세운다.** 한 번에 붙인 별칭은 `created_at` 이 같아(트랜잭션 시작
-        # 시각) 차례가 질의마다 달라졌다 — 그러면 허브와 쌍둥이를 견주는 자리에서 **매번
-        # 「별칭이 바뀌었다」** 가 되어, 바뀐 것이 없는데도 다시 쓴다(실측).
-        .order_by(ObjectAlias.created_at, ObjectAlias.id)
-    ):
-        out[row.object_id].append(row)
+    # 나눠 묻는다 — 10만 행짜리 일괄 입력이면 id 가 바인드 한도(65,535)를 넘는다.
+    for batch in chunks(ids):
+        for row in db.scalars(
+            select(ObjectAlias)
+            .where(ObjectAlias.object_id.in_(batch))
+            # **id 까지 보고 세운다.** 한 번에 붙인 별칭은 `created_at` 이 같아(트랜잭션
+            # 시작 시각) 차례가 질의마다 달라졌다 — 그러면 허브와 쌍둥이를 견주는 자리에서
+            # **매번 「별칭이 바뀌었다」** 가 되어, 바뀐 것이 없는데도 다시 쓴다(실측).
+            .order_by(ObjectAlias.created_at, ObjectAlias.id)
+        ):
+            out[row.object_id].append(row)
     return out
 
 
@@ -152,16 +153,17 @@ def taken_by(
 ) -> dict[str, uuid.UUID]:
     """이 값들을 **이미 쓰는 다른 객체** — {비교키: 객체 id}."""
     norms = [compare_key(one) for one in values]
-    if not norms:
-        return {}
-    rows = db.execute(
-        select(ObjectAlias.norm, ObjectAlias.object_id).where(
-            ObjectAlias.type_id == object_type.id,
-            ObjectAlias.kind == kind,
-            ObjectAlias.norm.in_(norms),
+    out: dict[str, uuid.UUID] = {}
+    for batch in chunks(norms):
+        rows = db.execute(
+            select(ObjectAlias.norm, ObjectAlias.object_id).where(
+                ObjectAlias.type_id == object_type.id,
+                ObjectAlias.kind == kind,
+                ObjectAlias.norm.in_(batch),
+            )
         )
-    )
-    return {norm: object_id for norm, object_id in rows}
+        out.update({norm: object_id for norm, object_id in rows})
+    return out
 
 
 def split_free(

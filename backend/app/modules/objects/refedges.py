@@ -26,13 +26,14 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import String, bindparam, cast, func, select, text, true
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
-from app.modules.objects.models import ObjectInstance
+from app.modules.objects.models import ObjectInstance, ObjectRef
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef
+from app.shared.batches import chunks
 from app.shared.permissions import visible_owner_clause
 
 PREFIX = "ref:"
@@ -137,17 +138,18 @@ class RefEdge:
 
 
 def _visible_ids(db: Session, user: User, ids: set[uuid.UUID]) -> set[uuid.UUID]:
-    if not ids:
-        return set()
-    return set(
-        db.scalars(
-            select(ObjectInstance.id).where(
-                ObjectInstance.id.in_(ids),
-                ObjectInstance.deleted_at.is_(None),
-                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+    out: set[uuid.UUID] = set()
+    for batch in chunks(ids):
+        out.update(
+            db.scalars(
+                select(ObjectInstance.id).where(
+                    ObjectInstance.id.in_(batch),
+                    ObjectInstance.deleted_at.is_(None),
+                    visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+                )
             )
         )
-    )
+    return out
 
 
 def _outgoing(
@@ -174,44 +176,60 @@ def _by_type(
     return grouped
 
 
-_INCOMING = text("""
-    SELECT o.id AS src, o.type_id, v.value AS dst
-      FROM objects o
-      CROSS JOIN LATERAL (
-          SELECT o.properties ->> :key AS value
-           WHERE jsonb_typeof(o.properties -> :key) = 'string'
-          UNION ALL
-          SELECT jsonb_array_elements_text(o.properties -> :key)
-           WHERE jsonb_typeof(o.properties -> :key) = 'array'
-      ) v
-     WHERE o.type_id = :owner
-       AND o.deleted_at IS NULL
-       AND v.value IN :ids
-""").bindparams(bindparam("ids", expanding=True))
+def _kind_clause(kinds_: list[RefKind]) -> Any:
+    """색인에서 이 칸들만 — (가리키는 타입 · 칸) 짝마다."""
+    return or_(
+        *(
+            and_(ObjectRef.src_type_id == kind.src_type.id, ObjectRef.key == kind.key)
+            for kind in kinds_
+        )
+    )
 
 
 def _incoming(
-    db: Session, user: User, ids: list[uuid.UUID], kinds_by_dst: dict[uuid.UUID, list[RefKind]]
+    db: Session,
+    user: User,
+    ids: list[uuid.UUID],
+    kinds_by_dst: dict[uuid.UUID, list[RefKind]],
+    *,
+    per_target: int | None = None,
 ) -> list[RefEdge]:
-    """ids 를 가리키는 객체들 — 칸의 값이 ids 중 하나인 행."""
-    out: list[RefEdge] = []
-    wanted = [str(one) for one in ids]
-    sources: set[uuid.UUID] = set()
-    found: list[tuple[RefKind, uuid.UUID, uuid.UUID]] = []
+    """ids 를 가리키는 **보이는** 객체들 — 참조 색인(`object_refs`)으로 묻는다(ADR 0010).
+
+    예전에는 가리키는 타입을 통째로 읽었다 — 기록 200만 건에서 인기 모델의 상세가 오류로
+    멈췄다. `per_target` 이면 대상마다 그만큼만(인기 모델은 10만 건을 끌어안는다 — 다 실을
+    화면이 없다).
+    """
     # 대상이 인터페이스인 칸은 구현 타입마다 걸려 있다 — 한 번씩만 묻는다(두 번 물으면 선이
     # 두 겹이 된다).
     unique = {kind.slug: kind for kind_list in kinds_by_dst.values() for kind in kind_list}
-    for kind in unique.values():
-        rows = db.execute(
-            _INCOMING, {"key": kind.key, "owner": str(kind.src_type.id), "ids": wanted}
+    if not unique or not ids:
+        return []
+    slug_of_pair = {(kind.src_type.id, kind.key): kind.slug for kind in unique.values()}
+    out: list[RefEdge] = []
+    for batch in chunks(ids):
+        stmt = (
+            select(ObjectRef.src_id, ObjectRef.key, ObjectRef.dst_id, ObjectRef.src_type_id)
+            .join(ObjectInstance, ObjectInstance.id == ObjectRef.src_id)
+            .where(
+                ObjectRef.dst_id.in_(batch),
+                _kind_clause(list(unique.values())),
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+            )
         )
-        for row in rows:
-            found.append((kind, row.src, uuid.UUID(row.dst)))
-            sources.add(row.src)
-    visible = _visible_ids(db, user, sources)
-    for kind, src, dst in found:
-        if src in visible:
-            out.append(RefEdge(edge_id(src, kind.key, dst), kind.slug, src, dst))
+        if per_target is not None:
+            ranked = stmt.add_columns(
+                func.row_number()
+                .over(partition_by=ObjectRef.dst_id, order_by=ObjectRef.src_id)
+                .label("rank")
+            ).subquery()
+            stmt = select(
+                ranked.c.src_id, ranked.c.key, ranked.c.dst_id, ranked.c.src_type_id
+            ).where(ranked.c.rank <= per_target)
+        for src, key, dst, src_type in db.execute(stmt):
+            slug = slug_of_pair.get((src_type, key))
+            if slug is not None:
+                out.append(RefEdge(edge_id(src, key, dst), slug, src, dst))
     return out
 
 
@@ -254,7 +272,7 @@ def neighbor_edges(
         for type_id, kind_list in by_dst.items()
         if type_id in set(row_types.values())
     }
-    edges += _incoming(db, user, frontier, relevant)
+    edges += _incoming(db, user, frontier, relevant, per_target=fanout)
     if type_ids is not None:
         allowed = set(type_ids)
         types_of = _types_of(db, {e.dst for e in edges} | {e.src for e in edges})
@@ -313,8 +331,22 @@ def degree_counts(db: Session, *, ids: list[uuid.UUID], user: User) -> dict[uuid
         for one in kind.dst_types:
             if one.id in row_types:
                 by_dst.setdefault(one.id, []).append(kind)
-    for edge in _incoming(db, user, ids, by_dst):
-        counts[edge.dst] += 1
+    # 나를 가리키는 것은 **세기만** 한다 — 인기 모델 하나가 10만 줄을 끌고 오지 않게.
+    unique = {kind.slug: kind for kind_list in by_dst.values() for kind in kind_list}
+    if unique:
+        for batch in chunks(ids):
+            pointing = db.execute(
+                select(ObjectRef.dst_id, func.count())
+                .join(ObjectInstance, ObjectInstance.id == ObjectRef.src_id)
+                .where(
+                    ObjectRef.dst_id.in_(batch),
+                    _kind_clause(list(unique.values())),
+                    visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+                )
+                .group_by(ObjectRef.dst_id)
+            )
+            for dst, count in pointing:
+                counts[dst] += int(count)
     return dict(counts)
 
 
@@ -329,57 +361,39 @@ class TypeRefEdge:
 def type_edge_counts(db: Session, *, user: User) -> list[TypeRefEdge]:
     """타입 사이에 참조 칸으로 실제 몇 개가 이어졌나 — 정의 그래프의 선 굵기.
 
-    보이는 규칙을 **양 끝에 따로** 건다 — 관계의 굵기와 같은 원칙(`graph.type_edge_counts`)."""
-    out: list[TypeRefEdge] = []
+    보이는 규칙을 **양 끝에 따로** 건다 — 관계의 굵기와 같은 원칙(`graph.type_edge_counts`).
+    참조 색인을 **한 번** 묶는다(예전에는 칸마다 가리키는 타입을 두 번씩 통째로 읽었다)."""
+    all_kinds = kinds(db)
+    if not all_kinds:
+        return []
     source = aliased(ObjectInstance)
     target = aliased(ObjectInstance)
-    pairs = [(kind, dst) for kind in kinds(db).values() for dst in kind.dst_types]
-    for kind, dst in pairs:
-        # 대상이 인터페이스면 **구현 타입마다** 한 선 — 그림에는 타입만 선다.
-        column = source.properties[kind.key]
-        values = (
-            func.jsonb_array_elements_text(column).table_valued("value").lateral("ref_values")
-        )
-        where = [
-            source.type_id == kind.src_type.id,
-            source.deleted_at.is_(None),
-            target.type_id == dst.id,
+    rows = db.execute(
+        select(ObjectRef.src_type_id, ObjectRef.key, target.type_id, func.count())
+        .join(source, source.id == ObjectRef.src_id)
+        .join(target, target.id == ObjectRef.dst_id)
+        .where(
             target.deleted_at.is_(None),
             visible_owner_clause(user, source.owner_workspace_id),
             visible_owner_clause(user, target.owner_workspace_id),
-        ]
-        single = (
-            select(func.count())
-            .select_from(source)
-            .join(target, cast(target.id, String) == column.astext)
-            .where(*where, func.jsonb_typeof(column) == "string")
         )
-        many = (
-            select(func.count())
-            .select_from(source)
-            .join(values, true())
-            .join(target, cast(target.id, String) == values.c.value)
-            .where(*where, func.jsonb_typeof(column) == "array")
+        .group_by(ObjectRef.src_type_id, ObjectRef.key, target.type_id)
+    )
+    counted = {(src, key, dst): int(count) for src, key, dst, count in rows}
+    # 대상이 인터페이스면 **구현 타입마다** 한 선 — 그림에는 타입만 선다. 0 인 선도 낸다.
+    return [
+        TypeRefEdge(
+            kind.slug,
+            kind.src_type.id,
+            dst.id,
+            counted.get((kind.src_type.id, kind.key, dst.id), 0),
         )
-        count = int(db.scalar(single) or 0) + int(db.scalar(many) or 0)
-        out.append(TypeRefEdge(kind.slug, kind.src_type.id, dst.id, count))
-    return out
+        for kind in all_kinds.values()
+        for dst in kind.dst_types
+    ]
 
 
 # --- 트리 — 자식이 부모를 칸으로 가리킨다 ------------------------------------
-
-
-_CHILDREN = text("""
-    SELECT o.id
-      FROM objects o
-     WHERE o.type_id = :owner
-       AND o.deleted_at IS NULL
-       AND (
-           o.properties ->> :key = :parent
-           OR (jsonb_typeof(o.properties -> :key) = 'array'
-               AND jsonb_exists(o.properties -> :key, :parent))
-       )
-""")
 
 
 def _kind(db: Session, relation: str) -> RefKind | None:
@@ -390,10 +404,15 @@ def child_ids(db: Session, *, relation: str, parent_id: uuid.UUID) -> list[uuid.
     kind = _kind(db, relation)
     if kind is None:
         return []
-    rows = db.execute(
-        _CHILDREN, {"owner": str(kind.src_type.id), "key": kind.key, "parent": str(parent_id)}
+    return list(
+        db.scalars(
+            select(ObjectRef.src_id).where(
+                ObjectRef.dst_id == parent_id,
+                ObjectRef.src_type_id == kind.src_type.id,
+                ObjectRef.key == kind.key,
+            )
+        )
     )
-    return [row.id for row in rows]
 
 
 def child_counts(
@@ -403,16 +422,18 @@ def child_counts(
     if kind is None or not parent_ids:
         return {}
     counts: Counter[uuid.UUID] = Counter()
-    rows = db.execute(
-        _INCOMING,
-        {
-            "key": kind.key,
-            "owner": str(kind.src_type.id),
-            "ids": [str(one) for one in parent_ids],
-        },
-    )
-    for row in rows:
-        counts[uuid.UUID(row.dst)] += 1
+    for batch in chunks(parent_ids):
+        rows = db.execute(
+            select(ObjectRef.dst_id, func.count())
+            .where(
+                ObjectRef.dst_id.in_(batch),
+                ObjectRef.src_type_id == kind.src_type.id,
+                ObjectRef.key == kind.key,
+            )
+            .group_by(ObjectRef.dst_id)
+        )
+        for dst, count in rows:
+            counts[dst] += int(count)
     return dict(counts)
 
 
@@ -461,22 +482,19 @@ def ancestor_ids(
 
 
 def parentless_ids(db: Session, *, relation: str, type_id: uuid.UUID) -> list[uuid.UUID]:
+    """그 칸으로 아무것도 가리키지 않는 것 — 트리의 뿌리."""
     kind = _kind(db, relation)
     if kind is None:
         return []
-    rows = db.execute(
-        text("""
-            SELECT o.id
-              FROM objects o
-             WHERE o.type_id = :type_id
-               AND o.deleted_at IS NULL
-               AND (
-                   o.properties -> :key IS NULL
-                   OR jsonb_typeof(o.properties -> :key) = 'null'
-                   OR (jsonb_typeof(o.properties -> :key) = 'array'
-                       AND jsonb_array_length(o.properties -> :key) = 0)
-               )
-        """),
-        {"type_id": str(type_id), "key": kind.key},
+    pointing = select(ObjectRef.src_id).where(
+        ObjectRef.src_id == ObjectInstance.id, ObjectRef.key == kind.key
     )
-    return [row.id for row in rows]
+    return list(
+        db.scalars(
+            select(ObjectInstance.id).where(
+                ObjectInstance.type_id == type_id,
+                ObjectInstance.deleted_at.is_(None),
+                ~pointing.exists(),
+            )
+        )
+    )

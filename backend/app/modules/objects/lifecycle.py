@@ -23,13 +23,13 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.objects import aliases, links, system
 from app.modules.objects import relations as rel
-from app.modules.objects.models import ObjectInstance, ObjectRelation
+from app.modules.objects.models import ObjectInstance, ObjectRef, ObjectRelation
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared import audit
@@ -60,6 +60,11 @@ class RelationHit:
     other_type_slug: str
 
 
+#: 「가리키는 것」 목록에 싣는 수 — 칸마다. 인기 모델은 10만 건이 가리킨다 — 다 실을 화면이
+#: 없고, 실으면 응답이 멈춘다(실측). 넘는 것은 수로 말한다(`more_property_refs`).
+REF_LIST_CAP = 200
+
+
 @dataclass
 class References:
     property_refs: list[RefHit] = field(default_factory=list)
@@ -67,11 +72,14 @@ class References:
     hidden_property_refs: int = 0
     """볼 수 없는 부서의 참조 수. 수만 말한다."""
     hidden_relations: int = 0
+    more_property_refs: int = 0
+    """보이지만 목록에 다 싣지 않은 참조 수(칸마다 `REF_LIST_CAP` 넘는 것)."""
 
     @property
     def total(self) -> int:
         return (
             len(self.property_refs)
+            + self.more_property_refs
             + len(self.relations)
             + self.hidden_property_refs
             + self.hidden_relations
@@ -100,21 +108,25 @@ def ref_defs(db: Session, type_slug: str) -> list[tuple[ObjectType, PropertyDef]
     return [(types[d.owner_id], d) for d in defs if d.owner_id in types]
 
 
+def _pointing(definition: PropertyDef, target_id: uuid.UUID) -> Any:
+    """이 칸에 target 을 담은 살아 있는 객체들 — 참조 색인으로(ADR 0010). 단일값 · 다중값
+    모두."""
+    return (
+        select(ObjectInstance)
+        .join(ObjectRef, ObjectRef.src_id == ObjectInstance.id)
+        .where(
+            ObjectRef.dst_id == target_id,
+            ObjectRef.src_type_id == definition.owner_id,
+            ObjectRef.key == definition.key,
+        )
+    )
+
+
 def _pointing_rows(
     db: Session, definition: PropertyDef, target_id: uuid.UUID
 ) -> list[ObjectInstance]:
-    """이 칸에 target 을 담은 객체들. 단일값·다중값 모두 — JSONB 안이라 텍스트로 본다."""
-    column = ObjectInstance.properties[definition.key]
-    wanted = str(target_id)
-    return list(
-        db.scalars(
-            select(ObjectInstance).where(
-                ObjectInstance.type_id == definition.owner_id,
-                ObjectInstance.deleted_at.is_(None),
-                or_(column.astext == wanted, column.contains([wanted])),
-            )
-        )
-    )
+    """전부 — **고치는 자리**(참조 비우기 · 병합)만 쓴다. 보여 주는 자리는 상한을 둔다."""
+    return list(db.scalars(_pointing(definition, target_id)))
 
 
 def references_of(
@@ -123,21 +135,31 @@ def references_of(
     """이 객체를 가리키는 것 전부 — 속성 참조와 관계."""
     out = References()
     for owner_type, definition in ref_defs(db, object_type.slug):
-        for other in _pointing_rows(db, definition, row.id):
-            if _visible(db, user, other):
-                out.property_refs.append(
-                    RefHit(
-                        object_id=other.id,
-                        label=other.label,
-                        key=other.key,
-                        type_slug=owner_type.slug,
-                        type_label=owner_type.label,
-                        property_key=definition.key,
-                        property_label=definition.label,
-                    )
+        pointing = _pointing(definition, row.id)
+        seen = visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+        everyone = int(db.scalar(select(func.count()).select_from(pointing.subquery())) or 0)
+        if not everyone:
+            continue
+        visible = int(
+            db.scalar(select(func.count()).select_from(pointing.where(seen).subquery())) or 0
+        )
+        listed = list(
+            db.scalars(pointing.where(seen).order_by(ObjectInstance.label).limit(REF_LIST_CAP))
+        )
+        for other in listed:
+            out.property_refs.append(
+                RefHit(
+                    object_id=other.id,
+                    label=other.label,
+                    key=other.key,
+                    type_slug=owner_type.slug,
+                    type_label=owner_type.label,
+                    property_key=definition.key,
+                    property_label=definition.label,
                 )
-            else:
-                out.hidden_property_refs += 1
+            )
+        out.more_property_refs += visible - len(listed)
+        out.hidden_property_refs += everyone - visible
 
     types = {one.id: one for one in db.scalars(select(ObjectType))}
     types_by_slug = {one.slug: one for one in types.values()}

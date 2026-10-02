@@ -305,6 +305,9 @@ class ReferencesOut(BaseModel):
     """볼 수 없는 부서의 참조 수. **수만 말한다** — 안 말하면 「아무것도 안 걸렸다」 로
     읽는다."""
     hidden_relations: int
+    more_property_refs: int = 0
+    """보이지만 목록에 다 싣지 않은 참조 수 — 인기 객체는 수만 건이 가리킨다. 「외 N개」 로
+    말한다."""
     total: int
 
 

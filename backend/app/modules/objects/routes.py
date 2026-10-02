@@ -2198,6 +2198,7 @@ def object_references(
         relations=[RelationHitOut(**vars(one)) for one in refs.relations],
         hidden_property_refs=refs.hidden_property_refs,
         hidden_relations=refs.hidden_relations,
+        more_property_refs=refs.more_property_refs,
         total=refs.total,
     )
 

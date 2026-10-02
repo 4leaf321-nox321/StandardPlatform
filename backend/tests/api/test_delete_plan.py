@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 from app.modules.audit.models import AuditEntry
 from app.modules.files.models import Attachment
 from app.modules.objects.models import ObjectInstance
+from app.modules.ontology.models import OntologySnapshot
 from app.shared.errors import code
 from tests.api.conftest import Signed
 from tests.api.test_interfaces import _add_common, _code, _make_interface, _props
@@ -32,6 +33,21 @@ def _plan(
     got = client.get("/api/ontology/delete-plan", params=params, headers=who.headers)
     assert got.status_code == 200, got.text
     return dict(got.json())
+
+
+def _only(db: Session, snapshot_id: str, slug: str) -> str:
+    """그 스냅샷에서 **이 타입만** 담은 스냅샷 — 시험 DB 는 스위트가 함께 써서, 통째로 되돌리면
+    다른 시험이 남긴 정의(등록 안 된 원 표 등)에 걸린다."""
+    whole = db.get(OntologySnapshot, uuid.UUID(snapshot_id))
+    assert whole is not None
+    types = [one for one in (whole.schema or {}).get("types", []) if one["slug"] == slug]
+    assert types, f"스냅샷에 {slug} 가 없습니다"
+    for one in types:
+        one.pop("nav_group_slug", None)
+    row = OntologySnapshot(actor_label="시험", reason=whole.reason, schema={"types": types})
+    db.add(row)
+    db.commit()
+    return str(row.id)
 
 
 def _snapshots(client: TestClient, admin: Signed) -> list[dict[str, Any]]:
@@ -189,7 +205,7 @@ def test_데이터_소스가_넣고_있는_타입은_먼저_말하고_막는다(
 
 
 def test_빈_타입은_무엇이_사라지고_무엇이_가리키는지_말하고_지우면_스냅샷이_남는다(
-    client: TestClient, admin: Signed
+    client: TestClient, admin: Signed, db: Session
 ) -> None:
     kind = _make_type(client, admin, label="부품")
     _make_property(client, admin, kind, key="w", label="무게", data_type="number")
@@ -217,7 +233,7 @@ def test_빈_타입은_무엇이_사라지고_무엇이_가리키는지_말하�
     assert snapshots[0]["reason"] == f"삭제 직전: 타입 {kind}"
 
     # 그 스냅샷이 되살린다 — 미리 보기는 아무것도 안 바꾼다.
-    restore = f"/api/ontology/snapshots/{snapshots[0]['id']}/restore"
+    restore = f"/api/ontology/snapshots/{_only(db, snapshots[0]['id'], kind)}/restore"
     preview = client.post(restore, params={"dry_run": "true"}, headers=admin.headers)
     assert preview.status_code == 200, preview.text
     assert preview.json()["applied"] is False
@@ -228,7 +244,8 @@ def test_빈_타입은_무엇이_사라지고_무엇이_가리키는지_말하�
         client.get(f"/api/ontology/types/{kind}/properties", headers=admin.headers).status_code
         == 404
     )
-    assert len(_snapshots(client, admin)) == before + 1, "미리 보기는 스냅샷도 안 남긴다"
+    after_preview = len(_snapshots(client, admin))
+    assert after_preview == before + 2, "미리 보기는 스냅샷을 안 남긴다(하나는 시험이 만든 것)"
 
     applied = client.post(restore, headers=admin.headers)
     assert applied.status_code == 200 and applied.json()["applied"] is True, applied.text
@@ -236,7 +253,7 @@ def test_빈_타입은_무엇이_사라지고_무엇이_가리키는지_말하�
 
 
 def test_속성을_지워도_저장값은_남고_되살리면_다시_보인다(
-    client: TestClient, admin: Signed
+    client: TestClient, admin: Signed, db: Session
 ) -> None:
     kind = _make_type(client, admin, label="부품")
     _make_property(client, admin, kind, key="w", label="무게", data_type="number")
@@ -256,7 +273,8 @@ def test_속성을_지워도_저장값은_남고_되살리면_다시_보인다(
     assert snapshot["reason"] == f"삭제 직전: 속성 {kind}.w"
 
     restored = client.post(
-        f"/api/ontology/snapshots/{snapshot['id']}/restore", headers=admin.headers
+        f"/api/ontology/snapshots/{_only(db, snapshot['id'], kind)}/restore",
+        headers=admin.headers,
     )
     assert restored.status_code == 200 and restored.json()["applied"] is True, restored.text
     got = client.get(f"/api/objects/{kind}/{bolt['id']}", headers=admin.headers)

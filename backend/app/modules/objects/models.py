@@ -33,13 +33,19 @@ from sqlalchemy import (
     event,
     func,
     insert,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
+from app.modules.objects import refindex
 from app.modules.ontology.models import SLUG_MAX
+
+#: 식별자의 비교키를 DB 에서 — `shared.text.compare_key`(NFKC · 공백 정리 · 소문자)와 같게.
+#: 인덱스와 질의가 **같은 글자**를 써야 인덱스를 탄다(`objects.resolve`).
+NORMALIZED_KEY_SQL = "lower(normalize(regexp_replace(btrim(key), '\\s+', ' ', 'g'), NFKC))"
 
 #: 객체의 상태.
 #:   active      picker 와 목록에 나온다
@@ -63,6 +69,20 @@ class ObjectInstance(Base):
         # **「지난번 이후 바뀐 것」 이 이 인덱스를 탄다.** 바깥 시스템이 새벽마다 증분으로
         # 물으므로, 없으면 그 질의가 타입 전체를 훑는다.
         Index("ix_objects_type_updated", "type_id", "updated_at"),
+        # 식별자로 찾기 — 일괄 입력 · 중복 확인 · 이름 풀이 · 참조 후보. 없으면 기록 200만 건
+        # 타입에서 식별자 하나를 찾을 때마다 타입을 통째로 읽는다(ADR 0010).
+        Index("ix_objects_key_type", "key", "type_id"),
+        # 비교키(`compare_key` 와 같은 정규화)로 찾기 — 전각 · 대소문자 · 겹친 공백이
+        # 달라도 같다.
+        # 예전에는 키 있는 행을 전부 파이썬으로 읽어 견줬다(200만 건에서 107초, 실측).
+        Index(
+            "ix_objects_type_key_norm",
+            "type_id",
+            text(NORMALIZED_KEY_SQL),
+            postgresql_where=text("key IS NOT NULL"),
+        ),
+        # 이름이 그대로 같은 것 — 대소문자 무시.
+        Index("ix_objects_type_label_lower", "type_id", text("lower(label)")),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -276,6 +296,35 @@ def _leave_tombstone(_mapper: Any, connection: Any, target: ObjectRelation) -> N
             relation=target.relation,
         )
     )
+
+
+class ObjectRef(Base):
+    """참조 칸의 색인 — **누가(src) · 어느 칸으로(key) · 누구를(dst)**. DB 트리거가 유지한다.
+
+    값의 정본은 여전히 `objects.properties` 다. 이 표는 「이것을 가리키는 것」 을 인덱스로 묻게
+    하려고 둔 **사본**이고, 쓰는 길이 열 곳이 넘어 코드가 아니라 트리거가 맞춘다
+    (`refindex.py`, ADR 0010). 그래서 앱 코드는 이 표에 **쓰지 않는다** — 읽기만 한다.
+    """
+
+    __tablename__ = "object_refs"
+    __table_args__ = (
+        # 「이것을 가리키는 것」 — 개발모델 상세 · 삭제 전 확인 · 그래프 이웃.
+        Index("ix_object_refs_dst", "dst_id", "key"),
+        # 「이 타입의 이 칸이 가리키는 것 전부」 — 참조 너머 칸 · 그래프 개요.
+        Index("ix_object_refs_src_type", "src_type_id", "key"),
+    )
+
+    src_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE"), primary_key=True
+    )
+    key: Mapped[str] = mapped_column(String(48), primary_key=True)
+    dst_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), primary_key=True)
+    """**FK 가 없다** — 원 표를 비추는 타입(부서 · 계정)의 id 도 들고, 지운 상대를 가리키는
+    줄도 남아야 「지워진 것을 가리키는 칸」 을 찾는다."""
+    src_type_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True))
+
+
+refindex.attach(Base.metadata)
 
 
 class ObjectLink(Base):

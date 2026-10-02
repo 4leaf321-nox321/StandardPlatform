@@ -27,14 +27,15 @@
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
-from sqlalchemy import Numeric, String, and_, cast, false, func, literal, or_, select
+from sqlalchemy import Numeric, String, and_, cast, false, literal, or_, select, true
 from sqlalchemy.orm import aliased
 
 from app.modules.objects import paths
-from app.modules.objects.models import ObjectInstance
+from app.modules.objects.models import ObjectInstance, ObjectRef
 from app.modules.ontology import conversion
 from app.modules.ontology.models import PropertyDef
 from app.modules.ontology.services import InvalidValue
@@ -135,6 +136,9 @@ def _clause(
             f"{label}: 「{op}」 는 이 칸에 못 겁니다. 되는 것: {', '.join(allowed)}",
         )
 
+    if data_type == "object_ref":
+        return _ref_clause(entity, field, op, raw)
+
     column = _column(field, entity)
     json_col = entity.properties[field]
 
@@ -214,6 +218,35 @@ def _clause(
     return column == raw
 
 
+def _ref_clause(entity: Any, field: str, op: str, raw: str) -> Any:
+    """참조 칸 — **참조 색인**으로 묻는다(ADR 0010). JSONB 를 펴서 견주면 그 타입을 통째로
+    읽는다(200만 건에서 1.3초, 실측) — 색인은 (누가 · 칸 · 누구를) 인덱스 하나다.
+
+    단일값 · 여러 값이 같은 모양이다(색인에는 원소마다 한 줄). 「다름」 은 비어 있는 것도
+    포함한다 — 화면의 다른 칸과 같은 뜻."""
+    linked = select(literal(1)).where(ObjectRef.src_id == entity.id, ObjectRef.key == field)
+    if op == "empty":
+        return ~linked.exists()
+    if op == "notempty":
+        return linked.exists()
+    wanted = _ids(_values(raw) if op == "in" else [raw])
+    if not wanted:
+        # 모양이 id 가 아닌 값은 아무것도 가리키지 않는다 — 같음은 없고 다름은 전부다.
+        return true() if op == "ne" else false()
+    hit = linked.where(ObjectRef.dst_id.in_(wanted)).exists()
+    return ~hit if op == "ne" else hit
+
+
+def _ids(raw: list[str]) -> list[uuid.UUID]:
+    out: list[uuid.UUID] = []
+    for one in raw:
+        try:
+            out.append(uuid.UUID(one.strip()))
+        except ValueError:
+            continue
+    return out
+
+
 def apply(
     stmt: Any,
     defs: list[PropertyDef],
@@ -286,11 +319,16 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
     )
     alive = target.deleted_at.is_(None)
     if hop.kind == "ref":
-        # 참조 칸은 id 하나(글자) 또는 id 의 배열 — `@>` 는 둘 다에 맞다.
-        pointed = ObjectInstance.properties[hop.name].op("@>", is_comparison=True)(
-            func.to_jsonb(cast(target.id, String))
+        # 참조 색인으로 잇는다 — 예전의 JSONB 포함(`@>`) 조인은 타입 제한이 없는 비등가
+        # 조인이라 200만 건에서 2분을 넘겼다(실측).
+        ref = aliased(ObjectRef, name=f"hop{index}_ref")
+        return (
+            select(literal(1))
+            .select_from(ref)
+            .join(target, target.id == ref.dst_id)
+            .where(ref.src_id == ObjectInstance.id, ref.key == hop.name, alive, inner)
+            .exists()
         )
-        return select(literal(1)).select_from(target).where(pointed, alive, inner).exists()
     edges = resolver.edges(hop, f"hop{index}_edges")
     return (
         select(literal(1))

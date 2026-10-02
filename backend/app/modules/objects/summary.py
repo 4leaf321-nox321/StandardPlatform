@@ -47,7 +47,7 @@ from sqlalchemy import (
 from sqlalchemy.orm import Session, aliased
 
 from app.modules.objects import paths, system
-from app.modules.objects.models import ObjectInstance
+from app.modules.objects.models import ObjectInstance, ObjectRef
 from app.modules.objects.scope import Scope, as_scope
 from app.modules.objects.services import count_of
 from app.modules.ontology.models import ObjectType, PropertyDef
@@ -376,18 +376,20 @@ def _hop_axis(resolver: paths.Resolver, found: paths.PathField, alias: str) -> A
     """이어진 것 너머의 기준 — 이어진 객체를 **바깥 조인**으로 붙인다."""
     hop = found.hop
     if hop.kind == "ref":
+        # 참조 색인으로 잇는다(ADR 0010) — 예전의 JSONB 포함(`@>`) 조인은 200만 건에서 2분을
+        # 넘겼다(실측). 색인은 원소마다 한 줄이라 단일값 · 여러 값이 같은 모양이다.
+        ref = aliased(ObjectRef, name=f"{alias}_link")
         target = aliased(ObjectInstance, name=f"{alias}_ref")
-        # 참조 칸은 id 하나(글자) 또는 id 의 배열 — `@>` 는 둘 다에 맞다.
-        pointed = ObjectInstance.properties[hop.name].op("@>", is_comparison=True)(
-            func.to_jsonb(cast(target.id, String))
-        )
         return _field_axis(
             target,
             found.field or "label",
             found.definition,
             found.label,
             alias,
-            [(target, and_(pointed, target.deleted_at.is_(None)))],
+            [
+                (ref, and_(ref.src_id == ObjectInstance.id, ref.key == hop.name)),
+                (target, and_(target.id == ref.dst_id, target.deleted_at.is_(None))),
+            ],
             many=hop.many,
         )
     edges = resolver.edges(hop, f"{alias}_edges")

@@ -24,6 +24,7 @@ const NONE: References = {
   relations: [],
   hidden_property_refs: 0,
   hidden_relations: 0,
+  more_property_refs: 0,
   total: 0,
 }
 const SOME: References = {
@@ -50,6 +51,7 @@ const SOME: References = {
   ],
   hidden_property_refs: 2,
   hidden_relations: 0,
+  more_property_refs: 0,
   total: 4,
 }
 
@@ -105,6 +107,22 @@ describe('삭제 창', () => {
     // 「그대로 두기」 가 기본이고, 그 상태에서는 삭제 단추가 안 선다.
     expect(screen.getByRole('radio', { name: /그대로 두기/ })).toBeChecked()
     expect(screen.getByRole('button', { name: '삭제' })).toBeDisabled()
+  })
+
+  it('인기 객체는 목록이 앞의 일부만 와도 수는 서버가 센 대로 말한다', async () => {
+    // 10만 건이 가리키는 개발모델 — 목록은 한 줄만 왔고 나머지는 수로 온다(ADR 0010).
+    objectApi.references.mockResolvedValue({
+      ...SOME,
+      relations: [],
+      hidden_property_refs: 0,
+      more_property_refs: 99_999,
+      total: 100_000,
+    })
+    await mount()
+    await waitFor(() =>
+      expect(screen.getByText(/이 객체를 가리키는 것 100000개/)).toBeInTheDocument(),
+    )
+    expect(screen.getByText(/… 외 99999개/)).toBeInTheDocument()
   })
 
   it('「참조 해제 후 삭제」 는 detach 로 보낸다', async () => {

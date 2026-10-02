@@ -27,14 +27,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import Text, and_, func, or_, select
-from sqlalchemy.dialects.postgresql import array
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.objects import aliases, bulk, lifecycle
-from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
+from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRef, ObjectRelation
 from app.modules.objects.services import audit_state, properties_of
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef
@@ -384,25 +383,21 @@ def _pointing(db: Session, row: ObjectInstance, doomed: set[uuid.UUID]) -> int:
             )
         )
     )
-    wanted = str(row.id)
-    total = 0
-    for definition in defs:
-        column = ObjectInstance.properties[definition.key]
-        found = db.scalars(
-            select(ObjectInstance.id).where(
-                ObjectInstance.type_id == definition.owner_id,
-                ObjectInstance.deleted_at.is_(None),
-                or_(
-                    column.astext == wanted,
-                    and_(
-                        func.jsonb_typeof(column) == "array",
-                        column.has_any(array([wanted], type_=Text)),
-                    ),
-                ),
-            )
+    if not defs:
+        return 0
+    # 참조 색인으로(ADR 0010) — 예전에는 칸마다 가리키는 타입을 통째로 읽었다.
+    found = db.scalars(
+        select(ObjectRef.src_id).where(
+            ObjectRef.dst_id == row.id,
+            or_(
+                *(
+                    and_(ObjectRef.key == d.key, ObjectRef.src_type_id == d.owner_id)
+                    for d in defs
+                )
+            ),
         )
-        total += len([one for one in found if one not in doomed])
-    return total
+    )
+    return len({one for one in found if one not in doomed})
 
 
 def _relation(

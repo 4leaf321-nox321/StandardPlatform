@@ -70,7 +70,9 @@ export function ObjectDeleteDialog({
   const summary = useMemo(() => {
     const data = refs.data
     if (!data) return null
-    const props = data.property_refs.length + data.hidden_property_refs
+    // 목록은 앞의 일부만 온다 — 수는 서버가 센 것(`more_property_refs`)까지 더한다.
+    const props =
+      data.property_refs.length + (data.more_property_refs ?? 0) + data.hidden_property_refs
     const rels = data.relations.length + data.hidden_relations
     return { props, rels, hidden: data.hidden_property_refs + data.hidden_relations }
   }, [refs.data])
@@ -152,8 +154,15 @@ export function ObjectDeleteDialog({
                         ({one.type_label}) 의 「{one.property_label}」
                       </li>
                     ))}
-                    {refs.data.property_refs.length > LIST_LIMIT && (
-                      <li>… 외 {refs.data.property_refs.length - LIST_LIMIT}개</li>
+                    {refs.data.property_refs.length + (refs.data.more_property_refs ?? 0) >
+                      LIST_LIMIT && (
+                      <li>
+                        … 외{' '}
+                        {refs.data.property_refs.length +
+                          (refs.data.more_property_refs ?? 0) -
+                          Math.min(LIST_LIMIT, refs.data.property_refs.length)}
+                        개
+                      </li>
                     )}
                   </ul>
                 )}
