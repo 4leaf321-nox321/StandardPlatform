@@ -32,9 +32,8 @@ z_i = (u_i - ū) / σ_i 의 흔들림을 이동 범위로 잰다: σz = 평균 |
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from datetime import date
-from typing import Literal
 
 import numpy as np
 from sqlalchemy.orm import Session
@@ -43,14 +42,13 @@ from app.modules.accounts.models import User
 from app.modules.metrics import query
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import MetricDef
-from app.modules.metrics.recipes import common, registry
+from app.modules.metrics.recipes import common, registry, series
 from app.modules.metrics.recipes.schemas import (
     ControlChartOut,
     ControlOut,
     ControlPointOut,
     ControlRuleOut,
 )
-from app.modules.metrics.schemas import DrillOut
 from app.modules.objects import axes
 
 NAME = "control"
@@ -69,8 +67,6 @@ FEW_SUBGROUPS = 12
 MAX_CHARTS = 12
 COMPACT_CHARTS = 6
 COMPACT_POINTS = 12
-#: 창의 길이를 말할 때의 단위 — 「3개월」 · 「2분기」.
-SPAN = {"day": "일", "week": "주", "month": "개월", "quarter": "분기", "year": "년"}
 
 
 # --- 순수 함수 -----------------------------------------------------------------------
@@ -187,24 +183,6 @@ def available(built: spec_module.Built) -> str | None:
 registry.register(registry.Recipe(NAME, LABEL, available))
 
 
-@dataclass
-class _Point:
-    when: date
-    count: int
-    exposure: float
-    closed: bool
-    baseline: bool
-
-
-def default_axis(built: spec_module.Built) -> Literal["period", "cohort"]:
-    """분모가 코호트와 짝이면 코호트 축(출고 K 기간 안 비율), 아니면 기간 축."""
-    den = built.spec.denominator
-    paired = den is not None and den.time == "cohort"
-    if built.cohort is not None and built.time is not None and paired:
-        return "cohort"
-    return "period" if built.time is not None else "cohort"
-
-
 def run(
     db: Session,
     user: User,
@@ -212,7 +190,7 @@ def run(
     built: spec_module.Built,
     ask: query.Ask,
     *,
-    axis: Literal["period", "cohort"] | None = None,
+    axis: series.Axis | None = None,
     window: int = 3,
     split: str | None = None,
     baseline_to: date | None = None,
@@ -221,106 +199,55 @@ def run(
     reason = available(built)
     if reason is not None:
         raise common.refuse(25, reason)
-    axis = axis or default_axis(built)
-    if axis == "cohort" and (built.cohort is None or built.time is None):
-        raise common.refuse(
-            26,
-            "코호트 관리도는 코호트 칸(생산 · 판매일)과 시간 칸(접수일)이 함께 있어야 "
-            "「출고 K 기간 안」 을 셉니다 — axis=period 로 봅니다.",
-        )
-    if axis == "period" and built.time is None:
-        raise common.refuse(26, "시간 칸이 없는 지표입니다 — axis=cohort 로 봅니다.")
-    axis_spec = built.cohort if axis == "cohort" else built.time
-    assert axis_spec is not None
-    grain = axis_spec.grain
-    den_in = built.spec.denominator
-    uses_den = den_in is not None and den_in.time == axis
-    target = common.dim_of(built, split) if split is not None else None
-    if target is not None and uses_den and den_in is not None and split not in den_in.on:
-        raise common.refuse(
-            26,
-            f"「{target.axis.label}」 로 나누면 분모도 그 기준으로 나뉘어야 합니다 — 분모 짝"
-            f"(on)에 없습니다. 거르기(d.{split}=값)로 하나씩 보거나, 분모 정의의 짝에 그 "
-            "기준을 넣습니다.",
-        )
-    dims = [split] if split is not None else []
-    if axis == "cohort":
-        ask = replace(ask, dims=dims, by=("cohort", "age"), age_from=0, age_to=window)
-    else:
-        ask = replace(ask, dims=dims, by=("period",))
-    common.require_exact_counts(built, ask)
-    frame = query.frame(db, user, metric, built, ask, with_denominator=uses_den)
-    common.require_whole(frame)
-    den = frame.denominator if uses_den else None
-    caveats = common.Caveats()
-    excluded = {"missing_denominator": 0, "open": 0}
-
-    grouped: dict[str | None, dict[date, int]] = {}
-    for cell in frame.cells:
-        when = cell.cohort if axis == "cohort" else cell.period
-        if when is None:
-            continue
-        key = cell.dims.get(split) if split is not None else None
-        bucket = grouped.setdefault(key, {})
-        bucket[when] = bucket.get(when, 0) + cell.count
-    keys = sorted(grouped, key=lambda one: -sum(grouped[one].values()))
-    limit = COMPACT_CHARTS if compact else MAX_CHARTS
-    other_groups = max(0, len(keys) - limit)
-    keys = keys[:limit]
-    every = sorted({when for bucket in grouped.values() for when in bucket})
-    timeline = (
-        query.dense(every[0], axes.next_period(every[-1], grain), grain) if every else []
+    found = series.read(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        axis=axis,
+        window=window,
+        split=split,
+        limit=COMPACT_CHARTS if compact else MAX_CHARTS,
     )
-    labels = query.labels_for(db, built, [split], frame.cells) if split is not None else {}
-
+    caveats = common.Caveats()
     charts: list[ControlChartOut] = []
     few = False
     widened: list[float] = []
-    for key in keys:
-        bucket = grouped[key]
-        points = _points(
-            bucket,
-            timeline,
-            key,
-            split,
-            axis,
-            grain,
-            window,
-            frame,
-            den,
-            baseline_to,
-            excluded,
+    per = found.per
+    for line in found.series:
+        groups = line.subgroups
+        baseline = [
+            one.closed and (baseline_to is None or one.when < baseline_to) for one in groups
+        ]
+        drawn = chart(
+            [one.count for one in groups],
+            [one.exposure for one in groups],
+            use=[one.closed for one in groups],
+            baseline=baseline,
         )
-        found = chart(
-            [one.count for one in points],
-            [one.exposure for one in points],
-            use=[one.closed for one in points],
-            baseline=[one.baseline for one in points],
-        )
-        baseline_points = sum(1 for one in points if one.baseline)
+        baseline_points = sum(baseline)
         if baseline_points < FEW_SUBGROUPS:
             few = True
-        if found.sigma_z_raw is not None and found.sigma_z_raw > 1.5:
-            widened.append(found.sigma_z_raw)
-        per = den.per if den is not None else 1.0
+        if drawn.sigma_z_raw is not None and drawn.sigma_z_raw > 1.5:
+            widened.append(drawn.sigma_z_raw)
         rows: list[ControlPointOut] = []
-        for index, point in enumerate(points):
-            rate = point.count / point.exposure * per if point.exposure > 0 else None
-            low, high = found.lcl[index], found.ucl[index]
+        for index, one in enumerate(groups):
+            low, high = drawn.lcl[index], drawn.ucl[index]
             rows.append(
                 ControlPointOut(
-                    when=point.when.isoformat(),
-                    label=axes.period_label(point.when.isoformat(), grain),
-                    count=point.count,
-                    exposure=point.exposure if den is not None else None,
-                    rate=rate,
+                    when=one.when.isoformat(),
+                    label=axes.period_label(one.when.isoformat(), found.grain),
+                    count=one.count,
+                    exposure=one.exposure if found.den is not None else None,
+                    rate=found.rate(one),
                     lcl=low * per if low is not None else None,
                     ucl=high * per if high is not None else None,
-                    z=found.z[index],
-                    closed=point.closed,
-                    baseline=point.baseline,
-                    signals=found.signals[index],
-                    drill=_drill(built, ask, axis, grain, window, split, key, point),
+                    z=drawn.z[index],
+                    closed=one.closed,
+                    baseline=baseline[index],
+                    signals=drawn.signals[index],
+                    drill=series.drill(found, built, line.key, one),
                 )
             )
         if compact:
@@ -328,168 +255,19 @@ def run(
             rows = [one for index, one in enumerate(rows) if index >= tail or one.signals]
         charts.append(
             ControlChartOut(
-                key=key,
-                label=query.label_of(labels, split, key) if split is not None else "전체",
-                center=found.center * per if found.center is not None else None,
-                sigma_z=found.sigma_z,
-                sigma_z_raw=found.sigma_z_raw,
-                subgroups=sum(1 for one in points if one.closed),
+                key=line.key,
+                label=line.label,
+                center=drawn.center * per if drawn.center is not None else None,
+                sigma_z=drawn.sigma_z,
+                sigma_z_raw=drawn.sigma_z_raw,
+                subgroups=sum(1 for one in groups if one.closed),
                 baseline_points=baseline_points,
-                signals=sum(1 for one in found.signals if one),
-                total=sum(bucket.values()),
+                signals=sum(1 for one in drawn.signals if one),
+                total=line.total,
                 points=rows,
             )
         )
-    _caveats(caveats, excluded, den, axis, grain, window, few, widened, other_groups)
-    head = common.header(
-        db,
-        user,
-        metric,
-        built,
-        frame,
-        recipe=NAME,
-        method=METHOD,
-        params={
-            "axis": axis,
-            "window": window if axis == "cohort" else None,
-            "split": split,
-            "baseline_to": baseline_to.isoformat() if baseline_to is not None else None,
-            "compact": compact,
-        },
-        caveats=caveats,
-        excluded=excluded,
-    )
-    return ControlOut(
-        **head,
-        axis=axis,
-        window=window if axis == "cohort" else None,
-        kind="u" if den is not None else "c",
-        per=den.per if den is not None else 1.0,
-        split=split,
-        split_label=target.axis.label if target is not None else None,
-        baseline_to=baseline_to.isoformat() if baseline_to is not None else None,
-        rules=[ControlRuleOut(number=number, label=text) for number, text in RULES.items()],
-        charts=charts,
-        other_groups=other_groups,
-    )
-
-
-def _points(
-    bucket: dict[date, int],
-    timeline: list[date],
-    key: str | None,
-    split: str | None,
-    axis: str,
-    grain: str,
-    window: int,
-    frame: query.Frame,
-    den: query.Denominator | None,
-    baseline_to: date | None,
-    excluded: dict[str, int],
-) -> list[_Point]:
-    """한 차트의 부분군 — 빈 기간은 0 건(대수가 있으면 진짜 관측이다)."""
-    out: list[_Point] = []
-    for when in timeline:
-        count = bucket.get(when, 0)
-        exposure = 1.0
-        den_closed = True
-        if den is not None:
-            probe = query.Cell(
-                {split: key} if split is not None else {},
-                when if axis == "period" else None,
-                when if axis == "cohort" else None,
-                None,
-                count,
-                0,
-                None,
-                None,
-                None,
-            )
-            units = den.lookup(probe, grain)
-            if not units:
-                excluded["missing_denominator"] += count
-                continue
-            exposure = float(units)
-            den_closed = query.is_closed(when, grain, den.before)
-        last = query.advance(when, window - 1, grain) if axis == "cohort" else when
-        closed = query.is_closed(last, grain, frame.before) and den_closed
-        if not closed:
-            excluded["open"] += count
-        baseline = closed and (baseline_to is None or when < baseline_to)
-        out.append(_Point(when, count, exposure, closed, baseline))
-    return out
-
-
-def _drill(
-    built: spec_module.Built,
-    ask: query.Ask,
-    axis: str,
-    grain: str,
-    window: int,
-    split: str | None,
-    key: str | None,
-    point: _Point,
-) -> DrillOut:
-    cell = query.Cell(
-        {split: key} if split is not None else {},
-        point.when if axis == "period" else None,
-        point.when if axis == "cohort" else None,
-        None,
-        point.count,
-        0,
-        None,
-        None,
-        None,
-    )
-    if axis == "period":
-        return query.drill(built, cell, by=("period",), ask=ask)
-    # 코호트의 창 — 접수일이 [코호트 시작, K 기간 뒤) 이고, 읽을 때 건 접수 범위와 겹친다.
-    end = query.advance(point.when, window, grain)
-    start = max(point.when, ask.period_from) if ask.period_from is not None else point.when
-    stop = min(end, ask.period_to) if ask.period_to is not None else end
-    return query.drill(
-        built, cell, by=("cohort",), ask=replace(ask, period_from=start, period_to=stop)
-    )
-
-
-def _caveats(
-    caveats: common.Caveats,
-    excluded: dict[str, int],
-    den: query.Denominator | None,
-    axis: str,
-    grain: str,
-    window: int,
-    few: bool,
-    widened: list[float],
-    other_groups: int,
-) -> None:
-    if den is None:
-        caveats.add(
-            "count_chart",
-            "분모(대수)가 이 축과 짝지어져 있지 않아 건수 관리도입니다 — 판매 · 생산이 늘면 "
-            "건수도 늘어 신호처럼 보입니다.",
-        )
-    if excluded["missing_denominator"]:
-        caveats.add(
-            "missing_denominator",
-            "대수가 없는 부분군의 기록을 뺐습니다.",
-            count=excluded["missing_denominator"],
-        )
-    if excluded["open"]:
-        caveats.add(
-            "open_excluded",
-            "아직 닫히지 않은 부분군은 그리되 한계 · 규칙에서 뺐습니다 — 더 들어올 수 "
-            "있습니다.",
-            level="info",
-            count=excluded["open"],
-        )
-    if axis == "cohort":
-        caveats.add(
-            "window_basis",
-            f"코호트마다 출고 뒤 {window}{SPAN.get(grain, grain)} 안의 건수입니다 — 그 "
-            "창이 닫힌 코호트만 한계 · 규칙에 씁니다.",
-            level="info",
-        )
+    series.caveats(found, caveats)
     if few:
         caveats.add(
             "few_subgroups",
@@ -503,10 +281,34 @@ def _caveats(
             f"{min(widened):.1f}~{max(widened):.1f}배 넓혔습니다.",
             level="info",
         )
-    if other_groups:
-        caveats.add(
-            "other_groups",
-            f"건수가 적은 {other_groups}개 값의 차트는 싣지 않았습니다 — 거르기로 봅니다.",
-            level="info",
-            count=other_groups,
-        )
+    head = common.header(
+        db,
+        user,
+        metric,
+        built,
+        found.frame,
+        recipe=NAME,
+        method=METHOD,
+        params={
+            "axis": found.axis,
+            "window": window if found.axis == "cohort" else None,
+            "split": split,
+            "baseline_to": baseline_to.isoformat() if baseline_to is not None else None,
+            "compact": compact,
+        },
+        caveats=caveats,
+        excluded=found.excluded,
+    )
+    return ControlOut(
+        **head,
+        axis=found.axis,
+        window=window if found.axis == "cohort" else None,
+        kind="u" if found.den is not None else "c",
+        per=per,
+        split=split,
+        split_label=found.split_dim.axis.label if found.split_dim is not None else None,
+        baseline_to=baseline_to.isoformat() if baseline_to is not None else None,
+        rules=[ControlRuleOut(number=number, label=text) for number, text in RULES.items()],
+        charts=charts,
+        other_groups=found.other_groups,
+    )

@@ -10514,6 +10514,163 @@
         }
       }
     },
+    "/api/metrics/{slug}/analysis/changes": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Changes Analysis",
+        "description": "⑩ 계절 · 변화점 — 중앙값 계절 지수와 준-포아송 최적 분할을 번갈아 맞춰 수준이 바뀐\n곳을 찾는다. 거르기는 `d.<기준>=<값>`.",
+        "operationId": "changes_analysis_api_metrics__slug__analysis_changes_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "axis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "period",
+                    "cohort"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "부분군의 축 — 비우면 분모가 코호트와 짝일 때 cohort, 아니면 period",
+              "title": "Axis"
+            },
+            "description": "부분군의 축 — 비우면 분모가 코호트와 짝일 때 cohort, 아니면 period"
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 120,
+              "minimum": 1,
+              "description": "코호트 축 — 출고 뒤 몇 기간 안의 건수인가",
+              "default": 3,
+              "title": "Window"
+            },
+            "description": "코호트 축 — 출고 뒤 몇 기간 안의 건수인가"
+          },
+          {
+            "name": "period_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period From"
+            }
+          },
+          {
+            "name": "period_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 날 **앞까지**",
+              "title": "Period To"
+            },
+            "description": "이 날 **앞까지**"
+          },
+          {
+            "name": "cohort_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort From"
+            }
+          },
+          {
+            "name": "cohort_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort To"
+            }
+          },
+          {
+            "name": "compact",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "점은 끝 24개만(MCP)",
+              "default": false,
+              "title": "Compact"
+            },
+            "description": "점은 끝 24개만(MCP)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/bundles/import": {
       "post": {
         "tags": [
@@ -15238,42 +15395,6 @@
         ],
         "title": "CellOut"
       },
-      "ChangeOut": {
-        "properties": {
-          "kind": {
-            "type": "string",
-            "title": "Kind"
-          },
-          "slug": {
-            "type": "string",
-            "title": "Slug"
-          },
-          "action": {
-            "type": "string",
-            "title": "Action"
-          },
-          "fields": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Fields"
-          },
-          "via": {
-            "type": "string",
-            "title": "Via",
-            "default": ""
-          }
-        },
-        "type": "object",
-        "required": [
-          "kind",
-          "slug",
-          "action",
-          "fields"
-        ],
-        "title": "ChangeOut"
-      },
       "ChangePasswordRequest": {
         "properties": {
           "current_password": {
@@ -15295,6 +15416,392 @@
           "new_password"
         ],
         "title": "ChangePasswordRequest"
+      },
+      "ChangesOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "axis": {
+            "type": "string",
+            "enum": [
+              "period",
+              "cohort"
+            ],
+            "title": "Axis"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "rate",
+              "count"
+            ],
+            "title": "Kind"
+          },
+          "per": {
+            "type": "number",
+            "title": "Per"
+          },
+          "season_length": {
+            "type": "integer",
+            "title": "Season Length"
+          },
+          "seasonal": {
+            "items": {
+              "$ref": "#/components/schemas/SeasonOut"
+            },
+            "type": "array",
+            "title": "Seasonal"
+          },
+          "seasonal_p_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seasonal P Value"
+          },
+          "dispersion": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispersion"
+          },
+          "penalty": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Penalty"
+          },
+          "min_segment": {
+            "type": "integer",
+            "title": "Min Segment"
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/app__modules__metrics__recipes__schemas__ChangeOut"
+            },
+            "type": "array",
+            "title": "Changes"
+          },
+          "segments": {
+            "items": {
+              "$ref": "#/components/schemas/SegmentOut"
+            },
+            "type": "array",
+            "title": "Segments"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/ChangesPointOut"
+            },
+            "type": "array",
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "axis",
+          "window",
+          "kind",
+          "per",
+          "season_length",
+          "seasonal",
+          "seasonal_p_value",
+          "dispersion",
+          "penalty",
+          "min_segment",
+          "changes",
+          "segments",
+          "points"
+        ],
+        "title": "ChangesOut"
+      },
+      "ChangesPointOut": {
+        "properties": {
+          "when": {
+            "type": "string",
+            "title": "When"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "exposure": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "seasonal": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seasonal"
+          },
+          "adjusted": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Adjusted"
+          },
+          "level": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level"
+          },
+          "closed": {
+            "type": "boolean",
+            "title": "Closed"
+          },
+          "drill": {
+            "$ref": "#/components/schemas/DrillOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "when",
+          "label",
+          "count",
+          "exposure",
+          "rate",
+          "seasonal",
+          "adjusted",
+          "level",
+          "closed",
+          "drill"
+        ],
+        "title": "ChangesPointOut"
       },
       "CohortCellOut": {
         "properties": {
@@ -26549,6 +27056,67 @@
         "title": "SearchTypeOut",
         "description": "타입마다 몇 건. **좁히는 단추가 된다** — 상한에 걸렸을 때 나머지가 어디 있는지\n이것만이 말해 준다."
       },
+      "SeasonOut": {
+        "properties": {
+          "season": {
+            "type": "integer",
+            "title": "Season"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "index": {
+            "type": "number",
+            "title": "Index"
+          }
+        },
+        "type": "object",
+        "required": [
+          "season",
+          "label",
+          "index"
+        ],
+        "title": "SeasonOut"
+      },
+      "SegmentOut": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "title": "Start"
+          },
+          "stop": {
+            "type": "string",
+            "title": "Stop"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "level": {
+            "type": "number",
+            "title": "Level"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "points": {
+            "type": "integer",
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "stop",
+          "label",
+          "level",
+          "count",
+          "points"
+        ],
+        "title": "SegmentOut"
+      },
       "SeriesOut": {
         "properties": {
           "slug": {
@@ -29326,6 +29894,66 @@
         ],
         "title": "SearchHitOut"
       },
+      "app__modules__metrics__recipes__schemas__ChangeOut": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "title": "At"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "before": {
+            "type": "number",
+            "title": "Before"
+          },
+          "after": {
+            "type": "number",
+            "title": "After"
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio"
+          },
+          "ratio_ci": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio Ci"
+          },
+          "provisional": {
+            "type": "boolean",
+            "title": "Provisional"
+          }
+        },
+        "type": "object",
+        "required": [
+          "at",
+          "label",
+          "before",
+          "after",
+          "ratio",
+          "ratio_ci",
+          "provisional"
+        ],
+        "title": "ChangeOut"
+      },
       "app__modules__metrics__schemas__PointOut": {
         "properties": {
           "period": {
@@ -29555,6 +30183,42 @@
         "title": "SnapshotOut",
         "description": "그 시점의 값 전체 — 지금 값에서 기록을 거꾸로 대어 재구성한 것."
       },
+      "app__modules__ontology__schemas__ChangeOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fields"
+          },
+          "via": {
+            "type": "string",
+            "title": "Via",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "slug",
+          "action",
+          "fields"
+        ],
+        "title": "ChangeOut"
+      },
       "app__modules__ontology__schemas__ImportPlanOut": {
         "properties": {
           "applied": {
@@ -29563,7 +30227,7 @@
           },
           "changes": {
             "items": {
-              "$ref": "#/components/schemas/ChangeOut"
+              "$ref": "#/components/schemas/app__modules__ontology__schemas__ChangeOut"
             },
             "type": "array",
             "title": "Changes"

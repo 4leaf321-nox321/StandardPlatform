@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.metrics import compute, params, query, services
-from app.modules.metrics.recipes import control, life, pareto
-from app.modules.metrics.recipes.schemas import ControlOut, LifeOut, ParetoOut
+from app.modules.metrics.recipes import changes, control, life, pareto
+from app.modules.metrics.recipes.schemas import ChangesOut, ControlOut, LifeOut, ParetoOut
 from app.shared.auth import current_user
 
 router = APIRouter(prefix="/{slug}/analysis")
@@ -142,3 +142,37 @@ def control_analysis(
         baseline_to=params.parse_date(baseline_to, "baseline_to"),
         compact=compact,
     )
+
+
+@router.get("/changes", response_model=ChangesOut)
+def changes_analysis(
+    slug: str,
+    request: Request,
+    axis: Literal["period", "cohort"] | None = Query(
+        default=None,
+        description="부분군의 축 — 비우면 분모가 코호트와 짝일 때 cohort, 아니면 period",
+    ),
+    window: int = Query(
+        default=3, ge=1, le=120, description="코호트 축 — 출고 뒤 몇 기간 안의 건수인가"
+    ),
+    period_from: str | None = Query(default=None),
+    period_to: str | None = Query(default=None, description="이 날 **앞까지**"),
+    cohort_from: str | None = Query(default=None),
+    cohort_to: str | None = Query(default=None),
+    compact: bool = Query(default=False, description="점은 끝 24개만(MCP)"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ChangesOut:
+    """⑩ 계절 · 변화점 — 중앙값 계절 지수와 준-포아송 최적 분할을 번갈아 맞춰 수준이 바뀐
+    곳을 찾는다. 거르기는 `d.<기준>=<값>`."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(
+        request,
+        period_from=period_from,
+        period_to=period_to,
+        cohort_from=cohort_from,
+        cohort_to=cohort_to,
+    )
+    return changes.run(db, user, metric, built, ask, axis=axis, window=window, compact=compact)

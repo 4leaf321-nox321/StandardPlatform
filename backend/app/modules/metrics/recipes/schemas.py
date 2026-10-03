@@ -243,3 +243,68 @@ class ControlOut(AnalysisHeader):
     rules: list[ControlRuleOut]
     charts: list[ControlChartOut]
     other_groups: int
+
+
+# --- ⑩ 계절 · 변화점 ------------------------------------------------------------------
+
+
+class SeasonOut(BaseModel):
+    season: int
+    label: str
+    index: float
+    """1 보다 크면 그 계절에 평소보다 많다(로그 평균 0 — 곱하면 1)."""
+
+
+class SegmentOut(BaseModel):
+    start: str
+    stop: str
+    """이 날 **앞까지**."""
+    label: str
+    level: float
+    """계절을 뺀 수준(비율이면 per 당)."""
+    count: int
+    points: int
+
+
+class ChangeOut(BaseModel):
+    at: str
+    """새 수준의 첫 부분군."""
+    label: str
+    before: float
+    after: float
+    ratio: float | None
+    ratio_ci: list[float] | None
+    provisional: bool
+    """새 수준이 몇 점 안 된다 — 더 보고 판단한다."""
+
+
+class ChangesPointOut(BaseModel):
+    when: str
+    label: str
+    count: int
+    exposure: float | None
+    rate: float | None
+    seasonal: float | None
+    adjusted: float | None
+    """계절을 뺀 값 = rate / seasonal."""
+    level: float | None
+    """그 점이 든 구간의 수준 — 열린 점은 없다."""
+    closed: bool
+    drill: DrillOut
+
+
+class ChangesOut(AnalysisHeader):
+    axis: Literal["period", "cohort"]
+    window: int | None
+    kind: Literal["rate", "count"]
+    per: float
+    season_length: int
+    seasonal: list[SeasonOut]
+    seasonal_p_value: float | None
+    dispersion: float | None
+    """과분산 φ — 1 이면 포아송 그대로."""
+    penalty: float | None
+    min_segment: int
+    changes: list[ChangeOut]
+    segments: list[SegmentOut]
+    points: list[ChangesPointOut]

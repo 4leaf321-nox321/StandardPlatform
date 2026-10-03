@@ -433,7 +433,7 @@ def test_분모가_축과_짝이_아니면_건수_관리도라고_말한다(
     _, cases = _two(client, admin, w)
     found = _analysis(client, admin, cases["slug"], "control", axis="period")
     assert found["kind"] == "c" and found["per"] == 1.0
-    assert "count_chart" in {one["code"] for one in found["caveats"]}
+    assert "count_basis" in {one["code"] for one in found["caveats"]}
     (chart,) = found["charts"]
     points = {one["label"]: one for one in chart["points"]}
     assert [points[label]["count"] for label in ("2026-01", "2026-02", "2026-03")] == [1, 2, 3]
@@ -445,10 +445,10 @@ def test_분모가_축과_짝이_아니면_건수_관리도라고_말한다(
         assert _listed(client, admin, w["case"], point["drill"]["params"]) == point["count"]
 
 
-def test_관리도는_큰_부분군을_라니로_넓히고_튄_달을_잡는다(
-    client: TestClient, admin: Signed
-) -> None:
-    w = _world(client, admin)
+def _monthly(
+    client: TestClient, admin: Signed, w: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(판매 대수, 월 인입률) — 접수 월마다의 건수를 그 달의 판매 대수와 짝짓는다."""
     sales, _ = _two(client, admin, w)
     monthly = _define(
         client,
@@ -468,6 +468,48 @@ def test_관리도는_큰_부분군을_라니로_넓히고_튄_달을_잡는다(
         },
         label="월 인입률",
     )
+    return sales, monthly
+
+
+def _plant_months(
+    w: dict[str, Any],
+    sales: dict[str, Any],
+    monthly: dict[str, Any],
+    counts: list[int],
+    units: float,
+    watermark: datetime,
+) -> None:
+    first = date(2026, 1, 1)
+    dims = {"base_model": w["s_base"]}
+    _plant(
+        monthly["slug"],
+        [
+            {"period": _month(first, i), "dims": dims, "count": count}
+            for i, count in enumerate(counts)
+        ],
+        watermark,
+    )
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(first, i),
+                "dims": dims,
+                "count": 1,
+                "value_count": 1,
+                "sum": units,
+            }
+            for i in range(len(counts))
+        ],
+        watermark,
+    )
+
+
+def test_관리도는_큰_부분군을_라니로_넓히고_튄_달을_잡는다(
+    client: TestClient, admin: Signed
+) -> None:
+    w = _world(client, admin)
+    sales, monthly = _monthly(client, admin, w)
     first = date(2026, 1, 1)
     dims = {"base_model": w["s_base"]}
     # 30 달 — 대수 2만에 건수 200 언저리(달마다 ±10% 흔들림), 스무째 달에 320 으로 튄다.
@@ -511,3 +553,57 @@ def test_관리도는_큰_부분군을_라니로_넓히고_튄_달을_잡는다(
     compact = _analysis(client, admin, monthly["slug"], "control", compact="true")
     labels = [one["label"] for one in compact["charts"][0]["points"]]
     assert "2027-09" in labels and len(labels) <= 13
+
+
+# --- ⑩ 계절 · 변화점 ----------------------------------------------------------------
+
+
+def test_변화점은_계절을_빼고_수준이_바뀐_달을_찾는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """4 년 — 대수 2만, 계절(±20%)을 타는 인입이 2028-01 부터 30% 오른다(잡음 없는 셀)."""
+    w = _world(client, admin)
+    sales, monthly = _monthly(client, admin, w)
+    season = [1 + 0.2 * np.sin(2 * np.pi * i / 12) for i in range(12)]
+    counts = [round(200 * season[i % 12] * (1.3 if i >= 24 else 1.0)) for i in range(48)]
+    _plant_months(w, sales, monthly, counts, 20000.0, datetime(2030, 2, 15, tzinfo=UTC))
+    found = _analysis(client, admin, monthly["slug"], "changes")
+    assert found["recipe"] == "changes" and found["kind"] == "rate" and found["per"] == 1000
+    assert found["season_length"] == 12 and len(found["seasonal"]) == 12
+    assert found["seasonal"][3]["label"] == "4월"
+    assert found["seasonal"][3]["index"] == pytest.approx(
+        season[3] / np.exp(np.mean(np.log(season))), rel=0.02
+    )
+    (change,) = found["changes"]
+    assert change["label"] == "2028-01" and change["provisional"] is False
+    assert change["ratio"] == pytest.approx(1.3, rel=0.02)
+    assert change["ratio_ci"][0] < 1.3 < change["ratio_ci"][1]
+    assert [one["points"] for one in found["segments"]] == [24, 24]
+    assert len(found["points"]) == 48 and all(one["closed"] for one in found["points"])
+    point = found["points"][30]
+    assert point["level"] == pytest.approx(change["after"])
+    assert point["adjusted"] == pytest.approx(point["rate"] / point["seasonal"])
+    # 끝의 넉 달만 오른 줄 — 변화점은 잡되 잠정이라고 말한다.
+    late = [round(200 * season[i % 12] * (1.5 if i >= 44 else 1.0)) for i in range(48)]
+    _plant_months(w, sales, monthly, late, 20000.0, datetime(2030, 2, 15, tzinfo=UTC))
+    provisional = _analysis(client, admin, monthly["slug"], "changes", compact="true")
+    (last,) = provisional["changes"]
+    assert last["label"] == "2029-09" and last["provisional"] is True
+    assert "provisional_change" in {one["code"] for one in provisional["caveats"]}
+    assert len(provisional["points"]) == 24
+    # 코호트 칸이 없는 지표에 코호트 축을 물으면 거절한다.
+    refused = _refused(client, admin, monthly["slug"], "changes", axis="cohort")
+    assert refused["code"].endswith("METRICS-0026")
+
+
+def test_변화점의_건_보기는_그_기간의_기록이다(client: TestClient, admin: Signed) -> None:
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    found = _analysis(client, admin, cases["slug"], "changes", axis="period")
+    assert found["kind"] == "count"
+    codes = {one["code"] for one in found["caveats"]}
+    assert "count_basis" in codes
+    assert found["excluded"]["open"] == 1
+    assert found["points"][-1]["closed"] is False
+    for point in found["points"]:
+        assert _listed(client, admin, w["case"], point["drill"]["params"]) == point["count"]
