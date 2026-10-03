@@ -32,6 +32,8 @@ import { DEFAULT_WORKSPACE, pendingItems } from '@/shared/layout/navigation'
 const AccountsAdminPage = lazy(() => import('@/modules/accounts/AccountsAdminPage'))
 const AuditPage = lazy(() => import('@/modules/audit/AuditPage'))
 const JobsPage = lazy(() => import('@/modules/jobs/JobsPage'))
+const MetricsPage = lazy(() => import('@/modules/metrics/MetricsPage'))
+const MetricDetailPage = lazy(() => import('@/modules/metrics/MetricDetailPage'))
 const GraphPage = lazy(() => import('@/modules/graph/GraphPage'))
 const MembersPage = lazy(() => import('@/modules/workspaces/MembersPage'))
 const NoticesPage = lazy(() => import('@/modules/notices/NoticesPage'))
@@ -112,6 +114,9 @@ export const router = createBrowserRouter(
             // 공통
             // **정의를 그림으로.** 타입이 늘어도 경로는 하나다 — 구조와 탐색이 한 화면이다.
             { path: 'graph', element: <GraphPage /> },
+            // 기록을 미리 세어 둔 값 — 비율 · 추이 · 코호트(ADR 0013).
+            { path: 'metrics', element: <MetricsPage /> },
+            { path: 'metrics/:slug', element: <MetricDetailPage /> },
             // **타입을 모르는 사람이 서는 자리.** 목록은 타입마다 따로다.
             { path: 'search', element: <SearchPage /> },
             { path: 'notices', element: <NoticesPage /> },

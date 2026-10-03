@@ -17,6 +17,7 @@ import {
   Boxes,
   Building2,
   ChartColumn,
+  ChartLine,
   DatabaseZap,
   Home,
   LayoutGrid,
@@ -152,6 +153,9 @@ export const NAV_GROUPS: NavGroup[] = [
       // 묶음에 안 걸린 타입도 여기서만 보인다(사이드바는 걸 자리가 없어 아예 안 그린다).
       { label: '객체 타입 전부', icon: LayoutGrid, to: '/o', end: true },
       { label: '지식 그래프', icon: Waypoints, to: '/graph' },
+      // **기록을 미리 세어 둔 값.** 비율 · 추이 · 코호트는 통계가 그때그때 세는 것으로는 안
+      // 되고, 세어 둔 값은 계산 시각과 함께 보여야 한다(ADR 0013).
+      { label: '지표', icon: ChartLine, to: '/metrics' },
       { label: '공지', icon: Megaphone, to: '/notices' },
     ],
   },
