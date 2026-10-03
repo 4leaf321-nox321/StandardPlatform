@@ -207,7 +207,7 @@ def objects_import(work: Work) -> dict[str, Any]:
             on_progress=work.progress,
             before_apply=_fingerprint_guard(work),
         )
-        if plan.ok:
+        if plan.ok and _changed(plan.counts):
             _after_ingest(work.db, object_type.id, f"import:{object_type.slug}")
         return _plan_result(plan, applied=plan.ok)
     plan = bulk.plan_objects(
@@ -572,9 +572,19 @@ def datasource_sync(work: Work) -> dict[str, Any]:
     result = datasource_services.sync(
         work.db, work.user, source, apply=bool(work.params.get("apply"))
     )
-    if result.run.applied:
+    if result.run.applied and _changed(result.run.counts or {}):
         _after_ingest(work.db, source.type_id, f"datasource:{slug}")
     return datasource_services.sync_out(result).model_dump(mode="json")
+
+
+def _changed(counts: dict[str, Any]) -> bool:
+    """적재가 **무엇이라도 바꿨나** — 만듦 · 고침 · 사용 중지 · 선. 몇 분마다 도는 동기화가
+    바뀐 것 없이 끝날 때마다 지표를 다시 세면, 200만 건 지표 하나가 45초(실측, ADR 0013)라
+    DB 가 쉬지 못한다. 그대로인 줄 · 오류 줄은 세지 않는다."""
+    return any(
+        isinstance(value, int) and value > 0 and not key.endswith(("unchanged", "error"))
+        for key, value in counts.items()
+    )
 
 
 def _after_ingest(db: Session, type_id: uuid.UUID, reason: str) -> None:

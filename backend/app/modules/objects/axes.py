@@ -7,7 +7,7 @@
 
 ## 걸음은 이어 붙인다
 
-`ref.model.ref.base_model` 처럼 걸음을 잇는다(`paths.Resolver.parse_chain`). 걸음마다 별칭을
+`ref.model.ref.base.series` 처럼 걸음을 잇는다(`paths.Resolver.parse_chain`). 걸음마다 별칭을
 번호로 짓고(`ax0_link` · `ax0_ref` · `ax1_link` …), **같은 접두 걸음은 한 번만 붙인다** — 두
 기준이 같은 여럿 걸음(`out.parts.label` 과 `out.parts.ref.vendor.label`)을 따로 붙이면 행이
 제곱으로 분다. `JoinPlan` 이 그것을 쥔다.

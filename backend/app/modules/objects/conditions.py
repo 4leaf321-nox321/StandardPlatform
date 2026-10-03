@@ -304,7 +304,7 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
     """이어진 것 너머의 조건 — **「이어진 것 중 하나라도 맞으면」** (`EXISTS`).
 
     조인으로 걸면 이어진 것이 여럿인 객체가 목록에 여러 번 선다. EXISTS 는 몇 개가
-    이어져 있든 한 번이다. 걸음이 여럿이면(`ref.model.ref.base_model`) EXISTS 안에서 걸음을
+    이어져 있든 한 번이다. 걸음이 여럿이면(`ref.model.ref.base.series`) EXISTS 안에서 걸음을
     이어 붙인다 — 뜻은 그대로 「그 길로 닿는 것 중 하나라도」 다.
     """
     try:

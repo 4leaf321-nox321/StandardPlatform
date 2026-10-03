@@ -940,7 +940,7 @@ async def objects_summary(
 
     - `group_by` 기준: `label`·`key`·`status`·`workspace`(소유 부서)·
       `created_year`, 속성은 `properties.<키>`, 다른 타입의 칸은
-      `object_fields` 의 주소. 걸음은 이어 적을 수 있다(`ref.model.ref.base_model`,
+      `object_fields` 의 주소. 걸음은 이어 적을 수 있다(`ref.model.ref.base.series`,
       셋까지). 긴 글·파일은 안 된다.
       `type_slug` 가 인터페이스면 `type`(어느 구현 타입인가)도 된다.
       쓸 수 있는 기준 전부가 응답의 `group_options` 다.

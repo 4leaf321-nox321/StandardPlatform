@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-04a
+GUIDE_VERSION: 2026-10-04b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -823,4 +823,22 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
 **정의할 때.** 시간 칸 · 코호트 칸은 **자기 타입의 날짜 칸**이어야 하고, 기준은 여섯까지, 분모의
 `on` 은 양쪽에 같은 이름 · 같은 값 종류(같은 타입을 가리키는 참조, 같은 종류의 칸)여야 한다.
 자유 글자 칸을 기준으로 두면 셀이 행 수만큼 나온다 — 계획의 경고를 그대로 전한다. 이름 붙인
-기준의 주소는 `objects_summary` 의 `group_by` 와 같다(`ref.model.ref.base_model` 처럼 걸음 셋까지).
+기준의 주소는 `objects_summary` 의 `group_by` 와 같다(`ref.model.ref.base.series` 처럼 걸음 셋까지 — 끝은
+칸 이름이다: SKU 의 기본 모델 참조 칸 자체는 `ref.model.base_model`, `ref.model.ref.base_model` 이 아니다).
+
+**자주 세우는 셋 — 분모가 있는 비율.** 분모가 되는 집계 지표를 **먼저** 세우고(분모의 분모는
+없다), 기록 지표가 `denominator` 로 그것을 부른다. 짝은 **기준 이름**으로 맞춘다 — 주소는 달라도
+된다(기록은 SKU 를 거쳐 `ref.model.out.<SKU→기본 모델 관계>` 또는 `ref.model.<기본 모델 참조 칸>`, 판매
+집계는 바로 `properties.base_model`). 사람의 말을 정의로 옮길 때 이 표를 따른다:
+
+| 물음 | 분모 지표(먼저) | 기록 지표 | 읽기 |
+| --- | --- | --- | --- |
+| 판매월 코호트 누적 인입률 | 판매 집계 — `sum` 대수 · time 판매월(month) · 기준 `base_model` | `count` · time 접수일(month) · cohort 판매일(month) · 기준 `base_model`(+ 증상) · denominator `{"on": ["base_model"], "time": "cohort", "per": 100}` | `shape="cohort", cumulative=true` — 행의 `denominator` 가 그 달 판매 대수, 셀의 `ratio` 가 누적 인입률(%) |
+| 생산월 x 공장 — 천 대당 | 생산 집계 — `sum` 대수 · time 생산월 · 기준 `base_model` · `factory` | `count` · time 접수일 · cohort 생산일 · 기준 `base_model` · `factory` · denominator `{"on": ["base_model", "factory"], "time": "cohort", "per": 1000}` | `shape="table", dims=["factory"], by=["cohort"]` |
+| 부품 교체 집중도 | 판매 집계(위) | `count` · time 접수일(**quarter**) · 기준 `part`(교체 부품 — 여러 값 참조) · denominator `{"on": [], "time": null, "per": 1000}` | `shape="table", dims=["part"]` — **겹침**: 한 건이 부품 여럿이라 합이 건수보다 크다. 기본 모델 x 부품 x 월은 200만 건에서 셀 350만으로 상한을 넘는다 — 기본 모델별로 보려면 기간을 빼거나 거른다 |
+
+- 분모 표(판매 · 생산)의 월은 날짜 칸이다 — 「2026-09」 처럼 연월만 적힌 값은 그 달 1일로 들어간다.
+- 비율이 비면 `denominator.missing` — 분모 표에 그 달 · 그 기본 모델 줄이 없는 것이다. 지어내지
+  않고 그렇게 말한다.
+- 기준 하나에 값이 수천 가지면(기본 모델 2,000개 x 코호트 50개) 표 한 번이 상한(2만 셀)에서
+  잘린다 — 기본 모델로 거르고(`filters`) 다시 묻는다.

@@ -102,7 +102,8 @@ class PathField:
 
 @dataclass
 class Chain:
-    """걸음을 이어 붙인 주소 — `ref.model.ref.base_model`, `out.rel.label`."""
+    """걸음을 이어 붙인 주소 — `ref.model.ref.base.series`, `ref.model.base`,
+    `out.rel.label`."""
 
     path: str
     hops: list[Hop]
@@ -332,7 +333,15 @@ class Resolver:
         heading = SEP.join(one.label for one in hops)
         if not rest:
             if last.kind == "ref":
-                raise _no_path(path, f"참조 칸 자체는 그 칸 이름({last.name})으로 씁니다.")
+                # 고쳐 쓸 주소를 그대로 말한다 — 「걸음을 잇는다」 고 생각하면 끝까지
+                # `ref.<칸>` 으로 적기 쉽다(`ref.model.ref.base` → `ref.model.base`).
+                fixed = ".".join([*tokens[: index - 2], last.name]) if len(hops) > 1 else None
+                raise _no_path(
+                    path,
+                    f"참조 칸 자체는 「{fixed}」 로 씁니다 — 주소는 칸 이름으로 끝납니다."
+                    if fixed
+                    else f"참조 칸 자체는 그 칸 이름({last.name})으로 씁니다.",
+                )
             return Chain(
                 path,
                 hops,

@@ -411,3 +411,18 @@ def test_걸음은_셋까지_모르는_걸음은_이유를_말한다(client: Tes
     )
     assert unknown.status_code == 422
     assert unknown.json()["error"]["code"].endswith("OBJECTS-0086")
+    # 참조 칸 걸음으로 끝나면 **고쳐 쓸 주소**를 그대로 말한다 — 「걸음을 잇는다」 고 생각하면
+    # 끝까지 `ref.<칸>` 으로 적기 쉽다(문서에도 그렇게 잘못 적은 적이 있다).
+    ref_end = client.get(
+        f"/api/objects/{w['case']}/summary",
+        params={"group_by": "ref.model.ref.base"},
+        headers=admin.headers,
+    )
+    assert ref_end.status_code == 422
+    assert "「ref.model.base」 로 씁니다" in ref_end.json()["error"]["message"]
+    fixed = client.get(
+        f"/api/objects/{w['case']}/summary",
+        params={"group_by": "ref.model.base"},
+        headers=admin.headers,
+    )
+    assert fixed.status_code == 200, fixed.text

@@ -17,10 +17,17 @@
 
     부서 10 · 시스템 관리자 1 · 부서 관리자 1(첫 부서)
     plm_project 120 · plm_task 5,000(→ 프로젝트)
-    plm_model 6,000(→ 과제, base_code 는 셋에 하나꼴로 같다)
-    svc_case N — 속성 31칸(고를 값 · 날짜 · 숫자 · 예/아니오 · 글), model → plm_model.
+    plm_model 6,000(→ 과제, base_code 는 셋에 하나꼴로 같다) — 운영의 SKU 자리
+    plm_base 2,001 — 기본 모델. SKU 와 **관계(`sku_base`)와 참조 칸(`base`) 둘 다**로 잇는다 —
+        사내에서는 관계로 잇는다. 지표가 두 길을 나란히 잰다.
+    svc_part 300 — 교체 부품
+    svc_case N — 속성 34칸(고를 값 · 날짜 · 숫자 · 예/아니오 · 글), model → plm_model.
         **5% 는 한 모델(뜨거운 모델)** 을 가리키고 나머지는 고르게 — 인기 모델의
-        상세가 10만 건을 끌어안는 경우를 같이 본다.
+        상세가 10만 건을 끌어안는 경우를 같이 본다. 생산일 → 판매일(0~59일 뒤) → 서비스일
+        (와이블 k=1.5 · η=400일의 경과 — 2026-09-30 을 넘는 것은 안 심는다), 공장은 기본 모델의
+        것, 교체 부품은 0~3개(여러 값 참조).
+    svc_sales · svc_production — 판매 집계(기본 모델 x 월 x 대수) · 생산 집계(기본 모델 x 월 x
+        공장 x 대수). 지표의 분모다.
 """
 
 from __future__ import annotations
@@ -51,6 +58,8 @@ CENTERS = [f"C{n:02d}" for n in range(30)]
 COUNTRIES = [f"N{n:02d}" for n in range(20)]
 HANDLINGS = [f"H{n}" for n in range(8)]
 SERIES = [f"X{n}" for n in range(10)]
+FACTORIES = [f"F{n}" for n in range(1, 5)]
+PARTS = 300
 TEXT_FIELDS = [f"t{n:02d}" for n in range(1, 19)]
 
 
@@ -84,7 +93,7 @@ def create(rows: int) -> None:
         if exists:
             raise SystemExit(f"{name} 이 이미 있습니다 — 먼저 `drop` 하세요.")
         connection.execute(text(f'CREATE DATABASE "{name}"'))
-    print(f"[1/5] {name} 을 만들었습니다 — 마이그레이션")
+    print(f"[1/6] {name} 을 만들었습니다 — 마이그레이션")
     env = {**os.environ, "DATABASE_URL": url, "EXTENSIONS": ""}
     subprocess.run(
         [sys.executable, "-m", "alembic", "upgrade", "head"], cwd=HERE, env=env, check=True
@@ -100,7 +109,7 @@ def create(rows: int) -> None:
     from app.modules.auth import security
     from app.modules.workspaces.models import Workspace, WorkspaceMember
 
-    print("[2/5] 부서 · 계정")
+    print("[2/6] 부서 · 계정")
     with SessionLocal() as db:
         spaces = [Workspace(slug=f"ws{n:02d}", name=f"부서 {n:02d}") for n in range(1, 11)]
         db.add_all(spaces)
@@ -119,7 +128,7 @@ def create(rows: int) -> None:
             db.add(WorkspaceMember(workspace_id=spaces[0].id, user_id=user.id, role=role))
         db.commit()
 
-    print("[3/5] 정의(가져오기)")
+    print("[3/6] 정의(가져오기)")
     client = TestClient(app)
     headers = _login(client, ADMIN)
     got = client.post(
@@ -134,7 +143,7 @@ def create(rows: int) -> None:
             slug: one
             for slug, one in connection.execute(text("SELECT slug, id FROM object_types"))
         }
-        print("[4/5] 축 — 프로젝트 · 과제 · 개발모델")
+        print("[4/6] 축 — 프로젝트 · 과제 · 개발모델(SKU) · 기본 모델 · 부품")
         connection.execute(
             text(
                 "INSERT INTO objects (id, type_id, key, label, created_at, updated_at) "
@@ -172,8 +181,46 @@ def create(rows: int) -> None:
             ),
             {"t": ids["plm_model"], "task": ids["plm_task"], "count": MODELS},
         )
+        # 기본 모델 — base_code 마다 하나. SKU 와는 참조 칸 · 관계 둘 다로 잇는다.
+        connection.execute(
+            text(
+                "INSERT INTO objects (id, type_id, key, label, created_at, updated_at) "
+                "SELECT gen_random_uuid(), :t, code, code, now(), now() FROM ("
+                "SELECT DISTINCT properties->>'base_code' AS code FROM objects "
+                "WHERE type_id = :model) c"
+            ),
+            {"t": ids["plm_base"], "model": ids["plm_model"]},
+        )
+        connection.execute(
+            text(
+                "UPDATE objects m SET properties = m.properties || "
+                "jsonb_build_object('base', b.id::text) FROM objects b "
+                "WHERE m.type_id = :model AND b.type_id = :base "
+                "AND b.key = m.properties->>'base_code'"
+            ),
+            {"model": ids["plm_model"], "base": ids["plm_base"]},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO object_relations (id, src_object_id, dst_object_id, relation, "
+                "properties, evidence_note, created_at, updated_at) "
+                "SELECT gen_random_uuid(), m.id, b.id, 'sku_base', '{}'::jsonb, '', "
+                "now(), now() "
+                "FROM objects m JOIN objects b ON b.type_id = :base "
+                "AND b.key = m.properties->>'base_code' WHERE m.type_id = :model"
+            ),
+            {"model": ids["plm_model"], "base": ids["plm_base"]},
+        )
+        connection.execute(
+            text(
+                "INSERT INTO objects (id, type_id, key, label, created_at, updated_at) "
+                "SELECT gen_random_uuid(), :t, 'PT-' || lpad(n::text, 3, '0'), '부품 ' || n, "
+                "now(), now() FROM generate_series(1, CAST(:count AS int)) n"
+            ),
+            {"t": ids["svc_part"], "count": PARTS},
+        )
 
-    print(f"[5/5] 기록 {rows:,}건 — 20만 건씩")
+    print(f"[5/6] 기록 {rows:,}건 — 20만 건씩")
     chunk = 200_000
     started = time.perf_counter()
     for low in range(1, rows + 1, chunk):
@@ -181,9 +228,41 @@ def create(rows: int) -> None:
         with engine.begin() as connection:
             connection.execute(
                 text(_CASES_SQL),
-                {"t": ids["svc_case"], "model": ids["plm_model"], "lo": low, "hi": high},
+                {
+                    "t": ids["svc_case"],
+                    "model": ids["plm_model"],
+                    "part": ids["svc_part"],
+                    "lo": low,
+                    "hi": high,
+                },
             )
         print(f"      {high:,} — {time.perf_counter() - started:.0f}초", flush=True)
+    print("[6/6] 분모 — 판매 집계 · 생산 집계(기본 모델 x 월)")
+    with engine.begin() as connection:
+        for slug, extra, upto in (
+            ("svc_sales", "", "2023-02-01"),
+            (
+                "svc_production",
+                ", 'factory', 'F' || (1 + (substr(b.key, 5)::int % 4))",
+                "2022-12-01",
+            ),
+        ):
+            connection.execute(
+                text(
+                    "INSERT INTO objects (id, type_id, key, label, properties, created_at, "
+                    "updated_at) SELECT gen_random_uuid(), :t, "
+                    "b.key || '_' || to_char(mon, 'YYYYMM'), "
+                    "b.key || ' ' || to_char(mon, 'YYYY-MM'), "
+                    "jsonb_build_object('base_model', b.id::text, "
+                    "'month', to_char(mon, 'YYYY-MM-DD'), "
+                    "'units', 400 + abs(hashtext(b.key || mon::text || :salt)) % 100"
+                    + extra
+                    + "), now(), now() FROM objects b, "
+                    "generate_series(date '2019-01-01', CAST(:upto AS date), "
+                    "interval '1 month') mon WHERE b.type_id = :base"
+                ),
+                {"t": ids[slug], "salt": slug, "base": ids["plm_base"], "upto": upto},
+            )
     with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
         connection.execute(text("VACUUM ANALYZE"))
         size = connection.execute(
@@ -195,21 +274,29 @@ def create(rows: int) -> None:
 _CASES_SQL = (
     "WITH m AS (SELECT array_agg(id::text ORDER BY key) a FROM objects "
     "WHERE type_id = :model), "
-    "w AS (SELECT array_agg(id ORDER BY slug) a FROM workspaces WHERE slug LIKE 'ws%') "
+    "w AS (SELECT array_agg(id ORDER BY slug) a FROM workspaces WHERE slug LIKE 'ws%'), "
+    "pt AS (SELECT array_agg(id::text ORDER BY key) a FROM objects WHERE type_id = :part) "
     "INSERT INTO objects (id, type_id, key, label, properties, owner_workspace_id, "
     "created_at, updated_at) "
     "SELECT gen_random_uuid(), :t, 'C' || lpad(n::text, 8, '0'), "
     "'C' || lpad(n::text, 8, '0'), "
     "jsonb_build_object("
     # 5% 는 뜨거운 모델(첫 모델) — 나머지는 고르게.
-    "'model', CASE WHEN n % 20 = 0 THEN m.a[1] "
-    "ELSE m.a[1 + (n::bigint * 7919) % array_length(m.a, 1)] END, "
+    "'model', m.a[1 + mm.mi], "
+    # 공장은 기본 모델의 것(생산 집계와 같은 규칙) — base_code 의 번호가 (모델 순번 + 1) / 3.
+    "'factory', 'F' || (1 + ((mm.mi + 1) / 3) % 4), "
+    "'parts', CASE n % 4 WHEN 0 THEN '[]'::jsonb "
+    "WHEN 1 THEN jsonb_build_array(pt.a[1 + (n * 31) % 300]) "
+    "WHEN 2 THEN jsonb_build_array(pt.a[1 + (n * 31) % 300], pt.a[1 + (n * 31 + 101) % 300]) "
+    "ELSE jsonb_build_array(pt.a[1 + (n * 31) % 300], pt.a[1 + (n * 31 + 101) % 300], "
+    "pt.a[1 + (n * 31 + 202) % 300]) END, "
     "'symptom', 'S' || lpad((n % 40)::text, 2, '0'), "
     "'center', 'C' || lpad((n % 30)::text, 2, '0'), "
     "'country', 'N' || lpad((n % 20)::text, 2, '0'), "
     "'handling', 'H' || (n % 8), "
-    "'service_date', to_char(date '2020-01-01' + (n % 2000), 'YYYY-MM-DD'), "
-    "'production_date', to_char(date '2019-01-01' + (n % 2000), 'YYYY-MM-DD'), "
+    "'service_date', to_char(dd.served, 'YYYY-MM-DD'), "
+    "'sale_date', to_char(dd.sold, 'YYYY-MM-DD'), "
+    "'production_date', to_char(dd.made, 'YYYY-MM-DD'), "
     "'cost', (n % 1000) * 10, "
     "'term', n % 36, "
     "'warranty', n % 3 = 0, "
@@ -219,7 +306,17 @@ _CASES_SQL = (
         f", '{one}', substr(md5((n + {i})::text), 1, 12)" for i, one in enumerate(TEXT_FIELDS)
     )
     + "), w.a[1 + n % 10], now(), now() - make_interval(secs => n) "
-    "FROM generate_series(CAST(:lo AS int), CAST(:hi AS int)) n, m, w"
+    "FROM generate_series(CAST(:lo AS int), CAST(:hi AS int)) n, m, w, pt, "
+    # 5% 는 뜨거운 모델(첫 모델) — 나머지는 고르게.
+    "LATERAL (SELECT CASE WHEN n % 20 = 0 THEN 0 "
+    "ELSE ((n::bigint * 7919) % array_length(m.a, 1))::int END AS mi) mm, "
+    # 생산 → 판매(0~59일 뒤) → 서비스(와이블 k=1.5 · η=400일의 경과). 2026-09-30 을 넘는 것은
+    # 아직 안 온 서비스라 안 심는다(관측의 끝).
+    "LATERAL (SELECT date '2019-01-01' + (n % 1400) AS made) d0, "
+    "LATERAL (SELECT d0.made, d0.made + (n % 60) AS sold, d0.made + (n % 60) + "
+    "floor(400 * power(-ln(((n::bigint * 7919) % 9973 + 0.5) / 9973.0), 1 / 1.5))::int "
+    "AS served) dd "
+    "WHERE dd.served <= date '2026-09-30'"
 )
 
 
@@ -237,6 +334,15 @@ def _schema() -> dict[str, Any]:
             "inverse_label": "시장 서비스",
         },
         _enum("symptom", "증상", SYMPTOMS),
+        {"key": "sale_date", "label": "판매일", "data_type": "date"},
+        _enum("factory", "공장", FACTORIES),
+        {
+            "key": "parts",
+            "label": "교체 부품",
+            "data_type": "object_ref",
+            "ref_type_slug": "svc_part",
+            "multi": True,
+        },
         _enum("center", "센터", CENTERS),
         _enum("country", "국가", COUNTRIES),
         _enum("handling", "처리유형", HANDLINGS),
@@ -265,11 +371,19 @@ def _schema() -> dict[str, Any]:
                     }
                 ],
             },
+            {"slug": "plm_base", "label": "기본 모델", "key_policy": "required"},
+            {"slug": "svc_part", "label": "부품", "key_policy": "required"},
             {
                 "slug": "plm_model",
                 "label": "개발모델",
                 "key_policy": "required",
                 "properties": [
+                    {
+                        "key": "base",
+                        "label": "기본 모델",
+                        "data_type": "object_ref",
+                        "ref_type_slug": "plm_base",
+                    },
                     {
                         "key": "task",
                         "label": "과제",
@@ -288,7 +402,51 @@ def _schema() -> dict[str, Any]:
                 "temporal_kind": "evergreen",
                 "properties": case_props,
             },
-        ]
+            {
+                "slug": "svc_sales",
+                "label": "판매 집계",
+                "key_policy": "required",
+                "usage": "log",
+                "properties": [
+                    {
+                        "key": "base_model",
+                        "label": "기본 모델",
+                        "data_type": "object_ref",
+                        "ref_type_slug": "plm_base",
+                    },
+                    {"key": "month", "label": "판매월", "data_type": "date"},
+                    {"key": "units", "label": "대수", "data_type": "number"},
+                ],
+            },
+            {
+                "slug": "svc_production",
+                "label": "생산 집계",
+                "key_policy": "required",
+                "usage": "log",
+                "properties": [
+                    {
+                        "key": "base_model",
+                        "label": "기본 모델",
+                        "data_type": "object_ref",
+                        "ref_type_slug": "plm_base",
+                    },
+                    {"key": "month", "label": "생산월", "data_type": "date"},
+                    _enum("factory", "공장", FACTORIES),
+                    {"key": "units", "label": "대수", "data_type": "number"},
+                ],
+            },
+        ],
+        "relation_types": [
+            {
+                "slug": "sku_base",
+                "label": "기본 모델",
+                "inverse_label": "SKU",
+                "src_type_slugs": ["plm_model"],
+                "dst_type_slugs": ["plm_base"],
+                "directed": True,
+                "cardinality": "many_to_one",
+            }
+        ],
     }
 
 
@@ -498,96 +656,240 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
 def _metrics_rehearsal(
     client: Any, admin: dict[str, str], url: str
 ) -> list[tuple[str, str, str, str]]:
-    """지표(ADR 0013) — 정의의 계획 · 전량 재계산 · 세 모양의 읽기. 재계산은 워커를 거치지
-    않고 이 자리에서 돌린다(재는 것은 SQL 한 문장이다). 끝나면 정의를 지운다."""
+    """지표(ADR 0013) — 운영에서 세울 **첫 지표 셋을 그대로** 세워 잰다.
+
+    분모 둘(판매 집계 · 생산 집계)과 기록 지표 넷 — ① 판매월 코호트 인입(기본 모델을
+    **관계**로 · **참조 칸**으로, 두 길을 나란히), ③ 생산월 코호트 x 공장(분모 생산 대수),
+    ⑦ 부품 교체(여러 값 기준 · 겹침, 분모는 판매 대수 전부 합). 계산은 워커를 거치지 않고 이
+    자리에서 돌린다 — 재는 것은 SQL 한 문장이다. 끝나면 정의를 지운다(분모를 쓰는 것부터).
+    """
     import uuid
 
     from app.database import SessionLocal
     from app.modules.metrics import services as metrics_services
 
     out: list[tuple[str, str, str, str]] = []
-    slug = f"rh_{uuid.uuid4().hex[:6]}"
-    spec = {
+    tag = uuid.uuid4().hex[:4]
+    sales, prod = f"rh_sales_{tag}", f"rh_prod_{tag}"
+
+    def when(address: str, grain: str = "month") -> dict[str, str]:
+        return {"address": address, "grain": grain}
+
+    base_ref = {"name": "base_model", "address": "ref.model.base"}
+    base_rel = {"name": "base_model", "address": "ref.model.out.sku_base"}
+    symptom = {"name": "symptom", "address": "properties.symptom"}
+    factory = {"name": "factory", "address": "properties.factory"}
+    part = {"name": "part", "address": "properties.parts"}
+    q1 = {
         "measure": "count",
-        "time": {"address": "properties.service_date", "grain": "month"},
-        "cohort": {"address": "properties.production_date", "grain": "month"},
-        "dimensions": [
-            {"name": "series", "address": "ref.model.series"},
-            {"name": "base_code", "address": "ref.model.base_code"},
-            {"name": "symptom", "address": "properties.symptom"},
-            {"name": "country", "address": "properties.country"},
-        ],
+        "time": when("properties.service_date"),
+        "cohort": when("properties.sale_date"),
+        "dimensions": [base_rel, symptom],
+        "denominator": {"metric": sales, "on": ["base_model"], "time": "cohort", "per": 100},
         "settle_days": 60,
     }
-    body = {"source_type_slug": "svc_case", "spec": spec}
-    started = time.perf_counter()
-    planned = client.post("/api/metrics/plan", json=body, headers=admin)
-    took = time.perf_counter() - started
-    note = (
-        f"ok={planned.json().get('ok')} rows={planned.json().get('rows')} "
-        f"cells~{planned.json().get('estimated_cells')}"
-        if planned.status_code == 200
-        else f"HTTP {planned.status_code} {planned.text[:160]}"
-    )
-    out.append(("metrics", "지표 계획(생산월 x 서비스월 x 기준 넷)", f"{took:.2f}초", note))
-    print(f"{took:8.2f}초  지표 계획  {note}", flush=True)
-    made = client.post(
-        "/api/metrics", json={"slug": slug, "label": "리허설", **body}, headers=admin
-    )
-    if made.status_code != 201:
-        out.append(("metrics", "지표 정의", "-", f"HTTP {made.status_code} {made.text[:160]}"))
-        return out
-    started = time.perf_counter()
-    with SessionLocal() as db:
-        try:
-            result = metrics_services.run_recompute(
-                db, [slug], job_id=None, progress=lambda *_: None
-            )
-            run = result["runs"][0]
-            note = f"cells={run.get('cells')} rows={run.get('rows')}"
-        except Exception as caught:  # 재는 자리다 — 이유만 적는다
-            note = f"실패 {type(caught).__name__}: {str(caught)[:120]}"
-    took = time.perf_counter() - started
-    out.append(("metrics", "지표 전량 재계산", f"{took:.2f}초", note))
-    print(f"{took:8.2f}초  지표 전량 재계산  {note}", flush=True)
-    reads = [
-        ("지표 표 — 시리즈 x 증상", f"/api/metrics/{slug}/values", {"dims": "series,symptom"}),
+    definitions: list[tuple[str, str, str, dict[str, Any]]] = [
         (
-            "지표 표 — 기본 코드별 · 월별",
-            f"/api/metrics/{slug}/values",
-            {"dims": "base_code", "by": "period"},
+            sales,
+            "판매 대수",
+            "svc_sales",
+            {
+                "measure": "sum",
+                "measure_field": "properties.units",
+                "time": when("properties.month"),
+                "dimensions": [{"name": "base_model", "address": "properties.base_model"}],
+            },
         ),
-        ("지표 추이 — 시리즈별 선", f"/api/metrics/{slug}/series", {"split": "series"}),
-        ("지표 코호트 — 누적", f"/api/metrics/{slug}/cohort", {"cumulative": "true"}),
-        ("지표 기준 값 목록", f"/api/metrics/{slug}/dims", {"name": "base_code"}),
+        (
+            prod,
+            "생산 대수",
+            "svc_production",
+            {
+                "measure": "sum",
+                "measure_field": "properties.units",
+                "time": when("properties.month"),
+                "dimensions": [
+                    {"name": "base_model", "address": "properties.base_model"},
+                    factory,
+                ],
+            },
+        ),
+        (f"rh_q1_{tag}", "① 판매월 코호트 인입 — 기본 모델을 관계로", "svc_case", q1),
+        (
+            f"rh_q1r_{tag}",
+            "① 같은 것 — 기본 모델을 참조 칸으로",
+            "svc_case",
+            {**q1, "dimensions": [base_ref, symptom]},
+        ),
+        (
+            f"rh_q3_{tag}",
+            "③ 생산월 코호트 x 공장",
+            "svc_case",
+            {
+                "measure": "count",
+                "time": when("properties.service_date"),
+                "cohort": when("properties.production_date"),
+                "dimensions": [base_ref, factory],
+                "denominator": {
+                    "metric": prod,
+                    "on": ["base_model", "factory"],
+                    "time": "cohort",
+                    "per": 1000,
+                },
+                "settle_days": 60,
+            },
+        ),
+        (
+            f"rh_q7_{tag}",
+            "⑦ 부품 교체 — 부품 x 분기(여러 값 기준)",
+            "svc_case",
+            {
+                "measure": "count",
+                "time": when("properties.service_date", "quarter"),
+                "dimensions": [part],
+                "denominator": {"metric": sales, "on": [], "time": None, "per": 1000},
+            },
+        ),
     ]
-    for label, path, params in reads:
-        times: list[float] = []
-        shape = ""
-        for _ in range(3):
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("metrics", label, f"{took:.2f}초", note))
+        print(f"{took:8.2f}초  {label}  {note}", flush=True)
+
+    made: list[str] = []
+    try:
+        for slug, label, source, spec in definitions:
+            body = {"source_type_slug": source, "spec": spec}
             started = time.perf_counter()
-            got = client.get(path, params=params, headers=admin)
-            times.append(time.perf_counter() - started)
-            if got.status_code >= 400:
-                shape = f"HTTP {got.status_code} {got.text[:120]}"
-                break
-            body_json = got.json()
-            shape = (
-                f"cells {len(body_json.get('cells', []))}"
-                if "cells" in body_json
-                else f"lines {len(body_json.get('lines', []))}"
-                if "lines" in body_json
-                else f"rows {len(body_json.get('rows', []))}"
-                if "rows" in body_json
-                else f"values {len(body_json.get('values', []))}"
+            planned = client.post("/api/metrics/plan", json=body, headers=admin)
+            plan = planned.json() if planned.status_code == 200 else {}
+            note = (
+                f"ok={plan.get('ok')} rows={plan.get('rows')} "
+                f"cells~{plan.get('estimated_cells')}"
+                if plan.get("ok")
+                else f"거절 {plan.get('errors') or planned.text[:160]}"
             )
-            if body_json.get("truncated"):
-                shape += " truncated"
-        median = statistics.median(times)
-        out.append(("metrics", label, f"{median:.2f}초", shape))
-        print(f"{median:8.2f}초  {label}  {shape}", flush=True)
-    client.delete(f"/api/metrics/{slug}", headers=admin)
+            row(f"계획 — {label}", time.perf_counter() - started, note)
+            saved = client.post(
+                "/api/metrics", json={"slug": slug, "label": label, **body}, headers=admin
+            )
+            if saved.status_code != 201:
+                out.append(("metrics", f"정의 — {label}", "-", saved.text[:160]))
+                return out
+            made.append(slug)
+            started = time.perf_counter()
+            with SessionLocal() as db:
+                try:
+                    result = metrics_services.run_recompute(
+                        db, [slug], job_id=None, progress=lambda *_: None
+                    )
+                    done = result["runs"][0]
+                    note = f"cells={done.get('cells'):,} rows={done.get('rows'):,}"
+                except Exception as caught:  # 재는 자리다 — 이유만 적는다
+                    note = f"실패 {type(caught).__name__}: {str(caught)[:120]}"
+            row(f"재계산 — {label}", time.perf_counter() - started, note)
+
+        wide = {
+            "measure": "count",
+            "time": when("properties.service_date"),
+            "dimensions": [base_ref, part],
+        }
+        started = time.perf_counter()
+        planned = client.post(
+            "/api/metrics/plan",
+            json={"source_type_slug": "svc_case", "spec": wide},
+            headers=admin,
+        )
+        plan = planned.json() if planned.status_code == 200 else {}
+        row(
+            "계획만 — ⑦ 기본 모델 x 부품 x 월(상한 확인)",
+            time.perf_counter() - started,
+            f"ok={plan.get('ok')} cells~{plan.get('estimated_cells')} {plan.get('errors') or ''}",
+        )
+
+        with create_engine(url).connect() as connection:
+            hot_base = connection.execute(
+                text(
+                    "SELECT o.properties->>'base' FROM objects o "
+                    "JOIN object_types t ON t.id = o.type_id "
+                    "WHERE t.slug = 'plm_model' ORDER BY o.key LIMIT 1"
+                )
+            ).scalar()
+        first, third, seventh = definitions[2][0], definitions[4][0], definitions[5][0]
+        reads: list[tuple[str, str, dict[str, Any]]] = [
+            (
+                "① 코호트 누적 비율 — 전체",
+                f"/api/metrics/{first}/cohort",
+                {"cumulative": "true"},
+            ),
+            (
+                "① 코호트 누적 비율 — 기본 모델 하나(뜨거운)",
+                f"/api/metrics/{first}/cohort",
+                {"cumulative": "true", "d.base_model": hot_base},
+            ),
+            (
+                "① 표 — 증상 x 판매월 코호트",
+                f"/api/metrics/{first}/values",
+                {"dims": "symptom", "by": "cohort"},
+            ),
+            ("① 추이 — 증상별 선", f"/api/metrics/{first}/series", {"split": "symptom"}),
+            (
+                "③ 표 — 공장 x 생산월 코호트(비율)",
+                f"/api/metrics/{third}/values",
+                {"dims": "factory", "by": "cohort"},
+            ),
+            (
+                "⑦ 표 — 부품별(겹침, 판매 대수 전부 분모)",
+                f"/api/metrics/{seventh}/values",
+                {"dims": "part"},
+            ),
+            (
+                "⑦ 표 — 부품 x 분기",
+                f"/api/metrics/{seventh}/values",
+                {"dims": "part", "by": "period"},
+            ),
+            ("기준 값 목록 — 기본 모델", f"/api/metrics/{first}/dims", {"name": "base_model"}),
+        ]
+        for label, path, params in reads:
+            times: list[float] = []
+            shape = ""
+            for _ in range(3):
+                started = time.perf_counter()
+                got = client.get(path, params=params, headers=admin)
+                times.append(time.perf_counter() - started)
+                if got.status_code >= 400:
+                    shape = f"HTTP {got.status_code} {got.text[:120]}"
+                    break
+                shape = _metric_shape(got.json())
+            row(label, statistics.median(times), shape)
+    finally:
+        for slug in reversed(made):
+            client.delete(f"/api/metrics/{slug}", headers=admin)
     return out
+
+
+def _metric_shape(body: dict[str, Any]) -> str:
+    """지표 응답 한 마디 — 수와, 숨기지 말아야 할 것(잘림 · 겹침 · 분모 없음)."""
+    if "rows" in body and "ages" in body:
+        rows = body["rows"]
+        note = f"코호트 {len(rows)} x 경과 {len(body['ages'])}"
+        if rows and rows[0]["cells"]:
+            last = rows[0]["cells"][-1]
+            note += f" · 첫 코호트 끝 누적 비율 {last.get('ratio')}"
+    elif "lines" in body:
+        note = f"선 {len(body['lines'])}" + (" (잘림)" if body.get("lines_truncated") else "")
+    elif "cells" in body:
+        note = f"셀 {len(body['cells'])} · 합 {body.get('total_count'):,}"
+    else:
+        note = f"값 {len(body.get('values', []))}"
+    if body.get("overlap"):
+        note += " · 겹침"
+    if body.get("truncated"):
+        note += " · 잘림"
+    missing = (body.get("denominator") or {}).get("missing")
+    if missing:
+        note += f" · 분모 없는 셀 {missing}"
+    return note
 
 
 def _shape(body: Any) -> str:

@@ -504,7 +504,7 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
             f"기준의 값 수는 {SAMPLE_ROWS:,}건 표본에서 어림했습니다 — 셀 수도 어림입니다."
         )
 
-    def counted(*columns: Any, axis: axes.Axis | None = None) -> Any | None:
+    def counted(*columns: Any, axis: axes.Axis | None = None, extra: Any = ()) -> Any | None:
         stmt = (
             select(*columns)
             .select_from(ObjectInstance)
@@ -512,8 +512,9 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
                 ObjectInstance.type_id == built.source.id, ObjectInstance.deleted_at.is_(None)
             )
         )
-        if axis is not None:
-            stmt = axes.joined(stmt, axis)
+        joining = [*([axis] if axis is not None else []), *extra]
+        if joining:
+            stmt = axes.joined(stmt, *joining)
         stmt = conditions.apply(stmt, built.scope.defs, built.conds, built.plan.resolver)
         if sampled:
             stmt = stmt.where(ObjectInstance.id.in_(built.base().limit(SAMPLE_ROWS)))
@@ -561,7 +562,19 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
         out.warnings.append(
             f"셀 수를 다 어림하지 못했습니다(추정 질의가 {ESTIMATE_SECONDS}초를 넘겼습니다)."
         )
-    estimated = product if built.overlap else min(out.rows, product)
+    # 셀은 (펼친) 기록 줄보다 많을 수 없다. 여러 값 기준(또는 여럿과 이어진 걸음)은 한 기록이
+    # 여러 줄로 펼쳐지므로 펼친 줄 수를 표본에서 세어 상한으로 쓴다 — 곱만 쓰면 기본 모델 x
+    # 부품 x 월이 4억 셀로 어림됐다(실측, 실제 펼친 줄은 300만).
+    expanded = out.rows
+    multi = [one.axis for one in built.dims if one.axis.multi]
+    if multi:
+        found = counted(func.count(), extra=multi)
+        if found is None:
+            unknown = True
+        else:
+            seen = min(out.rows, SAMPLE_ROWS) if sampled else out.rows
+            expanded = round(int(found[0]) * out.rows / max(seen, 1))
+    estimated = min(product, expanded)
     out.estimated_cells = estimated
     if estimated > settings.metrics_max_cells:
         out.ok = False

@@ -339,7 +339,8 @@ def test_계획이_셀_수를_어림하고_겹침을_말한다(client: TestClien
     assert dims["base_model"]["kind"] == "object_ref" and dims["base_model"]["distinct"] == 2
     assert dims["symptom"]["distinct"] == 3 and dims["parts"]["multi"] is True
     assert plan["period_from"] == "2026-01-01"
-    assert plan["estimated_cells"] is not None and plan["estimated_cells"] >= 8
+    # 셀은 펼친 기록 줄보다 많을 수 없다 — 부품이 둘인 기록 하나가 줄 하나를 더한다(8 + 1).
+    assert plan["estimated_cells"] == 9
 
 
 def test_분모는_같은_종류의_값으로만_짝짓는다(client: TestClient, admin: Signed) -> None:
@@ -629,6 +630,7 @@ def test_적재_뒤_훅이_작업을_넣고_중복은_안_넣는다(
     plm: FakeOData,  # noqa: F811 — 픽스처
 ) -> None:
     from app.database import SessionLocal
+    from app.modules.jobs import services as job_services
     from app.modules.metrics import services
     from app.modules.ontology.models import ObjectType
 
@@ -667,6 +669,19 @@ def test_적재_뒤_훅이_작업을_넣고_중복은_안_넣는다(
     # 시간 칸이 없는 지표는 추이를 못 낸다 — 그 사실을 말한다.
     denied = client.get(f"/api/metrics/{metric['slug']}/series", headers=admin.headers)
     assert denied.status_code == 422 and "시간 칸" in denied.json()["error"]["message"]
+    # **바뀐 것이 없는 동기화는 다시 세지 않는다** — 몇 분마다 도는 소스가 매번 200만 건
+    # 지표를 다시 세게 하면 DB 가 쉬지 못한다.
+    again = _sync(client, admin, source["slug"], apply=True)
+    assert again.status_code == 200 and again.json()["counts"]["create"] == 0
+    with SessionLocal() as db:
+        assert services.pending_recompute(db, metric["slug"]) is None
+    # 한 줄이라도 바뀌면 다시 들어간다.
+    plm.rows[0]["Rating"] = 99
+    _sync(client, admin, source["slug"], apply=True)
+    with SessionLocal() as db:
+        assert services.pending_recompute(db, metric["slug"]) is not None
+    while job_services.process_one("test-worker"):
+        pass
 
 
 def test_타이머가_돌릴_차례(client: TestClient, admin: Signed) -> None:
