@@ -15,6 +15,7 @@ const metricsApi = vi.hoisted(() => ({
   series: vi.fn(),
   cohort: vi.fn(),
   dims: vi.fn(),
+  runs: vi.fn(),
 }))
 vi.mock('@/modules/metrics/api', () => ({ metricsApi }))
 vi.mock('@/shared/charts', () => ({ Chart: () => <div>차트</div> }))
@@ -221,5 +222,44 @@ describe('지표 상세', () => {
         expect.objectContaining({ cumulative: false }),
       ),
     )
+  })
+
+  it('계산 기록은 실패한 계산의 이유를 보여 준다 — 옛 값이 왜 그대로인지', async () => {
+    metricsApi.runs.mockResolvedValue([
+      {
+        id: 'r2',
+        job_id: 'j2',
+        status: 'failed',
+        watermark: null,
+        started_at: '2026-10-04T02:30:00+09:00',
+        finished_at: '2026-10-04T02:30:01+09:00',
+        rows: 0,
+        cells: 0,
+        error: '[APP-METRICS-0003] 이 타입에 없는 칸입니다: nope',
+        stats: {},
+      },
+      {
+        id: 'r1',
+        job_id: 'j1',
+        status: 'ok',
+        watermark: '2026-10-03T02:30:00+09:00',
+        started_at: '2026-10-03T02:30:00+09:00',
+        finished_at: '2026-10-03T02:30:20+09:00',
+        rows: 2000000,
+        cells: 5800,
+        error: null,
+        stats: { unbucketed: 12 },
+      },
+    ])
+    await mount()
+    await waitFor(() => expect(screen.getByText('월별 인입')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('tab', { name: '계산 기록' }))
+    await waitFor(() => expect(metricsApi.runs).toHaveBeenCalledWith('cases_monthly'))
+    expect(await screen.findByText('실패')).toBeInTheDocument()
+    expect(screen.getByText(/이 타입에 없는 칸입니다/)).toBeInTheDocument()
+    expect(screen.getByText('성공')).toBeInTheDocument()
+    expect(screen.getByText('20초')).toBeInTheDocument()
+    expect(screen.getByText('2,000,000')).toBeInTheDocument()
+    expect(screen.getByText('5,800')).toBeInTheDocument()
   })
 })

@@ -324,7 +324,7 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 - **끄기**: `METRICS_ENABLED=0 sudo ./deploy.sh update` (유닛은 `systemctl disable --now <slug>-metrics.timer`)
 - **손으로 한 번**: `sudo systemctl start <slug>-metrics` (차례가 된 것만) — 하나만 지정해 돌리려면
   화면의 「지금 다시 계산」 이나 컨테이너 안에서 `scripts/recompute_metrics.py --slug <지표>`.
-- 결과는 화면(공통 › 지표 › 계산 기록)과 홈의 「남은 일」(실패 · 오래 안 셈)에 남는다.
+- 결과는 화면(공통 › 지표 › 지표를 열고 「계산 기록」 탭)과 홈의 「남은 일」(실패 · 오래 안 셈)에 남는다.
 - 200만 건을 묶을 때 `work_mem` 이 모자라면 느리다 — `.env` 의 `METRICS_WORK_MEM`(기본 256MB).
 
 ---

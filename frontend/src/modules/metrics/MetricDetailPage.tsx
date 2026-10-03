@@ -3,6 +3,9 @@
  *
  * 머리에 계산 시각 · 닫힌 기간 · 겹침 · 못 묶은 수를 적는다 — 세어 둔 값은 그 사실을 숨기면
  * 안 된다. 기준 값으로 거르면 분모도 같이 걸리고, 셀의 수는 목록 조건으로 그대로 돌아간다.
+ *
+ * 「계산 기록」 은 최근 계산들이다 — 실패한 계산은 옛 값을 그대로 두므로, 값이 왜 안 바뀌었는지
+ * 물을 자리가 여기다(운영 안내 5d 가 이 탭을 가리킨다).
  */
 
 import { useMemo, useState } from 'react'
@@ -13,6 +16,7 @@ import type {
   Metric,
   MetricCohort,
   MetricDim,
+  MetricRun,
   MetricSeries,
   MetricTable,
   ReadHeader,
@@ -50,8 +54,21 @@ const EMPTY = '__empty__'
 /** 코호트 표에 늘어놓을 경과 칸의 상한 — 그보다 길면 히트맵만 읽는다. */
 const AGES_IN_TABLE = 24
 
-type Tab = 'table' | 'series' | 'cohort'
+type Tab = 'table' | 'series' | 'cohort' | 'runs'
 type By = 'none' | 'period' | 'cohort'
+
+const RUN_STATUS: Record<string, { label: string; className: string }> = {
+  running: { label: '도는 중', className: 'text-muted-foreground' },
+  ok: { label: '성공', className: 'text-emerald-700 dark:text-emerald-400' },
+  failed: { label: '실패', className: 'text-destructive' },
+}
+
+/** 계산 한 번이 걸린 시간 — 끝나지 않았으면 「—」. */
+function tookOf(run: MetricRun): string {
+  if (!run.finished_at) return '—'
+  const took = (Date.parse(run.finished_at) - Date.parse(run.started_at)) / 1000
+  return Number.isFinite(took) ? `${shownNumber(Math.max(0, took), 1)}초` : '—'
+}
 
 /** 응답 머리 — 계산 시각 · 신선도 · 겹침 · 못 묶은 수 · 잘림 · 분모 없음. */
 function HeaderLine({ header }: { header: ReadHeader }) {
@@ -174,6 +191,10 @@ export default function MetricDetailPage() {
         : Promise.resolve(null),
     [slug, tab, seriesKey, Boolean(found)],
   )
+  const runs = useResource<MetricRun[] | null>(
+    () => (tab === 'runs' ? metricsApi.runs(slug) : Promise.resolve(null)),
+    [slug, tab],
+  )
   const cohortKey = JSON.stringify([filters, cumulative])
   const cohort = useResource<MetricCohort | null>(
     () =>
@@ -251,6 +272,7 @@ export default function MetricDetailPage() {
           <TabsTrigger value="table">표</TabsTrigger>
           {found.grain && <TabsTrigger value="series">추이</TabsTrigger>}
           {found.cohort_grain && <TabsTrigger value="cohort">코호트</TabsTrigger>}
+          <TabsTrigger value="runs">계산 기록</TabsTrigger>
         </TabsList>
 
         <TabsContent value="table" className="space-y-3">
@@ -395,6 +417,11 @@ export default function MetricDetailPage() {
           {cohort.data && (
             <CohortView data={cohort.data} ratio={showRatio} cumulative={cumulative} />
           )}
+        </TabsContent>
+
+        <TabsContent value="runs" className="space-y-3">
+          {runs.error && <ErrorNotice error={runs.error} />}
+          {runs.data && <RunsView runs={runs.data} />}
         </TabsContent>
       </Tabs>
     </div>
@@ -557,6 +584,51 @@ function CohortView({
           경과 {AGES_IN_TABLE}칸까지만 표로 — 나머지는 히트맵에서 봅니다.
         </p>
       )}
+    </>
+  )
+}
+
+function RunsView({ runs }: { runs: MetricRun[] }) {
+  if (runs.length === 0) {
+    return <p className="text-muted-foreground text-sm">아직 한 번도 안 셌습니다.</p>
+  }
+  return (
+    <>
+      <p className="text-muted-foreground text-xs">
+        최근 {runs.length}번. 실패한 계산은 옛 값을 그대로 두고 이유를 남깁니다.
+      </p>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>시작</TableHead>
+            <TableHead>상태</TableHead>
+            <TableHead className="text-right">걸린 시간</TableHead>
+            <TableHead className="text-right">기록</TableHead>
+            <TableHead className="text-right">셀</TableHead>
+            <TableHead className="text-right">날짜 없음</TableHead>
+            <TableHead>이유</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {runs.map((run) => {
+            const status = RUN_STATUS[run.status] ?? { label: run.status, className: '' }
+            const done = run.status === 'ok'
+            return (
+              <TableRow key={run.id}>
+                <TableCell className="whitespace-nowrap">{shownDateTime(run.started_at)}</TableCell>
+                <TableCell className={status.className}>{status.label}</TableCell>
+                <TableCell className="text-right">{tookOf(run)}</TableCell>
+                <TableCell className="text-right">{done ? shownNumber(run.rows) : '—'}</TableCell>
+                <TableCell className="text-right">{done ? shownNumber(run.cells) : '—'}</TableCell>
+                <TableCell className="text-right">
+                  {done ? shownNumber(run.stats.unbucketed ?? 0) : '—'}
+                </TableCell>
+                <TableCell className="text-destructive text-xs">{run.error ?? ''}</TableCell>
+              </TableRow>
+            )
+          })}
+        </TableBody>
+      </Table>
     </>
   )
 }
