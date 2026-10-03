@@ -782,3 +782,152 @@ def test_순차_검정이_안_되는_지표는_이유를_말한다(client: TestC
     assert reason["ok"] is False and "코호트" in reason["reason"]
     refused = _refused(client, admin, monthly["slug"], "sprt", target=w["s_base"])
     assert refused["code"].endswith("METRICS-0028")
+
+
+# --- ⑨ 연관 · 묶음 · 파레토 두 기간 비교 ------------------------------------------------
+
+
+def _symptom_parts(client: TestClient, admin: Signed, w: dict[str, Any]) -> dict[str, Any]:
+    return _define(
+        client,
+        admin,
+        source=w["case"],
+        spec={
+            "measure": "count",
+            "time": {"address": "properties.received", "grain": "month"},
+            "dimensions": [
+                {"name": "symptom", "address": "properties.symptom"},
+                {"name": "part", "address": "properties.parts"},
+            ],
+        },
+        label="증상 x 부품",
+    )
+
+
+def test_연관은_심은_덩어리의_짝과_묶음을_찾는다(client: TestClient, admin: Signed) -> None:
+    """증상 넷 x 부품 넷 — 증상 a · b 는 부품 1 · 2 와, c · d 는 3 · 4 와 자주 함께 나온다."""
+    w = _world(client, admin)
+    metric = _symptom_parts(client, admin, w)
+    strong = {
+        ("a", "1"),
+        ("a", "2"),
+        ("b", "1"),
+        ("b", "2"),
+        ("c", "3"),
+        ("c", "4"),
+        ("d", "3"),
+        ("d", "4"),
+    }
+    cells: list[dict[str, Any]] = [
+        {
+            "period": date(2026, 1, 1),
+            "dims": {"symptom": f"S-{row}", "part": f"P-{col}"},
+            "count": 40 if (row, col) in strong else 4,
+        }
+        for row in "abcd"
+        for col in "1234"
+    ]
+    cells.append(
+        {"period": date(2026, 1, 1), "dims": {"symptom": "S-a", "part": None}, "count": 9}
+    )
+    _plant(metric["slug"], cells, datetime(2026, 9, 1, tzinfo=UTC))
+    found = _analysis(client, admin, metric["slug"], "assoc", rows="symptom", cols="part")
+    assert found["basis"] == "occurrences" and found["total"] == 8 * 40 + 8 * 4
+    assert found["excluded"] == {"no_value": 9}
+    pairs = {(one["row"]["key"], one["col"]["key"]) for one in found["pairs"]}
+    assert pairs and all((row[-1] in "ab") == (col[-1] in "12") for row, col in pairs)
+    first = found["pairs"][0]
+    assert first["lift"] == pytest.approx(40 / (88 * 88 / 352))
+    assert first["q_value"] < 0.05 and first["drill"]["params"]
+    groups = [
+        sorted(one["key"] for one in cluster["members"]) for cluster in found["clusters"]
+    ]
+    assert sorted(groups) == [["S-a", "S-b"], ["S-c", "S-d"]]
+    assert found["silhouette"] > 0.5
+    assert found["map_explained"] > 0.5 and len(found["map_rows"]) == 4
+    codes = {one["code"] for one in found["caveats"]}
+    assert {"overlap_basis", "association", "multiple_testing"} <= codes
+    compact = _analysis(
+        client, admin, metric["slug"], "assoc", rows="symptom", cols="part", compact="true"
+    )
+    assert compact["map_rows"] == [] and len(compact["pairs"]) <= 15
+
+
+def test_연관은_기준_둘을_고르고_건_보기는_그_짝이다(
+    client: TestClient, admin: Signed
+) -> None:
+    w = _world(client, admin)
+    metric = _symptom_parts(client, admin, w)
+    found = _analysis(
+        client, admin, metric["slug"], "assoc", rows="symptom", cols="part", min_count=1
+    )
+    # 부품이 빈 기록 셋(건3 · 건6 · 건8)은 뺀다, 짝 다섯을 검정했다(유의한 것은 없다).
+    assert found["excluded"] == {"no_value": 3} and found["tested"] == 5
+    assert found["pairs"] == []
+    same = _refused(client, admin, metric["slug"], "assoc", rows="symptom", cols="symptom")
+    assert same["code"].endswith("METRICS-0034")
+    filtered = _refused(
+        client,
+        admin,
+        metric["slug"],
+        "assoc",
+        rows="symptom",
+        cols="part",
+        **{"d.part": w["p1"]},
+    )
+    assert filtered["code"].endswith("METRICS-0034")
+    _, cases = _two(client, admin, w)
+    one_dim = _define(
+        client,
+        admin,
+        source=w["case"],
+        spec={
+            "measure": "count",
+            "dimensions": [{"name": "symptom", "address": "properties.symptom"}],
+        },
+        label="증상만",
+    )
+    reason = next(one for one in one_dim["analyses"] if one["recipe"] == "assoc")
+    assert reason["ok"] is False and "둘 이상" in reason["reason"]
+    assert next(one for one in cases["analyses"] if one["recipe"] == "assoc")["ok"] is True
+
+
+def test_파레토는_두_기간의_몫을_견준다(client: TestClient, admin: Signed) -> None:
+    """앞 기간(1월) 소음 500 · 발열 300 · 누수 200, 뒤 기간(3월) 소음 500 · 발열 200 ·
+    누수 300."""
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    dims = {"base_model": w["s_base"], "factory": "F1"}
+    cells = [
+        {"period": period, "dims": {**dims, "symptom": symptom}, "count": count}
+        for period, counts in (
+            (date(2026, 1, 1), {"소음": 500, "발열": 300, "누수": 200}),
+            (date(2026, 3, 1), {"소음": 500, "발열": 200, "누수": 300}),
+        )
+        for symptom, count in counts.items()
+    ]
+    _plant(cases["slug"], cells, datetime(2026, 9, 1, tzinfo=UTC))
+    found = _analysis(
+        client,
+        admin,
+        cases["slug"],
+        "pareto",
+        dim="symptom",
+        period_from="2026-01-01",
+        period_to="2026-02-01",
+        compare_from="2026-03-01",
+        compare_to="2026-04-01",
+    )
+    comparison = found["comparison"]
+    assert comparison["label_a"] == "2026-01-01 ~ 2026-02-01"
+    assert comparison["total_a"] == comparison["total_b"] == 1000
+    assert comparison["df"] == 2 and comparison["p_value"] < 1e-6
+    items = {one["key"]: one for one in comparison["items"]}
+    assert items["누수"]["residual"] > 3 and items["누수"]["notable"] is True
+    assert items["발열"]["residual"] < -3 and items["소음"]["notable"] is False
+    assert items["누수"]["share_a"] == pytest.approx(0.2)
+    assert items["누수"]["share_b"] == pytest.approx(0.3)
+    assert found["params"]["compare_from"] == "2026-03-01"
+    # 비교를 안 주면 없다.
+    plain = _analysis(client, admin, cases["slug"], "pareto", dim="symptom")
+    assert plain["comparison"] is None

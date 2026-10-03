@@ -7,7 +7,7 @@
 
 import type { Drill, ReadHeader } from '@/modules/metrics/api'
 
-export type Recipe = 'pareto' | 'life' | 'control' | 'changes' | 'sprt' | 'logit'
+export type Recipe = 'pareto' | 'life' | 'control' | 'changes' | 'sprt' | 'logit' | 'assoc'
 
 export interface Caveat {
   code: string
@@ -68,6 +68,30 @@ export interface ParetoTrend {
   closed: boolean
 }
 
+export interface ParetoCompareItem {
+  key: string | null
+  label: string
+  count_a: number
+  share_a: number
+  count_b: number
+  share_b: number
+  /** 뒤 기간 쪽 수정 잔차 — 양수면 뒤 기간에 몫이 커졌다. */
+  residual: number
+  /** |잔차| > 3 — 몫이 달라진 값. */
+  notable: boolean
+}
+
+export interface ParetoCompare {
+  label_a: string
+  label_b: string
+  total_a: number
+  total_b: number
+  chi2: number
+  df: number
+  p_value: number
+  items: ParetoCompareItem[]
+}
+
 export interface ParetoResult extends AnalysisHeader {
   dim: string
   dim_label: string
@@ -80,6 +104,7 @@ export interface ParetoResult extends AnalysisHeader {
   other_value: number
   concentration: Concentration | null
   trend: ParetoTrend[]
+  comparison?: ParetoCompare | null
 }
 
 // --- ② 수명 · B수명 -------------------------------------------------------------
@@ -373,4 +398,58 @@ export interface LogitResult extends AnalysisHeader {
   null_deviance: number | null
   auc: number | null
   converged: boolean | null
+}
+
+// --- ⑨ 연관 · 묶음 ---------------------------------------------------------------
+
+export interface AssocLabel {
+  key: string
+  label: string
+}
+
+export interface AssocPair {
+  row: AssocLabel
+  col: AssocLabel
+  count: number
+  expected: number
+  /** 향상도 — count / expected. */
+  lift: number
+  /** 행의 값 안에서 이 열의 몫. */
+  share: number
+  p_value: number
+  q_value: number
+  drill: Drill
+}
+
+export interface AssocCluster {
+  members: AssocLabel[]
+  /** 그 묶음을 가르는 열. */
+  top: AssocLabel[]
+  count: number
+}
+
+export interface AssocPoint {
+  key: string
+  label: string
+  x: number
+  y: number
+  mass: number
+}
+
+export interface AssocResult extends AnalysisHeader {
+  rows: string
+  rows_label: string
+  cols: string
+  cols_label: string
+  basis: 'records' | 'occurrences'
+  total: number
+  row_values: number
+  col_values: number
+  tested: number
+  pairs: AssocPair[]
+  clusters: AssocCluster[]
+  silhouette: number | null
+  map_rows: AssocPoint[]
+  map_cols: AssocPoint[]
+  map_explained: number | null
 }

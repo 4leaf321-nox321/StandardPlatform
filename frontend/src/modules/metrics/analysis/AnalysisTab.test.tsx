@@ -11,7 +11,12 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { Metric, ReadHeader } from '@/modules/metrics/api'
 import AnalysisTab from '@/modules/metrics/analysis/AnalysisTab'
 import { decisionText } from '@/modules/metrics/analysis/SprtView'
-import type { LifeResult, LogitResult, ParetoResult } from '@/modules/metrics/analysis/types'
+import type {
+  AssocResult,
+  LifeResult,
+  LogitResult,
+  ParetoResult,
+} from '@/modules/metrics/analysis/types'
 
 const metricsApi = vi.hoisted(() => ({ analysis: vi.fn(), dims: vi.fn() }))
 vi.mock('@/modules/metrics/api', () => ({ metricsApi }))
@@ -328,5 +333,94 @@ describe('분석 탭', () => {
     expect(screen.getByText(/— 값 2개/)).toBeInTheDocument()
     const logitCall = metricsApi.analysis.mock.calls.find((one) => one[1] === 'logit')
     expect(logitCall?.[2]).toMatchObject({ factors: 'visit_no' })
+  })
+
+  it('연관은 짝과 묶음을, 파레토는 두 기간의 몫 변화를 적는다', async () => {
+    const TWO = {
+      ...METRIC,
+      dims: [
+        ...METRIC.dims,
+        { name: 'part', address: 'properties.parts', label: '교체 부품', kind: 'object_ref',
+          multi: true, grain: null },
+      ],
+      analyses: [
+        { recipe: 'pareto', label: '파레토 · 집중도', ok: true, reason: null },
+        { recipe: 'assoc', label: '연관 · 묶음', ok: true, reason: null },
+      ],
+    } as unknown as Metric
+    const ASSOC: AssocResult = {
+      ...HEADER,
+      recipe: 'assoc',
+      method: '향상도 · 초기하 정확 검정 · BH · PPMI 코사인 평균 연결 · 대응 분석 v1',
+      params: {},
+      run_id: 'r1',
+      caveats: [],
+      excluded: {},
+      visible_share: 1,
+      rows: 'symptom',
+      rows_label: '증상',
+      cols: 'part',
+      cols_label: '교체 부품',
+      basis: 'occurrences',
+      total: 352,
+      row_values: 4,
+      col_values: 4,
+      tested: 16,
+      pairs: [
+        {
+          row: { key: 'S-a', label: '소음' },
+          col: { key: 'P-1', label: '팬' },
+          count: 40,
+          expected: 22,
+          lift: 1.82,
+          share: 0.45,
+          p_value: 0.0001,
+          q_value: 0.0004,
+          drill: { type_slug: 'svc_case', params: { 'f.symptom.eq': 'S-a' }, partial: [] },
+        },
+      ],
+      clusters: [
+        { members: [{ key: 'S-a', label: '소음' }, { key: 'S-b', label: '진동' }],
+          top: [{ key: 'P-1', label: '팬' }], count: 176 },
+      ],
+      silhouette: 0.71,
+      map_rows: [],
+      map_cols: [],
+      map_explained: null,
+    }
+    const COMPARED: ParetoResult = {
+      ...PARETO,
+      comparison: {
+        label_a: '2026-01-01 ~ 2026-02-01',
+        label_b: '2026-03-01 ~ 2026-04-01',
+        total_a: 1000,
+        total_b: 1000,
+        chi2: 35.2,
+        df: 2,
+        p_value: 0.000001,
+        items: [
+          { key: '누수', label: '누수', count_a: 200, share_a: 0.2, count_b: 300, share_b: 0.3,
+            residual: 5.2, notable: true },
+        ],
+      },
+    }
+    metricsApi.analysis.mockImplementation((_slug: string, recipe: string) =>
+      Promise.resolve(recipe === 'assoc' ? ASSOC : COMPARED),
+    )
+    render(
+      <MemoryRouter>
+        <AnalysisTab metric={TWO} read={{ filters: {} }} />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('늘었다')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '연관 · 묶음' }))
+    expect(await screen.findByText('1.82배')).toBeInTheDocument()
+    expect(screen.getByText('소음 · 진동')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '40건 보기' })).toHaveAttribute(
+      'href',
+      '/o/svc_case?f.symptom.eq=S-a',
+    )
+    const assocCall = metricsApi.analysis.mock.calls.find((one) => one[1] === 'assoc')
+    expect(assocCall?.[2]).toMatchObject({ rows: 'symptom', cols: 'part' })
   })
 })

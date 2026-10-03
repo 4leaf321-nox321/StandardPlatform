@@ -13,8 +13,9 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.metrics import compute, params, query, services
-from app.modules.metrics.recipes import changes, control, life, logit, pareto, sprt
+from app.modules.metrics.recipes import assoc, changes, control, life, logit, pareto, sprt
 from app.modules.metrics.recipes.schemas import (
+    AssocOut,
     ChangesOut,
     ControlOut,
     LifeOut,
@@ -41,6 +42,10 @@ def pareto_analysis(
     period_to: str | None = Query(default=None, description="이 날 **앞까지**"),
     cohort_from: str | None = Query(default=None),
     cohort_to: str | None = Query(default=None),
+    compare_from: str | None = Query(
+        default=None, description="이 기간과 몫을 견준다 — 시작(지금 범위가 앞 기간)"
+    ),
+    compare_to: str | None = Query(default=None, description="견줄 기간의 끝(앞까지)"),
     compact: bool = Query(default=False, description="줄을 10개로 줄이고 추이를 뺀다(MCP)"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
@@ -67,6 +72,8 @@ def pareto_analysis(
         top=top,
         include_empty=include_empty,
         by_period=by_period,
+        compare_from=params.parse_date(compare_from, "compare_from"),
+        compare_to=params.parse_date(compare_to, "compare_to"),
         compact=compact,
     )
 
@@ -280,6 +287,51 @@ def logit_analysis(
         built,
         ask,
         factors=params.names(factors),
+        min_count=min_count,
+        compact=compact,
+    )
+
+
+@router.get("/assoc", response_model=AssocOut)
+def assoc_analysis(
+    slug: str,
+    request: Request,
+    rows: str = Query(description="행 기준(증상 등)"),
+    cols: str = Query(description="열 기준(교체 부품 · 원인 등) — 여러 값이어도 된다"),
+    min_count: int = Query(
+        default=assoc.MIN_COUNT,
+        ge=1,
+        le=100_000,
+        description="이보다 적은 짝은 검정하지 않는다",
+    ),
+    period_from: str | None = Query(default=None),
+    period_to: str | None = Query(default=None, description="이 날 **앞까지**"),
+    cohort_from: str | None = Query(default=None),
+    cohort_to: str | None = Query(default=None),
+    compact: bool = Query(default=False, description="짝 15개 · 지도 없이(MCP)"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> AssocOut:
+    """⑨ 연관 · 묶음 — 기준 둘이 함께 나온 수에서 향상도 · 정확 검정(BH), 행의 묶음(PPMI ·
+    평균 연결 · 실루엣), 대응 분석 지도. 거르기는 `d.<기준>=<값>`."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(
+        request,
+        period_from=period_from,
+        period_to=period_to,
+        cohort_from=cohort_from,
+        cohort_to=cohort_to,
+    )
+    return assoc.run(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        rows=rows,
+        cols=cols,
         min_count=min_count,
         compact=compact,
     )

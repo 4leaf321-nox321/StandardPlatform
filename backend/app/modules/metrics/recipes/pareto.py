@@ -9,6 +9,12 @@
 
 여러 값 기준(교체 부품)이면 한 기록이 값마다 한 번씩 들어 **몫은 나온 횟수 기준**이다 —
 `basis` 와 주의로 말한다. 한 번도 안 나온 값은 몫이 없어 유효 개수에 들지 않는다.
+
+## 두 기간 비교
+
+`compare_from` · `compare_to` 를 주면 그 기간의 몫과 견준다 — 2 x K 동질성 χ²(기대가 5 미만인
+값은 「그 밖」 으로 모은다)와 값마다 **수정 잔차**(뒤 기간 쪽, ±3 을 넘으면 몫이 달라진 값).
+「구성비가 바뀌었나」(⑧ 성격 분류의 구성비 추이)를 이것으로 본다.
 """
 
 from __future__ import annotations
@@ -24,9 +30,11 @@ from app.modules.accounts.models import User
 from app.modules.metrics import query
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import MetricDef
-from app.modules.metrics.recipes import common, registry
+from app.modules.metrics.recipes import _numeric, common, registry
 from app.modules.metrics.recipes.schemas import (
     ConcentrationOut,
+    ParetoCompareItemOut,
+    ParetoCompareOut,
     ParetoItemOut,
     ParetoOut,
     ParetoTrendOut,
@@ -38,6 +46,11 @@ LABEL = "파레토 · 집중도"
 METHOD = "파레토 · HHI · 지니 · CR v1"
 #: 압축 응답(MCP)에 싣는 줄 수.
 COMPACT_ITEMS = 10
+#: 기대가 이보다 작은 값은 비교에서 「그 밖」 으로 모은다.
+MIN_EXPECTED = 5.0
+#: 수정 잔차가 이것을 넘으면 몫이 달라진 값으로 본다 — 값이 수십이라 2 보다 엄격하게.
+NOTABLE_RESIDUAL = 3.0
+OTHER = "__other__"
 
 
 @dataclass
@@ -102,6 +115,40 @@ def concentration(values: Sequence[float]) -> Concentration | None:
     return Concentration(k, hhi, hhi_norm, 1 / hhi, max(0.0, gini), cr, vital, vital / k)
 
 
+@dataclass
+class Homogeneity:
+    chi2: float
+    df: int
+    p_value: float
+    residuals: list[float]
+    """칸마다 뒤 기간 쪽 수정 잔차 — (관측 - 기대) / √(기대 (1 - 행 몫)(1 - 열 몫))."""
+
+
+def homogeneity(first: Sequence[float], second: Sequence[float]) -> Homogeneity | None:
+    """2 x K 동질성 χ² — 두 기간의 몫이 같은가. 열의 합이 0 인 값은 뺀다."""
+    table = np.asarray([first, second], dtype=np.float64)
+    keep = table.sum(axis=0) > 0
+    table = table[:, keep]
+    total = float(table.sum())
+    if table.shape[1] < 2 or total <= 0 or (table.sum(axis=1) <= 0).any():
+        return None
+    rows = table.sum(axis=1)
+    cols = table.sum(axis=0)
+    expected = np.outer(rows, cols) / total
+    chi2 = float(((table - expected) ** 2 / expected).sum())
+    df = table.shape[1] - 1
+    spread = np.sqrt(expected[1] * (1 - rows[1] / total) * (1 - cols / total))
+    residual = np.where(
+        spread > 0, (table[1] - expected[1]) / np.where(spread > 0, spread, 1), 0
+    )
+    out = [0.0] * len(keep)
+    kept = iter(residual.tolist())
+    for index, flag in enumerate(keep):
+        if flag:
+            out[index] = float(next(kept))
+    return Homogeneity(chi2, df, _numeric.chi2_sf(chi2, df), out)
+
+
 def available(built: spec_module.Built) -> str | None:
     if not built.dims:
         return "기준이 없는 지표입니다 — 파레토는 기준 하나의 값별 몫을 봅니다."
@@ -127,6 +174,8 @@ def run(
     top: int = 30,
     include_empty: bool = False,
     by_period: bool = False,
+    compare_from: date | None = None,
+    compare_to: date | None = None,
     compact: bool = False,
 ) -> ParetoOut:
     reason = available(built)
@@ -204,6 +253,23 @@ def run(
         if by_period and not compact
         else []
     )
+    comparison = None
+    if compare_from is not None or compare_to is not None:
+        comparison = _compare(
+            db,
+            user,
+            metric,
+            built,
+            ask,
+            dim,
+            present,
+            labels,
+            caveats,
+            include_empty,
+            compare_from,
+            compare_to,
+            multi=target.axis.multi,
+        )
     head = common.header(
         db,
         user,
@@ -217,6 +283,8 @@ def run(
             "top": top,
             "include_empty": include_empty,
             "by_period": by_period,
+            "compare_from": compare_from.isoformat() if compare_from else None,
+            "compare_to": compare_to.isoformat() if compare_to else None,
             "compact": compact,
         },
         caveats=caveats,
@@ -235,6 +303,7 @@ def run(
         other_value=other_value,
         concentration=found.out() if found is not None else None,
         trend=trend,
+        comparison=comparison,
     )
 
 
@@ -288,3 +357,109 @@ def _trend(
             )
         )
     return out
+
+
+def _range_label(start: date | None, stop: date | None) -> str:
+    if start is None and stop is None:
+        return "전체"
+    return f"{start.isoformat() if start else '처음'} ~ {stop.isoformat() if stop else '끝'}"
+
+
+def _compare(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    built: spec_module.Built,
+    ask: query.Ask,
+    dim: str,
+    present: list[tuple[query.Cell, float]],
+    labels: dict[str, dict[str, str]],
+    caveats: common.Caveats,
+    include_empty: bool,
+    compare_from: date | None,
+    compare_to: date | None,
+    *,
+    multi: bool,
+) -> ParetoCompareOut | None:
+    """지금 범위(앞)와 비교 범위(뒤)의 몫 — 동질성 χ² 와 값마다 수정 잔차."""
+    if built.time is None:
+        raise common.refuse(22, "시간 칸이 없는 지표라 두 기간을 견줄 수 없습니다.")
+    other = replace(ask, period_from=compare_from, period_to=compare_to)
+    cells, truncated = query.read(db, user, metric, other)
+    if truncated:
+        raise common.refuse(
+            20,
+            "비교 기간의 셀이 읽기 상한에서 잘렸습니다 — 기준 값이나 기간으로 좁혀 다시 "
+            "묻습니다.",
+        )
+    first: dict[str | None, float] = {cell.dims.get(dim): value for cell, value in present}
+    second: dict[str | None, float] = {}
+    for cell in cells:
+        key = cell.dims.get(dim)
+        if key is None and not include_empty:
+            continue
+        second[key] = second.get(key, 0.0) + float(cell.measure(built.spec.measure) or 0)
+    keys = sorted(
+        set(first) | set(second), key=lambda k: -(first.get(k, 0) + second.get(k, 0))
+    )
+    total_a, total_b = sum(first.values()), sum(second.values())
+    if total_a <= 0 or total_b <= 0:
+        caveats.add(
+            "compare_empty",
+            "견줄 두 기간 중 한쪽에 건수가 없습니다.",
+            level="info",
+        )
+        return None
+    grand = total_a + total_b
+    kept: list[str | None] = []
+    pooled_a = pooled_b = 0.0
+    for key in keys:
+        a, b = first.get(key, 0.0), second.get(key, 0.0)
+        smallest = min(total_a, total_b) * (a + b) / grand
+        if smallest >= MIN_EXPECTED:
+            kept.append(key)
+        else:
+            pooled_a += a
+            pooled_b += b
+    columns_a = [first.get(key, 0.0) for key in kept]
+    columns_b = [second.get(key, 0.0) for key in kept]
+    if pooled_a + pooled_b > 0:
+        columns_a.append(pooled_a)
+        columns_b.append(pooled_b)
+    tested = homogeneity(columns_a, columns_b)
+    if tested is None:
+        return None
+    items: list[ParetoCompareItemOut] = []
+    names: list[str | None] = [*kept, OTHER] if pooled_a + pooled_b > 0 else list(kept)
+    for index, key in enumerate(names):
+        a, b = columns_a[index], columns_b[index]
+        items.append(
+            ParetoCompareItemOut(
+                key=key,
+                label="그 밖" if key == OTHER else query.label_of(labels, dim, key),
+                count_a=a,
+                share_a=a / total_a,
+                count_b=b,
+                share_b=b / total_b,
+                residual=tested.residuals[index],
+                notable=abs(tested.residuals[index]) > NOTABLE_RESIDUAL,
+            )
+        )
+    items.sort(key=lambda one: -abs(one.residual))
+    if multi:
+        caveats.add(
+            "overlap_test_approx",
+            "여러 값 기준이라 나온 횟수로 견줍니다 — 한 기록의 값끼리 독립이 아니라 검정은 "
+            "근사입니다.",
+            level="info",
+        )
+    return ParetoCompareOut(
+        label_a=_range_label(ask.period_from, ask.period_to),
+        label_b=_range_label(compare_from, compare_to),
+        total_a=total_a,
+        total_b=total_b,
+        chi2=tested.chi2,
+        df=tested.df,
+        p_value=tested.p_value,
+        items=items,
+    )

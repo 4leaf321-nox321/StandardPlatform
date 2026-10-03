@@ -11,6 +11,7 @@
 import { useState } from 'react'
 
 import type { Metric, ReadOptions } from '@/modules/metrics/api'
+import { AssocView } from '@/modules/metrics/analysis/AssocView'
 import { ChangesView } from '@/modules/metrics/analysis/ChangesView'
 import { ControlView } from '@/modules/metrics/analysis/ControlView'
 import { LifeView } from '@/modules/metrics/analysis/LifeView'
@@ -19,8 +20,8 @@ import { ParetoView } from '@/modules/metrics/analysis/ParetoView'
 import { SprtView } from '@/modules/metrics/analysis/SprtView'
 import { Button } from '@/shared/components/ui/button'
 
-/** 화면에 늘어놓는 차례 — 물음 번호(②③④⑥⑦⑩)대로. */
-const ORDER = ['life', 'control', 'sprt', 'logit', 'pareto', 'changes']
+/** 화면에 늘어놓는 차례 — 물음 번호(②③④⑥⑦⑨⑩)대로. */
+const ORDER = ['life', 'control', 'sprt', 'logit', 'pareto', 'assoc', 'changes']
 
 export interface AnalysisTabProps {
   metric: Metric
@@ -79,6 +80,7 @@ export default function AnalysisTab({ metric, read }: AnalysisTabProps) {
       {recipe === 'changes' && <ChangesView metric={metric} read={read} />}
       {recipe === 'sprt' && <SprtView metric={metric} read={read} />}
       {recipe === 'logit' && <LogitView metric={metric} read={read} />}
+      {recipe === 'assoc' && <AssocView metric={metric} read={read} />}
     </div>
   )
 }

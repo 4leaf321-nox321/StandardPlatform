@@ -1973,12 +1973,14 @@ async def metric_query(
 #: 거절한다 — 「걸렀다고 믿었는데 안 걸린」 답이 제일 나쁘다.
 _RANGES = {"period_from", "period_to", "cohort_from", "cohort_to"}
 _RECIPE_OPTIONS: dict[str, set[str]] = {
-    "pareto": {"dim", "top", "include_empty", "by_period"} | _RANGES,
+    "pareto": {"dim", "top", "include_empty", "by_period", "compare_from", "compare_to"}
+    | _RANGES,
     "life": {"model", "max_age", "basis", "cohort_from", "cohort_to"},
     "control": {"axis", "window", "split", "baseline_to"} | _RANGES,
     "changes": {"axis", "window"} | _RANGES,
     "sprt": {"target", "reference", "reference_via", "dim", "rho", "alpha", "beta"},
     "logit": {"factors", "min_count"} | _RANGES,
+    "assoc": {"rows", "cols", "min_count"} | _RANGES,
 }
 
 
@@ -1997,7 +1999,8 @@ async def metric_analyze(
 
     `recipe` 와 `options`:
     - `pareto` — 몫 · 누적 · ABC · HHI · 유효 개수 · 지니 · CR. `dim`(필수) · `top` ·
-      `include_empty` · `by_period`(기간별 집중도)
+      `include_empty` · `by_period`(기간별 집중도) · `compare_from` · `compare_to`(그 기간과
+      몫을 견준다 — 동질성 χ² 와 값마다 수정 잔차, 「구성비가 바뀌었나」)
     - `life` — 와이블(표준 · 결함) 맞춤과 B1 · B5 · B10. `model`(`auto` · `weibull` ·
       `defective`) · `max_age` · `basis`(`first_visits` 면 시리얼마다 첫 방문만 — 방문 기준이
       있는 지표)
@@ -2010,6 +2013,8 @@ async def metric_analyze(
       `beta`
     - `logit` — 재방문 위험 요인(방문 기준 「재방문」 이 있는 지표). `factors`(필수 — 값이 적은
       기준 이름 넷까지, 목록) · `min_count`
+    - `assoc` — 연관 · 묶음. `rows` · `cols`(필수 — 증상 · 부품처럼 기준 둘) · `min_count`.
+      향상도 · 정확 검정(BH q), 행의 묶음, 대응 분석 지도
     - 범위: `period_from` · `period_to`(앞까지) · `cohort_from` · `cohort_to` — `YYYY-MM-DD`
 
     `filters`: `{기준 이름: 값}` — 지표 읽기와 같다(분모 · 두 모델에 함께 걸린다).
@@ -2024,8 +2029,8 @@ async def metric_analyze(
     - 순차 검정: `continue` 는 「아직 결론 없음」 이지 「문제없음」 이 아니다. `not_worse` 는
       「ρ 배 나쁘지는 않다」 이지 「같다」 가 아니다.
     - 관리도의 신호는 「조사할 곳」 이지 원인이 아니다. 변화점의 `provisional` 은 잠정이다.
-    - 위험 요인의 오즈비는 「함께 나옴」 이지 원인이 아니다. `unstable` 인 값은 오즈비를 말하지
-      않는다.
+    - 위험 요인의 오즈비 · 연관의 향상도는 「함께 나옴」 이지 원인이 아니다. `unstable` 인 값은
+      오즈비를 말하지 않는다. `aliased` 면 요인끼리 겹쳐 오즈비를 가를 수 없다.
     - `method`(방법과 판) · `computed_at`(계산 시각)을 함께 말한다. 근거는 `drill.params` →
       `objects_list` 의 `conditions`(지표 읽기와 같다)."""
     name = (recipe or "").strip().lower()

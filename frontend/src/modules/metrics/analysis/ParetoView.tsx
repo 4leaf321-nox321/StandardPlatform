@@ -17,6 +17,7 @@ import type { ParetoResult } from '@/modules/metrics/analysis/types'
 import { shownNumber } from '@/modules/metrics/metricDrill'
 import { Chart } from '@/shared/charts'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
+import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
 import {
   Select,
@@ -38,14 +39,22 @@ import { useResource } from '@/shared/hooks/useResource'
 export function ParetoView({ metric, read }: { metric: Metric; read: ReadOptions }) {
   const [dim, setDim] = useState(metric.dims[0]?.name ?? '')
   const [byPeriod, setByPeriod] = useState(false)
-  const key = JSON.stringify([dim, byPeriod, read])
+  // 두 기간 비교 — 지금 범위(상세 위의 기간)가 앞, 여기 범위가 뒤.
+  const [compareFrom, setCompareFrom] = useState('')
+  const [compareTo, setCompareTo] = useState('')
+  const key = JSON.stringify([dim, byPeriod, compareFrom, compareTo, read])
   const result = useResource<ParetoResult | null>(
     () =>
       dim
         ? metricsApi.analysis<ParetoResult>(
             metric.slug,
             'pareto',
-            { dim, by_period: byPeriod || undefined },
+            {
+              dim,
+              by_period: byPeriod || undefined,
+              compare_from: compareFrom || undefined,
+              compare_to: compareTo || undefined,
+            },
             read,
           )
         : Promise.resolve(null),
@@ -79,6 +88,28 @@ export function ParetoView({ metric, read }: { metric: Metric; read: ReadOptions
             />
             기간별 집중도 추이
           </label>
+        )}
+        {metric.grain && (
+          <div className="flex gap-2">
+            <div className="space-y-1">
+              <Label htmlFor="pareto-compare-from">견줄 기간 시작</Label>
+              <Input
+                id="pareto-compare-from"
+                type="date"
+                value={compareFrom}
+                onChange={(event) => setCompareFrom(event.target.value)}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="pareto-compare-to">끝(앞까지)</Label>
+              <Input
+                id="pareto-compare-to"
+                type="date"
+                value={compareTo}
+                onChange={(event) => setCompareTo(event.target.value)}
+              />
+            </div>
+          </div>
         )}
       </div>
       {result.error && <ErrorNotice error={result.error} />}
@@ -147,6 +178,39 @@ export function ParetoView({ metric, read }: { metric: Metric; read: ReadOptions
             <p className="text-muted-foreground text-xs">
               그 밖 {shownNumber(data.other_categories)}개 값 — 합 {shownNumber(data.other_value)}
             </p>
+          )}
+          {data.comparison && (
+            <section className="space-y-1" aria-label="두 기간 비교">
+              <h3 className="text-sm font-semibold">
+                {data.comparison.label_a} vs {data.comparison.label_b} — χ²{' '}
+                {shownNumber(data.comparison.chi2, 1)} (자유도 {data.comparison.df}), p ={' '}
+                {shownNumber(data.comparison.p_value, 4)}
+              </h3>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{data.dim_label}</TableHead>
+                    <TableHead className="text-right">앞 몫</TableHead>
+                    <TableHead className="text-right">뒤 몫</TableHead>
+                    <TableHead className="text-right">수정 잔차</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {data.comparison.items.map((one) => (
+                    <TableRow key={one.key ?? '__empty__'}>
+                      <TableCell>{one.label}</TableCell>
+                      <TableCell className="text-right">{percent(one.share_a)}</TableCell>
+                      <TableCell className="text-right">{percent(one.share_b)}</TableCell>
+                      <TableCell className="text-right">{shownNumber(one.residual, 1)}</TableCell>
+                      <TableCell className="text-xs">
+                        {one.notable ? (one.residual > 0 ? '늘었다' : '줄었다') : ''}
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </section>
           )}
           {data.trend.length > 0 && (
             <Table>

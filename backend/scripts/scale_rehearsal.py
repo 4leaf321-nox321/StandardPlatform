@@ -647,6 +647,8 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
         results.extend(_metrics_rehearsal(client, admin, url))
     if not only or "recipes" in (only or ""):
         results.extend(_recipes_rehearsal(client, admin, url))
+    if not only or "visits" in (only or ""):
+        results.extend(_visits_rehearsal(client, admin, url))
 
     print("\n| 영역 | 무엇 | 중앙값 | 비고 |\n| --- | --- | --- | --- |")
     for area, label, took, note in results:
@@ -1056,6 +1058,225 @@ def _recipes_rehearsal(
     return out
 
 
+#: 심는 재방문의 정답 — 기본 확률 0.08, 공장 F2 오즈비 2 · F3 0.5, 증상 S05 ~ S09 1.5.
+_VISIT_TRUTH = {"base": 0.08, "F2": 2.0, "F3": 0.5, "S05+": 1.5}
+
+_VISITS_SQL = (
+    "WITH s AS MATERIALIZED (SELECT g AS serial, 'F' || (1 + g % 4) AS factory, "
+    # 증상은 시리얼을 4 로 나눈 몫에서 — g % 10 이면 g % 4(공장)와 홀짝이 엮여 홀수 증상이
+    # F2 · F4 에서만 나오고, 두 요인이 완전히 겹쳐 오즈비를 가를 수 없다(첫 리허설에서 겪었다).
+    "'S' || lpad(((g / 4) % 10)::text, 2, '0') AS symptom, "
+    "date '2019-01-01' + (g % 1400) AS sold FROM generate_series(1, CAST(:n AS int)) g), "
+    "p AS MATERIALIZED (SELECT s.*, 1 / (1 + exp(-(ln(0.08 / 0.92) "
+    "+ CASE factory WHEN 'F2' THEN ln(2) WHEN 'F3' THEN ln(0.5) ELSE 0 END "
+    "+ CASE WHEN symptom >= 'S05' THEN ln(1.5) ELSE 0 END))) AS prob, "
+    "s.sold + floor(400 * power(-ln(1 - random()), 1 / 1.5))::int AS first, "
+    "random() AS r2, random() AS r3, 1 + floor(random() * 90)::int AS d2, "
+    "1 + floor(random() * 90)::int AS d3 FROM s), "
+    "v AS (SELECT serial, factory, symptom, sold, first AS received, 1 AS k FROM p "
+    "UNION ALL SELECT serial, factory, symptom, sold, first + d2, 2 FROM p WHERE r2 < prob "
+    "UNION ALL SELECT serial, factory, symptom, sold, first + d2 + d3, 3 FROM p "
+    "WHERE r2 < prob AND r3 < prob) "
+    "INSERT INTO objects (id, type_id, key, label, properties, owner_workspace_id, "
+    "created_at, updated_at) "
+    "SELECT gen_random_uuid(), :t, 'V' || serial || '_' || k, 'V' || serial || '_' || k, "
+    "jsonb_build_object('received', to_char(received, 'YYYY-MM-DD'), "
+    "'sold', to_char(sold, 'YYYY-MM-DD'), 'serial', 'VS' || serial, "
+    "'factory', factory, 'symptom', symptom), "
+    "(SELECT id FROM workspaces WHERE slug = 'ws01'), now(), now() "
+    "FROM v WHERE received <= date '2026-09-30'"
+)
+
+
+def _visits_rehearsal(
+    client: Any, admin: dict[str, str], url: str
+) -> list[tuple[str, str, str, str]]:
+    """방문(ADR 0014) — 둘을 잰다. 끝나면 지표와 임시 타입을 지운다.
+
+    1. 200만 건 기록에 방문 기준을 세워 **창 함수의 값**을 잰다. 시리얼(S/N)이 기록마다 달라
+       모두 첫 방문이고 재방문은 없다 — 수는 뻔하고, 재는 것은 시간이다.
+    2. 정답을 아는 재방문을 심은 임시 타입(시리얼 30만, 기록 약 33만)에서 위험 요인의 오즈비를
+       되찾는다. 방문마다 그 뒤 90일 안에 다시 올 확률이 로지스틱(기본 0.08, 공장 F2 x2 · F3
+       x0.5, 증상 S05 ~ S09 x1.5)이라 오즈비가 곧 정답이다.
+    """
+    import uuid
+
+    out: list[tuple[str, str, str, str]] = []
+    tag = uuid.uuid4().hex[:4]
+    kind = f"rh_visit_{tag}"
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("visits", label, f"{took:.2f}초", note))
+        print(f"{took:8.2f}초  {label}  {note}", flush=True)
+
+    def visit_spec(
+        source_date: str, serial: str, more: list[dict[str, str]]
+    ) -> dict[str, Any]:
+        return {
+            "measure": "count",
+            "time": {"address": source_date, "grain": "month"},
+            "visits": {"key": serial, "within_days": 90},
+            "dimensions": [
+                {"name": "visit_no", "address": "visit.number"},
+                {"name": "again", "address": "visit.repeat"},
+                *more,
+            ],
+            "settle_days": 60,
+        }
+
+    def counts(slug: str, dim: str) -> str:
+        got = client.get(f"/api/metrics/{slug}/values", params={"dims": dim}, headers=admin)
+        if got.status_code >= 400:
+            return f"HTTP {got.status_code}"
+        found: dict[str, int] = {}
+        for cell in got.json()["cells"]:
+            key = str(cell["dims"][dim])
+            found[key] = found.get(key, 0) + cell["count"]
+        return " · ".join(f"{key} {value:,}" for key, value in sorted(found.items()))
+
+    made: list[str] = []
+    planted = False
+    try:
+        wide = f"rh_v2m_{tag}"
+        if not _build_metrics(
+            client,
+            admin,
+            [
+                (
+                    wide,
+                    "방문 — 200만 건(시리얼이 기록마다 다름)",
+                    "svc_case",
+                    visit_spec(
+                        "properties.service_date",
+                        "properties.serial_no",
+                        [{"name": "factory", "address": "properties.factory"}],
+                    ),
+                )
+            ],
+            row,
+            made,
+        ):
+            return out
+        row("방문 차례 — 200만 건", 0.0, counts(wide, "visit_no"))
+        row("재방문 — 200만 건", 0.0, counts(wide, "again"))
+
+        imported = client.post(
+            "/api/ontology/import",
+            params={"dry_run": "false"},
+            json={
+                "types": [
+                    {
+                        "slug": kind,
+                        "label": f"재방문 리허설 {tag}",
+                        "usage": "log",
+                        "properties": [
+                            {"key": "received", "label": "접수일", "data_type": "date"},
+                            {"key": "sold", "label": "판매일", "data_type": "date"},
+                            {"key": "serial", "label": "시리얼", "data_type": "text"},
+                            {"key": "factory", "label": "공장", "data_type": "text"},
+                            {"key": "symptom", "label": "증상", "data_type": "text"},
+                        ],
+                    }
+                ]
+            },
+            headers=admin,
+        )
+        if imported.status_code != 200 or not imported.json().get("applied"):
+            row("임시 타입", 0.0, f"못 만듦 {imported.text[:160]}")
+            return out
+        planted = True
+        engine = create_engine(url)
+        started = time.perf_counter()
+        with engine.begin() as connection:
+            type_id = connection.execute(
+                text("SELECT id FROM object_types WHERE slug = :s"), {"s": kind}
+            ).scalar()
+            connection.execute(text("SELECT setseed(0.42)"))
+            inserted = connection.execute(
+                text(_VISITS_SQL), {"n": 300_000, "t": type_id}
+            ).rowcount
+        with engine.connect().execution_options(isolation_level="AUTOCOMMIT") as connection:
+            connection.execute(text("ANALYZE objects"))
+        row("재방문 심기 — 시리얼 30만", time.perf_counter() - started, f"기록 {inserted:,}")
+
+        risk = f"rh_vrisk_{tag}"
+        if not _build_metrics(
+            client,
+            admin,
+            [
+                (
+                    risk,
+                    "방문 — 심은 재방문",
+                    kind,
+                    visit_spec(
+                        "properties.received",
+                        "properties.serial",
+                        [
+                            {"name": "factory", "address": "properties.factory"},
+                            {"name": "symptom", "address": "properties.symptom"},
+                        ],
+                    ),
+                )
+            ],
+            row,
+            made,
+        ):
+            return out
+        row("방문 차례 — 심은 재방문", 0.0, counts(risk, "visit_no"))
+        started = time.perf_counter()
+        got = client.get(
+            f"/api/metrics/{risk}/analysis/logit",
+            params={"factors": "factory,symptom"},
+            headers=admin,
+        )
+        took = time.perf_counter() - started
+        if got.status_code >= 400:
+            row("⑥ 위험 요인", took, f"HTTP {got.status_code} {got.text[:160]}")
+            return out
+        body = got.json()
+        # 레시피의 기준 수준은 기록이 가장 많은 값이다 — 정답과 견주려고 F1 · S00 대비로
+        # 바꾼다.
+        odds: dict[str, float] = {}
+        for factor in body["factors"]:
+            for level in factor["levels"]:
+                if level["odds_ratio"] is not None:
+                    odds[str(level["key"])] = float(level["odds_ratio"])
+
+        def versus(key: str, base: str) -> str:
+            if key not in odds or base not in odds:
+                return "-"
+            return f"{odds[key] / odds[base]:.2f}"
+
+        symptoms = [odds[key] / odds["S00"] for key in odds if key >= "S05" and "S00" in odds]
+        row(
+            "⑥ 위험 요인 — F1 · S00 대비(정답 F2 2 · F3 0.5 · F4 1 · S05~09 1.5)",
+            took,
+            f"F2 {versus('F2', 'F1')} · F3 {versus('F3', 'F1')} · F4 {versus('F4', 'F1')} · "
+            f"S05~09 {min(symptoms, default=0):.2f}~{max(symptoms, default=0):.2f} · "
+            f"AUC {body['auc']:.3f} · 닫힌 기록 {body['records']:,} · "
+            f"열림 {body['excluded'].get('open', 0):,} · "
+            f"주의 {','.join(one['code'] for one in body['caveats'])}",
+        )
+    finally:
+        for slug in reversed(made):
+            client.delete(f"/api/metrics/{slug}", headers=admin)
+        if planted:
+            with create_engine(url).begin() as connection:
+                connection.execute(
+                    text(
+                        "UPDATE objects SET deleted_at = now() WHERE type_id = "
+                        "(SELECT id FROM object_types WHERE slug = :s)"
+                    ),
+                    {"s": kind},
+                )
+            gone = client.delete(
+                f"/api/ontology/types/{kind}", params={"purge_deleted": "true"}, headers=admin
+            )
+            if gone.status_code != 204:
+                row("임시 타입 지우기", 0.0, f"HTTP {gone.status_code} {gone.text[:160]}")
+    return out
+
+
 def _metric_shape(body: dict[str, Any]) -> str:
     """지표 응답 한 마디 — 수와, 숨기지 말아야 할 것(잘림 · 겹침 · 분모 없음)."""
     if "rows" in body and "ages" in body:
@@ -1249,7 +1470,8 @@ def main() -> None:
     parser.add_argument("--timeout", type=int, default=120, help="질의 하나의 상한(초)")
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument(
-        "--only", help="이 영역만 잰다(list · profile · graph · summary · metrics · recipes …)"
+        "--only",
+        help="이 영역만 잰다(list · profile · graph · summary · metrics · recipes · visits …)",
     )
     args = parser.parse_args()
     if args.action == "create":

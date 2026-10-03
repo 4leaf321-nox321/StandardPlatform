@@ -77,6 +77,30 @@ class ParetoTrendOut(BaseModel):
     closed: bool
 
 
+class ParetoCompareItemOut(BaseModel):
+    key: str | None
+    label: str
+    count_a: float
+    share_a: float
+    count_b: float
+    share_b: float
+    residual: float
+    """뒤 기간 쪽 수정 잔차 — 양수면 뒤 기간에 몫이 커졌다."""
+    notable: bool
+    """|잔차| > 3 — 몫이 달라진 값."""
+
+
+class ParetoCompareOut(BaseModel):
+    label_a: str
+    label_b: str
+    total_a: float
+    total_b: float
+    chi2: float
+    df: int
+    p_value: float
+    items: list[ParetoCompareItemOut]
+
+
 class ParetoOut(AnalysisHeader):
     dim: str
     dim_label: str
@@ -90,6 +114,8 @@ class ParetoOut(AnalysisHeader):
     other_value: float
     concentration: ConcentrationOut | None
     trend: list[ParetoTrendOut]
+    comparison: ParetoCompareOut | None = None
+    """두 기간 비교 — `compare_from` · `compare_to` 를 줬을 때."""
 
 
 # --- ② 수명 · B수명 -----------------------------------------------------------------
@@ -425,3 +451,62 @@ class LogitOut(AnalysisHeader):
     auc: float | None
     """예측 확률이 재방문 기록과 아닌 기록을 가르는 정도 — 0.5 면 못 가름."""
     converged: bool | None
+
+
+# --- ⑨ 연관 · 묶음 -------------------------------------------------------------------
+
+
+class AssocLabelOut(BaseModel):
+    key: str
+    label: str
+
+
+class AssocPairOut(BaseModel):
+    row: AssocLabelOut
+    col: AssocLabelOut
+    count: float
+    expected: float
+    """여백만 보고 우연이면 나올 수."""
+    lift: float
+    """향상도 — count / expected."""
+    share: float
+    """행의 값 안에서 이 열의 몫."""
+    p_value: float
+    q_value: float
+    """BH 로 거짓 발견율을 맞춘 p."""
+    drill: DrillOut
+
+
+class AssocClusterOut(BaseModel):
+    members: list[AssocLabelOut]
+    top: list[AssocLabelOut]
+    """그 묶음을 가르는 열 — PPMI 가 큰 것부터."""
+    count: float
+
+
+class AssocPointOut(BaseModel):
+    key: str
+    label: str
+    x: float
+    y: float
+    mass: float
+
+
+class AssocOut(AnalysisHeader):
+    rows: str
+    rows_label: str
+    cols: str
+    cols_label: str
+    basis: Literal["records", "occurrences"]
+    total: float
+    row_values: int
+    col_values: int
+    tested: int
+    """검정한 짝 수(건수가 min_count 이상)."""
+    pairs: list[AssocPairOut]
+    clusters: list[AssocClusterOut]
+    silhouette: float | None
+    map_rows: list[AssocPointOut]
+    map_cols: list[AssocPointOut]
+    map_explained: float | None
+    """대응 분석 첫 두 축이 설명하는 몫."""

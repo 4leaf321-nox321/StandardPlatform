@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-04d
+GUIDE_VERSION: 2026-10-04e
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -832,7 +832,8 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
 | 새 모델이 전작보다 나빠졌나 | `sprt` | 위 + 분모 `on` 에 모델 기준 | `target`(값, 참조면 id) · `reference` 또는 `reference_via` |
 | 관리도 — 튀는 달 · 공장 | `control` | 기간 또는 코호트(출고 K 기간 안) | `axis` · `window` · `split`(분모 짝에 있는 기준) · `baseline_to` |
 | 계절을 빼고 언제 바뀌었나 | `changes` | 기간 또는 코호트 | `axis` · `window` |
-| 몇 값에 몰렸나 | `pareto` | 기준이 있는 건수 · 합계 | `dim` · `top` · `by_period` |
+| 몇 값에 몰렸나 · 구성비가 바뀌었나 | `pareto` | 기준이 있는 건수 · 합계 | `dim` · `top` · `by_period` · `compare_from` · `compare_to`(두 기간 비교) |
+| 어떤 증상과 부품(원인)이 함께 나오나 · 증상 묶음 | `assoc` | 기준 둘(여러 값이어도) | `rows` · `cols` · `min_count` |
 | 어떤 조건에서 다시 들어오나(90일 재인입) | `logit` | 방문 기준 `visit.repeat` + 요인 기준 | `factors`(값이 적은 기준 넷까지) · `min_count` |
 
 옮길 때 규칙:
@@ -851,6 +852,10 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
 - 변화점: `provisional` 은 잠정 — 몇 기간 더 보고 판단한다. 비는 `ratio_ci` 와 함께.
 - 위험 요인: 오즈비는 기준 수준(`reference`) 대비이고 「함께 나옴」 이지 원인이 아니다. `unstable`
   인 값은 오즈비를 말하지 않고, 「그 밖」 은 모은 값이다. `open_excluded` — 창이 안 닫힌 기록은 뺐다.
+  `aliased` 면 요인끼리 겹쳐(어떤 값이 다른 요인의 몇 값에서만 나온다) 오즈비를 못 가른다 — 하나씩 본다.
+- 연관: `pairs` 는 향상도 > 1 이고 BH q < 0.05 인 짝만이다(검정한 수는 `tested`). 향상도는 「a 의 기록에서
+  b 가 나오는 몫이 전체의 몇 배」. 묶음(`clusters`)은 `silhouette` 이 작으면(`weak_clusters`) 참고로만.
+- 두 기간 비교: `comparison.items` 의 `notable`(|수정 잔차| > 3)인 값만 「몫이 달라졌다」 고 말한다.
 - 수명은 방문 기준(`visit.number`)이 있으면 `basis="first_visits"` 로 시리얼마다 첫 방문만 센다 —
   기록 수가 곧 고장 난 대수가 된다(`records_not_units` 주의가 사라진다).
 - 근거는 지표 읽기와 같다 — `drill.params` → `objects_list` 의 `conditions`.

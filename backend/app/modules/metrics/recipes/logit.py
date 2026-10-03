@@ -186,6 +186,8 @@ class Fitted:
     references: list[str | None]
     sizes: list[list[tuple[str | None, int]]]
     groups: list[Group]
+    aliased: bool = False
+    """요인끼리 완전히 겹쳐(어떤 값이 한 요인의 값에서만 나온다) 오즈비를 가를 수 없다."""
 
 
 def design(
@@ -244,7 +246,11 @@ def fit(groups: Sequence[Group], factors: int, min_count: int = MIN_COUNT) -> Fi
     yes = np.asarray([one.yes for one in pooled], dtype=np.float64)
     total = np.asarray([one.yes + one.no for one in pooled], dtype=np.float64)
     x, columns = design(pooled, references)
+    aliased = int(np.linalg.matrix_rank(x)) < x.shape[1]
     beta, covariance, dev, converged = irls(x, yes, total)
+    if aliased:
+        # 계수 하나하나는 정해지지 않는다 — 이탈도 · LR 은 그대로 뜻이 있다.
+        covariance = None
     null_x = np.ones((len(pooled), 1))
     _, _, null_dev, _ = irls(null_x, yes, total)
     lr: list[tuple[float, int, float]] = []
@@ -270,6 +276,7 @@ def fit(groups: Sequence[Group], factors: int, min_count: int = MIN_COUNT) -> Fi
         references,
         sizes,
         pooled,
+        aliased,
     )
 
 
@@ -366,7 +373,13 @@ def run(
     if total_yes > 0 and total_no > 0:
         found = fit(groups, len(factors), min_count)
         out_factors = _factors(found, factors, dims, labels, compact)
-        if any(level.unstable for one in out_factors for level in one.levels):
+        if found.aliased:
+            caveats.add(
+                "aliased",
+                "요인끼리 겹쳐(어떤 값이 다른 요인의 몇 값에서만 나온다) 오즈비를 가를 수 "
+                "없습니다 — 요인을 하나씩 봅니다. 요인별 LR 검정은 그대로 읽습니다.",
+            )
+        elif any(level.unstable for one in out_factors for level in one.levels):
             caveats.add(
                 "separation",
                 "예 · 아니오 중 한쪽이 거의 없는 조합이 있어 일부 오즈비가 불안정합니다 — "

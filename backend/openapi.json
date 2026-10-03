@@ -10159,6 +10159,42 @@
             }
           },
           {
+            "name": "compare_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 기간과 몫을 견준다 — 시작(지금 범위가 앞 기간)",
+              "title": "Compare From"
+            },
+            "description": "이 기간과 몫을 견준다 — 시작(지금 범위가 앞 기간)"
+          },
+          {
+            "name": "compare_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "견줄 기간의 끝(앞까지)",
+              "title": "Compare To"
+            },
+            "description": "견줄 기간의 끝(앞까지)"
+          },
+          {
             "name": "compact",
             "in": "query",
             "required": false,
@@ -10974,6 +11010,163 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/LogitOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/metrics/{slug}/analysis/assoc": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Assoc Analysis",
+        "description": "⑨ 연관 · 묶음 — 기준 둘이 함께 나온 수에서 향상도 · 정확 검정(BH), 행의 묶음(PPMI ·\n평균 연결 · 실루엣), 대응 분석 지도. 거르기는 `d.<기준>=<값>`.",
+        "operationId": "assoc_analysis_api_metrics__slug__analysis_assoc_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "rows",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "행 기준(증상 등)",
+              "title": "Rows"
+            },
+            "description": "행 기준(증상 등)"
+          },
+          {
+            "name": "cols",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "열 기준(교체 부품 · 원인 등) — 여러 값이어도 된다",
+              "title": "Cols"
+            },
+            "description": "열 기준(교체 부품 · 원인 등) — 여러 값이어도 된다"
+          },
+          {
+            "name": "min_count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100000,
+              "minimum": 1,
+              "description": "이보다 적은 짝은 검정하지 않는다",
+              "default": 5,
+              "title": "Min Count"
+            },
+            "description": "이보다 적은 짝은 검정하지 않는다"
+          },
+          {
+            "name": "period_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period From"
+            }
+          },
+          {
+            "name": "period_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 날 **앞까지**",
+              "title": "Period To"
+            },
+            "description": "이 날 **앞까지**"
+          },
+          {
+            "name": "cohort_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort From"
+            }
+          },
+          {
+            "name": "cohort_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort To"
+            }
+          },
+          {
+            "name": "compact",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "짝 15개 · 지도 없이(MCP)",
+              "default": false,
+              "title": "Compact"
+            },
+            "description": "짝 15개 · 지도 없이(MCP)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssocOut"
                 }
               }
             }
@@ -14044,6 +14237,422 @@
         ],
         "title": "AssessmentOut",
         "description": "평가 한 줄 — **축 종류마다 채워진 칸이 다르다**(§정의)."
+      },
+      "AssocClusterOut": {
+        "properties": {
+          "members": {
+            "items": {
+              "$ref": "#/components/schemas/AssocLabelOut"
+            },
+            "type": "array",
+            "title": "Members"
+          },
+          "top": {
+            "items": {
+              "$ref": "#/components/schemas/AssocLabelOut"
+            },
+            "type": "array",
+            "title": "Top"
+          },
+          "count": {
+            "type": "number",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "members",
+          "top",
+          "count"
+        ],
+        "title": "AssocClusterOut"
+      },
+      "AssocLabelOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "AssocLabelOut"
+      },
+      "AssocOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "rows": {
+            "type": "string",
+            "title": "Rows"
+          },
+          "rows_label": {
+            "type": "string",
+            "title": "Rows Label"
+          },
+          "cols": {
+            "type": "string",
+            "title": "Cols"
+          },
+          "cols_label": {
+            "type": "string",
+            "title": "Cols Label"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "records",
+              "occurrences"
+            ],
+            "title": "Basis"
+          },
+          "total": {
+            "type": "number",
+            "title": "Total"
+          },
+          "row_values": {
+            "type": "integer",
+            "title": "Row Values"
+          },
+          "col_values": {
+            "type": "integer",
+            "title": "Col Values"
+          },
+          "tested": {
+            "type": "integer",
+            "title": "Tested"
+          },
+          "pairs": {
+            "items": {
+              "$ref": "#/components/schemas/AssocPairOut"
+            },
+            "type": "array",
+            "title": "Pairs"
+          },
+          "clusters": {
+            "items": {
+              "$ref": "#/components/schemas/AssocClusterOut"
+            },
+            "type": "array",
+            "title": "Clusters"
+          },
+          "silhouette": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Silhouette"
+          },
+          "map_rows": {
+            "items": {
+              "$ref": "#/components/schemas/AssocPointOut"
+            },
+            "type": "array",
+            "title": "Map Rows"
+          },
+          "map_cols": {
+            "items": {
+              "$ref": "#/components/schemas/AssocPointOut"
+            },
+            "type": "array",
+            "title": "Map Cols"
+          },
+          "map_explained": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Map Explained"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "rows",
+          "rows_label",
+          "cols",
+          "cols_label",
+          "basis",
+          "total",
+          "row_values",
+          "col_values",
+          "tested",
+          "pairs",
+          "clusters",
+          "silhouette",
+          "map_rows",
+          "map_cols",
+          "map_explained"
+        ],
+        "title": "AssocOut"
+      },
+      "AssocPairOut": {
+        "properties": {
+          "row": {
+            "$ref": "#/components/schemas/AssocLabelOut"
+          },
+          "col": {
+            "$ref": "#/components/schemas/AssocLabelOut"
+          },
+          "count": {
+            "type": "number",
+            "title": "Count"
+          },
+          "expected": {
+            "type": "number",
+            "title": "Expected"
+          },
+          "lift": {
+            "type": "number",
+            "title": "Lift"
+          },
+          "share": {
+            "type": "number",
+            "title": "Share"
+          },
+          "p_value": {
+            "type": "number",
+            "title": "P Value"
+          },
+          "q_value": {
+            "type": "number",
+            "title": "Q Value"
+          },
+          "drill": {
+            "$ref": "#/components/schemas/DrillOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "row",
+          "col",
+          "count",
+          "expected",
+          "lift",
+          "share",
+          "p_value",
+          "q_value",
+          "drill"
+        ],
+        "title": "AssocPairOut"
+      },
+      "AssocPointOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "x": {
+            "type": "number",
+            "title": "X"
+          },
+          "y": {
+            "type": "number",
+            "title": "Y"
+          },
+          "mass": {
+            "type": "number",
+            "title": "Mass"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "x",
+          "y",
+          "mass"
+        ],
+        "title": "AssocPointOut"
       },
       "AttachmentBrief": {
         "properties": {
@@ -24285,6 +24894,112 @@
         "title": "PairPatchIn",
         "description": "연계에서 고칠 수 있는 것 — **소속 부서뿐이다.**\n\n시험 항목이나 해석을 바꾸는 것은 다른 연계를 뜻한다(§services.move)."
       },
+      "ParetoCompareItemOut": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count_a": {
+            "type": "number",
+            "title": "Count A"
+          },
+          "share_a": {
+            "type": "number",
+            "title": "Share A"
+          },
+          "count_b": {
+            "type": "number",
+            "title": "Count B"
+          },
+          "share_b": {
+            "type": "number",
+            "title": "Share B"
+          },
+          "residual": {
+            "type": "number",
+            "title": "Residual"
+          },
+          "notable": {
+            "type": "boolean",
+            "title": "Notable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "count_a",
+          "share_a",
+          "count_b",
+          "share_b",
+          "residual",
+          "notable"
+        ],
+        "title": "ParetoCompareItemOut"
+      },
+      "ParetoCompareOut": {
+        "properties": {
+          "label_a": {
+            "type": "string",
+            "title": "Label A"
+          },
+          "label_b": {
+            "type": "string",
+            "title": "Label B"
+          },
+          "total_a": {
+            "type": "number",
+            "title": "Total A"
+          },
+          "total_b": {
+            "type": "number",
+            "title": "Total B"
+          },
+          "chi2": {
+            "type": "number",
+            "title": "Chi2"
+          },
+          "df": {
+            "type": "integer",
+            "title": "Df"
+          },
+          "p_value": {
+            "type": "number",
+            "title": "P Value"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ParetoCompareItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label_a",
+          "label_b",
+          "total_a",
+          "total_b",
+          "chi2",
+          "df",
+          "p_value",
+          "items"
+        ],
+        "title": "ParetoCompareOut"
+      },
       "ParetoItemOut": {
         "properties": {
           "key": {
@@ -24566,6 +25281,16 @@
             },
             "type": "array",
             "title": "Trend"
+          },
+          "comparison": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ParetoCompareOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
