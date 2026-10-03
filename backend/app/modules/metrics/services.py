@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.jobs import services as job_services
 from app.modules.jobs.models import Job
-from app.modules.metrics import compute, query, recipes, schemas
+from app.modules.metrics import alerts, compute, query, recipes, schemas
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import MetricDef, MetricRun, MetricValue
 from app.modules.objects.summary import METRIC_LABELS
@@ -303,6 +303,18 @@ def _mark_failed(
     db.commit()
 
 
+def _check_alerts(db: Session, metric_id: uuid.UUID, slug: str) -> dict[str, int]:
+    """계산이 커밋된 뒤 그 지표의 경보(ADR 0016). **경보는 계산을 실패로 만들지 않는다** —
+    경보마다의 실패는 `alerts.check_one` 이 경보에 적고, 여기까지 온 것(DB 가 끊김 등)은
+    로그만."""
+    try:
+        return alerts.after_recompute(db, metric_id)
+    except Exception:
+        db.rollback()
+        log.exception("경보 확인 실패: %s", slug)
+        return {"alerts": 0, "new": 0}
+
+
 def run_recompute(
     db: Session,
     slugs: list[str],
@@ -342,14 +354,17 @@ def run_recompute(
             failed.append(f"{slug}: {message}")
             runs.append({"slug": slug, "status": "failed", "error": message})
             continue
+        seconds = round(perf_counter() - started, 3)
+        progress("경보", index, len(slugs))
         runs.append(
             {
                 "slug": slug,
                 "status": "ok",
                 "rows": run.rows,
                 "cells": run.cells,
-                "seconds": round(perf_counter() - started, 3),
+                "seconds": seconds,
                 "error": None,
+                "alerts": _check_alerts(db, metric.id, slug),
             }
         )
     if failed:

@@ -11184,6 +11184,395 @@
         }
       }
     },
+    "/api/metrics/alerts/events": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "My Events",
+        "description": "내 경보들의 최근 발생 — 새것부터. 「요즘 무엇이 울렸나」.",
+        "operationId": "my_events_api_metrics_alerts_events_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "baseline",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "처음 확인에서 본 것(알리지 않은 것)도",
+              "default": false,
+              "title": "Baseline"
+            },
+            "description": "처음 확인에서 본 것(알리지 않은 것)도"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AlertEventOut"
+                  },
+                  "title": "Response My Events Api Metrics Alerts Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/metrics/{slug}/alerts": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "List Alerts",
+        "description": "이 지표에 건 내 경보.",
+        "operationId": "list_alerts_api_metrics__slug__alerts_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AlertOut"
+                  },
+                  "title": "Response List Alerts Api Metrics  Slug  Alerts Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Create Alert",
+        "description": "경보 하나 — 한 번 돌려 지금 있는 결론을 「처음부터 있던 것」 으로 적고 돌려준다(알리지\n않는다). 다음 계산부터 처음 보는 결론이 알림이 된다.",
+        "operationId": "create_alert_api_metrics__slug__alerts_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertSavedOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/metrics/{slug}/alerts/{alert_id}": {
+      "patch": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Update Alert",
+        "description": "이름 · 켜고 끄기만. **인자는 못 바꾼다** — 바꾸면 지난 발생이 다른 물음의 것이 된다.\n인자를 바꾸려면 분석 탭에서 그 인자로 열어 새로 저장한다.",
+        "operationId": "update_alert_api_metrics__slug__alerts__alert_id__patch",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "alert_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Alert Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AlertPatch"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Delete Alert",
+        "description": "경보와 그 발생 기록을 함께 지운다.",
+        "operationId": "delete_alert_api_metrics__slug__alerts__alert_id__delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "alert_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Alert Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/metrics/{slug}/alerts/{alert_id}/check": {
+      "post": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Check Alert",
+        "description": "지금 확인 — **적지도 알리지도 않는다.** 지금 셀에서 보이는 결론과, 그중 이 경보가 아직\n안 본 것(`new` — 다음 계산 뒤 알림이 될 것).",
+        "operationId": "check_alert_api_metrics__slug__alerts__alert_id__check_post",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "alert_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Alert Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AlertCheckOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/metrics/{slug}/alerts/{alert_id}/events": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Alert Events",
+        "description": "이 경보의 발생 — 새것부터, 처음부터 있던 것도 함께(표시가 붙는다).",
+        "operationId": "alert_events_api_metrics__slug__alerts__alert_id__events_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "alert_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Alert Id"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AlertEventOut"
+                  },
+                  "title": "Response Alert Events Api Metrics  Slug  Alerts  Alert Id  Events Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/bundles/import": {
       "post": {
         "tags": [
@@ -13892,6 +14281,437 @@
         ],
         "title": "AccountWorkspaceOut",
         "description": "소속 한 줄 — **이름과 경로를 함께 준다.**\n\nslug 만 주면 화면은 「hq」 라고 쓰게 된다. 그것은 주소지 부서 이름이 아니고,\n사람은 자기 부서를 「본사」 로 안다."
+      },
+      "AlertCheckOut": {
+        "properties": {
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "findings": {
+            "items": {
+              "$ref": "#/components/schemas/AlertFindingOut"
+            },
+            "type": "array",
+            "title": "Findings"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "run_id",
+          "findings",
+          "notes"
+        ],
+        "title": "AlertCheckOut",
+        "description": "지금 확인 — 알리지도 적지도 않는다. 만들 때는 이것이 「처음부터 있던 것」 이 된다."
+      },
+      "AlertEventOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "alert_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Alert Id"
+          },
+          "alert_name": {
+            "type": "string",
+            "title": "Alert Name"
+          },
+          "metric": {
+            "type": "string",
+            "title": "Metric"
+          },
+          "metric_label": {
+            "type": "string",
+            "title": "Metric Label"
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail"
+          },
+          "baseline": {
+            "type": "boolean",
+            "title": "Baseline"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "link": {
+            "type": "string",
+            "title": "Link"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "alert_id",
+          "alert_name",
+          "metric",
+          "metric_label",
+          "recipe",
+          "key",
+          "title",
+          "detail",
+          "baseline",
+          "run_id",
+          "created_at",
+          "link"
+        ],
+        "title": "AlertEventOut"
+      },
+      "AlertFindingOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail"
+          },
+          "new": {
+            "type": "boolean",
+            "title": "New"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "title",
+          "detail",
+          "new"
+        ],
+        "title": "AlertFindingOut"
+      },
+      "AlertIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 120,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe",
+            "description": "sprt · control · changes"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Params",
+            "description": "분석 경로의 쿼리 그대로 — 거르기는 `d.<기준>`, 경보만의 것은 `recent` · `launched_within` · `notify_not_worse`"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "recipe"
+        ],
+        "title": "AlertIn"
+      },
+      "AlertOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "metric": {
+            "type": "string",
+            "title": "Metric"
+          },
+          "metric_label": {
+            "type": "string",
+            "title": "Metric Label"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "recipe_label": {
+            "type": "string",
+            "title": "Recipe Label"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Params"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "last_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "events": {
+            "type": "integer",
+            "title": "Events"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "link": {
+            "type": "string",
+            "title": "Link"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "metric",
+          "metric_label",
+          "name",
+          "recipe",
+          "recipe_label",
+          "params",
+          "is_active",
+          "last_checked_at",
+          "last_status",
+          "last_error",
+          "events",
+          "created_at",
+          "link"
+        ],
+        "title": "AlertOut"
+      },
+      "AlertPatch": {
+        "properties": {
+          "name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 120,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Name"
+          },
+          "is_active": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Is Active"
+          }
+        },
+        "type": "object",
+        "title": "AlertPatch"
+      },
+      "AlertSavedOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "metric": {
+            "type": "string",
+            "title": "Metric"
+          },
+          "metric_label": {
+            "type": "string",
+            "title": "Metric Label"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "recipe_label": {
+            "type": "string",
+            "title": "Recipe Label"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Params"
+          },
+          "is_active": {
+            "type": "boolean",
+            "title": "Is Active"
+          },
+          "last_checked_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Checked At"
+          },
+          "last_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Status"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "events": {
+            "type": "integer",
+            "title": "Events"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "link": {
+            "type": "string",
+            "title": "Link"
+          },
+          "baseline": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AlertCheckOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "metric",
+          "metric_label",
+          "name",
+          "recipe",
+          "recipe_label",
+          "params",
+          "is_active",
+          "last_checked_at",
+          "last_status",
+          "last_error",
+          "events",
+          "created_at",
+          "link"
+        ],
+        "title": "AlertSavedOut"
       },
       "AliasReviewOut": {
         "properties": {

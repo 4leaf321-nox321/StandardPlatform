@@ -36,6 +36,12 @@ JOB_FAILED = "job.failed"
 """내가 시킨 작업이 실패했다. 같은 이유로 짧게 끝난 것은 안 알린다 — 그 오류는 화면에 떴다."""
 WEBHOOK_FAILED = "webhook.failed"
 """보내기를 세 번 다 실패해 포기했다. 받는 쪽이 조용히 못 받고 있는 상태다."""
+METRIC_ALERT = "metric.alert"
+"""내 경보에 새 결과가 나왔다(ADR 0016). **처음 보는 결론만** — 순차 검정의 「나쁨」 은 한 번
+서면 계속 서 있어서, 그것을 계산마다 알리면 같은 알림이 날마다 온다."""
+METRIC_ALERT_FAILED = "metric.alert.failed"
+"""내 경보를 돌리지 못했다(지표 정의가 바뀌어 기준이 사라졌다 등). 처음 한 번만 — 다시 되면
+조용히 돌아온다."""
 
 
 def notify(

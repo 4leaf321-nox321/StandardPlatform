@@ -262,3 +262,77 @@ class DimValuesOut(BaseModel):
     kind: str
     values: list[DimValueOut]
     truncated: bool
+
+
+# --- 경보(ADR 0016) ---------------------------------------------------------------------
+
+
+class AlertIn(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    recipe: str = Field(description="sprt · control · changes")
+    params: dict[str, str] = Field(
+        default_factory=dict,
+        description="분석 경로의 쿼리 그대로 — 거르기는 `d.<기준>`, 경보만의 것은 `recent` · "
+        "`launched_within` · `notify_not_worse`",
+    )
+
+
+class AlertPatch(BaseModel):
+    name: str | None = Field(default=None, min_length=1, max_length=120)
+    is_active: bool | None = None
+
+
+class AlertFindingOut(BaseModel):
+    key: str
+    title: str
+    detail: dict[str, Any]
+    new: bool
+    """이 경보가 아직 안 본 것 — 다음 계산에서 알림이 된다."""
+
+
+class AlertCheckOut(BaseModel):
+    """지금 확인 — 알리지도 적지도 않는다. 만들 때는 이것이 「처음부터 있던 것」 이 된다."""
+
+    run_id: uuid.UUID | None
+    findings: list[AlertFindingOut]
+    notes: list[str]
+    """건너뛴 것 · 보정 — 「전작을 못 찾은 모델 2개」, 「α 를 모델 12개로 나눴습니다」."""
+
+
+class AlertOut(BaseModel):
+    id: uuid.UUID
+    metric: str
+    metric_label: str
+    name: str
+    recipe: str
+    recipe_label: str
+    params: dict[str, str]
+    is_active: bool
+    last_checked_at: datetime | None
+    last_status: str | None
+    last_error: str | None
+    events: int
+    created_at: datetime
+    link: str
+    """분석 탭을 이 인자로 연다 — 알림의 링크와 같다."""
+
+
+class AlertSavedOut(AlertOut):
+    baseline: AlertCheckOut | None = None
+    """만들 때만 — 처음 확인에서 본 것(알리지 않았다)."""
+
+
+class AlertEventOut(BaseModel):
+    id: uuid.UUID
+    alert_id: uuid.UUID
+    alert_name: str
+    metric: str
+    metric_label: str
+    recipe: str
+    key: str
+    title: str
+    detail: dict[str, Any]
+    baseline: bool
+    run_id: uuid.UUID | None
+    created_at: datetime
+    link: str

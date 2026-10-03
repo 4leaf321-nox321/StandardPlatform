@@ -44,6 +44,7 @@ from sqlalchemy import (
     Integer,
     String,
     Text,
+    UniqueConstraint,
     func,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -187,3 +188,87 @@ class MetricValue(Base):
     sum: Mapped[float | None] = mapped_column(Float, nullable=True)
     min: Mapped[float | None] = mapped_column(Float, nullable=True)
     max: Mapped[float | None] = mapped_column(Float, nullable=True)
+
+
+#: 경보가 부르는 분석(ADR 0016) — 「새로 나온 것」 의 뜻이 서는 셋.
+ALERT_RECIPES = ("sprt", "control", "changes")
+
+
+class MetricAlert(Base):
+    """경보 — 지표 하나 · 분석 하나 · 그 인자 · 주인(ADR 0016).
+
+    계산이 끝날 때마다 **주인의 눈으로** 다시 돌려, 처음 보는 결론만 주인에게 알린다.
+    주인에게만 가는 이유: 셀은 보이는 부서 것만 더해지므로, 다른 사람에게 보내면 그 사람이 못
+    보는 부서의 수가 새고 알림을 눌러 열면 다른 수가 보인다.
+    """
+
+    __tablename__ = "metric_alerts"
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    metric_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("metric_defs.id", ondelete="CASCADE"), index=True
+    )
+    owner_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
+    )
+    name: Mapped[str] = mapped_column(String(120))
+    recipe: Mapped[str] = mapped_column(String(20))
+    """`ALERT_RECIPES` 중 하나."""
+    params: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """분석 경로의 쿼리 그대로 — {이름: 글자}, 거르기는 `d.<기준>`. 화면의 분석 탭에서 본 것을
+    그대로 저장하고, 알림의 링크도 이것으로 같은 화면을 다시 연다."""
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+
+    last_checked_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """NULL 이면 아직 한 번도 안 봤다 — 처음 본 것은 「처음부터 있던 것」 으로 적고 알리지
+    않는다."""
+    last_run_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    """마지막으로 본 지표 실행. 외래키를 걸지 않는다 — `current_run_id` 와 같은 이유."""
+    last_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
+    """`ok` · `failed`. 실패는 처음 한 번만 알린다(같은 실패를 밤마다 알리면 종이 잡음이
+    된다)."""
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now(), nullable=False
+    )
+
+
+class MetricAlertEvent(Base):
+    """발생 — 경보가 처음 본 결론 하나. **(경보, 열쇠)가 유일**해서 같은 결론은 다시 적지도
+    알리지도 않는다. 순차 검정의 「나쁨」 은 누적이라 한 번 서면 계속 서 있다 — 열쇠가 없으면
+    날마다 같은 알림이 온다."""
+
+    __tablename__ = "metric_alert_events"
+    __table_args__ = (
+        UniqueConstraint("alert_id", "key", name="uq_metric_alert_events_key"),
+        Index("ix_metric_alert_events_alert_created", "alert_id", "created_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    alert_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("metric_alerts.id", ondelete="CASCADE")
+    )
+    run_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    """이 결론을 처음 본 지표 실행."""
+    key: Mapped[str] = mapped_column(String(300))
+    """`worse:<모델>` · `<차트>:<부분군>:<규칙>` · `<up|down>:<변화점>` — `alerts.py` 가
+    짓는다."""
+    title: Mapped[str] = mapped_column(String(300))
+    """한 줄 — 알림 본문과 화면의 발생 목록이 그대로 쓴다."""
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """수 몇 개(관측 · 기대 · 비) — 화면이 다시 계산하지 않고 그린다."""
+    baseline: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    """처음 확인에서 본 것 — 알리지 않았다."""
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )

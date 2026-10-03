@@ -10,7 +10,7 @@ from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs.schemas import JobOut
-from app.modules.metrics import compute, params, query, services
+from app.modules.metrics import alert_routes, compute, params, query, services
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import MetricDef, MetricRun
 from app.modules.metrics.recipes import routes as recipes_routes
@@ -234,3 +234,4 @@ def metric_dim_values(
 
 # 분석(ADR 0014) — `/metrics/{slug}/analysis/<레시피>`. 지표 모듈 안의 하위 경로다.
 router.include_router(recipes_routes.router)
+router.include_router(alert_routes.router)
