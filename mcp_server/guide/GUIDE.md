@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-03g
+GUIDE_VERSION: 2026-10-03h
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -421,6 +421,8 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 - 셸이 없는 클라이언트(예: Claude Desktop)는 **올리지 못한다** — 사람에게 화면의 그 칸에서
   올려 달라고 한다. 다른 길(base64 · 파일 내용을 글로)을 찾지 않는다.
 - Windows PowerShell 에서는 `curl` 이 다른 명령이다 — `curl.exe` 로 부른다.
+- curl 이 인증서 오류(`SSL certificate problem`)를 내면 **`-k` 로 넘기지 않는다** — 셸이 회사
+  인증서를 모르는 것이다. 그 말을 사람에게 전한다(화면에서 업로드하거나 인증서를 설치한다).
 - 붙이고 뗀 일은 객체의 이력에 남는다(`object.attachment.add` · `.remove`). 잘못 붙였으면
   사람이 확인한 뒤 `attachment_remove(attachment_id)`.
 

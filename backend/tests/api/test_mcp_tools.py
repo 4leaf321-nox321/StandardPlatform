@@ -1277,3 +1277,56 @@ def test_업로드_주소는_들어온_주소를_따른다() -> None:
     assert origin({"host": "10.0.0.5:8042"}) == "http://10.0.0.5:8040"
     assert origin({"host": "10.0.0.5:9000"}) == "http://10.0.0.5:9000"
     assert origin({}) is None
+
+
+def test_RA_처럼_MCP_직접_주소를_적어도_업로드는_앱_포트로_간다(
+    client: TestClient, admin: Signed, bot: Bot, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`.env` 의 MCP_PUBLIC_URL 에 MCP 직접 주소(`http://<IP>:<앱+2>/mcp`)를 적으면 —
+    ReportArchive 가 그렇게 쓴다 — 0.4.29 는 그 주소에서 `/mcp` 만 떼어 업로드를 **MCP
+    포트**로 보냈다(404). 그 값이면 백엔드는 완전한 주소를 만들지 않고, MCP 가 들어온
+    주소(앱 포트)로 만든다. 앱은 접두어가 붙어 오든 벗겨 오든 받는다(PrefixMiddleware)."""
+    import shlex
+
+    from app.config import get_settings
+    from tests.api.test_attachment_images import _world
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "public_path", "/sp")
+    monkeypatch.setattr(settings, "mcp_public_url", f"http://10.0.0.5:{settings.port + 2}/mcp")
+    w = _world(client, admin)
+    token = bot.ctx.request_context.request.headers["authorization"]
+    direct = SimpleNamespace(
+        request_context=SimpleNamespace(
+            request=SimpleNamespace(
+                headers={"authorization": token, "host": f"10.0.0.5:{settings.port + 2}"}
+            )
+        )
+    )
+    monkeypatch.setenv("MCP_PORT", str(settings.port + 2))
+    got = asyncio.run(
+        server.attachment_upload_prepare(
+            direct, w["type"], w["id"], "/tmp/a.png", field="photo"
+        )
+    )
+    assert "error" not in got, got
+    url = shlex.split(got["curl"])[-1].split("?")[0]
+    assert url == f"http://10.0.0.5:{settings.port}/sp/api/attachments/upload"
+
+
+def test_표준이_아닌_포트의_프록시_뒤는_MCP_공개_주소로_만든다(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """그 포트(8443)는 프록시가 넘기는 `Host` 에 없다 — 그래서 MCP_PUBLIC_URL 이 있는
+    자리다."""
+    from app.config import get_settings
+    from app.modules.files import services as file_services
+
+    settings = get_settings()
+    monkeypatch.setattr(settings, "public_path", "/sp")
+    monkeypatch.setattr(settings, "mcp_public_url", "https://hwax.example.com:8443/sp/mcp")
+    assert file_services._public_upload_url("/sp/api/attachments/upload") == (
+        "https://hwax.example.com:8443/sp/api/attachments/upload"
+    )
+    monkeypatch.setattr(settings, "mcp_public_url", "")
+    assert file_services._public_upload_url("/sp/api/attachments/upload") is None

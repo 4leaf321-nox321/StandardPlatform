@@ -13,6 +13,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import BinaryIO
+from urllib.parse import urlsplit
 
 from sqlalchemy import Select, func, select, update
 from sqlalchemy.orm import Session
@@ -362,12 +363,19 @@ def _ticket_hash(ticket: str) -> str:
 
 def _public_upload_url(path: str) -> str | None:
     """바깥 주소를 설정으로 아는 설치면 완전한 주소 — `MCP_PUBLIC_URL` 이
-    `<앱 주소>/mcp` 다."""
-    configured = get_settings().mcp_public_url.strip().rstrip("/")
+    `<앱 주소>/mcp` 다(표준이 아닌 포트의 프록시 뒤).
+
+    MCP 포트를 바로 적은 값(`http://<IP>:<앱+2>/mcp` — ReportArchive 가 그렇게 쓴다)이면 그
+    주소에서 `/mcp` 를 떼도 앱이 아니라 MCP 포트다. 그때는 만들지 않는다 — MCP 서버가 들어온
+    주소로 만든다(앱 포트)."""
+    settings = get_settings()
+    configured = settings.mcp_public_url.strip().rstrip("/")
     if not configured.endswith("/mcp"):
         return None
+    if urlsplit(configured).port == settings.port + 2:
+        return None
     base = configured[: -len("/mcp")]
-    prefix = get_settings().base_path
+    prefix = settings.base_path
     if prefix and base.endswith(prefix):
         base = base[: -len(prefix)]
     return f"{base}{path}"
