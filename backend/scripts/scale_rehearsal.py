@@ -804,7 +804,8 @@ def _metrics_rehearsal(
         row(
             "계획만 — ⑦ 기본 모델 x 부품 x 월(상한 확인)",
             time.perf_counter() - started,
-            f"ok={plan.get('ok')} cells~{plan.get('estimated_cells')} {plan.get('errors') or ''}",
+            f"ok={plan.get('ok')} cells~{plan.get('estimated_cells')} "
+            f"{plan.get('errors') or ''}",
         )
 
         with create_engine(url).connect() as connection:
