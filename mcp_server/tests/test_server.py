@@ -528,7 +528,9 @@ def test_기동_블록_뒤에_도구가_없다() -> None:
     `list_tools` 로는 못 잡는다 — 그래서 **소스의 순서**를 본다."""
     source = (Path(server.__file__)).read_text(encoding="utf-8")
     boot = source.index('if __name__ == "__main__":')
-    assert "@tool()" not in source[boot:], "기동 블록 뒤에 도구가 있습니다 — 블록을 파일 끝으로"
+    assert "@tool()" not in source[boot:], (
+        "기동 블록 뒤에 도구가 있습니다 — 블록을 파일 끝으로"
+    )
 
 
 def test_통계의_기간_단위와_시간순이_그대로_건너간다() -> None:
@@ -537,7 +539,11 @@ def test_통계의_기간_단위와_시간순이_그대로_건너간다() -> Non
     seen = _serve(lambda _r: httpx.Response(200, json={"buckets": []}))
     asyncio.run(
         server.objects_summary(
-            _ctx("Bearer abc"), "svc_case", group_by="properties.made", grain="month", order="key"
+            _ctx("Bearer abc"),
+            "svc_case",
+            group_by="properties.made",
+            grain="month",
+            order="key",
         )
     )
     params = seen[0].url.params
