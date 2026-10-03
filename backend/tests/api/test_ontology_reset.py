@@ -29,6 +29,41 @@ def _seed(client: TestClient, admin: Signed) -> None:
     assert _link(client, admin, part, bolt["id"], kind, acme["id"]).status_code == 201
 
 
+def test_지표_정의가_있어도_비워진다(client: TestClient, admin: Signed) -> None:
+    """지표 정의는 **타입을 가리킨다**(`source_type_id`, RESTRICT) — 비우기가 그 표를 안
+    지우면 날 FK 문구로 막힌다.
+
+    실측으로 그렇게 막혔다(CI). 지표를 하나라도 정의한 설치에서는 「비우기」 가 아예 안 됐고,
+    오류 문구는 `fk_metric_defs_source_type_id_object_types` 였다 — 사람이 읽고 할 일을 알 수
+    없는 말이다. 순서에 기대는 시험(지표 시험 뒤에 도는 것)으로는 이 자리가 비면 조용히
+    지나가므로, **여기서 직접 정의하고 비운다.**
+    """
+    part = _make_type(client, admin, label="부품")
+    _make_object(client, admin, part, label="볼트", properties={})
+    made = client.post(
+        "/api/metrics",
+        params={"recompute": "false"},
+        json={
+            "slug": "reset_m",
+            "label": "부품 수",
+            "source_type_slug": part,
+            "spec": {"measure": "count"},
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+
+    # 계획이 **먼저 센다** — 안 세면 화면에는 안 보이고 적용만 막힌다.
+    planned = _reset(client, admin).json()
+    counts = {one["table"]: one["count"] for one in planned["items"]}
+    assert counts.get("metric_defs", 0) >= 1, planned["items"]
+
+    applied = _reset(client, admin, confirm=CONFIRM_PHRASE, apply=True)
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["applied"] is True
+    assert client.get("/api/metrics", headers=admin.headers).json() == []
+
+
 def test_계획이_먼저고_아무것도_안_지운다(client: TestClient, admin: Signed) -> None:
     """「정말 삭제하시겠습니까」 만 묻는 창은 아무도 안 읽고 예를 누른다 — 읽을 것이
     없어서다."""

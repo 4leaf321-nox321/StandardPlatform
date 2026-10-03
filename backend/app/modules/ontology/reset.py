@@ -39,6 +39,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.datasources.models import DataSource
 from app.modules.files.models import Attachment
+from app.modules.metrics.models import MetricDef, MetricRun, MetricValue
 from app.modules.objects.models import (
     ObjectAlias,
     ObjectInstance,
@@ -105,6 +106,9 @@ def plan(db: Session) -> ResetPlan:
             ResetItem("object_years", "연도 배정", _count(db, ObjectYear)),
             ResetItem("saved_views", "저장된 뷰", _count(db, SavedView)),
             ResetItem("data_sources", "데이터 소스", _count(db, DataSource)),
+            # 지표 정의는 **타입을 가리킨다**(`source_type_id`, RESTRICT) — 세지 않으면
+            # 계획에는 안 보이고 적용만 FK 로 막힌다.
+            ResetItem("metric_defs", "지표 정의", _count(db, MetricDef)),
             ResetItem(
                 "attachments",
                 "객체에 붙은 첨부",
@@ -131,6 +135,11 @@ def apply(db: Session, *, confirm: str) -> ResetPlan:
     try:
         db.execute(delete(Attachment).where(Attachment.owner_table == "objects"))
         db.execute(delete(DataSource))
+        # 지표 — 값 · 실행 · 정의 차례로. 정의가 타입을 RESTRICT 로 잡고 있어서, 안 지우면
+        # 「비우기」 가 날 FK 문구로 막힌다(값 · 실행은 CASCADE 지만 계획과 맞추려고 명시한다).
+        db.execute(delete(MetricValue))
+        db.execute(delete(MetricRun))
+        db.execute(delete(MetricDef))
         db.execute(delete(SavedView))
         db.execute(delete(ObjectYear))
         db.execute(delete(ObjectAlias))
