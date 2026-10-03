@@ -10025,6 +10025,176 @@
         }
       }
     },
+    "/api/metrics/{slug}/analysis/pareto": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Pareto Analysis",
+        "description": "⑦ 파레토 · 집중도 — 기준 하나의 값별 몫 · 누적 · ABC, HHI · 유효 개수 · 지니 · CR.\n거르기는 `d.<기준>=<값>`.",
+        "operationId": "pareto_analysis_api_metrics__slug__analysis_pareto_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "dim",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "몫을 볼 기준 이름",
+              "title": "Dim"
+            },
+            "description": "몫을 볼 기준 이름"
+          },
+          {
+            "name": "top",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "description": "줄로 보일 값 수 — 나머지는 「그 밖」",
+              "default": 30,
+              "title": "Top"
+            },
+            "description": "줄로 보일 값 수 — 나머지는 「그 밖」"
+          },
+          {
+            "name": "include_empty",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "값이 빈 기록을 몫에 넣을지",
+              "default": false,
+              "title": "Include Empty"
+            },
+            "description": "값이 빈 기록을 몫에 넣을지"
+          },
+          {
+            "name": "by_period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "기간마다의 집중도 추이",
+              "default": false,
+              "title": "By Period"
+            },
+            "description": "기간마다의 집중도 추이"
+          },
+          {
+            "name": "period_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period From"
+            }
+          },
+          {
+            "name": "period_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 날 **앞까지**",
+              "title": "Period To"
+            },
+            "description": "이 날 **앞까지**"
+          },
+          {
+            "name": "cohort_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort From"
+            }
+          },
+          {
+            "name": "cohort_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort To"
+            }
+          },
+          {
+            "name": "compact",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "줄을 10개로 줄이고 추이를 뺀다(MCP)",
+              "default": false,
+              "title": "Compact"
+            },
+            "description": "줄을 10개로 줄이고 추이를 뺀다(MCP)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ParetoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/bundles/import": {
       "post": {
         "tags": [
@@ -12885,6 +13055,41 @@
         "title": "AliasesRequest",
         "description": "사람이 붙인 별칭을 통째로 — 빈 목록이면 전부 지운다."
       },
+      "AnalysisAvailOut": {
+        "properties": {
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "ok": {
+            "type": "boolean",
+            "title": "Ok"
+          },
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "recipe",
+          "label",
+          "ok"
+        ],
+        "title": "AnalysisAvailOut",
+        "description": "이 지표에 되는 분석(ADR 0014) — 안 되면 그 이유 한 줄. 화면이 고르개를 끄고 말로\n보인다."
+      },
       "ApproveRequest": {
         "properties": {
           "workspace_slug": {
@@ -14382,6 +14587,45 @@
         ],
         "title": "CatalogOut"
       },
+      "CaveatOut": {
+        "properties": {
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "info",
+              "warn"
+            ],
+            "title": "Level"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "count": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "code",
+          "level",
+          "message"
+        ],
+        "title": "CaveatOut",
+        "description": "결과와 함께 **그대로 전해야 하는 말** — 코드는 기계가, 말은 사람이 읽는다."
+      },
       "CellOut": {
         "properties": {
           "dims": {
@@ -14878,6 +15122,69 @@
           "cells"
         ],
         "title": "CohortRowOut"
+      },
+      "ConcentrationOut": {
+        "properties": {
+          "categories": {
+            "type": "integer",
+            "title": "Categories"
+          },
+          "hhi": {
+            "type": "number",
+            "title": "Hhi"
+          },
+          "hhi_norm": {
+            "type": "number",
+            "title": "Hhi Norm"
+          },
+          "effective": {
+            "type": "number",
+            "title": "Effective"
+          },
+          "gini": {
+            "type": "number",
+            "title": "Gini"
+          },
+          "cr1": {
+            "type": "number",
+            "title": "Cr1"
+          },
+          "cr3": {
+            "type": "number",
+            "title": "Cr3"
+          },
+          "cr5": {
+            "type": "number",
+            "title": "Cr5"
+          },
+          "cr10": {
+            "type": "number",
+            "title": "Cr10"
+          },
+          "vital_few": {
+            "type": "integer",
+            "title": "Vital Few"
+          },
+          "vital_share": {
+            "type": "number",
+            "title": "Vital Share"
+          }
+        },
+        "type": "object",
+        "required": [
+          "categories",
+          "hhi",
+          "hhi_norm",
+          "effective",
+          "gini",
+          "cr1",
+          "cr3",
+          "cr5",
+          "cr10",
+          "vital_few",
+          "vital_share"
+        ],
+        "title": "ConcentrationOut"
       },
       "ConditionOut": {
         "properties": {
@@ -18548,6 +18855,13 @@
             ],
             "title": "Broken"
           },
+          "analyses": {
+            "items": {
+              "$ref": "#/components/schemas/AnalysisAvailOut"
+            },
+            "type": "array",
+            "title": "Analyses"
+          },
           "current_run_id": {
             "anyOf": [
               {
@@ -21208,6 +21522,376 @@
         ],
         "title": "PairPatchIn",
         "description": "연계에서 고칠 수 있는 것 — **소속 부서뿐이다.**\n\n시험 항목이나 해석을 바꾸는 것은 다른 연계를 뜻한다(§services.move)."
+      },
+      "ParetoItemOut": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "value": {
+            "type": "number",
+            "title": "Value"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "share": {
+            "type": "number",
+            "title": "Share"
+          },
+          "cumulative": {
+            "type": "number",
+            "title": "Cumulative"
+          },
+          "cls": {
+            "type": "string",
+            "enum": [
+              "A",
+              "B",
+              "C"
+            ],
+            "title": "Cls"
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio"
+          },
+          "drill": {
+            "$ref": "#/components/schemas/DrillOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "value",
+          "count",
+          "share",
+          "cumulative",
+          "cls",
+          "drill"
+        ],
+        "title": "ParetoItemOut"
+      },
+      "ParetoOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "dim": {
+            "type": "string",
+            "title": "Dim"
+          },
+          "dim_label": {
+            "type": "string",
+            "title": "Dim Label"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "records",
+              "occurrences"
+            ],
+            "title": "Basis"
+          },
+          "total": {
+            "type": "number",
+            "title": "Total"
+          },
+          "empty_count": {
+            "type": "integer",
+            "title": "Empty Count"
+          },
+          "empty_value": {
+            "type": "number",
+            "title": "Empty Value"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ParetoItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "other_categories": {
+            "type": "integer",
+            "title": "Other Categories"
+          },
+          "other_value": {
+            "type": "number",
+            "title": "Other Value"
+          },
+          "concentration": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ConcentrationOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "trend": {
+            "items": {
+              "$ref": "#/components/schemas/ParetoTrendOut"
+            },
+            "type": "array",
+            "title": "Trend"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "dim",
+          "dim_label",
+          "basis",
+          "total",
+          "empty_count",
+          "empty_value",
+          "items",
+          "other_categories",
+          "other_value",
+          "concentration",
+          "trend"
+        ],
+        "title": "ParetoOut"
+      },
+      "ParetoTrendOut": {
+        "properties": {
+          "period": {
+            "type": "string",
+            "title": "Period"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "total": {
+            "type": "number",
+            "title": "Total"
+          },
+          "hhi": {
+            "type": "number",
+            "title": "Hhi"
+          },
+          "effective": {
+            "type": "number",
+            "title": "Effective"
+          },
+          "gini": {
+            "type": "number",
+            "title": "Gini"
+          },
+          "top_share": {
+            "type": "number",
+            "title": "Top Share"
+          },
+          "closed": {
+            "type": "boolean",
+            "title": "Closed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period",
+          "label",
+          "total",
+          "hhi",
+          "effective",
+          "gini",
+          "top_share",
+          "closed"
+        ],
+        "title": "ParetoTrendOut"
       },
       "PartOut": {
         "properties": {

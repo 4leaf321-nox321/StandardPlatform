@@ -2,8 +2,6 @@
 
 from __future__ import annotations
 
-from datetime import date
-
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -12,9 +10,10 @@ from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs.schemas import JobOut
-from app.modules.metrics import compute, query, services
+from app.modules.metrics import compute, params, query, services
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import MetricDef, MetricRun
+from app.modules.metrics.recipes import routes as recipes_routes
 from app.modules.metrics.schemas import (
     CohortOut,
     DimValuesOut,
@@ -29,53 +28,10 @@ from app.modules.metrics.schemas import (
     TableOut,
 )
 from app.shared.auth import current_user, require_system_admin
-from app.shared.errors import AppError, code
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
 RECENT_RUNS = 30
-#: 기준 값으로 거르는 쿼리 파라미터 — `d.<기준 이름>=<값>`, 빈 값은 「(비어 있음)」.
-FILTER_PREFIX = "d."
-
-
-def _date(raw: str | None, what: str) -> date | None:
-    if not raw:
-        return None
-    try:
-        return date.fromisoformat(raw[:10])
-    except ValueError as caught:
-        raise AppError(
-            code("METRICS", 11), f"{what}은(는) YYYY-MM-DD 여야 합니다: {raw}", status=422
-        ) from caught
-
-
-def _names(raw: str | None) -> list[str]:
-    return [one.strip() for one in (raw or "").split(",") if one.strip()]
-
-
-def _ask(
-    request: Request,
-    *,
-    dims: str | None,
-    by: str | None,
-    period_from: str | None,
-    period_to: str | None,
-    cohort_from: str | None,
-    cohort_to: str | None,
-) -> query.Ask:
-    filters: dict[str, str | None] = {}
-    for key, value in request.query_params.multi_items():
-        if key.startswith(FILTER_PREFIX):
-            filters[key[len(FILTER_PREFIX) :]] = value if value != "" else None
-    return query.Ask(
-        dims=_names(dims),
-        by=tuple(_names(by)),
-        filters=filters,
-        period_from=_date(period_from, "period_from"),
-        period_to=_date(period_to, "period_to"),
-        cohort_from=_date(cohort_from, "cohort_from"),
-        cohort_to=_date(cohort_to, "cohort_to"),
-    )
 
 
 def _built(db: Session, metric: MetricDef) -> spec_module.Built:
@@ -200,7 +156,7 @@ def metric_values(
     「(비어 있음)」). 셀마다 비율 · 닫힘 · **건 보기 조건**(`drill`)이 붙는다."""
     row = services.get(db, slug)
     built = _built(db, row)
-    ask = _ask(
+    ask = params.ask_from_request(
         request,
         dims=dims,
         by=by,
@@ -225,7 +181,7 @@ def metric_series(
     """추이 — 기간순, 빈 기간은 0, 전기 · 전년 동기 · 닫힘."""
     row = services.get(db, slug)
     built = _built(db, row)
-    ask = _ask(
+    ask = params.ask_from_request(
         request,
         dims=None,
         by=None,
@@ -250,7 +206,7 @@ def metric_cohort(
     """코호트 x 경과 행렬 — 음수 경과와 못 읽은 날짜는 빼고 그 수를 말한다."""
     row = services.get(db, slug)
     built = _built(db, row)
-    ask = _ask(
+    ask = params.ask_from_request(
         request,
         dims=None,
         by=None,
@@ -274,3 +230,7 @@ def metric_dim_values(
     row = services.get(db, slug)
     built = _built(db, row)
     return query.dim_values(db, user, row, built, name, q=q)
+
+
+# 분석(ADR 0014) — `/metrics/{slug}/analysis/<레시피>`. 지표 모듈 안의 하위 경로다.
+router.include_router(recipes_routes.router)

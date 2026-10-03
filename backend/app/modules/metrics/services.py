@@ -28,7 +28,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.jobs import services as job_services
 from app.modules.jobs.models import Job
-from app.modules.metrics import compute, query, schemas
+from app.modules.metrics import compute, query, recipes, schemas
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import MetricDef, MetricRun, MetricValue
 from app.modules.objects.summary import METRIC_LABELS
@@ -92,6 +92,7 @@ def out(db: Session, metric: MetricDef) -> schemas.MetricOut:
     spec = spec_module.MetricSpec.model_validate(metric.spec)
     dims: list[schemas.DimOut] = []
     broken: str | None = None
+    built: spec_module.Built | None = None
     try:
         built = compute.built_of(db, metric)
         dims = [
@@ -123,6 +124,7 @@ def out(db: Session, metric: MetricDef) -> schemas.MetricOut:
         cohort_grain=spec.cohort.grain if spec.cohort else None,
         dims=dims,
         broken=broken,
+        analyses=recipes.registry.availability(built, broken),
         current_run_id=metric.current_run_id,
         last_run_at=metric.last_run_at,
         last_status=metric.last_status,

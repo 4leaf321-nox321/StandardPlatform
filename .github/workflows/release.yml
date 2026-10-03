@@ -91,6 +91,10 @@ jobs:
           grep -q "^version=${GITHUB_REF_NAME}$" "$info" \
             || { echo "BUILD_INFO 의 version 이 태그와 다릅니다"; exit 1; }
           cat "$info"
+          # **크기를 잰다 — 어림하지 않는다.** 폐쇄망에는 이 tar 를 손으로 옮긴다. 분석의
+          # numpy · scipy(ADR 0014)처럼 의존성이 늘면 여기 숫자가 먼저 말한다.
+          ls -lh release/*.tar.gz
+          tar tvzf release/*.tar.gz | awk '$NF ~ /app\.sif$/ {printf "app.sif %.1f MB\n", $3/1e6}'
 
       # **줄바꿈을 여기서 한 번 더 본다.** Windows 에서 만진 스크립트가 CRLF 로
       # 들어오면 서버에서 `bad interpreter: /usr/bin/env bash^M` 로 죽는데, 그

@@ -68,6 +68,13 @@ ignore_missing_imports = true
 module = ["openpyxl.*"]
 ignore_missing_imports = true
 
+# scipy 는 타입 표시(`py.typed`)가 없다. 부르는 자리가 `metrics/recipes/_numeric.py` 하나라(구조
+# 시험이 지킨다) 결과를 거기서 float · ndarray 로 바꿔 내보낸다 — Any 가 레시피로 번지지 않게.
+# 스텁 패키지(scipy-stubs)를 배포 이미지에 넣을 이유는 없다.
+[[tool.mypy.overrides]]
+module = ["scipy.*"]
+ignore_missing_imports = true
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"

@@ -35,3 +35,7 @@ watchfiles==1.2.0
 rdflib==7.6.0
 owlrl==7.6.2
 pyparsing==3.3.2
+# 분석(ADR 0014) — 와이블 최대우도 · 분포 함수 · 묶음. scipy 는 `metrics/recipes/_numeric.py`
+# 한 곳에서만 부른다(구조 시험). pandas · statsmodels 는 쓰지 않는다 — 번들이 커지고 쓸 것이 없다.
+numpy==2.5.3
+scipy==1.18.1

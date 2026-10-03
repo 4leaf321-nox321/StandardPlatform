@@ -203,3 +203,23 @@ def test_모듈_이름이_백엔드와_프론트에서_같다() -> None:
 
     only_backend = backend_modules - frontend_modules - FRONTEND_MERGED
     assert not only_backend, f"프론트에 짝이 없는 모듈: {sorted(only_backend)}"
+
+
+def test_scipy_는_수치_문_한_곳에서만_부른다() -> None:
+    """**scipy 는 `metrics/recipes/_numeric.py` 에서만, pandas · statsmodels 는 아무 데서도.**
+
+    scipy 는 타입 표시가 없어 부르는 자리마다 Any 가 퍼지고, 프로세스마다 0.3~0.6초 · 약
+    50MB 를 들여 올린다 — 한 문(늦은 import)으로만 들어오게 한다(ADR 0014). pandas ·
+    statsmodels 는 번들을 240MB 로 키우고 쓸 것이 없다 — 「잠깐 편하자」 는 import 하나가 그
+    값을 치르게 한다.
+    """
+    allowed = MODULES / "metrics" / "recipes" / "_numeric.py"
+    offenders: list[str] = []
+    for path in (BACKEND / "app").rglob("*.py"):
+        for name in _imports(path):
+            root = name.split(".")[0]
+            if root in ("pandas", "statsmodels"):
+                offenders.append(f"{path.relative_to(BACKEND)} -> {name}")
+            if root == "scipy" and path != allowed:
+                offenders.append(f"{path.relative_to(BACKEND)} -> {name}")
+    assert not offenders, "수치 라이브러리를 정한 문 밖에서 부릅니다: " + ", ".join(offenders)

@@ -22,6 +22,16 @@ class DimOut(BaseModel):
     """계획에서만 — 거르기를 통과한 기록에서 서로 다른 값의 수."""
 
 
+class AnalysisAvailOut(BaseModel):
+    """이 지표에 되는 분석(ADR 0014) — 안 되면 그 이유 한 줄. 화면이 고르개를 끄고 말로
+    보인다."""
+
+    recipe: str
+    label: str
+    ok: bool
+    reason: str | None = None
+
+
 class MetricOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -41,6 +51,8 @@ class MetricOut(BaseModel):
     dims: list[DimOut]
     broken: str | None = None
     """정의가 지금 안 지어지는 이유(칸이 지워짐 · 분모가 사라짐). 있으면 계산이 실패한다."""
+    analyses: list[AnalysisAvailOut] = Field(default_factory=list)
+    """이 지표 위에서 되는 분석과 안 되는 이유(ADR 0014)."""
     current_run_id: uuid.UUID | None
     last_run_at: datetime | None
     last_status: str | None

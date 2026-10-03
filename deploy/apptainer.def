@@ -63,6 +63,11 @@ From: ubuntu:24.04
     export LOG_DIR=/data/logs
     export FILESTORE_DIR=/data/filestore
 
+    # **선형대수 스레드는 하나.** 분석(ADR 0014)의 행렬은 작은데, OpenBLAS 가 프로세스마다 코어 수만큼
+    # 스레드를 띄우면 웹 워커 넷이 서로 CPU 를 빼앗는다 — 작은 행렬에서는 스레드가 더 느리다.
+    export OPENBLAS_NUM_THREADS=1
+    export OMP_NUM_THREADS=1
+
 %runscript
     cd /opt/app/backend
     exec /opt/app/venv/bin/python run.py

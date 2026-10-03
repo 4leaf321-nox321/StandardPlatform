@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -65,6 +65,9 @@ class Ask:
     period_to: date | None = None
     cohort_from: date | None = None
     cohort_to: date | None = None
+    age_from: int | None = None
+    age_to: int | None = None
+    """경과 범위 — 「앞까지」. 관리도 · 순차 검정은 K 경과 앞까지만 본다(셀 상한 안에 들게)."""
 
 
 @dataclass
@@ -129,7 +132,7 @@ def year_before(start: date, grain: str) -> date:
     return _add_months(start, -12)
 
 
-def _dense(start: date, stop: date, grain: str) -> list[date]:
+def dense(start: date, stop: date, grain: str) -> list[date]:
     """`start` 부터 `stop` **직전**까지의 기간 시작일 — 빈 기간을 0 으로 채우려고."""
     out: list[date] = []
     current = start
@@ -187,6 +190,10 @@ def read(db: Session, user: User, metric: MetricDef, ask: Ask) -> tuple[list[Cel
         stmt = stmt.where(MetricValue.cohort >= ask.cohort_from)
     if ask.cohort_to is not None:
         stmt = stmt.where(MetricValue.cohort < ask.cohort_to)
+    if ask.age_from is not None:
+        stmt = stmt.where(MetricValue.age >= ask.age_from)
+    if ask.age_to is not None:
+        stmt = stmt.where(MetricValue.age < ask.age_to)
     if group:
         stmt = stmt.group_by(*group)
     rows = db.execute(stmt.limit(limit + 1)).all()
@@ -248,6 +255,9 @@ class Denominator:
     values: dict[tuple[tuple[str | None, ...], date | None], float | None]
     truncated: bool
     missing: int = 0
+    run: MetricRun | None = None
+    """분모 지표의 지금 실행 — 분석이 분모 쪽 기간도 닫혔는지 본다(판매가 덜 들어온 달)."""
+    before: date | None = None
 
     def lookup(self, cell: Cell, grain: str | None) -> float | None:
         when: date | None = None
@@ -280,7 +290,7 @@ class Denominator:
         )
 
 
-def _denominator(
+def read_denominator(
     db: Session, user: User, built: spec_module.Built, ask: Ask
 ) -> Denominator | None:
     """분모 지표를 **같은 함수로 두 번째 질의** — 묶음은 `on` 중 이번에 요청한 기준과
@@ -314,7 +324,77 @@ def _denominator(
     for cell in cells:
         key = (tuple(cell.dims.get(name) for name in on), cell.period if time else None)
         values[key] = cell.measure(den_spec.measure)
-    return Denominator(den, den_spec, on, time, den_in.per, values, truncated)
+    den_run = current_run(db, den)
+    return Denominator(
+        den,
+        den_spec,
+        on,
+        time,
+        den_in.per,
+        values,
+        truncated,
+        run=den_run,
+        before=closed_before(den_run, den_spec.settle_days),
+    )
+
+
+# --- 분석이 쓰는 묶음 읽기 ---------------------------------------------------------------
+
+
+@dataclass
+class Frame:
+    """셀 · 분모 · 실행 · 닫힘 — 분석 하나가 셀 위에서 추론하는 데 드는 것 전부(ADR 0014)."""
+
+    cells: list[Cell]
+    truncated: bool
+    denominator: Denominator | None
+    run: MetricRun | None
+    before: date | None
+    """이 날 앞에 끝나는 기간은 닫혔다 — 계산 시각 - 닫힘 일수."""
+
+
+def frame(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    built: spec_module.Built,
+    ask: Ask,
+    *,
+    with_denominator: bool = True,
+) -> Frame:
+    check_ask(built, ask)
+    cells, truncated = read(db, user, metric, ask)
+    den = read_denominator(db, user, built, ask) if with_denominator else None
+    run = current_run(db, metric)
+    return Frame(cells, truncated, den, run, closed_before(run, built.spec.settle_days))
+
+
+def snapshot(db: Session) -> None:
+    """이 요청의 읽기를 **한 스냅샷**으로 — 분석은 주체 · 기준 · 분모를 여러 번 읽는데, 그
+    사이 재계산이 `current_run_id` 를 바꿔 끼우면 옛 실행과 새 실행이 섞인다. 실행 번호를
+    붙잡아 두는 것으로는 안 된다 — 바꿔 끼우는 트랜잭션이 옛 실행의 셀을 지운다.
+
+    인증이 이미 연 트랜잭션은 닫고, 새 트랜잭션의 첫 문장으로 격리 수준을 정한다."""
+    db.rollback()
+    db.execute(text("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"))
+
+
+def visible_share(db: Session, user: User, metric: MetricDef) -> float | None:
+    """지금 실행의 기록 중 이 사람에게 보이는 몫 — 1 보다 작으면 분자는 줄었는데 분모(판매
+    대수)는 전사일 수 있어 비율이 낮게 나온다. 시스템 관리자는 다 본다."""
+    if user.is_system_admin:
+        return 1.0
+    current = (
+        select(MetricDef.current_run_id).where(MetricDef.id == metric.id).scalar_subquery()
+    )
+    seen = visible_owner_clause(user, MetricValue.workspace_id)
+    total, visible = db.execute(
+        select(
+            func.coalesce(func.sum(MetricValue.count), 0),
+            func.coalesce(func.sum(MetricValue.count).filter(seen), 0),
+        ).where(MetricValue.metric_id == metric.id, MetricValue.run_id == current)
+    ).one()
+    return float(visible) / float(total) if total else None
 
 
 # --- 건 보기 · 이름 · 닫힘 --------------------------------------------------------------
@@ -419,7 +499,7 @@ def _dim_condition(
         params[f"f.{field_name}.eq"] = value
 
 
-def _labels(
+def labels_for(
     db: Session, built: spec_module.Built, names: list[str], cells: list[Cell]
 ) -> dict[str, dict[str, str]]:
     out: dict[str, dict[str, str]] = {}
@@ -438,13 +518,13 @@ def _labels(
     return out
 
 
-def _label_of(labels: dict[str, dict[str, str]], name: str, value: str | None) -> str:
+def label_of(labels: dict[str, dict[str, str]], name: str, value: str | None) -> str:
     if value is None:
         return axes.EMPTY_LABEL
     return labels.get(name, {}).get(value, value)
 
 
-def _run(db: Session, metric: MetricDef) -> MetricRun | None:
+def current_run(db: Session, metric: MetricDef) -> MetricRun | None:
     if metric.current_run_id is None:
         return None
     return db.get(MetricRun, metric.current_run_id)
@@ -460,19 +540,19 @@ def is_stale(metric: MetricDef, now: datetime | None = None) -> bool:
     return metric.last_run_at + timedelta(hours=metric.interval_hours * 3) < now
 
 
-def _closed_before(run: MetricRun | None, settle_days: int) -> date | None:
+def closed_before(run: MetricRun | None, settle_days: int) -> date | None:
     if run is None or run.watermark is None:
         return None
     return run.watermark.astimezone(UTC).date() - timedelta(days=settle_days)
 
 
-def _is_closed(period: date | None, grain: str | None, before: date | None) -> bool:
+def is_closed(period: date | None, grain: str | None, before: date | None) -> bool:
     if period is None or grain is None or before is None:
         return False
     return axes.next_period(period, grain) <= before
 
 
-def _header(
+def header_of(
     metric: MetricDef,
     built: spec_module.Built,
     run: MetricRun | None,
@@ -522,10 +602,10 @@ def table(
     """요청한 기준(과 기간 · 코호트)별 셀 — 비율 · 건 보기 포함."""
     check_ask(built, ask)
     cells, truncated = read(db, user, metric, ask)
-    denominator = _denominator(db, user, built, ask)
-    labels = _labels(db, built, ask.dims, cells)
-    run = _run(db, metric)
-    before = _closed_before(run, built.spec.settle_days)
+    denominator = read_denominator(db, user, built, ask)
+    labels = labels_for(db, built, ask.dims, cells)
+    run = current_run(db, metric)
+    before = closed_before(run, built.spec.settle_days)
     measure = built.spec.measure
     out: list[schemas.CellOut] = []
     total_value = 0.0 if measure in ("count", "sum") else None
@@ -538,7 +618,7 @@ def table(
             schemas.CellOut(
                 dims=cell.dims,
                 labels={
-                    name: _label_of(labels, name, value) for name, value in cell.dims.items()
+                    name: label_of(labels, name, value) for name, value in cell.dims.items()
                 },
                 period=_iso(cell.period),
                 period_label=(
@@ -563,14 +643,12 @@ def table(
                 ratio=ratio,
                 denominator=denominator.lookup(cell, built.grain) if denominator else None,
                 closed=(
-                    _is_closed(cell.period, built.grain, before)
-                    if "period" in ask.by
-                    else None
+                    is_closed(cell.period, built.grain, before) if "period" in ask.by else None
                 ),
                 drill=drill(built, cell, by=ask.by, ask=ask),
             )
         )
-    header = _header(metric, built, run, truncated=truncated, denominator=denominator)
+    header = header_of(metric, built, run, truncated=truncated, denominator=denominator)
     return schemas.TableOut(
         **header,
         dims=list(ask.dims),
@@ -598,10 +676,10 @@ def series(
     check_ask(built, ask)
     grain = built.time.grain
     cells, truncated = read(db, user, metric, ask)
-    denominator = _denominator(db, user, built, ask)
-    labels = _labels(db, built, ask.dims, cells)
-    run = _run(db, metric)
-    before = _closed_before(run, built.spec.settle_days)
+    denominator = read_denominator(db, user, built, ask)
+    labels = labels_for(db, built, ask.dims, cells)
+    run = current_run(db, metric)
+    before = closed_before(run, built.spec.settle_days)
     measure = built.spec.measure
 
     dated = [one for one in cells if one.period is not None]
@@ -618,7 +696,7 @@ def series(
         if dated
         else None
     )
-    periods = _dense(start, stop, grain) if start is not None and stop is not None else []
+    periods = dense(start, stop, grain) if start is not None and stop is not None else []
 
     order = sorted(
         by_line,
@@ -646,7 +724,7 @@ def series(
                     ratio=denominator.ratio(value, cell, grain) if denominator else None,
                     prev=previous,
                     yoy=values.get(year_before(when, grain)),
-                    closed=_is_closed(when, grain, before),
+                    closed=is_closed(when, grain, before),
                     drill=drill(built, cell, by=("period",), ask=ask),
                 )
             )
@@ -654,11 +732,11 @@ def series(
         lines.append(
             schemas.LineOut(
                 key=key,
-                label=_label_of(labels, split, key) if split else metric.label,
+                label=label_of(labels, split, key) if split else metric.label,
                 points=points,
             )
         )
-    header = _header(metric, built, run, truncated=truncated, denominator=denominator)
+    header = header_of(metric, built, run, truncated=truncated, denominator=denominator)
     return schemas.SeriesOut(
         **header, split=split, lines=lines, lines_truncated=lines_truncated
     )
@@ -682,9 +760,9 @@ def cohort(
     check_ask(built, ask)
     grain = built.cohort.grain
     cells, truncated = read(db, user, metric, ask)
-    denominator = _denominator(db, user, built, ask)
-    run = _run(db, metric)
-    before = _closed_before(run, built.spec.settle_days)
+    denominator = read_denominator(db, user, built, ask)
+    run = current_run(db, metric)
+    before = closed_before(run, built.spec.settle_days)
     measure = built.spec.measure
 
     matrix: dict[date, dict[int, Cell]] = {}
@@ -696,7 +774,7 @@ def cohort(
     if matrix:
         start = ask.cohort_from or min(matrix)
         stop = ask.cohort_to or axes.next_period(max(matrix), grain)
-        cohorts = _dense(start, stop, grain)
+        cohorts = dense(start, stop, grain)
     max_age = max((age for ages in matrix.values() for age in ages), default=-1)
     ages = list(range(max_age + 1))
 
@@ -720,7 +798,7 @@ def cohort(
                     value=value,
                     cumulative=running,
                     ratio=denominator.ratio(total, cell, grain) if denominator else None,
-                    closed=_is_closed(period, grain, before),
+                    closed=is_closed(period, grain, before),
                     drill=drill(built, cell, by=("cohort",), ask=ask, period=period),
                 )
             )
@@ -736,7 +814,7 @@ def cohort(
                 cells=out_cells,
             )
         )
-    header = _header(metric, built, run, truncated=truncated, denominator=denominator)
+    header = header_of(metric, built, run, truncated=truncated, denominator=denominator)
     return schemas.CohortOut(**header, cumulative=cumulative, ages=ages, rows=rows)
 
 
