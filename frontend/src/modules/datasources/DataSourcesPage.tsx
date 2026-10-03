@@ -168,6 +168,7 @@ export default function DataSourcesPage() {
                 {source.interval_minutes > 0
                   ? ` · ${source.interval_minutes}분마다`
                   : ' · 손으로만'}
+                {source.source_name && ` · 출처 ${source.source_name}`}
                 {source.deprecate_missing && ' · 사라진 행은 사용 중지'}
                 {source.auth_kind !== 'none' && ` · 인증 ${source.auth_kind}`}
               </p>
@@ -384,7 +385,7 @@ function EditDialog({
   onSaved,
 }: {
   source: DataSource | null
-  types: { slug: string; label: string; properties: PropertyDef[] }[]
+  types: { slug: string; label: string; managed_by?: string; properties: PropertyDef[] }[]
   /** 이 설치의 관계 종류 — 선을 가져오는 소스가 그중 하나를 고른다. */
   relationTypes: { slug: string; label: string }[]
   workspaceSlugs: string[]
@@ -418,6 +419,7 @@ function EditDialog({
   const [edgeDst, setEdgeDst] = useState(edges?.dst?.column ?? '')
   const [edgeNote, setEdgeNote] = useState(edges?.evidence_note?.value ?? '')
   const [edgeReplace, setEdgeReplace] = useState(edges?.mode === 'replace')
+  const [sourceName, setSourceName] = useState(source?.source_name ?? '')
   const [deprecate, setDeprecate] = useState(source?.deprecate_missing ?? false)
   const [interval, setInterval] = useState(String(source?.interval_minutes ?? 0))
   const [active, setActive] = useState(source?.is_active ?? true)
@@ -473,6 +475,7 @@ function EditDialog({
             external_key: externalKey.trim(),
             columns: columns.filter((one) => one.source.trim() && one.target),
           },
+      source_name: sourceName.trim(),
       deprecate_missing: deprecate,
       interval_minutes: Number(interval) || 0,
       is_active: active,
@@ -1201,6 +1204,37 @@ function EditDialog({
                   </tbody>
                 </table>
               </div>
+            )}
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="ds-source-name">출처 이름 (비우면 slug)</Label>
+            <Input
+              id="ds-source-name"
+              value={sourceName}
+              onChange={(event) => setSourceName(event.target.value)}
+              placeholder={slug.trim() || 'hub'}
+              className="font-mono"
+            />
+            {/* **잠긴 타입에 넣으려면 이 이름이 맞아야 한다.** 그런데 「누가 관리하는가」 는
+                타입 화면에 있어서, 여기서 안 말해 주면 운영자는 동기화가 실패한 뒤에야 안다. */}
+            {type?.managed_by ? (
+              <p className="text-xs">
+                <b>{type.label}</b> 은(는) <b>{type.managed_by}</b> 가 관리하는 타입입니다 —
+                출처 이름을 <b className="font-mono">{type.managed_by}</b> 로 적어야 이 소스의
+                적재가 통과합니다.{' '}
+                {sourceName.trim()
+                  ? sourceName.trim() === type.managed_by
+                    ? '맞게 적혀 있습니다.'
+                    : `지금은 「${sourceName.trim()}」 입니다.`
+                  : `비우면 slug(「${slug.trim() || '…'}」)가 이름이 됩니다.`}
+              </p>
+            ) : (
+              <p className="text-muted-foreground text-xs">
+                <b>잠긴 타입에 받을 때만 씁니다.</b> 허브가 내려준 정의는 받는 쪽에서 고치는 길을
+                막는데, 적재가 이 이름을 말하고 그것이 허브가 적은 이름과 같을 때만 통과합니다 —
+                막기만 하면 받기도 막히기 때문입니다.
+              </p>
             )}
           </div>
 

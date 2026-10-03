@@ -8,6 +8,10 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.objects.schemas import ImportRowOut
 
+#: 출처 이름에 받는 글자 — **묶음 가져오기의 `source` 와 같은 규칙이다.** 두 벌로 두면
+#: 한쪽에서만 쓸 수 있는 이름이 생기고, 그 이름은 영영 안 맞는다.
+SOURCE_NAME_RE = r"^([a-z][a-z0-9_-]{0,39})?$"
+
 
 class DataSourceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -29,6 +33,11 @@ class DataSourceOut(BaseModel):
     type_slug: str
     workspace_slug: str | None
     mapping: dict[str, Any]
+    source_name: str = ""
+    """이 소스가 적재할 때 내보이는 **출처 이름** — 비우면 slug 를 쓴다.
+
+    잠긴 타입(`managed_by`)에 넣을 수 있는 근거다. 허브가 묶음을 내려줄 때 적은 이름과
+    같아야 한다."""
     deprecate_missing: bool
     since_mark: str = ""
     relations_since_mark: str = ""
@@ -59,6 +68,7 @@ class DataSourceWriteRequest(BaseModel):
     type_slug: str
     workspace_slug: str | None = None
     mapping: dict[str, Any] = Field(default_factory=dict)
+    source_name: str = Field(default="", pattern=SOURCE_NAME_RE)
     deprecate_missing: bool = False
     interval_minutes: int = Field(default=0, ge=0, le=60 * 24 * 30)
     is_active: bool = True
@@ -82,6 +92,8 @@ class DataSourcePatchRequest(BaseModel):
     type_slug: str | None = None
     workspace_slug: str | None = None
     mapping: dict[str, Any] | None = None
+    source_name: str | None = Field(default=None, pattern=SOURCE_NAME_RE)
+    """빈 문자열을 보내면 **slug 로 돌아간다**(= 안 적은 상태)."""
     deprecate_missing: bool | None = None
     since_mark: str | None = Field(default=None, max_length=64)
     """빈 문자열을 보내면 **처음부터 다시** 받는다 — 상대를 갈아엎었거나 대응을 크게

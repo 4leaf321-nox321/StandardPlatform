@@ -62,6 +62,7 @@ def _out(db: Session, row: DataSource) -> DataSourceOut:
         type_slug=object_type.slug if object_type else "",
         workspace_slug=workspace.slug if workspace else None,
         mapping=row.mapping or {},
+        source_name=row.source_name,
         deprecate_missing=row.deprecate_missing,
         since_mark=row.since_mark,
         relations_since_mark=row.relations_since_mark,
@@ -179,6 +180,7 @@ def create_source(
         type_id=object_type.id,
         workspace_id=workspace.id if workspace else None,
         mapping=payload.mapping,
+        source_name=payload.source_name.strip(),
         deprecate_missing=_check_deprecate(payload.kind, payload.deprecate_missing),
         interval_minutes=payload.interval_minutes,
         is_active=payload.is_active,
@@ -261,6 +263,9 @@ def update_source(
         assert object_type is not None
         _check_mapping(db, object_type, payload.mapping)
         row.mapping = payload.mapping
+    # 빈 문자열이 「slug 로 돌아가기」 다 — null 은 「안 보냄」 과 구별되지 않는다.
+    if "source_name" in sent and payload.source_name is not None:
+        row.source_name = payload.source_name.strip()
     if "deprecate_missing" in sent and payload.deprecate_missing is not None:
         row.deprecate_missing = _check_deprecate(row.kind, payload.deprecate_missing)
     # **비우는 것만 받는다** — 시계를 손으로 앞당기면 그 사이 것을 영영 안 받는다.

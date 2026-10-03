@@ -356,6 +356,7 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 | `prepare` 가 `Unable to locate package apptainer` 로 멈춘다 | **v0.1.0 번들이다** — PPA 없이 apt 에서 찾았다. 새 번들로 다시 돌리거나 `sudo add-apt-repository -y ppa:apptainer/ppa && sudo apt-get update` 후 `prepare` 를 다시 |
 | 서비스가 `failed` | `journalctl -u <slug> -n 50` |
 | **파일 업로드에서 `Read-only file system`** | `.env` 의 `FILESTORE_DIR` 가 bind-mount 밖을 가리킨다. `/data/filestore` 여야 한다 |
+| 동기화가 「… 가 관리하는 타입이라 여기서 넣지 않습니다」 로 실패 | 허브가 내려준(잠긴) 타입이다. 소스 수정 › **출처 이름**에 그 이름을 적는다 — 비우면 소스의 slug 가 이름이 된다 |
 | 모든 페이지가 JSON 404 | SIF 에 `frontend/dist` 가 없다. 라우팅 버그처럼 보이지만 아니다 |
 | 운영이 development 로 뜬다 | `.env` 에 BOM 이 붙어 **첫 줄 키만 조용히 무시**됐다 |
 | 기동 거부: `JWT_SECRET` | 기본값 그대로다. 그것이 의도다 — `.env` 에 난수를 넣는다 |

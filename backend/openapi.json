@@ -15713,6 +15713,11 @@
             "type": "object",
             "title": "Mapping"
           },
+          "source_name": {
+            "type": "string",
+            "title": "Source Name",
+            "default": ""
+          },
           "deprecate_missing": {
             "type": "boolean",
             "title": "Deprecate Missing"
@@ -15956,6 +15961,18 @@
             ],
             "title": "Mapping"
           },
+          "source_name": {
+            "anyOf": [
+              {
+                "type": "string",
+                "pattern": "^([a-z][a-z0-9_-]{0,39})?$"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Name"
+          },
           "deprecate_missing": {
             "anyOf": [
               {
@@ -16093,6 +16110,12 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Mapping"
+          },
+          "source_name": {
+            "type": "string",
+            "pattern": "^([a-z][a-z0-9_-]{0,39})?$",
+            "title": "Source Name",
+            "default": ""
           },
           "deprecate_missing": {
             "type": "boolean",

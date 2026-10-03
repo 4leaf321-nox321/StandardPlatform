@@ -43,6 +43,7 @@ from app.modules.objects import aliases, bulk
 from app.modules.objects.models import ObjectAlias, ObjectInstance
 from app.modules.objects.schemas import ImportRowOut
 from app.modules.objects.services import properties_of
+from app.modules.ontology import managed
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared import audit, extensions
 from app.shared.errors import AppError, code
@@ -476,6 +477,27 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     db.add(run)
     db.flush()
 
+    if mapping.relations is None:
+        # **잠긴 타입이면 바깥 표를 부르기 전에 끝낸다** — 읽어 온 뒤에 거절하면 그쪽
+        # 시스템을 헛되게 부르고, 기록에는 「행 1784개를 읽었고 아무것도 안 넣었다」 만
+        # 남는다. 그리고 거절 문구는 **이 화면에서 무엇을 적어야 하는가**를 말해야 한다 —
+        # 받는 것 자체는 막을 일이 아니다(잠근 뜻은 「아무나 고치지 마라」 다).
+        name = source_name(source)
+        refused = managed.objects_refusal(object_type, source=name, what="넣지")
+        if refused:
+            run.status = "failed"
+            run.errors = [
+                refused,
+                f"이 소스가 말하는 출처 이름은 「{name}」 입니다 — "
+                f"「{managed.owner_of(object_type)}」 로 적으면 이 소스의 적재만 통과합니다"
+                "(소스 수정 › 출처 이름).",
+            ]
+            run.finished_at = datetime.now(UTC)
+            source.last_run_at = run.finished_at
+            source.last_status = "failed"
+            db.commit()
+            return SyncResult(run=run, plan_rows=[], truncated=False)
+
     try:
         fetched = fetchers.fetch(
             source,
@@ -563,7 +585,14 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     chunks = [rows[i : i + bulk.MAX_ROWS] for i in range(0, len(rows), bulk.MAX_ROWS)]
     plans = [
         bulk.plan_objects(
-            db, _actor(db, user), object_type, chunk, owner_workspace_id=source.workspace_id
+            db,
+            _actor(db, user),
+            object_type,
+            chunk,
+            owner_workspace_id=source.workspace_id,
+            # **자기 출처 이름을 말한다** — 잠긴 타입(`managed_by`)에 넣는 근거다. 안 넘기면
+            # 허브가 내려준 타입은 받기까지 막힌다(잠근 뜻은 그것이 아니다).
+            source=source_name(source),
         )
         for chunk in chunks
     ]
@@ -620,7 +649,12 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     applied_rows: list[bulk.RowPlan] = []
     for chunk in chunks:
         done = bulk.apply_objects(
-            db, actor, object_type, chunk, owner_workspace_id=source.workspace_id
+            db,
+            actor,
+            object_type,
+            chunk,
+            owner_workspace_id=source.workspace_id,
+            source=source_name(source),
         )
         if not done.ok:
             run.status = "failed"
@@ -722,7 +756,8 @@ def _apply_edges(
     """
     actor = _actor(db, user)
     errors: list[str] = []
-    plan = bulk.plan_relations(db, actor, object_type, rows, mode=mode)
+    name = source_name(source)
+    plan = bulk.plan_relations(db, actor, object_type, rows, mode=mode, source=name)
     counts = {f"relations_{name}": value for name, value in plan.counts.items()}
     errors.extend(plan.errors)
     errors.extend(
@@ -745,7 +780,7 @@ def _apply_edges(
                 if one.get("src") and one.get("relation") and one.get("dst")
             ]
         ),
-        source=source.slug,
+        source=name,
         apply=apply and plan.ok,
     )
     unlinked = cut.counts.get("unlink", 0)
@@ -756,7 +791,7 @@ def _apply_edges(
         counts["relations_unlink"] = counts.get("relations_unlink", 0) + unlinked
         return counts, errors
 
-    done = bulk.apply_relations(db, actor, object_type, rows, mode=mode)
+    done = bulk.apply_relations(db, actor, object_type, rows, mode=mode, source=name)
     counts = {f"relations_{name}": value for name, value in done.counts.items()}
     counts["relations_unlink"] = counts.get("relations_unlink", 0) + unlinked
     if not done.ok:
@@ -828,6 +863,16 @@ def _counts(rows: list[bulk.RowPlan]) -> dict[str, int]:
     for one in rows:
         out[one.action] = out.get(one.action, 0) + 1
     return out
+
+
+def source_name(source: DataSource) -> str:
+    """이 소스가 적재할 때 **내보이는 출처 이름** — 비우면 slug.
+
+    **한 자리에서만 나온다.** 세 다리(객체 · 선 · 무덤)가 각자 값을 고르면 한쪽만 통과하는
+    상태가 생기고, 그때는 「선은 들어왔는데 객체가 안 들어온다」 를 물을 자리가 없다 — 선을
+    끊는 다리만 slug 를 넘기고 나머지가 빈 값을 넘긴 것이 정확히 그 고장이었다.
+    """
+    return (source.source_name or source.slug).strip()
 
 
 def _actor(db: Session, user: User | None) -> User:

@@ -16,7 +16,13 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.modules.datasources import services
-from tests.api.conftest import Signed, finish_job, maintenance_counts, notifications_of
+from tests.api.conftest import (
+    Signed,
+    bundle_import,
+    finish_job,
+    maintenance_counts,
+    notifications_of,
+)
 from tests.api.test_ontology import _make_object, _make_property, _make_type
 
 ROWS: list[dict[str, Any]] = [
@@ -167,6 +173,99 @@ def _source(client: TestClient, admin: Signed, vendor: str, **kw: Any) -> dict[s
     made = client.post("/api/datasources", json=body, headers=admin.headers)
     assert made.status_code == 201, made.text
     return dict(made.json())
+
+
+def _lock(client: TestClient, admin: Signed, type_slug: str, owner: str) -> None:
+    """그 타입을 **허브가 관리하는 것**으로 만든다 — 묶음에 `source` 를 붙여 받으면 잠긴다.
+
+    화면에는 잠그는 단추가 없다(`managed_by` 는 받기만 적는다) — 그래서 시험도 받는 길로
+    잠근다.
+    """
+    done = bundle_import(
+        client,
+        admin,
+        {
+            "ontology": {"types": [{"slug": type_slug, "label": "공급사"}]},
+            "source": owner,
+            "apply": True,
+        },
+    )
+    assert done["applied"] is True, done
+    types = {
+        one["slug"]: one
+        for one in client.get("/api/ontology/types", headers=admin.headers).json()
+    }
+    assert types[type_slug]["managed_by"] == owner
+
+
+def test_잠긴_타입에도_지정한_출처의_적재는_들어온다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """**막기만 하면 받기도 막힌다.** 잠근 뜻은 「아무나 고치지 마라」 이고 「허브가 준 것도
+    들어오지 마라」 가 아니다 — 그런데 동기화가 자기 출처 이름을 안 넘겨서 둘이 함께 막혔다.
+
+    적재는 자기 이름을 말하고, 그것이 `managed_by` 와 같을 때만 통과한다. 이름을 적는 칸은
+    slug 와 따로다 — slug 는 별칭 `source:<slug>` 에 박혀 바꿀 수 없어서, 그 칸이 없으면
+    소스를 지우고 다시 만들어야 하고 그러면 외부 식별자를 전부 잃는다.
+    """
+    vendor = _vendor_type(client, admin)
+    _lock(client, admin, vendor, "hub")
+
+    # 1) 출처 이름을 안 적었다 — slug 가 이름이 되고, 그것은 `hub` 가 아니라서 막힌다.
+    source = _source(client, admin, vendor)
+    blocked = _sync(client, admin, source["slug"], apply=True)
+    assert blocked.status_code == 200, blocked.text
+    run = blocked.json()["run"]
+    assert run["status"] == "failed", run
+    joined = " ".join(run["errors"])
+    # 「허브에서 고쳐라」 로 끝나면 운영자는 이 화면에서 할 일을 모른다 — 적을 이름을 말한다.
+    assert "hub" in joined and source["slug"] in joined, run["errors"]
+    assert "출처 이름" in joined, run["errors"]
+    # **바깥 표를 부르기도 전에** 끝낸다 — 읽고 나서 거절하면 그쪽 시스템을 헛되게 부른다.
+    assert run["rows_seen"] == 0, run
+
+    # 2) 허브가 적은 이름을 적으면 그 소스의 적재만 통과한다.
+    fixed = client.patch(
+        f"/api/datasources/{source['slug']}",
+        json={"source_name": "hub"},
+        headers=admin.headers,
+    )
+    assert fixed.status_code == 200 and fixed.json()["source_name"] == "hub"
+    done = _sync(client, admin, source["slug"], apply=True)
+    assert done.status_code == 200, done.text
+    assert done.json()["run"]["status"] == "ok", done.json()["run"]
+    items = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["items"]
+    assert {one["key"] for one in items} == {"V-001", "V-002", "V-003"}
+
+    # 3) 화면에서 고치는 길은 **여전히 막혀 있다** — 잠금이 풀린 것이 아니다.
+    target = next(one for one in items if one["key"] == "V-001")
+    refused = client.patch(
+        f"/api/objects/{vendor}/{target['id']}",
+        json={"label": "손으로 고침"},
+        headers=admin.headers,
+    )
+    assert refused.status_code == 409, refused.text
+    assert "hub" in refused.json()["error"]["message"]
+
+
+def test_출처_이름은_묶음과_같은_글자만_받는다(client: TestClient, admin: Signed) -> None:
+    """묶음 가져오기의 `source` 와 **같은 규칙**이다. 두 벌로 두면 한쪽에서만 쓸 수 있는
+    이름이 생기고, 그 이름은 영영 `managed_by` 와 안 맞는다."""
+    vendor = _vendor_type(client, admin)
+    bad = client.post(
+        "/api/datasources",
+        json={
+            "slug": f"plm_{uuid.uuid4().hex[:6]}",
+            "name": "x",
+            "base_url": "http://a/b",
+            "entity_set": "S",
+            "type_slug": vendor,
+            "source_name": "Hub 플랫폼",
+            "mapping": {"external_key": "VendorNo"},
+        },
+        headers=admin.headers,
+    )
+    assert bad.status_code == 422, bad.text
 
 
 def test_시스템_관리자만_정의한다(client: TestClient, member: Signed) -> None:

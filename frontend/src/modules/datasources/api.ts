@@ -84,6 +84,13 @@ export interface DataSource {
   type_slug: string
   workspace_slug: string | null
   mapping: Mapping
+  /**
+   * 이 소스가 적재할 때 내보이는 **출처 이름** — 비우면 slug 를 쓴다.
+   *
+   * 허브가 내려준 정의는 받는 쪽에서 고치는 길을 막는다(타입의 `managed_by`). 적재가 이 이름을
+   * 말하고 그것이 같을 때만 통과한다 — **막기만 하면 받기도 막힌다.**
+   */
+  source_name: string
   deprecate_missing: boolean
   /** `sp_core` 가 지난번에 어디까지 받았나 — 비우면 다음 동기화가 처음부터 받는다. */
   since_mark: string
@@ -112,6 +119,8 @@ export interface DataSourceWrite {
   type_slug: string
   workspace_slug?: string | null
   mapping?: Mapping
+  /** 비우면 slug 로 돌아간다. 묶음 가져오기의 `source` 와 같은 글자만 받는다. */
+  source_name?: string
   deprecate_missing?: boolean
   /** **비우는 것만 보낸다**(`''`) — 처음부터 다시 받는다. 시계를 앞당기면 그 사이 것을 잃는다. */
   since_mark?: string

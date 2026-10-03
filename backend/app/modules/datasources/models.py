@@ -96,6 +96,19 @@ class DataSource(Base):
     영영 안 받는다. 상대가 `reset` 을 주면(무덤의 보관 기간이 지났다) 이 값을 비우고 전량을
     다시 받는다."""
 
+    source_name: Mapped[str] = mapped_column(String(100), default="", server_default="")
+    """이 소스가 적재할 때 **내보이는 출처 이름** — 잠긴 타입에 넣을 수 있는 근거다.
+
+    허브가 내려준 정의 · 객체는 받는 쪽에서 고치는 길을 막는다(`ontology/managed.py`,
+    `object_types.managed_by`). 그런데 **막기만 하면 받기도 막힌다** — 잠근 뜻은 「아무나
+    고치지 마라」 이고 「허브가 준 것도 들어오지 마라」 가 아니다. 그래서 적재는 자기 출처
+    이름을 말하고, 그것이 `managed_by` 와 같을 때만 통과한다.
+
+    비우면 **slug** 를 쓴다. 적는 자리를 따로 둔 이유: slug 는 별칭 `source:<slug>` 에 박혀
+    **바꿀 수 없다**. 허브가 적은 이름과 slug 가 다르면, 이 칸이 없으면 소스를 지우고 다시
+    만들어야 하고 — 그러면 그 소스가 남긴 외부 식별자를 전부 잃어 다음 동기화가 같은 객체를
+    새로 만든다(같은 것이 둘이 된다)."""
+
     deprecate_missing: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
