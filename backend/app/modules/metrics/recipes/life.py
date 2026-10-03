@@ -485,11 +485,20 @@ class Cohort:
 
 
 def cohorts_of(
-    frame: query.Frame, grain: str, excluded: dict[str, int], *, max_age: int | None = None
+    frame: query.Frame,
+    grain: str,
+    excluded: dict[str, int],
+    *,
+    max_age: int | None = None,
+    within_units: bool = True,
 ) -> list[Cohort]:
     """코호트 x 경과 셀 → 쓸 수 있는 코호트. 뺀 것은 `excluded` 에 더한다 — 분모 없음 · 판매가
     덜 들어온 달 · 닫히지 않은 코호트 · 아직 들어오는 경과 · 기록이 대수보다 많음 · 경과 상한
-    밖. (순차 검정도 같은 규칙으로 코호트를 고른다.)"""
+    밖. (순차 검정도 같은 규칙으로 코호트를 고른다.)
+
+    `within_units` — 기록이 대수보다 많은 코호트를 뺀다. 수명은 「몇 대가 고장 났나」 라
+    기록이 대수를 넘을 수 없지만, 순차 검정은 대수당 **건수**(포아송 비율)라 1 을 넘어도
+    된다(재방문)."""
     for key in (
         "missing_denominator",
         "open_denominator",
@@ -539,7 +548,7 @@ def cohorts_of(
                 excluded["beyond_max_age"] += c
             else:
                 excluded["open_cells"] += c
-        if inside > units:
+        if within_units and inside > units:
             excluded["inconsistent_denominator"] += records
             continue
         out.append(Cohort(start, float(units), horizon, counts))

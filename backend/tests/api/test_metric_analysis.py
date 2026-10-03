@@ -765,6 +765,15 @@ def test_순차_검정은_두_배면_나쁨_같으면_나쁘지_않음으로_선
     assert same["decision"] == "not_worse" and same["decided_at"] == "2026-05"
     assert same["smr"] == pytest.approx(1.0)
 
+    # 재방문으로 기록이 대수보다 많아도(코호트마다 2,400건 > 1,000대) 대수당 건수로 견준다 —
+    # 수명과 달리 그 코호트를 빼지 않는다.
+    plant(100)
+    revisits = _analysis(
+        client, admin, cases["slug"], "sprt", target=w["s_base"], reference=w["a_base"]
+    )
+    assert revisits["decision"] == "worse" and revisits["decided_at"] == "2026-01"
+    assert "inconsistent_denominator" not in revisits["excluded"]
+
 
 def test_순차_검정이_안_되는_지표는_이유를_말한다(client: TestClient, admin: Signed) -> None:
     w = _world(client, admin)

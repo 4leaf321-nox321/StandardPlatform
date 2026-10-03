@@ -645,6 +645,8 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
         results.append(_infer_plan(client, admin, url, 5_000))
     if not only or "metrics" in (only or ""):
         results.extend(_metrics_rehearsal(client, admin, url))
+    if not only or "recipes" in (only or ""):
+        results.extend(_recipes_rehearsal(client, admin, url))
 
     print("\n| 영역 | 무엇 | 중앙값 | 비고 |\n| --- | --- | --- | --- |")
     for area, label, took, note in results:
@@ -653,23 +655,13 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
     _explain(engine, typical)
 
 
-def _metrics_rehearsal(
-    client: Any, admin: dict[str, str], url: str
-) -> list[tuple[str, str, str, str]]:
-    """지표(ADR 0013) — 운영에서 세울 **첫 지표 셋을 그대로** 세워 잰다.
+def _metric_definitions(tag: str) -> list[tuple[str, str, str, dict[str, Any]]]:
+    """운영에서 세울 첫 지표 셋 — (slug, 이름, 원천 타입, 정의). 분모 둘이 앞에 온다.
 
     분모 둘(판매 집계 · 생산 집계)과 기록 지표 넷 — ① 판매월 코호트 인입(기본 모델을
-    **관계**로 · **참조 칸**으로, 두 길을 나란히), ③ 생산월 코호트 x 공장(분모 생산 대수),
-    ⑦ 부품 교체(여러 값 기준 · 겹침, 분모는 판매 대수 전부 합). 계산은 워커를 거치지 않고 이
-    자리에서 돌린다 — 재는 것은 SQL 한 문장이다. 끝나면 정의를 지운다(분모를 쓰는 것부터).
+    **관계**로 · **참조 칸**으로), ③ 생산월 코호트 x 공장(분모 생산 대수), ⑦ 부품 교체(여러
+    값 기준 · 겹침, 분모는 판매 대수 전부 합). 지표 리허설과 분석 리허설이 함께 쓴다.
     """
-    import uuid
-
-    from app.database import SessionLocal
-    from app.modules.metrics import services as metrics_services
-
-    out: list[tuple[str, str, str, str]] = []
-    tag = uuid.uuid4().hex[:4]
     sales, prod = f"rh_sales_{tag}", f"rh_prod_{tag}"
 
     def when(address: str, grain: str = "month") -> dict[str, str]:
@@ -688,7 +680,7 @@ def _metrics_rehearsal(
         "denominator": {"metric": sales, "on": ["base_model"], "time": "cohort", "per": 100},
         "settle_days": 60,
     }
-    definitions: list[tuple[str, str, str, dict[str, Any]]] = [
+    return [
         (
             sales,
             "판매 대수",
@@ -752,47 +744,83 @@ def _metrics_rehearsal(
         ),
     ]
 
+
+def _build_metrics(
+    client: Any,
+    admin: dict[str, str],
+    definitions: list[tuple[str, str, str, dict[str, Any]]],
+    row: Callable[[str, float, str], None],
+    made: list[str],
+) -> bool:
+    """정의마다 계획 → 저장 → 이 자리에서 재계산(워커를 거치지 않는다 — 재는 것은 SQL 한
+    문장이다). 저장한 slug 는 `made` 에 — 부르는 쪽이 끝에 지운다. 저장이 실패하면 False."""
+    from app.database import SessionLocal
+    from app.modules.metrics import services as metrics_services
+
+    for slug, label, source, spec in definitions:
+        body = {"source_type_slug": source, "spec": spec}
+        started = time.perf_counter()
+        planned = client.post("/api/metrics/plan", json=body, headers=admin)
+        plan = planned.json() if planned.status_code == 200 else {}
+        note = (
+            f"ok={plan.get('ok')} rows={plan.get('rows')} cells~{plan.get('estimated_cells')}"
+            if plan.get("ok")
+            else f"거절 {plan.get('errors') or planned.text[:160]}"
+        )
+        row(f"계획 — {label}", time.perf_counter() - started, note)
+        saved = client.post(
+            "/api/metrics", json={"slug": slug, "label": label, **body}, headers=admin
+        )
+        if saved.status_code != 201:
+            row(f"정의 — {label}", 0.0, saved.text[:160])
+            return False
+        made.append(slug)
+        started = time.perf_counter()
+        with SessionLocal() as db:
+            try:
+                result = metrics_services.run_recompute(
+                    db, [slug], job_id=None, progress=lambda *_: None
+                )
+                done = result["runs"][0]
+                note = f"cells={done.get('cells'):,} rows={done.get('rows'):,}"
+            except Exception as caught:  # 재는 자리다 — 이유만 적는다
+                note = f"실패 {type(caught).__name__}: {str(caught)[:120]}"
+        row(f"재계산 — {label}", time.perf_counter() - started, note)
+    return True
+
+
+def _metrics_rehearsal(
+    client: Any, admin: dict[str, str], url: str
+) -> list[tuple[str, str, str, str]]:
+    """지표(ADR 0013) — 운영에서 세울 **첫 지표 셋을 그대로** 세워 잰다.
+
+    분모 둘(판매 집계 · 생산 집계)과 기록 지표 넷 — ① 판매월 코호트 인입(기본 모델을
+    **관계**로 · **참조 칸**으로, 두 길을 나란히), ③ 생산월 코호트 x 공장(분모 생산 대수),
+    ⑦ 부품 교체(여러 값 기준 · 겹침, 분모는 판매 대수 전부 합). 계산은 워커를 거치지 않고 이
+    자리에서 돌린다 — 재는 것은 SQL 한 문장이다. 끝나면 정의를 지운다(분모를 쓰는 것부터).
+    """
+    import uuid
+
+    out: list[tuple[str, str, str, str]] = []
+    tag = uuid.uuid4().hex[:4]
+    definitions = _metric_definitions(tag)
+
     def row(label: str, took: float, note: str) -> None:
         out.append(("metrics", label, f"{took:.2f}초", note))
         print(f"{took:8.2f}초  {label}  {note}", flush=True)
 
     made: list[str] = []
     try:
-        for slug, label, source, spec in definitions:
-            body = {"source_type_slug": source, "spec": spec}
-            started = time.perf_counter()
-            planned = client.post("/api/metrics/plan", json=body, headers=admin)
-            plan = planned.json() if planned.status_code == 200 else {}
-            note = (
-                f"ok={plan.get('ok')} rows={plan.get('rows')} "
-                f"cells~{plan.get('estimated_cells')}"
-                if plan.get("ok")
-                else f"거절 {plan.get('errors') or planned.text[:160]}"
-            )
-            row(f"계획 — {label}", time.perf_counter() - started, note)
-            saved = client.post(
-                "/api/metrics", json={"slug": slug, "label": label, **body}, headers=admin
-            )
-            if saved.status_code != 201:
-                out.append(("metrics", f"정의 — {label}", "-", saved.text[:160]))
-                return out
-            made.append(slug)
-            started = time.perf_counter()
-            with SessionLocal() as db:
-                try:
-                    result = metrics_services.run_recompute(
-                        db, [slug], job_id=None, progress=lambda *_: None
-                    )
-                    done = result["runs"][0]
-                    note = f"cells={done.get('cells'):,} rows={done.get('rows'):,}"
-                except Exception as caught:  # 재는 자리다 — 이유만 적는다
-                    note = f"실패 {type(caught).__name__}: {str(caught)[:120]}"
-            row(f"재계산 — {label}", time.perf_counter() - started, note)
+        if not _build_metrics(client, admin, definitions, row, made):
+            return out
 
         wide = {
             "measure": "count",
-            "time": when("properties.service_date"),
-            "dimensions": [base_ref, part],
+            "time": {"address": "properties.service_date", "grain": "month"},
+            "dimensions": [
+                {"name": "base_model", "address": "ref.model.base"},
+                {"name": "part", "address": "properties.parts"},
+            ],
         }
         started = time.perf_counter()
         planned = client.post(
@@ -863,6 +891,165 @@ def _metrics_rehearsal(
                     break
                 shape = _metric_shape(got.json())
             row(label, statistics.median(times), shape)
+    finally:
+        for slug in reversed(made):
+            client.delete(f"/api/metrics/{slug}", headers=admin)
+    return out
+
+
+def _recipes_rehearsal(
+    client: Any, admin: dict[str, str], url: str
+) -> list[tuple[str, str, str, str]]:
+    """분석(ADR 0014) — 운영 모양 자료 위에서 레시피 다섯을 **정답과 견주어** 잰다.
+
+    정답: 서비스 경과가 와이블(형상 1.5 · 척도 400일), 판매 대수의 약 4.6%만 기록을 남긴다 →
+    수명은 결함 모형 · 형상 1.4~1.6 · 척도 380~420일 · B10 「이르지 않음」. 순차 검정은 기록의
+    5%를 받는 뜨거운 기본 모델 vs 보통 모델이 첫 시점에 「나쁨」, 보통끼리 무작위 짝 200개는
+    「나쁨」 이 α/(1-β) 언저리 아래. 부품은 고르게 퍼져 몰림이 없고, 코호트 축에 변화가 없다.
+
+    판매일은 생산일 + 0~59일이라 2019-01 · 02 코호트는 기록이 덜 차고(생산 첫 두 달),
+    2022-11 뒤는 생산이 끝나 기록이 없는데 판매 집계는 2023-02 까지 있다 — 코호트를
+    2019-03 ~ 2022-10 으로 좁혀 그 가장자리를 뺀다.
+    """
+    import random
+    import uuid
+
+    out: list[tuple[str, str, str, str]] = []
+    tag = uuid.uuid4().hex[:4]
+    every = {one[0]: one for one in _metric_definitions(tag)}
+    sales, prod = f"rh_sales_{tag}", f"rh_prod_{tag}"
+    first, third, seventh = f"rh_q1r_{tag}", f"rh_q3_{tag}", f"rh_q7_{tag}"
+    definitions = [every[slug] for slug in (sales, prod, first, third, seventh)]
+    inside = {"cohort_from": "2019-03-01", "cohort_to": "2022-11-01"}
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("recipes", label, f"{took:.2f}초", note))
+        print(f"{took:8.2f}초  {label}  {note}", flush=True)
+
+    def analyse(slug: str, recipe: str, **params: Any) -> tuple[float, dict[str, Any]]:
+        started = time.perf_counter()
+        got = client.get(
+            f"/api/metrics/{slug}/analysis/{recipe}", params=params, headers=admin
+        )
+        took = time.perf_counter() - started
+        if got.status_code >= 400:
+            return took, {"error": f"HTTP {got.status_code} {got.text[:160]}"}
+        return took, dict(got.json())
+
+    def codes(body: dict[str, Any]) -> str:
+        return ",".join(one["code"] for one in body.get("caveats", []))
+
+    made: list[str] = []
+    try:
+        if not _build_metrics(client, admin, definitions, row, made):
+            return out
+        # ② 수명 — 결함 모형을 고르고 B10 을 지어내지 않는가.
+        took, life = analyse(first, "life", **inside)
+        if "error" in life:
+            row("② 수명", took, life["error"])
+        else:
+            fits = {one["model"]: one for one in life["fits"]}
+            chosen = fits.get(life["chosen"] or "", {})
+            lives = " · ".join(
+                f"B{round(one['q'] * 100)} {one['status']}"
+                + (f" {one['age']:.1f}" if one["age"] is not None else "")
+                for one in life["b_lives"]
+            )
+            row(
+                "② 수명 — 둘을 맞춰 고르기",
+                took,
+                f"고름 {life['chosen']} β={chosen.get('beta', 0):.3f} "
+                f"η={chosen.get('eta_days', 0):.0f}일 p={chosen.get('p') or 0:.4f} · "
+                f"{lives} · "
+                f"코호트 {life['cohorts_used']} · 경과 {life['max_age']} · 주의 {codes(life)}",
+            )
+            standard = fits.get("weibull", {})
+            row(
+                "② 수명 — 표준 와이블(치우침 기록)",
+                0.0,
+                f"β={standard.get('beta', 0):.3f} η={standard.get('eta_days', 0):.0f}일 "
+                f"LR p={life['lrt_p_value']}",
+            )
+        # ④ 순차 검정 — 뜨거운 기본 모델 vs 보통, 그리고 보통끼리 무작위 짝.
+        with create_engine(url).connect() as connection:
+            hot = connection.execute(
+                text(
+                    "SELECT o.properties->>'base' FROM objects o "
+                    "JOIN object_types t ON t.id = o.type_id "
+                    "WHERE t.slug = 'plm_model' ORDER BY o.key LIMIT 1"
+                )
+            ).scalar()
+            bases = [
+                str(one)
+                for one in connection.execute(
+                    text(
+                        "SELECT o.id FROM objects o JOIN object_types t ON t.id = o.type_id "
+                        "WHERE t.slug = 'plm_base' ORDER BY o.key"
+                    )
+                ).scalars()
+            ]
+        typical = [one for one in bases if one != hot]
+        took, hot_vs = analyse(
+            first, "sprt", target=hot, reference=typical[len(typical) // 2], compact="true"
+        )
+        row(
+            "④ 순차 검정 — 뜨거운 기본 모델 vs 보통",
+            took,
+            hot_vs.get("error")
+            or f"{hot_vs['decision']} @ {hot_vs['decided_at']} · "
+            f"표준화 비 {hot_vs['smr']:.1f}",
+        )
+        rng = random.Random(7)
+        tally: dict[str, int] = {}
+        times: list[float] = []
+        for _ in range(200):
+            target, reference = rng.sample(typical, 2)
+            took, pair = analyse(
+                first, "sprt", target=target, reference=reference, compact="true"
+            )
+            times.append(took)
+            key = pair.get("decision", "error")
+            tally[key] = tally.get(key, 0) + 1
+        row(
+            "④ 순차 검정 — 보통끼리 무작위 짝 200",
+            statistics.median(times),
+            " · ".join(f"{key} {value}" for key, value in sorted(tally.items())),
+        )
+        # ③ 관리도 — 생산월 코호트(출고 3개월 안) x 공장.
+        took, control = analyse(
+            third, "control", axis="cohort", window=3, split="factory", **inside
+        )
+        row(
+            "③ 관리도 — 생산월 코호트 x 공장(라니)",
+            took,
+            control.get("error")
+            or " · ".join(
+                f"{one['label']} 신호 {one['signals']}/{one['subgroups']} "
+                f"σz {one['sigma_z_raw'] or 0:.1f}"
+                for one in control["charts"]
+            ),
+        )
+        # ⑩ 계절 · 변화점 — 판매월 코호트의 출고 3개월 안 인입률.
+        took, changes = analyse(first, "changes", axis="cohort", window=3, **inside)
+        row(
+            "⑩ 변화점 — 판매월 코호트(출고 3개월 안)",
+            took,
+            changes.get("error")
+            or f"변화 {len(changes['changes'])} · 계절 "
+            f"{'씀' if changes['seasonal'] else '안 씀'} "
+            f"· φ {changes['dispersion']:.2f} · 점 {len(changes['points'])}",
+        )
+        # ⑦ 파레토 — 부품(여러 값 · 나온 횟수 기준).
+        took, pareto = analyse(seventh, "pareto", dim="part", compact="true")
+        found = pareto.get("concentration") or {}
+        row(
+            "⑦ 파레토 — 부품",
+            took,
+            pareto.get("error")
+            or f"값 {found.get('categories')} · 유효 {found.get('effective', 0):.0f} · "
+            f"HHI {found.get('hhi', 0):.4f} · 지니 {found.get('gini', 0):.3f} · "
+            f"핵심 소수 {found.get('vital_few')} · 기준 {pareto['basis']}",
+        )
     finally:
         for slug in reversed(made):
             client.delete(f"/api/metrics/{slug}", headers=admin)
@@ -1061,7 +1248,9 @@ def main() -> None:
     parser.add_argument("--rows", type=int, default=2_000_000)
     parser.add_argument("--timeout", type=int, default=120, help="질의 하나의 상한(초)")
     parser.add_argument("--repeat", type=int, default=3)
-    parser.add_argument("--only", help="이 영역만 잰다(list · profile · graph · summary …)")
+    parser.add_argument(
+        "--only", help="이 영역만 잰다(list · profile · graph · summary · metrics · recipes …)"
+    )
     args = parser.parse_args()
     if args.action == "create":
         create(args.rows)

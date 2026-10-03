@@ -242,9 +242,12 @@ def run(
     target_frame = frame_of(target)
     reference_frame = frame_of(reference)
     excluded: dict[str, int] = {}
-    target_cohorts = life.cohorts_of(target_frame, grain, excluded)
+    # 대수당 건수를 견준다 — 기록이 대수보다 많은 코호트(재방문)도 그대로 쓴다.
+    target_cohorts = life.cohorts_of(target_frame, grain, excluded, within_units=False)
     reference_excluded: dict[str, int] = {}
-    reference_cohorts = life.cohorts_of(reference_frame, grain, reference_excluded)
+    reference_cohorts = life.cohorts_of(
+        reference_frame, grain, reference_excluded, within_units=False
+    )
     rates = reference_rates(reference_cohorts)
     if not rates:
         raise common.refuse(
