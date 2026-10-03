@@ -90,6 +90,7 @@ from app.modules.objects.schemas import (
     QualityFindingOut,
     QualityHitOut,
     QualityReportOut,
+    RangeOut,
     ReferencesOut,
     RefHitOut,
     RelatedObjectOut,
@@ -342,8 +343,14 @@ def summary(
         default=None, description="세부 기준 — 같은 규칙. 주면 계열이 여럿이 된다"
     ),
     metric: str = Query(default="count", description="count·sum·avg·min·max"),
-    order: str = Query(default="desc", description="desc(큰 값부터)·asc(작은 값부터)"),
+    order: str = Query(
+        default="desc",
+        description="desc(큰 값부터)·asc(작은 값부터)·key(키 순 — 날짜는 시간순)",
+    ),
     metric_field: str | None = Query(default=None, description="합·평균을 낼 숫자 칸"),
+    grain: str | None = Query(
+        default=None, description="날짜 축의 기간 단위 — day·week·month·quarter·year(기본)"
+    ),
     q: str | None = Query(default=None),
     status: str | None = Query(default=None),
     under: uuid.UUID | None = Query(default=None),
@@ -370,6 +377,7 @@ def summary(
     stmt = _filtered(
         db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
     )
+    summary_service.check_grain(grain)
     found = summary_service.summarize(
         db,
         scope,
@@ -379,12 +387,14 @@ def summary(
         metric=metric,
         metric_field=metric_field,
         order=order,
+        grain=grain,
     )
     defs = scope.defs
     return SummaryOut(
         group_field=found.group_field,
         group_label=found.group_label,
         order=found.order,
+        grain=found.grain,
         split_field=found.split_field,
         split_label=found.split_label,
         splits=found.splits,
@@ -399,6 +409,11 @@ def summary(
                 label=one.label,
                 count=one.count,
                 value=one.value,
+                range=(
+                    RangeOut(gte=one.range[0], lt=one.range[1])
+                    if one.range is not None
+                    else None
+                ),
                 parts=[
                     PartOut(key=part.key, label=part.label, count=part.count, value=part.value)
                     for part in one.parts
@@ -433,6 +448,7 @@ def points(
     x: str = Query(description="숫자 칸 — properties.<칸>"),
     y: str | None = Query(default=None, description="두 번째 숫자 칸(산점도)"),
     group_by: str | None = Query(default=None, description="상자를 나눌 기준 · 점의 색"),
+    grain: str | None = Query(default=None, description="기준이 날짜면 그 기간 단위"),
     q: str | None = Query(default=None),
     status: str | None = Query(default=None),
     under: uuid.UUID | None = Query(default=None),
@@ -458,7 +474,7 @@ def points(
     stmt = _filtered(
         db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
     )
-    found = summary_service.points(db, scope, stmt, x=x, y=y, group_by=group_by)
+    found = summary_service.points(db, scope, stmt, x=x, y=y, group_by=group_by, grain=grain)
     defs = scope.defs
     return PointsOut(
         x_label=found.x_label,
@@ -497,6 +513,7 @@ def summary_export(
     metric: str = Query(default="count"),
     order: str = Query(default="desc"),
     metric_field: str | None = Query(default=None),
+    grain: str | None = Query(default=None),
     q: str | None = Query(default=None),
     status: str | None = Query(default=None),
     under: uuid.UUID | None = Query(default=None),
@@ -528,6 +545,7 @@ def summary_export(
         metric=metric,
         metric_field=metric_field,
         order=order,
+        grain=grain,
     )
     header, rows = summary_service.summary_table(found)
     return sheets.file_response(
@@ -543,6 +561,7 @@ def points_export(
     x: str = Query(),
     y: str | None = Query(default=None),
     group_by: str | None = Query(default=None),
+    grain: str | None = Query(default=None),
     q: str | None = Query(default=None),
     status: str | None = Query(default=None),
     under: uuid.UUID | None = Query(default=None),
@@ -565,7 +584,7 @@ def points_export(
     stmt = _filtered(
         db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
     )
-    found = summary_service.points(db, scope, stmt, x=x, y=y, group_by=group_by)
+    found = summary_service.points(db, scope, stmt, x=x, y=y, group_by=group_by, grain=grain)
     header, rows = summary_service.points_table(found)
     return sheets.file_response(
         header, rows, fmt=format, stem=f"{type_slug}-points", sheet="값"
@@ -846,14 +865,16 @@ def _checked_summary(
         return {}
     defs = properties_of(db, object_type.id)
     resolver = paths.Resolver(db, object_type)
-    summary_service.check_group(defs, asked.group_by, resolver)
+    grain = asked.grain or None
+    summary_service.check_grain(grain)
+    summary_service.check_group(defs, asked.group_by, resolver, grain)
     if asked.order not in summary_service.ORDERS:
         raise Conflict(
             code("OBJECTS", 52),
             f"차례는 {', '.join(summary_service.ORDERS)} 중 하나여야 합니다: {asked.order}",
         )
     if asked.split_by:
-        summary_service.check_group(defs, asked.split_by, resolver)
+        summary_service.check_group(defs, asked.split_by, resolver, grain)
     summary_service.check_metric(defs, asked.metric, asked.metric_field)
     if asked.chart not in summary_service.CHART_KINDS:
         raise Conflict(

@@ -131,6 +131,7 @@ export function HomeWidget({
               metric: view.summary.group_by ? view.summary.metric : 'count',
               metricField: view.summary.group_by ? view.summary.metric_field : null,
               order: view.summary.order || 'desc',
+              grain: view.summary.grain || null,
             },
           )
           .then((found) => {

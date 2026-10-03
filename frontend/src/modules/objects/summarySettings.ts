@@ -23,8 +23,10 @@ export interface SummarySettings {
   x: string
   y: string
   stacked: boolean
-  /** desc(큰 값부터) · asc(작은 값부터). 「가장 낮은 것」 을 찾는 물음이 따로 있다. */
+  /** desc(큰 값부터) · asc(작은 값부터) · key(키 순 — 날짜는 시간순). */
   order: string
+  /** 날짜 축의 기간 단위(day · week · month · quarter · year). 비우면 해. */
+  grain: string
 }
 
 export const DEFAULT_SUMMARY: SummarySettings = {
@@ -37,4 +39,19 @@ export const DEFAULT_SUMMARY: SummarySettings = {
   y: '',
   stacked: false,
   order: 'desc',
+  grain: '',
+}
+
+export const GRAINS: { value: string; label: string }[] = [
+  { value: 'day', label: '일' },
+  { value: 'week', label: '주' },
+  { value: 'month', label: '월' },
+  { value: 'quarter', label: '분기' },
+  { value: 'year', label: '해' },
+]
+
+export const ORDER_LABELS: Record<string, string> = {
+  desc: '큰 값부터',
+  asc: '작은 값부터',
+  key: '시간순',
 }

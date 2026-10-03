@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-03h
+GUIDE_VERSION: 2026-10-03i
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -347,14 +347,18 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 와 같아서 **같은 조건이면 total 이 같다.**
 
 - `group_by`: `status`·`workspace`·`created_year`·`label`·`key`, 속성은 `properties.<키>`, 다른
-  타입의 칸은 `object_fields` 의 주소. 쓸 수 있는 전부가 응답의 `group_options`.
+  타입의 칸은 `object_fields` 의 주소. 쓸 수 있는 전부가 응답의 `group_options`. 걸음은 셋까지
+  이어 적을 수 있다(`ref.model.ref.base.series` — 고르개에는 한 걸음만 보이지만 주소는 받는다).
 - `metric` 이 `sum`·`avg`·`min`·`max` 면 `metric_field`(숫자 속성)가 필요하다.
-- `order="asc"` 는 「가장 낮은 것」 을 찾을 때.
+- `order="asc"` 는 「가장 낮은 것」 을 찾을 때. **「월별 추이」 는 `grain="month", order="key"`** —
+  `grain`(`day`·`week`·`month`·`quarter`·`year`)이 날짜 축을 그 단위로 묶고, `order="key"` 가
+  시간순으로 세운다. 날짜 칸의 `buckets[].key` 는 기간의 **시작일**, `range` 가 `{gte, lt}` 다.
 - 옮길 때 **빼먹지 않는다**: `total` 은 객체 수, 「(비어 있음)」 도 한 칸, `other_groups`·
   `other_count` 가 0 이 아니면 「그 밖에 N종류 M건」, `overlap` 이 true 면 한 객체가 여러 칸에
   들어 **칸의 합이 total 보다 클 수 있다**.
 - 「그 칸이 뭔데」 는 `buckets[].key` 를 조건 값으로 `objects_list` — 기준이 `properties.<키>`
-  면 field `<키>`, 다른 타입의 칸이면 그 주소, key 가 null 이면 `empty`.
+  면 field `<키>`, 다른 타입의 칸이면 그 주소, key 가 null 이면 `empty`. **날짜 칸은 `range` 로** —
+  `{field, op: "gte", value: range.gte}` 와 `{op: "lt", value: range.lt}` 둘(`eq` 는 0건).
 
 `object_history(type_slug, object_id)` — 언제·누가·어느 칸을 전→후. 값 기록의
 `snapshot` 이 그 시점의 값 전체다. 되돌리기는 `object_restore(entry_id)` — 그 `snapshot` 을

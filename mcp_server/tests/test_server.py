@@ -529,3 +529,17 @@ def test_기동_블록_뒤에_도구가_없다() -> None:
     source = (Path(server.__file__)).read_text(encoding="utf-8")
     boot = source.index('if __name__ == "__main__":')
     assert "@tool()" not in source[boot:], "기동 블록 뒤에 도구가 있습니다 — 블록을 파일 끝으로"
+
+
+def test_통계의_기간_단위와_시간순이_그대로_건너간다() -> None:
+    """「월별 추이」 는 `grain="month", order="key"` 다 — 서버가 월로 묶고 시간순으로 세운다.
+    도구가 그 둘을 떨어뜨리면 해 단위 · 건수 순이 되어 추이가 아니다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"buckets": []}))
+    asyncio.run(
+        server.objects_summary(
+            _ctx("Bearer abc"), "svc_case", group_by="properties.made", grain="month", order="key"
+        )
+    )
+    params = seen[0].url.params
+    assert params["grain"] == "month" and params["order"] == "key"
+    assert params["group_by"] == "properties.made"

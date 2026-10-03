@@ -48,7 +48,7 @@ import type {
   Summary,
 } from '@/modules/objects/api'
 import { PinToHomeDialog } from '@/modules/objects/PinToHomeDialog'
-import { DEFAULT_SUMMARY } from '@/modules/objects/summarySettings'
+import { DEFAULT_SUMMARY, GRAINS, ORDER_LABELS } from '@/modules/objects/summarySettings'
 import type { SummarySettings } from '@/modules/objects/summarySettings'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isManagerOf } from '@/shared/auth/roles'
@@ -119,8 +119,9 @@ interface Props {
    */
   settings: SummarySettings
   onSettings: (next: SummarySettings) => void
-  /** 막대를 눌렀을 때 — 걸 수 있는 축이면 부른다. */
-  onPick: (field: string, key: string | null) => void
+  /** 막대를 눌렀을 때 — 걸 수 있는 축이면 부른다. 날짜 축이면 그 칸의 범위(`gte` · `lt`)를
+   *  함께 준다 — 키 하나를 `eq` 로 걸면 0건이다. */
+  onPick: (field: string, key: string | null, range?: { gte: string; lt: string } | null) => void
   onClose: () => void
   /**
    * 홈 게시를 낼 수 있나 — **인터페이스 목록은 안 된다**(게시는 저장된 뷰라 타입의 것이다).
@@ -226,6 +227,7 @@ export function SummaryPanel({
           x,
           y: settings.chart === 'scatter' ? settings.y || numbers[1]?.field : null,
           groupBy: settings.splitBy || (settings.chart === 'box' ? groupBy : null),
+          grain: settings.grain || null,
         })
         .then((found) => {
           if (cancelled) return
@@ -249,6 +251,7 @@ export function SummaryPanel({
         metric,
         metricField: metric === 'count' ? null : metricField,
         order: settings.order,
+        grain: settings.grain || null,
       })
       .then((found) => {
         if (cancelled) return
@@ -272,6 +275,7 @@ export function SummaryPanel({
     metric,
     metricField,
     settings.order,
+    settings.grain,
     raw,
     settings.chart,
     settings.x,
@@ -313,6 +317,16 @@ export function SummaryPanel({
     [data],
   )
   const canFilter = Boolean(data && filterable(data.group_field))
+  /** 기준이나 세부 기준이 날짜 칸인가 — 그때만 기간 단위와 「시간순」 이 뜻이 있다. */
+  const dated = useMemo(() => {
+    const kinds = new Set(['date', 'datetime'])
+    const kindOf = (field: string) =>
+      (data?.group_options ?? []).find((one) => one.field === field)?.kind ?? ''
+    return (
+      kinds.has(kindOf(groupBy)) || (settings.splitBy ? kinds.has(kindOf(settings.splitBy)) : false)
+    )
+  }, [data, groupBy, settings.splitBy])
+  const orders = dated ? ['desc', 'asc', 'key'] : ['desc', 'asc']
 
   /**
    * 지금 그림을 **같은 숫자로** 파일에. 막대를 보고 옮겨 적으면 그 사이에 틀리고, 틀린
@@ -349,6 +363,7 @@ export function SummaryPanel({
           metric,
           metricField: metric === 'count' ? null : metricField,
           order: settings.order,
+          grain: settings.grain || null,
         },
         format,
         `${typeSlug}-${data?.group_label ?? '통계'}별.${format}`,
@@ -510,18 +525,38 @@ export function SummaryPanel({
           ))}
         </div>
 
+        {/* 날짜 칸은 **기간 단위**로 묶는다 — 기본은 해. 월별 추이를 보려면 여기서 고른다. */}
+        {!raw && dated && (
+          <Select value={settings.grain || 'year'} onValueChange={(next) => patch({ grain: next })}>
+            <SelectTrigger className="w-24" aria-label="기간 단위">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {GRAINS.map((one) => (
+                <SelectItem key={one.value} value={one.value}>
+                  {one.label}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        )}
+
         {/* 「가장 낮은 것」 을 찾는 물음이 따로 있다 — 점수가 제일 낮은 공급사, 불량이
-            제일 적은 공정. 그때마다 데이터를 거꾸로 넣게 할 수는 없다. */}
+            제일 적은 공정. 그때마다 데이터를 거꾸로 넣게 할 수는 없다. 날짜 축이면
+            「시간순」 이 하나 더 — 값 순이면 꺾은선이 건수 순으로 선다. */}
         {!raw && (
           <Button
             variant="outline"
             size="sm"
-            title={settings.order === 'desc' ? '큰 값부터' : '작은 값부터'}
+            title={ORDER_LABELS[settings.order] ?? ORDER_LABELS.desc}
             aria-label="순서 변경"
-            onClick={() => patch({ order: settings.order === 'desc' ? 'asc' : 'desc' })}
+            onClick={() => {
+              const at = orders.indexOf(settings.order)
+              patch({ order: orders[(at + 1) % orders.length] })
+            }}
           >
             <ArrowUpDown className="mr-1 size-4" />
-            {settings.order === 'desc' ? '큰 값부터' : '작은 값부터'}
+            {ORDER_LABELS[settings.order] ?? ORDER_LABELS.desc}
           </Button>
         )}
 
@@ -599,6 +634,7 @@ export function SummaryPanel({
                   chart: settings.chart,
                   stacked: settings.stacked,
                   order: settings.order,
+                  grain: settings.grain,
                 }
               : null
           }
@@ -671,7 +707,10 @@ export function SummaryPanel({
                   ? (row) => {
                       const key = row[KEY]
                       // 빈 칸은 「값이 없음」 이라 필터로 옮길 값이 없다.
-                      if (typeof key === 'string') onPick(data.group_field, key)
+                      if (typeof key !== 'string') return
+                      // 날짜 축은 그 기간의 **범위**로 — 시작일 하나를 `eq` 로 걸면 0건이다.
+                      const picked = data.buckets.find((one) => one.key === key)
+                      onPick(data.group_field, key, picked?.range ?? null)
                     }
                   : undefined
               }

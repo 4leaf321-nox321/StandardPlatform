@@ -924,6 +924,7 @@ async def objects_summary(
     metric: str = "count",
     metric_field: str | None = None,
     order: str = "desc",
+    grain: str | None = None,
     q: str | None = None,
     properties: dict[str, str] | None = None,
     conditions: list[dict[str, str]] | None = None,
@@ -937,13 +938,19 @@ async def objects_summary(
 
     - `group_by` 기준: `label`·`key`·`status`·`workspace`(소유 부서)·
       `created_year`, 속성은 `properties.<키>`, 다른 타입의 칸은
-      `object_fields` 의 주소. 날짜는 해로 센다. 긴 글·파일은 안 된다.
+      `object_fields` 의 주소. 걸음은 이어 적을 수 있다(`ref.model.ref.base_model`,
+      셋까지). 긴 글·파일은 안 된다.
       `type_slug` 가 인터페이스면 `type`(어느 구현 타입인가)도 된다.
       쓸 수 있는 기준 전부가 응답의 `group_options` 다.
     - `split_by` 세부 기준(같은 규칙). 주면 칸마다 `parts` 로 나뉜다.
     - `metric`: `count`(기본)·`sum`·`avg`·`min`·`max`. `count` 가 아니면
       `metric_field`(숫자 속성 `properties.<키>`)가 필요하다.
-    - `order`: `desc`(큰 값부터)·`asc`(작은 값부터 — 「가장 낮은 것」).
+    - `order`: `desc`(큰 값부터)·`asc`(작은 값부터 — 「가장 낮은 것」)·`key`(키 순 —
+      날짜 축을 **시간순**으로 볼 때).
+    - `grain`: 날짜 축의 기간 단위 `day`·`week`·`month`·`quarter`·`year`(기본). 「월별
+      추이」 는 `grain="month", order="key"`. 날짜 칸의 `buckets[].key` 는 그 기간의
+      **시작일**이고 `range` 가 `{gte, lt}` 다 — 그 칸을 보려면 `objects_list` 에
+      `{field: <칸>, op: "gte"}` 와 `{op: "lt"}` 둘을 건다(`eq` 는 0건).
 
     사용자에게 옮길 때 **빼먹지 않는다**:
     - `total` 은 거른 **객체 수**. 「(비어 있음)」 칸도 숨기지 않는다.
@@ -962,6 +969,8 @@ async def objects_summary(
         params.append(("split_by", split_by))
     if metric_field and metric != "count":
         params.append(("metric_field", metric_field))
+    if grain:
+        params.append(("grain", grain))
     params += _filter_params(q, status, properties, conditions)
     return await _get(ctx, f"/api/objects/{type_slug}/summary", params=params)
 

@@ -93,7 +93,7 @@ const BASE = {
   metric_options: [{ field: 'properties.weight', label: '무게', kind: 'number' }],
 }
 
-async function panel(data: object) {
+async function panel(data: object, settings: Record<string, unknown> = {}) {
   objectApi.summary.mockResolvedValue(data)
   const { SummaryPanel, DEFAULT_SUMMARY } = await import('@/modules/objects/SummaryPanel')
   const onPick = vi.fn()
@@ -105,7 +105,7 @@ async function panel(data: object) {
       <SummaryPanel
         typeSlug="part"
         query={{ q: '볼트' }}
-        settings={DEFAULT_SUMMARY}
+        settings={{ ...DEFAULT_SUMMARY, ...settings }}
         onSettings={onSettings}
         onPick={onPick}
         onClose={vi.fn()}
@@ -122,7 +122,14 @@ describe('통계', () => {
     expect(objectApi.summary).toHaveBeenCalledWith(
       'part',
       { q: '볼트' },
-      { groupBy: 'status', splitBy: null, metric: 'count', metricField: null, order: 'desc' },
+      {
+        groupBy: 'status',
+        splitBy: null,
+        metric: 'count',
+        metricField: null,
+        order: 'desc',
+        grain: null,
+      },
     )
     // **빈 값을 숨기면 막대의 합이 전체와 안 맞고, 그 차이는 화면 어디에도 안 적힌다.**
     expect(charts.rows.map((one) => one.name)).toEqual(['A', 'B', '(비어 있음)'])
@@ -137,7 +144,7 @@ describe('통계', () => {
   it('막대를 클릭하면 **원래 값**으로 거른다 — 빈 칸은 거를 값이 없다', async () => {
     const { onPick } = await panel(BASE)
     await userEvent.click(screen.getByRole('button', { name: 'A' }))
-    expect(onPick).toHaveBeenCalledWith('properties.grade', 'A')
+    expect(onPick).toHaveBeenCalledWith('properties.grade', 'A', null)
 
     onPick.mockClear()
     await userEvent.click(screen.getByRole('button', { name: '(비어 있음)' }))
@@ -284,7 +291,14 @@ describe('개별 순위', () => {
       expect(objectApi.exportSummary).toHaveBeenCalledWith(
         'part',
         { q: '볼트' },
-        { groupBy: 'status', splitBy: null, metric: 'count', metricField: null, order: 'desc' },
+        {
+          groupBy: 'status',
+          splitBy: null,
+          metric: 'count',
+          metricField: null,
+          order: 'desc',
+          grain: null,
+        },
         'xlsx',
         'part-등급별.xlsx',
       ),
@@ -333,6 +347,56 @@ describe('개별 순위', () => {
   it('이어진 것 너머의 기준도 막대를 클릭하면 그 주소로 거른다', async () => {
     const { onPick } = await panel({ ...BASE, group_field: 'ref.vendor.country' })
     await userEvent.click(screen.getByRole('button', { name: 'A' }))
-    expect(onPick).toHaveBeenCalledWith('ref.vendor.country', 'A')
+    expect(onPick).toHaveBeenCalledWith('ref.vendor.country', 'A', null)
+  })
+})
+
+describe('기간 단위', () => {
+  const DATED = {
+    ...BASE,
+    group_field: 'properties.made',
+    group_label: '만든 날 (월)',
+    order: 'key',
+    grain: 'month',
+    buckets: [
+      {
+        key: '2026-01-01',
+        label: '2026-01',
+        count: 2,
+        value: null,
+        parts: [],
+        range: { gte: '2026-01-01', lt: '2026-02-01' },
+      },
+      {
+        key: '2026-02-01',
+        label: '2026-02',
+        count: 1,
+        value: null,
+        parts: [],
+        range: { gte: '2026-02-01', lt: '2026-03-01' },
+      },
+    ],
+    group_options: [
+      { field: 'status', label: '상태', kind: 'fixed' },
+      { field: 'properties.made', label: '만든 날', kind: 'date' },
+    ],
+  }
+
+  it('날짜 기준이면 기간 단위를 고를 수 있고, 막대를 누르면 **범위**로 거른다', async () => {
+    const { onPick, onSettings } = await panel(DATED, { groupBy: 'properties.made' })
+    expect(screen.getByLabelText('기간 단위')).toBeTruthy()
+    await userEvent.click(screen.getByRole('button', { name: '2026-01' }))
+    expect(onPick).toHaveBeenCalledWith('properties.made', '2026-01-01', {
+      gte: '2026-01-01',
+      lt: '2026-02-01',
+    })
+    // 차례 단추는 큰 값부터 → 작은 값부터 → 시간순으로 돈다 — 날짜가 아닌 기준에는 없는 자리다.
+    await userEvent.click(screen.getByRole('button', { name: '순서 변경' }))
+    expect(onSettings).toHaveBeenLastCalledWith(expect.objectContaining({ order: 'asc' }))
+  })
+
+  it('날짜가 아닌 기준에는 기간 단위 고르개가 없다', async () => {
+    await panel(BASE)
+    expect(screen.queryByLabelText('기간 단위')).toBeNull()
   })
 })

@@ -428,7 +428,10 @@ class SavedViewSummary(BaseModel):
     stacked: bool = False
     """막대를 쌓을지. 여럿을 나란히 두면 「전체가 얼마인지」 를 못 읽는 물음이 있다."""
     order: str = "desc"
-    """desc(큰 값부터) · asc(작은 값부터). 작은 값부터는 「가장 낮은 것」 을 찾을 때 쓴다."""
+    """desc(큰 값부터) · asc(작은 값부터) · key(키 순 — 날짜 축을 시간순으로). 작은 값부터는
+    「가장 낮은 것」 을 찾을 때 쓴다."""
+    grain: str = ""
+    """날짜 축의 기간 단위(day · week · month · quarter · year). 비우면 해."""
 
 
 class SavedViewOut(BaseModel):
@@ -570,12 +573,22 @@ class PartOut(BaseModel):
     value: float | None = None
 
 
+class RangeOut(BaseModel):
+    """날짜 칸의 범위 조건 — `f.<칸>.gte` · `f.<칸>.lt` 로 그대로 쓴다."""
+
+    gte: str
+    lt: str
+
+
 class BucketOut(BaseModel):
     key: str | None
-    """거르기에 그대로 넣을 수 있는 값. 빈 칸이면 null."""
+    """거르기에 그대로 넣을 수 있는 값. 빈 칸이면 null. 날짜 축이면 **기간의 시작일**이다."""
     label: str
     count: int
     value: float | None = None
+    range: RangeOut | None = None
+    """날짜 축이면 이 칸의 범위 — 막대를 누르면 `gte` · `lt` 두 조건이 된다. 키 하나를 `eq` 로
+    걸면 0건이다(저장값은 날짜 하나하나다)."""
     parts: list[PartOut] = Field(default_factory=list)
 
 
@@ -586,6 +599,8 @@ class SummaryOut(BaseModel):
     group_field: str
     group_label: str
     order: str
+    grain: str | None = None
+    """날짜 축이면 묶은 기간 단위."""
     split_field: str
     split_label: str
     splits: list[str]

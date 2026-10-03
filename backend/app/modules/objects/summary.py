@@ -15,8 +15,9 @@
 
 아무 칸으로나 묶게 두면 긴 글 칸으로 묶었을 때 그룹이 행 수만큼 나온다 — 답이 아니라
 목록을 다시 보는 것이고, DB 에는 부담만 남는다. 그래서 묶을 수 있는 칸을 정의에서
-고른다(§`group_options`). 날짜는 **해로** 묶는다: 날짜 하나하나로 묶으면 그룹이
-수백 개가 되고, 사람이 실제로 묻는 것은 연도다.
+고른다(§`group_options`). 날짜는 **기간 단위**(`grain`)로 묶는다 — 기본은 해다: 날짜 하나하나로
+묶으면 그룹이 수백 개가 되고, 사람이 실제로 묻는 것은 연도다. 월 · 주로 보려면 단위를 고른다
+(ADR 0013). 축을 SQL 로 만드는 빌더는 지표와 함께 쓴다(`axes.py`).
 
 ## 빈 값은 숨기지 않는다
 
@@ -27,31 +28,29 @@
 from __future__ import annotations
 
 import uuid
-from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import (
-    Float,
-    Select,
-    String,
-    and_,
-    case,
-    cast,
-    func,
-    nulls_last,
-    or_,
-    select,
-    true,
-)
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy import Select, func, nulls_last, or_, select
+from sqlalchemy.orm import Session
 
-from app.modules.objects import paths, system
-from app.modules.objects.models import ObjectInstance, ObjectRef
+from app.modules.objects import axes, paths
+from app.modules.objects.axes import (  # noqa: F401 — 통계의 공개 이름으로 다시 내보낸다
+    BOOL_LABELS,
+    DATE_KINDS,
+    EMPTY_LABEL,
+    FIXED_FIELDS,
+    GRAINS,
+    GROUPABLE,
+    NUMERIC_RE,
+    STATUS_LABELS,
+    TYPE_FIELD,
+    Axis,
+)
+from app.modules.objects.models import ObjectInstance
 from app.modules.objects.scope import Scope, as_scope
 from app.modules.objects.services import count_of
 from app.modules.ontology.models import ObjectType, PropertyDef
-from app.modules.workspaces.models import Workspace
 from app.shared.errors import AppError, code
 
 #: 집계 방식. `count` 는 칸을 안 받고, 나머지는 숫자 속성 하나를 받는다.
@@ -64,28 +63,6 @@ METRIC_LABELS = {
     "max": "최댓값",
 }
 
-#: 속성이 아니라 객체 자신이 가진 축.
-#:
-#: **이름·식별자도 축이다.** 그룹이 행 수만큼 나온다는 이유로 막아 두면 「점수가 높은
-#: 부품 열 개」 같은 **개별 순위** 그림이 아예 안 나온다 — 그런데 사람이 실제로 자주
-#: 보는 것이 그것이다. 상한(`MAX_BUCKETS`)과 정렬이 이미 있으니 그대로 순위가 된다.
-FIXED_FIELDS = {
-    "label": "이름",
-    "key": "식별자",
-    "status": "상태",
-    "workspace": "소유 부서",
-    "created_year": "만든 해",
-}
-
-#: 인터페이스 목록에만 있는 축 — 그 줄이 **어느 타입의 객체인가**(ADR 0006). 「설비가 타입별로
-#: 몇 대」 는 인터페이스 목록에서 가장 먼저 나오는 물음이다.
-TYPE_FIELD = ("type", "타입")
-
-#: 묶을 수 있는 속성 종류. **긴 글과 파일은 없다** — 그룹이 행 수만큼 나온다.
-GROUPABLE = ("text", "enum", "bool", "url", "number", "date", "datetime", "object_ref")
-#: 해로 묶는 종류.
-BY_YEAR = ("date", "datetime")
-
 #: 저장된 뷰가 담을 수 있는 그림 모양. 앞의 넷은 `shared/charts` 의 `Chart`,
 #: `heatmap` 은 plotly(`LazyPlot`)가 그린다 — **세부 기준이 있을 때만 뜻이 있다.**
 CHART_KINDS = ("bar", "line", "area", "pie", "heatmap", "list", "count")
@@ -94,8 +71,9 @@ CHART_KINDS = ("bar", "line", "area", "pie", "heatmap", "list", "count")
 AXISLESS_KINDS = ("count", "list")
 
 #: 차례. 큰 값부터가 기본이고, 작은 값부터는 「가장 낮은 것」 을 찾을 때 쓴다
-#: (불량률이 가장 낮은 공정, 점수가 가장 낮은 공급사).
-ORDERS = ("desc", "asc")
+#: (불량률이 가장 낮은 공정, 점수가 가장 낮은 공급사). `key` 는 **키 순서** — 날짜 축을
+#: 시간순으로 세울 때(값 순이면 꺾은선이 건수 순으로 선다).
+ORDERS = ("desc", "asc", "key")
 
 #: 세부 기준에서 돌려줄 값의 수. 이보다 많으면 색이 겹쳐 못 읽는다 —
 #: 여덟 색을 돌려 쓰므로 열둘이면 이미 같은 색이 두 번 나온다.
@@ -104,13 +82,6 @@ MAX_SPLITS = 12
 #: 한 번에 돌려줄 그룹 수. 넘는 것은 「그 밖에」 한 줄로 접는다 — 막대 200개는
 #: 읽을 수 없고, 그림이 아니라 벽이 된다.
 MAX_BUCKETS = 30
-
-STATUS_LABELS = {"active": "사용", "deprecated": "안 씀"}
-BOOL_LABELS = {"true": "예", "false": "아니오"}
-EMPTY_LABEL = "(비어 있음)"
-
-#: 숫자로 읽히는 값. 합·평균을 낼 때 이것에 안 맞는 행은 셈에서 빠진다.
-NUMERIC_RE = r"^-?[0-9]+(\.[0-9]+)?$"
 
 
 @dataclass
@@ -126,13 +97,16 @@ class Part:
 @dataclass
 class Bucket:
     key: str | None
-    """거르기에 그대로 쓸 수 있는 값. 빈 칸이면 None."""
+    """거르기에 그대로 쓸 수 있는 값. 빈 칸이면 None. 날짜 축이면 **기간의 시작일**."""
     label: str
     count: int
     value: float | None = None
     """`metric` 이 count 가 아닐 때의 값. count 면 None."""
     parts: list[Part] = field(default_factory=list)
     """세부 기준을 줬을 때만 채워진다. 합은 이 칸의 `count` 와 맞는다."""
+    range: tuple[str, str] | None = None
+    """날짜 축이면 이 칸의 (gte, lt) — 막대를 누르면 **범위 조건** 둘이 된다. 키 하나를 `eq` 로
+    걸면 0건이다(저장값은 날짜 하나하나다)."""
 
 
 @dataclass
@@ -145,6 +119,8 @@ class Summary:
     total: int
     """거르기를 통과한 **전체 행 수.** 막대의 합과 다르면 「그 밖에」 가 그 차이다."""
     order: str = "desc"
+    grain: str | None = None
+    """날짜 축이면 묶은 기간 단위."""
     split_field: str = ""
     split_label: str = ""
     splits: list[str] = field(default_factory=list)
@@ -178,23 +154,6 @@ class GroupOption:
 
     참조 칸 「개발사」 와 관계 「개발사」 가 둘 다 있으면 같은 「개발사 › 국가」 가 두 번
     서는데, 제목이 그 둘을 가른다."""
-
-
-@dataclass
-class Axis:
-    """기준 하나를 SQL 로 — 식·보여 줄 이름·종류, 그리고 바깥 조인으로 붙일 것들."""
-
-    expr: Any
-    label: str
-    kind: str
-    joins: list[tuple[Any, Any]] = field(default_factory=list)
-    """(붙일 것, 조건) — 여러 값 칸의 펼친 배열, 참조로 이어진 객체, 관계."""
-    multi: bool = False
-    """한 행이 여러 막대에 들 수 있나."""
-    ref_def: PropertyDef | None = None
-    """참조 칸이면 그 정의 — 값(id)을 이름으로 바꿀 때 쓴다."""
-    namer: Callable[[list[str]], dict[str, str]] | None = None
-    """관계로 이어진 것 자체가 기준이면 — id 를 이름으로."""
 
 
 def group_options(
@@ -248,239 +207,6 @@ def metric_options(defs: list[PropertyDef]) -> list[GroupOption]:
     ]
 
 
-def _prop(defs: list[PropertyDef], field_name: str) -> PropertyDef:
-    key = field_name.split(".", 1)[1]
-    found = next((one for one in defs if one.key == key), None)
-    if found is None:
-        raise AppError(
-            code("OBJECTS", 40),
-            f"이 타입에 없는 칸입니다: {key}",
-            status=422,
-        )
-    return found
-
-
-def _group_expr(
-    defs: list[PropertyDef],
-    field_name: str,
-    alias: str = "g",
-    resolver: paths.Resolver | None = None,
-) -> Axis:
-    """기준 하나. 식은 **글자**를 내놓는다 — 그래야 한 자리에서 상태·부서·속성을 같은
-    규칙으로 다룬다.
-
-    **여러 값 칸은 배열을 펼쳐** 값마다 한 줄로 센다(`LEFT JOIN LATERAL`). **이어진 것 너머의
-    칸**(`ref.`·`out.`·`in.`)은 이어진 객체를 바깥 조인으로 붙여 그 칸으로 센다. 둘 다 한
-    행이 여러 막대에 들 수 있고, 그 사실을 `multi` 로 화면에 넘겨 **적게 한다** — 안 적으면
-    사람은 합이 안 맞는 것을 오류로 읽는다. 바깥 조인이라 이어진 것·값이 없는 행은
-    「(비어 있음)」 한 칸으로 남는다.
-    """
-    if paths.is_path(field_name):
-        if resolver is None:
-            raise AppError(
-                code("OBJECTS", 41), f"기준으로 쓸 수 없는 칸입니다: {field_name}", status=422
-            )
-        return _hop_axis(resolver, resolver.parse(field_name), alias)
-    if field_name == TYPE_FIELD[0]:
-        scope = resolver.scope if resolver is not None else None
-        if scope is None or not scope.is_interface:
-            raise AppError(
-                code("OBJECTS", 41),
-                "「타입」 축은 인터페이스 목록에서만 씁니다 — 타입 목록은 한 타입뿐입니다.",
-                status=422,
-            )
-        names = {str(one.id): one.label for one in scope.types}
-        return Axis(
-            cast(ObjectInstance.type_id, String),
-            TYPE_FIELD[1],
-            "type",
-            namer=lambda keys: {one: names.get(one, one) for one in keys},
-        )
-    if field_name in FIXED_FIELDS:
-        label = FIXED_FIELDS[field_name]
-        if field_name == "label":
-            return Axis(ObjectInstance.label, label, "plain")
-        if field_name == "key":
-            return Axis(ObjectInstance.key, label, "plain")
-        if field_name == "status":
-            return Axis(ObjectInstance.status, label, "status")
-        if field_name == "workspace":
-            return Axis(cast(ObjectInstance.owner_workspace_id, String), label, "workspace")
-        return Axis(func.to_char(ObjectInstance.created_at, "YYYY"), label, "year")
-    if not field_name.startswith("properties."):
-        raise AppError(
-            code("OBJECTS", 41),
-            f"기준으로 쓸 수 없는 칸입니다: {field_name}. "
-            f"쓸 수 있는 것: {', '.join(FIXED_FIELDS)} 또는 properties.<칸>",
-            status=422,
-        )
-    one = _prop(defs, field_name)
-    return _field_axis(ObjectInstance, one.key, one, one.label, alias, [], many=False)
-
-
-def _field_axis(
-    entity: Any,
-    field_name: str,
-    definition: PropertyDef | None,
-    label: str,
-    alias: str,
-    joins: list[tuple[Any, Any]],
-    *,
-    many: bool,
-) -> Axis:
-    """`entity`(목록의 객체, 또는 이어진 객체의 별칭)의 칸 하나로 센다."""
-    if definition is None:
-        fixed = {"label": entity.label, "key": entity.key, "status": entity.status}
-        return Axis(
-            fixed[field_name],
-            label,
-            "status" if field_name == "status" else "plain",
-            joins,
-            many,
-        )
-    if definition.data_type not in GROUPABLE:
-        raise AppError(
-            code("OBJECTS", 42),
-            f"「{label}」 은 기준으로 쓸 수 없는 종류입니다({definition.data_type}). "
-            "긴 글과 파일은 기준이 되지 않습니다 — 그룹이 행 수만큼 나옵니다.",
-            status=422,
-        )
-    joins = list(joins)
-    if definition.multi:
-        raw = entity.properties[definition.key]
-        shape = func.jsonb_typeof(raw)
-        # 옛 데이터에는 배열이 아닌 값 하나가 들어 있을 수 있다 — 그것도 한 값으로 센다.
-        array = case(
-            (shape == "array", raw),
-            (func.coalesce(shape, "null") == "null", func.jsonb_build_array()),
-            else_=func.jsonb_build_array(raw),
-        )
-        values = (
-            func.jsonb_array_elements_text(array)
-            .table_valued("value")
-            .lateral(f"{alias}_values")
-        )
-        joins.append((values, true()))
-        column = values.c.value
-    else:
-        column = entity.properties[definition.key].astext
-    ref_def = definition if definition.data_type == "object_ref" else None
-    multi = many or definition.multi
-    if definition.data_type in BY_YEAR:
-        # 날짜 하나하나로 묶으면 그룹이 수백 개다. 사람이 묻는 것은 연도다.
-        return Axis(func.substr(column, 1, 4), f"{label} (해)", "year", joins, multi, ref_def)
-    return Axis(column, label, definition.data_type, joins, multi, ref_def)
-
-
-def _hop_axis(resolver: paths.Resolver, found: paths.PathField, alias: str) -> Axis:
-    """이어진 것 너머의 기준 — 이어진 객체를 **바깥 조인**으로 붙인다."""
-    hop = found.hop
-    if hop.kind == "ref":
-        # 참조 색인으로 잇는다(ADR 0010) — 예전의 JSONB 포함(`@>`) 조인은 200만 건에서 2분을
-        # 넘겼다(실측). 색인은 원소마다 한 줄이라 단일값 · 여러 값이 같은 모양이다.
-        ref = aliased(ObjectRef, name=f"{alias}_link")
-        target = aliased(ObjectInstance, name=f"{alias}_ref")
-        return _field_axis(
-            target,
-            found.field or "label",
-            found.definition,
-            found.label,
-            alias,
-            [
-                (ref, and_(ref.src_id == ObjectInstance.id, ref.key == hop.name)),
-                (target, and_(target.id == ref.dst_id, target.deleted_at.is_(None))),
-            ],
-            many=hop.many,
-        )
-    edges = resolver.edges(hop, f"{alias}_edges")
-    joins: list[tuple[Any, Any]] = [(edges, edges.c.me == ObjectInstance.id)]
-    if found.field is None:
-        return Axis(
-            edges.c.other,
-            found.label,
-            "related",
-            joins,
-            hop.many,
-            namer=lambda keys: resolver.names(hop, keys),
-        )
-    target = aliased(ObjectInstance, name=f"{alias}_obj")
-    joins.append(
-        (target, and_(cast(target.id, String) == edges.c.other, target.deleted_at.is_(None)))
-    )
-    return _field_axis(
-        target, found.field, found.definition, found.label, alias, joins, many=hop.many
-    )
-
-
-def _joined(stmt: Select[Any], *axes: Axis) -> Select[Any]:
-    """기준이 붙일 것을 **바깥 조인**으로 붙인다 — 안쪽 조인이면 값·이어진 것이 없는 행이
-    사라져 「(비어 있음)」 이 안 서고, 막대의 합이 전체보다 작아진다."""
-    for axis in axes:
-        for target, onclause in axis.joins:
-            stmt = stmt.outerjoin_from(ObjectInstance, target, onclause)
-    return stmt
-
-
-def _metric_expr(defs: list[PropertyDef], metric: str, metric_field: str | None) -> Any:
-    if metric == "count":
-        return None
-    if not metric_field:
-        raise AppError(
-            code("OBJECTS", 44),
-            f"{METRIC_LABELS[metric]}을(를) 내려면 숫자 칸을 골라야 합니다.",
-            status=422,
-        )
-    one = _prop(defs, metric_field)
-    if one.data_type != "number" or one.multi:
-        raise AppError(
-            code("OBJECTS", 45),
-            f"「{one.label}」 은 숫자 칸이 아니라 "
-            f"{METRIC_LABELS[metric]}을(를) 낼 수 없습니다.",
-            status=422,
-        )
-    # **행 하나가 질의를 통째로 죽인다.** JSONB 는 글자를 담으므로 숫자가 아닌 값이
-    # 섞일 수 있고(옛 데이터·손으로 고친 값·가져오기 이전의 것), 그때 cast 는 그 행
-    # 하나 때문에 오류를 낸다 — 화면에는 「합계를 낼 수 없음」 이 아니라 500 이 뜬다.
-    # 숫자로 읽히는 것만 숫자로 보고 나머지는 NULL 로 둔다(집계 함수가 건너뛴다).
-    text = ObjectInstance.properties[one.key].astext
-    return case((text.op("~")(NUMERIC_RE), cast(text, Float)), else_=None)
-
-
-def _labels(db: Session, axis: Axis, keys: list[str]) -> dict[str, str]:
-    """그룹 값을 사람이 읽는 이름으로. **모르는 값은 그대로 보여 준다** — 빈 칸으로
-    두면 데이터가 없는 것처럼 읽히는데, 실제로는 표에 없는 새 값이 들어온 것이다."""
-    if axis.namer is not None:
-        return axis.namer(keys)
-    if axis.kind == "status":
-        return {one: STATUS_LABELS.get(one, one) for one in keys}
-    if axis.kind == "bool":
-        return {one: BOOL_LABELS.get(one.lower(), one) for one in keys}
-    if axis.kind == "workspace":
-        found = {
-            str(row.id): row.name
-            for row in db.scalars(
-                select(Workspace).where(
-                    Workspace.id.in_([uuid.UUID(one) for one in keys if _is_uuid(one)])
-                )
-            )
-        }
-        return {one: found.get(one, "(지워진 부서)") for one in keys}
-    if axis.kind == "object_ref" and axis.ref_def is not None:
-        ref = axis.ref_def
-        rows = [{ref.key: key} for key in keys if _is_uuid(key)]
-        names = system.ref_labels(db, [ref], rows)
-        return {key: names.get(uuid.UUID(key), key) for key in keys if _is_uuid(key)}
-    return {}
-
-
-def _is_uuid(raw: str) -> bool:
-    try:
-        uuid.UUID(raw)
-        return True
-    except ValueError:
-        return False
-
-
 def summarize(
     db: Session,
     target: ObjectType | Scope,
@@ -491,12 +217,15 @@ def summarize(
     metric: str = "count",
     metric_field: str | None = None,
     order: str = "desc",
+    grain: str | None = None,
 ) -> Summary:
     """목록과 **같은 거르기** 위에서 센다. `split_by`(세부 기준)를 주면 한 번 더 나눈다.
 
     세부 기준이 필요한 이유: 「부서별 몇 건」 다음에 오는 물음이 거의 언제나 「그 안에서
     등급은 어떻게 되나」 이기 때문이다. 그때 거르기를 등급마다 바꿔 가며 여섯 번 세는
     것이 지금까지의 방법이었고, 그것은 사람이 그 답을 포기하게 만든다.
+
+    `grain` 은 날짜 축의 기간 단위(기본 해) — 기준 · 세부 기준 둘 다에 걸린다.
     """
     if metric not in METRICS:
         raise AppError(
@@ -512,17 +241,17 @@ def summarize(
         )
     scope = as_scope(db, target)
     defs = scope.defs
-    resolver = paths.Resolver(db, scope)
-    group = _group_expr(defs, group_by, "g", resolver)
+    plan = axes.JoinPlan(db, scope, prefix="g")
+    group = plan.axis(group_by, grain=grain)
     key_expr = group.expr
-    value_expr = _metric_expr(defs, metric, metric_field)
+    value_expr = axes.metric_expr(defs, metric, metric_field, METRIC_LABELS)
 
     total = count_of(db, filtered)
     counted = func.count().label("n")
     columns: list[Any] = [key_expr.label("k"), counted]
     if value_expr is not None:
         columns.append(getattr(func, metric)(value_expr).label("v"))
-    grouped = _joined(filtered.with_only_columns(*columns), group).group_by(key_expr)
+    grouped = axes.joined(filtered.with_only_columns(*columns), group).group_by(key_expr)
 
     # 그룹이 몇 개인지, 그리고 **센 줄이 모두 몇인지** 먼저 센다. 상한을 넘는 축(자유
     # 글자 칸)에서 전부 읽어 오면 응답이 수만 줄이 된다. 센 줄의 합은 여러 값 칸이면
@@ -532,7 +261,10 @@ def summarize(
     # 참조 너머 칸으로 묶으면 기록 200만 건에서 그 한 번이 3초였다(실측, ADR 0010).
     every = grouped.order_by(None).subquery()
     measured = every.c.n if value_expr is None else every.c.v
-    ordering = measured.asc() if order == "asc" else measured.desc()
+    if order == "key":
+        ordering = every.c.k.asc()
+    else:
+        ordering = measured.asc() if order == "asc" else measured.desc()
     rows = list(
         db.execute(
             select(
@@ -548,7 +280,7 @@ def summarize(
     counted_rows = int(rows[0].all_rows or 0) if rows else 0
 
     keys = [str(row.k) for row in rows if row.k is not None]
-    names = _labels(db, group, keys)
+    names = axes.labels(db, group, keys)
     buckets = [
         Bucket(
             key=None if row.k is None else str(row.k),
@@ -559,6 +291,11 @@ def summarize(
             ),
             count=int(row.n),
             value=(None if value_expr is None else _float(row.v)),
+            range=(
+                axes.period_range(str(row.k), group.grain)
+                if group.grain is not None and row.k is not None
+                else None
+            ),
         )
         for row in rows
     ]
@@ -570,17 +307,18 @@ def summarize(
     if split_by:
         split_label, splits, other_splits, split_multi = _split(
             db,
-            defs,
             filtered,
             buckets=buckets,
             group=group,
-            resolver=resolver,
+            plan=plan,
             split_by=split_by,
+            grain=grain,
             metric=metric,
             value_expr=value_expr,
         )
     return Summary(
         order=order,
+        grain=group.grain,
         split_field=split_by or "",
         split_label=split_label,
         splits=splits,
@@ -601,13 +339,13 @@ def summarize(
 
 def _split(
     db: Session,
-    defs: list[PropertyDef],
     filtered: Select[Any],
     *,
     buckets: list[Bucket],
     group: Axis,
-    resolver: paths.Resolver,
+    plan: axes.JoinPlan,
     split_by: str,
+    grain: str | None,
     metric: str,
     value_expr: Any,
 ) -> tuple[str, list[str], int, bool]:
@@ -617,7 +355,7 @@ def _split(
     화면이 칸마다 나오는 순서대로 계열을 만들면 첫 칸에 없던 값이 뒤에서 튀어나와
     **색이 밀린다** — 같은 값이 그림 안에서 두 색을 갖는다.
     """
-    split = _group_expr(defs, split_by, "s", resolver)
+    split = plan.axis(split_by, grain=grain)
     key_expr = group.expr
     counted = func.count().label("n")
     columns: list[Any] = [key_expr.label("k"), split.expr.label("s"), counted]
@@ -630,7 +368,7 @@ def _split(
     within = key_expr.in_(wanted) if wanted else None
     if any(one.key is None for one in buckets):
         within = key_expr.is_(None) if within is None else or_(within, key_expr.is_(None))
-    stmt = _joined(filtered.with_only_columns(*columns), group, split)
+    stmt = axes.joined(filtered.with_only_columns(*columns), group, split)
     if within is not None:
         stmt = stmt.where(within)
     rows = list(db.execute(stmt.group_by(key_expr, split.expr)))
@@ -643,7 +381,7 @@ def _split(
         weight[key] = weight.get(key, 0) + int(row.n)
     ordered = sorted(weight, key=lambda one: (-weight[one], one or ""))
     kept = ordered[:MAX_SPLITS]
-    names = _labels(db, split, [one for one in kept if one is not None])
+    names = axes.labels(db, split, [one for one in kept if one is not None])
     label_of = {one: (EMPTY_LABEL if one is None else names.get(one, one)) for one in kept}
 
     by_key = {one.key: one for one in buckets}
@@ -679,11 +417,30 @@ def _float(raw: Any) -> float | None:
 
 
 def check_group(
-    defs: list[PropertyDef], field_name: str, resolver: paths.Resolver | None = None
+    defs: list[PropertyDef],
+    field_name: str,
+    resolver: paths.Resolver | None = None,
+    grain: str | None = None,
 ) -> None:
     """이 축으로 묶을 수 있나. **저장할 때 부른다** — 안 하면 열었을 때 그림만 안 뜨고,
     무엇이 잘못됐는지 말할 자리가 없다."""
-    _group_expr(defs, field_name, "g", resolver)
+    if resolver is None:
+        if paths.is_path(field_name) or field_name == TYPE_FIELD[0]:
+            raise AppError(
+                code("OBJECTS", 41), f"기준으로 쓸 수 없는 칸입니다: {field_name}", status=422
+            )
+        axes.own_axis(defs, field_name, grain=grain)
+        return
+    axes.JoinPlan(resolver.db, resolver.scope).axis(field_name, grain=grain)
+
+
+def check_grain(grain: str | None) -> None:
+    if grain is not None and grain not in GRAINS:
+        raise AppError(
+            code("OBJECTS", 98),
+            f"기간 단위는 {', '.join(GRAINS)} 중 하나여야 합니다: {grain}",
+            status=422,
+        )
 
 
 def check_metric(defs: list[PropertyDef], metric: str, metric_field: str | None) -> None:
@@ -694,7 +451,7 @@ def check_metric(defs: list[PropertyDef], metric: str, metric_field: str | None)
             f"집계 방식은 {', '.join(METRICS)} 중 하나여야 합니다: {metric}",
             status=422,
         )
-    _metric_expr(defs, metric, metric_field)
+    axes.metric_expr(defs, metric, metric_field, METRIC_LABELS)
 
 
 # --- 원값 뽑기(분포·산점도) ----------------------------------------------------
@@ -733,7 +490,7 @@ class Points:
 def _number_def(defs: list[PropertyDef], field_name: str) -> PropertyDef:
     """숫자 칸만. **글자 칸으로 분포를 그릴 수는 없다** — 고를 수 있다고 보여 주고
     나서 빈 그림을 주지 않는다."""
-    one = _prop(defs, field_name)
+    one = axes.own_property(defs, field_name)
     if one.data_type != "number" or one.multi:
         raise AppError(
             code("OBJECTS", 57),
@@ -751,38 +508,27 @@ def points(
     x: str,
     y: str | None = None,
     group_by: str | None = None,
+    grain: str | None = None,
 ) -> Points:
     """고른 것들의 **원값**을 그대로. 상자 그림은 x 하나와 기준, 산점도는 x·y 둘."""
     scope = as_scope(db, target)
     defs = scope.defs
     x_def = _number_def(defs, x)
     y_def = _number_def(defs, y) if y else None
-    axis = _group_expr(defs, group_by, "g", paths.Resolver(db, scope)) if group_by else None
+    axis = None
+    if group_by:
+        axis = axes.JoinPlan(db, scope, prefix="g").axis(group_by, grain=grain)
     group_expr = axis.expr if axis else None
     group_label = axis.label if axis else ""
 
-    x_expr = case(
-        (
-            ObjectInstance.properties[x_def.key].astext.op("~")(NUMERIC_RE),
-            cast(ObjectInstance.properties[x_def.key].astext, Float),
-        ),
-        else_=None,
-    )
+    x_expr = axes.numeric(ObjectInstance.properties[x_def.key].astext)
     columns: list[Any] = [
         ObjectInstance.id.label("id"),
         ObjectInstance.label.label("label"),
         x_expr.label("x"),
     ]
     if y_def is not None:
-        columns.append(
-            case(
-                (
-                    ObjectInstance.properties[y_def.key].astext.op("~")(NUMERIC_RE),
-                    cast(ObjectInstance.properties[y_def.key].astext, Float),
-                ),
-                else_=None,
-            ).label("y")
-        )
+        columns.append(axes.numeric(ObjectInstance.properties[y_def.key].astext).label("y"))
     if group_expr is not None:
         columns.append(group_expr.label("g"))
 
@@ -791,12 +537,12 @@ def points(
     stmt = filtered.with_only_columns(*columns).where(x_expr.is_not(None))
     if axis is not None:
         # 여러 값 기준이면 값마다 점이 하나씩 — 상자 그림에서는 그 값의 상자에 든다.
-        stmt = _joined(stmt, axis)
+        stmt = axes.joined(stmt, axis)
     total = count_of(db, stmt)
     rows = list(db.execute(stmt.limit(MAX_POINTS)))
 
     keys = [str(row.g) for row in rows if group_expr is not None and row.g is not None]
-    names = _labels(db, axis, keys) if axis is not None else {}
+    names = axes.labels(db, axis, keys) if axis is not None else {}
     out = Points(
         x_label=x_def.label,
         y_label=y_def.label if y_def else "",

@@ -282,60 +282,87 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
     """이어진 것 너머의 조건 — **「이어진 것 중 하나라도 맞으면」** (`EXISTS`).
 
     조인으로 걸면 이어진 것이 여럿인 객체가 목록에 여러 번 선다. EXISTS 는 몇 개가
-    이어져 있든 한 번이다.
+    이어져 있든 한 번이다. 걸음이 여럿이면(`ref.model.ref.base_model`) EXISTS 안에서 걸음을
+    이어 붙인다 — 뜻은 그대로 「그 길로 닿는 것 중 하나라도」 다.
     """
     try:
-        found = resolver.parse(condition.field)
+        chain = resolver.parse_chain(condition.field)
     except AppError as caught:
         raise InvalidValue(code("OBJECTS", 73), caught.message) from caught
-    hop, op, raw = found.hop, condition.op, condition.value
+    op, raw = condition.op, condition.value
+    whole = chain.field is None
 
-    if found.field is None:
+    if whole:
         # 관계로 이어진 것 자체 — 누구와 이어졌나, 또는 이어져 있기는 한가.
-        allowed = (*OPS_CHOICE, *OPS_ANY) if found.data_type == "object_ref" else OPS_ANY
+        allowed = (*OPS_CHOICE, *OPS_ANY) if chain.data_type == "object_ref" else OPS_ANY
         if op not in allowed:
             raise InvalidValue(
                 code("OBJECTS", 72),
-                f"{found.label}: 「{op}」 는 이 칸에 못 겁니다. 되는 것: {', '.join(allowed)}",
+                f"{chain.label}: 「{op}」 는 이 칸에 못 겁니다. 되는 것: {', '.join(allowed)}",
             )
-        edges = resolver.edges(hop, f"hop{index}_edges")
-        linked = select(literal(1)).select_from(edges).where(edges.c.me == ObjectInstance.id)
+    elif chain.definition is not None and chain.definition.data_type == "file":
+        raise InvalidValue(code("OBJECTS", 73), f"{chain.label}: 파일 칸은 못 겁니다.")
+
+    # 걸음을 잇는다 — 첫 걸음은 바깥(목록의 객체)과 상관 관계로 묶이고, 다음 걸음은 앞 걸음의
+    # 끝(이어진 객체)에서 나간다.
+    linked: Any = None
+    previous: Any = ObjectInstance
+    last_edges: Any = None
+    last_target: Any = None
+    for depth, (hop, owner) in enumerate(zip(chain.hops, chain.owners, strict=True)):
+        name = f"hop{index}_{depth}"
+        final = depth == len(chain.hops) - 1
+        if hop.kind == "ref":
+            # 참조 색인으로 잇는다 — 예전의 JSONB 포함(`@>`) 조인은 타입 제한이 없는 비등가
+            # 조인이라 200만 건에서 2분을 넘겼다(실측).
+            link = aliased(ObjectRef, name=f"{name}_ref")
+            target = aliased(ObjectInstance, name=f"{name}_obj")
+            step = and_(link.src_id == previous.id, link.key == hop.name)
+            if linked is None:
+                linked = select(literal(1)).select_from(link).where(step)
+            else:
+                linked = linked.join(link, step)
+            linked = linked.join(
+                target, and_(target.id == link.dst_id, target.deleted_at.is_(None))
+            )
+            last_target = target
+        else:
+            edges = owner.edges(hop, f"{name}_edges")
+            step = edges.c.me == previous.id
+            if linked is None:
+                linked = select(literal(1)).select_from(edges).where(step)
+            else:
+                linked = linked.join(edges, step)
+            last_edges = edges
+            if final and whole:
+                last_target = None
+                break
+            target = aliased(ObjectInstance, name=f"{name}_obj")
+            linked = linked.join(
+                target,
+                and_(cast(target.id, String) == edges.c.other, target.deleted_at.is_(None)),
+            )
+            last_target = target
+        previous = last_target
+
+    if whole:
+        assert last_edges is not None
         if op == "empty":
             return ~linked.exists()
         if op == "notempty":
             return linked.exists()
         if op == "eq":
-            return linked.where(edges.c.other == raw).exists()
+            return linked.where(last_edges.c.other == raw).exists()
         if op == "ne":
-            return ~linked.where(edges.c.other == raw).exists()
+            return ~linked.where(last_edges.c.other == raw).exists()
         values = _values(raw)
-        return linked.where(edges.c.other.in_(values)).exists() if values else false()
+        return linked.where(last_edges.c.other.in_(values)).exists() if values else false()
 
-    if found.definition is not None and found.definition.data_type == "file":
-        raise InvalidValue(code("OBJECTS", 73), f"{found.label}: 파일 칸은 못 겁니다.")
-    target = aliased(ObjectInstance, name=f"hop{index}_obj")
+    assert chain.field is not None and last_target is not None
     inner = _clause(
-        Condition(found.field, op, raw), found.definition, target, label=found.label
+        Condition(chain.field, op, raw), chain.definition, last_target, label=chain.label
     )
-    alive = target.deleted_at.is_(None)
-    if hop.kind == "ref":
-        # 참조 색인으로 잇는다 — 예전의 JSONB 포함(`@>`) 조인은 타입 제한이 없는 비등가
-        # 조인이라 200만 건에서 2분을 넘겼다(실측).
-        ref = aliased(ObjectRef, name=f"hop{index}_ref")
-        return (
-            select(literal(1))
-            .select_from(ref)
-            .join(target, target.id == ref.dst_id)
-            .where(ref.src_id == ObjectInstance.id, ref.key == hop.name, alive, inner)
-            .exists()
-        )
-    edges = resolver.edges(hop, f"hop{index}_edges")
-    return (
-        select(literal(1))
-        .select_from(edges.join(target, cast(target.id, String) == edges.c.other))
-        .where(edges.c.me == ObjectInstance.id, alive, inner)
-        .exists()
-    )
+    return linked.where(inner).exists()
 
 
 def to_query(conditions: list[Condition]) -> dict[str, str]:

@@ -576,3 +576,143 @@ def test_여러_값_기준으로_상자를_가르면_값마다_점이_든다(
     assert got.status_code == 200, got.text
     groups = sorted(one["group"] for one in got.json()["rows"])
     assert groups == ["(비어 있음)", "구조", "구조", "열", "유체", "유체"]
+
+
+# --- 날짜는 기간 단위로 -------------------------------------------------------------
+#
+# 저장된 날짜는 날짜 하나하나다. 「월별 몇 건」 은 그것을 월로 **묶어야** 나오고, 막대를 누르면
+# 그 달의 **범위**로 걸러져야 그 수가 나온다(시작일 하나를 `eq` 로 걸면 0건). 정규형이 아닌
+# 값(옛 데이터)은 질의를 죽이지 않고 「(비어 있음)」 에 모인다.
+
+
+def _dated(client: TestClient, admin: Signed, db: Any) -> str:
+    from sqlalchemy import select, update
+
+    from app.modules.objects.models import ObjectInstance
+    from app.modules.ontology.models import ObjectType
+
+    kind = _make_type(client, admin, label="사건")
+    _make_property(client, admin, kind, key="made", label="만든 날", data_type="date")
+    samples = [
+        "2026-01-05",
+        "2026-01-20",
+        "2026-02-03",
+        "20260310",
+        "2026-02-11",
+        "2026-02-12",
+    ]
+    for index, value in enumerate([*samples, None]):
+        properties: dict[str, Any] = {"made": value} if value is not None else {}
+        _make_object(client, admin, kind, label=f"사건{index}", properties=properties)
+    # 옛 데이터의 정규형이 아닌 값 — 쓰기 검증은 막지만 저장소에는 있을 수 있다.
+    type_id = db.scalar(select(ObjectType.id).where(ObjectType.slug == kind))
+    for label, bad in (("사건4", "2026-02-30"), ("사건5", "abc")):
+        db.execute(
+            update(ObjectInstance)
+            .where(ObjectInstance.type_id == type_id, ObjectInstance.label == label)
+            .values(properties={"made": bad})
+        )
+    db.commit()
+    return kind
+
+
+def test_날짜는_기간_단위로_묶이고_막대는_범위로_걸린다(
+    client: TestClient, admin: Signed, db: Any
+) -> None:
+    kind = _dated(client, admin, db)
+    found = _summary(
+        client, admin, kind, group_by="properties.made", grain="month", order="key"
+    )
+    assert found["grain"] == "month" and found["group_label"] == "만든 날 (월)"
+    keys = [one["key"] for one in found["buckets"]]
+    # 시간순이고, 「(비어 있음)」 은 맨 뒤 — 없는 값 하나와 정규형이 아닌 값 둘이 거기 모인다.
+    assert keys == ["2026-01-01", "2026-02-01", "2026-03-01", None]
+    assert [one["label"] for one in found["buckets"]] == [
+        "2026-01",
+        "2026-02",
+        "2026-03",
+        "(비어 있음)",
+    ]
+    assert [one["count"] for one in found["buckets"]] == [2, 1, 1, 3]
+    assert found["buckets"][0]["range"] == {"gte": "2026-01-01", "lt": "2026-02-01"}
+    assert found["buckets"][3]["range"] is None
+    assert sum(one["count"] for one in found["buckets"]) == found["total"] == 7
+
+    # 막대의 범위를 조건으로 걸면 **그 수**가 나온다 — 시작일을 `eq` 로 걸면 0건이다.
+    listed = client.get(
+        f"/api/objects/{kind}",
+        params={"f.made.gte": "2026-01-01", "f.made.lt": "2026-02-01"},
+        headers=admin.headers,
+    ).json()
+    assert listed["total"] == 2
+    exact = client.get(
+        f"/api/objects/{kind}", params={"f.made.eq": "2026-01-01"}, headers=admin.headers
+    ).json()
+    assert exact["total"] == 0
+
+
+def test_기간_단위마다_키와_이름이_다르다(client: TestClient, admin: Signed, db: Any) -> None:
+    kind = _dated(client, admin, db)
+    by_year = _summary(client, admin, kind, group_by="properties.made", order="key")
+    assert by_year["grain"] == "year"
+    assert [one["key"] for one in by_year["buckets"]] == ["2026-01-01", None]
+    assert by_year["buckets"][0]["label"] == "2026"
+    assert by_year["buckets"][0]["range"] == {"gte": "2026-01-01", "lt": "2027-01-01"}
+
+    quarter = _summary(client, admin, kind, group_by="properties.made", grain="quarter")
+    assert quarter["buckets"][0] == {
+        "key": "2026-01-01",
+        "label": "2026-Q1",
+        "count": 4,
+        "value": None,
+        "range": {"gte": "2026-01-01", "lt": "2026-04-01"},
+        "parts": [],
+    }
+    week = _summary(client, admin, kind, group_by="properties.made", grain="week", order="key")
+    # 2026-01-05 는 월요일 — ISO 주의 시작이고 그해 둘째 주다(1월 1일이 목요일).
+    assert week["buckets"][0]["key"] == "2026-01-05"
+    assert week["buckets"][0]["label"] == "2026-W02"
+    assert week["buckets"][0]["range"] == {"gte": "2026-01-05", "lt": "2026-01-12"}
+    day = _summary(client, admin, kind, group_by="properties.made", grain="day", order="key")
+    assert day["buckets"][0]["label"] == "2026-01-05"
+
+
+def test_기간_단위는_날짜_칸에만_모르는_단위는_거절(
+    client: TestClient, admin: Signed, db: Any
+) -> None:
+    kind = _dated(client, admin, db)
+    wrong = client.get(
+        f"/api/objects/{kind}/summary",
+        params={"group_by": "properties.made", "grain": "decade"},
+        headers=admin.headers,
+    )
+    assert wrong.status_code == 422, wrong.text
+    assert wrong.json()["error"]["code"].endswith("OBJECTS-0098")
+    not_date = client.get(
+        f"/api/objects/{kind}/summary",
+        params={"group_by": "label", "grain": "month"},
+        headers=admin.headers,
+    )
+    assert not_date.status_code == 422
+    # 저장된 뷰도 같은 검사를 거친다 — 열었을 때 그림만 안 뜨는 뷰가 남지 않게.
+    view = client.post(
+        f"/api/objects/{kind}/views",
+        json={
+            "name": "월별",
+            "query": {"q": "", "conditions": [], "status": None},
+            "summary": {"group_by": "properties.made", "grain": "month", "order": "key"},
+        },
+        headers=admin.headers,
+    )
+    assert view.status_code == 201, view.text
+    assert view.json()["summary"]["grain"] == "month"
+    bad_view = client.post(
+        f"/api/objects/{kind}/views",
+        json={
+            "name": "틀림",
+            "query": {"q": "", "conditions": [], "status": None},
+            "summary": {"group_by": "properties.made", "grain": "decade"},
+        },
+        headers=admin.headers,
+    )
+    assert bad_view.status_code == 422

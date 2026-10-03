@@ -6024,11 +6024,11 @@
             "required": false,
             "schema": {
               "type": "string",
-              "description": "desc(큰 값부터)·asc(작은 값부터)",
+              "description": "desc(큰 값부터)·asc(작은 값부터)·key(키 순 — 날짜는 시간순)",
               "default": "desc",
               "title": "Order"
             },
-            "description": "desc(큰 값부터)·asc(작은 값부터)"
+            "description": "desc(큰 값부터)·asc(작은 값부터)·key(키 순 — 날짜는 시간순)"
           },
           {
             "name": "metric_field",
@@ -6047,6 +6047,24 @@
               "title": "Metric Field"
             },
             "description": "합·평균을 낼 숫자 칸"
+          },
+          {
+            "name": "grain",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "날짜 축의 기간 단위 — day·week·month·quarter·year(기본)",
+              "title": "Grain"
+            },
+            "description": "날짜 축의 기간 단위 — day·week·month·quarter·year(기본)"
           },
           {
             "name": "q",
@@ -6214,6 +6232,24 @@
               "title": "Group By"
             },
             "description": "상자를 나눌 기준 · 점의 색"
+          },
+          {
+            "name": "grain",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "기준이 날짜면 그 기간 단위",
+              "title": "Grain"
+            },
+            "description": "기준이 날짜면 그 기간 단위"
           },
           {
             "name": "q",
@@ -6409,6 +6445,22 @@
             }
           },
           {
+            "name": "grain",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Grain"
+            }
+          },
+          {
             "name": "q",
             "in": "query",
             "required": false,
@@ -6576,6 +6628,22 @@
                 }
               ],
               "title": "Group By"
+            }
+          },
+          {
+            "name": "grain",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Grain"
             }
           },
           {
@@ -12796,6 +12864,16 @@
               }
             ],
             "title": "Value"
+          },
+          "range": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/RangeOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "parts": {
             "items": {
@@ -20175,6 +20253,25 @@
         ],
         "title": "QueryRequest"
       },
+      "RangeOut": {
+        "properties": {
+          "gte": {
+            "type": "string",
+            "title": "Gte"
+          },
+          "lt": {
+            "type": "string",
+            "title": "Lt"
+          }
+        },
+        "type": "object",
+        "required": [
+          "gte",
+          "lt"
+        ],
+        "title": "RangeOut",
+        "description": "날짜 칸의 범위 조건 — `f.<칸>.gte` · `f.<칸>.lt` 로 그대로 쓴다."
+      },
       "RecentOut": {
         "properties": {
           "pair_id": {
@@ -22006,6 +22103,11 @@
             "type": "string",
             "title": "Order",
             "default": "desc"
+          },
+          "grain": {
+            "type": "string",
+            "title": "Grain",
+            "default": ""
           }
         },
         "type": "object",
@@ -22813,6 +22915,17 @@
           "order": {
             "type": "string",
             "title": "Order"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
           },
           "split_field": {
             "type": "string",

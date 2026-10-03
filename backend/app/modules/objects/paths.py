@@ -1,4 +1,4 @@
-"""이어진 것 너머의 칸 — **한 걸음만.**
+"""이어진 것 너머의 칸 — **고르개는 한 걸음, 주소는 셋까지.**
 
 「미국 기업이 만든 툴만」 「개발사 국가별 툴 수」 는 목록에서 바로 나와야 하는 물음이다. 칸이
 그 타입 자신의 것뿐이면, 사람은 기업 목록에서 미국 기업을 찾아 적어 두고 툴 목록으로
@@ -14,10 +14,12 @@
 조건(`f.<주소>.<연산>=값`)과 통계 기준(`group_by=<주소>`)이 **같은 주소**를 쓴다 — 막대를
 누르면 그 주소 그대로 조건이 된다. 속성 키에는 점이 없으므로 이 주소와 겹치지 않는다.
 
-## 한 걸음만인 이유
+## 고르개는 한 걸음, 주소는 셋까지
 
-두 걸음(「개발사의 모회사의 국가」)부터는 화면에서 조건을 읽을 수 없고, 질의 비용도 예측이
-안 된다. 그런 물음이 자주 나오면 그것은 대개 **칸이 하나 빠진** 것이다.
+화면의 고르개는 한 걸음까지만 보인다 — 두 걸음(「개발사의 모회사의 국가」)부터는 목록이
+길어지고, 그런 물음이 자주 나오면 그것은 대개 **칸이 하나 빠진** 것이다. 다만 주소로 적으면
+걸음을 이어 받는다(`parse_chain`, ADR 0013): 지표가 「SKU → 기본 모델」 로 접고, 그 칸의 막대가
+조건으로 돌아올 때 같은 주소가 필요하다. 걸음의 상대가 하나로 정해져 있어야 다음 걸음을 간다.
 
 ## 뜻 — 「이어진 것 중 하나라도」
 
@@ -43,6 +45,9 @@ from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared.errors import AppError, code
 
 HOP_KINDS = ("ref", "out", "in")
+
+#: 걸음을 몇 번까지 잇나. 넷부터는 조건을 화면에서 읽을 수 없고 질의 비용을 짐작할 수 없다.
+MAX_HOPS = 3
 
 #: 이어진 것의 고정 칸.
 TARGET_FIXED = {"label": "이름", "key": "식별자", "status": "상태"}
@@ -96,6 +101,38 @@ class PathField:
 
 
 @dataclass
+class Chain:
+    """걸음을 이어 붙인 주소 — `ref.model.ref.base_model`, `out.rel.label`."""
+
+    path: str
+    hops: list[Hop]
+    owners: list[Resolver]
+    """걸음마다 그 걸음을 가진 Resolver — 관계 걸음의 선(`edges`)과 이름 풀이가 여기서
+    나온다."""
+    field: str | None
+    """None 이면 마지막 관계로 이어진 것 **자체**."""
+    definition: PropertyDef | None
+    label: str
+    data_type: str
+    many_hops: bool
+    """걸음 중 하나라도 여럿과 이어지나."""
+    multi: bool
+    """`many_hops` 이거나 끝 칸이 여러 값 칸 — 한 행이 여러 막대에 든다."""
+
+    @property
+    def hop(self) -> Hop:
+        return self.hops[-1]
+
+    @property
+    def ref_def(self) -> PropertyDef | None:
+        return (
+            self.definition
+            if self.definition is not None and self.definition.data_type == "object_ref"
+            else None
+        )
+
+
+@dataclass
 class FieldOption:
     """고르개에 서는 줄 하나."""
 
@@ -106,6 +143,13 @@ class FieldOption:
     multi: bool = False
     enum_options: list[str] | None = None
     ref_type_slug: str | None = None
+
+
+def _no_target(hop: Hop) -> str:
+    return (
+        f"「{hop.label}」 너머의 칸은 고를 수 없습니다 — "
+        "이어지는 타입이 하나로 정해져 있지 않거나, 원 표를 비추는 타입입니다."
+    )
 
 
 def _no_path(path: str, why: str) -> AppError:
@@ -127,6 +171,7 @@ class Resolver:
         self.db = db
         self.scope = as_scope(db, target)
         self._hops: list[Hop] | None = None
+        self._children: dict[str, Resolver] = {}
 
     def _touches(self, allowed: list[str] | None) -> bool:
         """이 범위의 객체가 그 끝에 설 수 있나. 비어 있으면(None) 제약이 없다."""
@@ -218,13 +263,14 @@ class Resolver:
                 )
         return out
 
-    def parse(self, path: str) -> PathField:
-        head, _, rest = path.partition(".")
-        name, _, field_name = rest.partition(".")
-        hop = next((one for one in self.hops() if one.kind == head and one.name == name), None)
-        if hop is None and head == "in":
+    def hop(self, kind: str, name: str) -> Hop | None:
+        """이 범위에서 한 걸음 — 참조 칸 이름이나 관계 slug 로."""
+        found = next(
+            (one for one in self.hops() if one.kind == kind and one.name == name), None
+        )
+        if found is None and kind == "in":
             # 방향 없는 관계는 out 으로만 선다 — in 으로 적어도 같은 것으로 읽는다.
-            hop = next(
+            found = next(
                 (
                     one
                     for one in self.hops()
@@ -235,49 +281,110 @@ class Resolver:
                 ),
                 None,
             )
-        if hop is None:
+        return found
+
+    def child(self, hop: Hop) -> Resolver:
+        """걸음의 상대에서 다시 걷는 Resolver — 상대가 하나로 정해졌을 때만. 같은 상대는 한
+        번만 만든다(걸음마다 관계 종류를 다시 읽지 않게)."""
+        if hop.target is None:  # pragma: no cover - parse_chain 이 먼저 거른다
+            raise _no_path(f"{hop.kind}.{hop.name}", "상대가 하나로 정해져 있지 않습니다.")
+        slug = hop.target.slug
+        if slug not in self._children:
+            self._children[slug] = Resolver(self.db, hop.target)
+        return self._children[slug]
+
+    def parse_chain(self, path: str, *, max_hops: int = MAX_HOPS) -> Chain:
+        """주소 → 걸음들과 끝 칸. 걸음은 `ref.<칸>` · `out.<관계>` · `in.<관계>` 가 이어진
+        것이고, 끝은 칸 하나(없으면 마지막 관계로 이어진 것 자체)."""
+        tokens = path.split(".")
+        hops: list[Hop] = []
+        owners: list[Resolver] = []
+        owner: Resolver = self
+        index = 0
+        while index + 1 < len(tokens) and tokens[index] in HOP_KINDS:
+            kind, name = tokens[index], tokens[index + 1]
+            if len(hops) >= max_hops:
+                raise _no_path(path, f"걸음은 {max_hops}번까지 잇습니다.")
+            hop = owner.hop(kind, name)
+            if hop is None:
+                where = "이 타입" if not hops else f"「{hops[-1].label}」"
+                raise _no_path(
+                    path,
+                    f"참조 칸이나 관계 종류가 바뀌었거나, {where}과 이어져 있지 않습니다: "
+                    f"{kind}.{name}",
+                )
+            hops.append(hop)
+            owners.append(owner)
+            index += 2
+            if index < len(tokens):
+                if hop.target is None:
+                    raise _no_path(path, _no_target(hop))
+                owner = owner.child(hop)
+        if not hops:
+            raise _no_path(path, "주소는 ref.<칸> · out.<관계> · in.<관계> 로 시작합니다.")
+        rest = tokens[index:]
+        if len(rest) > 1:
             raise _no_path(
-                path, "참조 칸이나 관계 종류가 바뀌었거나, 이 타입과 이어져 있지 않습니다."
+                path, f"끝은 칸 하나여야 합니다 — 「{'.'.join(rest)}」 는 칸 이름이 아닙니다."
             )
-        if not field_name:
-            if hop.kind == "ref":
-                raise _no_path(path, f"참조 칸 자체는 그 칸 이름({hop.name})으로 씁니다.")
-            return PathField(
+        last = hops[-1]
+        many_hops = any(one.many for one in hops)
+        heading = SEP.join(one.label for one in hops)
+        if not rest:
+            if last.kind == "ref":
+                raise _no_path(path, f"참조 칸 자체는 그 칸 이름({last.name})으로 씁니다.")
+            return Chain(
                 path,
-                hop,
+                hops,
+                owners,
                 None,
                 None,
-                hop.label,
-                "object_ref" if len(hop.target_slugs) == 1 else "relation",
-                hop.many,
+                heading,
+                "object_ref" if len(last.target_slugs) == 1 else "relation",
+                many_hops,
+                many_hops,
             )
-        if hop.target is None:
-            raise _no_path(
-                path,
-                f"「{hop.label}」 너머의 칸은 고를 수 없습니다 — "
-                "이어지는 타입이 하나로 정해져 있지 않거나, 원 표를 비추는 타입입니다.",
-            )
+        field_name = rest[0]
+        if last.target is None:
+            raise _no_path(path, _no_target(last))
         if field_name in TARGET_FIXED:
-            return PathField(
+            return Chain(
                 path,
-                hop,
+                hops,
+                owners,
                 field_name,
                 None,
-                f"{hop.label}{SEP}{TARGET_FIXED[field_name]}",
+                f"{heading}{SEP}{TARGET_FIXED[field_name]}",
                 "enum" if field_name == "status" else "text",
-                hop.many,
+                many_hops,
+                many_hops,
             )
-        definition = next((one for one in hop.target_defs if one.key == field_name), None)
+        definition = next((one for one in last.target_defs if one.key == field_name), None)
         if definition is None:
-            raise _no_path(path, f"「{hop.target.label}」 에 없는 칸입니다: {field_name}")
-        return PathField(
+            raise _no_path(path, f"「{last.target.label}」 에 없는 칸입니다: {field_name}")
+        return Chain(
             path,
-            hop,
+            hops,
+            owners,
             field_name,
             definition,
-            f"{hop.label}{SEP}{definition.label}",
+            f"{heading}{SEP}{definition.label}",
             definition.data_type,
-            hop.many or definition.multi,
+            many_hops,
+            many_hops or definition.multi,
+        )
+
+    def parse(self, path: str) -> PathField:
+        """한 걸음 주소 — 고르개 · 옛 호출자용. 걸음을 잇는 것은 `parse_chain`."""
+        chain = self.parse_chain(path, max_hops=1)
+        return PathField(
+            chain.path,
+            chain.hop,
+            chain.field,
+            chain.definition,
+            chain.label,
+            chain.data_type,
+            chain.multi,
         )
 
     def edges(self, hop: Hop, name: str) -> Any:

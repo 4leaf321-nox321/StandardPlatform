@@ -247,3 +247,167 @@ def test_뷰에_이어진_칸의_조건과_기준이_담긴다(client: TestClien
         headers=admin.headers,
     )
     assert broken.status_code == 422
+
+
+# --- 걸음을 잇는다 ------------------------------------------------------------------
+#
+# 고르개는 한 걸음까지지만 주소는 셋까지 받는다(ADR 0013) — 지표가 「SKU → 기본 모델」 로 접고,
+# 그 막대가 조건으로 돌아올 때 같은 주소가 필요하다. 같은 걸음을 두 기준이 지나도 행이 곱으로
+# 불지 않아야 한다.
+
+
+def _deep_world(client: TestClient, admin: Signed) -> dict[str, Any]:
+    """기록 ─model→ SKU ─base→ 기본 모델(계열) ─제조(관계)→ 제조사(국가). 기록은 태그 여럿."""
+    maker = _make_type(client, admin, label="제조사")
+    _make_property(
+        client,
+        admin,
+        maker,
+        key="country",
+        label="국가",
+        data_type="enum",
+        enum_options=["KR", "US"],
+    )
+    base = _make_type(client, admin, label="기본 모델")
+    _make_property(
+        client,
+        admin,
+        base,
+        key="series",
+        label="계열",
+        data_type="enum",
+        enum_options=["S", "A"],
+    )
+    made_by = _make_relation(
+        client, admin, label="제조", src_type_slugs=[base], dst_type_slugs=[maker]
+    )
+    sku = _make_type(client, admin, label="SKU")
+    _make_property(
+        client,
+        admin,
+        sku,
+        key="base",
+        label="기본 모델",
+        data_type="object_ref",
+        ref_type_slug=base,
+    )
+    tag = _make_type(client, admin, label="태그")
+    _make_property(
+        client,
+        admin,
+        tag,
+        key="kind",
+        label="종류",
+        data_type="enum",
+        enum_options=["색", "용량"],
+    )
+    case = _make_type(client, admin, label="기록", usage="log")
+    _make_property(
+        client,
+        admin,
+        case,
+        key="model",
+        label="모델",
+        data_type="object_ref",
+        ref_type_slug=sku,
+    )
+    _make_property(
+        client,
+        admin,
+        case,
+        key="tags",
+        label="태그",
+        data_type="object_ref",
+        ref_type_slug=tag,
+        multi=True,
+    )
+    kr = _make_object(client, admin, maker, label="한국사", properties={"country": "KR"})["id"]
+    us = _make_object(client, admin, maker, label="미국사", properties={"country": "US"})["id"]
+    s_base = _make_object(client, admin, base, label="S기본", properties={"series": "S"})["id"]
+    a_base = _make_object(client, admin, base, label="A기본", properties={"series": "A"})["id"]
+    _relate(client, admin, base, s_base, made_by, kr)
+    _relate(client, admin, base, a_base, made_by, us)
+    s1 = _make_object(client, admin, sku, label="S-1", properties={"base": s_base})["id"]
+    s2 = _make_object(client, admin, sku, label="S-2", properties={"base": s_base})["id"]
+    a1 = _make_object(client, admin, sku, label="A-1", properties={"base": a_base})["id"]
+    red = _make_object(client, admin, tag, label="빨강", properties={"kind": "색"})["id"]
+    big = _make_object(client, admin, tag, label="256G", properties={"kind": "용량"})["id"]
+    for index, (model, tags) in enumerate(
+        [(s1, [red, big]), (s2, [red]), (a1, [big]), (a1, [red, big]), (s1, [])]
+    ):
+        _make_object(
+            client, admin, case, label=f"건{index}", properties={"model": model, "tags": tags}
+        )
+    return {"case": case, "s_base": s_base, "a_base": a_base, "made_by": made_by}
+
+
+def test_걸음을_이어_접고_같은_주소로_거른다(client: TestClient, admin: Signed) -> None:
+    w = _deep_world(client, admin)
+    rel = w["made_by"]
+    # 한 걸음의 참조 칸: SKU 를 기본 모델로 접는다(값은 id, 이름은 상대의 이름).
+    found = _summary(client, admin, w["case"], group_by="ref.model.base")
+    assert found["group_label"] == "모델 › 기본 모델"
+    assert found["overlap"] is False
+    assert {one["label"]: one["count"] for one in found["buckets"]} == {"S기본": 3, "A기본": 2}
+    # 두 걸음(참조 → 참조 너머의 칸): 기본 모델의 계열.
+    series = _summary(client, admin, w["case"], group_by="ref.model.ref.base.series")
+    assert series["group_label"] == "모델 › 기본 모델 › 계열"
+    assert {one["label"]: one["count"] for one in series["buckets"]} == {"S": 3, "A": 2}
+    # 세 걸음(참조 → 참조 → 관계 너머의 칸): 제조사의 국가.
+    deep = _summary(client, admin, w["case"], group_by=f"ref.model.ref.base.out.{rel}.country")
+    assert {one["label"]: one["count"] for one in deep["buckets"]} == {"KR": 3, "US": 2}
+    # 막대의 키가 같은 주소로 조건이 된다 — 묶은 수와 거른 수가 같다.
+    s_key = next(one["key"] for one in found["buckets"] if one["label"] == "S기본")
+    listed = client.get(
+        f"/api/objects/{w['case']}",
+        params={"f.ref.model.base.eq": s_key},
+        headers=admin.headers,
+    ).json()
+    assert listed["total"] == 3
+    by_series = client.get(
+        f"/api/objects/{w['case']}",
+        params={"f.ref.model.ref.base.series.eq": "A"},
+        headers=admin.headers,
+    ).json()
+    assert by_series["total"] == 2
+    by_country = client.get(
+        f"/api/objects/{w['case']}",
+        params={f"f.ref.model.ref.base.out.{rel}.country.eq": "US"},
+        headers=admin.headers,
+    ).json()
+    assert by_country["total"] == 2
+
+
+def test_같은_여럿_걸음을_두_기준이_지나도_곱으로_불지_않는다(
+    client: TestClient, admin: Signed
+) -> None:
+    w = _deep_world(client, admin)
+    # 태그(여러 값 참조)의 종류로 묶고 같은 태그의 이름으로 나눈다 — 태그마다 한 줄이지
+    # 태그 x 태그가 아니다. 건 5개의 태그는 모두 6개.
+    found = _summary(
+        client, admin, w["case"], group_by="ref.tags.kind", split_by="ref.tags.label"
+    )
+    assert found["overlap"] is True
+    counts = {one["label"]: one["count"] for one in found["buckets"]}
+    assert counts == {"색": 3, "용량": 3, "(비어 있음)": 1}
+    for bucket in found["buckets"]:
+        assert sum(part["count"] for part in bucket["parts"]) == bucket["count"]
+
+
+def test_걸음은_셋까지_모르는_걸음은_이유를_말한다(client: TestClient, admin: Signed) -> None:
+    w = _deep_world(client, admin)
+    rel = w["made_by"]
+    too_long = client.get(
+        f"/api/objects/{w['case']}/summary",
+        params={"group_by": f"ref.model.ref.base.out.{rel}.out.{rel}.country"},
+        headers=admin.headers,
+    )
+    assert too_long.status_code == 422
+    assert "걸음" in too_long.json()["error"]["message"]
+    unknown = client.get(
+        f"/api/objects/{w['case']}/summary",
+        params={"group_by": "ref.model.ref.nothing.x"},
+        headers=admin.headers,
+    )
+    assert unknown.status_code == 422
+    assert unknown.json()["error"]["code"].endswith("OBJECTS-0086")

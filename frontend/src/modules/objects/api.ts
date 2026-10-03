@@ -254,6 +254,8 @@ export interface SavedViewSummary {
   chart: string
   stacked: boolean
   order: string
+  /** 날짜 축의 기간 단위. 비우면 해. */
+  grain?: string
 }
 
 export interface SavedView {
@@ -469,11 +471,14 @@ export interface Part {
 }
 
 export interface Bucket {
+  /** 거르기에 그대로 넣을 값. 날짜 축이면 **기간의 시작일**이다. */
   key: string | null
   label: string
   count: number
   value: number | null
   parts: Part[]
+  /** 날짜 축이면 이 칸의 범위 — 막대를 누르면 `gte` · `lt` 두 조건이 된다(`eq` 는 0건). */
+  range?: { gte: string; lt: string } | null
 }
 
 /** 묶을 수 있는(또는 셀 수 있는) 축 하나. */
@@ -490,8 +495,10 @@ export interface GroupOption {
 export interface Summary {
   group_field: string
   group_label: string
-  /** desc(큰 값부터) · asc(작은 값부터). */
+  /** desc(큰 값부터) · asc(작은 값부터) · key(키 순 — 날짜는 시간순). */
   order: string
+  /** 날짜 축이면 묶은 기간 단위. */
+  grain?: string | null
   split_field: string
   split_label: string
   /** 계열의 **차례.** 칸마다 나오는 대로 만들면 첫 칸에 없던 값이 뒤에서 튀어나와 색이 밀린다. */
@@ -539,6 +546,8 @@ export interface SummaryOptions {
   metric?: string
   metricField?: string | null
   order?: string
+  /** 날짜 축의 기간 단위 — day · week · month · quarter · year(기본). */
+  grain?: string | null
 }
 
 /** 원값 그림의 칸. */
@@ -546,6 +555,7 @@ export interface PointsOptions {
   x: string
   y?: string | null
   groupBy?: string | null
+  grain?: string | null
 }
 
 function summaryParams(query: ObjectQuery, options: SummaryOptions): URLSearchParams {
@@ -557,6 +567,7 @@ function summaryParams(query: ObjectQuery, options: SummaryOptions): URLSearchPa
   if (options.order) params.set('order', options.order)
   if (options.metric) params.set('metric', options.metric)
   if (options.metricField) params.set('metric_field', options.metricField)
+  if (options.grain) params.set('grain', options.grain)
   return params
 }
 
@@ -567,6 +578,7 @@ function pointsParams(query: ObjectQuery, options: PointsOptions): URLSearchPara
   params.set('x', options.x)
   if (options.y) params.set('y', options.y)
   if (options.groupBy) params.set('group_by', options.groupBy)
+  if (options.grain) params.set('grain', options.grain)
   return params
 }
 

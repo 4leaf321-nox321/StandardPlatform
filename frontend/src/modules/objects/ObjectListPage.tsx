@@ -218,6 +218,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
         metric: view.summary.metric || 'count',
         metricField: view.summary.metric_field,
         chart: (view.summary.chart as SummarySettings['chart']) || 'bar',
+        grain: view.summary.grain || '',
         x: '',
         y: '',
         stacked: Boolean(view.summary.stacked),
@@ -611,7 +612,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                 settings={summary}
                 onSettings={setSummary}
                 onClose={() => setGrouping(false)}
-                onPick={(field, key) => {
+                onPick={(field, key, range) => {
                   // **누른 막대가 곧 필터다.** 여기서 필터 칸으로 돌아가 값을 다시
                   // 치게 하면, 그 한 번이 사람을 엑셀로 돌려보낸다.
                   if (key === null) return
@@ -620,6 +621,20 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                   const propertyKey = field.startsWith('properties.')
                     ? field.slice('properties.'.length)
                     : field
+                  if (range) {
+                    // 날짜 칸은 기간의 **범위** 둘로 — 시작일 하나를 `eq` 로 걸면 0건이다.
+                    const ranged = ['eq', 'gte', 'gt', 'lt', 'lte']
+                    const rest = conditions.filter(
+                      (one) => !(one.field === propertyKey && ranged.includes(one.op)),
+                    )
+                    setConditions([
+                      ...rest,
+                      { field: propertyKey, op: 'gte', value: range.gte },
+                      { field: propertyKey, op: 'lt', value: range.lt },
+                    ])
+                    setOffset(0)
+                    return
+                  }
                   const rest = conditions.filter(
                     (one) => !(one.field === propertyKey && one.op === 'eq'),
                   )
