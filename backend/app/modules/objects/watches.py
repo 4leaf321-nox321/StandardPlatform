@@ -49,6 +49,8 @@ WATCHED_ACTIONS = {
     "object.relation.update",
     "object.relation.remove",
     "object.years.set",
+    "object.attachment.add",
+    "object.attachment.remove",
 }
 
 #: 무엇이 바뀌었는지 한 줄로. 사람이 알림만 보고 열지 말지를 정한다.
@@ -61,6 +63,8 @@ LABELS = {
     "object.relation.update": "관계가 바뀌었습니다",
     "object.relation.remove": "관계가 끊어졌습니다",
     "object.years.set": "연도가 바뀌었습니다",
+    "object.attachment.add": "첨부가 추가됐습니다",
+    "object.attachment.remove": "첨부가 삭제됐습니다",
 }
 
 

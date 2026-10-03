@@ -6,27 +6,38 @@
 
 from __future__ import annotations
 
+import hashlib
+import io
+import secrets
 import uuid
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import BinaryIO
 
 from sqlalchemy import Select, func, select, update
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.modules.accounts.models import User
-from app.modules.files.models import Attachment
-from app.modules.files.schemas import AttachmentOut
-from app.shared import extensions, filestore
-from app.shared.errors import AppError, Forbidden, NotFound, code
+from app.modules.files.models import Attachment, AttachmentTicket
+from app.modules.files.schemas import AttachmentOut, TicketOut
+from app.shared import extensions, filestore, images
+from app.shared.errors import AppError, Conflict, Forbidden, NotFound, code
 from app.shared.permissions import (
     require_owner_edit,
     resolve_owner_workspace,
     visible_owner_clause,
 )
+from app.shared.request_context import get_actor_token, set_actor_token
 from app.shared.text import clean
 
 #: 한 파일의 상한. **서버가 강제한다** — 화면의 검사는 우회할 수 있고, 우회되면
 #: 디스크가 찬다. 디스크가 차면 앱만이 아니라 DB 도 함께 멈춘다.
 MAX_BYTES = 50 * 1024 * 1024
+
+
+#: 이미지만 받는 칸에 넣을 수 있는 것 — 사람에게 보일 말.
+IMAGE_KINDS = "PNG · JPEG · GIF · WebP"
 
 
 def _out(attachment: Attachment) -> AttachmentOut:
@@ -40,7 +51,41 @@ def _out(attachment: Attachment) -> AttachmentOut:
         size_bytes=attachment.size_bytes,
         sha256=attachment.sha256,
         created_at=attachment.created_at,
+        is_image=attachment.media == "image",
+        width=attachment.width,
+        height=attachment.height,
     )
+
+
+def _inspect(attachment: Attachment, path: Path) -> None:
+    """서버가 열어 보고 이미지인지 정한다. 이미지면 종류를 **서버가 읽은 것**으로 고치고
+    미리보기를 만든다(`shared/images`)."""
+    found = images.inspect(path)
+    if found is None:
+        attachment.media = "file"
+        return
+    attachment.media = "image"
+    attachment.content_type = found.content_type
+    attachment.width = found.width
+    attachment.height = found.height
+    thumb = images.thumbnail(path)
+    if thumb is not None:
+        attachment.thumb_path = filestore.save(io.BytesIO(thumb)).relative_path
+
+
+def inspect_pending(db: Session, rows: list[Attachment]) -> None:
+    """이미지 판별 칸이 생기기 전에 올라온 첨부를 **처음 보일 때** 본다.
+
+    마이그레이션이 하지 않는 이유: 파일을 읽어야 하고, 이중화에서는 그 순간 저장소가
+    붙어 있는지 모른다. 파일이 없으면 그대로 둔다(다음에 다시 본다).
+    """
+    pending = [row for row in rows if row.media is None]
+    for row in pending:
+        path = filestore.resolve(row.relative_path)
+        if path is not None:
+            _inspect(row, path)
+    if any(row.media is not None for row in pending):
+        db.commit()
 
 
 def _visible(db: Session, user: User) -> Select[tuple[Attachment]]:
@@ -65,12 +110,20 @@ def upload(
 ) -> AttachmentOut:
     """파일 하나를 붙인다.
 
-    **쓰기 권한은 부서로 판정한다.** 전역(부서 없음)에 붙이는 것은 시스템
-    관리자뿐이다 — 여러 부서가 함께 보는 자리이기 때문이다.
+    **그 자료의 도메인이 자리를 답한다**(`extensions.register_attachment_owner`) — 자료가
+    있나, 고칠 수 있나, 그 칸이 무엇을 받나. 첨부의 부서는 자료의 부서를 따른다. 도메인이
+    등록하지 않은 표는 예전 동작이다: 올린 쪽이 고른 부서의 관리자면 붙는다(전역은 시스템
+    관리자뿐 — 여러 부서가 함께 보는 자리다).
+
+    **이미지인지는 서버가 열어 보고 정한다** — 올린 쪽이 붙인 `content_type` 은 말일 뿐이다.
     """
-    workspace_id = resolve_owner_workspace(
-        db, user, workspace_slug, what="첨부", code_value=code("FILES", 1)
-    )
+    owner = extensions.attachment_owner(db, user, owner_table, owner_id, owner_field)
+    if owner is None:
+        workspace_id = resolve_owner_workspace(
+            db, user, workspace_slug, what="첨부", code_value=code("FILES", 1)
+        )
+    else:
+        workspace_id = owner.workspace_id
 
     stored = filestore.save(stream)
     if stored.size == 0:
@@ -97,7 +150,21 @@ def upload(
         relative_path=stored.relative_path,
         uploaded_by_id=user.id,
     )
+    path = filestore.resolve(stored.relative_path)
+    if path is not None:
+        _inspect(attachment, path)
+    if owner is not None and owner.accept == "image" and attachment.media != "image":
+        raise AppError(
+            code("FILES", 7),
+            f"이 칸에는 이미지({IMAGE_KINDS})만 업로드할 수 있습니다 — "
+            f"{attachment.original_name} 은(는) 이미지로 확인되지 않았습니다.",
+            status=415,
+            details={"accept": "image", "content_type": attachment.content_type},
+        )
     db.add(attachment)
+    db.flush()
+    if owner is not None and owner.changed is not None:
+        owner.changed(db, user, owner_field, attachment.original_name, True)
     db.commit()
     db.refresh(attachment)
     return _out(attachment)
@@ -121,7 +188,8 @@ def list_for(
     )
     if owner_field is not None:
         stmt = stmt.where(Attachment.owner_field == owner_field)
-    rows = db.scalars(stmt.order_by(Attachment.created_at))
+    rows = list(db.scalars(stmt.order_by(Attachment.created_at)))
+    inspect_pending(db, rows)
     return [_out(row) for row in rows]
 
 
@@ -146,9 +214,63 @@ def remove(db: Session, *, user: User, attachment_id: uuid.UUID) -> None:
     found = db.scalar(_visible(db, user).where(Attachment.id == attachment_id))
     if found is None:
         raise NotFound(code("FILES", 4), "첨부를 찾을 수 없습니다.")
-    require_owner_edit(db, user, found.workspace_id, what="첨부", code_value=code("FILES", 5))
+    # 뗄 때는 자리를 묻지 않는다(None) — 칸이 지워진 뒤에도 붙은 것은 뗄 수 있어야 한다.
+    owner = extensions.attachment_owner(db, user, found.owner_table, found.owner_id, None)
+    if owner is None:
+        require_owner_edit(
+            db, user, found.workspace_id, what="첨부", code_value=code("FILES", 5)
+        )
     found.deleted_at = func.now()
+    if owner is not None and owner.changed is not None:
+        owner.changed(db, user, found.owner_field, found.original_name, False)
     db.commit()
+
+
+def move_owner(
+    db: Session,
+    owner_table: str,
+    source_id: uuid.UUID,
+    target_id: uuid.UUID,
+    workspace_id: uuid.UUID | None,
+) -> int:
+    """한 자료의 첨부를 다른 자료로 — 합치기에서. 부서는 받는 자료의 것을 따른다.
+    **커밋하지 않는다** — 합치기와 같은 트랜잭션이다."""
+    done = db.execute(
+        update(Attachment)
+        .where(
+            Attachment.owner_table == owner_table,
+            Attachment.owner_id == source_id,
+            Attachment.deleted_at.is_(None),
+        )
+        .values(owner_id=target_id, workspace_id=workspace_id)
+    )
+    return extensions.rows_changed(done)
+
+
+def thumbnail_path(db: Session, *, user: User, attachment_id: uuid.UUID) -> Path:
+    """미리보기 파일. 이미지가 아니면 404 — 화면은 그때 파일 아이콘을 띄운다.
+
+    미리보기 파일만 없으면(파일스토어를 일부만 되돌렸을 때) 원본에서 다시 만든다.
+    """
+    found = get_for_download(db, user=user, attachment_id=attachment_id)
+    if found.media is None:
+        inspect_pending(db, [found])
+    if found.media != "image":
+        raise NotFound(code("FILES", 8), "미리보기가 없는 첨부입니다(이미지가 아닙니다).")
+    path = filestore.resolve(found.thumb_path) if found.thumb_path else None
+    if path is None:
+        original = filestore.resolve(found.relative_path)
+        ensure_readable(original is not None)
+        assert original is not None
+        thumb = images.thumbnail(original)
+        if thumb is None:
+            raise NotFound(code("FILES", 8), "미리보기를 만들 수 없는 이미지입니다.")
+        found.thumb_path = filestore.save(io.BytesIO(thumb)).relative_path
+        db.commit()
+        path = filestore.resolve(found.thumb_path)
+    ensure_readable(path is not None)
+    assert path is not None
+    return path
 
 
 def ensure_readable(path_exists: bool) -> None:
@@ -223,3 +345,118 @@ def workspace_reference(
             table="attachments", label="첨부", count=count, blocks_delete=True
         )
     ]
+
+
+# --- 한 번 쓰는 업로드 표(MCP) -----------------------------------------------------
+#
+# 바이트가 모델을 거치지 않게 — MCP 도구는 표와 `curl` 명령만 주고, AI 의 셸이 파일을 직접
+# 올린다(ADR 0012). 표 자체가 자격이라 짧게 · 한 번만 · 자리를 정해서 낸다.
+
+#: 표의 수명. AI 가 명령을 받아 바로 돌리는 데 충분하고, 새어도 곧 쓸모없어지게.
+TICKET_TTL = timedelta(minutes=5)
+
+
+def _ticket_hash(ticket: str) -> str:
+    return hashlib.sha256(ticket.encode()).hexdigest()
+
+
+def _public_upload_url(path: str) -> str | None:
+    """바깥 주소를 설정으로 아는 설치면 완전한 주소 — `MCP_PUBLIC_URL` 이
+    `<앱 주소>/mcp` 다."""
+    configured = get_settings().mcp_public_url.strip().rstrip("/")
+    if not configured.endswith("/mcp"):
+        return None
+    base = configured[: -len("/mcp")]
+    prefix = get_settings().base_path
+    if prefix and base.endswith(prefix):
+        base = base[: -len(prefix)]
+    return f"{base}{path}"
+
+
+def issue_ticket(
+    db: Session,
+    *,
+    user: User,
+    owner_table: str,
+    owner_id: uuid.UUID,
+    owner_field: str | None,
+    filename: str,
+) -> TicketOut:
+    """업로드 표를 낸다. **지금 자리를 확인한다** — 안 되는 자리면 표를 안 낸다(AI 가 curl 을
+    돌리고 나서야 거절을 보지 않게)."""
+    owner = extensions.attachment_owner(db, user, owner_table, owner_id, owner_field)
+    if owner is None:
+        raise Conflict(
+            code("FILES", 9),
+            f"업로드 티켓은 객체의 첨부에만 발급합니다({owner_table} 은(는) 지원하지 "
+            "않습니다).",
+        )
+    ticket = secrets.token_urlsafe(32)
+    expires_at = datetime.now(UTC) + TICKET_TTL
+    db.add(
+        AttachmentTicket(
+            token_hash=_ticket_hash(ticket),
+            user_id=user.id,
+            token_name=get_actor_token(),
+            owner_table=owner_table,
+            owner_id=owner_id,
+            owner_field=owner_field,
+            filename=clean(filename)[:255],
+            expires_at=expires_at,
+        )
+    )
+    db.commit()
+    # 표는 주소가 아니라 머리(`X-Upload-Ticket`)로 — 주소는 접근 로그에 남는다.
+    path = f"{get_settings().base_path}/api/attachments/upload"
+    return TicketOut(
+        ticket=ticket,
+        upload_path=path,
+        upload_url=_public_upload_url(path),
+        expires_at=expires_at,
+        expires_in_seconds=int(TICKET_TTL.total_seconds()),
+        max_bytes=MAX_BYTES,
+        accept=owner.accept,
+    )
+
+
+def redeem_ticket(
+    db: Session, *, ticket: str, filename: str, stream: BinaryIO
+) -> AttachmentOut:
+    """표로 올린다. **표를 낸 사람의 권한으로 자리를 다시 확인한다** — 그 사이 바뀔 수 있다.
+
+    표는 성공했을 때만 쓴 것이 된다 — 이미지만 받는 칸에 엑셀을 올려 거절되면 같은 표로 고쳐
+    다시 올릴 수 있다(5분 안). 같은 표를 동시에 두 번 쓰면 행 잠금이 하나만 통과시킨다.
+    """
+    refused = AppError(
+        code("FILES", 10),
+        "업로드 티켓이 없거나, 이미 사용했거나, 만료됐습니다 — 새로 발급받으세요"
+        "(MCP `attachment_upload_prepare`).",
+        status=401,
+    )
+    found = db.scalar(
+        select(AttachmentTicket)
+        .where(AttachmentTicket.token_hash == _ticket_hash(ticket))
+        .with_for_update()
+    )
+    if found is None or found.used_at is not None or found.expires_at <= datetime.now(UTC):
+        raise refused
+    user = db.get(User, found.user_id)
+    if user is None or user.status != "active":
+        raise refused
+    # 감사에 「어느 토큰이 올렸나」 — 표를 낸 토큰의 이름을 그대로 잇는다.
+    set_actor_token(found.token_name)
+    found.used_at = func.now()
+    made = upload(
+        db,
+        user=user,
+        owner_table=found.owner_table,
+        owner_id=found.owner_id,
+        owner_field=found.owner_field,
+        workspace_slug=None,
+        filename=filename or found.filename or "이름없음",
+        content_type=None,
+        stream=stream,
+    )
+    found.attachment_id = made.id
+    db.commit()
+    return made

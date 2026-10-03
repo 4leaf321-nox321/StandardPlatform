@@ -113,6 +113,7 @@ PROPERTY_HEADER = [
     "최대",
     "소수",
     "정규식",
+    "허용 종류",
     "기본값",
     "도움말",
 ]
@@ -135,6 +136,7 @@ def _property_row(one: PropertyDef) -> list[Any]:
         one.max_value,
         one.decimals,
         one.pattern or "",
+        one.accept or "",
         _joined(one.default_value),
         one.help,
     ]

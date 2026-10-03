@@ -2,26 +2,45 @@
 
 **내려받기는 평범한 링크로 안 된다.** access 토큰은 메모리에만 있어서 브라우저가
 스스로 여는 주소(a href · img src)에는 안 실린다 — 프론트는 `downloadFile` 로
-받는다(`shared/api/client.ts`).
+받는다(`shared/api/client.ts`). 그림도 같다 — 받아서 blob 주소로 띄운다.
+
+## 파일 응답의 머리(ADR 0012)
+
+- `X-Content-Type-Options: nosniff` — 브라우저가 내용을 보고 종류를 짐작하지 않게.
+- `Content-Security-Policy: sandbox` — 누가 이 주소를 앱 창에서 직접 열어도 HTML · SVG 의
+  스크립트가 앱의 주소로 돌지 않게.
+- `Cache-Control: private` — 한 사람의 브라우저에만. 첨부는 id 마다 내용이 안 바뀐다(내용
+  주소 · 행은 고치지 않는다) — 같은 화면을 다시 열 때 사진을 또 받지 않는다.
 """
 
 from __future__ import annotations
 
+import tempfile
 import uuid
+from typing import BinaryIO, cast
 from urllib.parse import quote
 
-from fastapi import APIRouter, Depends, File, Form, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
+from starlette.concurrency import run_in_threadpool
 
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.files import services
-from app.modules.files.schemas import AttachmentOut
+from app.modules.files.schemas import AttachmentOut, TicketOut, TicketRequest
 from app.shared import filestore
 from app.shared.auth import current_user
+from app.shared.errors import AppError, code
 
 router = APIRouter(prefix="/attachments", tags=["files"])
+
+#: 파일을 내보내는 응답마다 붙이는 머리.
+FILE_HEADERS = {
+    "X-Content-Type-Options": "nosniff",
+    "Content-Security-Policy": "default-src 'none'; sandbox",
+    "Cache-Control": "private, max-age=86400",
+}
 
 
 @router.post("", response_model=AttachmentOut, status_code=201)
@@ -50,6 +69,61 @@ def upload(
         content_type=upload_file.content_type,
         stream=upload_file.file,
     )
+
+
+@router.post("/tickets", response_model=TicketOut, status_code=201)
+def issue_ticket(
+    payload: TicketRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> TicketOut:
+    """한 번 쓰는 업로드 표(5분) — MCP 가 파일을 **토큰으로 나르지 않게**(ADR 0012).
+
+    자리(자료 · 칸)를 지금 확인하고 낸다. 받은 쪽은 표를 `X-Upload-Ticket` 머리에 실어
+    `PUT /api/attachments/upload` 로 파일 바이트를 그대로 보낸다 — `curl -T <파일>`.
+    """
+    return services.issue_ticket(
+        db,
+        user=user,
+        owner_table=payload.owner_table,
+        owner_id=payload.owner_id,
+        owner_field=payload.owner_field,
+        filename=payload.filename,
+    )
+
+
+@router.put("/upload", response_model=AttachmentOut, status_code=201)
+async def upload_with_ticket(
+    request: Request,
+    filename: str = Query(default="", max_length=255),
+    ticket: str = Header(alias="X-Upload-Ticket", min_length=20, max_length=200),
+    db: Session = Depends(get_db),
+) -> AttachmentOut:
+    """표로 올린다 — **토큰 없이**, 본문이 곧 파일이다(multipart 아님).
+
+    본문을 흘려 받으며 크기를 센다 — 상한을 넘는 순간 끊는다(다 받고 나서 재지 않는다).
+    """
+    limit = services.MAX_BYTES
+    with tempfile.SpooledTemporaryFile(max_size=1024 * 1024) as spool:
+        size = 0
+        async for chunk in request.stream():
+            size += len(chunk)
+            if size > limit:
+                raise AppError(
+                    code("FILES", 3),
+                    f"파일이 너무 큽니다 (최대 {limit // 1024 // 1024}MB).",
+                    status=413,
+                    details={"max_bytes": limit},
+                )
+            spool.write(chunk)
+        spool.seek(0)
+        return await run_in_threadpool(
+            services.redeem_ticket,
+            db,
+            ticket=ticket,
+            filename=filename,
+            stream=cast(BinaryIO, spool),
+        )
 
 
 @router.get("", response_model=list[AttachmentOut])
@@ -89,8 +163,19 @@ def download(
     return FileResponse(
         path,
         media_type=attachment.content_type,
-        headers={"Content-Disposition": disposition},
+        headers={**FILE_HEADERS, "Content-Disposition": disposition},
     )
+
+
+@router.get("/{attachment_id}/thumbnail", include_in_schema=False)
+def thumbnail(
+    attachment_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> FileResponse:
+    """미리보기(WebP, 긴 변 320px). **서버가 이미지로 읽은 첨부만** — 아니면 404(FILES-8)."""
+    path = services.thumbnail_path(db, user=user, attachment_id=attachment_id)
+    return FileResponse(path, media_type="image/webp", headers=FILE_HEADERS)
 
 
 @router.delete("/{attachment_id}", status_code=204)

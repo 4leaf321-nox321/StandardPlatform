@@ -66,6 +66,8 @@ class PropertyDefOut(BaseModel):
     max_value: float | None
     decimals: int | None
     pattern: str | None
+    accept: str | None = None
+    """`file` 칸이 받는 것 — `image` 면 이미지만(ADR 0012)."""
     default_value: Any | None
     unique: bool
     section: str
@@ -90,6 +92,8 @@ class PropertyDefWriteRequest(BaseModel):
     max_value: float | None = None
     decimals: int | None = Field(default=None, ge=0, le=10)
     pattern: str | None = Field(default=None, max_length=200)
+    accept: str | None = Field(default=None, max_length=16)
+    """`file` 칸만 — `image` 면 서버가 이미지로 읽은 것만 붙는다(ADR 0012)."""
     default_value: Any | None = None
     unique: bool = False
     section: str = Field(default="", max_length=48)

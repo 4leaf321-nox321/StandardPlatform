@@ -40,7 +40,7 @@ from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
-from app.modules.objects import refindex
+from app.modules.objects import attachment_sync, refindex
 from app.modules.ontology.models import SLUG_MAX
 
 #: 식별자의 비교키를 DB 에서 — `shared.text.compare_key`(NFKC · 공백 정리 · 소문자)와 같게.
@@ -357,6 +357,7 @@ class ObjectRef(Base):
 
 
 refindex.attach(Base.metadata)
+attachment_sync.attach(Base.metadata)
 
 
 def _need_trigram(_target: Any, connection: Any, **_kw: Any) -> None:

@@ -77,8 +77,14 @@ class AttachmentBrief(BaseModel):
     id: uuid.UUID
     owner_field: str | None
     original_name: str
+    content_type: str
     size_bytes: int
     created_at: datetime
+    is_image: bool = False
+    """서버가 열어 보고 이미지로 읽은 것(ADR 0012). **바이트는 여기 없다** — 화면은
+    `/api/attachments/{id}/thumbnail` 을 받고, MCP 는 이름 · 크기만 본다."""
+    width: int | None = None
+    height: int | None = None
 
 
 class RelatedObjectOut(BaseModel):

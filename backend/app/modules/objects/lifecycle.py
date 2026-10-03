@@ -27,6 +27,7 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.files import services as files_services
 from app.modules.objects import aliases, links, rewrite, system
 from app.modules.objects import relations as rel
 from app.modules.objects.models import ObjectInstance, ObjectRef, ObjectRelation
@@ -540,6 +541,11 @@ def merge_into(
 
     # 지는 쪽의 별칭과 이름을 이긴 쪽에 — 같은 표기로 다시 와도 같은 것으로 풀린다.
     aliases_moved, aliases_dropped = aliases.move(db, row, target)
+    # 첨부(사진)도 이긴 쪽으로 — 같은 타입이라 같은 파일 칸이 있다. 안 옮기면 지운 쪽에 남아
+    # 아무 화면에서도 안 보인다(ADR 0012).
+    attachments_moved = files_services.move_owner(
+        db, "objects", row.id, target.id, target.owner_workspace_id
+    )
 
     row.merged_into_id = target.id
     _soft_delete(db, user, row, object_type, reason=reason)
@@ -559,6 +565,7 @@ def merge_into(
             "relations_dropped": dropped_edges,
             "aliases_moved": aliases_moved,
             "aliases_dropped": aliases_dropped,
+            "attachments_moved": attachments_moved,
             **audit.diff({"properties": before}, {"properties": target.properties or {}}),
         },
         reason=reason,

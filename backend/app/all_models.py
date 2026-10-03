@@ -30,7 +30,7 @@ from app.modules.audit.models import AccessLog, AuditEntry
 from app.modules.auth.models import PersonalAccessToken, RefreshToken
 from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.datasources.models import DataSource, DataSourceRun
-from app.modules.files.models import Attachment
+from app.modules.files.models import Attachment, AttachmentTicket
 from app.modules.jobs.models import Job, JobFile, WorkerHeartbeat
 from app.modules.notices.models import Notice, NoticeRead
 from app.modules.notifications.models import Notification
@@ -60,6 +60,7 @@ from app.modules.workspaces.models import Workspace, WorkspaceMember
 __all__ = [
     "AccessLog",
     "Attachment",
+    "AttachmentTicket",
     "AuditEntry",
     "Base",
     "BundleRun",

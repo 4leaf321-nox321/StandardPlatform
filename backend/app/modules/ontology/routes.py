@@ -41,6 +41,7 @@ from app.modules.ontology import (
     export as schema_export,
 )
 from app.modules.ontology.models import (
+    ACCEPTS,
     CARDINALITIES,
     DATA_TYPES,
     ENTRY_POLICIES,
@@ -1743,6 +1744,7 @@ def create_property(
         max_value=payload.max_value,
         decimals=payload.decimals,
         pattern=payload.pattern,
+        accept=payload.accept,
         default_value=payload.default_value,
         unique=payload.unique,
         section=payload.section,
@@ -1820,6 +1822,7 @@ def update_property(
     row.max_value = payload.max_value
     row.decimals = payload.decimals
     row.pattern = payload.pattern
+    row.accept = payload.accept
     row.default_value = payload.default_value
     row.unique = payload.unique
     row.section = payload.section
@@ -2470,6 +2473,20 @@ def _check_property_shape(payload: PropertyDefWriteRequest) -> None:
     _check_shape_fields(
         payload.data_type, payload.enum_options, payload.min_value, payload.max_value
     )
+    _check_accept(payload.data_type, payload.accept)
+
+
+def _check_accept(data_type: str, accept: str | None) -> None:
+    """「받는 종류」 는 파일 칸에만 — 다른 칸에 두면 아무것도 안 하는 설정이 화면에 남는다."""
+    if accept is None:
+        return
+    require_choice(accept, ACCEPTS, what="허용 파일 종류")
+    if data_type != "file":
+        raise Conflict(
+            code("ONTOLOGY", 87),
+            "「사진만 허용」은 파일 속성에만 설정할 수 있습니다.",
+            details={"data_type": data_type, "accept": accept},
+        )
 
 
 def _check_shape_fields(

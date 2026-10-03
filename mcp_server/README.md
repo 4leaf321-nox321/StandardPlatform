@@ -33,7 +33,7 @@ claude mcp list        # standardplatform: http://<host>:8042/mcp (HTTP) - ✔ C
 >
 > 이름과 범위를 고르고 발급하면 토큰이 한 번 보인다(그때 복사). 범위:
 > - `read` — 스키마와 객체 읽기
-> - `objects:write` — 객체를 만들고 고치기
+> - `objects:write` — 객체를 만들고 고치기(사진 · 파일 붙이기 포함 — 바이트는 셸의 `curl` 이 올린다)
 > - `ontology:write` — **정의까지 고치기**
 >
 > 셋을 가른 이유: 한 범위로 묶으면 「객체만 넣게」 하려던 토큰이 **타입까지 지울

@@ -2754,6 +2754,104 @@
         }
       }
     },
+    "/api/attachments/tickets": {
+      "post": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Issue Ticket",
+        "description": "한 번 쓰는 업로드 표(5분) — MCP 가 파일을 **토큰으로 나르지 않게**(ADR 0012).\n\n자리(자료 · 칸)를 지금 확인하고 낸다. 받은 쪽은 표를 `X-Upload-Ticket` 머리에 실어\n`PUT /api/attachments/upload` 로 파일 바이트를 그대로 보낸다 — `curl -T <파일>`.",
+        "operationId": "issue_ticket_api_attachments_tickets_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TicketRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TicketOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/attachments/upload": {
+      "put": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Upload With Ticket",
+        "description": "표로 올린다 — **토큰 없이**, 본문이 곧 파일이다(multipart 아님).\n\n본문을 흘려 받으며 크기를 센다 — 상한을 넘는 순간 끊는다(다 받고 나서 재지 않는다).",
+        "operationId": "upload_with_ticket_api_attachments_upload_put",
+        "parameters": [
+          {
+            "name": "filename",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 255,
+              "default": "",
+              "title": "Filename"
+            }
+          },
+          {
+            "name": "X-Upload-Ticket",
+            "in": "header",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "minLength": 20,
+              "maxLength": 200,
+              "title": "X-Upload-Ticket"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/attachments/{attachment_id}": {
       "delete": {
         "tags": [
@@ -12158,6 +12256,10 @@
             "type": "string",
             "title": "Original Name"
           },
+          "content_type": {
+            "type": "string",
+            "title": "Content Type"
+          },
           "size_bytes": {
             "type": "integer",
             "title": "Size Bytes"
@@ -12166,6 +12268,33 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "is_image": {
+            "type": "boolean",
+            "title": "Is Image",
+            "default": false
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
           }
         },
         "type": "object",
@@ -12173,6 +12302,7 @@
           "id",
           "owner_field",
           "original_name",
+          "content_type",
           "size_bytes",
           "created_at"
         ],
@@ -12225,6 +12355,33 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "is_image": {
+            "type": "boolean",
+            "title": "Is Image",
+            "default": false
+          },
+          "width": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Width"
+          },
+          "height": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Height"
           }
         },
         "type": "object",
@@ -19552,6 +19709,17 @@
             ],
             "title": "Pattern"
           },
+          "accept": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept"
+          },
           "default_value": {
             "anyOf": [
               {},
@@ -19725,6 +19893,18 @@
               }
             ],
             "title": "Pattern"
+          },
+          "accept": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 16
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept"
           },
           "default_value": {
             "anyOf": [
@@ -22800,6 +22980,101 @@
         ],
         "title": "TemporaryPasswordResponse",
         "description": "임시 비밀번호는 이 응답에서 한 번만 나온다.\n\n메일이 없어 보낼 수 없으므로 관리자가 화면에서 읽어 구두로 전달한다. 받는\n사람은 첫 로그인 때 변경이 강제된다."
+      },
+      "TicketOut": {
+        "properties": {
+          "ticket": {
+            "type": "string",
+            "title": "Ticket"
+          },
+          "upload_path": {
+            "type": "string",
+            "title": "Upload Path"
+          },
+          "upload_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Upload Url"
+          },
+          "expires_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Expires At"
+          },
+          "expires_in_seconds": {
+            "type": "integer",
+            "title": "Expires In Seconds"
+          },
+          "max_bytes": {
+            "type": "integer",
+            "title": "Max Bytes"
+          },
+          "accept": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Accept"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ticket",
+          "upload_path",
+          "expires_at",
+          "expires_in_seconds",
+          "max_bytes"
+        ],
+        "title": "TicketOut"
+      },
+      "TicketRequest": {
+        "properties": {
+          "owner_table": {
+            "type": "string",
+            "maxLength": 60,
+            "title": "Owner Table",
+            "default": "objects"
+          },
+          "owner_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Owner Id"
+          },
+          "owner_field": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 48
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Field"
+          },
+          "filename": {
+            "type": "string",
+            "maxLength": 255,
+            "title": "Filename",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "owner_id"
+        ],
+        "title": "TicketRequest",
+        "description": "업로드 표를 낸다 — 어느 자료의 어느 자리에 올릴지 **지금** 정하고 확인한다."
       },
       "TileLevelOut": {
         "properties": {

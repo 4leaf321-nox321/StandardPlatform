@@ -17,6 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
+from app.modules.files import services as files_services
 from app.modules.files.models import Attachment
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs import services as job_services
@@ -1874,15 +1875,18 @@ def object_profile(
                 ) from None
         raise
 
-    attachments = db.scalars(
-        select(Attachment)
-        .where(
-            Attachment.owner_table == "objects",
-            Attachment.owner_id == row.id,
-            Attachment.deleted_at.is_(None),
+    attachments = list(
+        db.scalars(
+            select(Attachment)
+            .where(
+                Attachment.owner_table == "objects",
+                Attachment.owner_id == row.id,
+                Attachment.deleted_at.is_(None),
+            )
+            .order_by(Attachment.created_at.desc())
         )
-        .order_by(Attachment.created_at.desc())
     )
+    files_services.inspect_pending(db, attachments)
 
     defs = properties_of(db, object_type.id)
     return ObjectProfileOut(

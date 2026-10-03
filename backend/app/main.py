@@ -42,6 +42,7 @@ from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs import services as jobs_services
 from app.modules.notices import routes as notices_routes
 from app.modules.notifications import routes as notifications_routes
+from app.modules.objects import attachments as objects_attachments
 from app.modules.objects import quality as objects_quality
 from app.modules.objects import routes as objects_routes
 from app.modules.objects import services as objects_services
@@ -151,6 +152,8 @@ def _register_extensions() -> None:
     extensions.register_workspace_content(objects_services.workspace_content)
     extensions.register_workspace_content(files_services.workspace_content)
     extensions.register_workspace_content(datasources_services.workspace_content)
+    # 객체에 붙는 첨부 — 객체가 있나 · 고칠 수 있나 · 파일 칸인가 · 이미지만인가(ADR 0012).
+    extensions.register_attachment_owner("objects", objects_attachments.owner)
     # 데이터 품질 — 필수값 빈 것·고아·깨진 참조·이름 같은 것을 홈 「남은 일」 에.
     extensions.register_maintenance(objects_quality.maintenance)
     extensions.register_stats(objects_quality.stats)
@@ -192,6 +195,8 @@ def _register_extensions() -> None:
     # 작업은 파일로 객체를 넣거나 내는 일이다 — 같은 범위. 정의가 든 묶음의 적용은 넣을 때
     # 적어 둔 `needs_scope` 를 apply 라우트가 다시 묻는다.
     scopes.register_write_scope("/api/jobs", "objects:write")
+    # 첨부 — 객체에 붙이는 일은 객체를 고치는 일이다(MCP 의 업로드 티켓도 이 범위).
+    scopes.register_write_scope("/api/attachments", "objects:write")
     # **내보내기는 읽기다.** 작업 한 줄을 남기니 표로는 쓰기지만, 하는 일은 「가진 것을 파일로
     # 받기」 다 — 받아만 가는 쪽(허브에서 정의를 받는 쌍둥이 · 바깥 시스템)에 쓰기 토큰을
     # 주게 하지 않는다. 실측: 쌍둥이 리허설에서 `read` 토큰이 묶음 내보내기에 403 을 받았다.

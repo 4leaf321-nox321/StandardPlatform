@@ -1206,3 +1206,74 @@ def test_가리키는_기록이_많은_객체의_합치기와_지우기는_작�
         one["properties"].get("model") for one in bot.call(server.objects_list, case)["items"]
     }
     assert pointed == {new["id"], None}
+
+
+def test_사진은_curl_명령으로_붙인다_바이트는_도구를_거치지_않는다(
+    client: TestClient, admin: Signed, bot: Bot
+) -> None:
+    """도구는 표와 명령만 준다 — 파일은 셸이 직접 올린다(ADR 0012). 명령을 그대로 흉내 내
+    올리면 붙는다. 경로의 빈칸 · 괄호는 셸이 깨지지 않게 감싼다."""
+    import shlex
+
+    from tests.api.test_attachment_images import _png, _world
+
+    w = _world(client, admin)
+    token = bot.ctx.request_context.request.headers["authorization"]
+    behind_nginx = SimpleNamespace(
+        request_context=SimpleNamespace(
+            request=SimpleNamespace(
+                headers={
+                    "authorization": token,
+                    "host": "sp.example.com",
+                    "x-forwarded-proto": "https",
+                }
+            )
+        )
+    )
+    got = asyncio.run(
+        server.attachment_upload_prepare(
+            behind_nginx, w["type"], w["id"], "/home/me/현장 사진 (1).png", field="photo"
+        )
+    )
+    assert "error" not in got, got
+    words = shlex.split(got["curl"])
+    assert words[:3] == ["curl", "-sS", "-T"]
+    assert words[3] == "/home/me/현장 사진 (1).png"
+    ticket = words[words.index("-H") + 1].removeprefix("X-Upload-Ticket: ")
+    url = words[-1]
+    assert url.startswith("https://sp.example.com/api/attachments/upload?filename=")
+    assert "base64" not in got["next"]
+
+    # 셸이 하는 일 — 토큰 없이 표만 실어 바이트를 그대로.
+    done = client.put(
+        "/api/attachments/upload?" + url.split("?", 1)[1],
+        content=_png(),
+        headers={"X-Upload-Ticket": ticket},
+    )
+    assert done.status_code == 201, done.text
+    assert done.json()["original_name"] == "현장 사진 (1).png"
+    assert done.json()["is_image"] is True
+
+    # 읽을 때도 바이트는 없다 — 이름 · 크기 · 판정만.
+    detail = bot.call(server.object_get, w["type"], w["id"])
+    (brief,) = detail["attachments"]
+    assert brief["is_image"] is True and "content" not in brief
+    removed = bot.call(server.attachment_remove, brief["id"])
+    assert removed == {"ok": True, "message": "완료"}
+
+
+def test_업로드_주소는_들어온_주소를_따른다() -> None:
+    """nginx 뒤면 포트 없이 그 호스트, MCP 포트로 바로 왔으면 앱 포트(-2)."""
+
+    def origin(headers: dict[str, str]) -> Any:
+        ctx = SimpleNamespace(
+            request_context=SimpleNamespace(request=SimpleNamespace(headers=headers))
+        )
+        return server._public_origin(ctx)
+
+    assert origin({"host": "sp.example.com", "x-forwarded-proto": "https"}) == (
+        "https://sp.example.com"
+    )
+    assert origin({"host": "10.0.0.5:8042"}) == "http://10.0.0.5:8040"
+    assert origin({"host": "10.0.0.5:9000"}) == "http://10.0.0.5:9000"
+    assert origin({}) is None

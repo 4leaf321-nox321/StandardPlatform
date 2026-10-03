@@ -52,6 +52,8 @@ TOOLS = {
     "objects_delete",
     "object_restore",
     "object_merge",
+    "attachment_upload_prepare",
+    "attachment_remove",
     "relation_add",
     "objects_import",
     "bundle_import",

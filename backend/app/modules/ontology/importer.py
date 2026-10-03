@@ -31,6 +31,7 @@ from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.ontology import interfaces, managed, retype, views
 from app.modules.ontology.models import (
+    ACCEPTS,
     CARDINALITIES,
     DATA_TYPES,
     ENTRY_POLICIES,
@@ -117,6 +118,7 @@ PROPERTY_FIELDS = {
     "max_value",
     "decimals",
     "pattern",
+    "accept",
     "default_value",
     "unique",
     "section",
@@ -162,6 +164,7 @@ CHOICES = {
     "usage": USAGES,
     "cardinality": CARDINALITIES,
     "data_type": DATA_TYPES,
+    "accept": ACCEPTS,
 }
 
 
@@ -717,6 +720,12 @@ def _plan_properties(
         _check_choices(one, what=f"속성 {type_slug}.{key}", errors=out.errors)
         found = existing.get(key)
         name = f"{type_slug}.{key}"
+        if one.get("accept") is not None:
+            kind = one.get("data_type") or (found.data_type if found is not None else None)
+            if kind != "file":
+                out.errors.append(
+                    f"속성 {name}: accept(사진만 허용)는 파일 속성에만 설정합니다."
+                )
         target = one.get("ref_type_slug")
         if ref_targets is not None and target and target not in ref_targets:
             # **경고만** — 옛 스냅샷을 되돌릴 때 사라진 대상 하나가 복원 전체를 막으면 안 된다.

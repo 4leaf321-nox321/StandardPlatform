@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-03f
+GUIDE_VERSION: 2026-10-03g
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -38,6 +38,8 @@ GUIDE_VERSION: 2026-10-03f
 | 무엇이 나빠지고 있나(필수값·고아·끊긴 참조·중복) | `quality_report` | 볼 수 있는 것만 |
 | 객체 하나 만들기 | `object_create` | 정의에 없는 속성 키는 거절된다 |
 | 객체 고치기 | `object_update` | **보낸 키만** 병합. 비우려면 `null`. 식별자 · 상태 · 유효 연도 · 별칭도 |
+| **사진 · 파일 붙이기** | `attachment_upload_prepare` → 셸에서 `curl` | **파일을 읽거나 base64 로 옮기지 않는다** — 바이트는 셸이 직접 올린다. 셸이 없으면 사람에게 화면에서 |
+| 잘못 붙인 첨부 떼기 | `attachment_remove(attachment_id)` | 사람이 떼라고 한 것만 |
 | 객체 지우기(하나 · 여럿) | `objects_delete(apply=false)` → 사람 확인 → `apply=true` | 가리키는 것이 있으면 그 줄은 거절(`block`). `detach` 는 사람이 고른 뒤에만. 그만 쓰는 것이면 `status="deprecated"` |
 | 같은 것이 둘 — 합치기 | `object_merge(apply=false)` → 사람 확인 → `apply=true` | **되돌리기 없음.** 어느 쪽이 남을지는 사람이 정한다 |
 | 여러 객체의 **한 칸**을 같은 값으로 | `bulk_edit(apply=false)` → `apply=true` | `batch_id` 를 사용자에게 알린다 — `bulk_edit_undo` 가 통째로 되돌린다 |
@@ -400,6 +402,28 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   못한다(그 표의 화면에서 한다). 파일·`objects_import` 에서는 그 표의 식별자(부서면
   slug, 계정이면 로그인 아이디)로 적는다.
 
+### 사진 · 파일 붙이기 — `attachment_upload_prepare` → 셸의 `curl`
+
+**파일의 바이트는 모델(당신)을 거치지 않는다.** 파일을 열어 읽거나, base64 로 바꿔 도구 인자에
+넣거나, 내용을 속성에 적지 않는다 — 1MB 가 수십만 토큰이고 그만큼 일을 못 한다. 받기도 같다:
+첨부는 `object_get` 의 `attachments[]` 에 **이름 · 크기 · `is_image` · 가로세로만** 오고, 사진을
+보려면 사람이 화면에서 본다.
+
+1. 붙일 객체의 id 를 찾는다(`object_resolve`), 붙일 칸을 고른다 — `object_fields` · `ontology_schema`
+   에서 `data_type: file` 인 칸. 칸의 `accept: image` 면 **서버가 이미지로 읽은 것(PNG · JPEG · GIF ·
+   WebP)만** 붙는다 — PDF · 엑셀은 거절된다. 칸이 없으면 `field` 를 비운다(「그 밖의 첨부」).
+2. `attachment_upload_prepare(type_slug, object_id, local_path, field=)` — `local_path` 는 **당신의
+   셸에서 보이는 경로**다. 서버는 그 파일을 열지 않고 명령에 넣기만 한다.
+3. 돌아온 `curl` 을 셸에서 **그대로 한 번** 실행한다(5분 안). 응답은 붙은 첨부(`id` · `is_image`)다.
+   `{"error": ...}` 면 그 말을 사용자에게 전한다(이미지만 받는 칸 · 권한 · 표 만료).
+4. 여러 장이면 장마다 1 ~ 3. 표는 한 장에 하나다.
+
+- 셸이 없는 클라이언트(예: Claude Desktop)는 **올리지 못한다** — 사람에게 화면의 그 칸에서
+  올려 달라고 한다. 다른 길(base64 · 파일 내용을 글로)을 찾지 않는다.
+- Windows PowerShell 에서는 `curl` 이 다른 명령이다 — `curl.exe` 로 부른다.
+- 붙이고 뗀 일은 객체의 이력에 남는다(`object.attachment.add` · `.remove`). 잘못 붙였으면
+  사람이 확인한 뒤 `attachment_remove(attachment_id)`.
+
 ### 여러 객체의 한 칸 — `bulk_edit(type_slug, ids, field, value, apply)`
 
 「등급 A 인 것 전부 B 로」 는 `objects_list` 로 id 를 모아 여기로. `field` 는 `status` ·
@@ -591,7 +615,7 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
   여러 줄을 바꾸고, 목록을 받는 자리는 **표대로 맞춘다**(보내지 않은 줄이 사라진다).
 - **근거를 요구하는 자리가 있다.** 디지털 트윈의 평가는 근거가 비면 저장되지 않는다 — 무엇을
   보고 매겼는지를 모른 채 채우지 말고, 사람이 말한 것을 그대로 적는다.
-- 파일을 주는 자리(`.../export`)는 도구로 받지 않는다 — 화면에서 내려받는다.
+- 파일을 주는 자리(`.../export` · 첨부 내용)는 도구로 받지 않는다 — 화면에서 내려받는다.
 - 기준 정보는 **코어 도구로** 다룬다. 확장의 기준 정보도 온톨로지 객체다(시험 항목 ·
   시뮬레이션 해석) — `objects_list` · `object_create` · `object_update` · `objects_import`
   가 그대로 쓰이고, 불량 유형처럼 목록인 칸도 그 객체의 속성이다.

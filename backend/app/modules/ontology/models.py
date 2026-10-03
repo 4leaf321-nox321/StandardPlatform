@@ -99,11 +99,12 @@ TEMPORAL_KINDS = ("evergreen", "lifecycle", "yearly", "derived")
 #: 시험 결과 300건도 기록이다.
 USAGES = ("axis", "log")
 
-#: 속성의 값 종류 일곱.
+#: 속성의 값 종류 열.
 #:
 #: `file` 은 첨부 모듈을 재사용한다(`attachments.owner_field`). JSONB 에 첨부 id 를
 #: 넣지 않는 이유는, 첨부를 지우면 **유령 id 가 남고 그것은 깨진 링크로만**
-#: 드러나기 때문이다.
+#: 드러나기 때문이다. 이미지도 `file` 이다 — 칸의 `accept` 가 「이미지만」 을 정하고,
+#: 화면은 서버가 이미지로 읽은 첨부를 미리보기로 띄운다(ADR 0012).
 #:
 #: `text_long` 과 `text` 를 가르는 이유는 **위젯이 다르기 때문**이다 — 여러 줄
 #: 글을 한 줄 칸에 넣으면 사람은 자기가 쓴 것을 못 본다. `url` 은 링크로 뜬다.
@@ -120,6 +121,9 @@ DATA_TYPES = (
     "object_ref",
     "file",
 )
+
+#: `file` 칸이 받는 것(`PropertyDef.accept`). 비우면 무엇이든 — 지금은 「이미지만」 하나다.
+ACCEPTS = ("image",)
 
 #: 속성 정의가 무엇에 붙는가. **타입의 폼과 관계의 폼이 같은 컴포넌트여야 한다** —
 #: 두 벌로 만들면 위젯이 갈리고, 갈린 것은 한쪽만 고쳐진다. 인터페이스의 공통 속성도 같은
@@ -407,6 +411,12 @@ class PropertyDef(Base):
 
     pattern: Mapped[str | None] = mapped_column(String(200), nullable=True)
     """`text` 계열의 정규식. 사번·도번처럼 **모양이 정해진 값**에 쓴다."""
+
+    accept: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    """`file` 칸이 받는 것 — `image` 면 서버가 이미지로 읽은 것만(ADR 0012). 비우면 무엇이든.
+
+    「사진」 칸에 엑셀이 붙으면 갤러리에 파일 아이콘이 섞이고, 사람은 사진이 깨졌다고 읽는다.
+    판정은 브라우저의 말이 아니라 서버가 열어 본 결과다(`shared/images`)."""
 
     default_value: Mapped[Any | None] = mapped_column(JSONB, nullable=True)
     """안 채웠을 때 들어가는 값. **기계가 대량으로 만들 때** 특히 쓸모 있다."""

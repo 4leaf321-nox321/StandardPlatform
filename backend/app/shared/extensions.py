@@ -1,4 +1,4 @@
-"""도메인이 공통 화면에 자기를 끼우는 자리 — **다섯.**
+"""도메인이 공통 화면에 자기를 끼우는 자리 — **여섯.**
 
 공통 틀에는 도메인을 모르는 화면이 있고, 그것들은 도메인이 무엇인지 모른다.
 
@@ -7,6 +7,7 @@
     부서 삭제 확인       -> references      무엇이 이 부서를 가리키나
     부서 자료 옮기기     -> contents        이 부서가 가진 것을 어떻게 옮기나
     객체의 연도 추론     -> temporal_source  이 객체가 언제 쓰였나
+    첨부 올리기 · 떼기   -> attachment_owner 그 자리가 있나 · 고칠 수 있나 · 무엇만 받나
 
 ## 왜 레지스트리인가
 
@@ -120,11 +121,37 @@ ContentProvider = Callable[[Session, uuid.UUID], list["WorkspaceContent"]]
 #: 객체 id 목록 -> 그 객체가 **쓰인 연도들.** 도메인이 자기 기록에서 답한다.
 TemporalProvider = Callable[[Session, list[uuid.UUID]], dict[uuid.UUID, set[int]]]
 
+
+@dataclass(frozen=True)
+class AttachmentOwner:
+    """첨부를 붙일 자리 — 도메인이 답한다. 공통 틀(files)은 도메인 표를 모른다.
+
+    답하는 쪽은 **그 자리가 없거나 고칠 수 없으면 스스로 던진다**(NotFound · Forbidden ·
+    InvalidValue). 돌려주는 것은 붙여도 될 때의 조건이다.
+    """
+
+    workspace_id: uuid.UUID | None
+    """첨부의 소유 부서 — **그 자료의 소유 부서를 따른다.** 올린 쪽이 부서를 고르게 두면
+    첨부와 자료가 서로 다른 부서에 서고, 자료를 볼 수 있는 사람이 첨부를 못 본다."""
+    accept: str | None = None
+    """`image` 면 서버가 이미지로 읽은 것만 붙는다(ADR 0012)."""
+    label: str = ""
+    """감사에 남길 자료 이름."""
+    changed: Callable[[Session, User, str | None, str, bool], None] | None = None
+    """붙였다(True) · 뗐다(False) — (db, 사람, 자리, 파일 이름, 붙였나). 도메인이 자기 이력에
+    남긴다. **커밋하지 않는다** — 첨부 행과 같은 트랜잭션이다."""
+
+
+#: (db, 사람, 자료 id, 자리) -> 붙일 조건. 자료 표마다 하나. 뗄 때는 자리를 None 으로
+#: 묻는다 — 칸이 지워졌거나 종류가 바뀐 뒤에도 이미 붙은 것은 뗄 수 있어야 한다.
+AttachmentOwnerProvider = Callable[[Session, User, uuid.UUID, str | None], AttachmentOwner]
+
 _maintenance: list[MaintenanceProvider] = []
 _stats: list[StatProvider] = []
 _references: list[ReferenceProvider] = []
 _contents: list[ContentProvider] = []
 _temporal: list[TemporalProvider] = []
+_attachment_owners: dict[str, AttachmentOwnerProvider] = {}
 
 
 # 셋 다 **같은 것을 두 번 넣어도 안전하다.** `create_app()` 은 시험에서 두 번
@@ -169,6 +196,25 @@ def register_temporal_source(provider: TemporalProvider) -> None:
     """
     if provider not in _temporal:
         _temporal.append(provider)
+
+
+def register_attachment_owner(owner_table: str, provider: AttachmentOwnerProvider) -> None:
+    """그 표의 자료에 첨부를 붙일 때 **자리를 확인하는 길.**
+
+    등록하지 않은 표는 예전 동작이다 — 올린 쪽이 고른 부서의 관리자면 붙는다. 등록하면
+    자료가 있는지 · 고칠 수 있는지 · 그 자리가 첨부를 받는 칸인지를 도메인이 본다.
+    """
+    _attachment_owners[owner_table] = provider
+
+
+def attachment_owner(
+    db: Session, user: User, owner_table: str, owner_id: uuid.UUID, owner_field: str | None
+) -> AttachmentOwner | None:
+    """등록된 표면 그 답, 아니면 None(부르는 쪽이 예전 동작으로)."""
+    provider = _attachment_owners.get(owner_table)
+    if provider is None:
+        return None
+    return provider(db, user, owner_id, owner_field)
 
 
 def has_temporal_source() -> bool:

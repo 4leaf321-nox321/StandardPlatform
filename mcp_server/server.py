@@ -30,8 +30,11 @@ import functools
 import json
 import os
 import re
+import shlex
 import time
+from pathlib import PureWindowsPath
 from typing import Any
+from urllib.parse import quote, urlsplit
 
 import httpx
 from mcp.server.fastmcp import Context, FastMCP
@@ -982,7 +985,10 @@ async def object_fields(ctx: Context, type_slug: str) -> Any:
 
 @tool()
 async def object_get(ctx: Context, type_slug: str, object_id: str) -> Any:
-    """객체 하나 — 속성·첨부·**관련 객체**(양방향)까지."""
+    """객체 하나 — 속성·첨부·**관련 객체**(양방향)까지.
+
+    첨부(`attachments[]`)는 이름 · 크기 · `is_image` · 가로세로뿐이다 — **바이트는
+    오지 않는다**(사진은 화면에서 본다). `owner_field` 가 그 파일 칸의 키다."""
     return await _get(ctx, f"/api/objects/{type_slug}/{object_id}")
 
 
@@ -1317,6 +1323,105 @@ async def object_merge(
             ctx, await _post(ctx, f"{path}/job", {"into": into}), JOB_WAIT_MAX
         )
     return got
+
+
+def _public_origin(ctx: Context) -> str | None:
+    """사용자 PC 가 **이 MCP 에 들어온 주소**의 앞부분 — 업로드 주소를 거기에 붙인다.
+
+    nginx 뒤면 `Host` 에 포트가 없다(`$host`) — 앱도 같은 호스트 · 같은 포트다. MCP
+    포트로 바로 들어왔으면 앱은 그 -2 다(설치 규칙: MCP = 앱 +2). 그 둘로 안 되는 설치는
+    `MCP_PUBLIC_URL` 을 적고, 그때는 백엔드가 완전한 주소를 준다(`upload_url`)."""
+    req = getattr(getattr(ctx, "request_context", None), "request", None)
+    headers = getattr(req, "headers", None) or {}
+    host = (headers.get("x-forwarded-host") or headers.get("host") or "").split(",")[0].strip()
+    if not host:
+        return None
+    proto = (headers.get("x-forwarded-proto") or "").split(",")[0].strip()
+    if not proto:
+        proto = getattr(getattr(req, "url", None), "scheme", None) or "http"
+    parts = urlsplit(f"//{host}")
+    if parts.hostname is None:
+        return None
+    name = f"[{parts.hostname}]" if ":" in parts.hostname else parts.hostname
+    port = parts.port
+    if port is not None and port == int(os.environ.get("MCP_PORT", "8042")):
+        port -= 2
+    default = port is None or (proto, port) in (("http", 80), ("https", 443))
+    return f"{proto}://{name}" if default else f"{proto}://{name}:{port}"
+
+
+@tool()
+async def attachment_upload_prepare(
+    ctx: Context,
+    type_slug: str,
+    object_id: str,
+    local_path: str,
+    field: str | None = None,
+    filename: str | None = None,
+) -> Any:
+    """사진 · 파일을 객체에 붙일 **curl 명령**을 만든다 — 파일 바이트는 모델을 거치지 않는다.
+
+    ⚠️ 파일을 읽어 base64 로 옮기거나 내용을 도구 인자에 넣지 않는다 — 1MB 가 수십만 토큰이다.
+    이 도구는 한 번 쓰는 업로드 표(5분)를 받아 명령을 돌려줄 뿐이고, **파일은 당신의 셸이
+    `curl` 로 직접** 올린다. 셸이 없는 클라이언트면 사람에게 화면에서 올려 달라고 한다.
+
+    - `local_path`: 셸에서 보이는 그 파일의 경로 — 이 서버는 그 파일을 열지 않는다
+      (명령에만 넣는다).
+    - `field`: 파일 칸의 키(`object_fields` · `ontology_schema` 의 `data_type: file`).
+      비우면 「그 밖의 첨부」. 칸의 `accept` 가 `image` 면 **서버가 이미지(PNG · JPEG ·
+      GIF · WebP)로 읽은 것만** 붙는다.
+    - 돌아온 `curl` 을 그대로 한 번 실행한다. 응답은 붙은 첨부(id · `is_image` ·
+      가로세로)이고, 실패하면 `{"error": ...}` 봉투가 온다 — 그 말을 사용자에게 전한다.
+    - 객체를 고칠 수 있어야 한다(소유 부서 관리자 · 토큰은 `objects:write`). 안 되면 표가
+      안 나온다.
+    """
+    name = filename or PureWindowsPath(local_path).name or "이름없음"
+    issued = await _post(
+        ctx,
+        "/api/attachments/tickets",
+        {
+            "owner_table": "objects",
+            "owner_id": object_id,
+            "owner_field": field,
+            "filename": name,
+        },
+    )
+    if not isinstance(issued, dict) or "error" in issued:
+        return issued
+    url = issued.get("upload_url")
+    if not url:
+        origin = _public_origin(ctx)
+        if origin is None:
+            return {
+                "error": "이 MCP 에 들어온 주소를 알 수 없어 업로드 주소를 못 만듭니다 — "
+                "운영자에게 `.env` 의 MCP_PUBLIC_URL 을 적어 달라고 하세요.",
+            }
+        url = f"{origin}{issued['upload_path']}"
+    command = (
+        f"curl -sS -T {shlex.quote(local_path)} "
+        f"-H 'X-Upload-Ticket: {issued['ticket']}' "
+        f"'{url}?filename={quote(name, safe='')}'"
+    )
+    return {
+        "curl": command,
+        "type_slug": type_slug,
+        "object_id": object_id,
+        "field": field,
+        "accept": issued.get("accept"),
+        "max_bytes": issued.get("max_bytes"),
+        "expires_in_seconds": issued.get("expires_in_seconds"),
+        "next": "셸에서 curl 을 그대로 한 번 실행합니다(5분 안). 응답 JSON 의 id · is_image "
+        "로 붙었는지 확인하고 사용자에게 알립니다. Windows PowerShell 이면 curl.exe 로 "
+        "부릅니다.",
+    }
+
+
+@tool()
+async def attachment_remove(ctx: Context, attachment_id: str) -> Any:
+    """붙은 첨부를 뗀다 — id 는 `object_get` 의 `attachments[].id`. 객체의 이력에 남는다.
+
+    **사람이 떼라고 한 것만.** 잘못 올린 것을 고칠 때 쓴다 — 파일 자체는 저장소에 남는다."""
+    return await _delete(ctx, f"/api/attachments/{attachment_id}")
 
 
 def _brief(detail: dict[str, Any]) -> dict[str, Any]:
