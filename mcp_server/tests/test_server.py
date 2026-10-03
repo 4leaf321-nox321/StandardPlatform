@@ -321,6 +321,14 @@ def test_분석은_레시피와_options_를_경로와_질의로_건넨다() -> N
     )
     assert seen[0].url.params["by_period"] == "true"
     assert seen[0].url.params["compact"] == "false"
+    # 목록 options 는 쉼표로 — 위험 요인의 factors.
+    seen = _serve(lambda _r: httpx.Response(200, json={}))
+    asyncio.run(
+        server.metric_analyze(
+            _ctx("Bearer t"), "m1", "logit", options={"factors": ["factory", "symptom"]}
+        )
+    )
+    assert seen[0].url.params["factors"] == "factory,symptom"
     seen = _serve(lambda _r: httpx.Response(200, json={}))
     wrong = asyncio.run(server.metric_analyze(_ctx("Bearer t"), "m1", "anova"))
     assert "recipe" in wrong["error"]

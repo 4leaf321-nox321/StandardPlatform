@@ -49,6 +49,11 @@ export interface MetricSpec {
   filters: MetricFilter[]
   denominator?: Denominator | null
   settle_days: number
+  /**
+   * 같은 제품의 방문 — 있으면 기준 주소 `visit.number`(차례) · `visit.repeat`(정한 일수 안
+   * 재방문)를 쓸 수 있다(ADR 0014).
+   */
+  visits?: { key: string; within_days: number } | null
 }
 
 export interface MetricDim {

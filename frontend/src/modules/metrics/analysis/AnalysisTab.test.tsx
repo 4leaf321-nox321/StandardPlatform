@@ -6,12 +6,12 @@
 import { render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 import type { Metric, ReadHeader } from '@/modules/metrics/api'
 import AnalysisTab from '@/modules/metrics/analysis/AnalysisTab'
 import { decisionText } from '@/modules/metrics/analysis/SprtView'
-import type { LifeResult, ParetoResult } from '@/modules/metrics/analysis/types'
+import type { LifeResult, LogitResult, ParetoResult } from '@/modules/metrics/analysis/types'
 
 const metricsApi = vi.hoisted(() => ({ analysis: vi.fn(), dims: vi.fn() }))
 vi.mock('@/modules/metrics/api', () => ({ metricsApi }))
@@ -201,6 +201,8 @@ function show() {
 }
 
 describe('분석 탭', () => {
+  beforeEach(() => vi.clearAllMocks())
+
   it('안 되는 분석은 누를 수 없고 그 이유를 적는다', async () => {
     metricsApi.analysis.mockResolvedValue(LIFE)
     show()
@@ -251,5 +253,80 @@ describe('분석 탭', () => {
     )
     expect(decisionText('not_worse', 1.5)).toContain('같다는 뜻은 아닙니다')
     expect(decisionText('worse', 1.5)).toBe('나쁨 — 전작보다 1.5배 쪽입니다.')
+  })
+
+  it('위험 요인은 기준 대비 오즈비, 모은 값과 불안정한 값은 그렇게 적는다', async () => {
+    const VISITS = {
+      ...METRIC,
+      dims: [
+        { name: 'visit_no', address: 'visit.number', label: '방문 차례', kind: 'visit',
+          multi: false, grain: null },
+        { name: 'again', address: 'visit.repeat', label: '90일 안 재방문', kind: 'visit',
+          multi: false, grain: null },
+        { name: 'factory', address: 'properties.factory', label: '공장', kind: 'text',
+          multi: false, grain: null },
+      ],
+      analyses: [
+        { recipe: 'life', label: '수명 · B수명', ok: true, reason: null },
+        { recipe: 'logit', label: '재방문 위험 요인', ok: true, reason: null },
+      ],
+    } as unknown as Metric
+    const LOGIT: LogitResult = {
+      ...HEADER,
+      recipe: 'logit',
+      method: '묶인 이항 로지스틱(IRLS) · 왈드 구간 · 요인별 LR 검정 v1',
+      params: {},
+      run_id: 'r1',
+      caveats: [],
+      excluded: { open: 30 },
+      visible_share: 1,
+      within_days: 90,
+      repeat_dim: 'again',
+      records: 3000,
+      yes: 350,
+      no: 2650,
+      rate: 350 / 3000,
+      baseline_rate: 0.1,
+      factors: [
+        {
+          name: 'factory',
+          label: '공장',
+          chi2: 88.1,
+          df: 2,
+          p_value: 0,
+          levels: [
+            { key: 'F1', label: 'F1', count: 1000, yes: 100, rate: 0.1, odds_ratio: 1,
+              ci: null, reference: true, pooled: 0, unstable: false },
+            { key: 'F2', label: 'F2', count: 1000, yes: 200, rate: 0.2, odds_ratio: 2.25,
+              ci: [1.8, 2.8], reference: false, pooled: 0, unstable: false },
+            { key: '__other__', label: '그 밖', count: 40, yes: 0, rate: 0, odds_ratio: null,
+              ci: null, reference: false, pooled: 2, unstable: true },
+          ],
+        },
+      ],
+      deviance: 1,
+      null_deviance: 90,
+      auc: 0.61,
+      converged: true,
+    }
+    metricsApi.analysis.mockImplementation((_slug: string, recipe: string) =>
+      Promise.resolve(recipe === 'logit' ? LOGIT : LIFE),
+    )
+    render(
+      <MemoryRouter>
+        <AnalysisTab metric={VISITS} read={{ filters: {} }} />
+      </MemoryRouter>,
+    )
+    // 방문 차례가 있으면 수명은 첫 방문으로 센다.
+    await waitFor(() => expect(metricsApi.analysis).toHaveBeenCalled())
+    const lifeCall = metricsApi.analysis.mock.calls.find((one) => one[1] === 'life')
+    expect(lifeCall?.[2]).toMatchObject({ basis: 'first_visits' })
+    await userEvent.click(screen.getByRole('button', { name: '재방문 위험 요인' }))
+    expect(await screen.findByText('2.25')).toBeInTheDocument()
+    expect(screen.getByText('(기준)')).toBeInTheDocument()
+    expect(screen.getByText('불안정')).toBeInTheDocument()
+    expect(screen.getByText(/— 값 2개/)).toBeInTheDocument()
+    const logitCall = metricsApi.analysis.mock.calls.find((one) => one[1] === 'logit')
+    expect(logitCall?.[2]).toMatchObject({ factors: 'visit_no' })
   })
 })

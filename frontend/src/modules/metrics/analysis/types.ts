@@ -7,7 +7,7 @@
 
 import type { Drill, ReadHeader } from '@/modules/metrics/api'
 
-export type Recipe = 'pareto' | 'life' | 'control' | 'changes' | 'sprt'
+export type Recipe = 'pareto' | 'life' | 'control' | 'changes' | 'sprt' | 'logit'
 
 export interface Caveat {
   code: string
@@ -330,4 +330,47 @@ export interface SprtResult extends AnalysisHeader {
   reference_rates: ReferenceRate[]
   looks: SprtLook[]
   cohort_rows: SprtCohort[]
+}
+
+// --- ⑥ 재방문 위험 요인 ----------------------------------------------------------
+
+export interface LogitLevel {
+  key: string | null
+  label: string
+  /** 재방문 창이 닫힌 기록 수(예 + 아니오). */
+  count: number
+  yes: number
+  rate: number | null
+  /** 기준 수준 대비 — 기준 수준은 1, 불안정하면 없다. */
+  odds_ratio: number | null
+  ci: number[] | null
+  reference: boolean
+  /** 「그 밖」 이면 모인 원래 값의 수. */
+  pooled: number
+  unstable: boolean
+}
+
+export interface LogitFactor {
+  name: string
+  label: string
+  chi2: number
+  df: number
+  p_value: number
+  levels: LogitLevel[]
+}
+
+export interface LogitResult extends AnalysisHeader {
+  within_days: number
+  repeat_dim: string
+  records: number
+  yes: number
+  no: number
+  rate: number | null
+  /** 모든 요인이 기준 수준일 때의 재방문 확률. */
+  baseline_rate: number | null
+  factors: LogitFactor[]
+  deviance: number | null
+  null_deviance: number | null
+  auc: number | null
+  converged: boolean | null
 }

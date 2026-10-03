@@ -1974,10 +1974,11 @@ async def metric_query(
 _RANGES = {"period_from", "period_to", "cohort_from", "cohort_to"}
 _RECIPE_OPTIONS: dict[str, set[str]] = {
     "pareto": {"dim", "top", "include_empty", "by_period"} | _RANGES,
-    "life": {"model", "max_age", "cohort_from", "cohort_to"},
+    "life": {"model", "max_age", "basis", "cohort_from", "cohort_to"},
     "control": {"axis", "window", "split", "baseline_to"} | _RANGES,
     "changes": {"axis", "window"} | _RANGES,
     "sprt": {"target", "reference", "reference_via", "dim", "rho", "alpha", "beta"},
+    "logit": {"factors", "min_count"} | _RANGES,
 }
 
 
@@ -1998,7 +1999,8 @@ async def metric_analyze(
     - `pareto` — 몫 · 누적 · ABC · HHI · 유효 개수 · 지니 · CR. `dim`(필수) · `top` ·
       `include_empty` · `by_period`(기간별 집중도)
     - `life` — 와이블(표준 · 결함) 맞춤과 B1 · B5 · B10. `model`(`auto` · `weibull` ·
-      `defective`) · `max_age`
+      `defective`) · `max_age` · `basis`(`first_visits` 면 시리얼마다 첫 방문만 — 방문 기준이
+      있는 지표)
     - `control` — 라니 u-관리도와 넬슨 규칙. `axis`(`period` · `cohort`) · `window`(코호트
       축 — 출고 뒤 몇 기간) · `split`(분모 짝에 있는 기준) · `baseline_to`(한계를 이 날
       앞으로만)
@@ -2006,6 +2008,8 @@ async def metric_analyze(
     - `sprt` — 새 모델 vs 전작 순차 검정. `target`(필수 — 기준 값, 참조면 id) ·
       `reference` 또는 `reference_via`(새 모델 객체의 전작 칸) · `dim` · `rho` · `alpha` ·
       `beta`
+    - `logit` — 재방문 위험 요인(방문 기준 「재방문」 이 있는 지표). `factors`(필수 — 값이 적은
+      기준 이름 넷까지, 목록) · `min_count`
     - 범위: `period_from` · `period_to`(앞까지) · `cohort_from` · `cohort_to` — `YYYY-MM-DD`
 
     `filters`: `{기준 이름: 값}` — 지표 읽기와 같다(분모 · 두 모델에 함께 걸린다).
@@ -2020,6 +2024,8 @@ async def metric_analyze(
     - 순차 검정: `continue` 는 「아직 결론 없음」 이지 「문제없음」 이 아니다. `not_worse` 는
       「ρ 배 나쁘지는 않다」 이지 「같다」 가 아니다.
     - 관리도의 신호는 「조사할 곳」 이지 원인이 아니다. 변화점의 `provisional` 은 잠정이다.
+    - 위험 요인의 오즈비는 「함께 나옴」 이지 원인이 아니다. `unstable` 인 값은 오즈비를 말하지
+      않는다.
     - `method`(방법과 판) · `computed_at`(계산 시각)을 함께 말한다. 근거는 `drill.params` →
       `objects_list` 의 `conditions`(지표 읽기와 같다)."""
     name = (recipe or "").strip().lower()
@@ -2038,6 +2044,8 @@ async def metric_analyze(
             continue
         if isinstance(value, bool):
             value = "true" if value else "false"
+        elif isinstance(value, list | tuple):
+            value = ",".join(str(one) for one in value)
         params.append((key, str(value)))
     for dim_name, value in (filters or {}).items():
         params.append((f"d.{dim_name}", "" if value is None else str(value)))
@@ -2076,6 +2084,10 @@ async def metric_define(
         `time` 은 `period`(기간끼리) · `cohort`(분모의 기간 = 분자의 코호트) · `null`(기간
         없이 전부 합)
       - `settle_days`: 이만큼 지난 기간은 「닫힘」
+      - `visits`: `{"key": "properties.<시리얼 칸>", "within_days": 90}`(선택) — 같은 제품의
+        방문. 있으면 기준 주소로 `visit.number`(시리얼마다 날짜순 차례 1 · 2 · 3 · 4+)와
+        `visit.repeat`(그 뒤 within_days 안에 다시 왔나 — yes · no · open)를 쓸 수 있다.
+        재방문 위험 요인(`metric_analyze(recipe="logit")`)과 첫 방문 수명이 이것을 쓴다
 
     계획은 **오류 전부** · 경고 · 거르기를 통과한 기록 수 · 어림한 셀 수 · 기준의 종류를
     돌려준다 — 그것을 사람에게 보여 주고 판단을 받는다. 같은 slug 가 이미 있으면 그 정의를

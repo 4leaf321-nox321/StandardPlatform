@@ -107,6 +107,8 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
   )
   const [denPer, setDenPer] = useState(String(spec0?.denominator?.per ?? 100))
   const [settleDays, setSettleDays] = useState(String(spec0?.settle_days ?? 0))
+  const [visitKey, setVisitKey] = useState(spec0?.visits?.key ?? '')
+  const [visitDays, setVisitDays] = useState(String(spec0?.visits?.within_days ?? 90))
   const [intervalHours, setIntervalHours] = useState(String(existing?.interval_hours ?? 24))
   const [plan, setPlan] = useState<MetricPlan | null>(null)
   const [busy, setBusy] = useState<'plan' | 'save' | null>(null)
@@ -132,6 +134,10 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
     (one) => (one.data_type === 'date' || one.data_type === 'datetime') && !one.multi,
   )
   const numberDefs = defs.filter((one) => one.data_type === 'number' && !one.multi)
+  // 시리얼 — 값 하나로 같은 제품을 가리키는 칸.
+  const serialDefs = defs.filter(
+    (one) => ['text', 'number', 'enum'].includes(one.data_type) && !one.multi,
+  )
   const linked = useResource<LinkedField[]>(
     () => (source ? objectApi.fields(source) : Promise.resolve([])),
     [source],
@@ -150,8 +156,14 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
       .map((one) => ({ value: `properties.${one.key}`, label: one.label }))
     const fixed = FIXED.map(([value, text]) => ({ value, label: text }))
     const beyond = (linked.data ?? []).map((one) => ({ value: one.field, label: one.label }))
-    return [...own, ...fixed, ...beyond]
-  }, [defs, linked.data])
+    const visits = visitKey
+      ? [
+          { value: 'visit.number', label: '방문 차례(1 · 2 · 3 · 4+)' },
+          { value: 'visit.repeat', label: `${visitDays}일 안 재방문(예 · 아니오 · 아직 열림)` },
+        ]
+      : []
+    return [...own, ...fixed, ...beyond, ...visits]
+  }, [defs, linked.data, visitKey, visitDays])
 
   const denominatorCandidates = (metrics.data ?? []).filter(
     (one) => one.slug !== slug && !one.spec.denominator,
@@ -182,6 +194,10 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
           }
         : null,
       settle_days: Number(settleDays) || 0,
+      visits:
+        visitKey && timeAddress
+          ? { key: visitKey, within_days: Number(visitDays) || 90 }
+          : null,
     }
   }
 
@@ -607,6 +623,44 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
                 </div>
               </div>
             </>
+          )}
+          <div className="space-y-1">
+            <Label htmlFor="metric-visit-key">방문 — 시리얼 칸 (선택)</Label>
+            <Select
+              value={visitKey || NONE}
+              disabled={!timeAddress}
+              onValueChange={(next) => {
+                setVisitKey(next === NONE ? '' : next)
+                invalidate()
+              }}
+            >
+              <SelectTrigger id="metric-visit-key">
+                <SelectValue placeholder="없음" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={NONE}>없음</SelectItem>
+                {serialDefs.map((one) => (
+                  <SelectItem key={one.key} value={`properties.${one.key}`}>
+                    {one.label}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          {visitKey && (
+            <div className="space-y-1">
+              <Label htmlFor="metric-visit-days">재방문 일수</Label>
+              <Input
+                id="metric-visit-days"
+                type="number"
+                min={1}
+                value={visitDays}
+                onChange={(event) => {
+                  setVisitDays(event.target.value)
+                  invalidate()
+                }}
+              />
+            </div>
           )}
           <div className="space-y-1">
             <Label htmlFor="metric-settle">닫힘 일수</Label>

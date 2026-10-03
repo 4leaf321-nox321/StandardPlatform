@@ -73,14 +73,22 @@ export function lifeText(life: BLife, fit: LifeFit | undefined, unit: string): s
 export function LifeView({ metric, read }: { metric: Metric; read: ReadOptions }) {
   const [model, setModel] = useState('auto')
   const [maxAge, setMaxAge] = useState('')
-  const key = JSON.stringify([model, maxAge, read.filters])
+  // 방문 차례 기준이 있으면 시리얼마다 첫 방문만 셀 수 있다 — 기록 수가 곧 고장 난 대수.
+  const visitNumber = metric.dims.find((one) => one.address === 'visit.number')
+  const [basis, setBasis] = useState(visitNumber ? 'first_visits' : 'records')
+  const filters = Object.fromEntries(
+    Object.entries(read.filters ?? {}).filter(
+      ([name]) => !(basis === 'first_visits' && name === visitNumber?.name),
+    ),
+  )
+  const key = JSON.stringify([model, maxAge, basis, filters])
   const result = useResource<LifeResult>(
     () =>
       metricsApi.analysis<LifeResult>(
         metric.slug,
         'life',
-        { model, max_age: maxAge || undefined },
-        { filters: read.filters },
+        { model, max_age: maxAge || undefined, basis },
+        { filters },
       ),
     [metric.slug, key],
   )
@@ -104,6 +112,20 @@ export function LifeView({ metric, read }: { metric: Metric; read: ReadOptions }
             </SelectContent>
           </Select>
         </div>
+        {visitNumber && (
+          <div className="space-y-1">
+            <Label htmlFor="life-basis">무엇을 고장으로 세나</Label>
+            <Select value={basis} onValueChange={setBasis}>
+              <SelectTrigger id="life-basis" className="w-56">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="first_visits">시리얼마다 첫 방문</SelectItem>
+                <SelectItem value="records">기록 전부</SelectItem>
+              </SelectContent>
+            </Select>
+          </div>
+        )}
         <div className="space-y-1">
           <Label htmlFor="life-max-age">경과 몇 개까지</Label>
           <Input
