@@ -67,6 +67,18 @@ def require_exact_counts(built: spec_module.Built, ask: query.Ask) -> None:
             )
 
 
+def dim_of(built: spec_module.Built, name: str) -> spec_module.Dim:
+    """분석이 이름으로 고른 기준 — 없으면 있는 것을 말하고 거절한다."""
+    found = built.dim(name)
+    if found is None:
+        raise refuse(
+            23,
+            f"이 지표에 없는 기준입니다: {name}. 있는 것: "
+            f"{', '.join(one.name for one in built.dims) or '(없음)'}",
+        )
+    return found
+
+
 def header(
     db: Session,
     user: User,

@@ -132,13 +132,7 @@ def run(
     reason = available(built)
     if reason is not None:
         raise common.refuse(22, reason)
-    target = built.dim(dim)
-    if target is None:
-        raise common.refuse(
-            23,
-            f"이 지표에 없는 기준입니다: {dim}. 있는 것: "
-            f"{', '.join(one.name for one in built.dims)}",
-        )
+    target = common.dim_of(built, dim)
     ask = replace(ask, dims=[dim], by=())
     common.require_exact_counts(built, ask)
     frame = query.frame(db, user, metric, built, ask)

@@ -10321,6 +10321,199 @@
         }
       }
     },
+    "/api/metrics/{slug}/analysis/control": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Control Analysis",
+        "description": "③ 관리도 — 라니 보정 u-관리도(분모가 없으면 건수 관리도)와 넬슨 규칙 1 · 2 · 3 · 5.\n거르기는 `d.<기준>=<값>`.",
+        "operationId": "control_analysis_api_metrics__slug__analysis_control_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "axis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "period",
+                    "cohort"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "부분군의 축 — 비우면 분모가 코호트와 짝일 때 cohort, 아니면 period",
+              "title": "Axis"
+            },
+            "description": "부분군의 축 — 비우면 분모가 코호트와 짝일 때 cohort, 아니면 period"
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 120,
+              "minimum": 1,
+              "description": "코호트 축 — 출고 뒤 몇 기간 안의 건수인가",
+              "default": 3,
+              "title": "Window"
+            },
+            "description": "코호트 축 — 출고 뒤 몇 기간 안의 건수인가"
+          },
+          {
+            "name": "split",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 기준의 값마다 차트를 나눈다(분모 짝에 있어야)",
+              "title": "Split"
+            },
+            "description": "이 기준의 값마다 차트를 나눈다(분모 짝에 있어야)"
+          },
+          {
+            "name": "baseline_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "한계를 이 날 **앞의** 부분군으로만 잡는다",
+              "title": "Baseline To"
+            },
+            "description": "한계를 이 날 **앞의** 부분군으로만 잡는다"
+          },
+          {
+            "name": "period_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period From"
+            }
+          },
+          {
+            "name": "period_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 날 **앞까지**",
+              "title": "Period To"
+            },
+            "description": "이 날 **앞까지**"
+          },
+          {
+            "name": "cohort_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort From"
+            }
+          },
+          {
+            "name": "cohort_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort To"
+            }
+          },
+          {
+            "name": "compact",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "차트 6개 · 점은 끝 12개와 신호만(MCP)",
+              "default": false,
+              "title": "Compact"
+            },
+            "description": "차트 6개 · 점은 끝 12개와 신호만(MCP)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ControlOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/bundles/import": {
       "post": {
         "tags": [
@@ -15434,6 +15627,491 @@
           "op"
         ],
         "title": "ConditionOut"
+      },
+      "ControlChartOut": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "center": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Center"
+          },
+          "sigma_z": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sigma Z"
+          },
+          "sigma_z_raw": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sigma Z Raw"
+          },
+          "subgroups": {
+            "type": "integer",
+            "title": "Subgroups"
+          },
+          "baseline_points": {
+            "type": "integer",
+            "title": "Baseline Points"
+          },
+          "signals": {
+            "type": "integer",
+            "title": "Signals"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/ControlPointOut"
+            },
+            "type": "array",
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "center",
+          "sigma_z",
+          "sigma_z_raw",
+          "subgroups",
+          "baseline_points",
+          "signals",
+          "total",
+          "points"
+        ],
+        "title": "ControlChartOut"
+      },
+      "ControlOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "axis": {
+            "type": "string",
+            "enum": [
+              "period",
+              "cohort"
+            ],
+            "title": "Axis"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "u",
+              "c"
+            ],
+            "title": "Kind"
+          },
+          "per": {
+            "type": "number",
+            "title": "Per"
+          },
+          "split": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split"
+          },
+          "split_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split Label"
+          },
+          "baseline_to": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline To"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/ControlRuleOut"
+            },
+            "type": "array",
+            "title": "Rules"
+          },
+          "charts": {
+            "items": {
+              "$ref": "#/components/schemas/ControlChartOut"
+            },
+            "type": "array",
+            "title": "Charts"
+          },
+          "other_groups": {
+            "type": "integer",
+            "title": "Other Groups"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "axis",
+          "window",
+          "kind",
+          "per",
+          "split",
+          "split_label",
+          "baseline_to",
+          "rules",
+          "charts",
+          "other_groups"
+        ],
+        "title": "ControlOut"
+      },
+      "ControlPointOut": {
+        "properties": {
+          "when": {
+            "type": "string",
+            "title": "When"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "exposure": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "lcl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lcl"
+          },
+          "ucl": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ucl"
+          },
+          "z": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Z"
+          },
+          "closed": {
+            "type": "boolean",
+            "title": "Closed"
+          },
+          "baseline": {
+            "type": "boolean",
+            "title": "Baseline"
+          },
+          "signals": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Signals"
+          },
+          "drill": {
+            "$ref": "#/components/schemas/DrillOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "when",
+          "label",
+          "count",
+          "exposure",
+          "rate",
+          "lcl",
+          "ucl",
+          "z",
+          "closed",
+          "baseline",
+          "signals",
+          "drill"
+        ],
+        "title": "ControlPointOut"
+      },
+      "ControlRuleOut": {
+        "properties": {
+          "number": {
+            "type": "integer",
+            "title": "Number"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "number",
+          "label"
+        ],
+        "title": "ControlRuleOut"
       },
       "CoreCatalogOut": {
         "properties": {

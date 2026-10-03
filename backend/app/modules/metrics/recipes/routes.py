@@ -13,8 +13,8 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.metrics import compute, params, query, services
-from app.modules.metrics.recipes import life, pareto
-from app.modules.metrics.recipes.schemas import LifeOut, ParetoOut
+from app.modules.metrics.recipes import control, life, pareto
+from app.modules.metrics.recipes.schemas import ControlOut, LifeOut, ParetoOut
 from app.shared.auth import current_user
 
 router = APIRouter(prefix="/{slug}/analysis")
@@ -90,4 +90,55 @@ def life_analysis(
     ask = params.ask_from_request(request, cohort_from=cohort_from, cohort_to=cohort_to)
     return life.run(
         db, user, metric, built, ask, model=model, max_age=max_age, compact=compact
+    )
+
+
+@router.get("/control", response_model=ControlOut)
+def control_analysis(
+    slug: str,
+    request: Request,
+    axis: Literal["period", "cohort"] | None = Query(
+        default=None,
+        description="부분군의 축 — 비우면 분모가 코호트와 짝일 때 cohort, 아니면 period",
+    ),
+    window: int = Query(
+        default=3, ge=1, le=120, description="코호트 축 — 출고 뒤 몇 기간 안의 건수인가"
+    ),
+    split: str | None = Query(
+        default=None, description="이 기준의 값마다 차트를 나눈다(분모 짝에 있어야)"
+    ),
+    baseline_to: str | None = Query(
+        default=None, description="한계를 이 날 **앞의** 부분군으로만 잡는다"
+    ),
+    period_from: str | None = Query(default=None),
+    period_to: str | None = Query(default=None, description="이 날 **앞까지**"),
+    cohort_from: str | None = Query(default=None),
+    cohort_to: str | None = Query(default=None),
+    compact: bool = Query(default=False, description="차트 6개 · 점은 끝 12개와 신호만(MCP)"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ControlOut:
+    """③ 관리도 — 라니 보정 u-관리도(분모가 없으면 건수 관리도)와 넬슨 규칙 1 · 2 · 3 · 5.
+    거르기는 `d.<기준>=<값>`."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(
+        request,
+        period_from=period_from,
+        period_to=period_to,
+        cohort_from=cohort_from,
+        cohort_to=cohort_to,
+    )
+    return control.run(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        axis=axis,
+        window=window,
+        split=split,
+        baseline_to=params.parse_date(baseline_to, "baseline_to"),
+        compact=compact,
     )

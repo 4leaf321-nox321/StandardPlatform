@@ -389,3 +389,125 @@ def test_수명이_안_되는_지표는_이유와_함께_거절한다(client: Te
     assert reason["ok"] is False and "건수" in reason["reason"]
     refused = _refused(client, admin, sales["slug"], "life")
     assert refused["code"].endswith("METRICS-0024")
+
+
+# --- ③ 관리도 ----------------------------------------------------------------------
+
+
+def test_관리도는_코호트_창의_비율이고_건_보기가_창의_기록이다(
+    client: TestClient, admin: Signed
+) -> None:
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    found = _analysis(client, admin, cases["slug"], "control", split="base_model")
+    assert found["axis"] == "cohort" and found["window"] == 3 and found["kind"] == "u"
+    assert found["per"] == 100 and found["split_label"] == "모델 › 기본 모델"
+    assert [one["number"] for one in found["rules"]] == [1, 2, 3, 5]
+    charts = {one["label"]: one for one in found["charts"]}
+    assert set(charts) == {"S기본", "A기본"}
+    s_points = {one["label"]: one for one in charts["S기본"]["points"]}
+    # S 의 1월 판매 코호트: 출고 3개월 안 두 건 / 100대(x 100).
+    assert s_points["2026-01"]["count"] == 2 and s_points["2026-01"]["exposure"] == 100.0
+    assert s_points["2026-01"]["rate"] == pytest.approx(2.0)
+    assert charts["S기본"]["center"] == pytest.approx(3 / 150 * 100)
+    for chart in charts.values():
+        for point in chart["points"]:
+            assert point["drill"]["partial"] == []
+            assert (
+                _listed(client, admin, w["case"], point["drill"]["params"]) == point["count"]
+            )
+    assert s_points["2026-01"]["drill"]["params"]["f.received.lt"] == "2026-04-01"
+    # A 의 2월 · S 의 오늘 달은 판매 대수가 없다.
+    assert found["excluded"]["missing_denominator"] == 2
+    codes = {one["code"] for one in found["caveats"]}
+    assert {"window_basis", "few_subgroups", "missing_denominator"} <= codes
+    # 분모가 공장으로 나뉘지 않으니 공장으로 나누면 비율이 틀린다 — 거절.
+    refused = _refused(client, admin, cases["slug"], "control", split="factory")
+    assert refused["code"].endswith("METRICS-0026") and "d.factory=" in refused["message"]
+
+
+def test_분모가_축과_짝이_아니면_건수_관리도라고_말한다(
+    client: TestClient, admin: Signed
+) -> None:
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    found = _analysis(client, admin, cases["slug"], "control", axis="period")
+    assert found["kind"] == "c" and found["per"] == 1.0
+    assert "count_chart" in {one["code"] for one in found["caveats"]}
+    (chart,) = found["charts"]
+    points = {one["label"]: one for one in chart["points"]}
+    assert [points[label]["count"] for label in ("2026-01", "2026-02", "2026-03")] == [1, 2, 3]
+    assert points["2026-04"]["count"] == 0 and points["2026-04"]["closed"] is True
+    # 오늘 접수한 건은 열린 달 — 그리되 한계 · 규칙에서 뺀다.
+    assert found["excluded"]["open"] == 1
+    for point in chart["points"]:
+        assert point["exposure"] is None
+        assert _listed(client, admin, w["case"], point["drill"]["params"]) == point["count"]
+
+
+def test_관리도는_큰_부분군을_라니로_넓히고_튄_달을_잡는다(
+    client: TestClient, admin: Signed
+) -> None:
+    w = _world(client, admin)
+    sales, _ = _two(client, admin, w)
+    monthly = _define(
+        client,
+        admin,
+        source=w["case"],
+        spec={
+            "measure": "count",
+            "time": {"address": "properties.received", "grain": "month"},
+            "dimensions": [{"name": "base_model", "address": "ref.model.base"}],
+            "denominator": {
+                "metric": sales["slug"],
+                "on": ["base_model"],
+                "time": "period",
+                "per": 1000,
+            },
+            "settle_days": 30,
+        },
+        label="월 인입률",
+    )
+    first = date(2026, 1, 1)
+    dims = {"base_model": w["s_base"]}
+    # 30 달 — 대수 2만에 건수 200 언저리(달마다 ±10% 흔들림), 스무째 달에 320 으로 튄다.
+    counts = [round(200 * (1 + 0.1 * np.sin(i * 1.7))) for i in range(30)]
+    counts[20] = 320
+    _plant(
+        monthly["slug"],
+        [
+            {"period": _month(first, i), "dims": dims, "count": count}
+            for i, count in enumerate(counts)
+        ],
+        datetime(2028, 8, 15, tzinfo=UTC),
+    )
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(first, i),
+                "dims": dims,
+                "count": 1,
+                "value_count": 1,
+                "sum": 20000.0,
+            }
+            for i in range(30)
+        ],
+        datetime(2028, 8, 15, tzinfo=UTC),
+    )
+    found = _analysis(client, admin, monthly["slug"], "control")
+    assert found["axis"] == "period" and found["kind"] == "u" and found["per"] == 1000
+    (chart,) = found["charts"]
+    assert chart["subgroups"] == 30 and chart["sigma_z_raw"] > 1.0
+    flagged = {one["label"]: one["signals"] for one in chart["points"] if one["signals"]}
+    assert 1 in flagged["2027-09"]
+    assert chart["center"] == pytest.approx(sum(counts) / (20000 * 30) * 1000)
+    # 앞 18 달로 한계를 잡는다.
+    early = _analysis(client, admin, monthly["slug"], "control", baseline_to="2027-07-01")
+    (early_chart,) = early["charts"]
+    assert early_chart["baseline_points"] == 18
+    assert early_chart["center"] == pytest.approx(sum(counts[:18]) / (20000 * 18) * 1000)
+    # 압축 — 끝 12 점과 신호만.
+    compact = _analysis(client, admin, monthly["slug"], "control", compact="true")
+    labels = [one["label"] for one in compact["charts"][0]["points"]]
+    assert "2027-09" in labels and len(labels) <= 13

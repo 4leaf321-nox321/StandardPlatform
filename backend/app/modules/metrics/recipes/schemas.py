@@ -181,3 +181,65 @@ class LifeOut(AnalysisHeader):
     gof_df: int | None
     gof_p_value: float | None
     max_rel_dev: float | None
+
+
+# --- ③ 관리도 ------------------------------------------------------------------------
+
+
+class ControlRuleOut(BaseModel):
+    number: int
+    label: str
+
+
+class ControlPointOut(BaseModel):
+    when: str
+    """부분군의 시작일 — 기간 축이면 접수 기간, 코호트 축이면 생산 · 판매 기간."""
+    label: str
+    count: int
+    exposure: float | None
+    """분모(대수). 건수 관리도면 없다."""
+    rate: float | None
+    """건수 / 대수 x per — 건수 관리도면 건수."""
+    lcl: float | None
+    ucl: float | None
+    z: float | None
+    """라니 보정까지 한 표준 점수 — ±3 이 관리 한계."""
+    closed: bool
+    baseline: bool
+    """한계를 잡는 데 쓴 점인가."""
+    signals: list[int]
+    """걸린 넬슨 규칙 번호."""
+    drill: DrillOut
+
+
+class ControlChartOut(BaseModel):
+    key: str | None
+    label: str
+    center: float | None
+    sigma_z: float | None
+    """한계를 넓힌 배수(라니) — 1 이면 포아송 그대로."""
+    sigma_z_raw: float | None
+    """이동 범위로 잰 값 그대로 — 1 보다 작아도 한계는 줄이지 않는다."""
+    subgroups: int
+    """닫힌 부분군 수."""
+    baseline_points: int
+    signals: int
+    """신호가 걸린 점 수."""
+    total: int
+    points: list[ControlPointOut]
+
+
+class ControlOut(AnalysisHeader):
+    axis: Literal["period", "cohort"]
+    """부분군의 축 — 그 단위는 머리의 `grain`(기간) · `cohort_grain`(코호트)."""
+    window: int | None
+    """코호트 축 — 출고 뒤 몇 기간 안의 건수인가."""
+    kind: Literal["u", "c"]
+    """u 는 대수당 비율, c 는 건수(분모가 없을 때)."""
+    per: float
+    split: str | None
+    split_label: str | None
+    baseline_to: str | None
+    rules: list[ControlRuleOut]
+    charts: list[ControlChartOut]
+    other_groups: int
