@@ -115,6 +115,13 @@ class ObjectInstance(Base):
         # 본다(0054).
         Index("ix_objects_label_bigram", text("sp_bigrams(label)"), postgresql_using="gin"),
         Index("ix_objects_key_bigram", text("sp_bigrams(key)"), postgresql_using="gin"),
+        # **합친 객체 참조(자기 외래키, SET NULL).** 없으면 객체 하나를 지울 때마다 표 전체를
+        # 훑는다 — 255만 행에서 33만 건 영구 삭제가 끝나지 않았다(0059). 값 있는 행만.
+        Index(
+            "ix_objects_merged_into",
+            "merged_into_id",
+            postgresql_where=text("merged_into_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
