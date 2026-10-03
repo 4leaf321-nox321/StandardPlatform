@@ -1330,3 +1330,103 @@ def test_표준이_아닌_포트의_프록시_뒤는_MCP_공개_주소로_만든
     )
     monkeypatch.setattr(settings, "mcp_public_url", "")
     assert file_services._public_upload_url("/sp/api/attachments/upload") is None
+
+
+def test_지표를_도구로_정의하고_읽으면_통계와_같은_수(bot: Bot) -> None:
+    """**세는 일은 목록으로 받아 직접 하지 않는다**(ADR 0013) — 계획 → 저장하고 세기 → 읽기가
+    진짜 라우터를 타고, 읽은 수가 그때그때 센 통계와 같다."""
+    kind = _uniq("case")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": kind,
+                    "label": "기록",
+                    "usage": "log",
+                    "properties": [
+                        {"key": "received", "label": "접수일", "data_type": "date"},
+                        {
+                            "key": "symptom",
+                            "label": "증상",
+                            "data_type": "enum",
+                            "enum_options": ["소음", "발열"],
+                        },
+                    ],
+                }
+            ]
+        },
+        apply=True,
+    )
+    for received, symptom in [
+        ("2026-01-05", "소음"),
+        ("2026-01-20", "발열"),
+        ("2026-02-03", "소음"),
+        ("2026-03-11", "소음"),
+    ]:
+        bot.call(
+            server.object_create,
+            kind,
+            label=f"{received} {symptom}",
+            properties={"received": received, "symptom": symptom},
+        )
+    slug = _uniq("m")
+    spec = {
+        "measure": "count",
+        "time": {"address": "properties.received", "grain": "month"},
+        "dimensions": [{"name": "symptom", "address": "properties.symptom"}],
+    }
+    planned = bot.call(server.metric_define, slug, "월별 증상", kind, spec)
+    assert planned["ok"] is True and planned["rows"] == 4
+    assert [one["name"] for one in planned["dims"]] == ["symptom"]
+    # 계획이 거절 사유를 모아 말한다 — 저장되지 않는다.
+    bad = bot.call(
+        server.metric_define,
+        slug,
+        "x",
+        kind,
+        {
+            "measure": "count",
+            "dimensions": [
+                {"name": "period", "address": "properties.symptom"},  # 예약어
+                {"name": "gone", "address": "properties.nope"},  # 없는 칸
+            ],
+        },
+    )
+    assert bad["ok"] is False and len(bad["errors"]) == 2
+
+    saved = bot.call(server.metric_define, slug, "월별 증상", kind, spec, apply=True)
+    assert saved["metric"]["slug"] == slug and saved["updated"] is False
+    assert saved["job"]["status"] == "done", saved["job"]
+    listed = bot.call(server.metric_list)
+    mine = next(one for one in listed["metrics"] if one["slug"] == slug)
+    assert mine["grain"] == "month" and mine["last_status"] == "ok" and mine["stale"] is False
+
+    table = bot.call(server.metric_query, slug, dims=["symptom"])
+    counts = {one["labels"]["symptom"]: one["count"] for one in table["cells"]}
+    summary = bot.call(server.objects_summary, kind, group_by="properties.symptom")
+    assert (
+        counts
+        == {one["label"]: one["count"] for one in summary["buckets"]}
+        == {
+            "소음": 3,
+            "발열": 1,
+        }
+    )
+    assert table["total"] == 4 and table["computed_at"] is not None
+    series = bot.call(server.metric_query, slug, shape="series", period_to="2026-04-01")
+    assert [one["count"] for one in series["lines"][0]["points"]] == [2, 1, 1]
+    # 셀의 건 보기 조건을 목록 조건으로 풀면 같은 수.
+    cell = next(one for one in table["cells"] if one["labels"]["symptom"] == "소음")
+    conditions = [
+        {"field": key[2:].rsplit(".", 1)[0], "op": key.rsplit(".", 1)[1], "value": value}
+        for key, value in cell["drill"]["params"].items()
+    ]
+    assert bot.call(server.objects_list, kind, conditions=conditions)["total"] == 3
+    # 같은 slug 로 다시 정의하면 고친다.
+    again = bot.call(
+        server.metric_define, slug, "월별 증상(고침)", kind, spec, apply=True, description="d"
+    )
+    assert again["updated"] is True and again["metric"]["label"] == "월별 증상(고침)"
+    with pytest.raises(ToolError, match="shape"):
+        bot.call(server.metric_query, slug, shape="pie")

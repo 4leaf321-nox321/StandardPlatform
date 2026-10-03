@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-03i
+GUIDE_VERSION: 2026-10-04a
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -26,6 +26,7 @@ GUIDE_VERSION: 2026-10-03i
 | 객체 찾기 | `objects_list(type_slug, q=, properties=, conditions=)` | 화면과 같은 거르기. **0건이면 `diagnosis` 를 읽는다** |
 | 여러 타입을 한 개념으로 — 「설비 전부」 | `objects_list(<인터페이스 slug>)` · `objects_summary(<인터페이스>, group_by="type")` | **읽기만.** 줄의 `type_slug` 가 실제 타입 — 상세 · 고치기는 그것으로 |
 | 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
+| **비율 · 추이 · 코호트** — 「판매월별 누적 인입률」 「생산월 x 공장별 건수」 | `metric_list` → `metric_query(slug, shape=)` | **미리 세어 둔 값**이다 — `computed_at` · `stale` · `overlap` 을 함께 말한다. 없으면 `metric_define(apply=false)` 로 제안 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 한 걸음까지. 주소를 추측하지 않는다 |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | — |
 | 언제 누가 무엇을 바꿨나 — 이 객체 | `object_history` | 되돌리기는 `object_restore(entry_id)` — **시점은 사람이 정한다** |
@@ -781,3 +782,45 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
 - 개인정보 · 계약 금액 · 고객 기밀은 템플릿 6장(민감한 것)을 먼저 본다.
 - 정의를 지우거나 slug 를 바꾸지 않는다 — 가져오기는 더하고 고치기만 한다.
 
+<!--@ metrics -->
+## 지표 — 기록을 미리 세어 둔 값
+
+서비스 기록은 한 타입에 수백만 건이고, 사람이 묻는 것은 「판매월 코호트의 누적 인입률」 「생산월 x
+공장별 증상 건수」 「부품 교체 집중도」 처럼 **분모가 있고 시간이 있는** 물음이다. 지표는 그것을
+밤마다(그리고 적재 뒤에) 세어 둔 것이다 — **계산은 플랫폼이 하고, 너는 읽고 해석한다.**
+`objects_list` 로 원시 행을 받아 직접 세지 않는다 — 쪽 상한에서 틀리고 토큰이 터진다.
+
+**순서.**
+
+1. `metric_list()` — 세어 둔 지표가 있나. `dims[]` 가 묶을 수 있는 기준, `grain` 이 기간 단위,
+   `denominator` 가 있으면 비율이 나온다. `broken` 이 있으면 그 지표는 지금 안 센다 — 사용자에게
+   알린다.
+2. `metric_query(slug, shape=, dims=, by=, filters=, …)` —
+   - `table`: 기준별 셀. `by=["period"]` 면 기간별, `by=["cohort"]` 면 코호트별.
+   - `series`: 기간순 추이 — 빈 기간은 0, `prev` 전기, `yoy` 전년 동기. `split` 으로 선 나누기.
+   - `cohort`: 코호트 x 경과 행렬. `cumulative=true` 면 경과순 누적(분자만 누적 ÷ 분모).
+   `filters` 는 `{기준 이름: 값}` — 값은 응답의 `dims` 값(참조는 id). 사람이 이름으로 말하면
+   `object_resolve` 로 id 를 먼저 푼다.
+3. 지표가 없으면 `objects_summary`(기준 하나 · 세부 기준 하나 · 그때그때 센다)로 되는 물음인지
+   보고, 그래도 안 되면 `metric_define(apply=false)` 로 **정의를 제안**한다 — 계획(오류 · 경고 ·
+   어림한 셀 수)을 사람에게 보여 주고, 저장은 사람이 판단한 뒤 `apply=true`. **시스템 관리자만.**
+
+**옮길 때 빼먹지 않는 것.**
+
+- `computed_at`(계산 시각) — 세어 둔 값이다. `stale` 이 true 면 세 주기가 지나도록 안 셌다.
+- `closed` 가 false 인 기간은 아직 더 들어올 수 있다(`settle_days`). 「3월 인입률 0.8%」 라고
+  말할 때 그 달이 닫혔는지 함께 말한다.
+- `overlap` — 한 기록이 여러 셀에 든다(여러 값 기준 · 여럿과 이어진 걸음). 셀의 합이 기록
+  수보다 크다.
+- `unbucketed` — 날짜를 못 읽어 기간이 없는 기록 수. `truncated` — 상한에서 잘렸다. 좁혀서 다시.
+- `denominator.missing` — 분모가 없거나 0 이라 비율이 빈 셀 수. 분모의 기간이 아직 안 들어온
+  것일 수 있다.
+- 「그 수가 뭔데」 — 셀의 `drill.params` 를 `objects_list(type_slug=drill.type_slug, conditions=)`
+  로. `f.<칸>.<연산>=<값>` 을 `{"field": "<칸>", "op": "<연산>", "value": "<값>"}` 로 풀고,
+  `status=` · `year=` 는 그 인자로. `drill.partial` 이 비어 있을 때 목록의 `total` 이 셀의
+  `count` 와 같다.
+
+**정의할 때.** 시간 칸 · 코호트 칸은 **자기 타입의 날짜 칸**이어야 하고, 기준은 여섯까지, 분모의
+`on` 은 양쪽에 같은 이름 · 같은 값 종류(같은 타입을 가리키는 참조, 같은 종류의 칸)여야 한다.
+자유 글자 칸을 기준으로 두면 셀이 행 수만큼 나온다 — 계획의 경고를 그대로 전한다. 이름 붙인
+기준의 주소는 `objects_summary` 의 `group_by` 와 같다(`ref.model.ref.base_model` 처럼 걸음 셋까지).

@@ -19,7 +19,7 @@ mcp__standardplatform__get_guide()
 
 - 인자 없이 부르면 **"하려는 일 → 어떤 도구" 표 + 기본 습관**이 온다. 대개 이걸로 충분하다.
 - 세부가 필요하면 그때 주제를 지정한다 — `find` · `schema` · `objects` · `bulk` ·
-  `relations` · `sparql` · `extensions` · `modeling`.
+  `relations` · `sparql` · `extensions` · `metrics` · `modeling`.
 - 한 번에 다 받지 마라. 필요한 주제만 받는 게 싸다.
 
 ## 이 파일에 내용을 더 적지 마라

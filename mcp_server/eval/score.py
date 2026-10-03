@@ -62,6 +62,7 @@ WRITE_TOOLS = {
     "relations_import",
     "bundle_import",
     "ontology_import",
+    "metric_define",
 }
 FIRST_OK = {"get_guide", "ontology_schema"}
 GAP_SECONDS = 120.0

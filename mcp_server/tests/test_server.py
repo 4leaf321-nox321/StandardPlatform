@@ -81,6 +81,9 @@ TOOLS = {
     "jobs_list",
     "extensions_schema",
     "extension_call",
+    "metric_list",
+    "metric_query",
+    "metric_define",
 }
 
 

@@ -349,6 +349,7 @@ _GUIDE_TOPICS = (
     "bulk",
     "relations",
     "sparql",
+    "metrics",
 )
 
 
@@ -391,6 +392,7 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
       - `bulk` 여러 행 한 번에(upsert)
       - `relations` 객체 잇기(근거)
       - `sparql` 여러 타입을 건너뛰어 잇는 물음 — 질의어로
+      - `metrics` 지표 — 미리 세어 둔 값으로 비율 · 추이 · 코호트에 답하기
       - `extensions` 이 설치에만 있는 기능(확장) — 무엇을 부를 수 있나
 
     한 번에 다 받지 마라 — 필요한 주제만 받는 게 싸다."""
@@ -1835,6 +1837,221 @@ async def extension_call(
             " — 내려받기는 화면에서 합니다.",
         }
     return _unwrap(response)
+
+
+# --- 지표 — 기록을 미리 세어 둔 값 (ADR 0013) ------------------------------------
+#
+# **세는 일은 목록으로 받아 직접 하지 않는다.** 서비스 기록은 한 타입에 200만 건이고, 사람이
+# 묻는 것은 「판매월 코호트의 누적 인입률」 「생산월 x 공장별 건수」 처럼 분모가 있고 시간이
+# 있는 물음이다. 지표는 그것을 밤마다 세어 둔 것이다 — 계산은 플랫폼이 하고, AI 는 읽고
+# 해석만 한다. 지표에 없는 물음은 `metric_define(apply=false)` 로 **정의를 제안**한다.
+
+#: 읽기 모양 → 경로.
+_METRIC_SHAPES = {"table": "values", "series": "series", "cohort": "cohort"}
+
+
+@tool()
+async def metric_list(ctx: Context) -> Any:
+    """**지표 목록** — 기록을 미리 세어 둔 값들. 「몇 건 · 비율 · 추이 · 코호트」 를 묻기 전에
+    여기서 **이미 세어 둔 지표가 있나** 본다. 있으면 `metric_query`, 없으면 `objects_summary`
+    (그때그때 센다 — 기준 하나 · 세부 기준 하나뿐), 그래도 안 되면 `metric_define(apply=false)`
+    로 정의를 제안한다.
+
+    줄마다: `slug` · `label` · `source_type_slug`(원천 기록 타입) · `measure` · `grain`(기간
+    단위) · `cohort_grain` · `dims[]`(기준 이름 · 주소 · 종류) · `denominator`(분모 지표 —
+    비율이 나온다) · `last_run_at`(계산 시각) · `stale`(세 주기가 지나도록 안 셈) · `overlap`
+    (한 기록이 여러 셀에 든다) · `broken`(정의가 깨진 이유 — 있으면 값이 낡는다)."""
+    rows = await _get(ctx, "/api/metrics")
+    if not isinstance(rows, list):
+        return rows
+    out = []
+    for one in rows:
+        spec = one.get("spec") or {}
+        out.append(
+            {
+                "slug": one.get("slug"),
+                "label": one.get("label"),
+                "description": one.get("description"),
+                "source_type_slug": one.get("source_type_slug"),
+                "measure": spec.get("measure"),
+                "measure_field": spec.get("measure_field"),
+                "grain": one.get("grain"),
+                "cohort_grain": one.get("cohort_grain"),
+                "time": spec.get("time"),
+                "cohort": spec.get("cohort"),
+                "dims": one.get("dims"),
+                "filters": spec.get("filters"),
+                "denominator": spec.get("denominator"),
+                "settle_days": spec.get("settle_days"),
+                "is_active": one.get("is_active"),
+                "overlap": one.get("overlap"),
+                "cells": one.get("cells"),
+                "last_run_at": one.get("last_run_at"),
+                "last_status": one.get("last_status"),
+                "stale": one.get("stale"),
+                "broken": one.get("broken"),
+            }
+        )
+    return {"total": len(out), "metrics": out}
+
+
+@tool()
+async def metric_query(
+    ctx: Context,
+    slug: str,
+    shape: str = "table",
+    dims: list[str] | None = None,
+    by: list[str] | None = None,
+    filters: dict[str, str | None] | None = None,
+    period_from: str | None = None,
+    period_to: str | None = None,
+    cohort_from: str | None = None,
+    cohort_to: str | None = None,
+    split: str | None = None,
+    cumulative: bool = False,
+) -> Any:
+    """**지표 읽기** — 세어 둔 셀 위에서 비율 · 누적 · 전기 · 전년 동기 · 건 보기까지.
+    보이는 부서의 것만 더한다(목록 · 통계와 같은 규칙).
+
+    - `shape="table"`: `dims`(묶을 기준 이름들, `metric_list` 의 `dims[].name`)와 `by`
+      (`period` · `cohort` · `age` 중 묶을 것)별 셀. 셀마다 `count` · `value`(이 지표의
+      집계) · `ratio`(분모가 있을 때) · `closed`(닫힌 기간) · `drill`.
+    - `shape="series"`: 기간순 추이. 빈 기간은 0, `prev`(전기) · `yoy`(전년 동기). `split`
+      으로 선을 나눈다(`lines[]`).
+    - `shape="cohort"`: 코호트 x 경과 행렬(`rows[].cells[]`). `cumulative=true` 면 경과순
+      누적 — 「판매 후 n개월째까지의 누적 인입률」. 행마다 `denominator`(분모가 코호트로
+      짝지어졌을 때 — 판매 대수).
+    - `filters`: `{기준 이름: 값}` — 값은 `drill` 이나 `dims` 의 값(참조는 id). `null` 은
+      「(비어 있음)」. 분모도 같은 기준으로 걸린다.
+    - `period_from` · `period_to`(앞까지) · `cohort_from` · `cohort_to`: `YYYY-MM-DD`.
+
+    사용자에게 옮길 때 **빼먹지 않는다**:
+    - `computed_at`(계산 시각)과 `stale` — 세어 둔 값이다. `closed` 가 false 인 기간은 더
+      들어올 수 있다.
+    - `overlap` 이 true 면 셀의 합이 기록 수보다 크다(여러 값 기준). `unbucketed` 는 날짜를
+      못 읽어 기간이 없는 기록 수, `truncated` 는 상한에서 잘렸다는 뜻 — 좁혀서 다시.
+    - `denominator.missing` 이 0 이 아니면 분모가 없어 비율이 빈 셀이 있다.
+    - 「그 수가 뭔데」 는 셀의 `drill.params` 를 `objects_list` 의 `conditions` 로 —
+      `f.<칸>.<연산>` 키를 `{field, op, value}` 로 풀면 된다(`drill.partial` 이 비어 있을 때
+      수가 같다)."""
+    where = _METRIC_SHAPES.get((shape or "table").strip().lower())
+    if where is None:
+        return {"error": f"shape 는 {', '.join(_METRIC_SHAPES)} 중 하나입니다: {shape!r}"}
+    params: list[tuple[str, Any]] = []
+    if dims:
+        params.append(("dims", ",".join(dims)))
+    if by:
+        params.append(("by", ",".join(by)))
+    for key, value in (
+        ("period_from", period_from),
+        ("period_to", period_to),
+        ("cohort_from", cohort_from),
+        ("cohort_to", cohort_to),
+        ("split", split),
+    ):
+        if value:
+            params.append((key, value))
+    if cumulative:
+        params.append(("cumulative", "true"))
+    for name, value in (filters or {}).items():
+        params.append((f"d.{name}", "" if value is None else str(value)))
+    got = await _get(ctx, f"/api/metrics/{slug}/{where}", params=params)
+    if isinstance(got, dict) and "error" not in got and "total" not in got:
+        # 자취 점수가 「몇 건인가」 를 읽는 자리 — 모양마다 세는 것이 다르다.
+        if "cells" in got:
+            got["total"] = got.get("total_count", len(got["cells"]))
+        elif "lines" in got:
+            got["total"] = sum(len(one.get("points", [])) for one in got["lines"])
+        elif "rows" in got:
+            got["total"] = sum(len(one.get("cells", [])) for one in got["rows"])
+    return got
+
+
+@tool()
+async def metric_define(
+    ctx: Context,
+    slug: str,
+    label: str,
+    source_type_slug: str,
+    spec: dict[str, Any],
+    apply: bool = False,
+    description: str = "",
+    interval_hours: int = 24,
+    wait_seconds: float = 20.0,
+) -> Any:
+    """**지표 정의** — 계획(`apply=false`, 기본) → 사람 확인 → 저장하고 바로 센다
+    (`apply=true`). **시스템 관리자만.** 사용자의 판단 없이 `apply=true` 를 부르지 않는다.
+
+    `spec`:
+      - `measure`: `count` · `sum` · `avg` · `min` · `max`(+ `measure_field`:
+        `properties.<숫자 칸>`)
+      - `time`: `{"address": "properties.<날짜 칸>", "grain": "month"}` — 자기 타입의 날짜
+        칸만. 단위는 `day` · `week` · `month` · `quarter` · `year`
+      - `cohort`: 같은 모양(선택) — 「판매월」 처럼 묶어 둘 둘째 날짜. 단위는 `time` 과
+        같아야 한다
+      - `dimensions`: `[{"name": "base_model", "address": "ref.model.base_model"}]` 여섯까지
+        — 주소는 `objects_summary` 의 `group_by` 와 같다(걸음 셋까지). 날짜 기준에는 `grain`
+      - `filters`: `[{"field": "status", "op": "eq", "value": "active"}]` — `objects_list`
+        의 조건
+      - `denominator`: `{"metric": "<지표>", "on": ["base_model"], "time": "cohort",
+        "per": 100}` — 비율의 분모. `on` 은 양쪽에 같은 이름 · 같은 값 종류로 있는 기준,
+        `time` 은 `period`(기간끼리) · `cohort`(분모의 기간 = 분자의 코호트) · `null`(기간
+        없이 전부 합)
+      - `settle_days`: 이만큼 지난 기간은 「닫힘」
+
+    계획은 **오류 전부** · 경고 · 거르기를 통과한 기록 수 · 어림한 셀 수 · 기준의 종류를
+    돌려준다 — 그것을 사람에게 보여 주고 판단을 받는다. 같은 slug 가 이미 있으면 그 정의를
+    고친다(원천 타입은 못 바꾼다). 저장 뒤 계산은 작업이다 — `wait_seconds` 만큼 기다렸다가
+    돌려주고, 아직이면 `job_status(job_id)` 로 다시 묻는다."""
+    if not apply:
+        return await _post(
+            ctx,
+            "/api/metrics/plan",
+            {"slug": slug, "source_type_slug": source_type_slug, "spec": spec},
+        )
+    existing = await _get(ctx, f"/api/metrics/{slug}")
+    exists = isinstance(existing, dict) and existing.get("slug") == slug
+    if exists:
+        saved = await _patch_with_params(
+            ctx,
+            f"/api/metrics/{slug}",
+            {
+                "label": label,
+                "description": description,
+                "spec": spec,
+                "interval_hours": interval_hours,
+            },
+            {"recompute": "true"},
+        )
+    else:
+        saved = await _post(
+            ctx,
+            "/api/metrics",
+            {
+                "slug": slug,
+                "label": label,
+                "description": description,
+                "source_type_slug": source_type_slug,
+                "spec": spec,
+                "interval_hours": interval_hours,
+            },
+            params={"recompute": "true"},
+        )
+    if not isinstance(saved, dict) or "metric" not in saved:
+        return saved
+    job = await _wait_job(ctx, saved.get("job"), wait_seconds)
+    return {"metric": saved["metric"], "job": job, "updated": exists}
+
+
+async def _patch_with_params(
+    ctx: Context, path: str, json_body: Any, params: dict[str, Any]
+) -> Any:
+    async with _client(120) as client:
+        return _unwrap(
+            await client.patch(
+                path, json=json_body, params=params, headers=_forward_headers(ctx)
+            )
+        )
 
 
 # --- 기동 ----------------------------------------------------------------------
