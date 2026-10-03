@@ -1860,7 +1860,8 @@ async def metric_list(ctx: Context) -> Any:
     줄마다: `slug` · `label` · `source_type_slug`(원천 기록 타입) · `measure` · `grain`(기간
     단위) · `cohort_grain` · `dims[]`(기준 이름 · 주소 · 종류) · `denominator`(분모 지표 —
     비율이 나온다) · `last_run_at`(계산 시각) · `stale`(세 주기가 지나도록 안 셈) · `overlap`
-    (한 기록이 여러 셀에 든다) · `broken`(정의가 깨진 이유 — 있으면 값이 낡는다)."""
+    (한 기록이 여러 셀에 든다) · `broken`(정의가 깨진 이유 — 있으면 값이 낡는다) ·
+    `analyses[]`(이 지표에 되는 분석 `{recipe, label, ok, reason}` — `metric_analyze`)."""
     rows = await _get(ctx, "/api/metrics")
     if not isinstance(rows, list):
         return rows
@@ -1890,6 +1891,7 @@ async def metric_list(ctx: Context) -> Any:
                 "last_status": one.get("last_status"),
                 "stale": one.get("stale"),
                 "broken": one.get("broken"),
+                "analyses": one.get("analyses"),
             }
         )
     return {"total": len(out), "metrics": out}
@@ -1965,6 +1967,82 @@ async def metric_query(
         elif "rows" in got:
             got["total"] = sum(len(one.get("cells", [])) for one in got["rows"])
     return got
+
+
+#: 분석 레시피 → 받는 options(공통 범위 포함). 모르는 키는 백엔드가 조용히 버리므로 여기서
+#: 거절한다 — 「걸렀다고 믿었는데 안 걸린」 답이 제일 나쁘다.
+_RANGES = {"period_from", "period_to", "cohort_from", "cohort_to"}
+_RECIPE_OPTIONS: dict[str, set[str]] = {
+    "pareto": {"dim", "top", "include_empty", "by_period"} | _RANGES,
+    "life": {"model", "max_age", "cohort_from", "cohort_to"},
+    "control": {"axis", "window", "split", "baseline_to"} | _RANGES,
+    "changes": {"axis", "window"} | _RANGES,
+    "sprt": {"target", "reference", "reference_via", "dim", "rho", "alpha", "beta"},
+}
+
+
+@tool()
+async def metric_analyze(
+    ctx: Context,
+    slug: str,
+    recipe: str,
+    options: dict[str, Any] | None = None,
+    filters: dict[str, str | None] | None = None,
+    compact: bool = True,
+) -> Any:
+    """**분석** — 세어 둔 지표의 셀 위에서 통계까지 **플랫폼이** 한다(ADR 0014). 셀을 받아
+    직접 계산하지 않는다 — 같은 물음에 같은 방법 · 같은 답 · 같은 주의가 나와야 한다.
+    `metric_list` 의 `analyses[]` 가 그 지표에 되는 분석과 **안 되는 이유**를 말한다.
+
+    `recipe` 와 `options`:
+    - `pareto` — 몫 · 누적 · ABC · HHI · 유효 개수 · 지니 · CR. `dim`(필수) · `top` ·
+      `include_empty` · `by_period`(기간별 집중도)
+    - `life` — 와이블(표준 · 결함) 맞춤과 B1 · B5 · B10. `model`(`auto` · `weibull` ·
+      `defective`) · `max_age`
+    - `control` — 라니 u-관리도와 넬슨 규칙. `axis`(`period` · `cohort`) · `window`(코호트
+      축 — 출고 뒤 몇 기간) · `split`(분모 짝에 있는 기준) · `baseline_to`(한계를 이 날
+      앞으로만)
+    - `changes` — 계절 지수와 변화점. `axis` · `window`
+    - `sprt` — 새 모델 vs 전작 순차 검정. `target`(필수 — 기준 값, 참조면 id) ·
+      `reference` 또는 `reference_via`(새 모델 객체의 전작 칸) · `dim` · `rho` · `alpha` ·
+      `beta`
+    - 범위: `period_from` · `period_to`(앞까지) · `cohort_from` · `cohort_to` — `YYYY-MM-DD`
+
+    `filters`: `{기준 이름: 값}` — 지표 읽기와 같다(분모 · 두 모델에 함께 걸린다).
+    `compact=true`(기본)는 대화에 맞게 줄인 응답이다 — 줄 · 곡선 · 점을 줄인다.
+
+    **옮길 때 규칙.**
+    - `caveats[]` 의 `message` 를 **그대로** 전한다. `warn` 은 결과보다 먼저.
+    - 수명: `status="unreachable"` 인 B수명은 **값이 없다** — 외삽으로 지어 말하지 않는다.
+      「판매의 p 만 결국 고장 나 그 비율에 이르지 않는다」 로 말하고, 필요하면
+      `conditional_age`(결국 고장 나는 것들 중의 그 비율)를 **그 이름으로** 말한다.
+      `extrapolated` 는 「관측 밖으로 늘려 읽은 값」 이다.
+    - 순차 검정: `continue` 는 「아직 결론 없음」 이지 「문제없음」 이 아니다. `not_worse` 는
+      「ρ 배 나쁘지는 않다」 이지 「같다」 가 아니다.
+    - 관리도의 신호는 「조사할 곳」 이지 원인이 아니다. 변화점의 `provisional` 은 잠정이다.
+    - `method`(방법과 판) · `computed_at`(계산 시각)을 함께 말한다. 근거는 `drill.params` →
+      `objects_list` 의 `conditions`(지표 읽기와 같다)."""
+    name = (recipe or "").strip().lower()
+    allowed = _RECIPE_OPTIONS.get(name)
+    if allowed is None:
+        return {"error": f"recipe 는 {', '.join(_RECIPE_OPTIONS)} 중 하나입니다: {recipe!r}"}
+    unknown = sorted(set(options or {}) - allowed)
+    if unknown:
+        return {
+            "error": f"{name} 이 모르는 options: {', '.join(unknown)} — 받는 것: "
+            f"{', '.join(sorted(allowed))}"
+        }
+    params: list[tuple[str, Any]] = []
+    for key, value in (options or {}).items():
+        if value is None:
+            continue
+        if isinstance(value, bool):
+            value = "true" if value else "false"
+        params.append((key, str(value)))
+    for dim_name, value in (filters or {}).items():
+        params.append((f"d.{dim_name}", "" if value is None else str(value)))
+    params.append(("compact", "true" if compact else "false"))
+    return await _get(ctx, f"/api/metrics/{slug}/analysis/{name}", params=params)
 
 
 @tool()

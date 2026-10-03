@@ -71,7 +71,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 
 스텁엔 안내 본문이 없으므로 **한 번 깔면 다시 복사할 일이 없다.**
 
-## 도구 쉰일곱
+## 도구 쉰여덟
 
 | 도구 | 무엇 |
 | --- | --- |
@@ -97,11 +97,12 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `datasources_list` · `datasource_sync` | 바깥 시스템(OData)에서 읽어 채우기 — 계획 먼저 |
 | `extensions_schema` · `extension_call` | **이 설치에만 있는 기능**(확장)의 자리 목록 · 그 자리 부르기. 쓰기는 그 확장의 범위를 가진 토큰만 |
 | `metric_list` · `metric_query` · `metric_define` | **지표** — 미리 세어 둔 값(ADR 0013). 비율 · 추이 · 코호트는 목록을 받아 직접 세지 않고 여기서 읽는다. 정의는 계획 먼저(시스템 관리자) |
+| `metric_analyze` | **분석** — 세어 둔 셀 위의 통계(ADR 0014): 수명 · B수명, 순차 검정(전작 대비), 관리도, 계절 · 변화점, 파레토 · 집중도. 셀을 받아 직접 계산하지 않는다 — 주의(`caveats`)를 그대로 전한다 |
 
 ### 왜 타입마다 도구를 안 만드나
 
 타입 20개에 도구가 80개가 되고, **도구 목록이 길수록 모델은 엉뚱한 것을 고른다.**
-도구는 쉰일곱으로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
+도구는 쉰여덟로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
 받는가」 를 말한다 — **동적인 것은 도구가 아니라 스키마다.**
 
 검증도 권한도 백엔드가 한다. 여기에 규칙을 두면 **MCP 로는 되는데 화면에서는 안

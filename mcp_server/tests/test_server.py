@@ -83,6 +83,7 @@ TOOLS = {
     "extension_call",
     "metric_list",
     "metric_query",
+    "metric_analyze",
     "metric_define",
 }
 
@@ -288,6 +289,48 @@ def test_통계는_목록과_같은_거르기로_건너간다() -> None:
     assert "metric_field" not in params
 
 
+def test_분석은_레시피와_options_를_경로와_질의로_건넨다() -> None:
+    """레시피는 경로, options 는 질의, filters 는 `d.<기준>` — 모르는 레시피 · options 는
+    보내기 전에 거절한다(백엔드는 모르는 질의를 조용히 버린다)."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"recipe": "sprt"}))
+    got = asyncio.run(
+        server.metric_analyze(
+            _ctx("Bearer t"),
+            "m1",
+            "SPRT",
+            options={"target": "x", "reference": "y", "rho": 1.5, "beta": None},
+            filters={"region": "KR", "empty": None},
+        )
+    )
+    assert got == {"recipe": "sprt"}
+    request = seen[0]
+    params = request.url.params
+    assert request.url.path == "/api/metrics/m1/analysis/sprt"
+    assert params["target"] == "x" and params["reference"] == "y" and params["rho"] == "1.5"
+    assert "beta" not in params and params["compact"] == "true"
+    assert params["d.region"] == "KR" and params["d.empty"] == ""
+    seen = _serve(lambda _r: httpx.Response(200, json={}))
+    asyncio.run(
+        server.metric_analyze(
+            _ctx("Bearer t"),
+            "m1",
+            "pareto",
+            options={"dim": "part", "by_period": True},
+            compact=False,
+        )
+    )
+    assert seen[0].url.params["by_period"] == "true"
+    assert seen[0].url.params["compact"] == "false"
+    seen = _serve(lambda _r: httpx.Response(200, json={}))
+    wrong = asyncio.run(server.metric_analyze(_ctx("Bearer t"), "m1", "anova"))
+    assert "recipe" in wrong["error"]
+    stray = asyncio.run(
+        server.metric_analyze(_ctx("Bearer t"), "m1", "life", options={"dim": "x"})
+    )
+    assert "dim" in stray["error"] and "max_age" in stray["error"]
+    assert seen == []
+
+
 def test_이어진_칸의_주소는_서버에_묻는다() -> None:
     seen = _serve(lambda _r: httpx.Response(200, json=[]))
     asyncio.run(server.object_fields(_ctx("Bearer t"), "tool"))
@@ -330,6 +373,12 @@ def test_가이드는_서버가_쥔다() -> None:
 
     relations = asyncio.run(server.get_guide(_ctx(None), topic="relations"))
     assert "replace_type" in relations["content"] and "unlink" in relations["content"]
+
+    # 분석(ADR 0014) — 전할 때의 규칙이 **가이드에 있어야** 「이르지 않음」 을 외삽으로,
+    # 「아직」 을 「문제없음」 으로 옮기지 않는다.
+    metrics = asyncio.run(server.get_guide(_ctx(None), topic="metrics"))
+    assert "metric_analyze" in metrics["content"] and "unreachable" in metrics["content"]
+    assert "metric_analyze" in overview["content"]
 
     missing = asyncio.run(server.get_guide(_ctx(None), topic="없는주제"))
     assert "error" in missing and "bulk" in missing["topics"]

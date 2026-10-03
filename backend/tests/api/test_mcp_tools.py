@@ -1433,3 +1433,18 @@ def test_지표를_도구로_정의하고_읽으면_통계와_같은_수(bot: Bo
     assert again["updated"] is True and again["metric"]["label"] == "월별 증상(고침)"
     with pytest.raises(ToolError, match="shape"):
         bot.call(server.metric_query, slug, shape="pie")
+    # 분석 — 지표 목록이 되는 분석을 말하고, 셀 위의 통계는 플랫폼이 낸다.
+    listed = bot.call(server.metric_list)
+    mine = next(one for one in listed["metrics"] if one["slug"] == slug)
+    analyses = {one["recipe"]: one for one in mine["analyses"]}
+    assert analyses["pareto"]["ok"] is True and analyses["life"]["ok"] is False
+    pareto = bot.call(server.metric_analyze, slug, "pareto", options={"dim": "symptom"})
+    assert [(one["label"], one["count"]) for one in pareto["items"]] == [
+        ("소음", 3),
+        ("발열", 1),
+    ]
+    assert pareto["method"].startswith("파레토") and pareto["computed_at"] is not None
+    with pytest.raises(ToolError, match="METRICS-0024"):
+        bot.call(server.metric_analyze, slug, "life")
+    with pytest.raises(ToolError, match="options"):
+        bot.call(server.metric_analyze, slug, "pareto", options={"dim": "symptom", "x": 1})

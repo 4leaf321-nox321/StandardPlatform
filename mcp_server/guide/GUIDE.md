@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-04b
+GUIDE_VERSION: 2026-10-04c
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -27,6 +27,7 @@ GUIDE_VERSION: 2026-10-04b
 | 여러 타입을 한 개념으로 — 「설비 전부」 | `objects_list(<인터페이스 slug>)` · `objects_summary(<인터페이스>, group_by="type")` | **읽기만.** 줄의 `type_slug` 가 실제 타입 — 상세 · 고치기는 그것으로 |
 | 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
 | **비율 · 추이 · 코호트** — 「판매월별 누적 인입률」 「생산월 x 공장별 건수」 | `metric_list` → `metric_query(slug, shape=)` | **미리 세어 둔 값**이다 — `computed_at` · `stale` · `overlap` 을 함께 말한다. 없으면 `metric_define(apply=false)` 로 제안 |
+| **세어 둔 수에서 추론** — 「B10 수명」 「전작보다 나빠졌나」 「관리도 신호」 「언제 바뀌었나」 「몰려 있나」 | `metric_list` 의 `analyses` → `metric_analyze(slug, recipe, options=)` | **셀을 받아 직접 계산하지 않는다.** `caveats` 를 그대로 전하고, `unreachable` 인 B수명은 값이 없다 — `get_guide(topic="metrics")` 의 「분석」 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 한 걸음까지. 주소를 추측하지 않는다 |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | — |
 | 언제 누가 무엇을 바꿨나 — 이 객체 | `object_history` | 되돌리기는 `object_restore(entry_id)` — **시점은 사람이 정한다** |
@@ -819,6 +820,36 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
   로. `f.<칸>.<연산>=<값>` 을 `{"field": "<칸>", "op": "<연산>", "value": "<값>"}` 로 풀고,
   `status=` · `year=` 는 그 인자로. `drill.partial` 이 비어 있을 때 목록의 `total` 이 셀의
   `count` 와 같다.
+
+**분석 — 세어 둔 셀 위의 통계(ADR 0014).** 「B10 이 몇 달이냐」 「새 모델이 전작보다
+나빠졌나」 같은 물음은 셀을 받아 직접 맞추지 않는다 — `metric_analyze(slug, recipe, options=)`.
+같은 물음에 같은 방법 · 같은 답 · 같은 주의가 나와야 한다. `metric_list` 의 `analyses[]` 가 그
+지표에 되는 레시피와 **안 되는 이유**를 말한다(안 되면 그 이유를 그대로 전한다).
+
+| 물음 | recipe | 지표 모양 | options |
+| --- | --- | --- | --- |
+| 수명 · B10 | `life` | 판매월 코호트 + 분모 `time=cohort` | `model`(`auto`) · `max_age` |
+| 새 모델이 전작보다 나빠졌나 | `sprt` | 위 + 분모 `on` 에 모델 기준 | `target`(값, 참조면 id) · `reference` 또는 `reference_via` |
+| 관리도 — 튀는 달 · 공장 | `control` | 기간 또는 코호트(출고 K 기간 안) | `axis` · `window` · `split`(분모 짝에 있는 기준) · `baseline_to` |
+| 계절을 빼고 언제 바뀌었나 | `changes` | 기간 또는 코호트 | `axis` · `window` |
+| 몇 값에 몰렸나 | `pareto` | 기준이 있는 건수 · 합계 | `dim` · `top` · `by_period` |
+
+옮길 때 규칙:
+
+- **`caveats[]` 의 `message` 를 그대로.** `warn` 은 숫자보다 먼저 말한다.
+- 수명: `status="unreachable"` 인 B수명은 **값이 없다** — 「판매의 p 만 결국 고장 나 그 비율에
+  이르지 않는다」 로 말한다. 필요하면 `conditional_age` 를 「결국 고장 나는 것들 중의 B10」 이라는
+  이름으로. `extrapolated` 는 「관측 밖으로 늘려 읽은 값」, `observed` 는 관측 안. 고른 모형
+  (`chosen` — 표준 · 결함)과 형상(β — 1 보다 크면 마모)을 함께.
+- 순차 검정: `continue` 는 「아직 결론 없음」(문제없음이 아니다), `not_worse` 는 「ρ 배 나쁘지는
+  않다」(같다가 아니다), `worse` 는 「ρ 배 쪽」. `decided_at` 과 SMR 구간을 함께. 「아직」 이면
+  `periods_to_*` 가 결론까지의 어림이다.
+- 관리도: 신호(넬슨 규칙 번호)는 「조사할 곳」 이지 원인이 아니다. 건수(`kind="c"`)로 그린
+  관리도는 판매가 늘어도 신호처럼 보인다.
+- 변화점: `provisional` 은 잠정 — 몇 기간 더 보고 판단한다. 비는 `ratio_ci` 와 함께.
+- 근거는 지표 읽기와 같다 — `drill.params` → `objects_list` 의 `conditions`.
+- 거절(422)은 「틀린 수를 낼 자리」 다: 셀이 상한에서 잘렸다(좁혀서 다시), 여러 값 기준을
+  묶지도 거르지도 않았다(`filters` 로 하나를 고른다). 우회하지 않는다.
 
 **정의할 때.** 시간 칸 · 코호트 칸은 **자기 타입의 날짜 칸**이어야 하고, 기준은 여섯까지, 분모의
 `on` 은 양쪽에 같은 이름 · 같은 값 종류(같은 타입을 가리키는 참조, 같은 종류의 칸)여야 한다.
