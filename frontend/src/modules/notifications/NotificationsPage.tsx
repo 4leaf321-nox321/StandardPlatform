@@ -61,7 +61,11 @@ export default function NotificationsPage() {
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <p className="text-sm font-medium">{one.title}</p>
-                  {one.body && <p className="text-muted-foreground mt-1 text-sm">{one.body}</p>}
+                  {one.body && (
+                    <p className="text-muted-foreground mt-1 text-sm whitespace-pre-line">
+                      {one.body}
+                    </p>
+                  )}
                   {one.link && (
                     <Link to={one.link} className="mt-1 inline-block text-xs underline">
                       보러 가기

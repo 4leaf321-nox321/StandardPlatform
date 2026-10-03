@@ -297,7 +297,7 @@ export interface ReadOptions {
   cohort_to?: string
 }
 
-function readParams(opts: ReadOptions, extra: Record<string, string | undefined> = {}) {
+function searchOf(opts: ReadOptions, extra: Record<string, string | undefined> = {}) {
   const params = new URLSearchParams()
   if (opts.dims?.length) params.set('dims', opts.dims.join(','))
   if (opts.by?.length) params.set('by', opts.by.join(','))
@@ -311,8 +311,91 @@ function readParams(opts: ReadOptions, extra: Record<string, string | undefined>
   for (const [key, value] of Object.entries(extra)) {
     if (value !== undefined && value !== '') params.set(key, value)
   }
-  const text = params.toString()
+  return params
+}
+
+function readParams(opts: ReadOptions, extra: Record<string, string | undefined> = {}) {
+  const text = searchOf(opts, extra).toString()
   return text ? `?${text}` : ''
+}
+
+type AnalysisOptions = Record<string, string | number | boolean | null | undefined>
+
+function analysisExtra(options: AnalysisOptions): Record<string, string | undefined> {
+  const extra: Record<string, string | undefined> = {}
+  for (const [key, value] of Object.entries(options)) {
+    if (value === null || value === undefined || value === '') continue
+    extra[key] = typeof value === 'boolean' ? (value ? 'true' : 'false') : String(value)
+  }
+  return extra
+}
+
+/**
+ * 분석 요청의 쿼리를 그대로 — 경보(ADR 0016)가 이것을 인자로 저장한다. 화면이 보낸 것과 저장한
+ * 것이 같아야 알림을 눌러 연 화면이 알림이 말한 것과 같다.
+ */
+export function analysisQuery(options: AnalysisOptions, opts: ReadOptions = {}) {
+  const out: Record<string, string> = {}
+  searchOf(opts, analysisExtra(options)).forEach((value, key) => {
+    out[key] = value
+  })
+  return out
+}
+
+export type AlertRecipe = 'sprt' | 'control' | 'changes'
+
+export interface MetricAlert {
+  id: string
+  metric: string
+  metric_label: string
+  name: string
+  recipe: AlertRecipe
+  recipe_label: string
+  params: Record<string, string>
+  is_active: boolean
+  last_checked_at: string | null
+  last_status: 'ok' | 'failed' | null
+  last_error: string | null
+  events: number
+  created_at: string
+  /** 분석 탭을 이 인자로 연다. */
+  link: string
+}
+
+export interface AlertFinding {
+  key: string
+  title: string
+  detail: Record<string, unknown>
+  /** 이 경보가 아직 안 본 것 — 다음 계산 뒤 알림이 된다. */
+  new: boolean
+}
+
+export interface AlertCheck {
+  run_id: string | null
+  findings: AlertFinding[]
+  notes: string[]
+}
+
+export interface AlertSaved extends MetricAlert {
+  /** 만들 때 지금 있던 것 — 알리지 않았다. */
+  baseline: AlertCheck | null
+}
+
+export interface AlertEvent {
+  id: string
+  alert_id: string
+  alert_name: string
+  metric: string
+  metric_label: string
+  recipe: AlertRecipe
+  key: string
+  title: string
+  detail: Record<string, unknown>
+  /** 처음 확인에서 본 것 — 알리지 않았다. */
+  baseline: boolean
+  run_id: string | null
+  created_at: string
+  link: string
 }
 
 export const metricsApi = {
@@ -343,17 +426,21 @@ export const metricsApi = {
    * 분석 — 세어 둔 셀 위의 통계(ADR 0014). `options` 는 레시피마다의 질의, 기준 거르기는
    * 읽기와 같은 `filters`. 빈 값은 보내지 않는다.
    */
-  analysis: <T>(
+  analysis: <T>(slug: string, recipe: string, options: AnalysisOptions, opts: ReadOptions = {}) =>
+    api.get<T>(`/metrics/${slug}/analysis/${recipe}${readParams(opts, analysisExtra(options))}`),
+  /** 이 지표에 건 내 경보(ADR 0016). */
+  alerts: (slug: string) => api.get<MetricAlert[]>(`/metrics/${slug}/alerts`),
+  /** 한 번 돌려 지금 있는 것을 「처음부터 있던 것」 으로 적는다 — 알리지 않는다. */
+  createAlert: (
     slug: string,
-    recipe: string,
-    options: Record<string, string | number | boolean | null | undefined>,
-    opts: ReadOptions = {},
-  ) => {
-    const extra: Record<string, string | undefined> = {}
-    for (const [key, value] of Object.entries(options)) {
-      if (value === null || value === undefined || value === '') continue
-      extra[key] = typeof value === 'boolean' ? (value ? 'true' : 'false') : String(value)
-    }
-    return api.get<T>(`/metrics/${slug}/analysis/${recipe}${readParams(opts, extra)}`)
-  },
+    body: { name: string; recipe: AlertRecipe; params: Record<string, string> },
+  ) => api.post<AlertSaved>(`/metrics/${slug}/alerts`, body),
+  updateAlert: (slug: string, id: string, body: { name?: string; is_active?: boolean }) =>
+    api.patch<MetricAlert>(`/metrics/${slug}/alerts/${id}`, body),
+  removeAlert: (slug: string, id: string) => api.delete<void>(`/metrics/${slug}/alerts/${id}`),
+  /** 지금 확인 — 적지도 알리지도 않는다. */
+  checkAlert: (slug: string, id: string) =>
+    api.post<AlertCheck>(`/metrics/${slug}/alerts/${id}/check`),
+  alertEvents: (slug: string, id: string) =>
+    api.get<AlertEvent[]>(`/metrics/${slug}/alerts/${id}/events`),
 }

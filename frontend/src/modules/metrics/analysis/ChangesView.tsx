@@ -4,8 +4,9 @@
 
 import { useState } from 'react'
 
-import type { Metric, ReadOptions } from '@/modules/metrics/api'
-import { metricsApi } from '@/modules/metrics/api'
+import { analysisQuery, metricsApi } from '@/modules/metrics/api'
+import { AlertSave } from '@/modules/metrics/analysis/AlertSave'
+import type { AnalysisViewProps } from '@/modules/metrics/analysis/SprtView'
 import { AnalysisMeta, CaveatList, interval } from '@/modules/metrics/analysis/common'
 import type { ChangesResult } from '@/modules/metrics/analysis/types'
 import { shownNumber } from '@/modules/metrics/metricDrill'
@@ -33,18 +34,13 @@ import { useResource } from '@/shared/hooks/useResource'
 
 const AUTO = '__auto__'
 
-export function ChangesView({ metric, read }: { metric: Metric; read: ReadOptions }) {
-  const [axis, setAxis] = useState(AUTO)
-  const [span, setSpan] = useState('3')
+export function ChangesView({ metric, read, initial = {} }: AnalysisViewProps) {
+  const [axis, setAxis] = useState(initial.axis ?? AUTO)
+  const [span, setSpan] = useState(initial.window ?? '3')
+  const asked = { axis: axis === AUTO ? undefined : axis, window: span }
   const key = JSON.stringify([axis, span, read])
   const result = useResource<ChangesResult>(
-    () =>
-      metricsApi.analysis<ChangesResult>(
-        metric.slug,
-        'changes',
-        { axis: axis === AUTO ? undefined : axis, window: span },
-        read,
-      ),
+    () => metricsApi.analysis<ChangesResult>(metric.slug, 'changes', asked, read),
     [metric.slug, key],
   )
   const data = result.data
@@ -79,6 +75,9 @@ export function ChangesView({ metric, read }: { metric: Metric; read: ReadOption
             />
           </div>
         )}
+        <div className="ml-auto">
+          <AlertSave metric={metric} recipe="changes" params={analysisQuery(asked, read)} />
+        </div>
       </div>
       {result.error && <ErrorNotice error={result.error} />}
       {data && (

@@ -27,15 +27,21 @@ export interface AnalysisTabProps {
   metric: Metric
   /** 상세 화면의 기준 거르기 · 기간 — 분석에도 그대로 건다. */
   read: ReadOptions
+  /** 처음 열 분석과 그 인자 — 경보 알림의 링크(`?tab=analysis&recipe=…`)가 연 화면. */
+  initial?: { recipe: string; params: Record<string, string> } | null
 }
 
-export default function AnalysisTab({ metric, read }: AnalysisTabProps) {
+export default function AnalysisTab({ metric, read, initial = null }: AnalysisTabProps) {
   const listed = [...metric.analyses].sort(
     (a, b) => ORDER.indexOf(a.recipe) - ORDER.indexOf(b.recipe),
   )
-  const [recipe, setRecipe] = useState<string | null>(
-    () => listed.find((one) => one.ok)?.recipe ?? null,
+  const [recipe, setRecipe] = useState<string | null>(() =>
+    initial && listed.some((one) => one.ok && one.recipe === initial.recipe)
+      ? initial.recipe
+      : (listed.find((one) => one.ok)?.recipe ?? null),
   )
+  // 링크가 연 인자는 그 분석에만 — 다른 분석으로 옮기면 그 분석의 기본값으로 연다.
+  const given = initial && initial.recipe === recipe ? initial.params : undefined
   const unavailable = listed.filter((one) => !one.ok)
   // 기간 범위는 접수 기간이다 — 수명 · 순차 검정은 코호트마다 닫힌 경과까지 보므로 안 쓴다.
   const cohortOnly = recipe === 'life' || recipe === 'sprt'
@@ -76,9 +82,9 @@ export default function AnalysisTab({ metric, read }: AnalysisTabProps) {
       )}
       {recipe === 'pareto' && <ParetoView metric={metric} read={read} />}
       {recipe === 'life' && <LifeView metric={metric} read={read} />}
-      {recipe === 'control' && <ControlView metric={metric} read={read} />}
-      {recipe === 'changes' && <ChangesView metric={metric} read={read} />}
-      {recipe === 'sprt' && <SprtView metric={metric} read={read} />}
+      {recipe === 'control' && <ControlView metric={metric} read={read} initial={given} />}
+      {recipe === 'changes' && <ChangesView metric={metric} read={read} initial={given} />}
+      {recipe === 'sprt' && <SprtView metric={metric} read={read} initial={given} />}
       {recipe === 'logit' && <LogitView metric={metric} read={read} />}
       {recipe === 'assoc' && <AssocView metric={metric} read={read} />}
     </div>

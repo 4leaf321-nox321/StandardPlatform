@@ -4,8 +4,9 @@
 
 import { useState } from 'react'
 
-import type { Metric, ReadOptions } from '@/modules/metrics/api'
-import { metricsApi } from '@/modules/metrics/api'
+import { analysisQuery, metricsApi } from '@/modules/metrics/api'
+import { AlertSave } from '@/modules/metrics/analysis/AlertSave'
+import type { AnalysisViewProps } from '@/modules/metrics/analysis/SprtView'
 import { AnalysisMeta, CaveatList, DrillLink } from '@/modules/metrics/analysis/common'
 import type { ControlChart, ControlResult } from '@/modules/metrics/analysis/types'
 import { shownNumber } from '@/modules/metrics/metricDrill'
@@ -33,26 +34,21 @@ import { useResource } from '@/shared/hooks/useResource'
 const NONE = '__none__'
 const AUTO = '__auto__'
 
-export function ControlView({ metric, read }: { metric: Metric; read: ReadOptions }) {
-  const [axis, setAxis] = useState(AUTO)
-  const [span, setSpan] = useState('3')
-  const [split, setSplit] = useState(NONE)
-  const [baselineTo, setBaselineTo] = useState('')
+export function ControlView({ metric, read, initial = {} }: AnalysisViewProps) {
+  const [axis, setAxis] = useState(initial.axis ?? AUTO)
+  const [span, setSpan] = useState(initial.window ?? '3')
+  const [split, setSplit] = useState(initial.split ?? NONE)
+  const [baselineTo, setBaselineTo] = useState(initial.baseline_to ?? '')
   const paired = metric.spec.denominator?.on ?? []
+  const asked = {
+    axis: axis === AUTO ? undefined : axis,
+    window: span,
+    split: split === NONE ? undefined : split,
+    baseline_to: baselineTo || undefined,
+  }
   const key = JSON.stringify([axis, span, split, baselineTo, read])
   const result = useResource<ControlResult>(
-    () =>
-      metricsApi.analysis<ControlResult>(
-        metric.slug,
-        'control',
-        {
-          axis: axis === AUTO ? undefined : axis,
-          window: span,
-          split: split === NONE ? undefined : split,
-          baseline_to: baselineTo || undefined,
-        },
-        read,
-      ),
+    () => metricsApi.analysis<ControlResult>(metric.slug, 'control', asked, read),
     [metric.slug, key],
   )
   const data = result.data
@@ -112,6 +108,9 @@ export function ControlView({ metric, read }: { metric: Metric; read: ReadOption
             value={baselineTo}
             onChange={(event) => setBaselineTo(event.target.value)}
           />
+        </div>
+        <div className="ml-auto">
+          <AlertSave metric={metric} recipe="control" params={analysisQuery(asked, read)} />
         </div>
       </div>
       {result.error && <ErrorNotice error={result.error} />}

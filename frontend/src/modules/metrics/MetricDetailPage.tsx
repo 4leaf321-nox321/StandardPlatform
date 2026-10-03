@@ -9,8 +9,9 @@
  */
 
 import { Suspense, lazy, useMemo, useState } from 'react'
-import { Link, useParams } from 'react-router-dom'
+import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 
+import { AlertsTab } from '@/modules/metrics/AlertsTab'
 import { metricsApi } from '@/modules/metrics/api'
 import type {
   Metric,
@@ -57,7 +58,8 @@ const EMPTY = '__empty__'
 /** 코호트 표에 늘어놓을 경과 칸의 상한 — 그보다 길면 히트맵만 읽는다. */
 const AGES_IN_TABLE = 24
 
-type Tab = 'table' | 'series' | 'cohort' | 'analysis' | 'runs'
+type Tab = 'table' | 'series' | 'cohort' | 'analysis' | 'alerts' | 'runs'
+const TABS: Tab[] = ['table', 'series', 'cohort', 'analysis', 'alerts', 'runs']
 type By = 'none' | 'period' | 'cohort'
 
 const RUN_STATUS: Record<string, { label: string; className: string }> = {
@@ -155,13 +157,39 @@ function Drill({ drill, count }: { drill: MetricTable['cells'][number]['drill'];
 
 export default function MetricDetailPage() {
   const { slug = '' } = useParams()
+  const { search } = useLocation()
+  // 주소가 바뀌면 새로 연다 — 경보 탭의 「분석 열기」 처럼 같은 화면 안에서 눌러도 그 인자로.
+  return <MetricDetail key={`${slug}${search}`} slug={slug} />
+}
+
+function MetricDetail({ slug }: { slug: string }) {
+  const [search] = useSearchParams()
   const metric = useResource(() => metricsApi.get(slug), [slug])
-  const [tab, setTab] = useState<Tab>('table')
+  // 경보 알림의 링크(ADR 0016)는 `?tab=analysis&recipe=…&d.<기준>=…` 로 그 분석을 그 인자로
+  // 연다 — 처음 한 번만 읽는다(그 뒤의 고르기는 화면의 것).
+  const [opened] = useState(() => {
+    const asked = search.get('tab') as Tab | null
+    const filtersAsked: Record<string, string | null> = {}
+    const params: Record<string, string> = {}
+    search.forEach((value, key) => {
+      if (key.startsWith('d.')) filtersAsked[key.slice(2)] = value === '' ? null : value
+      else if (key !== 'tab' && key !== 'recipe') params[key] = value
+    })
+    const recipe = search.get('recipe')
+    return {
+      tab: asked && TABS.includes(asked) ? asked : 'table',
+      filters: filtersAsked,
+      periodFrom: params.period_from ?? '',
+      periodTo: params.period_to ?? '',
+      analysis: recipe ? { recipe, params } : null,
+    }
+  })
+  const [tab, setTab] = useState<Tab>(opened.tab)
   const [dims, setDims] = useState<string[] | null>(null)
   const [by, setBy] = useState<By>('none')
-  const [filters, setFilters] = useState<Record<string, string | null>>({})
-  const [periodFrom, setPeriodFrom] = useState('')
-  const [periodTo, setPeriodTo] = useState('')
+  const [filters, setFilters] = useState<Record<string, string | null>>(opened.filters)
+  const [periodFrom, setPeriodFrom] = useState(opened.periodFrom)
+  const [periodTo, setPeriodTo] = useState(opened.periodTo)
   const [split, setSplit] = useState('')
   const [cumulative, setCumulative] = useState(true)
   const [ratio, setRatio] = useState(true)
@@ -276,6 +304,7 @@ export default function MetricDetailPage() {
           {found.grain && <TabsTrigger value="series">추이</TabsTrigger>}
           {found.cohort_grain && <TabsTrigger value="cohort">코호트</TabsTrigger>}
           {found.analyses.length > 0 && <TabsTrigger value="analysis">분석</TabsTrigger>}
+          <TabsTrigger value="alerts">경보</TabsTrigger>
           <TabsTrigger value="runs">계산 기록</TabsTrigger>
         </TabsList>
 
@@ -426,9 +455,13 @@ export default function MetricDetailPage() {
         <TabsContent value="analysis" className="space-y-3">
           {tab === 'analysis' && (
             <Suspense fallback={<p className="text-muted-foreground text-sm">불러오는 중…</p>}>
-              <AnalysisTab metric={found} read={common} />
+              <AnalysisTab metric={found} read={common} initial={opened.analysis} />
             </Suspense>
           )}
+        </TabsContent>
+
+        <TabsContent value="alerts" className="space-y-3">
+          {tab === 'alerts' && <AlertsTab metric={found} />}
         </TabsContent>
 
         <TabsContent value="runs" className="space-y-3">

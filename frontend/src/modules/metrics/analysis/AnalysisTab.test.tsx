@@ -18,8 +18,11 @@ import type {
   ParetoResult,
 } from '@/modules/metrics/analysis/types'
 
-const metricsApi = vi.hoisted(() => ({ analysis: vi.fn(), dims: vi.fn() }))
-vi.mock('@/modules/metrics/api', () => ({ metricsApi }))
+const metricsApi = vi.hoisted(() => ({ analysis: vi.fn(), dims: vi.fn(), createAlert: vi.fn() }))
+vi.mock('@/modules/metrics/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/modules/metrics/api')>()),
+  metricsApi,
+}))
 vi.mock('@/shared/charts', () => ({ Chart: () => <div>차트</div> }))
 vi.mock('@/shared/charts/LazyPlot', () => ({ LazyPlot: () => <div>그림</div> }))
 
@@ -422,5 +425,80 @@ describe('분석 탭', () => {
     )
     const assocCall = metricsApi.analysis.mock.calls.find((one) => one[1] === 'assoc')
     expect(assocCall?.[2]).toMatchObject({ rows: 'symptom', cols: 'part' })
+  })
+
+  it('링크가 연 순차 검정은 그 인자로 묻고, 경보 저장은 같은 인자를 저장한다', async () => {
+    const metric = {
+      ...METRIC,
+      analyses: [
+        { recipe: 'pareto', label: '파레토 · 집중도', ok: true, reason: null },
+        { recipe: 'sprt', label: '순차 검정(전작 대비)', ok: true, reason: null },
+      ],
+    } as unknown as Metric
+    metricsApi.dims.mockResolvedValue({ name: 'base_model', values: [], truncated: false })
+    metricsApi.analysis.mockResolvedValue({
+      ...HEADER,
+      recipe: 'sprt',
+      method: '포아송 SPRT v1',
+      params: {},
+      run_id: 'r1',
+      excluded: {},
+      visible_share: 1,
+      caveats: [],
+      decision: 'continue',
+      decided_at: null,
+      target_label: 'S기본',
+      reference_label: 'A기본',
+      rho: 2,
+      looks: [],
+      cohort_rows: [],
+    })
+    metricsApi.createAlert.mockResolvedValue({
+      id: 'a1',
+      name: '인입 · 순차 검정',
+      baseline: {
+        run_id: 'r1',
+        findings: [{ key: 'worse:S', title: 'S기본: 전작 A기본 보다 나쁨', detail: {}, new: false }],
+        notes: [],
+      },
+    })
+    render(
+      <MemoryRouter>
+        <AnalysisTab
+          metric={metric}
+          read={{ filters: { symptom: '소음', base_model: 'X' } }}
+          initial={{ recipe: 'sprt', params: { target: 'S', reference: 'A', rho: '2' } }}
+        />
+      </MemoryRouter>,
+    )
+    // 모델 기준의 거르기는 target · reference 가 대신한다 — 보내지 않는다.
+    await waitFor(() =>
+      expect(metricsApi.analysis).toHaveBeenCalledWith(
+        'cases',
+        'sprt',
+        { target: 'S', reference: 'A', reference_via: undefined, dim: 'base_model', rho: '2' },
+        { filters: { symptom: '소음' } },
+      ),
+    )
+    await userEvent.click(await screen.findByRole('button', { name: /경보 저장/ }))
+    expect(screen.getByLabelText('이름')).toHaveValue('인입 · 순차 검정')
+    // 전작을 값으로 골랐으면 「최근 출시 모델 전부」 는 없다 — 모델마다 전작이 다르다.
+    expect(screen.queryByText(/최근 출시 모델 전부/)).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '저장' }))
+    await waitFor(() =>
+      expect(metricsApi.createAlert).toHaveBeenCalledWith('cases', {
+        name: '인입 · 순차 검정',
+        recipe: 'sprt',
+        params: {
+          'd.symptom': '소음',
+          target: 'S',
+          reference: 'A',
+          dim: 'base_model',
+          rho: '2',
+        },
+      }),
+    )
+    expect(await screen.findByText(/은 알리지 않습니다/)).toBeInTheDocument()
+    expect(screen.getByText('S기본: 전작 A기본 보다 나쁨')).toBeInTheDocument()
   })
 })

@@ -8,7 +8,8 @@
 import { useMemo, useState } from 'react'
 
 import type { Metric, ReadOptions } from '@/modules/metrics/api'
-import { metricsApi } from '@/modules/metrics/api'
+import { analysisQuery, metricsApi } from '@/modules/metrics/api'
+import { AlertSave } from '@/modules/metrics/analysis/AlertSave'
 import {
   AnalysisMeta,
   CaveatList,
@@ -40,7 +41,14 @@ export function decisionText(decision: SprtDecision, rho: number): string {
   return '아직 — 결론이 서지 않았습니다(문제없다는 뜻이 아닙니다).'
 }
 
-export function SprtView({ metric, read }: { metric: Metric; read: ReadOptions }) {
+export interface AnalysisViewProps {
+  metric: Metric
+  read: ReadOptions
+  /** 처음 고를 인자 — 경보 알림의 링크가 연 화면(분석 경로의 쿼리 그대로). */
+  initial?: Record<string, string>
+}
+
+export function SprtView({ metric, read, initial = {} }: AnalysisViewProps) {
   const dim = metric.spec.denominator?.on[0] ?? ''
   const dimInfo = metric.dims.find((one) => one.name === dim)
   const values = useResource(
@@ -58,31 +66,27 @@ export function SprtView({ metric, read }: { metric: Metric; read: ReadOptions }
         })),
     [values.data],
   )
-  const [target, setTarget] = useState('')
-  const [reference, setReference] = useState('')
-  const [via, setVia] = useState('')
-  const [rho, setRho] = useState('1.5')
+  const [target, setTarget] = useState(initial.target ?? '')
+  const [reference, setReference] = useState(initial.reference ?? '')
+  const [via, setVia] = useState(initial.reference_via ?? '')
+  const [rho, setRho] = useState(initial.rho ?? '1.5')
   // 모델 기준의 거르기는 target · reference 가 대신한다 — 함께 보내면 서버가 거절한다.
   const filters = Object.fromEntries(
     Object.entries(read.filters ?? {}).filter(([name]) => name !== dim),
   )
   const ready = Boolean(target && (reference || via))
+  const asked = {
+    target,
+    reference: reference || undefined,
+    reference_via: reference ? undefined : via || undefined,
+    dim,
+    rho,
+  }
   const key = JSON.stringify([target, reference, via, rho, filters])
   const result = useResource<SprtResult | null>(
     () =>
       ready
-        ? metricsApi.analysis<SprtResult>(
-            metric.slug,
-            'sprt',
-            {
-              target,
-              reference: reference || undefined,
-              reference_via: reference ? undefined : via || undefined,
-              dim,
-              rho,
-            },
-            { filters },
-          )
+        ? metricsApi.analysis<SprtResult>(metric.slug, 'sprt', asked, { filters })
         : Promise.resolve(null),
     [metric.slug, key],
   )
@@ -135,6 +139,14 @@ export function SprtView({ metric, read }: { metric: Metric; read: ReadOptions }
             onChange={(event) => setRho(event.target.value)}
           />
         </div>
+      </div>
+      <div className="flex justify-end">
+        <AlertSave
+          metric={metric}
+          recipe="sprt"
+          params={analysisQuery(asked, { filters })}
+          disabled={!ready}
+        />
       </div>
       {!ready && (
         <p className="text-muted-foreground text-sm">새 모델과 전작(또는 그 칸)을 고릅니다.</p>

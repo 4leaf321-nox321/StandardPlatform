@@ -16,8 +16,13 @@ const metricsApi = vi.hoisted(() => ({
   cohort: vi.fn(),
   dims: vi.fn(),
   runs: vi.fn(),
+  analysis: vi.fn(),
+  alerts: vi.fn(),
 }))
-vi.mock('@/modules/metrics/api', () => ({ metricsApi }))
+vi.mock('@/modules/metrics/api', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/modules/metrics/api')>()),
+  metricsApi,
+}))
 vi.mock('@/shared/charts', () => ({ Chart: () => <div>차트</div> }))
 vi.mock('@/shared/charts/LazyPlot', () => ({ LazyPlot: () => <div>히트맵</div> }))
 
@@ -164,8 +169,8 @@ const COHORT: MetricCohort = {
   ],
 }
 
-async function mount() {
-  metricsApi.get.mockResolvedValue(METRIC)
+async function mount(path = '/metrics/cases_monthly', metric: Metric = METRIC) {
+  metricsApi.get.mockResolvedValue(metric)
   metricsApi.dims.mockResolvedValue({
     name: 'symptom',
     label: '증상',
@@ -177,7 +182,7 @@ async function mount() {
   metricsApi.cohort.mockResolvedValue(COHORT)
   const { default: MetricDetailPage } = await import('@/modules/metrics/MetricDetailPage')
   render(
-    <MemoryRouter initialEntries={['/metrics/cases_monthly']}>
+    <MemoryRouter initialEntries={[path]}>
       <Routes>
         <Route path="/metrics/:slug" element={<MetricDetailPage />} />
       </Routes>
@@ -262,5 +267,115 @@ describe('지표 상세', () => {
     expect(screen.getByText('20초')).toBeInTheDocument()
     expect(screen.getByText('2,000,000')).toBeInTheDocument()
     expect(screen.getByText('5,800')).toBeInTheDocument()
+  })
+
+  it('경보 알림의 링크는 그 분석을 그 거르기 · 인자로 연다', async () => {
+    metricsApi.values.mockClear()
+    metricsApi.analysis.mockResolvedValue({
+      ...HEADER,
+      recipe: 'control',
+      method: '라니 u-관리도 v1',
+      params: {},
+      run_id: 'r1',
+      caveats: [],
+      excluded: {},
+      visible_share: 1,
+      axis: 'period',
+      window: null,
+      kind: 'u',
+      per: 100,
+      split: null,
+      split_label: null,
+      baseline_to: null,
+      rules: [],
+      charts: [],
+      other_groups: 0,
+    })
+    await mount(
+      '/metrics/cases_monthly?tab=analysis&recipe=control&axis=period&window=3&d.symptom=%EC%86%8C%EC%9D%8C',
+      {
+        ...METRIC,
+        analyses: [
+          { recipe: 'pareto', label: '파레토 · 집중도', ok: true, reason: null },
+          { recipe: 'control', label: '관리도', ok: true, reason: null },
+        ],
+      },
+    )
+    await waitFor(() =>
+      expect(metricsApi.analysis).toHaveBeenCalledWith(
+        'cases_monthly',
+        'control',
+        { axis: 'period', window: '3', split: undefined, baseline_to: undefined },
+        expect.objectContaining({ filters: { symptom: '소음' } }),
+      ),
+    )
+    expect(metricsApi.values).not.toHaveBeenCalled()
+    expect(screen.getByRole('tab', { name: '분석' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('경보 탭의 「분석 열기」 는 같은 화면 안에서도 그 인자로 다시 연다', async () => {
+    metricsApi.analysis.mockClear()
+    metricsApi.analysis.mockResolvedValue({
+      ...HEADER,
+      recipe: 'changes',
+      method: '변화점 v1',
+      params: {},
+      run_id: 'r1',
+      caveats: [],
+      excluded: {},
+      visible_share: 1,
+      axis: 'cohort',
+      window: 6,
+      kind: 'rate',
+      per: 100,
+      season_length: 12,
+      seasonal: [],
+      seasonal_p_value: null,
+      dispersion: 1,
+      penalty: null,
+      min_segment: 3,
+      changes: [],
+      segments: [],
+      points: [],
+    })
+    metricsApi.alerts.mockResolvedValue([
+      {
+        id: 'a1',
+        metric: 'cases_monthly',
+        metric_label: '월별 인입',
+        name: '수준 변화',
+        recipe: 'changes',
+        recipe_label: '계절 · 변화점',
+        params: { axis: 'cohort', window: '6' },
+        is_active: true,
+        last_checked_at: null,
+        last_status: 'ok',
+        last_error: null,
+        events: 0,
+        created_at: '2026-10-04T00:00:00+09:00',
+        link: '/metrics/cases_monthly?tab=analysis&recipe=changes&axis=cohort&window=6',
+      },
+    ])
+    await mount('/metrics/cases_monthly?tab=alerts', {
+      ...METRIC,
+      analyses: [{ recipe: 'changes', label: '계절 · 변화점', ok: true, reason: null }],
+    })
+    await userEvent.click(await screen.findByRole('link', { name: '분석 열기' }))
+    await waitFor(() =>
+      expect(metricsApi.analysis).toHaveBeenCalledWith(
+        'cases_monthly',
+        'changes',
+        { axis: 'cohort', window: '6' },
+        expect.anything(),
+      ),
+    )
+    expect(screen.getByRole('tab', { name: '분석' })).toHaveAttribute('aria-selected', 'true')
+  })
+
+  it('경보 탭은 이 지표에 건 내 경보를 보인다', async () => {
+    metricsApi.alerts.mockResolvedValue([])
+    await mount('/metrics/cases_monthly?tab=alerts')
+    await waitFor(() => expect(metricsApi.alerts).toHaveBeenCalledWith('cases_monthly'))
+    expect(await screen.findByText('이 지표에 건 내 경보가 없습니다.')).toBeInTheDocument()
   })
 })
