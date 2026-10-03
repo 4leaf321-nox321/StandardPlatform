@@ -13,6 +13,8 @@
     filters      [{field, op, value}] — 목록 조건과 같은 뜻
     denominator  {metric, on: [기준 이름], time: period|cohort|null, per}
     settle_days  이만큼 지난 기간은 「닫힘」
+    visits       {key: properties.<시리얼 칸>, within_days} — 기준 주소 `visit.number` ·
+                 `visit.repeat` 를 연다(같은 시리얼의 차례 · 정한 일수 안 재방문, `visits.py`)
 
 ## 예약어
 
@@ -32,6 +34,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.modules.metrics import visits as visits_module
 from app.modules.metrics.models import MetricDef
 from app.modules.objects import axes, conditions, system
 from app.modules.objects.models import ObjectInstance
@@ -123,6 +126,8 @@ class MetricSpec(BaseModel):
     filters: list[FilterIn] = Field(default_factory=list, max_length=50)
     denominator: DenominatorIn | None = None
     settle_days: int = Field(default=0, ge=0, le=3650)
+    visits: visits_module.VisitsIn | None = None
+    """같은 시리얼의 방문 — 있으면 기준 주소 `visit.number` · `visit.repeat` 를 쓸 수 있다."""
 
 
 # --- 지은 것 ---------------------------------------------------------------------
@@ -175,6 +180,7 @@ class Built:
     dims: list[Dim]
     conds: list[conditions.Condition]
     denominator: MetricDef | None
+    visits: visits_module.Visits | None = None
 
     @property
     def overlap(self) -> bool:
@@ -270,7 +276,12 @@ def _time_axis(scope: Scope, axis_in: TimeAxisIn, what: str) -> TimeAxis:
     return TimeAxis(axis_in.address, definition.key, definition, axis_in.grain, expr)
 
 
-def _dimension(plan: axes.JoinPlan, dim_in: DimensionIn, seen: set[str]) -> Dim:
+def _dimension(
+    plan: axes.JoinPlan,
+    dim_in: DimensionIn,
+    seen: set[str],
+    visits: visits_module.Visits | None = None,
+) -> Dim:
     name = dim_in.name
     if not NAME_RE.match(name):
         raise _bad(
@@ -282,6 +293,13 @@ def _dimension(plan: axes.JoinPlan, dim_in: DimensionIn, seen: set[str]) -> Dim:
         raise _bad(f"기준 이름이 겹칩니다: {name}")
     if dim_in.address == axes.TYPE_FIELD[0]:
         raise _bad("「타입」 축은 인터페이스 목록의 것입니다 — 지표의 원천은 타입 하나입니다.")
+    if dim_in.address in visits_module.ADDRESSES:
+        if visits is None:
+            raise _bad(
+                f"「{dim_in.address}」 은 방문 기준입니다 — 정의에 visits(시리얼 칸 · 일수)가 "
+                "있어야 합니다."
+            )
+        return Dim(name, dim_in.address, None, visits_module.axis(visits, dim_in.address))
     axis = plan.axis(dim_in.address, grain=dim_in.grain)
     if axis.kind in axes.DATE_KINDS and dim_in.grain is None:
         raise _bad(f"날짜 기준 「{axis.label}」 에는 기간 단위(grain)가 필요합니다.")
@@ -375,14 +393,40 @@ def build(
     cohort = _cohort(scope, spec, time)
     if len(spec.dimensions) > MAX_DIMENSIONS:
         raise _bad(f"기준은 {MAX_DIMENSIONS}개까지입니다.")
+    conds = _filters(plan, scope, spec)
+    visits = _visits(source, scope, spec, time, conds, plan)
     dims: list[Dim] = []
     seen: set[str] = set()
     for one in spec.dimensions:
-        dims.append(_dimension(plan, one, seen))
+        dims.append(_dimension(plan, one, seen, visits))
         seen.add(one.name)
-    conds = _filters(plan, scope, spec)
     denominator = _denominator(db, spec, dims, self_slug=self_slug)
-    return Built(source, scope, spec, plan, value, time, cohort, dims, conds, denominator)
+    return Built(
+        source, scope, spec, plan, value, time, cohort, dims, conds, denominator, visits
+    )
+
+
+def _visits(
+    source: ObjectType,
+    scope: Scope,
+    spec: MetricSpec,
+    time: TimeAxis | None,
+    conds: list[conditions.Condition],
+    plan: axes.JoinPlan,
+) -> visits_module.Visits | None:
+    if spec.visits is None:
+        return None
+    try:
+        return visits_module.build(
+            source,
+            scope.defs,
+            spec.visits,
+            time.key if time is not None else None,
+            conds,
+            plan.resolver,
+        )
+    except visits_module.VisitError as caught:
+        raise _bad(str(caught)) from caught
 
 
 def _cohort(scope: Scope, spec: MetricSpec, time: TimeAxis | None) -> TimeAxis | None:
@@ -444,21 +488,28 @@ def plan(
                 errors.append(caught.message)
     if spec.time is None:
         warnings.append("시간 칸이 없습니다 — 추이 · 코호트는 못 보고, 셀에 기간이 없습니다.")
+    conds: list[conditions.Condition] = []
+    try:
+        conds = _filters(join_plan, scope, spec)
+    except AppError as caught:
+        errors.append(caught.message)
+    visits: visits_module.Visits | None = None
+    try:
+        visits = _visits(source, scope, spec, time, conds, join_plan)
+    except AppError as caught:
+        if spec.time is None or time is not None:
+            errors.append(caught.message)
     dims: list[Dim] = []
     seen: set[str] = set()
     if len(spec.dimensions) > MAX_DIMENSIONS:
         errors.append(f"기준은 {MAX_DIMENSIONS}개까지입니다.")
     for one in spec.dimensions[:MAX_DIMENSIONS]:
         try:
-            dims.append(_dimension(join_plan, one, seen))
+            dims.append(_dimension(join_plan, one, seen, visits))
         except AppError as caught:
-            errors.append(caught.message)
+            if one.address not in visits_module.ADDRESSES or spec.visits is None:
+                errors.append(caught.message)
         seen.add(one.name)
-    conds: list[conditions.Condition] = []
-    try:
-        conds = _filters(join_plan, scope, spec)
-    except AppError as caught:
-        errors.append(caught.message)
     denominator: MetricDef | None = None
     try:
         denominator = _denominator(db, spec, dims, self_slug=self_slug)
@@ -473,7 +524,7 @@ def plan(
     if errors:
         return Plan(False, errors, warnings, None, infos)
     built = Built(
-        source, scope, spec, join_plan, value, time, cohort, dims, conds, denominator
+        source, scope, spec, join_plan, value, time, cohort, dims, conds, denominator, visits
     )
     out = Plan(True, errors, warnings, built, infos)
     if estimate:
@@ -547,6 +598,11 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
         else:
             product *= max(int(found[0]), 1)
     for info, dim in zip(out.dims, built.dims, strict=True):
+        if dim.address in visits_module.ADDRESSES:
+            # 값의 가짓수가 정해져 있다 — 창 함수를 표본마다 돌리지 않는다.
+            info.distinct = visits_module.CARDINALITY[dim.address]
+            product *= info.distinct + 1
+            continue
         found = counted(func.count(func.distinct(dim.axis.expr)), axis=dim.axis)
         if found is None:
             unknown = True

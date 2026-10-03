@@ -379,3 +379,49 @@ class SprtOut(AnalysisHeader):
     reference_rates: list[ReferenceRateOut]
     looks: list[SprtLookOut]
     cohort_rows: list[SprtCohortOut]
+
+
+# --- ⑥ 재방문 위험 요인 --------------------------------------------------------------
+
+
+class LogitLevelOut(BaseModel):
+    key: str | None
+    label: str
+    count: int
+    """재방문 창이 닫힌 기록 수(예 + 아니오)."""
+    yes: int
+    rate: float | None
+    odds_ratio: float | None
+    """기준 수준 대비 — 기준 수준은 1, 불안정하면 없다."""
+    ci: list[float] | None
+    reference: bool
+    pooled: int
+    """「그 밖」 이면 모인 원래 값의 수."""
+    unstable: bool
+
+
+class LogitFactorOut(BaseModel):
+    name: str
+    label: str
+    chi2: float
+    """이 요인을 뺐을 때 이탈도가 는 양 — LR 검정 통계량."""
+    df: int
+    p_value: float
+    levels: list[LogitLevelOut]
+
+
+class LogitOut(AnalysisHeader):
+    within_days: int
+    repeat_dim: str
+    records: int
+    yes: int
+    no: int
+    rate: float | None
+    baseline_rate: float | None
+    """모든 요인이 기준 수준일 때의 재방문 확률."""
+    factors: list[LogitFactorOut]
+    deviance: float | None
+    null_deviance: float | None
+    auc: float | None
+    """예측 확률이 재방문 기록과 아닌 기록을 가르는 정도 — 0.5 면 못 가름."""
+    converged: bool | None

@@ -10251,6 +10251,22 @@
             "description": "경과 몇 개까지 쓸지 — 24 면 경과 0~23"
           },
           {
+            "name": "basis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "records",
+                "first_visits"
+              ],
+              "type": "string",
+              "description": "first_visits 면 시리얼마다 첫 방문만 센다(방문 기준이 있는 지표)",
+              "default": "records",
+              "title": "Basis"
+            },
+            "description": "first_visits 면 시리얼마다 첫 방문만 센다(방문 기준이 있는 지표)"
+          },
+          {
             "name": "cohort_from",
             "in": "query",
             "required": false,
@@ -10812,6 +10828,152 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/SprtOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/metrics/{slug}/analysis/logit": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Logit Analysis",
+        "description": "⑥ 재방문 위험 요인 — 방문 기준 「재방문」 을 요인별로 묶은 셀 위의 로지스틱. 요인마다\n오즈비 · 구간 · LR 검정, AUC. 거르기는 `d.<기준>=<값>`.",
+        "operationId": "logit_analysis_api_metrics__slug__analysis_logit_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "factors",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "요인 기준 이름들(쉼표) — 값이 적은 기준, 넷까지",
+              "title": "Factors"
+            },
+            "description": "요인 기준 이름들(쉼표) — 값이 적은 기준, 넷까지"
+          },
+          {
+            "name": "min_count",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100000,
+              "minimum": 1,
+              "description": "기록이 이보다 적은 값은 「그 밖」 으로 모은다",
+              "default": 30,
+              "title": "Min Count"
+            },
+            "description": "기록이 이보다 적은 값은 「그 밖」 으로 모은다"
+          },
+          {
+            "name": "period_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period From"
+            }
+          },
+          {
+            "name": "period_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 날 **앞까지**",
+              "title": "Period To"
+            },
+            "description": "이 날 **앞까지**"
+          },
+          {
+            "name": "cohort_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort From"
+            }
+          },
+          {
+            "name": "cohort_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort To"
+            }
+          },
+          {
+            "name": "compact",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "요인마다 값은 12개까지(MCP)",
+              "default": false,
+              "title": "Compact"
+            },
+            "description": "요인마다 값은 12개까지(MCP)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LogitOut"
                 }
               }
             }
@@ -20703,6 +20865,422 @@
         ],
         "title": "LoginResponse"
       },
+      "LogitFactorOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "chi2": {
+            "type": "number",
+            "title": "Chi2"
+          },
+          "df": {
+            "type": "integer",
+            "title": "Df"
+          },
+          "p_value": {
+            "type": "number",
+            "title": "P Value"
+          },
+          "levels": {
+            "items": {
+              "$ref": "#/components/schemas/LogitLevelOut"
+            },
+            "type": "array",
+            "title": "Levels"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label",
+          "chi2",
+          "df",
+          "p_value",
+          "levels"
+        ],
+        "title": "LogitFactorOut"
+      },
+      "LogitLevelOut": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "yes": {
+            "type": "integer",
+            "title": "Yes"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "odds_ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Odds Ratio"
+          },
+          "ci": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci"
+          },
+          "reference": {
+            "type": "boolean",
+            "title": "Reference"
+          },
+          "pooled": {
+            "type": "integer",
+            "title": "Pooled"
+          },
+          "unstable": {
+            "type": "boolean",
+            "title": "Unstable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "count",
+          "yes",
+          "rate",
+          "odds_ratio",
+          "ci",
+          "reference",
+          "pooled",
+          "unstable"
+        ],
+        "title": "LogitLevelOut"
+      },
+      "LogitOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "within_days": {
+            "type": "integer",
+            "title": "Within Days"
+          },
+          "repeat_dim": {
+            "type": "string",
+            "title": "Repeat Dim"
+          },
+          "records": {
+            "type": "integer",
+            "title": "Records"
+          },
+          "yes": {
+            "type": "integer",
+            "title": "Yes"
+          },
+          "no": {
+            "type": "integer",
+            "title": "No"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "baseline_rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Baseline Rate"
+          },
+          "factors": {
+            "items": {
+              "$ref": "#/components/schemas/LogitFactorOut"
+            },
+            "type": "array",
+            "title": "Factors"
+          },
+          "deviance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Deviance"
+          },
+          "null_deviance": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Null Deviance"
+          },
+          "auc": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Auc"
+          },
+          "converged": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Converged"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "within_days",
+          "repeat_dim",
+          "records",
+          "yes",
+          "no",
+          "rate",
+          "baseline_rate",
+          "factors",
+          "deviance",
+          "null_deviance",
+          "auc",
+          "converged"
+        ],
+        "title": "LogitOut"
+      },
       "MaintenanceItemOut": {
         "properties": {
           "key": {
@@ -21379,6 +21957,16 @@
             "minimum": 0.0,
             "title": "Settle Days",
             "default": 0
+          },
+          "visits": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/VisitsIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "additionalProperties": false,
@@ -29525,6 +30113,29 @@
           "type"
         ],
         "title": "ValidationError"
+      },
+      "VisitsIn": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 200,
+            "minLength": 1,
+            "title": "Key"
+          },
+          "within_days": {
+            "type": "integer",
+            "maximum": 3650.0,
+            "minimum": 1.0,
+            "title": "Within Days",
+            "default": 90
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "key"
+        ],
+        "title": "VisitsIn"
       },
       "WatchOut": {
         "properties": {

@@ -35,6 +35,7 @@ from app.config import get_settings
 from app.modules.accounts.models import User
 from app.modules.metrics import schemas
 from app.modules.metrics import spec as spec_module
+from app.modules.metrics import visits as visits_module
 from app.modules.metrics.models import MetricDef, MetricRun, MetricValue
 from app.modules.objects import axes
 from app.modules.objects.summary import METRIC_LABELS
@@ -472,6 +473,10 @@ def _dim_condition(
     params: dict[str, str], partial: list[str], dim: spec_module.Dim, value: str | None
 ) -> None:
     address = dim.address
+    if address in visits_module.ADDRESSES:
+        # 방문 차례 · 재방문은 같은 시리얼의 다른 기록에 달린 값이라 목록 조건이 없다.
+        partial.append(dim.name)
+        return
     own = address.startswith("properties.")
     field_name = address.split(".", 1)[1] if own else address
     if value is None:

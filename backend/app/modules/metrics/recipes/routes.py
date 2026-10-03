@@ -13,11 +13,12 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.metrics import compute, params, query, services
-from app.modules.metrics.recipes import changes, control, life, pareto, sprt
+from app.modules.metrics.recipes import changes, control, life, logit, pareto, sprt
 from app.modules.metrics.recipes.schemas import (
     ChangesOut,
     ControlOut,
     LifeOut,
+    LogitOut,
     ParetoOut,
     SprtOut,
 )
@@ -81,6 +82,10 @@ def life_analysis(
     max_age: int | None = Query(
         default=None, ge=1, le=600, description="경과 몇 개까지 쓸지 — 24 면 경과 0~23"
     ),
+    basis: Literal["records", "first_visits"] = Query(
+        default="records",
+        description="first_visits 면 시리얼마다 첫 방문만 센다(방문 기준이 있는 지표)",
+    ),
     cohort_from: str | None = Query(default=None),
     cohort_to: str | None = Query(default=None, description="이 날 **앞까지**"),
     compact: bool = Query(default=False, description="곡선 · 코호트 줄을 빼고 요약만(MCP)"),
@@ -95,7 +100,15 @@ def life_analysis(
     built = compute.built_of(db, metric)
     ask = params.ask_from_request(request, cohort_from=cohort_from, cohort_to=cohort_to)
     return life.run(
-        db, user, metric, built, ask, model=model, max_age=max_age, compact=compact
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        model=model,
+        max_age=max_age,
+        basis=basis,
+        compact=compact,
     )
 
 
@@ -225,5 +238,48 @@ def sprt_analysis(
         rho=rho,
         alpha=alpha,
         beta=beta,
+        compact=compact,
+    )
+
+
+@router.get("/logit", response_model=LogitOut)
+def logit_analysis(
+    slug: str,
+    request: Request,
+    factors: str = Query(description="요인 기준 이름들(쉼표) — 값이 적은 기준, 넷까지"),
+    min_count: int = Query(
+        default=logit.MIN_COUNT,
+        ge=1,
+        le=100_000,
+        description="기록이 이보다 적은 값은 「그 밖」 으로 모은다",
+    ),
+    period_from: str | None = Query(default=None),
+    period_to: str | None = Query(default=None, description="이 날 **앞까지**"),
+    cohort_from: str | None = Query(default=None),
+    cohort_to: str | None = Query(default=None),
+    compact: bool = Query(default=False, description="요인마다 값은 12개까지(MCP)"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> LogitOut:
+    """⑥ 재방문 위험 요인 — 방문 기준 「재방문」 을 요인별로 묶은 셀 위의 로지스틱. 요인마다
+    오즈비 · 구간 · LR 검정, AUC. 거르기는 `d.<기준>=<값>`."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(
+        request,
+        period_from=period_from,
+        period_to=period_to,
+        cohort_from=cohort_from,
+        cohort_to=cohort_to,
+    )
+    return logit.run(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        factors=params.names(factors),
+        min_count=min_count,
         compact=compact,
     )

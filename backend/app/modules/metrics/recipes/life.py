@@ -51,6 +51,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.metrics import query
 from app.modules.metrics import spec as spec_module
+from app.modules.metrics import visits as visits_module
 from app.modules.metrics.models import MetricDef
 from app.modules.metrics.recipes import _numeric, common, registry
 from app.modules.metrics.recipes.schemas import (
@@ -564,6 +565,7 @@ def run(
     *,
     model: Literal["auto", "weibull", "defective"] = "auto",
     max_age: int | None = None,
+    basis: Literal["records", "first_visits"] = "records",
     compact: bool = False,
 ) -> LifeOut:
     reason = available(built)
@@ -571,7 +573,18 @@ def run(
         raise common.refuse(24, reason)
     assert built.cohort is not None and built.time is not None
     grain = built.cohort.grain
-    ask = replace(ask, dims=[], by=("cohort", "age"), age_from=0)
+    filters = dict(ask.filters)
+    if basis == "first_visits":
+        # 첫 방문만 — 같은 시리얼이 다시 온 기록을 빼면 기록 수가 곧 고장 난 대수다.
+        number = next((one for one in built.dims if one.address == visits_module.NUMBER), None)
+        if number is None:
+            raise common.refuse(
+                30,
+                "첫 방문 기준은 방문 기준 「방문 차례」(visit.number)가 있는 지표에서만 "
+                "됩니다 — 정의에 visits(시리얼 칸 · 일수)를 두고 그 기준을 더합니다.",
+            )
+        filters[number.name] = "1"
+    ask = replace(ask, dims=[], by=("cohort", "age"), age_from=0, filters=filters)
     common.require_exact_counts(built, ask)
     frame = query.frame(db, user, metric, built, ask)
     common.require_whole(frame)
@@ -605,12 +618,19 @@ def run(
             level="info",
             count=excluded["open_cells"],
         )
-    caveats.add(
-        "records_not_units",
-        "기록 수를 고장 대수로 봅니다 — 같은 제품이 다시 들어온 기록이 섞이면 수명이 짧게 "
-        "나옵니다.",
-        level="info",
-    )
+    if basis == "first_visits":
+        caveats.add(
+            "first_visits",
+            "시리얼마다 첫 방문만 셉니다 — 다시 온 기록과 시리얼이 빈 기록은 빠집니다.",
+            level="info",
+        )
+    else:
+        caveats.add(
+            "records_not_units",
+            "기록 수를 고장 대수로 봅니다 — 같은 제품이 다시 들어온 기록이 섞이면 수명이 짧게 "
+            "나옵니다.",
+            level="info",
+        )
     if grain in ("quarter", "year"):
         caveats.add(
             "coarse_grain",
@@ -646,7 +666,7 @@ def run(
             f"관측 안의 건수가 {int(data.total_failures)}건이라 와이블을 맞추지 않았습니다 — "
             "비모수 곡선만 봅니다.",
         )
-    found = _Found(data, cohorts, fits, chosen, statistic, p_value)
+    found = _Found(data, cohorts, fits, chosen, statistic, p_value, basis)
     return _out(
         db, user, metric, built, ask, frame, caveats, excluded, found, model, max_age, compact
     )
@@ -660,6 +680,7 @@ class _Found:
     chosen: Fit | None
     statistic: float | None
     p_value: float | None
+    basis: Literal["records", "first_visits"] = "records"
 
 
 def _out(
@@ -792,13 +813,18 @@ def _out(
         frame,
         recipe=NAME,
         method=METHOD,
-        params={"model": model, "max_age": max_age, "compact": compact},
+        params={
+            "model": model,
+            "max_age": max_age,
+            "basis": found.basis,
+            "compact": compact,
+        },
         caveats=caveats,
         excluded=excluded,
     )
     return LifeOut(
         **head,
-        basis="records",
+        basis=found.basis,
         time_unit=grain,
         units=data.units if data is not None else 0.0,
         failures=int(data.total_failures) if data is not None else 0,

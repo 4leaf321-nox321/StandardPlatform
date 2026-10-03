@@ -22,7 +22,7 @@ import hashlib
 import re
 import uuid
 from collections.abc import Callable
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime, timedelta
 from itertools import chain
 from typing import Any
 
@@ -49,6 +49,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.modules.coreapi import services as coreapi_services
 from app.modules.metrics import spec as spec_module
+from app.modules.metrics import visits as visits_module
 from app.modules.metrics.models import MetricDef, MetricRun, MetricValue
 from app.modules.objects import axes, conditions
 from app.modules.objects.models import ObjectInstance
@@ -65,12 +66,21 @@ def lock_key(slug: str) -> int:
     return int.from_bytes(digest, "big", signed=True)
 
 
-def statement(built: spec_module.Built, *, metric_id: uuid.UUID, run_id: uuid.UUID) -> Insert:
+def statement(
+    built: spec_module.Built,
+    *,
+    metric_id: uuid.UUID,
+    run_id: uuid.UUID,
+    cutoff: date | None = None,
+) -> Insert:
     """`INSERT INTO metric_values … SELECT … GROUP BY`.
 
     안쪽이 (부서, 기간, 코호트, 기준 값들)로 묶고, 바깥이 그 위에 경과 · 기준 JSON · 해시를
     얹는다 — 바깥은 셀 수만큼만 돈다. NULL 은 **종류를 박아** 넣는다: 서브쿼리의 맨
     NULL 은 text 가 되어 date 열에 못 들어간다.
+
+    `cutoff` 는 방문 기준의 닫힘선(워터마크 - 닫힘 일수) — 재방문 창이 이것을 넘으면 「아직
+    열림」 이다.
     """
     value = built.value
     ws = ObjectInstance.owner_workspace_id
@@ -154,6 +164,8 @@ def statement(built: spec_module.Built, *, metric_id: uuid.UUID, run_id: uuid.UU
         grouped.c.vmin,
         grouped.c.vmax,
     )
+    if built.visits is not None and cutoff is not None:
+        outer = outer.params({visits_module.CUTOFF: cutoff})
     return insert(MetricValue).from_select(
         [
             MetricValue.metric_id,
@@ -204,16 +216,20 @@ def run_one(
     if _WORK_MEM_RE.match(work_mem):
         # 묶기가 디스크로 넘어가면 열 배 느리다. 이 트랜잭션에서만.
         db.execute(text(f"SET LOCAL work_mem = '{work_mem}'"))
+    watermark = coreapi_services.watermark(db)
     run = MetricRun(
         metric_id=metric.id,
         job_id=job_id,
         status="running",
-        watermark=coreapi_services.watermark(db),
+        watermark=watermark,
     )
     db.add(run)
     db.flush()
     progress(f"{metric.label} 계산", 0, 0)
-    db.execute(statement(built, metric_id=metric.id, run_id=run.id))
+    # 읽기의 닫힘(`query.closed_before`)과 같은 선 — 방문의 「아직 열림」 이 그것을 따른다.
+    seen = (watermark or datetime.now(UTC)).astimezone(UTC).date()
+    cutoff = seen - timedelta(days=built.spec.settle_days)
+    db.execute(statement(built, metric_id=metric.id, run_id=run.id, cutoff=cutoff))
 
     mine = (MetricValue.metric_id == metric.id, MetricValue.run_id == run.id)
     totals = db.execute(
