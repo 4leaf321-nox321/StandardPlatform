@@ -627,6 +627,10 @@ def test_적재_뒤_훅이_작업을_넣고_중복은_안_넣는다(
     from app.modules.ontology.models import ObjectType
 
     vendor = _vendor_type(client, admin)
+    # 가짜 서버의 이름을 바꿔 둔다 — 「ANSYS Inc.」 를 더 만들면 검색 시험(`search("ansys")`)의
+    # 상한 안에서 그 줄이 밀려난다(실측: 전체 시험에서만 깨졌다).
+    for row in plm.rows:
+        row["Name"] = f"벤더 {row['VendorNo']}"
     spec = {
         "measure": "count",
         "dimensions": [{"name": "country", "address": "properties.country"}],
@@ -772,3 +776,9 @@ def test_타이머_스크립트는_차례인_것만_넣고_겹치지_않는다(
         )
         assert f"{manual['slug']}: 작업" in capsys.readouterr().out
         assert module.enqueue(db, Namespace(due=False, all=False, slug="nope", now=False)) == 1
+    # 넣어 둔 작업을 여기서 비운다 — 남겨 두면 뒤의 시험이 `process_one` 으로 **남의 작업**을
+    # 집어 자기 작업이 안 돈 줄 안다(실측: 웹훅 시험 둘이 그렇게 깨졌다).
+    from app.modules.jobs import services as job_services
+
+    while job_services.process_one("test-worker"):
+        pass

@@ -70,6 +70,9 @@ DENOMINATOR_TIMES = ("period", "cohort")
 ESTIMATE_SECONDS = 20
 #: 자유 글자 기준의 값이 이보다 많으면 경고 — 셀이 행 수만큼 나온다.
 MANY_VALUES = 1000
+#: 기준마다의 서로 다른 값 수는 이만큼의 **표본**에서 센다. 200만 건을 기준마다 훑으면 계획
+#: 하나에 50초였다(실측) — 어림이 목적이라 표본이면 된다. 행 수는 정확히 센다.
+SAMPLE_ROWS = 200_000
 
 
 class TimeAxisIn(BaseModel):
@@ -492,6 +495,12 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
     settings = get_settings()
     out.rows = count_of(db, built.base())
 
+    sampled = out.rows > SAMPLE_ROWS
+    if sampled:
+        out.warnings.append(
+            f"기준의 값 수는 {SAMPLE_ROWS:,}건 표본에서 어림했습니다 — 셀 수도 어림입니다."
+        )
+
     def counted(*columns: Any, axis: axes.Axis | None = None) -> Any | None:
         stmt = (
             select(*columns)
@@ -503,6 +512,8 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
         if axis is not None:
             stmt = axes.joined(stmt, axis)
         stmt = conditions.apply(stmt, built.scope.defs, built.conds, built.plan.resolver)
+        if sampled:
+            stmt = stmt.where(ObjectInstance.id.in_(built.base().limit(SAMPLE_ROWS)))
         return _guarded(db, stmt)
 
     product = 1

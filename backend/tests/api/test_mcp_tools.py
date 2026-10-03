@@ -604,15 +604,18 @@ def test_타입을_모르면_search_부서를_모르면_whoami(bot: Bot) -> None
     me = bot.call(server.whoami)
     assert me["home_workspace_slug"] and isinstance(me["memberships"], list)
 
+    # **고유한 말로 찾는다.** 「ansys」 로 찾으면 다른 시험들이 남긴 「ANSYS Inc.」 들이 이름순
+    # 상한(20줄) 안을 먼저 채워 이 줄이 밀려난다 — 시험 DB 를 스위트가 함께 쓰므로 수가 변한다.
+    label = f"Ansys {vendor}"
     bot.call(
         server.object_create,
         vendor,
-        label="Ansys",
+        label=label,
         workspace_slug=me["home_workspace_slug"],
     )
-    found = bot.call(server.search, "ansys")
+    found = bot.call(server.search, vendor)
     assert any(t["type_slug"] == vendor and t["count"] == 1 for t in found["types"])
-    assert any(one["label"] == "Ansys" for one in found["items"])
+    assert any(one["label"] == label for one in found["items"])
 
 
 def test_잘못_이은_관계는_고치고_끊는다(bot: Bot) -> None:
