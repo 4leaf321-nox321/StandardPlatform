@@ -62,6 +62,14 @@ export interface MetricDim {
   distinct?: number | null
 }
 
+/** 이 지표에 되는 분석 — 안 되면 그 이유(ADR 0014). */
+export interface AnalysisAvail {
+  recipe: string
+  label: string
+  ok: boolean
+  reason: string | null
+}
+
 export interface Metric {
   id: string
   slug: string
@@ -86,6 +94,8 @@ export interface Metric {
   last_error: string | null
   cells: number
   stale: boolean
+  /** 되는 분석과 안 되는 이유 — 서버가 정의를 보고 판단한다. */
+  analyses: AnalysisAvail[]
   created_at: string
   updated_at: string
 }
@@ -324,4 +334,21 @@ export const metricsApi = {
     ),
   dims: (slug: string, name: string, q?: string) =>
     api.get<DimValues>(`/metrics/${slug}/dims${readParams({}, { name, q })}`),
+  /**
+   * 분석 — 세어 둔 셀 위의 통계(ADR 0014). `options` 는 레시피마다의 질의, 기준 거르기는
+   * 읽기와 같은 `filters`. 빈 값은 보내지 않는다.
+   */
+  analysis: <T>(
+    slug: string,
+    recipe: string,
+    options: Record<string, string | number | boolean | null | undefined>,
+    opts: ReadOptions = {},
+  ) => {
+    const extra: Record<string, string | undefined> = {}
+    for (const [key, value] of Object.entries(options)) {
+      if (value === null || value === undefined || value === '') continue
+      extra[key] = typeof value === 'boolean' ? (value ? 'true' : 'false') : String(value)
+    }
+    return api.get<T>(`/metrics/${slug}/analysis/${recipe}${readParams(opts, extra)}`)
+  },
 }

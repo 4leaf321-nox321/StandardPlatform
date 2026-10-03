@@ -60,6 +60,7 @@ const METRIC: Metric = {
   last_error: null,
   cells: 12,
   stale: false,
+  analyses: [],
   created_at: '2026-10-01T00:00:00+09:00',
   updated_at: '2026-10-01T00:00:00+09:00',
 }

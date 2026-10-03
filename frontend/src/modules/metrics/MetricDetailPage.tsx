@@ -1,5 +1,5 @@
 /**
- * 지표 하나 — **표 · 추이 · 코호트**, 그리고 셀마다 「N건 보기」.
+ * 지표 하나 — **표 · 추이 · 코호트 · 분석**, 그리고 셀마다 「N건 보기」.
  *
  * 머리에 계산 시각 · 닫힌 기간 · 겹침 · 못 묶은 수를 적는다 — 세어 둔 값은 그 사실을 숨기면
  * 안 된다. 기준 값으로 거르면 분모도 같이 걸리고, 셀의 수는 목록 조건으로 그대로 돌아간다.
@@ -8,7 +8,7 @@
  * 물을 자리가 여기다(운영 안내 5d 가 이 탭을 가리킨다).
  */
 
-import { useMemo, useState } from 'react'
+import { Suspense, lazy, useMemo, useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 
 import { metricsApi } from '@/modules/metrics/api'
@@ -49,12 +49,15 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
+// 분석은 그림 도구가 무거워 탭을 열 때만 받는다.
+const AnalysisTab = lazy(() => import('@/modules/metrics/analysis/AnalysisTab'))
+
 const ALL = '__all__'
 const EMPTY = '__empty__'
 /** 코호트 표에 늘어놓을 경과 칸의 상한 — 그보다 길면 히트맵만 읽는다. */
 const AGES_IN_TABLE = 24
 
-type Tab = 'table' | 'series' | 'cohort' | 'runs'
+type Tab = 'table' | 'series' | 'cohort' | 'analysis' | 'runs'
 type By = 'none' | 'period' | 'cohort'
 
 const RUN_STATUS: Record<string, { label: string; className: string }> = {
@@ -272,6 +275,7 @@ export default function MetricDetailPage() {
           <TabsTrigger value="table">표</TabsTrigger>
           {found.grain && <TabsTrigger value="series">추이</TabsTrigger>}
           {found.cohort_grain && <TabsTrigger value="cohort">코호트</TabsTrigger>}
+          {found.analyses.length > 0 && <TabsTrigger value="analysis">분석</TabsTrigger>}
           <TabsTrigger value="runs">계산 기록</TabsTrigger>
         </TabsList>
 
@@ -416,6 +420,14 @@ export default function MetricDetailPage() {
           {cohort.error && <ErrorNotice error={cohort.error} />}
           {cohort.data && (
             <CohortView data={cohort.data} ratio={showRatio} cumulative={cumulative} />
+          )}
+        </TabsContent>
+
+        <TabsContent value="analysis" className="space-y-3">
+          {tab === 'analysis' && (
+            <Suspense fallback={<p className="text-muted-foreground text-sm">불러오는 중…</p>}>
+              <AnalysisTab metric={found} read={common} />
+            </Suspense>
           )}
         </TabsContent>
 
