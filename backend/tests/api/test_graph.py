@@ -213,6 +213,33 @@ def test_관계와_타입으로_거른다(client: TestClient, admin: Signed) -> 
     assert focus["truncated"] is True
 
 
+def test_참조_칸으로_이은_이웃도_타입으로_거른다(client: TestClient, admin: Signed) -> None:
+    """참조 칸(부품 → 공급사)의 선이 있을 때 타입으로 거르면 500 이었다 — 노드의 타입을 찾는
+    질의 결과를 사전으로 바꾸다 실패했다(v0.4.28 ~ 0.4.34). 관계 선만 있는 시험은 이 길을
+    안 지났다."""
+    part = _make_type(client, admin, label="부품")
+    vendor = _make_type(client, admin, label="공급사")
+    _make_property(
+        client,
+        admin,
+        part,
+        key="maker",
+        label="공급사",
+        data_type="object_ref",
+        ref_type_slug=vendor,
+    )
+    acme = _make_object(client, admin, vendor, label="ACME")
+    bolt = _make_object(client, admin, part, label="볼트", properties={"maker": acme["id"]})
+    _make_object(client, admin, part, label="너트", properties={"maker": acme["id"]})
+
+    vendors = _neighborhood(client, admin, bolt["id"], types=vendor)
+    assert {node["label"] for node in vendors["nodes"]} == {"볼트", "ACME"}
+    parts = _neighborhood(client, admin, acme["id"], types=part)
+    assert {node["label"] for node in parts["nodes"]} == {"ACME", "볼트", "너트"}
+    deeper = _neighborhood(client, admin, bolt["id"], types=f"{vendor},{part}", depth=2)
+    assert {node["label"] for node in deeper["nodes"]} == {"볼트", "ACME", "너트"}
+
+
 def test_남의_부서_객체는_이웃에도_굵기에도_안_샌다(
     client: TestClient, admin: Signed, member: Signed
 ) -> None:

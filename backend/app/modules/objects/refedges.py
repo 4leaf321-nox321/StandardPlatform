@@ -300,11 +300,13 @@ def neighbor_edges(
 def _types_of(db: Session, ids: set[uuid.UUID]) -> dict[uuid.UUID, uuid.UUID]:
     if not ids:
         return {}
-    return dict(
-        db.execute(
-            select(ObjectInstance.id, ObjectInstance.type_id).where(ObjectInstance.id.in_(ids))
-        ).tuples()
-    )
+    # **`.all()` 로 줄 목록을 만든 뒤 사전으로.** 결과 객체를 바로 `dict()` 에 넣으면 그것이
+    # `keys()`(열 이름)를 가져 사전으로 읽히고, `결과[열 이름]` 에서 TypeError 가 난다 —
+    # 참조 선이 있는 이웃을 타입으로 거르면 늘 500 이었다(v0.4.28 ~ 0.4.34).
+    rows = db.execute(
+        select(ObjectInstance.id, ObjectInstance.type_id).where(ObjectInstance.id.in_(ids))
+    ).tuples()
+    return dict(rows.all())
 
 
 def induced_edges(

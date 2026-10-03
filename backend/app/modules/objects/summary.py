@@ -225,7 +225,7 @@ def summarize(
     등급은 어떻게 되나」 이기 때문이다. 그때 거르기를 등급마다 바꿔 가며 여섯 번 세는
     것이 지금까지의 방법이었고, 그것은 사람이 그 답을 포기하게 만든다.
 
-    `grain` 은 날짜 축의 기간 단위(기본 해) — 기준 · 세부 기준 둘 다에 걸린다.
+    `grain` 은 날짜 축의 기간 단위(기본 해) — 기준 · 세부 기준 중 날짜인 쪽에 건다.
     """
     if metric not in METRICS:
         raise AppError(
@@ -242,7 +242,13 @@ def summarize(
     scope = as_scope(db, target)
     defs = scope.defs
     plan = axes.JoinPlan(db, scope, prefix="g")
-    group = plan.axis(group_by, grain=grain)
+    # 기간 단위는 날짜인 축에 건다 — 화면의 고르개 하나가 기준 · 세부 기준 중 날짜인 쪽의
+    # 것이다. 기준이 날짜가 아니고 세부 기준이 날짜면 세부 기준만 받는다. 둘 다 아니면 기준이
+    # 받아 「날짜 칸이 아니다」 로 거절한다(조용히 버리면 고른 단위가 무시된 그림이 「월별」 로
+    # 읽힌다).
+    split_dated = bool(split_by) and plan.dated(split_by or "")
+    group_grain = None if split_dated and not plan.dated(group_by) else grain
+    group = plan.axis(group_by, grain=group_grain)
     key_expr = group.expr
     value_expr = axes.metric_expr(defs, metric, metric_field, METRIC_LABELS)
 
@@ -355,7 +361,8 @@ def _split(
     화면이 칸마다 나오는 순서대로 계열을 만들면 첫 칸에 없던 값이 뒤에서 튀어나와
     **색이 밀린다** — 같은 값이 그림 안에서 두 색을 갖는다.
     """
-    split = plan.axis(split_by, grain=grain)
+    # 기간 단위는 날짜 기준의 것 — 세부 기준은 그것도 날짜일 때만 받는다.
+    split = plan.axis(split_by, grain=grain if plan.dated(split_by) else None)
     key_expr = group.expr
     counted = func.count().label("n")
     columns: list[Any] = [key_expr.label("k"), split.expr.label("s"), counted]
@@ -517,7 +524,9 @@ def points(
     y_def = _number_def(defs, y) if y else None
     axis = None
     if group_by:
-        axis = axes.JoinPlan(db, scope, prefix="g").axis(group_by, grain=grain)
+        plan = axes.JoinPlan(db, scope, prefix="g")
+        # 분포의 묶음은 화면의 세부 기준이다 — 날짜일 때만 기간 단위를 받는다.
+        axis = plan.axis(group_by, grain=grain if plan.dated(group_by) else None)
     group_expr = axis.expr if axis else None
     group_label = axis.label if axis else ""
 

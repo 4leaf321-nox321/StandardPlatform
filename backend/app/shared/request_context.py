@@ -89,6 +89,13 @@ class RequestIdMiddleware:
 
         try:
             await self.app(scope, receive, send_wrapper)
-        finally:
+        except BaseException:
+            # **예외가 나가면 되돌리지 않는다.** 처리 못 한 예외의 500 은 이 미들웨어
+            # 바깥(Starlette 의 ServerErrorMiddleware)의 처리기가 만든다 — 여기서 되돌리면
+            # 그 처리기의 본문 · 로그가 「-」 를 보고, 정작 신고가 필요한 오류에서 요청 ID 가
+            # 사라진다(v0.4.34 까지 모든 500 이 그랬다). 요청마다 태스크가 따로라 값이 다음
+            # 요청으로 새지 않는다.
+            raise
+        else:
             _request_id.reset(token)
             _actor.reset(actor)

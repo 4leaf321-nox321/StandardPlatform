@@ -136,6 +136,29 @@ describe('통계', () => {
     expect(screen.getByText(/조건에 맞는 전체 5건/)).toBeInTheDocument()
   })
 
+  it('날짜가 아닌 기준이면 남아 있던 기간 단위를 안 보낸다', async () => {
+    // 날짜 기준에서 「월」 을 고른 뒤 등급으로 바꾼 상태 — 단위를 보내면 서버가 거절했다.
+    objectApi.summary.mockClear()
+    await panel(BASE, { groupBy: 'properties.grade', grain: 'month' })
+    await waitFor(() => expect(objectApi.summary).toHaveBeenCalled())
+    for (const call of objectApi.summary.mock.calls) {
+      expect(call[2]).toMatchObject({ groupBy: 'properties.grade', grain: null })
+    }
+  })
+
+  it('날짜 기준이면 고른 기간 단위를 보낸다', async () => {
+    objectApi.summary.mockClear()
+    const dated = {
+      ...BASE,
+      group_field: 'properties.made',
+      group_options: [...BASE.group_options, { field: 'properties.made', label: '만든 날', kind: 'date' }],
+    }
+    await panel(dated, { groupBy: 'properties.made', grain: 'month' })
+    await waitFor(() =>
+      expect(objectApi.summary.mock.calls.at(-1)?.[2]).toMatchObject({ grain: 'month' }),
+    )
+  })
+
   it('접힌 그룹이 있으면 몇 종류 몇 건이 빠졌는지 적는다', async () => {
     await panel({ ...BASE, total: 40, other_groups: 7, other_count: 35 })
     expect(screen.getByText(/7종류 35건은 접혔습니다/)).toBeInTheDocument()

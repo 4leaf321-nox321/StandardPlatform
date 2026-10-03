@@ -207,6 +207,21 @@ export function SummaryPanel({
   const myWorkspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
   const canPin = pinnable && Boolean(myWorkspace && isManagerOf(user, myWorkspace))
 
+  /** 기준이나 세부 기준이 날짜 칸인가 — 그때만 기간 단위와 「시간순」 이 뜻이 있다. */
+  const dated = useMemo(() => {
+    const kinds = new Set(['date', 'datetime'])
+    const kindOf = (field: string) =>
+      (data?.group_options ?? []).find((one) => one.field === field)?.kind ?? ''
+    return (
+      kinds.has(kindOf(groupBy)) || (settings.splitBy ? kinds.has(kindOf(settings.splitBy)) : false)
+    )
+  }, [data, groupBy, settings.splitBy])
+  /**
+   * 보낼 기간 단위 — 기준이나 세부 기준 중 날짜가 있을 때만. 날짜 기준에서 월을 고른 뒤 다른
+   * 기준으로 바꾸면 고른 단위가 남아, 날짜가 아닌 칸에 기간 단위를 걸었다는 거절이 났다.
+   */
+  const grain = dated ? settings.grain || null : null
+
   // 필터가 바뀌면 다시 센다. `query` 는 매 렌더 새 객체라 **내용**으로 비교한다 —
   // 안 그러면 이 효과가 끝없이 돈다.
   const signature = JSON.stringify(query)
@@ -227,7 +242,7 @@ export function SummaryPanel({
           x,
           y: settings.chart === 'scatter' ? settings.y || numbers[1]?.field : null,
           groupBy: settings.splitBy || (settings.chart === 'box' ? groupBy : null),
-          grain: settings.grain || null,
+          grain,
         })
         .then((found) => {
           if (cancelled) return
@@ -251,7 +266,7 @@ export function SummaryPanel({
         metric,
         metricField: metric === 'count' ? null : metricField,
         order: settings.order,
-        grain: settings.grain || null,
+        grain,
       })
       .then((found) => {
         if (cancelled) return
@@ -275,7 +290,7 @@ export function SummaryPanel({
     metric,
     metricField,
     settings.order,
-    settings.grain,
+    grain,
     raw,
     settings.chart,
     settings.x,
@@ -317,15 +332,6 @@ export function SummaryPanel({
     [data],
   )
   const canFilter = Boolean(data && filterable(data.group_field))
-  /** 기준이나 세부 기준이 날짜 칸인가 — 그때만 기간 단위와 「시간순」 이 뜻이 있다. */
-  const dated = useMemo(() => {
-    const kinds = new Set(['date', 'datetime'])
-    const kindOf = (field: string) =>
-      (data?.group_options ?? []).find((one) => one.field === field)?.kind ?? ''
-    return (
-      kinds.has(kindOf(groupBy)) || (settings.splitBy ? kinds.has(kindOf(settings.splitBy)) : false)
-    )
-  }, [data, groupBy, settings.splitBy])
   const orders = dated ? ['desc', 'asc', 'key'] : ['desc', 'asc']
 
   /**
@@ -363,7 +369,7 @@ export function SummaryPanel({
           metric,
           metricField: metric === 'count' ? null : metricField,
           order: settings.order,
-          grain: settings.grain || null,
+          grain,
         },
         format,
         `${typeSlug}-${data?.group_label ?? '통계'}별.${format}`,
@@ -634,7 +640,7 @@ export function SummaryPanel({
                   chart: settings.chart,
                   stacked: settings.stacked,
                   order: settings.order,
-                  grain: settings.grain,
+                  grain: grain ?? undefined,
                 }
               : null
           }

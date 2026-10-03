@@ -684,6 +684,39 @@ def test_기간_단위마다_키와_이름이_다르다(client: TestClient, admi
     assert day["buckets"][0]["label"] == "2026-01-05"
 
 
+def test_날짜를_월로_묶고_날짜_아닌_칸으로_나눈다(
+    client: TestClient, admin: Signed, db: Any
+) -> None:
+    """화면의 기간 단위 고르개는 하나다(날짜 기준에 붙는다). 세부 기준은 그것이 날짜일 때만
+    같은 단위를 받는다 — 날짜를 월로 묶고 상태로 나누면 「상태는 날짜 칸이 아니다」 로
+    거절되던 것(v0.4.34 까지)."""
+    kind = _dated(client, admin, db)
+    found = _summary(
+        client,
+        admin,
+        kind,
+        group_by="properties.made",
+        grain="month",
+        split_by="status",
+        order="key",
+    )
+    assert found["grain"] == "month"
+    assert [one["label"] for one in found["buckets"]][:3] == ["2026-01", "2026-02", "2026-03"]
+    assert sum(part["count"] for part in found["buckets"][0]["parts"]) == 2
+    # 거꾸로 — 상태로 묶고 날짜(월)로 나누면 기간 단위는 세부 기준이 받는다.
+    flipped = _summary(
+        client, admin, kind, group_by="status", grain="month", split_by="properties.made"
+    )
+    assert "2026-01" in flipped["splits"] and "(월)" in flipped["split_label"]
+    # 분포 그림의 묶음(화면의 세부 기준)도 같다 — 숫자 칸이 없어도 거절 사유가 단위가 아니다.
+    points = client.get(
+        f"/api/objects/{kind}/points",
+        params={"x": "properties.made", "group_by": "status", "grain": "month"},
+        headers=admin.headers,
+    )
+    assert "기간 단위" not in points.text
+
+
 def test_기간_단위는_날짜_칸에만_모르는_단위는_거절(
     client: TestClient, admin: Signed, db: Any
 ) -> None:

@@ -23,6 +23,7 @@ from fastapi.responses import JSONResponse
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.branding import ERROR_PREFIX
+from app.shared.request_context import HEADER as REQUEST_ID_HEADER
 from app.shared.request_context import get_request_id
 
 logger = logging.getLogger(__name__)
@@ -246,10 +247,12 @@ def register_error_handlers(app: FastAPI) -> None:
         # 스택 트레이스를 반드시 남긴다. 사용자에게는 request_id 만 주고, 그 id 로
         # 로그에서 원본을 찾는다.
         logger.exception("%s %s -> 500 unhandled", request.method, request.url.path)
+        # 이 응답은 요청 ID 미들웨어 바깥에서 나가 그 헤더가 안 붙는다 — 여기서 단다.
         return JSONResponse(
             status_code=500,
             content=_body(
                 code("COMMON", 500),
                 "서버 오류가 발생했습니다. 요청 ID를 관리자에게 알려주세요.",
             ),
+            headers={REQUEST_ID_HEADER: get_request_id()},
         )

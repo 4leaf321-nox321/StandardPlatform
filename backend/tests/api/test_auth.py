@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import logging
+
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -13,6 +15,7 @@ from app.branding import ERROR_PREFIX
 from app.modules.accounts.models import User
 from app.modules.auth import security
 from app.modules.workspaces.models import Workspace
+from app.shared.request_context import get_request_id
 from tests.api.conftest import PASSWORD, Signed
 
 
@@ -78,6 +81,41 @@ def test_오류는_봉투와_요청id_를_싣는다(client: TestClient) -> None:
     assert error["request_id"]
     # 헤더로도 나간다 — 응답 본문을 못 읽는 상황에서도 끈이 남아야 한다.
     assert response.headers["X-Request-ID"] == error["request_id"]
+
+
+def test_처리_못한_오류에도_요청id_가_실린다() -> None:
+    """**500 이야말로 요청 ID 가 필요한 자리다.** 500 은 요청 ID 미들웨어 바깥의 처리기가
+    만드는데, 미들웨어가 먼저 값을 되돌려 본문 · 헤더 · 로그가 모두 「-」 였다 — 화면은
+    「요청 ID 를 알려 주세요」 라고 하면서 ID 를 안 줬다(v0.4.34 까지)."""
+    from app.main import app
+    from app.shared.auth import current_user
+
+    def boom() -> User:
+        raise RuntimeError("일부러 낸 오류")
+
+    logged: list[str] = []
+
+    class Grab(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            if "500 unhandled" in record.getMessage():
+                logged.append(get_request_id())
+
+    grab = Grab()
+    errors_log = logging.getLogger("app.shared.errors")
+    errors_log.addHandler(grab)
+    app.dependency_overrides[current_user] = boom
+    try:
+        response = TestClient(app, raise_server_exceptions=False).get("/api/auth/me")
+    finally:
+        app.dependency_overrides.pop(current_user, None)
+        errors_log.removeHandler(grab)
+    assert response.status_code == 500
+    error = response.json()["error"]
+    assert error["code"].endswith("COMMON-0500")
+    assert error["request_id"] not in ("", "-")
+    assert response.headers["X-Request-ID"] == error["request_id"]
+    # 로그의 그 줄에도 같은 ID — 신고받은 ID 로 스택 트레이스를 찾는다.
+    assert logged == [error["request_id"]]
 
 
 def test_세션은_한_번_쓰면_회전한다(client: TestClient, admin: Signed) -> None:

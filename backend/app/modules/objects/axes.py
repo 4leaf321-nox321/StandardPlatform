@@ -378,6 +378,26 @@ class JoinPlan:
             entity, owner, joins = end.entity, end.resolver, end.joins  # type: ignore[assignment]
         return end
 
+    def dated(self, address: str) -> bool:
+        """이 주소가 날짜 칸인가 — 기간 단위를 걸 수 있나.
+
+        화면에는 기간 단위 고르개가 하나다(날짜 기준에 붙는다). 세부 기준 · 분포의 묶음은
+        그것이 날짜일 때만 같은 단위를 받는다 — 날짜를 월로 묶고 상태로 나누면 「상태는 날짜
+        칸이 아니다」 로 거절되던 것(v0.4.34 까지)."""
+        if paths.is_path(address):
+            chain = self.resolver.parse_chain(address)
+            definition = chain.definition
+            return (
+                chain.field is not None
+                and definition is not None
+                and (definition.data_type in DATE_KINDS)
+            )
+        if address.startswith("properties."):
+            key = address.split(".", 1)[1]
+            found = next((one for one in self.scope.defs if one.key == key), None)
+            return found is not None and found.data_type in DATE_KINDS
+        return False
+
     def axis(self, address: str, *, grain: str | None = None) -> Axis:
         """주소 하나 → 기준. 식은 **글자**를 내놓는다 — 그래야 한 자리에서 상태·부서·속성을
         같은 규칙으로 다룬다. 여러 값 칸과 여럿과 이어진 걸음은 한 행이 여러 막대에 들고, 그
