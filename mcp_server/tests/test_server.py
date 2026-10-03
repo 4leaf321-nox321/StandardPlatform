@@ -520,3 +520,12 @@ def test_적재_도구가_맞춤과_검수를_보낸다() -> None:
 
     asyncio.run(server.aliases_review(_ctx("Bearer t"), "mach", ["a1"], action="remove"))
     assert b'"action":"remove"' in seen[-1].content
+
+
+def test_기동_블록_뒤에_도구가_없다() -> None:
+    """`mcp.run()` 은 블로킹이다 — 그 뒤에 적힌 `@tool()` 은 운영(`python server.py`)에서
+    등록되지 않는다. 확장 도구 둘이 그렇게 빠져 있었고, 이 시험은 모듈을 import 해 보므로
+    `list_tools` 로는 못 잡는다 — 그래서 **소스의 순서**를 본다."""
+    source = (Path(server.__file__)).read_text(encoding="utf-8")
+    boot = source.index('if __name__ == "__main__":')
+    assert "@tool()" not in source[boot:], "기동 블록 뒤에 도구가 있습니다 — 블록을 파일 끝으로"
