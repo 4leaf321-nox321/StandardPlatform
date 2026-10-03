@@ -109,6 +109,10 @@ def test_이중화는_공용_폴더와_로컬을_가른다(bundle: Path, tmp_pat
 
     sync = read(etc, "systemd/system/testplatform-sync.service")
     assert "--bind /data/common/testplatform/.env" in sync
+    # 지표 타이머(ADR 0013)도 같은 SIF · 같은 .env — 다른 파이썬이면 다른 스키마를 본다.
+    metrics = read(etc, "systemd/system/testplatform-metrics.service")
+    assert "--bind /data/common/testplatform/.env" in metrics
+    assert "recompute_metrics.py --due" in metrics and "@@" not in metrics
     backup = read(etc, "systemd/system/testplatform-backup.service")
     assert (
         "backup.sh -e /data/common/testplatform/.env -f /data/common/testplatform/filestore"

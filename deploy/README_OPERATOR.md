@@ -33,7 +33,8 @@ cd <slug>-<태그>
 ls
 #  app.sif  deploy.sh  ha.sh  pg-ha.sh  backup.sh  restore.sh
 #  app.service.template  worker.service.template  mcp.service.template  sync.service.template  sync.timer.template
-#  backup.service.template  backup.timer.template  .env.example  BUILD_INFO  README.md  쉬운-설치.md
+#  metrics.service.template  metrics.timer.template  backup.service.template  backup.timer.template
+#  .env.example  BUILD_INFO  README.md  쉬운-설치.md
 #  mcp_server/   (Claude 연동 MCP 서버 + 오프라인 설치용 휠)
 #  apptainer_debs/  (폐쇄망용 apptainer .deb — prepare 가 먼저 본다)
 ```
@@ -311,6 +312,21 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
   — 컨테이너 안 경로라 bind-mount 아래여야 한다(`/data/filestore/incoming` 권장). 안 적으면
   URL 로만 읽는다.
 
+## 5d. 지표 다시 계산 타이머
+
+지표(공통 › 지표 — 기록을 미리 세어 둔 값, ADR 0013)는 밤마다 다시 센다. `deploy.sh install`/`update`
+가 `<slug>-metrics.timer` 를 함께 설치한다 — 매일 02:30(백업 03:00 보다 앞이라 세어 둔 값까지 덤프에
+든다) 주기가 지난 지표마다 **작업 하나를 넣는다**(세는 것은 워커, 5b-2). 앱과 **같은 SIF·같은 .env**
+로 `scripts/recompute_metrics.py --due` 를 실행한다. 적재(데이터 소스 동기화 · 파일 가져오기)가 끝나면
+그 타입을 원천으로 쓰는 지표는 타이머를 기다리지 않고 바로 작업이 들어간다.
+
+- **상태**: `systemctl list-timers <slug>-metrics.timer` / 로그 `journalctl -u <slug>-metrics`
+- **끄기**: `METRICS_ENABLED=0 sudo ./deploy.sh update` (유닛은 `systemctl disable --now <slug>-metrics.timer`)
+- **손으로 한 번**: `sudo systemctl start <slug>-metrics` (차례가 된 것만) — 하나만 지정해 돌리려면
+  화면의 「지금 다시 계산」 이나 컨테이너 안에서 `scripts/recompute_metrics.py --slug <지표>`.
+- 결과는 화면(공통 › 지표 › 계산 기록)과 홈의 「남은 일」(실패 · 오래 안 셈)에 남는다.
+- 200만 건을 묶을 때 `work_mem` 이 모자라면 느리다 — `.env` 의 `METRICS_WORK_MEM`(기본 256MB).
+
 ---
 
 ## 6. 한 서버에 여러 플랫폼
@@ -321,7 +337,7 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 | --- | --- |
 | 설치 경로 | `~/apps/<slug>` |
 | 데이터베이스 · 역할 | `<slug>` |
-| systemd 유닛 | `<slug>.service` · `<slug>-mcp.service` · `<slug>-sync.timer` |
+| systemd 유닛 | `<slug>.service` · `<slug>-mcp.service` · `<slug>-sync.timer` · `<slug>-metrics.timer` |
 | 포트 | 설치 때 준 `APP_PORT` (없으면 `BUILD_INFO` 의 `port`) · MCP 는 +2 (플랫폼마다 10씩 벌린다) |
 
 **slug 가 겹치면 서로를 덮어쓴다.** 유닛 이름이 같으면 나중 배포가 앞의 것을

@@ -415,6 +415,16 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
             "통계 — 모델 시리즈별(참조 너머)",
             get(f"{cases_path}/summary", group_by="ref.model.series"),
         ),
+        (
+            "summary",
+            "통계 — 서비스월별 추이(기간 단위 · 시간순)",
+            get(
+                f"{cases_path}/summary",
+                group_by="properties.service_date",
+                grain="month",
+                order="key",
+            ),
+        ),
         ("search", "통합 검색", get("/api/search", q="C0012345")),
         # 두 글자 — trigram 은 세 글자부터라 조각 인덱스(0054)가 탄다. 흔한 조각(「C0」)은
         # 안 건다.
@@ -475,12 +485,109 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
         results.append(_import_plan(client, admin, url, 100_000))
     if not only or "infer" in (only or ""):
         results.append(_infer_plan(client, admin, url, 5_000))
+    if not only or "metrics" in (only or ""):
+        results.extend(_metrics_rehearsal(client, admin, url))
 
     print("\n| 영역 | 무엇 | 중앙값 | 비고 |\n| --- | --- | --- | --- |")
     for area, label, took, note in results:
         print(f"| {area} | {label} | {took} | {note} |")
     print()
     _explain(engine, typical)
+
+
+def _metrics_rehearsal(
+    client: Any, admin: dict[str, str], url: str
+) -> list[tuple[str, str, str, str]]:
+    """지표(ADR 0013) — 정의의 계획 · 전량 재계산 · 세 모양의 읽기. 재계산은 워커를 거치지
+    않고 이 자리에서 돌린다(재는 것은 SQL 한 문장이다). 끝나면 정의를 지운다."""
+    import uuid
+
+    from app.database import SessionLocal
+    from app.modules.metrics import services as metrics_services
+
+    out: list[tuple[str, str, str, str]] = []
+    slug = f"rh_{uuid.uuid4().hex[:6]}"
+    spec = {
+        "measure": "count",
+        "time": {"address": "properties.service_date", "grain": "month"},
+        "cohort": {"address": "properties.production_date", "grain": "month"},
+        "dimensions": [
+            {"name": "series", "address": "ref.model.series"},
+            {"name": "base_code", "address": "ref.model.base_code"},
+            {"name": "symptom", "address": "properties.symptom"},
+            {"name": "country", "address": "properties.country"},
+        ],
+        "settle_days": 60,
+    }
+    body = {"source_type_slug": "svc_case", "spec": spec}
+    started = time.perf_counter()
+    planned = client.post("/api/metrics/plan", json=body, headers=admin)
+    took = time.perf_counter() - started
+    note = (
+        f"ok={planned.json().get('ok')} rows={planned.json().get('rows')} "
+        f"cells~{planned.json().get('estimated_cells')}"
+        if planned.status_code == 200
+        else f"HTTP {planned.status_code} {planned.text[:160]}"
+    )
+    out.append(("metrics", "지표 계획(생산월 x 서비스월 x 기준 넷)", f"{took:.2f}초", note))
+    print(f"{took:8.2f}초  지표 계획  {note}", flush=True)
+    made = client.post(
+        "/api/metrics", json={"slug": slug, "label": "리허설", **body}, headers=admin
+    )
+    if made.status_code != 201:
+        out.append(("metrics", "지표 정의", "-", f"HTTP {made.status_code} {made.text[:160]}"))
+        return out
+    started = time.perf_counter()
+    with SessionLocal() as db:
+        try:
+            result = metrics_services.run_recompute(
+                db, [slug], job_id=None, progress=lambda *_: None
+            )
+            run = result["runs"][0]
+            note = f"cells={run.get('cells')} rows={run.get('rows')}"
+        except Exception as caught:  # 재는 자리다 — 이유만 적는다
+            note = f"실패 {type(caught).__name__}: {str(caught)[:120]}"
+    took = time.perf_counter() - started
+    out.append(("metrics", "지표 전량 재계산", f"{took:.2f}초", note))
+    print(f"{took:8.2f}초  지표 전량 재계산  {note}", flush=True)
+    reads = [
+        ("지표 표 — 시리즈 x 증상", f"/api/metrics/{slug}/values", {"dims": "series,symptom"}),
+        (
+            "지표 표 — 기본 코드별 · 월별",
+            f"/api/metrics/{slug}/values",
+            {"dims": "base_code", "by": "period"},
+        ),
+        ("지표 추이 — 시리즈별 선", f"/api/metrics/{slug}/series", {"split": "series"}),
+        ("지표 코호트 — 누적", f"/api/metrics/{slug}/cohort", {"cumulative": "true"}),
+        ("지표 기준 값 목록", f"/api/metrics/{slug}/dims", {"name": "base_code"}),
+    ]
+    for label, path, params in reads:
+        times: list[float] = []
+        shape = ""
+        for _ in range(3):
+            started = time.perf_counter()
+            got = client.get(path, params=params, headers=admin)
+            times.append(time.perf_counter() - started)
+            if got.status_code >= 400:
+                shape = f"HTTP {got.status_code} {got.text[:120]}"
+                break
+            body_json = got.json()
+            shape = (
+                f"cells {len(body_json.get('cells', []))}"
+                if "cells" in body_json
+                else f"lines {len(body_json.get('lines', []))}"
+                if "lines" in body_json
+                else f"rows {len(body_json.get('rows', []))}"
+                if "rows" in body_json
+                else f"values {len(body_json.get('values', []))}"
+            )
+            if body_json.get("truncated"):
+                shape += " truncated"
+        median = statistics.median(times)
+        out.append(("metrics", label, f"{median:.2f}초", shape))
+        print(f"{median:8.2f}초  {label}  {shape}", flush=True)
+    client.delete(f"/api/metrics/{slug}", headers=admin)
+    return out
 
 
 def _shape(body: Any) -> str:

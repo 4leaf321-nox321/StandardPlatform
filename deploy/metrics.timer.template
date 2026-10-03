@@ -1,0 +1,13 @@
+[Unit]
+Description=@@APP_NAME@@ 지표 다시 계산 타이머
+
+[Timer]
+# 밤마다 「차례가 된 지표」 를 묻는다. 지표마다의 주기(시간)는 화면에서 정한다 — 이 값은
+# 그 주기를 언제 확인하느냐일 뿐이다. 02:30 은 백업(03:00)보다 앞 — 세어 둔 값까지 덤프에 든다.
+OnCalendar=*-*-* 02:30
+# 두 서버가 같은 초에 깨어 서로 잠금을 다투지 않게 조금 흩뜨린다.
+RandomizedDelaySec=10min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
