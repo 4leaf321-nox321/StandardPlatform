@@ -2059,6 +2059,39 @@ async def metric_analyze(
 
 
 @tool()
+async def metric_alerts(ctx: Context, slug: str | None = None, limit: int = 20) -> Any:
+    """**내 경보와 최근 발생** — 「요즘 무엇이 울렸나」 · 「내가 지켜보는 게 뭐였지」
+    (ADR 0016).
+
+    경보는 사람이 화면의 「분석」 탭에서 「경보 저장」 으로 만든다 — 저장한 분석(순차 검정 ·
+    관리도 · 변화점)을 지표를 다시 셀 때마다 **그 사람의 눈으로** 돌려, 처음 보는 결론만 그
+    사람에게 알린다. 이 도구는 **읽기만** 한다(만들기 · 끄기는 화면에서 — 인자를 눈으로 보고
+    저장하게).
+
+    `slug` 를 주면 그 지표에 건 내 경보(`alerts[]` — 이름 · 분석 · 인자 · 켜짐 · 마지막 확인 ·
+    실패 이유)와 그 지표의 발생만, 비우면 내 모든 경보의 최근 발생 `limit` 개(새것부터).
+
+    발생(`events[]`)마다 `title`(한 줄 결론) · `detail`(수) · `created_at` · `link`(분석 탭을
+    그 인자로 여는 주소). `link` 의 인자를 `metric_analyze` 의 `options` 와 `filters`
+    (`d.<기준>`)로 옮기면 지금 셀로 같은 분석을 다시 본다.
+
+    **옮길 때 규칙.** 발생은 「그때 처음 본 결론」 이지 원인이 아니다 — 관리도 신호는 조사할
+    곳, 순차 검정 「나쁨」 은 정한 배수 쪽이라는 판정, 변화점의 「잠정」 은 잠정이다. 지금도
+    그런지는 `metric_analyze` 로 본다."""
+    events = await _get(
+        ctx, "/api/metrics/alerts/events", params=[("limit", str(max(1, min(limit, 200))))]
+    )
+    if not isinstance(events, list):
+        return events
+    if slug is None:
+        return {"events": events}
+    alerts = await _get(ctx, f"/api/metrics/{slug}/alerts")
+    if not isinstance(alerts, list):
+        return alerts
+    return {"alerts": alerts, "events": [one for one in events if one.get("metric") == slug]}
+
+
+@tool()
 async def metric_define(
     ctx: Context,
     slug: str,

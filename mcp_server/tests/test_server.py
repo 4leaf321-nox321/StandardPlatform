@@ -84,6 +84,7 @@ TOOLS = {
     "metric_list",
     "metric_query",
     "metric_analyze",
+    "metric_alerts",
     "metric_define",
 }
 
@@ -337,6 +338,28 @@ def test_분석은_레시피와_options_를_경로와_질의로_건넨다() -> N
     )
     assert "dim" in stray["error"] and "max_age" in stray["error"]
     assert seen == []
+
+
+def test_경보는_내_발생을_읽고_지표를_주면_그_지표만() -> None:
+    """만들기는 화면에서 — 이 도구는 읽기만 한다. 지표를 주면 그 지표의 경보와 발생만."""
+    events = [{"metric": "m1", "title": "a"}, {"metric": "m2", "title": "b"}]
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/metrics/alerts/events":
+            return httpx.Response(200, json=events)
+        return httpx.Response(200, json=[{"id": "x", "name": "경보"}])
+
+    seen = _serve(respond)
+    got = asyncio.run(server.metric_alerts(_ctx("Bearer t"), limit=999))
+    assert got == {"events": events}
+    assert seen[0].url.params["limit"] == "200" and seen[0].method == "GET"
+    seen = _serve(respond)
+    one = asyncio.run(server.metric_alerts(_ctx("Bearer t"), "m1"))
+    assert one == {"alerts": [{"id": "x", "name": "경보"}], "events": [events[0]]}
+    assert [request.url.path for request in seen] == [
+        "/api/metrics/alerts/events",
+        "/api/metrics/m1/alerts",
+    ]
 
 
 def test_이어진_칸의_주소는_서버에_묻는다() -> None:

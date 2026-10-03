@@ -28,6 +28,7 @@ GUIDE_VERSION: 2026-10-04e
 | 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
 | **비율 · 추이 · 코호트** — 「판매월별 누적 인입률」 「생산월 x 공장별 건수」 | `metric_list` → `metric_query(slug, shape=)` | **미리 세어 둔 값**이다 — `computed_at` · `stale` · `overlap` 을 함께 말한다. 없으면 `metric_define(apply=false)` 로 제안 |
 | **세어 둔 수에서 추론** — 「B10 수명」 「전작보다 나빠졌나」 「관리도 신호」 「언제 바뀌었나」 「몰려 있나」 | `metric_list` 의 `analyses` → `metric_analyze(slug, recipe, options=)` | **셀을 받아 직접 계산하지 않는다.** `caveats` 를 그대로 전하고, `unreachable` 인 B수명은 값이 없다 — `get_guide(topic="metrics")` 의 「분석」 |
+| **요즘 무엇이 울렸나** — 「내 경보」 「새로 나빠진 모델 있나」 | `metric_alerts(slug=)` | 발생은 「그때 처음 본 결론」 — 지금도 그런지는 `metric_analyze` 로. 만들기는 화면에서 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 한 걸음까지. 주소를 추측하지 않는다 |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | — |
 | 언제 누가 무엇을 바꿨나 — 이 객체 | `object_history` | 되돌리기는 `object_restore(entry_id)` — **시점은 사람이 정한다** |
@@ -861,6 +862,13 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
 - 근거는 지표 읽기와 같다 — `drill.params` → `objects_list` 의 `conditions`.
 - 거절(422)은 「틀린 수를 낼 자리」 다: 셀이 상한에서 잘렸다(좁혀서 다시), 여러 값 기준을
   묶지도 거르지도 않았다(`filters` 로 하나를 고른다). 우회하지 않는다.
+
+**경보 — 저장한 분석을 계산마다 다시(ADR 0016).** 사람이 화면의 분석 탭에서 「경보 저장」 을 누르면
+그 분석(순차 검정 · 관리도 · 변화점)을 지표를 다시 셀 때마다 **그 사람의 눈으로** 돌려, 처음 보는
+결론만 그 사람에게 알린다 — 순차 검정은 새로 선 「나쁨」, 관리도는 끝 부분군의 신호, 변화점은 끝
+몇 기간 안의 것. `metric_alerts` 는 내 경보와 최근 발생을 읽는다(만들기 · 끄기는 화면에서). 발생의
+`link` 인자를 `metric_analyze` 의 `options` · `filters` 로 옮기면 지금 셀로 다시 본다 — 발생은 그때의
+결론이고 원인이 아니다.
 
 **방문(재방문).** 같은 제품의 기록을 시리얼로 이어 보려면 정의에 `visits` 를 둔다 —
 `{"key": "properties.<시리얼 칸>", "within_days": 90}`. 그러면 기준 주소 `visit.number`(차례 1 · 2 ·

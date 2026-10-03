@@ -649,6 +649,8 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
         results.extend(_recipes_rehearsal(client, admin, url))
     if not only or "visits" in (only or ""):
         results.extend(_visits_rehearsal(client, admin, url))
+    if not only or "alerts" in (only or ""):
+        results.extend(_alerts_rehearsal(client, admin, url))
 
     print("\n| 영역 | 무엇 | 중앙값 | 비고 |\n| --- | --- | --- | --- |")
     for area, label, took, note in results:
@@ -1052,6 +1054,109 @@ def _recipes_rehearsal(
             f"HHI {found.get('hhi', 0):.4f} · 지니 {found.get('gini', 0):.3f} · "
             f"핵심 소수 {found.get('vital_few')} · 기준 {pareto['basis']}",
         )
+    finally:
+        for slug in reversed(made):
+            client.delete(f"/api/metrics/{slug}", headers=admin)
+    return out
+
+
+def _alerts_rehearsal(
+    client: Any, admin: dict[str, str], url: str
+) -> list[tuple[str, str, str, str]]:
+    """경보(ADR 0016) — 만들 때의 처음 확인과 **계산 하나에 붙는 확인 시간**.
+
+    정답: 뜨거운 기본 모델의 순차 검정은 만들 때 이미 「나쁨」 이라 그것이 「처음부터 있던
+    것」 이 되고, 같은 셀로 다시 확인하면 새것이 없다. 기본 모델은 모두 2019-01 에 처음 팔려
+    최근 출시 훑기는 0개, 전부(60기간)를 훑으면 2,001개라 상한에서 거절한다.
+    """
+    import uuid
+
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.modules.metrics import alerts as alerts_module
+    from app.modules.metrics.models import MetricDef
+
+    out: list[tuple[str, str, str, str]] = []
+    tag = uuid.uuid4().hex[:4]
+    every = {one[0]: one for one in _metric_definitions(tag)}
+    sales, prod = f"rh_sales_{tag}", f"rh_prod_{tag}"
+    first, third = f"rh_q1r_{tag}", f"rh_q3_{tag}"
+    definitions = [every[slug] for slug in (sales, prod, first, third)]
+    inside = {"cohort_from": "2019-03-01", "cohort_to": "2022-11-01"}
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("alerts", label, f"{took:.2f}초", note))
+        print(f"{took:8.2f}초  {label}  {note}", flush=True)
+
+    def create(slug: str, recipe: str, params: dict[str, str]) -> tuple[float, dict[str, Any]]:
+        started = time.perf_counter()
+        got = client.post(
+            f"/api/metrics/{slug}/alerts",
+            json={"name": f"리허설 {recipe}", "recipe": recipe, "params": params},
+            headers=admin,
+        )
+        took = time.perf_counter() - started
+        if got.status_code >= 400:
+            return took, {"error": f"HTTP {got.status_code} {got.text[:160]}"}
+        return took, dict(got.json())
+
+    def seen(body: dict[str, Any]) -> str:
+        if "error" in body:
+            return str(body["error"])
+        baseline = body.get("baseline") or {}
+        findings = baseline.get("findings") or []
+        head = f" · {findings[0]['title'][:60]}" if findings else ""
+        notes = " · ".join(baseline.get("notes") or [])[:120]
+        return f"처음부터 있던 것 {len(findings)}{head}" + (f" · {notes}" if notes else "")
+
+    made: list[str] = []
+    try:
+        if not _build_metrics(client, admin, definitions, row, made):
+            return out
+        with create_engine(url).connect() as connection:
+            hot = connection.execute(
+                text(
+                    "SELECT o.properties->>'base' FROM objects o "
+                    "JOIN object_types t ON t.id = o.type_id "
+                    "WHERE t.slug = 'plm_model' ORDER BY o.key LIMIT 1"
+                )
+            ).scalar()
+            typical = connection.execute(
+                text(
+                    "SELECT o.id FROM objects o JOIN object_types t ON t.id = o.type_id "
+                    "WHERE t.slug = 'plm_base' AND o.id::text <> :hot ORDER BY o.key "
+                    "OFFSET 1000 LIMIT 1"
+                ),
+                {"hot": str(hot)},
+            ).scalar()
+        took, body = create(first, "sprt", {"target": str(hot), "reference": str(typical)})
+        row("만들기 — 순차 검정(뜨거운 모델)", took, seen(body))
+        took, body = create(
+            third, "control", {"axis": "cohort", "window": "3", "split": "factory", **inside}
+        )
+        row("만들기 — 관리도(생산월 x 공장)", took, seen(body))
+        took, body = create(first, "changes", {"axis": "cohort", "window": "3", **inside})
+        row("만들기 — 변화점(판매월 코호트)", took, seen(body))
+        took, body = create(first, "sprt", {"launched_within": "6", "reference": str(typical)})
+        row("만들기 — 새 모델 훑기(최근 6기간)", took, seen(body))
+        took, body = create(
+            first, "sprt", {"launched_within": "60", "reference": str(typical)}
+        )
+        row("만들기 — 새 모델 훑기(60기간 = 전부)", took, seen(body))
+        # 계산 뒤의 확인 — 같은 셀이라 새것이 없어야 한다. 지표마다 그 경보 전부.
+        with SessionLocal() as db:
+            for slug in (first, third):
+                metric_id = db.scalars(
+                    select(MetricDef.id).where(MetricDef.slug == slug)
+                ).one()
+                started = time.perf_counter()
+                result = alerts_module.after_recompute(db, metric_id)
+                row(
+                    f"계산 뒤 확인 — {slug}",
+                    time.perf_counter() - started,
+                    f"경보 {result['alerts']} · 새것 {result['new']}",
+                )
     finally:
         for slug in reversed(made):
             client.delete(f"/api/metrics/{slug}", headers=admin)
@@ -1471,7 +1576,10 @@ def main() -> None:
     parser.add_argument("--repeat", type=int, default=3)
     parser.add_argument(
         "--only",
-        help="이 영역만 잰다(list · profile · graph · summary · metrics · recipes · visits …)",
+        help=(
+            "이 영역만 잰다(list · profile · graph · summary · metrics · recipes · visits · "
+            "alerts …)"
+        ),
     )
     args = parser.parse_args()
     if args.action == "create":

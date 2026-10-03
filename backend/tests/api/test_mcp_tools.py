@@ -1448,3 +1448,5 @@ def test_지표를_도구로_정의하고_읽으면_통계와_같은_수(bot: Bo
         bot.call(server.metric_analyze, slug, "life")
     with pytest.raises(ToolError, match="options"):
         bot.call(server.metric_analyze, slug, "pareto", options={"dim": "symptom", "x": 1})
+    # 경보 — 읽기만. 만든 것이 없으면 빈 목록이다.
+    assert bot.call(server.metric_alerts, slug) == {"alerts": [], "events": []}
