@@ -1216,3 +1216,61 @@ def test_한_파일_안의_순환도_계획에서_걸린다(client: TestClient, 
         headers=admin.headers,
     ).json()
     assert ok["applied"] is True, ok
+
+
+def test_날짜는_여러_표기와_연월을_받아_ISO_로_넣는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """월 집계 표(판매 · 생산)는 날이 없다 — 「2026-09」 를 **그 달 1일**로 받는다.
+    「2026.11.5」 · 「2026년 12월」 같은 표기도 ISO 로 바꿔 넣는다(종류 변경과 한 벌).
+    날짜 칸에 붙은 시각은 **조용히 버리지 않는다** — 그 행이 오류다."""
+    kind = _make_type(client, admin, label="판매", key_policy="required")
+    _make_property(client, admin, kind, key="month", label="판매월", data_type="date")
+    _make_property(client, admin, kind, key="at", label="집계 시각", data_type="datetime")
+    rows = [
+        {"key": "S-1", "label": "가", "month": "2026-09"},
+        {"key": "S-2", "label": "나", "month": "202610"},
+        {"key": "S-3", "label": "다", "month": "2026.11.5"},
+        {"key": "S-4", "label": "라", "month": "2026년 12월"},
+        {"key": "S-5", "label": "마", "month": "2026-12-02 00:00:00"},
+        # ISO 기본형은 늘 받던 것이라 그대로 둔다.
+        {"key": "S-6", "label": "바", "month": "20261203", "at": "2026.12.3 9:05"},
+    ]
+    got = client.post(
+        f"/api/objects/{kind}/import-rows",
+        json={"rows": rows, "apply": True},
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    assert got.json()["applied"] is True, got.json()
+    items = client.get(f"/api/objects/{kind}", headers=admin.headers).json()["items"]
+    assert {one["key"]: one["properties"].get("month") for one in items} == {
+        "S-1": "2026-09-01",
+        "S-2": "2026-10-01",
+        "S-3": "2026-11-05",
+        "S-4": "2026-12-01",
+        "S-5": "2026-12-02",
+        "S-6": "20261203",
+    }
+    assert next(one for one in items if one["key"] == "S-6")["properties"]["at"] == (
+        "2026-12-03T09:05"
+    )
+
+    bad = client.post(
+        f"/api/objects/{kind}/import-rows",
+        json={
+            "rows": [
+                {"key": "S-7", "label": "사", "month": "2026-12-02 13:05"},
+                {"key": "S-8", "label": "아", "month": "2026-13"},
+                # 연월일 여섯 자리를 2403년 5월로 읽지 않는다.
+                {"key": "S-9", "label": "자", "month": "240305"},
+            ]
+        },
+        headers=admin.headers,
+    )
+    assert bad.status_code == 200, bad.text
+    # 오류 행은 행 번호로 찾는다(헤더 다음이 1).
+    messages = {one["row"]: one["message"] for one in bad.json()["rows"]}
+    assert "시각이 붙어" in messages[1], messages
+    assert "날짜(YYYY-MM-DD)" in messages[2], messages
+    assert "날짜(YYYY-MM-DD)" in messages[3], messages

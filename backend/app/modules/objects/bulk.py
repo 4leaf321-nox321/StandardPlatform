@@ -32,6 +32,7 @@ import re
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select, true
@@ -603,7 +604,41 @@ def _one_from_text(definition: PropertyDef, raw: Any, refs: Refs) -> Any:
         )
     if kind == "object_ref":
         return refs.resolve(definition, text)
+    if kind in ("date", "datetime"):
+        return _moment_text(definition, text)
     return text
+
+
+def _moment_text(definition: PropertyDef, text: str) -> str:
+    """날짜 · 시각 칸의 글자 — **ISO 는 그대로**, 그 밖의 표기(`2024.3.5` · `2024년 3월 5일` ·
+    월 집계 표의 `2026-09`)는 ISO 로 바꾼다. 종류 변경과 한 벌이다(`conversion.parse_date`).
+
+    못 읽는 값은 그대로 두어 검증이 늘 하던 말로 거절한다. 바꾸면서 무엇을 버려야 하는 값(날짜
+    칸에 붙은 시각)은 **조용히 버리지 않는다** — 그 행을 오류로 둔다.
+    """
+    dated = definition.data_type == "date"
+    try:
+        (date.fromisoformat if dated else datetime.fromisoformat)(text)
+        return text
+    except ValueError:
+        pass
+    try:
+        value, dropped = (conversion.parse_date if dated else conversion.parse_datetime)(text)
+    except conversion.Unconvertible:
+        return text
+    if dropped:
+        if dated:
+            raise InvalidValue(
+                code("ONTOLOGY", 13),
+                f"{definition.label}: 날짜 칸에 시각이 붙어 있습니다 — 날짜만 적거나 "
+                f"시각 칸으로 받습니다: {text!r}",
+            )
+        raise InvalidValue(
+            code("ONTOLOGY", 19),
+            f"{definition.label}: 초 아래까지 적힌 시각입니다 — "
+            f"ISO(2026-09-11T13:05:07.123)로 적으면 그대로 받습니다: {text!r}",
+        )
+    return value
 
 
 def cell_to_value(definition: PropertyDef, raw: Any, refs: Refs) -> Any:

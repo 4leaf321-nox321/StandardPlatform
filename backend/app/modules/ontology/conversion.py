@@ -69,6 +69,13 @@ _NUMBER = re.compile(r"^[+-]?(?:(?:\d{1,3}(?:,\d{3})+|\d+)(?:\.\d*)?|\.\d+)(?:[e
 _DATE_SEP = re.compile(r"^(\d{4})([-./])\s*(\d{1,2})\2\s*(\d{1,2})\.?$")
 _DATE_KO = re.compile(r"^(\d{4})\s*년\s*(\d{1,2})\s*월\s*(\d{1,2})\s*일$")
 _DATE_COMPACT = re.compile(r"^(\d{4})(\d{2})(\d{2})$")
+#: 연월만 적힌 값 — 월 집계 표(판매 · 생산)의 「2026-09」 · 「2026.9」 · 「202609」 ·
+#: 「2026년 9월」.
+_MONTH_SEP = re.compile(r"^(\d{4})([-./])\s*(\d{1,2})\.?$")
+_MONTH_KO = re.compile(r"^(\d{4})\s*년\s*(\d{1,2})\s*월$")
+_MONTH_COMPACT = re.compile(r"^(\d{4})(\d{2})$")
+#: 여섯 자리를 「연월」 로 읽을 해의 범위 — 연월일 여섯 자리(`240305`)를 2403년으로 읽지 않게.
+_MONTH_YEARS = range(1900, 2200)
 _TIME = re.compile(r"^(\d{1,2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?$")
 
 
@@ -155,6 +162,23 @@ def _date_of(text: str) -> date | None:
         year, month, day = (int(found.group(one)) for one in groups)
         try:
             return date(year, month, day)
+        except ValueError:
+            raise Unconvertible("없는 날짜입니다") from None
+    return _month_of(text)
+
+
+def _month_of(text: str) -> date | None:
+    """연월만 적힌 값 → **그 달 1일.** 월 집계 표(판매 대수 · 생산 대수)는 날이 없다 — 엑셀도
+    「2026-09」 를 9월 1일로 읽는다. 지표는 그 날을 월 단위로 묶으므로 뜻이 그대로다."""
+    for pattern, month_group in ((_MONTH_SEP, 3), (_MONTH_KO, 2), (_MONTH_COMPACT, 2)):
+        found = pattern.match(text)
+        if found is None:
+            continue
+        year, month = int(found.group(1)), int(found.group(month_group))
+        if pattern is _MONTH_COMPACT and year not in _MONTH_YEARS:
+            return None
+        try:
+            return date(year, month, 1)
         except ValueError:
             raise Unconvertible("없는 날짜입니다") from None
     return None

@@ -101,6 +101,10 @@ class Axis:
     """날짜 축이면 묶은 기간 단위. 키는 그 기간의 시작일이다."""
     address: str = ""
     """이 축의 주소 — 막대가 조건으로 돌아갈 때 그대로 쓴다."""
+    target: str | None = None
+    """관계로 이어진 것 **자체**가 기준이면 — 상대 타입이 하나로 정해질 때 그 slug. 값은 그
+    타입 객체의 id 라서 같은 타입을 가리키는 참조 칸과 **같은 값**이다(지표의 분모 짝, ADR
+    0013)."""
 
 
 def own_property(defs: list[PropertyDef], field_name: str) -> PropertyDef:
@@ -395,6 +399,7 @@ class JoinPlan:
                     chain.multi,
                     namer=lambda keys: owner.names(hop, keys),
                     address=address,
+                    target=hop.target_slugs[0] if len(hop.target_slugs) == 1 else None,
                 )
             return field_axis(
                 end.entity,

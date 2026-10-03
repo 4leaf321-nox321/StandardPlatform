@@ -22,7 +22,13 @@ from tests.api.test_datasources import (  # noqa: F401 — plm 은 픽스처
     _vendor_type,
     plm,
 )
-from tests.api.test_ontology import _make_object, _make_property, _make_type
+from tests.api.test_linked_fields import _relate
+from tests.api.test_ontology import (
+    _make_object,
+    _make_property,
+    _make_relation,
+    _make_type,
+)
 
 
 def _slug(base: str) -> str:
@@ -782,3 +788,83 @@ def test_타이머_스크립트는_차례인_것만_넣고_겹치지_않는다(
 
     while job_services.process_one("test-worker"):
         pass
+
+
+def test_SKU_와_기본_모델을_관계로_이어도_분모와_짝이_맞는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """사내에서는 SKU → 기본 모델을 **관계로** 잇는다. 기록은 `ref.model.out.<관계>` 로 기본
+    모델에 닿고 판매 집계는 기본 모델 **참조 칸**으로 닿는다 — 값이 같은 id 라 짝이 맞아야
+    한다."""
+    base = _make_type(client, admin, label="기본 모델")
+    sku = _make_type(client, admin, label="SKU")
+    rel = _make_relation(
+        client,
+        admin,
+        label="기본 모델",
+        src_type_slugs=[sku],
+        dst_type_slugs=[base],
+        directed=True,
+        cardinality="many_to_one",
+    )
+    case = _make_type(client, admin, label="기록", usage="log")
+    _prop(client, admin, case, "model", "모델", data_type="object_ref", ref_type_slug=sku)
+    _prop(client, admin, case, "received", "접수일", data_type="date")
+    _prop(client, admin, case, "sold", "판매일", data_type="date")
+    sales = _make_type(client, admin, label="판매", usage="log")
+    _prop(
+        client,
+        admin,
+        sales,
+        "base_model",
+        "기본 모델",
+        data_type="object_ref",
+        ref_type_slug=base,
+    )
+    _prop(client, admin, sales, "month", "판매월", data_type="date")
+    _prop(client, admin, sales, "units", "대수", data_type="number")
+    s_base = _make_object(client, admin, base, label="S기본")["id"]
+    s1 = _make_object(client, admin, sku, label="S-1")["id"]
+    _relate(client, admin, sku, s1, rel, s_base)
+    _make_object(
+        client,
+        admin,
+        sales,
+        label="판매 1월",
+        properties={"base_model": s_base, "month": "2026-01-01", "units": 50},
+    )
+    for received in ("2026-01-20", "2026-02-10"):
+        _make_object(
+            client,
+            admin,
+            case,
+            label=received,
+            properties={"model": s1, "received": received, "sold": "2026-01-05"},
+        )
+    sales_metric = _define(client, admin, source=sales, spec=_sales_spec(), label="판매 대수")
+    spec = {
+        "measure": "count",
+        "time": {"address": "properties.received", "grain": "month"},
+        "cohort": {"address": "properties.sold", "grain": "month"},
+        "dimensions": [{"name": "base_model", "address": f"ref.model.out.{rel}"}],
+        "denominator": {
+            "metric": sales_metric["slug"],
+            "on": ["base_model"],
+            "time": "cohort",
+            "per": 100,
+        },
+    }
+    cases = _define(client, admin, source=case, spec=spec, label="인입(관계)")
+    assert cases["dims"][0]["kind"] == "related" and cases["broken"] is None
+
+    found = _read(client, admin, cases["slug"], "cohort", cumulative="true")
+    row = found["rows"][0]
+    assert row["label"] == "2026-01" and row["denominator"] == 50.0
+    assert [one["cumulative"] for one in row["cells"]] == [1.0, 2.0]
+    assert row["cells"][1]["ratio"] == 4.0
+    # 이름은 관계의 상대에서, 건 보기는 같은 주소의 조건으로.
+    table = _read(client, admin, cases["slug"], dims="base_model")
+    cell = table["cells"][0]
+    assert cell["labels"]["base_model"] == "S기본" and cell["dims"]["base_model"] == s_base
+    assert cell["drill"]["params"] == {f"f.ref.model.out.{rel}.eq": s_base}
+    assert _listed(client, admin, case, cell["drill"]["params"]) == cell["count"] == 2

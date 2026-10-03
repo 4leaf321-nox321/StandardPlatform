@@ -148,12 +148,15 @@ class Dim:
     @property
     def signature(self) -> tuple[str, ...]:
         """값의 종류 — 분모와 짝지을 때 이것이 같아야 한다. 참조는 상대 타입, 관계 자체는
-        주소, 나머지는 종류와 단위."""
+        상대가 한 타입이면 그 타입(참조와 같은 값), 아니면 주소, 나머지는 종류와 단위."""
         axis = self.axis
         if axis.kind == "object_ref" and axis.ref_def is not None:
             return ("ref", axis.ref_def.ref_type_slug or "")
         if axis.kind == "related":
-            return ("related", self.address)
+            # 관계로 이어진 것 자체 — 상대가 한 타입이면 그 타입을 가리키는 참조와 같은 값(id)
+            # 이다. SKU → 기본 모델을 **관계로** 이었어도 기본 모델 참조 칸을 가진 분모(판매
+            # 집계)와 짝이 맞는다 — 사내에서는 그 둘을 관계로 잇는다(2026-10-03).
+            return ("ref", axis.target) if axis.target else ("related", self.address)
         return (axis.kind, axis.grain or "")
 
 

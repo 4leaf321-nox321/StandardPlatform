@@ -152,3 +152,13 @@ def test_안_바뀌면_바뀌지_않았다고_한다() -> None:
     flag = _def("number")
     assert conversion.convert_stored(flag, True).failures  # 예 → 숫자 아님
     assert conversion.convert_stored(_def("text"), 1).changed
+
+
+def test_연월만_적힌_값은_그_달_1일이다() -> None:
+    """월 집계 표의 「2026-09」 — 엑셀도 9월 1일로 읽는다. 여섯 자리는 해가 그럴듯할 때만."""
+    day = _def("date")
+    for text in ("2024-03", "2024.3", "2024. 3.", "2024/03", "202403", "2024년 3월"):
+        assert _ok(day, text) == "2024-03-01", text
+    assert "없는 날짜" in _fails(day, "2024-13")
+    assert _fails(day, "240305")
+    assert _ok(_def("datetime"), "2024-03") == "2024-03-01T00:00"
