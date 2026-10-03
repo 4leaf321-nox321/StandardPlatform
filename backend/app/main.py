@@ -40,6 +40,8 @@ from app.modules.files import services as files_services
 from app.modules.graph import routes as graph_routes
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs import services as jobs_services
+from app.modules.metrics import routes as metrics_routes
+from app.modules.metrics import services as metrics_services
 from app.modules.notices import routes as notices_routes
 from app.modules.notifications import routes as notifications_routes
 from app.modules.objects import attachments as objects_attachments
@@ -98,6 +100,8 @@ def _api_router(settings: Settings) -> APIRouter:
     # 도메인은 여전히 이 저장소에 없고, 여기 정의로 얹힌다.
     router.include_router(ontology_routes.router)
     router.include_router(objects_routes.router)
+    # 기록을 미리 세어 둔 값 — 물으면 데이터로 바로 답한다(ADR 0013).
+    router.include_router(metrics_routes.router)
     # 정의 · 객체 · 관계를 한 묶음으로 — 로컬 정제 도구(pipeline/)가 부른다.
     router.include_router(bundles_routes.router)
     router.include_router(graph_routes.router)
@@ -181,6 +185,9 @@ def _register_extensions() -> None:
     # 웹훅도 멎는다** — 그 사실이 「작업」 화면 안에만 있으면 아무도 제때 모른다.
     extensions.register_maintenance(jobs_services.maintenance)
     extensions.register_stats(jobs_services.stats)
+    # 계산에 실패했거나 오래 안 센 지표 — 밤의 타이머가 조용히 멎는 것은 같은 실패 방식이다.
+    extensions.register_maintenance(metrics_services.maintenance)
+    extensions.register_stats(metrics_services.stats)
 
     # **기계 자격으로 온톨로지를 채우는 길**(3-d). 안 열면 PAT 로는 못 고친다 —
     # 기본이 「막힘」 이고, 그것이 맞는 기본값이다(shared/scopes.py).
@@ -210,6 +217,9 @@ def _register_extensions() -> None:
     scopes.register_read_scope("/api/core", coreapi_routes.SCOPE)
     # 동기화는 객체를 넣는 일이다 — 같은 범위. 소스 정의 자체는 시스템 관리자만.
     scopes.register_write_scope("/api/datasources", "objects:write")
+    # 지표 정의는 화면의 모양을 정하는 일이라 정의 범위다. 계획은 POST 지만 읽기다.
+    scopes.register_write_scope("/api/metrics", "ontology:write")
+    scopes.register_read_only_post("/api/metrics/plan")
     # `import` 는 POST 지만 `dry_run` 이면 아무것도 안 바꾼다. 그래도 **읽기로
     # 열지 않는다** — 같은 경로가 적용도 하기 때문이다. 읽기 토큰은 `schema` 로
     # 본다.

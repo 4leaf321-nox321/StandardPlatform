@@ -645,6 +645,13 @@ def test_날짜는_기간_단위로_묶이고_막대는_범위로_걸린다(
         headers=admin.headers,
     ).json()
     assert listed["total"] == 2
+    # 정규형이 아닌 유효한 날짜(`20260310`)도 **읽어서** 견준다 — 3월 막대 하나가 목록 하나다.
+    march = client.get(
+        f"/api/objects/{kind}",
+        params={"f.made.gte": "2026-03-01", "f.made.lt": "2026-04-01"},
+        headers=admin.headers,
+    ).json()
+    assert march["total"] == 1
     exact = client.get(
         f"/api/objects/{kind}", params={"f.made.eq": "2026-01-01"}, headers=admin.headers
     ).json()

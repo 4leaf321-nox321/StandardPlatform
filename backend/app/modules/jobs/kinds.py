@@ -207,6 +207,8 @@ def objects_import(work: Work) -> dict[str, Any]:
             on_progress=work.progress,
             before_apply=_fingerprint_guard(work),
         )
+        if plan.ok:
+            _after_ingest(work.db, object_type.id, f"import:{object_type.slug}")
         return _plan_result(plan, applied=plan.ok)
     plan = bulk.plan_objects(
         work.db,
@@ -570,7 +572,33 @@ def datasource_sync(work: Work) -> dict[str, Any]:
     result = datasource_services.sync(
         work.db, work.user, source, apply=bool(work.params.get("apply"))
     )
+    if result.run.applied:
+        _after_ingest(work.db, source.type_id, f"datasource:{slug}")
     return datasource_services.sync_out(result).model_dump(mode="json")
+
+
+def _after_ingest(db: Session, type_id: uuid.UUID, reason: str) -> None:
+    """적재가 끝난 타입을 원천으로 쓰는 지표를 다시 세는 작업을 넣는다 — **이벤트가 아니라
+    작업 본문에서**(ADR 0013). 워커 프로세스는 `app.main` 을 import 하지 않아 이벤트
+    리스너가 비어 있고, 적재는 전부 워커에서 커밋된다. 같은 지표의 작업이 줄에 있으면 안
+    넣는다. 커밋은 이 작업과 함께."""
+    from app.modules.metrics import services as metrics_services
+
+    metrics_services.enqueue_for_type(db, type_id, reason=reason)
+
+
+# --- 지표 ------------------------------------------------------------------------
+
+
+def metrics_recompute(work: Work) -> dict[str, Any]:
+    """지표들을 전부 다시 센다 — `metrics/services.run_recompute` 가 **지표마다 커밋**한다.
+    타이머 · 적재 뒤 훅이 넣은 작업은 시킨 사람이 없다."""
+    from app.modules.metrics import services as metrics_services
+
+    slugs = [str(one) for one in (work.params.get("slugs") or [])]
+    return metrics_services.run_recompute(
+        work.db, slugs, job_id=work.job.id, progress=work.progress
+    )
 
 
 # --- 웹훅 ------------------------------------------------------------------------
@@ -627,6 +655,16 @@ register(
         False,
         False,
         webhook_dispatch,
+        allow_system=True,
+    )
+)
+register(
+    Kind(
+        "metrics_recompute",
+        "지표 다시 계산",
+        False,
+        False,
+        metrics_recompute,
         allow_system=True,
     )
 )

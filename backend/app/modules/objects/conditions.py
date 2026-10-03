@@ -29,12 +29,13 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from datetime import date
 from typing import Any
 
 from sqlalchemy import Numeric, String, and_, cast, false, literal, or_, select, true
 from sqlalchemy.orm import aliased
 
-from app.modules.objects import paths
+from app.modules.objects import axes, paths
 from app.modules.objects.models import ObjectInstance, ObjectRef
 from app.modules.ontology import conversion
 from app.modules.ontology.models import PropertyDef
@@ -112,6 +113,15 @@ def _number(field: str, raw: str) -> float:
         return float(raw)
     except ValueError:
         raise InvalidValue(code("OBJECTS", 71), f"{field}: 숫자여야 합니다: {raw!r}") from None
+
+
+def _date(field: str, raw: str) -> date:
+    try:
+        return date.fromisoformat(raw.strip()[:10])
+    except ValueError:
+        raise InvalidValue(
+            code("OBJECTS", 71), f"{field}: 날짜는 YYYY-MM-DD 여야 합니다: {raw!r}"
+        ) from None
 
 
 def _clause(
@@ -207,8 +217,20 @@ def _clause(
         return column.ilike(f"{raw}%")
     if op == "ne":
         return or_(column != raw, column.is_(None))
+    if data_type == "date" and op in ("gt", "gte", "lt", "lte"):
+        # **날짜는 읽어서 견준다** — 통계 · 지표의 버킷과 같은 가드(`axes.date_or_null`)로.
+        # 글자로 견주면 `20260310`(정규형이 아닌 유효한 날짜)은 범위 밖이고 `2026-02-30`(못
+        # 읽는 값)은 안이라, 막대를 눌러 나온 목록의 수가 막대의 수와 어긋난다.
+        when = _date(label, raw)
+        normalized = axes.date_or_null(column)
+        return {
+            "gt": normalized > when,
+            "gte": normalized >= when,
+            "lt": normalized < when,
+            "lte": normalized <= when,
+        }[op]
     if op in ("gt", "gte", "lt", "lte"):
-        # 날짜·시각은 ISO 문자열이라 사전순이 곧 시간순이다.
+        # 시각은 ISO 문자열이라 사전순이 곧 시간순이다(날짜 경계 `< 2026-03-01` 도 맞는다).
         return {
             "gt": column > raw,
             "gte": column >= raw,

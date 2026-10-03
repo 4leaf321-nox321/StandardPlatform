@@ -32,6 +32,7 @@ from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.datasources.models import DataSource, DataSourceRun
 from app.modules.files.models import Attachment, AttachmentTicket
 from app.modules.jobs.models import Job, JobFile, WorkerHeartbeat
+from app.modules.metrics.models import MetricDef, MetricRun, MetricValue
 from app.modules.notices.models import Notice, NoticeRead
 from app.modules.notifications.models import Notification
 from app.modules.objects.models import (
@@ -76,6 +77,9 @@ __all__ = [
     "ExtensionState",
     "Job",
     "JobFile",
+    "MetricDef",
+    "MetricRun",
+    "MetricValue",
     "NavGroup",
     "Notice",
     "NoticeRead",
