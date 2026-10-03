@@ -10195,6 +10195,132 @@
         }
       }
     },
+    "/api/metrics/{slug}/analysis/life": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Life Analysis",
+        "description": "② 수명 · B수명 — 판매월 코호트의 경과별 인입으로 와이블(표준 · 결함)을 맞추고\nB1 · B5 · B10 을 상태(관측 안 · 외삽 · 이르지 않음 · 불확실)와 함께 낸다. 거르기는\n`d.<기준>=<값>`(분모에도 걸린다).",
+        "operationId": "life_analysis_api_metrics__slug__analysis_life_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "auto",
+                "weibull",
+                "defective"
+              ],
+              "type": "string",
+              "description": "auto 는 표준 · 결함 와이블을 함께 맞추고 LR 검정으로 고른다",
+              "default": "auto",
+              "title": "Model"
+            },
+            "description": "auto 는 표준 · 결함 와이블을 함께 맞추고 LR 검정으로 고른다"
+          },
+          {
+            "name": "max_age",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 600,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "경과 몇 개까지 쓸지 — 24 면 경과 0~23",
+              "title": "Max Age"
+            },
+            "description": "경과 몇 개까지 쓸지 — 24 면 경과 0~23"
+          },
+          {
+            "name": "cohort_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort From"
+            }
+          },
+          {
+            "name": "cohort_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 날 **앞까지**",
+              "title": "Cohort To"
+            },
+            "description": "이 날 **앞까지**"
+          },
+          {
+            "name": "compact",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "곡선 · 코호트 줄을 빼고 요약만(MCP)",
+              "default": false,
+              "title": "Compact"
+            },
+            "description": "곡선 · 코호트 줄을 빼고 요약만(MCP)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LifeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/bundles/import": {
       "post": {
         "tags": [
@@ -13519,6 +13645,106 @@
           "created_at"
         ],
         "title": "AuditEntryOut"
+      },
+      "BLifeOut": {
+        "properties": {
+          "q": {
+            "type": "number",
+            "title": "Q"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "observed",
+              "extrapolated",
+              "unreachable",
+              "uncertain",
+              "none"
+            ],
+            "title": "Status"
+          },
+          "age": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age"
+          },
+          "ci": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ci"
+          },
+          "age_days": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Age Days"
+          },
+          "conditional_age": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Conditional Age"
+          },
+          "extrapolation": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Extrapolation"
+          },
+          "observed_age": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Age"
+          }
+        },
+        "type": "object",
+        "required": [
+          "q",
+          "status",
+          "age",
+          "ci",
+          "age_days",
+          "conditional_age",
+          "extrapolation",
+          "observed_age"
+        ],
+        "title": "BLifeOut"
       },
       "BackupOut": {
         "properties": {
@@ -18412,6 +18638,611 @@
           "two_step"
         ],
         "title": "KindOut"
+      },
+      "LifeCohortOut": {
+        "properties": {
+          "cohort": {
+            "type": "string",
+            "title": "Cohort"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "units": {
+            "type": "number",
+            "title": "Units"
+          },
+          "failures": {
+            "type": "integer",
+            "title": "Failures"
+          },
+          "horizon": {
+            "type": "integer",
+            "title": "Horizon"
+          },
+          "drill": {
+            "$ref": "#/components/schemas/DrillOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cohort",
+          "label",
+          "units",
+          "failures",
+          "horizon",
+          "drill"
+        ],
+        "title": "LifeCohortOut"
+      },
+      "LifeCurveOut": {
+        "properties": {
+          "age": {
+            "type": "number",
+            "title": "Age"
+          },
+          "standard": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Standard"
+          },
+          "defective": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Defective"
+          }
+        },
+        "type": "object",
+        "required": [
+          "age",
+          "standard",
+          "defective"
+        ],
+        "title": "LifeCurveOut"
+      },
+      "LifeFitOut": {
+        "properties": {
+          "model": {
+            "type": "string",
+            "enum": [
+              "weibull",
+              "defective"
+            ],
+            "title": "Model"
+          },
+          "beta": {
+            "type": "number",
+            "title": "Beta"
+          },
+          "beta_ci": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Beta Ci"
+          },
+          "eta": {
+            "type": "number",
+            "title": "Eta"
+          },
+          "eta_ci": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Eta Ci"
+          },
+          "eta_days": {
+            "type": "number",
+            "title": "Eta Days"
+          },
+          "p": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P"
+          },
+          "p_ci": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "number"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P Ci"
+          },
+          "loglik": {
+            "type": "number",
+            "title": "Loglik"
+          },
+          "aic": {
+            "type": "number",
+            "title": "Aic"
+          },
+          "converged": {
+            "type": "boolean",
+            "title": "Converged"
+          },
+          "identifiable": {
+            "type": "boolean",
+            "title": "Identifiable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "model",
+          "beta",
+          "beta_ci",
+          "eta",
+          "eta_ci",
+          "eta_days",
+          "p",
+          "p_ci",
+          "loglik",
+          "aic",
+          "converged",
+          "identifiable"
+        ],
+        "title": "LifeFitOut"
+      },
+      "LifeOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "records",
+              "first_visits"
+            ],
+            "title": "Basis"
+          },
+          "time_unit": {
+            "type": "string",
+            "title": "Time Unit"
+          },
+          "units": {
+            "type": "number",
+            "title": "Units"
+          },
+          "failures": {
+            "type": "integer",
+            "title": "Failures"
+          },
+          "cohorts_used": {
+            "type": "integer",
+            "title": "Cohorts Used"
+          },
+          "max_age": {
+            "type": "integer",
+            "title": "Max Age"
+          },
+          "reached": {
+            "type": "number",
+            "title": "Reached"
+          },
+          "fits": {
+            "items": {
+              "$ref": "#/components/schemas/LifeFitOut"
+            },
+            "type": "array",
+            "title": "Fits"
+          },
+          "chosen": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "weibull",
+                  "defective"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Chosen"
+          },
+          "lrt_statistic": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lrt Statistic"
+          },
+          "lrt_p_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lrt P Value"
+          },
+          "b_lives": {
+            "items": {
+              "$ref": "#/components/schemas/BLifeOut"
+            },
+            "type": "array",
+            "title": "B Lives"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/LifePointOut"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "curve": {
+            "items": {
+              "$ref": "#/components/schemas/LifeCurveOut"
+            },
+            "type": "array",
+            "title": "Curve"
+          },
+          "cohort_rows": {
+            "items": {
+              "$ref": "#/components/schemas/LifeCohortOut"
+            },
+            "type": "array",
+            "title": "Cohort Rows"
+          },
+          "gof_chi2": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gof Chi2"
+          },
+          "gof_df": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gof Df"
+          },
+          "gof_p_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Gof P Value"
+          },
+          "max_rel_dev": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Rel Dev"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "basis",
+          "time_unit",
+          "units",
+          "failures",
+          "cohorts_used",
+          "max_age",
+          "reached",
+          "fits",
+          "chosen",
+          "lrt_statistic",
+          "lrt_p_value",
+          "b_lives",
+          "points",
+          "curve",
+          "cohort_rows",
+          "gof_chi2",
+          "gof_df",
+          "gof_p_value",
+          "max_rel_dev"
+        ],
+        "title": "LifeOut"
+      },
+      "LifePointOut": {
+        "properties": {
+          "age": {
+            "type": "integer",
+            "title": "Age"
+          },
+          "at_risk": {
+            "type": "number",
+            "title": "At Risk"
+          },
+          "failures": {
+            "type": "number",
+            "title": "Failures"
+          },
+          "hazard": {
+            "type": "number",
+            "title": "Hazard"
+          },
+          "observed": {
+            "type": "number",
+            "title": "Observed"
+          },
+          "observed_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed Low"
+          },
+          "observed_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Observed High"
+          },
+          "fitted": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fitted"
+          },
+          "cohorts": {
+            "type": "integer",
+            "title": "Cohorts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "age",
+          "at_risk",
+          "failures",
+          "hazard",
+          "observed",
+          "observed_low",
+          "observed_high",
+          "fitted",
+          "cohorts"
+        ],
+        "title": "LifePointOut"
       },
       "LineOut": {
         "properties": {

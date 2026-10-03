@@ -7,10 +7,13 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, date, datetime
 from typing import Any
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from tests.api.conftest import Signed
 from tests.api.test_metrics import _define, _listed, _two, _world
@@ -172,3 +175,217 @@ def test_일부_부서만_보이면_그렇게_말한다(
     everything = _analysis(client, admin, cases["slug"], "pareto", dim="symptom")
     assert everything["visible_share"] == 1.0
     assert "partial_visibility" not in {one["code"] for one in everything["caveats"]}
+
+
+# --- ② 수명 ------------------------------------------------------------------------
+
+
+def _plant(slug: str, cells: list[dict[str, Any]], watermark: datetime) -> None:
+    """지표의 지금 계산을 **심은 셀**로 바꾼다 — 기록 수만 건을 만들지 않고 정답을 아는 셀
+    위에서 경로 · 분모 결합 · 닫힘을 본다(건 보기는 기록이 없어 여기서 안 본다)."""
+    from app.database import SessionLocal
+    from app.modules.metrics.models import MetricDef, MetricRun, MetricValue
+
+    with SessionLocal() as db:
+        metric = db.scalars(select(MetricDef).where(MetricDef.slug == slug)).one()
+        run = MetricRun(
+            metric_id=metric.id,
+            status="ok",
+            watermark=watermark,
+            finished_at=watermark,
+            rows=sum(one["count"] for one in cells),
+            cells=len(cells),
+        )
+        db.add(run)
+        db.flush()
+        for one in cells:
+            db.add(
+                MetricValue(
+                    metric_id=metric.id,
+                    run_id=run.id,
+                    cell_hash=uuid.uuid4(),
+                    workspace_id=None,
+                    period=one.get("period"),
+                    cohort=one.get("cohort"),
+                    age=one.get("age"),
+                    dims=one["dims"],
+                    count=one["count"],
+                    value_count=one.get("value_count", 0),
+                    sum=one.get("sum"),
+                    min=one.get("sum"),
+                    max=one.get("sum"),
+                )
+            )
+        metric.current_run_id = run.id
+        db.commit()
+
+
+def _month(start: date, months: int) -> date:
+    index = start.year * 12 + start.month - 1 + months
+    return date(index // 12, index % 12 + 1, 1)
+
+
+def _weibull_steps(ages: int, beta: float, eta: float, p: float, units: float) -> list[int]:
+    """경과 a 의 기대 건수 — 판매일이 달 안에 고르면 P(경과 = a) = G(a) - G(a-1),
+    G(a) = ∫_a^{a+1} W. 가는 사다리꼴로 적분하고 반올림한다."""
+    grid = np.linspace(0.0, 1.0, 2001)
+    mass = [
+        float(np.trapezoid(-np.expm1(-(((a + grid) / eta) ** beta)), a + grid))
+        for a in range(ages)
+    ]
+    previous = [0.0, *mass[:-1]]
+    return [
+        round(units * p * (now - before)) for now, before in zip(mass, previous, strict=True)
+    ]
+
+
+def test_수명은_닫힌_경과로_맞추고_B10_을_지어내지_않는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """판매의 4.4%만 고장 나는 제품(형상 1.5 · 척도 400일) — 심은 셀에서 결함 모형을 고르고
+    정답을 되찾는다. 닫히지 않은 경과 · 코호트, 판매가 덜 들어온 달, 분모 없는 달은 빼고
+    그 수를 말한다."""
+    w = _world(client, admin)
+    sales, cases = _two(client, admin, w)
+    dims = {"base_model": w["s_base"], "symptom": "소음", "factory": "F1"}
+    first = date(2026, 1, 1)
+    units = 20000.0
+    steps = _weibull_steps(36, 1.5, 400 / 30.4375, 0.044, units)
+    planted: list[dict[str, Any]] = []
+    # 2026-01 ~ 2028-11 코호트 — 2028-11 까지 닫혔다(계산 2029-01-15, 닫힘 30일).
+    for i in range(35):
+        start = _month(first, i)
+        horizon = 34 - i
+        for age in range(horizon + 1):
+            if steps[age]:
+                planted.append(
+                    {
+                        "period": _month(start, age),
+                        "cohort": start,
+                        "age": age,
+                        "dims": dims,
+                        "count": steps[age],
+                    }
+                )
+        # 아직 들어오는 중인 달(2028-12)의 기록 — 맞춤에서 뺀다.
+        planted.append(
+            {
+                "period": _month(start, horizon + 1),
+                "cohort": start,
+                "age": horizon + 1,
+                "dims": dims,
+                "count": 3,
+            }
+        )
+    # 닫히지 않은 코호트(2028-12), 판매가 덜 들어온 달(2029-01), 판매 대수가 없는 달(2025-12).
+    for month, count in (
+        (date(2028, 12, 1), 4),
+        (date(2029, 1, 1), 6),
+        (date(2025, 12, 1), 5),
+    ):
+        planted.append(
+            {"period": month, "cohort": month, "age": 0, "dims": dims, "count": count}
+        )
+    _plant(cases["slug"], planted, datetime(2029, 1, 15, tzinfo=UTC))
+    # 판매 대수 — 2026-01 ~ 2029-01. 판매 계산이 2029-01-20 이라 2029-01 판매는 덜 들어왔다.
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(first, i),
+                "dims": {"base_model": w["s_base"]},
+                "count": 1,
+                "value_count": 1,
+                "sum": units,
+            }
+            for i in range(37)
+        ],
+        datetime(2029, 1, 20, tzinfo=UTC),
+    )
+
+    found = _analysis(client, admin, cases["slug"], "life")
+    assert found["recipe"] == "life" and found["method"].startswith("와이블")
+    assert found["chosen"] == "defective" and found["time_unit"] == "month"
+    assert found["lrt_p_value"] < 1e-10
+    fits = {one["model"]: one for one in found["fits"]}
+    assert fits["defective"]["beta"] == pytest.approx(1.5, rel=0.08)
+    assert fits["defective"]["eta_days"] == pytest.approx(400, rel=0.08)
+    assert fits["defective"]["p"] == pytest.approx(0.044, rel=0.08)
+    assert fits["weibull"]["beta"] < 1.0  # 평평한 곡선을 따라간 표준 모형
+    lives = found["b_lives"]
+    assert [one["status"] for one in lives] == ["observed", "unreachable", "unreachable"]
+    assert lives[2]["age"] is None and lives[2]["age_days"] is None and lives[2]["ci"] is None
+    assert lives[2]["conditional_age"] is not None
+    assert lives[0]["age"] is not None and lives[0]["observed_age"] is not None
+    # 쓰는 코호트는 2026-01 ~ 2028-11 — 2028-11 은 경과 0 하나만 닫혔다.
+    assert found["cohorts_used"] == 35 and found["max_age"] == 34
+    assert found["excluded"] == {
+        "missing_denominator": 5,
+        "open_denominator": 6,
+        "open_cohort": 4,
+        "open_cells": 3 * 35,
+    }
+    codes = {one["code"] for one in found["caveats"]}
+    assert {"missing_denominator", "open_cells_excluded", "records_not_units"} <= codes
+    assert "plateau_unknown" not in codes
+    assert found["units"] == units * 35
+    assert len(found["points"]) == 35 and found["points"][0]["age"] == 0
+    assert found["points"][-1]["cohorts"] == 1  # 경과 34 는 2026-01 코호트만 봤다
+    assert len(found["cohort_rows"]) == 35 and found["cohort_rows"][0]["horizon"] == 34
+    assert found["curve"] and found["gof_p_value"] is not None
+
+    compact = _analysis(client, admin, cases["slug"], "life", compact="true")
+    assert compact["curve"] == [] and compact["cohort_rows"] == []
+    assert [one["status"] for one in compact["b_lives"]] == [
+        "observed",
+        "unreachable",
+        "unreachable",
+    ]
+    # 표준 모형을 억지로 고르면 관측 밖을 읽고, 「결국 고장 나는 비율」 을 모른다고 말한다.
+    standard = _analysis(client, admin, cases["slug"], "life", model="weibull")
+    assert standard["chosen"] == "weibull" and len(standard["fits"]) == 1
+    assert [one["status"] for one in standard["b_lives"]][1:] == ["extrapolated"] * 2
+    assert "plateau_unknown" in {one["code"] for one in standard["caveats"]}
+    # 경과를 12 개로 자르면 그 뒤의 건은 뺀 수로 말한다.
+    short = _analysis(client, admin, cases["slug"], "life", max_age=12)
+    assert short["max_age"] == 11
+    assert short["excluded"]["beyond_max_age"] > 0
+
+
+def test_수명의_코호트_건_보기는_닫힌_경과까지의_기록이다(
+    client: TestClient, admin: Signed
+) -> None:
+    """기록이 적으면 맞추지 않고 비모수 곡선만 — 그래도 코호트마다의 수는 근거로 돌아간다."""
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    found = _analysis(client, admin, cases["slug"], "life")
+    assert found["fits"] == [] and found["chosen"] is None
+    assert "too_few_failures" in {one["code"] for one in found["caveats"]}
+    # 오늘 판 오늘 접수 건은 판매 대수가 없는 달이다.
+    assert found["excluded"]["missing_denominator"] == 1
+    rows = {one["label"]: one for one in found["cohort_rows"]}
+    assert set(rows) == {"2026-01", "2026-02"}
+    assert (rows["2026-01"]["units"], rows["2026-01"]["failures"]) == (300.0, 3)
+    assert (rows["2026-02"]["units"], rows["2026-02"]["failures"]) == (50.0, 2)
+    for row in rows.values():
+        assert row["drill"]["partial"] == []
+        assert _listed(client, admin, w["case"], row["drill"]["params"]) == row["failures"]
+    assert found["b_lives"][0]["status"] == "observed"
+    assert [one["status"] for one in found["b_lives"]][1:] == ["none", "none"]
+    # 기본 모델로 거르면 분모도 그 모델의 판매 대수, 건 보기도 그 거르기를 건다.
+    only_s = _analysis(client, admin, cases["slug"], "life", **{"d.base_model": w["s_base"]})
+    rows_s = {one["label"]: one for one in only_s["cohort_rows"]}
+    assert (rows_s["2026-01"]["units"], rows_s["2026-01"]["failures"]) == (100.0, 2)
+    for row in rows_s.values():
+        assert row["drill"]["params"]["f.ref.model.base.eq"] == w["s_base"]
+        assert _listed(client, admin, w["case"], row["drill"]["params"]) == row["failures"]
+
+
+def test_수명이_안_되는_지표는_이유와_함께_거절한다(client: TestClient, admin: Signed) -> None:
+    w = _world(client, admin)
+    sales, cases = _two(client, admin, w)
+    assert next(one for one in cases["analyses"] if one["recipe"] == "life")["ok"] is True
+    reason = next(one for one in sales["analyses"] if one["recipe"] == "life")
+    assert reason["ok"] is False and "건수" in reason["reason"]
+    refused = _refused(client, admin, sales["slug"], "life")
+    assert refused["code"].endswith("METRICS-0024")

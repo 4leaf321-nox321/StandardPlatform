@@ -5,14 +5,16 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, Depends, Query, Request
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.metrics import compute, params, query, services
-from app.modules.metrics.recipes import pareto
-from app.modules.metrics.recipes.schemas import ParetoOut
+from app.modules.metrics.recipes import life, pareto
+from app.modules.metrics.recipes.schemas import LifeOut, ParetoOut
 from app.shared.auth import current_user
 
 router = APIRouter(prefix="/{slug}/analysis")
@@ -59,4 +61,33 @@ def pareto_analysis(
         include_empty=include_empty,
         by_period=by_period,
         compact=compact,
+    )
+
+
+@router.get("/life", response_model=LifeOut)
+def life_analysis(
+    slug: str,
+    request: Request,
+    model: Literal["auto", "weibull", "defective"] = Query(
+        default="auto",
+        description="auto 는 표준 · 결함 와이블을 함께 맞추고 LR 검정으로 고른다",
+    ),
+    max_age: int | None = Query(
+        default=None, ge=1, le=600, description="경과 몇 개까지 쓸지 — 24 면 경과 0~23"
+    ),
+    cohort_from: str | None = Query(default=None),
+    cohort_to: str | None = Query(default=None, description="이 날 **앞까지**"),
+    compact: bool = Query(default=False, description="곡선 · 코호트 줄을 빼고 요약만(MCP)"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> LifeOut:
+    """② 수명 · B수명 — 판매월 코호트의 경과별 인입으로 와이블(표준 · 결함)을 맞추고
+    B1 · B5 · B10 을 상태(관측 안 · 외삽 · 이르지 않음 · 불확실)와 함께 낸다. 거르기는
+    `d.<기준>=<값>`(분모에도 걸린다)."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(request, cohort_from=cohort_from, cohort_to=cohort_to)
+    return life.run(
+        db, user, metric, built, ask, model=model, max_age=max_age, compact=compact
     )

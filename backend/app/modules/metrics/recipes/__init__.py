@@ -6,6 +6,6 @@
 레시피 모듈은 import 될 때 `registry` 에 스스로 등록한다 — 여기서 전부 import 한다.
 """
 
-from app.modules.metrics.recipes import pareto
+from app.modules.metrics.recipes import life, pareto
 
-__all__ = ["pareto"]
+__all__ = ["life", "pareto"]

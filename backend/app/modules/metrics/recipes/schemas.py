@@ -90,3 +90,94 @@ class ParetoOut(AnalysisHeader):
     other_value: float
     concentration: ConcentrationOut | None
     trend: list[ParetoTrendOut]
+
+
+# --- ② 수명 · B수명 -----------------------------------------------------------------
+
+
+class LifeFitOut(BaseModel):
+    model: Literal["weibull", "defective"]
+    beta: float
+    """형상 — 1 보다 작으면 초기 고장, 1 근처면 우발, 크면 마모."""
+    beta_ci: list[float] | None
+    eta: float
+    """척도 — 고장 나는 것들의 63% 가 고장 나는 경과(기간 단위)."""
+    eta_ci: list[float] | None
+    eta_days: float
+    p: float | None
+    """결국 고장 나는 비율(결함 모형만)."""
+    p_ci: list[float] | None
+    loglik: float
+    aic: float
+    converged: bool
+    identifiable: bool
+    """정보 행렬이 서서 구간을 낼 수 있었나 — 아니면 구간 없이 값만."""
+
+
+class BLifeOut(BaseModel):
+    q: float
+    status: Literal["observed", "extrapolated", "unreachable", "uncertain", "none"]
+    age: float | None
+    """기간 단위의 경과 — 「이르지 않음」 이면 없다(지어내지 않는다)."""
+    ci: list[float] | None
+    age_days: float | None
+    conditional_age: float | None
+    """결국 고장 나는 것들 중 q 가 고장 날 때까지 — 결함 모형에서만, 그렇게 읽는다."""
+    extrapolation: float | None
+    """관측한 가장 긴 경과의 몇 배 밖인가."""
+    observed_age: float | None
+    """비모수 곡선이 q 에 닿은 경과 — 닿았을 때만."""
+
+
+class LifePointOut(BaseModel):
+    age: int
+    at_risk: float
+    failures: float
+    hazard: float
+    observed: float
+    observed_low: float | None
+    observed_high: float | None
+    fitted: float | None
+    """고른 모형의 같은 경과 값(판매일이 달 안에 고르다고 본 경과 확률).
+
+    관측과 같은 자로 견준다.
+    """
+    cohorts: int
+
+
+class LifeCurveOut(BaseModel):
+    age: float
+    standard: float | None
+    defective: float | None
+
+
+class LifeCohortOut(BaseModel):
+    cohort: str
+    label: str
+    units: float
+    failures: int
+    horizon: int
+    drill: DrillOut
+
+
+class LifeOut(AnalysisHeader):
+    basis: Literal["records", "first_visits"]
+    time_unit: str
+    units: float
+    failures: int
+    cohorts_used: int
+    max_age: int
+    reached: float
+    """비모수 곡선이 닿은 가장 큰 누적 고장률."""
+    fits: list[LifeFitOut]
+    chosen: Literal["weibull", "defective"] | None
+    lrt_statistic: float | None
+    lrt_p_value: float | None
+    b_lives: list[BLifeOut]
+    points: list[LifePointOut]
+    curve: list[LifeCurveOut]
+    cohort_rows: list[LifeCohortOut]
+    gof_chi2: float | None
+    gof_df: int | None
+    gof_p_value: float | None
+    max_rel_dev: float | None
