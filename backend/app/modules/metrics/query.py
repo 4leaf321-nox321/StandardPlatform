@@ -325,26 +325,53 @@ def drill(
     cell: Cell,
     *,
     by: tuple[str, ...],
+    ask: Ask | None = None,
     period: date | None = None,
 ) -> schemas.DrillOut:
     """셀 → 목록 조건. 정의의 거르기는 그대로 덧붙이되 **기준이 정한 조건이 이긴다** —
-    기준 값은 거르기를 통과한 값이라 겹쳐도 뜻이 같다. `by` 에 없는 축은 조건이 없다(그
-    축으로 묶지 않은 셀은 그 축의 전부다)."""
+    기준 값은 거르기를 통과한 값이라 겹쳐도 뜻이 같다. `by` 에 없는 축은 그 축의 전부다.
+
+    **읽을 때 건 거르기(`ask`)도 조건이 된다** — 기본 모델로 거른 코호트의 셀은 그 기본 모델의
+    기록이다. 셀이 묶지 않은 기준의 거르기 값, 묶지 않은 기간 · 코호트의 범위를 덧붙인다.
+    빠뜨리면 「N건 보기」 가 전체 기본 모델의 기록을 열면서 정확하다고 말한다(0.4.32 의
+    버그 — 거른 화면에서만 드러났다)."""
     params: dict[str, str] = {}
     partial: list[str] = []
     for name, value in cell.dims.items():
         dim = built.dim(name)
         if dim is not None:
             _dim_condition(params, partial, dim, value)
+    if ask is not None:
+        for name, value in ask.filters.items():
+            dim = built.dim(name)
+            if dim is not None and name not in cell.dims:
+                _dim_condition(params, partial, dim, value)
     if built.time is not None and period is not None:
         _range_condition(params, partial, "period", built.time, period)
     elif built.time is not None and "period" in by:
         _range_condition(params, partial, "period", built.time, cell.period)
+    elif built.time is not None and ask is not None:
+        _bounds(params, built.time, ask.period_from, ask.period_to)
     if built.cohort is not None and "cohort" in by:
         _range_condition(params, partial, "cohort", built.cohort, cell.cohort)
+    elif built.cohort is not None and ask is not None:
+        _bounds(params, built.cohort, ask.cohort_from, ask.cohort_to)
     for cond in built.conds:
         params.setdefault(f"f.{cond.field}.{cond.op}", cond.value)
     return schemas.DrillOut(type_slug=built.source.slug, params=params, partial=partial)
+
+
+def _bounds(
+    params: dict[str, str],
+    axis: spec_module.TimeAxis,
+    start: date | None,
+    stop: date | None,
+) -> None:
+    """묶지 않은 축의 읽기 범위 — 날짜 칸의 `gte` · `lt`. 범위의 끝은 「앞까지」 다."""
+    if start is not None:
+        params[f"f.{axis.key}.gte"] = start.isoformat()
+    if stop is not None:
+        params[f"f.{axis.key}.lt"] = stop.isoformat()
 
 
 def _range_condition(
@@ -540,7 +567,7 @@ def table(
                     if "period" in ask.by
                     else None
                 ),
-                drill=drill(built, cell, by=ask.by),
+                drill=drill(built, cell, by=ask.by, ask=ask),
             )
         )
     header = _header(metric, built, run, truncated=truncated, denominator=denominator)
@@ -620,7 +647,7 @@ def series(
                     prev=previous,
                     yoy=values.get(year_before(when, grain)),
                     closed=_is_closed(when, grain, before),
-                    drill=drill(built, cell, by=("period",)),
+                    drill=drill(built, cell, by=("period",), ask=ask),
                 )
             )
             previous = value
@@ -694,7 +721,7 @@ def cohort(
                     cumulative=running,
                     ratio=denominator.ratio(total, cell, grain) if denominator else None,
                     closed=_is_closed(period, grain, before),
-                    drill=drill(built, cell, by=("cohort",), period=period),
+                    drill=drill(built, cell, by=("cohort",), ask=ask, period=period),
                 )
             )
         rows.append(

@@ -883,3 +883,48 @@ def test_SKU_와_기본_모델을_관계로_이어도_분모와_짝이_맞는다
     assert cell["labels"]["base_model"] == "S기본" and cell["dims"]["base_model"] == s_base
     assert cell["drill"]["params"] == {f"f.ref.model.out.{rel}.eq": s_base}
     assert _listed(client, admin, case, cell["drill"]["params"]) == cell["count"] == 2
+
+
+def test_거른_읽기의_건_보기도_그_거르기를_건다(client: TestClient, admin: Signed) -> None:
+    """**셀의 수 = 그 셀의 건 보기 목록 수** — 읽을 때 건 거르기(`d.<기준>`)와 묶지 않은 기간 ·
+    코호트 범위까지 조건이 돼야 한다. 0.4.32 는 기본 모델로 거른 코호트 · 추이에서 셀을 누르면
+    전체 기본 모델의 기록을 열었다(거르지 않은 경우만 시험했다)."""
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    s_filter = {"d.base_model": w["s_base"]}
+
+    def check(items: list[tuple[int, dict[str, Any]]]) -> int:
+        seen = 0
+        for count, drill in items:
+            if count == 0 or drill["partial"]:
+                continue
+            assert _listed(client, admin, w["case"], drill["params"]) == count, drill
+            seen += 1
+        return seen
+
+    cohort = _read(client, admin, cases["slug"], "cohort", cohort_to="2026-03-01", **s_filter)
+    assert cohort["rows"], cohort
+    first = cohort["rows"][0]["cells"][0]["drill"]["params"]
+    assert first["f.ref.model.base.eq"] == w["s_base"]
+    assert check([(c["count"], c["drill"]) for r in cohort["rows"] for c in r["cells"]]) >= 2
+
+    series = _read(
+        client, admin, cases["slug"], "series", period_to="2026-04-01", **{"d.symptom": "소음"}
+    )
+    points = series["lines"][0]["points"]
+    assert points[0]["drill"]["params"]["f.symptom.eq"] == "소음"
+    assert check([(p["count"], p["drill"]) for p in points]) >= 2
+
+    # 기간 범위만 건 표 — 기간으로 묶지 않아도 그 범위가 조건이 된다.
+    ranged = _read(
+        client,
+        admin,
+        cases["slug"],
+        dims="symptom",
+        period_from="2026-02-01",
+        period_to="2026-04-01",
+        **s_filter,
+    )
+    cell = ranged["cells"][0]["drill"]["params"]
+    assert cell["f.received.gte"] == "2026-02-01" and cell["f.received.lt"] == "2026-04-01"
+    assert check([(c["count"], c["drill"]) for c in ranged["cells"]]) >= 1
