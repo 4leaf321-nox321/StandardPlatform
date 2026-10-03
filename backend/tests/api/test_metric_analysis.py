@@ -607,3 +607,169 @@ def test_변화점의_건_보기는_그_기간의_기록이다(client: TestClien
     assert found["points"][-1]["closed"] is False
     for point in found["points"]:
         assert _listed(client, admin, w["case"], point["drill"]["params"]) == point["count"]
+
+
+# --- ④ 순차 검정 --------------------------------------------------------------------
+
+
+def test_순차_검정은_전작의_경과별_비율로_기대_건수를_낸다(
+    client: TestClient, admin: Signed
+) -> None:
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    found = _analysis(
+        client, admin, cases["slug"], "sprt", target=w["s_base"], reference=w["a_base"]
+    )
+    assert found["dim"] == "base_model"
+    assert (found["target_label"], found["reference_label"]) == ("S기본", "A기본")
+    # 전작 A: 1월 코호트 200대에 경과 2 한 건 — 경과 2 의 비율 0.005, 나머지 0.
+    rates = {one["age"]: one["rate"] for one in found["reference_rates"]}
+    assert rates[2] == pytest.approx(0.005) and rates[0] == 0 and rates[1] == 0
+    # 새 모델 S: 1월 100대 · 2월 50대 → 기대 0.5 + 0.25, 관측 세 건.
+    assert found["observed"] == 3 and found["expected"] == pytest.approx(0.75)
+    assert found["decision"] == "continue" and found["decided_at"] is None
+    assert found["to_not_worse"] is not None and found["to_worse"] is not None
+    assert {"small_expected", "one_sided"} <= {one["code"] for one in found["caveats"]}
+    assert found["excluded"]["missing_denominator"] == 1  # 오늘 판 건
+    assert found["excluded"]["reference_missing_denominator"] == 1  # A 의 2월
+    rows = {one["label"]: one for one in found["cohort_rows"]}
+    assert (rows["2026-01"]["observed"], rows["2026-02"]["observed"]) == (2, 1)
+    for row in rows.values():
+        assert row["drill"]["params"]["f.ref.model.base.eq"] == w["s_base"]
+        assert _listed(client, admin, w["case"], row["drill"]["params"]) == row["observed"]
+
+    # 전작을 새 모델 객체의 칸으로 찾는다.
+    from tests.api.test_metrics import _prop
+
+    _prop(
+        client,
+        admin,
+        w["base"],
+        "predecessor",
+        "전작",
+        data_type="object_ref",
+        ref_type_slug=w["base"],
+    )
+    patched = client.patch(
+        f"/api/objects/{w['base']}/{w['s_base']}",
+        json={"properties": {"predecessor": w["a_base"]}},
+        headers=admin.headers,
+    )
+    assert patched.status_code == 200, patched.text
+    via = _analysis(
+        client, admin, cases["slug"], "sprt", target=w["s_base"], reference_via="predecessor"
+    )
+    assert via["reference"] == w["a_base"] and via["expected"] == pytest.approx(0.75)
+    # 거절 — 전작 없음 · 같은 모델 · 모델 거르기를 함께 줌 · 칸이 빈 객체.
+    assert _refused(client, admin, cases["slug"], "sprt", target=w["s_base"])["code"].endswith(
+        "METRICS-0029"
+    )
+    assert _refused(
+        client, admin, cases["slug"], "sprt", target=w["s_base"], reference=w["s_base"]
+    )["code"].endswith("METRICS-0029")
+    assert _refused(
+        client,
+        admin,
+        cases["slug"],
+        "sprt",
+        target=w["s_base"],
+        reference=w["a_base"],
+        **{"d.base_model": w["s_base"]},
+    )["code"].endswith("METRICS-0029")
+    assert _refused(
+        client, admin, cases["slug"], "sprt", target=w["a_base"], reference_via="predecessor"
+    )["code"].endswith("METRICS-0029")
+
+
+def test_순차_검정은_두_배면_나쁨_같으면_나쁘지_않음으로_선다(
+    client: TestClient, admin: Signed
+) -> None:
+    """전작 A — 2024~2025 코호트 1,000대씩, 경과마다 2건(비율 0.002). 새 모델 S — 2026~2027
+    코호트 1,000대씩. 기간 k 의 기대는 2(k+1) 씩 쌓인다."""
+    w = _world(client, admin)
+    sales, cases = _two(client, admin, w)
+    dims_a = {"base_model": w["a_base"], "symptom": "소음", "factory": "F1"}
+    dims_s = {"base_model": w["s_base"], "symptom": "소음", "factory": "F1"}
+    watermark = datetime(2028, 2, 15, tzinfo=UTC)  # 닫힘 30일 — 2027-12 까지 닫혔다
+
+    def plant(per_cell: int) -> None:
+        cells: list[dict[str, Any]] = []
+        for i in range(24):
+            start = _month(date(2024, 1, 1), i)
+            for age in range(min(36, 48 - i)):
+                cells.append(
+                    {
+                        "period": _month(start, age),
+                        "cohort": start,
+                        "age": age,
+                        "dims": dims_a,
+                        "count": 2,
+                    }
+                )
+            target = _month(date(2026, 1, 1), i)
+            for age in range(24 - i):
+                cells.append(
+                    {
+                        "period": _month(target, age),
+                        "cohort": target,
+                        "age": age,
+                        "dims": dims_s,
+                        "count": per_cell,
+                    }
+                )
+        _plant(cases["slug"], cells, watermark)
+
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(date(2024, 1, 1), i),
+                "dims": {"base_model": base},
+                "count": 1,
+                "value_count": 1,
+                "sum": 1000.0,
+            }
+            for base, offset in ((w["a_base"], 0), (w["s_base"], 24))
+            for i in range(offset, offset + 24)
+        ],
+        watermark,
+    )
+    plant(4)
+    worse = _analysis(
+        client, admin, cases["slug"], "sprt", target=w["s_base"], reference=w["a_base"]
+    )
+    # Λ = 2E·ln 1.5 - 0.5E — E 가 9.3 을 넘는 셋째 기간(E = 12)에 「나쁨」.
+    assert worse["decision"] == "worse" and worse["decided_at"] == "2026-03"
+    assert worse["smr"] == pytest.approx(2.0) and worse["smr_low"] > 1.5
+    looks = {one["label"]: one for one in worse["looks"]}
+    assert looks["2026-03"]["expected"] == pytest.approx(12.0)
+    assert looks["2026-03"]["after_decision"] is False and looks["2026-04"]["after_decision"]
+    assert worse["to_worse"] is None
+    compact = _analysis(
+        client,
+        admin,
+        cases["slug"],
+        "sprt",
+        target=w["s_base"],
+        reference=w["a_base"],
+        compact="true",
+    )
+    assert "2026-03" in {one["label"] for one in compact["looks"]}
+    assert len(compact["looks"]) <= 13 and compact["reference_rates"] == []
+
+    plant(2)
+    same = _analysis(
+        client, admin, cases["slug"], "sprt", target=w["s_base"], reference=w["a_base"]
+    )
+    # Λ = -0.0945E — E 가 23.8 을 넘는 다섯째 기간(E = 30)에 「나쁘지 않음」.
+    assert same["decision"] == "not_worse" and same["decided_at"] == "2026-05"
+    assert same["smr"] == pytest.approx(1.0)
+
+
+def test_순차_검정이_안_되는_지표는_이유를_말한다(client: TestClient, admin: Signed) -> None:
+    w = _world(client, admin)
+    _, monthly = _monthly(client, admin, w)
+    reason = next(one for one in monthly["analyses"] if one["recipe"] == "sprt")
+    assert reason["ok"] is False and "코호트" in reason["reason"]
+    refused = _refused(client, admin, monthly["slug"], "sprt", target=w["s_base"])
+    assert refused["code"].endswith("METRICS-0028")

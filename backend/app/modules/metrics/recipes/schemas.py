@@ -308,3 +308,74 @@ class ChangesOut(AnalysisHeader):
     changes: list[ChangeOut]
     segments: list[SegmentOut]
     points: list[ChangesPointOut]
+
+
+# --- ④ 순차 검정 ---------------------------------------------------------------------
+
+
+class ReferenceRateOut(BaseModel):
+    age: int
+    rate: float
+    """경과 a 의 건수 / 그 경과까지 본 대수(대수 하나당)."""
+    units: float
+    records: int
+
+
+class SprtLookOut(BaseModel):
+    k: int
+    """출시(새 모델의 첫 코호트)부터 몇 번째 기간."""
+    when: str
+    label: str
+    observed: float
+    expected: float
+    llr: float
+    smr: float | None
+    smr_low: float | None
+    smr_high: float | None
+    decision: Literal["continue", "worse", "not_worse"]
+    after_decision: bool
+    """결론이 선 뒤의 기간 — 참고로만."""
+
+
+class SprtCohortOut(BaseModel):
+    cohort: str
+    label: str
+    units: float
+    observed: int
+    expected: float
+    drill: DrillOut
+
+
+class SprtOut(AnalysisHeader):
+    dim: str
+    dim_label: str
+    target: str
+    target_label: str
+    reference: str
+    reference_label: str
+    rho: float
+    alpha: float
+    beta: float
+    upper: float
+    lower: float
+    decision: Literal["continue", "worse", "not_worse"]
+    """worse 는 「전작보다 ρ 배 쪽」, not_worse 는 「ρ 배 나쁘지는 않다」, continue 는
+    「아직」."""
+    decided_at: str | None
+    observed: float
+    expected: float
+    llr: float
+    smr: float | None
+    smr_low: float | None
+    smr_high: float | None
+    to_not_worse: float | None
+    """「아직」 일 때 — 전작과 같다면 결론까지 더 쌓일 기대 건수."""
+    to_worse: float | None
+    periods_to_not_worse: float | None
+    """요즘 기간마다 쌓이는 기대 건수로 나눈 어림 — 몇 기간 더."""
+    periods_to_worse: float | None
+    reference_reach: int
+    """전작이 닿은 가장 긴 경과 — 그 너머의 새 모델 기록은 견주지 못한다."""
+    reference_rates: list[ReferenceRateOut]
+    looks: list[SprtLookOut]
+    cohort_rows: list[SprtCohortOut]

@@ -10671,6 +10671,164 @@
         }
       }
     },
+    "/api/metrics/{slug}/analysis/sprt": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Sprt Analysis",
+        "description": "④ 순차 검정 — 새 모델의 경과별 인입을 전작의 경과별 비율로 낸 기대 건수와 견주는\n포아송 SPRT. 매 기간 봐도 된다. 다른 거르기는 `d.<기준>=<값>`(두 모델에 함께).",
+        "operationId": "sprt_analysis_api_metrics__slug__analysis_sprt_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "새 모델 — 그 기준의 값(관계 기준이면 객체 id)",
+              "title": "Target"
+            },
+            "description": "새 모델 — 그 기준의 값(관계 기준이면 객체 id)"
+          },
+          {
+            "name": "reference",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "전작 — 그 기준의 값",
+              "title": "Reference"
+            },
+            "description": "전작 — 그 기준의 값"
+          },
+          {
+            "name": "reference_via",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "전작을 새 모델 객체의 이 칸(참조)에서 찾는다 — reference 대신",
+              "title": "Reference Via"
+            },
+            "description": "전작을 새 모델 객체의 이 칸(참조)에서 찾는다 — reference 대신"
+          },
+          {
+            "name": "dim",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "모델 기준 — 비우면 분모 짝(on)의 첫 기준",
+              "title": "Dim"
+            },
+            "description": "모델 기준 — 비우면 분모 짝(on)의 첫 기준"
+          },
+          {
+            "name": "rho",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 10.0,
+              "exclusiveMinimum": 1.0,
+              "description": "「나쁨」 의 비",
+              "default": 1.5,
+              "title": "Rho"
+            },
+            "description": "「나쁨」 의 비"
+          },
+          {
+            "name": "alpha",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMaximum": 0.5,
+              "exclusiveMinimum": 0.0,
+              "default": 0.05,
+              "title": "Alpha"
+            }
+          },
+          {
+            "name": "beta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMaximum": 0.5,
+              "exclusiveMinimum": 0.0,
+              "default": 0.1,
+              "title": "Beta"
+            }
+          },
+          {
+            "name": "compact",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "기간은 끝 12개와 결론이 선 자리만, 비율 · 코호트 줄 빼고",
+              "default": false,
+              "title": "Compact"
+            },
+            "description": "기간은 끝 12개와 결론이 선 자리만, 비율 · 코호트 줄 빼고"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SprtOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/bundles/import": {
       "post": {
         "tags": [
@@ -25292,6 +25450,34 @@
         "title": "ReferenceEdgeOut",
         "description": "참조 칸을 관계처럼 읽은 것 — **길 목록이 한 벌**이 되게. AI 와 그래프가 관계 종류와 함께\n본다. slug 는 `ref:<타입>.<칸>`, 조건 · 통계에서는 `ref.<칸>.…` 로 건넌다."
       },
+      "ReferenceRateOut": {
+        "properties": {
+          "age": {
+            "type": "integer",
+            "title": "Age"
+          },
+          "rate": {
+            "type": "number",
+            "title": "Rate"
+          },
+          "units": {
+            "type": "number",
+            "title": "Units"
+          },
+          "records": {
+            "type": "integer",
+            "title": "Records"
+          }
+        },
+        "type": "object",
+        "required": [
+          "age",
+          "rate",
+          "units",
+          "records"
+        ],
+        "title": "ReferenceRateOut"
+      },
       "ReferencesOut": {
         "properties": {
           "property_refs": {
@@ -27616,6 +27802,518 @@
           "workspace_slug"
         ],
         "title": "SignupRequest"
+      },
+      "SprtCohortOut": {
+        "properties": {
+          "cohort": {
+            "type": "string",
+            "title": "Cohort"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "units": {
+            "type": "number",
+            "title": "Units"
+          },
+          "observed": {
+            "type": "integer",
+            "title": "Observed"
+          },
+          "expected": {
+            "type": "number",
+            "title": "Expected"
+          },
+          "drill": {
+            "$ref": "#/components/schemas/DrillOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "cohort",
+          "label",
+          "units",
+          "observed",
+          "expected",
+          "drill"
+        ],
+        "title": "SprtCohortOut"
+      },
+      "SprtLookOut": {
+        "properties": {
+          "k": {
+            "type": "integer",
+            "title": "K"
+          },
+          "when": {
+            "type": "string",
+            "title": "When"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "observed": {
+            "type": "number",
+            "title": "Observed"
+          },
+          "expected": {
+            "type": "number",
+            "title": "Expected"
+          },
+          "llr": {
+            "type": "number",
+            "title": "Llr"
+          },
+          "smr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smr"
+          },
+          "smr_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smr Low"
+          },
+          "smr_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smr High"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "continue",
+              "worse",
+              "not_worse"
+            ],
+            "title": "Decision"
+          },
+          "after_decision": {
+            "type": "boolean",
+            "title": "After Decision"
+          }
+        },
+        "type": "object",
+        "required": [
+          "k",
+          "when",
+          "label",
+          "observed",
+          "expected",
+          "llr",
+          "smr",
+          "smr_low",
+          "smr_high",
+          "decision",
+          "after_decision"
+        ],
+        "title": "SprtLookOut"
+      },
+      "SprtOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "dim": {
+            "type": "string",
+            "title": "Dim"
+          },
+          "dim_label": {
+            "type": "string",
+            "title": "Dim Label"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "target_label": {
+            "type": "string",
+            "title": "Target Label"
+          },
+          "reference": {
+            "type": "string",
+            "title": "Reference"
+          },
+          "reference_label": {
+            "type": "string",
+            "title": "Reference Label"
+          },
+          "rho": {
+            "type": "number",
+            "title": "Rho"
+          },
+          "alpha": {
+            "type": "number",
+            "title": "Alpha"
+          },
+          "beta": {
+            "type": "number",
+            "title": "Beta"
+          },
+          "upper": {
+            "type": "number",
+            "title": "Upper"
+          },
+          "lower": {
+            "type": "number",
+            "title": "Lower"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "continue",
+              "worse",
+              "not_worse"
+            ],
+            "title": "Decision"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "observed": {
+            "type": "number",
+            "title": "Observed"
+          },
+          "expected": {
+            "type": "number",
+            "title": "Expected"
+          },
+          "llr": {
+            "type": "number",
+            "title": "Llr"
+          },
+          "smr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smr"
+          },
+          "smr_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smr Low"
+          },
+          "smr_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smr High"
+          },
+          "to_not_worse": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Not Worse"
+          },
+          "to_worse": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "To Worse"
+          },
+          "periods_to_not_worse": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periods To Not Worse"
+          },
+          "periods_to_worse": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periods To Worse"
+          },
+          "reference_reach": {
+            "type": "integer",
+            "title": "Reference Reach"
+          },
+          "reference_rates": {
+            "items": {
+              "$ref": "#/components/schemas/ReferenceRateOut"
+            },
+            "type": "array",
+            "title": "Reference Rates"
+          },
+          "looks": {
+            "items": {
+              "$ref": "#/components/schemas/SprtLookOut"
+            },
+            "type": "array",
+            "title": "Looks"
+          },
+          "cohort_rows": {
+            "items": {
+              "$ref": "#/components/schemas/SprtCohortOut"
+            },
+            "type": "array",
+            "title": "Cohort Rows"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "dim",
+          "dim_label",
+          "target",
+          "target_label",
+          "reference",
+          "reference_label",
+          "rho",
+          "alpha",
+          "beta",
+          "upper",
+          "lower",
+          "decision",
+          "decided_at",
+          "observed",
+          "expected",
+          "llr",
+          "smr",
+          "smr_low",
+          "smr_high",
+          "to_not_worse",
+          "to_worse",
+          "periods_to_not_worse",
+          "periods_to_worse",
+          "reference_reach",
+          "reference_rates",
+          "looks",
+          "cohort_rows"
+        ],
+        "title": "SprtOut"
       },
       "StaffAgentFteOut": {
         "properties": {

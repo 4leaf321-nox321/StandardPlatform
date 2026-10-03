@@ -471,49 +471,41 @@ registry.register(registry.Recipe(NAME, LABEL, available))
 
 
 @dataclass
-class _Cohort:
+class Cohort:
+    """코호트 하나 — 대수 · 닫힌 마지막 경과 · 경과별 건수(닫히지 않은 경과도 든다)."""
+
     start: date
     units: float
     horizon: int
     counts: dict[int, int]
 
+    @property
+    def inside(self) -> int:
+        return sum(c for a, c in self.counts.items() if a <= self.horizon)
 
-def run(
-    db: Session,
-    user: User,
-    metric: MetricDef,
-    built: spec_module.Built,
-    ask: query.Ask,
-    *,
-    model: Literal["auto", "weibull", "defective"] = "auto",
-    max_age: int | None = None,
-    compact: bool = False,
-) -> LifeOut:
-    reason = available(built)
-    if reason is not None:
-        raise common.refuse(24, reason)
-    assert built.cohort is not None and built.time is not None
-    grain = built.cohort.grain
-    ask = replace(ask, dims=[], by=("cohort", "age"), age_from=0)
-    common.require_exact_counts(built, ask)
-    frame = query.frame(db, user, metric, built, ask)
-    common.require_whole(frame)
-    caveats = common.Caveats()
-    excluded: dict[str, int] = {
-        "missing_denominator": 0,
-        "open_denominator": 0,
-        "open_cohort": 0,
-        "open_cells": 0,
-        "inconsistent_denominator": 0,
-        "beyond_max_age": 0,
-    }
+
+def cohorts_of(
+    frame: query.Frame, grain: str, excluded: dict[str, int], *, max_age: int | None = None
+) -> list[Cohort]:
+    """코호트 x 경과 셀 → 쓸 수 있는 코호트. 뺀 것은 `excluded` 에 더한다 — 분모 없음 · 판매가
+    덜 들어온 달 · 닫히지 않은 코호트 · 아직 들어오는 경과 · 기록이 대수보다 많음 · 경과 상한
+    밖. (순차 검정도 같은 규칙으로 코호트를 고른다.)"""
+    for key in (
+        "missing_denominator",
+        "open_denominator",
+        "open_cohort",
+        "open_cells",
+        "inconsistent_denominator",
+        "beyond_max_age",
+    ):
+        excluded.setdefault(key, 0)
     by_cohort: dict[date, dict[int, int]] = {}
     for cell in frame.cells:
         if cell.cohort is None or cell.age is None:
             continue
         by_cohort.setdefault(cell.cohort, {})[cell.age] = cell.count
     den = frame.denominator
-    cohorts: list[_Cohort] = []
+    out: list[Cohort] = []
     for start in sorted(by_cohort):
         counts = by_cohort[start]
         records = sum(counts.values())
@@ -550,7 +542,40 @@ def run(
         if inside > units:
             excluded["inconsistent_denominator"] += records
             continue
-        cohorts.append(_Cohort(start, float(units), horizon, counts))
+        out.append(Cohort(start, float(units), horizon, counts))
+    return out
+
+
+def run(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    built: spec_module.Built,
+    ask: query.Ask,
+    *,
+    model: Literal["auto", "weibull", "defective"] = "auto",
+    max_age: int | None = None,
+    compact: bool = False,
+) -> LifeOut:
+    reason = available(built)
+    if reason is not None:
+        raise common.refuse(24, reason)
+    assert built.cohort is not None and built.time is not None
+    grain = built.cohort.grain
+    ask = replace(ask, dims=[], by=("cohort", "age"), age_from=0)
+    common.require_exact_counts(built, ask)
+    frame = query.frame(db, user, metric, built, ask)
+    common.require_whole(frame)
+    caveats = common.Caveats()
+    excluded: dict[str, int] = {
+        "missing_denominator": 0,
+        "open_denominator": 0,
+        "open_cohort": 0,
+        "open_cells": 0,
+        "inconsistent_denominator": 0,
+        "beyond_max_age": 0,
+    }
+    cohorts = cohorts_of(frame, grain, excluded, max_age=max_age)
     if excluded["inconsistent_denominator"]:
         caveats.add(
             "inconsistent_denominator",
@@ -621,7 +646,7 @@ def run(
 @dataclass
 class _Found:
     data: LifeData | None
-    cohorts: list[_Cohort]
+    cohorts: list[Cohort]
     fits: list[Fit]
     chosen: Fit | None
     statistic: float | None
@@ -737,7 +762,7 @@ def _out(
     if not compact:
         for cohort in cohorts:
             end = query.advance(cohort.start, cohort.horizon + 1, grain)
-            inside = sum(c for a, c in cohort.counts.items() if a <= cohort.horizon)
+            inside = cohort.inside
             cell = query.Cell({}, None, cohort.start, None, inside, 0, None, None, None)
             ranged = replace(ask, period_from=cohort.start, period_to=end)
             rows.append(

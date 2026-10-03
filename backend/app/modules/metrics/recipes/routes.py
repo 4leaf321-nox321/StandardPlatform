@@ -13,8 +13,14 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.metrics import compute, params, query, services
-from app.modules.metrics.recipes import changes, control, life, pareto
-from app.modules.metrics.recipes.schemas import ChangesOut, ControlOut, LifeOut, ParetoOut
+from app.modules.metrics.recipes import changes, control, life, pareto, sprt
+from app.modules.metrics.recipes.schemas import (
+    ChangesOut,
+    ControlOut,
+    LifeOut,
+    ParetoOut,
+    SprtOut,
+)
 from app.shared.auth import current_user
 
 router = APIRouter(prefix="/{slug}/analysis")
@@ -176,3 +182,48 @@ def changes_analysis(
         cohort_to=cohort_to,
     )
     return changes.run(db, user, metric, built, ask, axis=axis, window=window, compact=compact)
+
+
+@router.get("/sprt", response_model=SprtOut)
+def sprt_analysis(
+    slug: str,
+    request: Request,
+    target: str = Query(description="새 모델 — 그 기준의 값(관계 기준이면 객체 id)"),
+    reference: str | None = Query(default=None, description="전작 — 그 기준의 값"),
+    reference_via: str | None = Query(
+        default=None,
+        description="전작을 새 모델 객체의 이 칸(참조)에서 찾는다 — reference 대신",
+    ),
+    dim: str | None = Query(
+        default=None, description="모델 기준 — 비우면 분모 짝(on)의 첫 기준"
+    ),
+    rho: float = Query(default=sprt.RHO, gt=1.0, le=10.0, description="「나쁨」 의 비"),
+    alpha: float = Query(default=sprt.ALPHA, gt=0.0, lt=0.5),
+    beta: float = Query(default=sprt.BETA, gt=0.0, lt=0.5),
+    compact: bool = Query(
+        default=False, description="기간은 끝 12개와 결론이 선 자리만, 비율 · 코호트 줄 빼고"
+    ),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> SprtOut:
+    """④ 순차 검정 — 새 모델의 경과별 인입을 전작의 경과별 비율로 낸 기대 건수와 견주는
+    포아송 SPRT. 매 기간 봐도 된다. 다른 거르기는 `d.<기준>=<값>`(두 모델에 함께)."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(request)
+    return sprt.run(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        target=target,
+        reference=reference,
+        reference_via=reference_via,
+        dim=dim,
+        rho=rho,
+        alpha=alpha,
+        beta=beta,
+        compact=compact,
+    )
