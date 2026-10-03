@@ -43,6 +43,8 @@ export interface PropertyDef {
   decimals: number | null
   /** `text` 계열의 모양 규칙(정규식). */
   pattern: string | null
+  /** `file` 칸이 받는 것 — `image` 면 서버가 이미지로 읽은 것만 붙는다(ADR 0012). */
+  accept?: string | null
   /** 안 채웠을 때 들어가는 값. **만들 때만** 적용된다. */
   default_value: unknown
   /** 유일해야 하는가. 범위는 타입의 `key_scope` 를 따른다. */

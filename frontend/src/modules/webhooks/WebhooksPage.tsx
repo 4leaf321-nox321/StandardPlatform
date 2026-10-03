@@ -33,11 +33,12 @@ import { shownDateTime } from '@/shared/lib/datetime'
 /** 자주 쓰는 패턴. 직접 쳐도 된다 — 감사 기록의 action 이름이다. */
 const EVENT_PRESETS: [string, string][] = [
   ['*', '전부'],
-  ['object.*', '객체 전부 (만듦·고침·지움·합침·관계)'],
+  ['object.*', '객체 전부 (만듦·고침·지움·합침·관계·첨부)'],
   ['object.create', '객체 만듦'],
   ['object.update', '객체 고침'],
   ['object.delete', '객체 지움'],
   ['object.relation.*', '관계 맺음·끊음'],
+  ['object.attachment.*', '첨부 추가·삭제'],
   ['ontology.*', '정의 변경'],
 ]
 

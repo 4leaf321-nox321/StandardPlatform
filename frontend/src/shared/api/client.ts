@@ -224,6 +224,20 @@ export async function downloadFile(path: string, filename: string): Promise<void
   }
 }
 
+/**
+ * 파일 내용을 blob 으로 — **그림을 띄울 때**(ADR 0012).
+ *
+ * `<img src="/api/...">` 는 토큰이 안 실려 401 이다(위 `downloadFile` 과 같은 이유). 받아서
+ * `URL.createObjectURL` 로 띄운다. 사진을 보는 동안 access 가 만료될 수 있어 한 번 갱신하고
+ * 다시 받는다. 서버가 `Cache-Control: private` 을 주므로 같은 사진은 브라우저 캐시에서 온다.
+ */
+export async function fetchBlob(path: string): Promise<Blob> {
+  let response = await send(path)
+  if (response.status === 401 && (await tryRefresh())) response = await send(path)
+  if (!response.ok) throw await parseError(response)
+  return response.blob()
+}
+
 export const api = {
   get: <T>(path: string) => request<T>(path),
   post: <T>(path: string, body?: unknown) =>

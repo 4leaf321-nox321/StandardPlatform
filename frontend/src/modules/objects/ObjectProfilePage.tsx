@@ -339,6 +339,7 @@ export default function ObjectProfilePage() {
           title={def.label}
           workspaceSlug={row.owner_workspace_slug}
           canEdit={profile.data?.can_edit ?? false}
+          accept={def.accept}
         />
       ))}
 

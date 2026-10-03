@@ -51,6 +51,8 @@ const ACTION_LABEL: Record<string, string> = {
   'object.relation.add': '관계 맺음',
   'object.relation.update': '관계 고침',
   'object.relation.remove': '관계 끊음',
+  'object.attachment.add': '첨부 추가',
+  'object.attachment.remove': '첨부 삭제',
 }
 
 const FIXED_LABEL: Record<string, string> = {
@@ -90,6 +92,11 @@ export function ObjectHistory({
     if (field.startsWith('properties.')) {
       const key = field.slice('properties.'.length)
       return byKey.get(key)?.label ?? key
+    }
+    // 붙이고 뗀 첨부 — 자리 없는 것은 `attachments._`(「그 밖의 첨부」).
+    if (field.startsWith('attachments.')) {
+      const key = field.slice('attachments.'.length)
+      return key === '_' ? '그 밖의 첨부' : `${byKey.get(key)?.label ?? key} (첨부)`
     }
     return FIXED_LABEL[field] ?? field
   }

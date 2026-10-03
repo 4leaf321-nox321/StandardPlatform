@@ -14,6 +14,20 @@ export interface Attachment {
   /** 내용의 해시. **같은 파일인지 눈으로 확인할 수 있는 유일한 값이다.** */
   sha256: string
   created_at: string
+  /**
+   * **서버가 열어 보고** 이미지(PNG · JPEG · GIF · WebP)로 읽은 것 — 이것만 그림으로 띄운다.
+   * `content_type` 은 판정에 쓰지 않는다(올린 쪽이 붙인 말일 수 있다).
+   */
+  is_image?: boolean
+  /** 세운 뒤(EXIF 회전 반영)의 가로 · 세로. */
+  width?: number | null
+  height?: number | null
+}
+
+/** 미리보기(긴 변 320px WebP) · 원본 — `useBlobUrl` 로 띄운다. */
+export const attachmentPaths = {
+  thumbnail: (id: string) => `/attachments/${id}/thumbnail`,
+  content: (id: string) => `/attachments/${id}/content`,
 }
 
 export const attachmentApi = {
@@ -61,8 +75,7 @@ export const attachmentApi = {
    * 여는 주소에는 안 실리고, 그러면 새 탭에서 401 이 나는데 화면에는 아무 표시도
    * 안 뜬다.
    */
-  download: (id: string, filename: string) =>
-    downloadFile(`/attachments/${id}/content`, filename),
+  download: (id: string, filename: string) => downloadFile(`/attachments/${id}/content`, filename),
 
   remove: (id: string) => api.delete<void>(`/attachments/${id}`),
 }

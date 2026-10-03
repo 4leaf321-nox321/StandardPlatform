@@ -127,6 +127,7 @@ export function PropertyEditDialog({
   const [maxValue, setMaxValue] = useState(property?.max_value?.toString() ?? '')
   const [decimals, setDecimals] = useState(property?.decimals?.toString() ?? '')
   const [pattern, setPattern] = useState(property?.pattern ?? '')
+  const [imageOnly, setImageOnly] = useState(property?.accept === 'image')
   const [defaultValue, setDefaultValue] = useState(
     property?.default_value == null ? '' : String(property.default_value),
   )
@@ -156,6 +157,7 @@ export function PropertyEditDialog({
       max_value: NUMERIC.has(dataType) && maxValue !== '' ? Number(maxValue) : null,
       decimals: NUMERIC.has(dataType) && decimals !== '' ? Number(decimals) : null,
       pattern: PATTERNABLE.has(dataType) && pattern ? pattern : null,
+      accept: dataType === 'file' && imageOnly ? 'image' : null,
       // **빈 칸은 「기본값 없음」 이다.** 빈 문자열을 넣으면 그것이 기본값이 되고,
       // 그러면 필수 검사가 통과해 버린다. 공통 속성에는 기본값 · 유일이 없다(타입마다다).
       default_value:
@@ -543,6 +545,25 @@ export function PropertyEditDialog({
                     </span>
                   </span>
                 </label>
+                {dataType === 'file' && (
+                  <label className="flex items-start gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="mt-0.5 size-4"
+                      checked={imageOnly}
+                      onChange={(event) => setImageOnly(event.target.checked)}
+                    />
+                    <span>
+                      사진만 허용
+                      <span className="text-muted-foreground ml-1 text-xs">
+                        PNG · JPEG · GIF · WebP 만 업로드됩니다 — <b>서버가 파일을 열어</b>
+                        확인합니다(이름 · 확장자로 판단하지 않습니다). 상세 화면에 사진 격자로
+                        표시됩니다. 끄면 모든 파일을 업로드할 수 있고, 사진은 그대로 미리보기로
+                        표시됩니다.
+                      </span>
+                    </span>
+                  </label>
+                )}
                 {!isInterface && UNIQUEABLE.has(dataType) && (
                   <label className="flex items-start gap-2 text-sm">
                     <input
