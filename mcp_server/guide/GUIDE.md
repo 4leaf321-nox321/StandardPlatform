@@ -812,7 +812,7 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
   말할 때 그 달이 닫혔는지 함께 말한다.
 - `overlap` — 한 기록이 여러 셀에 든다(여러 값 기준 · 여럿과 이어진 걸음). 셀의 합이 기록
   수보다 크다.
-- `unbucketed` — 날짜를 못 읽어 기간이 없는 기록 수. `truncated` — 상한에서 잘렸다. 좁혀서 다시.
+- `unbucketed` — 시간 칸이 비었거나 못 읽어 기간이 없는 기록 수. `truncated` — 상한에서 잘렸다. 좁혀서 다시.
 - `denominator.missing` — 분모가 없거나 0 이라 비율이 빈 셀 수. 분모의 기간이 아직 안 들어온
   것일 수 있다.
 - 「그 수가 뭔데」 — 셀의 `drill.params` 를 `objects_list(type_slug=drill.type_slug, conditions=)`

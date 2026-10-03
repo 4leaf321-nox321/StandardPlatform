@@ -1928,8 +1928,8 @@ async def metric_query(
     사용자에게 옮길 때 **빼먹지 않는다**:
     - `computed_at`(계산 시각)과 `stale` — 세어 둔 값이다. `closed` 가 false 인 기간은 더
       들어올 수 있다.
-    - `overlap` 이 true 면 셀의 합이 기록 수보다 크다(여러 값 기준). `unbucketed` 는 날짜를
-      못 읽어 기간이 없는 기록 수, `truncated` 는 상한에서 잘렸다는 뜻 — 좁혀서 다시.
+    - `overlap` 이 true 면 셀의 합이 기록 수보다 크다(여러 값 기준). `unbucketed` 는 시간 칸이
+      비었거나 못 읽어 기간이 없는 기록 수, `truncated` 는 상한에서 잘렸다는 뜻 — 좁혀서 다시.
     - `denominator.missing` 이 0 이 아니면 분모가 없어 비율이 빈 셀이 있다.
     - 「그 수가 뭔데」 는 셀의 `drill.params` 를 `objects_list` 의 `conditions` 로 —
       `f.<칸>.<연산>` 키를 `{field, op, value}` 로 풀면 된다(`drill.partial` 이 비어 있을 때
