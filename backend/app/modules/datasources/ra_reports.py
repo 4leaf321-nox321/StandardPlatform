@@ -254,7 +254,7 @@ def fetch(
                 out.pages += 1
                 for item in items:
                     if isinstance(item, dict):
-                        out.rows.append(flatten(item))
+                        out.rows.append(flatten(item, base_url=source.base_url))
                 if len(out.rows) >= max_rows:
                     out.truncated = True
                     out.rows = out.rows[:max_rows]
@@ -284,7 +284,26 @@ def fetch(
 # --- 행 바꾸기 --------------------------------------------------------------------
 
 
-def flatten(item: dict[str, Any]) -> dict[str, Any]:
+#: RA 가 본문을 한 건 1MB 에서 자르면(`text_truncated`) 끝에 붙인다 — 에이전트가 앞부분을
+#: 전부로 읽지 않게.
+CUT_NOTE = "\n\n[RA 피드의 한 건 상한(1MB)에서 잘렸습니다 — 전문은 원본 주소에서 봅니다.]"
+
+
+def absolute(base_url: str, url: object) -> str | None:
+    """원문 주소 — RA 에 기준 주소(`APP_BASE_URL`)가 비어 있으면 `/w/…` 상대 경로가 온다.
+    그때는 소스의 RA 루트를 붙인다(루트를 `…/api` 까지 적었어도)."""
+    if not isinstance(url, str) or not url.strip():
+        return None
+    url = url.strip()
+    if url.startswith(("http://", "https://")) or not url.startswith("/"):
+        return url
+    base = base_url.strip().rstrip("/")
+    if base.endswith("/api"):
+        base = base[: -len("/api")]
+    return f"{base}{url}"
+
+
+def flatten(item: dict[str, Any], *, base_url: str = "") -> dict[str, Any]:
     """피드 항목 하나 → 틀의 칸 키로 된 평평한 행(숨은 자리 `_…` 포함)."""
     rid = item.get("id")
     workspace: dict[str, Any] = (
@@ -318,7 +337,7 @@ def flatten(item: dict[str, Any]) -> dict[str, Any]:
         "key": f"{KEY_PREFIX}{rid}" if rid is not None else "",
         "label": str(item.get("title") or "").strip(),
         "ra_id": "" if rid is None else str(rid),
-        "url": item.get("url"),
+        "url": absolute(base_url, item.get("url")),
         "report_date": item.get("report_date"),
         "phase": PHASE_LABELS.get(phase, phase),
         "report_type": item.get("report_type"),
@@ -332,7 +351,7 @@ def flatten(item: dict[str, Any]) -> dict[str, Any]:
     # 본문은 **왔을 때만** 싣는다 — 안 온 것(전량 대조 · RA 백필 전)으로 우리 본문을 지우지
     # 않는다.
     if isinstance(item.get("text"), str):
-        row["body"] = item["text"]
+        row["body"] = item["text"] + (CUT_NOTE if item.get("text_truncated") else "")
     return row
 
 
