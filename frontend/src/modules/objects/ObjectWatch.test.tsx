@@ -83,8 +83,10 @@ describe('인터페이스 주소로 연 상세', () => {
     objectApi.setWatch.mockResolvedValue({ watching: true, watcher_count: 1 })
     // 「설비」 를 가리키는 칸에서 누르면 /o/<인터페이스>/<id> 가 된다.
     await open(PROFILE, '/o/equip/bolt')
+    // 옮겨 간 뒤의 조회를 기다린 다음 단추를 잡는다 — 처음 주소의 화면이 먼저 서므로, 부하가
+    // 걸리면 옮기기 전에 단추를 잡아 시험이 흔들렸다(전체 검사에서 한 번).
+    await waitFor(() => expect(objectApi.profile).toHaveBeenLastCalledWith('part', 'bolt'))
     const button = await screen.findByRole('button', { name: /알림 구독/ })
-    expect(objectApi.profile).toHaveBeenLastCalledWith('part', 'bolt')
     await userEvent.click(button)
     await waitFor(() => expect(objectApi.setWatch).toHaveBeenCalledWith('part', 'bolt', true))
   })
