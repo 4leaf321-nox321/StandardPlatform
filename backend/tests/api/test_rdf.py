@@ -273,6 +273,53 @@ def test_목록에서_안_보이는_남의_부서_객체는_RDF_로도_안_나�
     assert asked(member) == {"MINE-1", "ALL-1"}
 
 
+def test_SPARQL_은_읽기_토큰으로도_묻되_쓰는_말은_막고_보이는_것만(
+    client: TestClient, admin: Signed, member: Signed, db: Session
+) -> None:
+    """질의는 POST 지만 읽기다 — 읽기(`read`) 토큰으로 물을 수 있어야 MCP 로 들어온 AI 가 여러
+    타입을 잇는 물음을 묻는다. 토큰의 주인이 보는 것만 나오고, 쓰는 말은 토큰이어도 막힌다."""
+    other = Workspace(slug=f"o-{uuid.uuid4().hex[:6]}", name="다른 부서")
+    db.add(other)
+    db.commit()
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    for workspace, key in ((other.slug, "HIDDEN-1"), (member.workspace, "MINE-1")):
+        made = client.post(
+            f"/api/objects/{part}",
+            json={"workspace_slug": workspace, "key": key, "label": key},
+            headers=admin.headers,
+        )
+        assert made.status_code == 201, made.text
+
+    def token(who: Signed, scopes: list[str]) -> dict[str, str]:
+        made = client.post(
+            "/api/auth/tokens", json={"name": "질의", "scopes": scopes}, headers=who.headers
+        )
+        assert made.status_code == 201, made.text
+        return {"Authorization": f"Bearer {made.json()['token']}"}
+
+    reading = token(member, ["read"])
+    query = {
+        "query": "SELECT ?k WHERE { ?x <http://purl.org/dc/terms/identifier> ?k }",
+        "types": [part],
+    }
+    asked = client.post("/api/rdf/query", json=query, headers=reading)
+    assert asked.status_code == 200, asked.text
+    assert {row["k"] for row in asked.json()["rows"]} == {"MINE-1"}
+
+    # 쓰는 말은 토큰이어도 경로가 거절한다 — 읽기로 연 것은 「묻기」 뿐이다.
+    sneaky = client.post(
+        "/api/rdf/query",
+        json={"query": "DELETE WHERE { ?s ?p ?o } ; SELECT ?s WHERE { ?s ?p ?o }"},
+        headers=reading,
+    )
+    assert sneaky.status_code == 409 and sneaky.json()["error"]["code"] == code("RDF", 2)
+
+    # 코어만 읽는 토큰은 묻지 못한다 — 사내 전체를 읽는 길이라서.
+    core_only = client.post("/api/rdf/query", json=query, headers=token(admin, ["core:read"]))
+    assert core_only.status_code == 403
+    assert core_only.json()["error"]["code"] == code("AUTH", 104)
+
+
 def test_너무_큰_그래프는_세우기_전에_거절하고_좁히라고_한다(
     client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
 ) -> None:

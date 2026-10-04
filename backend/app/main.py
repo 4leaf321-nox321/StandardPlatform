@@ -212,6 +212,11 @@ def _register_extensions() -> None:
     # 없다), 하는 일은 「이 이름이 어느 것인지 묻기」 다. 쓰기로 두면 **보내기 전에 미리
     # 물어보는** 도구가 쓰기 토큰을 들어야 한다 — 그 토큰은 실수로 넣을 수도 있다.
     scopes.register_read_only_post_suffix("/resolve-many")
+    # **SPARQL 도 읽기다.** POST 인 이유는 질의가 길어서(주소에 못 넣는다)이고, 하는 일은
+    # 「묻기」 다 — `SELECT` · `ASK` 만 받고 쓰는 말(INSERT · DELETE …)과 바깥 호출은 경로가
+    # 거절하며, 질의는 메모리에 세운 사본 그래프에서 돌아 DB 를 바꿀 길이 없다. 안 열면 읽기
+    # 토큰으로 들어온 AI(MCP `rdf_query`)가 여러 타입을 잇는 물음을 못 묻는다.
+    scopes.register_read_only_post("/api/rdf/query")
     # **바깥 시스템에 주는 토큰은 코어만 읽는다.** `read` 를 주면 그 계정이 볼 수 있는 전부가
     # 나간다 — 연동 하나 때문에 사내 전체를 여는 일이 된다.
     scopes.register_read_scope("/api/core", coreapi_routes.SCOPE)
