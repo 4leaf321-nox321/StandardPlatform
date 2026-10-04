@@ -11,6 +11,7 @@ import { useState } from 'react'
 import { Eye, Plus, RefreshCw, Trash2, Wand2, X } from 'lucide-react'
 
 import { datasourceApi } from '@/modules/datasources/api'
+import { RA_FEED, RaOptionsFields, RaReportTypeMaker } from '@/modules/datasources/RaReportsFields'
 import type {
   AuthKind,
   CoreSuggest,
@@ -57,6 +58,17 @@ const KIND_LABEL: Record<string, string> = {
   rest: 'REST',
   file: '파일',
   sp_core: '형제 코어',
+  ra_reports: 'RA 보고서',
+}
+
+/** RA 보고서 소스만 아는 설정 — 다른 종류로 바꾸면 떨군다(서버가 모르는 설정을 거절한다). */
+const RA_OPTION_KEYS: readonly string[] = ['board', 'include_descendants', 'phase', 'include_text']
+
+function optionsFor(kind: SourceKind, options: SourceOptions): SourceOptions {
+  const ra = kind === 'ra_reports'
+  return Object.fromEntries(
+    Object.entries(options).filter(([key]) => RA_OPTION_KEYS.includes(key) === ra),
+  ) as SourceOptions
 }
 
 export default function DataSourcesPage() {
@@ -159,7 +171,11 @@ export default function DataSourcesPage() {
               <p className="text-muted-foreground font-mono text-xs break-all">
                 {source.kind === 'file'
                   ? source.entity_set
-                  : `${source.base_url}/${source.entity_set.replace(/^\//, '')}`}
+                  : source.kind === 'ra_reports'
+                    ? `${source.base_url} · 조직 ${source.options.board || '(안 고름)'}${
+                        source.options.include_descendants === false ? '' : ' 과 하위'
+                      }`
+                    : `${source.base_url}/${source.entity_set.replace(/^\//, '')}`}
                 {source.kind === 'odata' && source.filter && ` ?$filter=${source.filter}`}
               </p>
               <p className="text-muted-foreground text-xs">
@@ -170,6 +186,10 @@ export default function DataSourcesPage() {
                   : ' · 손으로만'}
                 {source.source_name && ` · 출처 ${source.source_name}`}
                 {source.deprecate_missing && ' · 사라진 행은 사용 중지'}
+                {source.kind === 'ra_reports' &&
+                  (source.reconciled_at
+                    ? ` · 마지막 전량 대조 ${shownDateTime(source.reconciled_at)}`
+                    : ' · 아직 전량 대조 전')}
                 {source.auth_kind !== 'none' && ` · 인증 ${source.auth_kind}`}
               </p>
               {opened === source.slug && <Runs source={source} />}
@@ -182,6 +202,7 @@ export default function DataSourcesPage() {
         <EditDialog
           source={editing === 'new' ? null : editing}
           types={(schema.data?.types ?? []).filter((one) => one.kind_class !== 'system')}
+          onTypesChanged={schema.reload}
           relationTypes={schema.data?.relation_types ?? []}
           workspaceSlugs={(workspaces.data ?? []).map((one) => one.slug)}
           onClose={() => setEditing(null)}
@@ -252,11 +273,7 @@ function Runs({ source }: { source: DataSource }) {
           <span className="text-muted-foreground">{shownDateTime(run.started_at)}</span>
           <span>{run.actor_label}</span>
           <span className="text-muted-foreground">
-            행 {run.rows_seen} ·{' '}
-            {Object.entries(run.counts)
-              .filter(([, n]) => n > 0)
-              .map(([k, n]) => `${COUNT_LABEL[k] ?? k} ${n}`)
-              .join(' · ')}
+            행 {run.rows_seen} · {countsText(run.counts)}
           </span>
           {run.errors.length > 0 && (
             <button
@@ -286,6 +303,19 @@ const COUNT_LABEL: Record<string, string> = {
   unchanged: '그대로',
   error: '오류',
   deprecated: '사용 중지',
+  // RA 보고서(ADR 0018) — 지우지 않고 원본 상태를 적는다.
+  gone: '원본에서 내려감',
+  back: '다시 게시',
+  gone_held_back: '내려감 보류',
+  tags_as_text: '태그를 글로',
+}
+
+/** 실행의 수 — 0 은 빼고. `full_read` 는 수가 아니라 「이번엔 전량으로 받았다」 는 표시다. */
+function countsText(counts: Record<string, number>): string {
+  return Object.entries(counts)
+    .filter(([, n]) => n > 0)
+    .map(([k, n]) => (k === 'full_read' ? '전량 대조' : `${COUNT_LABEL[k] ?? k} ${n}`))
+    .join(' · ')
 }
 
 /** 계획을 보고 적용한다 — 일괄 입력의 계획 창과 같은 무늬. */
@@ -301,7 +331,12 @@ function SyncDialog({
   const [result, setResult] = useState(initial)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error | null>(null)
-  const ok = result.errors.length === 0 && (result.counts.error ?? 0) === 0 && !result.truncated
+  const ra = source.kind === 'ra_reports'
+  // RA 는 깨진 보고서(번호 · 제목이 빈 것)를 건너뛰고 나머지를 넣는다 — 한 건 때문에 조직
+  // 전체가 멈추지 않게. 그래서 넣을 수 있는가는 서버의 판단(`planned`)을 따른다.
+  const ok = ra
+    ? result.run.status === 'planned' && !result.truncated
+    : result.errors.length === 0 && (result.counts.error ?? 0) === 0 && !result.truncated
   const problems = result.rows.filter((row) => row.action === 'error')
 
   async function apply() {
@@ -324,11 +359,7 @@ function SyncDialog({
             {source.name} — {result.applied ? '적용했습니다' : '동기화 계획'}
           </DialogTitle>
           <DialogDescription>
-            외부에서 {result.run.rows_seen}행을 조회했습니다.{' '}
-            {Object.entries(result.counts)
-              .filter(([, n]) => n > 0)
-              .map(([k, n]) => `${COUNT_LABEL[k] ?? k} ${n}`)
-              .join(' · ')}
+            외부에서 {result.run.rows_seen}행을 조회했습니다. {countsText(result.counts)}
             {!result.applied && !ok && ' — 오류가 있어 아무것도 추가하지 않습니다.'}
           </DialogDescription>
         </DialogHeader>
@@ -357,8 +388,12 @@ function SyncDialog({
         )}
         {!result.applied && ok && (
           <p className="text-muted-foreground text-sm">
-            같은 객체(바깥 식별자·식별자·별칭·이름 순)는 수정하고, 없으면 새로 만듭니다. 빈 칸은
-            변경하지 않습니다.
+            {ra
+              ? '같은 보고서(RA 번호)는 고치고, 없으면 새로 만듭니다 — 제목이 같아도 다른 보고서입니다. ' +
+                '깨진 보고서는 건너뜁니다. 이번에 안 온 보고서는 지우지 않습니다(하루 한 번 전량 ' +
+                '대조에서 「원본에서 내려감」 으로 표시).'
+              : '같은 객체(바깥 식별자·식별자·별칭·이름 순)는 수정하고, 없으면 새로 만듭니다. ' +
+                '빈 칸은 변경하지 않습니다.'}
           </p>
         )}
         <DialogFooter>
@@ -379,13 +414,22 @@ function SyncDialog({
 function EditDialog({
   source,
   types,
+  onTypesChanged,
   relationTypes,
   workspaceSlugs,
   onClose,
   onSaved,
 }: {
   source: DataSource | null
-  types: { slug: string; label: string; managed_by?: string; properties: PropertyDef[] }[]
+  types: {
+    slug: string
+    label: string
+    managed_by?: string
+    usage?: 'axis' | 'log'
+    properties: PropertyDef[]
+  }[]
+  /** 타입을 새로 지었으면(「보고서 기록 타입 만들기」) 고르개가 다시 받는다. */
+  onTypesChanged: () => void
   /** 이 설치의 관계 종류 — 선을 가져오는 소스가 그중 하나를 고른다. */
   relationTypes: { slug: string; label: string }[]
   workspaceSlugs: string[]
@@ -423,11 +467,17 @@ function EditDialog({
   const [deprecate, setDeprecate] = useState(source?.deprecate_missing ?? false)
   const [interval, setInterval] = useState(String(source?.interval_minutes ?? 0))
   const [active, setActive] = useState(source?.is_active ?? true)
+  /**
+   * 이 창에서 **한 번 저장된** slug — 미리 보기 · 자동 제안 · 조직 불러오기가 먼저 저장한다.
+   * 새 소스에서 그런 단추를 두 번 누르면 두 번째는 고치기여야 한다(또 만들면 「이미 있다」).
+   */
+  const [savedSlug, setSavedSlug] = useState<string | null>(source?.slug ?? null)
   const [preview, setPreview] = useState<Preview | null>(null)
   const [suggested, setSuggested] = useState<CoreSuggest | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error | null>(null)
 
+  const ra = kind === 'ra_reports'
   const type = types.find((one) => one.slug === typeSlug)
   const propertyTargets = (type?.properties ?? [])
     .filter((def) => def.data_type !== 'file')
@@ -453,11 +503,12 @@ function EditDialog({
       name: name.trim(),
       kind,
       base_url: kind === 'file' ? '' : baseUrl.trim(),
-      entity_set: entitySet.trim(),
-      options,
+      // RA 는 피드 주소가 정해져 있고, 토큰(PAT)을 Bearer 로 보낸다.
+      entity_set: ra ? RA_FEED : entitySet.trim(),
+      options: optionsFor(kind, options),
       filter: filter.trim(),
-      auth_kind: authKind,
-      auth_user: authUser.trim(),
+      auth_kind: ra ? 'bearer' : authKind,
+      auth_user: ra ? '' : authUser.trim(),
       type_slug: typeSlug,
       workspace_slug: workspace === NONE ? null : workspace,
       // 빈 줄(열 이름을 아직 안 적은 속성 줄)은 보내지 않는다 — 서버가 「source 가 없다」 로 거절한다.
@@ -476,21 +527,31 @@ function EditDialog({
             columns: columns.filter((one) => one.source.trim() && one.target),
           },
       source_name: sourceName.trim(),
-      deprecate_missing: deprecate,
+      deprecate_missing: ra ? false : deprecate,
       interval_minutes: Number(interval) || 0,
       is_active: active,
     }
+    // RA 는 칸 대응을 적지 않는다 — 보고서 기록 타입의 칸 키가 약속이다.
+    if (ra) out.mapping = {}
     // 비밀은 **적었을 때만** 보낸다 — 빈 값으로 보내면 있던 비밀이 지워진다.
     if (authSecret || !source) out.auth_secret = authSecret
     return out
+  }
+
+  /** 저장 — 이 창에서 처음이면 만들고, 그다음부터는 고친다. */
+  async function persist(payload: DataSourceWrite) {
+    if (savedSlug) await datasourceApi.update(savedSlug, payload)
+    else {
+      await datasourceApi.create(payload)
+      setSavedSlug(payload.slug)
+    }
   }
 
   async function save() {
     setBusy(true)
     setError(null)
     try {
-      if (source) await datasourceApi.update(source.slug, body())
-      else await datasourceApi.create(body())
+      await persist(body())
       onSaved()
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
@@ -509,8 +570,7 @@ function EditDialog({
       const draft = body()
       const complete = Boolean(externalKey.trim() && fixedOf('label'))
       const payload = complete ? draft : { ...draft, mapping: {} }
-      if (source) await datasourceApi.update(source.slug, payload)
-      else await datasourceApi.create(payload)
+      await persist(payload)
       setPreview(await datasourceApi.preview(slug.trim()))
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
@@ -533,8 +593,7 @@ function EditDialog({
       const draft = body()
       const complete = Boolean(externalKey.trim() && fixedOf('label'))
       const payload = complete ? draft : { ...draft, mapping: {} }
-      if (source) await datasourceApi.update(source.slug, payload)
-      else await datasourceApi.create(payload)
+      await persist(payload)
       const found = await datasourceApi.coreSuggest(slug.trim())
       setSuggested(found)
       setExternalKey(found.mapping.external_key ?? 'key')
@@ -544,6 +603,12 @@ function EditDialog({
     } finally {
       setBusy(false)
     }
+  }
+
+  /** RA 의 조직 트리 — 저장된 주소 · 토큰으로 묻는다(비밀을 화면이 들고 다니지 않게). */
+  async function loadBoards() {
+    await persist(body())
+    return datasourceApi.raBoards(slug.trim())
   }
 
   const sourceColumns = preview?.columns ?? []
@@ -562,11 +627,11 @@ function EditDialog({
           {error && <ErrorNotice error={error} />}
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-1.5">
-              <Label htmlFor="ds-slug">slug {source && '(바꿀 수 없음)'}</Label>
+              <Label htmlFor="ds-slug">slug {savedSlug && '(바꿀 수 없음)'}</Label>
               <Input
                 id="ds-slug"
                 value={slug}
-                disabled={Boolean(source)}
+                disabled={Boolean(savedSlug)}
                 placeholder="plm_suppliers"
                 onChange={(event) => setSlug(event.target.value)}
               />
@@ -586,10 +651,12 @@ function EditDialog({
                   <SelectItem value="rest">REST JSON</SelectItem>
                   <SelectItem value="file">파일 (CSV · Excel · JSON)</SelectItem>
                   <SelectItem value="sp_core">형제 Standard Platform (코어)</SelectItem>
+                  <SelectItem value="ra_reports">ReportArchive 보고서 (조직 하나)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
-            <div className="space-y-1.5">
+            {/* RA 는 개인 토큰(PAT) 하나 — 인증 방식을 고르게 하지 않는다. */}
+            <div className="space-y-1.5" hidden={ra}>
               <Label>인증</Label>
               <Select value={authKind} onValueChange={(next) => setAuthKind(next as AuthKind)}>
                 <SelectTrigger>
@@ -603,7 +670,7 @@ function EditDialog({
                 </SelectContent>
               </Select>
             </div>
-            {(authKind === 'basic' || authKind === 'header') && (
+            {!ra && (authKind === 'basic' || authKind === 'header') && (
               <div className="space-y-1.5">
                 <Label htmlFor="ds-user">{authKind === 'basic' ? '아이디' : '헤더 이름'}</Label>
                 <Input
@@ -614,10 +681,16 @@ function EditDialog({
                 />
               </div>
             )}
-            {authKind !== 'none' && (
+            {(ra || authKind !== 'none') && (
               <div className="space-y-1.5">
                 <Label htmlFor="ds-secret">
-                  {authKind === 'basic' ? '비밀번호' : authKind === 'header' ? '헤더 값' : '토큰'}{' '}
+                  {ra
+                    ? 'RA 개인 토큰 (PAT)'
+                    : authKind === 'basic'
+                      ? '비밀번호'
+                      : authKind === 'header'
+                        ? '헤더 값'
+                        : '토큰'}{' '}
                   {source?.has_secret && '(비우면 그대로)'}
                 </Label>
                 <Input
@@ -637,7 +710,9 @@ function EditDialog({
                     ? 'OData 서비스 루트'
                     : kind === 'sp_core'
                       ? '형제 설치의 API 루트'
-                      : 'API 루트'}
+                      : ra
+                        ? 'RA 주소'
+                        : 'API 루트'}
                 </Label>
                 <Input
                   id="ds-url"
@@ -647,13 +722,18 @@ function EditDialog({
                       ? 'https://plm.example.com/odata/v4'
                       : kind === 'sp_core'
                         ? 'https://hub.example.com/api'
-                        : 'https://erp.example.com/api'
+                        : ra
+                          ? 'https://ra.example.com'
+                          : 'https://erp.example.com/api'
                   }
                   onChange={(event) => setBaseUrl(event.target.value)}
                 />
               </div>
             )}
-            <div className={kind === 'file' ? 'space-y-1.5 sm:col-span-2' : 'space-y-1.5'}>
+            <div
+              className={kind === 'file' ? 'space-y-1.5 sm:col-span-2' : 'space-y-1.5'}
+              hidden={ra}
+            >
               <Label htmlFor="ds-set">
                 {kind === 'odata'
                   ? '엔티티 셋'
@@ -837,8 +917,27 @@ function EditDialog({
             </div>
           </div>
 
-          {/* --- 칸 대응 — 역할별로 가른다. 식별자·이름은 각자 자리에서, 속성은 표에서. --- */}
-          <div className="space-y-4 rounded-md border p-3">
+          {ra && (
+            <>
+              <RaReportTypeMaker
+                axes={types.filter((one) => one.usage !== 'log')}
+                onMade={(made) => {
+                  setTypeSlug(made)
+                  onTypesChanged()
+                }}
+              />
+              <RaOptionsFields
+                options={options}
+                onChange={setOptions}
+                canLoad={Boolean(slug.trim() && name.trim() && baseUrl.trim() && typeSlug)}
+                onLoad={loadBoards}
+              />
+            </>
+          )}
+
+          {/* --- 칸 대응 — 역할별로 가른다. 식별자·이름은 각자 자리에서, 속성은 표에서.
+              RA 에는 없다(`hidden` — 화면에서도 화면 읽기에서도 빠진다). --- */}
+          <div className="space-y-4 rounded-md border p-3" hidden={ra}>
             <div className="flex items-center justify-between">
               <Label>칸 대응 — 바깥 열이 우리 객체의 어느 칸으로 가는가</Label>
               <Button
@@ -1258,7 +1357,12 @@ function EditDialog({
               {/* **증분 소스에는 이 규칙이 없다.** 코어는 지난번 이후만 오므로 「안 온 것」 이
                   대부분이다 — 켜면 다음 날 멀쩡한 객체 전부가 사용 중지가 된다. 사라진 것은
                   상대가 무덤으로 알려 준다. */}
-              {kind !== 'sp_core' ? (
+              {ra ? (
+                <p className="text-muted-foreground text-sm">
+                  RA 에서 내려간 보고서는 <b>지우지도 사용 중지하지도 않습니다</b> — 하루 한 번
+                  전량을 대조해 「원본에서 내려감」 과 그날을 적고, 다시 오면 되돌립니다.
+                </p>
+              ) : kind !== 'sp_core' ? (
                 <label className="flex cursor-pointer items-center gap-2 text-sm">
                   <input
                     type="checkbox"
@@ -1297,10 +1401,9 @@ function EditDialog({
               !slug.trim() ||
               !name.trim() ||
               (kind !== 'file' && !baseUrl.trim()) ||
-              !entitySet.trim() ||
               !typeSlug ||
-              !externalKey.trim() ||
-              !fixedOf('label')
+              // RA 는 칸 대응을 적지 않는다 — 타입의 칸 키가 약속이다.
+              (!ra && (!entitySet.trim() || !externalKey.trim() || !fixedOf('label')))
             }
           >
             저장

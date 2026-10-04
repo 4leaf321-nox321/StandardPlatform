@@ -6,7 +6,7 @@ import { api } from '@/shared/api/client'
 import type { ImportRow } from '@/modules/objects/api'
 
 export type AuthKind = 'none' | 'basic' | 'bearer' | 'header'
-export type SourceKind = 'odata' | 'rest' | 'file' | 'sp_core'
+export type SourceKind = 'odata' | 'rest' | 'file' | 'sp_core' | 'ra_reports'
 export type RestPaging = 'none' | 'page' | 'offset' | 'cursor'
 
 /** 종류별 설정. REST: 행 자리·쪽 넘김. 파일: 형식·시트. */
@@ -29,6 +29,13 @@ export interface SourceOptions {
    * 무덤의 보관 기간이 지났으면 `reset` 으로 「처음부터 다시 받아라」 고 한다.
    */
   relations?: boolean
+  /** RA 보고서(`ra_reports`) — 고른 조직의 slug. 그 하위까지(`include_descendants`, 기본 켬). */
+  board?: string
+  include_descendants?: boolean
+  /** `finalized`(발행 단추를 누른 것, 기본) · `published`(게시된 것 전부). */
+  phase?: 'finalized' | 'published'
+  /** 본문까지 받나(기본 켬) — 끄면 색인만. */
+  include_text?: boolean
 }
 
 export interface MappingColumn {
@@ -96,6 +103,8 @@ export interface DataSource {
   since_mark: string
   /** 선의 시계 — 객체와 따로 움직인다(형제 코어에서 선까지 받을 때). */
   relations_since_mark?: string
+  /** RA 보고서: 마지막 전량 대조 — 하루가 지나면 다음 동기화가 전량으로 받아 대조한다. */
+  reconciled_at?: string | null
   interval_minutes: number
   is_active: boolean
   last_run_at: string | null
@@ -145,6 +154,22 @@ export interface CoreSuggest {
     note: string
   }[]
   notes: string[]
+}
+
+/** RA 의 조직 하나 — 위에서 아래로(`depth` · `path`). */
+export interface RaBoard {
+  slug: string
+  name: string
+  parent_slug: string | null
+  depth: number
+  path: string
+}
+
+export interface RaReportType {
+  type_slug: string
+  /** 새로 만들었나(아니면 있던 타입에 모자란 칸을 더했나). */
+  created: boolean
+  changes: string[]
 }
 
 export interface Run {
@@ -209,4 +234,9 @@ export const datasourceApi = {
     return done.result as unknown as SyncResult
   },
   runs: (slug: string) => api.get<Run[]>(`/datasources/${slug}/runs`),
+  /** RA 의 조직 트리 — **저장된** 주소 · 토큰으로 묻는다. */
+  raBoards: (slug: string) => api.get<RaBoard[]>(`/datasources/${slug}/ra-boards`),
+  /** 「보고서 기록 타입 만들기」 — 표준 칸과 고른 축의 참조 칸. 있으면 모자란 칸만 더한다. */
+  raReportType: (body: { slug: string; label: string; axes: string[] }) =>
+    api.post<RaReportType>('/datasources/ra-report-type', body),
 }
