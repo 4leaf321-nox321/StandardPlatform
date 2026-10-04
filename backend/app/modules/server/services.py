@@ -42,6 +42,18 @@ def available() -> tuple[str, ...]:
     return _AVAILABLE
 
 
+#: 확장이 하는 일 한 줄 — `main.py` 가 확장을 실을 때 넣는다(모듈은 확장을 import 하지 않는다).
+_DESCRIPTIONS: dict[str, str] = {}
+
+
+def register_description(name: str, text: str) -> None:
+    _DESCRIPTIONS[name] = " ".join(str(text or "").split())
+
+
+def description(name: str) -> str:
+    return _DESCRIPTIONS.get(name, "")
+
+
 def _rows(db: Session) -> dict[str, ExtensionState]:
     return {one.name: one for one in db.scalars(select(ExtensionState))}
 
@@ -211,9 +223,19 @@ def live_facts(db: Session) -> list[extensions.ProfileFact]:
     out = extensions.profile_facts(db)
     names = list(enabled_names(db))
     if names:
+        # **이름만으로는 무엇을 하는 곳인지 모른다** — 하는 일 한 줄을 곁에 싣는다. 켜고 끄면
+        # 이 플랫폼에서 할 수 있는 일이 달라지므로 낡음 표시로 친다(드물어서 소란스럽지 않다).
         out.append(
             extensions.ProfileFact(
-                key="extensions", label="확장", lines=[", ".join(names)], marks={}
+                key="extensions",
+                label="확장",
+                lines=[
+                    " · ".join(
+                        f"{name}({description(name)})" if description(name) else name
+                        for name in names
+                    )
+                ],
+                marks={f"extension:{name}": f"확장 「{name}」" for name in names},
             )
         )
     return out

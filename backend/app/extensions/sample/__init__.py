@@ -15,6 +15,10 @@ from fastapi import APIRouter, Depends
 from app.modules.accounts.models import User
 from app.shared.auth import current_user
 
+#: 이 확장이 하는 일 한 줄 — 플랫폼 자기소개(MCP 안내문)와 서버 화면이 이름 곁에 싣는다.
+#: **새 확장도 반드시 적는다**(구조 시험이 본다).
+DESCRIPTION = "본보기 확장 — 새 확장을 만들 때 복사하는 틀(응답 확인 하나)"
+
 router = APIRouter(prefix="/ext/sample", tags=["ext:sample"])
 
 

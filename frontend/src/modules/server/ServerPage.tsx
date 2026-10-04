@@ -73,6 +73,7 @@ function Extensions() {
             <li key={one.name} className="flex items-center justify-between gap-4 p-3">
               <div className="min-w-0">
                 <p className="font-mono text-sm">{one.name}</p>
+                {one.description && <p className="text-sm">{one.description}</p>}
                 <p className="text-muted-foreground text-xs">
                   {one.enabled ? '사용 중' : '미사용'}
                   {one.pinned

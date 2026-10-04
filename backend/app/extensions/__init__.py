@@ -43,6 +43,9 @@ from fastapi import APIRouter
 class Extension(ModuleType):
     """`load()` 가 돌려주는 모듈의 모양 — 타입 검사용."""
 
+    DESCRIPTION: str
+    """하는 일 한 줄 — 플랫폼 자기소개 · 서버 화면이 이름 곁에 싣는다."""
+
     def register(self, router: APIRouter) -> None: ...
 
 

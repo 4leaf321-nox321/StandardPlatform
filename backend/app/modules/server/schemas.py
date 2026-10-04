@@ -59,6 +59,8 @@ class ExtensionOut(BaseModel):
     """확장 하나의 켜짐 — **시스템 관리자 화면이 그리는 줄.**"""
 
     name: str
+    description: str = ""
+    """하는 일 한 줄 — 확장이 적은 것(`DESCRIPTION`)."""
     enabled: bool
     pinned: bool
     """화면에서 지정했나. 거짓이면 `.env` 의 `EXTENSIONS` 가 답한 것이다 —

@@ -268,3 +268,18 @@ def test_이름은_env_에서_오고_화면에_심긴다(
             )
     finally:
         get_settings.cache_clear()
+
+
+def test_확장마다_하는_일_한_줄이_있고_목록이_싣는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """에이전트는 「caegroup」 이라는 이름만으로는 무엇을 하는 곳인지 모른다 — 자기소개 · 서버
+    화면이 이름 곁에 싣는 한 줄(`DESCRIPTION`)을 **새 확장도 빠뜨리지 않게** 여기서 본다."""
+    from app.extensions import available, load
+
+    for name in available():
+        assert str(getattr(load(name), "DESCRIPTION", "")).strip(), (
+            f"확장 {name} 에 설명이 없다"
+        )
+    listed = client.get("/api/server/extensions", headers=admin.headers).json()
+    assert all(one["description"] for one in listed)

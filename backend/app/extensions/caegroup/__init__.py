@@ -15,6 +15,10 @@ from app.extensions.caegroup import routes, services
 from app.shared import extensions as extension_points
 from app.shared import scopes
 
+#: 이 확장이 하는 일 한 줄 — 플랫폼 자기소개(MCP 안내문)와 서버 화면이 이름 곁에 싣는다.
+#: 에이전트는 「caegroup」 이라는 이름만으로는 무엇을 하는 곳인지 모른다.
+DESCRIPTION = "디지털 트윈 역량 — 개발모델 · 해석의 연계 · 평가 · 인력 · 인프라"
+
 
 def register(api: APIRouter) -> None:
     """코어가 부르는 유일한 자리 — 라우터 · 확장 지점 · PAT 범위를 여기서 연다."""

@@ -207,6 +207,8 @@ export interface MaintenanceItem {
 
 export interface ExtensionState {
   name: string
+  /** 하는 일 한 줄 — 확장이 적은 것(`DESCRIPTION`). 자기소개(MCP 안내문)에도 같은 줄이 실린다. */
+  description?: string
   enabled: boolean
   /** 화면에서 지정했나. 거짓이면 `.env` 의 기본값이 답한 것이다. */
   pinned: boolean

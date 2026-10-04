@@ -122,7 +122,11 @@ def _api_router(settings: Settings) -> APIRouter:
     server_services.register_available(names)
     for name in names:
         gated = APIRouter(dependencies=[Depends(server_services.require_extension(name))])
-        ext_loader.load(name).register(gated)
+        module = ext_loader.load(name)
+        module.register(gated)
+        # 하는 일 한 줄 — 자기소개 · 서버 화면이 이름 곁에 싣는다(코어는 확장을 모르므로
+        # 여기서 넘긴다).
+        server_services.register_description(name, getattr(module, "DESCRIPTION", ""))
         router.include_router(gated)
 
     # --- 여기에 도메인 라우터를 더한다 -----------------------------------

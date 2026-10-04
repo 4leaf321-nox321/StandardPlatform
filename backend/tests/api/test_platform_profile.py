@@ -137,3 +137,32 @@ def test_사람이_쓴_뒤_타입이_생기면_낡았다고_알리고_다시_쓰
     # 글을 안 바꾸고 저장만 해도 「지금 것을 보고 썼다」 — 낡음이 비워진다.
     client.put(PATH, json={"summary": "해석 기록"}, headers=admin.headers)
     assert client.get(f"{PATH}/live", headers=admin.headers).json()["stale"] == []
+
+
+def test_확장은_하는_일과_함께_싣고_켜고_끄면_낡았다고_알린다(
+    client: TestClient, admin: Signed, db: Session, fresh: None
+) -> None:
+    """확장을 켜면 이 플랫폼에서 할 수 있는 일이 달라진다 — 사람이 쓴 소개도 다시 봐야 한다."""
+    from app.modules.server.models import ExtensionState
+
+    def toggle(on: bool) -> None:
+        got = client.patch(
+            "/api/server/extensions/sample", json={"enabled": on}, headers=admin.headers
+        )
+        assert got.status_code == 200, got.text
+
+    db.query(ExtensionState).delete()
+    db.commit()
+    try:
+        toggle(False)
+        client.put(PATH, json={"summary": "해석 기록"}, headers=admin.headers)
+        toggle(True)
+        live = client.get(f"{PATH}/live", headers=admin.headers).json()
+        assert live["stale"] == ["생김: 확장 「sample」"]
+        shown = next(one for one in live["facts"] if one["key"] == "extensions")["lines"][0]
+        assert "sample(본보기 확장" in shown
+        toggle(False)  # 쓸 때와 같아지면 낡음도 사라진다
+        assert client.get(f"{PATH}/live", headers=admin.headers).json()["stale"] == []
+    finally:
+        db.query(ExtensionState).delete()
+        db.commit()

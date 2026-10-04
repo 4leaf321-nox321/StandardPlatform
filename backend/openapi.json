@@ -20587,6 +20587,11 @@
             "type": "string",
             "title": "Name"
           },
+          "description": {
+            "type": "string",
+            "title": "Description",
+            "default": ""
+          },
           "enabled": {
             "type": "boolean",
             "title": "Enabled"

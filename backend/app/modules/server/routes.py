@@ -153,7 +153,13 @@ def extension_list(
 ) -> list[ExtensionOut]:
     """이 번들에 든 확장과 그 켜짐. **고를 수 있는 것은 여기 있는 것뿐이다.**"""
     return [
-        ExtensionOut(name=name, enabled=on, pinned=pinned, updated_at=at)
+        ExtensionOut(
+            name=name,
+            description=services.description(name),
+            enabled=on,
+            pinned=pinned,
+            updated_at=at,
+        )
         for name, on, pinned, at in services.states(db)
     ]
 
@@ -174,7 +180,13 @@ def extension_toggle(
     """
     services.set_enabled(db, user, name, payload.enabled)
     row = next(one for one in services.states(db) if one[0] == name)
-    return ExtensionOut(name=row[0], enabled=row[1], pinned=row[2], updated_at=row[3])
+    return ExtensionOut(
+        name=row[0],
+        description=services.description(row[0]),
+        enabled=row[1],
+        pinned=row[2],
+        updated_at=row[3],
+    )
 
 
 @router.get("/maintenance", response_model=list[MaintenanceItemOut])
