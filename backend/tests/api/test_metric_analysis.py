@@ -1110,3 +1110,63 @@ def test_순차_검정을_증상마다_훑으면_나빠진_증상과_새로_생�
         reference=w["a_base"],
     )
     assert refused["code"].endswith("METRICS-0029")
+
+
+# --- ⑤ 집단 비교 ------------------------------------------------------------------------
+
+
+def test_집단_비교는_뜨거운_집단을_잡고_작은_집단의_우연을_줄인다(
+    client: TestClient, admin: Signed
+) -> None:
+    """기본 모델 넷 · 1 년 — B1 · B2 는 달마다 2만 대에 100건, B3 은 200건(두 배). B4 는 한 달
+    150 대에 3 건뿐 — 그대로면 2%(전체의 세 배)라 가장 나빠 보인다."""
+    w = _world(client, admin)
+    sales, monthly = _monthly(client, admin, w)
+    first, watermark = date(2026, 1, 1), datetime(2027, 3, 15, tzinfo=UTC)
+    plan = {"B1": (100, 20000.0), "B2": (100, 20000.0), "B3": (200, 20000.0), "B4": (3, 150.0)}
+    months = {"B1": 12, "B2": 12, "B3": 12, "B4": 1}
+    _plant(
+        monthly["slug"],
+        [
+            {"period": _month(first, i), "dims": {"base_model": key}, "count": count}
+            for key, (count, _) in plan.items()
+            for i in range(months[key])
+        ],
+        watermark,
+    )
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(first, i),
+                "dims": {"base_model": key},
+                "count": 1,
+                "value_count": 1,
+                "sum": units,
+            }
+            for key, (_, units) in plan.items()
+            for i in range(months[key])
+        ],
+        watermark,
+    )
+    found = _analysis(client, admin, monthly["slug"], "groups", dim="base_model")
+    assert found["recipe"] == "groups" and found["groups"] == 4 and found["per"] == 1000
+    assert found["heterogeneity_p"] < 1e-6 and found["spread"] > 0
+    rows = {one["key"]: one for one in found["rows"]}
+    assert found["rows"][0]["key"] == "B3" and rows["B3"]["flag"] == "high"
+    assert rows["B3"]["count"] == 2400 and rows["B3"]["exposure"] == 240000
+    small = rows["B4"]
+    assert small["rate"] == pytest.approx(3 / 150 * 1000)
+    assert small["rate"] > rows["B3"]["rate"]  # 그대로면 가장 나빠 보이지만
+    assert (
+        small["flag"] is None and small["shrinkage"] > 0.5 and small["shrunk"] < small["rate"]
+    )
+    assert found["flagged"] >= 1 and rows["B3"]["drill"]["params"]
+    codes = {one["code"] for one in found["caveats"]}
+    assert {"multiple_testing", "small_groups", "association"} <= codes
+    # 집단마다 대수를 모르는 기준으로는 견주지 않는다.
+    _, symptom_months = _symptom_months(client, admin, w)
+    refused = _refused(client, admin, symptom_months["slug"], "groups", dim="symptom")
+    assert refused["code"].endswith("METRICS-0035")
+    listed = next(one for one in monthly["analyses"] if one["recipe"] == "groups")
+    assert listed["ok"] is True and listed["label"] == "집단 비교"

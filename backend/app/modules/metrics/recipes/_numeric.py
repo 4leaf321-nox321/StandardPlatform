@@ -78,3 +78,19 @@ def hypergeom_sf(k: int, total: int, successes: int, draws: int) -> float:
     from scipy import stats
 
     return float(stats.hypergeom.sf(k - 1, total, successes, draws))
+
+
+def binom_two_sided(k: int, n: int, p: float) -> float:
+    """이항 정확 검정의 양쪽 p — 집단 비교에서 「그 집단 대 나머지」(조건부 포아송)."""
+    from scipy import stats
+
+    if n <= 0:
+        return 1.0
+    return float(stats.binomtest(k, n, min(max(p, 0.0), 1.0)).pvalue)
+
+
+def gamma_ppf(q: float, shape: float, rate: float) -> float:
+    """감마(모양, 비율) 분위수 — 줄인 비율의 구간."""
+    from scipy import stats
+
+    return float(stats.gamma.ppf(q, shape, scale=1.0 / rate))

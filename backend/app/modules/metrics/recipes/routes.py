@@ -13,12 +13,22 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.metrics import compute, params, query, services
-from app.modules.metrics.recipes import assoc, changes, control, life, logit, pareto, sprt
+from app.modules.metrics.recipes import (
+    assoc,
+    changes,
+    control,
+    groups,
+    life,
+    logit,
+    pareto,
+    sprt,
+)
 from app.modules.metrics.recipes.schemas import (
     AssocOut,
     ChangesOut,
     ChangesScanOut,
     ControlOut,
+    GroupsOut,
     LifeOut,
     LogitOut,
     ParetoOut,
@@ -287,6 +297,42 @@ def sprt_scan(
         alpha=alpha,
         beta=beta,
         top=top,
+    )
+
+
+@router.get("/groups", response_model=GroupsOut)
+def groups_analysis(
+    slug: str,
+    request: Request,
+    dim: str | None = Query(
+        default=None, description="견줄 집단의 기준 — 분모 짝(on)에 있어야 한다(비우면 첫 짝)"
+    ),
+    axis: Literal["period", "cohort"] | None = Query(default=None),
+    window: int = Query(
+        default=3, ge=1, le=120, description="코호트 축 — 출고 뒤 몇 기간 안의 건수인가"
+    ),
+    period_from: str | None = Query(default=None),
+    period_to: str | None = Query(default=None, description="이 날 **앞까지**"),
+    cohort_from: str | None = Query(default=None),
+    cohort_to: str | None = Query(default=None),
+    compact: bool = Query(default=False, description="「다르다」 인 집단과 위쪽 15개만(MCP)"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> GroupsOut:
+    """⑤ 집단 비교 — 집단마다 비율, 이질성 χ², 집단 대 나머지 정확 검정(BH), 작은 집단의 과장을
+    줄인 비율(감마-포아송 경험적 베이즈). 거르기는 `d.<기준>=<값>`."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(
+        request,
+        period_from=period_from,
+        period_to=period_to,
+        cohort_from=cohort_from,
+        cohort_to=cohort_to,
+    )
+    return groups.run(
+        db, user, metric, built, ask, dim=dim, axis=axis, window=window, compact=compact
     )
 
 

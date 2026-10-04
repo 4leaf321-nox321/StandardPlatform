@@ -382,6 +382,54 @@ class ChangesScanOut(AnalysisHeader):
     items: list[ChangesScanItemOut]
 
 
+# --- ⑤ 집단 비교 ---------------------------------------------------------------------
+
+
+class GroupRowOut(BaseModel):
+    key: str | None
+    label: str
+    count: int
+    exposure: float
+    rate: float | None
+    """그대로 비율(per 대당) — 작은 집단에서는 우연으로 크게 흔들린다."""
+    shrunk: float | None
+    """줄인 비율 — 대수가 작을수록 전체 쪽으로 끌린 값. 순위 · 견줌은 이것으로."""
+    shrunk_low: float | None
+    shrunk_high: float | None
+    shrinkage: float
+    """줄인 정도 0~1 — 1 이면 전체 비율로 다 끌렸다(대수가 작거나 집단 사이 차이가 없다)."""
+    ratio: float | None
+    """줄인 비율 / 전체 비율."""
+    p_value: float
+    q_value: float
+    """그 집단 대 나머지 정확 검정의 p 를 BH 로 맞춘 것."""
+    flag: Literal["high", "low"] | None
+    """q < 0.05 인 집단 — 전체보다 높음 · 낮음."""
+    drill: DrillOut
+
+
+class GroupsOut(AnalysisHeader):
+    """⑤ 집단 비교 — 「SKU(색상 · 용량 · 통신사) · 공장 · 기본 모델마다 불량률이 다른가?」."""
+
+    dim: str
+    dim_label: str
+    axis: Literal["period", "cohort"]
+    window: int | None
+    per: float
+    pooled: float | None
+    """전체 비율(per 대당)."""
+    groups: int
+    heterogeneity_chi2: float | None
+    heterogeneity_df: int
+    heterogeneity_p: float | None
+    """「집단 사이에 우연보다 큰 차이가 있나」 — 포아송 χ²."""
+    spread: float | None
+    """집단 사이 참 비율의 흔들림 τ / 전체 비율(0 이면 차이가 우연의 흔들림 안)."""
+    flagged: int
+    rows: list[GroupRowOut]
+    other_groups: int
+
+
 # --- ④ 순차 검정 ---------------------------------------------------------------------
 
 
