@@ -34,6 +34,7 @@ from typing import Any
 from sqlalchemy import Select, func, nulls_last, or_, select
 from sqlalchemy.orm import Session
 
+from app.modules.accounts.models import User
 from app.modules.objects import axes, paths
 from app.modules.objects.axes import (  # noqa: F401 — 통계의 공개 이름으로 다시 내보낸다
     BOOL_LABELS,
@@ -218,6 +219,7 @@ def summarize(
     metric_field: str | None = None,
     order: str = "desc",
     grain: str | None = None,
+    viewer: User | None = None,
 ) -> Summary:
     """목록과 **같은 거르기** 위에서 센다. `split_by`(세부 기준)를 주면 한 번 더 나눈다.
 
@@ -226,6 +228,10 @@ def summarize(
     것이 지금까지의 방법이었고, 그것은 사람이 그 답을 포기하게 만든다.
 
     `grain` 은 날짜 축의 기간 단위(기본 해) — 기준 · 세부 기준 중 날짜인 쪽에 건다.
+
+    **여럿으로 이어지는 기준은 객체마다 한 번 센다**(ADR 0017) — 같은 증상의 기록이 300건인
+    모델은 그 막대에서 1 이다(이어진 줄마다 세면 300 이었다). 합계 · 평균도 객체마다 한 번.
+    `viewer` 는 들어오는 참조 걸음이 그 사람이 볼 수 있는 객체만 잇게 한다.
     """
     if metric not in METRICS:
         raise AppError(
@@ -241,7 +247,7 @@ def summarize(
         )
     scope = as_scope(db, target)
     defs = scope.defs
-    plan = axes.JoinPlan(db, scope, prefix="g")
+    plan = axes.JoinPlan(db, scope, prefix="g", viewer=viewer)
     # 기간 단위는 날짜인 축에 건다 — 화면의 고르개 하나가 기준 · 세부 기준 중 날짜인 쪽의
     # 것이다. 기준이 날짜가 아니고 세부 기준이 날짜면 세부 기준만 받는다. 둘 다 아니면 기준이
     # 받아 「날짜 칸이 아니다」 로 거절한다(조용히 버리면 고른 단위가 무시된 그림이 「월별」 로
@@ -249,15 +255,10 @@ def summarize(
     split_dated = bool(split_by) and plan.dated(split_by or "")
     group_grain = None if split_dated and not plan.dated(group_by) else grain
     group = plan.axis(group_by, grain=group_grain)
-    key_expr = group.expr
     value_expr = axes.metric_expr(defs, metric, metric_field, METRIC_LABELS)
 
     total = count_of(db, filtered)
-    counted = func.count().label("n")
-    columns: list[Any] = [key_expr.label("k"), counted]
-    if value_expr is not None:
-        columns.append(getattr(func, metric)(value_expr).label("v"))
-    grouped = axes.joined(filtered.with_only_columns(*columns), group).group_by(key_expr)
+    grouped = _grouped(filtered, [group], metric, value_expr)
 
     # 그룹이 몇 개인지, 그리고 **센 줄이 모두 몇인지** 먼저 센다. 상한을 넘는 축(자유
     # 글자 칸)에서 전부 읽어 오면 응답이 수만 줄이 된다. 센 줄의 합은 여러 값 칸이면
@@ -343,6 +344,41 @@ def summarize(
     )
 
 
+def _grouped(
+    filtered: Select[Any],
+    axes_: list[Axis],
+    metric: str,
+    value_expr: Any,
+    within: Any = None,
+) -> Select[Any]:
+    """기준(과 세부 기준)마다 센 질의 — 열은 `k`(· `s`) · `n` · `v`.
+
+    기준 중 하나라도 여럿으로 이어지면(여러 값 칸 · 여럿 걸음) **(객체, 막대)를 한 번씩**
+    남긴 뒤 센다. 이어진 줄마다 세면 한 객체가 같은 막대에서 여러 번 센다 — 모델 하나를
+    가리키는 같은 증상의 기록 300건이 그 모델을 300 으로 만든다(ADR 0017)."""
+    names = ["k", "s"][: len(axes_)]
+    keys = [axis.expr.label(name) for axis, name in zip(axes_, names, strict=True)]
+    if not any(axis.multi for axis in axes_):
+        columns: list[Any] = [*keys, func.count().label("n")]
+        if value_expr is not None:
+            columns.append(getattr(func, metric)(value_expr).label("v"))
+        stmt = axes.joined(filtered.with_only_columns(*columns), *axes_)
+        if within is not None:
+            stmt = stmt.where(within)
+        return stmt.group_by(*[axis.expr for axis in axes_])
+    picked: list[Any] = [ObjectInstance.id.label("oid"), *keys]
+    if value_expr is not None:
+        picked.append(value_expr.label("val"))
+    inner = axes.joined(filtered.with_only_columns(*picked), *axes_)
+    if within is not None:
+        inner = inner.where(within)
+    pairs = inner.distinct().subquery("pairs")
+    columns = [*[pairs.c[name].label(name) for name in names], func.count().label("n")]
+    if value_expr is not None:
+        columns.append(getattr(func, metric)(pairs.c.val).label("v"))
+    return select(*columns).group_by(*[pairs.c[name] for name in names])
+
+
 def _split(
     db: Session,
     filtered: Select[Any],
@@ -364,10 +400,6 @@ def _split(
     # 기간 단위는 날짜 기준의 것 — 세부 기준은 그것도 날짜일 때만 받는다.
     split = plan.axis(split_by, grain=grain if plan.dated(split_by) else None)
     key_expr = group.expr
-    counted = func.count().label("n")
-    columns: list[Any] = [key_expr.label("k"), split.expr.label("s"), counted]
-    if value_expr is not None:
-        columns.append(getattr(func, metric)(value_expr).label("v"))
     wanted = [one.key for one in buckets if one.key is not None]
     # 보여 줄 칸 안에서만 나눈다. 전부 나누면 접힌 그룹의 조각까지 실려 응답이 몇 배가
     # 되고, 화면은 그것을 안 쓴다. **「(비어 있음)」 칸도 보여 주는 칸이다** — IN 에는
@@ -375,10 +407,7 @@ def _split(
     within = key_expr.in_(wanted) if wanted else None
     if any(one.key is None for one in buckets):
         within = key_expr.is_(None) if within is None else or_(within, key_expr.is_(None))
-    stmt = axes.joined(filtered.with_only_columns(*columns), group, split)
-    if within is not None:
-        stmt = stmt.where(within)
-    rows = list(db.execute(stmt.group_by(key_expr, split.expr)))
+    rows = list(db.execute(_grouped(filtered, [group, split], metric, value_expr, within)))
 
     # 계열의 차례 — 전체에서 큰 값부터. 상한을 넘으면 자른다(색이 여덟이라 열둘이면
     # 이미 같은 색이 두 번 나온다).
@@ -516,6 +545,7 @@ def points(
     y: str | None = None,
     group_by: str | None = None,
     grain: str | None = None,
+    viewer: User | None = None,
 ) -> Points:
     """고른 것들의 **원값**을 그대로. 상자 그림은 x 하나와 기준, 산점도는 x·y 둘."""
     scope = as_scope(db, target)
@@ -524,7 +554,7 @@ def points(
     y_def = _number_def(defs, y) if y else None
     axis = None
     if group_by:
-        plan = axes.JoinPlan(db, scope, prefix="g")
+        plan = axes.JoinPlan(db, scope, prefix="g", viewer=viewer)
         # 분포의 묶음은 화면의 세부 기준이다 — 날짜일 때만 기간 단위를 받는다.
         axis = plan.axis(group_by, grain=grain if plan.dated(group_by) else None)
     group_expr = axis.expr if axis else None
@@ -545,8 +575,11 @@ def points(
     # 거짓말을 한다.
     stmt = filtered.with_only_columns(*columns).where(x_expr.is_not(None))
     if axis is not None:
-        # 여러 값 기준이면 값마다 점이 하나씩 — 상자 그림에서는 그 값의 상자에 든다.
+        # 여러 값 기준이면 값마다 점이 하나씩 — 상자 그림에서는 그 값의 상자에 든다. 같은
+        # 값으로 여럿 이어져도 그 상자에 한 번이다(ADR 0017).
         stmt = axes.joined(stmt, axis)
+        if axis.multi:
+            stmt = stmt.distinct()
     total = count_of(db, stmt)
     rows = list(db.execute(stmt.limit(MAX_POINTS)))
 

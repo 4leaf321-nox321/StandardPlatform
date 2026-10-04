@@ -984,7 +984,9 @@ async def object_fields(ctx: Context, type_slug: str) -> Any:
 
     두 걸음까지 준다: `ref.<참조 칸>.<칸>`(참조 칸이 가리키는 것의 칸),
     `out.<관계>`(관계로 이어진 것 자체 — 값은 상대 id), `out.<관계>.<칸>`,
-    `in.<관계>[.<칸>]`(들어오는 관계), 그리고 그 너머 한 걸음 더
+    `in.<관계>[.<칸>]`(들어오는 관계), `in.<타입>:<참조 칸>[.<칸>]`(나를 가리키는 것 —
+    그 타입의 참조 칸이 이 객체를 가리키는 것, 개발모델에서 `in.svc_case:model.symptom` 은
+    「이 모델을 가리키는 서비스 기록의 증상」), 그리고 그 너머 한 걸음 더
     (`ref.model.ref.task.project` — 모델의 과제의 프로젝트). `heading` 이 어느 걸음인지
     가른다 — 참조 칸과 관계가 같은 이름일 수 있다. `data_type` 이 `relation` 이면 상대가
     하나로 안 정해져 `empty`·`notempty` 만 걸린다.

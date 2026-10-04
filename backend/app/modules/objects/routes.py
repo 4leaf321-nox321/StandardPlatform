@@ -388,6 +388,7 @@ def summary(
         metric_field=metric_field,
         order=order,
         grain=grain,
+        viewer=user,
     )
     defs = scope.defs
     return SummaryOut(
@@ -474,7 +475,9 @@ def points(
     stmt = _filtered(
         db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
     )
-    found = summary_service.points(db, scope, stmt, x=x, y=y, group_by=group_by, grain=grain)
+    found = summary_service.points(
+        db, scope, stmt, x=x, y=y, group_by=group_by, grain=grain, viewer=user
+    )
     defs = scope.defs
     return PointsOut(
         x_label=found.x_label,
@@ -546,6 +549,7 @@ def summary_export(
         metric_field=metric_field,
         order=order,
         grain=grain,
+        viewer=user,
     )
     header, rows = summary_service.summary_table(found)
     return sheets.file_response(
@@ -584,7 +588,9 @@ def points_export(
     stmt = _filtered(
         db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
     )
-    found = summary_service.points(db, scope, stmt, x=x, y=y, group_by=group_by, grain=grain)
+    found = summary_service.points(
+        db, scope, stmt, x=x, y=y, group_by=group_by, grain=grain, viewer=user
+    )
     header, rows = summary_service.points_table(found)
     return sheets.file_response(
         header, rows, fmt=format, stem=f"{type_slug}-points", sheet="값"
@@ -766,7 +772,9 @@ def _filtered(
         if _condition_name(one, index) != omit
     ]
     if asked:
-        stmt = conditions.apply(stmt, scope.defs, asked, paths.Resolver(db, scope))
+        stmt = conditions.apply(
+            stmt, scope.defs, asked, paths.Resolver(db, scope, viewer=user)
+        )
     return stmt
 
 
@@ -1803,7 +1811,7 @@ def diagnose_list(
                 rest,
                 defs,
                 [conditions.Condition(field=field, op="notempty", value="")],
-                paths.Resolver(db, scope),
+                paths.Resolver(db, scope, viewer=user),
             )
             return max(count_of(db, rest) - count_of(db, known), 0)
         except AppError:

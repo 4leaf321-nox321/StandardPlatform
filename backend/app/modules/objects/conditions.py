@@ -330,11 +330,31 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
     linked: Any = None
     previous: Any = ObjectInstance
     last_edges: Any = None
+    last_back: Any = None
     last_target: Any = None
     for depth, (hop, owner) in enumerate(zip(chain.hops, chain.owners, strict=True)):
         name = f"hop{index}_{depth}"
         final = depth == len(chain.hops) - 1
-        if hop.kind == "ref":
+        if hop.is_back:
+            # 나를 가리키는 것(ADR 0017) — 참조 색인을 거꾸로(`dst_id` 색인). 그 객체는 보는
+            # 사람이 볼 수 있는 것만 — 남의 부서 기록이 있다는 사실이 새지 않게.
+            link = aliased(ObjectRef, name=f"{name}_back")
+            target = aliased(ObjectInstance, name=f"{name}_obj")
+            step = and_(
+                link.dst_id == previous.id,
+                link.key == hop.back_key,
+                link.src_type_id == hop.back_type_id,
+            )
+            if linked is None:
+                linked = select(literal(1)).select_from(link).where(step)
+            else:
+                linked = linked.join(link, step)
+            seen = owner.seen(target)
+            linked = linked.join(
+                target, and_(target.id == link.src_id, target.deleted_at.is_(None), *seen)
+            )
+            last_target, last_back = target, link
+        elif hop.kind == "ref":
             # 참조 색인으로 잇는다 — 예전의 JSONB 포함(`@>`) 조인은 타입 제한이 없는 비등가
             # 조인이라 200만 건에서 2분을 넘겼다(실측).
             link = aliased(ObjectRef, name=f"{name}_ref")
@@ -367,6 +387,15 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
             last_target = target
         previous = last_target
 
+    if whole and last_back is not None:
+        # 나를 가리키는 것 자체 — 있음 · 없음, 또는 특정 객체가 가리키나.
+        if op == "empty":
+            return ~linked.exists()
+        if op == "notempty":
+            return linked.exists()
+        picked = _ids(_values(raw) if op == "in" else [raw])
+        hit = linked.where(last_back.src_id.in_(picked)).exists() if picked else false()
+        return ~hit if op == "ne" else hit
     if whole:
         assert last_edges is not None
         if op == "empty":

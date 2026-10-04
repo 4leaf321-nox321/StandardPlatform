@@ -36,7 +36,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.modules.metrics import visits as visits_module
 from app.modules.metrics.models import MetricDef
-from app.modules.objects import axes, conditions, system
+from app.modules.objects import axes, conditions, paths, system
 from app.modules.objects.models import ObjectInstance
 from app.modules.objects.scope import Scope, of_type
 from app.modules.objects.services import count_of
@@ -300,6 +300,15 @@ def _dimension(
                 "있어야 합니다."
             )
         return Dim(name, dim_in.address, None, visits_module.axis(visits, dim_in.address))
+    if paths.is_path(dim_in.address) and any(
+        hop.is_back for hop in plan.resolver.parse_chain(dim_in.address).hops
+    ):
+        # 지표는 기록을 센다 — 나를 가리키는 것으로 거꾸로 가면 한 기록이 가리키는 것마다
+        # 불어나 셀의 합이 기록 수와 어긋난다(ADR 0017). 목록의 통계에서는 된다.
+        raise _bad(
+            f"「{dim_in.address}」 는 나를 가리키는 것(들어오는 참조)을 지나는 기준이라 "
+            "지표에는 못 씁니다 — 한 기록이 여러 번 셉니다. 목록의 통계에서 씁니다."
+        )
     axis = plan.axis(dim_in.address, grain=dim_in.grain)
     if axis.kind in axes.DATE_KINDS and dim_in.grain is None:
         raise _bad(f"날짜 기준 「{axis.label}」 에는 기간 단위(grain)가 필요합니다.")

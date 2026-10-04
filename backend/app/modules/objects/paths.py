@@ -10,6 +10,8 @@
     out.<관계>             이 객체에서 나가는 관계로 이어진 것 자체   out.used_by
     out.<관계>.<칸>        그것의 칸                             out.used_by.label
     in.<관계>[.<칸>]       들어오는 관계(방향이 있을 때만 따로 선다)
+    in.<타입>:<참조 칸>[.<칸>]
+                           나를 가리키는 것 — 그 타입의 참조 칸이 나를 가리키는 객체(ADR 0017)
 
 조건(`f.<주소>.<연산>=값`)과 통계 기준(`group_by=<주소>`)이 **같은 주소**를 쓴다 — 막대를
 누르면 그 주소 그대로 조건이 된다. 속성 키에는 점이 없으므로 이 주소와 겹치지 않는다.
@@ -42,12 +44,14 @@ from typing import Any
 from sqlalchemy import String, cast, select, union_all
 from sqlalchemy.orm import Session
 
-from app.modules.objects import system
+from app.modules.accounts.models import User
+from app.modules.objects import refedges, system
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.objects.scope import Scope, as_scope
 from app.modules.objects.scope import find as find_scope
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared.errors import AppError, code
+from app.shared.permissions import visible_owner_clause
 
 HOP_KINDS = ("ref", "out", "in")
 
@@ -56,6 +60,10 @@ MAX_HOPS = 3
 
 #: 고르개가 몇 걸음까지 늘어놓나. 주소로는 `MAX_HOPS` 까지 받는다.
 PICKER_HOPS = 2
+
+#: 들어오는 참조 걸음의 이름에서 타입과 참조 칸을 가른다 — `in.svc_case:model`. 관계 slug 에는
+#: `:` 가 못 들어가 겹치지 않고, 주소의 `.` 와도 안 겹친다.
+BACK_SEP = ":"
 
 #: 이어진 것의 고정 칸.
 TARGET_FIXED = {"label": "이름", "key": "식별자", "status": "상태"}
@@ -88,10 +96,20 @@ class Hop:
     """한 객체에 여럿이 이어질 수 있나. 그러면 한 행이 여러 막대에 든다."""
     ref_def: PropertyDef | None = None
     relation: RelationType | None = None
+    back_type_id: uuid.UUID | None = None
+    """들어오는 참조(ADR 0017) — 나를 가리키는 객체의 타입. `back_key` 가 그 참조 칸."""
+    back_key: str | None = None
+
+    @property
+    def is_back(self) -> bool:
+        """나를 가리키는 것 — `in.<타입>:<참조 칸>`. 참조 색인을 거꾸로 걷는다."""
+        return self.back_key is not None
 
     @property
     def heading(self) -> str:
         where = f" ({self.target.label})" if self.target else ""
+        if self.is_back:
+            return f"가리키는 것 · {self.label}"
         return f"{self.label}{where}" if self.kind == "ref" else f"관계 · {self.label}{where}"
 
 
@@ -176,11 +194,34 @@ class Resolver:
     가린다.
     """
 
-    def __init__(self, db: Session, target: ObjectType | Scope) -> None:
+    def __init__(
+        self,
+        db: Session,
+        target: ObjectType | Scope,
+        *,
+        viewer: User | None = None,
+        _kinds: dict[str, refedges.RefKind] | None = None,
+    ) -> None:
         self.db = db
         self.scope = as_scope(db, target)
+        self.viewer = viewer
+        """보는 사람 — 들어오는 참조 걸음은 이 사람이 볼 수 있는 객체만 잇는다(ADR 0017).
+        없으면(지표 · 저장 검사) 가리지 않는다."""
         self._hops: list[Hop] | None = None
         self._children: dict[str, Resolver] = {}
+        self._kinds = _kinds
+
+    def ref_kinds(self) -> dict[str, refedges.RefKind]:
+        """이 설치의 참조 칸 전부 — 걸음의 상대에서 다시 걸을 때도 한 번만 읽는다."""
+        if self._kinds is None:
+            self._kinds = refedges.kinds(self.db)
+        return self._kinds
+
+    def seen(self, entity: Any) -> list[Any]:
+        """들어오는 참조로 이은 객체에 걸 가시성 — 보는 사람이 없거나 시스템 관리자면 없다."""
+        if self.viewer is None or self.viewer.is_system_admin:
+            return []
+        return [visible_owner_clause(self.viewer, entity.owner_workspace_id)]
 
     def _touches(self, allowed: list[str] | None) -> bool:
         """이 범위의 객체가 그 끝에 설 수 있나. 비어 있으면(None) 제약이 없다."""
@@ -270,6 +311,34 @@ class Resolver:
                         relation=relation,
                     )
                 )
+
+        # **나를 가리키는 것**(ADR 0017) — 다른 타입의 참조 칸이 이 범위의 타입을 가리키면
+        # 그 칸을 거꾸로 걷는 걸음. 축에서 기록으로 내려가는 물음(「증상이 S07 인 기록이 있는
+        # 모델」)이 이것이다. 언제나 여럿이다.
+        mine = set(self.scope.type_slugs)
+        for kind_ in self.ref_kinds().values():
+            if not mine & {one.slug for one in kind_.dst_types}:
+                continue
+            owner = kind_.src_type
+            target, defs = fields_of(owner.slug)
+            if target is None:
+                continue
+            # 역방향 이름을 안 적었으면 「가리키는 타입(칸)」 — 같은 타입의 두 칸이 같은 이름이
+            # 되지 않게.
+            named = kind_.inverse_label != owner.label
+            out.append(
+                Hop(
+                    "in",
+                    f"{owner.slug}{BACK_SEP}{kind_.key}",
+                    kind_.inverse_label if named else f"{owner.label}({kind_.label})",
+                    [owner.slug],
+                    target,
+                    defs,
+                    True,
+                    back_type_id=owner.id,
+                    back_key=kind_.key,
+                )
+            )
         return out
 
     def hop(self, kind: str, name: str) -> Hop | None:
@@ -299,7 +368,9 @@ class Resolver:
             raise _no_path(f"{hop.kind}.{hop.name}", "상대가 하나로 정해져 있지 않습니다.")
         slug = hop.target.slug
         if slug not in self._children:
-            self._children[slug] = Resolver(self.db, hop.target)
+            self._children[slug] = Resolver(
+                self.db, hop.target, viewer=self.viewer, _kinds=self.ref_kinds()
+            )
         return self._children[slug]
 
     def parse_chain(self, path: str, *, max_hops: int = MAX_HOPS) -> Chain:
@@ -480,7 +551,7 @@ class Resolver:
             if first.target is None:
                 continue
             for second in self.child(first).hops():
-                if _reverses(first, second):
+                if _reverses(first, second, self.scope):
                     continue
                 out.extend(
                     _hop_options(
@@ -495,9 +566,15 @@ class Resolver:
         return out
 
 
-def _reverses(first: Hop, second: Hop) -> bool:
+def _reverses(first: Hop, second: Hop, mine: Scope) -> bool:
     """둘째 걸음이 첫 걸음을 되짚나 — 같은 관계를 반대 방향으로(방향 없는 관계면 같은
-    쪽으로)."""
+    쪽으로), 또는 참조 칸을 거꾸로(모델 → 가리키는 기록 → 그 기록의 모델)."""
+    if first.kind == "ref" and second.is_back:
+        return second.back_key == first.name and second.back_type_id in mine.type_ids
+    if first.is_back and second.kind == "ref":
+        return second.name == first.back_key and bool(
+            set(second.target_slugs) & set(mine.type_slugs)
+        )
     if first.relation is None or second.relation is None or first.name != second.name:
         return False
     return first.kind != second.kind or not first.relation.directed
@@ -516,7 +593,9 @@ def _hop_options(
     out: list[FieldOption] = []
     prefix = f"{path}{hop.kind}.{hop.name}"
     many = many or hop.many
-    if hop.relation is not None:
+    # 이어진 것 **자체** — 관계는 조건 · 기준 둘 다, 나를 가리키는 것은 조건만(있음 · 없음 ·
+    # 특정 객체). 그것으로 묶으면 가리키는 기록마다 막대 하나가 된다.
+    if hop.relation is not None or (hop.is_back and not for_group):
         single = hop.target_slugs[0] if len(hop.target_slugs) == 1 else None
         out.append(
             FieldOption(

@@ -33,6 +33,7 @@ from typing import Any
 from sqlalchemy import Date, Float, Integer, Select, String, and_, case, cast, func, true
 from sqlalchemy.orm import Session, aliased
 
+from app.modules.accounts.models import User
 from app.modules.objects import paths, system
 from app.modules.objects.models import ObjectInstance, ObjectRef
 from app.modules.objects.scope import Scope, as_scope
@@ -315,10 +316,18 @@ class JoinPlan:
     (이어진 객체의 별칭)과 그 걸음에서 다시 걸을 때 쓸 Resolver 를 접두 경로마다 기억한다.
     """
 
-    def __init__(self, db: Session, target: ObjectType | Scope, *, prefix: str = "ax") -> None:
+    def __init__(
+        self,
+        db: Session,
+        target: ObjectType | Scope,
+        *,
+        prefix: str = "ax",
+        viewer: User | None = None,
+    ) -> None:
         self.db = db
         self.scope = as_scope(db, target)
-        self.resolver = paths.Resolver(db, self.scope)
+        # 보는 사람 — 들어오는 참조 걸음이 그 사람이 볼 수 있는 객체만 잇게(ADR 0017).
+        self.resolver = paths.Resolver(db, self.scope, viewer=viewer)
         self.prefix = prefix
         self._ends: dict[tuple[tuple[str, str], ...], _End] = {}
         self._count = 0
@@ -335,7 +344,30 @@ class JoinPlan:
                 self._count += 1
                 mine: list[tuple[Any, Any]] = []
                 edges = None
-                if hop.kind == "ref":
+                if hop.is_back:
+                    # 나를 가리키는 것(ADR 0017) — 참조 색인을 거꾸로(`dst_id` 색인). 보이는
+                    # 것만 잇는다.
+                    link = aliased(ObjectRef, name=f"{name}_back")
+                    target = aliased(ObjectInstance, name=f"{name}_ref")
+                    mine = [
+                        (
+                            link,
+                            and_(
+                                link.dst_id == entity.id,
+                                link.key == hop.back_key,
+                                link.src_type_id == hop.back_type_id,
+                            ),
+                        ),
+                        (
+                            target,
+                            and_(
+                                target.id == link.src_id,
+                                target.deleted_at.is_(None),
+                                *owner.seen(target),
+                            ),
+                        ),
+                    ]
+                elif hop.kind == "ref":
                     # 참조 색인으로 잇는다(ADR 0010) — 예전의 JSONB 포함(`@>`) 조인은 200만
                     # 건에서 2분을 넘겼다. 색인은 원소마다 한 줄이라 단일값 · 여러 값이 같다.
                     link = aliased(ObjectRef, name=f"{name}_link")
@@ -393,6 +425,13 @@ class JoinPlan:
         if paths.is_path(address):
             chain = self.resolver.parse_chain(address)
             end = self._walk(chain)
+            if chain.field is None and chain.hop.is_back:
+                raise AppError(
+                    code("OBJECTS", 99),
+                    f"「{chain.label}」 자체로는 묶지 않습니다 — 가리키는 객체마다 막대가 "
+                    "하나씩 섭니다. 그 객체의 칸(예: 증상)으로 묶습니다.",
+                    status=422,
+                )
             if chain.field is None:
                 assert end.edges is not None and end.hop is not None and end.owner is not None
                 if grain is not None:

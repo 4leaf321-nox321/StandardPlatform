@@ -381,7 +381,17 @@ def _deep_world(client: TestClient, admin: Signed) -> dict[str, Any]:
         _make_object(
             client, admin, case, label=f"건{index}", properties={"model": model, "tags": tags}
         )
-    return {"case": case, "s_base": s_base, "a_base": a_base, "made_by": made_by}
+    return {
+        "case": case,
+        "sku": sku,
+        "base": base,
+        "s_base": s_base,
+        "a_base": a_base,
+        "made_by": made_by,
+        "s1": s1,
+        "s2": s2,
+        "a1": a1,
+    }
 
 
 def test_걸음을_이어_접고_같은_주소로_거른다(client: TestClient, admin: Signed) -> None:
@@ -469,3 +479,129 @@ def test_걸음은_셋까지_모르는_걸음은_이유를_말한다(client: Tes
         headers=admin.headers,
     )
     assert fixed.status_code == 200, fixed.text
+
+
+# --- 나를 가리키는 것(들어오는 참조, ADR 0017) ---------------------------------------
+
+
+def test_나를_가리키는_것을_고르개에_세우고_되짚는_걸음은_뺀다(
+    client: TestClient, admin: Signed
+) -> None:
+    w = _deep_world(client, admin)
+    case, sku = w["case"], w["sku"]
+    back = f"in.{case}:model"
+    fields = {
+        one["field"]: one
+        for one in client.get(f"/api/objects/{sku}/fields", headers=admin.headers).json()
+    }
+    itself = fields[back]
+    assert itself["heading"] == "가리키는 것 · 기록(모델)"
+    assert itself["data_type"] == "object_ref" and itself["ref_type_slug"] == case
+    assert fields[f"{back}.label"]["label"] == "기록(모델) › 이름"
+    # 두 걸음 — 가리키는 기록의 태그의 종류.
+    assert fields[f"{back}.ref.tags.kind"]["label"] == "기록(모델) › 태그 › 종류"
+    # 되짚기 — SKU → 가리키는 기록 → 그 기록의 모델(다시 SKU)은 늘어놓지 않는다.
+    assert not any(key.startswith(f"{back}.ref.model") for key in fields)
+    # 기본 모델에서는 두 걸음 모두 거꾸로 — SKU 가 가리키고, 그 SKU 를 기록이 가리킨다.
+    base_fields = client.get(f"/api/objects/{w['base']}/fields", headers=admin.headers).json()
+    assert f"in.{sku}:base.{back}.label" in {one["field"] for one in base_fields}
+
+    # 통계 기준에는 그 걸음 자체가 없다(기록마다 막대가 선다) — 주소로 물으면 이유와 함께 거절.
+    options = {one["field"] for one in _summary(client, admin, sku)["group_options"]}
+    assert back not in options and f"{back}.ref.tags.label" in options
+    refused = client.get(
+        f"/api/objects/{sku}/summary", params={"group_by": back}, headers=admin.headers
+    )
+    assert refused.status_code == 422
+    assert refused.json()["error"]["code"].endswith("OBJECTS-0099")
+
+
+def test_나를_가리키는_것으로_거르고_객체마다_한_번_센다(
+    client: TestClient, admin: Signed
+) -> None:
+    w = _deep_world(client, admin)
+    case, sku = w["case"], w["sku"]
+    back = f"in.{case}:model"
+    _make_object(client, admin, sku, label="B-1")  # 가리키는 기록이 없다
+    assert _labels(client, admin, sku, **{f"f.{back}.empty": ""}) == ["B-1"]
+    assert _labels(client, admin, sku, **{f"f.{back}.notempty": ""}) == ["A-1", "S-1", "S-2"]
+    # 「256G 태그가 달린 기록이 있는 SKU」 — 건0(S-1) · 건2 · 건3(A-1).
+    assert _labels(client, admin, sku, **{f"f.{back}.ref.tags.label.eq": "256G"}) == [
+        "A-1",
+        "S-1",
+    ]
+
+    # 태그 이름별 SKU 수 — A-1 은 256G 기록이 둘이어도 그 막대에서 하나다.
+    found = _summary(client, admin, sku, group_by=f"{back}.ref.tags.label")
+    assert found["overlap"] is True and found["total"] == 4
+    counts = {one["label"]: one["count"] for one in found["buckets"]}
+    assert counts == {"빨강": 3, "256G": 2, "(비어 있음)": 2}
+    # 막대를 누르면 그 수만큼 걸린다.
+    big = next(one for one in found["buckets"] if one["label"] == "256G")
+    assert (
+        len(_labels(client, admin, sku, **{f"f.{back}.ref.tags.label.eq": "256G"}))
+        == big["count"]
+    )
+    # 두 걸음 모두 거꾸로 — 태그 이름별 기본 모델 수.
+    bases = _summary(client, admin, w["base"], group_by=f"in.{sku}:base.{back}.ref.tags.label")
+    assert {one["label"]: one["count"] for one in bases["buckets"]} == {
+        "빨강": 2,
+        "256G": 2,
+        "(비어 있음)": 1,
+    }
+    # 세부 기준으로 나눠도 조각의 합이 칸과 같다(객체마다 한 번).
+    split = _summary(
+        client, admin, sku, group_by=f"{back}.ref.tags.label", split_by=f"{back}.ref.tags.kind"
+    )
+    for bucket in split["buckets"]:
+        assert sum(part["count"] for part in bucket["parts"]) == bucket["count"]
+
+
+def test_가리키는_기록은_보이는_것만_잇는다(
+    client: TestClient, admin: Signed, member: Signed, db: Any
+) -> None:
+    """남의 부서 기록이 있다는 사실이 「기록이 있는 SKU」 로 새지 않는다."""
+    import uuid
+
+    from app.modules.workspaces.models import Workspace
+
+    other = Workspace(slug=f"o-{uuid.uuid4().hex[:6]}", name="다른 부서")
+    db.add(other)
+    db.commit()
+    w = _deep_world(client, admin)
+    case, sku = w["case"], w["sku"]
+    hidden_model = _make_object(client, admin, sku, label="H-1")["id"]
+    made = client.post(
+        f"/api/objects/{case}",
+        json={
+            "workspace_slug": other.slug,
+            "label": "남의 건",
+            "properties": {"model": hidden_model, "tags": []},
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    back = f"in.{case}:model"
+    assert "H-1" in _labels(client, admin, sku, **{f"f.{back}.notempty": ""})
+    assert "H-1" not in _labels(client, member, sku, **{f"f.{back}.notempty": ""})
+    assert "H-1" in _labels(client, member, sku, **{f"f.{back}.empty": ""})
+
+
+def test_지표의_기준으로는_나를_가리키는_것을_안_받는다(
+    client: TestClient, admin: Signed
+) -> None:
+    w = _deep_world(client, admin)
+    got = client.post(
+        "/api/metrics/plan",
+        json={
+            "source_type_slug": w["sku"],
+            "spec": {
+                "measure": "count",
+                "dimensions": [
+                    {"name": "tag", "address": f"in.{w['case']}:model.ref.tags.label"}
+                ],
+            },
+        },
+        headers=admin.headers,
+    )
+    assert "나를 가리키는 것" in got.text, got.text

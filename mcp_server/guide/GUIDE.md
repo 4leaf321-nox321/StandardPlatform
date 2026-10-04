@@ -337,6 +337,11 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 
 - `ref.<참조 칸>.<칸>` 참조 칸이 가리키는 것의 칸 · `out.<관계>` 관계로 이어진 것 자체(값은
   상대 id) · `out.<관계>.<칸>` 그것의 칸 · `in.<관계>[.<칸>]` 들어오는 관계.
+- **나를 가리키는 것** — `in.<타입>:<참조 칸>[.<칸>]`. 축에서 기록으로 내려가는 물음이 이것이다:
+  개발모델 목록에서 `{"field": "in.svc_case:model.symptom", "op": "eq", "value": "S07"}` 는 「증상 S07
+  기록이 있는 모델」, `in.svc_case:model` 의 `empty` 는 「기록이 없는 모델」, 통계
+  `group_by="in.svc_case:model.symptom"` 은 「증상별 모델 수」(모델마다 그 막대에 한 번). 그 걸음
+  자체로는 묶지 않는다. 기록은 토큰 주인이 볼 수 있는 것만 잇는다. 지표의 기준으로는 못 쓴다.
 - **두 걸음까지 준다** — 「개발사의 모회사의 국가」 는 `ref.vendor.ref.parent.country`, 「기록의 모델의
   과제의 프로젝트」 는 `ref.model.ref.task.project`. 같은 관계를 되짚는 걸음(끝이 출발한 쪽)은 없다.
   주소로는 셋까지 받지만 `object_fields` 에 없는 주소는 지어내지 않는다.
