@@ -33,3 +33,12 @@ def test_잘린_본문은_잘렸다고_적고_없는_본문은_싣지_않는다(
     assert ra_reports.flatten(base, base_url="https://ra.local")["url"] == (
         "https://ra.local/w/cae/reports/7"
     )
+
+
+def test_긴_제목은_이름_칸에_맞게_줄인다() -> None:
+    """RA 제목은 255자, 이름 칸은 200자 — 넘긴 채 보내면 적용에서 DB 가 거절하고 같은 보고서가
+    다음 차례에도 와서 동기화가 계속 멈춘다."""
+    long = "가" * 255
+    label = ra_reports.flatten({"id": 1, "title": long})["label"]
+    assert len(label) == ra_reports.TITLE_MAX and label.endswith("…")
+    assert ra_reports.flatten({"id": 1, "title": "  강성\n해석  "})["label"] == "강성 해석"

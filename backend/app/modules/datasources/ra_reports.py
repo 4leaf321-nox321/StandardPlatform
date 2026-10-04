@@ -310,6 +310,17 @@ def fetch(
 CUT_NOTE = "\n\n[RA 피드의 한 건 상한(1MB)에서 잘렸습니다 — 전문은 원본 주소에서 봅니다.]"
 
 
+#: 이름 칸의 길이(`ObjectInstance.label`, 200) — RA 제목은 255 자까지라 넘는 것은 줄인다. 넘긴
+#: 채 보내면 적용에서 DB 가 거절하고, 같은 보고서가 다음 차례에도 와서 동기화가 계속 멈춘다.
+#: 전체 제목은 본문 앞머리에 있다(RA 의 검색용 평문은 제목부터).
+TITLE_MAX = 200
+
+
+def _title(raw: object) -> str:
+    title = " ".join(str(raw or "").split())
+    return title if len(title) <= TITLE_MAX else title[: TITLE_MAX - 1] + "…"
+
+
 def absolute(base_url: str, url: object) -> str | None:
     """원문 주소 — RA 에 기준 주소(`APP_BASE_URL`)가 비어 있으면 `/w/…` 상대 경로가 온다.
     그때는 소스의 RA 루트를 붙인다(루트를 `…/api` 까지 적었어도)."""
@@ -356,7 +367,7 @@ def flatten(item: dict[str, Any], *, base_url: str = "") -> dict[str, Any]:
         _OWNER: workspace.get("slug"),
         _ENTITIES: entities,
         "key": f"{KEY_PREFIX}{rid}" if rid is not None else "",
-        "label": str(item.get("title") or "").strip(),
+        "label": _title(item.get("title")),
         "ra_id": "" if rid is None else str(rid),
         "url": absolute(base_url, item.get("url")),
         "report_date": item.get("report_date"),
@@ -715,7 +726,13 @@ def type_payload(
             ],
             "sort": {"field": "properties.report_date", "dir": "desc"},
             "search": ["label", "properties.body", "properties.tags", "properties.ra_tags"],
-            "filters": ["properties.ra_workspace", "properties.origin_state"],
+            # 단계 — 「게시된 것 전부」 로 받으면 발행본과 검토 중이 섞인다(RA: 발행은 편집
+            # 잠금을 겸해 드물다). 둘을 가를 수 있게.
+            "filters": [
+                "properties.ra_workspace",
+                "properties.phase",
+                "properties.origin_state",
+            ],
         },
     }
     if nav_group_slug:
