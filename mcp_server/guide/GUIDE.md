@@ -672,6 +672,10 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
   목록의 `in.ra_report:ref_plm_model` 이 `notempty` 면 「보고서가 있는 모델」, 통계
   `group_by="in.ra_report:ref_plm_model.report_type"` 은 「보고서 유형별 모델 수」(`find` 의 「나를
   가리키는 것」).
+- **태그가 빠진 보고서** — 이 쌍둥이에서 태깅하지 않는다(태깅은 RA 에서 한다). 축 참조 칸의 `empty`
+  (「모델이 안 달린 보고서」)와 `ra_tags` 의 `notempty`(이 쌍둥이에 못 이은 태그)로 찾아, **어느 보고서에
+  어느 축이 빠졌는지** 모아 사람에게 보이고 RA 에서 태깅하도록 권한다. 본문에서 짐작한 축은 「후보」 로만
+  말한다.
 - **이 쌍둥이에 없는 축** — 그 태그는 `ra_tags` 에 글로 있다:
   `{"field": "ra_tags", "op": "contains", "value": "부품: P-1234"}`.
 - **기간 · 부서로 세기** — `objects_summary("ra_report", group_by="properties.report_date",
