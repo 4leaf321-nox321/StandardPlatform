@@ -315,3 +315,80 @@ def test_새_모델_훑기는_최근_출시_모델마다_전작과_견준다(
     )
     assert narrow["baseline"]["findings"] == []
     assert narrow["baseline"]["notes"] == ["최근 6기간 안에 처음 팔린 모델이 없습니다."]
+
+
+def test_증상마다_훑는_경보는_나빠진_증상을_값과_함께_알린다(
+    client: TestClient, admin: Signed
+) -> None:
+    """「출시 N주차, 전작보다 빨리 늘고 있는 증상은?」 을 밤마다 — 새 모델 하나를 증상마다."""
+    w, cases, plant = _sprt_world(client, admin)
+    slug = cases["slug"]
+    # 새 모델 훑기와 증상 훑기를 겹치면 수가 곱으로 는다 — 새 모델을 하나 정해야 한다.
+    assert _refused(client, admin, slug, "sprt", {"by": "symptom"}).endswith("METRICS-0045")
+    params = {"target": w["s_base"], "reference": w["a_base"], "by": "symptom"}
+    plant(2)
+    made = _create(client, admin, slug, "sprt", params, name="S 증상별")
+    assert made["baseline"]["findings"] == [] and "by=symptom" in made["link"]
+    plant(4)
+    assert _after(slug) == {"alerts": 1, "new": 1}
+    (note,) = _notes(client, admin, "metric.alert")
+    assert "S기본 · 소음: 전작 A기본 보다 나쁨" in note["body"]
+    events = client.get("/api/metrics/alerts/events", headers=admin.headers).json()
+    (event,) = [one for one in events if one["alert_id"] == made["id"]]
+    assert event["key"] == f"worse:{w['s_base']}@소음" and event["detail"]["value"] == "소음"
+
+
+def test_변화점_경보를_증상마다_훑으면_값마다_따로_센다(
+    client: TestClient, admin: Signed
+) -> None:
+    from tests.api.test_metric_analysis import _symptom_months
+
+    w = _world(client, admin)
+    sales, monthly = _symptom_months(client, admin, w)
+    first, watermark = date(2026, 1, 1), datetime(2030, 2, 15, tzinfo=UTC)
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(first, i),
+                "dims": {"base_model": w["s_base"]},
+                "count": 1,
+                "value_count": 1,
+                "sum": 20000.0,
+            }
+            for i in range(48)
+        ],
+        watermark,
+    )
+
+    def plant(leak_from: int | None) -> None:
+        def count(symptom: str, i: int) -> int:
+            if symptom == "발열":
+                return 210 if i >= 30 else 150  # 오래전 변화 — 끝 여섯 달 밖
+            if symptom == "누수":
+                return 150 if leak_from is not None and i >= leak_from else 100
+            return 200
+
+        _plant(
+            monthly["slug"],
+            [
+                {
+                    "period": _month(first, i),
+                    "dims": {"base_model": w["s_base"], "symptom": symptom},
+                    "count": count(symptom, i),
+                }
+                for i in range(48)
+                for symptom in ("소음", "발열", "누수")
+            ],
+            watermark,
+        )
+
+    plant(None)
+    slug = monthly["slug"]
+    made = _create(client, admin, slug, "changes", {"by": "symptom"}, name="증상별 변화")
+    assert made["baseline"]["findings"] == []  # 발열의 변화는 끝 여섯 달 밖
+    plant(44)  # 누수가 끝 넉 달 오른다(잠정)
+    assert _after(slug) == {"alerts": 1, "new": 1}
+    events = client.get(f"{'/api/metrics/alerts/events'}", headers=admin.headers).json()
+    (event,) = [one for one in events if one["alert_id"] == made["id"]]
+    assert event["key"] == "up:2029-09-01@누수" and event["detail"]["provisional"] is True

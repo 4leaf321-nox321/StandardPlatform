@@ -17,11 +17,13 @@ from app.modules.metrics.recipes import assoc, changes, control, life, logit, pa
 from app.modules.metrics.recipes.schemas import (
     AssocOut,
     ChangesOut,
+    ChangesScanOut,
     ControlOut,
     LifeOut,
     LogitOut,
     ParetoOut,
     SprtOut,
+    SprtScanOut,
 )
 from app.shared.auth import current_user
 
@@ -202,6 +204,90 @@ def changes_analysis(
         cohort_to=cohort_to,
     )
     return changes.run(db, user, metric, built, ask, axis=axis, window=window, compact=compact)
+
+
+@router.get("/changes/scan", response_model=ChangesScanOut)
+def changes_scan(
+    slug: str,
+    request: Request,
+    by: str = Query(description="값마다 훑을 기준 이름(증상 등)"),
+    axis: Literal["period", "cohort"] | None = Query(default=None),
+    window: int = Query(
+        default=3, ge=1, le=120, description="코호트 축 — 출고 뒤 몇 기간 안의 건수인가"
+    ),
+    top: int = Query(
+        default=changes.SCAN_TOP,
+        ge=1,
+        le=changes.SCAN_MAX,
+        description="건수 많은 값부터 몇 개",
+    ),
+    period_from: str | None = Query(default=None),
+    period_to: str | None = Query(default=None, description="이 날 **앞까지**"),
+    cohort_from: str | None = Query(default=None),
+    cohort_to: str | None = Query(default=None),
+    compact: bool = Query(default=False),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ChangesScanOut:
+    """⑩ 값마다 훑기 — 「계절을 빼면 실제로 늘고 있는 증상은?」 값마다 계절 · 변화점을 맞추고
+    (여럿을 보니 변화점 벌점에 2·ln K), 마지막 변화가 오름인 값부터."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(
+        request,
+        period_from=period_from,
+        period_to=period_to,
+        cohort_from=cohort_from,
+        cohort_to=cohort_to,
+    )
+    return changes.scan(
+        db, user, metric, built, ask, by=by, axis=axis, window=window, top=top, compact=compact
+    )
+
+
+@router.get("/sprt/scan", response_model=SprtScanOut)
+def sprt_scan(
+    slug: str,
+    request: Request,
+    by: str = Query(description="값마다 훑을 기준 이름(증상 등)"),
+    target: str = Query(description="새 모델 — 그 기준의 값(관계 기준이면 객체 id)"),
+    reference: str | None = Query(default=None, description="전작 — 그 기준의 값"),
+    reference_via: str | None = Query(
+        default=None, description="전작을 새 모델 객체의 이 칸(참조)에서 찾는다"
+    ),
+    dim: str | None = Query(default=None, description="모델 기준 — 비우면 분모 짝의 첫 기준"),
+    rho: float = Query(default=sprt.RHO, gt=1.0, le=10.0),
+    alpha: float = Query(default=sprt.ALPHA, gt=0.0, lt=0.5),
+    beta: float = Query(default=sprt.BETA, gt=0.0, lt=0.5),
+    top: int = Query(
+        default=sprt.SCAN_TOP, ge=1, le=sprt.SCAN_MAX, description="새 모델의 건수 많은 값부터"
+    ),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> SprtScanOut:
+    """④ 값마다 훑기 — 「출시 N주차, 전작보다 빨리 늘고 있는 증상은?」 값마다 그 값으로 걸러
+    새 모델 vs 전작 순차 검정(유의수준은 α/K), 「나쁨」 이 선 값부터."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(request)
+    return sprt.scan(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        by=by,
+        target=target,
+        reference=reference,
+        reference_via=reference_via,
+        dim=dim,
+        rho=rho,
+        alpha=alpha,
+        beta=beta,
+        top=top,
+    )
 
 
 @router.get("/sprt", response_model=SprtOut)

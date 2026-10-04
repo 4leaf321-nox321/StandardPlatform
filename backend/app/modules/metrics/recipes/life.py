@@ -515,6 +515,15 @@ def cohorts_of(
             continue
         by_cohort.setdefault(cell.cohort, {})[cell.age] = cell.count
     den = frame.denominator
+    # **팔렸는데 기록이 0 건인 코호트도 코호트다** — 「팔렸고 아직 0 건」 이라는 관측이다.
+    # 셀에서만 코호트를 만들면 증상 하나로 거른 드문 증상에서 0 건 코호트가 빠져 비율이
+    # 부풀고(전작은 기대가 커져 새 모델이 좋아 보이고, 새 모델은 기대만 빠져 나빠 보인다),
+    # 전작에 없던 증상은 아예 견줄 수 없었다. 대수는 코호트와 짝이고 나누는 기준이 없을 때만
+    # 펼친다.
+    if den is not None and den.time == "cohort" and not den.on:
+        for (_, when), units in den.values.items():
+            if when is not None and units:
+                by_cohort.setdefault(when, {})
     out: list[Cohort] = []
     for start in sorted(by_cohort):
         counts = by_cohort[start]

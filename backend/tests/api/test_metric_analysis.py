@@ -939,3 +939,174 @@ def test_파레토는_두_기간의_몫을_견준다(client: TestClient, admin: 
     # 비교를 안 주면 없다.
     plain = _analysis(client, admin, cases["slug"], "pareto", dim="symptom")
     assert plain["comparison"] is None
+
+
+# --- ④ · ⑩ 값마다 훑기 --------------------------------------------------------------------
+
+
+def _symptom_months(
+    client: TestClient, admin: Signed, w: dict[str, Any]
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """(판매 대수, 증상별 월 인입률) — 분모는 기본 모델로만 짝짓는다(증상은 대수를 안
+    나눈다)."""
+    sales, _ = _two(client, admin, w)
+    monthly = _define(
+        client,
+        admin,
+        source=w["case"],
+        spec={
+            "measure": "count",
+            "time": {"address": "properties.received", "grain": "month"},
+            "dimensions": [
+                {"name": "base_model", "address": "ref.model.base"},
+                {"name": "symptom", "address": "properties.symptom"},
+            ],
+            "denominator": {
+                "metric": sales["slug"],
+                "on": ["base_model"],
+                "time": "period",
+                "per": 1000,
+            },
+            "settle_days": 30,
+        },
+        label="증상별 월 인입률",
+    )
+    return sales, monthly
+
+
+def test_변화점을_증상마다_훑으면_늘어난_증상이_먼저_선다(
+    client: TestClient, admin: Signed
+) -> None:
+    """4 년 · 대수 2만 — 발열은 2028-07 부터 1.4배, 누수는 0.7배, 소음은 그대로(잡음 없는
+    셀)."""
+    w = _world(client, admin)
+    sales, monthly = _symptom_months(client, admin, w)
+    first, watermark = date(2026, 1, 1), datetime(2030, 2, 15, tzinfo=UTC)
+    levels = {"소음": (200, 200), "발열": (150, 210), "누수": (100, 70)}
+    _plant(
+        monthly["slug"],
+        [
+            {
+                "period": _month(first, i),
+                "dims": {"base_model": w["s_base"], "symptom": symptom},
+                "count": after if i >= 30 else before,
+            }
+            for i in range(48)
+            for symptom, (before, after) in levels.items()
+        ],
+        watermark,
+    )
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(first, i),
+                "dims": {"base_model": w["s_base"]},
+                "count": 1,
+                "value_count": 1,
+                "sum": 20000.0,
+            }
+            for i in range(48)
+        ],
+        watermark,
+    )
+    found = _analysis(client, admin, monthly["slug"], "changes/scan", by="symptom")
+    assert found["scanned"] == 3 and found["extra_penalty"] == pytest.approx(2 * np.log(3))
+    assert [one["key"] for one in found["items"]] == ["발열", "누수", "소음"]
+    up, down, flat = found["items"]
+    assert up["direction"] == "up" and up["last"]["label"] == "2028-07"
+    assert up["last"]["ratio"] == pytest.approx(1.4, rel=0.02)
+    assert up["level_now"] == pytest.approx(210 / 20000 * 1000, rel=0.02)
+    assert down["direction"] == "down" and flat["direction"] == "flat"
+    assert "발열" in up["drill"]["params"].values()
+    assert len(found["periods"]) == 48 and found["kind"] == "rate"
+    codes = {one["code"] for one in found["caveats"]}
+    assert {"scan_penalty", "shared_exposure"} <= codes
+    refused = _refused(
+        client, admin, monthly["slug"], "changes/scan", by="symptom", **{"d.symptom": "소음"}
+    )
+    assert refused["code"].endswith("METRICS-0027")
+
+
+def test_순차_검정을_증상마다_훑으면_나빠진_증상과_새로_생긴_증상이_먼저_선다(
+    client: TestClient, admin: Signed
+) -> None:
+    """전작 A · 새 모델 S 1,000대씩 — 소음은 둘 다 경과마다 2건, 발열은 2 → 6건(세 배), 누수는
+    전작에 없고 S 에 3건. 전작에 없던 증상도 0 건 코호트가 기대 0 을 내서 견준다."""
+    w = _world(client, admin)
+    sales, cases = _two(client, admin, w)
+    watermark = datetime(2028, 2, 15, tzinfo=UTC)
+    per = {"소음": (2, 2), "발열": (2, 6), "누수": (0, 3)}
+    cells: list[dict[str, Any]] = []
+    for i in range(24):
+        a_start, s_start = _month(date(2024, 1, 1), i), _month(date(2026, 1, 1), i)
+        for symptom, (a_count, s_count) in per.items():
+            a_dims = {"base_model": w["a_base"], "symptom": symptom, "factory": "F1"}
+            s_dims = {"base_model": w["s_base"], "symptom": symptom, "factory": "F1"}
+            if a_count:
+                cells += [
+                    {
+                        "period": _month(a_start, age),
+                        "cohort": a_start,
+                        "age": age,
+                        "dims": a_dims,
+                        "count": a_count,
+                    }
+                    for age in range(min(36, 48 - i))
+                ]
+            cells += [
+                {
+                    "period": _month(s_start, age),
+                    "cohort": s_start,
+                    "age": age,
+                    "dims": s_dims,
+                    "count": s_count,
+                }
+                for age in range(24 - i)
+            ]
+    _plant(cases["slug"], cells, watermark)
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(date(2024, 1, 1), i),
+                "dims": {"base_model": base},
+                "count": 1,
+                "value_count": 1,
+                "sum": 1000.0,
+            }
+            for base, offset in ((w["a_base"], 0), (w["s_base"], 24))
+            for i in range(offset, offset + 24)
+        ],
+        watermark,
+    )
+    found = _analysis(
+        client,
+        admin,
+        cases["slug"],
+        "sprt/scan",
+        by="symptom",
+        target=w["s_base"],
+        reference=w["a_base"],
+    )
+    assert found["scanned"] == 3 and found["alpha_each"] == pytest.approx(0.05 / 3)
+    assert found["skipped"] == []
+    items = {one["key"]: one for one in found["items"]}
+    assert items["발열"]["decision"] == "worse" and items["발열"]["smr"] == pytest.approx(3.0)
+    assert items["누수"]["decision"] == "worse" and items["누수"]["new"] is True
+    assert items["누수"]["smr"] is None and items["누수"]["expected"] == 0
+    assert items["소음"]["decision"] != "worse" and items["소음"]["smr"] == pytest.approx(1.0)
+    assert found["items"][-1]["key"] == "소음"  # 「나쁨」 이 먼저
+    codes = {one["code"] for one in found["caveats"]}
+    assert {"multiple_testing", "shared_exposure", "new_values"} <= codes
+    # 모델 기준으로는 훑지 않는다.
+    refused = _refused(
+        client,
+        admin,
+        cases["slug"],
+        "sprt/scan",
+        by="base_model",
+        target=w["s_base"],
+        reference=w["a_base"],
+    )
+    assert refused["code"].endswith("METRICS-0029")

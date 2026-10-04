@@ -18,6 +18,13 @@
 
 STL 은 쓰지 않는다 — 추세를 매끈하게 맞추는 방법이라 계단을 비탈로 뭉개 변화점을 잃는다.
 
+## 값마다 훑기 — 「실제로 늘고 있는 **증상**은?」
+
+기준 하나(증상 등)의 값마다 같은 모형을 따로 맞춘다. 대수는 그 기준이 분모 짝에 있으면 값마다
+나눈 대수, 없으면 **같은 대수**(모든 기기가 모든 증상에 노출된다)로 나눈다. 값 K 개를 함께 보면
+우연한 변화점이 K 배로 늘어나므로 변화점 하나의 벌점에 2 · ln K 를 더한다 — 우도비 척도에서
+본페로니와 같은 몫이다. 마지막 변화점이 오름인 값부터, 최근 것부터 세운다.
+
 ## 읽는 법
 
 변화점마다 앞 · 뒤 수준(계절을 뺀 비율)과 그 비(準포아송 구간). 새 수준이 6점이 안 되면
@@ -30,6 +37,7 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
+from typing import Literal
 
 import numpy as np
 from numpy.typing import NDArray
@@ -44,6 +52,9 @@ from app.modules.metrics.recipes.schemas import (
     ChangeOut,
     ChangesOut,
     ChangesPointOut,
+    ChangesScanItemOut,
+    ChangesScanOut,
+    ScanPeriodOut,
     SeasonOut,
     SegmentOut,
 )
@@ -58,6 +69,9 @@ SETTLED = 2 * MIN_SEGMENT
 #: 이보다 짧으면 변화점을 찾지 않는다.
 MIN_POINTS = 2 * MIN_SEGMENT + 2
 MAX_ITERATIONS = 10
+#: 값마다 훑기 — 건수 많은 값부터 몇 개.
+SCAN_TOP = 20
+SCAN_MAX = 40
 Z95 = 1.959963984540054
 WEEKDAYS = ("월", "화", "수", "목", "금", "토", "일")
 
@@ -295,6 +309,7 @@ def detect(
     m: int,
     *,
     min_size: int = MIN_SEGMENT,
+    extra: float = 0.0,
 ) -> Fit:
     """닫힌 부분군을 차례로 — 계절 지수와 변화점을 번갈아 맞춘다.
 
@@ -305,7 +320,7 @@ def detect(
     y = np.asarray(counts, dtype=np.float64)
     e = np.asarray(exposures, dtype=np.float64)
     n = int(y.size)
-    penalty = 3.0 * math.log(max(n, 2))
+    penalty = 3.0 * math.log(max(n, 2)) + extra
     season_list = list(seasons)
     use_season = m > 1 and n >= 2 * m
     flat = np.ones(max(m, 1))
@@ -382,6 +397,50 @@ def available(built: spec_module.Built) -> str | None:
 registry.register(registry.Recipe(NAME, LABEL, available))
 
 
+def described(
+    fit: Fit, closed: Sequence[series.Subgroup], grain: str, per: float
+) -> tuple[list[SegmentOut], list[ChangeOut]]:
+    """맞춘 결과 → 구간과 변화점(앞 · 뒤 수준, 비와 그 구간, 잠정)."""
+    segments: list[SegmentOut] = []
+    changes: list[ChangeOut] = []
+    counts = [one.count for one in closed]
+    for k, (start, end) in enumerate(zip(fit.starts, fit.ends, strict=True)):
+        first, last = closed[start].when, closed[end - 1].when
+        segments.append(
+            SegmentOut(
+                start=first.isoformat(),
+                stop=axes.next_period(last, grain).isoformat(),
+                label=f"{axes.period_label(first.isoformat(), grain)} ~ "
+                f"{axes.period_label(last.isoformat(), grain)}",
+                level=fit.levels[k] * per,
+                count=int(sum(counts[start:end])),
+                points=end - start,
+            )
+        )
+        if k == 0:
+            continue
+        before, after = fit.levels[k - 1], fit.levels[k]
+        band = ratio_interval(
+            before,
+            after,
+            sum(counts[fit.starts[k - 1] : start]),
+            sum(counts[start:end]),
+            fit.dispersion,
+        )
+        changes.append(
+            ChangeOut(
+                at=first.isoformat(),
+                label=axes.period_label(first.isoformat(), grain),
+                before=before * per,
+                after=after * per,
+                ratio=after / before if before > 0 else None,
+                ratio_ci=list(band) if band is not None else None,
+                provisional=end - start < SETTLED,
+            )
+        )
+    return segments, changes
+
+
 def run(
     db: Session,
     user: User,
@@ -445,42 +504,7 @@ def run(
             season_index[one.when] = (
                 fit.seasonal[season_of(one.when, grain)] if fit.seasonal else 1.0
             )
-        counts = [one.count for one in closed]
-        for k, (start, end) in enumerate(zip(fit.starts, fit.ends, strict=True)):
-            first, last = closed[start].when, closed[end - 1].when
-            segments.append(
-                SegmentOut(
-                    start=first.isoformat(),
-                    stop=axes.next_period(last, grain).isoformat(),
-                    label=f"{axes.period_label(first.isoformat(), grain)} ~ "
-                    f"{axes.period_label(last.isoformat(), grain)}",
-                    level=fit.levels[k] * per,
-                    count=int(sum(counts[start:end])),
-                    points=end - start,
-                )
-            )
-            if k == 0:
-                continue
-            before, after = fit.levels[k - 1], fit.levels[k]
-            band = ratio_interval(
-                before,
-                after,
-                sum(counts[fit.starts[k - 1] : start]),
-                sum(counts[start:end]),
-                fit.dispersion,
-            )
-            provisional = end - start < SETTLED
-            changes.append(
-                ChangeOut(
-                    at=first.isoformat(),
-                    label=axes.period_label(first.isoformat(), grain),
-                    before=before * per,
-                    after=after * per,
-                    ratio=after / before if before > 0 else None,
-                    ratio_ci=list(band) if band is not None else None,
-                    provisional=provisional,
-                )
-            )
+        segments, changes = described(fit, closed, grain, per)
         if any(one.provisional for one in changes):
             caveats.add(
                 "provisional_change",
@@ -542,4 +566,177 @@ def run(
         changes=changes,
         segments=segments,
         points=points,
+    )
+
+
+def scan_penalty(k: int) -> float:
+    """값 K 개를 함께 볼 때 변화점 하나에 더하는 벌점 — 2 · ln K(우도비 척도의 본페로니)."""
+    return 2.0 * math.log(k) if k > 1 else 0.0
+
+
+def scan(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    built: spec_module.Built,
+    ask: query.Ask,
+    *,
+    by: str,
+    axis: series.Axis | None = None,
+    window: int = 3,
+    top: int = SCAN_TOP,
+    compact: bool = False,
+) -> ChangesScanOut:
+    """기준 `by` 의 값마다 계절 · 변화점 — 「계절을 빼면 실제로 늘고 있는 증상은?」."""
+    reason = available(built)
+    if reason is not None:
+        raise common.refuse(27, reason)
+    by_dim = common.dim_of(built, by)
+    if by in ask.filters:
+        raise common.refuse(
+            27, f"d.{by} 로 거른 기준으로는 훑을 수 없습니다 — 그 거르기를 빼고 훑습니다."
+        )
+    found = series.read(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        axis=axis,
+        window=window,
+        split=by,
+        limit=max(1, min(top, SCAN_MAX)),
+        shared=True,
+    )
+    caveats = common.Caveats()
+    series.caveats(found, caveats)
+    grain, per = found.grain, found.per
+    m = season_length(grain)
+    extra = scan_penalty(len(found.series))
+    items: list[ChangesScanItemOut] = []
+    for one in found.series:
+        closed = [g for g in one.subgroups if g.closed and g.exposure > 0]
+        drill = query.drill(
+            built,
+            query.Cell({by: one.key}, None, None, None, one.total, 0, None, None, None),
+            by=(),
+            ask=ask,
+        )
+        if len(closed) < MIN_POINTS:
+            items.append(
+                ChangesScanItemOut(
+                    key=one.key,
+                    label=one.label,
+                    total=one.total,
+                    points=len(closed),
+                    direction="flat",
+                    last=None,
+                    changes=[],
+                    level_now=None,
+                    dispersion=None,
+                    seasonal=False,
+                    note=f"닫힌 부분군이 {len(closed)}개라 보지 않았습니다.",
+                    drill=drill,
+                )
+            )
+            continue
+        fit = detect(
+            [g.count for g in closed],
+            [g.exposure for g in closed],
+            [season_of(g.when, grain) for g in closed],
+            m,
+            extra=extra,
+        )
+        _, found_changes = described(fit, closed, grain, per)
+        last = found_changes[-1] if found_changes else None
+        direction: Literal["up", "down", "flat"] = (
+            "flat" if last is None else ("up" if last.after > last.before else "down")
+        )
+        items.append(
+            ChangesScanItemOut(
+                key=one.key,
+                label=one.label,
+                total=one.total,
+                points=len(closed),
+                direction=direction,
+                last=last,
+                changes=found_changes,
+                level_now=fit.levels[-1] * per if fit.levels else None,
+                dispersion=fit.dispersion,
+                seasonal=fit.seasonal is not None,
+                note=None,
+                drill=drill,
+            )
+        )
+    rank = {"up": 0, "down": 1, "flat": 2}
+    items.sort(
+        key=lambda one: (
+            rank[one.direction],
+            # 최근 변화부터, 같으면 큰 비부터
+            -(date.fromisoformat(one.last.at).toordinal() if one.last else 0),
+            -((one.last.ratio or 0.0) if one.last else 0.0),
+            -one.total,
+        )
+    )
+    if len(found.series) > 1:
+        caveats.add(
+            "scan_penalty",
+            f"값 {len(found.series)}개를 함께 보므로 변화점 하나의 벌점을 {extra:.1f}(2·ln K) "
+            "올렸습니다 — 우연한 변화점이 값의 수만큼 늘지 않게. 대신 작은 변화는 놓칠 수 "
+            "있습니다(하나만 보려면 d.<기준>=값 으로 단건 분석).",
+            level="info",
+        )
+    den_in = built.spec.denominator
+    if found.den is not None and den_in is not None and by not in den_in.on:
+        caveats.add(
+            "shared_exposure",
+            f"대수는 「{by_dim.axis.label}」 와 상관없이 같은 대수로 나눴습니다 — 모든 기기가 "
+            "모든 값에 노출된다고 봅니다.",
+            level="info",
+        )
+    if any(one.direction == "up" and one.last and one.last.provisional for one in items):
+        caveats.add(
+            "provisional_change",
+            f"끝 쪽의 변화점은 새 수준이 {SETTLED}점이 안 돼 잠정입니다 — 몇 기간 더 보고 "
+            "판단합니다.",
+        )
+    timeline = found.series[0].subgroups if found.series else []
+    head = common.header(
+        db,
+        user,
+        metric,
+        built,
+        found.frame,
+        recipe=NAME,
+        method=f"{METHOD} · 값마다 훑기(벌점 +2·ln K)",
+        params={
+            "by": by,
+            "axis": found.axis,
+            "window": window if found.axis == "cohort" else None,
+            "top": top,
+            "compact": compact,
+        },
+        caveats=caveats,
+        excluded=found.excluded,
+    )
+    return ChangesScanOut(
+        **head,
+        axis=found.axis,
+        window=window if found.axis == "cohort" else None,
+        kind="rate" if found.den is not None else "count",
+        per=per,
+        by=by,
+        by_label=by_dim.axis.label,
+        scanned=len(found.series),
+        other_values=found.other_groups,
+        extra_penalty=extra,
+        periods=[
+            ScanPeriodOut(
+                when=g.when.isoformat(),
+                label=axes.period_label(g.when.isoformat(), grain),
+                closed=g.closed,
+            )
+            for g in timeline
+        ],
+        items=items,
     )

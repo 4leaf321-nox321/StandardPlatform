@@ -336,6 +336,52 @@ class ChangesOut(AnalysisHeader):
     points: list[ChangesPointOut]
 
 
+class ScanPeriodOut(BaseModel):
+    when: str
+    label: str
+    closed: bool
+
+
+class ChangesScanItemOut(BaseModel):
+    """값 하나(증상 등)의 변화점 — 같은 대수로 나눈 그 값의 비율에서."""
+
+    key: str | None
+    label: str
+    total: int
+    points: int
+    """계산에 쓴 닫힌 부분군 수."""
+    direction: Literal["up", "down", "flat"]
+    """마지막 변화점의 방향 — 없으면 flat."""
+    last: ChangeOut | None
+    changes: list[ChangeOut]
+    level_now: float | None
+    """끝 구간의 수준(계절을 뺀 비율)."""
+    dispersion: float | None
+    seasonal: bool
+    """계절 지수를 썼나."""
+    note: str | None
+    """계산하지 못한 까닭(점이 모자람 등)."""
+    drill: DrillOut
+
+
+class ChangesScanOut(AnalysisHeader):
+    """⑩ 값마다 훑기 — 「계절을 빼면 실제로 늘고 있는 증상은?」 늘어난 것부터."""
+
+    axis: Literal["period", "cohort"]
+    window: int | None
+    kind: Literal["rate", "count"]
+    per: float
+    by: str
+    by_label: str
+    scanned: int
+    other_values: int
+    """건수가 적어 훑지 않은 값 수."""
+    extra_penalty: float
+    """여럿을 함께 보느라 변화점 하나에 더한 벌점(2·ln K)."""
+    periods: list[ScanPeriodOut]
+    items: list[ChangesScanItemOut]
+
+
 # --- ④ 순차 검정 ---------------------------------------------------------------------
 
 
@@ -405,6 +451,48 @@ class SprtOut(AnalysisHeader):
     reference_rates: list[ReferenceRateOut]
     looks: list[SprtLookOut]
     cohort_rows: list[SprtCohortOut]
+
+
+class SprtScanItemOut(BaseModel):
+    """값 하나(증상 등)로 거른 새 모델 vs 전작."""
+
+    key: str
+    label: str
+    decision: Literal["continue", "worse", "not_worse"]
+    decided_at: str | None
+    observed: float
+    expected: float
+    llr: float
+    smr: float | None
+    smr_low: float | None
+    smr_high: float | None
+    periods_to_worse: float | None
+    periods_to_not_worse: float | None
+    new: bool
+    """전작에 없던 값 — 기대가 0 이라 비를 낼 수 없다."""
+
+
+class SprtScanOut(AnalysisHeader):
+    """④ 값마다 훑기 — 「출시 N주차, 전작보다 빨리 늘고 있는 증상은?」 「나쁨」 이 선
+    것부터."""
+
+    dim: str
+    dim_label: str
+    by: str
+    by_label: str
+    target: str
+    target_label: str
+    reference: str
+    reference_label: str
+    rho: float
+    alpha: float
+    alpha_each: float
+    """값마다의 유의수준 — 여럿을 함께 보느라 α 를 값의 수로 나눴다(본페로니)."""
+    beta: float
+    scanned: int
+    other_values: int
+    items: list[SprtScanItemOut]
+    skipped: list[str]
 
 
 # --- ⑥ 재방문 위험 요인 --------------------------------------------------------------

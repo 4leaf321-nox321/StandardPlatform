@@ -64,10 +64,13 @@ ALLOWED: dict[str, frozenset[str]] = {
             "alpha",
             "beta",
             "notify_not_worse",
+            # 값마다 훑기(증상마다) — `target` 과 함께만.
+            "by",
+            "top",
         }
     ),
     "control": frozenset({"axis", "window", "split", "baseline_to", "recent"}) | RANGE_KEYS,
-    "changes": frozenset({"axis", "window", "recent"}) | RANGE_KEYS,
+    "changes": frozenset({"axis", "window", "recent", "by", "top"}) | RANGE_KEYS,
 }
 #: 끝에서 몇 부분군 · 기간 안의 것을 「새로」 로 보나.
 RECENT_DEFAULT = {"control": 1, "changes": 6}
@@ -161,6 +164,12 @@ def clean(recipe: str, raw: Mapping[str, str]) -> dict[str, str]:
             )
         out[key] = value
     if recipe == "sprt":
+        if "by" in out and "target" not in out:
+            raise _refuse(
+                45,
+                "값마다 훑기(by)는 새 모델(target)을 하나 정해야 합니다 — 새 모델 훑기와 함께 "
+                "못 씁니다.",
+            )
         if ("target" in out) == ("launched_within" in out):
             raise _refuse(
                 42,
@@ -255,6 +264,8 @@ def _sprt(
     beta = _float(values, "beta", sprt.BETA)
     if not (rho > 1.0 and 0.0 < alpha < 0.5 and 0.0 < beta < 0.5):
         raise _refuse(41, "rho 는 1 보다 크고, alpha · beta 는 0 과 0.5 사이입니다.")
+    if values.get("by"):
+        return _sprt_scan(db, user, metric, built, values, ask, dim, rho, alpha, beta)
     notes: list[str] = []
     if "target" in values:
         targets = [values["target"]]
@@ -346,6 +357,82 @@ def _sprt(
     return Outcome(findings, notes, run_id)
 
 
+def _sprt_scan(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    built: spec_module.Built,
+    values: Mapping[str, str],
+    ask: query.Ask,
+    dim: str,
+    rho: float,
+    alpha: float,
+    beta: float,
+) -> Outcome:
+    """증상마다 — 새 모델 하나를 전작과 값마다 견준다. 새 모델 훑기와 겹치면 수가 곱으로 늘어
+    `target` 과 함께만 받는다."""
+    if "target" not in values:
+        raise _refuse(
+            45,
+            "값마다 훑기(by)는 새 모델(target)을 하나 정해야 합니다 — 새 모델 훑기와 함께 "
+            "못 씁니다.",
+        )
+    out = sprt.scan(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        by=values["by"],
+        target=values["target"],
+        reference=values.get("reference"),
+        reference_via=values.get("reference_via"),
+        dim=dim,
+        rho=rho,
+        alpha=alpha,
+        beta=beta,
+        top=_int(values, "top", sprt.SCAN_TOP, 1, sprt.SCAN_MAX),
+    )
+    findings: list[Finding] = []
+    for item in out.items:
+        if item.decision == "continue" or (
+            item.decision == "not_worse" and not _flag(values, "notify_not_worse")
+        ):
+            continue
+        numbers = f"실제 {item.observed:g}건 · 기대 {item.expected:.1f}건" + (
+            f" · 표준화 비 {item.smr:.2f}" if item.smr is not None else " · 전작에 없던 값"
+        )
+        verdict = (
+            f"전작 {out.reference_label} 보다 나쁨"
+            if item.decision == "worse"
+            else f"전작 {out.reference_label} 의 {rho:g}배만큼 나쁘지는 않음"
+        )
+        findings.append(
+            Finding(
+                key=f"{item.decision}:{out.target}@{item.key}",
+                title=f"{out.target_label} · {item.label}: {verdict} — {numbers}",
+                detail={
+                    "target": out.target,
+                    "target_label": out.target_label,
+                    "reference": out.reference,
+                    "reference_label": out.reference_label,
+                    "by": out.by,
+                    "value": item.key,
+                    "value_label": item.label,
+                    "decision": item.decision,
+                    "decided_at": item.decided_at,
+                    "observed": item.observed,
+                    "expected": item.expected,
+                    "smr": item.smr,
+                },
+            )
+        )
+    notes = [f"{out.by_label} {out.scanned}개를 봤습니다 — 값마다 α {out.alpha_each:.4f}."]
+    if out.skipped:
+        notes.append(f"견주지 못한 값 {len(out.skipped)}개 — {out.skipped[0]}")
+    return Outcome(findings, notes, out.run_id)
+
+
 def _number(value: float | None) -> str:
     return "-" if value is None else f"{value:.3g}"
 
@@ -406,6 +493,8 @@ def _changes(
     values: Mapping[str, str],
 ) -> Outcome:
     recent = _int(values, "recent", RECENT_DEFAULT["changes"], 1, 60)
+    if values.get("by"):
+        return _changes_scan(db, user, metric, built, values, recent)
     out = changes.run(
         db,
         user,
@@ -444,6 +533,65 @@ def _changes(
     return Outcome(findings, [], out.run_id, positions)
 
 
+def _changes_scan(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    built: spec_module.Built,
+    values: Mapping[str, str],
+    recent: int,
+) -> Outcome:
+    """값마다 — 끝 몇 기간 안의 변화점. 열쇠에 값을 붙여, 같은 값의 이웃한 변화점만 같은 것으로
+    본다(`_same_change`)."""
+    out = changes.scan(
+        db,
+        user,
+        metric,
+        built,
+        params.ask_from_values(values),
+        by=values["by"],
+        axis=_axis(values),
+        window=_int(values, "window", 3, 1, 120),
+        top=_int(values, "top", changes.SCAN_TOP, 1, changes.SCAN_MAX),
+    )
+    closed = [period.when for period in out.periods if period.closed]
+    since = closed[-recent] if len(closed) >= recent else (closed[0] if closed else None)
+    findings: list[Finding] = []
+    positions: dict[str, int] = {}
+    for item in out.items:
+        for index, period in enumerate(out.periods):
+            positions[f"{period.when}@{item.key}"] = index
+        for change in item.changes:
+            if since is None or change.at < since:
+                continue
+            up = change.after > change.before
+            ratio = f" · {change.ratio:.2f}배" if change.ratio is not None else ""
+            findings.append(
+                Finding(
+                    key=f"{'up' if up else 'down'}:{change.at}@{item.key}",
+                    title=(
+                        f"{item.label} — {change.label}부터 {'올라감' if up else '내려감'}: "
+                        f"{_number(change.before)} → {_number(change.after)}{ratio}"
+                        + (" (잠정)" if change.provisional else "")
+                    ),
+                    detail={
+                        "by": out.by,
+                        "value": item.key,
+                        "value_label": item.label,
+                        "at": change.at,
+                        "before": change.before,
+                        "after": change.after,
+                        "ratio": change.ratio,
+                        "provisional": change.provisional,
+                    },
+                )
+            )
+    notes = [
+        f"{out.by_label} {out.scanned}개를 봤습니다 — 변화점 벌점 +{out.extra_penalty:.1f}."
+    ]
+    return Outcome(findings, notes, out.run_id, positions)
+
+
 def evaluate(
     db: Session, user: User, metric: MetricDef, recipe: str, values: Mapping[str, str]
 ) -> Outcome:
@@ -464,11 +612,13 @@ def _same_change(key: str, seen: set[str], positions: dict[str, int]) -> bool:
     here = positions.get(at)
     if direction not in ("up", "down") or here is None:
         return False
+    value = at.partition("@")[2]  # 값마다 훑기면 그 값 — 다른 값의 변화점은 다른 것이다
     for old in seen:
         old_direction, _, old_at = old.partition(":")
         there = positions.get(old_at)
         if (
-            old_direction == direction
+            old_at.partition("@")[2] == value
+            and old_direction == direction
             and there is not None
             and abs(here - there) <= CHANGE_SLACK
         ):

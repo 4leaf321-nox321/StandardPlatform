@@ -90,6 +90,7 @@ def read(
     window: int,
     split: str | None,
     limit: int,
+    shared: bool = False,
 ) -> SeriesSet:
     """셀을 읽어 기준 값마다(나누지 않으면 하나) 부분군의 줄을 만든다 — 건수 많은 순 `limit`
     개. 빈 기간은 0 건이다(대수가 있으면 진짜 관측이다)."""
@@ -108,7 +109,15 @@ def read(
     den_in = built.spec.denominator
     uses_den = den_in is not None and den_in.time == axis
     target = common.dim_of(built, split) if split is not None else None
-    if target is not None and uses_den and den_in is not None and split not in den_in.on:
+    # `shared` — 값마다 훑기: 대수를 나누지 않는 기준(증상)은 같은 대수로 나눈다(분모가 그
+    # 기준을 모르면 그대로 펼쳐진다 — `read_denominator`).
+    if (
+        target is not None
+        and uses_den
+        and den_in is not None
+        and split not in den_in.on
+        and not shared
+    ):
         raise common.refuse(
             26,
             f"「{target.axis.label}」 로 나누면 분모도 그 기준으로 나뉘어야 합니다 — 분모 짝"

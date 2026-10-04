@@ -131,3 +131,39 @@ def test_계절의_자리와_이름() -> None:
     assert changes.season_label(2, "month") == "3월"
     assert changes.season_label(0, "quarter") == "1분기"
     assert changes.season_label(changes.season_of(date(2026, 10, 3), "day"), "day") == "토"
+
+
+def test_여럿을_함께_보면_벌점을_올려_헛_변화점이_값의_수만큼_늘지_않는다() -> None:
+    """값 10개 · 과분산 3배인 평평한 줄 — 하나씩 보는 벌점이면 열 중 하나가 우연히 변화점을
+    내는 일이 잦다. 2·ln K 를 더하면 가족 단위로 줄고, 포아송 그대로의 30% 계단은 여전히
+    찾는다."""
+    assert changes.scan_penalty(1) == 0.0
+    assert changes.scan_penalty(10) == pytest.approx(2 * np.log(10))
+    rng = np.random.default_rng(3)
+    n, k, families = 36, 10, 40
+    flat = [0] * n
+
+    def any_change(extra: float) -> float:
+        hits = 0
+        for _ in range(families):
+            found = False
+            for _ in range(k):
+                lam = rng.gamma(100.0 / 2.0, 2.0, n)  # 평균 100 · φ 3
+                fit = changes.detect(
+                    rng.poisson(lam).tolist(), [1.0] * n, flat, 1, extra=extra
+                )
+                found = found or len(fit.starts) > 1
+            hits += found
+        return hits / families
+
+    alone, scanned = any_change(0.0), any_change(changes.scan_penalty(k))
+    assert scanned <= alone and scanned <= 0.05
+    caught = 0
+    for _ in range(40):
+        mean = np.full(n, 100.0)
+        mean[18:] *= 1.3
+        fit = changes.detect(
+            rng.poisson(mean).tolist(), [1.0] * n, flat, 1, extra=changes.scan_penalty(k)
+        )
+        caught += any(abs(start - 18) <= 1 for start in fit.starts[1:])
+    assert caught / 40 >= 0.85

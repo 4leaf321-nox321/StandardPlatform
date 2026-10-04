@@ -19,6 +19,13 @@
 
 매 기간 표준화 비 SMR = O/E 와 정확 포아송 구간(가우드), 결론까지 남은 기대 건수(같다면 · ρ
 배라면)를 함께 낸다. 「나아졌나」 는 묻지 않는다 — 표준화 비의 구간으로 읽는다.
+
+## 값마다 훑기 — 「전작보다 빨리 늘고 있는 **증상**은?」
+
+기준 하나(증상 등)의 값마다 그 값으로 걸러 같은 검정을 한다 — 새 모델의 그 증상 건수를 전작의
+그 증상의 경과별 비율로 낸 기대와 견준다(대수는 모델의 판매 대수 그대로). 값 K 개를 함께 보므로
+값마다 유의수준을 α/K 로 나눈다(본페로니 — 새 모델 훑기와 같다). 「나쁨」 이 선 값부터, 표준화
+비가 큰 것부터 세운다. 전작에 없던 값은 기대가 0 이라 비 없이 건수로만 「나쁨」 에 이른다.
 """
 
 from __future__ import annotations
@@ -42,9 +49,12 @@ from app.modules.metrics.recipes.schemas import (
     SprtCohortOut,
     SprtLookOut,
     SprtOut,
+    SprtScanItemOut,
+    SprtScanOut,
 )
 from app.modules.objects import axes
 from app.modules.objects.models import ObjectInstance
+from app.shared.errors import AppError
 from app.shared.permissions import visible_owner_clause
 
 NAME = "sprt"
@@ -54,6 +64,9 @@ RHO = 1.5
 ALPHA = 0.05
 BETA = 0.10
 COMPACT_LOOKS = 12
+#: 값마다 훑기 — 새 모델의 건수가 많은 값부터 몇 개.
+SCAN_TOP = 20
+SCAN_MAX = 40
 Decision = Literal["continue", "worse", "not_worse"]
 
 
@@ -459,4 +472,197 @@ def _caveats(
         "records_not_units",
         "기록 수를 고장 대수로 봅니다 — 재방문이 두 모델에서 다르게 섞이면 그만큼 틀립니다.",
         level="info",
+    )
+
+
+def scan(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    built: spec_module.Built,
+    ask: query.Ask,
+    *,
+    by: str,
+    target: str,
+    reference: str | None = None,
+    reference_via: str | None = None,
+    dim: str | None = None,
+    rho: float = RHO,
+    alpha: float = ALPHA,
+    beta: float = BETA,
+    top: int = SCAN_TOP,
+) -> SprtScanOut:
+    """기준 `by` 의 값마다 새 모델 vs 전작 — 「출시 N주차, 전작보다 빨리 늘고 있는
+    증상은?」."""
+    reason = available(built)
+    if reason is not None:
+        raise common.refuse(28, reason)
+    den_in = built.spec.denominator
+    assert den_in is not None
+    dim = dim or den_in.on[0]
+    model_dim = common.dim_of(built, dim)
+    by_dim = common.dim_of(built, by)
+    if by == dim:
+        raise common.refuse(
+            29, "훑을 기준이 모델 기준과 같습니다 — 증상처럼 다른 기준을 줍니다."
+        )
+    if by in ask.filters:
+        raise common.refuse(
+            29, f"d.{by} 로 거른 기준으로는 훑을 수 없습니다 — 거르기를 뺍니다."
+        )
+    if reference is None and reference_via is not None:
+        reference = _follow(db, user, target, reference_via)
+    if reference is None:
+        raise common.refuse(
+            29,
+            "전작을 reference=<값> 으로 주거나, reference_via=<전작을 가리키는 칸> 으로 "
+            "새 모델 객체에서 찾게 합니다.",
+        )
+    # 값 고르기 — 새 모델의 기록이 많은 값부터. 전작에만 있는 값은 「늘고 있나」 의 물음이
+    # 아니다.
+    pick = replace(ask, dims=[by], by=(), filters={**ask.filters, dim: target})
+    frame = query.frame(db, user, metric, built, pick, with_denominator=False)
+    common.require_whole(frame)
+    totals: dict[str, int] = {}
+    for cell in frame.cells:
+        key = cell.dims.get(by)
+        if key is not None:
+            totals[key] = totals.get(key, 0) + cell.count
+    limit = max(1, min(top, SCAN_MAX))
+    values = sorted(totals, key=lambda key: (-totals[key], key))[:limit]
+    each = alpha / max(len(values), 1)
+    labels = query.labels_for(db, built, [by], frame.cells)
+    names = query.labels_for(
+        db,
+        built,
+        [dim],
+        [
+            query.Cell({dim: value}, None, None, None, 0, 0, None, None, None)
+            for value in (target, reference)
+        ],
+    )
+    items: list[SprtScanItemOut] = []
+    skipped: list[str] = []
+    for value in values:
+        label = query.label_of(labels, by, value)
+        try:
+            out = run(
+                db,
+                user,
+                metric,
+                built,
+                replace(ask, filters={**ask.filters, by: value}),
+                target=target,
+                reference=reference,
+                dim=dim,
+                rho=rho,
+                alpha=each,
+                beta=beta,
+                compact=True,
+            )
+        except AppError as caught:
+            skipped.append(f"{label}: {caught.message}")
+            continue
+        items.append(
+            SprtScanItemOut(
+                key=value,
+                label=label,
+                decision=out.decision,
+                decided_at=out.decided_at,
+                observed=out.observed,
+                expected=out.expected,
+                llr=out.llr,
+                smr=out.smr,
+                smr_low=out.smr_low,
+                smr_high=out.smr_high,
+                periods_to_worse=out.periods_to_worse,
+                periods_to_not_worse=out.periods_to_not_worse,
+                new=out.expected <= 0 and out.observed > 0,
+            )
+        )
+    rank = {"worse": 0, "continue": 1, "not_worse": 2}
+    items.sort(
+        key=lambda one: (
+            rank[one.decision],
+            -(one.smr if one.smr is not None else (math.inf if one.new else 0.0)),
+            -one.llr,
+        )
+    )
+    caveats = common.Caveats()
+    if len(values) > 1:
+        caveats.add(
+            "multiple_testing",
+            f"값 {len(values)}개를 함께 보므로 잘못 「나쁨」 이라 할 확률을 값마다 "
+            f"{each:.4f}(α/{len(values)})로 나눴습니다 — 보수적이라 작은 차이는 놓칠 수 "
+            "있습니다(하나만 보려면 d.<기준>=값 으로 단건 분석).",
+            level="info",
+        )
+    if by not in den_in.on:
+        caveats.add(
+            "shared_exposure",
+            f"대수는 「{by_dim.axis.label}」 와 상관없이 모델의 판매 대수입니다 — 모든 기기가 "
+            "모든 값에 노출된다고 봅니다.",
+            level="info",
+        )
+    if any(one.new for one in items):
+        caveats.add(
+            "new_values",
+            "전작에 없던 값은 기대가 0 이라 표준화 비가 없습니다 — 건수로만 「나쁨」 에 "
+            "이릅니다.",
+            level="info",
+        )
+    if skipped:
+        caveats.add(
+            "skipped_values",
+            f"견주지 못한 값 {len(skipped)}개 — {skipped[0]}",
+            level="info",
+            count=len(skipped),
+        )
+    if len(totals) > limit:
+        caveats.add(
+            "other_values",
+            f"새 모델의 건수가 적은 {len(totals) - limit}개 값은 훑지 않았습니다.",
+            level="info",
+            count=len(totals) - limit,
+        )
+    head = common.header(
+        db,
+        user,
+        metric,
+        built,
+        frame,
+        recipe=NAME,
+        method=f"{METHOD} · 값마다 훑기(본페로니)",
+        params={
+            "by": by,
+            "dim": dim,
+            "target": target,
+            "reference": reference,
+            "reference_via": reference_via,
+            "rho": rho,
+            "alpha": alpha,
+            "beta": beta,
+            "top": top,
+        },
+        caveats=caveats,
+        excluded={},
+    )
+    return SprtScanOut(
+        **head,
+        dim=dim,
+        dim_label=model_dim.axis.label,
+        by=by,
+        by_label=by_dim.axis.label,
+        target=target,
+        target_label=query.label_of(names, dim, target),
+        reference=reference,
+        reference_label=query.label_of(names, dim, reference),
+        rho=rho,
+        alpha=alpha,
+        alpha_each=each,
+        beta=beta,
+        scanned=len(values),
+        other_values=max(0, len(totals) - limit),
+        items=items,
+        skipped=skipped,
     )
