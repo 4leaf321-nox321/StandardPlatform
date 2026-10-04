@@ -17,7 +17,7 @@
 #
 # **번들 하나로 여러 플랫폼(인스턴스)을 설치한다.** 어느 플랫폼인지는 `APP_SLUG` 가 정한다 —
 # 처음 한 번 env 로 주면(`APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8040`)
-# /etc/platform-instances/<slug>.conf 에 남아 다음부터는 `APP_SLUG=plmhub ./deploy.sh update` 로
+# /etc/platform-instances/<slug>.conf 에 남아 다음부터는 `sudo APP_SLUG=plmhub ./deploy.sh update` 로
 # 충분하고, 이 서버에 인스턴스가 하나뿐이면 그것마저 생략된다. 안 주면 번들의 기본값
 # (BUILD_INFO — 틀의 이름)으로 뜬다. slug 하나에서 DB · 유닛 · 경로 · 주소가 전부 나온다.
 #
@@ -249,7 +249,7 @@ check_port_clash() {
                 err "$APP_SLUG 의 $what 포트 $port 가 이미 설치된 $slug 와 겹칩니다" \
                     "($slug: 앱 ${oapp:-?} · MCP ${omcp:-?})." \
                     "MCP 는 앱 포트 +2 로 딸려 옵니다 — 앱 포트를 10 이상 벌려 주세요:" \
-                    "APP_SLUG=$APP_SLUG APP_PORT=<다른 포트> sudo ./deploy.sh update"
+                    "sudo APP_SLUG=$APP_SLUG APP_PORT=<다른 포트> ./deploy.sh update"
             fi
         done
     done
@@ -387,7 +387,7 @@ EOF
     warn "$ENV_FILE 를 만들었습니다 — 공개 전에 CORS·백업 경로를 확인하세요."
 }
 
-# 이름 · 설명은 배포로 바꿀 수 있다 — `APP_NAME=… sudo ./deploy.sh update`.
+# 이름 · 설명은 배포로 바꿀 수 있다 — `sudo APP_NAME=… ./deploy.sh update`.
 # **확장은 화면에서 켠다**(시스템 관리자 › 서버 › 「확장 모듈」). 여기 EXTENSIONS 는
 # 아직 아무도 켜고 끈 적 없는 확장의 기본값일 뿐이다.
 # **slug 만은 못 바꾼다** — DB · 쿠키 · 토큰 · 유닛 이름이 전부 거기서 나왔다.

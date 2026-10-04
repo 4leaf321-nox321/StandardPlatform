@@ -48,21 +48,25 @@ ls
 
 ```bash
 # 처음 한 번 — 이름 · 포트 · 확장을 준다. /etc/platform-instances/<slug>.conf 에 남는다
-APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8040 sudo ./deploy.sh prepare
-APP_SLUG=plmhub sudo ./deploy.sh install
+sudo APP_SLUG=plmhub APP_NAME="PLM 기준정보" APP_PORT=8040 ./deploy.sh prepare
+sudo APP_SLUG=plmhub ./deploy.sh install
 # 그다음부터 — 이 서버에 인스턴스가 하나면 APP_SLUG 를 안 줘도 그것이다
 sudo ./deploy.sh update
 ```
 
+> **env 는 `sudo` 뒤에 붙인다** — `sudo APP_NAME=… ./deploy.sh update`. `APP_NAME=… sudo ./deploy.sh`
+> 처럼 앞에 두면 우분투 기본 설정(`env_reset`)이 그 값을 **조용히 버린다**(24.04 운영 서버에서
+> 확인, 2026-10-05). 스크립트에는 「안 줬다」 로 보여 기억한 값이나 기본값으로 그대로 진행한다.
+
 | 설치 때 주는 것 | 뜻 | 나중에 |
 | --- | --- | --- |
 | `APP_SLUG` | 기계가 읽는 이름. 소문자·숫자 한 덩어리, 32자 이내 | **바꾸지 않는다** — DB · 쿠키 · 토큰 · 유닛이 다 걸린다 |
-| `APP_NAME` · `APP_TAGLINE` | 화면에 보이는 이름 · 한 줄 설명 | `APP_NAME=… sudo ./deploy.sh update` 로 바꿀 수 있다 |
+| `APP_NAME` · `APP_TAGLINE` | 화면에 보이는 이름 · 한 줄 설명 | `sudo APP_NAME=… ./deploy.sh update` 로 바꿀 수 있다 |
 | `APP_PORT` | 앱 포트(MCP 는 +2). 같은 서버의 인스턴스마다 10씩 벌린다 | 바꾸면 메인 서버 조각도 다시 넣어야 한다 |
 | `EXTENSIONS` | 확장 모듈의 **기본값**, 쉼표로. 안 줘도 된다 | **화면에서 켠다** — 시스템 관리자 › 서버 › 「확장 모듈」 |
 
 같은 서버에 두 번째 인스턴스는 다른 `APP_SLUG` · `APP_PORT` 로 같은 명령을 한 번 더. 인스턴스가
-여럿이면 `update` · `status` 에도 `APP_SLUG=<slug>` 를 붙인다(안 붙이면 어느 것인지 묻는다).
+여럿이면 `update` · `status` 에도 붙인다 — `sudo APP_SLUG=<slug> ./deploy.sh update`(안 붙이면 어느 것인지 묻는다).
 
 ### SSH 로만 붙는 서버라면 — 미리 알아 둘 넷
 
@@ -189,7 +193,7 @@ sudo systemctl start <slug>
 **DB 와 첨부를 같은 시각에 함께 받는다.** 둘 중 하나만 받으면 복구되지 않는다.
 
 매일 받게 하려면 systemd 타이머로 건다 — `deploy.sh` 가 백업 폴더를 알면(`DATA_DIR`, 또는
-`BACKUP_HOST_DIR=<폴더> sudo ./deploy.sh update`) `<slug>-backup.timer` 를 스스로 건다(매일 03:00,
+`sudo BACKUP_HOST_DIR=<폴더> ./deploy.sh update`) `<slug>-backup.timer` 를 스스로 건다(매일 03:00,
 이중화의 대기 서버는 03:30 — 그날 것이 이미 있으면 건너뛴다). 손으로 걸려면 `backup.sh` 머리말에
 유닛 예시가 있다. **앱 프로세스에 넣지 않는다** — 앱이 죽은 날 백업도 조용히 죽는다.
 
@@ -235,7 +239,7 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 
 - **상태**: `sudo systemctl status <slug>-mcp` / 로그 `journalctl -u <slug>-mcp -f`
   (`sudo ./deploy.sh status` 도 함께 보여 준다)
-- **끄기**: `MCP_ENABLED=0 sudo ./deploy.sh update` (유닛은 별도 `systemctl disable --now <slug>-mcp`)
+- **끄기**: `sudo MCP_ENABLED=0 ./deploy.sh update` (유닛은 별도 `systemctl disable --now <slug>-mcp`)
 - **주소**: `http://<서버>:<앱포트+2>/mcp` — **`<slug>` 접두어가 붙지 않는다.** 접두어가 붙는
   형태(`https://<도메인>/<slug>/mcp`)는 **메인 서버 nginx 뒤에서만** 성립한다(조각이 그 길을
   MCP 로 넘긴다). 앱 포트에 `/<slug>/mcp` 를 물으면 앱이 404 로 답한다.
@@ -247,7 +251,7 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
   처럼 MCP 직접 주소(`http://<IP>:<앱+2>/mcp`)를 적어 두어도 된다 — 화면은 그 주소를 안내하고,
   업로드는 들어온 주소로 만든다.
 - **포트**: `BUILD_INFO` 의 `mcp_port` — **앱 포트 +2** (운영 +0 · 개발 +1 다음 자리).
-  바꾸려면 `MCP_PORT=<포트> sudo ./deploy.sh update`.
+  바꾸려면 `sudo MCP_PORT=<포트> ./deploy.sh update`.
   한 서버에 쌍둥이를 여럿 얹을 때 **앱 포트를 10 씩 벌린다** — MCP 가 +2 를 쓰므로 8040 과
   8042 를 나란히 고르면 겹친다. `deploy.sh` 가 이미 설치된 인스턴스와 견줘 **겹치면 멈춘다**
   (`/etc/platform-instances/<slug>.conf` 의 `APP_PORT` · `MCP_PORT`), `setup` 은 빈 자리를
@@ -256,8 +260,8 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
   → **406 · 400 이면 정상**(스트리밍 규약이라 평범한 GET 에는 그렇게 답한다), `404` 면 앱에
   물은 것, 연결 실패면 `MCP_HOST` 가 `127.0.0.1` 이라 밖에 안 열린 것이다.
 - **외부 노출**: 기본 `127.0.0.1` (로컬만). 사내망에 열려면 **한 번만**
-  `MCP_HOST=0.0.0.0 sudo ./deploy.sh update` — 이후 `./deploy.sh update` 는 설치된 유닛에서
-  값을 읽어 **자동으로 유지**하므로 매번 다시 붙일 필요 없다(되돌릴 땐 그때만 `MCP_HOST=127.0.0.1 …`).
+  `sudo MCP_HOST=0.0.0.0 ./deploy.sh update` — 이후 `./deploy.sh update` 는 설치된 유닛에서
+  값을 읽어 **자동으로 유지**하므로 매번 다시 붙일 필요 없다(되돌릴 땐 그때만 `sudo MCP_HOST=127.0.0.1 ./deploy.sh update`).
   외부망이면 nginx 리버스프록시(TLS) 권장. 백엔드가 다른 주소면 `MCP_API_BASE=http://127.0.0.1:<포트>`.
 - **Host 보호**: 비-localhost 로 열면 server.py 가 DNS rebinding 보호를 자동으로 끈다(사내망 가정).
   더 단단히 하려면 `MCP_ALLOWED_HOSTS="<서버호스트>:<mcp포트>,<서버IP>:<mcp포트>"` (또는 nginx 도메인) 지정 —
@@ -304,7 +308,7 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 `--slug <소스> --now`.
 
 - **상태**: `systemctl list-timers <slug>-sync.timer` / 로그 `journalctl -u <slug>-sync`
-- **끄기**: `SYNC_ENABLED=0 sudo ./deploy.sh update` (유닛은 `systemctl disable --now <slug>-sync.timer`)
+- **끄기**: `sudo SYNC_ENABLED=0 ./deploy.sh update` (유닛은 `systemctl disable --now <slug>-sync.timer`)
 - **손으로 한 번**: `sudo systemctl start <slug>-sync` (차례가 된 것만) — 하나만 지정해 돌리려면
   화면의 「동기화」 나 컨테이너 안에서 `scripts/sync_datasources.py --slug <소스>`.
 - 결과는 화면(관리 › 데이터 소스 › 최근 동기화)에도 남는다.
@@ -321,7 +325,7 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 그 타입을 원천으로 쓰는 지표는 타이머를 기다리지 않고 바로 작업이 들어간다.
 
 - **상태**: `systemctl list-timers <slug>-metrics.timer` / 로그 `journalctl -u <slug>-metrics`
-- **끄기**: `METRICS_ENABLED=0 sudo ./deploy.sh update` (유닛은 `systemctl disable --now <slug>-metrics.timer`)
+- **끄기**: `sudo METRICS_ENABLED=0 ./deploy.sh update` (유닛은 `systemctl disable --now <slug>-metrics.timer`)
 - **손으로 한 번**: `sudo systemctl start <slug>-metrics` (차례가 된 것만) — 하나만 지정해 돌리려면
   화면의 「지금 다시 계산」 이나 컨테이너 안에서 `scripts/recompute_metrics.py --slug <지표>`.
 - 결과는 화면(공통 › 지표 › 지표를 열고 「계산 기록」 탭)과 홈의 「남은 일」(실패 · 오래 안 셈)에 남는다.
@@ -438,16 +442,16 @@ sudo ./deploy.sh setup           # A 에서 .env · 복제 비밀번호를 scp �
 
 ```bash
 # ── 서버 A (주) ──
-APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> \
-HA_ROLE=master PEER_IP=<B의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
-  sudo ./deploy.sh prepare         # 패키지(postgresql-16 · keepalived) · DB 역할
+sudo APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> \
+  HA_ROLE=master PEER_IP=<B의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
+  ./deploy.sh prepare              # 패키지(postgresql-16 · keepalived) · DB 역할
 sudo ./deploy.sh db-primary        # 복제 계정 · pg_hba · 감시 훅 · 원복 잠금. 비밀번호를 /data/…/db/ 에 둔다
 sudo ./deploy.sh install           # .env(/data 에) · SIF · 마이그레이션 · 시드 · 유닛 · 메인 서버용 nginx 조각
 
 # ── 서버 B (대기) ──  (같은 APP_* 값으로)
-APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> \
-HA_ROLE=backup PEER_IP=<A의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
-  sudo ./deploy.sh prepare
+sudo APP_SLUG=<slug> APP_NAME=<이름> APP_PORT=<포트> \
+  HA_ROLE=backup PEER_IP=<A의 IP> PUBLIC_HOST=<호스트명> DATA_DIR=/data/<slug> \
+  ./deploy.sh prepare
 sudo ./deploy.sh db-standby        # A 에서 pg_basebackup — 기존 로컬 DB 는 옆으로 치운다
 sudo ./deploy.sh install           # .env 는 /data 의 것을 그대로(만들지 않는다) · 마이그레이션은 이미 돼 있어 통과
 
@@ -469,7 +473,7 @@ DB VIP 가 있으면 A 의 첫 명령부터 `DB_VIP=<주소>` 를 함께 준다.
 | 없는 것 | 대신 |
 | --- | --- |
 | **DB VIP** | `DB_VIP` 를 안 주면 keepalived 도 자동 승격도 없다. 앱은 A 의 IP 로 DB 에 붙는다. 승격은 손으로(8.3 「DB VIP 없이」). guard 는 VIP 없이도 상대에게 물어 동작한다. 받으면 8.5 |
-| **`/data/<slug>`** | `DATA_DIR` 를 안 주면 각 서버 `~/apps/<slug>` 에 전부 둔다. **B 의 `.env` 와 복제 비밀번호는 A 의 것**이어야 한다 — `setup` 이 A 의 `~/apps/<slug>/handoff/` 에서 scp 로 받아 온다(손으로 하면 `scp <A>:~/apps/<slug>/handoff/.env ~/apps/<slug>/.env`, 복제 비밀번호는 `/etc/pg-ha.replpass` 에 root:postgres 640). 첨부는 서버마다 따로 쌓인다(리허설이면 그것으로 충분). 나중에 `/data` 가 오면 `~/apps/<slug>/{.env,filestore}` 를 옮기고 `DATA_DIR=/data/<slug> sudo ./deploy.sh update` — 양쪽 |
+| **`/data/<slug>`** | `DATA_DIR` 를 안 주면 각 서버 `~/apps/<slug>` 에 전부 둔다. **B 의 `.env` 와 복제 비밀번호는 A 의 것**이어야 한다 — `setup` 이 A 의 `~/apps/<slug>/handoff/` 에서 scp 로 받아 온다(손으로 하면 `scp <A>:~/apps/<slug>/handoff/.env ~/apps/<slug>/.env`, 복제 비밀번호는 `/etc/pg-ha.replpass` 에 root:postgres 640). 첨부는 서버마다 따로 쌓인다(리허설이면 그것으로 충분). 나중에 `/data` 가 오면 `~/apps/<slug>/{.env,filestore}` 를 옮기고 `sudo DATA_DIR=/data/<slug> ./deploy.sh update` — 양쪽 |
 
 리허설에서 볼 수 있는 것: 복제(`db-status` 의 지연), 손 승격 · demote · `db-standby` 재구성, guard(옛 주 부팅), 두 앱 동시 운영(동시 편집 · 타이머 한 대만 · 웹훅 한 번만), B→A 업데이트, 재부팅. 못 보는 것: 자동 승격, 공용 첨부, 백업 폴더, 메인 서버 경유.
 
@@ -523,7 +527,7 @@ DB VIP 가 없을 때는 각 단계 사이에 `/data/…/.env` 의 `DATABASE_URL
 
 ```bash
 # 양쪽 모두
-DB_VIP=<주소> sudo ./deploy.sh lb           # keepalived 에 DB VIP 인스턴스 · 감시 · 자동 승격
+sudo DB_VIP=<주소> ./deploy.sh lb           # keepalived 에 DB VIP 인스턴스 · 감시 · 자동 승격
 # 주 서버에서
 sudo ./deploy.sh db-primary                  # /etc/pg-ha.conf 에 VIP 를 적는다(감시가 그것을 본다)
 # /data/…/.env 의 DATABASE_URL 호스트를 VIP 로 → 양쪽 sudo systemctl restart <slug>
