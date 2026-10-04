@@ -773,6 +773,30 @@ async def ontology_restore(
 # --------------------------------------------------------------------------- #
 # 객체
 # --------------------------------------------------------------------------- #
+# 긴 글 칸(보고서 본문 같은 것)은 잘라서 준다 — 목록 50건이 본문째 오면 답 하나가 문맥을
+# 채우고, 정작 읽어야 할 것을 밀어낸다. 잘랐으면 **잘랐다고** 적는다(`clipped`) — 앞부분을
+# 전부로 읽지 않게.
+LIST_TEXT = 300
+GET_TEXT = 6000
+
+
+def _clip(row: Any, *, start: int, size: int) -> None:
+    """`row.properties` 의 `size` 보다 긴 글을 `[start, start+size)` 만 남기고, 무엇을
+    잘랐는지 `row.clipped[<칸>] = {from, to, length}` 로 적는다."""
+    properties = row.get("properties") if isinstance(row, dict) else None
+    if not isinstance(properties, dict):
+        return
+    clipped: dict[str, dict[str, int]] = {}
+    for key, value in properties.items():
+        if isinstance(value, str) and len(value) > size:
+            begin = min(max(start, 0), len(value))
+            end = min(len(value), begin + size)
+            properties[key] = value[begin:end]
+            clipped[key] = {"from": begin, "to": end, "length": len(value)}
+    if clipped:
+        row["clipped"] = clipped
+
+
 @tool()
 async def objects_list(
     ctx: Context,
@@ -809,10 +833,16 @@ async def objects_list(
     안 보임(not_visible)」 · 「조건이 좁음(filters)」 중 무엇인지, 조건 때문이면 어느 조건을
     빼면 몇 건인지, 그 중 **값이 비어 있어서** 빠진 것이 몇 건인지까지 있다(인터페이스는
     「구현한 타입이 없음(no_implementers)」 도 있다). 읽지 않고
-    「없습니다」 라고 답하지 마라 — 있는 것을 없다고 하면 사람은 그것을 새로 만든다."""
+    「없습니다」 라고 답하지 마라 — 있는 것을 없다고 하면 사람은 그것을 새로 만든다.
+
+    **긴 글 칸(보고서 본문 같은 것)은 앞 300자만** 온다 — 줄의 `clipped` 가 그 칸의 전체
+    길이를 말한다. 내용으로 답하려면 그 객체를 `object_get` 으로 읽는다."""
     filters = _filter_params(q, status, properties, conditions)
     params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset), *filters]
     found = await _get(ctx, f"/api/objects/{type_slug}", params=params)
+    if isinstance(found, dict):
+        for row in found.get("items") or []:
+            _clip(row, start=0, size=LIST_TEXT)
     if isinstance(found, dict) and found.get("total") == 0:
         # **0건은 「없다」 가 아니다.** 안 채운 타입일 수도, 부서 밖이라 안 보일 수도,
         # 조건이 좁을 뿐일 수도 있다. 셋을 안 가르면 모델은 「없다」 로 읽고 없는 것을
@@ -998,12 +1028,18 @@ async def object_fields(ctx: Context, type_slug: str) -> Any:
 
 
 @tool()
-async def object_get(ctx: Context, type_slug: str, object_id: str) -> Any:
+async def object_get(ctx: Context, type_slug: str, object_id: str, text_from: int = 0) -> Any:
     """객체 하나 — 속성·첨부·**관련 객체**(양방향)까지.
 
     첨부(`attachments[]`)는 이름 · 크기 · `is_image` · 가로세로뿐이다 — **바이트는
-    오지 않는다**(사진은 화면에서 본다). `owner_field` 가 그 파일 칸의 키다."""
-    return await _get(ctx, f"/api/objects/{type_slug}/{object_id}")
+    오지 않는다**(사진은 화면에서 본다). `owner_field` 가 그 파일 칸의 키다.
+
+    **긴 글 칸은 6,000자씩** 온다. `clipped[<칸>] = {from, to, length}` 가 있으면 잘린
+    것이다 — `to < length` 면 `text_from=<to>` 로 다시 불러 이어 읽는다. 다 읽기 전에
+    「본문에 그런 내용은 없다」 고 답하지 마라."""
+    found = await _get(ctx, f"/api/objects/{type_slug}/{object_id}")
+    _clip(found, start=text_from, size=GET_TEXT)
+    return found
 
 
 @tool()

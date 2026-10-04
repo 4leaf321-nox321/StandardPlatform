@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-04e
+GUIDE_VERSION: 2026-10-04f
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -30,7 +30,8 @@ GUIDE_VERSION: 2026-10-04e
 | **세어 둔 수에서 추론** — 「B10 수명」 「전작보다 나빠졌나」 「관리도 신호」 「언제 바뀌었나」 「몰려 있나」 | `metric_list` 의 `analyses` → `metric_analyze(slug, recipe, options=)` | **셀을 받아 직접 계산하지 않는다.** `caveats` 를 그대로 전하고, `unreachable` 인 B수명은 값이 없다 — `get_guide(topic="metrics")` 의 「분석」 |
 | **요즘 무엇이 울렸나** — 「내 경보」 「새로 나빠진 모델 있나」 | `metric_alerts(slug=)` | 발생은 「그때 처음 본 결론」 — 지금도 그런지는 `metric_analyze` 로. 만들기는 화면에서 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」 · 「모델의 과제의 프로젝트별 건수」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 두 걸음까지 준다. 주소를 추측하지 않는다 |
-| 객체 하나 자세히(관련 객체까지) | `object_get` | — |
+| 객체 하나 자세히(관련 객체까지) | `object_get` | 긴 글 칸은 6,000자씩 — `clipped` 면 `text_from` 으로 이어 읽는다 |
+| **보고서에 묻기** — 「모델 X 의 강성 해석 보고서」 「지난 분기 CAE 보고서 요지」 | `get_guide(topic="reports")` → `objects_list(<보고서 타입>, q=)` → `object_get` | 목록의 본문은 앞부분뿐. 답에 원문 주소(`url`)를 붙이고, 「원본에서 내려감」 이면 그렇게 말한다 |
 | 언제 누가 무엇을 바꿨나 — 이 객체 | `object_history` | 되돌리기는 `object_restore(entry_id)` — **시점은 사람이 정한다** |
 | 어제 무슨 일이 있었나 — 전체 | `audit_recent` | **부서 관리자 이상.** 시간 · 사람으로는 못 거른다 — 최근 것부터 받아 본다 |
 | 계층(트리)을 한 단계씩 | `object_tree(parent=)` | 깊이 전부는 `rdf_query` 의 `+` 경로 |
@@ -635,6 +636,57 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
 - 기준 정보는 **코어 도구로** 다룬다. 확장의 기준 정보도 온톨로지 객체다(시험 항목 ·
   시뮬레이션 해석) — `objects_list` · `object_create` · `object_update` · `objects_import`
   가 그대로 쓰이고, 불량 유형처럼 목록인 칸도 그 객체의 속성이다.
+
+<!--@ reports -->
+## 보고서 기록 — RA 에서 쌓인 보고서에 묻기
+
+이 쌍둥이에 ReportArchive(RA)의 보고서가 기록으로 쌓여 있다면(데이터 소스 종류 `ra_reports`),
+보고서는 **한 기록 타입의 객체**다 — 대개 slug `ra_report`, 이름 「보고서」. 타입은
+`ontology_schema` 에서 확인하고(소스 화면의 「보고서 기록 타입 만들기」 가 지은 것), 칸 키는
+정해져 있다:
+
+| 칸 | 뜻 |
+|---|---|
+| `label` | 제목 — **같은 제목이 여럿일 수 있다**(다른 보고서다) |
+| `key` · `ra_id` | `RA-<번호>` · RA 의 보고서 번호 |
+| `url` | RA 의 원문 주소 — **답에 붙인다** |
+| `report_date` | 보고일 |
+| `ra_workspace` · `author` · `boards` | 작성 부서 · 작성자 · 게시된 게시판 |
+| `phase` · `revision` · `report_type` | 단계(「발행」 · 「검토 중」 …) · 개정 · 보고서 유형 |
+| `tags` | RA 의 자유 태그 |
+| `ref_<타입>` | **축 태그** — 이 쌍둥이의 개발모델 · 과제 같은 객체를 가리키는 참조 칸 |
+| `ra_tags` | 이 쌍둥이에 없는 축 태그 — 「종류: 값」 글 |
+| `body` | 본문 |
+| `origin_state` · `removed_on` | 원본 상태(「게시 중」 · 「원본에서 내려감」) · 내려간 날 |
+
+### 묻는 길
+
+- **주제로** — `objects_list("ra_report", q="강성 해석")` 이 제목 · 본문 · 태그를 함께 찾는다.
+  목록의 본문은 **앞 300자뿐**이다(줄의 `clipped` 가 전체 길이를 말한다) — 내용으로 답하기 전에
+  고른 보고서를 `object_get` 으로 읽는다.
+- **본문 끝까지** — `object_get` 은 긴 칸을 6,000자씩 준다. `clipped.body.to < length` 면
+  `object_get(..., text_from=<to>)` 로 이어 읽는다. **다 읽기 전에 「그런 내용은 없다」 고 말하지
+  않는다.**
+- **축으로** — 「모델 X 의 보고서」 는 `object_resolve("plm_model", "X")` 로 id 를 정한 뒤
+  `conditions=[{"field": "ref_plm_model", "op": "eq", "value": "<id>"}]`. 축에서 거꾸로 — 개발모델
+  목록의 `in.ra_report:ref_plm_model` 이 `notempty` 면 「보고서가 있는 모델」, 통계
+  `group_by="in.ra_report:ref_plm_model.report_type"` 은 「보고서 유형별 모델 수」(`find` 의 「나를
+  가리키는 것」).
+- **이 쌍둥이에 없는 축** — 그 태그는 `ra_tags` 에 글로 있다:
+  `{"field": "ra_tags", "op": "contains", "value": "부품: P-1234"}`.
+- **기간 · 부서로 세기** — `objects_summary("ra_report", group_by="properties.report_date",
+  grain="month", order="key")`, `group_by="properties.ra_workspace"`. 목록을 받아 세지 않는다.
+
+### 전할 때
+
+- **출처를 붙인다** — 제목 · 보고일 · 작성 부서와 `url`. 요약은 요약이라고 말한다.
+- **「원본에서 내려감」 이면 그렇게 말한다.** RA 에서 삭제 · 게시 취소 · 발행 취소 · 범위 밖 이동 ·
+  권한 변경 중 무엇인지는 이 쌍둥이가 모른다 — 「원본에서 볼 수 없게 된 보고서(그날 확인)」 로
+  옮기고, 사유를 짓지 않는다. 지금 유효한 결론인지는 사람에게 확인을 권한다.
+- **여기 있는 것은 고른 조직과 그 하위의 공용 게시판 보고서뿐이다**(대개 발행본만). 「그런 보고서는
+  없다」 고 하기 전에 그 범위를 함께 말한다 — 다른 조직 · 개인 공간 · 작성 중인 것은 들어오지 않는다.
+- 보고서는 RA 가 정본이다 — **이 쌍둥이에서 고치지 않는다.** 사람이 고친 칸은 동기화가 비켜 가서
+  그 뒤 RA 의 고침을 받지 못하고 갈라진다. 틀린 곳은 RA 에서 고치도록 사람에게 알린다.
 
 <!--@ modeling -->
 ## 모델링 규약 v0 — 무엇을 무엇으로 만드나

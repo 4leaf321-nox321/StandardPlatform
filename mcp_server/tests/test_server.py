@@ -411,6 +411,11 @@ def test_가이드는_서버가_쥔다() -> None:
     assert "metric_analyze" in metrics["content"] and "unreachable" in metrics["content"]
     assert "metric_analyze" in overview["content"]
 
+    # 보고서 기록(ADR 0018) — 잘린 본문을 끝까지 읽는 길과 「원본에서 내려감」 을 전하는 법.
+    reports = asyncio.run(server.get_guide(_ctx(None), topic="reports"))
+    assert "text_from" in reports["content"] and "원본에서 내려감" in reports["content"]
+    assert 'topic="reports"' in overview["content"]
+
     missing = asyncio.run(server.get_guide(_ctx(None), topic="없는주제"))
     assert "error" in missing and "bulk" in missing["topics"]
 
@@ -632,3 +637,35 @@ def test_통계의_기간_단위와_시간순이_그대로_건너간다() -> Non
     params = seen[0].url.params
     assert params["grain"] == "month" and params["order"] == "key"
     assert params["group_by"] == "properties.made"
+
+
+def test_긴_글은_잘라_주고_어디까지인지_말한다() -> None:
+    """보고서 본문 같은 긴 글 — 목록은 앞부분만, 상세는 한 번에 일정 길이씩 이어 읽는다.
+
+    목록 50건이 본문째 오면 답 하나가 문맥을 채운다. 잘랐으면 잘랐다고 적는다 — 앞부분을
+    전부로 읽고 「본문에 없다」 고 답하지 않게."""
+    body = "가" * (server.GET_TEXT + 500)
+    one = {"id": "o1", "label": "보고서", "properties": {"body": body, "author": "홍길동"}}
+    _serve(
+        lambda r: httpx.Response(
+            200,
+            json={"items": [one], "total": 1} if r.url.path.endswith("/ra_report") else one,
+        )
+    )
+    listed = asyncio.run(server.objects_list(_ctx("Bearer t"), "ra_report"))
+    row = listed["items"][0]
+    assert len(row["properties"]["body"]) == server.LIST_TEXT
+    assert row["properties"]["author"] == "홍길동" and "author" not in row["clipped"]
+    assert row["clipped"]["body"] == {"from": 0, "to": server.LIST_TEXT, "length": len(body)}
+
+    first = asyncio.run(server.object_get(_ctx("Bearer t"), "ra_report", "o1"))
+    assert first["clipped"]["body"]["to"] == server.GET_TEXT
+    rest = asyncio.run(
+        server.object_get(_ctx("Bearer t"), "ra_report", "o1", text_from=server.GET_TEXT)
+    )
+    assert rest["properties"]["body"] == "가" * 500
+    assert rest["clipped"]["body"] == {
+        "from": server.GET_TEXT,
+        "to": len(body),
+        "length": len(body),
+    }

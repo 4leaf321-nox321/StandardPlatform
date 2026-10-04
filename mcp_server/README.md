@@ -81,7 +81,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `ontology_import` | 정의를 한 트랜잭션으로. **기본은 미리 보기**(`apply=false`) |
 | `object_resolve` | **이름 하나가 어느 객체인가** — `exact`/`candidates`/`none`. 이름으로 가리키기 전에 부른다 |
 | `objects_resolve_many` | 이름 **여럿을 한 번에**(500개까지) — 넣기 전에 「없는 것 · 여럿과 맞는 것」 을 먼저 걸러 묶음 전체가 거절되지 않게 |
-| `objects_list` · `object_get` | 객체 읽기 — 화면과 같은 조건 거르기 (`object_get` 은 관련 객체까지). **0건이면 `diagnosis` 가 붙는다** |
+| `objects_list` · `object_get` | 객체 읽기 — 화면과 같은 조건 거르기 (`object_get` 은 관련 객체까지). **0건이면 `diagnosis` 가 붙는다**. 긴 글 칸은 잘라 준다(목록 300자 · 상세 6,000자씩, `clipped` · `text_from`) |
 | `objects_summary` · `object_fields` | 통계(서버가 센다 — 화면의 「통계」 와 같다) · 다른 타입의 칸 주소(`ref.vendor.country` 등) |
 | `object_history` · `object_references` · `object_rollup` · `quality_report` | 이력 · 가리키는 것 · 아래 전부의 합 · 품질 — 화면의 읽기와 대칭 |
 | `graph_neighbors` · `graph_overview` | **이것과 이어진 것들**(한 걸음 너머, 질의어 없이) · 타입 사이의 지형 — 화면의 지식 그래프와 같은 길 |
