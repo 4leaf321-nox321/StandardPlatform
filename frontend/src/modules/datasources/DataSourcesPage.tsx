@@ -916,6 +916,12 @@ function EditDialog({
                   ))}
                 </SelectContent>
               </Select>
+              {ra && (
+                <p className="text-muted-foreground text-xs">
+                  아래 「보고서 기록 타입 생성」 으로 만든 타입이어야 합니다 — 다른 타입(프로젝트
+                  등)은 저장할 때 거절됩니다.
+                </p>
+              )}
             </div>
             <div className="space-y-1.5">
               <Label>새 객체의 소유 부서</Label>

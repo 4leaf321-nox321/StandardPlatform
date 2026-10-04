@@ -812,6 +812,11 @@ def _sync_ra(
     """RA 보고서(ADR 0018) — 읽기 · 바꾸기 · 계획 → 적용은 다른 소스와 같고, 다른 것은 넷:
     이름으로 붙이지 않고, 행을 소유 부서끼리 모아 넘기고, 지우는 대신 원본 상태를 적고, 커서와
     대조 시각을 **끝까지 받고 적용에 성공했을 때만** 옮긴다."""
+    # **RA 를 부르기 전에 끝낸다** — 이 판 전에 엉뚱한 타입으로 저장된 소스, 나중에 RA 번호
+    # 칸이 지워진 타입. 실행 기록에 까닭이 남는다.
+    refused = ra_reports.type_refusal(object_type, defs)
+    if refused:
+        return _fail(db, source, run, [refused])
     mode = ra_reports.mode_of(source)
     try:
         fetched = ra_reports.fetch(

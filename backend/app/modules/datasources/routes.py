@@ -144,10 +144,18 @@ def _check_deprecate(kind: str, wanted: bool) -> bool:
     return wanted
 
 
-def _check_ra(kind: str, options: dict[str, object], mapping: dict[str, object]) -> None:
-    """RA 보고서 소스 — 설정을 읽어 보고(틀린 값은 이유와 함께 거절), 칸 대응은 받지 않는다."""
+def _check_ra(
+    db: Session,
+    object_type: ObjectType,
+    kind: str,
+    options: dict[str, object],
+    mapping: dict[str, object],
+) -> None:
+    """RA 보고서 소스 — 넣을 타입이 보고서 기록 타입인가, 설정을 읽어 보고(틀린 값은 이유와
+    함께 거절), 칸 대응은 받지 않는다."""
     if kind != ra_reports.KIND:
         return
+    ra_reports.require_report_type(db, object_type)
     ra_reports.options_of(dict(options))
     if mapping:
         raise AppError(
@@ -187,7 +195,7 @@ def create_source(
     require_choice(payload.kind, SOURCE_KINDS, what="소스 종류")
     require_choice(payload.auth_kind, AUTH_KINDS, what="인증 방식")
     _check_mapping(db, object_type, payload.mapping)
-    _check_ra(payload.kind, payload.options, payload.mapping)
+    _check_ra(db, object_type, payload.kind, payload.options, payload.mapping)
     row = DataSource(
         slug=slug,
         name=payload.name.strip(),
@@ -290,7 +298,9 @@ def update_source(
         if row.kind != ra_reports.KIND:
             _check_mapping(db, object_type, payload.mapping)
         row.mapping = payload.mapping
-    _check_ra(row.kind, row.options or {}, row.mapping or {})
+    target = db.get(ObjectType, row.type_id)
+    assert target is not None
+    _check_ra(db, target, row.kind, row.options or {}, row.mapping or {})
     # 빈 문자열이 「slug 로 돌아가기」 다 — null 은 「안 보냄」 과 구별되지 않는다.
     if "source_name" in sent and payload.source_name is not None:
         row.source_name = payload.source_name.strip()

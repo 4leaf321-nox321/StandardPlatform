@@ -107,6 +107,29 @@ HELP = {
     "ra_tags": "이 쌍둥이에 없는 축 태그 — 「종류: 값」.",
 }
 
+#: 보고서 기록 타입이라는 표 — 다시 찾기의 열쇠인 RA 번호 칸. 다른 틀 칸은 없어도 받지만(손으로
+#: 만든 타입), 이 칸마저 없으면 「넣을 타입」 에 기본으로 서 있던 엉뚱한 타입(「프로젝트」)에
+#: 보고서 수천 건이 객체로 선다 — 저장과 동기화가 거절한다.
+ANCHOR = "ra_id"
+
+
+def type_refusal(object_type: ObjectType, defs: list[PropertyDef]) -> str | None:
+    """보고서를 넣을 수 없는 타입이면 그 까닭 — 넣을 수 있으면 None."""
+    if any(one.key == ANCHOR for one in defs):
+        return None
+    return (
+        f"「{object_type.label}」 은 보고서 기록 타입이 아닙니다(RA 번호 칸 `{ANCHOR}` 가 "
+        "없습니다) — 그대로 받으면 보고서가 이 타입의 객체로 생깁니다. 같은 창의 "
+        "「보고서 기록 타입 생성」 으로 만든 타입을 「넣을 타입」 으로 고릅니다."
+    )
+
+
+def require_report_type(db: Session, object_type: ObjectType) -> None:
+    refused = type_refusal(object_type, properties_of(db, object_type.id))
+    if refused:
+        raise _refuse(60, refused)
+
+
 #: 변환이 행에 남기는 숨은 자리 — bulk 로 넘기기 전에 뗀다.
 _OWNER = "_owner"
 _ID = "_ra_id"

@@ -15,7 +15,7 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from app.modules.datasources import services
 from tests.api.conftest import Signed, finish_job
@@ -531,6 +531,52 @@ def test_조직_트리와_설정을_거르고_사용_중지는_켤_수_없다(
     assert ra.feed_requests()[-1]["phase"] == "finalized"
     got = _records(client, admin, w["report"])
     assert "RA-10" in got and "RA-9" not in got
+
+
+def test_보고서_기록_타입이_아니면_저장도_동기화도_거절한다(
+    client: TestClient, admin: Signed, ra: FakeRA
+) -> None:
+    """「넣을 타입」 에는 첫 타입(「프로젝트」)이 기본으로 서 있다 — 「보고서 기록 타입
+    생성」 을 안 누르고 저장하면 보고서 수천 건이 프로젝트 객체로 생긴다. RA 번호 칸이 없는
+    타입은 거절한다."""
+    w = _setup(client, admin)
+    project = _make_type(client, admin, label="프로젝트")
+    body = {
+        "slug": _uniq("ra"),
+        "name": "RA 보고서",
+        "kind": "ra_reports",
+        "base_url": BASE,
+        "entity_set": "/api/feeds/published-reports",
+        "auth_kind": "bearer",
+        "auth_secret": "ra_pat_test",
+        "type_slug": project,
+        "options": {"board": "cae"},
+    }
+    made = client.post("/api/datasources", json=body, headers=admin.headers)
+    assert made.status_code == 422, made.text
+    assert made.json()["error"]["code"].endswith("0060")
+    assert "보고서 기록 타입 생성" in made.json()["error"]["message"]
+    base = f"/api/datasources/{w['source']}"
+    moved = client.patch(base, json={"type_slug": project}, headers=admin.headers)
+    assert moved.status_code == 422 and moved.json()["error"]["code"].endswith("0060")
+    # 이 판 전에 엉뚱한 타입으로 저장된 소스 — 동기화가 RA 를 부르기 전에 실패로 적는다.
+    from app.database import SessionLocal
+    from app.modules.datasources.models import DataSource
+    from app.modules.ontology.models import ObjectType
+
+    with SessionLocal() as db:
+        wrong = db.scalars(select(ObjectType.id).where(ObjectType.slug == project)).one()
+        db.execute(
+            update(DataSource).where(DataSource.slug == w["source"]).values(type_id=wrong)
+        )
+        db.commit()
+    ra.add(1, "보고 1", board="cae", changed=1)
+    failed = _sync(client, admin, w["source"])
+    assert failed["run"]["status"] == "failed"
+    assert "보고서 기록 타입이 아닙니다" in str(failed["errors"])
+    assert ra.feed_requests() == []
+    listed = client.get(f"/api/objects/{project}", headers=admin.headers)
+    assert listed.status_code == 200 and listed.json()["items"] == []
 
 
 def test_소스를_지우면_객체는_남는다(client: TestClient, admin: Signed, ra: FakeRA) -> None:
