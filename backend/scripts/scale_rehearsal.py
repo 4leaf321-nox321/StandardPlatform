@@ -1054,7 +1054,9 @@ def _recipes_rehearsal(
             f"HHI {found.get('hhi', 0):.4f} · 지니 {found.get('gini', 0):.3f} · "
             f"핵심 소수 {found.get('vital_few')} · 기준 {pareto['basis']}",
         )
-        # ⑤ 집단 비교 — 공장은 차이가 없다(정답), 기본 모델은 뜨거운 하나만 「높음」.
+        # ⑤ 집단 비교 — 정답: 공장은 뜨거운 기본 모델이 있는 F1 이 높고 넷이 모두 다르다(기록을
+        # 덜 받는 기본 모델이 공장마다 고르지 않다). 기본 모델은 뜨거운 것 하나만 「높음」, 세
+        # 모델 중 둘만 기록을 받는 299개(순번이 20 의 배수인 모델은 기록이 없다)가 「낮음」 쪽.
         took, plants = analyse(
             third, "groups", dim="factory", axis="cohort", window=3, **inside
         )
