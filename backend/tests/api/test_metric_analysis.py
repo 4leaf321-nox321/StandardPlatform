@@ -1196,11 +1196,12 @@ def test_집단_비교는_뜨거운_집단을_잡고_작은_집단의_우연을_
     codes = {one["code"] for one in found["caveats"]}
     assert {"multiple_testing", "small_groups", "association", "open_excluded"} <= codes
     assert "missing_denominator" in codes
-    # 싣는 줄이 모자라면 다른 것은 모두, 나머지는 줄인 비율 높은 순 — 계산에는 모두 든다.
+    # 자리가 모자라면 「다름」 을 전체와 먼 것부터(B5 · B3 이 B1 · B2 보다 멀다) — 계산에는
+    # 모두 든다.
     monkeypatch.setattr(groups_recipe, "MAX_ROWS", 2)
     cut = _analysis(client, admin, monthly["slug"], "groups", dim="base_model")
-    assert cut["groups"] == 5 and cut["other_groups"] == 1
-    assert [one["key"] for one in cut["rows"]] == ["B3", "B1", "B2", "B5"]
+    assert cut["groups"] == 5 and cut["other_groups"] == 3 and cut["flagged"] == 4
+    assert [one["key"] for one in cut["rows"]] == ["B3", "B5"]
     assert cut["heterogeneity_p"] == found["heterogeneity_p"]
     assert "rows_shown" in {one["code"] for one in cut["caveats"]}
     # 집단마다 대수를 모르는 기준으로는 견주지 않는다.

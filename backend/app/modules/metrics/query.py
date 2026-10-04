@@ -417,6 +417,14 @@ def paired_totals(
     lacks = or_(units.is_(None), units <= 0)
     closed = func.coalesce(num.c[when], paired.c.period) < closed_to
     key = func.coalesce(num_key, den_key)
+    # 「(비어 있음)」 은 「(비어 있음)」 끼리만 — `IS NOT DISTINCT FROM` 은 해시 조인이 못 써서
+    # 기간만으로 붙인 뒤 기준 값을 줄마다 견준다(기본 모델 2천 x 44달이면 7,600만 번, 7초).
+    # 비었나 · 값(빈 것은 '') 둘의 같음으로 적으면 셋 다 해시 키다.
+    same = and_(
+        num_key.is_(None) == den_key.is_(None),
+        func.coalesce(num_key, "") == func.coalesce(den_key, ""),
+        num.c[when] == paired.c.period,
+    )
     stmt = (
         select(
             key.label("k"),
@@ -425,13 +433,7 @@ def paired_totals(
             func.sum(num.c.n).filter(lacks).label("miss"),
             func.sum(num.c.n).filter(and_(has, ~closed)).label("open"),
         )
-        .select_from(
-            num.join(
-                paired,
-                and_(num_key.is_not_distinct_from(den_key), num.c[when] == paired.c.period),
-                full=True,
-            )
-        )
+        .select_from(num.join(paired, same, full=True))
         .group_by(key)
     )
     limit = get_settings().metrics_max_read_cells

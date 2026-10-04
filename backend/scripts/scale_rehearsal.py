@@ -1081,11 +1081,16 @@ def _recipes_rehearsal(
             row(
                 "⑤ 집단 비교 — 기본 모델(판매월 코호트 · 출고 3개월 안)",
                 took,
-                f"집단 {models['groups']}(+{models['other_groups']}) · "
-                f"다름 {models['flagged']} · 맨 위 {'뜨거운 것' if top['key'] == hot else top['key']} "
+                f"집단 {models['groups']}(싣지 않음 {models['other_groups']}) · "
+                f"다름 {models['flagged']}(실은 줄: 높음 "
+                f"{sum(one['flag'] == 'high' for one in models['rows'])} · 낮음 "
+                f"{sum(one['flag'] == 'low' for one in models['rows'])}) · 맨 위 "
+                f"{'뜨거운 것' if top['key'] == hot else top['key']} "
                 f"{top['ratio'] or 0:.1f}배 {top['flag']}",
             )
-        # ④ 증상마다 훑기 — 뜨거운 것은 증상마다 「나쁨」, 보통끼리는 거의 아무것도 안 선다.
+        # ④ 증상마다 훑기 — 뜨거운 것은 증상마다 「나쁨」. 합성 기록은 기본 모델마다 증상 셋이
+        # 겹치지 않게 붙어(기록 번호로 모델 · 증상이 함께 정해진다) 대상의 증상은 대개 전작에
+        # 없다(`new`) — 그것을 빼고 센 「나쁨」 이 잘못 선 것이다.
         took, hot_scan = analyse(
             first, "sprt/scan", by="symptom", target=hot, reference=typical[len(typical) // 2]
         )
@@ -1094,10 +1099,11 @@ def _recipes_rehearsal(
             took,
             hot_scan.get("error")
             or f"증상 {hot_scan['scanned']} · 나쁨 "
-            f"{sum(one['decision'] == 'worse' for one in hot_scan['items'])} · "
+            f"{sum(one['decision'] == 'worse' for one in hot_scan['items'])}(전작에 없던 것 "
+            f"{sum(one['new'] for one in hot_scan['items'])}) · "
             f"α/K {hot_scan['alpha_each']:.4f}",
         )
-        any_worse = 0
+        any_worse = any_new = 0
         scan_times: list[float] = []
         for _ in range(20):
             target, reference = rng.sample(typical, 2)
@@ -1105,11 +1111,14 @@ def _recipes_rehearsal(
                 first, "sprt/scan", by="symptom", target=target, reference=reference
             )
             scan_times.append(took)
-            any_worse += any(one["decision"] == "worse" for one in pair_scan.get("items", []))
+            items = pair_scan.get("items", [])
+            any_worse += any(one["decision"] == "worse" and not one["new"] for one in items)
+            any_new += any(one["new"] for one in items)
         row(
             "④ 증상마다 — 보통끼리 무작위 짝 20",
             statistics.median(scan_times),
-            f"하나라도 나쁨 {any_worse}/20",
+            f"전작에도 있던 증상이 하나라도 나쁨 {any_worse}/20 · 전작에 없던 증상이 있음 "
+            f"{any_new}/20",
         )
         # ⑩ 증상마다 변화점 — 정답은 변화 없음.
         took, change_scan = analyse(

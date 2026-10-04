@@ -34,6 +34,7 @@ b / (n_g + b)). 95% 구간은 감마(c_g + a, n_g + b) 의 분위수. τ² 가 0
 
 from __future__ import annotations
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Literal
@@ -95,35 +96,52 @@ def compare(counts: Sequence[float], exposures: Sequence[float]) -> Comparison |
     spread = sum(ni * (ci / ni - pooled) ** 2 for ci, ni in zip(c, n, strict=True))
     bottom = total_n - sum(ni * ni for ni in n) / total_n
     tau2 = max(0.0, (spread - df * pooled) / bottom) if bottom > 0 else 0.0
-    rows: list[Compared] = []
-    for ci, ni in zip(c, n, strict=True):
-        tested = _numeric.binom_two_sided(round(ci), round(total_c), ni / total_n)
-        if tau2 > 0:
-            a, b = pooled * pooled / tau2, pooled / tau2
-            rows.append(
-                Compared(
-                    rate=ci / ni,
-                    shrunk=(ci + a) / (ni + b),
-                    low=_numeric.gamma_ppf(0.025, ci + a, ni + b),
-                    high=_numeric.gamma_ppf(0.975, ci + a, ni + b),
-                    shrinkage=b / (ni + b),
-                    p_value=tested,
-                )
+    tested = _numeric.binom_two_sided(
+        [round(ci) for ci in c], round(total_c), [ni / total_n for ni in n]
+    )
+    if tau2 <= 0:
+        rows = [
+            Compared(
+                rate=ci / ni,
+                shrunk=pooled,
+                low=None,
+                high=None,
+                shrinkage=1.0,
+                p_value=p_one,
             )
-        else:
-            rows.append(
-                Compared(
-                    rate=ci / ni,
-                    shrunk=pooled,
-                    low=None,
-                    high=None,
-                    shrinkage=1.0,
-                    p_value=tested,
-                )
+            for ci, ni, p_one in zip(c, n, tested, strict=True)
+        ]
+    else:
+        a, b = pooled * pooled / tau2, pooled / tau2
+        shapes, rates = [ci + a for ci in c], [ni + b for ni in n]
+        lows = _numeric.gamma_ppf(0.025, shapes, rates)
+        highs = _numeric.gamma_ppf(0.975, shapes, rates)
+        rows = [
+            Compared(
+                rate=ci / ni,
+                shrunk=(ci + a) / (ni + b),
+                low=low,
+                high=high,
+                shrinkage=b / (ni + b),
+                p_value=p_one,
             )
+            for ci, ni, p_one, low, high in zip(c, n, tested, lows, highs, strict=True)
+        ]
     for one, q in zip(rows, benjamini_hochberg([one.p_value for one in rows]), strict=True):
         one.q_value = q
     return Comparison(pooled, chi2, df, p_value, tau2, rows)
+
+
+def _rank(row: GroupRowOut) -> tuple[float, float, str]:
+    """줄인 비율 높은 순 — 모두 전체로 줄였으면(흔들림 0) 그대로 비율 순."""
+    return (-(row.shrunk or 0.0), -(row.rate or 0.0), row.key or "")
+
+
+def _distance(row: GroupRowOut) -> float:
+    """전체와 얼마나 먼가 — 줄인 비율 / 전체의 로그 크기(두 배와 반은 같은 거리)."""
+    if row.ratio is None or row.ratio <= 0:
+        return 0.0
+    return abs(math.log(row.ratio))
 
 
 # --- 셀 어댑터 -----------------------------------------------------------------------
@@ -188,15 +206,6 @@ def run(
     per = found.per
     totals = [one for one in found.groups if one.exposure > 0]
     compared = compare([one.count for one in totals], [one.exposure for one in totals])
-    labels = query.labels_for(
-        db,
-        built,
-        [dim],
-        [
-            query.Cell({dim: one.key}, None, None, None, one.count, 0, None, None, None)
-            for one in totals
-        ],
-    )
     rows: list[GroupRowOut] = []
     if compared is not None:
         for total, one in zip(totals, compared.rows, strict=True):
@@ -206,7 +215,7 @@ def run(
             rows.append(
                 GroupRowOut(
                     key=total.key,
-                    label=query.label_of(labels, dim, total.key),
+                    label=total.key or "",  # 싣는 줄만 아래에서 이름을 푼다
                     count=total.count,
                     exposure=total.exposure,
                     rate=one.rate * per,
@@ -221,7 +230,7 @@ def run(
                     drill=series.group_drill(found, built, total.key, total.count),
                 )
             )
-        rows.sort(key=lambda row: (-(row.shrunk or 0.0), row.label))
+        rows.sort(key=_rank)
         if compared.tau2 <= 0:
             caveats.add(
                 "no_spread",
@@ -252,20 +261,35 @@ def run(
         "있습니다.",
         level="info",
     )
-    # 싣는 줄 — 다른 것은 모두, 나머지는 줄인 비율 높은 순. 계산에는 모든 집단이 들었다.
+    # 싣는 줄 — 다른 것을 전체와 먼 것부터, 남으면 줄인 비율 높은 순. 계산에는 모든 집단이
+    # 들었다(다른 것이 자리보다 많을 수 있다 — 간추림 15 줄에 「다름」 이 이백이면 먼 것부터).
     room = COMPACT_ROWS if compact else MAX_ROWS
     shown = rows
     if len(rows) > room:
-        flagged_rows = [row for row in rows if row.flag]
-        rest = [row for row in rows if not row.flag][: max(0, room - len(flagged_rows))]
-        shown = sorted(flagged_rows + rest, key=lambda row: (-(row.shrunk or 0.0), row.label))
+        flagged_rows = sorted(
+            (row for row in rows if row.flag), key=lambda row: (-_distance(row), row.q_value)
+        )[:room]
+        rest = [row for row in rows if not row.flag][: room - len(flagged_rows)]
+        shown = sorted(flagged_rows + rest, key=_rank)
         caveats.add(
             "rows_shown",
-            f"집단 {len(rows)}개 중 {len(shown)}개만 싣습니다(다른 것은 모두, 나머지는 줄인 "
-            "비율 높은 순) — 계산(이질성 · BH · 줄이기)에는 모두 넣었습니다.",
+            f"집단 {len(rows)}개 중 {len(shown)}개만 싣습니다(「다름」 은 전체와 먼 것부터, "
+            "남으면 줄인 비율 높은 순) — 계산(이질성 · BH · 줄이기)에는 모두 넣었습니다.",
             level="info",
             count=len(rows) - len(shown),
         )
+    # 이름은 싣는 줄만 푼다 — 기본 모델 2천 개의 이름 풀기가 0.9초였다.
+    labels = query.labels_for(
+        db,
+        built,
+        [dim],
+        [
+            query.Cell({dim: row.key}, None, None, None, 0, 0, None, None, None)
+            for row in shown
+        ],
+    )
+    for row in shown:
+        row.label = query.label_of(labels, dim, row.key)
     head = common.header(
         db,
         user,
