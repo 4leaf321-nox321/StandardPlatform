@@ -56,6 +56,9 @@ class Fetched:
     말했다(무덤의 보관 기간이 지났다). 빈 쪽을 「바뀐 것 없음」 으로 읽으면 이미 끊긴 선을
     영영 들고 있는다 — 부르는 쪽이 시계를 비우고 전량을 다시 받는다."""
     reset_reason: str = ""
+    full: bool = False
+    """**전량을 받았다**(`ra_reports` 의 처음 · 하루 한 번 대조) — 이때만 안 온 것을 「원본에서
+    내려감」 으로 적는다. 증분에서 안 온 것은 그냥 안 바뀐 것이다."""
 
 
 def _unwrap(body: Any) -> tuple[list[dict[str, Any]], str | None]:

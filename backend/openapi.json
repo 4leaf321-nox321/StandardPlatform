@@ -2508,6 +2508,95 @@
         }
       }
     },
+    "/api/datasources/ra-report-type": {
+      "post": {
+        "tags": [
+          "datasources"
+        ],
+        "summary": "Create Ra Report Type",
+        "description": "「보고서 기록 타입 만들기」 — 표준 칸(제목 · 주소 · 보고일 · 작성 부서 · 본문 · 원본\n상태 …)과 고른 축의 참조 칸 `ref_<타입>` 을 정의 가져오기로 한 번에. 이미 있으면 모자란\n칸을 더한다.",
+        "operationId": "create_ra_report_type_api_datasources_ra_report_type_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RaReportTypeIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RaReportTypeOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/datasources/{slug}/ra-boards": {
+      "get": {
+        "tags": [
+          "datasources"
+        ],
+        "summary": "Ra Boards",
+        "description": "RA 의 조직 트리 — 이 소스의 주소 · 토큰으로 RA 에 묻는다(`GET /api/workspaces`). 고른\n조직의 slug 를 `options.board` 에 넣는다.",
+        "operationId": "ra_boards_api_datasources__slug__ra_boards_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RaBoardOut"
+                  },
+                  "title": "Response Ra Boards Api Datasources  Slug  Ra Boards Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/notifications": {
       "get": {
         "tags": [
@@ -19234,6 +19323,18 @@
             "type": "string",
             "format": "date-time",
             "title": "Created At"
+          },
+          "reconciled_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reconciled At"
           }
         },
         "type": "object",
@@ -27352,6 +27453,112 @@
           "query"
         ],
         "title": "QueryRequest"
+      },
+      "RaBoardOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "parent_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Slug"
+          },
+          "depth": {
+            "type": "integer",
+            "title": "Depth"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "name",
+          "parent_slug",
+          "depth",
+          "path"
+        ],
+        "title": "RaBoardOut",
+        "description": "RA 의 조직 하나 — 고르개가 위에서 아래로 그린다(`depth` · `path`)."
+      },
+      "RaReportTypeIn": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "maxLength": 64,
+            "title": "Slug",
+            "default": "ra_report"
+          },
+          "label": {
+            "type": "string",
+            "maxLength": 64,
+            "minLength": 1,
+            "title": "Label",
+            "default": "보고서"
+          },
+          "axes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Axes",
+            "description": "보고서의 축 태그를 걸 타입 slug — 예: plm_model"
+          },
+          "nav_group_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Nav Group Slug"
+          }
+        },
+        "type": "object",
+        "title": "RaReportTypeIn",
+        "description": "「보고서 기록 타입 만들기」 — 표준 칸과 고른 축(이 쌍둥이의 타입)의 참조 칸."
+      },
+      "RaReportTypeOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "created": {
+            "type": "boolean",
+            "title": "Created"
+          },
+          "changes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Changes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "created",
+          "changes"
+        ],
+        "title": "RaReportTypeOut"
       },
       "RangeOut": {
         "properties": {

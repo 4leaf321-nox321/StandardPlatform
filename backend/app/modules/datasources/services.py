@@ -30,7 +30,7 @@ from app.modules.accounts.models import User
 # **무덤의 규칙을 그대로 쓴다** — 끊긴 선을 끊는 길이 둘이 되면 한쪽에만 권한 검사가 남는다.
 from app.modules.bundles import tombstones as graves
 from app.modules.bundles.schemas import RelationTombstoneIn, TombstonesIn
-from app.modules.datasources import fetchers, odata
+from app.modules.datasources import fetchers, odata, ra_reports
 from app.modules.datasources.models import DataSource, DataSourceRun
 from app.modules.datasources.schemas import (
     CoreSuggestOut,
@@ -323,9 +323,12 @@ def _match(
     object_type: ObjectType,
     slug: str,
     mapped: list[Mapped],
+    *,
+    by_name: bool = True,
 ) -> None:
     """같은 객체를 다시 찾아 행에 `id` 를 박는다 — 외부 식별자 → (식별자는 bulk 가) →
-    별칭·이름."""
+    별칭·이름. `by_name=False` 면 이름으로 붙이지 않는다 — RA 보고서처럼 **같은 이름이 흔한**
+    것을 이름으로 붙이면 다른 보고서를 덮어쓴다."""
     kind = aliases.source_kind(slug)
     by_external = {
         norm: object_id
@@ -358,6 +361,8 @@ def _match(
         if found is not None:
             one.row["id"] = str(found)
             continue
+        if not by_name:
+            continue
         # 처음 만나는 행 — 별칭·이름으로 우리 것을 찾는다(사람이 먼저 만들어 둔 것과 합류).
         # 못 찾으면 bulk 가 식별자로 찾거나 새로 만든다.
         label = str(one.row.get("label") or "")
@@ -387,11 +392,56 @@ def _auth(source: DataSource) -> odata.Auth:
     )
 
 
+#: 미리 보기에 싣는 본문의 길이 — 한 화면에 몇 MB 를 펴지 않는다.
+PREVIEW_TEXT = 300
+
+
+def _short(row: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    for key, value in row.items():
+        if key.startswith("_"):
+            continue
+        if isinstance(value, str) and len(value) > PREVIEW_TEXT:
+            value = f"{value[:PREVIEW_TEXT]}… ({len(value):,}자)"
+        out[key] = value
+    return out
+
+
+def _preview_ra(
+    db: Session, source: DataSource, defs: list[PropertyDef], limit: int
+) -> dict[str, Any]:
+    """RA 보고서 — 첫 쪽 몇 건을 본문까지(잘라서), 그리고 우리 칸으로 바꾼 뒤."""
+    try:
+        fetched = ra_reports.fetch(
+            source,
+            auth=_auth(source),
+            mode="initial",
+            page_size=limit,
+            max_rows=limit,
+            transport=transport,
+        )
+    except AppError as caught:
+        return {"columns": [], "rows": [], "mapped": [], "mapping_error": caught.message}
+    rows = [_short(raw) for raw in fetched.rows]
+    columns: list[str] = []
+    for row in rows:
+        columns.extend(name for name in row if name not in columns)
+    mapped = []
+    for raw in fetched.rows:
+        one = ra_reports.to_row(raw, defs)
+        mapped.append(
+            {"external_id": one.external_id, "row": _short(one.row), "error": one.error}
+        )
+    return {"columns": columns, "rows": rows, "mapped": mapped, "mapping_error": None}
+
+
 def preview(db: Session, source: DataSource, *, limit: int = 5) -> dict[str, Any]:
     """앞의 몇 행을 **그대로**와 **대응한 뒤** 로 — 칸 대응을 맞출 때 본다."""
     object_type = db.get(ObjectType, source.type_id)
     assert object_type is not None
     defs = properties_of(db, object_type.id)
+    if source.kind == ra_reports.KIND:
+        return _preview_ra(db, source, defs, limit)
     fetched = fetchers.fetch(
         source,
         auth=_auth(source),
@@ -469,7 +519,13 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     if object_type is None:
         raise AppError(code("DATASOURCES", 21), "소스가 가리키는 타입이 없습니다.", status=409)
     defs = properties_of(db, object_type.id)
-    mapping = Mapping.parse(source.mapping or {}, defs)
+    ra = source.kind == ra_reports.KIND
+    # RA 보고서는 칸 대응을 틀이 정한다 — 사람이 적은 대응은 없다.
+    mapping = (
+        Mapping(external_key="id", columns=[])
+        if ra
+        else Mapping.parse(source.mapping or {}, defs)
+    )
     run = DataSourceRun(
         source_id=source.id,
         actor_label=(user.display_name or user.email) if user else "타이머",
@@ -497,6 +553,9 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
             source.last_status = "failed"
             db.commit()
             return SyncResult(run=run, plan_rows=[], truncated=False)
+
+    if ra:
+        return _sync_ra(db, user, source, object_type, defs, run, apply=apply)
 
     try:
         fetched = fetchers.fetch(
@@ -726,6 +785,214 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
 RELATION_KINDS = ("sp_core",)
 #: 관계 적재가 아는 칸 — 코어 봉투에서 그 밖의 것(도착 타입 · 끊김 표시)은 떼고 보낸다.
 EDGE_SKIP = ("dst_type", fetchers.CORE_DELETED)
+
+
+def _fail(
+    db: Session, source: DataSource, run: DataSourceRun, errors: list[str]
+) -> SyncResult:
+    run.status = "failed"
+    run.errors = errors[:ERROR_SAMPLE]
+    run.finished_at = datetime.now(UTC)
+    source.last_run_at = run.finished_at
+    source.last_status = "failed"
+    db.commit()
+    return SyncResult(run=run, plan_rows=[], truncated=False)
+
+
+def _sync_ra(
+    db: Session,
+    user: User | None,
+    source: DataSource,
+    object_type: ObjectType,
+    defs: list[PropertyDef],
+    run: DataSourceRun,
+    *,
+    apply: bool,
+) -> SyncResult:
+    """RA 보고서(ADR 0018) — 읽기 · 바꾸기 · 계획 → 적용은 다른 소스와 같고, 다른 것은 넷:
+    이름으로 붙이지 않고, 행을 소유 부서끼리 모아 넘기고, 지우는 대신 원본 상태를 적고, 커서와
+    대조 시각을 **끝까지 받고 적용에 성공했을 때만** 옮긴다."""
+    mode = ra_reports.mode_of(source)
+    try:
+        fetched = ra_reports.fetch(
+            source,
+            auth=_auth(source),
+            mode=mode,
+            page_size=source.page_size,
+            max_rows=odata.MAX_ROWS,
+            transport=transport,
+        )
+    except AppError as caught:
+        return _fail(db, source, run, [caught.message])
+
+    # 같은 보고서가 두 번 오면(겹쳐 읽기 · 쪽 경계) 뒤의 것 하나 — 한 계획에 같은 객체가 둘이면
+    # 일괄 입력이 그 줄을 오류로 만든다.
+    latest: dict[str, ra_reports.Converted] = {}
+    broken: list[ra_reports.Converted] = []
+    for raw in fetched.rows:
+        one = ra_reports.to_row(raw, defs)
+        if one.error:
+            broken.append(one)
+        else:
+            latest[one.external_id] = one
+    converted = list(latest.values())
+    moved = ra_reports.prune_refs(db, defs, converted)
+    # **소유 부서끼리 모은다** — 일괄 입력은 소유 부서를 호출마다 하나 받는다. 차례를 정렬로
+    # 바꾸고 그 차례 그대로 끝까지 가야 적용 결과와 외부 식별자가 짝이 맞는다.
+    owner_ids = ra_reports.owners(db, {one.owner_slug for one in converted if one.owner_slug})
+
+    def owner_of(one: ra_reports.Converted) -> uuid.UUID | None:
+        return owner_ids.get(one.owner_slug or "", source.workspace_id)
+
+    converted.sort(key=lambda one: str(owner_of(one) or ""))
+    mapped = [Mapped(external_id=one.external_id, row=one.row) for one in converted]
+    run.rows_seen = len(mapped) + len(broken)
+    _match(db, object_type, source.slug, mapped, by_name=False)
+
+    groups: list[tuple[uuid.UUID | None, list[dict[str, Any]]]] = []
+    for one, row in zip(converted, mapped, strict=True):
+        owner = owner_of(one)
+        if not groups or groups[-1][0] != owner or len(groups[-1][1]) >= bulk.MAX_ROWS:
+            groups.append((owner, []))
+        groups[-1][1].append(row.row)
+
+    actor = _actor(db, user)
+    plan_rows: list[bulk.RowPlan] = [
+        bulk.RowPlan(row=index, action="error", label=bad.external_id, message=bad.error or "")
+        for index, bad in enumerate(broken, start=1)
+    ]
+    errors: list[str] = []
+    if fetched.truncated:
+        errors.append(
+            f"행이 {odata.MAX_ROWS}개를 넘어 끊었습니다 — 조직을 나눠 소스를 여럿 둡니다."
+        )
+    offset = len(plan_rows)
+    for owner, rows in groups:
+        plan = bulk.plan_objects(
+            db,
+            actor,
+            object_type,
+            rows,
+            owner_workspace_id=owner,
+            source=source_name(source),
+            blank_missing=True,
+        )
+        errors.extend(plan.errors)
+        for row_plan in plan.rows:
+            plan_rows.append(
+                bulk.RowPlan(
+                    row=row_plan.row + offset,
+                    action=row_plan.action,
+                    label=row_plan.label,
+                    key=row_plan.key,
+                    object_id=row_plan.object_id,
+                    changes=row_plan.changes,
+                    message=row_plan.message,
+                )
+            )
+        offset += len(plan.rows)
+    # 깨진 행(번호 · 제목이 빈 것)은 건너뛰고 적어 둔다 — 한 건 때문에 조직 전체가 멈추지 않게.
+    ok = not errors and all(one.action != "error" for one in plan_rows[len(broken) :])
+    # 수만 담는다(실행 기록의 모양) — 전량으로 받았나는 0 · 1 로.
+    counts: dict[str, Any] = {
+        **_counts(plan_rows),
+        "full_read": int(fetched.full),
+        "tags_as_text": moved,
+    }
+    if not apply or not ok:
+        run.status = "planned" if ok else "failed"
+        run.counts = counts
+        run.errors = (
+            errors
+            + [
+                f"{one.row}행 {one.label}: {one.message}"
+                for one in plan_rows
+                if one.action == "error"
+            ]
+        )[:ERROR_SAMPLE]
+        run.finished_at = datetime.now(UTC)
+        if not ok:
+            source.last_run_at = run.finished_at
+            source.last_status = "failed"
+        db.commit()
+        return SyncResult(run=run, plan_rows=plan_rows, truncated=fetched.truncated)
+
+    applied: list[bulk.RowPlan] = []
+    for owner, rows in groups:
+        done = bulk.apply_objects(
+            db,
+            actor,
+            object_type,
+            rows,
+            owner_workspace_id=owner,
+            source=source_name(source),
+            blank_missing=True,
+        )
+        if not done.ok:
+            return _fail(
+                db,
+                source,
+                run,
+                done.errors
+                + [
+                    f"{one.row}행 {one.label}: {one.message}"
+                    for one in done.rows
+                    if one.action == "error"
+                ],
+            )
+        applied.extend(done.rows)
+
+    seen: set[str] = set()
+    for sent, row_plan in zip(mapped, applied, strict=True):
+        seen.add(compare_key(sent.external_id))
+        if row_plan.object_id is None:
+            continue
+        target = db.get(ObjectInstance, row_plan.object_id)
+        if target is not None:
+            aliases.set_external(db, target, object_type, source.slug, sent.external_id)
+    full = fetched.full and not fetched.truncated
+    marks = ra_reports.reconcile(db, actor, object_type, source, seen, full=full)
+    counts = {**counts, **marks}
+    held_back = marks.get("gone_held_back", 0)
+    now = datetime.now(UTC)
+    if fetched.as_of and not fetched.truncated:
+        source.since_mark = fetched.as_of
+    warnings: list[str] = []
+    if held_back:
+        # 대조 시각을 안 옮긴다 — 다음 차례에 다시 대조하고, 그사이 사람이 본다.
+        warnings.append(
+            f"전량에서 보고서 {held_back}건이 한꺼번에 안 왔습니다 — 가진 것의 절반이 넘어 "
+            "「원본에서 내려감」 을 적지 않았습니다. RA 읽기 계정의 권한과 고른 조직을 "
+            "확인하세요(받은 것은 넣었습니다)."
+        )
+    elif full:
+        source.reconciled_at = now
+    run.status = "failed" if held_back else "ok"
+    run.applied = True
+    run.counts = counts
+    run.errors = (
+        warnings
+        + [
+            f"{one.row}행 {one.label}: {one.message}"
+            for one in plan_rows
+            if one.action == "error"
+        ]
+    )[:ERROR_SAMPLE]
+    run.finished_at = now
+    source.last_run_at = now
+    source.last_status = run.status
+    audit.record(
+        db,
+        action="datasource.sync",
+        actor=user,
+        target_table="data_sources",
+        target_id=source.id,
+        target_label=source.slug,
+        workspace_id=source.workspace_id,
+        changes={"rows": run.rows_seen, **counts},
+    )
+    db.commit()
+    return SyncResult(run=run, plan_rows=applied, truncated=fetched.truncated)
 
 
 def wants_relations(source: DataSource) -> bool:

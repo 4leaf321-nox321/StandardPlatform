@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
-from app.modules.datasources import services
+from app.modules.datasources import ra_reports, services
 from app.modules.datasources.models import (
     AUTH_KINDS,
     SOURCE_KINDS,
@@ -23,6 +23,9 @@ from app.modules.datasources.schemas import (
     DataSourcePatchRequest,
     DataSourceWriteRequest,
     PreviewOut,
+    RaBoardOut,
+    RaReportTypeIn,
+    RaReportTypeOut,
     RunOut,
 )
 from app.modules.jobs import routes as jobs_routes
@@ -71,6 +74,7 @@ def _out(db: Session, row: DataSource) -> DataSourceOut:
         last_run_at=row.last_run_at,
         last_status=row.last_status,
         created_at=row.created_at,
+        reconciled_at=row.reconciled_at,
     )
 
 
@@ -123,6 +127,13 @@ def _check_deprecate(kind: str, wanted: bool) -> bool:
     동기화 다음 날 **멀쩡한 객체 전부가 사용 중지가 된다.** 사라진 것은 무덤(`deleted`)으로
     오므로 그 규칙 자체가 필요 없다.
     """
+    if wanted and kind == ra_reports.KIND:
+        raise AppError(
+            code("DATASOURCES", 59),
+            "RA 보고서는 지우지 않고 「원본에서 내려감」 을 적습니다 — 「이번에 안 온 것을 "
+            "사용 중지」 는 켤 수 없습니다(ADR 0018).",
+            status=422,
+        )
     if wanted and kind == "sp_core":
         raise AppError(
             code("DATASOURCES", 40),
@@ -131,6 +142,19 @@ def _check_deprecate(kind: str, wanted: bool) -> bool:
             status=422,
         )
     return wanted
+
+
+def _check_ra(kind: str, options: dict[str, object], mapping: dict[str, object]) -> None:
+    """RA 보고서 소스 — 설정을 읽어 보고(틀린 값은 이유와 함께 거절), 칸 대응은 받지 않는다."""
+    if kind != ra_reports.KIND:
+        return
+    ra_reports.options_of(dict(options))
+    if mapping:
+        raise AppError(
+            code("DATASOURCES", 59),
+            "RA 보고서 소스는 칸 대응을 적지 않습니다 — 보고서 기록 타입의 칸 키가 정합니다.",
+            status=422,
+        )
 
 
 def _check_mapping(db: Session, object_type: ObjectType, mapping: dict[str, object]) -> None:
@@ -162,6 +186,7 @@ def create_source(
     require_choice(payload.kind, SOURCE_KINDS, what="소스 종류")
     require_choice(payload.auth_kind, AUTH_KINDS, what="인증 방식")
     _check_mapping(db, object_type, payload.mapping)
+    _check_ra(payload.kind, payload.options, payload.mapping)
     row = DataSource(
         slug=slug,
         name=payload.name.strip(),
@@ -261,8 +286,10 @@ def update_source(
     if "mapping" in sent and payload.mapping is not None:
         object_type = db.get(ObjectType, row.type_id)
         assert object_type is not None
-        _check_mapping(db, object_type, payload.mapping)
+        if row.kind != ra_reports.KIND:
+            _check_mapping(db, object_type, payload.mapping)
         row.mapping = payload.mapping
+    _check_ra(row.kind, row.options or {}, row.mapping or {})
     # 빈 문자열이 「slug 로 돌아가기」 다 — null 은 「안 보냄」 과 구별되지 않는다.
     if "source_name" in sent and payload.source_name is not None:
         row.source_name = payload.source_name.strip()
@@ -279,6 +306,8 @@ def update_source(
         row.since_mark = ""
         # **선의 시계도 함께 비운다** — 하나만 처음부터 받으면 점과 선이 어긋난다.
         row.relations_since_mark = ""
+        # RA 보고서는 처음부터 = 본문까지 전량, 그리고 대조.
+        row.reconciled_at = None
     if "interval_minutes" in sent and payload.interval_minutes is not None:
         row.interval_minutes = payload.interval_minutes
     if "is_active" in sent and payload.is_active is not None:
@@ -401,3 +430,52 @@ def list_runs(
         .limit(RECENT_RUNS)
     )
     return [RunOut.model_validate(one) for one in runs]
+
+
+# --- RA 보고서(ADR 0018) ---------------------------------------------------------
+
+
+@router.post("/ra-report-type", response_model=RaReportTypeOut, status_code=201)
+def create_ra_report_type(
+    payload: RaReportTypeIn,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> RaReportTypeOut:
+    """「보고서 기록 타입 만들기」 — 표준 칸(제목 · 주소 · 보고일 · 작성 부서 · 본문 · 원본
+    상태 …)과 고른 축의 참조 칸 `ref_<타입>` 을 정의 가져오기로 한 번에. 이미 있으면 모자란
+    칸을 더한다."""
+    slug = require_slug(payload.slug, what="타입 slug")
+    existed = db.scalar(select(ObjectType).where(ObjectType.slug == slug)) is not None
+    plan = ra_reports.create_type(
+        db,
+        user,
+        slug=slug,
+        label=payload.label.strip(),
+        axes=[one.strip() for one in payload.axes if one.strip()],
+        nav_group_slug=payload.nav_group_slug,
+    )
+    db.commit()
+    return RaReportTypeOut(
+        type_slug=slug,
+        created=not existed,
+        changes=[
+            f"{one.kind} {one.slug}: {one.action}"
+            for one in plan.changes
+            if one.action != "unchanged"
+        ],
+    )
+
+
+@router.get("/{slug}/ra-boards", response_model=list[RaBoardOut])
+def ra_boards(
+    slug: str, _: User = Depends(require_system_admin), db: Session = Depends(get_db)
+) -> list[RaBoardOut]:
+    """RA 의 조직 트리 — 이 소스의 주소 · 토큰으로 RA 에 묻는다(`GET /api/workspaces`). 고른
+    조직의 slug 를 `options.board` 에 넣는다."""
+    row = _source(db, slug)
+    if row.kind != ra_reports.KIND:
+        raise AppError(
+            code("DATASOURCES", 59), "RA 보고서 소스에서만 조직을 고릅니다.", status=422
+        )
+    found = ra_reports.boards(row, auth=services._auth(row), transport=services.transport)
+    return [RaBoardOut(**one) for one in found]

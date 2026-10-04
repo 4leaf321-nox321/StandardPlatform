@@ -37,7 +37,9 @@ AUTH_KINDS = ("none", "basic", "bearer", "header")
 #:   odata  OData v4(v2 봉투도). base_url + entity_set
 #:   rest   JSON 을 주는 REST. base_url + entity_set(경로), options 로 행 자리·쪽 넘김
 #:   file   CSV·Excel·JSON 파일 — URL 또는 `datasource_dir` 아래 경로. entity_set 이 그 위치
-SOURCE_KINDS = ("odata", "rest", "file", "sp_core")
+#:   ra_reports  ReportArchive 의 발행 보고서 피드 — 조직 하나와 그 하위의 발행본을 「보고서」
+#:          기록으로 쌓는다(ADR 0018, `ra_reports.py`). 칸 대응은 틀이 정한다
+SOURCE_KINDS = ("odata", "rest", "file", "sp_core", "ra_reports")
 #: 동기화 기록의 상태.
 RUN_STATUSES = ("planned", "ok", "failed")
 
@@ -96,6 +98,11 @@ class DataSource(Base):
     영영 안 받는다. 상대가 `reset` 을 주면(무덤의 보관 기간이 지났다) 이 값을 비우고 전량을
     다시 받는다."""
 
+    reconciled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """`ra_reports` 만 쓴다 — 마지막으로 **전량을 받아 대조한** 때. 하루가 지나면 다음 동기화가
+    전량을 받아 태그만 바뀐 것을 메우고, 안 온 보고서에 「원본에서 내려감」 을 적는다."""
     source_name: Mapped[str] = mapped_column(String(100), default="", server_default="")
     """이 소스가 적재할 때 **내보이는 출처 이름** — 잠긴 타입에 넣을 수 있는 근거다.
 

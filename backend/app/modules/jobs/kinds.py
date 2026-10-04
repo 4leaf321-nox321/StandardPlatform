@@ -582,9 +582,17 @@ def _changed(counts: dict[str, Any]) -> bool:
     바뀐 것 없이 끝날 때마다 지표를 다시 세면, 200만 건 지표 하나가 45초(실측, ADR 0013)라
     DB 가 쉬지 못한다. 그대로인 줄 · 오류 줄은 세지 않는다."""
     return any(
-        isinstance(value, int) and value > 0 and not key.endswith(("unchanged", "error"))
+        isinstance(value, int)
+        and value > 0
+        and not key.endswith(("unchanged", "error"))
+        and key not in _NOT_CHANGES
         for key, value in counts.items()
     )
+
+
+#: 바뀐 수가 아니라 **표시**인 수 — RA 보고서 소스가 「전량으로 읽었나」 · 「글자 태그로 남긴
+#: 축 태그 수」 · 「멈춘 내려감」 을 적는다(ADR 0018). 이것으로 지표를 다시 세지 않는다.
+_NOT_CHANGES = frozenset({"full_read", "tags_as_text", "gone_held_back"})
 
 
 def _after_ingest(db: Session, type_id: uuid.UUID, reason: str) -> None:

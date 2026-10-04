@@ -50,6 +50,36 @@ class DataSourceOut(BaseModel):
     last_run_at: datetime | None
     last_status: str | None
     created_at: datetime
+    reconciled_at: datetime | None = None
+    """`ra_reports` — 마지막으로 전량을 받아 대조한 때(ADR 0018)."""
+
+
+class RaBoardOut(BaseModel):
+    """RA 의 조직 하나 — 고르개가 위에서 아래로 그린다(`depth` · `path`)."""
+
+    slug: str
+    name: str
+    parent_slug: str | None
+    depth: int
+    path: str
+
+
+class RaReportTypeIn(BaseModel):
+    """「보고서 기록 타입 만들기」 — 표준 칸과 고른 축(이 쌍둥이의 타입)의 참조 칸."""
+
+    slug: str = Field(default="ra_report", max_length=64)
+    label: str = Field(default="보고서", min_length=1, max_length=64)
+    axes: list[str] = Field(
+        default_factory=list, description="보고서의 축 태그를 걸 타입 slug — 예: plm_model"
+    )
+    nav_group_slug: str | None = None
+
+
+class RaReportTypeOut(BaseModel):
+    type_slug: str
+    created: bool
+    """새로 만들었나(아니면 있던 타입에 모자란 칸을 더했나)."""
+    changes: list[str]
 
 
 class DataSourceWriteRequest(BaseModel):
