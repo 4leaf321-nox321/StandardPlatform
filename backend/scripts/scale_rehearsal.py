@@ -1054,6 +1054,76 @@ def _recipes_rehearsal(
             f"HHI {found.get('hhi', 0):.4f} · 지니 {found.get('gini', 0):.3f} · "
             f"핵심 소수 {found.get('vital_few')} · 기준 {pareto['basis']}",
         )
+        # ⑤ 집단 비교 — 공장은 차이가 없다(정답), 기본 모델은 뜨거운 하나만 「높음」.
+        took, plants = analyse(
+            third, "groups", dim="factory", axis="cohort", window=3, **inside
+        )
+        row(
+            "⑤ 집단 비교 — 공장(생산월 코호트 · 출고 3개월 안)",
+            took,
+            plants.get("error")
+            or f"집단 {plants['groups']} · 이질성 p {plants['heterogeneity_p']:.3g} · "
+            f"흔들림 {plants['spread'] or 0:.3f} · 다름 {plants['flagged']}",
+        )
+        took, models = analyse(
+            first,
+            "groups",
+            dim="base_model",
+            axis="cohort",
+            window=3,
+            compact="true",
+            **inside,
+        )
+        if "error" in models:
+            row("⑤ 집단 비교 — 기본 모델", took, models["error"])
+        else:
+            top = models["rows"][0]
+            row(
+                "⑤ 집단 비교 — 기본 모델(판매월 코호트 · 출고 3개월 안)",
+                took,
+                f"집단 {models['groups']}(+{models['other_groups']}) · "
+                f"다름 {models['flagged']} · 맨 위 {'뜨거운 것' if top['key'] == hot else top['key']} "
+                f"{top['ratio'] or 0:.1f}배 {top['flag']}",
+            )
+        # ④ 증상마다 훑기 — 뜨거운 것은 증상마다 「나쁨」, 보통끼리는 거의 아무것도 안 선다.
+        took, hot_scan = analyse(
+            first, "sprt/scan", by="symptom", target=hot, reference=typical[len(typical) // 2]
+        )
+        row(
+            "④ 증상마다 — 뜨거운 기본 모델 vs 보통",
+            took,
+            hot_scan.get("error")
+            or f"증상 {hot_scan['scanned']} · 나쁨 "
+            f"{sum(one['decision'] == 'worse' for one in hot_scan['items'])} · "
+            f"α/K {hot_scan['alpha_each']:.4f}",
+        )
+        any_worse = 0
+        scan_times: list[float] = []
+        for _ in range(20):
+            target, reference = rng.sample(typical, 2)
+            took, pair_scan = analyse(
+                first, "sprt/scan", by="symptom", target=target, reference=reference
+            )
+            scan_times.append(took)
+            any_worse += any(one["decision"] == "worse" for one in pair_scan.get("items", []))
+        row(
+            "④ 증상마다 — 보통끼리 무작위 짝 20",
+            statistics.median(scan_times),
+            f"하나라도 나쁨 {any_worse}/20",
+        )
+        # ⑩ 증상마다 변화점 — 정답은 변화 없음.
+        took, change_scan = analyse(
+            first, "changes/scan", by="symptom", axis="cohort", window=3, **inside
+        )
+        row(
+            "⑩ 증상마다 — 판매월 코호트(출고 3개월 안)",
+            took,
+            change_scan.get("error")
+            or f"증상 {change_scan['scanned']} · 오름 "
+            f"{sum(one['direction'] == 'up' for one in change_scan['items'])} · 내림 "
+            f"{sum(one['direction'] == 'down' for one in change_scan['items'])} · 벌점 "
+            f"+{change_scan['extra_penalty']:.1f}",
+        )
     finally:
         for slug in reversed(made):
             client.delete(f"/api/metrics/{slug}", headers=admin)

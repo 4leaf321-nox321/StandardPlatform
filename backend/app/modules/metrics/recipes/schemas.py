@@ -478,6 +478,8 @@ class SprtOut(AnalysisHeader):
     beta: float
     upper: float
     lower: float
+    dispersion: float = 1.0
+    """전작 셀의 과분산 φ — 1 보다 크면 우도비를 φ 로 나눴다(준-포아송)."""
     decision: Literal["continue", "worse", "not_worse"]
     """worse 는 「전작보다 ρ 배 쪽」, not_worse 는 「ρ 배 나쁘지는 않다」, continue 는
     「아직」."""

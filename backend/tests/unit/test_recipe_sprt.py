@@ -78,3 +78,52 @@ def test_포아송_흐름에서_1종_오류와_검정력(ratio: float, bound: st
         assert share <= 0.05 / 0.9 + 0.01
     else:
         assert share >= 0.87
+
+
+def test_과분산은_코호트째_뭉치면_크고_포아송이면_1_언저리다() -> None:
+    """한 코호트에 수십 건 · 이웃은 0 건인 몰림은 셀(코호트 x 경과)로 재면 안 보인다 — 코호트의
+    닫힌 경과까지 합으로 잰다."""
+    rng = np.random.default_rng(3)
+    ages = 12
+
+    def cohorts(counts: list[dict[int, int]]) -> list[life.Cohort]:
+        return [life.Cohort(date(2024, 1, 1), 1000.0, ages - 1, one) for one in counts]
+
+    poisson = cohorts([{a: int(rng.poisson(2.0)) for a in range(ages)} for _ in range(40)])
+    phi = sprt.overdispersion(poisson, sprt.reference_rates(poisson))
+    assert 0.5 < phi < 1.6
+    # 넷 중 하나의 코호트에만 기록이 몰린다(평균은 같다).
+    clumped = cohorts([{a: (8 if k % 4 == 0 else 0) for a in range(ages)} for k in range(40)])
+    assert sprt.overdispersion(clumped, sprt.reference_rates(clumped)) > 10
+    assert sprt.overdispersion(clumped[:4], sprt.reference_rates(clumped[:4])) == 1.0
+
+
+def test_흔들림이_큰_흐름은_우도비를_φ_로_나눠야_잘못_나쁨이_α_언저리다() -> None:
+    """같은 비율 · 분산이 평균의 5배(음이항) — 포아송 그대로면 잘못 「나쁨」 이 잦고, φ 로
+    나누면 α/(1-β) 언저리 아래로 돌아온다."""
+    rng = np.random.default_rng(1)
+    expected = [10.0] * 40
+    phi = 5.0
+    plain = adjusted = 0
+    for _ in range(1000):
+        # 평균 10 · 분산 50 인 음이항(감마-포아송).
+        observed = rng.poisson(rng.gamma(10.0 / (phi - 1), phi - 1, 40)).tolist()
+        plain += (
+            sprt.walk(observed, expected, rho=1.5, alpha=0.05, beta=0.1)[0][-1].decision
+            == "worse"
+        )
+        adjusted += (
+            sprt.walk(observed, expected, rho=1.5, alpha=0.05, beta=0.1, dispersion=phi)[0][
+                -1
+            ].decision
+            == "worse"
+        )
+    assert plain / 1000 > 0.1
+    assert adjusted / 1000 <= 0.05 / 0.9 + 0.02
+
+
+def test_과분산이면_표준화_비의_구간을_로그_척도에서_넓힌다() -> None:
+    low, high = sprt.widened(2.0, 1.5, 2.6, 4.0)
+    assert low == pytest.approx(2.0 * (1.5 / 2.0) ** 2) and high == pytest.approx(2.0 * 1.3**2)
+    assert sprt.widened(2.0, 1.5, 2.6, 1.0) == (1.5, 2.6)
+    assert sprt.widened(None, None, None, 4.0) == (None, None)

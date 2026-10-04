@@ -20,6 +20,15 @@
 매 기간 표준화 비 SMR = O/E 와 정확 포아송 구간(가우드), 결론까지 남은 기대 건수(같다면 · ρ
 배라면)를 함께 낸다. 「나아졌나」 는 묻지 않는다 — 표준화 비의 구간으로 읽는다.
 
+## 과분산 — 준-포아송
+
+기록은 포아송보다 크게 흔들린다(부품 로트 · 판매 묶음 · 코호트마다 몰림). 포아송 그대로면 그
+흔들림을 차이로 읽어 잘못 「나쁨」 이 α 보다 훨씬 잦다(규모 자료에서 보통끼리 60쌍 중 7).
+전작의 **코호트마다**(닫힌 경과까지의 합) 피어슨 φ = Σ (O - E)² / E / (코호트 수 - 1) 를 재고,
+φ > 1 이면 Λ 를 φ 로 나눈다(준-우도). 셀(코호트 x 경과) 단위로 재면 한 셀의 기대가 작아
+코호트째 몰리는 흔들림이 안 보인다. 결론까지 남은 기대 건수는 φ 배, 표준화 비의 구간은 로그
+척도에서 √φ 배 넓어진다.
+
 ## 값마다 훑기 — 「전작보다 빨리 늘고 있는 **증상**은?」
 
 기준 하나(증상 등)의 값마다 그 값으로 걸러 같은 검정을 한다 — 새 모델의 그 증상 건수를 전작의
@@ -59,11 +68,13 @@ from app.shared.permissions import visible_owner_clause
 
 NAME = "sprt"
 LABEL = "순차 검정(전작 대비)"
-METHOD = "포아송 SPRT · 전작의 경과별 비율로 간접 표준화 v1"
+METHOD = "포아송 SPRT(과분산이면 준-포아송 Λ/φ) · 전작의 경과별 비율로 간접 표준화 v2"
 RHO = 1.5
 ALPHA = 0.05
 BETA = 0.10
 COMPACT_LOOKS = 12
+#: 과분산을 재려면 전작의 코호트가 이만큼은 있어야 한다.
+DISPERSION_MIN_COHORTS = 5
 #: 값마다 훑기 — 새 모델의 건수가 많은 값부터 몇 개.
 SCAN_TOP = 20
 SCAN_MAX = 40
@@ -97,8 +108,10 @@ def walk(
     rho: float,
     alpha: float,
     beta: float,
+    dispersion: float = 1.0,
 ) -> tuple[list[Look], int | None]:
-    """기간마다 더한 관측 · 기대 → 쌓은 줄과 결론이 선 자리(처음 경계를 넘은 기간)."""
+    """기간마다 더한 관측 · 기대 → 쌓은 줄과 결론이 선 자리(처음 경계를 넘은 기간).
+    `dispersion` φ > 1 이면 Λ 를 φ 로 나눈다(준-포아송)."""
     upper, lower = boundaries(alpha, beta)
     total_o = total_e = 0.0
     decided: int | None = None
@@ -107,7 +120,7 @@ def walk(
     for k, (o, e) in enumerate(zip(observed, expected, strict=True)):
         total_o += o
         total_e += e
-        value = llr(total_o, total_e, rho)
+        value = llr(total_o, total_e, rho) / max(dispersion, 1.0)
         if decided is None:
             if value >= upper:
                 state, decided = "worse", k
@@ -126,13 +139,54 @@ def garwood(observed: float, expected: float) -> tuple[float | None, float | Non
     return low / expected, high / expected
 
 
-def remaining(value: float, *, rho: float, alpha: float, beta: float) -> tuple[float, float]:
+def remaining(
+    value: float, *, rho: float, alpha: float, beta: float, dispersion: float = 1.0
+) -> tuple[float, float]:
     """결론까지 남은 **기대 건수**(전작 비율로) — (같다면 「나쁘지 않음」 까지, ρ 배라면
-    「나쁨」 까지). 기대 건수 하나마다 Λ 가 평균으로 움직이는 만큼으로 나눈다."""
+    「나쁨」 까지). 기대 건수 하나마다 Λ 가 평균으로 움직이는 만큼으로 나눈다(과분산이면 φ
+    배)."""
     upper, lower = boundaries(alpha, beta)
-    toward_same = (rho - 1) - math.log(rho)
-    toward_worse = rho * math.log(rho) - (rho - 1)
+    phi = max(dispersion, 1.0)
+    toward_same = ((rho - 1) - math.log(rho)) / phi
+    toward_worse = (rho * math.log(rho) - (rho - 1)) / phi
     return max(0.0, (value - lower) / toward_same), max(0.0, (upper - value) / toward_worse)
+
+
+def overdispersion(cohorts: Sequence[life.Cohort], rates: dict[int, Rate]) -> float:
+    """전작의 **코호트마다** 피어슨 φ — 닫힌 경과까지의 관측 합이 기대 합(대수 x 경과별
+    비율의 합)보다 얼마나 더 흔들리나. 셀(코호트 x 경과) 단위로 재면 한 셀의 기대가 작아
+    코호트째 몰리는 흔들림(한 코호트에 수십 건 · 이웃은 0 건)이 안 보인다 — 순차 검정은
+    코호트를 더해 가므로 그 단위로 잰다. 코호트가 `DISPERSION_MIN_COHORTS` 보다 적으면 1(잴 수
+    없다)."""
+    total = 0.0
+    used = 0
+    for cohort in cohorts:
+        expected = sum(
+            cohort.units * rates[a].rate for a in range(cohort.horizon + 1) if a in rates
+        )
+        if expected <= 0:
+            continue
+        observed = sum(
+            c for a, c in cohort.counts.items() if a <= cohort.horizon and a in rates
+        )
+        total += (observed - expected) ** 2 / expected
+        used += 1
+    if used < DISPERSION_MIN_COHORTS:
+        return 1.0
+    return total / (used - 1)
+
+
+def widened(
+    smr: float | None, low: float | None, high: float | None, dispersion: float
+) -> tuple[float | None, float | None]:
+    """표준화 비의 구간을 로그 척도에서 √φ 배 넓힌다(과분산)."""
+    phi = max(dispersion, 1.0)
+    if smr is None or smr <= 0 or phi == 1.0:
+        return low, high
+    root = math.sqrt(phi)
+    out_low = smr * (low / smr) ** root if low is not None and low > 0 else low
+    out_high = smr * (high / smr) ** root if high is not None else high
+    return out_low, out_high
 
 
 @dataclass
@@ -267,6 +321,7 @@ def run(
             29, "전작의 닫힌 코호트가 없습니다 — 판매 대수와 닫힌 경과가 있어야 견줍니다."
         )
     reach = max(rates)
+    phi = max(1.0, overdispersion(reference_cohorts, rates))
     caveats = common.Caveats()
     labels = query.labels_for(
         db,
@@ -326,9 +381,12 @@ def run(
                 )
             )
         excluded["beyond_reference"] = beyond
-        walked, decided = walk(observed, expected, rho=rho, alpha=alpha, beta=beta)
+        walked, decided = walk(
+            observed, expected, rho=rho, alpha=alpha, beta=beta, dispersion=phi
+        )
         for k, (when, one) in enumerate(zip(timeline, walked, strict=True)):
-            low, high = garwood(one.observed, one.expected)
+            smr_k = one.observed / one.expected if one.expected > 0 else None
+            low, high = widened(smr_k, *garwood(one.observed, one.expected), phi)
             looks.append(
                 SprtLookOut(
                     k=k,
@@ -349,7 +407,7 @@ def run(
             decision = walked[decided].decision
             decided_label = looks[decided].label
         elif final is not None:
-            left = remaining(final.llr, rho=rho, alpha=alpha, beta=beta)
+            left = remaining(final.llr, rho=rho, alpha=alpha, beta=beta, dispersion=phi)
             recent = expected[-3:]
             pace = sum(recent) / len(recent) if recent else 0.0
             if pace > 0:
@@ -360,6 +418,13 @@ def run(
             looks = [one for one in looks if one.k >= tail or one.k in keep]
             rows = []
     _caveats(caveats, excluded, reference_excluded, final, rho)
+    if phi > 1.5:
+        caveats.add(
+            "overdispersion",
+            f"전작의 건수가 포아송의 {phi:.1f}배로 흔들립니다 — 우도비를 그만큼 나눴습니다"
+            "(준-포아송). 결론이 늦게 서는 대신 흔들림을 차이로 읽지 않습니다.",
+            level="info",
+        )
     head = common.header(
         db,
         user,
@@ -385,7 +450,12 @@ def run(
         },
     )
     upper, lower = boundaries(alpha, beta)
-    smr_low, smr_high = garwood(final.observed, final.expected) if final else (None, None)
+    smr_final = final.observed / final.expected if final and final.expected > 0 else None
+    smr_low, smr_high = (
+        widened(smr_final, *garwood(final.observed, final.expected), phi)
+        if final
+        else (None, None)
+    )
     return SprtOut(
         **head,
         dim=dim,
@@ -399,6 +469,7 @@ def run(
         beta=beta,
         upper=upper,
         lower=lower,
+        dispersion=phi,
         decision=decision,
         decided_at=decided_label,
         observed=final.observed if final else 0.0,
