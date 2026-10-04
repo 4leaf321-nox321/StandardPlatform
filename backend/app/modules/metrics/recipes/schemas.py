@@ -428,6 +428,7 @@ class GroupsOut(AnalysisHeader):
     flagged: int
     rows: list[GroupRowOut]
     other_groups: int
+    """계산에는 넣었으나 싣지 않은 집단 수 — 다른 것은 모두 싣는다."""
 
 
 # --- ④ 순차 검정 ---------------------------------------------------------------------

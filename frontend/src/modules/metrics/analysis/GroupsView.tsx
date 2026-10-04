@@ -38,6 +38,9 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table'
+
+/** 그림에 싣는 줄 — 집단이 수백이면 점이 겹쳐 못 읽는다(표에는 모두). */
+const PLOT_ROWS = 40
 import { useResource } from '@/shared/hooks/useResource'
 
 const AUTO = '__auto__'
@@ -63,6 +66,7 @@ export function GroupsView({ metric, read, initial = {} }: AnalysisViewProps) {
     [metric.slug, key],
   )
   const data = result.data
+  const plotted = data ? data.rows.slice(0, PLOT_ROWS) : []
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-end gap-3">
@@ -128,33 +132,33 @@ export function GroupsView({ metric, read, initial = {} }: AnalysisViewProps) {
               : '집단 사이 차이가 우연의 흔들림 안입니다.'}{' '}
             {data.flagged > 0 && `전체와 다른 집단 ${data.flagged}개.`}
           </p>
-          {data.rows.length > 0 && (
+          {plotted.length > 0 && (
             <LazyPlot
-              height={Math.max(220, 28 * data.rows.length)}
-              title="줄인 비율과 95% 구간 — 점선이 전체"
+              height={Math.max(220, 28 * plotted.length)}
+              title={`줄인 비율과 95% 구간 — 점선이 전체${data.rows.length > PLOT_ROWS ? ` · 위 ${PLOT_ROWS}개` : ''}`}
               data={[
                 {
                   type: 'scatter',
                   mode: 'markers',
                   name: '줄인 비율',
-                  x: data.rows.map((one) => one.shrunk),
-                  y: data.rows.map((one) => one.label),
+                  x: plotted.map((one) => one.shrunk),
+                  y: plotted.map((one) => one.label),
                   error_x: {
                     type: 'data',
                     symmetric: false,
-                    array: data.rows.map((one) =>
+                    array: plotted.map((one) =>
                       one.shrunk_high !== null && one.shrunk !== null
                         ? one.shrunk_high - one.shrunk
                         : 0,
                     ),
-                    arrayminus: data.rows.map((one) =>
+                    arrayminus: plotted.map((one) =>
                       one.shrunk_low !== null && one.shrunk !== null
                         ? one.shrunk - one.shrunk_low
                         : 0,
                     ),
                   },
                   marker: {
-                    color: data.rows.map((one) =>
+                    color: plotted.map((one) =>
                       one.flag === 'high' ? '#dc2626' : one.flag === 'low' ? '#059669' : '#2563eb',
                     ),
                   },
@@ -163,8 +167,8 @@ export function GroupsView({ metric, read, initial = {} }: AnalysisViewProps) {
                   type: 'scatter',
                   mode: 'markers',
                   name: '그대로 비율',
-                  x: data.rows.map((one) => one.rate),
-                  y: data.rows.map((one) => one.label),
+                  x: plotted.map((one) => one.rate),
+                  y: plotted.map((one) => one.label),
                   marker: { symbol: 'x', color: '#9ca3af' },
                 },
               ]}

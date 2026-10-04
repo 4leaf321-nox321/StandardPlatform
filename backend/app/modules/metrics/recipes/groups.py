@@ -6,6 +6,10 @@
 n_g 를 더한다 — 관리도와 같은 줄이다(기간 축, 또는 코호트마다 출고 K 기간 안). 전체 비율
 r̄ = Σc / Σn.
 
+부분군을 줄로 펴서 읽지 않고 **DB 안에서 짝지어 값마다 더한다**(`series.totals`) — 기본 모델 ·
+SKU 처럼 집단이 수천이면 부분군 셀이 읽기 상한을 넘는다. 그래서 모든 집단이 계산에 들고, 기록이
+하나도 없는 집단도 대수가 있으면 0 건으로 든다(가장 좋은 집단이다).
+
 ## 다른가 — 이질성과 집단마다의 검정
 
 - 이질성: 포아송 χ² = Σ (c_g - n_g r̄)² / (n_g r̄), 자유도 G - 1 — 「집단 사이에 우연보다 큰
@@ -47,7 +51,7 @@ from app.modules.metrics.recipes.schemas import GroupRowOut, GroupsOut
 NAME = "groups"
 LABEL = "집단 비교"
 METHOD = "포아송 이질성 χ² · 조건부 이항 정확 검정 · BH · 감마-포아송 경험적 베이즈(적률) v1"
-MAX_GROUPS = 500
+MAX_ROWS = 200
 COMPACT_ROWS = 15
 Q_LIMIT = 0.05
 
@@ -172,10 +176,8 @@ def run(
         raise common.refuse(
             35, f"d.{dim} 로 거른 기준으로는 견줄 수 없습니다 — 거르기를 뺍니다."
         )
-    found = series.read(
-        db, user, metric, built, ask, axis=axis, window=window, split=dim, limit=MAX_GROUPS
-    )
-    if found.den is None:
+    found = series.totals(db, user, metric, built, ask, axis=axis, window=window, split=dim)
+    if found is None:
         raise common.refuse(
             36,
             "분모가 이 축과 짝이 아니어서 집단마다의 대수가 없습니다 — 분모가 코호트와 짝이면 "
@@ -184,26 +186,29 @@ def run(
     caveats = common.Caveats()
     series.caveats(found, caveats)
     per = found.per
-    totals: list[tuple[series.Series, float, float]] = []
-    for line in found.series:
-        closed = [one for one in line.subgroups if one.closed and one.exposure > 0]
-        count = float(sum(one.count for one in closed))
-        exposure = float(sum(one.exposure for one in closed))
-        if exposure > 0:
-            totals.append((line, count, exposure))
-    compared = compare([one[1] for one in totals], [one[2] for one in totals])
+    totals = [one for one in found.groups if one.exposure > 0]
+    compared = compare([one.count for one in totals], [one.exposure for one in totals])
+    labels = query.labels_for(
+        db,
+        built,
+        [dim],
+        [
+            query.Cell({dim: one.key}, None, None, None, one.count, 0, None, None, None)
+            for one in totals
+        ],
+    )
     rows: list[GroupRowOut] = []
     if compared is not None:
-        for (line, count, exposure), one in zip(totals, compared.rows, strict=True):
+        for total, one in zip(totals, compared.rows, strict=True):
             flag: Literal["high", "low"] | None = None
             if one.q_value < Q_LIMIT:
                 flag = "high" if one.rate > compared.pooled else "low"
             rows.append(
                 GroupRowOut(
-                    key=line.key,
-                    label=line.label,
-                    count=int(count),
-                    exposure=exposure,
+                    key=total.key,
+                    label=query.label_of(labels, dim, total.key),
+                    count=total.count,
+                    exposure=total.exposure,
                     rate=one.rate * per,
                     shrunk=one.shrunk * per,
                     shrunk_low=one.low * per if one.low is not None else None,
@@ -213,14 +218,7 @@ def run(
                     p_value=one.p_value,
                     q_value=one.q_value,
                     flag=flag,
-                    drill=query.drill(
-                        built,
-                        query.Cell(
-                            {dim: line.key}, None, None, None, int(count), 0, None, None, None
-                        ),
-                        by=(),
-                        ask=ask,
-                    ),
+                    drill=series.group_drill(found, built, total.key, total.count),
                 )
             )
         rows.sort(key=lambda row: (-(row.shrunk or 0.0), row.label))
@@ -254,13 +252,20 @@ def run(
         "있습니다.",
         level="info",
     )
+    # 싣는 줄 — 다른 것은 모두, 나머지는 줄인 비율 높은 순. 계산에는 모든 집단이 들었다.
+    room = COMPACT_ROWS if compact else MAX_ROWS
     shown = rows
-    if compact and len(rows) > COMPACT_ROWS:
+    if len(rows) > room:
         flagged_rows = [row for row in rows if row.flag]
-        rest = [row for row in rows if not row.flag][
-            : max(0, COMPACT_ROWS - len(flagged_rows))
-        ]
+        rest = [row for row in rows if not row.flag][: max(0, room - len(flagged_rows))]
         shown = sorted(flagged_rows + rest, key=lambda row: (-(row.shrunk or 0.0), row.label))
+        caveats.add(
+            "rows_shown",
+            f"집단 {len(rows)}개 중 {len(shown)}개만 싣습니다(다른 것은 모두, 나머지는 줄인 "
+            "비율 높은 순) — 계산(이질성 · BH · 줄이기)에는 모두 넣었습니다.",
+            level="info",
+            count=len(rows) - len(shown),
+        )
     head = common.header(
         db,
         user,
@@ -295,5 +300,5 @@ def run(
         else None,
         flagged=sum(1 for row in rows if row.flag),
         rows=shown,
-        other_groups=found.other_groups,
+        other_groups=len(rows) - len(shown),
     )

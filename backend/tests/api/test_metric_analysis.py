@@ -15,6 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from app.modules.metrics.recipes import groups as groups_recipe
 from tests.api.conftest import Signed
 from tests.api.test_metrics import _define, _listed, _two, _world
 from tests.api.test_ontology import _make_object
@@ -1116,21 +1117,34 @@ def test_순차_검정을_증상마다_훑으면_나빠진_증상과_새로_생�
 
 
 def test_집단_비교는_뜨거운_집단을_잡고_작은_집단의_우연을_줄인다(
-    client: TestClient, admin: Signed
+    client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """기본 모델 넷 · 1 년 — B1 · B2 는 달마다 2만 대에 100건, B3 은 200건(두 배). B4 는 한 달
-    150 대에 3 건뿐 — 그대로면 2%(전체의 세 배)라 가장 나빠 보인다."""
+    """기본 모델 다섯 · 1 년 — B1 · B2 는 달마다 2만 대에 100건, B3 은 200건(두 배). B4 는 한
+    달 150 대에 3 건뿐 — 그대로면 2%(전체의 세 배)라 가장 나빠 보인다. B5 는 달마다 2천 대에
+    기록이 하나도 없다(가장 좋은 집단 — 기록이 없어도 대수가 있으면 든다)."""
     w = _world(client, admin)
     sales, monthly = _monthly(client, admin, w)
     first, watermark = date(2026, 1, 1), datetime(2027, 3, 15, tzinfo=UTC)
-    plan = {"B1": (100, 20000.0), "B2": (100, 20000.0), "B3": (200, 20000.0), "B4": (3, 150.0)}
-    months = {"B1": 12, "B2": 12, "B3": 12, "B4": 1}
+    plan = {
+        "B1": (100, 20000.0),
+        "B2": (100, 20000.0),
+        "B3": (200, 20000.0),
+        "B4": (3, 150.0),
+        "B5": (0, 2000.0),
+    }
+    months = {"B1": 12, "B2": 12, "B3": 12, "B4": 1, "B5": 12}
     _plant(
         monthly["slug"],
         [
             {"period": _month(first, i), "dims": {"base_model": key}, "count": count}
             for key, (count, _) in plan.items()
             for i in range(months[key])
+            if count
+        ]
+        # B4 의 판매가 없는 달의 기록(대수 없음 — 뺀다), B1 의 아직 열린 달(뺀다).
+        + [
+            {"period": _month(first, 5), "dims": {"base_model": "B4"}, "count": 7},
+            {"period": date(2027, 3, 1), "dims": {"base_model": "B1"}, "count": 11},
         ],
         watermark,
     )
@@ -1146,11 +1160,22 @@ def test_집단_비교는_뜨거운_집단을_잡고_작은_집단의_우연을_
             }
             for key, (_, units) in plan.items()
             for i in range(months[key])
+        ]
+        + [
+            {
+                "period": date(2027, 3, 1),
+                "dims": {"base_model": "B1"},
+                "count": 1,
+                "value_count": 1,
+                "sum": 20000.0,
+            }
         ],
         watermark,
     )
     found = _analysis(client, admin, monthly["slug"], "groups", dim="base_model")
-    assert found["recipe"] == "groups" and found["groups"] == 4 and found["per"] == 1000
+    assert found["recipe"] == "groups" and found["groups"] == 5 and found["per"] == 1000
+    assert found["excluded"] == {"missing_denominator": 7, "open": 11}
+    assert found["other_groups"] == 0
     assert found["heterogeneity_p"] < 1e-6 and found["spread"] > 0
     rows = {one["key"]: one for one in found["rows"]}
     assert found["rows"][0]["key"] == "B3" and rows["B3"]["flag"] == "high"
@@ -1161,9 +1186,23 @@ def test_집단_비교는_뜨거운_집단을_잡고_작은_집단의_우연을_
     assert (
         small["flag"] is None and small["shrinkage"] > 0.5 and small["shrunk"] < small["rate"]
     )
-    assert found["flagged"] >= 1 and rows["B3"]["drill"]["params"]
+    assert rows["B1"]["count"] == 1200 and rows["B1"]["exposure"] == 240000
+    none = rows["B5"]
+    assert none["count"] == 0 and none["exposure"] == 24000 and none["flag"] == "low"
+    assert found["rows"][-1]["key"] == "B5"
+    assert found["flagged"] >= 2 and rows["B3"]["drill"]["params"]
+    # 건 보기는 닫힌 범위로 좁힌다 — 열린 달의 기록은 근거에 없다.
+    assert rows["B1"]["drill"]["params"]["f.received.lt"] == "2027-02-01"
     codes = {one["code"] for one in found["caveats"]}
-    assert {"multiple_testing", "small_groups", "association"} <= codes
+    assert {"multiple_testing", "small_groups", "association", "open_excluded"} <= codes
+    assert "missing_denominator" in codes
+    # 싣는 줄이 모자라면 다른 것은 모두, 나머지는 줄인 비율 높은 순 — 계산에는 모두 든다.
+    monkeypatch.setattr(groups_recipe, "MAX_ROWS", 2)
+    cut = _analysis(client, admin, monthly["slug"], "groups", dim="base_model")
+    assert cut["groups"] == 5 and cut["other_groups"] == 1
+    assert [one["key"] for one in cut["rows"]] == ["B3", "B1", "B2", "B5"]
+    assert cut["heterogeneity_p"] == found["heterogeneity_p"]
+    assert "rows_shown" in {one["code"] for one in cut["caveats"]}
     # 집단마다 대수를 모르는 기준으로는 견주지 않는다.
     _, symptom_months = _symptom_months(client, admin, w)
     refused = _refused(client, admin, symptom_months["slug"], "groups", dim="symptom")

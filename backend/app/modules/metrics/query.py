@@ -24,11 +24,11 @@
 from __future__ import annotations
 
 import calendar
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select, text
+from sqlalchemy import Select, and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -150,9 +150,10 @@ def _iso(when: date | None) -> str | None:
 # --- 셀 읽기 ---------------------------------------------------------------------
 
 
-def read(db: Session, user: User, metric: MetricDef, ask: Ask) -> tuple[list[Cell], bool]:
-    """보이는 셀을 요청한 축으로 묶어 — (셀들, 잘렸나)."""
-    limit = get_settings().metrics_max_read_cells
+def _statement(user: User, metric: MetricDef, ask: Ask) -> Select[Any]:
+    """보이는 셀을 요청한 축으로 묶는 문장 — `read` 가 받고, `paired_totals` 는 짝지어 더한다.
+    칸 이름: 기준 `d_<이름>`, 축 `period` · `cohort` · `age`, 집계 `n` · `vn` · `vs` · `vmin` ·
+    `vmax`."""
     current = (
         select(MetricDef.current_run_id).where(MetricDef.id == metric.id).scalar_subquery()
     )
@@ -197,7 +198,13 @@ def read(db: Session, user: User, metric: MetricDef, ask: Ask) -> tuple[list[Cel
         stmt = stmt.where(MetricValue.age < ask.age_to)
     if group:
         stmt = stmt.group_by(*group)
-    rows = db.execute(stmt.limit(limit + 1)).all()
+    return stmt
+
+
+def read(db: Session, user: User, metric: MetricDef, ask: Ask) -> tuple[list[Cell], bool]:
+    """보이는 셀을 요청한 축으로 묶어 — (셀들, 잘렸나)."""
+    limit = get_settings().metrics_max_read_cells
+    rows = db.execute(_statement(user, metric, ask).limit(limit + 1)).all()
     truncated = len(rows) > limit
     cells: list[Cell] = []
     for row in rows[:limit]:
@@ -337,6 +344,109 @@ def read_denominator(
         run=den_run,
         before=closed_before(den_run, den_spec.settle_days),
     )
+
+
+@dataclass
+class Paired:
+    """기준 값 하나의 합 — 대수가 있는 부분군만 비율에 든다."""
+
+    key: str | None
+    count: int
+    """닫히고 대수가 있는 부분군의 건수."""
+    exposure: float
+    missing: int
+    """대수가 없는 부분군의 건수 — 비율에서 뺀다."""
+    open: int
+    """대수는 있으나 아직 닫히지 않은 부분군의 건수."""
+
+
+def _units(rows: Any, measure: str) -> Any:
+    """분모 셀의 값 — `Cell.measure` 의 SQL 짝."""
+    if measure == "count":
+        return rows.c.n
+    if measure == "sum":
+        return rows.c.vs
+    if measure == "avg":
+        return rows.c.vs / func.nullif(rows.c.vn, 0)
+    return rows.c.vmin if measure == "min" else rows.c.vmax
+
+
+def paired_totals(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    built: spec_module.Built,
+    ask: Ask,
+    *,
+    dim: str,
+    when: str,
+    closed_to: date,
+) -> tuple[list[Paired], bool]:
+    """기준 값마다 부분군(값 x `when`)의 건수 · 대수를 **DB 안에서 짝지어** 더한다 — 집단이
+    수천이면 부분군 셀이 읽기 상한을 넘는데, 집단 비교에는 값마다의 합만 있으면 된다(돌아오는
+    줄 = 값의 수). 짝의 규칙은 셀을 받아 짝짓는 길(`read_denominator` · `Denominator.lookup`)과
+    같다: 분모의 `period` 를 분자의 `when`(`period` · `cohort`)과 맞추고, 거르기는 분모 짝에
+    있는 기준만, 범위는 `when` 의 범위를 그대로.
+
+    `closed_to` 앞의 부분군만 닫혔다. 분자에 없는 부분군(그 기간에 기록이 없음)도 대수가 있으면
+    0 건의 관측이다 — 기록이 하나도 없는 값도 한 줄로 온다."""
+    den = built.denominator
+    den_in = built.spec.denominator
+    assert den is not None and den_in is not None
+    den_spec = spec_module.MetricSpec.model_validate(den.spec)
+    start, stop = (
+        (ask.period_from, ask.period_to)
+        if when == "period"
+        else (ask.cohort_from, ask.cohort_to)
+    )
+    num = _statement(user, metric, replace(ask, dims=[dim], by=(when,))).subquery("num")
+    paired = _statement(
+        user,
+        den,
+        Ask(
+            dims=[dim],
+            by=("period",),
+            filters={name: value for name, value in ask.filters.items() if name in den_in.on},
+            period_from=start,
+            period_to=stop,
+        ),
+    ).subquery("den")
+    num_key, den_key = num.c[f"d_{dim}"], paired.c[f"d_{dim}"]
+    units = _units(paired, den_spec.measure)
+    has = units > 0
+    lacks = or_(units.is_(None), units <= 0)
+    closed = func.coalesce(num.c[when], paired.c.period) < closed_to
+    key = func.coalesce(num_key, den_key)
+    stmt = (
+        select(
+            key.label("k"),
+            func.sum(num.c.n).filter(and_(closed, has)).label("n"),
+            func.sum(units).filter(and_(closed, has)).label("u"),
+            func.sum(num.c.n).filter(lacks).label("miss"),
+            func.sum(num.c.n).filter(and_(has, ~closed)).label("open"),
+        )
+        .select_from(
+            num.join(
+                paired,
+                and_(num_key.is_not_distinct_from(den_key), num.c[when] == paired.c.period),
+                full=True,
+            )
+        )
+        .group_by(key)
+    )
+    limit = get_settings().metrics_max_read_cells
+    rows = db.execute(stmt.limit(limit + 1)).all()
+    out = [
+        Paired(
+            key=row.k,
+            count=int(row.n or 0),
+            exposure=float(row.u or 0),
+            missing=int(row.miss or 0),
+            open=int(row.open or 0),
+        )
+        for row in rows[:limit]
+    ]
+    return out, len(rows) > limit
 
 
 # --- 분석이 쓰는 묶음 읽기 ---------------------------------------------------------------

@@ -45,7 +45,7 @@ export function ChangesView({ metric, read, initial = {} }: AnalysisViewProps) {
   const scanning = Boolean(by) && !focus
   const asked = { axis: axis === AUTO ? undefined : axis, window: span }
   const single = focus
-    ? { ...read, filters: { ...(read.filters ?? {}), [focus.name]: focus.value } }
+    ? { ...read, filters: { ...read.filters, [focus.name]: focus.value } }
     : read
   const key = JSON.stringify([axis, span, single, scanning])
   const result = useResource<ChangesResult | null>(

@@ -79,6 +79,21 @@ def default_axis(built: spec_module.Built) -> Axis:
     return "period" if built.time is not None else "cohort"
 
 
+def _axis(built: spec_module.Built, axis: Axis | None) -> tuple[Axis, str]:
+    axis = axis or default_axis(built)
+    if axis == "cohort" and (built.cohort is None or built.time is None):
+        raise common.refuse(
+            26,
+            "코호트 축은 코호트 칸(생산 · 판매일)과 시간 칸(접수일)이 함께 있어야 「출고 K "
+            "기간 안」 을 셉니다 — axis=period 로 봅니다.",
+        )
+    if axis == "period" and built.time is None:
+        raise common.refuse(26, "시간 칸이 없는 지표입니다 — axis=cohort 로 봅니다.")
+    axis_spec = built.cohort if axis == "cohort" else built.time
+    assert axis_spec is not None
+    return axis, axis_spec.grain
+
+
 def read(
     db: Session,
     user: User,
@@ -94,18 +109,7 @@ def read(
 ) -> SeriesSet:
     """셀을 읽어 기준 값마다(나누지 않으면 하나) 부분군의 줄을 만든다 — 건수 많은 순 `limit`
     개. 빈 기간은 0 건이다(대수가 있으면 진짜 관측이다)."""
-    axis = axis or default_axis(built)
-    if axis == "cohort" and (built.cohort is None or built.time is None):
-        raise common.refuse(
-            26,
-            "코호트 축은 코호트 칸(생산 · 판매일)과 시간 칸(접수일)이 함께 있어야 「출고 K "
-            "기간 안」 을 셉니다 — axis=period 로 봅니다.",
-        )
-    if axis == "period" and built.time is None:
-        raise common.refuse(26, "시간 칸이 없는 지표입니다 — axis=cohort 로 봅니다.")
-    axis_spec = built.cohort if axis == "cohort" else built.time
-    assert axis_spec is not None
-    grain = axis_spec.grain
+    axis, grain = _axis(built, axis)
     den_in = built.spec.denominator
     uses_den = den_in is not None and den_in.time == axis
     target = common.dim_of(built, split) if split is not None else None
@@ -215,6 +219,131 @@ def _cell(found: SeriesSet, key: str | None, when: date, count: int) -> query.Ce
     )
 
 
+@dataclass
+class Totals:
+    """값마다 닫힌 부분군의 합 — 집단 비교. `read` 와 같은 줄(첫 기록부터 마지막 기록까지의
+    부분군 · 닫힘 · 대수 없는 부분군 빼기)을 펴지 않고 DB 에서 더한다: 집단이 수천이어도 읽기
+    한 번에 집단 수만큼의 줄이다. 기록이 하나도 없는 값도 대수가 있으면 0 건으로 든다."""
+
+    axis: Axis
+    grain: str
+    window: int
+    den: query.Denominator
+    frame: query.Frame
+    ask: query.Ask
+    """닫힌 부분군의 범위로 좁힌 읽기 — 건 보기가 쓴다."""
+    groups: list[query.Paired]
+    excluded: dict[str, int]
+    other_groups: int = 0
+
+    @property
+    def per(self) -> float:
+        return self.den.per
+
+
+def totals(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    built: spec_module.Built,
+    ask: query.Ask,
+    *,
+    axis: Axis | None,
+    window: int,
+    split: str,
+) -> Totals | None:
+    """기준 값마다 닫힌 부분군의 건수 · 대수 합. 분모가 이 축과 짝이 아니면 None — 대수 없는
+    합은 견줄 수 없다."""
+    axis, grain = _axis(built, axis)
+    den_in = built.spec.denominator
+    den_metric = built.denominator
+    if den_in is None or den_metric is None or den_in.time != axis:
+        return None
+    if axis == "cohort":
+        ask = replace(ask, dims=[], by=("cohort",), age_from=0, age_to=window)
+    else:
+        ask = replace(ask, dims=[], by=("period",))
+    common.require_exact_counts(built, replace(ask, dims=[split]))
+    # 부분군의 줄은 값을 가리지 않은 첫 기록부터 마지막 기록까지 — 기간 수만큼의 셀이다.
+    frame = query.frame(db, user, metric, built, ask, with_denominator=False)
+    common.require_whole(frame)
+    whens: set[date] = set()
+    for cell in frame.cells:
+        when = cell.cohort if axis == "cohort" else cell.period
+        if when is not None:
+            whens.add(when)
+    den_spec = spec_module.MetricSpec.model_validate(den_metric.spec)
+    den_run = query.current_run(db, den_metric)
+    den = query.Denominator(
+        den_metric,
+        den_spec,
+        [split],
+        axis,
+        den_in.per,
+        {},
+        False,
+        run=den_run,
+        before=query.closed_before(den_run, den_spec.settle_days),
+    )
+    found = Totals(
+        axis=axis,
+        grain=grain,
+        window=window,
+        den=den,
+        frame=replace(frame, denominator=den),
+        ask=ask,
+        groups=[],
+        excluded={"missing_denominator": 0, "open": 0},
+    )
+    if not whens:
+        return found
+    first, end = min(whens), axes.next_period(max(whens), grain)
+    # 닫힘은 시간에 따라 한 번만 바뀐다(앞은 닫히고 뒤는 열린다) — 처음 열린 부분군에서 끊는다.
+    cut = first
+    while cut < end and _whole(found, cut):
+        cut = axes.next_period(cut, grain)
+    if axis == "cohort":
+        stop = min(end, ask.cohort_to) if ask.cohort_to is not None else end
+        found.ask = replace(ask, cohort_from=first, cohort_to=stop)
+    else:
+        stop = min(end, ask.period_to) if ask.period_to is not None else end
+        found.ask = replace(ask, period_from=first, period_to=stop)
+    found.groups, den.truncated = query.paired_totals(
+        db, user, metric, built, found.ask, dim=split, when=axis, closed_to=cut
+    )
+    common.require_whole(found.frame)
+    found.excluded["missing_denominator"] = sum(one.missing for one in found.groups)
+    found.excluded["open"] = sum(one.open for one in found.groups)
+    # 건 보기는 닫힌 부분군만 — 열린 부분군의 기록은 수에 안 들었다.
+    if axis == "cohort":
+        found.ask = replace(found.ask, cohort_to=min(cut, stop))
+    else:
+        found.ask = replace(found.ask, period_to=min(cut, stop))
+    return found
+
+
+def group_drill(
+    found: Totals, built: spec_module.Built, key: str | None, count: int
+) -> DrillOut:
+    """값 하나의 근거 — 닫힌 부분군의 범위. 코호트 축의 「출고 K 기간 안」 은 코호트마다 접수
+    범위가 달라 목록 조건 하나로 못 적는다(`age` — 목록이 더 많을 수 있다)."""
+    cell = query.Cell({found.den.on[0]: key}, None, None, None, count, 0, None, None, None)
+    out = query.drill(built, cell, by=(), ask=found.ask)
+    if found.axis == "cohort":
+        out.partial.append("age")
+    return out
+
+
+def _whole(found: Totals, when: date) -> bool:
+    """부분군이 닫혔나 — 분자(코호트 축이면 창의 마지막 경과까지)와 분모가 함께."""
+    last = (
+        query.advance(when, found.window - 1, found.grain) if found.axis == "cohort" else when
+    )
+    return query.is_closed(last, found.grain, found.frame.before) and query.is_closed(
+        when, found.grain, found.den.before
+    )
+
+
 def drill(
     found: SeriesSet, built: spec_module.Built, key: str | None, subgroup: Subgroup
 ) -> DrillOut:
@@ -233,7 +362,7 @@ def drill(
     return query.drill(built, cell, by=("cohort",), ask=ranged)
 
 
-def caveats(found: SeriesSet, caveats_: common.Caveats) -> None:
+def caveats(found: SeriesSet | Totals, caveats_: common.Caveats) -> None:
     """줄을 읽으며 생긴 주의 — 건수로 봄 · 분모 없음 · 열림 · 창."""
     if found.den is None:
         caveats_.add(
