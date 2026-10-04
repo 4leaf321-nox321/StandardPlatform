@@ -1,4 +1,4 @@
-"""이어진 것 너머의 칸 — **고르개는 한 걸음, 주소는 셋까지.**
+"""이어진 것 너머의 칸 — **고르개는 두 걸음, 주소는 셋까지.**
 
 「미국 기업이 만든 툴만」 「개발사 국가별 툴 수」 는 목록에서 바로 나와야 하는 물음이다. 칸이
 그 타입 자신의 것뿐이면, 사람은 기업 목록에서 미국 기업을 찾아 적어 두고 툴 목록으로
@@ -14,12 +14,17 @@
 조건(`f.<주소>.<연산>=값`)과 통계 기준(`group_by=<주소>`)이 **같은 주소**를 쓴다 — 막대를
 누르면 그 주소 그대로 조건이 된다. 속성 키에는 점이 없으므로 이 주소와 겹치지 않는다.
 
-## 고르개는 한 걸음, 주소는 셋까지
+## 고르개는 두 걸음, 주소는 셋까지
 
-화면의 고르개는 한 걸음까지만 보인다 — 두 걸음(「개발사의 모회사의 국가」)부터는 목록이
-길어지고, 그런 물음이 자주 나오면 그것은 대개 **칸이 하나 빠진** 것이다. 다만 주소로 적으면
-걸음을 이어 받는다(`parse_chain`, ADR 0013): 지표가 「SKU → 기본 모델」 로 접고, 그 칸의 막대가
-조건으로 돌아올 때 같은 주소가 필요하다. 걸음의 상대가 하나로 정해져 있어야 다음 걸음을 간다.
+화면의 고르개는 두 걸음까지 늘어놓는다 — 「서비스 기록 → 개발모델 → 과제 › 프로젝트」, 「→ 기본
+모델 › 이름」. 한 걸음만 보이던 때는 기록에서 축의 축으로 가는 물음이 대부분 막혔고, 그때마다
+칸을 복사해 두라고 하면 복사한 칸이 원본과 갈린다. 두 걸음이면 고르개가 수백 줄이 되므로 화면은
+치거나 훑는 고르개(제목 아래로 모은)에 싣는다. **같은 관계를 되짚는 걸음은 늘어놓지 않는다** —
+끝이 출발한 쪽이다. 주소로 적으면 셋까지 받는다(`parse_chain`, ADR 0013 — 지표의 기준). 걸음의
+상대가 하나로 정해져 있어야 다음 걸음을 간다.
+
+규모(기록 200만, 2026-10-04): 두 걸음 조건 0.04~0.46초, 두 걸음 통계 2.2초(과제 › 프로젝트)
+· 4.1초(기본 모델 이름 2,001가지).
 
 ## 뜻 — 「이어진 것 중 하나라도」
 
@@ -48,6 +53,9 @@ HOP_KINDS = ("ref", "out", "in")
 
 #: 걸음을 몇 번까지 잇나. 넷부터는 조건을 화면에서 읽을 수 없고 질의 비용을 짐작할 수 없다.
 MAX_HOPS = 3
+
+#: 고르개가 몇 걸음까지 늘어놓나. 주소로는 `MAX_HOPS` 까지 받는다.
+PICKER_HOPS = 2
 
 #: 이어진 것의 고정 칸.
 TARGET_FIXED = {"label": "이름", "key": "식별자", "status": "상태"}
@@ -457,53 +465,105 @@ class Resolver:
                 )
         return out
 
-    def options(self, *, for_group: bool) -> list[FieldOption]:
-        """고르개에 붙일 줄들 — 걸음마다 제목 아래로."""
+    def options(self, *, for_group: bool, depth: int = PICKER_HOPS) -> list[FieldOption]:
+        """고르개에 붙일 줄들 — 걸음마다 제목 아래로. 한 걸음 것을 모두 낸 뒤 두 걸음 것.
+
+        둘째 걸음은 첫 걸음의 상대가 하나로 정해졌을 때만 간다(`parse_chain` 과 같은 규칙).
+        **같은 관계를 되짚는 걸음은 뺀다** — 「부품 → 공급사 → (공급) → 부품」 의 끝은 출발한
+        쪽이라, 칸 목록만 두 배로 길게 하고 물음은 거의 없다."""
         out: list[FieldOption] = []
         for hop in self.hops():
-            prefix = f"{hop.kind}.{hop.name}"
-            if hop.relation is not None:
-                single = hop.target_slugs[0] if len(hop.target_slugs) == 1 else None
-                out.append(
-                    FieldOption(
-                        prefix,
-                        hop.label,
-                        hop.heading,
-                        "object_ref" if single else "relation",
-                        hop.many,
-                        None,
-                        single,
-                    )
-                )
-            if hop.target is None:
+            out.extend(_hop_options(hop, for_group, hop.heading))
+        if depth < 2:
+            return out
+        for first in self.hops():
+            if first.target is None:
                 continue
-            for key, label in TARGET_FIXED.items():
-                # 조건의 고정 칸은 목록과 같게 이름·식별자뿐이다(상태는 따로 거른다).
-                if key == "status" and not for_group:
+            for second in self.child(first).hops():
+                if _reverses(first, second):
                     continue
-                if key == "key" and hop.target.key_policy == "none":
-                    continue
-                out.append(
-                    FieldOption(
-                        f"{prefix}.{key}",
-                        f"{hop.label}{SEP}{label}",
-                        hop.heading,
-                        "enum" if key == "status" else "text",
-                        hop.many,
-                    )
-                )
-            for one in hop.target_defs:
-                if one.data_type == "file":
-                    continue
-                out.append(
-                    FieldOption(
-                        f"{prefix}.{one.key}",
-                        f"{hop.label}{SEP}{one.label}",
-                        hop.heading,
-                        one.data_type,
-                        hop.many or one.multi,
-                        list(one.enum_options) if one.enum_options else None,
-                        one.ref_type_slug,
+                out.extend(
+                    _hop_options(
+                        second,
+                        for_group,
+                        f"{first.label}{SEP}{second.heading}",
+                        path=f"{first.kind}.{first.name}.",
+                        label=f"{first.label}{SEP}",
+                        many=first.many,
                     )
                 )
         return out
+
+
+def _reverses(first: Hop, second: Hop) -> bool:
+    """둘째 걸음이 첫 걸음을 되짚나 — 같은 관계를 반대 방향으로(방향 없는 관계면 같은
+    쪽으로)."""
+    if first.relation is None or second.relation is None or first.name != second.name:
+        return False
+    return first.kind != second.kind or not first.relation.directed
+
+
+def _hop_options(
+    hop: Hop,
+    for_group: bool,
+    heading: str,
+    *,
+    path: str = "",
+    label: str = "",
+    many: bool = False,
+) -> list[FieldOption]:
+    """걸음 하나의 줄들 — 관계로 이어진 것 자체와 상대의 칸. `path` · `label` 은 앞 걸음."""
+    out: list[FieldOption] = []
+    prefix = f"{path}{hop.kind}.{hop.name}"
+    many = many or hop.many
+    if hop.relation is not None:
+        single = hop.target_slugs[0] if len(hop.target_slugs) == 1 else None
+        out.append(
+            FieldOption(
+                prefix,
+                f"{label}{hop.label}",
+                heading,
+                "object_ref" if single else "relation",
+                many,
+                None,
+                single,
+            )
+        )
+    if hop.target is None:
+        return out
+    for key, fixed in TARGET_FIXED.items():
+        # 조건의 고정 칸은 목록과 같게 이름·식별자뿐이다(상태는 따로 거른다).
+        if key == "status" and not for_group:
+            continue
+        if key == "key" and hop.target.key_policy == "none":
+            continue
+        out.append(
+            FieldOption(
+                f"{prefix}.{key}",
+                f"{label}{hop.label}{SEP}{fixed}",
+                heading,
+                "enum" if key == "status" else "text",
+                many,
+            )
+        )
+    for one in hop.target_defs:
+        if one.data_type == "file":
+            continue
+        out.append(
+            FieldOption(
+                f"{prefix}.{one.key}",
+                f"{label}{hop.label}{SEP}{one.label}",
+                heading,
+                one.data_type,
+                many or one.multi,
+                list(one.enum_options) if one.enum_options else None,
+                one.ref_type_slug,
+            )
+        )
+    return out
+
+
+def ends_at_hop(path: str) -> bool:
+    """주소가 걸음으로 끝나나(관계로 이어진 것 **자체**) — 칸으로 끝나면 조각 수가 홀수다.
+    `out.used_by` · `ref.model.out.used_by` 는 걸음, `ref.model.series` 는 칸."""
+    return len(path.split(".")) % 2 == 0

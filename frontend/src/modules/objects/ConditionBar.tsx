@@ -22,9 +22,7 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/shared/components/ui/
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select'
@@ -250,17 +248,18 @@ interface ConditionEditorProps {
 
 /** 칸 → 연산 → 값. 연산과 값 입력은 칸의 종류를 따라간다. */
 function ConditionEditor({ fields, onAdd, onNames }: ConditionEditorProps) {
-  // 제목이 같은 칸끼리 — 자기 칸(제목 없음)이 먼저, 이어진 것은 걸음마다.
-  const groups = useMemo(() => {
-    const out: [string, Field[]][] = []
-    for (const one of fields) {
-      const heading = one.heading ?? ''
-      const last = out[out.length - 1]
-      if (last && last[0] === heading) last[1].push(one)
-      else out.push([heading, [one]])
-    }
-    return out
-  }, [fields])
+  // **치거나 훑는다.** 이어진 것을 두 걸음까지 늘어놓으면(「모델 › 과제 › 프로젝트」) 큰 타입은
+  // 칸이 수백이다 — 펼쳐 놓고 눈으로 찾게 하지 않는다. 자기 칸(제목 없음)이 먼저, 이어진 것은
+  // 걸음마다 제목 아래로.
+  const choices = useMemo(
+    () =>
+      fields.map((one) => ({
+        value: one.key,
+        label: one.label,
+        group: one.heading || undefined,
+      })),
+    [fields],
+  )
   const [fieldKey, setFieldKey] = useState(fields[0]?.key ?? '')
   const field = fields.find((one) => one.key === fieldKey) ?? fields[0]
   const kind = FIXED.some((one) => one.key === field?.key) ? 'fixed' : (field?.data_type ?? 'text')
@@ -287,31 +286,14 @@ function ConditionEditor({ fields, onAdd, onNames }: ConditionEditorProps) {
     <div className="space-y-2 text-sm">
       <label className="block space-y-1">
         <span className="text-muted-foreground text-xs">칸</span>
-        <Select value={fieldKey} onValueChange={setFieldKey}>
-          <SelectTrigger size="sm" className="w-full">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {groups.map(([heading, items]) =>
-              heading ? (
-                <SelectGroup key={heading}>
-                  <SelectLabel>{heading}</SelectLabel>
-                  {items.map((one) => (
-                    <SelectItem key={one.key} value={one.key}>
-                      {one.label}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ) : (
-                items.map((one) => (
-                  <SelectItem key={one.key} value={one.key}>
-                    {one.label}
-                  </SelectItem>
-                ))
-              ),
-            )}
-          </SelectContent>
-        </Select>
+        <SearchablePicker
+          options={choices}
+          value={fieldKey}
+          onChange={setFieldKey}
+          ariaLabel="칸"
+          className="h-8"
+          searchPlaceholder="칸 이름으로 찾기 — 「국가」 · 「과제」"
+        />
       </label>
       <label className="block space-y-1">
         <span className="text-muted-foreground text-xs">연산</span>

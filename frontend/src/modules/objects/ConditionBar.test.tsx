@@ -108,10 +108,52 @@ describe('조건 줄', () => {
     )
     expect(screen.getByText('개발사 › 국가 = 미국')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: /조건 추가/ }))
-    // 첫 고르개가 「칸」 이다.
-    await userEvent.click(screen.getAllByRole('combobox')[0])
+    await userEvent.click(screen.getByRole('combobox', { name: '칸' }))
     expect(await screen.findByText('개발사 (기업)')).toBeInTheDocument()
-    expect(screen.getByRole('option', { name: '개발사 › 국가' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '개발사 › 국가' })).toBeInTheDocument()
+  })
+
+  it('두 걸음 너머의 칸도 이름으로 찾아 조건을 건다', async () => {
+    // 「모델의 과제의 프로젝트」 — 한 걸음 고르개로는 안 닿던 물음.
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    const onChange = vi.fn()
+    render(
+      <ConditionBar
+        defs={DEFS}
+        conditions={[]}
+        onChange={onChange}
+        linked={[
+          {
+            field: 'ref.model.series',
+            label: '모델 › 시리즈',
+            heading: '모델 (개발모델)',
+            data_type: 'text',
+            multi: false,
+            enum_options: null,
+            ref_type_slug: null,
+          },
+          {
+            field: 'ref.model.ref.task.label',
+            label: '모델 › 과제 › 이름',
+            heading: '모델 › 과제 (과제)',
+            data_type: 'text',
+            multi: false,
+            enum_options: null,
+            ref_type_slug: null,
+          },
+        ]}
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: /조건 추가/ }))
+    await userEvent.click(screen.getByRole('combobox', { name: '칸' }))
+    await userEvent.type(screen.getByPlaceholderText(/칸 이름으로 찾기/), '과제')
+    await userEvent.click(screen.getByRole('button', { name: '모델 › 과제 › 이름' }))
+    expect(screen.getByRole('combobox', { name: '칸' })).toHaveTextContent('모델 › 과제 › 이름')
+    await userEvent.type(screen.getByRole('textbox'), '엔진')
+    await userEvent.click(screen.getByRole('button', { name: '걸기' }))
+    expect(onChange).toHaveBeenCalledWith([
+      { field: 'ref.model.ref.task.label', op: 'eq', value: '엔진' },
+    ])
   })
 
   it('상대가 정해지지 않은 관계는 있음·없음만 걸 수 있다', async () => {

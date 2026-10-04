@@ -123,4 +123,31 @@ describe('SearchablePicker — 창 안에서', () => {
     expect(onChange).toHaveBeenCalledWith('mat-lab')
     expect(screen.queryByPlaceholderText('이름으로 검색')).not.toBeInTheDocument()
   })
+
+  it('제목이 있으면 그 아래로 모으고, 제목으로도 찾는다', async () => {
+    // 이어진 것 너머의 칸은 걸음마다 제목 아래로 선다 — 「국가」 가 어느 걸음의 것인지.
+    render(
+      <SearchablePicker
+        options={[
+          { value: 'label', label: '이름' },
+          { value: 'ref.vendor.country', label: '개발사 › 국가', group: '개발사 (기업)' },
+          {
+            value: 'ref.model.ref.task.project',
+            label: '모델 › 과제 › 프로젝트',
+            group: '모델 › 과제 (과제)',
+          },
+          { value: 'ref.model.ref.task.label', label: '모델 › 과제 › 이름', group: '모델 › 과제 (과제)' },
+        ]}
+        value="label"
+        onChange={vi.fn()}
+        ariaLabel="칸"
+      />,
+    )
+    await userEvent.click(screen.getByRole('combobox', { name: '칸' }))
+    expect(screen.getAllByText('모델 › 과제 (과제)')).toHaveLength(1)
+    expect(screen.getByText('개발사 (기업)')).toBeInTheDocument()
+    await userEvent.type(screen.getByPlaceholderText('이름으로 검색'), '과제 (과제')
+    expect(screen.getAllByRole('button', { name: /모델 › 과제/ })).toHaveLength(2)
+    expect(screen.queryByText('개발사 (기업)')).not.toBeInTheDocument()
+  })
 })

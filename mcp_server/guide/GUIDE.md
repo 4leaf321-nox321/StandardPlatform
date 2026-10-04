@@ -29,7 +29,7 @@ GUIDE_VERSION: 2026-10-04e
 | **비율 · 추이 · 코호트** — 「판매월별 누적 인입률」 「생산월 x 공장별 건수」 | `metric_list` → `metric_query(slug, shape=)` | **미리 세어 둔 값**이다 — `computed_at` · `stale` · `overlap` 을 함께 말한다. 없으면 `metric_define(apply=false)` 로 제안 |
 | **세어 둔 수에서 추론** — 「B10 수명」 「전작보다 나빠졌나」 「관리도 신호」 「언제 바뀌었나」 「몰려 있나」 | `metric_list` 의 `analyses` → `metric_analyze(slug, recipe, options=)` | **셀을 받아 직접 계산하지 않는다.** `caveats` 를 그대로 전하고, `unreachable` 인 B수명은 값이 없다 — `get_guide(topic="metrics")` 의 「분석」 |
 | **요즘 무엇이 울렸나** — 「내 경보」 「새로 나빠진 모델 있나」 | `metric_alerts(slug=)` | 발생은 「그때 처음 본 결론」 — 지금도 그런지는 `metric_analyze` 로. 만들기는 화면에서 |
-| 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 한 걸음까지. 주소를 추측하지 않는다 |
+| 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」 · 「모델의 과제의 프로젝트별 건수」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 두 걸음까지 준다. 주소를 추측하지 않는다 |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | — |
 | 언제 누가 무엇을 바꿨나 — 이 객체 | `object_history` | 되돌리기는 `object_restore(entry_id)` — **시점은 사람이 정한다** |
 | 어제 무슨 일이 있었나 — 전체 | `audit_recent` | **부서 관리자 이상.** 시간 · 사람으로는 못 거른다 — 최근 것부터 받아 본다 |
@@ -337,7 +337,9 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 
 - `ref.<참조 칸>.<칸>` 참조 칸이 가리키는 것의 칸 · `out.<관계>` 관계로 이어진 것 자체(값은
   상대 id) · `out.<관계>.<칸>` 그것의 칸 · `in.<관계>[.<칸>]` 들어오는 관계.
-- **한 걸음까지다.** 「개발사의 모회사의 국가」 는 없다.
+- **두 걸음까지 준다** — 「개발사의 모회사의 국가」 는 `ref.vendor.ref.parent.country`, 「기록의 모델의
+  과제의 프로젝트」 는 `ref.model.ref.task.project`. 같은 관계를 되짚는 걸음(끝이 출발한 쪽)은 없다.
+  주소로는 셋까지 받지만 `object_fields` 에 없는 주소는 지어내지 않는다.
 - 이어진 것이 여럿이면 **그중 하나라도** 맞으면 걸린다. 이어진 것이 **없는** 객체는 너머의 칸
   조건에 안 걸린다(`ne` 도). 「개발사가 없는 툴」 은 참조 칸 `vendor` 의 `empty` 로 묻는다.
 - 참조 칸과 관계가 같은 이름일 수 있다 — `heading` 으로 가른다.
@@ -351,7 +353,7 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 
 - `group_by`: `status`·`workspace`·`created_year`·`label`·`key`, 속성은 `properties.<키>`, 다른
   타입의 칸은 `object_fields` 의 주소. 쓸 수 있는 전부가 응답의 `group_options`. 걸음은 셋까지
-  이어 적을 수 있다(`ref.model.ref.base.series` — 고르개에는 한 걸음만 보이지만 주소는 받는다).
+  이어 적을 수 있다(`group_options` 에는 두 걸음까지 실린다).
 - `metric` 이 `sum`·`avg`·`min`·`max` 면 `metric_field`(숫자 속성)가 필요하다.
 - `order="asc"` 는 「가장 낮은 것」 을 찾을 때. **「월별 추이」 는 `grain="month", order="key"`** —
   `grain`(`day`·`week`·`month`·`quarter`·`year`)이 날짜 축을 그 단위로 묶고, `order="key"` 가
@@ -778,8 +780,8 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
 
 ### 8. 하지 않는 것
 
-- 두 걸음 연결을 전제로 설계하지 않는다 — 조건 · 통계는 한 걸음까지다. 두 걸음 물음이 자주 나오면
-  칸이 하나 빠진 것이다.
+- 세 걸음 연결을 전제로 설계하지 않는다 — 조건 · 통계의 고르개는 두 걸음까지다. 세 걸음 물음이 자주
+  나오면 칸이 하나 빠진 것이다.
 - 원문 전체 · 첨부 내용을 속성에 넣지 않는다.
 - 개인정보 · 계약 금액 · 고객 기밀은 템플릿 6장(민감한 것)을 먼저 본다.
 - 정의를 지우거나 slug 를 바꾸지 않는다 — 가져오기는 더하고 고치기만 한다.

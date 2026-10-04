@@ -183,7 +183,7 @@ def group_options(
         )
     # **이어진 것 너머** — 「개발사 › 국가」, 「사용 부서」. 자기 칸 뒤에 선다.
     for option in resolver.options(for_group=True) if resolver is not None else []:
-        itself = option.field.count(".") == 1
+        itself = paths.ends_at_hop(option.field)
         if not itself and option.data_type not in GROUPABLE:
             continue
         out.append(

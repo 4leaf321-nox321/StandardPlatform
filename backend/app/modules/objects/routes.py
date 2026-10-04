@@ -600,7 +600,8 @@ def linked_fields(
     """**이어진 것 너머의 칸** — 참조 칸이 가리키는 타입의 칸, 관계로 이어진 것과 그 칸.
 
     조건 고르개가 이 타입 자신의 칸 아래에 제목별로 붙인다. 통계 기준은 `/summary` 의
-    `group_options` 에 같은 주소로 실린다. 한 걸음까지다 — 두 걸음부터는 조건을 읽을 수 없다.
+    `group_options` 에 같은 주소로 실린다. 두 걸음까지 늘어놓는다(「모델 › 과제 › 프로젝트」) —
+    같은 관계를 되짚는 걸음은 뺀다. 주소로는 셋까지 받는다.
     """
     scope = _scope(db, type_slug)
     if _projection(scope) is not None:

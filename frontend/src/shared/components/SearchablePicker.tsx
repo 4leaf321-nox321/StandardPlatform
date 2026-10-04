@@ -40,6 +40,11 @@ export interface PickerOption {
   keywords?: string
   /** 값이 있으면 못 고른다. **그 이유가 배지로 뜬다.** */
   disabledReason?: string
+  /**
+   * 같은 제목끼리 그 제목 아래로 모은다 — 이어진 것 너머의 칸처럼 「개발사 (기업)」 · 「모델 ›
+   * 과제 (과제)」 걸음마다. 제목도 검색에 걸린다. 차례는 호스트가 준 대로다.
+   */
+  group?: string
 }
 
 interface SearchablePickerProps {
@@ -63,6 +68,8 @@ interface SearchablePickerProps {
   loading?: boolean
   /** 골라 둔 값이 후보에 없을 때 대신 보여 줄 것(호스트가 상세에서 읽어 온 이름). */
   pinned?: PickerOption | null
+  /** 단추의 이름(화면 읽기 · 시험) — 옆에 글자 라벨이 없을 때. */
+  ariaLabel?: string
 }
 
 /** 눈에 같아 보이는 값을 같게 본다 — 전각·대소문자·군더더기 공백. */
@@ -83,6 +90,7 @@ export function SearchablePicker({
   total,
   loading = false,
   pinned = null,
+  ariaLabel,
 }: SearchablePickerProps) {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
@@ -100,7 +108,9 @@ export function SearchablePicker({
     const needle = normalize(query)
     if (!needle || onQueryChange) return base
     return base.filter((one) =>
-      normalize(`${one.label} ${one.hint ?? ''} ${one.keywords ?? ''}`).includes(needle),
+      normalize(`${one.label} ${one.hint ?? ''} ${one.keywords ?? ''} ${one.group ?? ''}`).includes(
+        needle,
+      ),
     )
   }, [options, pinned, value, query, onQueryChange])
 
@@ -132,6 +142,7 @@ export function SearchablePicker({
           variant="outline"
           role="combobox"
           aria-expanded={open}
+          aria-label={ariaLabel}
           className={cn('w-full justify-between font-normal', className)}
         >
           <span className={cn('truncate', !selected && 'text-muted-foreground')}>
@@ -174,8 +185,13 @@ export function SearchablePicker({
                 {loading ? '찾는 중…' : emptyText}
               </li>
             )}
-            {shown.map((one) => (
+            {shown.map((one, index) => (
               <li key={one.value}>
+                {one.group && one.group !== shown[index - 1]?.group && (
+                  <p className="text-muted-foreground px-2 pt-2 pb-1 text-xs font-medium">
+                    {one.group}
+                  </p>
+                )}
                 <button
                   type="button"
                   onClick={() => pick(one)}

@@ -54,13 +54,13 @@ import { useAuth } from '@/shared/auth/AuthContext'
 import { isManagerOf } from '@/shared/auth/roles'
 import { Chart, LazyPlot, colorFor } from '@/shared/charts'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
+import { SearchablePicker } from '@/shared/components/SearchablePicker'
+import type { PickerOption } from '@/shared/components/SearchablePicker'
 import { Button } from '@/shared/components/ui/button'
 import {
   Select,
   SelectContent,
-  SelectGroup,
   SelectItem,
-  SelectLabel,
   SelectTrigger,
   SelectValue,
 } from '@/shared/components/ui/select'
@@ -164,20 +164,18 @@ function plotTraces(kind: string, points: Points): Record<string, unknown>[] {
 }
 
 /**
- * 제목이 같은 기준끼리 — 자기 칸(제목 없음)이 먼저, 이어진 것은 걸음마다.
+ * 기준 고르개의 줄 — 자기 칸(제목 없음)이 먼저, 이어진 것은 걸음마다 제목 아래로.
  *
  * 참조 칸 「개발사」 와 관계 「개발사」 가 둘 다 있으면 「개발사 › 국가」 가 두 번 선다. 제목
- * 없이 늘어놓으면 둘 중 무엇을 골랐는지 알 수 없다.
+ * 없이 늘어놓으면 둘 중 무엇을 골랐는지 알 수 없다. **두 걸음까지 늘어놓으면 큰 타입은 기준이
+ * 수백이라** 펼쳐 놓는 고르개가 아니라 치거나 훑는 고르개에 싣는다.
  */
-function byHeading(options: GroupOption[]): [string, GroupOption[]][] {
-  const out: [string, GroupOption[]][] = []
-  for (const one of options) {
-    const heading = one.heading ?? ''
-    const last = out[out.length - 1]
-    if (last && last[0] === heading) last[1].push(one)
-    else out.push([heading, [one]])
-  }
-  return out
+function choicesOf(options: GroupOption[], suffix = ''): PickerOption[] {
+  return options.map((one) => ({
+    value: one.field,
+    label: `${one.label}${suffix}${one.multi ? ' (여러 값)' : ''}`,
+    group: one.heading || undefined,
+  }))
 }
 
 /** 이 축으로 묶은 값을 목록 필터에 그대로 걸 수 있나. */
@@ -387,50 +385,31 @@ export function SummaryPanel({
         <BarChart3 className="text-muted-foreground size-4" />
         <span className="text-sm font-medium">통계</span>
 
-        <Select value={groupBy} onValueChange={(next) => patch({ groupBy: next })}>
-          <SelectTrigger className="w-48" aria-label="기준">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {byHeading(data?.group_options ?? []).map(([heading, items], index) => (
-              <SelectGroup key={`${index}-${heading}`}>
-                {heading && <SelectLabel>{heading}</SelectLabel>}
-                {items.map((one) => (
-                  <SelectItem key={one.field} value={one.field}>
-                    {one.label}
-                    {one.multi && ' (여러 값)'}
-                  </SelectItem>
-                ))}
-              </SelectGroup>
-            ))}
-          </SelectContent>
-        </Select>
+        <SearchablePicker
+          options={choicesOf(data?.group_options ?? [])}
+          value={groupBy}
+          onChange={(next) => patch({ groupBy: next })}
+          ariaLabel="기준"
+          className="w-56"
+          searchPlaceholder="기준 이름으로 찾기 — 「국가」 · 「과제」"
+        />
 
         {/* **세부 기준.** 「부서별 몇 건」 다음 물음은 거의 언제나 「그 안에서 등급은」
             이다. 그때 필터를 바꿔 가며 여섯 번 세게 하면 사람은 그 답을 포기한다. */}
-        <Select
+        <SearchablePicker
+          options={[
+            { value: NO_SPLIT, label: '세부 기준 없음' },
+            ...choicesOf(
+              (data?.group_options ?? []).filter((one) => one.field !== groupBy),
+              ' 기준',
+            ),
+          ]}
           value={settings.splitBy || NO_SPLIT}
-          onValueChange={(next) => patch({ splitBy: next === NO_SPLIT ? '' : next })}
-        >
-          <SelectTrigger className="w-44" aria-label="세부 기준">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value={NO_SPLIT}>세부 기준 없음</SelectItem>
-            {byHeading((data?.group_options ?? []).filter((one) => one.field !== groupBy)).map(
-              ([heading, items], index) => (
-                <SelectGroup key={`${index}-${heading}`}>
-                  {heading && <SelectLabel>{heading}</SelectLabel>}
-                  {items.map((one) => (
-                    <SelectItem key={one.field} value={one.field}>
-                      {one.label} 기준{one.multi && ' (여러 값)'}
-                    </SelectItem>
-                  ))}
-                </SelectGroup>
-              ),
-            )}
-          </SelectContent>
-        </Select>
+          onChange={(next) => patch({ splitBy: next === NO_SPLIT ? '' : next })}
+          ariaLabel="세부 기준"
+          className="w-52"
+          searchPlaceholder="기준 이름으로 찾기"
+        />
 
         {!raw && (
           <Select

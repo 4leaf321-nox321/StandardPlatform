@@ -199,6 +199,49 @@ def test_고르개가_이어진_칸을_제목별로_준다(client: TestClient, a
     assert "ref.developer.status" not in fields
 
 
+def test_고르개는_두_걸음까지_늘어놓고_되짚는_걸음은_뺀다(
+    client: TestClient, admin: Signed
+) -> None:
+    """한 걸음 고르개로는 「경쟁 툴의 개발사 국가」 · 「개발사가 공급하는 툴」 에 안 닿았다.
+    같은 관계를 되짚는 걸음은 끝이 출발한 쪽이라 늘어놓지 않는다."""
+    w = _world(client, admin)
+    competes, resells = w["competes"], w["resells"]
+    got = client.get(f"/api/objects/{w['tool']}/fields", headers=admin.headers)
+    assert got.status_code == 200, got.text
+    fields = {one["field"]: one for one in got.json()}
+
+    two = fields[f"out.{competes}.ref.developer.country"]
+    assert two["label"] == "경쟁 › 개발사 › 국가"
+    assert two["heading"] == "경쟁 › 개발사 (기업)"
+    assert two["data_type"] == "enum" and two["enum_options"] == ["미국", "한국"]
+    supplied = fields[f"ref.developer.out.{resells}"]
+    assert supplied["data_type"] == "object_ref" and supplied["ref_type_slug"] == w["tool"]
+    assert fields[f"ref.developer.out.{resells}.label"]["label"] == "개발사 › 공급 › 이름"
+    # 되짚기 — 방향 있는 관계를 반대로, 방향 없는 관계를 같은 쪽으로.
+    assert not any(key.startswith(f"in.{resells}.out.{resells}") for key in fields)
+    assert not any(key.startswith(f"out.{competes}.out.{competes}") for key in fields)
+    # 세 걸음은 늘어놓지 않는다(주소로는 받는다).
+    assert max(len(key.split(".")) for key in fields) == 5
+
+    # 통계 기준에도 같은 주소로 — 관계 자체는 「이어진 것」 기준이다.
+    options = {
+        one["field"]: one for one in _summary(client, admin, w["tool"])["group_options"]
+    }
+    assert options[f"out.{competes}.ref.developer.country"]["kind"] == "enum"
+    assert options[f"ref.developer.out.{resells}"]["kind"] == "related"
+    # 그 주소로 세고, 막대와 같은 수로 거른다 — 툴1 은 한국사의 툴3 과 경쟁한다.
+    by = _summary(client, admin, w["tool"], group_by=f"out.{competes}.ref.developer.country")
+    counts = {one["label"]: one["count"] for one in by["buckets"]}
+    assert counts["한국"] == 1
+    assert _labels(
+        client, admin, w["tool"], **{f"f.out.{competes}.ref.developer.country.eq": "한국"}
+    ) == ["툴1"]
+    # 개발사가 툴1 을 공급하는 툴 — 미국사 · 한국사 둘 다 툴1 을 공급하니 그들이 만든 툴 셋.
+    assert _labels(
+        client, admin, w["tool"], **{f"f.ref.developer.out.{resells}.eq": w["툴1"]}
+    ) == ["툴1", "툴2", "툴3"]
+
+
 def test_모르는_주소는_이유를_말한다(client: TestClient, admin: Signed) -> None:
     w = _world(client, admin)
     bad = client.get(
