@@ -11,7 +11,12 @@ import { useState } from 'react'
 import { Eye, Plus, RefreshCw, Trash2, Wand2, X } from 'lucide-react'
 
 import { datasourceApi } from '@/modules/datasources/api'
-import { RA_FEED, RaOptionsFields, RaReportTypeMaker } from '@/modules/datasources/RaReportsFields'
+import {
+  RA_FEED,
+  RA_PHASE_DEFAULT,
+  RaOptionsFields,
+  RaReportTypeMaker,
+} from '@/modules/datasources/RaReportsFields'
 import type {
   AuthKind,
   CoreSuggest,
@@ -66,9 +71,11 @@ const RA_OPTION_KEYS: readonly string[] = ['board', 'include_descendants', 'phas
 
 function optionsFor(kind: SourceKind, options: SourceOptions): SourceOptions {
   const ra = kind === 'ra_reports'
-  return Object.fromEntries(
+  const kept = Object.fromEntries(
     Object.entries(options).filter(([key]) => RA_OPTION_KEYS.includes(key) === ra),
   ) as SourceOptions
+  // 단계는 **늘 적어 둔다** — 기본이 바뀌어도 저장된 소스가 조용히 다른 것을 받지 않게.
+  return ra ? { phase: RA_PHASE_DEFAULT, ...kept } : kept
 }
 
 export default function DataSourcesPage() {
@@ -368,7 +375,7 @@ function SyncDialog({
             2026-10 RA 실측) — 0건을 「연결이 틀렸다」 로 읽지 않게 이유와 바꾸는 길을 말한다. */}
         {ra &&
           result.run.rows_seen === 0 &&
-          (source.options.phase ?? 'finalized') === 'finalized' && (
+          (source.options.phase ?? RA_PHASE_DEFAULT) === 'finalized' && (
             <p className="text-sm">
               발행본이 아직 없을 수 있습니다 — RA 에서는 게시한 보고서가 「검토 중」 단계에 머무는
               것이 보통이고, 발행 버튼을 클릭한 보고서는 아직 적습니다. 게시된 보고서까지

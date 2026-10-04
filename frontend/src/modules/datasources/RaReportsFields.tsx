@@ -29,6 +29,12 @@ import {
 export const RA_FEED = '/api/feeds/published-reports'
 
 /**
+ * 단계의 기본 — 게시된 것 전부. RA 에서 발행은 편집 잠금을 겸해 드물고(2026-10 전사 13건), 조직에
+ * 내놓았다는 신호는 사실상 게시다(RA 회신). 서버의 기본과 같아야 한다(`ra_reports.options_of`).
+ */
+export const RA_PHASE_DEFAULT = 'published'
+
+/**
  * 「보고서 기록 타입 만들기」 — 표준 칸(제목 · 주소 · 보고일 · 작성 부서 · 본문 · 원본 상태 …)과
  * 고른 축의 참조 칸 `ref_<타입>` 을 한 번에. 이미 있으면 모자란 칸만 더한다.
  */
@@ -243,7 +249,7 @@ export function RaOptionsFields({
         <div className="space-y-1">
           <Label className="text-xs">단계</Label>
           <Select
-            value={options.phase ?? 'finalized'}
+            value={options.phase ?? RA_PHASE_DEFAULT}
             onValueChange={(next) =>
               onChange({ ...options, phase: next as SourceOptions['phase'] })
             }
@@ -252,8 +258,8 @@ export function RaOptionsFields({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
+              <SelectItem value="published">게시된 것 전부 (검토 중 · 발행)</SelectItem>
               <SelectItem value="finalized">발행본만 (발행 버튼을 클릭한 것)</SelectItem>
-              <SelectItem value="published">게시된 것 전부</SelectItem>
             </SelectContent>
           </Select>
         </div>

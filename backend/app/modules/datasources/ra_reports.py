@@ -49,8 +49,10 @@ KIND = "ra_reports"
 FEED_PATH = "/api/feeds/published-reports"
 BOARDS_PATH = "/api/workspaces"
 
-#: 피드의 단계 — `finalized`(발행 버튼을 누른 것, 기본) · `published`(게시된 것 전부).
-PHASES = ("finalized", "published")
+#: 피드의 단계 — `published`(게시된 것 전부 — 검토 중 · 발행, 기본) · `finalized`(발행 버튼을
+#: 클릭한 것만). 기본이 게시인 까닭: RA 에서 발행은 편집 잠금을 겸해 드물고(2026-10 전사 13건),
+#: 조직에 내놓았다는 신호는 사실상 게시다(RA 회신, 2026-10-04).
+PHASES = ("published", "finalized")
 #: 피드 한 쪽의 상한(RA 가 정한 것).
 PAGE_MAX = 500
 #: 증분을 이만큼 겹쳐 읽는다 — RA 의 커밋 순서 · 시계 때문에 경계의 한두 건이 늦을 수 있다.
@@ -133,7 +135,7 @@ def options_of(raw: dict[str, Any] | None) -> Options:
     unknown = sorted(set(raw) - {"board", "include_descendants", "phase", "include_text"})
     if unknown:
         raise _refuse(50, f"RA 보고서 소스에 없는 설정입니다: {', '.join(unknown)}")
-    phase = str(raw.get("phase") or "finalized")
+    phase = str(raw.get("phase") or "published")
     if phase not in PHASES:
         raise _refuse(50, f"단계는 {' · '.join(PHASES)} 중 하나입니다: {phase}")
     return Options(

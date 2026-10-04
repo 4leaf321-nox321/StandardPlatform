@@ -180,7 +180,8 @@ describe('RA 보고서 소스', () => {
     expect(datasourceApi.update).toHaveBeenCalledWith(
       'ra_cae',
       expect.objectContaining({
-        options: { board: 'cae' },
+        // 단계는 늘 적어 둔다 — 기본(게시된 것 전부)이 바뀌어도 저장된 소스가 그대로 받게.
+        options: { phase: 'published', board: 'cae' },
         mapping: {},
       }),
     )
@@ -191,7 +192,10 @@ describe('RA 보고서 소스', () => {
     setup([raSource({ options: { board: 'cae', rows_path: 'items', paging: 'page' } })])
     await userEvent.click(await screen.findByRole('button', { name: '수정' }))
     await userEvent.click(screen.getByRole('button', { name: '저장' }))
-    expect(datasourceApi.update.mock.calls[0][1].options).toEqual({ board: 'cae' })
+    expect(datasourceApi.update.mock.calls[0][1].options).toEqual({
+      phase: 'published',
+      board: 'cae',
+    })
   })
 
   it('목록은 조직과 전량 대조를, 실행 기록은 「원본에서 내려감」 을 말한다', async () => {
@@ -242,28 +246,34 @@ describe('RA 보고서 소스', () => {
     expect(screen.getByRole('button', { name: /적용 — 2개 새로/ })).toBeEnabled()
   })
 
-  it('발행본만 받는데 0건이면 이유와 단계를 바꾸는 길을 말한다', async () => {
-    datasourceApi.sync.mockResolvedValue({
-      run: {
-        id: 'r1',
-        status: 'planned',
+  it.each([
+    ['finalized', '선다', true],
+    ['published', '없다', false],
+  ])(
+    '0건일 때 단계가 %s 면 안내가 %s — 발행본만이면 이유와 바꾸는 길을 말한다',
+    async (phase, _said, shown) => {
+      datasourceApi.sync.mockResolvedValue({
+        run: {
+          id: 'r1',
+          status: 'planned',
+          applied: false,
+          actor_label: '관리자',
+          rows_seen: 0,
+          counts: { full_read: 1 },
+          errors: [],
+          started_at: '2026-10-04T01:00:00Z',
+          finished_at: '2026-10-04T01:00:01Z',
+        },
         applied: false,
-        actor_label: '관리자',
-        rows_seen: 0,
         counts: { full_read: 1 },
+        rows: [],
         errors: [],
-        started_at: '2026-10-04T01:00:00Z',
-        finished_at: '2026-10-04T01:00:01Z',
-      },
-      applied: false,
-      counts: { full_read: 1 },
-      rows: [],
-      errors: [],
-      truncated: false,
-    })
-    setup([raSource()])
-    await userEvent.click(await screen.findByRole('button', { name: /동기화/ }))
-    expect(await screen.findByText(/발행본이 아직 없을 수 있습니다/)).toBeInTheDocument()
-    expect(screen.getByText(/「게시된 것 전부」 로 변경합니다/)).toBeInTheDocument()
-  })
+        truncated: false,
+      })
+      setup([raSource({ options: { board: 'cae', phase } })])
+      await userEvent.click(await screen.findByRole('button', { name: /동기화/ }))
+      await screen.findByRole('dialog')
+      expect(Boolean(screen.queryByText(/발행본이 아직 없을 수 있습니다/))).toBe(shown)
+    },
+  )
 })

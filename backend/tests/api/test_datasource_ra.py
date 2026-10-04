@@ -345,19 +345,22 @@ def test_조직_하위의_발행본을_본문까지_넣고_같은_제목도_따�
     )
     ra.add(2, "주간 보고", board="cae-2", changed=2, workspace="cae-2")
     ra.add(3, "영업 보고", board="sales", changed=3)  # CAE 밖
-    ra.add(4, "검토 중 보고", board="cae", changed=4, phase="reviewing")  # 발행본 아님
+    ra.add(
+        4, "검토 중 보고", board="cae", changed=4, phase="reviewing"
+    )  # 게시 — 기본이라 온다
 
     preview = client.post(
         f"/api/datasources/{w['source']}/preview", headers=admin.headers
     ).json()
     assert preview["mapping_error"] is None
-    assert {one["external_id"] for one in preview["mapped"]} == {"1", "2"}
+    assert {one["external_id"] for one in preview["mapped"]} == {"1", "2", "4"}
 
     done = _sync(client, admin, w["source"])
     assert done["applied"] is True, done
-    assert done["counts"]["create"] == 2 and done["counts"]["full_read"] == 1
+    assert done["counts"]["create"] == 3 and done["counts"]["full_read"] == 1
     records = _records(client, admin, w["report"])
-    assert set(records) == {"RA-1", "RA-2"}  # 같은 제목이어도 둘
+    assert set(records) == {"RA-1", "RA-2", "RA-4"}  # 같은 제목이어도 둘
+    assert records["RA-4"]["properties"]["phase"] == "검토 중"
     one = _full(client, admin, w["report"], "RA-1")
     props = one["properties"]
     assert props["body"] == "해석 결과: 응력 120MPa"
@@ -374,7 +377,7 @@ def test_조직_하위의_발행본을_본문까지_넣고_같은_제목도_따�
     assert any(f["field"] == f"in.{w['report']}:ref_{model}" for f in fields)
     first = ra.feed_requests()[-1]
     assert first["board"] == "cae" and first["include_descendants"] == "true"
-    assert first["phase"] == "finalized" and first["include_text"] == "true"
+    assert first["phase"] == "published" and first["include_text"] == "true"
 
 
 def test_증분은_커서에서_겹쳐_읽고_전량_대조는_지우지_않고_표시한다(
@@ -515,16 +518,19 @@ def test_조직_트리와_설정을_거르고_사용_중지는_켤_수_없다(
     garbled = client.get(f"{base}/ra-boards", headers=admin.headers)
     assert garbled.status_code == 422 and garbled.json()["error"]["code"].endswith("0051")
     assert "영문" in str(_sync(client, admin, w["source"])["errors"])
-    # 발행본만이 기본 — 게시된 것 전부로 넓힐 수 있다(코드 변경 없이).
-    widened = client.patch(
+    # 게시된 것 전부가 기본 — 발행본만으로 좁힐 수 있다(코드 변경 없이, 조직마다).
+    narrowed = client.patch(
         base,
-        json={"options": {"board": "cae", "phase": "published"}, "auth_secret": "ra_pat_test"},
+        json={"options": {"board": "cae", "phase": "finalized"}, "auth_secret": "ra_pat_test"},
         headers=admin.headers,
     )
-    assert widened.status_code == 200, widened.text
+    assert narrowed.status_code == 200, narrowed.text
     ra.add(9, "검토 중", board="cae", changed=1, phase="reviewing")
+    ra.add(10, "발행", board="cae", changed=2)
     _sync(client, admin, w["source"])
-    assert "RA-9" in _records(client, admin, w["report"])
+    assert ra.feed_requests()[-1]["phase"] == "finalized"
+    got = _records(client, admin, w["report"])
+    assert "RA-10" in got and "RA-9" not in got
 
 
 def test_소스를_지우면_객체는_남는다(client: TestClient, admin: Signed, ra: FakeRA) -> None:

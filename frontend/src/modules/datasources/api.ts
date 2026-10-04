@@ -32,7 +32,7 @@ export interface SourceOptions {
   /** RA 보고서(`ra_reports`) — 고른 조직의 slug. 그 하위까지(`include_descendants`, 기본 켬). */
   board?: string
   include_descendants?: boolean
-  /** `finalized`(발행 단추를 누른 것, 기본) · `published`(게시된 것 전부). */
+  /** `published`(게시된 것 전부 — 검토 중 · 발행, 기본) · `finalized`(발행 버튼을 클릭한 것만). */
   phase?: 'finalized' | 'published'
   /** 본문까지 받나(기본 켬) — 끄면 색인만. */
   include_text?: boolean
