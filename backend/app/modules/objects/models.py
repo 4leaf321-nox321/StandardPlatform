@@ -58,6 +58,41 @@ LANGUAGE sql IMMUTABLE STRICT PARALLEL SAFE AS $$
 $$
 """
 
+#: 글자 칸을 날짜로 — **못 읽는 값은 NULL**(`axes.date_or_null`). 앞 열 글자에서 대시를 떼고
+#: 여덟 자리 숫자인지, 달의 날수 안인지 본 뒤에만 바꾼다(`to_date` 는 `2024-02-30` 에 오류를
+#: 내 질의 하나를 통째로 죽인다). **식으로 적으면 같은 문자열 가공을 행마다 십수 번
+#: 되풀이한다** — 함수 안에서는 한 번이다(200만 건 날짜 조건 세기 3.6초 → 1.5초, 병렬 없이).
+#: 뜻을 바꾸면 통계 · 지표의 기간 묶기와 날짜 조건이 함께 바뀐다(0061 이 운영의 사본이다).
+DATE_SQL = """
+CREATE OR REPLACE FUNCTION sp_date(raw text) RETURNS date
+LANGUAGE plpgsql IMMUTABLE STRICT PARALLEL SAFE AS $$
+DECLARE
+  d text := substr(translate(substr(raw, 1, 10), '-', ''), 1, 8);
+  y int;
+  m int;
+  dd int;
+BEGIN
+  IF length(d) <> 8 OR translate(d, '0123456789', '') <> '' THEN
+    RETURN NULL;
+  END IF;
+  y := substr(d, 1, 4)::int;
+  m := substr(d, 5, 2)::int;
+  dd := substr(d, 7, 2)::int;
+  IF y < 1 OR m < 1 OR m > 12 OR dd < 1 OR dd > (
+    CASE
+      WHEN m = 2 THEN
+        CASE WHEN (mod(y, 4) = 0 AND mod(y, 100) <> 0) OR mod(y, 400) = 0 THEN 29 ELSE 28 END
+      WHEN m IN (4, 6, 9, 11) THEN 30
+      ELSE 31
+    END
+  ) THEN
+    RETURN NULL;
+  END IF;
+  RETURN make_date(y, m, dd);
+END
+$$
+"""
+
 #: 객체의 상태.
 #:   active      picker 와 목록에 나온다
 #:   deprecated  picker 에서 숨되 **이미 걸린 관계와 값은 그대로 남는다**
@@ -371,8 +406,9 @@ def _need_trigram(_target: Any, connection: Any, **_kw: Any) -> None:
     """`gin_trgm_ops` 인덱스가 서려면 확장이 **표보다 먼저** 있어야 한다(모델로 세우는 길 —
     시험은 스키마를 통째로 지우고 다시 세우므로 확장도 함께 사라진다). 운영은 0051 이 건다."""
     connection.exec_driver_sql("CREATE EXTENSION IF NOT EXISTS pg_trgm")
-    # 두 글자 조각 함수도 인덱스보다 먼저(운영은 0054).
+    # 두 글자 조각 함수도 인덱스보다 먼저(운영은 0054). 날짜 읽기 함수도(운영은 0061).
     connection.exec_driver_sql(BIGRAMS_SQL)
+    connection.exec_driver_sql(DATE_SQL)
 
 
 event.listen(Base.metadata, "before_create", _need_trigram)

@@ -341,6 +341,42 @@ def audit_state(row: ObjectInstance) -> dict[str, Any]:
     }
 
 
+#: 맞는 줄이 이 수 이하면 **먼저 다 모으고 정렬한다**(`page_rows`). 모으는 값은 맞는 줄 수에
+#: 비례하고, 정렬 색인을 따라 걷는 값은 「타입의 줄 수 x 쪽 크기 / 맞는 줄 수」 에 비례한다 —
+#: 200만 건 타입에서 둘이 만나는 자리가 만 언저리다.
+GATHER_BELOW = 10_000
+
+
+def page_rows(
+    db: Session,
+    stmt: Select[Any],
+    view: dict[str, Any],
+    *,
+    total: int,
+    limit: int,
+    offset: int,
+) -> list[ObjectInstance]:
+    """목록 한 쪽 — **방금 센 수를 보고 길을 고른다.**
+
+    「이름순 50개」 를 뽑을 때 플래너는 이름 색인을 따라 걸으며 조건을 한 줄씩 대 보는 길을
+    즐겨 고른다 — 맞는 줄이 많으면 50줄을 금방 채워 빠르다. 그런데 맞는 줄이 적거나 없으면
+    타입을 끝까지 걷는다: 기록 200만 건에서 「모델의 과제 비어 있음」(0건) 53초, 「서비스일 <
+    2019-01-08」(0건) 10.6초 — 같은 조건을 세는 데는 2초 · 4초였다(실측). 플래너는 맞는 줄 수를
+    어림으로만 알지만 우리는 방금 셌다.
+
+    - 쪽이 끝 너머면(0건 포함) 묻지 않는다.
+    - `GATHER_BELOW` 이하면 맞는 줄의 id 를 먼저 다 모으고(`MATERIALIZED` — 세기와 같은 계획을
+      탄다) 그것만 정렬한다.
+    - 그 위면 정렬 색인을 따라 걷는다(맞는 줄이 촘촘해 금방 찬다).
+    """
+    if total <= offset:
+        return []
+    if total <= GATHER_BELOW:
+        hit = stmt.with_only_columns(ObjectInstance.id).cte("hit").prefix_with("MATERIALIZED")
+        stmt = select(ObjectInstance).join(hit, hit.c.id == ObjectInstance.id)
+    return list(db.scalars(apply_sort(stmt, view).limit(limit).offset(offset)))
+
+
 def count_of(db: Session, stmt: Select[Any]) -> int:
     """**total 을 함께 준다.** 없으면 화면이 「다음 쪽이 있는지」 를 알려고 한 건
     더 요청하는 편법을 쓰고, 그 편법은 화면마다 달라진다."""

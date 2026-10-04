@@ -120,11 +120,11 @@ from app.modules.objects.scope import Scope
 from app.modules.objects.services import (
     apply_property_filters,
     apply_search,
-    apply_sort,
     apply_year,
     audit_state,
     count_of,
     normalize_key,
+    page_rows,
     properties_of,
     require_key_free,
     require_refs_exist,
@@ -1678,9 +1678,7 @@ def list_objects(
     )
 
     total = count_of(db, stmt)
-    rows = db.scalars(apply_sort(stmt, scope.list_view).limit(capped).offset(offset))
-
-    found = list(rows)
+    found = page_rows(db, stmt, scope.list_view, total=total, limit=capped, offset=offset)
     workspaces = _workspace_slugs(db)
     labels = _ref_labels(db, scope.defs, found)
     names = aliases.of(db, [row.id for row in found])

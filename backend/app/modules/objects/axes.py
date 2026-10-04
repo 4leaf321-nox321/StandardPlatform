@@ -30,7 +30,7 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
-from sqlalchemy import Date, Float, Integer, Select, String, and_, case, cast, func, or_, true
+from sqlalchemy import Date, Float, Integer, Select, String, and_, case, cast, func, true
 from sqlalchemy.orm import Session, aliased
 
 from app.modules.objects import paths, system
@@ -134,25 +134,12 @@ def date_or_null(column: Any) -> Any:
     바꾸는 식은 통과한 값에만 닿는다.
 
     모양 검사는 정규식이 아니라 `translate` 다 — 앞 열 글자에서 대시를 떼고 여덟 자리 숫자인지
-    본다(`DATE_RE` 와 같은 뜻). 정규식 둘이면 200만 건 묶기가 4.9초, 이것이면 2.8초였다(실측,
-    ADR 0013) — 기간 단위 묶기와 날짜 범위 조건이 행마다 이 식을 탄다.
+    본다(`DATE_RE` 와 같은 뜻). 정규식 둘이면 200만 건 묶기가 4.9초, `translate` 식이면
+    2.8초였다(실측, ADR 0013). **DB 함수 `sp_date` 로 둔다**(`models.DATE_SQL`, 0061) — 식으로
+    적으면 같은 가공을 행마다 십수 번 되풀이해 날짜 조건 세기가 3.6초였고, 함수는 한
+    번이다(1.5초). 기간 단위 묶기 · 날짜 범위 조건 · 지표의 기간이 행마다 이것을 탄다.
     """
-    digits = func.substr(func.translate(func.substr(column, 1, 10), "-", ""), 1, 8)
-    shaped = and_(func.length(digits) == 8, func.translate(digits, "0123456789", "") == "")
-    year = cast(func.substr(digits, 1, 4), Integer)
-    month = cast(func.substr(digits, 5, 2), Integer)
-    day = cast(func.substr(digits, 7, 2), Integer)
-    leap = or_(and_(year % 4 == 0, year % 100 != 0), year % 400 == 0)
-    days = case(
-        (month == 2, case((leap, 29), else_=28)),
-        (month.in_([4, 6, 9, 11]), 30),
-        else_=31,
-    )
-    return case(
-        (~shaped, None),
-        (or_(year < 1, month < 1, month > 12, day < 1, day > days), None),
-        else_=func.to_date(digits, "YYYYMMDD"),
-    )
+    return func.sp_date(column, type_=Date)
 
 
 def bucket(date_expr: Any, grain: str) -> Any:
