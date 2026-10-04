@@ -26,6 +26,9 @@ vi.mock('@/modules/metrics/api', async (importOriginal) => ({
 vi.mock('@/shared/charts', () => ({ Chart: () => <div>차트</div> }))
 vi.mock('@/shared/charts/LazyPlot', () => ({ LazyPlot: () => <div>히트맵</div> }))
 
+/** 늦게 불러오는 탭을 기다리는 시간 — 시험 전체가 한꺼번에 돌면 기본 1초로는 모자라다. */
+const LAZY_WAIT = 10_000
+
 const METRIC: Metric = {
   id: 'm1',
   slug: 'cases_monthly',
@@ -301,13 +304,16 @@ describe('지표 상세', () => {
         ],
       },
     )
-    await waitFor(() =>
-      expect(metricsApi.analysis).toHaveBeenCalledWith(
-        'cases_monthly',
-        'control',
-        { axis: 'period', window: '3', split: undefined, baseline_to: undefined },
-        expect.objectContaining({ filters: { symptom: '소음' } }),
-      ),
+    // 분석 탭은 늦게 불러온다(그림 도구가 무겁다) — 시험 전체가 한꺼번에 돌 때는 1초를 넘긴다.
+    await waitFor(
+      () =>
+        expect(metricsApi.analysis).toHaveBeenCalledWith(
+          'cases_monthly',
+          'control',
+          { axis: 'period', window: '3', split: undefined, baseline_to: undefined },
+          expect.objectContaining({ filters: { symptom: '소음' } }),
+        ),
+      { timeout: LAZY_WAIT },
     )
     expect(metricsApi.values).not.toHaveBeenCalled()
     expect(screen.getByRole('tab', { name: '분석' })).toHaveAttribute('aria-selected', 'true')
@@ -361,13 +367,15 @@ describe('지표 상세', () => {
       analyses: [{ recipe: 'changes', label: '계절 · 변화점', ok: true, reason: null }],
     })
     await userEvent.click(await screen.findByRole('link', { name: '분석 열기' }))
-    await waitFor(() =>
-      expect(metricsApi.analysis).toHaveBeenCalledWith(
-        'cases_monthly',
-        'changes',
-        { axis: 'cohort', window: '6' },
-        expect.anything(),
-      ),
+    await waitFor(
+      () =>
+        expect(metricsApi.analysis).toHaveBeenCalledWith(
+          'cases_monthly',
+          'changes',
+          { axis: 'cohort', window: '6' },
+          expect.anything(),
+        ),
+      { timeout: LAZY_WAIT },
     )
     expect(screen.getByRole('tab', { name: '분석' })).toHaveAttribute('aria-selected', 'true')
   })
