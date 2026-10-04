@@ -26,7 +26,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import functools
+import hashlib
 import json
 import os
 import re
@@ -228,16 +230,27 @@ def _client(timeout: float) -> httpx.AsyncClient:
 # 이 플랫폼의 자기소개 — 같은 도구를 가진 플랫폼 여럿 가운데 어디에 물을지
 # --------------------------------------------------------------------------- #
 #: 같은 틀(Standard Platform)로 띄운 플랫폼은 도구 이름 · 설명이 전부 같다. 한 에이전트에
-#: 여럿이 붙으면 고를 단서가 서버 이름(slug) 하나뿐이라, 저장된 자기소개
-#: (`/api/server/profile`, 로그인 없이 읽힌다)를 **접속마다** 안내문 첫머리에 싣는다.
-#: 관리자가 고치면 이만큼 뒤의 새 접속부터.
+#: 여럿이 붙으면 고를 단서가 서버 이름(slug) 하나뿐이라, **접속마다** 안내문 첫머리에 이
+#: 플랫폼의 자기소개를 싣는다(ADR 0019): 사람이 쓴 소개 + **접속 때 센 자동 요약**(담긴 것 ·
+#: 들어오는 곳 · 지표) + 사람이 쓴 뒤 달라진 것(낡음). 요약은 접속한 사람의 토큰으로 읽는다 —
+#: 토큰이 없으면 로그인 없이 읽히는 사람의 문장만.
 PROFILE_TTL = 60.0
 PROFILE_PATH = "/api/server/profile"
+PROFILE_LIVE_PATH = "/api/server/profile/live"
 
 #: 안내문을 만드는 자리는 동기 함수다(라이브러리의 `create_initialization_options`) — 시험이
 #: 여기에 가짜 응답을 붙인다.
 _SYNC_TRANSPORT: httpx.BaseTransport | None = None
-_profile_cache: tuple[float, dict[str, Any] | None] = (0.0, None)
+#: 토큰마다(지문으로) 붙들어 둔다 — 접속마다 백엔드에 묻지 않게, 그러나 사람마다 보이는 것이
+#: 다를 수 있어 섞지 않는다.
+_profile_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+_CACHE_MAX = 256
+
+#: 접속(초기화) 요청에 실려 온 `Authorization` — `_RememberToken` 이 요청마다 넣는다.
+#: 라이브러리는 그 요청을 처리하는 흐름에서 접속 작업을 띄우므로 작업이 이 값을 물려받는다.
+_CONNECTING_TOKEN: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "connecting_token", default=None
+)
 
 SAME_TOOLS_RULE = (
     "같은 틀로 띄운 다른 플랫폼도 **같은 이름의 도구**를 낸다. 물음의 대상이 이 "
@@ -247,26 +260,40 @@ SAME_TOOLS_RULE = (
 )
 
 
-def profile_now() -> dict[str, Any] | None:
-    """저장된 자기소개 — 짧게 붙들어 둔다. 백엔드가 안 닿으면 붙들던 것(없으면 None)."""
-    global _profile_cache
-    at, cached = _profile_cache
-    if cached is not None and time.monotonic() - at < PROFILE_TTL:
-        return cached
+def _fetch_profile(authorization: str | None) -> dict[str, Any] | None:
+    """토큰이 있으면 `live`(요약 · 낡음까지), 없거나 거절되면 로그인 없는 소개."""
+    headers = {"Authorization": authorization} if authorization else {}
+    paths = [PROFILE_LIVE_PATH, PROFILE_PATH] if authorization else [PROFILE_PATH]
     try:
-        with httpx.Client(base_url=API_BASE, timeout=1.5, transport=_SYNC_TRANSPORT) as client:
-            got = client.get(PROFILE_PATH)
-        fresh = got.json() if got.status_code == 200 else None
+        with httpx.Client(base_url=API_BASE, timeout=2.0, transport=_SYNC_TRANSPORT) as client:
+            for path in paths:
+                got = client.get(path, headers=headers if path == PROFILE_LIVE_PATH else {})
+                if got.status_code == 200:
+                    body = got.json()
+                    if isinstance(body, dict):
+                        return body
     except (httpx.HTTPError, ValueError):
-        fresh = None
-    if isinstance(fresh, dict):
-        _profile_cache = (time.monotonic(), fresh)
-        return fresh
-    return cached
+        return None
+    return None
+
+
+def profile_now(authorization: str | None = None) -> dict[str, Any] | None:
+    """자기소개 — 토큰마다 짧게 붙들어 둔다. 백엔드가 안 닿으면 붙들던 것(없으면 None)."""
+    key = hashlib.sha256((authorization or "").encode()).hexdigest()[:16]
+    held = _profile_cache.get(key)
+    if held and time.monotonic() - held[0] < PROFILE_TTL:
+        return held[1]
+    fresh = _fetch_profile(authorization)
+    if fresh is None:
+        return held[1] if held else None
+    if len(_profile_cache) >= _CACHE_MAX:
+        _profile_cache.clear()
+    _profile_cache[key] = (time.monotonic(), fresh)
+    return fresh
 
 
 def identity(profile: dict[str, Any] | None) -> str:
-    """안내문 첫머리 — 이 서버가 **어느 플랫폼의 것이고 무엇을 담나.**"""
+    """안내문 첫머리 — 이 서버가 **어느 플랫폼의 것이고 지금 무엇을 담나.**"""
     slug = str((profile or {}).get("slug") or os.environ.get("APP_SLUG", "standardplatform"))
     if not profile:
         head = (
@@ -280,14 +307,31 @@ def identity(profile: dict[str, Any] | None) -> str:
         f"**이 서버는 「{name}」(`{slug}`)의 것이다.**" + (f" {tagline}" if tagline else "")
     ]
     summary = str(profile.get("summary") or "").strip()
+    written = str(profile.get("updated_at") or "")[:10]
+    facts = [one for one in profile.get("facts") or [] if isinstance(one, dict)]
+    # 토큰 없이 접속했으면 자동 요약이 없다 — 그때는 어디서 보는지 말한다.
+    elsewhere = "아래 「지금 담긴 것」" if facts else "`whoami` 의 `platform.facts`"
     lines.append(
-        f"담는 것: {summary}"
+        f"담는 것(사람이 쓴 소개{', ' + written if written else ''}): {summary}"
         if summary
-        else "담는 것: (아직 안 적었다 — 시스템 관리자가 `platform_profile` 로 적는다)"
+        else f"담는 것: (사람이 쓴 소개가 아직 없다 — {elsewhere} 을 본다)"
     )
     notes = str(profile.get("notes") or "").strip()
     if notes:
         lines.append(f"다른 플랫폼과의 사이: {notes}")
+    if facts:
+        lines.append("지금 담긴 것(접속 때 센 것):")
+        for one in facts:
+            for line in one.get("lines") or []:
+                lines.append(f"  - {one.get('label')}: {line}")
+    stale = [str(one) for one in profile.get("stale") or [] if summary]
+    if stale:
+        lines.append(
+            "⚠ 사람이 쓴 소개는 그 뒤 달라진 것을 반영하지 않았다 — "
+            + " · ".join(stale[:5])
+            + (f" 외 {len(stale) - 5}" if len(stale) > 5 else "")
+            + ". 엇갈리면 「지금 담긴 것」 을 믿는다."
+        )
     lines.append(SAME_TOOLS_RULE)
     return "\n".join(lines) + "\n\n"
 
@@ -302,13 +346,45 @@ def _install_identity() -> None:
         return
 
     def with_identity(*args: Any, **kwargs: Any) -> Any:
-        low.instructions = identity(profile_now()) + BASE_INSTRUCTIONS
+        profile = profile_now(_CONNECTING_TOKEN.get())
+        low.instructions = identity(profile) + BASE_INSTRUCTIONS
         return original(*args, **kwargs)
 
     low.create_initialization_options = with_identity
 
 
 _install_identity()
+
+
+class _RememberToken:
+    """접속 요청의 토큰을 기억하는 껍데기 — 안내문을 **그 사람의 눈으로** 만들려고. 토큰을
+    어디에도 남기지 않는다(요청이 끝나면 되돌린다)."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope.get("type") != "http":
+            await self.app(scope, receive, send)
+            return
+        token = next(
+            (
+                value.decode("latin-1")
+                for name, value in scope.get("headers") or []
+                if name.lower() == b"authorization"
+            ),
+            None,
+        )
+        reset = _CONNECTING_TOKEN.set(token)
+        try:
+            await self.app(scope, receive, send)
+        finally:
+            _CONNECTING_TOKEN.reset(reset)
+
+
+def http_app() -> Any:
+    """운영이 띄우는 앱 — 라이브러리의 streamable-http 앱을 토큰 껍데기로 감싼다."""
+    return _RememberToken(mcp.streamable_http_app())
 
 
 async def _get(
@@ -503,7 +579,7 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
             return {"error": f"그런 주제가 없습니다: {topic}", "topics": sorted(secs.keys())}
         return {"guide_version": version, "topic": key, "content": secs[key]}
     # **어느 플랫폼의 안내서인가** — 같은 안내서를 여러 플랫폼이 낸다.
-    platform = await _get(ctx, PROFILE_PATH)
+    platform = await _get(ctx, PROFILE_LIVE_PATH)
     return {
         "guide_version": version,
         "topic": "overview",
@@ -533,11 +609,12 @@ async def whoami(ctx: Context) -> Any:
     되어 시스템 관리자가 아니면 거절된다 — **부서를 짐작해 넣지 말고 여기서 읽는다.**
     쓰기가 거절되면 `memberships[].role` 을 보고 사용자에게 알린다.
 
-    `platform` 은 **지금 어느 플랫폼에 묻고 있나** — 이름 · 담는 것(`summary`) · 다른
-    플랫폼과의 사이(`notes`). 같은 도구를 가진 플랫폼이 여럿 붙어 있으면 이것으로 가른다."""
+    `platform` 은 **지금 어느 플랫폼에 묻고 있나** — 이름 · 사람이 쓴 소개(`summary` ·
+    `notes`) · 지금 담긴 것(`facts`, 읽을 때 센다) · 사람이 쓴 뒤 달라진 것(`stale`). 같은
+    도구를 가진 플랫폼이 여럿 붙어 있으면 이것으로 가른다."""
     me = await _get(ctx, "/api/auth/me")
     if isinstance(me, dict) and "error" not in me:
-        platform = await _get(ctx, PROFILE_PATH)
+        platform = await _get(ctx, PROFILE_LIVE_PATH)
         if isinstance(platform, dict) and "error" not in platform:
             me = {**me, "platform": platform}
     return me
@@ -545,81 +622,25 @@ async def whoami(ctx: Context) -> Any:
 
 @tool()
 async def platform_profile(ctx: Context) -> Any:
-    """**이 플랫폼의 자기소개와, 그것을 쓸 사실** — 소개를 적거나 고치기 전에 부른다.
+    """**이 플랫폼의 자기소개 · 지금 담긴 것 · 낡음** — 소개를 고치기 전에 부른다.
 
-    같은 틀로 띄운 플랫폼 여럿이 한 에이전트에 붙으면 도구가 전부 같아서, 에이전트는 이
-    소개로 어디에 물을지 고른다(안내문 첫머리 · `whoami` 의 `platform`).
+    같은 틀로 띄운 플랫폼 여럿이 한 에이전트에 붙으면 도구가 전부 같아서, 에이전트는 접속 때
+    안내문 첫머리에 실리는 이 소개로 어디에 물을지 고른다.
 
-    - `profile` — 지금 소개: `summary`(무엇을 담나) · `notes`(다른 플랫폼과의 사이).
-    - `facts` — 서버가 아는 것: 타입별 건수 · 축/기록(`usage`) · 허브에서 받은 타입
-      (`managed_by`) · 코어 공개(`core`) · 데이터 소스 · 확장 · 지표. 시스템 관리자가 아니면
-      못 보는 것은 `unavailable` 에 이유와 함께.
+    - `summary` · `notes` — **사람이 쓴 소개**(무엇을 담나 · 다른 플랫폼과의 사이). 쓴 날에
+      멈춘다.
+    - `facts` — **지금 담긴 것**(읽을 때 센다, 저장 안 함): 기록 · 축과 건수, 들어오는
+      곳(데이터 소스), 정본이 바깥인 타입(`managed_by`), 코어 공개, 지표, 확장. 늘 지금이라
+      손댈 것이 없다.
+    - `stale` — 사람이 쓴 뒤 **생기고 없어진 것**(타입 · 데이터 소스 · 정본). 비었으면 소개가
+      지금과 맞다. 차 있으면 시스템 관리자의 홈 「남은 일」 에도 뜬다.
 
-    **소개를 쓰는 법:**
-    - `summary`(300자) — 무엇을 담나: 주요 기록 · 축과 규모, 어디서 오나. 예 「CAE 그룹의
-      해석 · 보고서 기록(RA 보고서 약 1.2만 건)과 개발모델 6천」.
-    - `notes`(2,000자) — 정본은 어디인가(`managed_by` 가 있으면 「그 타입의 정본은 그쪽」,
-      RA 보고서 소스면 「보고서의 정본은 RA — 여기서 고치지 않는다」), 무엇은 여기 없나.
-    - **로그인 없이 읽힌다** — 토큰 · 내부 주소 · 사람 이름을 적지 않는다.
-    - 사실에 없는 것을 지어 쓰지 않는다. 초안은 `platform_profile_update(apply=false)` 로
-      사람에게 보인다."""
-    facts: dict[str, Any] = {}
-    unavailable: dict[str, str] = {}
-    profile = await _get(ctx, PROFILE_PATH)
-    schema = await _get(ctx, "/api/ontology/schema")
-    if isinstance(schema, dict) and "error" not in schema:
-        kinds = [
-            {
-                "slug": one.get("slug"),
-                "label": one.get("label"),
-                "usage": one.get("usage"),
-                "count": one.get("object_count"),
-                "managed_by": one.get("managed_by") or None,
-                "core": bool(one.get("core")),
-            }
-            for one in schema.get("types") or []
-            if one.get("kind_class") != "system"
-        ]
-        facts["types"] = sorted(kinds, key=lambda one: -(one["count"] or 0))
-        facts["relation_types"] = len(schema.get("relation_types") or [])
-        facts["interfaces"] = len(schema.get("interfaces") or [])
-    else:
-        unavailable["types"] = str((schema or {}).get("error"))
-    sources = await _get(ctx, "/api/datasources")
-    if isinstance(sources, list):
-        # 주소 · 인증은 싣지 않는다 — 소개에 옮겨 적힐 자리라서.
-        facts["datasources"] = [
-            {
-                "name": one.get("name"),
-                "kind": one.get("kind"),
-                "type_slug": one.get("type_slug"),
-                "scope": (one.get("options") or {}).get("board"),
-                "interval_minutes": one.get("interval_minutes"),
-                "last_status": one.get("last_status"),
-            }
-            for one in sources
-        ]
-    else:
-        unavailable["datasources"] = str((sources or {}).get("error"))
-    status = await _get(ctx, "/api/server/status")
-    if isinstance(status, dict) and "error" not in status:
-        facts["extensions"] = status.get("extensions")
-        facts["version"] = status.get("version")
-    else:
-        unavailable["server"] = str((status or {}).get("error"))
-    metrics = await _get(ctx, "/api/metrics")
-    if isinstance(metrics, list):
-        facts["metrics"] = [
-            {"slug": one.get("slug"), "label": one.get("label"),
-             "source_type_slug": one.get("source_type_slug")}
-            for one in metrics
-        ]  # fmt: skip
-    else:
-        unavailable["metrics"] = str((metrics or {}).get("error"))
-    out: dict[str, Any] = {"profile": profile, "facts": facts}
-    if unavailable:
-        out["unavailable"] = unavailable
-    return out
+    **소개를 고치는 법:** `facts` 와 `stale` 을 보고 `summary`(300자 — 무엇을 담나, 어디서
+    오나)와 `notes`(2,000자 — 정본은 어디인가, 무엇은 여기 없나)를 고쳐
+    `platform_profile_update(apply=false)` 로 사람에게 보인다. 건수처럼 자동 요약에 이미 있는
+    것은 옮겨 적지 않는다(사람의 글은 **뜻** — 무엇을 하러 오는 곳인가 — 을 쓴다). **로그인
+    없이 읽힌다** — 토큰 · 내부 주소 · 사람 이름을 적지 않는다."""
+    return await _get(ctx, PROFILE_LIVE_PATH)
 
 
 @tool()
@@ -632,11 +653,12 @@ async def platform_profile_update(
     """자기소개를 고친다 — **시스템 관리자만**(토큰이면 `ontology:write`). 안 보낸 칸은 그대로.
 
     `apply=false`(기본)는 미리 보기: 지금 → 바꿀 것, 그리고 **다른 에이전트가 볼 안내문
-    첫머리**. 사람이 확인한 뒤 `apply=true`. 저장하면 새 접속부터 실린다(1분 안) — 이미 열린
-    접속의 안내문은 그대로다. 비우려면 `""` 를 보낸다."""
+    첫머리**(자동 요약까지). 사람이 확인한 뒤 `apply=true`. 저장하면 「지금 담긴 것을 보고
+    썼다」 가 남아 낡음(`stale`)이 비워진다 — 글을 안 바꾸고 저장만 해도 그 확인이 된다. 새
+    접속부터 실린다(1분 안). 비우려면 `""` 를 보낸다."""
     if summary is None and notes is None:
         return {"error": "summary 나 notes 중 하나는 보내야 합니다."}
-    current = await _get(ctx, PROFILE_PATH)
+    current = await _get(ctx, PROFILE_LIVE_PATH)
     if not isinstance(current, dict) or "error" in current:
         return current
     after = {
@@ -653,7 +675,7 @@ async def platform_profile_update(
             "applied": False,
             "before": {"summary": current.get("summary"), "notes": current.get("notes")},
             "after": after,
-            "instructions_preview": identity({**current, **after}),
+            "instructions_preview": identity({**current, **after, "stale": []}),
             "problems": problems,
             "note": "사람이 확인한 뒤 apply=true 로 부른다.",
         }
@@ -664,8 +686,7 @@ async def platform_profile_update(
             await client.put(PROFILE_PATH, json=after, headers=_forward_headers(ctx))
         )
     if isinstance(saved, dict) and "error" not in saved:
-        global _profile_cache
-        _profile_cache = (0.0, None)  # 다음 접속이 새로 읽는다
+        _profile_cache.clear()  # 다음 접속이 새로 읽는다
         return {
             "applied": True,
             "profile": saved,
@@ -2498,4 +2519,13 @@ if __name__ == "__main__":
                 enable_dns_rebinding_protection=False,
             )
 
-    mcp.run(transport="streamable-http")
+    # 라이브러리의 `run(transport="streamable-http")` 과 같되, 접속 요청의 토큰을 기억하는
+    # 껍데기로 감싼다 — 안내문의 자동 요약을 그 사람의 눈으로 센다(ADR 0019).
+    import uvicorn
+
+    uvicorn.run(
+        http_app(),
+        host=mcp.settings.host,
+        port=mcp.settings.port,
+        log_level=mcp.settings.log_level.lower(),
+    )

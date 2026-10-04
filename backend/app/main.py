@@ -49,6 +49,7 @@ from app.modules.objects import quality as objects_quality
 from app.modules.objects import routes as objects_routes
 from app.modules.objects import services as objects_services
 from app.modules.objects import watches as objects_watches
+from app.modules.ontology import profile as ontology_profile
 from app.modules.ontology import routes as ontology_routes
 from app.modules.rdf import routes as rdf_routes
 from app.modules.search import routes as search_routes
@@ -188,6 +189,12 @@ def _register_extensions() -> None:
     # 계산에 실패했거나 오래 안 센 지표 — 밤의 타이머가 조용히 멎는 것은 같은 실패 방식이다.
     extensions.register_maintenance(metrics_services.maintenance)
     extensions.register_stats(metrics_services.stats)
+    # 플랫폼 자기소개의 자동 요약(ADR 0019) — 담긴 것 · 들어오는 곳 · 지표. 서버 모듈은
+    # 모으기만 한다(도메인 표를 모른다).
+    extensions.register_profile_facts(ontology_profile.facts)
+    extensions.register_profile_facts(datasources_services.profile_facts)
+    extensions.register_profile_facts(metrics_services.profile_facts)
+    extensions.register_maintenance(server_services.maintenance)
 
     # **기계 자격으로 온톨로지를 채우는 길**(3-d). 안 열면 PAT 로는 못 고친다 —
     # 기본이 「막힘」 이고, 그것이 맞는 기본값이다(shared/scopes.py).

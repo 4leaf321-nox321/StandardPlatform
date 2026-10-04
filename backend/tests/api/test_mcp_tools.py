@@ -1461,14 +1461,15 @@ def test_자기소개는_서버가_아는_사실로_쓰고_whoami_가_싣는다(
     db.commit()
     try:
         got = bot.call(server.platform_profile)
-        assert got["profile"]["summary"] == ""
-        assert got["facts"]["types"] and "unavailable" not in got  # 시스템 관리자의 토큰
+        assert got["summary"] == "" and got["stale"] == ["자기소개를 아직 안 적었다"]
+        assert any(one["key"] == "types" for one in got["facts"])  # 읽을 때 센 것
         plan = bot.call(server.platform_profile_update, summary="보고서 쌍둥이")
         assert plan["applied"] is False
         assert bot.call(server.whoami)["platform"]["summary"] == ""  # 미리 보기는 안 바꾼다
         done = bot.call(server.platform_profile_update, summary="보고서 쌍둥이", apply=True)
         assert done["profile"]["summary"] == "보고서 쌍둥이"
-        assert bot.call(server.whoami)["platform"]["summary"] == "보고서 쌍둥이"
+        platform = bot.call(server.whoami)["platform"]
+        assert platform["summary"] == "보고서 쌍둥이" and platform["stale"] == []
     finally:
         db.query(PlatformProfile).delete()
         db.commit()

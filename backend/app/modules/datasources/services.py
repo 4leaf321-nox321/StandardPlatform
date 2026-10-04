@@ -1472,3 +1472,40 @@ def sync_out(result: SyncResult) -> SyncOut:
         errors=list(result.run.errors or []),
         truncated=result.truncated,
     )
+
+
+#: 자기소개에 쓰는 종류의 이름 — 화면의 이름과 같게(`DataSourcesPage` 의 KIND_LABEL).
+PROFILE_KIND_LABEL = {
+    "odata": "OData",
+    "rest": "REST",
+    "file": "파일",
+    "sp_core": "형제 코어",
+    "ra_reports": "RA 보고서",
+}
+
+
+def profile_facts(db: Session) -> list[extensions.ProfileFact]:
+    """자기소개의 「들어오는 곳」(ADR 0019) — 어느 바깥에서 무엇이 들어오나. 주소 · 인증은
+    싣지 않는다(에이전트 안내문에 그대로 선다). 소스가 생기고 없어지면 사람이 쓴 소개가 낡은
+    것이다."""
+    rows = db.execute(
+        select(DataSource, ObjectType.label)
+        .join(ObjectType, ObjectType.id == DataSource.type_id)
+        .where(DataSource.is_active.is_(True))
+        .order_by(DataSource.name)
+    ).all()
+    lines: list[str] = []
+    marks: dict[str, str] = {}
+    for source, type_label in rows:
+        kind = PROFILE_KIND_LABEL.get(source.kind, source.kind)
+        board = (source.options or {}).get("board") if source.kind == ra_reports.KIND else None
+        where = f", 조직 {board}" if board else ""
+        lines.append(f"{source.name}({kind}{where}) → {type_label}")
+        marks[f"source:{source.slug}"] = f"데이터 소스 「{source.name}」"
+    if not lines:
+        return []
+    return [
+        extensions.ProfileFact(
+            key="datasources", label="들어오는 곳", lines=[" · ".join(lines)], marks=marks
+        )
+    ]

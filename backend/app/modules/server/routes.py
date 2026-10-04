@@ -30,7 +30,9 @@ from app.modules.server.schemas import (
     ExtensionPatchIn,
     MaintenanceItemOut,
     PlatformProfileIn,
+    PlatformProfileLiveOut,
     PlatformProfileOut,
+    ProfileFactOut,
     ServerStatusOut,
     TableCountOut,
 )
@@ -222,6 +224,21 @@ def platform_profile(db: Session = Depends(get_db)) -> PlatformProfileOut:
     로그인을 요구할 수 없다. 그래서 **비밀을 적는 자리가 아니다.**
     """
     return _profile_out(db)
+
+
+@router.get("/profile/live", response_model=PlatformProfileLiveOut)
+def platform_profile_live(
+    _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> PlatformProfileLiveOut:
+    """자기소개 + **지금 담긴 것**(읽을 때 센다 — 기록 · 축과 건수, 들어오는 곳, 정본이 바깥인
+    타입, 지표, 확장) + **낡음**(사람이 쓴 뒤 생기고 없어진 것). 로그인한 사람(토큰)에게 —
+    MCP 가 접속 때 그 사람의 토큰으로 읽어 안내문에 싣는다."""
+    facts = services.live_facts(db)
+    return PlatformProfileLiveOut(
+        **_profile_out(db).model_dump(),
+        facts=[ProfileFactOut(key=one.key, label=one.label, lines=one.lines) for one in facts],
+        stale=services.stale_reasons(services.profile(db), facts),
+    )
 
 
 @router.put("/profile", response_model=PlatformProfileOut)

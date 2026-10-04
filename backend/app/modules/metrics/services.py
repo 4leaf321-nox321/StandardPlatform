@@ -447,3 +447,21 @@ def values_count(db: Session, metric: MetricDef) -> int:
         )
         or 0
     )
+
+
+def profile_facts(db: Session) -> list[extensions.ProfileFact]:
+    """자기소개의 「지표」(ADR 0019) — 미리 세어 둔 것이 무엇인가. 지표는 자주 생기고 지워져서
+    낡음 표시로 쓰지 않는다(소개가 지표마다 낡으면 아무도 안 고친다)."""
+    labels = list(
+        db.scalars(
+            select(MetricDef.label)
+            .where(MetricDef.is_active.is_(True))
+            .order_by(MetricDef.label)
+        )
+    )
+    if not labels:
+        return []
+    shown = " · ".join(labels[:10]) + (
+        f" · 그 밖에 {len(labels) - 10}개" if len(labels) > 10 else ""
+    )
+    return [extensions.ProfileFact(key="metrics", label="지표", lines=[shown], marks={})]

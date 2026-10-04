@@ -17,7 +17,8 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.modules.audit.models import AuditEntry
 from app.modules.server.models import PlatformProfile
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, maintenance_counts
+from tests.api.test_ontology import _make_type
 
 PATH = "/api/server/profile"
 
@@ -96,3 +97,43 @@ def test_토큰은_정의를_바꾸는_범위가_있어야_고친다(
         "/api/server/extensions/sample", json={"enabled": True}, headers=writer
     )
     assert toggled.status_code == 403
+
+
+def test_지금_담긴_것은_로그인한_사람에게만_읽을_때_센다(
+    client: TestClient, admin: Signed, member: Signed, fresh: None
+) -> None:
+    """사람이 쓴 소개는 쓴 날에 멈춘다 — 담긴 것은 읽을 때마다 세어 늘 지금이다. 로그인 없는
+    소개에는 싣지 않는다(타입 이름 · 건수는 로그인한 사람의 것)."""
+    _make_type(client, admin, label="보고서", key_policy="optional")
+    assert "facts" not in client.get(PATH).json()
+    assert client.get(f"{PATH}/live").status_code == 401
+    live = client.get(f"{PATH}/live", headers=member.headers)
+    assert live.status_code == 200, live.text
+    body = live.json()
+    types = next(one for one in body["facts"] if one["key"] == "types")
+    assert types["label"] == "담긴 것" and types["lines"][0].startswith(("기록 — ", "축 — "))
+    assert body["stale"] == ["자기소개를 아직 안 적었다"]
+
+
+def test_사람이_쓴_뒤_타입이_생기면_낡았다고_알리고_다시_쓰면_비운다(
+    client: TestClient, admin: Signed, member: Signed, fresh: None
+) -> None:
+    assert maintenance_counts(client, admin).get("platform_profile") == 1  # 비어 있음
+    assert "platform_profile" not in maintenance_counts(client, member)  # 관리자에게만
+    client.put(PATH, json={"summary": "해석 기록"}, headers=admin.headers)
+    assert client.get(f"{PATH}/live", headers=admin.headers).json()["stale"] == []
+    assert "platform_profile" not in maintenance_counts(client, admin)
+
+    _make_type(client, admin, label="새 기록", key_policy="optional")
+    stale = client.get(f"{PATH}/live", headers=admin.headers).json()["stale"]
+    assert stale == ["생김: 타입 「새 기록」"]
+    item = next(
+        one
+        for one in client.get("/api/server/maintenance", headers=admin.headers).json()
+        if one["key"] == "platform_profile"
+    )
+    assert "새 기록" in item["label"] and item["link"] == "/admin/server"
+
+    # 글을 안 바꾸고 저장만 해도 「지금 것을 보고 썼다」 — 낡음이 비워진다.
+    client.put(PATH, json={"summary": "해석 기록"}, headers=admin.headers)
+    assert client.get(f"{PATH}/live", headers=admin.headers).json()["stale"] == []

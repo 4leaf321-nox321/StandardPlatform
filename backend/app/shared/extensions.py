@@ -60,6 +60,23 @@ class MaintenanceItem:
 
 
 @dataclass(frozen=True)
+class ProfileFact:
+    """플랫폼 자기소개의 **자동 요약** 한 갈래(ADR 0019) — 읽을 때마다 센다, 저장하지 않는다.
+
+    사람이 쓴 소개는 쓴 날에 멈춘다. 타입 · 데이터 소스가 늘어도 안 따라가고, 그 사실을
+    아무도 모른다. 그래서 「무엇이 담겼나」 는 도메인이 그때그때 말하고, 사람이 쓸 때의
+    표시(`marks`)를 남겨 두었다가 달라지면 「낡음」 으로 알린다."""
+
+    key: str
+    label: str
+    """「기록」 · 「들어오는 곳」 처럼 — 에이전트 안내문에 그대로 선다."""
+    lines: list[str]
+    marks: dict[str, str]
+    """낡음 판정의 표시 → 사람이 읽는 이름(`type:ra_report` → 「타입 「보고서」」). 이것이
+    사람이 쓸 때와 달라지면 소개가 낡은 것이다. 건수처럼 늘 변하는 것은 넣지 않는다."""
+
+
+@dataclass(frozen=True)
 class StatItem:
     """서버 화면의 「쌓인 것」 한 칸."""
 
@@ -152,6 +169,7 @@ _references: list[ReferenceProvider] = []
 _contents: list[ContentProvider] = []
 _temporal: list[TemporalProvider] = []
 _attachment_owners: dict[str, AttachmentOwnerProvider] = {}
+_profile: list[Callable[[Session], list[ProfileFact]]] = []
 
 
 # 셋 다 **같은 것을 두 번 넣어도 안전하다.** `create_app()` 은 시험에서 두 번
@@ -167,6 +185,29 @@ def register_maintenance(provider: MaintenanceProvider) -> None:
 def register_stats(provider: StatProvider) -> None:
     if provider not in _stats:
         _stats.append(provider)
+
+
+def register_profile_facts(provider: Callable[[Session], list[ProfileFact]]) -> None:
+    """플랫폼 자기소개의 자동 요약에 한 갈래를 더한다(ADR 0019)."""
+    if provider not in _profile:
+        _profile.append(provider)
+
+
+def count_text(n: int) -> str:
+    """건수를 안내문의 말로 — 만을 넘으면 「1.2만」 · 「200만」(어림이면 된다)."""
+    if n < 10_000:
+        return f"{n:,}"
+    value = n / 10_000
+    return f"{value:.0f}만" if value >= 100 or value == int(value) else f"{value:.1f}만"
+
+
+def profile_facts(db: Session) -> list[ProfileFact]:
+    """**빈 갈래는 버린다** — 타입이 없는 설치의 「기록 — 」 같은 빈 줄은 에이전트에게
+    소음이다."""
+    out: list[ProfileFact] = []
+    for provider in _profile:
+        out.extend(one for one in provider(db) if one.lines)
+    return out
 
 
 def register_workspace_reference(provider: ReferenceProvider) -> None:

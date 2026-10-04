@@ -14,6 +14,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -53,6 +54,11 @@ class PlatformProfile(Base):
     notes: Mapped[str] = mapped_column(Text, default="", server_default="")
     """다른 플랫폼과의 사이 — 정본은 어디인가(「코어 기준정보의 정본은 허브」), 무엇은
     여기 없나."""
+    facts_seen: Mapped[dict[str, str]] = mapped_column(
+        JSONB, default=dict, server_default="{}"
+    )
+    """사람이 쓸 때 **무엇이 담겨 있었나**(자동 요약의 표시 → 이름). 지금과 달라지면 소개가
+    낡은 것이다 — 「남은 일」 과 MCP 안내문이 그렇게 말한다."""
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )

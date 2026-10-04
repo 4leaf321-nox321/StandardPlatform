@@ -24,7 +24,7 @@ from app.config import get_settings
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.server.models import ExtensionState, PlatformProfile
-from app.shared import audit
+from app.shared import audit, extensions
 from app.shared.errors import NotFound, code
 
 #: 이 번들에 들어 있는 확장 이름 — `main.py` 가 기동에서 한 번 넣는다.
@@ -206,6 +206,65 @@ def require_extension(name: str) -> Callable[..., None]:
     return guard
 
 
+def live_facts(db: Session) -> list[extensions.ProfileFact]:
+    """자동 요약 — 도메인이 등록한 갈래에 이 설치의 확장을 더한다. **읽을 때마다 센다.**"""
+    out = extensions.profile_facts(db)
+    names = list(enabled_names(db))
+    if names:
+        out.append(
+            extensions.ProfileFact(
+                key="extensions", label="확장", lines=[", ".join(names)], marks={}
+            )
+        )
+    return out
+
+
+def marks_of(facts: list[extensions.ProfileFact]) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for one in facts:
+        out.update(one.marks)
+    return out
+
+
+def stale_reasons(
+    row: PlatformProfile | None, facts: list[extensions.ProfileFact]
+) -> list[str]:
+    """사람이 쓴 뒤 **달라진 것** — 생긴 타입 · 데이터 소스, 없어진 것, 정본이 바뀐 것. 소개가
+    아직 없으면 그것이 한 줄이다."""
+    if row is None or not row.summary.strip():
+        return ["자기소개를 아직 안 적었다"]
+    now = marks_of(facts)
+    seen = dict(row.facts_seen or {})
+    born = [f"생김: {now[key]}" for key in sorted(now) if key not in seen]
+    gone = [f"없어짐: {seen[key]}" for key in sorted(seen) if key not in now]
+    return born + gone
+
+
+def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
+    """자기소개가 비었거나 낡았으면 시스템 관리자의 홈에 — 에이전트가 이 글로 어느 플랫폼에
+    물을지 고르는데, 낡은 채 두면 새로 들어온 자료를 「여기 없다」 고 읽는다."""
+    if not viewer.is_system_admin:
+        return []
+    reasons = stale_reasons(profile(db), live_facts(db))
+    if not reasons:
+        return []
+    empty = reasons == ["자기소개를 아직 안 적었다"]
+    return [
+        extensions.MaintenanceItem(
+            key="platform_profile",
+            label=(
+                "플랫폼 자기소개가 비어 있음 — 에이전트가 어느 플랫폼에 물을지 가르는 글"
+                if empty
+                else "플랫폼 자기소개가 그 뒤 바뀐 자료를 반영하지 않음 — "
+                + " · ".join(reasons[:3])
+                + (f" 외 {len(reasons) - 3}" if len(reasons) > 3 else "")
+            ),
+            count=len(reasons),
+            link="/admin/server",
+        )
+    ]
+
+
 def profile(db: Session) -> PlatformProfile | None:
     """이 플랫폼의 자기소개 — 한 행. 아직 아무도 안 적었으면 없다."""
     return db.get(PlatformProfile, 1)
@@ -226,6 +285,9 @@ def set_profile(db: Session, user: User, *, summary: str, notes: str) -> Platfor
         db.add(row)
     else:
         row.summary, row.notes = after["summary"], after["notes"]
+    # **쓴 때 무엇이 담겨 있었나** — 이것과 지금이 달라지면 낡았다고 알린다. 글을 안 바꾸고
+    # 저장만 해도 「지금 것을 봤다」 는 확인이 된다.
+    row.facts_seen = marks_of(live_facts(db))
     row.updated_by_id = user.id
     if before != after:
         audit.record(

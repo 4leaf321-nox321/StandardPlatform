@@ -124,3 +124,21 @@ class PlatformProfileOut(BaseModel):
 class PlatformProfileIn(BaseModel):
     summary: str = Field(default="", max_length=300)
     notes: str = Field(default="", max_length=2000)
+
+
+class ProfileFactOut(BaseModel):
+    """자동 요약 한 갈래 — **읽을 때 센 것**(저장하지 않는다)."""
+
+    key: str
+    label: str
+    lines: list[str]
+
+
+class PlatformProfileLiveOut(PlatformProfileOut):
+    """자기소개 + 지금 담긴 것 + 낡음 — 로그인한 사람(토큰)에게. MCP 가 접속 때 이것을
+    읽는다."""
+
+    facts: list[ProfileFactOut]
+    stale: list[str]
+    """사람이 쓴 뒤 달라진 것(「생김: 타입 「보고서」」). 비었으면 소개가 지금과 맞다 — 소개가
+    아직 없으면 그것도 한 줄로 말한다."""

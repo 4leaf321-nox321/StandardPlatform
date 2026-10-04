@@ -20,6 +20,7 @@ import { PageHeader } from '@/shared/components/PageHeader'
 import { Button } from '@/shared/components/ui/button'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
+import { PlatformProfile } from '@/modules/server/PlatformProfile'
 
 function gib(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`
@@ -222,6 +223,8 @@ export default function ServerPage() {
           </div>
         )}
       </dl>
+
+      {isSystemAdmin(user) && <PlatformProfile />}
 
       {isSystemAdmin(user) && <Extensions />}
 

@@ -681,84 +681,155 @@ PROFILE = {
     "notes": "개발모델 · 과제의 정본은 허브다.",
     "updated_at": "2026-10-04T10:00:00Z",
 }
+LIVE = {
+    **PROFILE,
+    "facts": [
+        {
+            "key": "types",
+            "label": "담긴 것",
+            "lines": ["기록 — 보고서 1.2만", "축 — 개발모델 6,000"],
+        },
+        {
+            "key": "datasources",
+            "label": "들어오는 곳",
+            "lines": ["CAE 보고서(RA 보고서, 조직 cae) → 보고서"],
+        },
+    ],
+    "stale": ["생김: 타입 「보고서」"],
+}
 
 
-def _profile_backend(seen: list[httpx.Request], profile: dict[str, Any] | None) -> Any:
+def test_안내문_첫머리는_사람의_소개_지금_담긴_것_낡음을_함께_싣는다() -> None:
+    text = server.identity(LIVE)
+    assert text.startswith("**이 서버는 「CAE 그룹 Datahub」(`caedatahub`)의 것이다.**")
+    assert "담는 것(사람이 쓴 소개, 2026-10-04): CAE 그룹의 보고서" in text
+    assert "  - 담긴 것: 기록 — 보고서 1.2만" in text and "  - 들어오는 곳: CAE 보고서" in text
+    assert (
+        "⚠ 사람이 쓴 소개는 그 뒤 달라진 것을 반영하지 않았다 — 생김: 타입 「보고서」" in text
+    )
+    assert server.SAME_TOOLS_RULE in text
+    # 사람의 소개가 없으면 낡음이 아니라 「없다」 — 자동 요약이 대신 말한다.
+    blank = server.identity({**LIVE, "summary": "", "stale": ["자기소개를 아직 안 적었다"]})
+    assert "사람이 쓴 소개가 아직 없다 — 아래 「지금 담긴 것」" in blank and "⚠" not in blank
+    anonymous = server.identity({**PROFILE, "summary": ""})  # 토큰 없이 — 요약이 없다
+    assert "`whoami` 의 `platform.facts`" in anonymous
+    assert "자기소개를 읽지 못했다" in server.identity(None)
+
+
+def test_접속하는_사람의_토큰으로_지금_담긴_것을_세어_안내문에_싣는다() -> None:
+    """진짜 MCP 앱에 초기화를 보낸다 — 접속 요청의 토큰이 백엔드 `live` 에 실려야 한다.
+    토큰이 없으면 로그인 없는 소개(사람의 문장)만."""
+    from starlette.testclient import TestClient
+
+    seen: list[httpx.Request] = []
+
     def respond(request: httpx.Request) -> httpx.Response:
         seen.append(request)
-        if profile is None:
-            raise httpx.ConnectError("down")
-        return httpx.Response(200, json=profile)
+        if request.url.path == "/api/server/profile/live":
+            return httpx.Response(200, json=LIVE)
+        return httpx.Response(200, json=PROFILE)
 
-    return httpx.MockTransport(respond)
+    server._SYNC_TRANSPORT = httpx.MockTransport(respond)
+    server._profile_cache.clear()
+    hello = {
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-06-18",
+            "capabilities": {},
+            "clientInfo": {"name": "test", "version": "0"},
+        },
+    }
+    accept = {"Accept": "application/json, text/event-stream"}
 
+    def instructions(got: httpx.Response) -> str:
+        assert got.status_code == 200, got.text
+        body = got.text
+        if body.lstrip().startswith("{"):
+            return str(json.loads(body)["result"]["instructions"])
+        data = next(line[5:] for line in body.splitlines() if line.startswith("data:"))
+        return str(json.loads(data)["result"]["instructions"])
 
-def test_접속마다_안내문_첫머리에_이_플랫폼의_자기소개가_선다() -> None:
-    """같은 틀로 띄운 플랫폼은 도구가 전부 같다 — 어느 플랫폼에 물을지 가를 단서가 안내문에
-    있어야 한다. 소개는 저장된 것을 읽어(로그인 없이) 접속마다 싣는다."""
-    seen: list[httpx.Request] = []
-    server._SYNC_TRANSPORT = _profile_backend(seen, PROFILE)
-    server._profile_cache = (0.0, None)
     try:
-        options = server.mcp._mcp_server.create_initialization_options()
-        text = options.instructions
-        assert text.startswith("**이 서버는 「CAE 그룹 Datahub」(`caedatahub`)의 것이다.**")
-        assert "담는 것: CAE 그룹의 보고서" in text and "정본은 허브" in text
-        assert server.SAME_TOOLS_RULE in text and text.endswith(server.BASE_INSTRUCTIONS)
-        assert seen[0].url.path == "/api/server/profile"
-        assert "authorization" not in seen[0].headers  # 토큰 없이 읽는다
-        # 짧게 붙들어 둔다 — 접속마다 백엔드에 묻지 않는다.
-        server.mcp._mcp_server.create_initialization_options()
-        assert len(seen) == 1
-        # 백엔드가 안 닿아도 붙들던 소개로 선다.
-        server._SYNC_TRANSPORT = _profile_backend(seen, None)
-        server._profile_cache = (0.0, PROFILE)
-        assert (
-            "CAE 그룹 Datahub"
-            in server.mcp._mcp_server.create_initialization_options().instructions
-        )
+        with TestClient(server.http_app(), base_url="http://127.0.0.1:8042") as client:
+            signed = client.post(
+                "/mcp", json=hello, headers={**accept, "Authorization": "Bearer t1"}
+            )
+            text = instructions(signed)
+            assert "  - 담긴 것: 기록 — 보고서 1.2만" in text and "⚠" in text
+            live = next(one for one in seen if one.url.path == "/api/server/profile/live")
+            assert live.headers["authorization"] == "Bearer t1"
+            seen.clear()
+            anonymous = instructions(client.post("/mcp", json=hello, headers=accept))
+            assert "담는 것(사람이 쓴 소개" in anonymous and "지금 담긴 것" not in anonymous
+            assert [one.url.path for one in seen] == ["/api/server/profile"]
     finally:
         server._SYNC_TRANSPORT = None
-        server._profile_cache = (0.0, None)
+        server._profile_cache.clear()
 
 
-def test_소개가_없거나_못_읽으면_그렇게_말한다() -> None:
-    blank = server.identity({**PROFILE, "summary": "", "notes": ""})
-    assert "아직 안 적었다" in blank and "다른 플랫폼과의 사이" not in blank
-    unknown = server.identity(None)
-    assert "자기소개를 읽지 못했다" in unknown and server.SAME_TOOLS_RULE in unknown
+def test_토큰마다_짧게_붙들고_백엔드가_안_닿으면_붙들던_것으로() -> None:
+    seen: list[httpx.Request] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(200, json=LIVE)
+
+    server._SYNC_TRANSPORT = httpx.MockTransport(respond)
+    server._profile_cache.clear()
+    try:
+        assert server.profile_now("Bearer a")["facts"]
+        server.profile_now("Bearer a")
+        assert len(seen) == 1  # 붙들었다
+        server.profile_now("Bearer b")
+        assert len(seen) == 2  # 사람마다 따로
+        # 붙들 시간이 지났는데 백엔드가 안 닿는다 — 붙들던 것으로 선다.
+        key = next(iter(server._profile_cache))
+        server._profile_cache[key] = (0.0, server._profile_cache[key][1])
+
+        def down(_request: httpx.Request) -> httpx.Response:
+            raise httpx.ConnectError("down")
+
+        server._SYNC_TRANSPORT = httpx.MockTransport(down)
+        assert server.profile_now("Bearer a")["name"] == LIVE["name"]
+    finally:
+        server._SYNC_TRANSPORT = None
+        server._profile_cache.clear()
 
 
-def test_whoami_는_어느_플랫폼인지도_말한다() -> None:
+def test_whoami_와_안내서는_지금의_플랫폼을_싣는다() -> None:
     def respond(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/api/auth/me":
             return httpx.Response(200, json={"name": "홍", "home_workspace_slug": "cae"})
-        return httpx.Response(200, json=PROFILE)
+        assert request.url.path == "/api/server/profile/live"
+        return httpx.Response(200, json=LIVE)
 
     _serve(respond)
     me = asyncio.run(server.whoami(_ctx("Bearer t")))
-    assert (
-        me["home_workspace_slug"] == "cae" and me["platform"]["summary"] == PROFILE["summary"]
-    )
+    assert me["home_workspace_slug"] == "cae" and me["platform"]["facts"]
     guide = asyncio.run(server.get_guide(_ctx("Bearer t")))
-    assert guide["platform"]["name"] == PROFILE["name"]
+    assert guide["platform"]["stale"] == LIVE["stale"]
     assert "platforms" in guide["more_topics"]
+    got = asyncio.run(server.platform_profile(_ctx("Bearer t")))
+    assert got["facts"] == LIVE["facts"]
 
 
 def test_자기소개_고치기는_미리_보기가_먼저고_안_보낸_칸은_그대로다() -> None:
     def respond(request: httpx.Request) -> httpx.Response:
         if request.method == "PUT":
             return httpx.Response(200, json={**PROFILE, **json.loads(request.content)})
-        return httpx.Response(200, json=PROFILE)
+        return httpx.Response(200, json=LIVE)
 
     seen = _serve(respond)
-    server._profile_cache = (0.0, PROFILE)
+    server._profile_cache["x"] = (0.0, LIVE)
     plan = asyncio.run(
         server.platform_profile_update(_ctx("Bearer t"), summary="  보고서 쌍둥이  ")
     )
     assert plan["applied"] is False and all(one.method == "GET" for one in seen)
     assert plan["after"] == {"summary": "보고서 쌍둥이", "notes": PROFILE["notes"]}
-    assert "담는 것: 보고서 쌍둥이" in plan["instructions_preview"]
+    preview = plan["instructions_preview"]
+    assert "보고서 쌍둥이" in preview and "지금 담긴 것" in preview and "⚠" not in preview
     too_long = asyncio.run(
         server.platform_profile_update(_ctx("Bearer t"), notes="가" * 2001, apply=True)
     )
@@ -769,44 +840,5 @@ def test_자기소개_고치기는_미리_보기가_먼저고_안_보낸_칸은_
     assert done["applied"] is True
     put = next(one for one in seen if one.method == "PUT")
     assert json.loads(put.content) == {"summary": "보고서 쌍둥이", "notes": PROFILE["notes"]}
-    assert server._profile_cache == (0.0, None)  # 다음 접속이 새로 읽는다
+    assert server._profile_cache == {}  # 다음 접속이 새로 읽는다
     assert "error" in asyncio.run(server.platform_profile_update(_ctx("Bearer t")))
-
-
-def test_자기소개를_쓸_사실을_모으고_못_보는_것은_이유와_함께() -> None:
-    def respond(request: httpx.Request) -> httpx.Response:
-        path = request.url.path
-        if path == "/api/ontology/schema":
-            return httpx.Response(
-                200,
-                json={
-                    "types": [
-                        {"slug": "ra_report", "label": "보고서", "usage": "log",
-                         "kind_class": "record", "object_count": 12000, "managed_by": ""},
-                        {"slug": "plm_model", "label": "개발모델", "usage": "axis",
-                         "kind_class": "record", "object_count": 6000, "managed_by": "hub",
-                         "core": True},
-                        {"slug": "workspace", "label": "부서", "kind_class": "system",
-                         "object_count": 30},
-                    ],
-                    "relation_types": [{"slug": "derived"}],
-                    "interfaces": [],
-                },
-            )  # fmt: skip
-        if path == "/api/datasources":
-            return httpx.Response(
-                403, json={"error": {"code": "APP-AUTH-0003", "message": "시스템 관리자만"}}
-            )
-        if path == "/api/metrics":
-            return httpx.Response(200, json=[])
-        if path == "/api/server/status":
-            return httpx.Response(200, json={"extensions": ["caegroup"], "version": "0.4.36"})
-        return httpx.Response(200, json=PROFILE)
-
-    _serve(respond)
-    got = asyncio.run(server.platform_profile(_ctx("Bearer t")))
-    assert got["profile"]["slug"] == "caedatahub"
-    assert [one["slug"] for one in got["facts"]["types"]] == ["ra_report", "plm_model"]
-    assert got["facts"]["types"][1]["managed_by"] == "hub" and got["facts"]["types"][1]["core"]
-    assert got["facts"]["extensions"] == ["caegroup"] and got["facts"]["metrics"] == []
-    assert "시스템 관리자만" in got["unavailable"]["datasources"]
