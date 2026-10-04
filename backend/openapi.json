@@ -12655,6 +12655,68 @@
         }
       }
     },
+    "/api/server/profile": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Platform Profile",
+        "description": "**이 플랫폼의 자기소개** — 무엇을 담고, 다른 플랫폼과 어떤 사이인가. **로그인 없이\n읽힌다.**\n\n같은 틀로 띄운 플랫폼 여럿이 한 에이전트에 도구로 붙으면 도구 이름 · 설명이 전부 같다. MCP\n서버가 이것을 읽어 안내문 첫머리에 싣는다 — 안내문은 에이전트가 토큰을 싣기 전에 서야 해서\n로그인을 요구할 수 없다. 그래서 **비밀을 적는 자리가 아니다.**",
+        "operationId": "platform_profile_api_server_profile_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformProfileOut"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Platform Profile Update",
+        "description": "자기소개를 고친다 — **시스템 관리자만.** 토큰으로는 `ontology:write` 범위가 든다(정의를\n바꾸는 일과 같은 무게 — 에이전트가 이 글로 플랫폼을 고른다).",
+        "operationId": "platform_profile_update_api_server_profile_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PlatformProfileIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PlatformProfileOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ext/caegroup/dt/defs": {
       "get": {
         "tags": [
@@ -26592,6 +26654,71 @@
           "period_to"
         ],
         "title": "PlanOut"
+      },
+      "PlatformProfileIn": {
+        "properties": {
+          "summary": {
+            "type": "string",
+            "maxLength": 300,
+            "title": "Summary",
+            "default": ""
+          },
+          "notes": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Notes",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "title": "PlatformProfileIn"
+      },
+      "PlatformProfileOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "tagline": {
+            "type": "string",
+            "title": "Tagline"
+          },
+          "summary": {
+            "type": "string",
+            "title": "Summary"
+          },
+          "notes": {
+            "type": "string",
+            "title": "Notes"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "name",
+          "tagline",
+          "summary",
+          "notes",
+          "updated_at"
+        ],
+        "title": "PlatformProfileOut",
+        "description": "이 플랫폼의 자기소개 — **로그인 없이 읽힌다**(MCP 안내문의 첫머리 · `whoami`).\n\n같은 틀로 띄운 플랫폼 여럿이 한 에이전트에 붙으면 도구가 전부 같아서, 어느 플랫폼에\n물을지를 이것으로 고른다. 이름 · 한 줄 설명은 설치(`.env`)의 것, 소개와 사이는 MCP · API 로\n고친 것."
       },
       "PointsOut": {
         "properties": {

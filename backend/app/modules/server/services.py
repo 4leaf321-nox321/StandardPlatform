@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.database import get_db
 from app.modules.accounts.models import User
-from app.modules.server.models import ExtensionState
+from app.modules.server.models import ExtensionState, PlatformProfile
 from app.shared import audit
 from app.shared.errors import NotFound, code
 
@@ -204,3 +204,39 @@ def require_extension(name: str) -> Callable[..., None]:
             )
 
     return guard
+
+
+def profile(db: Session) -> PlatformProfile | None:
+    """이 플랫폼의 자기소개 — 한 행. 아직 아무도 안 적었으면 없다."""
+    return db.get(PlatformProfile, 1)
+
+
+def set_profile(db: Session, user: User, *, summary: str, notes: str) -> PlatformProfile:
+    """자기소개를 고친다 — **시스템 관리자만**(부르는 쪽이 막는다). 바뀌었으면 감사에 전 ·
+    후를 남긴다: 에이전트가 이 글로 플랫폼을 고르므로, 누가 언제 무엇으로 바꿨나가 답이 갈린
+    까닭이 된다.
+    """
+    row = db.get(PlatformProfile, 1)
+    before = (
+        {"summary": row.summary, "notes": row.notes} if row else {"summary": "", "notes": ""}
+    )
+    after = {"summary": summary.strip(), "notes": notes.strip()}
+    if row is None:
+        row = PlatformProfile(id=1, **after)
+        db.add(row)
+    else:
+        row.summary, row.notes = after["summary"], after["notes"]
+    row.updated_by_id = user.id
+    if before != after:
+        audit.record(
+            db,
+            action="server.profile",
+            actor=user,
+            target_table="platform_profile",
+            target_id=None,
+            target_label=get_settings().app_name,
+            changes={"before": before, "after": after},
+        )
+    db.commit()
+    db.refresh(row)
+    return row

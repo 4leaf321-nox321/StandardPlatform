@@ -49,48 +49,52 @@ API_BASE = os.environ.get("PLATFORM_API_BASE", "http://localhost:8040").rstrip("
 # 로그/재개)를 포기하지만, 이 서버는 그 기능들을 쓰지 않으므로 실질 손실이 없다.
 _JSON_RESPONSE = os.environ.get("MCP_JSON_RESPONSE") == "1"
 
+#: 모든 설치에 같은 안내 — 그 앞에 **이 플랫폼의 자기소개**(`identity`)가 접속마다 붙는다.
+BASE_INSTRUCTIONS = (
+    "이 설치의 온톨로지를 읽고 쓴다. **`get_guide` 와 `ontology_schema` 를 먼저 "
+    "부른다** — 무엇을 만들 수 있고 각 타입이 어떤 값을 받는지가 거기 다 있다.\n"
+    "\n"
+    "하려는 일 → 부를 것:\n"
+    "  어느 타입에 있는지 모른다       search           ← 타입을 모를 때의 첫 걸음\n"
+    "  이름으로 무언가를 가리킨다      object_resolve   ← 참조·관계 잇기의 첫 걸음\n"
+    "  내 부서 · 내 권한               whoami           (create 의 workspace_slug)\n"
+    "  이 플랫폼의 자기소개를 적는다   platform_profile → platform_profile_update\n"
+    "  그 타입에 무엇이 있나           objects_list\n"
+    "  몇 건인가 · 어떻게 갈리나       objects_summary  (세려고 전부 받지 마라)\n"
+    "  이 객체의 모든 것               object_get · object_references · object_rollup\n"
+    "  계층을 한 단계씩                object_tree\n"
+    "  이것과 이어진 것들              graph_neighbors  (타입 지형은 graph_overview)\n"
+    "  누가 언제 무엇을 바꿨나         object_history(하나) · audit_recent(전체)\n"
+    "  여러 객체의 한 칸을 한 값으로   bulk_edit (apply=false 로 먼저 · undo 있음)\n"
+    "  객체를 지운다 · 둘을 합친다     objects_delete · object_merge (apply=false 먼저)\n"
+    "  객체를 이력의 그 값으로         object_restore\n"
+    "  잘못 이은 관계                  relation_update · relation_remove\n"
+    "  여러 타입을 건너뛰는 물음       rdf_query (SPARQL)\n"
+    "  여러 행 · 묶음을 넣는다         objects_import · bundle_import → job_apply\n"
+    "  정의를 바꾼다                   ontology_import (apply=false 로 먼저)\n"
+    "  정의를 지운다                   ontology_delete (apply=false 로 먼저)\n"
+    "  속성 종류 · 고를 값 이름 · 승격  ontology_retype · ontology_rename_option · "
+    "ontology_promote\n"
+    "  정의를 그때로 되돌린다          ontology_restore\n"
+    "  이 설치에만 있는 기능           extensions_schema → extension_call\n"
+    "\n"
+    "지켜야 할 셋:\n"
+    "1. **이름은 해소하고 쓴다.** `object_resolve` 가 `candidates` 를 주면 고르지 "
+    "말고 사람에게 묻는다 — 목록의 첫 줄을 집으면 틀린 줄도 집힌다.\n"
+    "2. **0건은 「없다」 가 아니다.** 목록이 0건이면 응답에 `diagnosis` 가 붙는다 "
+    "— 안 채운 타입인지, 부서 밖이라 안 보이는지, 조건이 좁은지 거기 적혀 있다. "
+    "그것을 읽기 전에 「없습니다」 라고 답하지 마라.\n"
+    "3. **바꾸거나 지울 때는 미리 보기 먼저.** `ontology_import` · `ontology_delete` · "
+    "`objects_delete` 같은 도구를 기본값(apply=false)으로 불러 계획과 경고를 사람에게 "
+    "보여 주고, 판단을 받은 뒤에 apply=true 로 부른다. 계획이 막는 것(`blocking` · "
+    "`errors`)은 우회하지 않는다 — 먼저 할 일을 사람에게 말한다."
+)
+
 mcp = FastMCP(
     # 번들 하나로 여러 플랫폼을 띄우므로 이름은 설치(유닛의 APP_SLUG)에서 온다.
     os.environ.get("APP_SLUG", "standardplatform"),
     json_response=_JSON_RESPONSE,
-    instructions=(
-        "이 설치의 온톨로지를 읽고 쓴다. **`get_guide` 와 `ontology_schema` 를 먼저 "
-        "부른다** — 무엇을 만들 수 있고 각 타입이 어떤 값을 받는지가 거기 다 있다.\n"
-        "\n"
-        "하려는 일 → 부를 것:\n"
-        "  어느 타입에 있는지 모른다       search           ← 타입을 모를 때의 첫 걸음\n"
-        "  이름으로 무언가를 가리킨다      object_resolve   ← 참조·관계 잇기의 첫 걸음\n"
-        "  내 부서 · 내 권한               whoami           (create 의 workspace_slug)\n"
-        "  그 타입에 무엇이 있나           objects_list\n"
-        "  몇 건인가 · 어떻게 갈리나       objects_summary  (세려고 전부 받지 마라)\n"
-        "  이 객체의 모든 것               object_get · object_references · object_rollup\n"
-        "  계층을 한 단계씩                object_tree\n"
-        "  이것과 이어진 것들              graph_neighbors  (타입 지형은 graph_overview)\n"
-        "  누가 언제 무엇을 바꿨나         object_history(하나) · audit_recent(전체)\n"
-        "  여러 객체의 한 칸을 한 값으로   bulk_edit (apply=false 로 먼저 · undo 있음)\n"
-        "  객체를 지운다 · 둘을 합친다     objects_delete · object_merge (apply=false 먼저)\n"
-        "  객체를 이력의 그 값으로         object_restore\n"
-        "  잘못 이은 관계                  relation_update · relation_remove\n"
-        "  여러 타입을 건너뛰는 물음       rdf_query (SPARQL)\n"
-        "  여러 행 · 묶음을 넣는다         objects_import · bundle_import → job_apply\n"
-        "  정의를 바꾼다                   ontology_import (apply=false 로 먼저)\n"
-        "  정의를 지운다                   ontology_delete (apply=false 로 먼저)\n"
-        "  속성 종류 · 고를 값 이름 · 승격  ontology_retype · ontology_rename_option · "
-        "ontology_promote\n"
-        "  정의를 그때로 되돌린다          ontology_restore\n"
-        "  이 설치에만 있는 기능           extensions_schema → extension_call\n"
-        "\n"
-        "지켜야 할 셋:\n"
-        "1. **이름은 해소하고 쓴다.** `object_resolve` 가 `candidates` 를 주면 고르지 "
-        "말고 사람에게 묻는다 — 목록의 첫 줄을 집으면 틀린 줄도 집힌다.\n"
-        "2. **0건은 「없다」 가 아니다.** 목록이 0건이면 응답에 `diagnosis` 가 붙는다 "
-        "— 안 채운 타입인지, 부서 밖이라 안 보이는지, 조건이 좁은지 거기 적혀 있다. "
-        "그것을 읽기 전에 「없습니다」 라고 답하지 마라.\n"
-        "3. **바꾸거나 지울 때는 미리 보기 먼저.** `ontology_import` · `ontology_delete` · "
-        "`objects_delete` 같은 도구를 기본값(apply=false)으로 불러 계획과 경고를 사람에게 "
-        "보여 주고, 판단을 받은 뒤에 apply=true 로 부른다. 계획이 막는 것(`blocking` · "
-        "`errors`)은 우회하지 않는다 — 먼저 할 일을 사람에게 말한다."
-    ),
+    instructions=BASE_INSTRUCTIONS,
 )
 
 #: 시험이 갈아 끼우는 자리 — 진짜 앱(ASGI)이나 가짜 응답을 여기로 붙인다.
@@ -218,6 +222,93 @@ def _unwrap(r: httpx.Response) -> Any:
 
 def _client(timeout: float) -> httpx.AsyncClient:
     return httpx.AsyncClient(base_url=API_BASE, timeout=timeout, transport=_TRANSPORT)
+
+
+# --------------------------------------------------------------------------- #
+# 이 플랫폼의 자기소개 — 같은 도구를 가진 플랫폼 여럿 가운데 어디에 물을지
+# --------------------------------------------------------------------------- #
+#: 같은 틀(Standard Platform)로 띄운 플랫폼은 도구 이름 · 설명이 전부 같다. 한 에이전트에
+#: 여럿이 붙으면 고를 단서가 서버 이름(slug) 하나뿐이라, 저장된 자기소개
+#: (`/api/server/profile`, 로그인 없이 읽힌다)를 **접속마다** 안내문 첫머리에 싣는다.
+#: 관리자가 고치면 이만큼 뒤의 새 접속부터.
+PROFILE_TTL = 60.0
+PROFILE_PATH = "/api/server/profile"
+
+#: 안내문을 만드는 자리는 동기 함수다(라이브러리의 `create_initialization_options`) — 시험이
+#: 여기에 가짜 응답을 붙인다.
+_SYNC_TRANSPORT: httpx.BaseTransport | None = None
+_profile_cache: tuple[float, dict[str, Any] | None] = (0.0, None)
+
+SAME_TOOLS_RULE = (
+    "같은 틀로 띄운 다른 플랫폼도 **같은 이름의 도구**를 낸다. 물음의 대상이 이 "
+    "플랫폼에 있는지 위 소개와 `ontology_schema` 로 먼저 보고, 여기서 0건이거나 그런 "
+    "타입이 없으면 「없다」 가 아니라 「이 플랫폼에는 없다」 로 말한다 — 다른 플랫폼에 "
+    "있을 수 있다. 같은 코어 타입이 여러 플랫폼에 있으면 소개가 말하는 정본에 묻는다."
+)
+
+
+def profile_now() -> dict[str, Any] | None:
+    """저장된 자기소개 — 짧게 붙들어 둔다. 백엔드가 안 닿으면 붙들던 것(없으면 None)."""
+    global _profile_cache
+    at, cached = _profile_cache
+    if cached is not None and time.monotonic() - at < PROFILE_TTL:
+        return cached
+    try:
+        with httpx.Client(base_url=API_BASE, timeout=1.5, transport=_SYNC_TRANSPORT) as client:
+            got = client.get(PROFILE_PATH)
+        fresh = got.json() if got.status_code == 200 else None
+    except (httpx.HTTPError, ValueError):
+        fresh = None
+    if isinstance(fresh, dict):
+        _profile_cache = (time.monotonic(), fresh)
+        return fresh
+    return cached
+
+
+def identity(profile: dict[str, Any] | None) -> str:
+    """안내문 첫머리 — 이 서버가 **어느 플랫폼의 것이고 무엇을 담나.**"""
+    slug = str((profile or {}).get("slug") or os.environ.get("APP_SLUG", "standardplatform"))
+    if not profile:
+        head = (
+            f"**이 서버는 플랫폼 `{slug}` 의 것이다.** (자기소개를 읽지 못했다 — "
+            "`whoami` 의 `platform` 을 본다.)"
+        )
+        return f"{head}\n{SAME_TOOLS_RULE}\n\n"
+    name = str(profile.get("name") or slug)
+    tagline = str(profile.get("tagline") or "").strip()
+    lines = [
+        f"**이 서버는 「{name}」(`{slug}`)의 것이다.**" + (f" {tagline}" if tagline else "")
+    ]
+    summary = str(profile.get("summary") or "").strip()
+    lines.append(
+        f"담는 것: {summary}"
+        if summary
+        else "담는 것: (아직 안 적었다 — 시스템 관리자가 `platform_profile` 로 적는다)"
+    )
+    notes = str(profile.get("notes") or "").strip()
+    if notes:
+        lines.append(f"다른 플랫폼과의 사이: {notes}")
+    lines.append(SAME_TOOLS_RULE)
+    return "\n".join(lines) + "\n\n"
+
+
+def _install_identity() -> None:
+    """접속(세션)마다 안내문을 다시 만든다 — 라이브러리가 접속마다
+    `create_initialization_options` 를 부르고 그때 `instructions` 를 읽는다. 시험의 가짜
+    FastMCP 에는 그 자리가 없다."""
+    low = getattr(mcp, "_mcp_server", None)
+    original = getattr(low, "create_initialization_options", None)
+    if low is None or original is None:
+        return
+
+    def with_identity(*args: Any, **kwargs: Any) -> Any:
+        low.instructions = identity(profile_now()) + BASE_INSTRUCTIONS
+        return original(*args, **kwargs)
+
+    low.create_initialization_options = with_identity
+
+
+_install_identity()
 
 
 async def _get(
@@ -350,6 +441,8 @@ _GUIDE_TOPICS = (
     "relations",
     "sparql",
     "metrics",
+    "reports",
+    "platforms",
 )
 
 
@@ -394,6 +487,8 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
       - `sparql` 여러 타입을 건너뛰어 잇는 물음 — 질의어로
       - `metrics` 지표 — 미리 세어 둔 값으로 비율 · 추이 · 코호트에 답하기
       - `extensions` 이 설치에만 있는 기능(확장) — 무엇을 부를 수 있나
+      - `reports` 보고서 기록 — RA 에서 쌓인 보고서에 묻기
+      - `platforms` 같은 도구를 가진 플랫폼이 여럿일 때 — 어디에 물을지 · 자기소개
 
     한 번에 다 받지 마라 — 필요한 주제만 받는 게 싸다."""
     version, secs = _guide_sections()
@@ -407,9 +502,14 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
         if key not in secs:
             return {"error": f"그런 주제가 없습니다: {topic}", "topics": sorted(secs.keys())}
         return {"guide_version": version, "topic": key, "content": secs[key]}
+    # **어느 플랫폼의 안내서인가** — 같은 안내서를 여러 플랫폼이 낸다.
+    platform = await _get(ctx, PROFILE_PATH)
     return {
         "guide_version": version,
         "topic": "overview",
+        "platform": platform
+        if isinstance(platform, dict) and "error" not in platform
+        else None,
         "content": secs.get("overview", ""),
         "more_topics": (
             [t for t in _GUIDE_TOPICS if t in secs and t != "overview"]
@@ -431,8 +531,147 @@ async def whoami(ctx: Context) -> Any:
 
     `object_create` 의 `workspace_slug` 에 무엇을 넣을지는 여기서 안다. 비우면 전역이
     되어 시스템 관리자가 아니면 거절된다 — **부서를 짐작해 넣지 말고 여기서 읽는다.**
-    쓰기가 거절되면 `memberships[].role` 을 보고 사용자에게 알린다."""
-    return await _get(ctx, "/api/auth/me")
+    쓰기가 거절되면 `memberships[].role` 을 보고 사용자에게 알린다.
+
+    `platform` 은 **지금 어느 플랫폼에 묻고 있나** — 이름 · 담는 것(`summary`) · 다른
+    플랫폼과의 사이(`notes`). 같은 도구를 가진 플랫폼이 여럿 붙어 있으면 이것으로 가른다."""
+    me = await _get(ctx, "/api/auth/me")
+    if isinstance(me, dict) and "error" not in me:
+        platform = await _get(ctx, PROFILE_PATH)
+        if isinstance(platform, dict) and "error" not in platform:
+            me = {**me, "platform": platform}
+    return me
+
+
+@tool()
+async def platform_profile(ctx: Context) -> Any:
+    """**이 플랫폼의 자기소개와, 그것을 쓸 사실** — 소개를 적거나 고치기 전에 부른다.
+
+    같은 틀로 띄운 플랫폼 여럿이 한 에이전트에 붙으면 도구가 전부 같아서, 에이전트는 이
+    소개로 어디에 물을지 고른다(안내문 첫머리 · `whoami` 의 `platform`).
+
+    - `profile` — 지금 소개: `summary`(무엇을 담나) · `notes`(다른 플랫폼과의 사이).
+    - `facts` — 서버가 아는 것: 타입별 건수 · 축/기록(`usage`) · 허브에서 받은 타입
+      (`managed_by`) · 코어 공개(`core`) · 데이터 소스 · 확장 · 지표. 시스템 관리자가 아니면
+      못 보는 것은 `unavailable` 에 이유와 함께.
+
+    **소개를 쓰는 법:**
+    - `summary`(300자) — 무엇을 담나: 주요 기록 · 축과 규모, 어디서 오나. 예 「CAE 그룹의
+      해석 · 보고서 기록(RA 보고서 약 1.2만 건)과 개발모델 6천」.
+    - `notes`(2,000자) — 정본은 어디인가(`managed_by` 가 있으면 「그 타입의 정본은 그쪽」,
+      RA 보고서 소스면 「보고서의 정본은 RA — 여기서 고치지 않는다」), 무엇은 여기 없나.
+    - **로그인 없이 읽힌다** — 토큰 · 내부 주소 · 사람 이름을 적지 않는다.
+    - 사실에 없는 것을 지어 쓰지 않는다. 초안은 `platform_profile_update(apply=false)` 로
+      사람에게 보인다."""
+    facts: dict[str, Any] = {}
+    unavailable: dict[str, str] = {}
+    profile = await _get(ctx, PROFILE_PATH)
+    schema = await _get(ctx, "/api/ontology/schema")
+    if isinstance(schema, dict) and "error" not in schema:
+        kinds = [
+            {
+                "slug": one.get("slug"),
+                "label": one.get("label"),
+                "usage": one.get("usage"),
+                "count": one.get("object_count"),
+                "managed_by": one.get("managed_by") or None,
+                "core": bool(one.get("core")),
+            }
+            for one in schema.get("types") or []
+            if one.get("kind_class") != "system"
+        ]
+        facts["types"] = sorted(kinds, key=lambda one: -(one["count"] or 0))
+        facts["relation_types"] = len(schema.get("relation_types") or [])
+        facts["interfaces"] = len(schema.get("interfaces") or [])
+    else:
+        unavailable["types"] = str((schema or {}).get("error"))
+    sources = await _get(ctx, "/api/datasources")
+    if isinstance(sources, list):
+        # 주소 · 인증은 싣지 않는다 — 소개에 옮겨 적힐 자리라서.
+        facts["datasources"] = [
+            {
+                "name": one.get("name"),
+                "kind": one.get("kind"),
+                "type_slug": one.get("type_slug"),
+                "scope": (one.get("options") or {}).get("board"),
+                "interval_minutes": one.get("interval_minutes"),
+                "last_status": one.get("last_status"),
+            }
+            for one in sources
+        ]
+    else:
+        unavailable["datasources"] = str((sources or {}).get("error"))
+    status = await _get(ctx, "/api/server/status")
+    if isinstance(status, dict) and "error" not in status:
+        facts["extensions"] = status.get("extensions")
+        facts["version"] = status.get("version")
+    else:
+        unavailable["server"] = str((status or {}).get("error"))
+    metrics = await _get(ctx, "/api/metrics")
+    if isinstance(metrics, list):
+        facts["metrics"] = [
+            {"slug": one.get("slug"), "label": one.get("label"),
+             "source_type_slug": one.get("source_type_slug")}
+            for one in metrics
+        ]  # fmt: skip
+    else:
+        unavailable["metrics"] = str((metrics or {}).get("error"))
+    out: dict[str, Any] = {"profile": profile, "facts": facts}
+    if unavailable:
+        out["unavailable"] = unavailable
+    return out
+
+
+@tool()
+async def platform_profile_update(
+    ctx: Context,
+    summary: str | None = None,
+    notes: str | None = None,
+    apply: bool = False,
+) -> Any:
+    """자기소개를 고친다 — **시스템 관리자만**(토큰이면 `ontology:write`). 안 보낸 칸은 그대로.
+
+    `apply=false`(기본)는 미리 보기: 지금 → 바꿀 것, 그리고 **다른 에이전트가 볼 안내문
+    첫머리**. 사람이 확인한 뒤 `apply=true`. 저장하면 새 접속부터 실린다(1분 안) — 이미 열린
+    접속의 안내문은 그대로다. 비우려면 `""` 를 보낸다."""
+    if summary is None and notes is None:
+        return {"error": "summary 나 notes 중 하나는 보내야 합니다."}
+    current = await _get(ctx, PROFILE_PATH)
+    if not isinstance(current, dict) or "error" in current:
+        return current
+    after = {
+        "summary": (current.get("summary") or "") if summary is None else summary.strip(),
+        "notes": (current.get("notes") or "") if notes is None else notes.strip(),
+    }
+    problems = [
+        f"{key} 는 {limit:,}자까지입니다(지금 {len(after[key]):,}자)."
+        for key, limit in (("summary", 300), ("notes", 2000))
+        if len(after[key]) > limit
+    ]
+    if not apply:
+        return {
+            "applied": False,
+            "before": {"summary": current.get("summary"), "notes": current.get("notes")},
+            "after": after,
+            "instructions_preview": identity({**current, **after}),
+            "problems": problems,
+            "note": "사람이 확인한 뒤 apply=true 로 부른다.",
+        }
+    if problems:
+        return {"error": " ".join(problems)}
+    async with _client(60) as client:
+        saved = _unwrap(
+            await client.put(PROFILE_PATH, json=after, headers=_forward_headers(ctx))
+        )
+    if isinstance(saved, dict) and "error" not in saved:
+        global _profile_cache
+        _profile_cache = (0.0, None)  # 다음 접속이 새로 읽는다
+        return {
+            "applied": True,
+            "profile": saved,
+            "note": "새 접속부터 안내문에 실린다 — 이미 열린 접속은 그대로다.",
+        }
+    return saved
 
 
 @tool()

@@ -10,9 +10,11 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, String, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
@@ -30,3 +32,30 @@ class ExtensionState(Base):
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
     )
     """**누가 바꿨나는 감사가 답한다**(`extension.toggle`) — 여기는 언제만 둔다."""
+
+
+class PlatformProfile(Base):
+    """**이 플랫폼의 자기소개** — 무엇을 담고, 다른 플랫폼과 어떤 사이인가. 한 행(`id=1`).
+
+    같은 틀(Standard Platform)로 띄운 플랫폼 여럿이 한 에이전트에 도구로 붙으면 도구
+    이름 · 설명이 전부 같다 — 에이전트가 어느 플랫폼에 물을지 가를 단서가 slug 하나뿐이다.
+    MCP 서버가 이것을 읽어 안내문 첫머리 · `whoami` 에 싣는다. 이름 · 한 줄 설명은
+    `.env`(브랜딩)가 그대로 쥐고, 여기는 **설치가 쌓이며 바뀌는 것**(담는 자료 · 정본이
+    어디인가)을 쥔다 — 그래서 MCP · API 로 고친다. **로그인 없이 읽힌다**(에이전트가 토큰을
+    싣기 전에 안내문이 서야 한다).
+    """
+
+    __tablename__ = "platform_profile"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    summary: Mapped[str] = mapped_column(String(300), default="", server_default="")
+    """무엇을 담나 — 한두 문장. 에이전트가 이 플랫폼에 물을지를 이것으로 고른다."""
+    notes: Mapped[str] = mapped_column(Text, default="", server_default="")
+    """다른 플랫폼과의 사이 — 정본은 어디인가(「코어 기준정보의 정본은 허브」), 무엇은
+    여기 없나."""
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+    updated_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )

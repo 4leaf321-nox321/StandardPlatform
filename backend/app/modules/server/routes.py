@@ -29,6 +29,8 @@ from app.modules.server.schemas import (
     ExtensionOut,
     ExtensionPatchIn,
     MaintenanceItemOut,
+    PlatformProfileIn,
+    PlatformProfileOut,
     ServerStatusOut,
     TableCountOut,
 )
@@ -195,3 +197,40 @@ def maintenance(
         )
         for item in extensions.maintenance_items(db, user)
     ]
+
+
+def _profile_out(db: Session) -> PlatformProfileOut:
+    settings = get_settings()
+    row = services.profile(db)
+    return PlatformProfileOut(
+        slug=settings.app_slug,
+        name=settings.app_name,
+        tagline=settings.app_tagline,
+        summary=row.summary if row else "",
+        notes=row.notes if row else "",
+        updated_at=row.updated_at if row else None,
+    )
+
+
+@router.get("/profile", response_model=PlatformProfileOut)
+def platform_profile(db: Session = Depends(get_db)) -> PlatformProfileOut:
+    """**이 플랫폼의 자기소개** — 무엇을 담고, 다른 플랫폼과 어떤 사이인가. **로그인 없이
+    읽힌다.**
+
+    같은 틀로 띄운 플랫폼 여럿이 한 에이전트에 도구로 붙으면 도구 이름 · 설명이 전부 같다. MCP
+    서버가 이것을 읽어 안내문 첫머리에 싣는다 — 안내문은 에이전트가 토큰을 싣기 전에 서야 해서
+    로그인을 요구할 수 없다. 그래서 **비밀을 적는 자리가 아니다.**
+    """
+    return _profile_out(db)
+
+
+@router.put("/profile", response_model=PlatformProfileOut)
+def platform_profile_update(
+    payload: PlatformProfileIn,
+    user: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> PlatformProfileOut:
+    """자기소개를 고친다 — **시스템 관리자만.** 토큰으로는 `ontology:write` 범위가 든다(정의를
+    바꾸는 일과 같은 무게 — 에이전트가 이 글로 플랫폼을 고른다)."""
+    services.set_profile(db, user, summary=payload.summary, notes=payload.notes)
+    return _profile_out(db)

@@ -224,6 +224,9 @@ def _register_extensions() -> None:
     scopes.register_write_scope("/api/datasources", "objects:write")
     # 지표 정의는 화면의 모양을 정하는 일이라 정의 범위다. 계획은 POST 지만 읽기다.
     scopes.register_write_scope("/api/metrics", "ontology:write")
+    # 플랫폼의 자기소개 — 에이전트가 이 글로 어느 플랫폼에 물을지 고른다. 서버 화면의 다른 쓰기
+    # (확장 켜기)는 토큰에 열지 않는다.
+    scopes.register_write_scope("/api/server/profile", "ontology:write")
     scopes.register_read_only_post("/api/metrics/plan")
     # `import` 는 POST 지만 `dry_run` 이면 아무것도 안 바꾼다. 그래도 **읽기로
     # 열지 않는다** — 같은 경로가 적용도 하기 때문이다. 읽기 토큰은 `schema` 로

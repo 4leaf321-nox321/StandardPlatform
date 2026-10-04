@@ -1450,3 +1450,25 @@ def test_지표를_도구로_정의하고_읽으면_통계와_같은_수(bot: Bo
         bot.call(server.metric_analyze, slug, "pareto", options={"dim": "symptom", "x": 1})
     # 경보 — 읽기만. 만든 것이 없으면 빈 목록이다.
     assert bot.call(server.metric_alerts, slug) == {"alerts": [], "events": []}
+
+
+def test_자기소개는_서버가_아는_사실로_쓰고_whoami_가_싣는다(bot: Bot, db: Session) -> None:
+    """같은 틀로 띄운 플랫폼 여럿이 붙으면 도구가 전부 같다 — 에이전트가 어디에 물을지 고르는
+    단서가 이 소개다. 관리자 에이전트가 사실을 모아 초안을 쓰고, 미리 보기 뒤에 저장한다."""
+    from app.modules.server.models import PlatformProfile
+
+    db.query(PlatformProfile).delete()
+    db.commit()
+    try:
+        got = bot.call(server.platform_profile)
+        assert got["profile"]["summary"] == ""
+        assert got["facts"]["types"] and "unavailable" not in got  # 시스템 관리자의 토큰
+        plan = bot.call(server.platform_profile_update, summary="보고서 쌍둥이")
+        assert plan["applied"] is False
+        assert bot.call(server.whoami)["platform"]["summary"] == ""  # 미리 보기는 안 바꾼다
+        done = bot.call(server.platform_profile_update, summary="보고서 쌍둥이", apply=True)
+        assert done["profile"]["summary"] == "보고서 쌍둥이"
+        assert bot.call(server.whoami)["platform"]["summary"] == "보고서 쌍둥이"
+    finally:
+        db.query(PlatformProfile).delete()
+        db.commit()

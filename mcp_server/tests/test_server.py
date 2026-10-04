@@ -86,6 +86,8 @@ TOOLS = {
     "metric_analyze",
     "metric_alerts",
     "metric_define",
+    "platform_profile",
+    "platform_profile_update",
 }
 
 
@@ -669,3 +671,142 @@ def test_긴_글은_잘라_주고_어디까지인지_말한다() -> None:
         "to": len(body),
         "length": len(body),
     }
+
+
+PROFILE = {
+    "slug": "caedatahub",
+    "name": "CAE 그룹 Datahub",
+    "tagline": "해석 데이터의 자리",
+    "summary": "CAE 그룹의 보고서 · 해석 기록과 개발모델",
+    "notes": "개발모델 · 과제의 정본은 허브다.",
+    "updated_at": "2026-10-04T10:00:00Z",
+}
+
+
+def _profile_backend(seen: list[httpx.Request], profile: dict[str, Any] | None) -> Any:
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        if profile is None:
+            raise httpx.ConnectError("down")
+        return httpx.Response(200, json=profile)
+
+    return httpx.MockTransport(respond)
+
+
+def test_접속마다_안내문_첫머리에_이_플랫폼의_자기소개가_선다() -> None:
+    """같은 틀로 띄운 플랫폼은 도구가 전부 같다 — 어느 플랫폼에 물을지 가를 단서가 안내문에
+    있어야 한다. 소개는 저장된 것을 읽어(로그인 없이) 접속마다 싣는다."""
+    seen: list[httpx.Request] = []
+    server._SYNC_TRANSPORT = _profile_backend(seen, PROFILE)
+    server._profile_cache = (0.0, None)
+    try:
+        options = server.mcp._mcp_server.create_initialization_options()
+        text = options.instructions
+        assert text.startswith("**이 서버는 「CAE 그룹 Datahub」(`caedatahub`)의 것이다.**")
+        assert "담는 것: CAE 그룹의 보고서" in text and "정본은 허브" in text
+        assert server.SAME_TOOLS_RULE in text and text.endswith(server.BASE_INSTRUCTIONS)
+        assert seen[0].url.path == "/api/server/profile"
+        assert "authorization" not in seen[0].headers  # 토큰 없이 읽는다
+        # 짧게 붙들어 둔다 — 접속마다 백엔드에 묻지 않는다.
+        server.mcp._mcp_server.create_initialization_options()
+        assert len(seen) == 1
+        # 백엔드가 안 닿아도 붙들던 소개로 선다.
+        server._SYNC_TRANSPORT = _profile_backend(seen, None)
+        server._profile_cache = (0.0, PROFILE)
+        assert (
+            "CAE 그룹 Datahub"
+            in server.mcp._mcp_server.create_initialization_options().instructions
+        )
+    finally:
+        server._SYNC_TRANSPORT = None
+        server._profile_cache = (0.0, None)
+
+
+def test_소개가_없거나_못_읽으면_그렇게_말한다() -> None:
+    blank = server.identity({**PROFILE, "summary": "", "notes": ""})
+    assert "아직 안 적었다" in blank and "다른 플랫폼과의 사이" not in blank
+    unknown = server.identity(None)
+    assert "자기소개를 읽지 못했다" in unknown and server.SAME_TOOLS_RULE in unknown
+
+
+def test_whoami_는_어느_플랫폼인지도_말한다() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/auth/me":
+            return httpx.Response(200, json={"name": "홍", "home_workspace_slug": "cae"})
+        return httpx.Response(200, json=PROFILE)
+
+    _serve(respond)
+    me = asyncio.run(server.whoami(_ctx("Bearer t")))
+    assert (
+        me["home_workspace_slug"] == "cae" and me["platform"]["summary"] == PROFILE["summary"]
+    )
+    guide = asyncio.run(server.get_guide(_ctx("Bearer t")))
+    assert guide["platform"]["name"] == PROFILE["name"]
+    assert "platforms" in guide["more_topics"]
+
+
+def test_자기소개_고치기는_미리_보기가_먼저고_안_보낸_칸은_그대로다() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "PUT":
+            return httpx.Response(200, json={**PROFILE, **json.loads(request.content)})
+        return httpx.Response(200, json=PROFILE)
+
+    seen = _serve(respond)
+    server._profile_cache = (0.0, PROFILE)
+    plan = asyncio.run(
+        server.platform_profile_update(_ctx("Bearer t"), summary="  보고서 쌍둥이  ")
+    )
+    assert plan["applied"] is False and all(one.method == "GET" for one in seen)
+    assert plan["after"] == {"summary": "보고서 쌍둥이", "notes": PROFILE["notes"]}
+    assert "담는 것: 보고서 쌍둥이" in plan["instructions_preview"]
+    too_long = asyncio.run(
+        server.platform_profile_update(_ctx("Bearer t"), notes="가" * 2001, apply=True)
+    )
+    assert "2,000자" in too_long["error"]
+    done = asyncio.run(
+        server.platform_profile_update(_ctx("Bearer t"), summary="보고서 쌍둥이", apply=True)
+    )
+    assert done["applied"] is True
+    put = next(one for one in seen if one.method == "PUT")
+    assert json.loads(put.content) == {"summary": "보고서 쌍둥이", "notes": PROFILE["notes"]}
+    assert server._profile_cache == (0.0, None)  # 다음 접속이 새로 읽는다
+    assert "error" in asyncio.run(server.platform_profile_update(_ctx("Bearer t")))
+
+
+def test_자기소개를_쓸_사실을_모으고_못_보는_것은_이유와_함께() -> None:
+    def respond(request: httpx.Request) -> httpx.Response:
+        path = request.url.path
+        if path == "/api/ontology/schema":
+            return httpx.Response(
+                200,
+                json={
+                    "types": [
+                        {"slug": "ra_report", "label": "보고서", "usage": "log",
+                         "kind_class": "record", "object_count": 12000, "managed_by": ""},
+                        {"slug": "plm_model", "label": "개발모델", "usage": "axis",
+                         "kind_class": "record", "object_count": 6000, "managed_by": "hub",
+                         "core": True},
+                        {"slug": "workspace", "label": "부서", "kind_class": "system",
+                         "object_count": 30},
+                    ],
+                    "relation_types": [{"slug": "derived"}],
+                    "interfaces": [],
+                },
+            )  # fmt: skip
+        if path == "/api/datasources":
+            return httpx.Response(
+                403, json={"error": {"code": "APP-AUTH-0003", "message": "시스템 관리자만"}}
+            )
+        if path == "/api/metrics":
+            return httpx.Response(200, json=[])
+        if path == "/api/server/status":
+            return httpx.Response(200, json={"extensions": ["caegroup"], "version": "0.4.36"})
+        return httpx.Response(200, json=PROFILE)
+
+    _serve(respond)
+    got = asyncio.run(server.platform_profile(_ctx("Bearer t")))
+    assert got["profile"]["slug"] == "caedatahub"
+    assert [one["slug"] for one in got["facts"]["types"]] == ["ra_report", "plm_model"]
+    assert got["facts"]["types"][1]["managed_by"] == "hub" and got["facts"]["types"][1]["core"]
+    assert got["facts"]["extensions"] == ["caegroup"] and got["facts"]["metrics"] == []
+    assert "시스템 관리자만" in got["unavailable"]["datasources"]

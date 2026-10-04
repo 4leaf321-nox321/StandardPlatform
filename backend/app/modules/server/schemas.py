@@ -101,3 +101,26 @@ class MaintenanceItemOut(BaseModel):
     link: str | None
     severity: str
     """info · warning. 경고는 색이 붙는다."""
+
+
+class PlatformProfileOut(BaseModel):
+    """이 플랫폼의 자기소개 — **로그인 없이 읽힌다**(MCP 안내문의 첫머리 · `whoami`).
+
+    같은 틀로 띄운 플랫폼 여럿이 한 에이전트에 붙으면 도구가 전부 같아서, 어느 플랫폼에
+    물을지를 이것으로 고른다. 이름 · 한 줄 설명은 설치(`.env`)의 것, 소개와 사이는 MCP · API 로
+    고친 것.
+    """
+
+    slug: str
+    name: str
+    tagline: str
+    summary: str
+    """무엇을 담나 — 한두 문장. 비어 있으면 아직 아무도 안 적었다."""
+    notes: str
+    """다른 플랫폼과의 사이 — 정본은 어디인가, 무엇은 여기 없나."""
+    updated_at: datetime | None
+
+
+class PlatformProfileIn(BaseModel):
+    summary: str = Field(default="", max_length=300)
+    notes: str = Field(default="", max_length=2000)
