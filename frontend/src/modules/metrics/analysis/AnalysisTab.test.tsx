@@ -3,7 +3,7 @@
  * 않으며, 「아직」 을 「문제없음」 으로 말하지 않는다.** 숫자마다 건 보기로 돌아간다.
  */
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
@@ -382,6 +382,11 @@ describe('분석 탭', () => {
           drill: { type_slug: 'svc_case', params: { 'f.symptom.eq': 'S-a' }, partial: [] },
         },
       ],
+      dispersion: [
+        { row: { key: 'S-c', label: '발열' }, count: 88, causes: 4, effective: 3.6,
+          top: { key: 'P-3', label: '전원부' }, top_share: 0.3 },
+      ],
+      overall_effective: 4,
       clusters: [
         { members: [{ key: 'S-a', label: '소음' }, { key: 'S-b', label: '진동' }],
           top: [{ key: 'P-1', label: '팬' }], count: 176 },
@@ -419,6 +424,11 @@ describe('분석 탭', () => {
     await userEvent.click(screen.getByRole('button', { name: '연관 · 묶음' }))
     expect(await screen.findByText('1.82배')).toBeInTheDocument()
     expect(screen.getByText('소음 · 진동')).toBeInTheDocument()
+    // 원인분산도 — 원인이 여럿에 갈린 증상이 먼저, 가장 많은 원인과 그 몫까지.
+    const spread = screen.getByRole('region', { name: '원인분산도' })
+    expect(within(spread).getByText('발열')).toBeInTheDocument()
+    expect(within(spread).getByText('3.6')).toBeInTheDocument()
+    expect(within(spread).getByText('전원부')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '40건 보기' })).toHaveAttribute(
       'href',
       '/o/svc_case?f.symptom.eq=S-a',

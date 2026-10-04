@@ -18,6 +18,14 @@
 거리로 평균 연결 계층 묶음을 한다. 묶음 수는 실루엣이 가장 큰 것(2 ~ 10). 실루엣이 작으면
 「뚜렷한 묶음이 없다」 고 말한다. 묶음마다 PPMI 가 큰 열(그 묶음을 가르는 원인)을 함께 낸다.
 
+## 원인분산도 — 증상마다 원인이 얼마나 갈렸나
+
+행 a 의 열 몫 p_b = N[a, b] / (a 의 합)으로 **유효 원인 수** 1 / Σ p_b² 를 낸다(역 심프슨).
+원인 하나에 몰리면 1, 넷에 고르게 갈리면 4 다. 가장 많은 원인과 그 몫을 함께 싣고, 많이 갈린
+증상부터 세운다 — 「원인이 여럿에 걸친 증상」 이 앞에 선다. 건수가 적은 행은 몇 건의 우연으로
+값이 흔들려 뺀다(`DISPERSION_MIN`). 견줄 기준으로 전체(모든 행을 합친 열 몫)의 유효 원인 수도
+낸다.
+
 ## 지도 — 대응 분석
 
 표준화 잔차 행렬의 특이값 분해로 행과 열을 같은 평면에 놓는다(첫 두 축과 그 몫). 가까운 행과
@@ -43,6 +51,7 @@ from app.modules.metrics.models import MetricDef
 from app.modules.metrics.recipes import _numeric, common, registry
 from app.modules.metrics.recipes.schemas import (
     AssocClusterOut,
+    AssocDispersionOut,
     AssocLabelOut,
     AssocOut,
     AssocPairOut,
@@ -51,7 +60,7 @@ from app.modules.metrics.recipes.schemas import (
 
 NAME = "assoc"
 LABEL = "연관 · 묶음"
-METHOD = "향상도 · 초기하 정확 검정 · BH · PPMI 코사인 평균 연결 · 대응 분석 v1"
+METHOD = "향상도 · 초기하 정확 검정 · BH · PPMI 코사인 평균 연결 · 대응 분석 · 유효 원인 수 v2"
 MIN_COUNT = 5
 TOP_PAIRS = 50
 COMPACT_PAIRS = 15
@@ -59,6 +68,9 @@ COMPACT_PAIRS = 15
 MAX_ROWS = 60
 MAX_COLS = 80
 WEAK_SILHOUETTE = 0.15
+#: 원인분산도를 낼 행의 최소 건수 — 몇 건짜리 행의 유효 원인 수는 우연이 정한다.
+DISPERSION_MIN = 20
+COMPACT_DISPERSION = 15
 
 Matrix = NDArray[np.float64]
 
@@ -107,6 +119,49 @@ def pairs(table: Matrix, min_count: float = MIN_COUNT) -> list[Pair]:
         out.append(Pair(int(i), int(j), count, expected, count / expected, p_value))
     for one, q in zip(out, benjamini_hochberg([one.p_value for one in out]), strict=True):
         one.q_value = q
+    return out
+
+
+def effective_count(values: NDArray[np.float64]) -> float:
+    """유효 개수 1 / Σ p² — 몫이 고르면 값의 수, 하나에 몰리면 1. 합이 0 이면 0."""
+    total = float(values.sum())
+    if total <= 0:
+        return 0.0
+    shares = values / total
+    return float(1.0 / np.square(shares).sum())
+
+
+@dataclass
+class Dispersion:
+    row: int
+    count: float
+    causes: int
+    """나온 원인(열 값) 수."""
+    effective: float
+    top: int
+    top_share: float
+
+
+def dispersion(table: Matrix, minimum: float = DISPERSION_MIN) -> list[Dispersion]:
+    """행마다 원인이 얼마나 갈렸나 — 많이 갈린 것부터. 건수가 `minimum` 보다 적은 행은 뺀다."""
+    out: list[Dispersion] = []
+    for i in range(table.shape[0]):
+        row = table[i]
+        total = float(row.sum())
+        if total < minimum or total <= 0:
+            continue
+        top = int(np.argmax(row))
+        out.append(
+            Dispersion(
+                row=i,
+                count=total,
+                causes=int(np.count_nonzero(row)),
+                effective=effective_count(row),
+                top=top,
+                top_share=float(row[top] / total),
+            )
+        )
+    out.sort(key=lambda one: (-one.effective, -one.count))
     return out
 
 
@@ -385,6 +440,28 @@ def run(
                 for j in range(small.shape[1])
                 if np.isfinite(col_points[j]).all()
             ]
+    spread = dispersion(table, max(DISPERSION_MIN, 4 * min_count))  # 아래 caveat 와 같은 값
+    out_dispersion = [
+        AssocDispersionOut(
+            row=_label(labels, rows, row_keys[one.row]),
+            count=one.count,
+            causes=one.causes,
+            effective=one.effective,
+            top=_label(labels, cols, col_keys[one.top]),
+            top_share=one.top_share,
+        )
+        for one in spread[: COMPACT_DISPERSION if compact else MAX_ROWS]
+    ]
+    overall = effective_count(table.sum(axis=0)) if table.size else None
+    if spread:
+        floor = max(DISPERSION_MIN, 4 * min_count)
+        caveats.add(
+            "dispersion",
+            "원인분산도는 증상마다 원인이 몇 개에 고르게 퍼진 것과 같은가(유효 원인 수 "
+            f"1/Σ몫²)입니다 — 1 이면 원인 하나에 몰림. 건수가 {floor}건보다 적은 증상은 "
+            "뺐습니다.",
+            level="info",
+        )
     multi = row_dim.axis.multi or col_dim.axis.multi
     if multi:
         caveats.add(
@@ -442,6 +519,8 @@ def run(
         col_values=len(col_keys),
         tested=len(found_pairs),
         pairs=out_pairs,
+        dispersion=out_dispersion,
+        overall_effective=overall,
         clusters=out_clusters,
         silhouette=silhouette_value,
         map_rows=rows_xy,

@@ -2313,7 +2313,8 @@ async def metric_analyze(
     - `logit` — 재방문 위험 요인(방문 기준 「재방문」 이 있는 지표). `factors`(필수 — 값이 적은
       기준 이름 넷까지, 목록) · `min_count`
     - `assoc` — 연관 · 묶음. `rows` · `cols`(필수 — 증상 · 부품처럼 기준 둘) · `min_count`.
-      향상도 · 정확 검정(BH q), 행의 묶음, 대응 분석 지도
+      향상도 · 정확 검정(BH q), 행의 묶음, 대응 분석 지도, **원인분산도**(`dispersion` — 행마다
+      유효 원인 수 1/Σ몫², 가장 많은 원인과 그 몫)
     - 범위: `period_from` · `period_to`(앞까지) · `cohort_from` · `cohort_to` — `YYYY-MM-DD`
 
     `filters`: `{기준 이름: 값}` — 지표 읽기와 같다(분모 · 두 모델에 함께 걸린다).

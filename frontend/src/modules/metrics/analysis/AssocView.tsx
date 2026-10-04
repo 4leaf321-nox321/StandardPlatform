@@ -127,6 +127,42 @@ export function AssocView({ metric, read }: { metric: Metric; read: ReadOptions 
               </TableBody>
             </Table>
           )}
+          {(data.dispersion ?? []).length > 0 && (
+            <section className="space-y-1" aria-label="원인분산도">
+              <h3 className="text-sm font-semibold">
+                원인분산도 — {data.rows_label}마다 {data.cols_label}이(가) 얼마나 갈렸나
+              </h3>
+              <p className="text-muted-foreground text-xs">
+                유효 원인 수는 원인이 몇 개에 고르게 퍼진 것과 같은가입니다 — 1 이면 하나에 몰림.
+                전체로는 {shownNumber(data.overall_effective, 1)}개. 많이 갈린 것부터.
+              </p>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{data.rows_label}</TableHead>
+                    <TableHead className="text-right">건수</TableHead>
+                    <TableHead className="text-right">원인 값</TableHead>
+                    <TableHead className="text-right">유효 원인 수</TableHead>
+                    <TableHead>가장 많은 {data.cols_label}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {(data.dispersion ?? []).map((one) => (
+                    <TableRow key={one.row.key}>
+                      <TableCell>{one.row.label}</TableCell>
+                      <TableCell className="text-right">{shownNumber(one.count)}</TableCell>
+                      <TableCell className="text-right">{shownNumber(one.causes)}</TableCell>
+                      <TableCell className="text-right">{shownNumber(one.effective, 1)}</TableCell>
+                      <TableCell>
+                        {one.top.label}{' '}
+                        <span className="text-muted-foreground">({percent(one.top_share)})</span>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </section>
+          )}
           {data.clusters.length > 0 && (
             <section className="space-y-1" aria-label="묶음">
               <h3 className="text-sm font-semibold">

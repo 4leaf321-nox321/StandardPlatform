@@ -96,3 +96,16 @@ def test_요인이_겹치면_오즈비를_가르지_않는다() -> None:
     found = logit.fit(groups, 2)
     assert found.aliased and found.covariance is None
     assert len(found.lr) == 2
+
+
+def test_원인분산도는_원인이_몇_개에_고르게_갈렸나다() -> None:
+    """한 원인에 몰리면 1, 둘에 반반이면 2, 넷에 고르면 4 — 많이 갈린 증상부터 선다. 몇 건짜리
+    증상은 우연이 값을 정해 뺀다."""
+    table = np.array(
+        [[100.0, 0, 0, 0], [50, 50, 0, 0], [25, 25, 25, 25], [5, 5, 0, 0]], dtype=np.float64
+    )
+    found = assoc.dispersion(table, minimum=20)
+    assert [one.row for one in found] == [2, 1, 0]
+    assert [one.effective for one in found] == pytest.approx([4.0, 2.0, 1.0])
+    assert found[2].top == 0 and found[2].top_share == 1.0 and found[2].causes == 1
+    assert assoc.effective_count(np.zeros(3)) == 0.0

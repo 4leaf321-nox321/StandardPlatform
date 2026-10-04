@@ -845,8 +845,16 @@ def test_연관은_심은_덩어리의_짝과_묶음을_찾는다(client: TestCl
     assert sorted(groups) == [["S-a", "S-b"], ["S-c", "S-d"]]
     assert found["silhouette"] > 0.5
     assert found["map_explained"] > 0.5 and len(found["map_rows"]) == 4
+    # 원인분산도 — 증상마다 부품 넷 중 둘에 몰렸다(40 · 40 · 4 · 4): 유효 원인 수 2.4.
+    spread = {one["row"]["key"]: one for one in found["dispersion"]}
+    assert set(spread) == {"S-a", "S-b", "S-c", "S-d"}
+    assert spread["S-a"]["effective"] == pytest.approx(
+        1 / (2 * (40 / 88) ** 2 + 2 * (4 / 88) ** 2)
+    )
+    assert spread["S-a"]["top"]["key"] in {"P-1", "P-2"} and spread["S-a"]["causes"] == 4
+    assert found["overall_effective"] == pytest.approx(4.0)  # 전체로는 넷에 고르다
     codes = {one["code"] for one in found["caveats"]}
-    assert {"overlap_basis", "association", "multiple_testing"} <= codes
+    assert {"overlap_basis", "association", "multiple_testing", "dispersion"} <= codes
     compact = _analysis(
         client, admin, metric["slug"], "assoc", rows="symptom", cols="part", compact="true"
     )

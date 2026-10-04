@@ -6,7 +6,7 @@ from __future__ import annotations
 import uuid
 from typing import Any, Literal
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.modules.metrics.schemas import DrillOut, ReadHeader
 
@@ -477,6 +477,20 @@ class AssocPairOut(BaseModel):
     drill: DrillOut
 
 
+class AssocDispersionOut(BaseModel):
+    """원인분산도 한 줄 — 이 행(증상)의 원인(열)이 얼마나 갈렸나."""
+
+    row: AssocLabelOut
+    count: float
+    causes: int
+    """나온 원인 값 수."""
+    effective: float
+    """유효 원인 수 1/Σ몫² — 원인이 몇 개에 고르게 퍼진 것과 같은가(1 이면 하나에 몰림)."""
+    top: AssocLabelOut
+    top_share: float
+    """가장 많은 원인의 몫."""
+
+
 class AssocClusterOut(BaseModel):
     members: list[AssocLabelOut]
     top: list[AssocLabelOut]
@@ -504,6 +518,10 @@ class AssocOut(AnalysisHeader):
     tested: int
     """검정한 짝 수(건수가 min_count 이상)."""
     pairs: list[AssocPairOut]
+    dispersion: list[AssocDispersionOut] = Field(default_factory=list)
+    """원인분산도 — 원인이 많이 갈린 행부터."""
+    overall_effective: float | None = None
+    """견줄 기준 — 모든 행을 합친 열 몫의 유효 개수."""
     clusters: list[AssocClusterOut]
     silhouette: float | None
     map_rows: list[AssocPointOut]

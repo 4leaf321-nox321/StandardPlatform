@@ -421,6 +421,18 @@ export interface AssocPair {
   drill: Drill
 }
 
+/** 원인분산도 한 줄 — 이 행(증상)의 원인(열)이 얼마나 갈렸나. */
+export interface AssocDispersion {
+  row: AssocLabel
+  count: number
+  /** 나온 원인 값 수. */
+  causes: number
+  /** 유효 원인 수 1/Σ몫² — 원인이 몇 개에 고르게 퍼진 것과 같은가(1 이면 하나에 몰림). */
+  effective: number
+  top: AssocLabel
+  top_share: number
+}
+
 export interface AssocCluster {
   members: AssocLabel[]
   /** 그 묶음을 가르는 열. */
@@ -447,6 +459,10 @@ export interface AssocResult extends AnalysisHeader {
   col_values: number
   tested: number
   pairs: AssocPair[]
+  /** 원인이 많이 갈린 행부터. */
+  dispersion?: AssocDispersion[]
+  /** 견줄 기준 — 모든 행을 합친 열 몫의 유효 개수. */
+  overall_effective?: number | null
   clusters: AssocCluster[]
   silhouette: number | null
   map_rows: AssocPoint[]
