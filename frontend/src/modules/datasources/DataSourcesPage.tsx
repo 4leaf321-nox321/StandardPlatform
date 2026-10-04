@@ -172,8 +172,8 @@ export default function DataSourcesPage() {
                 {source.kind === 'file'
                   ? source.entity_set
                   : source.kind === 'ra_reports'
-                    ? `${source.base_url} · 조직 ${source.options.board || '(안 고름)'}${
-                        source.options.include_descendants === false ? '' : ' 과 하위'
+                    ? `${source.base_url} · 조직 ${source.options.board || '(선택하지 않음)'}${
+                        source.options.include_descendants === false ? '' : ' 및 하위 조직'
                       }`
                     : `${source.base_url}/${source.entity_set.replace(/^\//, '')}`}
                 {source.kind === 'odata' && source.filter && ` ?$filter=${source.filter}`}
@@ -307,7 +307,7 @@ const COUNT_LABEL: Record<string, string> = {
   gone: '원본에서 내려감',
   back: '다시 게시',
   gone_held_back: '내려감 보류',
-  tags_as_text: '태그를 글로',
+  tags_as_text: '글로 남긴 태그',
 }
 
 /** 실행의 수 — 0 은 빼고. `full_read` 는 수가 아니라 「이번엔 전량으로 받았다」 는 표시다. */
@@ -364,6 +364,17 @@ function SyncDialog({
           </DialogDescription>
         </DialogHeader>
         {error && <ErrorNotice error={error} />}
+        {/* RA 에서는 게시하면 「검토 중」 에 머무는 것이 보통이라 발행본이 아직 적다(전사 13건,
+            2026-10 RA 실측) — 0건을 「연결이 틀렸다」 로 읽지 않게 이유와 바꾸는 길을 말한다. */}
+        {ra &&
+          result.run.rows_seen === 0 &&
+          (source.options.phase ?? 'finalized') === 'finalized' && (
+            <p className="text-sm">
+              발행본이 아직 없을 수 있습니다 — RA 에서는 게시한 보고서가 「검토 중」 단계에 머무는
+              것이 보통이고, 발행 버튼을 클릭한 보고서는 아직 적습니다. 게시된 보고서까지
+              수신하려면 소스 수정에서 단계를 「게시된 것 전부」 로 변경합니다.
+            </p>
+          )}
         {result.errors.length > 0 && (
           <ul className="text-destructive space-y-1 text-sm">
             {result.errors.map((one, index) => (
@@ -389,9 +400,9 @@ function SyncDialog({
         {!result.applied && ok && (
           <p className="text-muted-foreground text-sm">
             {ra
-              ? '같은 보고서(RA 번호)는 고치고, 없으면 새로 만듭니다 — 제목이 같아도 다른 보고서입니다. ' +
-                '깨진 보고서는 건너뜁니다. 이번에 안 온 보고서는 지우지 않습니다(하루 한 번 전량 ' +
-                '대조에서 「원본에서 내려감」 으로 표시).'
+              ? '같은 보고서(RA 번호)는 수정하고, 없으면 생성합니다 — 제목이 같아도 다른 보고서입니다. ' +
+                '번호 · 제목이 빈 보고서는 제외합니다. 이번에 수신하지 않은 보고서는 삭제하지 ' +
+                '않습니다(하루 한 번 전량 대조에서 「원본에서 내려감」 으로 표시).'
               : '같은 객체(바깥 식별자·식별자·별칭·이름 순)는 수정하고, 없으면 새로 만듭니다. ' +
                 '빈 칸은 변경하지 않습니다.'}
           </p>
@@ -685,7 +696,7 @@ function EditDialog({
               <div className="space-y-1.5">
                 <Label htmlFor="ds-secret">
                   {ra
-                    ? 'RA 개인 토큰 (PAT)'
+                    ? 'RA 액세스 토큰 (PAT)'
                     : authKind === 'basic'
                       ? '비밀번호'
                       : authKind === 'header'
@@ -1359,8 +1370,9 @@ function EditDialog({
                   상대가 무덤으로 알려 준다. */}
               {ra ? (
                 <p className="text-muted-foreground text-sm">
-                  RA 에서 내려간 보고서는 <b>지우지도 사용 중지하지도 않습니다</b> — 하루 한 번
-                  전량을 대조해 「원본에서 내려감」 과 그날을 적고, 다시 오면 되돌립니다.
+                  RA 에서 내려간 보고서는 <b>삭제하지도 사용 중지하지도 않습니다</b> — 하루 한 번
+                  전량 대조에서 「원본에서 내려감」 과 그 날짜를 표시하고, 다시 게시되면 「게시
+                  중」 으로 복원합니다.
                 </p>
               ) : kind !== 'sp_core' ? (
                 <label className="flex cursor-pointer items-center gap-2 text-sm">

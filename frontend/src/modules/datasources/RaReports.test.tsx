@@ -141,22 +141,22 @@ describe('RA 보고서 소스', () => {
     expect(screen.queryByText('① 같은 것 검색')).not.toBeVisible()
     expect(screen.queryByRole('textbox', { name: /엔티티 셋|경로|파일 위치/ })).toBeNull()
     await userEvent.type(screen.getByLabelText('RA 주소'), 'https://ra.local')
-    await userEvent.type(screen.getByLabelText(/RA 개인 토큰/), 'ra_pat_x')
+    await userEvent.type(screen.getByLabelText(/RA 액세스 토큰/), 'ra_pat_x')
 
     // 타입 — 축만 고를 거리로 서고(기록 타입은 아니다), 만든 것이 넣을 타입이 된다.
     expect(screen.getByRole('checkbox', { name: '개발모델' })).toBeInTheDocument()
     expect(screen.queryByRole('checkbox', { name: '보고서' })).toBeNull()
     await userEvent.click(screen.getByRole('checkbox', { name: '개발모델' }))
-    await userEvent.click(screen.getByRole('button', { name: '만들기' }))
+    await userEvent.click(screen.getByRole('button', { name: '생성' }))
     expect(datasourceApi.raReportType).toHaveBeenCalledWith({
       slug: 'ra_report',
       label: '보고서',
       axes: ['plm_model'],
     })
-    expect(await screen.findByText(/새로 만들었습니다/)).toBeInTheDocument()
+    expect(await screen.findByText(/생성했습니다/)).toBeInTheDocument()
     expect(ontologyApi.schema).toHaveBeenCalledTimes(2) // 고르개가 새 타입을 받는다
 
-    await userEvent.click(screen.getByRole('button', { name: '저장하고 RA 조직 불러오기' }))
+    await userEvent.click(screen.getByRole('button', { name: '저장 후 RA 조직 조회' }))
     expect(datasourceApi.create).toHaveBeenCalledTimes(1)
     expect(datasourceApi.create.mock.calls[0][0]).toMatchObject({
       kind: 'ra_reports',
@@ -209,7 +209,7 @@ describe('RA 보고서 소스', () => {
       },
     ])
     setup([raSource({ reconciled_at: '2026-10-04T01:00:05Z' })])
-    expect(await screen.findByText(/조직 cae 과 하위/)).toBeInTheDocument()
+    expect(await screen.findByText(/조직 cae 및 하위 조직/)).toBeInTheDocument()
     expect(screen.getByText(/마지막 전량 대조/)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: 'CAE 보고서' }))
     expect(
@@ -240,5 +240,30 @@ describe('RA 보고서 소스', () => {
     await userEvent.click(await screen.findByRole('button', { name: /동기화/ }))
     expect(await screen.findByText(/제목이 같아도 다른 보고서/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /적용 — 2개 새로/ })).toBeEnabled()
+  })
+
+  it('발행본만 받는데 0건이면 이유와 단계를 바꾸는 길을 말한다', async () => {
+    datasourceApi.sync.mockResolvedValue({
+      run: {
+        id: 'r1',
+        status: 'planned',
+        applied: false,
+        actor_label: '관리자',
+        rows_seen: 0,
+        counts: { full_read: 1 },
+        errors: [],
+        started_at: '2026-10-04T01:00:00Z',
+        finished_at: '2026-10-04T01:00:01Z',
+      },
+      applied: false,
+      counts: { full_read: 1 },
+      rows: [],
+      errors: [],
+      truncated: false,
+    })
+    setup([raSource()])
+    await userEvent.click(await screen.findByRole('button', { name: /동기화/ }))
+    expect(await screen.findByText(/발행본이 아직 없을 수 있습니다/)).toBeInTheDocument()
+    expect(screen.getByText(/「게시된 것 전부」 로 변경합니다/)).toBeInTheDocument()
   })
 })

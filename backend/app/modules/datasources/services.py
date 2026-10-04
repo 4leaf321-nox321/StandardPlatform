@@ -837,6 +837,7 @@ def _sync_ra(
             latest[one.external_id] = one
     converted = list(latest.values())
     moved = ra_reports.prune_refs(db, defs, converted)
+    ra_reports.clear_emptied(defs, converted)
     # **소유 부서끼리 모은다** — 일괄 입력은 소유 부서를 호출마다 하나 받는다. 차례를 정렬로
     # 바꾸고 그 차례 그대로 끝까지 가야 적용 결과와 외부 식별자가 짝이 맞는다.
     owner_ids = ra_reports.owners(db, {one.owner_slug for one in converted if one.owner_slug})
@@ -864,7 +865,8 @@ def _sync_ra(
     errors: list[str] = []
     if fetched.truncated:
         errors.append(
-            f"행이 {odata.MAX_ROWS}개를 넘어 끊었습니다 — 조직을 나눠 소스를 여럿 둡니다."
+            f"행이 {odata.MAX_ROWS}개를 넘어 중단했습니다 — 조직을 나눠 소스를 여러 개 "
+            "생성하세요."
         )
     offset = len(plan_rows)
     for owner, rows in groups:
@@ -961,9 +963,9 @@ def _sync_ra(
     if held_back:
         # 대조 시각을 안 옮긴다 — 다음 차례에 다시 대조하고, 그사이 사람이 본다.
         warnings.append(
-            f"전량에서 보고서 {held_back}건이 한꺼번에 안 왔습니다 — 가진 것의 절반이 넘어 "
-            "「원본에서 내려감」 을 적지 않았습니다. RA 읽기 계정의 권한과 고른 조직을 "
-            "확인하세요(받은 것은 넣었습니다)."
+            f"전량 대조에서 보고서 {held_back}건이 한꺼번에 수신되지 않았습니다 — 보유한 "
+            "것의 절반이 넘어 「원본에서 내려감」 을 표시하지 않았습니다. RA 읽기 계정의 "
+            "권한과 선택한 조직을 확인하세요(수신한 보고서는 반영했습니다)."
         )
     elif full:
         source.reconciled_at = now

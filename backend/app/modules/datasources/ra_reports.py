@@ -90,6 +90,21 @@ FIELDS: tuple[tuple[str, str, str, bool, tuple[str, ...] | None], ...] = (
     ("removed_on", "원본에서 내려간 날", "date", False, None),
 )
 
+#: 칸의 설명(`help`) — 사람과 에이전트가 이 칸을 **무엇으로 읽어야 하는지**. RA 의 본문은
+#: 검색용 평문이라 첨부 파일 이름이 섞여 있다(RA 회신, 2026-10-04) — 그것을 본문 내용으로
+#: 옮기지 않게 적어 둔다.
+HELP = {
+    "body": (
+        "RA 의 검색용 평문 — 제목 · 본문 글과 첨부 파일 이름이 섞여 있습니다. 1MB 를 넘으면 "
+        "앞부분만 있고 끝에 잘렸다고 적힙니다."
+    ),
+    "origin_state": (
+        "하루 한 번 전량 대조에서 RA 에 없으면 「원본에서 내려감」 — 삭제 · 게시 취소 · 발행 "
+        "취소 · 권한 변경 중 무엇인지는 알 수 없습니다."
+    ),
+    "ra_tags": "이 쌍둥이에 없는 축 태그 — 「종류: 값」.",
+}
+
 #: 변환이 행에 남기는 숨은 자리 — bulk 로 넘기기 전에 뗀다.
 _OWNER = "_owner"
 _ID = "_ra_id"
@@ -117,7 +132,7 @@ def options_of(raw: dict[str, Any] | None) -> Options:
     raw = raw or {}
     unknown = sorted(set(raw) - {"board", "include_descendants", "phase", "include_text"})
     if unknown:
-        raise _refuse(50, f"RA 보고서 소스가 모르는 설정입니다: {', '.join(unknown)}")
+        raise _refuse(50, f"RA 보고서 소스에 없는 설정입니다: {', '.join(unknown)}")
     phase = str(raw.get("phase") or "finalized")
     if phase not in PHASES:
         raise _refuse(50, f"단계는 {' · '.join(PHASES)} 중 하나입니다: {phase}")
@@ -138,7 +153,9 @@ def _url(base_url: str, path: str) -> str:
 
 
 # 머리글은 latin-1 만 실린다 — 한글이 섞인 토큰은 보내기 전에 깨진다.
-BAD_TOKEN = "토큰에 영문 · 숫자 밖의 글자가 있습니다 — RA 의 PAT 를 그대로 넣으세요."
+BAD_TOKEN = (
+    "토큰에 영문 · 숫자 외의 글자가 있습니다 — RA 에서 발급한 액세스 토큰을 그대로 입력하세요."
+)
 
 
 def _client(auth: Auth, transport: httpx.BaseTransport | None) -> httpx.Client:
@@ -157,14 +174,14 @@ def _data(response: httpx.Response) -> Any:
         raise _refuse(
             51,
             f"RA 가 토큰을 거절했습니다(HTTP {response.status_code}) — RA 의 읽기 계정 "
-            "PAT 인지, 그 계정이 고른 조직의 게시판을 볼 수 있는지 확인하세요.",
+            "액세스 토큰인지, 그 계정이 선택한 조직의 게시판을 볼 수 있는지 확인하세요.",
             status=502,
         )
     if response.status_code == 404:
         raise _refuse(
             52,
-            "RA 에 이 창구가 없습니다(HTTP 404) — 주소가 RA 의 루트인지, RA 가 발행 보고서 "
-            "피드를 낸 판인지 확인하세요. 고른 조직이 RA 에 없어도 404 입니다.",
+            "RA 에 이 창구가 없습니다(HTTP 404) — 주소가 RA 의 루트인지, 발행 보고서 피드가 "
+            "있는 RA 버전인지 확인하세요. 선택한 조직이 RA 에 없어도 404 입니다.",
             status=502,
         )
     if response.status_code >= 400:
@@ -199,8 +216,8 @@ def _decode(mark: str) -> tuple[datetime, int]:
     except ValueError as caught:
         raise _refuse(
             54,
-            f"저장된 커서를 읽지 못했습니다: {mark!r} — 소스의 커서를 비우면 처음부터 "
-            "받습니다.",
+            f"저장된 수신 기준 시각을 읽지 못했습니다: {mark!r} — 소스의 수신 기준 시각을 "
+            "비우면 처음부터 다시 수신합니다.",
         ) from caught
     if when.tzinfo is None:
         when = when.replace(tzinfo=UTC)
@@ -225,7 +242,9 @@ def fetch(
     opts = options_of(source.options)
     if not opts.board:
         raise _refuse(
-            55, "RA 조직을 고르세요 — 그 조직과 하위의 게시판에 게시된 보고서를 받습니다."
+            55,
+            "RA 조직을 선택하세요 — 그 조직과 하위 조직의 게시판에 게시된 보고서를 "
+            "수신합니다.",
         )
     params: dict[str, str] = {
         "board": opts.board,
@@ -270,7 +289,9 @@ def fetch(
                 out.truncated = True
                 return out
     except httpx.HTTPError as caught:
-        raise _refuse(56, f"RA 에 닿지 못했습니다: {str(caught)[:300]}", status=502) from None
+        raise _refuse(
+            56, f"RA 에 연결하지 못했습니다: {str(caught)[:300]}", status=502
+        ) from None
     except UnicodeEncodeError:
         raise _refuse(51, BAD_TOKEN) from None
     if last is not None:
@@ -397,6 +418,27 @@ def to_row(raw: dict[str, Any], defs: list[PropertyDef]) -> Converted:
         existing = [one for one in str(out.get("ra_tags") or "").split(bulk.MULTI_SEP) if one]
         out["ra_tags"] = bulk.MULTI_SEP.join(dict.fromkeys([*existing, *loose]))
     return Converted(external, out, str(owner) if owner else None)
+
+
+#: RA 가 주인인 여럿 값 칸 — 축 참조 칸 `ref_<타입>` 도 그렇다.
+OWNED_MULTI = ("boards", "tags", "ra_tags")
+
+
+def clear_emptied(defs: list[PropertyDef], rows: list[Converted]) -> None:
+    """피드가 비워 보낸 여럿 값 칸은 **우리도 비운다**(`\\null`). 일괄 입력은 빈 값을 「안
+    건드림」 으로 읽어서, RA 에서 태그를 다 뺀 보고서가 옛 태그로 남는다 — RA 가 `sp` 를 채워
+    글 태그(`ra_tags`)가 모두 참조 칸으로 옮겨 갈 때도 그렇다. `prune_refs` 뒤에 부른다(그
+    전이면 `\\null` 을 식별자로 묻는다)."""
+    owned = [
+        one.key
+        for one in defs
+        if one.key in OWNED_MULTI
+        or (one.key.startswith(REF_PREFIX) and one.data_type == "object_ref")
+    ]
+    for one in rows:
+        for key in owned:
+            if key not in one.row:
+                one.row[key] = bulk.NULL_MARK
 
 
 def prune_refs(db: Session, defs: list[PropertyDef], rows: list[Converted]) -> int:
@@ -565,7 +607,9 @@ def boards(
         with _client(auth, transport) as client:
             data = _data(client.get(_url(source.base_url, BOARDS_PATH)))
     except httpx.HTTPError as caught:
-        raise _refuse(56, f"RA 에 닿지 못했습니다: {str(caught)[:300]}", status=502) from None
+        raise _refuse(
+            56, f"RA 에 연결하지 못했습니다: {str(caught)[:300]}", status=502
+        ) from None
     except UnicodeEncodeError:
         raise _refuse(51, BAD_TOKEN) from None
     if not isinstance(data, list):
@@ -636,6 +680,8 @@ def type_payload(
         }
         if options:
             one["enum_options"] = list(options)
+        if key in HELP:
+            one["help"] = HELP[key]
         properties.append(one)
     for index, axis in enumerate(axes):
         target = targets[axis]
@@ -694,6 +740,6 @@ def create_type(
     plan = importer.plan(db, payload)
     if plan.errors:
         raise _refuse(
-            58, "보고서 기록 타입을 만들 수 없습니다 — " + " / ".join(plan.errors[:5])
+            58, "보고서 기록 타입을 생성할 수 없습니다 — " + " / ".join(plan.errors[:5])
         )
-    return importer.apply(db, payload, actor=user, reason="RA 보고서 기록 타입 만들기")
+    return importer.apply(db, payload, actor=user, reason="RA 보고서 기록 타입 생성")

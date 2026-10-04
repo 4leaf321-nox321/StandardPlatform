@@ -292,6 +292,8 @@ def test_보고서_기록_타입의_틀은_표준_칸과_축의_참조_칸을_�
     for key in ("ra_id", "url", "report_date", "phase", "body", "origin_state", "removed_on"):
         assert key in keys, key
     assert keys["body"]["data_type"] == "text_long"
+    # 본문은 RA 의 검색용 평문이다 — 첨부 파일 이름을 본문 내용으로 읽지 않게 칸이 말한다.
+    assert "첨부 파일 이름" in keys["body"]["help"]
     assert keys[f"ref_{w['model']}"]["ref_type_slug"] == w["model"]
     assert keys[f"ref_{w['model']}"]["multi"] is True
     assert kind["usage"] == "log"
@@ -414,6 +416,48 @@ def test_증분은_커서에서_겹쳐_읽고_전량_대조는_지우지_않고_
     assert done["counts"]["back"] == 1
     back = _full(client, admin, w["report"], "RA-3")["properties"]
     assert back["origin_state"] == "게시 중" and "removed_on" not in back
+
+
+def test_RA_에서_태그를_다_빼면_우리도_비우고_그대로인_것은_그대로다(
+    client: TestClient, admin: Signed, ra: FakeRA
+) -> None:
+    """일괄 입력은 빈 값을 「안 건드림」 으로 읽는다 — 그대로 두면 RA 에서 태그를 다 뺀
+    보고서가 옛 태그로 남는다(RA 가 `sp` 를 채워 글 태그가 전부 참조로 옮겨 갈 때도). 비움을
+    실어 보내되, 이미 빈 칸이면 「고침」 이 아니다."""
+    w = _setup(client, admin)
+    model = w["model"]
+    _make_object(client, admin, model, key="M-100", label="모델 100")
+    sp = {"type": model, "key": "M-100"}
+    tagged: list[dict[str, Any]] = [
+        {
+            "type": "model",
+            "type_label": "모델",
+            "value": "모델 100",
+            "code": "M-100",
+            "sp": sp,
+        },
+        {"type": "part", "type_label": "부품", "value": "브래킷", "code": None, "sp": None},
+    ]
+    ra.add(1, "보고 1", board="cae-2", changed=1, entities=tagged)
+    ra.add(2, "보고 2", board="cae-2", changed=2)
+    ra.reports[2]["tags"] = []
+    _sync(client, admin, w["source"])
+    before = _full(client, admin, w["report"], "RA-1")["properties"]
+    assert before["tags"] == ["강성"] and len(before[f"ref_{model}"]) == 1
+    assert before["ra_tags"] == ["부품: 브래킷"]
+
+    # 바뀐 것 없이 다시(커서에서 겹쳐 둘 다 다시 온다) — 둘 다 그대로다.
+    again = _sync(client, admin, w["source"])
+    assert again["counts"]["unchanged"] == 2 and again["counts"].get("update", 0) == 0
+
+    # RA 에서 태그를 다 뺐다 — 우리도 비운다.
+    ra.add(1, "보고 1", board="cae-2", changed=10, entities=[])
+    ra.reports[1]["tags"] = []
+    done = _sync(client, admin, w["source"])
+    assert done["counts"]["update"] == 1
+    after = _full(client, admin, w["report"], "RA-1")["properties"]
+    assert not after.get("tags") and not after.get("ra_tags")
+    assert not after.get(f"ref_{model}")
 
 
 def test_한꺼번에_사라지면_내려감을_적지_않고_멈춘다(

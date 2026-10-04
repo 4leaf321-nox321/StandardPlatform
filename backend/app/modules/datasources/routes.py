@@ -130,8 +130,8 @@ def _check_deprecate(kind: str, wanted: bool) -> bool:
     if wanted and kind == ra_reports.KIND:
         raise AppError(
             code("DATASOURCES", 59),
-            "RA 보고서는 지우지 않고 「원본에서 내려감」 을 적습니다 — 「이번에 안 온 것을 "
-            "사용 중지」 는 켤 수 없습니다(ADR 0018).",
+            "RA 보고서는 삭제하지 않고 「원본에서 내려감」 으로 표시합니다 — 「이번에 "
+            "수신하지 않은 것을 사용 중지」 는 사용할 수 없습니다(ADR 0018).",
             status=422,
         )
     if wanted and kind == "sp_core":
@@ -152,7 +152,8 @@ def _check_ra(kind: str, options: dict[str, object], mapping: dict[str, object])
     if mapping:
         raise AppError(
             code("DATASOURCES", 59),
-            "RA 보고서 소스는 칸 대응을 적지 않습니다 — 보고서 기록 타입의 칸 키가 정합니다.",
+            "RA 보고서 소스에는 칸 대응을 입력하지 않습니다 — 보고서 기록 타입의 속성 키를 "
+            "사용합니다.",
             status=422,
         )
 
@@ -475,7 +476,7 @@ def ra_boards(
     row = _source(db, slug)
     if row.kind != ra_reports.KIND:
         raise AppError(
-            code("DATASOURCES", 59), "RA 보고서 소스에서만 조직을 고릅니다.", status=422
+            code("DATASOURCES", 59), "조직 선택은 RA 보고서 소스에서만 사용합니다.", status=422
         )
     found = ra_reports.boards(row, auth=services._auth(row), transport=services.transport)
     return [RaBoardOut(**one) for one in found]
