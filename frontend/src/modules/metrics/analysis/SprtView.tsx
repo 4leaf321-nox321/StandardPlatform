@@ -17,7 +17,9 @@ import {
   Stat,
   interval,
 } from '@/modules/metrics/analysis/common'
-import type { SprtDecision, SprtResult } from '@/modules/metrics/analysis/types'
+import { ByPicker, FocusNote, SprtScanTable } from '@/modules/metrics/analysis/Scan'
+import type { Focus } from '@/modules/metrics/analysis/Scan'
+import type { SprtDecision, SprtResult, SprtScanResult } from '@/modules/metrics/analysis/types'
 import { shownNumber } from '@/modules/metrics/metricDrill'
 import { LazyPlot } from '@/shared/charts/LazyPlot'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -70,10 +72,15 @@ export function SprtView({ metric, read, initial = {} }: AnalysisViewProps) {
   const [reference, setReference] = useState(initial.reference ?? '')
   const [via, setVia] = useState(initial.reference_via ?? '')
   const [rho, setRho] = useState(initial.rho ?? '1.5')
+  // 값마다 훑기(증상마다) — 고르면 표로, 표의 「이 값만 보기」 는 그 값으로 거른 단건으로.
+  const [by, setBy] = useState(initial.by ?? '')
+  const [focus, setFocus] = useState<Focus | null>(null)
   // 모델 기준의 거르기는 target · reference 가 대신한다 — 함께 보내면 서버가 거절한다.
-  const filters = Object.fromEntries(
+  const base = Object.fromEntries(
     Object.entries(read.filters ?? {}).filter(([name]) => name !== dim),
   )
+  const filters = focus ? { ...base, [focus.name]: focus.value } : base
+  const scanning = Boolean(by) && !focus
   const ready = Boolean(target && (reference || via))
   const asked = {
     target,
@@ -82,15 +89,28 @@ export function SprtView({ metric, read, initial = {} }: AnalysisViewProps) {
     dim,
     rho,
   }
-  const key = JSON.stringify([target, reference, via, rho, filters])
+  const key = JSON.stringify([target, reference, via, rho, filters, scanning])
   const result = useResource<SprtResult | null>(
     () =>
-      ready
+      ready && !scanning
         ? metricsApi.analysis<SprtResult>(metric.slug, 'sprt', asked, { filters })
         : Promise.resolve(null),
     [metric.slug, key],
   )
-  const data = result.data
+  const scanKey = JSON.stringify([target, reference, via, rho, base, by, scanning])
+  const scan = useResource<SprtScanResult | null>(
+    () =>
+      ready && scanning
+        ? metricsApi.analysis<SprtScanResult>(
+            metric.slug,
+            'sprt/scan',
+            { ...asked, by },
+            { filters: base },
+          )
+        : Promise.resolve(null),
+    [metric.slug, scanKey],
+  )
+  const data = scanning ? null : result.data
   return (
     <div className="space-y-3">
       <div className="grid gap-3 md:grid-cols-4">
@@ -140,18 +160,37 @@ export function SprtView({ metric, read, initial = {} }: AnalysisViewProps) {
           />
         </div>
       </div>
-      <div className="flex justify-end">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <ByPicker
+          id="sprt-by"
+          metric={metric}
+          value={by}
+          exclude={[dim, ...Object.keys(base)]}
+          onChange={(next) => {
+            setBy(next)
+            setFocus(null)
+          }}
+        />
         <AlertSave
           metric={metric}
           recipe="sprt"
-          params={analysisQuery(asked, { filters })}
+          params={analysisQuery(scanning ? { ...asked, by } : asked, { filters })}
           disabled={!ready}
         />
       </div>
+      {focus && <FocusNote focus={focus} onBack={() => setFocus(null)} />}
       {!ready && (
         <p className="text-muted-foreground text-sm">새 모델과 전작(또는 그 칸)을 고릅니다.</p>
       )}
-      {result.error && <ErrorNotice error={result.error} />}
+      {!scanning && result.error && <ErrorNotice error={result.error} />}
+      {scanning && scan.error && <ErrorNotice error={scan.error} />}
+      {scanning && scan.data && (
+        <>
+          <CaveatList caveats={scan.data.caveats} />
+          <AnalysisMeta result={scan.data} />
+          <SprtScanTable data={scan.data} onFocus={setFocus} />
+        </>
+      )}
       {data && (
         <>
           <p

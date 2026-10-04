@@ -8,7 +8,9 @@ import { analysisQuery, metricsApi } from '@/modules/metrics/api'
 import { AlertSave } from '@/modules/metrics/analysis/AlertSave'
 import type { AnalysisViewProps } from '@/modules/metrics/analysis/SprtView'
 import { AnalysisMeta, CaveatList, interval } from '@/modules/metrics/analysis/common'
-import type { ChangesResult } from '@/modules/metrics/analysis/types'
+import { ByPicker, ChangesScanTable, FocusNote } from '@/modules/metrics/analysis/Scan'
+import type { Focus } from '@/modules/metrics/analysis/Scan'
+import type { ChangesResult, ChangesScanResult } from '@/modules/metrics/analysis/types'
 import { shownNumber } from '@/modules/metrics/metricDrill'
 import { Chart } from '@/shared/charts'
 import { LazyPlot } from '@/shared/charts/LazyPlot'
@@ -37,13 +39,36 @@ const AUTO = '__auto__'
 export function ChangesView({ metric, read, initial = {} }: AnalysisViewProps) {
   const [axis, setAxis] = useState(initial.axis ?? AUTO)
   const [span, setSpan] = useState(initial.window ?? '3')
+  // 값마다 훑기(증상마다) — 고르면 표로, 표의 「이 값만 보기」 는 그 값으로 거른 단건으로.
+  const [by, setBy] = useState(initial.by ?? '')
+  const [focus, setFocus] = useState<Focus | null>(null)
+  const scanning = Boolean(by) && !focus
   const asked = { axis: axis === AUTO ? undefined : axis, window: span }
-  const key = JSON.stringify([axis, span, read])
-  const result = useResource<ChangesResult>(
-    () => metricsApi.analysis<ChangesResult>(metric.slug, 'changes', asked, read),
+  const single = focus
+    ? { ...read, filters: { ...(read.filters ?? {}), [focus.name]: focus.value } }
+    : read
+  const key = JSON.stringify([axis, span, single, scanning])
+  const result = useResource<ChangesResult | null>(
+    () =>
+      scanning
+        ? Promise.resolve(null)
+        : metricsApi.analysis<ChangesResult>(metric.slug, 'changes', asked, single),
     [metric.slug, key],
   )
-  const data = result.data
+  const scanKey = JSON.stringify([axis, span, read, by, scanning])
+  const scan = useResource<ChangesScanResult | null>(
+    () =>
+      scanning
+        ? metricsApi.analysis<ChangesScanResult>(
+            metric.slug,
+            'changes/scan',
+            { ...asked, by },
+            read,
+          )
+        : Promise.resolve(null),
+    [metric.slug, scanKey],
+  )
+  const data = scanning ? null : result.data
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-end gap-3">
@@ -75,11 +100,34 @@ export function ChangesView({ metric, read, initial = {} }: AnalysisViewProps) {
             />
           </div>
         )}
+        <ByPicker
+          id="changes-by"
+          metric={metric}
+          value={by}
+          exclude={Object.keys(read.filters ?? {})}
+          onChange={(next) => {
+            setBy(next)
+            setFocus(null)
+          }}
+        />
         <div className="ml-auto">
-          <AlertSave metric={metric} recipe="changes" params={analysisQuery(asked, read)} />
+          <AlertSave
+            metric={metric}
+            recipe="changes"
+            params={analysisQuery(scanning ? { ...asked, by } : asked, single)}
+          />
         </div>
       </div>
-      {result.error && <ErrorNotice error={result.error} />}
+      {focus && <FocusNote focus={focus} onBack={() => setFocus(null)} />}
+      {!scanning && result.error && <ErrorNotice error={result.error} />}
+      {scanning && scan.error && <ErrorNotice error={scan.error} />}
+      {scanning && scan.data && (
+        <>
+          <CaveatList caveats={scan.data.caveats} />
+          <AnalysisMeta result={scan.data} />
+          <ChangesScanTable data={scan.data} onFocus={setFocus} />
+        </>
+      )}
       {data && (
         <>
           <CaveatList caveats={data.caveats} />

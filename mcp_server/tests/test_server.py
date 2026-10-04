@@ -842,3 +842,26 @@ def test_자기소개_고치기는_미리_보기가_먼저고_안_보낸_칸은_
     assert json.loads(put.content) == {"summary": "보고서 쌍둥이", "notes": PROFILE["notes"]}
     assert server._profile_cache == {}  # 다음 접속이 새로 읽는다
     assert "error" in asyncio.run(server.platform_profile_update(_ctx("Bearer t")))
+
+
+def test_값마다_훑기는_by_를_주면_훑기_경로로_간다() -> None:
+    """「전작보다 빨리 늘고 있는 증상은?」 — 같은 레시피에 `by` 만 더한다(응답 모양이 달라
+    경로가 따로다)."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": []}))
+    asyncio.run(
+        server.metric_analyze(
+            _ctx("Bearer t"),
+            "cases",
+            "sprt",
+            options={"target": "S", "reference": "A", "by": "symptom", "top": 10},
+        )
+    )
+    asyncio.run(server.metric_analyze(_ctx("Bearer t"), "cases", "changes", {"by": "symptom"}))
+    asyncio.run(server.metric_analyze(_ctx("Bearer t"), "cases", "changes", {"window": 3}))
+    paths = [one.url.path for one in seen]
+    assert paths == [
+        "/api/metrics/cases/analysis/sprt/scan",
+        "/api/metrics/cases/analysis/changes/scan",
+        "/api/metrics/cases/analysis/changes",
+    ]
+    assert seen[0].url.params["by"] == "symptom" and seen[0].url.params["top"] == "10"

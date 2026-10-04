@@ -2276,8 +2276,18 @@ _RECIPE_OPTIONS: dict[str, set[str]] = {
     | _RANGES,
     "life": {"model", "max_age", "basis", "cohort_from", "cohort_to"},
     "control": {"axis", "window", "split", "baseline_to"} | _RANGES,
-    "changes": {"axis", "window"} | _RANGES,
-    "sprt": {"target", "reference", "reference_via", "dim", "rho", "alpha", "beta"},
+    "changes": {"axis", "window", "by", "top"} | _RANGES,
+    "sprt": {
+        "target",
+        "reference",
+        "reference_via",
+        "dim",
+        "rho",
+        "alpha",
+        "beta",
+        "by",
+        "top",
+    },
     "logit": {"factors", "min_count"} | _RANGES,
     "assoc": {"rows", "cols", "min_count"} | _RANGES,
 }
@@ -2306,10 +2316,12 @@ async def metric_analyze(
     - `control` — 라니 u-관리도와 넬슨 규칙. `axis`(`period` · `cohort`) · `window`(코호트
       축 — 출고 뒤 몇 기간) · `split`(분모 짝에 있는 기준) · `baseline_to`(한계를 이 날
       앞으로만)
-    - `changes` — 계절 지수와 변화점. `axis` · `window`
+    - `changes` — 계절 지수와 변화점. `axis` · `window` · **`by`**(값마다 훑기 — 「계절을 빼면
+      늘고 있는 증상은?」: 증상마다 변화점, 벌점 +2·ln K, 마지막 변화가 오름인 값부터) · `top`
     - `sprt` — 새 모델 vs 전작 순차 검정. `target`(필수 — 기준 값, 참조면 id) ·
       `reference` 또는 `reference_via`(새 모델 객체의 전작 칸) · `dim` · `rho` · `alpha` ·
-      `beta`
+      `beta` · **`by`**(값마다 훑기 — 「전작보다 빨리 늘고 있는 증상은?」: 증상마다 그 증상으로
+      거른 검정, 유의수준 α/K, 「나쁨」 이 선 값부터. `new` 는 전작에 없던 값) · `top`
     - `logit` — 재방문 위험 요인(방문 기준 「재방문」 이 있는 지표). `factors`(필수 — 값이 적은
       기준 이름 넷까지, 목록) · `min_count`
     - `assoc` — 연관 · 묶음. `rows` · `cols`(필수 — 증상 · 부품처럼 기준 둘) · `min_count`.
@@ -2355,7 +2367,10 @@ async def metric_analyze(
     for dim_name, value in (filters or {}).items():
         params.append((f"d.{dim_name}", "" if value is None else str(value)))
     params.append(("compact", "true" if compact else "false"))
-    return await _get(ctx, f"/api/metrics/{slug}/analysis/{name}", params=params)
+    path = f"/api/metrics/{slug}/analysis/{name}"
+    if name in ("sprt", "changes") and (options or {}).get("by"):
+        path += "/scan"  # 값마다 훑기 — 응답 모양이 달라 경로가 따로다
+    return await _get(ctx, path, params=params)
 
 
 @tool()

@@ -293,6 +293,86 @@ export interface ChangesResult extends AnalysisHeader {
   points: ChangesPoint[]
 }
 
+// --- 값마다 훑기(④ · ⑩) -------------------------------------------------------------
+
+export interface ScanPeriod {
+  when: string
+  label: string
+  closed: boolean
+}
+
+/** ⑩ 값 하나(증상 등)의 변화점 — 같은 대수로 나눈 그 값의 비율에서. */
+export interface ChangesScanItem {
+  key: string | null
+  label: string
+  total: number
+  points: number
+  /** 마지막 변화점의 방향 — 없으면 flat. */
+  direction: 'up' | 'down' | 'flat'
+  last: Change | null
+  changes: Change[]
+  /** 끝 구간의 수준(계절을 뺀 비율). */
+  level_now: number | null
+  dispersion: number | null
+  seasonal: boolean
+  /** 계산하지 못한 까닭. */
+  note: string | null
+  drill: Drill
+}
+
+export interface ChangesScanResult extends AnalysisHeader {
+  axis: 'period' | 'cohort'
+  window: number | null
+  kind: 'rate' | 'count'
+  per: number
+  by: string
+  by_label: string
+  scanned: number
+  other_values: number
+  /** 여럿을 함께 보느라 변화점 하나에 더한 벌점(2·ln K). */
+  extra_penalty: number
+  periods: ScanPeriod[]
+  items: ChangesScanItem[]
+}
+
+/** ④ 값 하나(증상 등)로 거른 새 모델 vs 전작. */
+export interface SprtScanItem {
+  key: string
+  label: string
+  decision: 'continue' | 'worse' | 'not_worse'
+  decided_at: string | null
+  observed: number
+  expected: number
+  llr: number
+  smr: number | null
+  smr_low: number | null
+  smr_high: number | null
+  periods_to_worse: number | null
+  periods_to_not_worse: number | null
+  /** 전작에 없던 값 — 기대가 0 이라 비를 낼 수 없다. */
+  new: boolean
+}
+
+export interface SprtScanResult extends AnalysisHeader {
+  dim: string
+  dim_label: string
+  by: string
+  by_label: string
+  target: string
+  target_label: string
+  reference: string
+  reference_label: string
+  rho: number
+  alpha: number
+  /** 값마다의 유의수준 — α 를 값의 수로 나눴다(본페로니). */
+  alpha_each: number
+  beta: number
+  scanned: number
+  other_values: number
+  items: SprtScanItem[]
+  skipped: string[]
+}
+
 // --- ④ 순차 검정 ---------------------------------------------------------------
 
 export type SprtDecision = 'continue' | 'worse' | 'not_worse'

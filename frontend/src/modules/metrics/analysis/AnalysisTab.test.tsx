@@ -13,9 +13,11 @@ import AnalysisTab from '@/modules/metrics/analysis/AnalysisTab'
 import { decisionText } from '@/modules/metrics/analysis/SprtView'
 import type {
   AssocResult,
+  ChangesScanResult,
   LifeResult,
   LogitResult,
   ParetoResult,
+  SprtScanResult,
 } from '@/modules/metrics/analysis/types'
 
 const metricsApi = vi.hoisted(() => ({ analysis: vi.fn(), dims: vi.fn(), createAlert: vi.fn() }))
@@ -510,5 +512,142 @@ describe('분석 탭', () => {
     )
     expect(await screen.findByText(/은 알리지 않습니다/)).toBeInTheDocument()
     expect(screen.getByText('S기본: 전작 A기본 보다 나쁨')).toBeInTheDocument()
+  })
+
+  it('증상마다 훑은 순차 검정은 나빠진 증상부터 보이고, 한 값만 보기로 오간다', async () => {
+    const metric = {
+      ...METRIC,
+      analyses: [{ recipe: 'sprt', label: '순차 검정(전작 대비)', ok: true, reason: null }],
+    } as unknown as Metric
+    metricsApi.dims.mockResolvedValue({ name: 'base_model', values: [], truncated: false })
+    const SCAN: SprtScanResult = {
+      ...HEADER,
+      recipe: 'sprt',
+      method: '포아송 SPRT v1 · 값마다 훑기(본페로니)',
+      params: {},
+      run_id: 'r1',
+      caveats: [],
+      excluded: {},
+      visible_share: 1,
+      dim: 'base_model',
+      dim_label: '기본 모델',
+      by: 'symptom',
+      by_label: '증상',
+      target: 'S',
+      target_label: 'S기본',
+      reference: 'A',
+      reference_label: 'A기본',
+      rho: 1.5,
+      alpha: 0.05,
+      alpha_each: 0.05 / 3,
+      beta: 0.1,
+      scanned: 3,
+      other_values: 0,
+      skipped: [],
+      items: [
+        { key: '발열', label: '발열', decision: 'worse', decided_at: '2026-03', observed: 300,
+          expected: 100, llr: 9, smr: 3, smr_low: 2.6, smr_high: 3.4, periods_to_worse: null,
+          periods_to_not_worse: null, new: false },
+        { key: '누수', label: '누수', decision: 'worse', decided_at: '2026-04', observed: 40,
+          expected: 0, llr: 6, smr: null, smr_low: null, smr_high: null, periods_to_worse: null,
+          periods_to_not_worse: null, new: true },
+        { key: '소음', label: '소음', decision: 'not_worse', decided_at: '2026-05',
+          observed: 100, expected: 100, llr: -3, smr: 1, smr_low: 0.8, smr_high: 1.2,
+          periods_to_worse: null, periods_to_not_worse: null, new: false },
+      ],
+    }
+    metricsApi.analysis.mockImplementation((_slug: string, recipe: string) =>
+      Promise.resolve(
+        recipe === 'sprt/scan'
+          ? SCAN
+          : { ...HEADER, recipe: 'sprt', method: 'x', params: {}, run_id: 'r1', excluded: {},
+              visible_share: 1, caveats: [], decision: 'worse', decided_at: '2026-03',
+              target_label: 'S기본', reference_label: 'A기본', rho: 1.5, looks: [],
+              cohort_rows: [] },
+      ),
+    )
+    render(
+      <MemoryRouter>
+        <AnalysisTab
+          metric={metric}
+          read={{ filters: {} }}
+          initial={{ recipe: 'sprt', params: { target: 'S', reference: 'A', by: 'symptom' } }}
+        />
+      </MemoryRouter>,
+    )
+    const table = await screen.findByRole('region', { name: '값마다 훑기' })
+    expect(within(table).getByText('나쁨 (2026-03)')).toBeInTheDocument()
+    expect(within(table).getByText('전작에 없던 값')).toBeInTheDocument()
+    expect(screen.getByText(/3개 중 2개가 전작보다 1.5배 쪽/)).toBeInTheDocument()
+    const scanCall = metricsApi.analysis.mock.calls.find((one) => one[1] === 'sprt/scan')
+    expect(scanCall?.[2]).toMatchObject({ target: 'S', reference: 'A', by: 'symptom' })
+
+    await userEvent.click(within(table).getAllByRole('button', { name: '이 값만 보기' })[0])
+    expect(await screen.findByText(/만 보는 중입니다/)).toBeInTheDocument()
+    await waitFor(() =>
+      expect(metricsApi.analysis).toHaveBeenCalledWith(
+        'cases',
+        'sprt',
+        expect.objectContaining({ target: 'S' }),
+        { filters: { symptom: '발열' } },
+      ),
+    )
+    await userEvent.click(screen.getByRole('button', { name: '훑기로 돌아가기' }))
+    expect(await screen.findByRole('region', { name: '값마다 훑기' })).toBeInTheDocument()
+  })
+
+  it('증상마다 훑은 변화점은 오른 증상부터 그 시점과 비를 적는다', async () => {
+    const metric = {
+      ...METRIC,
+      analyses: [{ recipe: 'changes', label: '계절 · 변화점', ok: true, reason: null }],
+    } as unknown as Metric
+    const change = (label: string, ratio: number) => ({
+      at: '2028-07-01', label, before: 7.5, after: 7.5 * ratio, ratio, ratio_ci: [1.3, 1.5],
+      provisional: false,
+    })
+    const drill = { type_slug: 'svc_case', params: { 'f.symptom.eq': '발열' }, partial: [] }
+    const SCAN: ChangesScanResult = {
+      ...HEADER,
+      recipe: 'changes',
+      method: 'x · 값마다 훑기(벌점 +2·ln K)',
+      params: {},
+      run_id: 'r1',
+      caveats: [],
+      excluded: {},
+      visible_share: 1,
+      axis: 'period',
+      window: null,
+      kind: 'rate',
+      per: 1000,
+      by: 'symptom',
+      by_label: '증상',
+      scanned: 2,
+      other_values: 0,
+      extra_penalty: 1.4,
+      periods: [],
+      items: [
+        { key: '발열', label: '발열', total: 8000, points: 48, direction: 'up',
+          last: change('2028-07', 1.4), changes: [change('2028-07', 1.4)], level_now: 10.5,
+          dispersion: 1, seasonal: false, note: null, drill },
+        { key: '소음', label: '소음', total: 9600, points: 48, direction: 'flat', last: null,
+          changes: [], level_now: 10, dispersion: 1, seasonal: false, note: null, drill },
+      ],
+    }
+    metricsApi.analysis.mockResolvedValue(SCAN)
+    render(
+      <MemoryRouter>
+        <AnalysisTab
+          metric={metric}
+          read={{ filters: {} }}
+          initial={{ recipe: 'changes', params: { by: 'symptom' } }}
+        />
+      </MemoryRouter>,
+    )
+    const table = await screen.findByRole('region', { name: '값마다 훑기' })
+    expect(within(table).getByText('2028-07부터 올라감')).toBeInTheDocument()
+    expect(within(table).getByText('1.4배 (1.3 ~ 1.5)')).toBeInTheDocument()
+    expect(within(table).getByText('바뀐 곳 없음')).toBeInTheDocument()
+    expect(screen.getByText(/2개 중 1개가 마지막 변화에서 올랐습니다/)).toBeInTheDocument()
+    expect(metricsApi.analysis.mock.calls[0][1]).toBe('changes/scan')
   })
 })

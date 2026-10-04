@@ -10812,6 +10812,353 @@
         }
       }
     },
+    "/api/metrics/{slug}/analysis/changes/scan": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Changes Scan",
+        "description": "⑩ 값마다 훑기 — 「계절을 빼면 실제로 늘고 있는 증상은?」 값마다 계절 · 변화점을 맞추고\n(여럿을 보니 변화점 벌점에 2·ln K), 마지막 변화가 오름인 값부터.",
+        "operationId": "changes_scan_api_metrics__slug__analysis_changes_scan_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "by",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "값마다 훑을 기준 이름(증상 등)",
+              "title": "By"
+            },
+            "description": "값마다 훑을 기준 이름(증상 등)"
+          },
+          {
+            "name": "axis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "period",
+                    "cohort"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Axis"
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 120,
+              "minimum": 1,
+              "description": "코호트 축 — 출고 뒤 몇 기간 안의 건수인가",
+              "default": 3,
+              "title": "Window"
+            },
+            "description": "코호트 축 — 출고 뒤 몇 기간 안의 건수인가"
+          },
+          {
+            "name": "top",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 40,
+              "minimum": 1,
+              "description": "건수 많은 값부터 몇 개",
+              "default": 20,
+              "title": "Top"
+            },
+            "description": "건수 많은 값부터 몇 개"
+          },
+          {
+            "name": "period_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period From"
+            }
+          },
+          {
+            "name": "period_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 날 **앞까지**",
+              "title": "Period To"
+            },
+            "description": "이 날 **앞까지**"
+          },
+          {
+            "name": "cohort_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort From"
+            }
+          },
+          {
+            "name": "cohort_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort To"
+            }
+          },
+          {
+            "name": "compact",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "default": false,
+              "title": "Compact"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ChangesScanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/metrics/{slug}/analysis/sprt/scan": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Sprt Scan",
+        "description": "④ 값마다 훑기 — 「출시 N주차, 전작보다 빨리 늘고 있는 증상은?」 값마다 그 값으로 걸러\n새 모델 vs 전작 순차 검정(유의수준은 α/K), 「나쁨」 이 선 값부터.",
+        "operationId": "sprt_scan_api_metrics__slug__analysis_sprt_scan_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "by",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "값마다 훑을 기준 이름(증상 등)",
+              "title": "By"
+            },
+            "description": "값마다 훑을 기준 이름(증상 등)"
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "새 모델 — 그 기준의 값(관계 기준이면 객체 id)",
+              "title": "Target"
+            },
+            "description": "새 모델 — 그 기준의 값(관계 기준이면 객체 id)"
+          },
+          {
+            "name": "reference",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "전작 — 그 기준의 값",
+              "title": "Reference"
+            },
+            "description": "전작 — 그 기준의 값"
+          },
+          {
+            "name": "reference_via",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "전작을 새 모델 객체의 이 칸(참조)에서 찾는다",
+              "title": "Reference Via"
+            },
+            "description": "전작을 새 모델 객체의 이 칸(참조)에서 찾는다"
+          },
+          {
+            "name": "dim",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "모델 기준 — 비우면 분모 짝의 첫 기준",
+              "title": "Dim"
+            },
+            "description": "모델 기준 — 비우면 분모 짝의 첫 기준"
+          },
+          {
+            "name": "rho",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "maximum": 10.0,
+              "exclusiveMinimum": 1.0,
+              "default": 1.5,
+              "title": "Rho"
+            }
+          },
+          {
+            "name": "alpha",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMaximum": 0.5,
+              "exclusiveMinimum": 0.0,
+              "default": 0.05,
+              "title": "Alpha"
+            }
+          },
+          {
+            "name": "beta",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMaximum": 0.5,
+              "exclusiveMinimum": 0.0,
+              "default": 0.1,
+              "title": "Beta"
+            }
+          },
+          {
+            "name": "top",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 40,
+              "minimum": 1,
+              "description": "새 모델의 건수 많은 값부터",
+              "default": 20,
+              "title": "Top"
+            },
+            "description": "새 모델의 건수 많은 값부터"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SprtScanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/metrics/{slug}/analysis/sprt": {
       "get": {
         "tags": [
@@ -15260,6 +15607,43 @@
         ],
         "title": "AssocClusterOut"
       },
+      "AssocDispersionOut": {
+        "properties": {
+          "row": {
+            "$ref": "#/components/schemas/AssocLabelOut"
+          },
+          "count": {
+            "type": "number",
+            "title": "Count"
+          },
+          "causes": {
+            "type": "integer",
+            "title": "Causes"
+          },
+          "effective": {
+            "type": "number",
+            "title": "Effective"
+          },
+          "top": {
+            "$ref": "#/components/schemas/AssocLabelOut"
+          },
+          "top_share": {
+            "type": "number",
+            "title": "Top Share"
+          }
+        },
+        "type": "object",
+        "required": [
+          "row",
+          "count",
+          "causes",
+          "effective",
+          "top",
+          "top_share"
+        ],
+        "title": "AssocDispersionOut",
+        "description": "원인분산도 한 줄 — 이 행(증상)의 원인(열)이 얼마나 갈렸나."
+      },
       "AssocLabelOut": {
         "properties": {
           "key": {
@@ -15476,6 +15860,24 @@
             },
             "type": "array",
             "title": "Pairs"
+          },
+          "dispersion": {
+            "items": {
+              "$ref": "#/components/schemas/AssocDispersionOut"
+            },
+            "type": "array",
+            "title": "Dispersion"
+          },
+          "overall_effective": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Overall Effective"
           },
           "clusters": {
             "items": {
@@ -17724,6 +18126,374 @@
           "drill"
         ],
         "title": "ChangesPointOut"
+      },
+      "ChangesScanItemOut": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "points": {
+            "type": "integer",
+            "title": "Points"
+          },
+          "direction": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down",
+              "flat"
+            ],
+            "title": "Direction"
+          },
+          "last": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app__modules__metrics__recipes__schemas__ChangeOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "changes": {
+            "items": {
+              "$ref": "#/components/schemas/app__modules__metrics__recipes__schemas__ChangeOut"
+            },
+            "type": "array",
+            "title": "Changes"
+          },
+          "level_now": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Level Now"
+          },
+          "dispersion": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dispersion"
+          },
+          "seasonal": {
+            "type": "boolean",
+            "title": "Seasonal"
+          },
+          "note": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Note"
+          },
+          "drill": {
+            "$ref": "#/components/schemas/DrillOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "total",
+          "points",
+          "direction",
+          "last",
+          "changes",
+          "level_now",
+          "dispersion",
+          "seasonal",
+          "note",
+          "drill"
+        ],
+        "title": "ChangesScanItemOut",
+        "description": "값 하나(증상 등)의 변화점 — 같은 대수로 나눈 그 값의 비율에서."
+      },
+      "ChangesScanOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "axis": {
+            "type": "string",
+            "enum": [
+              "period",
+              "cohort"
+            ],
+            "title": "Axis"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "rate",
+              "count"
+            ],
+            "title": "Kind"
+          },
+          "per": {
+            "type": "number",
+            "title": "Per"
+          },
+          "by": {
+            "type": "string",
+            "title": "By"
+          },
+          "by_label": {
+            "type": "string",
+            "title": "By Label"
+          },
+          "scanned": {
+            "type": "integer",
+            "title": "Scanned"
+          },
+          "other_values": {
+            "type": "integer",
+            "title": "Other Values"
+          },
+          "extra_penalty": {
+            "type": "number",
+            "title": "Extra Penalty"
+          },
+          "periods": {
+            "items": {
+              "$ref": "#/components/schemas/ScanPeriodOut"
+            },
+            "type": "array",
+            "title": "Periods"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ChangesScanItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "axis",
+          "window",
+          "kind",
+          "per",
+          "by",
+          "by_label",
+          "scanned",
+          "other_values",
+          "extra_penalty",
+          "periods",
+          "items"
+        ],
+        "title": "ChangesScanOut",
+        "description": "⑩ 값마다 훑기 — 「계절을 빼면 실제로 늘고 있는 증상은?」 늘어난 것부터."
       },
       "CohortCellOut": {
         "properties": {
@@ -29738,6 +30508,29 @@
         ],
         "title": "SavedViewWriteRequest"
       },
+      "ScanPeriodOut": {
+        "properties": {
+          "when": {
+            "type": "string",
+            "title": "When"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "closed": {
+            "type": "boolean",
+            "title": "Closed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "when",
+          "label",
+          "closed"
+        ],
+        "title": "ScanPeriodOut"
+      },
       "SearchOut": {
         "properties": {
           "q": {
@@ -30898,6 +31691,395 @@
           "cohort_rows"
         ],
         "title": "SprtOut"
+      },
+      "SprtScanItemOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "continue",
+              "worse",
+              "not_worse"
+            ],
+            "title": "Decision"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "observed": {
+            "type": "number",
+            "title": "Observed"
+          },
+          "expected": {
+            "type": "number",
+            "title": "Expected"
+          },
+          "llr": {
+            "type": "number",
+            "title": "Llr"
+          },
+          "smr": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smr"
+          },
+          "smr_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smr Low"
+          },
+          "smr_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Smr High"
+          },
+          "periods_to_worse": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periods To Worse"
+          },
+          "periods_to_not_worse": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periods To Not Worse"
+          },
+          "new": {
+            "type": "boolean",
+            "title": "New"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "decision",
+          "decided_at",
+          "observed",
+          "expected",
+          "llr",
+          "smr",
+          "smr_low",
+          "smr_high",
+          "periods_to_worse",
+          "periods_to_not_worse",
+          "new"
+        ],
+        "title": "SprtScanItemOut",
+        "description": "값 하나(증상 등)로 거른 새 모델 vs 전작."
+      },
+      "SprtScanOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "dim": {
+            "type": "string",
+            "title": "Dim"
+          },
+          "dim_label": {
+            "type": "string",
+            "title": "Dim Label"
+          },
+          "by": {
+            "type": "string",
+            "title": "By"
+          },
+          "by_label": {
+            "type": "string",
+            "title": "By Label"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "target_label": {
+            "type": "string",
+            "title": "Target Label"
+          },
+          "reference": {
+            "type": "string",
+            "title": "Reference"
+          },
+          "reference_label": {
+            "type": "string",
+            "title": "Reference Label"
+          },
+          "rho": {
+            "type": "number",
+            "title": "Rho"
+          },
+          "alpha": {
+            "type": "number",
+            "title": "Alpha"
+          },
+          "alpha_each": {
+            "type": "number",
+            "title": "Alpha Each"
+          },
+          "beta": {
+            "type": "number",
+            "title": "Beta"
+          },
+          "scanned": {
+            "type": "integer",
+            "title": "Scanned"
+          },
+          "other_values": {
+            "type": "integer",
+            "title": "Other Values"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SprtScanItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "skipped": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Skipped"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "dim",
+          "dim_label",
+          "by",
+          "by_label",
+          "target",
+          "target_label",
+          "reference",
+          "reference_label",
+          "rho",
+          "alpha",
+          "alpha_each",
+          "beta",
+          "scanned",
+          "other_values",
+          "items",
+          "skipped"
+        ],
+        "title": "SprtScanOut",
+        "description": "④ 값마다 훑기 — 「출시 N주차, 전작보다 빨리 늘고 있는 증상은?」 「나쁨」 이 선\n것부터."
       },
       "StaffAgentFteOut": {
         "properties": {
