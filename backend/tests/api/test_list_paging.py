@@ -92,3 +92,28 @@ def test_적게_맞으면_모아서_정렬해도_색인_길과_같은_쪽이다(
     assert gathered[2][0] == 4 and gathered[2][1] == sorted(gathered[2][1])
     assert gathered[3] == (0, [])
     assert gathered[4] == (6, [])
+
+
+def test_이름이_같은_것이_많아도_쪽을_넘기면_빠짐도_겹침도_없다(
+    client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """이름순 정렬에서 이름이 같은 줄의 차례가 쪽마다 달라지면, 쪽을 넘길 때 어떤 것은 두 번
+    나오고 어떤 것은 안 나온다 — 목록에 있는데 못 찾는 것이 된다."""
+    kind = _make_type(client, admin, label="사건")
+    made = {_make_object(client, admin, kind, label="같은 이름")["id"] for _ in range(23)} | {
+        _make_object(client, admin, kind, label=f"다른 이름 {index}")["id"]
+        for index in range(4)
+    }
+
+    def walk() -> list[str]:
+        seen: list[str] = []
+        for offset in range(0, 40, 5):
+            found = _listed(client, admin, kind, limit=5, offset=offset)
+            seen += [one["id"] for one in found["items"]]
+        return seen
+
+    for gather in (10_000, 0):  # 모으는 길 · 색인을 따라 걷는 길
+        monkeypatch.setattr("app.modules.objects.services.GATHER_BELOW", gather)
+        seen = walk()
+        assert len(seen) == len(set(seen)) == len(made), gather
+        assert set(seen) == made

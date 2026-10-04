@@ -302,7 +302,11 @@ def apply_property_filters(stmt: Select[Any], filters: dict[str, str]) -> Select
 
 
 def apply_sort(stmt: Select[Any], view: dict[str, Any]) -> Select[Any]:
-    """`list_view.sort` 대로. 안 정해 뒀으면 이름순."""
+    """`list_view.sort` 대로. 안 정해 뒀으면 이름순.
+
+    **마지막에 id 로 한 번 더 세운다.** 이름이 같은 줄의 차례가 정해지지 않으면 쪽마다 달라질
+    수 있다 — 쪽을 넘기면 어떤 것은 두 번 나오고 어떤 것은 안 나와, 목록에 있는데 못 찾는다
+    (맞는 줄을 먼저 모아 정렬하는 길 `page_rows` 에서 실제로 그랬다)."""
     sort = view.get("sort") or {}
     field = sort.get("field") or "label"
     descending = (sort.get("dir") or "asc") == "desc"
@@ -318,7 +322,10 @@ def apply_sort(stmt: Select[Any], view: dict[str, Any]) -> Select[Any]:
     else:
         column = ObjectInstance.label
 
-    return stmt.order_by(column.desc() if descending else column.asc())
+    return stmt.order_by(
+        column.desc() if descending else column.asc(),
+        ObjectInstance.id.desc() if descending else ObjectInstance.id.asc(),
+    )
 
 
 def audit_state(row: ObjectInstance) -> dict[str, Any]:

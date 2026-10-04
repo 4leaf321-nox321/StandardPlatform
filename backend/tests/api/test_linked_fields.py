@@ -605,3 +605,26 @@ def test_지표의_기준으로는_나를_가리키는_것을_안_받는다(
         headers=admin.headers,
     )
     assert "나를 가리키는 것" in got.text, got.text
+
+
+def test_나를_가리키는_것_너머의_관계도_막대와_목록이_같다(
+    client: TestClient, admin: Signed
+) -> None:
+    """들어오는 참조 다음에 관계가 오는 두 걸음 — 처음에 조건이 「마지막 걸음이 들어오는 참조」
+    인지를 「걸음 중 하나라도」 로 봐서, 막대는 1인데 눌러 나온 목록은 0 이었다."""
+    w = _world(client, admin)
+    tool, competes = w["tool"], w["competes"]
+    for field in (
+        f"in.{tool}:developer.out.{competes}",
+        f"in.{tool}:developer.out.{competes}.label",
+    ):
+        found = _summary(client, admin, w["company"], group_by=field)
+        keyed = [one for one in found["buckets"] if one["key"] is not None]
+        assert keyed, field
+        for bucket in keyed:
+            listed = _labels(client, admin, w["company"], **{f"f.{field}.eq": bucket["key"]})
+            assert len(listed) == bucket["count"], (field, bucket)
+    # 미국사의 툴1 이 한국사의 툴3 과 경쟁하고, 한국사의 툴3 이 툴1 과 경쟁한다(방향 없음).
+    assert _labels(
+        client, admin, w["company"], **{f"f.in.{tool}:developer.out.{competes}.eq": w["툴3"]}
+    ) == ["미국사"]

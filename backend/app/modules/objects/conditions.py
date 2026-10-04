@@ -387,8 +387,9 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
             last_target = target
         previous = last_target
 
-    if whole and last_back is not None:
-        # 나를 가리키는 것 자체 — 있음 · 없음, 또는 특정 객체가 가리키나.
+    if whole and chain.hop.is_back:
+        # 나를 가리키는 것 자체(**마지막 걸음이** 그것일 때) — 있음 · 없음, 또는 특정 객체가
+        # 가리키나. 앞 걸음이 그것이고 끝이 관계면 아래 관계 길이다.
         if op == "empty":
             return ~linked.exists()
         if op == "notempty":
