@@ -7,7 +7,15 @@
 
 import type { Drill, ReadHeader } from '@/modules/metrics/api'
 
-export type Recipe = 'pareto' | 'life' | 'control' | 'changes' | 'sprt' | 'logit' | 'assoc'
+export type Recipe =
+  | 'pareto'
+  | 'life'
+  | 'control'
+  | 'changes'
+  | 'sprt'
+  | 'groups'
+  | 'logit'
+  | 'assoc'
 
 export interface Caveat {
   code: string
@@ -371,6 +379,49 @@ export interface SprtScanResult extends AnalysisHeader {
   other_values: number
   items: SprtScanItem[]
   skipped: string[]
+}
+
+// --- ⑤ 집단 비교 ---------------------------------------------------------------
+
+export interface GroupRow {
+  key: string | null
+  label: string
+  count: number
+  exposure: number
+  /** 그대로 비율(per 대당) — 작은 집단에서는 우연으로 크게 흔들린다. */
+  rate: number | null
+  /** 줄인 비율 — 대수가 작을수록 전체 쪽으로 끌린 값. 순위 · 견줌은 이것으로. */
+  shrunk: number | null
+  shrunk_low: number | null
+  shrunk_high: number | null
+  /** 줄인 정도 0~1. */
+  shrinkage: number
+  /** 줄인 비율 / 전체 비율. */
+  ratio: number | null
+  p_value: number
+  q_value: number
+  /** q < 0.05 인 집단 — 전체보다 높음 · 낮음. */
+  flag: 'high' | 'low' | null
+  drill: Drill
+}
+
+export interface GroupsResult extends AnalysisHeader {
+  dim: string
+  dim_label: string
+  axis: 'period' | 'cohort'
+  window: number | null
+  per: number
+  /** 전체 비율(per 대당). */
+  pooled: number | null
+  groups: number
+  heterogeneity_chi2: number | null
+  heterogeneity_df: number
+  heterogeneity_p: number | null
+  /** 집단 사이 참 비율의 흔들림 τ / 전체 비율. */
+  spread: number | null
+  flagged: number
+  rows: GroupRow[]
+  other_groups: number
 }
 
 // --- ④ 순차 검정 ---------------------------------------------------------------

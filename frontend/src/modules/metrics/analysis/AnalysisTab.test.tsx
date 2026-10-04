@@ -14,6 +14,7 @@ import { decisionText } from '@/modules/metrics/analysis/SprtView'
 import type {
   AssocResult,
   ChangesScanResult,
+  GroupsResult,
   LifeResult,
   LogitResult,
   ParetoResult,
@@ -649,5 +650,68 @@ describe('분석 탭', () => {
     expect(within(table).getByText('바뀐 곳 없음')).toBeInTheDocument()
     expect(screen.getByText(/2개 중 1개가 마지막 변화에서 올랐습니다/)).toBeInTheDocument()
     expect(metricsApi.analysis.mock.calls[0][1]).toBe('changes/scan')
+  })
+
+  it('집단 비교는 줄인 비율로 세우고, 대수가 작은 집단의 그대로 비율을 곁에 둔다', async () => {
+    const metric = {
+      ...METRIC,
+      dims: [
+        { name: 'base_model', address: 'ref.model.base', label: '기본 모델', kind: 'object_ref',
+          multi: false, grain: null },
+        ...METRIC.dims,
+      ],
+      analyses: [{ recipe: 'groups', label: '집단 비교', ok: true, reason: null }],
+    } as unknown as Metric
+    const row = (key: string, extra: Record<string, unknown>) => ({
+      key, label: key, count: 0, exposure: 0, rate: 5, shrunk: 5, shrunk_low: 4.5,
+      shrunk_high: 5.5, shrinkage: 0.1, ratio: 1, p_value: 0.5, q_value: 0.6, flag: null,
+      drill: { type_slug: 'svc_case', params: { 'f.ref.model.base.eq': key }, partial: [] },
+      ...extra,
+    })
+    const GROUPS: GroupsResult = {
+      ...HEADER,
+      recipe: 'groups',
+      method: '포아송 이질성 χ² · … v1',
+      params: {},
+      run_id: 'r1',
+      caveats: [],
+      excluded: {},
+      visible_share: 1,
+      dim: 'base_model',
+      dim_label: '기본 모델',
+      axis: 'period',
+      window: null,
+      per: 1000,
+      pooled: 6.67,
+      groups: 2,
+      heterogeneity_chi2: 400,
+      heterogeneity_df: 1,
+      heterogeneity_p: 0.0000001,
+      spread: 0.35,
+      flagged: 1,
+      rows: [
+        row('B3', { count: 2400, exposure: 240000, rate: 10, shrunk: 9.9, ratio: 1.48,
+          q_value: 0.000001, flag: 'high' }),
+        row('B4', { count: 3, exposure: 150, rate: 20, shrunk: 8.1, shrinkage: 0.84,
+          ratio: 1.21, q_value: 0.2 }),
+      ] as GroupsResult['rows'],
+      other_groups: 0,
+    }
+    metricsApi.analysis.mockResolvedValue(GROUPS)
+    render(
+      <MemoryRouter>
+        <AnalysisTab metric={metric} read={{ filters: { base_model: 'B1' } }} />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('B3 — 높음')).toBeInTheDocument()
+    expect(screen.getByText(/집단 사이에 우연보다 큰 차이가 있습니다/)).toBeInTheDocument()
+    expect(screen.getByText('84%')).toBeInTheDocument() // B4 는 대부분 줄였다
+    // 견주는 기준의 거르기는 빼고 보낸다.
+    expect(metricsApi.analysis).toHaveBeenCalledWith(
+      'cases',
+      'groups',
+      expect.objectContaining({ dim: 'base_model' }),
+      expect.objectContaining({ filters: {} }),
+    )
   })
 })

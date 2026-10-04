@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-04j
+GUIDE_VERSION: 2026-10-04k
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -950,6 +950,7 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 | 계절을 빼면 **어떤 증상이** 늘고 있나 | `changes` + `by` | 위 + 그 기준(증상) | 위 + `by` · `top` |
 | 몇 값에 몰렸나 · 구성비가 바뀌었나 | `pareto` | 기준이 있는 건수 · 합계 | `dim` · `top` · `by_period` · `compare_from` · `compare_to`(두 기간 비교) |
 | 어떤 증상과 부품(원인)이 함께 나오나 · 증상 묶음 · 원인분산도 | `assoc` | 기준 둘(여러 값이어도) | `rows` · `cols` · `min_count` |
+| SKU · 공장 · 기본 모델마다 비율이 다른가 | `groups` | 분모 `on` 에 그 기준 | `dim` · `axis` · `window` |
 | 어떤 조건에서 다시 들어오나(90일 재인입) | `logit` | 방문 기준 `visit.repeat` + 요인 기준 | `factors`(값이 적은 기준 넷까지) · `min_count` |
 
 옮길 때 규칙:
@@ -980,6 +981,11 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
   `effective` = 1/Σ몫², 1 이면 하나에 몰림)와 가장 많은 원인(`top` · `top_share`) — 많이 갈린 증상부터.
   「원인이 여럿에 걸친 증상」 은 이것으로 말하고, 전체의 값(`overall_effective`)과 견준다.
 - 두 기간 비교: `comparison.items` 의 `notable`(|수정 잔차| > 3)인 값만 「몫이 달라졌다」 고 말한다.
+- 집단 비교: **줄인 비율(`shrunk`)로 순위를 말한다** — 그대로 비율(`rate`)은 대수가 작은 집단에서 우연으로
+  크게 흔들린다(`shrinkage` 가 크면 그 집단은 거의 전체로 줄었다 — 「자료가 적어 말하기 이르다」).
+  「다르다」 는 `flag`(q < 0.05)인 것만, 구간(`shrunk_low` ~ `shrunk_high`)과 함께. 먼저 이질성
+  (`heterogeneity_p`)으로 「집단 사이에 우연보다 큰 차이가 있나」 를 말한다. SKU 로 묻는데 `dim` 이 분모 짝에
+  없다고 거절되면 「SKU 별 판매 대수가 분모에 없다」 고 전한다 — 지어서 나누지 않는다.
 - 수명은 방문 기준(`visit.number`)이 있으면 `basis="first_visits"` 로 시리얼마다 첫 방문만 센다 —
   기록 수가 곧 고장 난 대수가 된다(`records_not_units` 주의가 사라진다).
 - 근거는 지표 읽기와 같다 — `drill.params` → `objects_list` 의 `conditions`.

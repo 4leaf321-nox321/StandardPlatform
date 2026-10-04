@@ -2288,6 +2288,7 @@ _RECIPE_OPTIONS: dict[str, set[str]] = {
         "by",
         "top",
     },
+    "groups": {"dim", "axis", "window"} | _RANGES,
     "logit": {"factors", "min_count"} | _RANGES,
     "assoc": {"rows", "cols", "min_count"} | _RANGES,
 }
@@ -2322,6 +2323,9 @@ async def metric_analyze(
       `reference` 또는 `reference_via`(새 모델 객체의 전작 칸) · `dim` · `rho` · `alpha` ·
       `beta` · **`by`**(값마다 훑기 — 「전작보다 빨리 늘고 있는 증상은?」: 증상마다 그 증상으로
       거른 검정, 유의수준 α/K, 「나쁨」 이 선 값부터. `new` 는 전작에 없던 값) · `top`
+    - `groups` — **집단 비교**(SKU · 공장 · 기본 모델마다 비율이 다른가). `dim`(분모 짝에 있는
+      기준) · `axis` · `window`. 이질성 χ², 집단 대 나머지 정확 검정(BH q), 작은 집단의 과장을
+      줄인 비율(`shrunk` · 구간 · `shrinkage`)
     - `logit` — 재방문 위험 요인(방문 기준 「재방문」 이 있는 지표). `factors`(필수 — 값이 적은
       기준 이름 넷까지, 목록) · `min_count`
     - `assoc` — 연관 · 묶음. `rows` · `cols`(필수 — 증상 · 부품처럼 기준 둘) · `min_count`.
