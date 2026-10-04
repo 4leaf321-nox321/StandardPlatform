@@ -269,8 +269,10 @@ def test_속성을_지워도_저장값은_남고_되살리면_다시_보인다(
 
     done = client.delete(f"/api/ontology/types/{kind}/properties/w", headers=admin.headers)
     assert done.status_code == 204, done.text
-    snapshot = _snapshots(client, admin)[0]
-    assert snapshot["reason"] == f"삭제 직전: 속성 {kind}.w"
+    # 스냅샷 목록은 설치 전체의 것이다 — 시험 DB 를 함께 쓰면 같은 때 남의 스냅샷이 앞에 선다.
+    # 내 타입 이름으로 찾는다.
+    reason = f"삭제 직전: 속성 {kind}.w"
+    snapshot = next(one for one in _snapshots(client, admin) if one["reason"] == reason)
 
     restored = client.post(
         f"/api/ontology/snapshots/{_only(db, snapshot['id'], kind)}/restore",
