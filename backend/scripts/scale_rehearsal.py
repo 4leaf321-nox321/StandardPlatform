@@ -651,6 +651,8 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
         results.extend(_visits_rehearsal(client, admin, url))
     if not only or "alerts" in (only or ""):
         results.extend(_alerts_rehearsal(client, admin, url))
+    if not only or "limits" in (only or ""):
+        results.extend(_limits_rehearsal(client, admin, url))
 
     print("\n| 영역 | 무엇 | 중앙값 | 비고 |\n| --- | --- | --- | --- |")
     for area, label, took, note in results:
@@ -1279,6 +1281,214 @@ def _alerts_rehearsal(
 
 
 #: 심는 재방문의 정답 — 기본 확률 0.08, 공장 F2 오즈비 2 · F3 0.5, 증상 S05 ~ S09 1.5.
+def _limits_rehearsal(
+    client: Any, admin: dict[str, str], url: str
+) -> list[tuple[str, str, str, str]]:
+    """상한(ADR 0023) — 계획의 셀 어림이 실제 셀과 얼마나 맞나, 큰 셀의 계산 · 분석이 견디나.
+
+    지표 다섯: 판매 대수 · 그것을 24개월 머물게 한 「쓰이는 대수」(머무는 기간) · ① 판매월
+    코호트(기본 모델 x 증상, 분모 판매 대수) · 기본 모델 x 부품 x 월(예전 어림으로 거절되던 것)
+    · 부품 x 분기. 지표마다 계획(어림 · 시간) → 계산(실제 셀 · 시간). 그다음 셀이 예전 읽기
+    상한(2만)을 넘는 분석 — 부품마다 변화점 훑기(부품 x 기간), 기본 모델 x 부품 연관, 기본 모델
+    집단 비교 · 순차 검정 훑기 · 수명 · 클레임 예측. 분석마다 이 프로세스의 메모리 최고치를
+    함께 적는다. 끝나면 지표를 지운다.
+    """
+    import resource
+    import uuid
+
+    from app.database import SessionLocal
+    from app.modules.metrics import services as metrics_services
+
+    out: list[tuple[str, str, str, str]] = []
+    tag = uuid.uuid4().hex[:4]
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("limits", label, f"{took:.2f}초", note))
+        print(f"{took:8.2f}초  {label}  {note}", flush=True)
+
+    def peak_mb() -> float:
+        return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / 1024
+
+    def when(address: str, grain: str = "month") -> dict[str, str]:
+        return {"address": address, "grain": grain}
+
+    sales, stay, first = f"lm_sales_{tag}", f"lm_stay_{tag}", f"lm_q1_{tag}"
+    wide, parts = f"lm_wide_{tag}", f"lm_parts_{tag}"
+    base_sales = {"name": "base_model", "address": "properties.base_model"}
+    base_ref = {"name": "base_model", "address": "ref.model.base"}
+    part = {"name": "part", "address": "properties.parts"}
+    sales_spec = {
+        "measure": "sum",
+        "measure_field": "properties.units",
+        "time": when("properties.month"),
+        "dimensions": [base_sales],
+    }
+    definitions: list[tuple[str, str, str, dict[str, Any]]] = [
+        (sales, "판매 대수", "svc_sales", sales_spec),
+        (
+            stay,
+            "쓰이는 대수(24개월 머묾)",
+            "svc_sales",
+            {**sales_spec, "stay": {"periods": 24}},
+        ),
+        (
+            first,
+            "① 판매월 코호트 — 기본 모델 x 증상",
+            "svc_case",
+            {
+                "measure": "count",
+                "time": when("properties.service_date"),
+                "cohort": when("properties.sale_date"),
+                "dimensions": [base_ref, {"name": "symptom", "address": "properties.symptom"}],
+                "denominator": {
+                    "metric": sales,
+                    "on": ["base_model"],
+                    "time": "cohort",
+                    "per": 100,
+                },
+                "settle_days": 60,
+            },
+        ),
+        (
+            wide,
+            "기본 모델 x 부품 x 월",
+            "svc_case",
+            {
+                "measure": "count",
+                "time": when("properties.service_date"),
+                "dimensions": [base_ref, part],
+            },
+        ),
+        (
+            parts,
+            "부품 x 분기",
+            "svc_case",
+            {
+                "measure": "count",
+                "time": when("properties.service_date", "quarter"),
+                "dimensions": [part],
+            },
+        ),
+    ]
+    made: list[str] = []
+    try:
+        for slug, label, source, spec in definitions:
+            body = {"source_type_slug": source, "spec": spec}
+            started = time.perf_counter()
+            planned = client.post("/api/metrics/plan", json=body, headers=admin)
+            plan_took = time.perf_counter() - started
+            plan = planned.json() if planned.status_code == 200 else {}
+            estimated = plan.get("estimated_cells")
+            if not plan.get("ok"):
+                row(
+                    f"계획 — {label}",
+                    plan_took,
+                    f"거절 {plan.get('errors') or planned.text[:200]}",
+                )
+                continue
+            saved = client.post(
+                "/api/metrics", json={"slug": slug, "label": label, **body}, headers=admin
+            )
+            if saved.status_code != 201:
+                row(f"정의 — {label}", 0.0, saved.text[:200])
+                continue
+            made.append(slug)
+            started = time.perf_counter()
+            with SessionLocal() as db:
+                try:
+                    done = metrics_services.run_recompute(
+                        db, [slug], job_id=None, progress=lambda *_: None
+                    )["runs"][0]
+                    cells = int(done["cells"])
+                    note = (
+                        f"어림 {estimated:,} · 실제 {cells:,} · 어림/실제 "
+                        f"{(estimated or 0) / max(cells, 1):.2f} · 펼친 줄 {done['rows']:,} · "
+                        f"계획 {plan_took:.1f}초"
+                    )
+                except Exception as caught:  # 재는 자리다 — 이유만 적는다
+                    note = f"실패 {type(caught).__name__}: {str(caught)[:160]}"
+            row(f"계산 — {label}", time.perf_counter() - started, note)
+        with create_engine(url).connect() as connection:
+            size = connection.execute(
+                text("SELECT pg_size_pretty(pg_total_relation_size('metric_values'))")
+            ).scalar()
+            hot = connection.execute(
+                text(
+                    "SELECT o.properties->>'base' FROM objects o "
+                    "JOIN object_types t ON t.id = o.type_id "
+                    "WHERE t.slug = 'plm_model' ORDER BY o.key LIMIT 1"
+                )
+            ).scalar()
+            typical = connection.execute(
+                text(
+                    "SELECT o.id FROM objects o JOIN object_types t ON t.id = o.type_id "
+                    "WHERE t.slug = 'plm_base' ORDER BY o.key OFFSET 1000 LIMIT 1"
+                )
+            ).scalar()
+        row("셀 표 크기", 0.0, f"metric_values {size}")
+        inside = {"cohort_from": "2019-03-01", "cohort_to": "2022-11-01"}
+        asks: list[tuple[str, str, str, dict[str, Any]]] = [
+            (
+                "부품마다 변화점 훑기(부품 x 월)",
+                wide,
+                "changes/scan",
+                {"by": "part", "axis": "period"},
+            ),
+            (
+                "기본 모델 x 부품 연관",
+                wide,
+                "assoc",
+                {"rows": "base_model", "cols": "part", "compact": "true"},
+            ),
+            (
+                "부품 파레토 · 기간별 추이",
+                parts,
+                "pareto",
+                {"dim": "part", "by_period": "true", "compact": "true"},
+            ),
+            (
+                "기본 모델 집단 비교(코호트 · 출고 3개월 안)",
+                first,
+                "groups",
+                {
+                    "dim": "base_model",
+                    "axis": "cohort",
+                    "window": 3,
+                    "compact": "true",
+                    **inside,
+                },
+            ),
+            (
+                "증상마다 순차 검정 — 뜨거운 기본 모델 vs 보통",
+                first,
+                "sprt/scan",
+                {"by": "symptom", "target": hot, "reference": str(typical)},
+            ),
+            ("수명", first, "life", {"compact": "true", **inside}),
+            ("클레임 예측(12기간)", first, "forecast", {"horizon": 12, **inside}),
+        ]
+        for label, slug, recipe, params in asks:
+            if slug not in made:
+                continue
+            params = {key: value for key, value in params.items() if value is not None}
+            before = peak_mb()
+            started = time.perf_counter()
+            got = client.get(
+                f"/api/metrics/{slug}/analysis/{recipe}", params=params, headers=admin
+            )
+            took = time.perf_counter() - started
+            note = (
+                f"HTTP {got.status_code} {got.text[:160]}"
+                if got.status_code >= 400
+                else f"주의 {','.join(one['code'] for one in got.json().get('caveats', []))}"
+            )
+            row(label, took, f"{note} · 메모리 최고 {peak_mb():.0f}MB(전 {before:.0f})")
+    finally:
+        for slug in reversed(made):
+            client.delete(f"/api/metrics/{slug}", headers=admin)
+    return out
+
+
 _VISIT_TRUTH = {"base": 0.08, "F2": 2.0, "F3": 0.5, "S05+": 1.5}
 
 _VISITS_SQL = (

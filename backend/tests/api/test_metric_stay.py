@@ -101,7 +101,15 @@ def test_머무는_기간은_기간마다_최근_N기간의_합이고_미래는_
     client: TestClient, admin: Signed
 ) -> None:
     w = _world(client, admin)
+    plan = client.post(
+        "/api/metrics/plan",
+        json={"source_type_slug": w["sales"], "spec": _units_spec()},
+        headers=admin.headers,
+    ).json()
     metric = _define(client, admin, source=w["sales"], spec=_units_spec(), label="쓰이는 대수")
+    # 셀 어림 — 펼침이 이웃 기간끼리 겹치므로 「셀 x N」 이 아니라 (기간 수 + N - 1) 로 묶인다.
+    # 넘치게는 어림해도 모자라게는 하지 않는다.
+    assert metric["cells"] <= plan["estimated_cells"] <= 2 * metric["cells"]
     table = _read(client, admin, metric["slug"], dims="country", by="period")
     assert table["stay"] == {"periods": 3, "periods_from": None, "periods_from_label": None}
     kor = _by_month(table, w["kor"])

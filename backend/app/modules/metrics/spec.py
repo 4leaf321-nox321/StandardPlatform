@@ -748,6 +748,7 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
         return _guarded(db, stmt)
 
     product = 1
+    periods = 0
     unknown = False
     workspaces = counted(func.count(func.distinct(ObjectInstance.owner_workspace_id)))
     product *= max(int(workspaces[0]), 1) if workspaces is not None else 1
@@ -760,7 +761,8 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
         if found is None:
             unknown = True
         else:
-            product *= max(int(found[0]), 1)
+            periods = int(found[0])
+            product *= max(periods, 1)
             out.period_from = found[1].isoformat() if found[1] is not None else None
             out.period_to = (
                 axes.next_period(found[2], built.time.grain).isoformat()
@@ -819,8 +821,14 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
         rate = expanded / max(out.rows, 1)
         estimated = min(estimated, extrapolate(combos, expanded, scale=rate))
     if built.stay is not None:
-        # 머무는 기간 — 셀마다 N기간까지 펼친다(계산 시점 뒤의 미래는 안 만들어 이보다 적다).
-        estimated *= built.stay.periods
+        # 머무는 기간 — 셀마다 N기간까지 펼치지만, 이웃한 기간의 펼침은 같은 셀에 겹친다: 기간
+        # 말고 다른 값의 조합마다 (기간 수 + N - 1) 개를 넘지 않는다(실측 — 판매 10만 셀 x 24
+        # 로 어림하면 240만, 실제는 15만).
+        stay_n = built.stay.periods
+        spread = estimated * stay_n
+        if periods:
+            spread = min(spread, product // periods * (periods + stay_n - 1))
+        estimated = spread
     out.estimated_cells = estimated
     if estimated > settings.metrics_max_cells:
         out.ok = False
