@@ -383,6 +383,69 @@ class ChangesScanOut(AnalysisHeader):
     items: list[ChangesScanItemOut]
 
 
+# --- 전후 비교 -----------------------------------------------------------------------
+
+
+class CutinSideOut(BaseModel):
+    """적용일의 한쪽 — 닫힌 부분군의 합."""
+
+    first: str | None
+    last: str | None
+    subgroups: int
+    count: int
+    exposure: float | None
+    rate: float | None
+    """per 대당(조건 비율이면 %)."""
+    drill: DrillOut | None
+
+
+class CutinPointOut(BaseModel):
+    when: str
+    label: str
+    count: int
+    exposure: float | None
+    rate: float | None
+    closed: bool
+    side: Literal["before", "after", "skipped", "boundary"]
+    """앞 · 뒤, 처음 빼기(`skip_first`), 적용일이 낀 부분군(섞여 있어 뺀다)."""
+    drill: DrillOut
+
+
+class CutinTrendOut(BaseModel):
+    """적용 전의 흐름 — 기간마다의 변화(비율의 배수 - 1)와 그 p."""
+
+    change_per_period: float | None
+    p_value: float | None
+
+
+class CutinOut(AnalysisHeader):
+    """전후 비교 — 「대책 적용일 뒤에 만든(판) 것부터 줄었나」."""
+
+    at: str
+    axis: Literal["period", "cohort"]
+    window: int | None
+    per: float
+    kind: Literal["rate", "count"]
+    before: CutinSideOut
+    after: CutinSideOut
+    open_after: int
+    """적용일 뒤에 있으나 창이 아직 안 닫힌 부분군 수 — 계산에 안 넣었다."""
+    ratio: float | None
+    """뒤 비율 / 앞 비율."""
+    ratio_low: float | None
+    ratio_high: float | None
+    p_value: float | None
+    dispersion: float
+    effect: float
+    """의미 있는 차이(예: 0.2 = 20%) — 「차이 없음」 과 「아직 이르다」 를 가른다."""
+    decision: Literal["reduced", "increased", "no_difference", "too_early"]
+    more_subgroups: int | None
+    """「아직 이르다」 면 그 차이를 가리려고 더 닫혀야 할 뒤의 부분군 수(검정력 80%) — 앞의
+    건수가 적어 못 가리면 None."""
+    pre_trend: CutinTrendOut
+    points: list[CutinPointOut]
+
+
 # --- ⑤ 집단 비교 ---------------------------------------------------------------------
 
 

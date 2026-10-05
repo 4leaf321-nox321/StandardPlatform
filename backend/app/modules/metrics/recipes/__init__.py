@@ -10,6 +10,7 @@ from app.modules.metrics.recipes import (
     assoc,
     changes,
     control,
+    cutin,
     groups,
     life,
     logit,
@@ -17,4 +18,4 @@ from app.modules.metrics.recipes import (
     sprt,
 )
 
-__all__ = ["assoc", "changes", "control", "groups", "life", "logit", "pareto", "sprt"]
+__all__ = ["assoc", "changes", "control", "cutin", "groups", "life", "logit", "pareto", "sprt"]

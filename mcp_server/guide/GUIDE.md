@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-05a
+GUIDE_VERSION: 2026-10-05b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -955,7 +955,8 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 | 계절을 빼면 **어떤 증상이** 늘고 있나 | `changes` + `by` | 위 + 그 기준(증상) | 위 + `by` · `top` |
 | 몇 값에 몰렸나 · 구성비가 바뀌었나 | `pareto` | 기준이 있는 건수 · 합계 | `dim` · `top` · `by_period` · `compare_from` · `compare_to`(두 기간 비교) |
 | 어떤 증상과 부품(원인)이 함께 나오나 · 증상 묶음 · 원인분산도 | `assoc` | 기준 둘(여러 값이어도) | `rows` · `cols` · `min_count` |
-| SKU · 공장 · 기본 모델마다 비율이 다른가 | `groups` | 분모 `on` 에 그 기준 | `dim` · `axis` · `window` |
+| SKU · 공장 · 기본 모델마다 비율이 다른가 | `groups` | 분모 `on` 에 그 기준(조건 비율이면 어느 기준이든) | `dim` · `axis` · `window` |
+| 대책 적용 뒤에 만든 것부터 줄었나 | `cutin` | 기간 또는 코호트(건수 · 조건 비율) | `at`(적용일) · `axis` · `window` · `skip_first` · `effect`, 모델은 `filters` |
 | 어떤 조건에서 다시 들어오나(90일 재인입) | `logit` | 방문 기준 `visit.repeat` + 요인 기준 | `factors`(값이 적은 기준 넷까지) · `min_count` |
 
 옮길 때 규칙:
@@ -995,6 +996,11 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
   계산에 든다(기록이 없는 집단도 대수가 있으면 0 건으로). `rows` 는 「다름」 을 전체와 먼 것부터,
   남으면 줄인 비율 높은 순이고, `other_groups` 는 계산에는 넣었으나 싣지 않은 수다(`groups` 가 전체 수,
   `flagged` 가 「다름」 전체 수 — 실은 줄보다 많을 수 있다).
+- 전후 비교: **모델로 거른다**(`filters`) — 앞쪽은 그 모델의 첫 출고부터다. `decision` 의 `reduced` 는
+  「적용일 뒤에 줄었다」 이지 「대책 때문에」 가 아니다(`association` 주의). `too_early` 는 효과 없음이
+  아니다 — `more_subgroups`(결론까지 더 닫혀야 할 부분군)로 언제쯤인지 말한다. `pre_trend` 주의가 있으면
+  「적용 전부터 이미 내려가고 있었다」 를 먼저 말하고, 출시 초기 때문이면 `skip_first` 로 다시 본다.
+  비(`ratio`)는 구간(`ratio_low` ~ `ratio_high`)과 함께.
 - 수명은 방문 기준(`visit.number`)이 있으면 `basis="first_visits"` 로 시리얼마다 첫 방문만 센다 —
   기록 수가 곧 고장 난 대수가 된다(`records_not_units` 주의가 사라진다).
 - 근거는 지표 읽기와 같다 — `drill.params` → `objects_list` 의 `conditions`.

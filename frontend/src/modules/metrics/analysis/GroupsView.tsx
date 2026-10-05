@@ -38,12 +38,11 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table'
-
-/** 그림에 싣는 줄 — 집단이 수백이면 점이 겹쳐 못 읽는다(표에는 모두). */
-const PLOT_ROWS = 40
 import { useResource } from '@/shared/hooks/useResource'
 
 const AUTO = '__auto__'
+/** 그림에 싣는 줄 — 집단이 수백이면 점이 겹쳐 못 읽는다(표에는 모두). */
+const PLOT_ROWS = 40
 
 export function GroupsView({ metric, read, initial = {} }: AnalysisViewProps) {
   // 집단마다 대수를 알아야 견준다 — 분모 짝(on)의 기준만.

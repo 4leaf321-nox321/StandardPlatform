@@ -2289,6 +2289,7 @@ _RECIPE_OPTIONS: dict[str, set[str]] = {
         "top",
     },
     "groups": {"dim", "axis", "window"} | _RANGES,
+    "cutin": {"at", "axis", "window", "skip_first", "effect"} | _RANGES,
     "logit": {"factors", "min_count"} | _RANGES,
     "assoc": {"rows", "cols", "min_count"} | _RANGES,
 }
@@ -2326,6 +2327,11 @@ async def metric_analyze(
     - `groups` — **집단 비교**(SKU · 공장 · 기본 모델마다 비율이 다른가). `dim`(분모 짝에 있는
       기준) · `axis` · `window`. 이질성 χ², 집단 대 나머지 정확 검정(BH q), 작은 집단의 과장을
       줄인 비율(`shrunk` · 구간 · `shrinkage`)
+    - `cutin` — **전후 비교**(대책 적용일 뒤에 만든 것부터 줄었나). `at`(필수 — 적용일
+      `YYYY-MM-DD`) · `axis` · `window` · `skip_first`(앞쪽에서 뺄 처음 부분군 — 출시 초기) ·
+      `effect`(의미 있는 차이, 기본 0.2). 모델은 `filters` 로 거른다 — 앞쪽은 그 모델의 첫
+      출고부터. 비(뒤/앞)와 구간, `decision`(`reduced` · `increased` · `no_difference` ·
+      `too_early`), `more_subgroups`(결론까지 더 닫혀야 할 부분군), `pre_trend`(앞쪽 흐름)
     - `logit` — 재방문 위험 요인(방문 기준 「재방문」 이 있는 지표). `factors`(필수 — 값이 적은
       기준 이름 넷까지, 목록) · `min_count`
     - `assoc` — 연관 · 묶음. `rows` · `cols`(필수 — 증상 · 부품처럼 기준 둘) · `min_count`.
@@ -2345,6 +2351,9 @@ async def metric_analyze(
     - 순차 검정: `continue` 는 「아직 결론 없음」 이지 「문제없음」 이 아니다. `not_worse` 는
       「ρ 배 나쁘지는 않다」 이지 「같다」 가 아니다.
     - 관리도의 신호는 「조사할 곳」 이지 원인이 아니다. 변화점의 `provisional` 은 잠정이다.
+    - 전후 비교: `reduced` 는 「적용일 뒤에 줄었다」 이지 「대책 때문에」 가 아니다. `too_early` 는
+      「효과 없음」 이 아니다 — `more_subgroups` 로 언제쯤인지 말한다. `pre_trend` 주의가 있으면
+      그 흐름을 먼저 말한다.
     - 위험 요인의 오즈비 · 연관의 향상도는 「함께 나옴」 이지 원인이 아니다. `unstable` 인 값은
       오즈비를 말하지 않는다. `aliased` 면 요인끼리 겹쳐 오즈비를 가를 수 없다.
     - `method`(방법과 판) · `computed_at`(계산 시각)을 함께 말한다. 근거는 `drill.params` →

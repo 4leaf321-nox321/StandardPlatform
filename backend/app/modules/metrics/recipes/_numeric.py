@@ -100,3 +100,11 @@ def gamma_ppf(q: float, shapes: Sequence[float], rates: Sequence[float]) -> list
     rate = np.asarray(rates, dtype=np.float64)
     found = stats.gamma.ppf(q, np.asarray(shapes, dtype=np.float64), scale=1.0 / rate)
     return [float(one) for one in np.atleast_1d(found)]
+
+
+def beta_ppf(q: float, a: float, b: float) -> float:
+    """베타 분위수 — 클로퍼-피어슨 구간(전후 비교의 조건부 이항). 모수는 실수여도
+    된다(과분산이면 건수를 φ 로 나눈 「실효 건수」)."""
+    from scipy import stats
+
+    return float(stats.beta.ppf(q, a, b))

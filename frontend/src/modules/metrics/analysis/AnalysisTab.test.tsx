@@ -14,6 +14,7 @@ import { decisionText } from '@/modules/metrics/analysis/SprtView'
 import type {
   AssocResult,
   ChangesScanResult,
+  CutinResult,
   GroupsResult,
   LifeResult,
   LogitResult,
@@ -712,6 +713,69 @@ describe('분석 탭', () => {
       'groups',
       expect.objectContaining({ dim: 'base_model' }),
       expect.objectContaining({ filters: {} }),
+    )
+  })
+  it('전후 비교는 적용일을 넣어야 묻고, 결론과 「대책 때문」 이 아니라는 주의를 앞에 둔다', async () => {
+    const metric = {
+      ...METRIC,
+      analyses: [{ recipe: 'cutin', label: '전후 비교', ok: true, reason: null }],
+    } as unknown as Metric
+    const side = (first: string, last: string, rate: number) => ({
+      first, last, subgroups: 6, count: 600, exposure: 120000, rate,
+      drill: { type_slug: 'svc_case', params: { 'f.received.gte': '2026-01-01' }, partial: [] },
+    })
+    const CUTIN: CutinResult = {
+      ...HEADER,
+      recipe: 'cutin',
+      method: '적용일 전후 부분군 비 · … v1',
+      params: {},
+      run_id: 'r1',
+      caveats: [
+        {
+          code: 'association',
+          level: 'info',
+          message: '이 결과는 「적용일 뒤에 줄었다 · 늘었다」 이지 「대책 때문에」 가 아닙니다.',
+          count: null,
+        },
+      ],
+      excluded: {},
+      visible_share: 1,
+      at: '2026-07-01',
+      axis: 'period',
+      window: null,
+      per: 1000,
+      kind: 'rate',
+      before: side('2026-01', '2026-06', 5),
+      after: side('2026-07', '2026-12', 3),
+      open_after: 0,
+      ratio: 0.6,
+      ratio_low: 0.54,
+      ratio_high: 0.67,
+      p_value: 0.000001,
+      dispersion: 1,
+      effect: 0.2,
+      decision: 'reduced',
+      more_subgroups: null,
+      pre_trend: { change_per_period: 0, p_value: 0.9 },
+      points: [],
+    }
+    metricsApi.analysis.mockResolvedValue(CUTIN)
+    render(
+      <MemoryRouter>
+        <AnalysisTab metric={metric} read={{ filters: { base_model: 'S' } }} />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('적용일을 넣으면 견줍니다.')).toBeInTheDocument()
+    expect(metricsApi.analysis).not.toHaveBeenCalled()
+    await userEvent.type(screen.getByLabelText('적용일'), '2026-07-01')
+    expect(await screen.findByText('줄었다')).toBeInTheDocument()
+    expect(screen.getByText(/뒤가 앞의 0.6배/)).toBeInTheDocument()
+    expect(screen.getByText(/대책 때문에/)).toBeInTheDocument()
+    expect(metricsApi.analysis).toHaveBeenLastCalledWith(
+      'cases',
+      'cutin',
+      expect.objectContaining({ at: '2026-07-01', effect: '0.2' }),
+      expect.objectContaining({ filters: { base_model: 'S' } }),
     )
   })
 })

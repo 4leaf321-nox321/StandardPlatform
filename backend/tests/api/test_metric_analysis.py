@@ -1210,3 +1210,63 @@ def test_집단_비교는_뜨거운_집단을_잡고_작은_집단의_우연을_
     assert refused["code"].endswith("METRICS-0035")
     listed = next(one for one in monthly["analyses"] if one["recipe"] == "groups")
     assert listed["ok"] is True and listed["label"] == "집단 비교"
+
+
+# --- 전후 비교 ----------------------------------------------------------------------
+
+
+def test_전후_비교는_적용일_앞뒤의_닫힌_부분군을_견주고_낀_달은_뺀다(
+    client: TestClient, admin: Signed
+) -> None:
+    """S 기본 모델 · 2026 년 — 상반기 달마다 2만 대에 100건, 하반기 60건(4할 줄음). 계산은
+    2027-03-15 라 2027-01 까지 닫혔고, 2027-02 는 열려 있다."""
+    w = _world(client, admin)
+    sales, monthly = _monthly(client, admin, w)
+    watermark = datetime(2027, 3, 15, tzinfo=UTC)
+    _plant_months(w, sales, monthly, [100] * 6 + [60] * 6 + [60, 60], 20000.0, watermark)
+    model = {"d.base_model": w["s_base"]}
+
+    found = _analysis(client, admin, monthly["slug"], "cutin", at="2026-07-01", **model)
+    assert found["recipe"] == "cutin" and found["decision"] == "reduced"
+    assert found["before"]["subgroups"] == 6 and found["before"]["count"] == 600
+    assert found["after"]["subgroups"] == 7 and found["open_after"] == 1
+    assert found["ratio"] == pytest.approx(0.6)
+    assert found["ratio_high"] < 1 and found["before"]["rate"] == pytest.approx(5.0)
+    assert found["before"]["first"] == "2026-01" and found["before"]["last"] == "2026-06"
+    # 근거 — 앞의 범위(접수월 1~6월)와 그 모델.
+    drill = found["before"]["drill"]["params"]
+    assert drill["f.received.gte"] == "2026-01-01" and drill["f.received.lt"] == "2026-07-01"
+    sides = [one["side"] for one in found["points"]]
+    assert sides[:6] == ["before"] * 6 and sides[6:] == ["after"] * 8
+    codes = {one["code"] for one in found["caveats"]}
+    assert "association" in codes and "open_after" in codes and "unfiltered" not in codes
+
+    # 적용일이 달 중간이면 그 달은 섞여 있어 뺀다. 처음 두 달은 출시 초기로 뺄 수 있다.
+    mid = _analysis(
+        client, admin, monthly["slug"], "cutin", at="2026-07-15", skip_first=2, **model
+    )
+    sides = [one["side"] for one in mid["points"]]
+    assert sides[:2] == ["skipped"] * 2 and sides[6] == "boundary"
+    assert mid["before"]["subgroups"] == 4 and mid["after"]["subgroups"] == 6
+    assert "boundary" in {one["code"] for one in mid["caveats"]}
+
+    # 적용일을 늦게 잡으면(11월) 앞쪽이 이미 내려가 있었다 — 「줄었다」 여도 그렇다고 말한다.
+    # 거르지 않으면 그것도 말한다.
+    late = _analysis(client, admin, monthly["slug"], "cutin", at="2026-11-01")
+    assert late["pre_trend"]["change_per_period"] < 0 and late["pre_trend"]["p_value"] < 0.05
+    codes = {one["code"] for one in late["caveats"]}
+    assert "pre_trend" in codes and "unfiltered" in codes
+
+    # 적용일 뒤가 아직 하나도 안 닫혔으면 「아직 이르다」.
+    early = _analysis(client, admin, monthly["slug"], "cutin", at="2027-02-01", **model)
+    assert early["decision"] == "too_early" and early["after"]["subgroups"] == 0
+    assert "no_after" in {one["code"] for one in early["caveats"]}
+
+    bad = client.get(
+        f"/api/metrics/{monthly['slug']}/analysis/cutin",
+        params={"at": "2026-07-01", "effect": 1.5},
+        headers=admin.headers,
+    )
+    assert bad.status_code == 422
+    listed = next(one for one in monthly["analyses"] if one["recipe"] == "cutin")
+    assert listed["ok"] is True and listed["label"] == "전후 비교"

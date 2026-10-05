@@ -11332,6 +11332,189 @@
         }
       }
     },
+    "/api/metrics/{slug}/analysis/cutin": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Cutin Analysis",
+        "description": "전후 비교 — 적용일 앞(첫 부분군부터)과 뒤(창이 닫힌 것)의 비율과 그 비 · 구간, 「줄었다\n· 늘었다 · 차이 없음 · 아직 이르다」, 앞쪽 추세. 모델은 `d.<기준>=<값>` 으로 거른다.",
+        "operationId": "cutin_analysis_api_metrics__slug__analysis_cutin_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "at",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "date",
+              "description": "적용일 — 이 날 뒤에 만든(판) 것부터를 「뒤」 로 본다",
+              "title": "At"
+            },
+            "description": "적용일 — 이 날 뒤에 만든(판) 것부터를 「뒤」 로 본다"
+          },
+          {
+            "name": "axis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "enum": [
+                    "period",
+                    "cohort"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Axis"
+            }
+          },
+          {
+            "name": "window",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 120,
+              "minimum": 1,
+              "description": "코호트 축 — 출고 뒤 몇 기간 안의 건수인가",
+              "default": 3,
+              "title": "Window"
+            },
+            "description": "코호트 축 — 출고 뒤 몇 기간 안의 건수인가"
+          },
+          {
+            "name": "skip_first",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 60,
+              "minimum": 0,
+              "description": "앞쪽에서 뺄 처음 부분군 수(출시 초기)",
+              "default": 0,
+              "title": "Skip First"
+            },
+            "description": "앞쪽에서 뺄 처음 부분군 수(출시 초기)"
+          },
+          {
+            "name": "effect",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "number",
+              "exclusiveMaximum": 1,
+              "exclusiveMinimum": 0,
+              "description": "의미 있는 차이(0.2 = 20%)",
+              "default": 0.2,
+              "title": "Effect"
+            },
+            "description": "의미 있는 차이(0.2 = 20%)"
+          },
+          {
+            "name": "period_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period From"
+            }
+          },
+          {
+            "name": "period_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 날 **앞까지**",
+              "title": "Period To"
+            },
+            "description": "이 날 **앞까지**"
+          },
+          {
+            "name": "cohort_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort From"
+            }
+          },
+          {
+            "name": "cohort_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CutinOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/metrics/{slug}/analysis/sprt": {
       "get": {
         "tags": [
@@ -20230,6 +20413,512 @@
         ],
         "title": "CreateAccountRequest",
         "description": "관리자가 직접 계정을 만들 때. 승인 절차 없이 바로 활성이다."
+      },
+      "CutinOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "at": {
+            "type": "string",
+            "title": "At"
+          },
+          "axis": {
+            "type": "string",
+            "enum": [
+              "period",
+              "cohort"
+            ],
+            "title": "Axis"
+          },
+          "window": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Window"
+          },
+          "per": {
+            "type": "number",
+            "title": "Per"
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "rate",
+              "count"
+            ],
+            "title": "Kind"
+          },
+          "before": {
+            "$ref": "#/components/schemas/CutinSideOut"
+          },
+          "after": {
+            "$ref": "#/components/schemas/CutinSideOut"
+          },
+          "open_after": {
+            "type": "integer",
+            "title": "Open After"
+          },
+          "ratio": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio"
+          },
+          "ratio_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio Low"
+          },
+          "ratio_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ratio High"
+          },
+          "p_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P Value"
+          },
+          "dispersion": {
+            "type": "number",
+            "title": "Dispersion"
+          },
+          "effect": {
+            "type": "number",
+            "title": "Effect"
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "reduced",
+              "increased",
+              "no_difference",
+              "too_early"
+            ],
+            "title": "Decision"
+          },
+          "more_subgroups": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "More Subgroups"
+          },
+          "pre_trend": {
+            "$ref": "#/components/schemas/CutinTrendOut"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/CutinPointOut"
+            },
+            "type": "array",
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "at",
+          "axis",
+          "window",
+          "per",
+          "kind",
+          "before",
+          "after",
+          "open_after",
+          "ratio",
+          "ratio_low",
+          "ratio_high",
+          "p_value",
+          "dispersion",
+          "effect",
+          "decision",
+          "more_subgroups",
+          "pre_trend",
+          "points"
+        ],
+        "title": "CutinOut",
+        "description": "전후 비교 — 「대책 적용일 뒤에 만든(판) 것부터 줄었나」."
+      },
+      "CutinPointOut": {
+        "properties": {
+          "when": {
+            "type": "string",
+            "title": "When"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "exposure": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "closed": {
+            "type": "boolean",
+            "title": "Closed"
+          },
+          "side": {
+            "type": "string",
+            "enum": [
+              "before",
+              "after",
+              "skipped",
+              "boundary"
+            ],
+            "title": "Side"
+          },
+          "drill": {
+            "$ref": "#/components/schemas/DrillOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "when",
+          "label",
+          "count",
+          "exposure",
+          "rate",
+          "closed",
+          "side",
+          "drill"
+        ],
+        "title": "CutinPointOut"
+      },
+      "CutinSideOut": {
+        "properties": {
+          "first": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First"
+          },
+          "last": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last"
+          },
+          "subgroups": {
+            "type": "integer",
+            "title": "Subgroups"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "exposure": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Exposure"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          },
+          "drill": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DrillOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "first",
+          "last",
+          "subgroups",
+          "count",
+          "exposure",
+          "rate",
+          "drill"
+        ],
+        "title": "CutinSideOut",
+        "description": "적용일의 한쪽 — 닫힌 부분군의 합."
+      },
+      "CutinTrendOut": {
+        "properties": {
+          "change_per_period": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Change Per Period"
+          },
+          "p_value": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "P Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "change_per_period",
+          "p_value"
+        ],
+        "title": "CutinTrendOut",
+        "description": "적용 전의 흐름 — 기간마다의 변화(비율의 배수 - 1)와 그 p."
       },
       "DataSourceOut": {
         "properties": {

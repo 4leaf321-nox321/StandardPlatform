@@ -14,6 +14,7 @@ export type Recipe =
   | 'changes'
   | 'sprt'
   | 'groups'
+  | 'cutin'
   | 'logit'
   | 'assoc'
 
@@ -600,4 +601,51 @@ export interface AssocResult extends AnalysisHeader {
   map_rows: AssocPoint[]
   map_cols: AssocPoint[]
   map_explained: number | null
+}
+
+/** 적용일의 한쪽 — 닫힌 부분군의 합. */
+export interface CutinSide {
+  first: string | null
+  last: string | null
+  subgroups: number
+  count: number
+  exposure: number | null
+  /** per 대당(조건 비율이면 %). */
+  rate: number | null
+  drill: Drill | null
+}
+
+export interface CutinPoint {
+  when: string
+  label: string
+  count: number
+  exposure: number | null
+  rate: number | null
+  closed: boolean
+  /** 앞 · 뒤, 처음 빼기, 적용일이 낀 부분군(섞여 있어 뺀다). */
+  side: 'before' | 'after' | 'skipped' | 'boundary'
+  drill: Drill
+}
+
+/** 전후 비교 — 「대책 적용일 뒤에 만든(판) 것부터 줄었나」. */
+export interface CutinResult extends AnalysisHeader {
+  at: string
+  axis: 'period' | 'cohort'
+  window: number | null
+  per: number
+  kind: 'rate' | 'count'
+  before: CutinSide
+  after: CutinSide
+  open_after: number
+  ratio: number | null
+  ratio_low: number | null
+  ratio_high: number | null
+  p_value: number | null
+  dispersion: number
+  effect: number
+  decision: 'reduced' | 'increased' | 'no_difference' | 'too_early'
+  /** 「아직 이르다」 면 결론까지 더 닫혀야 할 뒤의 부분군 수 — 앞의 건수가 적어 못 가리면 null. */
+  more_subgroups: number | null
+  pre_trend: { change_per_period: number | null; p_value: number | null }
+  points: CutinPoint[]
 }

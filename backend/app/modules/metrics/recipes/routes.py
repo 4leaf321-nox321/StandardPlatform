@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Literal
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -17,6 +18,7 @@ from app.modules.metrics.recipes import (
     assoc,
     changes,
     control,
+    cutin,
     groups,
     life,
     logit,
@@ -28,6 +30,7 @@ from app.modules.metrics.recipes.schemas import (
     ChangesOut,
     ChangesScanOut,
     ControlOut,
+    CutinOut,
     GroupsOut,
     LifeOut,
     LogitOut,
@@ -333,6 +336,54 @@ def groups_analysis(
     )
     return groups.run(
         db, user, metric, built, ask, dim=dim, axis=axis, window=window, compact=compact
+    )
+
+
+@router.get("/cutin", response_model=CutinOut)
+def cutin_analysis(
+    slug: str,
+    request: Request,
+    at: date = Query(description="적용일 — 이 날 뒤에 만든(판) 것부터를 「뒤」 로 본다"),
+    axis: Literal["period", "cohort"] | None = Query(default=None),
+    window: int = Query(
+        default=3, ge=1, le=120, description="코호트 축 — 출고 뒤 몇 기간 안의 건수인가"
+    ),
+    skip_first: int = Query(
+        default=0, ge=0, le=60, description="앞쪽에서 뺄 처음 부분군 수(출시 초기)"
+    ),
+    effect: float = Query(
+        default=cutin.EFFECT, gt=0, lt=1, description="의미 있는 차이(0.2 = 20%)"
+    ),
+    period_from: str | None = Query(default=None),
+    period_to: str | None = Query(default=None, description="이 날 **앞까지**"),
+    cohort_from: str | None = Query(default=None),
+    cohort_to: str | None = Query(default=None),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> CutinOut:
+    """전후 비교 — 적용일 앞(첫 부분군부터)과 뒤(창이 닫힌 것)의 비율과 그 비 · 구간, 「줄었다
+    · 늘었다 · 차이 없음 · 아직 이르다」, 앞쪽 추세. 모델은 `d.<기준>=<값>` 으로 거른다."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(
+        request,
+        period_from=period_from,
+        period_to=period_to,
+        cohort_from=cohort_from,
+        cohort_to=cohort_to,
+    )
+    return cutin.run(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        at=at,
+        axis=axis,
+        window=window,
+        skip_first=skip_first,
+        effect=effect,
     )
 
 
