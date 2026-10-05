@@ -7,8 +7,10 @@
 
 from __future__ import annotations
 
+import math
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.api.conftest import Signed
@@ -112,6 +114,7 @@ def _axes_world(client: TestClient, admin: Signed) -> dict[str, Any]:
         ("R3", m2, "P3", "마모", "FEA"),  # 기대 밖 — P3 에는 마모가 안 걸린다
         ("R4", m1, "P1", None, None),  # 태그가 모자란 기록
     ]
+    reports: dict[str, str] = {}
     for label, m, p, k, h in rows:
         props: dict[str, Any] = {
             "reported": "2026-01-15",
@@ -122,7 +125,7 @@ def _axes_world(client: TestClient, admin: Signed) -> dict[str, Any]:
             props["ref_mech"] = [mechs[k]]
         if h:
             props["ref_method"] = [methods[h]]
-        obj(report, label, **props)
+        reports[label] = obj(report, label, **props)
     metric = _define(
         client,
         admin,
@@ -148,6 +151,7 @@ def _axes_world(client: TestClient, admin: Signed) -> dict[str, Any]:
         "parts": parts,
         "mechs": mechs,
         "methods": methods,
+        "reports": reports,
     }
 
 
@@ -222,3 +226,48 @@ def test_커버리지는_온톨로지의_길로_편_조합과_다룬_조합을_�
     wrong = _refused(client, admin, slug, "coverage", levels=LEVELS, via="ref.predecessor,,")
     assert wrong["code"].endswith("METRICS-0039")
     assert _refused(client, admin, slug, "coverage", levels="model")["code"].endswith("0046")
+
+
+# --- 비슷한 기록 ----------------------------------------------------------------------
+
+
+def test_비슷한_기록은_드문_태그가_겹칠수록_위에_서고_겹친_태그를_말한다(
+    client: TestClient, admin: Signed
+) -> None:
+    """보고 넷 — R1(M1 · P1 · 피로 · FEA)에 비슷한 것. 무게 ln(4/df): M1 은 셋이 가져 0.29, P1
+    · 피로 · FEA 는 둘이 가져 0.69, 하나만 가진 것은 1.39. 손셈 점수: R4 0.414 · R2 0.191 · R3
+    0.106."""
+    w = _axes_world(client, admin)
+    base = f"/api/objects/{w['report']}"
+    got = client.get(f"{base}/{w['reports']['R1']}/similar", headers=admin.headers)
+    assert got.status_code == 200, got.text
+    found = got.json()
+    assert found["total"] == 4
+    assert [one["label"] for one in found["items"]] == ["R4", "R2", "R3"]
+    scores = [one["score"] for one in found["items"]]
+    assert scores == pytest.approx([0.4144, 0.1908, 0.1061], abs=1e-3)
+    r4 = found["items"][0]
+    assert [one["value_label"] for one in r4["shared"]] == ["P1", "M1"]  # 무게 큰 것부터
+    assert r4["shared"][0]["field_label"] == "부품" and r4["shared"][0]["records"] == 2
+    assert r4["extra"] == 0
+    query = {one["value_label"]: one for one in found["query"]}
+    assert query["M1"]["weight"] == pytest.approx(math.log(4 / 3))
+    # 칸을 고르면 그 칸의 태그로만 — 메커니즘만 보면 R2 가 똑같다.
+    only = client.get(
+        f"{base}/{w['reports']['R1']}/similar",
+        params={"fields": "ref_mech"},
+        headers=admin.headers,
+    ).json()
+    assert [(one["label"], one["score"]) for one in only["items"]] == [("R2", 1.0)]
+    # 아직 기록이 없는 이슈 — 태그 묶음으로 묻는다.
+    asked = client.post(
+        f"{base}/similar",
+        json={"tags": {"ref_part": [w["parts"]["P3"]]}},
+        headers=admin.headers,
+    )
+    assert asked.status_code == 200, asked.text
+    assert [one["label"] for one in asked.json()["items"]] == ["R3"]
+    wrong = client.post(
+        f"{base}/similar", json={"tags": {"reported": []}}, headers=admin.headers
+    )
+    assert wrong.status_code == 422 and wrong.json()["error"]["code"].endswith("0110")

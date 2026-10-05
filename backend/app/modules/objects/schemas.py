@@ -793,3 +793,50 @@ class DiagnosisOut(BaseModel):
     hidden: int
     filters: list[FilterEffectOut] = Field(default_factory=list)
     next_steps: list[str] = Field(default_factory=list)
+
+
+# --- 비슷한 기록(ADR 0022) -------------------------------------------------------------
+
+
+class SimilarTagOut(BaseModel):
+    """태그 하나 — 참조 칸과 가리키는 객체, 그 무게(ln(N / 그 태그를 가진 기록 수))."""
+
+    field: str
+    field_label: str
+    value: str
+    value_label: str | None
+    """안 보이는 객체면 이름이 없다."""
+    weight: float
+    records: int
+
+
+class SimilarItemOut(BaseModel):
+    id: uuid.UUID
+    key: str | None
+    label: str
+    status: str
+    score: float
+    """무게를 단 자카드 — 겹친 무게 / 합친 무게(0 ~ 1)."""
+    shared: list[SimilarTagOut]
+    """겹친 태그 — 무게 큰 것부터. 「왜 비슷한가」."""
+    extra: int
+    """이 기록에만 있는 태그 수."""
+
+
+class SimilarOut(BaseModel):
+    """비슷한 기록 — 축 태그가 많이 겹치는 기록(드문 태그가 겹칠수록 비슷하다)."""
+
+    type_slug: str
+    total: int
+    """보이는 기록 수(무게의 N)."""
+    fields: list[str]
+    query: list[SimilarTagOut]
+    items: list[SimilarItemOut]
+
+
+class SimilarAskRequest(BaseModel):
+    """태그 묶음으로 묻기 — {참조 칸: [객체 id, …]}. 기록이 아직 없는 이슈에서 찾을 때."""
+
+    tags: dict[str, list[uuid.UUID]]
+    fields: list[str] | None = None
+    limit: int = Field(default=10, ge=1, le=50)

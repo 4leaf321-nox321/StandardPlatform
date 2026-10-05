@@ -769,6 +769,8 @@ export const objectApi = {
   /** 삭제 전에 — 이 객체를 가리키는 것. */
   references: (typeSlug: string, id: string) =>
     api.get<References>(`/objects/${typeSlug}/${id}/references`),
+  /** 비슷한 기록(ADR 0022) — 축 태그(참조 칸)가 많이 겹치는 같은 타입의 기록. */
+  similar: (typeSlug: string, id: string) => api.get<Similar>(`/objects/${typeSlug}/${id}/similar`),
   /** `block`(기본)은 가리키는 것이 있으면 409. `detach` 는 참조를 비우고 관계를 끊고 지운다. */
   remove: (typeSlug: string, id: string, mode: 'block' | 'detach' = 'block') =>
     api.delete<void>(`/objects/${typeSlug}/${id}?mode=${mode}`),
@@ -799,4 +801,32 @@ export const objectApi = {
   /** **통째로** 정한다 — 화면이 보여 준 것과 저장되는 것이 같아야 한다. */
   setYears: (typeSlug: string, id: string, years: number[]) =>
     api.put<number[]>(`/objects/${typeSlug}/${id}/years`, years),
+}
+
+/** 비슷한 기록의 태그 하나 — 참조 칸과 가리키는 객체, 무게(드물수록 크다). */
+export interface SimilarTag {
+  field: string
+  field_label: string
+  value: string
+  value_label: string | null
+  weight: number
+  records: number
+}
+
+/** 비슷한 기록(ADR 0022) — 축 태그가 많이 겹치는 기록과 겹친 태그. */
+export interface Similar {
+  type_slug: string
+  total: number
+  fields: string[]
+  query: SimilarTag[]
+  items: {
+    id: string
+    key: string | null
+    label: string
+    status: string
+    /** 무게를 단 자카드 — 0 ~ 1. */
+    score: number
+    shared: SimilarTag[]
+    extra: number
+  }[]
 }

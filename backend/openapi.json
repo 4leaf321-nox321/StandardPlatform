@@ -8704,6 +8704,142 @@
         }
       }
     },
+    "/api/objects/{type_slug}/{object_id}/similar": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Object Similar",
+        "description": "비슷한 기록(ADR 0022) — 이 기록의 축 태그(참조 칸)와 많이 겹치는 같은 타입의 기록.\n드문 태그가 겹칠수록 비슷하다(무게 ln(N/df)), 겹친 태그를 함께.",
+        "operationId": "object_similar_api_objects__type_slug___object_id__similar_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "태그로 볼 참조 칸, 쉼표로(비우면 참조 칸 전부)",
+              "title": "Fields"
+            },
+            "description": "태그로 볼 참조 칸, 쉼표로(비우면 참조 칸 전부)"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 10,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimilarOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/similar": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Tags Similar",
+        "description": "태그 묶음과 비슷한 기록 — 아직 기록이 없는 새 이슈에서 「전에 비슷한 것」 을 찾을 때.",
+        "operationId": "tags_similar_api_objects__type_slug__similar_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SimilarAskRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SimilarOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/{object_id}/references": {
       "get": {
         "tags": [
@@ -33540,6 +33676,191 @@
           "workspace_slug"
         ],
         "title": "SignupRequest"
+      },
+      "SimilarAskRequest": {
+        "properties": {
+          "tags": {
+            "additionalProperties": {
+              "items": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "type": "array"
+            },
+            "type": "object",
+            "title": "Tags"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "default": 10
+          }
+        },
+        "type": "object",
+        "required": [
+          "tags"
+        ],
+        "title": "SimilarAskRequest",
+        "description": "태그 묶음으로 묻기 — {참조 칸: [객체 id, …]}. 기록이 아직 없는 이슈에서 찾을 때."
+      },
+      "SimilarItemOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "shared": {
+            "items": {
+              "$ref": "#/components/schemas/SimilarTagOut"
+            },
+            "type": "array",
+            "title": "Shared"
+          },
+          "extra": {
+            "type": "integer",
+            "title": "Extra"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "key",
+          "label",
+          "status",
+          "score",
+          "shared",
+          "extra"
+        ],
+        "title": "SimilarItemOut"
+      },
+      "SimilarOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Fields"
+          },
+          "query": {
+            "items": {
+              "$ref": "#/components/schemas/SimilarTagOut"
+            },
+            "type": "array",
+            "title": "Query"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SimilarItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "total",
+          "fields",
+          "query",
+          "items"
+        ],
+        "title": "SimilarOut",
+        "description": "비슷한 기록 — 축 태그가 많이 겹치는 기록(드문 태그가 겹칠수록 비슷하다)."
+      },
+      "SimilarTagOut": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "field_label": {
+            "type": "string",
+            "title": "Field Label"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "value_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Label"
+          },
+          "weight": {
+            "type": "number",
+            "title": "Weight"
+          },
+          "records": {
+            "type": "integer",
+            "title": "Records"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "field_label",
+          "value",
+          "value_label",
+          "weight",
+          "records"
+        ],
+        "title": "SimilarTagOut",
+        "description": "태그 하나 — 참조 칸과 가리키는 객체, 그 무게(ln(N / 그 태그를 가진 기록 수))."
       },
       "SprtCohortOut": {
         "properties": {

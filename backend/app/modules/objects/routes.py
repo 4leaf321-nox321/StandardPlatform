@@ -37,6 +37,7 @@ from app.modules.objects import (
     refedges,
     resolve,
     rollup,
+    similar,
     system,
     watches,
 )
@@ -108,6 +109,10 @@ from app.modules.objects.schemas import (
     SavedViewQuery,
     SavedViewSummary,
     SavedViewWriteRequest,
+    SimilarAskRequest,
+    SimilarItemOut,
+    SimilarOut,
+    SimilarTagOut,
     SnapshotOut,
     SummaryOut,
     TreeNodeOut,
@@ -2227,6 +2232,105 @@ def object_rollup(
             db, user, object_type, row, defs, relation=relation, parent_end=parent_end
         )
     ]
+
+
+@router.get("/{type_slug}/{object_id}/similar", response_model=SimilarOut)
+def object_similar(
+    type_slug: str,
+    object_id: uuid.UUID,
+    fields: str | None = Query(
+        default=None, description="태그로 볼 참조 칸, 쉼표로(비우면 참조 칸 전부)"
+    ),
+    limit: int = Query(default=10, ge=1, le=50),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> SimilarOut:
+    """비슷한 기록(ADR 0022) — 이 기록의 축 태그(참조 칸)와 많이 겹치는 같은 타입의 기록.
+    드문 태그가 겹칠수록 비슷하다(무게 ln(N/df)), 겹친 태그를 함께."""
+    object_type = _type(db, type_slug)
+    row = _visible(db, user, object_type, object_id)
+    chosen = similar.axis_fields(db, object_type, _keys(fields))
+    found = similar.similar(
+        db,
+        user,
+        object_type,
+        query=similar.tags_of(db, row.id, chosen),
+        fields=chosen,
+        exclude=row.id,
+        limit=limit,
+    )
+    return _similar_out(object_type, found)
+
+
+@router.post("/{type_slug}/similar", response_model=SimilarOut)
+def tags_similar(
+    type_slug: str,
+    payload: SimilarAskRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> SimilarOut:
+    """태그 묶음과 비슷한 기록 — 아직 기록이 없는 새 이슈에서 「전에 비슷한 것」 을 찾을 때."""
+    object_type = _type(db, type_slug)
+    chosen = similar.axis_fields(db, object_type, payload.fields)
+    allowed = {one.key for one in chosen}
+    unknown = sorted(set(payload.tags) - allowed)
+    if unknown:
+        raise AppError(
+            code("OBJECTS", 110),
+            f"태그로 볼 참조 칸이 아닙니다: {', '.join(unknown)} — 있는 것: "
+            f"{', '.join(sorted(allowed)) or '(없음)'}",
+            status=422,
+        )
+    query = {
+        similar.Tag(key, str(value))
+        for key, values in payload.tags.items()
+        for value in values
+    }
+    found = similar.similar(
+        db, user, object_type, query=query, fields=chosen, limit=payload.limit
+    )
+    return _similar_out(object_type, found)
+
+
+def _keys(raw: str | None) -> list[str] | None:
+    if raw is None:
+        return None
+    return [one.strip() for one in raw.split(",") if one.strip()]
+
+
+def _similar_out(object_type: ObjectType, found: similar.Found) -> SimilarOut:
+    labels = {one.key: one.label for one in found.fields}
+
+    def tag(one: similar.Tag) -> SimilarTagOut:
+        return SimilarTagOut(
+            field=one.key,
+            field_label=labels.get(one.key, one.key),
+            value=one.value,
+            value_label=found.names.get(one.value),
+            weight=found.weight.get(one, 0.0),
+            records=found.df.get(one, 0),
+        )
+
+    return SimilarOut(
+        type_slug=object_type.slug,
+        total=found.total,
+        fields=[one.key for one in found.fields],
+        query=[
+            tag(one) for one in sorted(found.query, key=lambda t: -found.weight.get(t, 0.0))
+        ],
+        items=[
+            SimilarItemOut(
+                id=item.row.id,
+                key=item.row.key,
+                label=item.row.label,
+                status=item.row.status,
+                score=item.score,
+                shared=[tag(one) for one in item.shared],
+                extra=item.extra,
+            )
+            for item in found.items
+        ],
+    )
 
 
 @router.get("/{type_slug}/{object_id}/references", response_model=ReferencesOut)

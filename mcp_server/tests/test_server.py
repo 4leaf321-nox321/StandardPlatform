@@ -47,6 +47,7 @@ TOOLS = {
     "objects_summary",
     "object_fields",
     "object_get",
+    "objects_similar",
     "object_create",
     "object_update",
     "objects_delete",

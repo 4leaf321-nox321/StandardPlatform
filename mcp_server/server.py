@@ -1288,6 +1288,44 @@ async def object_fields(ctx: Context, type_slug: str) -> Any:
 
 
 @tool()
+async def objects_similar(
+    ctx: Context,
+    type_slug: str,
+    object_id: str | None = None,
+    tags: dict[str, list[str]] | None = None,
+    fields: list[str] | None = None,
+    limit: int = 10,
+) -> Any:
+    """**비슷한 기록**(ADR 0022) — 축 태그(참조 칸 — 제품 · 부품 · 고장 메커니즘 ·
+    해석법 …)가 많이 겹치는 같은 타입의 기록. 「이 이슈와 비슷한 과거 사례」 「이 부품 ·
+    메커니즘 조합을 다룬 보고」.
+
+    `object_id` 를 주면 그 기록의 태그로, 아직 기록이 없는 이슈면 `tags`(`{참조 칸: [객체
+    id]}` — 이름은 `object_resolve` 로 먼저 푼다)로 묻는다. `fields` 로 볼 참조 칸을 좁힌다
+    (비우면 전부).
+
+    태그마다 무게 `weight` = ln(N / 그 태그를 가진 기록 수) — **드문 태그가 겹칠수록
+    비슷하다**. `score` 는 무게를 단 자카드(0~1). 항목마다 `shared`(겹친 태그 — 「왜
+    비슷한가」)를 함께 말한다. 본문의 뜻으로 찾지 않는다 — 찾은 기록의 본문은 `object_get`
+    으로 읽어 비교한다."""
+    limit = max(1, min(limit, 50))
+    if object_id:
+        params: dict[str, Any] = {"limit": limit}
+        if fields:
+            params["fields"] = ",".join(fields)
+        return await _get(
+            ctx, f"/api/objects/{type_slug}/{object_id}/similar", params=list(params.items())
+        )
+    if not tags:
+        return {"error": "object_id 나 tags 중 하나를 줍니다."}
+    return await _post(
+        ctx,
+        f"/api/objects/{type_slug}/similar",
+        {"tags": tags, "fields": fields, "limit": limit},
+    )
+
+
+@tool()
 async def object_get(ctx: Context, type_slug: str, object_id: str, text_from: int = 0) -> Any:
     """객체 하나 — 속성·첨부·**관련 객체**(양방향)까지.
 

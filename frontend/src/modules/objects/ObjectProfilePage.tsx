@@ -14,6 +14,7 @@ import { ontologyApi } from '@/modules/ontology/api'
 import { ObjectYears } from '@/modules/objects/ObjectYears'
 import { AliasesPanel } from '@/modules/objects/AliasesPanel'
 import { RelatedObjects } from '@/modules/objects/RelatedObjects'
+import { SimilarRecords } from '@/modules/objects/SimilarRecords'
 import { LogCounts } from '@/modules/objects/LogCounts'
 import { RollupPanel } from '@/modules/objects/RollupPanel'
 import type { PropertyDef, SectionView } from '@/modules/ontology/api'
@@ -301,6 +302,11 @@ export default function ObjectProfilePage() {
         canEdit={profile.data.can_link ?? profile.data.can_edit}
         onChanged={profile.reload}
       />
+
+      {/* 비슷한 기록 — 축 태그(참조 칸)가 있는 기록 타입에서만(ADR 0022). */}
+      {objectType?.usage === 'log' && defs.some((one) => one.data_type === 'object_ref') && (
+        <SimilarRecords typeSlug={typeSlug} objectId={objectId} />
+      )}
 
       {/* 상세를 떠나지 않고 보는 관계도 — 관계가 없으면 안 그린다. */}
       <GraphPanel objectId={objectId} types={colorTypes} groups={colorGroups} />
