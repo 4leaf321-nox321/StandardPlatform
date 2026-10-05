@@ -1,8 +1,8 @@
 """셀 수 어림 — 표본의 조합 수를 늘리는 식과 표본의 문턱(ADR 0023).
 
 지키는 것: 표본이 전부면 센 수 그대로 · 조합이 `a · n^b` 로 늘면 그 식대로 늘린다(b 가 1 이면
-줄에 비례, 0 이면 그대로) · 줄 수를 넘지 않는다 · 펼친 줄의 비(`scale`)를 쓴다 · 문턱은 표본
-크기만큼의 몫이다.
+줄에 비례, 0 이면 그대로) · 줄 수를 넘지 않는다 · 셀 어림(chao1 · GEE 의 큰 쪽)이 규모 DB 의
+실측 표본 통계에서 실제 셀의 0.9 ~ 1.5배 · 문턱은 표본 크기만큼의 몫이다.
 """
 
 from __future__ import annotations
@@ -11,7 +11,7 @@ import uuid
 
 import pytest
 
-from app.modules.metrics.spec import SAMPLE_ROWS, extrapolate, sample_cut
+from app.modules.metrics.spec import SAMPLE_ROWS, estimate_combos, extrapolate, sample_cut
 
 
 def _points(a: float, b: float) -> list[tuple[int, int]]:
@@ -46,10 +46,32 @@ def test_조합이_다_나왔으면_더_늘리지_않는다() -> None:
     assert extrapolate(flat, 50_000_000) == 3_000
 
 
-def test_펼친_줄의_비를_쓴다() -> None:
-    # 한 기록이 부품 셋으로 펼쳐진다 — 표본 20만 기록 = 60만 줄, 전체는 펼친 600만 줄.
-    points = [(n, n) for n in (25_000, 50_000, 100_000, 200_000)]
-    assert extrapolate(points, 6_000_000, scale=3.0) == pytest.approx(2_000_000, rel=0.01)
+def test_표본이_전부면_조합_통계도_센_수_그대로() -> None:
+    assert estimate_combos([(10, 4), (20, 7)], 3, 1, 20) == 7
+
+
+@pytest.mark.parametrize(
+    ("rows", "seen", "once", "twice", "total", "truth"),
+    [
+        # 규모 DB 실측(ADR 0023) — 표본 20만 줄의 조합 통계와 계산이 센 실제 셀.
+        (200_000, 182_535, 170_496, 10_295, 1_999_728, 1_079_040),  # 코호트 · 200만 건
+        (350_000, 265_779, 202_631, 52_841, 3_499_513, 692_348),  # 기본 모델 x 부품 · 200만
+        (200_000, 176_894, 159_996, 14_452, 19_997_260, 1_655_254),  # 코호트 · 2,000만 건
+    ],
+)
+def test_실측_표본_통계에서_실제_셀의_0_9_에서_1_5_배(
+    rows: int, seen: int, once: int, twice: int, total: int, truth: int
+) -> None:
+    # 거듭제곱 늘리기는 줄에 비례(점 하나 — 기울기 1)라 위로만 묶는다.
+    found = estimate_combos([(rows, seen)], once, twice, total)
+    assert 0.9 * truth <= found <= 1.5 * truth, found
+
+
+def test_조합_어림은_거듭제곱_늘리기와_줄_수를_넘지_않는다() -> None:
+    # 다 나온 조합(한 번 · 두 번 나온 것이 없다) — 늘리지 않는다.
+    assert estimate_combos([(25_000, 3_000), (200_000, 3_000)], 0, 0, 10_000_000) == 3_000
+    # 줄마다 새 조합 — 줄 수를 넘지 않는다.
+    assert estimate_combos([(200_000, 200_000)], 200_000, 0, 1_000_000) == 1_000_000
 
 
 def test_표본의_문턱은_표본_크기만큼의_몫이다() -> None:

@@ -633,11 +633,15 @@ def sample_cut(rows: int) -> uuid.UUID | None:
     return uuid.UUID(int=int(SAMPLE_ROWS / rows * 2**128))
 
 
-def extrapolate(points: list[tuple[int, int]], total: int, *, scale: float = 1.0) -> int:
+def extrapolate(points: list[tuple[int, int]], total: int) -> int:
     """(표본의 줄 수, 조합 수) 몇 쌍 → 전체 `total` 줄의 조합 수. 조합은 표본이 커질수록 덜
     늘어난다 — `d = a · n^b`(헵스 법칙)를 로그에서 최소제곱으로 맞춰 늘린다(b 는 0 ~ 1).
-    표본이 전부면 그 수 그대로. `scale` 은 표본의 줄을 펼친 줄로 바꾸는 비(여러 값 기준)."""
-    found = [(rows * scale, combos) for rows, combos in points if rows > 0 and combos > 0]
+    표본이 전부면 그 수 그대로. 줄은 펼친 줄(여러 값 기준이면 값마다 한 줄)이다.
+
+    표본보다 훨씬 멀리 늘리면 크게 넘친다 — 조합은 어느 크기에서 포화하는데 작은 표본 안의
+    기울기는 아직 1 에 가깝다(2,000만 건에서 실제의 8.6배, ADR 0023). 그래서 위로 묶는 데만
+    쓴다(`estimate_combos`)."""
+    found = [(rows, combos) for rows, combos in points if rows > 0 and combos > 0]
     if not found:
         return 0
     last_rows, last = found[-1]
@@ -655,7 +659,39 @@ def extrapolate(points: list[tuple[int, int]], total: int, *, scale: float = 1.0
     return min(total, math.ceil(last * math.pow(total / last_rows, slope)))
 
 
-def _combos(db: Session, built: Built, cut: uuid.UUID | None) -> list[tuple[int, int]] | None:
+def estimate_combos(points: list[tuple[int, int]], once: int, twice: int, total: int) -> int:
+    """표본의 조합 통계 → 전체 `total` 줄의 조합 수(셀 수) 어림.
+
+    표본이 전부면 센 수 그대로. 아니면 서로 다른 값 수 어림 둘의 큰 쪽 — 셋으로 묶는다:
+
+        chao1 = d + f1² / (2 · f2)              f1 · f2 = 표본에서 한 번 · 두 번 나온 조합
+        GEE   = √(전체 줄 / 표본 줄) · f1 + (d - f1)
+
+    둘은 서로 다른 자리에서 모자란다(실측 — chao1 은 큰 자료에서 0.64배, GEE 는 중간 자료에서
+    0.51배). 큰 쪽은 세 실측에서 0.98 ~ 1.48배였다(ADR 0023). 거듭제곱 늘리기(`extrapolate`) ·
+    전체 줄 수를 넘지 않는다."""
+    found = [(rows, combos) for rows, combos in points if rows > 0 and combos > 0]
+    if not found:
+        return 0
+    rows, seen = found[-1]
+    if total <= rows:
+        return seen
+    chao1 = seen + once * once / (2 * max(twice, 1))
+    gee = math.sqrt(total / rows) * once + (seen - once)
+    return min(total, extrapolate(found, total), math.ceil(max(chao1, gee)))
+
+
+@dataclass
+class Combos:
+    """표본의 조합 통계 — 겹친 표본마다 (펼친 줄 수, 조합 수)와 전체 표본에서 한 번 · 두 번
+    나온 조합 수."""
+
+    points: list[tuple[int, int]]
+    once: int
+    twice: int
+
+
+def _combos(db: Session, built: Built, cut: uuid.UUID | None) -> Combos | None:
     """표본에서 (줄 수, 셀 조합 수)를 겹친 표본마다 — 1/8 · 1/4 · 1/2 · 전부. 방문 기준은 창
     함수를 표본마다 돌리지 않고 가짓수를 곱한다(어림이 크게 나올 뿐이다). 시간 상한을 넘기면
     None."""
@@ -699,11 +735,21 @@ def _combos(db: Session, built: Built, cut: uuid.UUID | None) -> list[tuple[int,
     )
     rows_by = select(cells.c.lv, func.sum(cells.c.n)).group_by(cells.c.lv)
     combos_by = select(first.c.lv, func.count()).group_by(first.c.lv)
+    per_combo = (
+        select(func.sum(cells.c.n).label("total"))
+        .group_by(*(cells.c[f"k{index}"] for index in range(len(keys))))
+        .subquery("est_total")
+    )
+    tally = select(
+        func.count().filter(per_combo.c.total == 1),
+        func.count().filter(per_combo.c.total == 2),
+    )
     try:
         with db.begin_nested():
             db.execute(text(f"SET LOCAL statement_timeout = {ESTIMATE_SECONDS * 1000}"))
             rows = {int(lv): int(n) for lv, n in db.execute(rows_by)}
             combos = {int(lv): int(n) for lv, n in db.execute(combos_by)}
+            once, twice = (int(one or 0) for one in db.execute(tally).one())
     except OperationalError as caught:
         if getattr(caught.orig, "sqlstate", None) == "57014":  # query_canceled
             return None
@@ -715,7 +761,7 @@ def _combos(db: Session, built: Built, cut: uuid.UUID | None) -> list[tuple[int,
         seen_combos += combos.get(step, 0)
         if seen_rows:
             out.append((seen_rows, seen_combos * fixed))
-    return out
+    return Combos(out, once * fixed, twice * fixed)
 
 
 def _estimate(db: Session, built: Built, out: Plan) -> None:
@@ -814,12 +860,14 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
     estimated = min(product, expanded)
     # 실제 조합 — 표본에서 셀(부서 · 기간 · 코호트 · 기준 값들)을 세어 늘린다. 곱은 값끼리 함께
     # 나오지 않는 것까지 세어 자료가 크면 늘 기록 수가 되고, 그러면 실제 셀이 적어도 거절했다.
+    # 표본의 줄은 이미 펼친 줄이다(조인 뒤에 센다) — 전체도 펼친 줄 수로 늘린다.
     combos = _combos(db, built, cut)
     if combos is None:
         unknown = True
     else:
-        rate = expanded / max(out.rows, 1)
-        estimated = min(estimated, extrapolate(combos, expanded, scale=rate))
+        estimated = min(
+            estimated, estimate_combos(combos.points, combos.once, combos.twice, expanded)
+        )
     if built.stay is not None:
         # 머무는 기간 — 셀마다 N기간까지 펼치지만, 이웃한 기간의 펼침은 같은 셀에 겹친다: 기간
         # 말고 다른 값의 조합마다 (기간 수 + N - 1) 개를 넘지 않는다(실측 — 판매 10만 셀 x 24
