@@ -1135,6 +1135,40 @@ def _recipes_rehearsal(
             f"{sum(one['direction'] == 'down' for one in change_scan['items'])} · 벌점 "
             f"+{change_scan['extra_penalty']:.1f}",
         )
+        # 클레임 예측 — 정답은 결함 와이블. 되짚어 보기(6 기간 전까지로 맞춰 그 뒤)가 실제를
+        # 맞히나.
+        took, ahead = analyse(first, "forecast", horizon=12, **inside)
+        back = ahead.get("backtest") or {}
+        row(
+            "클레임 예측 — 판매월 코호트, 앞으로 12기간",
+            took,
+            ahead.get("error")
+            or f"모형 {ahead['model']} · 앞으로 {ahead['total']['expected']:.0f}건"
+            f"({ahead['total']['low']:.0f} ~ {ahead['total']['high']:.0f}) · 되짚어 보기 "
+            f"{back.get('start')} 부터 예측 {back.get('predicted', 0):.0f} · 실제 "
+            f"{back.get('actual', 0):.0f} · {'구간 안' if back.get('within') else '구간 밖'}",
+        )
+        # 전후 비교 — 정답은 「변화 없음」(대책이 없다). 보통 기본 모델 20 개를 아무 날짜로.
+        decisions: dict[str, int] = {}
+        cut_times: list[float] = []
+        for target in rng.sample(typical, 20):
+            took, cut = analyse(
+                first,
+                "cutin",
+                at="2021-01-01",
+                axis="cohort",
+                window=3,
+                **{"d.base_model": target},
+                **inside,
+            )
+            cut_times.append(took)
+            key = cut.get("decision") or "error"
+            decisions[key] = decisions.get(key, 0) + 1
+        row(
+            "전후 비교 — 보통 기본 모델 20 · 아무 날짜(변화 없음이 정답)",
+            statistics.median(cut_times),
+            " · ".join(f"{key} {value}" for key, value in sorted(decisions.items())),
+        )
     finally:
         for slug in reversed(made):
             client.delete(f"/api/metrics/{slug}", headers=admin)
