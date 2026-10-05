@@ -32,7 +32,8 @@ from tests.api.test_ontology import (
 
 
 def _slug(base: str) -> str:
-    return f"{base}_{uuid.uuid4().hex[:6]}"
+    # 6자리면 한 번의 전체 시험에서 만드는 수천 개끼리 부딪친다(2026-10-05, 409) — 12자리.
+    return f"{base}_{uuid.uuid4().hex[:12]}"
 
 
 def _prop(
