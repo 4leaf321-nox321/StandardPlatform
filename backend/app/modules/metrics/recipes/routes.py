@@ -19,6 +19,7 @@ from app.modules.metrics.recipes import (
     changes,
     control,
     cutin,
+    forecast,
     groups,
     life,
     logit,
@@ -31,6 +32,7 @@ from app.modules.metrics.recipes.schemas import (
     ChangesScanOut,
     ControlOut,
     CutinOut,
+    ForecastOut,
     GroupsOut,
     LifeOut,
     LogitOut,
@@ -384,6 +386,51 @@ def cutin_analysis(
         window=window,
         skip_first=skip_first,
         effect=effect,
+    )
+
+
+@router.get("/forecast", response_model=ForecastOut)
+def forecast_analysis(
+    slug: str,
+    request: Request,
+    horizon: int = Query(default=forecast.HORIZON, ge=1, le=60, description="앞으로 몇 기간"),
+    warranty: int | None = Query(
+        default=None,
+        ge=1,
+        le=240,
+        description=(
+            "보증 기간(코호트 기간 수) — 주면 그 경과부터는 세지 않고 끝까지 남은 총량도"
+        ),
+    ),
+    model: Literal["auto", "weibull", "defective"] = Query(default="auto"),
+    basis: Literal["records", "first_visits"] = Query(default="records"),
+    cost: float | None = Query(default=None, ge=0, description="건당 비용 — 주면 금액도"),
+    backtest: int = Query(
+        default=forecast.BACKTEST, ge=0, le=24, description="되짚어 보기 기간(0 이면 안 함)"
+    ),
+    cohort_from: str | None = Query(default=None),
+    cohort_to: str | None = Query(default=None),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ForecastOut:
+    """클레임 예측 — 수명 분석과 같은 맞춤으로 이미 판 코호트의 앞으로 기간마다 예상 건수와
+    80 · 95% 구간, 보증 끝까지의 총량, 되짚어 보기. 모델은 `d.<기준>=<값>` 으로 거른다."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(request, cohort_from=cohort_from, cohort_to=cohort_to)
+    return forecast.run(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        horizon=horizon,
+        warranty=warranty,
+        model=model,
+        basis=basis,
+        cost=cost,
+        backtest=backtest,
     )
 
 

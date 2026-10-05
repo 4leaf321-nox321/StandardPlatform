@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-05b
+GUIDE_VERSION: 2026-10-05c
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -956,6 +956,7 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 | 몇 값에 몰렸나 · 구성비가 바뀌었나 | `pareto` | 기준이 있는 건수 · 합계 | `dim` · `top` · `by_period` · `compare_from` · `compare_to`(두 기간 비교) |
 | 어떤 증상과 부품(원인)이 함께 나오나 · 증상 묶음 · 원인분산도 | `assoc` | 기준 둘(여러 값이어도) | `rows` · `cols` · `min_count` |
 | SKU · 공장 · 기본 모델마다 비율이 다른가 | `groups` | 분모 `on` 에 그 기준(조건 비율이면 어느 기준이든) | `dim` · `axis` · `window` |
+| 이미 판 물량에서 앞으로 몇 건 · 얼마 | `forecast` | 수명과 같다(판매월 코호트 + 분모 `time=cohort`) | `horizon` · `warranty` · `cost` · `backtest` |
 | 대책 적용 뒤에 만든 것부터 줄었나 | `cutin` | 기간 또는 코호트(건수 · 조건 비율) | `at`(적용일) · `axis` · `window` · `skip_first` · `effect`, 모델은 `filters` |
 | 어떤 조건에서 다시 들어오나(90일 재인입) | `logit` | 방문 기준 `visit.repeat` + 요인 기준 | `factors`(값이 적은 기준 넷까지) · `min_count` |
 
@@ -996,6 +997,10 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
   계산에 든다(기록이 없는 집단도 대수가 있으면 0 건으로). `rows` 는 「다름」 을 전체와 먼 것부터,
   남으면 줄인 비율 높은 순이고, `other_groups` 는 계산에는 넣었으나 싣지 않은 수다(`groups` 가 전체 수,
   `flagged` 가 「다름」 전체 수 — 실은 줄보다 많을 수 있다).
+- 클레임 예측: 기간마다 `expected` 와 구간(`low` ~ `high` 95%, `low80` ~ `high80`)을 함께 말한다 —
+  평균만 말하지 않는다. `backtest` 가 있으면 「6개월 전에 예측했다면 실제 N건, 예측 M건(구간 안 · 밖)」 을
+  먼저 — `within` 이 false 면 예측을 조심하라고 말한다. 이미 판 물량만이다(앞으로 팔 것 · 리콜 · 캠페인은
+  없다). 보증 기간(`warranty`)을 주면 `remaining` 이 보증 끝까지의 총량이다. 모델로 거르면 그 모델만.
 - 전후 비교: **모델로 거른다**(`filters`) — 앞쪽은 그 모델의 첫 출고부터다. `decision` 의 `reduced` 는
   「적용일 뒤에 줄었다」 이지 「대책 때문에」 가 아니다(`association` 주의). `too_early` 는 효과 없음이
   아니다 — `more_subgroups`(결론까지 더 닫혀야 할 부분군)로 언제쯤인지 말한다. `pre_trend` 주의가 있으면

@@ -11515,6 +11515,177 @@
         }
       }
     },
+    "/api/metrics/{slug}/analysis/forecast": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Forecast Analysis",
+        "description": "클레임 예측 — 수명 분석과 같은 맞춤으로 이미 판 코호트의 앞으로 기간마다 예상 건수와\n80 · 95% 구간, 보증 끝까지의 총량, 되짚어 보기. 모델은 `d.<기준>=<값>` 으로 거른다.",
+        "operationId": "forecast_analysis_api_metrics__slug__analysis_forecast_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "horizon",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 60,
+              "minimum": 1,
+              "description": "앞으로 몇 기간",
+              "default": 12,
+              "title": "Horizon"
+            },
+            "description": "앞으로 몇 기간"
+          },
+          {
+            "name": "warranty",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 240,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "보증 기간(코호트 기간 수) — 주면 그 경과부터는 세지 않고 끝까지 남은 총량도",
+              "title": "Warranty"
+            },
+            "description": "보증 기간(코호트 기간 수) — 주면 그 경과부터는 세지 않고 끝까지 남은 총량도"
+          },
+          {
+            "name": "model",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "auto",
+                "weibull",
+                "defective"
+              ],
+              "type": "string",
+              "default": "auto",
+              "title": "Model"
+            }
+          },
+          {
+            "name": "basis",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "records",
+                "first_visits"
+              ],
+              "type": "string",
+              "default": "records",
+              "title": "Basis"
+            }
+          },
+          {
+            "name": "cost",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "건당 비용 — 주면 금액도",
+              "title": "Cost"
+            },
+            "description": "건당 비용 — 주면 금액도"
+          },
+          {
+            "name": "backtest",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 24,
+              "minimum": 0,
+              "description": "되짚어 보기 기간(0 이면 안 함)",
+              "default": 6,
+              "title": "Backtest"
+            },
+            "description": "되짚어 보기 기간(0 이면 안 함)"
+          },
+          {
+            "name": "cohort_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort From"
+            }
+          },
+          {
+            "name": "cohort_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort To"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ForecastOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/metrics/{slug}/analysis/sprt": {
       "get": {
         "tags": [
@@ -22400,6 +22571,509 @@
           "op"
         ],
         "title": "FilterIn"
+      },
+      "ForecastBacktestOut": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "title": "Start"
+          },
+          "periods": {
+            "type": "integer",
+            "title": "Periods"
+          },
+          "predicted": {
+            "type": "number",
+            "title": "Predicted"
+          },
+          "low": {
+            "type": "number",
+            "title": "Low"
+          },
+          "high": {
+            "type": "number",
+            "title": "High"
+          },
+          "actual": {
+            "type": "number",
+            "title": "Actual"
+          },
+          "within": {
+            "type": "boolean",
+            "title": "Within"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/ForecastPointOut"
+            },
+            "type": "array",
+            "title": "Points"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "periods",
+          "predicted",
+          "low",
+          "high",
+          "actual",
+          "within",
+          "points"
+        ],
+        "title": "ForecastBacktestOut",
+        "description": "되짚어 보기 — `start` 앞까지만 보고 맞췄다면 그 뒤 `periods` 기간을 얼마나 맞혔나."
+      },
+      "ForecastOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "model": {
+            "type": "string",
+            "enum": [
+              "weibull",
+              "defective"
+            ],
+            "title": "Model"
+          },
+          "beta": {
+            "type": "number",
+            "title": "Beta"
+          },
+          "eta": {
+            "type": "number",
+            "title": "Eta"
+          },
+          "p": {
+            "type": "number",
+            "title": "P"
+          },
+          "horizon": {
+            "type": "integer",
+            "title": "Horizon"
+          },
+          "warranty": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Warranty"
+          },
+          "basis": {
+            "type": "string",
+            "enum": [
+              "records",
+              "first_visits"
+            ],
+            "title": "Basis"
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost"
+          },
+          "units": {
+            "type": "number",
+            "title": "Units"
+          },
+          "cohorts": {
+            "type": "integer",
+            "title": "Cohorts"
+          },
+          "start": {
+            "type": "string",
+            "title": "Start"
+          },
+          "total": {
+            "$ref": "#/components/schemas/ForecastTotalOut"
+          },
+          "remaining": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ForecastTotalOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/ForecastPointOut"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "history": {
+            "items": {
+              "$ref": "#/components/schemas/ForecastPointOut"
+            },
+            "type": "array",
+            "title": "History"
+          },
+          "backtest": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/ForecastBacktestOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "model",
+          "beta",
+          "eta",
+          "p",
+          "horizon",
+          "warranty",
+          "basis",
+          "cost",
+          "units",
+          "cohorts",
+          "start",
+          "total",
+          "remaining",
+          "points",
+          "history",
+          "backtest"
+        ],
+        "title": "ForecastOut",
+        "description": "클레임 예측 — 「이미 판 물량에서 앞으로 몇 건(얼마)이 더 들어오나」."
+      },
+      "ForecastPointOut": {
+        "properties": {
+          "period": {
+            "type": "string",
+            "title": "Period"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "expected": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Expected"
+          },
+          "low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Low"
+          },
+          "high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "High"
+          },
+          "low80": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Low80"
+          },
+          "high80": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "High80"
+          },
+          "actual": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Actual"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period",
+          "label",
+          "expected",
+          "low",
+          "high",
+          "low80",
+          "high80",
+          "actual"
+        ],
+        "title": "ForecastPointOut",
+        "description": "달력 기간 하나 — 예측(평균 · 80 · 95% 구간) 또는 실제."
+      },
+      "ForecastTotalOut": {
+        "properties": {
+          "expected": {
+            "type": "number",
+            "title": "Expected"
+          },
+          "low": {
+            "type": "number",
+            "title": "Low"
+          },
+          "high": {
+            "type": "number",
+            "title": "High"
+          },
+          "cost": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost"
+          },
+          "cost_low": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost Low"
+          },
+          "cost_high": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cost High"
+          }
+        },
+        "type": "object",
+        "required": [
+          "expected",
+          "low",
+          "high",
+          "cost",
+          "cost_low",
+          "cost_high"
+        ],
+        "title": "ForecastTotalOut"
       },
       "GroupOptionOut": {
         "properties": {

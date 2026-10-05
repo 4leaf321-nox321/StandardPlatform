@@ -15,6 +15,7 @@ import { AssocView } from '@/modules/metrics/analysis/AssocView'
 import { ChangesView } from '@/modules/metrics/analysis/ChangesView'
 import { ControlView } from '@/modules/metrics/analysis/ControlView'
 import { CutinView } from '@/modules/metrics/analysis/CutinView'
+import { ForecastView } from '@/modules/metrics/analysis/ForecastView'
 import { GroupsView } from '@/modules/metrics/analysis/GroupsView'
 import { LifeView } from '@/modules/metrics/analysis/LifeView'
 import { LogitView } from '@/modules/metrics/analysis/LogitView'
@@ -23,7 +24,18 @@ import { SprtView } from '@/modules/metrics/analysis/SprtView'
 import { Button } from '@/shared/components/ui/button'
 
 /** 화면에 늘어놓는 차례 — 물음 번호(②③④⑤⑥⑦⑨⑩)대로. */
-const ORDER = ['life', 'control', 'sprt', 'groups', 'cutin', 'logit', 'pareto', 'assoc', 'changes']
+const ORDER = [
+  'life',
+  'forecast',
+  'control',
+  'sprt',
+  'groups',
+  'cutin',
+  'logit',
+  'pareto',
+  'assoc',
+  'changes',
+]
 
 export interface AnalysisTabProps {
   metric: Metric
@@ -84,6 +96,7 @@ export default function AnalysisTab({ metric, read, initial = null }: AnalysisTa
       )}
       {recipe === 'pareto' && <ParetoView metric={metric} read={read} />}
       {recipe === 'life' && <LifeView metric={metric} read={read} />}
+      {recipe === 'forecast' && <ForecastView metric={metric} read={read} initial={given} />}
       {recipe === 'control' && <ControlView metric={metric} read={read} initial={given} />}
       {recipe === 'changes' && <ChangesView metric={metric} read={read} initial={given} />}
       {recipe === 'sprt' && <SprtView metric={metric} read={read} initial={given} />}

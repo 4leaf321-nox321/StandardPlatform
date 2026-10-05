@@ -1270,3 +1270,83 @@ def test_전후_비교는_적용일_앞뒤의_닫힌_부분군을_견주고_낀_
     assert bad.status_code == 422
     listed = next(one for one in monthly["analyses"] if one["recipe"] == "cutin")
     assert listed["ok"] is True and listed["label"] == "전후 비교"
+
+
+# --- 클레임 예측 ---------------------------------------------------------------------
+
+
+def test_클레임_예측은_이미_판_코호트의_앞으로를_수명_맞춤으로_내고_되짚어_본다(
+    client: TestClient, admin: Signed
+) -> None:
+    """판매 30개월(2026-01 ~ 2028-06) x 2만 대, 모두 고장 나는 와이블(형상 1.5 · 척도 13개월).
+    계산 2028-08-15 · 닫힘 30일이라 2028-06 까지 닫혔다 — 예측은 2028-07 부터."""
+    w = _world(client, admin)
+    sales, cases = _two(client, admin, w)
+    dims = {"base_model": w["s_base"], "symptom": "소음", "factory": "F1"}
+    first, units, beta, eta = date(2026, 1, 1), 20000.0, 1.5, 13.0
+    steps = _weibull_steps(40, beta, eta, 1.0, units)
+    planted: list[dict[str, Any]] = []
+    for i in range(30):
+        start = _month(first, i)
+        for age in range(30 - i):
+            if steps[age]:
+                planted.append(
+                    {
+                        "period": _month(start, age),
+                        "cohort": start,
+                        "age": age,
+                        "dims": dims,
+                        "count": steps[age],
+                    }
+                )
+    watermark = datetime(2028, 8, 15, tzinfo=UTC)
+    _plant(cases["slug"], planted, watermark)
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(first, i),
+                "dims": {"base_model": w["s_base"]},
+                "count": 1,
+                "value_count": 1,
+                "sum": units,
+            }
+            for i in range(30)
+        ],
+        watermark,
+    )
+    found = _analysis(
+        client, admin, cases["slug"], "forecast", horizon=6, warranty=24, cost=50000
+    )
+    assert found["recipe"] == "forecast" and found["model"] == "weibull"
+    assert found["start"] == "2028-07" and len(found["points"]) == 6
+    assert found["beta"] == pytest.approx(beta, rel=0.03)
+    assert found["eta"] == pytest.approx(eta, rel=0.03)
+    assert found["units"] == 30 * units and found["cohorts"] == 30
+    # 2028-07 의 정답 — 코호트마다 아직 안 본 경과(30 - c), 보증 24개월 안만.
+    grid = np.linspace(0.0, 1.0, 2001)
+    mass = [
+        float(np.trapezoid(-np.expm1(-(((a + grid) / eta) ** beta)), a + grid))
+        for a in range(40)
+    ]
+    pi = [now - before for now, before in zip(mass, [0.0, *mass[:-1]], strict=True)]
+    truth = sum(units * pi[30 - c] for c in range(30) if 30 - c < 24)
+    july = found["points"][0]
+    assert july["expected"] == pytest.approx(truth, rel=0.03)
+    assert july["low"] <= july["expected"] <= july["high"]
+    assert july["low"] <= july["low80"] <= july["high80"] <= july["high"]
+    # 보증 끝까지 남은 총량은 앞 6개월보다 크고, 비용은 건수 x 건당 비용이다.
+    assert found["remaining"]["expected"] > found["total"]["expected"]
+    assert found["total"]["cost"] == pytest.approx(found["total"]["expected"] * 50000)
+    # 앞부분은 실제(닫힌 기간), 되짚어 보기는 6개월 전까지로 맞춰 그 뒤를 맞혔나.
+    assert found["history"][-1]["label"] == "2028-06" and found["history"][-1]["actual"] > 0
+    back = found["backtest"]
+    assert back["start"] == "2028-01" and back["periods"] == 6
+    assert back["within"] is True
+    assert back["predicted"] == pytest.approx(back["actual"], rel=0.05)
+    codes = {one["code"] for one in found["caveats"]}
+    assert "already_sold" in codes and "records_not_units" in codes
+    # 코호트가 없는 지표는 이유를 말하고 거절한다.
+    _, monthly = _monthly(client, admin, w)
+    refused = _refused(client, admin, monthly["slug"], "forecast")
+    assert refused["code"].endswith("METRICS-0038")

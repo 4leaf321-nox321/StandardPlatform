@@ -15,6 +15,7 @@ export type Recipe =
   | 'sprt'
   | 'groups'
   | 'cutin'
+  | 'forecast'
   | 'logit'
   | 'assoc'
 
@@ -648,4 +649,57 @@ export interface CutinResult extends AnalysisHeader {
   more_subgroups: number | null
   pre_trend: { change_per_period: number | null; p_value: number | null }
   points: CutinPoint[]
+}
+
+/** 달력 기간 하나 — 예측(평균 · 80 · 95% 구간) 또는 실제. */
+export interface ForecastPoint {
+  period: string
+  label: string
+  expected: number | null
+  low: number | null
+  high: number | null
+  low80: number | null
+  high80: number | null
+  actual: number | null
+}
+
+export interface ForecastTotal {
+  expected: number
+  /** 95% 구간. */
+  low: number
+  high: number
+  cost: number | null
+  cost_low: number | null
+  cost_high: number | null
+}
+
+/** 클레임 예측 — 「이미 판 물량에서 앞으로 몇 건(얼마)이 더 들어오나」. */
+export interface ForecastResult extends AnalysisHeader {
+  model: 'weibull' | 'defective'
+  beta: number
+  eta: number
+  p: number
+  horizon: number
+  warranty: number | null
+  basis: 'records' | 'first_visits'
+  cost: number | null
+  units: number
+  cohorts: number
+  /** 예측의 첫 기간 — 닫히지 않은 첫 기간. */
+  start: string
+  total: ForecastTotal
+  /** 보증 끝까지 남은 총량(보증 기간을 줬을 때). */
+  remaining: ForecastTotal | null
+  points: ForecastPoint[]
+  history: ForecastPoint[]
+  backtest: {
+    start: string
+    periods: number
+    predicted: number
+    low: number
+    high: number
+    actual: number
+    within: boolean
+    points: ForecastPoint[]
+  } | null
 }

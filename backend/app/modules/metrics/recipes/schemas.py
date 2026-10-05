@@ -383,6 +383,71 @@ class ChangesScanOut(AnalysisHeader):
     items: list[ChangesScanItemOut]
 
 
+# --- 클레임 예측 ---------------------------------------------------------------------
+
+
+class ForecastPointOut(BaseModel):
+    """달력 기간 하나 — 예측(평균 · 80 · 95% 구간) 또는 실제."""
+
+    period: str
+    label: str
+    expected: float | None
+    low: float | None
+    high: float | None
+    low80: float | None
+    high80: float | None
+    actual: float | None
+
+
+class ForecastTotalOut(BaseModel):
+    expected: float
+    low: float
+    high: float
+    """95% 구간."""
+    cost: float | None
+    cost_low: float | None
+    cost_high: float | None
+
+
+class ForecastBacktestOut(BaseModel):
+    """되짚어 보기 — `start` 앞까지만 보고 맞췄다면 그 뒤 `periods` 기간을 얼마나 맞혔나."""
+
+    start: str
+    periods: int
+    predicted: float
+    low: float
+    high: float
+    actual: float
+    within: bool
+    points: list[ForecastPointOut]
+
+
+class ForecastOut(AnalysisHeader):
+    """클레임 예측 — 「이미 판 물량에서 앞으로 몇 건(얼마)이 더 들어오나」."""
+
+    model: Literal["weibull", "defective"]
+    beta: float
+    eta: float
+    """척도 — 코호트 기간 단위."""
+    p: float
+    """결국 고장 나는 비율(표준 와이블이면 1)."""
+    horizon: int
+    warranty: int | None
+    basis: Literal["records", "first_visits"]
+    cost: float | None
+    units: float
+    cohorts: int
+    start: str
+    """예측의 첫 기간 — 닫히지 않은 첫 기간."""
+    total: ForecastTotalOut
+    """앞으로 `horizon` 기간의 합."""
+    remaining: ForecastTotalOut | None
+    """보증 끝까지 남은 총량(보증 기간을 줬을 때)."""
+    points: list[ForecastPointOut]
+    history: list[ForecastPointOut]
+    backtest: ForecastBacktestOut | None
+
+
 # --- 전후 비교 -----------------------------------------------------------------------
 
 

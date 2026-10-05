@@ -580,6 +580,48 @@ def run(
     reason = available(built)
     if reason is not None:
         raise common.refuse(24, reason)
+    got = prepare(db, user, metric, built, ask, model=model, max_age=max_age, basis=basis)
+    return _out(
+        db,
+        user,
+        metric,
+        built,
+        got.ask,
+        got.frame,
+        got.caveats,
+        got.excluded,
+        got.found,
+        model,
+        max_age,
+        compact,
+    )
+
+
+@dataclass
+class Prepared:
+    """읽고 · 코호트를 고르고 · 맞춘 것 — 수명과 클레임 예측이 함께 쓴다."""
+
+    ask: query.Ask
+    frame: query.Frame
+    caveats: common.Caveats
+    excluded: dict[str, int]
+    found: _Found
+
+
+def prepare(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    built: spec_module.Built,
+    ask: query.Ask,
+    *,
+    model: Literal["auto", "weibull", "defective"] = "auto",
+    max_age: int | None = None,
+    basis: Literal["records", "first_visits"] = "records",
+    before: date | None = None,
+) -> Prepared:
+    """`before` — 이 날 앞까지만 관측한 것처럼(되짚어 보기: 그때 예측했다면). 분자 · 분모의
+    닫힘을 그 날로 당긴다."""
     assert built.cohort is not None and built.time is not None
     grain = built.cohort.grain
     filters = dict(ask.filters)
@@ -597,6 +639,17 @@ def run(
     common.require_exact_counts(built, ask)
     frame = query.frame(db, user, metric, built, ask)
     common.require_whole(frame)
+    if before is not None:
+        den = frame.denominator
+        frame = replace(
+            frame,
+            before=min(frame.before, before) if frame.before is not None else before,
+            denominator=(
+                replace(den, before=min(den.before, before) if den.before else before)
+                if den is not None
+                else None
+            ),
+        )
     caveats = common.Caveats()
     excluded: dict[str, int] = {
         "missing_denominator": 0,
@@ -676,9 +729,7 @@ def run(
             "비모수 곡선만 봅니다.",
         )
     found = _Found(data, cohorts, fits, chosen, statistic, p_value, basis)
-    return _out(
-        db, user, metric, built, ask, frame, caveats, excluded, found, model, max_age, compact
-    )
+    return Prepared(ask, frame, caveats, excluded, found)
 
 
 @dataclass

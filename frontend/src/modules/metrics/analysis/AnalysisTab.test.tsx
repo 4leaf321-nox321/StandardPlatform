@@ -15,6 +15,7 @@ import type {
   AssocResult,
   ChangesScanResult,
   CutinResult,
+  ForecastResult,
   GroupsResult,
   LifeResult,
   LogitResult,
@@ -776,6 +777,68 @@ describe('분석 탭', () => {
       'cutin',
       expect.objectContaining({ at: '2026-07-01', effect: '0.2' }),
       expect.objectContaining({ filters: { base_model: 'S' } }),
+    )
+  })
+  it('클레임 예측은 되짚어 보기를 앞에 두고, 평균과 구간 · 비용을 함께 적는다', async () => {
+    const metric = {
+      ...METRIC,
+      analyses: [{ recipe: 'forecast', label: '클레임 예측', ok: true, reason: null }],
+    } as unknown as Metric
+    const total = (expected: number, low: number, high: number) => ({
+      expected, low, high, cost: expected * 1000, cost_low: low * 1000, cost_high: high * 1000,
+    })
+    const FORECAST: ForecastResult = {
+      ...HEADER,
+      recipe: 'forecast',
+      method: '수명 모형 … v1',
+      params: {},
+      run_id: 'r1',
+      caveats: [
+        {
+          code: 'already_sold',
+          level: 'info',
+          message: '이미 판 물량의 예측입니다 — 앞으로 팔 것과 리콜 · 캠페인 같은 일회성 급증은 들어 있지 않습니다.',
+          count: null,
+        },
+      ],
+      excluded: {},
+      visible_share: 1,
+      model: 'weibull',
+      beta: 1.5,
+      eta: 13,
+      p: 1,
+      horizon: 6,
+      warranty: 24,
+      basis: 'records',
+      cost: 1000,
+      units: 600000,
+      cohorts: 30,
+      start: '2028-07',
+      total: total(1200, 1100, 1300),
+      remaining: total(5000, 4700, 5300),
+      points: [],
+      history: [],
+      backtest: {
+        start: '2028-01', periods: 6, predicted: 900, low: 840, high: 960, actual: 910,
+        within: true, points: [],
+      },
+    }
+    metricsApi.analysis.mockResolvedValue(FORECAST)
+    render(
+      <MemoryRouter>
+        <AnalysisTab metric={metric} read={{ filters: {} }} />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText(/되짚어 보기 — 2028-01 앞까지만/)).toBeInTheDocument()
+    expect(screen.getByText('구간 안')).toBeInTheDocument()
+    expect(screen.getByText('1,200건')).toBeInTheDocument()
+    expect(screen.getByText('5,000건')).toBeInTheDocument()
+    expect(screen.getByText(/리콜/)).toBeInTheDocument()
+    expect(metricsApi.analysis).toHaveBeenLastCalledWith(
+      'cases',
+      'forecast',
+      expect.objectContaining({ horizon: '12' }),
+      expect.anything(),
     )
   })
 })
