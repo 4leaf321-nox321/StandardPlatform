@@ -459,6 +459,63 @@ class CoverageOut(AnalysisHeader):
     """기준 중 하나라도 비어 있는 기록(겹침 포함) — 태그가 모자란 기록."""
 
 
+# --- 재발 --------------------------------------------------------------------------
+
+
+class RecurrenceItemOut(BaseModel):
+    """다시 나온 서명 하나 — 전작에서의 건수, 이 세대에서의 건수, 이 세대의 그 기록."""
+
+    keys: list[str]
+    labels: list[str]
+    before: int
+    now: int
+    drill: DrillOut
+
+
+class RecurrencePairOut(BaseModel):
+    """세대 하나와 그 전작 — 전작에서 나온 서명 중 다시 나온 몫."""
+
+    key: str
+    label: str
+    predecessor: str
+    predecessor_label: str
+    predecessor_signatures: int
+    signatures: int
+    recurring: int
+    rate: float | None
+    """다시 나온 서명 / 전작 서명."""
+    new: int
+    """이 세대에서 처음 나온 서명."""
+    items: list[RecurrenceItemOut]
+
+
+class RecurrenceSignatureOut(BaseModel):
+    """여러 세대에 걸쳐 되풀이된 서명 — 다시 나온 세대 쌍의 수."""
+
+    keys: list[str]
+    labels: list[str]
+    pairs: int
+    generations: list[str]
+
+
+class RecurrenceOut(AnalysisHeader):
+    """재발 — 「전작에서 나온 축 조합이 다음 모델에서 다시 나왔나」."""
+
+    generation: str
+    generation_label: str
+    way: str
+    way_label: str
+    signature: list[str]
+    signature_labels: list[str]
+    pairs: list[RecurrencePairOut]
+    pairs_total: int
+    rate: float | None
+    """모든 쌍을 합친 재발률 — 다시 나온 서명 합 / 전작 서명 합."""
+    no_predecessor: int
+    """전작이 없거나 전작에 기록이 없는 세대 수."""
+    signatures: list[RecurrenceSignatureOut]
+
+
 # --- 클레임 예측 ---------------------------------------------------------------------
 
 

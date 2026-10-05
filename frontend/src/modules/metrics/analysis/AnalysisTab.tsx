@@ -21,6 +21,7 @@ import { GroupsView } from '@/modules/metrics/analysis/GroupsView'
 import { LifeView } from '@/modules/metrics/analysis/LifeView'
 import { LogitView } from '@/modules/metrics/analysis/LogitView'
 import { ParetoView } from '@/modules/metrics/analysis/ParetoView'
+import { RecurrenceView } from '@/modules/metrics/analysis/RecurrenceView'
 import { SprtView } from '@/modules/metrics/analysis/SprtView'
 import { Button } from '@/shared/components/ui/button'
 
@@ -33,6 +34,7 @@ const ORDER = [
   'groups',
   'cutin',
   'coverage',
+  'recurrence',
   'logit',
   'pareto',
   'assoc',
@@ -105,6 +107,7 @@ export default function AnalysisTab({ metric, read, initial = null }: AnalysisTa
       {recipe === 'groups' && <GroupsView metric={metric} read={read} initial={given} />}
       {recipe === 'cutin' && <CutinView metric={metric} read={read} initial={given} />}
       {recipe === 'coverage' && <CoverageView metric={metric} read={read} initial={given} />}
+      {recipe === 'recurrence' && <RecurrenceView metric={metric} read={read} initial={given} />}
       {recipe === 'logit' && <LogitView metric={metric} read={read} />}
       {recipe === 'assoc' && <AssocView metric={metric} read={read} />}
     </div>

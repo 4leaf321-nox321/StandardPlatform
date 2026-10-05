@@ -172,7 +172,6 @@ def run(
 
     # 다룬 조합 — 기준을 모두 묶은 셀(기간은 합친다).
     observed_ask = replace(ask, dims=list(levels), by=())
-    common.require_exact_counts(built, observed_ask)
     frame = query.frame(db, user, metric, built, observed_ask, with_denominator=False)
     common.require_whole(frame)
     observed: dict[Seen, int] = {}
@@ -182,6 +181,7 @@ def run(
     covered = prefixes(observed)
 
     caveats = common.Caveats()
+    common.overlap_note(built, observed_ask, caveats)
     root = levels[0]
     if root in ask.filters:
         value = ask.filters[root]

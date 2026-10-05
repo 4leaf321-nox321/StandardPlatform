@@ -25,6 +25,7 @@ from app.modules.metrics.recipes import (
     life,
     logit,
     pareto,
+    recurrence,
     sprt,
     ways,
 )
@@ -40,6 +41,7 @@ from app.modules.metrics.recipes.schemas import (
     LifeOut,
     LogitOut,
     ParetoOut,
+    RecurrenceOut,
     SprtOut,
     SprtScanOut,
     WayOut,
@@ -499,6 +501,48 @@ def coverage_ways(
     built = compute.built_of(db, metric)
     found = ways.ways(db, ways.axis_type(built, source), ways.axis_type(built, target))
     return [WayOut(address=one.address, label=one.label) for one in found]
+
+
+@router.get("/recurrence", response_model=RecurrenceOut)
+def recurrence_analysis(
+    slug: str,
+    request: Request,
+    generation: str = Query(description="세대 기준(축 — 예: 모델)"),
+    signature: str = Query(description="서명 기준, 쉼표로(예: part,mechanism) — 1~3개"),
+    via: str | None = Query(
+        default=None, description="세대 축에서 전작으로 가는 길(비우면 하나뿐인 길)"
+    ),
+    period_from: str | None = Query(default=None),
+    period_to: str | None = Query(default=None, description="이 날 **앞까지**"),
+    cohort_from: str | None = Query(default=None),
+    cohort_to: str | None = Query(default=None),
+    compact: bool = Query(default=False, description="쌍 15 · 쌍마다 5 · 서명 10 만(MCP)"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RecurrenceOut:
+    """재발 — 세대마다 나온 서명(축 조합)을 전작의 것과 견준다. 다시 나온 것 · 재발률 · 새로
+    나온 것, 여러 세대에 걸쳐 되풀이된 서명."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(
+        request,
+        period_from=period_from,
+        period_to=period_to,
+        cohort_from=cohort_from,
+        cohort_to=cohort_to,
+    )
+    return recurrence.run(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        generation=generation,
+        signature=[one.strip() for one in signature.split(",") if one.strip()],
+        via=via,
+        compact=compact,
+    )
 
 
 @router.get("/sprt", response_model=SprtOut)

@@ -21,6 +21,7 @@ import type {
   LifeResult,
   LogitResult,
   ParetoResult,
+  RecurrenceResult,
   SprtScanResult,
 } from '@/modules/metrics/analysis/types'
 
@@ -905,6 +906,62 @@ describe('분석 탭', () => {
       'cases',
       'coverage',
       expect.objectContaining({ levels: 'model,part,mechanism' }),
+      expect.anything(),
+    )
+  })
+  it('재발은 서명을 골라야 묻고, 세대 쌍마다 다시 나온 것과 재발률을 적는다', async () => {
+    const axis = (name: string, label: string) => ({
+      name, address: `properties.ref_${name}`, label, kind: 'object_ref', multi: true, grain: null,
+    })
+    const metric = {
+      ...METRIC,
+      dims: [axis('model', '모델'), axis('part', '부품'), axis('mechanism', '메커니즘')],
+      analyses: [{ recipe: 'recurrence', label: '재발', ok: true, reason: null }],
+    } as unknown as Metric
+    const RECURRENCE: RecurrenceResult = {
+      ...HEADER,
+      recipe: 'recurrence',
+      method: '세대마다 서명 집합 x 전작의 서명 집합 v1',
+      params: {},
+      run_id: 'r1',
+      caveats: [],
+      excluded: {},
+      visible_share: 1,
+      generation: 'model',
+      generation_label: '모델',
+      way: 'ref.predecessor',
+      way_label: '전작',
+      signature: ['part'],
+      signature_labels: ['부품'],
+      pairs: [{
+        key: 'm2', label: 'M2', predecessor: 'm1', predecessor_label: 'M1',
+        predecessor_signatures: 2, signatures: 2, recurring: 1, rate: 0.5, new: 1,
+        items: [{
+          keys: ['p1'], labels: ['P1'], before: 1, now: 1,
+          drill: { type_slug: 'report', params: { 'f.ref_part.eq': 'p1' }, partial: [] },
+        }],
+      }],
+      pairs_total: 1,
+      rate: 0.5,
+      no_predecessor: 1,
+      signatures: [{ keys: ['p1'], labels: ['P1'], pairs: 1, generations: ['M2'] }],
+    }
+    metricsApi.analysis.mockResolvedValue(RECURRENCE)
+    metricsApi.coverageWays.mockResolvedValue([{ address: 'ref.predecessor', label: '전작' }])
+    render(
+      <MemoryRouter>
+        <AnalysisTab metric={metric} read={{ filters: {} }} />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('서명 기준을 하나 이상 고릅니다.')).toBeInTheDocument()
+    expect(metricsApi.analysis).not.toHaveBeenCalled()
+    await userEvent.click(screen.getByRole('checkbox', { name: '부품' }))
+    expect(await screen.findByText('M2 ← M1')).toBeInTheDocument()
+    expect(screen.getByText('1 / 2')).toBeInTheDocument()
+    expect(metricsApi.analysis).toHaveBeenLastCalledWith(
+      'cases',
+      'recurrence',
+      expect.objectContaining({ generation: 'model', signature: 'part' }),
       expect.anything(),
     )
   })

@@ -30,7 +30,11 @@ def _relate(
     assert got.status_code == 201, got.text
 
 
-def _axes_world(client: TestClient, admin: Signed) -> dict[str, Any]:
+def _axes_world(
+    client: TestClient,
+    admin: Signed,
+    extra: tuple[tuple[str, str, str, str | None, str | None], ...] = (),
+) -> dict[str, Any]:
     """모델 M1 · M2(M2 의 전작은 M1), 부품 P1 · P2 · P3, 메커니즘 피로 · 크리프 · 부식 · 마모,
     해석법 FEA · 시험 · 염수. M1 은 P1 · P2, M2 는 P2 · P3 를 가진다. P1 → 피로 · 크리프,
     P2 → 피로, P3 → 부식. 피로 → FEA · 시험, 크리프 → FEA, 부식 → 염수."""
@@ -114,6 +118,8 @@ def _axes_world(client: TestClient, admin: Signed) -> dict[str, Any]:
         ("R3", m2, "P3", "마모", "FEA"),  # 기대 밖 — P3 에는 마모가 안 걸린다
         ("R4", m1, "P1", None, None),  # 태그가 모자란 기록
     ]
+    named = {"M1": m1, "M2": m2}
+    rows += [(label, named[m], p, k, h) for label, m, p, k, h in extra]
     reports: dict[str, str] = {}
     for label, m, p, k, h in rows:
         props: dict[str, Any] = {
@@ -271,3 +277,48 @@ def test_비슷한_기록은_드문_태그가_겹칠수록_위에_서고_겹친_
         f"{base}/similar", json={"tags": {"reported": []}}, headers=admin.headers
     )
     assert wrong.status_code == 422 and wrong.json()["error"]["code"].endswith("0110")
+
+
+# --- 재발 ----------------------------------------------------------------------------
+
+
+def test_재발은_전작에서_나온_조합이_후속_모델에서_다시_나온_것을_센다(
+    client: TestClient, admin: Signed
+) -> None:
+    """M2 의 전작은 M1. M1 에서 (P1 · 피로) · (P2 · 피로), M2 에서 (P3 · 마모) · (P1 · 피로) —
+    다시 나온 것 하나(P1 · 피로), 재발률 1/2, 새로 나온 것 하나."""
+    w = _axes_world(client, admin, extra=(("R5", "M2", "P1", "피로", "FEA"),))
+    slug = w["metric"]["slug"]
+    found = _analysis(
+        client, admin, slug, "recurrence", generation="model", signature="part,mechanism"
+    )
+    assert found["way"] == "ref.predecessor"  # 후속(나를 가리키는 것)은 후보에서 뺐다
+    assert found["pairs_total"] == 1 and found["rate"] == 0.5
+    pair = found["pairs"][0]
+    assert (pair["label"], pair["predecessor_label"]) == ("M2", "M1")
+    assert (pair["predecessor_signatures"], pair["signatures"], pair["recurring"]) == (2, 2, 1)
+    assert pair["rate"] == 0.5 and pair["new"] == 1
+    item = pair["items"][0]
+    assert item["labels"] == ["P1", "피로"] and (item["before"], item["now"]) == (1, 1)
+    assert _listed(client, admin, w["report"], item["drill"]["params"]) == 1
+    assert found["no_predecessor"] == 1  # M1 은 전작이 없다
+    assert [one["labels"] for one in found["signatures"]] == [["P1", "피로"]]
+    codes = {one["code"] for one in found["caveats"]}
+    assert {"order_ignored", "no_predecessor", "overlap_counts"} <= codes
+    # 길을 주면 그것으로 — 후속 쪽(나를 전작으로 가리키는 것)으로 걸으면 짝이 거꾸로다.
+    backward = _analysis(
+        client,
+        admin,
+        slug,
+        "recurrence",
+        generation="model",
+        signature="part,mechanism",
+        via=f"in.{w['types']['model']}:predecessor",
+    )
+    assert [(one["label"], one["predecessor_label"]) for one in backward["pairs"]] == [
+        ("M1", "M2")
+    ]
+    refused = _refused(
+        client, admin, slug, "recurrence", generation="model", signature="model"
+    )
+    assert refused["code"].endswith("METRICS-0047")

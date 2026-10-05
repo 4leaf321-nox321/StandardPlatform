@@ -16,6 +16,7 @@ export type Recipe =
   | 'groups'
   | 'cutin'
   | 'coverage'
+  | 'recurrence'
   | 'forecast'
   | 'logit'
   | 'assoc'
@@ -742,4 +743,34 @@ export interface CoverageResult extends AnalysisHeader {
   extras: { keys: string[]; labels: string[]; count: number; drill: Drill }[]
   extras_total: number
   untagged: number
+}
+
+/** 재발의 세대 쌍 하나 — 전작에서 나온 서명 중 다시 나온 것. */
+export interface RecurrencePair {
+  key: string
+  label: string
+  predecessor: string
+  predecessor_label: string
+  predecessor_signatures: number
+  signatures: number
+  recurring: number
+  /** 다시 나온 서명 / 전작 서명. */
+  rate: number | null
+  new: number
+  items: { keys: string[]; labels: string[]; before: number; now: number; drill: Drill }[]
+}
+
+/** 재발 — 「전작에서 나온 축 조합이 다음 모델에서 다시 나왔나」(ADR 0022). */
+export interface RecurrenceResult extends AnalysisHeader {
+  generation: string
+  generation_label: string
+  way: string
+  way_label: string
+  signature: string[]
+  signature_labels: string[]
+  pairs: RecurrencePair[]
+  pairs_total: number
+  rate: number | null
+  no_predecessor: number
+  signatures: { keys: string[]; labels: string[]; pairs: number; generations: string[] }[]
 }

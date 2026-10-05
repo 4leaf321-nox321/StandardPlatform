@@ -2329,6 +2329,7 @@ _RECIPE_OPTIONS: dict[str, set[str]] = {
     "groups": {"dim", "axis", "window"} | _RANGES,
     "cutin": {"at", "axis", "window", "skip_first", "effect"} | _RANGES,
     "coverage": {"levels", "via"} | _RANGES,
+    "recurrence": {"generation", "signature", "via"} | _RANGES,
     "forecast": {
         "horizon",
         "warranty",
@@ -2381,6 +2382,10 @@ async def metric_analyze(
       길 — 비운 자리는 온톨로지에 하나뿐인 길, 여럿이면 거절하며 후보를 말한다). 첫 기준은
       `filters` 로 거른다. `gaps`(빈 칸 — `leaves` 는 그 아래 끝 조합 수), `extras`(기대 밖),
       `roots`(첫 기준 값마다 다룬 몫)
+    - `recurrence` — **재발**(전작에서 나온 축 조합이 다음 모델에서 다시 나왔나).
+      `generation`(필수 — 세대 기준, 예: 모델) · `signature`(필수 — 서명 기준 1~3개, 예: 부품 ·
+      메커니즘) · `via`(세대 축에서 전작으로 가는 길 — 비우면 하나뿐인 앞쪽 길). 쌍마다
+      다시 나온 것 · `rate`(재발률) · `new`, 모든 쌍의 `rate`, 되풀이된 `signatures`
     - `cutin` — **전후 비교**(대책 적용일 뒤에 만든 것부터 줄었나). `at`(필수 — 적용일
       `YYYY-MM-DD`) · `axis` · `window` · `skip_first`(앞쪽에서 뺄 처음 부분군 — 출시 초기) ·
       `effect`(의미 있는 차이, 기본 0.2). 모델은 `filters` 로 거른다 — 앞쪽은 그 모델의 첫
@@ -2410,6 +2415,8 @@ async def metric_analyze(
     - 순차 검정: `continue` 는 「아직 결론 없음」 이지 「문제없음」 이 아니다. `not_worse` 는
       「ρ 배 나쁘지는 않다」 이지 「같다」 가 아니다.
     - 관리도의 신호는 「조사할 곳」 이지 원인이 아니다. 변화점의 `provisional` 은 잠정이다.
+    - 재발: 다시 나온 서명은 「전작에서도 이 조합의 기록이 있었다」 이다 — 날짜 순서는 안
+      본다(`order_ignored`). 재발률은 전작 서명 중의 몫이다.
     - 커버리지: 빈 칸은 「이 플랫폼에 그 조합의 기록이 없다」 이지 「검토하지 않았다」 가
       아니다. `extras`(기대 밖)는 온톨로지 관계나 태깅을 고칠 곳이다.
     - 클레임 예측: 평균(`expected`)만 말하지 않고 구간과 함께, `backtest.within` 이 false

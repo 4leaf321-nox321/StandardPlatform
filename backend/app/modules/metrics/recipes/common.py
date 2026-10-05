@@ -67,6 +67,23 @@ def require_exact_counts(built: spec_module.Built, ask: query.Ask) -> None:
             )
 
 
+def overlap_note(built: spec_module.Built, ask: query.Ask, caveats: Caveats) -> None:
+    """나왔나만 보는 분석(커버리지 · 재발)은 여러 값 기준을 묶지 않아도 된다 — 조합이
+    나왔는지는 그대로다. 다만 건수에는 한 기록이 그 기준의 값마다 들어간다 — 그렇게 말한다."""
+    loose = [
+        one.axis.label
+        for one in built.dims
+        if one.axis.multi and one.name not in ask.dims and one.name not in ask.filters
+    ]
+    if loose:
+        caveats.add(
+            "overlap_counts",
+            f"건수에 겹침이 있습니다 — 「{', '.join(loose)}」 이 여러 값 기준이라 한 기록이 "
+            "그 값마다 셉니다(나왔는지 · 다뤘는지는 그대로).",
+            level="info",
+        )
+
+
 def dim_of(built: spec_module.Built, name: str) -> spec_module.Dim:
     """분석이 이름으로 고른 기준 — 없으면 있는 것을 말하고 거절한다."""
     found = built.dim(name)
