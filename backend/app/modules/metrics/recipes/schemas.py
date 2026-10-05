@@ -383,6 +383,82 @@ class ChangesScanOut(AnalysisHeader):
     items: list[ChangesScanItemOut]
 
 
+# --- 커버리지 ------------------------------------------------------------------------
+
+
+class CoverageLevelOut(BaseModel):
+    """기준 하나 — 그 축 타입과 앞 기준에서 오는 길."""
+
+    dim: str
+    label: str
+    type_slug: str
+    way: str | None
+    """앞 기준의 축에서 이 축으로 가는 길(주소) — 첫 기준은 없다."""
+    way_label: str | None
+
+
+class CoverageDepthOut(BaseModel):
+    """앞에서부터 기준 `depth + 1` 개의 조합 — 다뤄야 할 것 · 다룬 것."""
+
+    depth: int
+    labels: list[str]
+    expected: int
+    covered: int
+
+
+class CoverageRootOut(BaseModel):
+    """첫 기준의 값 하나(예: 모델) — 그 아래 끝 조합 중 다룬 몫."""
+
+    key: str
+    label: str
+    expected: int
+    covered: int
+    share: float | None
+
+
+class CoverageGapOut(BaseModel):
+    """빈 칸 — 다룬 기록이 없는 조합. 위 조합은 다뤘다(그보다 위가 비었으면 그것이 빈
+    칸이다)."""
+
+    keys: list[str]
+    labels: list[str]
+    depth: int
+    leaves: int
+    """그 아래 다뤄야 할 끝 조합 수."""
+
+
+class CoverageExtraOut(BaseModel):
+    """기대 밖 조합 — 기록은 있는데 온톨로지의 길로는 닿지 않는 조합."""
+
+    keys: list[str]
+    labels: list[str]
+    count: int
+    drill: DrillOut
+
+
+class WayOut(BaseModel):
+    """축 타입 사이의 한 걸음 길 — 주소와 이름."""
+
+    address: str
+    label: str
+
+
+class CoverageOut(AnalysisHeader):
+    """커버리지 — 「다뤄야 할 축 조합 중 무엇을 다뤘고 무엇이 비었나」."""
+
+    levels: list[CoverageLevelOut]
+    depths: list[CoverageDepthOut]
+    roots: list[CoverageRootOut]
+    expected_leaves: int
+    covered_leaves: int
+    gaps: list[CoverageGapOut]
+    gaps_total: int
+    extras: list[CoverageExtraOut]
+    extras_total: int
+    untagged: int
+    """기준 중 하나라도 비어 있는 기록(겹침 포함) — 태그가 모자란 기록."""
+
+
 # --- 클레임 예측 ---------------------------------------------------------------------
 
 

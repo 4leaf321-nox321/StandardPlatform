@@ -14,6 +14,7 @@ import type { Metric, ReadOptions } from '@/modules/metrics/api'
 import { AssocView } from '@/modules/metrics/analysis/AssocView'
 import { ChangesView } from '@/modules/metrics/analysis/ChangesView'
 import { ControlView } from '@/modules/metrics/analysis/ControlView'
+import { CoverageView } from '@/modules/metrics/analysis/CoverageView'
 import { CutinView } from '@/modules/metrics/analysis/CutinView'
 import { ForecastView } from '@/modules/metrics/analysis/ForecastView'
 import { GroupsView } from '@/modules/metrics/analysis/GroupsView'
@@ -31,6 +32,7 @@ const ORDER = [
   'sprt',
   'groups',
   'cutin',
+  'coverage',
   'logit',
   'pareto',
   'assoc',
@@ -102,6 +104,7 @@ export default function AnalysisTab({ metric, read, initial = null }: AnalysisTa
       {recipe === 'sprt' && <SprtView metric={metric} read={read} initial={given} />}
       {recipe === 'groups' && <GroupsView metric={metric} read={read} initial={given} />}
       {recipe === 'cutin' && <CutinView metric={metric} read={read} initial={given} />}
+      {recipe === 'coverage' && <CoverageView metric={metric} read={read} initial={given} />}
       {recipe === 'logit' && <LogitView metric={metric} read={read} />}
       {recipe === 'assoc' && <AssocView metric={metric} read={read} />}
     </div>

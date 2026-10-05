@@ -18,6 +18,7 @@ from app.modules.metrics.recipes import (
     assoc,
     changes,
     control,
+    coverage,
     cutin,
     forecast,
     groups,
@@ -25,12 +26,14 @@ from app.modules.metrics.recipes import (
     logit,
     pareto,
     sprt,
+    ways,
 )
 from app.modules.metrics.recipes.schemas import (
     AssocOut,
     ChangesOut,
     ChangesScanOut,
     ControlOut,
+    CoverageOut,
     CutinOut,
     ForecastOut,
     GroupsOut,
@@ -39,6 +42,7 @@ from app.modules.metrics.recipes.schemas import (
     ParetoOut,
     SprtOut,
     SprtScanOut,
+    WayOut,
 )
 from app.shared.auth import current_user
 
@@ -432,6 +436,69 @@ def forecast_analysis(
         cost=cost,
         backtest=backtest,
     )
+
+
+@router.get("/coverage", response_model=CoverageOut)
+def coverage_analysis(
+    slug: str,
+    request: Request,
+    levels: str = Query(
+        description="축인 기준을 차례로, 쉼표로(예: model,part,mechanism,method) — 2~4개"
+    ),
+    via: str | None = Query(
+        default=None,
+        description=(
+            "기준 사이마다의 길, 쉼표로(비운 자리는 하나뿐인 길) — 예: out.bom,,ref.methods"
+        ),
+    ),
+    period_from: str | None = Query(default=None),
+    period_to: str | None = Query(default=None, description="이 날 **앞까지**"),
+    cohort_from: str | None = Query(default=None),
+    cohort_to: str | None = Query(default=None),
+    compact: bool = Query(
+        default=False, description="빈 칸 30 · 기대 밖 10 · 뿌리 15 만(MCP)"
+    ),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> CoverageOut:
+    """커버리지 — 온톨로지의 길로 편 「다뤄야 할 조합」 과 기록이 다룬 조합을 견준다. 단계마다
+    다룬 몫, 첫 기준 값마다의 몫, 빈 칸, 기대 밖 조합. 첫 기준은 `d.<기준>=<값>` 으로
+    거른다."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(
+        request,
+        period_from=period_from,
+        period_to=period_to,
+        cohort_from=cohort_from,
+        cohort_to=cohort_to,
+    )
+    return coverage.run(
+        db,
+        user,
+        metric,
+        built,
+        ask,
+        levels=[one.strip() for one in levels.split(",") if one.strip()],
+        via=[one.strip() or None for one in via.split(",")] if via else [],
+        compact=compact,
+    )
+
+
+@router.get("/coverage/ways", response_model=list[WayOut])
+def coverage_ways(
+    slug: str,
+    source: str = Query(alias="from", description="앞 기준"),
+    target: str = Query(alias="to", description="다음 기준"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[WayOut]:
+    """두 기준의 축 타입 사이의 한 걸음 길 후보 — 화면의 길 고르개."""
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    found = ways.ways(db, ways.axis_type(built, source), ways.axis_type(built, target))
+    return [WayOut(address=one.address, label=one.label) for one in found]
 
 
 @router.get("/sprt", response_model=SprtOut)

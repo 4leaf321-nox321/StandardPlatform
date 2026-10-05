@@ -15,6 +15,7 @@ export type Recipe =
   | 'sprt'
   | 'groups'
   | 'cutin'
+  | 'coverage'
   | 'forecast'
   | 'logit'
   | 'assoc'
@@ -702,4 +703,43 @@ export interface ForecastResult extends AnalysisHeader {
     within: boolean
     points: ForecastPoint[]
   } | null
+}
+
+/** 커버리지의 기준 하나 — 그 축 타입과 앞 기준에서 오는 길. */
+export interface CoverageLevel {
+  dim: string
+  label: string
+  type_slug: string
+  way: string | null
+  way_label: string | null
+}
+
+/** 빈 칸 — 바로 위 조합은 다뤘는데 이 조합은 기록이 없다. */
+export interface CoverageGap {
+  keys: string[]
+  labels: string[]
+  depth: number
+  /** 그 아래 다뤄야 할 끝 조합 수. */
+  leaves: number
+}
+
+/** 커버리지 — 「다뤄야 할 축 조합 중 무엇을 다뤘고 무엇이 비었나」(ADR 0022). */
+export interface CoverageResult extends AnalysisHeader {
+  levels: CoverageLevel[]
+  depths: { depth: number; labels: string[]; expected: number; covered: number }[]
+  roots: {
+    key: string
+    label: string
+    expected: number
+    covered: number
+    share: number | null
+  }[]
+  expected_leaves: number
+  covered_leaves: number
+  gaps: CoverageGap[]
+  gaps_total: number
+  /** 기대 밖 — 기록은 있는데 온톨로지의 길로는 닿지 않는 조합. */
+  extras: { keys: string[]; labels: string[]; count: number; drill: Drill }[]
+  extras_total: number
+  untagged: number
 }

@@ -2290,6 +2290,7 @@ _RECIPE_OPTIONS: dict[str, set[str]] = {
     },
     "groups": {"dim", "axis", "window"} | _RANGES,
     "cutin": {"at", "axis", "window", "skip_first", "effect"} | _RANGES,
+    "coverage": {"levels", "via"} | _RANGES,
     "forecast": {
         "horizon",
         "warranty",
@@ -2337,6 +2338,11 @@ async def metric_analyze(
     - `groups` — **집단 비교**(SKU · 공장 · 기본 모델마다 비율이 다른가). `dim`(분모 짝에 있는
       기준) · `axis` · `window`. 이질성 χ², 집단 대 나머지 정확 검정(BH q), 작은 집단의 과장을
       줄인 비율(`shrunk` · 구간 · `shrinkage`)
+    - `coverage` — **커버리지**(다뤄야 할 축 조합 중 기록이 다룬 것 · 빈 칸). `levels`(필수 —
+      축인 기준을 차례로, 2~4개, 예: 모델 · 부품 · 메커니즘 · 해석법) · `via`(기준 사이마다의
+      길 — 비운 자리는 온톨로지에 하나뿐인 길, 여럿이면 거절하며 후보를 말한다). 첫 기준은
+      `filters` 로 거른다. `gaps`(빈 칸 — `leaves` 는 그 아래 끝 조합 수), `extras`(기대 밖),
+      `roots`(첫 기준 값마다 다룬 몫)
     - `cutin` — **전후 비교**(대책 적용일 뒤에 만든 것부터 줄었나). `at`(필수 — 적용일
       `YYYY-MM-DD`) · `axis` · `window` · `skip_first`(앞쪽에서 뺄 처음 부분군 — 출시 초기) ·
       `effect`(의미 있는 차이, 기본 0.2). 모델은 `filters` 로 거른다 — 앞쪽은 그 모델의 첫
@@ -2366,6 +2372,8 @@ async def metric_analyze(
     - 순차 검정: `continue` 는 「아직 결론 없음」 이지 「문제없음」 이 아니다. `not_worse` 는
       「ρ 배 나쁘지는 않다」 이지 「같다」 가 아니다.
     - 관리도의 신호는 「조사할 곳」 이지 원인이 아니다. 변화점의 `provisional` 은 잠정이다.
+    - 커버리지: 빈 칸은 「이 플랫폼에 그 조합의 기록이 없다」 이지 「검토하지 않았다」 가
+      아니다. `extras`(기대 밖)는 온톨로지 관계나 태깅을 고칠 곳이다.
     - 클레임 예측: 평균(`expected`)만 말하지 않고 구간과 함께, `backtest.within` 이 false
       면 그것을 먼저. 이미 판 것만이다 — 앞으로 팔 것 · 리콜은 없다.
     - 전후 비교: `reduced` 는 「적용일 뒤에 줄었다」 이지 「대책 때문에」 가 아니다.
@@ -2392,7 +2400,8 @@ async def metric_analyze(
         if isinstance(value, bool):
             value = "true" if value else "false"
         elif isinstance(value, list | tuple):
-            value = ",".join(str(one) for one in value)
+            # 빈 자리는 빈 글자로 — 커버리지의 `via` 처럼 「이 자리는 하나뿐인 길」 을 뜻한다.
+            value = ",".join("" if one is None else str(one) for one in value)
         params.append((key, str(value)))
     for dim_name, value in (filters or {}).items():
         params.append((f"d.{dim_name}", "" if value is None else str(value)))

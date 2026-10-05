@@ -11686,6 +11686,225 @@
         }
       }
     },
+    "/api/metrics/{slug}/analysis/coverage": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Coverage Analysis",
+        "description": "커버리지 — 온톨로지의 길로 편 「다뤄야 할 조합」 과 기록이 다룬 조합을 견준다. 단계마다\n다룬 몫, 첫 기준 값마다의 몫, 빈 칸, 기대 밖 조합. 첫 기준은 `d.<기준>=<값>` 으로\n거른다.",
+        "operationId": "coverage_analysis_api_metrics__slug__analysis_coverage_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "levels",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "축인 기준을 차례로, 쉼표로(예: model,part,mechanism,method) — 2~4개",
+              "title": "Levels"
+            },
+            "description": "축인 기준을 차례로, 쉼표로(예: model,part,mechanism,method) — 2~4개"
+          },
+          {
+            "name": "via",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "기준 사이마다의 길, 쉼표로(비운 자리는 하나뿐인 길) — 예: out.bom,,ref.methods",
+              "title": "Via"
+            },
+            "description": "기준 사이마다의 길, 쉼표로(비운 자리는 하나뿐인 길) — 예: out.bom,,ref.methods"
+          },
+          {
+            "name": "period_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period From"
+            }
+          },
+          {
+            "name": "period_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 날 **앞까지**",
+              "title": "Period To"
+            },
+            "description": "이 날 **앞까지**"
+          },
+          {
+            "name": "cohort_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort From"
+            }
+          },
+          {
+            "name": "cohort_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort To"
+            }
+          },
+          {
+            "name": "compact",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "빈 칸 30 · 기대 밖 10 · 뿌리 15 만(MCP)",
+              "default": false,
+              "title": "Compact"
+            },
+            "description": "빈 칸 30 · 기대 밖 10 · 뿌리 15 만(MCP)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app__modules__metrics__recipes__schemas__CoverageOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/metrics/{slug}/analysis/coverage/ways": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Coverage Ways",
+        "description": "두 기준의 축 타입 사이의 한 걸음 길 후보 — 화면의 길 고르개.",
+        "operationId": "coverage_ways_api_metrics__slug__analysis_coverage_ways_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "앞 기준",
+              "title": "From"
+            },
+            "description": "앞 기준"
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "다음 기준",
+              "title": "To"
+            },
+            "description": "다음 기준"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WayOut"
+                  },
+                  "title": "Response Coverage Ways Api Metrics  Slug  Analysis Coverage Ways Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/metrics/{slug}/analysis/sprt": {
       "get": {
         "tags": [
@@ -14237,7 +14456,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CoverageOut"
+                  "$ref": "#/components/schemas/app__extensions__caegroup__schemas__CoverageOut"
                 }
               }
             }
@@ -20518,32 +20737,195 @@
         ],
         "title": "CoverageAxisOut"
       },
-      "CoverageOut": {
+      "CoverageDepthOut": {
         "properties": {
-          "kind": {
-            "type": "string",
-            "title": "Kind"
-          },
-          "pairs": {
+          "depth": {
             "type": "integer",
-            "title": "Pairs"
+            "title": "Depth"
           },
-          "axes": {
+          "labels": {
             "items": {
-              "$ref": "#/components/schemas/CoverageAxisOut"
+              "type": "string"
             },
             "type": "array",
-            "title": "Axes"
+            "title": "Labels"
+          },
+          "expected": {
+            "type": "integer",
+            "title": "Expected"
+          },
+          "covered": {
+            "type": "integer",
+            "title": "Covered"
           }
         },
         "type": "object",
         "required": [
-          "kind",
-          "pairs",
-          "axes"
+          "depth",
+          "labels",
+          "expected",
+          "covered"
         ],
-        "title": "CoverageOut",
-        "description": "**평가 완료율** — 평가된 연계 ÷ 전체 연계. 축마다 따로 센다."
+        "title": "CoverageDepthOut",
+        "description": "앞에서부터 기준 `depth + 1` 개의 조합 — 다뤄야 할 것 · 다룬 것."
+      },
+      "CoverageExtraOut": {
+        "properties": {
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keys"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Labels"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "drill": {
+            "$ref": "#/components/schemas/DrillOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "keys",
+          "labels",
+          "count",
+          "drill"
+        ],
+        "title": "CoverageExtraOut",
+        "description": "기대 밖 조합 — 기록은 있는데 온톨로지의 길로는 닿지 않는 조합."
+      },
+      "CoverageGapOut": {
+        "properties": {
+          "keys": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Keys"
+          },
+          "labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Labels"
+          },
+          "depth": {
+            "type": "integer",
+            "title": "Depth"
+          },
+          "leaves": {
+            "type": "integer",
+            "title": "Leaves"
+          }
+        },
+        "type": "object",
+        "required": [
+          "keys",
+          "labels",
+          "depth",
+          "leaves"
+        ],
+        "title": "CoverageGapOut",
+        "description": "빈 칸 — 다룬 기록이 없는 조합. 위 조합은 다뤘다(그보다 위가 비었으면 그것이 빈\n칸이다)."
+      },
+      "CoverageLevelOut": {
+        "properties": {
+          "dim": {
+            "type": "string",
+            "title": "Dim"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "way": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Way"
+          },
+          "way_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Way Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "dim",
+          "label",
+          "type_slug",
+          "way",
+          "way_label"
+        ],
+        "title": "CoverageLevelOut",
+        "description": "기준 하나 — 그 축 타입과 앞 기준에서 오는 길."
+      },
+      "CoverageRootOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "expected": {
+            "type": "integer",
+            "title": "Expected"
+          },
+          "covered": {
+            "type": "integer",
+            "title": "Covered"
+          },
+          "share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "expected",
+          "covered",
+          "share"
+        ],
+        "title": "CoverageRootOut",
+        "description": "첫 기준의 값 하나(예: 모델) — 그 아래 끝 조합 중 다룬 몫."
       },
       "CreateAccountRequest": {
         "properties": {
@@ -35389,6 +35771,25 @@
         "title": "WatchedOut",
         "description": "내가 지켜보는 것 한 줄 — **최근 바뀐 것부터.**"
       },
+      "WayOut": {
+        "properties": {
+          "address": {
+            "type": "string",
+            "title": "Address"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "address",
+          "label"
+        ],
+        "title": "WayOut",
+        "description": "축 타입 사이의 한 걸음 길 — 주소와 이름."
+      },
       "WebhookOut": {
         "properties": {
           "id": {
@@ -36194,6 +36595,33 @@
         "title": "WorkspaceUpdateRequest",
         "description": "**안 보낸 것과 비운 것을 구별한다.** None 은 \"안 바꿈\" 이다.\n\n구별하지 않으면 이름만 고칠 때마다 공개 설정이 함께 초기화되고, 그 손실은\n저장한 사람 눈에 안 보인다."
       },
+      "app__extensions__caegroup__schemas__CoverageOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "pairs": {
+            "type": "integer",
+            "title": "Pairs"
+          },
+          "axes": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageAxisOut"
+            },
+            "type": "array",
+            "title": "Axes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "pairs",
+          "axes"
+        ],
+        "title": "CoverageOut",
+        "description": "**평가 완료율** — 평가된 연계 ÷ 전체 연계. 축마다 따로 센다."
+      },
       "app__modules__bundles__routes__RunOut": {
         "properties": {
           "id": {
@@ -36424,6 +36852,253 @@
           "provisional"
         ],
         "title": "ChangeOut"
+      },
+      "app__modules__metrics__recipes__schemas__CoverageOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "levels": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageLevelOut"
+            },
+            "type": "array",
+            "title": "Levels"
+          },
+          "depths": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageDepthOut"
+            },
+            "type": "array",
+            "title": "Depths"
+          },
+          "roots": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageRootOut"
+            },
+            "type": "array",
+            "title": "Roots"
+          },
+          "expected_leaves": {
+            "type": "integer",
+            "title": "Expected Leaves"
+          },
+          "covered_leaves": {
+            "type": "integer",
+            "title": "Covered Leaves"
+          },
+          "gaps": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageGapOut"
+            },
+            "type": "array",
+            "title": "Gaps"
+          },
+          "gaps_total": {
+            "type": "integer",
+            "title": "Gaps Total"
+          },
+          "extras": {
+            "items": {
+              "$ref": "#/components/schemas/CoverageExtraOut"
+            },
+            "type": "array",
+            "title": "Extras"
+          },
+          "extras_total": {
+            "type": "integer",
+            "title": "Extras Total"
+          },
+          "untagged": {
+            "type": "integer",
+            "title": "Untagged"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "levels",
+          "depths",
+          "roots",
+          "expected_leaves",
+          "covered_leaves",
+          "gaps",
+          "gaps_total",
+          "extras",
+          "extras_total",
+          "untagged"
+        ],
+        "title": "CoverageOut",
+        "description": "커버리지 — 「다뤄야 할 축 조합 중 무엇을 다뤘고 무엇이 비었나」."
       },
       "app__modules__metrics__schemas__PointOut": {
         "properties": {

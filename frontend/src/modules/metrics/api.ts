@@ -433,6 +433,11 @@ export const metricsApi = {
    */
   analysis: <T>(slug: string, recipe: string, options: AnalysisOptions, opts: ReadOptions = {}) =>
     api.get<T>(`/metrics/${slug}/analysis/${recipe}${readParams(opts, analysisExtra(options))}`),
+  /** 두 기준의 축 타입 사이의 한 걸음 길 후보 — 커버리지의 길 고르개(ADR 0022). */
+  coverageWays: (slug: string, from: string, to: string) =>
+    api.get<{ address: string; label: string }[]>(
+      `/metrics/${slug}/analysis/coverage/ways?${new URLSearchParams({ from, to })}`,
+    ),
   /** 이 지표에 건 내 경보(ADR 0016). */
   alerts: (slug: string) => api.get<MetricAlert[]>(`/metrics/${slug}/alerts`),
   /** 한 번 돌려 지금 있는 것을 「처음부터 있던 것」 으로 적는다 — 알리지 않는다. */

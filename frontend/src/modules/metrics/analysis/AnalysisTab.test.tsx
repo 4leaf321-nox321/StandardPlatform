@@ -14,6 +14,7 @@ import { decisionText } from '@/modules/metrics/analysis/SprtView'
 import type {
   AssocResult,
   ChangesScanResult,
+  CoverageResult,
   CutinResult,
   ForecastResult,
   GroupsResult,
@@ -23,7 +24,12 @@ import type {
   SprtScanResult,
 } from '@/modules/metrics/analysis/types'
 
-const metricsApi = vi.hoisted(() => ({ analysis: vi.fn(), dims: vi.fn(), createAlert: vi.fn() }))
+const metricsApi = vi.hoisted(() => ({
+  analysis: vi.fn(),
+  dims: vi.fn(),
+  createAlert: vi.fn(),
+  coverageWays: vi.fn(),
+}))
 vi.mock('@/modules/metrics/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/modules/metrics/api')>()),
   metricsApi,
@@ -838,6 +844,67 @@ describe('분석 탭', () => {
       'cases',
       'forecast',
       expect.objectContaining({ horizon: '12' }),
+      expect.anything(),
+    )
+  })
+  it('커버리지는 덜 다룬 값부터, 빈 칸과 기대 밖 조합을 근거와 함께 적는다', async () => {
+    const axis = (name: string, label: string) => ({
+      name, address: `properties.ref_${name}`, label, kind: 'object_ref', multi: true, grain: null,
+    })
+    const metric = {
+      ...METRIC,
+      dims: [axis('model', '모델'), axis('part', '부품'), axis('mechanism', '메커니즘')],
+      analyses: [{ recipe: 'coverage', label: '커버리지', ok: true, reason: null }],
+    } as unknown as Metric
+    const level = (dim: string, label: string, way: string | null) => ({
+      dim, label, type_slug: dim, way, way_label: way ? '이어진 것' : null,
+    })
+    const COVERAGE: CoverageResult = {
+      ...HEADER,
+      recipe: 'coverage',
+      method: '온톨로지의 길로 편 기대 조합 x 셀이 다룬 조합 v1',
+      params: {},
+      run_id: 'r1',
+      caveats: [],
+      excluded: {},
+      visible_share: 1,
+      levels: [level('model', '모델', null), level('part', '부품', 'out.has_part'),
+        level('mechanism', '메커니즘', 'ref.mechanisms')],
+      depths: [
+        { depth: 0, labels: ['모델'], expected: 2, covered: 2 },
+        { depth: 1, labels: ['모델', '부품'], expected: 4, covered: 3 },
+        { depth: 2, labels: ['모델', '부품', '메커니즘'], expected: 5, covered: 2 },
+      ],
+      roots: [
+        { key: 'm2', label: 'M2', expected: 3, covered: 0, share: 0 },
+        { key: 'm1', label: 'M1', expected: 3, covered: 2, share: 0.67 },
+      ],
+      expected_leaves: 5,
+      covered_leaves: 2,
+      gaps: [{ keys: ['m2', 'p2'], labels: ['M2', 'P2'], depth: 1, leaves: 2 }],
+      gaps_total: 1,
+      extras: [{
+        keys: ['m2', 'p3', 'wear'], labels: ['M2', 'P3', '마모'], count: 1,
+        drill: { type_slug: 'report', params: { 'f.ref_mech.eq': 'wear' }, partial: [] },
+      }],
+      extras_total: 1,
+      untagged: 0,
+    }
+    metricsApi.analysis.mockResolvedValue(COVERAGE)
+    metricsApi.coverageWays.mockResolvedValue([{ address: 'out.has_part', label: '부품' }])
+    render(
+      <MemoryRouter>
+        <AnalysisTab metric={metric} read={{ filters: {} }} />
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('M2 / P2')).toBeInTheDocument()
+    expect(screen.getByText('2 / 5')).toBeInTheDocument()
+    expect(screen.getByText('M2 / P3 / 마모')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /1건 보기/ })).toBeInTheDocument()
+    expect(metricsApi.analysis).toHaveBeenLastCalledWith(
+      'cases',
+      'coverage',
+      expect.objectContaining({ levels: 'model,part,mechanism' }),
       expect.anything(),
     )
   })

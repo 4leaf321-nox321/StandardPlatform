@@ -397,6 +397,43 @@ class JoinPlan:
             entity, owner, joins = end.entity, end.resolver, end.joins  # type: ignore[assignment]
         return end
 
+    def reach(self, address: str) -> Reach:
+        """주소가 닿는 **객체 자체** — 칸이 아니라 이어진 객체(커버리지 · 재발이 축에서 축으로
+        걷는다). `properties.<참조 칸>` 은 `ref.<참조 칸>` 과 같고, 끝이 참조 칸이면 한 걸음 더
+        간다(`ref.a.b` = `ref.a.ref.b`). 들어오는 참조(`in.<타입>:<칸>`)로도 끝날 수 있다."""
+        if address.startswith("properties."):
+            address = "ref." + address.split(".", 1)[1]
+        tokens = address.split(".")
+        if len(tokens) == 2 and tokens[0] == "ref":
+            # 자기 참조 칸 하나 — 주소 문법은 이것을 걸음으로 안 받는다(칸 이름으로 쓴다). 참조
+            # 색인으로 바로 잇는다(ADR 0010).
+            hop = self.resolver.hop("ref", tokens[1])
+            if hop is None:
+                raise AppError(
+                    code("OBJECTS", 41), f"없는 참조 칸입니다: {tokens[1]}", status=422
+                )
+            link = aliased(ObjectRef, name=f"{self.prefix}r_link")
+            target = aliased(ObjectInstance, name=f"{self.prefix}r_obj")
+            joins: list[tuple[Any, Any]] = [
+                (link, and_(link.src_id == ObjectInstance.id, link.key == hop.name)),
+                (target, and_(target.id == link.dst_id, target.deleted_at.is_(None))),
+            ]
+            return Reach(cast(target.id, String), target, joins, [hop])
+        chain = self.resolver.parse_chain(address)
+        if chain.field is not None:
+            definition = chain.definition
+            if definition is None or definition.data_type != "object_ref":
+                raise AppError(
+                    code("OBJECTS", 41),
+                    f"「{chain.label}」 은 객체에 닿는 길이 아닙니다 — 참조 칸이나 관계로 "
+                    "끝나야 합니다.",
+                    status=422,
+                )
+            head = address.rsplit(".", 1)[0]
+            chain = self.resolver.parse_chain(f"{head}.ref.{chain.field}")
+        end = self._walk(chain)
+        return Reach(cast(end.entity.id, String), end.entity, end.joins, chain.hops)
+
     def dated(self, address: str) -> bool:
         """이 주소가 날짜 칸인가 — 기간 단위를 걸 수 있나.
 
@@ -523,6 +560,16 @@ def own_axis(
         grain=grain,
         address=address,
     )
+
+
+@dataclass
+class Reach:
+    """걸음 끝의 객체 — id(글자) 식 · 별칭 · 붙일 조인 · 걸음들(마지막 걸음의 상대 타입)."""
+
+    expr: Any
+    entity: Any
+    joins: list[tuple[Any, Any]]
+    hops: list[paths.Hop]
 
 
 @dataclass
