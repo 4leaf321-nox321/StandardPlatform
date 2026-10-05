@@ -94,7 +94,8 @@ def run(
     total = sum(one.count for one in counts(ask, []))
     count = sum(one.count for one in counts(mine, []))
     caveats = common.Caveats()
-    common.overlap_note(built, replace(ask, dims=[dim]), caveats)
+    # 전체(몫의 분모)는 기준을 묶지 않고 세므로 요약하는 기준 자신의 겹침도 든다.
+    common.overlap_note(built, replace(ask, dims=[]), caveats)
     if count < FEW:
         caveats.add(
             "few",

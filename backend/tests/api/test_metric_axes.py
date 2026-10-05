@@ -356,7 +356,7 @@ def test_한_장_요약은_값의_기록_추이_함께_나온_값을_향상도�
     p2 = next(one for one in related["part"]["values"] if one["label"] == "P2")
     assert _listed(client, admin, w["report"], p2["drill"]["params"]) == 1
     codes = {one["code"] for one in found["caveats"]}
-    assert {"few", "association"} <= codes
+    assert {"few", "association", "overlap_counts"} <= codes
     refused = _refused(
         client,
         admin,
