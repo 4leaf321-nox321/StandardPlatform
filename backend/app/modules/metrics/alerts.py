@@ -221,7 +221,10 @@ def _launched(
     measure = spec_module.MetricSpec.model_validate(den.spec).measure
     on = built.spec.denominator.on if built.spec.denominator is not None else []
     filters = {name: value for name, value in ask.filters.items() if name in on}
-    periods, _ = query.read(db, user, den, query.Ask(by=("period",), filters=filters))
+    limit = query.frame_limit()
+    periods, _ = query.read(
+        db, user, den, query.Ask(by=("period",), filters=filters), limit=limit
+    )
     starts = [
         cell.period for cell in periods if cell.period is not None and cell.measure(measure)
     ]
@@ -237,10 +240,10 @@ def _launched(
         }
 
     recent, _ = query.read(
-        db, user, den, query.Ask(dims=[dim], filters=filters, period_from=since)
+        db, user, den, query.Ask(dims=[dim], filters=filters, period_from=since), limit=limit
     )
     earlier, _ = query.read(
-        db, user, den, query.Ask(dims=[dim], filters=filters, period_to=since)
+        db, user, den, query.Ask(dims=[dim], filters=filters, period_to=since), limit=limit
     )
     return sorted(having(recent) - having(earlier))
 

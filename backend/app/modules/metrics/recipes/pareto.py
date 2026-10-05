@@ -322,7 +322,9 @@ def _trend(
     if built.time is None:
         caveats.add("no_time", "시간 칸이 없는 지표라 기간별 추이는 없습니다.", level="info")
         return []
-    cells, truncated = query.read(db, user, metric, replace(ask, dims=[dim], by=("period",)))
+    cells, truncated = query.read(
+        db, user, metric, replace(ask, dims=[dim], by=("period",)), limit=query.frame_limit()
+    )
     if truncated:
         caveats.add(
             "trend_truncated",
@@ -385,7 +387,7 @@ def _compare(
     if built.time is None:
         raise common.refuse(22, "시간 칸이 없는 지표라 두 기간을 견줄 수 없습니다.")
     other = replace(ask, period_from=compare_from, period_to=compare_to)
-    cells, truncated = query.read(db, user, metric, other)
+    cells, truncated = query.read(db, user, metric, other, limit=query.frame_limit())
     if truncated:
         raise common.refuse(
             20,

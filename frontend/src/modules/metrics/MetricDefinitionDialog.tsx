@@ -470,11 +470,11 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
 
         <section className="space-y-2">
           <div className="flex items-center justify-between">
-            <span className="text-sm font-medium">기준 (여섯까지)</span>
+            <span className="text-sm font-medium">기준 (여덟까지)</span>
             <Button
               size="sm"
               variant="outline"
-              disabled={dims.length >= 6}
+              disabled={dims.length >= 8}
               onClick={() => {
                 setDims([...dims, { name: '', address: '', grain: '' }])
                 invalidate()

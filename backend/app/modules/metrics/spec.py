@@ -10,7 +10,7 @@
                  | share — 조건 비율: `share_when` 에 맞는 기록의 몫(분모는 같은 기록 전체)
     time         {address: properties.<날짜 칸>, grain: day|week|month|quarter|year}
     cohort       같은 모양(선택) — 경과(age)는 이 단위. 시간 칸과 단위가 같아야 한다
-    dimensions   [{name, address, grain?}] 6개까지 — 주소는 통계 · 조건과 같다(걸음 셋까지)
+    dimensions   [{name, address, grain?}] 8개까지 — 주소는 통계 · 조건과 같다(걸음 셋까지)
     filters      [{field, op, value}] — 목록 조건과 같은 뜻
     denominator  {metric, on: [기준 이름], time: period|cohort|null, per}
     settle_days  이만큼 지난 기간은 「닫힘」
@@ -27,12 +27,14 @@
 
 from __future__ import annotations
 
+import math
 import re
+import uuid
 from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import Select, and_, case, func, select, text
+from sqlalchemy import Select, and_, case, func, literal, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -52,8 +54,9 @@ from app.shared.errors import AppError, code
 SHARE = "share"
 MEASURES = (*METRICS, SHARE)
 MEASURE_LABELS = {**METRIC_LABELS, SHARE: "조건 비율"}
-#: 기준은 여섯까지. 일곱부터는 셀 수를 짐작할 수 없고, 사람이 그 표를 읽지 못한다.
-MAX_DIMENSIONS = 6
+#: 기준은 여덟까지. 셀 수는 기준의 수가 아니라 **실제 조합**으로 막는다 — 계획은 표본의 조합
+#: 수로 어림하고 계산은 실제 셀 수로 거절한다(ADR 0023). 표는 그중 몇 개만 골라 묶어 읽는다.
+MAX_DIMENSIONS = 8
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 #: 응답에서 셀의 칸 · 집계가 서는 이름 — 기준 이름으로 못 쓴다.
 RESERVED = frozenset(
@@ -81,9 +84,13 @@ DENOMINATOR_TIMES = ("period", "cohort")
 ESTIMATE_SECONDS = 20
 #: 자유 글자 기준의 값이 이보다 많으면 경고 — 셀이 행 수만큼 나온다.
 MANY_VALUES = 1000
-#: 기준마다의 서로 다른 값 수는 이만큼의 **표본**에서 센다. 200만 건을 기준마다 훑으면 계획
-#: 하나에 50초였다(실측) — 어림이 목적이라 표본이면 된다. 행 수는 정확히 센다.
+#: 기준마다의 서로 다른 값 수와 셀 조합은 이만큼의 **표본**에서 센다. 200만 건을 기준마다
+#: 훑으면 계획 하나에 50초였다(실측) — 어림이 목적이라 표본이면 된다. 행 수는 정확히 센다.
+#: 표본은 id(uuid4 — 무작위)의 앞자리로 고른다: 「처음 N 행」 은 시간순으로 쌓인 자료에서 앞
+#: 기간에 쏠린다.
 SAMPLE_ROWS = 200_000
+#: 표본을 겹친 넷(1/8 · 1/4 · 1/2 · 전부)으로 나눠 조합 수가 늘어나는 모양을 맞춘다.
+SAMPLE_LEVELS = 4
 
 
 class TimeAxisIn(BaseModel):
@@ -618,15 +625,110 @@ def _guarded(db: Session, stmt: Select[Any]) -> Any | None:
         raise
 
 
+def sample_cut(rows: int) -> uuid.UUID | None:
+    """표본의 문턱 — id 가 이보다 작은 행이 약 `SAMPLE_ROWS` 개. 행이 그보다 적으면 None
+    (전부)."""
+    if rows <= SAMPLE_ROWS:
+        return None
+    return uuid.UUID(int=int(SAMPLE_ROWS / rows * 2**128))
+
+
+def extrapolate(points: list[tuple[int, int]], total: int, *, scale: float = 1.0) -> int:
+    """(표본의 줄 수, 조합 수) 몇 쌍 → 전체 `total` 줄의 조합 수. 조합은 표본이 커질수록 덜
+    늘어난다 — `d = a · n^b`(헵스 법칙)를 로그에서 최소제곱으로 맞춰 늘린다(b 는 0 ~ 1).
+    표본이 전부면 그 수 그대로. `scale` 은 표본의 줄을 펼친 줄로 바꾸는 비(여러 값 기준)."""
+    found = [(rows * scale, combos) for rows, combos in points if rows > 0 and combos > 0]
+    if not found:
+        return 0
+    last_rows, last = found[-1]
+    if total <= last_rows:
+        return last
+    slope = 1.0
+    if len(found) >= 2 and found[0][0] < last_rows:
+        xs = [math.log(rows) for rows, _ in found]
+        ys = [math.log(combos) for _, combos in found]
+        mx, my = sum(xs) / len(xs), sum(ys) / len(ys)
+        spread = sum((x - mx) ** 2 for x in xs)
+        if spread > 0:
+            slope = sum((x - mx) * (y - my) for x, y in zip(xs, ys, strict=True)) / spread
+    slope = min(max(slope, 0.0), 1.0)
+    return min(total, math.ceil(last * math.pow(total / last_rows, slope)))
+
+
+def _combos(db: Session, built: Built, cut: uuid.UUID | None) -> list[tuple[int, int]] | None:
+    """표본에서 (줄 수, 셀 조합 수)를 겹친 표본마다 — 1/8 · 1/4 · 1/2 · 전부. 방문 기준은 창
+    함수를 표본마다 돌리지 않고 가짓수를 곱한다(어림이 크게 나올 뿐이다). 시간 상한을 넘기면
+    None."""
+    keys: list[Any] = [ObjectInstance.owner_workspace_id]
+    if built.time is not None:
+        keys.append(built.time.expr)
+    if built.cohort is not None:
+        keys.append(built.cohort.expr)
+    joining: list[axes.Axis] = []
+    fixed = 1
+    for dim in built.dims:
+        if dim.address in visits_module.ADDRESSES:
+            fixed *= visits_module.CARDINALITY[dim.address] + 1
+            continue
+        keys.append(dim.axis.expr)
+        joining.append(dim.axis)
+    if cut is None:
+        level: Any = literal(SAMPLE_LEVELS - 1)
+    else:
+        whens = [
+            (ObjectInstance.id < uuid.UUID(int=cut.int >> (SAMPLE_LEVELS - 1 - step)), step)
+            for step in range(SAMPLE_LEVELS - 1)
+        ]
+        level = case(*whens, else_=SAMPLE_LEVELS - 1)
+    labelled = [one.label(f"k{index}") for index, one in enumerate(keys)]
+    stmt = (
+        select(*labelled, level.label("lv"), func.count().label("n"))
+        .select_from(ObjectInstance)
+        .where(ObjectInstance.type_id == built.source.id, ObjectInstance.deleted_at.is_(None))
+    )
+    if joining:
+        stmt = axes.joined(stmt, *joining)
+    stmt = conditions.apply(stmt, built.scope.defs, built.conds, built.plan.resolver)
+    if cut is not None:
+        stmt = stmt.where(ObjectInstance.id < cut)
+    cells = stmt.group_by(*keys, level).cte("est_cells")
+    first = (
+        select(func.min(cells.c.lv).label("lv"))
+        .group_by(*(cells.c[f"k{index}"] for index in range(len(keys))))
+        .subquery("est_first")
+    )
+    rows_by = select(cells.c.lv, func.sum(cells.c.n)).group_by(cells.c.lv)
+    combos_by = select(first.c.lv, func.count()).group_by(first.c.lv)
+    try:
+        with db.begin_nested():
+            db.execute(text(f"SET LOCAL statement_timeout = {ESTIMATE_SECONDS * 1000}"))
+            rows = {int(lv): int(n) for lv, n in db.execute(rows_by)}
+            combos = {int(lv): int(n) for lv, n in db.execute(combos_by)}
+    except OperationalError as caught:
+        if getattr(caught.orig, "sqlstate", None) == "57014":  # query_canceled
+            return None
+        raise
+    out: list[tuple[int, int]] = []
+    seen_rows = seen_combos = 0
+    for step in range(SAMPLE_LEVELS):
+        seen_rows += rows.get(step, 0)
+        seen_combos += combos.get(step, 0)
+        if seen_rows:
+            out.append((seen_rows, seen_combos * fixed))
+    return out
+
+
 def _estimate(db: Session, built: Built, out: Plan) -> None:
     """셀 수 어림 — 행 수와 기준마다의 서로 다른 값 수. **상한을 넘기면 거절한다.**"""
     settings = get_settings()
     out.rows = count_of(db, built.base())
 
-    sampled = out.rows > SAMPLE_ROWS
+    cut = sample_cut(out.rows)
+    sampled = cut is not None
     if sampled:
         out.warnings.append(
-            f"기준의 값 수는 {SAMPLE_ROWS:,}건 표본에서 어림했습니다 — 셀 수도 어림입니다."
+            f"기준의 값 수와 셀 조합은 약 {SAMPLE_ROWS:,}건의 무작위 표본에서 어림했습니다 — "
+            "셀 수도 어림입니다(계산이 실제 셀 수로 다시 막는다)."
         )
 
     def counted(*columns: Any, axis: axes.Axis | None = None, extra: Any = ()) -> Any | None:
@@ -641,8 +743,8 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
         if joining:
             stmt = axes.joined(stmt, *joining)
         stmt = conditions.apply(stmt, built.scope.defs, built.conds, built.plan.resolver)
-        if sampled:
-            stmt = stmt.where(ObjectInstance.id.in_(built.base().limit(SAMPLE_ROWS)))
+        if cut is not None:
+            stmt = stmt.where(ObjectInstance.id < cut)
         return _guarded(db, stmt)
 
     product = 1
@@ -695,6 +797,10 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
     # 셀은 (펼친) 기록 줄보다 많을 수 없다. 여러 값 기준(또는 여럿과 이어진 걸음)은 한 기록이
     # 여러 줄로 펼쳐지므로 펼친 줄 수를 표본에서 세어 상한으로 쓴다 — 곱만 쓰면 기본 모델 x
     # 부품 x 월이 4억 셀로 어림됐다(실측, 실제 펼친 줄은 300만).
+    seen = out.rows
+    if sampled:
+        found = counted(func.count())
+        seen = int(found[0]) if found is not None else min(out.rows, SAMPLE_ROWS)
     expanded = out.rows
     multi = [one.axis for one in built.dims if one.axis.multi]
     if multi:
@@ -702,9 +808,16 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
         if found is None:
             unknown = True
         else:
-            seen = min(out.rows, SAMPLE_ROWS) if sampled else out.rows
             expanded = round(int(found[0]) * out.rows / max(seen, 1))
     estimated = min(product, expanded)
+    # 실제 조합 — 표본에서 셀(부서 · 기간 · 코호트 · 기준 값들)을 세어 늘린다. 곱은 값끼리 함께
+    # 나오지 않는 것까지 세어 자료가 크면 늘 기록 수가 되고, 그러면 실제 셀이 적어도 거절했다.
+    combos = _combos(db, built, cut)
+    if combos is None:
+        unknown = True
+    else:
+        rate = expanded / max(out.rows, 1)
+        estimated = min(estimated, extrapolate(combos, expanded, scale=rate))
     if built.stay is not None:
         # 머무는 기간 — 셀마다 N기간까지 펼친다(계산 시점 뒤의 미래는 안 만들어 이보다 적다).
         estimated *= built.stay.periods

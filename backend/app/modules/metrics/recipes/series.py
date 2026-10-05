@@ -386,7 +386,7 @@ def _share_totals(
             part = replace(part, cohort_from=lo, cohort_to=hi)
         else:
             part = replace(part, period_from=lo, period_to=hi)
-        return query.read(db, user, metric, part)
+        return query.read(db, user, metric, part, limit=query.frame_limit())
 
     closed, cut_short = span(start, min(closed_to, stop) if stop else closed_to)
     opened, open_short = (

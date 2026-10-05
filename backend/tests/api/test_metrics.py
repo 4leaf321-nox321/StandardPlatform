@@ -305,15 +305,15 @@ def test_계획이_거절_사유를_모아_말한다(client: TestClient, admin: 
     )
     assert denied.status_code == 422
     assert "예약어" in denied.json()["error"]["message"]
-    # 기준 일곱 — 모양부터 막는다.
-    seven = {
+    # 기준 아홉 — 모양부터 막는다(여덟까지, ADR 0023).
+    nine = {
         "measure": "count",
-        "dimensions": [{"name": f"d{i}", "address": "properties.factory"} for i in range(7)],
+        "dimensions": [{"name": f"d{i}", "address": "properties.factory"} for i in range(9)],
     }
     assert (
         client.post(
             "/api/metrics/plan",
-            json={"source_type_slug": w["case"], "spec": seven},
+            json={"source_type_slug": w["case"], "spec": nine},
             headers=admin.headers,
         ).status_code
         == 422

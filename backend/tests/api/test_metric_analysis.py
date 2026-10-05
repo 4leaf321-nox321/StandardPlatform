@@ -145,7 +145,7 @@ def test_셀이_상한에서_잘리면_거절한다(
 
     w = _world(client, admin)
     _, cases = _two(client, admin, w)
-    monkeypatch.setattr(get_settings(), "metrics_max_read_cells", 1)
+    monkeypatch.setattr(get_settings(), "metrics_max_frame_cells", 1)
     refused = _refused(client, admin, cases["slug"], "pareto", dim="symptom")
     assert refused["code"].endswith("METRICS-0020") and "잘렸습니다" in refused["message"]
 

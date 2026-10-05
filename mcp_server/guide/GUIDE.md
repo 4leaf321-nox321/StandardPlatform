@@ -1049,7 +1049,7 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 쓰면 판매가 쌓이는 만큼 늘어 변화점이 신모델 출시 때 선다**(실측). 이 지표를 분모로 둔
 비율(`denominator.time="period"`)로 묻는다.
 
-**정의할 때.** 시간 칸 · 코호트 칸은 **자기 타입의 날짜 칸**이어야 하고, 기준은 여섯까지, 분모의
+**정의할 때.** 시간 칸 · 코호트 칸은 **자기 타입의 날짜 칸**이어야 하고, 기준은 여덟까지, 분모의
 `on` 은 양쪽에 같은 이름 · 같은 값 종류(같은 타입을 가리키는 참조, 같은 종류의 칸)여야 한다.
 자유 글자 칸을 기준으로 두면 셀이 행 수만큼 나온다 — 계획의 경고를 그대로 전한다. 이름 붙인
 기준의 주소는 `objects_summary` 의 `group_by` 와 같다(`ref.model.ref.base.series` 처럼 걸음 셋까지 — 끝은
@@ -1065,10 +1065,11 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 | 판매월 코호트 누적 인입률 | 판매 집계 — `sum` 대수 · time 판매월(month) · 기준 `base_model` | `count` · time 접수일(month) · cohort 판매일(month) · 기준 `base_model`(+ 증상) · denominator `{"on": ["base_model"], "time": "cohort", "per": 100}` | `shape="cohort", cumulative=true` — 행의 `denominator` 가 그 달 판매 대수, 셀의 `ratio` 가 누적 인입률(%) |
 | 생산월 x 공장 — 천 대당 | 생산 집계 — `sum` 대수 · time 생산월 · 기준 `base_model` · `factory` | `count` · time 접수일 · cohort 생산일 · 기준 `base_model` · `factory` · denominator `{"on": ["base_model", "factory"], "time": "cohort", "per": 1000}` | `shape="table", dims=["factory"], by=["cohort"]` |
 | 보증 중 1,000대당 접수(접수월 추이 · 계절 · 변화점) | 판매 집계 — `sum` 대수 · time 판매월 · 기준 `base_model` · `country` · **`stay` `{"periods": 24, "periods_from": "ref.country.warranty_months"}`** | `count` · time 접수일(month) · 기준 `base_model` · `country`(+ 대분류 · 불량 코드) · 거르기 보증 내 · denominator `{"on": ["base_model", "country"], "time": "period", "per": 1000}` | `metric_analyze(recipe="changes", options={"axis": "period"})` · `shape="series"` |
-| 부품 교체 집중도 | 판매 집계(위) | `count` · time 접수일(**quarter**) · 기준 `part`(교체 부품 — 여러 값 참조) · denominator `{"on": [], "time": null, "per": 1000}` | `shape="table", dims=["part"]` — **겹침**: 한 건이 부품 여럿이라 합이 건수보다 크다. 기본 모델 x 부품 x 월은 200만 건에서 셀 350만으로 상한을 넘는다 — 기본 모델별로 보려면 기간을 빼거나 거른다 |
+| 부품 교체 집중도 | 판매 집계(위) | `count` · time 접수일(**quarter**) · 기준 `part`(교체 부품 — 여러 값 참조) · denominator `{"on": [], "time": null, "per": 1000}` | `shape="table", dims=["part"]` — **겹침**: 한 건이 부품 여럿이라 합이 건수보다 크다. 기본 모델 x 부품 x 월처럼 잘게 나누면 셀이 많다 — 계획의 어림(`estimated_cells`)이 상한(1,000만)에 가까우면 기간을 빼거나 거른다 |
 
 - 분모 표(판매 · 생산)의 월은 날짜 칸이다 — 「2026-09」 처럼 연월만 적힌 값은 그 달 1일로 들어간다.
 - 비율이 비면 `denominator.missing` — 분모 표에 그 달 · 그 기본 모델 줄이 없는 것이다. 지어내지
   않고 그렇게 말한다.
 - 기준 하나에 값이 수천 가지면(기본 모델 2,000개 x 코호트 50개) 표 한 번이 상한(2만 셀)에서
-  잘린다 — 기본 모델로 거르고(`filters`) 다시 묻는다.
+  잘린다 — 기본 모델로 거르고(`filters`) 다시 묻는다. 분석(`metric_analyze`)은 계산하려고 20만
+  셀까지 받는다 — 표로 셀을 받아 직접 계산하지 말고 분석으로 묻는다.

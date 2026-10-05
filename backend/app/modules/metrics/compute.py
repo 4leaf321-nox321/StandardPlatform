@@ -76,6 +76,7 @@ def statement(
     run_id: uuid.UUID,
     cutoff: date | None = None,
     until: date | None = None,
+    cap: int | None = None,
 ) -> Insert:
     """`INSERT INTO metric_values … SELECT … GROUP BY`.
 
@@ -85,7 +86,8 @@ def statement(
 
     `cutoff` 는 방문 기준의 닫힘선(워터마크 - 닫힘 일수) — 재방문 창이 이것을 넘으면 「아직
     열림」 이다. `until` 은 머무는 기간의 미래 자르기(워터마크 날짜) — 그 날 뒤에 시작하는
-    기간은 만들지 않는다.
+    기간은 만들지 않는다. `cap` 이 있으면 셀을 그 수 + 1 개까지만 넣는다 — 상한을 넘는 계산을
+    끝까지 쓰고 나서 버리지 않게(넘었는지는 넣은 수로 안다).
     """
     value = built.value
     ws = ObjectInstance.owner_workspace_id
@@ -184,6 +186,8 @@ def statement(
         outer = outer.params({visits_module.CUTOFF: cutoff})
     if stay is not None and until is not None:
         outer = outer.params({stay_module.UNTIL: until})
+    if cap is not None:
+        outer = outer.limit(cap + 1)
     return insert(MetricValue).from_select(
         [
             MetricValue.metric_id,
@@ -294,7 +298,11 @@ def run_one(
     # 읽기의 닫힘(`query.closed_before`)과 같은 선 — 방문의 「아직 열림」 이 그것을 따른다.
     seen = (watermark or datetime.now(UTC)).astimezone(UTC).date()
     cutoff = seen - timedelta(days=built.spec.settle_days)
-    db.execute(statement(built, metric_id=metric.id, run_id=run.id, cutoff=cutoff, until=seen))
+    cap = get_settings().metrics_max_cells
+    insert = statement(
+        built, metric_id=metric.id, run_id=run.id, cutoff=cutoff, until=seen, cap=cap
+    )
+    db.execute(insert)
 
     mine = (MetricValue.metric_id == metric.id, MetricValue.run_id == run.id)
     totals = db.execute(
@@ -307,6 +315,15 @@ def run_one(
         ).where(*mine)
     ).one()
     cells = int(totals[0])
+    if cells > cap:
+        # 계획의 어림은 표본이라 틀릴 수 있다 — 진짜 상한은 여기다. 넣은 것은 호출자가 되돌리고
+        # 옛 값이 남는다.
+        raise AppError(
+            code("METRICS", 12),
+            f"셀이 상한 {cap:,}개를 넘었습니다 — 이번 계산을 버리고 옛 값을 둡니다. 기준을 "
+            "줄이거나 거르기를 더합니다.",
+            status=422,
+        )
     stats = {
         "unbucketed": int(totals[2]) if built.time is not None else 0,
         "unbucketed_cohort": int(totals[3]) if built.cohort is not None else 0,

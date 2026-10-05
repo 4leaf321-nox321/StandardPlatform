@@ -22783,7 +22783,7 @@
               "type": "string"
             },
             "type": "array",
-            "maxItems": 6,
+            "maxItems": 8,
             "title": "On"
           },
           "time": {
@@ -27231,7 +27231,7 @@
               "$ref": "#/components/schemas/DimensionIn"
             },
             "type": "array",
-            "maxItems": 6,
+            "maxItems": 8,
             "title": "Dimensions"
           },
           "filters": {

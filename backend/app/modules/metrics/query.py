@@ -1,8 +1,9 @@
 """읽기 — **셀 위에서** 비율 · 누적 · 비교 · 건 보기.
 
-저장된 것은 기초 집계뿐이다. 분모 결합 · 경과 누적 · 전기 · 전년 동기는 상한(설정
-`metrics_max_read_cells`) 안의 셀을 받은 뒤 Python 에서 낸다 — 셀은 기록보다 수백 배 적고,
-동적 창 함수 SQL 보다 단순하며 시험이 쉽다.
+저장된 것은 기초 집계뿐이다. 분모 결합 · 경과 누적 · 전기 · 전년 동기는 상한 안의 셀을 받은 뒤
+Python 에서 낸다 — 셀은 기록보다 수백 배 적고, 동적 창 함수 SQL 보다 단순하며 시험이 쉽다.
+상한은 둘이다: 화면에 돌려주는 읽기(`metrics_max_read_cells`)와 분석이 계산하려고 받는 읽기
+(`metrics_max_frame_cells`, `frame`).
 
 ## 한 문장 = 한 스냅샷
 
@@ -45,8 +46,8 @@ from app.shared.permissions import visible_owner_clause
 
 #: 추이에서 세부 기준의 선 수 상한 — 그보다 많으면 색이 겹쳐 못 읽는다.
 MAX_LINES = 24
-#: 기준 값의 이름을 한 번에 푸는 상한.
-MAX_LABELS = 5000
+#: 기준 값의 이름을 한 번에 푸는 상한 — 분석이 받는 셀(20만)의 값이 다 이름을 갖게.
+MAX_LABELS = 50_000
 #: 기준 값 목록(`/dims`)의 상한.
 MAX_DIM_VALUES = 200
 #: 셀의 진짜 칸 — 요청의 `by` 가 고른다.
@@ -205,9 +206,18 @@ def _statement(user: User, metric: MetricDef, ask: Ask) -> Select[Any]:
     return stmt
 
 
-def read(db: Session, user: User, metric: MetricDef, ask: Ask) -> tuple[list[Cell], bool]:
-    """보이는 셀을 요청한 축으로 묶어 — (셀들, 잘렸나)."""
-    limit = get_settings().metrics_max_read_cells
+def frame_limit() -> int:
+    """분석이 계산하려고 받는 셀 상한 — 화면 읽기의 것보다 크다(`metrics_max_frame_cells`)."""
+    return get_settings().metrics_max_frame_cells
+
+
+def read(
+    db: Session, user: User, metric: MetricDef, ask: Ask, *, limit: int | None = None
+) -> tuple[list[Cell], bool]:
+    """보이는 셀을 요청한 축으로 묶어 — (셀들, 잘렸나). 상한은 화면 읽기의 것, 분석은 `frame`
+    이 더 큰 것을 준다."""
+    if limit is None:
+        limit = get_settings().metrics_max_read_cells
     rows = db.execute(_statement(user, metric, ask).limit(limit + 1)).all()
     truncated = len(rows) > limit
     cells: list[Cell] = []
@@ -303,7 +313,13 @@ class Denominator:
 
 
 def read_denominator(
-    db: Session, user: User, metric: MetricDef, built: spec_module.Built, ask: Ask
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    built: spec_module.Built,
+    ask: Ask,
+    *,
+    limit: int | None = None,
 ) -> Denominator | None:
     """분모 지표를 **같은 함수로 두 번째 질의** — 묶음은 `on` 중 이번에 요청한 기준과
     시간축 규칙으로. 분자에만 있는 기준은 펼쳐진다(키에 없으므로 같은 값이 든다)."""
@@ -333,7 +349,7 @@ def read_denominator(
         period_from=period_from,
         period_to=period_to,
     )
-    cells, truncated = read(db, user, den, den_ask)
+    cells, truncated = read(db, user, den, den_ask, limit=limit)
     values: dict[tuple[tuple[str | None, ...], date | None], float | None] = {}
     for cell in cells:
         key = (tuple(cell.dims.get(name) for name in on), cell.period if time else None)
@@ -487,7 +503,7 @@ def paired_totals(
         .select_from(num.join(paired, same, full=True))
         .group_by(key)
     )
-    limit = get_settings().metrics_max_read_cells
+    limit = frame_limit()
     rows = db.execute(stmt.limit(limit + 1)).all()
     out = [
         Paired(
@@ -527,8 +543,13 @@ def frame(
     with_denominator: bool = True,
 ) -> Frame:
     check_ask(built, ask)
-    cells, truncated = read(db, user, metric, ask)
-    den = read_denominator(db, user, metric, built, ask) if with_denominator else None
+    limit = frame_limit()
+    cells, truncated = read(db, user, metric, ask, limit=limit)
+    den = (
+        read_denominator(db, user, metric, built, ask, limit=limit)
+        if with_denominator
+        else None
+    )
     run = current_run(db, metric)
     return Frame(cells, truncated, den, run, closed_before(run, built.spec.settle_days))
 

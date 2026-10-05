@@ -28,6 +28,7 @@ from app.modules.objects.schemas import ObjectOut
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared import system_sources
+from app.shared.batches import chunks
 from app.shared.errors import Conflict, code
 from app.shared.permissions import visible_owner_clause
 from app.shared.system_sources import SystemRef, SystemSource
@@ -138,8 +139,10 @@ def ref_labels(
         else:
             # 상대 타입을 모르는(정의가 비었거나 지워진) 참조도 객체 표에서 찾아 본다.
             plain.update(ids)
-    if plain:
-        for row in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(plain))):
+    # 이름만 — 분석이 기준 값 수만 개의 이름을 풀 때 속성까지 끌어오면 무겁다. 나눠 묻는다.
+    columns = (ObjectInstance.id, ObjectInstance.label, ObjectInstance.deleted_at)
+    for part in chunks(sorted(plain)):
+        for row in db.execute(select(*columns).where(ObjectInstance.id.in_(part))):
             out[row.id] = row.label if row.deleted_at is None else f"{row.label} (지워짐)"
     return out
 
