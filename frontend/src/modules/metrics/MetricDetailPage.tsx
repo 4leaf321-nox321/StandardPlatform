@@ -85,6 +85,12 @@ function HeaderLine({ header }: { header: ReadHeader }) {
   )
   if (header.stale) parts.push('오래됨 — 세 주기가 지나도록 안 셌습니다')
   if (header.settle_days > 0) parts.push(`닫힌 기간: ${header.settle_days}일 지난 것`)
+  if (header.stay)
+    parts.push(
+      header.stay.periods_from_label
+        ? `기간마다 최근 ${header.stay.periods_from_label}만큼(최대 ${header.stay.periods}기간)의 합`
+        : `기간마다 최근 ${header.stay.periods}기간의 합`,
+    )
   if (header.overlap) parts.push('겹침 — 한 기록이 여러 셀에 듭니다')
   if (header.unbucketed > 0)
     parts.push(`날짜가 없거나 못 읽은 기록 ${shownNumber(header.unbucketed)}건`)

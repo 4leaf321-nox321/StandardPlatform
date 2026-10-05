@@ -16950,6 +16950,16 @@
               }
             ]
           },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -19039,6 +19049,16 @@
               }
             ]
           },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -19535,6 +19555,16 @@
               }
             ]
           },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -19850,6 +19880,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
               },
               {
                 "type": "null"
@@ -20208,6 +20248,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
               },
               {
                 "type": "null"
@@ -21503,6 +21553,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
               },
               {
                 "type": "null"
@@ -23559,6 +23619,16 @@
               }
             ]
           },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -24168,6 +24238,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
               },
               {
                 "type": "null"
@@ -25622,6 +25702,16 @@
               }
             ]
           },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -26284,6 +26374,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
               },
               {
                 "type": "null"
@@ -27163,6 +27263,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/VisitsIn"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayIn"
               },
               {
                 "type": "null"
@@ -29764,6 +29874,16 @@
               }
             ]
           },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -30650,6 +30770,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
               },
               {
                 "type": "null"
@@ -31965,6 +32095,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
               },
               {
                 "type": "null"
@@ -34376,6 +34516,16 @@
               }
             ]
           },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "split": {
             "anyOf": [
               {
@@ -35187,6 +35337,16 @@
               }
             ]
           },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -35699,6 +35859,16 @@
               }
             ]
           },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
           "recipe": {
             "type": "string",
             "title": "Recipe"
@@ -36124,6 +36294,72 @@
         ],
         "title": "StaffSummaryOut"
       },
+      "StayIn": {
+        "properties": {
+          "periods": {
+            "type": "integer",
+            "maximum": 120.0,
+            "minimum": 1.0,
+            "title": "Periods"
+          },
+          "periods_from": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periods From"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "periods"
+        ],
+        "title": "StayIn"
+      },
+      "StayOut": {
+        "properties": {
+          "periods": {
+            "type": "integer",
+            "title": "Periods"
+          },
+          "periods_from": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periods From"
+          },
+          "periods_from_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periods From Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "periods",
+          "periods_from",
+          "periods_from_label"
+        ],
+        "title": "StayOut",
+        "description": "머무는 기간 — 기간마다의 값이 최근 `periods` 기간의 합이다(ADR 0023)."
+      },
       "SubgraphOut": {
         "properties": {
           "nodes": {
@@ -36439,6 +36675,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
               },
               {
                 "type": "null"
@@ -38367,6 +38613,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stay": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/StayOut"
               },
               {
                 "type": "null"

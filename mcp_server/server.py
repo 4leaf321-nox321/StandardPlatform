@@ -2531,6 +2531,11 @@ async def metric_define(
         방문. 있으면 기준 주소로 `visit.number`(시리얼마다 날짜순 차례 1 · 2 · 3 · 4+)와
         `visit.repeat`(그 뒤 within_days 안에 다시 왔나 — yes · no · open)를 쓸 수 있다.
         재방문 위험 요인(`metric_analyze(recipe="logit")`)과 첫 방문 수명이 이것을 쓴다
+      - `stay`: `{"periods": 24, "periods_from": "ref.country.warranty_months"}`(선택) —
+        머무는 기간. 기록을 그 기간부터 N기간 동안 센다(기간마다 최근 N기간의 합). 판매
+        집계에 두면 「보증 중 대수」 — 접수월 인입률의 분모(`denominator.time="period"`).
+        `periods_from` 은 기록마다 기간 수를 읽을 숫자 칸(비면 · 넘으면 `periods`). 코호트 ·
+        방문과 함께 못 둔다
 
     계획은 **오류 전부** · 경고 · 거르기를 통과한 기록 수 · 어림한 셀 수 · 기준의 종류를
     돌려준다 — 그것을 사람에게 보여 주고 판단을 받는다. 같은 slug 가 이미 있으면 그 정의를

@@ -33,12 +33,14 @@ from sqlalchemy import (
     Insert,
     Integer,
     String,
+    and_,
     cast,
     delete,
     func,
     insert,
     literal,
     null,
+    or_,
     select,
     text,
 )
@@ -49,6 +51,7 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.modules.coreapi import services as coreapi_services
 from app.modules.metrics import spec as spec_module
+from app.modules.metrics import stay as stay_module
 from app.modules.metrics import visits as visits_module
 from app.modules.metrics.models import MetricDef, MetricRun, MetricValue
 from app.modules.objects import axes, conditions
@@ -72,6 +75,7 @@ def statement(
     metric_id: uuid.UUID,
     run_id: uuid.UUID,
     cutoff: date | None = None,
+    until: date | None = None,
 ) -> Insert:
     """`INSERT INTO metric_values … SELECT … GROUP BY`.
 
@@ -80,7 +84,8 @@ def statement(
     NULL 은 text 가 되어 date 열에 못 들어간다.
 
     `cutoff` 는 방문 기준의 닫힘선(워터마크 - 닫힘 일수) — 재방문 창이 이것을 넘으면 「아직
-    열림」 이다.
+    열림」 이다. `until` 은 머무는 기간의 미래 자르기(워터마크 날짜) — 그 날 뒤에 시작하는
+    기간은 만들지 않는다.
     """
     value = built.value
     ws = ObjectInstance.owner_workspace_id
@@ -95,6 +100,11 @@ def statement(
     for index, dim in enumerate(built.dims):
         columns.append(dim.axis.expr.label(f"d{index}"))
         group.append(dim.axis.expr)
+    stay = built.stay
+    if stay is not None:
+        length = stay_module.length(stay)
+        columns.append(length.label("w"))
+        group.append(length)
     if value is None:
         measures: list[Any] = [
             func.count().label("n"),
@@ -116,9 +126,15 @@ def statement(
         .select_from(ObjectInstance)
         .where(ObjectInstance.type_id == built.source.id, ObjectInstance.deleted_at.is_(None))
     )
-    inner = axes.joined(inner, *[one.axis for one in built.dims])
+    joining = [one.axis for one in built.dims]
+    if stay is not None and stay.source is not None:
+        joining.append(stay.source)
+    inner = axes.joined(inner, *joining)
     inner = conditions.apply(inner, built.scope.defs, built.conds, built.plan.resolver)
     grouped = inner.group_by(*group).subquery("g")
+    if stay is not None:
+        assert built.time is not None
+        grouped = _spread(grouped, len(built.dims), built.time.grain, stay)
 
     if built.dims:
         pairs = chain.from_iterable(
@@ -166,6 +182,8 @@ def statement(
     )
     if built.visits is not None and cutoff is not None:
         outer = outer.params({visits_module.CUTOFF: cutoff})
+    if stay is not None and until is not None:
+        outer = outer.params({stay_module.UNTIL: until})
     return insert(MetricValue).from_select(
         [
             MetricValue.metric_id,
@@ -183,6 +201,53 @@ def statement(
             MetricValue.max,
         ],
         outer,
+    )
+
+
+def _spread(grouped: Any, dims: int, grain: str, stay: stay_module.Stay) -> Any:
+    """머무는 기간 — 묶은 셀을 0 ~ w-1 기간 뒤로 펼쳐 다시 묶는다. 날짜를 못 읽은 셀(기간
+    NULL)은 펼치지 않고, 계산 시점의 기간을 넘는 미래는 만들지 않는다."""
+    # FROM 안의 함수는 앞 표(g)의 칸을 그냥 본다 — LATERAL 이 필요 없다. 열 이름은 붙여야
+    # 한다(`AS stay_steps(k)`) — 안 붙이면 열이 함수 별칭 이름이 된다.
+    steps = (
+        func.generate_series(0, grouped.c.w - 1)
+        .table_valued("k")
+        .render_derived(name="stay_steps")
+    )
+    period = stay_module.shifted(grouped.c.period, steps.c.k, grain)
+    keys = [grouped.c.ws, grouped.c.cohort, *(grouped.c[f"d{i}"] for i in range(dims))]
+    spread = (
+        select(
+            *keys,
+            period.label("period"),
+            grouped.c.n,
+            grouped.c.vn,
+            grouped.c.vs,
+            grouped.c.vmin,
+            grouped.c.vmax,
+        )
+        .select_from(grouped.join(steps, literal(True)))
+        .where(
+            or_(
+                and_(grouped.c.period.is_not(None), period <= stay.until),
+                and_(grouped.c.period.is_(None), steps.c.k == 0),
+            )
+        )
+        .subquery("sp")
+    )
+    regrouped = [spread.c.ws, spread.c.period, spread.c.cohort]
+    regrouped.extend(spread.c[f"d{i}"] for i in range(dims))
+    return (
+        select(
+            *regrouped,
+            func.sum(spread.c.n).label("n"),
+            func.sum(spread.c.vn).label("vn"),
+            func.sum(spread.c.vs).label("vs"),
+            func.min(spread.c.vmin).label("vmin"),
+            func.max(spread.c.vmax).label("vmax"),
+        )
+        .group_by(*regrouped)
+        .subquery("g")
     )
 
 
@@ -229,7 +294,7 @@ def run_one(
     # 읽기의 닫힘(`query.closed_before`)과 같은 선 — 방문의 「아직 열림」 이 그것을 따른다.
     seen = (watermark or datetime.now(UTC)).astimezone(UTC).date()
     cutoff = seen - timedelta(days=built.spec.settle_days)
-    db.execute(statement(built, metric_id=metric.id, run_id=run.id, cutoff=cutoff))
+    db.execute(statement(built, metric_id=metric.id, run_id=run.id, cutoff=cutoff, until=seen))
 
     mine = (MetricValue.metric_id == metric.id, MetricValue.run_id == run.id)
     totals = db.execute(

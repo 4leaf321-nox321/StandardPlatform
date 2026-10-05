@@ -57,6 +57,11 @@ export interface MetricSpec {
    * 재방문)를 쓸 수 있다(ADR 0014).
    */
   visits?: { key: string; within_days: number } | null
+  /**
+   * 머무는 기간 — 기록을 그 기간부터 `periods` 기간 동안 센다(기간마다 최근 N기간의 합,
+   * ADR 0023). `periods_from` 은 기록마다 기간 수를 읽을 숫자 칸(최대는 `periods`).
+   */
+  stay?: { periods: number; periods_from?: string | null } | null
 }
 
 export interface MetricDim {
@@ -196,6 +201,8 @@ export interface ReadHeader {
   negative_age: number
   truncated: boolean
   denominator: DenominatorInfo | null
+  /** 머무는 기간 — 기간마다의 값이 최근 `periods` 기간의 합(ADR 0023). */
+  stay?: { periods: number; periods_from: string | null; periods_from_label: string | null } | null
 }
 
 export interface MetricCell {

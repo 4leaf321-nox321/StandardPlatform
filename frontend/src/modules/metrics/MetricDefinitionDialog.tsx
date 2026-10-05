@@ -117,6 +117,9 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
   const [settleDays, setSettleDays] = useState(String(spec0?.settle_days ?? 0))
   const [visitKey, setVisitKey] = useState(spec0?.visits?.key ?? '')
   const [visitDays, setVisitDays] = useState(String(spec0?.visits?.within_days ?? 90))
+  // 머무는 기간 — 비우면 없음. 판매 대수를 보증 기간 동안 세면 「보증 중 대수」.
+  const [stayPeriods, setStayPeriods] = useState(String(spec0?.stay?.periods ?? ''))
+  const [stayFrom, setStayFrom] = useState(spec0?.stay?.periods_from ?? '')
   const [intervalHours, setIntervalHours] = useState(String(existing?.interval_hours ?? 24))
   const [plan, setPlan] = useState<MetricPlan | null>(null)
   const [busy, setBusy] = useState<'plan' | 'save' | null>(null)
@@ -150,6 +153,13 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
     () => (source ? objectApi.fields(source) : Promise.resolve([])),
     [source],
   )
+  // 머무는 기간 수를 읽을 칸 — 자기 숫자 칸이나 참조 너머의 숫자 칸(국가의 보증 기간).
+  const stayFromOptions = [
+    ...numberDefs.map((one) => ({ value: `properties.${one.key}`, label: one.label })),
+    ...(linked.data ?? [])
+      .filter((one) => one.data_type === 'number' && !one.multi)
+      .map((one) => ({ value: one.field, label: one.label })),
+  ]
   // 시간 칸이 비었으면 첫 날짜 칸 — 정의의 대부분이 시간을 갖는다.
   useEffect(() => {
     if (!timeAddress && dateDefs.length > 0 && !existing) {
@@ -210,6 +220,10 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
       visits:
         visitKey && timeAddress
           ? { key: visitKey, within_days: Number(visitDays) || 90 }
+          : null,
+      stay:
+        Number(stayPeriods) > 0 && timeAddress
+          ? { periods: Number(stayPeriods), periods_from: stayFrom || null }
           : null,
     }
   }
@@ -698,6 +712,54 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
                   invalidate()
                 }}
               />
+            </div>
+          )}
+          <div className="space-y-1">
+            <Label htmlFor="metric-stay">머무는 기간 — 기간 수 (선택)</Label>
+            <Input
+              id="metric-stay"
+              type="number"
+              min={1}
+              max={120}
+              placeholder="없음"
+              disabled={!timeAddress}
+              value={stayPeriods}
+              onChange={(event) => {
+                setStayPeriods(event.target.value)
+                invalidate()
+              }}
+            />
+            <p className="text-xs text-muted-foreground">
+              기록을 그 기간부터 이 기간 수만큼 계속 셉니다 — 기간마다 최근 N기간의 합. 판매 대수를
+              보증 기간 동안 세면 보증 중 대수입니다.
+            </p>
+          </div>
+          {Number(stayPeriods) > 0 && (
+            <div className="space-y-1">
+              <Label htmlFor="metric-stay-from">기간 수를 읽을 칸 (선택)</Label>
+              <Select
+                value={stayFrom || NONE}
+                onValueChange={(next) => {
+                  setStayFrom(next === NONE ? '' : next)
+                  invalidate()
+                }}
+              >
+                <SelectTrigger id="metric-stay-from">
+                  <SelectValue placeholder="모두 같은 기간 수" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={NONE}>모두 같은 기간 수</SelectItem>
+                  {stayFromOptions.map((one) => (
+                    <SelectItem key={one.value} value={one.value}>
+                      {one.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                기록마다 다르면(국가의 보증 기간) — 비었으면 위 기간 수, 넘으면 위 기간 수로
+                자릅니다.
+              </p>
             </div>
           )}
           <div className="space-y-1">

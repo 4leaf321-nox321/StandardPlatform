@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-05g
+GUIDE_VERSION: 2026-10-05h
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -1040,6 +1040,15 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 칸의 날짜순, 거르기를 통과한 기록만으로 센다. 이 기준은 목록 조건으로 못 적어 건 보기에 「≈」 가
 붙는다(`drill.partial`) — 그 셀의 「N건」 은 목록과 다를 수 있다고 말한다.
 
+**머무는 기간(보증 중 대수).** 기록을 그 기간부터 N기간 동안 계속 세려면 정의에 `stay` 를 둔다 —
+`{"periods": 24, "periods_from": "ref.country.warranty_months"}`. 그러면 기간마다의 값이 **최근 N기간의
+합**이다. 판매 집계에 두면 「보증 중 대수」(국가마다 보증 기간이 다르면 `periods_from` 으로 그 칸을 —
+비었으면 `periods`, 넘으면 `periods` 로 자른다), 36개월이면 「쓰이는 대수」. 계산 시점 뒤의 미래 기간은
+안 만든다. 코호트 · 방문과는 함께 못 둔다. 읽기 머리의 `stay` 가 이것을 말한다 — 그 지표의 값을 「그
+달에 생긴 수」 로 전하지 않는다. **접수월(기간 축) 물음 — 추이 · 계절 · 변화점 · 기간 비교 — 에 건수만
+쓰면 판매가 쌓이는 만큼 늘어 변화점이 신모델 출시 때 선다**(실측). 이 지표를 분모로 둔
+비율(`denominator.time="period"`)로 묻는다.
+
 **정의할 때.** 시간 칸 · 코호트 칸은 **자기 타입의 날짜 칸**이어야 하고, 기준은 여섯까지, 분모의
 `on` 은 양쪽에 같은 이름 · 같은 값 종류(같은 타입을 가리키는 참조, 같은 종류의 칸)여야 한다.
 자유 글자 칸을 기준으로 두면 셀이 행 수만큼 나온다 — 계획의 경고를 그대로 전한다. 이름 붙인
@@ -1055,6 +1064,7 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 | --- | --- | --- | --- |
 | 판매월 코호트 누적 인입률 | 판매 집계 — `sum` 대수 · time 판매월(month) · 기준 `base_model` | `count` · time 접수일(month) · cohort 판매일(month) · 기준 `base_model`(+ 증상) · denominator `{"on": ["base_model"], "time": "cohort", "per": 100}` | `shape="cohort", cumulative=true` — 행의 `denominator` 가 그 달 판매 대수, 셀의 `ratio` 가 누적 인입률(%) |
 | 생산월 x 공장 — 천 대당 | 생산 집계 — `sum` 대수 · time 생산월 · 기준 `base_model` · `factory` | `count` · time 접수일 · cohort 생산일 · 기준 `base_model` · `factory` · denominator `{"on": ["base_model", "factory"], "time": "cohort", "per": 1000}` | `shape="table", dims=["factory"], by=["cohort"]` |
+| 보증 중 1,000대당 접수(접수월 추이 · 계절 · 변화점) | 판매 집계 — `sum` 대수 · time 판매월 · 기준 `base_model` · `country` · **`stay` `{"periods": 24, "periods_from": "ref.country.warranty_months"}`** | `count` · time 접수일(month) · 기준 `base_model` · `country`(+ 대분류 · 불량 코드) · 거르기 보증 내 · denominator `{"on": ["base_model", "country"], "time": "period", "per": 1000}` | `metric_analyze(recipe="changes", options={"axis": "period"})` · `shape="series"` |
 | 부품 교체 집중도 | 판매 집계(위) | `count` · time 접수일(**quarter**) · 기준 `part`(교체 부품 — 여러 값 참조) · denominator `{"on": [], "time": null, "per": 1000}` | `shape="table", dims=["part"]` — **겹침**: 한 건이 부품 여럿이라 합이 건수보다 크다. 기본 모델 x 부품 x 월은 200만 건에서 셀 350만으로 상한을 넘는다 — 기본 모델별로 보려면 기간을 빼거나 거른다 |
 
 - 분모 표(판매 · 생산)의 월은 날짜 칸이다 — 「2026-09」 처럼 연월만 적힌 값은 그 달 1일로 들어간다.

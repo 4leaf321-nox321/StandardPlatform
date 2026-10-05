@@ -216,6 +216,22 @@ describe('지표 상세', () => {
     expect(screen.getByText('2.5')).toBeInTheDocument()
   })
 
+  it('머무는 기간이 있는 지표는 머리가 「최근 N기간의 합」 이라고 말한다', async () => {
+    await mount('/metrics/cases_monthly', METRIC, {
+      ...TABLE,
+      stay: {
+        periods: 24,
+        periods_from: 'ref.country.warranty_months',
+        periods_from_label: '국가 › 보증 기간',
+      },
+    })
+    await waitFor(() =>
+      expect(
+        screen.getByText(/기간마다 최근 국가 › 보증 기간만큼\(최대 24기간\)의 합/),
+      ).toBeInTheDocument(),
+    )
+  })
+
   it('조건 비율은 조건 건수를 그 목록으로 잇고 비율(%) 열을 세운다', async () => {
     // 분모 지표 없이 — 같은 기록 전체가 분모다. 「N건 보기」 는 셀의 전부, 조건 건수는 조건까지.
     const share: Metric = {

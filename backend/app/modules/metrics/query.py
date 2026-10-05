@@ -35,6 +35,7 @@ from app.config import get_settings
 from app.modules.accounts.models import User
 from app.modules.metrics import schemas
 from app.modules.metrics import spec as spec_module
+from app.modules.metrics import stay as stay_module
 from app.modules.metrics import visits as visits_module
 from app.modules.metrics.models import MetricDef, MetricRun, MetricValue
 from app.modules.objects import axes
@@ -591,11 +592,13 @@ def drill(
             if dim is not None and name not in cell.dims:
                 _dim_condition(params, partial, dim, value)
     if built.time is not None and period is not None:
-        _range_condition(params, partial, "period", built.time, period)
+        _range_condition(params, partial, "period", built.time, period, built.stay)
     elif built.time is not None and "period" in by:
-        _range_condition(params, partial, "period", built.time, cell.period)
+        _range_condition(params, partial, "period", built.time, cell.period, built.stay)
     elif built.time is not None and ask is not None:
-        _bounds(params, built.time, ask.period_from, ask.period_to)
+        _bounds(params, built.time, ask.period_from, ask.period_to, built.stay)
+        if built.stay is not None and built.stay.varies and ask.period_from is not None:
+            partial.append("stay")
     if built.cohort is not None and "cohort" in by:
         _range_condition(params, partial, "cohort", built.cohort, cell.cohort)
     elif built.cohort is not None and ask is not None:
@@ -614,9 +617,13 @@ def _bounds(
     axis: spec_module.TimeAxis,
     start: date | None,
     stop: date | None,
+    stay: stay_module.Stay | None = None,
 ) -> None:
-    """묶지 않은 축의 읽기 범위 — 날짜 칸의 `gte` · `lt`. 범위의 끝은 「앞까지」 다."""
+    """묶지 않은 축의 읽기 범위 — 날짜 칸의 `gte` · `lt`. 범위의 끝은 「앞까지」 다. 머무는
+    기간이면 첫 기간에 든 기록은 N-1 기간 앞부터다."""
     if start is not None:
+        if stay is not None:
+            start = stay_module.earliest(start, stay.periods, axis.grain)
         params[f"f.{axis.key}.gte"] = start.isoformat()
     if stop is not None:
         params[f"f.{axis.key}.lt"] = stop.isoformat()
@@ -628,11 +635,19 @@ def _range_condition(
     what: str,
     axis: spec_module.TimeAxis,
     when: date | None,
+    stay: stay_module.Stay | None = None,
 ) -> None:
+    """기간 하나의 범위. 머무는 기간이면 그 기간의 값에 든 기록 — N-1 기간 앞부터 그 기간까지.
+    기록마다 기간 수가 다르면(`periods_from`) 앞쪽에 안 든 기록이 섞여 「≈」 다."""
     if when is None:
         partial.append(what)
         return
-    params[f"f.{axis.key}.gte"] = when.isoformat()
+    start = when
+    if stay is not None:
+        start = stay_module.earliest(when, stay.periods, axis.grain)
+        if stay.varies:
+            partial.append("stay")
+    params[f"f.{axis.key}.gte"] = start.isoformat()
     params[f"f.{axis.key}.lt"] = axes.next_period(when, axis.grain).isoformat()
 
 
@@ -750,7 +765,19 @@ def header_of(
         "negative_age": int(stats.get("negative_age", 0)),
         "truncated": truncated or (denominator.truncated if denominator else False),
         "denominator": denominator.out() if denominator is not None else None,
+        "stay": _stay_out(built),
     }
+
+
+def _stay_out(built: spec_module.Built) -> schemas.StayOut | None:
+    stay, stay_in = built.stay, built.spec.stay
+    if stay is None or stay_in is None:
+        return None
+    return schemas.StayOut(
+        periods=stay.periods,
+        periods_from=stay_in.periods_from,
+        periods_from_label=stay.source.label if stay.source is not None else None,
+    )
 
 
 def _sort_key(cell: Cell, dims: list[str]) -> tuple[Any, ...]:

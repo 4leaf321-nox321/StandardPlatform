@@ -176,6 +176,15 @@ class DenominatorOut(BaseModel):
     truncated: bool
 
 
+class StayOut(BaseModel):
+    """머무는 기간 — 기간마다의 값이 최근 `periods` 기간의 합이다(ADR 0023)."""
+
+    periods: int
+    periods_from: str | None
+    """기록마다 기간 수를 읽은 칸의 주소 — 있으면 기록마다 다르다(최대 `periods`)."""
+    periods_from_label: str | None
+
+
 class ReadHeader(BaseModel):
     """모든 읽기 응답의 머리 — **계산 시각 · 겹침 · 못 묶은 수 · 잘림을 숨기지 않는다.**"""
 
@@ -196,6 +205,8 @@ class ReadHeader(BaseModel):
     negative_age: int
     truncated: bool
     denominator: DenominatorOut | None
+    stay: StayOut | None = None
+    """머무는 기간이 있는 지표 — 기간의 값은 그 기간에 생긴 것이 아니라 최근 N기간의 합이다."""
 
 
 class TableOut(ReadHeader):

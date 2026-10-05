@@ -16,6 +16,8 @@
     settle_days  이만큼 지난 기간은 「닫힘」
     visits       {key: properties.<시리얼 칸>, within_days} — 기준 주소 `visit.number` ·
                  `visit.repeat` 를 연다(같은 시리얼의 차례 · 정한 일수 안 재방문, `visits.py`)
+    stay         {periods, periods_from?} — 기록을 그 기간부터 N기간 동안 센다(최근 N기간의
+                 합, `stay.py`). 판매 대수 → 보증 중 대수
 
 ## 예약어
 
@@ -35,6 +37,7 @@ from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.modules.metrics import stay as stay_module
 from app.modules.metrics import visits as visits_module
 from app.modules.metrics.models import MetricDef
 from app.modules.objects import axes, conditions, paths, system
@@ -136,6 +139,8 @@ class MetricSpec(BaseModel):
     settle_days: int = Field(default=0, ge=0, le=3650)
     visits: visits_module.VisitsIn | None = None
     """같은 시리얼의 방문 — 있으면 기준 주소 `visit.number` · `visit.repeat` 를 쓸 수 있다."""
+    stay: stay_module.StayIn | None = None
+    """머무는 기간 — 기록을 그 기간부터 N기간 동안 센다(기간마다 최근 N기간의 합)."""
 
 
 # --- 지은 것 ---------------------------------------------------------------------
@@ -189,6 +194,7 @@ class Built:
     conds: list[conditions.Condition]
     denominator: MetricDef | None
     visits: visits_module.Visits | None = None
+    stay: stay_module.Stay | None = None
 
     @property
     def overlap(self) -> bool:
@@ -436,8 +442,9 @@ def build(
         dims.append(_dimension(plan, one, seen, visits))
         seen.add(one.name)
     denominator = _denominator(db, spec, dims, self_slug=self_slug)
+    stay = _stay(spec, plan, time)
     return Built(
-        source, scope, spec, plan, value, time, cohort, dims, conds, denominator, visits
+        source, scope, spec, plan, value, time, cohort, dims, conds, denominator, visits, stay
     )
 
 
@@ -461,6 +468,21 @@ def _visits(
             plan.resolver,
         )
     except visits_module.VisitError as caught:
+        raise _bad(str(caught)) from caught
+
+
+def _stay(
+    spec: MetricSpec, plan: axes.JoinPlan, time: TimeAxis | None
+) -> stay_module.Stay | None:
+    if spec.stay is None:
+        return None
+    if time is None:
+        raise _bad("머무는 기간은 시간 칸이 있어야 둘 수 있습니다 — 무엇의 기간부터 셀지.")
+    try:
+        return stay_module.build(
+            spec.stay, plan, cohort=spec.cohort is not None, visits=spec.visits is not None
+        )
+    except stay_module.StayError as caught:
         raise _bad(str(caught)) from caught
 
 
@@ -550,6 +572,12 @@ def plan(
         denominator = _denominator(db, spec, dims, self_slug=self_slug)
     except AppError as caught:
         errors.append(caught.message)
+    stay: stay_module.Stay | None = None
+    try:
+        stay = _stay(spec, join_plan, time)
+    except AppError as caught:
+        if spec.time is None or time is not None:
+            errors.append(caught.message)
     infos = [
         DimInfo(
             one.name, one.address, one.axis.label, one.axis.kind, one.axis.multi, one.grain
@@ -559,7 +587,18 @@ def plan(
     if errors:
         return Plan(False, errors, warnings, None, infos)
     built = Built(
-        source, scope, spec, join_plan, value, time, cohort, dims, conds, denominator, visits
+        source,
+        scope,
+        spec,
+        join_plan,
+        value,
+        time,
+        cohort,
+        dims,
+        conds,
+        denominator,
+        visits,
+        stay,
     )
     out = Plan(True, errors, warnings, built, infos)
     if estimate:
@@ -666,6 +705,9 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
             seen = min(out.rows, SAMPLE_ROWS) if sampled else out.rows
             expanded = round(int(found[0]) * out.rows / max(seen, 1))
     estimated = min(product, expanded)
+    if built.stay is not None:
+        # 머무는 기간 — 셀마다 N기간까지 펼친다(계산 시점 뒤의 미래는 안 만들어 이보다 적다).
+        estimated *= built.stay.periods
     out.estimated_cells = estimated
     if estimated > settings.metrics_max_cells:
         out.ok = False
