@@ -322,3 +322,48 @@ def test_재발은_전작에서_나온_조합이_후속_모델에서_다시_나�
         client, admin, slug, "recurrence", generation="model", signature="model"
     )
     assert refused["code"].endswith("METRICS-0047")
+
+
+# --- 한 장 요약 ----------------------------------------------------------------------
+
+
+def test_한_장_요약은_값의_기록_추이_함께_나온_값을_향상도와_낸다(
+    client: TestClient, admin: Signed
+) -> None:
+    """피로 — R1(M1 · P1 · FEA) · R2(M1 · P2 · 시험), 전체 넷. 향상도 = (n_vb / n_v) / (n_b /
+    N): M1 은 (2/2)/(3/4) = 1.33, P2 는 (1/2)/(1/4) = 2, P1 은 (1/2)/(2/4) = 1."""
+    w = _axes_world(client, admin)
+    slug = w["metric"]["slug"]
+    # 축 객체의 상세가 쓰는 표시 — 기준이 가리키는 타입.
+    dims = {one["name"]: one for one in w["metric"]["dims"]}
+    assert dims["mechanism"]["target"] == w["types"]["mech"]
+    found = _analysis(
+        client, admin, slug, "profile", dim="mechanism", value=w["mechs"]["피로"]
+    )
+    assert found["value_label"] == "피로" and found["dim_label"] == "메커니즘"
+    assert (found["count"], found["total"], found["share"]) == (2, 4, 0.5)
+    assert _listed(client, admin, w["report"], found["drill"]["params"]) == 2
+    assert [(one["label"], one["count"], one["total"]) for one in found["points"]] == [
+        ("2026-01", 2, 4)
+    ]
+    related = {group["dim"]: group for group in found["related"]}
+    assert set(related) == {"model", "part", "method"}
+    models = {one["label"]: one for one in related["model"]["values"]}
+    assert models["M1"]["share"] == 1.0
+    assert models["M1"]["lift"] == pytest.approx(4 / 3)
+    parts = {one["label"]: one["lift"] for one in related["part"]["values"]}
+    assert parts == pytest.approx({"P1": 1.0, "P2": 2.0})
+    p2 = next(one for one in related["part"]["values"] if one["label"] == "P2")
+    assert _listed(client, admin, w["report"], p2["drill"]["params"]) == 1
+    codes = {one["code"] for one in found["caveats"]}
+    assert {"few", "association"} <= codes
+    refused = _refused(
+        client,
+        admin,
+        slug,
+        "profile",
+        dim="mechanism",
+        value=w["mechs"]["피로"],
+        **{"d.mechanism": w["mechs"]["피로"]},
+    )
+    assert refused["code"].endswith("METRICS-0048")

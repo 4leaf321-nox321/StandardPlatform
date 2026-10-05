@@ -12202,6 +12202,149 @@
         }
       }
     },
+    "/api/metrics/{slug}/analysis/profile": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Profile Analysis",
+        "description": "한 장 요약 — 기준 값 하나의 기록 수 · 몫, 기간 추이, 다른 기준마다 함께 나온\n값(향상도).",
+        "operationId": "profile_analysis_api_metrics__slug__analysis_profile_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "dim",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "기준",
+              "title": "Dim"
+            },
+            "description": "기준"
+          },
+          {
+            "name": "value",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "그 기준의 값(참조면 객체 id)",
+              "title": "Value"
+            },
+            "description": "그 기준의 값(참조면 객체 id)"
+          },
+          {
+            "name": "period_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Period From"
+            }
+          },
+          {
+            "name": "period_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 날 **앞까지**",
+              "title": "Period To"
+            },
+            "description": "이 날 **앞까지**"
+          },
+          {
+            "name": "cohort_from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort From"
+            }
+          },
+          {
+            "name": "cohort_to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Cohort To"
+            }
+          },
+          {
+            "name": "compact",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "함께 나온 값을 기준마다 5개만(MCP)",
+              "default": false,
+              "title": "Compact"
+            },
+            "description": "함께 나온 값을 기준마다 5개만(MCP)"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProfileOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/metrics/{slug}/analysis/sprt": {
       "get": {
         "tags": [
@@ -22754,6 +22897,17 @@
               }
             ],
             "title": "Distinct"
+          },
+          "target": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target"
           }
         },
         "type": "object",
@@ -30369,6 +30523,327 @@
         "title": "ProfileFactOut",
         "description": "자동 요약 한 갈래 — **읽을 때 센 것**(저장하지 않는다)."
       },
+      "ProfileGroupOut": {
+        "properties": {
+          "dim": {
+            "type": "string",
+            "title": "Dim"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "values": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileValueOut"
+            },
+            "type": "array",
+            "title": "Values"
+          },
+          "others": {
+            "type": "integer",
+            "title": "Others"
+          }
+        },
+        "type": "object",
+        "required": [
+          "dim",
+          "label",
+          "values",
+          "others"
+        ],
+        "title": "ProfileGroupOut"
+      },
+      "ProfileOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "measure": {
+            "type": "string",
+            "title": "Measure"
+          },
+          "measure_label": {
+            "type": "string",
+            "title": "Measure Label"
+          },
+          "grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Grain"
+          },
+          "cohort_grain": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Cohort Grain"
+          },
+          "settle_days": {
+            "type": "integer",
+            "title": "Settle Days"
+          },
+          "computed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Computed At"
+          },
+          "watermark": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Watermark"
+          },
+          "stale": {
+            "type": "boolean",
+            "title": "Stale"
+          },
+          "overlap": {
+            "type": "boolean",
+            "title": "Overlap"
+          },
+          "unbucketed": {
+            "type": "integer",
+            "title": "Unbucketed"
+          },
+          "unbucketed_cohort": {
+            "type": "integer",
+            "title": "Unbucketed Cohort"
+          },
+          "negative_age": {
+            "type": "integer",
+            "title": "Negative Age"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "denominator": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DenominatorOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "params": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Params"
+          },
+          "run_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Id"
+          },
+          "caveats": {
+            "items": {
+              "$ref": "#/components/schemas/CaveatOut"
+            },
+            "type": "array",
+            "title": "Caveats"
+          },
+          "excluded": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Excluded"
+          },
+          "visible_share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Visible Share"
+          },
+          "dim": {
+            "type": "string",
+            "title": "Dim"
+          },
+          "dim_label": {
+            "type": "string",
+            "title": "Dim Label"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "value_label": {
+            "type": "string",
+            "title": "Value Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share"
+          },
+          "drill": {
+            "$ref": "#/components/schemas/DrillOut"
+          },
+          "points": {
+            "items": {
+              "$ref": "#/components/schemas/ProfilePointOut"
+            },
+            "type": "array",
+            "title": "Points"
+          },
+          "related": {
+            "items": {
+              "$ref": "#/components/schemas/ProfileGroupOut"
+            },
+            "type": "array",
+            "title": "Related"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "measure",
+          "measure_label",
+          "grain",
+          "cohort_grain",
+          "settle_days",
+          "computed_at",
+          "watermark",
+          "stale",
+          "overlap",
+          "unbucketed",
+          "unbucketed_cohort",
+          "negative_age",
+          "truncated",
+          "denominator",
+          "recipe",
+          "method",
+          "params",
+          "run_id",
+          "caveats",
+          "excluded",
+          "visible_share",
+          "dim",
+          "dim_label",
+          "value",
+          "value_label",
+          "count",
+          "total",
+          "share",
+          "drill",
+          "points",
+          "related"
+        ],
+        "title": "ProfileOut",
+        "description": "한 장 요약 — 기준 값 하나(예: 고장 메커니즘 「피로」)의 기록 · 추이 · 함께 나온 것."
+      },
+      "ProfilePointOut": {
+        "properties": {
+          "period": {
+            "type": "string",
+            "title": "Period"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share"
+          },
+          "closed": {
+            "type": "boolean",
+            "title": "Closed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period",
+          "label",
+          "count",
+          "total",
+          "share",
+          "closed"
+        ],
+        "title": "ProfilePointOut",
+        "description": "기간 하나 — 그 값의 건수와 전체."
+      },
       "ProfileUpdateRequest": {
         "properties": {
           "display_name": {
@@ -30384,6 +30859,65 @@
         ],
         "title": "ProfileUpdateRequest",
         "description": "자기 정보 수정.\n\n**표시 이름만 바꾼다.** 아이디(email)는 로그인 식별자라 본인이 바꾸면 감사\n로그·알림이 가리키는 대상이 흔들린다 — 그것은 관리자의 일로 남긴다."
+      },
+      "ProfileValueOut": {
+        "properties": {
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "share": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Share"
+          },
+          "lift": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Lift"
+          },
+          "drill": {
+            "$ref": "#/components/schemas/DrillOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "count",
+          "share",
+          "lift",
+          "drill"
+        ],
+        "title": "ProfileValueOut",
+        "description": "함께 나온 값 하나 — 그 값의 기록 중 몫과 향상도(전체에서보다 몇 배 자주)."
       },
       "PromoteOptionOut": {
         "properties": {

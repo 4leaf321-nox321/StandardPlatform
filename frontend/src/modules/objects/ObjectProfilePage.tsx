@@ -10,6 +10,7 @@ import { Bell, BellOff, Pencil, Trash2, Waypoints } from 'lucide-react'
 
 import { AttachmentList } from '@/modules/files/AttachmentList'
 import { GraphPanel } from '@/modules/graph/GraphPanel'
+import { AxisProfile } from '@/modules/metrics/AxisProfile'
 import { ontologyApi } from '@/modules/ontology/api'
 import { ObjectYears } from '@/modules/objects/ObjectYears'
 import { AliasesPanel } from '@/modules/objects/AliasesPanel'
@@ -302,6 +303,9 @@ export default function ObjectProfilePage() {
         canEdit={profile.data.can_link ?? profile.data.can_edit}
         onChanged={profile.reload}
       />
+
+      {/* 기록 요약 — 이 타입을 기준(축)으로 가진 지표가 있으면(ADR 0022). 없으면 안 그린다. */}
+      {!isSystem && <AxisProfile typeSlug={typeSlug} objectId={objectId} />}
 
       {/* 비슷한 기록 — 축 태그(참조 칸)가 있는 기록 타입에서만(ADR 0022). */}
       {objectType?.usage === 'log' && defs.some((one) => one.data_type === 'object_ref') && (

@@ -17,6 +17,7 @@ export type Recipe =
   | 'cutin'
   | 'coverage'
   | 'recurrence'
+  | 'profile'
   | 'forecast'
   | 'logit'
   | 'assoc'
@@ -773,4 +774,35 @@ export interface RecurrenceResult extends AnalysisHeader {
   rate: number | null
   no_predecessor: number
   signatures: { keys: string[]; labels: string[]; pairs: number; generations: string[] }[]
+}
+
+/** 함께 나온 값 하나 — 그 값의 기록 중 몫과 향상도(전체에서보다 몇 배 자주). */
+export interface ProfileValue {
+  key: string | null
+  label: string
+  count: number
+  share: number | null
+  lift: number | null
+  drill: Drill
+}
+
+/** 한 장 요약 — 기준 값 하나의 기록 · 추이 · 함께 나온 것(ADR 0022). */
+export interface ProfileResult extends AnalysisHeader {
+  dim: string
+  dim_label: string
+  value: string
+  value_label: string
+  count: number
+  total: number
+  share: number | null
+  drill: Drill
+  points: {
+    period: string
+    label: string
+    count: number
+    total: number
+    share: number | null
+    closed: boolean
+  }[]
+  related: { dim: string; label: string; values: ProfileValue[]; others: number }[]
 }

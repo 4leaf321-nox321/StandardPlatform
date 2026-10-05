@@ -103,6 +103,9 @@ def out(db: Session, metric: MetricDef) -> schemas.MetricOut:
                 kind=one.axis.kind,
                 multi=one.axis.multi,
                 grain=one.grain,
+                target=one.signature[1]
+                if one.signature[0] == "ref" and one.signature[1]
+                else None,
             )
             for one in built.dims
         ]

@@ -2330,6 +2330,7 @@ _RECIPE_OPTIONS: dict[str, set[str]] = {
     "cutin": {"at", "axis", "window", "skip_first", "effect"} | _RANGES,
     "coverage": {"levels", "via"} | _RANGES,
     "recurrence": {"generation", "signature", "via"} | _RANGES,
+    "profile": {"dim", "value"} | _RANGES,
     "forecast": {
         "horizon",
         "warranty",
@@ -2386,6 +2387,9 @@ async def metric_analyze(
       `generation`(필수 — 세대 기준, 예: 모델) · `signature`(필수 — 서명 기준 1~3개, 예: 부품 ·
       메커니즘) · `via`(세대 축에서 전작으로 가는 길 — 비우면 하나뿐인 앞쪽 길). 쌍마다
       다시 나온 것 · `rate`(재발률) · `new`, 모든 쌍의 `rate`, 되풀이된 `signatures`
+    - `profile` — **한 장 요약**(기준 값 하나 — 예: 메커니즘 「피로」). `dim` · `value`(필수 —
+      참조면 객체 id, `object_resolve` 로 먼저). 건수 · 몫 · 기간 추이(`points`), 다른
+      기준마다 함께 나온 값(`related` — 몫 · `lift` 향상도 · `drill`)
     - `cutin` — **전후 비교**(대책 적용일 뒤에 만든 것부터 줄었나). `at`(필수 — 적용일
       `YYYY-MM-DD`) · `axis` · `window` · `skip_first`(앞쪽에서 뺄 처음 부분군 — 출시 초기) ·
       `effect`(의미 있는 차이, 기본 0.2). 모델은 `filters` 로 거른다 — 앞쪽은 그 모델의 첫

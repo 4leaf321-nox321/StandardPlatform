@@ -25,6 +25,7 @@ from app.modules.metrics.recipes import (
     life,
     logit,
     pareto,
+    profile,
     recurrence,
     sprt,
     ways,
@@ -41,6 +42,7 @@ from app.modules.metrics.recipes.schemas import (
     LifeOut,
     LogitOut,
     ParetoOut,
+    ProfileOut,
     RecurrenceOut,
     SprtOut,
     SprtScanOut,
@@ -543,6 +545,35 @@ def recurrence_analysis(
         via=via,
         compact=compact,
     )
+
+
+@router.get("/profile", response_model=ProfileOut)
+def profile_analysis(
+    slug: str,
+    request: Request,
+    dim: str = Query(description="기준"),
+    value: str = Query(description="그 기준의 값(참조면 객체 id)"),
+    period_from: str | None = Query(default=None),
+    period_to: str | None = Query(default=None, description="이 날 **앞까지**"),
+    cohort_from: str | None = Query(default=None),
+    cohort_to: str | None = Query(default=None),
+    compact: bool = Query(default=False, description="함께 나온 값을 기준마다 5개만(MCP)"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ProfileOut:
+    """한 장 요약 — 기준 값 하나의 기록 수 · 몫, 기간 추이, 다른 기준마다 함께 나온
+    값(향상도)."""
+    query.snapshot(db)
+    metric = services.get(db, slug)
+    built = compute.built_of(db, metric)
+    ask = params.ask_from_request(
+        request,
+        period_from=period_from,
+        period_to=period_to,
+        cohort_from=cohort_from,
+        cohort_to=cohort_to,
+    )
+    return profile.run(db, user, metric, built, ask, dim=dim, value=value, compact=compact)
 
 
 @router.get("/sprt", response_model=SprtOut)

@@ -20,6 +20,9 @@ class DimOut(BaseModel):
     grain: str | None = None
     distinct: int | None = None
     """계획에서만 — 거르기를 통과한 기록에서 서로 다른 값의 수."""
+    target: str | None = None
+    """축(다른 타입을 가리키는 참조 · 관계)이면 그 타입 — 축 객체의 상세가 자기를 기준으로 가진
+    지표를 찾는다(ADR 0022)."""
 
 
 class AnalysisAvailOut(BaseModel):

@@ -68,6 +68,8 @@ export interface MetricDim {
   grain: string | null
   /** 계획에서만 — 서로 다른 값의 수. */
   distinct?: number | null
+  /** 축(다른 타입을 가리키는 참조 · 관계)이면 그 타입 — 축 객체의 상세가 자기를 기준으로 가진 지표를 찾는다. */
+  target?: string | null
 }
 
 /** 이 지표에 되는 분석 — 안 되면 그 이유(ADR 0014). */

@@ -19,6 +19,8 @@ const objectApi = vi.hoisted(() => ({
 const ontologyApi = vi.hoisted(() => ({ schema: vi.fn() }))
 vi.mock('@/modules/objects/api', () => ({ objectApi }))
 vi.mock('@/modules/ontology/api', () => ({ ontologyApi }))
+// 축 객체의 「기록 요약」 이 지표 목록을 묻는다 — 여기서는 지표가 없다.
+vi.mock('@/modules/metrics/api', () => ({ metricsApi: { list: vi.fn().mockResolvedValue([]) } }))
 
 const PROFILE = {
   object: {

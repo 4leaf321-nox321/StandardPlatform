@@ -516,6 +516,54 @@ class RecurrenceOut(AnalysisHeader):
     signatures: list[RecurrenceSignatureOut]
 
 
+# --- 한 장 요약 ----------------------------------------------------------------------
+
+
+class ProfilePointOut(BaseModel):
+    """기간 하나 — 그 값의 건수와 전체."""
+
+    period: str
+    label: str
+    count: int
+    total: int
+    share: float | None
+    closed: bool
+
+
+class ProfileValueOut(BaseModel):
+    """함께 나온 값 하나 — 그 값의 기록 중 몫과 향상도(전체에서보다 몇 배 자주)."""
+
+    key: str | None
+    label: str
+    count: int
+    share: float | None
+    lift: float | None
+    drill: DrillOut
+
+
+class ProfileGroupOut(BaseModel):
+    dim: str
+    label: str
+    values: list[ProfileValueOut]
+    others: int
+    """싣지 않은 값의 수."""
+
+
+class ProfileOut(AnalysisHeader):
+    """한 장 요약 — 기준 값 하나(예: 고장 메커니즘 「피로」)의 기록 · 추이 · 함께 나온 것."""
+
+    dim: str
+    dim_label: str
+    value: str
+    value_label: str
+    count: int
+    total: int
+    share: float | None
+    drill: DrillOut
+    points: list[ProfilePointOut]
+    related: list[ProfileGroupOut]
+
+
 # --- 클레임 예측 ---------------------------------------------------------------------
 
 
