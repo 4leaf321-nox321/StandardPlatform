@@ -196,7 +196,8 @@ function MetricDetail({ slug }: { slug: string }) {
 
   const found = metric.data
   const chosen = dims ?? (found?.dims[0] ? [found.dims[0].name] : [])
-  const hasDenominator = Boolean(found?.spec.denominator)
+  // 조건 비율은 같은 기록 전체가 분모다 — 분모 지표 없이도 비율이 선다.
+  const hasDenominator = Boolean(found?.spec.denominator) || found?.spec.measure === 'share'
   const showRatio = hasDenominator && ratio
   const common = useMemo(
     () => ({
@@ -366,9 +367,15 @@ function MetricDetail({ slug }: { slug: string }) {
                     ))}
                     <TableHead className="text-right">건수</TableHead>
                     {found.spec.measure !== 'count' && (
-                      <TableHead className="text-right">{found.measure_label}</TableHead>
+                      <TableHead className="text-right">
+                        {found.spec.measure === 'share' ? '조건 건수' : found.measure_label}
+                      </TableHead>
                     )}
-                    {showRatio && <TableHead className="text-right">비율</TableHead>}
+                    {showRatio && (
+                      <TableHead className="text-right">
+                        {found.spec.measure === 'share' ? '비율(%)' : '비율'}
+                      </TableHead>
+                    )}
                     {by === 'period' && <TableHead>닫힘</TableHead>}
                     <TableHead />
                   </TableRow>
@@ -386,7 +393,13 @@ function MetricDetail({ slug }: { slug: string }) {
                       ))}
                       <TableCell className="text-right">{shownNumber(cell.count)}</TableCell>
                       {found.spec.measure !== 'count' && (
-                        <TableCell className="text-right">{shownNumber(cell.value)}</TableCell>
+                        <TableCell className="text-right">
+                          {cell.value_drill ? (
+                            <Drill drill={cell.value_drill} count={cell.value ?? 0} />
+                          ) : (
+                            shownNumber(cell.value)
+                          )}
+                        </TableCell>
                       )}
                       {showRatio && (
                         <TableCell className="text-right">{shownNumber(cell.ratio)}</TableCell>

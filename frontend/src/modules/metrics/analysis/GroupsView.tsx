@@ -48,7 +48,9 @@ const AUTO = '__auto__'
 export function GroupsView({ metric, read, initial = {} }: AnalysisViewProps) {
   // 집단마다 대수를 알아야 견준다 — 분모 짝(on)의 기준만.
   const paired = metric.spec.denominator?.on ?? []
-  const choices = metric.dims.filter((one) => paired.includes(one.name))
+  // 조건 비율은 집단마다 분모(그 집단의 전체 건수)를 스스로 든다 — 어느 기준으로도 견준다.
+  const share = metric.spec.measure === 'share'
+  const choices = share ? metric.dims : metric.dims.filter((one) => paired.includes(one.name))
   const [dim, setDim] = useState(initial.dim ?? choices[0]?.name ?? '')
   const [axis, setAxis] = useState(initial.axis ?? AUTO)
   const [span, setSpan] = useState(initial.window ?? '3')
@@ -125,8 +127,8 @@ export function GroupsView({ metric, read, initial = {} }: AnalysisViewProps) {
           <CaveatList caveats={data.caveats} />
           <AnalysisMeta result={data} />
           <p className="text-sm">
-            {data.dim_label} {shownNumber(data.groups)}개 — 전체 {shownNumber(data.pooled, 2)}건/
-            {shownNumber(data.per)}대.{' '}
+            {data.dim_label} {shownNumber(data.groups)}개 — 전체 {shownNumber(data.pooled, 2)}
+            {share ? '%' : `건/${shownNumber(data.per)}대`}.{' '}
             {data.heterogeneity_p !== null && data.heterogeneity_p < 0.05
               ? `집단 사이에 우연보다 큰 차이가 있습니다(p ${shownNumber(data.heterogeneity_p, 4)}, 참 비율이 집단마다 약 ±${percent(data.spread, 0)} 흔들림).`
               : '집단 사이 차이가 우연의 흔들림 안입니다.'}{' '}

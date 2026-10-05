@@ -14,6 +14,9 @@ z_i = (u_i - ū) / σ_i 의 흔들림을 이동 범위로 잰다: σz = 평균 |
 분모가 없으면 n_i = 1 인 건수(c) 관리도다 — 판매가 늘면 건수도 늘어 신호처럼 보이므로 그렇게
 말한다.
 
+조건 비율(같은 기록 중 조건에 맞는 몫)이면 p-관리도다 — σ_i = √(p̄(1 - p̄) / n_i), 위 한계는
+1 을 넘지 않는다. 라니 보정은 같다.
+
 ## 코호트 축
 
 생산월(판매월) 코호트마다 **출고 K 기간 안의 건수 / 그 달의 대수** — 창이 닫힌 코호트만 본다
@@ -53,7 +56,7 @@ from app.modules.objects import axes
 
 NAME = "control"
 LABEL = "관리도"
-METHOD = "u-관리도 · 라니 보정(σz ≥ 1) · 넬슨 1·2·3·5 v1"
+METHOD = "u-관리도(조건 비율이면 p) · 라니 보정(σz ≥ 1) · 넬슨 1·2·3·5 v2"
 RULES = {
     1: "한계 밖 한 점",
     2: "중심선 한쪽에 아홉 점 연속",
@@ -130,9 +133,10 @@ def chart(
     use: Sequence[bool],
     baseline: Sequence[bool],
     laney: bool = True,
+    binomial: bool = False,
 ) -> Chart:
     """부분군을 차례로 — `use` 는 규칙을 걸 점(닫힌 점), `baseline` 은 중심선과 σz 를 잡는
-    점(`use` 의 부분)."""
+    점(`use` 의 부분). `binomial` 이면 p-관리도(몫 — 건수가 대수를 못 넘는다)."""
     size = len(counts)
     empty = Chart(None, None, None, [None] * size, [None] * size, [None] * size, [])
     empty.signals = [[] for _ in range(size)]
@@ -142,11 +146,12 @@ def chart(
     if not base.any():
         return empty
     center = float(c[base].sum() / n[base].sum())
-    if center <= 0:
-        empty.center = 0.0
+    if center <= 0 or (binomial and center >= 1):
+        empty.center = min(center, 1.0) if binomial else 0.0
         return empty
     positive = n > 0
-    sigma = np.where(positive, np.sqrt(center / np.where(positive, n, 1.0)), np.nan)
+    spread = center * (1.0 - center) if binomial else center
+    sigma = np.where(positive, np.sqrt(spread / np.where(positive, n, 1.0)), np.nan)
     rate = np.where(positive, c / np.where(positive, n, 1.0), np.nan)
     score = (rate - center) / sigma
     in_base = score[base]
@@ -154,6 +159,8 @@ def chart(
     widen = max(1.0, raw) if laney and raw is not None else 1.0
     lcl = np.maximum(center - 3 * widen * sigma, 0.0)
     ucl = center + 3 * widen * sigma
+    if binomial:
+        ucl = np.minimum(ucl, 1.0)
     z = score / widen
     shown: list[float | None] = [
         float(z[i]) if positive[i] and use[i] else None for i in range(size)
@@ -173,8 +180,8 @@ def chart(
 
 
 def available(built: spec_module.Built) -> str | None:
-    if built.spec.measure != "count":
-        return "건수 지표에서만 됩니다 — 관리도는 건수 · 비율의 흔들림을 봅니다."
+    if built.spec.measure not in ("count", spec_module.SHARE):
+        return "건수 · 조건 비율 지표에서만 됩니다 — 관리도는 건수 · 비율의 흔들림을 봅니다."
     if built.time is None and built.cohort is None:
         return "시간 칸이나 코호트 칸이 있는 지표에서만 됩니다."
     return None
@@ -199,6 +206,7 @@ def run(
     reason = available(built)
     if reason is not None:
         raise common.refuse(25, reason)
+    share = built.spec.measure == spec_module.SHARE
     found = series.read(
         db,
         user,
@@ -225,6 +233,7 @@ def run(
             [one.exposure for one in groups],
             use=[one.closed for one in groups],
             baseline=baseline,
+            binomial=share,
         )
         baseline_points = sum(baseline)
         if baseline_points < FEW_SUBGROUPS:
@@ -303,7 +312,7 @@ def run(
         **head,
         axis=found.axis,
         window=window if found.axis == "cohort" else None,
-        kind="u" if found.den is not None else "c",
+        kind="p" if share else ("u" if found.den is not None else "c"),
         per=per,
         split=split,
         split_label=found.split_dim.axis.label if found.split_dim is not None else None,

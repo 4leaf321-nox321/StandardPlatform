@@ -132,6 +132,13 @@ def compare(counts: Sequence[float], exposures: Sequence[float]) -> Comparison |
     return Comparison(pooled, chi2, df, p_value, tau2, rows)
 
 
+def _capped(high: float | None, per: float, share: bool) -> float | None:
+    """구간의 위 끝 — 조건 비율은 몫이라 100% 를 넘지 않는다(감마 분위수는 넘을 수 있다)."""
+    if high is None:
+        return None
+    return min(high, 1.0) * per if share else high * per
+
+
 def _rank(row: GroupRowOut) -> tuple[float, float, str]:
     """줄인 비율 높은 순 — 모두 전체로 줄였으면(흔들림 0) 그대로 비율 순."""
     return (-(row.shrunk or 0.0), -(row.rate or 0.0), row.key or "")
@@ -149,6 +156,13 @@ def _distance(row: GroupRowOut) -> float:
 
 def available(built: spec_module.Built) -> str | None:
     den = built.spec.denominator
+    if built.spec.measure == spec_module.SHARE:
+        # 조건 비율은 집단마다 분모(그 집단의 전체 건수)를 스스로 든다 — 어느 기준으로도.
+        if not built.dims:
+            return "기준이 있는 지표에서만 됩니다 — 견줄 집단이 기준의 값입니다."
+        if built.time is None and built.cohort is None:
+            return "시간 칸이나 코호트 칸이 있는 지표에서만 됩니다."
+        return None
     if built.spec.measure != "count":
         return "건수 지표에서만 됩니다 — 집단마다 건수 / 대수를 견줍니다."
     if den is None or not den.on:
@@ -180,10 +194,14 @@ def run(
     if reason is not None:
         raise common.refuse(35, reason)
     den_in = built.spec.denominator
-    assert den_in is not None
-    dim = dim or den_in.on[0]
+    share = built.spec.measure == spec_module.SHARE
+    if share:
+        dim = dim or built.dims[0].name
+    else:
+        assert den_in is not None
+        dim = dim or den_in.on[0]
     target = common.dim_of(built, dim)
-    if dim not in den_in.on:
+    if den_in is not None and dim not in den_in.on:
         raise common.refuse(
             35,
             f"「{target.axis.label}」 은 분모 짝(on)에 없어 집단마다의 대수를 모릅니다 — "
@@ -221,7 +239,7 @@ def run(
                     rate=one.rate * per,
                     shrunk=one.shrunk * per,
                     shrunk_low=one.low * per if one.low is not None else None,
-                    shrunk_high=one.high * per if one.high is not None else None,
+                    shrunk_high=_capped(one.high, per, share),
                     shrinkage=one.shrinkage,
                     ratio=one.shrunk / compared.pooled if compared.pooled > 0 else None,
                     p_value=one.p_value,

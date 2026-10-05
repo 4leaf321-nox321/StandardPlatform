@@ -177,9 +177,12 @@ const DIRECTION_TEXT = { up: '올라감', down: '내려감', flat: '그대로' }
 export function ChangesScanTable({
   data,
   onFocus,
+  share = false,
 }: {
   data: ChangesScanResult
   onFocus: (focus: Focus) => void
+  /** 조건 비율 — 수준을 「N대당」 이 아니라 % 로 읽는다. */
+  share?: boolean
 }) {
   const rising = data.items.filter((one) => one.direction === 'up')
   return (
@@ -197,7 +200,8 @@ export function ChangesScanTable({
             <TableHead>마지막 변화</TableHead>
             <TableHead className="text-right">비(95% 구간)</TableHead>
             <TableHead className="text-right">
-              지금 수준{data.kind === 'rate' ? `(${shownNumber(data.per)}대당)` : ''}
+              지금 수준
+              {data.kind === 'rate' ? (share ? '(%)' : `(${shownNumber(data.per)}대당)`) : ''}
             </TableHead>
             <TableHead className="text-right">건수</TableHead>
             <TableHead />

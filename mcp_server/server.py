@@ -2427,7 +2427,9 @@ async def metric_define(
 
     `spec`:
       - `measure`: `count` · `sum` · `avg` · `min` · `max`(+ `measure_field`:
-        `properties.<숫자 칸>`)
+        `properties.<숫자 칸>`) · `share`(조건 비율 — `share_when` 에 거르기와 같은 꼴의
+        조건을 주면 셀마다 조건 건수(`value`) / 전체 건수(`count`) = `ratio`(%). 분모 지표는
+        두지 않는다. 「센터마다 NTF 비율」 · 「대분류 중 SW 의 몫」)
       - `time`: `{"address": "properties.<날짜 칸>", "grain": "month"}` — 자기 타입의 날짜
         칸만. 단위는 `day` · `week` · `month` · `quarter` · `year`
       - `cohort`: 같은 모양(선택) — 「판매월」 처럼 묶어 둘 둘째 날짜. 단위는 `time` 과

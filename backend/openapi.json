@@ -17875,6 +17875,16 @@
           },
           "drill": {
             "$ref": "#/components/schemas/DrillOut"
+          },
+          "value_drill": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/DrillOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "type": "object",
@@ -19264,7 +19274,8 @@
             "type": "string",
             "enum": [
               "u",
-              "c"
+              "c",
+              "p"
             ],
             "title": "Kind"
           },
@@ -24890,6 +24901,14 @@
               }
             ],
             "title": "Measure Field"
+          },
+          "share_when": {
+            "items": {
+              "$ref": "#/components/schemas/FilterIn"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Share When"
           },
           "time": {
             "anyOf": [

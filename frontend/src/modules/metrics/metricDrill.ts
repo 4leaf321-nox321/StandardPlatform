@@ -33,6 +33,7 @@ export const GRAIN_LABELS: Record<string, string> = {
 
 export const MEASURE_LABELS: Record<string, string> = {
   count: '건수',
+  share: '조건 비율',
   sum: '합계',
   avg: '평균',
   min: '최솟값',

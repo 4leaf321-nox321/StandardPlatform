@@ -157,6 +157,8 @@ class CellOut(BaseModel):
     denominator: float | None = None
     closed: bool | None = None
     drill: DrillOut
+    value_drill: DrillOut | None = None
+    """조건 비율이면 조건에 맞는 기록(값)의 목록 — `drill` 은 셀의 기록 전부(분모)."""
 
 
 class DenominatorOut(BaseModel):

@@ -125,7 +125,11 @@ export function ChangesView({ metric, read, initial = {} }: AnalysisViewProps) {
         <>
           <CaveatList caveats={scan.data.caveats} />
           <AnalysisMeta result={scan.data} />
-          <ChangesScanTable data={scan.data} onFocus={setFocus} />
+          <ChangesScanTable
+            data={scan.data}
+            onFocus={setFocus}
+            share={metric.spec.measure === 'share'}
+          />
         </>
       )}
       {data && (

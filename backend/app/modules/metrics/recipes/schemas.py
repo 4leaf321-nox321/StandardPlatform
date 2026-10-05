@@ -260,7 +260,8 @@ class ControlOut(AnalysisHeader):
     """부분군의 축 — 그 단위는 머리의 `grain`(기간) · `cohort_grain`(코호트)."""
     window: int | None
     """코호트 축 — 출고 뒤 몇 기간 안의 건수인가."""
-    kind: Literal["u", "c"]
+    kind: Literal["u", "c", "p"]
+    """u — 대수당 비율, c — 건수, p — 조건 비율(같은 기록 중 몫)."""
     """u 는 대수당 비율, c 는 건수(분모가 없을 때)."""
     per: float
     split: str | None

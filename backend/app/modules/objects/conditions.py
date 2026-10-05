@@ -282,12 +282,23 @@ def apply(
     """
     if not conditions:
         return stmt
+    return stmt.where(*clauses(defs, conditions, resolver))
+
+
+def clauses(
+    defs: list[PropertyDef],
+    conditions: list[Condition],
+    resolver: paths.Resolver | None = None,
+) -> list[Any]:
+    """조건마다 WHERE 식 하나 — `apply` 가 문장에 걸고, 지표의 조건 비율은 `CASE WHEN` 안에
+    넣는다(「조건에 맞으면 1」). 검사는 `apply` 와 같다."""
     by_key = {d.key: d for d in defs}
+    out: list[Any] = []
     for index, condition in enumerate(conditions):
         if paths.is_path(condition.field):
             if resolver is None:
                 raise InvalidValue(code("OBJECTS", 73), f"없는 칸입니다: {condition.field}")
-            stmt = stmt.where(_hop_clause(resolver, condition, index))
+            out.append(_hop_clause(resolver, condition, index))
             continue
         definition = by_key.get(condition.field)
         if condition.field not in FIXED_FIELDS and definition is None:
@@ -296,8 +307,8 @@ def apply(
             raise InvalidValue(
                 code("OBJECTS", 73), f"{definition.label}: 파일 칸은 못 겁니다."
             )
-        stmt = stmt.where(_clause(condition, definition))
-    return stmt
+        out.append(_clause(condition, definition))
+    return out
 
 
 def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> Any:

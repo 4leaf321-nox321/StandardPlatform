@@ -41,7 +41,7 @@ import { useResource } from '@/shared/hooks/useResource'
 
 const NONE = '__none__'
 const GRAINS = ['day', 'week', 'month', 'quarter', 'year'] as const
-const MEASURES = ['count', 'sum', 'avg', 'min', 'max'] as const
+const MEASURES = ['count', 'sum', 'avg', 'min', 'max', 'share'] as const
 /** 자기 객체의 고정 축 — 서버의 `FIXED_FIELDS` 와 같다. */
 const FIXED: [string, string][] = [
   ['label', '이름'],
@@ -95,6 +95,14 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
   )
   const [filters, setFilters] = useState<Condition[]>(
     (spec0?.filters ?? []).map((one) => ({
+      field: one.field,
+      op: one.op as ConditionOp,
+      value: one.value,
+    })),
+  )
+  // 조건 비율의 조건 — 거르기를 통과한 기록 중 이 조건에 맞는 몫.
+  const [shareWhen, setShareWhen] = useState<Condition[]>(
+    (spec0?.share_when ?? []).map((one) => ({
       field: one.field,
       op: one.op as ConditionOp,
       value: one.value,
@@ -166,14 +174,18 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
   }, [defs, linked.data, visitKey, visitDays])
 
   const denominatorCandidates = (metrics.data ?? []).filter(
-    (one) => one.slug !== slug && !one.spec.denominator,
+    (one) => one.slug !== slug && !one.spec.denominator && one.spec.measure !== 'share',
   )
+  const share = measure === 'share'
   const denominator = denominatorCandidates.find((one) => one.slug === denMetric)
 
   function buildSpec(): MetricSpec {
     return {
       measure: measure as MetricSpec['measure'],
-      measure_field: measure === 'count' ? null : measureField || null,
+      measure_field: measure === 'count' || share ? null : measureField || null,
+      share_when: share
+        ? shareWhen.map((one) => ({ field: one.field, op: one.op, value: one.value }))
+        : [],
       time: timeAddress ? { address: timeAddress, grain: grain as Grain } : null,
       cohort:
         cohortAddress && timeAddress ? { address: cohortAddress, grain: grain as Grain } : null,
@@ -185,14 +197,15 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
           grain: one.grain ? (one.grain as Grain) : null,
         })),
       filters: filters.map((one) => ({ field: one.field, op: one.op, value: one.value })),
-      denominator: denMetric
-        ? {
-            metric: denMetric,
-            on: denOn.filter((name) => dims.some((dim) => dim.name === name)),
-            time: denTime === NONE ? null : (denTime as 'period' | 'cohort'),
-            per: Number(denPer) || 1,
-          }
-        : null,
+      denominator:
+        denMetric && !share
+          ? {
+              metric: denMetric,
+              on: denOn.filter((name) => dims.some((dim) => dim.name === name)),
+              time: denTime === NONE ? null : (denTime as 'period' | 'cohort'),
+              per: Number(denPer) || 1,
+            }
+          : null,
       settle_days: Number(settleDays) || 0,
       visits:
         visitKey && timeAddress
@@ -329,6 +342,11 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
                 value={measure}
                 onValueChange={(next) => {
                   setMeasure(next)
+                  // 조건 비율은 숫자 칸 · 분모 지표 없이 — 같은 기록 전체가 분모다.
+                  if (next === 'share') {
+                    setMeasureField('')
+                    setDenMetric('')
+                  }
                   invalidate()
                 }}
               >
@@ -343,7 +361,7 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
                   ))}
                 </SelectContent>
               </Select>
-              {measure !== 'count' && (
+              {measure !== 'count' && !share && (
                 <Select
                   value={measureField || NONE}
                   onValueChange={(next) => {
@@ -535,10 +553,30 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
           />
         </section>
 
+        {share && (
+          <section className="space-y-2">
+            <span className="text-sm font-medium">
+              조건 비율의 조건 — 거르기를 통과한 기록 중 이 조건에 맞는 몫(%)
+            </span>
+            <ConditionBar
+              defs={defs}
+              linked={linked.data ?? undefined}
+              conditions={shareWhen}
+              onChange={(next) => {
+                setShareWhen(next)
+                invalidate()
+              }}
+            />
+          </section>
+        )}
+
         <section className="grid gap-4 md:grid-cols-2">
           <div className="space-y-1">
-            <Label htmlFor="metric-denominator">분모 지표 (비율)</Label>
+            <Label htmlFor="metric-denominator">
+              분모 지표 (비율){share && ' — 조건 비율은 같은 기록 전체가 분모'}
+            </Label>
             <Select
+              disabled={share}
               value={denMetric || NONE}
               onValueChange={(next) => {
                 setDenMetric(next === NONE ? '' : next)

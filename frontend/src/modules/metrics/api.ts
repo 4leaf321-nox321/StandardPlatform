@@ -9,7 +9,8 @@ import type { Job } from '@/modules/jobs/api'
 import { api } from '@/shared/api/client'
 
 export type Grain = 'day' | 'week' | 'month' | 'quarter' | 'year'
-export type Measure = 'count' | 'sum' | 'avg' | 'min' | 'max'
+/** `share` — 조건 비율: `share_when` 에 맞는 기록의 몫(분모는 같은 기록 전체, %). */
+export type Measure = 'count' | 'sum' | 'avg' | 'min' | 'max' | 'share'
 
 export interface TimeAxis {
   /** `properties.<날짜 칸>` — 자기 타입의 날짜 칸만. */
@@ -43,6 +44,8 @@ export interface Denominator {
 export interface MetricSpec {
   measure: Measure
   measure_field?: string | null
+  /** 조건 비율의 조건 — 전부 맞아야(AND) 그 몫이다. */
+  share_when?: MetricFilter[]
   time?: TimeAxis | null
   cohort?: TimeAxis | null
   dimensions: Dimension[]
@@ -212,6 +215,8 @@ export interface MetricCell {
   denominator: number | null
   closed: boolean | null
   drill: Drill
+  /** 조건 비율이면 조건에 맞는 기록(값)의 목록 — `drill` 은 셀의 기록 전부. */
+  value_drill?: Drill | null
 }
 
 export interface MetricTable extends ReadHeader {

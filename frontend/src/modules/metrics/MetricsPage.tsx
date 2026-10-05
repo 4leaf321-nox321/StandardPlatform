@@ -109,7 +109,7 @@ export default function MetricsPage() {
                     {metric.source_type_label} · {metric.measure_label}
                     {metric.grain && ` · ${GRAIN_LABELS[metric.grain] ?? metric.grain}별`}
                     {metric.cohort_grain && ' · 코호트'}
-                    {metric.spec.denominator && ' · 비율'}
+                    {(metric.spec.denominator || metric.spec.measure === 'share') && ' · 비율'}
                   </span>
                   {mark && (
                     <span className={`rounded px-1.5 py-0.5 text-xs ${TONE[mark.tone]}`}>

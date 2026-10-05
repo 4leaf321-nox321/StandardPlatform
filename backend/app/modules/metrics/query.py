@@ -92,6 +92,9 @@ class Cell:
     def measure(self, name: str) -> float | None:
         if name == "count":
             return float(self.count)
+        if name == spec_module.SHARE:
+            # 조건 비율의 값은 조건 건수(`sum`) — 비율은 분모(`OwnTotal`)가 낸다.
+            return float(self.sum or 0.0)
         if name == "sum":
             return self.sum
         if name == "avg":
@@ -290,7 +293,7 @@ class Denominator:
             metric=self.metric.slug,
             label=self.metric.label,
             measure=self.spec.measure,
-            measure_label=METRIC_LABELS[self.spec.measure],
+            measure_label=spec_module.MEASURE_LABELS[self.spec.measure],
             time=self.time,
             per=self.per,
             missing=self.missing,
@@ -299,10 +302,12 @@ class Denominator:
 
 
 def read_denominator(
-    db: Session, user: User, built: spec_module.Built, ask: Ask
+    db: Session, user: User, metric: MetricDef, built: spec_module.Built, ask: Ask
 ) -> Denominator | None:
     """분모 지표를 **같은 함수로 두 번째 질의** — 묶음은 `on` 중 이번에 요청한 기준과
     시간축 규칙으로. 분자에만 있는 기준은 펼쳐진다(키에 없으므로 같은 값이 든다)."""
+    if built.spec.measure == spec_module.SHARE:
+        return own_total(db, metric, built, ask)
     den = built.denominator
     den_in = built.spec.denominator
     if den is None or den_in is None:
@@ -343,6 +348,51 @@ def read_denominator(
         truncated,
         run=den_run,
         before=closed_before(den_run, den_spec.settle_days),
+    )
+
+
+@dataclass
+class OwnTotal(Denominator):
+    """조건 비율의 분모 — **같은 셀의 전체 건수**(`count`). 다른 지표를 읽지 않는다. 기록이
+    없는 칸은 비율이 없을 뿐 「분모 없음」 이 아니다(세지 않는다)."""
+
+    def lookup(self, cell: Cell, grain: str | None) -> float | None:
+        return float(cell.count) if cell.count else None
+
+    def ratio(self, numerator: float | None, cell: Cell, grain: str | None) -> float | None:
+        if numerator is None or not cell.count:
+            return None
+        return numerator / cell.count * self.per
+
+    def out(self) -> schemas.DenominatorOut:
+        return schemas.DenominatorOut(
+            metric=self.metric.slug,
+            label=f"{self.metric.label} — 같은 기록 전체",
+            measure="count",
+            measure_label=METRIC_LABELS["count"],
+            time=self.time,
+            per=self.per,
+            missing=0,
+            truncated=False,
+        )
+
+
+#: 조건 비율은 % 로 읽는다.
+SHARE_PER = 100.0
+
+
+def own_total(db: Session, metric: MetricDef, built: spec_module.Built, ask: Ask) -> OwnTotal:
+    run = current_run(db, metric)
+    return OwnTotal(
+        metric,
+        built.spec,
+        list(ask.dims),
+        "period" if "period" in ask.by else ("cohort" if "cohort" in ask.by else None),
+        SHARE_PER,
+        {},
+        False,
+        run=run,
+        before=closed_before(run, built.spec.settle_days),
     )
 
 
@@ -477,7 +527,7 @@ def frame(
 ) -> Frame:
     check_ask(built, ask)
     cells, truncated = read(db, user, metric, ask)
-    den = read_denominator(db, user, built, ask) if with_denominator else None
+    den = read_denominator(db, user, metric, built, ask) if with_denominator else None
     run = current_run(db, metric)
     return Frame(cells, truncated, den, run, closed_before(run, built.spec.settle_days))
 
@@ -520,6 +570,7 @@ def drill(
     by: tuple[str, ...],
     ask: Ask | None = None,
     period: date | None = None,
+    numerator: bool = False,
 ) -> schemas.DrillOut:
     """셀 → 목록 조건. 정의의 거르기는 그대로 덧붙이되 **기준이 정한 조건이 이긴다** —
     기준 값은 거르기를 통과한 값이라 겹쳐도 뜻이 같다. `by` 에 없는 축은 그 축의 전부다.
@@ -549,6 +600,10 @@ def drill(
         _range_condition(params, partial, "cohort", built.cohort, cell.cohort)
     elif built.cohort is not None and ask is not None:
         _bounds(params, built.cohort, ask.cohort_from, ask.cohort_to)
+    if numerator and built.spec.measure == spec_module.SHARE:
+        # 조건 비율의 분자 — 「조건에 맞는 N건」 이 그 목록이다(분석의 건수는 이것이다).
+        for one in built.spec.share_when:
+            params[f"f.{one.field}.{one.op}"] = one.value
     for cond in built.conds:
         params.setdefault(f"f.{cond.field}.{cond.op}", cond.value)
     return schemas.DrillOut(type_slug=built.source.slug, params=params, partial=partial)
@@ -682,7 +737,7 @@ def header_of(
         "slug": metric.slug,
         "label": metric.label,
         "measure": built.spec.measure,
-        "measure_label": METRIC_LABELS[built.spec.measure],
+        "measure_label": spec_module.MEASURE_LABELS[built.spec.measure],
         "grain": built.grain,
         "cohort_grain": built.cohort.grain if built.cohort is not None else None,
         "settle_days": built.spec.settle_days,
@@ -719,13 +774,13 @@ def table(
     """요청한 기준(과 기간 · 코호트)별 셀 — 비율 · 건 보기 포함."""
     check_ask(built, ask)
     cells, truncated = read(db, user, metric, ask)
-    denominator = read_denominator(db, user, built, ask)
+    denominator = read_denominator(db, user, metric, built, ask)
     labels = labels_for(db, built, ask.dims, cells)
     run = current_run(db, metric)
     before = closed_before(run, built.spec.settle_days)
     measure = built.spec.measure
     out: list[schemas.CellOut] = []
-    total_value = 0.0 if measure in ("count", "sum") else None
+    total_value = 0.0 if measure in ("count", "sum", spec_module.SHARE) else None
     for cell in sorted(cells, key=lambda one: _sort_key(one, ask.dims)):
         value = cell.measure(measure)
         if total_value is not None and value is not None:
@@ -763,6 +818,11 @@ def table(
                     is_closed(cell.period, built.grain, before) if "period" in ask.by else None
                 ),
                 drill=drill(built, cell, by=ask.by, ask=ask),
+                value_drill=(
+                    drill(built, cell, by=ask.by, ask=ask, numerator=True)
+                    if measure == spec_module.SHARE
+                    else None
+                ),
             )
         )
     header = header_of(metric, built, run, truncated=truncated, denominator=denominator)
@@ -793,7 +853,7 @@ def series(
     check_ask(built, ask)
     grain = built.time.grain
     cells, truncated = read(db, user, metric, ask)
-    denominator = read_denominator(db, user, built, ask)
+    denominator = read_denominator(db, user, metric, built, ask)
     labels = labels_for(db, built, ask.dims, cells)
     run = current_run(db, metric)
     before = closed_before(run, built.spec.settle_days)
@@ -877,7 +937,7 @@ def cohort(
     check_ask(built, ask)
     grain = built.cohort.grain
     cells, truncated = read(db, user, metric, ask)
-    denominator = read_denominator(db, user, built, ask)
+    denominator = read_denominator(db, user, metric, built, ask)
     run = current_run(db, metric)
     before = closed_before(run, built.spec.settle_days)
     measure = built.spec.measure
@@ -899,6 +959,7 @@ def cohort(
     for when in cohorts:
         found = matrix.get(when, {})
         running = 0.0
+        running_count = 0
         out_cells: list[schemas.CohortCellOut] = []
         row_cell = Cell({}, None, when, 0, 0, 0, None, None, None)
         for age in ages:
@@ -906,7 +967,11 @@ def cohort(
             value = cell.measure(measure)
             if value is not None:
                 running += value
+            running_count += cell.count
             total = running if cumulative else value
+            if cumulative and isinstance(denominator, OwnTotal):
+                # 조건 비율의 누적은 분모도 누적이다 — 그 경과까지의 조건 건수 / 전체 건수.
+                cell = replace(cell, count=running_count)
             period = advance(when, age, grain)
             out_cells.append(
                 schemas.CohortCellOut(

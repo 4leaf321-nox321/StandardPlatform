@@ -111,7 +111,9 @@ def read(
     개. 빈 기간은 0 건이다(대수가 있으면 진짜 관측이다)."""
     axis, grain = _axis(built, axis)
     den_in = built.spec.denominator
-    uses_den = den_in is not None and den_in.time == axis
+    # 조건 비율은 분모가 자기 셀이다 — 건수는 조건 건수, 대수는 같은 부분군의 전체 건수.
+    share = built.spec.measure == spec_module.SHARE
+    uses_den = share or (den_in is not None and den_in.time == axis)
     target = common.dim_of(built, split) if split is not None else None
     # `shared` — 값마다 훑기: 대수를 나누지 않는 기준(증상)은 같은 대수로 나눈다(분모가 그
     # 기준을 모르면 그대로 펼쳐진다 — `read_denominator`).
@@ -140,14 +142,19 @@ def read(
     excluded = {"missing_denominator": 0, "open": 0}
 
     grouped: dict[str | None, dict[date, int]] = {}
+    records: dict[str | None, dict[date, int]] = {}
     for cell in frame.cells:
         when = cell.cohort if axis == "cohort" else cell.period
         if when is None:
             continue
         key = cell.dims.get(split) if split is not None else None
         bucket = grouped.setdefault(key, {})
-        bucket[when] = bucket.get(when, 0) + cell.count
-    keys = sorted(grouped, key=lambda one: -sum(grouped[one].values()))
+        bucket[when] = bucket.get(when, 0) + (int(cell.sum or 0) if share else cell.count)
+        if share:
+            whole = records.setdefault(key, {})
+            whole[when] = whole.get(when, 0) + cell.count
+    weight = records if share else grouped
+    keys = sorted(grouped, key=lambda one: -sum(weight[one].values()))
     other_groups = max(0, len(keys) - limit)
     keys = keys[:limit]
     every = sorted({when for bucket in grouped.values() for when in bucket})
@@ -174,7 +181,9 @@ def read(
             Series(
                 key=key,
                 label=query.label_of(labels, split, key) if split is not None else "전체",
-                subgroups=_subgroups(found, bucket, timeline, key),
+                subgroups=_subgroups(
+                    found, bucket, timeline, key, records.get(key) if share else None
+                ),
                 total=sum(bucket.values()),
             )
         )
@@ -182,15 +191,26 @@ def read(
 
 
 def _subgroups(
-    found: SeriesSet, bucket: dict[date, int], timeline: list[date], key: str | None
+    found: SeriesSet,
+    bucket: dict[date, int],
+    timeline: list[date],
+    key: str | None,
+    records: dict[date, int] | None = None,
 ) -> list[Subgroup]:
+    """`records` — 조건 비율이면 부분군마다 전체 건수(대수 자리). 기록이 없는 부분군은 관측이
+    아니다(비율이 없다) — 「분모 없음」 으로 세지 않고 건너뛴다."""
     out: list[Subgroup] = []
     den, grain, axis = found.den, found.grain, found.axis
     for when in timeline:
         count = bucket.get(when, 0)
         exposure = 1.0
         den_closed = True
-        if den is not None:
+        if records is not None:
+            whole = records.get(when, 0)
+            if not whole:
+                continue
+            exposure = float(whole)
+        elif den is not None:
             units = den.lookup(_cell(found, key, when, count), grain)
             if not units:
                 found.excluded["missing_denominator"] += count
@@ -257,7 +277,8 @@ def totals(
     axis, grain = _axis(built, axis)
     den_in = built.spec.denominator
     den_metric = built.denominator
-    if den_in is None or den_metric is None or den_in.time != axis:
+    share = built.spec.measure == spec_module.SHARE
+    if not share and (den_in is None or den_metric is None or den_in.time != axis):
         return None
     if axis == "cohort":
         ask = replace(ask, dims=[], by=("cohort",), age_from=0, age_to=window)
@@ -272,19 +293,24 @@ def totals(
         when = cell.cohort if axis == "cohort" else cell.period
         if when is not None:
             whens.add(when)
-    den_spec = spec_module.MetricSpec.model_validate(den_metric.spec)
-    den_run = query.current_run(db, den_metric)
-    den = query.Denominator(
-        den_metric,
-        den_spec,
-        [split],
-        axis,
-        den_in.per,
-        {},
-        False,
-        run=den_run,
-        before=query.closed_before(den_run, den_spec.settle_days),
-    )
+    den: query.Denominator
+    if share:
+        den = query.own_total(db, metric, built, replace(ask, dims=[split], by=()))
+    else:
+        assert den_in is not None and den_metric is not None
+        den_spec = spec_module.MetricSpec.model_validate(den_metric.spec)
+        den_run = query.current_run(db, den_metric)
+        den = query.Denominator(
+            den_metric,
+            den_spec,
+            [split],
+            axis,
+            den_in.per,
+            {},
+            False,
+            run=den_run,
+            before=query.closed_before(den_run, den_spec.settle_days),
+        )
     found = Totals(
         axis=axis,
         grain=grain,
@@ -308,9 +334,14 @@ def totals(
     else:
         stop = min(end, ask.period_to) if ask.period_to is not None else end
         found.ask = replace(ask, period_from=first, period_to=stop)
-    found.groups, den.truncated = query.paired_totals(
-        db, user, metric, built, found.ask, dim=split, when=axis, closed_to=cut
-    )
+    if share:
+        found.groups, den.truncated = _share_totals(
+            db, user, metric, found.ask, split=split, when=axis, closed_to=cut
+        )
+    else:
+        found.groups, den.truncated = query.paired_totals(
+            db, user, metric, built, found.ask, dim=split, when=axis, closed_to=cut
+        )
     common.require_whole(found.frame)
     found.excluded["missing_denominator"] = sum(one.missing for one in found.groups)
     found.excluded["open"] = sum(one.open for one in found.groups)
@@ -328,10 +359,52 @@ def group_drill(
     """값 하나의 근거 — 닫힌 부분군의 범위. 코호트 축의 「출고 K 기간 안」 은 코호트마다 접수
     범위가 달라 목록 조건 하나로 못 적는다(`age` — 목록이 더 많을 수 있다)."""
     cell = query.Cell({found.den.on[0]: key}, None, None, None, count, 0, None, None, None)
-    out = query.drill(built, cell, by=(), ask=found.ask)
+    out = query.drill(built, cell, by=(), ask=found.ask, numerator=True)
     if found.axis == "cohort":
         out.partial.append("age")
     return out
+
+
+def _share_totals(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    ask: query.Ask,
+    *,
+    split: str,
+    when: Axis,
+    closed_to: date,
+) -> tuple[list[query.Paired], bool]:
+    """조건 비율의 값마다 합 — 짝지을 분모가 없다(셀이 조건 건수 · 전체 건수를 함께 든다).
+    닫힌 범위와 열린 범위를 따로 한 번씩 읽는다(줄 = 값의 수)."""
+    start = ask.cohort_from if when == "cohort" else ask.period_from
+    stop = ask.cohort_to if when == "cohort" else ask.period_to
+
+    def span(lo: date | None, hi: date | None) -> tuple[list[query.Cell], bool]:
+        part = replace(ask, dims=[split], by=())
+        if when == "cohort":
+            part = replace(part, cohort_from=lo, cohort_to=hi)
+        else:
+            part = replace(part, period_from=lo, period_to=hi)
+        return query.read(db, user, metric, part)
+
+    closed, cut_short = span(start, min(closed_to, stop) if stop else closed_to)
+    opened, open_short = (
+        span(closed_to, stop) if stop is None or closed_to < stop else ([], False)
+    )
+    late = {one.dims.get(split): int(one.sum or 0) for one in opened}
+    out = [
+        query.Paired(
+            key=one.dims.get(split),
+            count=int(one.sum or 0),
+            exposure=float(one.count),
+            missing=0,
+            open=late.pop(one.dims.get(split), 0),
+        )
+        for one in closed
+    ]
+    out += [query.Paired(key, 0, 0.0, 0, hits) for key, hits in late.items()]
+    return out, cut_short or open_short
 
 
 def _whole(found: Totals, when: date) -> bool:
@@ -352,14 +425,14 @@ def drill(
     cell = _cell(found, key, subgroup.when, subgroup.count)
     ask = found.ask
     if found.axis == "period":
-        return query.drill(built, cell, by=("period",), ask=ask)
+        return query.drill(built, cell, by=("period",), ask=ask, numerator=True)
     end = query.advance(subgroup.when, found.window, found.grain)
     start = (
         max(subgroup.when, ask.period_from) if ask.period_from is not None else subgroup.when
     )
     stop = min(end, ask.period_to) if ask.period_to is not None else end
     ranged = replace(ask, period_from=start, period_to=stop)
-    return query.drill(built, cell, by=("cohort",), ask=ranged)
+    return query.drill(built, cell, by=("cohort",), ask=ranged, numerator=True)
 
 
 def caveats(found: SeriesSet | Totals, caveats_: common.Caveats) -> None:

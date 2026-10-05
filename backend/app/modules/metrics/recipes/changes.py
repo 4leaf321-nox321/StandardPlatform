@@ -387,8 +387,8 @@ def ratio_interval(
 
 
 def available(built: spec_module.Built) -> str | None:
-    if built.spec.measure != "count":
-        return "건수 지표에서만 됩니다 — 변화점은 건수 · 비율의 수준을 봅니다."
+    if built.spec.measure not in ("count", spec_module.SHARE):
+        return "건수 · 조건 비율 지표에서만 됩니다 — 변화점은 건수 · 비율의 수준을 봅니다."
     if built.time is None and built.cohort is None:
         return "시간 칸이나 코호트 칸이 있는 지표에서만 됩니다."
     return None

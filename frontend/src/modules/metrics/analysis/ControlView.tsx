@@ -119,7 +119,12 @@ export function ControlView({ metric, read, initial = {} }: AnalysisViewProps) {
           <CaveatList caveats={data.caveats} />
           <AnalysisMeta result={data} />
           <p className="text-muted-foreground text-xs">
-            {data.kind === 'u' ? `대수 ${shownNumber(data.per)}대당 비율` : '건수'} · 규칙:{' '}
+            {data.kind === 'u'
+              ? `대수 ${shownNumber(data.per)}대당 비율`
+              : data.kind === 'p'
+                ? '조건 비율(%) — p-관리도'
+                : '건수'}{' '}
+            · 규칙:{' '}
             {data.rules.map((one) => `${one.number}) ${one.label}`).join(' · ')}
           </p>
           {data.charts.map((chart) => (
@@ -164,7 +169,7 @@ function ChartBlock({ chart, result }: { chart: ControlChart; result: ControlRes
           {
             type: 'scatter',
             mode: 'lines+markers',
-            name: result.kind === 'u' ? '비율' : '건수',
+            name: result.kind === 'c' ? '건수' : '비율',
             x: labels,
             y: chart.points.map((one) => one.rate),
             marker: {
@@ -196,7 +201,7 @@ function ChartBlock({ chart, result }: { chart: ControlChart; result: ControlRes
           <TableHeader>
             <TableRow>
               <TableHead>{result.axis === 'cohort' ? '코호트' : '기간'}</TableHead>
-              <TableHead className="text-right">{result.kind === 'u' ? '비율' : '건수'}</TableHead>
+              <TableHead className="text-right">{result.kind === 'c' ? '건수' : '비율'}</TableHead>
               <TableHead>걸린 규칙</TableHead>
               <TableHead />
             </TableRow>

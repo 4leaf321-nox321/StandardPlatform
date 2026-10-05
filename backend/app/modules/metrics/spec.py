@@ -7,6 +7,7 @@
 ## 정의의 모양(`MetricSpec`)
 
     measure      count | sum | avg | min | max  (+ measure_field: 자기 숫자 칸)
+                 | share — 조건 비율: `share_when` 에 맞는 기록의 몫(분모는 같은 기록 전체)
     time         {address: properties.<날짜 칸>, grain: day|week|month|quarter|year}
     cohort       같은 모양(선택) — 경과(age)는 이 단위. 시간 칸과 단위가 같아야 한다
     dimensions   [{name, address, grain?}] 6개까지 — 주소는 통계 · 조건과 같다(걸음 셋까지)
@@ -29,7 +30,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import Select, func, select, text
+from sqlalchemy import Select, and_, case, func, select, text
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -44,6 +45,10 @@ from app.modules.objects.summary import METRIC_LABELS, METRICS
 from app.modules.ontology.models import SLUG_MAX, ObjectType, PropertyDef
 from app.shared.errors import AppError, code
 
+#: 조건 비율 — 지표에만 있는 집계(그때그때 통계에는 없다).
+SHARE = "share"
+MEASURES = (*METRICS, SHARE)
+MEASURE_LABELS = {**METRIC_LABELS, SHARE: "조건 비율"}
 #: 기준은 여섯까지. 일곱부터는 셀 수를 짐작할 수 없고, 사람이 그 표를 읽지 못한다.
 MAX_DIMENSIONS = 6
 NAME_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
@@ -120,6 +125,9 @@ class MetricSpec(BaseModel):
 
     measure: str = "count"
     measure_field: str | None = Field(default=None, max_length=200)
+    share_when: list[FilterIn] = Field(default_factory=list, max_length=20)
+    """조건 비율(`measure="share"`)의 조건 — 거르기와 같은 꼴, 전부 맞아야(AND) 「그 몫」
+    이다."""
     time: TimeAxisIn | None = None
     cohort: TimeAxisIn | None = None
     dimensions: list[DimensionIn] = Field(default_factory=list, max_length=MAX_DIMENSIONS)
@@ -245,10 +253,28 @@ def _check_source(source: ObjectType) -> None:
         raise _bad(f"「{source.label}」 은 꺼진 타입입니다.")
 
 
-def _measure(scope: Scope, spec: MetricSpec) -> Any | None:
+def _measure(scope: Scope, spec: MetricSpec, plan: axes.JoinPlan) -> Any | None:
+    if spec.measure == SHARE:
+        return _share(scope, spec, plan)
+    if spec.share_when:
+        raise _bad("조건(share_when)은 조건 비율(share)에서만 둡니다.")
     if spec.measure not in METRICS:
-        raise _bad(f"집계는 {', '.join(METRICS)} 중 하나여야 합니다: {spec.measure}")
+        raise _bad(f"집계는 {', '.join(MEASURES)} 중 하나여야 합니다: {spec.measure}")
     return axes.metric_expr(scope.defs, spec.measure, spec.measure_field, METRIC_LABELS)
+
+
+def _share(scope: Scope, spec: MetricSpec, plan: axes.JoinPlan) -> Any:
+    """조건 비율 — 값 식이 「조건에 맞으면 1, 아니면 0」 이다. 그러면 계산 문장이 셀마다
+    `sum` 에 조건 건수를, `count` 에 전체 건수를 그대로 담는다(칸을 새로 두지 않는다)."""
+    if spec.measure_field:
+        raise _bad("조건 비율에는 숫자 칸을 고르지 않습니다 — 조건(share_when)으로 셉니다.")
+    if not spec.share_when:
+        raise _bad("조건 비율은 조건(share_when)이 하나 이상 있어야 합니다 — 무엇의 몫인가.")
+    if spec.denominator is not None:
+        raise _bad("조건 비율은 같은 기록 전체가 분모입니다 — 분모 지표를 두지 않습니다.")
+    conds = [conditions.Condition(one.field, one.op, one.value) for one in spec.share_when]
+    found = conditions.clauses(scope.defs, conds, plan.resolver)
+    return case((and_(*found), 1), else_=0)
 
 
 def _time_axis(scope: Scope, axis_in: TimeAxisIn, what: str) -> TimeAxis:
@@ -339,7 +365,7 @@ def _denominator(
     if not found.is_active:
         raise _bad(f"분모 지표가 꺼져 있습니다: {den_in.metric}")
     den_spec = MetricSpec.model_validate(found.spec)
-    if den_spec.denominator is not None:
+    if den_spec.denominator is not None or den_spec.measure == SHARE:
         raise _bad("분모의 분모는 둘 수 없습니다 — 비율의 비율은 읽을 수 없습니다.")
     if den_in.time is not None and den_in.time not in DENOMINATOR_TIMES:
         raise _bad(
@@ -397,7 +423,7 @@ def build(
     _check_source(source)
     scope = of_type(db, source)
     plan = axes.JoinPlan(db, scope, prefix="mx")
-    value = _measure(scope, spec)
+    value = _measure(scope, spec, plan)
     time = _time_axis(scope, spec.time, "시간 칸") if spec.time is not None else None
     cohort = _cohort(scope, spec, time)
     if len(spec.dimensions) > MAX_DIMENSIONS:
@@ -479,7 +505,7 @@ def plan(
     join_plan = axes.JoinPlan(db, scope, prefix="mx")
     value: Any | None = None
     try:
-        value = _measure(scope, spec)
+        value = _measure(scope, spec, join_plan)
     except AppError as caught:
         errors.append(caught.message)
     time: TimeAxis | None = None

@@ -172,7 +172,11 @@ const COHORT: MetricCohort = {
   ],
 }
 
-async function mount(path = '/metrics/cases_monthly', metric: Metric = METRIC) {
+async function mount(
+  path = '/metrics/cases_monthly',
+  metric: Metric = METRIC,
+  table: MetricTable = TABLE,
+) {
   metricsApi.get.mockResolvedValue(metric)
   metricsApi.dims.mockResolvedValue({
     name: 'symptom',
@@ -181,7 +185,7 @@ async function mount(path = '/metrics/cases_monthly', metric: Metric = METRIC) {
     values: [{ value: '소음', label: '소음', count: 2 }],
     truncated: false,
   })
-  metricsApi.values.mockResolvedValue(TABLE)
+  metricsApi.values.mockResolvedValue(table)
   metricsApi.cohort.mockResolvedValue(COHORT)
   const { default: MetricDetailPage } = await import('@/modules/metrics/MetricDetailPage')
   render(
@@ -210,6 +214,45 @@ describe('지표 상세', () => {
     )
     // 분모가 있으니 비율 열이 선다.
     expect(screen.getByText('2.5')).toBeInTheDocument()
+  })
+
+  it('조건 비율은 조건 건수를 그 목록으로 잇고 비율(%) 열을 세운다', async () => {
+    // 분모 지표 없이 — 같은 기록 전체가 분모다. 「N건 보기」 는 셀의 전부, 조건 건수는 조건까지.
+    const share: Metric = {
+      ...METRIC,
+      measure_label: '조건 비율',
+      spec: {
+        ...METRIC.spec,
+        measure: 'share',
+        share_when: [{ field: 'handling', op: 'eq', value: 'NTF' }],
+        denominator: null,
+      },
+    }
+    const cell = TABLE.cells[0]
+    await mount('/metrics/cases_monthly', share, {
+      ...TABLE,
+      measure: 'share',
+      measure_label: '조건 비율',
+      cells: [
+        {
+          ...cell,
+          count: 8,
+          value: 2,
+          ratio: 25,
+          value_drill: {
+            ...cell.drill,
+            params: { ...cell.drill.params, 'f.handling.eq': 'NTF' },
+          },
+        },
+      ],
+    })
+    await waitFor(() => expect(screen.getByText('비율(%)')).toBeInTheDocument())
+    expect(screen.getByText('조건 건수')).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /8건 보기/ })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: /2건 보기/ }).getAttribute('href')).toContain(
+      'f.handling.eq=NTF',
+    )
+    expect(screen.getByText('25')).toBeInTheDocument()
   })
 
   it('코호트 탭은 누적을 켜고 끄며 다시 묻는다', async () => {

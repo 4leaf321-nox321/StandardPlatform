@@ -235,7 +235,8 @@ export interface ControlChart {
 export interface ControlResult extends AnalysisHeader {
   axis: 'period' | 'cohort'
   window: number | null
-  kind: 'u' | 'c'
+  /** u — 대수당 비율, c — 건수, p — 조건 비율(같은 기록 중 몫, %). */
+  kind: 'u' | 'c' | 'p'
   per: number
   split: string | null
   split_label: string | null
