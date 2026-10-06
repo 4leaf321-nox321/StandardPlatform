@@ -99,6 +99,37 @@ def test_끝_슬래시도_받는다(client: TestClient, admin: Signed) -> None:
     assert slashed.json()["types"][0]["endpoint"] == plain.json()["types"][0]["endpoint"]
 
 
+def test_판은_구조가_바뀔_때만_바뀐다(client: TestClient, admin: Signed) -> None:
+    """받는 쪽은 판이 바뀌면 「구조 변경」 을 통지한다 — 표시 문구가 바뀐 날 울리면 곧
+    아무도 안 읽고, 고를 값이 는 날 안 울리면 새 코드를 모른 채 받는다."""
+    _, part = _world(client, admin)
+
+    def revision() -> str:
+        return str(client.get("/api/core", headers=admin.headers).json()["revision"])
+
+    def patch_grade(label: str, options: list[str]) -> None:
+        got = client.patch(
+            f"/api/ontology/types/{part}/properties/grade",
+            json={
+                "key": "grade",
+                "label": label,
+                "data_type": "enum",
+                "enum_options": options,
+            },
+            headers=admin.headers,
+        )
+        assert got.status_code == 200, got.text
+
+    first = revision()
+    assert revision() == first
+
+    patch_grade("품질 등급", ["A", "B"])
+    assert revision() == first
+
+    patch_grade("품질 등급", ["A", "B", "C"])
+    assert revision() != first
+
+
 def test_행은_봉투와_알맹이로_나뉘고_참조는_식별자로_나간다(
     client: TestClient, admin: Signed
 ) -> None:

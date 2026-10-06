@@ -19,6 +19,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import io
 import uuid
 import zipfile
@@ -201,6 +202,36 @@ def _property_out(definition: PropertyDef) -> CorePropertyOut:
     )
 
 
+def _mark(object_type: ObjectType, defs: list[PropertyDef], kinds: list[str]) -> str:
+    """타입 하나의 **받는 쪽 코드가 기대는 모양** — 판(`revision`)의 재료.
+
+    칸 이름과 자료형만으로는 모자란다. 한 값이 배열이 되거나(`multi`), 참조가 다른 타입을
+    가리키거나, 고를 값이 늘거나, 선이 하나 더 열리면 받는 쪽은 해석을 바꿔야 한다 — 그런데
+    판이 그대로면 「구조가 그대로다」 로 읽는다. 이름 · 설명 같은 표시 문구는 넣지 않는다:
+    그것이 바뀔 때마다 판이 달라지면 받는 쪽은 곧 이 값을 안 본다.
+    """
+    columns = ",".join(
+        f"{one.key}:{one.data_type}"
+        + ("[]" if one.multi else "")
+        + (f">{one.ref_type_slug}" if one.ref_type_slug else "")
+        + ("=" + "/".join(one.enum_options) if one.enum_options else "")
+        for one in defs
+    )
+    return f"{object_type.slug}:{columns};{','.join(kinds)}"
+
+
+def revision_of(marks: list[str]) -> str:
+    """열린 정의의 판 — **같은 구조면 어느 프로세스에서 물어도 같은 값.**
+
+    ⚠️ 내장 `hash()` 를 쓰지 않는다. 문자열 해시는 프로세스마다 씨가 달라서(PYTHONHASHSEED)
+       허브를 다시 띄울 때마다, 워커가 여럿이면 요청마다 판이 바뀌었다 — 받는 쪽은 구조가
+       그대로인데도 「구조 변경」 을 통지받았다(0.4.40 까지, 같은 입력이 두 프로세스에서
+       6120845454 · 8701402863 으로 실측).
+    """
+    digest = hashlib.sha256("|".join(marks).encode("utf-8")).hexdigest()
+    return f"{len(marks)}-{int(digest, 16) % 10**10:010d}"
+
+
 def _shown_defs(db: Session, object_type: ObjectType) -> list[PropertyDef]:
     """나가는 칸 — 첨부(`file`)는 뺀다. 파일은 이 길로 옮길 수 없고, 목록에 이름만 남으면
     받는 쪽은 그 파일이 있는 줄 안다."""
@@ -264,13 +295,13 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
                 relations=kinds,
             )
         )
-        marks.append(f"{object_type.slug}:" + ",".join(f"{d.key}:{d.data_type}" for d in defs))
+        marks.append(_mark(object_type, defs, kinds))
 
     return CoreCatalogOut(
         system=get_settings().app_slug,
         # **구조가 바뀌면 값이 바뀐다.** 날짜로 두면 칸이 안 바뀐 날에도 달라져서, 받는 쪽은
         # 곧 그것을 안 보게 된다.
-        revision=f"{len(types)}-{abs(hash('|'.join(marks))) % 10**10:010d}",
+        revision=revision_of(marks),
         as_of=_stamp(datetime.now(UTC)) or "",
         types=out,
     )
