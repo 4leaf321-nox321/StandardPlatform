@@ -130,6 +130,59 @@ def test_판은_구조가_바뀔_때만_바뀐다(client: TestClient, admin: Sig
     assert revision() != first
 
 
+def test_판은_칸과_타입의_표시_차례와_상관없다(client: TestClient, admin: Signed) -> None:
+    """**차례는 표시다** — 이름순 · `sort_order` 가 판의 재료에 차례로 새어 들면 안 된다.
+
+    판의 재료를 받은 차례대로 이었더니, 칸 이름만 바꿔도 이름순 차례가 바뀌어 판이 바뀌었다.
+    이름의 정렬은 DB 의 정렬 규칙마다 달라 CI(`en_US.utf8`)에서만 깨졌다(로컬 `C.UTF-8` 통과).
+    여기서는 **어느 정렬 규칙에서도 맨 앞에 서는 이름**(「가…」)으로 바꿔 그 차례를 확실히
+    흔든다.
+    """
+    vendor, part = _world(client, admin)
+
+    def revision() -> str:
+        return str(client.get("/api/core", headers=admin.headers).json()["revision"])
+
+    first = revision()
+
+    # 등급은 이름순으로 맨 뒤였다(공급사 · 꼬리표 · 등급) — 「가」 로 시작하면 맨 앞이 된다.
+    renamed = client.patch(
+        f"/api/ontology/types/{part}/properties/grade",
+        json={
+            "key": "grade",
+            "label": "가장 등급",
+            "data_type": "enum",
+            "enum_options": ["A", "B"],
+        },
+        headers=admin.headers,
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert revision() == first
+
+    # 화면에서 칸 순서를 바꾼 것 — 표시다.
+    moved = client.patch(
+        f"/api/ontology/types/{part}/properties/grade",
+        json={
+            "key": "grade",
+            "label": "가장 등급",
+            "data_type": "enum",
+            "enum_options": ["A", "B"],
+            "sort_order": 99,
+        },
+        headers=admin.headers,
+    )
+    assert moved.status_code == 200, moved.text
+    assert revision() == first
+
+    # 사이드바에서 타입 순서를 바꾼 것 — 이것도 표시다.
+    for slug, order in ((vendor, 999), (part, -999)):
+        got = client.patch(
+            f"/api/ontology/types/{slug}", json={"sort_order": order}, headers=admin.headers
+        )
+        assert got.status_code == 200, got.text
+    assert revision() == first
+
+
 def test_행은_봉투와_알맹이로_나뉘고_참조는_식별자로_나간다(
     client: TestClient, admin: Signed
 ) -> None:

@@ -209,15 +209,21 @@ def _mark(object_type: ObjectType, defs: list[PropertyDef], kinds: list[str]) ->
     가리키거나, 고를 값이 늘거나, 선이 하나 더 열리면 받는 쪽은 해석을 바꿔야 한다 — 그런데
     판이 그대로면 「구조가 그대로다」 로 읽는다. 이름 · 설명 같은 표시 문구는 넣지 않는다:
     그것이 바뀔 때마다 판이 달라지면 받는 쪽은 곧 이 값을 안 본다.
+
+    ⚠️ **칸의 차례는 키로 정한다** — 받은 차례(`sort_order` · 이름순)를 쓰면 표시 문구가
+       차례를 통해 새어 든다. 이름만 바꿔도 차례가 바뀌어 판이 바뀌고, 이름의 정렬은 DB 의
+       정렬 규칙(`C.UTF-8` · `en_US.utf8`)마다 달라 같은 정의가 설치마다 다른 판이 된다 —
+       CI 에서 「이름만 바꿨는데 판이 바뀌었다」 로 깨졌다(로컬에서는 통과). 화면에서 칸
+       순서를 바꾼 것도 판을 바꿨다.
     """
     columns = ",".join(
         f"{one.key}:{one.data_type}"
         + ("[]" if one.multi else "")
         + (f">{one.ref_type_slug}" if one.ref_type_slug else "")
         + ("=" + "/".join(one.enum_options) if one.enum_options else "")
-        for one in defs
+        for one in sorted(defs, key=lambda one: one.key)
     )
-    return f"{object_type.slug}:{columns};{','.join(kinds)}"
+    return f"{object_type.slug}:{columns};{','.join(sorted(kinds))}"
 
 
 def revision_of(marks: list[str]) -> str:
@@ -228,7 +234,8 @@ def revision_of(marks: list[str]) -> str:
        그대로인데도 「구조 변경」 을 통지받았다(0.4.40 까지, 같은 입력이 두 프로세스에서
        6120845454 · 8701402863 으로 실측).
     """
-    digest = hashlib.sha256("|".join(marks).encode("utf-8")).hexdigest()
+    # 타입의 차례도 slug 로 — 받은 차례는 사이드바 순서(`sort_order`)라 표시다.
+    digest = hashlib.sha256("|".join(sorted(marks)).encode("utf-8")).hexdigest()
     return f"{len(marks)}-{int(digest, 16) % 10**10:010d}"
 
 
