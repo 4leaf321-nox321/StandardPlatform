@@ -181,6 +181,24 @@ def platform_name(server: str) -> str:
     return name
 
 
+def _apart(name: str, server: str, known: dict[str, Any]) -> str:
+    """같은 이름을 **다른 주소**가 쥐고 있을 때 쓸 이름 — 주소를 붙인다.
+
+    같은 플랫폼의 개발판 · 운영판은 slug 가 같다. 덮어쓰면 앞의 것을 겨누던 작업 폴더가 그
+    순간부터 **다른 서버로** 미리 보기 · 적용을 보낸다(개발용 작업이 운영에 들어간다).
+    """
+    parts = urllib.parse.urlsplit(server)
+    tail = re.sub(r"[^a-z0-9]+", "-", f"{parts.hostname or ''}-{parts.port or ''}".lower())
+    base = f"{name}-{tail.strip('-')}"[:40].rstrip("-")
+    candidate, number = base, 2
+    while True:
+        held = known.get(candidate)
+        if not isinstance(held, dict) or str(held.get("server") or "") == server:
+            return candidate
+        candidate = f"{base[:37].rstrip('-')}-{number}"
+        number += 1
+
+
 def register(
     *,
     work_root: Path | None,
@@ -190,11 +208,16 @@ def register(
     hub: str = "",
     hub_token: str = "",
     forget: str = "",
-) -> dict[str, Any]:
-    """이 PC 의 설정에 **더한다** — 다른 플랫폼은 그대로 둔다.
+    move: bool = False,
+) -> tuple[dict[str, Any], str]:
+    """이 PC 의 설정에 **더한다** — 다른 플랫폼은 그대로 둔다. `(설정, 사람에게 할 말)`.
 
     토큰 자리표시는 안 적는다(그것을 토큰으로 보내면 401 이 「토큰이 틀렸다」 로 읽힌다).
-    토큰을 안 주고 다시 돌리면 그 플랫폼의 옛 토큰을 그대로 둔다 — 주소만 고칠 때.
+    같은 이름 · 같은 주소면 토큰만 바꾼다(토큰을 안 주면 옛 토큰을 둔다).
+
+    ⚠️ **같은 이름 · 다른 주소는 덮지 않는다** — 개발판 · 운영판은 slug 가 같다. 덮으면 앞의
+       것을 겨누던 작업 폴더가 말없이 다른 서버로 간다. 주소를 붙인 이름으로 **따로** 등록하고
+       그렇게 했다고 말한다. 서버를 정말 옮긴 것이면 `move` 로(같은 이름의 주소를 바꾼다).
     """
     settings = pipeline.load_settings()
     if work_root is not None:
@@ -204,18 +227,29 @@ def register(
         if forget not in known:
             raise Stop(f"등록되지 않은 플랫폼입니다: {forget}")
         del known[forget]
+    note = ""
     if server:
+        server = server.rstrip("/")
         name = platform or platform_name(server)
         if not pipeline.PLATFORM_RE.match(name):
             raise Stop(f"플랫폼 이름은 영소문자 · 숫자 · _ · - 로 40자까지입니다: {name!r}")
+        held = known.get(name) if isinstance(known.get(name), dict) else None
+        if held and str(held.get("server") or "") != server and not move:
+            apart = _apart(name, server, known)
+            note = (
+                f"이름 {name} 은 이미 다른 주소({held.get('server')})입니다 — 덮지 않고 "
+                f"{apart} 로 따로 등록했습니다. 서버를 옮긴 것이면 "
+                f"`--platform {name} --move` 로."
+            )
+            name = apart
         before = known.get(name) if isinstance(known.get(name), dict) else {}
         kept = token if token and token != TOKEN_PLACEHOLDER else before.get("token", "")
-        known[name] = {"server": server.rstrip("/"), "token": kept}
+        known[name] = {"server": server, "token": kept}
     settings["platforms"] = known
     if hub:
         settings["hub"] = {"server": hub.rstrip("/"), "token": hub_token}
     pipeline.save_settings(settings)
-    return settings
+    return settings, note
 
 
 def describe(settings: dict[str, Any]) -> str:
@@ -301,6 +335,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--hub-token", default=os.environ.get("SP_HUB_TOKEN", ""))
     parser.add_argument("--forget", default="", help="이 이름의 플랫폼 등록을 뺀다")
     parser.add_argument(
+        "--move",
+        action="store_true",
+        help="같은 이름의 주소를 바꾼다(서버를 옮겼을 때) — 없으면 다른 주소는 따로 등록한다",
+    )
+    parser.add_argument(
         "--from-clipboard",
         action="store_true",
         help="화면 「이 PC 에 등록」 이 복사한 등록 정보를 읽는다(install.cmd 가 쓴다)",
@@ -346,7 +385,7 @@ def main(argv: list[str] | None = None) -> int:
             work_root = default_work_root()
         if work_root is not None:
             work_root.mkdir(parents=True, exist_ok=True)
-        settings = register(
+        settings, note = register(
             work_root=work_root,
             platform=args.platform,
             server=args.server,
@@ -354,7 +393,10 @@ def main(argv: list[str] | None = None) -> int:
             hub=args.hub_server,
             hub_token=args.hub_token,
             forget=args.forget,
+            move=args.move,
         )
+        if note:
+            print(note)
         print(describe(settings))
         if args.forget:
             return 0

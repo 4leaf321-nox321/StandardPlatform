@@ -124,7 +124,12 @@ Claude Desktop 의 항목도 하나다(도구가 플랫폼 수만큼 불어나�
 ```bash
 python sp_setup.py --platform qings --server http://<서버>:3040/qings --token spt_... --no-install
 python sp_setup.py --forget qings                # 등록을 뺀다
+python sp_setup.py --platform qings --server http://<새 주소>/qings --move   # 서버를 옮겼을 때
 ```
+
+- **같은 이름 · 다른 주소는 덮지 않는다.** 같은 플랫폼의 개발판 · 운영판은 slug 가 같다 — 덮으면
+  개발용 작업 폴더가 그 순간부터 운영으로 간다. 주소를 붙인 이름(`standardplatform-10-0-0-5-8040`)
+  으로 **따로** 등록하고 그렇게 했다고 말한다. 서버를 정말 옮긴 것이면 `--move`.
 
 - **작업 폴더가 넣을 곳을 기억한다.** 만들 때 정한다 — 등록한 플랫폼이 하나뿐이면 그것이 되고,
   여럿이면 AI 가 어디에 넣을지 **묻는다**(짐작하지 않는다). 바꾸려면 `work_platform`.

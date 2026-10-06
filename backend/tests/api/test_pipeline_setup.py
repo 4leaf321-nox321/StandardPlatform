@@ -113,12 +113,14 @@ def test_플랫폼마다_설치하면_더해지고_앞의_것은_남는다(setti
         # 토큰이 평문이다 — 이 사용자만 읽는다.
         assert settings.stat().st_mode & 0o777 == 0o600
 
-    # 주소만 고쳐 다시 — 토큰을 안 주면 옛 토큰을 둔다. 자리표시는 토큰으로 안 적는다.
+    # 서버를 옮겼을 때 — **`move` 를 줘야** 같은 이름의 주소를 바꾼다. 토큰을 안 주면 옛 토큰을
+    # 둔다. 자리표시는 토큰으로 안 적는다.
     setup.register(
         work_root=None,
         platform="qings",
         server="http://10.0.0.9:3040/qings",
         token="<개인 토큰>",
+        move=True,
     )
     qings = json.loads(settings.read_text(encoding="utf-8"))["platforms"]["qings"]
     assert qings == {"server": "http://10.0.0.9:3040/qings", "token": "spt_qings"}
@@ -129,6 +131,53 @@ def test_플랫폼마다_설치하면_더해지고_앞의_것은_남는다(setti
     ]
     with pytest.raises(setup.Stop, match="영소문자"):
         setup.register(work_root=None, platform="Root Design", server="http://x", token="t")
+
+
+def test_같은_이름_다른_주소는_덮지_않고_따로_등록한다(settings: Path) -> None:
+    """**개발판 · 운영판은 slug 가 같다.** 덮어쓰면 개발용 작업 폴더가 그 순간부터 운영으로
+    미리 보기 · 적용을 보낸다. 주소를 붙인 이름으로 따로 등록하고 그렇게 했다고 말한다."""
+    _, note = setup.register(
+        work_root=Path("/w"),
+        platform="rootdesign",
+        server="http://localhost:8041",
+        token="spt_dev",
+    )
+    assert note == ""
+    _, note = setup.register(
+        work_root=None,
+        platform="rootdesign",
+        server="http://10.0.0.5:8040/",
+        token="spt_prod",
+    )
+    known = json.loads(settings.read_text(encoding="utf-8"))["platforms"]
+    assert known["rootdesign"] == {"server": "http://localhost:8041", "token": "spt_dev"}
+    assert known["rootdesign-10-0-0-5-8040"] == {
+        "server": "http://10.0.0.5:8040",
+        "token": "spt_prod",
+    }
+    assert "덮지 않고" in note and "rootdesign-10-0-0-5-8040" in note and "--move" in note
+
+    # 운영을 다시 등록하면(토큰 갱신) **같은 따로 이름**으로 간다 — 셋째가 생기지 않는다.
+    setup.register(
+        work_root=None,
+        platform="rootdesign",
+        server="http://10.0.0.5:8040",
+        token="spt_2",
+    )
+    known = json.loads(settings.read_text(encoding="utf-8"))["platforms"]
+    assert sorted(known) == ["rootdesign", "rootdesign-10-0-0-5-8040"]
+    assert known["rootdesign-10-0-0-5-8040"]["token"] == "spt_2"
+    # 같은 이름 · 같은 주소는 토큰만 바꾼다.
+    setup.register(
+        work_root=None,
+        platform="rootdesign",
+        server="http://localhost:8041",
+        token="spt_d2",
+    )
+    assert json.loads(settings.read_text(encoding="utf-8"))["platforms"]["rootdesign"] == {
+        "server": "http://localhost:8041",
+        "token": "spt_d2",
+    }
 
 
 def test_어느_플랫폼인지_짐작하지_않는다(settings: Path) -> None:
