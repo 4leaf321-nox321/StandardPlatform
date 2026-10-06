@@ -63,17 +63,20 @@ mcp = FastMCP(
         "만든다. **처음에 `pipeline_guide()` 를, 작업마다 `work_status` 를 먼저 부르고 그 "
         "「다음」 을 따른다.** 정의 확정 · 미해결의 답 · 적용은 사람이 한다 — "
         "그 자리에서 멈추고 "
-        "묻는다. 통계를 스스로 세지 말고 `source_profile` 결과를 쓴다."
+        "묻는다. 통계를 스스로 세지 말고 `source_profile` 결과를 쓴다. "
+        "**이 PC 는 플랫폼 여럿에 넣을 수 있다** — 작업 폴더가 넣을 곳을 기억하고"
+        "(`work_list` 에 보인다), 여럿인데 정해지지 않았으면 짐작하지 말고 사람에게 묻는다."
     ),
 )
 
 
 def _root() -> Path:
-    raw = os.environ.get("SP_WORK_ROOT", "").strip()
+    raw = pipeline.setting("SP_WORK_ROOT")
     if not raw:
         raise Stop(
-            "SP_WORK_ROOT 가 설정돼 있지 않습니다 — "
-            "MCP 설정의 env 에 작업 폴더들을 둘 곳을 적으세요"
+            "작업 폴더들을 둘 곳(SP_WORK_ROOT)이 정해지지 않았습니다 — 플랫폼 화면 "
+            "「내 정보」 의 정제 도구 키트에 있는 설치 명령(`sp_setup.py --work-root …`)을 "
+            "실행하세요"
         )
     root = Path(raw).expanduser().resolve()
     if not root.is_dir():
@@ -119,12 +122,20 @@ def _sections(text: str) -> dict[str, str]:
     return {key: "\n".join(lines).strip() for key, lines in out.items()}
 
 
-def _server() -> tuple[str, str]:
-    server = os.environ.get("SP_SERVER", "").strip()
-    token = os.environ.get("SP_TOKEN", "").strip()
-    if not server or not token:
-        raise Stop("플랫폼에 닿으려면 MCP 설정의 env 에 SP_SERVER · SP_TOKEN 이 있어야 합니다")
-    return server, token
+def _target(folder: Path | None = None, platform: str = "") -> pipeline.Target:
+    """넣을 곳 — 이름을 주면 그것, 아니면 **작업 폴더가 기억하는 것**, 그것도 없으면 하나뿐인
+    등록 플랫폼. 여럿인데 정해지지 않았으면 `pipeline.target` 이 묻는다."""
+    return pipeline.target(platform or (sp_work.platform_of(folder) if folder else ""))
+
+
+def _maybe(folder: Path) -> tuple[str, str]:
+    """**물어보기만 하는** 자리(조사 · 변환 · 검증)의 주소 — 정해지지 않았으면 빈 값
+    (모양만 본다)."""
+    try:
+        chosen = _target(folder)
+    except Stop:
+        return "", ""
+    return chosen.server, chosen.token
 
 
 # --------------------------------------------------------------------------
@@ -168,7 +179,8 @@ def pipeline_guide(topic: str = "") -> dict[str, Any]:
 
 @mcp.tool()
 def work_list() -> dict[str, Any]:
-    """SP_WORK_ROOT 아래의 작업 폴더들."""
+    """작업 폴더들과 **각자 넣을 플랫폼**, 그리고 이 PC 에 등록한 플랫폼들(토큰은 안
+    보인다)."""
     root = _root()
     works = []
     for marker in sorted(root.glob(f"*/{sp_work.WORK}")) + sorted(
@@ -176,18 +188,36 @@ def work_list() -> dict[str, Any]:
     ):
         folder = marker.parent
         try:
-            title = sp_work.load(folder).get("title")
+            body = sp_work.load(folder)
         except Stop:
             continue
-        works.append({"work": folder.relative_to(root).as_posix(), "title": title})
-    return {"root": str(root), "works": works}
+        works.append(
+            {
+                "work": folder.relative_to(root).as_posix(),
+                "title": body.get("title"),
+                "platform": body.get("platform") or "",
+            }
+        )
+    platforms = {name: one["server"] for name, one in pipeline.platforms().items()}
+    return {"root": str(root), "platforms": platforms, "works": works}
 
 
 @mcp.tool()
-def work_init(work: str, title: str, group: str = "") -> str:
+def work_init(work: str, title: str, group: str = "", platform: str = "") -> str:
     """새 작업 폴더(원천 하나 또는 한 묶음의 원천). `work` 는 SP_WORK_ROOT 아래 이름,
-    `group` 은 그룹 코드(그룹 전용 slug 의 앞부분)."""
-    return sp_work.init(_work(work, exists=False), title=title, group=group)
+    `group` 은 그룹 코드(그룹 전용 slug 의 앞부분).
+
+    `platform` 은 **이 작업을 넣을 플랫폼**(`work_list` 의 `platforms` 중 하나). 하나뿐이면
+    생략해도 그것이 되고, 여럿인데 생략하면 멈춘다 — 사람에게 어디에 넣을지 묻고 다시 부른다.
+    """
+    return sp_work.init(_work(work, exists=False), title=title, group=group, platform=platform)
+
+
+@mcp.tool()
+def work_platform(work: str, platform: str) -> str:
+    """이 작업을 넣을 플랫폼을 정한다(바꾼다). **사람이 정한 것만** — 결정기록에 남는다.
+    이미 미리 본 실행은 옛 곳을 기억하므로 미리 보기를 다시 해야 적용된다."""
+    return sp_work.set_platform(_work(work), platform)
 
 
 @mcp.tool()
@@ -281,8 +311,7 @@ def source_profile(
         target = one.partition("=")[2].strip()
         if target.startswith("@"):
             sp_work.inside(folder, target[1:])
-    server = os.environ.get("SP_SERVER", "").strip()
-    token = os.environ.get("SP_TOKEN", "").strip()
+    server, token = _maybe(folder)
     previous = Path.cwd()
     try:
         # `@파일` 은 작업 폴더를 기준으로 푼다.
@@ -326,13 +355,8 @@ def table_convert(work: str, mapping: str, source: str, name: str = "") -> dict[
     mapping_path = sp_work.inside(folder, mapping)
     source_path = _source(folder, source)
     run = sp_work.new_run(folder, name or source_path.stem)
-    ok, report = sp_table.convert(
-        mapping_path,
-        source_path,
-        run,
-        server=os.environ.get("SP_SERVER", "").strip(),
-        token=os.environ.get("SP_TOKEN", "").strip(),
-    )
+    server, token = _maybe(folder)
+    ok, report = sp_table.convert(mapping_path, source_path, run, server=server, token=token)
     return {
         "run": run.relative_to(folder).as_posix(),
         "unresolved_empty": ok,
@@ -365,8 +389,8 @@ def hub_pull(work: str, group: str | list[str], name: str = "") -> str:
     **묶음을 여럿 적어도 된다**(`["plm", "core"]`) — 코어를 축별로 나눠 둔 허브에서 하나씩
     받으면 축끼리 가리키는 참조 때문에 어느 쪽도 못 받는다."""
     folder = _work(work)
-    hub = os.environ.get("SP_HUB_SERVER", "").strip()
-    token = os.environ.get("SP_HUB_TOKEN", "").strip()
+    hub = pipeline.setting("SP_HUB_SERVER")
+    token = pipeline.setting("SP_HUB_TOKEN")
     if not hub or not token:
         raise Stop(
             "허브에서 받으려면 MCP 설정의 env 에 SP_HUB_SERVER · SP_HUB_TOKEN 이 있어야 합니다"
@@ -386,10 +410,7 @@ def run_validate(work: str, run: str, ask_platform: bool = True) -> dict[str, An
     계획을 세우느라 몇 분이 걸린다. `SP_SERVER` · `SP_TOKEN` 이 없으면 모양만 본다.
     """
     folder = _work(work)
-    server, token = "", ""
-    if ask_platform:
-        server = os.environ.get("SP_SERVER", "").strip()
-        token = os.environ.get("SP_TOKEN", "").strip()
+    server, token = _maybe(folder) if ask_platform else ("", "")
     ok, report = pipeline.cmd_validate(_run(folder, run), server=server, token=token)
     return {"ok": ok, "report": report}
 
@@ -400,44 +421,51 @@ def run_preview(work: str, run: str) -> dict[str, Any]:
     `apply_command` 를 **사람이 직접** 실행하게 안내한다(이 서버에는 적용 도구가 없다)."""
     folder = _work(work)
     path = _run(folder, run)
-    server, token = _server()
-    ok, summary = pipeline.cmd_preview(path, server=server, token=token)
+    chosen = _target(folder)
+    ok, summary = pipeline.cmd_preview(
+        path, server=chosen.server, token=chosen.token, platform=chosen.name
+    )
     return {
         "ok": ok,
+        # **어디에 미리 봤는지를 먼저** — 사람은 숫자보다 그것을 먼저 확인해야 한다.
+        "platform": chosen.shown,
         "summary": summary,
         "apply_command": (
             f'python "{HERE / "sp_pipeline.py"}" apply "{path}"' if ok else None
         ),
-        "note": "적용하려면 SP_SERVER · SP_TOKEN 이 설정된 창에서 "
-        "사람이 apply_command 를 실행한다.",
+        "note": "사람이 아무 명령 창에서 apply_command 를 실행한다 — 미리 본 그 플랫폼으로만 "
+        "간다(이 PC 의 설정에서 주소 · 토큰을 읽는다).",
     }
 
 
 @mcp.tool()
-def runs_list(limit: int = 20) -> dict[str, Any]:
-    """**넣은 판들** — 되돌릴 번호를 여기서 찾는다(적용한 것만, 최근 것부터)."""
-    server, token = _server()
-    ok, text = pipeline.cmd_runs(server=server, token=token, limit=limit)
-    return {"ok": ok, "runs": text}
+def runs_list(limit: int = 20, platform: str = "") -> dict[str, Any]:
+    """**넣은 판들** — 되돌릴 번호를 여기서 찾는다(적용한 것만, 최근 것부터).
+
+    `platform` 은 등록한 플랫폼 이름 — 하나뿐이면 생략한다."""
+    chosen = _target(platform=platform)
+    ok, text = pipeline.cmd_runs(server=chosen.server, token=chosen.token, limit=limit)
+    return {"ok": ok, "platform": chosen.shown, "runs": text}
 
 
 @mcp.tool()
-def run_undo(run_id: str) -> dict[str, Any]:
+def run_undo(run_id: str, platform: str = "") -> dict[str, Any]:
     """넣은 판 하나를 되돌리면 **무엇이 되돌아가나** — 계획만. 아무것도 안 바뀐다.
 
     요약을 사람에게 보이고, 되돌릴지는 사람이 `undo_command` 를 실행해 정한다(이 서버에는
     되돌리는 도구가 없다 — 적용과 같은 규칙이다). 건너뛰는 줄의 이유도 함께 보인다.
     """
-    server, token = _server()
-    ok, summary = pipeline.cmd_undo(run_id, server=server, token=token)
+    chosen = _target(platform=platform)
+    ok, summary = pipeline.cmd_undo(run_id, server=chosen.server, token=chosen.token)
+    where = f" --platform {chosen.name}" if chosen.name else ""
     return {
         "ok": ok,
+        "platform": chosen.shown,
         "summary": summary,
         "undo_command": (
-            f'python "{HERE / "sp_pipeline.py"}" undo {run_id} --apply' if ok else None
+            f'python "{HERE / "sp_pipeline.py"}" undo {run_id}{where} --apply' if ok else None
         ),
-        "note": "되돌리려면 SP_SERVER · SP_TOKEN 이 설정된 창에서 "
-        "사람이 undo_command 를 실행한다.",
+        "note": "사람이 아무 명령 창에서 undo_command 를 실행한다.",
     }
 
 

@@ -25,6 +25,7 @@ import contextlib
 import hashlib
 import json
 import os
+import re
 import sys
 import time
 import urllib.error
@@ -48,6 +49,163 @@ APPLIED = "applied.json"
 
 #: 감사 기록에 남는 통로 이름 — 사람이 화면에서 넣은 것과 가른다.
 CLIENT = "sp-pipeline"
+
+# --- 이 PC 가 겨누는 플랫폼들 -----------------------------------------------------
+#
+# **한 PC 가 여러 플랫폼에 넣는다**(허브 · 쌍둥이 여럿). 그래서 주소 · 토큰을 한 벌로 두지
+# 않고 **이름을 붙여 여럿** 둔다. 설치(`sp_setup.py`)를 플랫폼마다 한 번씩 돌리면 더해진다 —
+# 앞에 등록한 것은 남는다.
+#
+# **작업 폴더가 자기 플랫폼을 기억한다**(`work.json` 의 `platform`). 검증 · 미리 보기는 그
+# 플랫폼으로, 적용은 **미리 본 그 플랫폼으로만** 간다. 둘 이상인데 정해지지 않았으면 짐작하지
+# 않고 묻는다 — 엉뚱한 플랫폼에 넣은 수만 줄은 되돌리기 전까지 그곳의 데이터다.
+#
+# 설정 파일은 키트 폴더가 아니라 **사용자 설정 폴더**에 둔다. 키트를 새 판으로 다시 풀어도
+# 등록한 플랫폼이 남아야 하고, 사람이 명령 창에서 치는 적용 · 되돌리기도 같은 곳을 읽어야
+# 한다(예전에는 주소 · 토큰을 AI 클라이언트의 MCP 설정에만 넣어서, 명령 창의 적용이 맨 끝에서
+# 「서버와 토큰이 필요합니다」 로 멈췄다).
+#
+#     {"work_root": "D:\\온톨로지작업",
+#      "platforms": {"rootdesign": {"server": "http://…:3030/rootdesign", "token": "spt_…"}},
+#      "hub": {"server": "…", "token": "…"}}
+
+#: 플랫폼 이름 — 그 설치의 slug 를 쓴다(화면의 설치 명령이 채워 준다).
+PLATFORM_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{0,39}$")
+
+
+def settings_path() -> Path:
+    """사용자 설정 폴더의 `sp-pipeline/settings.json` — `SP_SETTINGS` 로 바꿀 수 있다(시험)."""
+    explicit = os.environ.get("SP_SETTINGS", "").strip()
+    if explicit:
+        return Path(explicit).expanduser()
+    if sys.platform == "win32":
+        base = Path(os.environ.get("APPDATA") or Path.home())
+    elif sys.platform == "darwin":
+        base = Path.home() / "Library" / "Application Support"
+    else:
+        base = Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config")
+    return base / "sp-pipeline" / "settings.json"
+
+
+def load_settings() -> dict[str, Any]:
+    """없거나 읽을 수 없으면 빈 것 — 「무엇이 없다」 는 부르는 쪽이 말한다."""
+    try:
+        loaded = json.loads(settings_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return loaded if isinstance(loaded, dict) else {}
+
+
+def save_settings(body: dict[str, Any]) -> Path:
+    """토큰이 평문이다 — Claude Desktop 설정에 두던 것과 같은 값 · 같은 PC 다. 이 사용자만
+    읽게 둔다(POSIX. Windows 는 사용자 폴더의 권한을 따른다)."""
+    path = settings_path()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(body, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    with contextlib.suppress(OSError):
+        path.chmod(0o600)
+    return path
+
+
+def platforms() -> dict[str, dict[str, str]]:
+    """등록한 플랫폼들 — `{이름: {server, token}}`."""
+    found = load_settings().get("platforms")
+    if not isinstance(found, dict):
+        return {}
+    return {
+        str(name): {
+            "server": str(one.get("server") or ""),
+            "token": str(one.get("token") or ""),
+        }
+        for name, one in found.items()
+        if isinstance(one, dict)
+    }
+
+
+def setting(name: str) -> str:
+    """환경 변수 → 설정 파일 차례로 — 작업 폴더 뿌리(`SP_WORK_ROOT`)와 허브(`SP_HUB_*`).
+
+    **환경이 이긴다** — 창에서 잠깐 다른 곳을 볼 때. 플랫폼 주소 · 토큰은 여기가 아니라
+    `target()` 이 정한다(이름으로 고른다).
+    """
+    value = os.environ.get(name, "").strip()
+    if value:
+        return value
+    settings = load_settings()
+    hub = settings.get("hub") if isinstance(settings.get("hub"), dict) else {}
+    found = {
+        "SP_WORK_ROOT": settings.get("work_root"),
+        "SP_HUB_SERVER": hub.get("server"),
+        "SP_HUB_TOKEN": hub.get("token"),
+    }.get(name)
+    return str(found or "").strip()
+
+
+@dataclass(frozen=True)
+class Target:
+    """넣을 곳 — 이름 · 주소 · 토큰. 이름이 비면 환경 변수로 준 것(옛 설치)이다."""
+
+    name: str
+    server: str
+    token: str
+
+    @property
+    def shown(self) -> str:
+        return f"{self.name} ({self.server})" if self.name else self.server
+
+
+def _listing(known: dict[str, dict[str, str]]) -> str:
+    return " · ".join(f"{name}({one['server']})" for name, one in sorted(known.items()))
+
+
+def target(platform: str = "") -> Target:
+    """**어느 플랫폼으로 가나** — 이름을 주면 그것, 아니면 하나뿐일 때만 그것.
+
+    1. 이름이 있으면 등록한 것 중에서 — 없으면 무엇이 등록돼 있는지와 더하는 법을 말한다.
+    2. `SP_SERVER` · `SP_TOKEN` 환경 변수 — 옛 설치(MCP 설정의 env)와 한 번만 다른 곳을 볼 때.
+    3. 등록한 것이 **하나뿐이면** 그것.
+    4. 여럿인데 이름이 없으면 **짐작하지 않고 멈춘다.**
+    """
+    known = platforms()
+    if platform:
+        found = known.get(platform)
+        if found is None:
+            raise Stop(
+                f"이 PC 에 등록되지 않은 플랫폼입니다: {platform} — "
+                f"등록된 것: {_listing(known) or '없음'}. 그 플랫폼 화면 「내 정보」 의 "
+                "정제 도구 키트에 있는 설치 명령을 이 PC 에서 한 번 실행하면 더해집니다."
+            )
+        if not found["server"] or not found["token"]:
+            raise Stop(f"플랫폼 {platform} 의 주소나 토큰이 비어 있습니다 — 설치 명령을 다시")
+        return Target(platform, found["server"], found["token"])
+    server = os.environ.get("SP_SERVER", "").strip()
+    token = os.environ.get("SP_TOKEN", "").strip()
+    if server and token:
+        return Target("", server, token)
+    if len(known) == 1:
+        return target(next(iter(known)))
+    if not known:
+        raise Stop(
+            "이 PC 에 등록된 플랫폼이 없습니다 — 플랫폼 화면 「내 정보」 의 정제 도구 키트에 "
+            "있는 설치 명령을 실행하세요"
+        )
+    raise Stop(
+        f"플랫폼이 여럿입니다 — {_listing(known)}. 어느 곳인지 정해야 합니다: 작업 폴더는 "
+        "`work_platform`(또는 만들 때 platform=), 명령이면 --platform"
+    )
+
+
+def work_platform(run: Path) -> str:
+    """실행 폴더가 든 **작업 폴더의 플랫폼** — `runs/<실행>` 의 두 단계 위 `work.json`.
+
+    작업 폴더 밖의 실행(명령으로 바로 만든 것)이면 빈 값이다.
+    """
+    if run.parent.name != "runs":
+        return ""
+    body = _read_json(run.parent.parent / "work.json", [])
+    return str(body.get("platform") or "") if isinstance(body, dict) else ""
+
+
 #: 플랫폼이 한 번에 받는 행 수(파일로 넣기와 같다).
 MAX_ROWS = 5000
 RELATION_FIELDS = ("src", "relation", "dst", "evidence_note", "properties")
@@ -1011,7 +1169,15 @@ def cmd_validate(
     return not report.errors, "\n".join([head, *lines])
 
 
-def cmd_preview(path: Path, *, server: str, token: str) -> tuple[bool, str]:
+def preview_platform(run: Path) -> str:
+    """미리 본 플랫폼의 이름 — **적용은 미리 본 곳으로만** 간다."""
+    seen = _read_json(run / PREVIEW, [])
+    return str(seen.get("platform") or "") if isinstance(seen, dict) else ""
+
+
+def cmd_preview(
+    path: Path, *, server: str, token: str, platform: str = ""
+) -> tuple[bool, str]:
     run = load(path)
     report = validate(run)
     if report.errors:
@@ -1022,7 +1188,13 @@ def cmd_preview(path: Path, *, server: str, token: str) -> tuple[bool, str]:
     result = _post_bundle(server, token, {**body, "apply": False})
     _write(
         path / PREVIEW,
-        {"at": _stamp(), "server": server, "digest": digest(body), "result": result},
+        {
+            "at": _stamp(),
+            "server": server,
+            "platform": platform,
+            "digest": digest(body),
+            "result": result,
+        },
     )
     return bool(result.get("ok")), summarize(result)
 
@@ -1114,6 +1286,16 @@ def cmd_undo(run_id: str, *, server: str, token: str, apply: bool = False) -> tu
     return bool(result.get("ok")), "\n".join([head, *errors, *skipped])
 
 
+def _chosen(args: argparse.Namespace, platform: str) -> Target:
+    """명령 줄의 `--server` 가 있으면 그것(등록 없이 한 번만), 아니면 이름으로 고른다."""
+    if args.server:
+        token = args.token or os.environ.get("SP_TOKEN", "").strip()
+        if not token:
+            raise Stop("--server 를 줬으면 --token 도 줍니다(또는 SP_TOKEN)")
+        return Target("", args.server, token)
+    return target(args.platform or platform)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="sp_pipeline", description=__doc__.split("\n")[0])
     sub = parser.add_subparsers(dest="command", required=True)
@@ -1131,8 +1313,11 @@ def main(argv: list[str] | None = None) -> int:
     check.add_argument("run", type=Path)
     check.add_argument("--allow-unresolved", action="store_true")
     # **주소와 토큰이 있으면 끝점을 미리 묻는다.** 없으면 모양만 본다(예전과 같다).
-    check.add_argument("--server", default=os.environ.get("SP_SERVER", ""))
-    check.add_argument("--token", default=os.environ.get("SP_TOKEN", ""))
+    check.add_argument(
+        "--platform", default="", help="등록한 플랫폼 이름(작업 폴더의 것이 기본)"
+    )
+    check.add_argument("--server", default="", help="한 번만 다른 곳 — 등록 없이")
+    check.add_argument("--token", default="")
 
     pull = sub.add_parser("pull", help="허브가 내보낸 묶음을 새 실행 폴더로 받는다")
     pull.add_argument("run", type=Path)
@@ -1142,19 +1327,21 @@ def main(argv: list[str] | None = None) -> int:
         action="append",
         help="사이드바 묶음 slug — PLM 기준정보면 plm. **여러 번 적어도 된다**",
     )
-    pull.add_argument("--hub", default=os.environ.get("SP_HUB_SERVER", ""))
-    pull.add_argument("--hub-token", default=os.environ.get("SP_HUB_TOKEN", ""))
+    pull.add_argument("--hub", default=setting("SP_HUB_SERVER"))
+    pull.add_argument("--hub-token", default=setting("SP_HUB_TOKEN"))
     pull.add_argument("--source", default="hub")
 
     runs = sub.add_parser("runs", help="넣은 판들 — 되돌릴 번호를 찾는다")
-    runs.add_argument("--server", default=os.environ.get("SP_SERVER", ""))
-    runs.add_argument("--token", default=os.environ.get("SP_TOKEN", ""))
+    runs.add_argument("--platform", default="", help="등록한 플랫폼 이름(하나뿐이면 생략)")
+    runs.add_argument("--server", default="")
+    runs.add_argument("--token", default="")
     runs.add_argument("--limit", type=int, default=20)
 
     undo = sub.add_parser("undo", help="넣은 판 하나를 통째로 되돌린다(기본은 계획)")
     undo.add_argument("run_id", help="`runs` 가 보여 준 판 번호")
-    undo.add_argument("--server", default=os.environ.get("SP_SERVER", ""))
-    undo.add_argument("--token", default=os.environ.get("SP_TOKEN", ""))
+    undo.add_argument("--platform", default="", help="등록한 플랫폼 이름(하나뿐이면 생략)")
+    undo.add_argument("--server", default="")
+    undo.add_argument("--token", default="")
     undo.add_argument(
         "--apply", action="store_true", help="계획을 읽은 뒤 — 이것 없이는 아무것도 안 바뀐다"
     )
@@ -1165,8 +1352,13 @@ def main(argv: list[str] | None = None) -> int:
     ):
         one = sub.add_parser(name, help=what)
         one.add_argument("run", type=Path)
-        one.add_argument("--server", default=os.environ.get("SP_SERVER", ""))
-        one.add_argument("--token", default=os.environ.get("SP_TOKEN", ""))
+        one.add_argument(
+            "--platform",
+            default="",
+            help="등록한 플랫폼 이름 — 미리 보기는 작업 폴더의 것, 적용은 미리 본 곳이 기본",
+        )
+        one.add_argument("--server", default="", help="한 번만 다른 곳 — 등록 없이")
+        one.add_argument("--token", default="")
         one.add_argument(
             "--backfill",
             action="store_true",
@@ -1179,13 +1371,20 @@ def main(argv: list[str] | None = None) -> int:
             print(cmd_init(args.run, title=args.title, backfill=args.backfill))
             return 0
         if args.command == "validate":
+            # 플랫폼이 정해지면 끝점까지 묻고, 아니면 모양만 본다 — 그 사실을 말한다.
+            asked: Target | None = None
+            note = ""
+            try:
+                asked = _chosen(args, work_platform(args.run))
+            except Stop as why:
+                note = f"\n(끝점은 묻지 않았습니다 — {why})"
             ok, text = cmd_validate(
                 args.run,
                 allow_unresolved=args.allow_unresolved,
-                server=args.server,
-                token=args.token,
+                server=asked.server if asked else "",
+                token=asked.token if asked else "",
             )
-            print(text)
+            print(text + note)
             return 0 if ok else 1
         if args.command == "pull":
             if not args.hub or not args.hub_token:
@@ -1203,17 +1402,17 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
-        if not args.server or not args.token:
-            raise Stop(
-                "서버와 토큰이 필요합니다 — SP_SERVER · SP_TOKEN 또는 --server · --token"
-            )
         if args.command == "runs":
-            ok, text = cmd_runs(server=args.server, token=args.token, limit=args.limit)
+            chosen = _chosen(args, "")
+            print(f"플랫폼: {chosen.shown}")
+            ok, text = cmd_runs(server=chosen.server, token=chosen.token, limit=args.limit)
             print(text)
             return 0 if ok else 1
         if args.command == "undo":
+            chosen = _chosen(args, "")
+            print(f"플랫폼: {chosen.shown}")
             ok, text = cmd_undo(
-                args.run_id, server=args.server, token=args.token, apply=args.apply
+                args.run_id, server=chosen.server, token=chosen.token, apply=args.apply
             )
             print(text)
             return 0 if ok else 1
@@ -1226,8 +1425,17 @@ def main(argv: list[str] | None = None) -> int:
                 raise Stop(f"{MANIFEST} 을 읽을 수 없습니다: {args.run}")
             body["backfill"] = True
             _write(mark, body)
-        command = cmd_preview if args.command == "preview" else cmd_apply
-        ok, text = command(args.run, server=args.server, token=args.token)
+        if args.command == "preview":
+            chosen = _chosen(args, work_platform(args.run))
+            print(f"미리 보는 곳: {chosen.shown}")
+            ok, text = cmd_preview(
+                args.run, server=chosen.server, token=chosen.token, platform=chosen.name
+            )
+        else:
+            # **적용은 미리 본 곳으로.** 그 이름을 실행 폴더가 기억한다.
+            chosen = _chosen(args, preview_platform(args.run) or work_platform(args.run))
+            print(f"넣는 곳: {chosen.shown}")
+            ok, text = cmd_apply(args.run, server=chosen.server, token=chosen.token)
         print(text)
         return 0 if ok else 1
     except Stop as stop:

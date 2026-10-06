@@ -25,6 +25,7 @@ TOOLS = {
     "pipeline_guide",
     "work_list",
     "work_init",
+    "work_platform",
     "work_status",
     "work_read",
     "work_write",
@@ -85,7 +86,11 @@ def test_클라이언트가_stdio_로_띄워_부르면_멈춤의_말이_그대�
     assert "작업 폴더 밖의 경로입니다" in escape[1] and "validation" not in escape[1]
 
 
-def test_설정이_없으면_무엇을_적을지_말한다(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_설정이_없으면_무엇을_적을지_말한다(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     monkeypatch.delenv("SP_WORK_ROOT", raising=False)
+    # 이 PC 의 정제 도구 설정도 안 본다 — 키트를 설치한 PC 면 그것을 읽어 흔들린다.
+    monkeypatch.setenv("SP_SETTINGS", str(tmp_path / "sp-settings.json"))
     with pytest.raises(Exception, match="SP_WORK_ROOT"):
         asyncio.run(sp_mcp.mcp.call_tool("work_list", {}))

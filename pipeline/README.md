@@ -85,14 +85,40 @@ AI 가 **사용자 PC 에서** 조사 · 변환 · 검증 · 미리 보기를 �
 로 만든 `…-private.zip` 을 쓴다(그 zip 은 올리지 않는다):
 
 ```bash
-python sp_setup.py --work-root "D:\온톨로지작업" --server http://<플랫폼>:<포트> \
-                   --token spt_... --write-claude --write-gemini
+python sp_setup.py --work-root "D:\온톨로지작업" --platform rootdesign \
+                   --server http://<서버>:3030/rootdesign --token spt_... --write-claude
 ```
 
 - venv(`venv/`)를 만들고 `mcp` 를 동봉 휠로 깐다(인터넷이 되면 `--online`).
 - `--write-claude` · `--write-gemini` 는 각 설정 파일에 `sp-pipeline` 항목만 넣는다. 원래 파일은
   `.bak` 로 남고, 다른 MCP 항목은 안 건드린다. 빼면 넣을 내용만 보여 준다.
+- **플랫폼을 이 PC 의 설정에 이름으로 등록한다**(`--platform` — 그 설치의 slug. 비우면 주소
+  끝에서 짓는다). 주소 · 토큰은 클라이언트 설정이 아니라 **이 PC 의 설정 파일 한 곳**에 있다:
+
+  | OS | 설정 파일 |
+  | --- | --- |
+  | Windows | `%APPDATA%\sp-pipeline\settings.json` |
+  | macOS | `~/Library/Application Support/sp-pipeline/settings.json` |
+  | Linux | `~/.config/sp-pipeline/settings.json` |
+
+  토큰이 평문으로 들어 있다 — 남에게 넘기지 않는다(Claude Desktop 설정에 두던 것과 같은 값이다).
 - **Claude Desktop 은 완전히 종료했다가 다시 켠다.**
+
+**한 PC 가 플랫폼 여럿에 넣는다**(허브 · 쌍둥이 여럿). 각 플랫폼 화면 「내 정보」 의 설치 명령을
+같은 PC 에서 **한 번씩** 실행한다 — 앞에 등록한 것은 남고 새 이름이 더해진다. 키트는 한 벌,
+Claude Desktop 의 항목도 하나다(도구가 플랫폼 수만큼 불어나지 않는다).
+
+```bash
+python sp_setup.py --platform qings --server http://<서버>:3040/qings --token spt_... --no-install
+python sp_setup.py --forget qings                # 등록을 뺀다
+```
+
+- **작업 폴더가 넣을 곳을 기억한다.** 만들 때 정한다 — 등록한 플랫폼이 하나뿐이면 그것이 되고,
+  여럿이면 AI 가 어디에 넣을지 **묻는다**(짐작하지 않는다). 바꾸려면 `work_platform`.
+- 검증 · 미리 보기는 그 작업의 플랫폼으로, **적용은 미리 본 그 플랫폼으로만** 간다. AI 가 알려 준
+  적용 명령을 **아무 명령 창에나 그대로** 붙이면 된다 — 명령도 같은 설정 파일을 읽는다.
+- 명령으로 직접 할 때는 `--platform <이름>`(하나뿐이면 생략). 한 번만 다른 곳을 볼 때는
+  `--server … --token …`(등록 없이), 또는 환경 변수 `SP_SERVER` · `SP_TOKEN`.
 
 **2. 설정의 모양** (직접 넣을 때 — `mcpServers` 안에):
 
@@ -100,7 +126,7 @@ python sp_setup.py --work-root "D:\온톨로지작업" --server http://<플랫�
 "sp-pipeline": {
   "command": "C:\\...\\sp-pipeline\\venv\\Scripts\\python.exe",
   "args": ["C:\\...\\sp-pipeline\\sp_mcp.py"],
-  "env": {"SP_WORK_ROOT": "D:\\온톨로지작업", "SP_SERVER": "http://...", "SP_TOKEN": "spt_..."}
+  "env": {}
 }
 ```
 
@@ -110,10 +136,11 @@ python sp_setup.py --work-root "D:\온톨로지작업" --server http://<플랫�
 | Claude Desktop (macOS) | `~/Library/Application Support/Claude/claude_desktop_config.json` |
 | Gemini CLI | `~/.gemini/settings.json` |
 
-| 환경 변수 | 뜻 |
+| 환경 변수(있으면 설정 파일보다 이긴다) | 뜻 |
 | --- | --- |
 | `SP_WORK_ROOT` | 작업 폴더들을 두는 곳 — **도구는 이 안만 읽고 쓴다** |
-| `SP_SERVER` · `SP_TOKEN` | 플랫폼 주소 · 개인 토큰(`read` · `objects:write`, 정의까지면 `ontology:write`). 미리 보기 · 코어 대조에 |
+| `SP_SERVER` · `SP_TOKEN` | 등록 없이 한 곳만 볼 때(옛 설치의 모양). 플랫폼 이름을 정한 작업에는 안 쓰인다 |
+| `SP_SETTINGS` | 설정 파일 자리를 바꿀 때 |
 
 플랫폼 MCP(`standardplatform`)도 함께 붙여 두면 AI 가 지금 정의(`ontology_schema`)를 읽는다.
 

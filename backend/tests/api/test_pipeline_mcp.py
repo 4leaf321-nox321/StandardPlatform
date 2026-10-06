@@ -79,6 +79,8 @@ def root(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("SP_WORK_ROOT", str(base))
     monkeypatch.delenv("SP_SERVER", raising=False)
     monkeypatch.delenv("SP_TOKEN", raising=False)
+    # 이 PC 의 정제 도구 설정도 안 본다 — 키트를 설치한 PC 면 그것을 읽어 흔들린다.
+    monkeypatch.setenv("SP_SETTINGS", str(tmp_path / "sp-settings.json"))
     return base
 
 
@@ -94,6 +96,7 @@ def test_적용_도구는_없고_안내는_정본을_내려준다() -> None:
         "pipeline_guide",
         "work_list",
         "work_init",
+        "work_platform",
         "work_status",
         "work_read",
         "work_write",
@@ -143,7 +146,10 @@ def test_작업_폴더_밖과_원천과_도구가_쥔_파일은_못_건드린다
         with pytest.raises(server.Stop, match="통째로 읽지 않습니다"):
             server.work_read("cae/대장", sneaky)
 
-    assert server.work_list()["works"] == [{"work": "cae/대장", "title": "대장"}]
+    # 작업마다 **넣을 곳**도 보인다 — 플랫폼이 없을 때 만든 것은 빈 값.
+    assert server.work_list()["works"] == [
+        {"work": "cae/대장", "title": "대장", "platform": ""}
+    ]
     assert "행,a,b" in server.source_head("cae/대장", "표.csv")
 
 
@@ -192,7 +198,8 @@ def test_조사부터_미리_보기까지_한_바퀴(
     assert run.startswith("runs/") and "못 읽음 3" in converted["report"]
     assert server.run_validate(work, run)["ok"] is True
 
-    with pytest.raises(server.Stop, match="SP_SERVER"):
+    # 넣을 곳이 하나도 없으면 — 무엇을 해야 하는지(설치 명령) 말한다.
+    with pytest.raises(server.Stop, match="등록된 플랫폼이 없습니다"):
         server.run_preview(work, run)
     made = client.post(
         "/api/auth/tokens",
@@ -222,3 +229,39 @@ def test_조사부터_미리_보기까지_한_바퀴(
     # 같은 원천을 고쳐 다시 돌리면 **새** 실행 폴더.
     again = server.table_convert(work, "03-대응/표.table.json", "표.csv")
     assert again["run"] != run
+
+    # --- 한 PC 가 플랫폼 여럿을 겨눈다 ---------------------------------------------------
+    # 시험 장치는 주소의 호스트를 무시하고 이 앱으로 보낸다 — 그래서 **토큰**으로 갈 곳을
+    # 가른다.
+    # 진짜 토큰을 든 `main` 과 가짜 토큰을 든 `other` 를 등록하고, 작업 폴더가 고른 쪽으로만
+    # 가는지 본다.
+    monkeypatch.delenv("SP_SERVER")
+    monkeypatch.delenv("SP_TOKEN")
+    server.pipeline.save_settings(
+        {
+            "work_root": str(root),
+            "platforms": {
+                "main": {"server": SERVER, "token": made.json()["token"]},
+                "other": {"server": "http://딴곳:3040/other", "token": "spt_fake"},
+            },
+        }
+    )
+    listed = server.work_list()
+    assert listed["platforms"] == {"main": SERVER, "other": "http://딴곳:3040/other"}
+    assert "spt_fake" not in json.dumps(listed, ensure_ascii=False)  # 토큰은 안 보인다
+    # 이 작업은 플랫폼이 하나도 없을 때 만들었다 — 여럿이 된 지금은 **짐작하지 않는다.**
+    with pytest.raises(server.Stop, match="여럿"):
+        server.run_preview(work, again["run"])
+    with pytest.raises(server.Stop, match="어느 플랫폼"):
+        server.work_init("plm/새것", "새 작업")
+
+    assert "main 에 넣습니다" in server.work_platform(work, "main")
+    went = server.run_preview(work, again["run"])
+    assert went["ok"] is True and went["platform"].startswith("main ")
+    seen = json.loads((root / work / again["run"] / "preview.json").read_text())
+    assert seen["platform"] == "main" and seen["server"] == SERVER
+
+    # 다른 곳으로 바꾸면 그쪽으로 간다 — 가짜 토큰이라 그 플랫폼이 거절한다.
+    server.work_platform(work, "other")
+    with pytest.raises(server.Stop):
+        server.run_preview(work, again["run"])

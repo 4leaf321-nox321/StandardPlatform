@@ -18,6 +18,9 @@ from __future__ import annotations
 import os
 
 os.environ.setdefault("APP_BCRYPT_ROUNDS", "4")
+# 정제 도구 키트의 **이 PC 설정**(등록한 플랫폼 · 토큰)을 시험이 읽지 않게 — 없는 자리를
+# 가리킨다. 필요한 시험은 제 임시 파일로 바꾼다(`SP_SETTINGS`).
+os.environ["SP_SETTINGS"] = os.path.join(os.devnull, "sp-pipeline-settings.json")
 
 
 def _test_database_url() -> str:

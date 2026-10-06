@@ -12,12 +12,14 @@
 읽고 쓴다. MCP 가 없으면(셸만 있는 Gemini CLI 등) 같은 일을 `sp_work.py` · `sp_profile.py` ·
 `sp_table.py` · `sp_pipeline.py` 명령으로 한다 — 도구와 명령은 같은 코드다.
 
+**이 PC 는 플랫폼 여럿에 넣을 수 있다.** 작업 폴더가 넣을 곳을 기억한다(`work_status` 의 「넣을 곳」). 작업을 만들 때 등록한 플랫폼이 여럿이면 **사람에게 어디에 넣을지 묻고** `work_init(…, platform=)` — 바꾸는 것도 사람이 정했을 때만 `work_platform`. 미리 보기 결과를 보일 때는 **어느 플랫폼에 미리 봤는지를 먼저** 말한다(`run_preview` 의 `platform`).
+
 **작업마다 `work_status` 를 먼저 부른다.** 어디까지 했고 다음이 무엇인지 거기 있다 — 그 「다음」 을
 따른다. 대화가 끊겨도 폴더가 진행을 쥐고 있다.
 
 | 단계 | 도구 | 멈추고 사람에게 |
 | --- | --- | --- |
-| 0 작업 폴더 | `work_list` · `work_init` | 원천을 `00-원천/` 에 넣어 달라고(엑셀은 시트마다 CSV UTF-8) |
+| 0 작업 폴더 | `work_list` · `work_init` | **어느 플랫폼에 넣을지**(`work_list` 의 `platforms` 가 둘 이상이면 — 짐작하지 않는다) · 원천을 `00-원천/` 에 넣어 달라고(엑셀은 시트마다 CSV UTF-8) |
 | 1 조사 | `source_profile`(고를 값을 적을 땐 `show_values`, 코어에 붙나는 `match`) · `source_head` | 결과를 요약해 보인다. 애매한 것은 묻는다 |
 | 2 정의 초안 | `pipeline_guide("modeling")` · 플랫폼 MCP `ontology_schema` · `work_write` 로 `02-정의/ontology.json` 과 `02-정의/판단표.md` | **판단표를 보이고 확정받는다** → `decision_record(confirms_ontology=true)` |
 | 3 대응 | `pipeline_guide("table")` · `work_write` 로 `03-대응/<원천 이름>.table.json` | — |

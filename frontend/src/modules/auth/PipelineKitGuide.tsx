@@ -14,6 +14,7 @@ import { Download } from 'lucide-react'
 import { Snippet } from '@/modules/auth/McpSetupGuide'
 import { api, downloadFile } from '@/shared/api/client'
 import { PUBLIC_PATH } from '@/shared/base'
+import { APP_SLUG } from '@/shared/branding'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
 import { useResource } from '@/shared/hooks/useResource'
@@ -38,10 +39,14 @@ export function appUrlFrom(origin: string, prefix: string = PUBLIC_PATH): string
  * 설치 명령 — **한 줄로.** 줄 잇기 기호가 셸마다 다르다(cmd 는 `^`, PowerShell 은 `` ` ``) —
  * 하나를 고르면 다른 쪽에서 깨진 명령이 되고, 사람은 그것을 키트가 고장 난 것으로 읽는다.
  */
-export function setupCommand(token: string | null, server: string): string {
+export function setupCommand(
+  token: string | null,
+  server: string,
+  platform: string = APP_SLUG,
+): string {
   return (
-    `python sp_setup.py --work-root "${WORK_ROOT}" --server ${server} ` +
-    `--token ${token || TOKEN_PLACEHOLDER} --write-claude`
+    `python sp_setup.py --work-root "${WORK_ROOT}" --platform ${platform} ` +
+    `--server ${server} --token ${token || TOKEN_PLACEHOLDER} --write-claude`
   )
 }
 
@@ -123,12 +128,19 @@ export function PipelineKitGuide({ token }: { token: string | null }) {
               </p>
             )}
             <Snippet text={setupCommand(token, server)} label="명령" />
+            <p className="text-muted-foreground">
+              <b>플랫폼이 여럿이면</b> 각 플랫폼 화면의 이 명령을 같은 PC 에서 한 번씩 실행합니다 —
+              앞에 등록한 것은 남고, 이 플랫폼은{' '}
+              <span className="font-mono">{APP_SLUG}</span> 라는 이름으로 더해집니다. 작업을 만들
+              때 어느 플랫폼에 넣을지 AI 가 묻습니다.
+            </p>
           </li>
           <li>
             <b>Claude Desktop 을 완전히 종료했다가 다시 켭니다.</b> 그 뒤 대화에서 「
             <span className="font-mono">{WORK_ROOT}</span> 에 ○○ 자료 작업을 시작하자」 처럼
             말하면, AI 가 원천을 넣어 달라고 하는 것부터 차례로 안내합니다. 넣는 것(적용)은 늘
-            사람이 미리 보기를 본 뒤에 합니다.
+            사람이 미리 보기를 본 뒤에 합니다 — AI 가 알려 주는 적용 명령을 <b>아무 명령 창에나</b>{' '}
+            붙여 넣으면 됩니다(설치가 이 서버 주소와 토큰을 키트 폴더에 기억해 둡니다).
           </li>
         </ol>
       )}

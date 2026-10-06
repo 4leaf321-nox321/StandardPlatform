@@ -65,11 +65,17 @@ describe('정제 도구 키트 안내', () => {
     expect(screen.queryByRole('button', { name: /sp-pipeline/ })).toBeNull()
   })
 
-  it('명령은 한 줄이고 접두어까지 든 주소를 쓴다', () => {
+  it('명령은 한 줄이고 접두어까지 든 주소와 이 설치의 이름을 쓴다', () => {
     // 줄 잇기 기호(cmd 의 ^ · PowerShell 의 `)를 쓰면 다른 셸에서 깨진 명령이 된다.
-    const command = setupCommand('spt_x', appUrlFrom('http://10.0.0.5:3030', '/rootdesign'))
+    const command = setupCommand(
+      'spt_x',
+      appUrlFrom('http://10.0.0.5:3030', '/rootdesign'),
+      'rootdesign',
+    )
     expect(command).not.toContain('\n')
     expect(command).toContain('--server http://10.0.0.5:3030/rootdesign ')
+    // **이름으로 더한다** — 한 PC 가 플랫폼 여럿을 겨눈다. 이름이 없으면 덮어쓰게 된다.
+    expect(command).toContain('--platform rootdesign ')
     expect(appUrlFrom('http://host:8040', '')).toBe('http://host:8040')
   })
 })

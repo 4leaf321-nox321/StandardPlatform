@@ -81,9 +81,62 @@ def load(folder: Path) -> dict[str, Any]:
     return body
 
 
-def init(folder: Path, *, title: str, group: str = "") -> str:
+def choose_platform(platform: str) -> str:
+    """이 작업을 **어느 플랫폼에 넣나** — 등록한 것 중에서.
+
+    이름이 없으면 하나뿐일 때만 그것을 쓰고, 여럿이면 **짐작하지 않고 묻는다**(엉뚱한 곳에
+    넣은 수만 줄은 되돌리기 전까지 그곳의 데이터다). 하나도 없으면 빈 값 — 옛 설치(환경 변수)
+    이거나 아직 안 붙였다. 그때는 미리 보기가 무엇이 없는지 말한다.
+    """
+    known = pipeline.platforms()
+    if platform:
+        if platform not in known:
+            names = " · ".join(sorted(known)) or "없음"
+            raise Stop(
+                f"이 PC 에 등록되지 않은 플랫폼입니다: {platform} — 등록된 것: {names}. "
+                "그 플랫폼 화면 「내 정보」 의 정제 도구 키트에 있는 설치 명령을 한 번 "
+                "실행하면 더해집니다."
+            )
+        return platform
+    if len(known) == 1:
+        return next(iter(known))
+    if len(known) > 1:
+        raise Stop(
+            f"이 작업을 어느 플랫폼에 넣나요 — {' · '.join(sorted(known))}. "
+            "사람에게 묻고 platform 을 정해 다시 만드세요."
+        )
+    return ""
+
+
+def platform_of(folder: Path) -> str:
+    return str(load(folder).get("platform") or "")
+
+
+def set_platform(folder: Path, platform: str) -> str:
+    """작업 폴더의 플랫폼을 정한다(바꾼다) — **결정기록에도 남긴다.** 미리 본 실행은 옛 곳을
+    기억하므로, 바꾼 뒤에는 미리 보기를 다시 해야 적용된다."""
+    if not platform:
+        raise Stop("플랫폼 이름을 주세요")
+    chosen = choose_platform(platform)
+    body = load(folder)
+    before = str(body.get("platform") or "")
+    body["platform"] = chosen
+    pipeline._write(folder / WORK, body)
+    record(
+        folder,
+        topic="넣을 플랫폼",
+        decision=f"{before or '(정하지 않음)'} → {chosen}",
+        reason="이 작업의 미리 보기 · 적용이 가는 곳",
+    )
+    return f"이 작업은 {chosen} 에 넣습니다" + (
+        " — 이미 미리 본 실행은 미리 보기를 다시 해야 적용됩니다" if before else ""
+    )
+
+
+def init(folder: Path, *, title: str, group: str = "", platform: str = "") -> str:
     if (folder / WORK).exists():
         raise Stop(f"이미 작업 폴더입니다: {folder}")
+    chosen = choose_platform(platform)
     for name in (SOURCES, SURVEY, DEFINITION, MAPPING, RUNS):
         (folder / name).mkdir(parents=True, exist_ok=True)
     pipeline._write(
@@ -92,6 +145,8 @@ def init(folder: Path, *, title: str, group: str = "") -> str:
             "format": FORMAT,
             "title": title,
             "group": group,
+            # 미리 보기 · 적용이 가는 곳 — 한 PC 가 여러 플랫폼에 넣는다.
+            "platform": chosen,
             "created_at": _now(),
             "confirmed": {},
         },
@@ -103,7 +158,8 @@ def init(folder: Path, *, title: str, group: str = "") -> str:
             "도구가 덧붙인다.\n",
             encoding="utf-8",
         )
-    return f"작업 폴더를 만들었습니다: {folder} — 원천을 {SOURCES}/ 에 넣으세요"
+    where = f" · 넣을 곳 {chosen}" if chosen else ""
+    return f"작업 폴더를 만들었습니다: {folder}{where} — 원천을 {SOURCES}/ 에 넣으세요"
 
 
 def new_run(folder: Path, name: str) -> Path:
@@ -266,6 +322,7 @@ def status(folder: Path) -> dict[str, Any]:
     return {
         "work": work.get("title"),
         "group": work.get("group"),
+        "platform": work.get("platform") or "",
         "sources": sources,
         "ontology": ontology,
         "runs": runs,
@@ -274,7 +331,12 @@ def status(folder: Path) -> dict[str, Any]:
 
 
 def render(state: dict[str, Any]) -> str:
-    lines = [f"작업: {state['work']} (그룹 {state['group'] or '-'})", "", "원천:"]
+    lines = [
+        f"작업: {state['work']} (그룹 {state['group'] or '-'})",
+        f"넣을 곳: {state.get('platform') or '정하지 않음'}",
+        "",
+        "원천:",
+    ]
     for one in state["sources"]:
         marks = [one["kind"], "조사함" if one["profiled"] else "조사 전"]
         if one["mapping"]:
@@ -318,6 +380,10 @@ def main(argv: list[str] | None = None) -> int:
     made.add_argument("folder", type=Path)
     made.add_argument("--title", required=True)
     made.add_argument("--group", default="")
+    made.add_argument("--platform", default="", help="등록한 플랫폼 이름(하나뿐이면 생략)")
+    where = sub.add_parser("platform", help="이 작업을 넣을 플랫폼을 정한다(바꾼다)")
+    where.add_argument("folder", type=Path)
+    where.add_argument("name")
     look = sub.add_parser("status", help="어디까지 했고 다음이 무엇인가")
     look.add_argument("folder", type=Path)
     note = sub.add_parser("record", help="결정 한 건을 적는다")
@@ -330,7 +396,11 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "init":
-            print(init(args.folder, title=args.title, group=args.group))
+            print(
+                init(args.folder, title=args.title, group=args.group, platform=args.platform)
+            )
+        elif args.command == "platform":
+            print(set_platform(args.folder, args.name))
         elif args.command == "status":
             print(render(status(args.folder)))
         else:

@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+# 정제 도구 키트의 **이 PC 설정**(등록한 플랫폼 · 토큰)을 시험이 읽지 않게 — 없는 자리.
+os.environ["SP_SETTINGS"] = os.path.join(os.devnull, "sp-pipeline-settings.json")
