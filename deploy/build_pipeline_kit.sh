@@ -34,8 +34,10 @@ PYTHONS="${KIT_PYTHONS:-3.11 3.12 3.13}"
 echo "==> [1/3] 도구 · 안내"
 rm -rf "$STAGE" "$OUT_DIR/$ZIP.zip" "$OUT_DIR/$ZIP.zip.sha256"
 mkdir -p "$STAGE/guide" "$STAGE/wheels"
+# `install.cmd` — 사용자가 **더블클릭**하는 설치(Windows). 화면 「내 정보」 의 「이 PC 에 등록」 이
+# 복사한 등록 정보를 클립보드에서 읽는다. CRLF 다(.gitattributes).
 cp pipeline/sp_*.py pipeline/AGENTS.md pipeline/CLAUDE.md pipeline/GEMINI.md \
-   pipeline/README.md pipeline/requirements.txt "$STAGE/"
+   pipeline/README.md pipeline/requirements.txt pipeline/install.cmd "$STAGE/"
 cp -r pipeline/templates pipeline/core "$STAGE/"
 # 모델링 규약의 정본은 플랫폼 MCP 의 가이드다 — **복사해 넣되 고치지 않는다.**
 # sp_mcp 의 pipeline_guide("modeling") 가 이것을 읽는다.
@@ -75,4 +77,4 @@ SIZE=$(du -h "$OUT_DIR/$ZIP.zip" | cut -f1)
 echo
 echo "[OK] $OUT_DIR/$ZIP.zip  ($SIZE)"
 echo "     $OUT_DIR/$ZIP.zip.sha256"
-echo "     사용자 PC 에서 풀고: python sp_setup.py --work-root <작업 폴더들> --server <플랫폼>"
+echo "     사용자 PC 에서 풀고: 플랫폼 화면 「내 정보」 의 「이 PC 에 등록 정보 복사」 → install.cmd 더블클릭"

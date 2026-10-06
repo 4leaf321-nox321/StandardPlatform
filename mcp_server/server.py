@@ -1863,9 +1863,9 @@ async def bundle_import(ctx: Context, bundle: dict[str, Any]) -> Any:
     한계다. 수만 줄은 사용자 PC 의 **정제 도구 MCP**(`sp-pipeline` 키트)로 넣는다:
     `run_init(backfill=True)` → `run_validate` → `run_preview` — 파일이 모델을 거치지
     않고 서버로 간다. 그 MCP 가 안 붙어 있으면 「백필 기능이 없다」 고 답하지 않는다 —
-    **이 플랫폼 화면의 「내 정보」 에서 키트를 받는다**(서버가 같은 판을 들고 있다). 받는
-    단추와, 이 설치의 주소 · 토큰을 채운 설치 명령 한 줄이 거기 있다 — 사용자에게 그리로
-    안내한다."""
+    **이 플랫폼 화면의 「내 정보」 에서 키트를 받는다**(서버가 같은 판을 들고 있다). 받기 ·
+    「이 PC 에 등록 정보 복사」 · `install.cmd` 더블클릭이 거기 안내돼 있다 — 사용자에게
+    그리로 안내한다."""
     job = await _post(ctx, "/api/bundles/import", {**bundle, "apply": False})
     return await _wait_job(ctx, job, JOB_WAIT_MAX)
 

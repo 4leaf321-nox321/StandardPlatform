@@ -21,11 +21,11 @@
 | --- | --- | --- |
 | 0 작업 폴더 | `work_list` · `work_init` | **어느 플랫폼에 넣을지**(`work_list` 의 `platforms` 가 둘 이상이면 — 짐작하지 않는다) · 원천을 `00-원천/` 에 넣어 달라고(엑셀은 시트마다 CSV UTF-8) |
 | 1 조사 | `source_profile`(고를 값을 적을 땐 `show_values`, 코어에 붙나는 `match`) · `source_head` | 결과를 요약해 보인다. 애매한 것은 묻는다 |
-| 2 정의 초안 | `pipeline_guide("modeling")` · 플랫폼 MCP `ontology_schema` · `work_write` 로 `02-정의/ontology.json` 과 `02-정의/판단표.md` | **판단표를 보이고 확정받는다** → `decision_record(confirms_ontology=true)` |
+| 2 정의 초안 | `pipeline_guide("modeling")` · `platform_schema(work)`(그 작업의 플랫폼 정의 — 서버 MCP 없이) · `work_write` 로 `02-정의/ontology.json` 과 `02-정의/판단표.md` | **판단표를 보이고 확정받는다** → `decision_record(confirms_ontology=true)` |
 | 3 대응 | `pipeline_guide("table")` · `work_write` 로 `03-대응/<원천 이름>.table.json` | — |
 | 4 변환 | `table_convert` → 보고서를 읽고 대응을 고쳐 다시 | **미해결은 사람에게 묻고** `decision_record` |
 | 4′ 문서 추출 | `run_init` · `work_write` 로 `runs/<실행>/objects/…` · `relations/…` | 확신 없는 것은 `unresolved.json` 으로 |
-| 5 검증 · 미리 보기 | `run_validate` → `run_preview` | **요약을 보이고, 적용은 사람이 `apply_command` 로** — 적용 도구는 없다 |
+| 5 검증 · 미리 보기 | `run_validate` → `run_preview` | **어느 플랫폼에 미리 봤는지부터 요약을 보이고, 적용은 사람이 — `apply_on_screen`(그 플랫폼 화면 「작업」 에서 「적용」) 을 먼저 안내, 명령 창이 편하면 `apply_command`** — 적용 도구는 없다 |
 | 허브에서 받기(쌍둥이) | `hub_pull(work, group="plm")` → `run_validate` → `run_preview` | 적용은 사람이. 받은 타입은 받는 플랫폼에서 **허브 관리**가 되어 거기서는 못 고친다 — 정의 · 값이 틀렸으면 허브 쪽 작업에서 고친다 |
 
 - **통계를 스스로 세지 않는다.** `source_profile` 결과를 인용한다 — 수천 행을 AI 가 읽어 센 수는
@@ -46,7 +46,8 @@
   늘 같은 값이 나오는 규칙으로 만든다. 식별자가 흔들리면 다시 넣을 때 같은 것이 둘이 된다.
 - 지우지 않는다. 플랫폼 가져오기는 더하고 고치기만 한다.
 
-MCP 도구는 **읽기**에 쓴다: `get_guide` · `ontology_schema`(지금 무엇이 정의돼 있나) ·
+지금 정의는 키트의 `platform_schema(work)` 로 읽는다(서버 MCP 없이도 된다). 서버 MCP 가 붙어 있으면 그 도구도
+**읽기**에 쓴다: `get_guide` · `ontology_schema`(지금 무엇이 정의돼 있나) ·
 `objects_list` · `object_fields`(이미 들어간 것과 겹치나) · `bundle_import(apply=false)`
 (만든 묶음이 어떻게 들어갈지 스스로 확인).
 
@@ -55,7 +56,7 @@ MCP 도구는 **읽기**에 쓴다: `get_guide` · `ontology_schema`(지금 무�
 
 1. **실행 폴더를 만든다** — `python sp_pipeline.py init runs/<날짜>-<무엇>`
 2. **원천을 적는다** — `bundle.json` 의 `sources` 에 파일 · 시스템 · 문서와 받은 날짜.
-3. **지금 정의를 읽는다** — `ontology_schema`. 이미 있는 타입 · 속성 · 관계 종류를 먼저 쓴다.
+3. **지금 정의를 읽는다** — `platform_schema(work)`(또는 서버 MCP 의 `ontology_schema`). 이미 있는 타입 · 속성 · 관계 종류를 먼저 쓴다.
    새로 만드는 것은 꼭 필요할 때만, 그리고 이유를 `bundle.json` 의 `notes` 에.
 4. **정의가 더 필요하면 `ontology.json` 에** — `ontology_import` 와 같은 모양. 더하고 고치기만.
 5. **객체를 `objects/<type_slug>.json` 에, 관계를 `relations/<type_slug>.json` 에** 만든다.

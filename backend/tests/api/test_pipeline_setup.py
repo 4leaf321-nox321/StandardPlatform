@@ -51,7 +51,8 @@ def test_클라이언트_설정에는_주소도_토큰도_안_넣는다() -> Non
     entry = _entry()
     assert entry["command"] == "/kit/venv/bin/python"
     assert entry["args"][0].endswith("sp_mcp.py")
-    assert entry["env"] == {}
+    # UTF-8 모드만 — 한국어 Windows 에서 키트가 한글 파일을 cp949 로 읽지 않게.
+    assert entry["env"] == {"PYTHONUTF8": "1"}
 
 
 def test_다른_MCP_항목은_두고_제_항목만_넣고_원본을_남긴다(tmp_path: Path) -> None:
@@ -198,3 +199,49 @@ def test_작업_폴더가_넣을_곳을_기억하고_바꾸면_기록한다(
     assert "다시" in sp_work.set_platform(folder, "rootdesign")
     assert sp_work.platform_of(folder) == "rootdesign"
     assert "qings → rootdesign" in (folder / sp_work.DECISIONS).read_text(encoding="utf-8")
+
+
+# --- 더블클릭 설치 — 클립보드의 등록 정보 -------------------------------------------
+#
+# 받는 사람은 개발자가 아니다. 화면 「이 PC 에 등록」 이 토큰을 발급해 한 줄로 복사하고,
+# `install.cmd`(더블클릭)가 그것을 읽는다 — 명령을 고쳐 칠 일도, 토큰이 대화에 나갈 일도 없다.
+
+
+def test_등록_정보_한_줄을_찾고_모양이_틀리면_말한다() -> None:
+    assert setup.parse_registration("아무 글이나") is None
+    line = (
+        'SP-PIPELINE-PLATFORM {"platform":"qings","server":"http://h/qings","token":"spt_1"}'
+    )
+    assert setup.parse_registration(f"앞 글 {line}\n다음 줄") == {
+        "platform": "qings",
+        "server": "http://h/qings",
+        "token": "spt_1",
+    }
+    with pytest.raises(setup.Stop, match="다시 복사"):
+        setup.parse_registration("SP-PIPELINE-PLATFORM")
+    with pytest.raises(setup.Stop, match="이름 · 주소 · 토큰"):
+        setup.parse_registration('SP-PIPELINE-PLATFORM {"platform":"q"}')
+
+
+def test_더블클릭_설치가_클립보드에서_등록하고_비운다(
+    settings: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cleared: list[bool] = []
+    line = (
+        'SP-PIPELINE-PLATFORM {"platform":"qings","server":"http://h/qings","token":"spt_q"}'
+    )
+    monkeypatch.setattr(setup, "read_clipboard", lambda: line)
+    monkeypatch.setattr(setup, "clear_clipboard", lambda: cleared.append(True))
+    # 처음 설치에는 작업 폴더를 물을 자리가 없다 — 정해진 자리에 둔다.
+    monkeypatch.setattr(setup, "default_work_root", lambda: tmp_path / "온톨로지작업")
+    assert setup.main(["--from-clipboard", "--no-install", "--venv", str(tmp_path / "v")]) == 0
+    body = json.loads(settings.read_text(encoding="utf-8"))
+    assert body["platforms"] == {"qings": {"server": "http://h/qings", "token": "spt_q"}}
+    assert body["work_root"] == str(tmp_path / "온톨로지작업")
+    assert cleared == [True]  # 토큰이 다음 붙여넣기에 딸려 나가지 않게
+
+    # 클립보드에 아무것도 없으면 — 등록이 있으면 설치만 확인하고, 없으면 무엇을 누를지 말한다.
+    monkeypatch.setattr(setup, "read_clipboard", lambda: "")
+    assert setup.main(["--from-clipboard", "--no-install", "--venv", str(tmp_path / "v")]) == 0
+    settings.unlink()
+    assert setup.main(["--from-clipboard", "--no-install", "--venv", str(tmp_path / "v")]) == 2

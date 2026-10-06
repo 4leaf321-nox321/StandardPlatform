@@ -43,6 +43,15 @@ import sp_pipeline as pipeline  # noqa: E402
 
 NAME = "sp-pipeline"
 TOKEN_PLACEHOLDER = "<개인 토큰>"
+#: 화면 「내 정보」 의 「이 PC 에 등록」 이 클립보드에 넣는 줄의 머리 — 뒤에 JSON 한 덩이.
+#:
+#:     SP-PIPELINE-PLATFORM {"platform": "rootdesign", "server": "http://…", "token": "spt_…"}
+#:
+#: 사람이 명령을 고쳐 칠 일을 없앤다 — 더블클릭(`install.cmd`)이 이것을 읽어 등록한다. 토큰이
+#: 대화(AI)에 나갈 일도 없다.
+REGISTRATION = "SP-PIPELINE-PLATFORM"
+#: 동봉한 휠이 맞는 파이썬 — `build_pipeline_kit.sh` 의 KIT_PYTHONS 와 같다.
+PYTHONS = ((3, 11), (3, 12), (3, 13))
 
 
 class Stop(Exception):
@@ -72,13 +81,17 @@ def install(python: Path, *, online: bool) -> None:
     else:
         print("PyPI(또는 사내 미러)에서 설치합니다")
     command += ["-r", str(HERE / "requirements.txt")]
-    if subprocess.run(command, check=False).returncode != 0:
+    # **UTF-8 모드로.** 한국어 Windows 의 파이썬은 파일을 cp949 로 읽는다 — pip 가 한글 주석이
+    # 든 requirements.txt 에서 `UnicodeDecodeError` 로 죽었다(실측: 그 PC 들에서는 설치가 한
+    # 번도 안 됐다). 리눅스에서만 시험해서 몰랐다.
+    utf8 = {**os.environ, "PYTHONUTF8": "1"}
+    if subprocess.run(command, check=False, env=utf8).returncode != 0:
         raise Stop(
             "설치에 실패했습니다 — 휠이 이 PC 의 파이썬 버전 · OS 에 맞는지 보거나, "
             "인터넷이 되면 --online 으로 다시"
         )
     check = [str(python), "-c", "import mcp.server.fastmcp"]
-    if subprocess.run(check, check=False).returncode != 0:
+    if subprocess.run(check, check=False, env=utf8).returncode != 0:
         raise Stop("설치는 끝났는데 mcp 를 불러오지 못합니다 — venv 를 지우고 다시 하세요")
 
 
@@ -89,7 +102,69 @@ def server_entry(python: Path) -> dict[str, Any]:
     (`sp_pipeline.settings_path`). env 에 두면 플랫폼이 여럿일 때 한 벌밖에 못 담고, 사람이
     명령 창에서 치는 적용은 그 env 를 못 본다(맨 끝 단계에서 멈췄다).
     """
-    return {"command": str(python), "args": [str(HERE / "sp_mcp.py")], "env": {}}
+    # UTF-8 모드 — 한국어 Windows 에서 `open()` 의 기본이 cp949 라, 키트가 읽고 쓰는 한글
+    # 파일이 깨지지 않게(설치에서 pip 가 그것으로 죽었다).
+    return {
+        "command": str(python),
+        "args": [str(HERE / "sp_mcp.py")],
+        "env": {"PYTHONUTF8": "1"},
+    }
+
+
+def parse_registration(text: str) -> dict[str, str] | None:
+    """클립보드 글에서 등록 정보 한 줄을 찾는다 — 없으면 None. 모양이 틀리면 멈춘다."""
+    at = text.find(REGISTRATION)
+    if at < 0:
+        return None
+    rest = text[at + len(REGISTRATION) :].strip()
+    raw = rest.splitlines()[0] if rest else ""
+    try:
+        body = json.loads(raw)
+    except ValueError:
+        raise Stop(
+            "클립보드의 등록 정보를 읽을 수 없습니다 — 화면에서 다시 복사하세요"
+        ) from None
+    if not isinstance(body, dict) or not all(
+        isinstance(body.get(key), str) and body.get(key)
+        for key in ("platform", "server", "token")
+    ):
+        raise Stop(
+            "클립보드의 등록 정보에 이름 · 주소 · 토큰이 다 있어야 합니다 — 다시 복사하세요"
+        )
+    return {key: str(body[key]) for key in ("platform", "server", "token")}
+
+
+def read_clipboard() -> str:
+    """이 PC 의 클립보드 글 — 못 읽으면 빈 값(그때는 등록 없이 설치만 한다)."""
+    if sys.platform == "win32":
+        command = [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "[Console]::OutputEncoding=[Text.Encoding]::UTF8; Get-Clipboard -Raw",
+        ]
+    elif sys.platform == "darwin":
+        command = ["pbpaste"]
+    else:
+        command = ["xclip", "-o", "-selection", "clipboard"]
+    try:
+        done = subprocess.run(command, capture_output=True, check=False, timeout=10)
+    except (OSError, subprocess.TimeoutExpired):
+        return ""
+    return done.stdout.decode("utf-8", errors="replace")
+
+
+def clear_clipboard() -> None:
+    """등록한 뒤 클립보드를 비운다 — **토큰이 다음 붙여넣기에 딸려 나가지 않게.**"""
+    if sys.platform == "win32":
+        subprocess.run(["cmd", "/c", "type nul | clip"], capture_output=True, check=False)
+    elif sys.platform == "darwin":
+        subprocess.run(["pbcopy"], input=b"", capture_output=True, check=False)
+
+
+def default_work_root() -> Path:
+    """처음 설치에서 작업 폴더 자리를 안 줬을 때 — 내 문서 옆(`~/온톨로지작업`)."""
+    return Path.home() / "온톨로지작업"
 
 
 def platform_name(server: str) -> str:
@@ -225,6 +300,11 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("--hub-token", default=os.environ.get("SP_HUB_TOKEN", ""))
     parser.add_argument("--forget", default="", help="이 이름의 플랫폼 등록을 뺀다")
+    parser.add_argument(
+        "--from-clipboard",
+        action="store_true",
+        help="화면 「이 PC 에 등록」 이 복사한 등록 정보를 읽는다(install.cmd 가 쓴다)",
+    )
     parser.add_argument("--venv", type=Path, default=HERE / "venv")
     parser.add_argument("--online", action="store_true", help="동봉 휠 대신 PyPI 에서")
     parser.add_argument("--no-install", action="store_true", help="설치는 건너뛰고 설정만")
@@ -232,11 +312,38 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--write-gemini", action="store_true")
     args = parser.parse_args(argv)
     try:
+        if not args.online and sys.version_info[:2] not in PYTHONS:
+            raise Stop(
+                f"이 PC 의 파이썬은 {sys.version_info[0]}.{sys.version_info[1]} 입니다 — "
+                "키트에 든 부품은 3.11 ~ 3.13 용입니다. python.org 에서 3.12 를 설치하세요"
+                "(첫 화면의 「Add python.exe to PATH」 를 체크)."
+            )
+        if args.from_clipboard and not args.server:
+            found = parse_registration(read_clipboard())
+            if found:
+                args.platform, args.server, args.token = (
+                    found["platform"],
+                    found["server"],
+                    found["token"],
+                )
+                clear_clipboard()
+                shown = f"{found['platform']} ({found['server']})"
+                print(f"클립보드의 등록 정보를 읽었습니다: {shown}")
+            elif not pipeline.platforms():
+                raise Stop(
+                    "클립보드에 등록 정보가 없습니다 — 플랫폼 화면 「내 정보」 의 정제 도구 "
+                    "키트에서 「이 PC 에 등록 정보 복사」 를 누른 뒤 다시 실행하세요."
+                )
+            else:
+                print(
+                    "클립보드에 등록 정보가 없습니다 — 등록은 그대로 두고 설치만 확인합니다."
+                )
         work_root: Path | None = None
         if args.work_root is not None:
             work_root = args.work_root.expanduser().resolve()
         elif not pipeline.load_settings().get("work_root"):
-            raise Stop("처음에는 --work-root 로 작업 폴더들을 둘 곳을 정합니다")
+            # 처음 — 더블클릭 설치에는 물을 자리가 없다. 정해진 자리에 두고 알린다.
+            work_root = default_work_root()
         if work_root is not None:
             work_root.mkdir(parents=True, exist_ok=True)
         settings = register(

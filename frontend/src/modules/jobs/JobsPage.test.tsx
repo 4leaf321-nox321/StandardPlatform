@@ -112,6 +112,28 @@ describe('작업 화면', () => {
     await waitFor(() => expect(jobsApi.apply).toHaveBeenCalledWith('j1'))
   })
 
+  it('정제 도구가 준 링크(?job=)로 오면 그 계획이 펼쳐진 채로 열린다', async () => {
+    // 사람은 명령 창 대신 여기서 계획을 읽고 「적용」 을 누른다.
+    window.history.replaceState(null, '', '/jobs?job=j1')
+    try {
+      await mount([job({ result: CLEAN_PLAN })])
+      expect(screen.getByText('볼트')).toBeInTheDocument() // 누르지 않아도 계획 표가 보인다
+      expect(screen.getByRole('button', { name: '적용' })).toBeInTheDocument()
+    } finally {
+      window.history.replaceState(null, '', '/')
+    }
+  })
+
+  it('링크의 작업이 목록에 없으면 그렇다고 말한다 — 조용히 아무것도 안 열리지 않게', async () => {
+    window.history.replaceState(null, '', '/jobs?job=다른-계정의-것')
+    try {
+      await mount([job({ result: CLEAN_PLAN })])
+      expect(await screen.findByText('링크의 작업이 이 목록에 없습니다')).toBeInTheDocument()
+    } finally {
+      window.history.replaceState(null, '', '/')
+    }
+  })
+
   it('오류가 있는 계획은 적용이 안 선다 — 고쳐서 다시 올리라고 말한다', async () => {
     const broken = {
       ...CLEAN_PLAN,

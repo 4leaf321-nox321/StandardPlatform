@@ -22,6 +22,12 @@
 *.env         text eol=lf
 .env.*        text eol=lf
 
+# **Windows 배치 파일은 거꾸로 CRLF 다.** 사용자 PC 에서 더블클릭하는 정제 도구 키트의
+# `install.cmd` — LF 로 나가면 cmd.exe 가 `goto` 의 표를 엉뚱하게 찾는 일이 있다(줄 길이에 따라
+# 조용히 다른 줄로 뛴다). 리눅스에서 키트를 묶어도 이 줄바꿈이 그대로 간다.
+*.cmd         text eol=crlf
+*.bat         text eol=crlf
+
 # 손대면 안 되는 것들. text=auto 의 추측에 맡기면 **조용히 망가진다** —
 # SIF 한 바이트가 바뀌면 이미지가 안 뜨고, 그 오류는 무엇을 고쳐야 하는지
 # 말해 주지 않는다.

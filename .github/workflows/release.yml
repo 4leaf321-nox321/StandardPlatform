@@ -57,7 +57,7 @@ jobs:
           kit=$(ls release/sp-pipeline-*.zip)
           python3 -m zipfile -l "$kit" > /tmp/kit.txt
           for f in sp_mcp.py sp_setup.py sp_pipeline.py sp_table.py sp_profile.py sp_work.py \
-                   AGENTS.md requirements.txt guide/GUIDE.md VERSION; do
+                   install.cmd AGENTS.md requirements.txt guide/GUIDE.md VERSION; do
             grep -q "/$f " /tmp/kit.txt || { echo "묶음에 $f 가 없습니다"; exit 1; }
           done
           grep -q "pywin32-.*win_amd64.whl" /tmp/kit.txt \

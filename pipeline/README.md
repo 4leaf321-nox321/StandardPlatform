@@ -78,11 +78,24 @@ python sp_pipeline.py validate runs/2026-09-13-plm-models    # 그 뒤는 위와
 AI 가 **사용자 PC 에서** 조사 · 변환 · 검증 · 미리 보기를 직접 돌리게 한다. 도구는
 `sp_mcp.py` 하나이고, 두 클라이언트가 같은 설정 모양으로 붙는다.
 
-**1. 설치** — `sp-pipeline-<버전>.zip` 을 풀고(휠 동봉 · 인터넷 없이 설치). **플랫폼 화면의 「내
-정보」 에서 받는다** — 서버 번들이 같은 판을 들고 있다(사내망에서는 GitHub 릴리스에 못 닿는다). 그
-자리에 이 설치의 주소 · 토큰을 채운 아래 명령도 나온다. 저장소에 없는
-사내 파일(허브 정의 · 대응 파일)까지 함께 들고 가려면 `KIT_PRIVATE_DIR=<폴더> ./deploy/build_pipeline_kit.sh`
-로 만든 `…-private.zip` 을 쓴다(그 zip 은 올리지 않는다):
+**1. 설치 — 더블클릭.** 받는 사람은 개발자가 아니다(Claude Desktop 만 쓰는 데이터 담당자).
+
+1. 플랫폼 화면 **「내 정보」 → 정제 도구 키트**에서 zip 을 받아 PC 에 푼다(처음 한 번). 서버 번들이
+   같은 판을 들고 있다 — 사내망에서는 GitHub 릴리스에 못 닿는다. **Python 3.12** 가 있어야 한다
+   (python.org 에서 설치할 때 첫 화면의 「Add python.exe to PATH」 를 체크).
+2. 같은 자리의 **「이 PC 에 등록 정보 복사」** — 이 플랫폼용 토큰을 하나 발급해 이름 · 주소와 함께
+   클립보드에 넣는다(`SP-PIPELINE-PLATFORM {…}` 한 줄).
+3. 푼 폴더의 **`install.cmd` 를 더블클릭** — 처음이면 설치까지(venv · 동봉 휠 · Claude Desktop 설정),
+   이미 설치했으면 그 플랫폼만 더한다. 클립보드의 등록 정보를 읽고 **비운다**(토큰이 다음
+   붙여넣기에 딸려 나가지 않게). 작업 폴더는 처음에 `~/온톨로지작업` 에 생긴다.
+4. **Claude Desktop 을 완전히 종료했다가 다시 켠다.**
+
+**적용은 그 플랫폼 화면 「작업」 에서** 사람이 「적용」 을 누른다 — 미리 보기 뒤에 AI 가 그 계획이
+펼쳐진 채로 열리는 링크(`apply_on_screen`)를 준다. 그 플랫폼의 화면이니 엉뚱한 곳에 넣을 일이 없다.
+
+**명령으로 할 때**(Gemini CLI · 다른 작업 폴더 · macOS · Linux) — 저장소에 없는 사내 파일(허브 정의 ·
+대응 파일)까지 함께 들고 가려면 `KIT_PRIVATE_DIR=<폴더> ./deploy/build_pipeline_kit.sh` 로 만든
+`…-private.zip` 을 쓴다(그 zip 은 올리지 않는다):
 
 ```bash
 python sp_setup.py --work-root "D:\온톨로지작업" --platform rootdesign \

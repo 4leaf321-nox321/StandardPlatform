@@ -214,9 +214,14 @@ def _run_state(folder: Path, run: Path) -> dict[str, Any]:
         "objects": sum(len(batch.rows) for batch in loaded.objects),
         "preview": "없음",
         "applied": (run / pipeline.APPLIED).exists(),
+        "screen": "",
     }
     seen = pipeline._read_json(run / pipeline.PREVIEW, [])
     if isinstance(seen, dict):
+        job = str((seen.get("result") or {}).get("job_id") or "")
+        if job and seen.get("server"):
+            # 그 플랫폼 화면에서 이 계획을 펼친 채로 — 적용은 거기서 사람이 누른다.
+            state["screen"] = pipeline.jobs_link(str(seen["server"]), job)
         if seen.get("digest") != pipeline.digest(pipeline.payload(loaded)):
             state["preview"] = "미리 본 뒤 바뀜"
         elif (seen.get("result") or {}).get("ok"):
@@ -313,9 +318,14 @@ def status(folder: Path) -> dict[str, Any]:
         elif run["preview"] == "오류 있음":
             steps.append(f"{run['run']}: 미리 보기 오류를 고쳐 새 실행으로 다시")
         else:
+            where = (
+                f"그 플랫폼 화면 「작업」 에서 「적용」 — {run['screen']}"
+                if run.get("screen")
+                else "그 플랫폼 화면 「작업」 에서 「적용」"
+            )
             steps.append(
-                f"{run['run']}: 사람이 미리 보기를 확인하고 **직접** 적용 — "
-                f"python sp_pipeline.py apply {(folder / run['run']).as_posix()}"
+                f"{run['run']}: 사람이 미리 보기를 확인하고 **직접** 적용 — {where} "
+                f"(명령 창이면 python sp_pipeline.py apply {(folder / run['run']).as_posix()})"
             )
     if not steps:
         steps.append("할 일이 없습니다 — 새 원천을 넣거나 새 실행을 만든다")

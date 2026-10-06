@@ -192,10 +192,22 @@ function Detail({
   )
 }
 
+/**
+ * 주소의 `?job=<id>` — **그 계획을 펼친 채로** 연다.
+ *
+ * 정제 도구 키트가 미리 보기를 마치면 이 링크를 준다. 사람은 명령 창 대신 여기서 계획을 읽고
+ * 「적용」 을 누른다 — 그 플랫폼의 화면이라 엉뚱한 곳에 넣을 일이 없다.
+ */
+function linkedJob(): string | null {
+  if (typeof window === 'undefined') return null
+  return new URLSearchParams(window.location.search).get('job')
+}
+
 export default function JobsPage() {
   const [offset, setOffset] = useState(0)
   const [busyId, setBusyId] = useState<string | null>(null)
-  const [opened, setOpened] = useState<string | null>(null)
+  const [linked] = useState(linkedJob)
+  const [opened, setOpened] = useState<string | null>(linked)
   // **하나씩 펼쳐 누르는 길만 있으면 스무 건에서 아무도 끝까지 안 한다.**
   const [picked, setPicked] = useState<Set<string>>(new Set())
   const [confirming, setConfirming] = useState<'apply' | 'cancel' | null>(null)
@@ -343,6 +355,18 @@ export default function JobsPage() {
 
       <ErrorNotice error={page.error} />
       <ErrorNotice error={actionError} />
+
+      {/* 링크로 왔는데 그 작업이 목록에 없다 — **조용히 아무것도 안 열리면** 사람은 링크가 고장 난
+          줄 안다. 계획을 본 사람만 적용할 수 있으니 대개 다른 계정으로 들어온 것이다. */}
+      {linked && page.data && !page.data.items.some((one) => one.id === linked) && (
+        <Alert>
+          <AlertTitle>링크의 작업이 이 목록에 없습니다</AlertTitle>
+          <AlertDescription>
+            미리 보기를 한 사람(정제 도구에 등록한 토큰의 주인)으로 로그인했는지 확인하세요 —
+            계획은 그 사람만 적용합니다. 「내가 시킨 것만」 을 끄면 다른 사람의 작업도 보입니다.
+          </AlertDescription>
+        </Alert>
+      )}
 
       {picked.size > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-md border p-2">

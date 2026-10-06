@@ -26,6 +26,7 @@ TOOLS = {
     "work_list",
     "work_init",
     "work_platform",
+    "platform_schema",
     "work_status",
     "work_read",
     "work_write",

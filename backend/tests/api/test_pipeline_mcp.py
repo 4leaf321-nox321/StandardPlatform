@@ -97,6 +97,7 @@ def test_적용_도구는_없고_안내는_정본을_내려준다() -> None:
         "work_list",
         "work_init",
         "work_platform",
+        "platform_schema",
         "work_status",
         "work_read",
         "work_write",
@@ -258,6 +259,20 @@ def test_조사부터_미리_보기까지_한_바퀴(
     assert "main 에 넣습니다" in server.work_platform(work, "main")
     went = server.run_preview(work, again["run"])
     assert went["ok"] is True and went["platform"].startswith("main ")
+    # **적용은 그 플랫폼 화면에서** — 계획이 펼쳐진 채로 열리는 링크를 준다.
+    assert went["apply_on_screen"].startswith(f"{SERVER}/jobs?job=")
+    assert "그 플랫폼 화면 「작업」" in server.work_status(work)
+    # 그 링크의 계획은 화면의 「적용」 이 받는 작업이다(같은 사람 · 같은 파일).
+    job_id = went["apply_on_screen"].rsplit("=", 1)[1]
+    applied = client.post(f"/api/jobs/{job_id}/apply", headers=admin.headers)
+    assert applied.status_code == 202, applied.text
+
+    # 정의를 **키트가 직접** 읽는다 — 서버 MCP 없이. 타입을 고르면 그것만.
+    schema = server.platform_schema(work)
+    assert slugs["model"] in [one["slug"] for one in schema["types"]]
+    picked = server.platform_schema(work, types=[slugs["model"], "없는타입"])
+    assert [one["slug"] for one in picked["types"]] == [slugs["model"]]
+    assert picked["missing"] == ["없는타입"] and slugs["model"] in picked["all_type_slugs"]
     seen = json.loads((root / work / again["run"] / "preview.json").read_text())
     assert seen["platform"] == "main" and seen["server"] == SERVER
 

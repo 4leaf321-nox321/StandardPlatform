@@ -612,7 +612,8 @@ def _post_bundle(server: str, token: str, body: dict[str, Any]) -> dict[str, Any
     result = job.get("result")
     if not isinstance(result, dict):
         raise Stop(f"플랫폼 응답을 읽을 수 없습니다: {job!r}")
-    return result
+    # 작업 번호를 함께 — 미리 본 계획을 그 플랫폼 화면 「작업」 에서 열어 적용하는 길이다.
+    return {**result, "job_id": str(job.get("id") or "")}
 
 
 def _send(
@@ -684,14 +685,53 @@ def _wait_job(server: str, token: str, job: Any, *, who: str = "플랫폼") -> d
         WAIT(POLL_SECONDS)
 
 
-def _get_json(server: str, token: str, path: str) -> Any:
+def _get_json(server: str, token: str, path: str, *, who: str = "허브") -> Any:
     headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
     status, answer = _send(
-        server, "GET", f"{server.rstrip('/')}{path}", headers, None, who="허브"
+        server, "GET", f"{server.rstrip('/')}{path}", headers, None, who=who
     )
     if status != 200:
-        _refused("허브", status, answer)
+        _refused(who, status, answer)
     return answer
+
+
+def jobs_link(server: str, job_id: str) -> str:
+    """그 플랫폼 화면의 「작업」 — **이 계획을 펼친 채로** 연다(`?job=`).
+
+    적용은 사람이 거기서 「적용」 을 누른다. 명령 창보다 쉽고, **그 플랫폼의 화면에서** 누르니
+    엉뚱한 곳에 넣을 일이 없다. 계획을 본 사람(이 토큰의 주인)만 적용할 수 있다.
+    """
+    return f"{server.rstrip('/')}/jobs?job={job_id}"
+
+
+def platform_schema(server: str, token: str, types: list[str] | None = None) -> dict[str, Any]:
+    """플랫폼의 **지금 정의** — 정의 초안을 잡기 전에 읽는다(무엇이 이미 있나).
+
+    **키트가 직접 읽는다** — 그래서 정제만 하는 사람은 서버 MCP 를 따로 붙이지 않아도 된다
+    (Node.js · 설정 JSON 손편집이 빠진다). `types` 를 주면 그 타입들과, 그 타입에 닿는 관계
+    종류만 — 타입이 백 개면 전부는 길다.
+    """
+    schema = _get_json(server, token, "/api/ontology/schema", who="플랫폼")
+    if not isinstance(schema, dict) or not types:
+        return schema if isinstance(schema, dict) else {}
+    wanted = set(types)
+    picked = [one for one in schema.get("types") or [] if one.get("slug") in wanted]
+    missing = sorted(wanted - {str(one.get("slug")) for one in picked})
+    relations = [
+        one
+        for one in schema.get("relation_types") or []
+        if wanted & set(one.get("src_type_slugs") or [])
+        | wanted & set(one.get("dst_type_slugs") or [])
+    ]
+    out = {
+        "groups": schema.get("groups") or [],
+        "types": picked,
+        "relation_types": relations,
+        "all_type_slugs": [one.get("slug") for one in schema.get("types") or []],
+    }
+    if missing:
+        out["missing"] = missing
+    return out
 
 
 def _export_bundle(hub: str, hub_token: str, groups: list[str]) -> Any:

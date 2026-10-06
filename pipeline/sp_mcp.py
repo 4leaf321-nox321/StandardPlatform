@@ -221,6 +221,22 @@ def work_platform(work: str, platform: str) -> str:
 
 
 @mcp.tool()
+def platform_schema(work: str, types: list[str] | None = None) -> dict[str, Any]:
+    """그 작업이 넣을 플랫폼의 **지금 정의** — 정의 초안을 잡기 전에 읽는다(무엇이 이미
+    있나 · 어떤 이름 · 어떤 속성). 서버 MCP 를 따로 붙이지 않아도 된다 — 키트가 등록된 토큰으로
+    읽는다.
+
+    `types` 를 주면 그 타입들과 그 타입에 닿는 관계 종류만(타입이 많으면 전부는 길다). 처음에는
+    없이 불러 `types` 의 slug · label 을 훑고, 필요한 것만 다시 부른다.
+    """
+    chosen = _target(_work(work))
+    return {
+        "platform": chosen.shown,
+        **pipeline.platform_schema(chosen.server, chosen.token, types),
+    }
+
+
+@mcp.tool()
 def work_status(work: str) -> str:
     """**작업마다 먼저 부른다.** 원천 · 정의 확정 여부 · 실행들의 상태와 **다음 할 일**."""
     return sp_work.render(sp_work.status(_work(work)))
@@ -417,24 +433,36 @@ def run_validate(work: str, run: str, ask_platform: bool = True) -> dict[str, An
 
 @mcp.tool()
 def run_preview(work: str, run: str) -> dict[str, Any]:
-    """플랫폼에 **아무것도 저장하지 않고** 미리 본다. 요약을 사람에게 보이고, 괜찮으면
-    `apply_command` 를 **사람이 직접** 실행하게 안내한다(이 서버에는 적용 도구가 없다)."""
+    """플랫폼에 **아무것도 저장하지 않고** 미리 본다. 요약을 사람에게 보이고, 괜찮으면 **사람이
+    직접** 적용하게 안내한다 — 이 도구들에는 적용이 없다.
+
+    적용하는 길은 **`apply_on_screen` 이 먼저다**: 그 플랫폼 화면 「작업」 에 이 계획이 펼쳐진
+    채로 열리고, 사람이 「적용」 을 누른다(명령 창이 필요 없다 · 그 플랫폼의 화면이니 엉뚱한
+    곳에 안 들어간다). 명령 창이 편한 사람에게는 `apply_command`.
+    """
     folder = _work(work)
     path = _run(folder, run)
     chosen = _target(folder)
     ok, summary = pipeline.cmd_preview(
         path, server=chosen.server, token=chosen.token, platform=chosen.name
     )
+    seen = pipeline._read_json(path / pipeline.PREVIEW, [])
+    job = (
+        str(((seen or {}).get("result") or {}).get("job_id") or "")
+        if isinstance(seen, dict)
+        else ""
+    )
     return {
         "ok": ok,
         # **어디에 미리 봤는지를 먼저** — 사람은 숫자보다 그것을 먼저 확인해야 한다.
         "platform": chosen.shown,
         "summary": summary,
+        "apply_on_screen": pipeline.jobs_link(chosen.server, job) if ok and job else None,
         "apply_command": (
             f'python "{HERE / "sp_pipeline.py"}" apply "{path}"' if ok else None
         ),
-        "note": "사람이 아무 명령 창에서 apply_command 를 실행한다 — 미리 본 그 플랫폼으로만 "
-        "간다(이 PC 의 설정에서 주소 · 토큰을 읽는다).",
+        "note": "사람이 apply_on_screen 을 열어 「적용」 을 누른다(계획을 본 사람 — 이 토큰의 "
+        "주인 — 으로 로그인해 있어야 한다). 명령 창이면 apply_command 를 아무 창에나.",
     }
 
 
