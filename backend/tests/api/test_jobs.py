@@ -64,6 +64,15 @@ def test_올리면_곧장_202_이고_워커가_계획을_세운다(client: TestC
     assert final["status"] == "done" and final["result"]["applied"] is True
     assert client.get(f"/api/objects/{part}", headers=admin.headers).json()["total"] == 2
 
+    # **계획이 「적용됐다」 를 안다** — 계획의 `result.applied` 는 영영 거짓이라(적용은 새
+    # 작업이다) 서버가 `applied_by` 로 알려 준다. 화면은 「적용」 을 거두고, 정제 도구는
+    # 「적용함」 을 안다. 같은 계획을 또 적용하면 그 자리에서 거절한다(화면에서 두 번 누른 것).
+    plan = client.get(f"/api/jobs/{job['id']}", headers=admin.headers).json()
+    assert plan["applied_by"] == final["id"]
+    twice = client.post(f"/api/jobs/{job['id']}/apply", headers=admin.headers)
+    assert twice.status_code == 409 and "이미 적용" in twice.json()["error"]["message"]
+    assert twice.json()["error"]["details"]["applied_by"] == final["id"]
+
 
 def test_미리_본_뒤_누가_바꾸면_적용하지_않는다(
     client: TestClient, admin: Signed, db: Session
@@ -134,12 +143,12 @@ def test_고른_계획을_한_번에_적용한다(client: TestClient, admin: Sig
         finish_job(client, admin, {"id": rows[one["id"]]["job_id"]})
     assert client.get(f"/api/objects/{part}", headers=admin.headers).json()["total"] == 2
 
-    # 같은 계획을 또 골라도 **두 번 들어가지 않는다** — 적용 작업은 서지만, 미리 본 뒤
-    # 자료가 달라졌으므로 그 작업이 지문 검사에서 실패한다.
+    # 같은 계획을 또 골라도 **두 번 들어가지 않는다** — 이미 적용한 계획은 적용 작업을
+    # 세우지 않고 그 자리에서 거절한다. 예전에는 작업을 세웠다가 지문 검사에서 실패했는데,
+    # 그동안 화면에 「적용 대기」 · 「적용」 이 남아 사람이 또 눌렀다.
     again = client.post("/api/jobs/apply", json={"ids": [first["id"]]}, headers=admin.headers)
-    assert again.json()[0]["status"] == "ok"
-    twice = finish_job(client, admin, {"id": again.json()[0]["job_id"]})
-    assert twice["status"] == "failed"
+    assert again.json()[0]["status"] != "ok" and again.json()[0]["job_id"] is None
+    assert "이미 적용" in again.json()[0]["message"]
     assert client.get(f"/api/objects/{part}", headers=admin.headers).json()["total"] == 2
 
 

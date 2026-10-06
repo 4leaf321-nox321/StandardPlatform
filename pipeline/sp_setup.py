@@ -376,8 +376,8 @@ def main(argv: list[str] | None = None) -> int:
                     f"{label}: {path} 에 넣으세요 (--write-{label.split()[0].lower()} 로 자동)"
                 )
         print(
-            "\n다른 플랫폼도 넣으려면 그 플랫폼 화면 「내 정보」 의 설치 명령을 이 PC 에서 "
-            "한 번 더 — 앞에 등록한 것은 남습니다."
+            "\n다른 플랫폼도 넣으려면 그 플랫폼 화면 「내 정보」 에서 「이 PC 에 등록 정보 "
+            "복사」 를 누르고 install.cmd 를 다시 더블클릭 — 앞에 등록한 것은 남습니다."
         )
         print("Claude Desktop 은 **완전히 종료했다가** 다시 켜야 새 MCP 를 읽습니다.")
     except Stop as stop:

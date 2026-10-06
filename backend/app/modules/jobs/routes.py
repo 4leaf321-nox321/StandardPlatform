@@ -59,6 +59,11 @@ def _out(db: Session, row: Job) -> JobOut:
         result=row.result,
         error=row.error,
         parent_id=row.parent_id,
+        applied_by=(
+            child.id
+            if row.status == "done" and (child := services.apply_child(db, row.id)) is not None
+            else None
+        ),
         input_file_name=input_name,
         has_output=row.output_file_id is not None,
         requested_by_name=who.display_name if who else None,

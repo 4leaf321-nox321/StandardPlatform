@@ -27,6 +27,8 @@ export interface Job {
   result: Record<string, unknown> | null
   error: string | null
   parent_id: string | null
+  /** 이 계획을 적용한(또는 적용 중인) 작업 — 있으면 다시 적용하지 않는다. */
+  applied_by?: string | null
   input_file_name: string | null
   has_output: boolean
   requested_by_name: string | null

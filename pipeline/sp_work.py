@@ -34,6 +34,8 @@ from typing import Any
 import sp_pipeline as pipeline
 
 FORMAT = "sp-work/1"
+#: 「새 정의 없음」 을 확정했다는 표시 — 정의 파일의 지문 자리에 둔다.
+NO_DEFINITION = "none"
 WORK = "work.json"
 SOURCES = "00-원천"
 SURVEY = "01-조사"
@@ -183,7 +185,12 @@ def record(
     decided_by: str = "",
     confirms_ontology: bool = False,
 ) -> str:
-    """결정 한 건을 덧붙인다. `confirms_ontology` 면 지금 정의의 지문을 확정으로 남긴다."""
+    """결정 한 건을 덧붙인다. `confirms_ontology` 면 지금 정의의 지문을 확정으로 남긴다.
+
+    **정의 파일이 없으면 「새 정의 없음」 을 확정한다** — 이미 있는 타입에 자료만 넣는 작업이다
+    (가장 흔한 일이다). 이 길이 없어서 그런 작업에도 상태가 「정의 초안을 쓰라」 고 끝까지
+    졸랐다(실측). 그 뒤에 정의 파일이 생기면 다시 확정받는다.
+    """
     work = load(folder)
     if not topic.strip() or not decision.strip():
         raise Stop("무엇에 대한 결정인지(topic)와 결정(decision)이 있어야 합니다")
@@ -193,16 +200,32 @@ def record(
     lines.append(f"- 정한 사람: {decided_by.strip() or '(적지 않음)'}")
     if confirms_ontology:
         digest = _sha(folder / ONTOLOGY)
-        if digest is None:
-            raise Stop(f"확정할 정의가 없습니다: {ONTOLOGY}")
-        work.setdefault("confirmed", {})["ontology_sha256"] = digest
+        work.setdefault("confirmed", {})["ontology_sha256"] = digest or NO_DEFINITION
         work["confirmed"]["at"] = _now()
         work["confirmed"]["by"] = decided_by.strip()
         pipeline._write(folder / WORK, work)
-        lines.append(f"- 정의 확정: {ONTOLOGY} sha256 {digest[:12]}")
+        lines.append(
+            f"- 정의 확정: {ONTOLOGY} sha256 {digest[:12]}"
+            if digest
+            else "- 정의 확정: 새 정의 없음 — 플랫폼에 있는 타입에만 넣는다"
+        )
     with (folder / DECISIONS).open("a", encoding="utf-8") as handle:
         handle.write("\n".join(lines) + "\n")
     return f"{DECISIONS} 에 적었습니다: {topic.strip()}"
+
+
+def _applied_on_screen(seen: dict[str, Any], job: str) -> bool:
+    """화면에서 적용했는지 **미리 본 그 플랫폼에** 묻는다 — 못 닿거나 등록이 바뀌었으면 모른다.
+
+    안 물으면 화면에서 적용한 뒤에도 상태가 「적용 전 — 적용하라」 고 조른다(실측).
+    """
+    try:
+        chosen = pipeline.target(str(seen.get("platform") or ""))
+    except Stop:
+        return False
+    if chosen.server.rstrip("/") != str(seen.get("server") or "").rstrip("/"):
+        return False
+    return bool(pipeline.plan_applied(chosen.server, chosen.token, job))
 
 
 def _run_state(folder: Path, run: Path) -> dict[str, Any]:
@@ -222,6 +245,8 @@ def _run_state(folder: Path, run: Path) -> dict[str, Any]:
         if job and seen.get("server"):
             # 그 플랫폼 화면에서 이 계획을 펼친 채로 — 적용은 거기서 사람이 누른다.
             state["screen"] = pipeline.jobs_link(str(seen["server"]), job)
+            if not state["applied"] and _applied_on_screen(seen, job):
+                state["applied"] = True
         if seen.get("digest") != pipeline.digest(pipeline.payload(loaded)):
             state["preview"] = "미리 본 뒤 바뀜"
         elif (seen.get("result") or {}).get("ok"):
@@ -263,8 +288,10 @@ def status(folder: Path) -> dict[str, Any]:
     ontology = {
         "exists": current is not None,
         "judgement": (folder / DEFINITION / "판단표.md").exists(),
-        "confirmed": bool(current and confirmed == current),
-        "changed_after_confirm": bool(current and confirmed and confirmed != current),
+        # 새 정의 없이 확정한 작업 — 정의 파일이 없는 그대로여야 확정이다.
+        "none": current is None and confirmed == NO_DEFINITION,
+        "confirmed": bool(confirmed and confirmed == (current or NO_DEFINITION)),
+        "changed_after_confirm": bool(confirmed and confirmed != (current or NO_DEFINITION)),
     }
     runs = [
         _run_state(folder, run)
@@ -281,7 +308,9 @@ def status(folder: Path) -> dict[str, Any]:
         elif one["kind"] == "표" and not one["profiled"]:
             steps.append(f"{one['name']}: 조사 — source_profile")
     if any(one["kind"] in {"표", "문서"} for one in sources):
-        if not ontology["exists"]:
+        if ontology["none"]:
+            pass  # 새 정의 없음으로 확정 — 있는 타입에만 넣는다
+        elif not ontology["exists"]:
             steps.append(
                 f"정의 초안 — {ONTOLOGY} 와 {DEFINITION}/판단표.md 를 쓰고 사람에게 보인다"
             )
@@ -356,7 +385,9 @@ def render(state: dict[str, Any]) -> str:
         lines.append("- 없음")
     ontology = state["ontology"]
     word = (
-        "없음"
+        "새 정의 없음(있는 타입에만 넣는다 — 확정됨)"
+        if ontology.get("none")
+        else "없음 — 새 타입이 필요 없으면 판단표에 그렇게 적고 확정받는다"
         if not ontology["exists"]
         else "확정됨"
         if ontology["confirmed"]

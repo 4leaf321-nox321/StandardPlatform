@@ -21,7 +21,7 @@
 | --- | --- | --- |
 | 0 작업 폴더 | `work_list` · `work_init` | **어느 플랫폼에 넣을지**(`work_list` 의 `platforms` 가 둘 이상이면 — 짐작하지 않는다) · 원천을 `00-원천/` 에 넣어 달라고(엑셀은 시트마다 CSV UTF-8) |
 | 1 조사 | `source_profile`(고를 값을 적을 땐 `show_values`, 코어에 붙나는 `match`) · `source_head` | 결과를 요약해 보인다. 애매한 것은 묻는다 |
-| 2 정의 초안 | `pipeline_guide("modeling")` · `platform_schema(work)`(그 작업의 플랫폼 정의 — 서버 MCP 없이) · `work_write` 로 `02-정의/ontology.json` 과 `02-정의/판단표.md` | **판단표를 보이고 확정받는다** → `decision_record(confirms_ontology=true)` |
+| 2 정의 초안 | **이미 있는 타입에 넣는 것이면 새 정의를 만들지 않는다** — 판단표에 「새 정의 없음 · 어느 타입에」 를 적어 보이고, 확정을 받으면 `decision_record(confirms_ontology=true)`(정의 파일 없이 = 「새 정의 없음」 확정). 새 타입이 필요하면 `pipeline_guide("modeling")` · `platform_schema(work)`(그 작업의 플랫폼 정의 — 서버 MCP 없이) · `work_write` 로 `02-정의/ontology.json` 과 `02-정의/판단표.md` | **판단표를 보이고 확정받는다** → `decision_record(confirms_ontology=true)` |
 | 3 대응 | `pipeline_guide("table")` · `work_write` 로 `03-대응/<원천 이름>.table.json` | — |
 | 4 변환 | `table_convert` → 보고서를 읽고 대응을 고쳐 다시 | **미해결은 사람에게 묻고** `decision_record` |
 | 4′ 문서 추출 | `run_init` · `work_write` 로 `runs/<실행>/objects/…` · `relations/…` | 확신 없는 것은 `unresolved.json` 으로 |

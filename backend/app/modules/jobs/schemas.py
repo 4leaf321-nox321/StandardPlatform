@@ -29,6 +29,10 @@ class JobOut(BaseModel):
     """끝난 뒤의 결과 — 가져오기면 계획 표(`ImportPlanOut` 모양 + `fingerprint`)."""
     error: str | None
     parent_id: uuid.UUID | None
+    applied_by: uuid.UUID | None = None
+    """이 **계획**을 적용한(또는 적용 중인) 작업 — 있으면 화면이 「적용」 을 안 세우고, 정제
+    도구가 「적용함」 을 안다. 계획의 `result.applied` 는 영영 거짓이라(적용은 새 작업이다)
+    이것이 「적용됐나」 의 답이다."""
     input_file_name: str | None
     has_output: bool
     requested_by_name: str | None

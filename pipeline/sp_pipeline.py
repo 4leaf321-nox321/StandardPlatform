@@ -242,11 +242,15 @@ Sender = Callable[[str, str, dict[str, str], bytes | None], tuple[int, Any]]
 
 
 def _urllib_send(
-    method: str, url: str, headers: dict[str, str], body: bytes | None
+    method: str,
+    url: str,
+    headers: dict[str, str],
+    body: bytes | None,
+    timeout: float = 600,
 ) -> tuple[int, Any]:
     request = urllib.request.Request(url, data=body, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=600) as response:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
             return response.status, json.loads(response.read() or b"null")
     except urllib.error.HTTPError as failure:
         raw = failure.read()
@@ -693,6 +697,32 @@ def _get_json(server: str, token: str, path: str, *, who: str = "허브") -> Any
     if status != 200:
         _refused(who, status, answer)
     return answer
+
+
+#: 상태를 **묻기만** 할 때 기다리는 시간 — 적재(600초)만큼 매달리면 작업 상태 하나 보는 데 몇
+#: 분이 걸린다. 못 닿으면 「모른다」 로 넘어간다.
+PROBE_SECONDS = 5.0
+
+
+def plan_applied(server: str, token: str, job_id: str) -> bool | None:
+    """그 계획을 **화면(또는 어디서든) 적용했나** — 플랫폼의 `applied_by` 로. 못 닿으면 None.
+
+    키트가 미리 본 계획을 사람은 그 플랫폼 화면 「작업」 에서 적용한다. 키트는 그것을
+    모르므로, 안 물으면 작업 상태가 계속 「적용 전 — 적용하라」 고 조르고, 사람은 같은 것을
+    또 넣으려 한다.
+    """
+    headers = {"Authorization": f"Bearer {token}", "X-Client": CLIENT}
+    url = f"{server.rstrip('/')}/api/jobs/{job_id}"
+    try:
+        if SEND is _urllib_send:
+            status, answer = _urllib_send("GET", url, headers, None, timeout=PROBE_SECONDS)
+        else:
+            status, answer = SEND("GET", url, headers, None)
+    except (urllib.error.URLError, OSError, ValueError):
+        return None
+    if status != 200 or not isinstance(answer, dict):
+        return None
+    return bool(answer.get("applied_by"))
 
 
 def jobs_link(server: str, job_id: str) -> str:

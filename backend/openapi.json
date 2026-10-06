@@ -25292,6 +25292,18 @@
             ],
             "title": "Parent Id"
           },
+          "applied_by": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Applied By"
+          },
           "input_file_name": {
             "anyOf": [
               {

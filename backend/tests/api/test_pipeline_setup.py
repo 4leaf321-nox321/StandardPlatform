@@ -196,6 +196,19 @@ def test_작업_폴더가_넣을_곳을_기억하고_바꾸면_기록한다(
     # 실행 폴더는 두 단계 위의 작업 폴더에서 읽는다 — 미리 보기가 갈 곳.
     assert setup.pipeline.work_platform(folder / "runs" / "첫") == "qings"
 
+    # **새 정의 없이 확정** — 이미 있는 타입에 자료만 넣는 작업(가장 흔하다). 이 길이
+    # 없어서 상태가 끝까지 「정의 초안을 쓰라」 고 졸랐다(실측). 그 뒤에 정의가 생기면 다시
+    # 확정받는다.
+    (folder / sp_work.SOURCES / "표.csv").write_text("a\n1\n", encoding="utf-8")
+    assert any("정의 초안" in one for one in sp_work.status(folder)["next"])
+    sp_work.record(folder, topic="정의", decision="새 정의 없음", confirms_ontology=True)
+    state = sp_work.status(folder)
+    assert state["ontology"]["none"] and state["ontology"]["confirmed"]
+    assert not any("정의" in one for one in state["next"]), state["next"]
+    assert "새 정의 없음" in sp_work.render(state)
+    (folder / sp_work.ONTOLOGY).write_text('{"types": []}', encoding="utf-8")
+    assert sp_work.status(folder)["ontology"]["changed_after_confirm"] is True
+
     assert "다시" in sp_work.set_platform(folder, "rootdesign")
     assert sp_work.platform_of(folder) == "rootdesign"
     assert "qings → rootdesign" in (folder / sp_work.DECISIONS).read_text(encoding="utf-8")

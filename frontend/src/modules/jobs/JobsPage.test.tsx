@@ -147,6 +147,15 @@ describe('작업 화면', () => {
     expect(screen.getByText('무게: 숫자여야 합니다')).toBeInTheDocument()
   })
 
+  it('이미 적용한 계획은 「적용」 을 거둔다 — 화면에서 두 번 누르지 않게', async () => {
+    // 계획의 result.applied 는 영영 거짓이다(적용은 새 작업) — 서버가 applied_by 로 알려 준다.
+    await mount([job({ result: CLEAN_PLAN, applied_by: 'j9-적용-작업' })])
+    expect(screen.queryByText('적용 대기')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '펼치기' }))
+    expect(screen.queryByRole('button', { name: '적용' })).not.toBeInTheDocument()
+    expect(screen.getByText(/적용했습니다 — 적용 작업/)).toBeInTheDocument()
+  })
+
   it('이미 적용한 작업은 또 적용하지 않는다', async () => {
     await mount([job({ result: { ...CLEAN_PLAN, applied: true } })])
     expect(screen.queryByText('적용 대기')).not.toBeInTheDocument()

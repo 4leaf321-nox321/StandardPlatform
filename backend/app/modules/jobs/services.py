@@ -162,6 +162,24 @@ def request_cancel(db: Session, user: User, job: Job) -> Job:
     return job
 
 
+def apply_child(db: Session, plan_id: uuid.UUID) -> Job | None:
+    """이 계획을 **적용한(또는 적용 중인) 작업** — 없으면 None.
+
+    계획 작업의 `result.applied` 는 영영 거짓이다(적용은 새 작업이다). 그것만 보면 적용하고
+    나서도 화면에 「적용 대기」 와 「적용」 단추가 남고, 같은 계획이 **두 번** 들어갈 수
+    있었다.
+    실패하거나 취소된 적용은 셈하지 않는다 — 그때는 다시 적용할 수 있어야 한다.
+    """
+    for row in db.scalars(
+        select(Job).where(Job.parent_id == plan_id).order_by(Job.created_at.desc())
+    ):
+        if row.status in ("queued", "running"):
+            return row
+        if row.status == "done" and (row.result or {}).get("applied") is not False:
+            return row
+    return None
+
+
 def make_apply(db: Session, user: User, plan_job: Job) -> Job:
     """계획 작업 → 적용 작업. **같은 파일 · 같은 지문.**"""
     spec = kinds.get(plan_job.kind)
@@ -171,6 +189,15 @@ def make_apply(db: Session, user: User, plan_job: Job) -> Job:
         raise Conflict(code("JOBS", 9), "계획이 끝난 작업만 적용할 수 있습니다.")
     if plan_job.params.get("apply"):
         raise Conflict(code("JOBS", 10), "이미 적용 작업입니다.")
+    # **같은 계획을 두 번 넣지 않는다** — 화면 · 정제 도구 · MCP 어디서 눌렀든.
+    done = apply_child(db, plan_job.id)
+    if done is not None:
+        raise Conflict(
+            code("JOBS", 22),
+            "이 계획은 이미 적용했습니다(또는 적용 중입니다) — 「작업」 화면에서 그 적용 "
+            "작업을 보세요. 다시 넣으려면 새로 미리 보세요.",
+            details={"applied_by": str(done.id)},
+        )
     result = plan_job.result
     if result.get("errors") or (result.get("counts") or {}).get("error"):
         raise Conflict(

@@ -113,6 +113,9 @@ function bundleBatches(job: Job): BundleBatch[] | null {
 /** 아직 적용 안 한 **깨끗한** 계획인가 — 그때만 「적용」 이 선다. */
 function waitingForApply(job: Job): boolean {
   if (job.status !== 'done' || !job.result) return false
+  // **이미 적용한 계획** — 계획의 `result.applied` 는 영영 거짓이라(적용은 새 작업이다) 서버가
+  // 따로 알려 준다. 안 보면 적용하고 나서도 「적용」 이 남아 같은 것을 두 번 넣는다.
+  if (job.applied_by) return false
   const result = job.result as { applied?: boolean; ok?: boolean }
   if (result.applied) return false
   const plan = planOf(job)
@@ -182,7 +185,12 @@ function Detail({
             </span>
           </>
         )}
-        {job.status === 'done' && !waitingForApply(job) && plan?.applied === false && (
+        {job.applied_by && (
+          <span className="text-muted-foreground text-xs">
+            적용했습니다 — 적용 작업 <span className="font-mono">{job.applied_by.slice(0, 8)}</span>
+          </span>
+        )}
+        {job.status === 'done' && !waitingForApply(job) && !job.applied_by && plan?.applied === false && (
           <span className="text-muted-foreground text-xs">
             오류가 있거나 바뀌는 것이 없어 적용할 수 없습니다 — 고쳐서 다시 올리세요.
           </span>

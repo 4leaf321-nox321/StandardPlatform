@@ -266,6 +266,10 @@ def test_조사부터_미리_보기까지_한_바퀴(
     job_id = went["apply_on_screen"].rsplit("=", 1)[1]
     applied = client.post(f"/api/jobs/{job_id}/apply", headers=admin.headers)
     assert applied.status_code == 202, applied.text
+    # **키트가 화면의 적용을 안다** — 안 물으면 상태가 「적용 전 — 적용하라」 고 계속 졸라
+    # 같은 것을 또 넣으려 한다(실측). 플랫폼의 `applied_by` 를 묻는다.
+    line = next(one for one in server.work_status(work).splitlines() if again["run"] in one)
+    assert "적용함" in line, line
 
     # 정의를 **키트가 직접** 읽는다 — 서버 MCP 없이. 타입을 고르면 그것만.
     schema = server.platform_schema(work)
