@@ -86,7 +86,12 @@ class Worker:
             try:
                 self._tick_housekeeping()
                 worked = services.process_one(self.worker_id)
-                self._last_beat = time.monotonic()
+                if worked:
+                    # 작업을 돌렸으면 `process_one` 이 끝에서 박동을 남겼다 — 30초를 거기서
+                    # 다시 센다. ⚠️ **빈 바퀴에서는 되감지 않는다.** 예전에는 바퀴마다 되감아,
+                    # 쉬는 워커(바퀴가 몇 초)는 30초에 영영 못 닿고 기동 뒤로 박동이 멎었다 —
+                    # 5분 뒤 살아 있는 워커가 화면에서 「꺼짐」 이 됐다.
+                    self._last_beat = time.monotonic()
             except Exception:  # 워커는 죽지 않는다 — DB 가 잠깐 끊겨도 다음 바퀴에 다시.
                 log.exception("워커 바퀴 실패 — %.0f초 뒤 다시", IDLE_MAX)
                 worked = False
