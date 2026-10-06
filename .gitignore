@@ -46,6 +46,8 @@ Thumbs.db
 /release/
 deploy/app.sif
 deploy/BUILD_INFO.txt
+# build_bundle.sh 가 이미지에 넣으려고 두는 정제 도구 키트(빌드 산출물).
+deploy/pipeline-kit.zip
 
 # 그래픽 드라이버가 작업 폴더에 만드는 로그. 우리 것이 아니다.
 "NVIDIA Corporation"/

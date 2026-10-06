@@ -91,7 +91,8 @@ export function setupSnippets(token: string | null, url = mcpUrl()) {
   return { claudeCode, desktop, codex, gemini: desktop }
 }
 
-function Snippet({ text, label }: { text: string; label: string }) {
+/** 복사할 글 한 덩이 — 이 화면의 안내들이 같은 모양을 쓴다(정제 도구 키트도). */
+export function Snippet({ text, label }: { text: string; label: string }) {
   const [done, setDone] = useState<'ok' | 'fail' | null>(null)
   return (
     <div className="space-y-2">

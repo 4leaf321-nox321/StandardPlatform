@@ -204,6 +204,14 @@ class Settings(BaseSettings):
     frontend_dist: Path = REPO_DIR / "frontend" / "dist"
     """존재하면 API 와 같은 프로세스가 SPA 를 서빙한다. 개발 중에는 없다."""
 
+    pipeline_kit: Path = REPO_DIR / "deploy" / "pipeline-kit.zip"
+    """**정제 도구 키트** — 사용자 PC 에 푸는 zip(`sp-pipeline`). 있으면 화면이 내려준다.
+
+    서버 번들이 같은 판의 키트를 이미지 안 이 자리에 넣는다(`build_bundle.sh` ·
+    `apptainer.def`). 따로 받게 두면 사내망에서는 GitHub 에 못 닿아 받을 길이 없고, 운영의
+    사람도 AI 도 그런 것이 있는 줄 모른다(실측). 개발 중에는 대개 없다 — 화면이 「이 설치에는
+    없다」 로 말한다."""
+
     jwt_secret: str = "dev-only-insecure-secret-change-me"
     """운영에서는 설치 스크립트가 난수로 만들어 .env 에 넣는다.
 

@@ -14272,6 +14272,28 @@
         }
       }
     },
+    "/api/server/pipeline-kit/info": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Pipeline Kit Info",
+        "description": "키트가 이 설치에 있나 — 화면이 단추를 세울지 정한다.",
+        "operationId": "pipeline_kit_info_api_server_pipeline_kit_info_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PipelineKitOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/ext/caegroup/dt/defs": {
       "get": {
         "tags": [
@@ -30262,6 +30284,35 @@
           "revoked_at"
         ],
         "title": "PatOut"
+      },
+      "PipelineKitOut": {
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "title": "Available"
+          },
+          "filename": {
+            "type": "string",
+            "title": "Filename"
+          },
+          "version": {
+            "type": "string",
+            "title": "Version"
+          },
+          "size_bytes": {
+            "type": "integer",
+            "title": "Size Bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "available",
+          "filename",
+          "version",
+          "size_bytes"
+        ],
+        "title": "PipelineKitOut",
+        "description": "정제 도구 키트가 **이 설치에 있나** — 화면이 단추를 세울지 이것으로 정한다."
       },
       "PlanIn": {
         "properties": {

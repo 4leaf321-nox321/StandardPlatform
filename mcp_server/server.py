@@ -73,6 +73,8 @@ BASE_INSTRUCTIONS = (
     "  잘못 이은 관계                  relation_update · relation_remove\n"
     "  여러 타입을 건너뛰는 물음       rdf_query (SPARQL)\n"
     "  여러 행 · 묶음을 넣는다         objects_import · bundle_import → job_apply\n"
+    "  원천 파일을 한꺼번에(수만 줄)   정제 도구 키트(사용자 PC 의 MCP) — "
+    "화면 「내 정보」 에서 받는다\n"
     "  정의를 바꾼다                   ontology_import (apply=false 로 먼저)\n"
     "  정의를 지운다                   ontology_delete (apply=false 로 먼저)\n"
     "  속성 종류 · 고를 값 이름 · 승격  ontology_retype · ontology_rename_option · "
@@ -1849,7 +1851,21 @@ async def bundle_import(ctx: Context, bundle: dict[str, Any]) -> Any:
     "relations": [{"type_slug", "rows": [{"src","relation","dst","evidence_note"}]}]}`.
     행은 `objects_import` · `relations_import` 와 같다. `objects` 는 **적은 차례대로**
     넣는다 — 참조하는 타입을 뒤에. 정의가 들면 시스템 관리자와 `ontology:write`
-    범위가 필요하다."""
+    범위가 필요하다.
+
+    **백필(한꺼번에 많이)** 이면 묶음에 칸 넷을 더 적는다 — 서버가 받는다.
+    `preview: "plan"`(적용을 두 번 안 돈다) · `events: "summary"` · `audit: "summary"`
+    (웹훅 · 감사가 줄마다 쌓이지 않게) · `missing_refs: "blank"`(못 찾은 참조 하나가
+    전체를 막지 않게 그 칸만 비운다). **사용자가 백필이라고 정했을 때만** 쓴다 —
+    넷 다 「전부 아니면 무 · 줄마다 기록」 을 느슨하게 하는 것이다.
+
+    **행이 이 호출에 실린다** — 모델이 한 번에 쓸 수 있는 만큼(대개 수백 ~ 천 줄)이
+    한계다. 수만 줄은 사용자 PC 의 **정제 도구 MCP**(`sp-pipeline` 키트)로 넣는다:
+    `run_init(backfill=True)` → `run_validate` → `run_preview` — 파일이 모델을 거치지
+    않고 서버로 간다. 그 MCP 가 안 붙어 있으면 「백필 기능이 없다」 고 답하지 않는다 —
+    **이 플랫폼 화면의 「내 정보」 에서 키트를 받는다**(서버가 같은 판을 들고 있다). 받는
+    단추와, 이 설치의 주소 · 토큰을 채운 설치 명령 한 줄이 거기 있다 — 사용자에게 그리로
+    안내한다."""
     job = await _post(ctx, "/api/bundles/import", {**bundle, "apply": False})
     return await _wait_job(ctx, job, JOB_WAIT_MAX)
 

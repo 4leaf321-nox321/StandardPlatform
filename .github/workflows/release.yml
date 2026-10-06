@@ -46,18 +46,10 @@ jobs:
       # 설치를 한 자리에서 정한다 — ci 와 release 가 같은 것을 쓴다.
       - uses: ./.github/actions/apptainer
 
-      # **버전은 태그다.** `git describe` 에 맡기면 얕은 체크아웃에서 엉뚱한 값이
-      # 나오고, 그 값이 BUILD_INFO 를 거쳐 `/api/health` 까지 간다 — 「지금 서버에
-      # 뭐가 깔렸나」 를 묻는 유일한 자리다.
-      #
-      # 러너에는 subuid/subgid 매핑이 없어 비특권 빌드가 실패한다 — sudo 로 켠다.
-      - name: 번들 빌드
-        env:
-          USE_SUDO_APPTAINER: '1'
-        run: ./deploy/build_bundle.sh "${GITHUB_REF_NAME}"
-
-      # **사용자 PC 에 옮기는 정제 도구 묶음**도 같은 태그로 낸다. 서버 번들과 따로 받는다 —
-      # 받는 사람이 다르다(운영 담당 / 데이터를 정제하는 사람).
+      # **사용자 PC 에 옮기는 정제 도구 묶음**도 같은 태그로 낸다. **번들보다 먼저** 만든다 —
+      # 번들 빌드가 이것을 그대로 이미지에 넣어(서버가 「내 정보」 에서 내려준다), 릴리스에
+      # 올라가는 zip 과 서버 안의 zip 이 같은 파일이 된다. 사내망에서는 GitHub 에 못 닿으므로
+      # 서버에서 받는 길이 정본이고, 릴리스의 zip 은 인터넷이 되는 PC 를 위한 것이다.
       - name: 정제 도구 묶음 빌드
         run: |
           set -euo pipefail
@@ -70,6 +62,16 @@ jobs:
           done
           grep -q "pywin32-.*win_amd64.whl" /tmp/kit.txt \
             || { echo "Windows 휠(pywin32)이 없습니다 — 오프라인 설치가 멈춥니다"; exit 1; }
+
+      # **버전은 태그다.** `git describe` 에 맡기면 얕은 체크아웃에서 엉뚱한 값이
+      # 나오고, 그 값이 BUILD_INFO 를 거쳐 `/api/health` 까지 간다 — 「지금 서버에
+      # 뭐가 깔렸나」 를 묻는 유일한 자리다.
+      #
+      # 러너에는 subuid/subgid 매핑이 없어 비특권 빌드가 실패한다 — sudo 로 켠다.
+      - name: 번들 빌드
+        env:
+          USE_SUDO_APPTAINER: '1'
+        run: ./deploy/build_bundle.sh "${GITHUB_REF_NAME}"
 
       # 나가기 전에 **번들이 자기 발로 서는지** 본다. 여기서 빠진 파일은 서버에서
       # `deploy.sh` 가 멈추는 것으로 드러나고, 그때는 SSH 로 붙어 있는 자리다.

@@ -144,3 +144,14 @@ class PlatformProfileLiveOut(PlatformProfileOut):
     stale: list[str]
     """사람이 쓴 뒤 달라진 것(「생김: 타입 「보고서」」). 비었으면 소개가 지금과 맞다 — 소개가
     아직 없으면 그것도 한 줄로 말한다."""
+
+
+class PipelineKitOut(BaseModel):
+    """정제 도구 키트가 **이 설치에 있나** — 화면이 단추를 세울지 이것으로 정한다."""
+
+    available: bool
+    filename: str
+    """내려받을 때의 이름 — `sp-pipeline-<이 설치의 판>.zip`. 판이 이름에 있어야 PC 에
+    여러 판이 쌓여도 어느 것이 이 서버와 맞는지 안다."""
+    version: str
+    size_bytes: int

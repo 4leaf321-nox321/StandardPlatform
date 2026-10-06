@@ -19,6 +19,10 @@ From: ubuntu:24.04
     # 자리가 아예 없어진다. build_bundle.sh 가 빌드 직전에 이 파일을 만든다 —
     # `apptainer build` 를 직접 부르려면 그 파일을 먼저 만들어야 한다.
     deploy/BUILD_INFO.txt /opt/app/BUILD_INFO.txt
+    # **정제 도구 키트** — 사용자 PC 에 푸는 zip. 앱이 화면(내 정보)에서 내려준다
+    # (`config.pipeline_kit` = `/opt/app/deploy/pipeline-kit.zip`). build_bundle.sh 가 같은
+    # 판을 이 이름으로 둔다 — `apptainer build` 를 직접 부르려면 그 파일을 먼저 만든다.
+    deploy/pipeline-kit.zip /opt/app/deploy/pipeline-kit.zip
 
 %post
     set -eux

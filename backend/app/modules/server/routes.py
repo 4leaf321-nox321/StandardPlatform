@@ -15,6 +15,7 @@ import shutil
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, Request
+from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
 from app import schema_version, version
@@ -29,6 +30,7 @@ from app.modules.server.schemas import (
     ExtensionOut,
     ExtensionPatchIn,
     MaintenanceItemOut,
+    PipelineKitOut,
     PlatformProfileIn,
     PlatformProfileLiveOut,
     PlatformProfileOut,
@@ -38,6 +40,7 @@ from app.modules.server.schemas import (
 )
 from app.shared import extensions, ops
 from app.shared.auth import current_user, require_system_admin
+from app.shared.errors import NotFound, code
 
 router = APIRouter(prefix="/server", tags=["server"])
 
@@ -263,3 +266,45 @@ def platform_profile_update(
     바꾸는 일과 같은 무게 — 에이전트가 이 글로 플랫폼을 고른다)."""
     services.set_profile(db, user, summary=payload.summary, notes=payload.notes)
     return _profile_out(db)
+
+
+# --- 정제 도구 키트 ---------------------------------------------------------------
+#
+# 사용자 PC 에 푸는 zip(`sp-pipeline`) — 원천 파일을 정제해 묶음으로 만들고 수만 줄을 한 번에
+# 넣는 길이다. **서버가 같은 판을 들고 있다가 내려준다.** 따로 받게 두면 사내망에서는 GitHub 에
+# 못 닿아 받을 길이 없고, 운영의 사람도 AI 도 그런 것이 있는 줄 몰랐다(실측).
+#
+# 로그인한 사람이면 누구나 — 비밀이 없다(릴리스에 공개로 올라가는 것과 같은 파일이다). 데이터를
+# 정제하는 사람은 대개 관리자가 아니다.
+
+
+def _kit_name() -> str:
+    """판이 이름에 있어야 PC 에 여러 판이 쌓여도 어느 것이 이 서버와 맞는지 안다."""
+    return f"sp-pipeline-{version.current()}.zip"
+
+
+@router.get("/pipeline-kit/info", response_model=PipelineKitOut)
+def pipeline_kit_info(_: User = Depends(current_user)) -> PipelineKitOut:
+    """키트가 이 설치에 있나 — 화면이 단추를 세울지 정한다."""
+    path = get_settings().pipeline_kit
+    there = path.is_file()
+    return PipelineKitOut(
+        available=there,
+        filename=_kit_name(),
+        version=version.current(),
+        size_bytes=path.stat().st_size if there else 0,
+    )
+
+
+@router.get("/pipeline-kit", include_in_schema=False)
+def pipeline_kit(_: User = Depends(current_user)) -> FileResponse:
+    """키트 zip 을 내려준다."""
+    path = get_settings().pipeline_kit
+    if not path.is_file():
+        raise NotFound(
+            code("SERVER", 2),
+            "이 설치에는 정제 도구 키트가 없습니다 — 서버 번들로 깔린 설치에만 들어 있습니다. "
+            "개발 중이면 `./deploy/build_pipeline_kit.sh` 로 만들어 "
+            "`deploy/pipeline-kit.zip` 에 두면 됩니다.",
+        )
+    return FileResponse(path, media_type="application/zip", filename=_kit_name())
