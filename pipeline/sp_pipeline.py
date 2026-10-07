@@ -734,6 +734,16 @@ def jobs_link(server: str, job_id: str) -> str:
     return f"{server.rstrip('/')}/jobs?job={job_id}"
 
 
+def command_line(*args: str) -> str:
+    """사람이 명령 창에 붙여 넣는 이 도구의 명령 — **지금 이것을 돌리는 파이썬으로.**
+
+    PC 에 파이썬이 없을 수 있다 — Windows 키트는 제 파이썬(`python/`)을 들고 다니고 PATH 에
+    안 올린다. `python …` 으로 주면 그 PC 에서는 「python 을 찾을 수 없다」 로 멈춘다.
+    `-X utf8` 은 MCP 서버의 PYTHONUTF8 과 같은 것 — 명령 창에는 그 환경 변수가 없다.
+    """
+    return f'"{sys.executable}" -X utf8 "{Path(__file__).resolve()}" ' + " ".join(args)
+
+
 def platform_schema(server: str, token: str, types: list[str] | None = None) -> dict[str, Any]:
     """플랫폼의 **지금 정의** — 정의 초안을 잡기 전에 읽는다(무엇이 이미 있나).
 

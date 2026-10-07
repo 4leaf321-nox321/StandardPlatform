@@ -307,3 +307,84 @@ def test_더블클릭_설치가_클립보드에서_등록하고_비운다(
     assert setup.main(["--from-clipboard", "--no-install", "--venv", str(tmp_path / "v")]) == 0
     settings.unlink()
     assert setup.main(["--from-clipboard", "--no-install", "--venv", str(tmp_path / "v")]) == 2
+
+
+# --- Windows 키트 — 파이썬을 넣어 보낸다 · 앱이 읽는 파일에 다 쓴다 -----------------------
+
+
+def test_키트에_든_파이썬을_쓰고_venv_도_pip_도_안_쓴다(
+    settings: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """PC 의 파이썬 판에 매이지 않는다 — 3.14 를 깐 PC 가 「맞는 휠이 없다」 로 거절됐다."""
+    embedded = tmp_path / "kit" / "python" / "python.exe"
+    configs = [tmp_path / "roaming" / "c.json", tmp_path / "store" / "c.json"]
+    tried: list[Path] = []
+
+    def never(*_: Any, **__: Any) -> None:
+        raise AssertionError("키트에 파이썬이 있으면 venv 도 pip 도 안 쓴다")
+
+    def tried_on(python: Path) -> list[str]:
+        tried.append(python)
+        return ["a"]
+
+    monkeypatch.setattr(setup, "kit_python", lambda: embedded)
+    monkeypatch.setattr(setup, "create_venv", never)
+    monkeypatch.setattr(setup, "install", never)
+    monkeypatch.setattr(setup, "try_server", tried_on)
+    monkeypatch.setattr(setup, "claude_configs", lambda: configs)
+    monkeypatch.setattr(setup, "wait_for_desktop_quit", lambda: None)
+    monkeypatch.setattr(setup, "default_work_root", lambda: tmp_path / "work")
+    assert (
+        setup.main(["--server", "http://h/qings", "--token", "spt_q", "--write-claude"]) == 0
+    )
+    # 설치가 됐다는 것은 띄워 봤다는 것이다.
+    assert tried == [embedded]
+    # Store 판의 앱 전용 파일까지 — 앱이 어느 쪽을 읽든 뜬다.
+    for path in configs:
+        entry = json.loads(path.read_text(encoding="utf-8"))["mcpServers"]["sp-pipeline"]
+        assert entry["command"] == str(embedded)
+
+
+def test_Store_판은_앱_전용_설정도_찾는다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(setup.platform, "system", lambda: "Windows")
+    monkeypatch.setenv("APPDATA", str(tmp_path / "Roaming"))
+    monkeypatch.setenv("LOCALAPPDATA", str(tmp_path / "Local"))
+    package = tmp_path / "Local" / "Packages" / "Claude_pzs8sxrjxfjjc"
+    package.mkdir(parents=True)
+    # 앱 전용 폴더에 Claude 가 아직 없으면 — 앱은 보통 자리를 읽는다.
+    assert setup.claude_configs() == [tmp_path / "Roaming" / "Claude" / setup.CLAUDE_CONFIG]
+    private = package / "LocalCache" / "Roaming" / "Claude"
+    private.mkdir(parents=True)
+    assert setup.claude_configs() == [
+        tmp_path / "Roaming" / "Claude" / setup.CLAUDE_CONFIG,
+        private / setup.CLAUDE_CONFIG,
+    ]
+
+
+def test_켜진_Claude_는_끄라고_하고_Claude_Code_는_건드리지_않는다(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """켜진 앱은 설정을 다시 써서 넣은 항목을 지울 수 있다 — 쓰기 전에 끄게 한다. 같은 이름
+    (claude.exe)의 Claude Code 는 Desktop 이 아니다."""
+    assert not any(
+        mark in "c:\\users\\a\\.local\\bin\\claude.exe" for mark in setup.DESKTOP_MARKS
+    )
+    assert any(
+        mark
+        in "c:\\program files\\windowsapps\\claude_1.0_x64__pzs8sxrjxfjjc\\app\\claude.exe"
+        for mark in setup.DESKTOP_MARKS
+    )
+    monkeypatch.setattr(setup, "claude_desktop_running", lambda: True)
+    monkeypatch.setattr(setup.sys, "stdin", None)
+    setup.wait_for_desktop_quit()
+    shown = capsys.readouterr().out
+    assert "「종료(Quit)」" in shown and "아직 켜져 있습니다" in shown
+
+
+def test_venv_가_없는_파이썬에서도_선다(monkeypatch: pytest.MonkeyPatch) -> None:
+    """키트에 든 파이썬(내장용 판)에는 `venv` 가 없다 — 맨 위에서 불렀더니 Windows 에서 설치가
+    첫 줄(`import venv`)에서 죽었다. venv 는 그것을 만들 때만 부른다."""
+    monkeypatch.setitem(sys.modules, "venv", None)
+    assert _load().NAME == "sp-pipeline"

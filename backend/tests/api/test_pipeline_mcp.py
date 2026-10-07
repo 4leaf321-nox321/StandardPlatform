@@ -214,6 +214,9 @@ def test_조사부터_미리_보기까지_한_바퀴(
     assert (
         "sp_pipeline.py" in preview["apply_command"] and " apply " in preview["apply_command"]
     )
+    # **이 서버를 돌리는 파이썬으로** — Windows 키트는 제 파이썬을 들고 다니고 PATH 에 안
+    # 올린다. `python …` 이면 파이썬을 안 깐 PC 에서 「찾을 수 없다」 로 멈춘다.
+    assert preview["apply_command"].startswith(f'"{sys.executable}" -X utf8 ')
     status = server.work_status(work)
     assert "미리 보기 괜찮음" in status and "**직접** 적용" in status
 

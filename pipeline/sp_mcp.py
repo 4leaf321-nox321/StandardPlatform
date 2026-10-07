@@ -458,9 +458,7 @@ def run_preview(work: str, run: str) -> dict[str, Any]:
         "platform": chosen.shown,
         "summary": summary,
         "apply_on_screen": pipeline.jobs_link(chosen.server, job) if ok and job else None,
-        "apply_command": (
-            f'python "{HERE / "sp_pipeline.py"}" apply "{path}"' if ok else None
-        ),
+        "apply_command": (pipeline.command_line("apply", f'"{path}"') if ok else None),
         "note": "사람이 apply_on_screen 을 열어 「적용」 을 누른다(계획을 본 사람 — 이 토큰의 "
         "주인 — 으로 로그인해 있어야 한다). 명령 창이면 apply_command 를 아무 창에나.",
     }
@@ -491,7 +489,7 @@ def run_undo(run_id: str, platform: str = "") -> dict[str, Any]:
         "platform": chosen.shown,
         "summary": summary,
         "undo_command": (
-            f'python "{HERE / "sp_pipeline.py"}" undo {run_id}{where} --apply' if ok else None
+            pipeline.command_line("undo", f"{run_id}{where}", "--apply") if ok else None
         ),
         "note": "사람이 아무 명령 창에서 undo_command 를 실행한다.",
     }

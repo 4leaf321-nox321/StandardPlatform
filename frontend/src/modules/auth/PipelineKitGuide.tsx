@@ -60,7 +60,8 @@ export function setupCommand(
   platform: string = APP_SLUG,
 ): string {
   return (
-    `python sp_setup.py --platform ${platform} ` +
+    // 키트에 든 파이썬으로 — PC 에 파이썬이 없어도 된다(PATH 에도 안 올린다).
+    `python\\python.exe sp_setup.py --platform ${platform} ` +
     `--server ${server} --token ${token || TOKEN_PLACEHOLDER} --write-claude`
   )
 }
@@ -147,8 +148,8 @@ export function PipelineKitGuide({
             <li className="space-y-1.5">
               <p>
                 <b>받아서 PC 에 풉니다</b>(처음 한 번 — 예: <span className="font-mono">D:\sp-pipeline</span>
-                ). 이 서버와 같은 판입니다. PC 에 <b>Python 3.12</b> 가 있어야 합니다 — python.org
-                에서 설치할 때 첫 화면의 「Add python.exe to PATH」 를 체크합니다.
+                ). 이 서버와 같은 판입니다. <b>파이썬이 들어 있어</b> 따로 깔 것이 없습니다 —
+                zip 안에서 바로 열지 말고 「압축 풀기」 로 푼 폴더에서 씁니다.
               </p>
               <Button
                 type="button"
@@ -193,12 +194,15 @@ export function PipelineKitGuide({
             </li>
             <li>
               푼 폴더의 <b className="font-mono">install.cmd</b> 를 <b>더블클릭</b>합니다. 처음이면
-              설치까지 하고, 이미 설치했으면 이 플랫폼만 더합니다. 작업 폴더는{' '}
+              설치까지 하고, 이미 설치했으면 이 플랫폼만 더합니다. Claude Desktop 이 켜져 있으면
+              먼저 끄라고 합니다 — 켜진 채로 넣으면 안 보일 수 있습니다. 작업 폴더는{' '}
               <span className="font-mono">내 사용자 폴더\온톨로지작업</span> 에 생깁니다.
             </li>
             <li>
-              <b>Claude Desktop 을 완전히 종료</b>(작업 표시줄 아이콘 → 종료)했다가 다시 켭니다. 그 뒤
-              대화에서 「○○ 자료 작업을 시작하자」 고 말하면 AI 가 차례를 안내합니다.
+              <b>Claude Desktop 을 켭니다</b>(켜져 있었다면 작업 표시줄 아이콘 → 종료 후 다시). 도구
+              목록에 <span className="font-mono">sp-pipeline</span> 이 보이면 대화에서 「○○ 자료
+              작업을 시작하자」 고 말합니다 — AI 가 차례를 안내합니다. 안 보이면 같은 폴더의{' '}
+              <b className="font-mono">check.cmd</b> 를 더블클릭 — 어디서 막혔는지 보여 줍니다.
             </li>
           </ol>
 
@@ -215,7 +219,8 @@ export function PipelineKitGuide({
             <summary className="cursor-pointer">명령으로 하려면(Gemini CLI · 다른 작업 폴더)</summary>
             <div className="mt-2 space-y-1.5">
               <p className="text-muted-foreground">
-                푼 폴더의 명령 창에서 — 토큰은 위에서 발급한 것. Gemini CLI 면 끝을{' '}
+                푼 폴더의 명령 창에서 — 토큰은 위에서 발급한 것(macOS · Linux 는 앞을{' '}
+                <span className="font-mono">python3 sp_setup.py</span> 로). Gemini CLI 면 끝을{' '}
                 <span className="font-mono">--write-gemini</span> 로, 작업 폴더를 다른 곳에 두려면{' '}
                 <span className="font-mono">--work-root "D:\온톨로지작업"</span> 을 더합니다.
               </p>

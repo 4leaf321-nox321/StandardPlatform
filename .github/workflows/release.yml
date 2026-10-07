@@ -57,11 +57,21 @@ jobs:
           kit=$(ls release/sp-pipeline-*.zip)
           python3 -m zipfile -l "$kit" > /tmp/kit.txt
           for f in sp_mcp.py sp_setup.py sp_pipeline.py sp_table.py sp_profile.py sp_work.py \
-                   install.cmd AGENTS.md requirements.txt guide/GUIDE.md VERSION; do
+                   install.cmd check.cmd AGENTS.md requirements.txt guide/GUIDE.md VERSION \
+                   python/python.exe python/Lib/site-packages/mcp/__init__.py \
+                   python/Lib/site-packages/pywin32.pth; do
             grep -q "/$f " /tmp/kit.txt || { echo "묶음에 $f 가 없습니다"; exit 1; }
           done
-          grep -q "pywin32-.*win_amd64.whl" /tmp/kit.txt \
-            || { echo "Windows 휠(pywin32)이 없습니다 — 오프라인 설치가 멈춥니다"; exit 1; }
+          # **Windows 파이썬의 길** — 부품 · 키트 폴더 · `import site` 가 없으면 서버가 안 뜬다.
+          python3 - "$kit" <<'PY'
+          import sys, zipfile
+          kit = zipfile.ZipFile(sys.argv[1])
+          pth = [n for n in kit.namelist() if n.endswith("._pth") and "/python/" in n]
+          lines = kit.read(pth[0]).decode().split() if pth else []
+          missing = [want for want in ("Lib\\site-packages", "..", "site") if want not in lines]
+          if missing:
+              sys.exit(f"Windows 파이썬의 ._pth 에 {missing} 가 없습니다: {lines}")
+          PY
 
       # **버전은 태그다.** `git describe` 에 맡기면 얕은 체크아웃에서 엉뚱한 값이
       # 나오고, 그 값이 BUILD_INFO 를 거쳐 `/api/health` 까지 간다 — 「지금 서버에

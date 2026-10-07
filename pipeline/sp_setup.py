@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-"""로컬 정제 MCP 설치 — venv 를 만들고 `mcp` 를 깔고, Claude Desktop · Gemini CLI 설정을
-만들고, **이 PC 가 넣을 플랫폼을 등록한다.**
+"""로컬 정제 MCP 설치 — Claude Desktop · Gemini CLI 설정을 만들고, **이 PC 가 넣을 플랫폼을
+등록한다.** 설치가 됐다는 것은 MCP 서버를 실제로 띄워 도구 목록을 받았다는 뜻이다.
 
     python sp_setup.py --work-root "D:\\온톨로지작업" --platform rootdesign \\
                        --server http://<서버>:3030/rootdesign --token spt_... --write-claude
@@ -12,7 +12,12 @@
   한 번씩 돌리면 더해진다 — 화면 「내 정보」 의 설치 명령이 그 설치의 이름 · 주소 · 토큰을
   채워 준다. 이름을 안 주면 주소의 끝(`/rootdesign` → `rootdesign`)에서 짓는다.
 
-- 묶음에 `wheels/` 가 있으면 **인터넷 없이** 그것으로 깐다(`--online` 이면 PyPI 에서).
+- **Windows 키트에는 파이썬이 들어 있다**(`python/` — 부품을 깐 채로). 그것을 그대로 쓴다 —
+  PC 의 파이썬도, venv 도, pip 도 안 쓴다. 전역 설치가 아니다(레지스트리 · PATH 를 안
+  건드린다).
+- 그 밖(macOS · 리눅스 · 저장소에서 바로)에서는 venv 를 만들어 깐다. 묶음에 `wheels/` 가 있으면
+  **인터넷 없이** 그것으로(`--online` 이면 PyPI 에서).
+- 안 뜰 때는 `--check`(키트의 `check.cmd`) — 앱이 읽는 설정 파일 · 서버가 뜨는지 · 앱의 로그.
 - 설정은 기본으로 **보여 주기만** 한다. `--write-claude` · `--write-gemini` 를 주면 그 파일에
   `sp-pipeline` 항목만 넣거나 바꾸고, 원래 파일은 `.bak` 으로 남긴다. 다른 MCP 항목은 안
   건드린다.
@@ -24,15 +29,19 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import os
 import platform
+import queue
 import re
 import shutil
 import subprocess
 import sys
+import tempfile
+import threading
+import time
 import urllib.parse
-import venv
 from pathlib import Path
 from typing import Any
 
@@ -50,8 +59,14 @@ TOKEN_PLACEHOLDER = "<개인 토큰>"
 #: 사람이 명령을 고쳐 칠 일을 없앤다 — 더블클릭(`install.cmd`)이 이것을 읽어 등록한다. 토큰이
 #: 대화(AI)에 나갈 일도 없다.
 REGISTRATION = "SP-PIPELINE-PLATFORM"
-#: 동봉한 휠이 맞는 파이썬 — `build_pipeline_kit.sh` 의 KIT_PYTHONS 와 같다.
+#: 동봉한 휠이 맞는 파이썬 — `build_pipeline_kit.sh` 의 KIT_PYTHONS 와 같다(macOS · 리눅스).
 PYTHONS = ((3, 11), (3, 12), (3, 13))
+#: Windows 키트에 든 파이썬 — python.org 의 내장용(embeddable) 판에 부품을 미리 깐 것.
+EMBEDDED = HERE / "python" / "python.exe"
+CLAUDE_CONFIG = "claude_desktop_config.json"
+#: Claude Desktop 의 실행 파일 자리(Store 판 · 설치 판). 같은 이름(claude.exe)인 Claude Code 는
+#: 아니다 — 그것을 끄라고 하면 안 된다.
+DESKTOP_MARKS = ("\\windowsapps\\claude_", "\\anthropicclaude\\", "\\programs\\claude\\")
 
 
 class Stop(Exception):
@@ -64,7 +79,16 @@ def venv_python(folder: Path) -> Path:
     return folder / "bin" / "python"
 
 
+def kit_python() -> Path | None:
+    """키트에 든 파이썬 — 있으면 venv 도 pip 도 안 쓴다(Windows 만)."""
+    return EMBEDDED if sys.platform == "win32" and EMBEDDED.is_file() else None
+
+
 def create_venv(folder: Path) -> Path:
+    # **여기서만 부른다** — 키트에 든 파이썬(내장용 판)에는 `venv` 가 없다. 맨 위에서 부르면
+    # 그 파이썬으로는 설치가 첫 줄에서 죽는다(Windows 에서 실제로 그랬다).
+    import venv
+
     python = venv_python(folder)
     if not python.exists():
         print(f"venv 를 만듭니다: {folder}")
@@ -271,19 +295,248 @@ def describe(settings: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def claude_config() -> Path:
+def _store_packages() -> list[Path]:
+    """Microsoft Store(MSIX) 판 Claude 의 앱 전용 폴더들 — 없으면 빈 목록."""
+    root = Path(os.environ.get("LOCALAPPDATA", "~")).expanduser() / "Packages"
+    return sorted(root.glob("Claude_*")) if root.is_dir() else []
+
+
+def claude_configs() -> list[Path]:
+    """Claude Desktop 이 읽을 수 있는 설정 파일들 — **Windows 에서는 둘 이상일 수 있다.**
+
+    Store(MSIX) 판은 `%APPDATA%` 를 앱 전용 자리(`%LOCALAPPDATA%\\Packages\\Claude_…\\
+    LocalCache\\Roaming`)로 돌려 쓸 수 있다 — 거기 `Claude` 폴더가 있으면 앱은 그쪽을 읽는다.
+    한 곳에만 쓰면 설치는 「넣었습니다」 인데 Claude 에는 안 뜬다. 있는 곳에 다 쓴다.
+
+    실측: 사용자 PC 에서 설치는 「넣었습니다」 였는데 「Edit Config」 로 연 파일에 항목이
+    없었다. 이것이 한 갈래, 켜진 앱이 파일을 다시 써서 지운 것이 다른 갈래다
+    (`wait_for_desktop_quit`).
+    """
     system = platform.system()
     if system == "Windows":
-        return (
-            Path(os.environ.get("APPDATA", "~")).expanduser()
-            / "Claude"
-            / "claude_desktop_config.json"
-        )
+        roaming = Path(os.environ.get("APPDATA", "~")).expanduser()
+        found = [roaming / "Claude" / CLAUDE_CONFIG]
+        for package in _store_packages():
+            private = package / "LocalCache" / "Roaming" / "Claude"
+            if private.is_dir():
+                found.append(private / CLAUDE_CONFIG)
+        return found
     if system == "Darwin":
-        return Path(
-            "~/Library/Application Support/Claude/claude_desktop_config.json"
-        ).expanduser()
-    return Path("~/.config/Claude/claude_desktop_config.json").expanduser()
+        return [Path("~/Library/Application Support/Claude").expanduser() / CLAUDE_CONFIG]
+    return [Path("~/.config/Claude").expanduser() / CLAUDE_CONFIG]
+
+
+def claude_logs() -> list[Path]:
+    """Claude Desktop 이 이 서버에 대해 남긴 로그 — 없으면 앱이 이 항목을 띄운 적이 없다."""
+    if platform.system() == "Windows":
+        local = Path(os.environ.get("LOCALAPPDATA", "~")).expanduser()
+        roaming = Path(os.environ.get("APPDATA", "~")).expanduser()
+        folders = [local / "Claude" / "Logs", roaming / "Claude" / "logs"]
+        for package in _store_packages():
+            cache = package / "LocalCache"
+            folders += [
+                cache / "Local" / "Claude" / "Logs",
+                cache / "Roaming" / "Claude" / "logs",
+            ]
+    elif platform.system() == "Darwin":
+        folders = [Path("~/Library/Logs/Claude").expanduser()]
+    else:
+        folders = [Path("~/.config/Claude/logs").expanduser()]
+    found = [one / f"mcp-server-{NAME}.log" for one in folders]
+    return sorted(
+        {one.resolve() for one in found if one.is_file()},
+        key=lambda one: one.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def claude_desktop_running() -> bool:
+    """Claude Desktop 이 켜져 있나(Windows 만 본다 — 다른 곳은 모른다고 거짓)."""
+    if sys.platform != "win32":
+        return False
+    command = [
+        "powershell",
+        "-NoProfile",
+        "-Command",
+        "[Console]::OutputEncoding=[Text.Encoding]::UTF8; "
+        "Get-Process -Name claude -ErrorAction SilentlyContinue | ForEach-Object { $_.Path }",
+    ]
+    try:
+        done = subprocess.run(command, capture_output=True, check=False, timeout=30)
+    except (OSError, subprocess.TimeoutExpired):
+        return False
+    paths = done.stdout.decode("utf-8", errors="replace").lower().splitlines()
+    return any(mark in one for one in paths for mark in DESKTOP_MARKS)
+
+
+def wait_for_desktop_quit() -> None:
+    """Claude Desktop 이 켜져 있으면 **끄라고 하고 기다린다** — 설정을 쓰기 전에.
+
+    앱은 설정을 켤 때 읽고, 켜져 있는 동안 **같은 파일을 스스로 다시 쓴다**(앱 로그의
+    「Config file written」). 켜진 채로 넣으면 다시 켜기 전까지 안 뜨고, 그 사이 앱이 제가 읽어
+    둔 것으로 파일을 쓰면 넣은 항목이 사라질 수 있다.
+    """
+    for _ in range(3):
+        if not claude_desktop_running():
+            return
+        print(
+            "\nClaude Desktop 이 켜져 있습니다 — 작업 표시줄 오른쪽(숨겨진 아이콘)의 "
+            "Claude 를 오른쪽 클릭해 「종료(Quit)」 한 뒤 Enter 를 누르세요."
+        )
+        if not sys.stdin or not sys.stdin.isatty():
+            break
+        input()
+    if claude_desktop_running():
+        print(
+            "⚠ Claude Desktop 이 아직 켜져 있습니다 — 끝나면 반드시 완전히 종료했다가 다시 "
+            "켜세요. 그래도 안 보이면 check.cmd."
+        )
+
+
+def try_server(python: Path, *, timeout: float = 120.0) -> list[str]:
+    """Claude Desktop 처럼 띄워 **도구 목록을 받아 본다** — 못 받으면 설치가 안 된 것이다.
+
+    처음에는 부품을 읽어 들이느라 몇 초 걸린다. 서버가 남긴 오류를 그대로 보인다.
+    """
+    env = {**os.environ, "PYTHONUTF8": "1"}
+    with tempfile.TemporaryFile() as errors:
+        process = subprocess.Popen(
+            [str(python), str(HERE / "sp_mcp.py")],
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=errors,
+            env=env,
+        )
+        assert process.stdin is not None and process.stdout is not None
+        stdin, stdout = process.stdin, process.stdout
+        lines: queue.Queue[bytes] = queue.Queue()
+
+        def pump() -> None:
+            for line in iter(stdout.readline, b""):
+                lines.put(line)
+            lines.put(b"")
+
+        threading.Thread(target=pump, daemon=True).start()
+
+        def failed(why: str) -> Stop:
+            # 죽은 서버는 오류를 다 쓰고 끝나게 잠깐 기다린다 — 끝까지 읽어야 이유가 보인다.
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                process.wait(timeout=3)
+            errors.seek(0)
+            tail = errors.read().decode("utf-8", errors="replace").strip()[-1500:]
+            return Stop(f"MCP 서버가 {why}({python})" + (f":\n{tail}" if tail else ""))
+
+        def send(body: dict[str, Any]) -> None:
+            stdin.write(json.dumps(body).encode("utf-8") + b"\n")
+            stdin.flush()
+
+        def answer(number: int) -> dict[str, Any]:
+            deadline = time.monotonic() + timeout
+            while True:
+                try:
+                    line = lines.get(timeout=max(deadline - time.monotonic(), 0.01))
+                except queue.Empty:
+                    raise failed(f"{timeout:.0f}초 안에 답하지 않습니다") from None
+                if not line:
+                    raise failed("뜨다 멈췄습니다")
+                try:
+                    message = json.loads(line)
+                except ValueError:
+                    continue
+                if isinstance(message, dict) and message.get("id") == number:
+                    return message
+
+        try:
+            send(
+                {
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-06-18",
+                        "capabilities": {},
+                        "clientInfo": {"name": "sp_setup", "version": "1"},
+                    },
+                }
+            )
+            answer(1)
+            send({"jsonrpc": "2.0", "method": "notifications/initialized"})
+            send({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})
+            tools = answer(2).get("result", {}).get("tools", [])
+            return [str(one.get("name")) for one in tools if isinstance(one, dict)]
+        except OSError as caught:
+            raise failed(f"입력을 받지 않습니다({caught})") from None
+        finally:
+            process.kill()
+            process.wait(timeout=10)
+
+
+def check(python: Path) -> int:
+    """점검 — 안 뜰 때 **어디서 막혔는지 한 화면에.** 아무것도 안 바꾼다. 0 이면 이 PC 쪽은
+    다 됐다(그래도 안 보이면 Claude Desktop 을 다시 켠다)."""
+    problems = 0
+    version = (
+        (HERE / "VERSION").read_text(encoding="utf-8").strip()
+        if (HERE / "VERSION").is_file()
+        else "개발판"
+    )
+    which = "키트에 든 것" if python == EMBEDDED else "venv"
+    print(f"[키트] {HERE} ({version}) · 파이썬: {python} ({which})")
+    print("\n[등록]")
+    print(describe(pipeline.load_settings()))
+
+    print("\n[Claude Desktop 설정 — 앱이 읽을 수 있는 파일마다]")
+    expected = server_entry(python)
+    for path in claude_configs():
+        if not path.is_file():
+            print(f"  - {path}: 파일 없음")
+            continue
+        try:
+            entry = (
+                json.loads(path.read_text(encoding="utf-8") or "{}").get("mcpServers") or {}
+            ).get(NAME)
+        except (ValueError, AttributeError):
+            print(f"  ✗ {path}: JSON 이 아닙니다")
+            problems += 1
+            continue
+        if not entry:
+            print(f"  ✗ {path}: {NAME} 항목이 없습니다 — install.cmd 를 다시")
+            problems += 1
+        elif (
+            entry.get("command") != expected["command"]
+            or entry.get("args") != expected["args"]
+        ):
+            print(f"  ✗ {path}: 다른 자리를 가리킵니다 — {entry.get('command')}")
+            print("    (키트 폴더를 옮겼거나 지웠다) — 이 폴더의 install.cmd 를 다시")
+            problems += 1
+        else:
+            print(f"  ✓ {path}: 이 키트를 가리킵니다")
+
+    running = claude_desktop_running()
+    print(f"\n[Claude Desktop] {'켜져 있음' if running else '꺼져 있음(또는 모름)'}")
+
+    print("\n[MCP 서버 — Claude 처럼 띄워 봄]")
+    try:
+        tools = try_server(python)
+        print(f"  ✓ 도구 {len(tools)}개 — {', '.join(tools[:4])} …")
+    except Stop as stop:
+        print(f"  ✗ {stop}")
+        problems += 1
+
+    print("\n[Claude Desktop 의 로그]")
+    logs = claude_logs()
+    if not logs:
+        print(
+            f"  mcp-server-{NAME}.log 가 없습니다 — 앱이 이 항목을 띄운 적이 없습니다. "
+            "위의 설정이 ✓ 면 Claude Desktop 을 완전히 종료했다가 다시 켜세요."
+        )
+    for log in logs[:1]:
+        print(f"  {log}")
+        tail = log.read_text(encoding="utf-8", errors="replace").splitlines()[-12:]
+        for line in tail:
+            print(f"    {line[:200]}")
+    print(f"\n{'이 PC 쪽은 다 됐습니다.' if not problems else f'막힌 곳 {problems}군데.'}")
+    return 0 if not problems else 1
 
 
 def gemini_config() -> Path:
@@ -349,13 +602,20 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--no-install", action="store_true", help="설치는 건너뛰고 설정만")
     parser.add_argument("--write-claude", action="store_true")
     parser.add_argument("--write-gemini", action="store_true")
+    parser.add_argument(
+        "--check",
+        action="store_true",
+        help="점검 — 앱이 읽는 설정 · 서버가 뜨는지 · 앱의 로그(아무것도 안 바꾼다)",
+    )
     args = parser.parse_args(argv)
+    embedded = kit_python()
     try:
-        if not args.online and sys.version_info[:2] not in PYTHONS:
+        if args.check:
+            return check(embedded or venv_python(args.venv))
+        if embedded is None and not args.online and sys.version_info[:2] not in PYTHONS:
             raise Stop(
                 f"이 PC 의 파이썬은 {sys.version_info[0]}.{sys.version_info[1]} 입니다 — "
-                "키트에 든 부품은 3.11 ~ 3.13 용입니다. python.org 에서 3.12 를 설치하세요"
-                "(첫 화면의 「Add python.exe to PATH」 를 체크)."
+                "키트에 든 부품은 3.11 ~ 3.13 용입니다. 그 판의 파이썬으로 다시 실행하세요."
             )
         if args.from_clipboard and not args.server:
             found = parse_registration(read_clipboard())
@@ -401,27 +661,39 @@ def main(argv: list[str] | None = None) -> int:
         if args.forget:
             return 0
 
-        python = venv_python(args.venv) if args.no_install else create_venv(args.venv)
-        if not args.no_install:
+        if embedded is not None:
+            python = embedded
+            print(f"\n키트에 든 파이썬을 씁니다: {python}")
+        elif args.no_install:
+            python = venv_python(args.venv)
+        else:
+            python = create_venv(args.venv)
             install(python, online=args.online)
+        if not args.no_install:
+            tools = try_server(python)
+            print(f"MCP 서버를 띄워 봤습니다 — 도구 {len(tools)}개")
         entry = server_entry(python)
         print("\nMCP 항목(두 클라이언트 같음) — mcpServers 안에:")
         print(json.dumps({NAME: entry}, ensure_ascii=False, indent=2))
-        for wanted, path, label in (
-            (args.write_claude, claude_config(), "Claude Desktop"),
-            (args.write_gemini, gemini_config(), "Gemini CLI"),
-        ):
-            if wanted:
+        if args.write_claude:
+            wait_for_desktop_quit()
+            for path in claude_configs():
                 print(merge(path, entry))
-            else:
-                print(
-                    f"{label}: {path} 에 넣으세요 (--write-{label.split()[0].lower()} 로 자동)"
-                )
+        else:
+            shown = " · ".join(str(one) for one in claude_configs())
+            print(f"Claude Desktop: {shown} 에 넣으세요 (--write-claude 로 자동)")
+        if args.write_gemini:
+            print(merge(gemini_config(), entry))
+        else:
+            print(f"Gemini CLI: {gemini_config()} 에 넣으세요 (--write-gemini 로 자동)")
         print(
             "\n다른 플랫폼도 넣으려면 그 플랫폼 화면 「내 정보」 에서 「이 PC 에 등록 정보 "
             "복사」 를 누르고 install.cmd 를 다시 더블클릭 — 앞에 등록한 것은 남습니다."
         )
-        print("Claude Desktop 은 **완전히 종료했다가** 다시 켜야 새 MCP 를 읽습니다.")
+        print(
+            "Claude Desktop 은 **켤 때** 새 MCP 를 읽습니다 — 켜져 있었다면 완전히 "
+            "종료했다가 다시."
+        )
     except Stop as stop:
         print(str(stop), file=sys.stderr)
         return 2

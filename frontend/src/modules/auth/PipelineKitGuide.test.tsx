@@ -112,6 +112,9 @@ describe('정제 도구 키트 안내', () => {
       'rootdesign',
     )
     expect(command).not.toContain('\n')
+    // **키트에 든 파이썬으로** — PC 에 파이썬이 없어도 된다(python.org 의 최신판은 휠이 없어
+    // 거절됐고, PATH 체크를 빠뜨리면 「python 을 찾을 수 없다」 였다).
+    expect(command.startsWith('python\\python.exe sp_setup.py ')).toBe(true)
     expect(command).toContain('--server http://10.0.0.5:3030/rootdesign ')
     // **이름으로 더한다** — 한 PC 가 플랫폼 여럿을 겨눈다. 이름이 없으면 덮어쓰게 된다.
     expect(command).toContain('--platform rootdesign ')

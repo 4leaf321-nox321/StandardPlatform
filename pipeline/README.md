@@ -81,14 +81,21 @@ AI 가 **사용자 PC 에서** 조사 · 변환 · 검증 · 미리 보기를 �
 **1. 설치 — 더블클릭.** 받는 사람은 개발자가 아니다(Claude Desktop 만 쓰는 데이터 담당자).
 
 1. 플랫폼 화면 **「내 정보」 → 정제 도구 키트**에서 zip 을 받아 PC 에 푼다(처음 한 번). 서버 번들이
-   같은 판을 들고 있다 — 사내망에서는 GitHub 릴리스에 못 닿는다. **Python 3.12** 가 있어야 한다
-   (python.org 에서 설치할 때 첫 화면의 「Add python.exe to PATH」 를 체크).
+   같은 판을 들고 있다 — 사내망에서는 GitHub 릴리스에 못 닿는다. **파이썬이 들어 있다**(`python/` —
+   python.org 의 내장용 판에 부품을 깐 채로). PC 에 파이썬이 없어도, 어느 판이 있어도 된다. 전역
+   설치가 아니다 — 레지스트리 · PATH 를 안 건드리고, 키트 폴더를 지우면 끝이다.
 2. 같은 자리의 **「이 PC 에 등록 정보 복사」** — 이 플랫폼용 토큰을 하나 발급해 이름 · 주소와 함께
    클립보드에 넣는다(`SP-PIPELINE-PLATFORM {…}` 한 줄).
-3. 푼 폴더의 **`install.cmd` 를 더블클릭** — 처음이면 설치까지(venv · 동봉 휠 · Claude Desktop 설정),
-   이미 설치했으면 그 플랫폼만 더한다. 클립보드의 등록 정보를 읽고 **비운다**(토큰이 다음
-   붙여넣기에 딸려 나가지 않게). 작업 폴더는 처음에 `~/온톨로지작업` 에 생긴다.
-4. **Claude Desktop 을 완전히 종료했다가 다시 켠다.**
+3. 푼 폴더의 **`install.cmd` 를 더블클릭** — 처음이면 설치까지(MCP 서버를 실제로 띄워 도구 목록을
+   받아 보고, Claude Desktop 설정에 넣는다), 이미 설치했으면 그 플랫폼만 더한다. 클립보드의 등록
+   정보를 읽고 **비운다**(토큰이 다음 붙여넣기에 딸려 나가지 않게). 작업 폴더는 처음에
+   `~/온톨로지작업` 에 생긴다.
+   - **Claude Desktop 이 켜져 있으면 먼저 끄라고 한다** — 켜진 앱은 설정 파일을 스스로 다시 쓴다(앱
+     로그의 「Config file written」). 켜진 채로 넣으면 그 항목이 사라질 수 있다.
+   - **Store(MSIX) 판은 설정 파일이 둘일 수 있다**(`%APPDATA%\Claude\` 와
+     `%LOCALAPPDATA%\Packages\Claude_…\LocalCache\Roaming\Claude\`) — 있는 곳에 다 넣는다.
+4. **Claude Desktop 을 켠다.** 안 보이면 **`check.cmd` 를 더블클릭** — 앱이 읽는 설정 파일마다
+   항목이 있는지 · 서버가 뜨는지 · 앱의 로그(`mcp-server-sp-pipeline.log`)를 한 화면에 보인다.
 
 **적용은 그 플랫폼 화면 「작업」 에서** 사람이 「적용」 을 누른다 — 미리 보기 뒤에 AI 가 그 계획이
 펼쳐진 채로 열리는 링크(`apply_on_screen`)를 준다. 그 플랫폼의 화면이니 엉뚱한 곳에 넣을 일이 없다.
@@ -98,11 +105,13 @@ AI 가 **사용자 PC 에서** 조사 · 변환 · 검증 · 미리 보기를 �
 `…-private.zip` 을 쓴다(그 zip 은 올리지 않는다):
 
 ```bash
-python sp_setup.py --work-root "D:\온톨로지작업" --platform rootdesign \
+python\python.exe sp_setup.py --work-root "D:\온톨로지작업" --platform rootdesign \
                    --server http://<서버>:3030/rootdesign --token spt_... --write-claude
 ```
 
-- venv(`venv/`)를 만들고 `mcp` 를 동봉 휠로 깐다(인터넷이 되면 `--online`).
+- Windows 는 키트의 파이썬(`python\python.exe`)으로 — 깔 것이 없다. macOS · Linux 는 그 PC 의
+  `python3`(3.11 ~ 3.13)로 돌리면 venv(`venv/`)를 만들고 `mcp` 를 동봉 휠로 깐다(인터넷이 되면
+  `--online`). 키트를 만드는 쪽: 내장용 파이썬의 판과 해시는 `deploy/build_pipeline_kit.sh` 에 있다.
 - `--write-claude` · `--write-gemini` 는 각 설정 파일에 `sp-pipeline` 항목만 넣는다. 원래 파일은
   `.bak` 로 남고, 다른 MCP 항목은 안 건드린다. 빼면 넣을 내용만 보여 준다.
 - **플랫폼을 이 PC 의 설정에 이름으로 등록한다**(`--platform` — 그 설치의 slug. 비우면 주소

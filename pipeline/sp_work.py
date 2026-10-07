@@ -354,7 +354,9 @@ def status(folder: Path) -> dict[str, Any]:
             )
             steps.append(
                 f"{run['run']}: 사람이 미리 보기를 확인하고 **직접** 적용 — {where} "
-                f"(명령 창이면 python sp_pipeline.py apply {(folder / run['run']).as_posix()})"
+                "(명령 창이면 "
+                + pipeline.command_line("apply", f'"{(folder / run["run"]).resolve()}"')
+                + ")"
             )
     if not steps:
         steps.append("할 일이 없습니다 — 새 원천을 넣거나 새 실행을 만든다")
