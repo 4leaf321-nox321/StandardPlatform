@@ -148,6 +148,7 @@ def import_file(
     path: str = "import",
     name: str = "rows.csv",
     workspace_slug: str | None = None,
+    encoding: str = "utf-8",
 ) -> dict[str, Any]:
     """일괄 입력을 **끝까지** — 올리고, 워커가 계획을 세우고, `apply` 면 적용까지.
     돌아오는 것은 옛 동기 응답과 같은 계획 표(`ImportPlanOut` 모양)라 시험이 그대로 읽는다."""
@@ -156,7 +157,7 @@ def import_file(
     data = {"workspace_slug": workspace_slug or who.workspace}
     response = client.post(
         f"/api/objects/{type_slug}/{path}",
-        files={"file": (name, io.BytesIO(text.encode("utf-8")), "text/csv")},
+        files={"file": (name, io.BytesIO(text.encode(encoding)), "text/csv")},
         data=data,
         headers=who.headers,
     )

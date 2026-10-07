@@ -288,8 +288,8 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
                 입니다 — 비우려면 <code>\null</code> 을 적습니다.
               </p>
               <p>
-                여러 값은 <code>;</code> 로, 참조는 상대의 식별자(없으면 이름)로. 엑셀에서는 「CSV
-                UTF-8」 로 저장하세요.
+                여러 값은 <code>;</code> 로, 참조는 상대의 식별자(없으면 이름)로. 엑셀의 「CSV
+                UTF-8」 도, 그냥 「CSV (쉼표로 분리)」 도 받습니다.
               </p>
             </>
           ) : (

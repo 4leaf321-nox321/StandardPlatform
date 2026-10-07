@@ -23,6 +23,7 @@ from app.config import get_settings
 from app.modules.datasources import odata
 from app.modules.datasources.models import DataSource
 from app.modules.datasources.odata import Auth, Fetched
+from app.shared import tabular
 from app.shared.errors import AppError, code
 
 MAX_PAGES = 1_000
@@ -558,10 +559,14 @@ def _rows_from_xlsx(raw: bytes, sheet: str) -> list[dict[str, Any]]:
 
 
 def parse_file(raw: bytes, *, fmt: str, sheet: str = "") -> list[dict[str, Any]]:
-    """바이트 → 행. CSV·JSON 은 일괄 입력와 같은 규칙(BOM 벗김, `{"rows": [...]}` 허용)."""
+    """바이트 → 행. CSV·JSON 은 일괄 입력와 같은 규칙(BOM 벗김, CP949 도 읽음,
+    `{"rows": [...]}` 허용)."""
     if fmt == "xlsx":
         return _rows_from_xlsx(raw, sheet)
-    text = raw.decode("utf-8-sig")
+    try:
+        text = tabular.decode_text(raw)
+    except tabular.TabularError as caught:
+        raise AppError(code("DATASOURCES", 10), str(caught), status=502) from None
     if fmt == "json":
         try:
             data = json.loads(text)

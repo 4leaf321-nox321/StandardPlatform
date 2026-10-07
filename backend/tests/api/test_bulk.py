@@ -17,7 +17,7 @@ from app.database import engine
 from app.modules.accounts.models import User
 from app.modules.objects import bulk
 from app.modules.ontology.models import ObjectType
-from tests.api.conftest import Signed, bundle_import, export_file, import_file
+from tests.api.conftest import Signed, bundle_import, export_file, finish_job, import_file
 from tests.api.test_ontology import (
     _make_object,
     _make_property,
@@ -861,6 +861,31 @@ def test_붙여_넣은_탭_구분_표도_받는다(client: TestClient, admin: Si
     planned = import_file(client, admin, part, text, name="pasted.csv")
     assert [r["action"] for r in planned["rows"]] == ["create", "create"]
     assert planned["rows"][0]["label"] == "볼트"
+
+
+def test_한국어_엑셀이_그냥_저장한_CSV_도_읽는다(client: TestClient, admin: Signed) -> None:
+    """한국어 Windows 엑셀의 「CSV (쉼표로 분리)」 는 CP949 다 — 사람이 가장 흔히 만드는
+    CSV 가 그것이다. UTF-8 만 받았더니 작업이 `UnicodeDecodeError` 한 줄로 실패했다."""
+    part = _part_type(client, admin)
+    text = "key,label,재질\nP-1,볼트,스틸\n"
+    applied = import_file(client, admin, part, text, encoding="cp949", apply=True)
+    assert applied["applied"] is True
+    item = client.get(f"/api/objects/{part}", headers=admin.headers).json()["items"][0]
+    assert item["label"] == "볼트" and item["properties"]["material"] == "스틸"
+
+
+def test_읽을_수_없는_글자면_무엇을_할지_말한다(client: TestClient, admin: Signed) -> None:
+    part = _part_type(client, admin)
+    response = client.post(
+        f"/api/objects/{part}/import",
+        files={"file": ("rows.csv", io.BytesIO(b"key,label\nP-1,\x80\n"), "text/csv")},
+        data={"workspace_slug": admin.workspace},
+        headers=admin.headers,
+    )
+    assert response.status_code == 202, response.text
+    failed = finish_job(client, admin, response.json())
+    assert failed["status"] == "failed"
+    assert "CSV UTF-8" in failed["error"] and "UnicodeDecodeError" not in failed["error"]
 
 
 def test_계획은_줄마다_묻지_않는다(client: TestClient, admin: Signed, db: Session) -> None:

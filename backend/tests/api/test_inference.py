@@ -24,12 +24,16 @@ CSV = "﻿" + "\n".join(
 
 
 def _upload(
-    client: TestClient, admin: Signed, text: str, name: str = "parts.csv"
+    client: TestClient,
+    admin: Signed,
+    text: str,
+    name: str = "parts.csv",
+    encoding: str = "utf-8",
 ) -> dict[str, Any]:
     return dict(
         client.post(
             "/api/ontology/infer",
-            files={"file": (name, io.BytesIO(text.encode("utf-8")), "text/csv")},
+            files={"file": (name, io.BytesIO(text.encode(encoding)), "text/csv")},
             headers=admin.headers,
         ).json()
     )
@@ -60,6 +64,15 @@ def test_열마다_역할과_종류를_제안한다(client: TestClient, admin: S
         and by_header["무게(kg)"]["label"] == "무게(kg)"
     )
     assert "고를 값" in by_header["종류"]["note"]
+
+
+def test_한국어_엑셀이_그냥_저장한_CSV_도_같게_읽는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """「CSV (쉼표로 분리)」 는 CP949 다 — 전에는 500 이 났다."""
+    plain = CSV.removeprefix("\ufeff")
+    got = _upload(client, admin, plain, encoding="cp949")
+    assert got["rows"] == 30 and got == _upload(client, admin, CSV)
 
 
 def test_고친_제안으로_타입을_만들고_행을_넣는다(client: TestClient, admin: Signed) -> None:
