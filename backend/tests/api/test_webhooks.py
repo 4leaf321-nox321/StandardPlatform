@@ -17,7 +17,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.webhooks import services
 from app.modules.webhooks.models import Webhook
-from tests.api.conftest import Signed, maintenance_counts, notifications_of
+from tests.api.conftest import Signed, maintenance_counts, notifications_of, work_until
 from tests.api.test_ontology import _make_object, _make_type
 
 
@@ -262,7 +262,7 @@ def test_보내는_것은_워커의_작업이다(client: TestClient, admin: Sign
         # 워커가 집어 돌리면 보낸다.
         assert webhook_services.pending_count(db) >= 1
         services.dispatcher.sync = True
-        job_services.process_one("test-worker")
+        work_until(db, waiting.id)
         db.expire_all()
         done = db.scalar(select(Job).where(Job.id == waiting.id))
         assert done is not None and done.status == "done"

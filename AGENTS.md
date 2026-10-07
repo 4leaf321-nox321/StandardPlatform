@@ -297,7 +297,7 @@ cd backend
 .venv/bin/ruff format . ../mcp_server ../pipeline --config pyproject.toml
 .venv/bin/ruff check . ../mcp_server ../pipeline --config pyproject.toml
 .venv/bin/mypy
-.venv/bin/python -m pytest
+.venv/bin/python -m pytest -n 8          # 작업자 8개 — 작업자마다 DB 를 따로 쓴다(1분 남짓)
 .venv/bin/python -m alembic check
 cd ../frontend && npm run build && npm test && npm run lint
 ```

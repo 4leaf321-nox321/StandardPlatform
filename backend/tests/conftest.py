@@ -7,6 +7,10 @@
 **스위트를 두 번 동시에 띄우지 않는다.** 둘 다 같은 시험 DB 를 비우므로 서로의
 데이터를 지운다.
 
+**병렬(`-n`, pytest-xdist)이면 작업자마다 DB 를 따로 쓴다**(`<이름>_gw0_test` …) — 처음이면
+만든다. 같은 DB 를 둘이 쓰면 맨 앞의 스키마 비우기가 서로의 표를 지운다. 첨부 · 로그
+폴더도 작업자마다 임시 폴더로 — 앱 기동 검사가 같은 탐침 파일을 만들고 지워서 엇갈린다.
+
 bcrypt 라운드를 낮춘다. 시험 하나가 계정을 만들고(해시) 로그인하므로(검증),
 운영 라운드 그대로면 그 시간은 인증 로직이 아니라 **bcrypt 의 설계 목적**을 재는
 데 쓰인다 — 시험이 보려는 것이 아니다. 검사하는 것은 그대로다: 같은 알고리즘,
@@ -15,12 +19,26 @@ bcrypt 라운드를 낮춘다. 시험 하나가 계정을 만들고(해시) 로�
 
 from __future__ import annotations
 
+import atexit
 import os
+import shutil
+import tempfile
+
+from sqlalchemy.engine import make_url
+
+#: pytest-xdist 의 작업자 이름(`gw0` …) — 병렬이 아니면 빈 값.
+WORKER = os.environ.get("PYTEST_XDIST_WORKER", "")
 
 os.environ.setdefault("APP_BCRYPT_ROUNDS", "4")
 # 정제 도구 키트의 **이 PC 설정**(등록한 플랫폼 · 토큰)을 시험이 읽지 않게 — 없는 자리를
 # 가리킨다. 필요한 시험은 제 임시 파일로 바꾼다(`SP_SETTINGS`).
 os.environ["SP_SETTINGS"] = os.path.join(os.devnull, "sp-pipeline-settings.json")
+# 설정을 처음 읽기 **전에** — 앱의 설정은 한 번 읽고 기억한다.
+if WORKER:
+    _scratch = tempfile.mkdtemp(prefix=f"sp-pytest-{WORKER}-")
+    atexit.register(shutil.rmtree, _scratch, ignore_errors=True)
+    os.environ["FILESTORE_DIR"] = os.path.join(_scratch, "filestore")
+    os.environ["LOG_DIR"] = os.path.join(_scratch, "logs")
 
 
 def _test_database_url() -> str:
@@ -42,18 +60,48 @@ def _test_database_url() -> str:
     return f"{base}/{name}_test" if base else url
 
 
-os.environ["DATABASE_URL"] = _test_database_url()
+def _for_worker(url: str) -> str:
+    """병렬이면 작업자의 DB 이름으로 — `<이름>_test` → `<이름>_gw0_test`(끝은 `_test` 그대로라
+    아래의 개발 DB 가드가 같게 선다)."""
+    if not WORKER:
+        return url
+    parsed = make_url(url)
+    name = parsed.database or ""
+    stem = name.removesuffix("_test")
+    return parsed.set(database=f"{stem}_{WORKER}_test").render_as_string(hide_password=False)
+
+
+# **시험 DB 주소는 주 프로세스가 한 번 정해 작업자에게 넘긴다**(`APP_TEST_DATABASE_URL`).
+# 작업자는 주 프로세스가 이미 `<이름>_test` 로 바꾼 DATABASE_URL 을 물려받는다 — 거기서 다시
+# 지으면 `_test` 가 두 번 붙었다(`<이름>_test_gw0_test`, 실측).
+os.environ.setdefault("APP_TEST_DATABASE_URL", _test_database_url())
+os.environ["DATABASE_URL"] = _for_worker(os.environ["APP_TEST_DATABASE_URL"])
 
 from collections.abc import Iterator  # noqa: E402
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
-from sqlalchemy import text  # noqa: E402
+from sqlalchemy import create_engine, text  # noqa: E402
 from sqlalchemy.orm import Session  # noqa: E402
 
 import app.all_models  # noqa: F401,E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app as fastapi_app  # noqa: E402
+
+
+def _ensure_database(name: str) -> None:
+    """시험 DB 가 없으면 만든다 — 병렬 작업자의 DB 는 처음 돌 때 없다. 같은 접속 정보로
+    관리 DB(`postgres`)에 붙어서. 있으면 아무것도 안 한다(만들 권한이 없어도 된다)."""
+    admin = create_engine(engine.url.set(database="postgres"), isolation_level="AUTOCOMMIT")
+    try:
+        with admin.connect() as connection:
+            found = connection.execute(
+                text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": name}
+            ).first()
+            if found is None:
+                connection.execute(text(f'CREATE DATABASE "{name}"'))
+    finally:
+        admin.dispose()
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -74,6 +122,7 @@ def schema() -> None:
         # 잘못 준 날 그 사실을 알려 줄 자리는 여기뿐이다.
         raise RuntimeError(f"시험 DB 가 아닙니다: {name}. 이름이 _test 로 끝나야 합니다.")
 
+    _ensure_database(name)
     with engine.begin() as connection:
         connection.execute(text("DROP SCHEMA public CASCADE"))
         connection.execute(text("CREATE SCHEMA public"))

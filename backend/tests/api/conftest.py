@@ -138,6 +138,27 @@ def finish_job(client: TestClient, who: Signed, job: dict[str, Any]) -> dict[str
     return dict(got.json())
 
 
+def work_until(db: Session, job_id: uuid.UUID) -> None:
+    """워커를 **그 작업이 끝날 때까지** 돌린다(이 프로세스에서). 큐 앞에 남의 작업이 있어도.
+
+    한 번만 돌리고 「내 것이 집혔다」 고 믿으면 안 된다 — 병렬 시험(`-n`)에서는 같은 작업자에서
+    앞서 돈 시험이 남긴 작업이 큐 앞에 있을 수 있다(워커는 오래된 것부터 집는다). 순서대로
+    돌 때는 사이의 시험들이 그것을 비워 줘서 우연히 맞았다.
+    """
+    from sqlalchemy import select
+
+    from app.modules.jobs import services as job_services
+    from app.modules.jobs.models import Job
+
+    for _ in range(50):
+        db.expire_all()
+        status = db.scalar(select(Job.status).where(Job.id == job_id))
+        if status not in ("queued", "running"):
+            return
+        if not job_services.process_one("test-worker"):
+            return
+
+
 def import_file(
     client: TestClient,
     who: Signed,

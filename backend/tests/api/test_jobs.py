@@ -26,6 +26,7 @@ from tests.api.conftest import (
     import_file,
     maintenance_counts,
     notifications_of,
+    work_until,
 )
 from tests.api.test_ontology import _make_object, _make_relation, _make_type
 
@@ -425,7 +426,7 @@ def test_타이머는_작업을_넣고_같은_것을_두_번_안_넣는다(
     assert services.pending_for(db, "datasource_sync", slug="다른소스") is None
 
     # 워커가 돌면 없는 소스라 실패로 끝나고, 그 뒤에는 「안 끝난 작업」 이 아니다.
-    services.process_one("test-worker")
+    work_until(db, job.id)
     db.expire_all()
     done = db.scalar(select(Job).where(Job.id == job.id))
     assert done is not None and done.status == "failed"

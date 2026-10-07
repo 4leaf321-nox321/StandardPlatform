@@ -85,6 +85,10 @@ jobs:
 
       # conftest 가 DATABASE_URL 에서 <이름>_test 를 파생해 만든다. **개발 DB 를
       # 건드리지 않는** 구조가 CI 에서도 그대로 성립한다.
+      #
+      # **작업자 여럿으로**(`-n auto` — 러너의 CPU 수). 작업자마다 DB 를 따로 쓰고
+      # (`<이름>_gw0_test` …), 없으면 conftest 가 만든다. 순서대로 돌 때는 이 단계가
+      # 11 ~ 17분으로 CI · 릴리스 시간의 거의 전부였다.
       - name: 테스트 (pytest)
         working-directory: backend
         env:
@@ -92,7 +96,7 @@ jobs:
           DATABASE_URL: postgresql+psycopg://postgres:postgres@localhost:5432/${{ steps.platform.outputs.slug }}
         run: |
           createdb -h localhost -U postgres '${{ steps.platform.outputs.slug }}_test'
-          python -m pytest
+          python -m pytest -n auto
 
       # **MCP 서버는 환경을 갈라 본다.**
       #

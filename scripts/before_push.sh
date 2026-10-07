@@ -82,7 +82,11 @@ ruff_format() { cd "$BACKEND" && "$PY" -m ruff format --check . ../mcp_server ..
 mypy_strict() { cd "$BACKEND" && "$PY" -m mypy; }
 # **`EXTENSIONS` 를 비운다.** CI 에는 `.env` 가 없어서 확장 기본값이 「꺼짐」 이다 —
 # 개발 `.env` 를 딛고 통과한 시험은 거기서만 통과한다.
-pytest_all() { cd "$BACKEND" && EXTENSIONS= "$PY" -m pytest -q; }
+# **작업자 여럿으로**(pytest-xdist) — 순서대로는 13분, 작업자 8개는 1분(실측 2026-10-07). 작업자마다
+# DB 를 따로 쓴다(`<이름>_gw0_test` …, tests/conftest.py). 작업자 하나가 DB 접속을 열댓 개까지
+# 쓰니 PostgreSQL 의 max_connections(기본 100)를 넘지 않게 묶는다 — PYTEST_WORKERS 로 바꾼다.
+PYTEST_WORKERS="${PYTEST_WORKERS:-8}"
+pytest_all() { cd "$BACKEND" && EXTENSIONS= "$PY" -m pytest -q -n "$PYTEST_WORKERS"; }
 step "ruff check" ruff_check
 step "ruff format" ruff_format
 step "mypy strict" mypy_strict
