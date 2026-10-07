@@ -52,7 +52,7 @@ from app.shared.text import compare_key
 #: 화면·기록에 싣는 오류 행의 상한.
 ERROR_SAMPLE = 50
 #: 칸 대응의 target 으로 쓸 수 있는 고정 자리.
-FIXED_TARGETS = ("key", "label", "description", "alias")
+FIXED_TARGETS = ("key", "label", "description", "alias", "status")
 
 #: 시험이 갈아 끼우는 자리 — 진짜 OData 대신 가짜 응답.
 transport: httpx.BaseTransport | None = None
@@ -245,6 +245,20 @@ class Mapping:
             )
         return cls(external_key=external_key, columns=columns)
 
+    def with_core_envelope(self) -> Mapping:
+        """형제 코어의 봉투에서 **상태 · 별칭**도 받는다 — 대응에 안 적었어도.
+
+        상대에서 사용 중지한 것 · 뺀 별칭이 이쪽에 남으면 둘이 갈린다. 자동 제안이 만든 대응
+        (`suggest_core_mapping` — 이름과 속성만)으로 만든 소스에는 이 둘이 없었다.
+        """
+        have = {one.target for one in self.columns}
+        extra: list[Column] = []
+        if "status" not in have:
+            extra.append(Column(source="status", target="status"))
+        if "alias" not in have:
+            extra.append(Column(source="aliases", target="alias"))
+        return Mapping(external_key=self.external_key, columns=[*self.columns, *extra])
+
     def select_clause(self) -> str:
         """`$select` 를 안 적었으면 대응에 쓰인 열만 청한다 — 표 전체를 끌어오지 않게."""
         wanted: list[str] = []
@@ -277,7 +291,44 @@ def _text(value: Any) -> str:
     return str(value)
 
 
-def map_row(mapping: Mapping, raw: dict[str, Any], slug: str) -> Mapped:
+def mirrors(source: DataSource) -> bool:
+    """**바깥을 정본으로 보나**(거울) — 바깥에서 비운 칸은 이쪽도 비우고, 뺀 별칭은 뺀다.
+
+    형제 코어(`sp_core`)는 늘 그렇다 — 상대가 보내는 한 줄이 그 객체의 지금 모습 전부이고,
+    빈 칸은 키째 빼고 보낸다(「비었다」 를 가르는 것은 받는 쪽 몫이다 — `coreapi`). 예전에는
+    빠진 칸을 「안 건드림」 으로 읽어, 허브에서 지운 값 · 뺀 별칭 · 사용 중지가 쌍둥이에 영영
+    남았다(동기화가 더하고 바꾸기만 했다). 그 밖의 소스는 `options.mirror` 를 켰을 때만 —
+    바깥 표에는 우리가 안 채운 칸이 흔해, 기본은 그대로 「빈 칸은 안 건드림」 이다.
+    """
+    return source.kind == "sp_core" or bool((source.options or {}).get("mirror"))
+
+
+def mapping_of(source: DataSource, defs: list[PropertyDef]) -> Mapping:
+    """이 소스의 대응 — 형제 코어면 봉투의 상태 · 별칭까지(`Mapping.with_core_envelope`)."""
+    mapping = Mapping.parse(source.mapping or {}, defs)
+    if source.kind == "sp_core" and mapping.relations is None:
+        mapping = mapping.with_core_envelope()
+    return mapping
+
+
+def _empty(value: Any) -> bool:
+    return value is None or value == "" or value == []
+
+
+def map_row(
+    mapping: Mapping,
+    raw: dict[str, Any],
+    slug: str,
+    *,
+    mirror: bool = False,
+    keep: frozenset[str] = frozenset(),
+) -> Mapped:
+    """바깥 행 하나 → 파일의 행. 빈 칸은 「안 건드림」 이다 — `mirror` 면 「비움」(`\\null`).
+
+    거울이어도 **비우지 않는 것**: 식별자 · 이름 · 상태(빈 값에 뜻이 없다), 그리고 `keep`
+    (필수 속성) — 비우면 그 줄이 「값이 필요합니다」 오류가 되고, 오류 한 줄이 묶음 전체를
+    막는다. 별칭 열이 있는데 별칭이 하나도 없으면 별칭을 비운다(뺀 것을 뺀다).
+    """
     external = _text(odata.pick(raw, mapping.external_key)).strip()
     if not external:
         return Mapped(
@@ -285,9 +336,10 @@ def map_row(mapping: Mapping, raw: dict[str, Any], slug: str) -> Mapped:
         )
     out: dict[str, Any] = {}
     alias_values: list[str] = []
+    alias_mapped = False
     for column in mapping.columns:
         value = odata.pick(raw, column.source)
-        if column.values is not None and value is not None and value != "":
+        if column.values is not None and not _empty(value):
             key = _text(value)
             if key in column.values:
                 value = column.values[key]
@@ -297,6 +349,7 @@ def map_row(mapping: Mapping, raw: dict[str, Any], slug: str) -> Mapped:
                     error=f"{column.source}: 값 대응표에 없는 값입니다: {key}",
                 )
         if column.target == "alias":
+            alias_mapped = True
             items = value if isinstance(value, list) else [value]
             alias_values.extend(_text(one).strip() for one in items if _text(one).strip())
             continue
@@ -310,12 +363,24 @@ def map_row(mapping: Mapping, raw: dict[str, Any], slug: str) -> Mapped:
             else column.target
         )
         # 빈 값은 「안 건드림」 — 파일과 같다. 바깥이 비워 보낸 칸으로 우리 값을 지우지 않는다.
-        if value is None or value == "":
+        # **거울이면 「비움」** — 바깥에서 지운 값이 이쪽에 남으면 둘이 갈린다.
+        if _empty(value):
+            if mirror and _clears(column.target, name, keep):
+                out[name] = bulk.NULL_MARK
             continue
         out[name] = value
     if alias_values:
         out["aliases"] = bulk.MULTI_SEP.join(dict.fromkeys(alias_values))
+    elif mirror and alias_mapped:
+        out["aliases"] = bulk.NULL_MARK
     return Mapped(external_id=external, row=out)
+
+
+def _clears(target: str, name: str, keep: frozenset[str]) -> bool:
+    """거울에서 빈 칸을 비우는 자리인가 — 설명과 (필수가 아닌) 속성만."""
+    if target == "description":
+        return True
+    return target.startswith("properties.") and name not in keep
 
 
 def _match(
@@ -468,7 +533,7 @@ def preview(db: Session, source: DataSource, *, limit: int = 5) -> dict[str, Any
                 columns.append(name)
     mapped: list[dict[str, Any]] = []
     try:
-        mapping = Mapping.parse(source.mapping or {}, defs)
+        mapping = mapping_of(source, defs)
     except AppError as caught:
         return {
             "columns": columns,
@@ -476,8 +541,9 @@ def preview(db: Session, source: DataSource, *, limit: int = 5) -> dict[str, Any
             "mapped": [],
             "mapping_error": caught.message,
         }
+    keep = frozenset(one.key for one in defs if one.required)
     for raw in fetched.rows:
-        one = map_row(mapping, raw, source.slug)
+        one = map_row(mapping, raw, source.slug, mirror=mirrors(source), keep=keep)
         mapped.append({"external_id": one.external_id, "row": one.row, "error": one.error})
     return {"columns": columns, "rows": fetched.rows, "mapped": mapped, "mapping_error": None}
 
@@ -532,11 +598,7 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     defs = properties_of(db, object_type.id)
     ra = source.kind == ra_reports.KIND
     # RA 보고서는 칸 대응을 틀이 정한다 — 사람이 적은 대응은 없다.
-    mapping = (
-        Mapping(external_key="id", columns=[])
-        if ra
-        else Mapping.parse(source.mapping or {}, defs)
-    )
+    mapping = Mapping(external_key="id", columns=[]) if ra else mapping_of(source, defs)
     run = DataSourceRun(
         source_id=source.id,
         actor_label=(user.display_name or user.email) if user else "타이머",
@@ -638,7 +700,11 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     # 가르고 나서 각자의 길로 보낸다.
     graves = [one for one in fetched.rows if one.get(fetchers.CORE_DELETED)]
     alive = [one for one in fetched.rows if not one.get(fetchers.CORE_DELETED)]
-    mapped = [map_row(mapping, raw, source.slug) for raw in alive]
+    mirror = mirrors(source)
+    keep = frozenset(one.key for one in defs if one.required)
+    mapped = [map_row(mapping, raw, source.slug, mirror=mirror, keep=keep) for raw in alive]
+    # 거울이면 별칭을 **맞춘다**(뺀 것을 뺀다) — 아니면 더하기만(사람이 붙인 것을 지우지 않게).
+    aliases_mode = "replace" if mirror else "add"
     run.rows_seen = len(mapped) + len(graves)
     _match(db, object_type, source.slug, mapped)
 
@@ -669,6 +735,7 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
             # **자기 출처 이름을 말한다** — 잠긴 타입(`managed_by`)에 넣는 근거다. 안 넘기면
             # 허브가 내려준 타입은 받기까지 막힌다(잠근 뜻은 그것이 아니다).
             source=source_name(source),
+            aliases_mode=aliases_mode,
         )
         for chunk in chunks
     ]
@@ -731,6 +798,7 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
             chunk,
             owner_workspace_id=source.workspace_id,
             source=source_name(source),
+            aliases_mode=aliases_mode,
         )
         if not done.ok:
             run.status = "failed"

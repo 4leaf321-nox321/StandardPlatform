@@ -506,6 +506,40 @@ def test_nextLink_없는_서버는_skip_으로_넘긴다(
     assert skips == ["0", "2"]  # 2행씩: 꽉 찬 첫 쪽 → 다음, 덜 찬 둘째 쪽 → 끝
 
 
+def test_바깥을_정본으로_켜면_비운_칸을_비우고_뺀_별칭을_뺀다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """기본은 「빈 칸은 안 건드림」 — 바깥 표에는 우리가 안 채운 칸이 흔해, 빈 칸으로 우리 값을
+    지우면 안 되는 곳이 많다. 바깥이 정본인 표는 켠다(`options.mirror`) — 그러면 바깥에서 지운
+    값 · 뺀 별칭이 이쪽에서도 빠진다."""
+    vendor = _vendor_type(client, admin)
+    plain = _source(client, admin, vendor)
+    assert _sync(client, admin, plain["slug"], apply=True).json()["applied"] is True
+    mirror = _source(client, admin, vendor, options={"mirror": True})
+
+    def ansys() -> dict[str, Any]:
+        listed = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["items"]
+        one = next(row for row in listed if row["key"] == "V-001")
+        got = client.get(f"/api/objects/{vendor}/{one['id']}", headers=admin.headers).json()
+        return dict(got["object"])
+
+    assert ansys()["properties"]["rating"] == 92 and ansys()["aliases"] == ["Ansys"]
+
+    # 바깥에서 점수와 줄임 이름을 지웠다.
+    plm.rows[0]["Rating"] = None
+    plm.rows[0]["Short"] = ""
+    # 기본 소스는 그대로 둔다.
+    assert _sync(client, admin, plain["slug"], apply=True).json()["applied"] is True
+    assert ansys()["properties"]["rating"] == 92 and ansys()["aliases"] == ["Ansys"]
+    # 정본으로 켠 소스는 비운다.
+    done = _sync(client, admin, mirror["slug"], apply=True).json()
+    assert done["applied"] is True, done
+    got = ansys()
+    assert "rating" not in got["properties"], got["properties"]
+    assert got["aliases"] == []
+    assert got["properties"]["country"] == "미국"
+
+
 def test_nextLink_로_넘기던_서버의_마지막_쪽이_꽉_차도_두_번_받지_않는다(
     client: TestClient, admin: Signed, plm: FakeOData
 ) -> None:

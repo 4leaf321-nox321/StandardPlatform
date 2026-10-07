@@ -23,6 +23,11 @@ export interface SourceOptions {
   format?: 'csv' | 'xlsx' | 'json'
   sheet?: string
   /**
+   * **바깥을 정본으로**(거울) — 바깥에서 비운 칸은 이쪽도 비우고, 뺀 별칭은 뺀다. 끄면(기본)
+   * 빈 칸은 「안 건드림」 이다. 형제 코어(`sp_core`)는 이것과 상관없이 늘 거울이다.
+   */
+  mirror?: boolean
+  /**
    * 형제 코어(`sp_core`)에서 **선까지** 받는다 — `/core/<타입>/relations`.
    *
    * 객체만 받으면 받는 쪽은 점만 있고 선이 없다. 끊긴 선은 상대가 `deleted` 로 말해 주고,

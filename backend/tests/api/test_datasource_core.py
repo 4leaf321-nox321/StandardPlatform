@@ -537,3 +537,76 @@ def test_기다리던_선을_상대가_끊으면_더_기다리지_않는다(
     assert after["counts"].get("relations_waiting", 0) == 0, after["counts"]
     saved = client.get(f"/api/datasources/{source['slug']}", headers=admin.headers).json()
     assert saved["relations_waiting"] == 0
+
+
+# --- 거울 — 상대에서 비우고 뺀 것도 따라온다 ---------------------------------------------
+
+
+def test_상대에서_비운_칸_뺀_별칭_사용_중지도_따라온다(
+    client: TestClient, admin: Signed, sibling: FakeCore
+) -> None:
+    """동기화가 **더하고 바꾸기만** 했다. 허브는 빈 칸을 키째 빼고 보내는데(「비었다」 를
+    가르는 것은 받는 쪽 몫 — 카탈로그에 칸 목록이 있다), 받는 쪽이 그것을 「안 건드림」 으로
+    읽어 허브에서 지운 값이 쌍둥이에 영영 남았다. 별칭은 더하기만 해 뺀 것이 남고, 사용
+    중지는 대응할 자리가 없어 안 따라왔다. 상대가 보내는 한 줄은 그 객체의 지금 모습 전부다."""
+    vendor = _vendor_type(client, admin)
+    sibling.items[0]["properties"]["aliases"] = ["Ansys", "앤시스"]
+    source = _source(client, admin, vendor)
+    assert _sync(client, admin, source["slug"])["counts"]["create"] == 2
+
+    def detail(key: str) -> dict[str, Any]:
+        listed = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["items"]
+        one = next(row for row in listed if row["key"] == key)
+        got = client.get(f"/api/objects/{vendor}/{one['id']}", headers=admin.headers).json()
+        return dict(got["object"])
+
+    first = detail("V-001")
+    assert first["properties"]["rating"] == 92 and first["aliases"] == ["Ansys", "앤시스"]
+
+    # 허브에서 점수를 지우고(키째 빠진다), 별칭 하나를 빼고, V-002 를 사용 중지한다.
+    del sibling.items[0]["properties"]["rating"]
+    sibling.items[0]["properties"]["aliases"] = ["Ansys"]
+    sibling.items[1]["status"] = "deprecated"
+    for one in sibling.items:
+        one["updated_at"] = "2026-09-03T00:00:00.000000Z"
+    sibling.as_of = "2026-09-03T12:00:00.000000Z"
+    after = _sync(client, admin, source["slug"])
+    assert after["run"]["status"] == "ok", after["run"]
+    assert after["counts"]["update"] == 2, after["counts"]
+
+    got = detail("V-001")
+    assert "rating" not in got["properties"], got["properties"]
+    assert got["properties"]["country"] == "미국"  # 온 것은 그대로
+    assert got["aliases"] == ["Ansys"]
+    assert _rows(client, admin, vendor)["V-002"] == "deprecated"
+
+    # 별칭을 다 빼면 다 빠진다.
+    del sibling.items[0]["properties"]["aliases"]
+    sibling.items[0]["updated_at"] = "2026-09-04T00:00:00.000000Z"
+    sibling.as_of = "2026-09-04T12:00:00.000000Z"
+    _sync(client, admin, source["slug"])
+    assert detail("V-001")["aliases"] == []
+
+
+def test_필수_칸은_상대가_비워도_비우지_않는다(
+    client: TestClient, admin: Signed, sibling: FakeCore
+) -> None:
+    """비우면 그 줄이 「값이 필요합니다」 오류가 되고, 오류 한 줄이 동기화 전체를 막는다."""
+    vendor = _make_type(
+        client, admin, label=f"공급사{uuid.uuid4().hex[:6]}", key_policy="optional"
+    )
+    _make_property(client, admin, vendor, key="country", label="국가", data_type="text")
+    _make_property(
+        client, admin, vendor, key="rating", label="점수", data_type="number", required=True
+    )
+    source = _source(client, admin, vendor)
+    assert _sync(client, admin, source["slug"])["counts"]["create"] == 2
+
+    del sibling.items[0]["properties"]["rating"]
+    sibling.items[0]["updated_at"] = "2026-09-03T00:00:00.000000Z"
+    sibling.as_of = "2026-09-03T12:00:00.000000Z"
+    after = _sync(client, admin, source["slug"])
+    assert after["run"]["status"] == "ok", after["run"]
+    listed = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["items"]
+    one = next(row for row in listed if row["key"] == "V-001")
+    assert one["properties"]["rating"] == 92

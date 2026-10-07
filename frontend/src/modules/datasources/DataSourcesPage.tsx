@@ -193,6 +193,7 @@ export default function DataSourcesPage() {
                   : ' · 손으로만'}
                 {source.source_name && ` · 출처 ${source.source_name}`}
                 {source.deprecate_missing && ' · 사라진 행은 사용 중지'}
+                {(source.kind === 'sp_core' || source.options.mirror) && ' · 바깥이 정본'}
                 {source.kind === 'ra_reports' &&
                   (source.reconciled_at
                     ? ` · 마지막 전량 대조 ${shownDateTime(source.reconciled_at)}`
@@ -1139,8 +1140,9 @@ function EditDialog({
                 </label>
                 <p className="text-muted-foreground text-xs">
                   출발점·도착점 열의 값은 그 객체의 <strong>식별자(없으면 별칭·이름)</strong>로
-                  풀립니다 — 못 풀면 그 줄이 오류이고 아무것도 안 들어갑니다. 선에 붙는 속성은
-                  지금 화면에서 못 정합니다(API 의 <code>mapping.relations.properties</code>).
+                  풀립니다 — 못 풀면 그 줄만 건너뛰고 다음 동기화에서 다시 봅니다(정본으로 켜면 그
+                  줄이 오류이고 아무것도 안 들어갑니다). 선에 붙는 속성은 지금 화면에서 못
+                  정합니다(API 의 <code>mapping.relations.properties</code>).
                 </p>
               </div>
             )}
@@ -1396,19 +1398,38 @@ function EditDialog({
                   중」 으로 복원합니다.
                 </p>
               ) : kind !== 'sp_core' ? (
-                <label className="flex cursor-pointer items-center gap-2 text-sm">
-                  <input
-                    type="checkbox"
-                    className="size-4"
-                    checked={deprecate}
-                    onChange={(event) => setDeprecate(event.target.checked)}
-                  />
-                  외부에서 삭제된 행은 「사용 중지」 로 표시 (기본은 변경하지 않음)
-                </label>
+                <>
+                  <label className="flex cursor-pointer items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      className="size-4"
+                      checked={deprecate}
+                      onChange={(event) => setDeprecate(event.target.checked)}
+                    />
+                    외부에서 삭제된 행은 「사용 중지」 로 표시 (기본은 변경하지 않음)
+                  </label>
+                  {!edgeMode && (
+                    <label className="flex cursor-pointer items-start gap-2 text-sm">
+                      <input
+                        type="checkbox"
+                        className="mt-0.5 size-4"
+                        checked={Boolean(options.mirror)}
+                        onChange={(event) =>
+                          setOptions({ ...options, mirror: event.target.checked })
+                        }
+                      />
+                      <span>
+                        바깥을 정본으로 — 바깥에서 <b>비운 칸은 이쪽도 비우고, 뺀 별칭은 뺍니다</b>
+                        (사람이 붙인 별칭도 바깥 목록대로 맞춰집니다). 끄면 빈 칸은 그대로 둡니다.
+                      </span>
+                    </label>
+                  )}
+                </>
               ) : (
                 <p className="text-muted-foreground text-sm">
-                  상대에서 <b>지워진 것은 그쪽이 알려 줍니다</b> — 이쪽에서 자동으로 「사용 중지」
-                  가 됩니다(합쳐진 것이면 이긴 쪽이 이력에 남습니다).
+                  상대를 <b>정본으로</b> 받습니다 — 상대에서 비운 칸 · 뺀 별칭 · 「사용 중지」 도
+                  따라옵니다. <b>지워진 것은 그쪽이 알려 줍니다</b> — 이쪽에서 자동으로 「사용
+                  중지」 가 됩니다(합쳐진 것이면 이긴 쪽이 이력에 남습니다).
                 </p>
               )}
               <label className="flex cursor-pointer items-center gap-2 text-sm">
