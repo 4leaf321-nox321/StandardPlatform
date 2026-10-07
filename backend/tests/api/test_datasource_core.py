@@ -454,3 +454,86 @@ def test_선은_reset_을_받으면_처음부터_다시_받는다(
     # 시계가 비워졌다 — 다음 실행이 전량을 받는다.
     saved = client.get(f"/api/datasources/{source['slug']}", headers=admin.headers).json()
     assert saved["relations_since_mark"] == ""
+
+
+# --- 끝점이 아직 없는 선 — 나머지를 막지 않고, 다음 동기화에서 다시 -------------------------
+
+
+def _edge(src: str, kind: str, dst: str, at: str, *, deleted: bool = False) -> dict[str, Any]:
+    return {
+        "src": src,
+        "relation": kind,
+        "dst": dst,
+        "dst_type": "vendor",
+        "updated_at": at,
+        "deleted": deleted,
+    }
+
+
+def test_끝점이_아직_없는_선은_기다렸다가_다음_동기화에서_선다(
+    client: TestClient, admin: Signed, sibling: FakeCore
+) -> None:
+    """타입마다 소스가 따로라, 선이 가리키는 쪽이 아직 안 들어왔을 수 있다(고장 모드 →
+    메커니즘). 예전에는 그런 줄 하나가 **그 소스의 선 전부**를 막았고 시계도 못 옮겼다 —
+    끝점이 끝내 안 오면 그 소스의 선은 영영 안 섰다. 이제는 나머지를 넣고, 못 찾은 줄만
+    남겼다가 다음 동기화가 다시 넣는다(상대가 그 선을 다시 보내지 않아도)."""
+    vendor = _vendor_type(client, admin)
+    kind = _partner_kind(client, admin, vendor)
+    sibling.edges = [
+        _edge("V-001", kind, "V-002", "2026-09-02T00:00:00.000000Z"),
+        _edge("V-001", kind, "V-404", "2026-09-02T00:00:00.000000Z"),  # 아직 없는 끝점
+    ]
+    source = _source(client, admin, vendor, options={"relations": True})
+
+    first = _sync(client, admin, source["slug"])
+    assert first["run"]["status"] == "ok", first["run"]
+    assert first["counts"]["relations_create"] == 1, first["counts"]
+    assert first["counts"]["relations_waiting"] == 1, first["counts"]
+    assert first["counts"].get("relations_error", 0) == 0, first["counts"]
+    assert any("기다립니다" in one and "V-404" in one for one in first["run"]["errors"])
+    saved = client.get(f"/api/datasources/{source['slug']}", headers=admin.headers).json()
+    # 시계는 옮긴다 — 못 찾은 줄은 따로 남겼다.
+    assert saved["relations_since_mark"] == sibling.edges_as_of
+    assert saved["relations_waiting"] == 1
+
+    # 끝점이 들어온다. 선 창구는 새로 보낼 것이 없다(그 선은 지난번에 이미 왔다).
+    sibling.items.append(
+        {
+            "key": "V-404",
+            "label": "Hexagon",
+            "status": "active",
+            "updated_at": "2026-09-03T00:00:00.000000Z",
+            "deleted": False,
+            "properties": {},
+        }
+    )
+    sibling.as_of = "2026-09-03T12:00:00.000000Z"
+    second = _sync(client, admin, source["slug"])
+    assert second["counts"]["relations_create"] == 1, second["counts"]
+    assert second["counts"].get("relations_waiting", 0) == 0, second["counts"]
+    saved = client.get(f"/api/datasources/{source['slug']}", headers=admin.headers).json()
+    assert saved["relations_waiting"] == 0
+
+    listed = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["items"]
+    one = next(row for row in listed if row["key"] == "V-001")
+    detail = client.get(f"/api/objects/{vendor}/{one['id']}", headers=admin.headers).json()
+    assert sorted(edge["object_label"] for edge in detail["related"]) == ["Altair", "Hexagon"]
+
+
+def test_기다리던_선을_상대가_끊으면_더_기다리지_않는다(
+    client: TestClient, admin: Signed, sibling: FakeCore
+) -> None:
+    vendor = _vendor_type(client, admin)
+    kind = _partner_kind(client, admin, vendor)
+    sibling.edges = [_edge("V-001", kind, "V-404", "2026-09-02T00:00:00.000000Z")]
+    source = _source(client, admin, vendor, options={"relations": True})
+    assert _sync(client, admin, source["slug"])["counts"]["relations_waiting"] == 1
+
+    sibling.edges = [
+        _edge("V-001", kind, "V-404", "2026-09-03T00:00:00.000000Z", deleted=True)
+    ]
+    sibling.edges_as_of = "2026-09-03T12:00:00.000000Z"
+    after = _sync(client, admin, source["slug"])
+    assert after["counts"].get("relations_waiting", 0) == 0, after["counts"]
+    saved = client.get(f"/api/datasources/{source['slug']}", headers=admin.headers).json()
+    assert saved["relations_waiting"] == 0

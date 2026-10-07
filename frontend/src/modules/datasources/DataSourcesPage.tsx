@@ -315,6 +315,14 @@ const COUNT_LABEL: Record<string, string> = {
   back: '다시 게시',
   gone_held_back: '내려감 보류',
   tags_as_text: '글로 남긴 태그',
+  // 선(관계) — 형제 코어 · 한 행이 선 하나인 소스.
+  relations_create: '선 새로',
+  relations_update: '선 고침',
+  relations_unchanged: '선 그대로',
+  relations_error: '선 오류',
+  relations_unlink: '선 끊음',
+  // 끝점이 아직 없어 다음 동기화에서 다시 넣을 선.
+  relations_waiting: '선 기다림',
 }
 
 /** 실행의 수 — 0 은 빼고. `full_read` 는 수가 아니라 「이번엔 전량으로 받았다」 는 표시다. */

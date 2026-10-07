@@ -44,6 +44,8 @@ class DataSourceOut(BaseModel):
     """**선의 시계** — 객체와 따로 움직인다(`options.relations` 를 켠 형제 코어 소스).
 
     `since_mark` 를 비우면 이것도 함께 비운다 — 하나만 처음부터 받으면 점과 선이 어긋난다."""
+    relations_waiting: int = 0
+    """끝점을 아직 못 찾아 **기다리는 선**의 수 — 다음 동기화가 다시 넣어 본다."""
     """`sp_core` 가 지난번에 어디까지 받았나 — 비우면 다음 동기화가 처음부터 받는다."""
     interval_minutes: int
     is_active: bool

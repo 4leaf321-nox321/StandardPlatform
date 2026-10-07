@@ -577,6 +577,50 @@ def datasource_sync(work: Work) -> dict[str, Any]:
     return datasource_services.sync_out(result).model_dump(mode="json")
 
 
+def datasource_sync_round(work: Work) -> dict[str, Any]:
+    """타이머의 한 차례 — 차례가 된 소스들을 **가리키는 쪽부터 한 줄로** 돌린다.
+
+    예전에는 소스마다 작업을 따로 넣었다 — 워커가 둘이면 둘씩, 하나여도 넣은 순서(아무
+    순서)대로 돌아, 「고장 모드」 가 「메커니즘」 보다 먼저 돌면 그 선이 끝점을 못 찾았다.
+    순서는 `datasources/services.sync_order` 가 정의에서 읽는다. **한 소스가 실패해도 다음
+    소스로 간다** — 실패는 그 소스의 실행 기록 · 알림에 남는다(소스마다 따로 넣던 때와 같다).
+    """
+    from app.modules.datasources import services as datasource_services
+    from app.modules.datasources.models import DataSource
+    from app.modules.jobs.services import Cancelled
+
+    slugs = [str(one) for one in work.params.get("slugs") or []]
+    apply = bool(work.params.get("apply"))
+    found = list(work.db.scalars(select(DataSource).where(DataSource.slug.in_(slugs))))
+    ordered = datasource_services.sync_order(work.db, found)
+    done: list[dict[str, Any]] = []
+    for index, source in enumerate(ordered):
+        work.progress(source.slug, index, len(ordered))
+        if not source.is_active:
+            done.append({"slug": source.slug, "status": "skipped"})
+            continue
+        try:
+            result = datasource_services.sync(work.db, work.user, source, apply=apply)
+        except Cancelled:
+            raise
+        except Exception as caught:  # 한 소스의 실패가 차례 전체를 멈추지 않는다
+            work.db.rollback()
+            done.append({"slug": source.slug, "status": "failed", "error": str(caught)[:500]})
+            continue
+        if result.run.applied and _changed(result.run.counts or {}):
+            _after_ingest(work.db, source.type_id, f"datasource:{source.slug}")
+        done.append(
+            {"slug": source.slug, "status": result.run.status, "counts": result.run.counts}
+        )
+    work.progress("끝", len(ordered), len(ordered))
+    return {
+        "order": [one.slug for one in ordered],
+        "sources": done,
+        "failed": sum(1 for one in done if one["status"] == "failed"),
+        "missing": sorted(set(slugs) - {one.slug for one in found}),
+    }
+
+
 def _changed(counts: dict[str, Any]) -> bool:
     """적재가 **무엇이라도 바꿨나** — 만듦 · 고침 · 사용 중지 · 선. 몇 분마다 도는 동기화가
     바뀐 것 없이 끝날 때마다 지표를 다시 세면, 200만 건 지표 하나가 45초(실측, ADR 0013)라
@@ -693,6 +737,16 @@ register(
         False,
         False,
         datasource_sync,
+        allow_system=True,
+    )
+)
+register(
+    Kind(
+        "datasource_sync_round",
+        "데이터 소스 동기화(차례대로)",
+        False,
+        False,
+        datasource_sync_round,
         allow_system=True,
     )
 )

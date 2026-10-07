@@ -103,6 +103,8 @@ export interface DataSource {
   since_mark: string
   /** 선의 시계 — 객체와 따로 움직인다(형제 코어에서 선까지 받을 때). */
   relations_since_mark?: string
+  /** 끝점을 아직 못 찾아 기다리는 선 — 다음 동기화가 다시 넣어 본다. */
+  relations_waiting?: number
   /** RA 보고서: 마지막 전량 대조 — 하루가 지나면 다음 동기화가 전량으로 받아 대조한다. */
   reconciled_at?: string | null
   interval_minutes: number

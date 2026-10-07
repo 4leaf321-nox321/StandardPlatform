@@ -135,6 +135,9 @@ class RowPlan:
     object_id: uuid.UUID | None = None
     changes: list[str] = field(default_factory=list)
     message: str = ""
+    skipped: bool = False
+    """`skip_missing` 로 **끝점을 못 찾아 건너뛴** 관계 줄 — `action` 은 `unchanged` 다. 부르는
+    쪽이 그 줄을 모아 다음에 다시 넣는다(데이터 소스의 「기다리는 선」)."""
 
 
 @dataclass
@@ -2620,6 +2623,7 @@ def _plan_relation(
             action="unchanged",
             label=f"{src_text} -{kind.label}-> {dst_text}",
             message=f"끝점을 찾지 못해 건너뜁니다 — {gone.message}",
+            skipped=True,
         )
     src, dst = src_end, dst_end
     if src.owner_workspace_id not in memo.editable:

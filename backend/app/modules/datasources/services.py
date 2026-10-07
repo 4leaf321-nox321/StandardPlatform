@@ -44,7 +44,7 @@ from app.modules.objects.models import ObjectAlias, ObjectInstance
 from app.modules.objects.schemas import ImportRowOut
 from app.modules.objects.services import properties_of
 from app.modules.ontology import managed
-from app.modules.ontology.models import ObjectType, PropertyDef
+from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared import audit, extensions
 from app.shared.errors import AppError, code
 from app.shared.text import compare_key
@@ -328,7 +328,14 @@ def _match(
 ) -> None:
     """같은 객체를 다시 찾아 행에 `id` 를 박는다 — 외부 식별자 → (식별자는 bulk 가) →
     별칭·이름. `by_name=False` 면 이름으로 붙이지 않는다 — RA 보고서처럼 **같은 이름이 흔한**
-    것을 이름으로 붙이면 다른 보고서를 덮어쓴다."""
+    것을 이름으로 붙이면 다른 보고서를 덮어쓴다.
+
+    ⚠️ **이름으로 찾을 때는 이미 이 소스의 다른 항목과 이어진 객체를 후보에서 뺀다** — 이번
+    실행에서 다른 행이 먼저 차지한 것도. 이름으로 붙이는 것은 「사람이 먼저 만들어 둔 것」 ·
+    「다른 소스가 만든 것」 과 합류하려는 것이다. 이 소스의 다른 항목에 이미 묶인 객체에
+    붙이면 바깥의 두 항목이 우리 객체 하나로 겹친다 — 옛 이름이 별칭으로 남은 객체에 같은
+    이름의 새 항목이 붙으면, 그 뒤로 한 객체가 두 항목의 값을 번갈아 받는다.
+    """
     kind = aliases.source_kind(slug)
     by_external = {
         norm: object_id
@@ -342,6 +349,8 @@ def _match(
             )
         )
     }
+    #: 이미 이 소스의 항목과 이어진 객체 — 이름 · 별칭으로는 붙이지 않는다.
+    taken: set[uuid.UUID] = set(by_external.values())
     names: dict[str, list[uuid.UUID]] = {}
     for object_id, label in db.execute(
         select(ObjectInstance.id, ObjectInstance.label).where(
@@ -366,9 +375,11 @@ def _match(
         # 처음 만나는 행 — 별칭·이름으로 우리 것을 찾는다(사람이 먼저 만들어 둔 것과 합류).
         # 못 찾으면 bulk 가 식별자로 찾거나 새로 만든다.
         label = str(one.row.get("label") or "")
-        hits = names.get(compare_key(label), []) if label else []
+        named = names.get(compare_key(label), []) if label else []
+        hits = [hit for hit in named if hit not in taken]
         if len(hits) == 1:
             one.row["id"] = str(hits[0])
+            taken.add(hits[0])
         elif len(hits) > 1:
             one.error = (
                 f"「{label}」 이 {len(hits)}개에 맞습니다 — "
@@ -578,7 +589,10 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
         # 찾기 · 무덤)은 타지 않는다: 이 소스는 객체를 만들지 않는다.
         run.rows_seen = len(fetched.rows)
         edges = [edge_row(mapping.relations, raw) for raw in fetched.rows]
-        only_counts, only_errors = _apply_edges(
+        # **「더하기」 면 끝점을 못 찾은 줄이 나머지를 막지 않는다** — 이 소스는 매번 전량을
+        # 읽으니 다음 동기화가 저절로 다시 넣는다. 「파일대로 맞춤」 은 그대로 엄격하다 —
+        # 건너뛴 줄이 「파일에 없는 선」 으로 읽혀 있는 선을 끊을 수 있다.
+        only_counts, only_errors, waiting = _apply_edges(
             db,
             user,
             source,
@@ -587,6 +601,7 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
             [],
             mode=mapping.relations.mode,
             apply=apply,
+            skip_missing=mapping.relations.mode == "add",
         )
         if fetched.truncated:
             only_errors.append(
@@ -595,6 +610,8 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
         ok = not only_errors and not any(
             name.endswith("_error") and value for name, value in only_counts.items()
         )
+        if waiting:
+            only_errors.append(_waiting_note(waiting))
         run.counts = only_counts
         run.errors = only_errors[:ERROR_SAMPLE]
         run.status = "ok" if (apply and ok) else ("planned" if ok else "failed")
@@ -1022,8 +1039,14 @@ def _apply_edges(
     *,
     mode: str,
     apply: bool,
-) -> tuple[dict[str, int], list[str]]:
-    """선을 계획하고(또는 넣고) **셈과 오류 줄**을 돌려준다 — 코어 쪽과 대응 쪽이 함께 쓴다.
+    skip_missing: bool = False,
+) -> tuple[dict[str, int], list[str], list[Waiting]]:
+    """선을 계획하고(또는 넣고) **셈 · 오류 줄 · 끝점을 못 찾아 건너뛴 줄**을 돌려준다 — 코어
+    쪽과 대응 쪽이 함께 쓴다.
+
+    `skip_missing` 이면 끝점을 못 찾은 줄이 **나머지를 막지 않는다** — 건너뛰고 돌려준다
+    (`relations_waiting` 으로 센다). 타입마다 소스가 따로라 가리키는 쪽이 아직 안 들어왔을
+    수 있다. 끄면 예전처럼 그런 줄 하나가 전부를 막는다.
 
     끊긴 선은 무덤과 같은 규칙으로 끊는다(`bundles/tombstones.py` — 줄마다 그 객체를 고칠
     수 있는지 다시 본다). 규칙을 두 벌로 적지 않으려고 그 모듈을 그대로 쓴다.
@@ -1031,8 +1054,11 @@ def _apply_edges(
     actor = _actor(db, user)
     errors: list[str] = []
     name = source_name(source)
-    plan = bulk.plan_relations(db, actor, object_type, rows, mode=mode, source=name)
-    counts = {f"relations_{name}": value for name, value in plan.counts.items()}
+    plan = bulk.plan_relations(
+        db, actor, object_type, rows, mode=mode, source=name, skip_missing=skip_missing
+    )
+    waiting = [Waiting(rows[one.row - 1], one.message) for one in plan.rows if one.skipped]
+    counts = _edge_counts(plan.counts, len(waiting))
     errors.extend(plan.errors)
     errors.extend(
         f"선 {one.row}줄 {one.label}: {one.message}"
@@ -1063,10 +1089,13 @@ def _apply_edges(
     )
     if not apply or not plan.ok or not cut.ok:
         counts["relations_unlink"] = counts.get("relations_unlink", 0) + unlinked
-        return counts, errors
+        return counts, errors, waiting
 
-    done = bulk.apply_relations(db, actor, object_type, rows, mode=mode, source=name)
-    counts = {f"relations_{name}": value for name, value in done.counts.items()}
+    done = bulk.apply_relations(
+        db, actor, object_type, rows, mode=mode, source=name, skip_missing=skip_missing
+    )
+    waiting = [Waiting(rows[one.row - 1], one.message) for one in done.rows if one.skipped]
+    counts = _edge_counts(done.counts, len(waiting))
     counts["relations_unlink"] = counts.get("relations_unlink", 0) + unlinked
     if not done.ok:
         errors.extend(
@@ -1074,7 +1103,48 @@ def _apply_edges(
             for one in done.rows
             if one.action == "error"
         )
-    return counts, errors
+    return counts, errors, waiting
+
+
+@dataclass
+class Waiting:
+    """끝점을 못 찾아 건너뛴 선 한 줄 — 넣으려던 줄 그대로와 그 까닭."""
+
+    row: dict[str, Any]
+    why: str
+
+
+def _edge_counts(raw: dict[str, int], waiting: int) -> dict[str, int]:
+    """관계 적재의 셈 → 실행 기록의 셈. 건너뛴 줄은 `unchanged` 로 오므로 거기서 빼서
+    `relations_waiting` 으로 따로 센다 — 「그대로」 와 「아직 못 넣음」 은 다른 말이다."""
+    counts = {f"relations_{name}": value for name, value in raw.items()}
+    if waiting:
+        counts["relations_unchanged"] = counts.get("relations_unchanged", 0) - waiting
+        counts["relations_waiting"] = waiting
+    return counts
+
+
+def _edge_key(row: dict[str, Any]) -> tuple[str, str, str]:
+    """선 한 줄의 정체 — 같은 선이 다시 오거나 끊겼다고 올 때 기다리던 줄과 맞춘다."""
+    return (
+        compare_key(str(row.get("src") or "")),
+        str(row.get("relation") or "").strip(),
+        compare_key(str(row.get("dst") or "")),
+    )
+
+
+def _waiting_note(waiting: list[Waiting]) -> str:
+    """사람에게 남기는 말 — 몇 줄이 왜 기다리는지(앞의 셋만)."""
+    sample = " · ".join(
+        f"{one.row.get('src')} -{one.row.get('relation')}-> {one.row.get('dst')}"
+        f" ({one.why.removeprefix('끝점을 찾지 못해 건너뜁니다 — ')})"
+        for one in waiting[:3]
+    )
+    more = f" 외 {len(waiting) - 3}줄" if len(waiting) > 3 else ""
+    return (
+        f"선 {len(waiting)}줄은 끝점이 아직 없어 기다립니다 — 다음 동기화에서 다시 넣습니다: "
+        f"{sample}{more}"
+    )
 
 
 def _sync_relations(
@@ -1121,14 +1191,41 @@ def _sync_relations(
 
     rows = [_edge_row(one) for one in got.rows if not one.get(fetchers.CORE_DELETED)]
     gone = [one for one in got.rows if one.get(fetchers.CORE_DELETED)]
-    counts, more = _apply_edges(
-        db, user, source, object_type, rows, gone, mode=mode, apply=apply
+    # **기다리던 선을 다시 싣는다**(끝점이 지난번에 없었다). 이번에 같은 선이 다시 왔으면 새
+    # 줄을 쓰고, 상대가 끊었다고 왔으면 버린다. 전량을 다시 받는 `reset` 이면 기다리던 것도
+    # 그 안에 다시 온다. 한 번에 넣는 상한을 넘기지 않게 남는 자리만큼만 — 나머지는 계속
+    # 기다린다.
+    waiting = (
+        [] if mode == "replace" else [dict(one) for one in source.relations_waiting or []]
+    )
+    again = {_edge_key(one) for one in rows} | {_edge_key(one) for one in gone}
+    retry = [one for one in waiting if _edge_key(one) not in again]
+    room = max(bulk.MAX_ROWS - len(rows), 0)
+    retry, held = retry[:room], retry[room:]
+    counts, more, still = _apply_edges(
+        db,
+        user,
+        source,
+        object_type,
+        rows + retry,
+        gone,
+        mode=mode,
+        apply=apply,
+        # 「파일대로 맞춤」(reset) 은 그대로 엄격하다 — 건너뛴 줄이 있는 선을 끊을 수 있다.
+        skip_missing=mode == "add",
     )
     errors.extend(more)
+    if still:
+        errors.append(_waiting_note(still))
     ok = not any(name.endswith("_error") and value for name, value in counts.items())
-    # **끝까지 받고 넣은 뒤에만** 시계를 옮긴다 — 중간에 옮기면 그 사이 선을 영영 안 받는다.
-    if apply and ok and got.as_of and not got.truncated:
-        source.relations_since_mark = got.as_of
+    if apply and ok:
+        source.relations_waiting = [one.row for one in still] + held
+        if held:
+            counts["relations_waiting"] = counts.get("relations_waiting", 0) + len(held)
+        # **끝까지 받고 넣은 뒤에만** 시계를 옮긴다 — 중간에 옮기면 그 사이 선을 영영 안
+        # 받는다. 끝점을 못 찾은 줄은 위에 남겼으니 시계를 막지 않는다.
+        if got.as_of and not got.truncated:
+            source.relations_since_mark = got.as_of
     return counts, errors
 
 
@@ -1360,6 +1457,76 @@ def due(db: Session, now: datetime | None = None) -> list[DataSource]:
             or source.last_run_at + timedelta(minutes=source.interval_minutes) <= now
         ):
             out.append(source)
+    return out
+
+
+def edges_only(source: DataSource) -> bool:
+    """**선만 받는 소스**(한 행이 선 하나 — BOM · 매핑 표). 객체를 만들지 않는다."""
+    return bool((source.mapping or {}).get("relations"))
+
+
+def sync_order(db: Session, sources: list[DataSource]) -> list[DataSource]:
+    """**가리키는 쪽을 먼저** — 참조 칸 · 관계가 가리키는 타입의 소스가 앞에 선다.
+
+    타입마다 소스가 따로이고 타이머가 한꺼번에 넣으면 순서가 없다 — 「고장 모드」 가
+    「메커니즘」 보다 먼저 돌면 그 선이 끝점을 못 찾고, 그 고장 모드가 실패하면 그것을
+    가리키는 「시험군」 의 선도 잇달아 실패했다(실측: 서른다섯 종류가 거의 같은 시각에 돌았다).
+
+    무엇이 무엇을 가리키나는 정의에서 읽는다 — 참조 칸의 `ref_type_slug`, 그리고 선을 받는
+    소스면 그 타입에서 나가는 관계 종류의 도착 타입(`dst_type_slugs`, 비어 있으면 모른다).
+    선만 받는 소스는 출발점 타입의 객체 소스 뒤에 선다. **서로 가리키면**(순환) 이름 순으로
+    끊는다 — 끝점을 못 찾은 선은 기다렸다가 다음 동기화에서 선다(`relations_waiting`).
+    """
+    ordered = sorted(sources, key=lambda one: one.slug)
+    if len(ordered) < 2:
+        return ordered
+    type_ids = {one.type_id for one in ordered}
+    slug_of = dict(
+        db.execute(select(ObjectType.id, ObjectType.slug).where(ObjectType.id.in_(type_ids)))
+        .tuples()
+        .all()
+    )
+    refs: dict[uuid.UUID, set[str]] = {}
+    for type_id, target in db.execute(
+        select(PropertyDef.owner_id, PropertyDef.ref_type_slug).where(
+            PropertyDef.owner_kind == "type",
+            PropertyDef.owner_id.in_(type_ids),
+            PropertyDef.ref_type_slug.is_not(None),
+        )
+    ):
+        refs.setdefault(type_id, set()).add(str(target))
+    kinds = list(db.scalars(select(RelationType).where(RelationType.is_active.is_(True))))
+
+    def points_at(source: DataSource) -> set[str]:
+        own = slug_of.get(source.type_id, "")
+        out = set(refs.get(source.type_id, set()))
+        if wants_relations(source) or edges_only(source):
+            for kind in kinds:
+                if kind.src_type_slugs is None or own in kind.src_type_slugs:
+                    out |= set(kind.dst_type_slugs or [])
+        if edges_only(source):
+            out.add(own)  # 출발점도 객체 소스가 먼저 만든다
+        return out
+
+    # slug 로 가른다 — 소스마다 유일하다.
+    after = {
+        one.slug: {
+            other.slug
+            for other in ordered
+            if other.slug != one.slug
+            and not edges_only(other)
+            and slug_of.get(other.type_id) in points_at(one)
+        }
+        for one in ordered
+    }
+    out: list[DataSource] = []
+    left = list(ordered)
+    while left:
+        waiting_on = {one.slug for one in left}
+        ready = [one for one in left if not after[one.slug] & waiting_on]
+        pick = ready[0] if ready else left[0]
+        out.append(pick)
+        left.remove(pick)
     return out
 
 

@@ -69,6 +69,7 @@ def _out(db: Session, row: DataSource) -> DataSourceOut:
         deprecate_missing=row.deprecate_missing,
         since_mark=row.since_mark,
         relations_since_mark=row.relations_since_mark,
+        relations_waiting=len(row.relations_waiting or []),
         interval_minutes=row.interval_minutes,
         is_active=row.is_active,
         last_run_at=row.last_run_at,
@@ -315,8 +316,10 @@ def update_source(
                 status=422,
             )
         row.since_mark = ""
-        # **선의 시계도 함께 비운다** — 하나만 처음부터 받으면 점과 선이 어긋난다.
+        # **선의 시계도 함께 비운다** — 하나만 처음부터 받으면 점과 선이 어긋난다. 기다리던
+        # 선도 — 전량이 다시 온다.
         row.relations_since_mark = ""
+        row.relations_waiting = []
         # RA 보고서는 처음부터 = 본문까지 전량, 그리고 대조.
         row.reconciled_at = None
     if "interval_minutes" in sent and payload.interval_minutes is not None:

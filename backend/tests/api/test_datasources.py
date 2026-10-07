@@ -14,6 +14,8 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.modules.datasources import services
 from tests.api.conftest import (
@@ -390,6 +392,53 @@ def test_처음_만날_때는_별칭과_이름으로_찾고_겹치면_거절한�
     assert list(got["external_ids"].values()) == ["V-001"]
 
 
+def test_이름으로_찾을_때_이미_다른_항목과_이어진_객체는_후보가_아니다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """옛 이름이 별칭으로 남은 객체에 **같은 이름의 새 항목**이 붙으면, 바깥의 두 항목이 우리
+    객체 하나로 겹친다 — 그 뒤로 그 객체가 두 항목의 값을 번갈아 받는다. 이름 · 별칭으로
+    붙이는 것은 사람이 먼저 만든 것과 합류하려는 것이지, 이 소스의 다른 항목을 덮는 것이
+    아니다."""
+    vendor = _vendor_type(client, admin)
+    source = _source(client, admin, vendor)
+    assert _sync(client, admin, source["slug"], apply=True).json()["applied"] is True
+    # V-001 「ANSYS Inc.」 는 「Ansys」 를 별칭으로 가졌다(Short 칸). 바깥에 그 이름의 새 항목.
+    plm.rows.append(
+        {"VendorNo": "V-009", "Name": "Ansys", "Short": "", "CountryCd": "KR", "Rating": 50}
+    )
+    done = _sync(client, admin, source["slug"], apply=True).json()
+    assert done["applied"] is True, done
+    assert done["run"]["counts"]["create"] == 1, done["run"]["counts"]
+
+    listed = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["items"]
+    by_key = {one["key"]: one for one in listed}
+    assert by_key["V-009"]["label"] == "Ansys"
+    assert by_key["V-001"]["label"] == "ANSYS Inc."
+    old = client.get(f"/api/objects/{vendor}/{by_key['V-001']['id']}", headers=admin.headers)
+    assert list(old.json()["object"]["external_ids"].values()) == ["V-001"]
+
+
+def test_이름이_같은_새_항목_둘은_한_객체를_나눠_갖지_않는다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """사람이 만든 「Hexagon」 하나에 바깥의 새 항목 둘이 같은 이름으로 오면 — 앞의 것이
+    합류하고 뒤의 것은 새로 선다. 예전에는 둘 다 같은 객체를 가리켜 실행 전체가 막혔다."""
+    vendor = _vendor_type(client, admin)
+    ours = _make_object(client, admin, vendor, label="Hexagon")
+    plm.rows = [
+        {"VendorNo": "V-010", "Name": "Hexagon", "Short": "", "CountryCd": "KR", "Rating": 1},
+        {"VendorNo": "V-011", "Name": "Hexagon", "Short": "", "CountryCd": "KR", "Rating": 2},
+    ]
+    source = _source(client, admin, vendor)
+    done = _sync(client, admin, source["slug"], apply=True).json()
+    assert done["applied"] is True, done
+
+    listed = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["items"]
+    by_key = {one["key"]: one for one in listed}
+    assert by_key["V-010"]["id"] == ours["id"]
+    assert by_key["V-011"]["id"] != ours["id"]
+
+
 def test_사라진_행은_기본_그대로_켜면_사용_중지(
     client: TestClient, admin: Signed, plm: FakeOData
 ) -> None:
@@ -455,6 +504,23 @@ def test_nextLink_없는_서버는_skip_으로_넘긴다(
     assert done["run"]["rows_seen"] == 3 and done["counts"]["create"] == 3
     skips = [parse_qs(r.url.query.decode()).get("$skip", ["0"])[0] for r in plm.requests]
     assert skips == ["0", "2"]  # 2행씩: 꽉 찬 첫 쪽 → 다음, 덜 찬 둘째 쪽 → 끝
+
+
+def test_nextLink_로_넘기던_서버의_마지막_쪽이_꽉_차도_두_번_받지_않는다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """행 수가 쪽 크기의 배수면 마지막 쪽이 꽉 찬다. 서버가 nextLink 로 넘기던 중이면 nextLink
+    가 없는 쪽이 끝이다 — 꽉 찼다고 `$skip` 으로 더 물으면 이미 받은 쪽을 또 받아, 같은 id 두
+    번으로 동기화 전체가 실패했다."""
+    plm.rows.append(
+        {"VendorNo": "V-004", "Name": "Hexagon", "Short": "", "CountryCd": "KR", "Rating": 1}
+    )
+    vendor = _vendor_type(client, admin)
+    source = _source(client, admin, vendor)  # 쪽 크기 2 · 행 4
+    done = _sync(client, admin, source["slug"], apply=True).json()
+    assert done["applied"] is True, done
+    assert done["run"]["rows_seen"] == 4 and done["run"]["counts"]["create"] == 4
+    assert len(plm.requests) == 2  # 쪽 둘 — 다시 묻지 않는다
 
 
 def test_타이머가_돌릴_차례(client: TestClient, admin: Signed, plm: FakeOData) -> None:
@@ -854,3 +920,159 @@ def test_선_소스의_맞춤은_그_출발점_범위만_끊는다(
         f"/api/objects/{vendor}/{rows['V-003']['id']}", headers=admin.headers
     ).json()
     assert any(one["relation"] == kind for one in third["related"]), "안 나온 출발점은 그대로"
+
+
+# --- 차례 — 가리키는 쪽부터 한 줄로 ----------------------------------------------------
+
+
+def _bare(**kw: Any) -> dict[str, Any]:
+    """식별자 · 이름만 받는 대응 — 타입마다 속성이 달라도 같은 가짜 서버를 읽는다."""
+    return {
+        "mapping": {
+            "external_key": "VendorNo",
+            "columns": [
+                {"source": "VendorNo", "target": "key"},
+                {"source": "Name", "target": "label"},
+            ],
+        },
+        **kw,
+    }
+
+
+def test_차례는_가리키는_쪽부터_한_줄로_돌고_하나가_실패해도_다음으로_간다(
+    client: TestClient, admin: Signed, db: Session, plm: FakeOData
+) -> None:
+    """소스마다 작업을 따로 넣으면 순서가 없다 — 「고장 모드」 가 「메커니즘」 보다 먼저 돌면
+    그것을 가리키는 칸 · 선이 끝점을 못 찾았다. 타이머는 이제 차례 하나를 넣고, 그 작업이
+    가리키는 쪽부터 돌린다. 한 소스가 실패해도 차례는 끝까지 간다."""
+    from app.modules.jobs import services as job_services
+    from app.modules.jobs.models import Job
+
+    mechanism = _make_type(client, admin, label="메커니즘", key_policy="optional")
+    mode = _make_type(client, admin, label="고장 모드", key_policy="optional")
+    _make_property(
+        client,
+        admin,
+        mode,
+        key="mechanism",
+        label="메커니즘",
+        data_type="object_ref",
+        ref_type_slug=mechanism,
+    )
+    # 이름 순이면 고장 모드가 앞이다 — 가리키는 쪽(메커니즘)이 먼저 돌아야 한다.
+    tag = uuid.uuid4().hex[:6]
+    first = _source(client, admin, mode, **_bare(slug=f"a_mode_{tag}"))
+    later = _source(client, admin, mechanism, **_bare(slug=f"z_mech_{tag}"))
+    broken = _source(
+        client, admin, mechanism, **_bare(slug=f"m_file_{tag}", kind="file", base_url="")
+    )
+
+    job = job_services.enqueue(
+        db,
+        kind="datasource_sync_round",
+        params={"slugs": [first["slug"], later["slug"], broken["slug"]], "apply": True},
+        user=None,  # 타이머가 넣는다
+        workspace_id=None,
+    )
+    db.commit()
+    while job_services.process_one("test-worker"):
+        db.expire_all()
+        if db.scalar(select(Job.status).where(Job.id == job.id)) in ("done", "failed"):
+            break
+    db.expire_all()
+    done = db.scalar(select(Job).where(Job.id == job.id))
+    assert done is not None and done.status == "done", done.error if done else None
+    result = done.result or {}
+    order = result["order"]
+    assert order.index(later["slug"]) < order.index(first["slug"]), order
+    statuses = {one["slug"]: one["status"] for one in result["sources"]}
+    assert statuses == {first["slug"]: "ok", later["slug"]: "ok", broken["slug"]: "failed"}
+    assert result["failed"] == 1
+
+
+def test_순서는_참조_칸_선_선만_받는_소스를_보고_순환은_이름_순으로_끊는다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    from app.modules.datasources.models import DataSource
+    from app.modules.ontology.models import ObjectType
+
+    def type_id(slug: str) -> uuid.UUID:
+        found = db.scalar(select(ObjectType.id).where(ObjectType.slug == slug))
+        assert found is not None
+        return uuid.UUID(str(found))
+
+    mechanism = _make_type(client, admin, label="메커니즘", key_policy="optional")
+    mode = _make_type(client, admin, label="고장 모드", key_policy="optional")
+    group = _make_type(client, admin, label="시험군", key_policy="optional")
+    kind = f"cause_{uuid.uuid4().hex[:6]}"
+    made = client.post(
+        "/api/ontology/import",
+        json={
+            "relation_types": [
+                {
+                    "slug": kind,
+                    "label": "원인",
+                    "src_type_slugs": [mode],
+                    "dst_type_slugs": [mechanism],
+                }
+            ]
+        },
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+    _make_property(
+        client,
+        admin,
+        group,
+        key="mode",
+        label="고장 모드",
+        data_type="object_ref",
+        ref_type_slug=mode,
+    )
+
+    def source(slug: str, of: str, **kw: Any) -> DataSource:
+        body: dict[str, Any] = {"kind": "odata", "options": {}, "mapping": {}, **kw}
+        return DataSource(slug=slug, type_id=type_id(of), **body)
+
+    # 선을 받는 고장 모드 소스는 메커니즘 뒤, 그것을 가리키는 시험군은 고장 모드 뒤.
+    mode_src = source("a_mode", mode, kind="sp_core", options={"relations": True})
+    group_src = source("b_group", group)
+    mech_src = source("c_mech", mechanism)
+    # 선만 받는 소스는 출발점(고장 모드)의 객체 소스 뒤.
+    edges = source(
+        "a_edges", mode, mapping={"relations": {"src": "s", "relation": kind, "dst": "d"}}
+    )
+    got = services.sync_order(db, [group_src, edges, mode_src, mech_src])
+    assert [one.slug for one in got] == ["c_mech", "a_mode", "a_edges", "b_group"]
+
+    # 선을 안 받는 고장 모드 소스는 메커니즘을 기다리지 않는다 — 이름 순.
+    plain = source("a_mode", mode)
+    assert [one.slug for one in services.sync_order(db, [mech_src, plain])] == [
+        "a_mode",
+        "c_mech",
+    ]
+
+    # 서로 가리키면 — 둘 다 돌고, 이름 순으로 끊는다.
+    _make_property(
+        client,
+        admin,
+        mechanism,
+        key="mode",
+        label="고장 모드",
+        data_type="object_ref",
+        ref_type_slug=mode,
+    )
+    _make_property(
+        client,
+        admin,
+        mode,
+        key="mechanism",
+        label="메커니즘",
+        data_type="object_ref",
+        ref_type_slug=mechanism,
+    )
+    assert [one.slug for one in services.sync_order(db, [mech_src, plain])] == [
+        "a_mode",
+        "c_mech",
+    ]

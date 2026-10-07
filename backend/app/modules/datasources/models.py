@@ -98,6 +98,18 @@ class DataSource(Base):
     영영 안 받는다. 상대가 `reset` 을 주면(무덤의 보관 기간이 지났다) 이 값을 비우고 전량을
     다시 받는다."""
 
+    relations_waiting: Mapped[list[dict[str, Any]]] = mapped_column(
+        JSONB, default=list, server_default="[]"
+    )
+    """**끝점을 아직 못 찾아 기다리는 선**(`sp_core` + `options.relations`) — 다음 동기화가
+    다시 넣어 본다.
+
+    타입마다 소스가 따로라 「고장 모드」 의 선이 가리키는 「메커니즘」 이 아직 안 들어왔을 수
+    있다. 예전에는 그런 줄 하나가 그 소스의 선 전부를 막았고(전부 아니면 무), 시계를 안 옮겨
+    다음 실행이 같은 범위를 다시 받았다 — 끝점이 끝내 안 오면 그 소스의 선은 영영 안 섰다.
+    이제는 나머지를 넣고 시계를 옮기고, 못 찾은 줄만 여기 남긴다. 상대가 그 선을 끊었다고
+    알려 오면(무덤) 여기서도 뺀다."""
+
     reconciled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )

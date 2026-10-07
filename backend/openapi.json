@@ -22090,6 +22090,11 @@
             "title": "Relations Since Mark",
             "default": ""
           },
+          "relations_waiting": {
+            "type": "integer",
+            "title": "Relations Waiting",
+            "default": 0
+          },
           "interval_minutes": {
             "type": "integer",
             "title": "Interval Minutes"

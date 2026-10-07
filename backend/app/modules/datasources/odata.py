@@ -120,6 +120,8 @@ def fetch(
     headers = {"Accept": "application/json", **(auth.headers() if auth else {})}
     out = Fetched()
     skip = 0
+    #: 서버가 nextLink 로 넘겨 왔나 — 그러면 nextLink 가 없는 쪽이 끝이다.
+    server_paged = False
     next_url: str | None = url
     next_params: dict[str, str] | None = params
     try:
@@ -162,9 +164,14 @@ def fetch(
                 if next_link:
                     # 서버가 쪽을 넘긴다(server-driven paging). nextLink 는 이미 쿼리를 담고
                     # 있다 — 다시 붙이면 `$top` 이 두 번 간다.
+                    server_paged = True
                     next_url = next_link
                     next_params = None
-                elif len(rows) >= page:
+                elif len(rows) >= page and not server_paged:
+                    # ⚠️ 서버가 nextLink 로 넘기던 중이면 여기 오지 않는다 — 마지막 쪽이 꽉
+                    # 찼다고 `$skip` 으로 다시 물으면, 우리 skip 은 서버가 넘긴 자리를 몰라
+                    # 이미 받은 쪽을 또 받았다(행 수가 쪽 크기의 배수일 때 — 같은 id 두 번으로
+                    # 동기화 전체가 실패했다).
                     # 서버가 안 넘기면 `$top` 은 상한일 뿐이다 — `$skip` 으로 우리가 넘긴다.
                     # 한 쪽이 꽉 찼을 때만 다음을 묻는다(덜 차면 끝이다).
                     skip += page
