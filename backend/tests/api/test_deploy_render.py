@@ -120,6 +120,19 @@ def test_이중화는_공용_폴더와_로컬을_가른다(bundle: Path, tmp_pat
     )
 
 
+def _assets_try_other_server(conf: str) -> None:
+    """화면 조각은 **한 서버에 없으면(404) 다른 서버에서** — 이중화를 한 대씩 올리는 동안 두
+    서버의 판이 달라, 새 판에서 받은 화면이 조각을 옛 판 서버에 물으면 404 가 난다. 앱
+    location 은 404 를 넘기지 않는다(POST 가 두 번 가면 안 된다) — 조각 location 만 따로."""
+    at = conf.index("location /testplatform/assets/ {")
+    block = conf[at : conf.index("}", at)]
+    assert "proxy_pass http://testplatform_app/assets/;" in block
+    assert "proxy_next_upstream error timeout http_404 http_502 http_503;" in block
+    app = conf[conf.index("location /testplatform/ {") :]
+    app = app[: app.index("}")]
+    assert "http_404" not in app
+
+
 def test_메인_서버에_넘길_nginx_조각(bundle: Path, tmp_path: Path) -> None:
     etc = tmp_path / "etc"
     render(bundle, etc, **HA_ENV)
@@ -135,6 +148,7 @@ def test_메인_서버에_넘길_nginx_조각(bundle: Path, tmp_path: Path) -> N
     assert "location /testplatform/mcp {" in snippet
     assert "proxy_pass http://testplatform_mcp/mcp;" in snippet
     assert "proxy_buffering off;" in snippet
+    _assets_try_other_server(snippet)
     # keepalived 는 DB VIP 만.
     conf = read(etc, "keepalived/keepalived.conf")
     assert "VI_DB" in conf and "VI_WEB" not in conf and "chk_nginx" not in conf
@@ -157,6 +171,7 @@ def test_로컬_LB_는_접두어를_떼고_두_앱에_나눈다(bundle: Path, tm
     assert "proxy_pass http://testplatform_mcp/mcp;" in site
     assert "proxy_buffering off;" in site
     assert "X-Forwarded-Proto $scheme" in site
+    _assets_try_other_server(site)
 
     host = (etc / "etc/nginx/sites-available/platform-ha").read_text(encoding="utf-8")
     assert "server_name portal.example.local 10.0.0.10 10.0.0.1 10.0.0.2 _;" in host

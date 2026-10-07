@@ -202,9 +202,9 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
   // 아니다 — 배포가 반쯤 끝난 상태에서 둘이 갈리고, 그때 화면이 거짓말을 한다.
   const health = useResource(() => systemApi.health(), [])
   const release = health.data?.version
-  // 서버가 이 빌드와 다른 버전인가. **개발에서만 본다** — 배포에서는 백엔드 한
-  // 프로세스가 SPA 까지 서빙하므로 둘이 다를 수가 없고, 그 자리에 경고가 뜨면
-  // 그것 자체가 거짓말이다.
+  // 서버가 이 빌드와 다른 버전인가 — 여기서는 **개발에서만 본다**(개발 화면이 옛 서버에
+  // 붙어 있는 것). 운영에서도 갈린다 — 업데이트 전부터 열어 둔 탭, 이중화를 한 대씩 올리는
+  // 동안. 그것은 맨 위의 「새 판이 나왔습니다」 띠(`NewBuildBanner`)가 말한다.
   const stale =
     import.meta.env.DEV && !!release && release !== UNKNOWN_VERSION && release !== __APP_VERSION__
 

@@ -14,6 +14,7 @@ import { ErrorBoundary } from '@/shared/components/ErrorBoundary'
 import { Skeleton } from '@/shared/components/ui/skeleton'
 import { Header } from '@/shared/layout/Header'
 import { DEFAULT_WORKSPACE } from '@/shared/layout/navigation'
+import { NewBuildBanner } from '@/shared/layout/NewBuildBanner'
 import { NoticePopup } from '@/modules/notices/NoticePopup'
 import { Sidebar, SidebarDrawer } from '@/shared/layout/Sidebar'
 
@@ -50,6 +51,8 @@ export function AppShell() {
       <SidebarDrawer open={drawer} onOpenChange={setDrawer} workspaceSlug={workspaceSlug} />
 
       <div className="flex min-w-0 flex-1 flex-col">
+        {/* 서버가 새 판이면 맨 위에 「새로 고침」 띠 — 열어 둔 탭이 옛 조각을 찾다 멈추기 전에. */}
+        <NewBuildBanner />
         <Header
           // **같은 단추가 화면 폭에 따라 다른 일을 한다.** 넓으면 붙박이
           // 사이드바를 접고, 좁으면(md 미만, 사이드바가 아예 없다) 서랍을 연다.

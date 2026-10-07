@@ -220,6 +220,20 @@ location $prefix/ {
     proxy_next_upstream error timeout http_502 http_503;
     proxy_next_upstream_tries 2;
 }
+
+# 화면 조각(이름에 해시) — **한 서버에 없으면 다른 서버에서.** 이중화를 한 대씩 올리는 동안
+# 두 서버의 판이 다르다: 새 판에서 받은 화면이 조각을 옛 판 서버에 물으면 404 가 난다(위의
+# 앱 location 은 404 를 넘기지 않는다 — POST 가 두 번 가면 안 되므로). 여기는 GET 뿐이다.
+location $prefix/assets/ {
+    proxy_pass http://${APP_SLUG}_app/assets/;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host \$host;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-Prefix $prefix;
+    proxy_next_upstream error timeout http_404 http_502 http_503;
+    proxy_next_upstream_tries 2;
+}
 EOF
 }
 
@@ -279,6 +293,20 @@ location $prefix/ {
     proxy_send_timeout 600s;
     # 한 앱이 죽으면 다른 앱으로 — 읽기와 멱등한 것만(POST 는 두 번 가면 안 된다).
     proxy_next_upstream error timeout http_502 http_503;
+    proxy_next_upstream_tries 2;
+}
+
+# 화면 조각(이름에 해시) — **한 서버에 없으면 다른 서버에서.** 이중화를 한 대씩 올리는 동안
+# 두 서버의 판이 다르다: 새 판에서 받은 화면이 조각을 옛 판 서버에 물으면 404 가 난다(위의
+# 앱 location 은 404 를 넘기지 않는다 — POST 가 두 번 가면 안 되므로). 여기는 GET 뿐이다.
+location $prefix/assets/ {
+    proxy_pass http://${APP_SLUG}_app/assets/;
+    proxy_http_version 1.1;
+    proxy_set_header Connection "";
+    proxy_set_header Host \$host;
+    proxy_set_header X-Forwarded-Proto \$scheme;
+    proxy_set_header X-Forwarded-Prefix $prefix;
+    proxy_next_upstream error timeout http_404 http_502 http_503;
     proxy_next_upstream_tries 2;
 }
 EOF

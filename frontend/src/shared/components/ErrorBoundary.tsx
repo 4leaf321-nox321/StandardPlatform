@@ -23,6 +23,7 @@ import type { ErrorInfo, ReactNode } from 'react'
 import { AlertTriangle } from 'lucide-react'
 
 import { PUBLIC_PATH } from '@/shared/base'
+import { isChunkLoadError, isReloading, reloadForNewBuild } from '@/shared/newBuild'
 
 import { Button } from '@/shared/components/ui/button'
 
@@ -52,6 +53,12 @@ export class ErrorBoundary extends Component<Props, State> {
   }
 
   componentDidCatch(error: Error, info: ErrorInfo): void {
+    // **새 판이 나와 옛 조각을 못 받은 것**이면 한 번 새로 고친다 — 화면 코드가 터진 것이
+    // 아니다(`shared/newBuild`). 방금 고쳤는데 또 못 받으면 아래 안내가 남는다.
+    if (isChunkLoadError(error) && reloadForNewBuild()) {
+      this.forceUpdate()
+      return
+    }
     // **원본을 콘솔에 남긴다.** 화면에 스택을 뿌리지 않는 대신, 개발자 도구를 열면
     // 컴포넌트 사슬까지 그대로 보이게 한다.
     console.error('화면에서 처리하지 못한 오류', error, info.componentStack)
@@ -60,6 +67,30 @@ export class ErrorBoundary extends Component<Props, State> {
   render(): ReactNode {
     const { error } = this.state
     if (!error) return this.props.children
+    if (isReloading()) {
+      return (
+        <p className="text-muted-foreground py-16 text-center text-sm">
+          새 판을 불러오는 중입니다…
+        </p>
+      )
+    }
+    if (isChunkLoadError(error)) {
+      return (
+        <div className="mx-auto max-w-lg py-16 text-center">
+          <AlertTriangle className="mx-auto size-8 text-amber-600" />
+          <h1 className="mt-4 text-lg font-semibold">이 화면의 파일을 받지 못했습니다</h1>
+          <p className="text-muted-foreground mt-1 text-sm">
+            새 판이 배포되었거나 서버에 잠깐 닿지 못했습니다. 새로 고치면 대개 낫습니다.
+          </p>
+          <p className="bg-muted text-muted-foreground mt-4 rounded-md p-3 text-left font-mono text-xs break-all">
+            {error.message || String(error)}
+          </p>
+          <div className="mt-5 flex justify-center">
+            <Button onClick={() => window.location.reload()}>새로 고침</Button>
+          </div>
+        </div>
+      )
+    }
 
     return (
       <div className="mx-auto max-w-lg py-16 text-center">
