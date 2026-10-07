@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from app.modules.jobs.schemas import JobOut
 from app.modules.metrics.spec import MetricSpec
@@ -76,6 +76,22 @@ class MetricIn(BaseModel):
     interval_hours: int = Field(default=24, ge=0, le=24 * 30)
     is_active: bool = True
 
+    @field_validator("interval_hours")
+    @classmethod
+    def _whole_days(cls, value: int) -> int:
+        return whole_days(value)
+
+
+def whole_days(value: int) -> int:
+    """주기는 **하루 미만(시간마다)이거나 날 단위(N일마다 밤)** 다 — 36시간 같은 값은 「밤에
+    센다」 와 「시간마다 센다」 어느 쪽인지 말이 안 된다."""
+    if value >= 24 and value % 24:
+        raise ValueError(
+            "하루 이상 주기는 날 단위입니다(24 · 48 · 72 …) — N일마다 밤에 셉니다. "
+            "하루보다 자주 세려면 23시간 이하로."
+        )
+    return value
+
 
 class MetricPatch(BaseModel):
     label: str | None = Field(default=None, min_length=1, max_length=100)
@@ -83,6 +99,11 @@ class MetricPatch(BaseModel):
     spec: MetricSpec | None = None
     interval_hours: int | None = Field(default=None, ge=0, le=24 * 30)
     is_active: bool | None = None
+
+    @field_validator("interval_hours")
+    @classmethod
+    def _whole_days(cls, value: int | None) -> int | None:
+        return None if value is None else whole_days(value)
 
 
 class PlanIn(BaseModel):

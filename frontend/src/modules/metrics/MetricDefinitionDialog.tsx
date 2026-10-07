@@ -12,6 +12,14 @@ import { Plus, Trash2 } from 'lucide-react'
 import { jobsApi } from '@/modules/jobs/api'
 import { metricsApi } from '@/modules/metrics/api'
 import type { Grain, Metric, MetricPlan, MetricSpec } from '@/modules/metrics/api'
+import {
+  MAX_HOURS,
+  MAX_NIGHTS,
+  intervalText,
+  joinInterval,
+  splitInterval,
+} from '@/modules/metrics/interval'
+import type { IntervalMode } from '@/modules/metrics/interval'
 import { GRAIN_LABELS, MEASURE_LABELS, shownNumber } from '@/modules/metrics/metricDrill'
 import { ConditionBar } from '@/modules/objects/ConditionBar'
 import { objectApi } from '@/modules/objects/api'
@@ -120,7 +128,13 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
   // 머무는 기간 — 비우면 없음. 판매 대수를 보증 기간 동안 세면 「보증 중 대수」.
   const [stayPeriods, setStayPeriods] = useState(String(spec0?.stay?.periods ?? ''))
   const [stayFrom, setStayFrom] = useState(spec0?.stay?.periods_from ?? '')
-  const [intervalHours, setIntervalHours] = useState(String(existing?.interval_hours ?? 24))
+  const [intervalMode, setIntervalMode] = useState<IntervalMode>(
+    splitInterval(existing?.interval_hours ?? 24).mode,
+  )
+  const [intervalCount, setIntervalCount] = useState(
+    String(splitInterval(existing?.interval_hours ?? 24).count),
+  )
+  const intervalHours = joinInterval(intervalMode, Number(intervalCount))
   const [plan, setPlan] = useState<MetricPlan | null>(null)
   const [busy, setBusy] = useState<'plan' | 'save' | null>(null)
   const [error, setError] = useState<Error | null>(null)
@@ -250,7 +264,7 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
       const saved = existing
         ? await metricsApi.update(
             existing.slug,
-            { label, description, spec, interval_hours: Number(intervalHours) || 0 },
+            { label, description, spec, interval_hours: intervalHours },
             true,
           )
         : await metricsApi.create(
@@ -260,7 +274,7 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
               description,
               source_type_slug: source,
               spec,
-              interval_hours: Number(intervalHours) || 0,
+              interval_hours: intervalHours,
             },
             true,
           )
@@ -772,13 +786,41 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
             />
           </div>
           <div className="space-y-1">
-            <Label htmlFor="metric-interval">주기 (시간, 0 은 손으로만)</Label>
-            <Input
-              id="metric-interval"
-              type="number"
-              value={intervalHours}
-              onChange={(event) => setIntervalHours(event.target.value)}
-            />
+            <Label htmlFor="metric-interval-mode">주기</Label>
+            <div className="flex items-center gap-2">
+              <Select
+                value={intervalMode}
+                onValueChange={(next) => setIntervalMode(next as IntervalMode)}
+              >
+                <SelectTrigger id="metric-interval-mode" className="w-40">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="nights">밤마다</SelectItem>
+                  <SelectItem value="hours">시간마다(낮에도)</SelectItem>
+                  <SelectItem value="manual">손으로만</SelectItem>
+                </SelectContent>
+              </Select>
+              {intervalMode !== 'manual' && (
+                <Input
+                  id="metric-interval"
+                  aria-label={intervalMode === 'hours' ? '몇 시간마다' : '며칠마다'}
+                  type="number"
+                  min={1}
+                  max={intervalMode === 'hours' ? MAX_HOURS : MAX_NIGHTS}
+                  className="w-20"
+                  value={intervalCount}
+                  onChange={(event) => setIntervalCount(event.target.value)}
+                />
+              )}
+            </div>
+            <p className="text-muted-foreground text-xs">
+              {intervalText(intervalHours)}
+              {intervalMode === 'nights' &&
+                ' — 밤(서버 2시대)에만 셉니다. 무거운 계산이 낮에 안 돌고, 백업에 그날 값이 듭니다.'}
+              {intervalMode === 'hours' && ' — 그 시간이 지나면 낮에도 셉니다.'}
+              {' '}자료가 들어오면(동기화 · 가져오기) 주기와 상관없이 바로 다시 셉니다.
+            </p>
           </div>
         </section>
 

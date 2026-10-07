@@ -686,24 +686,91 @@ def test_적재_뒤_훅이_작업을_넣고_중복은_안_넣는다(
 
 
 def test_타이머가_돌릴_차례(client: TestClient, admin: Signed) -> None:
+    """타이머는 **매시간** 깬다. 하루 미만 주기는 그 시간이 지났으면 아무 때나, 「매일 밤 ·
+    N일마다 밤」 은 밤 시간에만 — 그리고 **타이머가 넣은 밤**에서 센다(끝난 시각이 아니다).
+
+    예전에는 끝난 시각에서 「24시간이 지났나」 를 봐서, 오늘 밤 타이머가 어제 끝난 시각보다 몇
+    분 일찍 깨면 건너뛰어 이틀에 한 번꼴로 셀 수 있었다. 낮에 적재로 다시 센 날도 밤 계산이
+    밀렸다.
+    """
     from app.database import SessionLocal
     from app.modules.metrics import services
+    from app.modules.metrics.models import MetricDef
 
     w = _world(client, admin)
-    every = _define(client, admin, source=w["sales"], spec=_sales_spec(), recompute=False)
+    nightly = _define(client, admin, source=w["sales"], spec=_sales_spec(), recompute=False)
+    hourly = _define(
+        client, admin, source=w["sales"], spec=_sales_spec(), recompute=False, interval_hours=6
+    )
+    weekly = _define(
+        client,
+        admin,
+        source=w["sales"],
+        spec=_sales_spec(),
+        recompute=False,
+        interval_hours=168,
+    )
     manual = _define(
         client, admin, source=w["sales"], spec=_sales_spec(), recompute=False, interval_hours=0
     )
-    with SessionLocal() as db:
-        slugs = {one.slug for one in services.due(db)}
-    assert every["slug"] in slugs and manual["slug"] not in slugs
-    started = client.post(f"/api/metrics/{every['slug']}/recompute", headers=admin.headers)
-    assert finish_job(client, admin, started.json())["status"] == "done"
-    with SessionLocal() as db:
-        assert every["slug"] not in {one.slug for one in services.due(db)}
-        # 하루가 지나면 다시 차례.
-        later = datetime.now(UTC) + timedelta(hours=25)
-        assert every["slug"] in {one.slug for one in services.due(db, later)}
+    night = datetime(2026, 10, 8, 2, 35, tzinfo=UTC)
+
+    def due(now: datetime, *, at_night: bool) -> set[str]:
+        with SessionLocal() as db:
+            mine = {nightly["slug"], hourly["slug"], weekly["slug"], manual["slug"]}
+            return {one.slug for one in services.due(db, now, nightly=at_night)} & mine
+
+    def set_times(slug: str, **values: Any) -> None:
+        with SessionLocal() as db:
+            row = db.scalar(select(MetricDef).where(MetricDef.slug == slug))
+            assert row is not None
+            for key, value in values.items():
+                setattr(row, key, value)
+            db.commit()
+
+    # 한 번도 안 셌다 — 시간마다는 바로, 밤마다는 다음 밤에. 손으로만은 안 센다.
+    assert due(night - timedelta(hours=12), at_night=False) == {hourly["slug"]}
+    assert due(night, at_night=True) == {nightly["slug"], hourly["slug"], weekly["slug"]}
+
+    # 밤에 넣고 몇 분 뒤 끝났다. 다음 밤 타이머가 **몇 분 일찍** 깨어도 차례다.
+    for one in (nightly, weekly):
+        set_times(one["slug"], scheduled_at=night, last_run_at=night + timedelta(minutes=6))
+    set_times(hourly["slug"], last_run_at=night + timedelta(minutes=6))
+    next_night = night + timedelta(days=1) - timedelta(minutes=4)
+    assert nightly["slug"] in due(next_night, at_night=True)
+    assert weekly["slug"] not in due(next_night, at_night=True)  # 7밤마다
+    assert weekly["slug"] in due(night + timedelta(days=7, minutes=-4), at_night=True)
+    # 같은 밤에 두 번은 아니다 · 낮에는 밤마다가 안 돈다(무거운 계산이 낮에 안 돈다).
+    assert nightly["slug"] not in due(night + timedelta(minutes=50), at_night=True)
+    assert nightly["slug"] not in due(night + timedelta(hours=12), at_night=False)
+    # **낮에 적재로 다시 셌어도** 밤 계산은 그대로 — 끝난 시각과 견주지 않는다.
+    set_times(nightly["slug"], last_run_at=night + timedelta(hours=12))
+    assert nightly["slug"] in due(next_night, at_night=True)
+
+    # 시간마다 — 그 시간이 지났으면 낮에도. 타이머가 몇 분 일찍 깨어도 차례다.
+    assert hourly["slug"] not in due(night + timedelta(hours=3), at_night=False)
+    assert hourly["slug"] in due(night + timedelta(hours=6, minutes=-4), at_night=False)
+
+    # 밤을 놓쳤으면(서버가 꺼져 있었다) 아침에 따라잡는다.
+    assert nightly["slug"] in due(night + timedelta(days=1, hours=7), at_night=False)
+
+
+def test_하루_이상_주기는_날_단위다(client: TestClient, admin: Signed) -> None:
+    """36시간 같은 값은 「밤에 센다」 와 「시간마다 센다」 어느 쪽인지 말이 안 된다."""
+    w = _world(client, admin)
+    made = client.post(
+        "/api/metrics",
+        json={
+            "slug": f"m_{uuid.uuid4().hex[:6]}",
+            "label": "주기 틀림",
+            "source_type_slug": w["sales"],
+            "spec": _sales_spec(),
+            "interval_hours": 36,
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 422, made.text
+    assert "날 단위" in made.text
 
 
 def test_고치기와_지우기(client: TestClient, admin: Signed) -> None:
@@ -783,14 +850,15 @@ def test_타이머_스크립트는_차례인_것만_넣고_겹치지_않는다(
     manual = _define(
         client, admin, source=w["sales"], spec=_sales_spec(), recompute=False, interval_hours=0
     )
-    due = Namespace(due=True, all=False, slug=None, now=False)
+    # 밤 시간으로 본다 — 「매일 밤」 지표는 밤에만 차례다.
+    due = Namespace(due=True, all=False, slug=None, now=False, nightly=True)
     with SessionLocal() as db:
         assert module.enqueue(db, due) == 0
         first = capsys.readouterr().out
         assert f"{every['slug']}: 작업" in first and manual["slug"] not in first
-        # 두 번째 — 아직 안 끝난 작업이 있으니 안 넣는다.
+        # 두 번째 — 같은 밤에 또 차례가 아니다(타이머가 넣은 때를 적었다).
         assert module.enqueue(db, due) == 0
-        assert "안 넣습니다" in capsys.readouterr().out
+        assert every["slug"] not in capsys.readouterr().out
         # 하나만 — 꺼진 주기의 지표도 손으로는 넣는다.
         assert (
             module.enqueue(db, Namespace(due=False, all=False, slug=manual["slug"], now=False))

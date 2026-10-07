@@ -76,8 +76,16 @@ class MetricDef(Base):
     """`spec.MetricSpec` — 집계 · 시간 · 코호트 · 기준 · 거르기 · 분모 · 닫힘 일수."""
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     interval_hours: Mapped[int] = mapped_column(Integer, default=24, server_default="24")
-    """0 이면 손으로만. 그 밖이면 타이머(`scripts/recompute_metrics.py --due`)가 이
-    간격으로."""
+    """0 이면 손으로만. 24 미만이면 그 시간마다(낮에도), 24 의 배수면 **N일마다 밤에**
+    (`services.due`). 타이머는 `scripts/recompute_metrics.py --due` 다."""
+    scheduled_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """**타이머가 마지막으로 넣은 때** — 「N일마다 밤」 의 차례는 이것으로 센다.
+
+    계산이 끝난 때(`last_run_at`)로 세면 안 된다 — 오늘 밤 타이머가 어제 끝난 시각보다 몇 분
+    일찍 깨면 「아직 24시간이 안 지났다」 로 건너뛰어 이틀에 한 번꼴로 셀 수 있었고, 낮에
+    적재로 다시 센 날은 그 밤 계산이 밀렸다."""
     overlap: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     """한 기록이 여러 셀에 드나(여러 값 기준 · 여럿과 이어진 걸음). 그러면 셀의 합이 기록
     수보다 크다 — 정의 · 응답 · 화면 세 곳이 이것을 말한다."""

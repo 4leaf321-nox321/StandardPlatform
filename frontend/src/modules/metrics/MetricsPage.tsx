@@ -23,6 +23,7 @@ import { PageHeader } from '@/shared/components/PageHeader'
 import { Button } from '@/shared/components/ui/button'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
+import { intervalText } from '@/modules/metrics/interval'
 
 const TONE: Record<'bad' | 'warn' | 'neutral', string> = {
   bad: 'bg-destructive/10 text-destructive',
@@ -157,9 +158,7 @@ export default function MetricsPage() {
                   {metric.last_run_at
                     ? ` · 계산 시각 ${shownDateTime(metric.last_run_at)}`
                     : ' · 아직 한 번도 안 셌습니다'}
-                  {metric.interval_hours > 0
-                    ? ` · ${metric.interval_hours}시간마다`
-                    : ' · 손으로만'}
+                  {` · ${intervalText(metric.interval_hours)}`}
                 </p>
                 {metric.broken && <p className="text-destructive text-xs">{metric.broken}</p>}
                 {metric.last_status === 'failed' && metric.last_error && (

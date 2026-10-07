@@ -162,7 +162,7 @@ DB_HOST="${DB_HOST_OVERRIDE:-$DB_HOST}"
 # 데이터 소스 동기화 타이머 — 화면에서 간격을 정한 소스를 몇 분마다 돌린다. 앱과 같은 SIF.
 # 이름은 `derive_unit_names` 가 만든다(위).
 SYNC_ENABLED="${SYNC_ENABLED:-1}"                      # 0 으로 두면 타이머 안 설치
-# 지표 다시 계산 타이머 — 밤마다 주기가 지난 지표를 작업으로 넣는다(ADR 0013). 앱과 같은 SIF.
+# 지표 다시 계산 타이머 — 매시간 차례가 된 지표를 작업으로 넣는다(ADR 0013 · 「N일마다 밤」 은 밤에만). 앱과 같은 SIF.
 METRICS_ENABLED="${METRICS_ENABLED:-1}"                # 0 으로 두면 타이머 안 설치
 
 # 작업 워커 — 파일 가져오기처럼 오래 걸리는 일을 요청 밖에서 돌린다. 앱과 같은 SIF.
@@ -571,7 +571,7 @@ setup_sync_timer() {
     info "동기화 타이머: 5분마다 차례가 된 데이터 소스를 돌립니다 (journalctl -u $SYNC_SERVICE_NAME)"
 }
 
-# ── 지표 타이머 — 밤마다(02:30) 주기가 지난 지표를 작업으로 넣는다. 같은 SIF. 비치명적. ──
+# ── 지표 타이머 — 매시간(:30) 차례가 된 지표를 작업으로 넣는다. 같은 SIF. 비치명적. ──
 setup_metrics_timer() {
     [[ "$METRICS_ENABLED" == "1" ]] || { info "지표 타이머 비활성(METRICS_ENABLED=0) — 건너뜀"; return 0; }
     [[ -f "$HERE/metrics.service.template" && -f "$HERE/metrics.timer.template" ]] \
@@ -583,7 +583,7 @@ setup_metrics_timer() {
     systemctl daemon-reload
     systemctl enable --now "${METRICS_SERVICE_NAME}.timer" >/dev/null 2>&1 \
         || warn "지표 타이머 기동 실패 — 'systemctl status ${METRICS_SERVICE_NAME}.timer' 확인"
-    info "지표 타이머: 매일 02:30 주기가 지난 지표를 다시 셉니다 (journalctl -u $METRICS_SERVICE_NAME)"
+    info "지표 타이머: 매시간 차례가 된 지표를 다시 셉니다 — 「매일 밤」 은 2시대 (journalctl -u $METRICS_SERVICE_NAME)"
 }
 
 # ── 백업 타이머 — 백업 폴더를 알 때만. 이중화면 두 서버 모두 걸리고, backup.sh 가 「오늘

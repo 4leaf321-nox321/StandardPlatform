@@ -271,8 +271,24 @@ def enqueue_for_type(db: Session, type_id: uuid.UUID, *, reason: str) -> list[Jo
     return out
 
 
-def due(db: Session, now: datetime | None = None) -> list[MetricDef]:
-    """타이머가 돌릴 차례 — 켜져 있고, 주기가 0 이 아니고, 마지막 계산에서 그만큼 지난 것."""
+#: 타이머는 몇 분 흩뜨려 깬다 — 그만큼은 봐준다(안 그러면 「6시간마다」 가 7시간마다가 된다).
+DUE_GRACE = timedelta(minutes=15)
+#: 「N일마다 밤」 — 밤 시간이면 지난 밤에서 이만큼만 지나도 차례다(밤 시간은 하루 한 번이다).
+NIGHT_EARLY = timedelta(hours=20)
+#: 밤을 놓쳤으면(서버가 꺼져 있었다) 이만큼 지난 뒤 아무 때나 따라잡는다.
+NIGHT_MISSED = timedelta(hours=6)
+
+
+def due(db: Session, now: datetime | None = None, *, nightly: bool = False) -> list[MetricDef]:
+    """타이머가 돌릴 차례 — **타이머는 매시간 깬다.** `nightly` 는 지금이 밤 시간인가.
+
+    - **하루 미만 주기**(6시간 …): 마지막 계산에서 그만큼 지났으면 — 낮에도.
+    - **날 단위 주기**(매일 밤 · N일마다 밤): **밤 시간에만**, 타이머가 마지막으로 넣은 때
+      (`scheduled_at`)에서 N밤이 지났으면. 계산이 끝난 때와 견주지 않는다 — 그러면 오늘 밤
+      타이머가 어제 끝난 시각보다 몇 분 일찍 깨는 밤은 건너뛰어 이틀에 한 번꼴로 셀 수 있었고,
+      낮에 적재로 다시 센 날은 그 밤 계산이 밀렸다. 한 번도 안 넣었으면 다음 밤에.
+    - **밤을 놓쳤으면**(서버가 꺼져 있었다) 아무 때나 따라잡는다 — 그 뒤로는 다시 밤에.
+    """
     now = now or datetime.now(UTC)
     out: list[MetricDef] = []
     for metric in db.scalars(
@@ -280,10 +296,18 @@ def due(db: Session, now: datetime | None = None) -> list[MetricDef]:
         .where(MetricDef.is_active.is_(True), MetricDef.interval_hours > 0)
         .order_by(MetricDef.slug)
     ):
-        if (
-            metric.last_run_at is None
-            or metric.last_run_at + timedelta(hours=metric.interval_hours) <= now
-        ):
+        if metric.interval_hours < 24:
+            every = timedelta(hours=metric.interval_hours)
+            if metric.last_run_at is None or metric.last_run_at + every - DUE_GRACE <= now:
+                out.append(metric)
+            continue
+        nights = timedelta(days=metric.interval_hours // 24)
+        if metric.scheduled_at is None:
+            if nightly:
+                out.append(metric)
+            continue
+        since = now - metric.scheduled_at
+        if (nightly and since >= nights - NIGHT_EARLY) or since >= nights + NIGHT_MISSED:
             out.append(metric)
     return out
 
