@@ -165,8 +165,18 @@ def test_태그를_밀면_번들이_나온다() -> None:
     assert "build_bundle.sh" in text, "릴리스가 번들을 안 만듭니다"
     assert "gh release create" in text, "릴리스가 산출물을 안 올립니다"
     # **검증을 통과해야 나간다.** 안 그러면 아무도 안 돌려 본 코드가 tar 로 나가고,
-    # 깨졌다는 사실은 운영 서버에서 드러난다.
-    assert "needs: verify" in text, "릴리스가 검증을 안 기다립니다"
+    # 깨졌다는 사실은 운영 서버에서 드러난다. 검증은 둘 중 하나다 — 같은 커밋에서 이미
+    # 통과한 CI 를 쓰거나(`ci-passed`), 그것이 없으면 verify 가 전부 돌린다.
+    assert "needs: [ci-passed, verify]" in text, "릴리스가 검증을 안 기다립니다"
+    assert "if: needs.ci-passed.outputs.passed != 'true'" in text, (
+        "verify 를 건너뛰는 조건이 바뀌었습니다 — 같은 커밋의 CI 가 통과했을 때만 건너뛴다"
+    )
+    # 건너뛴 verify 를 통과로 치는 것은 **그 커밋의 CI 가 통과로 끝났을 때만**이다.
+    assert "needs.ci-passed.result == 'success'" in text
+    assert "(needs.verify.result == 'success' || needs.verify.result == 'skipped')" in text
+    assert "head_sha=${GITHUB_SHA}" in text and '" completed/success "' in text, (
+        "다른 커밋이나 끝나지 않은 CI 를 통과로 읽습니다"
+    )
     ci = (REPO / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
     assert "workflow_call" in ci, "ci.yml 을 릴리스에서 불러 쓸 수 없습니다"
 
