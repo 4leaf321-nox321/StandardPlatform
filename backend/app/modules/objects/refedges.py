@@ -469,14 +469,15 @@ def child_ids(db: Session, *, relation: str, parent_id: uuid.UUID) -> list[uuid.
 
 
 def child_counts(
-    db: Session, *, relation: str, parent_ids: list[uuid.UUID]
+    db: Session, *, relation: str, parent_ids: list[uuid.UUID], user: User | None = None
 ) -> dict[uuid.UUID, int]:
+    """자식(나를 칸으로 가리키는 것) 수 — `user` 를 주면 그 사람이 볼 수 있는 것만."""
     kind = _kind(db, relation)
     if kind is None or not parent_ids:
         return {}
     counts: Counter[uuid.UUID] = Counter()
     for batch in chunks(parent_ids):
-        rows = db.execute(
+        stmt = (
             select(ObjectRef.dst_id, func.count())
             .where(
                 ObjectRef.dst_id.in_(batch),
@@ -485,7 +486,11 @@ def child_counts(
             )
             .group_by(ObjectRef.dst_id)
         )
-        for dst, count in rows:
+        if user is not None and not user.is_system_admin:
+            stmt = stmt.join(ObjectInstance, ObjectInstance.id == ObjectRef.src_id).where(
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+            )
+        for dst, count in db.execute(stmt):
             counts[dst] += int(count)
     return dict(counts)
 
@@ -534,20 +539,21 @@ def ancestor_ids(
     return out
 
 
-def parentless_ids(db: Session, *, relation: str, type_id: uuid.UUID) -> list[uuid.UUID]:
-    """그 칸으로 아무것도 가리키지 않는 것 — 트리의 뿌리."""
+def parentless_ids(
+    db: Session, *, relation: str, type_id: uuid.UUID, user: User | None = None
+) -> list[uuid.UUID]:
+    """그 칸으로 아무것도 가리키지 않는 것 — 트리의 뿌리. `user` 를 주면 보이는 것만."""
     kind = _kind(db, relation)
     if kind is None:
         return []
     pointing = select(ObjectRef.src_id).where(
         ObjectRef.src_id == ObjectInstance.id, ObjectRef.key == kind.key
     )
-    return list(
-        db.scalars(
-            select(ObjectInstance.id).where(
-                ObjectInstance.type_id == type_id,
-                ObjectInstance.deleted_at.is_(None),
-                ~pointing.exists(),
-            )
-        )
+    stmt = select(ObjectInstance.id).where(
+        ObjectInstance.type_id == type_id,
+        ObjectInstance.deleted_at.is_(None),
+        ~pointing.exists(),
     )
+    if user is not None:
+        stmt = stmt.where(visible_owner_clause(user, ObjectInstance.owner_workspace_id))
+    return list(db.scalars(stmt))

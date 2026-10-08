@@ -588,3 +588,21 @@ def test_소스를_지우면_객체는_남는다(client: TestClient, admin: Sign
         == 204
     )
     assert set(_records(client, admin, w["report"])) == {"RA-1"}
+
+
+def test_전량_대조에서_제목만_빈_보고서는_내려감이_아니다(
+    client: TestClient, admin: Signed, ra: FakeRA
+) -> None:
+    """제목이 빈 보고서는 깨진 행으로 건너뛴다 — 그런데 「이번에 온 것」 에서도 빠져, 전량
+    대조가 그것을 「원본에서 내려감」 으로 잘못 적었다(2026-10-08). RA 에는 그대로 있다."""
+    w = _setup(client, admin)
+    for rid in (1, 2, 3):
+        ra.add(rid, f"보고 {rid}", board="cae-2", changed=rid)
+    _sync(client, admin, w["source"])
+
+    ra.reports[2]["title"] = ""
+    _age_reconcile(w["source"])
+    done = _sync(client, admin, w["source"])
+    assert done["counts"]["full_read"] == 1, done["counts"]
+    assert done["counts"].get("gone", 0) == 0, done["counts"]
+    assert _full(client, admin, w["report"], "RA-2")["properties"]["origin_state"] == "게시 중"

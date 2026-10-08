@@ -27,6 +27,7 @@ from app.modules.accounts.schemas import (
     TemporaryPasswordResponse,
 )
 from app.shared.auth import require_system_admin
+from app.shared.pagination import Page
 
 router = APIRouter(prefix="/accounts", tags=["accounts"])
 
@@ -59,16 +60,27 @@ def account_summary(
     )
 
 
-@router.get("", response_model=list[AccountOut])
+@router.get("", response_model=Page[AccountOut])
 def list_accounts(
     status: str | None = Query(default=None, pattern="^(pending|active|suspended)$"),
     limit: int = Query(default=50, ge=1, le=100),
     offset: int = Query(default=0, ge=0),
     _: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
-) -> list[AccountOut]:
+) -> Page[AccountOut]:
+    """계정 목록 — **`total` 을 함께 준다**(다른 목록과 같은 `Page` 모양).
+
+    맨 리스트로 주던 때는 화면이 처음 50명만 그리고 끝이었다 — 쪽을 넘길 근거(전체 수)가
+    없어서다. 그리고 목록은 잘렸다는 말을 안 하므로 관리자는 그것이 전부라고 읽었다
+    (2026-10-08).
+    """
     users = services.list_accounts(db, status=status, limit=limit, offset=offset)
-    return [services.account_out(db, user) for user in users]
+    return Page[AccountOut](
+        items=[services.account_out(db, user) for user in users],
+        total=services.count_accounts(db, status=status),
+        limit=limit,
+        offset=offset,
+    )
 
 
 @router.post("", response_model=TemporaryPasswordResponse, status_code=201)

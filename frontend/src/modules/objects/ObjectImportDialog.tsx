@@ -35,7 +35,9 @@ import {
   planIsClean,
 } from '@/modules/objects/ImportPlanTable'
 import type { ObjectType } from '@/modules/ontology/api'
+import { OwnerWorkspacePicker } from '@/modules/workspaces/OwnerWorkspacePicker'
 import { useAuth } from '@/shared/auth/AuthContext'
+import { defaultOwnerWorkspace } from '@/shared/auth/roles'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
 import {
@@ -118,7 +120,9 @@ interface ObjectImportDialogProps {
 
 export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDialogProps) {
   const { user } = useAuth()
-  const myWorkspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
+  /** 새로 만드는 객체의 소유 부서 — **내가 관리자인 부서 중에서.** 대표 소속을 고정으로 보내던
+   *  때는 B 의 관리자인데 대표 소속 A 에서는 멤버인 사람이 늘 403 을 봤다(2026-10-08). */
+  const [owner, setOwner] = useState<string | null>(() => defaultOwnerWorkspace(user))
   const [kind, setKind] = useState<Kind>('objects')
   const [file, setFile] = useState<File | null>(null)
   /** 「표에 붙여넣기」 — 파일을 못 만드는 곳(사내 DRM)에서 이 길이 유일하다. */
@@ -211,7 +215,7 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
       const started =
         kind === 'objects'
           ? await objectApi.import(type.slug, sending, {
-              workspaceSlug: myWorkspace,
+              workspaceSlug: owner,
               aliasesMode: replaceAliases ? 'replace' : 'add',
               humanEdits: overwriteHuman ? 'overwrite' : 'keep',
             })
@@ -337,6 +341,22 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
 
         {kind === 'objects' ? (
           <div className="space-y-1.5">
+            {/* 계획은 그 부서를 보고 세운다(같은 식별자를 찾는 범위 · 권한) — 바꾸면 다시 본다. */}
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              <label htmlFor="import-owner" className="text-muted-foreground">
+                새로 만드는 것의 소유 부서
+              </label>
+              <OwnerWorkspacePicker
+                id="import-owner"
+                className="w-64"
+                value={owner}
+                onChange={(next) => {
+                  setOwner(next)
+                  setPlan(null)
+                  setPlanJob(null)
+                }}
+              />
+            </div>
             <label className="text-muted-foreground flex items-center gap-2 text-xs">
               <input
                 type="checkbox"

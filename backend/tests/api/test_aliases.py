@@ -156,6 +156,27 @@ def test_합치면_지는_쪽_이름이_별칭으로_남는다(client: TestClien
     assert row["properties"]["vendor"] == ansys["id"]
 
 
+def test_지는_쪽_이름을_다른_객체가_별칭으로_가졌어도_합친다(
+    client: TestClient, admin: Signed
+) -> None:
+    """타입 안에서 별칭 (종류, 값)은 하나뿐이다 — 제3의 객체가 이미 그 이름을 별칭으로
+    가졌으면 이긴 쪽 별칭으로 못 남긴다. 예전에는 그대로 넣어 합치기가 500 이었다
+    (2026-10-08). 남기지 못한 겹침은 품질 검사가 센다."""
+    vendor = _make_type(client, admin, label="공급사", key_policy="optional")
+    ansys = _make_object(client, admin, vendor, label="Ansys")
+    dup = _make_object(client, admin, vendor, label="ANSYS Inc.")
+    other = _make_object(client, admin, vendor, label="앤시스 코리아")
+    _aliases(client, admin, vendor, other["id"], ["ANSYS Inc."])
+    merged = client.post(
+        f"/api/objects/{vendor}/{dup['id']}/merge",
+        json={"into": ansys["id"]},
+        headers=admin.headers,
+    )
+    assert merged.status_code == 200, merged.text
+    winner = client.get(f"/api/objects/{vendor}/{ansys['id']}", headers=admin.headers).json()
+    assert "ANSYS Inc." not in winner["object"]["aliases"]
+
+
 def test_별칭이_다른_객체의_이름과_같으면_품질에_뜬다(
     client: TestClient, admin: Signed
 ) -> None:

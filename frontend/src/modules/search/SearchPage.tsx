@@ -49,6 +49,14 @@ export default function SearchPage() {
   const [data, setData] = useState<SearchResult | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<Error | null>(null)
+  /**
+   * **안 좁힌 결과의 타입별 수 · 전체 수** — 이 말(`q`)에 대해.
+   *
+   * 서버는 좁히면 `types` 를 그 타입 하나로 줄이고 `total` 도 그 타입의 수로 준다. 그것을 그대로
+   * 쓰던 때는 타입을 고르는 순간 「전체 N」 이 좁힌 수가 되고 다른 타입 단추가 사라져, 옆 타입으로
+   * 옮기려면 「전체」 로 돌아갔다 와야 했다(2026-10-08). 그래서 안 좁힌 결과를 들고 있는다.
+   */
+  const [overview, setOverview] = useState<{ q: string; result: SearchResult } | null>(null)
 
   useEffect(() => setTyped(q), [q])
 
@@ -65,6 +73,7 @@ export default function SearchPage() {
         if (cancelled) return
         setData(found)
         setError(null)
+        if (!type) setOverview({ q, result: found })
       })
       .catch((caught: unknown) => {
         if (!cancelled) setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
@@ -76,6 +85,26 @@ export default function SearchPage() {
       cancelled = true
     }
   }, [q, type, offset])
+
+  // 좁힌 주소로 바로 들어왔으면(링크 · 새로 고침) 안 좁힌 수를 한 번 따로 묻는다.
+  const known = overview?.q === q
+  useEffect(() => {
+    if (!q || !type || known) return
+    let cancelled = false
+    searchApi
+      .find(q)
+      .then((found) => {
+        if (!cancelled) setOverview({ q, result: found })
+      })
+      .catch(() => {
+        // 못 받으면 좁힌 결과의 단추로 남는다 — 목록 자체는 이미 섰다.
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [q, type, known])
+  /** 타입 단추 · 「전체」 의 수 — 안 좁힌 결과가 있으면 그것, 아직이면 지금 결과. */
+  const counted = known ? overview.result : data
 
   function go(next: { q?: string; type?: string | null; offset?: number }) {
     const copy = new URLSearchParams()
@@ -121,18 +150,18 @@ export default function SearchPage() {
 
       <ErrorNotice error={error} />
 
-      {data && data.types.length > 0 && (
+      {counted && counted.types.length > 0 && (
         <div className="mb-4 flex flex-wrap items-center gap-2">
           {/* **타입마다 몇 건인지가 곧 좁히는 단추다.** 상한에 걸렸을 때 나머지가
-              어디 있는지 이것만이 말해 준다. */}
+              어디 있는지 이것만이 말해 준다. 좁힌 뒤에도 그대로 선다 — 옆 타입으로 바로 옮긴다. */}
           <Button
             variant={type ? 'outline' : 'secondary'}
             size="sm"
             onClick={() => go({ type: null, offset: 0 })}
           >
-            전체 {data.total}
+            전체 {counted.total}
           </Button>
-          {data.types.map((one) => (
+          {counted.types.map((one) => (
             <Button
               key={one.type_slug}
               variant={type === one.type_slug ? 'secondary' : 'outline'}

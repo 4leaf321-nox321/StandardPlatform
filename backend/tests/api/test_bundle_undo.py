@@ -11,7 +11,9 @@ import uuid
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy.orm import Session
 
+from app.modules.objects.models import ObjectLink
 from tests.api.conftest import Signed, bundle_import, finish_job
 
 
@@ -311,3 +313,308 @@ def test_남의_판은_못_되돌린다(client: TestClient, admin: Signed, membe
     # 남의 판은 목록에도 안 보인다.
     mine = client.get("/api/bundles/runs", headers=member.headers).json()
     assert loaded["run_id"] not in {one["id"] for one in mine}
+
+
+# --- 전부 아니면 무 · 다시 잇기 · 만든 것 지우기 (2026-10-08) -------------------------
+
+
+def _tools(
+    client: TestClient, who: Signed, tool: str, rows: list[dict[str, Any]], **more: Any
+) -> dict[str, Any]:
+    loaded = bundle_import(
+        client,
+        who,
+        {
+            "objects": [{"type_slug": tool, "workspace_slug": who.workspace, "rows": rows}],
+            "apply": True,
+            **more,
+        },
+    )
+    assert loaded["applied"] is True, loaded
+    return loaded
+
+
+def _links(
+    client: TestClient, who: Signed, tool: str, rows: list[dict[str, Any]], mode: str = "add"
+) -> dict[str, Any]:
+    loaded = bundle_import(
+        client,
+        who,
+        {"relations": [{"type_slug": tool, "rows": rows, "mode": mode}], "apply": True},
+    )
+    assert loaded["applied"] is True, loaded
+    return loaded
+
+
+def _edges(client: TestClient, who: Signed, tool: str, object_id: str) -> set[str]:
+    """그 객체에서 나가는 선의 도착점 이름."""
+    got = client.get(f"/api/objects/{tool}/{object_id}", headers=who.headers)
+    assert got.status_code == 200, got.text
+    return {one["object_label"] for one in got.json()["related"] if one["outgoing"] is True}
+
+
+def test_오류_줄이_있으면_앞_줄도_안_되돌린다(client: TestClient, admin: Signed) -> None:
+    """**`apply=true` 로 곧장 부르면 일부만 커밋되고 「적용 안 됨」 이라 말했다.**
+
+    거꾸로 읽으며 줄마다 flush 하는데, 오류 줄을 만나도 루프가 계속 돌았고 워커는 결과가
+    무엇이든 커밋했다. 이 판이 만든 객체는 지워지고, 값을 되돌릴 줄은 오류인 채로 남았다 —
+    판은 「되돌리지 않음」 이라 다시 되돌릴 수도 없었다.
+    """
+    base, names = _world(admin.workspace)
+    assert bundle_import(client, admin, base)["applied"] is True
+    tool = names["tool"]
+    made = client.post(
+        f"/api/ontology/types/{tool}/properties",
+        json={
+            "key": "grade",
+            "label": "등급",
+            "data_type": "enum",
+            "enum_options": ["A", "B"],
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    _tools(client, admin, tool, [{"key": "T-1", "label": "툴1", "grade": "A"}])
+    # 이 판은 T-1 의 등급을 B 로 고치고 T-2 를 새로 만든다 — 거꾸로 읽으면 T-2 를 먼저 지운다.
+    second = _tools(
+        client,
+        admin,
+        tool,
+        [{"key": "T-1", "label": "툴1", "grade": "B"}, {"key": "T-2", "label": "툴2"}],
+    )
+    # 그 뒤 관리자가 고를 값 A 를 뺐다 — T-1 을 A 로 되돌리는 줄은 지금 정의에 안 맞는다.
+    narrowed = client.patch(
+        f"/api/ontology/types/{tool}/properties/grade",
+        json={"key": "grade", "label": "등급", "data_type": "enum", "enum_options": ["B"]},
+        headers=admin.headers,
+    )
+    assert narrowed.status_code == 200, narrowed.text
+
+    done = _undo(client, admin, second["run_id"], apply=True)
+    assert done["applied"] is False and done["ok"] is False, done
+    assert any(one["action"] == "error" for one in done["rows"]), done["rows"]
+    # 앞 줄(T-2 지우기)도 안 바뀌었다.
+    assert {one["key"] for one in _rows(client, admin, tool)} == {"T-1", "T-2"}
+    runs = client.get("/api/bundles/runs", headers=admin.headers).json()
+    mine = next(one for one in runs if one["id"] == second["run_id"])
+    assert mine["undoable"] is True and mine["undone_at"] is None, mine
+
+
+def _moved(client: TestClient, admin: Signed) -> tuple[dict[str, str], str, str]:
+    """툴 T-1 의 소속을 맞춤(`replace`)으로 미국사 → 한국사로 옮긴 판 — (이름들, 판, T-1 id).
+
+    맞춤은 새 선을 이은 뒤 옛 선을 끊는다. 소속은 그때 「여럿」 이었다 — 「하나만」 이면 새
+    선을 잇는 자리에서 막혀 옮기지 못한다.
+    """
+    base, names = _world(admin.workspace)
+    owner = _uniq("ownedby")
+    base["ontology"]["relation_types"].append(
+        {
+            "slug": owner,
+            "label": "소속",
+            "src_type_slugs": [names["tool"]],
+            "dst_type_slugs": [names["company"]],
+        }
+    )
+    base["objects"][0]["rows"].extend(
+        [{"key": "C-2", "label": "한국사"}, {"key": "C-3", "label": "일본사"}]
+    )
+    assert bundle_import(client, admin, base)["applied"] is True
+    tool = names["tool"]
+    _tools(client, admin, tool, [{"key": "T-1", "label": "툴1"}])
+    _links(client, admin, tool, [{"src": "T-1", "relation": owner, "dst": "C-1"}])
+    moved = _links(
+        client, admin, tool, [{"src": "T-1", "relation": owner, "dst": "C-2"}], mode="replace"
+    )
+    t1 = str(_rows(client, admin, tool)[0]["id"])
+    assert _edges(client, admin, tool, t1) == {"한국사"}
+    return {**names, "owner": owner}, str(moved["run_id"]), t1
+
+
+def _tighten(client: TestClient, admin: Signed, slug: str) -> None:
+    """그 뒤 관리자가 소속을 「하나만」 으로 조였다."""
+    tightened = client.patch(
+        f"/api/ontology/relation-types/{slug}",
+        json={"cardinality": "many_to_one"},
+        headers=admin.headers,
+    )
+    assert tightened.status_code == 200, tightened.text
+
+
+def test_되돌리며_끊을_선은_개수_제약에_안_센다(client: TestClient, admin: Signed) -> None:
+    """**거꾸로 읽으면 옛 선을 먼저 되살린다** — 그때 새 선은 아직 있지만 곧 이 되돌리기가
+    끊는다. 그것을 막는 것으로 세면 「하나만」 으로 조인 관계의 판은 하나도 못 되돌린다."""
+    names, run_id, t1 = _moved(client, admin)
+    tool = names["tool"]
+    _tighten(client, admin, names["owner"])
+
+    plan = _undo(client, admin, run_id)
+    assert plan["ok"] is True, plan["rows"]
+    done = _undo(client, admin, run_id, apply=True)
+    assert done["applied"] is True, done
+    assert _edges(client, admin, tool, t1) == {"미국사"}
+
+
+def test_같은_선이_다시_이어졌으면_그대로_둔다(client: TestClient, admin: Signed) -> None:
+    """그 사이 **같은 선이 새 id 로** 이어졌으면, 되살리면 유일 제약에 걸려 작업이 죽었다 —
+    그 판은 영영 못 되돌렸다."""
+    base, names = _world(admin.workspace)
+    base["objects"][0]["rows"].append({"key": "C-2", "label": "한국사"})
+    assert bundle_import(client, admin, base)["applied"] is True
+    tool, made_by = names["tool"], names["made_by"]
+    _tools(client, admin, tool, [{"key": "T-1", "label": "툴1"}])
+    _links(client, admin, tool, [{"src": "T-1", "relation": made_by, "dst": "C-1"}])
+    moved = _links(
+        client,
+        admin,
+        tool,
+        [{"src": "T-1", "relation": made_by, "dst": "C-2"}],
+        mode="replace",
+    )
+    t1 = _rows(client, admin, tool)[0]["id"]
+    c1 = next(
+        one["id"] for one in _rows(client, admin, names["company"]) if one["key"] == "C-1"
+    )
+    # 사람이 끊긴 선을 손으로 다시 이었다(새 id).
+    again = client.post(
+        f"/api/objects/{tool}/{t1}/relations",
+        json={"relation": made_by, "dst_object_id": c1},
+        headers=admin.headers,
+    )
+    assert again.status_code == 201, again.text
+
+    done = _undo(client, admin, moved["run_id"], apply=True)
+    assert done["applied"] is True, done
+    row = next(one for one in done["rows"] if "미국사" in one["label"])
+    assert row["action"] == "unchanged" and "이미" in row["message"], row
+    assert _edges(client, admin, tool, t1) == {"미국사"}
+
+
+def test_되살리면_개수_제약을_깨는_선은_오류다(client: TestClient, admin: Signed) -> None:
+    """**「하나만」 관계에 둘째가 조용히 들어갔다** — 되살리기가 id 로만 있나를 보고 개수
+    제약 · 순환 · 관계 종류를 안 봤다. 오류 줄이고, 계획에도 같은 말이 뜬다."""
+    names, run_id, t1 = _moved(client, admin)
+    tool, owner = names["tool"], names["owner"]
+    moved = {"run_id": run_id}
+    # 그 뒤 사람이 C-2 선을 끊고 C-3 에 이었다 — 이 판 밖의 선이다.
+    profile = client.get(f"/api/objects/{tool}/{t1}", headers=admin.headers).json()
+    edge = next(one for one in profile["related"] if one["object_label"] == "한국사")
+    cut = client.delete(
+        f"/api/objects/{tool}/{t1}/relations/{edge['relation_id']}", headers=admin.headers
+    )
+    assert cut.status_code == 204, cut.text
+    c3 = next(
+        one["id"] for one in _rows(client, admin, names["company"]) if one["key"] == "C-3"
+    )
+    linked = client.post(
+        f"/api/objects/{tool}/{t1}/relations",
+        json={"relation": owner, "dst_object_id": c3},
+        headers=admin.headers,
+    )
+    assert linked.status_code == 201, linked.text
+    _tighten(client, admin, owner)
+
+    plan = _undo(client, admin, moved["run_id"])
+    assert plan["ok"] is False, plan["rows"]
+    row = next(one for one in plan["rows"] if "미국사" in one["label"])
+    assert row["action"] == "error" and "하나만" in row["message"], row
+    done = _undo(client, admin, moved["run_id"], apply=True)
+    assert done["applied"] is False, done
+    assert _edges(client, admin, tool, t1) == {"일본사"}
+
+
+def test_만든_객체도_그_사이_고쳤으면_안_지운다(client: TestClient, admin: Signed) -> None:
+    """문서는 「남의 변경을 덮지 않는다」 고 약속하는데 **만든 줄에는 그 검사가 없었다** —
+    사람이 그 뒤 고친 객체를 통째로 지웠다."""
+    base, names = _world(admin.workspace)
+    assert bundle_import(client, admin, base)["applied"] is True
+    tool = names["tool"]
+    loaded = _tools(client, admin, tool, [{"key": "T-1", "label": "툴1"}])
+    made = _rows(client, admin, tool)[0]
+    changed = client.patch(
+        f"/api/objects/{tool}/{made['id']}",
+        json={"properties": {"note": "사람이 적음"}},
+        headers=admin.headers,
+    )
+    assert changed.status_code == 200, changed.text
+
+    plan = _undo(client, admin, loaded["run_id"])
+    row = next(one for one in plan["rows"] if one["object_id"] == made["id"])
+    assert row["action"] == "unchanged" and "고쳐져" in row["message"], row
+    done = _undo(client, admin, loaded["run_id"], apply=True)
+    assert done["applied"] is True, done
+    assert [one["key"] for one in _rows(client, admin, tool)] == ["T-1"]
+
+
+def test_원_표에서_오는_선이_있으면_안_지운다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """원 표(계정 · 부서)가 출발점인 선은 **이 객체가 도착점**이다 — 출발점만 봐서, 지우면 그
+    선이 가리킬 곳 없이 남았다."""
+    base, names = _world(admin.workspace)
+    assert bundle_import(client, admin, base)["applied"] is True
+    tool = names["tool"]
+    loaded = _tools(client, admin, tool, [{"key": "T-1", "label": "툴1"}])
+    made = _rows(client, admin, tool)[0]
+    db.add(
+        ObjectLink(
+            src_type="user",
+            src_id=uuid.uuid4(),
+            dst_type=tool,
+            dst_id=uuid.UUID(made["id"]),
+            relation=names["made_by"],
+        )
+    )
+    db.commit()
+
+    plan = _undo(client, admin, loaded["run_id"])
+    row = next(one for one in plan["rows"] if one["object_id"] == made["id"])
+    assert row["action"] == "unchanged" and "가리켜 안 지웁니다" in row["message"], row
+
+
+def test_되살리면_순환이_생기는_선은_오류다(client: TestClient, admin: Signed) -> None:
+    """순환을 막는 관계에 **돌아오는 길**이 그 사이 생겼으면, 끊었던 선을 되살리는 순간 트리가
+    무한히 돈다 — 되살리기가 그것을 안 봤다."""
+    base, names = _world(admin.workspace)
+    follows = _uniq("follows")
+    base["ontology"]["relation_types"].append(
+        {
+            "slug": follows,
+            "label": "뒤따름",
+            "transitive": True,
+            "acyclic": True,
+            "src_type_slugs": [names["tool"]],
+            "dst_type_slugs": [names["tool"]],
+        }
+    )
+    assert bundle_import(client, admin, base)["applied"] is True
+    tool = names["tool"]
+    _tools(
+        client,
+        admin,
+        tool,
+        [{"key": f"T-{n}", "label": f"툴{n}"} for n in (1, 2, 3)],
+    )
+    _links(client, admin, tool, [{"src": "T-1", "relation": follows, "dst": "T-2"}])
+    moved = _links(
+        client,
+        admin,
+        tool,
+        [{"src": "T-1", "relation": follows, "dst": "T-3"}],
+        mode="replace",
+    )
+    ids = {one["key"]: one["id"] for one in _rows(client, admin, tool)}
+    # 그 뒤 사람이 T-2 → T-1 을 이었다 — T-1 → T-2 가 되살아나면 고리다.
+    back = client.post(
+        f"/api/objects/{tool}/{ids['T-2']}/relations",
+        json={"relation": follows, "dst_object_id": ids["T-1"]},
+        headers=admin.headers,
+    )
+    assert back.status_code == 201, back.text
+
+    plan = _undo(client, admin, moved["run_id"])
+    row = next(one for one in plan["rows"] if one["label"].endswith("툴2"))
+    assert row["action"] == "error" and "순환" in row["message"], plan["rows"]
+    done = _undo(client, admin, moved["run_id"], apply=True)
+    assert done["applied"] is False, done
+    assert _edges(client, admin, tool, ids["T-1"]) == {"툴3"}

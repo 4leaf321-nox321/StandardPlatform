@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import logging
 import signal
+import threading
 import time
 from typing import Any
 
@@ -27,6 +28,28 @@ HEARTBEAT_EVERY = 30.0
 RECOVER_EVERY = 60.0
 PURGE_EVERY = 3600.0
 IDLE_MAX = 5.0
+#: 고아 첨부 정리는 기동 한 시간 뒤가 첫 차례 — 업데이트로 워커가 자주 다시 떠도 밀리지 않게,
+#: 그렇다고 기동하자마자 저장소 전체를 훑지는 않게.
+GC_FIRST_AFTER = 3600.0
+
+
+def _clean_orphans() -> None:
+    """고아 첨부 정리 한 차례 — 워커의 바퀴와 **다른 스레드**에서(제 세션으로) 돈다."""
+    from app.modules.files import gc
+
+    try:
+        with SessionLocal() as db:
+            done = gc.clean(db, gc.scan(db))
+    except Exception:
+        log.exception("고아 첨부 정리 실패 — 다음 차례에 다시")
+        return
+    if done.files or done.temp:
+        log.info(
+            "고아 첨부 정리: 파일 %d개(%.1fMB) · 임시 파일 %d개",
+            done.files,
+            done.bytes / 1024 / 1024,
+            done.temp,
+        )
 
 
 class Worker:
@@ -37,6 +60,10 @@ class Worker:
         self._last_recover = 0.0
         self._last_purge = 0.0
         self._last_webhook = 0.0
+        hours = get_settings().filestore_gc_hours
+        self._gc_every = hours * 3600.0 if hours > 0 else 0.0
+        self._last_gc = time.monotonic() - max(self._gc_every - GC_FIRST_AFTER, 0.0)
+        self._gc_thread: threading.Thread | None = None
 
     def _tick_housekeeping(self) -> None:
         now = time.monotonic()
@@ -76,6 +103,23 @@ class Worker:
                     old_undo,
                 )
             self._last_purge = now
+        if self._gc_every and now - self._last_gc >= self._gc_every:
+            # **아무 첨부도 안 가리키는 파일** — 거절된 업로드 · 뗀 첨부의 파일이 쌓이기만 했다
+            # (`files/gc.py`). 서버마다 저장소가 따로면 각자 제 것을, 같이 쓰면 둘이 같은 것을
+            # 훑는다 — 지우기는 없는 파일을 넘어가므로 겹쳐도 된다.
+            # **실패해도 차례는 넘긴다** — 시각을 안 옮기면 5초마다 저장소 전체를 다시 훑는다.
+            self._last_gc = now
+            if self._gc_thread is not None and self._gc_thread.is_alive():
+                log.warning("앞 차례의 고아 첨부 정리가 아직 돕니다 — 이번 차례는 건너뜁니다")
+            else:
+                # ⚠️ **따로 돈다.** 이 바퀴 안에서 돌면 큰 저장소를 훑는 동안 박동이 멎어, 5분을
+                #    넘기면 살아 있는 워커가 화면에서 「꺼짐」 이 되고 그동안 작업 · 웹훅도 못
+                #    집었다(2026-10-08). 정리는 파일과 제 연결만 만지므로 바퀴와 나란히 돌아도
+                #    된다.
+                self._gc_thread = threading.Thread(
+                    target=_clean_orphans, name="filestore-gc", daemon=True
+                )
+                self._gc_thread.start()
 
     def run_forever(self) -> None:
         settings = get_settings()
@@ -103,6 +147,10 @@ class Worker:
                 # 비어 있으면 천천히 — 빈 표를 2초마다 두드리는 것은 DB 에 대한 예의가 아니다.
                 time.sleep(idle)
                 idle = min(idle * 1.5, IDLE_MAX)
+        if self._gc_thread is not None and self._gc_thread.is_alive():
+            # 데몬 스레드라 프로세스와 함께 끊긴다 — 지우기는 파일 하나씩이라 반쯤 남아도
+            # 다음 차례가 처음부터 다시 훑는다.
+            log.info("고아 첨부 정리가 도는 중에 멈춥니다 — 다음 차례에 처음부터 다시")
         log.info("워커 종료: %s", self.worker_id)
 
     def handle_signal(self, signum: int, _frame: Any) -> None:

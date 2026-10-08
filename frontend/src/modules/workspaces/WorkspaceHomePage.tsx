@@ -23,6 +23,7 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 
+import { MetricHomeWidget } from '@/modules/metrics/MetricHomeWidget'
 import { HomeWidget } from '@/modules/objects/HomeWidget'
 import { AddWidgetDialog } from '@/modules/workspaces/AddWidgetDialog'
 import { objectApi, viewApi } from '@/modules/objects/api'
@@ -55,6 +56,19 @@ export default function WorkspaceHomePage() {
   const canAdd = isManagerOf(user, slug)
 
   const workspace = user?.memberships.find((one) => one.slug === slug)
+
+  // **자리와 메뉴는 그 위젯의 부서 안에서** 센다 — 「다른 부서 것도」 를 켜면 여러 부서가 한
+  // 줄로 서는데, 그 줄의 순번을 그대로 보내면 서버(부서마다의 자리)가 엉뚱한 곳으로 옮겼고,
+  // 지금 부서의 관리자라고 남의 부서 위젯에 메뉴를 세워 누르면 거절됐다(2026-10-08).
+  const shown = widgets.data ?? []
+  const place = (one: (typeof shown)[number]) => {
+    const same = shown.filter((other) => other.workspace_slug === one.workspace_slug)
+    return {
+      canEdit: isManagerOf(user, one.workspace_slug),
+      index: same.indexOf(one),
+      total: same.length,
+    }
+  }
 
   return (
     <div className="space-y-8">
@@ -150,18 +164,27 @@ export default function WorkspaceHomePage() {
             </div>
           </div>
           <div className="grid gap-4 lg:grid-cols-2">
-            {(widgets.data ?? []).map((one, index) => (
-              <HomeWidget
-                key={one.view.id}
-                widget={one}
-                // 여러 부서를 한 화면에 놓으면 **어디 것인지** 적어야 한다.
-                showWorkspace={everywhere}
-                canEdit={canAdd}
-                index={index}
-                total={(widgets.data ?? []).length}
-                onChanged={() => widgets.reload()}
-              />
-            ))}
+            {shown.map((one) =>
+              // **뷰와 지표가 한 줄**이다 — 자리는 서버가 함께 매긴다.
+              one.metric ? (
+                <MetricHomeWidget
+                  key={`metric:${one.metric.id}`}
+                  widget={{ ...one, metric: one.metric }}
+                  showWorkspace={everywhere}
+                  {...place(one)}
+                  onChanged={() => widgets.reload()}
+                />
+              ) : one.view ? (
+                <HomeWidget
+                  key={one.view.id}
+                  widget={{ ...one, view: one.view }}
+                  // 여러 부서를 한 화면에 놓으면 **어디 것인지** 적어야 한다.
+                  showWorkspace={everywhere}
+                  {...place(one)}
+                  onChanged={() => widgets.reload()}
+                />
+              ) : null,
+            )}
           </div>
         </section>
       ) : (
@@ -183,7 +206,16 @@ export default function WorkspaceHomePage() {
         </section>
       )}
 
-      {adding && <AddWidgetDialog onClose={() => setAdding(false)} />}
+      {adding && (
+        <AddWidgetDialog
+          workspace={slug ?? ''}
+          onClose={() => setAdding(false)}
+          onAdded={() => {
+            setAdding(false)
+            widgets.reload()
+          }}
+        />
+      )}
     </div>
   )
 }

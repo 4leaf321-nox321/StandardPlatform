@@ -36,6 +36,9 @@ class JobOut(BaseModel):
     input_file_name: str | None
     has_output: bool
     requested_by_name: str | None
+    requested_by_id: uuid.UUID | None = None
+    """시킨 사람 — 화면이 「취소」 · 「적용」 을 그 사람(과 시스템 관리자)에게만 세운다(서버도
+    그렇게 거절한다)."""
     workspace_slug: str | None
     cancel_requested: bool
     attempts: int

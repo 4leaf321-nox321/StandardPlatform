@@ -129,3 +129,19 @@ describe('올리기', () => {
     expect(screen.queryByRole('button', { name: /업로드/ })).toBeNull()
   })
 })
+
+describe('그 밖의 첨부', () => {
+  it('칸별 목록이 이미 보인 자리는 빼고, 자리 없는 것 · 지운 칸의 것은 남긴다', async () => {
+    // 자리를 안 주면 서버는 전부를 준다 — 안 빼던 때는 칸별 첨부가 두 번 섰다(2026-10-08).
+    attachmentApi.list.mockResolvedValue([
+      { ...row('a', '도면.pdf', false), owner_field: 'drawing' },
+      { ...row('b', '메모.txt', false), owner_field: null },
+      { ...row('c', '옛 칸.pdf', false), owner_field: 'removed' },
+    ])
+    await show({ ownerField: undefined, title: '그 밖의 첨부', excludeFields: ['drawing'] })
+    expect(await screen.findByText('메모.txt')).toBeInTheDocument()
+    expect(screen.getByText('옛 칸.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('도면.pdf')).not.toBeInTheDocument()
+    expect(attachmentApi.list).toHaveBeenCalledWith('objects', 'o1', undefined)
+  })
+})

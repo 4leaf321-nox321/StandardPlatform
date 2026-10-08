@@ -58,6 +58,13 @@ interface AttachmentListProps {
    * 사진만 보이게 한다.
    */
   accept?: string | null
+  /**
+   * 행 전체를 볼 때(`ownerField` 없음) **빼고 보일 자리** — 그 자리는 화면의 다른 목록이 이미
+   * 보인다. 안 빼던 때는 객체 상세의 「그 밖의 첨부」 가 칸별 첨부까지 다 보여 같은 파일이 두 번
+   * 섰다(서버는 자리를 안 주면 전부를 준다, 2026-10-08). 지운 속성의 자리는 여기 안 적히므로
+   * 그 첨부는 「그 밖의」 에 남는다 — 갈 곳이 없어지지 않게.
+   */
+  excludeFields?: string[]
 }
 
 const IMAGE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp'
@@ -89,6 +96,7 @@ export function AttachmentList({
   workspaceSlug,
   canEdit = false,
   accept,
+  excludeFields,
 }: AttachmentListProps) {
   const list = useResource(
     () => attachmentApi.list(ownerTable, ownerId, ownerField),
@@ -138,7 +146,9 @@ export function AttachmentList({
     if (failed.length > 0) setError(new Error(failed.join(' / ')))
   }
 
-  const rows = list.data ?? []
+  const rows = (list.data ?? []).filter(
+    (one) => !one.owner_field || !(excludeFields ?? []).includes(one.owner_field),
+  )
   const images = rows.filter((one) => one.is_image)
   const others = rows.filter((one) => !one.is_image)
   const busy = progress !== null

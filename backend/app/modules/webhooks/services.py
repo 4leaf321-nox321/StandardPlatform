@@ -53,7 +53,9 @@ MAX_ATTEMPTS = 3
 TIMEOUT_SECONDS = 10.0
 #: 실패한 뒤 다시 보내기까지. 받는 쪽이 잠깐 죽은 것이 대부분이라 길게 기다린다.
 #: **워커가 이 간격으로 남은 pending 을 보고 작업을 다시 넣는다** — 전에는 프로세스 안의
-#: 타이머였고, 그래서 재시작하면 사라졌다.
+#: 타이머였고, 그래서 재시작하면 사라졌다. 보내는 쪽도 이 간격을 지킨다(`_cooling`) — 새
+#: 이벤트가 작업을 깨울 때마다 실패한 것을 곧바로 다시 보내면 세 번을 몇 초 안에 다 쓰고
+#: 포기했다(2026-10-08).
 RETRY_AFTER_SECONDS = 60.0
 #: 화면에 보여 주는 최근 기록 수.
 RECENT = 50
@@ -164,14 +166,20 @@ def on_events(staged: list[events.ChangeEvent]) -> None:
 
 
 def pending_count(db: Session) -> int:
-    """아직 보내야 할 것 — 워커가 이것을 보고 작업을 다시 넣는다."""
+    """아직 보내야 할 것 — 워커가 이것을 보고 작업을 다시 넣는다.
+
+    **꺼 둔 웹훅의 것은 안 센다** — 그것은 다시 켤 때까지 기다리는 것이다. 세면 워커가 할 일
+    없는 보내기 작업을 1분마다 한 줄씩 영영 넣는다.
+    """
     return int(
         db.scalar(
             select(func.count())
             .select_from(WebhookDelivery)
+            .join(Webhook, Webhook.id == WebhookDelivery.webhook_id)
             .where(
                 WebhookDelivery.status == "pending",
                 WebhookDelivery.attempts < MAX_ATTEMPTS,
+                Webhook.is_active.is_(True),
             )
         )
         or 0
@@ -192,6 +200,21 @@ def enqueue_dispatch(db: Session) -> None:
 
 def sign(secret: str, body: bytes) -> str:
     return "sha256=" + hmac.new(secret.encode("utf-8"), body, hashlib.sha256).hexdigest()
+
+
+def _cooling(hook: Webhook, now: datetime) -> bool:
+    """이 웹훅의 **재시도를 아직 미루나** — 마지막 전송이 실패했고 `RETRY_AFTER_SECONDS` 가
+    안 지났으면.
+
+    전송마다의 마지막 시도 시각 칸은 없다(`webhook_deliveries` 에는 보낸 시각뿐이다). 대신
+    웹훅의 마지막 결과(`last_status` · `last_at`)로 판단한다 — 같은 받는 쪽이 방금 실패했으면
+    밀린 재시도도 대개 실패하고, 그 실패가 시도 하나를 또 쓴다. 이렇게 두면 한 전송의 실패한
+    시도 사이는 늘 이 간격 이상이다(그 사이 같은 받는 쪽이 성공했으면 곧장 다시 간다 — 받는
+    쪽이 살아 있다는 뜻이다).
+    """
+    if hook.last_status != "failed" or hook.last_at is None:
+        return False
+    return (now - hook.last_at).total_seconds() < RETRY_AFTER_SECONDS
 
 
 @dataclass
@@ -257,13 +280,23 @@ class Dispatcher:
         return left
 
     def _deliver(self, db: Session, gave_up: set[uuid.UUID]) -> int:
+        """pending 을 한 번씩 — 단, 둘은 이번 바퀴에 안 보낸다(pending 그대로).
+
+        - **꺼 둔 웹훅의 것.** 끄면 새 이벤트를 안 쌓는데(`wants`), 이미 쌓인 것은 그대로
+          나갔다 — 「사용 안 함」 이 반만 듣는 셈이었다(2026-10-08). 지우지도 실패로 두지도
+          않는다: 켜 있을 때 생긴 이벤트이고, 다시 켜면 나간다.
+        - **식는 중인 웹훅의 재시도**(`_cooling`). 첫 시도 · 사람이 누른 「다시 보내기」 는
+          곧장 간다.
+        """
         left = 0
+        off = select(Webhook.id).where(Webhook.is_active.is_(False))
         rows = list(
             db.scalars(
                 select(WebhookDelivery)
                 .where(
                     WebhookDelivery.status == "pending",
                     WebhookDelivery.attempts < MAX_ATTEMPTS,
+                    WebhookDelivery.webhook_id.notin_(off),
                 )
                 .order_by(WebhookDelivery.created_at)
             )
@@ -274,11 +307,17 @@ class Dispatcher:
                 select(Webhook).where(Webhook.id.in_({row.webhook_id for row in rows}))
             )
         }
+        # 바퀴를 시작할 때 한 번 본다 — 한 바퀴 안에서는 예전처럼 다 보낸다.
+        started = datetime.now(UTC)
+        cooling = {hook.id for hook in hooks.values() if _cooling(hook, started)}
         for delivery in rows:
             hook = hooks.get(delivery.webhook_id)
             if hook is None:
                 delivery.status = "failed"
                 delivery.last_error = "웹훅이 지워졌습니다"
+                continue
+            if delivery.attempts > 0 and hook.id in cooling:
+                left += 1
                 continue
             result = self.send(hook, delivery)
             now = datetime.now(UTC)

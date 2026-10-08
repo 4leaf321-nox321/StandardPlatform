@@ -14,9 +14,19 @@ import { describe, expect, it, vi } from 'vitest'
 const objectApi = vi.hoisted(() => ({
   summary: vi.fn(),
   exportSummary: vi.fn(),
+  points: vi.fn(),
+  exportPoints: vi.fn(),
 }))
 const viewApi = vi.hoisted(() => ({ create: vi.fn() }))
 vi.mock('@/modules/objects/api', () => ({ objectApi, viewApi }))
+// 시스템 관리자의 부서 고르개는 전체 부서를 받는다.
+const workspaceApi = vi.hoisted(() => ({
+  options: vi.fn(async () => [
+    { slug: 'hq', name: '본사', path: '본사', depth: 0 },
+    { slug: 'sales', name: '영업팀', path: '본사 / 영업팀', depth: 1 },
+  ]),
+}))
+vi.mock('@/modules/workspaces/api', () => ({ workspaceApi }))
 
 // 「홈에 올리기」 는 부서 관리자에게만 보인다 — 누구로 로그인했는지가 이 시험의 조건이다.
 const auth = vi.hoisted(() => ({
@@ -93,7 +103,11 @@ const BASE = {
   metric_options: [{ field: 'properties.weight', label: '무게', kind: 'number' }],
 }
 
-async function panel(data: object, settings: Record<string, unknown> = {}) {
+async function panel(
+  data: object,
+  settings: Record<string, unknown> = {},
+  { homeWorkspace = null as string | null } = {},
+) {
   objectApi.summary.mockResolvedValue(data)
   const { SummaryPanel, DEFAULT_SUMMARY } = await import('@/modules/objects/SummaryPanel')
   const onPick = vi.fn()
@@ -109,6 +123,7 @@ async function panel(data: object, settings: Record<string, unknown> = {}) {
         onSettings={onSettings}
         onPick={onPick}
         onClose={vi.fn()}
+        homeWorkspace={homeWorkspace}
       />
     </MemoryRouter>,
   )
@@ -241,6 +256,55 @@ describe('홈 게시', () => {
       ),
     )
     expect(await screen.findByRole('link', { name: '홈에서 보기' })).toBeInTheDocument()
+  })
+
+  it('홈의 「위젯 추가」 로 온 부서에 올린다 — 대표 소속이 아니라', async () => {
+    // 시스템 관리자(대표 hq)가 /w/sales 에서 추가하면 hq 홈에 섰다 — 창의 「여기에 표시됩니다」
+    // 가 거짓이었다(2026-10-08).
+    auth.user = {
+      home_workspace_slug: 'hq',
+      is_system_admin: true,
+      memberships: [{ slug: 'hq', role: 'manager', name: '본사', path: '본사' }],
+    }
+    viewApi.create.mockClear()
+    viewApi.create.mockResolvedValue({ id: 'v10' })
+    await panel(BASE, {}, { homeWorkspace: 'sales' })
+    await userEvent.click(screen.getByRole('button', { name: '홈 게시' }))
+    await screen.findByPlaceholderText(/홈에 뜰 이름/)
+    await userEvent.click(screen.getByRole('button', { name: /^홈 게시$/ }))
+    await waitFor(() =>
+      expect(viewApi.create).toHaveBeenCalledWith(
+        'part',
+        expect.objectContaining({ workspace_slug: 'sales', on_home: true }),
+      ),
+    )
+    expect(await screen.findByRole('link', { name: '홈에서 보기' })).toHaveAttribute(
+      'href',
+      '/w/sales',
+    )
+  })
+
+  it('대표 소속에서는 멤버뿐인 다른 부서의 관리자에게도 서고, 그 부서로 간다', async () => {
+    // 대표 소속만 보던 때는 이 사람에게 단추가 아예 안 섰다(2026-10-08).
+    auth.user = {
+      home_workspace_slug: 'cae',
+      memberships: [
+        { slug: 'cae', role: 'member', name: '해석팀', path: '해석팀' },
+        { slug: 'lab', role: 'manager', name: '시험팀', path: '시험팀' },
+      ],
+    }
+    viewApi.create.mockClear()
+    viewApi.create.mockResolvedValue({ id: 'v11' })
+    await panel(BASE)
+    await userEvent.click(screen.getByRole('button', { name: '홈 게시' }))
+    expect(await screen.findByRole('combobox', { name: '소유 부서' })).toHaveTextContent('시험팀')
+    await userEvent.click(screen.getByRole('button', { name: /^홈 게시$/ }))
+    await waitFor(() =>
+      expect(viewApi.create).toHaveBeenCalledWith(
+        'part',
+        expect.objectContaining({ workspace_slug: 'lab' }),
+      ),
+    )
   })
 })
 
@@ -421,5 +485,56 @@ describe('기간 단위', () => {
   it('날짜가 아닌 기준에는 기간 단위 고르개가 없다', async () => {
     await panel(BASE)
     expect(screen.queryByLabelText('기간 단위')).toBeNull()
+  })
+
+  it('원값 파일도 그림과 같은 기간 단위로 묶는다', async () => {
+    // 상자 그림은 월별로 묶어 그리는데 파일은 grain 없이 받아 해별이었다(2026-10-08).
+    objectApi.points.mockResolvedValue({
+      x_label: '무게',
+      y_label: '',
+      group_label: '만든 날 (월)',
+      rows: [{ x: 1, y: null, group: '2026-01', label: '볼트', id: 'o1' }],
+      total: 1,
+      truncated: false,
+    })
+    objectApi.exportPoints.mockResolvedValue(undefined)
+    objectApi.summary.mockResolvedValue(DATED)
+    const settings = { groupBy: 'properties.made', grain: 'month' }
+    // 숫자 칸 목록은 집계 응답이 알려 준다 — 그것을 받은 뒤 상자로 바꾼다(화면이 하듯).
+    const { SummaryPanel, DEFAULT_SUMMARY } = await import('@/modules/objects/SummaryPanel')
+    const { rerender } = render(
+      <MemoryRouter>
+        <SummaryPanel
+          typeSlug="part"
+          query={{ q: '볼트' }}
+          settings={{ ...DEFAULT_SUMMARY, ...settings }}
+          onSettings={vi.fn()}
+          onPick={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    await screen.findByText(/조건에 맞는 전체/)
+    rerender(
+      <MemoryRouter>
+        <SummaryPanel
+          typeSlug="part"
+          query={{ q: '볼트' }}
+          settings={{ ...DEFAULT_SUMMARY, ...settings, chart: 'box' }}
+          onSettings={vi.fn()}
+          onPick={vi.fn()}
+          onClose={vi.fn()}
+        />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(objectApi.points).toHaveBeenCalled())
+    expect(objectApi.points.mock.calls.at(-1)?.[2]).toMatchObject({ grain: 'month' })
+    await userEvent.click(await screen.findByRole('button', { name: /내보내기/ }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: /Excel/ }))
+    await waitFor(() => expect(objectApi.exportPoints).toHaveBeenCalled())
+    expect(objectApi.exportPoints.mock.calls.at(-1)?.[2]).toMatchObject({
+      x: 'properties.weight',
+      grain: 'month',
+    })
   })
 })

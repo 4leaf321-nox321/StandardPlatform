@@ -16,6 +16,7 @@ import { House } from 'lucide-react'
 
 import { viewApi } from '@/modules/objects/api'
 import type { SavedViewQuery, SavedViewSummary } from '@/modules/objects/api'
+import { OwnerWorkspacePicker } from '@/modules/workspaces/OwnerWorkspacePicker'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
 import {
@@ -30,7 +31,8 @@ import { Input } from '@/shared/components/ui/input'
 
 interface Props {
   typeSlug: string
-  /** 올릴 부서 — 내 대표 소속. 그 부서의 관리자여야 단추가 보인다. */
+  /** 올릴 부서의 첫 값 — 보고 있던 부서(홈에서 왔으면 그 부서), 아니면 대표 소속. 창에서
+   *  **내가 관리자인 부서 중에서** 바꿀 수 있다(서버가 그 부서의 관리자만 받아 준다). */
   workspaceSlug: string
   query: SavedViewQuery
   summary: SavedViewSummary | null
@@ -48,6 +50,7 @@ export function PinToHomeDialog({
   onClose,
 }: Props) {
   const [name, setName] = useState(suggested)
+  const [target, setTarget] = useState(workspaceSlug)
   /** 축이 없을 때의 두 모양 — 수 하나이거나 몇 줄이거나. 「미승인 12건」 은 수가 낫고,
    *  「최근 들어온 것」 은 이름이 보여야 한다. */
   const [shape, setShape] = useState<'count' | 'list'>('count')
@@ -62,7 +65,7 @@ export function PinToHomeDialog({
       await viewApi.create(typeSlug, {
         name: name.trim(),
         query,
-        workspace_slug: workspaceSlug,
+        workspace_slug: target,
         summary: summary ?? {
           group_by: '',
           split_by: '',
@@ -88,16 +91,15 @@ export function PinToHomeDialog({
         <DialogHeader>
           <DialogTitle>부서 홈 게시</DialogTitle>
           <DialogDescription>
-            지금 조건 {query.conditions.length}개와 {summary ? '통계 기준을' : '검색 조건을'}{' '}
-            <strong>{workspaceSlug}</strong> 부서 뷰로 저장하고 그 부서 홈에 게시합니다. 부서 사람
-            모두가 같은 것을 봅니다.
+            지금 조건 {query.conditions.length}개와 {summary ? '통계 기준을' : '검색 조건을'} 아래
+            부서의 뷰로 저장하고 그 부서 홈에 게시합니다. 부서 사람 모두가 같은 것을 봅니다.
           </DialogDescription>
         </DialogHeader>
 
         {done ? (
           <p className="text-sm">
             올렸습니다.{' '}
-            <Link to={`/w/${workspaceSlug}`} className="underline">
+            <Link to={`/w/${target}`} className="underline">
               홈에서 보기
             </Link>
             . 게시 해제는 목록의 「뷰」 메뉴에서 합니다.
@@ -116,6 +118,17 @@ export function PinToHomeDialog({
               placeholder="홈에 뜰 이름 — 「등급별 공급사」 처럼"
               onChange={(event) => setName(event.target.value)}
             />
+            <div className="space-y-1">
+              <label htmlFor="pin-workspace" className="text-sm">
+                게시할 부서 홈
+              </label>
+              <OwnerWorkspacePicker
+                id="pin-workspace"
+                className="w-full"
+                value={target}
+                onChange={setTarget}
+              />
+            </div>
             {!summary && (
               /* 축이 없으면 **무엇으로 세울지** 고르게 한다. 둘 다 쓸모가 있다. */
               <div className="space-y-1">

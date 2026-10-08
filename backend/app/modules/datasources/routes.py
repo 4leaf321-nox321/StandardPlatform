@@ -55,7 +55,8 @@ def _out(db: Session, row: DataSource) -> DataSourceOut:
         kind=row.kind,
         base_url=row.base_url,
         entity_set=row.entity_set,
-        options=row.options or {},
+        # 동기화가 적어 두는 칸(끊은 자리)은 화면의 설정이 아니다.
+        options=services.public_options(row.options),
         filter=row.filter,
         select=row.select,
         auth_kind=str(auth.get("kind") or "none"),
@@ -266,6 +267,7 @@ def update_source(
     }
     if "name" in sent and payload.name is not None:
         row.name = payload.name.strip()
+    kind_before = row.kind
     if "kind" in sent and payload.kind is not None:
         row.kind = require_choice(payload.kind, SOURCE_KINDS, what="소스 종류")
     if "base_url" in sent and payload.base_url is not None:
@@ -273,7 +275,12 @@ def update_source(
     if "entity_set" in sent and payload.entity_set is not None:
         row.entity_set = payload.entity_set.strip()
     if "options" in sent and payload.options is not None:
-        row.options = payload.options
+        # 동기화가 적어 두는 칸(`_` — 끊은 자리)은 화면이 모른다. 보낸 설정으로 갈아 끼우되
+        # 그 칸은 서버의 것을 지킨다 — 안 지키면 이름 하나 고칠 때마다 이어 받던 자리를 잃는다.
+        row.options = {
+            **services.public_options(payload.options),
+            **services.internal_options(row.options),
+        }
     if "filter" in sent and payload.filter is not None:
         row.filter = payload.filter.strip()
     if "select" in sent and payload.select is not None:
@@ -301,12 +308,25 @@ def update_source(
         row.mapping = payload.mapping
     target = db.get(ObjectType, row.type_id)
     assert target is not None
-    _check_ra(db, target, row.kind, row.options or {}, row.mapping or {})
+    reshaped = row.kind != kind_before or "type_slug" in sent
+    if reshaped and "mapping" not in sent and row.kind != ra_reports.KIND:
+        # 종류 · 타입만 바꿔도 **바뀐 뒤의 모양**으로 본다 — 새 타입에 없는 칸을 가리키는
+        # 대응은 저장할 때 말한다(동기화를 눌러서야 아는 것보다 낫다).
+        _check_mapping(db, target, row.mapping or {})
+    if row.kind != kind_before:
+        row.base_url = _require_url(row.base_url, kind=row.kind)
+        # 끊은 자리는 그 종류의 것이다 — 종류가 바뀌면 버린다.
+        row.options = services.public_options(row.options)
+    _check_ra(db, target, row.kind, services.public_options(row.options), row.mapping or {})
     # 빈 문자열이 「slug 로 돌아가기」 다 — null 은 「안 보냄」 과 구별되지 않는다.
     if "source_name" in sent and payload.source_name is not None:
         row.source_name = payload.source_name.strip()
     if "deprecate_missing" in sent and payload.deprecate_missing is not None:
-        row.deprecate_missing = _check_deprecate(row.kind, payload.deprecate_missing)
+        row.deprecate_missing = payload.deprecate_missing
+    # **바뀐 뒤의 모양 전체로 본다** — 보낸 칸만 보면, 「안 온 것을 중지」 를 켜 둔 OData
+    # 소스의 종류만 형제 코어로 바꿀 때 그 검사를 비켜 갔다. 그러면 두 번째 증분에서 안 바뀐
+    # 객체가 전부 사용 중지된다(2026-10-08).
+    _check_deprecate(row.kind, row.deprecate_missing)
     # **비우는 것만 받는다** — 시계를 손으로 앞당기면 그 사이 것을 영영 안 받는다.
     if "since_mark" in sent and payload.since_mark is not None:
         if payload.since_mark.strip():
@@ -317,9 +337,10 @@ def update_source(
             )
         row.since_mark = ""
         # **선의 시계도 함께 비운다** — 하나만 처음부터 받으면 점과 선이 어긋난다. 기다리던
-        # 선도 — 전량이 다시 온다.
+        # 선도 — 전량이 다시 온다. 끊어 둔 자리도 버린다(옛 시계에서 시작한 것이다).
         row.relations_since_mark = ""
         row.relations_waiting = []
+        row.options = services.public_options(row.options)
         # RA 보고서는 처음부터 = 본문까지 전량, 그리고 대조.
         row.reconciled_at = None
     if "interval_minutes" in sent and payload.interval_minutes is not None:
@@ -417,6 +438,19 @@ def sync_source(
             code("DATASOURCES", 7), "동기화는 시스템 관리자만 돌립니다.", status=403
         )
     row = _source(db, slug)
+    if apply:
+        # **같은 소스를 겹쳐 넣지 않는다** — 둘이 함께 돌면 같은 새 행을 둘 다 만든다(늦은 쪽은
+        # 외부 식별자에서 터진다). 같은 적용이 이미 줄에 있으면 그것을 돌려주고, 타이머의
+        # 차례가 이 소스를 곧 돌리면 그렇다고 말한다(2026-10-08).
+        busy = services.pending_job(db, row, apply=True)
+        if busy is not None and busy.kind == "datasource_sync":
+            return jobs_routes._out(db, busy)
+        if busy is not None:
+            raise Conflict(
+                services.BUSY,
+                f"타이머의 차례(작업 {busy.id})가 이 소스를 곧 동기화합니다 — 그 작업이 끝난 "
+                "뒤에 다시 하세요.",
+            )
     job = job_services.enqueue(
         db,
         kind="datasource_sync",

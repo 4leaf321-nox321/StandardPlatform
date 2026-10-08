@@ -15,6 +15,14 @@
 
 경계는 `updated_at > since` 로 **연다**(같은 값은 뺀다). 같은 밀리초에 둘이 바뀌면 한 번 더
 받을 뿐이고, 받는 쪽은 같은 값을 덮어쓰므로 해가 없다 — 반대로 닫으면 잃는다.
+
+쪽을 넘기는 동안의 `as_of` 는 **첫 쪽의 시각**이다(커서에 실어 다닌다). 마지막 쪽의 시각을
+주면 그 사이 커밋된 긴 적재(시각은 시작 때 — 커서보다 앞)를 이번에도 다음에도 못 받는다.
+
+## 더 이상 안 보이는 것
+
+보이던 부서에서 안 보이는 부서로 옮긴 객체는 그 자격에게 **사라진 것**이다 — 무덤(`deleted`
+· `hidden`)으로 알린다. 안 그러면 받는 쪽은 그 행을 영영 살아 있는 것으로 든다.
 """
 
 from __future__ import annotations
@@ -27,12 +35,14 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+from sqlalchemy import String, cast, exists, func, literal, or_, select, text
 from sqlalchemy import false as sa_false
-from sqlalchemy import func, literal, select, text
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy.sql.elements import ColumnElement
 
 from app.config import get_settings
 from app.modules.accounts.models import User
+from app.modules.audit.models import AuditEntry
 from app.modules.coreapi.schemas import (
     CoreCatalogOut,
     CoreConsumerOut,
@@ -54,6 +64,7 @@ from app.modules.objects.models import (
 )
 from app.modules.objects.services import properties_of
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
+from app.modules.workspaces.models import WorkspaceMember
 from app.shared import audit
 from app.shared.errors import NotFound, code
 from app.shared.permissions import visible_owner_clause
@@ -158,6 +169,9 @@ def consumers(db: Session) -> list[CoreConsumerOut]:
     「몇 개 시스템이 이 이름을 쓰는가」 를 말할 근거다. 정확히는 「읽을 수 있는 자격」 이지
     「지금 읽고 있는 시스템」 이 아니다 — 그래서 마지막 사용 시각을 함께 준다. 한 번도 안
     쓴 토큰과 어제도 받아 간 토큰은 다른 무게다.
+
+    **정지 · 삭제된 계정의 토큰은 세지 않는다** — 인증(`resolve_pat`)이 이미 막으므로 읽을 수
+    없는 자격이다. 세면 「이 이름을 쓰는 연동이 있다」 로 읽혀 아무도 못 지운다(2026-10-08).
     """
     from app.modules.auth.models import PersonalAccessToken
 
@@ -165,7 +179,11 @@ def consumers(db: Session) -> list[CoreConsumerOut]:
     rows = db.execute(
         select(PersonalAccessToken, User)
         .join(User, User.id == PersonalAccessToken.user_id)
-        .where(PersonalAccessToken.revoked_at.is_(None))
+        .where(
+            PersonalAccessToken.revoked_at.is_(None),
+            User.deleted_at.is_(None),
+            User.status == "active",
+        )
         .order_by(PersonalAccessToken.created_at)
     ).all()
     out: list[CoreConsumerOut] = []
@@ -315,9 +333,13 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
 
 
 def _ref_keys(
-    db: Session, defs: list[PropertyDef], rows: list[ObjectInstance]
-) -> dict[str, str]:
-    """참조 값(id) → 상대의 `key`. **id 로 주면 받는 쪽에서 아무것도 못 가리킨다.**"""
+    db: Session, user: User, defs: list[PropertyDef], rows: list[ObjectInstance]
+) -> dict[str, str | None]:
+    """참조 값(id) → 상대의 `key`. **id 로 주면 받는 쪽에서 아무것도 못 가리킨다.**
+
+    **토큰 주인이 못 보는 상대는 None** — 그 값은 내보내지 않는다(`_properties_out`). 상대의
+    부서를 보지 않고 풀었더니 안 보이는 부서 객체의 식별자 · 이름이 참조 칸으로 샜다
+    (2026-10-08)."""
     wanted: set[uuid.UUID] = set()
     for row in rows:
         values = row.properties or {}
@@ -333,14 +355,17 @@ def _ref_keys(
                         continue
     if not wanted:
         return {}
-    return {
-        str(one.id): one.key or one.label
-        for one in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(wanted)))
-    }
+    seen = visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+    found = db.execute(
+        select(
+            ObjectInstance.id, ObjectInstance.key, ObjectInstance.label, seen.label("seen")
+        ).where(ObjectInstance.id.in_(wanted))
+    )
+    return {str(one.id): (one.key or one.label) if one.seen else None for one in found}
 
 
 def _properties_out(
-    row: ObjectInstance, defs: list[PropertyDef], ref_keys: dict[str, str]
+    row: ObjectInstance, defs: list[PropertyDef], ref_keys: dict[str, str | None]
 ) -> dict[str, Any]:
     values = row.properties or {}
     out: dict[str, Any] = {}
@@ -352,7 +377,11 @@ def _properties_out(
             continue
         items = raw if isinstance(raw, list) else [raw]
         if definition.data_type == "object_ref":
-            items = [ref_keys.get(str(one), str(one)) for one in items]
+            # 못 보는 상대(None)는 뺀다 — 다 빠지면 빈 값처럼 키를 뺀다.
+            resolved = [ref_keys.get(str(one), str(one)) for one in items]
+            items = [one for one in resolved if one is not None]
+            if not items:
+                continue
         out[definition.key] = items if definition.multi else items[0]
     return out
 
@@ -366,13 +395,19 @@ def page(
     cursor: str | None,
     limit: int,
 ) -> CorePageOut:
-    """한 쪽 — 바뀐 것과 **사라진 것**을 함께."""
-    # **시계는 DB 것을 쓰고, 도는 적재보다 앞서지 않는다**(`watermark` 의 설명).
+    """한 쪽 — 바뀐 것과 **사라진 것**(지운 것 · 더 이상 안 보이는 것)을 함께."""
+    # **시계는 DB 것을 쓰고, 도는 적재보다 앞서지 않는다**(`watermark` 의 설명). 쪽을 넘기는
+    # 중이면 첫 쪽의 시각이 커서에 실려 온다.
+    started = _cursor(cursor)[2] if cursor else None
     now = watermark(db)
+    as_of = min(started, now) if started is not None else now
     defs = _shown_defs(db, object_type)
-    stmt = select(ObjectInstance).where(
-        ObjectInstance.type_id == object_type.id,
-        visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+    seen = visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+    shown: ColumnElement[bool] = seen
+    if since is not None and not user.is_system_admin:
+        shown = or_(seen, _moved_away(user, since))
+    stmt = select(ObjectInstance, seen.label("seen")).where(
+        ObjectInstance.type_id == object_type.id, shown
     )
     if since is not None:
         stmt = stmt.where(ObjectInstance.updated_at > since)
@@ -381,33 +416,29 @@ def page(
         # 없고, 오래된 무덤이 첫 적재를 채운다.
         stmt = stmt.where(ObjectInstance.deleted_at.is_(None))
     if cursor:
-        at, _, tail = cursor.partition("|")
-        try:
-            mark = datetime.fromisoformat(at)
-            last = uuid.UUID(tail)
-        except ValueError:
-            raise NotFound(
-                code("CORE", 2), "커서를 읽을 수 없습니다. 처음부터 받으세요."
-            ) from None
+        mark, last, _ = _cursor(cursor)
         stmt = stmt.where(
             (ObjectInstance.updated_at > mark)
             | ((ObjectInstance.updated_at == mark) & (ObjectInstance.id > last))
         )
 
     # **정렬을 고정한다** — 쪽을 넘기는 사이 순서가 바뀌면 행이 빠지거나 두 번 온다.
-    found = list(
-        db.scalars(
-            stmt.order_by(ObjectInstance.updated_at, ObjectInstance.id).limit(limit + 1)
-        )
-    )
-    more = len(found) > limit
-    found = found[:limit]
+    picked = db.execute(
+        stmt.order_by(ObjectInstance.updated_at, ObjectInstance.id).limit(limit + 1)
+    ).all()
+    more = len(picked) > limit
+    picked = picked[:limit]
+    found = [one for one, _ in picked]
+    hidden = {one.id for one, visible in picked if not visible}
+    shown_rows = [one for one in found if one.id not in hidden]
 
-    ref_keys = _ref_keys(db, defs, found)
-    human = aliases.human_of(db, [one.id for one in found])
-    merged_keys = _merged_keys(db, found)
+    ref_keys = _ref_keys(db, user, defs, shown_rows)
+    human = aliases.human_of(db, [one.id for one in shown_rows])
+    merged_keys = _merged_keys(db, user, shown_rows)
     items = [
-        CoreRowOut(
+        _gone_out(one)
+        if one.id in hidden
+        else CoreRowOut(
             key=one.key or one.label,
             label=one.label,
             status=one.status,
@@ -450,13 +481,81 @@ def page(
     return CorePageOut(
         type_slug=object_type.slug,
         # **끝까지 받았을 때만 시계가 온다.** 쪽이 남았는데 `as_of` 를 주면, 거기서 멈춘 쪽은
-        # 남은 쪽을 영영 안 받는다 — 그래서 남았으면 아예 안 준다(null).
-        as_of=None if more else _stamp(now),
+        # 남은 쪽을 영영 안 받는다 — 그래서 남았으면 아예 안 준다(null). 주는 시계는 **첫 쪽의
+        # 것**이다(`_cursor`).
+        as_of=None if more else _stamp(as_of),
         since=_stamp(since),
         next=(
-            f"{last_row.updated_at.isoformat()}|{last_row.id}" if more and last_row else None
+            _next_cursor(last_row.updated_at, last_row.id, as_of)
+            if more and last_row
+            else None
         ),
         items=items,
+    )
+
+
+def _cursor(raw: str) -> tuple[datetime, uuid.UUID, datetime | None]:
+    """커서 → (마지막 행의 시각, 그 id, 첫 쪽의 `as_of`).
+
+    **첫 쪽의 시계를 커서에 실어 다닌다.** 마지막 쪽을 부른 때의 시계를 주면 이런 일이 났다:
+    긴 적재 A 가 T0 에 시작해 도는 동안 뒤에 시작한 짧은 적재들의 행이 쪽을 넘어 커서가 T0 를
+    지나고, 그 사이 A 가 커밋하면 A 의 행(시각 T0 < 커서)은 이번 쪽 넘김에서 건너뛰어지는데
+    마지막 쪽의 시계는 T0 보다 뒤라 다음 주기의 `since` 로도 못 받는다 — **영영 못 받는다**
+    (2026-10-08). 첫 쪽의 시계는 그때 도는 A 보다 앞이므로 다음 주기가 A 를 받는다.
+
+    옛 커서(`시각|id`, 시계 없음)도 받는다 — 그때는 지금 시계를 쓴다(예전과 같다)."""
+    at, _, tail = raw.partition("|")
+    last, _, started = tail.partition("|")
+    try:
+        return (
+            datetime.fromisoformat(at),
+            uuid.UUID(last),
+            datetime.fromisoformat(started) if started else None,
+        )
+    except ValueError:
+        raise NotFound(
+            code("CORE", 2), "커서를 읽을 수 없습니다. 처음부터 받으세요."
+        ) from None
+
+
+def _next_cursor(at: datetime, last: uuid.UUID, as_of: datetime) -> str:
+    return f"{at.isoformat()}|{last}|{as_of.isoformat()}"
+
+
+def _moved_away(user: User, since: datetime) -> ColumnElement[bool]:
+    """`since` 뒤에 **보이던 부서에서 옮겨 간** 객체 — 감사 기록에 소유 부서가 보이는 쪽(전역 ·
+    내 부서)에서 바뀐 것이 있다. 지금 안 보이면 그 자격에게는 사라진 것이다(무덤으로 보낸다).
+
+    부서 통폐합(`_move_objects`)은 객체마다 기록을 안 남겨 여기 안 걸린다 — 옮겨 간 부서가
+    합쳐지는 부서라 보던 사람은 대개 그 부서에도 든다."""
+    mine = select(cast(WorkspaceMember.workspace_id, String)).where(
+        WorkspaceMember.user_id == user.id
+    )
+    change = AuditEntry.changes["owner_workspace_id"]
+    before = change["before"].astext
+    return exists().where(
+        AuditEntry.target_table == "objects",
+        AuditEntry.target_id == ObjectInstance.id,
+        AuditEntry.created_at > since,
+        AuditEntry.changes.has_key("owner_workspace_id"),
+        or_(before.is_(None), before.in_(mine)),
+    )
+
+
+def _gone_out(row: ObjectInstance) -> CoreRowOut:
+    """더 이상 안 보이는 객체의 무덤 — 받는 쪽이 제 행을 찾을 식별자만. 옮겨 간 뒤의 이름 ·
+    칸은 그 자격이 볼 수 없는 것이라 싣지 않는다."""
+    key = row.key or row.label
+    return CoreRowOut(
+        key=key,
+        label=key,
+        status=row.status,
+        updated_at=_stamp(row.updated_at) or "",
+        deleted=True,
+        hidden=True,
+        renamed_from=key_history.latest(row),
+        previous_keys=[x for x in (row.previous_keys or []) if x and x != row.key],
+        properties={},
     )
 
 
@@ -498,13 +597,18 @@ def relations(
     객체 쪽과 같은 규칙이다(`since` · `next` · `as_of`, 시계는 DB 것). 끊긴 선은 무덤
     (`object_relation_tombstones`)에서 온다 — 선은 행을 정말 지우기 때문이다. 둘을 시각으로
     한 줄에 세워 보내므로, 받는 쪽은 **온 차례대로 적용하면** 마지막 상태가 맞는다.
+
+    **양 끝이 모두 보이는 선만** 나간다 — 출발점만 보고 도착점의 부서를 안 봤더니 못 보는
+    부서 객체의 식별자가 `dst` 로 샜다(2026-10-08).
     """
+    started = _cursor(cursor)[2] if cursor else None
     now = watermark(db)
+    as_of = min(started, now) if started is not None else now
     open_slugs = {one.slug for one in core_types(db)}
     kinds = open_relation_kinds(db, object_type, open_slugs)
     if not kinds:
         return CoreRelationPageOut(
-            type_slug=object_type.slug, as_of=_stamp(now), since=_stamp(since), items=[]
+            type_slug=object_type.slug, as_of=_stamp(as_of), since=_stamp(since), items=[]
         )
     horizon = now - timedelta(days=get_settings().tombstone_ttl_days)
     if since is not None and since < horizon:
@@ -525,7 +629,9 @@ def relations(
     slugs = [one.slug for one in kinds]
     visible = visible_owner_clause(user, ObjectInstance.owner_workspace_id)
     src = ObjectInstance
-    # 출발점이 이 타입인 것만. 보이는 부서의 것만(객체 쪽과 같은 규칙).
+    dst = aliased(ObjectInstance)
+    reachable = visible_owner_clause(user, dst.owner_workspace_id)
+    # 출발점이 이 타입인 것만. 양 끝이 보이는 부서의 것만(객체 쪽과 같은 규칙).
     live = (
         select(
             ObjectRelation.id.label("id"),
@@ -533,11 +639,13 @@ def relations(
             literal(False).label("gone"),
         )
         .join(src, src.id == ObjectRelation.src_object_id)
+        .join(dst, dst.id == ObjectRelation.dst_object_id)
         .where(
             ObjectRelation.relation.in_(slugs),
             src.type_id == object_type.id,
             src.deleted_at.is_(None),
             visible,
+            reachable,
         )
     )
     if since is not None:
@@ -551,10 +659,12 @@ def relations(
             literal(True).label("gone"),
         )
         .join(src, src.id == ObjectRelationTombstone.src_object_id)
+        .join(dst, dst.id == ObjectRelationTombstone.dst_object_id)
         .where(
             ObjectRelationTombstone.relation.in_(slugs),
             src.type_id == object_type.id,
             visible,
+            reachable,
         )
     )
     if since is not None:
@@ -568,14 +678,7 @@ def relations(
     stream = live.union_all(graves).subquery()
     ordered = select(stream).order_by(stream.c.at, stream.c.id)
     if cursor:
-        at, _, tail = cursor.partition("|")
-        try:
-            mark = datetime.fromisoformat(at)
-            last = uuid.UUID(tail)
-        except ValueError:
-            raise NotFound(
-                code("CORE", 2), "커서를 읽을 수 없습니다. 처음부터 받으세요."
-            ) from None
+        mark, last, _ = _cursor(cursor)
         ordered = ordered.where(
             (stream.c.at > mark) | ((stream.c.at == mark) & (stream.c.id > last))
         )
@@ -651,9 +754,10 @@ def relations(
     last_mark = marks[-1] if marks else None
     return CoreRelationPageOut(
         type_slug=object_type.slug,
-        as_of=None if more else _stamp(now),
+        # 객체 쪽과 같이 **첫 쪽의 시계**(`_cursor`).
+        as_of=None if more else _stamp(as_of),
         since=_stamp(since),
-        next=(f"{last_mark[0].isoformat()}|{last_mark[1]}" if more and last_mark else None),
+        next=(_next_cursor(last_mark[0], last_mark[1], as_of) if more and last_mark else None),
         items=items,
     )
 
@@ -664,13 +768,19 @@ def _aliases_of(human: dict[uuid.UUID, list[str]], row: ObjectInstance) -> dict[
     return {"aliases": names} if names else {}
 
 
-def _merged_keys(db: Session, rows: list[ObjectInstance]) -> dict[uuid.UUID, str]:
+def _merged_keys(db: Session, user: User, rows: list[ObjectInstance]) -> dict[uuid.UUID, str]:
+    """합쳐진 것의 이긴 쪽 `key` — **보이는 것만**(참조 칸과 같은 규칙, `_ref_keys`)."""
     wanted = {one.merged_into_id for one in rows if one.merged_into_id}
     if not wanted:
         return {}
     return {
         one.id: one.key or one.label
-        for one in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(wanted)))
+        for one in db.scalars(
+            select(ObjectInstance).where(
+                ObjectInstance.id.in_(wanted),
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+            )
+        )
     }
 
 

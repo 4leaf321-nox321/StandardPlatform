@@ -7,6 +7,7 @@
 
 import { useState } from 'react'
 import { Plus } from 'lucide-react'
+import { useSearchParams } from 'react-router-dom'
 
 import { accountApi } from '@/modules/accounts/api'
 import type { Account } from '@/modules/accounts/api'
@@ -17,6 +18,7 @@ import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
+import { Pagination } from '@/shared/components/Pagination'
 import { StatusBadge } from '@/shared/components/StatusBadge'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
@@ -33,8 +35,41 @@ import {
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDate } from '@/shared/lib/datetime'
 
+/** 서버 상한(`accounts/routes.py` 의 le=100) 안에서 고른 한 쪽 크기. */
+const PER_PAGE = 50
+
+/** 상태 거르기 — 알림의 링크(`?status=pending`)가 이 값을 싣고 온다. */
+const STATUS_FILTERS: { value: string | null; label: string }[] = [
+  { value: null, label: '전체' },
+  { value: 'pending', label: '승인 대기' },
+  { value: 'active', label: '정상' },
+  { value: 'suspended', label: '정지' },
+]
+
 export default function AccountsAdminPage() {
-  const list = useResource(() => accountApi.list(), [])
+  // **상태는 주소가 든다.** 가입 신청 알림이 `/admin/accounts?status=pending` 으로 보내는데
+  // 화면이 그것을 안 읽으면 전체 목록이 열리고, 대기는 그 안 어딘가에 묻힌다(2026-10-08).
+  const [params, setParams] = useSearchParams()
+  const raw = params.get('status')
+  const status = STATUS_FILTERS.some((one) => one.value === raw) ? raw : null
+  // 쪽 위치는 **그 거르기의 것**이다 — 알림 링크로 거르기가 바뀌면 3쪽에 남지 않고 첫 쪽으로.
+  const [paging, setPaging] = useState<{ status: string | null; offset: number }>({
+    status,
+    offset: 0,
+  })
+  const offset = paging.status === status ? paging.offset : 0
+  const list = useResource(
+    () => accountApi.list({ status, limit: PER_PAGE, offset }),
+    [status, offset],
+  )
+  const rows = list.data?.items ?? []
+
+  function chooseStatus(value: string | null) {
+    const next = new URLSearchParams(params)
+    if (value) next.set('status', value)
+    else next.delete('status')
+    setParams(next, { replace: true })
+  }
   const summary = useResource(() => accountApi.summary(), [])
   const workspaces = useResource(() => workspaceApi.options(), [])
   const [error, setError] = useState<ApiError | Error | null>(null)
@@ -154,11 +189,32 @@ export default function AccountsAdminPage() {
 
       <ErrorNotice error={error ?? list.error} />
 
-      {list.data && list.data.length === 0 ? (
-        <EmptyState
-          title="계정이 없습니다"
-          hint="설치 스크립트로 만든 관리자 계정만 있는 상태일 수 있습니다."
-        />
+      <div className="flex flex-wrap gap-1" role="group" aria-label="상태">
+        {STATUS_FILTERS.map((one) => (
+          <Button
+            key={one.label}
+            size="sm"
+            variant={status === one.value ? 'default' : 'outline'}
+            aria-pressed={status === one.value}
+            onClick={() => chooseStatus(one.value)}
+          >
+            {one.label}
+          </Button>
+        ))}
+      </div>
+
+      {list.data && rows.length === 0 ? (
+        status ? (
+          <EmptyState
+            title={`${STATUS_FILTERS.find((one) => one.value === status)?.label} 계정이 없습니다`}
+            hint="상태 거르기를 「전체」 로 바꾸면 다른 계정이 보입니다."
+          />
+        ) : (
+          <EmptyState
+            title="계정이 없습니다"
+            hint="설치 스크립트로 만든 관리자 계정만 있는 상태일 수 있습니다."
+          />
+        )
       ) : (
         <Table>
           <TableHeader>
@@ -172,7 +228,7 @@ export default function AccountsAdminPage() {
             </TableRow>
           </TableHeader>
           <TableBody>
-            {(list.data ?? []).map((one) => (
+            {rows.map((one) => (
               <TableRow key={one.id}>
                 <TableCell className="font-mono text-xs">{one.email}</TableCell>
                 <TableCell>
@@ -258,6 +314,18 @@ export default function AccountsAdminPage() {
             ))}
           </TableBody>
         </Table>
+      )}
+
+      {/* **없으면 50명이 넘는 순간 나머지를 볼 방법이 없다** — 그리고 목록은 잘렸다는
+          말을 하지 않으므로 관리자는 그것이 전부라고 읽는다. */}
+      {list.data && (
+        <Pagination
+          total={list.data.total}
+          limit={list.data.limit}
+          offset={list.data.offset}
+          unit="명"
+          onChange={(next) => setPaging({ status, offset: next })}
+        />
       )}
 
       {editing && (

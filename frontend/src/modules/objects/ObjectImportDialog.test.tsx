@@ -12,9 +12,13 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 import type { ImportPlan } from '@/modules/objects/api'
 import type { ObjectType } from '@/modules/ontology/api'
 
-vi.mock('@/shared/auth/AuthContext', () => ({
-  useAuth: () => ({ user: { home_workspace_slug: 'hq', memberships: [] } }),
-}))
+const HQ_MANAGER = {
+  home_workspace_slug: 'hq',
+  is_system_admin: false,
+  memberships: [{ slug: 'hq', name: '본사', path: '본사', role: 'manager' }],
+}
+const auth = vi.hoisted(() => ({ user: null as unknown }))
+vi.mock('@/shared/auth/AuthContext', () => ({ useAuth: () => auth }))
 const objectApi = vi.hoisted(() => ({
   import: vi.fn(),
   importRelations: vi.fn(),
@@ -145,7 +149,35 @@ async function upload() {
 }
 
 describe('일괄 입력', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    auth.user = HQ_MANAGER
+  })
+
+  it('대표 소속에서 멤버뿐이면 관리하는 부서로 보낸다 — 대표 소속으로 보내 403 을 보지 않는다', async () => {
+    // 대표 소속(hq)을 고정으로 보내던 때, B 의 관리자인데 hq 에서는 멤버인 사람은 늘 403 을
+    // 봤다(서버의 require_manager, 2026-10-08).
+    auth.user = {
+      home_workspace_slug: 'hq',
+      is_system_admin: false,
+      memberships: [
+        { slug: 'hq', name: '본사', path: '본사', role: 'member' },
+        { slug: 'lab', name: '시험팀', path: '본사 / 시험팀', role: 'manager' },
+      ],
+    }
+    objectApi.import.mockResolvedValue(job('j1', null, 'queued'))
+    jobsApi.waitFor.mockResolvedValue(job('j1', CLEAN))
+    await mount()
+    expect(screen.getByRole('combobox', { name: '소유 부서' })).toHaveTextContent('시험팀')
+    await upload()
+    await waitFor(() =>
+      expect(objectApi.import).toHaveBeenCalledWith(
+        'part',
+        expect.any(File),
+        expect.objectContaining({ workspaceSlug: 'lab' }),
+      ),
+    )
+  })
 
   it('오류 행이 있으면 적용이 안 선다 — 어느 행이 왜 틀렸는지 적는다', async () => {
     objectApi.import.mockResolvedValue(job('j1', null, 'queued'))

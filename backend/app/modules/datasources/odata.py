@@ -48,7 +48,10 @@ class Fetched:
     rows: list[dict[str, Any]] = field(default_factory=list)
     pages: int = 0
     truncated: bool = False
-    """MAX_ROWS 에서 끊었다 — 계획은 서지만 적용은 막는다."""
+    """MAX_ROWS 에서 끊었다 — 계획은 서지만 적용은 막는다(`next` 가 있는 `sp_core` 는 예외)."""
+    next: str | None = None
+    """끊은 자리 — 상대가 준 **다음 쪽 커서**(`sp_core`). 받은 쪽을 넣고 이 커서를 적어 두면
+    다음 차례가 거기서 잇는다. 없으면 이어 받을 길이 없다(같은 자리에서 다시 받는다)."""
     as_of: str | None = None
     """증분 소스(`sp_core`)가 **끝까지 받았을 때만** 채운다 — 다음 호출의 `since`."""
     reset: bool = False
@@ -179,6 +182,10 @@ def fetch(
                     next_params = {**params, "$skip": str(skip)}
                 else:
                     next_url = None
+            if next_url:
+                # **쪽 수 상한에서 멈췄다** — 더 있는데 안 받았다. 끊김으로 말하지 않으면 잘린
+                # 것을 전량으로 믿고, 「바깥에서 사라진 것」 을 사용 중지까지 한다(2026-10-08).
+                out.truncated = True
     except httpx.HTTPError as caught:
         raise AppError(
             code("DATASOURCES", 13),

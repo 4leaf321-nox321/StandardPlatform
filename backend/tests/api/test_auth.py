@@ -7,16 +7,22 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.branding import ERROR_PREFIX
 from app.modules.accounts.models import User
+from app.modules.audit.models import AuditEntry
 from app.modules.auth import security
+from app.modules.auth.models import PersonalAccessToken, RefreshToken
 from app.modules.workspaces.models import Workspace
+from app.shared.errors import code
 from app.shared.request_context import get_request_id
-from tests.api.conftest import PASSWORD, Signed
+from tests.api.conftest import PASSWORD, Signed, _make_user
 
 
 def test_로그인하면_소속과_역할이_함께_온다(client: TestClient, admin: Signed) -> None:
@@ -203,3 +209,370 @@ def test_아는_범위_목록은_서버가_준다(client: TestClient, admin: Sig
     response = client.get("/api/auth/token-scopes", headers=admin.headers)
     assert response.status_code == 200
     assert "read" in response.json()["scopes"]
+
+
+def test_관리자가_비밀번호를_초기화하면_그_사람의_세션이_끊기고_기록이_남는다(
+    client: TestClient, admin: Signed, member: Signed
+) -> None:
+    """초기화는 대개 「비밀번호가 샜다」 다 — 옛 세션(리프레시 사슬)이 살아 있으면 초기화한
+    뜻이 없다. 본인이 바꿀 때는 끊었는데 관리자 초기화는 안 끊고 기록도 안 남겼다
+    (2026-10-08)."""
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.modules.accounts.models import User
+    from app.modules.audit.models import AuditEntry
+    from app.modules.auth.models import RefreshToken
+
+    with SessionLocal() as db:
+        user = db.scalar(select(User).where(User.email == member.email))
+        assert user is not None
+        user_id = user.id
+        alive = list(
+            db.scalars(
+                select(RefreshToken.id).where(
+                    RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None)
+                )
+            )
+        )
+    assert alive, "로그인한 세션이 있어야 시험이 뜻이 있다"
+    reset = client.post(f"/api/accounts/{user_id}/reset-password", headers=admin.headers)
+    assert reset.status_code == 200, reset.text
+    with SessionLocal() as db:
+        left = db.scalar(
+            select(RefreshToken.id).where(
+                RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None)
+            )
+        )
+        assert left is None
+        logged = db.scalar(
+            select(AuditEntry).where(
+                AuditEntry.action == "account.password_reset", AuditEntry.target_id == user_id
+            )
+        )
+        assert logged is not None and logged.changes["sessions_revoked"] >= 1
+
+
+def test_검증_오류는_비밀번호를_남기지_않는다(client: TestClient) -> None:
+    """틀린 모양의 본문이 오면 그 값이 로그와 응답에 그대로 실렸다 — 비밀번호까지
+    (2026-10-08)."""
+    got = client.post(
+        "/api/auth/login", json={"username": "a@b.c", "password": "hunter2-secret"}
+    )
+    assert got.status_code == 422
+    assert "hunter2-secret" not in got.text
+
+
+# --- 로그인의 입구 ---------------------------------------------------------------
+
+
+def test_없는_계정도_해시_검증을_한_번만_한다(
+    client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**응답 시간으로 계정이 있는지가 새면 안 된다.** 없는 계정 쪽이 해시를 새로 만들고
+    (bcrypt 한 번) 그것으로 검증해(또 한 번) 있는 계정보다 두 배 느렸다 — 막으려던 것과
+    반대로 「느린 쪽이 없는 계정」 이었다(2026-10-08). 시간은 흔들리므로 bcrypt 를 부른
+    횟수로 본다."""
+    import bcrypt
+
+    called: list[str] = []
+    hashpw, checkpw = bcrypt.hashpw, bcrypt.checkpw
+
+    def counted_hash(password: bytes, salt: bytes) -> bytes:
+        called.append("hash")
+        return hashpw(password, salt)
+
+    def counted_check(password: bytes, hashed: bytes) -> bool:
+        called.append("check")
+        return checkpw(password, hashed)
+
+    monkeypatch.setattr(bcrypt, "hashpw", counted_hash)
+    monkeypatch.setattr(bcrypt, "checkpw", counted_check)
+
+    def work(email: str) -> list[str]:
+        body = {"email": email, "password": "not-the-password"}
+        client.post("/api/auth/login", json=body)  # 처음 한 번은 준비(미리 만드는 해시)
+        called.clear()
+        assert client.post("/api/auth/login", json=body).status_code == 401
+        return list(called)
+
+    assert work(f"nobody-{uuid.uuid4().hex[:8]}@example.local") == ["check"]
+    assert work(admin.email) == ["check"]
+
+
+def test_로그인은_아이디를_가입과_같게_다듬는다(client: TestClient, admin: Signed) -> None:
+    """가입 · 관리자 생성은 앞뒤 공백을 떼고 소문자로 저장하는데 로그인은 소문자만 했다 —
+    붙여 넣다 딸려 온 공백 하나로 「이메일 또는 비밀번호가 올바르지 않습니다」 가 났다
+    (2026-10-08)."""
+    got = client.post(
+        "/api/auth/login", json={"email": f"  {admin.email.upper()}\t", "password": PASSWORD}
+    )
+    assert got.status_code == 200, got.text
+
+
+def test_인코딩된_물음표로_범위_판정을_비껴가지_못한다(
+    client: TestClient, admin: Signed
+) -> None:
+    """범위는 **라우팅과 같은 경로**로 판정한다. `request.url.path` 는 디코딩된 경로로 주소를
+    다시 지어 쪼개므로 `%3F`(?) · `%23`(#) 에서 잘린다 — `/api/metrics/plan%3F/recompute` 가
+    「읽기로 연 `/api/metrics/plan`」 으로 보여 읽기 토큰이 재계산(쓰기) 경로를 지나갔다
+    (2026-10-08). 라우팅은 `plan?` 을 지표 이름으로 받는다."""
+    made = client.post(
+        "/api/auth/tokens", json={"name": "읽기만", "scopes": ["read"]}, headers=admin.headers
+    )
+    head = {"Authorization": f"Bearer {made.json()['token']}"}
+    for path in ("/api/metrics/plan%3F/recompute", "/api/metrics/plan%23/recompute"):
+        got = client.post(path, headers=head)
+        assert got.status_code == 403, (path, got.status_code, got.text)
+        assert got.json()["error"]["code"] == code("AUTH", 106), got.text
+
+
+# --- 계정의 생애와 세션 ------------------------------------------------------------
+
+
+def test_계정을_만들거나_승인할_때_모르는_역할은_거절한다(
+    client: TestClient, admin: Signed, workspace: Workspace
+) -> None:
+    """역할 칸을 안 봐서 `owner` 같은 아무 글자나 부서 역할로 들어갔다 — 그 사람은 관리자도
+    멤버도 아닌 채로 남고, 부서 화면 어디에서도 설명되지 않는다(2026-10-08)."""
+    email = f"role-{uuid.uuid4().hex[:8]}@example.local"
+    body = {"email": email, "display_name": "역할", "workspace_slug": workspace.slug}
+    refused = client.post(
+        "/api/accounts", json={**body, "role": "owner"}, headers=admin.headers
+    )
+    assert refused.status_code == 400, refused.text
+    assert refused.json()["error"]["code"] == code("ACCOUNTS", 10)
+    # 반쯤 만든 계정을 남기지 않는다 — 남기면 같은 아이디로 다시 못 만든다.
+    made = client.post(
+        "/api/accounts", json={**body, "role": "manager"}, headers=admin.headers
+    )
+    assert made.status_code == 201, made.text
+    assert [one["role"] for one in made.json()["account"]["workspaces"]] == ["manager"]
+
+    signup = client.post(
+        "/api/accounts/signup",
+        json={
+            "email": f"wait-{uuid.uuid4().hex[:8]}@example.local",
+            "password": "signup-password",
+            "display_name": "대기",
+            "workspace_slug": workspace.slug,
+        },
+    )
+    assert signup.status_code == 201, signup.text
+    approve = f"/api/accounts/{signup.json()['id']}/approve"
+    wrong = client.post(approve, json={"role": "superuser"}, headers=admin.headers)
+    assert wrong.status_code == 400, wrong.text
+    assert wrong.json()["error"]["code"] == code("ACCOUNTS", 10)
+    # 거절이 대기 상태를 안 바꿨다 — 맞는 역할로 다시 승인된다.
+    approved = client.post(approve, json={"role": "member"}, headers=admin.headers)
+    assert approved.status_code == 200, approved.text
+
+
+def test_관리자가_만든_계정과_그때_준_시스템_관리자_권한이_기록에_남는다(
+    client: TestClient, db: Session, admin: Signed, workspace: Workspace
+) -> None:
+    """계정 화면에서 시스템 관리자를 **켜면** 기록이 남는데, 만들면서 켜면 아무것도 안 남았다
+    — 같은 권한이 길에 따라 흔적이 있고 없었다(2026-10-08)."""
+    made = client.post(
+        "/api/accounts",
+        json={
+            "email": f"made-{uuid.uuid4().hex[:8]}@example.local",
+            "display_name": "새 관리자",
+            "workspace_slug": workspace.slug,
+            "is_system_admin": True,
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    account_id = uuid.UUID(made.json()["account"]["id"])
+    actions = set(
+        db.scalars(select(AuditEntry.action).where(AuditEntry.target_id == account_id))
+    )
+    assert actions == {"account.created", "account.admin_changed"}
+
+
+def _own_session(email: str) -> tuple[TestClient, dict[str, str]]:
+    """그 사람의 브라우저 — refresh 쿠키를 **따로** 든다(공용 `client` 의 쿠키는 마지막에
+    로그인한 사람 것이다). 그 사람의 개인 토큰도 하나 만들어 머리로 돌려준다."""
+    from app.main import app
+
+    own = TestClient(app)
+    signed = own.post("/api/auth/login", json={"email": email, "password": PASSWORD})
+    assert signed.status_code == 200, signed.text
+    made = own.post(
+        "/api/auth/tokens",
+        json={"name": "연동"},
+        headers={"Authorization": f"Bearer {signed.json()['access_token']}"},
+    )
+    assert made.status_code == 201, made.text
+    return own, {"Authorization": f"Bearer {made.json()['token']}"}
+
+
+def test_정지했다_다시_켜도_옛_세션은_살아나지_않는다(
+    client: TestClient, db: Session, admin: Signed, workspace: Workspace
+) -> None:
+    """정지는 세션을 끊지 않고 **막기만** 했다 — 정지 동안 refresh 는 거절되지만 다시 켜는
+    순간 정지 전의 로그인(30일)이 그대로 이어졌다. 정지한 까닭이 「그 사람의 기기가 샜다」
+    면 다시 켠 날 그 기기가 돌아온다(2026-10-08).
+
+    개인 토큰은 다르다 — 정지 동안 막히고 다시 켜면 산다. 연동은 사람이 그 자리에서 다시
+    로그인하지 못한다(초기화도 토큰은 따로 폐기한다)."""
+    user = _make_user(db, workspace, label="paused", is_system_admin=False, role="member")
+    own, machine = _own_session(user.email)
+
+    paused = client.post(f"/api/accounts/{user.id}/suspend", headers=admin.headers)
+    assert paused.status_code == 200, paused.text
+    assert own.get("/api/auth/me", headers=machine).status_code == 401
+    resumed = client.post(f"/api/accounts/{user.id}/activate", headers=admin.headers)
+    assert resumed.status_code == 200, resumed.text
+
+    assert own.post("/api/auth/refresh").status_code == 401
+    assert own.get("/api/auth/me", headers=machine).status_code == 200
+    # 막은 것은 옛 세션이지 계정이 아니다 — 다시 로그인하면 이어진다.
+    login = own.post("/api/auth/login", json={"email": user.email, "password": PASSWORD})
+    assert login.status_code == 200, login.text
+    assert own.post("/api/auth/refresh").status_code == 200
+
+    logged = [
+        entry.changes
+        for entry in db.scalars(
+            select(AuditEntry).where(
+                AuditEntry.action == "account.suspended", AuditEntry.target_id == user.id
+            )
+        )
+    ]
+    assert {"status": {"before": "active", "after": "suspended"}, "sessions_revoked": 1} in (
+        logged
+    )
+
+
+def test_계정을_지우면_세션과_개인_토큰을_폐기한다(
+    client: TestClient, db: Session, admin: Signed, workspace: Workspace
+) -> None:
+    """지운 계정은 되살리는 길이 없다. 막혀 있기만 한 자격을 살아 있는 채로 두면 「이 창구를
+    읽을 수 있는 자격」 목록(코어 › 액세스 토큰)이 그것을 센다 — 폐기해 두면 목록과 실제가
+    같다(2026-10-08)."""
+    user = _make_user(db, workspace, label="leaving", is_system_admin=False, role="member")
+    own, machine = _own_session(user.email)
+
+    gone = client.delete(f"/api/accounts/{user.id}", headers=admin.headers)
+    assert gone.status_code == 200, gone.text
+    assert own.get("/api/auth/me", headers=machine).status_code == 401
+    assert own.post("/api/auth/refresh").status_code in (401, 403)
+
+    alive_refresh = db.scalar(
+        select(RefreshToken.id).where(
+            RefreshToken.user_id == user.id, RefreshToken.revoked_at.is_(None)
+        )
+    )
+    alive_pat = db.scalar(
+        select(PersonalAccessToken.id).where(
+            PersonalAccessToken.user_id == user.id, PersonalAccessToken.revoked_at.is_(None)
+        )
+    )
+    assert alive_refresh is None and alive_pat is None
+    entry = db.scalar(
+        select(AuditEntry).where(
+            AuditEntry.action == "account.deleted", AuditEntry.target_id == user.id
+        )
+    )
+    assert entry is not None
+    assert entry.changes == {"sessions_revoked": 1, "tokens_revoked": 1}
+
+
+def _browser(email: str, password: str = PASSWORD) -> tuple[TestClient, dict[str, str]]:
+    """그 사람의 브라우저 하나 — refresh 쿠키를 따로 들고, 받은 access 를 머리로 돌려준다."""
+    from app.main import app
+
+    own = TestClient(app)
+    signed = own.post("/api/auth/login", json={"email": email, "password": password})
+    assert signed.status_code == 200, signed.text
+    return own, {"Authorization": f"Bearer {signed.json()['access_token']}"}
+
+
+def test_세션을_끊으면_이미_받은_access_도_못_쓴다(
+    client: TestClient, db: Session, admin: Signed, workspace: Workspace
+) -> None:
+    """끊는 일은 refresh 만 폐기했다 — 이미 받은 access(12시간)는 만료까지 그대로 통해서,
+    「샜다」 고 초기화 · 정지한 뒤에도 공격자가 쥔 토큰이 반나절 살았다(2026-10-08)."""
+    user = _make_user(db, workspace, label="leaked", is_system_admin=False, role="member")
+
+    own, access = _browser(user.email)
+    assert own.get("/api/auth/me", headers=access).status_code == 200
+    reset = client.post(f"/api/accounts/{user.id}/reset-password", headers=admin.headers)
+    assert reset.status_code == 200, reset.text
+    assert own.get("/api/auth/me", headers=access).status_code == 401
+
+    # 정지했다 다시 켜도 정지 전의 access 는 돌아오지 않는다.
+    db.refresh(user)
+    user.password_hash = security.hash_password(PASSWORD)
+    db.commit()
+    own, access = _browser(user.email)
+    assert client.post(f"/api/accounts/{user.id}/suspend", headers=admin.headers).is_success
+    assert client.post(f"/api/accounts/{user.id}/activate", headers=admin.headers).is_success
+    assert own.get("/api/auth/me", headers=access).status_code == 401
+
+    # 막은 것은 그때까지의 로그인이다 — 새로 받은 것은 통한다.
+    _, fresh = _browser(user.email)
+    assert own.get("/api/auth/me", headers=fresh).status_code == 200
+
+
+def test_비밀번호를_바꾸면_옛_기기의_갱신이_새_로그인을_끊지_않는다(
+    db: Session, workspace: Workspace
+) -> None:
+    """비밀번호 변경으로 폐기된 옛 기기의 refresh 가 늦게 오면 「탈취」 로 보고 그 사람의
+    로그인을 **전부** 끊었다 — 바꾼 뒤 새로 한 로그인까지(2026-10-08). 회전이 아니라 끊어서
+    폐기된 것은 그 기기만 거절한다."""
+    user = _make_user(db, workspace, label="mover", is_system_admin=False, role="member")
+    old_device, old_access = _browser(user.email)
+    laptop, laptop_access = _browser(user.email)
+
+    changed = laptop.post(
+        "/api/auth/change-password",
+        json={"current_password": PASSWORD, "new_password": "brand-new-password"},
+        headers=laptop_access,
+    )
+    assert changed.status_code == 204, changed.text
+    # 바꾼 그 자리의 access 도, 다른 기기의 access 도 끊겼다.
+    assert laptop.get("/api/auth/me", headers=laptop_access).status_code == 401
+    assert old_device.get("/api/auth/me", headers=old_access).status_code == 401
+
+    laptop, fresh = _browser(user.email, "brand-new-password")
+    late = old_device.post("/api/auth/refresh")
+    assert late.status_code == 401
+    assert late.json()["error"]["code"] == code("AUTH", 3)
+    # 새 로그인은 살아 있다.
+    assert laptop.get("/api/auth/me", headers=fresh).status_code == 200
+    assert laptop.post("/api/auth/refresh").status_code == 200
+
+
+def test_회전으로_넘겨진_값이_다시_오면_전부_끊는다(db: Session, workspace: Workspace) -> None:
+    """탈취 탐지는 그대로다 — 회전으로 이미 넘겨진 값이 유예를 지나 다시 오면 사슬이 둘로
+    갈린 것이다. 그 사람의 refresh 도, 이미 받은 access 도 모두 끊는다."""
+    from app.config import get_settings
+    from app.main import app
+    from app.modules.auth import services as auth_services
+
+    cookie = get_settings().refresh_cookie_name
+    user = _make_user(db, workspace, label="stolen", is_system_admin=False, role="member")
+    own, _ = _browser(user.email)
+    stolen = own.cookies.get(cookie)
+    assert stolen
+    rotated = own.post("/api/auth/refresh")
+    assert rotated.status_code == 200, rotated.text
+    access = {"Authorization": f"Bearer {rotated.json()['access_token']}"}
+
+    token = db.scalar(
+        select(RefreshToken).where(RefreshToken.token_hash == security.hash_token(stolen))
+    )
+    assert token is not None and token.revoked_at is not None
+    token.revoked_at = token.revoked_at - auth_services.REFRESH_GRACE * 2
+    db.commit()
+
+    thief = TestClient(app)
+    thief.cookies.set(cookie, stolen)
+    replay = thief.post("/api/auth/refresh")
+    assert replay.status_code == 401
+    assert replay.json()["error"]["code"] == code("AUTH", 5)
+    assert own.get("/api/auth/me", headers=access).status_code == 401
+    assert own.post("/api/auth/refresh").status_code == 401

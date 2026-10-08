@@ -88,6 +88,9 @@ export default function DataSourcesPage() {
   const [syncing, setSyncing] = useState<{ source: DataSource; result: SyncResult } | null>(null)
   const [busy, setBusy] = useState<string | null>(null)
   const [error, setError] = useState<Error | null>(null)
+  /** 동기화(계획 · 적용)를 돌릴 때마다 하나씩 — 펼쳐 둔 「최근 동기화」 가 다시 읽는다. 안 읽던
+   *  때는 방금 돌린 것이 목록에 없어, 기록이 안 남은 줄 알았다(2026-10-08). */
+  const [runsVersion, setRunsVersion] = useState(0)
 
   const sources = list.data ?? []
 
@@ -100,6 +103,7 @@ export default function DataSourcesPage() {
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     } finally {
       setBusy(null)
+      setRunsVersion((before) => before + 1)
     }
   }
 
@@ -200,7 +204,7 @@ export default function DataSourcesPage() {
                     : ' · 아직 전량 대조 전')}
                 {source.auth_kind !== 'none' && ` · 인증 ${source.auth_kind}`}
               </p>
-              {opened === source.slug && <Runs source={source} />}
+              {opened === source.slug && <Runs source={source} version={runsVersion} />}
             </li>
           ))}
         </ul>
@@ -228,6 +232,7 @@ export default function DataSourcesPage() {
           onClose={() => {
             setSyncing(null)
             list.reload()
+            setRunsVersion((before) => before + 1)
           }}
         />
       )}
@@ -249,9 +254,9 @@ export default function DataSourcesPage() {
   )
 }
 
-/** 최근 동기화 기록. */
-function Runs({ source }: { source: DataSource }) {
-  const runs = useResource(() => datasourceApi.runs(source.slug), [source.slug])
+/** 최근 동기화 기록. `version` 이 바뀌면(이 화면에서 동기화를 돌렸으면) 다시 읽는다. */
+function Runs({ source, version }: { source: DataSource; version: number }) {
+  const runs = useResource(() => datasourceApi.runs(source.slug), [source.slug, version])
   const rows = runs.data ?? []
   const [shown, setShown] = useState<string | null>(null)
   return (
@@ -271,12 +276,20 @@ function Runs({ source }: { source: DataSource }) {
             className={
               run.status === 'ok'
                 ? 'text-emerald-700 dark:text-emerald-400'
-                : run.status === 'failed'
+                : run.status === 'failed' && run.finished_at !== null
                   ? 'text-destructive'
                   : 'text-muted-foreground'
             }
           >
-            {run.status === 'ok' ? '적용' : run.status === 'failed' ? '실패' : '계획만'}
+            {/* 적용은 시작할 때 「실패 · 적용 중…」 을 먼저 적어 둔다(도중에 죽어도 계획으로
+                안 보이게) — 아직 안 끝난 것을 「실패」 라고 부르지 않는다. */}
+            {run.status === 'ok'
+              ? '적용'
+              : run.status === 'failed'
+                ? run.finished_at === null
+                  ? '적용 중'
+                  : '실패'
+                : '계획만'}
           </span>
           <span className="text-muted-foreground">{shownDateTime(run.started_at)}</span>
           <span>{run.actor_label}</span>
@@ -314,7 +327,10 @@ const COUNT_LABEL: Record<string, string> = {
   // RA 보고서(ADR 0018) — 지우지 않고 원본 상태를 적는다.
   gone: '원본에서 내려감',
   back: '다시 게시',
-  gone_held_back: '내려감 보류',
+  // 바깥이 한꺼번에 비어 「사라짐」 처리(내려감 · 사용 중지)를 미뤘다 — 일부만 온 응답일 수 있다.
+  gone_held_back: '사라짐 처리 보류',
+  // 이 소스가 「바깥에서 사라져」 중지했던 것이 다시 왔다.
+  revived: '다시 사용',
   tags_as_text: '글로 남긴 태그',
   // 선(관계) — 형제 코어 · 한 행이 선 하나인 소스.
   relations_create: '선 새로',
@@ -350,9 +366,13 @@ function SyncDialog({
   const ra = source.kind === 'ra_reports'
   // RA 는 깨진 보고서(번호 · 제목이 빈 것)를 건너뛰고 나머지를 넣는다 — 한 건 때문에 조직
   // 전체가 멈추지 않게. 그래서 넣을 수 있는가는 서버의 판단(`planned`)을 따른다.
-  const ok = ra
-    ? result.run.status === 'planned' && !result.truncated
-    : result.errors.length === 0 && (result.counts.error ?? 0) === 0 && !result.truncated
+  // 넣을 수 있는가는 **서버의 판단**(`planned`)을 따른다 — 기록의 말(`errors`)에는 오류가 아닌
+  // 안내(선 기다림 · 처음부터 다시 받음 · 이어 받을 끊김)도 실려, 그것만으로 적용을 막았다
+  // (2026-10-08). RA 는 깨진 보고서(오류 줄)를 건너뛰고 넣되, 끊기면 넣지 않는다(전량 대조라
+  // 일부로는 「내려감」 을 틀리게 적는다).
+  const ok =
+    result.run.status === 'planned' &&
+    (ra ? !result.truncated : (result.counts.error ?? 0) === 0)
   const problems = result.rows.filter((row) => row.action === 'error')
 
   async function apply() {
@@ -587,6 +607,26 @@ function EditDialog({
     }
   }
 
+  /**
+   * 미리 보기 · 초안 받기 **앞에 저장할 것** — 칸 대응을 맞추기 **전**에 누르므로, 덜 된 객체
+   * 대응은 빼고 보낸다(서버가 「이름 열이 없다」 로 거절하면 열 이름을 볼 길이 없다).
+   *
+   * ⚠️ **선 소스는 그 판정에 안 걸린다** — 선에는 바깥 식별자 · 이름 열이 없다. 예전에는 늘
+   *    「덜 됨」 으로 보고 빈 대응을 저장해, 미리 보기만 눌러도 저장된 선 대응이 지워졌다
+   *    (2026-10-08). 선은 출발 · 도착 열이 다 적혔을 때만 싣고, 아니면 **대응을 안 보낸다**
+   *    (있던 것을 그대로 둔다).
+   */
+  function draftForLookup(): DataSourceWrite {
+    const draft = body()
+    if (edgeMode) {
+      if (edgeRelation && edgeSrc.trim() && edgeDst.trim()) return draft
+      const { mapping: _unsent, ...rest } = draft
+      return rest as DataSourceWrite
+    }
+    const complete = Boolean(externalKey.trim() && fixedOf('label'))
+    return complete ? draft : { ...draft, mapping: {} }
+  }
+
   /** 미리 보기 — 저장한 뒤 앞의 몇 행을 읽어 온다. 열 이름이 여기서 보이면 칸 대응이 쉽다. */
   async function peek() {
     setBusy(true)
@@ -594,10 +634,7 @@ function EditDialog({
     try {
       // 미리 보기는 칸 대응을 **맞추기 전**에 누른다 — 아직 덜 된 대응은 보내지 않는다
       // (서버가 「이름 열이 없다」 로 거절하면 열 이름을 볼 길이 없다).
-      const draft = body()
-      const complete = Boolean(externalKey.trim() && fixedOf('label'))
-      const payload = complete ? draft : { ...draft, mapping: {} }
-      await persist(payload)
+      await persist(draftForLookup())
       setPreview(await datasourceApi.preview(slug.trim()))
     } catch (caught) {
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
@@ -617,10 +654,7 @@ function EditDialog({
     setBusy(true)
     setError(null)
     try {
-      const draft = body()
-      const complete = Boolean(externalKey.trim() && fixedOf('label'))
-      const payload = complete ? draft : { ...draft, mapping: {} }
-      await persist(payload)
+      await persist(draftForLookup())
       const found = await datasourceApi.coreSuggest(slug.trim())
       setSuggested(found)
       setExternalKey(found.mapping.external_key ?? 'key')

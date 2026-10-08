@@ -508,7 +508,12 @@ def index_of(db: Session, object_type: ObjectType) -> dict[str, list[uuid.UUID]]
 
 def move(db: Session, loser: ObjectInstance, winner: ObjectInstance) -> tuple[int, int]:
     """합치기 — 지는 쪽의 별칭·외부 식별자와 **이름**을 이긴 쪽으로. 겹치면 버린다.
-    (옮긴 수, 버린 수)."""
+    (옮긴 수, 버린 수).
+
+    같은 소스에서 온 둘을 합치면 이긴 쪽이 그 소스의 외부 식별자(`source:<slug>`)를 **둘 다**
+    갖는다 — 일부러다. 하나를 버리면 바깥의 그 행이 다음 동기화에서 새 객체를 만들어 합친 것이
+    도로 갈린다. 동기화는 둘을 이 객체로 모아 한 행의 값만 넣는다(`datasources/services.py`
+    의 `_collapse_merged`)."""
     winner_rows = list(
         db.scalars(select(ObjectAlias).where(ObjectAlias.object_id == winner.id))
     )
@@ -523,9 +528,21 @@ def move(db: Session, loser: ObjectInstance, winner: ObjectInstance) -> tuple[in
         one.object_id = winner.id
         have.add((one.kind, one.norm))
         moved += 1
-    # 지는 쪽 이름도 별칭으로 — 같은 표기로 다시 와도 같은 것으로 풀리게.
+    # 지는 쪽 이름도 별칭으로 — 같은 표기로 다시 와도 같은 것으로 풀리게. **다른 객체가 이미
+    # 그 이름을 별칭으로 가졌으면 건너뛴다** — 타입 안에서 (종류, 값)은 하나뿐이라 넣으면
+    # 합치기가 통째로 500 이 됐다(2026-10-08). 그 겹침은 품질 검사(`alias_clash`)가 따로 센다.
     loser_norm = compare_key(loser.label)
-    if (HUMAN, loser_norm) not in have and loser_norm:
+    taken = (
+        db.scalar(
+            select(ObjectAlias.id).where(
+                ObjectAlias.type_id == winner.type_id,
+                ObjectAlias.kind == HUMAN,
+                ObjectAlias.norm == loser_norm,
+            )
+        )
+        is not None
+    )
+    if (HUMAN, loser_norm) not in have and loser_norm and not taken:
         db.add(
             ObjectAlias(
                 object_id=winner.id,

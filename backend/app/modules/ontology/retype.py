@@ -28,10 +28,10 @@ import re
 import uuid
 from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -675,8 +675,25 @@ def apply(
     seen = 0
     now = datetime.now(UTC)
     for target in targets:
-        owner = db.get(ObjectType, target.type_id)
-        if owner is None:  # pragma: no cover - 계획과 같은 트랜잭션이다
+        failed = _Failed()
+        # **정의 행과 타입을 먼저 잠근다** — 긴 변환 중에 다른 관리자가 같은 속성 · 타입을
+        # 고치면 끝에서 덮인다. 타입은 `NO KEY UPDATE` 다: 객체 만들기의 FK 검사(KEY SHARE)는
+        # 막지 않는다 — 막으면 200만 건 변환 내내 그 타입에 객체를 못 넣는다.
+        definition = db.scalar(
+            select(PropertyDef)
+            .where(
+                PropertyDef.owner_kind == "type",
+                PropertyDef.owner_id == target.type_id,
+                PropertyDef.key == target.key,
+            )
+            .with_for_update()
+        )
+        owner = db.scalar(
+            select(ObjectType)
+            .where(ObjectType.id == target.type_id)
+            .with_for_update(key_share=True)  # PostgreSQL 에서 `FOR NO KEY UPDATE`
+        )
+        if owner is None or definition is None:  # pragma: no cover - 계획과 같은 트랜잭션이다
             continue
         why = (
             f"속성 종류 변경: 「{target.label}」 {kind_label(target.before)} → "
@@ -686,80 +703,42 @@ def apply(
             why += f" — 인터페이스 {target.via}"
         if reason:
             why += f" — {reason}"
-        converted = cleared = 0
-        last: uuid.UUID | None = None
-        while True:
-            # 그 칸만 읽고 잠근다 — 행 전체(속성 30여 칸)를 ORM 객체로 싣지 않는다.
-            stmt = (
-                select(
-                    ObjectInstance.id,
-                    ObjectInstance.label,
-                    ObjectInstance.owner_workspace_id,
-                    ObjectInstance.properties[target.key],
+        counts = [0, 0]
+        for scope in ("all", "late"):
+            # 첫 바퀴는 값이 있는 행 전부, 둘째 바퀴는 **커서가 지나간 뒤 바뀌거나 생긴 행** —
+            # uuid 순으로 덩어리를 잠그므로, 이미 지나간 자리에 새로 생긴 행 · 그때 그 칸이
+            # 비어 있다가 채워진 행은 첫 바퀴가 못 본다. 정의를 바꾸기 직전에 한 번 더 훑지
+            # 않으면 그 값은 옛 종류로 남았다(2026-10-08).
+            last: uuid.UUID | None = None
+            while True:
+                rows = _locked_chunk(db, target, last, late=scope == "late")
+                if not rows:
+                    break
+                if on_progress is not None and scope == "all":
+                    on_progress("적용", seen, total)
+                    seen += len(rows)
+                if linker is not None:
+                    linker.ready(target, [old for *_, old in rows])
+                done = _rewrite_rows(
+                    db, user, target, owner.slug, rows, mapping, linker, why, failed
                 )
-                .where(
-                    ObjectInstance.type_id == target.type_id,
-                    ObjectInstance.deleted_at.is_(None),
-                    ObjectInstance.properties.has_key(target.key),
-                )
-                .order_by(ObjectInstance.id)
-                .limit(rewrite.CHUNK)
-                .with_for_update()
+                counts[0] += done[0]
+                counts[1] += done[1]
+                last = rows[-1][0]
+        converted, cleared = counts
+        if failed.values:
+            # 계획 뒤에 **바뀐 값이 변환되지 않는다** — 예전에는 조용히 건너뛰어 그 값이 옛
+            # 종류로 남았다. 하나라도 있으면 전부 되돌린다(부르는 쪽이 롤백한다).
+            listed = ", ".join(
+                f"「{value}」({count})"
+                for value, count in sorted(failed.values.items(), key=lambda one: -one[1])[:5]
             )
-            if last is not None:
-                stmt = stmt.where(ObjectInstance.id > last)
-            rows = [(row[0], row[1], row[2], row[3]) for row in db.execute(stmt)]
-            if not rows:
-                break
-            if on_progress is not None:
-                on_progress("적용", seen, total)
-                seen += len(rows)
-            if linker is not None:
-                linker.ready(target, [old for *_, old in rows])
-            writes: list[tuple[uuid.UUID, bool, Any]] = []
-            history: list[tuple[uuid.UUID, str, uuid.UUID | None, dict[str, Any]]] = []
-            for object_id, label, workspace_id, old in rows:
-                result = _converted(target, old, mapping, linker)
-                if result.failures or not result.changed:
-                    continue
-                writes.append((object_id, result.remove, result.value))
-                if result.remove:
-                    cleared += 1
-                    after: dict[str, Any] = {}
-                else:
-                    converted += 1
-                    after = {target.key: result.value}
-                history.append(
-                    (
-                        object_id,
-                        f"{owner.slug}:{label}",
-                        workspace_id,
-                        rewrite.changed_property(target.key, old, after),
-                    )
-                )
-            if writes:
-                # **덩어리 하나에 문장 하나** — 행마다 보내면 참조 색인 트리거가 행마다 돌았다
-                # (실측: 200만 건 38분).
-                rewrite.write_key(db, target.key, writes)
-                audit.record_rows(
-                    db,
-                    action="object.update",
-                    actor=user,
-                    target_table="objects",
-                    rows=history,
-                    reason=why,
-                )
-            last = rows[-1][0]
-
-        definition = db.scalar(
-            select(PropertyDef).where(
-                PropertyDef.owner_kind == "type",
-                PropertyDef.owner_id == target.type_id,
-                PropertyDef.key == target.key,
+            planned.errors.append(
+                f"{target.name}: 계획을 세운 뒤 바뀐 값 가운데 "
+                f"{kind_label(target.after.data_type)}(으)로 변환할 수 없는 것이 "
+                f"{sum(failed.values.values())}건 있습니다 — {listed}. 다시 계획을 보세요."
             )
-        )
-        if definition is None:  # pragma: no cover - 계획과 같은 트랜잭션이다
-            continue
+            return planned
         for name, value in interfaces.shape_of(target.after).written().items():
             setattr(definition, name, value)
         definition.unique = bool(target.after.unique)
@@ -787,6 +766,117 @@ def apply(
         )
     db.flush()
     return planned
+
+
+#: 둘째 바퀴가 보는 시각의 폭 — 이 트랜잭션이 시작하기 이만큼 전에 시작한 쓰기도 커서가 지나간
+#: 뒤에 커밋됐을 수 있다(요청은 초 단위, 묶음 가져오기는 분 단위다).
+LATE_SLACK = timedelta(minutes=30)
+
+
+@dataclass
+class _Failed:
+    """적용 중에 변환하지 못한 값 — 값마다 건수, 그리고 그 행(둘째 바퀴가 다시 세지 않게)."""
+
+    values: dict[str, int] = field(default_factory=dict)
+    ids: set[uuid.UUID] = field(default_factory=set)
+
+
+Row = tuple[uuid.UUID, str, uuid.UUID | None, Any]
+
+
+def _locked_chunk(
+    db: Session, target: Target, last: uuid.UUID | None, *, late: bool
+) -> list[Row]:
+    """그 칸만 읽고 잠근 덩어리 하나 — 행 전체(속성 30여 칸)를 ORM 객체로 싣지 않는다.
+
+    `late` 면 **이 트랜잭션 밖에서** 최근에 바뀐 행만 — 이 트랜잭션이 고친 행은 `updated_at`
+    이 `now()` 와 같고, 그 행은 첫 바퀴가 이미 잠가 남이 못 고쳤다(두 범위로 나눠 색인을 탄다).
+    """
+    stmt = (
+        select(
+            ObjectInstance.id,
+            ObjectInstance.label,
+            ObjectInstance.owner_workspace_id,
+            ObjectInstance.properties[target.key],
+        )
+        .where(
+            ObjectInstance.type_id == target.type_id,
+            ObjectInstance.deleted_at.is_(None),
+            ObjectInstance.properties.has_key(target.key),
+        )
+        .order_by(ObjectInstance.id)
+        .limit(rewrite.CHUNK)
+        .with_for_update()
+    )
+    if late:
+        stmt = stmt.where(
+            or_(
+                and_(
+                    ObjectInstance.updated_at >= func.now() - LATE_SLACK,
+                    ObjectInstance.updated_at < func.now(),
+                ),
+                ObjectInstance.updated_at > func.now(),
+            )
+        )
+    if last is not None:
+        stmt = stmt.where(ObjectInstance.id > last)
+    return [(row[0], row[1], row[2], row[3]) for row in db.execute(stmt)]
+
+
+def _rewrite_rows(
+    db: Session,
+    user: User | None,
+    target: Target,
+    owner_slug: str,
+    rows: list[Row],
+    mapping: Mapping[str, str | None] | None,
+    linker: RefLinker | None,
+    why: str,
+    failed: _Failed,
+) -> tuple[int, int]:
+    """덩어리 하나를 새 종류로 — (변환한 수, 비운 수). 변환할 수 없는 값은 `failed` 에 센다."""
+    writes: list[tuple[uuid.UUID, bool, Any]] = []
+    history: list[tuple[uuid.UUID, str, uuid.UUID | None, dict[str, Any]]] = []
+    converted = cleared = 0
+    for object_id, label, workspace_id, old in rows:
+        if object_id in failed.ids:
+            continue
+        result = _converted(target, old, mapping, linker)
+        if result.failures:
+            failed.ids.add(object_id)
+            for key, _reason in result.failures:
+                failed.values[key] = failed.values.get(key, 0) + 1
+            continue
+        if not result.changed:
+            continue
+        writes.append((object_id, result.remove, result.value))
+        if result.remove:
+            cleared += 1
+            after: dict[str, Any] = {}
+        else:
+            converted += 1
+            after = {target.key: result.value}
+        history.append(
+            (
+                object_id,
+                f"{owner_slug}:{label}",
+                workspace_id,
+                rewrite.changed_property(target.key, old, after),
+            )
+        )
+    if writes:
+        # **덩어리 하나에 문장 하나** — 행마다 보내면 참조 색인 트리거가 행마다 돌았다
+        # (실측: 200만 건 38분).
+        rewrite.write_key(db, target.key, writes)
+        audit.record_rows(
+            db,
+            action="object.update",
+            actor=user,
+            target_table="objects",
+            rows=history,
+            reason=why,
+        )
+    return converted, cleared
 
 
 # --- 딸린 것 --------------------------------------------------------------------
@@ -866,21 +956,77 @@ def _view_error(db: Session, view: Any) -> str | None:
     return None
 
 
-def _views_breaking(db: Session, targets: list[Target]) -> list[str]:
-    """저장된 뷰 · 홈 위젯 가운데 **이 변경으로 새로** 깨지는 것.
+def _metric_error(db: Session, metric: Any) -> str | None:
+    """지표 정의를 지금 정의로 지으면 나는 오류 — 없으면 None. 계산이 부르는 것과 같은 함수다
+    (`metrics.spec.build`)."""
+    from pydantic import ValidationError
 
-    손으로 견주지 않고 **흉내 낸다** — 세이브포인트 안에서 새 정의를 적고, 저장할 때와 같은
-    검사를 다시 돌린 뒤 되돌린다. 칸은 이어진 칸 주소(`ref.개발사.국가`)일 수도 있어서, 손으로
-    견주면 다른 타입의 뷰를 놓친다. 원래 깨져 있던 뷰는 이 변경 탓이 아니라 말하지 않는다.
+    from app.modules.metrics import spec as metric_spec
+    from app.shared.errors import AppError
+
+    source = db.get(ObjectType, metric.source_type_id)
+    if source is None:  # pragma: no cover - RESTRICT 라 원천 타입이 먼저 못 지워진다
+        return None
+    try:
+        parsed = metric_spec.MetricSpec.model_validate(metric.spec or {})
+        metric_spec.build(db, source, parsed, self_slug=metric.slug)
+    except AppError as caught:
+        return caught.message
+    except ValidationError:  # 원래 깨진 정의 — 이 변경 탓이 아니다
+        return None
+    return None
+
+
+def breaking(db: Session, mutate: Callable[[], None]) -> list[str]:
+    """저장된 뷰 · 홈 위젯 · **지표** 가운데 `mutate` 로 **새로** 깨지는 것.
+
+    손으로 견주지 않고 **흉내 낸다** — 세이브포인트 안에서 바꾼 뒤, 저장할 때 · 계산할 때와
+    같은 검사를 다시 돌리고 되돌린다. 칸은 이어진 칸 주소(`ref.개발사.국가`)일 수도 있어서,
+    손으로 견주면 다른 타입의 뷰 · 지표를 놓친다. 원래 깨져 있던 것은 이 변경 탓이 아니라
+    말하지 않는다. 속성 삭제(`ontology.routes`)와 종류 변경이 함께 쓴다 — 지표는 예전에 둘 다
+    안 봤다(2026-10-08).
     """
+    from app.modules.metrics.models import MetricDef
     from app.modules.objects.models import SavedView
 
     saved = list(db.scalars(select(SavedView)))
-    if not saved:
+    metrics = list(db.scalars(select(MetricDef)))
+    if not saved and not metrics:
         return []
     before = {one.id: _view_error(db, one) for one in saved}
+    counted = {one.id: _metric_error(db, one) for one in metrics}
     savepoint = db.begin_nested()
     try:
+        mutate()
+        db.flush()
+        after = {one.id: _view_error(db, one) for one in saved}
+        recounted = {one.id: _metric_error(db, one) for one in metrics}
+    finally:
+        savepoint.rollback()
+    broken = [one for one in saved if before[one.id] is None and after[one.id] is not None]
+    out = [
+        f"저장된 뷰 「{one.name}」{'(홈 게시)' if one.home_order is not None else ''} 은(는) "
+        f"이 변경 뒤 열면 오류가 납니다 — {after[one.id]}"
+        for one in broken[:10]
+    ]
+    if len(broken) > 10:
+        out.append(f"그 밖에 저장된 뷰 {len(broken) - 10}개도 이 변경 뒤 열면 오류가 납니다.")
+    failing = [
+        one for one in metrics if counted[one.id] is None and recounted[one.id] is not None
+    ]
+    out.extend(
+        f"지표 「{one.label}」 은(는) 이 변경 뒤 계산이 실패합니다 — {recounted[one.id]}"
+        for one in failing[:10]
+    )
+    if len(failing) > 10:
+        out.append(f"그 밖에 지표 {len(failing) - 10}개도 이 변경 뒤 계산이 실패합니다.")
+    return out
+
+
+def _views_breaking(db: Session, targets: list[Target]) -> list[str]:
+    """종류 변경으로 새로 깨지는 뷰 · 지표 — 새 정의를 적어 흉내 낸다(`breaking`)."""
+
+    def write() -> None:
         for target in targets:
             definition = db.scalar(
                 select(PropertyDef).where(
@@ -893,16 +1039,5 @@ def _views_breaking(db: Session, targets: list[Target]) -> list[str]:
                 continue
             for name, value in interfaces.shape_of(target.after).written().items():
                 setattr(definition, name, value)
-        db.flush()
-        after = {one.id: _view_error(db, one) for one in saved}
-    finally:
-        savepoint.rollback()
-    broken = [one for one in saved if before[one.id] is None and after[one.id] is not None]
-    out = [
-        f"저장된 뷰 「{one.name}」{'(홈 게시)' if one.home_order is not None else ''} 은(는) "
-        f"이 변경 뒤 열면 오류가 납니다 — {after[one.id]}"
-        for one in broken[:10]
-    ]
-    if len(broken) > 10:
-        out.append(f"그 밖에 저장된 뷰 {len(broken) - 10}개도 이 변경 뒤 열면 오류가 납니다.")
-    return out
+
+    return breaking(db, write)

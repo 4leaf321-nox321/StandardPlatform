@@ -32,11 +32,24 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any
 
-from sqlalchemy import Numeric, String, and_, cast, false, literal, or_, select, true
+from sqlalchemy import (
+    Numeric,
+    String,
+    and_,
+    case,
+    cast,
+    false,
+    func,
+    literal,
+    or_,
+    select,
+    true,
+)
 from sqlalchemy.orm import aliased
 
 from app.modules.objects import axes, paths
 from app.modules.objects.models import ObjectInstance, ObjectRef
+from app.modules.objects.services import like_escape
 from app.modules.ontology import conversion
 from app.modules.ontology.models import PropertyDef
 from app.modules.ontology.services import InvalidValue
@@ -175,14 +188,19 @@ def _clause(
             has_any = or_(*[json_col.contains([one]) for one in numbers])
             # 「다름」 은 칸이 비어 있는 것도 포함한다 — NULL 의 부정은 NULL 이라 따로 적는다.
             return or_(json_col.is_(None), ~has_any) if op == "ne" else has_any
-        numeric = cast(column, Numeric)
+        # **읽을 수 있는 값만 숫자로** — 맨 cast 는 숫자 아닌 글자(옛 데이터 · 손으로 고친 값)
+        # 하나에 질의 전체가 오류(500)였다. 통계의 숫자 가드(`axes.numeric`)와 같은 모양이고,
+        # 정밀도를 지키려 Numeric 으로 바꾼다.
+        numeric = case((column.op("~")(axes.NUMERIC_RE), cast(column, Numeric)), else_=None)
         if op == "in":
             picked = [_number(label, one) for one in _values(raw)]
             return or_(*[numeric == one for one in picked]) if picked else false()
         number = _number(label, raw)
         return {
             "eq": numeric == number,
-            "ne": numeric != number,
+            # 「다름」 은 비어 있는 것(못 읽는 값 포함)도 든다 — 여러 값 숫자 · 참조 · 글자와
+            # 같은 뜻이다. 예전에는 단일 숫자 칸만 빈 것을 뺐다(2026-10-08).
+            "ne": or_(numeric.is_(None), numeric != number),
             "gt": numeric > number,
             "gte": numeric >= number,
             "lt": numeric < number,
@@ -203,18 +221,21 @@ def _clause(
         if op == "in":
             values = _values(raw)
             return or_(*[json_col.contains([one]) for one in values]) if values else false()
+        # 포함 · 시작은 **원소마다** 본다 — 배열을 통째 글자(`["가나", "다라"]`)로 견주면
+        # 「시작」 은 늘 `["` 로 시작해 0건이었고, 「포함」 은 원소 사이의 `", "` 에도 걸렸다
+        # (2026-10-08).
         if op == "contains":
-            return column.ilike(f"%{raw}%")
+            return _any_element(json_col, f"%{like_escape(raw)}%")
         if op == "starts":
-            return column.ilike(f"{raw}%")
+            return _any_element(json_col, f"{like_escape(raw)}%")
 
     if op == "in":
         values = _values(raw)
         return column.in_(values) if values else false()
     if op == "contains":
-        return column.ilike(f"%{raw}%")
+        return column.ilike(f"%{like_escape(raw)}%", escape="\\")
     if op == "starts":
-        return column.ilike(f"{raw}%")
+        return column.ilike(f"{like_escape(raw)}%", escape="\\")
     if op == "ne":
         return or_(column != raw, column.is_(None))
     if data_type == "date" and op in ("gt", "gte", "lt", "lte"):
@@ -238,6 +259,20 @@ def _clause(
             "lte": column <= raw,
         }[op]
     return column == raw
+
+
+def _any_element(json_col: Any, pattern: str) -> Any:
+    """여러 값 칸의 **원소 중 하나라도** 그 모양(`ILIKE`, `\\` 이스케이프)에 맞나. 옛 데이터에
+    배열이 아닌 값 하나가 든 칸도 한 원소로 본다(통계의 여러 값 펼치기와 같은 가드)."""
+    shape = func.jsonb_typeof(json_col)
+    array = case((shape == "array", json_col), else_=func.jsonb_build_array(json_col))
+    items = func.jsonb_array_elements_text(array).table_valued("value")
+    return (
+        select(literal(1))
+        .select_from(items)
+        .where(items.c.value.ilike(pattern, escape="\\"))
+        .exists()
+    )
 
 
 def _ref_clause(entity: Any, field: str, op: str, raw: str) -> Any:
@@ -375,11 +410,17 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
                 linked = select(literal(1)).select_from(link).where(step)
             else:
                 linked = linked.join(link, step)
+            # 가리키는 객체도 **보이는 것만** — 들어오는 참조와 같은 규칙(`Resolver.seen`).
             linked = linked.join(
-                target, and_(target.id == link.dst_id, target.deleted_at.is_(None))
+                target,
+                and_(
+                    target.id == link.dst_id, target.deleted_at.is_(None), *owner.seen(target)
+                ),
             )
             last_target = target
         else:
+            # 관계 걸음 — 저쪽 끝은 선(`edges`)에서 이미 보이는 것만 남는다. 관계로 이어진 것
+            # **자체**(있음 · 없음 · 특정 객체)도 그래서 못 보는 객체로는 안 걸린다.
             edges = owner.edges(hop, f"{name}_edges")
             step = edges.c.me == previous.id
             if linked is None:
@@ -393,7 +434,11 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
             target = aliased(ObjectInstance, name=f"{name}_obj")
             linked = linked.join(
                 target,
-                and_(cast(target.id, String) == edges.c.other, target.deleted_at.is_(None)),
+                and_(
+                    cast(target.id, String) == edges.c.other,
+                    target.deleted_at.is_(None),
+                    *owner.seen(target),
+                ),
             )
             last_target = target
         previous = last_target

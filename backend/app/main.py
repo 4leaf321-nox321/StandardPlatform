@@ -161,6 +161,7 @@ def _register_extensions() -> None:
     extensions.register_workspace_content(objects_services.workspace_content)
     extensions.register_workspace_content(files_services.workspace_content)
     extensions.register_workspace_content(datasources_services.workspace_content)
+    extensions.register_workspace_content(metrics_services.workspace_content)
     # 객체에 붙는 첨부 — 객체가 있나 · 고칠 수 있나 · 파일 칸인가 · 이미지만인가(ADR 0012).
     extensions.register_attachment_owner("objects", objects_attachments.owner)
     # 데이터 품질 — 필수값 빈 것·고아·깨진 참조·이름 같은 것을 홈 「남은 일」 에.
@@ -218,11 +219,17 @@ def _register_extensions() -> None:
     # **내보내기는 읽기다.** 작업 한 줄을 남기니 표로는 쓰기지만, 하는 일은 「가진 것을 파일로
     # 받기」 다 — 받아만 가는 쪽(허브에서 정의를 받는 쌍둥이 · 바깥 시스템)에 쓰기 토큰을
     # 주게 하지 않는다. 실측: 쌍둥이 리허설에서 `read` 토큰이 묶음 내보내기에 403 을 받았다.
-    scopes.register_read_only_post_suffix("/export")
+    for pattern in (
+        "/api/ontology/export",
+        "/api/bundles/export",
+        "/api/objects/*/export",
+        "/api/objects/*/relations/export",
+    ):
+        scopes.register_read_only_post_pattern(pattern)
     # **이름 풀기도 읽기다.** POST 인 이유는 이름을 오백 개까지 담기 때문이고(주소에 넣을 수
     # 없다), 하는 일은 「이 이름이 어느 것인지 묻기」 다. 쓰기로 두면 **보내기 전에 미리
     # 물어보는** 도구가 쓰기 토큰을 들어야 한다 — 그 토큰은 실수로 넣을 수도 있다.
-    scopes.register_read_only_post_suffix("/resolve-many")
+    scopes.register_read_only_post_pattern("/api/objects/*/resolve-many")
     # **SPARQL 도 읽기다.** POST 인 이유는 질의가 길어서(주소에 못 넣는다)이고, 하는 일은
     # 「묻기」 다 — `SELECT` · `ASK` 만 받고 쓰는 말(INSERT · DELETE …)과 바깥 호출은 경로가
     # 거절하며, 질의는 메모리에 세운 사본 그래프에서 돌아 DB 를 바꿀 길이 없다. 안 열면 읽기

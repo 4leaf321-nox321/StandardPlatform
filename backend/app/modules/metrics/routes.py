@@ -17,6 +17,8 @@ from app.modules.metrics.recipes import routes as recipes_routes
 from app.modules.metrics.schemas import (
     CohortOut,
     DimValuesOut,
+    HomePinIn,
+    HomePinOut,
     MetricIn,
     MetricOut,
     MetricPatch,
@@ -27,7 +29,9 @@ from app.modules.metrics.schemas import (
     SeriesOut,
     TableOut,
 )
+from app.modules.workspaces.models import Workspace
 from app.shared.auth import current_user, require_system_admin
+from app.shared.permissions import workspace_by_slug
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
@@ -108,6 +112,71 @@ def delete_metric(
     slug: str, user: User = Depends(require_system_admin), db: Session = Depends(get_db)
 ) -> None:
     services.delete(db, user, services.get(db, slug))
+    db.commit()
+
+
+@router.get("/{slug}/home", response_model=list[HomePinOut])
+def metric_home_pins(
+    slug: str, _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> list[HomePinOut]:
+    """이 지표가 올라간 부서 홈들."""
+    pins = services.home_pins(db, services.get(db, slug))
+    spaces = {
+        one.id: one
+        for one in db.scalars(
+            select(Workspace).where(Workspace.id.in_([pin.workspace_id for pin in pins]))
+        )
+    }
+    return [
+        HomePinOut(
+            id=pin.id,
+            workspace_slug=spaces[pin.workspace_id].slug,
+            workspace_name=spaces[pin.workspace_id].name,
+            split=pin.split,
+            home_order=pin.home_order,
+        )
+        for pin in sorted(pins, key=lambda one: spaces[one.workspace_id].name)
+    ]
+
+
+@router.put("/{slug}/home", response_model=HomePinOut)
+def pin_metric_home(
+    slug: str,
+    payload: HomePinIn,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> HomePinOut:
+    """부서 홈에 올린다 — **그 부서의 관리자만**(뷰를 홈에 올리는 것과 같다). 홈에서는 지표의
+    추이가 그림으로 서고, 누르면 지표 화면으로 간다."""
+    workspace = workspace_by_slug(db, payload.workspace_slug)
+    pin = services.pin_home(
+        db,
+        user,
+        services.get(db, slug),
+        workspace=workspace,
+        split=payload.split,
+        position=payload.position,
+    )
+    db.commit()
+    return HomePinOut(
+        id=pin.id,
+        workspace_slug=workspace.slug,
+        workspace_name=workspace.name,
+        split=pin.split,
+        home_order=pin.home_order,
+    )
+
+
+@router.delete("/{slug}/home", status_code=204)
+def unpin_metric_home(
+    slug: str,
+    workspace: str = Query(description="부서 slug"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    services.unpin_home(
+        db, user, services.get(db, slug), workspace=workspace_by_slug(db, workspace)
+    )
     db.commit()
 
 

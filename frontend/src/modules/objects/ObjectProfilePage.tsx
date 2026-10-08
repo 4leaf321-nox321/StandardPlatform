@@ -361,6 +361,8 @@ export default function ObjectProfilePage() {
           workspaceSlug={row.owner_workspace_slug}
           canEdit={profile.data.can_edit}
           title={fileDefs.length > 0 ? '그 밖의 첨부' : '첨부'}
+          // 칸별 첨부는 위의 목록들이 보인다 — 여기서 또 보이면 같은 파일이 두 번 선다.
+          excludeFields={fileDefs.map((def) => def.key)}
         />
       )}
 

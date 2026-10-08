@@ -462,7 +462,7 @@ def data_pages(db: Session, user: User, *, progress: Progress = None) -> list[Pa
             found = found[:MAX_DATA_ROWS]
         rows_total += len(found)
         columns = bulk.export_columns(defs)
-        records = bulk.export_rows(db, defs, found)
+        records = bulk.export_rows(db, defs, found, viewer=user)
         out.append(
             Page(
                 object_type.label or object_type.slug,
@@ -524,7 +524,7 @@ def bundle(
             key = slugs.get(row.owner_workspace_id) if row.owner_workspace_id else None
             by_workspace.setdefault(key, []).append(row)
         for workspace_slug, group in by_workspace.items():
-            records = bulk.export_rows(db, defs, group)
+            records = bulk.export_rows(db, defs, group, viewer=user)
             for record in records:
                 # id 는 이 설치의 것이다 — 다른 설치에 넣으면 아무것도 안 가리킨다.
                 record.pop("id", None)

@@ -108,3 +108,54 @@ def test_reset_이_두_번_오면_멈추고_말한다(tmp_path: Path) -> None:
         assert "reset" in str(stopped)
     else:  # pragma: no cover - 돌면 안 되는 자리
         raise AssertionError("두 번째 reset 에서 멈춰야 한다")
+
+
+def test_더_이상_안_보이는_행은_이름과_칸을_두고_비활성만_한다(tmp_path: Path) -> None:
+    """`hidden` — 지운 것이 아니라 그 토큰으로 더 이상 못 보게 된 것(소유 부서 이동)이다.
+    공개 측은 옮긴 뒤의 이름 · 칸을 싣지 않으므로(식별자만), 그대로 덮으면 가진 이름이 식별자로
+    바뀌고 칸이 비었다(2026-10-08)."""
+    kit = _kit()
+    cfg = {"out_dir": tmp_path, "page_size": 500}
+    kit.save_rows(
+        cfg,
+        "vendor",
+        [
+            {
+                "key": "MOV-1",
+                "label": "옮길 공급사",
+                "status": "active",
+                "updated_at": "1",
+                "deleted": False,
+                "properties": {"grade": "A"},
+            }
+        ],
+    )
+    kit.save_rows(
+        cfg,
+        "vendor",
+        [
+            {
+                "key": "MOV-1",
+                "label": "MOV-1",
+                "status": "active",
+                "updated_at": "2",
+                "deleted": True,
+                "hidden": True,
+                "properties": {},
+            },
+            # 받은 적 없는 것의 무덤은 새로 만들지 않는다.
+            {
+                "key": "NEW-1",
+                "label": "NEW-1",
+                "updated_at": "2",
+                "deleted": True,
+                "hidden": True,
+            },
+        ],
+    )
+    db = sqlite3.connect(tmp_path / "sp_core.sqlite")
+    try:
+        rows = list(db.execute('SELECT key, label, deleted, properties FROM "vendor"'))
+    finally:
+        db.close()
+    assert rows == [("MOV-1", "옮길 공급사", 1, '{"grade": "A"}')]

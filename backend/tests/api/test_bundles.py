@@ -11,7 +11,11 @@ import uuid
 from typing import Any
 
 from fastapi.testclient import TestClient
+from sqlalchemy import func, select
+from sqlalchemy.orm import Session
 
+from app.modules.accounts.models import User
+from app.modules.bundles.models import BundleRun
 from app.shared import events
 from tests.api.conftest import Signed, bundle_import, finish_job
 from tests.api.test_ontology import _make_type
@@ -250,6 +254,35 @@ def test_내보내기는_읽기_토큰으로_된다(client: TestClient, admin: S
     # **넣는 것은 여전히 못 한다** — 읽기 토큰이 쓰기로 새면 범위를 가른 뜻이 없다.
     denied = client.post("/api/bundles/import", json={"objects": []}, headers=reader)
     assert denied.status_code in (403, 409), denied.text
+
+
+def test_읽기로_연_자리는_마디와_메서드까지_맞아야_한다(
+    client: TestClient, admin: Signed
+) -> None:
+    """읽기로 연 POST(내보내기 · 계획)는 **그 자리의 POST 만** 이다. 끝(`/export`)이나 글자
+    앞머리(`/api/metrics/plan`)만 보던 때는 읽기 토큰으로 ① slug 가 `export` 인 타입에 객체를
+    만들고 ② `plan…` 으로 시작하는 지표를 고치고 지울 수 있었다(2026-10-08)."""
+    from app.shared import scopes
+
+    assert scopes.is_reading("POST", "/api/objects/part/export")
+    assert scopes.is_reading("POST", "/api/ontology/export")
+    assert scopes.is_reading("POST", "/api/metrics/plan")
+    assert not scopes.is_reading("POST", "/api/objects/export")  # 타입 `export` 에 만들기
+    assert not scopes.is_reading("PATCH", "/api/ontology/types/export")
+    assert not scopes.is_reading("DELETE", "/api/metrics/plan")
+    assert not scopes.is_reading("POST", "/api/metrics/plant_yield/recompute")
+    assert not scopes.is_reading("PATCH", "/api/metrics/plant_yield")
+    assert scopes.needed_scope("/api/objectsx") is None
+
+    made = client.post(
+        "/api/auth/tokens",
+        json={"name": _uniq("reader"), "scopes": ["read"]},
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    reader = {"Authorization": f"Bearer {made.json()['token']}"}
+    denied = client.post("/api/objects/export", json={"label": "몰래"}, headers=reader)
+    assert denied.status_code == 403, denied.text
 
 
 def test_가벼운_미리보기는_적용을_돌리지_않는다(client: TestClient, admin: Signed) -> None:
@@ -532,3 +565,38 @@ def test_필수_참조를_못_찾으면_그_줄만_건너뛴다(client: TestClie
         for one in client.get(f"/api/objects/{tool}", headers=admin.headers).json()["items"]
     }
     assert keys == {"T-1"}, keys
+
+
+def test_바뀐_것이_없는_무덤만의_묶음은_판을_안_남긴다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """**적은 줄이 없으면 판도 없다**(`journal.finish`). 무덤만 담은 묶음이 아무것도 안 바꾸면
+    판이 한 번도 DB 에 안 써진 채로 지우려 해 작업이 실패하거나, 빈 판이 목록에 남았다."""
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    actor = db.scalars(select(User.id).where(User.email == admin.email)).one()
+
+    def runs() -> int:
+        return int(
+            db.scalar(
+                select(func.count()).select_from(BundleRun).where(BundleRun.actor_id == actor)
+            )
+            or 0
+        )
+
+    before = runs()
+    done = bundle_import(
+        client,
+        admin,
+        {
+            "tombstones": {
+                "objects": [{"type_slug": part, "key": "없는 것"}],
+                "relations": [],
+            },
+            "source": "hub",
+            "apply": True,
+        },
+    )
+    assert done["applied"] is True and done["run_id"] is None, done
+    assert done["tombstones"]["rows"][0]["action"] == "unchanged", done
+    db.expire_all()
+    assert runs() == before

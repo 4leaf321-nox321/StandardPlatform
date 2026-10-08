@@ -126,7 +126,9 @@ def run(
     reason = available(built)
     if reason is not None:
         raise common.refuse(47, reason)
-    signature = list(signature)
+    # 같은 서명 기준을 두 번 주면(`signature=x,x`) 같은 이름의 칸이 겹쳐 500 이었다 — 한
+    # 번만(뜻이 같다, 2026-10-08).
+    signature = list(dict.fromkeys(signature))
     if not 1 <= len(signature) <= MAX_SIGNATURE or generation in signature:
         raise common.refuse(
             47,

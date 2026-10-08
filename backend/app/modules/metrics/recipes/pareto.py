@@ -387,6 +387,9 @@ def _compare(
     if built.time is None:
         raise common.refuse(22, "시간 칸이 없는 지표라 두 기간을 견줄 수 없습니다.")
     other = replace(ask, period_from=compare_from, period_to=compare_to)
+    # 비교 범위도 지금 범위와 같이 기간 경계로 맞춘다(시작은 내림, 끝은 올림).
+    query.check_ask(built, other)
+    compare_from, compare_to = other.period_from, other.period_to
     cells, truncated = query.read(db, user, metric, other, limit=query.frame_limit())
     if truncated:
         raise common.refuse(
@@ -395,6 +398,12 @@ def _compare(
             "묻습니다.",
         )
     first: dict[str | None, float] = {cell.dims.get(dim): value for cell, value in present}
+    # 비교 기간에만 나온 값은 지금 범위의 이름표에 없다 — 따로 푼다. 안 풀면 그 값이 이름
+    # 대신 id 로 나갔다(2026-10-08). 셀에서 온 값이라 보이는 기록의 값이다.
+    late = query.labels_for(
+        db, built, [dim], [cell for cell in cells if cell.dims.get(dim) not in first]
+    )
+    labels = {dim: {**late.get(dim, {}), **labels.get(dim, {})}}
     second: dict[str | None, float] = {}
     for cell in cells:
         key = cell.dims.get(dim)

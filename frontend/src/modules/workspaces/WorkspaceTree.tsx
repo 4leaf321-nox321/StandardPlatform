@@ -30,7 +30,7 @@ import {
   Users,
 } from 'lucide-react'
 
-import { descendants, movePlan } from '@/modules/workspaces/tree'
+import { descendants, movePlan, siblingOrder } from '@/modules/workspaces/tree'
 import type { MovePlan, TreeRow } from '@/modules/workspaces/tree'
 import type { Workspace } from '@/modules/workspaces/api'
 import { StatusBadge } from '@/shared/components/StatusBadge'
@@ -80,7 +80,8 @@ export function WorkspaceTree({
   function siblingIndex(node: Workspace): { index: number; count: number } {
     const siblings = all
       .filter((one) => (one.parent_slug ?? null) === (node.parent_slug ?? null))
-      .sort((a, b) => a.sort_order - b.sort_order || a.slug.localeCompare(b.slug))
+      // 서버의 위 · 아래(`reorder`)와 같은 차례 — `(sort_order, name)`.
+      .sort(siblingOrder)
     return { index: siblings.findIndex((one) => one.slug === node.slug), count: siblings.length }
   }
 

@@ -21,7 +21,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import String, cast, func, literal, or_, select, union, union_all
+from sqlalchemy import String, case, cast, func, literal, or_, select, union, union_all
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Session, aliased
 
@@ -226,7 +226,12 @@ def _broken_refs(
             select(
                 ObjectRef.src_id.label("src"),
                 ObjectRef.key.label("key"),
-                dst.label.label("dst_label"),
+                # 지워진 상대의 이름 — **보는 사람이 볼 수 있던 것만.** 남의 부서 것이
+                # 지워졌으면 그 이름 대신 가린 말을 싣는다(2026-10-08).
+                case(
+                    (visible_owner_clause(user, dst.owner_workspace_id), dst.label),
+                    else_=literal(system.HIDDEN_LABEL, String),
+                ).label("dst_label"),
             )
             .join(source, source.id == ObjectRef.src_id)
             .outerjoin(dst, dst.id == ObjectRef.dst_id)

@@ -23,6 +23,7 @@ from time import perf_counter
 from typing import Any
 
 from sqlalchemy import func, select
+from sqlalchemy import update as sql_update
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -30,12 +31,15 @@ from app.modules.jobs import services as job_services
 from app.modules.jobs.models import Job
 from app.modules.metrics import alerts, compute, query, recipes, schemas
 from app.modules.metrics import spec as spec_module
-from app.modules.metrics.models import MetricDef, MetricRun, MetricValue
+from app.modules.metrics.models import HomeMetric, MetricDef, MetricRun, MetricValue
+from app.modules.objects import home
 from app.modules.objects.summary import METRIC_LABELS
 from app.modules.ontology.models import ObjectType
 from app.modules.ontology.services import require_slug
+from app.modules.workspaces.models import Workspace
 from app.shared import audit, extensions
 from app.shared.errors import AppError, Conflict, NotFound, code
+from app.shared.permissions import require_owner_edit
 
 log = logging.getLogger(__name__)
 
@@ -238,15 +242,44 @@ def delete(db: Session, user: User, metric: MetricDef) -> None:
 # --- 돌리기 ---------------------------------------------------------------------
 
 
+#: 이 까닭으로 넣은 작업은 **전부** 다시 센다 — 사람이 「다시 세기」 를 누른 것은 지금 값을
+#: 의심한다는 뜻이다. 타이머 · 적재 뒤 · 정의 저장은 되면 바뀐 기간만(정의가 바뀌었으면 정의
+#: 지문이 달라 어차피 전량이다, `incremental.plan`).
+FULL_REASONS = frozenset({"manual"})
+
+
 def pending_recompute(db: Session, slug: str) -> Job | None:
     return job_services.pending_for(db, JOB_KIND, slugs=[slug])
+
+
+def queued_recompute(db: Session, slug: str) -> Job | None:
+    """줄에서 **아직 기다리는** 같은 지표의 작업 — 도는 것은 뺀다."""
+    found = pending_recompute(db, slug)
+    return found if found is not None and found.status == "queued" else None
 
 
 def enqueue_recompute(
     db: Session, metric: MetricDef, *, user: User | None, reason: str
 ) -> Job:
-    """작업 하나 — 같은 지표의 작업이 줄에 있으면 그것을. 부르는 쪽이 커밋한다."""
-    existing = pending_recompute(db, metric.slug)
+    """작업 하나 — 같은 지표의 작업이 **줄에서 기다리고** 있으면 그것을. 부르는 쪽이 커밋한다.
+
+    **도는 중인 작업에는 합치지 않는다** — 그 계산은 이미 원천을 읽기 시작해 그 뒤에 들어온
+    적재를 못 본다. 합치면 적재 뒤 계산이 사라져 다음 타이머(하루 단위면 다음 밤)까지 값이
+    낡았다(2026-10-08). 새 작업은 자문 잠금에서 앞 계산이 끝나기를 기다린다.
+
+    기다리는 것이 바뀐 기간만 셀 작업인데 이번 까닭이 전량이면(사람의 「다시 세기」) 그 작업을
+    전량으로 올린다 — **아직 안 집혔을 때만**(조건부로 고쳐, 그 사이 워커가 집었으면 새로
+    넣는다)."""
+    existing = queued_recompute(db, metric.slug)
+    if existing is not None and reason in FULL_REASONS and not existing.params.get("full"):
+        done = db.execute(
+            sql_update(Job)
+            .where(Job.id == existing.id, Job.status == "queued")
+            .values(params={**(existing.params or {}), "full": True})
+        )
+        db.refresh(existing)
+        if not extensions.rows_changed(done):
+            existing = None  # 그 사이 워커가 집었다 — 그 계산은 바뀐 기간만 센다
     if existing is not None:
         return existing
     return job_services.enqueue(
@@ -259,14 +292,15 @@ def enqueue_recompute(
 
 
 def enqueue_for_type(db: Session, type_id: uuid.UUID, *, reason: str) -> list[Job]:
-    """이 타입을 원천으로 쓰는 켜진 지표마다 작업 하나 — 적재 작업의 본문이 부른다."""
+    """이 타입을 원천으로 쓰는 켜진 지표마다 작업 하나 — 적재 작업의 본문이 부른다. 줄에서
+    기다리는 것이 있으면 안 넣는다(도는 것은 이 적재를 못 보므로 넣는다)."""
     out: list[Job] = []
     for metric in db.scalars(
         select(MetricDef)
         .where(MetricDef.source_type_id == type_id, MetricDef.is_active.is_(True))
         .order_by(MetricDef.slug)
     ):
-        if pending_recompute(db, metric.slug) is None:
+        if queued_recompute(db, metric.slug) is None:
             out.append(enqueue_recompute(db, metric, user=None, reason=reason))
     return out
 
@@ -348,9 +382,11 @@ def run_recompute(
     *,
     job_id: uuid.UUID | None,
     progress: Callable[[str, int, int], None],
+    full: bool = True,
 ) -> dict[str, Any]:
     """지표들을 차례로 — **지표마다 커밋.** 하나가 실패해도 나머지는 돌고, 끝에 실패를 모아
-    작업을 실패로 만든다(성공한 것의 새 값은 이미 들어가 있다)."""
+    작업을 실패로 만든다(성공한 것의 새 값은 이미 들어가 있다). `full` 이 아니면 되는 지표는
+    바뀐 기간만 센다."""
     runs: list[dict[str, Any]] = []
     failed: list[str] = []
     for index, slug in enumerate(slugs):
@@ -362,7 +398,7 @@ def run_recompute(
             continue
         started = perf_counter()
         try:
-            run = compute.run_one(db, metric, job_id=job_id, progress=progress)
+            run = compute.run_one(db, metric, job_id=job_id, progress=progress, full=full)
         except job_services.Cancelled:
             db.rollback()
             raise
@@ -387,6 +423,8 @@ def run_recompute(
             {
                 "slug": slug,
                 "status": "ok",
+                "mode": run.mode,
+                "note": run.note,
                 "rows": run.rows,
                 "cells": run.cells,
                 "seconds": seconds,
@@ -462,15 +500,14 @@ def stats(db: Session) -> list[extensions.StatItem]:
 
 def values_count(db: Session, metric: MetricDef) -> int:
     """지금 실행의 셀 수(표에서 센다) — 시험과 점검이 `cells` 와 맞춰 본다."""
-    if metric.current_run_id is None:
+    cells_run = metric.cells_run_id or metric.current_run_id
+    if cells_run is None:
         return 0
     return int(
         db.scalar(
             select(func.count())
             .select_from(MetricValue)
-            .where(
-                MetricValue.metric_id == metric.id, MetricValue.run_id == metric.current_run_id
-            )
+            .where(MetricValue.metric_id == metric.id, MetricValue.run_id == cells_run)
         )
         or 0
     )
@@ -492,3 +529,118 @@ def profile_facts(db: Session) -> list[extensions.ProfileFact]:
         f" · 그 밖에 {len(labels) - 10}개" if len(labels) > 10 else ""
     )
     return [extensions.ProfileFact(key="metrics", label="지표", lines=[shown], marks={})]
+
+
+# --- 부서 홈 ------------------------------------------------------------------------
+
+
+def home_pins(db: Session, metric: MetricDef) -> list[HomeMetric]:
+    return list(db.scalars(select(HomeMetric).where(HomeMetric.metric_id == metric.id)))
+
+
+def pin_home(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    *,
+    workspace: Workspace,
+    split: str | None,
+    position: int | None,
+) -> HomeMetric:
+    """부서 홈에 올린다(이미 있으면 나눌 기준 · 자리만 고친다) — **그 부서의 관리자만**, 뷰를
+    홈에 올리는 것과 같은 규칙이다. 자리는 그 부서 홈의 뷰와 같은 줄에서 센다."""
+    require_owner_edit(db, user, workspace.id, what="부서 홈", code_value=code("METRICS", 45))
+    if split and compute.built_of(db, metric).dim(split) is None:
+        raise Conflict(
+            code("METRICS", 46),
+            f"「{split}」 은 이 지표의 기준이 아닙니다 — 정의의 기준 이름 중 하나로 나눕니다.",
+        )
+    found = db.scalar(
+        select(HomeMetric).where(
+            HomeMetric.workspace_id == workspace.id, HomeMetric.metric_id == metric.id
+        )
+    )
+    if found is None:
+        found = HomeMetric(
+            workspace_id=workspace.id,
+            metric_id=metric.id,
+            home_order=home.next_order(db, workspace.id),
+            created_by_id=user.id,
+        )
+        db.add(found)
+    found.split = split or None
+    db.flush()
+    if position is not None:
+        home.place(db, workspace.id, found, position)
+    audit.record(
+        db,
+        action="metric.home",
+        actor=user,
+        target_table="metric_defs",
+        target_id=metric.id,
+        target_label=metric.slug,
+        workspace_id=workspace.id,
+        changes={"on_home": True, "split": found.split, "home_order": found.home_order},
+    )
+    return found
+
+
+def _move_home_pins(db: Session, source: uuid.UUID, target: uuid.UUID) -> int:
+    """부서 통폐합 — 홈에 올린 지표를 받는 부서 홈으로. 받는 쪽에 같은 지표가 이미 있으면
+    옮기지 않고 지운다(부서마다 지표 하나는 한 번만 선다). 자리는 받는 쪽 끝에 붙인다."""
+    have = set(
+        db.scalars(select(HomeMetric.metric_id).where(HomeMetric.workspace_id == target))
+    )
+    moved = 0
+    for pin in list(db.scalars(select(HomeMetric).where(HomeMetric.workspace_id == source))):
+        if pin.metric_id in have:
+            db.delete(pin)
+        else:
+            pin.workspace_id = target
+            pin.home_order = home.next_order(db, target)
+            have.add(pin.metric_id)
+        moved += 1
+        db.flush()
+    return moved
+
+
+def workspace_content(
+    db: Session, workspace_id: uuid.UUID
+) -> list[extensions.WorkspaceContent]:
+    """부서 통폐합 때 옮길 것 — **홈에 올린 지표.** 빠뜨리면 원본 부서를 지울 때 그 홈의
+    지표가 말없이 사라진다(외래키가 CASCADE 다)."""
+    count = (
+        db.scalar(
+            select(func.count())
+            .select_from(HomeMetric)
+            .where(HomeMetric.workspace_id == workspace_id)
+        )
+        or 0
+    )
+    return [
+        extensions.WorkspaceContent(
+            kind="home_metrics", label="홈의 지표", count=int(count), move=_move_home_pins
+        )
+    ]
+
+
+def unpin_home(db: Session, user: User, metric: MetricDef, *, workspace: Workspace) -> None:
+    require_owner_edit(db, user, workspace.id, what="부서 홈", code_value=code("METRICS", 45))
+    found = db.scalar(
+        select(HomeMetric).where(
+            HomeMetric.workspace_id == workspace.id, HomeMetric.metric_id == metric.id
+        )
+    )
+    if found is None:
+        raise NotFound(code("METRICS", 47), "그 부서 홈에 올라가 있지 않은 지표입니다.")
+    db.delete(found)
+    audit.record(
+        db,
+        action="metric.home",
+        actor=user,
+        target_table="metric_defs",
+        target_id=metric.id,
+        target_label=metric.slug,
+        workspace_id=workspace.id,
+        changes={"on_home": False},
+    )

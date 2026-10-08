@@ -239,7 +239,12 @@ def run(
     )
     untagged = sum(count for combo, count in observed.items() if None in combo)
 
-    labels = _labels(db, dims, [*observed, *leaves, *(gap.combo for gap in found_gaps)])
+    # 거르기로 준 첫 기준 값은 요청이 준 것 — 못 보는 객체면 이름을 풀지 않는다(나머지는 보이는
+    # 기록 · 보는 사람의 눈으로 따라간 길에서 왔다).
+    hidden = common.hidden_objects(db, user, roots) if root in ask.filters else set()
+    labels = _labels(
+        db, dims, [*observed, *leaves, *(gap.combo for gap in found_gaps)], hidden=hidden
+    )
 
     def named(combo: Sequence[str | None]) -> list[str]:
         return [
@@ -365,9 +370,14 @@ def run(
 
 
 def _labels(
-    db: Session, dims: Sequence[spec_module.Dim], combos: Sequence[Sequence[str | None]]
+    db: Session,
+    dims: Sequence[spec_module.Dim],
+    combos: Sequence[Sequence[str | None]],
+    *,
+    hidden: set[str] | frozenset[str] = frozenset(),
 ) -> list[dict[str, str]]:
-    """깊이마다 값의 이름 — 기대 조합의 값은 셀에 없을 수 있어 직접 푼다."""
+    """깊이마다 값의 이름 — 기대 조합의 값은 셀에 없을 수 있어 직접 푼다. `hidden` — 이름을
+    풀지 않을 첫 기준 값(못 보는 객체)."""
     out: list[dict[str, str]] = []
     for i, dim in enumerate(dims):
         seen: set[str] = set()
@@ -375,7 +385,7 @@ def _labels(
             value = combo[i] if len(combo) > i else None
             if value is not None:
                 seen.add(value)
-        keys = sorted(seen)
+        keys = sorted(seen - hidden if i == 0 else seen)
         found = axes.labels(db, dim.axis, keys[: query.MAX_LABELS]) if keys else {}
         out.append({key: found.get(key, key) for key in keys})
     return out

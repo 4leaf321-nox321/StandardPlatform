@@ -323,15 +323,8 @@ def run(
     reach = max(rates)
     phi = max(1.0, overdispersion(reference_cohorts, rates))
     caveats = common.Caveats()
-    labels = query.labels_for(
-        db,
-        built,
-        [dim],
-        [
-            query.Cell({dim: value}, None, None, None, 0, 0, None, None, None)
-            for value in (target, reference)
-        ],
-    )
+    # 새 모델 · 전작은 요청이 준 값 — 못 보는 객체면 이름을 풀지 않는다.
+    labels = common.given_labels(db, user, built, dim, (target, reference))
 
     looks: list[SprtLookOut] = []
     rows: list[SprtCohortOut] = []
@@ -603,15 +596,7 @@ def scan(
     values = sorted(totals, key=lambda key: (-totals[key], key))[:limit]
     each = alpha / max(len(values), 1)
     labels = query.labels_for(db, built, [by], frame.cells)
-    names = query.labels_for(
-        db,
-        built,
-        [dim],
-        [
-            query.Cell({dim: value}, None, None, None, 0, 0, None, None, None)
-            for value in (target, reference)
-        ],
-    )
+    names = common.given_labels(db, user, built, dim, (target, reference))
     items: list[SprtScanItemOut] = []
     skipped: list[str] = []
     for value in values:

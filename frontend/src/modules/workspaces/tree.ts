@@ -30,6 +30,18 @@ export interface MovePlan {
   position: number
 }
 
+/**
+ * 형제 차례 — **서버와 같은 열쇠로**(`workspaces/services.py` 의 move: `(sort_order, name)`).
+ *
+ * 같은 `sort_order` 에서 화면은 slug 로, 서버는 이름으로 갈라 「몇 번째」 가 서로 다른 형제를
+ * 가리켰다 — 끌어 놓은 자리와 다른 자리에 끼었다(2026-10-08). 이름은 `localeCompare` 가 아니라
+ * 글자 차례로 견준다 — 파이썬의 문자열 비교가 그렇다.
+ */
+export function siblingOrder(a: Workspace, b: Workspace): number {
+  if (a.sort_order !== b.sort_order) return a.sort_order - b.sort_order
+  return a.name < b.name ? -1 : a.name > b.name ? 1 : 0
+}
+
 /** 자신과 모든 하위. 자기 밑으로 옮기는 것을 막는 데 쓴다. */
 export function descendants(rows: Workspace[], slug: string): Set<string> {
   const byParent = new Map<string | null, Workspace[]>()
@@ -76,7 +88,7 @@ export function movePlan(
   const parentSlug = kind === 'inside' ? targetRow.slug : targetRow.parent_slug
   const siblings = rows
     .filter((one) => (one.parent_slug ?? null) === (parentSlug ?? null) && one.slug !== dragged)
-    .sort((a, b) => a.sort_order - b.sort_order || a.slug.localeCompare(b.slug))
+    .sort(siblingOrder)
 
   let position = siblings.length
   if (kind === 'before') {
@@ -90,7 +102,7 @@ export function movePlan(
   if (currentParent === (parentSlug ?? null)) {
     const current = rows
       .filter((one) => (one.parent_slug ?? null) === currentParent)
-      .sort((a, b) => a.sort_order - b.sort_order || a.slug.localeCompare(b.slug))
+      .sort(siblingOrder)
       .findIndex((one) => one.slug === dragged)
     if (current === position) return null
   }

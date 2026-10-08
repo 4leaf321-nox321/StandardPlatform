@@ -16,6 +16,12 @@
   지우면 그 참조가 빈 칸이 된다. 그 줄은 건너뛰고 무엇이 걸렸는지 적는다.
 - **계획이 먼저다.** 다른 모든 일괄 작업과 같은 모양(`bulk.Plan`)으로 「무엇이 되돌아가나」
   를 보여 주고, 사람이 누르면 적용한다.
+- **적용은 전부 아니면 무다.** 오류 줄이 하나라도 있으면 앞 줄에서 바꾼 것까지 세이브포인트로
+  되돌린다 — 예전에는 앞 줄의 지우기 · 되돌리기가 커밋되고 결과는 「적용 안 됨」 이라 말했다
+  (`apply=true` 로 곧장 부르면 계획을 안 거친다, 2026-10-08).
+- **끊었던 선을 다시 이을 때도 잇는 규칙을 지킨다**(관계 종류 · 허용 타입 · 개수 제약 ·
+  순환). 그 사이 같은 선이 새로 이어졌으면 「그대로」 다 — 안 그러면 유일 제약에 걸려 그 판은
+  영영 못 되돌린다.
 - **합치기는 되돌리지 않는다.** 합치기는 참조를 옮긴 것이라 자동으로 풀면 어느 참조가
   원래 어느 쪽 것이었는지 알 수 없다 — 그 줄은 이유를 적고 사람에게 넘긴다.
 """
@@ -27,16 +33,17 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.objects import aliases, bulk, lifecycle
+from app.modules.objects import relations as rel
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRef, ObjectRelation
 from app.modules.objects.services import audit_state, properties_of
-from app.modules.ontology import interfaces
-from app.modules.ontology.models import ObjectType, PropertyDef
+from app.modules.ontology import interfaces, managed
+from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.services import InvalidValue, check_value
 from app.shared import audit
 from app.shared.errors import AppError, Forbidden, NotFound, code
@@ -56,6 +63,25 @@ class Outcome:
     @property
     def ok(self) -> bool:
         return self.plan.ok
+
+
+@dataclass
+class _Context:
+    """한 판을 되돌리는 동안 줄마다 다시 읽지 않을 것."""
+
+    run: BundleRun
+    now: datetime
+    """이 트랜잭션의 `now()` — 이 되돌리기가 고친 행의 `updated_at` 이 이것이다."""
+    types: dict[uuid.UUID, ObjectType]
+    kinds: dict[str, RelationType]
+    """관계 종류 — slug 로. 선을 다시 이을 때 규칙(허용 타입 · 개수 제약 · 순환)을 본다."""
+    ends: interfaces.Ends | None = None
+    """허용 타입 판정에 쓰는 정의 — 처음 쓸 때 한 번 읽는다(줄마다 읽으면 수만 번이다)."""
+
+    def ends_of(self, db: Session) -> interfaces.Ends:
+        if self.ends is None:
+            self.ends = interfaces.load_ends(db)
+        return self.ends
 
 
 def recent(db: Session, user: User, *, limit: int = 30) -> list[BundleRun]:
@@ -144,18 +170,27 @@ def run_undo(
         if one.table_name in ("object_relations", "object_links") and one.action == "create"
     }
     total = len(entries)
+    # **적용은 세이브포인트 안에서** — 줄마다 flush 하므로, 뒤 줄이 오류면 앞 줄이 이미 DB 에
+    # 있다. 워커는 결과가 무엇이든 커밋하므로 여기서 거둬야 전부 아니면 무가 된다.
+    savepoint = db.begin_nested() if apply else None
+    ctx = _Context(
+        run=run,
+        now=db.execute(select(func.now())).scalar_one(),
+        types=types,
+        kinds={one.slug: one for one in db.scalars(select(RelationType))},
+    )
     for done, entry in enumerate(entries, start=1):
         if on_progress is not None and (done % 200 == 0 or done == total):
             on_progress("되돌리기", done, total)
         if entry.table_name == "object_relations":
-            out.plan.rows.append(_relation(db, user, entry, done, apply=apply))
+            out.plan.rows.append(_relation(db, user, entry, done, ctx, cut=cut, apply=apply))
         elif entry.table_name == "object_links":
-            out.plan.rows.append(_link(db, entry, done, apply=apply))
+            out.plan.rows.append(_link(db, user, entry, done, ctx, apply=apply))
         elif entry.table_name == "object_aliases":
-            out.plan.rows.append(_alias(db, user, entry, done, types, apply=apply))
+            out.plan.rows.append(_alias(db, user, entry, done, types, ctx, apply=apply))
         elif entry.table_name == "objects":
             out.plan.rows.append(
-                _object(db, user, entry, done, types, doomed=doomed, cut=cut, apply=apply)
+                _object(db, user, entry, done, types, ctx, doomed=doomed, cut=cut, apply=apply)
             )
         else:  # pragma: no cover - 표가 늘면 여기 온다
             out.plan.rows.append(
@@ -166,6 +201,13 @@ def run_undo(
                     message=f"되돌릴 줄을 읽을 수 없습니다: {entry.table_name}",
                 )
             )
+    if savepoint is not None:
+        if not out.plan.ok:
+            # 오류 줄이 있으면 **아무것도 안 바꾼다** — 앞 줄에서 지운 객체 · 끊은 선까지
+            # 되돌린다. 결과의 줄은 그대로 두어 무엇이 막았는지 읽게 한다.
+            savepoint.rollback()
+            return out
+        savepoint.commit()
     if apply and out.plan.ok:
         run.undone_at = datetime.now(UTC)
         run.undone_by_id = user.id
@@ -201,6 +243,7 @@ def _object(
     entry: BundleUndoEntry,
     index: int,
     types: dict[uuid.UUID, ObjectType],
+    ctx: _Context,
     *,
     doomed: set[uuid.UUID],
     cut: set[uuid.UUID],
@@ -216,15 +259,26 @@ def _object(
         return bulk.RowPlan(
             row=index, action="error", label=entry.label, message="타입이 없어졌습니다"
         )
-    try:
-        require_owner_edit(
-            db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 12)
-        )
-    except AppError as denied:
-        return bulk.RowPlan(
-            row=index, action="error", label=entry.label, message=denied.message
-        )
+    refused = _refusal(db, user, row, object_type, ctx)
+    if refused:
+        return bulk.RowPlan(row=index, action="error", label=entry.label, message=refused)
     if entry.action == "create":
+        if (
+            row.updated_at is not None
+            and row.updated_at > ctx.run.at
+            and row.updated_at != ctx.now
+        ):
+            # **만든 객체도 남이 고쳤으면 안 지운다** — 지우면 그 사람의 변경이 함께 사라진다.
+            # 만든 줄에는 「넣은 값」 이 안 적혀 있어 칸마다 견줄 수 없고, 그 판보다 뒤에
+            # 고쳐졌는지(`updated_at`)로 본다(2026-10-08). 이 되돌리기가 방금 앞 줄에서 고친
+            # 것(`now()` 와 같다)은 남의 변경이 아니다 — 안 빼면 계획과 적용이 갈린다.
+            return bulk.RowPlan(
+                row=index,
+                action="unchanged",
+                label=entry.label,
+                object_id=row.id,
+                message="그 뒤에 고쳐져 안 지웁니다",
+            )
         blocked = _blockers(db, row, doomed, cut)
         if blocked:
             return bulk.RowPlan(
@@ -292,6 +346,26 @@ def _object(
     )
 
 
+def _refusal(
+    db: Session, user: User, row: ObjectInstance, object_type: ObjectType, ctx: _Context
+) -> str:
+    """이 객체를 **지금** 고칠 수 있나 — 못 하면 그 까닭, 되면 빈 글자.
+
+    판을 넣은 날의 권한이 아니라 지금의 권한이다(그 사이 부서를 옮겼을 수 있다). 허브가
+    관리하게 된 타입은 그 허브의 판(`source`)만 되돌린다 — 아니면 다음 받기가 덮어쓴다.
+    """
+    refused = managed.objects_refusal(object_type, source=ctx.run.source, what="되돌리지")
+    if refused:
+        return refused
+    try:
+        require_owner_edit(
+            db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 12)
+        )
+    except AppError as denied:
+        return denied.message
+    return ""
+
+
 def _wrong_kind(db: Session, row: ObjectInstance, properties: Any) -> str:
     """되돌릴 값이 **지금 속성 종류에 맞나** — 안 맞으면 그 까닭.
 
@@ -353,9 +427,15 @@ def _blockers(
     ]
     if edges:
         return f"관계 {len(edges)}건"
+    # 원 표와 잇는 선은 **양쪽을 다 본다** — 계정 → 과제처럼 원 표가 출발점이면 이 객체는
+    # 도착점에 있다. 출발점만 보면 그 선이 이름 없이 남은 채로 지웠다(2026-10-08).
     links = [
         one
-        for one in db.scalars(select(ObjectLink.id).where(ObjectLink.src_id == row.id))
+        for one in db.scalars(
+            select(ObjectLink.id).where(
+                or_(ObjectLink.src_id == row.id, ObjectLink.dst_id == row.id)
+            )
+        )
         if one not in cut
     ]
     if links:
@@ -401,7 +481,14 @@ def _pointing(db: Session, row: ObjectInstance, doomed: set[uuid.UUID]) -> int:
 
 
 def _relation(
-    db: Session, user: User, entry: BundleUndoEntry, index: int, *, apply: bool
+    db: Session,
+    user: User,
+    entry: BundleUndoEntry,
+    index: int,
+    ctx: _Context,
+    *,
+    cut: set[uuid.UUID],
+    apply: bool,
 ) -> bulk.RowPlan:
     edge = db.get(ObjectRelation, entry.target_id)
     if entry.action == "create":
@@ -409,6 +496,9 @@ def _relation(
             return bulk.RowPlan(
                 row=index, action="unchanged", label=entry.label, message="이미 끊겼습니다"
             )
+        refused = _edge_refusal(db, user, edge.src_object_id, edge.relation, ctx)
+        if refused:
+            return bulk.RowPlan(row=index, action="error", label=entry.label, message=refused)
         if apply:
             audit.record(
                 db,
@@ -444,12 +534,36 @@ def _relation(
                 label=entry.label,
                 message=f"{gone} 이 지금 없어 다시 이을 수 없습니다",
             )
+        src_id = uuid.UUID(str(entry.before["src"]))
+        dst_id = uuid.UUID(str(entry.before["dst"]))
+        slug = str(entry.before.get("relation") or "")
+        twin = db.scalar(
+            select(ObjectRelation.id).where(
+                ObjectRelation.src_object_id == src_id,
+                ObjectRelation.dst_object_id == dst_id,
+                ObjectRelation.relation == slug,
+            )
+        )
+        if twin is not None:
+            # 그 사이 **같은 선이 새 id 로** 이어졌다 — 다시 넣으면 유일 제약에 걸려 그 판
+            # 전체가 영영 안 되돌려진다(2026-10-08). 바라는 상태가 이미 그렇다.
+            return bulk.RowPlan(
+                row=index,
+                action="unchanged",
+                label=entry.label,
+                message="같은 선이 이미 이어져 있습니다",
+            )
+        refused = _edge_refusal(db, user, src_id, slug, ctx) or _relink_refusal(
+            db, ctx, slug, src_id, dst_id, cut
+        )
+        if refused:
+            return bulk.RowPlan(row=index, action="error", label=entry.label, message=refused)
         if apply:
             made = ObjectRelation(
                 id=uuid.uuid4(),
-                src_object_id=uuid.UUID(str(entry.before["src"])),
-                dst_object_id=uuid.UUID(str(entry.before["dst"])),
-                relation=str(entry.before["relation"]),
+                src_object_id=src_id,
+                dst_object_id=dst_id,
+                relation=slug,
                 properties=dict(entry.before.get("properties") or {}),
                 evidence_note=str(entry.before.get("evidence_note") or ""),
                 created_by_id=user.id,
@@ -476,6 +590,9 @@ def _relation(
         return bulk.RowPlan(
             row=index, action="unchanged", label=entry.label, message="선이 이미 없습니다"
         )
+    refused = _edge_refusal(db, user, edge.src_object_id, edge.relation, ctx)
+    if refused:
+        return bulk.RowPlan(row=index, action="error", label=entry.label, message=refused)
     current = {
         "properties": dict(edge.properties or {}),
         "evidence_note": edge.evidence_note or "",
@@ -509,6 +626,120 @@ def _relation(
     )
 
 
+def _edge_refusal(db: Session, user: User, src_id: uuid.UUID, slug: str, ctx: _Context) -> str:
+    """이 선을 **지금** 잇거나 끊을 수 있나 — 출발점을 고칠 수 있어야 하고(일괄 입력과 같은
+    문턱), 허브가 관리하는 관계 종류는 그 허브의 판만 되돌린다."""
+    kind = ctx.kinds.get(slug)
+    if kind is not None:
+        try:
+            managed.require_relation_editable(kind, source=ctx.run.source)
+        except AppError as refused:
+            return refused.message
+    src = db.get(ObjectInstance, src_id)
+    if src is None:
+        return ""
+    try:
+        require_owner_edit(
+            db, user, src.owner_workspace_id, what="객체", code_value=code("OBJECTS", 27)
+        )
+    except AppError as denied:
+        return denied.message
+    return ""
+
+
+def _relink_refusal(
+    db: Session,
+    ctx: _Context,
+    slug: str,
+    src_id: uuid.UUID,
+    dst_id: uuid.UUID,
+    cut: set[uuid.UUID],
+) -> str:
+    """끊었던 선을 **다시 이으면 잇는 규칙을 깨나** — 깨면 사람이 읽는 까닭.
+
+    화면 · 일괄 입력이 지키는 셋(`objects/relations.py`)을 그대로 본다: 관계 종류가 있고 쓰는
+    중인가, 양끝이 허용 타입인가, 개수 제약 · 순환을 안 깨나. 안 보면 「한 부품의 상위는
+    하나」 인 관계에 둘째 상위가 조용히 들어간다(2026-10-08).
+
+    **이 되돌리기가 끊을 선(`cut`)은 없는 것으로 친다** — 「파일대로 맞춤」 으로 상위를 옮긴
+    판은 새 선을 이은 뒤 옛 선을 끊었고, 거꾸로 읽으면 옛 선을 먼저 되살린다. 그때 새 선은
+    아직 있지만 곧 끊긴다.
+    """
+    kind = ctx.kinds.get(slug)
+    if kind is None:
+        return f"관계 종류 {slug} 이(가) 지금 없어 다시 이을 수 없습니다"
+    if not kind.is_active:
+        return f"{kind.label}은 지금 쓰지 않는 관계 종류라 다시 잇지 않습니다"
+    src = db.get(ObjectInstance, src_id)
+    dst = db.get(ObjectInstance, dst_id)
+    if src is None or dst is None:  # pragma: no cover - `_missing_end` 가 먼저 본다
+        return "끝점이 없어 다시 이을 수 없습니다"
+    slugs = {one.id: one.slug for one in ctx.types.values()}
+    try:
+        rel.require_end_types_allowed(
+            db, kind, slugs.get(src.type_id, ""), slugs.get(dst.type_id, ""), ctx.ends_of(db)
+        )
+    except AppError as refused:
+        return refused.message
+    if kind.cardinality in ("one_to_one", "many_to_one") and _edges_from(
+        db, kind.slug, src_id, cut, side="src"
+    ):
+        return f"{kind.label}은 하나만 맺을 수 있는데 그 사이 다른 선이 이어졌습니다"
+    if kind.cardinality in ("one_to_one", "one_to_many") and _edges_from(
+        db, kind.slug, dst_id, cut, side="dst"
+    ):
+        return f"{kind.label}의 도착 쪽은 하나만 받을 수 있는데 그 사이 다른 선이 이어졌습니다"
+    if kind.acyclic and _closes_cycle(db, kind.slug, src_id, dst_id, cut):
+        return f"다시 이으면 {kind.label}에 순환이 생깁니다 — 그 사이 돌아오는 길이 생겼습니다"
+    return ""
+
+
+def _edges_from(
+    db: Session, slug: str, end: uuid.UUID, cut: set[uuid.UUID], *, side: str
+) -> bool:
+    """그 끝에 이 관계의 선이 **이 되돌리기가 끊을 것 말고** 있나 — 두 표(`object_relations`
+    · 원 표와 잇는 `object_links`)를 다 본다(`relations.require_cardinality` 와 같다)."""
+    edge_end = ObjectRelation.src_object_id if side == "src" else ObjectRelation.dst_object_id
+    link_end = ObjectLink.src_id if side == "src" else ObjectLink.dst_id
+    found = [
+        *db.scalars(
+            select(ObjectRelation.id).where(ObjectRelation.relation == slug, edge_end == end)
+        ),
+        *db.scalars(select(ObjectLink.id).where(ObjectLink.relation == slug, link_end == end)),
+    ]
+    return any(one not in cut for one in found)
+
+
+def _closes_cycle(
+    db: Session, slug: str, src_id: uuid.UUID, dst_id: uuid.UUID, cut: set[uuid.UUID]
+) -> bool:
+    """`src → dst` 를 이으면 순환인가 — `relations.require_no_cycle` 과 같은 훑기에서 이
+    되돌리기가 끊을 선만 뺀다."""
+    if src_id == dst_id:
+        return True
+    reachable = db.execute(
+        text("""
+            WITH RECURSIVE walk(id) AS (
+                SELECT dst_object_id FROM object_relations
+                 WHERE src_object_id = :dst AND relation = :rel
+                   AND NOT (id = ANY(CAST(:cut AS uuid[])))
+                UNION
+                SELECT r.dst_object_id FROM object_relations r
+                  JOIN walk w ON r.src_object_id = w.id
+                 WHERE r.relation = :rel AND NOT (r.id = ANY(CAST(:cut AS uuid[])))
+            )
+            SELECT 1 FROM walk WHERE id = :src LIMIT 1
+        """),
+        {
+            "dst": str(dst_id),
+            "src": str(src_id),
+            "rel": slug,
+            "cut": [str(one) for one in cut],
+        },
+    ).scalar()
+    return bool(reachable)
+
+
 def _missing_end(db: Session, before: dict[str, Any]) -> str:
     """양끝이 지금도 있나 — 없으면 사람이 읽는 이름."""
     for name in ("src", "dst"):
@@ -522,12 +753,19 @@ def _missing_end(db: Session, before: dict[str, Any]) -> str:
     return ""
 
 
-def _link(db: Session, entry: BundleUndoEntry, index: int, *, apply: bool) -> bulk.RowPlan:
+def _link(
+    db: Session, user: User, entry: BundleUndoEntry, index: int, ctx: _Context, *, apply: bool
+) -> bulk.RowPlan:
     link = db.get(ObjectLink, entry.target_id)
     if link is None:
         return bulk.RowPlan(
             row=index, action="unchanged", label=entry.label, message="이미 끊겼습니다"
         )
+    # 원 표 쪽 끝은 행이 없다 — `objects` 에 있는 끝의 부서로 본다(일괄 입력은 출발점이다).
+    end = link.src_id if db.get(ObjectInstance, link.src_id) is not None else link.dst_id
+    refused = _edge_refusal(db, user, end, link.relation, ctx)
+    if refused:
+        return bulk.RowPlan(row=index, action="error", label=entry.label, message=refused)
     if apply:
         db.delete(link)
         db.flush()
@@ -545,6 +783,7 @@ def _alias(
     entry: BundleUndoEntry,
     index: int,
     types: dict[uuid.UUID, ObjectType],
+    ctx: _Context,
     *,
     apply: bool,
 ) -> bulk.RowPlan:
@@ -558,6 +797,9 @@ def _alias(
         return bulk.RowPlan(
             row=index, action="error", label=entry.label, message="타입이 없어졌습니다"
         )
+    refused = _refusal(db, user, row, object_type, ctx)
+    if refused:
+        return bulk.RowPlan(row=index, action="error", label=entry.label, message=refused)
     now = aliases.human_of(db, [row.id]).get(row.id, [])
     # **묶음으로 견준다** — 표의 차례(붙인 시각)와 파일의 차례가 다를 수 있다. 순서로 보면
     # 바뀐 것이 없는데도 「그 뒤에 바뀌었다」 가 되어 되돌리기가 늘 건너뛴다.

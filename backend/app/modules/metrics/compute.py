@@ -6,9 +6,14 @@
 
 ## 바꿔 끼운다
 
-새 실행의 셀을 다 쓴 뒤 `current_run_id` 를 바꾸고 옛 실행의 셀을 지운다 — 같은 트랜잭션.
-읽는 쪽은 반쯤 쓰인 값을 보지 않고, 실패하면 롤백되어 옛 값이 남는다. 지표 하나가 끝날
-때마다 커밋한다(`run_recompute`) — 열 개 중 아홉이 되고 하나가 실패했으면 아홉은 새 값이다.
+**전량**은 새 실행의 셀을 다 쓴 뒤 `current_run_id` · `cells_run_id` 를 바꾸고 옛 실행의 셀을
+지운다 — 같은 트랜잭션. 읽는 쪽은 반쯤 쓰인 값을 보지 않고, 실패하면 롤백되어 옛 값이 남는다.
+지표 하나가 끝날 때마다 커밋한다(`run_recompute`) — 열 개 중 아홉이 되고 하나가 실패했으면
+아홉은 새 값이다.
+
+**증분**(`incremental.py`)은 셀이 든 실행(`cells_run_id`)에서 바뀐 기간의 셀만 지우고 다시
+넣는다 — 역시 한 트랜잭션. 새 실행 행은 「언제 · 어디까지 봤나」(워터마크)만 새로 하고 셀은
+전량 실행의 것을 이어 쓴다.
 
 ## 가시성은 안 건다
 
@@ -50,6 +55,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.modules.coreapi import services as coreapi_services
+from app.modules.metrics import incremental, timeindex
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics import stay as stay_module
 from app.modules.metrics import visits as visits_module
@@ -77,6 +83,8 @@ def statement(
     cutoff: date | None = None,
     until: date | None = None,
     cap: int | None = None,
+    periods: list[date | None] | None = None,
+    indexed: bool = True,
 ) -> Insert:
     """`INSERT INTO metric_values … SELECT … GROUP BY`.
 
@@ -87,7 +95,9 @@ def statement(
     `cutoff` 는 방문 기준의 닫힘선(워터마크 - 닫힘 일수) — 재방문 창이 이것을 넘으면 「아직
     열림」 이다. `until` 은 머무는 기간의 미래 자르기(워터마크 날짜) — 그 날 뒤에 시작하는
     기간은 만들지 않는다. `cap` 이 있으면 셀을 그 수 + 1 개까지만 넣는다 — 상한을 넘는 계산을
-    끝까지 쓰고 나서 버리지 않게(넘었는지는 넣은 수로 안다).
+    끝까지 쓰고 나서 버리지 않게(넘었는지는 넣은 수로 안다). `periods` 가 있으면 그 기간에
+    드는 원천 기록만 센다(증분 — 시간 칸이 있는 지표만). `indexed` 는 날짜 칸 색인이 있나 —
+    거르는 식의 모양이 달라진다(`incremental.period_filter`).
     """
     value = built.value
     ws = ObjectInstance.owner_workspace_id
@@ -128,6 +138,8 @@ def statement(
         .select_from(ObjectInstance)
         .where(ObjectInstance.type_id == built.source.id, ObjectInstance.deleted_at.is_(None))
     )
+    if periods is not None:
+        inner = inner.where(incremental.period_filter(built, periods, indexed=indexed))
     joining = [one.axis for one in built.dims]
     if stay is not None and stay.source is not None:
         joining.append(stay.source)
@@ -275,36 +287,84 @@ def run_one(
     *,
     job_id: uuid.UUID | None,
     progress: Callable[[str, int, int], None],
+    full: bool = True,
 ) -> MetricRun:
-    """지표 하나를 **전부 다시** 센다 — 끝에 커밋한다. 실패하면 예외가 나가고 호출자가
-    롤백한다(옛 값은 그대로)."""
-    built = built_of(db, metric)
+    """지표 하나를 센다 — 끝에 커밋한다. 실패하면 예외가 나가고 호출자가 롤백한다(옛 값은
+    그대로). `full` 이 아니면 **되는 때만** 바뀐 기간만 센다(`incremental.plan` — 안 되면 그
+    까닭을 실행 기록에 남기고 전량)."""
     # 타이머와 손이 같은 지표를 동시에 세면 둘째가 기다린다 — 트랜잭션이 끝나면 풀린다.
     db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": lock_key(metric.slug)})
+    # 잠금을 기다리는 사이 다른 계산이나 정의 고치기가 바꿨을 수 있다 — 그 뒤의 모습으로
+    # 짓고 판단한다. 잠금 전에 지으면 옛 정의로 세고 새 정의의 지문을 남겨, 그 뒤 증분이 옛
+    # 정의의 셀을 이어 썼다(2026-10-08).
+    db.refresh(metric)
+    built = built_of(db, metric)
     work_mem = get_settings().metrics_work_mem
     if _WORK_MEM_RE.match(work_mem):
         # 묶기가 디스크로 넘어가면 열 배 느리다. 이 트랜잭션에서만.
         db.execute(text(f"SET LOCAL work_mem = '{work_mem}'"))
     watermark = coreapi_services.watermark(db)
+    step: incremental.Increment | str = (
+        "전량 요청" if full else incremental.plan(db, metric, built, now=datetime.now(UTC))
+    )
+    partial = isinstance(step, incremental.Increment)
     run = MetricRun(
         metric_id=metric.id,
         job_id=job_id,
         status="running",
         watermark=watermark,
+        spec_hash=incremental.spec_hash(metric),
+        mode="incremental" if partial else "full",
     )
     db.add(run)
     db.flush()
-    progress(f"{metric.label} 계산", 0, 0)
     # 읽기의 닫힘(`query.closed_before`)과 같은 선 — 방문의 「아직 열림」 이 그것을 따른다.
     seen = (watermark or datetime.now(UTC)).astimezone(UTC).date()
     cutoff = seen - timedelta(days=built.spec.settle_days)
     cap = get_settings().metrics_max_cells
-    insert = statement(
-        built, metric_id=metric.id, run_id=run.id, cutoff=cutoff, until=seen, cap=cap
-    )
-    db.execute(insert)
+    old_cells = metric.cells_run_id or metric.current_run_id
+    if isinstance(step, incremental.Increment):
+        assert old_cells is not None
+        cells_run = old_cells
+        progress(f"{metric.label} 바뀐 기간 계산", 0, 0)
+        run.periods = [one.isoformat() if one else None for one in step.periods]
+        run.note = f"바뀐 기록 {step.changed:,}건 · 기간 {len(step.periods)}개"
+        if step.periods:
+            dated = [one for one in step.periods if one is not None]
+            stale = [MetricValue.period.in_(dated)] if dated else []
+            if None in step.periods:
+                stale.append(MetricValue.period.is_(None))
+            db.execute(
+                delete(MetricValue).where(
+                    MetricValue.metric_id == metric.id,
+                    MetricValue.run_id == cells_run,
+                    or_(*stale),
+                )
+            )
+            db.execute(
+                statement(
+                    built,
+                    metric_id=metric.id,
+                    run_id=cells_run,
+                    cutoff=cutoff,
+                    until=seen,
+                    cap=cap,
+                    periods=step.periods,
+                    indexed=built.time is not None
+                    and timeindex.has(db, built.source.id, built.time.key),
+                )
+            )
+    else:
+        cells_run = run.id
+        progress(f"{metric.label} 계산", 0, 0)
+        run.note = step
+        db.execute(
+            statement(
+                built, metric_id=metric.id, run_id=run.id, cutoff=cutoff, until=seen, cap=cap
+            )
+        )
 
-    mine = (MetricValue.metric_id == metric.id, MetricValue.run_id == run.id)
+    mine = (MetricValue.metric_id == metric.id, MetricValue.run_id == cells_run)
     totals = db.execute(
         select(
             func.count(),
@@ -330,7 +390,6 @@ def run_one(
         "negative_age": int(totals[4]),
     }
 
-    old = metric.current_run_id
     now = datetime.now(UTC)
     run.status = "ok"
     run.finished_at = now
@@ -338,15 +397,16 @@ def run_one(
     run.cells = cells
     run.stats = stats
     metric.current_run_id = run.id
+    metric.cells_run_id = cells_run
     metric.last_run_at = now
     metric.last_status = "ok"
     metric.last_error = None
     metric.cells = cells
     metric.overlap = built.overlap
-    if old is not None:
+    if old_cells is not None and old_cells != cells_run:
         db.execute(
             delete(MetricValue).where(
-                MetricValue.metric_id == metric.id, MetricValue.run_id == old
+                MetricValue.metric_id == metric.id, MetricValue.run_id == old_cells
             )
         )
     db.commit()

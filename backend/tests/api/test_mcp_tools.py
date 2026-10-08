@@ -1452,6 +1452,80 @@ def test_지표를_도구로_정의하고_읽으면_통계와_같은_수(bot: Bo
     # 경보 — 읽기만. 만든 것이 없으면 빈 목록이다.
     assert bot.call(server.metric_alerts, slug) == {"alerts": [], "events": []}
 
+    # 거르기에 넣을 값 — 기준 하나의 값과 건수.
+    values = bot.call(server.metric_query, slug, shape="dim_values", dims=["symptom"])
+    assert {one["label"]: one["count"] for one in values["values"]} == {"소음": 3, "발열": 1}
+    # 사람의 「다시 세기」 는 전부 센다 — 계산 기록이 방식과 까닭을 말한다.
+    job = bot.call(server.metric_recompute, slug)
+    assert job["status"] == "done" and job["result"]["applied"] is True, job
+    runs = bot.call(server.metric_runs, slug)
+    assert runs[0]["mode"] == "full" and runs[0]["note"] == "전량 요청"
+    assert runs[0]["status"] == "ok" and runs[0]["rows"] == 4
+    found = bot.call(server.jobs_list, kind="metrics_recompute", status="done")
+    assert any(one["job_id"] == job["job_id"] for one in found["items"])
+    assert all(one["kind"] == "metrics_recompute" for one in found["items"])
+    # 끝난 작업은 못 멈춘다 — 서버의 말이 그대로 온다.
+    with pytest.raises(ToolError, match="JOBS-0007"):
+        bot.call(server.job_cancel, job["job_id"])
+
+
+def test_지표를_부서_홈에_올리고_내린다(bot: Bot, admin: Signed) -> None:
+    kind = _uniq("case")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": kind,
+                    "label": "기록",
+                    "usage": "log",
+                    "properties": [
+                        {"key": "received", "label": "접수일", "data_type": "date"},
+                        {"key": "symptom", "label": "증상", "data_type": "text"},
+                    ],
+                }
+            ]
+        },
+        apply=True,
+    )
+    slug = _uniq("m")
+    spec = {
+        "measure": "count",
+        "time": {"address": "properties.received", "grain": "month"},
+        "dimensions": [{"name": "symptom", "address": "properties.symptom"}],
+    }
+    saved = bot.call(
+        server.metric_define, slug, "홈 지표", kind, spec, apply=True, interval_hours=6
+    )
+    assert saved["metric"]["interval_hours"] == 6
+    # 고칠 때 주기를 안 주면 그대로 둔다.
+    again = bot.call(server.metric_define, slug, "홈 지표", kind, spec, apply=True)
+    assert again["metric"]["interval_hours"] == 6
+
+    pinned = bot.call(server.metric_home, slug, admin.workspace, split="symptom")
+    assert pinned["workspace_slug"] == admin.workspace and pinned["split"] == "symptom"
+    assert [one["workspace_slug"] for one in bot.call(server.metric_home, slug)] == [
+        admin.workspace
+    ]
+    with pytest.raises(ToolError, match="METRICS-0046"):
+        bot.call(server.metric_home, slug, admin.workspace, split="nope")
+    assert bot.call(server.metric_home, slug, admin.workspace, remove=True)["ok"] is True
+    assert bot.call(server.metric_home, slug) == []
+
+
+def test_남은_일_알림_고아_파일을_도구로_본다(bot: Bot) -> None:
+    items = bot.call(server.server_maintenance)
+    assert isinstance(items, list) and all("key" in one and "count" in one for one in items)
+    assert isinstance(bot.call(server.notifications), list)
+    # 고아 파일 정리는 계획만 — 지울 것이 있으면 job_apply, 없으면 그렇다고 말한다.
+    planned = bot.call(server.filestore_gc)
+    assert planned["kind"] == "filestore_gc" and planned["status"] == "done", planned
+    assert planned["result"]["applied"] is False and planned["result"]["summary"]
+    if planned["result"]["ok"]:
+        assert "job_apply" in planned["next"]
+    else:
+        assert "적용할 것이 없는" in planned["next"]
+
 
 def test_자기소개는_서버가_아는_사실로_쓰고_whoami_가_싣는다(bot: Bot, db: Session) -> None:
     """같은 틀로 띄운 플랫폼 여럿이 붙으면 도구가 전부 같다 — 에이전트가 어디에 물을지 고르는

@@ -101,20 +101,30 @@ async def upload_with_ticket(
 ) -> AttachmentOut:
     """표로 올린다 — **토큰 없이**, 본문이 곧 파일이다(multipart 아님).
 
-    본문을 흘려 받으며 크기를 센다 — 상한을 넘는 순간 끊는다(다 받고 나서 재지 않는다).
+    **표부터 본다** — 표가 곧 자격이라, 안 되는 표면 본문을 한 바이트도 받지 않는다. 그다음
+    밝힌 크기(`Content-Length`)가 상한을 넘으면 역시 받기 전에 끊고, 안 밝힌 본문은 흘려
+    받으며 세다가 상한을 넘는 순간 끊는다(다 받고 나서 재지 않는다).
     """
+    await run_in_threadpool(services.check_ticket, db, ticket=ticket)
     limit = services.MAX_BYTES
+
+    def too_large() -> AppError:
+        return AppError(
+            code("FILES", 3),
+            f"파일이 너무 큽니다 (최대 {limit // 1024 // 1024}MB).",
+            status=413,
+            details={"max_bytes": limit},
+        )
+
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > limit:
+        raise too_large()
     with tempfile.SpooledTemporaryFile(max_size=1024 * 1024) as spool:
         size = 0
         async for chunk in request.stream():
             size += len(chunk)
             if size > limit:
-                raise AppError(
-                    code("FILES", 3),
-                    f"파일이 너무 큽니다 (최대 {limit // 1024 // 1024}MB).",
-                    status=413,
-                    details={"max_bytes": limit},
-                )
+                raise too_large()
             spool.write(chunk)
         spool.seek(0)
         return await run_in_threadpool(

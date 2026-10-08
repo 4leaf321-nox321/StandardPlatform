@@ -29,19 +29,39 @@ export function ObjectYears({ typeSlug, objectId, canEdit }: Props) {
   const [dirty, setDirty] = useState(false)
   const [error, setError] = useState<Error | null>(null)
   const [saving, setSaving] = useState(false)
+  /**
+   * 지금 배정을 **읽었나.** 저장은 통째 교체(PUT)라, 못 읽은 채 빈 목록에서 한 해를 눌러 저장하면
+   * 기존 배정이 그 한 해로 바뀐다. 읽기 실패를 삼키던 때는 실패가 빈 목록으로 보였다(2026-10-08).
+   */
+  const [loaded, setLoaded] = useState(false)
+  const [loadError, setLoadError] = useState<Error | null>(null)
+  const [attempt, setAttempt] = useState(0)
 
   useEffect(() => {
     let cancelled = false
-    objectApi.years(typeSlug, objectId).then((found) => {
-      if (!cancelled) {
-        setYears(found)
-        setDirty(false)
-      }
-    })
+    setLoaded(false)
+    setLoadError(null)
+    objectApi
+      .years(typeSlug, objectId)
+      .then((found) => {
+        if (!cancelled) {
+          setYears(found)
+          setDirty(false)
+          setLoaded(true)
+        }
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setLoadError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+        }
+      })
     return () => {
       cancelled = true
     }
-  }, [typeSlug, objectId])
+  }, [typeSlug, objectId, attempt])
+
+  /** 고칠 수 있나 — 권한이 있고, 지금 배정을 읽은 뒤에만. */
+  const editable = canEdit && loaded
 
   function toggle(one: number) {
     setYears((now) => (now.includes(one) ? now.filter((y) => y !== one) : [...now, one].sort()))
@@ -49,6 +69,7 @@ export function ObjectYears({ typeSlug, objectId, canEdit }: Props) {
   }
 
   async function save() {
+    if (!loaded) return
     setError(null)
     setSaving(true)
     try {
@@ -70,13 +91,30 @@ export function ObjectYears({ typeSlug, objectId, canEdit }: Props) {
       </h2>
 
       {error && <ErrorNotice error={error} />}
+      {loadError && (
+        <div className="space-y-2">
+          <ErrorNotice error={loadError} />
+          <p className="text-muted-foreground text-xs">
+            지금 배정을 읽지 못해 수정할 수 없습니다 — 저장은 통째로 바꾸므로, 읽지 못한 채
+            저장하면 기존 배정이 지워집니다.{' '}
+            <button
+              type="button"
+              className="underline"
+              onClick={() => setAttempt((before) => before + 1)}
+            >
+              다시 읽기
+            </button>
+          </p>
+        </div>
+      )}
 
       <div className="flex flex-wrap gap-1.5">
         {YEARS.map((one) => (
           <button
             key={one}
             type="button"
-            disabled={!canEdit}
+            aria-pressed={years.includes(one)}
+            disabled={!editable}
             onClick={() => toggle(one)}
             className={
               years.includes(one)
@@ -96,7 +134,7 @@ export function ObjectYears({ typeSlug, objectId, canEdit }: Props) {
 
       {canEdit && (
         <div className="flex justify-end">
-          <Button size="sm" onClick={save} disabled={!dirty || saving}>
+          <Button size="sm" onClick={save} disabled={!dirty || saving || !loaded}>
             저장
           </Button>
         </div>

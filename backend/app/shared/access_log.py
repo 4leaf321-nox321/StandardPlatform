@@ -14,6 +14,7 @@ import logging
 
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
+from app.config import get_settings
 from app.database import SessionLocal
 from app.modules.audit.models import AccessLog
 from app.shared.request_context import get_request_id
@@ -52,6 +53,12 @@ class AccessLogMiddleware:
             return
 
         path = str(scope.get("path", ""))
+        # **접두어를 떼고 본다** — 접두어 설치(`PUBLIC_PATH=/<slug>`)에서는 바깥의
+        # `PrefixMiddleware` 가 경로에 접두어를 붙여 넘긴다. `/api/` 로 시작하는지만 보던 때는
+        # 그런 설치에서 로그인 · 로그아웃 · 고치기가 한 줄도 안 남았다(2026-10-08).
+        base = get_settings().base_path
+        if base and (path == base or path.startswith(base + "/")):
+            path = path[len(base) :] or "/"
         method = str(scope.get("method", ""))
         status_holder = {"status": 0}
 

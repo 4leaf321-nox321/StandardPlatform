@@ -167,7 +167,10 @@ def _write_trace(fn: Any, started: float, signal: dict[str, Any]) -> None:
         "ms": round((time.monotonic() - started) * 1000),
         **signal,
     }
-    with contextlib.suppress(OSError), open(str(_TRACE_PATH), "a", encoding="utf-8") as f:
+    with (
+        contextlib.suppress(OSError),
+        open(str(_TRACE_PATH), "a", encoding="utf-8") as f,
+    ):
         f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
@@ -417,6 +420,11 @@ async def _patch(ctx: Context, path: str, json_body: Any) -> Any:
         return _unwrap(await client.patch(path, json=json_body, headers=_forward_headers(ctx)))
 
 
+async def _put(ctx: Context, path: str, json_body: Any) -> Any:
+    async with _client(60) as client:
+        return _unwrap(await client.put(path, json=json_body, headers=_forward_headers(ctx)))
+
+
 async def _delete(ctx: Context, path: str, params: dict[str, Any] | None = None) -> Any:
     async with _client(60) as client:
         return _unwrap(await client.delete(path, params=params, headers=_forward_headers(ctx)))
@@ -462,14 +470,32 @@ async def _wait_job(ctx: Context, job: Any, wait_seconds: float) -> Any:
     return _job_view(current)
 
 
+#: 계획 → **`job_apply`** 로 적용하는 작업 종류(백엔드 `jobs/kinds.py` 의 두 단계 종류).
+_APPLY_BY_JOB = frozenset(
+    {
+        "objects_import",
+        "relations_import",
+        "bundle_import",
+        "bundle_undo",
+        "ontology_retype",
+        "filestore_gc",
+    }
+)
+#: 계획을 낸 **도구를 `apply=true` 로 다시 불러** 적용하는 종류 — `job_apply` 로는 안 된다.
+_APPLY_BY_TOOL = {"datasource_sync": "datasource_sync(slug, apply=true)"}
+
+
 def _job_view(job: Any) -> Any:
-    """AI 에게 주는 작업 모양 — 상태와 결과, 그리고 **다음에 할 일**."""
+    """AI 에게 주는 작업 모양 — 상태와 결과, 그리고 **다음에 할 일**(종류마다 다르다:
+    `job_apply` 로 적용하는 계획 · 도구를 `apply=true` 로 다시 부르는 계획 · 파일을 내는
+    작업 · 그냥 끝나는 작업)."""
     if not isinstance(job, dict) or "id" not in job:
         return job
     status = job.get("status")
+    kind = job.get("kind")
     out: dict[str, Any] = {
         "job_id": job["id"],
-        "kind": job.get("kind"),
+        "kind": kind,
         "status": status,
         "progress": job.get("progress"),
     }
@@ -477,23 +503,45 @@ def _job_view(job: Any) -> Any:
         out["result"] = job.get("result")
         result = job.get("result") or {}
         applied = bool(result.get("applied"))
-        has_errors = (
-            bool(result.get("errors"))
-            or bool((result.get("counts") or {}).get("error"))
-            or result.get("ok") is False
+        has_errors = bool(result.get("errors")) or bool(
+            (result.get("counts") or {}).get("error")
         )
+        # 두 단계 종류는 늘 계획을 낸다 — 결과에 `applied` 가 없어도.
+        is_plan = not applied and ("applied" in result or kind in _APPLY_BY_JOB)
         if applied:
             out["next"] = "적용됐다. 결과를 사용자에게 요약한다."
-        elif has_errors:
+        elif job.get("applied_by"):
+            out["applied_by"] = job["applied_by"]
+            out["next"] = (
+                "이 계획은 이미 적용됐다(또는 적용 중이다) — `applied_by` 작업을 "
+                "job_status 로 본다."
+            )
+        elif is_plan and has_errors:
             out["next"] = (
                 "오류가 있는 계획이다 — 적용할 수 없다. 오류를 사용자에게 보이고 고쳐서 다시 "
                 "넣는다."
             )
-        else:
+        elif is_plan and result.get("ok") is False:
+            out["next"] = (
+                "적용할 것이 없는 계획이다(`result.summary` · `result.errors` 가 까닭) — "
+                "그것을 사용자에게 전한다."
+            )
+        elif is_plan and kind in _APPLY_BY_JOB:
             out["next"] = (
                 "계획이다 — 아직 아무것도 안 들어갔다. 사용자에게 보여 주고 판단을 받은 뒤 "
                 "job_apply(job_id) 로 적용한다."
             )
+        elif is_plan and kind in _APPLY_BY_TOOL:
+            out["next"] = (
+                "계획이다 — 아직 아무것도 안 들어갔다. 사용자에게 보여 주고 판단을 받은 뒤 "
+                f"{_APPLY_BY_TOOL[kind]} 로 적용한다(job_apply 로는 안 된다)."
+            )
+        elif job.get("has_output"):
+            out["next"] = (
+                "끝났다 — 만든 파일은 화면의 「작업」 에서 받는다. 결과를 사용자에게 요약한다."
+            )
+        else:
+            out["next"] = "끝났다. 결과를 사용자에게 요약한다."
     elif status == "failed":
         out["error"] = job.get("error")
         out["next"] = "실패했다. 이유를 사용자에게 그대로 전한다 — 우회하지 않는다."
@@ -578,7 +626,10 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
     if topic:
         key = topic.strip().lower()
         if key not in secs:
-            return {"error": f"그런 주제가 없습니다: {topic}", "topics": sorted(secs.keys())}
+            return {
+                "error": f"그런 주제가 없습니다: {topic}",
+                "topics": sorted(secs.keys()),
+            }
         return {"guide_version": version, "topic": key, "content": secs[key]}
     # **어느 플랫폼의 안내서인가** — 같은 안내서를 여러 플랫폼이 낸다.
     platform = await _get(ctx, PROFILE_LIVE_PATH)
@@ -675,7 +726,10 @@ async def platform_profile_update(
     if not apply:
         return {
             "applied": False,
-            "before": {"summary": current.get("summary"), "notes": current.get("notes")},
+            "before": {
+                "summary": current.get("summary"),
+                "notes": current.get("notes"),
+            },
             "after": after,
             "instructions_preview": identity({**current, **after, "stale": []}),
             "problems": problems,
@@ -875,7 +929,10 @@ async def ontology_delete(
         params["purge_deleted"] = "true"
     got = await _delete(ctx, path, params=params or None)
     if isinstance(got, dict) and got.get("ok"):
-        return {"ok": True, "message": f"지웠습니다 — {kind} {slug}{f'.{key}' if key else ''}"}
+        return {
+            "ok": True,
+            "message": f"지웠습니다 — {kind} {slug}{f'.{key}' if key else ''}",
+        }
     return got
 
 
@@ -1135,7 +1192,11 @@ def _filter_params(
     for key, value in (properties or {}).items():
         params.append((f"p.{key}", value))
     for one in conditions or []:
-        field, op, value = one.get("field", ""), one.get("op", "eq"), one.get("value", "")
+        field, op, value = (
+            one.get("field", ""),
+            one.get("op", "eq"),
+            one.get("value", ""),
+        )
         params.append((f"f.{field}.{op}", value))
     return params
 
@@ -1316,7 +1377,9 @@ async def objects_similar(
         if fields:
             params["fields"] = ",".join(fields)
         return await _get(
-            ctx, f"/api/objects/{type_slug}/{object_id}/similar", params=list(params.items())
+            ctx,
+            f"/api/objects/{type_slug}/{object_id}/similar",
+            params=list(params.items()),
         )
     if not tags:
         return {"error": "object_id 나 tags 중 하나를 줍니다."}
@@ -1503,13 +1566,34 @@ async def audit_recent(
 
 @tool()
 async def quality_report(ctx: Context, kind: str | None = None) -> Any:
-    """데이터 품질 — **나빠지고 있는 것.** 홈 「남은 일」 과 같은 것.
+    """데이터 품질 — **나빠지고 있는 것**, 타입마다 어느 객체인지까지. 홈 「남은 일」 중 데이터
+    쪽을 펼친 것이다(운영 쪽 — 실패한 작업 · 지표 · 동기화 · 승인 대기는 `server_maintenance`).
 
     `kind` 로 한 종류만: `missing_required`(필수값 빈 객체) · `orphan`(관계 없는 객체) ·
     `broken_ref`(지워진 것을 가리키는 칸) · `duplicate`(이름이 같은 객체). 종류·타입마다
     수는 전부, 목록은 앞의 몇 개(`sample_limit`)만. **볼 수 있는 것만 센다.**"""
     params = {"kind": kind} if kind else None
     return await _get(ctx, "/api/objects/quality/report", params=params)
+
+
+@tool()
+async def server_maintenance(ctx: Context) -> Any:
+    """홈의 **「남은 일」** — 손이 가야 하는데 아무도 안 본 것들(승인 대기 계정 · 적용 안 한
+    계획 · 실패한 작업 · 멈춘 워커 · 실패하거나 멎은 지표 · 동기화 실패 · 웹훅 실패 · 낡은
+    백업 · 데이터 품질 · 확장이 올린 것). 줄마다 `label` · `count` ·
+    `severity`(`warning` 이면 미루면 안 되는 것) · `link`(화면 주소). **보는 사람의 권한대로**
+    — 시스템 관리자에게만 보이는 줄이 있다. 「요즘 챙길 것이 뭐야」 에 먼저 부른다."""
+    return await _get(ctx, "/api/server/maintenance")
+
+
+@tool()
+async def notifications(ctx: Context, unread_only: bool = True) -> Any:
+    """**내 알림** 최근 것부터(100개까지) — 지켜보는 객체가 바뀜 · 경보가 울림 · 내 작업이
+    끝남/실패 · 가입 승인 같은 것. 줄마다 `kind` · 제목 · 본문 · 링크 · 읽음 여부.
+    `unread_only=false` 면 읽은
+    것까지. **읽음 처리는 하지 않는다** — 사람이 화면에서 본 것으로 둔다."""
+    params = {"unread_only": "true"} if unread_only else None
+    return await _get(ctx, "/api/notifications", params=params)
 
 
 @tool()
@@ -1779,7 +1863,14 @@ def _brief(detail: dict[str, Any]) -> dict[str, Any]:
     row = detail.get("object") or {}
     return {
         name: row.get(name)
-        for name in ("id", "key", "label", "owner_workspace_slug", "status", "properties")
+        for name in (
+            "id",
+            "key",
+            "label",
+            "owner_workspace_slug",
+            "status",
+            "properties",
+        )
     }
 
 
@@ -1916,7 +2007,11 @@ async def relation_add(
     return await _post(
         ctx,
         f"/api/objects/{type_slug}/{object_id}/relations",
-        {"relation": relation, "dst_object_id": dst_object_id, "evidence_note": evidence_note},
+        {
+            "relation": relation,
+            "dst_object_id": dst_object_id,
+            "evidence_note": evidence_note,
+        },
     )
 
 
@@ -1991,9 +2086,11 @@ async def relations_import(
 # --------------------------------------------------------------------------- #
 @tool()
 async def job_status(ctx: Context, job_id: str, wait_seconds: int = 20) -> Any:
-    """작업이 어디까지 됐나 — `objects_import` · `relations_import` · `bundle_import` 가 돌려준
-    `job_id` 로. `wait_seconds`(최대 25) 동안 끝나기를 기다렸다가 돌려준다 — 그래도 안 끝났으면
-    `status` 가 `running` 인 채로 오고, 그때 다시 부른다. **끝났다고 지어내지 않는다.**"""
+    """작업이 어디까지 됐나 — 작업을 만든 도구(`objects_import` · `relations_import` ·
+    `bundle_import` · `datasource_sync` · `metric_define` · `metric_recompute` ·
+    `filestore_gc` …)가 돌려준 `job_id` 로. `wait_seconds`(최대 25) 동안 끝나기를 기다렸다가
+    돌려준다 — 그래도 안 끝났으면 `status` 가 `running` 인 채로 오고, 그때 다시 부른다.
+    **끝났다고 지어내지 않는다.** `next` 가 다음에 할 일을 말한다(종류마다 다르다)."""
     job = await _get(ctx, f"/api/jobs/{job_id}")
     return await _wait_job(ctx, job, float(wait_seconds))
 
@@ -2010,10 +2107,29 @@ async def job_apply(ctx: Context, job_id: str, wait_seconds: int = 20) -> Any:
 
 
 @tool()
-async def jobs_list(ctx: Context, limit: int = 20) -> Any:
-    """내 작업 최근 것부터 — 무엇이 돌고 있고 무엇이 실패했나. 워커가 살아 있는지도 함께
-    (`workers[].alive`) — 워커가 없으면 작업은 영영 대기다. 그때는 운영자에게 알린다."""
-    listed = await _get(ctx, "/api/jobs", params=[("limit", limit)])
+async def jobs_list(
+    ctx: Context,
+    limit: int = 20,
+    status: str | None = None,
+    kind: str | None = None,
+    mine: bool = False,
+) -> Any:
+    """작업 최근 것부터 — 무엇이 돌고 있고 무엇이 실패했나. 볼 수 있는 것만(내가 시킨 것 ·
+    내 부서 것, 시스템 관리자는 타이머가 넣은 것까지 전부). 워커가 살아 있는지도 함께
+    (`workers[].alive`) —
+    워커가 없으면 작업은 영영 대기다. 그때는 운영자에게 알린다.
+
+    거르기: `status`(`queued` · `running` · `done` · `failed` · `cancelled`) · `kind`(작업
+    종류 — `datasource_sync` · `metrics_recompute` · `objects_import` …) · `mine`(내가 시킨
+    것만). 「어젯밤 동기화가 실패했나」 는 `kind="datasource_sync", status="failed"`."""
+    params: list[tuple[str, Any]] = [("limit", limit)]
+    if status:
+        params.append(("status", status))
+    if kind:
+        params.append(("kind", kind))
+    if mine:
+        params.append(("mine", "true"))
+    listed = await _get(ctx, "/api/jobs", params=params)
     workers = await _get(ctx, "/api/jobs/workers")
     if isinstance(listed, dict) and "items" in listed:
         listed["items"] = [_job_view(one) for one in listed["items"]]
@@ -2021,14 +2137,56 @@ async def jobs_list(ctx: Context, limit: int = 20) -> Any:
     return listed
 
 
+@tool()
+async def job_cancel(ctx: Context, job_id: str) -> Any:
+    """작업을 **멈춘다** — 줄에서 기다리는 것은 바로, 도는 것은 단계 사이에서 멈춘다(그때까지
+    커밋한 것은 남는다 — 지표는 다 센 지표까지). 시킨 사람만(시스템 관리자는 모두). 이미 끝난
+    작업은 거절된다. **사용자가 멈추라고 한 것만** 멈춘다."""
+    job = await _post(ctx, f"/api/jobs/{job_id}/cancel", None)
+    return _job_view(job)
+
+
+@tool()
+async def filestore_gc(ctx: Context, wait_seconds: int = 20) -> Any:
+    """첨부 저장소의 **고아 파일**(아무 첨부도 안 가리키는 파일 · 끊긴 업로드의 찌꺼기)을 센다
+    — **계획만**: 지울 파일 수 · 크기 · 예시. 사람이 보고 판단한 뒤 `job_apply(job_id)` 로
+    지운다. 하루가 안 지난 것과 저장소 모양이 아닌 것은 안 건드린다. 워커가 매일 한 번 스스로도
+    지운다(`FILESTORE_GC_HOURS`). **시스템 관리자만.** 지운 파일은 되살릴 수 없다."""
+    job = await _post_form(ctx, "/api/jobs", {"kind": "filestore_gc", "params": "{}"}, None)
+    return await _wait_job(ctx, job, float(wait_seconds))
+
+
 # --------------------------------------------------------------------------- #
 # 데이터 소스 — 바깥 시스템(OData)에서 읽어 채우기. 정의는 화면에서, 돌리는 것은 여기서도.
 # --------------------------------------------------------------------------- #
 @tool()
 async def datasources_list(ctx: Context) -> Any:
-    """정의된 **데이터 소스**(OData → 타입) 목록 — 어느 표를 어느 타입에 넣는지, 마지막 결과.
-    시스템 관리자 토큰이어야 보인다."""
+    """정의된 **데이터 소스**(OData · REST · 파일 폴더 · 다른 플랫폼 → 타입) 목록 — 어느 표를
+    어느 타입에 넣는지, 주기, 마지막 결과. 시스템 관리자 토큰이어야 보인다. 실패 이유 · 지난
+    결과는 `datasource_runs`, 칸 대응이 맞는지는 `datasource_preview`."""
     return await _get(ctx, "/api/datasources")
+
+
+@tool()
+async def datasource_runs(ctx: Context, slug: str) -> Any:
+    """데이터 소스의 **최근 실행 기록** — 언제 · 누가(타이머) · 계획/적용 · 수(`counts`: 새로 ·
+    고침 · 그대로 · 오류 · 바깥에서 사라져 「사용 안 함」 으로 돌린 것 `deprecated` · 관계는
+    `relations_*`) · 오류 행. 「어젯밤 동기화가 왜 실패했나」 · 「얼마나 들어왔나」 는 여기서.
+    끝점을 못 찾아 **다음 동기화로 미룬 관계**는 `relations_waiting`. 시스템 관리자만."""
+    return await _get(ctx, f"/api/datasources/{slug}/runs")
+
+
+@tool()
+async def datasource_preview(ctx: Context, slug: str, limit: int = 5) -> Any:
+    """바깥 표의 **앞 몇 행을 그대로 + 칸 대응한 뒤로** — 대응이 맞는지 볼 때. 아무것도 안
+    바꾼다. `mapping_error` 가 있으면 대응이 틀린 것이다 — 고치는 것은 화면에서. 시스템
+    관리자만."""
+    return await _post(
+        ctx,
+        f"/api/datasources/{slug}/preview",
+        None,
+        params={"limit": max(1, min(limit, 50))},
+    )
 
 
 @tool()
@@ -2037,8 +2195,14 @@ async def datasource_sync(ctx: Context, slug: str, apply: bool = False) -> Any:
 
     `apply=False`(기본)면 **계획만**: 행마다 새로/고침/그대로/오류와 그 이유. 사람에게 보여
     주고 판단을 받은 뒤 `apply=True`. **한 행이라도 오류면 아무것도 안 넣는다.** 같은 객체는
-    바깥 식별자 → 식별자 → 별칭·이름 순으로 다시 찾고, 빈 칸은 안 건드린다. 값 대응표에 없는
-    값·못 푸는 참조는 오류 행이다 — 사용자에게 무엇을 고쳐야 하는지 말한다.
+    바깥 식별자 → 식별자 → 별칭·이름 순으로 다시 찾는다(이미 다른 바깥 행과 이어진 객체는
+    이름으로 다시 안 고른다). 값 대응표에 없는 값·못 푸는 참조는 오류 행이다 — 사용자에게
+    무엇을 고쳐야 하는지 말한다.
+
+    **빈 칸 · 빠진 별칭** — 보통은 빈 칸을 안 건드린다(더하기 · 바꾸기만). 다른 플랫폼
+    (`sp_core`)이나 「바깥이 정본」(거울)으로 둔 소스는 바깥에서 비운 칸을 **비우고** 빠진
+    별칭을 **뺀다** — 계획의 「고침」 에 그것이 보인다. 관계의 끝점이 아직 안 들어왔으면 그
+    관계는 다음 동기화에서 다시 잇는다(`relations_waiting`).
 
     **작업이 된다** — 바깥 표를 읽는 시간은 그쪽이 정한다. 끝나기를 잠깐 기다렸다가 돌려주고,
     아직이면 `job_status(job_id)` 로 다시 묻는다. 결과(`result`)가 계획 · 기록이다."""
@@ -2200,7 +2364,12 @@ async def extension_call(
 # 해석만 한다. 지표에 없는 물음은 `metric_define(apply=false)` 로 **정의를 제안**한다.
 
 #: 읽기 모양 → 경로.
-_METRIC_SHAPES = {"table": "values", "series": "series", "cohort": "cohort"}
+_METRIC_SHAPES = {
+    "table": "values",
+    "series": "series",
+    "cohort": "cohort",
+    "dim_values": "dims",
+}
 
 
 @tool()
@@ -2264,6 +2433,7 @@ async def metric_query(
     cohort_to: str | None = None,
     split: str | None = None,
     cumulative: bool = False,
+    search: str | None = None,
 ) -> Any:
     """**지표 읽기** — 세어 둔 셀 위에서 비율 · 누적 · 전기 · 전년 동기 · 건 보기까지.
     보이는 부서의 것만 더한다(목록 · 통계와 같은 규칙).
@@ -2276,8 +2446,10 @@ async def metric_query(
     - `shape="cohort"`: 코호트 x 경과 행렬(`rows[].cells[]`). `cumulative=true` 면 경과순
       누적 — 「판매 후 n개월째까지의 누적 인입률」. 행마다 `denominator`(분모가 코호트로
       짝지어졌을 때 — 판매 대수).
-    - `filters`: `{기준 이름: 값}` — 값은 `drill` 이나 `dims` 의 값(참조는 id). `null` 은
-      「(비어 있음)」. 분모도 같은 기준으로 걸린다.
+    - `shape="dim_values"`: 기준 **하나**(`dims=[이름]`)의 값과 이름 · 건수 — `filters` 에
+      넣을 값(참조는 id)을 찾을 때. `search` 로 이름에 든 글자를 거른다.
+    - `filters`: `{기준 이름: 값}` — 값은 `drill` 이나 `dim_values` 의 값(참조는 id).
+      `null` 은 「(비어 있음)」. 분모도 같은 기준으로 걸린다.
     - `period_from` · `period_to`(앞까지) · `cohort_from` · `cohort_to`: `YYYY-MM-DD`.
 
     사용자에게 옮길 때 **빼먹지 않는다**:
@@ -2292,6 +2464,13 @@ async def metric_query(
     where = _METRIC_SHAPES.get((shape or "table").strip().lower())
     if where is None:
         return {"error": f"shape 는 {', '.join(_METRIC_SHAPES)} 중 하나입니다: {shape!r}"}
+    if where == "dims":
+        if not dims or len(dims) != 1:
+            return {"error": "dim_values 는 기준 하나를 dims=[이름] 으로 줍니다."}
+        asked: list[tuple[str, Any]] = [("name", dims[0])]
+        if search:
+            asked.append(("q", search))
+        return await _get(ctx, f"/api/metrics/{slug}/dims", params=asked)
     params: list[tuple[str, Any]] = []
     if dims:
         params.append(("dims", ",".join(dims)))
@@ -2498,7 +2677,9 @@ async def metric_alerts(ctx: Context, slug: str | None = None, limit: int = 20) 
     곳, 순차 검정 「나쁨」 은 정한 배수 쪽이라는 판정, 변화점의 「잠정」 은 잠정이다. 지금도
     그런지는 `metric_analyze` 로 본다."""
     events = await _get(
-        ctx, "/api/metrics/alerts/events", params=[("limit", str(max(1, min(limit, 200))))]
+        ctx,
+        "/api/metrics/alerts/events",
+        params=[("limit", str(max(1, min(limit, 200))))],
     )
     if not isinstance(events, list):
         return events
@@ -2507,7 +2688,10 @@ async def metric_alerts(ctx: Context, slug: str | None = None, limit: int = 20) 
     alerts = await _get(ctx, f"/api/metrics/{slug}/alerts")
     if not isinstance(alerts, list):
         return alerts
-    return {"alerts": alerts, "events": [one for one in events if one.get("metric") == slug]}
+    return {
+        "alerts": alerts,
+        "events": [one for one in events if one.get("metric") == slug],
+    }
 
 
 @tool()
@@ -2519,7 +2703,8 @@ async def metric_define(
     spec: dict[str, Any],
     apply: bool = False,
     description: str = "",
-    interval_hours: int = 24,
+    interval_hours: int | None = None,
+    is_active: bool | None = None,
     wait_seconds: float = 20.0,
 ) -> Any:
     """**지표 정의** — 계획(`apply=false`, 기본) → 사람 확인 → 저장하고 바로 센다
@@ -2553,6 +2738,15 @@ async def metric_define(
         `periods_from` 은 기록마다 기간 수를 읽을 숫자 칸(비면 · 넘으면 `periods`). 코호트 ·
         방문과 함께 못 둔다
 
+    `interval_hours` — 타이머가 다시 세는 주기. `0` 은 손으로만(`metric_recompute`), 1 ~ 23
+    은 그 시간마다(낮에도), `24` 는 매일 밤, `48` · `72` … 는 N일마다 밤(날 단위만 —
+    36 같은 값은 거절된다). 새로 만들 때 비우면 매일 밤, 고칠 때 비우면 그대로 둔다.
+    `is_active=false` 면 타이머 · 적재 뒤에 안 센다(값은 남는다).
+
+    타이머 · 적재 뒤의 계산은 **되면 바뀐 기간만** 다시 센다 — 정의를 바꾼 뒤 첫 계산 ·
+    일주일마다 · 다른 객체 너머가 바뀌었을 때는 전부(`metric_runs` 가 어느 쪽이었는지와 그
+    까닭을 말한다).
+
     계획은 **오류 전부** · 경고 · 거르기를 통과한 기록 수 · 어림한 셀 수 · 기준의 종류를
     돌려준다 — 그것을 사람에게 보여 주고 판단을 받는다. 같은 slug 가 이미 있으면 그 정의를
     고친다(원천 타입은 못 바꾼다). 저장 뒤 계산은 작업이다 — `wait_seconds` 만큼 기다렸다가
@@ -2565,16 +2759,17 @@ async def metric_define(
         )
     existing = await _get(ctx, f"/api/metrics/{slug}")
     exists = isinstance(existing, dict) and existing.get("slug") == slug
+    # 비운 것은 안 보낸다 — 고칠 때는 그대로 두고, 만들 때는 서버의 기본(매일 밤 · 켜짐).
+    extra = {
+        key: value
+        for key, value in (("interval_hours", interval_hours), ("is_active", is_active))
+        if value is not None
+    }
     if exists:
         saved = await _patch_with_params(
             ctx,
             f"/api/metrics/{slug}",
-            {
-                "label": label,
-                "description": description,
-                "spec": spec,
-                "interval_hours": interval_hours,
-            },
+            {"label": label, "description": description, "spec": spec, **extra},
             {"recompute": "true"},
         )
     else:
@@ -2587,7 +2782,7 @@ async def metric_define(
                 "description": description,
                 "source_type_slug": source_type_slug,
                 "spec": spec,
-                "interval_hours": interval_hours,
+                **extra,
             },
             params={"recompute": "true"},
         )
@@ -2595,6 +2790,56 @@ async def metric_define(
         return saved
     job = await _wait_job(ctx, saved.get("job"), wait_seconds)
     return {"metric": saved["metric"], "job": job, "updated": exists}
+
+
+@tool()
+async def metric_recompute(ctx: Context, slug: str, wait_seconds: float = 20.0) -> Any:
+    """지표를 **지금 전부 다시** 센다 — 화면의 「다시 세기」 와 같다. **시스템 관리자만.**
+
+    값이 이상해 보일 때 · 바깥에서 기록을 고친 직후 바로 볼 때. 평소에는 타이머가 주기마다
+    (되면 바뀐 기간만) 세므로 부를 일이 드물다. 같은 지표의 작업이 줄에서 기다리고 있으면
+    그것을 전부 세기로 올려 돌려준다(이미 도는 중이면 새로 넣는다). **작업이 된다** —
+    `wait_seconds` 만큼 기다렸다가 돌려주고, 아직이면 `job_status(job_id)` 로 다시 묻는다."""
+    job = await _post(ctx, f"/api/metrics/{slug}/recompute", None)
+    return await _wait_job(ctx, job, wait_seconds)
+
+
+@tool()
+async def metric_runs(ctx: Context, slug: str) -> Any:
+    """지표의 **최근 계산 기록** — 언제 · 성공/실패와 이유 · 기록 수 · 셀 수 · 날짜를 못 읽은
+    기록 수(`stats.unbucketed`) · **방식**(`mode`: `full` 전부 / `incremental` 바뀐 기간만 —
+    `periods` 가 다시 센 기간) · `note`(전부였으면 왜 전부였나). 「값이 왜 그대로인가」 ·
+    「언제 셌나」 는 여기서 — 실패한 계산은 옛 값을 그대로 두고 이유를 남긴다."""
+    return await _get(ctx, f"/api/metrics/{slug}/runs")
+
+
+@tool()
+async def metric_home(
+    ctx: Context,
+    slug: str,
+    workspace_slug: str | None = None,
+    split: str | None = None,
+    remove: bool = False,
+) -> Any:
+    """지표를 **부서 홈에 올린다**(최근 열두 기간의 추이 그림) · 내린다 · 어디 올라가 있나
+    본다.
+
+    - `workspace_slug` 없이: 이 지표가 올라간 부서 홈들(`split` 포함).
+    - `workspace_slug` 를 주면 그 부서 홈에 올린다 — `split` 은 선을 나눌 기준 이름
+      (`metric_list` 의 `dims[].name`, 비우면 합계 한 줄). 이미 있으면 기준만 바꾼다.
+    - `remove=true` 면 그 부서 홈에서 내린다(지표는 안 지운다).
+
+    **그 부서의 관리자만** 올리고 내린다(목록 통계를 홈에 올리는 것과 같다). 홈은 그 부서
+    사람 모두가 보는 자리다 — 사용자가 올리자고 한 것만 올린다."""
+    if workspace_slug is None:
+        return await _get(ctx, f"/api/metrics/{slug}/home")
+    if remove:
+        return await _delete(ctx, f"/api/metrics/{slug}/home", {"workspace": workspace_slug})
+    return await _put(
+        ctx,
+        f"/api/metrics/{slug}/home",
+        {"workspace_slug": workspace_slug, "split": split},
+    )
 
 
 async def _patch_with_params(

@@ -10,12 +10,14 @@
  * 다시 해야 한다.
  */
 
-import { Fragment, useEffect, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { ChevronDown, ChevronRight, Download, Loader2 } from 'lucide-react'
 
 import { jobsApi, isTerminal, STATUS_LABEL } from '@/modules/jobs/api'
 import type { Job, JobBulkResult, JobStatus } from '@/modules/jobs/api'
 import type { ImportPlan } from '@/modules/objects/api'
+import type { RetypeOut } from '@/modules/ontology/api'
+import { DATA_TYPE_LABELS } from '@/modules/ontology/PropertyEditDialog'
 import {
   ImportPlanTable,
   planChangesSomething,
@@ -37,6 +39,8 @@ import {
   TableHeader,
   TableRow,
 } from '@/shared/components/ui/table'
+import { useAuth } from '@/shared/auth/AuthContext'
+import { isSystemAdmin } from '@/shared/auth/roles'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
@@ -75,6 +79,23 @@ function Progress({ job }: { job: Job }) {
 
 function Outcome({ job }: { job: Job }) {
   if (job.error) return <span className="text-destructive text-xs">{job.error}</span>
+  // **결과가 스스로 한 줄로 말하는 종류**(고아 첨부 정리 …) — 그 말을 그대로.
+  const summary = (job.result as { summary?: unknown } | null)?.summary
+  if (typeof summary === 'string') {
+    return <span className="text-muted-foreground text-xs">{summary}</span>
+  }
+  const retype = retypeOf(job)
+  if (retype) {
+    const converted = retype.types.reduce((sum, one) => sum + one.converted, 0)
+    const cleared = retype.types.reduce((sum, one) => sum + one.cleared, 0)
+    return (
+      <span className="text-muted-foreground text-xs">
+        {retype.applied ? '적용 — ' : '계획 — '}
+        변환 {converted.toLocaleString()} · 비움 {cleared.toLocaleString()}
+        {retype.errors.length > 0 ? ` · 막는 것 ${retype.errors.length}` : ''}
+      </span>
+    )
+  }
   const counts = (job.result as { counts?: Record<string, number>; applied?: boolean } | null)
     ?.counts
   if (!counts) return null
@@ -94,6 +115,89 @@ function planOf(job: Job): ImportPlan | null {
   return result && Array.isArray(result.rows) ? result : null
 }
 
+/**
+ * 속성 종류 변경(`ontology_retype`)의 계획인가 — `rows` · `counts` · `ok` 가 없는 모양이다
+ * (`ontology/routes.py` 의 `run_retype_job` → `RetypeOut`). 이것을 못 알아보던 때는 창을 닫고
+ * 돌아오면 「남길 결과가 없는 작업입니다」 만 보였고 적용할 자리가 없었다 — 서버는 적용을 받아
+ * 주는데(2026-10-08).
+ */
+function retypeOf(job: Job): RetypeOut | null {
+  const result = job.result as unknown as RetypeOut | null
+  return result && Array.isArray(result.types) && typeof result.data_type_after === 'string'
+    ? result
+    : null
+}
+
+/** 공개 타입의 계획이면 수신 시스템에 통보했다는 확인(`accept_core`)을 계획 때 받았나 — 적용
+ *  작업은 계획의 요청을 그대로 들고 가므로, 안 받았으면 서버가 적용을 거절한다. */
+function retypeCoreAccepted(job: Job): boolean {
+  const request = (job.params as { request?: { accept_core?: unknown } }).request
+  return request?.accept_core === true
+}
+
+function retypeApplicable(job: Job, retype: RetypeOut): boolean {
+  return (
+    retype.errors.length === 0 &&
+    (retype.core_consumers.length === 0 || retypeCoreAccepted(job))
+  )
+}
+
+/** 종류 변경 계획을 읽는 자리 — 타입마다 몇 개가 변환되고 비워지나, 막는 것 · 알릴 것. */
+function RetypePlanView({ job, retype }: { job: Job; retype: RetypeOut }) {
+  const before = DATA_TYPE_LABELS[retype.data_type_before] ?? retype.data_type_before
+  const after = DATA_TYPE_LABELS[retype.data_type_after] ?? retype.data_type_after
+  return (
+    <div className="space-y-2 text-xs">
+      <p>
+        {String(job.params.key ?? '')} 속성: <b>{before}</b> → <b>{after}</b>
+        {retype.applied ? ' — 적용했습니다' : ' — 계획'}
+      </p>
+      <table>
+        <thead className="text-muted-foreground">
+          <tr>
+            <th className="pr-3 text-left font-normal">타입</th>
+            <th className="pr-3 text-right font-normal">값 있음</th>
+            <th className="pr-3 text-right font-normal">변환</th>
+            <th className="pr-3 text-right font-normal">그대로</th>
+            <th className="text-right font-normal">비움</th>
+          </tr>
+        </thead>
+        <tbody className="tabular-nums">
+          {retype.types.map((one) => (
+            <tr key={`${one.type_slug}-${one.key}`}>
+              <td className="pr-3">
+                {one.type_label}
+                {one.via && <span className="text-muted-foreground"> ({one.via})</span>}
+              </td>
+              <td className="pr-3 text-right">{one.with_value.toLocaleString()}</td>
+              <td className="pr-3 text-right">{one.converted.toLocaleString()}</td>
+              <td className="pr-3 text-right">{one.unchanged.toLocaleString()}</td>
+              <td className="text-right">{one.cleared.toLocaleString()}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {retype.errors.map((one) => (
+        <p key={one} className="text-destructive">
+          {one}
+        </p>
+      ))}
+      {retype.warnings.map((one) => (
+        <p key={one} className="text-amber-700 dark:text-amber-400">
+          {one}
+        </p>
+      ))}
+      {retype.core_consumers.length > 0 && !retypeCoreAccepted(job) && (
+        <p className="text-destructive">
+          바깥에 연 타입입니다({retype.core_consumers.join(', ')}) — 수신 시스템에 통보했다는
+          확인 없이 계획했으므로 여기서 적용할 수 없습니다. 속성 화면에서 확인을 체크하고 다시
+          계획하세요.
+        </p>
+      )}
+    </div>
+  )
+}
+
 /** 묶음 결과의 타입별 묶음 — 정의 · 객체 · 관계가 한 결과에 들어 있다. */
 interface BundleBatch {
   type_slug: string
@@ -110,8 +214,11 @@ function bundleBatches(job: Job): BundleBatch[] | null {
   return [...(result.objects ?? []), ...(result.relations ?? [])]
 }
 
-/** 아직 적용 안 한 **깨끗한** 계획인가 — 그때만 「적용」 이 선다. */
-function waitingForApply(job: Job): boolean {
+/** 아직 적용 안 한 **깨끗한** 계획인가 — 그때만 「적용」 이 선다. **적용 단계가 있는 종류만**
+ * (`two_step`) — 데이터 소스 동기화도 계획을 내지만 적용은 「동기화」 를 다시 누르는 것이라, 여기서
+ * 「적용」 을 세우면 서버가 거절한다(「이 종류의 작업은 적용 단계가 없습니다」). */
+function waitingForApply(job: Job, twoStep: ReadonlySet<string>): boolean {
+  if (!twoStep.has(job.kind)) return false
   if (job.status !== 'done' || !job.result) return false
   // **이미 적용한 계획** — 계획의 `result.applied` 는 영영 거짓이라(적용은 새 작업이다) 서버가
   // 따로 알려 준다. 안 보면 적용하고 나서도 「적용」 이 남아 같은 것을 두 번 넣는다.
@@ -120,6 +227,9 @@ function waitingForApply(job: Job): boolean {
   if (result.applied) return false
   const plan = planOf(job)
   if (plan) return planIsClean(plan) && planChangesSomething(plan)
+  // 종류 변경 — 막는 것(`errors`)이 없으면. 값이 하나도 안 바뀌어도 정의의 종류는 바뀐다.
+  const retype = retypeOf(job)
+  if (retype) return retypeApplicable(job, retype)
   // 묶음 — 자체 판정(`ok`)을 쓴다.
   return result.ok === true
 }
@@ -127,19 +237,27 @@ function waitingForApply(job: Job): boolean {
 function Detail({
   job,
   busy,
+  canApply,
+  twoStep,
   onApply,
   onDownload,
 }: {
   job: Job
   busy: boolean
+  /** 적용을 세우나 — `waitingForApply`. */
+  canApply: boolean
+  /** 적용 단계가 있는 종류인가 — 없으면 계획이어도 여기서 적용하지 않는다. */
+  twoStep: boolean
   onApply: () => void
   onDownload: () => void
 }) {
   const plan = planOf(job)
   const batches = bundleBatches(job)
+  const retype = retypeOf(job)
   return (
     <div className="bg-muted/30 space-y-3 px-4 py-3">
       {plan && <ImportPlanTable plan={plan} />}
+      {retype && <RetypePlanView job={job} retype={retype} />}
       {batches && (
         <table className="text-xs">
           <tbody>
@@ -162,7 +280,7 @@ function Detail({
           </tbody>
         </table>
       )}
-      {!plan && !batches && !job.error && (
+      {!plan && !batches && !retype && !job.error && (
         <p className="text-muted-foreground text-xs">
           {job.has_output ? '만든 파일을 받으세요.' : '남길 결과가 없는 작업입니다.'}
         </p>
@@ -174,7 +292,7 @@ function Detail({
             파일 받기
           </Button>
         )}
-        {waitingForApply(job) && (
+        {canApply && (
           <>
             <Button size="xs" onClick={onApply} disabled={busy}>
               {busy && <Loader2 className="mr-1 size-3 animate-spin" />}
@@ -190,9 +308,19 @@ function Detail({
             적용했습니다 — 적용 작업 <span className="font-mono">{job.applied_by.slice(0, 8)}</span>
           </span>
         )}
-        {job.status === 'done' && !waitingForApply(job) && !job.applied_by && plan?.applied === false && (
+        {job.status === 'done' &&
+          twoStep &&
+          !canApply &&
+          !job.applied_by &&
+          (plan?.applied === false || retype?.applied === false) && (
+            <span className="text-muted-foreground text-xs">
+              오류가 있거나 바뀌는 것이 없어 적용할 수 없습니다 — 고쳐서 다시 올리세요.
+            </span>
+          )}
+        {job.status === 'done' && !twoStep && plan?.applied === false && (
           <span className="text-muted-foreground text-xs">
-            오류가 있거나 바뀌는 것이 없어 적용할 수 없습니다 — 고쳐서 다시 올리세요.
+            계획만 본 것입니다 — 넣으려면 그 화면(데이터 소스의 「동기화」)에서 적용으로 다시
+            돌립니다.
           </span>
         )}
       </div>
@@ -212,6 +340,12 @@ function linkedJob(): string | null {
 }
 
 export default function JobsPage() {
+  const { user } = useAuth()
+  /** 이 작업을 내가 멈추거나 적용할 수 있나 — 시킨 사람과 시스템 관리자만. 「내가 시킨 것만」
+   * 을 끄면 같은 부서 동료의 작업이 보이는데, 거기에 단추를 세우면 눌러 보고 거절당했다
+   * (2026-10-08). */
+  const ownedByMe = (job: Job) =>
+    isSystemAdmin(user) || (job.requested_by_id != null && job.requested_by_id === user?.id)
   const [offset, setOffset] = useState(0)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [linked] = useState(linkedJob)
@@ -238,6 +372,10 @@ export default function JobsPage() {
     [offset, kind, status, mine],
   )
   const kinds = useResource(() => jobsApi.kinds(), [])
+  const twoStep = useMemo(
+    () => new Set((kinds.data ?? []).filter((one) => one.two_step).map((one) => one.name)),
+    [kinds.data],
+  )
   const workers = useResource(() => jobsApi.workers(), [])
 
   // 돌고 있는 것이 있으면 다시 읽는다 — 끝난 목록을 3초마다 두드릴 이유는 없다.
@@ -267,8 +405,10 @@ export default function JobsPage() {
 
   /** 목록에서 고른 것들 — **한 번에 적용하거나 한 번에 취소한다.** */
   const chosen = (page.data?.items ?? []).filter((one) => picked.has(one.id))
-  const applicable = chosen.filter(waitingForApply)
-  const cancellable = chosen.filter((one) => !isTerminal(one) && !one.cancel_requested)
+  const applicable = chosen.filter((one) => ownedByMe(one) && waitingForApply(one, twoStep))
+  const cancellable = chosen.filter(
+    (one) => ownedByMe(one) && !isTerminal(one) && !one.cancel_requested,
+  )
 
   async function runMany(what: 'apply' | 'cancel') {
     setActionError(null)
@@ -417,9 +557,9 @@ export default function JobsPage() {
         description={
           confirming === 'apply' ? (
             <>
-              고른 계획마다 <b>적용 작업</b>이 서고 워커가 차례로 넣습니다. 오류가 있는 계획과
-              이미 적용한 것은 빠집니다 — 한 건이 막혀도 나머지는 갑니다. 넣은 뒤 되돌리려면
-              객체 화면의 <b>일괄 되돌리기</b>를 씁니다.
+              고른 계획마다 <b>적용 작업</b>이 서고 워커가 차례로 넣습니다. 오류가 있는 계획과 이미
+              적용한 것은 빠집니다 — 한 건이 막혀도 나머지는 갑니다. 넣은 뒤 되돌리려면 객체 화면의{' '}
+              <b>일괄 되돌리기</b>를 씁니다.
             </>
           ) : (
             <>
@@ -561,7 +701,7 @@ export default function JobsPage() {
                     )}
                   </TableCell>
                   <TableCell className="text-right">
-                    {!isTerminal(one) && !one.cancel_requested && (
+                    {ownedByMe(one) && !isTerminal(one) && !one.cancel_requested && (
                       <Button
                         size="xs"
                         variant="outline"
@@ -571,7 +711,7 @@ export default function JobsPage() {
                         취소
                       </Button>
                     )}
-                    {waitingForApply(one) && opened !== one.id && (
+                    {ownedByMe(one) && waitingForApply(one, twoStep) && opened !== one.id && (
                       <Badge variant="outline">적용 대기</Badge>
                     )}
                   </TableCell>
@@ -582,6 +722,8 @@ export default function JobsPage() {
                       <Detail
                         job={one}
                         busy={busyId === one.id}
+                        canApply={ownedByMe(one) && waitingForApply(one, twoStep)}
+                        twoStep={twoStep.has(one.kind)}
                         onApply={() => void apply(one)}
                         onDownload={() => void download(one)}
                       />

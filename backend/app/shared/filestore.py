@@ -13,16 +13,17 @@
 **한 폴더에 수만 개를 두지 않는다.** Windows 탐색기가 그 폴더를 못 열고, 백업
 도구도 느려진다. 두 겹이면 파일 100만 개에서도 한 폴더가 수백 개다.
 
-## 지우지 않는다
+## 행을 지울 때 파일을 지우지 않는다
 
 같은 내용을 여러 행이 가리킬 수 있어서, 행 하나를 지웠다고 파일을 지우면 다른
-행이 가리키던 것이 사라진다. 정리는 「아무도 안 가리키는 것」 을 따로 훑는 일이고,
-그것은 지금 없다 — 없는 편이 **가리키는데 없는 파일**보다 안전하다.
+행이 가리키던 것이 사라진다. 정리는 「아무도 안 가리키는 것」 을 따로 훑는 일이다
+(`files/gc.py` — 워커가 하루 한 번, 시스템 관리자가 작업으로).
 """
 
 from __future__ import annotations
 
 import hashlib
+import os
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -86,9 +87,19 @@ def save(stream: BinaryIO) -> Stored:
     checksum = digest.hexdigest()
     final = _path_for(checksum)
     if final.exists():
-        # 같은 내용이 이미 있다. 새로 쓴 것은 버린다.
-        temp_path.unlink(missing_ok=True)
-        return Stored(checksum, size, str(final.relative_to(base)).replace("\\", "/"), True)
+        # 같은 내용이 이미 있다. **시각을 새로 한 뒤에** 새로 쓴 것을 버린다 — 고아 정리
+        # (`files/gc.py`)가 하루 지난 고아로 골라 둔 파일이면 행이 생기기 전에 지우지 않게.
+        # 시각을 못 바꿨으면(그 사이 정리가 지웠다) 새로 쓴 것을 그 자리로 옮긴다 — 먼저
+        # 버리면 행이 없는 파일을 가리켰다(2026-10-08).
+        try:
+            os.utime(final)
+        except OSError:
+            pass
+        else:
+            temp_path.unlink(missing_ok=True)
+            return Stored(
+                checksum, size, str(final.relative_to(base)).replace("\\", "/"), True
+            )
 
     final.parent.mkdir(parents=True, exist_ok=True)
     shutil.move(str(temp_path), str(final))

@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import contextlib
+import threading
 from itertools import pairwise
 from typing import Any
 
@@ -100,3 +101,63 @@ def test_작업을_돌린_뒤에도_박동이_이어진다(monkeypatch: pytest.M
     beats = _run(monkeypatch, minutes=10, jobs={3, 4, 10})
     limit = worker_module.HEARTBEAT_EVERY + worker_module.IDLE_MAX
     assert _longest_gap(beats) <= limit, beats
+
+
+def test_고아_첨부_정리가_오래_걸려도_박동과_작업은_이어진다(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """정리는 바퀴 안에서 돌았다 — 큰 저장소를 훑는 동안 박동이 멎어 5분을 넘기면 살아 있는
+    워커가 「꺼짐」 이 되고, 그동안 작업도 못 집었다(2026-10-08).
+
+    가짜 정리는 **바퀴가 작업을 몇 번 집을 때까지** 안 끝난다. 바퀴 안에서 돌면 그 신호가 영영
+    안 와서 2초를 기다린 뒤 10분이 흐른 것으로 치고 끝난다 — 그 10분이 박동의 빈틈으로 남는다.
+    """
+    from app.modules.files import gc
+
+    worker = worker_module.Worker()
+    assert worker._gc_every, "시험 설정에서 정리가 꺼져 있다"
+    clock = _Clock(worker, until=5 * 60)
+    worker._last_gc = clock.now - worker._gc_every  # 첫 바퀴가 정리 차례다
+    beats: list[float] = []
+    turns = {"n": 0}
+    released = threading.Event()
+    scans = {"n": 0}
+
+    def slow_scan(_db: Any, **_kw: Any) -> gc.Found:
+        scans["n"] += 1
+        if not released.wait(timeout=2.0):
+            clock.now += 600.0
+        return gc.Found()
+
+    def process_one(_worker_id: str) -> bool:
+        turns["n"] += 1
+        if turns["n"] == 3:
+            released.set()  # 정리하는 동안 바퀴가 돌아 작업을 집었다
+        return False
+
+    services: Any = job_services
+    monkeypatch.setattr(worker_module, "time", clock)
+    monkeypatch.setattr(worker_module, "SessionLocal", lambda: contextlib.nullcontext(None))
+    monkeypatch.setattr(gc, "scan", slow_scan)
+    monkeypatch.setattr(gc, "clean", lambda _db, _found, **_kw: gc.Cleaned())
+    monkeypatch.setattr(services, "heartbeat", lambda *_a: beats.append(clock.now))
+    monkeypatch.setattr(services, "process_one", process_one)
+    monkeypatch.setattr(services, "recover_stale", lambda _db: 0)
+    for name in (
+        "purge_expired_files",
+        "purge_old_jobs",
+        "purge_old_tombstones",
+        "purge_old_undo_journals",
+    ):
+        monkeypatch.setattr(services, name, lambda _db: 0)
+    monkeypatch.setattr(webhook_services, "pending_count", lambda _db: 0)
+    try:
+        worker.run_forever()
+    finally:
+        released.set()
+        if worker._gc_thread is not None:
+            worker._gc_thread.join(timeout=5.0)
+    assert scans["n"] == 1, "정리가 한 차례만 돌아야 한다"
+    assert turns["n"] >= 3, "정리하는 동안 바퀴가 작업을 집지 못했다"
+    limit = worker_module.HEARTBEAT_EVERY + worker_module.IDLE_MAX
+    assert _longest_gap([*beats, clock.now]) <= limit, beats

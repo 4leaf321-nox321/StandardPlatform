@@ -21,7 +21,7 @@ import { Link } from 'react-router-dom'
 import { ChevronDown, ChevronUp, Loader2, MoreHorizontal, X } from 'lucide-react'
 
 import { objectApi, viewApi } from '@/modules/objects/api'
-import type { HomeWidget as Widget, ObjectRow, Summary } from '@/modules/objects/api'
+import type { HomeWidget, ObjectRow, SavedView, Summary } from '@/modules/objects/api'
 import { Chart, LazyPlot, colorFor } from '@/shared/charts'
 import type { ChartKind } from '@/shared/charts'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -49,7 +49,15 @@ function partValue(
   return metric === 'count' ? part.count : (part.value ?? 0)
 }
 
-/** 이 뷰를 그대로 여는 목록 주소 — 조건까지 실어 보낸다. */
+/** 뷰 칸 — 홈의 한 칸 중 저장된 뷰인 것. */
+type Widget = HomeWidget & { view: SavedView }
+
+/**
+ * 이 뷰를 그대로 여는 목록 주소 — **위젯이 센 것과 같은 조건으로.**
+ *
+ * 위젯은 연도 없이 센다. 목록은 기본으로 올해를 거므로 `year=all` 을 함께 보낸다 — 안 보내던
+ * 때는 홈에서 「120건」 을 누르면 올해 것 30건이 열렸다(2026-10-08). 상태도 위젯이 세는 대로.
+ */
 export function viewHref(widget: Widget): string {
   const params = new URLSearchParams()
   const query = widget.view.query
@@ -57,6 +65,8 @@ export function viewHref(widget: Widget): string {
   for (const one of query.conditions ?? []) {
     params.append(`f.${one.field}.${one.op}`, one.value)
   }
+  if (query.status) params.set('status', query.status)
+  params.set('year', 'all')
   params.set('view', widget.view.id)
   return `/o/${widget.view.type_slug}?${params.toString()}`
 }
@@ -115,6 +125,7 @@ export function HomeWidget({
           .list(view.type_slug, {
             q: view.query.q || undefined,
             conditions: view.query.conditions,
+            status: view.query.status || null,
             limit: LIST_ROWS,
           })
           .then((page) => {
@@ -123,7 +134,11 @@ export function HomeWidget({
       : objectApi
           .summary(
             view.type_slug,
-            { q: view.query.q || undefined, conditions: view.query.conditions },
+            {
+              q: view.query.q || undefined,
+              conditions: view.query.conditions,
+              status: view.query.status || null,
+            },
             {
               // 축이 없으면 상태로 묶어 수만 쓴다 — 한 번 더 물을 것 없이 total 이 나온다.
               groupBy: view.summary.group_by || 'status',
@@ -158,8 +173,10 @@ export function HomeWidget({
     view.summary.metric,
     view.summary.metric_field,
     view.summary.order,
+    view.summary.grain,
     view.query.q,
     view.query.conditions,
+    view.query.status,
   ])
 
   return (

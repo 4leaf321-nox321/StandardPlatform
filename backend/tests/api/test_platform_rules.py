@@ -34,8 +34,8 @@ def _all_accounts(client: TestClient, admin: Signed) -> list[dict[str, Any]]:
         page = client.get(
             f"/api/accounts?limit=100&offset={offset}", headers=admin.headers
         ).json()
-        out.extend(page)
-        if len(page) < 100:
+        out.extend(page["items"])
+        if offset + 100 >= page["total"]:
             return out
         offset += 100
 
@@ -74,7 +74,7 @@ def test_마지막_관리자는_정지할_수_없다(client: TestClient, admin: 
 
 
 def test_자기_계정은_못_지운다(client: TestClient, admin: Signed) -> None:
-    accounts = client.get("/api/accounts", headers=admin.headers).json()
+    accounts = _all_accounts(client, admin)
     me = next(one for one in accounts if one["email"] == admin.email)
     assert client.delete(f"/api/accounts/{me['id']}", headers=admin.headers).status_code == 409
 
@@ -215,7 +215,7 @@ def test_마지막_부서_관리자는_뺄_수_없다(
     client: TestClient, admin: Signed, member: Signed
 ) -> None:
     """그러면 그 부서는 아무도 못 고치는 상태가 된다."""
-    accounts = client.get("/api/accounts", headers=admin.headers).json()
+    accounts = _all_accounts(client, admin)
     me = next(one for one in accounts if one["email"] == admin.email)
 
     response = client.delete(

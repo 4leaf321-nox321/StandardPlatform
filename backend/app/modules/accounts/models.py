@@ -72,6 +72,15 @@ class User(Base):
     must_change_password: Mapped[bool] = mapped_column(
         Boolean, default=False, server_default="false"
     )
+    session_epoch: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    """**로그인의 세대** — access 토큰에 박히고, 다르면 그 토큰은 무효다.
+
+    access 토큰은 12시간 살고 폐기 목록이 없다. 비밀번호를 바꾸거나 관리자가 초기화 · 정지해도
+    refresh 만 끊겨, 이미 받은 access 는 만료까지 그대로 통했다 — 「샜다」 고 초기화한 뒤에도
+    공격자가 쥔 토큰이 최대 12시간 살았다(2026-10-08). 세션을 끊는 자리(`auth/services.
+    revoke_sessions`)가 이 수를 올린다. **시각이 아니라 수인 까닭**: 끊은 서버와 토큰을 낸
+    서버의 시계가 어긋나면(이중화 · WSL 시계 되감김) 시각 비교는 방금 로그인한 사람을 튕기거나
+    옛 토큰을 놓친다. 개인 토큰(PAT)은 이 칸과 무관하다(따로 폐기한다)."""
     """관리자가 만든 계정의 임시 비밀번호. 첫 로그인 때 변경을 강제한다 —
     시드 비밀번호가 그대로 남는 것이 가장 흔한 사고다."""
 

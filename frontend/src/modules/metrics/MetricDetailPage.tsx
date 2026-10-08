@@ -659,18 +659,21 @@ function RunsView({ runs }: { runs: MetricRun[] }) {
   return (
     <>
       <p className="text-muted-foreground text-xs">
-        최근 {runs.length}번. 실패한 계산은 옛 값을 그대로 두고 이유를 남깁니다.
+        최근 {runs.length}번. 실패한 계산은 옛 값을 그대로 두고 이유를 남깁니다. 「바뀐 기간만」 은
+        지난 계산 뒤에 바뀐 기록이 든 기간만 다시 센 것입니다 — 정의가 바뀌었거나 일주일이 지났거나
+        다른 객체 너머가 바뀌었으면 전부 다시 셉니다(그 까닭을 적습니다).
       </p>
       <Table>
         <TableHeader>
           <TableRow>
             <TableHead>시작</TableHead>
             <TableHead>상태</TableHead>
+            <TableHead>방식</TableHead>
             <TableHead className="text-right">걸린 시간</TableHead>
             <TableHead className="text-right">기록</TableHead>
             <TableHead className="text-right">셀</TableHead>
             <TableHead className="text-right">날짜 없음</TableHead>
-            <TableHead>이유</TableHead>
+            <TableHead>이유 · 메모</TableHead>
           </TableRow>
         </TableHeader>
         <TableBody>
@@ -681,13 +684,27 @@ function RunsView({ runs }: { runs: MetricRun[] }) {
               <TableRow key={run.id}>
                 <TableCell className="whitespace-nowrap">{shownDateTime(run.started_at)}</TableCell>
                 <TableCell className={status.className}>{status.label}</TableCell>
+                <TableCell
+                  className="whitespace-nowrap"
+                  title={
+                    run.periods?.length
+                      ? run.periods.map((one) => one ?? '날짜 없음').join(', ')
+                      : undefined
+                  }
+                >
+                  {run.mode === 'incremental' ? '바뀐 기간만' : '전량'}
+                </TableCell>
                 <TableCell className="text-right">{tookOf(run)}</TableCell>
                 <TableCell className="text-right">{done ? shownNumber(run.rows) : '—'}</TableCell>
                 <TableCell className="text-right">{done ? shownNumber(run.cells) : '—'}</TableCell>
                 <TableCell className="text-right">
                   {done ? shownNumber(run.stats.unbucketed ?? 0) : '—'}
                 </TableCell>
-                <TableCell className="text-destructive text-xs">{run.error ?? ''}</TableCell>
+                {run.error ? (
+                  <TableCell className="text-destructive text-xs">{run.error}</TableCell>
+                ) : (
+                  <TableCell className="text-muted-foreground text-xs">{run.note ?? ''}</TableCell>
+                )}
               </TableRow>
             )
           })}

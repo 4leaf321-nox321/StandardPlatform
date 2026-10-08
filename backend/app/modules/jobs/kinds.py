@@ -80,6 +80,14 @@ class Kind:
     """넣을 때 부서를 정하는 종류인가(객체 가져오기). 관계는 양끝의 것이라 부서가 없다."""
     allow_system: bool = False
     """시킨 사람 없이(타이머) 돌아도 되는 종류인가."""
+    public: bool = False
+    """일반 작업 API(`POST /api/jobs`)로 넣을 수 있나. **기본은 막힘** — 전용 경로가 있는
+    종류(동기화 · 지표 · 묶음 · 내보내기 …)는 그 경로가 권한 · 범위를 본다. 일반 API 로 열면
+    그 검사를 건너뛴다(2026-10-08 — 일반 멤버가 `bundle_export` 로 모든 부서의 객체를 받을 수
+    있었다)."""
+    admin_only: bool = False
+    """시킨 사람이 있으면 **시스템 관리자여야** 하는 종류 — 워커가 돌리기 전에 한 번 더 본다
+    (넣는 길이 몇이든)."""
 
 
 _registry: dict[str, Kind] = {}
@@ -303,8 +311,9 @@ def bundle_undo(work: Work) -> dict[str, Any]:
     """묶음 한 판을 **통째로 되돌린다** — 계획 → 사람 확정 → 적용, 다른 일괄 작업과 같다.
 
     수만 줄짜리 판을 요청 안에서 되돌리면 클라이언트가 먼저 끊는다. 그래서 작업이다.
-    지문이 안 맞으면 여기서 오류를 내고, 그러면 `services.run` 이 롤백한다 — 되돌리기도
-    전부 아니면 무다.
+    지문이 안 맞으면 여기서 오류를 내고, 그러면 워커(`services.run`)가 롤백한다. 오류 줄이 있는
+    적용은 `run_undo` 가 세이브포인트로 거둔다 — 워커는 결과가 무엇이든 커밋하므로, 거기서
+    안 거두면 앞 줄의 지우기만 남는다(`apply=true` 로 곧장 부를 때, 2026-10-08).
     """
     raw = str(work.params.get("run_id") or "")
     try:
@@ -441,7 +450,7 @@ def objects_export(work: Work) -> dict[str, Any]:
         apply_sort(stmt, object_type.list_view or {}).execution_options(yield_per=EXPORT_CHUNK)
     )
     for part in rows.partitions():
-        records = bulk.export_rows(work.db, defs, list(part))
+        records = bulk.export_rows(work.db, defs, list(part), viewer=work.user)
         if fmt == "csv":
             out.write("".join(_csv_line(columns, one) for one in records).encode("utf-8"))
         else:
@@ -583,19 +592,31 @@ def datasource_sync_round(work: Work) -> dict[str, Any]:
     예전에는 소스마다 작업을 따로 넣었다 — 워커가 둘이면 둘씩, 하나여도 넣은 순서(아무
     순서)대로 돌아, 「고장 모드」 가 「메커니즘」 보다 먼저 돌면 그 선이 끝점을 못 찾았다.
     순서는 `datasources/services.sync_order` 가 정의에서 읽는다. **한 소스가 실패해도 다음
-    소스로 간다** — 실패는 그 소스의 실행 기록 · 알림에 남는다(소스마다 따로 넣던 때와 같다).
+    소스로 간다** — 실패는 그 소스의 실행 기록 · 알림에 남는다(`services.sync` 가 무엇이 나도
+    기록을 닫는다).
+
+    **소스마다 커밋 경계를 맞춘다.** 지표 다시 세기 작업(`_after_ingest`)은 그 소스가 끝난
+    자리에서 커밋한다 — 예전에는 flush 만 해서, 다음 소스의 예외 · 취소가 부른 롤백이 앞
+    소스의 그 작업까지 버렸다(2026-10-08). 소스는 **돌기 직전에 다시 읽는다** — 세션이 커밋에
+    값을 버리지 않아(`expire_on_commit=False`), 차례가 도는 사이 관리자가 받은 자리를 비우거나
+    소스를 꺼도 처음 읽은 값으로 덮거나 그대로 돌았다.
     """
     from app.modules.datasources import services as datasource_services
     from app.modules.datasources.models import DataSource
     from app.modules.jobs.services import Cancelled
+    from app.shared.errors import AppError
 
     slugs = [str(one) for one in work.params.get("slugs") or []]
     apply = bool(work.params.get("apply"))
     found = list(work.db.scalars(select(DataSource).where(DataSource.slug.in_(slugs))))
     ordered = datasource_services.sync_order(work.db, found)
     done: list[dict[str, Any]] = []
-    for index, source in enumerate(ordered):
-        work.progress(source.slug, index, len(ordered))
+    for index, planned in enumerate(ordered):
+        work.progress(planned.slug, index, len(ordered))
+        source = work.db.get(DataSource, planned.id, populate_existing=True)
+        if source is None:  # 차례가 도는 사이 지워졌다
+            done.append({"slug": planned.slug, "status": "skipped", "error": "지워졌습니다"})
+            continue
         if not source.is_active:
             done.append({"slug": source.slug, "status": "skipped"})
             continue
@@ -603,12 +624,25 @@ def datasource_sync_round(work: Work) -> dict[str, Any]:
             result = datasource_services.sync(work.db, work.user, source, apply=apply)
         except Cancelled:
             raise
+        except AppError as caught:
+            work.db.rollback()
+            # 다른 작업이 이 소스를 지금 넣고 있다 — 이 소스에는 아무 일도 안 했다.
+            busy = caught.code == datasource_services.BUSY
+            done.append(
+                {
+                    "slug": source.slug,
+                    "status": "skipped" if busy else "failed",
+                    "error": caught.message[:500],
+                }
+            )
+            continue
         except Exception as caught:  # 한 소스의 실패가 차례 전체를 멈추지 않는다
             work.db.rollback()
             done.append({"slug": source.slug, "status": "failed", "error": str(caught)[:500]})
             continue
         if result.run.applied and _changed(result.run.counts or {}):
             _after_ingest(work.db, source.type_id, f"datasource:{source.slug}")
+        work.db.commit()
         done.append(
             {"slug": source.slug, "status": result.run.status, "counts": result.run.counts}
         )
@@ -619,6 +653,54 @@ def datasource_sync_round(work: Work) -> dict[str, Any]:
         "failed": sum(1 for one in done if one["status"] == "failed"),
         "missing": sorted(set(slugs) - {one.slug for one in found}),
     }
+
+
+def filestore_gc(work: Work) -> dict[str, Any]:
+    """첨부 저장소의 **고아 파일 정리**(`files/gc.py`) — 계획은 세기만, 적용이 지운다.
+
+    시스템 관리자만(또는 시킨 사람 없는 워커). 적용은 계획을 믿지 않고 **다시 훑는다** — 그
+    사이 올라오거나 지워진 것이 있다.
+    """
+    from app.modules.files import gc
+
+    if work.user is not None and not work.user.is_system_admin:
+        raise Forbidden(code("JOBS", 23), "첨부 저장소 정리는 시스템 관리자만 합니다.")
+    found = gc.scan(work.db, progress=work.progress)
+    size = _megabytes(found.orphan_bytes + found.temp_bytes)
+    if not work.params.get("apply"):
+        return {
+            "applied": False,
+            "ok": bool(found.orphans or found.temp),
+            "orphans": len(found.orphans),
+            "orphan_bytes": found.orphan_bytes,
+            "temp": len(found.temp),
+            "recent": found.recent,
+            "scanned": found.scanned,
+            "sample": [relative for relative, _ in found.orphans[: gc.SAMPLE]],
+            "summary": (
+                f"지울 것 — 고아 파일 {len(found.orphans):,}개 · 임시 파일 "
+                f"{len(found.temp):,}개({size}) · 훑은 파일 {found.scanned:,}개 · 하루가 안 "
+                f"지나 남길 것 {found.recent:,}개"
+            ),
+        }
+    work.progress("지우기", 0, 0)
+    done = gc.clean(work.db, found)
+    return {
+        "applied": True,
+        "removed": done.files,
+        "removed_bytes": done.bytes,
+        "temp": done.temp,
+        "kept": done.kept,
+        "summary": (
+            f"지움 — 고아 파일 {done.files:,}개({_megabytes(done.bytes)}) · 임시 파일 "
+            f"{done.temp:,}개"
+            + (f" · 다시 보니 쓰여 남김 {done.kept:,}개" if done.kept else "")
+        ),
+    }
+
+
+def _megabytes(size: int) -> str:
+    return f"{size / 1024 / 1024:,.1f}MB"
 
 
 def _changed(counts: dict[str, Any]) -> bool:
@@ -653,13 +735,18 @@ def _after_ingest(db: Session, type_id: uuid.UUID, reason: str) -> None:
 
 
 def metrics_recompute(work: Work) -> dict[str, Any]:
-    """지표들을 전부 다시 센다 — `metrics/services.run_recompute` 가 **지표마다 커밋**한다.
-    타이머 · 적재 뒤 훅이 넣은 작업은 시킨 사람이 없다."""
+    """지표들을 다시 센다 — `metrics/services.run_recompute` 가 **지표마다 커밋**한다. 타이머 ·
+    적재 뒤 훅이 넣은 작업은 시킨 사람이 없다. 사람이 「다시 세기」 로 넣은 것(`manual`)이나
+    `full` 을 준 것은 전부, 나머지는 되면 바뀐 기간만."""
     from app.modules.metrics import services as metrics_services
 
     slugs = [str(one) for one in (work.params.get("slugs") or [])]
+    full = (
+        bool(work.params.get("full"))
+        or work.params.get("reason") in metrics_services.FULL_REASONS
+    )
     return metrics_services.run_recompute(
-        work.db, slugs, job_id=work.job.id, progress=work.progress
+        work.db, slugs, job_id=work.job.id, progress=work.progress, full=full
     )
 
 
@@ -700,13 +787,19 @@ def objects_rewrite(work: Work) -> dict[str, Any]:
     return objects_routes.run_rewrite_job(work.db, _user(work), work.params, work.progress)
 
 
-register(Kind("objects_import", "객체 일괄 입력", True, True, objects_import, True))
+# `public` — 일반 작업 API 로 넣는 것은 일괄 입력 둘(MCP · 정제 도구가 파일을 올린다)과 고아
+# 파일 정리(서버 화면 · MCP)뿐이다. 나머지는 전용 경로로만.
+register(
+    Kind("objects_import", "객체 일괄 입력", True, True, objects_import, True, public=True)
+)
 register(Kind("objects_rewrite", "병합 · 참조 비우고 지우기", False, False, objects_rewrite))
-register(Kind("ontology_retype", "속성 종류 변경", False, True, ontology_retype))
-register(Kind("relations_import", "관계 일괄 입력", True, True, relations_import))
+register(
+    Kind("ontology_retype", "속성 종류 변경", False, True, ontology_retype, admin_only=True)
+)
+register(Kind("relations_import", "관계 일괄 입력", True, True, relations_import, public=True))
 register(Kind("bundle_import", "묶음 가져오기", True, True, bundle_import))
 register(Kind("bundle_undo", "묶음 되돌리기", False, True, bundle_undo))
-register(Kind("bundle_export", "묶음 내보내기", False, False, bundle_export))
+register(Kind("bundle_export", "묶음 내보내기", False, False, bundle_export, admin_only=True))
 register(Kind("objects_export", "객체 내보내기", False, False, objects_export))
 register(Kind("ontology_export", "온톨로지 통째로 내보내기", False, False, ontology_export))
 register(Kind("relations_export", "관계 내보내기", False, False, relations_export))
@@ -728,6 +821,7 @@ register(
         False,
         metrics_recompute,
         allow_system=True,
+        admin_only=True,
     )
 )
 register(
@@ -738,6 +832,19 @@ register(
         False,
         datasource_sync,
         allow_system=True,
+        admin_only=True,
+    )
+)
+register(
+    Kind(
+        "filestore_gc",
+        "고아 첨부 파일 정리",
+        False,
+        True,
+        filestore_gc,
+        allow_system=True,
+        admin_only=True,
+        public=True,
     )
 )
 register(
@@ -748,5 +855,6 @@ register(
         False,
         datasource_sync_round,
         allow_system=True,
+        admin_only=True,
     )
 )

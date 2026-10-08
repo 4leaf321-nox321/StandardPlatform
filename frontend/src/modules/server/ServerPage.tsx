@@ -21,6 +21,8 @@ import { Button } from '@/shared/components/ui/button'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 import { PlatformProfile } from '@/modules/server/PlatformProfile'
+import { jobsApi } from '@/modules/jobs/api'
+import { PUBLIC_PATH } from '@/shared/base'
 
 function gib(bytes: number): string {
   return `${(bytes / 1024 ** 3).toFixed(1)} GiB`
@@ -227,6 +229,8 @@ export default function ServerPage() {
 
       {isSystemAdmin(user) && <PlatformProfile />}
 
+      {isSystemAdmin(user) && <OrphanFiles />}
+
       {isSystemAdmin(user) && <Extensions />}
 
       <section className="space-y-3">
@@ -243,5 +247,41 @@ export default function ServerPage() {
         </ul>
       </section>
     </div>
+  )
+}
+
+/**
+ * **아무 첨부도 안 가리키는 파일** — 뗀 첨부 · 거절된 업로드의 파일이 저장소에 쌓인다(첨부를
+ * 지우면 행만 지운다). 워커가 하루 한 번 저절로 지우고, 여기서는 지금 세어 보고 「작업」 화면에서
+ * 적용한다 — 계획을 보고 사람이 누르는 다른 일과 같은 길이다.
+ */
+function OrphanFiles() {
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<Error | null>(null)
+
+  async function count() {
+    setBusy(true)
+    setError(null)
+    try {
+      const job = await jobsApi.submit('filestore_gc')
+      window.location.assign(`${PUBLIC_PATH}/jobs?job=${job.id}`)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section className="space-y-2">
+      <h2 className="text-base font-semibold">첨부 저장소</h2>
+      <p className="text-muted-foreground text-sm">
+        첨부를 지우면 기록만 지우고 파일은 남깁니다(같은 파일을 다른 첨부가 쓸 수 있다). 아무 첨부도
+        안 쓰는 파일은 워커가 하루 한 번 지웁니다 — 올린 지 하루가 안 된 것은 남깁니다.
+      </p>
+      <Button type="button" variant="outline" size="sm" disabled={busy} onClick={count}>
+        고아 파일 지금 세어 보기
+      </Button>
+      {error && <ErrorNotice error={error} />}
+    </section>
   )
 }

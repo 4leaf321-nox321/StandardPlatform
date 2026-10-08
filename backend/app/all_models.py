@@ -33,6 +33,7 @@ from app.modules.datasources.models import DataSource, DataSourceRun
 from app.modules.files.models import Attachment, AttachmentTicket
 from app.modules.jobs.models import Job, JobFile, WorkerHeartbeat
 from app.modules.metrics.models import (
+    HomeMetric,
     MetricAlert,
     MetricAlertEvent,
     MetricDef,
@@ -81,6 +82,7 @@ __all__ = [
     "DataSource",
     "DataSourceRun",
     "ExtensionState",
+    "HomeMetric",
     "Job",
     "JobFile",
     "MetricAlert",

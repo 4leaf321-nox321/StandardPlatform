@@ -204,6 +204,33 @@ def test_데이터_소스가_넣고_있는_타입은_먼저_말하고_막는다(
     assert refused.status_code == 409 and _code(refused) == code("ONTOLOGY", 86)
 
 
+def test_지표가_세는_타입도_먼저_말하고_막는다(client: TestClient, admin: Signed) -> None:
+    """지표 정의도 원천 타입을 RESTRICT 로 붙든다 — 계획은 「지울 수 있다」 고 말하고 지우는
+    자리에서 500 이 났다(2026-10-08)."""
+    kind = _make_type(client, admin, label="기록", usage="log")
+    _make_property(client, admin, kind, key="received", label="접수일", data_type="date")
+    made = client.post(
+        "/api/metrics",
+        params={"recompute": "false"},
+        json={
+            "slug": _uniq("m"),
+            "label": "월별 접수",
+            "source_type_slug": kind,
+            "spec": {
+                "measure": "count",
+                "time": {"address": "properties.received", "grain": "month"},
+            },
+        },
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+
+    plan = _plan(client, admin, "type", kind)
+    assert [one["code"] for one in plan["blocking"]] == [code("ONTOLOGY", 88)]
+    refused = client.delete(f"/api/ontology/types/{kind}", headers=admin.headers)
+    assert refused.status_code == 409 and _code(refused) == code("ONTOLOGY", 88)
+
+
 def test_빈_타입은_무엇이_사라지고_무엇이_가리키는지_말하고_지우면_스냅샷이_남는다(
     client: TestClient, admin: Signed, db: Session
 ) -> None:

@@ -38,8 +38,10 @@ from app.modules.objects.models import OBJECT_STATUSES, ObjectInstance
 from app.modules.objects.services import (
     audit_state,
     properties_of,
+    require_key_free,
     require_refs_exist,
     require_unique_properties,
+    stored_text,
 )
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.ontology.services import validate_properties
@@ -143,7 +145,65 @@ def plan(
             )
             continue
         found.rows.append(_one(db, user, object_type, defs, row, field_name, value))
+    _refuse_same_in_batch(object_type, defs, found, by_id, field_name, value)
     return found
+
+
+def _refuse_same_in_batch(
+    object_type: ObjectType,
+    defs: list[PropertyDef],
+    found: EditPlan,
+    by_id: dict[uuid.UUID, ObjectInstance],
+    field_name: str,
+    value: Any,
+) -> None:
+    """**같은 묶음 안에서** 유일해야 할 값이 겹치는 줄을 오류로 바꾼다.
+
+    줄마다 DB 만 보면(`require_unique_properties` · `require_key_free`) 아직 저장 안 된 이웃
+    줄은 안 보인다 — 유일 속성 하나를 열 건에 같은 값으로 넣으면 열 건 다 「바뀜」 이었고,
+    부서를 옮기면(`key_scope="workspace"`) 두 부서에서 같은 식별자를 쓰던 둘이 한 부서에
+    함께 들어갔다(2026-10-08). 겹친 줄은 **모두** 오류다 — 어느 하나를 고르면 그것이 짐작이다.
+    """
+    changing = [one for one in found.rows if one.action == "change" and one.id in by_id]
+    if len(changing) < 2:
+        return
+    groups: dict[tuple[str, str, str], list[RowPlan]] = {}
+    labels = {d.key: d.label for d in defs}
+    if field_name == "workspace":
+        # 옮기는 줄은 모두 **같은 부서**로 간다 — 범위가 부서인 타입만 겹침이 생긴다.
+        if object_type.key_scope != "workspace":
+            return
+        for one in changing:
+            row = by_id[one.id]
+            if row.key:
+                groups.setdefault(("key", row.key, ""), []).append(one)
+            for definition in defs:
+                held = (row.properties or {}).get(definition.key)
+                if definition.unique and held not in (None, "", []):
+                    groups.setdefault((definition.key, stored_text(held), ""), []).append(one)
+    elif field_name not in FIXED_FIELDS:
+        key = field_name.split(".", 1)[-1]
+        target = next((d for d in defs if d.key == key), None)
+        if target is None or not target.unique or value in (None, "", []):
+            return
+        for one in changing:
+            # 범위가 부서면 **부서마다** 하나다 — 다른 부서의 두 줄은 겹치지 않는다.
+            scope = (
+                str(by_id[one.id].owner_workspace_id)
+                if object_type.key_scope == "workspace"
+                else ""
+            )
+            groups.setdefault((key, "", scope), []).append(one)
+    for (what, _value, _scope), hits in groups.items():
+        if len(hits) < 2:
+            continue
+        name = "식별자" if what == "key" else labels.get(what, what)
+        for one in hits:
+            one.action = "error"
+            one.message = (
+                f"{name}: 이 묶음의 {len(hits)}건이 같은 값이 됩니다 — 유일해야 하는 칸이라 "
+                "같은 것이 둘이 되면 둘 다 못 믿게 됩니다."
+            )
 
 
 def _field_label(object_type: ObjectType, defs: list[PropertyDef], field_name: str) -> str:
@@ -194,13 +254,13 @@ def _one(
     if field_name == "description":
         return _diff(row, row.description, clean(str(value or "")))
     if field_name == "workspace":
-        return _workspace(db, user, row, value)
+        return _workspace(db, user, object_type, defs, row, value)
 
     key = field_name.split(".", 1)[-1]
     merged = {**(row.properties or {}), key: value}
     try:
         cleaned = validate_properties(defs, merged)
-        require_refs_exist(db, defs, cleaned, row.properties or {})
+        require_refs_exist(db, defs, cleaned, row.properties or {}, user=user)
         require_unique_properties(
             db,
             object_type,
@@ -214,21 +274,43 @@ def _one(
     return _diff(row, (row.properties or {}).get(key), cleaned.get(key))
 
 
-def _workspace(db: Session, user: User, row: ObjectInstance, value: Any) -> RowPlan:
+def _workspace(
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    defs: list[PropertyDef],
+    row: ObjectInstance,
+    value: Any,
+) -> RowPlan:
     slug = str(value or "").strip()
     try:
-        target = (
-            resolve_owner_workspace(
-                db, user, slug, what="객체", code_value=code("OBJECTS", 17)
-            )
-            if slug
-            else None
+        # 비운 값(전역)도 같은 판정을 거친다 — 전역은 시스템 관리자만이다. 예전에는 빈 값이면
+        # 판정을 건너뛰어 부서 관리자가 객체를 전역으로 옮길 수 있었다(2026-10-08).
+        target = resolve_owner_workspace(
+            db, user, slug or None, what="객체", code_value=code("OBJECTS", 17)
         )
     except AppError as caught:
         return RowPlan(id=row.id, label=row.label, action="error", message=caught.message)
     before = row.owner_workspace_id
     if before == target:
         return RowPlan(id=row.id, label=row.label, action="unchanged", before=slug, after=slug)
+    if object_type.key_scope == "workspace":
+        # **유일 범위가 부서인 타입은 옮겨 갈 부서에서 다시 본다** — 식별자와 유일 속성.
+        # 안 보면 두 부서에서 각자 하나이던 「A-1」 이 한 부서에 둘이 된다(2026-10-08).
+        try:
+            require_key_free(
+                db, object_type, row.key, owner_workspace_id=target, exclude_id=row.id
+            )
+            require_unique_properties(
+                db,
+                object_type,
+                defs,
+                row.properties or {},
+                owner_workspace_id=target,
+                exclude_id=row.id,
+            )
+        except AppError as caught:
+            return RowPlan(id=row.id, label=row.label, action="error", message=caught.message)
     return RowPlan(
         id=row.id,
         label=row.label,
@@ -290,12 +372,8 @@ def apply_to(
             row.description = clean(str(value or ""))
         elif field_name == "workspace":
             slug = str(value or "").strip()
-            row.owner_workspace_id = (
-                resolve_owner_workspace(
-                    db, user, slug, what="객체", code_value=code("OBJECTS", 17)
-                )
-                if slug
-                else None
+            row.owner_workspace_id = resolve_owner_workspace(
+                db, user, slug or None, what="객체", code_value=code("OBJECTS", 17)
             )
         else:
             key = field_name.split(".", 1)[-1]

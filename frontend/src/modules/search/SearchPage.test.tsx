@@ -92,6 +92,37 @@ describe('검색', () => {
     )
   })
 
+  it('좁힌 뒤에도 「전체」 는 전체 수고, 다른 타입 단추가 그대로 선다', async () => {
+    // 서버는 좁히면 types · total 을 그 타입 것으로 준다 — 그것을 그대로 쓰던 때는 「전체 3」
+    // 이 「전체 2」 가 되고 「툴」 단추가 사라졌다(2026-10-08).
+    const narrowed = {
+      ...RESULT,
+      total: 2,
+      types: [RESULT.types[0]],
+      items: [RESULT.items[0]],
+    }
+    searchApi.find.mockImplementation(async (_q: string, options?: { type?: string | null }) =>
+      options?.type ? narrowed : RESULT,
+    )
+    await open('/search?q=ansys')
+    await waitFor(() => expect(screen.getByText('ANSYS Inc.')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: /공급사 2/ }))
+    await waitFor(() => expect(screen.queryByText('구조 해석기')).not.toBeInTheDocument())
+    expect(screen.getByRole('button', { name: '전체 3' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /툴 1/ })).toBeInTheDocument()
+  })
+
+  it('좁힌 주소로 바로 들어와도 안 좁힌 수를 따로 물어 단추를 세운다', async () => {
+    const narrowed = { ...RESULT, total: 2, types: [RESULT.types[0]], items: [RESULT.items[0]] }
+    searchApi.find.mockImplementation(async (_q: string, options?: { type?: string | null }) =>
+      options?.type ? narrowed : RESULT,
+    )
+    await open('/search?q=ansys&type=vendor')
+    expect(await screen.findByRole('button', { name: '전체 3' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /툴 1/ })).toBeInTheDocument()
+    expect(searchApi.find).toHaveBeenCalledWith('ansys')
+  })
+
   it('아직 안 쳤으면 무엇을 칠 수 있는지 말한다', async () => {
     searchApi.find.mockResolvedValue(RESULT)
     await open('/search')

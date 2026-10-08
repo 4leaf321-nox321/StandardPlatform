@@ -79,6 +79,24 @@ describe('movePlan', () => {
     expect(movePlan(ROWS, 'design', 'cae', 'before')).toBeNull()
     expect(movePlan(ROWS, 'struct', 'cae', 'inside')).toBeNull()
   })
+
+  it('sort_order 가 같으면 서버처럼 이름으로 가른다 — slug 가 아니라', () => {
+    // 서버(move)는 `(sort_order, name)` 으로 형제를 세운다. 화면이 slug 로 가르던 때는 같은
+    // 「몇 번째」 가 서로 다른 형제를 가리켜, 놓은 자리와 다른 자리에 끼었다(2026-10-08).
+    // slug 차례(a-team < z-team)와 이름 차례(가팀 < 나팀)가 거꾸로다.
+    const tied = [
+      node('root', null, 0, 0, '본부'),
+      node('z-team', 'root', 1, 0, '가팀'),
+      node('a-team', 'root', 1, 0, '나팀'),
+      node('mover', null, 0, 1, '옮길 팀'),
+    ]
+    // 「나팀」 앞 = 이름 차례로 두 번째(가팀 다음) — slug 로 갈랐으면 0 이었다.
+    expect(movePlan(tied, 'mover', 'a-team', 'before')).toEqual({
+      slug: 'mover',
+      parentSlug: 'root',
+      position: 1,
+    })
+  })
 })
 
 describe('visibleRows', () => {

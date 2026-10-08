@@ -33,6 +33,30 @@ def test_뒤에_한_건도_없으면_비는_0_이고_위_끝만_있다() -> None
     assert cutin.decide(found, 0.2) == "reduced"
 
 
+def test_앞_건수가_아주_적고_흔들림이_크면_위_끝이_없다고_말한다() -> None:
+    """앞 1건 · 뒤가 크게 흔들림(φ ≈ 64) — 실효 건수가 0.016건이라 위 끝의 π 가 1.0 으로
+    떨어져 0 으로 나눴고, 그 요청은 500 이었다(2026-10-08). 위 끝은 없음(None)이고 결론은
+    「아직 이르다」 다."""
+    before = [(1.0, 1000.0)] + [(0.0, 1000.0)] * 3
+    after = [(10.0, 1000.0), (200.0, 1000.0), (50.0, 1000.0), (5.0, 1000.0)]
+    found = cutin.compare(before, after)
+    assert found.ratio == pytest.approx(265.0) and found.dispersion > 60
+    assert found.high is None and found.low is not None and found.low < 1
+    assert cutin.decide(found, 0.2) == "too_early"
+
+
+def test_흔들림의_자유도는_잰_평균의_수만큼_뺀다() -> None:
+    """피어슨 χ² 의 자유도 = 부분군 수 - 잰 모수의 수. 양쪽은 각자의 평균(둘)이라 n - 2,
+    한쪽만(앞쪽 추세의 φ · 뒤가 0 건)이면 평균 하나라 n - 1 이다."""
+    groups = [(10.0, 100.0), (20.0, 100.0), (30.0, 100.0), (40.0, 100.0), (50.0, 100.0)]
+    chi2 = (400 + 100 + 0 + 100 + 400) / 30  # 평균 30 둘레
+    assert cutin.dispersion(groups, []) == pytest.approx(chi2 / 4)
+    # 뒤(모두 5건 — χ² 0)를 더하면 부분군 아홉에 평균 둘.
+    assert cutin.dispersion(groups, [(5.0, 100.0)] * 4) == pytest.approx(chi2 / 7)
+    # 뒤가 0 건이면 그쪽은 평균을 안 잰다(χ² 에도 안 든다) — 앞만의 n - 1 그대로.
+    assert cutin.dispersion(groups, [(0.0, 100.0)] * 4) == pytest.approx(chi2 / 4)
+
+
 def test_크기가_크고_비가_1_언저리면_차이_없음() -> None:
     found = cutin.compare([(1000.0, 100_000.0)] * 12, [(1005.0, 100_000.0)] * 12)
     assert cutin.decide(found, 0.2) == "no_difference"

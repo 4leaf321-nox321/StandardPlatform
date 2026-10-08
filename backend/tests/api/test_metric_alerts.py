@@ -232,6 +232,42 @@ def test_경보가_실패해도_계산은_서고_처음_실패만_알린다(
     assert listed["last_status"] == "failed" and "METRICS-0008" in listed["last_error"]
 
 
+def test_같은_경보를_동시에_확인해도_실패가_아니고_한_번만_알린다(
+    client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """계산 둘이 겹치면 두 확인이 같은 스냅샷에서 같은 새 열쇠를 본다 — 늦은 쪽은 먼저 적은
+    쪽과 유일 제약 · 직렬화 실패로 부딪친다. 그것을 실패로 적고 「경보를 확인하지 못했습니다」
+    를 보냈다(2026-10-08). 다시 보면 이미 본 열쇠라 건너뛴다."""
+    from app.database import SessionLocal
+    from app.modules.metrics import alerts
+
+    w, cases, plant = _sprt_world(client, admin)
+    slug = cases["slug"]
+    plant(2)
+    params = {"target": w["s_base"], "reference": w["a_base"]}
+    made = _create(client, admin, slug, "sprt", params)
+    plant(4)  # 「나쁨」 이 선다
+    real = alerts.evaluate
+    calls: list[int] = []
+
+    def racing(*args: Any, **kwargs: Any) -> alerts.Outcome:
+        found = real(*args, **kwargs)
+        calls.append(len(found.findings))
+        if len(calls) == 1:
+            # 이 확인이 읽은 뒤 · 적기 전에 다른 확인이 같은 결론을 먼저 적고 커밋한다.
+            with SessionLocal() as other:
+                assert alerts.check_one(other, uuid.UUID(made["id"])) == 1
+        return found
+
+    monkeypatch.setattr(alerts, "evaluate", racing)
+    assert _after(slug) == {"alerts": 1, "new": 0}
+    assert len(calls) == 3  # 늦은 쪽은 새 스냅샷으로 한 번 더 봤다
+    assert _notes(client, admin, "metric.alert.failed") == []
+    assert len(_notes(client, admin, "metric.alert")) == 1
+    (listed,) = client.get(f"/api/metrics/{slug}/alerts", headers=admin.headers).json()
+    assert listed["last_status"] == "ok" and listed["events"] == 1
+
+
 def test_남의_경보는_없는_것이고_틀린_인자는_만들기_전에_거절한다(
     client: TestClient, admin: Signed, member: Signed
 ) -> None:

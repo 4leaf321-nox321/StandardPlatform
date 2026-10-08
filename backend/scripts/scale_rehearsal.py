@@ -653,6 +653,8 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
         results.extend(_alerts_rehearsal(client, admin, url))
     if not only or "limits" in (only or ""):
         results.extend(_limits_rehearsal(client, admin, url))
+    if not only or "incremental" in (only or ""):
+        results.extend(_incremental_rehearsal(client, admin, url))
 
     print("\n| 영역 | 무엇 | 중앙값 | 비고 |\n| --- | --- | --- | --- |")
     for area, label, took, note in results:
@@ -1704,6 +1706,192 @@ def _visits_rehearsal(
             )
             if gone.status_code != 204:
                 row("임시 타입 지우기", 0.0, f"HTTP {gone.status_code} {gone.text[:160]}")
+    return out
+
+
+def _incremental_rehearsal(
+    client: Any, admin: dict[str, str], url: str
+) -> list[tuple[str, str, str, str]]:
+    """지표 증분(ADR 0024) — **바뀐 기간만** 다시 센 것과 전부 센 것을 같은 지표로 잰다.
+
+    지표 둘: 자기 칸만(서비스월 x 판매월 코호트 x 증상 x 공장)과 참조 너머(기본 모델 x 증상 —
+    ① 의 참조 칸 길). 전량 → 최근 기록 1천 건의 증상 · 1백 건의 서비스일을 **화면과 같은
+    길로**(감사를 남기며) 고친다 → 증분(날짜 칸 색인 없이) → 색인을 세운다 → 고친 것을 되돌린다
+    → 증분(색인으로) → 전량. 증분 뒤의 셀이 전량의 셀과 같은지도 본다. 끝나면 지표 · 색인을
+    지운다(되돌린 기록은 처음 값이다 — 감사 기록만 남는다).
+    """
+    import uuid as uuid_module
+    from datetime import date as date_type
+
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.database import engine as app_engine
+    from app.modules.metrics import compute, timeindex
+    from app.modules.metrics.models import MetricDef, MetricValue
+    from app.modules.objects.models import ObjectInstance
+    from app.modules.objects.services import audit_state
+    from app.shared import audit
+
+    out: list[tuple[str, str, str, str]] = []
+    tag = uuid_module.uuid4().hex[:4]
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("incremental", label, f"{took:.2f}초", note))
+        print(f"{took:8.2f}초  {label}  {note}", flush=True)
+
+    def when(address: str) -> dict[str, str]:
+        return {"address": address, "grain": "month"}
+
+    own = {
+        "measure": "count",
+        "time": when("properties.service_date"),
+        "cohort": when("properties.sale_date"),
+        "dimensions": [
+            {"name": "symptom", "address": "properties.symptom"},
+            {"name": "factory", "address": "properties.factory"},
+        ],
+    }
+    through = {
+        "measure": "count",
+        "time": when("properties.service_date"),
+        "cohort": when("properties.sale_date"),
+        "dimensions": [
+            {"name": "base_model", "address": "ref.model.base"},
+            {"name": "symptom", "address": "properties.symptom"},
+        ],
+    }
+    metrics = [
+        (f"rh_inc_own_{tag}", "자기 칸", own),
+        (f"rh_inc_ref_{tag}", "참조 너머", through),
+    ]
+    made: list[str] = []
+    index_name: str | None = None
+
+    def cells(slug: str) -> list[tuple[Any, ...]]:
+        with SessionLocal() as db:
+            metric = db.scalar(select(MetricDef).where(MetricDef.slug == slug))
+            assert metric is not None
+            run = metric.cells_run_id or metric.current_run_id
+            found = db.execute(
+                select(
+                    MetricValue.cell_hash,
+                    MetricValue.period,
+                    MetricValue.cohort,
+                    MetricValue.count,
+                ).where(MetricValue.metric_id == metric.id, MetricValue.run_id == run)
+            ).all()
+        return sorted((tuple(one) for one in found), key=str)
+
+    def recount(slug: str, *, full: bool, label: str) -> None:
+        started = time.perf_counter()
+        with SessionLocal() as db:
+            metric = db.scalar(select(MetricDef).where(MetricDef.slug == slug))
+            assert metric is not None
+            done = compute.run_one(
+                db, metric, job_id=None, progress=lambda *_: None, full=full
+            )
+            note = (
+                f"{done.mode} cells={done.cells:,} rows={done.rows:,} "
+                f"periods={len(done.periods or [])} — {done.note}"
+            )
+        row(label, time.perf_counter() - started, note)
+
+    def edit(changes: list[tuple[Any, dict[str, Any]]]) -> float:
+        """화면의 고치기와 같은 감사 기록을 남기며 — 한 트랜잭션으로."""
+        started = time.perf_counter()
+        with SessionLocal() as db:
+            for object_id, patch in changes:
+                found = db.get(ObjectInstance, object_id)
+                assert found is not None
+                before = audit_state(found)
+                found.properties = {**found.properties, **patch}
+                audit.record(
+                    db,
+                    action="object.update",
+                    actor=None,
+                    target_table="objects",
+                    target_id=found.id,
+                    target_label=found.label,
+                    changes=audit.diff(before, audit_state(found)),
+                )
+            db.commit()
+        return time.perf_counter() - started
+
+    try:
+        for slug, label, spec in metrics:
+            saved = client.post(
+                "/api/metrics",
+                params={"recompute": "false"},
+                json={
+                    "slug": slug,
+                    "label": label,
+                    "source_type_slug": "svc_case",
+                    "spec": spec,
+                },
+                headers=admin,
+            )
+            if saved.status_code != 201:
+                row(f"정의 — {label}", 0.0, saved.text[:160])
+                return out
+            made.append(slug)
+            recount(slug, full=True, label=f"전량 — {label}")
+
+        with SessionLocal() as db:
+            recent = db.execute(
+                text(
+                    "SELECT o.id, o.properties ->> 'symptom', o.properties ->> 'service_date' "
+                    "FROM objects o JOIN object_types t ON t.id = o.type_id "
+                    "WHERE t.slug = 'svc_case' AND o.deleted_at IS NULL "
+                    "ORDER BY o.properties ->> 'service_date' DESC NULLS LAST LIMIT 1100"
+                )
+            ).all()
+        symptoms = [(one[0], {"symptom": one[1]}) for one in recent[:1000]]
+        dates = [(one[0], {"service_date": one[2]}) for one in recent[1000:]]
+        flipped = [(object_id, {"symptom": "S00"}) for object_id, _ in symptoms]
+
+        def moved(raw: str) -> str:
+            day = date_type.fromisoformat(raw[:10])
+            back = date_type(day.year - (day.month == 1), (day.month - 2) % 12 + 1, 1)
+            return back.isoformat()
+
+        shifted = [
+            (object_id, {"service_date": moved(old["service_date"])})
+            for object_id, old in dates
+        ]
+        took = edit(flipped + shifted)
+        row("고치기 — 증상 1천 · 서비스일 1백(한 달 앞으로)", took, "감사 기록과 함께")
+        for slug, label, _spec in metrics:
+            recount(slug, full=False, label=f"증분(색인 없음) — {label}")
+
+        with SessionLocal() as db:
+            source = db.scalar(text("SELECT id FROM object_types WHERE slug = 'svc_case'"))
+        index_name = timeindex.name_of(source, "service_date")
+        started = time.perf_counter()
+        with app_engine.connect().execution_options(
+            isolation_level="AUTOCOMMIT"
+        ) as connection:
+            connection.execute(text(timeindex.create_sql(index_name, source, "service_date")))
+        row("날짜 칸 색인 세우기(CONCURRENTLY)", time.perf_counter() - started, index_name)
+
+        took = edit(symptoms + dates)
+        row("되돌리기 — 같은 1천 1백 건", took, "")
+        incremental: dict[str, list[tuple[Any, ...]]] = {}
+        for slug, label, _spec in metrics:
+            recount(slug, full=False, label=f"증분(색인) — {label}")
+            incremental[slug] = cells(slug)
+        for slug, label, _spec in metrics:
+            recount(slug, full=True, label=f"전량 — {label}")
+            same = cells(slug) == incremental[slug]
+            row(f"증분 = 전량 — {label}", 0.0, "같다" if same else "**다르다**")
+    finally:
+        if index_name is not None:
+            with app_engine.connect().execution_options(
+                isolation_level="AUTOCOMMIT"
+            ) as connection:
+                connection.execute(text(f"DROP INDEX CONCURRENTLY IF EXISTS {index_name}"))
+        for slug in reversed(made):
+            client.delete(f"/api/metrics/{slug}", headers=admin)
     return out
 
 

@@ -15,6 +15,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -117,11 +118,42 @@ def _ids_by_target(
     return out
 
 
+#: 보는 사람이 못 보는 객체의 이름 자리 — 이력 · 참조 이름 · 묶음 이름이 같은 말을 쓴다.
+HIDDEN_LABEL = "(볼 수 없는 객체)"
+
+
+def hidden_objects(
+    db: Session, viewer: User | None, ids: Iterable[uuid.UUID]
+) -> set[uuid.UUID]:
+    """ids 중 **보는 사람이 못 보는 객체** — 객체 표에 있는데 그 사람의 가시성 밖인 것.
+
+    원 표의 행(부서 · 계정)과 없는 id 는 안 든다(부서 소유가 아니거나, 가릴 이름이 없다).
+    보는 사람이 없거나(지표 · 내부 계산) 시스템 관리자면 비어 있다."""
+    wanted = sorted(set(ids))
+    if viewer is None or viewer.is_system_admin or not wanted:
+        return set()
+    seen = visible_owner_clause(viewer, ObjectInstance.owner_workspace_id)
+    out: set[uuid.UUID] = set()
+    for part in chunks(wanted):
+        out.update(
+            db.scalars(select(ObjectInstance.id).where(ObjectInstance.id.in_(part), ~seen))
+        )
+    return out
+
+
 def ref_labels(
-    db: Session, defs: list[PropertyDef], rows: list[dict[str, Any]]
+    db: Session,
+    defs: list[PropertyDef],
+    rows: list[dict[str, Any]],
+    *,
+    viewer: User | None = None,
 ) -> dict[uuid.UUID, str]:
     """이 값들이 가리키는 것들의 이름을 **한 번에** — 객체는 `objects` 에서, system 은
     원 표에서. 지워진 것을 가리키면 **지워졌다고 적는다.** 이름만 보이면 살아 있는 줄 안다.
+
+    `viewer` 를 주면 그 사람이 못 보는 객체는 이름 대신 `HIDDEN_LABEL` — 가리킨 뒤에 그
+    객체가 다른 부서로 옮겨 갔을 수 있다. 상세의 「관련 객체」 는 그 줄을 숨기는데 칸의
+    이름표가 그 이름을 보이면, 숨긴 것이 칸으로 샌다(2026-10-08).
     """
     by_target = _ids_by_target(defs, rows)
     if not by_target:
@@ -141,8 +173,12 @@ def ref_labels(
             plain.update(ids)
     # 이름만 — 분석이 기준 값 수만 개의 이름을 풀 때 속성까지 끌어오면 무겁다. 나눠 묻는다.
     columns = (ObjectInstance.id, ObjectInstance.label, ObjectInstance.deleted_at)
+    hidden = hidden_objects(db, viewer, plain)
     for part in chunks(sorted(plain)):
         for row in db.execute(select(*columns).where(ObjectInstance.id.in_(part))):
+            if row.id in hidden:
+                out[row.id] = HIDDEN_LABEL
+                continue
             out[row.id] = row.label if row.deleted_at is None else f"{row.label} (지워짐)"
     return out
 

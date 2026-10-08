@@ -32,6 +32,8 @@ export interface Job {
   input_file_name: string | null
   has_output: boolean
   requested_by_name: string | null
+  /** 시킨 사람 — 「취소」 · 「적용」 은 그 사람과 시스템 관리자만(서버도 그렇게 거절한다). */
+  requested_by_id?: string | null
   workspace_slug: string | null
   cancel_requested: boolean
   attempts: number
@@ -80,6 +82,29 @@ export const POLL_MS = 1500
  */
 export const STUCK_MS = 15_000
 
+/**
+ * 이만큼 내리 「대기」 면 **기다림을 그만둔다** — 아무 워커도 안 집어 간 것이다.
+ *
+ * 끝이 없던 때는 워커가 죽으면 데이터 소스 동기화 · 내보내기 「만드는 중…」 · 지표 다시 계산 ·
+ * 객체 삭제(작업 경로)가 영영 바쁨이었다(2026-10-08). 도는 중(`running`)인 것은 오래 걸려도
+ * 기다린다 — 큰 파일은 분 단위가 정상이다.
+ */
+export const GIVE_UP_MS = 120_000
+
+/** 기다림을 그만뒀을 때의 말 — 작업은 대기열에 남아 있고, 워커가 살아나면 마저 돈다. */
+export class JobStalledError extends Error {
+  readonly job: Job
+
+  constructor(job: Job) {
+    super(
+      '워커가 돌지 않는 것 같습니다 — 작업이 아직 아무에게도 집히지 않았습니다. 「내 활동 › 작업」 ' +
+        '화면에서 확인하세요(작업은 대기열에 남아 있어, 워커가 살아나면 마저 돕니다).',
+    )
+    this.name = 'JobStalledError'
+    this.job = job
+  }
+}
+
 const sleep = (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
 
 export interface JobKind {
@@ -117,6 +142,13 @@ export const jobsApi = {
     return api.get<JobList>(`/jobs?${params.toString()}`)
   },
   kinds: () => api.get<JobKind[]>('/jobs/kinds'),
+  /** 파일 없는 작업 하나를 넣는다 — 종류와 인자만(`POST /api/jobs`). */
+  submit: (kind: string, params: Record<string, unknown> = {}) => {
+    const body = new FormData()
+    body.set('kind', kind)
+    body.set('params', JSON.stringify(params))
+    return api.postForm<Job>('/jobs', body)
+  },
   workers: () => api.get<WorkerInfo[]>('/jobs/workers'),
   /** 계획을 본 뒤 **사람이 누르는 자리** — 같은 파일 · 같은 지문으로 적용 작업을 만든다. */
   apply: (id: string) => api.post<Job>(`/jobs/${id}/apply`),
@@ -133,12 +165,28 @@ export const jobsApi = {
    *
    * **끝난 작업을 돌려줄 뿐 실패를 던지지 않는다** — 실패도 결과다. 부르는 쪽이
    * `status` 를 보고 `error` 를 사람에게 보인다. 던지면 「어느 행이 왜」 가 사라진다.
+   *
+   * 던지는 것은 하나 — **내리 `giveUpMs` 동안 대기**면 `JobStalledError`(워커가 없다). 부르는
+   * 쪽은 이미 오류를 보이는 자리가 있으므로 그 말이 그대로 선다.
    */
-  waitFor: async (id: string, onTick?: (job: Job) => void, pollMs = POLL_MS): Promise<Job> => {
+  waitFor: async (
+    id: string,
+    onTick?: (job: Job) => void,
+    pollMs = POLL_MS,
+    giveUpMs = GIVE_UP_MS,
+  ): Promise<Job> => {
+    let queuedSince: number | null = null
     for (;;) {
       const job = await api.get<Job>(`/jobs/${id}`)
       onTick?.(job)
       if (isTerminal(job)) return job
+      // 집혔다가 워커가 죽어 다시 대기로 돌아온 것도 그때부터 다시 잰다.
+      if (job.status === 'queued') {
+        queuedSince ??= Date.now()
+        if (Date.now() - queuedSince >= giveUpMs) throw new JobStalledError(job)
+      } else {
+        queuedSince = null
+      }
       await sleep(pollMs)
     }
   },

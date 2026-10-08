@@ -276,8 +276,22 @@ export interface SavedView {
 }
 
 /** 부서 홈에 올라간 뷰 하나. **홈은 타입을 모르므로** 서버가 다 실어 준다. */
+/** 부서 홈에 올린 지표 — 값은 위젯이 지표의 추이로 읽는다. */
+export interface HomeMetric {
+  id: string
+  metric_slug: string
+  metric_label: string
+  /** 선을 나눌 기준 이름 — 없으면 합계 한 줄. */
+  split: string | null
+  home_order: number
+}
+
+/** 부서 홈의 한 칸 — **저장된 뷰이거나 지표다**(`kind`). 둘은 한 줄에 선다. */
 export interface HomeWidget {
-  view: SavedView
+  kind?: 'view' | 'metric'
+  view?: SavedView | null
+  metric?: HomeMetric | null
+  /** 뷰는 그 타입, 지표는 원천 기록 타입의 이름. */
   type_label: string
   icon: string
   /** 어느 부서의 것인가 — 여러 부서를 한 화면에 놓을 때 이것이 없으면 구별이 안 된다. */

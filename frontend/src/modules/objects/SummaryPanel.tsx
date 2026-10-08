@@ -51,7 +51,7 @@ import { PinToHomeDialog } from '@/modules/objects/PinToHomeDialog'
 import { DEFAULT_SUMMARY, GRAINS, ORDER_LABELS } from '@/modules/objects/summarySettings'
 import type { SummarySettings } from '@/modules/objects/summarySettings'
 import { useAuth } from '@/shared/auth/AuthContext'
-import { isManagerOf } from '@/shared/auth/roles'
+import { defaultOwnerWorkspace, isAnyManager } from '@/shared/auth/roles'
 import { Chart, LazyPlot, colorFor } from '@/shared/charts'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
@@ -128,6 +128,13 @@ interface Props {
    * 단추를 세운 뒤 서버가 거절하게 두면, 누른 사람은 왜 안 되는지 거절문으로야 안다.
    */
   pinnable?: boolean
+  /**
+   * 홈 게시의 기본 부서 — 홈의 「위젯 추가」 가 주소(`home=`)로 싣고 온 그 부서. 없으면 대표
+   * 소속(관리하는 곳일 때)이다. 그 부서의 관리자가 아니면 관리하는 부서로 떨어진다.
+   */
+  homeWorkspace?: string | null
+  /** 지금 실제로 쓰는 기간 단위(날짜 축일 때만) — 화면의 「뷰로 저장」 이 같은 것을 담게. */
+  onGrain?: (grain: string | null) => void
 }
 
 /**
@@ -191,6 +198,8 @@ export function SummaryPanel({
   onPick,
   onClose,
   pinnable = true,
+  homeWorkspace = null,
+  onGrain,
 }: Props) {
   const { groupBy, metric, metricField, chart: kind } = settings
   const patch = (next: Partial<SummarySettings>) => onSettings({ ...settings, ...next })
@@ -201,9 +210,11 @@ export function SummaryPanel({
   const [error, setError] = useState<Error | null>(null)
   const [pinning, setPinning] = useState(false)
   const { user } = useAuth()
-  // 올릴 곳은 내 대표 소속이다 — 뷰를 부서와 함께 쓸 때와 같은 규칙(`ViewPicker`).
-  const myWorkspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
-  const canPin = pinnable && Boolean(myWorkspace && isManagerOf(user, myWorkspace))
+  // 올릴 곳은 **보고 있던 부서**(홈에서 왔으면 그 부서), 아니면 대표 소속 — 그중 내가 관리자인
+  // 곳이다. 늘 대표 소속으로 올리던 때는 시스템 관리자가 /w/sales 에서 추가한 것이 hq 홈에 섰고,
+  // 대표 소속에서 멤버뿐인 B 의 관리자에게는 단추가 아예 안 섰다(2026-10-08).
+  const pinTarget = defaultOwnerWorkspace(user, homeWorkspace)
+  const canPin = pinnable && isAnyManager(user) && pinTarget !== null
 
   /** 기준이나 세부 기준이 날짜 칸인가 — 그때만 기간 단위와 「시간순」 이 뜻이 있다. */
   const dated = useMemo(() => {
@@ -219,6 +230,9 @@ export function SummaryPanel({
    * 기준으로 바꾸면 고른 단위가 남아, 날짜가 아닌 칸에 기간 단위를 걸었다는 거절이 났다.
    */
   const grain = dated ? settings.grain || null : null
+  useEffect(() => {
+    onGrain?.(grain)
+  }, [grain, onGrain])
 
   // 필터가 바뀌면 다시 센다. `query` 는 매 렌더 새 객체라 **내용**으로 비교한다 —
   // 안 그러면 이 효과가 끝없이 돈다.
@@ -352,6 +366,8 @@ export function SummaryPanel({
             x,
             y: settings.chart === 'scatter' ? settings.y || numbers[1]?.field : null,
             groupBy: settings.splitBy || (settings.chart === 'box' ? groupBy : null),
+            // 그림과 **같은 묶음**으로 — 빠뜨리면 그림은 월별인데 파일은 해별이었다(2026-10-08).
+            grain,
           },
           format,
           `${typeSlug}-${points?.x_label ?? '값'}.${format}`,
@@ -600,14 +616,17 @@ export function SummaryPanel({
 
       <ErrorNotice error={error} />
 
-      {pinning && myWorkspace && (
+      {pinning && pinTarget && (
         <PinToHomeDialog
           typeSlug={typeSlug}
-          workspaceSlug={myWorkspace}
+          workspaceSlug={pinTarget}
           query={
-            (query.conditions
-              ? { q: query.q ?? '', conditions: query.conditions, status: null }
-              : { q: query.q ?? '', conditions: [], status: null }) as SavedViewQuery
+            {
+              q: query.q ?? '',
+              conditions: query.conditions ?? [],
+              // 지표의 「N건 보기」 처럼 상태로 거른 목록이면 그 상태도 — 홈의 수가 목록과 같게.
+              status: query.status ?? null,
+            } satisfies SavedViewQuery
           }
           summary={
             settings.groupBy

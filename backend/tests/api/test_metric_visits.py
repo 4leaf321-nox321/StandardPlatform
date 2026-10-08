@@ -208,6 +208,10 @@ def test_재방문_위험_요인은_요인별_오즈비를_낸다(client: TestCl
     assert 0.5 < found["auc"] < 1.0
     codes = {one["code"] for one in found["caveats"]}
     assert {"open_excluded", "not_independent", "association"} <= codes
+    # 같은 요인을 두 번 적으면 한 번으로 — 같은 이름의 칸 둘이 되어 500 이었다(2026-10-08).
+    twice = _analysis(client, admin, metric["slug"], "logit", factors="factory,factory")
+    assert len(twice["factors"]) == 1 and twice["records"] == 3000
+    assert twice["factors"][0]["df"] == 2
     # 거절 — 결과를 요인으로, 없는 기준.
     assert _refused(client, admin, metric["slug"], "logit", factors="again")["code"].endswith(
         "METRICS-0032"

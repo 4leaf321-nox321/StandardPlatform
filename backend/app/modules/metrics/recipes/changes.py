@@ -58,6 +58,7 @@ from app.modules.metrics.recipes.schemas import (
     SeasonOut,
     SegmentOut,
 )
+from app.modules.metrics.schemas import DrillOut
 from app.modules.objects import axes
 
 NAME = "changes"
@@ -569,6 +570,24 @@ def run(
     )
 
 
+def _value_drill(
+    found: series.SeriesSet, built: spec_module.Built, by: str, one: series.Series
+) -> DrillOut:
+    """값 하나의 근거 — 그 줄을 읽은 범위(`found.ask`)에서 그 값. 코호트 축의 「출고 K 기간
+    안」 은 코호트마다 접수 범위가 달라 목록 조건 하나로 못 적는다(`age` — 목록이 더 많을 수
+    있다). 예전에는 요청의 범위를 그대로 써 창 밖의 기록까지 열면서 정확하다고 말했다
+    (2026-10-08)."""
+    out = query.drill(
+        built,
+        query.Cell({by: one.key}, None, None, None, one.total, 0, None, None, None),
+        by=(),
+        ask=found.ask,
+    )
+    if found.axis == "cohort":
+        out.partial.append("age")
+    return out
+
+
 def scan_penalty(k: int) -> float:
     """값 K 개를 함께 볼 때 변화점 하나에 더하는 벌점 — 2 · ln K(우도비 척도의 본페로니)."""
     return 2.0 * math.log(k) if k > 1 else 0.0
@@ -616,12 +635,7 @@ def scan(
     items: list[ChangesScanItemOut] = []
     for one in found.series:
         closed = [g for g in one.subgroups if g.closed and g.exposure > 0]
-        drill = query.drill(
-            built,
-            query.Cell({by: one.key}, None, None, None, one.total, 0, None, None, None),
-            by=(),
-            ask=ask,
-        )
+        drill = _value_drill(found, built, by, one)
         if len(closed) < MIN_POINTS:
             items.append(
                 ChangesScanItemOut(

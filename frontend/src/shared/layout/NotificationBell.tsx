@@ -17,6 +17,19 @@ import { Button } from '@/shared/components/ui/button'
 
 const POLL_MS = 60_000
 
+/** 읽음이 바뀌었다는 신호 — 알림 화면이 보내고 배지가 듣는다. */
+const UNREAD_CHANGED = 'notifications:unread-changed'
+
+/**
+ * 읽음 상태를 바꾼 뒤 부른다 — 배지가 **곧바로** 다시 묻게.
+ *
+ * 안 부르던 때는 「모두 읽음」 을 눌러도 배지가 다음 폴링(최대 60초)까지 그대로였고, 사람은 그
+ * 단추가 안 먹힌 줄 알았다(2026-10-08).
+ */
+export function notifyUnreadChanged(): void {
+  window.dispatchEvent(new Event(UNREAD_CHANGED))
+}
+
 export function NotificationBell() {
   const [unread, setUnread] = useState(0)
   const navigate = useNavigate()
@@ -32,11 +45,14 @@ export function NotificationBell() {
         // 띄우지 않는다** — 사람이 하던 일과 아무 상관이 없다.
       }
     }
+    const again = () => void poll()
     void poll()
     const timer = window.setInterval(poll, POLL_MS)
+    window.addEventListener(UNREAD_CHANGED, again)
     return () => {
       cancelled = true
       window.clearInterval(timer)
+      window.removeEventListener(UNREAD_CHANGED, again)
     }
   }, [])
 

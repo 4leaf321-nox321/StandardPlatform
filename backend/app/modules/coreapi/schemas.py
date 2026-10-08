@@ -101,6 +101,10 @@ class CoreRowOut(BaseModel):
     updated_at: str
     deleted: bool = False
     """참이면 이 시스템에서 사라졌다 — 받는 쪽은 자기 것을 비활성으로 둔다."""
+    hidden: bool = False
+    """참이면 지운 것이 아니라 **이 자격으로는 더 이상 안 보인다**(소유 부서가 보는 범위
+    밖으로 옮겨 갔다). `deleted` 도 참이다 — 받는 쪽은 사라진 것처럼 다룬다. 이름 · 칸은 싣지
+    않는다(식별자만)."""
     merged_into: str | None = None
     """다른 것에 합쳐져서 사라졌으면 이긴 쪽의 `key`. **받는 쪽이 제 참조를 옮길 수 있다.**"""
     renamed_from: str | None = None
@@ -123,10 +127,11 @@ class CorePageOut(BaseModel):
     달라도 그 사이 행이 샌다.
 
     **쪽이 남아 있으면(`next` 가 있으면) `null` 이다** — 끝까지 받은 뒤에만 시계를 옮긴다.
-    안 그러면 중간에서 멈춘 쪽이 남은 쪽을 영영 안 받는다."""
+    안 그러면 중간에서 멈춘 쪽이 남은 쪽을 영영 안 받는다. 쪽을 넘겨 받았으면 **첫 쪽을 부른
+    때의 시계**다 — 쪽을 넘기는 사이에 커밋된 긴 적재를 다음 주기에 받게."""
     since: str | None = None
     next: str | None = None
-    """다음 쪽의 커서. 없으면 끝이다."""
+    """다음 쪽의 커서 — **그대로 돌려준다**(모양은 약속이 아니다). 없으면 끝이다."""
     items: list[CoreRowOut]
 
 

@@ -28,12 +28,30 @@ import {
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
+/** 값 하나를 한 줄로 — 객체 · 목록은 JSON 으로(`[object Object]` 가 되지 않게). */
+function shown(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+/** 고치기 기록인가 — `{before, after}` 꼴. 감사 기록이 다 이 꼴은 아니다. */
+function isDiff(value: unknown): value is { before?: unknown; after?: unknown } {
+  return (
+    typeof value === 'object' && value !== null && ('before' in value || 'after' in value)
+  )
+}
+
 function shownChanges(changes: AuditEntry['changes']): string {
   // `_` 로 시작하는 키는 기록에 붙인 표식(묶음 번호 등)이다 — 칸이 아니다.
-  const parts = Object.entries(changes)
+  // **모든 기록이 `{before, after}` 꼴은 아니다** — 수 · 목록 · null 도 온다(홈 게시의
+  // `split: null` 에서 `null.before` 로 화면 전체가 죽었다, 2026-10-08).
+  const parts = Object.entries(changes ?? {})
     .filter(([key]) => !key.startsWith('_'))
-    .map(
-      ([key, value]) => `${key}: ${String(value.before ?? '—')} -> ${String(value.after ?? '—')}`,
+    .map(([key, value]) =>
+      isDiff(value)
+        ? `${key}: ${shown(value.before)} -> ${shown(value.after)}`
+        : `${key}: ${shown(value)}`,
     )
   return parts.join(', ') || '—'
 }

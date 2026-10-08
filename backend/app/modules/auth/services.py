@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import functools
 import time
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -95,13 +96,30 @@ def _note_failure(db: Session, user: User) -> float:
     return delay
 
 
-def authenticate(db: Session, email: str, password: str) -> User:
-    user = db.scalar(select(User).where(User.email == email.lower()))
+def normalize_login_id(email: str) -> str:
+    """로그인 아이디를 저장 · 조회하는 모양 — 앞뒤 공백을 떼고 소문자로.
 
-    # 계정이 없을 때도 해시 비교를 한 번 수행해 **응답 시간으로 계정 존재 여부가
-    # 새지 않게** 한다.
+    가입 · 관리자 생성 · 로그인이 **이 하나를 함께 쓴다.** 로그인만 소문자로 바꾸고 공백은
+    안 뗐을 때, 붙여 넣다 딸려 온 공백 하나로 「비밀번호가 올바르지 않습니다」 가 났다
+    (2026-10-08) — 비밀번호를 몇 번 다시 쳐 본 사람은 결국 늦추기에 걸린다.
+    """
+    return email.strip().lower()
+
+
+@functools.cache
+def _dummy_hash() -> str:
+    """없는 계정에 견줄 해시. **한 번만 만든다** — 실제 계정과 같은 라운드다."""
+    return security.hash_password("no-such-account")
+
+
+def authenticate(db: Session, email: str, password: str) -> User:
+    user = db.scalar(select(User).where(User.email == normalize_login_id(email)))
+
+    # 계정이 없을 때도 해시 비교를 **한 번만** 수행해 응답 시간으로 계정 존재 여부가
+    # 새지 않게 한다. ⚠️ 여기서 해시를 새로 만들면(bcrypt 한 번 더) 없는 계정 쪽이 두 배
+    # 느려져 거꾸로 새었다(2026-10-08) — 미리 만든 것과 견준다.
     if user is None:
-        security.verify_password(password, security.hash_password("dummy"))
+        security.verify_password(password, _dummy_hash())
         raise AppError(code("AUTH", 1), _INVALID_LOGIN, status=401)
 
     if not security.verify_password(password, user.password_hash):
@@ -132,7 +150,7 @@ def issue_session(db: Session, user: User, user_agent: str | None) -> tuple[str,
         )
     )
     db.commit()
-    access, expires_in = security.create_access_token(user.id)
+    access, expires_in = security.create_access_token(user.id, user.session_epoch)
     return access, expires_in, raw
 
 
@@ -174,7 +192,17 @@ def rotate_refresh(
         just_rotated = _now() - token.revoked_at <= REFRESH_GRACE
         if replacement is not None and just_rotated and replacement.revoked_at is None:
             token = replacement
+        elif replacement is None:
+            # **회전이 아니라 끊어서 폐기된 것**(로그아웃 · 비밀번호 변경 · 초기화 · 정지)
+            # 이다 — 그 기기가 늦게 갱신을 물어 온 것뿐이다. 탈취로 보고 전부 끊으면,
+            # 비밀번호를 바꾼 뒤 새로 로그인한 세션까지 옛 기기의 갱신 한 번에
+            # 끊겼다(2026-10-08).
+            raise AppError(
+                code("AUTH", 3), "세션이 만료되었습니다. 다시 로그인해 주세요.", status=401
+            )
         else:
+            # 회전으로 이미 넘겨진 값이 유예를 지나 다시 왔다 — 사슬이 둘로 갈렸다(탈취).
+            # 그 사람의 로그인을 전부 끊는다(이미 받은 access 까지).
             revoke_all_for_user(db, token.user_id)
             raise AppError(
                 code("AUTH", 5),
@@ -208,7 +236,7 @@ def rotate_refresh(
     token.replaced_by_id = new_token.id
     db.commit()
 
-    access, expires_in = security.create_access_token(user.id)
+    access, expires_in = security.create_access_token(user.id, user.session_epoch)
     return user, access, expires_in, new_raw
 
 
@@ -221,14 +249,41 @@ def revoke_refresh(db: Session, raw: str) -> None:
         db.commit()
 
 
-def revoke_all_for_user(db: Session, user_id: uuid.UUID) -> None:
+def revoke_sessions(db: Session, user_id: uuid.UUID) -> int:
+    """그 사람의 로그인을 모두 끊는다 — 살아 있는 refresh 를 폐기하고 몇 개였는지 돌려준다.
+    **이미 받은 access 토큰도** 함께 무효가 된다(`User.session_epoch` 를 올린다).
+
+    **커밋하지 않는다** — 정지 · 삭제 · 초기화는 폐기와 그 감사 기록이 한 트랜잭션이다.
+    """
+    now = _now()
+    user = db.get(User, user_id)
+    if user is not None:
+        user.session_epoch = User.session_epoch + 1  # 동시에 둘이 끊어도 하나를 잃지 않게
     tokens = db.scalars(
         select(RefreshToken).where(
             RefreshToken.user_id == user_id, RefreshToken.revoked_at.is_(None)
         )
     ).all()
     for token in tokens:
-        token.revoked_at = _now()
+        token.revoked_at = now
+    return len(tokens)
+
+
+def revoke_pats(db: Session, user_id: uuid.UUID) -> int:
+    """그 사람의 살아 있는 개인 토큰을 모두 폐기한다. 커밋하지 않는다(위와 같다)."""
+    now = _now()
+    pats = db.scalars(
+        select(PersonalAccessToken).where(
+            PersonalAccessToken.user_id == user_id, PersonalAccessToken.revoked_at.is_(None)
+        )
+    ).all()
+    for pat in pats:
+        pat.revoked_at = now
+    return len(pats)
+
+
+def revoke_all_for_user(db: Session, user_id: uuid.UUID) -> None:
+    revoke_sessions(db, user_id)
     db.commit()
 
 

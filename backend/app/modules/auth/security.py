@@ -83,8 +83,9 @@ def new_pat() -> tuple[str, str, str]:
     return raw, raw[: len(prefix) + 6], hash_token(raw)
 
 
-def create_access_token(user_id: uuid.UUID) -> tuple[str, int]:
-    """(JWT, 만료까지 초). access 는 짧게 살고 폐기하지 않는다 — 폐기는 refresh 의 몫."""
+def create_access_token(user_id: uuid.UUID, epoch: int = 0) -> tuple[str, int]:
+    """(JWT, 만료까지 초). 토큰 하나하나를 폐기하지는 않는다 — 그 사람의 로그인을 통째로 끊을
+    때는 세대(`epoch`, `User.session_epoch`)를 올려, 그 전에 받은 것을 한꺼번에 무효로 한다."""
     settings = get_settings()
     ttl = timedelta(minutes=settings.access_token_minutes)
     now = datetime.now(UTC)
@@ -93,6 +94,7 @@ def create_access_token(user_id: uuid.UUID) -> tuple[str, int]:
         "iat": int(now.timestamp()),
         "exp": int((now + ttl).timestamp()),
         "typ": "access",
+        "sep": epoch,
     }
     token = jwt.encode(payload, settings.jwt_secret, algorithm="HS256")
     return token, int(ttl.total_seconds())

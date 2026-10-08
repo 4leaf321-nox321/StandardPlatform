@@ -393,6 +393,7 @@
           "accounts"
         ],
         "summary": "List Accounts",
+        "description": "계정 목록 — **`total` 을 함께 준다**(다른 목록과 같은 `Page` 모양).\n\n맨 리스트로 주던 때는 화면이 처음 50명만 그리고 끝이었다 — 쪽을 넘길 근거(전체 수)가\n없어서다. 그리고 목록은 잘렸다는 말을 안 하므로 관리자는 그것이 전부라고 읽었다\n(2026-10-08).",
         "operationId": "list_accounts_api_accounts_get",
         "parameters": [
           {
@@ -442,11 +443,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/AccountOut"
-                  },
-                  "title": "Response List Accounts Api Accounts Get"
+                  "$ref": "#/components/schemas/Page_AccountOut_"
                 }
               }
             }
@@ -2891,7 +2888,7 @@
           "files"
         ],
         "summary": "Upload With Ticket",
-        "description": "표로 올린다 — **토큰 없이**, 본문이 곧 파일이다(multipart 아님).\n\n본문을 흘려 받으며 크기를 센다 — 상한을 넘는 순간 끊는다(다 받고 나서 재지 않는다).",
+        "description": "표로 올린다 — **토큰 없이**, 본문이 곧 파일이다(multipart 아님).\n\n**표부터 본다** — 표가 곧 자격이라, 안 되는 표면 본문을 한 바이트도 받지 않는다. 그다음\n밝힌 크기(`Content-Length`)가 상한을 넘으면 역시 받기 전에 끊고, 안 밝힌 본문은 흘려\n받으며 세다가 상한을 넘는 순간 끊는다(다 받고 나서 재지 않는다).",
         "operationId": "upload_with_ticket_api_attachments_upload_put",
         "parameters": [
           {
@@ -2983,7 +2980,7 @@
           "audit"
         ],
         "summary": "List Entries",
-        "description": "무엇이 바뀌었는가.\n\n부서 관리자도 본다 — 자기 부서의 자료가 왜 사라졌는지 물을 사람은 시스템\n관리자가 아니라 그 부서다.",
+        "description": "무엇이 바뀌었는가.\n\n부서 관리자도 본다 — 자기 부서의 자료가 왜 사라졌는지 물을 사람은 시스템\n관리자가 아니라 그 부서다. 그래서 **부서 관리자는 자기가 관리자인 부서의 기록만**\n본다(`workspace_id`). 예전에는 어느 부서든 관리자이기만 하면 모든 부서의 기록 —\n남의 부서 객체 이름 · 바뀐 값 · 계정 일까지 — 이 다 보였다(2026-10-08). 부서가 없는\n기록(전역 자료 · 계정 · 정의)은 시스템 관리자의 일이라 시스템 관리자만 본다.",
         "operationId": "list_entries_api_audit_entries_get",
         "parameters": [
           {
@@ -5432,7 +5429,7 @@
           "ontology"
         ],
         "summary": "Property Usage",
-        "description": "**지우기 전에 무엇이 사라지는지.** 화면의 확인 창이 이것을 읽어 말한다.",
+        "description": "**지우기 전에 무엇이 사라지는지.** 화면의 확인 창이 이것을 읽어 말한다.\n\n수신 시스템(연동 토큰 이름 · 마지막 사용일)은 **시스템 관리자에게만** 싣는다 — 그 목록은\n`core-status` 가 바로 그 까닭으로 시스템 관리자 전용이다. 일반 사용자에게는 열려 있다는\n것(`core_open`)만 간다(2026-10-08 — 모든 사용자가 남의 토큰 이름을 읽었다).",
         "operationId": "property_usage_api_ontology_types__slug__properties__key__usage_get",
         "parameters": [
           {
@@ -9745,6 +9742,148 @@
               "type": "string",
               "title": "Slug"
             }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/metrics/{slug}/home": {
+      "get": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Metric Home Pins",
+        "description": "이 지표가 올라간 부서 홈들.",
+        "operationId": "metric_home_pins_api_metrics__slug__home_get",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/HomePinOut"
+                  },
+                  "title": "Response Metric Home Pins Api Metrics  Slug  Home Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Pin Metric Home",
+        "description": "부서 홈에 올린다 — **그 부서의 관리자만**(뷰를 홈에 올리는 것과 같다). 홈에서는 지표의\n추이가 그림으로 서고, 누르면 지표 화면으로 간다.",
+        "operationId": "pin_metric_home_api_metrics__slug__home_put",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HomePinIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HomePinOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "metrics"
+        ],
+        "summary": "Unpin Metric Home",
+        "operationId": "unpin_metric_home_api_metrics__slug__home_delete",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "부서 slug",
+              "title": "Workspace"
+            },
+            "description": "부서 slug"
           }
         ],
         "responses": {
@@ -20968,6 +21107,11 @@
             "title": "Deleted",
             "default": false
           },
+          "hidden": {
+            "type": "boolean",
+            "title": "Hidden",
+            "default": false
+          },
           "merged_into": {
             "anyOf": [
               {
@@ -24632,10 +24776,155 @@
         ],
         "title": "HistoryOut"
       },
+      "HomeMetricOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "metric_slug": {
+            "type": "string",
+            "title": "Metric Slug"
+          },
+          "metric_label": {
+            "type": "string",
+            "title": "Metric Label"
+          },
+          "split": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split"
+          },
+          "home_order": {
+            "type": "integer",
+            "title": "Home Order"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "metric_slug",
+          "metric_label",
+          "split",
+          "home_order"
+        ],
+        "title": "HomeMetricOut",
+        "description": "부서 홈에 올린 지표 하나 — 값은 화면이 지표의 추이(`/metrics/<slug>/series`)로\n읽는다."
+      },
+      "HomePinIn": {
+        "properties": {
+          "workspace_slug": {
+            "type": "string",
+            "maxLength": 32,
+            "minLength": 1,
+            "title": "Workspace Slug"
+          },
+          "split": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 32
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split"
+          },
+          "position": {
+            "anyOf": [
+              {
+                "type": "integer",
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Position"
+          }
+        },
+        "type": "object",
+        "required": [
+          "workspace_slug"
+        ],
+        "title": "HomePinIn",
+        "description": "부서 홈에 올린다 — 이미 있으면 나눌 기준 · 자리만 고친다."
+      },
+      "HomePinOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "workspace_slug": {
+            "type": "string",
+            "title": "Workspace Slug"
+          },
+          "workspace_name": {
+            "type": "string",
+            "title": "Workspace Name"
+          },
+          "split": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split"
+          },
+          "home_order": {
+            "type": "integer",
+            "title": "Home Order"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "workspace_slug",
+          "workspace_name",
+          "split",
+          "home_order"
+        ],
+        "title": "HomePinOut"
+      },
       "HomeWidgetOut": {
         "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind",
+            "default": "view"
+          },
           "view": {
-            "$ref": "#/components/schemas/SavedViewOut"
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SavedViewOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "metric": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/HomeMetricOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "type_label": {
             "type": "string",
@@ -24656,14 +24945,13 @@
         },
         "type": "object",
         "required": [
-          "view",
           "type_label",
           "icon",
           "workspace_slug",
           "workspace_name"
         ],
         "title": "HomeWidgetOut",
-        "description": "부서 홈에 올라간 뷰 하나. 홈 화면은 타입을 모르므로 **여기서 다 실어 준다.**"
+        "description": "부서 홈에 올라간 것 하나 — **저장된 뷰이거나 지표다**(`kind`). 홈 화면은 타입을 모르므로\n여기서 다 실어 준다. 둘은 한 줄에 선다(자리 값을 함께 매긴다)."
       },
       "HomeWorkspaceRequest": {
         "properties": {
@@ -25334,6 +25622,18 @@
               }
             ],
             "title": "Requested By Name"
+          },
+          "requested_by_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Requested By Id"
           },
           "workspace_slug": {
             "anyOf": [
@@ -27178,6 +27478,37 @@
             "additionalProperties": true,
             "type": "object",
             "title": "Stats"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode",
+            "default": "full"
+          },
+          "periods": {
+            "anyOf": [
+              {
+                "items": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Periods"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note",
+            "default": ""
           }
         },
         "type": "object",
@@ -29396,6 +29727,37 @@
           "offset"
         ],
         "title": "Page[AccessLogOut]"
+      },
+      "Page_AccountOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AccountOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "Page[AccountOut]"
       },
       "Page_AuditEntryOut_": {
         "properties": {

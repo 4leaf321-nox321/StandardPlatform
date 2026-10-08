@@ -165,7 +165,8 @@ export interface AuditEntry {
   target_table: string
   target_id: string | null
   target_label: string
-  changes: Record<string, { before?: unknown; after?: unknown }>
+  /** 감사 기록마다 모양이 다르다 — 고치기는 `{before, after}`, 나머지는 수 · 목록 · null 도. */
+  changes: Record<string, unknown>
   reason: string | null
   /** 접근 로그·파일 로그와 잇는 끈. */
   request_id: string | null

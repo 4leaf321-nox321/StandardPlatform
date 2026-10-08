@@ -122,6 +122,20 @@ def open_owner_clause(
     return or_(column.is_(None), column.in_(opened), column.in_(mine))
 
 
+def editable_owner_clause(
+    user: User, column: InstrumentedAttribute[uuid.UUID | None]
+) -> ColumnElement[bool]:
+    """고칠 수 있는 것만 — `require_owner_edit` 를 질의로. 전역은 시스템 관리자만, 부서 것은
+    그 부서의 관리자만. **보이는 것(`visible_owner_clause`)과 다른 축이다** — 여럿을 한 번에
+    고치는 자리가 보이는 것으로 고르면, 고칠 수 없는 것까지 고친다."""
+    if user.is_system_admin:
+        return true()
+    managed = select(WorkspaceMember.workspace_id).where(
+        WorkspaceMember.user_id == user.id, WorkspaceMember.role == "manager"
+    )
+    return column.in_(managed)
+
+
 def resolve_owner_workspace(
     db: Session, user: User, slug: str | None, *, what: str, code_value: str
 ) -> uuid.UUID | None:

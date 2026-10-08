@@ -15,8 +15,13 @@ from urllib.parse import parse_qs
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from app.modules.datasources import services
+from app.modules.datasources import odata, services
+from app.modules.datasources.models import DataSource
+from app.shared import singleton
+from app.shared.errors import AppError
 from tests.api.conftest import Signed, finish_job
 from tests.api.test_ontology import _make_property, _make_type
 
@@ -51,9 +56,15 @@ class FakeCore:
         self.edges_reset = False
         self.requests: list[httpx.Request] = []
         self.token = "Bearer sibling-token"
+        #: 참이면 SSO 앞단처럼 로그인 화면(HTML)을 200 으로 준다.
+        self.login_page = False
+        #: 선 창구가 돌려줄 HTTP 상태 — 500 이면 선만 못 받는다.
+        self.edges_status = 200
 
     def __call__(self, request: httpx.Request) -> httpx.Response:
         self.requests.append(request)
+        if self.login_page:
+            return httpx.Response(200, text="<html><body>사내 로그인</body></html>")
         if request.headers.get("Authorization") != self.token:
             return httpx.Response(401, json={"error": {"message": "범위가 없습니다"}})
         if request.url.path.endswith("/core"):
@@ -108,8 +119,15 @@ class FakeCore:
         )
 
     def _relations(self, request: httpx.Request) -> httpx.Response:
-        """선 창구 — 객체와 같은 규칙(`since` · `as_of`), 끊긴 선은 `deleted`."""
-        if self.edges_reset:
+        """선 창구 — 객체와 같은 규칙(`since` · `as_of`), 끊긴 선은 `deleted`. reset 은 진짜
+        코어처럼 **시계를 준 물음에만** 보낸다(빈 시계는 처음부터 받는 것이라 보낼 까닭이
+        없다 — `coreapi/services.py`)."""
+        if self.edges_status != 200:
+            return httpx.Response(
+                self.edges_status, json={"error": {"message": "선 창구 고장"}}
+            )
+        since = parse_qs(request.url.query.decode()).get("since", [""])[0]
+        if self.edges_reset and since:
             return httpx.Response(
                 200,
                 json={
@@ -120,18 +138,21 @@ class FakeCore:
                     "reset_reason": "30일보다 오래된 시점부터는 끊긴 선을 알려 줄 수 없습니다",
                 },
             )
-        since = parse_qs(request.url.query.decode()).get("since", [""])[0]
         rows = [one for one in self.edges if not since or one["updated_at"] > since]
         if not since:
             rows = [one for one in rows if not one.get("deleted")]
+        query = parse_qs(request.url.query.decode())
+        limit = int(query.get("limit", ["500"])[0])
+        start = int(query.get("cursor", ["0"])[0])
+        more = start + limit < len(rows)
         return httpx.Response(
             200,
             json={
                 "type_slug": "vendor",
                 "since": since or None,
-                "as_of": self.edges_as_of,
-                "next": None,
-                "items": rows,
+                "as_of": None if more else self.edges_as_of,
+                "next": str(start + limit) if more else None,
+                "items": rows[start : start + limit],
             },
         )
 
@@ -444,14 +465,52 @@ def test_선은_reset_을_받으면_처음부터_다시_받는다(
     source = _source(client, admin, vendor, options={"relations": True})
     assert _sync(client, admin, source["slug"])["counts"]["relations_create"] == 1
 
-    # 상대가 reset 을 보낸다.
+    before = client.get(f"/api/datasources/{source['slug']}", headers=admin.headers).json()
+
+    # 상대가 reset 을 보낸다. **미리 보기는 그 신호를 먹지 않는다** — 예전에는 계획이 시계를
+    # 비우고 커밋해, 상대가 빈 시계에는 reset 을 안 보내니 다음 적용이 「더하기」 로 받아
+    # 「파일대로 맞춤」 이 영영 안 일어났다(2026-10-08).
     sibling.edges_reset = True
+    sibling.edges_as_of = "2026-09-03T12:00:00.000000Z"
+    planned = _sync(client, admin, source["slug"], apply=False)
+    assert any("처음부터 다시" in one for one in planned["run"]["errors"])
+    saved = client.get(f"/api/datasources/{source['slug']}", headers=admin.headers).json()
+    assert saved["relations_since_mark"] == before["relations_since_mark"] != ""
+
     reset = _sync(client, admin, source["slug"])
     assert any("처음부터 다시" in one for one in reset["run"]["errors"]), reset["run"][
         "errors"
     ]
+    # 맞춤이 끝나면 새 시계로 — 다음부터는 바뀐 것만.
+    saved = client.get(f"/api/datasources/{source['slug']}", headers=admin.headers).json()
+    assert saved["relations_since_mark"] == "2026-09-03T12:00:00.000000Z"
 
-    # 시계가 비워졌다 — 다음 실행이 전량을 받는다.
+
+def test_선_계획_전체가_거절되면_시계를_안_옮긴다(
+    client: TestClient, admin: Signed, sibling: FakeCore
+) -> None:
+    """한 번에 넣는 상한을 넘거나 모르는 열이 오면 계획 **전체**가 거절된다 — 줄이 하나도
+    없어 `relations_error` 셈은 0 이다. 셈만 보던 때는 그것을 성공으로 알고 시계를 옮겨 그
+    증분의 선을 영영 놓쳤다(2026-10-08)."""
+    vendor = _vendor_type(client, admin)
+    kind = _partner_kind(client, admin, vendor)
+    sibling.edges = [
+        {
+            "src": "V-001",
+            "relation": kind,
+            "dst": "V-002",
+            "dst_type": "vendor",
+            "updated_at": "2026-09-02T00:00:00.000000Z",
+            "deleted": False,
+            # 이쪽 관계 종류에 없는 속성 — 「모르는 열」
+            "properties": {"weight_kg": 3},
+        }
+    ]
+    source = _source(client, admin, vendor, options={"relations": True})
+    done = _sync(client, admin, source["slug"])
+    # 객체는 들어가도 선이 거절됐으면 실행은 「실패」 다 — 「ok」 면 선이 빠진 줄 모른다.
+    assert done["run"]["status"] == "failed", done["run"]
+    assert any("모르는 열" in one for one in done["run"]["errors"]), done["run"]["errors"]
     saved = client.get(f"/api/datasources/{source['slug']}", headers=admin.headers).json()
     assert saved["relations_since_mark"] == ""
 
@@ -610,3 +669,196 @@ def test_필수_칸은_상대가_비워도_비우지_않는다(
     listed = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["items"]
     one = next(row for row in listed if row["key"] == "V-001")
     assert one["properties"]["rating"] == 92
+
+
+# --- 많이 와서 끊길 때 — 받은 만큼 넣고 끊은 자리에서 잇는다 --------------------------------
+
+
+def _item(key: str, label: str, at: str, **extra: Any) -> dict[str, Any]:
+    return {
+        "key": key,
+        "label": label,
+        "status": "active",
+        "updated_at": at,
+        "deleted": False,
+        "properties": {},
+        **extra,
+    }
+
+
+def _saved(client: TestClient, admin: Signed, slug: str) -> dict[str, Any]:
+    return dict(client.get(f"/api/datasources/{slug}", headers=admin.headers).json())
+
+
+def test_상한에서_끊기면_받은_만큼_넣고_다음_차례가_끊은_자리에서_잇는다(
+    client: TestClient, admin: Signed, sibling: FakeCore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """예전에는 끊기면 시계도 자리도 안 남겨, 다음 차례가 같은 `since` 로 같은 5만 행을 다시
+    받아 **영영 앞으로 못 갔다** — 안내는 「`$filter` 로 나눠」 였는데 코어 소스는 그 칸을
+    쓰지도 않는다(2026-10-08)."""
+    monkeypatch.setattr(odata, "MAX_ROWS", 3)
+    vendor = _vendor_type(client, admin)
+    sibling.items = [
+        _item(f"V-00{n}", f"공급사 {n}", f"2026-09-0{n}T00:00:00.000000Z") for n in range(1, 6)
+    ]
+    source = _source(client, admin, vendor, page_size=2)
+
+    first = _sync(client, admin, source["slug"])
+    assert first["run"]["status"] == "ok", first["run"]
+    assert first["counts"]["create"] == 4, first["counts"]  # 쪽 경계(2행씩)에서 끊는다
+    assert any("끊은 자리에서 잇습니다" in one for one in first["run"]["errors"])
+    saved = _saved(client, admin, source["slug"])
+    assert saved["since_mark"] == ""  # 다 받기 전에는 시계를 안 옮긴다
+    assert not any(key.startswith("_") for key in saved["options"])  # 화면의 설정이 아니다
+
+    first_clock = sibling.as_of
+    sibling.as_of = "2026-09-09T12:00:00.000000Z"  # 그 사이 상대의 시계가 갔다
+    second = _sync(client, admin, source["slug"])
+    assert second["run"]["status"] == "ok", second["run"]
+    assert second["counts"]["create"] == 1, second["counts"]
+    assert any(
+        parse_qs(one.url.query.decode()).get("cursor") == ["4"] for one in sibling.requests
+    )
+    assert sorted(_rows(client, admin, vendor)) == [f"V-00{n}" for n in range(1, 6)]
+    # 다 받은 뒤의 시계는 **처음 끊었을 때 상대의 시계** — 여러 차례에 걸쳐 받는 사이 늦게
+    # 커밋된 것 · 받은 뒤에 지워진 것을 그 시계에서 다시 받는다.
+    assert _saved(client, admin, source["slug"])["since_mark"] == first_clock
+
+
+def test_선도_상한에서_끊기면_받은_만큼_넣고_다음_차례가_잇는다(
+    client: TestClient, admin: Signed, sibling: FakeCore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """선 쪽도 같았다 — 끊기면 시계를 그대로 두어, 다음 차례가 같은 줄만 다시 받고 「다음
+    동기화가 같은 자리에서 잇습니다」 는 사실이 아니었다(2026-10-08)."""
+    monkeypatch.setattr(odata, "MAX_ROWS", 3)
+    vendor = _vendor_type(client, admin)
+    kind = _partner_kind(client, admin, vendor)
+    sibling.items = [
+        _item(f"V-00{n}", f"공급사 {n}", f"2026-09-0{n}T00:00:00.000000Z") for n in range(1, 5)
+    ]
+    sibling.edges = [
+        _edge(src, kind, dst, "2026-09-02T00:00:00.000000Z")
+        for src, dst in (
+            ("V-001", "V-002"),
+            ("V-001", "V-003"),
+            ("V-001", "V-004"),
+            ("V-002", "V-003"),
+            ("V-002", "V-004"),
+        )
+    ]
+    source = _source(client, admin, vendor, page_size=2, options={"relations": True})
+
+    first = _sync(client, admin, source["slug"])
+    assert first["run"]["status"] == "ok", first["run"]
+    assert first["counts"]["create"] == 4 and first["counts"]["relations_create"] == 4
+    assert any("4줄까지" in one for one in first["run"]["errors"]), first["run"]["errors"]
+    assert _saved(client, admin, source["slug"])["relations_since_mark"] == ""
+
+    second = _sync(client, admin, source["slug"])
+    assert second["counts"]["relations_create"] == 1, second["counts"]
+    assert _saved(client, admin, source["slug"])["relations_since_mark"] == sibling.edges_as_of
+
+
+def test_로그인_화면이_JSON_대신_오면_무엇이_왔는지_기록에_남긴다(
+    client: TestClient, admin: Signed, sibling: FakeCore
+) -> None:
+    """SSO 앞단은 로그인 화면(HTML)을 200 으로 준다. 예전에는 `JSONDecodeError` 가 작업을
+    통째로 죽여 실행 기록도 `last_status` 도 안 남았다(2026-10-08)."""
+    vendor = _vendor_type(client, admin)
+    source = _source(client, admin, vendor)
+    sibling.login_page = True
+    done = _sync(client, admin, source["slug"])
+    assert done["run"]["status"] == "failed", done["run"]
+    said = " ".join(done["run"]["errors"])
+    assert "JSON 이 아닙니다" in said and "사내 로그인" in said
+    assert _saved(client, admin, source["slug"])["last_status"] == "failed"
+
+
+def test_선_창구에_못_닿아도_객체와_외부_식별자는_남고_실행은_실패로_적힌다(
+    client: TestClient, admin: Signed, sibling: FakeCore
+) -> None:
+    """선 창구의 연결 오류가 예외로 빠져나가면 마지막 커밋(외부 식별자 · 객체의 시계)이
+    롤백되고 기록은 「계획 · 미완료」 로 남았다 — 다음 동기화가 같은 객체를 이름으로 다시
+    찾거나 새로 만들었다(2026-10-08)."""
+    vendor = _vendor_type(client, admin)
+    sibling.edges_status = 500
+    source = _source(client, admin, vendor, options={"relations": True})
+    done = _sync(client, admin, source["slug"])
+    assert done["run"]["status"] == "failed" and done["run"]["applied"] is True, done["run"]
+    assert any("선을 받지 못했습니다" in one for one in done["run"]["errors"])
+    listed = client.get(f"/api/objects/{vendor}", headers=admin.headers).json()["items"]
+    assert {one["key"]: one["external_ids"] for one in listed} == {
+        "V-001": {source["slug"]: "V-001"},
+        "V-002": {source["slug"]: "V-002"},
+    }
+    saved = _saved(client, admin, source["slug"])
+    assert saved["last_status"] == "failed"
+    assert saved["since_mark"] == sibling.as_of and saved["relations_since_mark"] == ""
+
+    # 고쳐지면 다음 차례가 선을 받는다 — 객체를 새로 만들지 않는다.
+    sibling.edges_status = 200
+    again = _sync(client, admin, source["slug"])
+    assert again["run"]["status"] == "ok", again["run"]
+    assert again["counts"]["create"] == 0
+
+
+def test_지웠다_같은_키로_다시_만들면_산_것이_이긴다(
+    client: TestClient, admin: Signed, sibling: FakeCore
+) -> None:
+    """한 증분에 무덤과 산 행이 함께 온다. 예전에는 산 행으로 고친 객체를 무덤이 곧바로
+    사용 중지했다(2026-10-08)."""
+    vendor = _vendor_type(client, admin)
+    source = _source(client, admin, vendor)
+    _sync(client, admin, source["slug"])
+
+    sibling.items[1] = _item("V-002", "Altair", "2026-09-03T00:00:00.000000Z", deleted=True)
+    sibling.items.append(_item("V-002", "Altair (새로)", "2026-09-03T01:00:00.000000Z"))
+    sibling.as_of = "2026-09-04T12:00:00.000000Z"
+    done = _sync(client, admin, source["slug"])
+    assert done["counts"]["deprecated"] == 0, done["counts"]
+    assert _rows(client, admin, vendor)["V-002"] == "active"
+
+
+def test_기다리던_선이_넣을_수_없게_되면_빼고_나머지를_막지_않는다(
+    client: TestClient, admin: Signed, sibling: FakeCore
+) -> None:
+    """기다리던 줄이 그 사이 오류 줄이 되면(관계 종류가 지워짐) 그 한 줄이 계획 전체를
+    막았고, 그 줄은 적용에 성공해야만 빠지므로 **그 소스의 선이 영영 안 섰다**(2026-10-08)."""
+    vendor = _vendor_type(client, admin)
+    kind = _partner_kind(client, admin, vendor)
+    doomed = _partner_kind(client, admin, vendor)
+    sibling.edges = [_edge("V-001", doomed, "V-404", "2026-09-02T00:00:00.000000Z")]
+    source = _source(client, admin, vendor, options={"relations": True})
+    assert _sync(client, admin, source["slug"])["counts"]["relations_waiting"] == 1
+
+    gone = client.delete(f"/api/ontology/relation-types/{doomed}", headers=admin.headers)
+    assert gone.status_code == 204, gone.text
+    sibling.edges = [_edge("V-001", kind, "V-002", "2026-09-03T00:00:00.000000Z")]
+    sibling.edges_as_of = "2026-09-03T12:00:00.000000Z"
+    after = _sync(client, admin, source["slug"])
+    assert after["run"]["status"] == "ok", after["run"]
+    assert after["counts"]["relations_create"] == 1, after["counts"]
+    assert any("더 기다리지 않습니다" in one for one in after["run"]["errors"])
+    saved = _saved(client, admin, source["slug"])
+    assert saved["relations_waiting"] == 0
+    assert saved["relations_since_mark"] == sibling.edges_as_of
+
+
+def test_같은_소스의_적용은_한_곳에서만_돈다(
+    client: TestClient, admin: Signed, sibling: FakeCore, db: Session
+) -> None:
+    """둘이 함께 돌면 같은 새 행을 둘 다 만들고, 늦은 쪽은 외부 식별자의 유일 제약에서
+    터진다 — 그 사이 같은 객체가 둘이 된다(2026-10-08). 계획은 아무것도 안 바꾸므로 막지
+    않는다."""
+    vendor = _vendor_type(client, admin)
+    source = _source(client, admin, vendor)
+    row = db.scalar(select(DataSource).where(DataSource.slug == source["slug"]))
+    assert row is not None
+    with singleton.held(f"datasource:{source['slug']}") as locked:
+        assert locked is not None
+        with pytest.raises(AppError) as caught:
+            services.sync(db, None, row, apply=True)
+        assert caught.value.code == services.BUSY
+        planned = services.sync(db, None, row, apply=False)
+        assert planned.run.status == "planned"
+    assert _rows(client, admin, vendor) == {}

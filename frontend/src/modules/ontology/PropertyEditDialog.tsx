@@ -129,7 +129,11 @@ export function PropertyEditDialog({
   const [pattern, setPattern] = useState(property?.pattern ?? '')
   const [imageOnly, setImageOnly] = useState(property?.accept === 'image')
   const [defaultValue, setDefaultValue] = useState(
-    property?.default_value == null ? '' : String(property.default_value),
+    property?.default_value == null
+      ? ''
+      : Array.isArray(property.default_value)
+        ? property.default_value.map(String).join(', ')
+        : String(property.default_value),
   )
   const [unique, setUnique] = useState(property?.unique ?? false)
   const [refType, setRefType] = useState(property?.ref_type_slug ?? '')
@@ -153,6 +157,9 @@ export function PropertyEditDialog({
       required,
       multi,
       sort_order: Number(sortOrder) || 0,
+      // **묶음(폼 · 상세의 섹션)은 이 창에서 안 고치지만 그대로 실어 보낸다** — 서버의 PATCH 는
+      // 통째 교체라, 빼면 이름 한 글자만 고쳐도 그 속성이 묶음에서 빠졌다(2026-10-08).
+      section: property?.section ?? '',
       min_value: NUMERIC.has(dataType) && minValue !== '' ? Number(minValue) : null,
       max_value: NUMERIC.has(dataType) && maxValue !== '' ? Number(maxValue) : null,
       decimals: NUMERIC.has(dataType) && decimals !== '' ? Number(decimals) : null,
@@ -161,7 +168,9 @@ export function PropertyEditDialog({
       // **빈 칸은 「기본값 없음」 이다.** 빈 문자열을 넣으면 그것이 기본값이 되고,
       // 그러면 필수 검사가 통과해 버린다. 공통 속성에는 기본값 · 유일이 없다(타입마다다).
       default_value:
-        isInterface || defaultValue === '' ? null : coerceDefault(dataType, defaultValue),
+        isInterface || defaultValue === ''
+          ? null
+          : coerceDefault(dataType, defaultValue, multi),
       unique: !isInterface && UNIQUEABLE.has(dataType) ? unique : false,
       enum_options:
         dataType === 'enum'
@@ -708,7 +717,16 @@ export function PropertyEditDialog({
 }
 
 /** 기본값을 그 종류의 모양으로. **글로 저장하면 숫자 속성이 사전순으로 정렬된다.** */
-function coerceDefault(kind: DataType, raw: string): unknown {
+/** 기본값 칸의 글자 → 저장할 값. **여러 값 칸은 목록**으로 — 쉼표로 나눈다. 글자 하나로 보내면
+ * 「A, B」 가 값 하나가 되어 저장이 거절됐다(2026-10-08). */
+function coerceDefault(kind: DataType, raw: string, multi = false): unknown {
+  if (multi) {
+    return raw
+      .split(',')
+      .map((one) => one.trim())
+      .filter(Boolean)
+      .map((one) => coerceDefault(kind, one))
+  }
   if (kind === 'number') return Number(raw)
   if (kind === 'bool') return raw === 'true' || raw === '예'
   return raw

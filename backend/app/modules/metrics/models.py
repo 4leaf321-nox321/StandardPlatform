@@ -93,7 +93,12 @@ class MetricDef(Base):
     current_run_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), nullable=True
     )
-    """읽는 쪽이 보는 실행. 바꿔 끼우기 전까지 새 실행의 셀은 아무도 안 본다."""
+    """읽는 쪽이 보는 실행 — 계산 시각 · 워터마크 · 셈은 이것의 것이다. 바꿔 끼우기 전까지 새
+    실행의 셀은 아무도 안 본다."""
+    cells_run_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    """**셀이 들어 있는 실행** — 비면 `current_run_id`. 증분 계산(`incremental.py`)은 새 실행
+    기록을 남기되 셀은 이 실행의 칸을 고친다(셀 전부를 새 실행으로 옮겨 쓰면 증분의 이득이
+    사라진다). 전량 계산이 이것을 자기로 바꾼다."""
     last_run_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -129,6 +134,14 @@ class MetricRun(Base):
     status: Mapped[str] = mapped_column(
         String(20), default="running", server_default="running"
     )
+    mode: Mapped[str] = mapped_column(String(12), default="full", server_default="full")
+    """`full`(전부 다시) · `incremental`(바뀐 기간만 — `periods`)."""
+    spec_hash: Mapped[str] = mapped_column(String(64), default="", server_default="")
+    """이 실행이 센 정의의 지문 — 증분은 셀을 만든 전량 실행과 지문이 같을 때만 한다."""
+    periods: Mapped[list[Any] | None] = mapped_column(JSONB, nullable=True)
+    """증분이 다시 센 기간(`YYYY-MM-DD`, 날짜를 못 읽은 칸은 null)."""
+    note: Mapped[str] = mapped_column(String(300), default="", server_default="")
+    """전량으로 센 까닭 · 증분의 요약 — 사람이 「왜 오래 걸렸나」 를 여기서 읽는다."""
     watermark: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     """이 실행이 본 「여기까지」 — 코어 API 의 `as_of` 와 같은 규칙(아직 안 끝난 적재보다
     앞서지 않는다). 닫힌 기간 판정과 (나중의) 증분 재계산이 이것을 쓴다."""
@@ -277,6 +290,41 @@ class MetricAlertEvent(Base):
     """수 몇 개(관측 · 기대 · 비) — 화면이 다시 계산하지 않고 그린다."""
     baseline: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
     """처음 확인에서 본 것 — 알리지 않았다."""
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class HomeMetric(Base):
+    """**부서 홈에 올린 지표** — 어느 부서 홈의 몇 번째에, 무엇으로 나눠 볼지.
+
+    지표는 부서에 속하지 않는다(정의는 누구나 보고, 값은 보이는 것만 더한다). 그래서 「어느
+    부서 홈에」 를 따로 둔다. 자리(`home_order`)는 **그 부서 홈의 저장된 뷰와 같은 줄**이다 —
+    둘을 섞어 한 번에 매긴다(`objects/home.py`). 따로 매기면 뷰와 지표가 같은 자리 값을 가져
+    「위로」 가 안 움직인 것처럼 보인다.
+    """
+
+    __tablename__ = "home_metrics"
+    __table_args__ = (
+        UniqueConstraint("workspace_id", "metric_id", name="uq_home_metrics_workspace_metric"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    workspace_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("workspaces.id", ondelete="CASCADE"), index=True
+    )
+    metric_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("metric_defs.id", ondelete="CASCADE"), index=True
+    )
+    """지표를 지우면 홈에서도 내려간다 — 홈에 「없는 지표」 가 남으면 아무도 못 치운다."""
+    home_order: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    split: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    """선을 나눌 기준 이름 — 없으면 합계 한 줄."""
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

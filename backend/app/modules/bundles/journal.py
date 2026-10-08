@@ -20,6 +20,7 @@ import uuid
 from dataclasses import dataclass
 from typing import Any
 
+from sqlalchemy import inspect
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -62,11 +63,20 @@ def finish(db: Session, *, counts: dict[str, Any], label: str = "") -> uuid.UUID
     state = db.info.pop(_KEY, None)
     if not isinstance(state, _Open):
         return None
-    run = db.get(BundleRun, state.run_id)
+    # **세션의 새것부터 찾는다** — 이 세션은 스스로 flush 하지 않아(`autoflush=False`),
+    # 아무것도 안 쓴 판(무덤만 담아 바뀐 것이 없는 묶음)은 아직 DB 에 없다. `db.get` 은 그것을
+    # 못 찾아 「없다」 고 돌아섰고, 판은 커밋에 실려 빈 채로 목록에 남았다(2026-10-08).
+    run = next(
+        (one for one in db.new if isinstance(one, BundleRun) and one.id == state.run_id),
+        None,
+    ) or db.get(BundleRun, state.run_id)
     if run is None:  # pragma: no cover - 방금 넣었다
         return None
     if not state.seq:
-        db.delete(run)
+        if inspect(run).pending:
+            db.expunge(run)
+        else:
+            db.delete(run)
         return None
     run.counts = dict(counts)
     if label:

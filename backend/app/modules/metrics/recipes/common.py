@@ -7,8 +7,11 @@
 
 from __future__ import annotations
 
+import uuid
+from collections.abc import Iterable
 from typing import Any, Literal
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -16,7 +19,9 @@ from app.modules.metrics import query
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import MetricDef
 from app.modules.metrics.recipes.schemas import CaveatOut
+from app.modules.objects.models import ObjectInstance
 from app.shared.errors import AppError, code
+from app.shared.permissions import visible_owner_clause
 
 
 def refuse(number: int, message: str) -> AppError:
@@ -94,6 +99,50 @@ def dim_of(built: spec_module.Built, name: str) -> spec_module.Dim:
             f"{', '.join(one.name for one in built.dims) or '(없음)'}",
         )
     return found
+
+
+def hidden_objects(db: Session, user: User, values: Iterable[str | None]) -> set[str]:
+    """값 중 **보는 사람이 못 보는 객체**를 가리키는 것. 셀에서 온 값은 보이는 기록의 값이지만
+    요청에 적힌 값(모델 고르기 · 요약할 값 · 첫 기준 거르기)은 아무 id 나 될 수 있다 — 그
+    이름을 풀어 주면 안 보이는 부서 객체의 이름이 샜다(2026-10-08)."""
+    if user.is_system_admin:
+        return set()
+    ids: dict[uuid.UUID, str] = {}
+    for value in values:
+        if value is None:
+            continue
+        try:
+            ids[uuid.UUID(value)] = value
+        except ValueError:
+            continue
+    if not ids:
+        return set()
+    rows = db.scalars(
+        select(ObjectInstance.id).where(
+            ObjectInstance.id.in_(list(ids)),
+            ~visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+        )
+    )
+    return {ids[one] for one in rows}
+
+
+def given_labels(
+    db: Session,
+    user: User,
+    built: spec_module.Built,
+    name: str,
+    values: Iterable[str | None],
+) -> dict[str, dict[str, str]]:
+    """요청에 적힌 값의 이름 — `query.labels_for` 와 같은 모양(`query.label_of` 로 읽는다).
+    못 보는 객체는 이름을 풀지 않는다 — 받은 값 그대로 나간다."""
+    wanted = [one for one in values if one is not None]
+    hidden = hidden_objects(db, user, wanted)
+    cells = [
+        query.Cell({name: one}, None, None, None, 0, 0, None, None, None)
+        for one in wanted
+        if one not in hidden
+    ]
+    return query.labels_for(db, built, [name], cells)
 
 
 def header(

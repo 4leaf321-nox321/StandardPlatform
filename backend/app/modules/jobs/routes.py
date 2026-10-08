@@ -11,6 +11,7 @@ import json
 import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import Response
@@ -33,7 +34,7 @@ from app.modules.jobs.schemas import (
 )
 from app.modules.workspaces.models import Workspace
 from app.shared.auth import current_user, require_system_admin
-from app.shared.errors import AppError, NotFound, code
+from app.shared.errors import AppError, Forbidden, NotFound, code
 from app.shared.pagination import clamp_limit
 from app.shared.permissions import resolve_owner_workspace
 
@@ -67,6 +68,7 @@ def _out(db: Session, row: Job) -> JobOut:
         input_file_name=input_name,
         has_output=row.output_file_id is not None,
         requested_by_name=who.display_name if who else None,
+        requested_by_id=row.requested_by_id,
         workspace_slug=workspace.slug if workspace else None,
         cancel_requested=row.cancel_requested,
         attempts=row.attempts,
@@ -174,6 +176,28 @@ def create_job(
         raise AppError(code("JOBS", 16), "params 는 JSON 이어야 합니다.", status=422) from None
     if not isinstance(parsed, dict):
         raise AppError(code("JOBS", 16), "params 는 JSON 객체여야 합니다.", status=422)
+    spec = kinds.get(kind)
+    if spec is not None and not spec.public:
+        # **전용 경로가 권한 · 범위를 본다** — 여기로 들어오면 그것을 건너뛴다(일반 멤버가
+        # `bundle_export` 로 모든 부서의 객체를 받고, 쓰기 범위만 있는 토큰이 정의가 든 묶음을
+        # 적용할 수 있었다 — 2026-10-08).
+        raise Forbidden(
+            code("JOBS", 25),
+            f"{spec.label}은(는) 이 API 로 넣지 않습니다 — 그 화면(전용 경로)에서 넣으세요.",
+        )
+    if spec is not None and spec.admin_only and not user.is_system_admin:
+        # 워커가 돌릴 때도 다시 보지만(`services.run`), 넣는 순간에 거절해야 사람이 몇 분 뒤가
+        # 아니라 지금 안다.
+        raise Forbidden(code("JOBS", 24), f"{spec.label}은(는) 시스템 관리자만 돌립니다.")
+    reserved = sorted(key for key in ("apply", "needs_scope") if key in parsed)
+    if reserved:
+        # 계획 없이 곧장 적용하는 길을 막는다 — 적용은 계획을 본 뒤 `/{id}/apply` 로만.
+        raise AppError(
+            code("JOBS", 26),
+            f"{', '.join(reserved)} 는 넣을 수 없습니다 — 계획을 만든 뒤 "
+            "`POST /api/jobs/{id}/apply` 로 적용합니다.",
+            status=422,
+        )
     job = submit(
         db, user, kind=kind, params=parsed, upload=upload, workspace_slug=workspace_slug
     )
@@ -321,10 +345,15 @@ def download_output(
     stored = db.get(JobFile, job.output_file_id)
     if stored is None:
         raise NotFound(code("JOBS", 13), "결과 파일이 이미 지워졌습니다.")
+    # 이름은 둘로 — ASCII 는 옛 브라우저용, UTF-8 은 한글 이름용(머리는 latin-1 만 받는다).
+    ascii_name = stored.name.encode("ascii", "replace").decode().replace('"', "")
     return Response(
         content=stored.data,
         media_type=stored.content_type,
-        headers={"Content-Disposition": f'attachment; filename="{stored.name}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{ascii_name}"; '
+            f"filename*=UTF-8''{quote(stored.name)}"
+        },
     )
 
 

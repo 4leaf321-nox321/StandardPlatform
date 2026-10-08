@@ -7,6 +7,7 @@
 
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const accountApi = vi.hoisted(() => ({
@@ -42,15 +43,54 @@ const ACCOUNT = {
   decision_note: null,
 }
 
-async function open(account = ACCOUNT) {
-  accountApi.list.mockResolvedValue([account])
+async function open(account = ACCOUNT, { url = '/admin/accounts', total = 1 } = {}) {
+  accountApi.list.mockImplementation(async (query: { limit: number; offset: number }) => ({
+    items: [account],
+    total,
+    limit: query.limit,
+    offset: query.offset,
+  }))
   accountApi.summary.mockResolvedValue({ pending: 0, active: 1, suspended: 0 })
   workspaceApi.options.mockResolvedValue([{ slug: 'hq', name: '본사', path: '본사', depth: 0 }])
   accountApi.setSystemAdmin.mockResolvedValue({ ...account, is_system_admin: true })
   const { default: AccountsAdminPage } = await import('@/modules/accounts/AccountsAdminPage')
-  render(<AccountsAdminPage />)
+  render(
+    <MemoryRouter initialEntries={[url]}>
+      <AccountsAdminPage />
+    </MemoryRouter>,
+  )
   await waitFor(() => expect(screen.getByText('홍길동')).toBeInTheDocument())
 }
+
+describe('계정 관리 · 쪽 넘김과 상태 거르기', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('50명이 넘으면 쪽을 넘긴다 — 처음 50명이 전부로 보이지 않는다', async () => {
+    // 맨 리스트로 받던 때는 limit/offset 없이 한 번 부르고 끝이었다(2026-10-08).
+    await open(ACCOUNT, { total: 120 })
+    expect(accountApi.list).toHaveBeenLastCalledWith({ status: null, limit: 50, offset: 0 })
+    expect(screen.getByText(/120명 중 1–50/)).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /다음/ }))
+    await waitFor(() =>
+      expect(accountApi.list).toHaveBeenLastCalledWith({ status: null, limit: 50, offset: 50 }),
+    )
+  })
+
+  it('알림 링크의 ?status=pending 을 읽어 그 상태만 보인다', async () => {
+    await open({ ...ACCOUNT, status: 'pending' }, { url: '/admin/accounts?status=pending' })
+    expect(accountApi.list).toHaveBeenLastCalledWith({ status: 'pending', limit: 50, offset: 0 })
+    expect(screen.getByRole('button', { name: '승인 대기' })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    )
+
+    await userEvent.click(screen.getByRole('button', { name: '전체' }))
+    await waitFor(() =>
+      expect(accountApi.list).toHaveBeenLastCalledWith({ status: null, limit: 50, offset: 0 }),
+    )
+  })
+})
 
 describe('계정 관리 · 시스템 관리자 지정', () => {
   // 가짜는 시험마다 비운다 — 안 비우면 앞 시험의 호출이 뒤 시험의 「안 불렸다」 를 깬다.

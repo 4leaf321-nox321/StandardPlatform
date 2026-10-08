@@ -11,8 +11,15 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
+from app.database import SessionLocal
+from app.modules.objects.models import ObjectInstance
+from app.modules.ontology import retype
+from app.modules.ontology.models import ObjectType, PropertyDef
 from tests.api.conftest import Signed
 from tests.api.test_interfaces import _add_common, _code, _make_interface, _props
 from tests.api.test_ontology import _make_object, _make_property, _make_type
@@ -308,3 +315,72 @@ def test_값이_없어도_RDF_가_새_종류를_본다(client: TestClient, admin
     done = _retype(client, admin, part, "qty", data_type="text", apply=True).json()
     assert done["applied"] is True, done
     assert any(one.endswith("string") for one in range_of())
+
+
+# --- 긴 변환 중에 들어온 값 (2026-10-08) -------------------------------------------------
+
+
+def _late_world(
+    client: TestClient, admin: Signed, db: Session, monkeypatch: pytest.MonkeyPatch, value: str
+) -> tuple[str, uuid.UUID, retype.Target]:
+    """글 → 숫자 변환 하나와, **첫 덩어리를 잠근 직전에** 다른 연결이 넣는 객체 하나.
+
+    그 객체의 id 는 커서가 이미 지나간 자리(가장 작은 쪽)다 — uuid 순 커서로 도는 첫 바퀴는
+    그것을 못 본다. 예전에는 그 값이 옛 종류(글)로 남은 채 정의만 숫자로 바뀌었다.
+    """
+    part = _make_type(client, admin, label="부품", key_policy="optional")
+    _make_property(client, admin, part, key="size", label="크기", data_type="text")
+    for n in ("1", "2"):
+        _make_object(client, admin, part, label=f"부품{n}", properties={"size": n})
+    owner = db.scalars(select(ObjectType).where(ObjectType.slug == part)).one()
+    definition = db.scalars(
+        select(PropertyDef).where(
+            PropertyDef.owner_kind == "type",
+            PropertyDef.owner_id == owner.id,
+            PropertyDef.key == "size",
+        )
+    ).one()
+    target, _ = retype.target_for(owner, definition, {"data_type": "number"})
+    late_id = uuid.UUID(int=uuid.uuid4().int >> 64)  # 앞 64비트가 0 — 커서보다 늘 앞이다
+    real = retype._locked_chunk
+
+    def chunk(
+        session: Session, at: retype.Target, last: uuid.UUID | None, *, late: bool
+    ) -> list[retype.Row]:
+        rows = real(session, at, last, late=late)
+        if not late and last is None:
+            with SessionLocal() as other:
+                other.add(
+                    ObjectInstance(
+                        id=late_id,
+                        type_id=owner.id,
+                        label="늦게 온 것",
+                        properties={"size": value},
+                    )
+                )
+                other.commit()
+        return rows
+
+    monkeypatch.setattr(retype, "_locked_chunk", chunk)
+    return part, late_id, target
+
+
+def test_변환_중에_커서_뒤로_들어온_값도_바꾼다(
+    client: TestClient, admin: Signed, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    part, late_id, target = _late_world(client, admin, db, monkeypatch, "7")
+    done = retype.apply(db, None, [target])
+    assert not done.errors, done.errors
+    db.commit()
+    assert _value(client, admin, part, str(late_id), "size") == 7
+
+
+def test_변환_중에_들어온_값이_안_바뀌면_적용하지_않는다(
+    client: TestClient, admin: Signed, db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """예전에는 변환할 수 없는 값을 **조용히 건너뛰어** 옛 종류로 남겼다."""
+    part, late_id, target = _late_world(client, admin, db, monkeypatch, "큼")
+    done = retype.apply(db, None, [target])
+    assert any("큼" in one for one in done.errors), done.errors
+    db.rollback()
+    assert _value(client, admin, part, str(late_id), "size") == "큼"

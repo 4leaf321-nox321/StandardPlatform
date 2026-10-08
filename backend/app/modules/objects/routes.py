@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
 from fastapi.responses import Response
-from sqlalchemy import false, func, or_, select, true
+from sqlalchemy import false, or_, select, true
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -22,6 +22,7 @@ from app.modules.files.models import Attachment
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs import services as job_services
 from app.modules.jobs.schemas import JobOut
+from app.modules.metrics.models import MetricDef
 from app.modules.objects import (
     aliases,
     bulk,
@@ -29,6 +30,7 @@ from app.modules.objects import (
     conditions,
     graph,
     history,
+    home,
     humanedits,
     lifecycle,
     links,
@@ -74,6 +76,7 @@ from app.modules.objects.schemas import (
     GroupOptionOut,
     HistoryBatchOut,
     HistoryEntryOut,
+    HomeMetricOut,
     HomeWidgetOut,
     ImportPlanOut,
     ImportRowOut,
@@ -216,15 +219,16 @@ def _workspace_slugs(db: Session) -> dict[uuid.UUID, Workspace]:
 
 
 def _ref_labels(
-    db: Session, defs: list[PropertyDef], rows: list[ObjectInstance]
+    db: Session, user: User, defs: list[PropertyDef], rows: list[ObjectInstance]
 ) -> dict[uuid.UUID, str]:
     """이 목록이 가리키는 객체들의 이름을 **한 번에** 읽는다.
 
     행마다 물으면 목록 한 쪽에 질의가 수십 개 붙는다. 어느 키가 참조인지는
     속성 정의가 알므로, 아무 문자열이나 uuid 로 넘겨짚지 않는다. 상대가 system
-    타입이면 원 표에서 읽는다 — `system.ref_labels` 가 가른다.
+    타입이면 원 표에서 읽는다 — `system.ref_labels` 가 가른다. 보는 사람이 못 보는
+    객체는 이름을 가린다(`system.HIDDEN_LABEL`).
     """
-    return system.ref_labels(db, defs, [row.properties or {} for row in rows])
+    return system.ref_labels(db, defs, [row.properties or {} for row in rows], viewer=user)
 
 
 def _out(
@@ -645,11 +649,13 @@ def object_tree(
         ids = graph.child_ids(db, relation=relation, parent_id=parent, parent_end=parent_end)
         orphan_count = 0
     else:
+        # 뿌리 · 외톨이 · 자식 수 모두 **보이는 것만** 센다 — 남의 부서 것까지 세면 「어디에도
+        # 안 걸린 것 12」 를 눌러 9개만 나오고, 그 차이가 남의 부서에 무엇이 있는지 말한다.
         parentless = graph.parentless_ids(
-            db, relation=relation, type_id=object_type.id, parent_end=parent_end
+            db, relation=relation, type_id=object_type.id, parent_end=parent_end, user=user
         )
         counts = graph.child_counts(
-            db, relation=relation, parent_ids=parentless, parent_end=parent_end
+            db, relation=relation, parent_ids=parentless, parent_end=parent_end, user=user
         )
         roots = [one for one in parentless if counts.get(one, 0) > 0]
         orphan_ids = [one for one in parentless if counts.get(one, 0) == 0]
@@ -672,7 +678,11 @@ def object_tree(
         )
     )
     counts = graph.child_counts(
-        db, relation=relation, parent_ids=[row.id for row in rows], parent_end=parent_end
+        db,
+        relation=relation,
+        parent_ids=[row.id for row in rows],
+        parent_end=parent_end,
+        user=user,
     )
     return TreeOut(
         nodes=[
@@ -918,12 +928,8 @@ def _set_home(db: Session, user: User, row: SavedView, *, on_home: bool) -> None
     )
     if row.home_order is not None:
         return
-    last = db.scalar(
-        select(func.max(SavedView.home_order)).where(
-            SavedView.workspace_id == row.workspace_id
-        )
-    )
-    row.home_order = (last + 1) if last is not None else 0
+    # **지표와 같은 줄의 끝** — 홈에는 뷰와 지표가 함께 선다(`objects/home.py`).
+    row.home_order = home.next_order(db, row.workspace_id)
 
 
 def _move_home(db: Session, user: User, row: SavedView, position: int) -> None:
@@ -937,23 +943,7 @@ def _move_home(db: Session, user: User, row: SavedView, position: int) -> None:
     require_owner_edit(
         db, user, row.workspace_id, what="부서 홈", code_value=code("OBJECTS", 50)
     )
-    siblings = sorted(
-        (
-            one
-            for one in db.scalars(
-                select(SavedView).where(
-                    SavedView.workspace_id == row.workspace_id,
-                    SavedView.home_order.is_not(None),
-                )
-            )
-            if one.id != row.id
-        ),
-        key=lambda one: (one.home_order or 0, one.name),
-    )
-    index = max(0, min(position, len(siblings)))
-    siblings.insert(index, row)
-    for order, one in enumerate(siblings):
-        one.home_order = order
+    home.place(db, row.workspace_id, row, position)
 
 
 @router.get("/home", response_model=list[HomeWidgetOut])
@@ -983,36 +973,50 @@ def home_widgets(
     if not wanted:
         return []
     types = {row.id: row for row in db.scalars(select(ObjectType))}
-    spaces = {
-        row.id: row for row in db.scalars(select(Workspace).where(Workspace.id.in_(wanted)))
-    }
-    rows = sorted(
-        db.scalars(
-            select(SavedView).where(
-                SavedView.workspace_id.in_(wanted), SavedView.home_order.is_not(None)
-            )
-        ),
-        key=lambda one: (
-            spaces[one.workspace_id].name if one.workspace_id in spaces else "",
-            one.home_order or 0,
-            one.name,
-        ),
+    spaces = sorted(
+        db.scalars(select(Workspace).where(Workspace.id.in_(wanted))),
+        key=lambda one: one.name,
     )
+    metrics = {row.id: row for row in db.scalars(select(MetricDef))}
     out: list[HomeWidgetOut] = []
-    for row in rows:
-        object_type = types.get(row.type_id)
-        space = spaces.get(row.workspace_id) if row.workspace_id else None
-        if object_type is None or space is None:
-            continue
-        out.append(
-            HomeWidgetOut(
-                view=_view_out(db, user, row, object_type.slug),
-                type_label=object_type.label,
-                icon=object_type.icon,
-                workspace_slug=space.slug,
-                workspace_name=space.name,
+    for space in spaces:
+        # **뷰와 지표가 한 줄**이다 — 자리 값을 함께 매긴다(`objects/home.py`).
+        for row in home.items(db, space.id):
+            if isinstance(row, SavedView):
+                object_type = types.get(row.type_id)
+                if object_type is None:
+                    continue
+                out.append(
+                    HomeWidgetOut(
+                        kind="view",
+                        view=_view_out(db, user, row, object_type.slug),
+                        type_label=object_type.label,
+                        icon=object_type.icon,
+                        workspace_slug=space.slug,
+                        workspace_name=space.name,
+                    )
+                )
+                continue
+            metric = metrics.get(row.metric_id)
+            source = types.get(metric.source_type_id) if metric is not None else None
+            if metric is None or source is None:
+                continue
+            out.append(
+                HomeWidgetOut(
+                    kind="metric",
+                    metric=HomeMetricOut(
+                        id=row.id,
+                        metric_slug=metric.slug,
+                        metric_label=metric.label,
+                        split=row.split,
+                        home_order=row.home_order,
+                    ),
+                    type_label=source.label,
+                    icon=source.icon,
+                    workspace_slug=space.slug,
+                    workspace_name=space.name,
+                )
             )
-        )
     return out
 
 
@@ -1693,7 +1697,7 @@ def list_objects(
     total = count_of(db, stmt)
     found = page_rows(db, stmt, scope.list_view, total=total, limit=capped, offset=offset)
     workspaces = _workspace_slugs(db)
-    labels = _ref_labels(db, scope.defs, found)
+    labels = _ref_labels(db, user, scope.defs, found)
     names = aliases.of(db, [row.id for row in found])
     # **줄마다 제 타입** — 인터페이스 목록은 여러 타입이 섞인다(링크가 그 타입의 상세로 간다).
     slug_of = {one.id: one.slug for one in scope.types}
@@ -1884,12 +1888,14 @@ def object_profile(
     try:
         row = _visible(db, user, object_type, object_id)
     except NotFound:
-        # 합쳐져서 지워진 것이면 **어디로 갔는지 말한다** — 옛 링크가 새 것으로 간다.
+        # 합쳐져서 지워진 것이면 **어디로 갔는지 말한다** — 옛 링크가 새 것으로 간다. 지는
+        # 쪽도 **보이는 것이어야** 한다 — 메시지가 그 이름을 싣는다(남의 부서 것이면 샌다).
         merged = db.scalar(
             select(ObjectInstance).where(
                 ObjectInstance.id == object_id,
                 ObjectInstance.type_id == object_type.id,
                 ObjectInstance.merged_into_id.is_not(None),
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
             )
         )
         if merged is not None and merged.merged_into_id is not None:
@@ -1927,7 +1933,7 @@ def object_profile(
             row,
             object_type.slug,
             _workspace_slugs(db),
-            _ref_labels(db, defs, [row]),
+            _ref_labels(db, user, defs, [row]),
             aliases.of(db, [row.id]).get(row.id),
         ),
         type_label=object_type.label,
@@ -1975,7 +1981,7 @@ def create_object(
 
     defs = properties_of(db, object_type.id)
     properties = validate_properties(defs, payload.properties, apply_defaults=True)
-    require_refs_exist(db, defs, properties)
+    require_refs_exist(db, defs, properties, user=user)
     require_unique_properties(
         db, object_type, defs, properties, owner_workspace_id=owner_workspace_id
     )
@@ -2035,7 +2041,7 @@ def update_object(
         if row.key and key and row.key != key:
             # **화면에서 고쳐도 옛 식별자를 남긴다.** 파일로 바꿀 때만 남기던 때는, 화면에서
             # 고친 키가 밖에서는 처음 보는 것이라 **같은 객체가 둘**이 됐다(실측).
-            key_history.remember(row, row.key)
+            key_history.remember(row, row.key, key)
         row.key = key
     if payload.label is not None:
         row.label = payload.label
@@ -2052,7 +2058,7 @@ def update_object(
         defs = properties_of(db, object_type.id)
         merged = merge_properties(row.properties or {}, payload.properties)
         cleaned = validate_properties(defs, merged)
-        require_refs_exist(db, defs, cleaned, row.properties or {})
+        require_refs_exist(db, defs, cleaned, row.properties or {}, user=user)
         require_unique_properties(
             db,
             object_type,
@@ -2118,7 +2124,7 @@ def set_aliases(
         row,
         object_type.slug,
         _workspace_slugs(db),
-        _ref_labels(db, properties_of(db, object_type.id), [row]),
+        _ref_labels(db, user, properties_of(db, object_type.id), [row]),
         aliases.of(db, [row.id]).get(row.id),
     )
 
@@ -2378,7 +2384,7 @@ def object_history(
             snapshot=SnapshotOut(**vars(one.snapshot)) if one.snapshot else None,
             batch=HistoryBatchOut(**one.batch) if one.batch else None,
         )
-        for one in history.history_of(db, row)
+        for one in history.history_of(db, row, viewer=user)
     ]
 
 
@@ -2401,7 +2407,9 @@ def restore_object(
     history.restore(db, user, row, object_type, payload.entry_id)
     db.refresh(row)
     defs = properties_of(db, object_type.id)
-    return _out(row, object_type.slug, _workspace_slugs(db), _ref_labels(db, defs, [row]))
+    return _out(
+        row, object_type.slug, _workspace_slugs(db), _ref_labels(db, user, defs, [row])
+    )
 
 
 @router.delete("/{type_slug}/{object_id}", status_code=204)
@@ -2854,6 +2862,7 @@ def update_relation(
         db.commit()
         return _link_out(db, user, row.id, link.id)
     edge = _edge(db, relation_id, row)
+    _require_other_end_visible(db, user, edge, row)
     managed.require_relation_editable(rel.relation_type(db, edge.relation))
 
     if payload.evidence_note is not None:
@@ -2935,6 +2944,26 @@ def remove_relation(
     db.commit()
 
 
+def _require_other_end_visible(
+    db: Session, user: User, edge: ObjectRelation, row: ObjectInstance
+) -> None:
+    """관계의 저쪽 끝이 **지금 보이고 살아 있나** — 「관련 객체」 가 그 줄을 숨기는 관계다.
+
+    안 보면 고치기가 커밋된 뒤 돌려줄 줄을 못 찾아 500 이었다(`found[0]`, 2026-10-08) —
+    저장은 됐는데 화면은 실패로 읽는다. 없는 것과 안 보이는 것을 같은 말로 고치기 전에 막는다.
+    """
+    other = edge.dst_object_id if edge.src_object_id == row.id else edge.src_object_id
+    seen = db.scalar(
+        select(ObjectInstance.id).where(
+            ObjectInstance.id == other,
+            ObjectInstance.deleted_at.is_(None),
+            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+        )
+    )
+    if seen is None:
+        raise NotFound(code("OBJECTS", 32), "관계를 찾을 수 없습니다.")
+
+
 def _edge_labels(db: Session, edge: ObjectRelation) -> tuple[str, str]:
     src = db.get(ObjectInstance, edge.src_object_id)
     dst = db.get(ObjectInstance, edge.dst_object_id)
@@ -2944,7 +2973,13 @@ def _edge_labels(db: Session, edge: ObjectRelation) -> tuple[str, str]:
 def _link_out(
     db: Session, user: User, mine: uuid.UUID, link_id: uuid.UUID
 ) -> RelatedObjectOut:
-    return next(one for one in _related_links(db, user, mine) if one.relation_id == link_id)
+    found = next(
+        (one for one in _related_links(db, user, mine) if one.relation_id == link_id), None
+    )
+    if found is None:
+        # 저쪽 끝(원 표의 행)이 사라졌다 — `next` 가 그대로 터지면 500 이다.
+        raise NotFound(code("OBJECTS", 32), "관계를 찾을 수 없습니다.")
+    return found
 
 
 def _link(db: Session, relation_id: uuid.UUID, row: ObjectInstance) -> ObjectLink | None:

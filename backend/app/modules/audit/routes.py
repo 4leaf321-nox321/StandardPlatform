@@ -17,7 +17,7 @@ from app.modules.audit.schemas import AccessLogOut, AuditEntryOut
 from app.shared.auth import current_user, require_system_admin
 from app.shared.errors import Forbidden, code
 from app.shared.pagination import MAX_LIMIT, Page, clamp_limit
-from app.shared.permissions import is_any_manager
+from app.shared.permissions import editable_owner_clause, is_any_manager
 
 router = APIRouter(prefix="/audit", tags=["audit"])
 
@@ -34,12 +34,17 @@ def list_entries(
     """무엇이 바뀌었는가.
 
     부서 관리자도 본다 — 자기 부서의 자료가 왜 사라졌는지 물을 사람은 시스템
-    관리자가 아니라 그 부서다.
+    관리자가 아니라 그 부서다. 그래서 **부서 관리자는 자기가 관리자인 부서의 기록만**
+    본다(`workspace_id`). 예전에는 어느 부서든 관리자이기만 하면 모든 부서의 기록 —
+    남의 부서 객체 이름 · 바뀐 값 · 계정 일까지 — 이 다 보였다(2026-10-08). 부서가 없는
+    기록(전역 자료 · 계정 · 정의)은 시스템 관리자의 일이라 시스템 관리자만 본다.
     """
     if not is_any_manager(db, user):
         raise Forbidden(code("AUDIT", 1), "부서 관리자만 볼 수 있습니다.")
 
-    stmt = select(AuditEntry)
+    # 「관리자인 부서」 의 판정은 고칠 수 있는 것과 같은 자리(`editable_owner_clause`) —
+    # 부서가 없는 기록은 거기서 시스템 관리자만 남는다.
+    stmt = select(AuditEntry).where(editable_owner_clause(user, AuditEntry.workspace_id))
     if action:
         stmt = stmt.where(AuditEntry.action == action)
     if target_table:

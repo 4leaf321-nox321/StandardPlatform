@@ -340,3 +340,32 @@ def test_너무_큰_그래프는_세우기_전에_거절하고_좁히라고_한�
     assert asked.json()["error"]["details"] == {"objects": 2, "limit": 1}
     data = client.get("/api/rdf/data", params={"type": part}, headers=admin.headers)
     assert data.status_code == 409
+
+
+def test_SPARQL_은_표기를_바꿔도_바깥을_부르지_않는다(
+    client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """rdflib 은 파싱 전에 `\\uXXXX` 를 펼친다 — 글자로만 막으면 `\\u0053ERVICE <바깥>` 가
+    차단어를 지나 **서버가 그 주소를 불렀다**(2026-10-08, 내부 메타데이터 주소까지). 펼친 뒤에
+    보고, 파싱한 모양(SERVICE 마디)도 다시 본다."""
+    from rdflib.plugins.sparql import evaluate
+
+    called: list[str] = []
+
+    def no_network(request: object, *_args: object, **_kw: object) -> None:
+        called.append(str(getattr(request, "full_url", request)))
+        raise OSError("시험 — 바깥으로 나가지 않는다")
+
+    monkeypatch.setattr(evaluate, "urlopen", no_network)
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    escaped = "\\u0053ERVICE"
+    for text in (
+        f"SELECT * WHERE {{ {escaped} <http://169.254.169.254/latest/> {{ ?s ?p ?o }} }}",
+        "SELECT * WHERE { SeRvIcE <http://169.254.169.254/latest/> { ?s ?p ?o } }",
+    ):
+        asked = client.post(
+            "/api/rdf/query", json={"query": text, "types": [part]}, headers=admin.headers
+        )
+        assert asked.status_code == 409, asked.text
+        assert asked.json()["error"]["code"] == code("RDF", 2)
+    assert called == []

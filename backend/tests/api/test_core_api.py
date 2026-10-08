@@ -743,3 +743,189 @@ def test_긴_백필도_기준_시각에서_빠지지_않는다(
         other.rollback()
         other.close()
     assert vendor
+
+
+def test_쪽을_넘기는_사이_커밋된_긴_적재도_다음_주기에_받는다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """**쪽을 넘기는 사이 끝난 적재를 영영 못 받았다**(2026-10-08).
+
+    긴 적재 A 가 T0 에 시작해 도는 동안 뒤에 시작한 짧은 적재들의 행이 쪽을 넘어 커서가 T0 를
+    지나고, 그 사이 A 가 커밋하면 A 의 행(시각 T0 < 커서)은 이번 쪽 넘김에서 건너뛰어진다.
+    마지막 쪽을 부른 때의 시계를 `as_of` 로 주면 그것은 T0 보다 뒤라 다음 주기로도 못 받는다
+    — 그래서 **첫 쪽의 시계**를 커서에 실어 그것을 준다.
+    """
+    from sqlalchemy import update
+
+    from app.database import SessionLocal
+    from app.modules.objects.models import ObjectInstance
+
+    vendor, _part = _world(client, admin)
+    early = _make_object(client, admin, vendor, label="먼저", key="X-0")
+    other = SessionLocal()
+    try:
+        other.execute(select(1))  # 긴 적재 A 가 T0 에 시작했다(아직 안 끝났다).
+        for at in range(1, 4):
+            _make_object(client, admin, vendor, label=f"나중{at}", key=f"V-{at}")
+        first = _rows(client, admin, vendor, limit=2)
+        assert [one["key"] for one in first["items"]] == ["X-0", "V-1"]
+        # A 가 이제 커밋한다 — 그 행의 시각은 시작한 때(T0)라 커서(V-1)보다 앞이다.
+        other.execute(
+            update(ObjectInstance)
+            .where(ObjectInstance.id == uuid.UUID(early["id"]))
+            .values(label="먼저 · 적재가 고침", updated_at=func.now())
+        )
+        other.commit()
+    finally:
+        other.rollback()
+        other.close()
+    db.rollback()  # 이 시험의 세션이 쥔 트랜잭션이 시계를 붙잡지 않게
+    second = _rows(client, admin, vendor, cursor=first["next"], limit=2)
+    assert [one["key"] for one in second["items"]] == ["V-2", "V-3"]
+    assert second["next"] is None and second["as_of"]
+    after = _rows(client, admin, vendor, since=second["as_of"])
+    caught = next((one for one in after["items"] if one["key"] == "X-0"), None)
+    assert caught is not None, "쪽을 넘기는 사이 커밋된 적재분을 다음 주기에도 못 받았다"
+    assert caught["label"] == "먼저 · 적재가 고침"
+    # 옛 커서(시계 없이 `시각|id`)도 받는다.
+    old = "|".join(first["next"].split("|")[:2])
+    assert _rows(client, admin, vendor, cursor=old, limit=2)["next"] is None
+
+
+def _other_workspace(client: TestClient, admin: Signed) -> str:
+    made = client.post(
+        "/api/workspaces",
+        json={"slug": f"other-{uuid.uuid4().hex[:6]}", "name": "다른 팀"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    return str(made.json()["slug"])
+
+
+def test_못_보는_부서의_상대는_참조로도_선으로도_안_나간다(
+    client: TestClient, admin: Signed, member: Signed
+) -> None:
+    """참조 칸 · 선의 도착점이 토큰 주인이 못 보는 부서 것이면 그 식별자를 내보내지 않는다 —
+    출발점만 보고 상대를 안 봤더니 안 보이는 부서 객체의 식별자가 샜다(2026-10-08)."""
+    vendor, part = _world(client, admin)
+    other = _other_workspace(client, admin)
+    kind = f"supplies_{uuid.uuid4().hex[:6]}"
+    made = client.post(
+        "/api/ontology/import",
+        json={
+            "relation_types": [
+                {
+                    "slug": kind,
+                    "label": "공급",
+                    "src_type_slugs": [part],
+                    "dst_type_slugs": [vendor],
+                }
+            ]
+        },
+        params={"dry_run": "false"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 200, made.text
+    _make_object(client, admin, vendor, label="ACME", key="ACME-001")
+    hidden = _make_object(
+        client, admin, vendor, label="비밀 공급사", key="HID-1", workspace_slug=other
+    )
+    _make_object(
+        client,
+        admin,
+        part,
+        label="볼트",
+        key="P-1",
+        properties={"grade": "A", "vendor": hidden["id"]},
+    )
+    applied = client.post(
+        f"/api/objects/{part}/relations/import-rows",
+        json={
+            "rows": [
+                {"src": "P-1", "relation": kind, "dst": "ACME-001"},
+                {"src": "P-1", "relation": kind, "dst": "HID-1"},
+            ],
+            "apply": True,
+        },
+        headers=admin.headers,
+    )
+    assert applied.status_code == 200, applied.text
+
+    # 다 보는 사람에게는 그대로.
+    row = next(one for one in _rows(client, admin, part)["items"] if one["key"] == "P-1")
+    assert row["properties"]["vendor"] == "HID-1"
+    assert {one["dst"] for one in _relations(client, admin, part)["items"]} == {
+        "ACME-001",
+        "HID-1",
+    }
+    # 그 부서를 못 보는 사람에게는 — 참조 칸은 빈 값처럼 빠지고, 그 선은 안 온다.
+    mine = next(one for one in _rows(client, member, part)["items"] if one["key"] == "P-1")
+    assert "vendor" not in mine["properties"] and mine["properties"]["grade"] == "A"
+    assert [one["dst"] for one in _relations(client, member, part)["items"]] == ["ACME-001"]
+
+
+def test_보이던_부서에서_옮겨_간_객체는_무덤으로_알린다(
+    client: TestClient, admin: Signed, member: Signed
+) -> None:
+    """보이던 부서에서 못 보는 부서로 옮긴 객체는 그 자격에게 사라진 것이다 — 알리지 않으면
+    받는 쪽은 그 행을 영영 살아 있는 것으로 든다(2026-10-08). 옮긴 뒤의 이름은 싣지 않는다."""
+    vendor, _part = _world(client, admin)
+    other = _other_workspace(client, admin)
+    moving = _make_object(client, admin, vendor, label="옮길 공급사", key="MOV-1")
+    _make_object(client, admin, vendor, label="남는 공급사", key="STAY-1")
+    mark = _rows(client, member, vendor)["as_of"]
+    assert {one["key"] for one in _rows(client, member, vendor)["items"]} == {
+        "MOV-1",
+        "STAY-1",
+    }
+
+    moved = client.post(
+        f"/api/objects/{vendor}/bulk-edit",
+        json={"ids": [moving["id"]], "field": "workspace", "value": other, "apply": True},
+        headers=admin.headers,
+    )
+    assert moved.status_code == 200, moved.text
+    assert moved.json()["counts"]["change"] == 1, moved.text
+    client.patch(
+        f"/api/objects/{vendor}/{moving['id']}",
+        json={"label": "옮긴 뒤 새 이름"},
+        headers=admin.headers,
+    )
+
+    after = _rows(client, member, vendor, since=mark)
+    grave = next(one for one in after["items"] if one["key"] == "MOV-1")
+    assert grave["deleted"] is True and grave["hidden"] is True
+    assert grave["properties"] == {} and grave["label"] == "MOV-1"
+    assert all(not one["hidden"] for one in after["items"] if one["key"] != "MOV-1")
+    # 다 보는 사람에게는 옮긴 것이 그냥 바뀐 것이다.
+    seen = next(
+        one
+        for one in _rows(client, admin, vendor, since=mark)["items"]
+        if one["key"] == "MOV-1"
+    )
+    assert seen["deleted"] is False and seen["hidden"] is False
+    assert seen["label"] == "옮긴 뒤 새 이름"
+    # 처음 받는 쪽에는 무덤을 안 보낸다.
+    assert {one["key"] for one in _rows(client, member, vendor)["items"]} == {"STAY-1"}
+
+
+def test_정지된_계정의_토큰은_읽을_수_있는_자격으로_세지_않는다(
+    client: TestClient, admin: Signed, member: Signed, db: Session
+) -> None:
+    """인증이 이미 막는 토큰을 「읽을 수 있는 자격」 으로 세면 그 이름을 쓰는 연동이 있다고
+    읽혀 아무도 못 지운다(2026-10-08)."""
+    from app.modules.accounts.models import User
+
+    _world(client, admin)
+    name = f"member-sync-{uuid.uuid4().hex[:6]}"
+    _token(client, member, name, ["core:read"])
+
+    def listed() -> set[str]:
+        body = client.get("/api/ontology/core-status", headers=admin.headers).json()
+        return {one["name"] for one in body["consumers"]}
+
+    assert name in listed()
+    owner = db.scalars(select(User).where(User.email == member.email)).one()
+    owner.status = "suspended"
+    db.commit()
+    assert name not in listed()

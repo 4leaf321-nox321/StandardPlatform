@@ -9,7 +9,7 @@
 
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { BarChart3, Download, FileUp, Loader2, Pencil, Plus, Trash2 } from 'lucide-react'
+import { BarChart3, Download, FileUp, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import type { OntologySchema } from '@/modules/ontology/api'
@@ -36,6 +36,8 @@ import { ObjectImportDialog } from '@/modules/objects/ObjectImportDialog'
 import { InterfaceListPage } from '@/modules/objects/InterfaceListPage'
 import { ObjectTree } from '@/modules/objects/ObjectTree'
 import { conditionsFromParams, withConditions } from '@/modules/objects/urlConditions'
+import { useAuth } from '@/shared/auth/AuthContext'
+import { isAnyManager } from '@/shared/auth/roles'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -183,7 +185,10 @@ export default function ObjectListPage() {
       />
     )
   }
-  return <TypeListPage schema={schema} />
+  // 다른 타입으로 옮기면 쪽 · 트리에서 고른 것 · 통계 펼침을 새로 — 같은 화면이 재사용되어,
+  // 그대로 두면 A 의 3쪽 · A 의 트리 노드 · A 의 칸으로 B 를 물어 빈 목록 · 409 · 422 가
+  // 났다(2026-10-08). 인터페이스 목록과 같다.
+  return <TypeListPage key={typeSlug} schema={schema} />
 }
 
 function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
@@ -195,20 +200,41 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
   const query = params.get('q') ?? ''
   const conditions = useMemo(() => conditionsFromParams(params), [params])
   const activeView = params.get('view')
+  /**
+   * 상태 거르기 — 지표의 「N건 보기」 가 `status=` 로 싣고 온다. 안 읽던 때는 그 조건이 버려져
+   * 목록이 셀의 수보다 많았다(2026-10-08). 조건 줄과 같이 주소가 든다.
+   */
+  const status = params.get('status') || null
+  /** 홈의 「위젯 추가」 가 싣고 온 부서 — 「홈 게시」 의 기본 부서다. */
+  const homeWorkspace = params.get('home')
   /** 검색어·조건을 바꾸면 주소도 같이 — 그리고 걸려 있던 뷰는 풀린다(손댄 순간 그 뷰가 아니다). */
-  const sync = (next: { q?: string; conditions?: Condition[]; view?: string | null }) => {
+  const sync = (next: {
+    q?: string
+    conditions?: Condition[]
+    view?: string | null
+    status?: string | null
+  }) => {
     const q = next.q ?? query
     const list = next.conditions ?? conditions
     const view = next.view === undefined ? null : next.view
     const copy = withConditions(params, { q, conditions: list })
     copy.delete('view')
     if (view) copy.set('view', view)
+    if (next.status !== undefined) {
+      copy.delete('status')
+      if (next.status) copy.set('status', next.status)
+    }
     setParams(copy, { replace: true })
   }
   const setQuery = (q: string) => sync({ q })
   const setConditions = (list: Condition[]) => sync({ conditions: list })
   const applyView = (view: SavedView) => {
-    sync({ q: view.query.q, conditions: view.query.conditions, view: view.id })
+    sync({
+      q: view.query.q,
+      conditions: view.query.conditions,
+      view: view.id,
+      status: view.query.status ?? null,
+    })
     // 뷰에 축이 담겨 있으면 그림까지 그대로 연다 — 조건만 돌려주고 축을 다시 고르게
     // 하면, 그 수고 때문에 사람은 뷰를 안 쓰게 된다.
     if (view.summary?.group_by) {
@@ -232,8 +258,13 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
   /**
    * **올해가 기본이다.** 연도를 쓰는 축에서 전체를 먼저 보여 주면 몇 해치가
    * 섞여 뜨고, 사람은 그것을 지금 쓰는 것으로 읽는다. 「전체 보기」 는 옵트인이다.
+   *
+   * 주소의 `year=all` 은 그 옵트인을 싣고 온 것이다 — 홈 위젯은 연도 없이 세므로, 눌러 연
+   * 목록에 올해가 걸리면 위젯의 수와 목록의 수가 달랐다(2026-10-08).
    */
-  const [year, setYear] = useState<number | null>(new Date().getFullYear())
+  const [year, setYear] = useState<number | null>(() =>
+    params.get('year') === 'all' ? null : new Date().getFullYear(),
+  )
   const [offset, setOffset] = useState(0)
   const [creating, setCreating] = useState(false)
   /** 통계를 펼쳐 두었나. **기본은 접힘** — 목록을 보러 온 사람에게
@@ -244,6 +275,13 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
   /** 통계 설정 — **여기가 들고 있다.** 뷰를 불러오면 그 뷰의 기준으로 열려야 하고,
    *  저장할 때는 지금 축이 함께 담겨야 한다. 패널이 혼자 들면 둘 다 못 한다. */
   const [summary, setSummary] = useState<SummarySettings>(DEFAULT_SUMMARY)
+  /** 통계가 실제로 쓰는 기간 단위 — 날짜 축일 때만 값이 있다(패널이 알린다). 「뷰로 저장」 이
+   *  이것을 담는다. 빠뜨리던 때는 월별로 저장한 뷰가 다시 열면 해별이었다(2026-10-08). */
+  const [summaryGrain, setSummaryGrain] = useState<string | null>(null)
+  const { user } = useAuth()
+  /** 생성 · 일괄 입력은 **어느 부서든 관리자일 때만** 선다 — 서버가 소유 부서의 관리자만
+   *  받아 준다(`resolve_owner_workspace`). 누구에게나 세우면 눌러 보고서야 403 을 안다. */
+  const canCreate = isAnyManager(user)
   /** 고른 줄 — **쪽을 넘기면 푼다.** 안 보이는 것을 고른 채로 두면 「10건 골랐다」 는
    *  말과 눈에 보이는 것이 어긋나고, 그때 사람은 무엇을 바꾸는지 모른다. */
   const [picked, setPicked] = useState<Set<string>>(new Set())
@@ -283,26 +321,30 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
   // 목록이 달라지면 고른 것을 푼다(쪽 넘김·필터·타입 바꾸기).
   useEffect(() => {
     setPicked(new Set())
-  }, [typeSlug, query, JSON.stringify(conditions), under, deep, year, offset])
+  }, [typeSlug, query, JSON.stringify(conditions), status, under, deep, year, offset])
 
   const list = useResource(
     () =>
       objectApi.list(typeSlug, {
         q: query || undefined,
         conditions,
+        status,
         under,
         deep,
         year: yearApplies ? year : null,
         offset,
       }),
-    // conditions 는 배열이라 참조가 매번 바뀐다 — 내용으로 비교한다.
-    [typeSlug, query, JSON.stringify(conditions), under, deep, year, offset],
+    // conditions 는 배열이라 참조가 매번 바뀐다 — 내용으로 비교한다. `yearApplies` 도 —
+    // 정의가 오기 전의 첫 요청은 연도 없이 나가는데, 그것만 보고 멈추면 고르개는 「올해」 인데
+    // 목록은 전체 연도였다(2026-10-08).
+    [typeSlug, query, JSON.stringify(conditions), status, under, deep, year, yearApplies, offset],
   )
 
-  /** 내보내기에 그대로 넘기는 필터 — 쪽(offset)만 뺀다. 파일은 전부다. */
+  /** 내보내기 · 통계에 그대로 넘기는 필터 — 쪽(offset)만 뺀다. 파일은 전부다. */
   const exportQuery: ObjectQuery = {
     q: query || undefined,
     conditions,
+    status,
     under,
     deep,
     year: yearApplies ? year : null,
@@ -322,7 +364,11 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
   const managed = Boolean(type?.managed_by)
   /** 지금 목록이 좁혀져 있나. 빈 목록의 이유가 이것으로 갈린다. */
   const narrowed =
-    Boolean(query) || conditions.length > 0 || Boolean(under) || (yearApplies && year !== null)
+    Boolean(query) ||
+    conditions.length > 0 ||
+    Boolean(status) ||
+    Boolean(under) ||
+    (yearApplies && year !== null)
   /** 트리가 정의된 타입인가. 안 정했으면 왼쪽을 안 그린다. */
   const hasTree = Boolean(type?.list_view?.tree?.relation)
   const columns = useMemo(
@@ -438,7 +484,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                       <BarChart3 className="mr-1 size-4" />
                       통계
                     </Button>
-                    {!managed && (
+                    {!managed && canCreate && (
                       <>
                         <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
                           <FileUp className="mr-1 size-4" />
@@ -558,9 +604,9 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
           <div className="mb-4 flex flex-wrap items-center gap-2">
             <ViewPicker
               typeSlug={typeSlug}
-              current={{ q: query, conditions, status: null }}
+              current={{ q: query, conditions, status }}
               // 통계를 펼쳐 둔 채 저장하면 **기준까지 담긴다.** 조건과 기준은 같은
-              // 물음의 두 쪽이다 — 「영남 공급사를 등급별로」.
+              // 물음의 두 쪽이다 — 「영남 공급사를 등급별로」. 기간 단위도 — 「홈 게시」 와 같게.
               summary={
                 grouping
                   ? {
@@ -571,19 +617,39 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                       chart: summary.chart,
                       stacked: summary.stacked,
                       order: summary.order,
+                      grain: summaryGrain ?? undefined,
                     }
                   : null
               }
+              homeWorkspace={homeWorkspace}
               activeId={activeView}
               onApply={(view) => {
                 applyView(view)
                 setOffset(0)
               }}
               onClear={() => {
-                sync({ q: '', conditions: [], view: null })
+                sync({ q: '', conditions: [], view: null, status: null })
                 setOffset(0)
               }}
             />
+            {/* 상태 거르기는 고르개가 없다 — 지표의 「N건 보기」 가 싣고 올 때만 선다. 그래서
+                **걸려 있다고 보이고 풀 수 있어야 한다** — 안 보이면 목록이 왜 적은지 모른다. */}
+            {status && (
+              <span className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs">
+                상태 <StatusBadge kind="object" value={status} />
+                <button
+                  type="button"
+                  aria-label="상태 거르기 해제"
+                  className="text-muted-foreground hover:text-foreground"
+                  onClick={() => {
+                    sync({ status: null })
+                    setOffset(0)
+                  }}
+                >
+                  <X className="size-3.5" />
+                </button>
+              </span>
+            )}
             <ConditionBar
               defs={type.properties}
               conditions={conditions}
@@ -611,6 +677,8 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                 query={exportQuery}
                 settings={summary}
                 onSettings={setSummary}
+                homeWorkspace={homeWorkspace}
+                onGrain={setSummaryGrain}
                 onClose={() => setGrouping(false)}
                 onPick={(field, key, range) => {
                   // **누른 막대가 곧 필터다.** 여기서 필터 칸으로 돌아가 값을 다시
@@ -691,7 +759,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                   variant="outline"
                   size="sm"
                   onClick={() => {
-                    sync({ q: '', conditions: [], view: null })
+                    sync({ q: '', conditions: [], view: null, status: null })
                     setUnder(null)
                     setYear(null)
                     setOffset(0)

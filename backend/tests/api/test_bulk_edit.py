@@ -210,3 +210,18 @@ def test_남의_부서_것은_되돌리지_않고_없는_묶음은_404(
 
     missing = _undo(client, admin, part, "00000000-0000-0000-0000-000000000000")
     assert missing.status_code == 404
+
+
+def test_부서_관리자는_여럿을_전역으로_못_옮긴다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """전역은 여러 부서가 함께 쓴다 — 시스템 관리자만 그리로 옮긴다. 빈 값(전역)이 판정을
+    건너뛰어 부서 관리자가 자기 부서 객체를 전역으로 내보낼 수 있었다(2026-10-08)."""
+    part = _make_type(client, admin, label="부품")
+    ids = [_make_object(client, manager, part, label=f"부품{i}")["id"] for i in range(2)]
+    planned = _edit(client, manager, part, ids=ids, field="workspace", value="").json()
+    assert planned["counts"]["error"] == 2, planned
+    assert "시스템 관리자" in planned["rows"][0]["message"]
+    # 시스템 관리자는 된다.
+    done = _edit(client, admin, part, ids=ids, field="workspace", value="", apply=True).json()
+    assert done["applied"] is True and done["counts"]["change"] == 2, done

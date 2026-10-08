@@ -84,10 +84,12 @@ def _enqueue(db: Session, args: argparse.Namespace) -> int:
     if not args.slug:
         return _enqueue_round(db, sources, apply=not args.plan)
     for source in sources:
-        waiting = job_services.pending_for(db, "datasource_sync", slug=source.slug)
+        # 따로 넣은 것도, 이 소스가 든 차례도 — 둘이 함께 돌면 같은 새 행을 둘 다 만든다.
+        waiting = services.pending_job(db, source)
         if waiting is not None:
             print(
-                f"{source.slug}: 아직 안 끝난 작업이 있습니다({waiting.status}) — 안 넣습니다."
+                f"{source.slug}: 아직 안 끝난 작업이 있습니다"
+                f"({waiting.kind} · {waiting.status}) — 안 넣습니다."
             )
             continue
         job = job_services.enqueue(

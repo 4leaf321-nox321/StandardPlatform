@@ -155,16 +155,22 @@ def _iso(when: date | None) -> str | None:
 # --- 셀 읽기 ---------------------------------------------------------------------
 
 
+def cells_run_of() -> Any:
+    """**셀이 든 실행** — 증분 계산은 새 실행을 남기되 셀은 전량 실행의 칸을 고친다
+    (`MetricDef.cells_run_id`). 비었으면 지금 실행이 곧 셀의 실행이다."""
+    return func.coalesce(MetricDef.cells_run_id, MetricDef.current_run_id)
+
+
 def _statement(user: User, metric: MetricDef, ask: Ask) -> Select[Any]:
     """보이는 셀을 요청한 축으로 묶는 문장 — `read` 가 받고, `paired_totals` 는 짝지어 더한다.
     칸 이름: 기준 `d_<이름>`, 축 `period` · `cohort` · `age`, 집계 `n` · `vn` · `vs` · `vmin` ·
     `vmax`."""
-    current = (
-        select(MetricDef.current_run_id).where(MetricDef.id == metric.id).scalar_subquery()
-    )
+    current = select(cells_run_of()).where(MetricDef.id == metric.id).scalar_subquery()
     columns: list[Any] = []
     group: list[Any] = []
-    for name in ask.dims:
+    # 같은 기준을 두 번 주면(`dims=a,a` · `factors=a,a`) 같은 이름의 칸이 둘이 되어 읽을 때
+    # 「모호한 칸」 으로 500 이었다(2026-10-08) — 한 번만 묶는다(뜻이 같다).
+    for name in dict.fromkeys(ask.dims):
         expr = MetricValue.dims[name].astext
         columns.append(expr.label(f"d_{name}"))
         group.append(expr)
@@ -242,9 +248,31 @@ def read(
     return cells, truncated
 
 
+def floor_period(day: date, grain: str) -> date:
+    """그 날이 든 기간의 시작일 — 셀의 기간과 같은 자리(`axes.bucket`, 주는 월요일)."""
+    if grain == "week":
+        return day - timedelta(days=day.weekday())
+    if grain == "month":
+        return day.replace(day=1)
+    if grain == "quarter":
+        return date(day.year, (day.month - 1) // 3 * 3 + 1, 1)
+    if grain == "year":
+        return date(day.year, 1, 1)
+    return day
+
+
+def _ceil_period(day: date, grain: str) -> date:
+    """「앞까지」 의 끝을 기간 경계로 올린다 — 그 날이 든 기간까지 넣는다."""
+    start = floor_period(day, grain)
+    return day if start == day else axes.next_period(start, grain)
+
+
 def check_ask(built: spec_module.Built, ask: Ask) -> None:
     """모르는 기준 · 없는 축은 422 — 조용히 무시하면 거르기가 안 걸린 수가 「전부」 로
-    읽힌다."""
+    읽힌다. 그리고 **기간 범위를 그 지표의 기간 경계로 맞춘다**(시작은 내림, 끝은 올림) —
+    화면의 날짜 칸은 아무 날이나 받는데, 셀의 기간은 기간의 시작일이다. 맞추지 않으면 월
+    단위 지표에 `2026-01-15` 부터를 주면 추이의 점(01-15, 02-15 …)이 셀(02-01 …)과 하나도
+    안 맞아 전부 0 이 됐다(2026-10-08)."""
     for name in [*ask.dims, *ask.filters]:
         if built.dim(name) is None:
             raise _bad(
@@ -261,6 +289,18 @@ def check_ask(built: spec_module.Built, ask: Ask) -> None:
         "cohort" in ask.by or "age" in ask.by or ask.cohort_from or ask.cohort_to
     ) and built.cohort is None:
         raise _bad(7, "이 지표에는 코호트 칸이 없습니다.")
+    if built.time is not None:
+        grain = built.time.grain
+        if ask.period_from is not None:
+            ask.period_from = floor_period(ask.period_from, grain)
+        if ask.period_to is not None:
+            ask.period_to = _ceil_period(ask.period_to, grain)
+    if built.cohort is not None:
+        grain = built.cohort.grain
+        if ask.cohort_from is not None:
+            ask.cohort_from = floor_period(ask.cohort_from, grain)
+        if ask.cohort_to is not None:
+            ask.cohort_to = _ceil_period(ask.cohort_to, grain)
 
 
 # --- 분모 ----------------------------------------------------------------------
@@ -340,6 +380,13 @@ def read_denominator(
         time = "period"
     elif den_in.time == "cohort" and "cohort" in ask.by:
         time = "cohort"
+        period_from, period_to = ask.cohort_from, ask.cohort_to
+    elif den_in.time == "period":
+        # **기간으로 안 묶어도 범위는 맞춘다** — 분자가 7 ~ 9월로 걸렸는데 분모가 판매 전
+        # 기간의 합이면 비율이 몇 배 작게 나왔다(2026-10-08). 같은 범위의 합끼리 나눈다.
+        period_from, period_to = ask.period_from, ask.period_to
+    elif den_in.time == "cohort":
+        # 분모의 기간 = 분자의 코호트 — 코호트 범위가 곧 분모의 기간 범위다.
         period_from, period_to = ask.cohort_from, ask.cohort_to
     # 거르기는 **묶지 않아도** 건넨다 — 분자를 S 모델로 걸렀으면 분모도 S 의 판매 대수다.
     den_ask = Ask(
@@ -569,9 +616,7 @@ def visible_share(db: Session, user: User, metric: MetricDef) -> float | None:
     대수)는 전사일 수 있어 비율이 낮게 나온다. 시스템 관리자는 다 본다."""
     if user.is_system_admin:
         return 1.0
-    current = (
-        select(MetricDef.current_run_id).where(MetricDef.id == metric.id).scalar_subquery()
-    )
+    current = select(cells_run_of()).where(MetricDef.id == metric.id).scalar_subquery()
     seen = visible_owner_clause(user, MetricValue.workspace_id)
     total, visible = db.execute(
         select(
@@ -699,9 +744,10 @@ def _dim_condition(
         return
     if address == "status":
         params["status"] = value
-    elif address == "created_year":
-        params["year"] = value
-    elif address == "workspace":
+    elif address in ("created_year", "workspace"):
+        # 만든 해는 목록 조건이 없다 — 목록의 `year` 는 「만든 해」 가 아니라 시간 정책의
+        # 연도라, 그것으로 적으면 다른 기록을 열면서 정확하다고 말했다(2026-10-08). 부서도
+        # 조건이 없다.
         partial.append(dim.name)
     else:
         params[f"f.{field_name}.eq"] = value
@@ -1006,16 +1052,39 @@ def cohort(
     rows: list[schemas.CohortRowOut] = []
     for when in cohorts:
         found = matrix.get(when, {})
-        running = 0.0
-        running_count = 0
+        # **누적은 집계마다 다르다** — 건수 · 합은 더하고, 평균은 (누적 합 / 누적 값 수),
+        # 최소 · 최대는 지금까지의 최소 · 최대다. 값을 그대로 더하면 평균 지표의 누적이
+        # 「평균의 합」 이었다(2026-10-08). 기초 집계를 누적한 셀 하나로 같은 `measure` 를
+        # 낸다.
+        running_count = running_vn = 0
+        running_sum: float | None = None
+        running_min: float | None = None
+        running_max: float | None = None
         out_cells: list[schemas.CohortCellOut] = []
         row_cell = Cell({}, None, when, 0, 0, 0, None, None, None)
         for age in ages:
             cell = found.get(age) or Cell({}, None, when, age, 0, 0, None, None, None)
             value = cell.measure(measure)
-            if value is not None:
-                running += value
             running_count += cell.count
+            running_vn += cell.value_count
+            if cell.sum is not None:
+                running_sum = (running_sum or 0.0) + cell.sum
+            if cell.min is not None:
+                running_min = cell.min if running_min is None else min(running_min, cell.min)
+            if cell.max is not None:
+                running_max = cell.max if running_max is None else max(running_max, cell.max)
+            so_far = Cell(
+                {},
+                None,
+                when,
+                age,
+                running_count,
+                running_vn,
+                running_sum,
+                running_min,
+                running_max,
+            )
+            running = so_far.measure(measure)
             total = running if cumulative else value
             if cumulative and isinstance(denominator, OwnTotal):
                 # 조건 비율의 누적은 분모도 누적이다 — 그 경과까지의 조건 건수 / 전체 건수.
@@ -1061,9 +1130,7 @@ def dim_values(
     dim = built.dim(name)
     if dim is None:
         raise _bad(8, f"이 지표에 없는 기준입니다: {name}")
-    current = (
-        select(MetricDef.current_run_id).where(MetricDef.id == metric.id).scalar_subquery()
-    )
+    current = select(cells_run_of()).where(MetricDef.id == metric.id).scalar_subquery()
     expr = MetricValue.dims[name].astext
     stmt = (
         select(expr.label("v"), func.sum(MetricValue.count).label("n"))

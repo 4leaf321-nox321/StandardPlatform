@@ -15,7 +15,7 @@
     · as_of 는 서버가 준 값을 그대로 돌려준다(자기 시계로 만들지 않는다)
     · next 가 있으면 as_of 를 저장하지 않는다(끝까지 받은 뒤에만)
     · key 를 저장한다(다음 수신이 수정이 되는 근거)
-    · deleted 행은 비활성 처리한다(삭제하지 않는다)
+    · deleted 행은 비활성 처리한다(삭제하지 않는다) — hidden 이면 이름 · 칸은 그대로 둔다
     · 모르는 칸은 무시한다(공개 측이 칸을 추가해도 깨지지 않는다)
     · reset 이 오면 그 타입을 비우고 처음부터 받는다(아래)
 
@@ -40,7 +40,7 @@ from typing import Any
 
 import requests
 
-ENVELOPE = ("key", "label", "status", "updated_at", "deleted", "merged_into")
+ENVELOPE = ("key", "label", "status", "updated_at", "deleted", "hidden", "merged_into")
 
 
 def load_config(path: str) -> dict[str, Any]:
@@ -176,7 +176,14 @@ def save_rows(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -
                     json.dumps(one.get("properties") or {}, ensure_ascii=False),
                 )
                 for one in rows
+                if not one.get("hidden")
             ],
+        )
+        # hidden — 지운 것이 아니라 이 토큰으로 더 이상 안 보이는 것(소유 부서가 옮겨 감).
+        # 이름 · 칸은 오지 않으므로 가진 것을 그대로 두고 비활성만 한다. 없던 것은 만들지 않는다.
+        db.executemany(
+            f'UPDATE "{type_slug}" SET deleted=1, updated_at=? WHERE key=?',
+            [(one.get("updated_at"), one["key"]) for one in rows if one.get("hidden")],
         )
         db.commit()
     finally:

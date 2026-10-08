@@ -8,22 +8,25 @@ from __future__ import annotations
 import json
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 from urllib.parse import parse_qs
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
 from app.modules.datasources import services
+from app.modules.datasources.models import DataSource
 from tests.api.conftest import (
     Signed,
     bundle_import,
     finish_job,
     maintenance_counts,
     notifications_of,
+    work_until,
 )
 from tests.api.test_ontology import _make_object, _make_property, _make_type
 
@@ -1110,3 +1113,414 @@ def test_순서는_참조_칸_선_선만_받는_소스를_보고_순환은_이�
         "a_mode",
         "c_mech",
     ]
+
+
+# --- 사람이 합친 객체 · 사라졌다 다시 온 것 · 한꺼번에 빈 응답 ------------------------
+
+
+def _by_key(client: TestClient, admin: Signed, vendor: str) -> dict[str, dict[str, Any]]:
+    listed = client.get(f"/api/objects/{vendor}?limit=200", headers=admin.headers).json()
+    return {one["key"]: one for one in listed["items"]}
+
+
+def _saved(client: TestClient, admin: Signed, slug: str) -> dict[str, Any]:
+    return dict(client.get(f"/api/datasources/{slug}", headers=admin.headers).json())
+
+
+def test_같은_소스에서_온_둘을_사람이_합쳐도_동기화가_멈추지_않는다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """합치기는 진 쪽의 외부 식별자를 이긴 쪽으로 옮긴다 — 이긴 쪽이 이 소스의 식별자를 둘
+    갖는다. 예전에는 다음 동기화가 바깥 두 행에 같은 `id` 를 박아 일괄 입력이 「같은 id 가
+    N행에도 있습니다」 로 **전부** 거절했다 — 그 소스가 영영 멈췄다(2026-10-08). 사람의
+    합치기가 이긴다: 값은 한 행에서만, 나머지 행은 「합친 객체」 로 건너뛴다."""
+    vendor = _vendor_type(client, admin)
+    source = _source(client, admin, vendor)
+    assert _sync(client, admin, source["slug"], apply=True).json()["applied"] is True
+    before = _by_key(client, admin, vendor)
+    merged = client.post(
+        f"/api/objects/{vendor}/{before['V-002']['id']}/merge",
+        json={"into": before["V-001"]["id"]},
+        headers=admin.headers,
+    )
+    assert merged.status_code == 200, merged.text
+
+    plm.rows[1]["Rating"] = 81  # 진 쪽의 행이 바뀌어도 값은 한 행(V-001)에서만 받는다
+    done = _sync(client, admin, source["slug"], apply=True).json()
+    assert done["applied"] is True and done["run"]["status"] == "ok", done
+    skipped = [one for one in done["rows"] if "합친 객체" in (one["message"] or "")]
+    assert [one["label"] for one in skipped] == ["V-002"], done["rows"]
+    after = _by_key(client, admin, vendor)
+    assert sorted(after) == ["V-001", "V-003"]
+    assert after["V-001"]["properties"]["rating"] == 92
+
+    # 두 외부 식별자가 다 남아 다음에도 그 객체를 찾는다 — 새 객체가 안 생긴다.
+    again = _sync(client, admin, source["slug"], apply=True).json()
+    assert again["run"]["status"] == "ok" and again["counts"]["create"] == 0, again
+
+
+def test_바깥에서_사라져_중지된_것이_다시_오면_되살리고_사람이_중지한_것은_그대로다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """상태 열을 대응하지 않는 소스는 다시 온 행으로 상태를 못 돌린다 — 예전에는 바깥에 다시
+    올라와도 영영 중지로 남았다(2026-10-08). 되살리는 것은 **이 소스가 「사라져」 중지시킨
+    것**뿐이다 — 사람이 중지한 것은 그 사람의 결정이 이긴다."""
+    vendor = _vendor_type(client, admin)
+    source = _source(client, admin, vendor, deprecate_missing=True)
+    _sync(client, admin, source["slug"], apply=True)
+    gone = plm.rows.pop()  # 마이다스(V-003)가 바깥에서 사라짐
+    assert _sync(client, admin, source["slug"], apply=True).json()["counts"]["deprecated"] == 1
+
+    by_key = _by_key(client, admin, vendor)
+    stopped = client.patch(
+        f"/api/objects/{vendor}/{by_key['V-002']['id']}",
+        json={"status": "deprecated"},
+        headers=admin.headers,
+    )
+    assert stopped.status_code == 200, stopped.text
+
+    plm.rows.append(gone)  # 다시 올라온다
+    back = _sync(client, admin, source["slug"], apply=True).json()
+    assert back["run"]["status"] == "ok", back["run"]
+    assert back["counts"]["revived"] == 1, back["counts"]
+    after = _by_key(client, admin, vendor)
+    assert after["V-003"]["status"] == "active"
+    assert after["V-002"]["status"] == "deprecated"
+    history = client.get(
+        f"/api/objects/{vendor}/{after['V-003']['id']}/history", headers=admin.headers
+    ).json()
+    assert any("다시 나타나" in (one["reason"] or "") for one in history)
+
+
+def test_바깥이_한꺼번에_비면_사용_중지하지_않고_멈춘다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """필터 · 권한이 바뀌어 바깥이 한 번 빈 응답을 주면, 「이번에 안 온 것을 중지」 가 이
+    소스가 넣은 것 전부를 중지시켰다 — RA 보고서의 「원본에서 내려감」 과 같은 안전장치가
+    없었다."""
+    vendor = _make_type(client, admin, label="공급사", key_policy="optional")
+    plm.rows = [
+        {"VendorNo": f"V-{n:03}", "Name": f"공급사 {n}", "Short": "", "CountryCd": "KR"}
+        for n in range(1, 13)
+    ]
+    source = _source(client, admin, vendor, **_bare(deprecate_missing=True))
+    assert _sync(client, admin, source["slug"], apply=True).json()["counts"]["create"] == 12
+
+    plm.rows = []
+    done = _sync(client, admin, source["slug"], apply=True).json()
+    assert done["run"]["status"] == "failed", done["run"]
+    assert done["counts"]["gone_held_back"] == 12 and done["counts"]["deprecated"] == 0
+    assert any("절반이 넘어" in one for one in done["errors"])
+    assert {one["status"] for one in _by_key(client, admin, vendor).values()} == {"active"}
+
+
+def test_바깥_식별자가_바뀐_행은_같은_객체를_고치고_사용_중지하지_않는다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """우리 식별자로 다시 찾은 행은 외부 식별자를 갈아 끼운다. 예전에는 그 변경이 아직
+    flush 되지 않은 채(`autoflush=False`) 「이번에 안 온 것」 을 옛 값으로 골라, 방금 고친
+    객체를 사용 중지했다(2026-10-08)."""
+    vendor = _vendor_type(client, admin)
+    for one in plm.rows:
+        one["ExtId"] = f"E-{one['VendorNo']}"
+    mapping = {
+        "external_key": "ExtId",
+        "columns": [
+            {"source": "VendorNo", "target": "key"},
+            {"source": "Name", "target": "label"},
+        ],
+    }
+    source = _source(client, admin, vendor, mapping=mapping, deprecate_missing=True)
+    _sync(client, admin, source["slug"], apply=True)
+
+    plm.rows[0]["ExtId"] = "E-NEW-001"  # 바깥이 식별자를 바꿨다(우리 식별자는 그대로)
+    done = _sync(client, admin, source["slug"], apply=True).json()
+    assert done["counts"]["deprecated"] == 0 and done["counts"]["create"] == 0, done
+    after = _by_key(client, admin, vendor)
+    assert after["V-001"]["status"] == "active"
+    assert after["V-001"]["external_ids"] == {source["slug"]: "E-NEW-001"}
+
+
+def test_이름으로_찾을_때_다른_소스의_외부_식별자는_이름이_아니다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """예전에는 이름 색인에 모든 별칭을 넣어, 바깥 행의 이름이 다른 소스의 식별자 글자와
+    같으면 그 소스의 객체에 붙었다(2026-10-08)."""
+    vendor = _vendor_type(client, admin)
+    _sync(client, admin, _source(client, admin, vendor)["slug"], apply=True)
+    other = _source(
+        client,
+        admin,
+        vendor,
+        mapping={
+            "external_key": "Name",
+            "columns": [{"source": "VendorNo", "target": "label"}],
+        },
+    )
+    done = _sync(client, admin, other["slug"], apply=True).json()
+    assert done["counts"]["create"] == 3 and done["counts"]["update"] == 0, done
+
+
+# --- 실패는 늘 기록에 남는다 ----------------------------------------------------------------
+
+
+def test_적용_도중_예외가_나도_기록과_상태가_남고_외부_식별자는_조각과_함께_들어간다(
+    client: TestClient, admin: Signed, plm: FakeOData, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """조각은 일괄 입력이 커밋하는데 실행 행은 flush 만 했었다 — 그 뒤 예외가 나면 객체는
+    들어가고 외부 식별자 · 사용 중지 · `last_status` · 알림은 사라졌고, 기록은 「계획 ·
+    미완료」 였다(2026-10-08)."""
+    vendor = _vendor_type(client, admin)
+    source = _source(client, admin, vendor)
+    before = len(notifications_of(client, admin, "datasource.failed"))
+
+    def boom(*_args: Any, **_kwargs: Any) -> int:
+        raise RuntimeError("사용 중지 단계에서 터짐")
+
+    monkeypatch.setattr(services, "_bury", boom)
+    done = _sync(client, admin, source["slug"], apply=True)
+    assert done.status_code == 200, done.text
+    run = done.json()["run"]
+    assert run["status"] == "failed" and run["applied"] is True, run
+    assert any("도중에 멈췄습니다" in one and "터짐" in one for one in run["errors"]), run
+    by_key = _by_key(client, admin, vendor)
+    assert {key: one["external_ids"] for key, one in by_key.items()} == {
+        key: {source["slug"]: key} for key in ("V-001", "V-002", "V-003")
+    }
+    assert _saved(client, admin, source["slug"])["last_status"] == "failed"
+    assert len(notifications_of(client, admin, "datasource.failed")) == before + 1
+
+    monkeypatch.undo()
+    again = _sync(client, admin, source["slug"], apply=True).json()
+    assert again["run"]["status"] == "ok" and again["counts"]["create"] == 0, again
+
+
+def test_대응이_틀려_시작도_못_해도_기록과_상태가_남는다(
+    client: TestClient, admin: Signed, plm: FakeOData, db: Session
+) -> None:
+    """대응 · 타입 · 대신 돌릴 관리자는 실행 기록보다 먼저 봤다 — 그 오류는 기록도 실패
+    알림도 없이 작업만 실패시켰다(2026-10-08)."""
+    vendor = _vendor_type(client, admin)
+    source = _source(client, admin, vendor)
+    db.execute(
+        update(DataSource)
+        .where(DataSource.slug == source["slug"])
+        .values(mapping={"columns": []})
+    )
+    db.commit()
+    done = _sync(client, admin, source["slug"], apply=True)
+    assert done.status_code == 200, done.text
+    assert done.json()["run"]["status"] == "failed"
+    assert any("external_key" in one for one in done.json()["run"]["errors"])
+    runs = client.get(f"/api/datasources/{source['slug']}/runs", headers=admin.headers).json()
+    assert runs[0]["status"] == "failed"
+    assert _saved(client, admin, source["slug"])["last_status"] == "failed"
+
+
+# --- 정의 고치기 · 겹쳐 넣기 · 차례 ---------------------------------------------------------
+
+
+def test_종류만_형제_코어로_바꿔도_안_온_것_중지를_다시_본다(
+    client: TestClient, admin: Signed, plm: FakeOData
+) -> None:
+    """보낸 칸만 검사하던 때는 「안 온 것을 중지」 를 켜 둔 채 종류만 바꿀 수 있었다 — 그러면
+    두 번째 증분에서 안 바뀐 객체가 전부 사용 중지된다(2026-10-08)."""
+    vendor = _vendor_type(client, admin)
+    source = _source(client, admin, vendor, deprecate_missing=True)
+    refused = client.patch(
+        f"/api/datasources/{source['slug']}", json={"kind": "sp_core"}, headers=admin.headers
+    )
+    assert refused.status_code == 422, refused.text
+    assert "무덤으로 알려" in refused.json()["error"]["message"]
+    changed = client.patch(
+        f"/api/datasources/{source['slug']}",
+        json={"kind": "sp_core", "deprecate_missing": False},
+        headers=admin.headers,
+    )
+    assert changed.status_code == 200, changed.text
+
+
+def test_같은_소스의_적용을_겹쳐_넣지_않는다(
+    client: TestClient, admin: Signed, plm: FakeOData, db: Session
+) -> None:
+    """화면의 「동기화」 가 줄에 있는 작업을 안 봤다 — 워커가 둘이면 둘 다 같은 새 행을
+    만들었다(2026-10-08)."""
+    from app.modules.jobs import services as job_services
+
+    vendor = _vendor_type(client, admin)
+    slug = _source(client, admin, vendor)["slug"]
+    first = client.post(
+        f"/api/datasources/{slug}/sync", params={"apply": "true"}, headers=admin.headers
+    )
+    again = client.post(
+        f"/api/datasources/{slug}/sync", params={"apply": "true"}, headers=admin.headers
+    )
+    assert first.status_code == again.status_code == 202, again.text
+    assert again.json()["id"] == first.json()["id"]
+    finish_job(client, admin, first.json())
+
+    # 타이머의 차례가 이 소스를 들고 있으면 그렇다고 말한다.
+    round_job = job_services.enqueue(
+        db,
+        kind="datasource_sync_round",
+        params={"slugs": [slug], "apply": True},
+        user=None,
+        workspace_id=None,
+    )
+    db.commit()
+    busy = client.post(
+        f"/api/datasources/{slug}/sync", params={"apply": "true"}, headers=admin.headers
+    )
+    assert busy.status_code == 409, busy.text
+    assert "차례" in busy.json()["error"]["message"]
+    work_until(db, round_job.id)
+
+
+def test_차례는_타이머의_간격만큼_봐준다(
+    client: TestClient, admin: Signed, plm: FakeOData, db: Session
+) -> None:
+    """`last_run_at` 은 끝난 때라 여유 없이 견주면 차례가 늘 다음 깸으로 밀렸다 — 5분 소스가
+    실제로는 10분마다 돌았다(2026-10-08)."""
+    vendor = _vendor_type(client, admin)
+    slug = _source(client, admin, vendor, interval_minutes=60)["slug"]
+    now = datetime.now(UTC)
+
+    def ran(minutes_ago: int) -> set[str]:
+        db.execute(
+            update(DataSource)
+            .where(DataSource.slug == slug)
+            .values(last_run_at=now - timedelta(minutes=minutes_ago))
+        )
+        db.commit()
+        return {one.slug for one in services.due(db, now=now)}
+
+    assert slug in ran(57)  # 타이머가 3분 뒤에 깨면 63분이 된다 — 지금 돌린다
+    assert slug not in ran(50)
+
+
+def test_한_번도_안_돈_소스도_멎음에_뜬다(
+    client: TestClient, admin: Signed, plm: FakeOData, db: Session
+) -> None:
+    """`last_run_at` 이 없으면 빼서, 타이머 · 워커가 처음부터 없던 설치의 소스는 영영 「멎음」
+    에 안 걸렸다(2026-10-08)."""
+    vendor = _vendor_type(client, admin)
+    slug = _source(client, admin, vendor, interval_minutes=60)["slug"]
+    before = maintenance_counts(client, admin).get("datasource_stale", 0)
+    db.execute(
+        update(DataSource)
+        .where(DataSource.slug == slug)
+        .values(created_at=datetime.now(UTC) - timedelta(days=1))
+    )
+    db.commit()
+    assert maintenance_counts(client, admin)["datasource_stale"] == before + 1
+
+
+def _round(db: Session, slugs: list[str]) -> dict[str, Any]:
+    from app.modules.jobs import services as job_services
+    from app.modules.jobs.models import Job
+
+    job = job_services.enqueue(
+        db,
+        kind="datasource_sync_round",
+        params={"slugs": slugs, "apply": True},
+        user=None,
+        workspace_id=None,
+    )
+    db.commit()
+    work_until(db, job.id)
+    db.expire_all()
+    done = db.scalar(select(Job).where(Job.id == job.id))
+    assert done is not None and done.status == "done", done.error if done else None
+    return dict(done.result or {})
+
+
+def test_차례에서_뒤_소스가_터져도_앞_소스의_지표_작업은_남는다(
+    client: TestClient,
+    admin: Signed,
+    plm: FakeOData,
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """지표 다시 세기 작업(`_after_ingest`)은 flush 만 했다 — 다음 소스의 예외가 부른 롤백이
+    앞 소스의 그 작업까지 버렸다(2026-10-08)."""
+    from app.modules.jobs import kinds
+    from app.modules.jobs import services as job_services
+    from app.modules.jobs.models import Job
+
+    tag = uuid.uuid4().hex[:6]
+    first = _source(client, admin, _vendor_type(client, admin), **_bare(slug=f"a_one_{tag}"))
+    later = _source(
+        client,
+        admin,
+        _make_type(client, admin, label="다른 것", key_policy="optional"),
+        **_bare(slug=f"b_two_{tag}"),
+    )
+    marker = f"marker_{tag}"
+
+    def after_ingest(session: Session, _type_id: uuid.UUID, _reason: str) -> None:
+        job_services.enqueue(
+            session,
+            kind="datasource_sync",
+            params={"slug": marker, "apply": False},
+            user=None,
+            workspace_id=None,
+        )
+
+    real = services.sync
+
+    def sync(session: Session, user: Any, source: Any, *, apply: bool) -> Any:
+        if source.slug == later["slug"]:
+            raise RuntimeError("뒤 소스가 터짐")
+        return real(session, user, source, apply=apply)
+
+    monkeypatch.setattr(kinds, "_after_ingest", after_ingest)
+    monkeypatch.setattr(services, "sync", sync)
+    result = _round(db, [first["slug"], later["slug"]])
+    statuses = {one["slug"]: one["status"] for one in result["sources"]}
+    assert statuses == {first["slug"]: "ok", later["slug"]: "failed"}
+    kept = select(Job).where(
+        Job.kind == "datasource_sync", Job.params["slug"].astext == marker
+    )
+    assert len(list(db.scalars(kept))) == 1
+    db.execute(
+        update(Job)
+        .where(Job.kind == "datasource_sync", Job.params["slug"].astext == marker)
+        .values(status="cancelled")
+    )
+    db.commit()
+
+
+def test_차례는_소스를_돌기_직전에_다시_읽는다(
+    client: TestClient,
+    admin: Signed,
+    plm: FakeOData,
+    db: Session,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """세션이 커밋에 값을 안 버려(`expire_on_commit=False`), 차례가 도는 사이 관리자가 소스를
+    꺼도 처음 읽은 값으로 그대로 돌았다(2026-10-08)."""
+    tag = uuid.uuid4().hex[:6]
+    first = _source(client, admin, _vendor_type(client, admin), **_bare(slug=f"a_one_{tag}"))
+    later = _source(
+        client,
+        admin,
+        _make_type(client, admin, label="다른 것", key_policy="optional"),
+        **_bare(slug=f"b_two_{tag}"),
+    )
+    real = services.sync
+
+    def sync(session: Session, user: Any, source: Any, *, apply: bool) -> Any:
+        if source.slug == first["slug"]:
+            # 차례가 도는 사이 관리자가 뒤 소스를 끈다(다른 세션).
+            off = client.patch(
+                f"/api/datasources/{later['slug']}",
+                json={"is_active": False},
+                headers=admin.headers,
+            )
+            assert off.status_code == 200, off.text
+        return real(session, user, source, apply=apply)
+
+    monkeypatch.setattr(services, "sync", sync)
+    result = _round(db, [first["slug"], later["slug"]])
+    statuses = {one["slug"]: one["status"] for one in result["sources"]}
+    assert statuses == {first["slug"]: "ok", later["slug"]: "skipped"}

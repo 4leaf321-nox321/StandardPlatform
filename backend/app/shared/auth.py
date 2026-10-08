@@ -50,8 +50,14 @@ def scope_path(request: Request) -> str:
        범위를 고치러 다니게 되는 자리다.
 
     ASGI 의 `root_path` 가 그 접두어다 — 라우팅도 같은 값을 떼고 길을 찾는다.
+
+    ⚠️ **`request.url.path` 가 아니라 `scope["path"]` 다** — 라우팅이 보는 바로 그 값. `url` 은
+       디코딩된 경로로 주소를 다시 지어 쪼개므로 `%3F`(?) · `%23`(#) 에서 잘린다: 읽기 토큰이
+       `POST /api/metrics/plan%3F/recompute` 를 보내면 범위는 「읽기로 연 `/api/metrics/plan`」
+       을 보고 통과시키는데, 라우팅은 `plan?` 을 지표 이름으로 받아 재계산(쓰기)으로 갔다
+       (Starlette 1.6, 2026-10-08).
     """
-    path = request.url.path
+    path = str(request.scope.get("path") or "/")
     root = request.scope.get("root_path") or ""
     if root and path.startswith(root):
         return path[len(root) :] or "/"
@@ -124,6 +130,10 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
     if signed_in is None:
         raise Forbidden(code("AUTH", 2), "삭제된 계정입니다. 관리자에게 문의하세요.")
     services.ensure_can_sign_in(signed_in)
+    if payload.get("sep", 0) != signed_in.session_epoch:
+        # **끊은 뒤에 쓰인 옛 로그인**(비밀번호 변경 · 초기화 · 정지 전에 받은 토큰)이다 —
+        # 만료와 같은 말로 답한다(다시 로그인하면 된다).
+        raise AppError(code("AUTH", 102), "세션이 만료되었습니다.", status=401)
     request.scope[USER_ID_SCOPE_KEY] = signed_in.id
     return signed_in
 

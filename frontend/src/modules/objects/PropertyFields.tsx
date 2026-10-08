@@ -27,6 +27,7 @@ import {
   SelectValue,
 } from '@/shared/components/ui/select'
 import { Textarea } from '@/shared/components/ui/textarea'
+import { toDatetimeLocal } from '@/shared/lib/datetime'
 import { cn } from '@/shared/lib/utils'
 
 /** 고를 것이 이보다 많으면 통째로 펼치지 않는다 — 눈으로 찾는 일은 실패한다. */
@@ -115,13 +116,27 @@ function OneValue({
   }
 
   if (def.data_type === 'datetime') {
+    // 가져오기로 들어온 값(공백 · 오프셋 · 소수 초)은 입력 칸이 못 읽어 빈칸으로 보였다 — 맞춰
+    // 보이고, 그래도 못 읽으면 **원값을 적어 두고 손대기 전까지 그대로 둔다**(2026-10-08).
+    const raw = typeof value === 'string' ? value : ''
+    const shown = toDatetimeLocal(raw)
     return (
-      <Input
-        type="datetime-local"
-        value={typeof value === 'string' ? value : ''}
-        disabled={disabled}
-        onChange={(event) => onChange(event.target.value || null)}
-      />
+      <div className="space-y-1">
+        <Input
+          type="datetime-local"
+          step={shown && shown.length > 16 ? 1 : undefined}
+          value={shown ?? ''}
+          title={raw || undefined}
+          disabled={disabled}
+          onChange={(event) => onChange(event.target.value || null)}
+        />
+        {shown === null && (
+          <p className="text-muted-foreground text-xs">
+            저장된 값 <span className="font-mono">{raw}</span> 은 이 칸이 읽을 수 없는 모양이라
+            그대로 둡니다 — 바꾸려면 새로 입력하세요.
+          </p>
+        )}
+      </div>
     )
   }
 

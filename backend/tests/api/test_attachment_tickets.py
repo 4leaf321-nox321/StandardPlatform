@@ -119,13 +119,93 @@ def test_쓸_때_다시_본다(client: TestClient, admin: Signed) -> None:
     assert _put(client, issued["ticket"], _png()).status_code == 404
 
 
+def _asgi_put(ticket: str, chunks: int) -> tuple[int, int]:
+    """앱을 ASGI 로 직접 불러 (응답 상태, **받아 간 본문 조각 수**) 를 낸다. TestClient 는
+    본문을 한 번에 넘겨서 「얼마나 받고 나서 거절했나」 가 안 보인다. 조각은 1KB 씩."""
+    import anyio
+    from starlette.types import Message
+
+    from app.main import app
+
+    pulled = 0
+    statuses: list[int] = []
+
+    async def receive() -> Message:
+        nonlocal pulled
+        if pulled >= chunks:
+            return {"type": "http.disconnect"}
+        pulled += 1
+        return {"type": "http.request", "body": b"x" * 1024, "more_body": pulled < chunks}
+
+    async def send(message: Message) -> None:
+        if message["type"] == "http.response.start":
+            statuses.append(int(message["status"]))
+
+    path = "/api/attachments/upload"
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "PUT",
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "root_path": "",
+        "query_string": b"",
+        "headers": [
+            (b"host", b"testserver"),
+            (b"x-upload-ticket", ticket.encode()),
+            (b"content-length", str(chunks * 1024).encode()),
+        ],
+        "client": ("testclient", 50000),
+        "server": ("testserver", 80),
+    }
+    anyio.run(app, scope, receive, send)
+    return statuses[0], pulled
+
+
+def test_표부터_보고_본문을_받는다(client: TestClient, admin: Signed) -> None:
+    """**표가 자격이다** — 표 없는 PUT 이 본문을 끝까지 보내고 나서야 거절되면, 아무나 50MB 를
+    거듭 보내 서버 디스크(임시 파일)를 쓰게 할 수 있다. 본문을 다 받은 뒤에 표를 봤다
+    (2026-10-08)."""
+    w = _world(client, admin)
+    status, pulled = _asgi_put("missing-ticket-" + "x" * 30, chunks=64)
+    assert status == 401
+    assert pulled == 0
+    # 쓴 표도 같다 — 한 번 쓴 표를 다시 들고 오면 본문을 받지 않는다.
+    issued = _ticket(client, admin, w["id"]).json()
+    status, pulled = _asgi_put(issued["ticket"], chunks=4)
+    assert (status, pulled) == (201, 4)
+    status, pulled = _asgi_put(issued["ticket"], chunks=64)
+    assert (status, pulled) == (401, 0)
+
+
+def test_크기를_미리_밝히면_받기_전에_끊는다(
+    client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`Content-Length` 가 상한을 넘으면 한 바이트도 받지 않는다 — 받다가 끊는 것은 그 값을 안
+    밝히거나 속인 요청의 몫이다. 표는 쓰지 않은 채로 남는다(작게 고쳐 다시 올린다)."""
+    monkeypatch.setattr(services, "MAX_BYTES", 2048)
+    w = _world(client, admin)
+    issued = _ticket(client, admin, w["id"]).json()
+    status, pulled = _asgi_put(issued["ticket"], chunks=8)
+    assert (status, pulled) == (413, 0)
+    assert _put(client, issued["ticket"], b"x" * 100).status_code == 201
+
+
 def test_크기_상한을_넘으면_받다가_끊는다(
     client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(services, "MAX_BYTES", 1000)
     w = _world(client, admin)
     issued = _ticket(client, admin, w["id"]).json()
-    refused = _put(client, issued["ticket"], b"x" * 5000)
+    # 크기를 안 밝히고(chunked) 보낸다 — 밝힌 요청은 받기 전에 끊긴다(위 시험).
+    refused = client.put(
+        "/api/attachments/upload",
+        content=iter([b"x" * 5000]),
+        headers={"X-Upload-Ticket": issued["ticket"]},
+    )
+    assert "content-length" not in refused.request.headers
     assert refused.status_code == 413
     assert refused.json()["error"]["code"].endswith("FILES-0003")
 

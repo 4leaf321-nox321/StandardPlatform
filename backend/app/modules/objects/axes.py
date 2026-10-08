@@ -106,11 +106,23 @@ class Axis:
     """관계로 이어진 것 **자체**가 기준이면 — 상대 타입이 하나로 정해질 때 그 slug. 값은 그
     타입 객체의 id 라서 같은 타입을 가리키는 참조 칸과 **같은 값**이다(지표의 분모 짝, ADR
     0013)."""
+    viewer: User | None = None
+    """보는 사람 — 참조 칸 기준의 이름표가 그 사람이 못 보는 객체의 이름을 가린다
+    (`labels`). 없으면(지표 · 저장 검사) 가리지 않는다."""
 
 
 def own_property(defs: list[PropertyDef], field_name: str) -> PropertyDef:
-    """`properties.<키>` → 그 정의. 없으면 422."""
-    key = field_name.split(".", 1)[1]
+    """`properties.<키>` → 그 정의. 없으면 422.
+
+    접두어 없이 키만 오면(`metric_field=weight` · `x=weight`) 고칠 주소를 말하며 422 다 —
+    예전에는 `split` 이 빈 자리를 집어 500 이었다(2026-10-08)."""
+    head, dot, key = field_name.partition(".")
+    if head != "properties" or not dot:
+        raise AppError(
+            code("OBJECTS", 40),
+            f"칸은 properties.<키> 로 적습니다: {field_name} → properties.{field_name}",
+            status=422,
+        )
     found = next((one for one in defs if one.key == key), None)
     if found is None:
         raise AppError(
@@ -372,11 +384,21 @@ class JoinPlan:
                     # 건에서 2분을 넘겼다. 색인은 원소마다 한 줄이라 단일값 · 여러 값이 같다.
                     link = aliased(ObjectRef, name=f"{name}_link")
                     target = aliased(ObjectInstance, name=f"{name}_ref")
+                    # 가리키는 객체도 보이는 것만 — 걸음마다 같은 규칙(`Resolver.seen`).
                     mine = [
                         (link, and_(link.src_id == entity.id, link.key == hop.name)),
-                        (target, and_(target.id == link.dst_id, target.deleted_at.is_(None))),
+                        (
+                            target,
+                            and_(
+                                target.id == link.dst_id,
+                                target.deleted_at.is_(None),
+                                *owner.seen(target),
+                            ),
+                        ),
                     ]
                 else:
+                    # 관계 걸음 — 선(`edges`)이 저쪽 끝을 보이는 것만 남긴다. 예전에는 걸리지
+                    # 않아 `in.<관계>` 로 묶으면 남의 부서 객체 이름이 막대로 섰다(2026-10-08).
                     edges = owner.edges(hop, f"{name}_edges")
                     target = aliased(ObjectInstance, name=f"{name}_obj")
                     mine = [
@@ -386,6 +408,7 @@ class JoinPlan:
                             and_(
                                 cast(target.id, String) == edges.c.other,
                                 target.deleted_at.is_(None),
+                                *owner.seen(target),
                             ),
                         ),
                     ]
@@ -416,7 +439,14 @@ class JoinPlan:
             target = aliased(ObjectInstance, name=f"{self.prefix}r_obj")
             joins: list[tuple[Any, Any]] = [
                 (link, and_(link.src_id == ObjectInstance.id, link.key == hop.name)),
-                (target, and_(target.id == link.dst_id, target.deleted_at.is_(None))),
+                (
+                    target,
+                    and_(
+                        target.id == link.dst_id,
+                        target.deleted_at.is_(None),
+                        *self.resolver.seen(target),
+                    ),
+                ),
             ]
             return Reach(cast(target.id, String), target, joins, [hop])
         chain = self.resolver.parse_chain(address)
@@ -458,6 +488,11 @@ class JoinPlan:
         """주소 하나 → 기준. 식은 **글자**를 내놓는다 — 그래야 한 자리에서 상태·부서·속성을
         같은 규칙으로 다룬다. 여러 값 칸과 여럿과 이어진 걸음은 한 행이 여러 막대에 들고, 그
         사실을 `multi` 로 화면에 넘겨 **적게 한다**."""
+        found = self._axis(address, grain=grain)
+        found.viewer = self.resolver.viewer
+        return found
+
+    def _axis(self, address: str, *, grain: str | None = None) -> Axis:
         defs = self.scope.defs
         if paths.is_path(address):
             chain = self.resolver.parse_chain(address)
@@ -650,7 +685,7 @@ def labels(db: Session, axis: Axis, keys: list[str]) -> dict[str, str]:
     if axis.kind == "object_ref" and axis.ref_def is not None:
         ref = axis.ref_def
         rows = [{ref.key: key} for key in keys if _is_uuid(key)]
-        names = system.ref_labels(db, [ref], rows)
+        names = system.ref_labels(db, [ref], rows, viewer=axis.viewer)
         return {key: names.get(uuid.UUID(key), key) for key in keys if _is_uuid(key)}
     return {}
 

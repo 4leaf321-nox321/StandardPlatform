@@ -586,20 +586,24 @@ def reconcile(
             ObjectInstance.deleted_at.is_(None),
         )
     )
-    held = list(rows)
+    # **객체로 센다** — 사람이 합친 객체는 이 소스의 외부 식별자를 둘 갖는다. 하나만 와도 온
+    # 것이고, 두 줄로 세면 한 객체에 「다시 올라옴」 과 「내려감」 이 함께 적힌다.
+    pairs = list(rows)
+    came = {row.id for row, norm in pairs if norm in seen}
+    held = list({row.id: row for row, _norm in pairs}.values())
     if full:
         candidates = sum(
             1
-            for row, norm in held
-            if norm not in seen and (row.properties or {}).get("origin_state") != ORIGIN_GONE
+            for row in held
+            if row.id not in came and (row.properties or {}).get("origin_state") != ORIGIN_GONE
         )
         if candidates > GONE_FLOOR and candidates > GONE_LIMIT * len(held):
             # **표시하지 않고 멈춘다** — 부르는 쪽이 실패로 적고 사람에게 알린다.
             full = False
             gone = -candidates
-    for row, norm in held:
+    for row in held:
         properties = dict(row.properties or {})
-        if norm in seen:
+        if row.id in came:
             if "removed_on" not in properties:
                 continue
             properties.pop("removed_on", None)

@@ -44,11 +44,18 @@ from app.shared.request_context import (
 # **과거형으로 적는다** — 일어난 일의 기록이지 명령이 아니다.
 
 ACCOUNT_DECIDED = "account.decided"
+"""가입 신청을 승인하거나 거절했다."""
+ACCOUNT_CREATED = "account.created"
+"""관리자가 계정을 직접 만들었다(가입 신청을 거치지 않고)."""
 ACCOUNT_SUSPENDED = "account.suspended"
+ACCOUNT_ACTIVATED = "account.activated"
+"""정지했던 계정을 다시 켰다 — 정지와 같은 이름으로 적으면 기록만 보고는 어느 쪽인지 모른다."""
 ACCOUNT_ADMIN_CHANGED = "account.admin_changed"
 ACCOUNT_HOME_CHANGED = "account.home_changed"
 ACCOUNT_WORKSPACES_CHANGED = "account.workspaces_changed"
 ACCOUNT_DELETED = "account.deleted"
+ACCOUNT_PASSWORD_RESET = "account.password_reset"
+"""관리자가 임시 비밀번호로 되돌렸다 — 그 사람의 세션(로그인)도 함께 끊었다."""
 LOGIN_THROTTLED = "auth.login_throttled"
 """같은 계정의 실패가 문턱을 넘어 응답을 늦추기 시작했다. 실패마다 남기면 넘치므로
 문턱을 넘는 순간 한 번만."""

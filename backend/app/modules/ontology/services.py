@@ -28,6 +28,24 @@ SLUG_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 #: `properties.<key>` 로 가리키는 이름이라, 점이나 공백이 들어가면 그 표기가 깨진다.
 KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
 
+#: 타입 · 인터페이스 slug 로 **못 쓰는 이름** — 객체 API 에서 `/{type_slug}` 보다 앞에 선 고정
+#: 경로의 첫 마디(`/api/objects/home` · `/watching` · `/quality/report`). 그 slug 의 타입은
+#: 목록이 고정 경로로 빠져 안 열린다(2026-10-08). 객체 라우터에 고정 경로를 더하면 여기에도
+#: 더한다 — `tests/api/test_ontology_guards.py` 가 둘이 어긋나면 잡는다. 이미 있는 타입은
+#: 그대로 두고 새로 만드는 것만 막는다.
+RESERVED_SLUGS: frozenset[str] = frozenset({"home", "quality", "watching"})
+
+
+def reserved_slug_error(slug: str, *, what: str) -> str | None:
+    """못 쓰는 slug 면 사람이 읽을 까닭, 아니면 None."""
+    if slug in RESERVED_SLUGS:
+        return (
+            f"{what} {slug}: 화면 · API 의 고정 주소(/api/objects/{slug})와 겹쳐 쓸 수 없는 "
+            "이름입니다 — 다른 slug 를 고르세요"
+            f"(못 쓰는 것: {', '.join(sorted(RESERVED_SLUGS))})."
+        )
+    return None
+
 
 class InvalidValue(AppError):
     """속성 값이 정의와 안 맞는다.
@@ -41,8 +59,11 @@ class InvalidValue(AppError):
 
 
 def require_slug(value: str, *, what: str) -> str:
-    """소문자로 시작하는 영숫자·밑줄. **바꿀 수 없는 값이므로 들어올 때 막는다.**"""
-    value = (value or "").strip()
+    """소문자로 시작하는 영숫자·밑줄. **바꿀 수 없는 값이므로 들어올 때 막는다.**
+
+    정의 파일은 JSON 이라 숫자 · 목록이 올 수 있다 — 글자가 아니면 같은 말로 거절한다(예전에는
+    `.strip()` 에서 터져 500 이었다, 2026-10-08)."""
+    value = (value or "").strip() if isinstance(value, str) or not value else str(value)
     if not SLUG_RE.match(value):
         raise InvalidValue(
             code("ONTOLOGY", 1),
@@ -52,7 +73,9 @@ def require_slug(value: str, *, what: str) -> str:
 
 
 def require_key(value: str) -> str:
-    value = (value or "").strip()
+    # 글자가 아니면(숫자 · 목록) `KEY_RE` 에 안 맞게 둔다 — 소문자로 시작해야 하니 숫자를
+    # 글자로 바꿔도 통과하지 못한다.
+    value = (value or "").strip() if isinstance(value, str) or not value else str(value)
     if not KEY_RE.match(value):
         raise InvalidValue(
             code("ONTOLOGY", 2),

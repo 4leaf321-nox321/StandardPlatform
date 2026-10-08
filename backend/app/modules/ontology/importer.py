@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import Boolean, Float, Integer, String, func, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -55,9 +55,11 @@ from app.modules.ontology.services import (
     group_parent_error,
     require_key,
     require_slug,
+    reserved_slug_error,
     system_source_error,
 )
 from app.shared import audit
+from app.shared.errors import code
 
 #: 스키마가 담을 수 있는 것. **모르는 것이 오면 거절한다** — 조용히 무시하면
 #: 보낸 쪽은 적용된 줄 안다.
@@ -179,6 +181,9 @@ class Change:
     via: str = ""
     """이 변경을 부른 인터페이스 — 파일에 없던 타입의 속성이 **인터페이스를 따라** 바뀔 때.
     사람이 「이건 왜 바뀌지」 를 물을 자리다."""
+    owner_kind: str = "type"
+    """속성(`property`)이면 그 주인이 타입인가 관계 종류인가 — 둘 다 `<주인>.<키>` 로 적혀
+    slug 만으로는 못 가른다. 허브 잠금(`_refuse_managed`)이 주인을 찾는 데 쓴다."""
 
 
 @dataclass
@@ -208,6 +213,113 @@ def _check_choices(payload: dict[str, Any], *, what: str, errors: list[str]) -> 
             errors.append(
                 f"{what}: {name} 은 {', '.join(allowed)} 중 하나여야 합니다 ({value})."
             )
+
+
+def _require_shape(payload: dict[str, Any]) -> None:
+    """**본문의 모양부터** — 목록 자리에 글자가, 항목 자리에 숫자가 오면 아래가 `.get` 에서
+    터져 500 이었다(`{"types": ["x"]}`, 2026-10-08). 모양이 틀린 본문은 계획을 세울 수 없으니
+    오류 목록이 아니라 422 로 거절한다."""
+
+    def wrong(message: str) -> InvalidValue:
+        return InvalidValue(code("ONTOLOGY", 92), f"정의의 모양이 틀렸습니다 — {message}")
+
+    if not isinstance(payload, dict):
+        raise wrong("최상위는 표(객체)여야 합니다.")
+    for name in sorted(TOP_KEYS):
+        items = payload.get(name)
+        if items is None:
+            continue
+        if not isinstance(items, list):
+            raise wrong(f"{name} 은(는) 목록이어야 합니다.")
+        for one in items:
+            if not isinstance(one, dict):
+                raise wrong(f"{name} 의 항목은 표(객체)여야 합니다: {str(one)[:60]!r}")
+            props = one.get("properties")
+            if props is None:
+                continue
+            if not isinstance(props, list) or not all(isinstance(p, dict) for p in props):
+                raise wrong(
+                    f"{name} {one.get('slug')!r} 의 properties 는 표의 목록이어야 합니다."
+                )
+
+
+#: 목록이어야 하는 칸 — 표의 칸으로는 JSONB 라 모양을 DB 가 안 본다.
+LIST_FIELDS = {
+    "interface_slugs",
+    "extends_slugs",
+    "src_type_slugs",
+    "dst_type_slugs",
+    "enum_options",
+}
+#: 표(객체)여야 하는 칸 — 화면 모양. 안의 키는 `views` 가 본다.
+DICT_FIELDS = {"list_view", "form_view", "detail_view"}
+#: 글자여야 하는 칸 — 행에는 id 로 있고 파일에는 slug 로 온다.
+SLUG_FIELDS = {"nav_group_slug", "parent_slug"}
+
+
+def _field_errors(
+    model: type[Any], payload: dict[str, Any], fields: set[str], *, what: str
+) -> list[str]:
+    """보낸 칸이 **표의 칸에 들어가나** — 종류와 글자 길이.
+
+    계획은 이것을 안 보고 적용이 `_assign` 으로 그대로 넣어서, 64자를 넘는 이름 하나가 미리
+    보기는 통과하고 적용에서 `varchar(64)` 로 500 이 났다(표에서 추론한 열 이름이 그랬다,
+    2026-10-08). 칸의 정의(`model.__table__`)에서 읽는다 — 길이를 여기 따로 적으면 두 벌이
+    된다.
+
+    **종류가 틀린 것(글자 자리의 숫자 · 목록 자리의 글자)은 모양 오류라 422 로 거절한다** —
+    뒤의 계획이 그 값을 목록으로 읽다 터진다. 길이 · 비울 수 없음은 계획의 오류로 돌려준다.
+    """
+    columns = model.__table__.columns
+    out: list[str] = []
+    wrong: list[str] = []
+    for name in sorted(fields & set(payload)):
+        if name in ("slug", "key", "properties"):
+            continue
+        value = payload[name]
+        said = f"{what}: {name}"
+        if name in LIST_FIELDS:
+            if value is not None and (
+                not isinstance(value, list) or not all(isinstance(one, str) for one in value)
+            ):
+                wrong.append(f"{said} 은(는) 글자의 목록이어야 합니다.")
+            continue
+        if name in DICT_FIELDS:
+            if value is not None and not isinstance(value, dict):
+                wrong.append(f"{said} 은(는) 표(객체)여야 합니다.")
+            continue
+        if name in SLUG_FIELDS:
+            if value is not None and not isinstance(value, str):
+                wrong.append(f"{said} 은(는) 글자여야 합니다.")
+            continue
+        if name not in columns:
+            continue
+        column = columns[name]
+        kind = column.type
+        if value is None:
+            if not column.nullable:
+                out.append(f"{said} 은(는) 비울 수 없습니다.")
+            continue
+        if isinstance(kind, String):
+            if not isinstance(value, str):
+                wrong.append(f"{said} 은(는) 글자여야 합니다.")
+            elif kind.length is not None and len(value) > kind.length:
+                out.append(f"{said} 은(는) {kind.length}자까지입니다({len(value)}자).")
+        elif isinstance(kind, Boolean):
+            if not isinstance(value, bool):
+                wrong.append(f"{said} 은(는) 참/거짓이어야 합니다.")
+        elif isinstance(kind, Integer):
+            if isinstance(value, bool) or not isinstance(value, int):
+                wrong.append(f"{said} 은(는) 정수여야 합니다.")
+        elif isinstance(kind, Float) and (
+            isinstance(value, bool) or not isinstance(value, int | float)
+        ):
+            wrong.append(f"{said} 은(는) 숫자여야 합니다.")
+    if wrong:
+        raise InvalidValue(
+            code("ONTOLOGY", 92), f"정의의 모양이 틀렸습니다 — {' '.join(wrong)}"
+        )
+    return out
 
 
 def _diff(
@@ -250,7 +362,11 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
 
     **인터페이스는 타입보다 먼저 읽는다** — 타입이 구현하는 것이 같은 파일에 올 수 있다. 공통
     속성이 바뀌면 파일에 없던 구현 타입의 속성도 따라 바뀐다: 바뀌기 전과 뒤의 정의를 만들어
-    `interfaces.plan_bindings` 가 할 일을 낸다(화면과 같은 함수다)."""
+    `interfaces.plan_bindings` 가 할 일을 낸다(화면과 같은 함수다).
+
+    **적용이 거절할 것은 여기서 다 본다**(칸의 종류 · 길이, 화면 모양) — 미리 보기가 오류
+    없이 통과한 파일이 적용에서 422 · 500 이 나면, 미리 보기를 믿을 수 없다."""
+    _require_shape(payload)
     _reject_unknown(payload, TOP_KEYS, what="스키마")
     out = Plan()
 
@@ -288,8 +404,12 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
 
     for one in payload.get("groups") or []:
         _reject_unknown(one, GROUP_FIELDS, what="묶음")
-        slug = require_slug(one.get("slug", ""), what="묶음 slug")
+        slug = one["slug"] = require_slug(one.get("slug", ""), what="묶음 slug")
         _check_choices(one, what=f"묶음 {slug}", errors=out.errors)
+        # 색은 아래 `group_color_error` 가 본다(같은 칸을 두 번 말하지 않는다).
+        out.errors.extend(
+            _field_errors(NavGroup, one, GROUP_FIELDS - {"color"}, what=f"묶음 {slug}")
+        )
         if "color" in one:
             # 화면이 막는 것을 파일이 통과시키면, 그 색은 캔버스에서 검정으로 나온다.
             wrong_color = group_color_error(slug, one["color"])
@@ -336,14 +456,19 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
             # **조용히 무시하지 않는다** — 무시하면 보낸 쪽은 계층이 적용된 줄 안다.
             raise ValueError(PARENT_GONE.format(slug=one.get("slug", "?")))
         _reject_unknown(one, TYPE_FIELDS, what="타입")
-        slug = require_slug(one.get("slug", ""), what="타입 slug")
+        slug = one["slug"] = require_slug(one.get("slug", ""), what="타입 slug")
         _check_choices(one, what=f"타입 {slug}", errors=out.errors)
+        out.errors.extend(_field_errors(ObjectType, one, TYPE_FIELDS, what=f"타입 {slug}"))
         object_type = types.get(slug)
         clash = interfaces.namespace_error(
             slug, as_kind="type", types=(), interfaces=known_ifaces
         )
         if clash:
             out.errors.append(clash)
+        reserved = reserved_slug_error(slug, what="타입") if object_type is None else None
+        if reserved:
+            # 새로 만드는 것만 — 이미 있는 그 이름의 타입은 그대로 고칠 수 있다.
+            out.errors.append(reserved)
 
         # 같은 스키마 안에서 함께 만들어지는 묶음도 인정한다 — **한 번에 보내는
         # 것이 이 엔드포인트의 요점**이라, 순서를 사람이 맞추게 하면 안 된다.
@@ -358,6 +483,21 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
         source_error = system_source_error(str(kind or "record"), str(source_of or ""))
         if source_error:
             out.errors.append(f"타입 {slug}: {source_error}")
+        already = (
+            object_type is not None and object_type.kind_class == "system" and object_type.core
+        )
+        if (
+            kind == "system"
+            and one.get("core", object_type.core if object_type else False)
+            and not already
+        ):
+            # 화면의 타입 수정(ONTOLOGY-45)과 같은 문턱 — 원 표(부서 · 계정)의 사람 정보를
+            # 바깥에 여는 일은 온톨로지 공개가 아니다. 파일로는 열렸다(2026-10-08). 이미 그런
+            # 타입(이 문턱 전에 생긴 것)은 막지 않는다 — 스냅샷 되돌리기가 통째로 막힌다.
+            out.errors.append(
+                f"타입 {slug}: 다른 표를 비추는 타입(system)은 외부에 공개(core)할 수 "
+                "없습니다."
+            )
 
         normalized = dict(one)
         if "interface_slugs" in one:
@@ -393,14 +533,21 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
 
     for one in payload.get("relation_types") or []:
         _reject_unknown(one, RELATION_FIELDS, what="관계 종류")
-        slug = require_slug(one.get("slug", ""), what="관계 slug")
+        slug = one["slug"] = require_slug(one.get("slug", ""), what="관계 slug")
         _check_choices(one, what=f"관계 {slug}", errors=out.errors)
-        if one.get("transitive") and not one.get("acyclic", one.get("transitive")):
+        out.errors.extend(
+            _field_errors(RelationType, one, RELATION_FIELDS, what=f"관계 {slug}")
+        )
+        relation = relations.get(slug)
+        # **적용이 만들 상태 그대로** 본다(`_relation_flags`) — 예전에는 여기서만 acyclic 을
+        # transitive 로 쳐 주고 적용은 모델 기본값(거짓)을 써서, 계획은 통과하고 API 가 막는
+        # 상태(ONTOLOGY-42)가 그대로 들어갔다. 있는 관계에 transitive 만 켜는 파일도 같았다.
+        transitive, acyclic = _relation_flags(relation, one)
+        if transitive and not acyclic:
             out.errors.append(
                 f"관계 {slug}: 재귀로 펼치는 관계는 순환을 막아야 합니다 — "
                 "안 그러면 트리가 무한히 돕니다."
             )
-        relation = relations.get(slug)
         if relation is None:
             out.changes.append(Change("relation_type", slug, "create"))
         else:
@@ -448,9 +595,119 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
     out.retypes.extend(following)
     out.warnings.extend(notes)
     _plan_retypes(db, payload, out)
+    _check_type_views(payload, types, after, out)
 
     _refuse_managed(out, types, relations, iface_rows, source)
     return out
+
+
+@dataclass(frozen=True)
+class _Field:
+    """화면 모양 검증이 읽는 속성 — 계획은 아직 안 적은 속성으로 본다."""
+
+    key: str
+    data_type: str
+    section: str
+
+
+def _fields_after(
+    after: interfaces.Catalog, bindings: list[interfaces.Binding], slug: str
+) -> list[_Field]:
+    """적용한 뒤 이 타입이 가질 속성 — 파일이 보낸 것 · 있던 것 · 인터페이스를 따라 생기거나
+    바뀌는 것(`apply_bindings`)."""
+    entry = after.types.get(slug)
+    out = {
+        key: _Field(key, prop.shape.data_type, prop.section)
+        for key, prop in (entry.props.items() if entry is not None else ())
+    }
+    for todo in bindings:
+        if (
+            todo.type_slug != slug
+            or todo.action not in ("create", "sync")
+            or todo.shape is None
+        ):
+            continue
+        have = out.get(todo.key)
+        section = have.section if have else (todo.defaults.section if todo.defaults else "")
+        out[todo.key] = _Field(todo.key, todo.shape.data_type, section)
+    return list(out.values())
+
+
+def _views_of(
+    one: dict[str, Any],
+    row: ObjectType | None,
+    defs: list[_Field],
+    numeric_gone: set[str],
+) -> dict[str, dict[str, Any]]:
+    """적용이 검증할 화면 모양 — 보낸 것은 그대로, 안 보낸 것은 지금 값을 **적용이 하는 대로
+    정리해서**(숫자가 아니게 된 칸의 롤업 · 속성이 없는 묶음을 걷는다). 계획과 적용이 같은
+    규칙(`_heals`)을 쓴다."""
+    out: dict[str, dict[str, Any]] = {}
+    for name in ("list_view", "form_view", "detail_view"):
+        stored: dict[str, Any] = dict(getattr(row, name) or {}) if row is not None else {}
+        spec: dict[str, Any] = (one[name] or {}) if name in one else stored
+        if name == "list_view":
+            if name not in one:
+                for key in numeric_gone:
+                    spec = views.prune_rollups(spec, key)
+        elif _heals(one, name, stored):
+            spec = views.prune_sections(spec, defs)
+        out[name] = spec
+    return out
+
+
+def _heals(one: dict[str, Any], name: str, stored: dict[str, Any]) -> bool:
+    """폼 · 상세의 빈 묶음을 **걷고** 볼 것인가 — 안 보냈거나, 저장된 그대로 돌아왔을 때.
+
+    속성을 지울 때 빈 묶음을 걷기 전에 남은 것이 저장값 · 스냅샷 · 허브의 묶음에 실려 있다 —
+    그것을 그대로 거절하면 그 타입을 담은 가져오기 · 복원이 통째로 막힌다. 보낸 사람이 새로
+    적은 빈 묶음은 여전히 거절한다(화면의 타입 수정과 같은 규칙, 2026-10-08)."""
+    return name not in one or (one[name] or {}) == stored
+
+
+def _check_type_views(
+    payload: dict[str, Any],
+    types: dict[str, ObjectType],
+    after: interfaces.Catalog,
+    out: Plan,
+) -> None:
+    """타입의 화면 모양(목록 · 폼 · 상세)을 **적용과 같은 정의로** 본다.
+
+    예전에는 적용만 검증해서(보내지 않은 기존 값까지) 미리 보기는 오류 0 인데 적용은 422
+    였다 — 모양이 틀린 스펙(`{"sort": 1}`)은 500 이었다(2026-10-08).
+    """
+    for one in payload.get("types") or []:
+        slug = str(one["slug"])
+        defs = _fields_after(after, out.bindings, slug)
+        gone = {
+            target.key
+            for target in out.retypes
+            if target.type_slug == slug
+            and target.before == "number"
+            and target.after.data_type != "number"
+        }
+        specs = _views_of(one, types.get(slug), defs, gone)
+        try:
+            views.validate_list_view(specs["list_view"], defs)
+            views.validate_form_view(specs["form_view"], defs, what="폼 화면")
+            views.validate_form_view(specs["detail_view"], defs, what="상세 화면")
+        except InvalidValue as caught:
+            out.errors.append(f"타입 {slug}: {caught.message}")
+
+
+def _relation_flags(relation: RelationType | None, one: dict[str, Any]) -> tuple[bool, bool]:
+    """이 파일을 적용한 뒤의 (transitive, acyclic) — **계획과 적용이 같은 함수를 쓴다.**
+
+    새 관계에서 acyclic 을 안 적으면 transitive 를 따른다(재귀로 펼치는 관계는 늘 순환을
+    막아야 하니, 그것을 매번 적게 하지 않는다). 있는 관계는 안 보낸 칸이 그대로다.
+    """
+    if relation is None:
+        transitive = bool(one.get("transitive", False))
+        return transitive, bool(one.get("acyclic", transitive))
+    return (
+        bool(one.get("transitive", relation.transitive)),
+        bool(one.get("acyclic", relation.acyclic)),
+    )
 
 
 def _plan_retypes(db: Session, payload: dict[str, Any], out: Plan) -> None:
@@ -509,13 +766,19 @@ def _plan_interfaces(
     """인터페이스의 계획 — 공통 속성 · 상위 인터페이스 · 목록 모양. `after` 에 덧씌운다."""
     for one in payloads:
         _reject_unknown(one, INTERFACE_FIELDS, what="인터페이스")
-        slug = require_slug(one.get("slug", ""), what="인터페이스 slug")
+        slug = one["slug"] = require_slug(one.get("slug", ""), what="인터페이스 slug")
+        out.errors.extend(
+            _field_errors(ObjectInterface, one, INTERFACE_FIELDS, what=f"인터페이스 {slug}")
+        )
         clash = interfaces.namespace_error(
             slug, as_kind="interface", types=type_slugs, interfaces=()
         )
         if clash:
             out.errors.append(clash)
         row = rows.get(slug)
+        reserved = reserved_slug_error(slug, what="인터페이스") if row is None else None
+        if reserved:
+            out.errors.append(reserved)
         normalized = dict(one)
         if "extends_slugs" in one:
             normalized["extends_slugs"] = interfaces.normalized_slugs(one["extends_slugs"])
@@ -658,7 +921,11 @@ def _refuse_managed(
         if change.action == "unchanged" or change.via:
             continue
         row: ObjectType | RelationType | ObjectInterface | None
-        if change.kind in ("type", "property"):
+        if change.kind == "property" and change.owner_kind == "relation":
+            # 관계 종류의 속성 — 타입에서 찾으면 늘 없어서 허브 관계에 속성을 만들거나
+            # 고칠 수 있었다(2026-10-08).
+            row = relations.get(change.slug.split(".", 1)[0])
+        elif change.kind in ("type", "property"):
             row = types.get(change.slug.split(".", 1)[0])
         elif change.kind == "relation_type":
             row = relations.get(change.slug)
@@ -716,8 +983,11 @@ def _plan_properties(
 
     for one in payloads:
         _reject_unknown(one, PROPERTY_FIELDS, what="속성")
-        key = require_key(one.get("key", ""))
+        key = one["key"] = require_key(one.get("key", ""))
         _check_choices(one, what=f"속성 {type_slug}.{key}", errors=out.errors)
+        out.errors.extend(
+            _field_errors(PropertyDef, one, PROPERTY_FIELDS, what=f"속성 {type_slug}.{key}")
+        )
         found = existing.get(key)
         name = f"{type_slug}.{key}"
         if one.get("accept") is not None:
@@ -735,7 +1005,7 @@ def _plan_properties(
             )
 
         if found is None:
-            out.changes.append(Change(kind_name, name, "create"))
+            out.changes.append(Change(kind_name, name, "create", owner_kind=owner_kind))
             continue
 
         retyping = bool(one.get("data_type")) and one["data_type"] != found.data_type
@@ -760,7 +1030,13 @@ def _plan_properties(
 
         fields = _diff(found, one, PROPERTY_FIELDS)
         out.changes.append(
-            Change(kind_name, name, "update" if fields else "unchanged", fields)
+            Change(
+                kind_name,
+                name,
+                "update" if fields else "unchanged",
+                fields,
+                owner_kind=owner_kind,
+            )
         )
         if isinstance(owner, ObjectType) and not retyping:
             # 저장된 값이 걸리는 위험은 타입 속성에서만 센다(관계 속성은 셈이 다르다). 종류가
@@ -1137,6 +1413,8 @@ def apply(
                 )
 
     written_types: list[ObjectType] = []
+    #: 고치기 전의 폼 · 상세 — 저장된 그대로 돌아온 것인지(`_heals`) 견줄 값.
+    stored_views: dict[str, dict[str, dict[str, Any]]] = {}
     for index, one in enumerate(payload.get("types") or []):
         slug = one["slug"]
         object_type = db.scalar(select(ObjectType).where(ObjectType.slug == slug))
@@ -1144,6 +1422,11 @@ def apply(
         if object_type is None:
             object_type = ObjectType(slug=slug, label=one.get("label", slug))
             db.add(object_type)
+        else:
+            stored_views[slug] = {
+                name: dict(getattr(object_type, name) or {})
+                for name in ("form_view", "detail_view")
+            }
         core_was = bool(object_type.core)
         _assign(
             object_type,
@@ -1190,6 +1473,8 @@ def apply(
             return prepared
 
     # **속성을 다 세우고 뷰를 검증한다** — 뷰가 그 속성(구현으로 생긴 것까지)을 가리킨다.
+    # 계획(`_check_type_views`)이 같은 값을 이미 봤다 — 여기서 거절되면 둘이 갈린 것이다.
+    sent_views = {str(one["slug"]): one for one in payload.get("types") or []}
     for object_type in written_types:
         defs = list(
             db.scalars(
@@ -1198,6 +1483,15 @@ def apply(
                 )
             )
         )
+        for name in ("form_view", "detail_view"):
+            stored = stored_views.get(object_type.slug, {}).get(name, {})
+            if _heals(sent_views.get(object_type.slug, {}), name, stored):
+                # 안 보냈거나 저장된 그대로면 빈 묶음을 걷고 본다(`_views_of` 와 같다).
+                setattr(
+                    object_type,
+                    name,
+                    views.prune_sections(getattr(object_type, name) or {}, defs),
+                )
         object_type.list_view = views.validate_list_view(object_type.list_view or {}, defs)
         object_type.form_view = views.validate_form_view(
             object_type.form_view or {}, defs, what="폼 화면"
@@ -1210,10 +1504,12 @@ def apply(
         slug = one["slug"]
         relation = db.scalar(select(RelationType).where(RelationType.slug == slug))
         fresh = relation is None
+        flags = _relation_flags(relation, one)
         if relation is None:
             relation = RelationType(slug=slug, label=one.get("label", slug))
             db.add(relation)
         _assign(relation, one, RELATION_FIELDS, position=index if fresh else None)
+        relation.transitive, relation.acyclic = flags
         db.flush()
         # **관계에도 속성이 붙는다** — 근거 건수 · 근거 종류처럼 선 자체에 딸린 값.
         _apply_properties(db, "relation", relation.id, one.get("properties") or [])

@@ -28,8 +28,9 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance
-from app.modules.ontology.models import NavGroup, ObjectType, PropertyDef
-from app.modules.ontology.services import require_slug
+from app.modules.ontology import interfaces, managed
+from app.modules.ontology.models import NavGroup, ObjectInterface, ObjectType, PropertyDef
+from app.modules.ontology.services import require_slug, reserved_slug_error
 from app.shared import audit
 from app.shared.errors import Conflict, code
 
@@ -131,8 +132,8 @@ def rename_values(
     definition.enum_options = [
         to_value if one == from_value else one for one in definition.enum_options or []
     ]
-    if definition.default_value == from_value:
-        definition.default_value = to_value
+    # 여러 값 칸의 기본값(목록)도 함께 — 같은 자리를 `_swap` 이 본다.
+    definition.default_value = _swap(definition.default_value, from_value, to_value)
     audit.record(
         db,
         action="ontology.property.update",
@@ -198,6 +199,19 @@ def _target(
             code("ONTOLOGY", 63),
             f"이미 있는 slug 입니다: {slug}. 「기존 코드표에 연결」 을 사용하세요.",
         )
+    # 타입 만들기 · 정의 가져오기와 같은 문턱 — 인터페이스와 slug 를 함께 쓰고, 객체 API 의
+    # 고정 경로와 겹치는 이름은 못 쓴다. 승격만 이 둘을 안 봤다(2026-10-08).
+    clash = interfaces.namespace_error(
+        slug,
+        as_kind="type",
+        types=(),
+        interfaces=set(db.scalars(select(ObjectInterface.slug))),
+    )
+    if clash:
+        raise Conflict(code("ONTOLOGY", 5), clash)
+    reserved = reserved_slug_error(slug, what="타입")
+    if reserved:
+        raise Conflict(code("ONTOLOGY", 91), reserved)
     return None, slug, new_label.strip(), True
 
 
@@ -255,6 +269,17 @@ def plan_promote(
     if target is not None and target.key_policy == "required":
         plan.errors.append(
             f"{target.label}은 식별자가 필수라 값 이름만으로는 객체를 못 만듭니다."
+        )
+    owner_of = managed.owner_of(target) if target is not None else ""
+    missing = [one.value for one in plan.options if one.action == "create"]
+    if owner_of and missing:
+        # **허브가 관리하는 코드표에 객체를 만들면 잠금을 돌아간다** — 그 객체는 이 설치에서
+        # 고치지도 지우지도 못하고, 다음 받기는 그것을 모른다(2026-10-08). 이미 있는 값에
+        # 붙이기만 하는 승격은 된다(이 설치의 칸이 허브의 객체를 가리키는 것이다).
+        plan.errors.append(
+            f"{target.label if target else ''}은(는) {owner_of} 가 관리하는 코드표라 여기서 "
+            f"객체를 만들지 않습니다 — 코드표에 없는 값: {', '.join(missing)}. "
+            f"{owner_of} 에서 더한 뒤 받거나, 그 값을 먼저 정리하세요."
         )
     return plan
 
@@ -379,6 +404,15 @@ def apply_promote(
     definition.enum_options = None
     if isinstance(definition.default_value, str):
         definition.default_value = id_of.get(definition.default_value)
+    elif isinstance(definition.default_value, list):
+        # 여러 값 칸의 기본값은 목록이다 — 안 옮기면 옛 이름 목록이 참조 칸의 기본값으로 남아,
+        # 그 칸을 비운 객체 만들기가 늘 422 였다(2026-10-08).
+        moved_default = [
+            id_of[one]
+            for one in definition.default_value
+            if isinstance(one, str) and one in id_of
+        ]
+        definition.default_value = moved_default or None
     audit.record(
         db,
         action="ontology.property.promote",

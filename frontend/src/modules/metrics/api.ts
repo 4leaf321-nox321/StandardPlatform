@@ -85,6 +85,15 @@ export interface AnalysisAvail {
   reason: string | null
 }
 
+/** 이 지표가 올라간 부서 홈 하나. */
+export interface HomePin {
+  id: string
+  workspace_slug: string
+  workspace_name: string
+  split: string | null
+  home_order: number
+}
+
 export interface Metric {
   id: string
   slug: string
@@ -161,6 +170,12 @@ export interface MetricRun {
   cells: number
   error: string | null
   stats: Record<string, number>
+  /** `full` 전부 다시 셌다 · `incremental` 바뀐 기간만. 옛 판의 기록에는 없다. */
+  mode?: 'full' | 'incremental'
+  /** 증분이 다시 센 기간(시작일, 날짜 없는 칸은 null). */
+  periods?: (string | null)[] | null
+  /** 전량이면 왜 전량이었나, 증분이면 바뀐 기록 수. */
+  note?: string
 }
 
 /** 셀을 이룬 기록의 목록 조건 — `/o/<타입>?<params>` 에 그대로. */
@@ -425,6 +440,19 @@ export const metricsApi = {
   remove: (slug: string) => api.delete<void>(`/metrics/${slug}`),
   /** 다시 센다 — 작업이 된다. 같은 지표의 작업이 줄에 있으면 그것을 돌려준다. */
   recompute: (slug: string) => api.post<Job>(`/metrics/${slug}/recompute`),
+  /** 이 지표가 올라간 부서 홈들. */
+  homePins: (slug: string) => api.get<HomePin[]>(`/metrics/${slug}/home`),
+  /** 부서 홈에 올린다(이미 있으면 나눌 기준 · 자리만 고친다) — 그 부서의 관리자만. */
+  pinHome: (
+    slug: string,
+    body: {
+      workspace_slug: string
+      split?: string | null
+      position?: number | null
+    },
+  ) => api.put<HomePin>(`/metrics/${slug}/home`, body),
+  unpinHome: (slug: string, workspace: string) =>
+    api.delete<void>(`/metrics/${slug}/home?workspace=${encodeURIComponent(workspace)}`),
   runs: (slug: string) => api.get<MetricRun[]>(`/metrics/${slug}/runs`),
   values: (slug: string, opts: ReadOptions = {}) =>
     api.get<MetricTable>(`/metrics/${slug}/values${readParams(opts)}`),

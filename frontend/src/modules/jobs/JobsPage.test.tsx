@@ -22,6 +22,10 @@ const jobsApi = vi.hoisted(() => ({
   cancelMany: vi.fn(),
   download: vi.fn(),
 }))
+const auth = vi.hoisted(() => ({ admin: true, id: 'u1' }))
+vi.mock('@/shared/auth/AuthContext', () => ({
+  useAuth: () => ({ user: { id: auth.id, is_system_admin: auth.admin, memberships: [] } }),
+}))
 vi.mock('@/modules/jobs/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/modules/jobs/api')>()),
   jobsApi,
@@ -73,6 +77,8 @@ async function mount(jobs: Job[], alive = true) {
   jobsApi.kinds.mockResolvedValue([
     { name: 'objects_import', label: '객체 일괄 입력', needs_file: true, two_step: true },
     { name: 'datasource_sync', label: '데이터 소스 동기화', needs_file: false, two_step: false },
+    { name: 'filestore_gc', label: '고아 첨부 파일 정리', needs_file: false, two_step: true },
+    { name: 'ontology_retype', label: '속성 종류 변경', needs_file: false, two_step: true },
   ])
   jobsApi.workers.mockResolvedValue(
     alive
@@ -99,17 +105,129 @@ async function mount(jobs: Job[], alive = true) {
 }
 
 describe('작업 화면', () => {
-  beforeEach(() => vi.clearAllMocks())
+  beforeEach(() => {
+    vi.clearAllMocks()
+    auth.admin = true
+  })
+
+  it('남의 작업에는 「취소」 · 「적용」 을 안 세운다 — 시킨 사람과 시스템 관리자만', async () => {
+    auth.admin = false
+    await mount([
+      job({ id: 'theirs', requested_by_id: 'u2', result: CLEAN_PLAN }),
+      job({ id: 'running', requested_by_id: 'u2', status: 'running' }),
+    ])
+    await waitFor(() => expect(jobsApi.kinds).toHaveBeenCalled())
+    expect(screen.queryByRole('button', { name: '취소' })).not.toBeInTheDocument()
+    expect(screen.queryByText('적용 대기')).not.toBeInTheDocument()
+  })
+
+  it('속성 종류 변경의 계획도 펼쳐 읽고 적용한다 — rows · counts 가 없는 모양이어도', async () => {
+    // 그 결과(`RetypeOut`)를 못 알아보던 때는 창을 닫고 돌아오면 「남길 결과가 없는
+    // 작업입니다」 만 보였다 — 서버는 적용을 받아 주는데(2026-10-08).
+    const retype = (over: Record<string, unknown> = {}) => ({
+      applied: false,
+      data_type_before: 'text',
+      data_type_after: 'number',
+      types: [
+        {
+          type_slug: 'part',
+          type_label: '부품',
+          key: 'weight',
+          via: '',
+          with_value: 120,
+          converted: 118,
+          unchanged: 0,
+          cleared: 2,
+        },
+      ],
+      failures: [],
+      failures_total: 0,
+      mapped: [],
+      errors: [],
+      warnings: ['무게: 소수 둘째 자리 아래는 버립니다 3개.'],
+      core_consumers: [],
+      snapshot_id: null,
+      fingerprint: 'abc',
+      ...over,
+    })
+    await mount([
+      job({
+        id: 'r1',
+        kind: 'ontology_retype',
+        kind_label: '속성 종류 변경',
+        params: { owner: 'type', slug: 'part', key: 'weight', request: { accept_core: false } },
+        input_file_name: null,
+        result: retype(),
+      }),
+      job({
+        id: 'r2',
+        kind: 'ontology_retype',
+        kind_label: '속성 종류 변경',
+        params: { owner: 'type', slug: 'part', key: 'grade', request: { accept_core: false } },
+        input_file_name: null,
+        result: retype({ errors: ['등급: 변환할 수 없는 값이 3종류 5건 있습니다'] }),
+      }),
+    ])
+    await waitFor(() => expect(jobsApi.kinds).toHaveBeenCalled())
+    // 목록에서도 무엇이 되는지 한 줄로 — 오류 없는 계획만 「적용 대기」.
+    expect(await screen.findAllByText(/계획 — 변환 118 · 비움 2/)).toHaveLength(2)
+    expect(screen.getAllByText('적용 대기')).toHaveLength(1)
+
+    const [first] = screen.getAllByRole('button', { name: '펼치기' })
+    await userEvent.click(first)
+    expect(screen.queryByText('남길 결과가 없는 작업입니다.')).not.toBeInTheDocument()
+    expect(screen.getByText(/소수 둘째 자리/)).toBeInTheDocument()
+    jobsApi.apply.mockResolvedValue(job({ id: 'r1-apply', kind: 'ontology_retype' }))
+    await userEvent.click(screen.getByRole('button', { name: '적용' }))
+    await waitFor(() => expect(jobsApi.apply).toHaveBeenCalledWith('r1'))
+  })
+
+  it('적용 단계가 없는 종류(데이터 소스 동기화)의 계획에는 「적용」 을 안 세운다', async () => {
+    // 눌러도 서버가 거절한다 — 동기화의 적용은 그 화면에서 「동기화」 를 다시 누르는 것이다.
+    await mount([
+      job({
+        kind: 'datasource_sync',
+        kind_label: '데이터 소스 동기화',
+        result: CLEAN_PLAN,
+      }),
+    ])
+    await waitFor(() => expect(jobsApi.kinds).toHaveBeenCalled())
+    await userEvent.click(screen.getByRole('button', { name: '펼치기' }))
+    expect(screen.getByText('볼트')).toBeInTheDocument()
+    expect(await screen.findByText(/계획만 본 것입니다/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '적용' })).not.toBeInTheDocument()
+    expect(screen.queryByText('적용 대기')).not.toBeInTheDocument()
+  })
 
   it('끝난 계획을 펼쳐 읽고 적용한다 — 창을 닫았어도', async () => {
     await mount([job({ result: CLEAN_PLAN })])
-    expect(screen.getByText('적용 대기')).toBeInTheDocument()
+    // 종류 목록(적용 단계가 있나)이 온 뒤에 선다.
+    expect(await screen.findByText('적용 대기')).toBeInTheDocument()
     jobsApi.apply.mockResolvedValue(job({ id: 'j2' }))
 
     await userEvent.click(screen.getByRole('button', { name: '펼치기' }))
     expect(screen.getByText('볼트')).toBeInTheDocument() // 계획 표가 그대로 보인다
     await userEvent.click(screen.getByRole('button', { name: '적용' }))
     await waitFor(() => expect(jobsApi.apply).toHaveBeenCalledWith('j1'))
+  })
+
+  it('결과가 스스로 한 줄로 말하는 계획(고아 첨부 정리)도 그 말과 함께 적용이 선다', async () => {
+    await mount([
+      job({
+        kind: 'filestore_gc',
+        kind_label: '고아 첨부 파일 정리',
+        params: {},
+        input_file_name: null,
+        result: {
+          applied: false,
+          ok: true,
+          orphans: 3,
+          summary: '지울 것 — 고아 파일 3개 · 임시 파일 1개(0.1MB)',
+        },
+      }),
+    ])
+    expect(screen.getByText(/지울 것 — 고아 파일 3개/)).toBeInTheDocument()
+    expect(await screen.findByText('적용 대기')).toBeInTheDocument()
   })
 
   it('정제 도구가 준 링크(?job=)로 오면 그 계획이 펼쳐진 채로 열린다', async () => {
@@ -203,7 +321,6 @@ describe('작업 화면', () => {
     expect(screen.getByRole('button', { name: '펼치기' })).toBeDisabled()
   })
 })
-
 
 describe('작업 화면 · 고른 것을 한 번에', () => {
   it('오류 없는 계획만 적용에 들어간다 — 고른 수와 갈 수를 함께 말한다', async () => {

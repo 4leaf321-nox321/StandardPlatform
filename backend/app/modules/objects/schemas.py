@@ -478,11 +478,28 @@ class SavedViewPatchRequest(BaseModel):
     화면이 자리를 제 손으로 매겨 여러 번 저장하면 중간 실패가 순서를 뒤섞는다."""
 
 
-class HomeWidgetOut(BaseModel):
-    """부서 홈에 올라간 뷰 하나. 홈 화면은 타입을 모르므로 **여기서 다 실어 준다.**"""
+class HomeMetricOut(BaseModel):
+    """부서 홈에 올린 지표 하나 — 값은 화면이 지표의 추이(`/metrics/<slug>/series`)로
+    읽는다."""
 
-    view: SavedViewOut
+    id: uuid.UUID
+    metric_slug: str
+    metric_label: str
+    split: str | None
+    """선을 나눌 기준 이름 — 없으면 합계 한 줄."""
+    home_order: int
+
+
+class HomeWidgetOut(BaseModel):
+    """부서 홈에 올라간 것 하나 — **저장된 뷰이거나 지표다**(`kind`). 홈 화면은 타입을 모르므로
+    여기서 다 실어 준다. 둘은 한 줄에 선다(자리 값을 함께 매긴다)."""
+
+    kind: str = "view"
+    """`view` · `metric`."""
+    view: SavedViewOut | None = None
+    metric: HomeMetricOut | None = None
     type_label: str
+    """뷰는 그 타입, 지표는 원천 기록 타입의 이름."""
     icon: str
     workspace_slug: str
     workspace_name: str

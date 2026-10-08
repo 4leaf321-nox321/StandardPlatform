@@ -14,7 +14,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, Query, Request, Response, UploadFile
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -24,8 +24,9 @@ from app.modules.datasources.models import DataSource
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs import services as job_services
 from app.modules.jobs.schemas import JobOut
+from app.modules.metrics.models import MetricDef
 from app.modules.objects import bulk, purge, refedges
-from app.modules.objects.models import ObjectInstance, ObjectRelation
+from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.ontology import (
     codebook,
     importer,
@@ -116,6 +117,8 @@ from app.modules.ontology.services import (
     require_key,
     require_slug,
     require_system_source,
+    reserved_slug_error,
+    validate_properties,
 )
 from app.shared import sheets, system_sources
 from app.shared.audit import record as record_audit
@@ -313,6 +316,13 @@ def _interface_slugs(db: Session) -> set[str]:
     return set(db.scalars(select(ObjectInterface.slug)))
 
 
+def _refuse_reserved(slug: str, *, what: str) -> None:
+    """객체 API 의 고정 경로와 겹치는 slug 를 새로 못 만든다(`services.RESERVED_SLUGS`)."""
+    wrong = reserved_slug_error(slug, what=what)
+    if wrong:
+        raise Conflict(code("ONTOLOGY", 91), wrong)
+
+
 def _check_ref_target(db: Session, slug: str | None) -> None:
     """참조 대상이 **실재하는 타입 · 인터페이스인가.** 인터페이스면 그것을 구현한 타입의
     객체를 가리킨다(ADR 0006). 없는 것을 대상으로 두면 그 칸은 아무것도 못 고르는데, 화면은
@@ -458,6 +468,13 @@ def create_type(
     _check_type_choices(payload)
     if db.scalar(select(ObjectType).where(ObjectType.slug == slug)) is not None:
         raise Conflict(code("ONTOLOGY", 33), f"이미 있는 타입입니다: {slug}")
+    _refuse_reserved(slug, what="타입")
+    if payload.core and payload.kind_class == "system":
+        # 고치기(update_type)와 같은 문턱 — 만들 때만 열려 있었다(2026-10-08).
+        raise Conflict(
+            code("ONTOLOGY", 45),
+            f"{payload.label}은(는) 다른 표를 비추는 타입이라 외부에 공개할 수 없습니다.",
+        )
     catalog = interfaces.load(db)
     clash = interfaces.namespace_error(
         slug, as_kind="type", types=(), interfaces=catalog.interfaces
@@ -606,10 +623,16 @@ def update_type(
     defs = _properties_of(db, row.id)
     if "list_view" in sent and payload.list_view is not None:
         row.list_view = views.validate_list_view(payload.list_view, defs)
-    if "form_view" in sent and payload.form_view is not None:
-        row.form_view = views.validate_form_view(payload.form_view, defs, what="폼 화면")
-    if "detail_view" in sent and payload.detail_view is not None:
-        row.detail_view = views.validate_form_view(payload.detail_view, defs, what="상세 화면")
+    for name, what in (("form_view", "폼 화면"), ("detail_view", "상세 화면")):
+        spec: dict[str, Any] | None = getattr(payload, name)
+        if name not in sent or spec is None:
+            continue
+        if spec == (getattr(row, name) or {}):
+            # **저장된 그대로 돌아온 것**이면 빈 묶음을 걷고 받는다 — 화면의 타입 수정 창은
+            # 폼 · 상세를 늘 함께 보내는데, 예전 삭제가 남긴 빈 묶음 때문에 이름만 고쳐도
+            # 거절됐다. 보낸 사람이 적은 것이 아니라 서버가 들고 있던 것이다(2026-10-08).
+            spec = views.prune_sections(spec, defs)
+        setattr(row, name, views.validate_form_view(spec, defs, what=what))
     if "title_template" in sent and payload.title_template is not None:
         row.title_template = payload.title_template
     if "is_active" in sent and payload.is_active is not None:
@@ -762,6 +785,41 @@ def _type_deletion(db: Session, row: ObjectType) -> _Deletion:
                 details={"data_sources": sources},
             )
         )
+    metrics = list(
+        db.scalars(select(MetricDef.label).where(MetricDef.source_type_id == row.id))
+    )
+    if metrics:
+        # 지표 정의도 원천 타입을 RESTRICT 로 붙든다 — 안 막으면 계획은 「지울 수 있다」 고
+        # 말하고 지우는 자리에서 500 이 났다(2026-10-08).
+        found.blocking.append(
+            Conflict(
+                code("ONTOLOGY", 88),
+                f"지표 {', '.join(metrics)} 이(가) {row.label}을(를) 원천으로 셉니다. 지표를 "
+                "먼저 지우세요(공통 › 지표).",
+                details={"metrics": metrics},
+            )
+        )
+    if row.kind_class == "system":
+        # 원 표(부서 · 계정)를 비추는 타입은 `objects` 에 행이 없어 위의 셈이 늘 0 이다 — 그
+        # 끝의 선은 `object_links` 에 타입 slug 로 적힌다. 안 세면 지운 뒤 그 선이 어느 타입의
+        # 끝인지 모르게 남았다(2026-10-08).
+        links = int(
+            db.scalar(
+                select(func.count())
+                .select_from(ObjectLink)
+                .where(or_(ObjectLink.src_type == row.slug, ObjectLink.dst_type == row.slug))
+            )
+            or 0
+        )
+        if links:
+            found.blocking.append(
+                Conflict(
+                    code("ONTOLOGY", 93),
+                    f"{row.label}을(를) 끝으로 맺힌 관계가 {links}개 있어 지울 수 없습니다. "
+                    "관계를 먼저 해제하세요.",
+                    details={"link_count": links},
+                )
+            )
     if not live:
         # **지운 객체만 남았으면 함께 영구 삭제한다**(ADR 0008) — 행이 타입을 RESTRICT 로
         # 붙들어, 안 그러면 객체를 한 번이라도 넣어 본 타입은 영영 못 지운다. 확인은 삭제
@@ -1072,10 +1130,21 @@ def update_relation_type(
 def _relation_type_deletion(db: Session, row: RelationType) -> _Deletion:
     found = _Deletion(label=row.label)
     found.check(lambda: managed.require_definition_editable(row))
-    edges = db.scalar(
-        select(func.count())
-        .select_from(ObjectRelation)
-        .where(ObjectRelation.relation == row.slug)
+    # 선은 두 표에 있다 — 양끝이 객체면 `object_relations`, 한쪽이 원 표(계정 · 부서)면
+    # `object_links`. 뒤쪽을 안 세서, 계정 → 과제 같은 관계 종류는 맺힌 선이 있어도 지워졌고
+    # 그 선은 이름 없이 남았다(2026-10-08).
+    edges = int(
+        db.scalar(
+            select(func.count())
+            .select_from(ObjectRelation)
+            .where(ObjectRelation.relation == row.slug)
+        )
+        or 0
+    ) + int(
+        db.scalar(
+            select(func.count()).select_from(ObjectLink).where(ObjectLink.relation == row.slug)
+        )
+        or 0
     )
     if edges:
         found.blocking.append(
@@ -1213,6 +1282,7 @@ def create_interface(
     catalog = interfaces.load(db)
     if slug in catalog.interfaces:
         raise Conflict(code("ONTOLOGY", 5), f"이미 있는 인터페이스입니다: {slug}")
+    _refuse_reserved(slug, what="인터페이스")
     clash = interfaces.namespace_error(
         slug, as_kind="interface", types=catalog.types, interfaces=()
     )
@@ -1635,6 +1705,15 @@ def rename_interface_option(
         )
         if prop is None:
             continue
+        owner_of = managed.owner_of(one)
+        if owner_of:
+            # **허브가 관리하는 구현 타입은 그 허브가 바꾼다** — 공통 속성 고치기 · 종류 변경은
+            # `plan_bindings` 가 막는데 이 길만 안 봐서, 허브 타입의 정의와 저장값을 이
+            # 설치에서 바꿨다(2026-10-08). 하나라도 걸리면 아무것도 안 바꾼다.
+            errors.append(
+                f"{one.slug}: {owner_of} 가 관리하는 타입이라 여기서 고를 값 이름을 바꾸지 "
+                f"않습니다 — {owner_of} 에서 고친 뒤 받으세요."
+            )
         if errors or not payload.apply:
             found = codebook.plan_rename(db, one, prop, payload.from_value, payload.to_value)
         else:
@@ -1750,6 +1829,7 @@ def create_property(
         section=payload.section,
         sort_order=payload.sort_order,
     )
+    _check_default(row)
     db.add(row)
     db.flush()
     _audit(
@@ -1825,8 +1905,15 @@ def update_property(
     row.accept = payload.accept
     row.default_value = payload.default_value
     row.unique = payload.unique
+    moved_section = row.section != payload.section
     row.section = payload.section
     row.sort_order = payload.sort_order
+    _check_default(row)
+    if moved_section:
+        # 옛 묶음의 마지막 속성을 옮겼으면 그 묶음이 폼 · 상세에 빈 채로 남는다 — 지울 때와
+        # 같이 걷는다(안 걷으면 다음 타입 수정이 거절된다).
+        db.flush()
+        _prune_sections(db, _type(db, slug))
     _audit(
         db,
         user,
@@ -1838,6 +1925,23 @@ def update_property(
     db.commit()
     db.refresh(row)
     return row
+
+
+def _check_default(row: PropertyDef) -> None:
+    """기본값이 **그 속성에 들어갈 수 있는 값인가.** 틀린 기본값은 만들 때마다 채워져, 그
+    칸을 비운 객체 만들기가 전부 422 가 된다 — 고칠 자리(속성 정의)는 그 오류에 안 나온다
+    (2026-10-08)."""
+    if row.default_value is None:
+        return
+    if row.multi and not isinstance(row.default_value, list):
+        # 화면의 기본값 칸은 글자 하나를 보낸다 — 여러 값 칸이면 그 하나를 담은 목록이 뜻이다.
+        row.default_value = [row.default_value]
+    try:
+        validate_properties([row], {row.key: row.default_value})
+    except InvalidValue as caught:
+        raise InvalidValue(
+            code("ONTOLOGY", 90), f"기본값이 이 속성에 맞지 않습니다 — {caught.message}"
+        ) from None
 
 
 @router.post("/types/{slug}/properties/{key}/rename-option", response_model=RenameOptionOut)
@@ -2365,9 +2469,13 @@ def _require_core_accepted(
 
 @router.get("/types/{slug}/properties/{key}/usage", response_model=PropertyUsage)
 def property_usage(
-    slug: str, key: str, _: User = Depends(current_user), db: Session = Depends(get_db)
+    slug: str, key: str, user: User = Depends(current_user), db: Session = Depends(get_db)
 ) -> PropertyUsage:
-    """**지우기 전에 무엇이 사라지는지.** 화면의 확인 창이 이것을 읽어 말한다."""
+    """**지우기 전에 무엇이 사라지는지.** 화면의 확인 창이 이것을 읽어 말한다.
+
+    수신 시스템(연동 토큰 이름 · 마지막 사용일)은 **시스템 관리자에게만** 싣는다 — 그 목록은
+    `core-status` 가 바로 그 까닭으로 시스템 관리자 전용이다. 일반 사용자에게는 열려 있다는
+    것(`core_open`)만 간다(2026-10-08 — 모든 사용자가 남의 토큰 이름을 읽었다)."""
     row = _property(db, slug, key)
     owner = _type(db, slug)
     return PropertyUsage(
@@ -2375,7 +2483,7 @@ def property_usage(
         label=row.label,
         objects_with_value=_objects_with_value(db, [owner.id], key),
         core_open=owner.core,
-        core_consumers=_core_consumers(db, owner),
+        core_consumers=_core_consumers(db, owner) if user.is_system_admin else [],
     )
 
 
@@ -2386,11 +2494,35 @@ def _property_deletion(db: Session, owner: ObjectType, row: PropertyDef) -> _Del
     found.removes.append("속성 정의")
     if views.prune_field(owner.list_view or {}, row.key) != (owner.list_view or {}):
         found.removes.append("목록의 열")
+    left = [one for one in _properties_of(db, owner.id) if one.id != row.id]
+    if any(
+        views.prune_sections(spec or {}, left) != (spec or {})
+        for spec in (owner.form_view, owner.detail_view)
+    ):
+        found.removes.append(
+            f"폼 · 상세의 묶음 「{row.section}」(이 속성이 마지막이라 비게 됩니다)"
+        )
     count = _objects_with_value(db, [owner.id], row.key)
     if count:
         found.keeps.append(
             f"저장값 {count}개 — 화면에서는 안 보이고, 같은 키로 정의를 되살리면 돌아옵니다"
         )
+
+    # **딸려 깨지는 것을 말한다** — 저장된 뷰 · 홈 위젯 · 지표는 흉내 내어(`retype.breaking`),
+    # 데이터 소스는 열 대응으로 본다. 예전에는 아무것도 말하지 않아, 지운 뒤 지표의 밤 계산이
+    # 실패하고서야 알았다(2026-10-08). 막지는 않는다 — 종류 변경과 같다.
+    def drop() -> None:
+        db.execute(delete(PropertyDef).where(PropertyDef.id == row.id))
+
+    found.warnings.extend(retype.breaking(db, drop))
+    field = f"properties.{row.key}"
+    for source in db.scalars(select(DataSource).where(DataSource.type_id == owner.id)):
+        columns = (source.mapping or {}).get("columns") or []
+        if any(isinstance(one, dict) and one.get("target") == field for one in columns):
+            found.warnings.append(
+                f"데이터 소스 「{source.name}」 이 이 속성에 넣습니다 — 지운 뒤에는 그 열의 "
+                "대응을 고치세요(안 고치면 다음 동기화가 그 열을 넣을 곳이 없습니다)."
+            )
     # 막지는 않는다 — 확인을 받는다(`accept_core`). 그 확인은 삭제 경로가 따로 묻는다.
     found.core_consumers = _core_consumers(db, owner)
     if owner.core:
@@ -2443,6 +2575,9 @@ def delete_property(
     # **안 걷어내면 그 뒤로 타입을 고칠 때마다 「없는 속성」 이라고 거절당한다** —
     # 그리고 사람은 자기가 방금 고친 것과 상관없는 그 오류를 이해할 수 없다.
     owner.list_view = views.prune_field(owner.list_view or {}, key)
+    # 폼 · 상세도 같다 — 이 속성이 그 묶음의 마지막이었으면 빈 묶음이 남아 다음 타입 수정이
+    # 「그 묶음에 속한 속성이 없습니다」 로 거절됐다(2026-10-08).
+    _prune_sections(db, owner, without=row.id)
     _audit(
         db,
         user,
@@ -2453,6 +2588,16 @@ def delete_property(
     )
     db.delete(row)
     db.commit()
+
+
+def _prune_sections(
+    db: Session, owner: ObjectType, *, without: uuid.UUID | None = None
+) -> None:
+    """폼 · 상세에서 속성이 하나도 안 남은 묶음을 걷는다 — 속성을 지우거나 묶음을 옮긴 뒤.
+    `without` 은 곧 지울 속성이다(아직 행이 있다)."""
+    defs = [one for one in _properties_of(db, owner.id) if one.id != without]
+    owner.form_view = views.prune_sections(owner.form_view or {}, defs)
+    owner.detail_view = views.prune_sections(owner.detail_view or {}, defs)
 
 
 def _property(db: Session, slug: str, key: str) -> PropertyDef:

@@ -137,6 +137,10 @@ def update_webhook(
         changes=audit.diff(before, after),
     )
     db.commit()
+    if row.is_active and not before["is_active"] and services.pending_count(db):
+        # 꺼 둔 동안 기다린 전송을 **지금** 내보낸다 — 안 깨우면 다음 이벤트나 워커의 다음
+        # 바퀴(최대 1분)까지 「다시 켰는데 안 나간다」 로 보인다.
+        services.dispatcher.kick()
     db.refresh(row)
     return _out(row)
 

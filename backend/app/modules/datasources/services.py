@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import logging
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -22,10 +23,11 @@ from functools import partial
 from typing import Any
 
 import httpx
-from sqlalchemy import func, select, update
+from sqlalchemy import event, func, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.audit.models import AuditEntry
 
 # **무덤의 규칙을 그대로 쓴다** — 끊긴 선을 끊는 길이 둘이 되면 한쪽에만 권한 검사가 남는다.
 from app.modules.bundles import tombstones as graves
@@ -38,6 +40,7 @@ from app.modules.datasources.schemas import (
     RunOut,
     SyncOut,
 )
+from app.modules.jobs.models import Job
 from app.modules.notifications import services as notifications
 from app.modules.objects import aliases, bulk
 from app.modules.objects.models import ObjectAlias, ObjectInstance
@@ -45,12 +48,38 @@ from app.modules.objects.schemas import ImportRowOut
 from app.modules.objects.services import properties_of
 from app.modules.ontology import managed
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
-from app.shared import audit, extensions
-from app.shared.errors import AppError, code
+from app.shared import audit, extensions, singleton
+from app.shared.batches import chunks as id_batches
+from app.shared.errors import AppError, Conflict, code
 from app.shared.text import compare_key
+
+log = logging.getLogger(__name__)
 
 #: 화면·기록에 싣는 오류 행의 상한.
 ERROR_SAMPLE = 50
+#: 「다른 곳이 이 소스를 지금 넣고 있다」 — 차례(round)는 이 코드를 보고 실패가 아니라
+#: 건너뜀으로 적는다(그 소스에는 아무 일도 안 했다).
+BUSY = code("DATASOURCES", 45)
+#: 적용이 시작되면 실행 기록에 먼저 적어 두는 말 — 끝나면 지운다. 도중에 프로세스가
+#: 죽으면 이것이 남아, 기록이 「계획 · 미완료」 로 보이지 않는다(조각마다 커밋되므로 이
+#: 줄도 함께 남는다).
+INTERRUPTED = (
+    "적용 중입니다 — 작업이 끝났는데 이 줄이 이대로면 도중에 멈춘 것입니다(그 전에 들어간 "
+    "조각은 그대로 있고, 다음 동기화가 이어서 맞춥니다)."
+)
+#: 앞 조각이 이미 들어간 뒤에 멈췄을 때 덧붙이는 말.
+PARTIAL = (
+    "그 전에 들어간 조각(객체와 외부 식별자)은 그대로 있습니다 — 사용 중지 · 선 · 받은 자리는 "
+    "다음 동기화가 다시 맞춥니다."
+)
+#: 끊은 자리 — 소스의 `options` 안에 둔다(표를 늘리지 않으려고). `_` 로 시작하는 키는 화면에
+#: 안 나가고(`public_options`) 정의를 고쳐도 지켜진다(라우터의 수정).
+RESUME = "_resume"
+RESUME_EDGES = "_resume_relations"
+#: 「바깥에서 사라져 사용 중지」 를 감사 기록에 박는 표식 — 다시 올라왔을 때 **이 소스가
+#: 중지시킨 것만** 되살리려고. `_` 로 시작하는 키는 이력 · 알림이 칸으로 안 읽는다
+#: (`history.py`).
+MARK = "_datasource"
 #: 칸 대응의 target 으로 쓸 수 있는 고정 자리.
 FIXED_TARGETS = ("key", "label", "description", "alias", "status")
 
@@ -281,6 +310,9 @@ class Mapped:
     external_id: str
     row: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    merged_into: str = ""
+    """사람이 합친 객체로 바깥의 다른 행과 함께 모였다 — 값은 그 행(이 바깥 식별자)에서만 받고
+    이 행은 건너뛴다(`_collapse_merged`). 오류가 아니다."""
 
 
 def _text(value: Any) -> str:
@@ -383,6 +415,17 @@ def _clears(target: str, name: str, keep: frozenset[str]) -> bool:
     return target.startswith("properties.") and name not in keep
 
 
+@dataclass
+class Known:
+    """이 소스의 외부 식별자 — `_match` 가 한 번 읽고, 적용이 고쳐 가며 쓴다."""
+
+    by_external: dict[str, uuid.UUID] = field(default_factory=dict)
+    """비교키 → 객체."""
+    held: dict[uuid.UUID, list[str]] = field(default_factory=dict)
+    """객체 → 그 객체가 쥔 이 소스의 비교키. **둘 이상일 수 있다** — 같은 소스에서 온 둘을
+    사람이 합치면 이긴 쪽이 둘 다 갖는다(`aliases.move`)."""
+
+
 def _match(
     db: Session,
     object_type: ObjectType,
@@ -390,7 +433,7 @@ def _match(
     mapped: list[Mapped],
     *,
     by_name: bool = True,
-) -> None:
+) -> Known:
     """같은 객체를 다시 찾아 행에 `id` 를 박는다 — 외부 식별자 → (식별자는 bulk 가) →
     별칭·이름. `by_name=False` 면 이름으로 붙이지 않는다 — RA 보고서처럼 **같은 이름이 흔한**
     것을 이름으로 붙이면 다른 보고서를 덮어쓴다.
@@ -400,38 +443,51 @@ def _match(
     「다른 소스가 만든 것」 과 합류하려는 것이다. 이 소스의 다른 항목에 이미 묶인 객체에
     붙이면 바깥의 두 항목이 우리 객체 하나로 겹친다 — 옛 이름이 별칭으로 남은 객체에 같은
     이름의 새 항목이 붙으면, 그 뒤로 한 객체가 두 항목의 값을 번갈아 받는다.
+
+    이름으로는 **사람이 붙인 별칭만** 본다 — 다른 소스의 외부 식별자(`source:<slug>`)는 이름이
+    아니다. 예전에는 모든 별칭을 봐서, 바깥 행의 이름이 다른 소스의 식별자 글자와 같으면
+    엉뚱한 객체에 붙었다(2026-10-08).
     """
     kind = aliases.source_kind(slug)
-    by_external = {
-        norm: object_id
+    known = Known()
+    for norm, object_id in db.execute(
+        select(ObjectAlias.norm, ObjectAlias.object_id)
+        .join(ObjectInstance, ObjectInstance.id == ObjectAlias.object_id)
+        .where(
+            ObjectAlias.type_id == object_type.id,
+            ObjectAlias.kind == kind,
+            ObjectInstance.deleted_at.is_(None),
+        )
+    ):
+        known.by_external[norm] = object_id
+        known.held.setdefault(object_id, []).append(norm)
+    #: 이미 이 소스의 항목과 이어진 객체 — 이름 · 별칭으로는 붙이지 않는다.
+    taken: set[uuid.UUID] = set(known.by_external.values())
+    names: dict[str, list[uuid.UUID]] = {}
+    if by_name:
+        for object_id, label in db.execute(
+            select(ObjectInstance.id, ObjectInstance.label).where(
+                ObjectInstance.type_id == object_type.id, ObjectInstance.deleted_at.is_(None)
+            )
+        ):
+            names.setdefault(compare_key(label), []).append(object_id)
         for norm, object_id in db.execute(
             select(ObjectAlias.norm, ObjectAlias.object_id)
             .join(ObjectInstance, ObjectInstance.id == ObjectAlias.object_id)
             .where(
                 ObjectAlias.type_id == object_type.id,
-                ObjectAlias.kind == kind,
+                ObjectAlias.kind == aliases.HUMAN,
                 ObjectInstance.deleted_at.is_(None),
             )
-        )
-    }
-    #: 이미 이 소스의 항목과 이어진 객체 — 이름 · 별칭으로는 붙이지 않는다.
-    taken: set[uuid.UUID] = set(by_external.values())
-    names: dict[str, list[uuid.UUID]] = {}
-    for object_id, label in db.execute(
-        select(ObjectInstance.id, ObjectInstance.label).where(
-            ObjectInstance.type_id == object_type.id, ObjectInstance.deleted_at.is_(None)
-        )
-    ):
-        names.setdefault(compare_key(label), []).append(object_id)
-    for norm, hits in aliases.index_of(db, object_type).items():
-        for hit in hits:
-            if hit not in names.setdefault(norm, []):
-                names[norm].append(hit)
+        ):
+            hits = names.setdefault(norm, [])
+            if object_id not in hits:
+                hits.append(object_id)
 
     for one in mapped:
         if one.error:
             continue
-        found = by_external.get(compare_key(one.external_id))
+        found = known.by_external.get(compare_key(one.external_id))
         if found is not None:
             one.row["id"] = str(found)
             continue
@@ -450,6 +506,154 @@ def _match(
                 f"「{label}」 이 {len(hits)}개에 맞습니다 — "
                 "바깥 식별자가 없어 고를 수 없습니다."
             )
+    _collapse_merged(mapped)
+    return known
+
+
+def _collapse_merged(mapped: list[Mapped]) -> None:
+    """**사람이 합친 객체**로 바깥의 여러 행이 모이면 — 한 행만 넣고 나머지는 건너뛴다.
+
+    같은 소스에서 온 둘을 사람이 합치면 이긴 쪽이 이 소스의 외부 식별자를 둘 갖는다(합치기가
+    진 쪽 것을 옮긴다). 그러면 다음 동기화가 바깥 두 행에 같은 `id` 를 박고, 일괄 입력이
+    「같은 id 가 N행에도 있습니다」 로 **전부** 거절해 그 소스가 영영 멈췄다(2026-10-08).
+
+    **사람의 합치기가 이긴다.** 값은 바깥 식별자 차례로 첫 행에서만 받는다 — 매번 같은 행이
+    이겨야 값이 두 행 사이를 오가지 않는다. 나머지는 계획에 「합친 객체」 로 적는다(오류가
+    아니다). 외부 식별자는 둘 다 남아 다음에도 그 객체를 찾는다.
+    """
+    groups: dict[str, list[Mapped]] = {}
+    for one in mapped:
+        if not one.error and one.row.get("id"):
+            groups.setdefault(str(one.row["id"]), []).append(one)
+    for rows in groups.values():
+        norms = sorted({compare_key(one.external_id) for one in rows})
+        if len(norms) < 2:
+            # 같은 바깥 식별자가 두 번 온 것은 합친 객체가 아니다 — 일괄 입력이 그 줄을
+            # 「같은 id」 로 말하게 둔다(바깥 표의 문제다).
+            continue
+        first = min(
+            (one for one in rows if compare_key(one.external_id) == norms[0]),
+            key=lambda one: one.external_id,
+        )
+        for other in rows:
+            if compare_key(other.external_id) != norms[0]:
+                other.merged_into = first.external_id
+
+
+def _merged_plan(index: int, one: Mapped) -> bulk.RowPlan:
+    """합친 객체로 모여 건너뛰는 행 — 계획의 한 줄(그대로)."""
+    return bulk.RowPlan(
+        row=index,
+        action="unchanged",
+        label=one.external_id,
+        object_id=uuid.UUID(str(one.row["id"])),
+        message=(
+            f"합친 객체 — 같은 객체로 모이는 「{one.merged_into}」 행의 값으로 넣고 이 행은 "
+            "건너뜁니다."
+        ),
+    )
+
+
+def _remember_externals(
+    db: Session,
+    object_type: ObjectType,
+    slug: str,
+    sent: list[Mapped],
+    row_plans: list[bulk.RowPlan],
+    known: Known,
+) -> None:
+    """외부 식별자를 별칭으로 남긴다 — 다음 동기화가 이것으로 같은 객체를 다시 찾는다.
+
+    이미 그 값을 쥔 객체면 그대로. 이 소스의 다른 값을 **하나** 쥐었으면 갈아 끼운다(바깥이
+    식별자를 바꿨고, 우리 식별자 · 이름으로 다시 찾았다). **둘 이상이면 더한다** — 사람이 합친
+    객체다. 갈아 끼우면 합친 짝의 식별자가 사라져 그 행이 다음에 새 객체를 만든다.
+    """
+    kind = aliases.source_kind(slug)
+    for one, row_plan in zip(sent, row_plans, strict=True):
+        object_id = row_plan.object_id
+        if object_id is None:
+            continue
+        norm = compare_key(one.external_id)
+        holder = known.by_external.get(norm)
+        if holder is not None:
+            # 이미 이 객체의 것이거나, 다른 객체가 쥐었다(고르지 않는다 — 유일 제약에 걸린다).
+            continue
+        mine = known.held.get(object_id, [])
+        if len(mine) == 1:
+            old = db.scalar(
+                select(ObjectAlias).where(
+                    ObjectAlias.object_id == object_id,
+                    ObjectAlias.kind == kind,
+                    ObjectAlias.norm == mine[0],
+                )
+            )
+            if old is not None:
+                old.value = one.external_id[: aliases.MAX_VALUE]
+                old.norm = norm
+                known.by_external.pop(mine[0], None)
+                known.by_external[norm] = object_id
+                known.held[object_id] = [norm]
+                continue
+        db.add(
+            ObjectAlias(
+                object_id=object_id,
+                type_id=object_type.id,
+                kind=kind,
+                value=one.external_id[: aliases.MAX_VALUE],
+                norm=norm,
+            )
+        )
+        known.by_external[norm] = object_id
+        known.held.setdefault(object_id, []).append(norm)
+
+
+def _apply_chunk(
+    db: Session,
+    actor: User,
+    object_type: ObjectType,
+    source: DataSource,
+    run: DataSourceRun,
+    sent: list[Mapped],
+    known: Known,
+    *,
+    owner: uuid.UUID | None,
+    aliases_mode: str = "add",
+    blank_missing: bool = False,
+) -> bulk.Plan:
+    """조각 하나를 넣고 — **같은 커밋에** 외부 식별자를 남긴다.
+
+    일괄 입력은 조각마다 스스로 커밋한다. 예전에는 외부 식별자를 조각을 다 넣은 **뒤에** 따로
+    남겼다 — 그 사이(선 받기 · 마지막 커밋)에서 예외가 나면 객체는 들어가고 외부 식별자는
+    롤백되어, 다음 동기화가 같은 것을 이름으로 다시 찾거나 새로 만들었다(2026-10-08). 그래서
+    일괄 입력이 커밋하기 **직전**(`before_commit`)에 함께 싣는다 — 둘은 함께 들어가거나 함께
+    안 들어간다. 실행 기록의 「적용함」 도 그 커밋에 탄다.
+    """
+    captured: list[bulk.Plan] = []
+
+    def ride(_session: Session) -> None:
+        if not captured:
+            return
+        plan = captured.pop()
+        # 새로 만든 객체가 먼저 들어가야 별칭의 외래키가 선다(둘 사이에 ORM 관계가 없다).
+        db.flush()
+        run.applied = True
+        _remember_externals(db, object_type, source.slug, sent, plan.rows, known)
+
+    event.listen(db, "before_commit", ride)
+    try:
+        return bulk.apply_objects(
+            db,
+            actor,
+            object_type,
+            [one.row for one in sent],
+            owner_workspace_id=owner,
+            source=source_name(source),
+            aliases_mode=aliases_mode,
+            blank_missing=blank_missing,
+            before_apply=captured.append,
+        )
+    finally:
+        event.remove(db, "before_commit", ride)
 
 
 @dataclass
@@ -552,8 +756,30 @@ def sync(db: Session, user: User | None, source: DataSource, *, apply: bool) -> 
     """계획을 세우고(그리고 `apply` 면 넣고) 기록을 남긴다. 상태가 바뀌면 알린다.
 
     **부르는 쪽이 커밋하지 않는다** — 여기서 커밋한다(bulk 가 그렇고, 기록은 실패해도
-    남아야 한다).
+    남아야 한다). **실패는 늘 실행 기록과 `last_status` 에 남는다**(`_sync` 의 그물) —
+    예외로 빠져나가는 것은 「다른 곳이 이 소스를 지금 넣고 있다」(`BUSY`) 하나뿐이고, 그때는
+    이 소스에 아무 일도 안 했다.
+
+    **적용은 소스마다 한 곳에서만 돈다** — DB 의 자문 잠금(`singleton.held`). 워커가 둘이면
+    화면의 「동기화」 와 타이머의 차례가 같은 소스를 함께 돌 수 있었고, 둘 다 같은 새 행을
+    만들어 늦은 쪽이 외부 식별자의 유일 제약에서 터졌다 — 그 사이에 같은 객체가 둘이
+    됐다(2026-10-08). 계획은 아무것도 안 바꾸므로 잠그지 않는다.
     """
+    if not apply:
+        return _sync_announced(db, user, source, apply=False)
+    with singleton.held(f"datasource:{source.slug}") as locked:
+        if locked is None:
+            raise Conflict(
+                BUSY,
+                f"「{source.name}」 은 다른 작업이 지금 동기화하고 있습니다 — 겹쳐 돌리면 "
+                "같은 행이 두 번 만들어집니다. 그 작업이 끝난 뒤에 다시 하세요.",
+            )
+        return _sync_announced(db, user, source, apply=True)
+
+
+def _sync_announced(
+    db: Session, user: User | None, source: DataSource, *, apply: bool
+) -> SyncResult:
     before = source.last_status
     result = _sync(db, user, source, apply=apply)
     _announce(db, source, before=before)
@@ -592,6 +818,68 @@ def _announce(db: Session, source: DataSource, *, before: str | None) -> None:
 
 
 def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) -> SyncResult:
+    """한 번의 동기화 — **실행 기록부터 남기고, 무슨 일이 나도 그 기록을 닫는다.**
+
+    예전에는 대응 · 타입 · 대신 돌릴 관리자를 실행 기록보다 먼저 봤고, 적용 중의 예외(선
+    받기의 연결 오류 · 마지막 커밋의 유일 제약)는 그대로 빠져나갔다. 그러면 기록은 아예
+    없거나 「계획 · 미완료」 로 남고 `last_status` 도 알림도 그대로라, 실패한 줄 아무도
+    몰랐다(2026-10-08).
+    """
+    run = DataSourceRun(
+        id=uuid.uuid4(),
+        source_id=source.id,
+        actor_label=(user.display_name or user.email) if user else "타이머",
+    )
+    db.add(run)
+    db.flush()
+    run_id, source_id, actor_label, slug = run.id, source.id, run.actor_label, source.slug
+    try:
+        return _sync_body(db, user, source, run, apply=apply)
+    except Exception as caught:  # 무엇이 나도 기록은 닫는다 — 스택은 로그에
+        log.exception("데이터 소스 동기화가 도중에 멈췄습니다: %s", slug)
+        return _crashed(db, source_id, run_id, actor_label, caught)
+
+
+def _crashed(
+    db: Session,
+    source_id: uuid.UUID,
+    run_id: uuid.UUID,
+    actor_label: str,
+    caught: Exception,
+) -> SyncResult:
+    """도중에 난 예외 — 되돌리고, **기록과 상태만은 남긴다.**
+
+    조각마다 커밋된 객체(와 같은 커밋에 실린 외부 식별자)는 그대로 있다. 사용 중지 · 선 · 받은
+    자리처럼 마지막 커밋에 실리던 것만 사라지고, 그것은 다음 동기화가 다시 한다(시계를 안
+    옮겼다)."""
+    db.rollback()
+    said = (
+        caught.message
+        if isinstance(caught, AppError)
+        else f"{type(caught).__name__}: {caught}"
+    )
+    run = db.get(DataSourceRun, run_id)
+    if run is None:  # 조각 하나도 커밋되기 전 — 실행 행도 함께 롤백됐다
+        run = DataSourceRun(id=run_id, source_id=source_id, actor_label=actor_label)
+        db.add(run)
+    errors = [f"동기화가 도중에 멈췄습니다 — {said[:500]}"]
+    if run.applied:
+        errors.append(PARTIAL)
+    now = datetime.now(UTC)
+    run.status = "failed"
+    run.errors = errors
+    run.finished_at = now
+    source = db.get(DataSource, source_id)
+    if source is not None:
+        source.last_run_at = now
+        source.last_status = "failed"
+    db.commit()
+    return SyncResult(run=run, plan_rows=[], truncated=False)
+
+
+def _sync_body(
+    db: Session, user: User | None, source: DataSource, run: DataSourceRun, *, apply: bool
+) -> SyncResult:
     object_type = db.get(ObjectType, source.type_id)
     if object_type is None:
         raise AppError(code("DATASOURCES", 21), "소스가 가리키는 타입이 없습니다.", status=409)
@@ -599,12 +887,6 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     ra = source.kind == ra_reports.KIND
     # RA 보고서는 칸 대응을 틀이 정한다 — 사람이 적은 대응은 없다.
     mapping = Mapping(external_key="id", columns=[]) if ra else mapping_of(source, defs)
-    run = DataSourceRun(
-        source_id=source.id,
-        actor_label=(user.display_name or user.email) if user else "타이머",
-    )
-    db.add(run)
-    db.flush()
 
     if mapping.relations is None:
         # **잠긴 타입이면 바깥 표를 부르기 전에 끝낸다** — 읽어 온 뒤에 거절하면 그쪽
@@ -630,21 +912,38 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     if ra:
         return _sync_ra(db, user, source, object_type, defs, run, apply=apply)
 
+    notes: list[str] = []
+    # 형제 코어는 **지난 차례가 끊은 자리**에서 잇는다(`Fetched.next`).
+    resume = (
+        _resume_of(source, RESUME, source.since_mark) if source.kind == "sp_core" else None
+    )
+    fetch = partial(
+        fetchers.fetch,
+        source,
+        auth=_auth(source),
+        max_rows=odata.MAX_ROWS,
+        select=source.select or mapping.select_clause(),
+        transport=transport,
+    )
     try:
-        fetched = fetchers.fetch(
-            source,
-            auth=_auth(source),
-            select=source.select or mapping.select_clause(),
-            transport=transport,
-        )
+        if resume is not None:
+            try:
+                fetched = fetch(
+                    since=str(resume.get("since") or ""), cursor=str(resume["next"])
+                )
+            except AppError as caught:
+                # 상대가 끊은 자리를 못 알아본다(상대를 다시 깔았다) — 받은 자리부터 다시.
+                notes.append(
+                    f"지난번에 끊은 자리에서 잇지 못해 받은 자리부터 다시 받았습니다 — "
+                    f"{caught.message}"
+                )
+                resume = None
+                fetched = fetch()
+        else:
+            fetched = fetch()
     except AppError as caught:
-        run.status = "failed"
-        run.errors = [caught.message]
-        run.finished_at = datetime.now(UTC)
-        source.last_run_at = run.finished_at
-        source.last_status = "failed"
-        db.commit()
-        return SyncResult(run=run, plan_rows=[], truncated=False)
+        return _fail(db, source, run, [caught.message])
+    since_used = str(resume.get("since") or "") if resume else source.since_mark
 
     if mapping.relations is not None:
         # **선을 가져오는 소스다** — 한 행이 선 하나다(BOM · 매핑 표). 객체 쪽 길(대응 · 다시
@@ -654,7 +953,7 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
         # **「더하기」 면 끝점을 못 찾은 줄이 나머지를 막지 않는다** — 이 소스는 매번 전량을
         # 읽으니 다음 동기화가 저절로 다시 넣는다. 「파일대로 맞춤」 은 그대로 엄격하다 —
         # 건너뛴 줄이 「파일에 없는 선」 으로 읽혀 있는 선을 끊을 수 있다.
-        only_counts, only_errors, waiting = _apply_edges(
+        only_counts, only_errors, waiting, edges_ok = _apply_edges(
             db,
             user,
             source,
@@ -664,13 +963,18 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
             mode=mapping.relations.mode,
             apply=apply,
             skip_missing=mapping.relations.mode == "add",
+            max_rows=max(len(edges), bulk.MAX_ROWS),
         )
         if fetched.truncated:
             only_errors.append(
                 f"행이 {odata.MAX_ROWS}개를 넘어 끊었습니다 — `$filter` 로 나눠 동기화하세요."
             )
-        ok = not only_errors and not any(
-            name.endswith("_error") and value for name, value in only_counts.items()
+        ok = (
+            edges_ok
+            and not only_errors
+            and not any(
+                name.endswith("_error") and value for name, value in only_counts.items()
+            )
         )
         if waiting:
             only_errors.append(_waiting_note(waiting))
@@ -700,19 +1004,30 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     # 가르고 나서 각자의 길로 보낸다.
     graves = [one for one in fetched.rows if one.get(fetchers.CORE_DELETED)]
     alive = [one for one in fetched.rows if not one.get(fetchers.CORE_DELETED)]
+    # **같은 키를 지웠다 다시 만들면** 한 증분에 무덤과 산 행이 함께 온다 — 산 것이 이긴다.
+    # 무덤을 그대로 두면 방금 산 행으로 고친 객체를 `_bury` 가 사용 중지했다(2026-10-08).
+    living = {compare_key(_text(odata.pick(one, mapping.external_key))) for one in alive}
+    graves = [
+        one
+        for one in graves
+        if compare_key(_text(one.get(mapping.external_key))) not in living
+    ]
     mirror = mirrors(source)
     keep = frozenset(one.key for one in defs if one.required)
     mapped = [map_row(mapping, raw, source.slug, mirror=mirror, keep=keep) for raw in alive]
     # 거울이면 별칭을 **맞춘다**(뺀 것을 뺀다) — 아니면 더하기만(사람이 붙인 것을 지우지 않게).
     aliases_mode = "replace" if mirror else "add"
-    run.rows_seen = len(mapped) + len(graves)
-    _match(db, object_type, source.slug, mapped)
+    run.rows_seen = len(fetched.rows)
+    known = _match(db, object_type, source.slug, mapped)
+    # 형제 코어는 끊은 자리를 기억해 다음 차례가 잇는다 — 그쪽의 끊김은 오류가 아니다.
+    resumable = source.kind == "sp_core" and fetched.truncated and bool(fetched.next)
 
-    # 대응에서 걸린 행은 계획에 오류로 싣고, 나머지를 bulk 에 넘긴다.
-    rows = [one.row for one in mapped if not one.error]
+    # 대응에서 걸린 행은 계획에 오류로, 합친 객체로 모인 행은 「그대로」 로 싣고, 나머지를
+    # bulk 에 넘긴다.
     plan_rows: list[bulk.RowPlan] = []
+    merged_rows: list[bulk.RowPlan] = []
     errors: list[str] = []
-    if fetched.truncated:
+    if fetched.truncated and not resumable:
         errors.append(
             f"행이 {odata.MAX_ROWS}개를 넘어 끊었습니다 — `$filter` 로 나눠 동기화하세요."
         )
@@ -723,21 +1038,26 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
                     row=index, action="error", label=one.external_id, message=one.error
                 )
             )
+        elif one.merged_into:
+            merged_rows.append(_merged_plan(index, one))
+    plan_rows.extend(merged_rows)
+    good = [one for one in mapped if not one.error and not one.merged_into]
     # bulk 의 상한(한 번에 5,000행)은 조각으로 넘는다 — 계획은 전부 세운 뒤에 적용한다.
-    chunks = [rows[i : i + bulk.MAX_ROWS] for i in range(0, len(rows), bulk.MAX_ROWS)]
+    pieces = [good[i : i + bulk.MAX_ROWS] for i in range(0, len(good), bulk.MAX_ROWS)]
+    actor = _actor(db, user)
     plans = [
         bulk.plan_objects(
             db,
-            _actor(db, user),
+            actor,
             object_type,
-            chunk,
+            [one.row for one in piece],
             owner_workspace_id=source.workspace_id,
             # **자기 출처 이름을 말한다** — 잠긴 타입(`managed_by`)에 넣는 근거다. 안 넘기면
             # 허브가 내려준 타입은 받기까지 막힌다(잠근 뜻은 그것이 아니다).
             source=source_name(source),
             aliases_mode=aliases_mode,
         )
-        for chunk in chunks
+        for piece in pieces
     ]
     offset = 0
     for plan in plans:
@@ -756,20 +1076,22 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
             )
         offset += len(plan.rows)
     ok = not errors and all(one.action != "error" for one in plan_rows)
-    counts = _counts(plan_rows)
+    counts: dict[str, int] = _counts(plan_rows)
+    revive = _revivable(db, object_type, source, mapped)
+    # 끊김을 기억해 이을 수 있으면 화면에 「끊김」 으로 알리지 않는다 — 적용을 막는 표시다.
+    truncated = fetched.truncated and not resumable
 
     if not apply or not ok:
+        if revive:
+            counts["revived"] = len(revive)
         if wants_relations(source):
             # **선도 미리 세어 본다** — 계획에 객체만 나오면 사람은 선이 올 줄 모른다.
-            edge_counts: dict[str, int]
-            edge_counts, edge_errors = _sync_relations(
+            edge_counts, edge_errors, edges_ok = _relations_or_note(
                 db, user, source, object_type, apply=False
             )
             counts = {**counts, **edge_counts}
             errors.extend(edge_errors)
-            ok = ok and not any(
-                name.endswith("_error") and value for name, value in edge_counts.items()
-            )
+            ok = ok and edges_ok
         run.status = "planned" if ok else "failed"
         run.counts = counts
         run.errors = (
@@ -778,26 +1100,31 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
                 f"{one.row}행 {one.label}: {one.message}"
                 for one in plan_rows
                 if one.action == "error"
-            ][:ERROR_SAMPLE]
-        )
+            ]
+            + notes
+        )[:ERROR_SAMPLE]
         run.finished_at = datetime.now(UTC)
         if not ok:
             source.last_run_at = run.finished_at
             source.last_status = "failed"
         db.commit()
-        return SyncResult(run=run, plan_rows=plan_rows, truncated=fetched.truncated)
+        return SyncResult(run=run, plan_rows=plan_rows, truncated=truncated)
 
-    # 적용 — 조각마다 bulk 가 검증을 다시 하고 커밋한다.
-    actor = _actor(db, user)
+    # 적용 — 조각마다 bulk 가 검증을 다시 하고 커밋한다(외부 식별자도 그 커밋에 탄다). 끝나기
+    # 전에 멈추면 이 표시가 기록에 남는다.
+    run.status = "failed"
+    run.errors = [INTERRUPTED]
     applied_rows: list[bulk.RowPlan] = []
-    for chunk in chunks:
-        done = bulk.apply_objects(
+    for piece in pieces:
+        done = _apply_chunk(
             db,
             actor,
             object_type,
-            chunk,
-            owner_workspace_id=source.workspace_id,
-            source=source_name(source),
+            source,
+            run,
+            piece,
+            known,
+            owner=source.workspace_id,
             aliases_mode=aliases_mode,
         )
         if not done.ok:
@@ -809,49 +1136,72 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
                     for one in done.rows
                     if one.action == "error"
                 ][:ERROR_SAMPLE]
+                + ([PARTIAL] if run.applied else [])
             )
             run.finished_at = datetime.now(UTC)
             source.last_run_at = run.finished_at
             source.last_status = "failed"
             db.commit()
-            return SyncResult(run=run, plan_rows=plan_rows, truncated=fetched.truncated)
+            return SyncResult(run=run, plan_rows=plan_rows, truncated=truncated)
         applied_rows.extend(done.rows)
 
-    # 외부 식별자를 별칭으로 남긴다 — 다음 동기화가 이것으로 같은 객체를 다시 찾는다.
-    seen: set[str] = set()
-    good = [one for one in mapped if not one.error]
-    for mapped_row, row_plan in zip(good, applied_rows, strict=True):
-        seen.add(compare_key(mapped_row.external_id))
-        if row_plan.object_id is None:
-            continue
-        target = db.get(ObjectInstance, row_plan.object_id)
-        if target is not None:
-            aliases.set_external(db, target, object_type, source.slug, mapped_row.external_id)
+    # 이번에 온 것 — 바깥 식별자로도, 객체로도(합친 객체는 식별자 하나만 와도 온 것이다).
+    seen_norms = {compare_key(one.external_id) for one in mapped if not one.error}
+    seen_ids = {one.object_id for one in applied_rows if one.object_id is not None}
+    seen_ids |= {one.object_id for one in merged_rows if one.object_id is not None}
+    revived = _revive(db, actor, object_type, source, revive)
     deprecated = _bury(db, actor, object_type, source, graves, mapping.external_key)
+    held_back = 0
     if source.deprecate_missing:
-        deprecated += _deprecate_missing(db, actor, object_type, source, seen)
+        more, held_back = _deprecate_missing(
+            db, actor, object_type, source, seen_norms, seen_ids
+        )
+        deprecated += more
 
     # **선은 객체 뒤에** — 선은 양 끝이 있어야 선다. 같은 실행 · 같은 트랜잭션이다.
     edge_counts = {}
+    relations_failed = False
     if wants_relations(source):
-        edge_counts, edge_errors = _sync_relations(db, user, source, object_type, apply=True)
+        edge_counts, edge_errors, edges_ok = _relations_or_note(
+            db, user, source, object_type, apply=True
+        )
         errors.extend(edge_errors)
+        if not edges_ok:
+            # 객체는 들어갔다(조각마다 커밋) — 선만 못 넣었다. 기록을 「ok」 로 두면 사람은
+            # 선이 빠진 줄 모른다. 선의 시계는 안 옮겼으니 다음 동기화가 같은 자리에서 다시
+            # 받는다.
+            relations_failed = True
 
     # **끝까지 받고 적용에 성공했을 때만 시계를 옮긴다.** 중간에 옮기면 그 사이 것을 영영
-    # 안 받고, 그 사실은 어디에도 안 뜬다.
-    if fetched.as_of and not fetched.truncated:
+    # 안 받고, 그 사실은 어디에도 안 뜬다. 끊은 형제 코어는 시계 대신 **끊은 자리**를 적는다.
+    if source.kind == "sp_core":
+        notes.extend(_advance(source, RESUME, fetched, resume, since_used))
+    elif fetched.as_of and not fetched.truncated:
         source.since_mark = fetched.as_of
 
-    run.status = "ok"
+    warnings: list[str] = []
+    if held_back:
+        warnings.append(
+            f"바깥에서 한꺼번에 {held_back}건이 오지 않았습니다 — 이 소스가 넣어 쓰는 것의 "
+            "절반이 넘어 사용 중지하지 않았습니다(받은 행은 반영했습니다). 바깥 표의 필터 · "
+            "권한 · 쪽 넘김을 확인하세요. 정말 사라진 것이면 객체 화면에서 골라 사용 "
+            "중지하세요 — 그 뒤로는 멈추지 않습니다."
+        )
+    run.status = "failed" if relations_failed or held_back else "ok"
     run.applied = True
-    run.counts = {**counts, "deprecated": deprecated, **edge_counts}
-    if errors:
-        # 선 쪽의 말(처음부터 다시 받음 · 끊김 거절)은 **성공한 실행에도 남긴다** — 사람이
-        # 「무엇이 더 있었나」 를 그 기록에서 읽는다.
-        run.errors = errors[:ERROR_SAMPLE]
+    run.counts = {
+        **counts,
+        "deprecated": deprecated,
+        **({"revived": revived} if revived else {}),
+        **({"gone_held_back": held_back} if held_back else {}),
+        **edge_counts,
+    }
+    # 선 쪽의 말(처음부터 다시 받음 · 끊김 거절) · 끊은 자리는 **성공한 실행에도 남긴다** —
+    # 사람이 「무엇이 더 있었나」 를 그 기록에서 읽는다.
+    run.errors = (warnings + errors + notes)[:ERROR_SAMPLE]
     run.finished_at = datetime.now(UTC)
     source.last_run_at = run.finished_at
-    source.last_status = "ok"
+    source.last_status = run.status
     audit.record(
         db,
         action="datasource.sync",
@@ -863,7 +1213,115 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
         changes={"rows": len(mapped), **run.counts},
     )
     db.commit()
-    return SyncResult(run=run, plan_rows=applied_rows, truncated=fetched.truncated)
+    return SyncResult(run=run, plan_rows=applied_rows + merged_rows, truncated=truncated)
+
+
+def _relations_or_note(
+    db: Session,
+    user: User | None,
+    source: DataSource,
+    object_type: ObjectType,
+    *,
+    apply: bool,
+) -> tuple[dict[str, int], list[str], bool]:
+    """선 받기 — **상대에 닿지 못해도 객체 쪽 결과는 남긴다.**
+
+    예전에는 선 창구의 연결 오류가 예외로 빠져나가, 객체를 넣은 실행의 마지막 커밋(외부
+    식별자 · 사용 중지 · 객체의 시계)까지 롤백되고 기록에는 「계획 · 미완료」 만 남았다
+    (2026-10-08). 이제는 그 실행의 실패로 적고 선의 시계만 안 옮긴다."""
+    try:
+        return _sync_relations(db, user, source, object_type, apply=apply)
+    except AppError as caught:
+        return {}, [f"선을 받지 못했습니다 — {caught.message}"], False
+
+
+def _resume_of(source: DataSource, key: str, mark: str) -> dict[str, Any] | None:
+    """지난 차례가 **끊은 자리** — 지금의 시계에서 시작한 것일 때만(시계를 손으로
+    비웠으면 버린다)."""
+    got = (source.options or {}).get(key)
+    if isinstance(got, dict) and got.get("next") and got.get("from") == mark:
+        return got
+    return None
+
+
+def _set_resume(source: DataSource, key: str, value: dict[str, Any] | None) -> None:
+    current = dict(source.options or {})
+    if current.get(key) == value or (value is None and key not in current):
+        return
+    if value is None:
+        current.pop(key, None)
+    else:
+        current[key] = value
+    # JSONB 는 제자리 변경을 모른다 — 새 dict 로 갈아 끼운다.
+    source.options = current
+
+
+def public_options(options: dict[str, Any] | None) -> dict[str, Any]:
+    """화면에 내보이는 설정 — 동기화가 적어 두는 칸(`_` 로 시작)은 뺀다."""
+    return {key: value for key, value in (options or {}).items() if not key.startswith("_")}
+
+
+def internal_options(options: dict[str, Any] | None) -> dict[str, Any]:
+    """동기화가 적어 두는 칸 — 정의를 고쳐도 지킨다(화면은 이것을 모른다)."""
+    return {key: value for key, value in (options or {}).items() if key.startswith("_")}
+
+
+def _earlier(floor: Any, as_of: str) -> str:
+    """둘 중 이른 시계. 시각으로 못 읽으면 `as_of`."""
+    if not floor:
+        return as_of
+    try:
+        first = datetime.fromisoformat(str(floor).replace("Z", "+00:00"))
+        second = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
+    except ValueError:
+        return as_of
+    return str(floor) if first < second else as_of
+
+
+def _advance(
+    source: DataSource,
+    key: str,
+    fetched: odata.Fetched,
+    resume: dict[str, Any] | None,
+    since_used: str,
+) -> list[str]:
+    """형제 코어의 시계를 옮긴다 — **다 받았으면 시계를, 끊겼으면 끊은 자리를.** 남길 말을
+    돌려준다.
+
+    예전에는 끊기면(5만 행) 시계도 자리도 안 남겨, 다음 차례가 같은 `since` 로 같은 5만
+    행을 다시 받아 **영영 앞으로 못 갔다** — 「다음 동기화가 같은 자리에서 잇습니다」 는
+    사실이 아니었다(2026-10-08). 이제 받은 만큼 넣고 상대가 준 다음 커서를 적어 두면 다음
+    차례가 거기서 잇는다.
+
+    다 받은 뒤의 시계는 **처음 끊었을 때 상대의 시계**(`floor`)와 `as_of` 중 이른 것이다.
+    커서는 지나간 자리를 다시 안 보므로, 여러 차례에 걸쳐 받는 동안 늦게 커밋된 적재 · 받은
+    뒤에 지워진 것은 커서만으로는 안 온다 — 그 시계에서 다시 받으면 온다(같은 행을 한 번
+    더 받을 뿐이다).
+    """
+    edges = key == RESUME_EDGES
+    clock = "relations_since_mark" if edges else "since_mark"
+    mark = str(getattr(source, clock) or "")
+    if fetched.truncated and fetched.next:
+        floor = (resume or {}).get("floor") or fetchers.core_watermark(
+            base_url=source.base_url,
+            type_slug=source.entity_set,
+            auth=_auth(source),
+            transport=transport,
+        )
+        _set_resume(
+            source,
+            key,
+            {"from": mark, "since": since_used, "next": fetched.next, "floor": floor},
+        )
+        noun, unit = ("선", "줄") if edges else ("행", "행")
+        return [
+            f"{noun}이 많아 이번에는 {len(fetched.rows):,}{unit}까지 넣었습니다 — 다음 "
+            "동기화가 끊은 자리에서 잇습니다."
+        ]
+    if fetched.as_of and not fetched.truncated:
+        setattr(source, clock, _earlier((resume or {}).get("floor"), fetched.as_of))
+        _set_resume(source, key, None)
+    return []
 
 
 #: 선까지 받는 소스 — 코어 창구가 객체와 선을 같은 규칙으로 열어 주는 종류.
@@ -938,19 +1396,26 @@ def _sync_ra(
     converted.sort(key=lambda one: str(owner_of(one) or ""))
     mapped = [Mapped(external_id=one.external_id, row=one.row) for one in converted]
     run.rows_seen = len(mapped) + len(broken)
-    _match(db, object_type, source.slug, mapped, by_name=False)
+    known = _match(db, object_type, source.slug, mapped, by_name=False)
 
-    groups: list[tuple[uuid.UUID | None, list[dict[str, Any]]]] = []
+    groups: list[tuple[uuid.UUID | None, list[Mapped]]] = []
     for one, row in zip(converted, mapped, strict=True):
+        if row.merged_into:
+            continue
         owner = owner_of(one)
         if not groups or groups[-1][0] != owner or len(groups[-1][1]) >= bulk.MAX_ROWS:
             groups.append((owner, []))
-        groups[-1][1].append(row.row)
+        groups[-1][1].append(row)
 
     actor = _actor(db, user)
     plan_rows: list[bulk.RowPlan] = [
         bulk.RowPlan(row=index, action="error", label=bad.external_id, message=bad.error or "")
         for index, bad in enumerate(broken, start=1)
+    ]
+    merged_rows = [
+        _merged_plan(len(broken) + index, one)
+        for index, one in enumerate(mapped, start=1)
+        if one.merged_into
     ]
     errors: list[str] = []
     if fetched.truncated:
@@ -959,12 +1424,13 @@ def _sync_ra(
             "생성하세요."
         )
     offset = len(plan_rows)
-    for owner, rows in groups:
+    plan_rows.extend(merged_rows)
+    for owner, sent in groups:
         plan = bulk.plan_objects(
             db,
             actor,
             object_type,
-            rows,
+            [one.row for one in sent],
             owner_workspace_id=owner,
             source=source_name(source),
             blank_missing=True,
@@ -1009,16 +1475,14 @@ def _sync_ra(
         db.commit()
         return SyncResult(run=run, plan_rows=plan_rows, truncated=fetched.truncated)
 
+    # 적용 — 외부 식별자는 조각의 커밋에 함께 탄다(`_apply_chunk`). 끝나기 전에 멈추면 이
+    # 표시가 기록에 남는다.
+    run.status = "failed"
+    run.errors = [INTERRUPTED]
     applied: list[bulk.RowPlan] = []
-    for owner, rows in groups:
-        done = bulk.apply_objects(
-            db,
-            actor,
-            object_type,
-            rows,
-            owner_workspace_id=owner,
-            source=source_name(source),
-            blank_missing=True,
+    for owner, sent in groups:
+        done = _apply_chunk(
+            db, actor, object_type, source, run, sent, known, owner=owner, blank_missing=True
         )
         if not done.ok:
             return _fail(
@@ -1030,18 +1494,15 @@ def _sync_ra(
                     f"{one.row}행 {one.label}: {one.message}"
                     for one in done.rows
                     if one.action == "error"
-                ],
+                ]
+                + ([PARTIAL] if run.applied else []),
             )
         applied.extend(done.rows)
 
-    seen: set[str] = set()
-    for sent, row_plan in zip(mapped, applied, strict=True):
-        seen.add(compare_key(sent.external_id))
-        if row_plan.object_id is None:
-            continue
-        target = db.get(ObjectInstance, row_plan.object_id)
-        if target is not None:
-            aliases.set_external(db, target, object_type, source.slug, sent.external_id)
+    # 이번에 온 것 — **깨진 행(제목이 빈 것)도 온 것이다.** 예전에는 그것을 빼서, 전량 대조가
+    # 제목만 빈 보고서를 「원본에서 내려감」 으로 잘못 적었다(2026-10-08).
+    seen = {compare_key(one.external_id) for one in mapped}
+    seen |= {compare_key(bad.external_id) for bad in broken if bad.external_id}
     full = fetched.full and not fetched.truncated
     marks = ra_reports.reconcile(db, actor, object_type, source, seen, full=full)
     counts = {**counts, **marks}
@@ -1084,7 +1545,7 @@ def _sync_ra(
         changes={"rows": run.rows_seen, **counts},
     )
     db.commit()
-    return SyncResult(run=run, plan_rows=applied, truncated=fetched.truncated)
+    return SyncResult(run=run, plan_rows=applied + merged_rows, truncated=fetched.truncated)
 
 
 def wants_relations(source: DataSource) -> bool:
@@ -1108,9 +1569,14 @@ def _apply_edges(
     mode: str,
     apply: bool,
     skip_missing: bool = False,
-) -> tuple[dict[str, int], list[str], list[Waiting]]:
-    """선을 계획하고(또는 넣고) **셈 · 오류 줄 · 끝점을 못 찾아 건너뛴 줄**을 돌려준다 — 코어
-    쪽과 대응 쪽이 함께 쓴다.
+    max_rows: int = bulk.MAX_ROWS,
+) -> tuple[dict[str, int], list[str], list[Waiting], bool]:
+    """선을 계획하고(또는 넣고) **셈 · 오류 줄 · 끝점을 못 찾아 건너뛴 줄 · 됐나**를 돌려준다 —
+    코어 쪽과 대응 쪽이 함께 쓴다.
+
+    **됐나(`ok`)를 셈으로 가르지 않는다** — 계획 전체가 거절되는 오류(한 번에 5,000줄 넘음 ·
+    모르는 열 · 잠긴 타입)는 줄이 하나도 없어 `*_error` 셈이 0 이다. 셈만 보던 코어 쪽은 그것을
+    성공으로 알고 시계를 옮겨, 그 증분의 선을 영영 놓쳤다(2026-10-08).
 
     `skip_missing` 이면 끝점을 못 찾은 줄이 **나머지를 막지 않는다** — 건너뛰고 돌려준다
     (`relations_waiting` 으로 센다). 타입마다 소스가 따로라 가리키는 쪽이 아직 안 들어왔을
@@ -1118,12 +1584,23 @@ def _apply_edges(
 
     끊긴 선은 무덤과 같은 규칙으로 끊는다(`bundles/tombstones.py` — 줄마다 그 객체를 고칠
     수 있는지 다시 본다). 규칙을 두 벌로 적지 않으려고 그 모듈을 그대로 쓴다.
+
+    `max_rows` — 동기화는 작업(워커)에서 돈다. 요청 경로의 5,000줄 상한을 그대로 두면 한 번에
+    5,000줄이 넘게 온 증분이 매번 「한 번에 5000행까지」 로 거절되어 시계가 영영 안
+    움직였다(2026-10-08). 받는 쪽의 상한(`odata.MAX_ROWS`)이 이미 크기를 정한다.
     """
     actor = _actor(db, user)
     errors: list[str] = []
     name = source_name(source)
     plan = bulk.plan_relations(
-        db, actor, object_type, rows, mode=mode, source=name, skip_missing=skip_missing
+        db,
+        actor,
+        object_type,
+        rows,
+        mode=mode,
+        source=name,
+        skip_missing=skip_missing,
+        max_rows=max_rows,
     )
     waiting = [Waiting(rows[one.row - 1], one.message) for one in plan.rows if one.skipped]
     counts = _edge_counts(plan.counts, len(waiting))
@@ -1157,21 +1634,29 @@ def _apply_edges(
     )
     if not apply or not plan.ok or not cut.ok:
         counts["relations_unlink"] = counts.get("relations_unlink", 0) + unlinked
-        return counts, errors, waiting
+        return counts, errors, waiting, plan.ok and cut.ok
 
     done = bulk.apply_relations(
-        db, actor, object_type, rows, mode=mode, source=name, skip_missing=skip_missing
+        db,
+        actor,
+        object_type,
+        rows,
+        mode=mode,
+        source=name,
+        skip_missing=skip_missing,
+        max_rows=max_rows,
     )
     waiting = [Waiting(rows[one.row - 1], one.message) for one in done.rows if one.skipped]
     counts = _edge_counts(done.counts, len(waiting))
     counts["relations_unlink"] = counts.get("relations_unlink", 0) + unlinked
     if not done.ok:
+        errors.extend(done.errors)
         errors.extend(
             f"선 {one.row}줄 {one.label}: {one.message}"
             for one in done.rows
             if one.action == "error"
         )
-    return counts, errors, waiting
+    return counts, errors, waiting, done.ok
 
 
 @dataclass
@@ -1222,8 +1707,8 @@ def _sync_relations(
     object_type: ObjectType,
     *,
     apply: bool,
-) -> tuple[dict[str, int], list[str]]:
-    """형제 설치의 **선**을 받는다 — `(셈, 오류 줄)`.
+) -> tuple[dict[str, int], list[str], bool]:
+    """형제 설치의 **선**을 받는다 — `(셈, 오류 줄, 됐나)`.
 
     **객체를 넣은 뒤에 부른다** — 선은 양 끝이 있어야 선다. 끊긴 선(`deleted`)은 무덤과 같은
     규칙으로 끊는다(`bundles/tombstones.py` — 줄마다 그 객체를 고칠 수 있는지 다시 본다).
@@ -1232,6 +1717,9 @@ def _sync_relations(
     상대가 `reset` 을 주면 시계를 비우고 **전량을 다시 받아 「파일대로 맞춤」** 으로 넣는다 —
     그 시각부터 끊긴 선을 알려 줄 수 없다는 말이므로, 온 것만 믿고 나머지는 끊는다. 범위는
     **온 목록에 나온 (출발 객체 · 관계 종류)** 뿐이다(파일에 아예 안 나온 객체는 안 건드린다).
+
+    많으면(5만 줄) 객체 쪽처럼 **받은 만큼 넣고 끊은 자리를 적어** 다음 차례가 잇는다
+    (`_advance`). 맞춤은 전부를 받았을 때만 한다 — 일부로 맞추면 아직 안 받은 선을 끊는다.
     """
     fetch = partial(
         fetchers.fetch_sp_core_relations,
@@ -1242,20 +1730,43 @@ def _sync_relations(
         max_rows=odata.MAX_ROWS,
         transport=transport,
     )
-    got = fetch(since=source.relations_since_mark)
-    mode = "add"
     errors: list[str] = []
+    resume = _resume_of(source, RESUME_EDGES, source.relations_since_mark)
+    since = str(resume.get("since") or "") if resume else source.relations_since_mark
+    if resume is not None:
+        try:
+            got = fetch(since=since, cursor=str(resume["next"]))
+        except AppError as caught:
+            errors.append(
+                f"선은 지난번에 끊은 자리에서 잇지 못해 받은 자리부터 다시 받았습니다 — "
+                f"{caught.message}"
+            )
+            resume = None
+            since = source.relations_since_mark
+            got = fetch(since=since)
+    else:
+        got = fetch(since=since)
+    mode = "add"
     if got.reset:
         why = got.reset_reason or "상대가 reset 을 보냈습니다"
         errors.append(f"선은 처음부터 다시 받았습니다 — {why}")
-        source.relations_since_mark = ""
+        # **소스의 시계는 여기서 안 비운다** — 계획(미리 보기)도 이 길을 지나고 그 실행도
+        # 커밋한다. 비워 두면 상대는 빈 시계에는 reset 을 안 보내, 다음 적용이 「더하기」 로
+        # 받아 「파일대로 맞춤」 이 영영 안 일어났다(2026-10-08). 적용에 성공하면 아래에서
+        # 새 시계로 옮긴다 — 실패하면 옛 시계라 상대가 다시 reset 을 보낸다.
+        resume = None
+        since = ""
         got = fetch(since="")
         mode = "replace"
-    if got.truncated:
-        errors.append(
-            f"선이 {odata.MAX_ROWS}줄을 넘어 끊었습니다 — "
-            "다음 동기화가 같은 자리에서 잇습니다."
-        )
+        if got.truncated:
+            # 일부로 맞추면 아직 안 받은 선이 「목록에 없는 선」 으로 읽혀 끊긴다 — 예전에는
+            # 그렇게 끊고, 시계도 못 옮겨 다음 차례가 또 끊었다.
+            mode = "add"
+            errors.append(
+                "선이 많아 처음부터 다시 받기를 한 번에 끝내지 못했습니다 — 받은 것은 "
+                "더하기로 넣고 끊은 자리에서 이어 받습니다. 상대에서 끊긴 선의 정리(맞춤)는 "
+                "하지 못해, 상대에서 끊긴 선이 이쪽에 남아 있을 수 있습니다."
+            )
 
     rows = [_edge_row(one) for one in got.rows if not one.get(fetchers.CORE_DELETED)]
     gone = [one for one in got.rows if one.get(fetchers.CORE_DELETED)]
@@ -1268,33 +1779,92 @@ def _sync_relations(
     )
     again = {_edge_key(one) for one in rows} | {_edge_key(one) for one in gone}
     retry = [one for one in waiting if _edge_key(one) not in again]
-    room = max(bulk.MAX_ROWS - len(rows), 0)
+    room = max(odata.MAX_ROWS - len(rows), 0)
     retry, held = retry[:room], retry[room:]
-    counts, more, still = _apply_edges(
+    retry, dropped = _still_placeable(db, user, source, object_type, retry)
+    if dropped:
+        errors.append(_dropped_note(dropped))
+    sent = rows + retry
+    counts, more, still, edges_ok = _apply_edges(
         db,
         user,
         source,
         object_type,
-        rows + retry,
+        sent,
         gone,
         mode=mode,
         apply=apply,
         # 「파일대로 맞춤」(reset) 은 그대로 엄격하다 — 건너뛴 줄이 있는 선을 끊을 수 있다.
         skip_missing=mode == "add",
+        max_rows=max(len(sent), bulk.MAX_ROWS),
     )
     errors.extend(more)
     if still:
         errors.append(_waiting_note(still))
-    ok = not any(name.endswith("_error") and value for name, value in counts.items())
+    ok = edges_ok and not any(
+        name.endswith("_error") and value for name, value in counts.items()
+    )
     if apply and ok:
         source.relations_waiting = [one.row for one in still] + held
         if held:
             counts["relations_waiting"] = counts.get("relations_waiting", 0) + len(held)
         # **끝까지 받고 넣은 뒤에만** 시계를 옮긴다 — 중간에 옮기면 그 사이 선을 영영 안
-        # 받는다. 끝점을 못 찾은 줄은 위에 남겼으니 시계를 막지 않는다.
-        if got.as_of and not got.truncated:
-            source.relations_since_mark = got.as_of
-    return counts, errors
+        # 받는다. 끝점을 못 찾은 줄은 위에 남겼으니 시계를 막지 않는다. 끊겼으면 끊은 자리를.
+        errors.extend(_advance(source, RESUME_EDGES, got, resume, since))
+    elif not apply and got.truncated and got.next:
+        errors.append(
+            f"선이 많아 이번에는 {len(got.rows):,}줄까지 받았습니다 — 적용하면 받은 만큼 넣고 "
+            "다음 동기화가 끊은 자리에서 잇습니다."
+        )
+    return counts, errors, ok
+
+
+def _still_placeable(
+    db: Session,
+    user: User | None,
+    source: DataSource,
+    object_type: ObjectType,
+    retry: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], list[tuple[dict[str, Any], str]]]:
+    """기다리던 선 가운데 **이제는 넣을 수 없는 것**을 가려낸다 — `(다시 실을 것, 뺄 것과
+    까닭)`.
+
+    기다리던 줄이 그 사이 오류 줄이 되면(관계 종류가 지워짐 · 개수 제약 · 끝점이 둘로 갈림)
+    그 한 줄이 계획 전체를 막는다. 그 줄은 적용에 성공해야만 목록에서 빠지므로, 예전에는
+    **매번 같은 줄이 막아 그 소스의 선이 영영 안 섰다**(2026-10-08). 새로 온 줄은 그대로
+    엄격하다 — 지금 바깥이 보낸 것이다. 끝점을 아직 못 찾은 것(`skipped`)은 계속 기다린다.
+    """
+    if not retry:
+        return [], []
+    probe = bulk.plan_relations(
+        db,
+        _actor(db, user),
+        object_type,
+        retry,
+        source=source_name(source),
+        skip_missing=True,
+        max_rows=max(len(retry), bulk.MAX_ROWS),
+    )
+    if probe.errors:
+        # 줄과 무관한 거절(모르는 열 — 그 사이 관계 속성이 지워졌다)은 어느 줄인지 못 가린다.
+        why = " · ".join(probe.errors)
+        return [], [(one, why) for one in retry]
+    bad = {one.row: one.message for one in probe.rows if one.action == "error"}
+    keep = [one for index, one in enumerate(retry, start=1) if index not in bad]
+    dropped = [(one, bad[index]) for index, one in enumerate(retry, start=1) if index in bad]
+    return keep, dropped
+
+
+def _dropped_note(dropped: list[tuple[dict[str, Any], str]]) -> str:
+    sample = " · ".join(
+        f"{row.get('src')} -{row.get('relation')}-> {row.get('dst')} ({why})"
+        for row, why in dropped[:3]
+    )
+    more = f" 외 {len(dropped) - 3}줄" if len(dropped) > 3 else ""
+    return (
+        f"기다리던 선 {len(dropped)}줄은 이제 넣을 수 없어 더 기다리지 않습니다: "
+        f"{sample}{more}"
+    )
 
 
 def _counts(rows: list[bulk.RowPlan]) -> dict[str, int]:
@@ -1394,13 +1964,34 @@ def _bury(
     return count
 
 
+#: 한 번에 이보다 많이(이 소스가 넣어 쓰는 것의 비율) 안 오면 사용 중지하지 않고 멈춘다 —
+#: RA 보고서의 「원본에서 내려감」 과 같은 무늬(`ra_reports.GONE_LIMIT`). 바깥이 한 번 빈
+#: 응답이나 일부만 주면(필터 · 권한이 바뀜, 쪽 넘김 설정이 틀림) 이 소스가 넣은 것 전부가 사용
+#: 중지됐다 — 그리고 그것을 되돌리는 길은 다시 온 행이 아니었다(상태를 대응하지 않는 소스).
+GONE_LIMIT = ra_reports.GONE_LIMIT
+#: 그 비율을 보지 않는 작은 수 — 몇 건짜리 표에서 둘이 빠지는 것은 정상이다.
+GONE_FLOOR = ra_reports.GONE_FLOOR
+
+
 def _deprecate_missing(
-    db: Session, actor: User, object_type: ObjectType, source: DataSource, seen: set[str]
-) -> int:
-    """이 소스가 남긴 객체 중 이번에 안 온 것을 「사용 중지」 로. 사람이 만든 것은 안
-    건드린다."""
+    db: Session,
+    actor: User,
+    object_type: ObjectType,
+    source: DataSource,
+    seen: set[str],
+    seen_ids: set[uuid.UUID],
+) -> tuple[int, int]:
+    """이 소스가 남긴 객체 중 이번에 안 온 것을 「사용 중지」 로 — `(중지한 수, 멈춘 수)`.
+    사람이 만든 것은 안 건드린다.
+
+    **객체로 센다.** 사람이 합친 객체는 이 소스의 외부 식별자를 둘 갖는다 — 하나만 와도 온
+    것이다(예전에는 안 온 식별자 하나로 방금 고친 객체를 중지시켰다). 이번에 넣은 객체
+    (`seen_ids`)도 온 것이다 — 외부 식별자가 바뀐 행은 옛 값으로는 안 맞는다.
+    """
     kind = aliases.source_kind(source.slug)
-    rows = db.execute(
+    held: dict[uuid.UUID, ObjectInstance] = {}
+    present: set[uuid.UUID] = set()
+    for row, norm in db.execute(
         select(ObjectInstance, ObjectAlias.norm)
         .join(ObjectAlias, ObjectAlias.object_id == ObjectInstance.id)
         .where(
@@ -1409,12 +2000,108 @@ def _deprecate_missing(
             ObjectInstance.deleted_at.is_(None),
             ObjectInstance.status == "active",
         )
-    )
-    count = 0
-    for row, norm in rows:
-        if norm in seen:
-            continue
+    ).tuples():
+        held[row.id] = row
+        if norm in seen or row.id in seen_ids:
+            present.add(row.id)
+    gone = [row for object_id, row in held.items() if object_id not in present]
+    if len(gone) > GONE_FLOOR and len(gone) > GONE_LIMIT * len(held):
+        # **중지하지 않고 멈춘다** — 부르는 쪽이 실패로 적고 사람에게 알린다.
+        return 0, len(gone)
+    for row in gone:
         row.status = "deprecated"
+        audit.record(
+            db,
+            action="object.update",
+            actor=actor,
+            target_table="objects",
+            target_id=row.id,
+            target_label=f"{object_type.slug}:{row.label}",
+            workspace_id=row.owner_workspace_id,
+            changes={
+                "status": {"before": "active", "after": "deprecated"},
+                MARK: {"slug": source.slug, "why": "missing"},
+            },
+            reason=f"{source.name} 에서 사라져 사용 중지로 표시",
+        )
+    return len(gone), 0
+
+
+def _revivable(
+    db: Session, object_type: ObjectType, source: DataSource, mapped: list[Mapped]
+) -> list[ObjectInstance]:
+    """**이 소스가 「바깥에서 사라져」 중지시킨 것**이 다시 왔다 — 되살릴 객체들.
+
+    상태 열을 대응하지 않는 소스(OData · REST · 파일 대부분)는 다시 온 행으로 상태를 못
+    돌린다. 그래서 `deprecate_missing` 이 중지시킨 것이 바깥에 다시 올라와도 영영 중지로
+    남았다(RA 는 「다시 올라옴」 을 따로 적는다 — `ra_reports.reconcile`). **사람이 중지한 것은
+    그대로다** — 그 객체의 **마지막 상태 변경**이 이 소스의 「사라져 중지」 일 때만 되살린다.
+    그 뒤에 사람이 상태를 만졌으면 그 사람의 결정이 이긴다. 행이 상태를 들고 오면 그 값이
+    정한다(여기서는 안 본다).
+    """
+    ids = {
+        uuid.UUID(str(one.row["id"]))
+        for one in mapped
+        if not one.error and one.row.get("id") and "status" not in one.row
+    }
+    stopped: list[ObjectInstance] = []
+    for batch in id_batches(sorted(ids)):
+        stopped.extend(
+            db.scalars(
+                select(ObjectInstance).where(
+                    ObjectInstance.id.in_(batch),
+                    ObjectInstance.status == "deprecated",
+                    ObjectInstance.deleted_at.is_(None),
+                )
+            )
+        )
+    if not stopped:
+        return []
+    last: dict[uuid.UUID, tuple[dict[str, Any], str | None]] = {}
+    for batch in id_batches([one.id for one in stopped]):
+        for target_id, changes, reason in db.execute(
+            select(AuditEntry.target_id, AuditEntry.changes, AuditEntry.reason)
+            .where(
+                AuditEntry.target_table == "objects",
+                AuditEntry.target_id.in_(batch),
+                AuditEntry.changes.op("?")("status"),
+            )
+            .order_by(AuditEntry.target_id, AuditEntry.seq.desc())
+            .distinct(AuditEntry.target_id)
+        ).tuples():
+            if target_id is not None:
+                last[target_id] = (dict(changes or {}), reason)
+    return [one for one in stopped if _stopped_by(source, last.get(one.id))]
+
+
+def _stopped_by(source: DataSource, entry: tuple[dict[str, Any], str | None] | None) -> bool:
+    """그 상태 변경이 **이 소스의 「바깥에서 사라져 중지」** 인가."""
+    if entry is None:
+        return False
+    changes, reason = entry
+    status = changes.get("status")
+    if not isinstance(status, dict) or status.get("after") != "deprecated":
+        return False
+    mark = changes.get(MARK)
+    if isinstance(mark, dict):
+        return mark.get("slug") == source.slug and mark.get("why") == "missing"
+    # 표식을 박기 전(2026-10-08 전)의 기록 — 사유 글로 가린다.
+    return reason == f"{source.name} 에서 사라져 사용 중지로 표시"
+
+
+def _revive(
+    db: Session,
+    actor: User,
+    object_type: ObjectType,
+    source: DataSource,
+    objects: list[ObjectInstance],
+) -> int:
+    """되살린다 — 「다시 올라옴」 을 기록에 남긴다(왜 다시 쓰게 됐는지 이력이 말한다)."""
+    count = 0
+    for row in objects:
+        if row.status != "deprecated":  # 그 사이 바뀌었다
+            continue
+        row.status = "active"
         count += 1
         audit.record(
             db,
@@ -1424,8 +2111,11 @@ def _deprecate_missing(
             target_id=row.id,
             target_label=f"{object_type.slug}:{row.label}",
             workspace_id=row.owner_workspace_id,
-            changes={"status": {"before": "active", "after": "deprecated"}},
-            reason=f"{source.name} 에서 사라져 사용 중지로 표시",
+            changes={
+                "status": {"before": "deprecated", "after": "active"},
+                MARK: {"slug": source.slug, "why": "returned"},
+            },
+            reason=f"{source.name} 에 다시 나타나 사용으로 되돌림",
         )
     return count
 
@@ -1511,8 +2201,16 @@ def suggest_core_mapping(
     )
 
 
+#: 타이머가 깨는 간격(`deploy/sync.timer.template` 의 `OnUnitActiveSec`) — 그만큼은 봐준다.
+#: `last_run_at` 은 실행이 **끝난** 때라, 여유 없이 「끝난 때 + 간격」 을 견주면 차례가 늘
+#: 다음 깸으로 밀린다 — 5분 소스가 실제로는 10분마다 돌았다(2026-10-08). 지표의 `DUE_GRACE`
+#: 와 같은 무늬다.
+DUE_GRACE = timedelta(minutes=5)
+
+
 def due(db: Session, now: datetime | None = None) -> list[DataSource]:
-    """타이머가 돌릴 차례인 소스 — 간격이 0 이 아니고 마지막 실행에서 그만큼 지난 것."""
+    """타이머가 돌릴 차례인 소스 — 간격이 0 이 아니고 마지막 실행에서 그만큼(여유를 빼고)
+    지난 것."""
     now = now or datetime.now(UTC)
     out: list[DataSource] = []
     for source in db.scalars(
@@ -1520,12 +2218,45 @@ def due(db: Session, now: datetime | None = None) -> list[DataSource]:
             DataSource.is_active.is_(True), DataSource.interval_minutes > 0
         )
     ):
-        if (
-            source.last_run_at is None
-            or source.last_run_at + timedelta(minutes=source.interval_minutes) <= now
-        ):
+        every = timedelta(minutes=source.interval_minutes)
+        if source.last_run_at is None or source.last_run_at + every - DUE_GRACE <= now:
             out.append(source)
     return out
+
+
+def pending_job(db: Session, source: DataSource, *, apply: bool | None = None) -> Job | None:
+    """이 소스를 돌릴 작업이 **줄에 있거나 돌고 있나** — 따로 넣은 것과 차례(round)에 든
+    것 모두.
+
+    `apply` 를 주면 그 뜻의 작업만 본다. 돌고 있는 차례는 이 소스를 이미 지났으면(그 차례가
+    시작한 뒤에 이 소스가 돌았다) 셈하지 않는다.
+    """
+    for row in db.scalars(
+        select(Job)
+        .where(
+            Job.kind.in_(("datasource_sync", "datasource_sync_round")),
+            Job.status.in_(("queued", "running")),
+        )
+        .order_by(Job.created_at)
+    ):
+        params = row.params or {}
+        if apply is not None and bool(params.get("apply")) != apply:
+            continue
+        if row.kind == "datasource_sync":
+            if params.get("slug") == source.slug:
+                return row
+            continue
+        if source.slug not in (params.get("slugs") or []):
+            continue
+        passed = (
+            row.status == "running"
+            and row.started_at is not None
+            and source.last_run_at is not None
+            and source.last_run_at >= row.started_at
+        )
+        if not passed:
+            return row
+    return None
 
 
 def edges_only(source: DataSource) -> bool:
@@ -1655,6 +2386,8 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
         )
     )
     now = datetime.now(UTC)
+    # **한 번도 안 돈 것도 센다** — 만든 때부터 잰다. 예전에는 `last_run_at` 이 없으면 빼서,
+    # 타이머나 워커가 처음부터 없던 설치의 소스는 영영 「멎음」 에 안 걸렸다(2026-10-08).
     stale = [
         one
         for one in db.scalars(
@@ -1663,8 +2396,9 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
             )
         )
         if one.last_status != "failed"
-        and one.last_run_at is not None
-        and one.last_run_at + timedelta(minutes=one.interval_minutes * STALE_FACTOR) < now
+        and (one.last_run_at or one.created_at)
+        + timedelta(minutes=one.interval_minutes * STALE_FACTOR)
+        < now
     ]
     return [
         extensions.MaintenanceItem(

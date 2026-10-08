@@ -167,6 +167,12 @@ class Settings(BaseSettings):
     """하루 이상 주기의 지표를 세는 **밤 시간**(서버 현지 시각, 0 ~ 23). 타이머는 매시간 깨고,
     「매일 밤 · N일마다 밤」 지표는 이 시간에만 센다 — 무거운 계산이 낮에 돌지 않고, 백업
     (03:00)에 그날 값이 든다(`metrics/services.due`)."""
+    metrics_full_every_days: int = 7
+    """**전량으로 다시 세는 주기**(일). 그 사이 타이머 · 적재 뒤의 계산은 바뀐 기간만 센다
+    (`metrics/incremental.py`). 증분이 못 보는 변경(감사 없이 바뀐 기록 · 타입 옮김 등)을 이
+    주기로 바로잡는다. 0 이면 늘 전량."""
+    metrics_incremental_max_share: float = 0.2
+    """바뀐 원천 기록이 원천의 이 비율을 넘으면 전량으로 센다 — 그러면 전량이 오히려 싸다."""
     metrics_work_mem: str = "256MB"
     """지표 계산 트랜잭션의 `work_mem`. 200만 건을 묶을 때 기본값(4MB)이면 디스크로 넘어가
     열 배 느리다. 계산은 한 번에 하나만 돌므로(지표마다 자문 잠금) 넉넉히 준다."""
@@ -182,6 +188,10 @@ class Settings(BaseSettings):
     """개발에서는 저장소 안. **운영에서는 `.env` 가 `/data/logs` 로 덮는다** —
     컨테이너 루트는 읽기 전용이라 이미지 안에는 못 쓴다."""
     log_retention_days: int = 30
+
+    filestore_gc_hours: int = 24
+    """첨부 저장소의 **고아 파일 정리**를 워커가 몇 시간마다 하나(`files/gc.py`). 0 이면 안
+    한다 — 시스템 관리자가 작업(「고아 첨부 파일 정리」)으로만."""
 
     filestore_dir: Path = BACKEND_DIR / "filestore"
     """첨부가 사는 곳. DB 에는 경로와 해시만 둔다.

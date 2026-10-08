@@ -322,6 +322,8 @@ def run(
         raise common.refuse(31, reason)
     repeat = _repeat_dim(built)
     assert repeat is not None
+    # 같은 요인을 두 번 주면(`factors=a,a`) 설계 행렬의 열이 겹친다 — 한 번만(뜻이 같다).
+    factors = list(dict.fromkeys(factors))
     if not factors:
         raise common.refuse(
             32, "요인(factors)을 하나 이상 고릅니다 — 값이 적은 기준이 좋습니다."

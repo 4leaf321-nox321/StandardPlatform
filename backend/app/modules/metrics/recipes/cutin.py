@@ -89,22 +89,27 @@ class Compared:
 def dispersion(
     before: Sequence[tuple[float, float]], after: Sequence[tuple[float, float]]
 ) -> float:
-    """양쪽 각자의 평균에서 잰 피어슨 χ² / (부분군 수 - 2). 자유도가 작으면 1, 1 보다 작으면
-    1."""
+    """양쪽 각자의 평균에서 잰 피어슨 χ² / 자유도. 자유도가 작으면 1, 1 보다 작으면 1.
+
+    자유도는 (부분군 수 - **잰 평균의 수**)다 — 건수가 있는 쪽마다 비율 하나를 쟀다. 양쪽이면
+    n - 2, 한쪽만이면(앞쪽 추세 · 뒤가 0 건) n - 1. 늘 n - 2 로 나누면 한쪽만일 때 φ 가 부풀어
+    (부분군 다섯이면 4/3 배) 구간이 까닭 없이 넓었다(2026-10-08)."""
     total = 0.0
     used = 0
+    rates = 0
     for side in (before, after):
         count = sum(c for c, _ in side)
         exposure = sum(n for _, n in side)
         if count <= 0 or exposure <= 0:
             continue
         rate = count / exposure
+        rates += 1
         for c, n in side:
             if n > 0:
                 expected = n * rate
                 total += (c - expected) ** 2 / expected
                 used += 1
-    df = used - 2
+    df = used - rates
     if df < DISPERSION_MIN_DF:
         return 1.0
     return max(1.0, total / df)
@@ -114,7 +119,7 @@ def compare(
     before: Sequence[tuple[float, float]], after: Sequence[tuple[float, float]]
 ) -> Compared:
     """(건수, 대수) 부분군 → 비 · 구간 · p · φ. 앞에 건수가 없거나 한쪽 대수가 없으면 비가
-    없다."""
+    없다. 구간의 위 끝이 없으면(`high` None) 「상한 없음」 이다."""
     phi = dispersion(before, after)
     c0, n0 = sum(c for c, _ in before), sum(n for _, n in before)
     c1, n1 = sum(c for c, _ in after), sum(n for _, n in after)
@@ -126,7 +131,12 @@ def compare(
     low_pi = 0.0 if k1 <= 0 else _numeric.beta_ppf(ALPHA / 2, k1, k0 + 1)
     high_pi = _numeric.beta_ppf(1 - ALPHA / 2, k1 + 1, k0)
 
-    def to_ratio(pi: float) -> float:
+    def to_ratio(pi: float) -> float | None:
+        """π → 비. π 가 1(이나 NaN)이면 비에 끝이 없다 — 앞의 실효 건수가 아주 적고 φ 가
+        크면(앞 1건 · φ 64 → 실효 0.016건) 위 끝의 π 가 1.0 으로 떨어져 0 으로 나눴고, 그
+        요청은 500 이었다(2026-10-08)."""
+        if not pi < 1:
+            return None
         return pi / (1 - pi) * n0 / n1
 
     low, high = to_ratio(low_pi), to_ratio(high_pi)
@@ -302,6 +312,13 @@ def run(
             f"부분군끼리의 흔들림이 우연의 {compared.dispersion:.1f}배입니다 — 구간을 그만큼 "
             "넓혔습니다(우연한 달 차이를 효과로 읽지 않게).",
             level="info",
+        )
+    if compared.ratio is not None and compared.high is None:
+        caveats.add(
+            "unbounded_high",
+            "앞쪽 건수가 흔들림(φ)에 견줘 너무 적어 비의 위 끝이 없습니다(상한 없음) — "
+            "「늘었다 · 차이 없음」 은 가릴 수 없습니다. 앞쪽을 넓힙니다(적용일 · 처음 빼기 · "
+            "거르기).",
         )
     if change is not None and trend_p is not None and trend_p < ALPHA:
         direction = "내려가고" if change < 0 else "올라가고"

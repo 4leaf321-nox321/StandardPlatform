@@ -71,7 +71,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 
 스텁엔 안내 본문이 없으므로 **한 번 깔면 다시 복사할 일이 없다.**
 
-## 도구 예순둘
+## 도구 일흔하나
 
 | 도구 | 무엇 |
 | --- | --- |
@@ -94,18 +94,20 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `aliases_pending` · `aliases_review` | **사람이 아직 안 본 별칭**(기계가 붙인 것) 목록 · 고른 것을 한 번에 확인/지우기. **확인은 사람의 판단이다** |
 | `bundle_import` | 정의 · 객체 · 관계를 한 묶음으로 — 작업이 되어 한 번에 미리 보기, 적용은 `job_apply`(전부 아니면 무) |
 | `bundle_runs` · `bundle_undo` | **넣은 판을 통째로 되돌린다** — 목록에서 번호를 찾고, 기본은 계획(사람 확인 뒤 `apply=True`). 되돌릴 기록은 30일 보관 |
-| `job_status` · `job_apply` · `jobs_list` | 작업이 어디까지 됐나 · 사람이 확인한 계획 적용 · 내 작업과 워커 생존 |
+| `job_status` · `job_apply` · `jobs_list` · `job_cancel` | 작업이 어디까지 됐나(`next` 가 종류마다 다음 할 일을 말한다) · 사람이 확인한 계획 적용 · 작업 목록(상태 · 종류 · 내 것으로 거르기)과 워커 생존 · 멈추기 |
 | `relation_add` · `relation_update` · `relation_remove` · `relations_import` | 객체 둘을 잇기 (**근거를 적는다**) · 근거 고치기 · 끊기(틀리게 이은 것을 되돌리는 자리). `relations_import(mode="replace")` 는 **파일에 없는 선을 끊음으로** 계획에 올린다(`replace_type` 은 그 타입 전체에서) |
-| `datasources_list` · `datasource_sync` | 바깥 시스템(OData)에서 읽어 채우기 — 계획 먼저 |
+| `datasources_list` · `datasource_sync` · `datasource_runs` · `datasource_preview` | 바깥 시스템(OData · REST · 파일 · 다른 플랫폼)에서 읽어 채우기 — 계획 먼저. 지난 실행 기록(실패 이유 · 미룬 관계) · 앞 몇 행을 칸 대응한 모습 |
+| `server_maintenance` · `notifications` · `filestore_gc` | 홈의 「남은 일」(보는 사람의 권한대로) · 내 알림 · 첨부 저장소의 고아 파일 정리(계획 → `job_apply`, 시스템 관리자) |
 | `extensions_schema` · `extension_call` | **이 설치에만 있는 기능**(확장)의 자리 목록 · 그 자리 부르기. 쓰기는 그 확장의 범위를 가진 토큰만 |
-| `metric_list` · `metric_query` · `metric_define` | **지표** — 미리 세어 둔 값(ADR 0013). 비율 · 추이 · 코호트는 목록을 받아 직접 세지 않고 여기서 읽는다. 정의는 계획 먼저(시스템 관리자) |
+| `metric_list` · `metric_query` · `metric_define` | **지표** — 미리 세어 둔 값(ADR 0013). 비율 · 추이 · 코호트 · 기준 값 목록은 목록을 받아 직접 세지 않고 여기서 읽는다. 정의는 계획 먼저(시스템 관리자) |
+| `metric_runs` · `metric_recompute` · `metric_home` | 계산 기록(전부/바뀐 기간만 · 그 까닭 · 실패 이유) · 지금 전부 다시 세기(시스템 관리자) · 부서 홈에 추이 그림으로 올리기/내리기(그 부서 관리자) |
 | `metric_analyze` | **분석** — 세어 둔 셀 위의 통계(ADR 0014): 수명 · B수명, 순차 검정(전작 대비), 관리도, 계절 · 변화점, 파레토 · 집중도. 셀을 받아 직접 계산하지 않는다 — 주의(`caveats`)를 그대로 전한다 |
 | `metric_alerts` | **내 경보와 최근 발생**(ADR 0016) — 지표를 다시 셀 때마다 저장한 분석을 돌려 처음 본 결론. 읽기만(만들기는 화면의 「경보 저장」) |
 
 ### 왜 타입마다 도구를 안 만드나
 
 타입 20개에 도구가 80개가 되고, **도구 목록이 길수록 모델은 엉뚱한 것을 고른다.**
-도구는 예순둘로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
+도구는 일흔하나로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
 받는가」 를 말한다 — **동적인 것은 도구가 아니라 스키마다.**
 
 검증도 권한도 백엔드가 한다. 여기에 규칙을 두면 **MCP 로는 되는데 화면에서는 안

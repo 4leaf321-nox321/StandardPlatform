@@ -108,3 +108,29 @@ def test_좁은_범위의_읽기도_접두어_아래에서_된다(
     denied = prefixed.get(f"{PREFIX}/api/ontology/schema", headers=head)
     assert denied.status_code == 403, denied.text
     assert _error(denied) == code("AUTH", 104), denied.text
+
+
+def test_접두어_아래에서도_접근_로그가_남는다(
+    client: TestClient, admin: Signed, prefixed: TestClient
+) -> None:
+    """접두어 설치에서는 경로가 `/<slug>/api/…` 로 보인다 — `/api/` 로 시작하는지만 보던 접근
+    로그가 로그인 · 고치기를 한 줄도 안 남겼다(2026-10-08). 남길 때는 접두어를 뗀 경로로."""
+    from sqlalchemy import func, select
+
+    from app.modules.audit.models import AccessLog
+
+    head = _token(client, admin, ["read", "ontology:write"])
+    marker = "/api/ontology/import"
+    with SessionLocal() as db:
+        before = db.scalar(
+            select(func.count()).select_from(AccessLog).where(AccessLog.path == marker)
+        )
+    got = prefixed.post(
+        f"{PREFIX}{marker}", params={"dry_run": "true"}, json={"types": []}, headers=head
+    )
+    assert got.status_code == 200, got.text
+    with SessionLocal() as db:
+        after = db.scalar(
+            select(func.count()).select_from(AccessLog).where(AccessLog.path == marker)
+        )
+    assert (after or 0) == (before or 0) + 1

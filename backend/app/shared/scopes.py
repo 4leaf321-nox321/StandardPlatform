@@ -42,9 +42,11 @@ _narrow_reads: list[tuple[str, str]] = []
 #: 존재하는 이유다. 도메인이 `/api/search/` 같은 것을 만들면 여기 등록한다.
 _read_only_posts: list[str] = []
 
-#: POST 지만 읽기인 경로 — **중간에 이름이 끼는 것**(`/api/objects/<타입>/export`).
-#: 앞머리로는 못 적는다: `/api/objects/` 로 열면 그 아래 쓰기까지 통째로 열린다.
-_read_only_post_suffixes: list[str] = []
+#: POST 지만 읽기인 경로 — **중간에 이름이 끼는 것**(`/api/objects/*/export`, `*` 는 마디
+#: 하나). 앞머리로는 못 적는다: `/api/objects/` 로 열면 그 아래 쓰기까지 통째로 열린다.
+#: 끝(`/export`)만 보던 때는 slug 가 `export` 인 타입의 **객체 만들기**(`POST
+#: /api/objects/export`)가 읽기 토큰으로 됐다(2026-10-08) — 마디 수까지 맞춘다.
+_read_only_post_patterns: list[tuple[str, ...]] = []
 
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
@@ -76,12 +78,19 @@ def register_read_scope(path_prefix: str, scope: str) -> None:
         _narrow_reads.append((path_prefix, scope))
 
 
+def _under(path: str, prefix: str) -> bool:
+    """`path` 가 `prefix` 자리이거나 그 **아래**인가 — 마디 경계로. 글자 앞머리만 보면
+    `/api/metrics/plan` 이 `/api/metrics/plant_yield/…` 까지 연다(2026-10-08)."""
+    base = prefix.rstrip("/")
+    return path == base or path.startswith(base + "/")
+
+
 def may_read(path: str, token_scopes: list[str]) -> bool:
     """이 토큰이 이 경로를 읽어도 되나. `read` 가 있으면 전부, 없으면 좁은 범위의 자리만."""
     if READ in token_scopes:
         return True
     return any(
-        path.startswith(prefix) and scope in token_scopes for prefix, scope in _narrow_reads
+        _under(path, prefix) and scope in token_scopes for prefix, scope in _narrow_reads
     )
 
 
@@ -91,15 +100,24 @@ def register_read_only_post(path_prefix: str) -> None:
         _read_only_posts.append(path_prefix)
 
 
-def register_read_only_post_suffix(suffix: str) -> None:
-    """끝이 이런 POST 는 읽기다 — `/api/objects/<타입>/export` 처럼 중간에 이름이 끼는 자리.
+def register_read_only_post_pattern(pattern: str) -> None:
+    """이 모양의 POST 는 읽기다 — `/api/objects/*/export` 처럼 중간에 이름이 끼는 자리
+    (`*` 는 마디 하나, 마디 수가 같아야 맞는다).
 
     **내보내기는 읽기다.** 작업 한 줄을 남기므로 표로는 쓰기지만, 사람이 하는 일은 「가진
     것을 파일로 받기」 다. 읽기 토큰으로 못 하게 두면 「허브에서 정의를 받아 가는」 길이
     쓰기 권한을 요구하게 되고, 그러면 받아만 가면 되는 쪽에 쓰기 토큰을 주게 된다.
     """
-    if suffix not in _read_only_post_suffixes:
-        _read_only_post_suffixes.append(suffix)
+    parts = tuple(pattern.strip("/").split("/"))
+    if parts not in _read_only_post_patterns:
+        _read_only_post_patterns.append(parts)
+
+
+def _matches(path: str, pattern: tuple[str, ...]) -> bool:
+    parts = path.strip("/").split("/")
+    return len(parts) == len(pattern) and all(
+        want in ("*", got) for want, got in zip(pattern, parts, strict=True)
+    )
 
 
 def known_scopes() -> tuple[str, ...]:
@@ -107,11 +125,15 @@ def known_scopes() -> tuple[str, ...]:
 
 
 def is_reading(method: str, path: str) -> bool:
+    """읽기인가. 읽기로 연 POST 는 **POST 만** — 같은 경로의 PATCH · DELETE 까지 읽기로 치면
+    읽기 토큰이 그 자리를 고치고 지운다(메서드를 안 보던 때 그랬다, 2026-10-08)."""
     if method in SAFE_METHODS:
         return True
-    if any(path.startswith(prefix) for prefix in _read_only_posts):
+    if method != "POST":
+        return False
+    if any(_under(path, prefix) for prefix in _read_only_posts):
         return True
-    return any(path.endswith(suffix) for suffix in _read_only_post_suffixes)
+    return any(_matches(path, pattern) for pattern in _read_only_post_patterns)
 
 
 def needed_scope(path: str) -> str | None:
@@ -122,6 +144,6 @@ def needed_scope(path: str) -> str | None:
     아니라 길이로만 막을 수 있다.
     """
     for prefix, scope in sorted(_write, key=lambda one: -len(one[0])):
-        if path.startswith(prefix):
+        if _under(path, prefix):
             return scope
     return None

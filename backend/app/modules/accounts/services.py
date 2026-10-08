@@ -16,9 +16,10 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import USER_STATUSES, User
 from app.modules.accounts.schemas import AccountOut, AccountWorkspaceOut
 from app.modules.auth import security
+from app.modules.auth import services as auth_services
 from app.modules.notifications import services as notifications
 from app.modules.workspaces import services as workspaces_services
-from app.modules.workspaces.models import Workspace, WorkspaceMember
+from app.modules.workspaces.models import WORKSPACE_ROLES, Workspace, WorkspaceMember
 from app.shared import audit, extensions, system_sources
 from app.shared.errors import AppError, Conflict, NotFound, code
 from app.shared.permissions import workspace_by_slug
@@ -102,10 +103,34 @@ def get_account(db: Session, user_id: uuid.UUID) -> User:
     return user
 
 
-def list_accounts(db: Session, *, status: str | None, limit: int, offset: int) -> list[User]:
-    query = select(User).where(User.deleted_at.is_(None))
+def _check_role(role: str) -> None:
+    """부서 역할은 정해진 것만. **무엇이든 받으면** `owner` 같은 글자가 그대로 저장된다 —
+    권한 판정은 `manager` 만 보므로 그 사람은 조용히 멤버로 돌고, 관리자로 올렸다고 믿은
+    사람은 부서 화면 어디에서도 그 까닭을 못 본다(2026-10-08). 무엇을 만들기 전에 본다."""
+    if role not in WORKSPACE_ROLES:
+        raise AppError(
+            code("ACCOUNTS", 10),
+            f"모르는 역할입니다: {role} ({' · '.join(WORKSPACE_ROLES)} 중 하나)",
+            status=400,
+            details={"allowed": list(WORKSPACE_ROLES)},
+        )
+
+
+def _listed(status: str | None) -> list[Any]:
+    """목록과 그 수가 **같은 거르기**를 쓴다 — 갈리면 「120명 중 1-50」 이 실제 쪽과 안 맞는다.
+    지운 계정은 빼고, 상태를 주면 그것만."""
+    where: list[Any] = [User.deleted_at.is_(None)]
     if status is not None:
-        query = query.where(User.status == status)
+        where.append(User.status == status)
+    return where
+
+
+def count_accounts(db: Session, *, status: str | None) -> int:
+    return int(db.scalar(select(func.count()).select_from(User).where(*_listed(status))) or 0)
+
+
+def list_accounts(db: Session, *, status: str | None, limit: int, offset: int) -> list[User]:
+    query = select(User).where(*_listed(status))
     # 승인 대기가 먼저 온다. **관리자가 할 일이 목록 맨 위에 있어야 한다** —
     # 이름순으로 두면 대기 하나를 찾으려고 세 쪽을 넘겨야 한다.
     return list(
@@ -121,7 +146,7 @@ def signup(
     db: Session, *, email: str, password: str, display_name: str, workspace_slug: str
 ) -> User:
     """가입 신청. 승인 전까지는 로그인할 수 없다(status=pending)."""
-    normalized = email.strip().lower()
+    normalized = auth_services.normalize_login_id(email)
     if db.scalar(select(User).where(User.email == normalized)) is not None:
         raise Conflict(code("ACCOUNTS", 2), "이미 있는 아이디입니다.")
 
@@ -150,7 +175,8 @@ def create_account(
     created_by: User,
 ) -> tuple[User, str]:
     """관리자가 계정을 만든다. 임시 비밀번호를 함께 돌려준다."""
-    normalized = email.strip().lower()
+    _check_role(role)
+    normalized = auth_services.normalize_login_id(email)
     if db.scalar(select(User).where(User.email == normalized)) is not None:
         raise Conflict(code("ACCOUNTS", 2), "이미 있는 아이디입니다.")
 
@@ -172,6 +198,29 @@ def create_account(
     db.add(user)
     db.flush()
     db.add(WorkspaceMember(workspace_id=workspace.id, user_id=user.id, role=role))
+    # **만든 것도 기록한다.** 승인 · 정지 · 권한 변경은 남는데 직접 만든 계정만 안 남았다 —
+    # 만들면서 시스템 관리자를 켜면 그 권한이 흔적 없이 생겼다(2026-10-08). 권한은 계정
+    # 화면에서 켠 것과 같은 항목으로.
+    audit.record(
+        db,
+        action=audit.ACCOUNT_CREATED,
+        actor=created_by,
+        target_table="users",
+        target_id=user.id,
+        target_label=user.email,
+        workspace_id=workspace.id,
+        changes={"status": {"before": None, "after": "active"}, "role": role},
+    )
+    if is_system_admin:
+        audit.record(
+            db,
+            action=audit.ACCOUNT_ADMIN_CHANGED,
+            actor=created_by,
+            target_table="users",
+            target_id=user.id,
+            target_label=user.email,
+            changes={"is_system_admin": {"before": False, "after": True}},
+        )
     db.commit()
     db.refresh(user)
     return user, temporary
@@ -185,6 +234,7 @@ def approve(
     workspace_slug: str | None,
     role: str,
 ) -> User:
+    _check_role(role)
     user = get_account(db, user_id)
     if user.status != "pending":
         raise Conflict(code("ACCOUNTS", 3), "승인 대기 중인 계정이 아닙니다.")
@@ -296,14 +346,26 @@ def set_status(db: Session, *, user_id: uuid.UUID, status: str, actor: User) -> 
 
     before = user.status
     user.status = status
+    changes: dict[str, Any] = {"status": {"before": before, "after": status}}
+    if status != "active":
+        # **정지하면 열린 로그인(refresh)을 폐기한다.** 막기만 하면 정지 동안은 거절되지만,
+        # 다시 켜는 순간 정지 전의 로그인(30일)이 그대로 이어졌다 — 정지한 까닭이 「그 기기가
+        # 샜다」 면 다시 켠 날 그 기기가 돌아온다(2026-10-08). 다시 켠 사람은 새로 로그인한다.
+        #
+        # 개인 토큰(PAT)은 **폐기하지 않는다** — 정지 동안은 `resolve_pat` 이 막고
+        # (can_sign_in), 다시 켜면 산다. 정지는 잠시 막는 것이고, 연동은 사람처럼 그
+        # 자리에서 다시 로그인하지 못한다 — 폐기하면 다시 켠 뒤에도 연동이 말없이 끊긴
+        # 채로 남는다(초기화가 토큰을 따로 두는 것과 같은 까닭). 토큰까지 끊을 일이면
+        # 계정을 지운다(지우면 토큰도 폐기한다 — 아래 `delete_account`).
+        changes["sessions_revoked"] = auth_services.revoke_sessions(db, user.id)
     audit.record(
         db,
-        action=audit.ACCOUNT_SUSPENDED,
+        action=audit.ACCOUNT_ACTIVATED if status == "active" else audit.ACCOUNT_SUSPENDED,
         actor=actor,
         target_table="users",
         target_id=user.id,
         target_label=user.email,
-        changes={"status": {"before": before, "after": status}},
+        changes=changes,
     )
     db.commit()
     db.refresh(user)
@@ -475,6 +537,19 @@ def reset_password(db: Session, *, user_id: uuid.UUID, actor: User) -> str:
     user.must_change_password = True
     user.failed_logins = 0
     user.last_failed_login_at = None
+    # **열려 있던 로그인을 끊는다** — 초기화는 대개 「비밀번호가 샜다」 이고, 그때 옛 세션
+    # (리프레시 사슬)이 살아 있으면 초기화한 뜻이 없다(2026-10-08). 본인이 바꿀 때와 같다.
+    # 기계 자격(PAT)은 따로 폐기한다 — 연동이 말없이 끊기지 않게.
+    revoked = auth_services.revoke_sessions(db, user.id)
+    audit.record(
+        db,
+        action=audit.ACCOUNT_PASSWORD_RESET,
+        actor=actor,
+        target_table="users",
+        target_id=user.id,
+        target_label=user.display_name or user.email,
+        changes={"sessions_revoked": revoked},
+    )
     db.commit()
     return temporary
 
@@ -492,6 +567,9 @@ def delete_account(db: Session, *, user_id: uuid.UUID, actor: User) -> User:
 
     user.deleted_at = _now()
     user.status = "suspended"
+    # **자격을 폐기한다 — 로그인(refresh)도 개인 토큰도.** 지운 계정은 되살리는 길이 없으니
+    # 정지와 달리 토큰을 남길 까닭이 없다. 막혀 있기만 한 자격을 살아 있는 채로 두면 「이
+    # 창구를 읽을 수 있는 자격」 목록(코어 › 액세스 토큰)이 그것을 센다(2026-10-08).
     audit.record(
         db,
         action=audit.ACCOUNT_DELETED,
@@ -499,6 +577,10 @@ def delete_account(db: Session, *, user_id: uuid.UUID, actor: User) -> User:
         target_table="users",
         target_id=user.id,
         target_label=user.email,
+        changes={
+            "sessions_revoked": auth_services.revoke_sessions(db, user.id),
+            "tokens_revoked": auth_services.revoke_pats(db, user.id),
+        },
     )
     db.commit()
     db.refresh(user)

@@ -85,9 +85,23 @@ describe('홈 위젯', () => {
     await show(widget())
     await waitFor(() => expect(screen.getByTestId('chart')).toBeInTheDocument())
     // 홈의 숫자를 보고 다음에 하는 일은 언제나 「그게 뭔데」 다 — 조건까지 실어 보낸다.
+    // 위젯은 연도 없이 센다 — 목록의 기본 「올해」 가 걸리면 수가 달라서 `year=all` 을 싣는다.
     expect(screen.getByRole('link', { name: '등급별' })).toHaveAttribute(
       'href',
-      '/o/part?f.grade.eq=A&view=v1',
+      '/o/part?f.grade.eq=A&year=all&view=v1',
+    )
+  })
+
+  it('상태로 거른 뷰는 그 상태로 세고, 같은 상태로 목록을 연다', async () => {
+    // 세는 조건과 여는 조건이 갈리면 홈의 「12건」 을 눌러 30건이 열린다(2026-10-08).
+    objectApi.summary.mockClear()
+    objectApi.summary.mockResolvedValue(SUMMARY)
+    await show(widget({ query: { q: '', status: 'deprecated', conditions: [] } }))
+    await waitFor(() => expect(objectApi.summary).toHaveBeenCalled())
+    expect(objectApi.summary.mock.calls.at(-1)?.[1]).toMatchObject({ status: 'deprecated' })
+    expect(screen.getByRole('link', { name: '등급별' })).toHaveAttribute(
+      'href',
+      '/o/part?status=deprecated&year=all&view=v1',
     )
   })
 

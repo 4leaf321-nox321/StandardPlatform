@@ -440,6 +440,47 @@ def test_기간별_표와_추이(client: TestClient, admin: Signed) -> None:
     assert [one["count"] for one in split["lines"][0]["points"]] == [1, 1, 2]
 
 
+def test_기간_범위는_기간_경계로_맞추고_분모도_같은_범위다(
+    client: TestClient, admin: Signed
+) -> None:
+    """화면의 날짜 칸은 아무 날이나 받는다 — 월 단위 지표에 `01-15` 부터를 주면 추이의 점이
+    셀과 하나도 안 맞아 전부 0 이었다. 그리고 기간으로 묶지 않은 표의 비율은 분모가 전
+    기간의 합이라 몇 배 작았다(2026-10-08)."""
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    aligned = _read(
+        client,
+        admin,
+        cases["slug"],
+        "series",
+        period_from="2026-01-01",
+        period_to="2026-04-01",
+    )
+    loose = _read(
+        client,
+        admin,
+        cases["slug"],
+        "series",
+        period_from="2026-01-15",
+        period_to="2026-03-10",
+    )
+    counts = [one["count"] for one in aligned["lines"][0]["points"]]
+    assert counts == [1, 2, 3]
+    assert [one["count"] for one in loose["lines"][0]["points"]] == counts
+
+    # 판매월 1월 코호트만 — 분모도 1월 판매(S기본 100 · A기본 200)여야 한다(전 기간이면 S 150).
+    table = _read(
+        client,
+        admin,
+        cases["slug"],
+        dims="base_model",
+        cohort_from="2026-01-01",
+        cohort_to="2026-02-01",
+    )
+    ratios = {one["labels"]["base_model"]: one["ratio"] for one in table["cells"]}
+    assert ratios == {"S기본": 3.0, "A기본": 0.5}, table["cells"]
+
+
 def test_코호트_행렬_누적_비율(client: TestClient, admin: Signed) -> None:
     w = _world(client, admin)
     _, cases = _two(client, admin, w)

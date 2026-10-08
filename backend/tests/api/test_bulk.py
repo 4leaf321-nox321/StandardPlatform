@@ -1058,6 +1058,14 @@ def test_키를_두_번_바꿔도_받는_쪽이_따라온다(client: TestClient,
     )
     detail = client.get(f"/api/objects/{mode}/{made}", headers=admin.headers).json()
     assert detail["object"]["key"] == "C-1"
+    # **이력이 실제로 쌓였다** — 예전에는 옛 키를 붙이자마자 빼서 늘 비어 있었고, 아래의
+    # 받는 쪽 시험은 별칭 덕에 통과해 그것을 못 잡았다(코어 API 의 `previous_keys` 가 빔).
+    from app.database import SessionLocal
+    from app.modules.objects.models import ObjectInstance
+
+    with SessionLocal() as db:
+        stored = db.get(ObjectInstance, uuid.UUID(made))
+        assert stored is not None and stored.previous_keys == ["A-1", "B-1"]
 
     # **A 를 들고 있는 쪽도 따라온다** — 이력을 거꾸로 훑는다.
     plan = client.post(
@@ -1299,3 +1307,48 @@ def test_날짜는_여러_표기와_연월을_받아_ISO_로_넣는다(
     assert "시각이 붙어" in messages[1], messages
     assert "날짜(YYYY-MM-DD)" in messages[2], messages
     assert "날짜(YYYY-MM-DD)" in messages[3], messages
+
+
+def test_타입_전체_맞춤은_고칠_수_있는_객체의_선만_끊는다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """`replace_type` 은 파일에 없는 선을 타입 전체에서 끊는다 — **고칠 수 있는 객체의 것만.**
+    보이는 것으로 고르던 때는 부서 관리자 한 사람의 파일이 전역 객체(시스템 관리자만 고친다)의
+    선까지 끊었다(2026-10-08)."""
+    from tests.api.test_ontology import _make_object
+
+    cause = _make_type(client, admin, label="원인")
+    effect = _make_type(client, admin, label="결과")
+    kind = _make_relation(
+        client,
+        admin,
+        "causes",
+        label="일으킴",
+        src_type_slugs=[cause],
+        dst_type_slugs=[effect],
+    )
+    mine = _make_object(client, manager, cause, label="내 원인")
+    shared = _make_object(client, admin, cause, label="전역 원인", workspace_slug=None)
+    target = _make_object(client, admin, effect, label="균열", workspace_slug=None)
+    for src in (mine, shared):
+        linked = client.post(
+            f"/api/objects/{cause}/{src['id']}/relations",
+            json={"relation": kind, "dst_object_id": target["id"]},
+            headers=admin.headers,
+        )
+        assert linked.status_code == 201, linked.text
+
+    rows = [{"src": mine["id"], "relation": kind, "dst": target["id"]}]
+    plan = client.post(
+        f"/api/objects/{cause}/relations/import-rows",
+        json={"rows": rows, "relations_mode": "replace_type"},
+        headers=manager.headers,
+    ).json()
+    assert plan["counts"].get("unlink", 0) == 0, plan
+    # 시스템 관리자의 같은 파일은 전역 객체의 선도 끊는다(그가 고칠 수 있다).
+    plan = client.post(
+        f"/api/objects/{cause}/relations/import-rows",
+        json={"rows": rows, "relations_mode": "replace_type"},
+        headers=admin.headers,
+    ).json()
+    assert plan["counts"]["unlink"] == 1, plan

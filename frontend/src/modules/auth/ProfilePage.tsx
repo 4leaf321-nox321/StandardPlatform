@@ -80,9 +80,17 @@ export default function ProfilePage() {
     }
   }
 
+  /** 폐기 — **실패하면 말한다.** 삼키던 때는 눌러도 아무 일이 없어, 사람은 끊었다고 믿고 그
+   *  토큰은 살아 있었다(2026-10-08). 자격을 끊는 일이라 그 차이가 곧 구멍이다. */
   async function revoke(id: string) {
-    await api.delete(`/auth/tokens/${id}`)
-    tokens.reload()
+    setError(null)
+    try {
+      await api.delete(`/auth/tokens/${id}`)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      tokens.reload()
+    }
   }
 
   return (
@@ -226,7 +234,7 @@ export default function ProfilePage() {
                 <TableCell>{shownDate(one.last_used_at)}</TableCell>
                 <TableCell className="text-right">
                   {!one.revoked_at && (
-                    <Button variant="ghost" size="sm" onClick={() => revoke(one.id)}>
+                    <Button variant="ghost" size="sm" onClick={() => void revoke(one.id)}>
                       폐기
                     </Button>
                   )}

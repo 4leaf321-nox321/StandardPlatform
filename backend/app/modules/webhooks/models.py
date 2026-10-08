@@ -53,6 +53,8 @@ class Webhook(Base):
     하면 언젠가 빠뜨리고, 빠뜨린 타입은 **조용히** 알림이 안 간다. 그 침묵은 받는 쪽에서
     「안 바뀌었나 보다」 로 읽힌다."""
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
+    """끄면(「사용 안 함」) 새 이벤트를 안 쌓고, **이미 쌓인 전송도 안 보내고 기다린다** —
+    다시 켜면 나간다(`services._deliver`)."""
 
     last_status: Mapped[str | None] = mapped_column(String(20), nullable=True)
     last_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)

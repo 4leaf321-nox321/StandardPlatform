@@ -9,7 +9,7 @@
  * **눌러 보고 403 을 알게 하지 않는 것.**
  */
 
-import type { CurrentUser } from '@/shared/auth/types'
+import type { CurrentUser, WorkspaceMembership } from '@/shared/auth/types'
 
 export function isSystemAdmin(user: CurrentUser | null | undefined): boolean {
   return Boolean(user?.is_system_admin)
@@ -23,9 +23,33 @@ export function isAnyManager(user: CurrentUser | null | undefined): boolean {
 /** 지금 서 있는 부서에서 관리자인가. 부서 스코프 화면이 단추를 보일 근거다. */
 export function isManagerOf(
   user: CurrentUser | null | undefined,
-  slug: string | undefined,
+  slug: string | null | undefined,
 ): boolean {
   if (isSystemAdmin(user)) return true
   if (!slug) return false
   return (user?.memberships ?? []).some((one) => one.slug === slug && one.role === 'manager')
+}
+
+/** 내가 관리자인 소속 — 부서 소유 자료(객체 · 부서 뷰)를 만들 수 있는 곳.
+ *  서버의 `require_manager` 와 같은 문턱이다. */
+export function managedMemberships(user: CurrentUser | null | undefined): WorkspaceMembership[] {
+  return (user?.memberships ?? []).filter((one) => one.role === 'manager')
+}
+
+/**
+ * 부서 소유 자료를 **어느 부서 것으로** 만들지의 기본값.
+ *
+ * 차례: 지금 보고 있는 부서(`preferred`) → 대표 소속 → 관리하는 소속의 첫째. **대표 소속이라고
+ * 무조건 고르지 않는다** — B 의 관리자인데 대표 소속 A 에서는 멤버인 사람이 A 로 보내면 403 을
+ * 보고, 그 단추는 그 사람에게 아예 안 서야 맞았다(2026-10-08). 관리하는 곳이 없으면 null.
+ */
+export function defaultOwnerWorkspace(
+  user: CurrentUser | null | undefined,
+  preferred?: string | null,
+): string | null {
+  if (preferred && isManagerOf(user, preferred)) return preferred
+  const home = user?.home_workspace_slug ?? null
+  if (home && isManagerOf(user, home)) return home
+  if (isSystemAdmin(user)) return user?.memberships[0]?.slug ?? null
+  return managedMemberships(user)[0]?.slug ?? null
 }

@@ -12,7 +12,8 @@ import { Bookmark, BookmarkPlus, Check, House, Trash2, Users } from 'lucide-reac
 import { viewApi } from '@/modules/objects/api'
 import type { SavedView, SavedViewQuery, SavedViewSummary } from '@/modules/objects/api'
 import { useAuth } from '@/shared/auth/AuthContext'
-import { isManagerOf } from '@/shared/auth/roles'
+import { OwnerWorkspacePicker } from '@/modules/workspaces/OwnerWorkspacePicker'
+import { defaultOwnerWorkspace, isAnyManager } from '@/shared/auth/roles'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
 import {
@@ -44,6 +45,8 @@ interface ViewPickerProps {
   activeId: string | null
   onApply: (view: SavedView) => void
   onClear: () => void
+  /** 부서와 함께 쓸 때의 기본 부서 — 홈에서 왔으면 그 부서(`home=`). */
+  homeWorkspace?: string | null
 }
 
 export function ViewPicker({
@@ -53,6 +56,7 @@ export function ViewPicker({
   activeId,
   onApply,
   onClear,
+  homeWorkspace = null,
 }: ViewPickerProps) {
   const views = useResource(() => viewApi.list(typeSlug), [typeSlug])
   const [saving, setSaving] = useState(false)
@@ -160,6 +164,7 @@ export function ViewPicker({
           typeSlug={typeSlug}
           query={current}
           summary={summary}
+          homeWorkspace={homeWorkspace}
           onClose={() => setSaving(false)}
           onSaved={(view) => {
             setSaving(false)
@@ -176,14 +181,26 @@ interface SaveViewDialogProps {
   typeSlug: string
   query: SavedViewQuery
   summary: SavedViewSummary | null
+  homeWorkspace: string | null
   onClose: () => void
   onSaved: (view: SavedView) => void
 }
 
-function SaveViewDialog({ typeSlug, query, summary, onClose, onSaved }: SaveViewDialogProps) {
+function SaveViewDialog({
+  typeSlug,
+  query,
+  summary,
+  homeWorkspace,
+  onClose,
+  onSaved,
+}: SaveViewDialogProps) {
   const { user } = useAuth()
-  const myWorkspace = user?.home_workspace_slug ?? user?.memberships[0]?.slug ?? null
-  const canShare = Boolean(myWorkspace && isManagerOf(user, myWorkspace))
+  // 함께 쓸 부서 — **내가 관리자인 부서 중에서.** 대표 소속만 보던 때는 대표 소속에서 멤버뿐인
+  // B 의 관리자에게 「함께 쓰기」 가 아예 안 섰다(2026-10-08). 홈 게시와 같은 규칙이다.
+  const [myWorkspace, setMyWorkspace] = useState(() =>
+    defaultOwnerWorkspace(user, homeWorkspace),
+  )
+  const canShare = isAnyManager(user) && myWorkspace !== null
   const [name, setName] = useState('')
   const [share, setShare] = useState(false)
   const [busy, setBusy] = useState(false)
@@ -233,20 +250,29 @@ function SaveViewDialog({ typeSlug, query, summary, onClose, onSaved }: SaveView
             onChange={(event) => setName(event.target.value)}
           />
           {canShare ? (
-            <label className="flex cursor-pointer items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                className="size-4"
-                checked={share}
-                onChange={(event) => setShare(event.target.checked)}
-              />
-              <span>
-                <span className="font-medium">{myWorkspace} 부서와 함께 쓰기</span>
-                <span className="text-muted-foreground block text-xs">
-                  부서 사람 모두의 목록에 표시됩니다. 수정하고 삭제하는 것은 부서 관리자만.
+            <div className="space-y-2">
+              <label className="flex cursor-pointer items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="size-4"
+                  checked={share}
+                  onChange={(event) => setShare(event.target.checked)}
+                />
+                <span>
+                  <span className="font-medium">부서와 함께 쓰기</span>
+                  <span className="text-muted-foreground block text-xs">
+                    부서 사람 모두의 목록에 표시됩니다. 수정하고 삭제하는 것은 부서 관리자만.
+                  </span>
                 </span>
-              </span>
-            </label>
+              </label>
+              {share && (
+                <OwnerWorkspacePicker
+                  className="w-full"
+                  value={myWorkspace}
+                  onChange={setMyWorkspace}
+                />
+              )}
+            </div>
           ) : (
             <p className="text-muted-foreground text-xs">
               내 것으로 저장됩니다. 부서와 함께 사용하는 뷰는 부서 관리자가 만듭니다.

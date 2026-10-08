@@ -182,6 +182,35 @@ _HTTP_MESSAGES = {
 }
 
 
+#: 이 말이 이름에 들어간 칸의 값은 오류 로그 · 응답에서 가린다.
+_SECRET_NAMES = ("password", "secret", "token", "authorization", "api_key")
+
+
+def _secret(name: Any) -> bool:
+    lowered = str(name).lower()
+    return any(word in lowered for word in _SECRET_NAMES)
+
+
+def _masked(errors: list[Any]) -> list[Any]:
+    """검증 오류의 `input` 에서 비밀을 가린다 — 칸 자체가 비밀이거나(`loc` 끝), 본문 통째가
+    오면 그 안의 비밀 칸을."""
+    out: list[Any] = []
+    for one in errors:
+        if not isinstance(one, dict) or "input" not in one:
+            out.append(one)
+            continue
+        item = dict(one)
+        loc = item.get("loc") or ()
+        if loc and _secret(loc[-1]):
+            item["input"] = "***"
+        elif isinstance(item["input"], dict):
+            item["input"] = {
+                key: "***" if _secret(key) else value for key, value in item["input"].items()
+            }
+        out.append(item)
+    return out
+
+
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
     async def _app_error(request: Request, exc: AppError) -> JSONResponse:
@@ -202,7 +231,9 @@ def register_error_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(RequestValidationError)
     async def _validation(request: Request, exc: RequestValidationError) -> JSONResponse:
-        errors = _plain(exc.errors())
+        # **보낸 값을 그대로 남기지 않는다** — 비밀번호 · 비밀 칸이 틀린 모양으로 오면 그 값이
+        # 로그와 응답에 평문으로 실렸다(2026-10-08). 비밀스러운 이름이 붙은 값은 가린다.
+        errors = _masked(_plain(exc.errors()))
         logger.warning("%s %s -> 422 validation: %s", request.method, request.url.path, errors)
         return JSONResponse(
             status_code=422,

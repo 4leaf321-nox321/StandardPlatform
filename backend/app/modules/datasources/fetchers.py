@@ -37,7 +37,10 @@ def fetch(
     page_size: int | None = None,
     select: str = "",
     transport: httpx.BaseTransport | None = None,
+    since: str | None = None,
+    cursor: str = "",
 ) -> Fetched:
+    """`since` · `cursor` 는 `sp_core` 만 쓴다 — 안 주면 소스의 시계에서 처음 쪽부터."""
     if source.kind == "odata":
         return odata.fetch(
             base_url=source.base_url,
@@ -63,7 +66,8 @@ def fetch(
         return fetch_sp_core(
             base_url=source.base_url,
             type_slug=source.entity_set,
-            since=source.since_mark,
+            since=source.since_mark if since is None else since,
+            cursor=cursor,
             auth=auth,
             page_size=page_size or source.page_size,
             max_rows=max_rows,
@@ -112,6 +116,100 @@ def core_row(item: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _core_client(auth: Auth, transport: httpx.BaseTransport | None) -> httpx.Client:
+    return httpx.Client(
+        timeout=odata.TIMEOUT_SECONDS,
+        transport=transport,
+        headers={"Accept": "application/json", **auth.headers()},
+        auth=auth.basic(),
+        follow_redirects=True,
+    )
+
+
+def _core_body(response: httpx.Response, what: str) -> Any:
+    """상대의 몸을 읽는다 — **JSON 이 아니면 무엇이 왔는지 말한다.**
+
+    SSO 앞단은 로그인 화면(HTML)을 200 으로 준다. 그것을 그대로 `json()` 하면
+    `JSONDecodeError` 가 실행 기록도 남기지 못하고 작업을 통째로 죽였다(2026-10-08)."""
+    try:
+        return response.json()
+    except ValueError:
+        head = " ".join(response.text[:200].split())
+        raise AppError(
+            code("DATASOURCES", 44),
+            f"{what} 응답이 JSON 이 아닙니다 — 로그인 화면(SSO)이나 다른 서버가 대신 답했을 "
+            f"수 있습니다. 주소와 인증을 확인하세요. 받은 것: {head}",
+            status=502,
+        ) from None
+
+
+def _core_pages(
+    *,
+    url: str,
+    what: str,
+    since: str,
+    cursor: str,
+    auth: Auth,
+    page_size: int,
+    max_rows: int,
+    transport: httpx.BaseTransport | None,
+    shape: Any,
+) -> Fetched:
+    """코어 창구의 쪽을 따라간다 — 객체와 선이 **같은 규칙**(`since` · `next` · `as_of`)이다.
+
+    `cursor` 를 주면 그 자리부터 잇는다(지난 차례가 끊은 자리 — `Fetched.next`).
+
+    **쪽 경계에서 끊는다.** 상한에 닿으면 받은 쪽은 통째로 들고 나가고, 상대가 준 다음
+    커서를 `next` 에 담는다 — 쪽 가운데서 자르면 커서가 가리키는 자리와 받은 것이 어긋나
+    잘린 줄을 영영 못 받는다. 예전에는 끊으면 커서를 버렸고, 다음 차례가 같은 `since` 로 같은
+    5만 행을 다시 받아 **영영 앞으로 못 갔다**(2026-10-08).
+    """
+    out = Fetched()
+    current = cursor or None
+    try:
+        with _core_client(auth, transport) as client:
+            while out.pages < MAX_PAGES:
+                params = {"limit": str(page_size)}
+                if since:
+                    params["since"] = since
+                if current:
+                    params["cursor"] = current
+                response = client.get(url, params=params)
+                _raise_for_core(response)
+                body = _core_body(response, what)
+                if isinstance(body, dict) and body.get("reset"):
+                    out.reset = True
+                    out.reset_reason = str(body.get("reset_reason") or "")
+                    out.rows = []
+                    return out
+                items = body.get("items") if isinstance(body, dict) else None
+                if not isinstance(items, list):
+                    raise AppError(
+                        code("DATASOURCES", 37),
+                        f"코어 응답에 items 가 없습니다 — 주소가 그 설치의 `{what}` 인지 "
+                        "확인하세요.",
+                        status=502,
+                    )
+                out.rows.extend(shape(one) for one in items if isinstance(one, dict))
+                out.pages += 1
+                current = body.get("next")
+                if not current:
+                    # 끝까지 받았다 — 이때만 시계가 온다.
+                    out.as_of = body.get("as_of")
+                    return out
+                if len(out.rows) >= max_rows:
+                    out.truncated = True
+                    out.next = str(current)
+                    return out
+    except httpx.HTTPError as caught:
+        raise AppError(
+            code("DATASOURCES", 38), f"코어 창구에 닿지 못했습니다: {caught}", status=502
+        ) from caught
+    out.truncated = True
+    out.next = str(current) if current else None
+    return out
+
+
 def fetch_sp_core(
     *,
     base_url: str,
@@ -121,6 +219,7 @@ def fetch_sp_core(
     page_size: int,
     max_rows: int,
     transport: httpx.BaseTransport | None,
+    cursor: str = "",
 ) -> Fetched:
     """형제 설치의 코어 창구에서 **지난번 이후**를 받는다."""
     if not type_slug.strip():
@@ -129,52 +228,46 @@ def fetch_sp_core(
             "가져올 코어 타입을 적으세요 — 상대의 `GET /api/core` 가 목록을 줍니다.",
             status=422,
         )
-    url = f"{base_url.rstrip('/')}/core/{type_slug.strip()}"
-    out = Fetched()
-    cursor: str | None = None
+    return _core_pages(
+        url=f"{base_url.rstrip('/')}/core/{type_slug.strip()}",
+        what="/api/core/<타입>",
+        since=since,
+        cursor=cursor,
+        auth=auth,
+        page_size=page_size,
+        max_rows=max_rows,
+        transport=transport,
+        shape=core_row,
+    )
+
+
+#: 「여기까지 봤다」 만 묻는 `since` — 이보다 뒤에 바뀐 것은 없으니 빈 쪽과 시계만 온다.
+FAR_SINCE = "9999-12-31T00:00:00Z"
+
+
+def core_watermark(
+    *, base_url: str, type_slug: str, auth: Auth, transport: httpx.BaseTransport | None
+) -> str | None:
+    """상대의 **지금 시계**(`as_of`) — 빈 쪽 하나를 청해 받는다. 못 받으면 None.
+
+    끊은 자리에서 다음 차례가 잇는 동안(`services._resume`) 상대에서 바뀌고 지워진 것을
+    놓치지 않으려고, **처음 끊었을 때의 시계**를 적어 두었다가 다 받은 뒤 거기서 다시 받는다.
+    커서는 지나간 자리를 다시 안 보므로, 그 사이 늦게 커밋된 적재 · 받은 뒤에 지워진 것은
+    커서만으로는 영영 안 온다. 상대의 `as_of` 는 도는 적재보다 앞서지 않는다
+    (`coreapi.services.watermark`) — 그 시계 뒤의 것은 다음 증분이 다시 준다."""
     try:
-        with httpx.Client(
-            timeout=odata.TIMEOUT_SECONDS,
+        got = fetch_sp_core(
+            base_url=base_url,
+            type_slug=type_slug,
+            since=FAR_SINCE,
+            auth=auth,
+            page_size=1,
+            max_rows=1,
             transport=transport,
-            headers={"Accept": "application/json", **auth.headers()},
-            auth=auth.basic(),
-            follow_redirects=True,
-        ) as client:
-            while out.pages < MAX_PAGES:
-                params = {"limit": str(page_size)}
-                if since:
-                    params["since"] = since
-                if cursor:
-                    params["cursor"] = cursor
-                response = client.get(url, params=params)
-                _raise_for_core(response)
-                body = response.json()
-                items = body.get("items") if isinstance(body, dict) else None
-                if not isinstance(items, list):
-                    raise AppError(
-                        code("DATASOURCES", 37),
-                        "코어 응답에 items 가 없습니다 — 주소가 그 설치의 "
-                        "`/api/core/<타입>` 인지 확인하세요.",
-                        status=502,
-                    )
-                out.rows.extend(core_row(one) for one in items if isinstance(one, dict))
-                out.pages += 1
-                if len(out.rows) >= max_rows:
-                    # **여기서 끊으면 시계를 안 옮긴다** — 다음 차례가 같은 자리에서 잇는다.
-                    out.truncated = True
-                    out.rows = out.rows[:max_rows]
-                    return out
-                cursor = body.get("next")
-                if not cursor:
-                    # 끝까지 받았다 — 이때만 시계가 온다.
-                    out.as_of = body.get("as_of")
-                    return out
-    except httpx.HTTPError as caught:
-        raise AppError(
-            code("DATASOURCES", 38), f"코어 창구에 닿지 못했습니다: {caught}", status=502
-        ) from caught
-    out.truncated = True
-    return out
+        )
+    except AppError:
+        return None
+    return got.as_of or None
 
 
 #: 코어 선 한 줄의 봉투 — 그대로 관계 적재의 칸 이름이 된다(`src` · `relation` · `dst`).
@@ -204,6 +297,7 @@ def fetch_sp_core_relations(
     page_size: int,
     max_rows: int,
     transport: httpx.BaseTransport | None,
+    cursor: str = "",
 ) -> Fetched:
     """형제 설치의 **선**을 받는다 — `/api/core/<타입>/relations`.
 
@@ -212,55 +306,17 @@ def fetch_sp_core_relations(
     기간이 지났다) 받은 것을 버리고 `reset` 만 표시해 돌려준다: 부르는 쪽이 시계를 비우고
     처음부터 다시 받는다. 빈 쪽을 「바뀐 것 없음」 으로 읽으면 이미 끊긴 선을 영영 들고 있다.
     """
-    url = f"{base_url.rstrip('/')}/core/{type_slug.strip()}/relations"
-    out = Fetched()
-    cursor: str | None = None
-    try:
-        with httpx.Client(
-            timeout=odata.TIMEOUT_SECONDS,
-            transport=transport,
-            headers={"Accept": "application/json", **auth.headers()},
-            auth=auth.basic(),
-            follow_redirects=True,
-        ) as client:
-            while out.pages < MAX_PAGES:
-                params = {"limit": str(page_size)}
-                if since:
-                    params["since"] = since
-                if cursor:
-                    params["cursor"] = cursor
-                response = client.get(url, params=params)
-                _raise_for_core(response)
-                body = response.json()
-                if isinstance(body, dict) and body.get("reset"):
-                    out.reset = True
-                    out.reset_reason = str(body.get("reset_reason") or "")
-                    out.rows = []
-                    return out
-                items = body.get("items") if isinstance(body, dict) else None
-                if not isinstance(items, list):
-                    raise AppError(
-                        code("DATASOURCES", 37),
-                        "코어 응답에 items 가 없습니다 — 주소가 그 설치의 "
-                        "`/api/core/<타입>/relations` 인지 확인하세요.",
-                        status=502,
-                    )
-                out.rows.extend(core_edge(one) for one in items if isinstance(one, dict))
-                out.pages += 1
-                if len(out.rows) >= max_rows:
-                    out.truncated = True
-                    out.rows = out.rows[:max_rows]
-                    return out
-                cursor = body.get("next")
-                if not cursor:
-                    out.as_of = body.get("as_of")
-                    return out
-    except httpx.HTTPError as caught:
-        raise AppError(
-            code("DATASOURCES", 38), f"코어 창구에 닿지 못했습니다: {caught}", status=502
-        ) from caught
-    out.truncated = True
-    return out
+    return _core_pages(
+        url=f"{base_url.rstrip('/')}/core/{type_slug.strip()}/relations",
+        what="/api/core/<타입>/relations",
+        since=since,
+        cursor=cursor,
+        auth=auth,
+        page_size=page_size,
+        max_rows=max_rows,
+        transport=transport,
+        shape=core_edge,
+    )
 
 
 def _raise_for_core(response: httpx.Response) -> None:
@@ -271,7 +327,7 @@ def _raise_for_core(response: httpx.Response) -> None:
     try:
         body = response.json()
         said = str((body.get("error") or {}).get("message") or "")
-    except ValueError:
+    except (ValueError, AttributeError):
         said = response.text[:300]
     if response.status_code in (401, 403):
         raise AppError(
@@ -294,16 +350,10 @@ def core_catalog(
 ) -> dict[str, Any]:
     """상대가 **무엇을 열어 뒀나.** 대응을 손으로 옮겨 적지 않게 하는 자리."""
     try:
-        with httpx.Client(
-            timeout=odata.TIMEOUT_SECONDS,
-            transport=transport,
-            headers={"Accept": "application/json", **auth.headers()},
-            auth=auth.basic(),
-            follow_redirects=True,
-        ) as client:
+        with _core_client(auth, transport) as client:
             response = client.get(f"{base_url.rstrip('/')}/core")
             _raise_for_core(response)
-            body = response.json()
+            body = _core_body(response, "/api/core")
     except httpx.HTTPError as caught:
         raise AppError(
             code("DATASOURCES", 38), f"코어 창구에 닿지 못했습니다: {caught}", status=502
@@ -449,6 +499,9 @@ def fetch_rest(
                 else:
                     page_no += 1
                     offset += page_size
+            if next_url:
+                # 쪽 수 상한에서 멈췄다 — 끊김으로 말한다(OData 와 같다).
+                out.truncated = True
     except httpx.HTTPError as caught:
         raise AppError(
             code("DATASOURCES", 13), f"연결하지 못했습니다: {str(caught)[:300]}", status=502

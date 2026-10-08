@@ -55,6 +55,8 @@ from app.modules.objects.services import (
     normalize_key,
     properties_of,
     require_key_free,
+    require_label_fits,
+    stored_text,
 )
 from app.modules.ontology import conversion, interfaces, managed
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
@@ -62,7 +64,11 @@ from app.modules.ontology.services import InvalidValue, merge_properties, valida
 from app.shared import audit, tabular
 from app.shared.batches import chunks
 from app.shared.errors import AppError, Conflict, code
-from app.shared.permissions import require_owner_edit, visible_owner_clause
+from app.shared.permissions import (
+    editable_owner_clause,
+    require_owner_edit,
+    visible_owner_clause,
+)
 from app.shared.system_sources import SystemRef
 from app.shared.text import compare_key
 
@@ -307,19 +313,13 @@ class Refs:
                 out.by_key[ref.key] = ref.id
                 out.by_label.setdefault(ref.label.strip(), []).append(ref.id)
         elif object_type is not None:
-            # 별칭·외부 식별자도 식별자처럼 — 「앤시스」 로 적어도 「Ansys」 로 풀린다.
-            for norm, hits in aliases.index_of(self.db, object_type).items():
-                if len(hits) == 1 and norm not in out.by_key:
-                    out.by_alias[norm] = hits[0]
             # 칸 셋만 읽는다 — 행 전체(속성 JSONB)를 읽으면 대상이 큰 타입일 때 메모리가 먼저
             # 바닥난다.
             rows = self.db.execute(
                 select(ObjectInstance.id, ObjectInstance.key, ObjectInstance.label).where(
                     ObjectInstance.type_id == object_type.id,
                     ObjectInstance.deleted_at.is_(None),
-                    true()
-                    if self.user is None
-                    else visible_owner_clause(self.user, ObjectInstance.owner_workspace_id),
+                    self._visible(),
                 )
             )
             for row_id, row_key, row_label in rows:
@@ -327,6 +327,15 @@ class Refs:
                 if row_key:
                     out.by_key[row_key] = row_id
                 out.by_label.setdefault(row_label.strip(), []).append(row_id)
+            # 별칭·외부 식별자도 식별자처럼 — 「앤시스」 로 적어도 「Ansys」 로 풀린다.
+            # **보이는 객체의 별칭만** — 남의 부서 객체의 별칭이 보이는 객체의 이름을
+            # 가리고(별칭이 이름보다 먼저 맞는다), 그 뒤 「찾을 수 없습니다: <id>」 로 못 보는
+            # 객체의 id 가 샜다(2026-10-08). 이름 풀이(`resolve.by_name`)도 보이는 것 중에서
+            # 고른다.
+            for norm, hits in aliases.index_of(self.db, object_type).items():
+                seen = [one for one in hits if str(one) in out.ids]
+                if len(seen) == 1 and norm not in out.by_key:
+                    out.by_alias[norm] = seen[0]
         return out
 
     def _visible(self) -> Any:
@@ -401,8 +410,8 @@ class Refs:
             hits = index.by_label.setdefault(row_label.strip(), [])
             if row_id not in hits:
                 hits.append(row_id)
-        # 별칭 — 통째로 읽을 때와 같은 규칙: 한 타입 안에서 그 별칭이 객체 하나여야 하고, 두
-        # 타입이 서로 다른 것을 가리키면 별칭으로는 안 정해진다.
+        # 별칭 — 통째로 읽을 때와 같은 규칙: 한 타입 안에서 그 별칭이 **보이는** 객체 하나여야
+        # 하고, 두 타입이 서로 다른 것을 가리키면 별칭으로는 안 정해진다.
         norms = {compare_key(one) for one in batch}
         by_type: dict[tuple[str, uuid.UUID], set[uuid.UUID]] = {}
         for norm, object_id, type_id in self.db.execute(
@@ -412,6 +421,7 @@ class Refs:
                 ObjectAlias.type_id.in_(index.member_ids),
                 ObjectAlias.norm.in_(norms),
                 ObjectInstance.deleted_at.is_(None),
+                self._visible(),
             )
         ):
             by_type.setdefault((norm, type_id), set()).add(object_id)
@@ -835,6 +845,10 @@ def _patch_of(
 # --- 객체 -----------------------------------------------------------------------
 
 
+#: 파일의 앞줄이 쓰기로 한 유일 값 하나 — (줄, 객체 — 새로 만들면 None, 그 객체의 부서).
+_Claim = tuple[int, uuid.UUID | None, uuid.UUID | None]
+
+
 @dataclass
 class _Index:
     """파일 한 장을 판정하는 데 필요한 것을 **한 번에 미리 읽는다.**
@@ -864,6 +878,12 @@ class _Index:
     범위(`key_scope`)가 줄마다 다른 객체를 가리킬 수 있어서다."""
     editable: dict[uuid.UUID | None, AppError | None] = field(default_factory=dict)
     """부서마다 한 번만 판정한다 — 같은 부서의 오천 줄에 오천 번 물을 이유가 없다."""
+    unique_claims: dict[str, dict[str, list[_Claim]]] = field(default_factory=dict)
+    """이 파일의 **앞줄이 쓰게 될 유일 값** — 속성 키 → 값(`stored_text`) → [(줄, 객체 —
+    새로 만들면 None, 부서)]. DB 에는 아직 없는 값이라 `unique` 로는 못 본다."""
+    keys_taken: dict[tuple[uuid.UUID | None, str], int] = field(default_factory=dict)
+    """이 파일의 앞줄이 **새로 쓰게 될 식별자** — (부서 범위, 식별자) → 그 줄 번호. 범위가
+    전사면 부서 자리는 None 이다."""
     claimed: dict[str, int] = field(default_factory=dict)
     """이 파일의 **앞줄이 먼저 쓴 별칭** — 비교키 → 그 줄 번호.
 
@@ -889,12 +909,18 @@ def _read_index(
     ids: set[uuid.UUID] = set()
     for row in rows:
         raw_key = _fixed(row, "key")
-        if raw_key not in (_MISSING, None):
-            wanted = normalize_key(object_type, str(raw_key))
-            if wanted:
-                keys.add(wanted)
-        for old in renamed_history(object_type, row):
-            keys.add(old)
+        try:
+            if raw_key not in (_MISSING, None):
+                wanted = normalize_key(object_type, str(raw_key))
+                if wanted:
+                    keys.add(wanted)
+            for old in renamed_history(object_type, row):
+                keys.add(old)
+        except AppError:
+            # 식별자가 틀린 줄(식별자를 안 쓰는 타입 · 너무 긴 식별자)은 **줄 오류**다 — 여기서
+            # 터뜨리면 파일 전체가 422 로 거절되고 그 줄이 어느 줄인지 안 적힌다
+            # (2026-10-08). 계획이 줄마다 다시 읽어 그 줄에 적는다.
+            pass
         raw_id = _fixed(row, "id")
         if raw_id not in (_MISSING, None):
             try:
@@ -956,8 +982,10 @@ def _read_index(
         index.alias_owner = aliases.taken_by(db, object_type, aliases.HUMAN, values)
 
     for definition in [one for one in defs if one.unique]:
+        # 저장된 글자와 **같은 모양으로** 견준다(`stored_text`) — `str()` 이면 예/아니오 · 여러
+        # 값이 영영 안 맞았다.
         wanted_values = {
-            str(patch[definition.key])
+            stored_text(patch[definition.key])
             for patch in patches
             if isinstance(patch, dict) and patch.get(definition.key) not in (None, "", [])
         }
@@ -1060,11 +1088,15 @@ def _unique_clash(
     *,
     owner_workspace_id: uuid.UUID | None,
     exclude_id: uuid.UUID | None,
+    row: int = 0,
 ) -> None:
     """유일 속성이 이미 쓰이고 있나 — 미리 읽은 것으로 본다(질의 없음).
 
     판정 규칙은 `services.require_unique_properties` 와 **같아야 한다** — 범위는
     `key_scope` 를 따르고, 자기 자신은 뺀다.
+
+    `row` 를 주면 **이 파일의 앞줄이 먼저 쓴 값**(`unique_claims`)도 본다 — DB 만 보면 새로
+    만드는 두 줄이 같은 값이면 둘 다 만들어졌다(2026-10-08).
     """
     for definition in defs:
         if not definition.unique or definition.key not in values:
@@ -1072,9 +1104,8 @@ def _unique_clash(
         value = values.get(definition.key)
         if value in (None, "", []):
             continue
-        for other_id, other_workspace in index.unique.get(definition.key, {}).get(
-            str(value), []
-        ):
+        token = stored_text(value)
+        for other_id, other_workspace in index.unique.get(definition.key, {}).get(token, []):
             if exclude_id is not None and other_id == exclude_id:
                 continue
             if object_type.key_scope == "workspace" and other_workspace != owner_workspace_id:
@@ -1085,6 +1116,43 @@ def _unique_clash(
                 f"{definition.label}에 같은 값이 {where} 있습니다: {value}. "
                 "같은 것이 둘이 되면 둘 다 못 믿게 됩니다 — 찾아서 수정하는 편이 낫습니다.",
             )
+        for earlier, claimer, claimer_workspace in index.unique_claims.get(
+            definition.key, {}
+        ).get(token, []):
+            if not row or earlier == row:
+                continue
+            if exclude_id is not None and claimer == exclude_id:
+                continue
+            if (
+                object_type.key_scope == "workspace"
+                and claimer_workspace != owner_workspace_id
+            ):
+                continue
+            raise Conflict(
+                code("OBJECTS", 5),
+                f"{definition.label}에 같은 값을 이 파일의 {earlier}행도 씁니다: {value}. "
+                "같은 것이 둘이 되면 둘 다 못 믿게 됩니다 — 한 줄로 고치세요.",
+            )
+
+
+def _claim_unique(
+    index: _Index,
+    defs: list[PropertyDef],
+    values: dict[str, Any],
+    *,
+    row: int,
+    object_id: uuid.UUID | None,
+    owner_workspace_id: uuid.UUID | None,
+) -> None:
+    """이 줄이 **쓰게 될** 유일 값을 적어 둔다 — 같은 파일의 뒷줄이 그것을 봐야 한다
+    (`_unique_clash`). 새로 만드는 줄은 `object_id` 가 없다."""
+    for definition in defs:
+        value = values.get(definition.key)
+        if not definition.unique or value in (None, "", []):
+            continue
+        index.unique_claims.setdefault(definition.key, {}).setdefault(
+            stored_text(value), []
+        ).append((row, object_id, owner_workspace_id))
 
 
 def _column_map(
@@ -1338,6 +1406,26 @@ def _plan_row(
         if existing is None and previous is not None:
             existing = previous
 
+    # 이 줄이 **새로 쓰게 될** 식별자(새로 만들거나 바꾸는 줄) — 같은 파일의 앞줄이 이미 그것을
+    # 쓰기로 했으면 거절한다. 위의 `seen_keys` 는 식별자로 찾는 줄만 적어서, 「id 로 찾아 키를
+    # 바꾸는 줄」 과 「그 키로 새로 만드는 줄」(또는 키를 바꾸는 두 줄)이 함께 통과해 같은
+    # 식별자가 둘이 됐다(2026-10-08). 범위가 부서면 부서마다 따로 센다.
+    key_slot: tuple[uuid.UUID | None, str] | None = None
+    if key is not None and (existing is None or key != existing.key):
+        key_slot = (
+            (owner_workspace_id if existing is None else existing.owner_workspace_id)
+            if object_type.key_scope == "workspace"
+            else None,
+            key,
+        )
+        earlier = index_data.keys_taken.get(key_slot)
+        if earlier is not None and earlier != index:
+            raise InvalidValue(
+                code("OBJECTS", 44), f"같은 식별자를 이 파일의 {earlier}행도 씁니다: {key}"
+            )
+    if raw_label not in (_MISSING, None):
+        require_label_fits(str(raw_label).strip())
+
     if existing is None:
         if raw_label is _MISSING or raw_label is None or not str(raw_label).strip():
             raise InvalidValue(
@@ -1367,7 +1455,18 @@ def _plan_row(
             properties,
             owner_workspace_id=owner_workspace_id,
             exclude_id=None,
+            row=index,
         )
+        _claim_unique(
+            index_data,
+            defs,
+            properties,
+            row=index,
+            object_id=None,
+            owner_workspace_id=owner_workspace_id,
+        )
+        if key_slot is not None:
+            index_data.keys_taken[key_slot] = index
         skipped: list[str] = []
         double: list[str] = []
         if wanted_aliases:
@@ -1472,6 +1571,7 @@ def _plan_row(
             rename_note = (
                 f"식별자를 {existing.key} → {key} 로 바꾸고 옛 것을 별칭으로 남깁니다"
             )
+    cleaned: dict[str, Any] = {}
     if patch:
         merged = merge_properties(existing.properties or {}, patch)
         cleaned = validate_properties(defs, merged)
@@ -1483,6 +1583,7 @@ def _plan_row(
             cleaned,
             owner_workspace_id=existing.owner_workspace_id,
             exclude_id=existing.id,
+            row=index,
         )
         current = existing.properties or {}
         for prop_key in patch:
@@ -1497,6 +1598,17 @@ def _plan_row(
         if kept:
             bare = {_bare(one) for one in kept}
             changes = [one for one in changes if one not in bare]
+    # 실제로 쓰게 될 것만 적어 둔다 — 같은 파일의 뒷줄이 본다(비켜 간 칸은 안 쓴다).
+    _claim_unique(
+        index_data,
+        defs,
+        {one: cleaned.get(one) for one in changes if one in cleaned},
+        row=index,
+        object_id=existing.id,
+        owner_workspace_id=existing.owner_workspace_id,
+    )
+    if key_slot is not None and "key" in changes:
+        index_data.keys_taken[key_slot] = index
     return RowPlan(
         row=index,
         action="update" if changes else "unchanged",
@@ -1686,7 +1798,7 @@ def apply_objects(
                 # **옛 식별자를 남긴다.** 별칭으로(그 번호로 적힌 문서 · 사람의 기억이 있다)
                 # 그리고 목록으로도 — 그래야 쌍둥이 · 코어 API 가 같은 것이 둘이 되지 않게
                 # 제 식별자를 옮긴다. 목록인 이유: 동기화 사이에 두 번 바뀔 수 있다.
-                key_history.remember(target, target.key)
+                key_history.remember(target, target.key, row_plan.key)
                 if renamed_from(object_type, row) is not None:
                     keep_old_key = target.key
             target.key = row_plan.key
@@ -1788,11 +1900,18 @@ def export_columns(defs: list[PropertyDef]) -> list[str]:
 
 
 def export_rows(
-    db: Session, defs: list[PropertyDef], rows: list[ObjectInstance]
+    db: Session,
+    defs: list[PropertyDef],
+    rows: list[ObjectInstance],
+    *,
+    viewer: User | None = None,
 ) -> list[dict[str, Any]]:
     """저장된 모양 → 파일의 모양.
 
-    참조는 상대의 **식별자**(없으면 이름)로 — 다시 넣을 수 있게.
+    참조는 상대의 **식별자**(없으면 이름)로 — 다시 넣을 수 있게. `viewer` 가 **못 보는**
+    상대는 비운다 — 식별자 · 이름 · id 어느 것도 싣지 않는다(내보내기라고 남의 부서 것이 새면
+    화면에서 가린 것을 파일이 연다, 2026-10-08). 빈 칸은 다시 넣을 때 「안 건드림」 이라 그
+    파일을 그대로 다시 올려도 그 값은 지워지지 않는다.
     """
     ref_keys = [d.key for d in defs if d.data_type == "object_ref"]
     wanted: set[uuid.UUID] = set()
@@ -1806,14 +1925,22 @@ def export_rows(
                     except ValueError:
                         continue
     names: dict[str, str] = {}
+    hidden: set[str] = set()
     # 칸 셋만, 나눠서 — 덩어리 하나가 가리키는 상대가 수만 개일 수 있다.
+    seen = (
+        visible_owner_clause(viewer, ObjectInstance.owner_workspace_id)
+        if viewer is not None
+        else None
+    )
     for batch in chunks(wanted):
-        for found_id, found_key, found_label in db.execute(
-            select(ObjectInstance.id, ObjectInstance.key, ObjectInstance.label).where(
-                ObjectInstance.id.in_(batch)
-            )
-        ):
-            names[str(found_id)] = found_key or found_label
+        columns: list[Any] = [ObjectInstance.id, ObjectInstance.key, ObjectInstance.label]
+        if seen is not None:
+            columns.append(seen.label("seen"))
+        for found in db.execute(select(*columns).where(ObjectInstance.id.in_(batch))):
+            if seen is not None and not found[3]:
+                hidden.add(str(found[0]))
+                continue
+            names[str(found[0])] = found[1] or found[2]
 
     names_of = aliases.human_of(db, [row.id for row in rows])
     out: list[dict[str, Any]] = []
@@ -1838,7 +1965,11 @@ def export_rows(
                 continue
             items = raw if isinstance(raw, list) else [raw]
             if d.data_type == "object_ref":
-                items = [names.get(str(item), str(item)) for item in items]
+                items = [
+                    names.get(str(item), str(item))
+                    for item in items
+                    if str(item) not in hidden
+                ]
             elif d.data_type == "bool":
                 items = ["예" if item else "아니오" for item in items]
             record[d.key] = (
@@ -1865,6 +1996,9 @@ def to_csv(columns: list[str], rows: list[dict[str, Any]]) -> bytes:
 RELATION_COLUMNS = ("src", "relation", "dst", "evidence_note")
 """관계 파일의 **고정 열.** 그 밖의 열은 **관계 종류의 속성**으로 읽는다 —
 `property_defs.owner_kind='relation'` 이 모양을 정한다(근거 건수 · 근거 종류처럼)."""
+
+#: 근거 메모의 길이 — 표의 칸(`evidence_note` String(500))과 같다. 화면 요청은 스키마가 본다.
+EVIDENCE_MAX = 500
 
 RELATION_RESERVED = (*RELATION_COLUMNS, "properties")
 """속성으로 읽지 않는 이름 — CSV 는 칸을 펼쳐 적고(`n`, `basis`), JSON · 허브 묶음은
@@ -2501,7 +2635,9 @@ def _unlinks(
         ).where(
             ObjectInstance.type_id == object_type.id,
             ObjectInstance.deleted_at.is_(None),
-            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+            # **고칠 수 있는 객체의 선만** 끊는다 — 보이는 것으로 고르면 전역 객체 · 내가
+            # 멤버일 뿐인 부서의 객체 선까지 끊었다(2026-10-08).
+            editable_owner_clause(user, ObjectInstance.owner_workspace_id),
         )
     else:
         stmt = stmt.where(ObjectRelation.src_object_id.in_({src for src, _ in pairs}))
@@ -2514,16 +2650,13 @@ def _unlinks(
     ]
     if not doomed:
         return []
+    ends = {one.src_object_id for one in doomed} | {one.dst_object_id for one in doomed}
+    # 출발점은 고칠 수 있는 것이지만 도착점은 남의 부서 것일 수 있다 — 그 이름은 가린다.
+    hidden = system.hidden_objects(db, user, ends)
     names = {
-        row.id: row.label
-        for row in db.scalars(
-            select(ObjectInstance).where(
-                ObjectInstance.id.in_(
-                    [one.src_object_id for one in doomed]
-                    + [one.dst_object_id for one in doomed]
-                )
-            )
-        )
+        row.id: system.HIDDEN_LABEL if row.id in hidden else row.label
+        for batch in chunks(sorted(ends))
+        for row in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(batch)))
     }
     return [
         RowPlan(
@@ -2554,6 +2687,14 @@ def _plan_relation(
     slug = str(row.get("relation") or "").strip()
     if not src_text or not dst_text or not slug:
         raise InvalidValue(code("OBJECTS", 47), "src · relation · dst 가 모두 있어야 합니다.")
+    note = str(row.get("evidence_note") or "").strip()
+    if len(note) > EVIDENCE_MAX:
+        # 계획에서 줄 오류로 — 안 보면 계획은 통과하고 적용에서 DB 가 거절해 작업이 통째로
+        # 실패했다(2026-10-08).
+        raise InvalidValue(
+            code("OBJECTS", 9),
+            f"evidence_note 는 {EVIDENCE_MAX}자까지입니다({len(note)}자).",
+        )
     kind = kinds.get(slug)
     if kind is None:
         # 라벨로 적었을 수도 있다 — 겹치지 않을 때만.

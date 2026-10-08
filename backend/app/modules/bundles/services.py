@@ -251,6 +251,11 @@ def _stages(
         except ValueError as caught:
             out.errors.append(f"정의: {caught}")
             return
+        except AppError as caught:
+            # 모양이 틀린 정의(목록 자리의 글자 · 숫자 slug)는 422 로 거절된다 — 묶음에서는
+            # 작업 전체를 실패로 끝내지 않고 정의의 오류로 보인다(바깥이 롤백한다).
+            out.errors.append(f"정의: {caught.message}")
+            return
         out.ontology = planned
         if planned.errors:
             # **정의가 안 서면 객체를 맞춰 볼 수 없다** — 거기서 멈추고 정의의 오류를 보인다.

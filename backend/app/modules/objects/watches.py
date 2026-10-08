@@ -30,11 +30,13 @@ from sqlalchemy import delete, select
 from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
+from app.modules.accounts.models import User
 from app.modules.notifications import services as notifications
 from app.modules.objects.models import ObjectInstance, ObjectWatch
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared import events
 from app.shared.batches import chunks
+from app.shared.permissions import visible_owner_clause
 
 logger = logging.getLogger(__name__)
 
@@ -177,6 +179,38 @@ def _property_labels(db: Session, type_ids: set[uuid.UUID]) -> dict[uuid.UUID, d
     return out
 
 
+def _visible_to(
+    db: Session, by_object: dict[uuid.UUID, list[uuid.UUID]]
+) -> dict[uuid.UUID, set[uuid.UUID]]:
+    """지켜보는 사람 → 그 사람이 **지금** 볼 수 있는 객체(이 알림에 걸린 것 중). 판정은 목록과
+    같은 규칙(`visible_owner_clause`) — 사람마다 한 번 묻는다(지켜보는 사람은 몇 명이다)."""
+    wanted: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for object_id, user_ids in by_object.items():
+        for user_id in user_ids:
+            wanted.setdefault(user_id, set()).add(object_id)
+    people = {
+        row.id: row
+        for batch in chunks(list(wanted))
+        for row in db.scalars(select(User).where(User.id.in_(batch)))
+    }
+    out: dict[uuid.UUID, set[uuid.UUID]] = {}
+    for user_id, object_ids in wanted.items():
+        viewer = people.get(user_id)
+        if viewer is None:
+            continue
+        out[user_id] = {
+            found
+            for batch in chunks(sorted(object_ids))
+            for found in db.scalars(
+                select(ObjectInstance.id).where(
+                    ObjectInstance.id.in_(batch),
+                    visible_owner_clause(viewer, ObjectInstance.owner_workspace_id),
+                )
+            )
+        }
+    return out
+
+
 def on_events(staged: list[events.ChangeEvent]) -> None:
     """커밋된 변경을 지켜보는 사람들에게. **던지지 않는다** — 알림이 실패했다고 방금
     성공한 저장이 실패로 보이면 안 된다(`shared/events.py` 가 삼키지만 여기서도 조심한다).
@@ -203,6 +237,7 @@ def on_events(staged: list[events.ChangeEvent]) -> None:
                 )
             }
             labels = _property_labels(db, {row.type_id for row in objects.values()})
+            seen = _visible_to(db, by_object)
             sent = 0
             for one in wanted:
                 target = one.target_id
@@ -212,6 +247,11 @@ def on_events(staged: list[events.ChangeEvent]) -> None:
                     # **내가 한 일은 나에게 안 알린다.** 자기 행동을 돌려받으면 그 종은
                     # 곧 잡음이 되고, 잡음이 된 종은 진짜 하나가 울려도 안 읽힌다.
                     if one.actor_id and user_id == one.actor_id:
+                        continue
+                    # **지금 볼 수 있는 사람에게만.** 지켜보기를 켠 뒤 부서가 바뀌어 못 보게
+                    # 됐을 수 있다 — `/watching` 목록은 거르는데 알림은 객체 이름과 바뀐 칸을
+                    # 그대로 실어 보냈다(2026-10-08).
+                    if target not in seen.get(user_id, set()):
                         continue
                     row = objects.get(target)
                     object_type = types.get(row.type_id) if row else None

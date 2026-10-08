@@ -6,13 +6,28 @@ JSONB 안에 있다. 둘 다 DB 가 안 잡아 주므로 여기서 잡는다.
 
 from __future__ import annotations
 
+import json
 import uuid
 from typing import TYPE_CHECKING, Any
 
-from sqlalchemy import Select, Text, and_, cast, func, or_, select, text, union, update
+from sqlalchemy import (
+    Numeric,
+    Select,
+    Text,
+    and_,
+    case,
+    cast,
+    func,
+    or_,
+    select,
+    text,
+    union,
+    update,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, array
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
+from app.modules.accounts.models import User
 from app.modules.objects import system
 from app.modules.objects.models import (
     ObjectAlias,
@@ -23,6 +38,7 @@ from app.modules.objects.models import (
 )
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.ontology.services import InvalidValue, object_ref_ids
+from app.modules.workspaces.models import Workspace
 from app.shared import extensions
 from app.shared.errors import Conflict, code
 
@@ -38,6 +54,13 @@ def properties_of(db: Session, type_id: uuid.UUID) -> list[PropertyDef]:
             .order_by(PropertyDef.sort_order, PropertyDef.label)
         )
     )
+
+
+#: 식별자 · 이름의 길이 — 표의 칸(`objects.key` String(120) · `label` String(200))과 같다.
+#: 여기서 안 보면 넘친 값이 DB 에서 터져 500 이 되고, 파일 가져오기는 계획을 통과한 뒤
+#: 적용에서 작업이 통째로 실패한다(2026-10-08).
+KEY_MAX = 120
+LABEL_MAX = 200
 
 
 def normalize_key(object_type: ObjectType, key: str | None) -> str | None:
@@ -56,7 +79,33 @@ def normalize_key(object_type: ObjectType, key: str | None) -> str | None:
         raise InvalidValue(
             code("OBJECTS", 2), f"{object_type.label}은 식별자가 반드시 있어야 합니다."
         )
+    if key is not None and len(key) > KEY_MAX:
+        raise InvalidValue(
+            code("OBJECTS", 6),
+            f"식별자는 {KEY_MAX}자까지입니다({len(key)}자): {key[:40]}…",
+        )
     return key
+
+
+def require_label_fits(label: str) -> None:
+    """이름이 칸에 들어가나 — 화면 요청은 스키마가 보고, 파일 가져오기가 이것을 부른다."""
+    if len(label) > LABEL_MAX:
+        raise InvalidValue(
+            code("OBJECTS", 7),
+            f"이름은 {LABEL_MAX}자까지입니다({len(label)}자): {label[:40]}…",
+        )
+
+
+def stored_text(value: Any) -> str:
+    """값 하나가 **JSONB 에서 글자로 꺼냈을 때**(`properties ->> 키`)의 모양.
+
+    유일 속성의 겹침을 이 글자로 견준다. `str()` 로 견주면 예/아니오(`True` ↔ `true`)와 여러
+    값(`['a']` ↔ `["a"]`)이 저장된 글자와 영영 안 맞아, 그 칸들은 유일 검사가 아예 안
+    걸렸다(2026-10-08). 글자 · 숫자는 예전과 같다.
+    """
+    if isinstance(value, str):
+        return value
+    return json.dumps(value, ensure_ascii=False)
 
 
 def require_key_free(
@@ -104,6 +153,8 @@ def require_refs_exist(
     defs: list[PropertyDef],
     values: dict[str, Any],
     before: dict[str, Any] | None = None,
+    *,
+    user: User | None = None,
 ) -> None:
     """참조가 가리키는 객체가 실제로 있고, **그 칸의 대상 타입인가.**
 
@@ -111,11 +162,18 @@ def require_refs_exist(
     「값이 없음」 인지 「가리키던 것이 사라짐」 인지 구별할 수 없다. 대상 밖의 것을
     가리키면 「공급사」 칸에 부품이 들어가고, 그 칸으로 거르거나 세는 모든 답이 틀린다.
     대상 검사는 **새로 적힌 값만** 본다(`before` — 고치기 전 값).
+
+    `user` 를 주면 새로 적힌 값이 **그 사람이 볼 수 있는 객체**여야 한다 — 없는 것과 같은 말로
+    거절한다. 안 보면 id 만 알면 남의 부서 객체를 칸에 넣을 수 있었고, 상세의 이름표가 그
+    이름을 보였다(2026-10-08). 파일 가져오기 · 관계 잇기는 이미 보이는 것만 찾는다.
     """
     if not object_ref_ids(defs, values):
         return
     # 상대가 system 타입이면 원 표에서, 아니면 객체 표에서 — `system.py` 가 가른다.
     missing = system.missing_refs(db, defs, values)
+    if user is not None:
+        hidden = system.hidden_objects(db, user, _fresh_refs(defs, values, before))
+        missing += [str(one) for one in sorted(hidden) if str(one) not in missing]
     if missing:
         raise InvalidValue(
             code("OBJECTS", 4),
@@ -126,6 +184,30 @@ def require_refs_exist(
         raise InvalidValue(
             code("OBJECTS", 94), f"참조 칸의 대상이 아닌 것을 가리킵니다: {'; '.join(wrong)}"
         )
+
+
+def _fresh_refs(
+    defs: list[PropertyDef], values: dict[str, Any], before: dict[str, Any] | None
+) -> set[uuid.UUID]:
+    """참조 칸에 **새로 적힌** id — 이미 있던 값은 그 사이 상대가 다른 부서로 옮겨 갔을 수
+    있다. 그 칸을 안 건드리는 저장까지 막으면 사람은 무엇을 고쳐야 할지 모른다."""
+
+    def ids(raw: Any) -> set[uuid.UUID]:
+        out: set[uuid.UUID] = set()
+        for item in raw if isinstance(raw, list) else [raw]:
+            if isinstance(item, str) and item:
+                try:
+                    out.add(uuid.UUID(item))
+                except ValueError:
+                    continue
+        return out
+
+    fresh: set[uuid.UUID] = set()
+    for definition in defs:
+        if definition.data_type != "object_ref" or definition.key not in values:
+            continue
+        fresh |= ids(values[definition.key]) - ids((before or {}).get(definition.key))
+    return fresh
 
 
 def require_unique_properties(
@@ -156,7 +238,7 @@ def require_unique_properties(
         stmt = select(ObjectInstance.id).where(
             ObjectInstance.type_id == object_type.id,
             ObjectInstance.deleted_at.is_(None),
-            ObjectInstance.properties[key].astext == str(value),
+            ObjectInstance.properties[key].astext == stored_text(value),
         )
         if object_type.key_scope == "workspace":
             if owner_workspace_id is None:
@@ -278,19 +360,33 @@ def apply_search(db: Session, stmt: Select[Any], scope: Scope, term: str) -> Sel
 
     안 정해 뒀으면 이름과 식별자를 본다 — **빈 결과보다 그럴듯한 기본이 낫다.** 인터페이스
     목록이면 그 인터페이스의 `list_view` 와 구현 타입 전부의 별칭을 본다.
+
+    정해 둔 자리가 **모두 글자로 못 훑는 것**(상태 · 만든 때처럼 뷰 검증은 받는 자리)이면
+    이름과 식별자로 떨어진다 — 예전에는 검색어를 말없이 버려 목록 전체가 「검색 결과」 로
+    나왔다(2026-10-08). 검색어의 `%` · `_` 는 글자 그대로 찾는다(통합 검색과 같다).
     """
     view = scope.list_view
-    fields = tuple(view.get("search") or ["label", "key"])
-    if not any(one in ("label", "key") or one.startswith("properties.") for one in fields):
-        return stmt
+    fields = tuple(
+        one
+        for one in (view.get("search") or ["label", "key"])
+        if one in ("label", "key") or one.startswith("properties.")
+    ) or ("label", "key")
     matched = containing_ids(
-        f"%{term}%",
+        f"%{like_escape(term)}%",
         type_clause=scope.clause(),
         alias_type_clause=scope.clause(ObjectAlias.type_id),
         fields=fields,
+        escape="\\",
         bigrams=bigram_plan(db, term),
     )
     return stmt.where(ObjectInstance.id.in_(matched))
+
+
+def like_escape(text: str) -> str:
+    """`LIKE` 의 와일드카드(`%` · `_`)와 이스케이프 글자를 글자 그대로 — `escape="\\\\"` 와
+    함께 쓴다. 안 그러면 「50%」 가 「50 뒤에 아무거나」 로, 「A_1」 이 「A 와 1 사이 아무
+    글자」 로 읽혀 엉뚱한 것이 걸린다."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def apply_property_filters(stmt: Select[Any], filters: dict[str, str]) -> Select[Any]:
@@ -311,18 +407,42 @@ def apply_sort(stmt: Select[Any], view: dict[str, Any]) -> Select[Any]:
     field = sort.get("field") or "label"
     descending = (sort.get("dir") or "asc") == "desc"
 
+    # 뷰 검증이 정렬 칸으로 받는 것(`ontology/views.BUILT_IN_FIELDS`)은 **모두 정렬된다** —
+    # 상태 · 만든 때 · 소유 부서가 말없이 이름순으로 떨어지던 것(2026-10-08).
+    first: list[Any] = []
     if field == "label":
         column: Any = ObjectInstance.label
     elif field == "key":
         column = ObjectInstance.key
     elif field == "updated_at":
         column = ObjectInstance.updated_at
+    elif field == "created_at":
+        column = ObjectInstance.created_at
+    elif field == "status":
+        column = ObjectInstance.status
+    elif field == "owner_workspace":
+        # 부서는 **이름으로** — id 순은 아무 뜻이 없다. 전역(없음)은 끝에.
+        name = (
+            select(Workspace.name)
+            .where(Workspace.id == ObjectInstance.owner_workspace_id)
+            .scalar_subquery()
+        )
+        first = [name.desc().nulls_last() if descending else name.asc().nulls_last()]
+        column = ObjectInstance.label
     elif field.startswith("properties."):
-        column = ObjectInstance.properties[field.split(".", 1)[1]].astext
+        raw = ObjectInstance.properties[field.split(".", 1)[1]]
+        # **숫자는 숫자로** — 글자로 세우면 10 · 100 · 9 가 된다. 숫자로 저장된 값만 숫자로
+        # 읽고(못 읽는 값 · 빈 값은 끝으로), 같은 수 · 글자 칸은 글자로 한 번 더 세운다.
+        number = case(
+            (func.jsonb_typeof(raw) == "number", cast(raw.astext, Numeric)), else_=None
+        )
+        first = [number.desc().nulls_last() if descending else number.asc().nulls_last()]
+        column = raw.astext
     else:
         column = ObjectInstance.label
 
     return stmt.order_by(
+        *first,
         column.desc() if descending else column.asc(),
         ObjectInstance.id.desc() if descending else ObjectInstance.id.asc(),
     )
@@ -450,9 +570,75 @@ def workspace_reference(
     ]
 
 
+#: 통폐합을 거절할 때 이름을 몇 개까지 적나 — 나머지는 수로.
+CLASH_SHOWN = 5
+
+
+def _scope_clashes(db: Session, source: uuid.UUID, target: uuid.UUID) -> list[str]:
+    """두 부서를 합치면 **부서 안에서 하나여야 할 것**이 겹치는 자리 — 유일 범위가 부서인
+    타입(`key_scope="workspace"`)의 식별자와 유일 속성. 살아 있는 것끼리만 본다(지운 것은
+    `require_key_free` 도 안 센다)."""
+    scoped = {
+        row.id: row.label
+        for row in db.scalars(select(ObjectType).where(ObjectType.key_scope == "workspace"))
+    }
+    if not scoped:
+        return []
+    mine = aliased(ObjectInstance, name="moving")
+    theirs = aliased(ObjectInstance, name="staying")
+    paired = (
+        theirs.type_id == mine.type_id,
+        theirs.owner_workspace_id == target,
+        theirs.deleted_at.is_(None),
+    )
+    alive = (
+        mine.type_id.in_(list(scoped)),
+        mine.owner_workspace_id == source,
+        mine.deleted_at.is_(None),
+    )
+    found: list[str] = []
+    for type_id, key in db.execute(
+        select(mine.type_id, mine.key)
+        .join(theirs, and_(theirs.key == mine.key, *paired))
+        .where(*alive, mine.key.is_not(None))
+        .limit(CLASH_SHOWN + 1)
+    ):
+        found.append(f"{scoped[type_id]} 식별자 「{key}」")
+    for definition in db.scalars(
+        select(PropertyDef).where(
+            PropertyDef.owner_kind == "type",
+            PropertyDef.owner_id.in_(list(scoped)),
+            PropertyDef.unique.is_(True),
+        )
+    ):
+        held = mine.properties[definition.key].astext
+        for (value,) in db.execute(
+            select(held)
+            .join(theirs, and_(theirs.properties[definition.key].astext == held, *paired))
+            .where(*alive, mine.type_id == definition.owner_id, held.not_in(("", "[]")))
+            .limit(CLASH_SHOWN + 1)
+        ):
+            found.append(f"{scoped[definition.owner_id]} {definition.label} 「{value}」")
+    return found
+
+
 def _move_objects(db: Session, source: uuid.UUID, target: uuid.UUID) -> int:
     """소유 부서를 바꾼다. **지운 객체도 함께 옮긴다** — 행이 남아 있으면 FK 는
-    그대로 붙들고, 그러면 원본 부서를 끝내 지울 수 없다."""
+    그대로 붙들고, 그러면 원본 부서를 끝내 지울 수 없다.
+
+    **부서 안에서 하나여야 할 것이 겹치면 통째로 거절한다**(`_scope_clashes`) — 원 SQL 로 한
+    번에 옮기므로 줄마다 볼 자리가 없다. 안 보면 두 부서에서 각자 하나이던 「A-1」 이 한
+    부서에 둘이 되고, 그때부터 그 식별자로는 어느 것인지 정해지지 않는다(2026-10-08).
+    통폐합은 한 트랜잭션이라 여기서 멈추면 아무것도 안 옮겨진다."""
+    clashes = _scope_clashes(db, source, target)
+    if clashes:
+        shown = ", ".join(clashes[:CLASH_SHOWN])
+        more = " 외 더 있음" if len(clashes) > CLASH_SHOWN else ""
+        raise Conflict(
+            code("OBJECTS", 8),
+            f"옮겨 갈 부서에 같은 것이 이미 있어 객체를 옮기지 않습니다: {shown}{more}. "
+            "부서 안에서 하나여야 하는 값이라 — 먼저 합치거나 값을 바꾸세요.",
+        )
     done = db.execute(
         update(ObjectInstance)
         .where(ObjectInstance.owner_workspace_id == source)

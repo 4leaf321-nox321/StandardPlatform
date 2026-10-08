@@ -5,6 +5,8 @@
     python scripts/recompute_metrics.py --all            켜진 것 전부
     python scripts/recompute_metrics.py --slug cases     하나만
     python scripts/recompute_metrics.py --slug x --now   넣지 않고 이 자리에서 돌린다(진단용)
+    python scripts/recompute_metrics.py --all --full     바뀐 기간만이 아니라 전부 다시
+    python scripts/recompute_metrics.py --indexes        날짜 칸 색인만 맞춘다
 
 systemd 타이머(`<slug>-metrics.timer`, deploy.sh 가 설치)가 **매시간** 이 스크립트를 컨테이너
 안에서 돌린다. 하루 미만 주기는 그 시간이 지났으면 아무 때나, 「매일 밤 · N일마다 밤」 은 밤
@@ -12,6 +14,11 @@ systemd 타이머(`<slug>-metrics.timer`, deploy.sh 가 설치)가 **매시간**
 (`services.due`). 데이터 소스 동기화(`sync_datasources.py`)와 같은 무늬다 — `jobs` 표에
 **지표마다 한 줄**을 넣고 워커(`<slug>-worker`)가 돌린다. 그래야 「지금 뭐가 돌고 있나」 가
 「작업」 화면 한 곳에 모이고, 진행 · 실패 이유 · 취소가 다른 작업과 같은 모양이 된다.
+
+타이머 · 적재 뒤의 계산은 **되면 바뀐 기간만** 센다(`metrics/incremental.py`). 그것이 빠르려면
+날짜 칸 색인이 있어야 해서, 지표를 넣은 **뒤에** 색인을 맞춘다(`metrics/timeindex.py` — 켜진
+지표의 시간 칸마다 하나, `CONCURRENTLY`). 색인을 세우는 동안 다음 타이머가 지표를 못 넣으면
+안 되므로 넣기의 잠금과 따로 잡는다.
 
 **두 서버의 타이머가 같은 시각에 돈다.** 잠금을 못 잡은 쪽은 물러나고, 잡은 쪽도 아직 안 끝난
 같은 지표의 작업이 있으면 또 넣지 않는다. 적재 뒤 훅(`jobs/kinds.py`)이 넣은 작업과도 같은
@@ -33,7 +40,8 @@ from sqlalchemy.orm import Session
 import app.all_models
 import app.main  # noqa: F401  (레지스트리 조립 — 작업 종류 · 원 표)
 from app.config import get_settings
-from app.modules.metrics import services
+from app.database import engine
+from app.modules.metrics import services, timeindex
 from app.modules.metrics.models import MetricDef
 from app.shared import singleton
 from app.shared.errors import AppError
@@ -45,6 +53,10 @@ def main() -> int:
     group.add_argument("--due", action="store_true", help="주기가 지난 것만")
     group.add_argument("--all", action="store_true", help="켜진 것 전부")
     group.add_argument("--slug", help="하나만")
+    group.add_argument("--indexes", action="store_true", help="날짜 칸 색인만 맞춘다")
+    parser.add_argument(
+        "--full", action="store_true", help="바뀐 기간만이 아니라 전부 다시 센다"
+    )
     parser.add_argument(
         "--now", action="store_true", help="작업으로 넣지 않고 이 자리에서 돌린다(진단용)"
     )
@@ -55,11 +67,28 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    with singleton.held("metrics-recompute") as db:
+    code = 0
+    if not args.indexes:
+        with singleton.held("metrics-recompute") as db:
+            if db is None:
+                print("다른 서버가 지표를 넣는 중입니다 — 이번 차례는 건너뜁니다.")
+                return 0
+            code = run_now(db, args) if args.now else enqueue(db, args)
+    if args.indexes or args.due:
+        sync_indexes()
+    return code
+
+
+def sync_indexes() -> None:
+    """날짜 칸 색인을 맞춘다 — 두 서버 중 한 곳만. 실패는 적고 넘어간다(지표 계산은 색인
+    없이도 맞다 — 느릴 뿐)."""
+    with singleton.held("metrics-timeindex") as db:
         if db is None:
-            print("다른 서버가 지표를 넣는 중입니다 — 이번 차례는 건너뜁니다.")
-            return 0
-        return run_now(db, args) if args.now else enqueue(db, args)
+            print("다른 서버가 날짜 칸 색인을 맞추는 중입니다.")
+            return
+        done = timeindex.sync(engine, db, say=print)
+        for line in done.failed:
+            print(f"날짜 칸 색인 실패(다음 차례에 다시): {line}", file=sys.stderr)
 
 
 def pick(db: Session, args: argparse.Namespace) -> list[MetricDef] | None:
@@ -104,7 +133,9 @@ def enqueue(db: Session, args: argparse.Namespace) -> int:
                 f"{metric.slug}: 아직 안 끝난 작업이 있습니다({waiting.status}) — 안 넣습니다."
             )
             continue
-        job = services.enqueue_recompute(db, metric, user=None, reason="timer")
+        job = services.enqueue_recompute(
+            db, metric, user=None, reason="manual" if getattr(args, "full", False) else "timer"
+        )
         db.commit()
         print(f"{metric.slug}: 작업 {job.id} 넣음 — 워커가 돌립니다")
     return 0
@@ -118,15 +149,19 @@ def run_now(db: Session, args: argparse.Namespace) -> int:
     slugs = [one.slug for one in metrics]
     try:
         result = services.run_recompute(
-            db, slugs, job_id=None, progress=lambda stage, done, total: None
+            db,
+            slugs,
+            job_id=None,
+            progress=lambda stage, done, total: None,
+            full=getattr(args, "full", False),
         )
     except AppError as caught:
         print(f"오류 — {caught.message}", file=sys.stderr)
         return 1
     for run in result["runs"]:
         print(
-            f"{run['slug']}: {run['status']} 기록 {run.get('rows', 0)} "
-            f"셀 {run.get('cells', 0)} {run.get('seconds', 0)}초"
+            f"{run['slug']}: {run['status']} {run.get('mode', '')} 기록 {run.get('rows', 0)} "
+            f"셀 {run.get('cells', 0)} {run.get('seconds', 0)}초 {run.get('note', '')}"
         )
     return 0
 

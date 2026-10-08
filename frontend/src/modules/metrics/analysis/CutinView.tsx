@@ -157,11 +157,17 @@ export function CutinView({ metric, read, initial = {} }: AnalysisViewProps) {
           <p className="text-sm">
             <b>{DECISIONS[data.decision]}</b>
             {data.ratio !== null &&
-              ` — 뒤가 앞의 ${shownNumber(data.ratio, 2)}배(${interval(
-                data.ratio_low !== null && data.ratio_high !== null
-                  ? [data.ratio_low, data.ratio_high]
-                  : null,
-              )}).`}
+              ` — 뒤가 앞의 ${shownNumber(data.ratio, 2)}배(${
+                // 앞쪽 건수가 아주 적으면 위 끝이 없다(서버가 null) — 「—」 로만 보이면 구간이 아예
+                // 없는 줄 안다(2026-10-08).
+                data.ratio_low !== null && data.ratio_high === null
+                  ? `${shownNumber(data.ratio_low, 2)} ~ 상한 없음`
+                  : interval(
+                      data.ratio_low !== null && data.ratio_high !== null
+                        ? [data.ratio_low, data.ratio_high]
+                        : null,
+                    )
+              }).`}
             {data.decision === 'no_difference' &&
               ` ${percent(data.effect, 0)} 넘게 달라지지는 않았습니다.`}
             {data.decision === 'too_early' &&

@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import func, or_, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy import and_, exists, func, or_, select, update
+from sqlalchemy.orm import Session, aliased
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -36,6 +36,15 @@ TERMINAL = ("done", "failed", "cancelled")
 
 class Cancelled(Exception):
     """워커가 단계 사이에서 취소 요청을 봤다 — 롤백하고 `cancelled` 로."""
+
+
+class Lost(Cancelled):
+    """워커가 단계 사이에서 보니 이 작업이 **더는 제 것이 아니다**(되살려져 남이 다시 집었다)
+    — 롤백하고 결과를 버린다.
+
+    `Cancelled` 를 잇는 까닭: 「멈춰라」 를 받는 자리(지표 다시 계산 · 동기화 차례)는 이미
+    `Cancelled` 를 다시 던지게 짜여 있다. 따로 두면 그 자리의 `except Exception` 이 삼켜
+    지표마다 「실패」 로 적고 다음 것을 계속 돈다."""
 
 
 # --- 파일 — 저장 계층은 files.py --------------------------------------------------
@@ -148,18 +157,51 @@ def get_visible(db: Session, user: User, job_id: uuid.UUID) -> Job:
 
 
 def request_cancel(db: Session, user: User, job: Job) -> Job:
-    """`queued` 면 바로 끝, `running` 이면 표시만 — 워커가 단계 사이에서 본다."""
+    """`queued` 면 바로 끝, `running` 이면 표시만 — 워커가 단계 사이에서 본다.
+
+    ⚠️ **읽은 상태를 믿고 쓰지 않는다** — 조건부 UPDATE 다. 예전에는 읽은 `queued` 를 보고
+       `cancelled` 를 그대로 덮었다. 읽은 직후 워커가 집었으면 워커는 `cancel_requested` 만
+       보므로 끝까지 돌았고, 끝에서 `done` 으로 다시 덮어 **취소가 소리 없이 사라졌다**
+       (2026-10-08). 이제 아직 대기일 때만 끝내고, 그 사이 집혔으면 표시를 남긴다.
+    """
     if not user.is_system_admin and job.requested_by_id != user.id:
         raise Forbidden(code("JOBS", 6), "시킨 사람만 취소할 수 있습니다.")
     if job.status in TERMINAL:
         raise Conflict(code("JOBS", 7), "이미 끝난 작업입니다.")
-    if job.status == "queued":
-        job.status = "cancelled"
-        job.finished_at = datetime.now(UTC)
-    else:
-        job.cancel_requested = True
-    db.flush()
+    stopped = db.execute(
+        update(Job)
+        .where(Job.id == job.id, Job.status == "queued")
+        .values(status="cancelled", finished_at=datetime.now(UTC))
+        .execution_options(synchronize_session=False)
+    )
+    if not extensions.rows_changed(stopped):
+        marked = db.execute(
+            update(Job)
+            .where(Job.id == job.id, Job.status == "running")
+            .values(cancel_requested=True)
+            .execution_options(synchronize_session=False)
+        )
+        if not extensions.rows_changed(marked):
+            raise Conflict(code("JOBS", 7), "이미 끝난 작업입니다.")
+    db.refresh(job)
     return job
+
+
+def counts_as_apply(child: Any) -> Any:
+    """이 자식 작업이 **계획을 적용한(또는 적용 중인)** 것인가 — SQL 조건.
+
+    실패하거나 취소된 적용, `applied` 가 거짓으로 끝난 적용은 셈하지 않는다 — 그때는 다시
+    적용할 수 있어야 한다. 판정은 **여기 하나**다: 홈의 「적용 대기」 가 따로 셌을 때 실패한
+    적용까지 「처리됨」 으로 쳐서, 다시 적용할 수 있는 계획이 홈에서 사라졌다(2026-10-08).
+    `result` 가 없거나 `applied` 칸이 없으면 셈한다(`is not False` 와 같다).
+    """
+    return or_(
+        child.status.in_(("queued", "running")),
+        and_(
+            child.status == "done",
+            child.result["applied"].astext.is_distinct_from("false"),
+        ),
+    )
 
 
 def apply_child(db: Session, plan_id: uuid.UUID) -> Job | None:
@@ -167,17 +209,14 @@ def apply_child(db: Session, plan_id: uuid.UUID) -> Job | None:
 
     계획 작업의 `result.applied` 는 영영 거짓이다(적용은 새 작업이다). 그것만 보면 적용하고
     나서도 화면에 「적용 대기」 와 「적용」 단추가 남고, 같은 계획이 **두 번** 들어갈 수
-    있었다.
-    실패하거나 취소된 적용은 셈하지 않는다 — 그때는 다시 적용할 수 있어야 한다.
+    있었다. 무엇을 셈하나는 `counts_as_apply` 가 정한다.
     """
-    for row in db.scalars(
-        select(Job).where(Job.parent_id == plan_id).order_by(Job.created_at.desc())
-    ):
-        if row.status in ("queued", "running"):
-            return row
-        if row.status == "done" and (row.result or {}).get("applied") is not False:
-            return row
-    return None
+    return db.scalar(
+        select(Job)
+        .where(Job.parent_id == plan_id, counts_as_apply(Job))
+        .order_by(Job.created_at.desc())
+        .limit(1)
+    )
 
 
 def make_apply(db: Session, user: User, plan_job: Job) -> Job:
@@ -247,26 +286,35 @@ def heartbeat(worker_id: str, job_id: uuid.UUID | None) -> None:
             row.last_seen = now
             row.current_job_id = job_id
         if job_id is not None:
-            db.execute(update(Job).where(Job.id == job_id).values(heartbeat_at=now))
+            # 내가 쥔 것만 — 되살려져 남이 집은 작업의 박동을 대신 뛰면, 그 워커가 죽어도
+            # 살아 있는 것처럼 보인다.
+            db.execute(update(Job).where(_owned(job_id, worker_id)).values(heartbeat_at=now))
         db.commit()
 
 
-def report_progress(job_id: uuid.UUID, stage: str, done: int, total: int) -> None:
+def report_progress(
+    job_id: uuid.UUID, worker_id: str, stage: str, done: int, total: int
+) -> bool:
+    """진행을 적고 **취소 요청이 있나**를 돌려준다 — 아직 이 워커가 쥔 작업일 때만 적는다.
+
+    쥐고 있지 않으면 `Lost` — 되살려져 남이 다시 집은 작업이다. 단계 사이에서 알아야 남의
+    진행을 덮어쓰지 않고, **커밋 전에** 멈춰 같은 일이 두 번 안 든다(끝에서만 보면 스스로
+    커밋하는 종류 — 일괄 입력 · 묶음 — 는 이미 넣은 뒤다).
+    """
     with SessionLocal() as db:
-        db.execute(
+        row = db.execute(
             update(Job)
-            .where(Job.id == job_id)
+            .where(_owned(job_id, worker_id))
             .values(
                 progress={"stage": stage, "done": done, "total": total},
                 heartbeat_at=datetime.now(UTC),
             )
-        )
+            .returning(Job.cancel_requested)
+        ).first()
         db.commit()
-
-
-def cancel_requested(job_id: uuid.UUID) -> bool:
-    with SessionLocal() as db:
-        return bool(db.scalar(select(Job.cancel_requested).where(Job.id == job_id)))
+    if row is None:
+        raise Lost()
+    return bool(row[0])
 
 
 def claim(db: Session, worker_id: str) -> Job | None:
@@ -346,18 +394,50 @@ def recover_stale(db: Session) -> int:
     return len(stale)
 
 
+LOST = "lost"
+"""이 워커가 **더는 쥐고 있지 않은** 작업 — 결과를 버린다(`Outcome.status` 로만 쓰고 표에는
+안 적는다). 박동이 멎어 되살려진 뒤 다른 워커가 다시 집었거나, 그 사이 끝난 것이다."""
+
+
 @dataclass
 class Outcome:
     status: str
     result: dict[str, Any] | None = None
     error: str | None = None
     output_file_id: uuid.UUID | None = None
+    written: bool = False
+    """본 트랜잭션이 상태(`done`)까지 함께 커밋했다 — `settle` 은 알리기만 한다."""
+
+
+def _owned(job_id: uuid.UUID, worker_id: str) -> Any:
+    """「아직 이 워커가 쥔, 도는 작업」 — 끝을 적는 모든 UPDATE 의 조건."""
+    return and_(Job.id == job_id, Job.status == "running", Job.worker_id == worker_id)
+
+
+def _why_cannot_run_as(user: User) -> str | None:
+    """시킨 사람의 계정으로 지금 돌릴 수 없으면 그 까닭 — 돌려도 되면 None."""
+    if user.can_sign_in:
+        return None
+    if user.deleted_at is not None:
+        return "삭제되어"
+    if user.status == "suspended":
+        return "정지되어"
+    return "로그인할 수 없는 상태라"
 
 
 def run(job: Job, *, worker_id: str) -> Outcome:
     """작업 하나를 **끝까지.** 본 트랜잭션은 여기서 한 번 커밋하거나 롤백한다.
 
-    결과 · 상태는 커밋 뒤에 **다른 세션**으로 쓴다 — 본 트랜잭션에 섞어 쓰면 실패한 작업의
+    **「아직 내가 쥔 작업」 인지 단계마다 본다** — 진행 보고(`report_progress`)가 조건부로
+    적고, 남이 다시 집었으면 `Lost` 로 롤백한다(같은 일이 두 번 안 든다).
+
+    **성공은 본 트랜잭션과 함께 적는다** — 같은 조건으로. 예전에는 커밋한 뒤 다른 세션으로
+    적었다. 그 사이가 끊기면(적기 실패 · 워커가 죽음) 작업은 `running` 으로 남아 되살려지고,
+    다시 돌면 지문이 달라 **이미 들어간 적용이 `failed`** 로 보였다(2026-10-08). 스스로
+    커밋하는 종류(일괄 입력 · 묶음)는 그 커밋과 이 적기 사이가 아주 짧아질 뿐 하나가 되지는
+    않는다.
+
+    실패 · 취소는 **다른 세션**으로 쓴다(`settle`) — 본 트랜잭션에 섞어 쓰면 실패한 작업의
     「failed」 표시가 롤백과 함께 사라진다.
     """
     spec = kinds.get(job.kind)
@@ -365,8 +445,7 @@ def run(job: Job, *, worker_id: str) -> Outcome:
         return Outcome("failed", error=f"모르는 작업 종류입니다: {job.kind}")
 
     def progress(stage: str, done: int, total: int) -> None:
-        report_progress(job.id, stage, done, total)
-        if cancel_requested(job.id):
+        if report_progress(job.id, worker_id, stage, done, total):
             raise Cancelled()
 
     with SessionLocal() as db:
@@ -375,6 +454,22 @@ def run(job: Job, *, worker_id: str) -> Outcome:
             if user is None and not spec.allow_system:
                 raise AppError(
                     code("JOBS", 14), "시킨 사람의 계정이 없어졌습니다.", status=409
+                )
+            why = _why_cannot_run_as(user) if user is not None else None
+            if user is not None and why is not None:
+                # 작업은 **시킨 사람의 권한으로** 돈다 — 정지 · 삭제된 사람의 것을 돌리면 막은
+                # 계정이 줄에 남은 작업으로 계속 쓴다(2026-10-08). 타이머가 넣은 것(시킨 사람
+                # 없음)은 해당 없다.
+                raise AppError(
+                    code("JOBS", 27),
+                    f"시킨 사람({user.display_name})의 계정이 {why} 돌리지 않습니다 — "
+                    "필요하면 다른 사람이 다시 넣으세요.",
+                    status=409,
+                )
+            if spec.admin_only and user is not None and not user.is_system_admin:
+                # 넣는 길이 몇이든 여기서 한 번 더 — 전용 경로를 건너뛰어 들어온 것을 막는다.
+                raise Forbidden(
+                    code("JOBS", 24), f"{spec.label}은(는) 시스템 관리자만 돌립니다."
                 )
             input_file = db.get(JobFile, job.input_file_id) if job.input_file_id else None
             if spec.needs_file and input_file is None:
@@ -392,8 +487,34 @@ def run(job: Job, *, worker_id: str) -> Outcome:
             result = spec.run(work)
             # 끝난 뒤의 취소 요청은 늦은 것이다 — `apply_*` 는 이미 커밋했다. 「취소됨」 이라
             # 적으면 들어간 것을 안 들어갔다고 말하는 셈이다.
+            finished = db.execute(
+                update(Job)
+                .where(_owned(job.id, worker_id))
+                .values(
+                    status="done",
+                    result=result,
+                    error=None,
+                    output_file_id=work.output_file_id,
+                    finished_at=datetime.now(UTC),
+                )
+                .execution_options(synchronize_session=False)
+            )
+            if not extensions.rows_changed(finished):
+                raise Lost()
             db.commit()
-            return Outcome("done", result=result, output_file_id=work.output_file_id)
+            return Outcome(
+                "done", result=result, output_file_id=work.output_file_id, written=True
+            )
+        except Lost:
+            db.rollback()
+            log.warning(
+                "작업 %s (%s) 은 이제 이 워커(%s)의 것이 아닙니다 — 결과를 버리고 "
+                "롤백합니다(되살려져 다시 집혔거나 이미 끝났다)",
+                job.id,
+                job.kind,
+                worker_id,
+            )
+            return Outcome(LOST)
         except Cancelled:
             db.rollback()
             return Outcome("cancelled")
@@ -406,22 +527,38 @@ def run(job: Job, *, worker_id: str) -> Outcome:
             return Outcome("failed", error=f"{type(caught).__name__}: {caught}"[:2000])
 
 
-def settle(job_id: uuid.UUID, outcome: Outcome) -> None:
+def settle(job_id: uuid.UUID, outcome: Outcome, *, worker_id: str) -> None:
     """끝난 상태를 적고, **오래 걸린 것이면 시킨 사람에게 알린다** — `run` 의 세션과 다른
-    세션으로(본 트랜잭션에 섞으면 실패한 작업의 「failed」 표시가 롤백과 함께 사라진다)."""
+    세션으로(본 트랜잭션에 섞으면 실패한 작업의 「failed」 표시가 롤백과 함께 사라진다).
+
+    **아직 이 워커가 쥔 작업일 때만 적는다.** 박동이 멎어 되살려진 뒤 남이 다시 집은 작업에
+    원래 워커가 늦게 「실패」 를 적으면, 도는 쪽의 결과 위에 남의 결과가 덮인다. 그때는 버리고
+    로그만 남긴다. 성공(`written`)은 `run` 이 본 트랜잭션과 함께 이미 적었다.
+    """
+    if outcome.status == LOST:
+        return
     with SessionLocal() as db:
-        db.execute(
-            update(Job)
-            .where(Job.id == job_id)
-            .values(
-                status=outcome.status,
-                result=outcome.result,
-                error=outcome.error,
-                output_file_id=outcome.output_file_id,
-                finished_at=datetime.now(UTC),
+        if not outcome.written:
+            wrote = db.execute(
+                update(Job)
+                .where(_owned(job_id, worker_id))
+                .values(
+                    status=outcome.status,
+                    result=outcome.result,
+                    error=outcome.error,
+                    output_file_id=outcome.output_file_id,
+                    finished_at=datetime.now(UTC),
+                )
             )
-        )
-        db.commit()
+            db.commit()
+            if not extensions.rows_changed(wrote):
+                log.warning(
+                    "작업 %s 은 이제 이 워커(%s)의 것이 아닙니다 — 「%s」 를 안 적고 버립니다",
+                    job_id,
+                    worker_id,
+                    outcome.status,
+                )
+                return
         row = db.get(Job, job_id)
         if row is not None:
             announce(db, row)
@@ -465,10 +602,16 @@ def announce(db: Session, job: Job) -> None:
         )
         title = f"{label} — 적용이 끝났습니다"
     elif counts:
+        # 계획을 「작업」 화면에서 적용하는 것은 **두 단계 종류**뿐이다 — 데이터 소스 동기화의
+        # 계획은 그 화면의 「동기화」 를 다시 눌러 적용한다(작업 화면에는 적용이 없다).
+        where = (
+            "작업 화면에서 계획을 읽고 적용하세요."
+            if spec is not None and spec.two_step
+            else "그 화면에서 계획을 읽고 적용으로 다시 돌리세요."
+        )
         body = (
             f"새로 {counts.get('create', 0)} · 고침 {counts.get('update', 0)} · "
-            f"오류 {counts.get('error', 0)}건. **아직 아무것도 안 들어갔습니다** — "
-            "작업 화면에서 계획을 읽고 적용하세요."
+            f"오류 {counts.get('error', 0)}건. **아직 아무것도 안 들어갔습니다** — {where}"
         )
         title = f"{label} — 계획이 끝났습니다"
     else:
@@ -531,7 +674,7 @@ def process_one(worker_id: str) -> bool:
     log.info("작업 시작: %s (%s)", job_id, kind)
     with _Beating(worker_id, job_id):
         outcome = run(job, worker_id=worker_id)
-    settle(job_id, outcome)
+    settle(job_id, outcome, worker_id=worker_id)
     heartbeat(worker_id, None)
     log.info("작업 끝: %s (%s) → %s", job_id, kind, outcome.status)
     return True
@@ -561,25 +704,46 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
     있으면 운영자는 사람이 물어볼 때까지 모른다.
     """
     items: list[extensions.MaintenanceItem] = []
-    # **적용 작업이 이미 걸린 계획은 할 일이 아니다.** 계획 작업의 `applied` 는 영영 거짓이고
-    # (적용은 새 작업이다), 그것만 보면 적용하고 나서도 홈이 계속 조른다.
-    handled = {
-        parent
-        for parent in db.scalars(
-            select(Job.parent_id).where(Job.parent_id.isnot(None), Job.status != "cancelled")
-        )
-    }
     waiting = 0
-    for row in db.scalars(
-        select(Job).where(Job.status == "done", Job.requested_by_id == viewer.id)
-    ):
-        result = row.result or {}
-        if row.id in handled or result.get("applied"):
+    # **적용 단계가 있는 종류만 센다** — 데이터 소스 동기화의 계획은 작업 화면에서 적용할 수
+    # 없다(그 화면에서 다시 돌린다). 세면 계획을 볼 때마다 홈의 수가 늘고 지울 길이 없었다
+    # (2026-10-08).
+    two_step = [one.name for one in kinds.all_kinds() if one.two_step]
+    needs_file = [one.name for one in kinds.all_kinds() if one.two_step and one.needs_file]
+    # **적용할 수 있는 계획만** — 올린 파일은 `job_file_ttl_days` 뒤 지워지고 그 뒤엔 적용이
+    # 거절된다(`make_apply`). 그보다 오래된 계획은 할 일이 아니라 지난 일이다. 예전에는 홈을
+    # 열 때마다 내가 끝낸 계획 전부를 **결과(계획 표 — 만 줄이면 만 줄) 째** 읽고, 모든
+    # 사람의 자식 작업까지 훑었다(2026-10-08). 이제 판정에 쓰는 칸만 읽는다.
+    cutoff = datetime.now(UTC) - timedelta(days=get_settings().job_file_ttl_days)
+    child = aliased(Job)
+    result = Job.result
+    rows = db.execute(
+        select(
+            result["applied"],
+            result["ok"],
+            result["counts"],
+            # 오류 목록은 클 수 있다 — 있나 없나만(빈 목록 · 빈 값은 없는 것).
+            func.coalesce(
+                result["errors"].astext.notin_(("[]", "{}", "", "0", "false")), False
+            ),
+        ).where(
+            Job.status == "done",
+            Job.requested_by_id == viewer.id,
+            Job.kind.in_(two_step),
+            Job.finished_at >= cutoff,
+            or_(Job.kind.notin_(needs_file), Job.input_file_id.isnot(None)),
+            # **적용 작업이 이미 걸린 계획은 할 일이 아니다** — 판정은 `apply_child` 와 같은
+            # 것(`counts_as_apply`). 실패한 적용은 다시 적용할 수 있으니 할 일로 남는다.
+            ~exists().where(child.parent_id == Job.id, counts_as_apply(child)),
+        )
+    )
+    for applied, ok, counts, has_errors in rows:
+        if applied:
             continue
-        if not (result.get("counts") or result.get("ok")):
+        if not (counts or ok):
             continue
-        counts = result.get("counts") or {}
-        if counts.get("error") or result.get("errors"):
+        counts = counts or {}
+        if counts.get("error") or has_errors:
             continue
         if counts and not (counts.get("create", 0) + counts.get("update", 0)):
             continue

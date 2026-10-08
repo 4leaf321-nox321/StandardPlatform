@@ -7,16 +7,17 @@ import hmac
 import json
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, select
+from sqlalchemy import delete, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.webhooks import services
-from app.modules.webhooks.models import Webhook
+from app.modules.webhooks.models import Webhook, WebhookDelivery
 from tests.api.conftest import Signed, maintenance_counts, notifications_of, work_until
 from tests.api.test_ontology import _make_object, _make_type
 
@@ -139,8 +140,20 @@ def test_거절된_저장은_알리지_않는다(
     assert inbox == []
 
 
+def _later(db: Session, hook: dict[str, Any]) -> None:
+    """시계를 돌리는 대신 — 그 웹훅의 마지막 시도를 재시도 간격보다 앞으로 민다."""
+    db.execute(
+        update(Webhook)
+        .where(Webhook.id == uuid.UUID(hook["id"]))
+        .values(
+            last_at=datetime.now(UTC) - timedelta(seconds=services.RETRY_AFTER_SECONDS + 1)
+        )
+    )
+    db.commit()
+
+
 def test_실패는_남아서_다시_보낸다(
-    client: TestClient, admin: Signed, inbox: list[httpx.Request]
+    client: TestClient, admin: Signed, inbox: list[httpx.Request], db: Session
 ) -> None:
     hook = _hook(client, admin, url="http://receiver.local/fail")
     part = _make_type(client, admin, label="부품")
@@ -155,8 +168,15 @@ def test_실패는_남아서_다시_보낸다(
     assert one["status"] == "pending" and one["attempts"] == 1
     assert one["response_code"] == 500 and one["last_error"] == "boom"
 
-    # 남은 것은 다음 기회에 — 세 번까지. 그 뒤엔 failed 로 두고 사람이 다시 보낸다.
+    # **곧바로는 다시 안 보낸다** — 새 이벤트가 보내기를 깨울 때마다 다시 보내면 세 번을 몇
+    # 초 안에 다 쓰고 포기했다(2026-10-08).
     services.dispatcher.deliver_pending()
+    assert len(inbox) == 1
+
+    # 간격이 지나면 다음 기회에 — 세 번까지. 그 뒤엔 failed 로 두고 사람이 다시 보낸다.
+    _later(db, hook)
+    services.dispatcher.deliver_pending()
+    _later(db, hook)
     services.dispatcher.deliver_pending()
     assert len(inbox) == 3
     again = client.get(f"/api/webhooks/{hook['id']}/deliveries", headers=admin.headers).json()[
@@ -164,7 +184,7 @@ def test_실패는_남아서_다시_보낸다(
     ]
     assert again["status"] == "failed" and again["attempts"] == 3
 
-    # 받는 쪽을 고친 뒤 「다시 보내기」.
+    # 받는 쪽을 고친 뒤 「다시 보내기」 — 사람이 누른 것은 간격을 안 기다린다(방금 실패했어도).
     client.patch(
         f"/api/webhooks/{hook['id']}",
         json={"url": "http://receiver.local/hook"},
@@ -177,7 +197,11 @@ def test_실패는_남아서_다시_보낸다(
 
 
 def test_포기하면_홈과_종이_말한다(
-    client: TestClient, admin: Signed, member: Signed, inbox: list[httpx.Request]
+    client: TestClient,
+    admin: Signed,
+    member: Signed,
+    inbox: list[httpx.Request],
+    db: Session,
 ) -> None:
     """**받는 쪽이 조용히 못 받고 있는 상태**를 아무도 모르면 안 된다 — 잘 가는 동안에는
     웹훅 화면을 아무도 안 연다."""
@@ -187,10 +211,12 @@ def test_포기하면_홈과_종이_말한다(
     before = len(notifications_of(client, admin, "webhook.failed"))
 
     _make_object(client, admin, part, label="너트")
+    _later(db, hook)
     services.dispatcher.deliver_pending()
     # 아직 포기 전(세 번째에 포기) — 알리지 않는다.
     assert len(notifications_of(client, admin, "webhook.failed")) == before
 
+    _later(db, hook)
     services.dispatcher.deliver_pending()
     after = notifications_of(client, admin, "webhook.failed")
     assert len(after) == before + 1
@@ -275,7 +301,6 @@ def test_밀린_것은_워커가_다시_집는다(client: TestClient, admin: Sig
     사라져 밀린 것이 **다음 이벤트가 올 때까지** 안 나갔다. 이제 워커가 표를 보고 다시
     넣는다."""
     from app.modules.jobs import services as job_services
-    from app.modules.webhooks.models import WebhookDelivery
     from app.worker import Worker
 
     hook = _hook(client, admin)
@@ -322,3 +347,52 @@ def test_코어_타입만_받는_웹훅은_목록이_아니라_규칙을_따라�
     client.patch(f"/api/ontology/types/{opened}", json={"core": False}, headers=admin.headers)
     _make_object(client, admin, opened, label="다시 안 가는 것")
     assert len(inbox) == 2
+
+
+def test_새_이벤트가_깨워도_방금_실패한_전송은_간격을_지킨다(
+    client: TestClient, admin: Signed, inbox: list[httpx.Request]
+) -> None:
+    """**받는 쪽이 1분 죽은 사이에 포기하던 자리다**(2026-10-08). 이벤트마다 보내기가 깨는데,
+    그때마다 실패한 것까지 곧바로 다시 보내 세 번을 몇 초 안에 다 썼다. 새 것은 곧장 가고,
+    방금 실패한 것은 `RETRY_AFTER_SECONDS` 를 기다린다."""
+    hook = _hook(client, admin, url="http://receiver.local/fail")
+    part = _make_type(client, admin, label="부품")
+    inbox.clear()
+    for label in ("볼트", "너트", "와셔"):
+        _make_object(client, admin, part, label=label)
+    assert len(inbox) == 3  # 새 것마다 첫 시도 한 번씩 — 다시 보낸 것은 없다
+    rows = client.get(f"/api/webhooks/{hook['id']}/deliveries", headers=admin.headers).json()
+    assert [(one["status"], one["attempts"]) for one in rows] == [("pending", 1)] * 3
+
+
+def test_꺼_둔_웹훅의_밀린_전송은_기다렸다가_다시_켜면_나간다(
+    client: TestClient, admin: Signed, inbox: list[httpx.Request], db: Session
+) -> None:
+    """끄면 새 이벤트를 안 쌓는데 이미 쌓인 것은 그대로 나갔다 — 「사용 안 함」 이 반만
+    들었다(2026-10-08). 켜 있을 때 생긴 이벤트이므로 지우지 않고 기다렸다가 다시 켜면 낸다."""
+    hook = _hook(client, admin)
+    off = client.patch(
+        f"/api/webhooks/{hook['id']}", json={"is_active": False}, headers=admin.headers
+    )
+    assert off.status_code == 200, off.text
+    # 끄기 전에 쌓여 아직 못 나간 전송 하나.
+    db.add(
+        WebhookDelivery(
+            webhook_id=uuid.UUID(hook["id"]), event="object.create", payload={"x": 1}
+        )
+    )
+    db.commit()
+    inbox.clear()
+
+    services.dispatcher.deliver_pending()
+    assert inbox == []
+    # 워커도 그것 때문에 보내기 작업을 1분마다 넣지 않는다 — 기다리는 것이지 밀린 것이 아니다.
+    assert services.pending_count(db) == 0
+
+    on = client.patch(
+        f"/api/webhooks/{hook['id']}", json={"is_active": True}, headers=admin.headers
+    )
+    assert on.status_code == 200, on.text
+    assert len(inbox) == 1
+    rows = client.get(f"/api/webhooks/{hook['id']}/deliveries", headers=admin.headers).json()
+    assert [one["status"] for one in rows] == ["ok"]

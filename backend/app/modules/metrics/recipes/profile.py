@@ -163,7 +163,8 @@ def run(
                 others=max(0, len(ranked) - room),
             )
         )
-    names = axes.labels(db, target.axis, [value])
+    # 요약할 값은 요청이 준 것 — 못 보는 객체면 이름을 풀지 않는다.
+    names = common.given_labels(db, user, built, dim, [value])
     head = common.header(
         db,
         user,
@@ -181,7 +182,7 @@ def run(
         dim=dim,
         dim_label=target.axis.label,
         value=value,
-        value_label=names.get(value, value),
+        value_label=query.label_of(names, dim, value),
         count=count,
         total=total,
         share=count / total if total else None,

@@ -31,6 +31,8 @@ GUIDE_VERSION: 2026-10-05h
 | **비율 · 추이 · 코호트** — 「판매월별 누적 인입률」 「생산월 x 공장별 건수」 | `metric_list` → `metric_query(slug, shape=)` | **미리 세어 둔 값**이다 — `computed_at` · `stale` · `overlap` 을 함께 말한다. 없으면 `metric_define(apply=false)` 로 제안 |
 | **세어 둔 수에서 추론** — 「B10 수명」 「전작보다 나빠졌나」 「관리도 신호」 「언제 바뀌었나」 「몰려 있나」 | `metric_list` 의 `analyses` → `metric_analyze(slug, recipe, options=)` | **셀을 받아 직접 계산하지 않는다.** `caveats` 를 그대로 전하고, `unreachable` 인 B수명은 값이 없다 — `get_guide(topic="metrics")` 의 「분석」 |
 | **요즘 무엇이 울렸나** — 「내 경보」 「새로 나빠진 모델 있나」 | `metric_alerts(slug=)` | 발생은 「그때 처음 본 결론」 — 지금도 그런지는 `metric_analyze` 로. 만들기는 화면에서 |
+| 지표 값이 이상하다 · 언제 셌나 · 왜 그대로인가 | `metric_runs(slug)` → (시스템 관리자) `metric_recompute(slug)` | 실패한 계산은 옛 값을 두고 이유를 남긴다. 평소에는 타이머가 바뀐 기간만 센다 — `mode` · `note` |
+| 지표를 **부서 홈**에 올리기 · 내리기 | `metric_home(slug, workspace_slug, split=)` · `remove=true` | **그 부서 관리자만.** 홈은 부서 모두가 보는 자리 — 사용자가 올리자고 한 것만 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」 · 「모델의 과제의 프로젝트별 건수」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 두 걸음까지 준다. 주소를 추측하지 않는다 |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | 긴 글 칸은 6,000자씩 — `clipped` 면 `text_from` 으로 이어 읽는다 |
 | **보고서에 묻기** — 「모델 X 의 강성 해석 보고서」 「지난 분기 CAE 보고서 요지」 | `get_guide(topic="reports")` → `objects_list(<보고서 타입>, q=)` → `object_get` | 목록의 본문은 앞부분뿐. 답에 원문 주소(`url`)를 붙이고, 「원본에서 내려감」 이면 그렇게 말한다 |
@@ -42,6 +44,8 @@ GUIDE_VERSION: 2026-10-05h
 | 어느 타입에서 어디로 갈 수 있나 | `graph_overview` | 관계 이름을 짐작하지 않는다 — 질의를 쓰기 전에 |
 | 지우기·합치기 전에 무엇이 걸렸나 | `object_references` | 남의 부서 것은 수만 |
 | 어셈블리 총 무게처럼 「아래 전부」 의 합 | `object_rollup` | `missing` 을 함께 말한다 |
+| **요즘 챙길 것** — 승인 대기 · 실패한 작업 · 멎은 지표 · 동기화 실패 | `server_maintenance` | 홈의 「남은 일」 과 같다. 보는 사람의 권한대로 |
+| 내 알림 — 지켜보는 것이 바뀜 · 경보 · 내 작업이 끝남 | `notifications(unread_only=)` | 읽음 처리는 안 한다(사람이 화면에서 본 것으로 둔다) |
 | 무엇이 나빠지고 있나(필수값·고아·끊긴 참조·중복) | `quality_report` | 볼 수 있는 것만 |
 | 객체 하나 만들기 | `object_create` | 정의에 없는 속성 키는 거절된다 |
 | 객체 고치기 | `object_update` | **보낸 키만** 병합. 비우려면 `null`. 식별자 · 상태 · 유효 연도 · 별칭도 |
@@ -57,8 +61,10 @@ GUIDE_VERSION: 2026-10-05h
 | 잘못 이은 관계 | `relation_update`(근거 · 속성) · `relation_remove`(끊기) | 양끝 · 종류는 못 바꾼다 — 끊고 새로 잇는다. 확실하지 않으면 끊지 말고 사람에게 |
 | 관계 여러 줄 한 번에 | `relations_import(mode=)` → 사람 확인 → `job_apply` | 이미 이어진 건 그대로. `replace`·`replace_type` 은 **파일에 없는 선을 끊는다** |
 | 기계가 붙인 별칭 검수 | `aliases_pending` → 사람 확인 → `aliases_review` | **스스로 승인하지 않는다** |
-| 뒤에서 도는 작업이 어디까지 됐나 | `job_status(job_id)` · `jobs_list()` | 워커가 없으면 영영 대기 — `jobs_list` 의 `workers` 로 안다 |
-| 바깥 시스템(OData·REST·파일)에서 읽어 채우기 | `datasources_list` → `datasource_sync(apply=false)` → `apply=true` | 정의는 화면에서. 오류 행이 있으면 아무것도 안 넣음 |
+| 뒤에서 도는 작업이 어디까지 됐나 | `job_status(job_id)` · `jobs_list(status=, kind=, mine=)` | 워커가 없으면 영영 대기 — `jobs_list` 의 `workers` 로 안다. 「어젯밤 동기화 실패?」 는 `kind="datasource_sync", status="failed"` |
+| 잘못 넣은 작업 멈추기 | `job_cancel(job_id)` | **사용자가 멈추라고 한 것만.** 그때까지 커밋한 것은 남는다 |
+| 바깥 시스템(OData·REST·파일)에서 읽어 채우기 | `datasources_list` → `datasource_sync(apply=false)` → `apply=true` | 정의는 화면에서. 오류 행이 있으면 아무것도 안 넣음. 지난 결과 · 실패 이유는 `datasource_runs`, 칸 대응 확인은 `datasource_preview` |
+| 첨부 저장소의 고아 파일 | `filestore_gc()` → 사람 확인 → `job_apply` | **시스템 관리자만.** 지운 파일은 못 되살린다 — 워커가 매일 스스로도 지운다 |
 | **이 설치에만 있는 기능**(디지털 트윈 역량 등) | `extensions_schema` → `extension_call` | 경로를 짐작하지 않는다. 쓰기는 그 확장의 범위를 가진 토큰만 |
 | 여러 타입을 건너뛰어 잇는 물음 · 역관계로 거슬러 세기 | `rdf_schema` → `rdf_query` | **먼저 `objects_summary` 로 되는 물음인지 본다.** 질의어는 그것으로 안 되는 자리에 |
 
@@ -552,13 +558,14 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   것이 생긴 객체, 합치기(참조를 옮긴 것이라 손으로 되돌린다). 「되돌렸습니다」 만 말하면
   남은 것을 아무도 모른다.
 
-### 작업 셋 — `job_status` · `job_apply` · `jobs_list`
+### 작업 넷 — `job_status` · `job_apply` · `jobs_list` · `job_cancel`
 
 | | |
 |---|---|
-| `job_status(job_id, wait_seconds=20)` | 어디까지 됐나. 끝나기를 잠깐 기다렸다가 준다 |
+| `job_status(job_id, wait_seconds=20)` | 어디까지 됐나. 끝나기를 잠깐 기다렸다가 준다. **`next` 가 다음 할 일**을 말한다 — 종류마다 다르다(`job_apply` 로 적용하는 계획 · `datasource_sync(apply=true)` 로 적용하는 계획 · 파일을 내는 작업 · 그냥 끝나는 작업) |
 | `job_apply(job_id)` | 계획을 **사람이 확인한 뒤** 적용. 사용자의 판단 없이 부르지 않는다 |
-| `jobs_list()` | 내 작업 최근 것부터 + 워커가 살아 있나. `workers[].alive` 가 전부 거짓이면 작업은 영영 대기다 — 운영자에게 알린다 |
+| `jobs_list(status=, kind=, mine=)` | 작업 최근 것부터 + 워커가 살아 있나. `workers[].alive` 가 전부 거짓이면 작업은 영영 대기다 — 운영자에게 알린다. 타이머가 넣은 작업에 파묻히면 `kind` · `mine` 으로 거른다 |
+| `job_cancel(job_id)` | 멈춘다 — 기다리는 것은 바로, 도는 것은 단계 사이에서. 시킨 사람만(시스템 관리자는 모두) |
 
 <!--@ relations -->
 ## 객체 잇기
@@ -937,9 +944,19 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
    - `cohort`: 코호트 x 경과 행렬. `cumulative=true` 면 경과순 누적(분자만 누적 ÷ 분모).
    `filters` 는 `{기준 이름: 값}` — 값은 응답의 `dims` 값(참조는 id). 사람이 이름으로 말하면
    `object_resolve` 로 id 를 먼저 푼다.
+   - `dim_values`: 기준 하나(`dims=[이름]`)의 값 · 이름 · 건수 — `filters` 에 넣을 값을 찾을 때
+     (`search` 로 이름 거르기).
 3. 지표가 없으면 `objects_summary`(기준 하나 · 세부 기준 하나 · 그때그때 센다)로 되는 물음인지
    보고, 그래도 안 되면 `metric_define(apply=false)` 로 **정의를 제안**한다 — 계획(오류 · 경고 ·
    어림한 셀 수)을 사람에게 보여 주고, 저장은 사람이 판단한 뒤 `apply=true`. **시스템 관리자만.**
+   `interval_hours` 는 타이머 주기 — `0` 손으로만 · 1 ~ 23 그 시간마다 · `24` 매일 밤 · `48` …
+   N일마다 밤. 고칠 때 비우면 그대로 둔다.
+
+**언제 셌나 · 어떻게 셌나.** 타이머 · 적재 뒤의 계산은 **되면 바뀐 기간만** 다시 센다 — 정의를
+바꾼 뒤 첫 계산 · 일주일마다 · 다른 객체 너머(참조 · 관계)가 바뀌었을 때 · 감사 없이 바뀐
+기록이 있을 때는 전부. `metric_runs(slug)` 가 실행마다 방식(`mode`) · 다시 센 기간(`periods`) ·
+전부였으면 그 까닭(`note`) · 실패 이유를 준다. 값이 의심스러우면 `metric_recompute(slug)`(시스템
+관리자 — 늘 전부 센다). 부서 홈에 추이 그림으로 올리는 것은 `metric_home`(그 부서 관리자).
 
 **조건 비율(`measure="share"`)** — 같은 기록 중 조건에 맞는 몫. 셀의 `value` 가 조건 건수, `count` 가
 전체, `ratio` 가 %(분모 지표 없이). 「몫이 다른가」 는 `groups`(어느 기준으로든 — 집단마다 분모를 스스로

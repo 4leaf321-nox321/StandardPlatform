@@ -208,15 +208,39 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
  * 나는데, 그 오류는 새 탭에서 나므로 **화면에는 아무 표시도 안 뜬다** — 사용자는
  * 아무 일도 안 일어난 것처럼 본다.
  */
+/**
+ * 서버가 붙인 파일 이름(`Content-Disposition`) — UTF-8(`filename*`)을 먼저, 없으면 따옴표 이름.
+ * 첨부처럼 ASCII 자리에 `download` 를 두는 응답은 그것을 이름으로 안 쓴다.
+ */
+export function filenameOf(header: string | null): string | null {
+  if (!header) return null
+  const encoded = /filename\*\s*=\s*UTF-8''([^;]+)/i.exec(header)
+  if (encoded) {
+    try {
+      return decodeURIComponent(encoded[1].trim())
+    } catch {
+      // 깨진 인코딩이면 아래 따옴표 이름으로
+    }
+  }
+  const plain = /filename\s*=\s*"([^"]*)"/i.exec(header)
+  const name = plain?.[1]?.trim()
+  return name && name !== 'download' ? name : null
+}
+
 export async function downloadFile(path: string, filename: string): Promise<void> {
-  const response = await send(path)
+  let response = await send(path)
+  // 받는 사이 access 가 만료될 수 있다 — 그림(`fetchBlob`)과 같이 한 번 갱신하고 다시.
+  if (response.status === 401 && (await tryRefresh())) response = await send(path)
   if (!response.ok) throw await parseError(response)
 
+  // **서버가 준 이름을 쓴다** — 부르는 쪽의 이름은 어림이다. 큰 내보내기는 zip 이 되고 작업의
+  // 결과는 xlsx · json 인데, 늘 `.csv` 로 받아 열리지 않았다(2026-10-08).
+  const named = filenameOf(response.headers.get('Content-Disposition'))
   const url = URL.createObjectURL(await response.blob())
   try {
     const anchor = document.createElement('a')
     anchor.href = url
-    anchor.download = filename
+    anchor.download = named ?? filename
     anchor.click()
   } finally {
     // 즉시 해제하면 저장이 시작되기 전에 사라지는 브라우저가 있다.

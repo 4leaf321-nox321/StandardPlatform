@@ -145,6 +145,13 @@ class MetricRunOut(BaseModel):
     cells: int
     error: str | None
     stats: dict[str, Any]
+    mode: str = "full"
+    """`full` 전부 다시 셌다 · `incremental` 바뀐 기간만(셀은 앞선 전량 실행의 것을 이어
+    쓴다)."""
+    periods: list[str | None] | None = None
+    """증분이 다시 센 기간(시작일, 날짜를 못 읽은 칸은 null)."""
+    note: str = ""
+    """전량이면 왜 전량이었나, 증분이면 바뀐 기록 수."""
 
 
 # --- 읽기 ---------------------------------------------------------------------------
@@ -373,3 +380,21 @@ class AlertEventOut(BaseModel):
     run_id: uuid.UUID | None
     created_at: datetime
     link: str
+
+
+class HomePinIn(BaseModel):
+    """부서 홈에 올린다 — 이미 있으면 나눌 기준 · 자리만 고친다."""
+
+    workspace_slug: str = Field(min_length=1, max_length=SLUG_MAX)
+    split: str | None = Field(default=None, max_length=32)
+    """선을 나눌 기준 이름 — 비우면 합계 한 줄."""
+    position: int | None = Field(default=None, ge=0)
+    """그 부서 홈에서 몇 번째 자리로(뷰와 같은 줄). 비우면 지금 자리 · 새것은 맨 끝."""
+
+
+class HomePinOut(BaseModel):
+    id: uuid.UUID
+    workspace_slug: str
+    workspace_name: str
+    split: str | None
+    home_order: int

@@ -1,6 +1,7 @@
 /** 계정 관리 API — 시스템 관리자 전용. */
 
 import { api } from '@/shared/api/client'
+import type { Page } from '@/shared/api/paging'
 import type {
   Account,
   AccountSummary,
@@ -12,7 +13,18 @@ export type { Account, AccountSummary, AccountWorkspace, TemporaryPassword }
 
 export const accountApi = {
   summary: () => api.get<AccountSummary>('/accounts/summary'),
-  list: (status?: string) => api.get<Account[]>(`/accounts${status ? `?status=${status}` : ''}`),
+  /**
+   * 한 쪽씩 — **전체 수(`total`)와 함께 온다.** 맨 리스트로 받던 때는 처음 50명만 그리고
+   * 끝이었다(서버 상한, 2026-10-08). `status` 를 주면 그 상태만 세고 읽는다.
+   */
+  list: (query: { status?: string | null; limit: number; offset: number }) => {
+    const params = new URLSearchParams({
+      limit: String(query.limit),
+      offset: String(query.offset),
+    })
+    if (query.status) params.set('status', query.status)
+    return api.get<Page<Account>>(`/accounts?${params}`)
+  },
   create: (body: Record<string, unknown>) => api.post<TemporaryPassword>('/accounts', body),
   approve: (id: string, body: { workspace_slug?: string | null; role?: string }) =>
     api.post<Account>(`/accounts/${id}/approve`, body),

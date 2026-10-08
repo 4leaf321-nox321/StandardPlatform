@@ -80,6 +80,15 @@ TOOLS = {
     "job_status",
     "job_apply",
     "jobs_list",
+    "job_cancel",
+    "filestore_gc",
+    "datasource_runs",
+    "datasource_preview",
+    "server_maintenance",
+    "notifications",
+    "metric_recompute",
+    "metric_runs",
+    "metric_home",
     "extensions_schema",
     "extension_call",
     "metric_list",
@@ -866,3 +875,153 @@ def test_값마다_훑기는_by_를_주면_훑기_경로로_간다() -> None:
         "/api/metrics/cases/analysis/changes",
     ]
     assert seen[0].url.params["by"] == "symptom" and seen[0].url.params["top"] == "10"
+
+
+def test_작업의_다음_할_일은_종류마다_다르다() -> None:
+    """계획을 `job_apply` 로 적용하는 종류 · 도구를 `apply=true` 로 다시 부르는 종류 · 파일을
+    내는 종류 · 그냥 끝나는 종류 — 하나로 말하면 AI 가 없는 길(내보내기를 job_apply)을 탄다."""
+    view = server._job_view
+    plan = {"applied": False, "counts": {"create": 1}}
+    assert (
+        "job_apply"
+        in view({"id": "a", "kind": "objects_import", "status": "done", "result": plan})[
+            "next"
+        ]
+    )
+    sync = view({"id": "b", "kind": "datasource_sync", "status": "done", "result": plan})
+    assert "datasource_sync(slug, apply=true)" in sync["next"] and "안 된다" in sync["next"]
+    gc = view(
+        {
+            "id": "c",
+            "kind": "filestore_gc",
+            "status": "done",
+            "result": {"applied": False, "ok": True},
+        }
+    )
+    assert "job_apply" in gc["next"]
+    nothing = view(
+        {
+            "id": "c2",
+            "kind": "filestore_gc",
+            "status": "done",
+            "result": {"applied": False, "ok": False, "summary": "지울 것이 없습니다."},
+        }
+    )
+    assert "적용할 것이 없는" in nothing["next"] and "job_apply" not in nothing["next"]
+    export = view(
+        {
+            "id": "d",
+            "kind": "objects_export",
+            "status": "done",
+            "result": {"format": "xlsx"},
+            "has_output": True,
+        }
+    )
+    assert "job_apply" not in export["next"] and "파일" in export["next"]
+    metrics = view(
+        {"id": "e", "kind": "metrics_recompute", "status": "done", "result": {"applied": True}}
+    )
+    assert metrics["next"].startswith("적용됐다")
+    done = view(
+        {
+            "id": "f",
+            "kind": "objects_import",
+            "status": "done",
+            "result": plan,
+            "applied_by": "g",
+        }
+    )
+    assert done["applied_by"] == "g" and "이미 적용" in done["next"]
+
+
+def test_작업_목록은_거르기를_그대로_건네고_취소는_그_작업으로() -> None:
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 0}))
+    asyncio.run(
+        server.jobs_list(_ctx("Bearer t"), status="failed", kind="datasource_sync", mine=True)
+    )
+    assert dict(seen[0].url.params) == {
+        "limit": "20",
+        "status": "failed",
+        "kind": "datasource_sync",
+        "mine": "true",
+    }
+    seen = _serve(
+        lambda _r: httpx.Response(200, json={"id": "j1", "kind": "x", "status": "cancelled"})
+    )
+    got = asyncio.run(server.job_cancel(_ctx("Bearer t"), "j1"))
+    assert seen[0].method == "POST" and seen[0].url.path == "/api/jobs/j1/cancel"
+    assert got["status"] == "cancelled"
+
+
+def test_고아_파일_정리는_계획_작업만_넣는다() -> None:
+    seen = _serve(
+        lambda _r: httpx.Response(
+            202,
+            json={
+                "id": "g1",
+                "kind": "filestore_gc",
+                "status": "done",
+                "result": {"applied": False, "ok": True},
+            },
+        )
+    )
+    got = asyncio.run(server.filestore_gc(_ctx("Bearer t")))
+    assert seen[0].url.path == "/api/jobs" and b"filestore_gc" in seen[0].content
+    assert "job_apply" in got["next"]
+
+
+def test_지표_도구는_주기를_안_주면_안_보내고_홈과_기록은_그_경로로() -> None:
+    """고칠 때 주기를 안 주면 **그대로 둔다** — 예전에는 늘 24 를 보내 손으로 정한 주기를
+    덮었다."""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET" and request.url.path == "/api/metrics/m1":
+            return httpx.Response(200, json={"slug": "m1"})
+        return httpx.Response(200, json={"metric": {"slug": "m1"}, "job": None})
+
+    seen = _serve(respond)
+    asyncio.run(
+        server.metric_define(
+            _ctx("Bearer t"), "m1", "지표", "case", {"measure": "count"}, apply=True
+        )
+    )
+    body = json.loads(seen[-1].content)
+    assert (
+        seen[-1].method == "PATCH" and "interval_hours" not in body and "is_active" not in body
+    )
+    asyncio.run(
+        server.metric_define(
+            _ctx("Bearer t"),
+            "m1",
+            "지표",
+            "case",
+            {"measure": "count"},
+            apply=True,
+            interval_hours=6,
+            is_active=False,
+        )
+    )
+    body = json.loads(seen[-1].content)
+    assert body["interval_hours"] == 6 and body["is_active"] is False
+
+    seen = _serve(lambda _r: httpx.Response(200, json=[]))
+    ctx = _ctx("Bearer t")
+    asyncio.run(server.metric_runs(ctx, "m1"))
+    asyncio.run(server.metric_home(ctx, "m1"))
+    asyncio.run(server.metric_home(ctx, "m1", "rnd", split="symptom"))
+    asyncio.run(server.metric_home(ctx, "m1", "rnd", remove=True))
+    asyncio.run(
+        server.metric_query(ctx, "m1", shape="dim_values", dims=["symptom"], search="소")
+    )
+    assert [(one.method, one.url.path) for one in seen] == [
+        ("GET", "/api/metrics/m1/runs"),
+        ("GET", "/api/metrics/m1/home"),
+        ("PUT", "/api/metrics/m1/home"),
+        ("DELETE", "/api/metrics/m1/home"),
+        ("GET", "/api/metrics/m1/dims"),
+    ]
+    assert json.loads(seen[2].content) == {"workspace_slug": "rnd", "split": "symptom"}
+    assert dict(seen[3].url.params) == {"workspace": "rnd"}
+    assert dict(seen[4].url.params) == {"name": "symptom", "q": "소"}
+    wrong = asyncio.run(server.metric_query(ctx, "m1", shape="dim_values", dims=["a", "b"]))
+    assert "기준 하나" in wrong["error"]

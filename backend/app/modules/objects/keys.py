@@ -16,13 +16,17 @@ from app.modules.objects.models import ObjectInstance
 MAX_HISTORY = 10
 
 
-def remember(row: ObjectInstance, old_key: str) -> None:
-    """옛 식별자를 이력에 붙인다 — 오래된 것부터, 같은 것은 한 번만."""
+def remember(row: ObjectInstance, old_key: str, new_key: str | None) -> None:
+    """옛 식별자를 이력에 붙인다 — 오래된 것부터, 같은 것은 한 번만.
+
+    ⚠️ **새 키를 받는다.** 부르는 쪽은 `row.key` 를 바꾸기 **전에** 부른다 — 그때 `row.key` 는
+       아직 옛 키라, 그것과 견주면 방금 붙인 옛 키가 곧바로 빠진다(그렇게 이력이 늘 비어
+       있었다 — 2026-10-08)."""
     history = [one for one in (row.previous_keys or []) if one and one != old_key]
     history.append(old_key)
     # 새 값이 이력 안에 있었으면(되돌린 경우) 그것은 뺀다 — 지금 키가 이력에 있으면
     # 받는 쪽이 자기 것을 자기에게 옮기려 한다.
-    row.previous_keys = [one for one in history if one != row.key][-MAX_HISTORY:]
+    row.previous_keys = [one for one in history if one != new_key][-MAX_HISTORY:]
 
 
 def latest(row: ObjectInstance) -> str | None:

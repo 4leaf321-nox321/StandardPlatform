@@ -22,7 +22,6 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Any, Protocol
 
-from app.modules.ontology.models import PropertyDef
 from app.modules.ontology.services import InvalidValue
 from app.shared.errors import code
 
@@ -57,7 +56,19 @@ class FieldDef(Protocol):
     def data_type(self) -> str: ...
 
 
+def _require_shape(value: Any, kind: type, *, what: str) -> None:
+    """**모양부터 본다** — 표 자리에 숫자가, 목록 자리에 글자가 오면 아래 검사가 `set(1)` ·
+    `for … in 3` 에서 터져 500 이 났다(2026-10-08). 화면 · 정의 파일 · 묶음이 모두 이리 온다.
+    """
+    if not isinstance(value, kind):
+        said = "표(객체)" if kind is dict else "목록"
+        raise InvalidValue(
+            code("ONTOLOGY", 89), f"{what}은(는) {said}여야 합니다: {type(value).__name__}"
+        )
+
+
 def _reject_unknown(spec: dict[str, Any], allowed: set[str], *, what: str) -> None:
+    _require_shape(spec, dict, what=what)
     unknown = sorted(set(spec) - allowed)
     if unknown:
         raise InvalidValue(
@@ -109,6 +120,13 @@ def validate_list_view(
     _reject_unknown(spec, allowed, what="목록 화면")
     keys = {d.key for d in defs}
 
+    for name, what in (
+        ("columns", "목록의 열"),
+        ("search", "검색 대상"),
+        ("filters", "거르기"),
+    ):
+        if spec.get(name):
+            _require_shape(spec[name], list, what=what)
     for field in spec.get("columns") or []:
         _require_field(field, keys, what="목록의 열", extra=extra_fields)
     for field in spec.get("search") or []:
@@ -140,6 +158,7 @@ def validate_list_view(
 
     # 롤업 — 트리가 있어야 뜻이 있고, 숫자 칸만 모은다. 글자를 더하면 그 수는 아무 뜻도 없다.
     rollups = spec.get("rollups") or []
+    _require_shape(rollups, list, what="롤업")
     if rollups and not tree:
         raise InvalidValue(
             code("ONTOLOGY", 60),
@@ -164,8 +183,16 @@ def validate_list_view(
     return spec
 
 
+class SectionedField(FieldDef, Protocol):
+    """폼 · 상세 검증이 읽는 것 — 키 · 종류에 더해 **묶음**. 정의 가져오기의 계획은 아직 안
+    적은 속성으로 검증하므로 `PropertyDef` 만 받으면 안 된다."""
+
+    @property
+    def section(self) -> str: ...
+
+
 def validate_form_view(
-    spec: dict[str, Any], defs: list[PropertyDef], *, what: str
+    spec: dict[str, Any], defs: Sequence[SectionedField], *, what: str
 ) -> dict[str, Any]:
     """폼·상세 스펙. **묶음의 소속은 여기서 안 정한다** — 속성이 들고 있다."""
     if not spec:
@@ -174,7 +201,9 @@ def validate_form_view(
     known_sections = {d.section for d in defs if d.section}
 
     seen: set[str] = set()
-    for section in spec.get("sections") or []:
+    sections = spec.get("sections") or []
+    _require_shape(sections, list, what=f"{what}의 묶음")
+    for section in sections:
         if not isinstance(section, dict):
             raise InvalidValue(code("ONTOLOGY", 57), f"{what}: 묶음은 표여야 합니다.")
         _reject_unknown(section, SECTION_KEYS, what=f"{what}의 묶음")
@@ -222,6 +251,35 @@ def prune_field(spec: dict[str, Any], key: str) -> dict[str, Any]:
     sort = out.get("sort")
     if isinstance(sort, dict) and sort.get("field") == field:
         out.pop("sort")
+    return out
+
+
+def prune_sections(spec: dict[str, Any], defs: Sequence[SectionedField]) -> dict[str, Any]:
+    """속성이 하나도 안 남은 묶음을 폼 · 상세에서 걷어낸다 — 속성을 지웠거나 다른 묶음으로
+    옮겼을 때.
+
+    검증은 빈 묶음을 거절한다(빈 제목은 「뭔가 안 나온다」 로 읽힌다). 그런데 속성 쪽에서
+    묶음이 비면 뷰에는 그 이름이 남아, **그 뒤 타입의 이름만 고쳐도 거절됐다** — 화면의 타입
+    수정 창은 폼 · 상세를 늘 함께 보낸다(2026-10-08). 남은 묶음이 없으면 `sections` 를 뺀다.
+    """
+    sections = spec.get("sections") if isinstance(spec, dict) else None
+    if not isinstance(sections, list):
+        return spec
+    known = {d.section for d in defs if d.section}
+    kept = [
+        one
+        for one in sections
+        if not isinstance(one, dict)
+        or not isinstance(one.get("name"), str)
+        or one["name"] in known
+    ]
+    if len(kept) == len(sections):
+        return spec
+    out = dict(spec)
+    if kept:
+        out["sections"] = kept
+    else:
+        out.pop("sections")
     return out
 
 

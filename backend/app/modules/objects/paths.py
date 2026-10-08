@@ -42,7 +42,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from sqlalchemy import String, cast, select, union_all
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
 from app.modules.objects import refedges, system
@@ -218,7 +218,12 @@ class Resolver:
         return self._kinds
 
     def seen(self, entity: Any) -> list[Any]:
-        """들어오는 참조로 이은 객체에 걸 가시성 — 보는 사람이 없거나 시스템 관리자면 없다."""
+        """걸음으로 이은 객체에 걸 가시성 — 보는 사람이 없거나 시스템 관리자면 없다.
+
+        **모든 걸음이 같은 규칙이다** — 들어오는 참조(ADR 0017)만 걸려 있던 때는 관계 걸음
+        (`in.<관계>`)으로 묶으면 남의 부서 객체 이름이 막대 이름으로 나왔고, 참조 칸 너머의
+        칸(`ref.<칸>.<칸>`)으로 거르면 못 보는 객체의 값을 하나씩 떠볼 수 있었다
+        (2026-10-08)."""
         if self.viewer is None or self.viewer.is_system_admin:
             return []
         return [visible_owner_clause(self.viewer, entity.owner_workspace_id)]
@@ -482,13 +487,23 @@ class Resolver:
         if relation is None:  # pragma: no cover - 참조 칸 걸음에는 부르지 않는다
             raise ValueError("관계가 아닌 걸음입니다")
         mine = self.scope.type_slugs
+
+        def between(me: Any, other: Any) -> Any:
+            """객체끼리의 선 — 저쪽 끝은 **보는 사람이 볼 수 있는 객체만**(`seen`). 원 표와
+            이은 선의 저쪽은 부서 · 계정이라 부서 소유가 아니다(늘 보인다)."""
+            stmt = select(me.label("me"), cast(other, String).label("other")).where(
+                ObjectRelation.relation == relation.slug
+            )
+            end = aliased(ObjectInstance)
+            visible = self.seen(end)
+            if visible:
+                stmt = stmt.join(end, end.id == other).where(*visible)
+            return stmt
+
         parts: list[Any] = []
         if hop.kind == "out" or not relation.directed:
             parts += [
-                select(
-                    ObjectRelation.src_object_id.label("me"),
-                    cast(ObjectRelation.dst_object_id, String).label("other"),
-                ).where(ObjectRelation.relation == relation.slug),
+                between(ObjectRelation.src_object_id, ObjectRelation.dst_object_id),
                 select(
                     ObjectLink.src_id.label("me"),
                     cast(ObjectLink.dst_id, String).label("other"),
@@ -496,10 +511,7 @@ class Resolver:
             ]
         if hop.kind == "in" or not relation.directed:
             parts += [
-                select(
-                    ObjectRelation.dst_object_id.label("me"),
-                    cast(ObjectRelation.src_object_id, String).label("other"),
-                ).where(ObjectRelation.relation == relation.slug),
+                between(ObjectRelation.dst_object_id, ObjectRelation.src_object_id),
                 select(
                     ObjectLink.dst_id.label("me"),
                     cast(ObjectLink.src_id, String).label("other"),
@@ -528,9 +540,15 @@ class Resolver:
                     out[str(key)] = ref.label
         rest = [one for one in wanted if str(one) not in out]
         if rest:
+            # 걸음이 이미 거르지만(`edges`), 이름표는 따로 한 번 더 — 못 보는 객체의 이름이
+            # 막대 이름으로 나가면 그것이 곧 샌 것이다.
+            hidden = system.hidden_objects(self.db, self.viewer, rest)
             for row in self.db.scalars(
                 select(ObjectInstance).where(ObjectInstance.id.in_(rest))
             ):
+                if row.id in hidden:
+                    out[str(row.id)] = system.HIDDEN_LABEL
+                    continue
                 out[str(row.id)] = (
                     row.label if row.deleted_at is None else f"{row.label} (지워짐)"
                 )

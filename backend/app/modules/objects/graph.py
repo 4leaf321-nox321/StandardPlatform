@@ -28,6 +28,7 @@ from sqlalchemy.sql import ColumnElement
 from app.modules.accounts.models import User
 from app.modules.objects import refedges
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
+from app.shared.batches import chunks
 from app.shared.permissions import visible_owner_clause
 
 ParentEnd = Literal["src", "dst"]
@@ -152,60 +153,87 @@ def ancestor_ids(
 
 
 def child_counts(
-    db: Session, *, relation: str, parent_ids: list[uuid.UUID], parent_end: ParentEnd
+    db: Session,
+    *,
+    relation: str,
+    parent_ids: list[uuid.UUID],
+    parent_end: ParentEnd,
+    user: User | None = None,
 ) -> dict[uuid.UUID, int]:
     """여러 노드의 자식 수를 **한 번에** 센다.
 
     노드마다 세면 한 단계를 펼칠 때 질의가 노드 수만큼 붙는다. 자식 수를 미리
     아는 이유는 **펼침 표시를 그릴지 정하기 위해서**다 — 없는데 펼침 화살표가
     보이면 눌러 보고서야 빈 것을 안다.
+
+    `user` 를 주면 **그 사람이 볼 수 있는 자식만** 센다 — 펼치면 안 보이는 것을 세면
+    「자식 3」 을 눌러 빈 가지가 열리고, 그 수가 남의 부서에 무엇이 있는지 말한다.
     """
     if not parent_ids:
         return {}
     if refedges.is_ref(relation):
-        return refedges.child_counts(db, relation=relation, parent_ids=parent_ids)
-    parent_col, child_col = _ends(parent_end)
-    rows = db.execute(
-        text(f"""
-            SELECT r.{parent_col} AS parent, COUNT(*) AS n
-              FROM object_relations r
-              JOIN objects o ON o.id = r.{child_col}
-             WHERE r.relation = :rel
-               AND r.{parent_col} = ANY(:parents)
-               AND o.deleted_at IS NULL
-             GROUP BY r.{parent_col}
-        """),
-        {"rel": relation, "parents": [str(one) for one in parent_ids]},
-    )
-    return {row.parent: int(row.n) for row in rows}
+        return refedges.child_counts(db, relation=relation, parent_ids=parent_ids, user=user)
+    parent_col, child_col = _columns(parent_end)
+    counts: dict[uuid.UUID, int] = {}
+    for batch in chunks(parent_ids):
+        stmt = (
+            select(parent_col, func.count())
+            .join(ObjectInstance, ObjectInstance.id == child_col)
+            .where(
+                ObjectRelation.relation == relation,
+                parent_col.in_(batch),
+                ObjectInstance.deleted_at.is_(None),
+            )
+            .group_by(parent_col)
+        )
+        if user is not None:
+            stmt = stmt.where(visible_owner_clause(user, ObjectInstance.owner_workspace_id))
+        for parent, n in db.execute(stmt):
+            counts[parent] = counts.get(parent, 0) + int(n)
+    return counts
 
 
 def parentless_ids(
-    db: Session, *, relation: str, type_id: uuid.UUID, parent_end: ParentEnd
+    db: Session,
+    *,
+    relation: str,
+    type_id: uuid.UUID,
+    parent_end: ParentEnd,
+    user: User | None = None,
 ) -> list[uuid.UUID]:
     """부모가 없는 것들 — 트리의 꼭대기 후보.
 
     자식이 있는 것은 **뿌리**이고, 자식도 없는 것은 **어디에도 안 걸린 것**이다.
     둘을 가르는 이유: 트리를 아직 안 만든 타입에서는 거의 모두가 부모가 없어,
     안 가르면 뿌리 목록이 곧 전체 목록이 된다.
+
+    `user` 를 주면 그 사람이 볼 수 있는 것만 — 「어디에도 안 걸린 것 N」 이 남의 부서 것까지
+    세면 그 수가 곧 샌 것이다.
     """
     if refedges.is_ref(relation):
-        return refedges.parentless_ids(db, relation=relation, type_id=type_id)
-    _, child_col = _ends(parent_end)
-    rows = db.execute(
-        text(f"""
-            SELECT o.id
-              FROM objects o
-             WHERE o.type_id = :type_id
-               AND o.deleted_at IS NULL
-               AND NOT EXISTS (
-                   SELECT 1 FROM object_relations r
-                    WHERE r.{child_col} = o.id AND r.relation = :rel
-               )
-        """),
-        {"type_id": str(type_id), "rel": relation},
+        return refedges.parentless_ids(db, relation=relation, type_id=type_id, user=user)
+    _, child_col = _columns(parent_end)
+    has_parent = (
+        select(ObjectRelation.id)
+        .where(child_col == ObjectInstance.id, ObjectRelation.relation == relation)
+        .exists()
     )
-    return [row.id for row in rows]
+    stmt = select(ObjectInstance.id).where(
+        ObjectInstance.type_id == type_id,
+        ObjectInstance.deleted_at.is_(None),
+        ~has_parent,
+    )
+    if user is not None:
+        stmt = stmt.where(visible_owner_clause(user, ObjectInstance.owner_workspace_id))
+    return list(db.scalars(stmt))
+
+
+def _columns(parent_end: ParentEnd) -> tuple[Any, Any]:
+    """(부모 쪽 칸, 자식 쪽 칸) — `_ends` 와 같은 뜻의 열 객체."""
+    rel = ObjectRelation
+    if parent_end == "dst":
+        return rel.dst_object_id, rel.src_object_id
+    return rel.src_object_id, rel.dst_object_id
 
 
 # --- 이웃 — 그래프 화면이 쓴다 ---------------------------------------------

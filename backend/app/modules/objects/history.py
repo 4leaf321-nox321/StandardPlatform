@@ -21,6 +21,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import uuid
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -31,7 +32,8 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.audit.models import AuditEntry
-from app.modules.objects import humanedits
+from app.modules.objects import humanedits, system
+from app.modules.objects import keys as key_history
 from app.modules.objects.models import ObjectInstance
 from app.modules.objects.services import (
     audit_state,
@@ -174,12 +176,32 @@ def _entries(db: Session, row: ObjectInstance) -> list[AuditEntry]:
     return list(db.scalars(stmt))
 
 
-def history_of(db: Session, row: ObjectInstance) -> list[Entry]:
-    """이력 — 최근 것이 앞. 값 기록마다 그 시점의 값을 붙인다."""
+def _hidden_ends(db: Session, viewer: User | None, rows: list[AuditEntry]) -> set[str]:
+    """관계 기록의 끝 중 **보는 사람이 지금 못 보는 객체**의 id.
+
+    기록은 맺을 때의 양 끝 이름(`src_label` · `dst_label`)을 박아 둔다. 그대로 내보내면 상세의
+    「관련 객체」 는 숨기는 남의 부서 객체 이름이 이력에서는 보인다(2026-10-08). 객체 표에
+    없는 끝(원 표 — 부서 · 계정)은 부서 소유가 아니라 늘 보인다."""
+    if viewer is None or viewer.is_system_admin:
+        return set()
+    ends: set[uuid.UUID] = set()
+    for entry in rows:
+        if entry.target_table == "objects":
+            continue
+        for name in ("src", "dst"):
+            with contextlib.suppress(ValueError):
+                ends.add(uuid.UUID(str((entry.changes or {}).get(name))))
+    return {str(one) for one in system.hidden_objects(db, viewer, ends)}
+
+
+def history_of(db: Session, row: ObjectInstance, *, viewer: User | None = None) -> list[Entry]:
+    """이력 — 최근 것이 앞. 값 기록마다 그 시점의 값을 붙인다. `viewer` 를 주면 관계 기록의
+    저쪽 끝이 그 사람이 못 보는 객체일 때 이름을 가린다."""
     rows = _entries(db, row)
     # 거꾸로 — 지금 값에서 출발해 각 기록의 before 를 대며 앞으로 간다.
     running: dict[str, Any] = audit_state(row)
     workspaces = _workspace_names(db, rows)
+    hidden = _hidden_ends(db, viewer, rows)
     out: list[Entry] = []
     for entry in reversed(rows):
         is_object = entry.target_table == "objects"
@@ -205,17 +227,15 @@ def history_of(db: Session, row: ObjectInstance) -> list[Entry]:
                     )
         relation = None
         if not is_object:
+            outgoing = changes.get("src") == str(row.id)
+            other_id = changes.get("dst") if outgoing else changes.get("src")
             relation = {
                 "relation": changes.get("relation"),
-                "outgoing": changes.get("src") == str(row.id),
-                "other_id": changes.get("dst")
-                if changes.get("src") == str(row.id)
-                else changes.get("src"),
-                "other_label": (
-                    changes.get("dst_label")
-                    if changes.get("src") == str(row.id)
-                    else changes.get("src_label")
-                )
+                "outgoing": outgoing,
+                "other_id": other_id,
+                "other_label": system.HIDDEN_LABEL
+                if str(other_id) in hidden
+                else (changes.get("dst_label") if outgoing else changes.get("src_label"))
                 or "",
             }
         out.append(
@@ -415,7 +435,7 @@ def restore(
         {k: v for k, v in wanted.properties.items() if k in known},
         from_ref=_retyped_from_ref(db, object_type, entry.id),
     )
-    require_refs_exist(db, defs, properties, row.properties or {})
+    require_refs_exist(db, defs, properties, row.properties or {}, user=user)
     require_unique_properties(
         db,
         object_type,
@@ -425,6 +445,9 @@ def restore(
         exclude_id=row.id,
     )
 
+    if row.key and key and row.key != key:
+        # 되돌리기로 키가 바뀌어도 옛 키를 남긴다 — 화면 · 파일로 바꿀 때와 같다.
+        key_history.remember(row, row.key, key)
     row.key = key
     row.label = wanted.label
     row.status = wanted.status

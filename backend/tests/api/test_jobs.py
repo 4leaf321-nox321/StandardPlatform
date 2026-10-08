@@ -11,6 +11,7 @@ import uuid
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import delete, func, select, update
 from sqlalchemy.orm import Session
@@ -556,6 +557,29 @@ def test_홈이_적용을_기다리는_계획을_말한다(client: TestClient, a
     assert maintenance_counts(client, admin).get("job_awaiting_apply", 0) == before
 
 
+def test_작업_화면에서_적용할_수_없는_계획은_할_일로_안_센다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """데이터 소스 동기화의 계획은 그 화면에서 다시 돌려 적용한다 — 작업 화면에는 적용이
+    없다. 세면 계획을 볼 때마다 홈의 수가 늘고 지울 길이 없었다(2026-10-08)."""
+    from app.modules.accounts.models import User
+
+    before = maintenance_counts(client, admin).get("job_awaiting_apply", 0)
+    user = db.scalar(select(User).where(User.email == admin.email))
+    assert user is not None
+    db.add(
+        Job(
+            kind="datasource_sync",
+            status="done",
+            params={"slug": "x", "apply": False},
+            result={"applied": False, "counts": {"create": 3, "update": 0, "error": 0}},
+            requested_by_id=user.id,
+        )
+    )
+    db.commit()
+    assert maintenance_counts(client, admin).get("job_awaiting_apply", 0) == before
+
+
 def test_오류가_있는_계획은_할_일로_안_센다(client: TestClient, admin: Signed) -> None:
     """적용할 수 없는 것을 「기다리는 일」 로 세면, 그 줄은 눌러도 없어지지 않는 숫자가
     된다."""
@@ -592,3 +616,277 @@ def test_서버_화면이_작업과_파일을_센다(client: TestClient, admin: 
     labels = {one["label"]: one["count"] for one in got.json()["counts"]}
     assert labels["작업"] >= 1
     assert any(name.startswith("작업 파일 (") for name in labels)
+
+
+def test_일반_작업_API_로는_전용_경로의_종류를_못_넣는다(
+    client: TestClient, admin: Signed, member: Signed
+) -> None:
+    """전용 경로(묶음 내보내기 · 동기화 · 지표 …)가 권한 · 토큰 범위를 본다 — 일반 API 로 열면
+    그것을 건너뛴다. 일반 멤버가 `bundle_export` 로 **모든 부서의 객체**를 파일로 받을 수
+    있었다(2026-10-08)."""
+    for kind in ("bundle_export", "bundle_import", "datasource_sync", "metrics_recompute"):
+        denied = client.post(
+            "/api/jobs",
+            data={"kind": kind, "params": '{"group": "x"}'},
+            headers=member.headers,
+        )
+        assert denied.status_code == 403, (kind, denied.text)
+        assert denied.json()["error"]["code"].endswith("JOBS-0025"), denied.text
+    # 시스템 관리자도 그 길로는 안 된다 — 전용 경로가 범위(정의 쓰기)를 본다.
+    denied = client.post(
+        "/api/jobs",
+        data={"kind": "bundle_import", "params": "{}"},
+        headers=admin.headers,
+    )
+    assert denied.status_code == 403
+    # 계획 없이 곧장 적용하는 길도 막는다 — 적용은 계획을 본 뒤 `/{id}/apply` 로만.
+    direct = client.post(
+        "/api/jobs",
+        data={
+            "kind": "objects_import",
+            "params": '{"type_slug": "x", "apply": true}',
+            "workspace_slug": admin.workspace,
+        },
+        files={"file": ("rows.json", b"[]", "application/json")},
+        headers=admin.headers,
+    )
+    assert direct.status_code == 422, direct.text
+    assert direct.json()["error"]["code"].endswith("JOBS-0026")
+
+
+def test_관리자_전용_종류는_워커도_다시_본다(db: Session, member: Signed) -> None:
+    """넣는 길이 몇이든 — 일반 멤버가 시킨 것으로 들어간 관리자 전용 작업은 워커가 돌리지
+    않는다."""
+    from app.modules.accounts.models import User
+
+    user = db.scalar(select(User).where(User.email == member.email))
+    assert user is not None
+    job = services.enqueue(
+        db, kind="bundle_export", params={"group": "x"}, user=user, workspace_id=None
+    )
+    db.commit()
+    outcome = services.run(job, worker_id="test")
+    assert outcome.status == "failed" and "시스템 관리자" in (outcome.error or "")
+
+
+def _detached(job_id: uuid.UUID) -> Job:
+    """워커가 손에 든 것처럼 — 세션에서 떼어 낸 작업 행."""
+    from app.database import SessionLocal
+
+    with SessionLocal() as one:
+        row = one.get(Job, job_id)
+        assert row is not None
+        one.expunge(row)
+    return row
+
+
+def _take(db: Session, job_id: uuid.UUID, worker_id: str, attempts: int = 1) -> None:
+    """`worker_id` 가 이 작업을 집은 상태로 — `claim` 은 가장 오래된 것을 집으므로(남이 남긴
+    대기 작업이 앞에 있을 수 있다) 행을 직접 고친다."""
+    now = datetime.now(UTC)
+    db.execute(
+        update(Job)
+        .where(Job.id == job_id)
+        .values(
+            status="running",
+            worker_id=worker_id,
+            attempts=attempts,
+            started_at=now,
+            heartbeat_at=now,
+        )
+    )
+    db.commit()
+
+
+def test_읽은_뒤_워커가_집었으면_취소는_표시로_남고_워커가_멈춘다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """**취소가 소리 없이 사라지던 자리다**(2026-10-08).
+
+    취소는 읽은 `queued` 를 보고 `cancelled` 를 그대로 덮었다. 읽은 직후 워커가 집었으면 워커는
+    `cancel_requested` 만 보므로 끝까지 돌고, 끝에서 `done` 으로 다시 덮었다.
+    """
+    from app.database import SessionLocal
+    from app.modules.accounts.models import User
+
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    job_id = uuid.UUID(_submit(client, admin, part, "key,label\nP-1,볼트\n")["id"])
+
+    with SessionLocal() as request_db:
+        seen = request_db.get(Job, job_id)
+        assert seen is not None and seen.status == "queued"  # 요청이 읽은 순간에는 대기
+        _take(db, job_id, "race-worker")  # 그 사이 워커가 집었다(다른 연결 · 커밋)
+        me = request_db.scalar(select(User).where(User.email == admin.email))
+        assert me is not None
+        services.request_cancel(request_db, me, seen)
+        request_db.commit()
+        assert seen.status == "running" and seen.cancel_requested
+
+    db.expire_all()
+    row = db.get(Job, job_id)
+    assert row is not None and row.status == "running" and row.cancel_requested
+    # 워커는 다음 단계 사이에서 그 표시를 보고 멈추고, 끝을 「취소됨」 으로 적는다.
+    outcome = services.run(_detached(job_id), worker_id="race-worker")
+    assert outcome.status == "cancelled"
+    services.settle(job_id, outcome, worker_id="race-worker")
+    db.expire_all()
+    final = db.get(Job, job_id)
+    assert final is not None and final.status == "cancelled"
+
+
+def test_되살려져_남이_집은_작업은_원래_워커가_끝나도_안_넣고_안_적는다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """박동이 5분 멎어 되살려지면 다른 워커가 같은 작업을 다시 집는다. 그때 원래 워커가 늦게
+    끝나면 **같은 적용이 두 번** 들어가고 결과도 두 번 적혔다 — 두 번째 쪽은 지문이 달라
+    「실패」 로 끝나, 들어간 적용이 실패로 보였다(2026-10-08)."""
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    plan = finish_job(client, admin, _submit(client, admin, part, "key,label\nP-1,볼트\n"))
+    applying = client.post(f"/api/jobs/{plan['id']}/apply", headers=admin.headers)
+    assert applying.status_code == 202, applying.text
+    apply_id = uuid.UUID(applying.json()["id"])
+
+    _take(db, apply_id, "slow-worker")
+    job = _detached(apply_id)
+    _take(db, apply_id, "other-worker", attempts=2)  # 되살려져 남이 다시 집었다
+
+    late = services.run(job, worker_id="slow-worker")
+    assert late.status == services.LOST
+    services.settle(apply_id, late, worker_id="slow-worker")
+    # 원래 워커의 적용은 롤백됐다 — 아직 아무것도 안 들어갔다.
+    assert client.get(f"/api/objects/{part}", headers=admin.headers).json()["total"] == 0
+    # 늦은 「실패」 도 남이 쥔 작업에는 안 적는다.
+    services.settle(
+        apply_id, services.Outcome("failed", error="늦은 실패"), worker_id="slow-worker"
+    )
+    db.expire_all()
+    row = db.get(Job, apply_id)
+    assert row is not None
+    assert (row.status, row.worker_id, row.error) == ("running", "other-worker", None)
+
+    # 지금 쥔 워커가 끝내면 한 번 들어가고, **본 트랜잭션과 함께** 끝이 적힌다 — 그 뒤 적기가
+    # 끊겨도(`settle` 전) 이미 `done` 이라 되살려 다시 돌리지 않는다.
+    done = services.run(job, worker_id="other-worker")
+    assert done.status == "done" and done.written
+    db.expire_all()
+    row = db.get(Job, apply_id)
+    assert row is not None and row.status == "done" and row.result is not None
+    assert row.result["applied"] is True
+    assert client.get(f"/api/objects/{part}", headers=admin.headers).json()["total"] == 1
+
+
+def test_실패한_적용은_다시_적용할_계획으로_홈에_남는다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """홈은 적용 작업이 **하나라도** 걸린 계획을 「처리됨」 으로 셌다 — 실패한 적용까지.
+    작업 화면(`applied_by`)은 그 계획에 「적용」 을 다시 띄우는데 홈에서는 사라졌다
+    (2026-10-08). 판정은 한 곳(`counts_as_apply`)이다."""
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    before = maintenance_counts(client, admin).get("job_awaiting_apply", 0)
+    planned = finish_job(client, admin, _submit(client, admin, part, "key,label\nP-1,볼트\n"))
+    applying = client.post(f"/api/jobs/{planned['id']}/apply", headers=admin.headers).json()
+    # 걸려 있는(대기) 동안은 할 일이 아니다.
+    assert maintenance_counts(client, admin).get("job_awaiting_apply", 0) == before
+
+    for status, result in (("failed", None), ("done", {"applied": False})):
+        db.execute(
+            update(Job)
+            .where(Job.id == uuid.UUID(applying["id"]))
+            .values(status=status, result=result, finished_at=datetime.now(UTC))
+        )
+        db.commit()
+        assert maintenance_counts(client, admin).get("job_awaiting_apply", 0) == before + 1
+        shown = client.get(f"/api/jobs/{planned['id']}", headers=admin.headers).json()
+        assert shown["applied_by"] is None, status
+
+
+def test_파일이_지워졌거나_오래된_계획은_할_일로_안_센다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """올린 파일은 `job_file_ttl_days` 뒤 지워지고 그 뒤엔 적용이 거절된다 — 그런 계획을 할
+    일로 세면 눌러도 안 되는 숫자가 홈에 남는다. 홈을 열 때마다 계획 전부를 결과 째 읽던
+    것도 이 창으로 줄인다."""
+    from app.config import get_settings
+
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    before = maintenance_counts(client, admin).get("job_awaiting_apply", 0)
+    gone = finish_job(client, admin, _submit(client, admin, part, "key,label\nP-1,볼트\n"))
+    old = finish_job(client, admin, _submit(client, admin, part, "key,label\nP-2,너트\n"))
+    assert maintenance_counts(client, admin)["job_awaiting_apply"] == before + 2
+
+    db.execute(update(Job).where(Job.id == uuid.UUID(gone["id"])).values(input_file_id=None))
+    long_ago = datetime.now(UTC) - timedelta(days=get_settings().job_file_ttl_days + 1)
+    db.execute(update(Job).where(Job.id == uuid.UUID(old["id"])).values(finished_at=long_ago))
+    db.commit()
+    assert maintenance_counts(client, admin).get("job_awaiting_apply", 0) == before
+
+
+def test_정지되거나_삭제된_사람의_작업은_돌리지_않는다(db: Session, member: Signed) -> None:
+    """작업은 시킨 사람의 권한으로 돈다 — 정지 · 삭제된 계정의 것을 돌리면 막은 계정이 줄에
+    남은 작업으로 계속 쓴다. 타이머가 넣은 것(시킨 사람 없음)은 해당 없다."""
+    from app.modules.accounts.models import User
+
+    user = db.scalar(select(User).where(User.email == member.email))
+    assert user is not None
+    job = services.enqueue(
+        db,
+        kind="objects_export",
+        params={"type_slug": "x", "format": "csv"},
+        user=user,
+        workspace_id=None,
+    )
+    user.status = "suspended"
+    db.commit()
+    outcome = services.run(_detached(job.id), worker_id="test")
+    assert outcome.status == "failed" and "JOBS-0027" in (outcome.error or "")
+    assert "정지되어" in (outcome.error or "")
+
+    user.status = "active"
+    user.deleted_at = datetime.now(UTC)
+    db.commit()
+    outcome = services.run(_detached(job.id), worker_id="test")
+    assert outcome.status == "failed" and "삭제되어" in (outcome.error or "")
+    job.status = "cancelled"  # 줄에 남겨 다음 시험의 워커가 집지 않게
+    db.commit()
+
+
+def test_말없이_오래_걸리는_작업도_박동은_뛴다(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """큰 지표 전량 계산은 SQL 한 문장이 5 ~ 7분이다(2,000만 건 실측) — 그동안 진행을 한 번도
+    안 적는다. 박동을 진행 보고가 겸하던 때는 그 사이 다른 서버의 워커가 「멎었다」 고 보고
+    다시 집었고, 「쥔 워커만 끝을 적는다」 아래에서는 둘 다 버려져 결국 실패로 끝날 수 있었다.
+    박동은 작업이 도는 동안 따로 뛴다(`_Beating`)."""
+    import time
+
+    from app.modules.jobs import kinds
+    from app.modules.jobs.models import Job
+
+    seen: list[datetime] = []
+
+    def quiet(work: kinds.Work) -> dict[str, Any]:
+        started = datetime.now(UTC)
+        time.sleep(0.6)  # 진행을 안 적는 긴 단계
+        from app.database import SessionLocal
+
+        with SessionLocal() as other:
+            beat = other.scalar(select(Job.heartbeat_at).where(Job.id == work.job.id))
+        assert beat is not None
+        seen.append(beat)
+        assert beat > started, "도는 동안 박동이 한 번도 안 뛰었다"
+        return {"applied": True}
+
+    name = f"quiet_{uuid.uuid4().hex[:6]}"
+    kinds.register(kinds.Kind(name, "말없는 작업", False, False, quiet, allow_system=True))
+    monkeypatch.setattr(services, "HEARTBEAT_EVERY", 0.1)
+    try:
+        job = services.enqueue(db, kind=name, params={}, user=None, workspace_id=None)
+        db.commit()
+        work_until(db, job.id)
+        db.expire_all()
+        done = db.get(Job, job.id)
+        assert done is not None
+        assert done.status == "done", (done.status, done.error)
+        assert seen
+    finally:
+        kinds._registry.pop(name, None)

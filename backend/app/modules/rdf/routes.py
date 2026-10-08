@@ -9,6 +9,9 @@ from typing import Any
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
 from rdflib import Graph
+from rdflib.plugins.sparql.algebra import translateQuery
+from rdflib.plugins.sparql.parser import expandUnicodeEscapes, parseQuery
+from rdflib.plugins.sparql.parserutils import CompValue
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -111,6 +114,19 @@ class QueryOut(BaseModel):
 _BLOCKED = ("insert", "delete", "load", "clear", "drop", "create", "service", "with")
 
 
+def _algebra_names(node: Any, seen: set[str] | None = None) -> set[str]:
+    """파싱한 질의 나무에 나오는 마디 이름 전부 — `SERVICE` 는 `ServiceGraphPattern` 이다."""
+    out = seen if seen is not None else set()
+    if isinstance(node, CompValue):
+        out.add(node.name)
+        for value in node.values():
+            _algebra_names(value, out)
+    elif isinstance(node, (list, tuple)):
+        for value in node:
+            _algebra_names(value, out)
+    return out
+
+
 @router.post("/query", response_model=QueryOut)
 def query(
     payload: QueryRequest,
@@ -123,7 +139,10 @@ def query(
     목록 · 조건 · 통계로는 한 타입 안이 쉽지만, 「코어를 건너뛰어 잇는 물음」(모델 → 과제 →
     프로젝트를 한 번에, 또는 역관계로 거슬러)은 질의어가 낫다. 읽기만 한다 — 쓰기 · 바깥 호출은
     막고, 결과는 `limit` 에서 자른다."""
-    lowered = payload.query.lower()
+    # **이스케이프를 펼친 뒤에 본다** — rdflib 은 파싱 전에 `\uXXXX` 를 펼친다. 글자 그대로
+    # 보면 `\u0053ERVICE <http://169.254.169.254/…>` 가 차단어를 지나 서버가 그 주소를
+    # 불렀다(2026-10-08). 차단어는 첫 겹이고, 아래에서 파싱한 질의의 모양을 다시 본다.
+    lowered = expandUnicodeEscapes(payload.query).lower()
     if not ("select" in lowered or "ask" in lowered):
         raise Conflict(code("RDF", 1), "SELECT 또는 ASK 질의만 됩니다.")
     for word in _BLOCKED:
@@ -140,10 +159,23 @@ def query(
             f"(상한 {export.INFER_MAX_TRIPLES}).",
         )
 
+    try:
+        prepared = translateQuery(
+            parseQuery(payload.query), initNs=dict(graph.namespace_manager.namespaces())
+        )
+    except Exception as failure:  # rdflib 의 문법 오류는 종류가 많다
+        raise Conflict(code("RDF", 4), f"질의를 이해하지 못했습니다: {failure}") from failure
+    # **파싱한 모양으로 다시 본다** — 글자 검사는 표기를 바꾸면 비켜 간다. 묻기(SELECT ·
+    # ASK)만, 그리고 바깥을 부르는 SERVICE 는 어디에도 없어야 한다.
+    if prepared.algebra.name not in ("SelectQuery", "AskQuery"):
+        raise Conflict(code("RDF", 1), "SELECT 또는 ASK 질의만 됩니다.")
+    if "ServiceGraphPattern" in _algebra_names(prepared.algebra):
+        raise Conflict(code("RDF", 2), "질의에 쓸 수 없는 말입니다: service")
+
     started = time.perf_counter()
     try:
-        result = graph.query(payload.query)
-    except Exception as failure:  # rdflib 의 문법 오류는 종류가 많다
+        result = graph.query(prepared)
+    except Exception as failure:  # rdflib 의 평가 오류도 종류가 많다
         raise Conflict(code("RDF", 4), f"질의를 이해하지 못했습니다: {failure}") from failure
     elapsed = int((time.perf_counter() - started) * 1000)
 

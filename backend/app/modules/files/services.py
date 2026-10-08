@@ -427,6 +427,46 @@ def issue_ticket(
     )
 
 
+def _ticket_holder(db: Session, found: AttachmentTicket | None) -> User:
+    """쓸 수 있는 표면 그 표를 낸 사람 — 없거나 · 썼거나 · 만료됐거나 · 낸 사람이 막혔으면
+    거절한다. 본문 전의 확인(`check_ticket`)과 쓸 때의 확인(`redeem_ticket`)이 **같은
+    규칙**이다."""
+    refused = AppError(
+        code("FILES", 10),
+        "업로드 티켓이 없거나, 이미 사용했거나, 만료됐습니다 — 새로 발급받으세요"
+        "(MCP `attachment_upload_prepare`).",
+        status=401,
+    )
+    if found is None or found.used_at is not None or found.expires_at <= datetime.now(UTC):
+        raise refused
+    user = db.get(User, found.user_id)
+    if user is None or not user.can_sign_in:
+        raise refused
+    return user
+
+
+def check_ticket(db: Session, *, ticket: str) -> None:
+    """본문을 받기 **전에** 표를 본다. 올리는 요청에는 토큰이 없어 표가 곧 자격인데, 본문을
+    다 받고 나서 봤다 — 아무나 표 없이 50MB 를 거듭 보내 서버 디스크(임시 파일)를 쓰게 할 수
+    있었다(2026-10-08).
+
+    잠그지 않고, 보고 나면 **트랜잭션을 닫는다** — 본문을 받는 동안(50MB 면 수십 초) 연결을
+    트랜잭션 안에 세워 두지 않는다. 다 받은 뒤 `redeem_ticket` 이 잠그고 다시 본다(그 사이 다른
+    요청이 같은 표를 쓸 수 있다).
+    """
+    try:
+        _ticket_holder(
+            db,
+            db.scalar(
+                select(AttachmentTicket).where(
+                    AttachmentTicket.token_hash == _ticket_hash(ticket)
+                )
+            ),
+        )
+    finally:
+        db.rollback()
+
+
 def redeem_ticket(
     db: Session, *, ticket: str, filename: str, stream: BinaryIO
 ) -> AttachmentOut:
@@ -435,22 +475,13 @@ def redeem_ticket(
     표는 성공했을 때만 쓴 것이 된다 — 이미지만 받는 칸에 엑셀을 올려 거절되면 같은 표로 고쳐
     다시 올릴 수 있다(5분 안). 같은 표를 동시에 두 번 쓰면 행 잠금이 하나만 통과시킨다.
     """
-    refused = AppError(
-        code("FILES", 10),
-        "업로드 티켓이 없거나, 이미 사용했거나, 만료됐습니다 — 새로 발급받으세요"
-        "(MCP `attachment_upload_prepare`).",
-        status=401,
-    )
     found = db.scalar(
         select(AttachmentTicket)
         .where(AttachmentTicket.token_hash == _ticket_hash(ticket))
         .with_for_update()
     )
-    if found is None or found.used_at is not None or found.expires_at <= datetime.now(UTC):
-        raise refused
-    user = db.get(User, found.user_id)
-    if user is None or user.status != "active":
-        raise refused
+    user = _ticket_holder(db, found)
+    assert found is not None  # _ticket_holder 가 None 이면 이미 던졌다
     # 감사에 「어느 토큰이 올렸나」 — 표를 낸 토큰의 이름을 그대로 잇는다.
     set_actor_token(found.token_name)
     found.used_at = func.now()

@@ -227,7 +227,9 @@ def infer(
             header=header,
             role=role,
             key="",
-            label=header.strip(),
+            # 속성 이름 칸은 64자다 — 긴 머리글을 그대로 두면 미리 보기를 지나 적용에서
+            # `varchar(64)` 로 500 이 났다(2026-10-08). 원래 머리글은 `header` 에 남는다.
+            label=header.strip()[:64],
             data_type="text",
             filled=len(values),
             distinct=len(set(values)),

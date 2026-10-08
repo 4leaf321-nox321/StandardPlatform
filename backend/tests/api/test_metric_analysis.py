@@ -218,6 +218,7 @@ def _plant(slug: str, cells: list[dict[str, Any]], watermark: datetime) -> None:
                 )
             )
         metric.current_run_id = run.id
+        metric.cells_run_id = run.id  # 셀은 읽기가 이쪽으로 찾는다(증분 계산 뒤로)
         db.commit()
 
 
@@ -942,6 +943,163 @@ def test_파레토는_두_기간의_몫을_견준다(client: TestClient, admin: 
     assert plain["comparison"] is None
 
 
+def test_파레토_비교에서_비교_기간에만_나온_값도_이름으로_나간다(
+    client: TestClient, admin: Signed
+) -> None:
+    """1월에는 S기본만, 3월에는 S기본 · A기본 — A기본은 지금 범위의 이름표에 없어 이름 대신
+    id 로 나갔다(2026-10-08). 비교 범위도 기간 경계로 맞춘다(3월 중순 → 3월)."""
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    rest = {"symptom": "소음", "factory": "F1"}
+    _plant(
+        cases["slug"],
+        [
+            {
+                "period": date(2026, 1, 1),
+                "dims": {"base_model": w["s_base"], **rest},
+                "count": 100,
+            },
+            {
+                "period": date(2026, 3, 1),
+                "dims": {"base_model": w["s_base"], **rest},
+                "count": 100,
+            },
+            {
+                "period": date(2026, 3, 1),
+                "dims": {"base_model": w["a_base"], **rest},
+                "count": 100,
+            },
+        ],
+        datetime(2026, 9, 1, tzinfo=UTC),
+    )
+    found = _analysis(
+        client,
+        admin,
+        cases["slug"],
+        "pareto",
+        dim="base_model",
+        period_from="2026-01-01",
+        period_to="2026-02-01",
+        compare_from="2026-03-15",
+        compare_to="2026-03-20",
+    )
+    comparison = found["comparison"]
+    assert comparison["label_b"] == "2026-03-01 ~ 2026-04-01" and comparison["total_b"] == 200
+    items = {one["key"]: one for one in comparison["items"]}
+    assert items[w["a_base"]]["label"] == "A기본" and items[w["a_base"]]["count_a"] == 0
+    assert items[w["s_base"]]["label"] == "S기본"
+
+
+def test_코호트_축으로_값마다_훑으면_건_보기에_창을_못_적는다고_말한다(
+    client: TestClient, admin: Signed
+) -> None:
+    """코호트 축의 값마다 건수는 「출고 K 기간 안」 이다 — 목록 조건으로 못 적는 그 창을 말하지
+    않으면 건 보기가 창 밖의 기록까지 열면서 정확하다고 말한다(2026-10-08)."""
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    cohort = _analysis(
+        client, admin, cases["slug"], "changes/scan", by="symptom", axis="cohort"
+    )
+    assert cohort["items"]
+    for item in cohort["items"]:
+        assert "age" in item["drill"]["partial"]
+        assert item["drill"]["params"]["f.symptom.eq"] == item["key"]
+    period = _analysis(
+        client, admin, cases["slug"], "changes/scan", by="symptom", axis="period"
+    )
+    assert all("age" not in one["drill"]["partial"] for one in period["items"])
+
+
+def test_요청에_적은_못_보는_객체는_이름을_풀지_않는다(
+    client: TestClient, admin: Signed, manager: Signed
+) -> None:
+    """요약할 값 · 모델 고르기 · 첫 기준 거르기는 요청이 준 값이라 아무 id 나 될 수 있다 —
+    보는 사람의 가시성 없이 풀었더니 못 보는 부서 객체의 이름이 나왔다(2026-10-08)."""
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    other = client.post(
+        "/api/workspaces",
+        json={"slug": f"other-{uuid.uuid4().hex[:6]}", "name": "다른 팀"},
+        headers=admin.headers,
+    )
+    assert other.status_code == 201, other.text
+    hidden = _make_object(
+        client, admin, w["base"], label="비밀 모델", workspace_slug=other.json()["slug"]
+    )["id"]
+    mine = _analysis(client, manager, cases["slug"], "profile", dim="base_model", value=hidden)
+    assert mine["value_label"] == hidden and mine["count"] == 0
+    everything = _analysis(
+        client, admin, cases["slug"], "profile", dim="base_model", value=hidden
+    )
+    assert everything["value_label"] == "비밀 모델"
+    seen = _analysis(
+        client, manager, cases["slug"], "profile", dim="base_model", value=w["s_base"]
+    )
+    assert seen["value_label"] == "S기본"
+
+
+def test_같은_기준을_두_번_적어도_한_번으로_읽는다(client: TestClient, admin: Signed) -> None:
+    """`dims=a,a` · `signature=x,x` 는 같은 이름의 칸 둘이 되어 읽을 때 「모호한 칸」 으로
+    500 이었다(2026-10-08)."""
+    from tests.api.test_metric_axes import _axes_world
+
+    w = _world(client, admin)
+    _, cases = _two(client, admin, w)
+    once = client.get(
+        f"/api/metrics/{cases['slug']}/values",
+        params={"dims": "symptom"},
+        headers=admin.headers,
+    )
+    twice = client.get(
+        f"/api/metrics/{cases['slug']}/values",
+        params={"dims": "symptom,symptom"},
+        headers=admin.headers,
+    )
+    assert twice.status_code == 200, twice.text
+    assert [one["count"] for one in twice.json()["cells"]] == [
+        one["count"] for one in once.json()["cells"]
+    ]
+    axes_world = _axes_world(client, admin, extra=(("R5", "M2", "P1", "피로", "FEA"),))
+    slug = axes_world["metric"]["slug"]
+    asked = {"generation": "model"}
+    single = _analysis(client, admin, slug, "recurrence", signature="part,mechanism", **asked)
+    double = _analysis(
+        client, admin, slug, "recurrence", signature="part,part,mechanism", **asked
+    )
+    assert double["params"]["signature"] == ["part", "mechanism"]
+    assert double["rate"] == single["rate"] and double["pairs_total"] == single["pairs_total"]
+
+
+def test_만든_해는_건_보기_조건이_없다고_말한다(client: TestClient, admin: Signed) -> None:
+    """목록의 `year` 는 「만든 해」 가 아니라 시간 정책의 연도다 — 그것으로 적으면 다른 기록을
+    열면서 정확하다고 말했다(2026-10-08). 만든 해는 `partial` 로, 상태는 `status` 그대로."""
+    w = _world(client, admin)
+    metric = _define(
+        client,
+        admin,
+        source=w["case"],
+        spec={
+            "measure": "count",
+            "dimensions": [
+                {"name": "st", "address": "status"},
+                {"name": "made", "address": "created_year"},
+            ],
+        },
+        label="상태 · 만든 해",
+    )
+    got = client.get(
+        f"/api/metrics/{metric['slug']}/values",
+        params={"dims": "st,made"},
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    (cell,) = got.json()["cells"]
+    drill = cell["drill"]
+    assert drill["params"]["status"] == "active" and "year" not in drill["params"]
+    assert drill["partial"] == ["made"]
+    assert _listed(client, admin, w["case"], drill["params"]) == cell["count"]
+
+
 # --- ④ · ⑩ 값마다 훑기 --------------------------------------------------------------------
 
 
@@ -1272,6 +1430,121 @@ def test_전후_비교는_적용일_앞뒤의_닫힌_부분군을_견주고_낀_
     assert listed["ok"] is True and listed["label"] == "전후 비교"
 
 
+def test_부분군의_줄은_대수가_있는_끝쪽의_0건까지_잇는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """S 기본 모델 · 2026 년 달마다 1,000대. 상반기 달마다 3건, 7월 1건, 8~12월은 기록이 없다.
+    줄을 마지막 기록(7월)에서 끊으면 뒤가 1/1,000 으로 남아 「아직 이르다」 였다 — 대수가 있는
+    달은 0 건도 관측이라 뒤는 1/6,000 이고 줄었다(2026-10-08). 변화점도 끝의 0 건을 본다."""
+    w = _world(client, admin)
+    sales, monthly = _monthly(client, admin, w)
+    first, watermark = date(2026, 1, 1), datetime(2027, 3, 15, tzinfo=UTC)
+    dims = {"base_model": w["s_base"]}
+    _plant(
+        monthly["slug"],
+        [
+            {"period": _month(first, i), "dims": dims, "count": count}
+            for i, count in enumerate([3] * 6 + [1])
+        ],
+        watermark,
+    )
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(first, i),
+                "dims": dims,
+                "count": 1,
+                "value_count": 1,
+                "sum": 1000.0,
+            }
+            for i in range(12)
+        ],
+        watermark,
+    )
+    model = {"d.base_model": w["s_base"]}
+    found = _analysis(client, admin, monthly["slug"], "cutin", at="2026-07-01", **model)
+    assert found["after"]["subgroups"] == 6 and found["after"]["count"] == 1
+    assert found["after"]["exposure"] == 6000 and found["ratio"] == pytest.approx(1 / 18)
+    assert found["decision"] == "reduced"
+    last = found["points"][-1]
+    assert last["label"] == "2026-12" and last["count"] == 0 and last["closed"] is True
+    changes = _analysis(client, admin, monthly["slug"], "changes", **model)
+    assert changes["points"][-1]["label"] == "2026-12"
+    control = _analysis(client, admin, monthly["slug"], "control", **model)
+    assert control["charts"][0]["points"][-1]["label"] == "2026-12"
+
+
+def test_코호트_축은_접수_기간_범위로_창을_자르지_않는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """판매월 코호트 2026-01 ~ 12, 모델마다 달마다 1,000대 · 출고 석 달 안 달마다 10건(창
+    30건). 화면은 기간 범위를 모든 분석에 넘긴다 — 접수 2026-12 앞까지로 창을 자르면 끝쪽
+    코호트가 10 · 20 · 0 건인 채 「닫힌 완전한 창」 으로 들어가 관리도 · 집단 비교에 가짜
+    하락이 섰다(2026-10-08). 코호트 축은 기간 범위를 쓰지 않고 그렇게 말한다."""
+    w = _world(client, admin)
+    sales, cases = _two(client, admin, w)
+    first, watermark = date(2026, 1, 1), datetime(2027, 6, 15, tzinfo=UTC)
+    bases = (w["s_base"], w["a_base"])
+    _plant(
+        cases["slug"],
+        [
+            {
+                "period": _month(_month(first, i), age),
+                "cohort": _month(first, i),
+                "age": age,
+                "dims": {"base_model": base, "symptom": "소음", "factory": "F1"},
+                "count": 10,
+            }
+            for base in bases
+            for i in range(12)
+            for age in range(3)
+        ],
+        watermark,
+    )
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(first, i),
+                "dims": {"base_model": base},
+                "count": 1,
+                "value_count": 1,
+                "sum": 1000.0,
+            }
+            for base in bases
+            for i in range(12)
+        ],
+        watermark,
+    )
+    ranged = {"period_from": "2026-01-01", "period_to": "2026-12-01"}
+    found = _analysis(
+        client,
+        admin,
+        cases["slug"],
+        "control",
+        axis="cohort",
+        **ranged,
+        **{"d.base_model": w["s_base"]},
+    )
+    (chart,) = found["charts"]
+    points = {one["label"]: one for one in chart["points"]}
+    assert [points[label]["count"] for label in ("2026-10", "2026-11", "2026-12")] == [30] * 3
+    assert all(one["closed"] for one in chart["points"]) and chart["signals"] == 0
+    assert "period_range_ignored" in {one["code"] for one in found["caveats"]}
+    # 코호트 점의 건 보기도 창 전체 — 범위의 끝(2026-12)에서 자르지 않는다.
+    assert points["2026-11"]["drill"]["params"]["f.received.lt"] == "2027-02-01"
+    groups = _analysis(
+        client, admin, cases["slug"], "groups", dim="base_model", axis="cohort", **ranged
+    )
+    rows = {one["key"]: one for one in groups["rows"]}
+    assert rows[w["s_base"]]["count"] == 360 and rows[w["s_base"]]["exposure"] == 12000
+    assert "period_range_ignored" in {one["code"] for one in groups["caveats"]}
+    # 범위를 안 주면 그 주의도 없다.
+    plain = _analysis(client, admin, cases["slug"], "control", axis="cohort")
+    assert "period_range_ignored" not in {one["code"] for one in plain["caveats"]}
+
+
 # --- 클레임 예측 ---------------------------------------------------------------------
 
 
@@ -1350,3 +1623,50 @@ def test_클레임_예측은_이미_판_코호트의_앞으로를_수명_맞춤�
     _, monthly = _monthly(client, admin, w)
     refused = _refused(client, admin, monthly["slug"], "forecast")
     assert refused["code"].endswith("METRICS-0038")
+
+
+def test_코호트_누적은_집계마다_다르게_쌓는다(client: TestClient, admin: Signed) -> None:
+    """평균 지표의 누적은 (누적 합 / 누적 값 수)다 — 값을 그대로 더해 「평균의 합」 이
+    나왔다(2026-10-08)."""
+    w = _world(client, admin)
+    spec = {
+        "measure": "avg",
+        "measure_field": "properties.cost",
+        "time": {"address": "properties.received", "grain": "month"},
+        "cohort": {"address": "properties.sold", "grain": "month"},
+    }
+    metric = _define(client, admin, source=w["case"], spec=spec, label="평균 비용")
+    cohort = date(2026, 1, 1)
+    _plant(
+        metric["slug"],
+        [
+            {
+                "period": date(2026, 1, 1),
+                "cohort": cohort,
+                "age": 0,
+                "dims": {},
+                "count": 2,
+                "value_count": 2,
+                "sum": 10.0,
+            },
+            {
+                "period": date(2026, 2, 1),
+                "cohort": cohort,
+                "age": 1,
+                "dims": {},
+                "count": 2,
+                "value_count": 2,
+                "sum": 30.0,
+            },
+        ],
+        datetime(2026, 9, 1, tzinfo=UTC),
+    )
+    got = client.get(
+        f"/api/metrics/{metric['slug']}/cohort",
+        params={"cumulative": "true"},
+        headers=admin.headers,
+    )
+    assert got.status_code == 200, got.text
+    cells = got.json()["rows"][0]["cells"]
+    assert [one["value"] for one in cells] == [5.0, 15.0]
+    assert [one["cumulative"] for one in cells] == [5.0, 10.0]

@@ -37,6 +37,7 @@ from typing import Any, cast
 from urllib.parse import urlencode
 
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -80,6 +81,11 @@ CHANGE_SLACK = 2
 LAUNCH_MAX = 30
 #: 알림 본문에 싣는 줄 수 — 나머지는 「외 N건」.
 BODY_LINES = 5
+#: 같은 경보를 동시에 확인한 다른 쪽과 부딪치면 새 스냅샷으로 다시 하는 횟수(`check_one`).
+RACE_RETRIES = 2
+#: 부딪침의 SQLSTATE — 같은 열쇠를 먼저 적음(유일 제약) · 같은 경보 줄을 먼저 고침(직렬화
+#: 실패) · 교착.
+RACE_STATES = frozenset({"23505", "40001", "40P01"})
 
 
 def _refuse(number: int, message: str) -> AppError:
@@ -629,16 +635,23 @@ def _same_change(key: str, seen: set[str], positions: dict[str, int]) -> bool:
     return False
 
 
+#: 열쇠는 이만큼만 적는다(표의 칸 길이) — 견줄 때도 **같은 길이로** 견준다.
+KEY_MAX = 300
+
+
 def fresh(outcome: Outcome, seen: set[str], recipe: str) -> list[Finding]:
-    """처음 보는 결론 — 한 확인 안의 같은 열쇠도 한 번만."""
+    """처음 보는 결론 — 한 확인 안의 같은 열쇠도 한 번만. 열쇠는 적는 길이로 잘라 견준다 —
+    긴 기준 값(관리도의 나눔 · 증상 글)이면 자르지 않은 열쇠가 적어 둔 것과 안 맞아 같은
+    결론을 다시 넣다 유일 제약에 걸렸고, 그 경보는 그 뒤로 매번 실패했다(2026-10-08)."""
     out: list[Finding] = []
     taken = set(seen)
     for one in outcome.findings:
-        if one.key in taken:
+        key = one.key[:KEY_MAX]
+        if key in taken:
             continue
         if recipe == "changes" and _same_change(one.key, taken, outcome.positions):
             continue
-        taken.add(one.key)
+        taken.add(key)
         out.append(one)
     return out
 
@@ -662,7 +675,7 @@ def record(
         row = MetricAlertEvent(
             alert_id=alert.id,
             run_id=outcome.run_id,
-            key=one.key[:300],
+            key=one.key[:KEY_MAX],
             title=one.title[:300],
             detail=one.detail,
             baseline=first,
@@ -713,33 +726,53 @@ def _mark_failed(db: Session, alert_id: uuid.UUID, message: str) -> None:
     db.commit()
 
 
+def _raced(caught: Exception) -> bool:
+    """같은 경보를 동시에 확인한 다른 쪽과 부딪쳤나(`RACE_STATES`)."""
+    if not isinstance(caught, IntegrityError | OperationalError):
+        return False
+    return getattr(caught.orig, "sqlstate", None) in RACE_STATES
+
+
 def check_one(db: Session, alert_id: uuid.UUID) -> int:
     """경보 하나 — 한 스냅샷으로 읽고, 새 결론을 적고 알리고 커밋한다. 새 결론 수를 돌려준다.
-    실패는 경보에 적고 삼킨다(계산을 실패로 만들지 않는다)."""
-    query.snapshot(db)
-    alert = db.get(MetricAlert, alert_id)
-    if alert is None or not alert.is_active:
-        db.rollback()
-        return 0
-    owner = db.get(User, alert.owner_id)
-    metric = db.get(MetricDef, alert.metric_id)
-    if owner is None or owner.status != "active" or metric is None:
-        db.rollback()
-        return 0
-    try:
-        outcome = evaluate(db, owner, metric, alert.recipe, alert.params)
-        added = record(db, alert, metric, outcome, notify=True)
-        db.commit()
-    except AppError as caught:
-        db.rollback()
-        _mark_failed(db, alert_id, f"[{caught.code}] {caught.message}")
-        return 0
-    except Exception as caught:
-        db.rollback()
-        log.exception("경보 확인 실패: %s", alert_id)
-        _mark_failed(db, alert_id, f"{type(caught).__name__}: {caught}"[:2000])
-        return 0
-    return len(added)
+    실패는 경보에 적고 삼킨다(계산을 실패로 만들지 않는다).
+
+    **같은 경보를 동시에 확인하면**(계산 둘이 겹침 · 증분과 전량) 둘 다 같은 스냅샷에서 같은
+    새 열쇠를 보고 적는다 — 늦은 쪽은 유일 제약이나 직렬화 실패로 부딪친다. 그것은 실패가
+    아니라 다른 쪽이 먼저 적은 것이다: 새 스냅샷으로 다시 돌면 그 열쇠는 이미 본 것이라
+    건너뛴다. 예전에는 경보 전체를 「실패」 로 적고 실패 알림까지 보냈다(2026-10-08)."""
+    for attempt in range(RACE_RETRIES + 1):
+        query.snapshot(db)
+        alert = db.get(MetricAlert, alert_id)
+        if alert is None or not alert.is_active:
+            db.rollback()
+            return 0
+        owner = db.get(User, alert.owner_id)
+        metric = db.get(MetricDef, alert.metric_id)
+        if owner is None or owner.status != "active" or metric is None:
+            db.rollback()
+            return 0
+        try:
+            outcome = evaluate(db, owner, metric, alert.recipe, alert.params)
+            added = record(db, alert, metric, outcome, notify=True)
+            db.commit()
+        except AppError as caught:
+            db.rollback()
+            _mark_failed(db, alert_id, f"[{caught.code}] {caught.message}")
+            return 0
+        except Exception as caught:
+            db.rollback()
+            if _raced(caught):
+                if attempt < RACE_RETRIES:
+                    continue
+                # 다른 확인이 거듭 먼저 적는다 — 그쪽이 적고 알렸다. 이 경보의 실패가 아니다.
+                log.warning("경보 확인이 다른 확인과 거듭 부딪쳐 넘깁니다: %s", alert_id)
+                return 0
+            log.exception("경보 확인 실패: %s", alert_id)
+            _mark_failed(db, alert_id, f"{type(caught).__name__}: {caught}"[:2000])
+            return 0
+        return len(added)
+    return 0  # pragma: no cover - 위 반복이 늘 돌려준다
 
 
 def after_recompute(db: Session, metric_id: uuid.UUID) -> dict[str, int]:

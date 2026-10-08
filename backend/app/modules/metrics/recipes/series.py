@@ -3,7 +3,14 @@
 - **기간 축** — 접수 기간마다의 건수. 분모가 기간과 짝(`time=period`)이면 그 기간의 대수.
 - **코호트 축** — 생산 · 판매월 코호트마다 **출고 K 기간 안**의 건수와 그 달의 대수(분모가
   코호트와 짝일 때). 창의 마지막 경과(K-1)가 닫힌 코호트만 닫혔다 — 같은 창으로 재야 늦게
-  만든 달이 덜 들어온 것을 품질로 읽지 않는다.
+  만든 달이 덜 들어온 것을 품질로 읽지 않는다. **접수 기간 범위는 코호트 축에 쓰지 않는다** —
+  범위가 창을 자르면 끝쪽 코호트가 덜 들어온 채 「닫힌 완전한 창」 으로 셌고, 관리도 · 변화점
+  · 전후 비교 · 집단 비교에 가짜 하락이 섰다(화면은 기간 범위를 모든 분석에 넘긴다,
+  2026-10-08). 코호트를 좁히는 것은 코호트 범위다.
+
+줄은 첫 기록부터 **대수가 있는 마지막 부분군까지**다 — 끝쪽에 대수는 있는데 기록이 없는
+부분군도 0 건의 관측이다. 마지막 기록에서 끊으면 대책 뒤 0 건인 달들이 빠져 뒤의 비율이
+부풀고(1/6,000 이 1/1,000 으로) 끝의 하락 계단을 못 봤다(2026-10-08).
 
 분모가 그 축과 짝이 아니면 대수 없이 건수로 본다(`exposure` = 1) — 그렇게 말한다.
 """
@@ -59,6 +66,8 @@ class SeriesSet:
     series: list[Series]
     other_groups: int
     excluded: dict[str, int]
+    range_dropped: bool = False
+    """코호트 축이라 요청의 접수 기간 범위를 쓰지 않았다 — 그렇게 말한다."""
 
     @property
     def per(self) -> float:
@@ -131,8 +140,9 @@ def read(
             "기준을 넣습니다.",
         )
     dims = [split] if split is not None else []
+    dropped = False
     if axis == "cohort":
-        ask = replace(ask, dims=dims, by=("cohort", "age"), age_from=0, age_to=window)
+        ask, dropped = _cohort_ask(ask, dims, window)
     else:
         ask = replace(ask, dims=dims, by=("period",))
     common.require_exact_counts(built, ask)
@@ -158,9 +168,13 @@ def read(
     other_groups = max(0, len(keys) - limit)
     keys = keys[:limit]
     every = sorted({when for bucket in grouped.values() for when in bucket})
-    timeline = (
-        query.dense(every[0], axes.next_period(every[-1], grain), grain) if every else []
-    )
+    timeline: list[date] = []
+    if every:
+        end = axes.next_period(every[-1], grain)
+        exposed = _last_exposed(den) if den is not None and not share else None
+        if exposed is not None:
+            end = max(end, axes.next_period(exposed, grain))
+        timeline = query.dense(every[0], end, grain)
     labels = query.labels_for(db, built, [split], frame.cells) if split is not None else {}
     found = SeriesSet(
         axis=axis,
@@ -174,6 +188,7 @@ def read(
         series=[],
         other_groups=other_groups,
         excluded=excluded,
+        range_dropped=dropped,
     )
     for key in keys:
         bucket = grouped[key]
@@ -188,6 +203,30 @@ def read(
             )
         )
     return found
+
+
+def _cohort_ask(ask: query.Ask, dims: list[str], window: int) -> tuple[query.Ask, bool]:
+    """코호트 축의 읽기 — 코호트 x 경과(창 K 앞까지), **접수 기간 범위는 뺀다**(모듈 설명).
+    (읽기, 범위를 뺐나)."""
+    dropped = ask.period_from is not None or ask.period_to is not None
+    return (
+        replace(
+            ask,
+            dims=dims,
+            by=("cohort", "age"),
+            age_from=0,
+            age_to=window,
+            period_from=None,
+            period_to=None,
+        ),
+        dropped,
+    )
+
+
+def _last_exposed(den: query.Denominator) -> date | None:
+    """대수가 있는 마지막 부분군 — 줄을 거기까지 잇는다(모듈 설명)."""
+    found = [when for (_, when), units in den.values.items() if when is not None and units]
+    return max(found, default=None)
 
 
 def _subgroups(
@@ -241,9 +280,9 @@ def _cell(found: SeriesSet, key: str | None, when: date, count: int) -> query.Ce
 
 @dataclass
 class Totals:
-    """값마다 닫힌 부분군의 합 — 집단 비교. `read` 와 같은 줄(첫 기록부터 마지막 기록까지의
-    부분군 · 닫힘 · 대수 없는 부분군 빼기)을 펴지 않고 DB 에서 더한다: 집단이 수천이어도 읽기
-    한 번에 집단 수만큼의 줄이다. 기록이 하나도 없는 값도 대수가 있으면 0 건으로 든다."""
+    """값마다 닫힌 부분군의 합 — 집단 비교. `read` 와 같은 줄(첫 기록부터 대수가 있는 마지막
+    부분군까지 · 닫힘 · 대수 없는 부분군 빼기)을 펴지 않고 DB 에서 더한다: 집단이 수천이어도
+    읽기 한 번에 집단 수만큼의 줄이다. 기록이 하나도 없는 값도 대수가 있으면 0 건으로 든다."""
 
     axis: Axis
     grain: str
@@ -255,6 +294,7 @@ class Totals:
     groups: list[query.Paired]
     excluded: dict[str, int]
     other_groups: int = 0
+    range_dropped: bool = False
 
     @property
     def per(self) -> float:
@@ -280,8 +320,10 @@ def totals(
     share = built.spec.measure == spec_module.SHARE
     if not share and (den_in is None or den_metric is None or den_in.time != axis):
         return None
+    dropped = False
     if axis == "cohort":
-        ask = replace(ask, dims=[], by=("cohort",), age_from=0, age_to=window)
+        ask, dropped = _cohort_ask(ask, [], window)
+        ask = replace(ask, by=("cohort",))
     else:
         ask = replace(ask, dims=[], by=("period",))
     common.require_exact_counts(built, replace(ask, dims=[split]))
@@ -320,10 +362,16 @@ def totals(
         ask=ask,
         groups=[],
         excluded={"missing_denominator": 0, "open": 0},
+        range_dropped=dropped,
     )
     if not whens:
         return found
     first, end = min(whens), axes.next_period(max(whens), grain)
+    if not share:
+        assert den_in is not None
+        exposed = _den_last(db, user, den, den_in, ask, axis)
+        if exposed is not None:
+            end = max(end, axes.next_period(exposed, grain))
     # 닫힘은 시간에 따라 한 번만 바뀐다(앞은 닫히고 뒤는 열린다) — 처음 열린 부분군에서 끊는다.
     cut = first
     while cut < end and _whole(found, cut):
@@ -351,6 +399,39 @@ def totals(
     else:
         found.ask = replace(found.ask, period_to=min(cut, stop))
     return found
+
+
+def _den_last(
+    db: Session,
+    user: User,
+    den: query.Denominator,
+    den_in: spec_module.DenominatorIn,
+    ask: query.Ask,
+    axis: Axis,
+) -> date | None:
+    """분모의 대수가 있는 마지막 기간 — 값을 가리지 않고 기간마다(기간 수만큼의 셀). 거르기 ·
+    범위는 짝짓는 길(`paired_totals`)과 같다."""
+    start, stop = (ask.period_from, ask.period_to)
+    if axis == "cohort":
+        start, stop = (ask.cohort_from, ask.cohort_to)
+    cells, _ = query.read(
+        db,
+        user,
+        den.metric,
+        query.Ask(
+            by=("period",),
+            filters={name: value for name, value in ask.filters.items() if name in den_in.on},
+            period_from=start,
+            period_to=stop,
+        ),
+        limit=query.frame_limit(),
+    )
+    found = [
+        cell.period
+        for cell in cells
+        if cell.period is not None and (cell.measure(den.spec.measure) or 0) > 0
+    ]
+    return max(found, default=None)
 
 
 def group_drill(
@@ -461,6 +542,14 @@ def caveats(found: SeriesSet | Totals, caveats_: common.Caveats) -> None:
             "window_basis",
             f"코호트마다 출고 뒤 {found.window}{SPAN.get(found.grain, found.grain)} 안의 "
             "건수입니다 — 그 창이 닫힌 코호트만 계산에 씁니다.",
+            level="info",
+        )
+    if found.range_dropped:
+        caveats_.add(
+            "period_range_ignored",
+            "기간 범위(접수일)는 코호트 축에 쓰지 않았습니다 — 범위가 창을 자르면 끝쪽 "
+            "코호트가 덜 들어온 채 닫힌 것으로 셉니다. 코호트를 좁히려면 코호트 범위를 "
+            "씁니다(cohort_from · cohort_to).",
             level="info",
         )
     if found.other_groups:
