@@ -19,7 +19,7 @@ from app.modules.objects import routes as objects_routes
 from app.modules.objects.models import ObjectLink
 from app.modules.ontology import inference
 from app.modules.ontology.models import ObjectType, RelationType
-from app.modules.ontology.services import RESERVED_SLUGS
+from app.modules.ontology.services import RESERVED_SLUGS, SLUG_RE
 from tests.api.conftest import Signed
 from tests.api.test_ontology import _make_object, _make_property, _make_type, _uniq
 
@@ -535,12 +535,15 @@ def test_객체_API_의_고정_경로와_겹치는_slug_는_못_만든다(
 
 
 def test_예약_slug_는_객체_라우터의_고정_첫_마디와_같다() -> None:
-    """객체 라우터에 고정 경로를 더하고 여기를 잊으면 그 이름의 타입이 다시 안 열린다."""
+    """객체 라우터에 고정 경로를 더하고 여기를 잊으면 그 이름의 타입이 다시 안 열린다.
+
+    slug 가 될 수 없는 이름(`fill-priorities` 처럼 `-` 가 든 것)은 겹칠 수 없어 예약하지
+    않는다 — slug 규칙이 먼저 거절한다."""
     fixed: set[str] = set()
     for route in objects_routes.router.routes:
         path = str(getattr(route, "path", ""))
         first = path.removeprefix("/objects").strip("/").split("/", 1)[0]
-        if first and not first.startswith("{"):
+        if first and not first.startswith("{") and SLUG_RE.match(first):
             fixed.add(first)
     assert fixed <= RESERVED_SLUGS, sorted(fixed - RESERVED_SLUGS)
 

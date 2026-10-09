@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-05h
+GUIDE_VERSION: 2026-10-09a
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -47,6 +47,8 @@ GUIDE_VERSION: 2026-10-05h
 | **요즘 챙길 것** — 승인 대기 · 실패한 작업 · 멎은 지표 · 동기화 실패 | `server_maintenance` | 홈의 「남은 일」 과 같다. 보는 사람의 권한대로 |
 | 내 알림 — 지켜보는 것이 바뀜 · 경보 · 내 작업이 끝남 | `notifications(unread_only=)` | 읽음 처리는 안 한다(사람이 화면에서 본 것으로 둔다) |
 | 무엇이 나빠지고 있나(필수값·고아·끊긴 참조·중복) | `quality_report` | 볼 수 있는 것만 |
+| **어디부터 채우나** — 「지금 무엇을 먼저 채워야 하나」 | `fill_priorities(type_slug=)` | 쓰는 곳(필수 · 지표 · 코어 공개 · 뷰)으로 가중한 줄. `gain` · `link` 를 함께 전하고, `estimated` 면 「약」 을 붙인다 |
+| **못 찾은 이름을 별칭으로** — 「이걸로는 왜 안 찾혀?」 | `alias_candidates` → 사람 확인 → `alias_candidate_apply(action="attach", object_id=, apply=true)` | `suggestions` 는 짐작 — **어느 객체인지 사람이 정한다.** 아닌 말은 `ignore` |
 | 객체 하나 만들기 | `object_create` | 정의에 없는 속성 키는 거절된다 |
 | 객체 고치기 | `object_update` | **보낸 키만** 병합. 비우려면 `null`. 식별자 · 상태 · 유효 연도 · 별칭도 |
 | **사진 · 파일 붙이기** | `attachment_upload_prepare` → 셸에서 `curl` | **파일을 읽거나 base64 로 옮기지 않는다** — 바이트는 셸이 직접 올린다. 셸이 없으면 사람에게 화면에서 |
@@ -324,6 +326,38 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 사용자에게 옮길 때 셋을 섞지 않는다. 「없습니다」 와 「안 보입니다」 와 「조건에 맞는 것이
 없습니다」 와 「그 칸을 아직 아무도 안 채웠습니다」 는 **서로 다른 다음 행동**을 부른다.
 
+### 못 찾은 말은 남는다 — 별칭 후보
+
+`object_resolve` 가 `none` 이거나, `search` 가 0건이거나, `objects_list` 가 **검색어 하나만으로**
+0건이면 그 말이 서버에 남는다(별칭 후보 — 누가 찾았는지는 안 남고 몇 사람인지만). 사람이 그것을
+어떤 객체의 별칭으로 붙이면 **다음부터 찾힌다** — 「앤시스」 로 못 찾던 것이 「Ansys」 로 풀린다.
+
+1. `alias_candidates(type_slug=)` — 많이 · 여럿이 찾은 것부터. 줄마다 `suggestions`(이름 ·
+   식별자 · 별칭이 비슷한 것)가 온다. **짐작이다** — 첫 줄을 고르지 않는다.
+2. 사람에게 「「앤시스」 를 Ansys 의 별칭으로 붙일까요?」 를 묻고 객체를 받는다(제안에 없으면
+   `object_resolve` 로 정한다).
+3. `alias_candidate_apply(candidate_id, object_id=, apply=false)` — 붙기 전 · 뒤 별칭과
+   `warnings` · `blocking` 을 보인다. `blocking` 이 있으면(다른 객체가 그 별칭을 쓴다) **붙지
+   않는다** — 사람에게 말한다.
+4. 확인받으면 `apply=true`. 별칭이 될 말이 아니면(오타 · 엉뚱한 말) `action="ignore"`.
+
+네가 찾다 못 찾은 말도 여기 남는다 — 같은 대화에서 사람이 「그건 Ansys 야」 라고 알려 주면,
+그 말을 별칭으로 붙일지 물어볼 자리다(붙이는 것은 부서 관리자 이상).
+
+### 어디부터 채우나 — `fill_priorities(type_slug=, limit=)`
+
+「이 플랫폼에서 지금 무엇을 먼저 채워야 해?」 에 답하는 자리다. 품질(`quality_report`)이 「무엇이
+나쁜가」 라면 이것은 「어디를 채우면 무엇이 좋아지나」 다.
+
+- `priorities[]` — 줄 세운 것. `kind` 는 `field`(칸) · `relation`(선이 없는 관계) · `refs`(지워진
+  것을 가리키는 칸) · `waiting`(데이터 소스가 끝점을 기다리는 선) · `aliases`(별칭 없는 객체 —
+  못 찾은 말이 쌓인 타입에서만) · `empty_type`(객체가 하나도 없는 타입). 줄마다 `uses`(쓰는 곳),
+  `gain`(채우면 좋아지는 것), `link`(빈 것만 거른 화면 주소).
+- `types[]` — 타입마다 객체 수 · 필수 칸이 빈 객체 · 칸별 채움률(낮은 것부터) · 관계 · 별칭.
+  `type_slug` 를 주면 그 타입의 칸이 전부 온다.
+- **큰 타입은 표본 어림이다**(`estimated`, `sample_rows`, `notes`). 수를 전할 때 「약」 을 붙인다.
+- 끝을 정하지 않은 관계 종류는 세지 않는다 — 어느 타입이 그 선을 가져야 하는지 정해지지 않았다.
+
 `objects_list(type_slug, q=, properties=, conditions=, status=, limit=, offset=)`:
 
 - `q` 는 이름·식별자·검색 속성. `properties={"grade": "A"}` 는 「같음」 의 짧은 꼴.
@@ -562,9 +596,9 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 
 | | |
 |---|---|
-| `job_status(job_id, wait_seconds=20)` | 어디까지 됐나. 끝나기를 잠깐 기다렸다가 준다. **`next` 가 다음 할 일**을 말한다 — 종류마다 다르다(`job_apply` 로 적용하는 계획 · `datasource_sync(apply=true)` 로 적용하는 계획 · 파일을 내는 작업 · 그냥 끝나는 작업) |
+| `job_status(job_id, wait_seconds=20)` | 어디까지 됐나. 끝나기를 잠깐 기다렸다가 준다. **`next` 가 다음 할 일**을 말한다 — 종류마다 다르다(`job_apply` 로 적용하는 계획 · `datasource_sync(apply=true)` 로 적용하는 계획 · 파일을 내는 작업 · 그냥 끝나는 작업). 계획 줄(`result.rows`)은 **앞 500줄까지만**(오류 줄 먼저) — 더 있으면 `rows_omitted` 가 그 수다. 건수(`counts`) · 오류(`errors`)는 전체의 것이니 그것으로 요약하고, 줄을 하나하나 옮겨 적지 않는다 |
 | `job_apply(job_id)` | 계획을 **사람이 확인한 뒤** 적용. 사용자의 판단 없이 부르지 않는다 |
-| `jobs_list(status=, kind=, mine=)` | 작업 최근 것부터 + 워커가 살아 있나. `workers[].alive` 가 전부 거짓이면 작업은 영영 대기다 — 운영자에게 알린다. 타이머가 넣은 작업에 파묻히면 `kind` · `mine` 으로 거른다 |
+| `jobs_list(status=, kind=, mine=)` | 작업 최근 것부터 + 워커가 살아 있나. 결과는 요약뿐이다(계획 줄은 비우고 `rows_omitted` 에 수만) — 줄은 `job_status` 로. `workers[].alive` 가 전부 거짓이면 작업은 영영 대기다 — 운영자에게 알린다. 타이머가 넣은 작업에 파묻히면 `kind` · `mine` 으로 거른다 |
 | `job_cancel(job_id)` | 멈춘다 — 기다리는 것은 바로, 도는 것은 단계 사이에서. 시킨 사람만(시스템 관리자는 모두) |
 
 <!--@ relations -->

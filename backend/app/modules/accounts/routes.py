@@ -25,7 +25,9 @@ from app.modules.accounts.schemas import (
     SignupRequest,
     SystemAdminRequest,
     TemporaryPasswordResponse,
+    TokenRevokeRequest,
 )
+from app.modules.auth.schemas import PatOut
 from app.shared.auth import require_system_admin
 from app.shared.pagination import Page
 
@@ -213,6 +215,32 @@ def reset_password(
     user = services.get_account(db, account_id)
     return TemporaryPasswordResponse(
         account=services.account_out(db, user), temporary_password=temporary
+    )
+
+
+@router.get("/{account_id}/tokens", response_model=list[PatOut])
+def account_tokens(
+    account_id: uuid.UUID,
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> list[PatOut]:
+    """그 사람의 액세스 토큰 — 이름 · 범위 · 만료 · 최종 사용, **폐기된 것까지.** 평문은 없다
+    (발급 응답에서 한 번만 나온다)."""
+    return services.account_tokens(db, account_id)
+
+
+@router.post("/{account_id}/tokens/{token_id}/revoke", response_model=PatOut)
+def revoke_account_token(
+    account_id: uuid.UUID,
+    token_id: uuid.UUID,
+    payload: TokenRevokeRequest,
+    admin: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> PatOut:
+    """남의 토큰 하나를 폐기한다 — 계정은 그대로 두고 그 연동만 끊는다. 감사 기록
+    (`account.token_revoked`)과 주인에게 가는 알림에 사유가 실린다. 이미 폐기된 것은 409."""
+    return services.revoke_token(
+        db, user_id=account_id, token_id=token_id, actor=admin, reason=payload.reason
     )
 
 

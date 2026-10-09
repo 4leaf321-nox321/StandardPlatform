@@ -45,6 +45,7 @@ from app.modules.metrics import services as metrics_services
 from app.modules.notices import routes as notices_routes
 from app.modules.notifications import routes as notifications_routes
 from app.modules.objects import attachments as objects_attachments
+from app.modules.objects import misses as objects_misses
 from app.modules.objects import quality as objects_quality
 from app.modules.objects import routes as objects_routes
 from app.modules.objects import services as objects_services
@@ -167,6 +168,9 @@ def _register_extensions() -> None:
     # 데이터 품질 — 필수값 빈 것·고아·깨진 참조·이름 같은 것을 홈 「남은 일」 에.
     extensions.register_maintenance(objects_quality.maintenance)
     extensions.register_stats(objects_quality.stats)
+    # **여러 번 찾았는데 못 찾은 이름**(별칭 후보) — 한 번 친 오타는 세지 않는다. 별칭으로
+    # 붙이면 다음부터 찾히는데, 그 목록을 여는 사람이 없으면 같은 것이 계속 새로 만들어진다.
+    extensions.register_maintenance(objects_misses.maintenance)
 
     # `system` 타입이 비추는 원 표. **등록하지 않으면 그 타입은 만들 수 없다** —
     # 스키마의 `system_sources` 가 여기서 나온다. 승격한 전용 표도 여기 더한다.

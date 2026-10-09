@@ -2,16 +2,20 @@
  * 코어 현황 — **공개한 것을 놓치지 않기 위한 화면.**
  *
  * 여기서 지키는 것: 연동 주소를 그대로 표시하는가, 전체 읽기 토큰을 구분하는가, 미사용
- * 토큰과 사용 중인 토큰을 구별하는가, 그리고 연동 키트를 전달할 수 있는가.
+ * 토큰과 사용 중인 토큰을 구별하는가, 연동 키트를 전달할 수 있는가, 그리고 **이 자리에서
+ * 토큰을 폐기할 수 있는가**(예전에는 「그 계정의 내 정보에서」 라고만 적혀 있었고, 남의 내
+ * 정보는 관리자도 못 열어 결국 계정을 지워야 끊겼다 — 2026-10-08).
  */
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 
 const ontologyApi = vi.hoisted(() => ({ coreStatus: vi.fn(), downloadCoreKit: vi.fn() }))
 vi.mock('@/modules/ontology/api', () => ({ ontologyApi }))
+const accountApi = vi.hoisted(() => ({ revokeToken: vi.fn() }))
+vi.mock('@/modules/accounts/api', () => ({ accountApi }))
 
 const STATUS = {
   base: 'https://sp.example.com/api/core',
@@ -28,16 +32,20 @@ const STATUS = {
   ],
   consumers: [
     {
+      id: 'pat-1',
       name: 'MatNexus 야간',
       owner: '연동계정',
+      owner_id: 'user-1',
       last_used_at: '2026-09-23T01:00:00Z',
       expires_at: null,
       narrow: true,
       created_at: '2026-09-01T00:00:00Z',
     },
     {
+      id: 'pat-2',
       name: '정제 스크립트',
       owner: '홍길동',
+      owner_id: 'user-2',
       last_used_at: null,
       expires_at: '2026-12-31T00:00:00Z',
       narrow: false,
@@ -82,6 +90,24 @@ describe('코어 현황', () => {
     expect(screen.getAllByText('전체 읽기').length).toBeGreaterThan(0)
     // 미사용 토큰은 아직 연결되지 않은 연동이다 — 사용 중인 토큰과 구분한다.
     expect(screen.getByText('미사용')).toBeInTheDocument()
+  })
+
+  it('액세스 토큰을 이 자리에서 폐기한다 — 사유를 받고, 끝나면 목록을 다시 읽는다', async () => {
+    accountApi.revokeToken.mockResolvedValue({})
+    await open()
+    await userEvent.click(await screen.findByRole('tab', { name: /액세스 토큰/ }))
+    const row = (await screen.findByText('MatNexus 야간')).closest('tr')
+    if (!row) throw new Error('줄이 없다')
+    await userEvent.click(within(row).getByRole('button', { name: '폐기' }))
+    const dialog = await screen.findByRole('dialog', { name: /MatNexus 야간.*폐기/ })
+    expect(within(dialog).getByText(/즉시 인증에 실패합니다/)).toBeInTheDocument()
+    await userEvent.type(within(dialog).getByLabelText('폐기 사유'), '연동 종료')
+    const read = ontologyApi.coreStatus.mock.calls.length
+    await userEvent.click(within(dialog).getByRole('button', { name: '폐기' }))
+    await waitFor(() =>
+      expect(accountApi.revokeToken).toHaveBeenCalledWith('user-1', 'pat-1', '연동 종료'),
+    )
+    await waitFor(() => expect(ontologyApi.coreStatus.mock.calls.length).toBe(read + 1))
   })
 
   it('연동 키트를 내려받는다 — 수신 측에 그대로 전달하는 묶음', async () => {

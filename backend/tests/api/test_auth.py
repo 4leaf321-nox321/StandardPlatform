@@ -576,3 +576,158 @@ def test_회전으로_넘겨진_값이_다시_오면_전부_끊는다(db: Sessio
     assert replay.json()["error"]["code"] == code("AUTH", 5)
     assert own.get("/api/auth/me", headers=access).status_code == 401
     assert own.post("/api/auth/refresh").status_code == 401
+
+
+# --- 관리자가 남의 토큰을 폐기한다 ---------------------------------------------------
+
+
+def _issued(
+    email: str, *names: str
+) -> tuple[TestClient, dict[str, dict[str, str]], list[str]]:
+    """그 사람의 브라우저로 토큰을 이름마다 하나씩 — (브라우저, {이름: 머리}, [id])."""
+    from app.main import app
+
+    own = TestClient(app)
+    signed = own.post("/api/auth/login", json={"email": email, "password": PASSWORD})
+    assert signed.status_code == 200, signed.text
+    bearer = {"Authorization": f"Bearer {signed.json()['access_token']}"}
+    heads: dict[str, dict[str, str]] = {}
+    ids: list[str] = []
+    for name in names:
+        made = own.post("/api/auth/tokens", json={"name": name}, headers=bearer)
+        assert made.status_code == 201, made.text
+        heads[name] = {"Authorization": f"Bearer {made.json()['token']}"}
+        ids.append(made.json()["pat"]["id"])
+    return own, heads, ids
+
+
+def test_관리자가_남의_토큰_하나를_폐기하면_그_연동만_끊기고_기록과_알림이_남는다(
+    client: TestClient, db: Session, admin: Signed, workspace: Workspace
+) -> None:
+    """예전에는 본인만 폐기했다 — 퇴사자 · 정지된 계정의 연동을 끊으려면 계정을 지워야 했고,
+    지우면 그 사람의 토큰이 전부 끊겼다(2026-10-08). 이제 관리자가 하나만 고른다."""
+    from app.modules.notifications.models import Notification
+
+    user = _make_user(db, workspace, label="leaver", is_system_admin=False, role="member")
+    own, heads, (nightly, script) = _issued(user.email, "야간 동기화", "정제 스크립트")
+
+    listed = client.get(f"/api/accounts/{user.id}/tokens", headers=admin.headers)
+    assert listed.status_code == 200, listed.text
+    assert {one["name"] for one in listed.json()} == {"야간 동기화", "정제 스크립트"}
+    assert all(
+        one["revoked_at"] is None and one["scopes"] == ["read"] for one in listed.json()
+    )
+    # 코어 화면의 「액세스 토큰」 도 이 자리를 부를 수 있게 토큰과 주인의 id 를 준다.
+    status = client.get("/api/ontology/core-status", headers=admin.headers).json()
+    mine = {one["id"]: one["owner_id"] for one in status["consumers"]}
+    assert mine.get(nightly) == str(user.id) and mine.get(script) == str(user.id)
+
+    gone = client.post(
+        f"/api/accounts/{user.id}/tokens/{nightly}/revoke",
+        json={"reason": "  퇴사  "},
+        headers=admin.headers,
+    )
+    assert gone.status_code == 200, gone.text
+    assert gone.json()["id"] == nightly and gone.json()["revoked_at"] is not None
+
+    # 그 토큰만 끊긴다 — 다른 토큰과 계정은 그대로다.
+    assert own.get("/api/auth/me", headers=heads["야간 동기화"]).status_code == 401
+    assert own.get("/api/auth/me", headers=heads["정제 스크립트"]).status_code == 200
+    db.expire_all()
+    assert db.get(User, user.id).status == "active"  # type: ignore[union-attr]
+    status = client.get("/api/ontology/core-status", headers=admin.headers).json()
+    assert nightly not in {one["id"] for one in status["consumers"]}
+    again = client.get(f"/api/accounts/{user.id}/tokens", headers=admin.headers).json()
+    assert {one["id"]: bool(one["revoked_at"]) for one in again} == {
+        nightly: True,
+        script: False,
+    }
+
+    entry = db.scalar(
+        select(AuditEntry).where(
+            AuditEntry.action == "account.token_revoked",
+            AuditEntry.target_id == uuid.UUID(nightly),
+        )
+    )
+    assert entry is not None
+    assert entry.actor_label and entry.reason == "퇴사"
+    assert entry.target_table == "personal_access_tokens"
+    assert entry.target_label == f"{user.email} · 야간 동기화"
+    assert entry.changes["owner"] == user.email
+    assert entry.changes["owner_id"] == str(user.id)
+    assert entry.changes["name"] == "야간 동기화" and entry.changes["scopes"] == ["read"]
+    admin_row = db.scalar(select(User).where(User.email == admin.email))
+    assert admin_row is not None and entry.actor_id == admin_row.id
+
+    # 토큰 주인이 안다 — 연동이 401 을 받기 시작한 까닭을 찾아 헤매지 않게.
+    told = db.scalar(
+        select(Notification).where(
+            Notification.user_id == user.id, Notification.kind == "account.token_revoked"
+        )
+    )
+    assert told is not None and "야간 동기화" in told.title
+    assert told.body is not None and "퇴사" in told.body and told.link == "/me"
+
+
+def test_이미_폐기된_토큰과_없는_토큰과_남의_토큰은_폐기하지_않는다(
+    client: TestClient, db: Session, admin: Signed, workspace: Workspace
+) -> None:
+    """**다시 폐기하지 않는다**(409) — 처음 폐기한 시각과 기록을 덮지 않으려고. 다른 사람의
+    토큰 id 를 섞어 보내면 없는 것과 같다(404) — 경로의 계정과 토큰이 짝이 맞아야 한다."""
+    one = _make_user(db, workspace, label="one", is_system_admin=False, role="member")
+    other = _make_user(db, workspace, label="other", is_system_admin=False, role="member")
+    own, _, (mine,) = _issued(one.email, "연동")
+    _, _, (theirs,) = _issued(other.email, "남의 연동")
+
+    # 본인이 먼저 폐기했다.
+    signed = own.post("/api/auth/login", json={"email": one.email, "password": PASSWORD})
+    bearer = {"Authorization": f"Bearer {signed.json()['access_token']}"}
+    assert own.delete(f"/api/auth/tokens/{mine}", headers=bearer).status_code == 204
+    twice = client.post(
+        f"/api/accounts/{one.id}/tokens/{mine}/revoke", json={}, headers=admin.headers
+    )
+    assert twice.status_code == 409, twice.text
+    assert twice.json()["error"]["code"] == code("ACCOUNTS", 12)
+    assert "revoked_at" in twice.json()["error"]["details"]
+
+    crossed = client.post(
+        f"/api/accounts/{one.id}/tokens/{theirs}/revoke", json={}, headers=admin.headers
+    )
+    assert crossed.status_code == 404, crossed.text
+    assert crossed.json()["error"]["code"] == code("ACCOUNTS", 11)
+    nowhere = client.post(
+        f"/api/accounts/{one.id}/tokens/{uuid.uuid4()}/revoke", json={}, headers=admin.headers
+    )
+    assert nowhere.status_code == 404
+    nobody = client.get(f"/api/accounts/{uuid.uuid4()}/tokens", headers=admin.headers)
+    assert nobody.status_code == 404
+    assert nobody.json()["error"]["code"] == code("ACCOUNTS", 1)
+
+    # 남의 토큰은 그대로 살아 있고, 거절한 것은 기록에 안 남는다.
+    alive = db.scalar(
+        select(PersonalAccessToken).where(PersonalAccessToken.id == uuid.UUID(theirs))
+    )
+    assert alive is not None and alive.revoked_at is None
+    logged = db.scalars(
+        select(AuditEntry.target_id).where(AuditEntry.action == "account.token_revoked")
+    ).all()
+    assert uuid.UUID(mine) not in logged and uuid.UUID(theirs) not in logged
+
+
+def test_관리자가_아니면_남의_토큰을_보지도_폐기하지도_못한다(
+    client: TestClient, db: Session, member: Signed, workspace: Workspace
+) -> None:
+    target = _make_user(db, workspace, label="target", is_system_admin=False, role="member")
+    own, heads, (pat,) = _issued(target.email, "연동")
+
+    assert (
+        client.get(f"/api/accounts/{target.id}/tokens", headers=member.headers).status_code
+        == 403
+    )
+    refused = client.post(
+        f"/api/accounts/{target.id}/tokens/{pat}/revoke",
+        json={"reason": "몰래"},
+        headers=member.headers,
+    )
+    assert refused.status_code == 403, refused.text
+    assert own.get("/api/auth/me", headers=heads["연동"]).status_code == 200

@@ -11,6 +11,7 @@ import { useSearchParams } from 'react-router-dom'
 
 import { accountApi } from '@/modules/accounts/api'
 import type { Account } from '@/modules/accounts/api'
+import { AccountTokensDialog } from '@/modules/accounts/AccountTokensDialog'
 import { AccountWorkspacesDialog } from '@/modules/accounts/AccountWorkspacesDialog'
 import { workspaceApi } from '@/modules/workspaces/api'
 import { ApiError } from '@/shared/api/client'
@@ -77,6 +78,8 @@ export default function AccountsAdminPage() {
   const [issued, setIssued] = useState<{ email: string; password: string } | null>(null)
   const [rejecting, setRejecting] = useState<{ id: string; email: string } | null>(null)
   const [editing, setEditing] = useState<Account | null>(null)
+  // 그 사람의 액세스 토큰 — 계정은 두고 연동 하나만 끊는 자리(정지는 토큰을 그대로 둔다).
+  const [tokensOf, setTokensOf] = useState<Account | null>(null)
   // **시스템 관리자 지정은 한 번 누르면 끝나는 일이 아니다.** 그 계정은 전 부서의 자료와
   // 계정 · 서버 설정을 다루게 된다 — 잘못 누른 것을 알아채는 자리가 어디에도 없다.
   const [promoting, setPromoting] = useState<Account | null>(null)
@@ -287,6 +290,9 @@ export default function AccountsAdminPage() {
                       <Button size="sm" variant="outline" onClick={() => setEditing(one)}>
                         소속 변경
                       </Button>
+                      <Button size="sm" variant="outline" onClick={() => setTokensOf(one)}>
+                        토큰
+                      </Button>
                       <Button
                         size="sm"
                         variant="outline"
@@ -327,6 +333,8 @@ export default function AccountsAdminPage() {
           onChange={(next) => setPaging({ status, offset: next })}
         />
       )}
+
+      {tokensOf && <AccountTokensDialog account={tokensOf} onClose={() => setTokensOf(null)} />}
 
       {editing && (
         <AccountWorkspacesDialog

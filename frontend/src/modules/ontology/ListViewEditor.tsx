@@ -51,11 +51,11 @@ const BUILT_IN: { id: string; label: string }[] = [
 /**
  * 목록에 세울 수 없는 속성 종류.
  *
- * `file` 은 값이 아니라 첨부다 — `properties` 에 아무것도 없어서 빈 열이 서고,
- * 빈 열은 「값이 없다」 로 읽힌다. `text_long` 은 여러 줄이라 표를 무너뜨린다 —
- * 목록에서는 잘려 보이느니 **안 보이는 편이 낫다**(상세에 있다).
+ * `text_long` 은 여러 줄이라 표를 무너뜨린다 — 목록에서는 잘려 보이느니 **안 보이는 편이
+ * 낫다**(상세에 있다). `file` 은 값이 아니라 첨부라 예전에는 빈 열이 섰다 — 이제 목록 응답이 칸
+ * (첫 장 · 수)을 함께 실어 사진은 작은 미리보기, 그 밖의 파일은 이름으로 선다(2026-10-08).
  */
-const NOT_A_GOOD_COLUMN = new Set(['file', 'text_long'])
+const NOT_A_GOOD_COLUMN = new Set(['text_long'])
 
 /** 「트리 없음」. 빈 문자열을 쓸 수 없다 — Select 가 그것을 「고른 것 없음」 으로 본다. */
 const NO_TREE = '__none__'
@@ -183,6 +183,9 @@ export function ListViewEditor({
   interfaces = [],
 }: Props) {
   const all = fieldOptions(defs, owner)
+  const fileColumns = new Set(
+    defs.filter((def) => def.data_type === 'file').map((def) => `properties.${def.key}`),
+  )
   const chosen = value.columns ?? []
   const rest = all.filter((one) => !chosen.includes(one.id))
 
@@ -298,8 +301,8 @@ export function ListViewEditor({
           </div>
         )}
         <p className="text-muted-foreground text-xs">
-          <b>첫 열이 상세로 가는 링크가 됩니다.</b> 파일 속성은 값이 아니라 첨부라 열로 세울 수
-          없습니다.
+          <b>첫 열이 상세로 가는 링크가 됩니다.</b> 파일 속성은 첫 장(사진이면 작은 미리보기)과
+          개수로 표시됩니다.
         </p>
       </div>
 
@@ -317,9 +320,10 @@ export function ListViewEditor({
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              {/* 「타입」 으로는 정렬하지 않는다 — 서버가 받지 않는다(열로만 선다). */}
+              {/* 「타입」 으로는 정렬하지 않는다 — 서버가 받지 않는다(열로만 선다). 파일 속성도 —
+                  값이 아니라 첨부라 늘 비어 있다. */}
               {all
-                .filter((one) => one.id !== TYPE_COLUMN.id)
+                .filter((one) => one.id !== TYPE_COLUMN.id && !fileColumns.has(one.id))
                 .map((one) => (
                   <SelectItem key={one.id} value={one.id}>
                     {one.label}

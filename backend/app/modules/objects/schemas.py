@@ -9,6 +9,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.modules.ontology.schemas import PropertyDefOut
+from app.shared.pagination import Page
 
 
 class ObjectOut(BaseModel):
@@ -85,6 +86,27 @@ class AttachmentBrief(BaseModel):
     `/api/attachments/{id}/thumbnail` 을 받고, MCP 는 이름 · 크기만 본다."""
     width: int | None = None
     height: int | None = None
+
+
+class FileCellOut(BaseModel):
+    """목록의 파일 칸 한 칸(2026-10-08). 화면은 `first` 가 이미지면 미리보기를, 아니면 아이콘 ·
+    이름을 보이고, 여럿이면 수를 곁에 적는다."""
+
+    count: int
+    """이 칸에 붙은 첨부의 수."""
+    first: AttachmentBrief
+    """사진이 있으면 가장 먼저 올라온 사진, 없으면 가장 먼저 올라온 파일."""
+
+
+class ObjectPageOut(Page[ObjectOut]):
+    """객체 목록 한 쪽. 목록 화면(`list_view.columns`)에 파일 속성이 있으면 그 칸들이
+    `files` 로 함께 온다 — 줄마다 첨부를 물으러 가면 한 쪽에 요청이 수십 개 붙는다.
+
+    줄(`ObjectOut`)이 아니라 쪽에 싣는다 — 파일 칸이 없는 목록(대부분이다)에서 줄마다 빈
+    칸을 싣지 않게."""
+
+    files: dict[str, dict[str, FileCellOut]] = Field(default_factory=dict)
+    """{객체 id: {속성 키: 칸}}. 첨부가 없는 칸은 없다(빈 칸)."""
 
 
 class RelatedObjectOut(BaseModel):
@@ -857,3 +879,168 @@ class SimilarAskRequest(BaseModel):
     tags: dict[str, list[uuid.UUID]]
     fields: list[str] | None = None
     limit: int = Field(default=10, ge=1, le=50)
+
+
+# --- 채울 곳 -------------------------------------------------------------------
+
+
+class FillFieldOut(BaseModel):
+    key: str
+    label: str
+    data_type: str
+    required: bool
+    filled: int
+    missing: int
+    rate: float
+    """채움률 0 ~ 1."""
+    uses: list[str]
+    """쓰는 곳 — 「필수」 「지표 「월별 인입률」」 「코어 공개」 「뷰 2개」."""
+
+
+class FillRelationOut(BaseModel):
+    relation: str
+    label: str
+    side: str
+    """`out`(이 타입이 출발) · `in`(도착) · `both`(방향 없음)."""
+    one: bool
+    """개수 제약으로 이 쪽은 「하나」 — 하나씩은 있어야 할 자리."""
+    missing: int
+    uses: list[str]
+
+
+class FillTypeOut(BaseModel):
+    type_slug: str
+    type_label: str
+    usage: str
+    core: bool
+    objects: int
+    estimated: bool
+    """표본에서 세어 늘린 어림인가."""
+    sample_rows: int | None
+    required_missing: int
+    fields: list[FillFieldOut]
+    """채움률이 낮은 칸부터 — 타입을 좁히지 않으면 몇 개까지만(`fields_more`)."""
+    fields_more: int
+    relations: list[FillRelationOut]
+    unresolved_refs: int
+    waiting_relations: int
+    no_alias: int | None
+    """별칭 없는 객체 — 축만(기록은 null)."""
+    alias_candidates: int
+    uses: list[str]
+
+
+class FillPriorityOut(BaseModel):
+    kind: str
+    """`empty_type` · `field` · `relation` · `refs` · `waiting` · `aliases`."""
+    type_slug: str
+    type_label: str
+    target: str
+    target_label: str
+    missing: int
+    total: int
+    score: float
+    weight: int
+    uses: list[str]
+    gain: str
+    """**이것을 채우면 무엇이 좋아지나.**"""
+    link: str
+    """화면 주소 — 빈 것만 거른 목록 등."""
+    estimated: bool
+
+
+class FillReportOut(BaseModel):
+    """채울 곳 — 타입마다 비어 있는 것과, 쓰는 곳으로 가중해 줄 세운 것."""
+
+    priorities: list[FillPriorityOut]
+    types: list[FillTypeOut]
+    notes: list[str]
+    """표본 · 안 보이는 타입 · 셈의 규칙 — **어림이면 어림이라고 말한다.**"""
+
+
+# --- 별칭 후보(못 찾은 말) -------------------------------------------------------
+
+
+class AliasSuggestionOut(BaseModel):
+    id: uuid.UUID
+    type_slug: str
+    type_label: str
+    label: str
+    key: str | None
+    matched: str
+    """label · key · alias — 어디가 비슷했나."""
+    matched_text: str
+    score: float
+
+
+class AliasCandidateOut(BaseModel):
+    id: uuid.UUID
+    text: str
+    """못 찾은 말 — 처음 친 표기 그대로."""
+    scope: str
+    """찾은 타입 · 인터페이스 slug. 비면 통합 검색."""
+    scope_label: str
+    scope_kind: str
+    hits: int
+    people: int
+    """몇 사람이 찾았나(스물까지 센다)."""
+    vias: list[str]
+    """`resolve` · `search` · `list`."""
+    status: str
+    """`pending` · `attached` · `ignored`."""
+    object_id: uuid.UUID | None
+    object_label: str | None
+    object_type_slug: str | None
+    first_at: datetime
+    last_at: datetime
+    decided_at: datetime | None
+    suggestions: list[AliasSuggestionOut]
+    """「이것 아닐까」 — 짐작이다. 사람이 고른 것만 붙인다."""
+    suggest_note: str
+
+
+class AliasCandidatePage(BaseModel):
+    items: list[AliasCandidateOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class AliasAttachRequest(BaseModel):
+    object_id: uuid.UUID
+    value: str | None = Field(default=None, max_length=200)
+    """붙일 글자 — 비우면 못 찾은 말 그대로."""
+    apply: bool = False
+    """거짓이면 **아무것도 안 바꾸고** 계획만."""
+
+
+class AliasAttachObjectOut(BaseModel):
+    id: uuid.UUID
+    type_slug: str
+    type_label: str
+    label: str
+    key: str | None
+
+
+class AliasAttachPlanOut(BaseModel):
+    applied: bool
+    candidate: AliasCandidateOut
+    object: AliasAttachObjectOut
+    value: str
+    aliases_before: list[str]
+    aliases_after: list[str]
+    warnings: list[str]
+    blocking: list[str]
+    """이것이 있으면 붙이지 않는다 — 사람이 먼저 할 일."""
+    closed: int = 0
+    """함께 닫은 줄 — 같은 말을 통합 검색 · 인터페이스에서 못 찾은 것."""
+
+
+class AliasCandidateDecision(BaseModel):
+    ids: list[uuid.UUID] = Field(min_length=1, max_length=500)
+    action: Literal["ignore", "restore"] = "ignore"
+
+
+class AliasCandidateDecisionOut(BaseModel):
+    done: int
+    refused: list[str]

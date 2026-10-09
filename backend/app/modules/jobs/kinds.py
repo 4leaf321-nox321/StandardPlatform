@@ -15,6 +15,7 @@ import csv
 import hashlib
 import io
 import json
+import logging
 import uuid
 import zipfile
 from collections.abc import Callable
@@ -42,11 +43,15 @@ from app.shared import sheets
 from app.shared.errors import Conflict, Forbidden, NotFound, code
 from app.shared.permissions import resolve_owner_workspace
 
+log = logging.getLogger(__name__)
+
 
 @dataclass
 class Work:
     db: Session
-    """본 트랜잭션. 처리 함수는 커밋하지 않는다 — 워커가 끝에서 한 번 한다."""
+    """본 트랜잭션. 처리 함수는 커밋하지 않는다 — 워커가 끝에서 한 번 한다. 스스로 커밋하는
+    것(일괄 입력 적용 · 동기화 · 지표)은 그 커밋마다 워커가 걸어 둔 검사(`services.hold`)가
+    「아직 이 작업을 쥐었나」 를 같은 트랜잭션에서 보고, 아니면 `Lost` 로 커밋을 막는다."""
     job: Job
     user: User | None
     """시킨 사람. 타이머가 넣은 작업(`allow_system` 인 종류)은 None — 감사 기록의 actor 가
@@ -56,6 +61,10 @@ class Work:
     progress: Callable[[str, int, int], None]
     """(단계, 처리한 수, 전체). 취소 요청이 있으면 **여기서 `Cancelled` 가 난다** — 단계
     사이에서만 멈추는 이유다."""
+    still_mine: Callable[[Session], None]
+    """처리 함수가 **따로 연 트랜잭션**을 커밋하기 바로 앞에, 그 트랜잭션의 세션으로 부른다 —
+    「아직 이 작업을 쥐었나」 를 그 안에서 보고 아니면 `Lost`(묶음 가져오기의 바깥 트랜잭션).
+    `db` 의 커밋에는 워커가 이미 걸어 두었다."""
     output_file_id: uuid.UUID | None = None
     """결과 파일을 만들었으면 `emit` 이 여기 적는다 — 워커가 끝에 작업 행에 옮긴다."""
 
@@ -289,6 +298,9 @@ def bundle_import(work: Work) -> dict[str, Any]:
         max_rows=get_settings().job_max_rows,
         on_progress=work.progress,
         before_commit=guard,
+        # 묶음은 제 연결의 바깥 트랜잭션으로 커밋한다 — 워커가 `work.db` 에 건 검사가 거기는
+        # 안 닿으므로 그 커밋 앞에서 직접 본다.
+        commit_check=work.still_mine,
     )
     out = bundle_services.outcome_out(outcome).model_dump(mode="json")
     if bundle.apply or bundle.preview != "plan":
@@ -603,7 +615,7 @@ def datasource_sync_round(work: Work) -> dict[str, Any]:
     """
     from app.modules.datasources import services as datasource_services
     from app.modules.datasources.models import DataSource
-    from app.modules.jobs.services import Cancelled
+    from app.modules.jobs.services import Cancelled, Lost
     from app.shared.errors import AppError
 
     slugs = [str(one) for one in work.params.get("slugs") or []]
@@ -611,41 +623,59 @@ def datasource_sync_round(work: Work) -> dict[str, Any]:
     found = list(work.db.scalars(select(DataSource).where(DataSource.slug.in_(slugs))))
     ordered = datasource_services.sync_order(work.db, found)
     done: list[dict[str, Any]] = []
-    for index, planned in enumerate(ordered):
-        work.progress(planned.slug, index, len(ordered))
-        source = work.db.get(DataSource, planned.id, populate_existing=True)
-        if source is None:  # 차례가 도는 사이 지워졌다
-            done.append({"slug": planned.slug, "status": "skipped", "error": "지워졌습니다"})
-            continue
-        if not source.is_active:
-            done.append({"slug": source.slug, "status": "skipped"})
-            continue
-        try:
-            result = datasource_services.sync(work.db, work.user, source, apply=apply)
-        except Cancelled:
-            raise
-        except AppError as caught:
-            work.db.rollback()
-            # 다른 작업이 이 소스를 지금 넣고 있다 — 이 소스에는 아무 일도 안 했다.
-            busy = caught.code == datasource_services.BUSY
+    try:
+        for index, planned in enumerate(ordered):
+            work.progress(planned.slug, index, len(ordered))
+            source = work.db.get(DataSource, planned.id, populate_existing=True)
+            if source is None:  # 차례가 도는 사이 지워졌다
+                done.append(
+                    {"slug": planned.slug, "status": "skipped", "error": "지워졌습니다"}
+                )
+                continue
+            if not source.is_active:
+                done.append({"slug": source.slug, "status": "skipped"})
+                continue
+            try:
+                result = datasource_services.sync(work.db, work.user, source, apply=apply)
+            except Cancelled:
+                raise
+            except AppError as caught:
+                work.db.rollback()
+                # 다른 작업이 이 소스를 지금 넣고 있다 — 이 소스에는 아무 일도 안 했다.
+                busy = caught.code == datasource_services.BUSY
+                done.append(
+                    {
+                        "slug": source.slug,
+                        "status": "skipped" if busy else "failed",
+                        "error": caught.message[:500],
+                    }
+                )
+                continue
+            except Exception as caught:  # 한 소스의 실패가 차례 전체를 멈추지 않는다
+                work.db.rollback()
+                done.append(
+                    {"slug": source.slug, "status": "failed", "error": str(caught)[:500]}
+                )
+                continue
+            if result.run.applied and _changed(result.run.counts or {}):
+                _after_ingest(work.db, source.type_id, f"datasource:{source.slug}")
+            work.db.commit()
             done.append(
-                {
-                    "slug": source.slug,
-                    "status": "skipped" if busy else "failed",
-                    "error": caught.message[:500],
-                }
+                {"slug": source.slug, "status": result.run.status, "counts": result.run.counts}
             )
-            continue
-        except Exception as caught:  # 한 소스의 실패가 차례 전체를 멈추지 않는다
-            work.db.rollback()
-            done.append({"slug": source.slug, "status": "failed", "error": str(caught)[:500]})
-            continue
-        if result.run.applied and _changed(result.run.counts or {}):
-            _after_ingest(work.db, source.type_id, f"datasource:{source.slug}")
-        work.db.commit()
-        done.append(
-            {"slug": source.slug, "status": result.run.status, "counts": result.run.counts}
-        )
+    except Lost:
+        # **빼앗긴 차례**(박동이 멎어 되살려져 남이 다시 집었다) — 이 워커의 결과(`done`)는
+        # 작업 행에 안 적힌다. 앞에서 이미 커밋한 소스는 그 소스의 실행 기록 · 감사에 남고,
+        # 이어받은 워커가 차례를 처음부터 다시 돈다(바뀐 것이 없으면 「그대로」 로 끝난다). 이
+        # 차례가 무엇을 이미 넣었는지는 작업 행에 적을 수 없으니 로그에 남긴다.
+        ran = [one["slug"] for one in done if one["status"] != "skipped"]
+        if ran:
+            log.warning(
+                "작업 %s 을 빼앗겼습니다 — 이 차례에서 이미 돈 소스(커밋됨): %s",
+                work.job.id,
+                ", ".join(ran),
+            )
+        raise
     work.progress("끝", len(ordered), len(ordered))
     return {
         "order": [one.slug for one in ordered],
@@ -787,11 +817,25 @@ def objects_rewrite(work: Work) -> dict[str, Any]:
     return objects_routes.run_rewrite_job(work.db, _user(work), work.params, work.progress)
 
 
+def objects_photos(work: Work) -> dict[str, Any]:
+    """사진 일괄 업로드 — zip 의 사진을 파일 이름으로 객체를 찾아 파일 속성에 붙인다
+    (`objects/photos.py`). 계획 → 사람 확정 → 적용. 권한은 객체마다 본다(못 고치는 객체는
+    계획에 「권한 없음」)."""
+    from app.modules.objects import photos
+
+    assert work.input_file is not None  # needs_file — 넣을 때 · 돌릴 때 이미 봤다
+    return photos.run(
+        work.db, _user(work), work.params, work.input_file.data, progress=work.progress
+    )
+
+
 # `public` — 일반 작업 API 로 넣는 것은 일괄 입력 둘(MCP · 정제 도구가 파일을 올린다)과 고아
-# 파일 정리(서버 화면 · MCP)뿐이다. 나머지는 전용 경로로만.
+# 파일 정리(서버 화면 · MCP)뿐이다. 나머지는 전용 경로로만. 사진 일괄 업로드도 전용 경로
+# (`POST /api/objects/{type}/photos/import`)로만 — 그 경로가 타입 · 칸을 넣는 순간에 본다.
 register(
     Kind("objects_import", "객체 일괄 입력", True, True, objects_import, True, public=True)
 )
+register(Kind("objects_photos", "사진 일괄 업로드", True, True, objects_photos))
 register(Kind("objects_rewrite", "병합 · 참조 비우고 지우기", False, False, objects_rewrite))
 register(
     Kind("ontology_retype", "속성 종류 변경", False, True, ontology_retype, admin_only=True)

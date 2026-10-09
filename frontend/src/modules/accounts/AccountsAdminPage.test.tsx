@@ -20,6 +20,8 @@ const accountApi = vi.hoisted(() => ({
   suspend: vi.fn(),
   activate: vi.fn(),
   create: vi.fn(),
+  tokens: vi.fn(),
+  revokeToken: vi.fn(),
 }))
 const workspaceApi = vi.hoisted(() => ({ options: vi.fn() }))
 vi.mock('@/modules/accounts/api', () => ({ accountApi }))
@@ -89,6 +91,20 @@ describe('계정 관리 · 쪽 넘김과 상태 거르기', () => {
     await waitFor(() =>
       expect(accountApi.list).toHaveBeenLastCalledWith({ status: null, limit: 50, offset: 0 }),
     )
+  })
+})
+
+describe('계정 관리 · 그 사람의 토큰', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  // 정지는 토큰을 그대로 둔다 — 계정을 지우지 않고 연동만 끊는 자리가 여기다.
+  it('정지된 계정도 「토큰」 으로 그 사람의 토큰 목록을 연다', async () => {
+    accountApi.tokens.mockResolvedValue([])
+    await open({ ...ACCOUNT, status: 'suspended' })
+    await userEvent.click(screen.getByRole('button', { name: '토큰' }))
+    const dialog = await screen.findByRole('dialog', { name: /홍길동\(hong\) 의 액세스 토큰/ })
+    expect(dialog).toBeInTheDocument()
+    await waitFor(() => expect(accountApi.tokens).toHaveBeenCalledWith('acc-1'))
   })
 })
 

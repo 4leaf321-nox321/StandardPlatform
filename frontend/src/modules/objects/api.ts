@@ -5,6 +5,7 @@ import type { Job } from '@/modules/jobs/api'
 import type { PropertyDef } from '@/modules/ontology/api'
 import { api, downloadFile } from '@/shared/api/client'
 import type { Page } from '@/shared/api/paging'
+import type { components } from '@/shared/api/schema'
 
 export interface ObjectRow {
   id: string
@@ -35,6 +36,71 @@ export interface AttachmentBrief {
   original_name: string
   size_bytes: number
   created_at: string
+  /** 서버가 열어 보고 이미지로 읽은 것 — 이것만 그림(미리보기)으로 띄운다(ADR 0012). */
+  is_image?: boolean
+}
+
+/**
+ * 목록의 파일 칸 한 칸 — 첫 장(사진이 있으면 사진)과 모두 몇 개인가. 바이트는 없다 — 화면은
+ * `/attachments/{id}/thumbnail`(긴 변 320px)을 받는다.
+ */
+export interface FileCell {
+  count: number
+  first: AttachmentBrief
+}
+
+/**
+ * 객체 목록 한 쪽. 목록 화면의 열에 파일 속성이 있으면 그 칸들이 `files` 로 온다 —
+ * `{객체 id: {속성 키: 칸}}`. 줄마다 첨부를 물으러 가면 한 쪽에 요청이 수십 개 붙는다.
+ */
+export interface ObjectPage extends Page<ObjectRow> {
+  files?: Record<string, Record<string, FileCell>>
+}
+
+/** 사진 일괄 업로드의 한 줄 — zip 안의 파일 하나가 무엇이 되나(`objects/photos.py`). */
+export type PhotoStatus =
+  | 'attach'
+  | 'replace'
+  | 'skip'
+  | 'not_found'
+  | 'ambiguous'
+  | 'not_image'
+  | 'too_large'
+  | 'forbidden'
+  | 'bad_entry'
+
+export interface PhotoRow {
+  /** zip 안의 경로(한글 이름을 풀어 읽은 것). */
+  name: string
+  status: PhotoStatus
+  size_bytes: number
+  object_id: string | null
+  object_label: string
+  object_key: string | null
+  /** 무엇으로 찾았나 — `key` · `alias` · `label` · `id` · `folder` · `suffix`. */
+  matched_by: string
+  message: string
+  /** 교체면 떼는 파일 수. */
+  replaces: number
+  attachment_id: string | null
+}
+
+/** 사진 일괄 업로드 작업의 결과 — 계획이든 적용이든 같은 모양이다. */
+export interface PhotoPlan {
+  photos: true
+  applied: boolean
+  /** 붙는 것이 하나라도 있나 — 그때만 적용할 수 있다. */
+  ok: boolean
+  type_slug: string
+  field: string
+  field_label: string
+  existing: 'skip' | 'replace' | 'add'
+  files: PhotoRow[]
+  /** 줄 종류마다 몇 개 — `counts` 가 아니다(그 이름은 작업 화면 · 홈이 일괄 입력의 수로 읽는다). */
+  tally: Partial<Record<PhotoStatus, number>>
+  /** 세기만 하고 줄에 안 실은 숨김 파일(`__MACOSX` · `.DS_Store` …). */
+  hidden: number
+  summary: string
 }
 
 export interface RelatedObject {
@@ -433,6 +499,51 @@ export const aliasReviewApi = {
     }),
 }
 
+/** 채울 곳 — **서버 스키마 그대로**(손으로 적지 않는다, `npm run api:types`). */
+export type FillReport = components['schemas']['FillReportOut']
+export type FillPriority = components['schemas']['FillPriorityOut']
+
+export const fillApi = {
+  /** 어디부터 채우나 — 쓰는 곳(필수 · 지표 · 코어 공개 · 뷰)으로 가중해 줄 세운 것. */
+  report: (options: { type?: string; limit?: number } = {}) => {
+    const params = new URLSearchParams()
+    if (options.type) params.set('type', options.type)
+    if (options.limit) params.set('limit', String(options.limit))
+    const query = params.toString()
+    return api.get<FillReport>(`/objects/fill-priorities${query ? `?${query}` : ''}`)
+  },
+}
+
+/** 별칭 후보(못 찾은 말) — 서버 스키마 그대로. */
+export type AliasCandidate = components['schemas']['AliasCandidateOut']
+export type AliasCandidatePage = components['schemas']['AliasCandidatePage']
+export type AliasAttachPlan = components['schemas']['AliasAttachPlanOut']
+
+export const aliasCandidateApi = {
+  list: (
+    options: { type?: string; status?: string; limit?: number; suggest?: boolean } = {},
+  ) => {
+    const params = new URLSearchParams()
+    if (options.type !== undefined) params.set('type', options.type)
+    if (options.status) params.set('status', options.status)
+    if (options.limit) params.set('limit', String(options.limit))
+    if (options.suggest === false) params.set('suggest', 'false')
+    const query = params.toString()
+    return api.get<AliasCandidatePage>(`/objects/alias-candidates${query ? `?${query}` : ''}`)
+  },
+  /** 그 객체의 별칭으로 — `apply=false` 면 계획만(아무것도 안 바뀐다). */
+  attach: (id: string, objectId: string, apply: boolean) =>
+    api.post<AliasAttachPlan>(`/objects/alias-candidates/${id}/attach`, {
+      object_id: objectId,
+      apply,
+    }),
+  decide: (ids: string[], action: 'ignore' | 'restore') =>
+    api.post<{ done: number; refused: string[] }>('/objects/alias-candidates/decide', {
+      ids,
+      action,
+    }),
+}
+
 export const viewApi = {
   list: (typeSlug: string) => api.get<SavedView[]>(`/objects/${typeSlug}/views`),
   create: (
@@ -663,6 +774,21 @@ export const objectApi = {
       () => api.post<Job>(`/objects/${typeSlug}/relations/export?format=${format}`),
       `${typeSlug}-relations.${format}`,
     ),
+  /**
+   * 사진 일괄 업로드 — zip 하나. **작업이 된다**(202): 워커가 파일 이름으로 객체를 찾아 계획을
+   * 세우고, 사람이 보고 `jobsApi.apply` 로 적용한다. 칸에 이미 사진이 있으면 `existing` 대로.
+   */
+  importPhotos: (
+    typeSlug: string,
+    file: File,
+    opts: { field: string; existing: 'skip' | 'replace' | 'add' },
+  ) => {
+    const body = new FormData()
+    body.append('file', file)
+    body.append('field', opts.field)
+    body.append('existing', opts.existing)
+    return api.postForm<Job>(`/objects/${typeSlug}/photos/import`, body)
+  },
   importRelations: (typeSlug: string, file: File, mode: 'add' | 'replace' = 'add') =>
     api.postForm<Job>(
       `/objects/${typeSlug}/relations/import`,
@@ -722,7 +848,7 @@ export const objectApi = {
   /** 내가 지켜보는 것 — 최근 바뀐 것부터. **알림은 읽으면 사라지지만 이것은 남는다.** */
   watching: (limit = 10) => api.get<Watched[]>(`/objects/watching?limit=${limit}`),
   list: (typeSlug: string, query: ObjectQuery = {}) =>
-    api.get<Page<ObjectRow>>(`/objects/${typeSlug}${queryString(query)}`),
+    api.get<ObjectPage>(`/objects/${typeSlug}${queryString(query)}`),
   /**
    * 통계 — **목록과 같은 필터 위에서.**
    *

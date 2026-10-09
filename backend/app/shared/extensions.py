@@ -110,6 +110,13 @@ class WorkspaceContent:
     label: str
     count: int
     move: Callable[[Session, uuid.UUID, uuid.UUID], int]
+    move_by: Callable[[Session, uuid.UUID, uuid.UUID, User], int] | None = None
+    """`move` 와 같되 **누가 옮기나**까지 받는다 — 있으면 통폐합이 이것을 부른다.
+
+    옮긴 것마다 기록을 남기는 종류가 쓴다(객체 — 옮겨 간 객체를 바깥 수신 측에 「더 이상 안
+    보임」 으로 알리는 근거가 객체마다의 소유 부서 기록이다, `coreapi/services._moved_away`).
+    기록에는 사람이 박혀야 한다 — 「시스템」 으로 남기면 반년 뒤 누가 옮겼는지 그 객체의
+    이력으로는 답할 수 없다."""
 
 
 def rows_changed(result: Result[Any]) -> int:

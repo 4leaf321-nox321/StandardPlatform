@@ -53,6 +53,10 @@ class RelationTombstoneIn(BaseModel):
     src: str = Field(min_length=1)
     relation: str = Field(min_length=1)
     dst: str = Field(min_length=1)
+    dst_type: str = ""
+    """도착점의 타입 slug — 있으면 그 타입의 것만 끊는다. 끝이 인터페이스인 종류는 도착이
+    여러 타입이고 식별자는 타입 안에서만 하나라, 이것 없이 찾으면 같은 식별자를 가진 다른
+    타입의 선을 끊을 수 있다. 이 설치에 없는 타입이면 버린다(예전처럼 세 끝으로 찾는다)."""
 
 
 class TombstonesIn(BaseModel):

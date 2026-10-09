@@ -24,6 +24,12 @@ export interface Attachment {
   height?: number | null
 }
 
+/**
+ * 한 파일의 상한 — 서버의 `files.services.MAX_BYTES` 와 같다(넘으면 서버가 413). 화면은 보내기
+ * **전에** 보려고 쓴다(생성 화면은 객체를 만들기 전에 — 만든 뒤에 거절되면 객체만 남는다).
+ */
+export const ATTACHMENT_MAX_BYTES = 50 * 1024 * 1024
+
 /** 미리보기(긴 변 320px WebP) · 원본 — `useBlobUrl` 로 띄운다. */
 export const attachmentPaths = {
   thumbnail: (id: string) => `/attachments/${id}/thumbnail`,

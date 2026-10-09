@@ -88,8 +88,10 @@ def core_relations(
     끝점은 `key` 로 온다. `dst_type` 은 도착점의 타입 slug 다 — 어느 표에서 찾을지 알려
     준다. `deleted: true` 인 줄은 **끊긴 선**이다(받는 쪽도 끊는다).
 
-    **양끝이 모두 열린 관계 종류만** 온다 — 한쪽이 안 열렸으면 받는 쪽이 못 찾는 끝점을
-    쥐게 된다. 무엇이 오는지는 카탈로그의 `relations` 가 말한다.
+    **양끝 객체의 타입이 모두 열린 선만** 온다 — 한쪽이 안 열렸으면 받는 쪽이 못 찾는 끝점을
+    쥐게 된다. 끝에 인터페이스를 적은 관계 종류는 그것을 구현한 타입 중 열린 것의 객체를 잇는
+    선만 온다(`dst_type` 이 선마다 다르다). 무엇이 오는지는 카탈로그의 `relations` ·
+    `relation_kinds` 가 말한다.
     """
     object_type = services.find_core_type(db, type_slug)
     return services.relations(

@@ -40,6 +40,14 @@ class _Clock:
         if self.now >= self.until:
             self.worker.stop = True
 
+    # 빈 워커의 기다림(`Waker` — 작업이 들어오면 바로 깬다)도 이 시계로 — 진짜는 DB 연결로
+    # 기다려 시계가 안 가고, 워커가 영영 안 선다.
+    def wait(self, seconds: float) -> None:
+        self.sleep(seconds)
+
+    def close(self) -> None:
+        pass
+
 
 def _run(monkeypatch: pytest.MonkeyPatch, *, minutes: int, jobs: set[int]) -> list[float]:
     """워커를 `minutes` 분 돌리고 박동이 남은 시각들을 돌려준다 — **끝 시각을 마지막에 붙여.**
@@ -66,6 +74,7 @@ def _run(monkeypatch: pytest.MonkeyPatch, *, minutes: int, jobs: set[int]) -> li
     # 워커가 부르는 것은 이 모듈들의 속성이다 — 같은 모듈 객체를 고친다.
     services: Any = job_services
     monkeypatch.setattr(worker_module, "time", clock)
+    monkeypatch.setattr(worker, "waker", clock)
     monkeypatch.setattr(worker_module, "SessionLocal", lambda: contextlib.nullcontext(None))
     monkeypatch.setattr(services, "heartbeat", lambda *_a: beats.append(clock.now))
     monkeypatch.setattr(services, "process_one", process_one)
@@ -137,6 +146,7 @@ def test_고아_첨부_정리가_오래_걸려도_박동과_작업은_이어진�
 
     services: Any = job_services
     monkeypatch.setattr(worker_module, "time", clock)
+    monkeypatch.setattr(worker, "waker", clock)
     monkeypatch.setattr(worker_module, "SessionLocal", lambda: contextlib.nullcontext(None))
     monkeypatch.setattr(gc, "scan", slow_scan)
     monkeypatch.setattr(gc, "clean", lambda _db, _found, **_kw: gc.Cleaned())

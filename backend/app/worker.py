@@ -10,11 +10,16 @@
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import signal
 import threading
 import time
 from typing import Any
+
+import psycopg
+from psycopg import sql
+from sqlalchemy.engine import make_url
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -52,10 +57,58 @@ def _clean_orphans() -> None:
         )
 
 
+class Waker:
+    """**작업이 들어오면 바로 깬다** — `LISTEN`(`services.WAKE_CHANNEL`) 한 연결로 기다린다.
+
+    예전에는 빈 워커가 2초에서 5초까지 늦춰 가며 물어, 넣고 집기까지 1 ~ 5초가 들었다 —
+    계획과 적용 두 번이면 그것이 두 번이다(2026-10-09). 연결이 안 되거나 끊기면 그냥 그
+    시간만큼 잔다(예전과 같다) — 다음 기다림에 다시 붙는다. 일하는 동안 온 알림은 연결에 쌓여
+    있다가 다음 기다림을 곧장 끝낸다(빈 바퀴 한 번이면 된다)."""
+
+    def __init__(self) -> None:
+        self._conn: psycopg.Connection[Any] | None = None
+
+    def _connected(self) -> psycopg.Connection[Any] | None:
+        if self._conn is not None and not self._conn.closed:
+            return self._conn
+        try:
+            url = make_url(get_settings().database_url).set(drivername="postgresql")
+            conn = psycopg.connect(url.render_as_string(hide_password=False), autocommit=True)
+            conn.execute(sql.SQL("LISTEN {}").format(sql.Identifier(services.WAKE_CHANNEL)))
+        except Exception:
+            log.warning(
+                "작업 알림을 들을 연결을 못 열었습니다 — 시간마다 묻습니다", exc_info=True
+            )
+            self._conn = None
+            return None
+        self._conn = conn
+        return conn
+
+    def wait(self, seconds: float) -> None:
+        conn = self._connected()
+        if conn is None:
+            time.sleep(seconds)
+            return
+        try:
+            for _ in conn.notifies(timeout=seconds, stop_after=1):
+                break
+        except Exception:
+            log.warning("작업 알림 연결이 끊겼습니다 — 다음에 다시 붙습니다", exc_info=True)
+            self.close()
+            time.sleep(seconds)
+
+    def close(self) -> None:
+        if self._conn is not None:
+            with contextlib.suppress(Exception):  # 닫는 것은 실패해도 할 일이 없다
+                self._conn.close()
+        self._conn = None
+
+
 class Worker:
     def __init__(self) -> None:
         self.worker_id = services.worker_identity()
         self.stop = False
+        self.waker = Waker()
         self._last_beat = 0.0
         self._last_recover = 0.0
         self._last_purge = 0.0
@@ -145,12 +198,14 @@ class Worker:
                 idle = settings.worker_poll_seconds
             else:
                 # 비어 있으면 천천히 — 빈 표를 2초마다 두드리는 것은 DB 에 대한 예의가 아니다.
-                time.sleep(idle)
+                # 기다리는 동안 작업이 들어오면 알림으로 바로 깬다(`Waker`).
+                self.waker.wait(idle)
                 idle = min(idle * 1.5, IDLE_MAX)
         if self._gc_thread is not None and self._gc_thread.is_alive():
             # 데몬 스레드라 프로세스와 함께 끊긴다 — 지우기는 파일 하나씩이라 반쯤 남아도
             # 다음 차례가 처음부터 다시 훑는다.
             log.info("고아 첨부 정리가 도는 중에 멈춥니다 — 다음 차례에 처음부터 다시")
+        self.waker.close()
         log.info("워커 종료: %s", self.worker_id)
 
     def handle_signal(self, signum: int, _frame: Any) -> None:

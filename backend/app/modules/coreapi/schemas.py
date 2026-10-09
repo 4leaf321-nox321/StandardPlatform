@@ -15,6 +15,7 @@
 
 from __future__ import annotations
 
+import uuid
 from datetime import datetime
 from typing import Any
 
@@ -39,6 +40,31 @@ class CorePropertyOut(BaseModel):
     help: str = ""
 
 
+class CoreRelationEndOut(BaseModel):
+    """관계 종류의 끝에 적힌 것 하나 — **타입이거나 인터페이스**(ADR 0006).
+
+    인터페이스는 여러 타입이 따르는 공통 모양이라 객체를 갖지 않는다. 끝에 인터페이스를 적은
+    종류의 선은 **그것을 구현한 타입의 객체**를 잇는다 — 그래서 받는 쪽은 「이 끝에 무엇이
+    올 수 있나」 를 slug 하나로는 모른다. `types` 가 그것을 말한다."""
+
+    slug: str
+    interface: bool = False
+    """참이면 `slug` 는 인터페이스다 — 그 끝에는 그것을 구현한 타입 중 **열린 것**만 선다."""
+    types: list[str] = Field(default_factory=list)
+    """이 끝에 설 수 있는 **열린** 타입 slug. 타입이면 자기 하나다. 선의 `dst_type` 은 늘 이
+    가운데 하나다 — 구현했어도 안 열린 타입의 객체를 가리키는 선은 안 나간다(받는 쪽이 못
+    찾는 끝점을 쥐게 된다). 인터페이스를 구현한 타입이 새로 열리면 여기에 늘고 판이 바뀐다."""
+
+
+class CoreRelationKindOut(BaseModel):
+    """이 타입에서 출발하는 관계 종류 하나의 **약속** — 양끝에 무엇이 서나."""
+
+    slug: str
+    label: str
+    src: list[CoreRelationEndOut]
+    dst: list[CoreRelationEndOut]
+
+
 class CoreTypeOut(BaseModel):
     slug: str
     label: str
@@ -53,8 +79,14 @@ class CoreTypeOut(BaseModel):
     relations_endpoint: str | None = None
     """이 타입에서 **출발하는 선**을 가져가는 자리 — 열린 관계 종류가 있을 때만."""
     relations: list[str] = Field(default_factory=list)
-    """그 창구에 오는 관계 종류의 slug 들. **양끝이 모두 열린 타입인 것만 온다** — 한쪽이
-    안 열린 선을 보내면 받는 쪽이 못 찾는 끝점을 쥔다."""
+    """그 창구에 오는 관계 종류의 slug 들. **선의 양끝 객체가 모두 열린 타입인 것만 온다** —
+    한쪽이 안 열린 선을 보내면 받는 쪽이 못 찾는 끝점을 쥔다. 끝에 타입을 적은 종류는 적힌
+    타입이 모두 열려야 열리고, 끝에 인터페이스를 적은 종류는 구현한 타입 중 열린 것이 있으면
+    열린다(선마다 끝 객체의 타입을 본다) — 자세한 것은 `relation_kinds`."""
+    relation_kinds: list[CoreRelationKindOut] = Field(default_factory=list)
+    """`relations` 를 풀어 쓴 것 — 종류마다 양끝에 적힌 타입 · 인터페이스와 **그 끝에 설 수
+    있는 열린 타입**. 끝이 인터페이스인 선을 받는 쪽은 `dst_type` 으로 어느 표에서 찾을지
+    가른다(같은 `key` 가 두 구현 타입에 있을 수 있다)."""
 
 
 class CoreCatalogOut(BaseModel):
@@ -76,10 +108,14 @@ class CoreConsumerOut(BaseModel):
     화면에 없으면, 사람은 아무도 안 쓴다고 여기고 누른다.
     """
 
+    id: uuid.UUID
+    """토큰의 id — 관리자가 이 화면에서 폐기할 때 쓴다
+    (`POST /api/accounts/{owner_id}/tokens/{id}/revoke`)."""
     name: str
     """토큰 이름 — 발급할 때 적은 용도(「MatNexus 야간 동기화」)."""
     owner: str
     """토큰이 붙은 계정."""
+    owner_id: uuid.UUID
     last_used_at: datetime | None = None
     """**한 번도 안 쓴 토큰은 여기가 비어 있다** — 아직 안 붙은 연동이라는 뜻이다."""
     expires_at: datetime | None = None
@@ -143,7 +179,9 @@ class CoreRelationOut(BaseModel):
     """관계 종류의 slug."""
     dst: str
     dst_type: str
-    """도착점의 타입 slug — 받는 쪽이 어느 표에서 찾을지 안다."""
+    """도착점의 타입 slug — 받는 쪽이 어느 표에서 찾을지 안다. 끝이 인터페이스인 종류면
+    선마다 다르다(구현한 타입 중 열린 것). **`key` 는 타입 안에서만 하나**라, 받는 쪽은 선을
+    `(src, relation, dst, dst_type)` 으로 가린다."""
     evidence_note: str = ""
     properties: dict[str, Any] = Field(default_factory=dict)
     """선 자체에 붙은 값(근거 건수처럼). **빈 값은 키를 뺀다.**"""

@@ -32,7 +32,10 @@ KEY_RE = re.compile(r"^[a-z][a-z0-9_]{0,47}$")
 #: 경로의 첫 마디(`/api/objects/home` · `/watching` · `/quality/report`). 그 slug 의 타입은
 #: 목록이 고정 경로로 빠져 안 열린다(2026-10-08). 객체 라우터에 고정 경로를 더하면 여기에도
 #: 더한다 — `tests/api/test_ontology_guards.py` 가 둘이 어긋나면 잡는다. 이미 있는 타입은
-#: 그대로 두고 새로 만드는 것만 막는다.
+#: 그대로 두고 새로 만드는 것만 막는다. **`-` 가 든 고정 경로**(`fill-priorities` ·
+#: `alias-candidates`)는 slug 규칙(`SLUG_RE`)이 이미 막아 여기 적지 않는다 — 적으면
+#: 「예약이라 거절」 보다 「slug 모양이 틀림」 이 먼저 나서 예약 목록이 거짓말을 한다. 새 고정
+#: 경로는 되도록 그렇게(`-` 를 넣어) 짓는다 — 그러면 어떤 타입 이름도 막지 않는다.
 RESERVED_SLUGS: frozenset[str] = frozenset({"home", "quality", "watching"})
 
 

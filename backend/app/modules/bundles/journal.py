@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import inspect
+from sqlalchemy import Table, inspect
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.bundles.models import BundleRun, BundleUndoEntry
+from app.shared import copyin
 
 _KEY = "bundle_journal"
 
@@ -127,19 +128,65 @@ def _add(
     after: dict[str, Any],
     label: str,
 ) -> None:
+    row = _row(db, table, target_id, action, before, after, label)
+    if row is not None:
+        db.add(BundleUndoEntry(**row))
+
+
+def _row(
+    db: Session,
+    table: str,
+    target_id: uuid.UUID,
+    action: str,
+    before: dict[str, Any],
+    after: dict[str, Any],
+    label: str,
+) -> dict[str, Any] | None:
+    """줄 하나의 칸 — 판이 안 열려 있으면 None. **차례(`seq`)는 여기서 매긴다**(부른 차례)."""
     state = db.info.get(_KEY)
     if not isinstance(state, _Open):
-        return
+        return None
     state.seq += 1
-    entry = BundleUndoEntry(
-        id=uuid.uuid4(),
-        run_id=state.run_id,
-        seq=state.seq,
-        table_name=table,
-        target_id=target_id,
-        action=action,
-        before=before,
-        after=after,
-        label=label[:300],
-    )
-    db.add(entry)
+    return {
+        "id": uuid.uuid4(),
+        "run_id": state.run_id,
+        "seq": state.seq,
+        "table_name": table,
+        "target_id": target_id,
+        "action": action,
+        "before": before,
+        "after": after,
+        "label": label[:300],
+    }
+
+
+class Batch:
+    """**만든 것**의 줄을 모았다가 한 문장(COPY)으로 넣는다 — 판이 안 열려 있으면 아무 일도
+    안 한다(`created` 와 같다).
+
+    묶음의 객체 단계는 새 줄마다 이 기록이 하나다. 줄마다 ORM 객체로 두면 flush 가 그것을
+    1,000줄짜리 `INSERT … RETURNING` 으로 보내는데, 감사 기록과 같은 이유로 그것이 느렸다
+    (`shared/copyin.py`). 차례(`seq`)는 **부를 때** 매기므로(`_row`) `changed` 처럼 바로
+    넣는 줄과 섞여도 되돌리는 차례는 그대로다.
+
+    ⚠️ `write` 전에는 표에 없다 — 부르는 쪽이 커밋 전에 부른다.
+    """
+
+    def __init__(self, db: Session) -> None:
+        self.db = db
+        self.rows: list[dict[str, Any]] = []
+
+    def created(self, table: str, target_id: uuid.UUID, *, label: str = "") -> None:
+        row = _row(self.db, table, target_id, "create", {}, {}, label)
+        if row is not None:
+            self.rows.append(row)
+
+    def write(self) -> None:
+        """모은 것을 넣는다 — 여러 번 불러도 된다(넣은 것은 비운다)."""
+        if not self.rows:
+            return
+        # 판(`BundleRun`)이 먼저 들어가야 외래키가 선다 — 이 세션은 스스로 flush 하지 않고
+        # (`autoflush=False`), COPY 는 세션을 거치지 않는다.
+        self.db.flush()
+        copyin.copy_rows(self.db, cast("Table", BundleUndoEntry.__table__), self.rows)
+        self.rows.clear()

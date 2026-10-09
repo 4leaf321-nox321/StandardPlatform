@@ -865,15 +865,20 @@ def test_말없이_오래_걸리는_작업도_박동은_뛴다(
     seen: list[datetime] = []
 
     def quiet(work: kinds.Work) -> dict[str, Any]:
-        started = datetime.now(UTC)
-        time.sleep(0.6)  # 진행을 안 적는 긴 단계
         from app.database import SessionLocal
 
-        with SessionLocal() as other:
-            beat = other.scalar(select(Job.heartbeat_at).where(Job.id == work.job.id))
-        assert beat is not None
-        seen.append(beat)
-        assert beat > started, "도는 동안 박동이 한 번도 안 뛰었다"
+        def beat() -> datetime | None:
+            with SessionLocal() as other:
+                return other.scalar(select(Job.heartbeat_at).where(Job.id == work.job.id))
+
+        # 시각의 크고 작음이 아니라 **바뀌었나**로 본다 — 이 PC(WSL)의 시계는 몇 초씩 뒤로
+        # 튀어, 「박동 > 시작」 은 박동이 뛰어도 거짓일 수 있다(2026-10-08).
+        first = beat()
+        time.sleep(0.6)  # 진행을 안 적는 긴 단계
+        last = beat()
+        assert last is not None
+        seen.append(last)
+        assert last != first, "도는 동안 박동이 한 번도 안 뛰었다"
         return {"applied": True}
 
     name = f"quiet_{uuid.uuid4().hex[:6]}"

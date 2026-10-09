@@ -12,7 +12,7 @@ import uuid
 from typing import Any
 
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from tests.api.conftest import Signed, finish_job
 from tests.api.test_metrics import _define, _world
@@ -36,6 +36,27 @@ def _recount(
     runs = client.get(f"/api/metrics/{slug}/runs", headers=admin.headers)
     assert runs.status_code == 200, runs.text
     return dict(runs.json()[0])
+
+
+def _clock_went_back(type_slug: str, watermark: str) -> bool:
+    """**시계가 뒤로 튀었나** — 계산 전에 넣은 기록의 시각이 그 계산의 워터마크보다 뒤다.
+
+    이 PC(WSL)의 시계는 몇 초씩 뒤로 튄다(2026-10-08 실측 — 45초에 2.9초). 그러면 먼저 넣은
+    기록이 워터마크 「뒤」 로 읽혀 증분이 그 기간을 한 번 더 센다 — 틀린 것이 아니라 넉넉한
+    쪽이다(값은 같다). 그때만 「아무 기간도 안 센다」 를 보지 않는다."""
+    from datetime import datetime
+
+    from app.database import SessionLocal
+    from app.modules.objects.models import ObjectInstance
+    from app.modules.ontology.models import ObjectType
+
+    with SessionLocal() as db:
+        latest = db.scalar(
+            select(func.max(ObjectInstance.updated_at))
+            .join(ObjectType, ObjectType.id == ObjectInstance.type_id)
+            .where(ObjectType.slug == type_slug)
+        )
+    return latest is not None and latest > datetime.fromisoformat(watermark)
 
 
 def _cells(slug: str) -> list[tuple[Any, ...]]:
@@ -115,7 +136,9 @@ def test_바뀐_기간만_다시_센_값이_전부_다시_센_값과_같다(
 
     # 바뀐 것이 없으면 아무 기간도 안 센다 — 그래도 실행은 남는다(워터마크가 나아간다).
     idle = _recount(client, admin, slug)
-    assert idle["mode"] == "incremental" and idle["periods"] == []
+    assert idle["mode"] == "incremental"
+    if not _clock_went_back(w["case"], first["watermark"]):
+        assert idle["periods"] == []
     assert idle["cells"] == first["cells"] and idle["rows"] == first["rows"]
 
     cases = _ids(w["case"])

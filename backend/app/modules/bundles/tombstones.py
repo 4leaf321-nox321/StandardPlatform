@@ -220,6 +220,13 @@ def _relation_row(
     if refused:
         return bulk.RowPlan(row=index, action="error", label=label, message=refused)
     found: ObjectRelation | None = None
+    # 도착 타입을 적었으면 그 타입의 것만 — 끝이 인터페이스면 같은 식별자가 두 타입에 있을 수
+    # 있다(이 설치에 없는 타입 이름이면 버린다).
+    dst_type = (
+        db.scalar(select(ObjectType.id).where(ObjectType.slug == grave.dst_type))
+        if grave.dst_type
+        else None
+    )
     for one in db.scalars(
         select(ObjectRelation).where(
             ObjectRelation.src_object_id == src.id,
@@ -227,7 +234,9 @@ def _relation_row(
         )
     ):
         end = db.get(ObjectInstance, one.dst_object_id)
-        if end is not None and grave.dst in (end.key, end.label):
+        if end is None or (dst_type is not None and end.type_id != dst_type):
+            continue
+        if grave.dst in (end.key, end.label):
             found = one
             break
     if found is None:

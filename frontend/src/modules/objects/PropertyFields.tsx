@@ -9,9 +9,9 @@
  * 다시 쓴다. **두 벌로 만들면 위젯이 갈리고, 갈린 것은 한쪽만 고쳐진다.**
  */
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import type { ReactNode } from 'react'
-import { ChevronRight, Plus, X } from 'lucide-react'
+import { ChevronRight, Paperclip, Plus, X } from 'lucide-react'
 
 import type { DataType, PropertyDef, SectionView } from '@/modules/ontology/api'
 import { useObjectOptions } from '@/modules/objects/useObjectOptions'
@@ -35,11 +35,19 @@ const PICKER_THRESHOLD = 20
 
 export type PropertyValues = Record<string, unknown>
 
+/** 파일 속성마다 고른 파일 — 생성 화면이 들고 있다가 객체를 만든 뒤 업로드한다. */
+export type PickedFiles = Record<string, File[]>
+
 interface Props {
   defs: PropertyDef[]
   values: PropertyValues
   onChange: (values: PropertyValues) => void
   disabled?: boolean
+  /**
+   * 파일 속성에서 고른 파일 — **생성 화면만** 준다(저장할 때 객체를 만든 뒤 업로드한다,
+   * 2026-10-08). 안 주면 파일 칸에는 「저장한 뒤 상세 화면에서」 안내만 선다.
+   */
+  files?: { picked: PickedFiles; onChange: (key: string, files: File[]) => void }
   /**
    * 묶음의 순서와 모양(`form_view`). 안 주면 한 덩어리로 선다.
    *
@@ -339,7 +347,84 @@ export function groupBySection(
   })
 }
 
-export function PropertyFields({ defs, values, onChange, disabled, view }: Props) {
+/** 사진만 받는 칸에서 고르는 창이 보일 것 — 서버가 열어 보고 최종 판정한다. */
+const IMAGE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp'
+
+/**
+ * 파일 칸에서 파일 고르기 — 고르기만 하고 올리지 않는다. 객체가 아직 없어서(첨부는 객체 id 에
+ * 매달린다) 생성 화면이 객체를 만든 **뒤에** 같은 업로드 API 로 올린다.
+ */
+function FilePick({
+  def,
+  picked,
+  onChange,
+  disabled,
+}: {
+  def: PropertyDef
+  picked: File[]
+  onChange: (next: File[]) => void
+  disabled?: boolean
+}) {
+  const inputRef = useRef<HTMLInputElement>(null)
+  const imageOnly = def.accept === 'image'
+  return (
+    <div className="space-y-1.5">
+      <input
+        ref={inputRef}
+        id={`prop-${def.key}`}
+        type="file"
+        multiple
+        hidden
+        accept={imageOnly ? IMAGE_ACCEPT : undefined}
+        onChange={(event) => {
+          const more = Array.from(event.target.files ?? [])
+          // **값을 비운다** — 안 비우면 같은 파일을 다시 고를 때 change 가 안 난다.
+          event.target.value = ''
+          onChange([...picked, ...more])
+        }}
+      />
+      <Button
+        type="button"
+        variant="outline"
+        size="sm"
+        disabled={disabled}
+        onClick={() => inputRef.current?.click()}
+      >
+        <Paperclip className="size-4" />
+        {imageOnly ? '사진 선택' : '파일 선택'}
+      </Button>
+      {picked.length > 0 && (
+        <ul className="space-y-1 text-sm">
+          {picked.map((file, index) => (
+            <li key={`${file.name}-${index}`} className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate">{file.name}</span>
+              <span className="text-muted-foreground shrink-0 text-xs tabular-nums">
+                {Math.max(1, Math.round(file.size / 1024)).toLocaleString()}KB
+              </span>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-7"
+                aria-label={`${file.name} 선택 해제`}
+                disabled={disabled}
+                onClick={() => onChange(picked.filter((_, at) => at !== index))}
+              >
+                <X className="size-3.5" />
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <p className="text-muted-foreground text-xs">
+        저장하면 객체를 만든 뒤 업로드합니다
+        {imageOnly ? ' — 사진(PNG · JPEG · GIF · WebP)만 업로드할 수 있습니다.' : '.'}
+      </p>
+    </div>
+  )
+}
+
+export function PropertyFields({ defs, values, onChange, disabled, view, files }: Props) {
   if (defs.length === 0) {
     return (
       <p className="text-muted-foreground text-sm">
@@ -376,12 +461,21 @@ export function PropertyFields({ defs, values, onChange, disabled, view }: Props
                 </Label>
 
                 {def.data_type === 'file' ? (
-                  /* **첨부는 저장한 뒤에 붙는다.** 파일은 객체 id 에 매달리므로, 생성
-               화면에서 미리 올릴 자리가 없다. 빈 칸을 놓아 두면 「올렸는데 안
-               붙었다」 가 되므로 무엇을 해야 하는지 적는다. */
-                  <p className="text-muted-foreground text-sm">
-                    저장한 뒤 상세 화면에서 파일을 업로드합니다.
-                  </p>
+                  files ? (
+                    /* 생성 화면 — 골라 두면 객체를 만든 뒤 올린다. */
+                    <FilePick
+                      def={def}
+                      picked={files.picked[def.key] ?? []}
+                      onChange={(next) => files.onChange(def.key, next)}
+                      disabled={disabled}
+                    />
+                  ) : (
+                    /* **첨부는 객체에 붙는다.** 파일 칸은 상세의 첨부 패널이 맡는다 — 빈 칸을
+                     놓아 두면 「올렸는데 안 붙었다」 가 되므로 무엇을 해야 하는지 적는다. */
+                    <p className="text-muted-foreground text-sm">
+                      저장한 뒤 상세 화면에서 파일을 업로드합니다.
+                    </p>
+                  )
                 ) : def.multi ? (
                   <ManyValues
                     def={def}

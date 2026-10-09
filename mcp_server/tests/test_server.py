@@ -98,6 +98,9 @@ TOOLS = {
     "metric_define",
     "platform_profile",
     "platform_profile_update",
+    "fill_priorities",
+    "alias_candidates",
+    "alias_candidate_apply",
 }
 
 
@@ -620,6 +623,46 @@ def test_적재_도구가_맞춤과_검수를_보낸다() -> None:
 
     asyncio.run(server.aliases_review(_ctx("Bearer t"), "mach", ["a1"], action="remove"))
     assert b'"action":"remove"' in seen[-1].content
+
+
+def test_채울_곳과_별칭_후보가_그대로_건너간다() -> None:
+    """「어디부터 채우나」 와 못 찾은 말 — **붙이기 · 무시는 미리 보기가 기본이다.** 별칭은 그
+    뒤로 이름 풀이 · 검색 · 적재가 전부 쓰므로, 틀리게 붙인 별칭은 틀린 객체로 풀린다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 0}))
+    asyncio.run(server.fill_priorities(_ctx("Bearer t"), type_slug="part", limit=5))
+    assert seen[-1].url.path == "/api/objects/fill-priorities"
+    assert seen[-1].url.params["type"] == "part" and seen[-1].url.params["limit"] == "5"
+
+    # 빈 글자는 「통합 검색에서 못 찾은 것」 — None(전부)과 달라서 그대로 건너가야 한다.
+    asyncio.run(server.alias_candidates(_ctx("Bearer t"), type_slug=""))
+    assert seen[-1].url.path == "/api/objects/alias-candidates"
+    assert seen[-1].url.params["type"] == "" and seen[-1].url.params["status"] == "pending"
+    asyncio.run(server.alias_candidates(_ctx("Bearer t")))
+    assert "type" not in seen[-1].url.params
+
+    # 어느 객체인지 안 정했으면 부르지도 않는다.
+    before = len(seen)
+    got = asyncio.run(server.alias_candidate_apply(_ctx("Bearer t"), "c1"))
+    assert "object_id" in got["error"] and len(seen) == before
+
+    asyncio.run(server.alias_candidate_apply(_ctx("Bearer t"), "c1", object_id="o1"))
+    assert seen[-1].url.path == "/api/objects/alias-candidates/c1/attach"
+    assert json.loads(seen[-1].content) == {"object_id": "o1", "apply": False}
+
+    preview = asyncio.run(
+        server.alias_candidate_apply(_ctx("Bearer t"), "c1", action="ignore")
+    )
+    assert preview["applied"] is False and seen[-1].method == "GET"
+    assert seen[-1].url.path == "/api/objects/alias-candidates/c1"
+
+    _serve(lambda _r: httpx.Response(200, json={"done": 1, "refused": []}))
+    done = asyncio.run(
+        server.alias_candidate_apply(_ctx("Bearer t"), "c1", action="ignore", apply=True)
+    )
+    assert done == {"applied": True, "action": "ignore", "done": 1, "refused": []}
+    assert "error" in asyncio.run(
+        server.alias_candidate_apply(_ctx("Bearer t"), "c1", action="drop", apply=True)
+    )
 
 
 def test_기동_블록_뒤에_도구가_없다() -> None:

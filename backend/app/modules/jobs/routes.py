@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import uuid
 from datetime import UTC, datetime, timedelta
@@ -41,7 +43,12 @@ from app.shared.permissions import resolve_owner_workspace
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 
-def _out(db: Session, row: Job) -> JobOut:
+_FULL = object()
+
+
+def _out(db: Session, row: Job, result: Any = _FULL) -> JobOut:
+    """작업 한 줄. 결과의 줄 목록은 `ROWS_SHOWN` 까지만(`services.trim_rows`) — 목록은 줄
+    목록을 비운 요약(`result`)을 따로 넘긴다."""
     spec = kinds.get(row.kind)
     who = db.get(User, row.requested_by_id) if row.requested_by_id else None
     workspace = db.get(Workspace, row.workspace_id) if row.workspace_id else None
@@ -57,7 +64,7 @@ def _out(db: Session, row: Job) -> JobOut:
         status=row.status,
         params={k: v for k, v in (row.params or {}).items() if k != "fingerprint"},
         progress=JobProgress(**(row.progress or {})),
-        result=row.result,
+        result=services.trim_rows(row.result) if result is _FULL else result,
         error=row.error,
         parent_id=row.parent_id,
         applied_by=(
@@ -220,7 +227,7 @@ def list_jobs(
     rows, total = services.list_visible(
         db, user, limit=capped, offset=offset, status=status, kind=kind, mine=mine
     )
-    return JobListOut(items=[_out(db, one) for one in rows], total=total)
+    return JobListOut(items=[_out(db, one, brief) for one, brief in rows], total=total)
 
 
 @router.get("/{job_id}", response_model=JobOut)
@@ -333,6 +340,50 @@ def cancel_job(
     db.commit()
     db.refresh(job)
     return _out(db, job)
+
+
+@router.get("/{job_id}/rows.csv")
+def download_rows(
+    job_id: uuid.UUID, user: User = Depends(current_user), db: Session = Depends(get_db)
+) -> Response:
+    """계획의 **모든 줄** — 화면 · 상세는 앞의 `ROWS_SHOWN` 줄만 싣는다. 엑셀이 한글을 읽게
+    BOM 을 붙인다. 묶음이면 줄마다 어느 타입의 것인지 첫 칸에."""
+    job = services.get_visible(db, user, job_id)
+    found = list(services.all_rows(job.result))
+    if not found:
+        raise NotFound(code("JOBS", 28), "이 작업의 결과에는 줄 목록이 없습니다.")
+    nested = any(where for where, _ in found)
+    columns = [key for key in _LEAD if any(key in row for _, row in found)]
+    for _, row in found:
+        for key in row:
+            if key not in columns:
+                columns.append(key)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow((["type"] if nested else []) + columns)
+    for where, row in found:
+        cells = [_cell(row.get(key)) for key in columns]
+        writer.writerow(([where] if nested else []) + cells)
+    name = f"{job.kind}-{str(job.id)[:8]}-rows.csv"
+    return Response(
+        content="\ufeff" + buffer.getvalue(),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
+
+
+#: CSV 앞에 세우는 열 — 몇째 줄 · 무엇이 되나 · 무엇인가. 나머지는 줄에 나온 차례대로.
+_LEAD = ("row", "action", "status", "name", "key", "label", "message")
+
+
+def _cell(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, list):
+        return ", ".join(_cell(one) for one in value)
+    if isinstance(value, dict):
+        return json.dumps(value, ensure_ascii=False)
+    return str(value)
 
 
 @router.get("/{job_id}/download")

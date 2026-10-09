@@ -190,8 +190,40 @@ def save_rows(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -
         db.close()
 
 
+RELATION_TABLE = (
+    "(src TEXT, relation TEXT, dst TEXT, dst_type TEXT NOT NULL DEFAULT '', "
+    "evidence_note TEXT, updated_at TEXT, properties TEXT, "
+    "PRIMARY KEY (src, relation, dst, dst_type))"
+)
+
+
+def relations_table(db: sqlite3.Connection, table: str) -> None:
+    """선 표를 마련한다 — **도착 타입까지 키다.**
+
+    끝이 인터페이스인 관계는 도착이 여러 타입이고 `key` 는 타입 안에서만 하나라, 같은 출발 ·
+    관계 · 도착 `key` 가 두 타입에 걸칠 수 있다. 세 끝만 키로 두면 그 둘이 한 줄로 겹쳐 하나가
+    사라진다. 옛 키트가 만든 표(세 끝이 키)면 내용을 그대로 옮겨 키를 바꾼다.
+    """
+    columns = list(db.execute(f'PRAGMA table_info("{table}")'))
+    if not columns:
+        db.execute(f'CREATE TABLE "{table}" {RELATION_TABLE}')
+        return
+    if any(one[1] == "dst_type" and one[5] for one in columns):
+        return
+    old = f"{table}__old"
+    db.execute(f'ALTER TABLE "{table}" RENAME TO "{old}"')
+    db.execute(f'CREATE TABLE "{table}" {RELATION_TABLE}')
+    db.execute(
+        f'INSERT OR REPLACE INTO "{table}" '
+        "(src,relation,dst,dst_type,evidence_note,updated_at,properties) "
+        "SELECT src, relation, dst, coalesce(dst_type, ''), evidence_note, updated_at, "
+        f'properties FROM "{old}"'
+    )
+    db.execute(f'DROP TABLE "{old}"')
+
+
 def save_relations(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -> None:
-    """선 저장 — CSV 는 수신 이력, SQLite 는 현재 상태(세 끝이 키다).
+    """선 저장 — CSV 는 수신 이력, SQLite 는 현재 상태(출발 · 관계 · 도착 · 도착 타입이 키다).
 
     `deleted` 인 줄은 **지운다** — 선은 상태가 아니라 있음/없음이다.
     """
@@ -227,27 +259,27 @@ def save_relations(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any
     table = f"{type_slug}__relations"
     db = sqlite3.connect(cfg["out_dir"] / "sp_core.sqlite")
     try:
-        db.execute(
-            f'CREATE TABLE IF NOT EXISTS "{table}" '
-            "(src TEXT, relation TEXT, dst TEXT, dst_type TEXT, evidence_note TEXT, "
-            "updated_at TEXT, properties TEXT, PRIMARY KEY (src, relation, dst))"
-        )
+        relations_table(db, table)
         for one in rows:
             keys = (one.get("src"), one.get("relation"), one.get("dst"))
+            dst_type = one.get("dst_type") or ""
             if one.get("deleted"):
+                # 도착 타입이 빈 줄은 옛 키트가 받은 것이다 — 그것도 같은 선으로 본다.
                 db.execute(
-                    f'DELETE FROM "{table}" WHERE src=? AND relation=? AND dst=?', keys
+                    f'DELETE FROM "{table}" WHERE src=? AND relation=? AND dst=? '
+                    "AND dst_type IN (?, '')",
+                    (*keys, dst_type),
                 )
                 continue
             db.execute(
                 f'INSERT INTO "{table}" '
                 "(src,relation,dst,dst_type,evidence_note,updated_at,properties) "
-                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(src,relation,dst) DO UPDATE SET "
-                "dst_type=excluded.dst_type, evidence_note=excluded.evidence_note, "
+                "VALUES (?,?,?,?,?,?,?) ON CONFLICT(src,relation,dst,dst_type) DO UPDATE SET "
+                "evidence_note=excluded.evidence_note, "
                 "updated_at=excluded.updated_at, properties=excluded.properties",
                 (
                     *keys,
-                    one.get("dst_type"),
+                    dst_type,
                     one.get("evidence_note"),
                     one.get("updated_at"),
                     json.dumps(one.get("properties") or {}, ensure_ascii=False),

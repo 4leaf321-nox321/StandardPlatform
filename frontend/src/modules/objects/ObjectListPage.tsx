@@ -8,8 +8,19 @@
  */
 
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
+import type { ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import { BarChart3, Download, FileUp, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
+import {
+  BarChart3,
+  Download,
+  FileUp,
+  Images,
+  Loader2,
+  Pencil,
+  Plus,
+  Trash2,
+  X,
+} from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import type { OntologySchema } from '@/modules/ontology/api'
@@ -18,11 +29,13 @@ import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
 import type {
   Condition,
+  FileCell,
   ObjectQuery,
   LinkedField,
   ObjectRow,
   SavedView,
 } from '@/modules/objects/api'
+import { AttachmentCell } from '@/modules/files/AttachmentCell'
 import { DEFAULT_SUMMARY } from '@/modules/objects/summarySettings'
 import type { SummarySettings } from '@/modules/objects/summarySettings'
 import { ConditionBar } from '@/modules/objects/ConditionBar'
@@ -33,6 +46,7 @@ import { BulkDeleteDialog } from '@/modules/objects/BulkDeleteDialog'
 import { BulkEditDialog } from '@/modules/objects/BulkEditDialog'
 import { BulkUndoDialog } from '@/modules/objects/BulkUndoDialog'
 import { ObjectImportDialog } from '@/modules/objects/ObjectImportDialog'
+import { PhotoImportDialog } from '@/modules/objects/PhotoImportDialog'
 import { InterfaceListPage } from '@/modules/objects/InterfaceListPage'
 import { ObjectTree } from '@/modules/objects/ObjectTree'
 import { conditionsFromParams, withConditions } from '@/modules/objects/urlConditions'
@@ -97,7 +111,8 @@ const FALLBACK_COLUMNS = ['key', 'label', 'updated_at']
 interface Column {
   id: string
   label: string
-  render: (row: ObjectRow) => string
+  /** `files` 는 그 줄의 파일 칸들(목록 응답의 `files[줄 id]`) — 파일 열만 쓴다. */
+  render: (row: ObjectRow, files?: Record<string, FileCell>) => ReactNode
 }
 
 function buildColumns(type: ObjectType, defs: PropertyDef[]): Column[] {
@@ -117,6 +132,15 @@ function buildColumns(type: ObjectType, defs: PropertyDef[]): Column[] {
         // **정의가 없는 열은 조용히 버린다.** 속성을 지운 뒤 list_view 에 이름이
         // 남아 있으면 빈 열이 서는데, 그 빈 열은 「값이 없다」 로 읽힌다.
         if (!def) return null
+        if (def.data_type === 'file') {
+          // 파일 칸은 값이 아니라 첨부다 — 서버가 쪽마다 한 번에 실어 준 칸(첫 장 · 수)을 그린다.
+          // 사진이면 작은 미리보기, 아니면 아이콘 · 이름(2026-10-08).
+          return {
+            id,
+            label: def.label,
+            render: (_row, files) => <AttachmentCell cell={files?.[key]} />,
+          }
+        }
         return {
           id,
           label: def.label,
@@ -295,6 +319,8 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
   // 내 소속을 주고, 못 고르는 것은 서버가 행마다 이유를 적는다.
   const myWorkspaces = useResource(() => workspaceApi.list(), [])
   const [importing, setImporting] = useState(false)
+  /** 사진 일괄 업로드 창 — 파일 속성이 있는 타입에서만 선다. */
+  const [importingPhotos, setImportingPhotos] = useState(false)
   /** 내보내기 실패 — 새 탭이 아니라 이 화면에 떠야 한다. 조용히 실패하면 아무 일도 안 일어난 것처럼 보인다. */
   const [exportError, setExportError] = useState<Error | null>(null)
   const [exporting, setExporting] = useState(false)
@@ -490,6 +516,18 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                           <FileUp className="mr-1 size-4" />
                           일괄 입력
                         </Button>
+                        {/* 사진은 객체를 고치는 일이라 생성 · 일괄 입력과 같은 자리 · 같은 문턱
+                            이다(객체마다의 권한은 계획이 「권한 없음」 으로 가른다). */}
+                        {type.properties.some((def) => def.data_type === 'file') && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => setImportingPhotos(true)}
+                          >
+                            <Images className="mr-1 size-4" />
+                            사진 일괄 업로드
+                          </Button>
+                        )}
                         <Button size="sm" onClick={() => setCreating(true)}>
                           <Plus className="mr-1 size-4" />
                           생성
@@ -845,10 +883,10 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                             className="font-medium hover:underline"
                             to={`/o/${typeSlug}/${row.id}`}
                           >
-                            {column.render(row)}
+                            {column.render(row, list.data?.files?.[row.id])}
                           </Link>
                         ) : (
-                          column.render(row)
+                          column.render(row, list.data?.files?.[row.id])
                         )}
                       </TableCell>
                     ))}
@@ -928,6 +966,15 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
         />
       )}
 
+      {type && importingPhotos && (
+        <PhotoImportDialog
+          type={type}
+          defs={type.properties}
+          onClose={() => setImportingPhotos(false)}
+          onApplied={() => list.reload()}
+        />
+      )}
+
       {type && creating && (
         <ObjectCreateDialog
           type={type}
@@ -937,6 +984,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
             setCreating(false)
             list.reload()
           }}
+          onOpen={(id) => navigate(`/o/${typeSlug}/${id}`)}
         />
       )}
     </div>

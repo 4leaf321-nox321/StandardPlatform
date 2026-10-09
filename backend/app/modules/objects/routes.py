@@ -10,7 +10,16 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
+from fastapi import (
+    APIRouter,
+    BackgroundTasks,
+    Depends,
+    File,
+    Form,
+    Query,
+    Request,
+    UploadFile,
+)
 from fastapi.responses import Response
 from sqlalchemy import false, or_, select, true
 from sqlalchemy.orm import Session
@@ -28,13 +37,16 @@ from app.modules.objects import (
     bulk,
     bulkedit,
     conditions,
+    fill,
     graph,
     history,
     home,
     humanedits,
     lifecycle,
     links,
+    misses,
     paths,
+    photos,
     quality,
     refedges,
     resolve,
@@ -43,6 +55,7 @@ from app.modules.objects import (
     system,
     watches,
 )
+from app.modules.objects import attachments as object_attachments
 from app.modules.objects import keys as key_history
 from app.modules.objects import relations as rel
 from app.modules.objects import scope as scopes
@@ -58,11 +71,19 @@ from app.modules.objects.models import (
     SavedView,
 )
 from app.modules.objects.schemas import (
+    AliasAttachObjectOut,
+    AliasAttachPlanOut,
+    AliasAttachRequest,
+    AliasCandidateDecision,
+    AliasCandidateDecisionOut,
+    AliasCandidateOut,
+    AliasCandidatePage,
     AliasesRequest,
     AliasReviewOut,
     AliasReviewPage,
     AliasReviewRequest,
     AliasReviewResult,
+    AliasSuggestionOut,
     AttachmentBrief,
     BucketOut,
     BulkDeletePlanOut,
@@ -73,6 +94,8 @@ from app.modules.objects.schemas import (
     BulkUndoRequest,
     DiagnosisOut,
     FieldOptionOut,
+    FileCellOut,
+    FillReportOut,
     GroupOptionOut,
     HistoryBatchOut,
     HistoryEntryOut,
@@ -86,6 +109,7 @@ from app.modules.objects.schemas import (
     MergeResultOut,
     ObjectCreateRequest,
     ObjectOut,
+    ObjectPageOut,
     ObjectPatchRequest,
     ObjectProfileOut,
     PartOut,
@@ -150,7 +174,7 @@ from app.modules.workspaces.models import Workspace
 from app.shared import audit, sheets
 from app.shared.auth import current_user
 from app.shared.errors import AppError, Conflict, Forbidden, NotFound, code
-from app.shared.pagination import Page, clamp_limit
+from app.shared.pagination import clamp_limit
 from app.shared.permissions import (
     my_workspace_ids,
     require_owner_edit,
@@ -336,6 +360,166 @@ def quality_report(
         sample_limit=quality.SAMPLE,
         skipped=skipped,
     )
+
+
+# --- 채울 곳 · 별칭 후보 ----------------------------------------------------------
+#
+# 이것도 `/{type_slug}` 보다 **앞에** 선다 — 이름의 `-` 는 타입 slug(영소문자 · 숫자 ·
+# `_`)에 없어 겹치지 않지만, 두 마디 주소(`/alias-candidates/{id}`)를
+# `/{type_slug}/{object_id}` 가 먼저 집으면 「객체를 찾을 수 없습니다」 가 된다.
+
+
+@router.get("/fill-priorities", response_model=FillReportOut)
+def fill_priorities(
+    type_slug: str | None = Query(
+        default=None, alias="type", description="타입 · 인터페이스 하나만 — 그러면 칸 전부"
+    ),
+    limit: int = Query(default=fill.LIMIT_DEFAULT, ge=1, le=fill.LIMIT_MAX),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> FillReportOut:
+    """**어디부터 채우나** — 타입마다 비어 있는 것(필수 칸 · 칸별 채움률 · 선이 없는 관계 ·
+    지워진 것을 가리키는 칸 · 별칭 없는 객체 · 객체 없는 타입)을 세고, **쓰는 곳**(필수 ·
+    지표 · 코어 공개 · 뷰)으로 가중해 줄을 세운다 — 줄마다 「이것을 채우면 무엇이
+    좋아지나」(`gain`).
+
+    데이터 품질(`/quality/report`)이 「무엇이 나쁜가」 라면 이것은 「어디부터 채우나」 다.
+    **볼 수 있는 것만 센다.** 큰 타입은 표본에서 센 어림이고 `notes` 가 그렇다고 말한다.
+    """
+    if type_slug:
+        # 없는 타입이면 404 — 빈 보고를 「다 찼다」 로 읽지 않게.
+        _scope(db, type_slug)
+    found = fill.report(db, user, only=type_slug, limit=limit)
+    return FillReportOut.model_validate(found, from_attributes=True)
+
+
+#: 별칭 후보 한 쪽의 상한 — 줄마다 「이것 아닐까」 를 찾는 질의가 붙는다.
+CANDIDATE_PAGE_MAX = 50
+
+
+def _candidate_out(found: misses.Candidate) -> AliasCandidateOut:
+    row = found.row
+    return AliasCandidateOut(
+        id=row.id,
+        text=row.text,
+        scope=row.scope,
+        scope_label=found.scope_label,
+        scope_kind=found.scope_kind,
+        hits=row.hits,
+        people=len(row.askers or []),
+        vias=list(row.vias or []),
+        status=row.status,
+        object_id=row.object_id,
+        object_label=found.object_label,
+        object_type_slug=found.object_type_slug,
+        first_at=row.first_at,
+        last_at=row.last_at,
+        decided_at=row.decided_at,
+        suggestions=[AliasSuggestionOut(**vars(one)) for one in found.suggestions],
+        suggest_note=found.suggest_note,
+    )
+
+
+@router.get("/alias-candidates", response_model=AliasCandidatePage)
+def alias_candidates(
+    type_slug: str | None = Query(
+        default=None,
+        alias="type",
+        description="못 찾은 자리(타입 · 인터페이스). 빈 글자면 통합 검색에서 못 찾은 것",
+    ),
+    status: str = Query(default="pending", pattern="^(pending|attached|ignored|all)$"),
+    suggest: bool = Query(default=True, description="줄마다 「이것 아닐까」 를 함께"),
+    limit: int | None = Query(default=None),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> AliasCandidatePage:
+    """**못 찾은 말** — 검색 · 이름 풀이가 아무것도 못 찾은 글자, 많이 · 여럿이 찾은 것부터.
+
+    어떤 객체의 다른 이름이면 `…/attach` 로 그 객체의 별칭으로 붙인다 — 다음부터 찾힌다.
+    아니면 `…/decide` 로 무시. 부서 관리자 이상(붙이는 것은 객체를 고치는 일이다).
+    """
+    misses.require_reviewer(db, user)
+    capped = min(clamp_limit(limit), CANDIDATE_PAGE_MAX)
+    found, total = misses.page(
+        db,
+        user,
+        scope=type_slug,
+        status=status,
+        limit=capped,
+        offset=offset,
+        suggest=suggest,
+    )
+    return AliasCandidatePage(
+        items=[_candidate_out(one) for one in found], total=total, limit=capped, offset=offset
+    )
+
+
+@router.get("/alias-candidates/{candidate_id}", response_model=AliasCandidateOut)
+def alias_candidate(
+    candidate_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> AliasCandidateOut:
+    """후보 하나 — 「이것 아닐까」 와 함께."""
+    misses.require_reviewer(db, user)
+    found = misses.describe(db, user, misses.get(db, candidate_id), suggest=True)
+    return _candidate_out(found)
+
+
+@router.post("/alias-candidates/{candidate_id}/attach", response_model=AliasAttachPlanOut)
+def attach_alias_candidate(
+    candidate_id: uuid.UUID,
+    payload: AliasAttachRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> AliasAttachPlanOut:
+    """못 찾은 말을 객체의 **별칭으로** — `apply=false`(기본)면 아무것도 안 바꾸고 계획만.
+
+    별칭을 붙이는 길은 객체 화면의 것과 같다(`aliases.set_human` · 감사 기록 · 확인한 것으로).
+    다른 객체가 이미 그 별칭을 쓰면 `blocking` 에 서고 적용하지 않는다. 같은 말을 통합 검색 ·
+    인터페이스에서 못 찾은 줄도 함께 닫는다(`closed`) — 이제 거기서도 찾힌다.
+    """
+    misses.require_reviewer(db, user)
+    miss = misses.get(db, candidate_id)
+    plan = misses.plan_attach(db, user, miss, payload.object_id, payload.value)
+    target, object_type = plan.target, plan.object_type
+    brief = AliasAttachObjectOut(
+        id=target.id,
+        type_slug=object_type.slug,
+        type_label=object_type.label,
+        label=target.label,
+        key=target.key,
+    )
+    closed = 0
+    if payload.apply:
+        closed = misses.attach(db, user, plan)
+        db.commit()
+    return AliasAttachPlanOut(
+        applied=payload.apply,
+        candidate=_candidate_out(misses.describe(db, user, miss, suggest=False)),
+        object=brief,
+        value=plan.value,
+        aliases_before=plan.before,
+        aliases_after=plan.after,
+        warnings=plan.warnings,
+        blocking=plan.blocking,
+        closed=closed,
+    )
+
+
+@router.post("/alias-candidates/decide", response_model=AliasCandidateDecisionOut)
+def decide_alias_candidates(
+    payload: AliasCandidateDecision,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> AliasCandidateDecisionOut:
+    """고른 후보를 **무시**(`ignore` — 별칭으로 붙일 말이 아니다)하거나 대기로 되돌린다
+    (`restore`). 무시한 말은 또 찾아도 다시 안 뜨고, 90일 아무도 안 찾으면 지워진다."""
+    misses.require_reviewer(db, user)
+    done, refused = misses.decide(db, user, payload.ids, payload.action)
+    db.commit()
+    return AliasCandidateDecisionOut(done=done, refused=refused)
 
 
 # --- 트리 -------------------------------------------------------------------
@@ -1561,6 +1745,45 @@ def import_objects(
     return jobs_routes._out(db, job)
 
 
+@router.post("/{type_slug}/photos/import", response_model=JobOut, status_code=202)
+def import_photos(
+    type_slug: str,
+    upload: UploadFile = File(alias="file"),
+    field: str = Form(max_length=48, description="사진을 붙일 파일 속성의 키"),
+    existing: str = Form(
+        default="skip",
+        pattern="^(skip|replace|add)$",
+        description="칸에 이미 사진이 있으면 — skip(건너뜀) · replace(교체) · add(추가)",
+    ),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> JobOut:
+    """사진 일괄 업로드 — zip 하나(202, 작업). 워커가 **파일 이름으로 객체를 찾아** 계획을
+    세우고(어느 파일이 어느 객체에 · 못 찾음 · 여럿에 맞음 · 이미지 아님 · 너무 큼 · 권한
+    없음), 사람이 보고 `POST /api/jobs/{id}/apply` 로 적용한다(`objects/photos.py`).
+
+    타입 · 칸은 **넣는 순간에** 본다 — 몇 분 뒤 「실패」 로 알게 하지 않는다. 객체마다의 권한은
+    계획이 본다(그 객체를 고칠 수 있는 사람만 붙는다).
+    """
+    object_type = _type(db, type_slug)
+    photos.require_target(db, object_type, field)
+    if not (upload.filename or "").lower().endswith(".zip"):
+        raise Conflict(
+            code("OBJECTS", 125),
+            "zip 파일만 업로드할 수 있습니다 — 사진을 선택한 뒤 「압축(zip) 폴더로 보내기」"
+            " 로 묶으세요.",
+        )
+    job = jobs_routes.submit(
+        db,
+        user,
+        kind="objects_photos",
+        params={"type_slug": object_type.slug, "field": field, "existing": existing},
+        upload=upload,
+        workspace_slug=None,
+    )
+    return jobs_routes._out(db, job)
+
+
 def _require_file_name(upload: UploadFile) -> None:
     name = upload.filename or ""
     if not name.lower().endswith((".csv", ".json", ".tsv", ".txt")):
@@ -1654,10 +1877,11 @@ def import_relation_rows(
 # --- 목록 -------------------------------------------------------------------
 
 
-@router.get("/{type_slug}", response_model=Page[ObjectOut])
+@router.get("/{type_slug}", response_model=ObjectPageOut)
 def list_objects(
     type_slug: str,
     request: Request,
+    background: BackgroundTasks,
     q: str | None = Query(default=None, description="이름·식별자·검색 속성"),
     status: str | None = Query(default=None),
     under: uuid.UUID | None = Query(default=None, description="트리에서 고른 노드"),
@@ -1669,11 +1893,13 @@ def list_objects(
     offset: int = Query(default=0, ge=0),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
-) -> Page[ObjectOut]:
+) -> ObjectPageOut:
     """이 타입의 객체 목록.
 
     거르기는 `?p.<속성키>=<값>` 으로 온다. `list_view` 가 열·정렬·검색 자리를
     정하고, 안 정해 뒀으면 기본형으로 떨어진다 — **빈 화면이 되지는 않는다.**
+
+    목록 화면의 열에 파일 속성이 있으면 그 칸들(첫 장 · 수)이 `files` 로 함께 온다.
     """
     scope = _scope(db, type_slug)
     capped = clamp_limit(limit)
@@ -1683,7 +1909,7 @@ def list_objects(
         # 행이 없다 — 원 표를 그대로 투영한다. 거르기는 검색어뿐이다(속성이 없으므로).
         refs, total = system.source_of(projected).search(db, user, q, capped, offset)
         now = datetime.now(UTC)
-        return Page(
+        return ObjectPageOut(
             items=[system.projected(ref, projected.slug, now) for ref in refs],
             total=total,
             limit=capped,
@@ -1695,13 +1921,17 @@ def list_objects(
     )
 
     total = count_of(db, stmt)
+    if total == 0 and offset == 0 and q:
+        _note_miss(
+            background, user, scope, request, q=q, status=status, year=year, under=under
+        )
     found = page_rows(db, stmt, scope.list_view, total=total, limit=capped, offset=offset)
     workspaces = _workspace_slugs(db)
     labels = _ref_labels(db, user, scope.defs, found)
     names = aliases.of(db, [row.id for row in found])
     # **줄마다 제 타입** — 인터페이스 목록은 여러 타입이 섞인다(링크가 그 타입의 상세로 간다).
     slug_of = {one.id: one.slug for one in scope.types}
-    return Page(
+    return ObjectPageOut(
         items=[
             _out(
                 row,
@@ -1715,7 +1945,50 @@ def list_objects(
         total=total,
         limit=capped,
         offset=offset,
+        files=_file_cells(db, user, scope, found),
     )
+
+
+def _file_cells(
+    db: Session, user: User, scope: Scope, rows: list[ObjectInstance]
+) -> dict[str, dict[str, FileCellOut]]:
+    """목록 화면의 열에 선 파일 속성의 칸들 — 열에 없으면 묻지 않는다(대부분의 목록)."""
+    file_keys = {one.key for one in scope.defs if one.data_type == "file"}
+    wanted = [
+        column.split(".", 1)[1]
+        for column in scope.list_view.get("columns") or []
+        if isinstance(column, str)
+        and column.startswith("properties.")
+        and column.split(".", 1)[1] in file_keys
+    ]
+    cells = object_attachments.file_cells(db, user, [row.id for row in rows], wanted)
+    return {
+        str(object_id): {
+            field: FileCellOut(
+                count=cell.count, first=AttachmentBrief.model_validate(cell.first)
+            )
+            for field, cell in fields.items()
+        }
+        for object_id, fields in cells.items()
+    }
+
+
+def _note_miss(
+    background: BackgroundTasks,
+    user: User,
+    scope: Scope,
+    request: Request,
+    *,
+    q: str,
+    status: str | None,
+    year: int | None,
+    under: uuid.UUID | None,
+) -> None:
+    """목록이 검색어로 0건 — **검색어만 걸렸을 때만** 못 찾은 말로 남긴다. 다른 조건이 함께
+    걸렸으면 0건의 까닭이 그 조건일 수 있다(그것은 진단의 몫이다)."""
+    parts = _filter_parts(request, q=q, status=status, year=year, under=under)
+    if [name for name, _label in parts] == ["q"]:
+        misses.note(background, user, scope.slug, q, "list")
 
 
 # --- 해소 · 진단 --------------------------------------------------------------
@@ -1724,6 +1997,7 @@ def list_objects(
 @router.get("/{type_slug}/resolve", response_model=ResolveOut)
 def resolve_name(
     type_slug: str,
+    background: BackgroundTasks,
     name: str = Query(description="이름·식별자·별칭 — 하나로 정해지는지 본다"),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
@@ -1734,7 +2008,11 @@ def resolve_name(
     사람에게 묻고, `none` 이면 없다. 이름으로 참조를 걸거나 관계를 잇기 **전에** 여기를
     거치라고 두는 자리다(`resolve` 모듈의 설명).
     """
-    found = resolve.by_name(db, user, _scope(db, type_slug), name)
+    scope = _scope(db, type_slug)
+    found = resolve.by_name(db, user, scope, name)
+    if found.match == "none" and _projection(scope) is None:
+        # **못 찾은 말은 별칭 후보로 남는다** — 응답 뒤에, 실패해도 이 답과 무관하게(`misses`).
+        misses.note(background, user, scope.slug, name, "resolve")
     return ResolveOut.model_validate(found)
 
 

@@ -473,8 +473,11 @@ export interface CoreStatus {
     properties: { key: string; label: string; data_type: string; multi: boolean }[]
   }[]
   consumers: {
+    /** 토큰 id — 이 화면에서 폐기할 때 쓴다(`POST /accounts/{owner_id}/tokens/{id}/revoke`). */
+    id: string
     name: string
     owner: string
+    owner_id: string
     last_used_at: string | null
     expires_at: string | null
     /** `core:read` 만 가진 좁은 자격인가. 거짓이면 `read` 라 코어 밖도 읽는다. */

@@ -41,6 +41,7 @@ from sqlalchemy.exc import IntegrityError, OperationalError
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.jobs import services as job_services
 from app.modules.metrics import compute, params, query
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import ALERT_RECIPES, MetricAlert, MetricAlertEvent, MetricDef
@@ -760,6 +761,11 @@ def check_one(db: Session, alert_id: uuid.UUID) -> int:
             db.rollback()
             _mark_failed(db, alert_id, f"[{caught.code}] {caught.message}")
             return 0
+        except job_services.Cancelled:
+            # 작업을 빼앗겼다(`Lost` — 커밋 앞 검사) — 경보의 실패가 아니다. 「실패」 를 적으면
+            # 그 커밋도 같은 검사에 막히고, 이어받은 워커가 다시 확인한다.
+            db.rollback()
+            raise
         except Exception as caught:
             db.rollback()
             if _raced(caught):

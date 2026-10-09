@@ -9,7 +9,21 @@ import { describe, expect, it, vi } from 'vitest'
 
 const qualityApi = vi.hoisted(() => ({ report: vi.fn() }))
 const aliasReviewApi = vi.hoisted(() => ({ pending: vi.fn(), review: vi.fn() }))
-vi.mock('@/modules/objects/api', () => ({ qualityApi, aliasReviewApi }))
+// 채울 곳 · 별칭 후보는 따로 시험한다(`FillPriorities.test` · `AliasCandidatesDialog.test`).
+const fillApi = vi.hoisted(() => ({
+  report: vi.fn().mockResolvedValue({ priorities: [], types: [], notes: [] }),
+}))
+const aliasCandidateApi = vi.hoisted(() => ({
+  list: vi.fn().mockResolvedValue({ items: [], total: 0, limit: 5, offset: 0 }),
+  attach: vi.fn(),
+  decide: vi.fn(),
+}))
+vi.mock('@/modules/objects/api', () => ({
+  qualityApi,
+  aliasReviewApi,
+  fillApi,
+  aliasCandidateApi,
+}))
 
 describe('데이터 품질', () => {
   it('걸린 것이 없으면 이유를 말한다', async () => {
@@ -121,5 +135,50 @@ describe('데이터 품질', () => {
       expect(aliasReviewApi.review).toHaveBeenCalledWith('mode', ['a1', 'a2'], 'approve'),
     )
     expect(screen.getByText(/확인 2건/)).toBeInTheDocument()
+  })
+  it('못 찾은 이름이 있으면 별칭 후보로 표시하고, 못 보는 사람에게는 자리를 안 띄운다', async () => {
+    qualityApi.report.mockResolvedValue({ findings: [], sample_limit: 50 })
+    aliasCandidateApi.list.mockResolvedValueOnce({
+      total: 3,
+      limit: 5,
+      offset: 0,
+      items: [
+        {
+          id: 'c1',
+          text: '앤시스',
+          scope: 'vendor',
+          scope_label: '공급사',
+          scope_kind: 'type',
+          hits: 5,
+          people: 3,
+          vias: ['resolve'],
+          status: 'pending',
+          suggestions: [],
+          suggest_note: '',
+        },
+      ],
+    })
+    const { default: QualityPage } = await import('@/modules/objects/QualityPage')
+    const { unmount } = render(
+      <MemoryRouter>
+        <QualityPage />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(screen.getByText('앤시스')).toBeInTheDocument())
+    expect(screen.getByText('공급사 · 5번 · 3명')).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '검토' })).toBeInTheDocument()
+    unmount()
+
+    const { ApiError } = await import('@/shared/api/client')
+    aliasCandidateApi.list.mockRejectedValueOnce(
+      new ApiError(403, { error: { code: 'APP-OBJECTS-0111', message: '부서 관리자 이상' } }),
+    )
+    render(
+      <MemoryRouter>
+        <QualityPage />
+      </MemoryRouter>,
+    )
+    await waitFor(() => expect(screen.getByText('해당 항목이 없습니다')).toBeInTheDocument())
+    expect(screen.queryByText(/부서 관리자 이상/)).not.toBeInTheDocument()
   })
 })

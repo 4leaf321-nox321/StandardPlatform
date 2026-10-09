@@ -48,10 +48,19 @@ const OBJECT: Record<string, { label: string; tone: Tone }> = {
   deprecated: { label: '안 씀', tone: 'neutral' },
 }
 
+const TOKEN: Record<string, { label: string; tone: Tone }> = {
+  active: { label: '사용', tone: 'good' },
+  // **만료는 주의다** — 그 토큰을 아직 넣어 둔 연동이 있으면 지금 인증에 실패하고 있다.
+  expired: { label: '만료', tone: 'warn' },
+  // 폐기는 사고가 아니라 끝낸 일이다.
+  revoked: { label: '폐기', tone: 'neutral' },
+}
+
 const TABLES = {
   account: ACCOUNT,
   object: OBJECT,
   notice: NOTICE,
+  token: TOKEN,
   workspace: WORKSPACE,
 } as const
 

@@ -14,6 +14,8 @@ import type { Job } from '@/modules/jobs/api'
 
 const jobsApi = vi.hoisted(() => ({
   list: vi.fn(),
+  get: vi.fn(),
+  rowsCsv: vi.fn(),
   kinds: vi.fn(),
   workers: vi.fn(),
   apply: vi.fn(),
@@ -79,6 +81,7 @@ async function mount(jobs: Job[], alive = true) {
     { name: 'datasource_sync', label: '데이터 소스 동기화', needs_file: false, two_step: false },
     { name: 'filestore_gc', label: '고아 첨부 파일 정리', needs_file: false, two_step: true },
     { name: 'ontology_retype', label: '속성 종류 변경', needs_file: false, two_step: true },
+    { name: 'objects_photos', label: '사진 일괄 업로드', needs_file: true, two_step: true },
   ])
   jobsApi.workers.mockResolvedValue(
     alive
@@ -211,6 +214,30 @@ describe('작업 화면', () => {
     await waitFor(() => expect(jobsApi.apply).toHaveBeenCalledWith('j1'))
   })
 
+  it('목록은 줄 목록 없이 오고, 펼치면 상세를 읽어 그린다 · 나머지 줄은 CSV 로', async () => {
+    // 5만 줄 계획을 목록이 작업마다 통째로 싣던 때는 목록 한 번이 93MB 였다(2026-10-09). 목록은
+    // 건수만 — 「적용」 은 그것으로 가르고, 표는 펼칠 때 상세(앞의 500줄)를 읽어 그린다.
+    const brief = { ...CLEAN_PLAN, rows: [], rows_omitted: 50_000 }
+    await mount([job({ result: brief })])
+    expect(await screen.findByText('적용 대기')).toBeInTheDocument()
+    jobsApi.get.mockResolvedValue(job({ result: { ...CLEAN_PLAN, rows_omitted: 49_999 } }))
+    jobsApi.rowsCsv.mockResolvedValue(undefined)
+
+    await userEvent.click(screen.getByRole('button', { name: '펼치기' }))
+    expect(await screen.findByText('볼트')).toBeInTheDocument()
+    expect(jobsApi.get).toHaveBeenCalledWith('j1')
+    expect(screen.getByText(/나머지 49,999줄/)).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '모든 줄 받기(CSV)' }))
+    await waitFor(() => expect(jobsApi.rowsCsv).toHaveBeenCalledWith('j1'))
+  })
+
+  it('줄 목록이 다 실린 결과는 상세를 다시 읽지 않는다', async () => {
+    await mount([job({ result: CLEAN_PLAN })])
+    await userEvent.click(await screen.findByRole('button', { name: '펼치기' }))
+    expect(await screen.findByText('볼트')).toBeInTheDocument()
+    expect(jobsApi.get).not.toHaveBeenCalled()
+  })
+
   it('결과가 스스로 한 줄로 말하는 계획(고아 첨부 정리)도 그 말과 함께 적용이 선다', async () => {
     await mount([
       job({
@@ -228,6 +255,62 @@ describe('작업 화면', () => {
     ])
     expect(screen.getByText(/지울 것 — 고아 파일 3개/)).toBeInTheDocument()
     expect(await screen.findByText('적용 대기')).toBeInTheDocument()
+  })
+
+  it('사진 일괄 업로드의 계획도 파일마다 읽고 적용한다', async () => {
+    // 못 붙는 파일이 있어도 붙는 것은 붙는다 — `ok`(붙는 것이 있나)로 「적용」 이 선다.
+    await mount([
+      job({
+        kind: 'objects_photos',
+        kind_label: '사진 일괄 업로드',
+        input_file_name: '사진.zip',
+        result: {
+          photos: true,
+          applied: false,
+          ok: true,
+          field: 'photo',
+          field_label: '사진',
+          existing: 'skip',
+          files: [
+            {
+              name: 'P-1.jpg',
+              status: 'attach',
+              size_bytes: 10,
+              object_id: 'o1',
+              object_label: '볼트',
+              object_key: 'P-1',
+              matched_by: 'key',
+              message: '',
+              replaces: 0,
+              attachment_id: null,
+            },
+            {
+              name: '없는것.jpg',
+              status: 'not_found',
+              size_bytes: 10,
+              object_id: null,
+              object_label: '',
+              object_key: null,
+              matched_by: '',
+              message: '「없는것」 에 맞는 부품이(가) 없습니다.',
+              replaces: 0,
+              attachment_id: null,
+            },
+          ],
+          tally: { attach: 1, not_found: 1 },
+          hidden: 0,
+          summary: '계획 — 업로드 1 · 못 찾음 1',
+        },
+      }),
+    ])
+    expect(screen.getByText('계획 — 업로드 1 · 못 찾음 1')).toBeInTheDocument()
+    expect(await screen.findByText('적용 대기')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '펼치기' }))
+    expect(screen.getByText('없는것.jpg')).toBeInTheDocument()
+    expect(screen.getByText('볼트 (P-1)')).toBeInTheDocument()
+    jobsApi.apply.mockResolvedValue(job({ id: 'j2' }))
+    await userEvent.click(screen.getByRole('button', { name: '적용' }))
+    await waitFor(() => expect(jobsApi.apply).toHaveBeenCalledWith('j1'))
   })
 
   it('정제 도구가 준 링크(?job=)로 오면 그 계획이 펼쳐진 채로 열린다', async () => {

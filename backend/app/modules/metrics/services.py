@@ -370,6 +370,11 @@ def _check_alerts(db: Session, metric_id: uuid.UUID, slug: str) -> dict[str, int
     로그만."""
     try:
         return alerts.after_recompute(db, metric_id)
+    except job_services.Cancelled:
+        # 빼앗긴 작업(`Lost`)의 커밋 앞 검사는 여기서 삼키면 안 된다 — 삼키면 다음 지표를
+        # 계속 돈다. 이어받은 워커가 이 지표부터 다시 센다.
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
         log.exception("경보 확인 실패: %s", slug)

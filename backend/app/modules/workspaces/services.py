@@ -520,7 +520,16 @@ def reassign(
             f"이 설치가 아는 것: {', '.join(available)}",
             status=422,
         )
-    moved = {kind: available[kind].move(db, source.id, target.id) for kind in kinds}
+    # 누가 옮기는지를 받는 종류는 그쪽으로 — 옮긴 것마다 기록에 사람이 박힌다(`move_by`).
+    moved = {
+        kind: (
+            content.move_by(db, source.id, target.id, actor)
+            if content.move_by is not None
+            else content.move(db, source.id, target.id)
+        )
+        for kind in kinds
+        for content in (available[kind],)
+    }
     audit.record(
         db,
         action=audit.WORKSPACE_REASSIGNED,

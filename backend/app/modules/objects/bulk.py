@@ -33,10 +33,10 @@ import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
 from datetime import date, datetime
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import and_, func, or_, select, true
-from sqlalchemy.orm import Session
+from sqlalchemy import Table, and_, func, or_, select, true
+from sqlalchemy.orm import Session, load_only
 
 from app.modules.accounts.models import User
 from app.modules.bundles import journal
@@ -61,8 +61,8 @@ from app.modules.objects.services import (
 from app.modules.ontology import conversion, interfaces, managed
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.services import InvalidValue, merge_properties, validate_properties
-from app.shared import audit, tabular
-from app.shared.batches import chunks
+from app.shared import audit, copyin, tabular
+from app.shared.batches import any_of, chunks
 from app.shared.errors import AppError, Conflict, code
 from app.shared.permissions import (
     editable_owner_clause,
@@ -890,6 +890,22 @@ class _Index:
     ⚠️ 표의 유일 제약은 「한 별칭은 한 객체」 다. 같은 파일에 같은 별칭이 둘이면 뒷줄 것이
        조용히 빠지는데, 예전에는 **미리 보기에 그 말이 없었다** — 적용하고 나서야 없는 것을
        본다(실측)."""
+    patches: list[dict[str, Any] | AppError] = field(default_factory=list)
+    """줄마다 읽은 칸 값(패치, 줄 순서) — **적용이 그대로 쓴다.**
+
+    ⚠️ 예전에는 같은 줄을 세 번 읽었다 — 계획의 첫 바퀴 · 둘째 바퀴(줄에 붙은 말을 모으려고) ·
+       적용(참조 대상을 처음부터 다시 읽고). 같은 트랜잭션의 같은 사실이라 답도 같다 — 5만 줄
+       적용에서 그 되풀이가 수 초였다(2026-10-09)."""
+    notes: dict[int, tuple[list[str], list[tuple[str, str]]]] = field(default_factory=dict)
+    """줄 번호 → 칸 값을 읽을 때 붙은 말(`Refs.notes`) · 못 찾은 필수 참조
+    (`Refs.blanked_required`). 있는 줄만 — 둘째 바퀴가 다시 읽는 대신 이것을 되살린다."""
+    ref_defs: list[PropertyDef] = field(default_factory=list)
+    unique_defs: list[PropertyDef] = field(default_factory=list)
+    """참조 칸 · 유일 칸만 — 줄마다 정의 전부를 훑어 그 둘을 고르던 자리다(정의의 칸 읽기는
+    ORM 속성이라 싸지 않다 — 5만 줄에 정의 17개를 세 번씩)."""
+    fresh: dict[int, dict[str, Any]] = field(default_factory=dict)
+    """새로 만드는 줄 번호 → 검증한 속성(기본값까지). 적용이 그대로 넣는다 — 같은 값을 같은
+    정의로 다시 검증하던 자리다."""
 
 
 def _read_index(
@@ -933,7 +949,7 @@ def _read_index(
     alive = (ObjectInstance.type_id == object_type.id, ObjectInstance.deleted_at.is_(None))
     by_id_found: dict[uuid.UUID, ObjectInstance] = {}
     for batch in chunks(sorted(keys)):
-        by_key_clause: Any = ObjectInstance.key.in_(batch)
+        by_key_clause: Any = any_of(ObjectInstance.key, batch)
         if object_type.key_scope == "workspace":
             # 범위가 부서면 **그 부서 안에서만** 같은 식별자다.
             by_key_clause = and_(
@@ -946,7 +962,7 @@ def _read_index(
             by_id_found[one.id] = one
     for id_batch in chunks(sorted(ids)):
         for one in db.scalars(
-            select(ObjectInstance).where(*alive, ObjectInstance.id.in_(id_batch))
+            select(ObjectInstance).where(*alive, any_of(ObjectInstance.id, id_batch))
         ):
             by_id_found[one.id] = one
     found = list(by_id_found.values())
@@ -959,7 +975,7 @@ def _read_index(
             index.visible.update(
                 db.scalars(
                     select(ObjectInstance.id).where(
-                        ObjectInstance.id.in_(found_batch),
+                        any_of(ObjectInstance.id, found_batch),
                         visible_owner_clause(user, ObjectInstance.owner_workspace_id),
                     )
                 )
@@ -971,8 +987,14 @@ def _read_index(
 
     values: list[str] = []
     for row in rows:
+        raw_aliases = _fixed(row, "aliases")
+        if raw_aliases is _MISSING or raw_aliases is None:
+            # 별칭 칸이 없는 줄 — **표식(`_MISSING`)을 글자로 읽지 않는다.** 예전에는 이것을
+            # 빠뜨려 줄마다 「<object object at 0x…>」 라는 별칭 하나를 물었다(5만 줄이면 5만
+            # 개를 덩어리 다섯으로, 2026-10-09). 계획 · 적용과 같은 거르기다.
+            continue
         try:
-            asked, _ = alias_values(_fixed(row, "aliases"))
+            asked, _ = alias_values(raw_aliases)
         except AppError:
             # 모양이 틀린 칸은 **줄 오류**다 — 여기서 터뜨리면 파일 전체가 거절되고,
             # 그 줄이 어느 줄인지 아무 데도 안 적힌다. 계획이 줄마다 다시 읽는다.
@@ -1247,16 +1269,23 @@ def plan_objects(
     # **칸 값을 먼저 한 바퀴 읽는다** — 그래야 유일 속성을 미리 물을 수 있다. 줄마다
     # 나는 오류(값 모양 · 참조 못 찾음)는 그 줄의 것으로 들고 있다가 아래에서 낸다.
     patches: list[dict[str, Any] | AppError] = []
-    for row in rows:
+    notes: dict[int, tuple[list[str], list[tuple[str, str]]]] = {}
+    for number, row in enumerate(rows, start=1):
         refs.notes.clear()
         refs.blanked_required.clear()
         try:
             patches.append(_patch_of(row, mapping, by_key, refs))
         except AppError as caught:
             patches.append(caught)
+        if refs.notes or refs.blanked_required:
+            notes[number] = (list(refs.notes), list(refs.blanked_required))
     index_data = _read_index(
         db, user, object_type, rows, defs, patches, owner_workspace_id=owner_workspace_id
     )
+    index_data.patches = patches
+    index_data.notes = notes
+    index_data.ref_defs = [one for one in defs if one.data_type == "object_ref"]
+    index_data.unique_defs = [one for one in defs if one.unique]
     plan.index = index_data
 
     for index, (row, patch) in enumerate(zip(rows, patches, strict=True), start=1):
@@ -1271,7 +1300,6 @@ def plan_objects(
                     object_type,
                     defs,
                     by_key,
-                    mapping,
                     refs,
                     row,
                     index,
@@ -1302,7 +1330,6 @@ def _plan_row(
     object_type: ObjectType,
     defs: list[PropertyDef],
     by_key: dict[str, PropertyDef],
-    mapping: dict[str, str],
     refs: Refs,
     row: dict[str, Any],
     index: int,
@@ -1315,10 +1342,11 @@ def _plan_row(
     seen_ids: dict[str, int],
     human_edits: str = "keep",
 ) -> RowPlan:
-    # 칸 값은 이미 읽었다 — 그때 붙은 말(별칭이 남의 이름이기도 하다)만 다시 모은다.
-    refs.notes.clear()
-    refs.blanked_required.clear()
-    _patch_of(row, mapping, by_key, refs)
+    # 칸 값은 이미 읽었다 — 그때 붙은 말(별칭이 남의 이름이기도 하다 · 못 찾은 참조)을
+    # 되살린다. 예전에는 그 말을 모으려고 줄을 **처음부터 다시 읽었다**(참조 풀이까지).
+    said, blanked = index_data.notes.get(index, ([], []))
+    refs.notes[:] = said
+    refs.blanked_required[:] = blanked
 
     raw_id = _fixed(row, "id")
     raw_key = _fixed(row, "key")
@@ -1447,10 +1475,10 @@ def _plan_row(
         properties = validate_properties(
             defs, {k: v for k, v in patch.items() if v is not None}, apply_defaults=True
         )
-        _require_refs(refs, defs, properties)
+        _require_refs(refs, index_data.ref_defs, properties)
         _unique_clash(
             object_type,
-            defs,
+            index_data.unique_defs,
             index_data,
             properties,
             owner_workspace_id=owner_workspace_id,
@@ -1459,7 +1487,7 @@ def _plan_row(
         )
         _claim_unique(
             index_data,
-            defs,
+            index_data.unique_defs,
             properties,
             row=index,
             object_id=None,
@@ -1474,6 +1502,7 @@ def _plan_row(
                 index_data, wanted_aliases, exclude_id=None, row=index
             )
             wanted_aliases = _only(wanted_aliases, free)
+        index_data.fresh[index] = properties
         return RowPlan(
             row=index,
             action="create",
@@ -1575,10 +1604,10 @@ def _plan_row(
     if patch:
         merged = merge_properties(existing.properties or {}, patch)
         cleaned = validate_properties(defs, merged)
-        _require_refs(refs, defs, cleaned)
+        _require_refs(refs, index_data.ref_defs, cleaned)
         _unique_clash(
             object_type,
-            defs,
+            index_data.unique_defs,
             index_data,
             cleaned,
             owner_workspace_id=existing.owner_workspace_id,
@@ -1601,7 +1630,7 @@ def _plan_row(
     # 실제로 쓰게 될 것만 적어 둔다 — 같은 파일의 뒷줄이 본다(비켜 간 칸은 안 쓴다).
     _claim_unique(
         index_data,
-        defs,
+        index_data.unique_defs,
         {one: cleaned.get(one) for one in changes if one in cleaned},
         row=index,
         object_id=existing.id,
@@ -1655,6 +1684,45 @@ def _can_see(db: Session, user: User, row: ObjectInstance) -> bool:
     )
 
 
+#: 새 줄을 이만큼 모으면 넣는다 — 다 모았다가 끝에 한 번 넣으면 5만 줄의 속성이 끝까지
+#: 메모리에 있고, 진행률이 「적용」 끝에서 한참 멈춘다.
+WRITE_EVERY = 5000
+
+
+class _Writes:
+    """적용이 **새로** 쓰는 줄 — 객체(또는 선) · 감사 · 되돌릴 기록을 모았다가 COPY 로 넣는다
+    (`shared/copyin.py`). 고치는 줄은 여전히 ORM 이 쓴다(속성 · 이력 표시를 객체에서 읽고
+    고친다) — 그 줄의 감사 · 되돌릴 기록만 여기로 온다.
+
+    ⚠️ 왜: 줄마다 ORM 객체를 두면 flush 가 그것을 1,000줄짜리 `INSERT … RETURNING` 으로
+       보내는데, psycopg 가 그 긴 문장을 덩어리마다 다시 쪼갰다 — 5만 줄 객체 적용 40초 중
+       flush 가 25초, 관계 적용은 22~25초 중 대부분이었다(2026-10-09 실측).
+    ⚠️ 새 줄이 **먼저** 들어간다 — 별칭(외래키)은 그 뒤에 붙인다. 감사 기록은 부른 차례
+       그대로 들어간다 — 그래서 모아 둔 줄보다 **뒤에** 부른 `audit.record`(ORM)가 있으면 그
+       앞에서 쓴다(관계의 원 표 선 · 끊을 선). 되돌릴 기록의 차례(`seq`)는 부를 때 매긴다
+       (`journal.Batch`).
+    ⚠️ 표를 보는 검사(개수 제약 · 순환)는 쓰지 않은 줄을 못 본다 — 그 앞에서 `write` 한다.
+    """
+
+    def __init__(self, db: Session, table: Any) -> None:
+        self.db = db
+        self.table = cast("Table", table)
+        self.rows: list[dict[str, Any]] = []
+        self.audit = audit.Batch(db)
+        self.undo = journal.Batch(db)
+
+    def maybe(self) -> None:
+        """`WRITE_EVERY` 를 넘었으면 넣는다."""
+        if max(len(self.rows), len(self.audit.rows), len(self.undo.rows)) >= WRITE_EVERY:
+            self.write()
+
+    def write(self) -> None:
+        copyin.copy_rows(self.db, self.table, self.rows)
+        self.rows.clear()
+        self.audit.write()
+        self.undo.write()
+
+
 def apply_objects(
     db: Session,
     user: User,
@@ -1696,21 +1764,22 @@ def apply_objects(
         before_apply(plan)
 
     defs = [d for d in properties_of(db, object_type.id) if d.data_type != "file"]
-    by_key = {d.key: d for d in defs}
-    mapping, _ = _column_map(defs, {key for row in rows for key in row})
-    refs = Refs(db, user, blank_missing=blank_missing)
-    prefetch_cells(refs, by_key, mapping, rows)
     # 계획이 미리 읽은 것을 그대로 쓴다 — 방금 세운 계획이라 같은 트랜잭션의 같은 사실이다.
+    # 칸 값(패치)도 그렇다: 예전에는 여기서 참조 대상을 처음부터 다시 읽고 줄마다 다시 풀었다.
     index_data = plan.index if isinstance(plan.index, _Index) else _Index()
-    # 새로 만든 객체의 별칭은 **모았다가 한 번에** 넣는다(아래) — 둘 사이에 ORM 관계가
-    # 없어 차례를 우리가 정해 줘야 한다(객체가 먼저 들어가야 외래키가 선다).
-    fresh_aliases: list[tuple[ObjectInstance, list[aliases.Incoming]]] = []
+    # 새로 만든 객체의 별칭은 **모았다가 한 번에** 넣는다(아래) — 객체가 먼저 들어가야
+    # 외래키가 선다.
+    fresh_aliases: list[tuple[uuid.UUID, list[aliases.Incoming]]] = []
+    # **새 줄은 모았다가 COPY 로 넣는다**(`_Writes`).
+    writes = _Writes(db, ObjectInstance.__table__)
 
     for row_plan, row in zip(plan.rows, rows, strict=True):
         _tick(on_progress, "적용", row_plan.row, len(rows))
         if row_plan.action == "unchanged":
             continue
-        patch = _patch_of(row, mapping, by_key, refs)
+        patch = index_data.patches[row_plan.row - 1]
+        if isinstance(patch, AppError):  # pragma: no cover - 오류 줄이 있으면 적용하지 않는다
+            raise patch
         raw_label = _fixed(row, "label")
         raw_description = _fixed(row, "description")
         raw_status = _fixed(row, "status")
@@ -1718,53 +1787,51 @@ def apply_objects(
         raw_to = _fixed(row, "valid_to_year")
 
         if row_plan.action == "create":
-            target = ObjectInstance(
-                # **id 를 여기서 정한다** — 그래야 별칭 · 감사 기록이 flush 를 기다리지
-                # 않는다. 줄마다 flush 하면 2만 줄에 왕복이 2만 번이다(실측).
-                id=uuid.uuid4(),
-                type_id=object_type.id,
-                key=row_plan.key,
-                label=row_plan.label,
-                description=""
-                if raw_description in (_MISSING, None)
-                else str(raw_description),
-                properties=validate_properties(
-                    defs,
-                    {k: v for k, v in patch.items() if v is not None},
-                    apply_defaults=True,
-                ),
-                status="active" if raw_status in (_MISSING, None) else str(raw_status),
-                owner_workspace_id=owner_workspace_id,
-                valid_from_year=None if raw_from in (_MISSING, None) else int(raw_from),
-                valid_to_year=None if raw_to in (_MISSING, None) else int(raw_to),
-                created_by_id=user.id,
+            # **id 를 여기서 정한다** — 그래야 별칭 · 감사 기록이 객체가 들어가기를 기다리지
+            # 않는다.
+            made = uuid.uuid4()
+            name = f"{object_type.slug}:{row_plan.label}"
+            writes.rows.append(
+                {
+                    "id": made,
+                    "type_id": object_type.id,
+                    "key": row_plan.key,
+                    "label": row_plan.label,
+                    "description": ""
+                    if raw_description in (_MISSING, None)
+                    else str(raw_description),
+                    # 계획이 검증한 그대로(기본값까지) — 같은 값을 다시 검증하던 자리다.
+                    "properties": index_data.fresh[row_plan.row],
+                    "status": "active" if raw_status in (_MISSING, None) else str(raw_status),
+                    "owner_workspace_id": owner_workspace_id,
+                    "valid_from_year": None if raw_from in (_MISSING, None) else int(raw_from),
+                    "valid_to_year": None if raw_to in (_MISSING, None) else int(raw_to),
+                    "created_by_id": user.id,
+                }
             )
-            db.add(target)
-            row_plan.object_id = target.id
+            row_plan.object_id = made
             # **되돌릴 자리를 적는다** — 판이 열려 있을 때만(묶음). `audit="summary"` 로
             # 줄마다의 기록을 끈 백필도 이것으로 되돌린다.
-            journal.created(
-                db, "objects", target.id, label=f"{object_type.slug}:{target.label}"
-            )
+            writes.undo.created("objects", made, label=name)
             raw_aliases = _fixed(row, "aliases")
             if raw_aliases is not _MISSING and raw_aliases is not None:
                 # 계획에서 가른 대로 — 남이 쓰는 별칭은 여기서도 빠진다. **미리 읽은 것으로**
                 # 가르고, 붙인 것은 거기에 적어 둔다: 같은 파일의 뒷줄이 그것을 봐야 한다.
                 asked = alias_values(raw_aliases)[0]
-                free, _taken, _double = _split_free(index_data, asked, exclude_id=target.id)
+                free, _taken, _double = _split_free(index_data, asked, exclude_id=made)
                 if free:
-                    fresh_aliases.append((target, _only(asked, free)))
-                    _remember(index_data, free, target.id)
-            audit.record(
-                db,
+                    fresh_aliases.append((made, _only(asked, free)))
+                    _remember(index_data, free, made)
+            writes.audit.record(
                 action="object.create",
                 actor=user,
                 target_table="objects",
-                target_id=target.id,
-                target_label=f"{object_type.slug}:{target.label}",
+                target_id=made,
+                target_label=name,
                 workspace_id=owner_workspace_id,
                 reason="일괄 가져오기",
             )
+            writes.maybe()
             continue
 
         found = db.get(ObjectInstance, row_plan.object_id)
@@ -1856,8 +1923,7 @@ def apply_objects(
             after={key: one["after"] for key, one in moved.items()},
             label=f"{object_type.slug}:{target.label}",
         )
-        audit.record(
-            db,
+        writes.audit.record(
             action="object.update",
             actor=user,
             target_table="objects",
@@ -1867,12 +1933,14 @@ def apply_objects(
             changes=moved,
             reason="일괄 가져오기",
         )
+        writes.maybe()
 
-    if fresh_aliases:
-        # **객체를 먼저 넣고** 별칭을 넣는다.
-        db.flush()
-        for made, values in fresh_aliases:
-            aliases.add_fresh(db, made, object_type, values)
+    # 남은 것을 넣는다 — **묶음 한 줄(`object.import`)보다 먼저**: 감사의 차례(`seq`)는 넣는
+    # 차례다.
+    writes.write()
+    # 객체가 들어간 **뒤에** 별칭을 붙인다(외래키).
+    for made, values in fresh_aliases:
+        aliases.add_fresh(db, made, object_type, values)
 
     counts = plan.counts
     audit.record(
@@ -2000,9 +2068,25 @@ RELATION_COLUMNS = ("src", "relation", "dst", "evidence_note")
 #: 근거 메모의 길이 — 표의 칸(`evidence_note` String(500))과 같다. 화면 요청은 스키마가 본다.
 EVIDENCE_MAX = 500
 
-RELATION_RESERVED = (*RELATION_COLUMNS, "properties")
+RELATION_RESERVED = (*RELATION_COLUMNS, "properties", "dst_type")
 """속성으로 읽지 않는 이름 — CSV 는 칸을 펼쳐 적고(`n`, `basis`), JSON · 허브 묶음은
-`properties` 객체로 적는다. **같은 정의로 같게 검사한다.**"""
+`properties` 객체로 적는다. **같은 정의로 같게 검사한다.**
+
+`dst_type` 은 고르는 열이다 — 도착점을 **어느 타입에서** 찾을지(`_dst_allowed`). 끝이
+인터페이스인 종류는 구현 타입이 여럿이고 `key` 는 타입 안에서만 하나라, 두 구현 타입에 같은
+식별자가 있으면 그 줄은 「여러 타입에 있습니다」 로 막혔다. 코어 창구의 선은 늘 이 값을
+싣는다."""
+
+
+def _dst_hint(row: dict[str, Any]) -> str:
+    """줄이 적은 도착 타입 — 없으면 빈 글자."""
+    return str(row.get("dst_type") or "").strip()
+
+
+def _dst_memo(kind: RelationType, hint: str) -> str:
+    """도착점 기억의 자리 — **도착 타입을 적은 줄은 따로 기억한다**(같은 글자라도 다른 타입의
+    다른 객체다)."""
+    return f"dst:{kind.slug}:{hint}" if hint else f"dst:{kind.slug}"
 
 
 def _relation_defs_all(db: Session, kinds: list[RelationType]) -> dict[str, list[PropertyDef]]:
@@ -2175,7 +2259,7 @@ def _load_pool(
         kind = kinds.get(slug)
         if not dst_text or kind is None:
             continue
-        allowed = ends.expand(kind.dst_type_slugs)
+        allowed = _dst_allowed(ends, kind, _dst_hint(row), by_slug)
         plain = tuple(
             sorted(
                 by_slug[one].id
@@ -2199,6 +2283,7 @@ def _pending_end(
     kind: RelationType,
     src_text: str,
     dst_text: str,
+    hint: str = "",
 ) -> tuple[str, str]:
     """**못 찾은 끝점**이 이 묶음이 만들 것인가 — `(까닭, 도착 타입 slug)`, 아니면 `("", "")`.
 
@@ -2220,6 +2305,8 @@ def _pending_end(
     if dst_text:
         ends = memo.end_types or interfaces.Ends()
         for slug in memo.pending:
+            if hint and hint in memo.types and slug != hint:
+                continue  # 도착 타입을 적은 줄 — 그 타입의 것만
             if ends.allows(kind.dst_type_slugs, slug) and dst_text in memo.pending[slug]:
                 dst_slug = slug
                 break
@@ -2372,38 +2459,57 @@ def _ends_of(
 
     ⚠️ 줄마다 최대 네 질의를 돌던 자리다. 관계 파일은 도착점이 줄마다 다르므로 기억해 두는
        것만으로는 줄지 않았다 — **파일에 나온 글자 전부**를 한 번에 묻는다.
+    ⚠️ 목록은 **배열 바인드 하나씩**이다(`any_of`). `in_` 으로 펼치면 글자 하나가 자리표
+       서넛이라, 출발점 2만 개쯤에서 바인드 한도(65,535)를 넘어 계획이 「number of parameters
+       must be between 0 and 65535」 로 죽었다(5만 줄 관계 파일, 2026-10-09).
     """
     out: dict[str, list[ObjectInstance]] = {}
     if not texts:
         return out
-    norms = {compare_key(one) for one in texts}
+    listed = sorted(texts)
+    norms = sorted({compare_key(one) for one in texts})
     ids: set[uuid.UUID] = set()
     for one in texts:
         try:
             ids.add(uuid.UUID(one))
         except ValueError:
             continue
-    alias_owners = select(ObjectAlias.object_id).where(ObjectAlias.norm.in_(norms))
-    stmt = select(ObjectInstance).where(
-        ObjectInstance.deleted_at.is_(None),
-        visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+    alias_owners = select(ObjectAlias.object_id).where(any_of(ObjectAlias.norm, norms))
+    stmt = (
+        select(ObjectInstance)
+        .where(
+            ObjectInstance.deleted_at.is_(None),
+            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+        )
+        # 끝점에서 쓰는 칸만 — 속성(JSONB)까지 읽으면 기록 5만 개의 끝점 읽기가 두 배였다
+        # (2.2초 → 1.1초, 2026-10-09). 안 읽은 칸은 쓰는 자리가 생기면 그때 읽힌다(값은 같다).
+        .options(
+            load_only(
+                ObjectInstance.id,
+                ObjectInstance.type_id,
+                ObjectInstance.key,
+                ObjectInstance.label,
+                ObjectInstance.owner_workspace_id,
+            )
+        )
     )
     if allowed_types:
         stmt = stmt.where(ObjectInstance.type_id.in_(allowed_types))
     wanted = [
-        ObjectInstance.key.in_(texts),
-        ObjectInstance.label.in_(texts),
+        any_of(ObjectInstance.key, listed),
+        any_of(ObjectInstance.label, listed),
         ObjectInstance.id.in_(alias_owners),
     ]
     if ids:
-        wanted.append(ObjectInstance.id.in_(ids))
+        wanted.append(any_of(ObjectInstance.id, sorted(ids)))
     rows = list(db.scalars(stmt.where(or_(*wanted))))
     if not rows:
         return out
     by_object: dict[uuid.UUID, set[str]] = {}
     for object_id, norm in db.execute(
         select(ObjectAlias.object_id, ObjectAlias.norm).where(
-            ObjectAlias.object_id.in_([one.id for one in rows]), ObjectAlias.norm.in_(norms)
+            any_of(ObjectAlias.object_id, [one.id for one in rows]),
+            any_of(ObjectAlias.norm, norms),
         )
     ):
         by_object.setdefault(object_id, set()).add(norm)
@@ -2459,12 +2565,31 @@ def _type_ids(db: Session, slugs: list[str] | None) -> list[uuid.UUID] | None:
 
 
 def _dst_maker(
-    db: Session, user: User, text: str, kind: RelationType, memo: _RelIndex
+    db: Session, user: User, text: str, kind: RelationType, memo: _RelIndex, hint: str = ""
 ) -> Callable[[], Any]:
     def find() -> Any:
-        return _find_dst(db, user, text, kind, memo)
+        return _find_dst(db, user, text, kind, memo, hint)
 
     return find
+
+
+def _dst_allowed(
+    ends: interfaces.Ends, kind: RelationType, hint: str, types: dict[str, ObjectType]
+) -> set[str] | None:
+    """도착에 설 수 있는 타입 slug — 줄이 도착 타입(`dst_type`)을 적었으면 **그 하나로**
+    좁힌다.
+
+    끝이 인터페이스면 구현 타입이 여럿이고 `key` 는 타입 안에서만 하나다. 두 구현 타입에 같은
+    식별자가 있으면 좁히지 않고는 어느 것인지 정해지지 않는다 — 짐작으로 고르면 다른 타입의
+    객체에 선이 선다. 적은 타입이 그 종류의 도착이 아니면 **빈 집합**(아무것도 안 된다 —
+    `_find_dst` 가 까닭을 말한다). **이 설치에 없는 타입 이름이면 그 말은 버린다** — 형제
+    설치의 타입 이름이 이쪽과 다를 수 있다(그때는 예전처럼 끝에 적힌 것 전부에서 찾는다)."""
+    allowed = ends.expand(kind.dst_type_slugs)
+    if not hint or hint not in types:
+        return allowed
+    if allowed is not None and hint not in allowed:
+        return set()
+    return {hint}
 
 
 def _find_dst(
@@ -2473,11 +2598,14 @@ def _find_dst(
     text: str,
     kind: RelationType,
     memo: _RelIndex | None = None,
+    hint: str = "",
 ) -> system.End:
     """도착점 — 객체 표 먼저, 그다음 관계가 허용한 system 타입의 원 표.
 
     system 끝은 관계 종류가 도착 타입을 **정해 뒀을 때만** 본다. 안 정했으면 원 표를
     전부 뒤지게 되고, 「부서 slug 를 적었더니 계정이 걸렸다」 같은 일이 생긴다.
+
+    `hint` 는 줄이 적은 도착 타입(`dst_type`) — 있으면 그 타입에서만 찾는다(`_dst_allowed`).
     """
     types = memo.types if memo is not None and memo.types else system.types_by_slug(db)
     ends = memo.end_types if memo is not None and memo.end_types else interfaces.load_ends(db)
@@ -2492,7 +2620,13 @@ def _find_dst(
 
     # 끝에 적힌 인터페이스는 구현 타입으로 편다. **`None` 만 「아무 타입이나」 다** — 구현
     # 타입이 없는 인터페이스는 빈 집합이고, 그것을 「제약 없음」 으로 읽으면 아무것이나 잇는다.
-    allowed = ends.expand(kind.dst_type_slugs)
+    allowed = _dst_allowed(ends, kind, hint, types)
+    if hint in types and allowed is not None and not allowed:
+        raise InvalidValue(
+            code("OBJECTS", 46),
+            f"「{text}」 을 이을 수 없습니다 — 도착 타입 {hint} 은(는) {kind.label}의 도착"
+            f"({ends.describe(kind.dst_type_slugs or [])})이 아닙니다.",
+        )
     if allowed is not None and not allowed:
         raise InvalidValue(
             code("OBJECTS", 46),
@@ -2718,8 +2852,11 @@ def _plan_relation(
     src_end = _try_end(
         memo, ("src", src_text), _endpoint_maker(db, user, object_type, src_text, memo)
     )
+    hint = _dst_hint(row)
     dst_end = _try_end(
-        memo, (f"dst:{kind.slug}", dst_text), _dst_maker(db, user, dst_text, kind, memo)
+        memo,
+        (_dst_memo(kind, hint), dst_text),
+        _dst_maker(db, user, dst_text, kind, memo, hint),
     )
     src_gone = src_end if isinstance(src_end, AppError) else None
     dst_gone = dst_end if isinstance(dst_end, AppError) else None
@@ -2730,6 +2867,7 @@ def _plan_relation(
             kind,
             src_text if src_gone is not None else "",
             dst_text if dst_gone is not None else "",
+            hint,
         )
         if later:
             # **이 묶음이 만들 끝점**을 가리킨다 — 계획만 볼 때는 「없다」 가 아니다.
@@ -2833,7 +2971,15 @@ def apply_relations(
     max_rows: int = MAX_ROWS,
     on_progress: Progress = None,
     before_apply: Callable[[Plan], None] | None = None,
+    mark: dict[str, Any] | None = None,
+    datasource_id: uuid.UUID | None = None,
 ) -> Plan:
+    """계획을 다시 세워 넣는다.
+
+    `mark` 는 **새로 이은 선의 기록에 붙이는 표식**(`changes` 에 더한다 — `_` 로 시작하는 키라
+    이력 · 알림이 칸으로 안 읽는다) — 이력에서 「어느 소스가 이었나」 를 읽게. `datasource_id`
+    는 새로 이은 선의 주인(`ObjectRelation.datasource_id`)이다: 나중에 「이 소스가 이은 선」 만
+    골라 정리할 근거다(`datasources/services.py` 의 처음부터 다시 받기)."""
     plan = plan_relations(
         db,
         user,
@@ -2855,9 +3001,14 @@ def apply_relations(
     # 적용이 그것을 처음부터 다시 물었다(줄마다 넷). 방금 세운 계획이라 같은 사실이다.
     memo = plan.index if isinstance(plan.index, _RelIndex) else _RelIndex()
     refs = Refs(db, user)
+    # **새 선은 모았다가 COPY 로 넣는다**(`_Writes`) — 감사 · 되돌릴 기록도 함께.
+    writes = _Writes(db, ObjectRelation.__table__)
     for row_plan in plan.rows:
         _tick(on_progress, "적용", row_plan.row, len(rows))
         if row_plan.action == "unlink" and row_plan.object_id is not None:
+            # 끊을 선은 파일 줄 **뒤에** 온다 — 그 감사 기록(ORM)이 모아 둔 새 선의 기록보다
+            # 뒤에 들어가게 먼저 쓴다.
+            writes.write()
             edge = db.get(ObjectRelation, row_plan.object_id)
             if edge is None:  # pragma: no cover - 방금 계획에서 찾았다
                 continue
@@ -2907,8 +3058,7 @@ def apply_relations(
                 },
                 label=row_plan.label,
             )
-            audit.record(
-                db,
+            writes.audit.record(
                 action="object.relation.update",
                 actor=user,
                 target_table="object_relations",
@@ -2917,6 +3067,7 @@ def apply_relations(
                 changes={"properties": {"before": before, "after": edge.properties}},
                 reason="일괄 가져오기",
             )
+            writes.maybe()
             continue
         if row_plan.action != "create":
             continue
@@ -2927,11 +3078,17 @@ def apply_relations(
         src = _memo_end(
             memo, ("src", src_text), _endpoint_maker(db, user, object_type, src_text, memo)
         )
+        hint = _dst_hint(row)
         dst = _memo_end(
-            memo, (f"dst:{kind.slug}", dst_text), _dst_maker(db, user, dst_text, kind, memo)
+            memo,
+            (_dst_memo(kind, hint), dst_text),
+            _dst_maker(db, user, dst_text, kind, memo, hint),
         )
         if dst.is_system:
-            # `links.add` 가 개수 제약을 넣기 직전에 다시 본다 — 앞 행이 채웠을 수 있다.
+            # `links.add` 가 개수 제약을 넣기 직전에 다시 본다 — 앞 행이 채웠을 수 있다. 그
+            # 감사 기록(ORM)이 **줄 차례대로** 들어가게 모아 둔 것을 먼저 쓰고, 뒤에 곧바로
+            # 쓴다.
+            writes.write()
             link = links.add(
                 db,
                 user,
@@ -2941,45 +3098,54 @@ def apply_relations(
                 evidence_note=str(row.get("evidence_note") or "").strip(),
                 reason="일괄 가져오기",
             )
+            db.flush()
             row_plan.object_id = link.id
-            journal.created(db, "object_links", link.id, label=row_plan.label)
+            writes.undo.created("object_links", link.id, label=row_plan.label)
             continue
         # **앞 행이 만든 선이 제약을 어길 수 있다.** 검사는 표를 보므로, 아직 안 쓴 선이
         # 있으면 그것을 못 본다 — 줄마다 쓰던 것을 없앤 뒤 이 구멍이 생겼다(실측).
         # 제약이 걸린 종류에서만 먼저 쓴다(대다수는 제약이 없어 그대로 빠르다).
         if _guarded(kind):
+            writes.write()
             db.flush()
         rel.require_cardinality(db, kind, src.id, dst.id)
         rel.require_no_cycle(db, kind, src.id, dst.id)
-        edge = ObjectRelation(
-            # **id 를 여기서 정한다** — 감사 기록이 flush 를 기다리지 않는다. 줄마다 flush
-            # 하면 수만 줄에 왕복이 수만 번이다.
-            id=uuid.uuid4(),
-            src_object_id=src.id,
-            dst_object_id=dst.id,
-            relation=kind.slug,
-            properties=_relation_properties(
-                db, kind, row, refs, defs=memo.defs.get(kind.slug)
-            ),
-            evidence_note=str(row.get("evidence_note") or "").strip(),
-            created_by_id=user.id,
+        # **id 를 여기서 정한다** — 감사 기록이 선이 들어가기를 기다리지 않는다.
+        made = uuid.uuid4()
+        writes.rows.append(
+            {
+                "id": made,
+                "src_object_id": src.id,
+                "dst_object_id": dst.id,
+                "relation": kind.slug,
+                "properties": _relation_properties(
+                    db, kind, row, refs, defs=memo.defs.get(kind.slug)
+                ),
+                "evidence_note": str(row.get("evidence_note") or "").strip(),
+                "created_by_id": user.id,
+                "datasource_id": datasource_id,
+            }
         )
-        db.add(edge)
-        row_plan.object_id = edge.id
-        journal.created(db, "object_relations", edge.id, label=row_plan.label)
-        # 뒤 줄이 「이미 있다」 로 보게 한다 — 같은 파일에 같은 선이 두 번 나올 수 있다.
-        memo.edges[(src.id, kind.slug, dst.id)] = edge
-        audit.record(
-            db,
+        row_plan.object_id = made
+        writes.undo.created("object_relations", made, label=row_plan.label)
+        # 같은 파일에 같은 선이 두 번이면 계획이 막는다(`_require_file_twice`) — 예전에 여기서
+        # `memo.edges` 에 적던 것은 적용에서 다시 읽는 곳이 없었다.
+        writes.audit.record(
             action="object.relation.add",
             actor=user,
             target_table="object_relations",
-            target_id=edge.id,
+            target_id=made,
             target_label=row_plan.label,
             workspace_id=src.owner_workspace_id,
-            changes=audit.relation_endpoints(edge, src.label, dst.label),
+            changes={
+                **audit.relation_ends(kind.slug, src.id, dst.id, src.label, dst.label),
+                **(mark or {}),
+            },
             reason="일괄 가져오기",
         )
+        writes.maybe()
+    # 남은 것을 넣는다 — **묶음 한 줄보다 먼저**(감사의 차례는 넣는 차례다).
+    writes.write()
     audit.record(
         db,
         action="object.relation.import",

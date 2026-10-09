@@ -49,6 +49,8 @@ from app.modules.coreapi.schemas import (
     CorePageOut,
     CorePropertyOut,
     CorePullOut,
+    CoreRelationEndOut,
+    CoreRelationKindOut,
     CoreRelationOut,
     CoreRelationPageOut,
     CoreRowOut,
@@ -63,6 +65,7 @@ from app.modules.objects.models import (
     ObjectRelationTombstone,
 )
 from app.modules.objects.services import properties_of
+from app.modules.ontology.interfaces import Ends, load_ends
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.workspaces.models import WorkspaceMember
 from app.shared import audit
@@ -195,8 +198,10 @@ def consumers(db: Session) -> list[CoreConsumerOut]:
             continue
         out.append(
             CoreConsumerOut(
+                id=pat.id,
                 name=pat.name,
                 owner=owner.display_name or owner.email,
+                owner_id=owner.id,
                 last_used_at=pat.last_used_at,
                 expires_at=pat.expires_at,
                 narrow=CORE_SCOPE in scopes and READ_SCOPE not in scopes,
@@ -302,11 +307,13 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
         }
 
     open_slugs = {one.slug for one in types}
+    ends = load_ends(db)
     for object_type in types:
         defs = _shown_defs(db, object_type)
         count = counts.get(object_type.id, 0)
         latest = latest_of.get(object_type.id)
-        kinds = [one.slug for one in open_relation_kinds(db, object_type, open_slugs)]
+        opened = open_relation_kinds(db, object_type, open_slugs, ends)
+        kinds = [one.slug for one in opened]
         out.append(
             CoreTypeOut(
                 slug=object_type.slug,
@@ -318,9 +325,10 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
                 endpoint=f"{base}/{object_type.slug}",
                 relations_endpoint=(f"{base}/{object_type.slug}/relations" if kinds else None),
                 relations=kinds,
+                relation_kinds=opened,
             )
         )
-        marks.append(_mark(object_type, defs, kinds))
+        marks.append(_mark(object_type, defs, [_kind_mark(one) for one in opened]))
 
     return CoreCatalogOut(
         system=get_settings().app_slug,
@@ -526,8 +534,15 @@ def _moved_away(user: User, since: datetime) -> ColumnElement[bool]:
     """`since` 뒤에 **보이던 부서에서 옮겨 간** 객체 — 감사 기록에 소유 부서가 보이는 쪽(전역 ·
     내 부서)에서 바뀐 것이 있다. 지금 안 보이면 그 자격에게는 사라진 것이다(무덤으로 보낸다).
 
-    부서 통폐합(`_move_objects`)은 객체마다 기록을 안 남겨 여기 안 걸린다 — 옮겨 간 부서가
-    합쳐지는 부서라 보던 사람은 대개 그 부서에도 든다."""
+    「보이던 쪽」 은 **토큰 주인의 지금 소속**으로 가른다 — 옮겨 오기 전 부서를 못 보던
+    자격에게는 그 객체가 처음 보이는 것이고(보통 행으로 온다), 둘 다 못 보면 아무것도 안
+    간다(식별자도 안 샌다).
+
+    부서 통폐합(`objects/services._move_objects`)도 옮긴 객체마다 기록을 남긴다 — 예전에는
+    통폐합 한 줄뿐이라 여기 안 걸렸고, 원본 부서만 보던 수신 측은 옮겨 간 객체를 영영 살아
+    있는 것으로 들었다(2026-10-08). 객체마다의 기록이라 이 물음은 객체 id 하나로 감사 기록의
+    색인(`target_id`)을 탄다 — 통폐합 한 줄의 「언제 · 어디서 어디로」 를 풀어 그때 옮긴
+    객체를 되짚는 길은 없다(옮긴 뒤에는 원래 그 부서에 있던 것과 옮겨 온 것이 안 갈린다)."""
     mine = select(cast(WorkspaceMember.workspace_id, String)).where(
         WorkspaceMember.user_id == user.id
     )
@@ -559,28 +574,75 @@ def _gone_out(row: ObjectInstance) -> CoreRowOut:
     )
 
 
-def open_relation_kinds(
-    db: Session, object_type: ObjectType, open_slugs: set[str]
-) -> list[RelationType]:
-    """이 타입에서 **출발하는, 양끝이 모두 열린** 관계 종류.
+def _open_end(
+    slugs: list[str] | None, open_slugs: set[str], ends: Ends
+) -> list[CoreRelationEndOut] | None:
+    """관계 종류의 한쪽 끝 → 그 끝의 **약속**(적힌 것과 거기 설 수 있는 열린 타입). 못 열면
+    None.
 
-    한쪽 끝이 안 열린 타입이면 보내지 않는다 — 받는 쪽은 찾을 수 없는 끝점을 쥐게 되고,
-    그것은 「우리 쪽 데이터가 이상하다」 로 읽힌다. 끝 타입을 안 적은 종류(NULL = 제약
-    없음)도 보내지 않는다: 무엇이 올지 우리도 모르는 선을 밖으로 내보낼 수는 없다. 끝에
-    **인터페이스**를 적은 종류도 아직 안 연다 — 코어는 타입만 약속한다(ADR 0006).
+    - 끝을 안 적었으면(NULL = 제약 없음) 못 연다 — 무엇이 올지 우리도 모르는 선을 밖으로
+      내보낼 수는 없다.
+    - 적힌 **타입**이 하나라도 안 열렸으면 못 연다(예전 그대로). 타입 목록은 종류를 고쳐야만
+      바뀌는 약속이라, 일부만 연 채로 내보내면 그 약속의 반쪽만 나간다.
+    - **인터페이스**는 구현한 타입 중 **열린 것만** 그 끝에 선다(선마다 끝 객체의 타입을 본다
+      — `relations`). 구현 타입이 **전부** 열려야 열리게 하면, 누가 새 타입에 그 인터페이스를
+      구현하는 순간 그 종류가 바깥에서 통째로 닫히고, 그 일은 화면 어디에도 안 적힌다
+      (2026-10-08 — 그 전에는 끝이 인터페이스면 아예 안 열어, 허브 → 쌍둥이에서 그 선이
+      통째로 빠졌다).
+    - 그 끝에 설 열린 타입이 하나도 없으면 못 연다 — 나갈 선이 없는 약속은 헛말이다.
     """
-    out: list[RelationType] = []
-    for kind in db.scalars(select(RelationType).order_by(RelationType.slug)):
-        if not kind.is_active or not kind.src_type_slugs or not kind.dst_type_slugs:
-            continue
-        if object_type.slug not in kind.src_type_slugs:
-            continue
-        if not set(kind.src_type_slugs) <= open_slugs:
-            continue
-        if not set(kind.dst_type_slugs) <= open_slugs:
-            continue
-        out.append(kind)
+    if not slugs:
+        return None
+    out: list[CoreRelationEndOut] = []
+    for one in slugs:
+        if one in ends.interfaces:
+            opened = sorted(slug for slug in ends.types_of([one]) if slug in open_slugs)
+            out.append(CoreRelationEndOut(slug=one, interface=True, types=opened))
+        elif one in open_slugs:
+            out.append(CoreRelationEndOut(slug=one, types=[one]))
+        else:
+            return None
+    if not any(end.types for end in out):
+        return None
     return out
+
+
+def open_relation_kinds(
+    db: Session, object_type: ObjectType, open_slugs: set[str], ends: Ends | None = None
+) -> list[CoreRelationKindOut]:
+    """이 타입에서 **출발하는, 양끝을 열 수 있는** 관계 종류와 그 약속(`_open_end`).
+
+    한쪽 끝을 못 열면 보내지 않는다 — 받는 쪽은 찾을 수 없는 끝점을 쥐게 되고, 그것은
+    「우리 쪽 데이터가 이상하다」 로 읽힌다. 끝에 **인터페이스**를 적은 종류는 구현한 타입 중
+    열린 것이 있으면 열고, 선마다 끝 객체의 타입이 열렸는지 본다(`relations`).
+
+    `ends` 는 타입 · 인터페이스를 펴는 표(`interfaces.load_ends`) — 카탈로그는 타입마다 이것을
+    부르므로 한 번 읽어 넘긴다.
+    """
+    ends = ends if ends is not None else load_ends(db)
+    out: list[CoreRelationKindOut] = []
+    for kind in db.scalars(select(RelationType).order_by(RelationType.slug)):
+        if not kind.is_active:
+            continue
+        src = _open_end(kind.src_type_slugs, open_slugs, ends)
+        dst = _open_end(kind.dst_type_slugs, open_slugs, ends)
+        if src is None or dst is None:
+            continue
+        if not any(object_type.slug in end.types for end in src):
+            continue
+        out.append(CoreRelationKindOut(slug=kind.slug, label=kind.label, src=src, dst=dst))
+    return out
+
+
+def _kind_mark(kind: CoreRelationKindOut) -> str:
+    """판(`revision`)에 싣는 관계 종류 하나 — 끝이 타입뿐이면 slug 그대로(예전 판과 같은 값),
+    **끝에 인터페이스가 있으면 도착에 설 수 있는 열린 타입까지.** 구현한 타입이 하나 더
+    열리거나 구현을 해제하면 `dst_type` 에 올 수 있는 것이 달라지는데, 판이 그대로면 받는 쪽은
+    「구조가 그대로다」 로 읽는다."""
+    if not any(end.interface for end in kind.src + kind.dst):
+        return kind.slug
+    dst = sorted({slug for end in kind.dst for slug in end.types})
+    return f"{kind.slug}>{'/'.join(dst)}"
 
 
 def relations(
@@ -600,11 +662,17 @@ def relations(
 
     **양 끝이 모두 보이는 선만** 나간다 — 출발점만 보고 도착점의 부서를 안 봤더니 못 보는
     부서 객체의 식별자가 `dst` 로 샜다(2026-10-08).
+
+    **도착 객체의 타입이 열린 선만** 나간다 — 끝이 인터페이스인 종류는 구현한 타입 중 안 열린
+    것의 객체도 잇는다. 그 선을 보내면 받는 쪽이 못 찾는 끝점을 쥔다(무덤도 같은 규칙 — 받은
+    적 없는 선을 끊으라고 할 이유가 없다).
     """
     started = _cursor(cursor)[2] if cursor else None
     now = watermark(db)
     as_of = min(started, now) if started is not None else now
-    open_slugs = {one.slug for one in core_types(db)}
+    opened_types = core_types(db)
+    open_slugs = {one.slug for one in opened_types}
+    open_ids = [one.id for one in opened_types]
     kinds = open_relation_kinds(db, object_type, open_slugs)
     if not kinds:
         return CoreRelationPageOut(
@@ -644,6 +712,7 @@ def relations(
             ObjectRelation.relation.in_(slugs),
             src.type_id == object_type.id,
             src.deleted_at.is_(None),
+            dst.type_id.in_(open_ids),
             visible,
             reachable,
         )
@@ -663,6 +732,7 @@ def relations(
         .where(
             ObjectRelationTombstone.relation.in_(slugs),
             src.type_id == object_type.id,
+            dst.type_id.in_(open_ids),
             visible,
             reachable,
         )

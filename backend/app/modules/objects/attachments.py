@@ -18,11 +18,14 @@ files 는 객체 표를 모른다(ADR 0001). 그래서 예전에는 올린 쪽�
 from __future__ import annotations
 
 import uuid
+from dataclasses import dataclass
 
-from sqlalchemy import select
+from sqlalchemy import case, func, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.files import services as files_services
+from app.modules.files.models import Attachment
 from app.modules.objects.models import ObjectInstance
 from app.modules.objects.services import properties_of
 from app.modules.ontology import managed
@@ -90,3 +93,75 @@ def owner(
     return AttachmentOwner(
         workspace_id=row.owner_workspace_id, accept=accept, label=row.label, changed=changed
     )
+
+
+# --- 목록의 파일 칸 ----------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class FileCell:
+    """목록의 파일 칸 한 칸 — 첫 장과 모두 몇 개인가."""
+
+    count: int
+    first: Attachment
+    """**사진이 있으면 사진**, 없으면 가장 먼저 올라온 파일. 같은 칸에 성적서(PDF)가 먼저
+    올라왔다고 사진이 있는 줄이 아이콘으로 서면, 사람은 그 줄에 사진이 없다고 읽는다."""
+
+
+def file_cells(
+    db: Session, user: User, object_ids: list[uuid.UUID], fields: list[str]
+) -> dict[uuid.UUID, dict[str, FileCell]]:
+    """목록 한 쪽의 파일 칸들 — **한 번에** 읽는다(행마다 물으면 한 쪽에 질의가 수십 개
+    붙는다).
+
+    보이는 것은 첨부를 내려받는 규칙과 같다(`files.services` 의 `_visible` — 전역 + 내 부서).
+    첨부의 부서는 객체의 부서를 따르므로(트리거, ADR 0012) 목록에 보이는 객체의 첨부가
+    보인다. **바이트는 여기 없다** — 화면은 `/api/attachments/{id}/thumbnail`(긴 변 320px)을
+    받고, 그 주소도 같은 규칙으로 판정한다.
+    """
+    if not object_ids or not fields:
+        return {}
+    slot = (Attachment.owner_id, Attachment.owner_field)
+    ranked = (
+        select(
+            Attachment.id.label("id"),
+            func.row_number()
+            .over(
+                partition_by=slot,
+                order_by=(
+                    # 판별 전(NULL)인 옛 첨부는 파일과 같이 친다 — 처음 보일 때 판별한다.
+                    case((Attachment.media == "image", 0), else_=1),
+                    Attachment.created_at,
+                    Attachment.id,
+                ),
+            )
+            .label("rank"),
+            func.count().over(partition_by=slot).label("count"),
+        )
+        .where(
+            Attachment.owner_table == "objects",
+            Attachment.owner_id.in_(object_ids),
+            Attachment.owner_field.in_(fields),
+            Attachment.deleted_at.is_(None),
+            visible_owner_clause(user, Attachment.workspace_id),
+        )
+        .subquery()
+    )
+    picked = {
+        attachment_id: int(count)
+        for attachment_id, count in db.execute(
+            select(ranked.c.id, ranked.c.count).where(ranked.c.rank == 1)
+        )
+    }
+    if not picked:
+        return {}
+    firsts = list(db.scalars(select(Attachment).where(Attachment.id.in_(picked))))
+    files_services.inspect_pending(db, firsts)
+    out: dict[uuid.UUID, dict[str, FileCell]] = {}
+    for one in firsts:
+        if one.owner_field is None:
+            continue
+        out.setdefault(one.owner_id, {})[one.owner_field] = FileCell(
+            count=picked[one.id], first=one
+        )
+    return out

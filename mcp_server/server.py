@@ -72,6 +72,8 @@ BASE_INSTRUCTIONS = (
     "  객체를 이력의 그 값으로         object_restore\n"
     "  잘못 이은 관계                  relation_update · relation_remove\n"
     "  여러 타입을 건너뛰는 물음       rdf_query (SPARQL)\n"
+    "  어디부터 채우나                 fill_priorities  (무엇이 나쁜가는 quality_report)\n"
+    "  못 찾은 이름을 별칭으로         alias_candidates → alias_candidate_apply\n"
     "  여러 행 · 묶음을 넣는다         objects_import · bundle_import → job_apply\n"
     "  원천 파일을 한꺼번에(수만 줄)   정제 도구 키트(사용자 PC 의 MCP) — "
     "화면 「내 정보」 에서 받는다\n"
@@ -1271,6 +1273,80 @@ async def aliases_review(
 
 
 @tool()
+async def alias_candidates(
+    ctx: Context, type_slug: str | None = None, status: str = "pending", limit: int = 20
+) -> Any:
+    """**못 찾은 말**(별칭 후보) — 사람과 AI 가 이름으로 찾다가(`object_resolve` · `search` ·
+    `objects_list(q=)`) 아무것도 못 찾은 글자, 많이 · 여럿이 찾은 것부터(`hits` · `people`).
+
+    그 말이 어떤 객체의 다른 이름이면 `alias_candidate_apply(action="attach")` 로 그 객체의
+    별칭으로 붙인다 — **다음부터 찾힌다.** 줄마다 `suggestions`(「이것 아닐까」 — 이름 ·
+    식별자 · 별칭이 비슷한 것)가 오지만 **짐작이다**: 사람에게 보이고 어느 객체인지 받은 뒤에
+    붙인다. 별칭이 될 말이 아니면(오타 · 엉뚱한 말) `action="ignore"`.
+
+    `type_slug` 로 그 타입에서 못 찾은 것만(빈 글자 `""` 면 통합 검색에서 못 찾은 것).
+    `status` 는 `pending`(기본) · `attached` · `ignored` · `all`. 부서 관리자 이상. 누가
+    찾았는지는 남지 않는다 — 몇 사람인지만."""
+    params: list[tuple[str, Any]] = [("status", status), ("limit", str(limit))]
+    if type_slug is not None:
+        params.append(("type", type_slug))
+    return await _get(ctx, "/api/objects/alias-candidates", params=params)
+
+
+@tool()
+async def alias_candidate_apply(
+    ctx: Context,
+    candidate_id: str,
+    action: str = "attach",
+    object_id: str | None = None,
+    value: str | None = None,
+    apply: bool = False,
+) -> Any:
+    """별칭 후보 하나를 처리한다 — `attach`(그 객체의 별칭으로) · `ignore`(무시) ·
+    `restore`(대기로 되돌림).
+
+    **`apply=False`(기본)면 아무것도 안 바꾼다** — `attach` 는 계획(붙기 전 · 뒤 별칭,
+    `warnings`, `blocking`)을, `ignore` · `restore` 는 그 후보를 돌려준다. 사람에게 보이고
+    확인받은 뒤 `apply=True` 로 부른다. `blocking` 이 있으면(다른 객체가 그 별칭을 쓴다) 붙지
+    않는다 — 우회하지 말고 사람에게 말한다.
+
+    `object_id` 는 `alias_candidates` 의 `suggestions` 나 `object_resolve` 로 정한 id 다 —
+    **스스로 고르지 마라.** 별칭은 그 뒤로 이름 풀이 · 검색 · 파일 적재가 전부 쓰므로, 틀리게
+    붙인 별칭은 틀린 객체로 풀린다. `value` 를 주면 그 표기로 붙인다(비우면 못 찾은 말
+    그대로)."""
+    if action == "attach":
+        if not object_id:
+            return {
+                "error": "attach 에는 object_id 가 필요합니다 — 어느 객체의 별칭인지 사람에게 "
+                "받으세요(suggestions 는 짐작입니다)."
+            }
+        body: dict[str, Any] = {"object_id": object_id, "apply": apply}
+        if value is not None:
+            body["value"] = value
+        return await _post(
+            ctx, f"/api/objects/alias-candidates/{quote(candidate_id, safe='')}/attach", body
+        )
+    if action not in ("ignore", "restore"):
+        return {"error": f"action 은 attach · ignore · restore 중 하나입니다: {action}"}
+    if not apply:
+        got = await _get(ctx, f"/api/objects/alias-candidates/{quote(candidate_id, safe='')}")
+        if not isinstance(got, dict) or "error" in got:
+            return got
+        return {
+            "applied": False,
+            "action": action,
+            "candidate": got,
+            "next": "사람에게 보이고 확인받은 뒤 apply=True 로 부른다.",
+        }
+    got = await _post(
+        ctx, "/api/objects/alias-candidates/decide", {"ids": [candidate_id], "action": action}
+    )
+    if isinstance(got, dict) and "error" not in got:
+        return {"applied": True, "action": action, **got}
+    return got
+
+
+@tool()
 async def objects_summary(
     ctx: Context,
     type_slug: str,
@@ -1577,12 +1653,33 @@ async def quality_report(ctx: Context, kind: str | None = None) -> Any:
 
 
 @tool()
+async def fill_priorities(ctx: Context, type_slug: str | None = None, limit: int = 20) -> Any:
+    """**어디부터 채우나** — 이 플랫폼에서 지금 먼저 채울 곳을 줄 세운다. 「무엇이 나쁜가」 는
+    `quality_report`, 「요즘 챙길 것(운영)」 은 `server_maintenance` 다.
+
+    타입마다(볼 수 있는 것만, `types`) 객체 수 · 필수 칸이 빈 객체 · 칸마다 채움률(낮은
+    칸부터) · 관계 종류마다 선이 없는 객체 · 지워진 것을 가리키는 칸 · 데이터 소스가 끝점을
+    기다리는 선 · 별칭 없는 객체 · 객체 없는 타입을 세고, 그 칸 · 타입을 **쓰는 곳**(필수 ·
+    지표 · 코어 공개 · 뷰 · 개수 제약 · 트리)으로 가중해 줄을 세운다(`priorities`). 줄마다
+    `gain` 이 「이것을 채우면 무엇이 좋아지나」, `link` 가 빈 것만 거른 화면 주소다 — 답할 때
+    둘을 함께 전한다.
+
+    **큰 타입은 표본에서 센 어림이다**(`estimated`, `notes`) — 사람에게 수를 전할 때 「약」 을
+    붙인다. `type_slug` 를 주면 그 타입(인터페이스면 구현 타입들)만, 칸은 전부 온다."""
+    params: list[tuple[str, Any]] = [("limit", str(limit))]
+    if type_slug:
+        params.append(("type", type_slug))
+    return await _get(ctx, "/api/objects/fill-priorities", params=params)
+
+
+@tool()
 async def server_maintenance(ctx: Context) -> Any:
     """홈의 **「남은 일」** — 손이 가야 하는데 아무도 안 본 것들(승인 대기 계정 · 적용 안 한
     계획 · 실패한 작업 · 멈춘 워커 · 실패하거나 멎은 지표 · 동기화 실패 · 웹훅 실패 · 낡은
-    백업 · 데이터 품질 · 확장이 올린 것). 줄마다 `label` · `count` ·
-    `severity`(`warning` 이면 미루면 안 되는 것) · `link`(화면 주소). **보는 사람의 권한대로**
-    — 시스템 관리자에게만 보이는 줄이 있다. 「요즘 챙길 것이 뭐야」 에 먼저 부른다."""
+    백업 · 데이터 품질 · 여러 번 찾았는데 못 찾은 이름 · 확장이 올린 것). 줄마다 `label` ·
+    `count` · `severity`(`warning` 이면 미루면 안 되는 것) · `link`(화면 주소). **보는 사람의
+    권한대로** — 시스템 관리자에게만 보이는 줄이 있다. 「요즘 챙길 것이 뭐야」 에 먼저
+    부른다."""
     return await _get(ctx, "/api/server/maintenance")
 
 

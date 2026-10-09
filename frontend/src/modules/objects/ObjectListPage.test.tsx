@@ -6,6 +6,7 @@
  * - 지표의 「N건 보기」 가 싣는 `status=` 를 읽는다 — 버리면 목록이 셀의 수보다 많다.
  * - 홈 위젯이 싣는 `year=all` 을 읽는다 — 위젯은 연도 없이 센다.
  * - 「뷰로 저장」 이 통계의 기간 단위까지 담는다.
+ * - 파일 열은 쪽마다 실려 온 칸을 그린다 — 사진은 미리보기(원본이 아니다), 그 밖은 이름.
  *
  * 무거운 이웃(조건 줄 · 트리 · 통계 · 뷰 고르개)은 가짜로 두고 **넘기는 것**만 본다.
  */
@@ -60,6 +61,10 @@ vi.mock('@/modules/objects/SummaryPanel', () => ({
   },
 }))
 vi.mock('@/modules/objects/ConditionBar', () => ({ ConditionBar: () => null }))
+// 미리보기는 blob 주소로 — 받은 경로를 그대로 적어 무엇을 받았는지 본다.
+vi.mock('@/shared/hooks/useBlobUrl', () => ({
+  useBlobUrl: (path: string | null) => ({ url: path ? `blob:${path}` : null, error: null }),
+}))
 vi.mock('@/modules/objects/ObjectTree', () => ({ ObjectTree: () => null }))
 
 const TYPE = {
@@ -124,6 +129,8 @@ describe('타입 목록', () => {
     await open()
     expect(screen.getByRole('button', { name: /생성/ })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: /일괄 입력/ })).toBeInTheDocument()
+    // 파일 속성이 없는 타입에는 사진을 올릴 칸이 없다.
+    expect(screen.queryByRole('button', { name: /사진 일괄 업로드/ })).not.toBeInTheDocument()
   })
 
   it('지표의 「N건 보기」 가 싣고 온 상태로 거르고, 걸려 있다고 보이며 풀 수 있다', async () => {
@@ -170,5 +177,79 @@ describe('타입 목록', () => {
     )
     expect(screen.getByTestId('view-picker')).toHaveTextContent('"home":"sales"')
     expect(screen.getByTestId('summary-panel')).toHaveTextContent('"home":"sales"')
+  })
+
+  it('파일 열은 쪽마다 실려 온 칸을 그린다 — 사진은 미리보기, 그 밖은 이름', async () => {
+    auth.user = {
+      ...MEMBER,
+      memberships: [
+        ...MEMBER.memberships,
+        { slug: 'lab', name: '시험팀', path: '시험팀', role: 'manager' },
+      ],
+    }
+    const file = (key: string, label: string, accept: string | null) => ({
+      key,
+      label,
+      data_type: 'file',
+      accept,
+      required: false,
+      multi: false,
+    })
+    ontologyApi.schema.mockResolvedValue({
+      types: [
+        {
+          ...TYPE,
+          properties: [file('photo', '사진', 'image'), file('doc', '성적서', null)],
+          list_view: { columns: ['label', 'properties.photo', 'properties.doc'] },
+        },
+      ],
+      interfaces: [],
+    })
+    objectApi.list.mockResolvedValue({
+      items: [
+        {
+          id: 'o1',
+          type_slug: 'part',
+          key: null,
+          label: '볼트',
+          description: '',
+          properties: {},
+          ref_labels: {},
+          status: 'active',
+          owner_workspace_slug: 'lab',
+          owner_workspace_name: '시험팀',
+          valid_from_year: null,
+          valid_to_year: null,
+          created_at: '2026-10-08T00:00:00Z',
+          updated_at: '2026-10-08T00:00:00Z',
+        },
+      ],
+      total: 1,
+      limit: 50,
+      offset: 0,
+      files: {
+        o1: {
+          photo: { count: 2, first: { id: 'a1', original_name: '앞면.jpg', is_image: true } },
+          doc: { count: 1, first: { id: 'f1', original_name: '성적서.pdf', is_image: false } },
+        },
+      },
+    })
+    const { default: ObjectListPage } = await import('@/modules/objects/ObjectListPage')
+    render(
+      <MemoryRouter initialEntries={['/o/part']}>
+        <Routes>
+          <Route path="/o/:typeSlug" element={<ObjectListPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    expect(await screen.findByText('볼트')).toBeInTheDocument()
+    expect(screen.getByRole('img', { name: '앞면.jpg' })).toHaveAttribute(
+      'src',
+      'blob:/attachments/a1/thumbnail',
+    )
+    expect(screen.getByText('+1')).toBeInTheDocument()
+    expect(screen.getByText('성적서.pdf')).toBeInTheDocument()
+    // 파일 속성이 있는 타입에서만 선다.
+    expect(screen.getByRole('button', { name: /사진 일괄 업로드/ })).toBeInTheDocument()
   })
 })

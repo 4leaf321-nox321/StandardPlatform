@@ -23,6 +23,7 @@ import {
   planChangesSomething,
   planIsClean,
 } from '@/modules/objects/ImportPlanTable'
+import { PhotoPlanTable, photoPlanOf } from '@/modules/objects/PhotoPlanTable'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -107,6 +108,28 @@ function Outcome({ job }: { job: Job }) {
       {counts.error ? ` · 오류 ${counts.error}` : ''}
     </span>
   )
+}
+
+/**
+ * 줄 목록을 뺀 요약인가 — 목록 API 는 결과의 줄 목록(`rows`)을 비우고 그 수만 싣는다
+ * (`rows_omitted`). 5만 줄 계획이면 결과 하나가 17MB 라, 목록이 그것을 작업마다 싣던 때는 한 번에
+ * 93MB 를 3초마다 받았다(2026-10-09). 펼칠 때 상세를 따로 읽는다.
+ */
+function omitsRows(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(omitsRows)
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  if (typeof record.rows_omitted === 'number' && record.rows_omitted > 0) return true
+  return Object.values(record).some((one) => typeof one === 'object' && omitsRows(one))
+}
+
+/** 결과에 줄 목록이 있나 — 있으면 모든 줄을 CSV 로 받을 수 있다. */
+function hasRows(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(hasRows)
+  if (!value || typeof value !== 'object') return false
+  const record = value as Record<string, unknown>
+  if (Array.isArray(record.rows)) return true
+  return Object.values(record).some((one) => typeof one === 'object' && hasRows(one))
 }
 
 /** 가져오기 계획인가 — 행이 있는 결과만 표로 그린다(묶음 · 내보내기는 모양이 다르다). */
@@ -235,12 +258,13 @@ function waitingForApply(job: Job, twoStep: ReadonlySet<string>): boolean {
 }
 
 function Detail({
-  job,
+  job: listed,
   busy,
   canApply,
   twoStep,
   onApply,
   onDownload,
+  onDownloadRows,
 }: {
   job: Job
   busy: boolean
@@ -250,14 +274,32 @@ function Detail({
   twoStep: boolean
   onApply: () => void
   onDownload: () => void
+  onDownloadRows: () => void
 }) {
+  // 목록의 결과는 줄 목록을 뺀 요약이다 — 펼치면 상세(앞의 500줄, 오류 먼저)를 읽는다.
+  const brief = omitsRows(listed.result)
+  const full = useResource(
+    () => (brief ? jobsApi.get(listed.id) : Promise.resolve(listed)),
+    [listed.id, listed.status, brief],
+  )
+  const job = (brief ? full.data : null) ?? listed
   const plan = planOf(job)
   const batches = bundleBatches(job)
   const retype = retypeOf(job)
+  // 사진 일괄 업로드 — 파일마다 무엇이 되나. 「적용」 은 결과의 `ok`(붙는 것이 있나)로 선다.
+  const photos = photoPlanOf(job.result)
   return (
     <div className="bg-muted/30 space-y-3 px-4 py-3">
-      {plan && <ImportPlanTable plan={plan} />}
+      {brief && full.loading && (
+        <p className="text-muted-foreground flex items-center gap-1 text-xs">
+          <Loader2 className="size-3 animate-spin" />
+          계획을 읽는 중…
+        </p>
+      )}
+      {brief && full.error && <ErrorNotice error={full.error} />}
+      {plan && <ImportPlanTable plan={plan} onDownloadRows={onDownloadRows} />}
       {retype && <RetypePlanView job={job} retype={retype} />}
+      {photos && <PhotoPlanTable plan={photos} />}
       {batches && (
         <table className="text-xs">
           <tbody>
@@ -280,7 +322,7 @@ function Detail({
           </tbody>
         </table>
       )}
-      {!plan && !batches && !retype && !job.error && (
+      {!plan && !batches && !retype && !photos && !job.error && (
         <p className="text-muted-foreground text-xs">
           {job.has_output ? '만든 파일을 받으세요.' : '남길 결과가 없는 작업입니다.'}
         </p>
@@ -290,6 +332,12 @@ function Detail({
           <Button size="xs" variant="outline" onClick={onDownload} disabled={busy}>
             <Download className="mr-1 size-3" />
             파일 받기
+          </Button>
+        )}
+        {!plan && hasRows(job.result) && (
+          <Button size="xs" variant="outline" onClick={onDownloadRows} disabled={busy}>
+            <Download className="mr-1 size-3" />
+            모든 줄 받기(CSV)
           </Button>
         )}
         {canApply && (
@@ -312,7 +360,9 @@ function Detail({
           twoStep &&
           !canApply &&
           !job.applied_by &&
-          (plan?.applied === false || retype?.applied === false) && (
+          (plan?.applied === false ||
+            retype?.applied === false ||
+            photos?.applied === false) && (
             <span className="text-muted-foreground text-xs">
               오류가 있거나 바뀌는 것이 없어 적용할 수 없습니다 — 고쳐서 다시 올리세요.
             </span>
@@ -726,6 +776,7 @@ export default function JobsPage() {
                         twoStep={twoStep.has(one.kind)}
                         onApply={() => void apply(one)}
                         onDownload={() => void download(one)}
+                        onDownloadRows={() => void act(one, () => jobsApi.rowsCsv(one.id))}
                       />
                     </TableCell>
                   </TableRow>

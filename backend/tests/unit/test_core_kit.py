@@ -159,3 +159,65 @@ def test_더_이상_안_보이는_행은_이름과_칸을_두고_비활성만_�
     finally:
         db.close()
     assert rows == [("MOV-1", "옮길 공급사", 1, '{"grade": "A"}')]
+
+
+def test_끝이_인터페이스인_선은_도착_타입까지_가려_저장한다(tmp_path: Path) -> None:
+    """`key` 는 타입 안에서만 하나다 — 끝이 인터페이스인 관계는 같은 출발 · 관계 · 도착
+    `key` 가 두 구현 타입에 걸칠 수 있다. 세 끝만 키로 두면 둘이 한 줄로 겹쳐 하나가
+    사라졌다. 옛 키트가 만든 표(세 끝이 키)도 내용을 그대로 옮겨 키를 바꾼다(2026-10-08)."""
+    kit = _kit()
+    cfg = {"out_dir": tmp_path, "page_size": 500}
+    path = tmp_path / "sp_core.sqlite"
+    # 옛 키트가 만든 표 — 세 끝이 키다.
+    old = sqlite3.connect(path)
+    old.execute(
+        'CREATE TABLE "part__relations" (src TEXT, relation TEXT, dst TEXT, dst_type TEXT, '
+        "evidence_note TEXT, updated_at TEXT, properties TEXT, "
+        "PRIMARY KEY (src, relation, dst))"
+    )
+    old.execute(
+        'INSERT INTO "part__relations" VALUES '
+        "('P-0', 'uses', 'EQ-0', 'tester', '', '1', '{}')"
+    )
+    old.commit()
+    old.close()
+
+    kit.save_relations(
+        cfg,
+        "part",
+        [
+            {"src": "P-1", "relation": "uses", "dst": "EQ-1", "dst_type": "tester"},
+            {"src": "P-1", "relation": "uses", "dst": "EQ-1", "dst_type": "plant"},
+        ],
+    )
+    db = sqlite3.connect(path)
+    try:
+        rows = sorted(db.execute('SELECT src, dst, dst_type FROM "part__relations"'))
+    finally:
+        db.close()
+    assert rows == [
+        ("P-0", "EQ-0", "tester"),  # 옛 표의 줄도 그대로 옮겨졌다
+        ("P-1", "EQ-1", "plant"),
+        ("P-1", "EQ-1", "tester"),
+    ]
+
+    # 끊긴 선은 **그 도착 타입의 것만** 지운다.
+    kit.save_relations(
+        cfg,
+        "part",
+        [
+            {
+                "src": "P-1",
+                "relation": "uses",
+                "dst": "EQ-1",
+                "dst_type": "plant",
+                "deleted": True,
+            }
+        ],
+    )
+    db = sqlite3.connect(path)
+    try:
+        rows = sorted(db.execute('SELECT src, dst, dst_type FROM "part__relations"'))
+    finally:
+        db.close()
+    assert rows == [("P-0", "EQ-0", "tester"), ("P-1", "EQ-1", "tester")]

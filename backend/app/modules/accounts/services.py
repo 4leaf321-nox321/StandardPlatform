@@ -17,6 +17,8 @@ from app.modules.accounts.models import USER_STATUSES, User
 from app.modules.accounts.schemas import AccountOut, AccountWorkspaceOut
 from app.modules.auth import security
 from app.modules.auth import services as auth_services
+from app.modules.auth.models import PersonalAccessToken
+from app.modules.auth.schemas import PatOut
 from app.modules.notifications import services as notifications
 from app.modules.workspaces import services as workspaces_services
 from app.modules.workspaces.models import WORKSPACE_ROLES, Workspace, WorkspaceMember
@@ -355,8 +357,9 @@ def set_status(db: Session, *, user_id: uuid.UUID, status: str, actor: User) -> 
         # 개인 토큰(PAT)은 **폐기하지 않는다** — 정지 동안은 `resolve_pat` 이 막고
         # (can_sign_in), 다시 켜면 산다. 정지는 잠시 막는 것이고, 연동은 사람처럼 그
         # 자리에서 다시 로그인하지 못한다 — 폐기하면 다시 켠 뒤에도 연동이 말없이 끊긴
-        # 채로 남는다(초기화가 토큰을 따로 두는 것과 같은 까닭). 토큰까지 끊을 일이면
-        # 계정을 지운다(지우면 토큰도 폐기한다 — 아래 `delete_account`).
+        # 채로 남는다(초기화가 토큰을 따로 두는 것과 같은 까닭). 연동을 끊을 일이면 그
+        # 토큰을 골라 폐기한다(`revoke_token` — 계정 화면의 「토큰」). 계정을 지우면 토큰도
+        # 전부 폐기된다(아래 `delete_account`).
         changes["sessions_revoked"] = auth_services.revoke_sessions(db, user.id)
     audit.record(
         db,
@@ -585,6 +588,79 @@ def delete_account(db: Session, *, user_id: uuid.UUID, actor: User) -> User:
     db.commit()
     db.refresh(user)
     return user
+
+
+# --- 그 사람의 액세스 토큰 -----------------------------------------------------
+
+
+def account_tokens(db: Session, user_id: uuid.UUID) -> list[PatOut]:
+    """그 사람의 개인 토큰 — **폐기된 것까지.** 「언제 끊겼나」 도 이 목록이 답할 자리다."""
+    return auth_services.list_pats(db, get_account(db, user_id))
+
+
+def revoke_token(
+    db: Session,
+    *,
+    user_id: uuid.UUID,
+    token_id: uuid.UUID,
+    actor: User,
+    reason: str | None,
+) -> PatOut:
+    """남의 토큰 **하나**를 폐기한다 — 시스템 관리자.
+
+    예전에는 본인만 폐기할 수 있었다. 퇴사자 · 정지된 계정의 연동 토큰을 끊으려면 계정을
+    지워야 했고(지우면 그 사람의 토큰이 전부 끊긴다), 지울 수 없는 계정(자료의 담당자로 남은
+    사람)의 토큰은 끊을 길이 없었다(2026-10-08). 정지는 토큰을 그대로 두므로(`set_status`)
+    「계정은 살리고 이 연동만 끊는다」 는 이 길뿐이다.
+
+    **이미 폐기된 것은 다시 폐기하지 않는다**(409) — 처음 폐기한 시각과 사람(감사 기록)을
+    덮지 않으려고. 다른 사람의 토큰 id 를 섞어 보내면 없는 것과 같이 답한다(404).
+    """
+    owner = get_account(db, user_id)
+    pat = db.get(PersonalAccessToken, token_id)
+    if pat is None or pat.user_id != owner.id:
+        raise NotFound(code("ACCOUNTS", 11), f"{owner.email} 의 토큰 중 해당 토큰이 없습니다.")
+    if pat.revoked_at is not None:
+        raise Conflict(
+            code("ACCOUNTS", 12),
+            f"이미 폐기된 토큰입니다 — {pat.revoked_at:%Y-%m-%d %H:%M}(UTC)에 폐기되었습니다.",
+            details={"revoked_at": pat.revoked_at.isoformat()},
+        )
+    pat.revoked_at = _now()
+    note = clean(reason or "") or None
+    audit.record(
+        db,
+        action=audit.ACCOUNT_TOKEN_REVOKED,
+        actor=actor,
+        target_table="personal_access_tokens",
+        target_id=pat.id,
+        target_label=f"{owner.email} · {pat.name}",
+        changes={
+            "owner": owner.email,
+            "owner_id": str(owner.id),
+            "name": pat.name,
+            "prefix": pat.prefix,
+            "scopes": list(pat.scopes or []),
+            "last_used_at": pat.last_used_at.isoformat() if pat.last_used_at else None,
+        },
+        reason=note,
+    )
+    if owner.id != actor.id:
+        notifications.notify(
+            db,
+            user_id=owner.id,
+            kind=notifications.ACCOUNT_TOKEN_REVOKED,
+            title=f"액세스 토큰 「{pat.name}」 이 폐기되었습니다"[:200],
+            body=(
+                f"시스템 관리자({actor.display_name or actor.email})가 폐기했습니다. "
+                "이 토큰을 사용하던 연동은 이제 인증에 실패합니다."
+                + (f" 사유: {note}" if note else "")
+            ),
+            link="/me",
+        )
+    db.commit()
+    db.refresh(pat)
+    return PatOut.model_validate(pat)
 
 
 # --- 홈의 「남은 일」에 끼는 것 -----------------------------------------------

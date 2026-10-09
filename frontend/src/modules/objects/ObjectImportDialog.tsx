@@ -131,6 +131,8 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
   const [plan, setPlan] = useState<ImportPlan | null>(null)
   /** 계획을 세운 작업 — 적용은 이 작업의 파일 · 지문으로 간다. */
   const [planJob, setPlanJob] = useState<Job | null>(null)
+  /** 지금 보이는 계획을 낸 작업 — 계획이든 적용이든. 모든 줄을 CSV 로 받을 때 쓴다. */
+  const [shownJobId, setShownJobId] = useState<string | null>(null)
   const [running, setRunning] = useState<Job | null>(null)
   /** 「대기」 가 길어졌나 — 워커가 안 떠 있다는 뜻일 수 있다. */
   const [stuck, setStuck] = useState(false)
@@ -182,6 +184,7 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
       )
       return null
     }
+    setShownJobId(finished.id)
     return finished.result as unknown as ImportPlan
   }
 
@@ -441,7 +444,14 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
 
         {error && <ErrorNotice error={error} />}
 
-        {plan && <ImportPlanTable plan={plan} />}
+        {plan && (
+          <ImportPlanTable
+            plan={plan}
+            onDownloadRows={
+              shownJobId ? () => download(() => jobsApi.rowsCsv(shownJobId)) : undefined
+            }
+          />
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={busy}>

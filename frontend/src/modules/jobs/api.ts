@@ -194,6 +194,8 @@ export const jobsApi = {
    * 결과 파일을 받는다 — 내보내기 작업이 끝난 뒤. 파일 이름은 서버가 준 것을 쓴다.
    */
   download: (id: string, filename: string) => downloadFile(`/jobs/${id}/download`, filename),
+  /** 계획의 **모든 줄** — 응답 · 화면은 앞의 500줄(오류 먼저)만 싣는다. */
+  rowsCsv: (id: string) => downloadFile(`/jobs/${id}/rows.csv`, `job-${id.slice(0, 8)}-rows.csv`),
   /**
    * 내보내기 한 바퀴 — 작업을 넣고, 끝나기를 기다리고, 파일을 받는다. 실패하면 그 이유로 던진다.
    *

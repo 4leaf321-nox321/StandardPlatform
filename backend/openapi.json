@@ -897,6 +897,118 @@
         }
       }
     },
+    "/api/accounts/{account_id}/tokens": {
+      "get": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Account Tokens",
+        "description": "그 사람의 액세스 토큰 — 이름 · 범위 · 만료 · 최종 사용, **폐기된 것까지.** 평문은 없다\n(발급 응답에서 한 번만 나온다).",
+        "operationId": "account_tokens_api_accounts__account_id__tokens_get",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Account Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/PatOut"
+                  },
+                  "title": "Response Account Tokens Api Accounts  Account Id  Tokens Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/accounts/{account_id}/tokens/{token_id}/revoke": {
+      "post": {
+        "tags": [
+          "accounts"
+        ],
+        "summary": "Revoke Account Token",
+        "description": "남의 토큰 하나를 폐기한다 — 계정은 그대로 두고 그 연동만 끊는다. 감사 기록\n(`account.token_revoked`)과 주인에게 가는 알림에 사유가 실린다. 이미 폐기된 것은 409.",
+        "operationId": "revoke_account_token_api_accounts__account_id__tokens__token_id__revoke_post",
+        "parameters": [
+          {
+            "name": "account_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Account Id"
+            }
+          },
+          {
+            "name": "token_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Token Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TokenRevokeRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PatOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/accounts/{account_id}": {
       "delete": {
         "tags": [
@@ -3540,6 +3652,48 @@
         }
       }
     },
+    "/api/jobs/{job_id}/rows.csv": {
+      "get": {
+        "tags": [
+          "jobs"
+        ],
+        "summary": "Download Rows",
+        "description": "계획의 **모든 줄** — 화면 · 상세는 앞의 `ROWS_SHOWN` 줄만 싣는다. 엑셀이 한글을 읽게\nBOM 을 붙인다. 묶음이면 줄마다 어느 타입의 것인지 첫 칸에.",
+        "operationId": "download_rows_api_jobs__job_id__rows_csv_get",
+        "parameters": [
+          {
+            "name": "job_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Job Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {}
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/jobs/{job_id}/download": {
       "get": {
         "tags": [
@@ -3635,7 +3789,7 @@
           "core"
         ],
         "summary": "Core Relations",
-        "description": "이 타입에서 **출발하는 선** — 바뀐 것과 **끊긴 것**을 함께.\n\n객체만 받아 가면 받는 쪽은 점만 있고 선이 없다. 그것을 자기 쪽에서 다시 만들려면 우리가\n이미 쥔 관계를 추측해야 한다.\n\n끝점은 `key` 로 온다. `dst_type` 은 도착점의 타입 slug 다 — 어느 표에서 찾을지 알려\n준다. `deleted: true` 인 줄은 **끊긴 선**이다(받는 쪽도 끊는다).\n\n**양끝이 모두 열린 관계 종류만** 온다 — 한쪽이 안 열렸으면 받는 쪽이 못 찾는 끝점을\n쥐게 된다. 무엇이 오는지는 카탈로그의 `relations` 가 말한다.",
+        "description": "이 타입에서 **출발하는 선** — 바뀐 것과 **끊긴 것**을 함께.\n\n객체만 받아 가면 받는 쪽은 점만 있고 선이 없다. 그것을 자기 쪽에서 다시 만들려면 우리가\n이미 쥔 관계를 추측해야 한다.\n\n끝점은 `key` 로 온다. `dst_type` 은 도착점의 타입 slug 다 — 어느 표에서 찾을지 알려\n준다. `deleted: true` 인 줄은 **끊긴 선**이다(받는 쪽도 끊는다).\n\n**양끝 객체의 타입이 모두 열린 선만** 온다 — 한쪽이 안 열렸으면 받는 쪽이 못 찾는 끝점을\n쥐게 된다. 끝에 인터페이스를 적은 관계 종류는 그것을 구현한 타입 중 열린 것의 객체를 잇는\n선만 온다(`dst_type` 이 선마다 다르다). 무엇이 오는지는 카탈로그의 `relations` ·\n`relation_kinds` 가 말한다.",
         "operationId": "core_relations_api_core__type_slug__relations_get",
         "parameters": [
           {
@@ -6044,6 +6198,312 @@
         }
       }
     },
+    "/api/objects/fill-priorities": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Fill Priorities",
+        "description": "**어디부터 채우나** — 타입마다 비어 있는 것(필수 칸 · 칸별 채움률 · 선이 없는 관계 ·\n지워진 것을 가리키는 칸 · 별칭 없는 객체 · 객체 없는 타입)을 세고, **쓰는 곳**(필수 ·\n지표 · 코어 공개 · 뷰)으로 가중해 줄을 세운다 — 줄마다 「이것을 채우면 무엇이\n좋아지나」(`gain`).\n\n데이터 품질(`/quality/report`)이 「무엇이 나쁜가」 라면 이것은 「어디부터 채우나」 다.\n**볼 수 있는 것만 센다.** 큰 타입은 표본에서 센 어림이고 `notes` 가 그렇다고 말한다.",
+        "operationId": "fill_priorities_api_objects_fill_priorities_get",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "타입 · 인터페이스 하나만 — 그러면 칸 전부",
+              "title": "Type"
+            },
+            "description": "타입 · 인터페이스 하나만 — 그러면 칸 전부"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 100,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FillReportOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/alias-candidates": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Alias Candidates",
+        "description": "**못 찾은 말** — 검색 · 이름 풀이가 아무것도 못 찾은 글자, 많이 · 여럿이 찾은 것부터.\n\n어떤 객체의 다른 이름이면 `…/attach` 로 그 객체의 별칭으로 붙인다 — 다음부터 찾힌다.\n아니면 `…/decide` 로 무시. 부서 관리자 이상(붙이는 것은 객체를 고치는 일이다).",
+        "operationId": "alias_candidates_api_objects_alias_candidates_get",
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "못 찾은 자리(타입 · 인터페이스). 빈 글자면 통합 검색에서 못 찾은 것",
+              "title": "Type"
+            },
+            "description": "못 찾은 자리(타입 · 인터페이스). 빈 글자면 통합 검색에서 못 찾은 것"
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^(pending|attached|ignored|all)$",
+              "default": "pending",
+              "title": "Status"
+            }
+          },
+          {
+            "name": "suggest",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "줄마다 「이것 아닐까」 를 함께",
+              "default": true,
+              "title": "Suggest"
+            },
+            "description": "줄마다 「이것 아닐까」 를 함께"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasCandidatePage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/alias-candidates/{candidate_id}": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Alias Candidate",
+        "description": "후보 하나 — 「이것 아닐까」 와 함께.",
+        "operationId": "alias_candidate_api_objects_alias_candidates__candidate_id__get",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasCandidateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/alias-candidates/{candidate_id}/attach": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Attach Alias Candidate",
+        "description": "못 찾은 말을 객체의 **별칭으로** — `apply=false`(기본)면 아무것도 안 바꾸고 계획만.\n\n별칭을 붙이는 길은 객체 화면의 것과 같다(`aliases.set_human` · 감사 기록 · 확인한 것으로).\n다른 객체가 이미 그 별칭을 쓰면 `blocking` 에 서고 적용하지 않는다. 같은 말을 통합 검색 ·\n인터페이스에서 못 찾은 줄도 함께 닫는다(`closed`) — 이제 거기서도 찾힌다.",
+        "operationId": "attach_alias_candidate_api_objects_alias_candidates__candidate_id__attach_post",
+        "parameters": [
+          {
+            "name": "candidate_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Candidate Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasAttachRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasAttachPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/alias-candidates/decide": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Decide Alias Candidates",
+        "description": "고른 후보를 **무시**(`ignore` — 별칭으로 붙일 말이 아니다)하거나 대기로 되돌린다\n(`restore`). 무시한 말은 또 찾아도 다시 안 뜨고, 90일 아무도 안 찾으면 지워진다.",
+        "operationId": "decide_alias_candidates_api_objects_alias_candidates_decide_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AliasCandidateDecision"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AliasCandidateDecisionOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/summary": {
       "get": {
         "tags": [
@@ -7584,6 +8044,59 @@
         }
       }
     },
+    "/api/objects/{type_slug}/photos/import": {
+      "post": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Import Photos",
+        "description": "사진 일괄 업로드 — zip 하나(202, 작업). 워커가 **파일 이름으로 객체를 찾아** 계획을\n세우고(어느 파일이 어느 객체에 · 못 찾음 · 여럿에 맞음 · 이미지 아님 · 너무 큼 · 권한\n없음), 사람이 보고 `POST /api/jobs/{id}/apply` 로 적용한다(`objects/photos.py`).\n\n타입 · 칸은 **넣는 순간에** 본다 — 몇 분 뒤 「실패」 로 알게 하지 않는다. 객체마다의 권한은\n계획이 본다(그 객체를 고칠 수 있는 사람만 붙는다).",
+        "operationId": "import_photos_api_objects__type_slug__photos_import_post",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "multipart/form-data": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_import_photos_api_objects__type_slug__photos_import_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/{type_slug}/import-rows": {
       "post": {
         "tags": [
@@ -7802,7 +8315,7 @@
           "objects"
         ],
         "summary": "List Objects",
-        "description": "이 타입의 객체 목록.\n\n거르기는 `?p.<속성키>=<값>` 으로 온다. `list_view` 가 열·정렬·검색 자리를\n정하고, 안 정해 뒀으면 기본형으로 떨어진다 — **빈 화면이 되지는 않는다.**",
+        "description": "이 타입의 객체 목록.\n\n거르기는 `?p.<속성키>=<값>` 으로 온다. `list_view` 가 열·정렬·검색 자리를\n정하고, 안 정해 뒀으면 기본형으로 떨어진다 — **빈 화면이 되지는 않는다.**\n\n목록 화면의 열에 파일 속성이 있으면 그 칸들(첫 장 · 수)이 `files` 로 함께 온다.",
         "operationId": "list_objects_api_objects__type_slug__get",
         "parameters": [
           {
@@ -7933,7 +8446,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Page_ObjectOut_"
+                  "$ref": "#/components/schemas/ObjectPageOut"
                 }
               }
             }
@@ -16580,6 +17093,353 @@
         ],
         "title": "AlertSavedOut"
       },
+      "AliasAttachObjectOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type_slug",
+          "type_label",
+          "label",
+          "key"
+        ],
+        "title": "AliasAttachObjectOut"
+      },
+      "AliasAttachPlanOut": {
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/AliasCandidateOut"
+          },
+          "object": {
+            "$ref": "#/components/schemas/AliasAttachObjectOut"
+          },
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "aliases_before": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases Before"
+          },
+          "aliases_after": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Aliases After"
+          },
+          "warnings": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Warnings"
+          },
+          "blocking": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Blocking"
+          },
+          "closed": {
+            "type": "integer",
+            "title": "Closed",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "candidate",
+          "object",
+          "value",
+          "aliases_before",
+          "aliases_after",
+          "warnings",
+          "blocking"
+        ],
+        "title": "AliasAttachPlanOut"
+      },
+      "AliasAttachRequest": {
+        "properties": {
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "required": [
+          "object_id"
+        ],
+        "title": "AliasAttachRequest"
+      },
+      "AliasCandidateDecision": {
+        "properties": {
+          "ids": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "maxItems": 500,
+            "minItems": 1,
+            "title": "Ids"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "ignore",
+              "restore"
+            ],
+            "title": "Action",
+            "default": "ignore"
+          }
+        },
+        "type": "object",
+        "required": [
+          "ids"
+        ],
+        "title": "AliasCandidateDecision"
+      },
+      "AliasCandidateDecisionOut": {
+        "properties": {
+          "done": {
+            "type": "integer",
+            "title": "Done"
+          },
+          "refused": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Refused"
+          }
+        },
+        "type": "object",
+        "required": [
+          "done",
+          "refused"
+        ],
+        "title": "AliasCandidateDecisionOut"
+      },
+      "AliasCandidateOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text"
+          },
+          "scope": {
+            "type": "string",
+            "title": "Scope"
+          },
+          "scope_label": {
+            "type": "string",
+            "title": "Scope Label"
+          },
+          "scope_kind": {
+            "type": "string",
+            "title": "Scope Kind"
+          },
+          "hits": {
+            "type": "integer",
+            "title": "Hits"
+          },
+          "people": {
+            "type": "integer",
+            "title": "People"
+          },
+          "vias": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Vias"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "object_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Id"
+          },
+          "object_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Label"
+          },
+          "object_type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Object Type Slug"
+          },
+          "first_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "First At"
+          },
+          "last_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last At"
+          },
+          "decided_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided At"
+          },
+          "suggestions": {
+            "items": {
+              "$ref": "#/components/schemas/AliasSuggestionOut"
+            },
+            "type": "array",
+            "title": "Suggestions"
+          },
+          "suggest_note": {
+            "type": "string",
+            "title": "Suggest Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "text",
+          "scope",
+          "scope_label",
+          "scope_kind",
+          "hits",
+          "people",
+          "vias",
+          "status",
+          "object_id",
+          "object_label",
+          "object_type_slug",
+          "first_at",
+          "last_at",
+          "decided_at",
+          "suggestions",
+          "suggest_note"
+        ],
+        "title": "AliasCandidateOut"
+      },
+      "AliasCandidatePage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AliasCandidateOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "AliasCandidatePage"
+      },
       "AliasReviewOut": {
         "properties": {
           "id": {
@@ -16712,6 +17572,62 @@
           "done"
         ],
         "title": "AliasReviewResult"
+      },
+      "AliasSuggestionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "matched": {
+            "type": "string",
+            "title": "Matched"
+          },
+          "matched_text": {
+            "type": "string",
+            "title": "Matched Text"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type_slug",
+          "type_label",
+          "label",
+          "key",
+          "matched",
+          "matched_text",
+          "score"
+        ],
+        "title": "AliasSuggestionOut"
       },
       "AliasesRequest": {
         "properties": {
@@ -17953,6 +18869,34 @@
           "file"
         ],
         "title": "Body_import_objects_api_objects__type_slug__import_post"
+      },
+      "Body_import_photos_api_objects__type_slug__photos_import_post": {
+        "properties": {
+          "file": {
+            "type": "string",
+            "contentMediaType": "application/octet-stream",
+            "title": "File"
+          },
+          "field": {
+            "type": "string",
+            "maxLength": 48,
+            "title": "Field",
+            "description": "사진을 붙일 파일 속성의 키"
+          },
+          "existing": {
+            "type": "string",
+            "pattern": "^(skip|replace|add)$",
+            "title": "Existing",
+            "description": "칸에 이미 사진이 있으면 — skip(건너뜀) · replace(교체) · add(추가)",
+            "default": "skip"
+          }
+        },
+        "type": "object",
+        "required": [
+          "file",
+          "field"
+        ],
+        "title": "Body_import_photos_api_objects__type_slug__photos_import_post"
       },
       "Body_import_relations_api_objects__type_slug__relations_import_post": {
         "properties": {
@@ -20754,6 +21698,11 @@
       },
       "CoreConsumerOut": {
         "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
           "name": {
             "type": "string",
             "title": "Name"
@@ -20761,6 +21710,11 @@
           "owner": {
             "type": "string",
             "title": "Owner"
+          },
+          "owner_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Owner Id"
           },
           "last_used_at": {
             "anyOf": [
@@ -20799,8 +21753,10 @@
         },
         "type": "object",
         "required": [
+          "id",
           "name",
           "owner",
+          "owner_id",
           "created_at"
         ],
         "title": "CoreConsumerOut",
@@ -20968,6 +21924,67 @@
         ],
         "title": "CorePullOut",
         "description": "누가 언제 무엇을 받아 갔나 — 감사 기록의 `core.pull` 한 줄."
+      },
+      "CoreRelationEndOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "interface": {
+            "type": "boolean",
+            "title": "Interface",
+            "default": false
+          },
+          "types": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Types"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug"
+        ],
+        "title": "CoreRelationEndOut",
+        "description": "관계 종류의 끝에 적힌 것 하나 — **타입이거나 인터페이스**(ADR 0006).\n\n인터페이스는 여러 타입이 따르는 공통 모양이라 객체를 갖지 않는다. 끝에 인터페이스를 적은\n종류의 선은 **그것을 구현한 타입의 객체**를 잇는다 — 그래서 받는 쪽은 「이 끝에 무엇이\n올 수 있나」 를 slug 하나로는 모른다. `types` 가 그것을 말한다."
+      },
+      "CoreRelationKindOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "src": {
+            "items": {
+              "$ref": "#/components/schemas/CoreRelationEndOut"
+            },
+            "type": "array",
+            "title": "Src"
+          },
+          "dst": {
+            "items": {
+              "$ref": "#/components/schemas/CoreRelationEndOut"
+            },
+            "type": "array",
+            "title": "Dst"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "src",
+          "dst"
+        ],
+        "title": "CoreRelationKindOut",
+        "description": "이 타입에서 출발하는 관계 종류 하나의 **약속** — 양끝에 무엇이 서나."
       },
       "CoreRelationOut": {
         "properties": {
@@ -21353,6 +22370,13 @@
             },
             "type": "array",
             "title": "Relations"
+          },
+          "relation_kinds": {
+            "items": {
+              "$ref": "#/components/schemas/CoreRelationKindOut"
+            },
+            "type": "array",
+            "title": "Relation Kinds"
           }
         },
         "type": "object",
@@ -23572,6 +24596,336 @@
         ],
         "title": "FieldOptionOut",
         "description": "이어진 것 너머의 칸 하나 — 조건 고르개와 통계 기준이 **같은 주소**를 쓴다."
+      },
+      "FileCellOut": {
+        "properties": {
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "first": {
+            "$ref": "#/components/schemas/AttachmentBrief"
+          }
+        },
+        "type": "object",
+        "required": [
+          "count",
+          "first"
+        ],
+        "title": "FileCellOut",
+        "description": "목록의 파일 칸 한 칸(2026-10-08). 화면은 `first` 가 이미지면 미리보기를, 아니면 아이콘 ·\n이름을 보이고, 여럿이면 수를 곁에 적는다."
+      },
+      "FillFieldOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "data_type": {
+            "type": "string",
+            "title": "Data Type"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          },
+          "filled": {
+            "type": "integer",
+            "title": "Filled"
+          },
+          "missing": {
+            "type": "integer",
+            "title": "Missing"
+          },
+          "rate": {
+            "type": "number",
+            "title": "Rate"
+          },
+          "uses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Uses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "data_type",
+          "required",
+          "filled",
+          "missing",
+          "rate",
+          "uses"
+        ],
+        "title": "FillFieldOut"
+      },
+      "FillPriorityOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "target": {
+            "type": "string",
+            "title": "Target"
+          },
+          "target_label": {
+            "type": "string",
+            "title": "Target Label"
+          },
+          "missing": {
+            "type": "integer",
+            "title": "Missing"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "weight": {
+            "type": "integer",
+            "title": "Weight"
+          },
+          "uses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Uses"
+          },
+          "gain": {
+            "type": "string",
+            "title": "Gain"
+          },
+          "link": {
+            "type": "string",
+            "title": "Link"
+          },
+          "estimated": {
+            "type": "boolean",
+            "title": "Estimated"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "type_slug",
+          "type_label",
+          "target",
+          "target_label",
+          "missing",
+          "total",
+          "score",
+          "weight",
+          "uses",
+          "gain",
+          "link",
+          "estimated"
+        ],
+        "title": "FillPriorityOut"
+      },
+      "FillRelationOut": {
+        "properties": {
+          "relation": {
+            "type": "string",
+            "title": "Relation"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "side": {
+            "type": "string",
+            "title": "Side"
+          },
+          "one": {
+            "type": "boolean",
+            "title": "One"
+          },
+          "missing": {
+            "type": "integer",
+            "title": "Missing"
+          },
+          "uses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Uses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "relation",
+          "label",
+          "side",
+          "one",
+          "missing",
+          "uses"
+        ],
+        "title": "FillRelationOut"
+      },
+      "FillReportOut": {
+        "properties": {
+          "priorities": {
+            "items": {
+              "$ref": "#/components/schemas/FillPriorityOut"
+            },
+            "type": "array",
+            "title": "Priorities"
+          },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/FillTypeOut"
+            },
+            "type": "array",
+            "title": "Types"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "priorities",
+          "types",
+          "notes"
+        ],
+        "title": "FillReportOut",
+        "description": "채울 곳 — 타입마다 비어 있는 것과, 쓰는 곳으로 가중해 줄 세운 것."
+      },
+      "FillTypeOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "usage": {
+            "type": "string",
+            "title": "Usage"
+          },
+          "core": {
+            "type": "boolean",
+            "title": "Core"
+          },
+          "objects": {
+            "type": "integer",
+            "title": "Objects"
+          },
+          "estimated": {
+            "type": "boolean",
+            "title": "Estimated"
+          },
+          "sample_rows": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Sample Rows"
+          },
+          "required_missing": {
+            "type": "integer",
+            "title": "Required Missing"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/FillFieldOut"
+            },
+            "type": "array",
+            "title": "Fields"
+          },
+          "fields_more": {
+            "type": "integer",
+            "title": "Fields More"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/FillRelationOut"
+            },
+            "type": "array",
+            "title": "Relations"
+          },
+          "unresolved_refs": {
+            "type": "integer",
+            "title": "Unresolved Refs"
+          },
+          "waiting_relations": {
+            "type": "integer",
+            "title": "Waiting Relations"
+          },
+          "no_alias": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "No Alias"
+          },
+          "alias_candidates": {
+            "type": "integer",
+            "title": "Alias Candidates"
+          },
+          "uses": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Uses"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "type_label",
+          "usage",
+          "core",
+          "objects",
+          "estimated",
+          "sample_rows",
+          "required_missing",
+          "fields",
+          "fields_more",
+          "relations",
+          "unresolved_refs",
+          "waiting_relations",
+          "no_alias",
+          "alias_candidates",
+          "uses"
+        ],
+        "title": "FillTypeOut"
       },
       "FilterEffectOut": {
         "properties": {
@@ -28755,6 +30109,48 @@
         ],
         "title": "ObjectOut"
       },
+      "ObjectPageOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ObjectOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "files": {
+            "additionalProperties": {
+              "additionalProperties": {
+                "$ref": "#/components/schemas/FileCellOut"
+              },
+              "type": "object"
+            },
+            "type": "object",
+            "title": "Files"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "ObjectPageOut",
+        "description": "객체 목록 한 쪽. 목록 화면(`list_view.columns`)에 파일 속성이 있으면 그 칸들이\n`files` 로 함께 온다 — 줄마다 첨부를 물으러 가면 한 쪽에 요청이 수십 개 붙는다.\n\n줄(`ObjectOut`)이 아니라 쪽에 싣는다 — 파일 칸이 없는 목록(대부분이다)에서 줄마다 빈\n칸을 싣지 않게."
+      },
       "ObjectPatchRequest": {
         "properties": {
           "key": {
@@ -29789,37 +31185,6 @@
           "offset"
         ],
         "title": "Page[AuditEntryOut]"
-      },
-      "Page_ObjectOut_": {
-        "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/ObjectOut"
-            },
-            "type": "array",
-            "title": "Items"
-          },
-          "total": {
-            "type": "integer",
-            "title": "Total"
-          },
-          "limit": {
-            "type": "integer",
-            "title": "Limit"
-          },
-          "offset": {
-            "type": "integer",
-            "title": "Offset"
-          }
-        },
-        "type": "object",
-        "required": [
-          "items",
-          "total",
-          "limit",
-          "offset"
-        ],
-        "title": "Page[ObjectOut]"
       },
       "PairBulkIn": {
         "properties": {
@@ -33306,6 +34671,11 @@
             "type": "string",
             "minLength": 1,
             "title": "Dst"
+          },
+          "dst_type": {
+            "type": "string",
+            "title": "Dst Type",
+            "default": ""
           }
         },
         "type": "object",
@@ -37461,6 +38831,24 @@
           "grain"
         ],
         "title": "TimeAxisIn"
+      },
+      "TokenRevokeRequest": {
+        "properties": {
+          "reason": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 500
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "title": "TokenRevokeRequest"
       },
       "TokenScopesOut": {
         "properties": {

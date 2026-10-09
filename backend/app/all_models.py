@@ -52,6 +52,7 @@ from app.modules.objects.models import (
     ObjectWatch,
     ObjectYear,
     SavedView,
+    SearchMiss,
 )
 from app.modules.ontology.models import (
     NavGroup,
@@ -111,6 +112,7 @@ __all__ = [
     "RefreshToken",
     "RelationType",
     "SavedView",
+    "SearchMiss",
     "User",
     "Webhook",
     "WebhookDelivery",

@@ -6,10 +6,11 @@ import type {
   Account,
   AccountSummary,
   AccountWorkspace,
+  Pat,
   TemporaryPassword,
 } from '@/shared/api/types'
 
-export type { Account, AccountSummary, AccountWorkspace, TemporaryPassword }
+export type { Account, AccountSummary, AccountWorkspace, Pat, TemporaryPassword }
 
 export const accountApi = {
   summary: () => api.get<AccountSummary>('/accounts/summary'),
@@ -47,4 +48,14 @@ export const accountApi = {
     api.post<Account>(`/accounts/${id}/system-admin`, { is_system_admin: grant }),
   resetPassword: (id: string) => api.post<TemporaryPassword>(`/accounts/${id}/reset-password`),
   remove: (id: string) => api.delete<Account>(`/accounts/${id}`),
+  /** 그 사람의 액세스 토큰 — **폐기된 것까지**(언제 끊겼는지도 이 목록이 답한다). */
+  tokens: (id: string) => api.get<Pat[]>(`/accounts/${id}/tokens`),
+  /**
+   * 그 사람의 토큰 **하나**를 폐기한다 — 계정은 그대로 두고 그 연동만 끊는다. 사유는 감사
+   * 기록과 토큰 주인의 알림에 실린다. 이미 폐기된 것은 409.
+   */
+  revokeToken: (id: string, tokenId: string, reason: string) =>
+    api.post<Pat>(`/accounts/${id}/tokens/${tokenId}/revoke`, {
+      reason: reason.trim() || null,
+    }),
 }

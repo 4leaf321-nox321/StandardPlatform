@@ -109,7 +109,37 @@ def upload(
     content_type: str | None,
     stream: BinaryIO,
 ) -> AttachmentOut:
-    """파일 하나를 붙인다.
+    """파일 하나를 붙인다 — `attach` 에 커밋을 더한 것(요청 하나가 첨부 하나다)."""
+    attachment = attach(
+        db,
+        user=user,
+        owner_table=owner_table,
+        owner_id=owner_id,
+        owner_field=owner_field,
+        workspace_slug=workspace_slug,
+        filename=filename,
+        content_type=content_type,
+        stream=stream,
+    )
+    db.commit()
+    db.refresh(attachment)
+    return _out(attachment)
+
+
+def attach(
+    db: Session,
+    *,
+    user: User,
+    owner_table: str,
+    owner_id: uuid.UUID,
+    owner_field: str | None,
+    workspace_slug: str | None,
+    filename: str,
+    content_type: str | None,
+    stream: BinaryIO,
+) -> Attachment:
+    """파일 하나를 붙인다. **커밋하지 않는다** — 사진 일괄 업로드(작업)는 여러 장을 한
+    트랜잭션으로 붙인다(처리 함수는 커밋하지 않는다, `docs/작업-워커-설계.md`).
 
     **그 자료의 도메인이 자리를 답한다**(`extensions.register_attachment_owner`) — 자료가
     있나, 고칠 수 있나, 그 칸이 무엇을 받나. 첨부의 부서는 자료의 부서를 따른다. 도메인이
@@ -117,6 +147,8 @@ def upload(
     관리자뿐 — 여러 부서가 함께 보는 자리다).
 
     **이미지인지는 서버가 열어 보고 정한다** — 올린 쪽이 붙인 `content_type` 은 말일 뿐이다.
+    파일은 행보다 먼저 저장소에 쓰인다 — 거절되거나 트랜잭션이 무르면 아무도 안 가리키는 파일이
+    남고, 고아 정리(`files/gc.py`)가 하루 뒤에 지운다.
     """
     owner = extensions.attachment_owner(db, user, owner_table, owner_id, owner_field)
     if owner is None:
@@ -166,9 +198,7 @@ def upload(
     db.flush()
     if owner is not None and owner.changed is not None:
         owner.changed(db, user, owner_field, attachment.original_name, True)
-    db.commit()
-    db.refresh(attachment)
-    return _out(attachment)
+    return attachment
 
 
 def list_for(
@@ -215,16 +245,24 @@ def remove(db: Session, *, user: User, attachment_id: uuid.UUID) -> None:
     found = db.scalar(_visible(db, user).where(Attachment.id == attachment_id))
     if found is None:
         raise NotFound(code("FILES", 4), "첨부를 찾을 수 없습니다.")
+    detach(db, user=user, attachment=found)
+    db.commit()
+
+
+def detach(db: Session, *, user: User, attachment: Attachment) -> None:
+    """첨부 하나를 뗀다. **커밋하지 않는다** — 사진 일괄 업로드의 「교체」 가 있던 사진을 떼고
+    새것을 붙이는 일을 한 트랜잭션으로 한다."""
     # 뗄 때는 자리를 묻지 않는다(None) — 칸이 지워진 뒤에도 붙은 것은 뗄 수 있어야 한다.
-    owner = extensions.attachment_owner(db, user, found.owner_table, found.owner_id, None)
+    owner = extensions.attachment_owner(
+        db, user, attachment.owner_table, attachment.owner_id, None
+    )
     if owner is None:
         require_owner_edit(
-            db, user, found.workspace_id, what="첨부", code_value=code("FILES", 5)
+            db, user, attachment.workspace_id, what="첨부", code_value=code("FILES", 5)
         )
-    found.deleted_at = func.now()
+    attachment.deleted_at = func.now()
     if owner is not None and owner.changed is not None:
-        owner.changed(db, user, found.owner_field, found.original_name, False)
-    db.commit()
+        owner.changed(db, user, attachment.owner_field, attachment.original_name, False)
 
 
 def move_owner(

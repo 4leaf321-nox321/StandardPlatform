@@ -18,13 +18,15 @@ from sqlalchemy import (
     case,
     cast,
     func,
+    literal,
     or_,
     select,
     text,
     union,
     update,
 )
-from sqlalchemy.dialects.postgresql import ARRAY, array
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, array
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
@@ -39,7 +41,7 @@ from app.modules.objects.models import (
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.ontology.services import InvalidValue, object_ref_ids
 from app.modules.workspaces.models import Workspace
-from app.shared import extensions
+from app.shared import audit, extensions
 from app.shared.errors import Conflict, code
 
 if TYPE_CHECKING:  # 실행 때는 안 읽는다 — scope 가 이 모듈을 읽는다(방향은 한쪽).
@@ -622,14 +624,31 @@ def _scope_clashes(db: Session, source: uuid.UUID, target: uuid.UUID) -> list[st
     return found
 
 
-def _move_objects(db: Session, source: uuid.UUID, target: uuid.UUID) -> int:
+def _move_objects(
+    db: Session, source: uuid.UUID, target: uuid.UUID, actor: User | None = None
+) -> int:
     """소유 부서를 바꾼다. **지운 객체도 함께 옮긴다** — 행이 남아 있으면 FK 는
     그대로 붙들고, 그러면 원본 부서를 끝내 지울 수 없다.
 
     **부서 안에서 하나여야 할 것이 겹치면 통째로 거절한다**(`_scope_clashes`) — 원 SQL 로 한
     번에 옮기므로 줄마다 볼 자리가 없다. 안 보면 두 부서에서 각자 하나이던 「A-1」 이 한
     부서에 둘이 되고, 그때부터 그 식별자로는 어느 것인지 정해지지 않는다(2026-10-08).
-    통폐합은 한 트랜잭션이라 여기서 멈추면 아무것도 안 옮겨진다."""
+    통폐합은 한 트랜잭션이라 여기서 멈추면 아무것도 안 옮겨진다.
+
+    **옮긴 객체마다 기록 한 줄을 남긴다**(소유 부서 전 → 후). 예전에는 통폐합 기록 한 줄
+    (`workspace.reassigned`)뿐이라 객체의 이력에 부서가 바뀐 일이 안 보였고, 코어 API 가 옮겨
+    간 객체를 받는 쪽에 「더 이상 안 보임」 으로 알리지 못했다 — 그 판정은 객체마다의 소유 부서
+    기록을 본다(`coreapi/services._moved_away`). 원본 부서만 보던 토큰의 수신 측은 옮겨 간
+    객체를 영영 살아 있는 것으로 들었다(2026-10-08).
+
+    ⚠️ **규모** — 통폐합 한 번이 객체 수십만 개를 옮길 수 있다. 줄마다 `audit.record` 를
+       부르면 객체를 하나씩 파이썬으로 읽고 바깥 알림(웹훅 · 지켜보기) 이벤트가 커밋까지 쌓인다
+       (종류 변경에서 200만 건이 4.6GB 였다). 그래서 **DB 안의 한 문장**(`INSERT … SELECT`,
+       `audit.record_select`)으로 남기고, 바깥에는 통폐합 한 줄만 알린다(`reassign`). 실측
+       (200만 건 규모 DB 에서 한 부서의 객체 20만을, 롤백하는 트랜잭션으로 — 2026-10-08):
+       기록 남기기 10초, 그 객체를 옮기는 갱신 자체가 77초 — 통폐합이 13% 늘 뿐이다(파이썬으로
+       줄을 모았으면 그 목록만 수백 MB 다). 이 기록은 **옮기기 전에** 남긴다 — 옮긴 뒤에는
+       어느 객체가 원본 부서에 있었는지 고를 길이 없다."""
     clashes = _scope_clashes(db, source, target)
     if clashes:
         shown = ", ".join(clashes[:CLASH_SHOWN])
@@ -639,6 +658,30 @@ def _move_objects(db: Session, source: uuid.UUID, target: uuid.UUID) -> int:
             f"옮겨 갈 부서에 같은 것이 이미 있어 객체를 옮기지 않습니다: {shown}{more}. "
             "부서 안에서 하나여야 하는 값이라 — 먼저 합치거나 값을 바꾸세요.",
         )
+    # `dict(결과)` 로 담지 않는다 — 결과에 `keys()` 가 있어 dict 가 그것을 사전으로 읽는다.
+    names = {
+        one: name
+        for one, name in db.execute(
+            select(Workspace.id, Workspace.name).where(Workspace.id.in_((source, target)))
+        )
+    }
+    audit.record_select(
+        db,
+        action="object.update",
+        actor=actor,
+        target_table="objects",
+        rows=select(
+            ObjectInstance.id,
+            func.concat(ObjectType.slug, ":", ObjectInstance.label),
+            literal(target, PgUUID(as_uuid=True)),
+            literal(
+                {"owner_workspace_id": {"before": str(source), "after": str(target)}}, JSONB
+            ),
+        )
+        .join(ObjectType, ObjectType.id == ObjectInstance.type_id)
+        .where(ObjectInstance.owner_workspace_id == source),
+        reason=f"부서 통폐합 — {names.get(source, '?')} → {names.get(target, '?')}",
+    )
     done = db.execute(
         update(ObjectInstance)
         .where(ObjectInstance.owner_workspace_id == source)
@@ -682,7 +725,11 @@ def workspace_content(
     )
     return [
         extensions.WorkspaceContent(
-            kind="objects", label="객체", count=int(objects), move=_move_objects
+            kind="objects",
+            label="객체",
+            count=int(objects),
+            move=_move_objects,
+            move_by=_move_objects,
         ),
         extensions.WorkspaceContent(
             kind="saved_views", label="저장된 뷰", count=int(views), move=_move_saved_views

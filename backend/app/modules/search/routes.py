@@ -6,11 +6,12 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
+from app.modules.objects import misses
 from app.modules.search import services
 from app.modules.search.schemas import SearchHitOut, SearchOut, SearchTypeOut
 from app.shared.auth import current_user
@@ -21,6 +22,7 @@ router = APIRouter(prefix="/search", tags=["search"])
 
 @router.get("", response_model=SearchOut)
 def search(
+    background: BackgroundTasks,
     q: str = Query(default="", description="이름·식별자·별칭의 일부"),
     type_slug: str | None = Query(default=None, alias="type"),
     limit: int | None = Query(default=None),
@@ -35,6 +37,10 @@ def search(
     """
     capped = clamp_limit(limit)
     found = services.search(db, user, q, type_slug=type_slug, limit=capped, offset=offset)
+    if found.total == 0 and found.records == 0 and offset == 0:
+        # **못 찾은 말은 별칭 후보로 남는다** — 응답 뒤에, 실패해도 이 답과 무관하게. 타입을
+        # 안 골랐으면 범위는 「통합 검색」(빈 글자)이다.
+        misses.note(background, user, type_slug or "", q, "search")
     return SearchOut(
         q=q.strip(),
         total=found.total,

@@ -304,17 +304,21 @@ def set_human(
 
 def add_fresh(
     db: Session,
-    row: ObjectInstance,
+    object_id: uuid.UUID,
     object_type: ObjectType,
     values: Sequence[str | Incoming],
     *,
     verified: User | None = None,
 ) -> list[str]:
-    """**방금 만든 객체**에 별칭을 붙인다 — 있던 것을 묻지 않는다(없다).
+    """**방금 만든 객체**(같은 트랜잭션)에 별칭을 붙인다 — 있던 것을 묻지 않는다(없다).
 
     ⚠️ 부르는 쪽이 겹침을 이미 가린 자리에서만 쓴다(일괄 가져오기의 `split_free`).
        `set_human` 은 줄마다 세 번 묻는다(있던 것 · 겹침 · 넣기) — 2만 줄이면 그것이
        6만 번이고, 실측으로 적용 시간의 대부분이 거기였다.
+
+    객체의 바뀐 때(`_touch`)는 손대지 않는다 — 같은 트랜잭션에서 만든 객체라 `updated_at` 이
+    이미 이 트랜잭션의 `now()` 이고, 다시 적으면 같은 값을 쓰는 UPDATE 만 는다. 그래서 객체
+    대신 id 를 받는다(일괄 입력은 새 객체를 ORM 을 거치지 않고 넣는다 — `shared/copyin.py`).
     """
     asked = incoming(values)
     wanted, long = split_long(clean([one.value for one in asked]))
@@ -324,14 +328,12 @@ def add_fresh(
         )
     meta = {compare_key(one.value): one for one in asked}
     now = datetime.now(UTC)
-    if wanted:
-        _touch(row)
     for value in wanted:
         norm = compare_key(value)
         one = meta.get(norm) or Incoming(value=value)
         db.add(
             ObjectAlias(
-                object_id=row.id,
+                object_id=object_id,
                 type_id=object_type.id,
                 kind=HUMAN,
                 value=value,

@@ -20,6 +20,9 @@ from app.modules.notifications.models import Notification
 #: 두 이름으로 갈리고, 그때 "이 알림 끄기" 를 만들 수가 없다.
 ACCOUNT_APPROVED = "account.approved"
 ACCOUNT_REJECTED = "account.rejected"
+ACCOUNT_TOKEN_REVOKED = "account.token_revoked"
+"""시스템 관리자가 내 액세스 토큰을 폐기했다. **연동 담당자는 그 토큰의 주인이다** — 알리지
+않으면 연동이 401 을 받기 시작한 까닭을 토큰 · 서버 · 네트워크에서 차례로 찾는다."""
 DATASOURCE_FAILED = "datasource.failed"
 """외부 소스에서 읽어 오는 일이 **처음으로** 실패했다. 타이머가 5분마다 도니까 매번
 알리면 하루에 288개가 쌓이고, 그러면 사람은 이 종류를 통째로 안 읽게 된다."""

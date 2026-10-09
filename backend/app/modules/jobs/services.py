@@ -16,8 +16,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
-from sqlalchemy import and_, exists, func, or_, select, update
-from sqlalchemy.orm import Session, aliased
+from sqlalchemy import and_, event, exists, func, or_, select, text, update
+from sqlalchemy.orm import Session, aliased, defer
 
 from app.config import get_settings
 from app.database import SessionLocal
@@ -33,14 +33,83 @@ log = logging.getLogger(__name__)
 
 TERMINAL = ("done", "failed", "cancelled")
 
+WAKE_CHANNEL = "sp_jobs"
+"""작업을 넣으면 이 채널로 알린다(`NOTIFY`) — 쉬던 워커가 바로 깬다(`worker.Waker`). 예전에는
+워커가 비어 있으면 5초까지 늦춰 물어, 넣고 집기까지 1 ~ 5초가 들었다 — 계획과 적용 두 번이면
+그것이 두 번이다(2026-10-09). 알림은 데이터베이스 안에서만 가므로 같은 PostgreSQL 의 다른
+플랫폼은 깨우지 않고, 두 서버의 워커는 둘 다 깨어 `SKIP LOCKED` 로 하나만 집는다."""
+
+ROWS_SHOWN = 500
+"""응답이 싣는 계획 줄의 상한 — 결과 안의 줄 목록(`rows`)마다. 넘으면 문제 줄(오류 · 못 찾음
+따위)을 앞세워 이만큼만 싣고 나머지 수를 `rows_omitted` 로 적는다. 전체는 CSV 로 받는다
+(`GET /api/jobs/{id}/rows.csv`).
+
+5만 줄 계획을 통째로 실으면 17 ~ 19MB 이고, 화면은 그것을 표 한 장에 다 그리려다 멈췄다
+(2026-10-09). 사람이 읽는 것은 앞의 몇백 줄과 오류이고, 나머지는 파일로 보는 편이 낫다."""
+
+#: 문제 줄로 앞세우는 상태 — 가져오기의 `action`, 사진 일괄 업로드의 `status`.
+_PROBLEM = frozenset(
+    {"error", "not_found", "ambiguous", "not_image", "too_big", "forbidden", "bad_entry"}
+)
+#: 「아무 일도 없다」 — 맨 뒤로.
+_QUIET = frozenset({"unchanged", "skip"})
+
+
+def _rank(row: Any) -> int:
+    if not isinstance(row, dict):
+        return 1
+    state = row.get("action") or row.get("status")
+    if state in _PROBLEM or row.get("error"):
+        return 0
+    return 2 if state in _QUIET else 1
+
+
+def trim_rows(result: Any, keep: int | None = None) -> Any:
+    """결과 안의 줄 목록(`rows`)마다 `keep` 줄까지만 — **문제 줄을 앞세우고** 그 안에서는
+    파일 순서대로. 뺀 수는 그 자리의 `rows_omitted`. 저장된 결과는 그대로다(새 값을 돌려준다).
+
+    묶음은 줄 목록이 안쪽에 있다(`objects[].plan.rows`) — 어디에 있든 같게 본다."""
+    if keep is None:
+        keep = ROWS_SHOWN
+    if isinstance(result, dict):
+        out: dict[str, Any] = {}
+        for key, value in result.items():
+            if key == "rows" and isinstance(value, list) and len(value) > keep:
+                order = sorted(range(len(value)), key=lambda at: (_rank(value[at]), at))
+                picked = sorted(order[:keep])
+                out["rows"] = [value[at] for at in picked]
+                out["rows_omitted"] = len(value) - keep
+            else:
+                out[key] = trim_rows(value, keep)
+        return out
+    if isinstance(result, list) and result and isinstance(result[0], dict | list):
+        return [trim_rows(one, keep) for one in result]
+    return result
+
+
+def all_rows(result: Any, where: str = "") -> Any:
+    """결과 안의 **모든** 계획 줄 — (어느 묶음의 것인가, 줄). CSV 로 내려줄 때."""
+    if isinstance(result, dict):
+        here = str(result.get("type_slug") or where)
+        for key, value in result.items():
+            if key == "rows" and isinstance(value, list):
+                for row in value:
+                    if isinstance(row, dict):
+                        yield here, row
+            else:
+                yield from all_rows(value, here)
+    elif isinstance(result, list):
+        for one in result:
+            yield from all_rows(one, where)
+
 
 class Cancelled(Exception):
     """워커가 단계 사이에서 취소 요청을 봤다 — 롤백하고 `cancelled` 로."""
 
 
 class Lost(Cancelled):
-    """워커가 단계 사이에서 보니 이 작업이 **더는 제 것이 아니다**(되살려져 남이 다시 집었다)
-    — 롤백하고 결과를 버린다.
+    """워커가 단계 사이에서(또는 처리 함수가 스스로 커밋하기 직전에 — `still_mine`) 보니 이
+    작업이 **더는 제 것이 아니다**(되살려져 남이 다시 집었다) — 롤백하고 결과를 버린다.
 
     `Cancelled` 를 잇는 까닭: 「멈춰라」 를 받는 자리(지표 다시 계산 · 동기화 차례)는 이미
     `Cancelled` 를 다시 던지게 짜여 있다. 따로 두면 그 자리의 `except Exception` 이 삼켜
@@ -110,7 +179,13 @@ def enqueue(
     )
     db.add(row)
     db.flush()
+    wake(db)
     return row
+
+
+def wake(db: Session) -> None:
+    """쉬던 워커를 깨운다 — **커밋할 때** 간다(롤백하면 안 간다)."""
+    db.execute(text("SELECT pg_notify(:channel, '')"), {"channel": WAKE_CHANNEL})
 
 
 def _visible_clause(user: User) -> Any:
@@ -134,7 +209,7 @@ def list_visible(
     status: str | None = None,
     kind: str | None = None,
     mine: bool = False,
-) -> tuple[list[Job], int]:
+) -> tuple[list[tuple[Job, dict[str, Any] | None]], int]:
     """내 것 + 내 부서 것. `kind` · `mine` 은 **타이머가 넣은 것에 파묻히지 않으려고** 있다 —
     소스마다 5분에 한 줄이면 하루 288행이고, 사람이 올린 작업은 그 사이에 한 줄이다."""
     stmt = select(Job).where(_visible_clause(user))
@@ -145,8 +220,16 @@ def list_visible(
     if mine:
         stmt = stmt.where(Job.requested_by_id == user.id)
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
-    rows = list(db.scalars(stmt.order_by(Job.created_at.desc()).limit(limit).offset(offset)))
-    return rows, int(total)
+    # **결과는 요약만** — 줄 목록을 비운 것(`sp_job_brief`)을 DB 에서 만들어 받는다. 줄 목록은
+    # 상세(`GET /api/jobs/{id}`)와 CSV 에만 있다.
+    found = db.execute(
+        stmt.options(defer(Job.result))
+        .add_columns(func.sp_job_brief(Job.result).label("brief"))
+        .order_by(Job.created_at.desc())
+        .limit(limit)
+        .offset(offset)
+    ).all()
+    return [(one[0], one[1]) for one in found], int(total)
 
 
 def get_visible(db: Session, user: User, job_id: uuid.UUID) -> Job:
@@ -213,6 +296,10 @@ def apply_child(db: Session, plan_id: uuid.UUID) -> Job | None:
     """
     return db.scalar(
         select(Job)
+        # 결과는 안 읽는다 — 적용 작업의 결과는 계획만큼 크다(5만 줄이면 17MB). 목록이 작업마다
+        # 이것을 물어, 결과를 통째로 끌어오던 때는 이것만으로 목록 한 번에 1초가 들었다
+        # (2026-10-09).
+        .options(defer(Job.result))
         .where(Job.parent_id == plan_id, counts_as_apply(Job))
         .order_by(Job.created_at.desc())
         .limit(1)
@@ -323,7 +410,11 @@ def claim(db: Session, worker_id: str) -> Job | None:
     row = db.scalar(
         select(Job)
         .where(Job.status == "queued")
-        .order_by(Job.created_at)
+        # **사람이 넣은 것을 먼저.** 적재 뒤의 지표 다시 세기 · 타이머의 동기화(시킨 사람
+        # 없음)가 워커 하나를 수십 초씩 잡아, 바로 이어 넣은 가져오기 · 적용이 그 뒤에 줄을
+        # 섰다(2026-10-09 — 적용 하나에 지표 열 개, 20초 남짓). 사람의 일이 끊이지 않으면
+        # 시스템 작업이 밀리지만, 그것은 다음 타이머가 다시 넣는 일이다.
+        .order_by(Job.requested_by_id.is_(None), Job.created_at)
         .limit(1)
         .with_for_update(skip_locked=True)
     )
@@ -390,6 +481,8 @@ def recover_stale(db: Session) -> int:
             job.worker_id = None
             job.progress = {"stage": "되돌림", "done": 0, "total": 0}
         log.warning("멎은 작업 되살림: %s (%s → %s)", job.id, job.kind, job.status)
+    if stale:
+        wake(db)
     db.commit()
     return len(stale)
 
@@ -414,6 +507,73 @@ def _owned(job_id: uuid.UUID, worker_id: str) -> Any:
     return and_(Job.id == job_id, Job.status == "running", Job.worker_id == worker_id)
 
 
+# --- 커밋 앞 검사 — 스스로 커밋하는 처리 함수 ----------------------------------------
+
+_HELD = "job_held_by"
+"""세션 `info` 의 열쇠 — (작업 id, 워커 id). 이 열쇠가 있는 세션의 커밋은 **그 작업을 아직 쥐고
+있을 때만** 된다(`_before_commit`)."""
+
+
+def hold(db: Session, job_id: uuid.UUID, worker_id: str) -> None:
+    """이 세션의 커밋마다 「아직 내가 쥔 작업인가」 를 보게 한다 — `run` 이 본 세션에 건다."""
+    db.info[_HELD] = (job_id, worker_id)
+
+
+def release(db: Session) -> None:
+    db.info.pop(_HELD, None)
+
+
+def still_mine(db: Session, job_id: uuid.UUID, worker_id: str) -> None:
+    """**커밋하기 바로 앞, 같은 트랜잭션에서** 작업 행을 조건부로 고친다 — 0줄이면 `Lost`.
+
+    처리 함수는 커밋하지 않는 것이 규칙이지만 스스로 커밋하는 것이 있다(일괄 입력 적용 · 데이터
+    소스 동기화 · 지표 다시 계산 · 병합 · 종류 변경 · 묶음 가져오기). 진행 보고와 끝에서만 보던
+    때는 마지막 진행 보고와 그 커밋 사이에 작업을 빼앗기면(박동이 멎어 `recover_stale` 이
+    되돌리고 다른 워커가 집음) **같은 적용이 두 번** 들어갈 수 있었다(2026-10-08).
+
+    같은 트랜잭션이 작업 행을 잠그므로 `recover_stale`(`FOR UPDATE SKIP LOCKED`)의 되돌리기와
+    줄을 선다 — 먼저 되돌려졌으면 0줄이라 커밋이 막히고, 우리가 먼저면 잠긴 행은 건너뛰고 그
+    커밋이 남긴 새 박동 때문에 다음에도 안 되돌린다. 잠금은 커밋까지 쥐므로 **먼저 flush 한다**
+    — 큰 flush 가 도는 동안 박동 스레드(`_Beating`)를 세워 두지 않게.
+    """
+    db.flush()
+    owned = db.execute(
+        update(Job)
+        .where(_owned(job_id, worker_id))
+        .values(heartbeat_at=datetime.now(UTC))
+        .execution_options(synchronize_session=False)
+    )
+    if not extensions.rows_changed(owned):
+        raise Lost()
+
+
+@event.listens_for(Session, "before_commit")
+def _before_commit(db: Session) -> None:
+    """`hold` 를 건 세션의 **진짜 커밋** 앞에서 `still_mine`.
+
+    세이브포인트를 놓는 것(RELEASE — `begin_nested` 의 끝, 바깥 트랜잭션에 세이브포인트로 붙은
+    세션의 커밋)은 안 본다. 그것은 커밋이 아니고, 거기서 잡은 잠금은 바깥 트랜잭션이 끝날
+    때까지 남는다 — 그 사이 진행 보고(다른 연결)가 같은 행을 고치려다 **제 트랜잭션을 기다리며
+    영영 멎는다.** 바깥 트랜잭션을 따로 쥔 처리 함수(묶음)는 그 커밋 앞에서
+    `Work.still_mine` 을 직접 부른다.
+
+    **반복 읽기(REPEATABLE READ) 트랜잭션도 안 본다.** 그 안에서 작업 행을 고치면, 스냅샷
+    뒤에 박동 스레드가 고친 행이라 직렬화 실패로 **지키려던 커밋 자체가 깨진다**(박동은
+    30초마다 뛴다). 그런 트랜잭션은 경보 확인(`metrics/alerts.check_one`)뿐이고, 경보는 같은
+    결론을 두 번 적지 않게 짜여 있다 — 본 열쇠는 건너뛰고, 함께 확인하면 늦은 쪽이 유일
+    제약에 부딪쳐 물러난다.
+    """
+    held = db.info.get(_HELD)
+    if held is None:
+        return
+    if db.connection().in_nested_transaction():
+        return
+    level = db.scalar(text("SELECT current_setting('transaction_isolation')"))
+    if level != "read committed":
+        return
+    still_mine(db, *held)
+
+
 def _why_cannot_run_as(user: User) -> str | None:
     """시킨 사람의 계정으로 지금 돌릴 수 없으면 그 까닭 — 돌려도 되면 None."""
     if user.can_sign_in:
@@ -433,9 +593,11 @@ def run(job: Job, *, worker_id: str) -> Outcome:
 
     **성공은 본 트랜잭션과 함께 적는다** — 같은 조건으로. 예전에는 커밋한 뒤 다른 세션으로
     적었다. 그 사이가 끊기면(적기 실패 · 워커가 죽음) 작업은 `running` 으로 남아 되살려지고,
-    다시 돌면 지문이 달라 **이미 들어간 적용이 `failed`** 로 보였다(2026-10-08). 스스로
-    커밋하는 종류(일괄 입력 · 묶음)는 그 커밋과 이 적기 사이가 아주 짧아질 뿐 하나가 되지는
-    않는다.
+    다시 돌면 지문이 달라 **이미 들어간 적용이 `failed`** 로 보였다(2026-10-08).
+
+    **스스로 커밋하는 종류**(일괄 입력 · 동기화 · 지표 · 묶음)는 그 커밋마다 같은 조건을 본다
+    — 본 세션에 `hold` 를 걸어 커밋 직전에 `still_mine` 이 돈다. 진행 보고와 끝에서만 보던
+    때는 마지막 진행 보고와 그 커밋 사이에 빼앗기면 두 번 들어갈 수 있었다(2026-10-08).
 
     실패 · 취소는 **다른 세션**으로 쓴다(`settle`) — 본 트랜잭션에 섞어 쓰면 실패한 작업의
     「failed」 표시가 롤백과 함께 사라진다.
@@ -449,6 +611,7 @@ def run(job: Job, *, worker_id: str) -> Outcome:
             raise Cancelled()
 
     with SessionLocal() as db:
+        hold(db, job.id, worker_id)
         try:
             user = db.get(User, job.requested_by_id) if job.requested_by_id else None
             if user is None and not spec.allow_system:
@@ -483,8 +646,12 @@ def run(job: Job, *, worker_id: str) -> Outcome:
                 params=dict(job.params or {}),
                 input_file=input_file,
                 progress=progress,
+                still_mine=lambda other: still_mine(other, job.id, worker_id),
             )
             result = spec.run(work)
+            # 끝은 아래 UPDATE 가 같은 조건으로 본다 — 검사를 남겨 두면 `done` 을 적은 뒤라
+            # 「이제 running 이 아니다」 로 읽고 제 끝을 막는다.
+            release(db)
             # 끝난 뒤의 취소 요청은 늦은 것이다 — `apply_*` 는 이미 커밋했다. 「취소됨」 이라
             # 적으면 들어간 것을 안 들어갔다고 말하는 셈이다.
             finished = db.execute(

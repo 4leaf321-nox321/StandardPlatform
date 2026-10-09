@@ -25,14 +25,14 @@ from __future__ import annotations
 
 import uuid
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
-from sqlalchemy import insert
+from sqlalchemy import CursorResult, Select, Table, func, insert, literal, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.audit.models import AuditEntry
-from app.shared import events
+from app.shared import copyin, events
 from app.shared.request_context import (
     get_actor_client,
     get_actor_token,
@@ -56,6 +56,10 @@ ACCOUNT_WORKSPACES_CHANGED = "account.workspaces_changed"
 ACCOUNT_DELETED = "account.deleted"
 ACCOUNT_PASSWORD_RESET = "account.password_reset"
 """관리자가 임시 비밀번호로 되돌렸다 — 그 사람의 세션(로그인)도 함께 끊었다."""
+ACCOUNT_TOKEN_REVOKED = "account.token_revoked"
+"""시스템 관리자가 **그 사람의** 액세스 토큰(PAT) 하나를 폐기했다 — 대상은 토큰, 이름 칸에
+「소유자 · 토큰 이름」, changes 에 소유자 · 앞자리 · 범위, 사유는 reason. 연동이 갑자기
+401 을 받기 시작한 날 「누가 왜 끊었나」 를 답하는 줄이다."""
 LOGIN_THROTTLED = "auth.login_throttled"
 """같은 계정의 실패가 문턱을 넘어 응답을 늦추기 시작했다. 실패마다 남기면 넘치므로
 문턱을 넘는 순간 한 번만."""
@@ -86,10 +90,20 @@ def relation_endpoints(edge: Any, src_label: str, dst_label: str) -> dict[str, A
     이름만 남기면 객체의 이력에서 「이 관계가 나에게 걸린 것」 을 찾을 수 없다 —
     이름은 바뀌고 겹친다.
     """
+    return relation_ends(
+        edge.relation, edge.src_object_id, edge.dst_object_id, src_label, dst_label
+    )
+
+
+def relation_ends(
+    relation: str, src_id: uuid.UUID, dst_id: uuid.UUID, src_label: str, dst_label: str
+) -> dict[str, Any]:
+    """`relation_endpoints` 와 같은 모양 — 선을 ORM 객체 없이 넣는 자리(일괄 입력의 COPY)가
+    쓴다. 모양은 여기 한 벌이다(객체 이력이 이 키로 찾는다)."""
     return {
-        "relation": edge.relation,
-        "src": str(edge.src_object_id),
-        "dst": str(edge.dst_object_id),
+        "relation": relation,
+        "src": str(src_id),
+        "dst": str(dst_id),
         "src_label": src_label,
         "dst_label": dst_label,
     }
@@ -133,49 +147,137 @@ def record(
     `summary` 는 **묶음 한 줄**이라는 표시다 — `quiet` 로 줄마다 남기기를 멈춘 동안에도
     이것은 남는다.
     """
-    entry = AuditEntry(
+    values = _values(
         action=action,
-        actor_id=actor.id if actor else None,
-        # **그때의 이름을 박는다.** 계정이 지워지면 누가 했는지 모르게 되는데,
-        # 그건 감사 로그가 존재하는 이유와 정면으로 어긋난다.
-        actor_label=(actor.display_name or actor.email) if actor else "시스템",
-        # **사람과 통로를 함께 남긴다.** 소유자만 남기면 사람이 넣은 것과 스크립트가
-        # 넣은 것이 구별되지 않는다 — 그리고 그 구별이 필요해지는 날은 반드시 온다.
-        actor_client=get_actor_client(),
-        actor_token=get_actor_token(),
+        actor=actor,
         target_table=target_table,
         target_id=target_id,
-        target_label=target_label[:300],
+        target_label=target_label,
         workspace_id=workspace_id,
-        changes=changes or {},
+        changes=changes,
         reason=reason,
-        request_id=get_request_id(),
     )
+    entry = AuditEntry(**values)
     if db.info.get(_QUIET) and not summary:
         # **줄마다 남기지 않는 동안이다.** 표에도 안 넣고 바깥에도 안 알린다 — 켠 쪽이
         # 묶음 한 줄을 남긴다. 만들어서 돌려주기는 한다(부르는 쪽이 값을 쓴다).
         return entry
     db.add(entry)
-    # 커밋되면 바깥(웹훅)에 알린다 — 감사가 곧 「알릴 만한 변경」 의 정의다.
+    _stage(db, values)
+    return entry
+
+
+def _values(
+    *,
+    action: str,
+    actor: User | None,
+    target_table: str,
+    target_id: uuid.UUID | None,
+    target_label: str,
+    workspace_id: uuid.UUID | None,
+    changes: dict[str, Any] | None,
+    reason: str | None,
+) -> dict[str, Any]:
+    """기록 한 줄의 칸들 — `record` 와 `Batch` 가 **같은 것**을 쓴다(두 벌이면 갈린다)."""
+    return {
+        "action": action,
+        "actor_id": actor.id if actor else None,
+        # **그때의 이름을 박는다.** 계정이 지워지면 누가 했는지 모르게 되는데,
+        # 그건 감사 로그가 존재하는 이유와 정면으로 어긋난다.
+        "actor_label": (actor.display_name or actor.email) if actor else "시스템",
+        # **사람과 통로를 함께 남긴다.** 소유자만 남기면 사람이 넣은 것과 스크립트가
+        # 넣은 것이 구별되지 않는다 — 그리고 그 구별이 필요해지는 날은 반드시 온다.
+        "actor_client": get_actor_client(),
+        "actor_token": get_actor_token(),
+        "target_table": target_table,
+        "target_id": target_id,
+        "target_label": target_label[:300],
+        "workspace_id": workspace_id,
+        "changes": changes or {},
+        "reason": reason,
+        "request_id": get_request_id(),
+    }
+
+
+def _stage(db: Session, values: dict[str, Any]) -> None:
+    """커밋되면 바깥(웹훅 · 지켜보기)에 알린다 — 감사가 곧 「알릴 만한 변경」 의 정의다."""
     events.stage(
         db,
         events.ChangeEvent(
-            action=action,
-            target_table=target_table,
-            target_id=target_id,
-            target_label=entry.target_label,
-            workspace_id=workspace_id,
-            actor_id=actor.id if actor else None,
-            actor_label=entry.actor_label,
-            actor_client=entry.actor_client,
-            actor_token=entry.actor_token,
-            changes=entry.changes,
-            reason=reason,
-            request_id=entry.request_id,
+            action=values["action"],
+            target_table=values["target_table"],
+            target_id=values["target_id"],
+            target_label=values["target_label"],
+            workspace_id=values["workspace_id"],
+            actor_id=values["actor_id"],
+            actor_label=values["actor_label"],
+            actor_client=values["actor_client"],
+            actor_token=values["actor_token"],
+            changes=values["changes"],
+            reason=values["reason"],
+            request_id=values["request_id"],
             at=datetime.now(UTC),
         ),
     )
-    return entry
+
+
+class Batch:
+    """줄마다의 기록을 **모았다가 한 문장으로**(COPY) 넣는다 — 줄도 알림도 `record` 와 같다.
+
+    일괄 입력 5만 줄이면 기록도 5만 줄이다. `record` 는 줄마다 ORM 객체를 만들고, flush 가
+    그것을 1,000줄짜리 `INSERT … RETURNING` 으로 묶어 보냈다 — 5만 줄에 8.2초(COPY 0.9초,
+    2026-10-09 실측, `shared/copyin.py`). `record_rows` 도 빠르지만 **바깥에 줄마다 알리지
+    않는다**(종류 변경용) — 일괄 입력의 줄마다 기록은 객체 이력 · 지켜보기 알림 · 웹훅이
+    기대므로 그것으로 바꿔 끼우면 뜻이 달라진다. 그래서 줄은 `record` 와 같은 칸(`_values`)으로
+    만들고 알림도 줄마다 같은 것을 **부를 때** 적되(`events.stage`), 표에 넣는 것만 묶는다.
+
+    ⚠️ `write` 전에는 표에 없다 — 부르는 쪽이 커밋 전에, 그리고 **뒤에 남길 다른 기록보다
+       먼저** 부른다. 차례(`seq`)는 넣는 차례라, 늦게 쓰면 묶음 한 줄(`object.import`)이 줄마다
+       기록보다 앞선다. 앞서 `record` 로 남겨 세션에 있는 것은 `write` 가 먼저 flush 해 앞에
+       세운다. `quiet` 동안에는 `record` 처럼 아무것도 안 남긴다.
+    """
+
+    def __init__(self, db: Session) -> None:
+        self.db = db
+        self.rows: list[dict[str, Any]] = []
+
+    def record(
+        self,
+        *,
+        action: str,
+        actor: User | None,
+        target_table: str,
+        target_id: uuid.UUID | None,
+        target_label: str,
+        workspace_id: uuid.UUID | None = None,
+        changes: dict[str, Any] | None = None,
+        reason: str | None = None,
+    ) -> None:
+        if self.db.info.get(_QUIET):
+            return
+        values = _values(
+            action=action,
+            actor=actor,
+            target_table=target_table,
+            target_id=target_id,
+            target_label=target_label,
+            workspace_id=workspace_id,
+            changes=changes,
+            reason=reason,
+        )
+        _stage(self.db, values)
+        # id 는 여기서 — COPY 는 파이썬 기본값(`uuid4`)을 안 붙인다.
+        self.rows.append({"id": uuid.uuid4(), **values})
+
+    def write(self) -> None:
+        """모은 것을 넣는다 — 여러 번 불러도 된다(넣은 것은 비운다)."""
+        if not self.rows:
+            return
+        # 세션에 아직 안 쓴 기록(`record` — 먼저 부른 것)이 이 줄들보다 **앞에** 서게 — COPY 는
+        # 세션을 거치지 않아, 그대로 두면 그것이 커밋 때 뒤에 들어간다.
+        self.db.flush()
+        copyin.copy_rows(self.db, cast("Table", AuditEntry.__table__), self.rows)
+        self.rows.clear()
 
 
 def record_rows(
@@ -220,3 +322,73 @@ def record_rows(
             for target_id, label, workspace_id, changes in rows
         ],
     )
+
+
+def record_select(
+    db: Session,
+    *,
+    action: str,
+    actor: User | None,
+    target_table: str,
+    rows: Select[Any],
+    reason: str | None = None,
+) -> int:
+    """같은 일의 기록 여럿을 **DB 안에서 한 문장으로** — `rows` 는 (대상 id, 이름표, 부서, 바뀐
+    것) 네 열을 내는 select 다. 넣은 줄 수를 돌려준다.
+
+    `record_rows` 는 줄을 파이썬에 모아 넘긴다. 부서 통폐합 한 번이 객체 수십만 개를 옮기면 그
+    목록(줄마다 dict 하나)만으로 수백 MB 이고, DB 에서 읽은 값을 그대로 다시 보내는 왕복이다 —
+    여기서는 `INSERT … SELECT` 하나다. 바깥(웹훅 · 지켜보기)에는 줄마다 알리지 않는다
+    (`record_rows` 와 같다 — 부르는 쪽이 한 줄 `record` 로 알린다). `quiet` 동안에는 안 남긴다.
+    """
+    if db.info.get(_QUIET):
+        return 0
+    found = list(rows.subquery().c)
+    if len(found) != 4:  # pragma: no cover - 부르는 쪽의 실수
+        raise ValueError("rows 는 (대상 id, 이름표, 부서, 바뀐 것) 네 열이어야 합니다")
+    target_id, label, workspace_id, changes = found
+    table = AuditEntry.__table__
+
+    def fixed(name: str, value: Any) -> Any:
+        return literal(value, table.c[name].type)
+
+    names = (
+        "id",
+        "action",
+        "actor_id",
+        "actor_label",
+        "actor_client",
+        "actor_token",
+        "target_table",
+        "target_id",
+        "target_label",
+        "workspace_id",
+        "changes",
+        "reason",
+        "request_id",
+    )
+    done = db.execute(
+        insert(AuditEntry).from_select(
+            list(names),
+            select(
+                # **id 를 DB 가 만든다** — 파이썬 기본값(`uuid4`)은 이 문장에서 한 번만
+                # 불려 모든 줄이 같은 id 를 받는다.
+                func.gen_random_uuid(),
+                fixed("action", action),
+                fixed("actor_id", actor.id if actor else None),
+                fixed(
+                    "actor_label", (actor.display_name or actor.email) if actor else "시스템"
+                ),
+                fixed("actor_client", get_actor_client()),
+                fixed("actor_token", get_actor_token()),
+                fixed("target_table", target_table),
+                target_id,
+                func.left(label, 300),
+                workspace_id,
+                changes,
+                fixed("reason", reason),
+                fixed("request_id", get_request_id()),
+            ),
+        )
+    )
+    return int(cast("CursorResult[Any]", done).rowcount or 0)

@@ -24,8 +24,10 @@ from typing import Any
 
 import httpx
 from sqlalchemy import event, func, select, update
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
+from sqlalchemy.sql.elements import ColumnElement
 
+from app.database import SessionLocal
 from app.modules.accounts.models import User
 from app.modules.audit.models import AuditEntry
 
@@ -40,17 +42,20 @@ from app.modules.datasources.schemas import (
     RunOut,
     SyncOut,
 )
+from app.modules.jobs import services as job_services
 from app.modules.jobs.models import Job
 from app.modules.notifications import services as notifications
 from app.modules.objects import aliases, bulk
-from app.modules.objects.models import ObjectAlias, ObjectInstance
+from app.modules.objects.models import ObjectAlias, ObjectInstance, ObjectRelation
 from app.modules.objects.schemas import ImportRowOut
 from app.modules.objects.services import properties_of
 from app.modules.ontology import managed
+from app.modules.ontology.interfaces import load_ends
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.shared import audit, extensions, singleton
 from app.shared.batches import chunks as id_batches
 from app.shared.errors import AppError, Conflict, code
+from app.shared.permissions import require_owner_edit
 from app.shared.text import compare_key
 
 log = logging.getLogger(__name__)
@@ -66,6 +71,11 @@ BUSY = code("DATASOURCES", 45)
 INTERRUPTED = (
     "적용 중입니다 — 작업이 끝났는데 이 줄이 이대로면 도중에 멈춘 것입니다(그 전에 들어간 "
     "조각은 그대로 있고, 다음 동기화가 이어서 맞춥니다)."
+)
+#: 작업을 빼앗겨(박동이 멎어 되살려져 다른 워커가 다시 집었다) 멈춘 실행.
+TAKEN_OVER = (
+    "이 실행을 돌던 워커가 멎은 사이 작업이 되돌려져, 여기서 멈추고 더 넣지 않았습니다 — "
+    "다시 돈 동기화는 따로 기록됩니다."
 )
 #: 앞 조각이 이미 들어간 뒤에 멈췄을 때 덧붙이는 말.
 PARTIAL = (
@@ -835,9 +845,31 @@ def _sync(db: Session, user: User | None, source: DataSource, *, apply: bool) ->
     run_id, source_id, actor_label, slug = run.id, source.id, run.actor_label, source.slug
     try:
         return _sync_body(db, user, source, run, apply=apply)
+    except job_services.Lost:
+        # **작업을 빼앗겼다** — 박동이 멎어 되살려진 작업을 다른 워커가 다시 집었고, 커밋
+        # 앞 검사(`jobs/services.still_mine`)가 이 조각의 커밋을 막았다. 아래 그물에
+        # 맡기면 「실패」 기록을 적으려는 커밋이 같은 검사에 또 막히고, `last_status` 를
+        # 「실패」 로 적으면 이어받은 워커가 끝낼 때 「다시 됩니다」 알림이 헛나간다. 그래서
+        # 소스는 건드리지 않고, 앞 조각이 이미 들어갔으면 그 실행 기록만 **다른 연결로**
+        # 닫는다 — 「적용 중」 으로 영영 남지 않게.
+        db.rollback()
+        _taken_over(run_id)
+        raise
     except Exception as caught:  # 무엇이 나도 기록은 닫는다 — 스택은 로그에
         log.exception("데이터 소스 동기화가 도중에 멈췄습니다: %s", slug)
         return _crashed(db, source_id, run_id, actor_label, caught)
+
+
+def _taken_over(run_id: uuid.UUID) -> None:
+    """빼앗긴 작업이 남긴 실행 기록을 닫는다 — 앞 조각이 커밋됐을 때만 행이 있다."""
+    with SessionLocal() as other:
+        run = other.get(DataSourceRun, run_id)
+        if run is None:  # 조각 하나도 커밋되기 전 — 실행 행도 함께 롤백됐다
+            return
+        run.status = "failed"
+        run.errors = [TAKEN_OVER] + ([PARTIAL] if run.applied else [])
+        run.finished_at = datetime.now(UTC)
+        other.commit()
 
 
 def _crashed(
@@ -1169,7 +1201,8 @@ def _sync_body(
         if not edges_ok:
             # 객체는 들어갔다(조각마다 커밋) — 선만 못 넣었다. 기록을 「ok」 로 두면 사람은
             # 선이 빠진 줄 모른다. 선의 시계는 안 옮겼으니 다음 동기화가 같은 자리에서 다시
-            # 받는다.
+            # 받는다. 처음부터 다시 받기의 정리를 멈춘 것(`_prune_unseen`)도 여기로 온다 —
+            # 그때는 받은 선은 넣고 시계도 옮겼다(그 까닭이 기록에 남는다).
             relations_failed = True
 
     # **끝까지 받고 적용에 성공했을 때만 시계를 옮긴다.** 중간에 옮기면 그 사이 것을 영영
@@ -1326,8 +1359,11 @@ def _advance(
 
 #: 선까지 받는 소스 — 코어 창구가 객체와 선을 같은 규칙으로 열어 주는 종류.
 RELATION_KINDS = ("sp_core",)
-#: 관계 적재가 아는 칸 — 코어 봉투에서 그 밖의 것(도착 타입 · 끊김 표시)은 떼고 보낸다.
-EDGE_SKIP = ("dst_type", fetchers.CORE_DELETED)
+#: 관계 적재가 모르는 칸 — 코어 봉투에서 끊김 표시는 떼고 보낸다. **도착 타입(`dst_type`)은
+#: 싣는다** — 끝이 인터페이스인 종류는 구현 타입이 여럿이고 식별자는 타입 안에서만 하나라,
+#: 그것 없이는 두 구현 타입에 같은 식별자가 있을 때 어느 것인지 못 정한다(`bulk._dst_allowed`).
+#: 예전에는 떼고 보내, 그런 선이 「여러 타입에 있습니다」 로 영영 기다렸다.
+EDGE_SKIP = (fetchers.CORE_DELETED,)
 
 
 def _fail(
@@ -1570,9 +1606,16 @@ def _apply_edges(
     apply: bool,
     skip_missing: bool = False,
     max_rows: int = bulk.MAX_ROWS,
+    seen: set[uuid.UUID] | None = None,
 ) -> tuple[dict[str, int], list[str], list[Waiting], bool]:
     """선을 계획하고(또는 넣고) **셈 · 오류 줄 · 끝점을 못 찾아 건너뛴 줄 · 됐나**를 돌려준다 —
     코어 쪽과 대응 쪽이 함께 쓴다.
+
+    `seen` 을 주면 이번에 온 줄이 가리킨 **이쪽 선**(이미 있던 것 · 새로 이은 것)의 id 를
+    담는다 — 처음부터 다시 받을 때 안 온 선을 가리는 근거다(`_prune_unseen`).
+
+    새로 이은 선의 기록에는 이 소스의 표식(`MARK`)을 단다 — 나중에 「이 소스가 이은 선」 만
+    골라 끊을 근거다. 사람이 화면에서 이은 선과 가를 자리가 그것 말고 없다.
 
     **됐나(`ok`)를 셈으로 가르지 않는다** — 계획 전체가 거절되는 오류(한 번에 5,000줄 넘음 ·
     모르는 열 · 잠긴 타입)는 줄이 하나도 없어 `*_error` 셈이 0 이다. 셈만 보던 코어 쪽은 그것을
@@ -1620,6 +1663,8 @@ def _apply_edges(
                     src=str(one.get("src") or ""),
                     relation=str(one.get("relation") or ""),
                     dst=str(one.get("dst") or ""),
+                    # 끝이 인터페이스면 같은 식별자가 두 구현 타입에 있을 수 있다.
+                    dst_type=str(one.get("dst_type") or ""),
                 )
                 for one in gone
                 if one.get("src") and one.get("relation") and one.get("dst")
@@ -1634,6 +1679,8 @@ def _apply_edges(
     )
     if not apply or not plan.ok or not cut.ok:
         counts["relations_unlink"] = counts.get("relations_unlink", 0) + unlinked
+        if seen is not None:
+            seen.update(_edge_ids(plan.rows))
         return counts, errors, waiting, plan.ok and cut.ok
 
     done = bulk.apply_relations(
@@ -1645,7 +1692,11 @@ def _apply_edges(
         source=name,
         skip_missing=skip_missing,
         max_rows=max_rows,
+        mark={MARK: {"slug": source.slug}},
+        datasource_id=source.id,
     )
+    if seen is not None:
+        seen.update(_edge_ids(done.rows))
     waiting = [Waiting(rows[one.row - 1], one.message) for one in done.rows if one.skipped]
     counts = _edge_counts(done.counts, len(waiting))
     counts["relations_unlink"] = counts.get("relations_unlink", 0) + unlinked
@@ -1657,6 +1708,18 @@ def _apply_edges(
             if one.action == "error"
         )
     return counts, errors, waiting, done.ok
+
+
+def _edge_ids(rows: list[bulk.RowPlan]) -> set[uuid.UUID]:
+    """계획 · 적용의 줄 → 그 줄이 가리킨 이쪽 선의 id(이미 있던 것 · 새로 이은 것). 건너뛴 줄 ·
+    오류 줄은 없다 — 이쪽에 그 선이 없다."""
+    return {
+        one.object_id
+        for one in rows
+        if one.object_id is not None
+        and not one.skipped
+        and one.action in ("create", "update", "unchanged")
+    }
 
 
 @dataclass
@@ -1677,13 +1740,30 @@ def _edge_counts(raw: dict[str, int], waiting: int) -> dict[str, int]:
     return counts
 
 
-def _edge_key(row: dict[str, Any]) -> tuple[str, str, str]:
-    """선 한 줄의 정체 — 같은 선이 다시 오거나 끊겼다고 올 때 기다리던 줄과 맞춘다."""
+def _edge_key(row: dict[str, Any]) -> tuple[str, str, str, str]:
+    """선 한 줄의 정체 — 같은 선이 다시 오거나 끊겼다고 올 때 기다리던 줄과 맞춘다.
+
+    **도착 타입까지 본다** — 끝이 인터페이스면 같은 식별자가 두 구현 타입에 있을 수 있다.
+    도착 타입이 없는 줄(이 판 전에 기다리기 시작한 줄)은 빈 글자다 — `_edge_keys` 가 그것과도
+    맞춘다."""
     return (
         compare_key(str(row.get("src") or "")),
         str(row.get("relation") or "").strip(),
         compare_key(str(row.get("dst") or "")),
+        str(row.get("dst_type") or "").strip(),
     )
+
+
+def _edge_keys(rows: list[dict[str, Any]]) -> set[tuple[str, str, str, str]]:
+    """이번에 온 줄들의 정체 — **도착 타입을 뺀 것도** 함께 담는다. 도착 타입 없이 기다리던 옛
+    줄이 같은 선의 새 줄(도착 타입이 있다)과 맞아야 두 번 실리지 않는다(실리면 「같은 관계가
+    두 번」 으로 그 차례 전체가 막힌다)."""
+    out: set[tuple[str, str, str, str]] = set()
+    for one in rows:
+        key = _edge_key(one)
+        out.add(key)
+        out.add((*key[:3], ""))
+    return out
 
 
 def _waiting_note(waiting: list[Waiting]) -> str:
@@ -1714,12 +1794,30 @@ def _sync_relations(
     규칙으로 끊는다(`bundles/tombstones.py` — 줄마다 그 객체를 고칠 수 있는지 다시 본다).
     규칙을 두 벌로 적지 않으려고 그 모듈을 그대로 쓴다.
 
-    상대가 `reset` 을 주면 시계를 비우고 **전량을 다시 받아 「파일대로 맞춤」** 으로 넣는다 —
-    그 시각부터 끊긴 선을 알려 줄 수 없다는 말이므로, 온 것만 믿고 나머지는 끊는다. 범위는
-    **온 목록에 나온 (출발 객체 · 관계 종류)** 뿐이다(파일에 아예 안 나온 객체는 안 건드린다).
-
     많으면(5만 줄) 객체 쪽처럼 **받은 만큼 넣고 끊은 자리를 적어** 다음 차례가 잇는다
-    (`_advance`). 맞춤은 전부를 받았을 때만 한다 — 일부로 맞추면 아직 안 받은 선을 끊는다.
+    (`_advance`).
+
+    ## 처음부터 다시 받기 — 끝까지 받은 차례에 정리한다
+
+    상대가 `reset` 을 주면(그 시각부터는 끊긴 선을 알려 줄 수 없다 — 무덤의 보관 기간이
+    지났다) 시계를 비우고 **전량을 다시 받는다.** 그 응답에는 끊긴 선이 없으므로 이쪽에서
+    「안 온 선」 을 끊어야 둘이 맞는다. 시계를 손으로 비웠을 때도 같다 — 첫 쪽부터 전량을 받는
+    일이다.
+
+    전량이 한 번에 받는 상한(5만 줄)을 넘으면 여러 차례에 걸친다. 예전에는 그때 더하기로만 이어
+    받고 정리를 못 해 「상대에서 끊긴 선이 이쪽에 남아 있을 수 있습니다」 만 적었다 — 끊긴 선이
+    영영 남았다(2026-10-08). 이제는 **세대**(`FULL_EDGES` — 시작한 때)를 소스에 적어 두고:
+
+    - 중간 차례마다 이번에 온 선에 「봤다」 를 적는다(`_touch_seen` — `datasource_seen_at`).
+    - 마지막 쪽까지 받은 차례에 **이 소스가 이은 선** 가운데 그 세대에 한 번도 안 닿은 것을
+      끊는다(`_prune_unseen`). 한 차례로 끝나면 표시 없이 그 차례에 온 것으로 가른다.
+    - 어느 차례든 실패하거나 도중에 멈추면 끊지 않는다 — 그 차례의 표시도 함께 롤백되고 다음
+      차례가 같은 자리에서 잇는다. 일부만 본 것으로 끊으면 아직 안 받은 선이 끊긴다.
+
+    **사람이 이은 선은 안 끊는다** — 끊는 것은 이 소스가 이은 선
+    (`ObjectRelation.datasource_id`)뿐이다.
+    예전의 「파일대로 맞춤」 은 온 목록에 나온 (출발 객체 · 관계 종류) 안의 선을 누가 이었든
+    끊었다.
     """
     fetch = partial(
         fetchers.fetch_sp_core_relations,
@@ -1731,8 +1829,11 @@ def _sync_relations(
         transport=transport,
     )
     errors: list[str] = []
-    resume = _resume_of(source, RESUME_EDGES, source.relations_since_mark)
-    since = str(resume.get("since") or "") if resume else source.relations_since_mark
+    mark = source.relations_since_mark
+    resume = _resume_of(source, RESUME_EDGES, mark)
+    since = str(resume.get("since") or "") if resume else mark
+    # 끊은 자리에서 **전량 받기를 잇는** 차례면 그 세대 — 첫 쪽이 연 것이다.
+    full = _full_of(source, mark) if resume is not None and not since else None
     if resume is not None:
         try:
             got = fetch(since=since, cursor=str(resume["next"]))
@@ -1742,42 +1843,40 @@ def _sync_relations(
                 f"{caught.message}"
             )
             resume = None
-            since = source.relations_since_mark
+            full = None
+            since = mark
             got = fetch(since=since)
     else:
         got = fetch(since=since)
-    mode = "add"
-    if got.reset:
+    reset = got.reset
+    if reset:
         why = got.reset_reason or "상대가 reset 을 보냈습니다"
         errors.append(f"선은 처음부터 다시 받았습니다 — {why}")
         # **소스의 시계는 여기서 안 비운다** — 계획(미리 보기)도 이 길을 지나고 그 실행도
         # 커밋한다. 비워 두면 상대는 빈 시계에는 reset 을 안 보내, 다음 적용이 「더하기」 로
-        # 받아 「파일대로 맞춤」 이 영영 안 일어났다(2026-10-08). 적용에 성공하면 아래에서
-        # 새 시계로 옮긴다 — 실패하면 옛 시계라 상대가 다시 reset 을 보낸다.
+        # 받아 정리가 영영 안 일어났다(2026-10-08). 적용에 성공하면 아래에서 새 시계로
+        # 옮긴다 — 실패하면 옛 시계라 상대가 다시 reset 을 보낸다.
         resume = None
         since = ""
         got = fetch(since="")
-        mode = "replace"
-        if got.truncated:
-            # 일부로 맞추면 아직 안 받은 선이 「목록에 없는 선」 으로 읽혀 끊긴다 — 예전에는
-            # 그렇게 끊고, 시계도 못 옮겨 다음 차례가 또 끊었다.
-            mode = "add"
+    if resume is None and not since:
+        # **첫 쪽부터 전량을 받는다**(reset · 시계를 손으로 비움 · 처음) — 세대를 연다.
+        full = {"from": mark, "started": _db_now(db)}
+        if reset and got.truncated:
             errors.append(
-                "선이 많아 처음부터 다시 받기를 한 번에 끝내지 못했습니다 — 받은 것은 "
-                "더하기로 넣고 끊은 자리에서 이어 받습니다. 상대에서 끊긴 선의 정리(맞춤)는 "
-                "하지 못해, 상대에서 끊긴 선이 이쪽에 남아 있을 수 있습니다."
+                "선이 많아 처음부터 다시 받기를 여러 차례에 나눠 받습니다 — 마지막 쪽까지 "
+                "받은 차례에 상대에 없는 선(이 소스가 이은 것만)을 끊습니다."
             )
 
     rows = [_edge_row(one) for one in got.rows if not one.get(fetchers.CORE_DELETED)]
     gone = [one for one in got.rows if one.get(fetchers.CORE_DELETED)]
     # **기다리던 선을 다시 싣는다**(끝점이 지난번에 없었다). 이번에 같은 선이 다시 왔으면 새
-    # 줄을 쓰고, 상대가 끊었다고 왔으면 버린다. 전량을 다시 받는 `reset` 이면 기다리던 것도
-    # 그 안에 다시 온다. 한 번에 넣는 상한을 넘기지 않게 남는 자리만큼만 — 나머지는 계속
-    # 기다린다.
-    waiting = (
-        [] if mode == "replace" else [dict(one) for one in source.relations_waiting or []]
-    )
-    again = {_edge_key(one) for one in rows} | {_edge_key(one) for one in gone}
+    # 줄을 쓰고, 상대가 끊었다고 왔으면 버린다. 첫 쪽부터 전량을 다시 받는 세대의 첫 차례면
+    # 기다리던 것도 그 안에 다시 오므로 버린다. 한 번에 넣는 상한을 넘기지 않게 남는 자리만큼만
+    # — 나머지는 계속 기다린다.
+    fresh = full is not None and resume is None
+    waiting = [] if fresh else [dict(one) for one in source.relations_waiting or []]
+    again = _edge_keys(rows) | _edge_keys(gone)
     retry = [one for one in waiting if _edge_key(one) not in again]
     room = max(odata.MAX_ROWS - len(rows), 0)
     retry, held = retry[:room], retry[room:]
@@ -1785,6 +1884,7 @@ def _sync_relations(
     if dropped:
         errors.append(_dropped_note(dropped))
     sent = rows + retry
+    seen: set[uuid.UUID] = set()
     counts, more, still, edges_ok = _apply_edges(
         db,
         user,
@@ -1792,11 +1892,13 @@ def _sync_relations(
         object_type,
         sent,
         gone,
-        mode=mode,
+        # **늘 더하기다** — 안 온 선의 정리는 세대가 끝난 차례에 이 소스가 이은 것만 한다
+        # (`_prune_unseen`). 끝점을 못 찾은 줄은 나머지를 막지 않고 기다린다.
+        mode="add",
         apply=apply,
-        # 「파일대로 맞춤」(reset) 은 그대로 엄격하다 — 건너뛴 줄이 있는 선을 끊을 수 있다.
-        skip_missing=mode == "add",
+        skip_missing=True,
         max_rows=max(len(sent), bulk.MAX_ROWS),
+        seen=seen,
     )
     errors.extend(more)
     if still:
@@ -1804,10 +1906,25 @@ def _sync_relations(
     ok = edges_ok and not any(
         name.endswith("_error") and value for name, value in counts.items()
     )
+    # 끝까지 받았다 — 이때만 상대가 시계를 준다.
+    complete = not got.truncated and bool(got.as_of)
+    held_back = 0
+    if ok and full is not None:
+        started = _full_started(full)
+        if complete:
+            pruned = _prune_unseen(db, user, source, object_type, started, seen, apply=apply)
+            held_back = pruned.held_back
+            if pruned.cut:
+                counts["relations_unlink"] = counts.get("relations_unlink", 0) + pruned.cut
+            errors.extend(pruned.notes)
+        elif apply:
+            _touch_seen(db, source, started, seen)
     if apply and ok:
         source.relations_waiting = [one.row for one in still] + held
         if held:
             counts["relations_waiting"] = counts.get("relations_waiting", 0) + len(held)
+        # 세대는 끝까지 받을 때까지 들고 간다 — 끝났거나 세대가 아니면 지운다.
+        _set_resume(source, FULL_EDGES, full if full is not None and not complete else None)
         # **끝까지 받고 넣은 뒤에만** 시계를 옮긴다 — 중간에 옮기면 그 사이 선을 영영 안
         # 받는다. 끝점을 못 찾은 줄은 위에 남겼으니 시계를 막지 않는다. 끊겼으면 끊은 자리를.
         errors.extend(_advance(source, RESUME_EDGES, got, resume, since))
@@ -1816,7 +1933,199 @@ def _sync_relations(
             f"선이 많아 이번에는 {len(got.rows):,}줄까지 받았습니다 — 적용하면 받은 만큼 넣고 "
             "다음 동기화가 끊은 자리에서 잇습니다."
         )
-    return counts, errors, ok
+    # 정리를 멈춘 적용은 실패로 적는다 — 「ok」 면 사람은 끊긴 선이 남은 줄 모른다.
+    return counts, errors, ok and not (apply and held_back)
+
+
+#: 처음부터 다시 받는 **세대** — `{from: 그때의 선 시계, started: 시작한 때(DB 시계)}`. 소스의
+#: `options` 안에 둔다(`_` 로 시작하는 키라 화면에 안 나가고 정의를 고쳐도 지켜진다).
+FULL_EDGES = "_full_relations"
+
+
+def _full_of(source: DataSource, mark: str) -> dict[str, Any] | None:
+    """지금 잇는 세대 — 그 세대를 연 때의 시계가 지금 시계일 때만(손으로 비웠으면 버린다)."""
+    got = (source.options or {}).get(FULL_EDGES)
+    if isinstance(got, dict) and got.get("from") == mark and got.get("started"):
+        return got
+    return None
+
+
+def _db_now(db: Session) -> str:
+    """**DB 의 시계**(이 트랜잭션이 시작한 때) — 선의 `updated_at` 과 같은 시계로 견준다. 이
+    차례에 새로 잇거나 고친 선은 같은 트랜잭션이라 이 값과 같다(옛것이 아니다)."""
+    now = db.scalar(select(func.now()))
+    return (now or datetime.now(UTC)).isoformat()
+
+
+def _full_started(full: dict[str, Any]) -> datetime:
+    return datetime.fromisoformat(str(full["started"]))
+
+
+def _made_here(source: DataSource) -> ColumnElement[bool]:
+    """**이 소스가 이은 선** — 처음 이을 때 주인으로 적힌다(`ObjectRelation.datasource_id`).
+
+    사람이 화면에서 이은 선 · 파일로 넣은 선 · 다른 소스가 이은 선은 여기 안 든다 — 같은 선을
+    이 소스가 나중에 받아도(「그대로」) 주인은 처음 이은 쪽이다. 주인 칸이 생기기 전(0.4.49
+    까지)에 이 소스가 이은 선도 안 든다: 누가 이었는지 가를 기록이 없어, 끊어도 되는 선인지
+    알 수 없다."""
+    return ObjectRelation.datasource_id == source.id
+
+
+def _touch_seen(
+    db: Session, source: DataSource, started: datetime, seen: set[uuid.UUID]
+) -> None:
+    """이번 차례에 온 선 가운데 **이 소스가 이은 것**에 「이 세대에서 봤다」 를 적는다
+    (`datasource_seen_at`). 이 세대에 새로 이은 것은 만든 때로 이미 가른다.
+
+    `updated_at` 은 **그대로 둔다** — 처음 구현은 그것을 밀었는데, 그러면 안 바뀐 선 수만 줄이
+    이 설치의 코어 창구로 다시 나가고 지표 증분이 「관계가 바뀌었다」 로 읽어 전량을 셌다
+    (2026-10-08). ORM 의 갱신은 `onupdate` 를 따라 `updated_at` 도 밀므로 제 값으로 묶는다.
+
+    한 차례에 5만 줄이면 갱신 문장 다섯(1만 줄씩) — 같은 차례에 그 5만 줄을 계획하고 넣는 일에
+    견주면 작다."""
+    for batch in id_batches(sorted(seen)):
+        db.execute(
+            update(ObjectRelation)
+            .where(ObjectRelation.id.in_(batch), _made_here(source))
+            .values(datasource_seen_at=func.now(), updated_at=ObjectRelation.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+
+
+@dataclass
+class Pruned:
+    """처음부터 다시 받기를 마친 차례의 정리 — 끊은(미리 보기면 끊을) 수 · 멈춘 수 · 말."""
+
+    cut: int = 0
+    held_back: int = 0
+    notes: list[str] = field(default_factory=list)
+
+
+def _prune_unseen(
+    db: Session,
+    user: User | None,
+    source: DataSource,
+    object_type: ObjectType,
+    started: datetime,
+    seen: set[uuid.UUID],
+    *,
+    apply: bool,
+) -> Pruned:
+    """처음부터 다시 받기를 **끝까지 마친 차례** — 이 소스가 이은 선 가운데 그 세대에 한 번도
+    안 온 것을 끊는다.
+
+    안 온 것 = 출발점이 이 소스의 타입이고(이 소스가 받는 창구가 그것이다), 세대를 시작하기
+    전에 이었고, 그 세대의 앞 차례에서 본 적이 없고(`_touch_seen`), 이번 차례에도 안 온 것
+    (`seen`). 끊는 길은 관계 파일의 맞춤과 같다 — 감사 기록을 남기고 행을
+    지우면 무덤이 남아 이 설치를 받는 쪽에도 끊긴 선으로 간다(`_leave_tombstone`).
+
+    **한꺼번에 절반 넘게 안 오면 끊지 않고 멈춘다**(`GONE_LIMIT` — 객체의 사용 중지와 같은
+    무늬). 상대의 토큰이 부서를 잃거나 공개를 잠시 닫으면 전량이 거의 비어 오고, 그것을 믿으면
+    이 소스가 이은 선이 한꺼번에 끊긴다. 시계는 옮긴다 — 안 옮기면 다음 차례마다 같은 전량을
+    다시 받는다.
+    """
+    out = Pruned()
+    src = aliased(ObjectInstance)
+    mine = (
+        select(ObjectRelation.id, ObjectRelation.created_at, ObjectRelation.datasource_seen_at)
+        .join(src, src.id == ObjectRelation.src_object_id)
+        .where(src.type_id == object_type.id, _made_here(source))
+    )
+    held = 0
+    doomed: list[uuid.UUID] = []
+    for edge_id, made, last_seen in db.execute(mine.execution_options(yield_per=10_000)):
+        held += 1
+        fresh = made >= started or (last_seen is not None and last_seen >= started)
+        if not fresh and edge_id not in seen:
+            doomed.append(edge_id)
+    if len(doomed) > GONE_FLOOR and len(doomed) > GONE_LIMIT * held:
+        out.held_back = len(doomed)
+        out.notes.append(
+            f"처음부터 다시 받았는데 이 소스가 이은 선 {held:,}줄 가운데 {len(doomed):,}줄이 "
+            "오지 않았습니다 — 절반이 넘어 끊지 않았습니다(받은 선은 반영했습니다). 상대 "
+            "토큰의 부서 · 공개 범위가 바뀌었는지 확인하세요. 정말 끊긴 것이면 화면에서 "
+            "끊거나 관계 파일을 「파일대로 맞춤」 으로 넣으세요."
+        )
+        return out
+    if not doomed:
+        return out
+    if not apply:
+        out.cut = len(doomed)
+        out.notes.append(
+            f"처음부터 다시 받은 결과 상대에 없는 선 {len(doomed):,}줄을 적용할 때 끊습니다"
+            "(이 소스가 이은 것만 — 사람이 이은 선은 그대로)."
+        )
+        return out
+
+    actor = _actor(db, user)
+    name = source_name(source)
+    kinds = {one.slug: one for one in db.scalars(select(RelationType))}
+    refused: dict[uuid.UUID | None, str] = {}
+    blocked: list[str] = []
+    dst = aliased(ObjectInstance)
+    for batch in id_batches(doomed):
+        records: list[tuple[uuid.UUID, str, uuid.UUID | None, dict[str, Any]]] = []
+        for edge, owner, src_label, dst_label in db.execute(
+            select(ObjectRelation, src.owner_workspace_id, src.label, dst.label)
+            .join(src, src.id == ObjectRelation.src_object_id)
+            .join(dst, dst.id == ObjectRelation.dst_object_id)
+            .where(ObjectRelation.id.in_(batch))
+        ).tuples():
+            label = f"{src_label} -{edge.relation}-> {dst_label}"
+            # **무덤과 같은 문턱** — 잠긴 관계 종류 · 고칠 수 없는 부서의 출발점은 안 끊는다.
+            kind = kinds.get(edge.relation)
+            owner_name = managed.owner_of(kind) if kind is not None else ""
+            if owner_name and owner_name != name:
+                blocked.append(f"{label}({owner_name} 가 관리하는 관계 종류)")
+                continue
+            if owner not in refused:
+                try:
+                    require_owner_edit(
+                        db, actor, owner, what="객체", code_value=code("OBJECTS", 12)
+                    )
+                    refused[owner] = ""
+                except AppError as denied:
+                    refused[owner] = denied.message
+            if refused[owner]:
+                blocked.append(f"{label}({refused[owner]})")
+                continue
+            records.append(
+                (
+                    edge.id,
+                    label,
+                    owner,
+                    {
+                        **audit.relation_endpoints(edge, src_label, dst_label),
+                        MARK: {"slug": source.slug, "why": "full_resync"},
+                    },
+                )
+            )
+            db.delete(edge)
+        # 선마다 기록은 남기되(양끝 객체의 이력에 선다) **바깥에는 줄마다 알리지 않는다** —
+        # 다시 받기 한 번이 수천 줄을 끊을 수 있고, 그 알림은 아무도 못 읽는다. 바깥에는 실행
+        # 한 줄(`datasource.sync` 의 `relations_unlink`)이 간다.
+        audit.record_rows(
+            db,
+            action="object.relation.remove",
+            actor=actor,
+            target_table="object_relations",
+            rows=records,
+            reason=f"{source.name} 에서 처음부터 다시 받았는데 오지 않아 끊음",
+        )
+        db.flush()  # 무덤(`_leave_tombstone`)도 여기서 남는다 — 덩어리마다 세션을 비운다
+        out.cut += len(records)
+    if out.cut:
+        out.notes.append(
+            f"처음부터 다시 받은 결과 상대에 없는 선 {out.cut:,}줄을 끊었습니다"
+            "(이 소스가 이은 것만 — 사람이 이은 선은 그대로)."
+        )
+    if blocked:
+        more = f" 외 {len(blocked) - 3}줄" if len(blocked) > 3 else ""
+        out.notes.append(
+            f"상대에 없는 선 {len(blocked):,}줄은 여기서 끊을 수 없어 남겼습니다: "
+            f"{' · '.join(blocked[:3])}{more}"
+        )
+    return out
 
 
 def _still_placeable(
@@ -2295,14 +2604,18 @@ def sync_order(db: Session, sources: list[DataSource]) -> list[DataSource]:
     ):
         refs.setdefault(type_id, set()).add(str(target))
     kinds = list(db.scalars(select(RelationType).where(RelationType.is_active.is_(True))))
+    # 끝 · 참조 대상에 적힌 **인터페이스는 구현 타입으로 편다** — 인터페이스 slug 는 어느
+    # 소스의 타입도 아니라, 안 펴면 그 선 · 참조가 가리키는 소스를 못 찾아 순서 없이 돌았다
+    # (그러면 끝점이 아직 없는 선이 한 차례씩 기다린다).
+    ends = load_ends(db)
 
     def points_at(source: DataSource) -> set[str]:
         own = slug_of.get(source.type_id, "")
-        out = set(refs.get(source.type_id, set()))
+        out = set(ends.types_of(sorted(refs.get(source.type_id, set()))))
         if wants_relations(source) or edges_only(source):
             for kind in kinds:
-                if kind.src_type_slugs is None or own in kind.src_type_slugs:
-                    out |= set(kind.dst_type_slugs or [])
+                if kind.src_type_slugs is None or ends.allows(kind.src_type_slugs, own):
+                    out |= set(ends.types_of(kind.dst_type_slugs or []))
         if edges_only(source):
             out.add(own)  # 출발점도 객체 소스가 먼저 만든다
         return out

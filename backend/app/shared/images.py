@@ -57,13 +57,21 @@ class Inspected:
     height: int
 
 
-def _open(path: Path) -> Image.Image | None:
-    """래스터 넷 중 하나로 열리면 그 그림, 아니면 None. 화소 수 상한을 넘어도 None."""
+#: 열어 볼 것 — 저장소의 파일, 또는 아직 저장하지 않은 바이트(사진 일괄 업로드의 계획은
+#: zip 안의 항목을 저장하지 않고 본다).
+Source = Path | bytes
+
+
+def _open(source: Source) -> Image.Image | None:
+    """래스터 넷 중 하나로 열리면 그 그림, 아니면 None. 화소 수 상한을 넘어도 None.
+
+    바이트면 열 때마다 새 스트림으로 — `verify()` 가 받은 스트림을 닫는다(PNG, 실측). 하나를
+    되감아 다시 쓰면 `inspect` 의 두 번째 열기가 「닫힌 파일」 로 터졌다."""
     try:
         with warnings.catch_warnings():
             # Pillow 는 큰 그림에 경고만 하고 연다 — 그것을 오류로 바꿔 거른다.
             warnings.simplefilter("error", Image.DecompressionBombWarning)
-            image = Image.open(path)
+            image = Image.open(source if isinstance(source, Path) else io.BytesIO(source))
             if image.format not in RASTER:
                 image.close()
                 return None
@@ -81,13 +89,13 @@ def _open(path: Path) -> Image.Image | None:
         return None
 
 
-def inspect(path: Path) -> Inspected | None:
+def inspect(source: Source) -> Inspected | None:
     """이미지면 (종류, 가로, 세로). 아니면 None.
 
     머리만 읽고 끝내지 않는다 — `verify()` 로 몸통까지 훑는다. 머리만 PNG 이고 나머지가
     깨진 파일은 미리보기를 만들 때에야 터지고, 그때는 이미 「이미지」 로 저장된 뒤다.
     """
-    image = _open(path)
+    image = _open(source)
     if image is None:
         return None
     try:
@@ -98,7 +106,7 @@ def inspect(path: Path) -> Inspected | None:
     finally:
         image.close()
     # verify() 뒤에는 다시 열어야 한다(Pillow 의 규칙). 회전을 반영한 크기를 잰다.
-    again = _open(path)
+    again = _open(source)
     if again is None:
         return None
     try:

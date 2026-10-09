@@ -109,11 +109,16 @@ def run(
     max_rows: int = bulk.MAX_ROWS,
     on_progress: bulk.Progress = None,
     before_commit: Callable[[Outcome], None] | None = None,
+    commit_check: Callable[[Session], None] | None = None,
 ) -> Outcome:
     """미리 보기(`apply` 거짓)는 늘 롤백, 적용은 **전부 괜찮을 때만** 커밋.
 
     `before_commit` 은 적용 직전에 결과를 보는 자리다 — 워커가 미리 본 지문과 견준다.
-    거기서 예외가 나면 롤백된다."""
+    거기서 예외가 나면 롤백된다.
+
+    `commit_check` 는 바깥 트랜잭션을 **커밋하기 바로 앞**, 그 트랜잭션 안에서 부른다 — 워커가
+    「아직 이 작업을 쥐었나」 를 본다(`jobs/services.still_mine`). 거기서 잡은 잠금은 이
+    커밋까지 쥐므로 사이에 아무것도 끼우지 않는다. 예외면 롤백된다."""
     connection = engine.connect()
     outer = connection.begin()
     db = Session(
@@ -150,6 +155,8 @@ def run(
                 },
             )
             outcome.run_id = journal.finish(db, counts=outcome.counts)
+            if commit_check is not None:
+                commit_check(db)
             db.commit()
             outer.commit()
             outcome.applied = True

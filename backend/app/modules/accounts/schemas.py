@@ -82,6 +82,12 @@ class RejectRequest(BaseModel):
     """거절 사유. 메일이 없어 통보가 앱 안에서만 되므로 반드시 남긴다."""
 
 
+class TokenRevokeRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+    """폐기 사유 — 감사 기록과 토큰 주인에게 가는 알림에 그대로 실린다. 비워도 되지만,
+    비우면 주인은 「왜」 를 관리자에게 따로 물어야 한다."""
+
+
 class CreateAccountRequest(BaseModel):
     """관리자가 직접 계정을 만들 때. 승인 절차 없이 바로 활성이다."""
 

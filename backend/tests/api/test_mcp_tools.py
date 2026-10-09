@@ -1513,6 +1513,55 @@ def test_지표를_부서_홈에_올리고_내린다(bot: Bot, admin: Signed) ->
     assert bot.call(server.metric_home, slug) == []
 
 
+def test_어디부터_채우나와_못_찾은_말을_도구로_다룬다(bot: Bot) -> None:
+    """AI 가 「어디부터 채우나」 에 답하고, 자기가 못 찾은 말을 사람의 확인을 받아 별칭으로
+    붙인다 — 붙이기는 미리 보기가 먼저고, 붙인 뒤에는 그 말로 찾힌다."""
+    slug = _uniq("tool")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": slug,
+                    "label": "툴",
+                    "properties": [{"key": "vendor", "label": "개발사", "data_type": "text"}],
+                }
+            ]
+        },
+        apply=True,
+    )
+    abaqus = bot.call(server.object_create, slug, label="Abaqus Standard")
+    bot.call(server.object_create, slug, label="Nastran", properties={"vendor": "MSC"})
+
+    report = bot.call(server.fill_priorities, type_slug=slug)
+    (row,) = [one for one in report["priorities"] if one["target"] == "vendor"]
+    assert row["missing"] == 1 and row["total"] == 2 and row["gain"]
+    assert report["types"][0]["fields"][0]["rate"] == 0.5
+
+    assert bot.call(server.object_resolve, slug, "Abaqus Standrd")["match"] == "none"
+    (miss,) = bot.call(server.alias_candidates, type_slug=slug)["items"]
+    assert miss["text"] == "Abaqus Standrd" and miss["suggestions"][0]["id"] == abaqus["id"]
+
+    plan = bot.call(server.alias_candidate_apply, miss["id"], object_id=abaqus["id"])
+    assert plan["applied"] is False and plan["aliases_after"] == ["Abaqus Standrd"]
+    assert bot.call(server.object_resolve, slug, "Abaqus Standrd")["match"] == "none"
+    done = bot.call(
+        server.alias_candidate_apply, miss["id"], object_id=abaqus["id"], apply=True
+    )
+    assert done["applied"] is True and done["candidate"]["status"] == "attached"
+    found = bot.call(server.object_resolve, slug, "Abaqus Standrd")
+    assert found["match"] == "exact" and found["object"]["id"] == abaqus["id"]
+
+    # 무시도 미리 보기가 먼저다.
+    assert bot.call(server.object_resolve, slug, "엉뚱한이름")["match"] == "none"
+    (other,) = bot.call(server.alias_candidates, type_slug=slug)["items"]
+    preview = bot.call(server.alias_candidate_apply, other["id"], action="ignore")
+    assert preview["applied"] is False and preview["candidate"]["status"] == "pending"
+    ignored = bot.call(server.alias_candidate_apply, other["id"], action="ignore", apply=True)
+    assert ignored["done"] == 1
+    assert bot.call(server.alias_candidates, type_slug=slug)["items"] == []
+
+
 def test_남은_일_알림_고아_파일을_도구로_본다(bot: Bot) -> None:
     items = bot.call(server.server_maintenance)
     assert isinstance(items, list) and all("key" in one and "count" in one for one in items)

@@ -283,6 +283,12 @@ class ObjectRelation(Base):
         Index("ix_object_relations_dst", "dst_object_id", "relation"),
         # 코어 API 의 「지난번 이후」 — 종류로 좁히고 시각으로 훑는다.
         Index("ix_object_relations_updated", "relation", "updated_at"),
+        # 데이터 소스가 이은 선만 — 사람이 이은 선(대부분)은 색인에 안 든다.
+        Index(
+            "ix_object_relations_datasource",
+            "datasource_id",
+            postgresql_where=text("datasource_id IS NOT NULL"),
+        ),
     )
 
     id: Mapped[uuid.UUID] = mapped_column(
@@ -323,6 +329,25 @@ class ObjectRelation(Base):
     )
     """**언제 바뀌었나.** 코어 API 가 「지난번 이후」 를 이 칸으로 가른다 — 없을 때는 선에
     붙은 근거·속성을 고쳐도 받는 쪽이 영영 몰랐다."""
+
+    datasource_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("data_sources.id", ondelete="SET NULL"), nullable=True
+    )
+    """**이 선을 이은 데이터 소스** — 사람이 화면 · 파일로 이은 선은 비어 있다.
+
+    소스가 「처음부터 다시」 받을 때 상대에서 끊긴 선을 이쪽에서도 끊는데, 그때 **이 소스가
+    이은 선만** 끊는다(사람이 이은 선은 그 소스의 목록에 없어도 남는다). 처음 이은 쪽이
+    주인이다 — 사람이 먼저 이은 선을 소스가 나중에 받아도(「그대로」) 주인은 안 바뀐다. 소스를
+    지우면 비워진다(선은 남는다). 2026-10-08 전에 소스가 이은 선은 비어 있다 — 누가 이었는지
+    가를 기록이 없다."""
+
+    datasource_seen_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """그 소스가 **마지막으로 보낸 때** — 여러 차례에 걸친 「처음부터 다시」 에서 「이번 세대에
+    봤다」 의 표시(`datasources/services._touch_seen`). `updated_at` 을 쓰지 않는 까닭: 그것을
+    밀면 안 바뀐 선이 이 설치의 코어 창구로 다시 나가고, 지표 증분이 「관계가 바뀌었다」 로
+    읽어 전량을 센다."""
 
 
 class ObjectRelationTombstone(Base):
@@ -631,5 +656,70 @@ class ObjectWatch(Base):
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), index=True
     )
     created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+#: 못 찾은 말의 처리 상태.
+#:   pending   대기 — 사람이 아직 안 봤다
+#:   attached  별칭으로 붙임 — 다음부터 찾힌다
+#:   ignored   무시 — 별칭으로 붙일 말이 아니다(오타 · 엉뚱한 말)
+SEARCH_MISS_STATUSES = ("pending", "attached", "ignored")
+
+
+class SearchMiss(Base):
+    """**못 찾은 말** — 검색 · 이름 풀이가 아무것도 못 찾은 글자(별칭 후보).
+
+    사람과 AI 가 이름으로 찾다가 못 찾으면 **없는 줄 알고 새로 만든다** — 그러면 같은 것이
+    둘이 된다. 그 말이 어떤 객체의 다른 이름이었다면, 그것을 별칭으로 붙이는 순간 다음부터
+    찾힌다. 그 말을 모으는 자리가 여기다(`objects/misses.py`).
+
+    **같은 말은 한 줄이다**(범위 · 비교키) — 수만 번 찾아도 횟수만 오른다. **누가 찾았는지는
+    남기지 않는다** — 몇 사람인지만 센다(`askers` 는 사람마다 짧은 지문이고, 스무 개까지).
+    """
+
+    __tablename__ = "search_misses"
+    __table_args__ = (
+        # 같은 범위의 같은 말은 한 줄 — 동시에 여럿이 못 찾아도 upsert 가 횟수만 올린다.
+        UniqueConstraint("scope", "norm", name="uq_search_misses_scope_norm"),
+        # 대기 목록(많이 찾은 것부터)과 홈 「남은 일」 의 수.
+        Index("ix_search_misses_status_hits", "status", "hits"),
+        # 오래된 것 정리.
+        Index("ix_search_misses_last_at", "last_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    scope: Mapped[str] = mapped_column(String(SLUG_MAX), default="", server_default="")
+    """**어디서 찾았나** — 타입이나 인터페이스의 slug. 빈 값이면 타입을 가리지 않은 찾기
+    (통합 검색)다. FK 를 걸지 않는다: 인터페이스도 담고, slug 는 바뀌지 않는다. 지운 타입의
+    줄은 정리가 치운다(`misses.purge`)."""
+    norm: Mapped[str] = mapped_column(String(200))
+    """비교키(`compare_key`) — 전각 · 대소문자 · 겹친 공백이 달라도 같은 말."""
+    text: Mapped[str] = mapped_column(String(200))
+    """처음 친 표기 그대로 — 별칭으로 붙일 때 이 글자를 쓴다."""
+    hits: Mapped[int] = mapped_column(Integer, default=1, server_default="1")
+    askers: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
+    """찾은 사람의 **지문**(이름 · id 가 아니다) — 몇 사람이 찾았나만 센다. 한 사람이 백 번
+    찾은 말과 열 사람이 찾은 말은 무게가 다르다."""
+    vias: Mapped[list[str]] = mapped_column(JSONB, default=list, server_default="[]")
+    """어느 자리에서 못 찾았나 — `resolve`(이름 풀이) · `search`(통합 검색) ·
+    `list`(목록 검색)."""
+    status: Mapped[str] = mapped_column(
+        String(12), default="pending", server_default="pending"
+    )
+    object_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="SET NULL"), nullable=True
+    )
+    """별칭으로 붙인 객체."""
+    decided_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    first_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )

@@ -12,6 +12,8 @@ import { useState } from 'react'
 import { Link } from 'react-router-dom'
 import { Download, Loader2 } from 'lucide-react'
 
+import { TokenRevokeDialog } from '@/modules/accounts/TokenRevokeDialog'
+import type { RevokeTarget } from '@/modules/accounts/TokenRevokeDialog'
 import { ontologyApi } from '@/modules/ontology/api'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -32,6 +34,9 @@ export default function OntologyCorePage() {
   const status = useResource(() => ontologyApi.coreStatus(), [])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error | null>(null)
+  // **이 자리에서 끊는다.** 예전에는 「그 계정의 내 정보에서 폐기」 라고 적어 두었는데, 남의
+  // 내 정보는 관리자도 못 연다 — 결국 계정을 지워야 끊겼다(2026-10-08).
+  const [revoking, setRevoking] = useState<RevokeTarget | null>(null)
 
   async function downloadKit() {
     setBusy(true)
@@ -158,7 +163,9 @@ export default function OntologyCorePage() {
           <p className="text-muted-foreground text-sm">
             코어를 조회할 수 있는 <b>유효한 토큰</b>입니다. <b>전체 읽기</b>로 표시된 토큰은 범위가{' '}
             <code>read</code> 라 코어 외 자료도 조회합니다 — 외부 시스템에는 <code>core:read</code>{' '}
-            범위로 발급하십시오. 차단은 해당 토큰 소유 계정의 <b>내 정보</b> 에서 삭제합니다.
+            범위로 발급하십시오. 연동을 중단하려면 해당 토큰을 <b>폐기</b>합니다 — 계정은 그대로 두고
+            해당 토큰만 사용할 수 없게 되며, 사유는 감사 기록(<code>account.token_revoked</code>)과
+            토큰 주인의 알림에 표시됩니다. 계정별 토큰 전체는 관리 › 계정의 「토큰」 에서 확인합니다.
           </p>
           {data.consumers.length === 0 ? (
             <EmptyState
@@ -174,11 +181,12 @@ export default function OntologyCorePage() {
                   <TableHead>범위</TableHead>
                   <TableHead>만료</TableHead>
                   <TableHead>최종 사용</TableHead>
+                  <TableHead />
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {data.consumers.map((one) => (
-                  <TableRow key={`${one.name}-${one.created_at}`}>
+                  <TableRow key={one.id}>
                     <TableCell>{one.name}</TableCell>
                     <TableCell className="text-sm">{one.owner}</TableCell>
                     <TableCell>
@@ -206,11 +214,33 @@ export default function OntologyCorePage() {
                         <span className="text-muted-foreground">미사용</span>
                       )}
                     </TableCell>
+                    <TableCell className="text-right">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() =>
+                          setRevoking({
+                            accountId: one.owner_id,
+                            tokenId: one.id,
+                            name: one.name,
+                            owner: one.owner,
+                            lastUsedAt: one.last_used_at,
+                          })
+                        }
+                      >
+                        폐기
+                      </Button>
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
             </Table>
           )}
+          <TokenRevokeDialog
+            target={revoking}
+            onClose={() => setRevoking(null)}
+            onRevoked={() => status.reload()}
+          />
         </TabsContent>
 
         <TabsContent value="recent" className="space-y-2 pt-4">
