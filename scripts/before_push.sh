@@ -148,7 +148,10 @@ step "alembic upgrade + check" alembic_check
 
 # ── 4. 프론트 ───────────────────────────────────────────────────────────
 say "4. 프론트 (tsc · vitest · oxlint · build)"
-tsc_build() { cd "$FRONT" && npx tsc -b --noEmit; }
+# **생성 타입(`schema.d.ts`) 없이 본다** — 커밋하지 않는 생성물이라 CI 의 빌드 단계에는 아직 없다(생성은
+# 그 뒤 최신성 검사에서). 이 PC 에 남은 파일로 타입을 맞추면 그것을 가져다 쓴 코드가 여기선 통과하고
+# CI 에서 떨어진다(v0.4.50, 2026-10-09). 지워도 5번이 다시 만든다.
+tsc_build() { cd "$FRONT" && rm -f src/shared/api/schema.d.ts && npx tsc -b --noEmit; }
 vitest_all() { cd "$FRONT" && npx vitest run --silent; }
 oxlint_all() { cd "$FRONT" && npx oxlint src; }
 vite_build() { cd "$FRONT" && npm run build; }

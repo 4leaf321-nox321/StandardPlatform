@@ -5,7 +5,6 @@ import type { Job } from '@/modules/jobs/api'
 import type { PropertyDef } from '@/modules/ontology/api'
 import { api, downloadFile } from '@/shared/api/client'
 import type { Page } from '@/shared/api/paging'
-import type { components } from '@/shared/api/schema'
 
 export interface ObjectRow {
   id: string
@@ -499,9 +498,73 @@ export const aliasReviewApi = {
     }),
 }
 
-/** 채울 곳 — **서버 스키마 그대로**(손으로 적지 않는다, `npm run api:types`). */
-export type FillReport = components['schemas']['FillReportOut']
-export type FillPriority = components['schemas']['FillPriorityOut']
+/**
+ * 채울 곳 — 서버의 `FillReportOut`(`objects/schemas.py`)과 같은 모양.
+ *
+ * 생성 타입(`@/shared/api/schema`)을 쓰지 않는다 — 그 파일은 커밋하지 않는 생성물이라 CI 의 빌드
+ * 단계에는 아직 없다(생성은 그 뒤 최신성 검사에서). 처음 쓴 판이 그것을 가져와 v0.4.50 CI 가
+ * 빌드에서 떨어졌다(2026-10-09) — 이 PC 에는 파일이 있어 푸시 전 검사가 못 봤다.
+ */
+export interface FillPriority {
+  kind: string
+  type_slug: string
+  type_label: string
+  target: string
+  target_label: string
+  missing: number
+  total: number
+  score: number
+  weight: number
+  uses: string[]
+  gain: string
+  link: string
+  estimated: boolean
+}
+
+export interface FillField {
+  key: string
+  label: string
+  data_type: string
+  required: boolean
+  filled: number
+  missing: number
+  rate: number
+  uses: string[]
+}
+
+export interface FillRelation {
+  relation: string
+  label: string
+  side: string
+  one: boolean
+  missing: number
+  uses: string[]
+}
+
+export interface FillType {
+  type_slug: string
+  type_label: string
+  usage: string
+  core: boolean
+  objects: number
+  estimated: boolean
+  sample_rows: number | null
+  required_missing: number
+  fields: FillField[]
+  fields_more: number
+  relations: FillRelation[]
+  unresolved_refs: number
+  waiting_relations: number
+  no_alias: number | null
+  alias_candidates: number
+  uses: string[]
+}
+
+export interface FillReport {
+  priorities: FillPriority[]
+  types: FillType[]
+  notes: string[]
+}
 
 export const fillApi = {
   /** 어디부터 채우나 — 쓰는 곳(필수 · 지표 · 코어 공개 · 뷰)으로 가중해 줄 세운 것. */
@@ -514,10 +577,57 @@ export const fillApi = {
   },
 }
 
-/** 별칭 후보(못 찾은 말) — 서버 스키마 그대로. */
-export type AliasCandidate = components['schemas']['AliasCandidateOut']
-export type AliasCandidatePage = components['schemas']['AliasCandidatePage']
-export type AliasAttachPlan = components['schemas']['AliasAttachPlanOut']
+/** 별칭 후보(못 찾은 말) — 서버의 `AliasCandidateOut` 등과 같은 모양(생성 타입을 안 쓰는 까닭은
+ *  위 `FillReport`). */
+export interface AliasSuggestion {
+  id: string
+  type_slug: string
+  type_label: string
+  label: string
+  key: string | null
+  matched: string
+  matched_text: string
+  score: number
+}
+
+export interface AliasCandidate {
+  id: string
+  text: string
+  scope: string
+  scope_label: string
+  scope_kind: string
+  hits: number
+  people: number
+  vias: string[]
+  status: string
+  object_id: string | null
+  object_label: string | null
+  object_type_slug: string | null
+  first_at: string
+  last_at: string
+  decided_at: string | null
+  suggestions: AliasSuggestion[]
+  suggest_note: string
+}
+
+export interface AliasCandidatePage {
+  items: AliasCandidate[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface AliasAttachPlan {
+  applied: boolean
+  candidate: AliasCandidate
+  object: { id: string; type_slug: string; type_label: string; label: string; key: string | null }
+  value: string
+  aliases_before: string[]
+  aliases_after: string[]
+  warnings: string[]
+  blocking: string[]
+  closed?: number
+}
 
 export const aliasCandidateApi = {
   list: (
