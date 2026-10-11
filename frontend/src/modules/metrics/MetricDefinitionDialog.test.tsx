@@ -169,4 +169,123 @@ describe('지표 정의', () => {
     )
     expect(jobsApi.waitFor).toHaveBeenCalledWith('j1')
   })
+
+  it('규칙 기준 — 불러와 차례를 바꾸면 그 차례로 계획을 보고, 미리 보기가 그 자리에 선다', async () => {
+    ontologyApi.schema.mockResolvedValue(SCHEMA)
+    objectApi.fields.mockResolvedValue([])
+    metricsApi.list.mockResolvedValue([])
+    metricsApi.plan.mockResolvedValue({
+      ok: true,
+      errors: [],
+      warnings: [],
+      rows: 10,
+      estimated_cells: 6,
+      overlap: false,
+      dims: [],
+      period_from: null,
+      period_to: null,
+      rules: [
+        {
+          name: 'nature',
+          label: '성격',
+          fingerprint: 'a'.repeat(64),
+          rules: [
+            { label: '고객과실', matched: 3, won: 3, taken_by: [], blocked: false },
+            {
+              label: 'SW',
+              matched: 1,
+              won: 0,
+              taken_by: [{ rule: 1, count: 1 }],
+              blocked: true,
+            },
+          ],
+          other: '기타',
+          other_count: 6,
+          seen: 10,
+          sampled: false,
+        },
+      ],
+    })
+    const existing = {
+      slug: 'nature_monthly',
+      label: '성격',
+      description: '',
+      source_type_slug: 'svc_case',
+      interval_hours: 24,
+      spec: {
+        measure: 'count',
+        time: { address: 'properties.received', grain: 'month' },
+        dimensions: [
+          {
+            name: 'nature',
+            label: '성격',
+            rules: [
+              { label: 'SW', when: [{ field: 'action', op: 'starts', value: 'SW' }] },
+              { label: '고객과실', when: [{ field: 'diag', op: 'in', value: 'C01|C02' }] },
+            ],
+            else: '기타',
+          },
+        ],
+        filters: [],
+        settle_days: 0,
+      },
+    }
+    const { MetricDefinitionDialog } = await import('@/modules/metrics/MetricDefinitionDialog')
+    render(
+      <MetricDefinitionDialog
+        existing={existing as unknown as import('@/modules/metrics/api').Metric}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    )
+    expect(await screen.findByLabelText('규칙 1 이름')).toHaveValue('SW')
+    await userEvent.click(screen.getByRole('button', { name: '규칙 2 위로' }))
+    expect(screen.getByLabelText('규칙 1 이름')).toHaveValue('고객과실')
+    await userEvent.click(screen.getByRole('button', { name: '규칙 미리 보기' }))
+    await waitFor(() => expect(metricsApi.plan).toHaveBeenCalled())
+    const sent = metricsApi.plan.mock.calls.at(-1)?.[0]
+    expect(sent.spec.dimensions).toEqual([
+      {
+        name: 'nature',
+        label: '성격',
+        rules: [
+          { label: '고객과실', when: [{ field: 'diag', op: 'in', value: 'C01|C02' }] },
+          { label: 'SW', when: [{ field: 'action', op: 'starts', value: 'SW' }] },
+        ],
+        else: '기타',
+      },
+    ])
+    expect(await screen.findByLabelText('규칙 1 미리 보기')).toHaveTextContent('3건 · 30%')
+    expect(screen.getByLabelText('규칙 2 미리 보기')).toHaveTextContent('막힌 규칙')
+    expect(screen.getByLabelText('기타 미리 보기')).toHaveTextContent('6건 · 60%')
+    // 규칙을 바꾸면 미리 보기는 사라진다 — 지난 계획으로 판단하지 않게.
+    await userEvent.click(screen.getByRole('button', { name: '규칙 1 아래로' }))
+    expect(screen.queryByLabelText('규칙 1 미리 보기')).not.toBeInTheDocument()
+  })
+
+  it('규칙 기준 추가는 빈 규칙 하나와 「기타」 로 선다', async () => {
+    metricsApi.plan.mockResolvedValue({
+      ok: false,
+      errors: ['규칙 1 의 이름(성격)이 비었습니다.'],
+      warnings: [],
+      rows: null,
+      estimated_cells: null,
+      overlap: false,
+      dims: [],
+      period_from: null,
+      period_to: null,
+      rules: [],
+    })
+    await mount()
+    await waitFor(() => expect(screen.getByText('시장 서비스 (기록)')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: '규칙 기준 추가' }))
+    expect(screen.getByLabelText('기준 1 기타 이름')).toHaveValue('기타')
+    await userEvent.type(screen.getByLabelText('기준 1 이름'), 'nature')
+    await userEvent.click(screen.getByRole('button', { name: '규칙 미리 보기' }))
+    await waitFor(() => expect(metricsApi.plan).toHaveBeenCalled())
+    expect(metricsApi.plan.mock.calls.at(-1)?.[0].spec.dimensions).toEqual([
+      { name: 'nature', label: null, rules: [{ label: '', when: [] }], else: '기타' },
+    ])
+    expect(await screen.findByText('규칙 1 의 이름(성격)이 비었습니다.')).toBeInTheDocument()
+  })
 })

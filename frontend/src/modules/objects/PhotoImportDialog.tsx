@@ -10,7 +10,7 @@
  * 틀렸다고 295장을 막으면 사람은 300장을 다시 고른다. 못 붙은 5장은 계획에 까닭과 함께 남는다.
  */
 
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Images, Loader2 } from 'lucide-react'
 
 import { jobsApi, STUCK_MS } from '@/modules/jobs/api'
@@ -38,6 +38,15 @@ import {
 } from '@/shared/components/ui/select'
 
 type Existing = 'skip' | 'replace' | 'add'
+
+/** 서버가 아직 안 알려 줬을 때의 상한 — 기본값(`job_photos_max_bytes`, 2GB). */
+const DEFAULT_MAX_BYTES = 2 * 1024 ** 3
+
+/** 상한을 사람의 말로 — 2GB · 500MB. */
+export function shownLimit(bytes: number): string {
+  if (bytes >= 1024 ** 3 && bytes % 1024 ** 3 === 0) return `${bytes / 1024 ** 3}GB`
+  return `${Math.floor(bytes / 1024 ** 2).toLocaleString()}MB`
+}
 
 /** 칸에 이미 사진이 있을 때 — 기본은 건너뜀(이미 고른 사진을 조용히 바꾸지 않는다). */
 const EXISTING: { value: Existing; label: string; help: string }[] = [
@@ -70,7 +79,29 @@ export function PhotoImportDialog({ type, defs, onClose, onApplied }: Props) {
   const [stuck, setStuck] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error | null>(null)
+  /**
+   * zip 하나의 상한 — **설치마다 다르다**(`.env` 의 `JOB_PHOTOS_MAX_BYTES`, 기본 2GB). 서버에
+   * 묻고(`/api/jobs/kinds`), 보내기 전에 견준다 — 2GB 를 다 올린 뒤에야 「너무 큽니다」 를 보지
+   * 않게. 100MB 이던 때는 휴대폰 사진 스무 장 남짓에서 나눠 올려야 했다(2026-10-10).
+   */
+  const [maxBytes, setMaxBytes] = useState(DEFAULT_MAX_BYTES)
   const inputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    let cancelled = false
+    jobsApi
+      .kinds()
+      .then((kinds) => {
+        const found = kinds.find((one) => one.name === 'objects_photos')?.max_file_bytes
+        if (!cancelled && found) setMaxBytes(found)
+      })
+      .catch(() => {
+        // 못 물었으면 기본값으로 — 서버가 넘는 것을 어차피 거절한다(413).
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
 
   /** 고른 것이 바뀌면 앞의 계획은 버린다 — 그 계획은 다른 것을 보고 세운 것이다. */
   const reset = () => {
@@ -116,6 +147,15 @@ export function PhotoImportDialog({ type, defs, onClose, onApplied }: Props) {
         return
       }
       if (!file || !field) return
+      if (file.size > maxBytes) {
+        setError(
+          new Error(
+            `파일이 너무 큽니다(${shownLimit(file.size)}) — zip 하나는 ${shownLimit(maxBytes)} ` +
+              '까지입니다. 나눠 업로드하세요.',
+          ),
+        )
+        return
+      }
       // 같은 파일을 다시 고를 수 있게 비운다 — 안 비우면 change 가 안 난다.
       if (inputRef.current) inputRef.current.value = ''
       const started = await objectApi.importPhotos(type.slug, file, { field, existing })
@@ -151,8 +191,8 @@ export function PhotoImportDialog({ type, defs, onClose, onApplied }: Props) {
             <code>P-100</code> 폴더에 담습니다.
           </li>
           <li>
-            사진(PNG · JPEG · GIF · WebP)만 업로드합니다. 한 장은 50MB, zip 하나는 서버의 작업
-            파일 상한(기본 100MB) · 2,000개까지 — 넘으면 나눠 업로드하세요.
+            사진(PNG · JPEG · GIF · WebP)만 업로드합니다. 한 장은 50MB, zip 하나는{' '}
+            {shownLimit(maxBytes)} · 2,000개까지 — 넘으면 나눠 업로드하세요.
           </li>
           <li>
             관리하는 부서의 객체에만 업로드됩니다. 수정할 수 없는 객체는 계획에 「권한 없음」 으로

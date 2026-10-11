@@ -4,7 +4,7 @@ import uuid
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from app.modules.jobs.schemas import JobOut
 from app.modules.metrics.spec import MetricSpec
@@ -113,6 +113,41 @@ class PlanIn(BaseModel):
     spec: MetricSpec
 
 
+class RuleTakenOut(BaseModel):
+    rule: int
+    """앞 규칙의 차례(1 부터)."""
+    count: int
+
+
+class RuleCountOut(BaseModel):
+    """계획의 규칙 하나(ADR 0015)."""
+
+    label: str
+    matched: int
+    """조건에 맞는 기록 — 앞 규칙과 상관없이."""
+    won: int
+    """이 규칙이 붙인 기록 — 첫 일치. 셀에 드는 수다."""
+    taken_by: list[RuleTakenOut]
+    """맞는데 앞 규칙이 가져간 것 — 규칙마다."""
+    blocked: bool
+    """맞는 기록은 있는데 한 건도 안 남는다(막힌 규칙)."""
+
+
+class RulePlanOut(BaseModel):
+    """계획의 규칙 기준 하나 — 규칙마다의 수 · 「기타」 의 수. 표본이면 `sampled`."""
+
+    name: str
+    label: str
+    fingerprint: str
+    """규칙 판의 지문 — 계산 기록의 `rules[].fingerprint` 와 같은 값이다."""
+    rules: list[RuleCountOut]
+    other: str
+    other_count: int
+    seen: int
+    """센 기록 수(표본이면 표본의 수) — 몫의 분모."""
+    sampled: bool
+
+
 class PlanOut(BaseModel):
     ok: bool
     errors: list[str]
@@ -124,12 +159,26 @@ class PlanOut(BaseModel):
     dims: list[DimOut]
     period_from: str | None
     period_to: str | None
+    rules: list[RulePlanOut] = Field(default_factory=list)
+    """규칙 기준마다 규칙별 수 · 막힌 규칙 · 기타의 몫(ADR 0015)."""
 
 
 class MetricSavedOut(BaseModel):
     metric: MetricOut
     job: JobOut | None
     """`recompute=true` 로 저장했으면 넣은 작업."""
+
+
+class RulesVersionOut(BaseModel):
+    """규칙 판 — 규칙(차례 포함)의 지문과 그 규칙을 저장한 사람 · 때."""
+
+    name: str
+    """규칙 기준의 이름."""
+    fingerprint: str
+    rules: int
+    """규칙 수."""
+    changed_at: datetime | None = None
+    changed_by: str | None = None
 
 
 class MetricRunOut(BaseModel):
@@ -152,6 +201,15 @@ class MetricRunOut(BaseModel):
     """증분이 다시 센 기간(시작일, 날짜를 못 읽은 칸은 null)."""
     note: str = ""
     """전량이면 왜 전량이었나, 증분이면 바뀐 기록 수."""
+    rules: list[RulesVersionOut] = Field(default_factory=list)
+    """이 계산이 쓴 **규칙 판**(규칙 기준마다 — ADR 0015). 지난달과 왜 다른지 가린다."""
+
+    @model_validator(mode="after")
+    def _rules_of_stats(self) -> MetricRunOut:
+        if not self.rules:
+            found = (self.stats or {}).get("rules") or []
+            self.rules = [RulesVersionOut.model_validate(one) for one in found]
+        return self
 
 
 # --- 읽기 ---------------------------------------------------------------------------
@@ -190,6 +248,9 @@ class CellOut(BaseModel):
     drill: DrillOut
     value_drill: DrillOut | None = None
     """조건 비율이면 조건에 맞는 기록(값)의 목록 — `drill` 은 셀의 기록 전부(분모)."""
+    composition: float | None = None
+    """구성비를 물었으면(`composition=<기준>`) 그 기준의 값들 사이의 몫(%) — 나머지 칸(기간 ·
+    코호트 · 다른 기준)이 같은 셀끼리 합이 100. 건수 · 합계의 몫이다(비율의 몫이 아니다)."""
 
 
 class DenominatorOut(BaseModel):
@@ -243,6 +304,8 @@ class TableOut(ReadHeader):
     cells: list[CellOut]
     total_count: int
     total_value: float | None
+    composition: str | None = None
+    """구성비를 낸 기준 — 셀의 `composition` 이 그 기준의 몫이다."""
 
 
 class PointOut(BaseModel):
@@ -257,6 +320,8 @@ class PointOut(BaseModel):
     """한 해 전 같은 기간의 값."""
     closed: bool
     drill: DrillOut
+    composition: float | None = None
+    """구성비를 물었으면 그 기간의 선들(모든 값) 사이의 몫(%)."""
 
 
 class LineOut(BaseModel):
@@ -269,6 +334,8 @@ class SeriesOut(ReadHeader):
     split: str | None
     lines: list[LineOut]
     lines_truncated: bool
+    composition: bool = False
+    """점마다 그 기간의 구성비(%)가 실렸나."""
 
 
 class CohortCellOut(BaseModel):

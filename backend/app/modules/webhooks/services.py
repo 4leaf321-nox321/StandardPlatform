@@ -105,7 +105,11 @@ def _type_slug_of(db: Session, one: events.ChangeEvent) -> str | None:
         except ValueError:
             object_id = None
     if object_id is None:
-        return None
+        # 작업의 요약 한 건(`jobs/services._summary_event`)은 대상 객체가 없다 — 그 작업의
+        # 타입을 실어 보낸다. 없으면 타입을 정한 웹훅 · 코어만 받는 웹훅에 아무 타입의 일괄
+        # 입력이나 다 갔다.
+        named = one.changes.get("type_slug")
+        return str(named) if named else None
     row = db.execute(
         select(ObjectType.slug)
         .join(ObjectInstance, ObjectInstance.type_id == ObjectType.id)

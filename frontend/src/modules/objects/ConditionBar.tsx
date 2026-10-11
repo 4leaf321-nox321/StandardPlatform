@@ -5,6 +5,10 @@
  * 연산은 칸의 종류가 정한다(숫자·날짜는 범위, 선택은 「그 중 하나」, 모두 「비어 있음」).
  * 서버 `objects/conditions.py` 의 표와 같다 — 어긋나면 서버가 422 로 말한다.
  *
+ * **제외 조건**(ADR 0015) — 조건 묶음 하나를 부정한다: 「(A 이고 B) 인 것은 뺀다」. 「조건 추가」 의
+ * 「넣을 곳」 에서 고르고, 묶음은 테두리 안의 칩들로 선다. 지표의 규칙 기준이 「앞 규칙에 안 맞음」
+ * 을 이것으로 적어 「N건 보기」 가 셀의 수와 정확히 같다. 주소는 `nf<번호>.<칸>.<연산>`.
+ *
  * 전체를 OR 로 잇는 트리는 안 만든다. 화면에 그릴 수 없고, 그려도 사람이 못 읽는다.
  */
 
@@ -126,6 +130,23 @@ interface ConditionBarProps {
   refLabels?: Record<string, string>
   /** 이어진 것 너머의 칸(`/objects/{slug}/fields`). */
   linked?: LinkedField[]
+  /**
+   * 제외 조건을 걸 수 있나 — 목록은 된다. 지표의 거르기 · 규칙의 조건은 보통 조건만 받는다
+   * (규칙 기준의 건 보기가 「앞 규칙에 안 맞음」 을 제외 묶음으로 적으므로 그 안에 또 부정을 둘 수
+   * 없다).
+   */
+  allowExclude?: boolean
+  /** 「조건 추가」 단추의 이름 — 한 화면에 조건 줄이 여럿이면 어느 것인지 말한다. */
+  addLabel?: string
+}
+
+/** 제외 묶음 번호들 — 걸린 차례대로. */
+function groupsOf(conditions: Condition[]): number[] {
+  const out: number[] = []
+  for (const one of conditions) {
+    if (one.exclude && !out.includes(one.exclude)) out.push(one.exclude)
+  }
+  return out
 }
 
 export function ConditionBar({
@@ -134,6 +155,8 @@ export function ConditionBar({
   onChange,
   refLabels = {},
   linked = NO_LINKED,
+  allowExclude = true,
+  addLabel = '조건 추가',
 }: ConditionBarProps) {
   const fields = useMemo(() => fieldsOf(defs, linked), [defs, linked])
   // 고르면서 본 이름 — 이어진 것 너머의 참조는 목록 행에 이름이 안 실려 온다.
@@ -190,20 +213,43 @@ export function ConditionBar({
     return `${label} ${OP_SIGN[one.op]} ${shown}`
   }
 
+  const groups = groupsOf(conditions)
+  const chip = (one: Condition, index: number) => (
+    <span
+      key={`${one.exclude ?? 0}.${one.field}.${one.op}.${index}`}
+      className="bg-muted inline-flex items-center gap-1 rounded-full py-0.5 pr-1 pl-2.5 text-xs"
+      title={`${byKey.get(one.field)?.label ?? one.field} ${OP_LABEL[one.op]} ${one.value}`}
+    >
+      {describe(one)}
+      <button
+        type="button"
+        className="hover:bg-background rounded-full p-0.5"
+        aria-label={`${one.exclude ? `제외 묶음 ${one.exclude} 의 ` : ''}조건 삭제: ${describe(one)}`}
+        onClick={() => onChange(conditions.filter((_, i) => i !== index))}
+      >
+        <X className="size-3" />
+      </button>
+    </span>
+  )
+
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {conditions.map((one, index) => (
+      {conditions.map((one, index) => (one.exclude ? null : chip(one, index)))}
+      {groups.map((group) => (
         <span
-          key={`${one.field}.${one.op}.${index}`}
-          className="bg-muted inline-flex items-center gap-1 rounded-full py-0.5 pr-1 pl-2.5 text-xs"
-          title={`${byKey.get(one.field)?.label ?? one.field} ${OP_LABEL[one.op]} ${one.value}`}
+          key={`group-${group}`}
+          role="group"
+          aria-label={`제외 묶음 ${group}`}
+          className="border-destructive/50 inline-flex flex-wrap items-center gap-1 rounded-full border border-dashed py-0.5 pr-1 pl-2 text-xs"
+          title="이 묶음의 조건에 모두 맞는 것은 뺍니다"
         >
-          {describe(one)}
+          <span className="text-destructive font-medium">제외</span>
+          {conditions.map((one, index) => (one.exclude === group ? chip(one, index) : null))}
           <button
             type="button"
             className="hover:bg-background rounded-full p-0.5"
-            aria-label={`조건 삭제: ${describe(one)}`}
-            onClick={() => onChange(conditions.filter((_, i) => i !== index))}
+            aria-label={`제외 묶음 ${group} 삭제`}
+            onClick={() => onChange(conditions.filter((one) => one.exclude !== group))}
           >
             <X className="size-3" />
           </button>
@@ -213,13 +259,14 @@ export function ConditionBar({
         <PopoverTrigger asChild>
           <Button size="sm" variant="outline" className="h-7">
             <Plus className="mr-1 size-3.5" />
-            조건 추가
+            {addLabel}
           </Button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-80 p-3">
           <ConditionEditor
             fields={fields}
             onNames={remember}
+            groups={allowExclude ? groups : null}
             onAdd={(next) => {
               onChange([...conditions, next])
               setOpen(false)
@@ -244,10 +291,16 @@ interface ConditionEditorProps {
   fields: Field[]
   onAdd: (next: Condition) => void
   onNames?: (names: Record<string, string>) => void
+  /** 걸린 제외 묶음 번호들 — 있으면(빈 목록도) 「넣을 곳」 을 고른다. null 이면 보통 조건만. */
+  groups?: number[] | null
 }
 
+/** 「넣을 곳」 — 보통 조건 · 새 제외 묶음 · 걸린 제외 묶음. */
+const PLAIN = 'plain'
+const NEW_GROUP = 'new'
+
 /** 칸 → 연산 → 값. 연산과 값 입력은 칸의 종류를 따라간다. */
-function ConditionEditor({ fields, onAdd, onNames }: ConditionEditorProps) {
+function ConditionEditor({ fields, onAdd, onNames, groups = null }: ConditionEditorProps) {
   // **치거나 훑는다.** 이어진 것을 두 걸음까지 늘어놓으면(「모델 › 과제 › 프로젝트」) 큰 타입은
   // 칸이 수백이다 — 펼쳐 놓고 눈으로 찾게 하지 않는다. 자기 칸(제목 없음)이 먼저, 이어진 것은
   // 걸음마다 제목 아래로.
@@ -267,6 +320,7 @@ function ConditionEditor({ fields, onAdd, onNames }: ConditionEditorProps) {
   const [op, setOp] = useState<ConditionOp>(ops[0])
   const [value, setValue] = useState('')
   const [picked, setPicked] = useState<string[]>([])
+  const [target, setTarget] = useState(PLAIN)
 
   // 칸이 바뀌면 연산·값을 그 칸에 맞게 되돌린다.
   useEffect(() => {
@@ -326,11 +380,36 @@ function ConditionEditor({ fields, onAdd, onNames }: ConditionEditorProps) {
           />
         </div>
       )}
+      {groups && (
+        <label className="block space-y-1">
+          <span className="text-muted-foreground text-xs">넣을 곳</span>
+          <Select value={target} onValueChange={setTarget}>
+            <SelectTrigger size="sm" className="w-full" aria-label="넣을 곳">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={PLAIN}>조건 — 맞는 것만</SelectItem>
+              <SelectItem value={NEW_GROUP}>제외 — 맞는 것을 뺀다(새 묶음)</SelectItem>
+              {groups.map((group) => (
+                <SelectItem key={group} value={String(group)}>
+                  제외 묶음 {group} 에 더함(그 묶음의 조건과 모두 맞는 것을 뺀다)
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+      )}
       <div className="flex justify-end">
         <Button
           size="sm"
           disabled={!ready}
-          onClick={() => onAdd({ field: field.key, op, value: needsValue ? finalValue : '' })}
+          onClick={() => {
+            const made: Condition = { field: field.key, op, value: needsValue ? finalValue : '' }
+            if (groups && target !== PLAIN) {
+              made.exclude = target === NEW_GROUP ? Math.max(0, ...groups) + 1 : Number(target)
+            }
+            onAdd(made)
+          }}
         >
           걸기
         </Button>

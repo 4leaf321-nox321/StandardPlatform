@@ -56,10 +56,20 @@ const TOKEN: Record<string, { label: string; tone: Tone }> = {
   revoked: { label: '폐기', tone: 'neutral' },
 }
 
+/** 느린 요청 · 큰 응답(ADR 0026) — 경로 틀 한 줄의 표시. */
+const PERFORMANCE: Record<string, { label: string; tone: Tone }> = {
+  // **느린 것은 고장이 아니라 주의다** — 빨강은 멎은 것(실패 · 오류)의 색이다.
+  slow: { label: '느림', tone: 'warn' },
+  large: { label: '큼', tone: 'warn' },
+  // 파일 응답은 크고 받는 쪽 속도를 타는 것이 정상이다 — 문턱 판정에서 뺀다는 표시.
+  file: { label: '파일', tone: 'neutral' },
+}
+
 const TABLES = {
   account: ACCOUNT,
   object: OBJECT,
   notice: NOTICE,
+  performance: PERFORMANCE,
   token: TOKEN,
   workspace: WORKSPACE,
 } as const

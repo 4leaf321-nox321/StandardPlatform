@@ -62,7 +62,7 @@ import zipfile
 import zlib
 from collections.abc import Callable
 from dataclasses import asdict, dataclass
-from typing import Any
+from typing import Any, BinaryIO
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -80,8 +80,10 @@ from app.shared.errors import AppError, Conflict, NotFound, code
 
 #: zip 안의 항목 수(폴더 포함) 상한 — 풀기 전에 본다.
 MAX_ENTRIES = 2000
-#: 머리에 적힌 풀린 크기의 합 상한. 작업 파일(zip)은 `job_file_max_bytes`(기본 100MB)까지인데,
-#: 사진(JPEG)은 거의 안 줄어드니 정상인 zip 은 이것에 한참 못 미친다 — 넘는 것은 폭탄이다.
+#: 머리에 적힌 풀린 크기의 합 상한 — **이것과 zip 크기의 두 배 중 큰 것**(`_unpacked_cap`).
+#: 사진(JPEG)은 거의 안 줄어드니 정상인 zip 은 풀어도 제 크기 남짓이다 — 넘는 것은 폭탄이다.
+#: 고정 1GB 이던 때는 zip 상한이 100MB 라 넉넉했는데, 2GB 로 올리면서(`job_photos_max_bytes`,
+#: 2026-10-10) 1GB 를 넘는 정상 zip 이 폭탄으로 거절될 뻔했다 — 그래서 zip 크기에 비례한다.
 MAX_TOTAL_BYTES = 1024 * 1024 * 1024
 #: 칸에 이미 사진이 있을 때 — 건너뜀(기본) · 교체 · 추가.
 EXISTING_MODES = ("skip", "replace", "add")
@@ -218,10 +220,21 @@ def _decoded(raw: bytes) -> str:
     return raw.decode("cp437")
 
 
-def _open(data: bytes) -> tuple[zipfile.ZipFile, list[_Entry]]:
-    """zip 을 열고 항목을 이름 차례로 — **풀기 전에** 수 · 크기를 본다."""
+def _unpacked_cap(packed: int) -> int:
+    return max(MAX_TOTAL_BYTES, 2 * packed)
+
+
+def _open(source: bytes | BinaryIO) -> tuple[zipfile.ZipFile, list[_Entry]]:
+    """zip 을 열고 항목을 이름 차례로 — **풀기 전에** 수 · 크기를 본다.
+
+    `source` 는 파일이다(작업 파일이 공용 저장소에 있으면 그 파일 — 2GB 를 통째로 메모리에
+    올리지 않는다). zip 은 끝의 목차를 먼저 읽고 항목마다 그 자리로 찾아가 읽는다."""
+    stream = io.BytesIO(source) if isinstance(source, bytes) else source
+    stream.seek(0, io.SEEK_END)
+    packed = stream.tell()
+    stream.seek(0)
     try:
-        archive = zipfile.ZipFile(io.BytesIO(data))
+        archive = zipfile.ZipFile(stream)
         infos = archive.infolist()
     except (*_BROKEN, zipfile.LargeZipFile, ValueError, struct.error):
         raise Conflict(
@@ -237,12 +250,13 @@ def _open(data: bytes) -> tuple[zipfile.ZipFile, list[_Entry]]:
             details={"entries": len(infos), "max_entries": MAX_ENTRIES},
         )
     total = sum(max(info.file_size, 0) for info in infos)
-    if total > MAX_TOTAL_BYTES:
+    cap = _unpacked_cap(packed)
+    if total > cap:
         raise Conflict(
             code("OBJECTS", 124),
-            f"zip 의 압축을 풀면 {total // (1024 * 1024):,}MB 입니다. 한 번에 "
-            f"{MAX_TOTAL_BYTES // (1024 * 1024):,}MB 까지 — 나눠 업로드하세요.",
-            details={"uncompressed_bytes": total, "max_bytes": MAX_TOTAL_BYTES},
+            f"zip 의 압축을 풀면 {total // (1024 * 1024):,}MB 입니다. 이 zip 은 "
+            f"{cap // (1024 * 1024):,}MB 까지 — 나눠 업로드하세요.",
+            details={"uncompressed_bytes": total, "max_bytes": cap},
         )
     entries = [_Entry(info, entry_name(info)) for info in infos if not info.is_dir()]
     entries.sort(key=lambda one: one.name)
@@ -508,11 +522,12 @@ def run(
     db: Session,
     user: User,
     params: dict[str, Any],
-    data: bytes,
+    data: bytes | BinaryIO,
     *,
     progress: Progress,
 ) -> dict[str, Any]:
-    """작업 `objects_photos` 의 본문 — 계획, 또는 (`apply`) 지문을 확인하고 적용.
+    """작업 `objects_photos` 의 본문 — 계획, 또는 (`apply`) 지문을 확인하고 적용. `data` 는 zip
+    파일(열린 파일 — `jobs.files.open_file`)이나 그 바이트.
 
     **커밋하지 않는다** — 워커가 끝에서 한 번 한다. 적용 중 실패하면 붙인 행은 모두 무르고,
     먼저 저장소에 쓴 파일은 아무도 안 가리키는 채 남아 고아 정리가 하루 뒤에 지운다.

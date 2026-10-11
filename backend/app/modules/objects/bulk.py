@@ -906,6 +906,10 @@ class _Index:
     fresh: dict[int, dict[str, Any]] = field(default_factory=dict)
     """새로 만드는 줄 번호 → 검증한 속성(기본값까지). 적용이 그대로 넣는다 — 같은 값을 같은
     정의로 다시 검증하던 자리다."""
+    checked: dict[int, dict[str, Any]] = field(default_factory=dict)
+    """고치는 줄 번호 → 계획이 검증한 속성(지금 값 + 패치). 사람이 고친 칸을 비켜 가지 않고 그
+    객체를 이 파일의 앞줄이 고치지 않았으면 적용이 그대로 쓴다 — 5만 줄 고치기에서 같은 검증을
+    두 번 하던 자리다(2026-10-10)."""
 
 
 def _read_index(
@@ -1604,6 +1608,7 @@ def _plan_row(
     if patch:
         merged = merge_properties(existing.properties or {}, patch)
         cleaned = validate_properties(defs, merged)
+        index_data.checked[index] = cleaned
         _require_refs(refs, index_data.ref_defs, cleaned)
         _unique_clash(
             object_type,
@@ -1690,37 +1695,56 @@ WRITE_EVERY = 5000
 
 
 class _Writes:
-    """적용이 **새로** 쓰는 줄 — 객체(또는 선) · 감사 · 되돌릴 기록을 모았다가 COPY 로 넣는다
-    (`shared/copyin.py`). 고치는 줄은 여전히 ORM 이 쓴다(속성 · 이력 표시를 객체에서 읽고
-    고친다) — 그 줄의 감사 · 되돌릴 기록만 여기로 온다.
+    """적용이 쓰는 줄 — **새** 객체(또는 선) · 감사 · 되돌릴 기록을 모았다가 COPY 로 넣고,
+    **고친** 객체(선)는 모았다가 덩어리 UPDATE 로 쓴다(`shared/copyin.py`). 고치는 줄의 값은
+    예전처럼 ORM 객체에서 읽고 고친다(속성 · 이력 표시 · 별칭의 「바뀐 때」) — 쓰기만 묶는다.
 
     ⚠️ 왜: 줄마다 ORM 객체를 두면 flush 가 그것을 1,000줄짜리 `INSERT … RETURNING` 으로
        보내는데, psycopg 가 그 긴 문장을 덩어리마다 다시 쪼갰다 — 5만 줄 객체 적용 40초 중
        flush 가 25초, 관계 적용은 22~25초 중 대부분이었다(2026-10-09 실측).
+    ⚠️ 고친 줄도 flush 에 맡기면 줄마다 UPDATE 한 문장이고, `objects` 의 문장 단위 트리거(참조
+       색인)가 **줄마다** 돈다 — 5만 줄 한 칸 고치기 41초 중 UPDATE 가 25초였다(2026-10-10).
+       덩어리 UPDATE 는 감사 기록보다 **먼저** 쓴다 — `audit.Batch.write` 의 flush 가 고친
+       객체를 줄마다 보내기 전에.
     ⚠️ 새 줄이 **먼저** 들어간다 — 별칭(외래키)은 그 뒤에 붙인다. 감사 기록은 부른 차례
        그대로 들어간다 — 그래서 모아 둔 줄보다 **뒤에** 부른 `audit.record`(ORM)가 있으면 그
        앞에서 쓴다(관계의 원 표 선 · 끊을 선). 되돌릴 기록의 차례(`seq`)는 부를 때 매긴다
        (`journal.Batch`).
     ⚠️ 표를 보는 검사(개수 제약 · 순환)는 쓰지 않은 줄을 못 본다 — 그 앞에서 `write` 한다.
+
+    검토함의 「지워진 것을 가리키는 칸」 도 이 길로 쓴다(`objects/review.py` 의
+    `_write_ref_changes` — 줄당 5ms 이던 일괄 수정의 쓰기를 갈아 끼웠다, 2026-10-10).
     """
 
     def __init__(self, db: Session, table: Any) -> None:
         self.db = db
         self.table = cast("Table", table)
         self.rows: list[dict[str, Any]] = []
+        self.changed: list[Any] = []
+        """고친 ORM 객체(선) — 바뀐 칸이 없는 것은 `update_rows` 가 건너뛴다(flush 와 같다)."""
         self.audit = audit.Batch(db)
         self.undo = journal.Batch(db)
 
     def maybe(self) -> None:
         """`WRITE_EVERY` 를 넘었으면 넣는다."""
-        if max(len(self.rows), len(self.audit.rows), len(self.undo.rows)) >= WRITE_EVERY:
+        if (
+            max(len(self.rows), len(self.changed), len(self.audit.rows), len(self.undo.rows))
+            >= WRITE_EVERY
+        ):
             self.write()
 
     def write(self) -> None:
         copyin.copy_rows(self.db, self.table, self.rows)
         self.rows.clear()
+        self.write_changed()
         self.audit.write()
         self.undo.write()
+
+    def write_changed(self) -> None:
+        """고친 객체만 지금 쓴다 — 곧 flush 할 자리(별칭 맞추기) 앞에서. flush 는 고친 객체를
+        줄마다 보내므로, 그 전에 덩어리로 써 두면 flush 에는 그 뒤에 고친 것만 남는다."""
+        copyin.update_rows(self.db, self.changed)
+        self.changed.clear()
 
 
 def apply_objects(
@@ -1770,8 +1794,11 @@ def apply_objects(
     # 새로 만든 객체의 별칭은 **모았다가 한 번에** 넣는다(아래) — 객체가 먼저 들어가야
     # 외래키가 선다.
     fresh_aliases: list[tuple[uuid.UUID, list[aliases.Incoming]]] = []
-    # **새 줄은 모았다가 COPY 로 넣는다**(`_Writes`).
+    # **새 줄은 모았다가 COPY 로, 고친 줄은 덩어리 UPDATE 로 쓴다**(`_Writes`).
     writes = _Writes(db, ObjectInstance.__table__)
+    # 이 적용에서 이미 고친 객체 — 같은 객체를 두 줄이 가리키면(id 로 하나, 식별자로 하나)
+    # 뒷줄은 앞줄이 고친 값 위에 다시 맞춘다(계획이 검증한 것은 앞줄 전의 값이다).
+    touched: set[uuid.UUID] = set()
 
     for row_plan, row in zip(plan.rows, rows, strict=True):
         _tick(on_progress, "적용", row_plan.row, len(rows))
@@ -1875,6 +1902,9 @@ def apply_objects(
             free, _taken, _double = _split_free(index_data, asked, exclude_id=target.id)
             before_names = [one.value for one in index_data.human.get(target.id, [])]
             kept = aliases.dump(index_data.human.get(target.id, []))
+            # 별칭 맞추기는 끝에서 flush 한다 — 그 앞에 모아 둔 고친 객체를 덩어리로 쓴다(안
+            # 쓰면 그 flush 가 앞줄들을 줄마다 보낸다).
+            writes.write_changed()
             _was, became = aliases.set_human(
                 db, target, object_type, _only(asked, free), mode=aliases_mode
             )
@@ -1900,15 +1930,21 @@ def apply_objects(
                 index_data, [aliases.Incoming(value=keep_old_key)], exclude_id=target.id
             )
             if free:
+                writes.write_changed()
                 aliases.set_human(db, target, object_type, free, mode="add")
                 _remember(index_data, free, target.id)
         if patch:
             guarded = {_bare(one) for one in guard if one.startswith(humanedits.PROP)}
             sending = {key: value for key, value in patch.items() if key not in guarded}
-            if sending:
+            checked = index_data.checked.get(row_plan.row)
+            if sending and checked is not None and not guarded and target.id not in touched:
+                # 계획이 **같은 값 · 같은 패치**를 같은 정의로 검증했다 — 그대로 쓴다.
+                target.properties = checked
+            elif sending:
                 target.properties = validate_properties(
                     defs, merge_properties(target.properties or {}, sending)
                 )
+        touched.add(target.id)
         after = audit_state(target)
         if human_edits == "overwrite":
             # 사람이 「덮어라」 고 정했다 — 덮은 칸은 이제 파일의 값이니 표시를 지운다.
@@ -1933,6 +1969,7 @@ def apply_objects(
             changes=moved,
             reason="일괄 가져오기",
         )
+        writes.changed.append(target)
         writes.maybe()
 
     # 남은 것을 넣는다 — **묶음 한 줄(`object.import`)보다 먼저**: 감사의 차례(`seq`)는 넣는
@@ -3040,7 +3077,12 @@ def apply_relations(
             kind = kinds.get(edge.relation) or by_label[edge.relation]
             before = dict(edge.properties or {})
             was_note = edge.evidence_note or ""
-            defs = memo.defs.get(kind.slug) or relation_defs(db, kind)
+            # **`or` 로 잇지 않는다** — 속성 정의가 없는 종류는 빈 목록이라 거짓이고, 그러면
+            # 줄마다 정의를 다시 물었다(2만 줄 근거 고치기 14.7초 중 9초 남짓, 2026-10-10).
+            found_defs = memo.defs.get(kind.slug)
+            if found_defs is None:
+                found_defs = memo.defs[kind.slug] = relation_defs(db, kind)
+            defs = found_defs
             wanted = _relation_properties(db, kind, row, refs, fresh=False, defs=defs)
             if wanted:
                 edge.properties = validate_properties(defs, {**before, **wanted})
@@ -3067,6 +3109,7 @@ def apply_relations(
                 changes={"properties": {"before": before, "after": edge.properties}},
                 reason="일괄 가져오기",
             )
+            writes.changed.append(edge)
             writes.maybe()
             continue
         if row_plan.action != "create":

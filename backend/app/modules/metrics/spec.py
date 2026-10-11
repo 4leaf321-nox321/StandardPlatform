@@ -11,6 +11,8 @@
     time         {address: properties.<날짜 칸>, grain: day|week|month|quarter|year}
     cohort       같은 모양(선택) — 경과(age)는 이 단위. 시간 칸과 단위가 같아야 한다
     dimensions   [{name, address, grain?}] 8개까지 — 주소는 통계 · 조건과 같다(걸음 셋까지)
+                 | {name, rules: [{label, when: [{field, op, value}]}], else, label?} — 규칙
+                 기준(ADR 0015): 위에서부터 **처음 맞는 규칙**의 이름이 값, 안 맞으면 `else`
     filters      [{field, op, value}] — 목록 조건과 같은 뜻
     denominator  {metric, on: [기준 이름], time: period|cohort|null, per}
     settle_days  이만큼 지난 기간은 「닫힘」
@@ -27,14 +29,33 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import math
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import Select, and_, case, func, literal, select, text
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    SerializerFunctionWrapHandler,
+    model_serializer,
+)
+from sqlalchemy import (
+    Select,
+    String,
+    and_,
+    case,
+    false,
+    func,
+    literal,
+    literal_column,
+    select,
+    text,
+)
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.orm import Session
 
@@ -92,6 +113,21 @@ SAMPLE_ROWS = 200_000
 #: 표본을 겹친 넷(1/8 · 1/4 · 1/2 · 전부)으로 나눠 조합 수가 늘어나는 모양을 맞춘다.
 SAMPLE_LEVELS = 4
 
+#: 규칙 기준(ADR 0015)의 값 종류 — 응답의 `kind` 와 같다.
+RULE_KIND = "rule"
+#: 규칙은 스물까지, 규칙마다 조건은 열까지. 「기타」 의 건 보기가 규칙마다 제외 묶음 하나를
+#: 쓰고 (목록 조건의 묶음 번호는 두 자리), 규칙이 그보다 많으면 사람이 차례를 못 읽는다.
+MAX_RULES = 20
+MAX_RULE_CONDITIONS = 10
+#: 성격 이름의 길이 — 셀의 기준 값으로 그대로 저장된다.
+RULE_LABEL_MAX = 40
+DEFAULT_ELSE = "기타"
+#: 「기타」 의 몫이 이보다 크면 계획이 경고한다 — 규칙이 모자란 것이다.
+ELSE_SHARE_WARN = 0.2
+#: 규칙 조건의 별칭 번호를 규칙마다 이만큼 띄운다 — 한 `CASE` 안의 EXISTS 들이 같은 별칭
+#: 이름을 갖지 않게(`conditions.clauses(offset=)`).
+_RULE_ALIAS_STEP = 100
+
 
 class TimeAxisIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -100,20 +136,57 @@ class TimeAxisIn(BaseModel):
     grain: str = Field(min_length=1, max_length=10)
 
 
-class DimensionIn(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    name: str = Field(min_length=1, max_length=32)
-    address: str = Field(min_length=1, max_length=200)
-    grain: str | None = Field(default=None, max_length=10)
-
-
 class FilterIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     field: str = Field(min_length=1, max_length=200)
     op: str = Field(min_length=1, max_length=12)
     value: str = Field(default="", max_length=2000)
+
+
+class RuleIn(BaseModel):
+    """규칙 하나 — 조건 전부(AND)에 맞으면 이 이름. 이름 · 조건 수의 상한은 계획이
+    말한다(여기서 막으면 422 본문이 계획의 오류 목록에 안 실린다)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    label: str = Field(default="", max_length=200)
+    when: list[FilterIn] = Field(default_factory=list, max_length=100)
+
+
+class DimensionIn(BaseModel):
+    """기준 하나 — **주소**(칸)거나 **규칙**(ADR 0015)이다. 규칙 기준은 주소 · 기간 단위 없이
+    `rules` · `else`(어느 규칙에도 안 맞을 때의 이름, 기본 「기타」) · `label`(기준의 이름,
+    비우면 `name`)을 둔다."""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True, serialize_by_alias=True)
+
+    name: str = Field(min_length=1, max_length=32)
+    address: str | None = Field(default=None, max_length=200)
+    grain: str | None = Field(default=None, max_length=10)
+    rules: list[RuleIn] | None = Field(default=None, max_length=200)
+    """위에서부터 **처음 맞는 규칙**이 이긴다 — 차례가 뜻이다."""
+    else_: str | None = Field(default=None, alias="else", max_length=200)
+    label: str | None = Field(default=None, max_length=RULE_LABEL_MAX)
+
+    @model_serializer(mode="wrap")
+    def _compact(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """저장되는 JSON 을 그 종류의 것만으로 — 주소 기준은 예전 모양(`name` · `address` ·
+        `grain`) 그대로다. 빈 칸(`rules: null`)을 붙이면 고치지 않은 지표를 다시 저장하기만
+        해도 정의 지문이 바뀌어 전량으로 센다(`incremental.spec_hash`)."""
+        out = dict(handler(self))
+        for key in ("rules", "else", "label"):
+            if out.get(key) is None:
+                out.pop(key, None)
+        if self.rules is not None:
+            for key in ("address", "grain"):
+                if out.get(key) is None:
+                    out.pop(key, None)
+        return out
+
+    @property
+    def is_rule(self) -> bool:
+        return self.rules is not None or self.else_ is not None
 
 
 class DenominatorIn(BaseModel):
@@ -164,16 +237,36 @@ class TimeAxis:
 
 
 @dataclass
+class RuleSet:
+    """규칙 기준을 지은 것 — 규칙마다 이름 · 조건 · 그 조건의 SQL, 「기타」 의 이름, 지문."""
+
+    labels: list[str]
+    conds: list[list[conditions.Condition]]
+    clauses: list[Any]
+    other: str
+    fingerprint: str
+
+    def index_of(self, label: str) -> int | None:
+        """그 이름의 규칙 차례(0 부터). 「기타」 · 모르는 이름은 None."""
+        return self.labels.index(label) if label in self.labels else None
+
+
+@dataclass
 class Dim:
     name: str
     address: str
     grain: str | None
     axis: axes.Axis
+    rules: RuleSet | None = None
+    """규칙 기준이면 그 규칙들(ADR 0015) — 주소는 비어 있다."""
 
     @property
     def signature(self) -> tuple[str, ...]:
         """값의 종류 — 분모와 짝지을 때 이것이 같아야 한다. 참조는 상대 타입, 관계 자체는
-        상대가 한 타입이면 그 타입(참조와 같은 값), 아니면 주소, 나머지는 종류와 단위."""
+        상대가 한 타입이면 그 타입(참조와 같은 값), 아니면 주소, 나머지는 종류와 단위. 규칙
+        기준은 **같은 규칙**(지문)끼리만 — 이름이 같아도 규칙이 다르면 같은 값이 아니다."""
+        if self.rules is not None:
+            return (RULE_KIND, self.rules.fingerprint)
         axis = self.axis
         if axis.kind == "object_ref" and axis.ref_def is not None:
             return ("ref", axis.ref_def.ref_type_slug or "")
@@ -237,6 +330,32 @@ class DimInfo:
 
 
 @dataclass
+class RuleCount:
+    """계획의 규칙 하나 — 조건에 맞는 기록(`matched`, 앞 규칙과 상관없이)과 그중 이 규칙이
+    붙인 기록(`won`, 첫 일치). 차이는 앞 규칙들이 가져간 것(`taken_by` — 규칙 차례 → 건수)."""
+
+    label: str
+    matched: int
+    won: int
+    taken_by: dict[int, int] = field(default_factory=dict)
+
+
+@dataclass
+class RulePlan:
+    """계획의 규칙 기준 하나 — 규칙마다의 수 · 「기타」 의 수. 표본이면 `sampled`."""
+
+    name: str
+    label: str
+    fingerprint: str
+    rules: list[RuleCount]
+    other: str
+    other_count: int
+    seen: int
+    """센 기록 수(표본이면 표본의 수) — 몫의 분모."""
+    sampled: bool
+
+
+@dataclass
 class Plan:
     ok: bool
     errors: list[str]
@@ -247,6 +366,7 @@ class Plan:
     estimated_cells: int | None = None
     period_from: str | None = None
     period_to: str | None = None
+    rules: list[RulePlan] = field(default_factory=list)
 
     @property
     def overlap(self) -> bool:
@@ -330,6 +450,15 @@ def _dimension(
         raise _bad(f"기준 이름으로 쓸 수 없는 예약어입니다: {name}")
     if name in seen:
         raise _bad(f"기준 이름이 겹칩니다: {name}")
+    if dim_in.is_rule:
+        return _rule_dimension(plan, dim_in)
+    if dim_in.label is not None:
+        raise _bad(
+            f"기준 「{name}」 의 이름(label)은 규칙 기준에만 둡니다 — 주소 기준의 이름은 칸의 "
+            "이름입니다."
+        )
+    if not dim_in.address:
+        raise _bad(f"기준 「{name}」 에 주소(address)나 규칙(rules)이 있어야 합니다.")
     if dim_in.address == axes.TYPE_FIELD[0]:
         raise _bad("「타입」 축은 인터페이스 목록의 것입니다 — 지표의 원천은 타입 하나입니다.")
     if dim_in.address in visits_module.ADDRESSES:
@@ -352,6 +481,108 @@ def _dimension(
     if axis.kind in axes.DATE_KINDS and dim_in.grain is None:
         raise _bad(f"날짜 기준 「{axis.label}」 에는 기간 단위(grain)가 필요합니다.")
     return Dim(name, dim_in.address, axis.grain, axis)
+
+
+def rules_fingerprint(dim_in: DimensionIn) -> str:
+    """규칙 판의 지문 — 규칙(차례 · 이름 · 조건)과 「기타」 의 이름. 기준 이름 · 보여 줄 이름은
+    안 든다(바꿔도 세는 값이 같다)."""
+    body = json.dumps(
+        {
+            "rules": [
+                {
+                    "label": rule.label.strip(),
+                    "when": [[one.field, one.op, one.value] for one in rule.when],
+                }
+                for rule in dim_in.rules or []
+            ],
+            "else": (dim_in.else_ if dim_in.else_ is not None else DEFAULT_ELSE).strip(),
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+    )
+    return hashlib.sha256(body.encode()).hexdigest()
+
+
+def _sql_text(value: str) -> Any:
+    """글자를 SQL 상수로 — 바인드 매개변수가 아니라. 규칙 기준의 `CASE` 는 고르는 칸과 묶는
+    칸에 두 번 서는데, 상수라야 두 식이 글자 그대로 같아 Postgres 가 같은 식으로 맞춰 본다."""
+    return literal_column("'" + value.replace("'", "''") + "'", String)
+
+
+def _rule_dimension(plan: axes.JoinPlan, dim_in: DimensionIn) -> Dim:
+    """규칙 기준(ADR 0015) — `CASE WHEN <규칙 1> THEN '…' WHEN <규칙 2> … ELSE '기타' END`.
+    **첫 일치가 이긴다.** 조건은 목록 조건과 같은 모양 · 같은 연산이다(`conditions.matches`) —
+    이어진 것 너머의 칸(EXISTS)도 기록마다 한 번이라 행이 불지 않는다."""
+    name = dim_in.name
+    if dim_in.address:
+        raise _bad(
+            f"규칙 기준 「{name}」 에는 주소(address)를 두지 않습니다 — 값은 규칙이 붙입니다."
+        )
+    if dim_in.grain:
+        raise _bad(f"규칙 기준 「{name}」 에는 기간 단위(grain)가 없습니다.")
+    rules = dim_in.rules or []
+    if not rules:
+        raise _bad(f"규칙 기준 「{name}」 에 규칙이 없습니다 — 하나 이상 둡니다.")
+    if len(rules) > MAX_RULES:
+        raise _bad(f"규칙 기준 「{name}」 의 규칙은 {MAX_RULES}개까지입니다({len(rules)}개).")
+    other = (dim_in.else_ if dim_in.else_ is not None else DEFAULT_ELSE).strip()
+    if not other:
+        raise _bad(f"규칙 기준 「{name}」 의 「기타」 이름이 비었습니다.")
+    if len(other) > RULE_LABEL_MAX:
+        raise _bad(f"「기타」 의 이름은 {RULE_LABEL_MAX}자까지입니다: {other!r}")
+    labels: list[str] = []
+    conds_all: list[list[conditions.Condition]] = []
+    clauses: list[Any] = []
+    for number, rule in enumerate(rules, 1):
+        label = rule.label.strip()
+        where = f"규칙 {number}" + (f" 「{label}」" if label else "")
+        if not label:
+            raise _bad(f"{where} 의 이름(성격)이 비었습니다.")
+        if len(label) > RULE_LABEL_MAX:
+            raise _bad(f"{where} 의 이름은 {RULE_LABEL_MAX}자까지입니다.")
+        if label == other:
+            raise _bad(
+                f"{where} 의 이름이 「기타」 의 이름과 같습니다 — 기타는 어느 규칙에도 안 "
+                "맞는 기록의 값입니다."
+            )
+        if label in labels:
+            raise _bad(
+                f"{where} 의 이름이 규칙 {labels.index(label) + 1} 과 같습니다 — 이름마다 "
+                "규칙 하나입니다. 한 칸 안의 「또는」 은 「그 중 하나(in)」 로 적습니다(두 "
+                "규칙이 한 셀이면 건 보기를 조건으로 정확히 적을 수 없다)."
+            )
+        if not rule.when:
+            raise _bad(
+                f"{where} 에 조건이 없습니다 — 조건 없는 규칙은 모든 기록에 맞아 뒤의 규칙이 "
+                "다 막힙니다."
+            )
+        if len(rule.when) > MAX_RULE_CONDITIONS:
+            raise _bad(f"{where} 의 조건은 {MAX_RULE_CONDITIONS}개까지입니다.")
+        pairs: set[tuple[str, str]] = set()
+        for one in rule.when:
+            if (one.field, one.op) in pairs:
+                raise _bad(
+                    f"{where} 에 같은 칸 · 같은 연산이 두 번 있습니다({one.field} {one.op}) — "
+                    "하나로 합칩니다(여러 값은 「그 중 하나(in)」)."
+                )
+            pairs.add((one.field, one.op))
+        conds = [conditions.Condition(one.field, one.op, one.value) for one in rule.when]
+        try:
+            found = conditions.matches(
+                plan.scope.defs, conds, plan.resolver, offset=number * _RULE_ALIAS_STEP
+            )
+        except AppError as caught:
+            raise _bad(f"{where}: {caught.message}") from caught
+        labels.append(label)
+        conds_all.append(conds)
+        clauses.append(found)
+    expr = case(
+        *[(found, _sql_text(label)) for found, label in zip(clauses, labels, strict=True)],
+        else_=_sql_text(other),
+    )
+    ruleset = RuleSet(labels, conds_all, clauses, other, rules_fingerprint(dim_in))
+    axis = axes.Axis(expr=expr, label=(dim_in.label or "").strip() or name, kind=RULE_KIND)
+    return Dim(name, "", None, axis, rules=ruleset)
 
 
 def _filters(
@@ -414,12 +645,16 @@ def _denominator(
         if name not in den_dims:
             raise _bad(f"분모 지표 「{found.label}」 에 그 기준이 없습니다: {name}")
         theirs = den_dims[name]
-        their_dim = Dim(
-            name,
-            theirs.address,
-            theirs.grain,
-            den_plan.axis(theirs.address, grain=theirs.grain),
-        )
+        if theirs.is_rule:
+            their_dim = _rule_dimension(den_plan, theirs)
+        else:
+            assert theirs.address is not None
+            their_dim = Dim(
+                name,
+                theirs.address,
+                theirs.grain,
+                den_plan.axis(theirs.address, grain=theirs.grain),
+            )
         if their_dim.signature != mine_by_name[name].signature:
             raise _bad(
                 f"기준 「{name}」 의 값 종류가 분모와 다릅니다 — 양쪽이 같은 타입을 "
@@ -571,7 +806,7 @@ def plan(
         try:
             dims.append(_dimension(join_plan, one, seen, visits))
         except AppError as caught:
-            if one.address not in visits_module.ADDRESSES or spec.visits is None:
+            if (one.address or "") not in visits_module.ADDRESSES or spec.visits is None:
                 errors.append(caught.message)
         seen.add(one.name)
     denominator: MetricDef | None = None
@@ -878,6 +1113,9 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
             spread = min(spread, product // periods * (periods + stay_n - 1))
         estimated = spread
     out.estimated_cells = estimated
+    for dim in built.dims:
+        if dim.rules is not None:
+            _rule_stats(db, built, dim, out, cut)
     if estimated > settings.metrics_max_cells:
         out.ok = False
         out.errors.append(
@@ -890,4 +1128,88 @@ def _estimate(db: Session, built: Built, out: Plan) -> None:
         out.warnings.append(
             "여러 값 기준(또는 여럿과 이어진 걸음)이 있어 한 기록이 여러 셀에 듭니다 — 셀의 "
             "합이 기록 수보다 큽니다(겹침)."
+        )
+
+
+def _rule_stats(db: Session, built: Built, dim: Dim, out: Plan, cut: uuid.UUID | None) -> None:
+    """규칙 기준의 계획 — 규칙마다 **맞는 기록**(앞 규칙과 상관없이)과 **이 규칙이 붙인 기록**
+    (첫 일치), 「기타」 의 수. 원천을 한 번 훑으며 규칙마다 맞나(참 · 거짓)를 묶는다 — 조합은
+    많아야 기록 수이고 대개 규칙 수 남짓이라, 첫 일치 · 앞 규칙이 가져간 것을 파이썬에서 낸다.
+    거르기를 통과한 기록만, 크면 표본에서(셀 어림과 같은 표본)."""
+    rules = dim.rules
+    assert rules is not None
+    hits = [
+        func.coalesce(one, false()).label(f"r{index}")
+        for index, one in enumerate(rules.clauses)
+    ]
+    stmt = (
+        select(*hits, func.count().label("n"))
+        .select_from(ObjectInstance)
+        .where(ObjectInstance.type_id == built.source.id, ObjectInstance.deleted_at.is_(None))
+    )
+    stmt = conditions.apply(stmt, built.scope.defs, built.conds, built.plan.resolver)
+    if cut is not None:
+        stmt = stmt.where(ObjectInstance.id < cut)
+    stmt = stmt.group_by(*(one for one in hits))
+    try:
+        with db.begin_nested():
+            db.execute(text(f"SET LOCAL statement_timeout = {ESTIMATE_SECONDS * 1000}"))
+            rows = [tuple(row) for row in db.execute(stmt)]
+    except OperationalError as caught:
+        if getattr(caught.orig, "sqlstate", None) != "57014":  # query_canceled
+            raise
+        out.warnings.append(
+            f"규칙 기준 「{dim.axis.label}」 의 규칙마다의 수를 세지 못했습니다(질의가 "
+            f"{ESTIMATE_SECONDS}초를 넘겼습니다)."
+        )
+        return
+    counts = [RuleCount(label, 0, 0) for label in rules.labels]
+    other = seen = 0
+    for row in rows:
+        flags, n = [bool(one) for one in row[:-1]], int(row[-1])
+        seen += n
+        first = next((index for index, hit in enumerate(flags) if hit), None)
+        if first is None:
+            other += n
+            continue
+        counts[first].won += n
+        for index, hit in enumerate(flags):
+            if hit:
+                counts[index].matched += n
+                if index != first:
+                    counts[index].taken_by[first] = counts[index].taken_by.get(first, 0) + n
+    sampled = cut is not None
+    out.rules.append(
+        RulePlan(
+            name=dim.name,
+            label=dim.axis.label,
+            fingerprint=rules.fingerprint,
+            rules=counts,
+            other=rules.other,
+            other_count=other,
+            seen=seen,
+            sampled=sampled,
+        )
+    )
+    where = "표본에서 " if sampled else ""
+    for number, one in enumerate(counts, 1):
+        if one.matched == 0:
+            out.warnings.append(
+                f"규칙 {number} 「{one.label}」 에 맞는 기록이 {where}한 건도 없습니다 — 칸 · "
+                "값을 확인합니다."
+            )
+        elif one.won == 0:
+            takers = " · ".join(
+                f"규칙 {index + 1} 「{rules.labels[index]}」"
+                for index in sorted(one.taken_by, key=lambda key: -one.taken_by[key])
+            )
+            out.warnings.append(
+                f"규칙 {number} 「{one.label}」 은 막힌 규칙입니다 — {where}맞는 "
+                f"{one.matched:,}건을 앞의 {takers} 이(가) 다 가져가 한 건도 안 남습니다. "
+                "차례를 바꾸거나 조건을 수정합니다."
+            )
+    if seen and other / seen > ELSE_SHARE_WARN:
+        out.warnings.append(
+            f"「{rules.other}」 가 {where}{other / seen:.0%}입니다({other:,}건) — 어느 "
+            "규칙에도 안 맞는 기록이 많습니다. 규칙이 모자란지 봅니다."
         )

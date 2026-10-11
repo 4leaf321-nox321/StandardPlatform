@@ -5,7 +5,12 @@
  * 안 된다. 기준 값으로 거르면 분모도 같이 걸리고, 셀의 수는 목록 조건으로 그대로 돌아간다.
  *
  * 「계산 기록」 은 최근 계산들이다 — 실패한 계산은 옛 값을 그대로 두므로, 값이 왜 안 바뀌었는지
- * 물을 자리가 여기다(운영 안내 5d 가 이 탭을 가리킨다).
+ * 물을 자리가 여기다(운영 안내 5d 가 이 탭을 가리킨다). 규칙 기준(ADR 0015)이 있으면 그 계산이
+ * 쓴 **규칙 판**(지문 · 수정한 사람 · 때)이 함께 선다 — 지난달과 왜 다른지 가린다.
+ *
+ * **구성비** — 표는 「구성비(%)」 로 고른 기준의 값들 사이의 몫(나머지 칸이 같은 셀끼리 합 100),
+ * 추이는 선을 나눈 기준의 기간마다 100% 쌓은 그림. 건수 · 합계의 몫이라 비율(분모로 나눈 값)과
+ * 함께 보지 않고, 평균 · 최소 · 최대에는 없다.
  */
 
 import { Suspense, lazy, useMemo, useState } from 'react'
@@ -55,6 +60,8 @@ const AnalysisTab = lazy(() => import('@/modules/metrics/analysis/AnalysisTab'))
 
 const ALL = '__all__'
 const EMPTY = '__empty__'
+/** 구성비를 낼 수 있는 집계 — 서버의 `query.COMPOSABLE`. */
+const COMPOSABLE = ['count', 'sum', 'share']
 /** 코호트 표에 늘어놓을 경과 칸의 상한 — 그보다 길면 히트맵만 읽는다. */
 const AGES_IN_TABLE = 24
 
@@ -199,12 +206,20 @@ function MetricDetail({ slug }: { slug: string }) {
   const [split, setSplit] = useState('')
   const [cumulative, setCumulative] = useState(true)
   const [ratio, setRatio] = useState(true)
+  // 구성비 — 표는 기준 이름(묶은 것 중 하나), 추이는 선을 나눈 기준의 기간마다 100%.
+  const [composition, setComposition] = useState('')
+  const [seriesComposition, setSeriesComposition] = useState(false)
 
   const found = metric.data
   const chosen = dims ?? (found?.dims[0] ? [found.dims[0].name] : [])
   // 조건 비율은 같은 기록 전체가 분모다 — 분모 지표 없이도 비율이 선다.
   const hasDenominator = Boolean(found?.spec.denominator) || found?.spec.measure === 'share'
-  const showRatio = hasDenominator && ratio
+  const composable = COMPOSABLE.includes(found?.spec.measure ?? '')
+  // 묶은 기준에서 빠지면 구성비도 꺼진다 — 서버는 묶은 기준의 몫만 낸다.
+  const shareOf = composable && chosen.includes(composition) ? composition : ''
+  const seriesShare = composable && seriesComposition && Boolean(split)
+  // 구성비는 건수 · 합계의 몫이다 — 비율(분모로 나눈 값)과 함께 보지 않는다.
+  const showRatio = hasDenominator && ratio && !(tab === 'table' ? shareOf : seriesShare)
   const common = useMemo(
     () => ({
       filters,
@@ -213,19 +228,28 @@ function MetricDetail({ slug }: { slug: string }) {
     }),
     [filters, periodFrom, periodTo],
   )
-  const tableKey = JSON.stringify([chosen, by, common])
+  const tableKey = JSON.stringify([chosen, by, common, shareOf])
   const table = useResource<MetricTable | null>(
     () =>
       tab === 'table' && found
-        ? metricsApi.values(slug, { ...common, dims: chosen, by: by === 'none' ? [] : [by] })
+        ? metricsApi.values(slug, {
+            ...common,
+            dims: chosen,
+            by: by === 'none' ? [] : [by],
+            composition: shareOf || undefined,
+          })
         : Promise.resolve(null),
     [slug, tab, tableKey, Boolean(found)],
   )
-  const seriesKey = JSON.stringify([split, common])
+  const seriesKey = JSON.stringify([split, common, seriesShare])
   const series = useResource<MetricSeries | null>(
     () =>
       tab === 'series' && found
-        ? metricsApi.series(slug, { ...common, split: split || undefined })
+        ? metricsApi.series(slug, {
+            ...common,
+            split: split || undefined,
+            composition: seriesShare,
+          })
         : Promise.resolve(null),
     [slug, tab, seriesKey, Boolean(found)],
   )
@@ -294,10 +318,18 @@ function MetricDetail({ slug }: { slug: string }) {
           </div>
         )}
         {hasDenominator && (
-          <label className="flex items-center gap-2 self-end text-sm">
+          <label
+            className="flex items-center gap-2 self-end text-sm"
+            title={
+              (tab === 'table' ? shareOf : seriesShare)
+                ? '구성비는 건수 · 합계의 몫입니다 — 비율과 함께 보지 않습니다'
+                : undefined
+            }
+          >
             <input
               type="checkbox"
               checked={ratio}
+              disabled={Boolean(tab === 'table' ? shareOf : seriesShare)}
               onChange={(event) => setRatio(event.target.checked)}
             />
             비율로 보기
@@ -340,6 +372,34 @@ function MetricDetail({ slug }: { slug: string }) {
                 })}
               </div>
             </div>
+            <div className="space-y-1">
+              <Label htmlFor="composition">구성비(%)</Label>
+              <Select
+                value={shareOf || ALL}
+                disabled={!composable}
+                onValueChange={(next) => setComposition(next === ALL ? '' : next)}
+              >
+                <SelectTrigger
+                  id="composition"
+                  className="w-44"
+                  title={
+                    composable
+                      ? '고른 기준의 값들 사이의 몫 — 나머지 칸(기간 · 다른 기준)이 같은 줄끼리 합이 100%'
+                      : '구성비는 건수 · 합계로만 냅니다 — 평균 · 최소 · 최대는 더할 수 없습니다'
+                  }
+                >
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>보지 않음</SelectItem>
+                  {chosen.map((name) => (
+                    <SelectItem key={name} value={name}>
+                      {found.dims.find((one) => one.name === name)?.label ?? name}의 몫
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             {found.grain && (
               <div className="space-y-1">
                 <Label htmlFor="by">기간으로 묶기</Label>
@@ -377,6 +437,9 @@ function MetricDetail({ slug }: { slug: string }) {
                         {found.spec.measure === 'share' ? '조건 건수' : found.measure_label}
                       </TableHead>
                     )}
+                    {table.data.composition && (
+                      <TableHead className="text-right">구성비(%)</TableHead>
+                    )}
                     {showRatio && (
                       <TableHead className="text-right">
                         {found.spec.measure === 'share' ? '비율(%)' : '비율'}
@@ -407,6 +470,11 @@ function MetricDetail({ slug }: { slug: string }) {
                           )}
                         </TableCell>
                       )}
+                      {table.data?.composition && (
+                        <TableCell className="text-right">
+                          {shownNumber(cell.composition, 1)}
+                        </TableCell>
+                      )}
                       {showRatio && (
                         <TableCell className="text-right">{shownNumber(cell.ratio)}</TableCell>
                       )}
@@ -433,27 +501,52 @@ function MetricDetail({ slug }: { slug: string }) {
         </TabsContent>
 
         <TabsContent value="series" className="space-y-3">
-          <div className="space-y-1">
-            <Label htmlFor="split">선 나누기</Label>
-            <Select
-              value={split || ALL}
-              onValueChange={(next) => setSplit(next === ALL ? '' : next)}
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="space-y-1">
+              <Label htmlFor="split">선 나누기</Label>
+              <Select
+                value={split || ALL}
+                onValueChange={(next) => setSplit(next === ALL ? '' : next)}
+              >
+                <SelectTrigger id="split" className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>한 선</SelectItem>
+                  {found.dims.map((dim) => (
+                    <SelectItem key={dim.name} value={dim.name}>
+                      {dim.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <label
+              className="flex items-center gap-2 pb-2 text-sm"
+              title={
+                !composable
+                  ? '구성비는 건수 · 합계로만 냅니다 — 평균 · 최소 · 최대는 더할 수 없습니다'
+                  : !split
+                    ? '선을 나눌 기준을 고르면 그 값들의 몫을 기간마다 100% 로 봅니다'
+                    : undefined
+              }
             >
-              <SelectTrigger id="split" className="w-48">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value={ALL}>한 선</SelectItem>
-                {found.dims.map((dim) => (
-                  <SelectItem key={dim.name} value={dim.name}>
-                    {dim.label}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+              <input
+                type="checkbox"
+                checked={seriesShare}
+                disabled={!composable || !split}
+                onChange={(event) => setSeriesComposition(event.target.checked)}
+              />
+              구성비(%) — 기간마다 100%
+            </label>
           </div>
           {series.error && <ErrorNotice error={series.error} />}
-          {series.data && <SeriesView data={series.data} metric={found} ratio={showRatio} />}
+          {series.data &&
+            (series.data.composition ? (
+              <CompositionView data={series.data} metric={found} />
+            ) : (
+              <SeriesView data={series.data} metric={found} ratio={showRatio} />
+            ))}
         </TabsContent>
 
         <TabsContent value="cohort" className="space-y-3">
@@ -573,6 +666,82 @@ function SeriesView({
   )
 }
 
+/**
+ * 구성비 추이 — 기간마다 선(기준 값)들의 몫을 100% 로 쌓는다. 표는 기간 x 값의 몫(%)이고 칸마다
+ * 그 값 · 그 기간의 「N건 보기」 로 간다. 선이 상한에서 잘려도 몫은 모든 값의 합으로 낸 것이다.
+ */
+function CompositionView({ data, metric }: { data: MetricSeries; metric: Metric }) {
+  const rows = useMemo(() => {
+    const byPeriod = new Map<string, Record<string, unknown>>()
+    for (const line of data.lines) {
+      for (const point of line.points) {
+        const row = byPeriod.get(point.period) ?? { name: point.label }
+        row[line.label] = point.composition ?? 0
+        byPeriod.set(point.period, row)
+      }
+    }
+    return [...byPeriod.values()]
+  }, [data])
+  const periods = data.lines[0]?.points ?? []
+  return (
+    <>
+      <HeaderLine header={data} />
+      {data.lines_truncated && (
+        <p className="text-muted-foreground text-xs">
+          값이 많아 위의 것만 그렸습니다 — 몫은 모든 값의 합으로 냈습니다.
+        </p>
+      )}
+      <Chart
+        kind="area"
+        stacked
+        data={rows}
+        x="name"
+        series={data.lines.map((line) => ({ key: line.label }))}
+        height={320}
+        title={`${metric.label} 구성비 추이(기간마다 100%)`}
+        emptyText="이 범위에는 셀이 없습니다."
+      />
+      <Table aria-label="구성비 표">
+        <TableHeader>
+          <TableRow>
+            <TableHead>기간</TableHead>
+            {data.lines.map((line) => (
+              <TableHead key={line.key ?? EMPTY} className="text-right">
+                {line.label}(%)
+              </TableHead>
+            ))}
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {periods.map((point, at) => (
+            <TableRow key={point.period}>
+              <TableCell>{point.label}</TableCell>
+              {data.lines.map((line) => {
+                const one = line.points[at]
+                return (
+                  <TableCell key={line.key ?? EMPTY} className="text-right">
+                    {one && one.count > 0 ? (
+                      <Link
+                        to={drillHref(one.drill)}
+                        className="hover:underline"
+                        title={`${shownNumber(one.count)}건 보기`}
+                      >
+                        {shownNumber(one.composition, 1)}
+                      </Link>
+                    ) : (
+                      shownNumber(one?.composition, 1)
+                    )}
+                  </TableCell>
+                )
+              })}
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </>
+  )
+}
+
 function CohortView({
   data,
   ratio,
@@ -652,16 +821,32 @@ function CohortView({
   )
 }
 
+/** 규칙 판 한 줄 — 「nature 3fa9c2e1 · 규칙 5 · 2026-10-10 14:02 홍길동」. */
+function rulesText(run: MetricRun): string {
+  return (run.rules ?? [])
+    .map(
+      (one) =>
+        `${one.name} ${one.fingerprint.slice(0, 8)} · 규칙 ${one.rules}` +
+        (one.changed_at
+          ? ` · ${shownDateTime(one.changed_at)}${one.changed_by ? ` ${one.changed_by}` : ''}`
+          : ''),
+    )
+    .join(' / ')
+}
+
 function RunsView({ runs }: { runs: MetricRun[] }) {
   if (runs.length === 0) {
     return <p className="text-muted-foreground text-sm">아직 한 번도 안 셌습니다.</p>
   }
+  const ruled = runs.some((one) => (one.rules ?? []).length > 0)
   return (
     <>
       <p className="text-muted-foreground text-xs">
         최근 {runs.length}번. 실패한 계산은 옛 값을 그대로 두고 이유를 남깁니다. 「바뀐 기간만」 은
         지난 계산 뒤에 바뀐 기록이 든 기간만 다시 센 것입니다 — 정의가 바뀌었거나 일주일이 지났거나
         다른 객체 너머가 바뀌었으면 전부 다시 셉니다(그 까닭을 적습니다).
+        {ruled &&
+          ' 「규칙 판」 은 그 계산이 쓴 규칙(차례 포함)의 지문과 그 규칙을 수정한 때 · 사람입니다 — 규칙이 바뀌면 지난 기간도 새 규칙으로 다시 셉니다.'}
       </p>
       <Table>
         <TableHeader>
@@ -673,6 +858,7 @@ function RunsView({ runs }: { runs: MetricRun[] }) {
             <TableHead className="text-right">기록</TableHead>
             <TableHead className="text-right">셀</TableHead>
             <TableHead className="text-right">날짜 없음</TableHead>
+            {ruled && <TableHead>규칙 판</TableHead>}
             <TableHead>이유 · 메모</TableHead>
           </TableRow>
         </TableHeader>
@@ -700,6 +886,11 @@ function RunsView({ runs }: { runs: MetricRun[] }) {
                 <TableCell className="text-right">
                   {done ? shownNumber(run.stats.unbucketed ?? 0) : '—'}
                 </TableCell>
+                {ruled && (
+                  <TableCell className="text-xs whitespace-nowrap">
+                    {rulesText(run) || '—'}
+                  </TableCell>
+                )}
                 {run.error ? (
                   <TableCell className="text-destructive text-xs">{run.error}</TableCell>
                 ) : (

@@ -101,6 +101,8 @@ TOOLS = {
     "fill_priorities",
     "alias_candidates",
     "alias_candidate_apply",
+    "review_list",
+    "review_decide",
 }
 
 
@@ -665,6 +667,80 @@ def test_채울_곳과_별칭_후보가_그대로_건너간다() -> None:
     )
 
 
+def test_검토함은_미리_보기_먼저이고_지문이_같을_때만_적용한다() -> None:
+    """`review_decide` 는 **늘 미리 보기 먼저** — 적용은 사람이 본 지문(`fingerprint`)과 지금
+    다시 본 계획의 지문이 같을 때만. 다르면 백엔드에 적용을 보내지도 않는다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "kinds": []}))
+    asyncio.run(
+        server.review_list(
+            _ctx("Bearer t"), kind="alias_review", type_slug="vendor", min_confidence=0.9
+        )
+    )
+    assert seen[-1].url.path == "/api/review/items"
+    params = seen[-1].url.params
+    assert params["kind"] == "alias_review" and params["type"] == "vendor"
+    assert params["min_confidence"] == "0.9" and "workspace" not in params
+
+    # 무엇을 정할지 없으면 부르지도 않는다 — 스스로 고르지 않는다.
+    before = len(seen)
+    assert "error" in asyncio.run(server.review_decide(_ctx("Bearer t")))
+    assert len(seen) == before
+
+    planned = {
+        "fingerprint": "fp1",
+        "decisions": [{"kind": "alias_review", "item_id": "a1", "action": "accept"}],
+        "counts": {"apply": 1, "blocked": 0},
+    }
+
+    def backend(request: httpx.Request) -> httpx.Response:
+        if request.url.path == "/api/review/plan":
+            return httpx.Response(200, json=planned)
+        return httpx.Response(200, json={"applied": True, "counts": {"done": 1}})
+
+    seen = _serve(backend)
+    preview = asyncio.run(
+        server.review_decide(_ctx("Bearer t"), recommended=True, kind="alias_review")
+    )
+    assert preview["applied"] is False and "fp1" in preview["next"]
+    body = json.loads(seen[-1].content)
+    assert body["mode"] == "recommended" and body["threshold"] == 0.9
+    assert body["filters"] == {"kind": "alias_review"}
+    assert all(one.url.path != "/api/review/apply" for one in seen)
+
+    # 지문 없이는 적용하지 않는다.
+    assert "error" in asyncio.run(
+        server.review_decide(
+            _ctx("Bearer t"), recommended=True, kind="alias_review", apply=True
+        )
+    )
+    # 그 사이 바뀌었다(지문이 다르다) — 적용을 보내지 않는다.
+    stale = asyncio.run(
+        server.review_decide(
+            _ctx("Bearer t"),
+            recommended=True,
+            kind="alias_review",
+            apply=True,
+            fingerprint="old",
+        )
+    )
+    assert "error" in stale and all(one.url.path != "/api/review/apply" for one in seen)
+
+    done = asyncio.run(
+        server.review_decide(
+            _ctx("Bearer t"),
+            recommended=True,
+            kind="alias_review",
+            apply=True,
+            fingerprint="fp1",
+        )
+    )
+    assert done["applied"] is True
+    assert seen[-1].url.path == "/api/review/apply"
+    sent = json.loads(seen[-1].content)
+    assert sent["decisions"] == planned["decisions"] and sent["fingerprint"] == "fp1"
+    assert sent["mode"] == "recommended" and sent["threshold"] == 0.9
+
+
 def test_기동_블록_뒤에_도구가_없다() -> None:
     """`mcp.run()` 은 블로킹이다 — 그 뒤에 적힌 `@tool()` 은 운영(`python server.py`)에서
     등록되지 않는다. 확장 도구 둘이 그렇게 빠져 있었고, 이 시험은 모듈을 import 해 보므로
@@ -1068,3 +1144,52 @@ def test_지표_도구는_주기를_안_주면_안_보내고_홈과_기록은_�
     assert dict(seen[4].url.params) == {"name": "symptom", "q": "소"}
     wrong = asyncio.run(server.metric_query(ctx, "m1", shape="dim_values", dims=["a", "b"]))
     assert "기준 하나" in wrong["error"]
+
+
+def test_제외_조건과_구성비와_규칙_기준이_그대로_건너간다() -> None:
+    """ADR 0015 — 지표 건 보기의 `nf<번호>.` 키를 `objects_list` 의 `exclude` 로 되돌려 보내고,
+    구성비는 표(기준 이름) · 추이(true)로, 규칙 기준은 정의 그대로 계획에 간다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 3}))
+    ctx = _ctx("Bearer t")
+    asyncio.run(
+        server.objects_list(
+            ctx,
+            "svc_case",
+            conditions=[
+                {"field": "parts", "op": "notempty", "value": ""},
+                {"field": "action", "op": "starts", "value": "SW", "exclude": 1},
+                {"field": "diag", "op": "in", "value": "C01|C02", "exclude": "2"},
+                {"field": "center", "op": "eq", "value": "서울", "exclude": 0},
+            ],
+        )
+    )
+    params = seen[0].url.params
+    assert params["f.parts.notempty"] == "" and params["nf1.action.starts"] == "SW"
+    assert params["nf2.diag.in"] == "C01|C02" and params["f.center.eq"] == "서울"
+
+    seen = _serve(lambda _r: httpx.Response(200, json={"cells": [], "total_count": 0}))
+    asyncio.run(server.metric_query(ctx, "m1", dims=["nature"], composition="nature"))
+    asyncio.run(
+        server.metric_query(ctx, "m1", shape="series", split="nature", composition=True)
+    )
+    asyncio.run(server.metric_query(ctx, "m1", dims=["nature"]))
+    assert seen[0].url.params["composition"] == "nature"
+    assert seen[1].url.path == "/api/metrics/m1/series"
+    assert seen[1].url.params["composition"] == "true"
+    assert "composition" not in seen[2].url.params
+
+    rules = {
+        "name": "nature",
+        "rules": [
+            {"label": "SW", "when": [{"field": "action", "op": "starts", "value": "SW"}]}
+        ],
+        "else": "기타",
+    }
+    seen = _serve(lambda _r: httpx.Response(200, json={"ok": True, "rules": []}))
+    asyncio.run(
+        server.metric_define(
+            ctx, "m1", "성격", "svc_case", {"measure": "count", "dimensions": [rules]}
+        )
+    )
+    assert seen[0].url.path == "/api/metrics/plan"
+    assert json.loads(seen[0].content)["spec"]["dimensions"] == [rules]

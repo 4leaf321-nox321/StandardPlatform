@@ -150,8 +150,10 @@ def test_볼_수_있는_것만_세고_홈에는_관리자에게만_뜬다(
     assert _find(_report(client, manager, "duplicate"), "duplicate", vendor) is None
 
     home = client.get("/api/server/maintenance", headers=admin.headers).json()
+    # 검토함에 그 종류(병합 후보)가 있어 그리로 간다 — 품질 화면은 그 줄의 「원래
+    # 화면」 이다(ADR 0027).
     assert any(
-        one["key"] == "quality_duplicate" and one["link"] == "/quality#duplicate"
+        one["key"] == "quality_duplicate" and one["link"] == "/review?kind=duplicate"
         for one in home
     )
     # 멤버는 고칠 수 없으니 홈에 안 뜬다.

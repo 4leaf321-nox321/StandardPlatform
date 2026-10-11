@@ -82,6 +82,31 @@ def plan_out(found: spec_module.Plan) -> schemas.PlanOut:
         dims=[schemas.DimOut(**vars(one)) for one in found.dims],
         period_from=found.period_from,
         period_to=found.period_to,
+        rules=[
+            schemas.RulePlanOut(
+                name=one.name,
+                label=one.label,
+                fingerprint=one.fingerprint,
+                rules=[
+                    schemas.RuleCountOut(
+                        label=rule.label,
+                        matched=rule.matched,
+                        won=rule.won,
+                        taken_by=[
+                            schemas.RuleTakenOut(rule=index + 1, count=count)
+                            for index, count in sorted(rule.taken_by.items())
+                        ],
+                        blocked=rule.matched > 0 and rule.won == 0,
+                    )
+                    for rule in one.rules
+                ],
+                other=one.other,
+                other_count=one.other_count,
+                seen=one.seen,
+                sampled=one.sampled,
+            )
+            for one in found.rules
+        ],
     )
 
 
@@ -143,6 +168,28 @@ def out(db: Session, metric: MetricDef) -> schemas.MetricOut:
     )
 
 
+def rules_changes(
+    before: dict[str, Any] | None, after: spec_module.MetricSpec
+) -> dict[str, Any]:
+    """규칙 판이 바뀐 규칙 기준 — 감사의 `rules`(`{기준 이름: {from, to}}`, 지문). 계산 기록이
+    「이 규칙 판은 누가 언제 저장했나」 를 이것으로 찾는다(`compute.rules_versions`). 바뀐 것이
+    없으면 빈 것."""
+    old: dict[str, str] = {}
+    for one in (before or {}).get("dimensions") or []:
+        dim_in = spec_module.DimensionIn.model_validate(one)
+        if dim_in.is_rule:
+            old[dim_in.name] = spec_module.rules_fingerprint(dim_in)
+    new = {
+        one.name: spec_module.rules_fingerprint(one) for one in after.dimensions if one.is_rule
+    }
+    changed = {
+        name: {"from": old.get(name), "to": new.get(name)}
+        for name in sorted({*old, *new})
+        if old.get(name) != new.get(name)
+    }
+    return {"rules": changed} if changed else {}
+
+
 def create(db: Session, user: User, payload: schemas.MetricIn) -> MetricDef:
     """정의 하나 — **계획이 통과할 때만.** 부르는 쪽이 커밋한다."""
     slug = require_slug(payload.slug, what="지표 slug")
@@ -176,6 +223,7 @@ def create(db: Session, user: User, payload: schemas.MetricIn) -> MetricDef:
             "slug": slug,
             "source": source.slug,
             "estimated_cells": found.estimated_cells,
+            **rules_changes(None, payload.spec),
         },
     )
     return row
@@ -194,6 +242,7 @@ def update(
         found = spec_module.plan(db, source, payload.spec, self_slug=metric.slug)
         if not found.ok:
             raise _rejected(found)
+        changes.update(rules_changes(metric.spec, payload.spec))
         metric.spec = payload.spec.model_dump(mode="json")
         metric.overlap = found.overlap
         changes["spec"] = True

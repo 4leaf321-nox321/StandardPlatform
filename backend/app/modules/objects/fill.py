@@ -197,6 +197,13 @@ def _metric_addresses(spec: dict[str, Any]) -> list[str]:
         if isinstance(one, dict):
             out.append(str(one.get("address") or ""))
     out += [str(one.get("address") or "") for one in spec.get("dimensions") or []]
+    # 규칙 기준(ADR 0015)은 규칙 조건의 칸을 쓴다 — 그 칸이 비면 「기타」 로 떨어진다.
+    out += [
+        str(cond.get("field") or "")
+        for one in spec.get("dimensions") or []
+        for rule in one.get("rules") or []
+        for cond in rule.get("when") or []
+    ]
     out += [str(one.get("field") or "") for one in spec.get("filters") or []]
     out += [str(one.get("field") or "") for one in spec.get("share_when") or []]
     if spec.get("measure_field"):

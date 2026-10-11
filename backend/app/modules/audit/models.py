@@ -1,10 +1,11 @@
 """접근 로그와 감사 로그 — **목적이 다르다.**
 
-  접근 로그(AccessLog)  사용자 지원용. 누가 언제 어느 API 를 썼는가
-  감사 로그(AuditEntry) 무결성용. 무엇이 바뀌었는가, 누가 승인했는가
+  접근 로그(AccessLog)         사용자 지원용. 누가 언제 어느 API 를 썼는가
+  감사 로그(AuditEntry)        무결성용. 무엇이 바뀌었는가, 누가 승인했는가
+  요청 시간(RequestTiming)     성능용. 어느 API 가 얼마나 걸리고 얼마나 큰 응답을 냈나
 
 둘을 한 표에 섞으면 보존 기간이 충돌한다 — 접근 로그는 몇 달이면 지워도 되지만
-감사 로그는 남아야 한다. 처음부터 나눈다.
+감사 로그는 남아야 한다. 처음부터 나눈다. 요청 시간도 같은 이유로 따로다(아래).
 
 파일 로그(app.log)와도 역할이 다르다. 파일은 요청 단위 진단용이고 로테이션으로
 사라지지만, 이것은 질의할 수 있어야 한다("지난주에 이 사람이 뭘 했나").
@@ -23,6 +24,7 @@ from sqlalchemy import (
     Identity,
     Index,
     Integer,
+    SmallInteger,
     String,
     Text,
     func,
@@ -65,6 +67,63 @@ class AccessLog(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), index=True
     )
+
+
+class RequestTiming(Base):
+    """요청 하나가 **얼마나 걸렸고 얼마나 컸나** — 「느린 요청 · 큰 응답」(ADR 0026).
+
+    ## 접근 로그와 표를 가른다
+
+    접근 로그는 상태를 바꾸는 요청만 남긴다(「무엇을 했는가」). 그런데 작업 목록 한 번이
+    93MB · 4.4초였던 것은 **조회(GET)** 였고, 그것을 사람이 「화면이 느리다」 고 말하고 나서야
+    알았다(2026-10-09). 그래서 여기는 조회까지 전부 남긴다. 접근 로그에 섞으면 그 표가 조회로
+    가득 차 정작 찾을 것을 못 찾는다 — 보관 기간도 다르다(이것은 `log_retention_days` 뒤 워커가
+    지운다).
+
+    ## 가볍게 둔다
+
+    요청마다 한 줄이라 가장 빨리 자라는 표다. 칸을 줄이고, 계정에 **외래키를 걸지 않는다** —
+    걸면 계정 하나를 지울 때 이 표 전체를 훑는다(계정은 보통 안 지우지만 시험은 지운다).
+    누가 불렀나는 보여 줄 때 이어 붙인다.
+    """
+
+    __tablename__ = "request_timings"
+    __table_args__ = (
+        # 「이 경로 틀의 최악 사례」 — 경로 틀 · 메서드로 좁히고 기간으로 자른다.
+        Index("ix_request_timings_route", "route", "method", "created_at"),
+    )
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    """요청을 **받은** 시각. 기록은 몇 초씩 모아 넣으므로(`shared/request_timing.py`) 넣은
+    시각이 아니라 미들웨어가 받을 때 잰 값을 적는다. 기간 집계 · 지우기가 이 색인을 탄다."""
+    method: Mapped[str] = mapped_column(String(10))
+    route: Mapped[str] = mapped_column(String(300, collation="C"))
+    """경로 틀 — `/api/objects/{type_slug}/{object_id}`. 같은 API 를 묶는 단위다(원 경로는
+    객체마다 달라서 묶을 수 없다). 맞는 것이 없던 요청은 「(없는 경로)」 하나로 모은다 — 아무
+    주소나 두드리는 요청이 묶음을 끝없이 늘리지 않게.
+
+    **글자 정렬 규칙을 C 로 둔다.** 기간 집계는 이 칸으로 묶느라 통째로 정렬하는데, 기본
+    규칙(C.UTF-8)이면 70만 줄 묶기가 0.64초, C 면 0.36초였다(2026-10-10 실측). 사람이 읽는
+    순서가 필요한 칸이 아니다."""
+    path: Mapped[str] = mapped_column(String(300))
+    """원 경로 — 최악 사례에서 「어느 객체였나」 를 본다. 물음표 뒤는 남기지 않는다(접근 로그와
+    같다)."""
+    status_code: Mapped[int] = mapped_column(SmallInteger)
+    duration_ms: Mapped[int] = mapped_column(Integer)
+    """받고 나서 **응답의 마지막 바이트를 보낼 때까지**(ms). 첫 바이트까지가 아니다 — 큰 JSON ·
+    스트리밍 · 파일 내려받기는 첫 바이트 뒤가 길다. 받는 쪽이 느리면 그만큼 든다."""
+    response_bytes: Mapped[int] = mapped_column(BigInteger)
+    """보낸 본문 바이트."""
+    content_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    """응답의 종류(매개변수를 뗀 것). JSON 이 아닌 응답(파일 내려받기 · 사진)은 크고 받는 쪽
+    속도를 타는 것이 정상이라 「남은 일」 의 문턱에서 뺀다."""
+    user_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    """누가 불렀나 — 로그인 전 요청은 비어 있다. 외래키가 없다(위)."""
+    request_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    """파일 로그와 잇는 끈 — 이 값으로 app.log 에서 그 요청의 모든 줄을 찾는다."""
 
 
 class AuditEntry(Base):

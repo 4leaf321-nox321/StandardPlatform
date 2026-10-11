@@ -117,6 +117,23 @@ class WorkspaceContent:
     보임」 으로 알리는 근거가 객체마다의 소유 부서 기록이다, `coreapi/services._moved_away`).
     기록에는 사람이 박혀야 한다 — 「시스템」 으로 남기면 반년 뒤 누가 옮겼는지 그 객체의
     이력으로는 답할 수 없다."""
+    move_steps: MoveSteps | None = None
+    """`move_by` 와 같되 **덩어리로 나눠** 옮기며 덩어리마다 (옮긴 수, 전체) 를 알린다 — 수십만
+    건이 될 수 있는 종류(객체)가 쓴다. 있으면 통폐합이 이것을 부른다.
+
+    통폐합은 작업(`workspace_reassign`)이다 — 한 부서의 객체 20만 개를 옮기는 데 90초 남짓이라
+    요청 안에서는 끊긴다(2026-10-10). 알림을 받는 쪽(작업의 진행률)이 **취소 · 빼앗김을 던질 수
+    있다** — 커밋 전이라 그때는 아무것도 안 옮겨진다. 커밋하지 않는다(`move` 와 같다)."""
+    check: Callable[[Session, uuid.UUID, uuid.UUID], list[str]] | None = None
+    """옮기면 **막히는 것** — 한 줄에 하나, 없으면 빈 목록. 통폐합의 계획이 미리 보인다(객체:
+    부서 안에서 하나여야 할 식별자가 대상 부서와 겹침). 적용(`move*`)도 같은 검사로 다시
+    막는다 — 계획과 적용 사이에 누가 같은 값을 만들 수 있다."""
+
+
+#: 옮기는 쪽이 덩어리마다 부르는 것 — (지금까지 옮긴 수, 전체).
+MoveProgress = Callable[[int, int], None]
+#: (db, 원본 부서 id, 대상 부서 id, 옮기는 사람, 진행률) → 옮긴 건수.
+MoveSteps = Callable[[Session, uuid.UUID, uuid.UUID, User, MoveProgress], int]
 
 
 def rows_changed(result: Result[Any]) -> int:

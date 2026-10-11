@@ -7,12 +7,20 @@
  *
  * **고른 종류만 옮긴다.** 멤버는 두고 객체만 넘기는 개편이 흔하다(팀은 남고 업무만
  * 넘어가는 경우).
+ *
+ * **작업이다**(2026-10-10) — 일괄 입력과 같은 무늬로 먼저 계획(무엇이 몇 건 · 무엇이 막히나)을
+ * 보고 적용한다. 요청 안에서 옮기던 때는 한 부서 객체 20만 개면 90초 남짓이라 브라우저 · 이중화의
+ * nginx 가 먼저 끊었다. 창을 닫아도 작업은 계속되고, 작업 화면에서 같은 계획을 읽고 적용한다.
  */
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { Loader2 } from 'lucide-react'
 
-import { workspaceApi } from '@/modules/workspaces/api'
-import type { Workspace, WorkspaceContent } from '@/modules/workspaces/api'
+import { jobsApi, STUCK_MS } from '@/modules/jobs/api'
+import type { Job } from '@/modules/jobs/api'
+import { reassignOf, workspaceApi } from '@/modules/workspaces/api'
+import type { ReassignResult, Workspace, WorkspaceContent } from '@/modules/workspaces/api'
+import { ReassignPlanView } from '@/modules/workspaces/ReassignPlanView'
 import { parentOptions } from '@/modules/workspaces/tree'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
@@ -34,13 +42,30 @@ interface Props {
   onDone: () => void
 }
 
+/** 창을 닫으면 기다림을 그만둔다 — 작업은 서버에서 계속된다. */
+class Closed extends Error {}
+
 export function WorkspaceReassignDialog({ source, all, onClose, onDone }: Props) {
   const [contents, setContents] = useState<WorkspaceContent[] | null>(null)
   const [target, setTarget] = useState('')
   const [picked, setPicked] = useState<Set<string>>(new Set())
-  const [moved, setMoved] = useState<Record<string, number> | null>(null)
+  /** 계획 — 적용은 이 작업의 지문으로 간다(그 사이 원본이 바뀌면 서버가 거절한다). */
+  const [plan, setPlan] = useState<ReassignResult | null>(null)
+  const [planJob, setPlanJob] = useState<Job | null>(null)
+  const [moved, setMoved] = useState<ReassignResult | null>(null)
+  const [running, setRunning] = useState<Job | null>(null)
+  const [stuck, setStuck] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [notice, setNotice] = useState<string | null>(null)
   const [error, setError] = useState<Error | null>(null)
+  const open = useRef(true)
+
+  useEffect(() => {
+    open.current = true
+    return () => {
+      open.current = false
+    }
+  }, [])
 
   useEffect(() => {
     let cancelled = false
@@ -69,6 +94,14 @@ export function WorkspaceReassignDialog({ source, all, onClose, onDone }: Props)
     .filter((one) => picked.has(one.kind))
     .reduce((sum, one) => sum + one.count, 0)
 
+  /** 고른 것이 바뀌면 앞의 계획은 버린다 — 그 계획은 다른 것을 보고 세운 것이다. */
+  function reset() {
+    setPlan(null)
+    setPlanJob(null)
+    setNotice(null)
+    setError(null)
+  }
+
   function toggle(kind: string) {
     setPicked((before) => {
       const next = new Set(before)
@@ -76,47 +109,111 @@ export function WorkspaceReassignDialog({ source, all, onClose, onDone }: Props)
       else next.add(kind)
       return next
     })
+    reset()
   }
 
-  async function run() {
-    setBusy(true)
-    setError(null)
+  /** 끝날 때까지 본다 — 진행률을 그리고, 대기가 길면 워커를 의심한다. */
+  async function settle(started: Job): Promise<Job> {
+    setRunning(started)
+    setStuck(false)
+    const since = Date.now()
     try {
-      const result = await workspaceApi.reassign(source.slug, target, [...picked])
-      setMoved(result.moved)
-      onDone()
+      return await jobsApi.waitFor(started.id, (job) => {
+        if (!open.current) throw new Closed()
+        setRunning(job)
+        setStuck(job.status === 'queued' && Date.now() - since > STUCK_MS)
+      })
+    } finally {
+      if (open.current) {
+        setRunning(null)
+        setStuck(false)
+      }
+    }
+  }
+
+  /** 끝난 작업이 결과를 못 냈으면 그 까닭 — 취소는 「아무것도 안 옮겼다」 로 말한다. */
+  function failure(finished: Job): void {
+    if (finished.status === 'cancelled') {
+      setNotice('취소했습니다 — 아무것도 이동하지 않았습니다.')
+      return
+    }
+    setError(new Error(finished.error ?? '작업이 끝나지 않았습니다.'))
+  }
+
+  async function preview() {
+    setBusy(true)
+    reset()
+    try {
+      const started = await workspaceApi.reassign(source.slug, target, [...picked])
+      setPlanJob(started)
+      const finished = await settle(started)
+      const result = reassignOf(finished.result)
+      if (finished.status !== 'done' || !result) failure(finished)
+      else setPlan(result)
     } catch (caught) {
+      if (caught instanceof Closed) return
       setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     } finally {
-      setBusy(false)
+      if (open.current) setBusy(false)
+    }
+  }
+
+  async function apply() {
+    if (!planJob) return
+    setBusy(true)
+    setError(null)
+    setNotice(null)
+    try {
+      const finished = await settle(await jobsApi.apply(planJob.id))
+      const result = reassignOf(finished.result)
+      if (finished.status !== 'done' || !result) {
+        failure(finished)
+        // 실패 · 취소한 계획은 그대로 다시 적용할 수 있다 — 다만 「그 사이에 바뀌었다」 면 새로
+        // 미리 봐야 하니 계획을 버린다.
+        if (finished.error?.includes('JOBS-0020')) reset()
+        return
+      }
+      setMoved(result)
+      onDone()
+    } catch (caught) {
+      if (caught instanceof Closed) return
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+    } finally {
+      if (open.current) setBusy(false)
+    }
+  }
+
+  async function stop() {
+    if (!running) return
+    try {
+      await jobsApi.cancel(running.id)
+    } catch (caught) {
+      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     }
   }
 
   const targetName = all.find((one) => one.slug === target)?.name ?? target
+  const progress = running?.progress
 
   return (
-    <Dialog open onOpenChange={(open) => !open && !busy && onClose()}>
-      <DialogContent className="sm:max-w-lg">
+    <Dialog open onOpenChange={(next) => !next && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
           <DialogTitle>{source.name} 의 자료 이동</DialogTitle>
           <DialogDescription>
-            선택한 것을 다른 부서로 통째 넘깁니다. 자료 자체는 그대로고 소유 부서만 바뀝니다. 다
-            넘긴 뒤에 이 부서를 보관하거나 삭제하면 통폐합이 끝납니다.
+            선택한 것을 다른 부서로 통째 넘깁니다. 자료 자체는 그대로고 소유 부서만 바뀝니다. 먼저
+            무엇이 몇 건 이동하는지 미리 보고, 확인한 뒤에 적용합니다. 다 넘긴 뒤에 이 부서를
+            보관하거나 삭제하면 통폐합이 끝납니다.
           </DialogDescription>
         </DialogHeader>
 
         {moved ? (
           <div className="space-y-2 text-sm">
             <p className="text-emerald-600 dark:text-emerald-400">{targetName} 으로 옮겼습니다.</p>
-            <ul className="space-y-1">
-              {(contents ?? [])
-                .filter((one) => (moved[one.kind] ?? 0) > 0)
-                .map((one) => (
-                  <li key={one.kind}>
-                    {one.label} {moved[one.kind]}건
-                  </li>
-                ))}
-            </ul>
+            <ReassignPlanView result={moved} />
+            <p className="text-muted-foreground text-xs">
+              이제 이 부서를 보관하거나 삭제하면 통폐합이 끝납니다.
+            </p>
           </div>
         ) : (
           <div className="space-y-4">
@@ -126,7 +223,10 @@ export function WorkspaceReassignDialog({ source, all, onClose, onDone }: Props)
                 id="reassign-target"
                 options={options}
                 value={target || null}
-                onChange={setTarget}
+                onChange={(next) => {
+                  setTarget(next)
+                  reset()
+                }}
                 placeholder="어느 부서로 넘길까요"
                 searchPlaceholder="부서 이름이나 주소로 검색"
               />
@@ -165,19 +265,53 @@ export function WorkspaceReassignDialog({ source, all, onClose, onDone }: Props)
                 것이 아니라 고치는 일이라, 사람이 정해야 합니다.
               </p>
             </div>
+            {plan && <ReassignPlanView result={plan} />}
+            {plan && !plan.ok && plan.errors.length === 0 && (
+              <p className="text-muted-foreground text-xs">이동할 것이 없습니다.</p>
+            )}
           </div>
         )}
 
+        {running && (
+          <div className="flex flex-wrap items-center gap-2 text-xs" role="status">
+            <Loader2 className="size-3.5 animate-spin" />
+            <span className="text-muted-foreground">
+              {running.status === 'queued'
+                ? stuck
+                  ? '아직 아무도 집어 가지 않았습니다 — 작업 워커가 꺼져 있을 수 있습니다. 「내 활동 › 작업」 에서 확인하세요.'
+                  : '워커를 기다리는 중 — 창을 닫아도 계속되고, 작업 화면에서 볼 수 있습니다.'
+                : progress && progress.total > 0
+                  ? `${progress.stage} ${progress.done.toLocaleString()} / ${progress.total.toLocaleString()}건`
+                  : `${progress?.stage || '진행 중'}…`}
+            </span>
+            {planJob && running.id !== planJob.id && (
+              <Button size="xs" variant="outline" onClick={() => void stop()}>
+                이동 취소
+              </Button>
+            )}
+          </div>
+        )}
+        {notice && <p className="text-muted-foreground text-sm">{notice}</p>}
         <ErrorNotice error={error} />
         <DialogFooter>
-          <Button variant="outline" onClick={onClose} disabled={busy}>
-            {moved ? '닫기' : '취소'}
+          <Button variant="outline" onClick={onClose}>
+            {moved || running ? '닫기' : '취소'}
           </Button>
-          {!moved && (
-            <Button onClick={run} disabled={busy || !target || picked.size === 0}>
-              {busy ? '옮기는 중…' : `${total}건 이동`}
-            </Button>
-          )}
+          {!moved &&
+            (plan ? (
+              <Button onClick={() => void apply()} disabled={busy || !plan.ok}>
+                {busy && <Loader2 className="mr-1 size-3.5 animate-spin" />}
+                {`적용 — ${plan.total.toLocaleString()}건 이동`}
+              </Button>
+            ) : (
+              <Button
+                onClick={() => void preview()}
+                disabled={busy || !target || picked.size === 0}
+              >
+                {busy && <Loader2 className="mr-1 size-3.5 animate-spin" />}
+                {`미리 보기 — ${total.toLocaleString()}건`}
+              </Button>
+            ))}
         </DialogFooter>
       </DialogContent>
     </Dialog>

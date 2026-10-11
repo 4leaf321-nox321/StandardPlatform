@@ -81,6 +81,10 @@ class KindOut(BaseModel):
     label: str
     needs_file: bool
     two_step: bool
+    max_file_bytes: int | None = None
+    """파일을 받는 종류면 그 상한(바이트) — 종류마다 다르다(표 파일 100MB · 사진 zip 2GB,
+    설치가 `.env` 로 정한다). 화면이 보내기 전에 견준다 — 2GB 를 다 올린 뒤에야 413 을 보지
+    않게."""
 
 
 class WorkerOut(BaseModel):

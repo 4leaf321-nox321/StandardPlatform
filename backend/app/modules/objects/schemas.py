@@ -420,6 +420,9 @@ class ConditionOut(BaseModel):
     field: str
     op: str
     value: str = ""
+    exclude: int = Field(default=0, ge=0, le=99)
+    """0 이면 보통 조건, 1 이상이면 그 번호의 **제외 묶음**(같은 번호끼리 AND 로 묶어 뺀다 —
+    주소의 `nf<번호>.<칸>.<연산>`, ADR 0015)."""
 
 
 class SavedViewQuery(BaseModel):

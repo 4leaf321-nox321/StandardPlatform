@@ -5,6 +5,7 @@ import type { Job } from '@/modules/jobs/api'
 import type { PropertyDef } from '@/modules/ontology/api'
 import { api, downloadFile } from '@/shared/api/client'
 import type { Page } from '@/shared/api/paging'
+import { conditionKey } from '@/modules/objects/urlConditions'
 
 export interface ObjectRow {
   id: string
@@ -295,7 +296,13 @@ export interface Condition {
   field: string
   op: ConditionOp
   value: string
+  /**
+   * **제외 묶음** 번호(1 부터, ADR 0015) — 같은 번호끼리 AND 로 묶어 그 묶음에 맞는 것을 뺀다.
+   * 주소는 `nf<번호>.<칸>.<연산>=<값>`. 없거나 0 이면 보통 조건.
+   */
+  exclude?: number
 }
+
 
 export type ConditionOp =
   'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'contains' | 'starts' | 'empty' | 'notempty'
@@ -439,7 +446,7 @@ function queryString(query: ObjectQuery): string {
   if (query.status) params.set('status', query.status)
   if (query.types?.length) params.set('types', query.types.join('|'))
   for (const one of query.conditions ?? []) {
-    params.append(`f.${one.field}.${one.op}`, one.value)
+    params.append(conditionKey(one), one.value)
   }
   const text = params.toString()
   return text ? `?${text}` : ''

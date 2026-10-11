@@ -20,7 +20,9 @@ import pytest
 
 from app import worker as worker_module
 from app.config import get_settings
+from app.modules.audit import retention
 from app.modules.jobs import services as job_services
+from app.modules.server import performance
 from app.modules.webhooks import services as webhook_services
 
 
@@ -86,6 +88,10 @@ def _run(monkeypatch: pytest.MonkeyPatch, *, minutes: int, jobs: set[int]) -> li
         "purge_old_undo_journals",
     ):
         monkeypatch.setattr(services, name, lambda _db: 0)
+    # 요청 시간 기록 · 접근 로그 정리도 — 흉내 안 내면 가짜 세션(None)에서 바퀴마다 예외가 나
+    # 정리 시각이 안 옮겨지고, 시험이 보려는 박동과 상관없는 길을 돈다.
+    monkeypatch.setattr(performance, "purge_old_timings", lambda _db: 0)
+    monkeypatch.setattr(retention, "purge_old_access_logs", lambda _db: 0)
     monkeypatch.setattr(webhook_services, "pending_count", lambda _db: 0)
     worker.run_forever()
     return [*beats, clock.now]
@@ -160,6 +166,10 @@ def test_고아_첨부_정리가_오래_걸려도_박동과_작업은_이어진�
         "purge_old_undo_journals",
     ):
         monkeypatch.setattr(services, name, lambda _db: 0)
+    # 요청 시간 기록 · 접근 로그 정리도 — 흉내 안 내면 가짜 세션(None)에서 바퀴마다 예외가 나
+    # 정리 시각이 안 옮겨지고, 시험이 보려는 박동과 상관없는 길을 돈다.
+    monkeypatch.setattr(performance, "purge_old_timings", lambda _db: 0)
+    monkeypatch.setattr(retention, "purge_old_access_logs", lambda _db: 0)
     monkeypatch.setattr(webhook_services, "pending_count", lambda _db: 0)
     try:
         worker.run_forever()

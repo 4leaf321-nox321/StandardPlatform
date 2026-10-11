@@ -42,6 +42,7 @@ const ObjectTypesPage = lazy(() => import('@/modules/objects/ObjectTypesPage'))
 const SearchPage = lazy(() => import('@/modules/search/SearchPage'))
 const ObjectProfilePage = lazy(() => import('@/modules/objects/ObjectProfilePage'))
 const QualityPage = lazy(() => import('@/modules/objects/QualityPage'))
+const ReviewPage = lazy(() => import('@/modules/review/ReviewPage'))
 const OntologyLayout = lazy(() => import('@/modules/ontology/OntologyLayout'))
 const OntologyGroupsPage = lazy(() => import('@/modules/ontology/OntologyGroupsPage'))
 const OntologyTypesPage = lazy(() => import('@/modules/ontology/OntologyTypesPage'))
@@ -122,6 +123,8 @@ export const router = createBrowserRouter(
             { path: 'notices', element: <NoticesPage /> },
             { path: 'audit', element: <AuditPage /> },
             { path: 'quality', element: <QualityPage /> },
+            // 사람이 판단할 일 — 원래 자리에서 읽어 모은다(ADR 0027).
+            { path: 'review', element: <ReviewPage /> },
 
             // **정의가 만드는 화면.** 타입이 늘어도 라우트는 안 늘어난다 —
             // `navigation.ts` 가 정적 화면의 정본이라는 규칙이 그대로 선다.

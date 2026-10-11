@@ -112,6 +112,8 @@ export interface JobKind {
   label: string
   needs_file: boolean
   two_step: boolean
+  /** 파일을 받는 종류면 그 상한(바이트) — 종류마다 다르다(표 파일 100MB · 사진 zip 2GB). */
+  max_file_bytes?: number | null
 }
 
 /** 일괄 처리의 한 줄 결과 — `ok` 면 `job_id` 가 새로 선 작업이다. */

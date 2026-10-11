@@ -19,14 +19,29 @@
 `f.<칸>.<연산>=<값>`. 붙여 넣으면 같은 목록이 선다. 값 여럿은 `|` 로 가른다.
 고정 칸은 `label` · `key` · `status`, 나머지는 속성 키다.
 
-## 모르는 것은 거절한다
+## 제외 조건 — 묶음 하나를 부정한다
 
-없는 칸·안 맞는 연산·못 읽는 값은 422 로 **무엇이 틀렸는지** 말한다. 조용히
-무시하면 거르기가 안 걸린 목록이 「전부」 로 읽힌다.
+    ?f.parts.notempty=&nf1.action.starts=SW&nf2.diag.in=C01|C02
+
+`nf<번호>.<칸>.<연산>=<값>` — 같은 번호끼리 AND 로 묶어 **그 묶음에 맞는 것을
+뺀다**(NOT). 묶음은 여럿이고 다른 조건 · 다른 묶음과는 AND 다. 지표의 규칙 기준(ADR
+0015)이 「규칙 k 의 조건 AND 앞 규칙들 어느 것에도 안 맞음」 을 이것으로 적는다 — 그래서
+건 보기의 수가 셀의 수와 **정확히** 같다(「≈」 로 넘기지 않는다, 2026-10-10).
+
+모양을 고른 까닭: 조건 하나의 꼴(`칸.연산=값`)은 그대로 두고 앞머리만 다르게 하면 옛
+주소 · 옛 저장된 뷰 · 옛 클라이언트가 하나도 안 깨진다. 트리(`not(and(...))`)를 JSON 으로
+받는 길은 주소에 붙여 넣을 수 없고 화면의 칩으로도 못 그린다. 저장된 뷰 · API 의 조건에는
+`exclude`(묶음 번호, 0 은 보통 조건) 한 칸이 붙는다.
+
+**비어 있는 칸은 「안 맞음」 이다.** `ILIKE` · 비교가 NULL 이면 그 기록은 묶음에 안
+맞으므로 남는다(`NOT coalesce(묶음, false)`). 지표의 `CASE WHEN` 이 NULL 을 「안 맞음」
+으로 넘기는 것과 같은 뜻이다 — 맨 `NOT` 이면 NULL 의 부정이 NULL 이라 그 기록이 양쪽에서
+다 빠진다.
 """
 
 from __future__ import annotations
 
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import date
@@ -41,6 +56,7 @@ from sqlalchemy import (
     false,
     func,
     literal,
+    not_,
     or_,
     select,
     true,
@@ -64,6 +80,12 @@ OPS_ANY: tuple[str, ...] = ("empty", "notempty")
 FIXED_FIELDS = ("label", "key", "status")
 MULTI_SEP = "|"
 PREFIX = "f."
+#: 제외 묶음의 앞머리 — `nf<번호>.<칸>.<연산>`.
+EXCLUDE_PREFIX = "nf"
+#: 제외 묶음 번호는 두 자리까지 — 규칙 기준의 「기타」 건 보기가 규칙마다 하나씩 쓴다
+#: (규칙 20개).
+MAX_EXCLUDE = 99
+_EXCLUDE_KEY = re.compile(r"^nf([0-9]{1,2})\.(.+)$")
 
 
 @dataclass(frozen=True)
@@ -71,6 +93,9 @@ class Condition:
     field: str
     op: str
     value: str
+    exclude: int = 0
+    """0 이면 보통 조건. 1 이상이면 그 번호의 **제외 묶음** — 같은 번호끼리 AND 로 묶어 그
+    묶음에 맞는 것을 뺀다."""
 
 
 def ops_for(data_type: str) -> tuple[str, ...]:
@@ -90,21 +115,40 @@ def ops_for(data_type: str) -> tuple[str, ...]:
 
 
 def parse(params: Any) -> list[Condition]:
-    """`f.<칸>.<연산>=<값>` 쿼리 파라미터 전부. 같은 키가 여럿이면 전부(AND)."""
+    """`f.<칸>.<연산>=<값>` · `nf<번호>.<칸>.<연산>=<값>`(제외 묶음) 쿼리 파라미터 전부. 같은
+    키가 여럿이면 전부(AND)."""
     out: list[Condition] = []
     for key, value in (
         params.multi_items() if hasattr(params, "multi_items") else params.items()
     ):
-        if not key.startswith(PREFIX):
-            continue
-        rest = key[len(PREFIX) :]
+        exclude = 0
+        if key.startswith(PREFIX):
+            rest = key[len(PREFIX) :]
+        else:
+            found = _EXCLUDE_KEY.match(key)
+            if found is None:
+                continue
+            exclude, rest = int(found.group(1)), found.group(2)
+            if exclude < 1:
+                raise InvalidValue(
+                    code("OBJECTS", 70),
+                    f"제외 묶음 번호는 1 부터입니다: {key} (nf<번호>.<칸>.<연산>)",
+                )
         if "." not in rest:
             raise InvalidValue(
-                code("OBJECTS", 70), f"조건의 모양이 틀렸습니다: {key} (f.<칸>.<연산>)"
+                code("OBJECTS", 70),
+                f"조건의 모양이 틀렸습니다: {key} "
+                f"({'nf<번호>' if exclude else 'f'}.<칸>.<연산>)",
             )
         field, op = rest.rsplit(".", 1)
-        out.append(Condition(field=field, op=op, value=value))
+        out.append(Condition(field=field, op=op, value=value, exclude=exclude))
     return out
+
+
+def key_of(condition: Condition) -> str:
+    """조건 하나의 쿼리 키 — `parse` 의 역. 제외 묶음이면 `nf<번호>.` 로 시작한다."""
+    head = f"{EXCLUDE_PREFIX}{condition.exclude}." if condition.exclude else PREFIX
+    return f"{head}{condition.field}.{condition.op}"
 
 
 def _column(field: str, entity: Any = ObjectInstance) -> Any:
@@ -117,8 +161,12 @@ def _column(field: str, entity: Any = ObjectInstance) -> Any:
     return entity.properties[field].astext
 
 
-def _values(raw: str) -> list[str]:
+def split_values(raw: str) -> list[str]:
+    """`in` 의 값 여럿(`A|B`) — 빈 것은 뺀다."""
     return [one.strip() for one in raw.split(MULTI_SEP) if one.strip()]
+
+
+_values = split_values
 
 
 def _number(field: str, raw: str) -> float:
@@ -137,14 +185,16 @@ def _date(field: str, raw: str) -> date:
         ) from None
 
 
-def _clause(
+def clause(
     condition: Condition,
     definition: PropertyDef | None,
     entity: Any = ObjectInstance,
     label: str | None = None,
 ) -> Any:
     """조건 하나 → SQL. `entity` 는 보통 목록의 객체이고, 이어진 것 너머의 칸이면 그
-    이어진 객체(별칭)다 — 같은 규칙을 두 벌로 적지 않는다."""
+    이어진 객체(별칭)다 — 같은 규칙을 두 벌로 적지 않는다. 지표의 규칙 기준(ADR 0015)도 이
+    식을 `CASE WHEN` 안에 넣는다(칸 · 연산 · 값을 따로 배우지 않는다) — 이어진 것 너머까지 한
+    번에 다루는 입구는 `clauses` · `matches` 다."""
     field, op, raw = condition.field, condition.op, condition.value
     is_fixed = field in FIXED_FIELDS
     data_type = "text" if is_fixed else (definition.data_type if definition else "")
@@ -324,26 +374,69 @@ def clauses(
     defs: list[PropertyDef],
     conditions: list[Condition],
     resolver: paths.Resolver | None = None,
+    *,
+    offset: int = 0,
 ) -> list[Any]:
-    """조건마다 WHERE 식 하나 — `apply` 가 문장에 걸고, 지표의 조건 비율은 `CASE WHEN` 안에
-    넣는다(「조건에 맞으면 1」). 검사는 `apply` 와 같다."""
+    """조건마다 WHERE 식 하나, 제외 묶음마다 하나 — `apply` 가 문장에 걸고, 지표의 조건
+    비율 · 규칙 기준은 `CASE WHEN` 안에 넣는다(`matches`). 검사는 `apply` 와 같다.
+
+    `offset` 은 이어진 것 너머 조건의 별칭 번호를 어디서 시작하나 — 한 문장에 조건 묶음을 여럿
+    넣을 때(규칙 열 개) 별칭 이름이 겹치지 않게."""
     by_key = {d.key: d for d in defs}
     out: list[Any] = []
-    for index, condition in enumerate(conditions):
-        if paths.is_path(condition.field):
-            if resolver is None:
-                raise InvalidValue(code("OBJECTS", 73), f"없는 칸입니다: {condition.field}")
-            out.append(_hop_clause(resolver, condition, index))
-            continue
-        definition = by_key.get(condition.field)
-        if condition.field not in FIXED_FIELDS and definition is None:
-            raise InvalidValue(code("OBJECTS", 73), f"없는 칸입니다: {condition.field}")
-        if definition is not None and definition.data_type == "file":
+    groups: dict[int, list[Any]] = {}
+    for index, condition in enumerate(conditions, offset):
+        if condition.exclude < 0 or condition.exclude > MAX_EXCLUDE:
             raise InvalidValue(
-                code("OBJECTS", 73), f"{definition.label}: 파일 칸은 못 겁니다."
+                code("OBJECTS", 70),
+                f"제외 묶음 번호는 1 ~ {MAX_EXCLUDE} 입니다: {condition.exclude}",
             )
-        out.append(_clause(condition, definition))
+        found = _one(by_key, resolver, condition, index)
+        if condition.exclude:
+            groups.setdefault(condition.exclude, []).append(found)
+        else:
+            out.append(found)
+    out.extend(excluded(groups[number]) for number in sorted(groups))
     return out
+
+
+def matches(
+    defs: list[PropertyDef],
+    conditions: list[Condition],
+    resolver: paths.Resolver | None = None,
+    *,
+    offset: int = 0,
+) -> Any:
+    """조건 전부(AND)에 맞나 — 식 하나. 지표의 조건 비율 · 규칙 기준이 `CASE WHEN` 에 넣는다.
+    조건이 없으면 늘 참."""
+    found = clauses(defs, conditions, resolver, offset=offset)
+    return and_(*found) if found else true()
+
+
+def excluded(found: list[Any]) -> Any:
+    """제외 묶음 — 묶음 전부(AND)에 **맞는 것을 뺀다.** 비교가 NULL(칸이 비었다)이면 「안
+    맞음」 이라 남는다. 맨 `NOT` 이면 NULL 의 부정이 NULL 이라 그 기록이 묶음에 맞는 쪽 ·
+    안 맞는 쪽 어디에도 안 든다 — 규칙 기준의 셀(`CASE WHEN` 은 NULL 을 「안 맞음」 으로
+    넘긴다)과 건 보기의 수가 어긋난다."""
+    return not_(func.coalesce(and_(*found), false()))
+
+
+def _one(
+    by_key: dict[str, PropertyDef],
+    resolver: paths.Resolver | None,
+    condition: Condition,
+    index: int,
+) -> Any:
+    if paths.is_path(condition.field):
+        if resolver is None:
+            raise InvalidValue(code("OBJECTS", 73), f"없는 칸입니다: {condition.field}")
+        return _hop_clause(resolver, condition, index)
+    definition = by_key.get(condition.field)
+    if condition.field not in FIXED_FIELDS and definition is None:
+        raise InvalidValue(code("OBJECTS", 73), f"없는 칸입니다: {condition.field}")
+    if definition is not None and definition.data_type == "file":
+        raise InvalidValue(code("OBJECTS", 73), f"{definition.label}: 파일 칸은 못 겁니다.")
+    return clause(condition, definition)
 
 
 def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> Any:
@@ -467,7 +560,7 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
         return linked.where(last_edges.c.other.in_(values)).exists() if values else false()
 
     assert chain.field is not None and last_target is not None
-    inner = _clause(
+    inner = clause(
         Condition(chain.field, op, raw), chain.definition, last_target, label=chain.label
     )
     return linked.where(inner).exists()
@@ -475,4 +568,4 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
 
 def to_query(conditions: list[Condition]) -> dict[str, str]:
     """저장된 뷰 → 쿼리 파라미터. `parse` 의 역."""
-    return {f"{PREFIX}{c.field}.{c.op}": c.value for c in conditions}
+    return {key_of(c): c.value for c in conditions}

@@ -655,6 +655,8 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
         results.extend(_limits_rehearsal(client, admin, url))
     if not only or "incremental" in (only or ""):
         results.extend(_incremental_rehearsal(client, admin, url))
+    if not only or "rules" in (only or ""):
+        results.extend(_rules_rehearsal(client, admin))
 
     print("\n| 영역 | 무엇 | 중앙값 | 비고 |\n| --- | --- | --- | --- |")
     for area, label, took, note in results:
@@ -1895,6 +1897,177 @@ def _incremental_rehearsal(
     return out
 
 
+#: 규칙 기준(ADR 0015)의 리허설 — 규칙 열(차례가 뜻이다). 일곱째는 **참조 너머**(SKU 의 기본
+#: 코드)라 기록마다 EXISTS 하나를 더 판다.
+_SCALE_RULES: list[dict[str, Any]] = [
+    {"label": "SW", "when": [{"field": "handling", "op": "eq", "value": "H7"}]},
+    {"label": "고객과실", "when": [{"field": "symptom", "op": "in", "value": "S01|S02|S07"}]},
+    {
+        "label": "NTF",
+        "when": [
+            {"field": "parts", "op": "empty", "value": ""},
+            {"field": "handling", "op": "eq", "value": "H0"},
+        ],
+    },
+    {
+        "label": "보증 외 고비용",
+        "when": [
+            {"field": "warranty", "op": "eq", "value": "false"},
+            {"field": "cost", "op": "gte", "value": "8000"},
+        ],
+    },
+    {
+        "label": "센터 점검",
+        "when": [
+            {"field": "center", "op": "in", "value": "C00|C01|C02"},
+            {"field": "parts", "op": "empty", "value": ""},
+        ],
+    },
+    {
+        "label": "국가 캠페인",
+        "when": [
+            {"field": "country", "op": "eq", "value": "N05"},
+            {"field": "symptom", "op": "in", "value": "S10|S11|S12|S13|S14"},
+        ],
+    },
+    {
+        "label": "초기 모델",
+        "when": [{"field": "ref.model.base_code", "op": "starts", "value": "SM-X000"}],
+    },
+    {"label": "비용 없음", "when": [{"field": "cost", "op": "eq", "value": "0"}]},
+    {
+        "label": "보증 H3",
+        "when": [
+            {"field": "handling", "op": "eq", "value": "H3"},
+            {"field": "warranty", "op": "eq", "value": "true"},
+        ],
+    },
+    {"label": "제품결함", "when": [{"field": "parts", "op": "notempty", "value": ""}]},
+]
+
+
+def _rules_rehearsal(client: Any, admin: dict[str, str]) -> list[tuple[str, str, str, str]]:
+    """규칙 기준(ADR 0015) — 보통 기준의 지표에 **규칙 열 개짜리 기준**을 더하면 계산이 얼마나
+    느려지나. 같은 모양 셋(보통 · 규칙 열 · 참조 너머를 뺀 규칙 아홉)을 계획 → 저장 →
+    재계산하고, 구성비 표 · 추이와 셀의 「N건 보기」(제외 묶음 열까지) 목록 수가 셀의 수와
+    같은지 본다. 끝나면 지표를 지운다."""
+    import uuid as uuid_module
+
+    out: list[tuple[str, str, str, str]] = []
+    tag = uuid_module.uuid4().hex[:4]
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("rules", label, f"{took:.2f}초", note))
+        print(f"{took:8.2f}초  {label}  {note}", flush=True)
+
+    base = {
+        "measure": "count",
+        "time": {"address": "properties.service_date", "grain": "month"},
+        "dimensions": [
+            {"name": "symptom", "address": "properties.symptom"},
+            {"name": "factory", "address": "properties.factory"},
+        ],
+    }
+
+    def nature(rules: list[dict[str, Any]]) -> dict[str, Any]:
+        return {"name": "nature", "label": "성격", "rules": rules, "else": "기타"}
+
+    own_rules = [one for one in _SCALE_RULES if one["label"] != "초기 모델"]
+    definitions = [
+        (f"rh_rule_base_{tag}", "보통 기준(증상 x 공장)", "svc_case", base),
+        (
+            f"rh_rule_ten_{tag}",
+            "+ 규칙 기준 열(참조 너머 하나)",
+            "svc_case",
+            {**base, "dimensions": [*base["dimensions"], nature(_SCALE_RULES)]},
+        ),
+        (
+            f"rh_rule_own_{tag}",
+            "+ 규칙 기준 아홉(자기 칸만)",
+            "svc_case",
+            {**base, "dimensions": [*base["dimensions"], nature(own_rules)]},
+        ),
+    ]
+    made: list[str] = []
+    try:
+        planned = client.post(
+            "/api/metrics/plan",
+            json={"source_type_slug": "svc_case", "spec": definitions[1][3]},
+            headers=admin,
+        ).json()
+        (plan,) = planned.get("rules") or [{}]
+        won = " · ".join(
+            f"{one['label']} {one['won']:,}" + ("(막힘)" if one["blocked"] else "")
+            for one in plan.get("rules", [])
+        )
+        print(
+            f"계획의 규칙별 수(센 기록 {plan.get('seen', 0):,}건, "
+            f"표본={plan.get('sampled')}): {won} · 기타 {plan.get('other_count', 0):,} / "
+            f"경고 {planned.get('warnings')}",
+            flush=True,
+        )
+        if not _build_metrics(client, admin, definitions, row, made):
+            return out
+        slug = definitions[1][0]
+        reads: list[tuple[str, str, dict[str, Any]]] = [
+            (
+                "구성비 표 — 성격 x 월(기간마다 100%)",
+                f"/api/metrics/{slug}/values",
+                {"dims": "nature", "by": "period", "composition": "nature"},
+            ),
+            (
+                "구성비 추이 — 성격별 선",
+                f"/api/metrics/{slug}/series",
+                {"split": "nature", "composition": "true"},
+            ),
+            ("표 — 성격 x 공장", f"/api/metrics/{slug}/values", {"dims": "nature,factory"}),
+        ]
+        for label, path, params in reads:
+            times: list[float] = []
+            shape = ""
+            for _ in range(3):
+                started = time.perf_counter()
+                got = client.get(path, params=params, headers=admin)
+                times.append(time.perf_counter() - started)
+                if got.status_code >= 400:
+                    shape = f"HTTP {got.status_code} {got.text[:120]}"
+                    break
+                shape = _metric_shape(got.json())
+            row(label, statistics.median(times), shape)
+        # 셀의 건 보기 — 목록의 수가 셀의 수와 같은가(기타는 제외 묶음 열).
+        table = client.get(
+            f"/api/metrics/{slug}/values", params={"dims": "nature"}, headers=admin
+        ).json()
+        counts = {one["dims"]["nature"]: one for one in table["cells"]}
+        print(
+            "성격별 건수: "
+            + " · ".join(f"{key} {one['count']:,}" for key, one in counts.items()),
+            flush=True,
+        )
+        for key in ("기타", "NTF", "초기 모델", "제품결함"):
+            cell = counts.get(key)
+            if cell is None:
+                continue
+            started = time.perf_counter()
+            listed = client.get(
+                "/api/objects/svc_case",
+                params={**cell["drill"]["params"], "limit": 1},
+                headers=admin,
+            )
+            took = time.perf_counter() - started
+            total = listed.json().get("total") if listed.status_code == 200 else listed.text
+            groups = sum(1 for one in cell["drill"]["params"] if one.startswith("nf"))
+            row(
+                f"건 보기 목록 — {key}(제외 묶음 조건 {groups}개)",
+                took,
+                f"셀 {cell['count']:,} · 목록 {total} · 같음={total == cell['count']}",
+            )
+    finally:
+        for one in reversed(made):
+            client.delete(f"/api/metrics/{one}", headers=admin)
+    return out
+
+
 def _metric_shape(body: dict[str, Any]) -> str:
     """지표 응답 한 마디 — 수와, 숨기지 말아야 할 것(잘림 · 겹침 · 분모 없음)."""
     if "rows" in body and "ages" in body:
@@ -2091,7 +2264,7 @@ def main() -> None:
         "--only",
         help=(
             "이 영역만 잰다(list · profile · graph · summary · metrics · recipes · visits · "
-            "alerts …)"
+            "alerts · incremental · rules …)"
         ),
     )
     args = parser.parse_args()

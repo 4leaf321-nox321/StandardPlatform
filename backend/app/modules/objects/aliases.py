@@ -476,6 +476,33 @@ def review(
     return done, refused
 
 
+def unverify(
+    db: Session,
+    user: User,
+    object_type: ObjectType,
+    alias_row: ObjectAlias,
+    owner: ObjectInstance,
+) -> None:
+    """확인을 거둔다 — **검수 대기로** 되돌린다(검토함의 「복원」, ADR 0027).
+
+    `review(approve=True)` 의 반대다. 지우는 것이 아니다 — 확인을 잘못 눌렀다고 별칭을 지우면
+    「확인은 실수였고 별칭은 맞다」 를 말할 자리가 없다. 권한은 부르는 쪽이 본다(`review` 와
+    같은 `require_owner_edit`). **부르는 쪽이 커밋한다.**"""
+    alias_row.verified_by_id = None
+    alias_row.verified_at = None
+    audit.record(
+        db,
+        action="object.update",
+        actor=user,
+        target_table="objects",
+        target_id=owner.id,
+        target_label=f"{object_type.slug}:{owner.label}",
+        workspace_id=owner.owner_workspace_id,
+        changes={"aliases": {"before": alias_row.value, "after": alias_row.value}},
+        reason="별칭 검수 — 확인을 거둠(검수 대기로)",
+    )
+
+
 def lookup(
     db: Session, object_type: ObjectType, text: str, *, kind: str | None = None
 ) -> list[uuid.UUID]:

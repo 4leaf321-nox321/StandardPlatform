@@ -24,6 +24,7 @@ from tests.api.test_ontology import (
     _make_relation,
     _make_type,
 )
+from tests.api.test_workspace_reassign_job import reassign_plan
 
 
 def _other(db: Session, name: str = "다른 부서") -> Workspace:
@@ -165,13 +166,12 @@ def test_부서_통폐합은_겹치는_식별자가_있으면_거절한다(
         client, admin, part, label="저기 것", key="K-1", workspace_slug=source.slug
     )["id"]
 
-    denied = client.post(
-        f"/api/workspaces/{source.slug}/reassign",
-        json={"target_slug": admin.workspace, "kinds": ["objects"]},
-        headers=admin.headers,
-    )
+    # 통폐합은 작업이다(2026-10-10) — 계획이 막는 것을 보이고, 적용 작업이 안 선다.
+    planned = reassign_plan(client, admin, source.slug, admin.workspace, ["objects"])
+    assert planned["result"]["ok"] is False
+    assert "K-1" in planned["result"]["errors"][0]
+    denied = client.post(f"/api/jobs/{planned['id']}/apply", headers=admin.headers)
     assert denied.status_code == 409, denied.text
-    assert "K-1" in denied.json()["error"]["message"]
     db.expire_all()
     stayed = db.get(ObjectInstance, uuid.UUID(moving))
     assert stayed is not None and stayed.owner_workspace_id == source.id

@@ -292,10 +292,17 @@ def _broken_refs(
     return _finding("broken_ref", object_type, count, hits)
 
 
+def duplicate_key(label: str) -> str:
+    """「이름이 같다」 의 기준 — 여기 한 곳. 품질의 「이름이 같은 객체」 와 검토함의 병합 후보
+    (`objects/review.py`)가 같은 것을 본다. 둘이 따로 정하면 품질에는 뜨는데 검토함에는 안
+    뜨는(또는 그 반대) 묶음이 생기고, 그때 어느 쪽이 맞는지 아무도 모른다(2026-10-10)."""
+    return compare_key(label)
+
+
 def _duplicates(object_type: ObjectType, rows: Rows) -> Finding | None:
     groups: dict[str, list[ObjectInstance]] = {}
     for row in rows():
-        groups.setdefault(compare_key(row.label), []).append(row)
+        groups.setdefault(duplicate_key(row.label), []).append(row)
     dupes = [members for members in groups.values() if len(members) > 1]
     if not dupes:
         return None

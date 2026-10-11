@@ -23,6 +23,7 @@ from app.modules.workspaces.models import Workspace, WorkspaceMember
 from tests.api.conftest import Signed, _login, _make_user
 from tests.api.test_core_api import _open
 from tests.api.test_ontology import _make_object, _make_type
+from tests.api.test_workspace_reassign_job import reassign
 
 
 def _workspace(client: TestClient, admin: Signed, db: Session, name: str) -> Workspace:
@@ -83,13 +84,8 @@ def test_통폐합으로_옮겨_간_객체는_토큰의_부서에_따라_무덤_
         }.items()
     }
 
-    moved = client.post(
-        f"/api/workspaces/{source.slug}/reassign",
-        json={"target_slug": target.slug, "kinds": ["objects"]},
-        headers=admin.headers,
-    )
-    assert moved.status_code == 200, moved.text
-    assert moved.json()["moved"] == {"objects": 1}
+    moved = reassign(client, admin, source.slug, target.slug, ["objects"])
+    assert moved["moved"] == {"objects": 1}
 
     # 원본 부서만 보던 자격 — **이제 안 보인다**: 이름 · 칸 없이 식별자만 실은 무덤.
     gone = _pull(client, only_source, vendor, since=marks["source"])["items"]
@@ -156,13 +152,8 @@ def test_통폐합의_객체_기록은_한_문장으로_옮긴_수만큼_남는�
     gone = client.delete(f"/api/objects/{vendor}/{made[0]['id']}", headers=admin.headers)
     assert gone.status_code in (200, 204), gone.text
 
-    moved = client.post(
-        f"/api/workspaces/{source.slug}/reassign",
-        json={"target_slug": target.slug, "kinds": ["objects"]},
-        headers=admin.headers,
-    )
-    assert moved.status_code == 200, moved.text
-    assert moved.json()["moved"] == {"objects": 5}
+    moved = reassign(client, admin, source.slug, target.slug, ["objects"])
+    assert moved["moved"] == {"objects": 5}
 
     ids = [uuid.UUID(one["id"]) for one in made]
     rows = list(

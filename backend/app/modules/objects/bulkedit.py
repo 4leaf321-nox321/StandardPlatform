@@ -452,26 +452,31 @@ def record(
     field_label: str,
     batch_id: uuid.UUID,
     reason: str,
+    sink: audit.Batch | None = None,
 ) -> None:
     """바뀐 행마다 기록 하나 — **같은 묶음 번호를 달고.**
 
     한 줄로 뭉뚱그리면 그 객체의 이력에서 이 변경이 사라지고, 지켜보는 사람에게도
     안 간다. 커밋은 부르는 쪽이 한다.
+
+    `sink`(`audit.Batch`)를 주면 기록을 거기 모은다(넣는 것은 부르는 쪽의 `write`) — 줄도
+    알림도 같고 넣는 것만 COPY 한 문장이다. 검토함의 「지워진 것을 가리키는 칸」 이 수만 줄을
+    이 기록으로 남긴다(`objects/review.py`). 묶음 표식의 모양은 여기 한 벌이다 — 복원이 그것을
+    읽는다. `size` 는 `changed` 의 수다(나눠 부르면 전체를 넘긴다).
     """
     for row in rows:
         if row.id not in changed:
             continue
         # 화면에서 사람이 고른 묶음이다 — 고친 칸을 표시해 다음 적재가 비켜 가게 한다.
         humanedits.record(row, before_state[row.id], state_of(row))
-        audit.record(
-            db,
-            action="object.update",
-            actor=user,
-            target_table="objects",
-            target_id=row.id,
-            target_label=f"{object_type.slug}:{row.label}",
-            workspace_id=row.owner_workspace_id,
-            changes={
+        entry: dict[str, Any] = {
+            "action": "object.update",
+            "actor": user,
+            "target_table": "objects",
+            "target_id": row.id,
+            "target_label": f"{object_type.slug}:{row.label}",
+            "workspace_id": row.owner_workspace_id,
+            "changes": {
                 **audit.diff(before_state[row.id], state_of(row)),
                 BATCH_KEY: {
                     "id": str(batch_id),
@@ -482,8 +487,12 @@ def record(
                     "size": len(changed),
                 },
             },
-            reason=reason,
-        )
+            "reason": reason,
+        }
+        if sink is not None:
+            sink.record(**entry)
+        else:
+            audit.record(db, **entry)
 
 
 def batch_entries(db: Session, batch_id: uuid.UUID) -> list[AuditEntry]:

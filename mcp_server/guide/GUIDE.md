@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-09a
+GUIDE_VERSION: 2026-10-10b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -29,6 +29,7 @@ GUIDE_VERSION: 2026-10-09a
 | 여러 타입을 한 개념으로 — 「설비 전부」 | `objects_list(<인터페이스 slug>)` · `objects_summary(<인터페이스>, group_by="type")` | **읽기만.** 줄의 `type_slug` 가 실제 타입 — 상세 · 고치기는 그것으로 |
 | 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
 | **비율 · 추이 · 코호트** — 「판매월별 누적 인입률」 「생산월 x 공장별 건수」 | `metric_list` → `metric_query(slug, shape=)` | **미리 세어 둔 값**이다 — `computed_at` · `stale` · `overlap` 을 함께 말한다. 없으면 `metric_define(apply=false)` 로 제안 |
+| **성격으로 분류한 구성비 추이** — 「제품결함 · NTF · 고객과실 · SW 의 몫이 어떻게 바뀌나」 | `metric_list` 의 `dims[].kind="rule"` → `metric_query(slug, shape="series", split=<규칙 기준>, composition=true)` | 성격은 사람이 정한 **규칙**이 붙인다 — 네가 기록을 받아 가르지 않는다. 규칙 기준이 없으면 `metric_define(apply=false)` 로 제안(`get_guide(topic="metrics")` 의 「규칙 기준」) |
 | **세어 둔 수에서 추론** — 「B10 수명」 「전작보다 나빠졌나」 「관리도 신호」 「언제 바뀌었나」 「몰려 있나」 | `metric_list` 의 `analyses` → `metric_analyze(slug, recipe, options=)` | **셀을 받아 직접 계산하지 않는다.** `caveats` 를 그대로 전하고, `unreachable` 인 B수명은 값이 없다 — `get_guide(topic="metrics")` 의 「분석」 |
 | **요즘 무엇이 울렸나** — 「내 경보」 「새로 나빠진 모델 있나」 | `metric_alerts(slug=)` | 발생은 「그때 처음 본 결론」 — 지금도 그런지는 `metric_analyze` 로. 만들기는 화면에서 |
 | 지표 값이 이상하다 · 언제 셌나 · 왜 그대로인가 | `metric_runs(slug)` → (시스템 관리자) `metric_recompute(slug)` | 실패한 계산은 옛 값을 두고 이유를 남긴다. 평소에는 타이머가 바뀐 기간만 센다 — `mode` · `note` |
@@ -49,6 +50,7 @@ GUIDE_VERSION: 2026-10-09a
 | 무엇이 나빠지고 있나(필수값·고아·끊긴 참조·중복) | `quality_report` | 볼 수 있는 것만 |
 | **어디부터 채우나** — 「지금 무엇을 먼저 채워야 하나」 | `fill_priorities(type_slug=)` | 쓰는 곳(필수 · 지표 · 코어 공개 · 뷰)으로 가중한 줄. `gain` · `link` 를 함께 전하고, `estimated` 면 「약」 을 붙인다 |
 | **못 찾은 이름을 별칭으로** — 「이걸로는 왜 안 찾혀?」 | `alias_candidates` → 사람 확인 → `alias_candidate_apply(action="attach", object_id=, apply=true)` | `suggestions` 는 짐작 — **어느 객체인지 사람이 정한다.** 아닌 말은 `ignore` |
+| **판단을 기다리는 일 한꺼번에** — 「검토할 것 뭐 있어?」 「확실한 것은 추천대로 해」 | `review_list` → 사람 확인 → `review_decide(..., apply=false)` → 사람 확인 → 같은 인자에 `apply=true, fingerprint=` | 별칭 후보 · 검수 대기 별칭 · 병합 후보 · 지워진 것을 가리키는 칸을 한 곳에서. **추천대로 모두(`recommended=True`)는 사람이 그러라고 했을 때만.** 병합은 복원이 없다 |
 | 객체 하나 만들기 | `object_create` | 정의에 없는 속성 키는 거절된다 |
 | 객체 고치기 | `object_update` | **보낸 키만** 병합. 비우려면 `null`. 식별자 · 상태 · 유효 연도 · 별칭도 |
 | **사진 · 파일 붙이기** | `attachment_upload_prepare` → 셸에서 `curl` | **파일을 읽거나 base64 로 옮기지 않는다** — 바이트는 셸이 직접 올린다. 셸이 없으면 사람에게 화면에서 |
@@ -344,6 +346,32 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 네가 찾다 못 찾은 말도 여기 남는다 — 같은 대화에서 사람이 「그건 Ansys 야」 라고 알려 주면,
 그 말을 별칭으로 붙일지 물어볼 자리다(붙이는 것은 부서 관리자 이상).
 
+### 판단을 기다리는 일 — 검토함: `review_list` · `review_decide`
+
+별칭 후보 · 기계가 붙인 별칭 · 이름이 같은 객체(병합 후보) · 지워진 것을 가리키는 칸은 원래
+자리가 다 다르다. 검토함은 그것을 **원래 자리에서 읽어** 한 줄(물음 · 근거 · 후보 · 추천 ·
+확신도)로 세운다 — 처리도 원래 기능으로 간다(그래서 위의 `alias_candidate_apply` ·
+`aliases_review` 와 결과가 같다). 「검토할 것 뭐 있어?」 · 「확실한 건 추천대로 해 줘」 에 쓴다.
+
+1. `review_list(kind=, type_slug=, workspace=, min_confidence=, group=)` — `kinds` 가 종류마다 수
+   (`total` 원래 자리에 있는 수 · `matched` 거르기에 맞는 수)를 센다. 요약은 그것으로. 줄의
+   `reason` 이 확신도의 근거, `blocked` 가 이 토큰의 주인이 처리할 수 없는 까닭이다.
+   `group=True` 면 같은 말 · 같은 지워진 객체 · 같은 출처의 줄이 한 줄로 접힌다(`members`).
+2. 사람에게 보이고 무엇을 할지 받는다. **추천은 규칙의 짐작이다** — 사람이 「추천대로」 라고
+   말하지 않았으면 고르지 않는다.
+3. `review_decide(decisions=[{kind, item_id, action, value?}])` 또는 「추천대로 모두」
+   `review_decide(recommended=True, threshold=0.9, kind=, type_slug=)` — **기본이 미리 보기**
+   (`apply=False`). `outcomes[].effect`(무엇이 무엇으로) · `counts.blocked`(막혀서 빠지는 것) ·
+   `skipped`(문턱 아래라 안 고른 것) · `by_kind[].undoable`(복원할 수 있나 — **병합은 없다**)를
+   사람에게 보인다.
+4. 확인받으면 **같은 인자**에 `apply=True, fingerprint=<미리 보기의 값>`. 그 사이 바뀌었으면
+   아무것도 안 하고 거절된다 — 다시 미리 보고 다시 묻는다. 적용하면 `batch_id` 가 온다 —
+   복원은 화면(내 부서 › 검토함 › 최근 적용)에서 한다. 큰 묶음은 작업이 되어 `job` 으로 온다.
+
+`action` 은 `accept`(추천대로) · `choose`(다른 것으로 — `value` 에 `choices[].value`) ·
+`ignore`(무시 — 검수 대기 별칭에는 없다). 「적용을 기다리는 계획」 · 「선 기다림」 줄은 처리
+길이 없다 — `link`(원래 화면)를 사람에게 전한다.
+
 ### 어디부터 채우나 — `fill_priorities(type_slug=, limit=)`
 
 「이 플랫폼에서 지금 무엇을 먼저 채워야 해?」 에 답하는 자리다. 품질(`quality_report`)이 「무엇이
@@ -370,6 +398,9 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   연산은 칸의 종류가 정한다(숫자·날짜 `eq ne gt gte lt lte in`, 글자 `eq ne contains
   starts in`, 선택·참조 `eq ne in`, 참/거짓 `eq`, 모두 `empty notempty`). 안 맞는 연산은
   서버가 `[코드] 문구` 로 거절한다 — 우회하지 말고 고친다.
+- **제외** — 조건에 `"exclude": <번호>` 를 붙이면 같은 번호끼리 AND 로 묶어 **그 묶음에 맞는
+  것을 뺀다**(「(SW 로 시작) 인 것은 빼고」). 묶음끼리 · 다른 조건과는 AND. 칸이 비어 비교가 안
+  되는 기록은 남는다. 화면 주소는 `nf<번호>.<칸>.<연산>=<값>` 이다.
 - 응답의 `total` 이 전체 수다. 한 쪽은 200까지. **몇 건인지 세려면 넘기지 말고 통계로.**
 
 ### 다른 타입의 칸 — `object_fields(type_slug)`
@@ -997,6 +1028,41 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 든다), 튄 달은 `control`(p-관리도), 바뀐 때는 `changes`. 근거는 `drill`(셀의 전부)과 `value_drill`(조건에
 맞는 것) 둘이다.
 
+**규칙 기준 — 성격으로 분류한 뒤 그 구성비 추이(열 가지 물음 ⑧, ADR 0015).** 「성격(제품결함 · NTF ·
+고객과실 · SW)으로 나눠 그 몫이 어떻게 바뀌나」 는 통계가 아니라 **분류**다 — 진단 · 조치 코드 · 교체 부품
+같은 칸을 보고 사람이 정한 규칙으로 붙인다. **네가 기록을 받아 가르지 않는다**(같은 물음에 매번 다른 답,
+200만 건을 토큰으로). 지표의 기준을 주소 대신 규칙으로 둔다:
+
+```json
+{"name": "nature", "label": "성격", "else": "기타",
+ "rules": [
+   {"label": "SW", "when": [{"field": "action", "op": "starts", "value": "SW"}]},
+   {"label": "고객과실", "when": [{"field": "diag", "op": "in", "value": "C01|C02|C07"}]},
+   {"label": "NTF", "when": [{"field": "parts", "op": "empty", "value": ""},
+                             {"field": "action", "op": "eq", "value": "N00"}]},
+   {"label": "제품결함", "when": [{"field": "parts", "op": "notempty", "value": ""}]}]}
+```
+
+- 기록마다 **위에서부터 처음 맞는 규칙**의 이름이 값이고, 아무것도 안 맞으면 `else`(「기타」). 차례가
+  뜻이다 — 「SW 이면서 부품 교체」 는 SW. 조건은 `objects_list` 의 조건과 같은 모양 · 같은 연산(너머
+  칸 `ref.model.series` 도). 규칙 스물 · 규칙마다 조건 열까지, 성격 이름은 규칙마다 다르다.
+- **규칙은 사람이 정한다.** 칸 이름은 `ontology_schema` 로 확인하고, 코드표(어느 코드가 고객과실인가)는
+  사람에게서 받는다 — 지어내지 않는다. `metric_define(apply=false)` 의 계획이 `rules[]` 로 규칙마다
+  붙인 수(`won`) · 맞는 수(`matched`) · **막힌 규칙**(`blocked` — 앞 규칙이 다 가져가 한 건도 안 남음,
+  `taken_by` 가 누가) · 기타의 수(`other_count`, 몫이 크면 경고)를 낸다. 그것을 사람에게 그대로
+  보이고 차례 · 조건을 같이 고친다. 표본이면(`sampled`) 「표본에서」 를 붙인다.
+- 읽기: 구성비 추이는 `metric_query(slug, shape="series", split="nature", composition=true)` — 점마다
+  `composition`(그 기간의 몫, %, 기간마다 합 100). 표는 `shape="table", dims=["nature"],
+  by=["period"], composition="nature"`. 「구성비가 바뀌었나」 는 `metric_analyze(recipe="pareto",
+  options={"dim": "nature", "compare_from": …, "compare_to": …})`(수정 잔차), 「어느 성격이 늘고 있나」
+  는 `recipe="changes", options={"by": "nature"}`. 구성비는 건수 · 합계의 몫이다 — 비율(분모로 나눈
+  값)의 몫이 아니다.
+- **규칙이 바뀌면 지난 기간도 새 규칙으로 다시 센다.** 「지난달과 왜 다르냐」 에는 `metric_runs` 의
+  `rules`(그 계산이 쓴 **규칙 판** — 지문 · 저장한 때 · 사람)를 먼저 본다: 판이 바뀌었으면 규칙이
+  바뀐 것이다.
+- 건 보기는 정확하다 — 규칙 k 의 셀은 「규칙 k 의 조건 + 앞 규칙마다 제외 묶음(`nf<번호>.`)」, 기타는
+  「모든 규칙의 제외 묶음」 이다(목록의 `total` 이 셀의 `count` 와 같다).
+
 **옮길 때 빼먹지 않는 것.**
 
 - `computed_at`(계산 시각) — 세어 둔 값이다. `stale` 이 true 면 세 주기가 지나도록 안 셌다.
@@ -1008,9 +1074,10 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 - `denominator.missing` — 분모가 없거나 0 이라 비율이 빈 셀 수. 분모의 기간이 아직 안 들어온
   것일 수 있다.
 - 「그 수가 뭔데」 — 셀의 `drill.params` 를 `objects_list(type_slug=drill.type_slug, conditions=)`
-  로. `f.<칸>.<연산>=<값>` 을 `{"field": "<칸>", "op": "<연산>", "value": "<값>"}` 로 풀고,
-  `status=` · `year=` 는 그 인자로. `drill.partial` 이 비어 있을 때 목록의 `total` 이 셀의
-  `count` 와 같다.
+  로. `f.<칸>.<연산>=<값>` 을 `{"field": "<칸>", "op": "<연산>", "value": "<값>"}` 로,
+  `nf<번호>.<칸>.<연산>=<값>`(제외 묶음 — 규칙 기준의 「앞 규칙에 안 맞음」)은 거기에
+  `"exclude": <번호>` 를 붙여 풀고, `status=` · `year=` 는 그 인자로. `drill.partial` 이 비어
+  있을 때 목록의 `total` 이 셀의 `count` 와 같다.
 
 **분석 — 세어 둔 셀 위의 통계(ADR 0014).** 「B10 이 몇 달이냐」 「새 모델이 전작보다
 나빠졌나」 같은 물음은 셀을 받아 직접 맞추지 않는다 — `metric_analyze(slug, recipe, options=)`.

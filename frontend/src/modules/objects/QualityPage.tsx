@@ -85,6 +85,13 @@ export default function QualityPage() {
       <PageHeader
         title="데이터 품질"
         description="검증은 넣을 때만 걸립니다. 그 뒤에 나빠진 것을 여기서 셉니다 — 내가 볼 수 있는 것만."
+        actions={
+          // 판단할 것(별칭 후보 · 검수 대기 별칭 · 이름이 같은 것 · 지워진 것을 가리키는 칸)은
+          // 검토함이 한꺼번에 처리한다(ADR 0027) — 여기는 세고 보여 주는 자리.
+          <Button asChild size="sm" variant="outline">
+            <Link to="/review">검토함</Link>
+          </Button>
+        }
       />
       <FillPriorities />
       {report.error && <ErrorNotice error={report.error} />}

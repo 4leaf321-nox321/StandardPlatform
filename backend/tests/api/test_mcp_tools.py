@@ -1597,3 +1597,98 @@ def test_자기소개는_서버가_아는_사실로_쓰고_whoami_가_싣는다(
     finally:
         db.query(PlatformProfile).delete()
         db.commit()
+
+
+def test_규칙_기준을_도구로_정의하고_구성비를_읽고_건_보기를_제외로_푼다(bot: Bot) -> None:
+    """열 가지 물음 ⑧(ADR 0015) — `metric_define` 이 규칙 기준을 받아 계획(규칙마다의 수 · 막힌
+    규칙 · 기타)을 말하고, `metric_query` 가 구성비를 내고, 셀의 건 보기(`nf<번호>.` 제외
+    묶음)를 `objects_list` 의 `exclude` 로 풀면 같은 수다."""
+    kind = _uniq("case")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": kind,
+                    "label": "기록",
+                    "usage": "log",
+                    "properties": [
+                        {"key": "received", "label": "접수일", "data_type": "date"},
+                        {"key": "action", "label": "조치 코드", "data_type": "text"},
+                        {"key": "diag", "label": "진단 코드", "data_type": "text"},
+                    ],
+                }
+            ]
+        },
+        apply=True,
+    )
+    for received, action, diag in [
+        ("2026-01-05", "SW1", "C01"),  # SW(고객과실보다 앞)
+        ("2026-01-20", "R10", "C01"),  # 고객과실
+        ("2026-02-03", None, "C09"),  # 기타 — 조치 코드가 비었다
+        ("2026-02-11", "SW2", None),  # SW
+    ]:
+        properties: dict[str, Any] = {"received": received}
+        if action is not None:
+            properties["action"] = action
+        if diag is not None:
+            properties["diag"] = diag
+        bot.call(server.object_create, kind, label=received, properties=properties)
+    slug = _uniq("m")
+    spec = {
+        "measure": "count",
+        "time": {"address": "properties.received", "grain": "month"},
+        "dimensions": [
+            {
+                "name": "nature",
+                "label": "성격",
+                "rules": [
+                    {
+                        "label": "SW",
+                        "when": [{"field": "action", "op": "starts", "value": "SW"}],
+                    },
+                    {
+                        "label": "고객과실",
+                        "when": [{"field": "diag", "op": "eq", "value": "C01"}],
+                    },
+                    {
+                        "label": "재작업",
+                        "when": [{"field": "action", "op": "eq", "value": "SW1"}],
+                    },
+                ],
+                "else": "기타",
+            }
+        ],
+    }
+    planned = bot.call(server.metric_define, slug, "성격", kind, spec)
+    assert planned["ok"] is True, planned
+    (rules,) = planned["rules"]
+    assert [one["won"] for one in rules["rules"]] == [2, 1, 0]
+    assert rules["rules"][2]["blocked"] is True and rules["other_count"] == 1
+    saved = bot.call(server.metric_define, slug, "성격", kind, spec, apply=True)
+    assert saved["job"]["status"] == "done", saved["job"]
+
+    series = bot.call(
+        server.metric_query, slug, shape="series", split="nature", composition=True
+    )
+    feb = {
+        line["key"]: point["composition"]
+        for line in series["lines"]
+        for point in line["points"]
+        if point["period"] == "2026-02-01"
+    }
+    assert feb == {"SW": 50.0, "기타": 50.0, "고객과실": 0.0}
+    table = bot.call(server.metric_query, slug, dims=["nature"])
+    for cell in table["cells"]:
+        conditions: list[dict[str, Any]] = []
+        for key, value in cell["drill"]["params"].items():
+            head, rest = key.split(".", 1)
+            field, op = rest.rsplit(".", 1)
+            one: dict[str, Any] = {"field": field, "op": op, "value": value}
+            if head.startswith("nf"):
+                one["exclude"] = int(head[2:])
+            conditions.append(one)
+        listed = bot.call(server.objects_list, kind, conditions=conditions)
+        assert listed["total"] == cell["count"], cell
+    runs = bot.call(server.metric_runs, slug)
+    assert runs[0]["rules"][0]["name"] == "nature"

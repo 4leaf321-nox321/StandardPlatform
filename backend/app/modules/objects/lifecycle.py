@@ -303,6 +303,12 @@ def _rewrite_ref(
     return merged
 
 
+#: 칸 하나에서 가리키는 것을 바꾸는 규칙 — 검토함의 「지워진 것을 가리키는 칸」 이 같은
+#: 규칙으로 줄마다 새 값을 만든다(`objects/review.py`). 병합과 다른 규칙이면 여러 값 칸에서
+#: 둘이 갈린다.
+replace_ref = _rewrite_ref
+
+
 def _rewrite_property_refs(
     db: Session,
     user: User,

@@ -47,13 +47,18 @@ from app.modules.notifications import routes as notifications_routes
 from app.modules.objects import attachments as objects_attachments
 from app.modules.objects import misses as objects_misses
 from app.modules.objects import quality as objects_quality
+from app.modules.objects import review as objects_review
 from app.modules.objects import routes as objects_routes
 from app.modules.objects import services as objects_services
 from app.modules.objects import watches as objects_watches
 from app.modules.ontology import profile as ontology_profile
 from app.modules.ontology import routes as ontology_routes
 from app.modules.rdf import routes as rdf_routes
+from app.modules.review import links as review_links
+from app.modules.review import registry as review_registry
+from app.modules.review import routes as review_routes
 from app.modules.search import routes as search_routes
+from app.modules.server import performance as server_performance
 from app.modules.server import routes as server_routes
 from app.modules.server import services as server_services
 from app.modules.webhooks import routes as webhooks_routes
@@ -111,6 +116,8 @@ def _api_router(settings: Settings) -> APIRouter:
     router.include_router(rdf_routes.router)
     router.include_router(search_routes.router)
     router.include_router(server_routes.router)
+    # 사람이 판단할 일을 한 곳에서 한꺼번에 — 원래 자리에서 읽어 모은다(ADR 0027).
+    router.include_router(review_routes.router)
 
     # --- 확장의 라우터 ---------------------------------------------------
     # 코어는 확장을 import 하지 않는다. 이름으로 찾아 붙이는 자리가 여기 하나다.
@@ -171,6 +178,10 @@ def _register_extensions() -> None:
     # **여러 번 찾았는데 못 찾은 이름**(별칭 후보) — 한 번 친 오타는 세지 않는다. 별칭으로
     # 붙이면 다음부터 찾히는데, 그 목록을 여는 사람이 없으면 같은 것이 계속 새로 만들어진다.
     extensions.register_maintenance(objects_misses.maintenance)
+    # **검토함의 종류** — 사람의 판단을 기다리는 일을 원래 자리에서 읽어 모으는 제공자(ADR
+    # 0027). 안 걸면 그 종류는 검토함에 안 뜨고, 홈 「남은 일」 의 그 줄도 원래 화면으로 간다.
+    for provider in (*objects_review.PROVIDERS, *review_links.PROVIDERS):
+        review_registry.register(provider)
 
     # `system` 타입이 비추는 원 표. **등록하지 않으면 그 타입은 만들 수 없다** —
     # 스키마의 `system_sources` 가 여기서 나온다. 승격한 전용 표도 여기 더한다.
@@ -178,7 +189,9 @@ def _register_extensions() -> None:
     system_sources.register_system_source(accounts_services.SYSTEM_SOURCE)
 
     # 변경 이벤트(감사 기록이 커밋된 뒤)를 웹훅이 듣는다.
-    events.register_listener(webhooks_services.on_events)
+    # 웹훅은 작업 안의 변경을 줄마다 받지 않고 작업이 끝난 뒤 요약 한 건으로
+    # (`events.job_scope`).
+    events.register_listener(webhooks_services.on_events, in_jobs="summary")
     # **지켜보는 사람에게도 같은 줄기로 간다.** 따로 심으면 두 벌이 되고, 두 벌은
     # 반드시 갈린다 — 감사에는 남는데 알림은 안 가는 변경이 생긴다.
     events.register_listener(objects_watches.on_events)
@@ -204,6 +217,9 @@ def _register_extensions() -> None:
     extensions.register_profile_facts(datasources_services.profile_facts)
     extensions.register_profile_facts(metrics_services.profile_facts)
     extensions.register_maintenance(server_services.maintenance)
+    # **느린 요청 · 큰 응답**(ADR 0026) — 작업 목록 한 번이 93MB · 4.4초였던 것을 사용자가
+    # 「화면이 느리다」 고 말하고 나서야 알았다(2026-10-09). 문턱을 넘은 경로가 홈에 뜬다.
+    extensions.register_maintenance(server_performance.maintenance)
 
     # **기계 자격으로 온톨로지를 채우는 길**(3-d). 안 열면 PAT 로는 못 고친다 —
     # 기본이 「막힘」 이고, 그것이 맞는 기본값이다(shared/scopes.py).
@@ -250,6 +266,10 @@ def _register_extensions() -> None:
     # (확장 켜기)는 토큰에 열지 않는다.
     scopes.register_write_scope("/api/server/profile", "ontology:write")
     scopes.register_read_only_post("/api/metrics/plan")
+    # 검토함의 적용 · 복원은 객체를 고치는 일이다 — 같은 범위. 미리 보기는 POST 지만 읽기다
+    # (결정 수백 개를 본문에 싣는다).
+    scopes.register_write_scope("/api/review", "objects:write")
+    scopes.register_read_only_post("/api/review/plan")
     # `import` 는 POST 지만 `dry_run` 이면 아무것도 안 바꾼다. 그래도 **읽기로
     # 열지 않는다** — 같은 경로가 적용도 하기 때문이다. 읽기 토큰은 `schema` 로
     # 본다.

@@ -24,7 +24,9 @@ from sqlalchemy.engine import make_url
 from app.config import get_settings
 from app.database import SessionLocal
 from app.logging_setup import setup_logging
+from app.modules.audit import retention
 from app.modules.jobs import services
+from app.modules.server import performance
 from app.modules.webhooks import services as webhooks
 
 log = logging.getLogger("app.worker")
@@ -146,14 +148,20 @@ class Worker:
                 old_graves = services.purge_old_tombstones(db)
                 # 되돌릴 기록은 바뀐 줄마다 한 줄이다 — 안 지우면 데이터보다 커진다.
                 old_undo = services.purge_old_undo_journals(db)
-            if gone or old_jobs or old_graves or old_undo:
+                # 요청 시간 기록은 요청마다 한 줄이다 — 가장 빨리 자라는 표(ADR 0026).
+                old_timings = performance.purge_old_timings(db)
+                # 접근 로그는 보관 기간(기본 1년)이 지난 것만. 감사 기록은 안 지운다.
+                old_access = retention.purge_old_access_logs(db)
+            if gone or old_jobs or old_graves or old_undo or old_timings or old_access:
                 log.info(
                     "정리: 작업 파일 %d개 · 끝난 작업 기록 %d개 · 끊긴 선의 무덤 %d개 · "
-                    "되돌릴 기록 %d줄",
+                    "되돌릴 기록 %d줄 · 요청 시간 기록 %d줄 · 접근 로그 %d줄",
                     gone,
                     old_jobs,
                     old_graves,
                     old_undo,
+                    old_timings,
+                    old_access,
                 )
             self._last_purge = now
         if self._gc_every and now - self._last_gc >= self._gc_every:
@@ -213,8 +221,27 @@ class Worker:
         self.stop = True
 
 
+def _assemble() -> None:
+    """**앱과 같은 조립**을 이 프로세스에도 건다 — 레지스트리(`app/main.py` 의
+    `_register_extensions` · 확장의 `register`)는 조립 지점 한 곳이 채운다.
+
+    워커는 그것을 안 거쳐 레지스트리가 **비어** 있었다. 처리 함수가 등록을 부르는 자리에서
+    조용히 다른 길로 갔다 — 사진 일괄 업로드의 적용은 「첨부 자리」
+    (`register_attachment_owner`)를 못 찾아 객체의 부서 대신 전역으로 판정했고(부서 관리자는
+    거절, 시스템 관리자는 전역 첨부), 부서 자료 이동은 「멤버」 말고는 옮길 종류를 몰랐다
+    (2026-10-10). 시험은 앱을 띄운 프로세스에서 워커를 돌려 이것을 못 본다
+    (`tests/api/test_worker_assembly.py` 가 따로 띄워 본다).
+
+    **변경 이벤트를 듣는 쪽도 앱과 같다**(2026-10-10) — 예전에는 비워 둬서 작업으로 한 일은
+    웹훅 · 지켜보기 알림이 하나도 안 갔다. 웹훅은 작업마다 **요약 한 건**만 받고(줄마다 보내면
+    일괄 입력 10만 줄이 웹훅 10만 건이다 — `events.job_scope`), 지켜보기는 지켜보는 객체가
+    바뀔 때마다 받는다. 적재 뒤의 일(지표 다시 세기)은 여전히 작업 본문이 넣는다(ADR 0013)."""
+    import app.main  # noqa: F401 — import 가 곧 조립이다(`create_app`)
+
+
 def main() -> None:
     setup_logging(get_settings())
+    _assemble()
     worker = Worker()
     signal.signal(signal.SIGTERM, worker.handle_signal)
     signal.signal(signal.SIGINT, worker.handle_signal)

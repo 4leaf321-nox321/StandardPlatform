@@ -15,10 +15,13 @@ from sqlalchemy import (
     Select,
     Text,
     and_,
+    any_,
+    bindparam,
     case,
     cast,
     func,
     literal,
+    literal_column,
     or_,
     select,
     text,
@@ -624,8 +627,32 @@ def _scope_clashes(db: Session, source: uuid.UUID, target: uuid.UUID) -> list[st
     return found
 
 
+#: 통폐합이 객체를 옮기는 덩어리 — 덩어리마다 기록 · 옮기기 · 진행률. 한 덩어리가 몇 초 안에
+#: 끝나야 취소가 그만큼 빨리 닿는다(20만 개면 40덩어리, 2026-10-10).
+MOVE_CHUNK = 5_000
+_UUIDS = ARRAY(PgUUID(as_uuid=True))
+
+
+def _reassign_blockers(db: Session, source: uuid.UUID, target: uuid.UUID) -> list[str]:
+    """통폐합의 계획이 미리 보이는 「막히는 것」 — 옮기는 순간(`_move_objects`)과 같은
+    검사다."""
+    clashes = _scope_clashes(db, source, target)
+    if not clashes:
+        return []
+    shown = ", ".join(clashes[:CLASH_SHOWN])
+    more = " 외 더 있음" if len(clashes) > CLASH_SHOWN else ""
+    return [
+        f"옮겨 갈 부서에 같은 것이 이미 있어 객체를 옮기지 않습니다: {shown}{more}. "
+        "부서 안에서 하나여야 하는 값이라 — 먼저 병합하거나 값을 변경하세요."
+    ]
+
+
 def _move_objects(
-    db: Session, source: uuid.UUID, target: uuid.UUID, actor: User | None = None
+    db: Session,
+    source: uuid.UUID,
+    target: uuid.UUID,
+    actor: User | None = None,
+    progress: extensions.MoveProgress | None = None,
 ) -> int:
     """소유 부서를 바꾼다. **지운 객체도 함께 옮긴다** — 행이 남아 있으면 FK 는
     그대로 붙들고, 그러면 원본 부서를 끝내 지울 수 없다.
@@ -633,7 +660,8 @@ def _move_objects(
     **부서 안에서 하나여야 할 것이 겹치면 통째로 거절한다**(`_scope_clashes`) — 원 SQL 로 한
     번에 옮기므로 줄마다 볼 자리가 없다. 안 보면 두 부서에서 각자 하나이던 「A-1」 이 한
     부서에 둘이 되고, 그때부터 그 식별자로는 어느 것인지 정해지지 않는다(2026-10-08).
-    통폐합은 한 트랜잭션이라 여기서 멈추면 아무것도 안 옮겨진다.
+    통폐합은 한 트랜잭션이라 여기서 멈추면 아무것도 안 옮겨진다. 계획도 같은 검사를 미리
+    보인다(`_reassign_blockers`).
 
     **옮긴 객체마다 기록 한 줄을 남긴다**(소유 부서 전 → 후). 예전에는 통폐합 기록 한 줄
     (`workspace.reassigned`)뿐이라 객체의 이력에 부서가 바뀐 일이 안 보였고, 코어 API 가 옮겨
@@ -647,17 +675,16 @@ def _move_objects(
        `audit.record_select`)으로 남기고, 바깥에는 통폐합 한 줄만 알린다(`reassign`). 실측
        (200만 건 규모 DB 에서 한 부서의 객체 20만을, 롤백하는 트랜잭션으로 — 2026-10-08):
        기록 남기기 10초, 그 객체를 옮기는 갱신 자체가 77초 — 통폐합이 13% 늘 뿐이다(파이썬으로
-       줄을 모았으면 그 목록만 수백 MB 다). 이 기록은 **옮기기 전에** 남긴다 — 옮긴 뒤에는
-       어느 객체가 원본 부서에 있었는지 고를 길이 없다."""
-    clashes = _scope_clashes(db, source, target)
-    if clashes:
-        shown = ", ".join(clashes[:CLASH_SHOWN])
-        more = " 외 더 있음" if len(clashes) > CLASH_SHOWN else ""
-        raise Conflict(
-            code("OBJECTS", 8),
-            f"옮겨 갈 부서에 같은 것이 이미 있어 객체를 옮기지 않습니다: {shown}{more}. "
-            "부서 안에서 하나여야 하는 값이라 — 먼저 합치거나 값을 바꾸세요.",
-        )
+       줄을 모았으면 그 목록만 수백 MB 다). 이 기록은 **옮기기 전에** 남긴다.
+
+    **덩어리로 나눠 옮긴다**(`MOVE_CHUNK`, 2026-10-10) — 통폐합이 작업이 되면서 진행률과
+    취소가 덩어리 사이에 선다(`progress` 가 취소 · 빼앗김을 던진다). 나눠도 **한 트랜잭션**이다
+    — 덩어리마다 커밋하면 실패 · 취소한 통폐합이 반쯤 옮겨진 부서를 남긴다. 옮길 id 는 처음에
+    한 번 읽고(20만 개면 수 MB), 끝에 그 사이 원본 부서로 들어온 것을 한 번 더 쓸어 담는다.
+    """
+    blockers = _reassign_blockers(db, source, target)
+    if blockers:
+        raise Conflict(code("OBJECTS", 8), blockers[0])
     # `dict(결과)` 로 담지 않는다 — 결과에 `keys()` 가 있어 dict 가 그것을 사전으로 읽는다.
     names = {
         one: name
@@ -665,6 +692,48 @@ def _move_objects(
             select(Workspace.id, Workspace.name).where(Workspace.id.in_((source, target)))
         )
     }
+    reason = f"부서 통폐합 — {names.get(source, '?')} → {names.get(target, '?')}"
+    # **놓인 차례(`ctid`)로** 읽는다 — 덩어리가 이웃한 페이지끼리 모여 기본 키로 찾아가는
+    # 읽기가 앞으로만 간다. id 차례(무작위 uuid)로 나눴을 때는 덩어리마다 표 전체를 뛰어다녀 한
+    # 문장(73초)보다 45% 느렸고, 놓인 차례면 오히려 빠르다(68초 — 200만 건 규모 DB 의 한 부서
+    # 20만 건, 롤백, 2026-10-10).
+    ids = list(
+        db.scalars(
+            select(ObjectInstance.id)
+            .where(ObjectInstance.owner_workspace_id == source)
+            .order_by(literal_column("ctid"))
+        )
+    )
+    total = len(ids)
+    moved = 0
+    if progress is not None:
+        progress(0, total)
+    for start in range(0, total, MOVE_CHUNK):
+        chunk = ids[start : start + MOVE_CHUNK]
+        # id 목록은 **배열 하나**로 넘긴다(`= ANY(:ids)`) — `IN (…)` 은 id 마다 자리표를 하나씩
+        # 만들어 문장마다 5,000개를 풀고 엮는다(같은 조건에서 98초 → 108초).
+        among = ObjectInstance.id == any_(bindparam("ids", chunk, type_=_UUIDS))
+        moved += _move_object_rows(db, source, target, actor, reason, among)
+        if progress is not None:
+            progress(moved, total)
+    # 덩어리를 세는 사이 원본 부서로 새로 들어온 것 — 보통은 0줄(색인으로 한 번 본다).
+    moved += _move_object_rows(db, source, target, actor, reason, None)
+    return moved
+
+
+def _move_object_rows(
+    db: Session,
+    source: uuid.UUID,
+    target: uuid.UUID,
+    actor: User | None,
+    reason: str,
+    among: Any,
+) -> int:
+    """원본 부서의 객체(`among` 이 있으면 그중)를 옮긴다 — 기록 먼저(옮긴 뒤에는 어느 객체가
+    원본 부서에 있었는지 고를 길이 없다), 그다음 갱신."""
+    where = [ObjectInstance.owner_workspace_id == source]
+    if among is not None:
+        where.append(among)
     audit.record_select(
         db,
         action="object.update",
@@ -679,13 +748,16 @@ def _move_objects(
             ),
         )
         .join(ObjectType, ObjectType.id == ObjectInstance.type_id)
-        .where(ObjectInstance.owner_workspace_id == source),
-        reason=f"부서 통폐합 — {names.get(source, '?')} → {names.get(target, '?')}",
+        .where(*where),
+        reason=reason,
     )
+    # 세션의 객체를 맞추지 않는다 — 통폐합의 세션은 객체를 들고 있지 않고, 맞추려면(`fetch`)
+    # 옮긴 id 를 전부 돌려받는다.
     done = db.execute(
         update(ObjectInstance)
-        .where(ObjectInstance.owner_workspace_id == source)
+        .where(*where)
         .values(owner_workspace_id=target)
+        .execution_options(synchronize_session=False)
     )
     return extensions.rows_changed(done)
 
@@ -730,6 +802,8 @@ def workspace_content(
             count=int(objects),
             move=_move_objects,
             move_by=_move_objects,
+            move_steps=_move_objects,
+            check=_reassign_blockers,
         ),
         extensions.WorkspaceContent(
             kind="saved_views", label="저장된 뷰", count=int(views), move=_move_saved_views

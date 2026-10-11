@@ -5,9 +5,13 @@
  *
  * 셋을 따로 두면 아무도 다 보지 않는다. 그리고 문제가 났을 때 첫 물음은 언제나
  * "지금 서버 버전이 뭐냐" 와 "어느 DB 를 보고 있냐" 다.
+ *
+ * 넷째 물음 **「어디가 느린가」** 는 탭으로 둔다(ADR 0026) — 기간을 묶어 세는 집계라 열 때만
+ * 부른다. 홈의 「남은 일」 이 `?tab=performance` 로 바로 연다.
  */
 
 import { useState } from 'react'
+import { useSearchParams } from 'react-router-dom'
 
 import { api } from '@/shared/api/client'
 import type { ExtensionState, ServerStatus } from '@/shared/api/types'
@@ -20,7 +24,9 @@ import { PageHeader } from '@/shared/components/PageHeader'
 import { Button } from '@/shared/components/ui/button'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { PlatformProfile } from '@/modules/server/PlatformProfile'
+import { Performance, periodOf, sortOf } from '@/modules/server/Performance'
 import { jobsApi } from '@/modules/jobs/api'
 import { PUBLIC_PATH } from '@/shared/base'
 
@@ -102,6 +108,35 @@ function Extensions() {
 }
 
 export default function ServerPage() {
+  const [params, setParams] = useSearchParams()
+  const tab = params.get('tab') === 'performance' ? 'performance' : 'status'
+
+  return (
+    <div className="space-y-6">
+      <PageHeader title="서버" description="이 설치의 상태입니다." />
+      <Tabs
+        value={tab}
+        onValueChange={(next) => setParams(next === 'status' ? {} : { tab: next }, { replace: true })}
+      >
+        <TabsList>
+          <TabsTrigger value="status">상태</TabsTrigger>
+          <TabsTrigger value="performance">느린 요청 · 큰 응답</TabsTrigger>
+        </TabsList>
+        <TabsContent value="status" className="pt-4">
+          <ServerStatusTab />
+        </TabsContent>
+        <TabsContent value="performance" className="pt-4">
+          <Performance
+            initialPeriod={periodOf(params.get('period'))}
+            initialSort={sortOf(params.get('sort'))}
+          />
+        </TabsContent>
+      </Tabs>
+    </div>
+  )
+}
+
+function ServerStatusTab() {
   const { user } = useAuth()
   const enabled = useEnabledExtensions()
   const status = useResource(() => api.get<ServerStatus>('/server/status'), [])
@@ -116,8 +151,6 @@ export default function ServerPage() {
 
   return (
     <div className="space-y-6">
-      <PageHeader title="서버" description="이 설치의 상태입니다." />
-
       {/* **뒤처져 있으면 여기서 말한다.** 안 그러면 사람은 그 사실을 엉뚱한
           화면의 500 으로 만나고, 거기엔 원인이 안 적힌다. */}
       {one.schema_behind && (

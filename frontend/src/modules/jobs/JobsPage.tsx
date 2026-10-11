@@ -24,6 +24,8 @@ import {
   planIsClean,
 } from '@/modules/objects/ImportPlanTable'
 import { PhotoPlanTable, photoPlanOf } from '@/modules/objects/PhotoPlanTable'
+import { reassignOf } from '@/modules/workspaces/api'
+import { ReassignPlanView } from '@/modules/workspaces/ReassignPlanView'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -253,6 +255,9 @@ function waitingForApply(job: Job, twoStep: ReadonlySet<string>): boolean {
   // 종류 변경 — 막는 것(`errors`)이 없으면. 값이 하나도 안 바뀌어도 정의의 종류는 바뀐다.
   const retype = retypeOf(job)
   if (retype) return retypeApplicable(job, retype)
+  // 부서 자료 이동 — 막히는 것이 없고 옮길 것이 있으면(`ok`).
+  const reassign = reassignOf(job.result)
+  if (reassign) return reassign.ok
   // 묶음 — 자체 판정(`ok`)을 쓴다.
   return result.ok === true
 }
@@ -288,6 +293,8 @@ function Detail({
   const retype = retypeOf(job)
   // 사진 일괄 업로드 — 파일마다 무엇이 되나. 「적용」 은 결과의 `ok`(붙는 것이 있나)로 선다.
   const photos = photoPlanOf(job.result)
+  // 부서 자료 이동(통폐합) — 무엇이 몇 건 옮겨지나 · 무엇이 막히나. 창을 닫고 와도 여기서 적용한다.
+  const reassign = reassignOf(job.result)
   return (
     <div className="bg-muted/30 space-y-3 px-4 py-3">
       {brief && full.loading && (
@@ -300,6 +307,7 @@ function Detail({
       {plan && <ImportPlanTable plan={plan} onDownloadRows={onDownloadRows} />}
       {retype && <RetypePlanView job={job} retype={retype} />}
       {photos && <PhotoPlanTable plan={photos} />}
+      {reassign && <ReassignPlanView result={reassign} />}
       {batches && (
         <table className="text-xs">
           <tbody>
@@ -322,7 +330,7 @@ function Detail({
           </tbody>
         </table>
       )}
-      {!plan && !batches && !retype && !photos && !job.error && (
+      {!plan && !batches && !retype && !photos && !reassign && !job.error && (
         <p className="text-muted-foreground text-xs">
           {job.has_output ? '만든 파일을 받으세요.' : '남길 결과가 없는 작업입니다.'}
         </p>
@@ -362,9 +370,12 @@ function Detail({
           !job.applied_by &&
           (plan?.applied === false ||
             retype?.applied === false ||
-            photos?.applied === false) && (
+            photos?.applied === false ||
+            reassign?.applied === false) && (
             <span className="text-muted-foreground text-xs">
-              오류가 있거나 바뀌는 것이 없어 적용할 수 없습니다 — 고쳐서 다시 올리세요.
+              {reassign
+                ? '막히는 것이 있거나 이동할 것이 없어 적용할 수 없습니다 — 부서 관리의 「자료 이동」 에서 다시 미리 보세요.'
+                : '오류가 있거나 바뀌는 것이 없어 적용할 수 없습니다 — 고쳐서 다시 올리세요.'}
             </span>
           )}
         {job.status === 'done' && !twoStep && plan?.applied === false && (

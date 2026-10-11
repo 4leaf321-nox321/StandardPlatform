@@ -26,7 +26,7 @@ from app.extensions.caegroup.models import (
     CaeDtStaff,
 )
 from app.modules.accounts.models import User
-from app.modules.audit.models import AccessLog, AuditEntry
+from app.modules.audit.models import AccessLog, AuditEntry, RequestTiming
 from app.modules.auth.models import PersonalAccessToken, RefreshToken
 from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.datasources.models import DataSource, DataSourceRun
@@ -62,6 +62,7 @@ from app.modules.ontology.models import (
     PropertyDef,
     RelationType,
 )
+from app.modules.review.models import ReviewDecision
 from app.modules.server.models import ExtensionState, PlatformProfile
 from app.modules.webhooks.models import Webhook, WebhookDelivery
 from app.modules.workspaces.models import Workspace, WorkspaceMember
@@ -111,6 +112,8 @@ __all__ = [
     "PropertyDef",
     "RefreshToken",
     "RelationType",
+    "RequestTiming",
+    "ReviewDecision",
     "SavedView",
     "SearchMiss",
     "User",

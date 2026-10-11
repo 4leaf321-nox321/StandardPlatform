@@ -14,6 +14,7 @@ from fastapi.testclient import TestClient
 from tests.api.conftest import Signed
 from tests.api.test_home_widgets import _home, _type_with_grade, _view
 from tests.api.test_metrics import _define, _sales_spec, _world
+from tests.api.test_workspace_reassign_job import reassign
 
 
 def _label(one: dict[str, Any]) -> str:
@@ -156,12 +157,8 @@ def test_부서를_합치면_홈의_지표도_옮겨_간다(client: TestClient, 
         ).json()
     }
     assert kinds["home_metrics"] == 2
-    done = client.post(
-        f"/api/workspaces/{source}/reassign",
-        json={"target_slug": target, "kinds": ["home_metrics"]},
-        headers=admin.headers,
-    )
-    assert done.status_code == 200, done.text
+    done = reassign(client, admin, source, target, ["home_metrics"])
+    assert done["moved"] == {"home_metrics": 2}
     pinned = [
         one["metric"]["metric_slug"]
         for one in _home(client, admin, target)

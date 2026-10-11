@@ -54,6 +54,7 @@ from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.modules.audit.models import AuditEntry
 from app.modules.coreapi import services as coreapi_services
 from app.modules.metrics import incremental, timeindex
 from app.modules.metrics import spec as spec_module
@@ -281,6 +282,39 @@ def built_of(db: Session, metric: MetricDef) -> spec_module.Built:
     )
 
 
+def rules_versions(
+    db: Session, metric: MetricDef, built: spec_module.Built
+) -> list[dict[str, Any]]:
+    """이 계산이 쓴 **규칙 판** — 규칙 기준마다 지문 · 규칙 수, 그 규칙을 저장한 사람 · 때(ADR
+    0015). 「지난달과 왜 다른가」 에서 규칙이 바뀌어서인지 기록이 바뀌어서인지를 가른다.
+    사람 · 때는 그 지문을 처음 남긴 감사(`metric.defined` · `metric.updated` 의 `rules`)에서
+    — 같은 규칙으로 돌아왔으면 가장 최근의 것이다."""
+    out: list[dict[str, Any]] = []
+    for dim in built.dims:
+        if dim.rules is None:
+            continue
+        saved = db.execute(
+            select(AuditEntry.created_at, AuditEntry.actor_label)
+            .where(
+                AuditEntry.target_table == "metric_defs",
+                AuditEntry.target_id == metric.id,
+                AuditEntry.changes["rules"][dim.name]["to"].astext == dim.rules.fingerprint,
+            )
+            .order_by(AuditEntry.created_at.desc())
+            .limit(1)
+        ).first()
+        out.append(
+            {
+                "name": dim.name,
+                "fingerprint": dim.rules.fingerprint,
+                "rules": len(dim.rules.labels),
+                "changed_at": saved.created_at.isoformat() if saved is not None else None,
+                "changed_by": saved.actor_label if saved is not None else None,
+            }
+        )
+    return out
+
+
 def run_one(
     db: Session,
     metric: MetricDef,
@@ -384,11 +418,14 @@ def run_one(
             "줄이거나 거르기를 더합니다.",
             status=422,
         )
-    stats = {
+    stats: dict[str, Any] = {
         "unbucketed": int(totals[2]) if built.time is not None else 0,
         "unbucketed_cohort": int(totals[3]) if built.cohort is not None else 0,
         "negative_age": int(totals[4]),
     }
+    versions = rules_versions(db, metric, built)
+    if versions:
+        stats["rules"] = versions
 
     now = datetime.now(UTC)
     run.status = "ok"

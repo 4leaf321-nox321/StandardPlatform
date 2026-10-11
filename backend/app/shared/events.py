@@ -20,10 +20,13 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable
+from collections import Counter
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import event
 from sqlalchemy.orm import Session
@@ -57,11 +60,62 @@ class ChangeEvent:
 
 Listener = Callable[[list[ChangeEvent]], None]
 _listeners: list[Listener] = []
+#: **작업 안에서는 요약 한 건만** 받는 쪽(웹훅). 일괄 입력 10만 줄이 웹훅 10만 건이 되면
+#: 받는 쪽은 두드려 맞기만 하고 「무슨 일이 났나」 를 모른다 — 작업이 끝나면 무엇이 몇
+#: 건인지 한 건으로 받는다(`dispatch_summary`, 2026-10-10). 지켜보기는 줄마다 받는다 —
+#: 지켜보는 객체는 몇 개라 넘치지 않고, 요약 한 줄로는 「내 객체가 바뀌었다」 를 말할 수 없다.
+_summary_only: list[Listener] = []
 
 
-def register_listener(listener: Listener) -> None:
+def register_listener(
+    listener: Listener, *, in_jobs: Literal["rows", "summary"] = "rows"
+) -> None:
     if listener not in _listeners:
         _listeners.append(listener)
+    if in_jobs == "summary" and listener not in _summary_only:
+        _summary_only.append(listener)
+
+
+@dataclass
+class Tally:
+    """작업 하나에서 커밋된 변경 — 무엇이 몇 건, 그리고 **요약 줄**(대상이 없는 것 — 일괄
+    입력의 `object.import`, 묶음의 `bundle.import` 처럼 일 전체를 말하는 감사 줄)의 마지막
+    것."""
+
+    counts: Counter[str] = field(default_factory=Counter)
+    headline: ChangeEvent | None = None
+
+    def add(self, staged: list[ChangeEvent]) -> None:
+        for one in staged:
+            self.counts[one.action] += 1
+            if one.target_id is None:
+                self.headline = one
+
+    @property
+    def total(self) -> int:
+        return sum(self.counts.values())
+
+
+_scope: ContextVar[Tally | None] = ContextVar("change_event_job_scope", default=None)
+
+
+@contextmanager
+def job_scope() -> Iterator[Tally]:
+    """작업 하나 — 이 안에서 커밋된 변경은 요약만 받는 쪽(`in_jobs="summary"`)에 안 보내고
+    센다. 끝나면 부르는 쪽(`jobs/services.run`)이 `dispatch_summary` 로 한 건을 보낸다."""
+    tally = Tally()
+    token = _scope.set(tally)
+    try:
+        yield tally
+    finally:
+        _scope.reset(token)
+
+
+def dispatch_summary(one: ChangeEvent) -> None:
+    """작업이 끝난 뒤의 요약 한 건 — 줄마다 안 받은 쪽에만."""
+    for listener in list(_summary_only):
+        if listener in _listeners:
+            _call(listener, [one])
 
 
 def stage(db: Session, one: ChangeEvent) -> None:
@@ -106,13 +160,22 @@ def _flush(session: Session) -> None:
 
 
 def _dispatch(staged: list[ChangeEvent]) -> None:
-    if not staged or not _listeners:
+    if not staged:
         return
-    for listener in _listeners:
-        try:
-            listener(staged)
-        except Exception:
-            logger.exception("변경 이벤트 듣는 쪽이 실패했습니다 (%d건)", len(staged))
+    tally = _scope.get()
+    if tally is not None:
+        tally.add(staged)
+    for listener in list(_listeners):
+        if tally is not None and listener in _summary_only:
+            continue
+        _call(listener, staged)
+
+
+def _call(listener: Listener, staged: list[ChangeEvent]) -> None:
+    try:
+        listener(staged)
+    except Exception:
+        logger.exception("변경 이벤트 듣는 쪽이 실패했습니다 (%d건)", len(staged))
 
 
 @event.listens_for(Session, "after_rollback")

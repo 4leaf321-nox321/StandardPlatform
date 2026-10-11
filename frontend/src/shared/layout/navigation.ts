@@ -20,6 +20,7 @@ import {
   ChartLine,
   DatabaseZap,
   Home,
+  Inbox,
   LayoutGrid,
   ListChecks,
   Megaphone,
@@ -180,6 +181,15 @@ export const NAV_GROUPS: NavGroup[] = [
         label: '데이터 품질',
         icon: ShieldCheck,
         to: '/quality',
+        audience: 'manager',
+      },
+      {
+        // **사람이 판단할 일을 한 곳에서, 한꺼번에**(ADR 0027). 별칭 후보 · 검수 대기 별칭 ·
+        // 병합 후보 · 지워진 것을 가리키는 칸이 화면마다 흩어져 있으면 홈의 수만 늘고 아무도
+        // 끝까지 안 본다. 처리하는 사람(관리자)에게만 — 권한은 줄마다 원래 화면의 것이다.
+        label: '검토함',
+        icon: Inbox,
+        to: '/review',
         audience: 'manager',
       },
     ],

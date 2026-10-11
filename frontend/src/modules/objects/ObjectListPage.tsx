@@ -560,14 +560,19 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
             const def = type?.properties.find((one) => one.key === key)
             if (!def) return null
             // 빠른 필터는 「같음」 조건 하나다 — 아래 조건 줄과 같은 것을 가리킨다.
-            const quick = conditions.find((one) => one.field === key && one.op === 'eq')
+            // 제외 묶음(`nf<번호>.`)의 조건은 빠른 필터가 아니다 — 건드리면 묶음의 뜻이 바뀐다.
+            const quick = conditions.find(
+              (one) => !one.exclude && one.field === key && one.op === 'eq',
+            )
             return (
               <PropertyFilter
                 key={key}
                 def={def}
                 value={quick?.value ?? ''}
                 onChange={(next) => {
-                  const rest = conditions.filter((one) => !(one.field === key && one.op === 'eq'))
+                  const rest = conditions.filter(
+                    (one) => one.exclude || !(one.field === key && one.op === 'eq'),
+                  )
                   // **빈 값은 「거르지 않음」 이다.** 빈 문자열로 걸면 값이 빈
                   // 행만 나오는데, 그것은 아무도 뜻한 적 없는 결과다.
                   setConditions(next ? [...rest, { field: key, op: 'eq', value: next }] : rest)
@@ -731,7 +736,8 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                     // 날짜 칸은 기간의 **범위** 둘로 — 시작일 하나를 `eq` 로 걸면 0건이다.
                     const ranged = ['eq', 'gte', 'gt', 'lt', 'lte']
                     const rest = conditions.filter(
-                      (one) => !(one.field === propertyKey && ranged.includes(one.op)),
+                      (one) =>
+                        one.exclude || !(one.field === propertyKey && ranged.includes(one.op)),
                     )
                     setConditions([
                       ...rest,
@@ -742,7 +748,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                     return
                   }
                   const rest = conditions.filter(
-                    (one) => !(one.field === propertyKey && one.op === 'eq'),
+                    (one) => one.exclude || !(one.field === propertyKey && one.op === 'eq'),
                   )
                   setConditions([...rest, { field: propertyKey, op: 'eq', value: key }])
                   setOffset(0)

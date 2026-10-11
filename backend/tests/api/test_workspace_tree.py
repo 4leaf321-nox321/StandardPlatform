@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 from tests.api.conftest import Signed
+from tests.api.test_workspace_reassign_job import reassign
 
 
 def _make(client: TestClient, admin: Signed, slug: str, parent: str | None = None) -> str:
@@ -80,13 +81,8 @@ def test_가진_것을_다른_부서로_옮기고_비운다(
     assert {"members", "objects", "saved_views", "attachments", "datasources"} <= set(kinds)
     assert kinds["members"]["count"] == 1  # 만든 사람이 관리자로 들어간다
 
-    done = client.post(
-        f"/api/workspaces/{source}/reassign",
-        json={"target_slug": target, "kinds": ["members"]},
-        headers=admin.headers,
-    )
-    assert done.status_code == 200, done.text
-    assert done.json()["moved"] == {"members": 1}
+    done = reassign(client, admin, source, target, ["members"])
+    assert done["moved"] == {"members": 1}
 
     after = {
         one["kind"]: one["count"]
@@ -120,12 +116,7 @@ def test_양쪽에_있는_사람은_짝이_안_겹치게(
     )
     db.commit()
 
-    done = client.post(
-        f"/api/workspaces/{source}/reassign",
-        json={"target_slug": target, "kinds": ["members"]},
-        headers=admin.headers,
-    )
-    assert done.status_code == 200, done.text
+    reassign(client, admin, source, target, ["members"])
     pairs = (
         db.query(WorkspaceMember).filter_by(workspace_id=target_row.id, user_id=both.id).all()
     )

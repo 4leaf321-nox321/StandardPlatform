@@ -1,5 +1,6 @@
 /** 부서 API. */
 
+import type { Job } from '@/modules/jobs/api'
 import { api, downloadFile } from '@/shared/api/client'
 import type { Member, Workspace, WorkspaceOption, WorkspaceReference } from '@/shared/api/types'
 
@@ -10,6 +11,45 @@ export interface WorkspaceContent {
   kind: string
   label: string
   count: number
+}
+
+/** 자료 이동의 한 종류 — 계획이면 옮길 수(`count`), 적용이면 옮긴 수(`moved`)까지. */
+export interface ReassignItem {
+  kind: string
+  label: string
+  count: number
+  moved?: number
+}
+
+/**
+ * 부서 자료 이동(통폐합)의 계획 · 적용 — 작업 `workspace_reassign` 의 `result`
+ * (`workspaces/services._reassign_out`). 통폐합 창과 작업 화면이 같은 모양을 그린다.
+ *
+ * `errors` 는 **막히는 것**(부서 안에서 하나여야 할 식별자가 대상 부서와 겹침) — 하나라도 있으면
+ * 적용하지 않는다. 적용할 것이 있나는 `ok`.
+ */
+export interface ReassignResult {
+  reassign: true
+  applied: boolean
+  ok: boolean
+  source_slug: string
+  source_name: string
+  target_slug: string
+  target_name: string
+  items: ReassignItem[]
+  total: number
+  moved: Record<string, number>
+  errors: string[]
+  summary: string
+}
+
+/** 작업 결과가 자료 이동의 것인가 — 아니면 null. */
+export function reassignOf(result: unknown): ReassignResult | null {
+  if (!result || typeof result !== 'object') return null
+  const found = result as Partial<ReassignResult>
+  return found.reassign === true && Array.isArray(found.items) && Array.isArray(found.errors)
+    ? (found as ReassignResult)
+    : null
 }
 
 export interface WorkspaceImportRow {
@@ -68,9 +108,15 @@ export const workspaceApi = {
   references: (slug: string) => api.get<WorkspaceReference[]>(`/workspaces/${slug}/references`),
   /** 옮길 수 있는 것 — **0 건도 온다.** 빠지면 사람은 그 종류가 안 옮겨지는 줄 안다. */
   contents: (slug: string) => api.get<WorkspaceContent[]>(`/workspaces/${slug}/contents`),
-  /** 자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계. */
+  /**
+   * 자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계. **작업의 계획을 넣는다**(202) —
+   * 무엇이 몇 건 옮겨지나 · 무엇이 막히나를 워커가 세고, 사람이 읽고 `jobsApi.apply` 로 적용한다.
+   *
+   * 예전에는 요청 안에서 옮기고 옮긴 수를 돌려줬다 — 한 부서 객체 20만 개면 90초 남짓이라
+   * 브라우저 · 이중화의 nginx 가 먼저 끊었다(2026-10-10).
+   */
   reassign: (slug: string, targetSlug: string, kinds: string[]) =>
-    api.post<{ moved: Record<string, number> }>(`/workspaces/${slug}/reassign`, {
+    api.post<Job>(`/workspaces/${slug}/reassign`, {
       target_slug: targetSlug,
       kinds,
     }),

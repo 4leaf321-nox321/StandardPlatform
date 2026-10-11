@@ -4,6 +4,9 @@
  * 원천 기록 타입 · 집계 · 시간 칸 · 코호트 칸 · 기준 · 거르기 · 분모 · 닫힘 일수 · 주기.
  * 「계획 보기」 가 정의를 실제로 지어 보고 오류 전부 · 경고 · 어림한 셀 수를 말한다 — 저장은
  * 계획이 통과한 뒤에만, 그리고 저장하자마자 센다. 용어는 `docs/용어.md` 의 것만 쓴다.
+ *
+ * 기준은 주소(칸)거나 **규칙**이다(ADR 0015) — 규칙 기준은 차례 · 성격 이름 · 조건의 표로
+ * 고치고(`RuleDimensionEditor`), 계획이 규칙마다 붙인 수 · 막힌 규칙 · 기타의 몫을 그 자리에 낸다.
  */
 
 import { useEffect, useMemo, useState } from 'react'
@@ -21,6 +24,8 @@ import {
 } from '@/modules/metrics/interval'
 import type { IntervalMode } from '@/modules/metrics/interval'
 import { GRAIN_LABELS, MEASURE_LABELS, shownNumber } from '@/modules/metrics/metricDrill'
+import { RuleDimensionEditor, emptyRuleDim } from '@/modules/metrics/RuleDimensionEditor'
+import type { RuleDimRow } from '@/modules/metrics/RuleDimensionEditor'
 import { ConditionBar } from '@/modules/objects/ConditionBar'
 import { objectApi } from '@/modules/objects/api'
 import type { Condition, ConditionOp, LinkedField } from '@/modules/objects/api'
@@ -59,11 +64,14 @@ const FIXED: [string, string][] = [
   ['created_year', '만든 해'],
 ]
 
-interface DimRow {
+interface AddressDimRow {
+  kind: 'address'
   name: string
   address: string
   grain: string
 }
+
+type DimRow = AddressDimRow | RuleDimRow
 
 interface Props {
   existing: Metric | null
@@ -95,11 +103,25 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
   const [grain, setGrain] = useState<string>(spec0?.time?.grain ?? 'month')
   const [cohortAddress, setCohortAddress] = useState(spec0?.cohort?.address ?? '')
   const [dims, setDims] = useState<DimRow[]>(
-    (spec0?.dimensions ?? []).map((one) => ({
-      name: one.name,
-      address: one.address,
-      grain: one.grain ?? '',
-    })),
+    (spec0?.dimensions ?? []).map(
+      (one): DimRow =>
+        one.rules || one.else
+          ? {
+              kind: 'rules',
+              name: one.name,
+              label: one.label ?? '',
+              rules: (one.rules ?? []).map((rule) => ({
+                label: rule.label,
+                when: rule.when.map((cond) => ({
+                  field: cond.field,
+                  op: cond.op as ConditionOp,
+                  value: cond.value,
+                })),
+              })),
+              other: one.else ?? '기타',
+            }
+          : { kind: 'address', name: one.name, address: one.address ?? '', grain: one.grain ?? '' },
+    ),
   )
   const [filters, setFilters] = useState<Condition[]>(
     (spec0?.filters ?? []).map((one) => ({
@@ -214,12 +236,28 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
       cohort:
         cohortAddress && timeAddress ? { address: cohortAddress, grain: grain as Grain } : null,
       dimensions: dims
-        .filter((one) => one.name.trim() && one.address.trim())
-        .map((one) => ({
-          name: one.name.trim(),
-          address: one.address.trim(),
-          grain: one.grain ? (one.grain as Grain) : null,
-        })),
+        .filter((one) => one.name.trim() && (one.kind === 'rules' || one.address.trim()))
+        .map((one) =>
+          one.kind === 'rules'
+            ? {
+                name: one.name.trim(),
+                label: one.label.trim() || null,
+                rules: one.rules.map((rule) => ({
+                  label: rule.label.trim(),
+                  when: rule.when.map((cond) => ({
+                    field: cond.field,
+                    op: cond.op,
+                    value: cond.value,
+                  })),
+                })),
+                else: one.other,
+              }
+            : {
+                name: one.name.trim(),
+                address: one.address.trim(),
+                grain: one.grain ? (one.grain as Grain) : null,
+              },
+        ),
       filters: filters.map((one) => ({ field: one.field, op: one.op, value: one.value })),
       denominator:
         denMetric && !share
@@ -483,19 +521,33 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
         </div>
 
         <section className="space-y-2">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-2">
             <span className="text-sm font-medium">기준 (여덟까지)</span>
+            <span className="ml-auto" />
             <Button
               size="sm"
               variant="outline"
               disabled={dims.length >= 8}
               onClick={() => {
-                setDims([...dims, { name: '', address: '', grain: '' }])
+                setDims([...dims, { kind: 'address', name: '', address: '', grain: '' }])
                 invalidate()
               }}
             >
               <Plus className="mr-1 size-3.5" />
               기준 추가
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={dims.length >= 8}
+              title="조건 목록의 첫 일치로 값을 붙이는 기준 — 성격(제품결함 · NTF · 고객과실 · SW)"
+              onClick={() => {
+                setDims([...dims, emptyRuleDim()])
+                invalidate()
+              }}
+            >
+              <Plus className="mr-1 size-3.5" />
+              규칙 기준 추가
             </Button>
           </div>
           <datalist id="metric-address-options">
@@ -505,7 +557,29 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
               </option>
             ))}
           </datalist>
-          {dims.map((dim, index) => (
+          {dims.map((dim, index) =>
+            dim.kind === 'rules' ? (
+              <RuleDimensionEditor
+                key={index}
+                index={index}
+                value={dim}
+                defs={defs}
+                linked={linked.data ?? []}
+                plan={plan?.rules?.find((one) => one.name === dim.name.trim()) ?? null}
+                onPreview={source ? seePlan : undefined}
+                previewing={busy === 'plan'}
+                onChange={(next) => {
+                  const copy = [...dims]
+                  copy[index] = next
+                  setDims(copy)
+                  invalidate()
+                }}
+                onRemove={() => {
+                  setDims(dims.filter((_, at) => at !== index))
+                  invalidate()
+                }}
+              />
+            ) : (
             <div key={index} className="flex flex-wrap items-center gap-2">
               <Input
                 aria-label={`기준 ${index + 1} 이름`}
@@ -565,7 +639,8 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
                 <Trash2 className="size-4" />
               </Button>
             </div>
-          ))}
+            ),
+          )}
         </section>
 
         <section className="space-y-2">
@@ -574,6 +649,7 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
             defs={defs}
             linked={linked.data ?? undefined}
             conditions={filters}
+            allowExclude={false}
             onChange={(next) => {
               setFilters(next)
               invalidate()
@@ -590,6 +666,7 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
               defs={defs}
               linked={linked.data ?? undefined}
               conditions={shareWhen}
+              allowExclude={false}
               onChange={(next) => {
                 setShareWhen(next)
                 invalidate()

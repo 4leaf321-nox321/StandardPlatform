@@ -74,8 +74,13 @@ class Increment:
 
 
 def _foreign_addresses(spec: spec_module.MetricSpec) -> list[str]:
-    """다른 객체를 거치는 주소(`ref.` · `out.` · `in.` 로 시작)."""
-    found = [one.address for one in spec.dimensions]
+    """다른 객체를 거치는 주소(`ref.` · `out.` · `in.` 로 시작). 규칙 기준(ADR 0015)은 규칙
+    조건의 칸 — 「기본 모델의 시리즈가 X 면 SW」 처럼 너머의 칸을 보는 규칙은 그 객체가 바뀌면
+    기록의 시각이 안 올라도 값이 바뀐다."""
+    found = [one.address for one in spec.dimensions if one.address]
+    found += [
+        cond.field for one in spec.dimensions for rule in one.rules or [] for cond in rule.when
+    ]
     found += [one.field for one in [*spec.filters, *spec.share_when]]
     if spec.measure_field:
         found.append(spec.measure_field)

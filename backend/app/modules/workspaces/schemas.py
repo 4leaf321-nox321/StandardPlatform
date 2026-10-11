@@ -107,15 +107,12 @@ class WorkspaceContentOut(BaseModel):
 
 
 class WorkspaceReassignRequest(BaseModel):
-    """자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계."""
+    """자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계. 작업(`workspace_reassign`)의
+    계획을 넣는다 — 옮긴 수는 적용 작업의 `result.moved`."""
 
     target_slug: str
     kinds: list[str] = Field(min_length=1)
     """옮길 종류. **고른 것만 옮긴다** — 멤버는 두고 객체만 넘기는 개편이 흔하다."""
-
-
-class WorkspaceReassignResult(BaseModel):
-    moved: dict[str, int]
 
 
 class MemberOut(BaseModel):

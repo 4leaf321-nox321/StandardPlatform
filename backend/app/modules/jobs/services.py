@@ -14,7 +14,7 @@ import threading
 import uuid
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import Any, BinaryIO
 
 from sqlalchemy import and_, event, exists, func, or_, select, text, update
 from sqlalchemy.orm import Session, aliased, defer
@@ -26,7 +26,7 @@ from app.modules.jobs import files, kinds
 from app.modules.jobs.models import Job, JobFile, WorkerHeartbeat
 from app.modules.notifications import services as notifications
 from app.modules.workspaces.models import WorkspaceMember
-from app.shared import extensions
+from app.shared import events, extensions
 from app.shared.errors import AppError, Conflict, Forbidden, NotFound, code
 
 log = logging.getLogger(__name__)
@@ -121,6 +121,33 @@ class Lost(Cancelled):
 
 def store_file(db: Session, *, name: str, content_type: str, data: bytes) -> JobFile:
     return files.store(db, name=name, content_type=content_type, data=data)
+
+
+def upload_cap(spec: kinds.Kind) -> int:
+    """그 종류가 받는 파일의 상한 — 종류마다 설정 하나(`Kind.max_file_setting`)."""
+    return files.cap_of(spec.max_file_setting)
+
+
+def store_upload(
+    db: Session,
+    *,
+    kind: str,
+    name: str,
+    content_type: str,
+    stream: BinaryIO,
+    size: int | None = None,
+) -> JobFile:
+    """올린 파일을 **흘려 받아** 넣는다 — 그 종류의 상한으로. 크기를 미리 알면(`size`, 받은
+    본문의 크기) 옮기기 전에 거절한다. 큰 것은 공용 저장소의 작업 폴더로 간다(`files`)."""
+    spec = kinds.get(kind)
+    if spec is None:
+        raise AppError(code("JOBS", 3), f"모르는 작업 종류입니다: {kind}", status=422)
+    cap = upload_cap(spec)
+    if size is not None and size > cap:
+        raise files.too_big(size, cap, label=spec.label)
+    return files.store_stream(
+        db, name=name, content_type=content_type, stream=stream, cap=cap, label=spec.label
+    )
 
 
 def purge_expired_files(db: Session) -> int:
@@ -333,8 +360,13 @@ def make_apply(db: Session, user: User, plan_job: Job) -> Job:
         raise Forbidden(code("JOBS", 12), "계획을 본 사람이 적용합니다.")
     if spec.needs_file and plan_job.input_file_id is None:
         raise Conflict(code("JOBS", 13), "파일이 이미 지워졌습니다. 다시 올리세요.")
-    # 파일이 없는 두 단계 작업도 있다(묶음 되돌리기 — 인자가 판 번호 하나뿐이다).
-    input_file = db.get(JobFile, plan_job.input_file_id) if plan_job.input_file_id else None
+    # 파일이 없는 두 단계 작업도 있다(묶음 되돌리기 — 인자가 판 번호 하나뿐이다). 내용은 안
+    # 읽는다 — 적용 작업에 같은 파일을 잇기만 한다(DB 에 든 것은 수십 MB 다).
+    input_file = (
+        db.get(JobFile, plan_job.input_file_id, options=[defer(JobFile.data)])
+        if plan_job.input_file_id
+        else None
+    )
     params = {**plan_job.params, "apply": True, "fingerprint": result.get("fingerprint")}
     return enqueue(
         db,
@@ -586,6 +618,63 @@ def _why_cannot_run_as(user: User) -> str | None:
 
 
 def run(job: Job, *, worker_id: str) -> Outcome:
+    """작업 하나를 돌리고, 그 안에서 커밋된 변경을 **웹훅에 요약 한 건으로** 알린다.
+
+    작업 안의 변경은 줄마다 웹훅으로 가지 않는다(`events.job_scope`) — 일괄 입력 10만 줄이
+    웹훅 10만 건이 되면 받는 쪽은 두드려 맞기만 한다. 예전에는 워커에 듣는 쪽이 아예 없어
+    작업으로 한 일(일괄 입력 · 묶음 · 사진 · 부서 자료 이동)은 웹훅이 **하나도** 안 갔다
+    (2026-10-10). 지켜보기는 줄마다 받는다(지켜보는 객체만). 실패 · 취소로 끝나도 그 전에
+    커밋된 것(소스마다 커밋하는 동기화 차례 등)이 있으면 요약을 보낸다 — 들어간 것은
+    들어간 것이다.
+    """
+    with events.job_scope() as tally:
+        outcome = _run(job, worker_id=worker_id)
+    if tally.total:
+        try:
+            events.dispatch_summary(_summary_event(job, outcome, tally))
+        except Exception:  # 알림이 실패했다고 작업이 실패로 보이면 안 된다
+            log.exception("작업 %s 의 변경 요약을 보내지 못했습니다", job.id)
+    return outcome
+
+
+def _summary_event(job: Job, outcome: Outcome, tally: events.Tally) -> events.ChangeEvent:
+    """작업 하나의 요약 — **요약 줄**(`object.import` · `bundle.import` 처럼 일 전체를 말하는
+    감사 줄)이 있으면 그것을 앞세우고, 없으면 `job.<종류>` 한 건. 무엇이 몇 건이었나
+    (`events`)와 작업 id 를 함께 싣는다 — 받는 쪽이 자세한 것은 작업 API(`/api/jobs/{id}`)로
+    본다."""
+    head = tally.headline
+    spec = kinds.get(job.kind)
+    with SessionLocal() as db:
+        who = db.get(User, job.requested_by_id) if job.requested_by_id else None
+        who_label = (who.display_name or who.email) if who else "시스템"
+    changes: dict[str, Any] = {
+        **(head.changes if head else {}),
+        "job_id": str(job.id),
+        "job_kind": job.kind,
+        "job_status": outcome.status,
+        "events": dict(tally.counts),
+    }
+    type_slug = (job.params or {}).get("type_slug")
+    if type_slug:
+        changes.setdefault("type_slug", type_slug)
+    return events.ChangeEvent(
+        action=head.action if head else f"job.{job.kind}",
+        target_table=head.target_table if head else "jobs",
+        target_id=head.target_id if head else job.id,
+        target_label=head.target_label if head else (spec.label if spec else job.kind),
+        workspace_id=head.workspace_id if head else job.workspace_id,
+        actor_id=job.requested_by_id,
+        actor_label=head.actor_label if head else who_label,
+        actor_client=head.actor_client if head else None,
+        actor_token=head.actor_token if head else None,
+        changes=changes,
+        reason=head.reason if head else None,
+        request_id=f"job:{job.id}",
+        at=datetime.now(UTC),
+    )
+
+
+def _run(job: Job, *, worker_id: str) -> Outcome:
     """작업 하나를 **끝까지.** 본 트랜잭션은 여기서 한 번 커밋하거나 롤백한다.
 
     **「아직 내가 쥔 작업」 인지 단계마다 본다** — 진행 보고(`report_progress`)가 조건부로
@@ -977,15 +1066,22 @@ def pending_jobs(db: Session) -> int:
 
 
 def stats(db: Session) -> list[extensions.StatItem]:
-    """서버 화면의 「쌓인 것」 — 표가 얼마나 찼나. 작업 파일은 DB 에 들어 있어서,
-    안 보여 주면 덤프가 왜 커졌는지 물을 자리가 없다."""
+    """서버 화면의 「쌓인 것」 — 표가 얼마나 찼나. 작업 파일은 작은 것은 DB 에, 큰 것은 공용
+    저장소(`_jobs/`)에 든다 — 안 보여 주면 덤프 · 저장소가 왜 커졌는지 물을 자리가 없다."""
     jobs = db.scalar(select(func.count()).select_from(Job)) or 0
     files_count = db.scalar(select(func.count()).select_from(JobFile)) or 0
-    stored = db.scalar(select(func.coalesce(func.sum(JobFile.size_bytes), 0))) or 0
+    in_db, on_disk = db.execute(
+        select(
+            func.coalesce(func.sum(JobFile.size_bytes).filter(JobFile.path.is_(None)), 0),
+            func.coalesce(func.sum(JobFile.size_bytes).filter(JobFile.path.is_not(None)), 0),
+        )
+    ).one()
+    mb = 1024 * 1024
     return [
         extensions.StatItem(label="작업", count=int(jobs)),
         extensions.StatItem(label="작업 워커(살아 있는)", count=alive_workers(db)),
         extensions.StatItem(
-            label=f"작업 파일 ({int(stored) // (1024 * 1024)}MB)", count=int(files_count)
+            label=f"작업 파일 (DB {int(in_db) // mb}MB · 저장소 {int(on_disk) // mb}MB)",
+            count=int(files_count),
         ),
     ]

@@ -1496,7 +1496,7 @@
           "workspaces"
         ],
         "summary": "Reassign Workspace",
-        "description": "자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계.\n\n옮기고 나서 원본을 보관하거나 지운다. 고른 종류만 옮기고, 하나라도 실패하면\n아무것도 안 옮긴다.",
+        "description": "자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계. **작업으로**(202).\n\n워커가 **계획**을 세운다 — 무엇이 몇 건 옮겨지나 · 겹쳐서 막히는 것(`result.items` ·\n`result.errors`). 아무것도 안 바뀐다. 사람이 읽고 `POST /api/jobs/{id}/apply` 로 적용하면\n같은 지문일 때만 한 트랜잭션으로 옮긴다 — 고른 종류만, 하나라도 실패하면 아무것도 안\n옮긴다. 옮기고 나서 원본을 보관하거나 지운다(도는 동안은 지우기를 막는다).\n\n예전에는 이 요청 안에서 옮기고 `{moved}` 를 돌려줬다 — 한 부서 객체 20만 개면 90초 남짓이라\n브라우저 · 이중화의 nginx 가 먼저 끊었다(2026-10-10). 옮긴 수는 이제 적용 작업의\n`result.moved` 다.\n\n없는 부서 · 같은 부서 · 모르는 종류는 **넣는 순간에** 거절한다(몇 분 뒤가 아니라).",
         "operationId": "reassign_workspace_api_workspaces__slug__reassign_post",
         "parameters": [
           {
@@ -1520,12 +1520,12 @@
           }
         },
         "responses": {
-          "200": {
+          "202": {
             "description": "Successful Response",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/WorkspaceReassignResult"
+                  "$ref": "#/components/schemas/JobOut"
                 }
               }
             }
@@ -10511,7 +10511,7 @@
           "metrics"
         ],
         "summary": "Metric Values",
-        "description": "표 — 요청한 기준(과 기간 · 코호트)별 셀. 기준 값으로 거르기는 `d.<기준>=<값>`(빈 값은\n「(비어 있음)」). 셀마다 비율 · 닫힘 · **건 보기 조건**(`drill`)이 붙는다.",
+        "description": "표 — 요청한 기준(과 기간 · 코호트)별 셀. 기준 값으로 거르기는 `d.<기준>=<값>`(빈 값은\n「(비어 있음)」). 셀마다 비율 · 닫힘 · **건 보기 조건**(`drill`)이 붙는다. `composition` 을\n주면 셀마다 구성비(`composition`, % — 나머지 칸이 같은 셀끼리 합이 100).",
         "operationId": "metric_values_api_metrics__slug__values_get",
         "parameters": [
           {
@@ -10624,6 +10624,24 @@
               ],
               "title": "Cohort To"
             }
+          },
+          {
+            "name": "composition",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "구성비를 낼 기준 이름(dims 중 하나) — 셀마다 그 기준의 값들 사이의 몫(%)",
+              "title": "Composition"
+            },
+            "description": "구성비를 낼 기준 이름(dims 중 하나) — 셀마다 그 기준의 값들 사이의 몫(%)"
           }
         ],
         "responses": {
@@ -10656,7 +10674,7 @@
           "metrics"
         ],
         "summary": "Metric Series",
-        "description": "추이 — 기간순, 빈 기간은 0, 전기 · 전년 동기 · 닫힘.",
+        "description": "추이 — 기간순, 빈 기간은 0, 전기 · 전년 동기 · 닫힘. `composition=true` 면 점마다 그\n기간의 구성비(%, 선을 나눈 기준의 값들 사이 — 기간마다 합이 100).",
         "operationId": "metric_series_api_metrics__slug__series_get",
         "parameters": [
           {
@@ -10717,6 +10735,18 @@
               ],
               "title": "Period To"
             }
+          },
+          {
+            "name": "composition",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "점마다 그 기간의 선들 사이의 몫(%) — split 이 있어야",
+              "default": false,
+              "title": "Composition"
+            },
+            "description": "점마다 그 기간의 선들 사이의 몫(%) — split 이 있어야"
           }
         ],
         "responses": {
@@ -14820,7 +14850,7 @@
           "server"
         ],
         "summary": "Maintenance",
-        "description": "남은 일. **홈이 이것을 보여 준다.**\n\n관리 화면에 들어가야만 보이는 목록은 아무도 안 본다 — 승인 대기가 며칠씩\n방치되고, 안 채워진 자료는 영영 안 채워진다.\n\n**0 건인 항목은 안 내보낸다**(레지스트리가 거른다). 다 0 인 목록을 매일 보면\n사람은 그 자리를 아예 안 읽게 되고, 그때 진짜 하나가 떠도 눈에 안 들어온다.",
+        "description": "남은 일. **홈이 이것을 보여 준다.**\n\n관리 화면에 들어가야만 보이는 목록은 아무도 안 본다 — 승인 대기가 며칠씩\n방치되고, 안 채워진 자료는 영영 안 채워진다.\n\n**0 건인 항목은 안 내보낸다**(레지스트리가 거른다). 다 0 인 목록을 매일 보면\n사람은 그 자리를 아예 안 읽게 되고, 그때 진짜 하나가 떠도 눈에 안 들어온다.\n\n**검토함에 그 종류가 있으면 그리로 간다**(ADR 0027) — 처리를 한꺼번에 하는 자리가 거기다.\n줄의 원래 링크(데이터 품질 · 작업 화면)는 검토함 줄의 「원래 화면으로」 가 된다.",
         "operationId": "maintenance_api_server_maintenance_get",
         "responses": {
           "200": {
@@ -14939,6 +14969,728 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/PipelineKitOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/server/performance/requests": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Performance Requests",
+        "description": "경로 틀 · 메서드마다 호출 수 · p50 · p95 · 최대 시간 · 평균/최대 응답 크기.\n\n`sort` — `p95`(느린 순) · `max_ms` · `max_bytes`(큰 순) · `avg_bytes` · `calls`. 기록이\n너무 많으면 최근 쪽만 세고 `capped` 로 말한다(`performance.MAX_ROWS`).",
+        "operationId": "performance_requests_api_server_performance_requests_get",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "1h",
+                "24h",
+                "7d"
+              ],
+              "type": "string",
+              "default": "24h",
+              "title": "Period"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "p95",
+                "max_ms",
+                "max_bytes",
+                "avg_bytes",
+                "calls"
+              ],
+              "type": "string",
+              "default": "p95",
+              "title": "Sort"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RequestStatsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/server/performance/requests/cases": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Performance Cases",
+        "description": "그 경로 틀의 **최근 최악 사례** — 오래 걸린 순(`order=bytes` 면 큰 순).\n\n요청 ID 로 app.log 에서 그 요청의 줄을 찾고, 원 경로로 어느 객체였나를 본다.",
+        "operationId": "performance_cases_api_server_performance_requests_cases_get",
+        "parameters": [
+          {
+            "name": "route",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 300,
+              "title": "Route"
+            }
+          },
+          {
+            "name": "method",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "maxLength": 10,
+              "title": "Method"
+            }
+          },
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "1h",
+                "24h",
+                "7d"
+              ],
+              "type": "string",
+              "default": "24h",
+              "title": "Period"
+            }
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "duration",
+                "bytes"
+              ],
+              "type": "string",
+              "default": "duration",
+              "title": "Order"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 50,
+              "minimum": 1,
+              "default": 20,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/RequestCaseOut"
+                  },
+                  "title": "Response Performance Cases Api Server Performance Requests Cases Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/server/performance/jobs": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Performance Jobs",
+        "description": "작업 종류마다 — 그 기간에 들어온 작업의 끝난 수 · 소요 · 대기(초). 느린 것이 위로.",
+        "operationId": "performance_jobs_api_server_performance_jobs_get",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "1h",
+                "24h",
+                "7d"
+              ],
+              "type": "string",
+              "default": "24h",
+              "title": "Period"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JobStatsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/review/items": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Review Items",
+        "description": "**사람이 판단할 일** — 종류마다 원래 자리에서 읽어 한 줄(물음 · 근거 · 후보 · 추천 ·\n확신도)로. 종류마다 묶여 선다(`kinds` 의 차례). 수는 `kinds[].total`(원래 자리에 있는 수)과\n`matched`(거르기에 맞는 수). 0건이면 `notes` · `kinds[].notes` 가 까닭을 말한다.",
+        "operationId": "review_items_api_review_items_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "종류 하나만 — `/items` 의 `kinds`",
+              "title": "Kind"
+            },
+            "description": "종류 하나만 — `/items` 의 `kinds`"
+          },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "타입 slug(별칭 후보는 못 찾은 자리)",
+              "title": "Type"
+            },
+            "description": "타입 slug(별칭 후보는 못 찾은 자리)"
+          },
+          {
+            "name": "workspace",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "부서 slug — `@global` 이면 전역(부서 없음)만",
+              "title": "Workspace"
+            },
+            "description": "부서 slug — `@global` 이면 전역(부서 없음)만"
+          },
+          {
+            "name": "min_confidence",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 1,
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Min Confidence"
+            }
+          },
+          {
+            "name": "max_confidence",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "number",
+                  "maximum": 1.01,
+                  "minimum": 0
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Max Confidence"
+            }
+          },
+          {
+            "name": "actionable",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "처리할 수 있는 것만(막힌 것 · 링크만 빼고)",
+              "default": false,
+              "title": "Actionable"
+            },
+            "description": "처리할 수 있는 것만(막힌 것 · 링크만 빼고)"
+          },
+          {
+            "name": "group",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "같은 것끼리 묶기",
+              "default": false,
+              "title": "Group"
+            },
+            "description": "같은 것끼리 묶기"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewPageOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/review/plan": {
+      "post": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Review Plan",
+        "description": "**미리 보기** — 무엇이 무엇으로 되나. 아무것도 안 바꾼다.\n\n- `mode=\"decisions\"` — 고른 것(`decisions`: 추천대로 `accept` · 다른 것으로 `choose` +\n  `value` · 무시 `ignore`).\n- `mode=\"recommended\"` — **「추천대로 모두」**: `filters` 에 맞고 추천이 있고 확신도가\n  `threshold`(기본 0.9) 이상인 것. 문턱 아래 · 추천 없음은 `skipped` 로 센다.\n- `mode=\"all\"` — 거른 전부에 `action`(추천대로 · 무시) 하나.\n\n막히는 것(다른 객체가 이미 쓰는 별칭 · 남의 부서 · 병합 묶음에 못 고치는 것)은 `blocked`\n로 따로 세고 적용에서 빠진다. 적용은 이 응답의 `decisions` 와 `fingerprint` 를 그대로\n`POST /api/review/apply` 에 — 그 사이 바뀌면 거절된다.",
+        "operationId": "review_plan_api_review_plan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewPlanRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewPlanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/review/apply": {
+      "post": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Review Apply",
+        "description": "**미리 본 그대로 적용** — 미리 보기의 `decisions` · `fingerprint` 를 그대로. 그 사이\n바뀐 것이 있으면 409(아무것도 안 했다). 결정마다 원래 기능으로 처리하고 결정 기록 한 줄을\n남긴다(하나가 막혀도 나머지는 간다 — `refused`).\n\n큰 묶음(결정 100건 · 줄 5,000 넘음, 가리키는 기록이 많은 병합)은 **작업으로** 간다 — 202 와\n`job_id`. 되돌리기는 `POST /api/review/batches/{batch_id}/undo`.",
+        "operationId": "review_apply_api_review_apply_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewApplyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewApplyOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/review/decisions": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Review Decisions",
+        "description": "**결정 기록** — 무엇을 누가 언제 어떻게 정했나, 추천을 따랐나. 내 것과 내가 관리하는\n부서의 것(시스템 관리자는 전부).",
+        "operationId": "review_decisions_api_review_decisions_get",
+        "parameters": [
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Kind"
+            }
+          },
+          {
+            "name": "batch",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "묶음 하나만",
+              "title": "Batch"
+            },
+            "description": "묶음 하나만"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewDecisionPage"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/review/decisions/accuracy": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Review Accuracy",
+        "description": "**추천이 얼마나 맞나** — 처리한 결정 중 추천이 있던 것에서 사람이 추천대로 한 몫.\n종류마다, 그리고 확신도 구간마다(「0.9 이상은 믿어도 되나」). 복원한 결정은 따른 것으로\n세지 않는다.",
+        "operationId": "review_accuracy_api_review_decisions_accuracy_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewAccuracyOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/review/batches": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Review Batches",
+        "description": "최근 적용한 묶음 — 복원할 수 있는 것이 몇이나 남았나.",
+        "operationId": "review_batches_api_review_batches_get",
+        "parameters": [
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ReviewBatchOut"
+                  },
+                  "title": "Response Review Batches Api Review Batches Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/review/batches/{batch_id}/undo": {
+      "post": {
+        "tags": [
+          "review"
+        ],
+        "summary": "Review Undo",
+        "description": "**묶음 복원** — `apply=false`(기본)면 무엇이 복원되나만. 종류마다 원래 기능의 되돌리기로\n간다(지워진 것을 가리키는 칸은 그 묶음의 기록에서 그때 값으로, 별칭은 빼거나 검수 대기로,\n별칭 후보는 대기로). **병합은 복원이 없다** — 그 줄은 「막힘」 으로 서고 까닭을 말한다.\n그 뒤에 누가 또 고친 줄은 덮어쓰지 않는다.",
+        "operationId": "review_undo_api_review_batches__batch_id__undo_post",
+        "parameters": [
+          {
+            "name": "batch_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Batch Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ReviewUndoRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewUndoOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
                 }
               }
             }
@@ -20013,6 +20765,17 @@
                 "type": "null"
               }
             ]
+          },
+          "composition": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Composition"
           }
         },
         "type": "object",
@@ -21159,6 +21922,13 @@
             "type": "string",
             "title": "Value",
             "default": ""
+          },
+          "exclude": {
+            "type": "integer",
+            "maximum": 99.0,
+            "minimum": 0.0,
+            "title": "Exclude",
+            "default": 0
           }
         },
         "type": "object",
@@ -24250,9 +25020,15 @@
             "title": "Name"
           },
           "address": {
-            "type": "string",
-            "maxLength": 200,
-            "minLength": 1,
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
             "title": "Address"
           },
           "grain": {
@@ -24266,15 +25042,54 @@
               }
             ],
             "title": "Grain"
+          },
+          "rules": {
+            "anyOf": [
+              {
+                "items": {
+                  "$ref": "#/components/schemas/RuleIn"
+                },
+                "type": "array",
+                "maxItems": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rules"
+          },
+          "else": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Else"
+          },
+          "label": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 40
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Label"
           }
         },
         "additionalProperties": false,
         "type": "object",
         "required": [
-          "name",
-          "address"
+          "name"
         ],
-        "title": "DimensionIn"
+        "title": "DimensionIn",
+        "description": "기준 하나 — **주소**(칸)거나 **규칙**(ADR 0015)이다. 규칙 기준은 주소 · 기간 단위 없이\n`rules` · `else`(어느 규칙에도 안 맞을 때의 이름, 기본 「기타」) · `label`(기준의 이름,\n비우면 `name`)을 둔다."
       },
       "DiskOut": {
         "properties": {
@@ -26856,6 +27671,129 @@
         "title": "JobBulkResultOut",
         "description": "줄마다 결과 — **하나가 막혀도 나머지는 간다.**\n\n통째로 되돌리면 스무 건 중 하나의 문제가 열아홉 건의 일을 없앤다. 대신 어느 것이\n왜 막혔는지 돌려준다(작업끼리는 서로 독립이다)."
       },
+      "JobKindStatOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "done": {
+            "type": "integer",
+            "title": "Done"
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed"
+          },
+          "cancelled": {
+            "type": "integer",
+            "title": "Cancelled"
+          },
+          "open": {
+            "type": "integer",
+            "title": "Open"
+          },
+          "run_p50_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run P50 S"
+          },
+          "run_p95_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run P95 S"
+          },
+          "run_max_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Run Max S"
+          },
+          "wait_p50_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait P50 S"
+          },
+          "wait_p95_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait P95 S"
+          },
+          "wait_max_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Wait Max S"
+          },
+          "queued_oldest_s": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Queued Oldest S"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "label",
+          "done",
+          "failed",
+          "cancelled",
+          "open",
+          "run_p50_s",
+          "run_p95_s",
+          "run_max_s",
+          "wait_p50_s",
+          "wait_p95_s",
+          "wait_max_s",
+          "queued_oldest_s"
+        ],
+        "title": "JobKindStatOut",
+        "description": "작업 종류 하나 — 그 기간에 들어온 작업의 소요 · 대기(초)."
+      },
       "JobListOut": {
         "properties": {
           "items": {
@@ -27082,6 +28020,33 @@
         "type": "object",
         "title": "JobProgress"
       },
+      "JobStatsOut": {
+        "properties": {
+          "period": {
+            "type": "string",
+            "title": "Period"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Since"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/JobKindStatOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period",
+          "since",
+          "items"
+        ],
+        "title": "JobStatsOut"
+      },
       "KindOut": {
         "properties": {
           "name": {
@@ -27099,6 +28064,17 @@
           "two_step": {
             "type": "boolean",
             "title": "Two Step"
+          },
+          "max_file_bytes": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max File Bytes"
           }
         },
         "type": "object",
@@ -28863,6 +29839,13 @@
             "type": "string",
             "title": "Note",
             "default": ""
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/RulesVersionOut"
+            },
+            "type": "array",
+            "title": "Rules"
           }
         },
         "type": "object",
@@ -32029,6 +33012,30 @@
         ],
         "title": "PatOut"
       },
+      "PerformanceThresholdsOut": {
+        "properties": {
+          "p95_ms": {
+            "type": "integer",
+            "title": "P95 Ms"
+          },
+          "min_calls": {
+            "type": "integer",
+            "title": "Min Calls"
+          },
+          "response_bytes": {
+            "type": "integer",
+            "title": "Response Bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "p95_ms",
+          "min_calls",
+          "response_bytes"
+        ],
+        "title": "PerformanceThresholdsOut",
+        "description": "홈 「남은 일」 의 문턱 — 화면이 그 줄에 표시를 단다(같은 기준으로)."
+      },
       "PipelineKitOut": {
         "properties": {
           "available": {
@@ -32163,6 +33170,13 @@
               }
             ],
             "title": "Period To"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/RulePlanOut"
+            },
+            "type": "array",
+            "title": "Rules"
           }
         },
         "type": "object",
@@ -35074,6 +36088,205 @@
         ],
         "title": "RenameOptionRequest"
       },
+      "RequestCaseOut": {
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "user_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "User Label"
+          },
+          "path": {
+            "type": "string",
+            "title": "Path"
+          },
+          "status_code": {
+            "type": "integer",
+            "title": "Status Code"
+          },
+          "duration_ms": {
+            "type": "integer",
+            "title": "Duration Ms"
+          },
+          "response_bytes": {
+            "type": "integer",
+            "title": "Response Bytes"
+          },
+          "content_type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Content Type"
+          },
+          "request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "created_at",
+          "user_label",
+          "path",
+          "status_code",
+          "duration_ms",
+          "response_bytes",
+          "content_type",
+          "request_id"
+        ],
+        "title": "RequestCaseOut",
+        "description": "최악 사례 한 줄 — 누가 · 언제 · 상태 · 시간 · 크기 · 요청 ID."
+      },
+      "RequestStatOut": {
+        "properties": {
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "route": {
+            "type": "string",
+            "title": "Route"
+          },
+          "calls": {
+            "type": "integer",
+            "title": "Calls"
+          },
+          "p50_ms": {
+            "type": "integer",
+            "title": "P50 Ms"
+          },
+          "p95_ms": {
+            "type": "integer",
+            "title": "P95 Ms"
+          },
+          "max_ms": {
+            "type": "integer",
+            "title": "Max Ms"
+          },
+          "avg_bytes": {
+            "type": "integer",
+            "title": "Avg Bytes"
+          },
+          "max_bytes": {
+            "type": "integer",
+            "title": "Max Bytes"
+          },
+          "file": {
+            "type": "boolean",
+            "title": "File"
+          },
+          "slow": {
+            "type": "boolean",
+            "title": "Slow"
+          },
+          "large": {
+            "type": "boolean",
+            "title": "Large"
+          }
+        },
+        "type": "object",
+        "required": [
+          "method",
+          "route",
+          "calls",
+          "p50_ms",
+          "p95_ms",
+          "max_ms",
+          "avg_bytes",
+          "max_bytes",
+          "file",
+          "slow",
+          "large"
+        ],
+        "title": "RequestStatOut",
+        "description": "경로 틀 · 메서드 하나의 묶음."
+      },
+      "RequestStatsOut": {
+        "properties": {
+          "period": {
+            "type": "string",
+            "title": "Period"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Since"
+          },
+          "capped": {
+            "type": "boolean",
+            "title": "Capped"
+          },
+          "first_recorded_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "First Recorded At"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/PerformanceThresholdsOut"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RequestStatOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period",
+          "since",
+          "capped",
+          "first_recorded_at",
+          "thresholds",
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "RequestStatsOut"
+      },
       "ResetItemOut": {
         "properties": {
           "table": {
@@ -35716,6 +36929,1268 @@
         ],
         "title": "RetypeValueOut"
       },
+      "ReviewAccuracyLineOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "decided": {
+            "type": "integer",
+            "title": "Decided"
+          },
+          "recommended": {
+            "type": "integer",
+            "title": "Recommended"
+          },
+          "followed": {
+            "type": "integer",
+            "title": "Followed"
+          },
+          "rate": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rate"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "label",
+          "decided",
+          "recommended",
+          "followed",
+          "rate"
+        ],
+        "title": "ReviewAccuracyLineOut"
+      },
+      "ReviewAccuracyOut": {
+        "properties": {
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewAccuracyLineOut"
+            },
+            "type": "array",
+            "title": "Kinds"
+          },
+          "bands": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewAccuracyLineOut"
+            },
+            "type": "array",
+            "title": "Bands"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kinds",
+          "bands"
+        ],
+        "title": "ReviewAccuracyOut"
+      },
+      "ReviewApplyOut": {
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "batch_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Batch Id"
+          },
+          "job_id": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Job Id"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewOutcomeOut"
+            },
+            "type": "array",
+            "title": "Outcomes"
+          },
+          "undoable": {
+            "type": "integer",
+            "title": "Undoable"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "batch_id",
+          "job_id",
+          "counts",
+          "outcomes",
+          "undoable"
+        ],
+        "title": "ReviewApplyOut"
+      },
+      "ReviewApplyRequest": {
+        "properties": {
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewDecisionIn"
+            },
+            "type": "array",
+            "title": "Decisions"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "mode": {
+            "type": "string",
+            "enum": [
+              "one",
+              "selected",
+              "all",
+              "recommended"
+            ],
+            "title": "Mode",
+            "default": "selected"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          }
+        },
+        "type": "object",
+        "required": [
+          "decisions",
+          "fingerprint"
+        ],
+        "title": "ReviewApplyRequest"
+      },
+      "ReviewBatchOut": {
+        "properties": {
+          "batch_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Batch Id"
+          },
+          "decided_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Decided At"
+          },
+          "decided_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By Name"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "done": {
+            "type": "integer",
+            "title": "Done"
+          },
+          "refused": {
+            "type": "integer",
+            "title": "Refused"
+          },
+          "undoable": {
+            "type": "integer",
+            "title": "Undoable"
+          },
+          "undone": {
+            "type": "integer",
+            "title": "Undone"
+          },
+          "kinds": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Kinds"
+          }
+        },
+        "type": "object",
+        "required": [
+          "batch_id",
+          "decided_at",
+          "decided_by_name",
+          "mode",
+          "count",
+          "done",
+          "refused",
+          "undoable",
+          "undone",
+          "kinds"
+        ],
+        "title": "ReviewBatchOut"
+      },
+      "ReviewChoiceOut": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "detail": {
+            "type": "string",
+            "title": "Detail",
+            "default": ""
+          },
+          "score": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Score"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value",
+          "label"
+        ],
+        "title": "ReviewChoiceOut"
+      },
+      "ReviewDecisionIn": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "item_id": {
+            "type": "string",
+            "title": "Item Id"
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "choose",
+              "ignore"
+            ],
+            "title": "Action"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "item_id",
+          "action"
+        ],
+        "title": "ReviewDecisionIn"
+      },
+      "ReviewDecisionOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "batch_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Batch Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "kind_label": {
+            "type": "string",
+            "title": "Kind Label"
+          },
+          "item_id": {
+            "type": "string",
+            "title": "Item Id"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "choice": {
+            "type": "string",
+            "title": "Choice"
+          },
+          "choice_label": {
+            "type": "string",
+            "title": "Choice Label"
+          },
+          "recommended": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "followed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Followed"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "undoable": {
+            "type": "boolean",
+            "title": "Undoable"
+          },
+          "undone_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Undone At"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "decided_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Decided By Name"
+          },
+          "decided_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Decided At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "batch_id",
+          "kind",
+          "kind_label",
+          "item_id",
+          "question",
+          "action",
+          "choice",
+          "choice_label",
+          "recommended",
+          "confidence",
+          "followed",
+          "mode",
+          "threshold",
+          "status",
+          "message",
+          "rows",
+          "undoable",
+          "undone_at",
+          "type_slug",
+          "decided_by_name",
+          "decided_at"
+        ],
+        "title": "ReviewDecisionOut"
+      },
+      "ReviewDecisionPage": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewDecisionOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "ReviewDecisionPage"
+      },
+      "ReviewFacetOut": {
+        "properties": {
+          "value": {
+            "type": "string",
+            "title": "Value"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "value",
+          "label",
+          "count"
+        ],
+        "title": "ReviewFacetOut"
+      },
+      "ReviewFilterIn": {
+        "properties": {
+          "kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Kind"
+          },
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          },
+          "workspace": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace",
+            "description": "부서 slug — `@global` 이면 전역(부서 없음)만"
+          },
+          "min_confidence": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.0,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Min Confidence"
+          },
+          "max_confidence": {
+            "anyOf": [
+              {
+                "type": "number",
+                "maximum": 1.01,
+                "minimum": 0.0
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Max Confidence"
+          },
+          "actionable": {
+            "type": "boolean",
+            "title": "Actionable",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ReviewFilterIn"
+      },
+      "ReviewItemOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "kind_label": {
+            "type": "string",
+            "title": "Kind Label"
+          },
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "evidence": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Evidence"
+          },
+          "choices": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewChoiceOut"
+            },
+            "type": "array",
+            "title": "Choices"
+          },
+          "recommended": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended"
+          },
+          "recommended_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended Label"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Slug"
+          },
+          "workspace_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Workspace Name"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "group": {
+            "type": "string",
+            "title": "Group"
+          },
+          "group_label": {
+            "type": "string",
+            "title": "Group Label"
+          },
+          "blocked": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Blocked"
+          },
+          "link": {
+            "type": "string",
+            "title": "Link"
+          },
+          "ignorable": {
+            "type": "boolean",
+            "title": "Ignorable"
+          },
+          "actionable": {
+            "type": "boolean",
+            "title": "Actionable"
+          },
+          "members": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Members"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "kind_label",
+          "id",
+          "question",
+          "evidence",
+          "choices",
+          "recommended",
+          "recommended_label",
+          "confidence",
+          "reason",
+          "type_slug",
+          "type_label",
+          "workspace_slug",
+          "workspace_name",
+          "rows",
+          "group",
+          "group_label",
+          "blocked",
+          "link",
+          "ignorable",
+          "actionable"
+        ],
+        "title": "ReviewItemOut"
+      },
+      "ReviewKindOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "link": {
+            "type": "string",
+            "title": "Link"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "matched": {
+            "type": "integer",
+            "title": "Matched"
+          },
+          "scanned": {
+            "type": "integer",
+            "title": "Scanned"
+          },
+          "actionable": {
+            "type": "boolean",
+            "title": "Actionable"
+          },
+          "undo_note": {
+            "type": "string",
+            "title": "Undo Note"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "label",
+          "description",
+          "link",
+          "total",
+          "matched",
+          "scanned",
+          "actionable",
+          "undo_note",
+          "notes"
+        ],
+        "title": "ReviewKindOut"
+      },
+      "ReviewKindPlanOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "apply": {
+            "type": "integer",
+            "title": "Apply"
+          },
+          "blocked": {
+            "type": "integer",
+            "title": "Blocked"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "undoable": {
+            "type": "boolean",
+            "title": "Undoable"
+          },
+          "undo_note": {
+            "type": "string",
+            "title": "Undo Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "label",
+          "apply",
+          "blocked",
+          "rows",
+          "undoable",
+          "undo_note"
+        ],
+        "title": "ReviewKindPlanOut"
+      },
+      "ReviewOutcomeOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "kind_label": {
+            "type": "string",
+            "title": "Kind Label"
+          },
+          "item_id": {
+            "type": "string",
+            "title": "Item Id"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "action": {
+            "type": "string",
+            "title": "Action"
+          },
+          "choice": {
+            "type": "string",
+            "title": "Choice"
+          },
+          "choice_label": {
+            "type": "string",
+            "title": "Choice Label"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "effect": {
+            "type": "string",
+            "title": "Effect"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "undoable": {
+            "type": "boolean",
+            "title": "Undoable"
+          },
+          "recommended": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Recommended"
+          },
+          "confidence": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Confidence"
+          },
+          "followed": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Followed"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "kind_label",
+          "item_id",
+          "question",
+          "action",
+          "choice",
+          "choice_label",
+          "status",
+          "effect",
+          "message",
+          "rows",
+          "undoable",
+          "recommended",
+          "confidence",
+          "followed"
+        ],
+        "title": "ReviewOutcomeOut"
+      },
+      "ReviewPageOut": {
+        "properties": {
+          "kinds": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewKindOut"
+            },
+            "type": "array",
+            "title": "Kinds"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewFacetOut"
+            },
+            "type": "array",
+            "title": "Types"
+          },
+          "workspaces": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewFacetOut"
+            },
+            "type": "array",
+            "title": "Workspaces"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kinds",
+          "items",
+          "total",
+          "limit",
+          "offset",
+          "types",
+          "workspaces",
+          "notes"
+        ],
+        "title": "ReviewPageOut"
+      },
+      "ReviewPlanOut": {
+        "properties": {
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "mode": {
+            "type": "string",
+            "title": "Mode"
+          },
+          "threshold": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Threshold"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewDecisionIn"
+            },
+            "type": "array",
+            "title": "Decisions"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "by_kind": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewKindPlanOut"
+            },
+            "type": "array",
+            "title": "By Kind"
+          },
+          "outcomes": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewOutcomeOut"
+            },
+            "type": "array",
+            "title": "Outcomes"
+          },
+          "outcomes_omitted": {
+            "type": "integer",
+            "title": "Outcomes Omitted"
+          },
+          "skipped": {
+            "type": "integer",
+            "title": "Skipped"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "as_job": {
+            "type": "boolean",
+            "title": "As Job"
+          },
+          "notes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Notes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "fingerprint",
+          "mode",
+          "threshold",
+          "decisions",
+          "counts",
+          "by_kind",
+          "outcomes",
+          "outcomes_omitted",
+          "skipped",
+          "rows",
+          "as_job",
+          "notes"
+        ],
+        "title": "ReviewPlanOut"
+      },
+      "ReviewPlanRequest": {
+        "properties": {
+          "mode": {
+            "type": "string",
+            "enum": [
+              "decisions",
+              "recommended",
+              "all"
+            ],
+            "title": "Mode",
+            "default": "decisions"
+          },
+          "decisions": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewDecisionIn"
+            },
+            "type": "array",
+            "title": "Decisions"
+          },
+          "filters": {
+            "$ref": "#/components/schemas/ReviewFilterIn"
+          },
+          "threshold": {
+            "type": "number",
+            "maximum": 1.0,
+            "minimum": 0.0,
+            "title": "Threshold",
+            "default": 0.9
+          },
+          "action": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "ignore"
+            ],
+            "title": "Action",
+            "default": "accept"
+          }
+        },
+        "type": "object",
+        "title": "ReviewPlanRequest"
+      },
+      "ReviewUndoLineOut": {
+        "properties": {
+          "decision_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Decision Id"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "question": {
+            "type": "string",
+            "title": "Question"
+          },
+          "choice_label": {
+            "type": "string",
+            "title": "Choice Label"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "message": {
+            "type": "string",
+            "title": "Message"
+          }
+        },
+        "type": "object",
+        "required": [
+          "decision_id",
+          "kind",
+          "question",
+          "choice_label",
+          "status",
+          "message"
+        ],
+        "title": "ReviewUndoLineOut"
+      },
+      "ReviewUndoOut": {
+        "properties": {
+          "applied": {
+            "type": "boolean",
+            "title": "Applied"
+          },
+          "batch_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Batch Id"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "type": "object",
+            "title": "Counts"
+          },
+          "lines": {
+            "items": {
+              "$ref": "#/components/schemas/ReviewUndoLineOut"
+            },
+            "type": "array",
+            "title": "Lines"
+          }
+        },
+        "type": "object",
+        "required": [
+          "applied",
+          "batch_id",
+          "counts",
+          "lines"
+        ],
+        "title": "ReviewUndoOut"
+      },
+      "ReviewUndoRequest": {
+        "properties": {
+          "apply": {
+            "type": "boolean",
+            "title": "Apply",
+            "default": false
+          }
+        },
+        "type": "object",
+        "title": "ReviewUndoRequest"
+      },
       "RollupOut": {
         "properties": {
           "property": {
@@ -35766,6 +38241,182 @@
         ],
         "title": "RollupOut",
         "description": "「아래 전부」 를 모은 수 하나 — 볼 때마다 센다(저장하지 않는다)."
+      },
+      "RuleCountOut": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "matched": {
+            "type": "integer",
+            "title": "Matched"
+          },
+          "won": {
+            "type": "integer",
+            "title": "Won"
+          },
+          "taken_by": {
+            "items": {
+              "$ref": "#/components/schemas/RuleTakenOut"
+            },
+            "type": "array",
+            "title": "Taken By"
+          },
+          "blocked": {
+            "type": "boolean",
+            "title": "Blocked"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "matched",
+          "won",
+          "taken_by",
+          "blocked"
+        ],
+        "title": "RuleCountOut",
+        "description": "계획의 규칙 하나(ADR 0015)."
+      },
+      "RuleIn": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Label",
+            "default": ""
+          },
+          "when": {
+            "items": {
+              "$ref": "#/components/schemas/FilterIn"
+            },
+            "type": "array",
+            "maxItems": 100,
+            "title": "When"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RuleIn",
+        "description": "규칙 하나 — 조건 전부(AND)에 맞으면 이 이름. 이름 · 조건 수의 상한은 계획이\n말한다(여기서 막으면 422 본문이 계획의 오류 목록에 안 실린다)."
+      },
+      "RulePlanOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "rules": {
+            "items": {
+              "$ref": "#/components/schemas/RuleCountOut"
+            },
+            "type": "array",
+            "title": "Rules"
+          },
+          "other": {
+            "type": "string",
+            "title": "Other"
+          },
+          "other_count": {
+            "type": "integer",
+            "title": "Other Count"
+          },
+          "seen": {
+            "type": "integer",
+            "title": "Seen"
+          },
+          "sampled": {
+            "type": "boolean",
+            "title": "Sampled"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "label",
+          "fingerprint",
+          "rules",
+          "other",
+          "other_count",
+          "seen",
+          "sampled"
+        ],
+        "title": "RulePlanOut",
+        "description": "계획의 규칙 기준 하나 — 규칙마다의 수 · 「기타」 의 수. 표본이면 `sampled`."
+      },
+      "RuleTakenOut": {
+        "properties": {
+          "rule": {
+            "type": "integer",
+            "title": "Rule"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rule",
+          "count"
+        ],
+        "title": "RuleTakenOut"
+      },
+      "RulesVersionOut": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "fingerprint": {
+            "type": "string",
+            "title": "Fingerprint"
+          },
+          "rules": {
+            "type": "integer",
+            "title": "Rules"
+          },
+          "changed_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changed At"
+          },
+          "changed_by": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Changed By"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "fingerprint",
+          "rules"
+        ],
+        "title": "RulesVersionOut",
+        "description": "규칙 판 — 규칙(차례 포함)의 지문과 그 규칙을 저장한 사람 · 때."
       },
       "SavedViewOut": {
         "properties": {
@@ -36347,6 +38998,11 @@
           "lines_truncated": {
             "type": "boolean",
             "title": "Lines Truncated"
+          },
+          "composition": {
+            "type": "boolean",
+            "title": "Composition",
+            "default": false
           }
         },
         "type": "object",
@@ -38526,6 +41182,17 @@
               }
             ],
             "title": "Total Value"
+          },
+          "composition": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Composition"
           }
         },
         "type": "object",
@@ -39962,23 +42629,7 @@
           "kinds"
         ],
         "title": "WorkspaceReassignRequest",
-        "description": "자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계."
-      },
-      "WorkspaceReassignResult": {
-        "properties": {
-          "moved": {
-            "additionalProperties": {
-              "type": "integer"
-            },
-            "type": "object",
-            "title": "Moved"
-          }
-        },
-        "type": "object",
-        "required": [
-          "moved"
-        ],
-        "title": "WorkspaceReassignResult"
+        "description": "자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계. 작업(`workspace_reassign`)의\n계획을 넣는다 — 옮긴 수는 적용 작업의 `result.moved`."
       },
       "WorkspaceReferenceOut": {
         "properties": {
@@ -40656,6 +43307,17 @@
           },
           "drill": {
             "$ref": "#/components/schemas/DrillOut"
+          },
+          "composition": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Composition"
           }
         },
         "type": "object",

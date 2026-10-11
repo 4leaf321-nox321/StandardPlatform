@@ -1145,6 +1145,9 @@ async def objects_list(
       **다른 타입의 칸**도 된다 — `ref.vendor.country`(참조 칸이 가리키는 것의 칸),
       `out.used_by`(관계로 이어진 것 자체), `in.resells.country`. 주소는 `object_fields`
       가 준다 — 추측하지 않는다.
+      **제외**: 조건에 `"exclude": 1`(묶음 번호)을 주면 같은 번호끼리 AND 로 묶어 **그 묶음에
+      맞는 것을 뺀다**(`nf1.<칸>.<연산>`). 칸이 비어 비교가 안 되는 기록은 남는다. 지표 건
+      보기의 `nf<번호>.<칸>.<연산>` 키는 `{"field", "op", "value", "exclude": <번호>}` 로 푼다.
     - `status`: `active` · `deprecated`.
 
     응답의 `total` 이 전체 수다 — 한 쪽(limit ≤ 200)씩 `offset` 으로 넘긴다.
@@ -1199,7 +1202,10 @@ def _filter_params(
             one.get("op", "eq"),
             one.get("value", ""),
         )
-        params.append((f"f.{field}.{op}", value))
+        # 제외 묶음(ADR 0015) — 같은 번호끼리 AND 로 묶어 뺀다. 지표 건 보기의 `nf<번호>.` 키.
+        group = str(one.get("exclude") or "").strip()
+        head = f"nf{group}" if group and group != "0" else "f"
+        params.append((f"{head}.{field}.{op}", value))
     return params
 
 
@@ -1344,6 +1350,142 @@ async def alias_candidate_apply(
     if isinstance(got, dict) and "error" not in got:
         return {"applied": True, "action": action, **got}
     return got
+
+
+#: 「추천대로 모두」 의 기본 문턱 — 백엔드(`review/services.DEFAULT_THRESHOLD`)와 같다.
+REVIEW_THRESHOLD = 0.9
+
+
+def _review_filters(
+    kind: str | None,
+    type_slug: str | None,
+    workspace: str | None,
+    min_confidence: float | None,
+) -> dict[str, Any]:
+    return {
+        "kind": kind,
+        "type": type_slug,
+        "workspace": workspace,
+        "min_confidence": min_confidence,
+    }
+
+
+@tool()
+async def review_list(
+    ctx: Context,
+    kind: str | None = None,
+    type_slug: str | None = None,
+    workspace: str | None = None,
+    min_confidence: float | None = None,
+    group: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+) -> Any:
+    """**검토함** — 사람이 판단할 일을 한 곳에서(ADR 0027). 별칭 후보(못 찾은 말) · 검수 대기
+    별칭 · 병합 후보(이름이 같은 객체) · 지워진 것을 가리키는 칸, 그리고 원래 화면에서만
+    처리하는 적용 대기 계획 · 선 기다림.
+
+    줄마다 `question`(물음) · `evidence`(근거) · `choices`(후보, `score`) · `recommended` ·
+    `confidence`(0~1) · `reason`(왜 이 추천인가) · `rows`(한 결정이 손대는 줄 수) · `blocked`
+    (이 토큰의 주인이 처리할 수 없는 까닭) · `link`(원래 화면). `kinds` 가 종류마다 수를 센다
+    (`total` 원래 자리에 있는 수 · `matched` 거르기에 맞는 수) — **요약할 때 이것으로.**
+
+    거르기: `kind`(종류 하나) · `type_slug` · `workspace`(부서 slug, `@global` 은 전역) ·
+    `min_confidence`. `group=True` 면 같은 말 · 같은 지워진 객체 · 같은 출처의 줄을 한 줄로
+    접는다(`members` 가 펼친 줄의 id — 결정은 그것마다).
+
+    **추천은 규칙의 짐작이다** — 처리는 `review_decide` 로, 사람에게 보이고 확인받은 뒤에.
+    부서 관리자 이상."""
+    params: list[tuple[str, Any]] = [("limit", str(limit)), ("offset", str(offset))]
+    for key, value in _review_filters(kind, type_slug, workspace, min_confidence).items():
+        if value is not None:
+            params.append((key, str(value)))
+    if group:
+        params.append(("group", "true"))
+    return await _get(ctx, "/api/review/items", params=params)
+
+
+@tool()
+async def review_decide(
+    ctx: Context,
+    decisions: list[dict[str, Any]] | None = None,
+    recommended: bool = False,
+    threshold: float = REVIEW_THRESHOLD,
+    kind: str | None = None,
+    type_slug: str | None = None,
+    workspace: str | None = None,
+    apply: bool = False,
+    fingerprint: str | None = None,
+) -> Any:
+    """검토함의 결정 — **늘 `apply=False`(기본) 미리 보기 먼저.** 무엇이 무엇으로 되나
+    (`outcomes[].effect`) · 막히는 것(`counts.blocked` · `outcomes[].message`) · 되돌릴 수
+    있나(`by_kind[].undoable` · `undo_note` — 병합은 복원이 없다)를 **사람에게 보이고 확인받은
+    뒤** 같은 인자에 `apply=True` 와 미리 보기의 `fingerprint` 를 넣어 다시 부른다. 그 사이
+    바뀌었으면 아무것도 안 하고 거절된다(다시 미리 본다).
+
+    두 길:
+    - `decisions=[{kind, item_id, action, value?}]` — 고른 것. `action` 은 `accept`(추천대로) ·
+      `choose`(다른 것으로 — `value` 에 `choices[].value`) · `ignore`(무시). `item_id` 는
+      `review_list` 의 `id`(묶은 줄이면 `members` 의 id 들).
+    - `recommended=True` — **추천대로 모두**: `kind` · `type_slug` · `workspace` 에 맞고
+      확신도가 `threshold`(기본 0.9) 이상인 것 전부. 문턱 아래는 `skipped` 로 센다(사람이 볼
+      것).
+
+    **스스로 고르지 마라** — 추천은 규칙의 짐작이다. 사람이 「추천대로 해」 라고 했을 때만
+    `recommended=True`, 줄마다 정한 것은 `decisions` 로. 큰 묶음은 작업이 되어 `job` 으로
+    온다(끝날 때까지 기다려 결과를 준다). 적용하면 `batch_id` — 화면의 검토함 › 최근 적용에서
+    복원한다."""
+    if not recommended and not decisions:
+        return {
+            "error": "decisions 를 주거나 recommended=True 로 부르세요 — 무엇을 정할지 "
+            "사람에게 받은 뒤에."
+        }
+    body: dict[str, Any] = {
+        "mode": "recommended" if recommended else "decisions",
+        "decisions": decisions or [],
+        "filters": {
+            key: value
+            for key, value in _review_filters(kind, type_slug, workspace, None).items()
+            if value is not None
+        },
+        "threshold": threshold,
+    }
+    plan = await _post(ctx, "/api/review/plan", body)
+    if not isinstance(plan, dict) or "fingerprint" not in plan:
+        return plan
+    if not apply:
+        plan["applied"] = False
+        plan["next"] = (
+            "미리 보기다 — 아직 아무것도 안 바뀌었다. outcomes 의 effect · message 와 막힌 "
+            "수 · 복원할 수 없는 것을 사람에게 보이고, 확인받으면 같은 인자에 apply=True 와 "
+            f'fingerprint="{plan["fingerprint"]}" 를 넣어 다시 부른다.'
+        )
+        return plan
+    if not fingerprint:
+        return {
+            "error": "apply=True 에는 미리 보기의 fingerprint 가 필요합니다 — 먼저 "
+            "apply=False 로 미리 보고 사람에게 확인받으세요."
+        }
+    if plan["fingerprint"] != fingerprint:
+        return {
+            "error": "미리 본 것과 달라졌습니다(그 사이 누군가 처리했거나 후보가 "
+            "바뀌었습니다) — 아무것도 안 했습니다. 다시 미리 보고 사람에게 확인받으세요.",
+            "plan": plan,
+        }
+    done = await _post(
+        ctx,
+        "/api/review/apply",
+        {
+            "decisions": plan["decisions"],
+            "fingerprint": fingerprint,
+            "mode": "recommended" if recommended else "selected",
+            "threshold": threshold if recommended else None,
+        },
+    )
+    if isinstance(done, dict) and done.get("job_id"):
+        job = await _get(ctx, f"/api/jobs/{done['job_id']}")
+        return {"applied": False, "job": await _wait_job(ctx, job, JOB_WAIT_MAX)}
+    return done
 
 
 @tool()
@@ -2531,6 +2673,7 @@ async def metric_query(
     split: str | None = None,
     cumulative: bool = False,
     search: str | None = None,
+    composition: str | bool | None = None,
 ) -> Any:
     """**지표 읽기** — 세어 둔 셀 위에서 비율 · 누적 · 전기 · 전년 동기 · 건 보기까지.
     보이는 부서의 것만 더한다(목록 · 통계와 같은 규칙).
@@ -2548,6 +2691,11 @@ async def metric_query(
     - `filters`: `{기준 이름: 값}` — 값은 `drill` 이나 `dim_values` 의 값(참조는 id).
       `null` 은 「(비어 있음)」. 분모도 같은 기준으로 걸린다.
     - `period_from` · `period_to`(앞까지) · `cohort_from` · `cohort_to`: `YYYY-MM-DD`.
+    - `composition`(구성비): `table` 이면 기준 이름(`dims` 중 하나) — 셀마다 그 기준의 값들
+      사이의 몫(`composition`, %, 나머지 칸이 같은 셀끼리 합 100). `series` 면 `true` —
+      점마다 그 기간의 선(`split` 의 값)들 사이의 몫. 「성격별 구성비 추이」 는
+      `shape="series", split=<규칙 기준>, composition=true`. 건수 · 합계의 몫이다(비율의
+      몫이 아니다 — 평균 · 최소 · 최대는 거절).
 
     사용자에게 옮길 때 **빼먹지 않는다**:
     - `computed_at`(계산 시각)과 `stale` — 세어 둔 값이다. `closed` 가 false 인 기간은 더
@@ -2556,8 +2704,9 @@ async def metric_query(
       비었거나 못 읽어 기간이 없는 기록 수, `truncated` 는 상한에서 잘렸다는 뜻 — 좁혀서 다시.
     - `denominator.missing` 이 0 이 아니면 분모가 없어 비율이 빈 셀이 있다.
     - 「그 수가 뭔데」 는 셀의 `drill.params` 를 `objects_list` 의 `conditions` 로 —
-      `f.<칸>.<연산>` 키를 `{field, op, value}` 로 풀면 된다(`drill.partial` 이 비어 있을 때
-      수가 같다)."""
+      `f.<칸>.<연산>` 키를 `{field, op, value}` 로, `nf<번호>.<칸>.<연산>`(제외 묶음 — 규칙
+      기준의 「앞 규칙에 안 맞음」)은 `{field, op, value, exclude: <번호>}` 로 풀면 된다
+      (`drill.partial` 이 비어 있을 때 수가 같다)."""
     where = _METRIC_SHAPES.get((shape or "table").strip().lower())
     if where is None:
         return {"error": f"shape 는 {', '.join(_METRIC_SHAPES)} 중 하나입니다: {shape!r}"}
@@ -2584,6 +2733,8 @@ async def metric_query(
             params.append((key, value))
     if cumulative:
         params.append(("cumulative", "true"))
+    if composition not in (None, False, ""):
+        params.append(("composition", "true" if composition is True else str(composition)))
     for name, value in (filters or {}).items():
         params.append((f"d.{name}", "" if value is None else str(value)))
     got = await _get(ctx, f"/api/metrics/{slug}/{where}", params=params)
@@ -2816,8 +2967,15 @@ async def metric_define(
         칸만. 단위는 `day` · `week` · `month` · `quarter` · `year`
       - `cohort`: 같은 모양(선택) — 「판매월」 처럼 묶어 둘 둘째 날짜. 단위는 `time` 과
         같아야 한다
-      - `dimensions`: `[{"name": "base_model", "address": "ref.model.base_model"}]` 여섯까지
-        — 주소는 `objects_summary` 의 `group_by` 와 같다(걸음 셋까지). 날짜 기준에는 `grain`
+      - `dimensions`: `[{"name": "base_model", "address": "ref.model.base_model"}]` 여덟까지
+        — 주소는 `objects_summary` 의 `group_by` 와 같다(걸음 셋까지). 날짜 기준에는 `grain`.
+        **규칙 기준**(ADR 0015 — 성격 분류): 주소 대신 `{"name": "nature", "label": "성격",
+        "rules": [{"label": "SW", "when": [{"field": "action", "op": "starts", "value":
+        "SW"}]}, …], "else": "기타"}` — 기록마다 위에서부터 **처음 맞는 규칙**의 이름이 값,
+        안 맞으면 `else`. `when` 은 `objects_list` 의 조건과 같은 모양(모두 맞아야, 너머 칸
+        도). 규칙 스물 · 규칙마다 조건 열까지, 이름은 규칙마다 달라야 한다(한 칸 안의 「또는」
+        은 `in`). 계획의 `rules[]` 가 규칙마다 붙인 수(`won`) · 막힌 규칙(`blocked` — 앞
+        규칙이 다 가져감) · 기타의 수(`other_count`)를 말한다 — 그대로 사람에게 보인다
       - `filters`: `[{"field": "status", "op": "eq", "value": "active"}]` — `objects_list`
         의 조건
       - `denominator`: `{"metric": "<지표>", "on": ["base_model"], "time": "cohort",
@@ -2905,8 +3063,10 @@ async def metric_recompute(ctx: Context, slug: str, wait_seconds: float = 20.0) 
 async def metric_runs(ctx: Context, slug: str) -> Any:
     """지표의 **최근 계산 기록** — 언제 · 성공/실패와 이유 · 기록 수 · 셀 수 · 날짜를 못 읽은
     기록 수(`stats.unbucketed`) · **방식**(`mode`: `full` 전부 / `incremental` 바뀐 기간만 —
-    `periods` 가 다시 센 기간) · `note`(전부였으면 왜 전부였나). 「값이 왜 그대로인가」 ·
-    「언제 셌나」 는 여기서 — 실패한 계산은 옛 값을 그대로 두고 이유를 남긴다."""
+    `periods` 가 다시 센 기간) · `note`(전부였으면 왜 전부였나) · `rules`(규칙 기준이 있으면
+    그 계산이 쓴 **규칙 판** — 지문 · 규칙 수 · 그 규칙을 저장한 때 · 사람). 「값이 왜
+    그대로인가」 · 「언제 셌나」 · 「지난달과 왜 다른가(규칙이 바뀌었나)」 는 여기서 — 실패한
+    계산은 옛 값을 그대로 두고 이유를 남긴다."""
     return await _get(ctx, f"/api/metrics/{slug}/runs")
 
 

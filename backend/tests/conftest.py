@@ -129,6 +129,19 @@ def schema() -> None:
     Base.metadata.create_all(bind=engine)
 
 
+@pytest.fixture(autouse=True)
+def _request_timing_in_foreground() -> Iterator[None]:
+    """요청 시간 기록을 **따로 도는 스레드 없이** — 스레드가 같은 엔진으로 제 차례에 넣으면
+    엔진의 문장 수를 세는 시험에 그 문장이 섞여 가끔 떨어졌다(2026-10-10). 시험마다 앞 시험의
+    줄을 버리고, 기록을 보는 시험은 `writer.flush()` 로 직접 넣는다."""
+    from app.shared.request_timing import writer
+
+    writer.background = False
+    writer.discard()
+    yield
+    writer.discard()
+
+
 @pytest.fixture
 def db() -> Iterator[Session]:
     session = SessionLocal()

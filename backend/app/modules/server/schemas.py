@@ -155,3 +155,96 @@ class PipelineKitOut(BaseModel):
     여러 판이 쌓여도 어느 것이 이 서버와 맞는지 안다."""
     version: str
     size_bytes: int
+
+
+# --- 느린 요청 · 큰 응답(ADR 0026) --------------------------------------------------
+
+
+class PerformanceThresholdsOut(BaseModel):
+    """홈 「남은 일」 의 문턱 — 화면이 그 줄에 표시를 단다(같은 기준으로)."""
+
+    p95_ms: int
+    min_calls: int
+    """p95 를 따지려면 24시간에 이만큼은 불려야 한다."""
+    response_bytes: int
+
+
+class RequestStatOut(BaseModel):
+    """경로 틀 · 메서드 하나의 묶음."""
+
+    method: str
+    route: str
+    """경로 틀 — `/api/objects/{type_slug}/{object_id}`. 맞는 라우트가 없던 요청은
+    「(없는 경로)」 하나로 모인다."""
+    calls: int
+    p50_ms: int
+    """호출의 절반이 이보다 빨랐다."""
+    p95_ms: int
+    """스무 번 중 한 번만 이보다 느렸다 — 평균은 느린 몇 번을 묻어 버린다."""
+    max_ms: int
+    avg_bytes: int
+    max_bytes: int
+    file: bool
+    """대부분이 JSON 이 아닌 응답(파일 · 사진)이다 — 크고 받는 쪽 속도를 타는 것이 정상이라
+    문턱 판정에서 뺀다."""
+    slow: bool
+    """p95 가 문턱을 넘었다(호출 수가 `min_calls` 이상일 때만 판정)."""
+    large: bool
+    """문턱보다 큰 응답을 한 번이라도 냈다."""
+
+
+class RequestStatsOut(BaseModel):
+    period: str
+    since: datetime
+    """실제로 센 기간의 시작. 기록이 상한보다 많으면 기간의 시작보다 늦다(`capped`)."""
+    capped: bool
+    """기록이 너무 많아 최근 쪽만 셌다 — 화면이 그렇게 말한다."""
+    first_recorded_at: datetime | None
+    """가장 오래된 기록. **비었으면 아직 아무것도 안 남긴 것**이다 — 빈 목록이 「그 기간에
+    요청이 없었다」 인지 「이 판부터 남기기 시작했다」 인지 가른다."""
+    thresholds: PerformanceThresholdsOut
+    items: list[RequestStatOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class RequestCaseOut(BaseModel):
+    """최악 사례 한 줄 — 누가 · 언제 · 상태 · 시간 · 크기 · 요청 ID."""
+
+    created_at: datetime
+    user_label: str | None
+    """로그인 전 요청이면 비어 있다."""
+    path: str
+    status_code: int
+    duration_ms: int
+    response_bytes: int
+    content_type: str | None
+    request_id: str | None
+    """파일 로그와 잇는 끈 — 이 값으로 app.log 에서 그 요청의 모든 줄을 찾는다."""
+
+
+class JobKindStatOut(BaseModel):
+    """작업 종류 하나 — 그 기간에 들어온 작업의 소요 · 대기(초)."""
+
+    kind: str
+    label: str
+    done: int
+    failed: int
+    cancelled: int
+    open: int
+    """지금 대기 · 실행 중."""
+    run_p50_s: float | None
+    run_p95_s: float | None
+    run_max_s: float | None
+    wait_p50_s: float | None
+    wait_p95_s: float | None
+    wait_max_s: float | None
+    queued_oldest_s: float | None
+    """아직 대기인 것 가운데 가장 오래 기다린 것 — 워커가 멎으면 여기만 는다."""
+
+
+class JobStatsOut(BaseModel):
+    period: str
+    since: datetime
+    items: list[JobKindStatOut]

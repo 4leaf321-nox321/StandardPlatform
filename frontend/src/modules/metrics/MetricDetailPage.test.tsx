@@ -331,6 +331,127 @@ describe('지표 상세', () => {
     expect(screen.getByText('5,800')).toBeInTheDocument()
   })
 
+  it('구성비 — 표는 고른 기준의 몫 열을 세우고, 그동안 비율은 함께 안 본다', async () => {
+    const cell = TABLE.cells[0]
+    await mount('/metrics/cases_monthly', METRIC, {
+      ...TABLE,
+      composition: 'symptom',
+      cells: [
+        { ...cell, composition: 40 },
+        {
+          ...cell,
+          dims: { symptom: '발열' },
+          labels: { symptom: '발열' },
+          count: 3,
+          ratio: 3.75,
+          composition: 60,
+        },
+      ],
+    })
+    await waitFor(() => expect(screen.getByText('월별 인입')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('combobox', { name: '구성비(%)' }))
+    await userEvent.click(await screen.findByRole('option', { name: '증상의 몫' }))
+    await waitFor(() =>
+      expect(metricsApi.values).toHaveBeenLastCalledWith(
+        'cases_monthly',
+        expect.objectContaining({ dims: ['symptom'], composition: 'symptom' }),
+      ),
+    )
+    expect(await screen.findByRole('columnheader', { name: '구성비(%)' })).toBeInTheDocument()
+    expect(screen.getByText('40')).toBeInTheDocument()
+    expect(screen.getByText('60')).toBeInTheDocument()
+    // 구성비는 건수의 몫 — 비율 열은 안 서고 「비율로 보기」 는 잠긴다.
+    expect(screen.queryByText('3.75')).not.toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: '비율로 보기' })).toBeDisabled()
+  })
+
+  it('구성비 추이 — 선을 나누면 기간마다 100% 로 쌓고 칸이 그 기록으로 간다', async () => {
+    const point = (period: string, count: number, composition: number) => ({
+      period,
+      label: period.slice(0, 7),
+      count,
+      value: count,
+      ratio: null,
+      prev: null,
+      yoy: null,
+      closed: true,
+      drill: { type_slug: 'svc_case', params: { 'f.received.gte': period }, partial: [] },
+      composition,
+    })
+    metricsApi.series.mockResolvedValue({
+      ...HEADER,
+      split: 'symptom',
+      lines_truncated: false,
+      composition: true,
+      lines: [
+        {
+          key: '소음',
+          label: '소음',
+          points: [point('2026-01-01', 1, 25), point('2026-02-01', 3, 75)],
+        },
+        {
+          key: '발열',
+          label: '발열',
+          points: [point('2026-01-01', 3, 75), point('2026-02-01', 1, 25)],
+        },
+      ],
+    })
+    await mount()
+    await waitFor(() => expect(screen.getByText('월별 인입')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('tab', { name: '추이' }))
+    const share = screen.getByRole('checkbox', { name: /구성비\(%\)/ })
+    // 선을 나누지 않으면 몫이 없다.
+    expect(share).toBeDisabled()
+    await userEvent.click(screen.getByRole('combobox', { name: '선 나누기' }))
+    await userEvent.click(await screen.findByRole('option', { name: '증상' }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /구성비\(%\)/ }))
+    await waitFor(() =>
+      expect(metricsApi.series).toHaveBeenLastCalledWith(
+        'cases_monthly',
+        expect.objectContaining({ split: 'symptom', composition: true }),
+      ),
+    )
+    const table = await screen.findByRole('table', { name: '구성비 표' })
+    expect(table).toHaveTextContent('소음(%)')
+    expect(screen.getAllByRole('link', { name: '75' })[0]).toHaveAttribute(
+      'href',
+      '/o/svc_case?f.received.gte=2026-01-01',
+    )
+  })
+
+  it('계산 기록은 그 계산이 쓴 규칙 판을 말한다 — 지난달과 왜 다른지', async () => {
+    metricsApi.runs.mockResolvedValue([
+      {
+        id: 'r3',
+        job_id: 'j3',
+        status: 'ok',
+        watermark: '2026-10-10T02:30:00+09:00',
+        started_at: '2026-10-10T02:30:00+09:00',
+        finished_at: '2026-10-10T02:30:05+09:00',
+        rows: 10,
+        cells: 6,
+        error: null,
+        stats: {},
+        mode: 'full',
+        note: '정의가 바뀌었다(또는 예전 판에서 센 셀이다)',
+        rules: [
+          {
+            name: 'nature',
+            fingerprint: '3fa9c2e1' + '0'.repeat(56),
+            rules: 5,
+            changed_at: '2026-10-09T14:02:00+09:00',
+            changed_by: '홍길동',
+          },
+        ],
+      },
+    ])
+    await mount()
+    await waitFor(() => expect(screen.getByText('월별 인입')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('tab', { name: '계산 기록' }))
+    expect(await screen.findByRole('columnheader', { name: '규칙 판' })).toBeInTheDocument()
+    expect(screen.getByText(/nature 3fa9c2e1 · 규칙 5 · .*홍길동/)).toBeInTheDocument()
+  })
+
   it('경보 알림의 링크는 그 분석을 그 거르기 · 인자로 연다', async () => {
     metricsApi.values.mockClear()
     metricsApi.analysis.mockResolvedValue({

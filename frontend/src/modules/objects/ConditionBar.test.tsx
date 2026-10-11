@@ -188,4 +188,53 @@ describe('조건 줄', () => {
     // 볼 수 없는 w9 는 id 그대로 — 이름을 지어내지 않는다.
     expect(await screen.findByText('사용 부서 ∈ 해석팀, w9')).toBeInTheDocument()
   })
+
+  it('제외 묶음은 테두리 안에 모여 서고, 묶음째 · 하나씩 삭제한다', async () => {
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    const onChange = vi.fn()
+    const conditions = [
+      { field: 'weight', op: 'gte' as const, value: '10' },
+      { field: 'region', op: 'eq' as const, value: '영남', exclude: 1 },
+      { field: 'weight', op: 'lt' as const, value: '20', exclude: 1 },
+      { field: 'region', op: 'eq' as const, value: '호남', exclude: 2 },
+    ]
+    render(<ConditionBar defs={DEFS} conditions={conditions} onChange={onChange} />)
+    const first = screen.getByRole('group', { name: '제외 묶음 1' })
+    expect(first).toHaveTextContent('제외')
+    expect(first).toHaveTextContent('지역 = 영남')
+    expect(first).toHaveTextContent('무게 < 20')
+    expect(screen.getByRole('group', { name: '제외 묶음 2' })).toHaveTextContent('지역 = 호남')
+    await userEvent.click(screen.getByRole('button', { name: '제외 묶음 1 삭제' }))
+    expect(onChange).toHaveBeenLastCalledWith([conditions[0], conditions[3]])
+    await userEvent.click(
+      screen.getByRole('button', { name: '제외 묶음 1 의 조건 삭제: 무게 < 20' }),
+    )
+    expect(onChange).toHaveBeenLastCalledWith([conditions[0], conditions[1], conditions[3]])
+  })
+
+  it('「넣을 곳」 에서 제외를 고르면 새 묶음이나 걸린 묶음으로 간다', async () => {
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    const onChange = vi.fn()
+    const conditions = [{ field: 'region', op: 'eq' as const, value: '영남', exclude: 3 }]
+    render(<ConditionBar defs={DEFS} conditions={conditions} onChange={onChange} />)
+    await userEvent.click(screen.getByRole('button', { name: /조건 추가/ }))
+    await userEvent.type(await screen.findByRole('textbox'), '볼')
+    await userEvent.click(screen.getByRole('combobox', { name: '넣을 곳' }))
+    await userEvent.click(await screen.findByRole('option', { name: /새 묶음/ }))
+    await userEvent.click(screen.getByRole('button', { name: '걸기' }))
+    expect(onChange).toHaveBeenLastCalledWith([
+      conditions[0],
+      { field: 'label', op: 'eq', value: '볼', exclude: 4 },
+    ])
+  })
+
+  it('제외를 받지 않는 자리(지표의 거르기 · 규칙)는 「넣을 곳」 이 없다', async () => {
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    render(
+      <ConditionBar defs={DEFS} conditions={[]} onChange={vi.fn()} allowExclude={false} />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: /조건 추가/ }))
+    await screen.findByRole('button', { name: '걸기' })
+    expect(screen.queryByRole('combobox', { name: '넣을 곳' })).not.toBeInTheDocument()
+  })
 })

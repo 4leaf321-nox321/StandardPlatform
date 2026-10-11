@@ -16,13 +16,14 @@ from typing import Any
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Query, Request, UploadFile
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
 from app.modules.accounts.models import User
+from app.modules.jobs import files as job_files
 from app.modules.jobs import kinds, services
 from app.modules.jobs.models import Job, JobFile, WorkerHeartbeat
 from app.modules.jobs.schemas import (
@@ -115,11 +116,16 @@ def submit(
     )
     stored: JobFile | None = None
     if upload is not None:
-        stored = services.store_file(
+        # **흘려 받는다** — 예전에는 `upload.file.read()` 로 통째로 읽어 100MB 면 요청 하나가
+        # 그만큼 메모리를 들었다(사진 zip 은 이제 2GB). 상한은 그 종류의 것
+        # (`Kind.max_file_setting`).
+        stored = services.store_upload(
             db,
+            kind=kind,
             name=upload.filename or "upload.bin",
             content_type=upload.content_type or "application/octet-stream",
-            data=upload.file.read(),
+            stream=upload.file,
+            size=upload.size,
         )
     merged = (
         {**params, "workspace_slug": workspace_slug} if spec.owns_workspace else dict(params)
@@ -141,7 +147,11 @@ def submit(
 def list_kinds() -> list[KindOut]:
     return [
         KindOut(
-            name=one.name, label=one.label, needs_file=one.needs_file, two_step=one.two_step
+            name=one.name,
+            label=one.label,
+            needs_file=one.needs_file,
+            two_step=one.two_step,
+            max_file_bytes=services.upload_cap(one) if one.needs_file else None,
         )
         for one in kinds.all_kinds()
     ]
@@ -398,14 +408,15 @@ def download_output(
         raise NotFound(code("JOBS", 13), "결과 파일이 이미 지워졌습니다.")
     # 이름은 둘로 — ASCII 는 옛 브라우저용, UTF-8 은 한글 이름용(머리는 latin-1 만 받는다).
     ascii_name = stored.name.encode("ascii", "replace").decode().replace('"', "")
-    return Response(
-        content=stored.data,
-        media_type=stored.content_type,
-        headers={
-            "Content-Disposition": f'attachment; filename="{ascii_name}"; '
-            f"filename*=UTF-8''{quote(stored.name)}"
-        },
-    )
+    headers = {
+        "Content-Disposition": f'attachment; filename="{ascii_name}"; '
+        f"filename*=UTF-8''{quote(stored.name)}"
+    }
+    # 큰 결과는 공용 저장소에 있다 — 파일에서 흘려 보낸다(통째로 메모리에 안 올린다).
+    path = job_files.local_path(stored)
+    if path is not None:
+        return FileResponse(path, media_type=stored.content_type, headers=headers)
+    return Response(content=stored.data, media_type=stored.content_type, headers=headers)
 
 
 @router.post("/maintenance/purge", status_code=200)

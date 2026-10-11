@@ -978,7 +978,10 @@ def _filtered(
 
 
 def _condition_name(one: conditions.Condition, index: int) -> str:
-    """조건 하나를 가리키는 이름. 같은 칸·같은 연산이 둘일 수 있어 차례를 붙인다."""
+    """조건 하나를 가리키는 이름. 같은 칸·같은 연산이 둘일 수 있어 차례를 붙인다. 제외 묶음은
+    **묶음 하나가 한 이름**이다 — 묶음의 조건 하나만 빼면 뜻이 다른 묶음이 된다."""
+    if one.exclude:
+        return f"{conditions.EXCLUDE_PREFIX}{one.exclude}"
     return f"f.{one.field}.{one.op}#{index}"
 
 
@@ -1005,8 +1008,15 @@ def _filter_parts(
     for key, value in request.query_params.items():
         if key.startswith("p."):
             parts.append((key, f"{key[2:]} = {value}"))
+    groups: dict[str, list[str]] = {}
     for index, one in enumerate(conditions.parse(request.query_params)):
-        parts.append((_condition_name(one, index), f"{one.field} {one.op} {one.value}"))
+        said = f"{one.field} {one.op} {one.value}"
+        if one.exclude:
+            groups.setdefault(_condition_name(one, index), []).append(said)
+        else:
+            parts.append((_condition_name(one, index), said))
+    for name, said_all in groups.items():
+        parts.append((name, f"제외: ({' 그리고 '.join(said_all)})"))
     return parts
 
 
@@ -1292,7 +1302,10 @@ def create_view(
     conditions.apply(
         select(ObjectInstance),
         properties_of(db, object_type.id),
-        [conditions.Condition(c.field, c.op, c.value) for c in payload.query.conditions],
+        [
+            conditions.Condition(c.field, c.op, c.value, c.exclude)
+            for c in payload.query.conditions
+        ],
         paths.Resolver(db, object_type),
     )
     row = SavedView(
@@ -1339,7 +1352,10 @@ def update_view(
         conditions.apply(
             select(ObjectInstance),
             properties_of(db, object_type.id),
-            [conditions.Condition(c.field, c.op, c.value) for c in payload.query.conditions],
+            [
+                conditions.Condition(c.field, c.op, c.value, c.exclude)
+                for c in payload.query.conditions
+            ],
             paths.Resolver(db, object_type),
         )
         row.query = payload.query.model_dump()

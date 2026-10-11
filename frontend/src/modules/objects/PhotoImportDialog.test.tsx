@@ -12,7 +12,7 @@ import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 
 const objectApi = vi.hoisted(() => ({ importPhotos: vi.fn() }))
 vi.mock('@/modules/objects/api', () => ({ objectApi }))
-const jobsApi = vi.hoisted(() => ({ apply: vi.fn(), waitFor: vi.fn() }))
+const jobsApi = vi.hoisted(() => ({ apply: vi.fn(), waitFor: vi.fn(), kinds: vi.fn() }))
 vi.mock('@/modules/jobs/api', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/modules/jobs/api')>()),
   jobsApi,
@@ -58,6 +58,16 @@ const PLAN = {
   summary: '계획 — 업로드 1 · 못 찾음 1',
 }
 
+function photoKind(maxFileBytes: number) {
+  return {
+    name: 'objects_photos',
+    label: '사진 일괄 업로드',
+    needs_file: true,
+    two_step: true,
+    max_file_bytes: maxFileBytes,
+  }
+}
+
 function done(id: string, result: unknown) {
   return { id, status: 'done', result, error: null, progress: { stage: '', done: 0, total: 0 } }
 }
@@ -65,6 +75,7 @@ function done(id: string, result: unknown) {
 describe('사진 일괄 업로드', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    jobsApi.kinds.mockResolvedValue([photoKind(2 * 1024 ** 3)])
   })
 
   it('사진만 받는 칸이 먼저 골라져 있고, 계획을 읽은 뒤 적용한다', async () => {
@@ -122,6 +133,20 @@ describe('사진 일괄 업로드', () => {
         existing: 'replace',
       }),
     )
+  })
+
+  it('zip 의 상한은 서버에 묻고, 넘는 파일은 보내기 전에 거절한다', async () => {
+    // 상한은 설치마다 다르다(`JOB_PHOTOS_MAX_BYTES`) — 2GB 를 다 올린 뒤에야 413 을 보지 않게.
+    jobsApi.kinds.mockResolvedValue([photoKind(500 * 1024 ** 2)])
+    const { PhotoImportDialog } = await import('@/modules/objects/PhotoImportDialog')
+    render(<PhotoImportDialog type={TYPE} defs={DEFS} onClose={vi.fn()} onApplied={vi.fn()} />)
+    expect(await screen.findByText(/zip 하나는 500MB/)).toBeInTheDocument()
+    const zip = new File(['PK'], '사진.zip', { type: 'application/zip' })
+    Object.defineProperty(zip, 'size', { value: 600 * 1024 ** 2 })
+    fireEvent.change(screen.getByLabelText('사진 zip 파일'), { target: { files: [zip] } })
+    await userEvent.click(screen.getByRole('button', { name: '미리 보기' }))
+    expect(await screen.findByText(/파일이 너무 큽니다\(600MB\)/)).toBeInTheDocument()
+    expect(objectApi.importPhotos).not.toHaveBeenCalled()
   })
 
   it('붙는 것이 없으면 적용이 잠긴다', async () => {

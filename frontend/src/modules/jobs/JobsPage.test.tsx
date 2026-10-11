@@ -82,6 +82,7 @@ async function mount(jobs: Job[], alive = true) {
     { name: 'filestore_gc', label: '고아 첨부 파일 정리', needs_file: false, two_step: true },
     { name: 'ontology_retype', label: '속성 종류 변경', needs_file: false, two_step: true },
     { name: 'objects_photos', label: '사진 일괄 업로드', needs_file: true, two_step: true },
+    { name: 'workspace_reassign', label: '부서 자료 이동', needs_file: false, two_step: true },
   ])
   jobsApi.workers.mockResolvedValue(
     alive
@@ -311,6 +312,64 @@ describe('작업 화면', () => {
     jobsApi.apply.mockResolvedValue(job({ id: 'j2' }))
     await userEvent.click(screen.getByRole('button', { name: '적용' }))
     await waitFor(() => expect(jobsApi.apply).toHaveBeenCalledWith('j1'))
+  })
+
+  it('부서 자료 이동의 계획도 펼쳐 읽고 적용한다 — 막히는 것이 있으면 적용이 안 선다', async () => {
+    // 한 부서 객체 20만 개면 적용이 90초 남짓이라 통폐합 창을 닫는 사람이 있다 — 돌아와서
+    // 여기서 같은 계획을 읽고 적용한다(2026-10-10).
+    const reassign = (over: Record<string, unknown> = {}) => ({
+      reassign: true,
+      applied: false,
+      ok: true,
+      source_slug: 'old',
+      source_name: '없어지는 팀',
+      target_slug: 'new',
+      target_name: '합쳐지는 팀',
+      items: [
+        { kind: 'members', label: '멤버', count: 3 },
+        { kind: 'objects', label: '객체', count: 200_000 },
+      ],
+      total: 200_003,
+      moved: {},
+      errors: [],
+      summary: '계획 — 이동할 것: 멤버 3 · 객체 200,000 (없어지는 팀 → 합쳐지는 팀)',
+      ...over,
+    })
+    const blocked = {
+      ok: false,
+      errors: ['객체: 옮겨 갈 부서에 같은 것이 이미 있어 객체를 옮기지 않습니다: 부품 식별자 「K-1」'],
+      summary: '계획 — 이동할 것: 객체 3 (없어지는 팀 → 합쳐지는 팀) · 막힘 1',
+    }
+    await mount([
+      job({
+        id: 'r1',
+        kind: 'workspace_reassign',
+        kind_label: '부서 자료 이동',
+        params: {},
+        input_file_name: null,
+        result: reassign(),
+      }),
+      job({
+        id: 'r2',
+        kind: 'workspace_reassign',
+        kind_label: '부서 자료 이동',
+        params: {},
+        input_file_name: null,
+        result: reassign(blocked),
+      }),
+    ])
+    expect(screen.getByText(/이동할 것: 멤버 3 · 객체 200,000/)).toBeInTheDocument()
+    expect(await screen.findAllByText('적용 대기')).toHaveLength(1)
+    const [first, second] = screen.getAllByRole('button', { name: '펼치기' })
+    await userEvent.click(first)
+    expect(screen.getByText('200,000')).toBeInTheDocument()
+    jobsApi.apply.mockResolvedValue(job({ id: 'r3' }))
+    await userEvent.click(screen.getByRole('button', { name: '적용' }))
+    await waitFor(() => expect(jobsApi.apply).toHaveBeenCalledWith('r1'))
+
+    await userEvent.click(second)
+    expect(screen.getByText(/「K-1」/)).toBeInTheDocument()
+    expect(screen.getByText(/막히는 것이 있거나 이동할 것이 없어/)).toBeInTheDocument()
   })
 
   it('정제 도구가 준 링크(?job=)로 오면 그 계획이 펼쳐진 채로 열린다', async () => {

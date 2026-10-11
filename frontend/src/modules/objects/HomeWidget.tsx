@@ -22,6 +22,7 @@ import { ChevronDown, ChevronUp, Loader2, MoreHorizontal, X } from 'lucide-react
 
 import { objectApi, viewApi } from '@/modules/objects/api'
 import type { HomeWidget, ObjectRow, SavedView, Summary } from '@/modules/objects/api'
+import { conditionKey } from '@/modules/objects/urlConditions'
 import { Chart, LazyPlot, colorFor } from '@/shared/charts'
 import type { ChartKind } from '@/shared/charts'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -63,7 +64,7 @@ export function viewHref(widget: Widget): string {
   const query = widget.view.query
   if (query.q) params.set('q', query.q)
   for (const one of query.conditions ?? []) {
-    params.append(`f.${one.field}.${one.op}`, one.value)
+    params.append(conditionKey(one), one.value)
   }
   if (query.status) params.set('status', query.status)
   params.set('year', 'all')

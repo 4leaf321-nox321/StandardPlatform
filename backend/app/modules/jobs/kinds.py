@@ -19,10 +19,11 @@ import logging
 import uuid
 import zipfile
 from collections.abc import Callable
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, BinaryIO
 
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -68,6 +69,19 @@ class Work:
     output_file_id: uuid.UUID | None = None
     """결과 파일을 만들었으면 `emit` 이 여기 적는다 — 워커가 끝에 작업 행에 옮긴다."""
 
+    def input_bytes(self) -> bytes:
+        """올린 파일의 내용을 **통째로** — 표 파일(일괄 입력 · 묶음)처럼 다 읽어야 푸는 것.
+        그 종류의 상한(`job_file_max_bytes`, 100MB)이 메모리의 상한이다. 큰 파일(사진 zip)은
+        `open_input` 으로 흘려 읽는다."""
+        assert self.input_file is not None  # needs_file — 넣을 때 · 돌릴 때 이미 봤다
+        return files.read_bytes(self.input_file)
+
+    def open_input(self) -> AbstractContextManager[BinaryIO]:
+        """올린 파일을 **파일로** 연다 — DB 에 든 작은 것이든 저장소(`_jobs/`)의 큰 것이든 같은
+        모양이다(`files.open_file`). zip 은 이것을 그대로 연다(통째로 메모리에 안 올린다)."""
+        assert self.input_file is not None
+        return files.open_file(self.input_file)
+
     def emit(self, *, name: str, content_type: str, data: bytes) -> JobFile:
         """결과 파일 — 사람은 `GET /api/jobs/{id}/download` 로 받는다."""
         stored = files.store(
@@ -97,6 +111,10 @@ class Kind:
     admin_only: bool = False
     """시킨 사람이 있으면 **시스템 관리자여야** 하는 종류 — 워커가 돌리기 전에 한 번 더 본다
     (넣는 길이 몇이든)."""
+    max_file_setting: str = "job_file_max_bytes"
+    """올리는 파일의 상한을 읽는 **설정 이름** — 종류마다 다르다(2026-10-10). 표 파일(일괄
+    입력 · 묶음)은 통째로 메모리에 올려 풀므로 100MB(`job_file_max_bytes`), 사진 zip 은 파일로
+    열어 한 장씩 읽으므로 2GB(`job_photos_max_bytes`). 값은 설치가 `.env` 로 정한다."""
 
 
 _registry: dict[str, Kind] = {}
@@ -176,7 +194,7 @@ def _rows(work: Work) -> list[dict[str, Any]]:
     name = work.input_file.name
     if not name.lower().endswith((".csv", ".json", ".tsv", ".txt")):
         raise Conflict(code("OBJECTS", 48), "CSV 나 JSON 파일만 받습니다.")
-    return bulk.parse_file(name, work.input_file.data)
+    return bulk.parse_file(name, work.input_bytes())
 
 
 def _fingerprint_guard(work: Work) -> Callable[[bulk.Plan], None]:
@@ -278,7 +296,7 @@ def bundle_import(work: Work) -> dict[str, Any]:
     지킨다. `work.db` 는 안 쓴다."""
     assert work.input_file is not None
     try:
-        raw = json.loads(work.input_file.data.decode("utf-8"))
+        raw = json.loads(work.input_bytes().decode("utf-8"))
     except (ValueError, UnicodeDecodeError) as caught:
         raise Conflict(code("BUNDLES", 3), f"묶음 파일을 읽을 수 없습니다: {caught}") from None
     bundle = BundleIn.model_validate({**raw, "apply": bool(work.params.get("apply"))})
@@ -752,10 +770,10 @@ _NOT_CHANGES = frozenset({"full_read", "tags_as_text", "gone_held_back"})
 
 
 def _after_ingest(db: Session, type_id: uuid.UUID, reason: str) -> None:
-    """적재가 끝난 타입을 원천으로 쓰는 지표를 다시 세는 작업을 넣는다 — **이벤트가 아니라
-    작업 본문에서**(ADR 0013). 워커 프로세스는 `app.main` 을 import 하지 않아 이벤트
-    리스너가 비어 있고, 적재는 전부 워커에서 커밋된다. 같은 지표의 작업이 줄에 있으면 안
-    넣는다. 커밋은 이 작업과 함께."""
+    """적재가 끝난 타입을 원천으로 쓰는 지표를 다시 세는 작업을 넣는다 — **이벤트가 아니라 작업
+    본문에서**(ADR 0013). 워커 프로세스에는 이벤트 리스너가 없고(앱과 같은 조립을 하되 리스너는
+    비운다 — `worker._assemble`), 적재는 전부 워커에서 커밋된다. 같은 지표의 작업이 줄에 있으면
+    안 넣는다. 커밋은 이 작업과 함께."""
     from app.modules.metrics import services as metrics_services
 
     metrics_services.enqueue_for_type(db, type_id, reason=reason)
@@ -823,19 +841,72 @@ def objects_photos(work: Work) -> dict[str, Any]:
     계획에 「권한 없음」)."""
     from app.modules.objects import photos
 
-    assert work.input_file is not None  # needs_file — 넣을 때 · 돌릴 때 이미 봤다
-    return photos.run(
-        work.db, _user(work), work.params, work.input_file.data, progress=work.progress
+    # **파일로 연다** — zip 은 2GB 까지라(`job_photos_max_bytes`) 통째로 메모리에 올리지
+    # 않는다. 저장소(`_jobs/`)의 큰 것은 그 파일을, DB 의 작은 것은 그 바이트를 같은 모양으로.
+    with work.open_input() as source:
+        return photos.run(work.db, _user(work), work.params, source, progress=work.progress)
+
+
+# --- 부서 통폐합 -----------------------------------------------------------------
+
+
+def workspace_reassign(work: Work) -> dict[str, Any]:
+    """부서 자료 이동(통폐합의 앞 단계) — 계획은 무엇이 몇 건 옮겨지나 · 무엇이 막히나만 세고,
+    적용이 **이 작업의 트랜잭션 하나에서** 옮긴다(`workspaces/services.reassign`).
+
+    **커밋하지 않는다** — 워커가 끝에서 한 번 하고, 그 커밋이 「아직 내 작업인가」 를 같은
+    조건으로 본다(`services.run` 의 `_owned`). 나눠 커밋하면 실패 · 취소한 통폐합이 반쯤 옮긴
+    부서를 남긴다 — 절반만 옮겨진 부서는 어디까지 됐는지 화면으로 알 수 없다. 대신 객체는
+    덩어리마다 진행률을 적고(`work.progress`) 거기서 취소 · 빼앗김이 난다 — 커밋 전이라
+    롤백이고 아무것도 안 옮겨진다.
+
+    **시스템 관리자만**(`admin_only` — 워커가 돌리기 전에 다시 본다). 일반 작업 API 로는 못
+    넣는다(`public` 아님) — 전용 경로(`POST /api/workspaces/{slug}/reassign`)가 부서 · 종류를
+    넣는 순간에 본다.
+
+    ⚠️ 옮길 종류는 `register_workspace_content` 로 등록된 것이다 — **워커도 앱과 같은 조립을
+       거친다**(`app/worker.py` 의 `_assemble`). 안 거치면 워커에는 등록이 하나도 없어 「멤버」
+       말고는 다 「옮길 수 없는 종류」 가 된다(시험은 앱을 띄운 프로세스에서 워커를 돌려 이것을
+       못 본다).
+    """
+    from app.modules.workspaces import services as workspace_services
+
+    slug = str(work.params.get("slug") or "")
+    target = str(work.params.get("target_slug") or "")
+    picked = [str(one) for one in work.params.get("kinds") or []]
+    if not work.params.get("apply"):
+        work.progress("계획", 0, 0)
+        return workspace_services.plan_reassign(
+            work.db, slug=slug, target_slug=target, kinds=picked
+        )
+    return workspace_services.reassign(
+        work.db,
+        slug=slug,
+        target_slug=target,
+        kinds=picked,
+        actor=_user(work),
+        progress=work.progress,
+        fingerprint=work.params.get("fingerprint"),
     )
 
 
 # `public` — 일반 작업 API 로 넣는 것은 일괄 입력 둘(MCP · 정제 도구가 파일을 올린다)과 고아
 # 파일 정리(서버 화면 · MCP)뿐이다. 나머지는 전용 경로로만. 사진 일괄 업로드도 전용 경로
-# (`POST /api/objects/{type}/photos/import`)로만 — 그 경로가 타입 · 칸을 넣는 순간에 본다.
+# (`POST /api/objects/{type}/photos/import`)로만 — 그 경로가 타입 · 칸을 넣는 순간에 본다. 부서
+# 자료 이동도 전용 경로(`POST /api/workspaces/{slug}/reassign`, 시스템 관리자)로만.
 register(
     Kind("objects_import", "객체 일괄 입력", True, True, objects_import, True, public=True)
 )
-register(Kind("objects_photos", "사진 일괄 업로드", True, True, objects_photos))
+register(
+    Kind(
+        "objects_photos",
+        "사진 일괄 업로드",
+        True,
+        True,
+        objects_photos,
+        max_file_setting="job_photos_max_bytes",
+    )
+)
 register(Kind("objects_rewrite", "병합 · 참조 비우고 지우기", False, False, objects_rewrite))
 register(
     Kind("ontology_retype", "속성 종류 변경", False, True, ontology_retype, admin_only=True)
@@ -893,6 +964,16 @@ register(
 )
 register(
     Kind(
+        "workspace_reassign",
+        "부서 자료 이동",
+        False,
+        True,
+        workspace_reassign,
+        admin_only=True,
+    )
+)
+register(
+    Kind(
         "datasource_sync_round",
         "데이터 소스 동기화(차례대로)",
         False,
@@ -902,3 +983,17 @@ register(
         admin_only=True,
     )
 )
+
+
+def review_apply(work: Work) -> dict[str, Any]:
+    """검토함의 큰 묶음(ADR 0027) — 요청 경로와 **같은 함수**(`review.services.apply`)를 같은
+    지문으로. 항목마다 원래 기능으로 처리하고 그 커밋마다 워커의 검사가 돈다(`work.db`). 멈추면
+    그때까지 한 것은 남고 결정 기록에 있다 — 묶음 복원으로 되돌린다."""
+    # 검토함이 이 모듈을 거쳐 작업을 넣는다 — 서로 부르므로 여기서 늦게 읽는다.
+    from app.modules.review import services as review_services
+
+    return review_services.run_job(work.db, _user(work), work.params, work.progress)
+
+
+# 검토함 — 계획(미리 보기)은 요청 안에서 사람이 이미 봤다. 적용만 작업이라 두 단계가 아니다.
+register(Kind("review_apply", "검토함 일괄 확인", False, False, review_apply))

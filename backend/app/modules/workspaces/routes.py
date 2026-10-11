@@ -16,6 +16,9 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
+from app.modules.jobs import routes as jobs_routes
+from app.modules.jobs import services as job_services
+from app.modules.jobs.schemas import JobOut
 from app.modules.workspaces import services
 from app.modules.workspaces.schemas import (
     MemberAddRequest,
@@ -30,7 +33,6 @@ from app.modules.workspaces.schemas import (
     WorkspaceOption,
     WorkspaceOut,
     WorkspaceReassignRequest,
-    WorkspaceReassignResult,
     WorkspaceReferenceOut,
     WorkspaceReorderRequest,
     WorkspaceUpdateRequest,
@@ -224,22 +226,39 @@ def workspace_contents(
     return services.contents(db, slug=slug)
 
 
-@router.post("/{slug}/reassign", response_model=WorkspaceReassignResult)
+@router.post("/{slug}/reassign", response_model=JobOut, status_code=202)
 def reassign_workspace(
     slug: str,
     payload: WorkspaceReassignRequest,
     admin: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
-) -> WorkspaceReassignResult:
-    """자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계.
+) -> JobOut:
+    """자료를 다른 부서로 통째 옮긴다 — 부서 통폐합의 앞 단계. **작업으로**(202).
 
-    옮기고 나서 원본을 보관하거나 지운다. 고른 종류만 옮기고, 하나라도 실패하면
-    아무것도 안 옮긴다.
+    워커가 **계획**을 세운다 — 무엇이 몇 건 옮겨지나 · 겹쳐서 막히는 것(`result.items` ·
+    `result.errors`). 아무것도 안 바뀐다. 사람이 읽고 `POST /api/jobs/{id}/apply` 로 적용하면
+    같은 지문일 때만 한 트랜잭션으로 옮긴다 — 고른 종류만, 하나라도 실패하면 아무것도 안
+    옮긴다. 옮기고 나서 원본을 보관하거나 지운다(도는 동안은 지우기를 막는다).
+
+    예전에는 이 요청 안에서 옮기고 `{moved}` 를 돌려줬다 — 한 부서 객체 20만 개면 90초 남짓이라
+    브라우저 · 이중화의 nginx 가 먼저 끊었다(2026-10-10). 옮긴 수는 이제 적용 작업의
+    `result.moved` 다.
+
+    없는 부서 · 같은 부서 · 모르는 종류는 **넣는 순간에** 거절한다(몇 분 뒤가 아니라).
     """
-    moved = services.reassign(
-        db, slug=slug, target_slug=payload.target_slug, kinds=payload.kinds, actor=admin
+    services.check_reassign(
+        db, slug=slug, target_slug=payload.target_slug, kinds=payload.kinds
     )
-    return WorkspaceReassignResult(moved=moved)
+    job = job_services.enqueue(
+        db,
+        kind=services.REASSIGN_KIND,
+        params={"slug": slug, "target_slug": payload.target_slug, "kinds": payload.kinds},
+        user=admin,
+        workspace_id=None,
+    )
+    db.commit()
+    db.refresh(job)
+    return jobs_routes._out(db, job)
 
 
 @router.delete("/{slug}", status_code=204)

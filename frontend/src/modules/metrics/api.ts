@@ -18,17 +18,31 @@ export interface TimeAxis {
   grain: Grain
 }
 
-export interface Dimension {
-  name: string
-  /** 통계 · 조건과 같은 주소 — `properties.<칸>` · `ref.<칸>.<칸>` · `out.<관계>` … 걸음 셋까지. */
-  address: string
-  grain?: Grain | null
-}
-
 export interface MetricFilter {
   field: string
   op: string
   value: string
+}
+
+/** 규칙 하나 — 조건 전부(AND)에 맞으면 이 이름(ADR 0015). */
+export interface MetricRule {
+  label: string
+  when: MetricFilter[]
+}
+
+/**
+ * 기준 하나 — **주소**(칸)거나 **규칙**(ADR 0015)이다. 규칙 기준은 주소 · 기간 단위 없이 `rules`
+ * (위에서부터 처음 맞는 규칙이 이긴다) · `else`(어느 규칙에도 안 맞을 때의 이름, 기본 「기타」) ·
+ * `label`(기준의 이름, 비우면 `name`).
+ */
+export interface Dimension {
+  name: string
+  /** 통계 · 조건과 같은 주소 — `properties.<칸>` · `ref.<칸>.<칸>` · `out.<관계>` … 걸음 셋까지. */
+  address?: string | null
+  grain?: Grain | null
+  rules?: MetricRule[] | null
+  else?: string | null
+  label?: string | null
 }
 
 export interface Denominator {
@@ -142,6 +156,29 @@ export interface MetricPatch {
   is_active?: boolean
 }
 
+/** 계획의 규칙 하나 — 맞는 기록(앞 규칙과 상관없이)과 이 규칙이 붙인 기록(첫 일치). */
+export interface RuleCount {
+  label: string
+  matched: number
+  won: number
+  /** 맞는데 앞 규칙이 가져간 것 — 규칙 차례(1 부터)마다. */
+  taken_by: { rule: number; count: number }[]
+  /** 맞는 기록은 있는데 한 건도 안 남는다(막힌 규칙). */
+  blocked: boolean
+}
+
+/** 계획의 규칙 기준 하나 — 표본이면 `sampled`, 몫의 분모는 `seen`. */
+export interface RulePlan {
+  name: string
+  label: string
+  fingerprint: string
+  rules: RuleCount[]
+  other: string
+  other_count: number
+  seen: number
+  sampled: boolean
+}
+
 export interface MetricPlan {
   ok: boolean
   errors: string[]
@@ -152,6 +189,17 @@ export interface MetricPlan {
   dims: MetricDim[]
   period_from: string | null
   period_to: string | null
+  /** 규칙 기준마다 규칙별 수 · 막힌 규칙 · 기타의 몫. */
+  rules?: RulePlan[]
+}
+
+/** 규칙 판 — 그 계산이 쓴 규칙(차례 포함)의 지문과 그 규칙을 저장한 사람 · 때. */
+export interface RulesVersion {
+  name: string
+  fingerprint: string
+  rules: number
+  changed_at: string | null
+  changed_by: string | null
 }
 
 export interface MetricSaved {
@@ -176,6 +224,8 @@ export interface MetricRun {
   periods?: (string | null)[] | null
   /** 전량이면 왜 전량이었나, 증분이면 바뀐 기록 수. */
   note?: string
+  /** 이 계산이 쓴 규칙 판(규칙 기준마다). */
+  rules?: RulesVersion[]
 }
 
 /** 셀을 이룬 기록의 목록 조건 — `/o/<타입>?<params>` 에 그대로. */
@@ -241,6 +291,8 @@ export interface MetricCell {
   drill: Drill
   /** 조건 비율이면 조건에 맞는 기록(값)의 목록 — `drill` 은 셀의 기록 전부. */
   value_drill?: Drill | null
+  /** 구성비를 물었으면 그 기준의 값들 사이의 몫(%) — 나머지 칸이 같은 셀끼리 합이 100. */
+  composition?: number | null
 }
 
 export interface MetricTable extends ReadHeader {
@@ -249,6 +301,8 @@ export interface MetricTable extends ReadHeader {
   cells: MetricCell[]
   total_count: number
   total_value: number | null
+  /** 구성비를 낸 기준. */
+  composition?: string | null
 }
 
 export interface MetricPoint {
@@ -261,6 +315,8 @@ export interface MetricPoint {
   yoy: number | null
   closed: boolean
   drill: Drill
+  /** 구성비를 물었으면 그 기간의 선들(모든 값) 사이의 몫(%). */
+  composition?: number | null
 }
 
 export interface MetricLine {
@@ -273,6 +329,7 @@ export interface MetricSeries extends ReadHeader {
   split: string | null
   lines: MetricLine[]
   lines_truncated: boolean
+  composition?: boolean
 }
 
 export interface CohortCell {
@@ -454,10 +511,19 @@ export const metricsApi = {
   unpinHome: (slug: string, workspace: string) =>
     api.delete<void>(`/metrics/${slug}/home?workspace=${encodeURIComponent(workspace)}`),
   runs: (slug: string) => api.get<MetricRun[]>(`/metrics/${slug}/runs`),
-  values: (slug: string, opts: ReadOptions = {}) =>
-    api.get<MetricTable>(`/metrics/${slug}/values${readParams(opts)}`),
-  series: (slug: string, opts: ReadOptions & { split?: string } = {}) =>
-    api.get<MetricSeries>(`/metrics/${slug}/series${readParams(opts, { split: opts.split })}`),
+  /** 표 — `composition` 을 주면 셀마다 그 기준의 구성비(%). */
+  values: (slug: string, opts: ReadOptions & { composition?: string } = {}) =>
+    api.get<MetricTable>(
+      `/metrics/${slug}/values${readParams(opts, { composition: opts.composition })}`,
+    ),
+  /** 추이 — `composition` 이면 점마다 그 기간의 선들 사이의 몫(%). */
+  series: (slug: string, opts: ReadOptions & { split?: string; composition?: boolean } = {}) =>
+    api.get<MetricSeries>(
+      `/metrics/${slug}/series${readParams(opts, {
+        split: opts.split,
+        composition: opts.composition ? 'true' : undefined,
+      })}`,
+    ),
   cohort: (slug: string, opts: ReadOptions & { cumulative?: boolean } = {}) =>
     api.get<MetricCohort>(
       `/metrics/${slug}/cohort${readParams(opts, { cumulative: opts.cumulative ? 'true' : undefined })}`,

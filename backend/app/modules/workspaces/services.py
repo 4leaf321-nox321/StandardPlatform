@@ -7,16 +7,20 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.jobs.models import Job
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 from app.modules.workspaces.schemas import (
     SLUG_PATTERN,
@@ -407,6 +411,14 @@ def delete(db: Session, *, slug: str, actor: User) -> None:
     경우를 위한 것이다.
     """
     workspace = workspace_by_slug(db, slug)
+    running = pending_reassign(db, workspace)
+    if running is not None:
+        raise Conflict(
+            code("WORKSPACES", 17),
+            "이 부서의 자료 이동이 아직 끝나지 않았습니다 — 「작업」 화면에서 끝난 것을 "
+            "확인한 뒤에 삭제하세요.",
+            details={"job_id": str(running.id)},
+        )
     blocking = [one for one in references(db, slug=slug) if one.blocks_delete]
     if blocking:
         detail = ", ".join(f"{one.label} {one.count}건" for one in blocking)
@@ -495,9 +507,141 @@ def contents(db: Session, *, slug: str) -> list[WorkspaceContentOut]:
     ]
 
 
+#: 통폐합의 작업 종류 — `jobs/kinds.py` 가 이 이름으로 등록한다.
+REASSIGN_KIND = "workspace_reassign"
+
+
+def _reassign_parts(
+    db: Session, *, slug: str, target_slug: str, kinds: list[str]
+) -> tuple[Workspace, Workspace, list[extensions.WorkspaceContent]]:
+    """(원본, 대상, 고른 종류) — 같은 부서 · 모르는 종류는 여기서 거절한다. 고른 종류는 등록된
+    차례 그대로(멤버가 먼저)."""
+    source = workspace_by_slug(db, slug)
+    target = workspace_by_slug(db, target_slug)
+    if source.id == target.id:
+        raise AppError(code("WORKSPACES", 14), "같은 부서로는 옮길 수 없습니다.", status=400)
+    available = _contents(db, source.id)
+    known = {one.kind for one in available}
+    unknown = [one for one in kinds if one not in known]
+    if unknown:
+        raise AppError(
+            code("WORKSPACES", 15),
+            f"옮길 수 없는 종류입니다: {', '.join(unknown)}. "
+            f"이 설치가 아는 것: {', '.join(one.kind for one in available)}",
+            status=422,
+        )
+    return source, target, [one for one in available if one.kind in kinds]
+
+
+def check_reassign(db: Session, *, slug: str, target_slug: str, kinds: list[str]) -> None:
+    """**넣는 순간에** 본다 — 없는 부서 · 같은 부서 · 모르는 종류를 몇 분 뒤 작업의 「실패」 가
+    아니라 지금 거절한다. 무엇이 몇 건이고 무엇이 막히나는 계획(작업)이 센다."""
+    _reassign_parts(db, slug=slug, target_slug=target_slug, kinds=kinds)
+
+
+def _blockers(
+    db: Session,
+    source: Workspace,
+    target: Workspace,
+    picked: list[extensions.WorkspaceContent],
+) -> list[str]:
+    out: list[str] = []
+    for one in picked:
+        if one.check is not None:
+            out.extend(
+                f"{one.label}: {reason}" for reason in one.check(db, source.id, target.id)
+            )
+    return out
+
+
+def _reassign_fingerprint(
+    source: Workspace,
+    target: Workspace,
+    picked: list[extensions.WorkspaceContent],
+    blockers: list[str],
+) -> str:
+    """계획의 지문 — 무엇을 어디서 어디로 몇 건, 무엇이 막혔나. 미리 본 뒤 원본 부서에 객체가
+    들어오거나 나가면 수가 달라지고, 그러면 적용하지 않는다(다시 미리 본다)."""
+    body = {
+        "source": str(source.id),
+        "target": str(target.id),
+        "items": [(one.kind, one.count) for one in picked],
+        "blockers": blockers,
+    }
+    raw = json.dumps(body, ensure_ascii=False, sort_keys=True)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def _reassign_out(
+    source: Workspace,
+    target: Workspace,
+    picked: list[extensions.WorkspaceContent],
+    blockers: list[str],
+    *,
+    fingerprint: str,
+    moved: dict[str, int] | None = None,
+) -> dict[str, Any]:
+    """작업 결과(`jobs.result`) — 작업 화면 · 통폐합 창이 같은 모양을 그린다.
+
+    `counts` 를 쓰지 않는다 — 작업의 공통 판정(홈의 「적용 대기」 · 알림)은 `counts` 를 일괄
+    입력의 새로 · 고침 · 오류로 읽는다. 그 이름이면 옮길 것이 있어도 「바뀌는 것 없음」 으로
+    빠진다(사진 일괄 업로드의 `tally` 와 같은 까닭). 적용할 것이 있나는 `ok` 가 말한다."""
+    applied = moved is not None
+    items: list[dict[str, Any]] = []
+    for one in picked:
+        item: dict[str, Any] = {"kind": one.kind, "label": one.label, "count": one.count}
+        if moved is not None:
+            item["moved"] = moved.get(one.kind, 0)
+        items.append(item)
+    total = sum(moved.values()) if moved is not None else sum(one.count for one in picked)
+    shown = " · ".join(
+        f"{one['label']} {int(one['moved'] if applied else one['count']):,}"
+        for one in items
+        if (one["moved"] if applied else one["count"])
+    )
+    head = "적용 — 이동" if applied else "계획 — 이동할 것"
+    summary = f"{head}: {shown or '없음'} ({source.name} → {target.name})"
+    if blockers:
+        summary += f" · 막힘 {len(blockers)}"
+    return {
+        "reassign": True,
+        "applied": applied,
+        "ok": not blockers and (applied or total > 0),
+        "source_slug": source.slug,
+        "source_name": source.name,
+        "target_slug": target.slug,
+        "target_name": target.name,
+        "items": items,
+        "total": total,
+        "moved": moved or {},
+        "errors": blockers,
+        "summary": summary,
+        "fingerprint": fingerprint,
+    }
+
+
+def plan_reassign(
+    db: Session, *, slug: str, target_slug: str, kinds: list[str]
+) -> dict[str, Any]:
+    """통폐합의 **계획** — 무엇이 몇 건 옮겨지나 · 겹쳐서 막히는 것. 아무것도 바꾸지 않는다."""
+    source, target, picked = _reassign_parts(
+        db, slug=slug, target_slug=target_slug, kinds=kinds
+    )
+    blockers = _blockers(db, source, target, picked)
+    mark = _reassign_fingerprint(source, target, picked, blockers)
+    return _reassign_out(source, target, picked, blockers, fingerprint=mark)
+
+
 def reassign(
-    db: Session, *, slug: str, target_slug: str, kinds: list[str], actor: User
-) -> dict[str, int]:
+    db: Session,
+    *,
+    slug: str,
+    target_slug: str,
+    kinds: list[str],
+    actor: User,
+    progress: Callable[[str, int, int], None] | None = None,
+    fingerprint: str | None = None,
+) -> dict[str, Any]:
     """자료를 다른 부서로 통째 옮긴다 — **부서 통폐합의 앞 단계.**
 
     옮기고 나서 원본을 보관하거나 지운다. 삭제만 있고 이 길이 없으면, 없어지는 부서의
@@ -505,31 +649,47 @@ def reassign(
     결국 쓰지 않는 부서가 목록에 영원히 남는다.
 
     **고른 종류만 옮기고, 하나라도 실패하면 아무것도 안 옮긴다.** 절반만 옮겨진 부서는
-    어디까지 됐는지 화면으로 알 수 없다.
+    어디까지 됐는지 화면으로 알 수 없다. 그래서 **커밋하지 않는다** — 작업
+    (`workspace_reassign`)의 본 트랜잭션 하나에서 돌고 워커가 끝에서 한 번 커밋한다. 취소 ·
+    빼앗김(`progress` 가 던진다) · 실패면 워커가 롤백해 아무것도 안 옮겨진다.
+
+    작업인 이유: 한 부서 객체 20만 개면 90초 남짓이라(대부분 옮기는 갱신, 2026-10-08 실측)
+    요청 안에서 돌면 브라우저 · 이중화의 nginx(메인 서버)가 먼저 끊었다(2026-10-10).
+
+    `fingerprint` 를 주면 지금 계획이 미리 본 계획과 같을 때만 옮긴다.
     """
-    source = workspace_by_slug(db, slug)
-    target = workspace_by_slug(db, target_slug)
-    if source.id == target.id:
-        raise AppError(code("WORKSPACES", 14), "같은 부서로는 옮길 수 없습니다.", status=400)
-    available = {one.kind: one for one in _contents(db, source.id)}
-    unknown = [one for one in kinds if one not in available]
-    if unknown:
-        raise AppError(
-            code("WORKSPACES", 15),
-            f"옮길 수 없는 종류입니다: {', '.join(unknown)}. "
-            f"이 설치가 아는 것: {', '.join(available)}",
-            status=422,
+    source, target, picked = _reassign_parts(
+        db, slug=slug, target_slug=target_slug, kinds=kinds
+    )
+    blockers = _blockers(db, source, target, picked)
+    mark = _reassign_fingerprint(source, target, picked, blockers)
+    if fingerprint and mark != fingerprint:
+        raise Conflict(
+            code("JOBS", 20),
+            "미리 본 것과 달라졌습니다 — 그 사이에 원본 부서의 자료가 바뀌었습니다. 아무것도 "
+            "옮기지 않았으니 다시 미리 보고 적용하세요.",
         )
-    # 누가 옮기는지를 받는 종류는 그쪽으로 — 옮긴 것마다 기록에 사람이 박힌다(`move_by`).
-    moved = {
-        kind: (
-            content.move_by(db, source.id, target.id, actor)
-            if content.move_by is not None
-            else content.move(db, source.id, target.id)
-        )
-        for kind in kinds
-        for content in (available[kind],)
-    }
+    if blockers:
+        raise Conflict(code("WORKSPACES", 16), " / ".join(blockers))
+    total = sum(one.count for one in picked)
+    done = 0
+    moved: dict[str, int] = {}
+    for one in picked:
+        stage = f"{one.label} 이동"
+        if progress is not None:
+            progress(stage, done, total)
+        if one.move_steps is not None and progress is not None:
+            step = _step(progress, stage, done, total)
+            count = one.move_steps(db, source.id, target.id, actor, step)
+        elif one.move_by is not None:
+            # 누가 옮기는지를 받는 종류는 그쪽으로 — 옮긴 것마다 기록에 사람이 박힌다.
+            count = one.move_by(db, source.id, target.id, actor)
+        else:
+            count = one.move(db, source.id, target.id)
+        moved[one.kind] = count
+        done += count
+    if progress is not None:
+        progress("기록", done, total)
     audit.record(
         db,
         action=audit.WORKSPACE_REASSIGNED,
@@ -541,8 +701,39 @@ def reassign(
         changes={"target": target.slug, "moved": moved},
         reason=f"{source.name} → {target.name}",
     )
-    db.commit()
-    return moved
+    db.flush()
+    return _reassign_out(source, target, picked, blockers, fingerprint=mark, moved=moved)
+
+
+def _step(
+    progress: Callable[[str, int, int], None], stage: str, before: int, total: int
+) -> extensions.MoveProgress:
+    """한 종류의 덩어리 진행 → 통폐합 전체의 진행(앞 종류에서 옮긴 수를 더해)."""
+
+    def step(count: int, _all: int) -> None:
+        progress(stage, before + count, total)
+
+    return step
+
+
+def pending_reassign(db: Session, workspace: Workspace) -> Job | None:
+    """이 부서가 원본이나 대상인 **안 끝난** 통폐합 작업 — 있으면 그 부서를 지우지 않는다.
+
+    통폐합이 작업이 되면서(2026-10-10) 「옮기기」 를 누른 뒤 곧장 「삭제」 를 누를 수 있게
+    됐다. 대기 중인 작업이 멤버를 옮기기 전에 원본을 지우면 멤버십은 부서와 함께 사라지고
+    (막는 참조가 아니다), 작업은 뒤늦게 「부서를 찾을 수 없습니다」 로 실패한다."""
+    return db.scalar(
+        select(Job)
+        .where(
+            Job.kind == REASSIGN_KIND,
+            Job.status.in_(("queued", "running")),
+            or_(
+                Job.params["slug"].astext == workspace.slug,
+                Job.params["target_slug"].astext == workspace.slug,
+            ),
+        )
+        .limit(1)
+    )
 
 
 # --- 멤버 --------------------------------------------------------------------

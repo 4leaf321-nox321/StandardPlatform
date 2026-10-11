@@ -12,7 +12,10 @@ filestore 는 내용 주소(sha256)라 같은 내용을 여러 첨부가 가리�
 - `_incoming/` 의 하루 지난 임시 파일(끊긴 업로드의 찌꺼기).
 
 **안 지우는 것** — 그 밖의 모든 것. filestore 아래에 다른 것을 두는 설치가 있다(데이터 소스의
-파일 폴더 `incoming/` 을 이 아래에 두라고 권한다). 모양이 다르면 손대지 않는다.
+파일 폴더 `incoming/` 을 이 아래에 두라고 권한다). 모양이 다르면 손대지 않는다. **큰 작업
+파일의 폴더(`_jobs/`)는 아예 안 들어간다**(2026-10-10) — 그 파일은 첨부가 아니라 작업의 것이고,
+작업 파일의 만료(`jobs/files.purge_expired`)가 지운다. 여기서 「아무 첨부도 안 가리킨다」 로
+지우면 계획을 본 뒤 적용을 기다리는 사진 zip 이 사라진다.
 
 **지운 첨부를 되살리는 길은 없다** — 휴지통에 간 객체의 첨부는 행이 살아 있어(객체만 지운다)
 그대로 남는다. 지우기 직전에 한 번 더 본다: 그 사이 같은 내용이 다시 올라와 행이 생겼거나
@@ -39,6 +42,9 @@ GRACE = timedelta(hours=24)
 #: 내용 주소 모양 — 이것만 지울 수 있다.
 CONTENT_PATH = re.compile(r"^[0-9a-f]{2}/[0-9a-f]{2}/[0-9a-f]{64}$")
 INCOMING = "_incoming"
+#: 큰 작업 파일의 폴더(`jobs/files.JOBS_DIR`) — 첨부가 아니다. 이름만 맞춘다(files 가 jobs 를
+#: import 하지 않게).
+JOBS = "_jobs"
 #: 결과에 싣는 예시 수.
 SAMPLE = 20
 
@@ -95,6 +101,8 @@ def scan(db: Session, *, now: datetime | None = None, progress: Progress = None)
     for index, top in enumerate(tops):
         if progress is not None:
             progress("훑기", index, len(tops))
+        if top.name == JOBS:
+            continue
         if top.name == INCOMING:
             for entry in os.scandir(top.path):
                 if entry.is_file(follow_symlinks=False) and entry.name.startswith("tmp"):

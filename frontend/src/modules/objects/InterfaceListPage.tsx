@@ -309,7 +309,7 @@ export function InterfaceListPage({
                       ? field.slice('properties.'.length)
                       : field
                     const rest = conditions.filter(
-                      (one) => !(one.field === propertyKey && one.op === 'eq'),
+                      (one) => one.exclude || !(one.field === propertyKey && one.op === 'eq'),
                     )
                     sync({ conditions: [...rest, { field: propertyKey, op: 'eq', value: key }] })
                   }}

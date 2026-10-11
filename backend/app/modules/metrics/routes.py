@@ -218,11 +218,16 @@ def metric_values(
     period_to: str | None = Query(default=None, description="이 날 **앞까지**"),
     cohort_from: str | None = Query(default=None),
     cohort_to: str | None = Query(default=None),
+    composition: str | None = Query(
+        default=None,
+        description="구성비를 낼 기준 이름(dims 중 하나) — 셀마다 그 기준의 값들 사이의 몫(%)",
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> TableOut:
     """표 — 요청한 기준(과 기간 · 코호트)별 셀. 기준 값으로 거르기는 `d.<기준>=<값>`(빈 값은
-    「(비어 있음)」). 셀마다 비율 · 닫힘 · **건 보기 조건**(`drill`)이 붙는다."""
+    「(비어 있음)」). 셀마다 비율 · 닫힘 · **건 보기 조건**(`drill`)이 붙는다. `composition` 을
+    주면 셀마다 구성비(`composition`, % — 나머지 칸이 같은 셀끼리 합이 100)."""
     row = services.get(db, slug)
     built = _built(db, row)
     ask = params.ask_from_request(
@@ -234,7 +239,7 @@ def metric_values(
         cohort_from=cohort_from,
         cohort_to=cohort_to,
     )
-    return query.table(db, user, row, built, ask)
+    return query.table(db, user, row, built, ask, composition=composition or None)
 
 
 @router.get("/{slug}/series", response_model=SeriesOut)
@@ -244,10 +249,14 @@ def metric_series(
     split: str | None = Query(default=None, description="선을 나눌 기준 이름"),
     period_from: str | None = Query(default=None),
     period_to: str | None = Query(default=None),
+    composition: bool = Query(
+        default=False, description="점마다 그 기간의 선들 사이의 몫(%) — split 이 있어야"
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> SeriesOut:
-    """추이 — 기간순, 빈 기간은 0, 전기 · 전년 동기 · 닫힘."""
+    """추이 — 기간순, 빈 기간은 0, 전기 · 전년 동기 · 닫힘. `composition=true` 면 점마다 그
+    기간의 구성비(%, 선을 나눈 기준의 값들 사이 — 기간마다 합이 100)."""
     row = services.get(db, slug)
     built = _built(db, row)
     ask = params.ask_from_request(
@@ -259,7 +268,7 @@ def metric_series(
         cohort_from=None,
         cohort_to=None,
     )
-    return query.series(db, user, row, built, ask, split=split)
+    return query.series(db, user, row, built, ask, split=split, composition=composition)
 
 
 @router.get("/{slug}/cohort", response_model=CohortOut)

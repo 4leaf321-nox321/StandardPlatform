@@ -14,7 +14,7 @@ from __future__ import annotations
 import shutil
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, Query, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
@@ -22,25 +22,33 @@ from app import schema_version, version
 from app.config import get_settings
 from app.database import engine, get_db
 from app.modules.accounts.models import User
-from app.modules.server import services
+from app.modules.review import services as review_services
+from app.modules.server import performance, services
 from app.modules.server.schemas import (
     BackupOut,
     DiskOut,
     ExtensionApiOut,
     ExtensionOut,
     ExtensionPatchIn,
+    JobKindStatOut,
+    JobStatsOut,
     MaintenanceItemOut,
+    PerformanceThresholdsOut,
     PipelineKitOut,
     PlatformProfileIn,
     PlatformProfileLiveOut,
     PlatformProfileOut,
     ProfileFactOut,
+    RequestCaseOut,
+    RequestStatOut,
+    RequestStatsOut,
     ServerStatusOut,
     TableCountOut,
 )
 from app.shared import extensions, ops
 from app.shared.auth import current_user, require_system_admin
 from app.shared.errors import NotFound, code
+from app.shared.pagination import MAX_LIMIT, clamp_limit
 
 router = APIRouter(prefix="/server", tags=["server"])
 
@@ -203,13 +211,17 @@ def maintenance(
 
     **0 건인 항목은 안 내보낸다**(레지스트리가 거른다). 다 0 인 목록을 매일 보면
     사람은 그 자리를 아예 안 읽게 되고, 그때 진짜 하나가 떠도 눈에 안 들어온다.
+
+    **검토함에 그 종류가 있으면 그리로 간다**(ADR 0027) — 처리를 한꺼번에 하는 자리가 거기다.
+    줄의 원래 링크(데이터 품질 · 작업 화면)는 검토함 줄의 「원래 화면으로」 가 된다.
     """
+    relinked = review_services.maintenance_links(db, user)
     return [
         MaintenanceItemOut(
             key=item.key,
             label=item.label,
             count=item.count,
-            link=item.link,
+            link=relinked.get(item.key, item.link),
             severity=item.severity,
         )
         for item in extensions.maintenance_items(db, user)
@@ -308,3 +320,84 @@ def pipeline_kit(_: User = Depends(current_user)) -> FileResponse:
             "`deploy/pipeline-kit.zip` 에 두면 됩니다.",
         )
     return FileResponse(path, media_type="application/zip", filename=_kit_name())
+
+
+# --- 느린 요청 · 큰 응답(ADR 0026) ----------------------------------------------------
+#
+# 미들웨어가 요청마다 걸린 시간 · 응답 크기를 남기고(`shared/access_log.py`), 여기서 경로
+# 틀마다 묶어 낸다. **시스템 관리자만** — 누가 언제 무엇을 불렀나가 함께 나간다(접근 로그와
+# 같은 무게).
+
+
+@router.get("/performance/requests", response_model=RequestStatsOut)
+def performance_requests(
+    period: performance.Period = "24h",
+    sort: performance.RequestSort = "p95",
+    limit: int = Query(default=50, ge=1, le=MAX_LIMIT),
+    offset: int = Query(default=0, ge=0),
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> RequestStatsOut:
+    """경로 틀 · 메서드마다 호출 수 · p50 · p95 · 최대 시간 · 평균/최대 응답 크기.
+
+    `sort` — `p95`(느린 순) · `max_ms` · `max_bytes`(큰 순) · `avg_bytes` · `calls`. 기록이
+    너무 많으면 최근 쪽만 세고 `capped` 로 말한다(`performance.MAX_ROWS`).
+    """
+    window = performance.window(db, period)
+    items, total = performance.route_stats(
+        db, window.since, sort=sort, limit=clamp_limit(limit), offset=offset
+    )
+    limits = performance.thresholds()
+    return RequestStatsOut(
+        period=period,
+        since=window.since,
+        capped=window.capped,
+        first_recorded_at=performance.first_recorded_at(db),
+        thresholds=PerformanceThresholdsOut(
+            p95_ms=limits.p95_ms,
+            min_calls=limits.min_calls,
+            response_bytes=limits.response_bytes,
+        ),
+        items=[RequestStatOut(**vars(one)) for one in items],
+        total=total,
+        limit=clamp_limit(limit),
+        offset=offset,
+    )
+
+
+@router.get("/performance/requests/cases", response_model=list[RequestCaseOut])
+def performance_cases(
+    route: str = Query(max_length=300),
+    method: str = Query(max_length=10),
+    period: performance.Period = "24h",
+    order: performance.CaseOrder = "duration",
+    limit: int = Query(default=20, ge=1, le=50),
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> list[RequestCaseOut]:
+    """그 경로 틀의 **최근 최악 사례** — 오래 걸린 순(`order=bytes` 면 큰 순).
+
+    요청 ID 로 app.log 에서 그 요청의 줄을 찾고, 원 경로로 어느 객체였나를 본다.
+    """
+    window = performance.window(db, period)
+    return [
+        RequestCaseOut(**vars(one))
+        for one in performance.cases(
+            db, route=route, method=method, since=window.since, order=order, limit=limit
+        )
+    ]
+
+
+@router.get("/performance/jobs", response_model=JobStatsOut)
+def performance_jobs(
+    period: performance.Period = "24h",
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> JobStatsOut:
+    """작업 종류마다 — 그 기간에 들어온 작업의 끝난 수 · 소요 · 대기(초). 느린 것이 위로."""
+    since = datetime.now(UTC) - performance.PERIODS[period]
+    return JobStatsOut(
+        period=period,
+        since=since,
+        items=[JobKindStatOut(**vars(one)) for one in performance.job_stats(db, since)],
+    )
