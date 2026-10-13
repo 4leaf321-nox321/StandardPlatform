@@ -84,6 +84,10 @@ export default function AccountsAdminPage() {
   // 계정 · 서버 설정을 다루게 된다 — 잘못 누른 것을 알아채는 자리가 어디에도 없다.
   const [promoting, setPromoting] = useState<Account | null>(null)
   const [note, setNote] = useState('')
+  // **희망 부서가 없는 신청**(HWAX 포털로 들어온 신청 · 신청한 부서가 없어진 것) — 그대로
+  // 승인하면 서버가 「부서를 골라 주세요」 로 거절하는데 고를 자리가 없었다. 승인할 때 묻는다.
+  const [approving, setApproving] = useState<Account | null>(null)
+  const [approveTo, setApproveTo] = useState('')
 
   const [newEmail, setNewEmail] = useState('')
   const [newName, setNewName] = useState('')
@@ -251,7 +255,8 @@ export default function AccountsAdminPage() {
                         .sort((a, b) => Number(b.is_home) - Number(a.is_home))
                         .map((room) => (room.is_home ? `★ ${room.name}` : room.name))
                         .join(', ')
-                    : (one.requested_workspace_name ?? '—')}
+                    : (one.requested_workspace_name ??
+                      (one.status === 'pending' ? '희망 부서 없음 — 승인할 때 선택' : '—'))}
                 </TableCell>
                 <TableCell className="text-sm">
                   {shownDate(one.decided_at ?? one.created_at)}
@@ -259,7 +264,17 @@ export default function AccountsAdminPage() {
                 <TableCell className="space-x-1 text-right">
                   {one.status === 'pending' ? (
                     <>
-                      <Button size="sm" onClick={() => act(() => accountApi.approve(one.id, {}))}>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          if (one.requested_workspace_slug) {
+                            void act(() => accountApi.approve(one.id, {}))
+                            return
+                          }
+                          setApproveTo('')
+                          setApproving(one)
+                        }}
+                      >
                         승인
                       </Button>
                       <Button
@@ -381,6 +396,44 @@ export default function AccountsAdminPage() {
           setPromoting(null)
         }}
         onClose={() => setPromoting(null)}
+      />
+
+      <ConfirmDialog
+        open={approving !== null}
+        title="가입 승인 — 부서 선택"
+        description={
+          <div className="space-y-2">
+            <p>
+              {approving?.display_name}({approving?.email}) 의 신청에는 희망 부서가 없습니다 — HWAX
+              포털로 들어온 신청이거나, 신청한 부서가 없어졌습니다. 소속할 부서를 선택하세요. 이
+              부서가 그 사람의 대표 소속이 됩니다.
+            </p>
+            <SearchablePicker
+              id="approve-workspace"
+              className="w-full"
+              value={approveTo || null}
+              onChange={setApproveTo}
+              placeholder="부서를 선택하세요"
+              searchPlaceholder="부서 이름이나 주소로 검색"
+              emptyText="그런 부서가 없습니다"
+              options={(workspaces.data ?? []).map((one) => ({
+                value: one.slug,
+                label: one.name,
+                hint: one.path,
+                keywords: one.slug,
+              }))}
+            />
+          </div>
+        }
+        confirmLabel="승인"
+        confirmDisabled={!approveTo}
+        onConfirm={async () => {
+          if (!approving) return
+          await accountApi.approve(approving.id, { workspace_slug: approveTo })
+          list.reload()
+          summary.reload()
+        }}
+        onClose={() => setApproving(null)}
       />
 
       <ConfirmDialog

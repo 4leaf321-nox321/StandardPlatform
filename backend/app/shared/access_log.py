@@ -35,6 +35,17 @@ logger = logging.getLogger(__name__)
 #: 스스로는 누가 불렀는지 알 수 없다.
 USER_ID_SCOPE_KEY = "app_user_id"
 
+#: 경로가 아니라 **자격이** 접근 로그의 종류를 정할 때 인증이 scope 에 남기는 키 — HWAX
+#: 게이트웨이의 위임 토큰으로 든 요청은 `GATEWAY_API` 다(ADR 0028). 접근 로그에는 통로 칸이
+#: 없어 이것이 없으면 「사람이 화면에서 한 것」 과 「사람 명의로 Claude 가 게이트웨이로 한 것」
+#: 이 같은 `API` 줄이 된다.
+ACTION_SCOPE_KEY = "app_access_action"
+
+#: 게이트웨이 위임 발급 · 회수(`/api/auth/sso`) — 거절도 이 이름으로 남는다(상태 코드와 함께).
+GATEWAY_SSO = "GATEWAY_SSO"
+#: 게이트웨이의 위임 토큰으로 든 요청(`ACTION_SCOPE_KEY`).
+GATEWAY_API = "GATEWAY_API"
+
 #: 남길 메서드. GET 은 기본적으로 안 남긴다(조회는 양이 많고 가치가 낮다).
 _RECORDED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 
@@ -54,6 +65,16 @@ def _action(path: str) -> str:
         return "LOGIN"
     if path.endswith("/auth/logout"):
         return "LOGOUT"
+    # **포털 로그인은 따로 적는다**(ADR 0028) — 비밀번호 로그인과 한 이름이면 「이 사람이 어느
+    # 길로 들어왔나」 가 안 갈린다. 성공한 줄에만 사람이 붙는다(실패 · 승인 대기는 사람 칸이
+    # 빈다 — 둘 다 303 이라 상태 코드로는 안 갈린다).
+    if path.endswith("/auth/portal-callback"):
+        return "PORTAL_LOGIN"
+    # **게이트웨이 위임 발급 · 회수**(ADR 0028) — 거절도 이 이름으로 남아(상태 코드와 함께)
+    # 서버 화면의 「마지막으로 거절한 때」 가 이 줄을 읽는다. 워커 · 서버가 여럿이라 메모리로는
+    # 못 본다.
+    if path.endswith(("/auth/sso", "/auth/sso/revoke")):
+        return GATEWAY_SSO
     return "API"
 
 
@@ -181,7 +202,7 @@ class AccessLogMiddleware:
                 db.add(
                     AccessLog(
                         user_id=scope.get(USER_ID_SCOPE_KEY),
-                        action=_action(path),
+                        action=str(scope.get(ACTION_SCOPE_KEY) or _action(path))[:30],
                         path=path[:300],
                         method=method,
                         status_code=seen.status,

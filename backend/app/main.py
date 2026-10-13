@@ -333,6 +333,13 @@ def _mount_spa(app: FastAPI, settings: Settings) -> None:
             # **MCP 주소.** 비어 있으면 화면이 짐작한다(앱 포트 +2 · 프록시 뒤면 접두어).
             # 짐작이 안 되는 구성에서만 `.env` 의 `MCP_PUBLIC_URL` 이 채운다.
             ("app-mcp", settings.mcp_public_url),
+            # **HWAX 포털로 로그인**(ADR 0028) — 로그인 화면이 이 주소가 있을 때만 단추를 낸다.
+            # 받는 쪽(`PORTAL_JWKS_URL`)이 꺼져 있으면 비운다: 단추를 누른 사람이 포털을 돌아
+            # 콜백의 404 JSON 을 보게 된다.
+            (
+                "app-portal-launch",
+                settings.portal_launch_url.strip() if settings.portal_jwks_url.strip() else "",
+            ),
             # **이 자리는 요청마다 채운다.** 켜짐이 화면에서 바뀌므로(시스템 관리자 ›
             # 서버) 기동 때 박아 두면 재시작까지 옛 메뉴가 붙는다.
             ("app-extensions", _EXTENSIONS_TOKEN),

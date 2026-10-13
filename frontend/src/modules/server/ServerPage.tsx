@@ -26,6 +26,7 @@ import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { PlatformProfile } from '@/modules/server/PlatformProfile'
+import { PortalLogin } from '@/modules/server/PortalLogin'
 import { Performance, periodOf, sortOf } from '@/modules/server/Performance'
 import { jobsApi } from '@/modules/jobs/api'
 import { PUBLIC_PATH } from '@/shared/base'
@@ -265,6 +266,8 @@ function ServerStatusTab() {
       {isSystemAdmin(user) && <OrphanFiles />}
 
       {isSystemAdmin(user) && <Extensions />}
+
+      {isSystemAdmin(user) && <PortalLogin />}
 
       <section className="space-y-3">
         <h2 className="text-base font-semibold">쌓인 것</h2>

@@ -18,11 +18,13 @@ import asyncio
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 import httpx
+import pytest
 
 import server
 
@@ -144,7 +146,8 @@ def test_토큰을_그대로_건넨다() -> None:
     seen = _serve(
         lambda _r: httpx.Response(401, json={"error": {"code": "X", "message": "m"}})
     )
-    asyncio.run(server.ontology_schema(_ctx(None)))
+    with pytest.raises(server.BackendUnauthorized):
+        asyncio.run(server.ontology_schema(_ctx(None)))
     assert "authorization" not in seen[0].headers
 
 
@@ -1193,3 +1196,119 @@ def test_제외_조건과_구성비와_규칙_기준이_그대로_건너간다()
     )
     assert seen[0].url.path == "/api/metrics/plan"
     assert json.loads(seen[0].content)["spec"]["dimensions"] == [rules]
+
+
+# --- HWAX 게이트웨이 (ADR 0028) ---------------------------------------------------
+
+#: 게이트웨이가 위임 토큰을 **다시 받는** 판정 — HWAXMcpGateway `gateway.py` 의
+#: `_TOKEN_REJECTED` 를 글자 그대로 옮겼다. 이것에 안 맞으면 회수된 토큰으로 12시간 동안 401 만
+#: 받는다.
+GATEWAY_TOKEN_REJECTED = re.compile(
+    r"^Error executing tool \S+: (?:GET|POST|PUT|PATCH|DELETE) \S+ → HTTP 401\b"
+)
+
+
+def _through_fastmcp(name: str, arguments: dict[str, Any], authorization: str) -> Any:
+    """게이트웨이가 보는 그대로 — FastMCP 의 도구 호출 처리기(`tools/call`)를 거친 결과.
+    도구에서 난 예외를 FastMCP 가 어떻게 감싸는지까지 이 길에서 돈다."""
+    from mcp import types
+    from mcp.server.lowlevel.server import request_ctx
+    from mcp.shared.context import RequestContext
+
+    handler = server.mcp._mcp_server.request_handlers[types.CallToolRequest]
+    request = SimpleNamespace(headers={"authorization": authorization})
+    held = request_ctx.set(
+        RequestContext(
+            request_id=1, meta=None, session=None, lifespan_context=None, request=request
+        )
+    )
+    try:
+        got = asyncio.run(
+            handler(
+                types.CallToolRequest(
+                    method="tools/call",
+                    params=types.CallToolRequestParams(name=name, arguments=arguments),
+                )
+            )
+        )
+    finally:
+        request_ctx.reset(held)
+    return got.root
+
+
+def _text(result: Any) -> str:
+    """게이트웨이의 `_token_rejected` 가 읽는 글 — 내용 조각을 이어 붙여 앞뒤 공백을 뗀 것."""
+    return "".join(getattr(one, "text", "") or "" for one in result.content).strip()
+
+
+def test_백엔드가_토큰을_거절하면_게이트웨이가_다시_받는_모양으로_실패한다() -> None:
+    """401 은 결과(`{"error": …}`)가 아니라 **오류**로 — 문구가 게이트웨이의 정규식에 맞아야
+    게이트웨이가 위임 토큰을 새로 받아 한 번 다시 부른다."""
+    seen = _serve(
+        lambda _r: httpx.Response(
+            401,
+            json={"error": {"code": "APP-AUTH-0101", "message": "토큰이 유효하지 않습니다."}},
+        )
+    )
+    got = _through_fastmcp("objects_list", {"type_slug": "model", "q": "x y"}, "Bearer old")
+    assert got.isError is True
+    text = _text(got)
+    assert GATEWAY_TOKEN_REJECTED.match(text), text
+    # 경로는 물음표 앞까지 — 질의에 공백이 있어도 `\S+` 가 끊기지 않는다. 서버의 말은 그대로다.
+    assert text == (
+        "Error executing tool objects_list: GET /api/objects/model → HTTP 401: "
+        "[APP-AUTH-0101] 토큰이 유효하지 않습니다."
+    )
+    assert seen[0].headers["authorization"] == "Bearer old"
+
+    # 쓰는 도구도 같다(POST) · 본문이 JSON 이 아니어도 같다.
+    _serve(lambda _r: httpx.Response(401, text="Unauthorized"))
+    got = _through_fastmcp("object_create", {"type_slug": "part", "label": "볼트"}, "Bearer t")
+    assert got.isError is True and GATEWAY_TOKEN_REJECTED.match(_text(got)), _text(got)
+    assert _text(got).startswith("Error executing tool object_create: POST /api/objects/part")
+
+    # 결과를 직접 다루는 도구(텍스트를 주는 rdf_schema)도 같은 모양이다.
+    _serve(lambda _r: httpx.Response(401, json={"error": {"code": "X", "message": "m"}}))
+    got = _through_fastmcp("rdf_schema", {}, "Bearer t")
+    assert got.isError is True and GATEWAY_TOKEN_REJECTED.match(_text(got)), _text(got)
+
+
+def test_401_이_아닌_오류는_지금처럼_결과로_전한다() -> None:
+    """권한 없음(403) · 검증(422) 은 토큰 문제가 아니다 — 게이트웨이가 다시 받으면 같은 일이 두
+    번 돈다. 결과로 그대로 전해 Claude 가 서버의 말을 읽는다."""
+    for status in (403, 404, 422, 500):
+        _serve(
+            lambda _r, status=status: httpx.Response(
+                status, json={"error": {"code": "APP-X-0001", "message": "안 됩니다"}}
+            )
+        )
+        got = _through_fastmcp("objects_list", {"type_slug": "model"}, "Bearer t")
+        assert got.isError is False, status
+        assert not GATEWAY_TOKEN_REJECTED.match(_text(got))
+        assert "[APP-X-0001] 안 됩니다" in _text(got)
+
+
+#: 이름만 보고도 지움 · 되돌리기 · 멈춤인 도구 — 새로 생기면 위험 목록에 들어 있어야 한다.
+_DESTRUCTIVE_WORDS = ("delete", "remove", "cancel", "undo", "merge", "restore", "_gc")
+REQUEST_TEMPLATE = (
+    Path(__file__).resolve().parents[2] / "docs" / "[참고] HWAX포탈_연동_요청서.md"
+)
+
+
+def test_위험_도구는_실제_도구이고_이름이_그런_것은_빠짐없다() -> None:
+    """HWAX 게이트웨이에 범용 실행기 차단(`_INVOKE_DENY_EXACT`)을 요청하는 목록 — 없는 이름을
+    적으면 요청이 헛돌고, 새 지우기 도구를 빠뜨리면 그 도구는 게이트웨이의 이름 규칙(`delete_`
+    로 **시작**)에도 안 걸려 환각 한 번에 불린다."""
+    assert server.DESTRUCTIVE_TOOLS <= TOOLS
+    named = {one for one in TOOLS if any(word in one for word in _DESTRUCTIVE_WORDS)}
+    assert named <= server.DESTRUCTIVE_TOOLS, named - server.DESTRUCTIVE_TOOLS
+
+
+def test_요청서_틀의_위험_도구_목록이_서버와_같다() -> None:
+    """요청서 틀(`deploy.sh hwax-request` 가 채운다)이 포털 담당에게 넘기는 목록은 코드의
+    목록과 **같아야** 한다 — 두 벌이 갈리면 늘 느슨한 쪽이 게이트웨이에 들어간다."""
+    text = REQUEST_TEMPLATE.read_text(encoding="utf-8")
+    start = text.index("<!-- 위험 도구: 시작 -->")
+    end = text.index("<!-- 위험 도구: 끝 -->")
+    listed = set(re.findall(r'"([a-z_]+)"', text[start:end]))
+    assert listed == set(server.DESTRUCTIVE_TOOLS)

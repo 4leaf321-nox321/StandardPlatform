@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import base64
+import functools
 import hashlib
 import os
 import secrets
@@ -59,7 +60,31 @@ def hash_password(password: str) -> str:
     return bcrypt.hashpw(_prepared(password), bcrypt.gensalt(BCRYPT_ROUNDS)).decode("ascii")
 
 
+#: 「비밀번호 없음」 의 표식 — bcrypt 해시는 `$` 로 시작하므로 겹치지 않는다.
+UNUSABLE_PASSWORD_PREFIX = "!"
+
+
+def unusable_password() -> str:
+    """**어떤 비밀번호로도 안 맞는** 저장값 — 포털로 가입 신청된 계정(ADR 0028)이 쓴다.
+
+    아는 사람이 없는 난수를 해시해 두는 것과 달리 「비밀번호가 없다」 가 값에 드러나고, 검증이
+    bcrypt 를 부르지 않고 바로 거절한다. 그 사람이 아이디 · 비밀번호로도 들어와야 하면 관리자가
+    「비밀번호 초기화」 로 임시 비밀번호를 준다."""
+    return UNUSABLE_PASSWORD_PREFIX + secrets.token_hex(16)
+
+
+@functools.cache
+def _timing_hash() -> str:
+    """비밀번호 없는 계정에 견줄 해시 — 한 번만 만든다(`services._dummy_hash` 와 같은 까닭)."""
+    return hash_password("unusable-password")
+
+
 def verify_password(password: str, password_hash: str) -> bool:
+    if password_hash.startswith(UNUSABLE_PASSWORD_PREFIX):
+        # **같은 만큼 일하고 거절한다** — 바로 돌아가면 응답 시간으로 「이 아이디는 포털로만
+        # 들어오는 계정」 이 샌다(없는 계정에 미리 만든 해시를 견주는 것과 같은 까닭).
+        bcrypt.checkpw(_prepared(password), _timing_hash().encode("ascii"))
+        return False
     try:
         return bcrypt.checkpw(_prepared(password), password_hash.encode("ascii"))
     except ValueError:

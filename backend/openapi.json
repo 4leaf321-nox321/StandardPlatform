@@ -92,6 +92,130 @@
         }
       }
     },
+    "/api/auth/portal-callback": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Portal Callback",
+        "description": "포털이 보낸 launch 토큰(폼 필드 `token`)으로 로그인한다 — **브라우저가 오는 길이다.**\n\n성공하면 refresh 쿠키를 심고 SPA 루트(`<접두어>/`)로 303 — SPA 는 기동 때 그 쿠키로 access\n를 받는다(비밀번호 로그인 뒤 새로 고침한 것과 같은 길). 실패 · 승인 대기 · 정지는 로그인\n화면(`<접두어>/login?sso=<사유>`)으로 303. **꺼져 있으면 404 JSON** — 포털 update-all 의\n진단표가 가짜 토큰을 던져 그 숫자로 「앱 SSO 꺼짐」 을 가른다(켜져 있으면 가짜에도 303 =\n정상).",
+        "operationId": "portal_callback_api_auth_portal_callback_post",
+        "requestBody": {
+          "content": {
+            "application/x-www-form-urlencoded": {
+              "schema": {
+                "$ref": "#/components/schemas/Body_portal_callback_api_auth_portal_callback_post"
+              }
+            }
+          }
+        },
+        "responses": {
+          "303": {
+            "description": "SPA 루트(성공) 또는 로그인 화면(`?sso=<사유>`)으로"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/portal-status": {
+      "get": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Portal Status",
+        "description": "포털 로그인이 켜졌나 · 이 서버에서 포털의 공개 키가 닿나 · 게이트웨이 위임은 어떤가 —\n시스템 관리자만.",
+        "operationId": "portal_status_api_auth_portal_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PortalStatusOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/auth/sso": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Gateway Sso",
+        "description": "**HWAX 게이트웨이의 사람별 위임 발급** — 그 사람 명의의 개인 토큰(하루)을 내준다.\n\n게이트웨이가 앱 포트로 직접 부른다(본문 없음). 머리: `X-Heax-Gateway-Secret` ·\n`X-Hwax-Delegate-Email`(또는 `X-Heax-User-Email`) · `X-Heax-Client`. 같은 client 의 직전\n토큰은 회수한다. 처음 보는 사람을 만들지 않는다 — 계약과 까닭은 `delegation.py`.",
+        "operationId": "gateway_sso_api_auth_sso_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DelegatedTokenOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "누구의 토큰인지 모른다(이메일 머리 없음) · client 모양 — 한 줄"
+          },
+          "401": {
+            "description": "게이트웨이 비밀이 다르다 — 한 줄"
+          },
+          "403": {
+            "description": "승인된 계정 없음 · 대기 · 정지 · 삭제 · 허용 주소 밖 — 한 줄"
+          },
+          "404": {
+            "description": "위임 꺼짐(`HEAX_SSO_SECRET` 없음) — JSON"
+          }
+        }
+      }
+    },
+    "/api/auth/sso/revoke": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Gateway Sso Revoke",
+        "description": "그 사람의 그 client 위임 토큰을 끊는다(같은 머리). 모르는 사람이면 0.",
+        "operationId": "gateway_sso_revoke_api_auth_sso_revoke_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DelegationRevokeOut"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "누구의 토큰인지 모른다(이메일 머리 없음) · client 모양 — 한 줄"
+          },
+          "401": {
+            "description": "게이트웨이 비밀이 다르다 — 한 줄"
+          },
+          "403": {
+            "description": "승인된 계정 없음 · 대기 · 정지 · 삭제 · 허용 주소 밖 — 한 줄"
+          },
+          "404": {
+            "description": "위임 꺼짐(`HEAX_SSO_SECRET` 없음) — JSON"
+          }
+        }
+      }
+    },
     "/api/auth/logout": {
       "post": {
         "tags": [
@@ -19684,6 +19808,23 @@
         ],
         "title": "Body_infer_from_file_api_ontology_infer_post"
       },
+      "Body_portal_callback_api_auth_portal_callback_post": {
+        "properties": {
+          "token": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Token"
+          }
+        },
+        "type": "object",
+        "title": "Body_portal_callback_api_auth_portal_callback_post"
+      },
       "Body_upload_api_attachments_post": {
         "properties": {
           "owner_table": {
@@ -24546,6 +24687,45 @@
         "title": "DefsOut",
         "description": "부문 · 축 · 척도 · 문턱 — **화면이 코드에 박지 않고 여기서 읽는다.**"
       },
+      "DelegatedTokenOut": {
+        "properties": {
+          "access_token": {
+            "type": "string",
+            "title": "Access Token"
+          },
+          "token_type": {
+            "type": "string",
+            "const": "bearer",
+            "title": "Token Type",
+            "default": "bearer"
+          },
+          "expires_in": {
+            "type": "integer",
+            "title": "Expires In"
+          }
+        },
+        "type": "object",
+        "required": [
+          "access_token",
+          "expires_in"
+        ],
+        "title": "DelegatedTokenOut",
+        "description": "HWAX 게이트웨이의 위임 발급 응답(`POST /api/auth/sso`, ADR 0028) — **봉투 없이.**\n\n게이트웨이는 응답을 깊이 뒤져 `access_token` 과 **같은 객체의** `expires_in` 을\n읽는다(Report Archive 는 `{success, data: {…}}` 봉투, TestScope 권장은 이 모양). 받은\n토큰을 최대 12시간, `expires_in` 보다 2분 먼저 버린다 — 수명 하루면 12시간마다 다시\n받는다."
+      },
+      "DelegationRevokeOut": {
+        "properties": {
+          "revoked": {
+            "type": "integer",
+            "title": "Revoked"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revoked"
+        ],
+        "title": "DelegationRevokeOut",
+        "description": "위임 회수(`POST /api/auth/sso/revoke`) — 그 사람의 그 client 토큰을 몇 개 끊었나."
+      },
       "DeleteBlockOut": {
         "properties": {
           "code": {
@@ -26317,6 +26497,108 @@
           "cost_high"
         ],
         "title": "ForecastTotalOut"
+      },
+      "GatewayDelegationOut": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "sso_path": {
+            "type": "string",
+            "title": "Sso Path"
+          },
+          "allowed_ips": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Allowed Ips"
+          },
+          "invalid_ips": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Invalid Ips"
+          },
+          "scopes": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Scopes"
+          },
+          "token_seconds": {
+            "type": "integer",
+            "title": "Token Seconds"
+          },
+          "live_tokens": {
+            "type": "integer",
+            "title": "Live Tokens"
+          },
+          "last_issued_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Issued At"
+          },
+          "last_refusal": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/GatewayRefusalOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "sso_path",
+          "allowed_ips",
+          "invalid_ips",
+          "scopes",
+          "token_seconds",
+          "live_tokens",
+          "last_issued_at",
+          "last_refusal"
+        ],
+        "title": "GatewayDelegationOut",
+        "description": "HWAX 게이트웨이의 사람별 위임(`POST /api/auth/sso`, ADR 0028) — 포털 로그인과 따로\n켜진다.\n\n게이트웨이는 위임 발급이 200 이 아니면 그 사람의 도구 호출을 **거절**한다(서비스 계정으로\n내려가지 않는다) — 그래서 「켜졌나」 와 함께 마지막으로 발급한 때 · 거절한 때를 말한다."
+      },
+      "GatewayRefusalOut": {
+        "properties": {
+          "at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "At"
+          },
+          "status": {
+            "type": "integer",
+            "title": "Status"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          }
+        },
+        "type": "object",
+        "required": [
+          "at",
+          "status",
+          "reason"
+        ],
+        "title": "GatewayRefusalOut",
+        "description": "게이트웨이 위임을 마지막으로 거절한 일."
       },
       "GroupOptionOut": {
         "properties": {
@@ -33378,6 +33660,129 @@
         ],
         "title": "PointsOut",
         "description": "**안 센 값들.** 분포는 집계로 안 보인다 — 평균이 같은 두 공정이 전혀 다른\n모양일 수 있고, 그 차이가 대개 문제의 자리다."
+      },
+      "PortalStatusOut": {
+        "properties": {
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "jwks_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Jwks Url"
+          },
+          "audience": {
+            "type": "string",
+            "title": "Audience"
+          },
+          "issuer": {
+            "type": "string",
+            "title": "Issuer"
+          },
+          "launch_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Launch Url"
+          },
+          "callback_path": {
+            "type": "string",
+            "title": "Callback Path"
+          },
+          "reachable": {
+            "anyOf": [
+              {
+                "type": "boolean"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Reachable"
+          },
+          "kids": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Kids"
+          },
+          "fetched_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fetched At"
+          },
+          "last_error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error"
+          },
+          "last_error_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Error At"
+          },
+          "problems": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Problems"
+          },
+          "delegation": {
+            "$ref": "#/components/schemas/GatewayDelegationOut"
+          }
+        },
+        "type": "object",
+        "required": [
+          "enabled",
+          "jwks_url",
+          "audience",
+          "issuer",
+          "launch_url",
+          "callback_path",
+          "reachable",
+          "kids",
+          "fetched_at",
+          "last_error",
+          "last_error_at",
+          "problems",
+          "delegation"
+        ],
+        "title": "PortalStatusOut",
+        "description": "HWAX 포털 로그인의 상태(ADR 0028) — 시스템 관리자의 서버 화면이 본다.\n\n「켜졌나」 만이 아니라 **「이 서버에서 포털의 공개 키가 닿나」** 를 지금 받아 보고 말한다 —\n설정만 보면 켜짐인데, 주소가 안 닿는 것은 첫 사람이 로그인을 시도해야 드러난다."
       },
       "PreviewOut": {
         "properties": {

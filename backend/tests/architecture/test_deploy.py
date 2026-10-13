@@ -83,6 +83,8 @@ def test_배포_스크립트가_번들에_함께_담긴다() -> None:
         "mcp_server/server.py",
         "mcp_server/requirements.txt",
         "mcp_server/guide",
+        # HWAX 포털 연동 요청서의 틀 — `deploy.sh hwax-request` 가 서버에서 채운다(ADR 0028).
+        "HWAX-연동요청서.template.md",
     ):
         assert name in text, f"{name} 이 번들에 안 담깁니다 (build_bundle.sh)"
 

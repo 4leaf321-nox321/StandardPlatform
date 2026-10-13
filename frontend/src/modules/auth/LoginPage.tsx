@@ -3,12 +3,17 @@
  *
  * **원래 가려던 곳으로 되돌려 보낸다.** 링크로 받은 주소가 로그인 후 홈으로
  * 흘러가 버리면, 사람은 그 링크를 다시 찾아야 한다.
+ *
+ * **HWAX 포털로 로그인**(ADR 0028) — 설치가 포털에 붙어 있으면 단추가 선다. 포털이 그 사람으로
+ * 토큰을 만들어 서버에 보내고, 서버가 쿠키를 심어 첫 화면으로 보낸다. 안 되면 서버가 이 화면에
+ * `?sso=<사유>` 를 달아 돌려보낸다 — 그 사유를 여기서 사람 말로 보인다.
  */
 
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { Link, Navigate, useLocation, useNavigate } from 'react-router-dom'
+import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
+import { portalLaunchUrl, ssoMessage } from '@/modules/auth/portal'
 import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { APP_NAME, APP_TAGLINE } from '@/shared/branding'
@@ -21,6 +26,10 @@ export default function LoginPage() {
   const { status, login } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
+  const [params] = useSearchParams()
+  const sso = params.get('sso')
+  const notice = sso ? ssoMessage(sso) : null
+  const launch = portalLaunchUrl()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<ApiError | Error | null>(null)
@@ -58,6 +67,33 @@ export default function LoginPage() {
           <h1 className="text-2xl font-semibold tracking-tight">{APP_NAME}</h1>
           {APP_TAGLINE && <p className="text-muted-foreground mt-1 text-sm">{APP_TAGLINE}</p>}
         </div>
+
+        {/* **포털이 돌려보낸 까닭.** 승인 대기는 할 일이 「기다림」 이라 오류 색을 쓰지 않는다. */}
+        {notice && (
+          <div
+            role={notice.tone === 'error' ? 'alert' : 'status'}
+            className={
+              notice.tone === 'error'
+                ? 'border-destructive/40 bg-destructive/5 text-destructive rounded-md border p-3 text-sm'
+                : 'rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm'
+            }
+          >
+            {notice.text}
+          </div>
+        )}
+
+        {/* **주소는 서버가 준다**(`PORTAL_LAUNCH_URL`) — 포털에 붙지 않은 설치에는 단추가 없다.
+            포털 화면을 거쳐 돌아오므로 앱에 직접 들어온 사람도 같은 길로 로그인된다. */}
+        {launch && (
+          <>
+            <Button asChild variant="outline" className="w-full">
+              <a href={launch}>HWAX 포털로 로그인</a>
+            </Button>
+            <p className="text-muted-foreground text-center text-xs">
+              또는 이 플랫폼의 아이디 · 비밀번호로
+            </p>
+          </>
+        )}
 
         <div className="space-y-2">
           <Label htmlFor="email">아이디</Label>

@@ -21,6 +21,9 @@ from app.branding import DEFAULT_APP_NAME, DEFAULT_APP_SLUG, DEFAULT_APP_TAGLINE
 BACKEND_DIR = Path(__file__).resolve().parent.parent
 REPO_DIR = BACKEND_DIR.parent
 
+#: HWAX 포털의 `JWT_ISSUER` 기본값 — launch 토큰의 `iss`(ADR 0028).
+DEFAULT_PORTAL_ISSUER = "https://hwax.sec.samsung.net"
+
 
 class Settings(BaseSettings):
     # utf-8-sig 로 읽는다. BOM 이 붙은 .env 는 **첫 줄 키만 조용히 무시된다** —
@@ -281,6 +284,47 @@ class Settings(BaseSettings):
     True 는 강제 — http 로 접속하면 브라우저가 쿠키를 버려 로그인이 유지되지 않으므로, 메인
     서버 없이 IP 로 확인하는 동안은 켜지 않는다."""
 
+    # ── HWAX 포털 로그인(jwt-handoff, ADR 0028) ───────────────────────────────────
+    # 포털이 RS256 launch 토큰(90초)을 만들어 브라우저가 `POST <접두어>/api/auth/
+    # portal-callback` 으로 보낸다. 포털에 붙는 설치는 `PUBLIC_PATH` 를 포털의 id 와 같게
+    # (`/<id>`) 둔다 — 포털 nginx 가 `/<id>/` 를 벗겨 넘기고, 로그인 뒤 돌아갈 곳 · 쿠키
+    # path 가 그 접두어 아래다.
+    portal_jwks_url: str = ""
+    """포털의 공개 키 주소(`…/.well-known/jwks.json`) — **비우면 포털 로그인이 꺼진다**(콜백이
+    404 JSON 으로 답한다 — 포털 update-all 의 진단표가 그 숫자로 「앱 SSO 꺼짐」 을 가른다).
+    다른 서버의 포털이면 포털 nginx 를 거친 주소(사내망
+    `http://<포털>:8088/.well-known/jwks.json` 이 간단 — https 는 사내 CA 를 이 서버가 믿어야
+    한다). 포털 담당에게서 받는다."""
+    portal_audience: str = ""
+    """launch 토큰의 `aud` — 포털 타일의 `audience`. 비우면 `app_slug`. 포털의 id 를 slug 와
+    다르게 지었을 때만 적는다(다르면 서명이 맞아도 「다른 앱에 낸 토큰」 으로 거절한다)."""
+    portal_issuer: str = ""
+    """launch 토큰의 `iss` — 포털의 `JWT_ISSUER`. 비우면 포털의
+    기본값(`DEFAULT_PORTAL_ISSUER`). 빈 값을 기본으로 읽는 까닭: `PORTAL_ISSUER=` 한 줄이 「iss
+    가 빈 토큰만 받는다」 가 되어 모든 포털 로그인이 「확인 실패」 로 튕긴다."""
+    portal_launch_url: str = ""
+    """로그인 화면의 「HWAX 포털로 로그인」 이 보낼 주소 — 포털의 `/launch/<id>`
+    (`https://hwax.sec.samsung.net/launch/<id>`). 비우면 그 단추가 안 뜬다. 포털이 그 사람으로
+    토큰을 만들어 위 콜백에 보내 준다 — 앱에 직접(`http://<서버>:8040/`) 들어온 사람도
+    같은 길."""
+
+    # ── HWAX 게이트웨이의 사람별 위임(`POST /api/auth/sso`, ADR 0028) ───────────────
+    # 포털의 MCP 게이트웨이가 사람마다 그 사람 명의의 개인 토큰을 받아 우리 MCP 를 부른다
+    # (Report Archive 와 같은 계약). 게이트웨이는 **앱 포트로 직접** 부른다(포털 nginx 를 안
+    # 거친다).
+    heax_sso_secret: str = ""
+    """게이트웨이와 이 설치만 아는 공유 비밀(`X-Heax-Gateway-Secret`) — **비우면 위임이
+    꺼진다** (`/api/auth/sso` 가 404 JSON). 인스턴스마다 따로 둔다(다른 서비스와 묶지 않는다) —
+    `sudo ./deploy.sh hwax-request` 가 없으면 만들어 적는다(`openssl rand -hex 32` 꼴). 포털
+    담당에게는 요청서와 **따로** 전한다(게이트웨이 `provision.env` 의 `<접두>_SSO_SECRET`)."""
+    heax_sso_allowed_ips: str = ""
+    """위임 발급을 받아 줄 원격 주소(쉼표 · CIDR — `10.1.2.3,10.1.2.0/24`). 비우면 비밀만 본다.
+    **TCP 의 원격 주소로 판정한다** — 게이트웨이는 직접 부르므로 프록시
+    머리(`X-Forwarded-For`)를 믿을 까닭이 없고, `TRUST_PROXY` 를 켠 설치는 서버(uvicorn)가 그
+    머리로 원격 주소를 바꿔 적는다. 그래서 목록이 있으면 그 머리가 붙은 요청은 받지 않는다. 못
+    읽는 값이 하나라도 있으면 **전부 거절한다**(오타 하나로 제한이 풀리지 않게) — 서버 화면의
+    「HWAX 포털 로그인」 이 그 값을 말한다."""
+
     @model_validator(mode="after")
     def _derive_from_slug(self) -> Settings:
         """slug 를 검사하고, 비워 둔 것들을 slug 에서 채운다."""
@@ -296,6 +340,10 @@ class Settings(BaseSettings):
             )
         if not self.refresh_cookie_name:
             self.refresh_cookie_name = f"{self.app_slug}_refresh"
+        if not self.portal_audience.strip():
+            self.portal_audience = self.app_slug
+        if not self.portal_issuer.strip():
+            self.portal_issuer = DEFAULT_PORTAL_ISSUER
         return self
 
     @property

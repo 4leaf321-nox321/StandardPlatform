@@ -34,7 +34,7 @@ ls
 #  app.sif  deploy.sh  ha.sh  pg-ha.sh  backup.sh  restore.sh
 #  app.service.template  worker.service.template  mcp.service.template  sync.service.template  sync.timer.template
 #  metrics.service.template  metrics.timer.template  backup.service.template  backup.timer.template
-#  .env.example  BUILD_INFO  README.md  쉬운-설치.md
+#  .env.example  BUILD_INFO  README.md  쉬운-설치.md  HWAX-연동요청서.template.md(9절 — hwax-request 가 채운다)
 #  mcp_server/   (Claude 연동 MCP 서버 + 오프라인 설치용 휠)
 #  apptainer_debs/  (폐쇄망용 apptainer .deb — prepare 가 먼저 본다)
 ```
@@ -253,6 +253,9 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
   MCP 포트로 직접)면 적지 않아도 맞고, 직접일 때는 앱 포트(MCP 포트 −2)로 올린다. ReportArchive
   처럼 MCP 직접 주소(`http://<IP>:<앱+2>/mcp`)를 적어 두어도 된다 — 화면은 그 주소를 안내하고,
   업로드는 들어온 주소로 만든다.
+  **HWAX 포털 뒤**면 포털은 MCP 경로를 열지 않는다(Report Archive 와 같다 — 9절) — 사람들의 Claude 는 포털의
+  게이트웨이(`/mcp-gw/mcp`)로 붙고 게이트웨이가 이 MCP 포트를 직접 부른다. 직접 붙는 사람을 위해
+  `MCP_PUBLIC_URL=http://<서버>:<MCP 포트>/mcp` 를 적는다(비우면 화면이 없는 길 `https://<포털>/<id>/mcp` 를 짐작한다).
 - **포트**: `BUILD_INFO` 의 `mcp_port` — **앱 포트 +2** (운영 +0 · 개발 +1 다음 자리).
   바꾸려면 `sudo MCP_PORT=<포트> ./deploy.sh update`.
   한 서버에 쌍둥이를 여럿 얹을 때 **앱 포트를 10 씩 벌린다** — MCP 가 +2 를 쓰므로 8040 과
@@ -571,6 +574,7 @@ sudo ./deploy.sh restart      # 앱 · 작업 워커 · MCP 를 함께
 | 첨부 · 백업 · `.env` · 복제 비밀번호 | `/data/<slug>/{filestore,backup,.env,db/}` (`DATA_DIR` — 경로는 env) |
 | DB 원본 | 각 서버 로컬(`/var/lib/postgresql/16/main`) — `/data` 는 느려서 두지 않는다 |
 | TLS · 로드밸런싱 · 접두어 벗기기 | **메인 서버의 nginx.** 우리는 넣어 달라고 할 조각(`~/apps/<slug>/main-server-nginx.conf`)을 만든다 |
+| (HWAX 포털에 붙일 때) | **HWAX 는 위 조각을 쓰지 않는다** — 포털 nginx 는 경로 목록(`routes.local.env`)으로 location 을 만든다. 9절 |
 | 호스트 수준 설정 | `/etc/platform-ha.conf` (역할 · 상대 IP · DB VIP · 호스트명) — 그 서버의 모든 플랫폼이 공유 |
 | DB 주/대기 도구 | `/usr/local/sbin/pg-ha` (deploy.sh 가 깐다) · `/etc/pg-ha.conf` · `/etc/pg-ha.replpass` |
 
@@ -616,6 +620,8 @@ sudo ./deploy.sh status            # 앱 · 상대 앱 · 메인 서버 경유 h
 ```
 
 **메인 서버 쪽에 부탁할 것** — 조각에 그대로 있다: `X-Forwarded-Proto $scheme` (앱이 https 인 줄 알아야 쿠키가 산다). 접두어 `/<slug>/` 는 벗겨 넘기든 그대로 넘기든 앱이 둘 다 받는다. MCP 경로는 `proxy_buffering off` · 긴 타임아웃.
+**HWAX 포털은 이 조각을 쓰지 않는다** — 포털 nginx 는 경로 목록으로 location 을 만들고, 우리가 넘길 것은 조각이 아니라
+요청서(주소 · 큰 요청 갈래 · 타일)다. 9절.
 
 **메인 서버가 아직 없어도** A · B 설치와 8.3 · 8.4 의 리허설은 전부 된다 — 화면은 `http://<A의 IP>:8040/<slug>/` 로 직접 본다(접두어를 붙여서). http 로 직접 보는 동안은 쿠키에 Secure 가 안 붙을 뿐 로그인 유지는 된다.
 
@@ -716,3 +722,114 @@ sudo ./deploy.sh status
 ### 8.9 메인 서버 없이 — A · B 가 직접 받을 때 (`LB_MODE=local`)
 
 `LB_MODE=local WEB_VIP=<VIP>` 를 더해 8.1 을 그대로 하면 A · B 에 nginx(TLS 종단 · 접두어 벗기기 · 두 앱 분배)와 keepalived 웹 VIP(vrid 51, master 역할 서버가 쥔다)가 선다. 인증서는 A 가 자체 서명으로 만들어 `/data/…/tls/` 에 두고 B 가 가져간다. 정식 인증서를 받으면 두 서버의 `/etc/nginx/tls/server.{crt,key}` 를 바꾸고 `sudo systemctl reload nginx`.
+
+---
+
+## 9. HWAX 포털에 붙이기 — `https://hwax.sec.samsung.net/<id>/` · 포털 로그인 · Claude(게이트웨이)
+
+HWAX 포털(사내 앱 모음)이 `/<id>/` 경로로 이 앱을 넘겨 주고, 타일을 누르면 포털에 로그인한 그 사람으로 들어오게 하며
+(jwt-handoff), 사람들의 Claude 는 **포털의 MCP 게이트웨이**가 사람마다 그 사람 명의의 토큰을 받아 이 설치의 MCP 를 부른다
+(사람별 위임). **Report Archive 를 붙였을 때와 같은 방식이다** — 결정과 까닭은 저장소의 `docs/adr/0028-HWAX-포털에-붙이기.md`,
+통합 정리는 `docs/HWAX-PORTAL-INTEGRATION.md`. **이중화 조각(`main-server-nginx.conf`)은 쓰지 않는다** — 포털 nginx 는 경로
+목록으로 location 을 만든다. 포털의 앱 id `<id>` 는 **`APP_SLUG` 와 같게** 둔다(타일 id · audience · 게이트웨이 키 · 권한
+id 가 전부 그 하나다).
+
+**인스턴스마다 한 번씩**이다 — 같은 번들로 띄운 인스턴스(「자주검증 Datahub」 · 「Failure Trace」 …)는 slug · 포트 · `.env`
+가 달라 각자의 요청서를 보낸다. 아래 명령은 전부 `APP_SLUG=<slug>` 를 준다(이 서버에 인스턴스가 하나면 생략된다).
+
+### 9.1 순서
+
+```bash
+# ① 요청서 + 게이트웨이 위임 비밀 — 비밀이 .env 에 없으면 만들어 적는다(있으면 그대로). 요청서는 이 설치의 값으로 채워진다
+sudo APP_SLUG=<slug> ./deploy.sh hwax-request          # → ~/apps/<slug>/HWAX-연동요청서.md
+sudo APP_SLUG=<slug> ./deploy.sh restart               # 비밀을 새로 만들었으면 — 앱이 읽게(이중화면 다른 서버에서도)
+# ② 게이트웨이가 MCP 에 닿게(한 번 — 유닛에 남는다). 이중화면 이미 0.0.0.0 이다
+sudo APP_SLUG=<slug> MCP_HOST=0.0.0.0 ./deploy.sh update
+# ③ 요청서를 포털 담당에게 — A · B 주소와 위임 비밀은 **따로**(①이 화면에 「따로 전할 것」 으로 찍는다)
+sudo grep '^HEAX_SSO_SECRET=' ~<운영 계정>/apps/<slug>/.env   # (이중화면 /data/<공통폴더>/<slug>/.env)
+# ④ 포털 담당에게서 JWKS 주소를 받으면 — 준 것만 .env 에 적는다
+sudo APP_SLUG=<slug> PORTAL_JWKS_URL=http://<포털>:8088/.well-known/jwks.json \
+     PORTAL_LAUNCH_URL=https://hwax.sec.samsung.net/launch/<slug> ./deploy.sh update
+# ⑤ (선택) 위임 발급을 포털 박스 주소에서만 받게
+sudo APP_SLUG=<slug> HEAX_SSO_ALLOWED_IPS=<포털 박스 주소> ./deploy.sh update
+```
+
+`hwax-request` 는 그 설치의 `.env` 와 설치 폴더만 만진다 — 운영 계정으로 sudo 없이도 된다(`./deploy.sh hwax-request`).
+요청서에는 위임 비밀도 내부 주소도 **안 쓴다**(메일 · 메신저로 도는 파일이다). 이미 포털에 전한 비밀은 바꾸지 않는다 —
+바꾸면 그 순간 게이트웨이의 위임이 전부 401 이다(바꿀 때는 포털 담당과 같이: `.env` 에서 지우고 ① 다시 → 새 값을 전한다).
+
+`deploy.sh` 는 `PORTAL_*` · `HEAX_SSO_ALLOWED_IPS` 를 **준 것만** `.env` 에 적고(빈 값을 주면 비운다 — 끄는 길),
+`PORTAL_JWKS_URL` 이 있는데 `PUBLIC_PATH` · `TRUST_PROXY` 가 없으면 `/<slug>` · `true` 를 더한다. 위임 비밀은 env 로 받지
+않는다(화면에 찍히고 셸 기록에 남는다). 나머지는 `.env` 를 손으로 고치고 `sudo ./deploy.sh restart`:
+
+| `.env` | 값 | 왜 |
+| --- | --- | --- |
+| `PUBLIC_PATH` | `/<id>` | 포털이 `/<id>/` 를 벗겨 넘긴다 — 화면 주소 · 쿠키 path · 로그인 뒤 돌아갈 곳이 그 아래여야 한다 |
+| `TRUST_PROXY` | `true` | 포털 nginx 가 주는 https 판정(쿠키 Secure) · 접속 주소를 믿는다 |
+| `PORTAL_JWKS_URL` | 포털 담당이 준 주소 | **비우면 포털 로그인이 꺼진다** — 콜백이 404 JSON |
+| `PORTAL_LAUNCH_URL` | `https://hwax.sec.samsung.net/launch/<id>` | 로그인 화면의 「HWAX 포털로 로그인」. 비우면 단추가 없다 |
+| `PORTAL_AUDIENCE` · `PORTAL_ISSUER` | (보통 안 적는다) | 기본이 `APP_SLUG` · `https://hwax.sec.samsung.net` — 포털 id · 포털 `JWT_ISSUER` 가 다를 때만 |
+| `HEAX_SSO_SECRET` | `hwax-request` 가 만든다(64자) | **비우면 게이트웨이 위임이 꺼진다** — `/api/auth/sso` 가 404 JSON, 포털의 Claude 가 이 설치를 못 부른다 |
+| `HEAX_SSO_ALLOWED_IPS` | 포털 박스 주소(쉼표 · CIDR) | 주소를 보지 않는다(비밀만). 못 읽는 값이 있으면 **모두 거절** |
+| `MCP_PUBLIC_URL` | `http://<이 서버>:<MCP 포트>/mcp` | 자기 토큰으로 직접 붙는 사람의 안내 주소(5b). 비우면 화면이 없는 길(`https://<포털>/<id>/mcp`)을 짐작한다 |
+
+방화벽: 포털 박스(nginx · 게이트웨이) → 이 서버 `:<앱 포트>`(화면 · 위임 발급) · `:<MCP 포트>`(게이트웨이 → MCP). 이 서버 →
+포털 `:8088`(JWKS). `MCP_ALLOWED_HOSTS` 를 적어 둔 설치면 게이트웨이가 부르는 주소를 **포트까지**(`<이 서버 주소>:<MCP 포트>`,
+B 도) 넣는다 — 아니면 MCP 가 421 로 거절한다.
+
+### 9.2 포털 담당에게 줄 것 · 받을 것
+
+- **줄 것** — ①이 쓴 요청서 한 장 + **A · B 의 내부 주소와 위임 비밀**(따로 — 안전한 길로). 요지는 RA 와 같다: 화면 라우트
+  `<id>=http://<A>:<앱 포트>/`(접두어 벗김) · `loc_extras()` 에 `<id>` · jwt-handoff 타일 · 게이트웨이 백엔드 `<id>`(우리 MCP
+  주소) · 사람별 위임 쌍(`PER_USER_SSO_APPS` 의 `<id>:<접두>` · `<접두>_SSO_SECRET` · `<접두>_SSO_URL=http://<A>:<앱 포트>/api/auth/sso`)
+  · 권한 표 한 블록 · 위험 도구 목록(한 번). **MCP 를 포털 nginx 경로(`/<id>/mcp`)로 열어 달라고 하지 않는다.**
+- **권하는 것** — 포털 `update-all` 에 목록형 단계 한 번(요청서 9절, `SP_APPS="<id>:<접두> …"` + `<접두>_HOST`) — 그 뒤로는
+  인스턴스를 더할 때 주소 한 줄이다.
+- **받을 것** — 이 서버에서 닿는 **포털 JWKS 주소**(사내망 `http://<포털>:8088/.well-known/jwks.json` 이 간단 — https 면
+  사내 CA 체인도), 그리고 포털에서 찍은 **콜백 숫자 · 위임 점검 숫자**(9.3 의 표).
+- **B 전환** — A 가 죽으면 포털 담당이 주소를 B 로 바꾸고 `update-all` 을 다시 돌린다(RA 와 같다). 우리 쪽 DB 승격은 8.3.
+
+### 9.3 확인
+
+```bash
+# 이 서버에서 — 포털 JWKS 가 닿나 · 위임이 켜졌나(이메일 없이 → 400 이 정상, 토큰을 만들지 않는다)
+curl -s -o /dev/null -w '%{http_code}\n' http://<포털>:8088/.well-known/jwks.json             # 200
+S=$(sudo sed -n 's/^HEAX_SSO_SECRET=//p' <.env 경로>)
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:<앱 포트>/api/auth/sso -H "X-Heax-Gateway-Secret: $S"   # 400
+# 포털 경유 — 콜백에 가짜 토큰(포털 update-all 의 진단과 같은 것)
+curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' -X POST \
+  https://hwax.sec.samsung.net/<id>/api/auth/portal-callback -d token=probe-not-a-token       # 303 …/<id>/login?sso=invalid
+```
+
+| 콜백 숫자 | 뜻 | 할 일 |
+| --- | --- | --- |
+| **303** | 다 섰다 | — |
+| 404 + JSON | 포털 로그인이 꺼져 있다 | `.env` 의 `PORTAL_JWKS_URL` → `sudo ./deploy.sh restart` |
+| 405 | 콜백이 없는 옛 판 | 새 번들로 `sudo ./deploy.sh update` |
+| 200 + HTML · 404 + HTML | 포털 nginx 에 라우트가 없다 · 경로가 어긋났다 | 포털 담당(`routes.local.env`) |
+| 502 · 504 · 000 | 포털이 이 서버 `:<앱 포트>` 에 못 닿는다 | 방화벽 · `systemctl status <slug>` |
+
+| 위임 숫자(`/api/auth/sso`) | 뜻 | 할 일 |
+| --- | --- | --- |
+| **400**(이메일 없이) · **200**(승인된 사람으로) | 켜짐 · 비밀 맞음 | — |
+| 401 + 한 줄 | 비밀이 다르다 | 포털 담당과 같은 값인지(따로 전한 것) |
+| 403 + 한 줄 | 처음 보는 사람 · 승인 대기 · 정지 · 허용 주소 밖 — 본문이 무엇인지 말한다 | 사람이면 포털에서 타일을 한 번 열고(가입 신청) 승인 · 주소면 `HEAX_SSO_ALLOWED_IPS` |
+| 404 + JSON | 위임이 꺼져 있다 | `HEAX_SSO_SECRET` → `sudo ./deploy.sh restart` |
+| 405 | 위임이 없는 옛 판 | 새 번들로 `sudo ./deploy.sh update` |
+
+화면에서는 **관리 › 서버 › 「HWAX 포털 로그인」**(시스템 관리자) — 켜졌나 · 포털 공개 키를 지금 받아 보고 닿나 · kid · 마지막
+오류 · 설정끼리 안 맞는 것(접두어 없음 · `TRUST_PROXY` 꺼짐 · `MCP_PUBLIC_URL` …), 그리고 「게이트웨이 위임」 — 켜졌나 · 허용
+주소 · 범위 · 지금 사용 중인 위임 토큰 수 · 마지막 발급 · 마지막 거절(때 · 숫자 · 까닭). 그다음 포털 타일을 눌러 첫 화면이
+뜨는지, 포털의 Claude 에서 `<id>_whoami` 가 그 사람인지 본다.
+
+| 증상 | 원인 |
+| --- | --- |
+| 로그인 화면에 「포털의 공개 키를 받지 못해…」 | 이 서버에서 `PORTAL_JWKS_URL` 이 안 닿는다 — 위 curl · 방화벽 :8088. 서버 화면의 「마지막 오류」 |
+| 「로그인 정보를 확인하지 못했습니다」 가 계속 | 포털 타일의 `audience` 와 `PORTAL_AUDIENCE`(기본 slug)가 다르거나 포털 `JWT_ISSUER` 를 바꿔 쓰는 박스 — 앱 로그 `journalctl -u <slug> \| grep '포털 로그인 거절'` 에 사유(InvalidAudience · InvalidIssuer …)가 있다 |
+| 「유효 시간을 벗어났습니다」 | 이 서버와 포털의 시계가 10초 넘게 어긋났다 — `timedatectl` |
+| 로그인 뒤 포털 첫 화면으로 간다 | `PUBLIC_PATH` 가 없다(9.1) |
+| 처음 들어온 사람이 「가입 승인을 기다립니다」 | 정상 — 관리 › 계정의 승인 대기(홈 「남은 일」). 희망 부서가 없어 「승인」 이 부서를 묻는다 |
+| 포털의 Claude 가 「… 자격증명으로 호출하지 못했습니다 (SSO 403: …)」 | 위임 거절 — 괄호 안이 까닭(승인된 계정 없음 · 대기 · 정지 · 주소). 서버 화면의 「마지막 거절」 · `journalctl -u <slug> \| grep '게이트웨이 위임 거절'` |
+| 포털의 Claude 가 「… (SSO 401: …)」 | 게이트웨이의 비밀과 `HEAX_SSO_SECRET` 이 다르다 — 포털 담당과 맞춘다 |
+| 포털의 Claude 에 이 설치의 도구가 없다 | 게이트웨이가 MCP 에 못 닿는다 — `MCP_HOST` 가 127.0.0.1 · 방화벽 `:<MCP 포트>` · `MCP_ALLOWED_HOSTS` 에 게이트웨이가 부르는 주소(포트까지)가 없다(421) |
+| 위임 토큰이 「내 정보」 에 「HWAX 게이트웨이(gateway)」 로 보인다 | 정상 — 게이트웨이가 반나절마다 새로 받고 지난 것은 폐기된 줄로 하나만 남는다. 폐기해도 게이트웨이가 다시 받는다 — 사람을 끊는 것은 계정 정지 |

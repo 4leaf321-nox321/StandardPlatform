@@ -166,6 +166,33 @@ def signup(
     return user
 
 
+def request_from_portal(db: Session, *, login_id: str, display_name: str) -> User:
+    """**포털로 처음 들어온 사람**의 가입 신청 — 승인 대기로 만든다(ADR 0028). 커밋하지 않는다
+    (부르는 쪽이 감사 기록과 한 트랜잭션으로).
+
+    화면의 가입 신청(`signup`)과 같은 줄이 된다 — 상태 `pending` 이라 관리자에게는 홈 「남은
+    일」 의 「가입 승인 대기」 로 같은 길로 가고, 승인 · 거절도 같은 화면에서 한다. 다른 것은
+    셋:
+
+    - **희망 부서가 없다.** 포털은 우리 조직도를 모르고(토큰의 `groups` 는 포털 쪽 묶음이다),
+      짐작으로 고른 부서는 사람 눈에 맞는 값처럼 보여 아무도 안 고친다 — 승인할 때 관리자가
+      고른다(계정 화면이 그때 부서를 묻는다).
+    - **비밀번호가 없다**(`security.unusable_password`) — 그 사람은 포털로 들어온다. 아이디 ·
+      비밀번호로도 들어와야 하면 승인 뒤 「비밀번호 초기화」.
+    - 아이디 · 이름은 포털이 보증한 값(토큰의 `email` · `name`)이다.
+    """
+    user = User(
+        email=auth_services.normalize_login_id(login_id),
+        password_hash=security.unusable_password(),
+        display_name=clean(display_name)[:100] or login_id[:100],
+        status="pending",
+        requested_workspace_id=None,
+    )
+    db.add(user)
+    db.flush()
+    return user
+
+
 def create_account(
     db: Session,
     *,

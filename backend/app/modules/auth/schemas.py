@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -119,3 +120,96 @@ class TokenScopesOut(BaseModel):
     더하면 화면은 아무것도 안 고쳐도 새 범위를 보여 준다."""
 
     scopes: list[str]
+
+
+class DelegatedTokenOut(BaseModel):
+    """HWAX 게이트웨이의 위임 발급 응답(`POST /api/auth/sso`, ADR 0028) — **봉투 없이.**
+
+    게이트웨이는 응답을 깊이 뒤져 `access_token` 과 **같은 객체의** `expires_in` 을
+    읽는다(Report Archive 는 `{success, data: {…}}` 봉투, TestScope 권장은 이 모양). 받은
+    토큰을 최대 12시간, `expires_in` 보다 2분 먼저 버린다 — 수명 하루면 12시간마다 다시
+    받는다."""
+
+    access_token: str
+    """그 사람 명의의 개인 토큰(`<slug>_pat_…`) — 사람이 화면에서 만드는 것과 같은 자격이다."""
+    token_type: Literal["bearer"] = "bearer"
+    expires_in: int
+    """만료까지 초."""
+
+
+class DelegationRevokeOut(BaseModel):
+    """위임 회수(`POST /api/auth/sso/revoke`) — 그 사람의 그 client 토큰을 몇 개 끊었나."""
+
+    revoked: int
+
+
+class GatewayRefusalOut(BaseModel):
+    """게이트웨이 위임을 마지막으로 거절한 일."""
+
+    at: datetime
+    status: int
+    """응답 숫자 — 400 머리 없음 · 401 비밀 다름 · 403 계정 · 주소 · 404 꺼짐."""
+    reason: str
+    """사람 말. 거절한 프로세스가 이 진단을 답하는 프로세스면 자세한 사유, 아니면 숫자의 뜻
+    (워커 · 서버가 여럿이다 — 자세한 것은 앱 로그의 `게이트웨이 위임 거절`)."""
+
+
+class GatewayDelegationOut(BaseModel):
+    """HWAX 게이트웨이의 사람별 위임(`POST /api/auth/sso`, ADR 0028) — 포털 로그인과 따로
+    켜진다.
+
+    게이트웨이는 위임 발급이 200 이 아니면 그 사람의 도구 호출을 **거절**한다(서비스 계정으로
+    내려가지 않는다) — 그래서 「켜졌나」 와 함께 마지막으로 발급한 때 · 거절한 때를 말한다."""
+
+    enabled: bool
+    """`HEAX_SSO_SECRET` 이 있나. 없으면 `/api/auth/sso` 가 404 JSON."""
+    sso_path: str
+    """게이트웨이 `<접두>_SSO_URL` 의 길 — **앱 포트로 직접**(`http://<서버>:<앱 포트>` +
+    이것). 접두어 없이 적는다(포털 nginx 를 안 거친다)."""
+    allowed_ips: list[str]
+    """`HEAX_SSO_ALLOWED_IPS` — 비면 주소를 보지 않는다(비밀만)."""
+    invalid_ips: list[str]
+    """그중 못 읽은 값 — 하나라도 있으면 **모든 발급을 거절한다**(오타로 제한이 풀리지
+    않게)."""
+    scopes: list[str]
+    """위임 토큰이 받는 범위 — `read` + 등록된 쓰기 범위(관리 범위는 없다)."""
+    token_seconds: int
+    live_tokens: int
+    """지금 살아 있는 위임 토큰 수 — 대개 쓰는 사람 수와 같다(client 마다 하나)."""
+    last_issued_at: datetime | None
+    """마지막으로 발급한 때 — 모든 서버 · 프로세스(DB)."""
+    last_refusal: GatewayRefusalOut | None
+    """마지막으로 거절한 일 — 모든 서버 · 프로세스(접근 로그)."""
+
+
+class PortalStatusOut(BaseModel):
+    """HWAX 포털 로그인의 상태(ADR 0028) — 시스템 관리자의 서버 화면이 본다.
+
+    「켜졌나」 만이 아니라 **「이 서버에서 포털의 공개 키가 닿나」** 를 지금 받아 보고 말한다 —
+    설정만 보면 켜짐인데, 주소가 안 닿는 것은 첫 사람이 로그인을 시도해야 드러난다.
+    """
+
+    enabled: bool
+    """`PORTAL_JWKS_URL` 이 있나. 없으면 콜백이 404 JSON(포털 진단표의 「SSO 꺼짐」)."""
+    jwks_url: str | None
+    audience: str
+    """토큰의 `aud` 로 받는 값 — 포털 타일의 `audience` 와 같아야 한다."""
+    issuer: str
+    launch_url: str | None
+    """로그인 화면의 「HWAX 포털로 로그인」 이 가는 곳. 비면(또는 꺼져 있으면) 단추가 없다."""
+    callback_path: str
+    """포털 타일의 `url` 에 적을 길 — 이 설치의 접두어가 붙은 모양."""
+    reachable: bool | None
+    """공개 키를 지금 받았나(또는 5분 안에 받아 둔 것이 있나). 꺼져 있으면 null."""
+    kids: list[str]
+    """받은 서명 키의 kid — 포털이 키를 바꾸면 여기가 바뀐다."""
+    fetched_at: datetime | None
+    """**이 프로세스가** 마지막으로 받은 때 — 워커(프로세스)마다 따로 든다."""
+    last_error: str | None
+    """이 프로세스가 마지막으로 못 받은 까닭 — 뒤에 받았어도 남는다(`fetched_at` 과 견준다)."""
+    last_error_at: datetime | None
+    problems: list[str]
+    """설정이 서로 안 맞는 것 — 접두어 없음 · 접두어와 audience 다름 · TRUST_PROXY 꺼짐 · 위임
+    비밀이 짧음 · 허용 IP 를 못 읽음 등."""
+    delegation: GatewayDelegationOut
+    """HWAX 게이트웨이의 사람별 위임(MCP) — 포털 로그인이 꺼져 있어도 따로 켜질 수 있다."""

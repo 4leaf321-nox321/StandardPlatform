@@ -21,11 +21,11 @@ from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
-from app.modules.auth import security, services
+from app.modules.auth import delegation, security, services
 from app.shared import scopes
-from app.shared.access_log import USER_ID_SCOPE_KEY
+from app.shared.access_log import ACTION_SCOPE_KEY, GATEWAY_API, USER_ID_SCOPE_KEY
 from app.shared.errors import AppError, Forbidden, code
-from app.shared.request_context import set_actor_token
+from app.shared.request_context import set_actor_client, set_actor_token
 
 logger = logging.getLogger(__name__)
 
@@ -109,6 +109,16 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
             logger.warning("PAT 인증 실패 (prefix=%s)", shown)
             raise AppError(code("AUTH", 101), "토큰이 유효하지 않습니다.", status=401)
         user, pat = found
+        # 접근 로그 미들웨어가 "누가" 를 알 수 있게 scope 에 남긴다. 미들웨어는
+        # 인증보다 바깥에 있어서 스스로는 사용자를 알 수 없다. **범위 검사보다 먼저** — 범위에
+        # 막힌 쓰기야말로 「누가 무엇을 하려 했나」 를 물을 줄이다.
+        request.scope[USER_ID_SCOPE_KEY] = user.id
+        if pat.delegated_client:
+            # **HWAX 게이트웨이가 위임 발급으로 받아 간 토큰**(ADR 0028) — 그 사람 명의로
+            # Claude 가 게이트웨이를 거쳐 한 일이다. 범위에 막힌 요청도 그 통로로 남게 먼저
+            # 적는다. 통로는 서버가 정한다(머리의 X-Client 는 믿지 않는다).
+            set_actor_client(delegation.CLIENT)
+            request.scope[ACTION_SCOPE_KEY] = GATEWAY_API
         _enforce_token_scope(request, list(pat.scopes or []), scope_path(request))
         # 한 요청이 **범위 둘**을 요구할 때(정의가 든 묶음) 라우트가 더 물을 수 있게 남긴다.
         # 사람 세션에는 없다 — 범위는 기계 자격에만 있는 개념이다.
@@ -116,9 +126,6 @@ def current_user(request: Request, db: Session = Depends(get_db)) -> User:
         # **감사에 토큰 이름을 남긴다.** 소유자만 남기면 사람이 넣은 것과 기계가
         # 넣은 것이 구별되지 않는다.
         set_actor_token(pat.name)
-        # 접근 로그 미들웨어가 "누가" 를 알 수 있게 scope 에 남긴다. 미들웨어는
-        # 인증보다 바깥에 있어서 스스로는 사용자를 알 수 없다.
-        request.scope[USER_ID_SCOPE_KEY] = user.id
         return user
 
     payload = security.decode_access_token(token)

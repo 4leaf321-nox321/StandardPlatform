@@ -97,3 +97,34 @@ class PersonalAccessToken(Base):
         DateTime(timezone=True), nullable=True
     )
     """마지막 사용 시각. 안 쓰는 토큰을 찾아 지우는 근거가 된다."""
+
+    delegated_client: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    """**HWAX 게이트웨이가 위임 발급**(`POST /api/auth/sso`, ADR 0028)으로 받아 간 토큰이면 그
+    client(`X-Heax-Client` — 보통 `gateway`). 사람이 화면에서 만든 토큰은 NULL.
+
+    이름(`HWAX 게이트웨이(<client>)`)으로 가리지 않는 까닭: 같은 이름을 사람이 손으로 지으면
+    다음 위임 발급이 **그 사람의 토큰을 회수**하고, 그 토큰으로 든 요청이 게이트웨이 통로로
+    적힌다. 이 칸이 있는 토큰으로 온 요청은 감사의 통로가 `hwax-gateway`
+    다(`shared/auth.py`)."""
+
+
+class PortalLaunchJti(Base):
+    """HWAX 포털 launch 토큰의 **쓴 jti** — 한 토큰은 한 번만 로그인시킨다(ADR 0028).
+
+    launch 토큰은 90초 사는 서명 문서라 그 안에서는 누가 들고 와도 유효하다 — 브라우저 기록 ·
+    프록시 로그 · 뒤로 가기의 폼 재전송으로 같은 토큰이 다시 올 수 있다. **메모리가 아니라 DB
+    에 둔다**: 이중화면 같은 토큰을 두 서버가 받을 수 있고, 워커(프로세스)도 넷이다. 기본키
+    충돌이 곧 「이미 썼다」 다(동시에 둘이 와도 하나만 들어간다).
+
+    원문은 두지 않고 해시만 둔다(길이가 정해지고, 모양이 이상한 jti 가 칸을 넘지 않는다).
+    `expires_at`(토큰의 exp + 여유)이 지난 줄은 다음 콜백이 지운다 — 그 뒤에 같은 토큰이 오면
+    만료로 이미 거절된다.
+    """
+
+    __tablename__ = "portal_launch_jtis"
+
+    jti_hash: Mapped[str] = mapped_column(String(64), primary_key=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

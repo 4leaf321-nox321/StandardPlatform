@@ -19,7 +19,7 @@ from typing import Any
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse, Response
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.branding import ERROR_PREFIX
@@ -160,6 +160,17 @@ class Forbidden(AppError):
         super().__init__(code, message, status=403, **kw)
 
 
+class PlainTextError(AppError):
+    """본문이 **사람이 읽을 한 줄**(text/plain)인 오류 — 끝에 오류 코드를 괄호로 단다.
+
+    받는 쪽이 본문을 **그대로 사람에게 보이는** 서버 간 계약에서만 쓴다. HWAX 게이트웨이는 위임
+    발급(`POST /api/auth/sso`)이 200 이 아니면 본문 앞 200자를 그 사람의 Claude 에 그대로
+    띄우는데, 봉투(JSON)를 주면 그 200자의 앞 마흔 자가 `{"error":{"code":…` 로 차고 정작 할
+    일은 잘린다. 로그는 다른 AppError 와 **같은 처리기**가 남긴다 — 응답을 만드는 경로가 곧
+    로그를 남기는 경로다.
+    """
+
+
 def _body(code: str, message: str, details: dict[str, Any] | None = None) -> dict[str, Any]:
     return {
         "error": {
@@ -213,7 +224,7 @@ def _masked(errors: list[Any]) -> list[Any]:
 
 def register_error_handlers(app: FastAPI) -> None:
     @app.exception_handler(AppError)
-    async def _app_error(request: Request, exc: AppError) -> JSONResponse:
+    async def _app_error(request: Request, exc: AppError) -> Response:
         # 4xx 는 정상 흐름의 일부라 warning, 5xx 는 error. 어느 쪽이든 남긴다.
         log = logger.warning if exc.status < 500 else logger.error
         log(
@@ -225,6 +236,8 @@ def register_error_handlers(app: FastAPI) -> None:
             exc.message,
             extra={"details": exc.details},
         )
+        if isinstance(exc, PlainTextError):
+            return PlainTextResponse(f"{exc.message} ({exc.code})", status_code=exc.status)
         return JSONResponse(
             status_code=exc.status, content=_body(exc.code, exc.message, exc.details)
         )

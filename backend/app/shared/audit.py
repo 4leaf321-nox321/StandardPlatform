@@ -63,6 +63,21 @@ ACCOUNT_TOKEN_REVOKED = "account.token_revoked"
 LOGIN_THROTTLED = "auth.login_throttled"
 """같은 계정의 실패가 문턱을 넘어 응답을 늦추기 시작했다. 실패마다 남기면 넘치므로
 문턱을 넘는 순간 한 번만."""
+PORTAL_LOGIN = "auth.portal_login"
+"""HWAX 포털이 보증한 신원으로 로그인했다(ADR 0028) — 통로(`actor_client`)는 `hwax-portal`,
+changes 에 포털의 `sub` · 무엇으로 찾았나(`matched_by`: email | sub) · `jti`. 비밀번호 로그인은
+남기지 않는데 이것은 남긴다: **우리가 확인하지 않은 신원을 받아들인 일**이라, 「이 계정에 누가
+어디로 들어왔나」 를 물을 날 그 근거가 여기뿐이다."""
+ACCOUNT_PORTAL_REQUESTED = "account.portal_requested"
+"""처음 보는 사람이 포털로 들어와 **가입 신청(승인 대기)** 이 만들어졌다 — 이름 · 아이디는
+포털의 토큰에서, 비밀번호는 없다(포털로만 들어온다). 승인은 다른 신청과 같다."""
+GATEWAY_DELEGATED = "auth.gateway_delegated"
+"""HWAX 게이트웨이가 그 사람 명의의 개인 토큰을 받아 갔다(게이트웨이 위임 발급, ADR 0028) —
+통로 `hwax-gateway`, 대상은 새 토큰, changes 에 client · 범위 · 만료 · 회수한 직전 토큰 수 ·
+원격 주소. 포털 로그인처럼 **우리가 확인하지 않은 신원을 받아들인 일**이라 남긴다(게이트웨이가
+12시간마다 다시 받으므로 쓰는 사람마다 하루 두 줄 남짓)."""
+GATEWAY_DELEGATION_REVOKED = "auth.gateway_delegation_revoked"
+"""게이트웨이가 그 사람의 위임 토큰을 회수해 갔다(`POST /api/auth/sso/revoke`)."""
 WORKSPACE_DELETED = "workspace.deleted"
 WORKSPACE_MOVED = "workspace.moved"
 """조직 개편 — 상위 부서나 형제 순서가 바뀌었다. **자료는 하나도 안 움직인다.**"""

@@ -65,11 +65,30 @@ const PERFORMANCE: Record<string, { label: string; tone: Tone }> = {
   file: { label: '파일', tone: 'neutral' },
 }
 
+/** HWAX 포털 로그인(ADR 0028) — 서버 화면의 한 줄. */
+const PORTAL: Record<string, { label: string; tone: Tone }> = {
+  // **꺼짐은 나쁨이 아니다** — 포털에 붙지 않은 설치의 정상이다.
+  off: { label: '꺼짐', tone: 'neutral' },
+  on: { label: '켜짐', tone: 'good' },
+  // 켰는데 공개 키가 안 닿으면 포털로 오는 사람이 전부 튕긴다 — 멎은 것의 색.
+  unreachable: { label: '공개 키 못 받음', tone: 'bad' },
+}
+
+/** HWAX 게이트웨이 위임(ADR 0028) — 서버 화면의 한 줄. */
+const DELEGATION: Record<string, { label: string; tone: Tone }> = {
+  off: { label: '꺼짐', tone: 'neutral' },
+  on: { label: '켜짐', tone: 'good' },
+  // 허용 주소를 못 읽으면 모든 발급을 거절한다 — 그 사람들의 Claude 가 이 설치를 못 부른다.
+  blocked: { label: '모두 거절', tone: 'bad' },
+}
+
 const TABLES = {
   account: ACCOUNT,
+  delegation: DELEGATION,
   object: OBJECT,
   notice: NOTICE,
   performance: PERFORMANCE,
+  portal: PORTAL,
   token: TOKEN,
   workspace: WORKSPACE,
 } as const

@@ -124,13 +124,17 @@ def bot(client: TestClient, admin: Signed) -> Iterator[Bot]:
 
 def test_토큰이_없으면_서버의_말이_그대로_온다(client: TestClient) -> None:
     """**「인증 실패」 만 뜨면 무엇을 해야 하는지 알 수 없다** — 백엔드의 오류
-    코드와 문구가 그대로 와야 README 의 표로 찾을 수 있다."""
+    코드와 문구가 그대로 와야 README 의 표로 찾을 수 있다.
+
+    401 은 결과가 아니라 **오류**로 온다 — HWAX 게이트웨이가 그 모양(`<METHOD> <경로> → HTTP
+    401`)을 보고 위임 토큰을 다시 받는다(ADR 0028). 경로는 진짜 앱이 받은 그대로다."""
     server._TRANSPORT = httpx.ASGITransport(app=fastapi_app)
     try:
-        got = asyncio.run(server.ontology_schema(_ctx("")))
+        with pytest.raises(server.BackendUnauthorized) as caught:
+            asyncio.run(server.ontology_schema(_ctx("")))
     finally:
         server._TRANSPORT = None
-    assert got["error"].startswith("[APP-AUTH-0100]")
+    assert str(caught.value).startswith("GET /api/ontology/schema → HTTP 401: [APP-AUTH-0100]")
 
 
 def test_스키마부터_읽는다(bot: Bot) -> None:

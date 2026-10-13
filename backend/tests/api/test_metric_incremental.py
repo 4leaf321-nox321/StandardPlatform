@@ -35,7 +35,11 @@ def _recount(
     assert done["status"] == "done", done
     runs = client.get(f"/api/metrics/{slug}/runs", headers=admin.headers)
     assert runs.status_code == 200, runs.text
-    return dict(runs.json()[0])
+    # **방금 넣은 작업의 실행을 작업 번호로 집는다** — 「맨 앞(가장 최근)」 으로 집던 때는
+    # 이 PC(WSL)의 시계가 뒤로 튀면 방금 돈 실행이 앞 실행보다 이른 시각을 받아 앞 실행을
+    # 돌려줬다(2026-10-13).
+    (mine,) = [one for one in runs.json() if one["job_id"] == job_id]
+    return dict(mine)
 
 
 def _clock_went_back(type_slug: str, watermark: str) -> bool:

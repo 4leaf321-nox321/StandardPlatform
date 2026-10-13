@@ -10,6 +10,8 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
+import type { Account } from '@/modules/accounts/api'
+
 const accountApi = vi.hoisted(() => ({
   list: vi.fn(),
   summary: vi.fn(),
@@ -27,7 +29,7 @@ const workspaceApi = vi.hoisted(() => ({ options: vi.fn() }))
 vi.mock('@/modules/accounts/api', () => ({ accountApi }))
 vi.mock('@/modules/workspaces/api', () => ({ workspaceApi }))
 
-const ACCOUNT = {
+const ACCOUNT: Account = {
   id: 'acc-1',
   email: 'hong',
   display_name: '홍길동',
@@ -137,5 +139,46 @@ describe('계정 관리 · 시스템 관리자 지정', () => {
     await userEvent.click(screen.getByRole('button', { name: '관리자 지정' }))
     await userEvent.click(screen.getByRole('button', { name: '취소' }))
     expect(accountApi.setSystemAdmin).not.toHaveBeenCalled()
+  })
+})
+
+describe('계정 관리 · 희망 부서 없는 신청의 승인', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const PENDING = {
+    ...ACCOUNT,
+    status: 'pending',
+    home_workspace_slug: null,
+    home_workspace_name: null,
+    memberships: [],
+    workspaces: [],
+  }
+
+  // HWAX 포털로 들어온 신청은 부서를 짐작하지 않는다(ADR 0028) — 그대로 승인하면 서버가 「부서를
+  // 골라 주세요」 로 거절하는데, 고를 자리가 없으면 관리자는 그 신청을 처리할 수 없다.
+  it('부서를 묻고, 고른 부서로 승인한다', async () => {
+    accountApi.approve.mockResolvedValue({ ...PENDING, status: 'active' })
+    await open(PENDING)
+    expect(screen.getByText('희망 부서 없음 — 승인할 때 선택')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: '승인' }))
+    expect(accountApi.approve).not.toHaveBeenCalled()
+    const dialog = await screen.findByRole('dialog', { name: '가입 승인 — 부서 선택' })
+    expect(within(dialog).getByRole('button', { name: '승인' })).toBeDisabled()
+
+    await userEvent.click(within(dialog).getByRole('combobox'))
+    await userEvent.click(await screen.findByRole('button', { name: /본사/ }))
+    await userEvent.click(within(dialog).getByRole('button', { name: '승인' }))
+    await waitFor(() =>
+      expect(accountApi.approve).toHaveBeenCalledWith('acc-1', { workspace_slug: 'hq' }),
+    )
+  })
+
+  it('희망 부서가 있으면 묻지 않고 그 부서로 승인한다', async () => {
+    accountApi.approve.mockResolvedValue({ ...PENDING, status: 'active' })
+    await open({ ...PENDING, requested_workspace_slug: 'hq', requested_workspace_name: '본사' })
+    await userEvent.click(screen.getByRole('button', { name: '승인' }))
+    await waitFor(() => expect(accountApi.approve).toHaveBeenCalledWith('acc-1', {}))
+    expect(screen.queryByRole('dialog')).toBeNull()
   })
 })

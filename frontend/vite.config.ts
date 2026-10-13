@@ -47,6 +47,8 @@ function devIdentity(): Plugin {
         // **씨앗일 뿐이다.** 켜짐은 DB 가 정하므로(관리 › 서버) 앱이
         // `/api/server/enabled-extensions` 에서 받는다 — 여기 값은 첫 그림에만 쓰인다.
         ['app-extensions', env.EXTENSIONS],
+        // HWAX 포털로 로그인 — 서버와 같은 규칙: 받는 쪽(PORTAL_JWKS_URL)이 있을 때만.
+        ['app-portal-launch', env.PORTAL_JWKS_URL ? env.PORTAL_LAUNCH_URL : ''],
       ]
       const tags = pairs
         .filter(([, v]) => v)

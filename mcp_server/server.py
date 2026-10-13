@@ -189,11 +189,50 @@ def tool() -> Any:
     return wrap
 
 
+#: **한 번의 잘못 부름이 곧 지움 · 덮어쓰기 · 되돌리기 · 멈춤이 되는 도구** — HWAX 게이트웨이에
+#: 범용 실행기(`invoke_tool`)로는 못 부르게 `_INVOKE_DENY_EXACT` 에 넣어 달라고 요청하는
+#: 목록이다 (요청서 「위험 도구」, ADR 0028). 게이트웨이의 이름 규칙(`delete_` · `remove_` ·
+#: `cancel_` 로 **시작**)은 우리 이름(`objects_delete` · `relation_remove` · `job_cancel`)에 안
+#: 걸린다.
+#:
+#: 차단은 게이트웨이가 **해석한 원래 이름**으로 보므로 인스턴스가
+#: 여럿이어도(`<id>_objects_delete`) 이 목록 하나로 덮인다. 사람이 고른 도구(직접 바인딩)는
+#: 막히지 않는다. 여기에 더하거나 빼면 요청서 틀(`docs/[참고] HWAX포탈_연동_요청서.md`)도 같이
+#: — 시험이 둘을 견준다. 더하는 기준은 「미리 보기 없이 바로 바꾸거나, apply 한 번에 여러 줄을
+#: 바꾸거나, 사라진 것을 되살릴 수 없는가」.
+DESTRUCTIVE_TOOLS = frozenset(
+    {
+        "objects_delete",  # 객체 삭제(여럿)
+        "object_merge",  # 둘을 하나로 — 하나가 지워진다
+        "object_restore",  # 지금 값을 이력의 그 값으로 덮는다
+        "attachment_remove",  # 첨부 삭제
+        "relation_remove",  # 관계 삭제
+        "ontology_delete",  # 정의(타입 · 속성 · 관계 종류) 삭제
+        "ontology_restore",  # 정의 전체를 그때로 되돌린다
+        "ontology_retype",  # 속성 종류 변경 — 모든 객체의 값을 바꾼다
+        "ontology_rename_option",  # 고를 값 이름 변경 — 모든 객체의 값을 바꾼다
+        "bulk_edit",  # 여러 객체의 한 칸을 한 값으로
+        "bulk_edit_undo",
+        "bundle_undo",  # 묶음으로 넣은 것을 걷어낸다
+        "job_apply",  # 계획(수천 줄)을 반영한다
+        "job_cancel",
+        "filestore_gc",  # 가리키는 곳 없는 파일을 지운다
+        "review_decide",  # 검토함 결정을 객체에 반영한다
+        "extension_call",  # 확장 API 를 그대로 부른다 — DELETE 도 된다
+    }
+)
+
+
 def _forward_headers(ctx: Context) -> dict[str, str]:
     """들어온 MCP HTTP 요청의 인증 헤더를 백엔드로 전달.
 
     MCP 는 **사용자의 토큰으로** 동작한다. 백엔드가 토큰 이름을 감사 기록에 남기므로
-    사람이 한 건지 기계가 한 건지는 거기서 갈린다."""
+    사람이 한 건지 기계가 한 건지는 거기서 갈린다.
+
+    **`Authorization` 만 넘긴다.** HWAX 게이트웨이가 사람별 호출에 함께 싣는 소속
+    (`X-Heax-User-Affiliation` · 증명 `X-Heax-Aff-Proof`)은 버린다 — 이 플랫폼은 무엇을 볼 수
+    있나를 부서와 권한으로 정하고 「같은 소속이면 읽기」 같은 공유를 두지 않는다. 받아 넘기면
+    언젠가 누가 그 머리를 믿는 코드를 쓰고, 그 머리는 게이트웨이 밖에서 아무나 적을 수 있다."""
     headers: dict[str, str] = {}
     req = getattr(getattr(ctx, "request_context", None), "request", None)
     if req is not None:
@@ -204,8 +243,52 @@ def _forward_headers(ctx: Context) -> dict[str, str]:
     return headers
 
 
+class BackendUnauthorized(Exception):
+    """백엔드가 **이 토큰을 거절했다**(401) — 도구 결과가 아니라 예외로 올린다.
+
+    HWAX 게이트웨이는 사람마다 그 사람의 위임 토큰(우리 `POST /api/auth/sso` 가 하루짜리로
+    낸다)을 12시간 들고 있다가, 도구 결과가 이 꼴일 때만 **새로 받아 한 번 다시 부른다**:
+
+        ^Error executing tool \\S+: (GET|POST|PUT|PATCH|DELETE) \\S+ → HTTP 401
+
+    FastMCP 는 도구에서 난 예외를 `Error executing tool <이름>: <예외 문구>` 로 감싸 오류
+    결과로 낸다 — 그래서 문구를 `<METHOD> <경로> → HTTP 401: <서버의 말>` 로 지으면 그 정규식에
+    맞는다. 401 을 다른 오류처럼 `{"error": "[AUTH-…] …"}` 결과로 돌려주던 때는 그 신호가 안
+    닿아, 회수된 토큰으로 12시간 동안 「토큰이 유효하지 않습니다」 만 받았을
+    것이다(게이트웨이가 ste 에서 겪은 일). 401 은 인증에서 끊긴 것이라 도구는 아무것도 안
+    했다 — 다시 불러도 두 번 실행되지 않는다.
+
+    게이트웨이를 안 거치는 사람(자기 토큰으로 직접)에게도 같은 문구가 간다 — 무엇을 부르다 왜
+    막혔는지가 그대로 읽힌다(토큰을 새로 만들면 된다).
+    """
+
+
+def _rejected(r: httpx.Response) -> BackendUnauthorized:
+    """`<METHOD> <경로> → HTTP 401: <서버의 말>` — 경로는 물음표 앞까지(게이트웨이의
+    `\\S+`)."""
+    try:
+        method = r.request.method
+        path = r.request.url.raw_path.decode("ascii", "replace").split("?", 1)[0]
+    except RuntimeError:  # 요청 없이 만든 응답(시험) — 실제 호출에는 늘 있다
+        method, path = "GET", "/"
+    said = "토큰이 없거나 유효하지 않습니다"
+    try:
+        body = r.json()
+    except ValueError:
+        body = None
+    error = body.get("error") if isinstance(body, dict) else None
+    if isinstance(error, dict):
+        said = f"[{error.get('code') or 401}] {error.get('message') or said}"
+    return BackendUnauthorized(f"{method} {path} → HTTP 401: {said}")
+
+
 def _unwrap(r: httpx.Response) -> Any:
-    """백엔드 응답 언래핑. 오류 봉투 {error: {code, message, details}} 면 {error,...}."""
+    """백엔드 응답 언래핑. 오류 봉투 {error: {code, message, details}} 면 {error,...}.
+
+    **401 만은 예외로 올린다**(`BackendUnauthorized`) — 게이트웨이가 토큰을 다시 받는
+    신호다."""
+    if r.status_code == 401:
+        raise _rejected(r)
     if r.status_code < 400 and not r.content:
         # 돌려줄 게 없는 성공(삭제 등). 그대로 흘리면 도구 결과가 **빈 문자열**이라
         # 모델은 성공했는지 알 수 없다 — 조용한 무동작과 구분이 안 된다.
@@ -2472,6 +2555,8 @@ async def rdf_schema(ctx: Context) -> str:
         response = await client.get(
             "/api/rdf/schema", params={"format": "ttl"}, headers=_forward_headers(ctx)
         )
+        if response.status_code == 401:
+            raise _rejected(response)  # 게이트웨이가 토큰을 다시 받는 신호(`_unwrap` 과 같다)
         response.raise_for_status()
         return response.text
 

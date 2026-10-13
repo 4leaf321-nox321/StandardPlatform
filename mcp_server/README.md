@@ -41,12 +41,44 @@ claude mcp list        # standardplatform: http://<host>:8042/mcp (HTTP) - ✔ C
 > `~/.claude.json` 에 저장되고 커밋되지 않는다. `--scope project`(`.mcp.json`)로
 > 두지 않는다.
 >
-> 토큰이 취소되면 도구가 `[APP-AUTH-0101] 토큰이 유효하지 않습니다.` 를 돌려준다 —
-> 그때 「내 정보」 에서 새로 발급해 `claude mcp add` 를 다시 하면 된다.
+> 토큰이 폐기되거나 만료되면 도구가 `GET /api/… → HTTP 401: [APP-AUTH-0101] 토큰이 유효하지
+> 않습니다.` 로 **실패한다**(결과가 아니라 오류 — 아래 「HWAX 게이트웨이를 거칠 때」) — 그때
+> 「내 정보」 에서 새로 발급해 `claude mcp add` 를 다시 하면 된다.
 
 **인증은 서버가 아니라 백엔드가 한다.** 이 서버는 들어온 `Authorization` 헤더를
 그대로 백엔드로 넘길 뿐이라, 같은 서버 하나를 여러 사람이 **각자 토큰으로** 쓴다
 (만능 토큰이 없다).
+
+## HWAX 게이트웨이를 거칠 때 (ADR 0028)
+
+HWAX 포털에 붙은 설치에서는 사람들의 Claude 가 **포털의 게이트웨이**
+(`https://hwax.sec.samsung.net/mcp-gw/mcp`, 포털 개인 토큰)에 붙고, 게이트웨이가 이 서버를
+`http://<서버>:<MCP 포트>/mcp` 로 부른다 — Report Archive 와 같은 길이다. 포털 nginx 에 `/<id>/mcp`
+경로는 없다. 사람이 이 설치의 토큰을 발급해 붙여 넣을 일도 없다:
+
+- **사람별 위임** — 게이트웨이가 그 사람마다 백엔드의 `POST /api/auth/sso`(공유 비밀
+  `HEAX_SSO_SECRET`)에서 **그 사람 명의의 액세스 토큰**(이름 「HWAX 게이트웨이(gateway)」, 하루)을
+  받아 `Authorization: Bearer` 로 싣는다. 이 서버는 지금처럼 그것을 백엔드에 넘길 뿐이다 — 권한 ·
+  부서 · 감사가 그 사람이고, 감사의 통로는 `hwax-gateway` 다.
+- **401 은 오류로 올린다** — 백엔드가 토큰을 거절하면 도구가 `<METHOD> <경로> → HTTP 401: <서버의
+  말>` 예외로 실패하고, FastMCP 가 그것을 `Error executing tool <이름>: …` 로 감싼다. 게이트웨이는
+  **그 모양일 때만** 위임 토큰을 새로 받아 한 번 다시 부른다(`_TOKEN_REJECTED`). 401 이 아닌 오류는
+  지금처럼 `{"error": "[코드] 서버의 말"}` 결과다(다시 부르면 같은 일이 두 번 돈다).
+- **도구 이름 앞에 `<id>_`** — 같은 틀의 인스턴스는 도구 이름이 전부 같아서, 게이트웨이는 겹친
+  이름에 백엔드 키(= slug)를 붙인다(`jajuverify_objects_list`). 인스턴스가 둘 이상이면 76개 전부,
+  하나뿐이어도 다른 앱과 겹치는 `search` 같은 것은 붙는다.
+- **바인딩 · Host 검사** — 게이트웨이가 닿게 `MCP_HOST=0.0.0.0`. `MCP_ALLOWED_HOSTS` 를 쓰면 게이트웨이가
+  부르는 주소를 **포트까지** 넣는다(`<서버 주소>:<MCP 포트>` — 이중화면 B 도). 없으면 421 `Invalid Host
+  header`. 비워 두면 Host 를 보지 않는다(사내망 — 인증은 백엔드가 한다).
+- **소속 머리는 버린다** — 게이트웨이가 함께 싣는 `X-Heax-User-Affiliation` · `X-Heax-Aff-Proof` 는
+  백엔드로 넘기지 않는다. 이 플랫폼은 보이는 것을 부서와 권한으로 정한다.
+- **위험 도구** — `server.py` 의 `DESTRUCTIVE_TOOLS`(지우기 · 되돌리기 · 덮어쓰기 · 멈추기 17개)를
+  게이트웨이의 범용 실행기 차단(`_INVOKE_DENY_EXACT`)에 넣어 달라고 요청한다 — 게이트웨이의 이름 규칙
+  (`delete_` 로 **시작**)에는 우리 이름이 안 걸린다. 목록을 고치면 요청서 틀(`docs/[참고]
+  HWAX포탈_연동_요청서.md`)도 같이 — 시험이 둘을 견준다.
+
+포털 쪽이 할 일은 인스턴스마다 `sudo APP_SLUG=<slug> ./deploy.sh hwax-request` 가 쓰는 요청서 한 장이다
+(운영 안내서 9절).
 
 ## 사용 안내는 서버가 준다 — 설치할 것 없음
 
@@ -173,6 +205,7 @@ cd .. && mcp_server/venv/bin/python -m pytest mcp_server/tests
 | --- | --- |
 | `ModuleNotFoundError: No module named 'mcp'` | venv 를 안 만들었거나 다른 python 으로 띄웠다. `./venv/bin/python server.py` |
 | `claude mcp list` 에서 ✘ Failed | 서버가 안 떠 있다. 이 폴더에서 `server.py` 를 먼저 띄운다 |
-| 도구가 `[APP-AUTH-0100]` | 헤더가 안 갔다. `claude mcp add` 에 `--header "Authorization: Bearer ..."` |
+| 도구가 `… → HTTP 401: [APP-AUTH-0100]` 로 실패 | 헤더가 안 갔다. `claude mcp add` 에 `--header "Authorization: Bearer ..."` |
+| 도구가 `… → HTTP 401: [APP-AUTH-0101]` 로 실패 | 토큰이 폐기 · 만료됐다. 「내 정보」 에서 새로 발급(게이트웨이로 붙었으면 게이트웨이가 스스로 다시 받는다 — 그래도 실패하면 그 사람이 승인된 계정이 없거나 정지) |
 | 도구가 `[APP-AUTH-0106] ... 범위가 없습니다` | 토큰 범위 부족. 「내 정보」 에서 범위를 넓혀 다시 발급 |
-| 421 `Invalid Host header` | 비-localhost 로 열었다. `MCP_ALLOWED_HOSTS` 를 지정하거나 비워 둔다(server.py 주석) |
+| 421 `Invalid Host header` | 비-localhost 로 열었다. `MCP_ALLOWED_HOSTS` 를 지정하거나 비워 둔다(server.py 주석) — HWAX 게이트웨이가 부르는 주소는 포트까지 |

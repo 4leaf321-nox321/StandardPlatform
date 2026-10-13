@@ -35,6 +35,12 @@ watchfiles==1.2.0
 rdflib==7.6.0
 owlrl==7.6.2
 pyparsing==3.3.2
+# HWAX 포털 로그인(ADR 0028)의 RS256 서명 확인 — PyJWT 가 RSA 공개 키를 읽으려면 cryptography 가
+# 있어야 한다. 그전에는 개발 venv 에만 다른 길로 깔려 있고 이 목록에 없어, 이미지(`pip install -r`)에는
+# 빠진다 — 그러면 운영에서만 모든 포털 로그인이 「키를 못 읽는다」 로 튕긴다. cffi · pycparser 는 그 의존.
+cryptography==50.0.1
+cffi==2.1.1
+pycparser==3.0
 # 분석(ADR 0014) — 와이블 최대우도 · 분포 함수 · 묶음. scipy 는 `metrics/recipes/_numeric.py`
 # 한 곳에서만 부른다(구조 시험). pandas · statsmodels 는 쓰지 않는다 — 번들이 커지고 쓸 것이 없다.
 numpy==2.5.3

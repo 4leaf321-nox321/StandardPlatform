@@ -10,29 +10,38 @@ localStorage 에 두면 XSS 한 번에 탈취된다.
 
 from __future__ import annotations
 
+import logging
 import uuid
+from typing import Any
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, Form, Request, Response
+from fastapi.responses import RedirectResponse
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.database import get_db
 from app.modules.accounts.models import User
-from app.modules.auth import services
+from app.modules.auth import delegation, portal, services
 from app.modules.auth.schemas import (
     ChangePasswordRequest,
+    DelegatedTokenOut,
+    DelegationRevokeOut,
     LoginRequest,
     LoginResponse,
     PatCreateRequest,
     PatCreateResponse,
     PatOut,
+    PortalStatusOut,
     ProfileUpdateRequest,
     TokenScopesOut,
     UserOut,
 )
 from app.shared import scopes
-from app.shared.auth import current_user
-from app.shared.errors import AppError, code
+from app.shared.access_log import USER_ID_SCOPE_KEY
+from app.shared.auth import current_user, require_system_admin
+from app.shared.errors import AppError, NotFound, code
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -97,6 +106,103 @@ def refresh(
     return LoginResponse(
         access_token=access, expires_in=expires_in, user=services.user_out(db, user)
     )
+
+
+# --- HWAX 포털 로그인(jwt-handoff, ADR 0028) -------------------------------------
+
+
+@router.post(
+    "/portal-callback",
+    status_code=303,
+    response_class=RedirectResponse,
+    responses={303: {"description": "SPA 루트(성공) 또는 로그인 화면(`?sso=<사유>`)으로"}},
+)
+def portal_callback(
+    request: Request,
+    token: str | None = Form(default=None),
+    db: Session = Depends(get_db),
+) -> RedirectResponse:
+    """포털이 보낸 launch 토큰(폼 필드 `token`)으로 로그인한다 — **브라우저가 오는 길이다.**
+
+    성공하면 refresh 쿠키를 심고 SPA 루트(`<접두어>/`)로 303 — SPA 는 기동 때 그 쿠키로 access
+    를 받는다(비밀번호 로그인 뒤 새로 고침한 것과 같은 길). 실패 · 승인 대기 · 정지는 로그인
+    화면(`<접두어>/login?sso=<사유>`)으로 303. **꺼져 있으면 404 JSON** — 포털 update-all 의
+    진단표가 가짜 토큰을 던져 그 숫자로 「앱 SSO 꺼짐」 을 가른다(켜져 있으면 가짜에도 303 =
+    정상).
+    """
+    settings = get_settings()
+    if not portal.enabled(settings):
+        raise NotFound(
+            code("AUTH", 9),
+            "포털 SSO 가 꺼져 있습니다 — 이 설치의 .env 에 PORTAL_JWKS_URL 이 없습니다.",
+        )
+    base = settings.base_path
+    try:
+        user, refresh_raw = portal.sign_in(db, token or "", request.headers.get("user-agent"))
+    except portal.PortalLoginError as failed:
+        # 승인 대기 · 정지는 사람이 할 일이 있는 정상적인 거절이고, 나머지는 살펴볼 일이다.
+        level = (
+            logging.INFO
+            if failed.reason in (portal.PENDING, portal.SUSPENDED, portal.DELETED)
+            else logging.WARNING
+        )
+        logger.log(level, "포털 로그인 거절(%s): %s", failed.reason, failed.detail)
+        return RedirectResponse(f"{base}/login?sso={failed.reason}", status_code=303)
+    # 접근 로그가 「누가」 를 알게 — 미들웨어는 인증보다 바깥이라 스스로 모른다.
+    request.scope[USER_ID_SCOPE_KEY] = user.id
+    response = RedirectResponse(f"{base}/", status_code=303)
+    _set_refresh_cookie(request, response, refresh_raw)
+    return response
+
+
+@router.get("/portal-callback", include_in_schema=False)
+def portal_callback_get() -> None:
+    """**GET 은 405.** 이 길은 포털의 숨은 폼이 POST 로 온다 — 주소창에 붙여 넣은 사람에게
+    SPA 의 「없는 엔드포인트」(404)를 주면 포털의 진단표가 그것을 「SSO 꺼짐」 으로 읽는다."""
+    raise AppError(
+        code("AUTH", 10),
+        "포털 로그인 콜백은 POST 로만 받습니다 — HWAX 포털의 타일이나 로그인 화면의 "
+        "단추로 여세요.",
+        status=405,
+    )
+
+
+@router.get("/portal-status", response_model=PortalStatusOut)
+def portal_status(
+    _: User = Depends(require_system_admin), db: Session = Depends(get_db)
+) -> PortalStatusOut:
+    """포털 로그인이 켜졌나 · 이 서버에서 포털의 공개 키가 닿나 · 게이트웨이 위임은 어떤가 —
+    시스템 관리자만."""
+    return portal.status(db, get_settings())
+
+
+# --- HWAX 게이트웨이의 사람별 위임(ADR 0028) --------------------------------------
+
+#: 거절은 사람이 읽을 한 줄(text/plain)이다 — 게이트웨이가 본문 앞 200자를 그 사람에게 그대로
+#: 보인다. 꺼짐만 404 JSON.
+_REFUSED: dict[int | str, dict[str, Any]] = {
+    400: {"description": "누구의 토큰인지 모른다(이메일 머리 없음) · client 모양 — 한 줄"},
+    401: {"description": "게이트웨이 비밀이 다르다 — 한 줄"},
+    403: {"description": "승인된 계정 없음 · 대기 · 정지 · 삭제 · 허용 주소 밖 — 한 줄"},
+    404: {"description": "위임 꺼짐(`HEAX_SSO_SECRET` 없음) — JSON"},
+}
+
+
+@router.post("/sso", response_model=DelegatedTokenOut, responses=_REFUSED)
+def gateway_sso(request: Request, db: Session = Depends(get_db)) -> DelegatedTokenOut:
+    """**HWAX 게이트웨이의 사람별 위임 발급** — 그 사람 명의의 개인 토큰(하루)을 내준다.
+
+    게이트웨이가 앱 포트로 직접 부른다(본문 없음). 머리: `X-Heax-Gateway-Secret` ·
+    `X-Hwax-Delegate-Email`(또는 `X-Heax-User-Email`) · `X-Heax-Client`. 같은 client 의 직전
+    토큰은 회수한다. 처음 보는 사람을 만들지 않는다 — 계약과 까닭은 `delegation.py`.
+    """
+    return delegation.issue(db, request, get_settings())
+
+
+@router.post("/sso/revoke", response_model=DelegationRevokeOut, responses=_REFUSED)
+def gateway_sso_revoke(request: Request, db: Session = Depends(get_db)) -> DelegationRevokeOut:
+    """그 사람의 그 client 위임 토큰을 끊는다(같은 머리). 모르는 사람이면 0."""
+    return delegation.revoke(db, request, get_settings())
 
 
 @router.post("/logout", status_code=204)

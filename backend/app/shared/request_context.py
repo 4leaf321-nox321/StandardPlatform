@@ -53,6 +53,15 @@ def get_actor_token() -> str | None:
     return (_actor.get() or {}).get("token")
 
 
+def set_actor_client(name: str) -> None:
+    """통로를 **서버가 정한다** — 포털 로그인(`hwax-portal`)처럼 요청 머리가 아니라 길 자체가
+    통로를 말할 때. 머리(`X-Client`)는 호출자가 스스로 밝히는 값이라 그런 길에서는 믿지 않는다.
+    dict 를 고치는 까닭은 `set_actor_token` 과 같다."""
+    holder = _actor.get()
+    if holder is not None:
+        holder["client"] = name[:40]
+
+
 def set_actor_token(name: str | None) -> None:
     """인증이 끝난 뒤 부른다 — 어느 토큰이 이 요청을 냈나.
 
