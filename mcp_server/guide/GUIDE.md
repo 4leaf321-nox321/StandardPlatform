@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-15a
+GUIDE_VERSION: 2026-10-15b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -90,6 +90,15 @@ GUIDE_VERSION: 2026-10-15a
   고쳐야 하는지 적혀 있다. 우회하지 말고 고쳐서 다시 부른다.
 - **권한은 토큰이 정한다.** `read` 만 있는 토큰으로는 쓰기가 거절된다 —
   사용자에게 범위(`objects:write`·`ontology:write`)를 알린다.
+- **위험 도구는 시스템 관리자만 쓴다** — 지우기 · 합치기 · 되돌리기 · 덮어쓰기 · 멈추기, 그리고
+  계획을 적용하는 것(`objects_delete` · `object_merge` · `object_restore` · `attachment_remove` ·
+  `relation_remove` · `ontology_delete` · `ontology_restore` · `ontology_retype` ·
+  `ontology_rename_option` · `bulk_edit` · `bulk_edit_undo` · `bundle_undo` · `job_apply` · `job_cancel` ·
+  `filestore_gc` · `review_decide` · `review_undo` · `config_delete` · `jobs_purge`, `extension_call` 의
+  쓰기). 화면에서는 부서 관리자도 하는 일이어도 **MCP 로는 미리 보기부터 막힌다.** `admin_only` 가 붙은
+  오류가 오면 사용자에게 화면에서 하거나 시스템 관리자에게 요청하라고 전하고, 다른 도구로 돌아가지
+  않는다(`object_update` 로 상태를 바꿔 지운 셈 치기 같은 것). `whoami` 의 `is_system_admin` 으로 미리
+  알 수 있다.
 - **이름은 해소하고 쓴다.** 참조 칸을 채우기 전에, 관계를 잇기 전에, 「그 부품」 이
   무엇인지 정하기 전에 `object_resolve`. 목록에서 첫 줄을 집으면 **틀린 줄도 첫 줄이면
   집힌다** — 그렇게 들어간 값은 사람 눈에 맞는 값처럼 보여서 아무도 안 고친다.
@@ -1236,6 +1245,8 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 
 고치는 도구는 **전부 미리 보기가 기본**이다(`apply=false` — 무엇이 되는지만). 사용자에게 보여 주고
 판단을 받은 뒤 같은 인자에 `apply=true`. 권한은 서버가 본다 — 대부분 **시스템 관리자**만.
+지우기(`config_delete`) · 되돌리기(`review_undo`) · 정리(`jobs_purge`)는 위험 도구라 MCP 로는 늘
+시스템 관리자만이다.
 
 | 하려는 것 | 도구 | 지킬 것 |
 | --- | --- | --- |

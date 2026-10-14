@@ -1037,9 +1037,12 @@ def test_이력의_그_값으로_되돌리고_상태도_고친다(bot: Bot) -> N
     assert (retired["status"], retired["key"]) == ("deprecated", "B-1")
 
 
-def test_권한은_화면과_같다_부서_관리자는_자기_부서_객체만_정의는_못_지운다(
+def test_권한은_화면을_따르되_위험_도구는_시스템_관리자만_쓴다(
     client: TestClient, admin: Signed, manager: Signed, bot: Bot
 ) -> None:
+    """고치기는 화면의 권한 그대로(자기 부서 것만), **위험 도구는 MCP 로는 시스템
+    관리자만**(2026-10-15 사용자 결정) — 화면에서는 부서 관리자도 자기 것을 지운다.
+    MCP 가 좁힐 뿐 서버의 권한은 그대로다."""
     kind = _part_type(bot)
     made = client.post(
         "/api/auth/tokens",
@@ -1053,15 +1056,31 @@ def test_권한은_화면과_같다_부서_관리자는_자기_부서_객체만_
     )
     shared = bot.call(server.object_create, kind, label="전역 볼트")
 
-    assert hand.call(server.objects_delete, kind, [mine["id"]], apply=True)["applied"] is True
-    # 전역 객체는 보이지만 고치는 것은 시스템 관리자뿐이다 — 화면과 같은 이유로 그 줄이 막힌다.
-    refused = hand.call(server.objects_delete, kind, [shared["id"]], apply=True)
-    assert refused["applied"] is False and refused["rows"][0]["action"] == "error"
-    assert [one["label"] for one in bot.call(server.objects_list, kind)["items"]] == [
-        "전역 볼트"
-    ]
-    with pytest.raises(ToolError, match="AUTH-0103"):
+    assert (
+        hand.call(server.object_update, kind, mine["id"], label="내 볼트")["label"]
+        == "내 볼트"
+    )
+    # 전역 객체는 보이지만 고치는 것은 시스템 관리자뿐이다 — 화면과 같은 이유로 막힌다.
+    with pytest.raises(ToolError, match="OBJECTS-0016"):
+        hand.call(server.object_update, kind, shared["id"], label="남의 볼트")
+
+    # 위험 도구는 미리 보기부터 막는다 — 자기 부서 것이어도, 정의여도.
+    for extra in ({}, {"apply": True}):
+        with pytest.raises(ToolError, match="시스템 관리자"):
+            hand.call(server.objects_delete, kind, [mine["id"]], **extra)
+    with pytest.raises(ToolError, match="시스템 관리자"):
+        hand.call(server.object_merge, kind, mine["id"], shared["id"], apply=True)
+    with pytest.raises(ToolError, match="시스템 관리자"):
         hand.call(server.ontology_delete, "property", kind, key="w")
+    assert len(bot.call(server.objects_list, kind)["items"]) == 2
+
+    # 같은 사람이 화면(세션)에서는 그대로 지운다.
+    gone = client.delete(f"/api/objects/{kind}/{mine['id']}", headers=manager.headers)
+    assert gone.status_code == 204, gone.text
+    # 시스템 관리자의 토큰은 그대로 쓴다.
+    done = bot.call(server.objects_delete, kind, [shared["id"]], apply=True)
+    assert done["applied"] is True
+    assert bot.call(server.objects_list, kind)["items"] == []
 
 
 def test_표에서_기록_타입을_만들고_축에_잇는다(bot: Bot) -> None:

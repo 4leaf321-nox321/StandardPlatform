@@ -131,11 +131,18 @@ def _ctx(authorization: str | None) -> Any:
     return SimpleNamespace(request_context=SimpleNamespace(request=request))
 
 
-def _serve(handler: Any) -> list[httpx.Request]:
-    """가짜 백엔드. 받은 요청을 모아 두고 handler 의 응답을 돌려준다."""
+def _serve(handler: Any, *, admin: bool | None = True) -> list[httpx.Request]:
+    """가짜 백엔드. 받은 요청을 모아 두고 handler 의 응답을 돌려준다.
+
+    위험 도구는 부를 때마다 `GET /api/auth/me` 로 시스템 관리자인지 먼저 묻는다 — 그
+    물음은 `admin` 으로 답하고 `seen` 에 넣지 않는다(시험마다 첫 요청이 그것이면 시험이
+    도구가 하는 일을 못 본다). `admin=None` 이면 그 물음도 handler 가 받는다.
+    """
     seen: list[httpx.Request] = []
 
     def respond(request: httpx.Request) -> httpx.Response:
+        if admin is not None and request.url.path == "/api/auth/me":
+            return httpx.Response(200, json={"is_system_admin": admin})
         seen.append(request)
         return handler(request)
 
@@ -953,7 +960,7 @@ def test_whoami_와_안내서는_지금의_플랫폼을_싣는다() -> None:
         assert request.url.path == "/api/server/profile/live"
         return httpx.Response(200, json=LIVE)
 
-    _serve(respond)
+    _serve(respond, admin=None)
     me = asyncio.run(server.whoami(_ctx("Bearer t")))
     assert me["home_workspace_slug"] == "cae" and me["platform"]["facts"]
     guide = asyncio.run(server.get_guide(_ctx("Bearer t")))
@@ -1478,3 +1485,47 @@ def test_서버의_느린_곳은_종류마다_제_자리로() -> None:
     assert seen[-1].url.path == "/api/server/performance/requests/cases"
     assert seen[-1].url.params["route"] == "/api/x"
     assert "error" in asyncio.run(server.server_status(_ctx("Bearer t"), performance="disk"))
+
+
+def test_위험_도구는_시스템_관리자만_쓴다() -> None:
+    """2026-10-15 사용자 결정 — 서버의 권한(부서 관리자도 자기 부서 객체를 지운다)보다
+    좁힌다. 막을 때는 **백엔드에 아무것도 안 보낸다**(미리 보기도) — 관리자인지 묻는 한
+    번뿐이다. 확장의 읽기(GET)는 위험 도구 이름이어도 그대로 열린다."""
+    ctx = _ctx("Bearer t")
+    seen = _serve(lambda _r: httpx.Response(200, json={"rows": []}), admin=False)
+    for call in (
+        server.objects_delete(ctx, "part", ["1"]),
+        server.config_delete(ctx, "datasource", slug="erp"),
+        server.jobs_purge(ctx),
+        server.job_cancel(ctx, "j1"),
+        server.extension_call(ctx, "caegroup", "dt/pairs", method="POST", body={}),
+    ):
+        got = asyncio.run(call)
+        assert got["admin_only"] is True and "시스템 관리자" in got["error"], got
+    assert seen == []
+
+    got = asyncio.run(server.extension_call(ctx, "caegroup", "dt/pairs"))
+    assert got == {"rows": []} and [r.method for r in seen] == ["GET"]
+    seen.clear()
+    assert asyncio.run(server.objects_summary(ctx, "part")) == {"rows": []}
+    assert len(seen) == 1  # 위험 도구가 아니면 묻지도 않는다
+
+    # 관리자인지 못 물으면 그 오류 그대로 — 열지 않는다. 401 은 다른 도구처럼 올린다
+    # (게이트웨이가 토큰을 다시 받는 신호).
+    seen = _serve(
+        lambda _r: httpx.Response(503, json={"error": {"code": "X", "message": "점검"}}),
+        admin=None,
+    )
+    got = asyncio.run(server.objects_delete(ctx, "part", ["1"], apply=True))
+    assert "error" in got and "admin_only" not in got
+    assert [r.url.path for r in seen] == ["/api/auth/me"]
+    server._TRANSPORT = httpx.MockTransport(
+        lambda _r: httpx.Response(401, json={"error": {"code": "X", "message": "만료"}})
+    )
+    with pytest.raises(server.BackendUnauthorized):
+        asyncio.run(server.objects_delete(ctx, "part", ["1"], apply=True))
+
+    # 시스템 관리자면 그대로 — 이름이 남아 FastMCP 가 같은 인자표를 본다.
+    seen = _serve(lambda _r: httpx.Response(200, json={"rows": []}), admin=True)
+    assert asyncio.run(server.jobs_purge(ctx))["applied"] is False
+    assert server.objects_delete.__name__ == "objects_delete"

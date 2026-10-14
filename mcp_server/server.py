@@ -4,7 +4,8 @@
 별도 venv** 로 돌리고, 백엔드와는 **REST API** 로만 통신한다. 사용자의 개인 액세스
 토큰(Authorization)을 그대로 백엔드에 전달해 **그 토큰의 권한·범위**로 동작한다
 (만능 토큰 X). 검증도 권한도 서버가 한다 — 여기에 규칙을 두면 「MCP 로는 되는데
-화면에서는 안 되는」 상태가 생기고, 그때 어느 쪽이 맞는지 알 방법이 없다.
+화면에서는 안 되는」 상태가 생기고, 그때 어느 쪽이 맞는지 알 방법이 없다. 하나 있는
+예외는 **좁히는 쪽**이다 — 위험 도구(`DESTRUCTIVE_TOOLS`)는 시스템 관리자만(ADR 0030).
 
 ## 왜 도구가 타입마다 있지 않은가
 
@@ -29,6 +30,7 @@ import contextlib
 import contextvars
 import functools
 import hashlib
+import inspect
 import json
 import os
 import re
@@ -93,7 +95,9 @@ BASE_INSTRUCTIONS = (
     "3. **바꾸거나 지울 때는 미리 보기 먼저.** `ontology_import` · `ontology_delete` · "
     "`objects_delete` 같은 도구를 기본값(apply=false)으로 불러 계획과 경고를 사람에게 "
     "보여 주고, 판단을 받은 뒤에 apply=true 로 부른다. 계획이 막는 것(`blocking` · "
-    "`errors`)은 우회하지 않는다 — 먼저 할 일을 사람에게 말한다."
+    "`errors`)은 우회하지 않는다 — 먼저 할 일을 사람에게 말한다. 지우기 · 합치기 · "
+    "되돌리기 · 계획 적용(`job_apply`) 같은 **위험 도구는 시스템 관리자만** 쓴다(미리 "
+    "보기도) — `admin_only` 오류면 화면에서 하거나 시스템 관리자에게 요청하라고 전한다."
 )
 
 mcp = FastMCP(
@@ -180,13 +184,53 @@ def tool() -> Any:
     """`@tool()` 과 같되 자취를 남긴다 — 등록과 측정을 한 자리에서 정한다.
 
     도구마다 따로 감싸면 새 도구를 넣은 사람이 그 한 줄을 잊고, 그러면 **그 도구만
-    측정에서 빠진다** — 빠진 줄은 「안 쓴 도구」 처럼 보인다.
+    측정에서 빠진다** — 빠진 줄은 「안 쓴 도구」 처럼 보인다. **위험 도구의 관리자 확인**
+    (`_admin_only`)도 같은 이유로 여기서 건다 — 새 위험 도구를 목록에 넣는 것만으로 걸린다.
     """
 
     def wrap(fn: Any) -> Any:
-        return mcp.tool()(_traced(fn))
+        return mcp.tool()(_traced(_admin_only(fn)))
 
     return wrap
+
+
+ADMIN_ONLY_MESSAGE = (
+    "`{name}` 은 위험 도구(지우기 · 되돌리기 · 덮어쓰기 · 멈추기)라 MCP 로는 "
+    "**시스템 관리자만** 씁니다 — 미리 보기도 마찬가지입니다. 사용자에게 화면에서 "
+    "하거나 시스템 관리자에게 요청하라고 전합니다(다른 도구로 우회하지 않습니다)."
+)
+
+
+def _admin_only(fn: Any) -> Any:
+    """**위험 도구는 시스템 관리자만**(ADR 0030) — `DESTRUCTIVE_TOOLS` 의 도구.
+
+    이 파일의 원칙은 「권한은 서버가 본다」 다 — 그런데 서버의 권한은 화면의 권한이라
+    부서 관리자도 자기 부서 객체를 지우고 합친다. 사람이 화면에서 누르는 것과 AI 가 기계
+    속도로 부르는 것은 무게가 달라서, **MCP 로는 그보다 좁힌다**(넓히지는 않는다 — 「MCP
+    로는 되는데 화면에서는 안 되는」 상태는 여전히 안 생긴다). 확인은 부를 때마다
+    `GET /api/auth/me` 한 번 — 토큰의 주인이 그 사이 관리자에서 빠지면 바로 막힌다.
+
+    `extension_call` 은 확장의 **읽기(GET)** 에도 쓰이므로 읽기는 그대로 두고 쓰기만 막는다.
+    """
+    if fn.__name__ not in DESTRUCTIVE_TOOLS:
+        return fn
+    signature = inspect.signature(fn)
+
+    @functools.wraps(fn)
+    async def inner(ctx: Any, *args: Any, **kwargs: Any) -> Any:
+        if fn.__name__ == "extension_call":
+            bound = signature.bind(ctx, *args, **kwargs)
+            bound.apply_defaults()
+            if str(bound.arguments.get("method") or "GET").upper() == "GET":
+                return await fn(ctx, *args, **kwargs)
+        me = await _get(ctx, "/api/auth/me")
+        if isinstance(me, dict) and "error" in me:
+            return me
+        if not (isinstance(me, dict) and me.get("is_system_admin")):
+            return {"error": ADMIN_ONLY_MESSAGE.format(name=fn.__name__), "admin_only": True}
+        return await fn(ctx, *args, **kwargs)
+
+    return inner
 
 
 #: **한 번의 잘못 부름이 곧 지움 · 덮어쓰기 · 되돌리기 · 멈춤이 되는 도구** — HWAX 게이트웨이에
@@ -200,6 +244,9 @@ def tool() -> Any:
 #: 막히지 않는다. 여기에 더하거나 빼면 요청서 틀(`docs/[참고] HWAX포탈_연동_요청서.md`)도 같이
 #: — 시험이 둘을 견준다. 더하는 기준은 「미리 보기 없이 바로 바꾸거나, apply 한 번에 여러 줄을
 #: 바꾸거나, 사라진 것을 되살릴 수 없는가」.
+#:
+#: **이 목록의 도구는 MCP 로는 시스템 관리자만 쓴다**(`_admin_only`, ADR 0030) — 게이트웨이
+#: 차단과 별개로, 사람이 직접 고른 도구(직접 바인딩)여도 그렇다.
 DESTRUCTIVE_TOOLS = frozenset(
     {
         "objects_delete",  # 객체 삭제(여럿)

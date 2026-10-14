@@ -49,6 +49,13 @@ claude mcp list        # standardplatform: http://<host>:8042/mcp (HTTP) - ✔ C
 그대로 백엔드로 넘길 뿐이라, 같은 서버 하나를 여러 사람이 **각자 토큰으로** 쓴다
 (만능 토큰이 없다).
 
+**위험 도구는 시스템 관리자만.** 권한은 백엔드가 보되, `DESTRUCTIVE_TOOLS`(지우기 · 합치기 ·
+되돌리기 · 덮어쓰기 · 멈추기 · 계획 적용 `job_apply` 등 20개)는 MCP 가 한 겹 더 좁힌다 — 부를 때마다
+`GET /api/auth/me` 로 시스템 관리자인지 묻고, 아니면 백엔드에 아무것도 안 보내고
+`{"error": …, "admin_only": true}` 를 돌려준다(미리 보기도). 화면에서는 부서 관리자도 자기 부서 것을
+지우지만, AI 가 기계 속도로 부르는 것은 무게가 달라서다(ADR 0030). `extension_call` 은 읽기(GET)만
+그대로 열린다.
+
 ## HWAX 게이트웨이를 거칠 때 (ADR 0028)
 
 HWAX 포털에 붙은 설치에서는 사람들의 Claude 가 **포털의 게이트웨이**
@@ -75,7 +82,8 @@ HWAX 포털에 붙은 설치에서는 사람들의 Claude 가 **포털의 게이
 - **위험 도구** — `server.py` 의 `DESTRUCTIVE_TOOLS`(지우기 · 되돌리기 · 덮어쓰기 · 멈추기 20개)를
   게이트웨이의 범용 실행기 차단(`_INVOKE_DENY_EXACT`)에 넣어 달라고 요청한다 — 게이트웨이의 이름 규칙
   (`delete_` 로 **시작**)에는 우리 이름이 안 걸린다. 목록을 고치면 요청서 틀(`docs/[참고]
-  HWAX포탈_연동_요청서.md`)도 같이 — 시험이 둘을 견준다.
+  HWAX포탈_연동_요청서.md`)도 같이 — 시험이 둘을 견준다. 이 20개는 **MCP 로는 시스템 관리자만** 쓴다
+  (위 「위험 도구는 시스템 관리자만」) — 게이트웨이 차단과 별개로, 직접 바인딩이어도.
 
 포털 쪽이 할 일은 인스턴스마다 `sudo APP_SLUG=<slug> ./deploy.sh hwax-request` 가 쓰는 요청서 한 장이다
 (운영 안내서 9절).
@@ -168,6 +176,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | 해소 강제 | 이름이 하나로 안 정해지면 **판정을 준다** | `object_resolve` |
 | 모름·빈 결과 구분 | 0건이 「없어서」 인지 「안 보여서」 인지 「조건이 좁아서」 인지 | `objects_list` 의 `diagnosis` |
 | 쓰기 방어 | 이름이 여럿에 맞으면 **거절한다** | 백엔드(`bulk.py` 의 참조 풀이) |
+| 위험 도구 | 지우기 · 되돌리기 · 계획 적용은 **시스템 관리자만**(미리 보기도) | `server.py` 의 `_admin_only` |
 | 못 찾은 말 | 아무것도 못 찾은 이름을 모아 사람이 별칭으로 붙이면 **다음부터 찾힌다** | `alias_candidates` · `alias_candidate_apply` |
 | 측정 | 실제로 덜 헤매게 됐는지 | `eval/score.py` |
 
