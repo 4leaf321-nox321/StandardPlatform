@@ -218,6 +218,9 @@ DESTRUCTIVE_TOOLS = frozenset(
         "job_cancel",
         "filestore_gc",  # 가리키는 곳 없는 파일을 지운다
         "review_decide",  # 검토함 결정을 객체에 반영한다
+        "review_undo",  # 검토함 묶음을 되돌린다
+        "config_delete",  # 지표 · 경보 · 데이터 소스 · 뷰 · 공지 · 부서 삭제
+        "jobs_purge",  # 작업 파일 · 끝난 작업 기록 삭제
         "extension_call",  # 확장 API 를 그대로 부른다 — DELETE 도 된다
     }
 )
@@ -490,7 +493,7 @@ async def _post(
     ctx: Context,
     path: str,
     json_body: Any,
-    params: dict[str, Any] | None = None,
+    params: dict[str, Any] | list[tuple[str, Any]] | None = None,
 ) -> Any:
     async with _client(120) as client:
         return _unwrap(
@@ -654,6 +657,7 @@ _GUIDE_TOPICS = (
     "metrics",
     "reports",
     "platforms",
+    "admin",
 )
 
 
@@ -700,6 +704,7 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
       - `extensions` 이 설치에만 있는 기능(확장) — 무엇을 부를 수 있나
       - `reports` 보고서 기록 — RA 에서 쌓인 보고서에 묻기
       - `platforms` 같은 도구를 가진 플랫폼이 여럿일 때 — 어디에 물을지 · 자기소개
+      - `admin` 운영 · 설정 — 코어 공개 현황 · 부서 · 뷰 · 지켜보기 · 서버 · 지우기
 
     한 번에 다 받지 마라 — 필요한 주제만 받는 게 싸다."""
     version, secs = _guide_sections()
@@ -2418,12 +2423,24 @@ async def job_status(ctx: Context, job_id: str, wait_seconds: int = 20) -> Any:
 
 
 @tool()
-async def job_apply(ctx: Context, job_id: str, wait_seconds: int = 20) -> Any:
+async def job_apply(
+    ctx: Context,
+    job_id: str | None = None,
+    wait_seconds: int = 20,
+    job_ids: list[str] | None = None,
+) -> Any:
     """계획을 **사람이 확인한 뒤** 적용한다 — 같은 파일 · 같은 지문으로 적용 작업을 만든다.
 
     미리 본 뒤에 누군가 그 사이에 같은 것을 바꿨으면 서버가 거절한다(「미리 본 것과
     달라졌습니다」) — 그러면 다시 미리 본다. 오류가 있는 계획은 적용 작업 자체가 안 만들어진다.
-    **사용자의 판단 없이 부르지 않는다.**"""
+    **사용자의 판단 없이 부르지 않는다.**
+
+    `job_ids` 로 **여러 계획을 한 번에** — 줄마다 결과(`status` · `message` · 적용 작업
+    `job_id`)가 온다. 하나가 거절돼도 나머지는 간다 — 거절된 줄을 사용자에게 전한다."""
+    if job_ids:
+        return await _post(ctx, "/api/jobs/apply", {"ids": list(job_ids)})
+    if not job_id:
+        return {"error": "job_id 또는 job_ids 를 줍니다."}
     job = await _post(ctx, f"/api/jobs/{job_id}/apply", None)
     return await _wait_job(ctx, job, float(wait_seconds))
 
@@ -2460,10 +2477,17 @@ async def jobs_list(
 
 
 @tool()
-async def job_cancel(ctx: Context, job_id: str) -> Any:
+async def job_cancel(
+    ctx: Context, job_id: str | None = None, job_ids: list[str] | None = None
+) -> Any:
     """작업을 **멈춘다** — 줄에서 기다리는 것은 바로, 도는 것은 단계 사이에서 멈춘다(그때까지
     커밋한 것은 남는다 — 지표는 다 센 지표까지). 시킨 사람만(시스템 관리자는 모두). 이미 끝난
-    작업은 거절된다. **사용자가 멈추라고 한 것만** 멈춘다."""
+    작업은 거절된다. **사용자가 멈추라고 한 것만** 멈춘다. `job_ids` 로 여럿을 한 번에(줄마다
+    결과)."""
+    if job_ids:
+        return await _post(ctx, "/api/jobs/cancel", {"ids": list(job_ids)})
+    if not job_id:
+        return {"error": "job_id 또는 job_ids 를 줍니다."}
     job = await _post(ctx, f"/api/jobs/{job_id}/cancel", None)
     return _job_view(job)
 
@@ -2482,11 +2506,29 @@ async def filestore_gc(ctx: Context, wait_seconds: int = 20) -> Any:
 # 데이터 소스 — 바깥 시스템(OData)에서 읽어 채우기. 정의는 화면에서, 돌리는 것은 여기서도.
 # --------------------------------------------------------------------------- #
 @tool()
-async def datasources_list(ctx: Context) -> Any:
+async def datasources_list(
+    ctx: Context, slug: str | None = None, suggest: bool = False, boards: bool = False
+) -> Any:
     """정의된 **데이터 소스**(OData · REST · 파일 폴더 · 다른 플랫폼 → 타입) 목록 — 어느 표를
     어느 타입에 넣는지, 주기, 마지막 결과. 시스템 관리자 토큰이어야 보인다. 실패 이유 · 지난
-    결과는 `datasource_runs`, 칸 대응이 맞는지는 `datasource_preview`."""
-    return await _get(ctx, "/api/datasources")
+    결과는 `datasource_runs`, 칸 대응이 맞는지는 `datasource_preview`.
+
+    `slug` 를 주면 **그 소스 하나**(주소 · 대상 표 · 칸 대응 · 주기 · 인증 방식 — 비밀은
+    `has_secret` 로만). 덧붙여:
+    - `suggest=True` — 다른 플랫폼(`sp_core`) 소스면 상대 카탈로그를 읽어 **칸 대응 초안**을
+      만든다(저장 안 함 — 고쳐서 `datasource_save` 의 `fields.mapping` 으로).
+    - `boards=True` — RA 보고서 소스면 RA 의 조직(게시판) 트리 — 받을 게시판을 고를 때. 만들기
+      · 고치기는 `datasource_save`, 지우기는 `config_delete(kind="datasource")`."""
+    if slug is None:
+        return await _get(ctx, "/api/datasources")
+    out: dict[str, Any] = {"source": await _get(ctx, f"/api/datasources/{slug}")}
+    if _failed(out["source"]):
+        return out["source"]
+    if suggest:
+        out["suggest"] = await _post(ctx, f"/api/datasources/{slug}/core-suggest", None)
+    if boards:
+        out["boards"] = await _get(ctx, f"/api/datasources/{slug}/ra-boards")
+    return out
 
 
 @tool()
@@ -2990,14 +3032,23 @@ async def metric_analyze(
 
 
 @tool()
-async def metric_alerts(ctx: Context, slug: str | None = None, limit: int = 20) -> Any:
+async def metric_alerts(
+    ctx: Context,
+    slug: str | None = None,
+    limit: int = 20,
+    alert_id: str | None = None,
+    check: bool = False,
+) -> Any:
     """**내 경보와 최근 발생** — 「요즘 무엇이 울렸나」 · 「내가 지켜보는 게 뭐였지」
     (ADR 0016).
 
-    경보는 사람이 화면의 「분석」 탭에서 「경보 저장」 으로 만든다 — 저장한 분석(순차 검정 ·
-    관리도 · 변화점)을 지표를 다시 셀 때마다 **그 사람의 눈으로** 돌려, 처음 보는 결론만 그
-    사람에게 알린다. 이 도구는 **읽기만** 한다(만들기 · 끄기는 화면에서 — 인자를 눈으로 보고
-    저장하게).
+    경보는 저장한 분석(순차 검정 · 관리도 · 변화점)을 지표를 다시 셀 때마다 **그 사람의
+    눈으로** 돌려, 처음 보는 결론만 그 사람에게 알린다. 이 도구는 **읽기만** 한다 — 걸기 · 이름
+    · 켜고 끄기는 `metric_alert_save`, 지우기는 `config_delete(kind="metric_alert")`.
+
+    `slug` 와 `alert_id` 를 주면 **그 경보 하나의 발생**(처음부터 있던 것도 표시와 함께),
+    `check=True` 면 **지금 확인** — 지금 셀에서 보이는 결론과 그중 아직 안 알린 것(적지도
+    알리지도 않는다).
 
     `slug` 를 주면 그 지표에 건 내 경보(`alerts[]` — 이름 · 분석 · 인자 · 켜짐 · 마지막 확인 ·
     실패 이유)와 그 지표의 발생만, 비우면 내 모든 경보의 최근 발생 `limit` 개(새것부터).
@@ -3009,6 +3060,16 @@ async def metric_alerts(ctx: Context, slug: str | None = None, limit: int = 20) 
     **옮길 때 규칙.** 발생은 「그때 처음 본 결론」 이지 원인이 아니다 — 관리도 신호는 조사할
     곳, 순차 검정 「나쁨」 은 정한 배수 쪽이라는 판정, 변화점의 「잠정」 은 잠정이다. 지금도
     그런지는 `metric_analyze` 로 본다."""
+    if alert_id is not None:
+        if not slug:
+            return {"error": "alert_id 를 주면 그 경보의 지표 slug 도 줍니다."}
+        if check:
+            return await _post(ctx, f"/api/metrics/{slug}/alerts/{alert_id}/check", None)
+        return await _get(
+            ctx,
+            f"/api/metrics/{slug}/alerts/{alert_id}/events",
+            params=[("limit", str(max(1, min(limit, 200))))],
+        )
     events = await _get(
         ctx,
         "/api/metrics/alerts/events",
@@ -3193,6 +3254,569 @@ async def _patch_with_params(
                 path, json=json_body, params=params, headers=_forward_headers(ctx)
             )
         )
+
+
+# --------------------------------------------------------------------------- #
+# 운영 · 설정 — 화면의 관리 기능을 AI 도 쓰게(2026-10-15)
+#
+# 도메인마다 **「읽기 하나 · 고치기 하나」** 로 묶고, 지우기는 `config_delete` 하나로 모은다
+# (`ontology_delete` 와 같은 모양). 기능마다 도구를 내면 목록이 두 배가 되고, 목록이 길어질수록
+# 모델은 엉뚱한 것을 고른다 — 이 파일 머리의 규칙이다. 고치는 도구는 **미리 보기가 기본**이다
+# (`apply=False` — 무엇이 되는지만, 사람의 판단 뒤 `apply=True`).
+#
+# **읽기만 하는 것** — 부서 · 공지 · 웹훅 · 서버. 그 쓰기(부서 만들기 · 옮기기 · 통폐합 ·
+# 지우기, 공지 올리기 · 지우기, 웹훅 다시 보내기, 확장 켜기)는 **토큰에 안 열린다** — 「계정 ·
+# 부서 · 서버 관리는 어느 범위로도 안 열린다」(`auth/delegation.py`, `shared/scopes.py` 의
+# 「모르는 것은 막는다」). 그 원칙을 MCP 때문에 넓히지 않는다(2026-10-15 — 만들어 진짜 앱에
+# 붙여 보니 그 자리가 403 「화면에서 하세요」 였다).
+#
+# **넣지 않은 것**(보안 · 사람 전용) — 로그인 · 토큰 · 계정, 부서 구성원 · 역할, 웹훅 등록 ·
+# 수정 · 삭제, 온톨로지 초기화, 접근 기록(사람의 열람 기록), 데이터 소스의 인증 비밀, 알림
+# 읽음(사람이 본 것으로 둔다), 파일 내려받기 · 사진 묶음 올리기(바이트는 모델을 거치지 않는다 —
+# 내보내기는 작업만 시작하고 파일은 화면에서 받는다).
+# --------------------------------------------------------------------------- #
+
+
+def _failed(found: Any) -> bool:
+    """백엔드가 거절했나 — `_unwrap` 의 오류 봉투."""
+    return isinstance(found, dict) and "error" in found
+
+
+def _preview(would: Any, *, current: Any = None, note: str = "") -> dict[str, Any]:
+    """미리 보기의 모양 — **아직 아무것도 안 바뀌었다**는 말과 다음 할 일을 함께."""
+    out: dict[str, Any] = {"applied": False, "would": would}
+    if current is not None:
+        out["current"] = current
+    out["next"] = (f"{note} " if note else "") + (
+        "아직 아무것도 안 바뀌었다. 사용자에게 보여 주고 판단을 받은 뒤 같은 인자에 "
+        "apply=true 로 다시 부른다."
+    )
+    return out
+
+
+def _pick(rows: Any, key: str, value: str) -> Any:
+    """목록에서 하나 — 없으면 오류 봉투(그 말이 곧 사람에게 전할 말이다)."""
+    if _failed(rows):
+        return rows
+    for one in rows if isinstance(rows, list) else []:
+        if str(one.get(key)) == str(value):
+            return one
+    return {
+        "error": f"{key}={value} 인 것을 찾지 못했습니다 — 목록을 먼저 읽어 값을 확인합니다."
+    }
+
+
+@tool()
+async def metric_alert_save(
+    ctx: Context,
+    slug: str,
+    name: str | None = None,
+    recipe: str | None = None,
+    params: dict[str, Any] | None = None,
+    alert_id: str | None = None,
+    is_active: bool | None = None,
+    apply: bool = False,
+) -> Any:
+    """**경보를 건다 · 고친다** — 저장한 분석을 지표를 다시 셀 때마다 **내 눈으로** 돌려, 처음
+    보는 결론만 나에게 알린다(ADR 0016). 「A60 이 전작보다 나빠지면 알려 줘」.
+
+    - **새로 걸기** — `alert_id` 없이 `name` · `recipe`(`sprt` 순차 검정 · `control` 관리도 ·
+      `changes` 변화점) · `params`. `params` 는 `metric_analyze` 의 `options` 를 **분석 경로의
+      쿼리 모양 그대로**(값은 글자) 쓰고, 거르기는 `d.<기준>` 키로 — 예: `{"reference": "A50",
+      "d.base_model": "A60"}`. 경보만의 인자: `recent`(최근 몇 기간의 결론만) ·
+      `launched_within` · `notify_not_worse`. 미리 보기(`apply=False`)는 그 인자로 **지금
+      분석을 한 번 돌려** 무엇이 보일지 보여 준다 — 저장하면 지금 있는 결론은 「처음부터 있던
+      것」 으로 적고 알리지 않는다(새로 생기는 것만 알린다).
+    - **고치기** — `alert_id` 와 `name` · `is_active`(끄기 · 켜기)만. **인자는 못 바꾼다** —
+      바꾸면 지난 발생이 다른 물음의 것이 된다. 새로 걸고 옛 것은
+      `config_delete(kind="metric_alert")`.
+
+    경보는 그것을 건 사람의 것이다(알림도 그 사람에게). 지금 건 경보와 발생은
+    `metric_alerts`."""
+    if alert_id is not None:
+        if recipe is not None or params is not None:
+            return {
+                "error": "경보의 인자(recipe · params)는 못 바꿉니다 — 새로 걸고 옛 경보는 "
+                "config_delete(kind='metric_alert') 로 지웁니다."
+            }
+        body = {key: value for key, value in (("name", name), ("is_active", is_active))}
+        body = {key: value for key, value in body.items() if value is not None}
+        if not body:
+            return {"error": "고칠 것(name · is_active)을 줍니다."}
+        if not apply:
+            current = _pick(await _get(ctx, f"/api/metrics/{slug}/alerts"), "id", alert_id)
+            return current if _failed(current) else _preview(body, current=current)
+        return await _patch(ctx, f"/api/metrics/{slug}/alerts/{alert_id}", body)
+    if not name or not recipe:
+        return {"error": "새 경보에는 name 과 recipe(sprt · control · changes)가 필요합니다."}
+    body = {"name": name, "recipe": recipe, "params": dict(params or {})}
+    if not apply:
+        query = [
+            (key, "" if value is None else str(value)) for key, value in body["params"].items()
+        ]
+        now = await _get(
+            ctx,
+            f"/api/metrics/{slug}/analysis/{recipe}",
+            params=[*query, ("compact", "true")],
+        )
+        return _preview(
+            body,
+            note="`now` 는 그 인자로 지금 돌린 분석이다 — 저장하면 이 결론들은 알리지 않고, "
+            "다음 계산부터 새로 생기는 결론만 알린다.",
+        ) | {"now": now}
+    return await _post(ctx, f"/api/metrics/{slug}/alerts", body)
+
+
+#: `config_delete` 가 지우는 것 — 종류마다 「무엇을 보고 확인하나 · 어디를 지우나」.
+_CONFIG_KINDS = (
+    "metric",
+    "metric_alert",
+    "datasource",
+    "view",
+)
+
+
+@tool()
+async def config_delete(
+    ctx: Context,
+    kind: str,
+    slug: str | None = None,
+    id: str | None = None,
+    apply: bool = False,
+) -> Any:
+    """설정 하나를 **지운다** — 지표 · 경보 · 데이터 소스 · 저장된 뷰.
+    `apply=False`(기본)면 **무엇이 지워지나만** 보인다 — 사용자의 판단 뒤 `apply=True`.
+
+    | kind | 인자 | 지우면 |
+    | --- | --- | --- |
+    | `metric` | `slug` | 지표 · 세어 둔 값 · 경보 · 홈 게시(기록은 남는다). 시스템 관리자 |
+    | `metric_alert` | `slug`(지표) · `id`(경보) | 경보와 그 발생 기록. 내 경보만 |
+    | `datasource` | `slug` | 소스 정의만 — **객체는 남는다**. 시스템 관리자 |
+    | `view` | `slug`(타입) · `id`(뷰) | 저장된 거르기 조건. 데이터는 그대로 |
+
+    되살리는 길이 없다 — **사용자가 지우라고 한 것만** 지운다. 부서 · 공지 · 웹훅 같은 관리
+    설정은 MCP 로 안 지운다(관리는 토큰에 안 열린다 — 사람이 화면에서)."""
+    name = (kind or "").strip()
+    if name not in _CONFIG_KINDS:
+        return {"error": f"kind 는 {', '.join(_CONFIG_KINDS)} 중 하나입니다: {kind!r}"}
+    needs_id = name in ("metric_alert", "view")
+    if not slug or (needs_id and not id):
+        wanted = "slug · id" if needs_id else "slug"
+        return {"error": f"{name} 을 지우려면 {wanted} 가 필요합니다."}
+    if name == "metric":
+        path, current = f"/api/metrics/{slug}", await _get(ctx, f"/api/metrics/{slug}")
+    elif name == "metric_alert":
+        path = f"/api/metrics/{slug}/alerts/{id}"
+        current = _pick(await _get(ctx, f"/api/metrics/{slug}/alerts"), "id", str(id))
+    elif name == "datasource":
+        path, current = f"/api/datasources/{slug}", await _get(ctx, f"/api/datasources/{slug}")
+    else:
+        path = f"/api/objects/{slug}/views/{id}"
+        current = _pick(await _get(ctx, f"/api/objects/{slug}/views"), "id", str(id))
+    if _failed(current):
+        return current
+    if not apply:
+        return _preview(
+            {"kind": name, "slug": slug, "id": id},
+            current=current,
+            note="되살리는 길이 없다.",
+        )
+    done = await _delete(ctx, path)
+    return (
+        done
+        if _failed(done)
+        else {"applied": True, "deleted": {"kind": name, "slug": slug, "id": id}}
+    )
+
+
+@tool()
+async def datasource_save(
+    ctx: Context,
+    slug: str | None = None,
+    fields: dict[str, Any] | None = None,
+    ra_report_type: dict[str, Any] | None = None,
+    apply: bool = False,
+) -> Any:
+    """데이터 소스를 **만들거나 고친다** — 바깥 표(OData · REST · 파일 폴더 · 다른 플랫폼 · RA
+    보고서)를 어느 타입에 어떻게 넣나. 시스템 관리자만.
+
+    - `slug` 의 소스가 있으면 `fields` 에 준 칸만 고치고, 없으면 새로 만든다. 새 소스에 필요한
+      칸: `name` · `entity_set`(바깥 표) · `type_slug`(넣을 타입). 그 밖: `kind`(`odata` 기본 ·
+      `rest` · `folder` · `sp_core` · `ra_reports` …) · `base_url` · `options` · `filter` ·
+      `select` · `auth_kind` · `auth_user` · `page_size` · `workspace_slug` · `mapping`(칸 대응
+      — `datasources_list(slug, suggest=True)` 의 초안) · `source_name` · `deprecate_missing` ·
+      `interval_minutes`(0 이면 손으로만) · `is_active`. 고칠 때는 `since_mark` 도 된다.
+    - **인증 비밀(`auth_secret`)은 받지 않는다** — 비밀이 대화와 기록에 남는다. 만든 뒤 화면
+      (관리 › 데이터 소스)에서 사람이 넣는다. `has_secret` 이 그 여부를 말한다.
+    - `ra_report_type` — RA 보고서를 받을 **보고서 기록 타입**을 표준 칸으로 만든다: `{"slug":
+      "ra_report", "label": "보고서", "axes": ["plm_model"], "nav_group_slug": null}` (`axes`
+      는 보고서에 축 태그로 걸 타입). 이때 `slug` · `fields` 는 안 쓴다.
+
+    미리 보기(`apply=False`)는 고칠 때 지금 값과 바뀔 값을 함께 보인다. 넣은 뒤 대응이 맞는지는
+    `datasource_preview`, 돌리기는 `datasource_sync`."""
+    if ra_report_type is not None:
+        if not apply:
+            return _preview({"ra_report_type": ra_report_type})
+        return await _post(ctx, "/api/datasources/ra-report-type", dict(ra_report_type))
+    if not slug or not fields:
+        return {"error": "slug 와 fields(만들거나 고칠 칸)를 줍니다."}
+    if "auth_secret" in fields:
+        return {
+            "error": "인증 비밀은 MCP 로 받지 않습니다 — 소스를 저장한 뒤 화면(관리 › 데이터 "
+            "소스)에서 사람이 넣습니다."
+        }
+    listed = await _get(ctx, "/api/datasources")
+    if _failed(listed):
+        return listed
+    exists = any(one.get("slug") == slug for one in listed if isinstance(one, dict))
+    if exists:
+        if not apply:
+            current = await _get(ctx, f"/api/datasources/{slug}")
+            shown = (
+                {key: current.get(key) for key in fields}
+                if isinstance(current, dict)
+                else current
+            )
+            return _preview(
+                {"action": "update", "slug": slug, "fields": fields}, current=shown
+            )
+        return await _patch(ctx, f"/api/datasources/{slug}", dict(fields))
+    if not apply:
+        return _preview({"action": "create", "slug": slug, "fields": fields})
+    return await _post(ctx, "/api/datasources", {"slug": slug, **fields})
+
+
+@tool()
+async def core_status(ctx: Context) -> Any:
+    """**외부 공개(코어) 현황** — 무엇이 공개되어 있고, 누가 읽을 수 있고, 누가 받아 갔나,
+    그리고 **무엇이 안 나가나**. 시스템 관리자만.
+
+    - `types` — 공개 타입마다 객체 수 · 최종 변경 · 칸 수 · 나가는 관계 종류(`relations`).
+    - `consumers` — 코어를 읽을 수 있는 토큰(이름 · 계정 · `narrow` 면 `core:read` 만 · 최종
+      사용 · 만료). 한 번도 안 쓴 토큰은 아직 안 붙은 연동이다.
+    - `recent` — 최근 수신 기록(어느 토큰이 어느 타입을 몇 행).
+    - `withheld_relations` — 공개 타입에 닿지만 **안 나가는 관계 종류**와 사유(`closed_types`
+      끝 타입 미공개 · `no_open_implementer` · `partial` · `unconstrained` 끝 타입 미지정),
+      공개하면 나가는 타입(`missing_labels`), 빠지는 관계 수(`edges`). 「관계까지 다 나가나」
+      는 여기로 답한다.
+    - `withheld_references` — 공개 안 한 타입을 가리키는 참조 속성(값은 나가지만 상대를 못
+      받는다).
+    - `watermark_lag_seconds` — 수신 기준 시각이 지금보다 얼마나 뒤인가(긴 적재 중이면 커진다).
+
+    공개 지정은 타입의 `core` — `ontology_import` 로 바꾼다(공개는 외부 시스템에 대한 약속이라
+    사용자의 판단을 받는다)."""
+    found = await _get(ctx, "/api/ontology/core-status")
+    if isinstance(found, dict):
+        for one in found.get("types") or []:
+            # 칸 목록은 길다 — 수만. 자세한 것은 `ontology_schema`.
+            one["property_count"] = len(one.pop("properties", None) or [])
+            one.pop("relation_kinds", None)
+    return found
+
+
+@tool()
+async def workspaces(ctx: Context, slug: str | None = None, all: bool = False) -> Any:
+    """**부서** — 비우면 부서 목록(트리 — `path` · `depth` · 상위 · 정렬 · 구성원 수 · 내
+    역할). `all=True` 면 쓰지 않는 부서까지. `slug` 를 주면 **그 부서가 가진 것**(`contents` —
+    종류마다 건수)과 **그 부서를 가리키는 것**(`references` — `blocks_delete` 면 지우기를 막는
+    것). 부서 하나의 내용은 시스템 관리자만.
+
+    객체의 소유 부서는 `object_create` 의 `workspace_slug` 다 — 내 소속은 `whoami`. **읽기만
+    한다** — 부서 만들기 · 이름 · 옮기기 · 통폐합 · 지우기와 구성원 · 역할은 사람이 화면(관리 ›
+    부서)에서 한다(부서 관리는 토큰에 안 열린다)."""
+    if slug is None:
+        return await _get(ctx, "/api/workspaces", params={"all": "true" if all else "false"})
+    contents = await _get(ctx, f"/api/workspaces/{slug}/contents")
+    if _failed(contents):
+        return contents
+    return {
+        "slug": slug,
+        "contents": contents,
+        "references": await _get(ctx, f"/api/workspaces/{slug}/references"),
+    }
+
+
+@tool()
+async def views(ctx: Context, type_slug: str) -> Any:
+    """그 타입의 **저장된 뷰** — 내 뷰와 내 부서와 함께 쓰는 뷰(부서 것이 먼저). 뷰마다 이름 ·
+    거르기(`query` — `q` · `conditions` · `status`, `objects_list` 와 같은 모양) · 통계 모양
+    (`summary`) · 홈 게시 차례 · 고칠 수 있나(`can_edit`). 뷰의 거르기를 `objects_list` ·
+    `objects_summary` 에 그대로 옮기면 같은 목록 · 통계다. 만들기 · 고치기는 `view_save`."""
+    return await _get(ctx, f"/api/objects/{type_slug}/views")
+
+
+@tool()
+async def view_save(
+    ctx: Context,
+    type_slug: str,
+    name: str | None = None,
+    query: dict[str, Any] | None = None,
+    view_id: str | None = None,
+    workspace_slug: str | None = None,
+    summary: dict[str, Any] | None = None,
+    on_home: bool | None = None,
+    home_position: int | None = None,
+    apply: bool = False,
+) -> Any:
+    """**뷰를 저장한다 · 고친다** — 자주 쓰는 거르기(와 통계 모양)에 이름을 붙여 둔다.
+
+    - `query` — `{"q": "...", "conditions": [{"field", "op", "value", "exclude"}], "status":
+      ...}` (`objects_list` 의 거르기와 같다 — 주소는 `object_fields`).
+    - `summary` — 통계 모양(`group_by` · `split_by` · `metric` · `metric_field` · `chart` ·
+      `order` · `grain`, `objects_summary` 와 같다). 없으면 목록 뷰.
+    - `workspace_slug` — 주면 **그 부서와 함께 쓰는** 뷰(그 부서의 관리자만), 비우면 내 것.
+      새로 만들 때만 정한다.
+    - `on_home` · `home_position` — 부서 홈에 올리기와 그 차례.
+    - `view_id` 를 주면 그 뷰를 고친다(준 칸만), 없으면 새로(`name` · `query` 필요).
+
+    미리 보기(`apply=False`)가 기본. 지우기는 `config_delete(kind="view", slug=타입,
+    id=뷰)`."""
+    if view_id is None:
+        if not name or query is None:
+            return {"error": "새 뷰에는 name 과 query 가 필요합니다."}
+        body: dict[str, Any] = {
+            "name": name,
+            "query": query,
+            "workspace_slug": workspace_slug,
+            "summary": summary,
+            "on_home": bool(on_home),
+        }
+        if not apply:
+            return _preview({"action": "create", "type_slug": type_slug, **body})
+        return await _post(ctx, f"/api/objects/{type_slug}/views", body)
+    body = {
+        key: value
+        for key, value in (
+            ("name", name),
+            ("query", query),
+            ("summary", summary),
+            ("on_home", on_home),
+            ("home_position", home_position),
+        )
+        if value is not None
+    }
+    if not body:
+        return {"error": "고칠 것(name · query · summary · on_home · home_position)을 줍니다."}
+    if not apply:
+        current = _pick(await _get(ctx, f"/api/objects/{type_slug}/views"), "id", view_id)
+        return current if _failed(current) else _preview(body, current=current)
+    return await _patch(ctx, f"/api/objects/{type_slug}/views/{view_id}", body)
+
+
+@tool()
+async def object_watch(
+    ctx: Context,
+    type_slug: str | None = None,
+    object_id: str | None = None,
+    on: bool | None = None,
+    limit: int = 50,
+) -> Any:
+    """**지켜보기** — 객체가 바뀌면 내 알림(`notifications`)으로 받는다.
+
+    - `type_slug` · `object_id` · `on=True` 면 지켜보기 시작, `on=False` 면 그만 — 응답은 지금
+      지켜보나와 지켜보는 사람 수.
+    - 아무것도 안 주면 **내가 지켜보는 것**(최근 바뀐 것부터, `limit` 개).
+
+    사용자가 「이거 바뀌면 알려 줘」 라고 한 것만 건다 — 알림은 그 사람에게 간다."""
+    if type_slug is None and object_id is None:
+        return await _get(
+            ctx, "/api/objects/watching", params={"limit": str(max(1, min(limit, 200)))}
+        )
+    if not type_slug or not object_id or on is None:
+        return {"error": "지켜보기를 바꾸려면 type_slug · object_id · on 을 모두 줍니다."}
+    return await _put(ctx, f"/api/objects/{type_slug}/{object_id}/watch", {"on": on})
+
+
+@tool()
+async def object_years(
+    ctx: Context,
+    type_slug: str,
+    object_id: str,
+    years: list[int] | None = None,
+    apply: bool = False,
+) -> Any:
+    """객체의 **연도 배정** — 해마다 쓰이는 축(`temporal_kind='yearly'`, 예: 그해의 과제 ·
+    연간 계획)에서 이 객체가 **명시적으로 배정된** 연도들. `years` 를 비우면 읽기만, 주면
+    **통째로** 그 연도들로 정한다(빠진 해는 풀린다 — 미리 보기에서 지금 값과 견준다). 목록의
+    `year` 거르기가 이 배정을 본다."""
+    current = await _get(ctx, f"/api/objects/{type_slug}/{object_id}/years")
+    if years is None or _failed(current):
+        return current
+    wanted = sorted({int(one) for one in years})
+    if not apply:
+        return _preview({"years": wanted}, current=current)
+    return await _put(ctx, f"/api/objects/{type_slug}/{object_id}/years", wanted)
+
+
+@tool()
+async def webhooks(ctx: Context, webhook_id: str | None = None) -> Any:
+    """**웹훅** — 바뀐 것을 바깥 주소로 알리는 설정. 비우면 목록(이름 · 주소 · 이벤트 · 타입 ·
+    「코어 공개 타입만」 · 켜짐 · 마지막 결과 — 서명 비밀은 `has_secret` 로만), `webhook_id` 를
+    주면 **그 웹훅의 보낸 기록**(언제 · 무엇을 · 응답 코드 · 실패 이유 · 시도 수). 시스템
+    관리자만.
+
+    「왜 안 오지」 는 보낸 기록부터 본다. **읽기만 한다** — 다시 보내기 · 시험 발송 · 등록 ·
+    수정 · 삭제는 화면(관리 › 웹훅)에서(바깥 주소로 자료를 내보내는 설정이고 서명 비밀을
+    다룬다)."""
+    if webhook_id is None:
+        return await _get(ctx, "/api/webhooks")
+    return await _get(ctx, f"/api/webhooks/{webhook_id}/deliveries")
+
+
+@tool()
+async def notices(ctx: Context, include_drafts: bool = False) -> Any:
+    """**공지** — 지금 게시 중인 것(제목 · 본문 · 수준 · 팝업 · 게시일 · 만료 · 쓴 사람 · 내가
+    읽었나). `include_drafts=True` 면 게시 전 것까지(시스템 관리자). **읽기만 한다** — 올리기 ·
+    지우기는 화면(관리 › 공지)에서. 사용자가 문안을 원하면 써서 보여 주고 화면에 올리게
+    한다."""
+    params = {"include_drafts": "true"} if include_drafts else None
+    return await _get(ctx, "/api/notices", params=params)
+
+
+@tool()
+async def review_history(
+    ctx: Context,
+    kind: str | None = None,
+    batch: str | None = None,
+    limit: int = 50,
+    offset: int = 0,
+) -> Any:
+    """**검토함의 지난 결정** — 무엇을 누가 언제 어떻게 정했나, 추천을 따랐나(`decisions`),
+    **추천이 얼마나 맞았나**(`accuracy` — 추천이 있던 결정 중 추천대로 한 몫), 최근 적용한
+    묶음(`batches` — 되돌릴 수 있는 것이 몇 남았나). `kind`(별칭 후보 · 검수 대기 …) ·
+    `batch`(묶음 id)로 거른다. 되돌리기는 `review_undo`."""
+    params: list[tuple[str, Any]] = [
+        ("limit", str(max(1, min(limit, 200)))),
+        ("offset", str(offset)),
+    ]
+    if kind:
+        params.append(("kind", kind))
+    if batch:
+        params.append(("batch", batch))
+    return {
+        "accuracy": await _get(ctx, "/api/review/decisions/accuracy"),
+        "decisions": await _get(ctx, "/api/review/decisions", params=params),
+        "batches": await _get(ctx, "/api/review/batches", params={"limit": "20"}),
+    }
+
+
+@tool()
+async def review_undo(ctx: Context, batch_id: str | None = None, apply: bool = False) -> Any:
+    """검토함에서 **한 번에 적용한 묶음을 되돌린다** — 종류마다 원래 기능의 되돌리기로(붙인
+    별칭은 떼고, 합친 것은 …). `batch_id` 를 비우면 **되돌릴 수 있는 묶음 목록**(최근 것부터 —
+    남은 수 `undoable`). `apply=False`(기본)면 무엇이 되돌아가나만(`lines`) — 사용자의 판단 뒤
+    `apply=True`. 이미 그 뒤에 바뀐 것은 되돌리지 않고 이유를 말한다."""
+    if batch_id is None:
+        return await _get(ctx, "/api/review/batches", params={"limit": "20"})
+    return await _post(ctx, f"/api/review/batches/{batch_id}/undo", {"apply": apply})
+
+
+#: `server_status(performance=…)` 가 부르는 자리.
+_PERFORMANCE = {
+    "requests": "/api/server/performance/requests",
+    "cases": "/api/server/performance/requests/cases",
+    "jobs": "/api/server/performance/jobs",
+}
+
+
+@tool()
+async def server_status(
+    ctx: Context,
+    performance: str | None = None,
+    period: str | None = None,
+    sort: str | None = None,
+    route: str | None = None,
+    method: str | None = None,
+    limit: int = 20,
+) -> Any:
+    """**서버 상태** — 판 · 환경 · DB 스키마가 최신인가(`schema_behind`) · 디스크 · 백업 ·
+    건수 · 기동 시각, 확장 모듈과 켜짐(`extensions` — 켜고 끄기는 화면에서), 정제 도구 키트가
+    있나(`pipeline_kit`). 시스템 관리자만(일부 칸은 누구나).
+
+    `performance` 로 **느린 곳**을 본다(시스템 관리자):
+    - `requests` — 경로 틀 · 메서드마다 호출 수 · p50 · p95 · 최대 시간 · 응답 크기. `period`
+      (`1h` · `24h` · `7d` …) · `sort`.
+    - `cases` — 한 경로의 최근 최악 사례. `route`(경로 틀) · `method` 필수.
+    - `jobs` — 작업 종류마다 끝난 수 · 소요 · 대기.
+
+    손이 가야 하는 일(승인 대기 · 적용 안 한 계획 · 실패한 동기화)은 `server_maintenance`."""
+    if performance is not None:
+        path = _PERFORMANCE.get(performance)
+        if path is None:
+            return {"error": f"performance 는 {', '.join(_PERFORMANCE)} 중 하나입니다."}
+        params: list[tuple[str, Any]] = []
+        for key, value in (
+            ("period", period),
+            ("sort", sort),
+            ("route", route),
+            ("method", method),
+        ):
+            if value:
+                params.append((key, value))
+        if performance != "jobs":
+            params.append(("limit", str(max(1, min(limit, 200)))))
+        return await _get(ctx, path, params=params)
+    return {
+        "status": await _get(ctx, "/api/server/status"),
+        "extensions": await _get(ctx, "/api/server/extensions"),
+        "pipeline_kit": await _get(ctx, "/api/server/pipeline-kit/info"),
+    }
+
+
+@tool()
+async def jobs_purge(ctx: Context, apply: bool = False) -> Any:
+    """**기한 지난 작업 파일과 끝난 작업 기록**을 지운다 — 워커도 한 시간마다 하는 정리를
+    지금. 시스템 관리자만. 지운 기록은 `jobs_list` 에서 사라지고 그 파일은 내려받을 수 없다.
+    미리 보기(`apply=False`)는 지금 작업 수만 보인다 — 무엇이 지워질지는 서버의 기한이
+    정한다."""
+    if not apply:
+        listed = await _get(ctx, "/api/jobs", params={"limit": "1"})
+        total = listed.get("total") if isinstance(listed, dict) else None
+        return _preview(
+            {"action": "purge"},
+            current={"jobs_total": total},
+            note="기한 지난 파일과 끝난 작업 기록이 지워진다(되살릴 수 없다).",
+        )
+    return await _post(ctx, "/api/jobs/maintenance/purge", None)
+
+
+#: `export_start` 가 만드는 작업.
+_EXPORTS = {
+    "objects": "/api/objects/{type_slug}/export",
+    "relations": "/api/objects/{type_slug}/relations/export",
+}
+
+
+@tool()
+async def export_start(
+    ctx: Context,
+    type_slug: str,
+    kind: str = "objects",
+    format: str = "csv",
+    q: str | None = None,
+    status: str | None = None,
+    properties: dict[str, str] | None = None,
+    conditions: list[dict[str, str]] | None = None,
+) -> Any:
+    """**파일로 내보내기를 시작한다** — 쪽 상한 없이 전부. 작업이 되고, **파일은 사람이 화면의
+    「작업」 에서 받는다**(바이트는 모델을 거치지 않는다).
+
+    - `kind="objects"` — 그 타입의 객체를 `objects_list` 와 **같은 거르기**(`q` · `status` ·
+      `properties` · `conditions`)로.
+    - `kind="relations"` — 그 타입에서 출발하는 관계 전부(`src` · `relation` · `dst` · 근거).
+    - `format` — `csv` · `json`.
+
+    내용을 읽어 답하려면 내보내지 말고 `objects_list` · `objects_summary`."""
+    template = _EXPORTS.get(kind)
+    if template is None:
+        return {"error": f"kind 는 {', '.join(_EXPORTS)} 중 하나입니다: {kind!r}"}
+    if format not in ("csv", "json"):
+        return {"error": "format 은 csv · json 입니다."}
+    params: list[tuple[str, Any]] = [("format", format)]
+    if kind == "objects":
+        params += _filter_params(q, status, properties, conditions)
+    job = await _post(ctx, template.format(type_slug=type_slug), None, params=params)
+    return await _wait_job(ctx, job, JOB_WAIT_MAX)
 
 
 # --- 기동 ----------------------------------------------------------------------

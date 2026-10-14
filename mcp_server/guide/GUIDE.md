@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-10b
+GUIDE_VERSION: 2026-10-15a
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -31,7 +31,8 @@ GUIDE_VERSION: 2026-10-10b
 | **비율 · 추이 · 코호트** — 「판매월별 누적 인입률」 「생산월 x 공장별 건수」 | `metric_list` → `metric_query(slug, shape=)` | **미리 세어 둔 값**이다 — `computed_at` · `stale` · `overlap` 을 함께 말한다. 없으면 `metric_define(apply=false)` 로 제안 |
 | **성격으로 분류한 구성비 추이** — 「제품결함 · NTF · 고객과실 · SW 의 몫이 어떻게 바뀌나」 | `metric_list` 의 `dims[].kind="rule"` → `metric_query(slug, shape="series", split=<규칙 기준>, composition=true)` | 성격은 사람이 정한 **규칙**이 붙인다 — 네가 기록을 받아 가르지 않는다. 규칙 기준이 없으면 `metric_define(apply=false)` 로 제안(`get_guide(topic="metrics")` 의 「규칙 기준」) |
 | **세어 둔 수에서 추론** — 「B10 수명」 「전작보다 나빠졌나」 「관리도 신호」 「언제 바뀌었나」 「몰려 있나」 | `metric_list` 의 `analyses` → `metric_analyze(slug, recipe, options=)` | **셀을 받아 직접 계산하지 않는다.** `caveats` 를 그대로 전하고, `unreachable` 인 B수명은 값이 없다 — `get_guide(topic="metrics")` 의 「분석」 |
-| **요즘 무엇이 울렸나** — 「내 경보」 「새로 나빠진 모델 있나」 | `metric_alerts(slug=)` | 발생은 「그때 처음 본 결론」 — 지금도 그런지는 `metric_analyze` 로. 만들기는 화면에서 |
+| **요즘 무엇이 울렸나** — 「내 경보」 「새로 나빠진 모델 있나」 | `metric_alerts(slug=)` · 경보 하나는 `alert_id`(`check=True` 면 지금 확인) | 발생은 「그때 처음 본 결론」 — 지금도 그런지는 `metric_analyze` 로 |
+| **「나빠지면 알려 줘」** — 경보 걸기 · 이름 · 끄기 | `metric_alert_save(apply=false)` → 사람 확인 → `apply=true` | 미리 보기가 지금 분석을 한 번 돌려 보인다. 인자는 못 고친다 — 새로 걸고 옛 것은 `config_delete(kind="metric_alert")` |
 | 지표 값이 이상하다 · 언제 셌나 · 왜 그대로인가 | `metric_runs(slug)` → (시스템 관리자) `metric_recompute(slug)` | 실패한 계산은 옛 값을 두고 이유를 남긴다. 평소에는 타이머가 바뀐 기간만 센다 — `mode` · `note` |
 | 지표를 **부서 홈**에 올리기 · 내리기 | `metric_home(slug, workspace_slug, split=)` · `remove=true` | **그 부서 관리자만.** 홈은 부서 모두가 보는 자리 — 사용자가 올리자고 한 것만 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」 · 「모델의 과제의 프로젝트별 건수」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 두 걸음까지 준다. 주소를 추측하지 않는다 |
@@ -66,8 +67,10 @@ GUIDE_VERSION: 2026-10-10b
 | 관계 여러 줄 한 번에 | `relations_import(mode=)` → 사람 확인 → `job_apply` | 이미 이어진 건 그대로. `replace`·`replace_type` 은 **파일에 없는 선을 끊는다** |
 | 기계가 붙인 별칭 검수 | `aliases_pending` → 사람 확인 → `aliases_review` | **스스로 승인하지 않는다** |
 | 뒤에서 도는 작업이 어디까지 됐나 | `job_status(job_id)` · `jobs_list(status=, kind=, mine=)` | 워커가 없으면 영영 대기 — `jobs_list` 의 `workers` 로 안다. 「어젯밤 동기화 실패?」 는 `kind="datasource_sync", status="failed"` |
-| 잘못 넣은 작업 멈추기 | `job_cancel(job_id)` | **사용자가 멈추라고 한 것만.** 그때까지 커밋한 것은 남는다 |
-| 바깥 시스템(OData·REST·파일)에서 읽어 채우기 | `datasources_list` → `datasource_sync(apply=false)` → `apply=true` | 정의는 화면에서. 오류 행이 있으면 아무것도 안 넣음. 지난 결과 · 실패 이유는 `datasource_runs`, 칸 대응 확인은 `datasource_preview` |
+| 잘못 넣은 작업 멈추기 | `job_cancel(job_id)` · 여럿은 `job_ids` | **사용자가 멈추라고 한 것만.** 그때까지 커밋한 것은 남는다 |
+| 바깥 시스템(OData·REST·파일)에서 읽어 채우기 | `datasources_list` → `datasource_sync(apply=false)` → `apply=true` | 오류 행이 있으면 아무것도 안 넣음. 지난 결과 · 실패 이유는 `datasource_runs`, 칸 대응 확인은 `datasource_preview` |
+| 데이터 소스 만들기 · 고치기 | `datasources_list(slug, suggest=True)`(대응 초안) → `datasource_save(apply=false)` → `apply=true` | **인증 비밀은 받지 않는다** — 저장한 뒤 사람이 화면에서 넣는다. 지우기는 `config_delete(kind="datasource")`(객체는 남는다) |
+| **운영 · 설정** — 코어 공개 현황 · 부서 · 저장된 뷰 · 지켜보기 · 연도 · 웹훅 · 공지 · 검토 이력 · 서버 · 내보내기 | `get_guide(topic="admin")` | 고치는 것은 전부 미리 보기 먼저. 지우기는 `config_delete` 하나. 부서 · 공지 · 웹훅 · 서버는 읽기만 |
 | 첨부 저장소의 고아 파일 | `filestore_gc()` → 사람 확인 → `job_apply` | **시스템 관리자만.** 지운 파일은 못 되살린다 — 워커가 매일 스스로도 지운다 |
 | **이 설치에만 있는 기능**(디지털 트윈 역량 등) | `extensions_schema` → `extension_call` | 경로를 짐작하지 않는다. 쓰기는 그 확장의 범위를 가진 토큰만 |
 | 여러 타입을 건너뛰어 잇는 물음 · 역관계로 거슬러 세기 | `rdf_schema` → `rdf_query` | **먼저 `objects_summary` 로 되는 물음인지 본다.** 질의어는 그것으로 안 되는 자리에 |
@@ -1184,7 +1187,7 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 **경보 — 저장한 분석을 계산마다 다시(ADR 0016).** 사람이 화면의 분석 탭에서 「경보 저장」 을 누르면
 그 분석(순차 검정 · 관리도 · 변화점)을 지표를 다시 셀 때마다 **그 사람의 눈으로** 돌려, 처음 보는
 결론만 그 사람에게 알린다 — 순차 검정은 새로 선 「나쁨」, 관리도는 끝 부분군의 신호, 변화점은 끝
-몇 기간 안의 것. `metric_alerts` 는 내 경보와 최근 발생을 읽는다(만들기 · 끄기는 화면에서). 발생의
+몇 기간 안의 것. `metric_alerts` 는 내 경보와 최근 발생을 읽고, 걸기 · 이름 · 끄기는 `metric_alert_save`(미리 보기 먼저 — 그 인자로 지금 분석을 돌려 보인다), 지우기는 `config_delete(kind="metric_alert")`. 발생의
 `link` 인자를 `metric_analyze` 의 `options` · `filters` 로 옮기면 지금 셀로 다시 본다 — 발생은 그때의
 결론이고 원인이 아니다.
 
@@ -1227,3 +1230,30 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 - 기준 하나에 값이 수천 가지면(기본 모델 2,000개 x 코호트 50개) 표 한 번이 상한(2만 셀)에서
   잘린다 — 기본 모델로 거르고(`filters`) 다시 묻는다. 분석(`metric_analyze`)은 계산하려고 20만
   셀까지 받는다 — 표로 셀을 받아 직접 계산하지 말고 분석으로 묻는다.
+
+<!--@ admin -->
+## 운영 · 설정 — 화면의 관리 기능
+
+고치는 도구는 **전부 미리 보기가 기본**이다(`apply=false` — 무엇이 되는지만). 사용자에게 보여 주고
+판단을 받은 뒤 같은 인자에 `apply=true`. 권한은 서버가 본다 — 대부분 **시스템 관리자**만.
+
+| 하려는 것 | 도구 | 지킬 것 |
+| --- | --- | --- |
+| 외부 공개(코어) 현황 — 무엇이 나가나 · **무엇이 안 나가나** · 누가 받아 가나 | `core_status()` | 「관계까지 다 나가나」 는 `withheld_relations`(사유 · 공개하면 나가는 타입 · 빠지는 관계 수)로 답한다. 공개 지정은 `ontology_import` 의 타입 `core` — 외부 약속이라 사람의 판단을 받는다 |
+| 부서 목록 · 부서가 가진 것 · 가리키는 것 | `workspaces()` · `workspaces(slug)` | **읽기만.** 부서 만들기 · 옮기기 · 통폐합 · 지우기 · 구성원 · 역할은 사람이 화면에서(부서 관리는 토큰에 안 열린다) |
+| 저장된 뷰 — 읽기 · 저장 · 고치기 | `views(type_slug)` · `view_save(apply=false)` | 부서와 함께 쓰는 뷰는 그 부서 관리자만. 뷰의 거르기는 `objects_list` 와 같은 모양 |
+| 「이거 바뀌면 알려 줘」 | `object_watch(type_slug, object_id, on=True)` · 내가 지켜보는 것은 `object_watch()` | 사용자가 말한 것만 건다. 알림 읽음은 사람이 화면에서 |
+| 해마다 쓰는 축의 연도 배정 | `object_years(type_slug, object_id)` · `years=[…]` 로 통째로 | 빠진 해는 풀린다 — 미리 보기에서 지금 값과 견준다 |
+| 웹훅 — 목록 · 보낸 기록 | `webhooks()` · `webhooks(id)` | **읽기만.** 다시 보내기 · 등록 · 수정 · 삭제는 화면에서(바깥 주소 · 서명 비밀) |
+| 공지 읽기 | `notices()` | **읽기만.** 올리기는 화면에서 — 문안이 필요하면 써서 보여 주고 사람이 올린다 |
+| 검토함의 지난 결정 · 추천 정확도 · 묶음 되돌리기 | `review_history()` · `review_undo(batch_id, apply=false)` | 되돌리기는 사용자의 판단 뒤. 이미 그 뒤에 바뀐 것은 안 되돌린다 |
+| 서버 상태 · 확장 · 느린 곳 | `server_status()` · `server_status(performance="requests" · "cases" · "jobs")` | **읽기만.** 확장 켜고 끄기는 화면에서 |
+| 작업 여럿 한 번에 적용 · 멈추기 · 오래된 작업 정리 | `job_apply(job_ids=)` · `job_cancel(job_ids=)` · `jobs_purge(apply=false)` | 적용은 사람이 계획을 본 것만 |
+| 파일로 내보내기(객체 · 관계) | `export_start(type_slug, kind, format, 거르기)` | 작업만 시작한다 — **파일은 사람이 화면의 「작업」 에서 받는다**. 내용으로 답하려면 내보내지 말고 `objects_list` · `objects_summary` |
+| 설정 지우기 — 지표 · 경보 · 데이터 소스 · 뷰 | `config_delete(kind, slug=, id=, apply=false)` | 되살리는 길이 없다 — **사용자가 지우라고 한 것만** |
+
+**MCP 로 하지 않는 것** — 로그인 · 토큰 · 계정 관리, 부서 관리(만들기 · 옮기기 · 통폐합 · 지우기 ·
+구성원 · 역할), 공지 올리기 · 지우기, 웹훅 등록 · 수정 · 삭제 · 다시 보내기, 확장 켜고 끄기, 온톨로지
+초기화, 접근 기록, 데이터 소스의 인증 비밀, 알림 읽음 처리, 파일 내려받기 · 사진 묶음 올리기.
+관리 쓰기는 토큰에 안 열린다(「계정 · 부서 · 서버 관리는 어느 범위로도 안 열린다」). 사용자가 원하면
+**화면의 자리를 알려 준다**(우회하지 않는다).

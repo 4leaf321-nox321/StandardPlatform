@@ -105,6 +105,22 @@ TOOLS = {
     "alias_candidate_apply",
     "review_list",
     "review_decide",
+    "metric_alert_save",
+    "config_delete",
+    "datasource_save",
+    "core_status",
+    "workspaces",
+    "views",
+    "view_save",
+    "object_watch",
+    "object_years",
+    "webhooks",
+    "notices",
+    "review_history",
+    "review_undo",
+    "server_status",
+    "jobs_purge",
+    "export_start",
 }
 
 
@@ -1312,3 +1328,153 @@ def test_요청서_틀의_위험_도구_목록이_서버와_같다() -> None:
     end = text.index("<!-- 위험 도구: 끝 -->")
     listed = set(re.findall(r'"([a-z_]+)"', text[start:end]))
     assert listed == set(server.DESTRUCTIVE_TOOLS)
+
+
+# --- 운영 · 설정(2026-10-15) ---------------------------------------------------------
+
+
+def _route(table: dict[tuple[str, str], Any]) -> list[httpx.Request]:
+    """경로마다 다른 응답 — (메서드, 경로) → JSON. 없는 것은 404 봉투."""
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        found = table.get((request.method, request.url.path))
+        if found is None:
+            return httpx.Response(404, json={"error": {"code": "X", "message": "없음"}})
+        return httpx.Response(204) if found == 204 else httpx.Response(200, json=found)
+
+    return _serve(respond)
+
+
+def test_설정_지우기는_미리_보기가_기본이고_종류마다_제_자리를_지운다() -> None:
+    ctx = _ctx("Bearer t")
+    seen = _route(
+        {
+            ("GET", "/api/datasources/erp"): {"slug": "erp", "name": "ERP"},
+            ("DELETE", "/api/datasources/erp"): 204,
+        }
+    )
+    got = asyncio.run(server.config_delete(ctx, "datasource", slug="erp"))
+    assert got["applied"] is False and [one.method for one in seen] == ["GET"]
+    got = asyncio.run(server.config_delete(ctx, "datasource", slug="erp", apply=True))
+    assert seen[-1].method == "DELETE" and seen[-1].url.path == "/api/datasources/erp"
+    assert got == {
+        "applied": True,
+        "deleted": {"kind": "datasource", "slug": "erp", "id": None},
+    }
+
+    # 관리 설정(부서 · 공지)은 MCP 로 안 지운다 — 토큰에 안 열린 자리다.
+    for kind in ("account", "workspace", "notice"):
+        assert "error" in asyncio.run(server.config_delete(ctx, kind, slug="x", id="y"))
+    assert "error" in asyncio.run(server.config_delete(ctx, "view", slug="part"))
+
+
+def test_데이터_소스_저장은_비밀을_안_받고_있으면_고치고_없으면_만든다() -> None:
+    ctx = _ctx("Bearer t")
+    refused = asyncio.run(
+        server.datasource_save(ctx, "erp", {"auth_secret": "s3cret"}, apply=True)
+    )
+    assert "error" in refused and "화면" in refused["error"]
+
+    seen = _route(
+        {
+            ("GET", "/api/datasources"): [{"slug": "erp"}],
+            ("GET", "/api/datasources/erp"): {"slug": "erp", "interval_minutes": 0},
+            ("PATCH", "/api/datasources/erp"): {"slug": "erp", "interval_minutes": 60},
+            ("POST", "/api/datasources"): {"slug": "mes"},
+        }
+    )
+    got = asyncio.run(server.datasource_save(ctx, "erp", {"interval_minutes": 60}))
+    assert got["applied"] is False and got["current"] == {"interval_minutes": 0}
+    asyncio.run(server.datasource_save(ctx, "erp", {"interval_minutes": 60}, apply=True))
+    assert seen[-1].method == "PATCH" and json.loads(seen[-1].content) == {
+        "interval_minutes": 60
+    }
+    asyncio.run(
+        server.datasource_save(
+            ctx, "mes", {"name": "MES", "entity_set": "Lots", "type_slug": "lot"}, apply=True
+        )
+    )
+    assert seen[-1].method == "POST" and json.loads(seen[-1].content)["slug"] == "mes"
+
+
+def test_경보는_미리_보기에서_지금_분석을_돌리고_인자는_못_고친다() -> None:
+    ctx = _ctx("Bearer t")
+    seen = _route(
+        {
+            ("GET", "/api/metrics/svc/analysis/sprt"): {"decision": "continue"},
+            ("POST", "/api/metrics/svc/alerts"): {"id": "a1"},
+            ("POST", "/api/metrics/svc/alerts/a1/check"): {"findings": []},
+            ("GET", "/api/metrics/svc/alerts/a1/events"): [],
+        }
+    )
+    got = asyncio.run(
+        server.metric_alert_save(
+            ctx, "svc", name="A60", recipe="sprt", params={"d.base_model": "A60"}
+        )
+    )
+    assert got["applied"] is False and got["now"] == {"decision": "continue"}
+    assert (
+        seen[0].url.params["d.base_model"] == "A60" and seen[0].url.params["compact"] == "true"
+    )
+    asyncio.run(
+        server.metric_alert_save(ctx, "svc", name="A60", recipe="sprt", params={}, apply=True)
+    )
+    assert seen[-1].method == "POST" and json.loads(seen[-1].content)["recipe"] == "sprt"
+    assert "error" in asyncio.run(
+        server.metric_alert_save(ctx, "svc", alert_id="a1", recipe="control")
+    )
+    asyncio.run(server.metric_alerts(ctx, "svc", alert_id="a1", check=True))
+    assert seen[-1].url.path == "/api/metrics/svc/alerts/a1/check"
+    asyncio.run(server.metric_alerts(ctx, "svc", alert_id="a1"))
+    assert seen[-1].url.path == "/api/metrics/svc/alerts/a1/events"
+
+
+def test_내보내기는_목록과_같은_거르기로_작업만_시작한다() -> None:
+    seen = _serve(
+        lambda _r: httpx.Response(
+            202,
+            json={"id": "j2", "kind": "objects_export", "status": "done", "has_output": True},
+        )
+    )
+    got = asyncio.run(
+        server.export_start(_ctx("Bearer t"), "part", q="볼트", properties={"grade": "A"})
+    )
+    assert seen[0].method == "POST" and seen[0].url.path == "/api/objects/part/export"
+    assert seen[0].url.params["format"] == "csv" and seen[0].url.params["q"] == "볼트"
+    assert "화면" in got["next"]
+    assert "error" in asyncio.run(server.export_start(_ctx("Bearer t"), "part", kind="photos"))
+
+
+def test_작업은_여럿을_한_번에_적용하고_멈춘다() -> None:
+    seen = _serve(lambda _r: httpx.Response(200, json=[{"id": "j1", "status": "ok"}]))
+    asyncio.run(server.job_apply(_ctx("Bearer t"), job_ids=["j1", "j2"]))
+    assert seen[-1].url.path == "/api/jobs/apply"
+    assert json.loads(seen[-1].content) == {"ids": ["j1", "j2"]}
+    asyncio.run(server.job_cancel(_ctx("Bearer t"), job_ids=["j3"]))
+    assert seen[-1].url.path == "/api/jobs/cancel"
+
+
+def test_코어_현황은_칸_목록을_수로_줄여_준다() -> None:
+    _route(
+        {
+            ("GET", "/api/ontology/core-status"): {
+                "types": [{"slug": "part", "properties": [{"key": "a"}, {"key": "b"}]}],
+                "withheld_relations": [{"slug": "supplies", "reason": "closed_types"}],
+            }
+        }
+    )
+    got = asyncio.run(server.core_status(_ctx("Bearer t")))
+    assert got["types"][0]["property_count"] == 2 and "properties" not in got["types"][0]
+    assert got["withheld_relations"][0]["reason"] == "closed_types"
+
+
+def test_서버의_느린_곳은_종류마다_제_자리로() -> None:
+    seen = _serve(lambda _r: httpx.Response(200, json={}))
+    asyncio.run(
+        server.server_status(
+            _ctx("Bearer t"), performance="cases", route="/api/x", method="GET"
+        )
+    )
+    assert seen[-1].url.path == "/api/server/performance/requests/cases"
+    assert seen[-1].url.params["route"] == "/api/x"
+    assert "error" in asyncio.run(server.server_status(_ctx("Bearer t"), performance="disk"))
