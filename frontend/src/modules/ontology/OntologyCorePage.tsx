@@ -53,6 +53,7 @@ export default function OntologyCorePage() {
   if (status.error) return <ErrorNotice error={status.error} />
   const data = status.data
   if (!data) return <p className="text-muted-foreground text-sm">조회 중…</p>
+  const withheldCount = data.withheld_relations.length + data.withheld_references.length
 
   return (
     <div className="space-y-6">
@@ -110,6 +111,7 @@ export default function OntologyCorePage() {
           <TabsTrigger value="types">공개 타입 {data.types.length}</TabsTrigger>
           <TabsTrigger value="tokens">액세스 토큰 {data.consumers.length}</TabsTrigger>
           <TabsTrigger value="recent">최근 조회 이력 {data.recent.length}</TabsTrigger>
+          <TabsTrigger value="withheld">제외된 관계 {withheldCount}</TabsTrigger>
         </TabsList>
 
         <TabsContent value="types" className="space-y-2 pt-4">
@@ -279,7 +281,111 @@ export default function OntologyCorePage() {
             </Table>
           )}
         </TabsContent>
+
+        {/* **나가지 않는 것도 보인다.** 카탈로그는 나가는 것만 말하므로, 끝 타입 하나를 공개하지
+            않아 관계 종류가 통째로 빠져도 수신 측은 「그런 관계가 없다」 로 읽고 이쪽은 보냈다고
+            여긴다(2026-10-14). */}
+        <TabsContent value="withheld" className="space-y-4 pt-4">
+          <p className="text-muted-foreground text-sm">
+            공개 타입에 연결되어 있지만 <b>외부로 나가지 않는 관계</b>입니다. 수신 측이 찾을 수
+            없는 객체를 가리키지 않도록, 관계의 <b>양 끝이 모두 공개 타입</b>일 때만 전달됩니다.
+            아래 타입을 공개하면 해당 관계가 함께 나갑니다.
+          </p>
+          {withheldCount === 0 ? (
+            <EmptyState
+              title="제외된 관계가 없습니다"
+              hint="공개 타입의 관계 종류와 참조 속성이 모두 외부로 전달됩니다."
+            />
+          ) : (
+            <>
+              {data.withheld_relations.length > 0 && (
+                <section className="space-y-2">
+                  <h3 className="text-sm font-semibold">관계 종류</h3>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>관계 종류</TableHead>
+                        <TableHead>제외 사유</TableHead>
+                        <TableHead>공개하면 전달되는 타입</TableHead>
+                        <TableHead className="text-right">제외된 관계</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.withheld_relations.map((one) => (
+                        <TableRow key={one.slug}>
+                          <TableCell>
+                            {one.label}
+                            <span className="text-muted-foreground ml-2 font-mono text-xs">
+                              {one.slug}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-sm">
+                            {WITHHELD_REASONS[one.reason] ?? one.reason}
+                          </TableCell>
+                          <TableCell className="text-sm">
+                            {one.missing_labels.length > 0 ? (
+                              one.missing_labels.join(', ')
+                            ) : (
+                              <span className="text-muted-foreground">
+                                관계 종류에 끝 타입 지정 필요
+                              </span>
+                            )}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{one.edges}</TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </section>
+              )}
+              {data.withheld_references.length > 0 && (
+                <section className="space-y-2">
+                  <h3 className="text-sm font-semibold">참조 속성</h3>
+                  <p className="text-muted-foreground text-sm">
+                    값(참조 대상의 식별자)은 전달되지만, 참조 대상 객체가 공개되지 않아 수신
+                    시스템이 조회할 수 없습니다.
+                  </p>
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>공개 타입</TableHead>
+                        <TableHead>참조 속성</TableHead>
+                        <TableHead>가리키는 타입</TableHead>
+                        <TableHead>공개하면 조회되는 타입</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {data.withheld_references.map((one) => (
+                        <TableRow key={`${one.type_slug}.${one.key}`}>
+                          <TableCell className="text-sm">{one.type_label}</TableCell>
+                          <TableCell className="text-sm">
+                            {one.label}
+                            <span className="text-muted-foreground ml-2 font-mono text-xs">
+                              {one.key}
+                            </span>
+                          </TableCell>
+                          <TableCell className="text-sm">{one.ref_type_label}</TableCell>
+                          <TableCell className="font-mono text-xs">
+                            {one.missing.join(', ')}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </section>
+              )}
+            </>
+          )}
+        </TabsContent>
       </Tabs>
     </div>
   )
+}
+
+/** 제외 사유 — 화면 문구(`docs/용어.md` 의 「공개 타입」 · 「관계 종류」). */
+const WITHHELD_REASONS: Record<string, string> = {
+  closed_types: '끝 타입 미공개',
+  no_open_implementer: '인터페이스 구현 타입 미공개',
+  partial: '일부 구현 타입 미공개 — 일부만 전달',
+  unconstrained: '끝 타입 미지정',
 }

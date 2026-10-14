@@ -62,6 +62,40 @@ const STATUS = {
       since: '2026-09-22T01:00:00Z',
     },
   ],
+  withheld_relations: [] as unknown[],
+  withheld_references: [] as unknown[],
+}
+
+const WITHHELD = {
+  withheld_relations: [
+    {
+      slug: 'supplies',
+      label: '공급',
+      reason: 'closed_types',
+      missing: ['vendor'],
+      missing_labels: ['공급사'],
+      edges: 3,
+    },
+    {
+      slug: 'related',
+      label: '관련',
+      reason: 'unconstrained',
+      missing: [],
+      missing_labels: [],
+      edges: 0,
+    },
+  ],
+  withheld_references: [
+    {
+      type_slug: 'material',
+      type_label: '재료',
+      key: 'maker',
+      label: '제조사',
+      ref_type_slug: 'vendor',
+      ref_type_label: '공급사',
+      missing: ['vendor'],
+    },
+  ],
 }
 
 async function open(data = STATUS) {
@@ -124,13 +158,36 @@ describe('코어 현황', () => {
     expect(await screen.findByText('조회 이력이 없습니다')).toBeInTheDocument()
   })
 
-  it('세 구역이 탭으로 나뉜다 — 공개 타입이 늘어도 나머지가 밀려나지 않게', async () => {
+  it('구역이 탭으로 나뉜다 — 공개 타입이 늘어도 나머지가 밀려나지 않게', async () => {
     await open()
     const tabs = await screen.findAllByRole('tab')
     expect(tabs.map((one) => one.textContent)).toEqual([
       '공개 타입 1',
       '액세스 토큰 2',
       '최근 조회 이력 1',
+      '제외된 관계 0',
     ])
+  })
+
+  it('외부로 나가지 않는 관계를 사유 · 공개할 타입과 함께 표시한다', async () => {
+    await open({ ...STATUS, ...WITHHELD })
+    await userEvent.click(await screen.findByRole('tab', { name: '제외된 관계 3' }))
+    const row = (await screen.findByText('공급')).closest('tr')
+    if (!row) throw new Error('줄이 없다')
+    expect(within(row).getByText('끝 타입 미공개')).toBeInTheDocument()
+    expect(within(row).getAllByText('공급사').length).toBeGreaterThan(0)
+    expect(within(row).getByText('3')).toBeInTheDocument()
+    // 끝 타입을 안 적은 종류는 공개가 아니라 관계 종류를 고쳐야 나간다.
+    expect(screen.getByText('관계 종류에 끝 타입 지정 필요')).toBeInTheDocument()
+    // 공개 안 한 타입을 가리키는 참조 속성 — 값은 가지만 상대를 조회할 수 없다.
+    const ref = screen.getByText('제조사').closest('tr')
+    if (!ref) throw new Error('참조 줄이 없다')
+    expect(within(ref).getByText('vendor')).toBeInTheDocument()
+  })
+
+  it('제외된 관계가 없으면 모두 전달된다고 말한다', async () => {
+    await open()
+    await userEvent.click(await screen.findByRole('tab', { name: /제외된 관계/ }))
+    expect(await screen.findByText('제외된 관계가 없습니다')).toBeInTheDocument()
   })
 })

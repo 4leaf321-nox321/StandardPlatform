@@ -35,7 +35,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import String, cast, exists, func, literal, or_, select, text
+from sqlalchemy import String, and_, cast, exists, func, literal, or_, select, text
 from sqlalchemy import false as sa_false
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import ColumnElement
@@ -56,6 +56,8 @@ from app.modules.coreapi.schemas import (
     CoreRowOut,
     CoreStatusOut,
     CoreTypeOut,
+    CoreWithheldReferenceOut,
+    CoreWithheldRelationOut,
 )
 from app.modules.objects import aliases
 from app.modules.objects import keys as key_history
@@ -884,6 +886,8 @@ def status(db: Session, user: User, *, base: str, limit: int = 20) -> CoreStatus
             for one in rows
         ],
         base=base,
+        withheld_relations=withheld_relations(db),
+        withheld_references=withheld_references(db),
         # **받아 가는 쪽이 지금 어디까지 볼 수 있나.** 긴 적재가 도는 동안 커지고 끝나면
         # 0 으로 돌아온다 — 줄지 않으면 열어 두고 잊은 세션이 있다는 뜻이다.
         watermark_lag_seconds=max(
@@ -896,6 +900,123 @@ def status(db: Session, user: User, *, base: str, limit: int = 20) -> CoreStatus
             ),
         ),
     )
+
+
+def withheld_relations(db: Session) -> list[CoreWithheldRelationOut]:
+    """공개 타입에 닿지만 **바깥에 안 나가는** 관계 종류 — 이유와 공개하면 나가는 타입.
+
+    카탈로그(`relation_kinds`)는 나가는 것만 말한다. 끝에 적힌 타입 하나를 공개하지 않아 관계
+    종류가 통째로 빠져도 그 사실은 어디에도 안 적혀, 받는 쪽은 「그런 관계가 없다」 로 읽고
+    공개한 쪽은 보냈다고 여긴다(2026-10-14 사용자 질문 — 「관계까지 모두 보내지고 있나」).
+
+    공개 타입에 안 닿는 종류(양끝이 모두 비공개)는 싣지 않는다 — 빠지는 게 당연하다. 끝을 안
+    적은 종류는 공개 타입 객체에 닿는 선이 있을 때만 싣는다. 판정은 `open_relation_kinds` 와
+    같은 함수(`_open_end`)가 한다 — 두 벌의 규칙을 두지 않는다.
+    """
+    opened = core_types(db)
+    open_slugs = {one.slug for one in opened}
+    if not open_slugs:
+        return []
+    open_ids = [one.id for one in opened]
+    ends = load_ends(db)
+    found: list[tuple[RelationType, str, list[str], bool]] = []
+    openable: list[str] = []
+    for kind in db.scalars(
+        select(RelationType)
+        .where(RelationType.is_active.is_(True))
+        .order_by(RelationType.slug)
+    ):
+        declared = [*(kind.src_type_slugs or []), *(kind.dst_type_slugs or [])]
+        reach = ends.types_of(declared)
+        touches = any(one in open_slugs for one in reach)
+        if not kind.src_type_slugs or not kind.dst_type_slugs:
+            found.append((kind, "unconstrained", [], touches))
+            continue
+        src = _open_end(kind.src_type_slugs, open_slugs, ends)
+        dst = _open_end(kind.dst_type_slugs, open_slugs, ends)
+        missing = list(dict.fromkeys(one for one in reach if one not in open_slugs))
+        if src is not None and dst is not None:
+            openable.append(kind.slug)
+            if missing:
+                found.append((kind, "partial", missing, touches))
+            continue
+        closed = [
+            one for one in declared if one not in ends.interfaces and one not in open_slugs
+        ]
+        if closed:
+            found.append((kind, "closed_types", list(dict.fromkeys(closed)), touches))
+        else:
+            found.append((kind, "no_open_implementer", missing, touches))
+    if not found:
+        return []
+
+    # **빠지는 선을 센다** — 공개 타입 객체에 닿는데 안 나가는 것. 나가는 종류(`partial`)는
+    # 양끝이 모두 공개 타입인 선이 나가므로 그것을 뺀다.
+    start, end = aliased(ObjectInstance), aliased(ObjectInstance)
+    sent = and_(
+        ObjectRelation.relation.in_(openable),
+        start.type_id.in_(open_ids),
+        end.type_id.in_(open_ids),
+    )
+    counts: dict[str, int] = {
+        relation: total
+        for relation, total in db.execute(
+            select(ObjectRelation.relation, func.count())
+            .join(start, start.id == ObjectRelation.src_object_id)
+            .join(end, end.id == ObjectRelation.dst_object_id)
+            .where(
+                ObjectRelation.relation.in_([kind.slug for kind, *_ in found]),
+                start.deleted_at.is_(None),
+                end.deleted_at.is_(None),
+                or_(start.type_id.in_(open_ids), end.type_id.in_(open_ids)),
+                ~sent,
+            )
+            .group_by(ObjectRelation.relation)
+        )
+    }
+    return [
+        CoreWithheldRelationOut(
+            slug=kind.slug,
+            label=kind.label,
+            reason=reason,
+            missing=missing,
+            missing_labels=[ends.labels.get(one, one) for one in missing],
+            edges=counts.get(kind.slug, 0),
+        )
+        for kind, reason, missing, touches in found
+        if touches or counts.get(kind.slug, 0)
+    ]
+
+
+def withheld_references(db: Session) -> list[CoreWithheldReferenceOut]:
+    """공개 타입의 참조 속성 중 **공개 안 한 타입을 가리키는 것.**
+
+    값(상대의 식별자)은 행에 실려 나가지만, 받는 쪽은 그 상대를 받아 올 창구가 없다 — 식별자만
+    쥔 채 무엇인지 모른다. 대상이 인터페이스면 그 구현 타입 중 공개 안 한 것을 적는다."""
+    opened = core_types(db)
+    open_slugs = {one.slug for one in opened}
+    ends = load_ends(db)
+    out: list[CoreWithheldReferenceOut] = []
+    for object_type in opened:
+        for definition in _shown_defs(db, object_type):
+            target = definition.ref_type_slug
+            if definition.data_type != "object_ref" or not target:
+                continue
+            missing = [one for one in ends.types_of([target]) if one not in open_slugs]
+            if not missing:
+                continue
+            out.append(
+                CoreWithheldReferenceOut(
+                    type_slug=object_type.slug,
+                    type_label=object_type.label,
+                    key=definition.key,
+                    label=definition.label,
+                    ref_type_slug=target,
+                    ref_type_label=ends.labels.get(target, target),
+                    missing=missing,
+                )
+            )
+    return out
 
 
 # --- 연동 키트 --------------------------------------------------------------------

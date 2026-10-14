@@ -23115,6 +23115,20 @@
             "type": "integer",
             "title": "Watermark Lag Seconds",
             "default": 0
+          },
+          "withheld_relations": {
+            "items": {
+              "$ref": "#/components/schemas/CoreWithheldRelationOut"
+            },
+            "type": "array",
+            "title": "Withheld Relations"
+          },
+          "withheld_references": {
+            "items": {
+              "$ref": "#/components/schemas/CoreWithheldReferenceOut"
+            },
+            "type": "array",
+            "title": "Withheld References"
           }
         },
         "type": "object",
@@ -23299,6 +23313,95 @@
           "endpoint"
         ],
         "title": "CoreTypeOut"
+      },
+      "CoreWithheldReferenceOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "ref_type_slug": {
+            "type": "string",
+            "title": "Ref Type Slug"
+          },
+          "ref_type_label": {
+            "type": "string",
+            "title": "Ref Type Label"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "type_label",
+          "key",
+          "label",
+          "ref_type_slug",
+          "ref_type_label"
+        ],
+        "title": "CoreWithheldReferenceOut",
+        "description": "공개 타입의 참조 속성 중 **공개 안 한 타입을 가리키는 것** — 값(상대 식별자)은 나가지만\n받는 쪽이 그 상대를 받아 올 길이 없다."
+      },
+      "CoreWithheldRelationOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "reason": {
+            "type": "string",
+            "title": "Reason"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing"
+          },
+          "missing_labels": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing Labels"
+          },
+          "edges": {
+            "type": "integer",
+            "title": "Edges",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "reason"
+        ],
+        "title": "CoreWithheldRelationOut",
+        "description": "공개 타입에 닿지만 **바깥에 안 나가는** 관계 종류 하나 — 왜 빠지나, 무엇을 열면 나가나.\n\n카탈로그는 나가는 것만 말한다. 타입 하나를 안 열어 관계 종류가 통째로 빠져도 그 사실은\n어디에도 안 적혀, 받는 쪽은 「그런 관계가 없다」 로 읽고 공개한 쪽은 보냈다고 여긴다."
       },
       "CoverageAxisOut": {
         "properties": {

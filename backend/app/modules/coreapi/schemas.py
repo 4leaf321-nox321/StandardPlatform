@@ -218,6 +218,41 @@ class CorePullOut(BaseModel):
     since: str = ""
 
 
+class CoreWithheldRelationOut(BaseModel):
+    """공개 타입에 닿지만 **바깥에 안 나가는** 관계 종류 하나 — 왜 빠지나, 무엇을 열면 나가나.
+
+    카탈로그는 나가는 것만 말한다. 타입 하나를 안 열어 관계 종류가 통째로 빠져도 그 사실은
+    어디에도 안 적혀, 받는 쪽은 「그런 관계가 없다」 로 읽고 공개한 쪽은 보냈다고 여긴다."""
+
+    slug: str
+    label: str
+    reason: str
+    """`unconstrained` 끝에 타입을 안 적음 · `closed_types` 적힌 타입 중 공개 안 한 것이 있음 ·
+    `no_open_implementer` 끝의 인터페이스를 구현한 공개 타입이 없음 · `partial` 나가지만 끝의
+    인터페이스를 구현한 타입 일부가 공개 안 돼 그 객체를 잇는 선은 빠짐."""
+    missing: list[str] = Field(default_factory=list)
+    """공개하면 이 종류가 나가는(`partial` 이면 더 나가는) 타입 slug. `unconstrained` 면 비어
+    있다 — 공개가 아니라 관계 종류에 끝 타입을 적어야 한다."""
+    missing_labels: list[str] = Field(default_factory=list)
+    edges: int = 0
+    """공개 타입의 객체에 닿는 선 가운데 지금 안 나가는 수(지운 객체의 선은 빼고)."""
+
+
+class CoreWithheldReferenceOut(BaseModel):
+    """공개 타입의 참조 속성 중 **공개 안 한 타입을 가리키는 것** — 값(상대 식별자)은 나가지만
+    받는 쪽이 그 상대를 받아 올 길이 없다."""
+
+    type_slug: str
+    type_label: str
+    key: str
+    label: str
+    ref_type_slug: str
+    ref_type_label: str
+    missing: list[str] = Field(default_factory=list)
+    """공개하면 받아 올 수 있게 되는 타입 slug — 대상이 인터페이스면 그 구현 타입 중 공개 안 한
+    것."""
+
+
 class CoreStatusOut(BaseModel):
     """**무엇이 열려 있고, 누가 읽을 수 있고, 누가 받아 갔나** — 한 화면.
 
@@ -236,3 +271,7 @@ class CoreStatusOut(BaseModel):
     `as_of` 는 도는 적재보다 앞서지 않는다(그래야 그 적재분을 안 잃는다). 그래서 긴 백필
     동안 이 값이 커지고, 백필이 끝나면 0 으로 돌아온다. **줄지 않고 계속 커지면** 열어 두고
     잊은 세션이 있다는 뜻이다 — 그때는 받아 가는 쪽이 새 값을 못 본다."""
+    withheld_relations: list[CoreWithheldRelationOut] = Field(default_factory=list)
+    """공개 타입에 닿지만 안 나가는 관계 종류 — 이유와 공개하면 나가는 타입."""
+    withheld_references: list[CoreWithheldReferenceOut] = Field(default_factory=list)
+    """공개 타입의 참조 속성 중 공개 안 한 타입을 가리키는 것."""

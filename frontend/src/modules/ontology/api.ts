@@ -492,6 +492,45 @@ export interface CoreStatus {
     rows: number
     since: string
   }[]
+  /** 공개 타입에 닿지만 외부로 나가지 않는 관계 종류 — 이유와 공개하면 나가는 타입. */
+  withheld_relations: CoreWithheldRelation[]
+  /** 공개 타입의 참조 속성 중 공개하지 않은 타입을 가리키는 것. */
+  withheld_references: CoreWithheldReference[]
+}
+
+/**
+ * 나가지 않는 관계 종류의 이유.
+ * - `closed_types` 끝에 적힌 타입 중 공개하지 않은 것이 있다
+ * - `no_open_implementer` 끝의 인터페이스를 구현한 공개 타입이 없다
+ * - `partial` 나가지만, 공개하지 않은 구현 타입의 객체를 잇는 관계는 빠진다
+ * - `unconstrained` 끝 타입을 지정하지 않았다 — 공개가 아니라 관계 종류 수정이 필요하다
+ */
+export type CoreWithheldReason =
+  | 'closed_types'
+  | 'no_open_implementer'
+  | 'partial'
+  | 'unconstrained'
+
+export interface CoreWithheldRelation {
+  slug: string
+  label: string
+  reason: CoreWithheldReason | string
+  /** 공개하면 나가는(`partial` 이면 더 나가는) 타입 slug. */
+  missing: string[]
+  missing_labels: string[]
+  /** 공개 타입의 객체에 닿는 관계 중 지금 나가지 않는 수. */
+  edges: number
+}
+
+export interface CoreWithheldReference {
+  type_slug: string
+  type_label: string
+  key: string
+  label: string
+  ref_type_slug: string
+  ref_type_label: string
+  /** 공개하면 상대를 받아 올 수 있게 되는 타입 slug. */
+  missing: string[]
 }
 
 /** 정의 삭제의 미리 보기 — **삭제 경로와 같은 함수가 센다**(`GET /ontology/delete-plan`). */
