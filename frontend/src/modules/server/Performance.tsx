@@ -17,6 +17,10 @@
  */
 
 import { Fragment, useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+
+import { MetricDefinitionDialog } from '@/modules/metrics/MetricDefinitionDialog'
+import type { MetricDraft } from '@/modules/metrics/MetricDefinitionDialog'
 
 import { api } from '@/shared/api/client'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -108,6 +112,8 @@ export interface CutQuestion {
   users: number
   last_at: string
   last_request_id: string | null
+  /** 이 물음을 미리 세어 둘 지표 정의 초안(`suggest=true` 일 때, 저장 안 됨 — ADR 0032). */
+  suggestion?: MetricDraft | null
 }
 
 export interface CutQuestions {
@@ -440,9 +446,12 @@ export function shapeParts(shape: Record<string, unknown>): { label: string; val
 
 function CutQuestionsSection({ period }: { period: PerformancePeriod }) {
   const cut = useResource(
-    () => api.get<CutQuestions>(`/server/performance/cut?period=${period}`),
+    () => api.get<CutQuestions>(`/server/performance/cut?period=${period}&suggest=true`),
     [period],
   )
+  const navigate = useNavigate()
+  // 줄의 초안으로 지표 정의 창을 연다 — 사람이 계획을 보고 고쳐 저장한다(ADR 0032).
+  const [drafting, setDrafting] = useState<MetricDraft | null>(null)
   return (
     <section className="space-y-3">
       <h2 className="text-base font-semibold">끊긴 질문</h2>
@@ -500,6 +509,16 @@ function CutQuestionsSection({ period }: { period: PerformancePeriod }) {
                   {one.last_request_id && (
                     <p className="text-muted-foreground font-mono">{one.last_request_id}</p>
                   )}
+                  {one.suggestion && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="mt-1"
+                      onClick={() => setDrafting(one.suggestion ?? null)}
+                    >
+                      지표 초안
+                    </Button>
+                  )}
                 </TableCell>
               </TableRow>
             ))}
@@ -510,6 +529,14 @@ function CutQuestionsSection({ period }: { period: PerformancePeriod }) {
         <p className="text-muted-foreground text-xs">
           모양 {cut.data.total}가지 중 많이 끊긴 {cut.data.items.length}가지만 보입니다.
         </p>
+      )}
+      {drafting && (
+        <MetricDefinitionDialog
+          existing={null}
+          draft={drafting}
+          onClose={() => setDrafting(null)}
+          onSaved={(metric) => navigate(`/metrics/${metric.slug}`)}
+        />
       )}
     </section>
   )

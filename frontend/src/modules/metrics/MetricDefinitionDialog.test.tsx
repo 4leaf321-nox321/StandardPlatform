@@ -94,6 +94,59 @@ async function mount(onSaved = vi.fn()) {
 }
 
 describe('지표 정의', () => {
+  it('끊긴 질문의 초안으로 채워 열고, 그 정의로 계획을 본다', async () => {
+    // ADR 0032 — 저장하지 않은 초안. 사람이 계획을 보고 고쳐 저장한다.
+    ontologyApi.schema.mockResolvedValue(SCHEMA)
+    objectApi.fields.mockResolvedValue([])
+    metricsApi.list.mockResolvedValue([])
+    metricsApi.plan.mockResolvedValue({
+      ok: true,
+      errors: [],
+      warnings: [],
+      rows: 8,
+      estimated_cells: 24,
+      overlap: false,
+      dims: [],
+      period_from: null,
+      period_to: null,
+    })
+    const { MetricDefinitionDialog } = await import('@/modules/metrics/MetricDefinitionDialog')
+    render(
+      <MetricDefinitionDialog
+        existing={null}
+        draft={{
+          slug: 'cut_1a2b3c4d',
+          label: '시장 서비스 — symptom (끊긴 질문)',
+          description: '끊긴 질문에서 지은 초안',
+          source_type_slug: 'svc_case',
+          spec: {
+            measure: 'count',
+            dimensions: [{ name: 'symptom', address: 'properties.symptom' }],
+            filters: [],
+            settle_days: 0,
+          },
+        }}
+        onClose={vi.fn()}
+        onSaved={vi.fn()}
+      />,
+    )
+    expect(await screen.findByRole('heading', { name: '새 지표' })).toBeInTheDocument()
+    expect(screen.getByLabelText('이름')).toHaveValue('시장 서비스 — symptom (끊긴 질문)')
+    expect(screen.getByLabelText('기준 1 주소')).toHaveValue('properties.symptom')
+    await userEvent.click(screen.getByRole('button', { name: '계획 보기' }))
+    await waitFor(() => expect(metricsApi.plan).toHaveBeenCalled())
+    const sent = metricsApi.plan.mock.calls.at(-1)?.[0]
+    expect(sent.slug).toBe('cut_1a2b3c4d')
+    expect(sent.source_type_slug).toBe('svc_case')
+    // 초안에 시간 칸이 없으면 첫 날짜 칸을 저절로 고르지 않는다 — 초안이 정한 대로.
+    expect(sent.spec.time ?? null).toBeNull()
+    expect(sent.spec.dimensions).toEqual([
+      expect.objectContaining({ name: 'symptom', address: 'properties.symptom' }),
+    ])
+    // 뒤의 시험이 첫 계획 호출을 읽는다 — 이 시험의 호출을 남기지 않는다.
+    metricsApi.plan.mockClear()
+  })
+
   it('기록 타입과 첫 날짜 칸을 미리 고르고, 계획의 오류를 보여 준다', async () => {
     metricsApi.plan.mockResolvedValue({
       ok: false,

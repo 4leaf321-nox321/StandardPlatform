@@ -264,6 +264,9 @@ class CutQuestionOut(BaseModel):
     last_at: datetime
     last_request_id: str | None
     """마지막 것의 요청 ID — app.log 에서 그 줄을 찾는다."""
+    suggestion: dict[str, Any] | None = None
+    """`suggest=true` 일 때 — 이 물음을 미리 세어 둘 지표 정의 초안(저장하지 않는다, ADR
+    0032)."""
 
 
 class CutQuestionsOut(BaseModel):

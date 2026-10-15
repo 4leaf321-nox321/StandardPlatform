@@ -73,8 +73,19 @@ interface AddressDimRow {
 
 type DimRow = AddressDimRow | RuleDimRow
 
+/** 저장하지 않은 정의 — 끊긴 질문에서 지은 초안(ADR 0032). 새 지표로 채워 연다. */
+export interface MetricDraft {
+  slug: string
+  label: string
+  description: string
+  source_type_slug: string
+  spec: MetricSpec
+}
+
 interface Props {
   existing: Metric | null
+  /** 새 지표를 이 초안으로 채워 연다 — 사람이 계획을 보고 고쳐 저장한다. */
+  draft?: MetricDraft | null
   onClose: () => void
   onSaved: (metric: Metric) => void
 }
@@ -87,16 +98,18 @@ function slugOf(label: string): string {
     .slice(0, 32)
 }
 
-export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
+export function MetricDefinitionDialog({ existing, draft = null, onClose, onSaved }: Props) {
   const schema = useResource(() => ontologyApi.schema(), [])
   const metrics = useResource(() => metricsApi.list(), [])
-  const spec0 = existing?.spec
-  const [slug, setSlug] = useState(existing?.slug ?? '')
+  // 처음 칸 — 고칠 지표, 아니면 초안.
+  const seed = existing ?? draft
+  const spec0 = seed?.spec
+  const [slug, setSlug] = useState(seed?.slug ?? '')
   // 이름에서 slug 를 짓되, 사람이 slug 를 손댄 뒤에는 따라가지 않는다.
-  const [slugTouched, setSlugTouched] = useState(Boolean(existing))
-  const [label, setLabel] = useState(existing?.label ?? '')
-  const [description, setDescription] = useState(existing?.description ?? '')
-  const [source, setSource] = useState(existing?.source_type_slug ?? '')
+  const [slugTouched, setSlugTouched] = useState(Boolean(seed))
+  const [label, setLabel] = useState(seed?.label ?? '')
+  const [description, setDescription] = useState(seed?.description ?? '')
+  const [source, setSource] = useState(seed?.source_type_slug ?? '')
   const [measure, setMeasure] = useState<string>(spec0?.measure ?? 'count')
   const [measureField, setMeasureField] = useState(spec0?.measure_field ?? '')
   const [timeAddress, setTimeAddress] = useState(spec0?.time?.address ?? '')
@@ -198,11 +211,11 @@ export function MetricDefinitionDialog({ existing, onClose, onSaved }: Props) {
   ]
   // 시간 칸이 비었으면 첫 날짜 칸 — 정의의 대부분이 시간을 갖는다.
   useEffect(() => {
-    if (!timeAddress && dateDefs.length > 0 && !existing) {
+    if (!timeAddress && dateDefs.length > 0 && !seed) {
       setTimeAddress(`properties.${dateDefs[0].key}`)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [dateDefs.length, existing])
+  }, [dateDefs.length, seed])
 
   const addressOptions = useMemo(() => {
     const own = defs

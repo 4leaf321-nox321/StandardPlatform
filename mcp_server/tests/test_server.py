@@ -1489,6 +1489,9 @@ def test_서버의_느린_곳은_종류마다_제_자리로() -> None:
     asyncio.run(server.server_status(_ctx("Bearer t"), performance="cut", period="7d"))
     assert seen[-1].url.path == "/api/server/performance/cut"
     assert seen[-1].url.params["period"] == "7d"
+    assert "suggest" not in seen[-1].url.params
+    asyncio.run(server.server_status(_ctx("Bearer t"), performance="cut", suggest=True))
+    assert seen[-1].url.params["suggest"] == "true"  # 지표 정의 초안(ADR 0032)
     assert "error" in asyncio.run(server.server_status(_ctx("Bearer t"), performance="disk"))
 
 

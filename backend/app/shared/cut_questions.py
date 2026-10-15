@@ -10,10 +10,15 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import logging
+import re
 from typing import Any
 
 from fastapi import Request
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
 from app.database import SessionLocal
 from app.modules.audit.models import CutQuestion
@@ -74,6 +79,136 @@ def objects_shape(request: Request) -> dict[str, Any]:
     if conditions:
         shape["conditions"] = sorted(conditions)
     return shape
+
+
+# --- 지표 초안(ADR 0032) ----------------------------------------------------------------
+
+#: 초안의 기준으로 안 삼는 칸 — 기록마다 다른 값(이름 · 식별자)은 셀이 기록 수만큼 된다.
+_NOT_DIMS = frozenset({"label", "key", "status", "workspace", "created_year"})
+_DATE_KINDS = frozenset({"date", "datetime"})
+_NAME_RE = re.compile(r"[^a-z0-9_]+")
+#: 기준 이름으로 못 쓰는 말(`metrics/spec.RESERVED` 와 같다 — 셀의 칸 · 집계).
+_RESERVED = frozenset(
+    {
+        "period",
+        "cohort",
+        "age",
+        "workspace",
+        "count",
+        "value_count",
+        "sum",
+        "min",
+        "max",
+        "avg",
+    }
+)
+#: 지표 기준의 상한(`metrics/spec.MAX_DIMENSIONS`).
+_MAX_DIMS = 8
+
+
+def _address(field: str) -> str:
+    """조건의 칸 → 지표의 주소. 자기 칸은 `properties.<키>`, 이어진 것 너머는 그대로."""
+    if "." in field or field.startswith(("ref.", "out.", "in.")):
+        return field
+    return f"properties.{field}"
+
+
+def _dim_name(address: str, taken: set[str]) -> str:
+    parts = [one for one in re.split(r"[.:]", address) if one]
+    last = parts[-1] if parts else "dim"
+    if last in ("label", "key", "status") and len(parts) > 1:
+        last = f"{parts[-2]}_{last}"
+    base = _NAME_RE.sub("_", last.lower()).strip("_") or "dim"
+    if not base[0].isalpha():
+        base = f"d_{base}"
+    base = base[:28]
+    if base in _RESERVED:
+        base = f"{base}_dim"
+    name, n = base, 2
+    while name in taken:
+        name, n = f"{base}_{n}", n + 1
+    taken.add(name)
+    return name
+
+
+def suggest(
+    db: Session, kind: str, shape: dict[str, Any], count: int
+) -> dict[str, Any] | None:
+    """끊긴 목록 · 통계의 모양 → 지표 정의 초안(저장하지 않는다 — 사람이 계획을 보고 만든다).
+
+    원천 = 그 타입, 집계 = 건수(합계 · 평균이면 그 칸), 날짜 칸 기준이면 시간 칸과 단위, 나머지
+    기준 · 세부 기준 · **조건의 칸**은 기준으로 — 조건의 값은 남지 않았고, 지표는 읽을 때
+    `d.<기준>=값` 으로 거른다. SPARQL 의 끊김은 짓지 않는다(지표의 모양이 아니다)."""
+    from app.modules.objects.services import properties_of
+    from app.modules.ontology.models import ObjectType
+
+    type_slug = shape.get("type")
+    if kind != "timeout" or not isinstance(type_slug, str):
+        return None
+    source = db.scalar(select(ObjectType).where(ObjectType.slug == type_slug))
+    if source is None:
+        return None
+    kinds = {one.key: one.data_type for one in properties_of(db, source.id)}
+
+    def is_date(address: str) -> bool:
+        return address.startswith("properties.") and (
+            kinds.get(address.removeprefix("properties.")) in _DATE_KINDS
+        )
+
+    addresses: list[str] = []
+    for key in ("group_by", "split_by"):
+        value = shape.get(key)
+        if isinstance(value, str) and value and value not in _NOT_DIMS:
+            addresses.append(value)
+    for condition in shape.get("conditions") or []:
+        field = str(condition).split(" ")[0].removeprefix("제외")
+        if not field or field in _NOT_DIMS:
+            continue
+        addresses.append(_address(field))
+    spec: dict[str, Any] = {
+        "measure": "count",
+        "dimensions": [],
+        "filters": [],
+        "settle_days": 0,
+    }
+    metric = shape.get("metric")
+    if (
+        isinstance(metric, str)
+        and metric in ("sum", "avg", "min", "max")
+        and shape.get("metric_field")
+    ):
+        spec["measure"] = metric
+        spec["measure_field"] = str(shape["metric_field"])
+    taken: set[str] = set()
+    seen: set[str] = set()
+    for address in addresses:
+        if address in seen:
+            continue
+        seen.add(address)
+        if is_date(address):
+            if "time" not in spec:
+                grain = shape.get("grain") if isinstance(shape.get("grain"), str) else "month"
+                spec["time"] = {"address": address, "grain": grain or "month"}
+            continue
+        if len(spec["dimensions"]) >= _MAX_DIMS:
+            break
+        spec["dimensions"].append({"name": _dim_name(address, taken), "address": address})
+    if not spec["dimensions"] and "time" not in spec:
+        return None
+    digest = hashlib.sha1(
+        json.dumps([type_slug, spec], sort_keys=True, ensure_ascii=False).encode()
+    ).hexdigest()[:8]
+    names = ", ".join(one["name"] for one in spec["dimensions"]) or "기간"
+    return {
+        "slug": f"cut_{digest}",
+        "label": f"{source.label} — {names} (끊긴 질문)"[:100],
+        "description": (
+            f"끊긴 질문에서 지은 초안 — {count}번 끊겼다. 조건의 값은 남지 않아 조건의 칸을 "
+            "기준으로 두었다: 읽을 때 그 값으로 거른다(d.<기준>=값)."
+        ),
+        "source_type_slug": type_slug,
+        "spec": spec,
+    }
 
 
 def sparql_shape(types: list[str] | None, query: str) -> dict[str, Any]:

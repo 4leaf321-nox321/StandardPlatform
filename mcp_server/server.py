@@ -3821,6 +3821,7 @@ async def server_status(
     route: str | None = None,
     method: str | None = None,
     limit: int = 20,
+    suggest: bool = False,
 ) -> Any:
     """**서버 상태** — 판 · 환경 · DB 스키마가 최신인가(`schema_behind`) · 디스크 · 백업 ·
     건수 · 기동 시각, 확장 모듈과 켜짐(`extensions` — 켜고 끄기는 화면에서), 정제 도구 키트가
@@ -3834,6 +3835,9 @@ async def server_status(
     - `cut` — **끊긴 질문**(ADR 0031): 시간 상한 · SPARQL 크기에 걸려 답을 못 받은 물음을
       같은 모양끼리(타입 · 기준 · 조건의 칸과 연산 — 값은 없다, SPARQL 은 질의문). 자주
       끊기는 물음은 지표(`metric_define`)로 미리 세어 둘 후보다 — 사람에게 제안한다.
+      `suggest=True` 면 줄마다 **지표 정의 초안**(`suggestion`)이 실린다 — 그대로
+      `metric_define(apply=false)` 에 넣어 계획을 보여 주고 사람의 판단을 받는다(저장은
+      사람이).
 
     손이 가야 하는 일(승인 대기 · 적용 안 한 계획 · 실패한 동기화)은 `server_maintenance`."""
     if performance is not None:
@@ -3851,6 +3855,8 @@ async def server_status(
                 params.append((key, value))
         if performance != "jobs":
             params.append(("limit", str(max(1, min(limit, 200)))))
+        if performance == "cut" and suggest:
+            params.append(("suggest", "true"))
         return await _get(ctx, path, params=params)
     return {
         "status": await _get(ctx, "/api/server/status"),

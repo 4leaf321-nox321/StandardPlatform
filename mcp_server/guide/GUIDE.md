@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-16b
+GUIDE_VERSION: 2026-10-16c
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -1271,7 +1271,7 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 | 공지 읽기 | `notices()` | **읽기만.** 올리기는 화면에서 — 문안이 필요하면 써서 보여 주고 사람이 올린다 |
 | 검토함의 지난 결정 · 추천 정확도 · 묶음 되돌리기 | `review_history()` · `review_undo(batch_id, apply=false)` | 되돌리기는 사용자의 판단 뒤. 이미 그 뒤에 바뀐 것은 안 되돌린다 |
 | 서버 상태 · 확장 · 느린 곳 | `server_status()` · `server_status(performance="requests" · "cases" · "jobs")` | **읽기만.** 확장 켜고 끄기는 화면에서 |
-| **끊긴 질문** — 답을 못 받고 끊긴 물음 · 지표로 세어 둘 후보 | `server_status(performance="cut", period="7d")` | 같은 모양끼리 몇 번 · 몇 명. 자주 끊기는 목록 · 통계는 `metric_define(apply=false)` 로 **제안**만 — 지표는 사람이 정한다. SPARQL 이 「그래프가 큼」 으로 자주 끊기면 그것도 사람에게 알린다(트리플 스토어를 판단할 근거) |
+| **끊긴 질문** — 답을 못 받고 끊긴 물음 · 지표로 세어 둘 후보 | `server_status(performance="cut", period="7d", suggest=True)` → 줄의 `suggestion` 을 `metric_define(apply=false)` 로 | 같은 모양끼리 몇 번 · 몇 명. 자주 끊기는 목록 · 통계는 `metric_define(apply=false)` 로 **제안**만 — 지표는 사람이 정한다. SPARQL 이 「그래프가 큼」 으로 자주 끊기면 그것도 사람에게 알린다(트리플 스토어를 판단할 근거) |
 | 작업 여럿 한 번에 적용 · 멈추기 · 오래된 작업 정리 | `job_apply(job_ids=)` · `job_cancel(job_ids=)` · `jobs_purge(apply=false)` | 적용은 사람이 계획을 본 것만 |
 | 파일로 내보내기(객체 · 관계) | `export_start(type_slug, kind, format, 거르기)` | 작업만 시작한다 — **파일은 사람이 화면의 「작업」 에서 받는다**. 내용으로 답하려면 내보내지 말고 `objects_list` · `objects_summary` |
 | 설정 지우기 — 지표 · 경보 · 데이터 소스 · 뷰 | `config_delete(kind, slug=, id=, apply=false)` | 되살리는 길이 없다 — **사용자가 지우라고 한 것만** |

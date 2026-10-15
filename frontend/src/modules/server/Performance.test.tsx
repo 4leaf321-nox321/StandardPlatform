@@ -6,10 +6,17 @@
 
 import { render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
+import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
 const client = vi.hoisted(() => ({ get: vi.fn() }))
 vi.mock('@/shared/api/client', () => ({ api: client }))
+// 지표 정의 창 자체는 그 창의 시험이 본다 — 여기서는 줄의 초안이 창으로 넘어가는지만.
+vi.mock('@/modules/metrics/MetricDefinitionDialog', () => ({
+  MetricDefinitionDialog: ({ draft }: { draft: { label: string } | null }) => (
+    <div role="dialog">지표 정의 창 — {draft?.label}</div>
+  ),
+}))
 
 import {
   Performance,
@@ -127,6 +134,21 @@ const CUT: CutQuestions = {
       users: 3,
       last_at: '2026-10-09T05:00:00Z',
       last_request_id: 'f00dcafe1234',
+      suggestion: {
+        slug: 'cut_1a2b3c4d',
+        label: '시장 서비스 — project_label, parts_label (끊긴 질문)',
+        description: '끊긴 질문에서 지은 초안',
+        source_type_slug: 'svc_case',
+        spec: {
+          measure: 'count',
+          dimensions: [
+            { name: 'project_label', address: 'ref.model.ref.task.ref.project.label' },
+            { name: 'parts_label', address: 'ref.parts.label' },
+          ],
+          filters: [],
+          settle_days: 0,
+        },
+      },
     },
     {
       kind: 'records',
@@ -154,9 +176,7 @@ function answer(requests: RequestStats = stats(), jobs: JobStats = JOBS, cut = N
 }
 
 function calls(prefix: string): string[] {
-  return client.get.mock.calls
-    .map(([url]) => String(url))
-    .filter((url) => url.startsWith(prefix))
+  return client.get.mock.calls.map(([url]) => String(url)).filter((url) => url.startsWith(prefix))
 }
 
 describe('느린 요청 · 큰 응답', () => {
@@ -166,7 +186,11 @@ describe('느린 요청 · 큰 응답', () => {
 
   it('경로 틀마다 수를 보이고, 문턱을 넘은 줄에 표시를 단다', async () => {
     answer()
-    render(<Performance />)
+    render(
+      <MemoryRouter>
+        <Performance />
+      </MemoryRouter>,
+    )
     const row = (await screen.findByRole('button', { name: '/api/jobs' })).closest('tr')
     expect(row).not.toBeNull()
     const cells = within(row as HTMLElement)
@@ -195,7 +219,11 @@ describe('느린 요청 · 큰 응답', () => {
 
   it('줄을 클릭하면 그 경로의 최악 사례(누가 · 요청 ID)를 연다', async () => {
     answer()
-    render(<Performance />)
+    render(
+      <MemoryRouter>
+        <Performance />
+      </MemoryRouter>,
+    )
     await userEvent.click(await screen.findByRole('button', { name: '/api/jobs' }))
     expect(await screen.findByText('김운영')).toBeInTheDocument()
     expect(screen.getByText('a1b2c3d4e5f6')).toBeInTheDocument()
@@ -209,7 +237,11 @@ describe('느린 요청 · 큰 응답', () => {
 
   it('큰 순 · 기간을 바꾸면 다시 세고, 최악 사례도 큰 순으로 연다', async () => {
     answer()
-    render(<Performance />)
+    render(
+      <MemoryRouter>
+        <Performance />
+      </MemoryRouter>,
+    )
     await screen.findByRole('button', { name: '/api/jobs' })
     await userEvent.click(screen.getByRole('button', { name: '7일' }))
     await waitFor(() =>
@@ -229,25 +261,41 @@ describe('느린 요청 · 큰 응답', () => {
 
   it('비었으면 아직 안 남긴 것인지 그 기간에 없던 것인지 가른다', async () => {
     answer(stats({ items: [], total: 0, first_recorded_at: null }), { ...JOBS, items: [] })
-    const { unmount } = render(<Performance />)
+    const { unmount } = render(
+      <MemoryRouter>
+        <Performance />
+      </MemoryRouter>,
+    )
     expect(await screen.findByText('아직 기록이 없습니다')).toBeInTheDocument()
     expect(await screen.findByText('이 기간에 들어온 작업이 없습니다')).toBeInTheDocument()
     unmount()
 
     answer(stats({ items: [], total: 0 }))
-    render(<Performance initialPeriod="1h" />)
+    render(
+      <MemoryRouter>
+        <Performance initialPeriod="1h" />
+      </MemoryRouter>,
+    )
     expect(await screen.findByText('이 기간에 기록된 요청이 없습니다')).toBeInTheDocument()
   })
 
   it('기록이 너무 많아 최근 쪽만 셌으면 그렇게 말한다', async () => {
     answer(stats({ capped: true }))
-    render(<Performance initialPeriod="7d" />)
+    render(
+      <MemoryRouter>
+        <Performance initialPeriod="7d" />
+      </MemoryRouter>,
+    )
     expect(await screen.findByText(/최근 기록만 셌습니다/)).toBeInTheDocument()
   })
 
   it('끊긴 질문을 모양과 함께 많이 끊긴 것부터 보인다', async () => {
     answer(stats(), JOBS, CUT)
-    render(<Performance />)
+    render(
+      <MemoryRouter>
+        <Performance />
+      </MemoryRouter>,
+    )
     const heading = await screen.findByRole('heading', { name: '끊긴 질문' })
     const section = heading.closest('section') as HTMLElement
     const rows = await within(section).findAllByRole('row')
@@ -260,9 +308,31 @@ describe('느린 요청 · 큰 응답', () => {
     expect(within(rows[2]).getByText(/sp:svc_case/)).toBeInTheDocument()
   })
 
+  it('끊긴 목록 · 통계는 지표 초안으로 지표 정의 창을 연다', async () => {
+    answer(stats(), JOBS, CUT)
+    render(
+      <MemoryRouter>
+        <Performance />
+      </MemoryRouter>,
+    )
+    await screen.findByRole('heading', { name: '끊긴 질문' })
+    expect(calls('/server/performance/cut')[0]).toContain('suggest=true')
+    // SPARQL 의 끊김에는 초안이 없다 — 단추도 하나뿐이다.
+    const buttons = screen.getAllByRole('button', { name: '지표 초안' })
+    expect(buttons).toHaveLength(1)
+    await userEvent.click(buttons[0])
+    expect(await screen.findByRole('dialog')).toHaveTextContent(
+      '지표 정의 창 — 시장 서비스 — project_label, parts_label (끊긴 질문)',
+    )
+  })
+
   it('끊긴 질문이 없으면 없다고 말한다', async () => {
     answer()
-    render(<Performance />)
+    render(
+      <MemoryRouter>
+        <Performance />
+      </MemoryRouter>,
+    )
     expect(await screen.findByText('이 기간에 끊긴 질문이 없습니다')).toBeInTheDocument()
     expect(shapeParts({ q: true, under: true })).toEqual([
       { label: '검색어', value: '있음' },

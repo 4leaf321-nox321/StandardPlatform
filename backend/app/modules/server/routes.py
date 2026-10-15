@@ -47,7 +47,7 @@ from app.modules.server.schemas import (
     ServerStatusOut,
     TableCountOut,
 )
-from app.shared import extensions, ops
+from app.shared import cut_questions, extensions, ops
 from app.shared.auth import current_user, require_system_admin
 from app.shared.errors import NotFound, code
 from app.shared.pagination import MAX_LIMIT, clamp_limit
@@ -394,6 +394,7 @@ def performance_cases(
 def performance_cut(
     period: performance.Period = "24h",
     limit: int = Query(default=50, ge=1, le=200),
+    suggest: bool = Query(default=False, description="줄마다 지표 정의 초안을 싣는다"),
     _: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> CutQuestionsOut:
@@ -405,7 +406,17 @@ def performance_cut(
     return CutQuestionsOut(
         period=period,
         since=since,
-        items=[CutQuestionOut(**vars(one)) for one in items],
+        items=[
+            CutQuestionOut(
+                **vars(one),
+                suggestion=(
+                    cut_questions.suggest(db, one.kind, one.shape, one.count)
+                    if suggest
+                    else None
+                ),
+            )
+            for one in items
+        ],
         total=total,
     )
 

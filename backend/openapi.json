@@ -15598,6 +15598,18 @@
               "default": 50,
               "title": "Limit"
             }
+          },
+          {
+            "name": "suggest",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "줄마다 지표 정의 초안을 싣는다",
+              "default": false,
+              "title": "Suggest"
+            },
+            "description": "줄마다 지표 정의 초안을 싣는다"
           }
         ],
         "responses": {
@@ -24047,6 +24059,18 @@
               }
             ],
             "title": "Last Request Id"
+          },
+          "suggestion": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Suggestion"
           }
         },
         "type": "object",

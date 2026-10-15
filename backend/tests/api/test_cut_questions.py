@@ -140,3 +140,43 @@ def test_끊긴_질문은_시스템_관리자만_보고_홈에_뜨고_보관_기
     performance.purge_old_timings(db)
     db.expire_all()  # 같은 세션이 들고 있는 줄이 아니라 표를 본다
     assert db.get(CutQuestion, gone_id) is None
+
+
+def test_끊긴_통계에서_지표_초안을_짓고_그_초안은_계획을_통과한다(
+    client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR 0032 — 날짜 칸 기준은 시간 칸으로, 나머지 기준과 **조건의 칸**은 기준으로(값은
+    안 남았다 — 읽을 때 `d.<기준>=값` 으로 거른다). 초안은 저장하지 않는다."""
+    kind = _make_type(client, admin, label="수리 기록")
+    _make_property(client, admin, kind, key="received", label="접수일", data_type="date")
+    _make_property(client, admin, kind, key="grade", label="등급", data_type="text")
+    _make_object(client, admin, kind, label="1건", properties={"received": "2026-01-05"})
+
+    def slow(db: Session, *args: Any, **kwargs: Any) -> Any:
+        db.execute(text("SELECT pg_sleep(3)"))
+        raise AssertionError("상한이 이 질의를 끊었어야 한다")
+
+    monkeypatch.setattr(summary_service, "summarize", slow)
+    monkeypatch.setattr(get_settings(), "read_query_seconds", 0.2)
+    asked = {"group_by": "properties.received", "grain": "month", "f.grade.eq": "A"}
+    got = client.get(f"/api/objects/{kind}/summary", params=asked, headers=admin.headers)
+    assert got.status_code == 504
+    monkeypatch.undo()
+
+    plain = _cut(client, admin)
+    assert all(one.get("suggestion") is None for one in plain["items"]), "물어야 싣는다"
+    found = client.get(
+        "/api/server/performance/cut", params={"suggest": "true"}, headers=admin.headers
+    ).json()
+    (one,) = [row for row in found["items"] if row["shape"].get("type") == kind]
+    draft = one["suggestion"]
+    assert draft["source_type_slug"] == kind and draft["slug"].startswith("cut_")
+    assert draft["spec"]["time"] == {"address": "properties.received", "grain": "month"}
+    assert draft["spec"]["dimensions"] == [{"name": "grade", "address": "properties.grade"}]
+    plan = client.post(
+        "/api/metrics/plan",
+        json={"slug": draft["slug"], "source_type_slug": kind, "spec": draft["spec"]},
+        headers=admin.headers,
+    )
+    assert plan.status_code == 200, plan.text
+    assert plan.json()["ok"] is True, plan.json()["errors"]
