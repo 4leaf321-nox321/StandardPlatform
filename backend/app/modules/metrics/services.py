@@ -430,6 +430,27 @@ def _check_alerts(db: Session, metric_id: uuid.UUID, slug: str) -> dict[str, int
         return {"alerts": 0, "new": 0}
 
 
+def _request_insights(db: Session, metric_id: uuid.UUID, slug: str) -> bool:
+    """다시 센 지표의 「눈여겨볼 것」 훑기를 작업으로 넣는다(ADR 0032) — 계산 안에서 돌리지
+    않는다. **넣다가 실패해도 계산은 성공이다**(다음 계산이 다시 넣는다)."""
+    from app.modules.metrics import insights
+
+    try:
+        metric = db.get(MetricDef, metric_id)
+        if metric is None:
+            return False
+        queued = insights.request(db, metric)
+        db.commit()
+        return queued is not None
+    except job_services.Cancelled:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        log.exception("눈여겨볼 것 훑기를 못 넣었습니다: %s", slug)
+        return False
+
+
 def run_recompute(
     db: Session,
     slugs: list[str],
@@ -484,6 +505,7 @@ def run_recompute(
                 "seconds": seconds,
                 "error": None,
                 "alerts": _check_alerts(db, metric.id, slug),
+                "insights": _request_insights(db, metric.id, slug),
             }
         )
     if failed:

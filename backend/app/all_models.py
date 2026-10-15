@@ -37,6 +37,7 @@ from app.modules.metrics.models import (
     MetricAlert,
     MetricAlertEvent,
     MetricDef,
+    MetricInsight,
     MetricRun,
     MetricValue,
 )
@@ -91,6 +92,7 @@ __all__ = [
     "MetricAlert",
     "MetricAlertEvent",
     "MetricDef",
+    "MetricInsight",
     "MetricRun",
     "MetricValue",
     "NavGroup",

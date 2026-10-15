@@ -40,6 +40,7 @@ from app.modules.files import services as files_services
 from app.modules.graph import routes as graph_routes
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs import services as jobs_services
+from app.modules.metrics import insight_routes as metrics_insight_routes
 from app.modules.metrics import routes as metrics_routes
 from app.modules.metrics import services as metrics_services
 from app.modules.notices import routes as notices_routes
@@ -109,6 +110,8 @@ def _api_router(settings: Settings) -> APIRouter:
     router.include_router(objects_routes.router)
     # 기록을 미리 세어 둔 값 — 물으면 데이터로 바로 답한다(ADR 0013).
     router.include_router(metrics_routes.router)
+    # 플랫폼이 스스로 지표를 훑어 찾은 결론 — 묻기 전에 알린다(ADR 0032).
+    router.include_router(metrics_insight_routes.router)
     # 정의 · 객체 · 관계를 한 묶음으로 — 로컬 정제 도구(pipeline/)가 부른다.
     router.include_router(bundles_routes.router)
     router.include_router(graph_routes.router)

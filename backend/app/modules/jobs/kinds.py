@@ -799,6 +799,28 @@ def metrics_recompute(work: Work) -> dict[str, Any]:
     )
 
 
+def metric_insights(work: Work) -> dict[str, Any]:
+    """지표 하나를 훑어 「눈여겨볼 것」 을 적는다(ADR 0032) — 지표를 다시 센 뒤 들어온다.
+    분석 하나의 실패는 훑기를 멈추지 않고 결과에 적는다."""
+    from app.modules.metrics import insights
+    from app.modules.metrics.models import MetricDef
+
+    slug = str(work.params.get("slug") or "")
+    metric = work.db.scalar(select(MetricDef).where(MetricDef.slug == slug))
+    if metric is None:
+        return {"slug": slug, "skipped": "없는 지표"}
+    work.progress("훑기", 0, 1)
+    found = insights.scan(work.db, metric.id)
+    work.progress("훑기", 1, 1)
+    return {
+        "slug": slug,
+        "plans": found.plans,
+        "found": found.found,
+        "new": found.new,
+        "failed": found.failed[:20],
+    }
+
+
 # --- 웹훅 ------------------------------------------------------------------------
 
 
@@ -936,6 +958,17 @@ register(
         False,
         False,
         metrics_recompute,
+        allow_system=True,
+        admin_only=True,
+    )
+)
+register(
+    Kind(
+        "metric_insights",
+        "눈여겨볼 것 훑기",
+        False,
+        False,
+        metric_insights,
         allow_system=True,
         admin_only=True,
     )

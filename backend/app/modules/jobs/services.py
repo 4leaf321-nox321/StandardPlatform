@@ -436,6 +436,10 @@ def report_progress(
     return bool(row[0])
 
 
+#: 다른 작업이 없을 때 집는 종류 — 「눈여겨볼 것」 훑기(`metrics/insights.py`).
+LOW_PRIORITY_KIND = "metric_insights"
+
+
 def claim(db: Session, worker_id: str) -> Job | None:
     """`queued` 하나를 **집는다** — `FOR UPDATE SKIP LOCKED` 라 두 워커가 같은 행을 안 집는다.
     커밋까지 여기서 한다."""
@@ -446,7 +450,13 @@ def claim(db: Session, worker_id: str) -> Job | None:
         # 없음)가 워커 하나를 수십 초씩 잡아, 바로 이어 넣은 가져오기 · 적용이 그 뒤에 줄을
         # 섰다(2026-10-09 — 적용 하나에 지표 열 개, 20초 남짓). 사람의 일이 끊이지 않으면
         # 시스템 작업이 밀리지만, 그것은 다음 타이머가 다시 넣는 일이다.
-        .order_by(Job.requested_by_id.is_(None), Job.created_at)
+        # **눈여겨볼 것의 훑기는 맨 뒤** — 급하지 않고(밤 계산 뒤 저절로 돈다), 지표를 다시 셀
+        # 때마다 하나씩 들어와 쌓이면 그 뒤에 넣은 다시 세기 · 동기화가 줄을 선다(ADR 0032).
+        .order_by(
+            Job.requested_by_id.is_(None),
+            Job.kind == LOW_PRIORITY_KIND,
+            Job.created_at,
+        )
         .limit(1)
         .with_for_update(skip_locked=True)
     )

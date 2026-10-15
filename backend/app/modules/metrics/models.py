@@ -106,6 +106,19 @@ class MetricDef(Base):
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     cells: Mapped[int] = mapped_column(BigInteger, default=0, server_default="0")
 
+    # ── 눈여겨볼 것(ADR 0032) ────────────────────────────────────────────────────────
+    insights_off: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    """훑지 않는다 — 결론이 잡음뿐인 지표를 시스템 관리자가 끈다."""
+    insights_scanned_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """마지막 훑기 — 그때 다시 안 나온 결론은 「지남」 이다."""
+    insights_owners: Mapped[list[str | None]] = mapped_column(
+        JSONB, default=list, server_default="[]"
+    )
+    """마지막 훑기 때 셀이 든 부서(id 글자, 전역은 null) — **이 부서를 모두 보는 사람에게만**
+    결론이 보인다(훑기는 전체의 눈으로 돈다). 읽을 때마다 셀을 훑지 않으려고 적어 둔다."""
+
     created_by_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
@@ -292,6 +305,51 @@ class MetricAlertEvent(Base):
     """처음 확인에서 본 것 — 알리지 않았다."""
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+
+
+class MetricInsight(Base):
+    """**눈여겨볼 것** 하나 — 플랫폼이 스스로 지표를 훑어 찾은 결론(ADR 0032).
+
+    (지표, 열쇠)가 유일 — 열쇠는 경보와 같은 규칙(`alerts.py`)이라 같은 결론은 한 줄이고, 다시
+    나오면 마지막 본 때만 는다. 처음 본 때가 「새로」 의 기준이다.
+    """
+
+    __tablename__ = "metric_insights"
+    __table_args__ = (
+        UniqueConstraint("metric_id", "key", name="uq_metric_insights_key"),
+        Index("ix_metric_insights_first_seen", "first_seen_at"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    metric_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("metric_defs.id", ondelete="CASCADE")
+    )
+    key: Mapped[str] = mapped_column(String(300))
+    kind: Mapped[str] = mapped_column(String(16))
+    """`change`(변화점) · `worse`(새 모델이 전작보다 나쁨) · `high`(집단이 높음)."""
+    recipe: Mapped[str] = mapped_column(String(16))
+    values: Mapped[dict[str, str]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """그 분석의 인자 — 링크가 분석 탭을 그대로 연다."""
+    title: Mapped[str] = mapped_column(String(300))
+    detail: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    score: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    """세기(|ln 비|) x 근거(log10(1 + 건수)), 잠정이면 절반."""
+    run_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    first_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    dismissed_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    """「그만 보기」 — 모두에게서 내려간다. 같은 열쇠는 다시 안 뜬다."""
+    dismissed_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), nullable=True
     )
 
 

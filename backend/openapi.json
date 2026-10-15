@@ -14001,6 +14001,281 @@
         }
       }
     },
+    "/api/insights": {
+      "get": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "List Insights",
+        "description": "**점수 높은 것부터** — 보이는 지표의 것만(그 지표의 셀이 든 부서를 모두 보는 사람).",
+        "operationId": "list_insights_api_insights_get",
+        "parameters": [
+          {
+            "name": "metric",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 지표만(slug)",
+              "title": "Metric"
+            },
+            "description": "이 지표만(slug)"
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "change · worse · high",
+              "title": "Kind"
+            },
+            "description": "change · worse · high"
+          },
+          {
+            "name": "days",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "maximum": 3650,
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "최근 N일에 처음 본 것만",
+              "title": "Days"
+            },
+            "description": "최근 N일에 처음 본 것만"
+          },
+          {
+            "name": "include_past",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "마지막 훑기에 안 나온 것도",
+              "default": false,
+              "title": "Include Past"
+            },
+            "description": "마지막 훑기에 안 나온 것도"
+          },
+          {
+            "name": "include_dismissed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "「그만 보기」 한 것도",
+              "default": false,
+              "title": "Include Dismissed"
+            },
+            "description": "「그만 보기」 한 것도"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsightsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/insights/{insight_id}/dismissed": {
+      "put": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Dismiss",
+        "description": "「그만 보기」 — 모두에게서 내려간다. 같은 열쇠는 다시 안 뜬다(새 열쇠는 뜬다). 되돌릴 수\n있다(`dismissed=false`).",
+        "operationId": "dismiss_api_insights__insight_id__dismissed_put",
+        "parameters": [
+          {
+            "name": "insight_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Insight Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InsightDismissIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsightOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/insights/scan": {
+      "post": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Scan Now",
+        "description": "지금 훑기 — 작업으로 넣는다(같은 지표의 대기 작업이 있으면 그것). 평소에는 지표를 다시\n센 뒤 저절로 돈다.",
+        "operationId": "scan_now_api_insights_scan_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InsightScanIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsightScanOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/insights/metrics/{slug}": {
+      "put": {
+        "tags": [
+          "insights"
+        ],
+        "summary": "Set Metric",
+        "description": "지표마다 훑기를 끄고 켠다 — 결론이 잡음뿐인 지표. 끈 지표의 결론은 「지남」 으로\n남는다.",
+        "operationId": "set_metric_api_insights_metrics__slug__put",
+        "parameters": [
+          {
+            "name": "slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Slug"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InsightSettingIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/InsightSettingOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/bundles/import": {
       "post": {
         "tags": [
@@ -28113,6 +28388,200 @@
           "raw_rows"
         ],
         "title": "InferOut"
+      },
+      "InsightDismissIn": {
+        "properties": {
+          "dismissed": {
+            "type": "boolean",
+            "title": "Dismissed",
+            "default": true
+          }
+        },
+        "type": "object",
+        "title": "InsightDismissIn"
+      },
+      "InsightOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "metric_slug": {
+            "type": "string",
+            "title": "Metric Slug"
+          },
+          "metric_label": {
+            "type": "string",
+            "title": "Metric Label"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "kind_label": {
+            "type": "string",
+            "title": "Kind Label"
+          },
+          "recipe": {
+            "type": "string",
+            "title": "Recipe"
+          },
+          "recipe_label": {
+            "type": "string",
+            "title": "Recipe Label"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "detail": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Detail"
+          },
+          "score": {
+            "type": "number",
+            "title": "Score"
+          },
+          "first_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "First Seen At"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last Seen At"
+          },
+          "past": {
+            "type": "boolean",
+            "title": "Past"
+          },
+          "dismissed": {
+            "type": "boolean",
+            "title": "Dismissed"
+          },
+          "link": {
+            "type": "string",
+            "title": "Link"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "metric_slug",
+          "metric_label",
+          "kind",
+          "kind_label",
+          "recipe",
+          "recipe_label",
+          "title",
+          "detail",
+          "score",
+          "first_seen_at",
+          "last_seen_at",
+          "past",
+          "dismissed",
+          "link"
+        ],
+        "title": "InsightOut",
+        "description": "플랫폼이 스스로 훑어 찾은 결론 하나."
+      },
+      "InsightScanIn": {
+        "properties": {
+          "metric": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Metric"
+          }
+        },
+        "type": "object",
+        "title": "InsightScanIn"
+      },
+      "InsightScanOut": {
+        "properties": {
+          "queued": {
+            "type": "integer",
+            "title": "Queued"
+          }
+        },
+        "type": "object",
+        "required": [
+          "queued"
+        ],
+        "title": "InsightScanOut"
+      },
+      "InsightSettingIn": {
+        "properties": {
+          "off": {
+            "type": "boolean",
+            "title": "Off"
+          }
+        },
+        "type": "object",
+        "required": [
+          "off"
+        ],
+        "title": "InsightSettingIn"
+      },
+      "InsightSettingOut": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "off": {
+            "type": "boolean",
+            "title": "Off"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "off"
+        ],
+        "title": "InsightSettingOut"
+      },
+      "InsightsOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/InsightOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "scanned_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Scanned At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "scanned_at"
+        ],
+        "title": "InsightsOut"
       },
       "InterfaceUsageOut": {
         "properties": {

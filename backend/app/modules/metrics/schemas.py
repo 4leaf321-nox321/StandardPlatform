@@ -465,3 +465,60 @@ class HomePinOut(BaseModel):
     workspace_name: str
     split: str | None
     home_order: int
+
+
+# --- 눈여겨볼 것(ADR 0032) ------------------------------------------------------------------
+
+
+class InsightOut(BaseModel):
+    """플랫폼이 스스로 훑어 찾은 결론 하나."""
+
+    id: uuid.UUID
+    metric_slug: str
+    metric_label: str
+    kind: str
+    """`change`(변화점) · `worse`(새 모델이 전작보다 나쁨) · `high`(다른 집단보다 높음)."""
+    kind_label: str
+    recipe: str
+    recipe_label: str
+    title: str
+    detail: dict[str, Any]
+    score: float
+    """세기(|ln 비|) x 근거(log10(1 + 건수)), 잠정이면 절반 — 줄 세우는 데만 쓴다."""
+    first_seen_at: datetime
+    last_seen_at: datetime
+    past: bool
+    """마지막 훑기에 다시 안 나왔다 — 지난 것."""
+    dismissed: bool
+    link: str
+    """그 분석을 그 인자로 연다 — 눌러서 본 것이 이 결론과 같다."""
+
+
+class InsightsOut(BaseModel):
+    items: list[InsightOut]
+    total: int
+    """거른 결론 수(`items` 는 점수 높은 것부터 일부)."""
+    scanned_at: datetime | None
+    """보이는 지표 가운데 가장 최근 훑기."""
+
+
+class InsightDismissIn(BaseModel):
+    dismissed: bool = True
+
+
+class InsightScanIn(BaseModel):
+    metric: str | None = None
+    """이 지표만(slug). 비우면 켜진 지표 전부."""
+
+
+class InsightScanOut(BaseModel):
+    queued: int
+
+
+class InsightSettingIn(BaseModel):
+    off: bool
+
+
+class InsightSettingOut(BaseModel):
+    slug: str
+    off: bool

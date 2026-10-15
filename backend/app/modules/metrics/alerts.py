@@ -536,6 +536,12 @@ def _changes(
                     "after": change.after,
                     "ratio": change.ratio,
                     "provisional": change.provisional,
+                    # 근거 — 변화점부터의 닫힌 건수(눈여겨볼 것의 점수가 쓴다, ADR 0032).
+                    "support": sum(
+                        point.count
+                        for point in out.points
+                        if point.closed and point.when >= change.at
+                    ),
                 },
             )
         )
@@ -565,6 +571,7 @@ def _changes_scan(
         top=_int(values, "top", changes.SCAN_TOP, 1, changes.SCAN_MAX),
     )
     closed = [period.when for period in out.periods if period.closed]
+    closed_periods = closed
     since = closed[-recent] if len(closed) >= recent else (closed[0] if closed else None)
     findings: list[Finding] = []
     positions: dict[str, int] = {}
@@ -593,6 +600,13 @@ def _changes_scan(
                         "after": change.after,
                         "ratio": change.ratio,
                         "provisional": change.provisional,
+                        # 근거 — 변화 뒤 닫힌 기간의 몫만큼(값마다의 기간별 건수는 응답에
+                        # 없다).
+                        "support": round(
+                            item.total
+                            * sum(1 for one in closed_periods if one >= change.at)
+                            / max(item.points, 1)
+                        ),
                     },
                 )
             )
