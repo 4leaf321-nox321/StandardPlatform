@@ -5,7 +5,7 @@
 #   ./deploy/build_bundle.sh v0.1.0     직접 지정
 #
 # 산출물: release/<slug>-<버전>.tar.gz
-#   app.sif · deploy.sh · ha.sh · pg-ha.sh · backup.sh · restore.sh · *.template · .env.example
+#   app.sif · deploy.sh · ha.sh · pg-ha.sh · pg-tune.sh · backup.sh · restore.sh · *.template · .env.example
 #   · BUILD_INFO · README.md · mcp_server/ (서버 + 오프라인 설치용 휠) · apptainer_debs/ (폐쇄망용)
 #
 # **배포 스크립트를 번들에 함께 담는다.** 서버가 릴리스만 받는 환경이어도 tar 하나로
@@ -149,6 +149,8 @@ cp deploy/backup.timer.template      "$STAGE/"
 # **ha.sh 가 없으면 deploy.sh 가 단독 서버에서도 안 돈다**(첫 줄에서 찾는다).
 cp deploy/ha.sh                      "$STAGE/"
 cp deploy/pg-ha.sh                   "$STAGE/"
+# PostgreSQL 서버 설정 맞추기 — `deploy.sh pg-tune` 이 부른다(ADR 0031). 개발 PC 는 저장소의 것을 그대로.
+cp deploy/pg-tune.sh                 "$STAGE/"
 cp deploy/.env.production.example    "$STAGE/.env.example"
 cp deploy/README_OPERATOR.md         "$STAGE/README.md"
 cp deploy/쉬운-설치.md               "$STAGE/쉬운-설치.md"

@@ -1255,6 +1255,9 @@ $APP_NAME 배포 스크립트 ($VERSION)
   db-status               역할 · 복제 지연 · VIP
   lb                      메인 서버용 nginx 조각 · keepalived(DB VIP)를 지금 설정으로 다시 만들고 반영
 
+  pg-tune [--apply]       PostgreSQL 서버 설정을 이 서버의 메모리 · CPU 로 맞춘다(기본은 보여 주기만 —
+                          ADR 0031). 공유 버퍼 등은 재시작해야 바뀐다. 이중화면 두 서버 다. --help 로 옵션
+
 지금 설정 (env 로 덮을 수 있음):
   APP_SLUG    = $APP_SLUG   (APP_NAME="$APP_NAME" EXTENSIONS=${EXTENSIONS:-없음}) — 다른 인스턴스는 APP_SLUG=<slug>
   OPERATOR    = $OPERATOR
@@ -1291,6 +1294,7 @@ case "${1:-}" in
     db-demote)      cmd_db demote ;;
     db-status)      cmd_db status ;;
     lb)             ensure_dirs; setup_lb ;;
+    pg-tune)        shift; exec "$HERE/pg-tune.sh" "$@" ;;
     render)         cmd_render ;;
     hwax-request)   cmd_hwax_request ;;
     ""|auto)        cmd_auto    ;;

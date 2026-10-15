@@ -85,6 +85,8 @@ def test_배포_스크립트가_번들에_함께_담긴다() -> None:
         "mcp_server/guide",
         # HWAX 포털 연동 요청서의 틀 — `deploy.sh hwax-request` 가 서버에서 채운다(ADR 0028).
         "HWAX-연동요청서.template.md",
+        # PostgreSQL 서버 설정 맞추기 — `deploy.sh pg-tune` 이 부른다(ADR 0031).
+        "pg-tune.sh",
     ):
         assert name in text, f"{name} 이 번들에 안 담깁니다 (build_bundle.sh)"
 
@@ -447,3 +449,19 @@ def test_우분투가_아니면_PPA_를_쓰지_않고_설치_안내를_준다(tm
     assert done.returncode != 0
     assert "apptainer.org" in done.stderr
     assert not any(one.startswith("add-apt-repository") for one in calls)
+
+
+def test_pg_tune_은_보여_주기만이_기본이고_바꾸면_재시작할_것을_말한다() -> None:
+    """서버 전체 설정을 바꾸는 스크립트다 — **물어보지 않고 바꾸지 않는다**(`--apply` 일 때만
+    ALTER SYSTEM), PostgreSQL 을 스스로 재시작하지 않는다(사람이 한가한 때). 개발 PC 는
+    `--url` 로 같은 것을 쓴다."""
+    script = (DEPLOY / "pg-tune.sh").read_text(encoding="utf-8")
+    assert "APPLY=0" in script and "if (( ! APPLY )); then" in script
+    assert "ALTER SYSTEM SET" in script and "pg_reload_conf()" in script
+    assert "pending_restart" in script
+    # 재시작은 말로만 — 스크립트가 직접 부르지 않는다.
+    lines = [line.strip() for line in script.splitlines()]
+    assert not any(line.startswith(("systemctl", "service ", "pg_ctl")) for line in lines)
+    assert "--url" in script
+    deploy = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    assert 'pg-tune)        shift; exec "$HERE/pg-tune.sh" "$@" ;;' in deploy

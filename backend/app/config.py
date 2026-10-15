@@ -235,6 +235,16 @@ class Settings(BaseSettings):
     2,000만 건을 지나가면 수 분이 걸린다(ADR 0031). 그동안 DB 연결과 API 작업자가 묶인다.
     0 이면 안 건다. **MCP 서버의 읽기 대기(90초)보다 짧게** — 길면 AI 는 이 안내 대신 끊긴
     연결을 받는다. 작업(내보내기 · 지표 계산)에는 안 걸린다."""
+    read_work_mem: str = "64MB"
+    """같은 읽기(목록 · 통계 · 추이)의 `work_mem` — 그 트랜잭션에서만(ADR 0031). 서버
+    기본(4MB)이면 2,000만 건을 묶는 정렬 · 해시가 디스크로 넘어간다. 정렬 · 해시 하나마다,
+    병렬 작업자마다 잡히므로(동시 요청이 많으면 그 곱 — 해시는 그 두 배까지) 지표
+    계산(`METRICS_WORK_MEM`)보다 작게 둔다. 비우면 서버 설정을 따른다. 개발 · 운영이 같은
+    값을 쓴다(`.env`)."""
+    read_parallel_workers: int = 4
+    """같은 읽기의 `max_parallel_workers_per_gather` — 기록 전부를 훑는 통계가 작업자 수만큼
+    나뉜다. 서버의 `max_parallel_workers`(기본 8, `deploy/pg-tune.sh` 가 CPU 수로 맞춘다)
+    안에서만 실제로 뜬다. -1 이면 서버 설정을 따른다."""
 
     filestore_gc_hours: int = 24
     """첨부 저장소의 **고아 파일 정리**를 워커가 몇 시간마다 하나(`files/gc.py`). 0 이면 안

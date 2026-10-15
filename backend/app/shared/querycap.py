@@ -14,6 +14,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from sqlalchemy import text
@@ -24,6 +25,9 @@ from app.config import get_settings
 #: PostgreSQL 의 「질의 취소」 — statement_timeout 을 넘겼거나 누가 취소했다.
 QUERY_CANCELED = "57014"
 
+#: `work_mem` 으로 받는 모양 — 틀린 값은 걸지 않고 서버 설정을 따른다(기동은 막지 않는다).
+_MEMORY_RE = re.compile(r"^[1-9][0-9]*(kB|MB|GB)$")
+
 #: 계획기가 조인 순서를 **다 따져 보는** 조인 수. 기본(8 · GEQO 12)이면 네 걸음 기준과 세
 #: 걸음 세부 기준에 조건까지 건 통계(조인 17개)가 순서를 어림으로 골라 100초 걸려 끊겼고,
 #: 20 이면 같은 질의가 13~20초였다(기록 2,000만, ADR 0031). 조인이 8개 아래인 보통 질의에는
@@ -31,15 +35,36 @@ QUERY_CANCELED = "57014"
 PLANNER_JOINS = 20
 
 
+def tuning() -> dict[str, str]:
+    """상한을 거는 읽기에 거는 설정 — 이름 → 값. 개발 · 운영이 같은 `.env` 로 정한다."""
+    settings = get_settings()
+    out = {
+        "join_collapse_limit": str(PLANNER_JOINS),
+        "from_collapse_limit": str(PLANNER_JOINS),
+        "geqo_threshold": str(PLANNER_JOINS),
+    }
+    if _MEMORY_RE.match(settings.read_work_mem):
+        # 2,000만 건 통계의 정렬 · 해시가 디스크로 안 넘어가게(ADR 0031 — 병렬과 함께 25~30%).
+        out["work_mem"] = settings.read_work_mem
+    if settings.read_parallel_workers >= 0:
+        out["max_parallel_workers_per_gather"] = str(settings.read_parallel_workers)
+    if settings.read_query_seconds > 0:
+        out["statement_timeout"] = str(max(1, round(settings.read_query_seconds * 1000)))
+    return out
+
+
 def cap(db: Session) -> None:
     """이 트랜잭션의 질의마다 `read_query_seconds` 상한을 걸고(0 이면 안 건다), 이어진 것
-    너머를 많이 걷는 질의를 위해 계획기를 넓힌다(`PLANNER_JOINS`)."""
-    for name in ("join_collapse_limit", "from_collapse_limit", "geqo_threshold"):
-        db.execute(text(f"SET LOCAL {name} = {PLANNER_JOINS}"))
-    seconds = get_settings().read_query_seconds
-    if seconds <= 0:
-        return
-    db.execute(text(f"SET LOCAL statement_timeout = {max(1, round(seconds * 1000))}"))
+    너머를 많이 걷는 질의를 위해 계획기를 넓히고(`PLANNER_JOINS`), 큰 묶기에 메모리 · 병렬
+    작업자를 준다(`read_work_mem` · `read_parallel_workers`). **한 번 왕복**으로 — 요청마다
+    붙는 일이라 설정 하나에 한 번씩 보내면 그만큼 늦다. `set_config(…, true)` 는 `SET LOCAL`
+    과 같다."""
+    found = tuning()
+    calls = ", ".join(f"set_config(:n{i}, :v{i}, true)" for i in range(len(found)))
+    params: dict[str, Any] = {}
+    for i, (name, value) in enumerate(found.items()):
+        params[f"n{i}"], params[f"v{i}"] = name, value
+    db.execute(text(f"SELECT {calls}"), params)
 
 
 def cancelled(caught: BaseException) -> bool:

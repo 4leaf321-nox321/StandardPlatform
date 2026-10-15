@@ -22,14 +22,42 @@ from tests.api.test_ontology import _make_object, _make_type
 
 
 def test_상한은_그_트랜잭션에만_걸리고_계획기를_넓힌다(db: Session) -> None:
+    before = {
+        name: db.execute(text(f"SHOW {name}")).scalar()
+        for name in ("statement_timeout", "join_collapse_limit", "work_mem")
+    }
+    db.rollback()
     querycap.cap(db)
     assert db.execute(text("SHOW statement_timeout")).scalar() == "1min"
     assert db.execute(text("SHOW join_collapse_limit")).scalar() == "20"
     assert db.execute(text("SHOW geqo_threshold")).scalar() == "20"
+    assert db.execute(text("SHOW work_mem")).scalar() == "64MB"
+    assert db.execute(text("SHOW max_parallel_workers_per_gather")).scalar() == "4"
     db.rollback()
     # `SET LOCAL` — 트랜잭션이 끝나면 풀린다. 같은 연결을 받는 다음 요청에 남지 않는다.
-    assert db.execute(text("SHOW statement_timeout")).scalar() == "0"
-    assert db.execute(text("SHOW join_collapse_limit")).scalar() == "8"
+    after = {name: db.execute(text(f"SHOW {name}")).scalar() for name in before}
+    assert after == before
+
+
+def test_메모리_병렬은_env_로_정하고_틀린_값은_서버_설정을_따른다(
+    db: Session, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    settings = get_settings()
+    monkeypatch.setattr(settings, "read_work_mem", "256MB")
+    monkeypatch.setattr(settings, "read_parallel_workers", 8)
+    assert querycap.tuning()["work_mem"] == "256MB"
+    assert querycap.tuning()["max_parallel_workers_per_gather"] == "8"
+    monkeypatch.setattr(settings, "read_work_mem", "64MB; DROP TABLE objects")
+    monkeypatch.setattr(settings, "read_parallel_workers", -1)
+    monkeypatch.setattr(settings, "read_query_seconds", 0)
+    assert set(querycap.tuning()) == {
+        "join_collapse_limit",
+        "from_collapse_limit",
+        "geqo_threshold",
+    }
+    querycap.cap(db)  # 거는 것이 계획기뿐이어도 한 번에 간다
+    assert db.execute(text("SHOW join_collapse_limit")).scalar() == "20"
+    db.rollback()
 
 
 def test_상한을_넘은_통계는_끊고_할_일을_말한다(

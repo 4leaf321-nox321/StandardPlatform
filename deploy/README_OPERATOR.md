@@ -486,6 +486,38 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 - **접근 로그(`access_logs`)와는 다른 표다.** 접근 로그는 상태를 바꾼 요청만(사용자 지원용) 남기고, 지금은
   지우는 주기가 없다.
 
+## 5f. PostgreSQL 설정 맞추기 — 기록이 수백만 건을 넘으면 (ADR 0031)
+
+PostgreSQL 은 설치한 기본값(공유 버퍼 128MB · 작업 메모리 4MB · 디스크 비용은 회전 디스크 기준)으로 돌고, 배포는
+그 설정을 건드리지 않는다. 기록 2,000만 건에서 「기록 전부를 프로젝트별로」 같은 통계가 기본값이면 27~34초,
+작업 메모리 64MB · 병렬 작업자 4면 22초였다(개발 PC, 다른 일과 같이 돌아 흔들린다). 두 층이다.
+
+- **요청마다 거는 것 — `.env`(앱이 건다, 개발 · 운영 같음).** 목록 · 통계 · 추이 한 번에만 걸리고 끝나면 풀린다.
+
+  | 설정 | 기본 | 뜻 |
+  | --- | --- | --- |
+  | `READ_WORK_MEM` | 64MB | 그 요청의 정렬 · 해시 메모리. 정렬 하나마다 · 작업자마다 잡혀 동시 요청이 많으면 그 곱 — 크게 잡지 않는다 |
+  | `READ_PARALLEL_WORKERS` | 4 | 그 요청이 나눠 쓸 병렬 작업자 수. 서버의 `max_parallel_workers` 안에서만 뜬다. -1 이면 서버 설정 |
+  | `READ_QUERY_SECONDS` | 60 | 질의 하나의 시간 상한(5e 위 표) |
+
+- **서버 전체에 거는 것 — `sudo ./deploy.sh pg-tune`.** 이 서버의 메모리 · CPU 로 권장값을 내고 지금 값과 견줘
+  보인다(**바꾸지 않는다**). `--apply` 면 `ALTER SYSTEM` 으로 적고 다시 읽힌다.
+
+  ```bash
+  sudo ./deploy.sh pg-tune                # 지금 값 · 권장값
+  sudo ./deploy.sh pg-tune --apply        # 적기 — 공유 버퍼 · 작업 프로세스 수는 재시작해야 바뀐다(말해 준다)
+  sudo ./deploy.sh pg-tune --share 0.8    # DB 만 도는 서버(기본 0.5 — 앱 · 워커 · MCP 와 메모리를 나눈다)
+  sudo ./deploy.sh pg-tune --hdd          # 회전 디스크(기본은 SSD — random_page_cost 1.1)
+  ```
+
+  공유 버퍼 = 몫의 1/4(16GB 까지), 캐시 어림 = 몫의 3/4, 유지보수 메모리 = 몫의 1/16(2GB 까지), 병렬 작업자 = CPU
+  수. **재시작은 스크립트가 하지 않는다** — 한가한 때 `sudo systemctl restart postgresql`(앱은 다음 요청에서 다시
+  붙는다). **이중화면 두 서버 다** 돌린다(`ALTER SYSTEM` 은 그 서버의 `postgresql.auto.conf` 에만 적힌다) —
+  대기를 먼저 재시작하고 주를 나중에. 되돌리기: `ALTER SYSTEM RESET <이름>`(또는 `RESET ALL`) 뒤 다시 읽히기.
+- **개발 PC 도 같은 스크립트다** — 저장소에서 `./deploy/pg-tune.sh --url "<backend/.env 의 DATABASE_URL>"`
+  (그 계정이 superuser 면 `--apply` 도). WSL 의 재시작은 `sudo service postgresql restart`. 같은 PostgreSQL 을
+  다른 프로젝트도 쓰면 그쪽에도 걸린다.
+
 ---
 
 ## 6. 한 서버에 여러 플랫폼
