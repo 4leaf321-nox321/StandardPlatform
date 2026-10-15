@@ -14,11 +14,13 @@ vi.mock('@/shared/api/client', () => ({ api: client }))
 import {
   Performance,
   periodOf,
+  shapeParts,
   shownBytes,
   shownMs,
   sortOf,
 } from '@/modules/server/Performance'
 import type {
+  CutQuestions,
   JobStats,
   RequestCase,
   RequestStat,
@@ -103,8 +105,47 @@ const JOBS: JobStats = {
   ],
 }
 
-function answer(requests: RequestStats = stats(), jobs: JobStats = JOBS) {
+const NO_CUT: CutQuestions = { period: '24h', since: '2026-10-09T06:00:00Z', items: [], total: 0 }
+
+const CUT: CutQuestions = {
+  period: '24h',
+  since: '2026-10-09T06:00:00Z',
+  total: 2,
+  items: [
+    {
+      kind: 'timeout',
+      kind_label: '시간 상한',
+      code: 'APP-COMMON-0504',
+      method: 'GET',
+      route: '/api/objects/{type_slug}/summary',
+      shape: {
+        type: 'svc_case',
+        group_by: 'ref.model.ref.task.ref.project.label',
+        conditions: ['ref.parts.label eq'],
+      },
+      count: 7,
+      users: 3,
+      last_at: '2026-10-09T05:00:00Z',
+      last_request_id: 'f00dcafe1234',
+    },
+    {
+      kind: 'records',
+      kind_label: '빠진 기록 타입',
+      code: 'APP-RDF-0006',
+      method: 'POST',
+      route: '/api/rdf/query',
+      shape: { types: [], query: 'SELECT ?x WHERE { ?x a sp:svc_case }' },
+      count: 1,
+      users: 1,
+      last_at: '2026-10-09T04:00:00Z',
+      last_request_id: null,
+    },
+  ],
+}
+
+function answer(requests: RequestStats = stats(), jobs: JobStats = JOBS, cut = NO_CUT) {
   client.get.mockImplementation((url: string) => {
+    if (url.startsWith('/server/performance/cut')) return Promise.resolve(cut)
     if (url.startsWith('/server/performance/requests/cases')) return Promise.resolve(CASES)
     if (url.startsWith('/server/performance/requests')) return Promise.resolve(requests)
     if (url.startsWith('/server/performance/jobs')) return Promise.resolve(jobs)
@@ -202,6 +243,31 @@ describe('느린 요청 · 큰 응답', () => {
     answer(stats({ capped: true }))
     render(<Performance initialPeriod="7d" />)
     expect(await screen.findByText(/최근 기록만 셌습니다/)).toBeInTheDocument()
+  })
+
+  it('끊긴 질문을 모양과 함께 많이 끊긴 것부터 보인다', async () => {
+    answer(stats(), JOBS, CUT)
+    render(<Performance />)
+    const heading = await screen.findByRole('heading', { name: '끊긴 질문' })
+    const section = heading.closest('section') as HTMLElement
+    const rows = await within(section).findAllByRole('row')
+    expect(rows).toHaveLength(3) // 머리 + 둘
+    expect(within(rows[1]).getByText('시간 상한')).toBeInTheDocument()
+    expect(within(rows[1]).getByText('ref.model.ref.task.ref.project.label')).toBeInTheDocument()
+    expect(within(rows[1]).getByText('ref.parts.label eq')).toBeInTheDocument()
+    expect(within(rows[1]).getByText('7')).toBeInTheDocument()
+    expect(within(rows[2]).getByText('기본(기록 타입 뺌)')).toBeInTheDocument()
+    expect(within(rows[2]).getByText(/sp:svc_case/)).toBeInTheDocument()
+  })
+
+  it('끊긴 질문이 없으면 없다고 말한다', async () => {
+    answer()
+    render(<Performance />)
+    expect(await screen.findByText('이 기간에 끊긴 질문이 없습니다')).toBeInTheDocument()
+    expect(shapeParts({ q: true, under: true })).toEqual([
+      { label: '검색어', value: '있음' },
+      { label: '트리', value: '가지 하나' },
+    ])
   })
 
   it('시간 · 크기는 단위를 바꿔 적고, 주소의 모르는 값은 기본으로', () => {

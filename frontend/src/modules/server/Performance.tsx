@@ -11,6 +11,9 @@
  *
  * 작업(일괄 입력 · 내보내기 · 동기화)이 얼마나 걸리고 얼마나 기다리는지도 같은 자리에 — 오래
  * 걸리는 일을 작업으로 옮겼는데 거기서 느려지면 다시 아무도 모르게 된다.
+ *
+ * **끊긴 질문**(ADR 0031)도 여기 — 시간 상한에 걸리거나 SPARQL 이 너무 커서 답을 못 받은 물음을 같은
+ * 모양끼리 묶는다. 무엇을 지표로 미리 세어 둘지를 짐작이 아니라 실제 물음으로 가른다.
  */
 
 import { Fragment, useState } from 'react'
@@ -92,6 +95,26 @@ export interface JobKindStat {
   wait_max_s: number | null
   /** 아직 대기인 것 가운데 가장 오래 기다린 것 — 워커가 멎으면 여기만 는다. */
   queued_oldest_s: number | null
+}
+
+export interface CutQuestion {
+  kind: string
+  kind_label: string
+  code: string
+  method: string
+  route: string
+  shape: Record<string, unknown>
+  count: number
+  users: number
+  last_at: string
+  last_request_id: string | null
+}
+
+export interface CutQuestions {
+  period: string
+  since: string
+  items: CutQuestion[]
+  total: number
 }
 
 export interface JobStats {
@@ -383,6 +406,115 @@ function Requests({
   )
 }
 
+/**
+ * 물음의 모양을 읽을 말로 — 목록 · 통계면 타입 · 기준 · 조건(칸과 연산 — 값은 서버가 안 남긴다),
+ * SPARQL 이면 범위와 질의문.
+ */
+export function shapeParts(shape: Record<string, unknown>): { label: string; value: string }[] {
+  const out: { label: string; value: string }[] = []
+  const text = (value: unknown) => (Array.isArray(value) ? value.join(', ') : String(value))
+  const names: [string, string][] = [
+    ['type', '타입'],
+    ['group_by', '기준'],
+    ['split_by', '세부 기준'],
+    ['metric', '집계'],
+    ['metric_field', '집계 칸'],
+    ['grain', '기간 단위'],
+    ['conditions', '조건'],
+    ['status', '상태'],
+    ['year', '해'],
+  ]
+  for (const [key, label] of names) {
+    if (shape[key] !== undefined) out.push({ label, value: text(shape[key]) })
+  }
+  if (shape.q) out.push({ label: '검색어', value: '있음' })
+  if (shape.under) out.push({ label: '트리', value: '가지 하나' })
+  if ('query' in shape) {
+    const types = Array.isArray(shape.types) ? shape.types : []
+    out.push({ label: '범위', value: types.length ? types.join(', ') : '기본(기록 타입 뺌)' })
+  } else if (shape.types !== undefined) {
+    out.push({ label: '타입들', value: text(shape.types) })
+  }
+  return out
+}
+
+function CutQuestionsSection({ period }: { period: PerformancePeriod }) {
+  const cut = useResource(
+    () => api.get<CutQuestions>(`/server/performance/cut?period=${period}`),
+    [period],
+  )
+  return (
+    <section className="space-y-3">
+      <h2 className="text-base font-semibold">끊긴 질문</h2>
+      <p className="text-muted-foreground text-sm">
+        시간 상한(<span className="font-mono">READ_QUERY_SECONDS</span>)에 걸리거나 SPARQL 이 너무
+        커서 답을 못 받은 물음입니다. 같은 모양끼리 묶어 많이 끊긴 것부터 보입니다 — 자주 끊기는
+        물음은 지표로 미리 세어 둘 후보입니다. 조건의 값과 검색어는 남기지 않습니다.
+      </p>
+      <ErrorNotice error={cut.error} />
+      {cut.data && cut.data.items.length === 0 ? (
+        <EmptyState
+          title="이 기간에 끊긴 질문이 없습니다"
+          hint="목록 · 통계 · SPARQL 이 모두 답을 냈다는 뜻입니다."
+        />
+      ) : (
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>까닭</TableHead>
+              <TableHead>물음</TableHead>
+              <TableHead className="text-right">번</TableHead>
+              <TableHead className="text-right">사람</TableHead>
+              <TableHead>마지막</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {(cut.data?.items ?? []).map((one) => (
+              <TableRow key={`${one.kind}/${one.code}/${one.route}/${JSON.stringify(one.shape)}`}>
+                <TableCell>
+                  {one.kind_label}
+                  <p className="text-muted-foreground font-mono text-xs">{one.code}</p>
+                </TableCell>
+                <TableCell className="max-w-xl">
+                  <p className="font-mono text-xs">
+                    {one.method} {one.route}
+                  </p>
+                  <dl className="mt-1 grid grid-cols-[auto_1fr] gap-x-2 text-xs">
+                    {shapeParts(one.shape).map((part) => (
+                      <Fragment key={part.label}>
+                        <dt className="text-muted-foreground">{part.label}</dt>
+                        <dd className="font-mono break-all">{part.value}</dd>
+                      </Fragment>
+                    ))}
+                  </dl>
+                  {typeof one.shape.query === 'string' && (
+                    <pre className="bg-muted mt-1 max-h-32 overflow-auto rounded p-2 text-xs whitespace-pre-wrap">
+                      {one.shape.query}
+                    </pre>
+                  )}
+                </TableCell>
+                <TableCell className="text-right tabular-nums">{one.count}</TableCell>
+                <TableCell className="text-right tabular-nums">{one.users}</TableCell>
+                <TableCell className="text-xs">
+                  {shownDateTime(one.last_at)}
+                  {one.last_request_id && (
+                    <p className="text-muted-foreground font-mono">{one.last_request_id}</p>
+                  )}
+                </TableCell>
+              </TableRow>
+            ))}
+          </TableBody>
+        </Table>
+      )}
+      {cut.data && cut.data.total > cut.data.items.length && (
+        <p className="text-muted-foreground text-xs">
+          모양 {cut.data.total}가지 중 많이 끊긴 {cut.data.items.length}가지만 보입니다.
+        </p>
+      )}
+    </section>
+  )
+}
+
 function Jobs({ period }: { period: PerformancePeriod }) {
   const jobs = useResource(
     () => api.get<JobStats>(`/server/performance/jobs?period=${period}`),
@@ -477,6 +609,7 @@ export function Performance({
       </div>
       {/* 기간 · 정렬이 바뀌면 첫 쪽 · 닫힌 줄부터 — 새로 세운다(`key`). */}
       <Requests key={`${period}/${sort}`} period={period} sort={sort} onSort={setSort} />
+      <CutQuestionsSection period={period} />
       <Jobs period={period} />
     </div>
   )

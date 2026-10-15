@@ -16,17 +16,18 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Literal
+from typing import Any, Literal
 
-from sqlalchemy import ColumnElement, Float, cast, delete, extract, func, or_, select
+from sqlalchemy import ColumnElement, Float, String, cast, delete, extract, func, or_, select
+from sqlalchemy.dialects.postgresql import ARRAY, aggregate_order_by
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.modules.accounts.models import User
-from app.modules.audit.models import RequestTiming
+from app.modules.audit.models import CutQuestion, RequestTiming
 from app.modules.jobs import kinds
 from app.modules.jobs.models import Job
-from app.shared import extensions
+from app.shared import cut_questions, extensions
 
 Period = Literal["1h", "24h", "7d"]
 PERIODS: dict[str, timedelta] = {
@@ -334,6 +335,68 @@ def job_stats(db: Session, since: datetime) -> list[JobKindStat]:
 _cached: dict[Thresholds, tuple[float, list[extensions.MaintenanceItem]]] = {}
 
 
+@dataclass
+class CutStat:
+    """같은 모양으로 끊긴 질문 묶음 하나 — 몇 번 · 몇 명 · 마지막."""
+
+    kind: str
+    kind_label: str
+    code: str
+    method: str
+    route: str
+    shape: dict[str, Any]
+    count: int
+    users: int
+    last_at: datetime
+    last_request_id: str | None
+
+
+def cut_stats(db: Session, since: datetime, limit: int = 100) -> tuple[list[CutStat], int]:
+    """끊긴 질문(ADR 0031)을 **같은 모양끼리** — 많이 끊긴 것부터. (줄들, 모양 수)."""
+    latest = func.array_agg(
+        aggregate_order_by(CutQuestion.request_id, CutQuestion.created_at.desc()),
+        type_=ARRAY(String),
+    )[1]
+    keys = (
+        CutQuestion.kind,
+        CutQuestion.code,
+        CutQuestion.method,
+        CutQuestion.route,
+        CutQuestion.shape,
+    )
+    grouped = (
+        select(
+            *keys,
+            func.count().label("n"),
+            func.count(func.distinct(CutQuestion.user_id)).label("users"),
+            func.max(CutQuestion.created_at).label("last_at"),
+            latest.label("rid"),
+        )
+        .where(CutQuestion.created_at >= since)
+        .group_by(*keys)
+        .subquery()
+    )
+    total = int(db.scalar(select(func.count()).select_from(grouped)) or 0)
+    rows = db.execute(
+        select(grouped).order_by(grouped.c.n.desc(), grouped.c.last_at.desc()).limit(limit)
+    ).all()
+    return [
+        CutStat(
+            kind=row.kind,
+            kind_label=cut_questions.KIND_LABELS.get(row.kind, row.kind),
+            code=row.code,
+            method=row.method,
+            route=row.route,
+            shape=dict(row.shape or {}),
+            count=int(row.n),
+            users=int(row.users),
+            last_at=row.last_at,
+            last_request_id=row.rid,
+        )
+        for row in rows
+    ], total
+
+
 def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
     """최근 24시간에 문턱을 넘은 경로 틀이 있으면 **시스템 관리자의 홈**에.
 
@@ -375,6 +438,21 @@ def maintenance(db: Session, viewer: User) -> list[extensions.MaintenanceItem]:
                 link="/admin/server?tab=performance&period=24h&sort=max_bytes",
             )
         )
+    _, cut = cut_stats(db, datetime.now(UTC) - PERIODS["24h"], limit=1)
+    if cut:
+        # 답을 못 받은 물음 — 지표로 미리 세어 둘 후보(ADR 0031). 느린 것과 달리 사람이 답을
+        # 못 받았다.
+        items.append(
+            extensions.MaintenanceItem(
+                key="cut_questions",
+                label=(
+                    "끊긴 질문 — 최근 24시간 시간 상한 · 크기에 걸려 답을 못 받은 물음"
+                    "(모양 수)"
+                ),
+                count=cut,
+                link="/admin/server?tab=performance&period=24h",
+            )
+        )
     _cached.clear()
     _cached[limits] = (now, items)
     return items
@@ -398,4 +476,9 @@ def purge_old_timings(db: Session) -> int:
         gone += removed
         if removed < PURGE_BATCH:
             break
+    # 끊긴 질문도 같은 보관 기간 — 드물게 생겨 한 번에 지운다.
+    gone += extensions.rows_changed(
+        db.execute(delete(CutQuestion).where(CutQuestion.created_at < cut))
+    )
+    db.commit()
     return gone

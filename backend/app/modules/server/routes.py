@@ -26,6 +26,8 @@ from app.modules.review import services as review_services
 from app.modules.server import performance, services
 from app.modules.server.schemas import (
     BackupOut,
+    CutQuestionOut,
+    CutQuestionsOut,
     DiskOut,
     ExtensionApiOut,
     ExtensionOut,
@@ -386,6 +388,26 @@ def performance_cases(
             db, route=route, method=method, since=window.since, order=order, limit=limit
         )
     ]
+
+
+@router.get("/performance/cut", response_model=CutQuestionsOut)
+def performance_cut(
+    period: performance.Period = "24h",
+    limit: int = Query(default=50, ge=1, le=200),
+    _: User = Depends(require_system_admin),
+    db: Session = Depends(get_db),
+) -> CutQuestionsOut:
+    """**끊긴 질문**(ADR 0031) — 시간 상한(504)에 걸린 목록 · 통계와 SPARQL 의 거절(그래프가
+    큼 · 빠진 기록 타입)을 같은 모양끼리 묶어 많이 끊긴 것부터. 무엇을 지표로 미리 세어
+    둘지, 트리플 스토어가 정말 필요한지를 실제 물음으로 가른다."""
+    since = datetime.now(UTC) - performance.PERIODS[period]
+    items, total = performance.cut_stats(db, since, limit=limit)
+    return CutQuestionsOut(
+        period=period,
+        since=since,
+        items=[CutQuestionOut(**vars(one)) for one in items],
+        total=total,
+    )
 
 
 @router.get("/performance/jobs", response_model=JobStatsOut)

@@ -1484,6 +1484,10 @@ def test_서버의_느린_곳은_종류마다_제_자리로() -> None:
     )
     assert seen[-1].url.path == "/api/server/performance/requests/cases"
     assert seen[-1].url.params["route"] == "/api/x"
+    # 끊긴 질문(ADR 0031) — 지표로 미리 세어 둘 후보.
+    asyncio.run(server.server_status(_ctx("Bearer t"), performance="cut", period="7d"))
+    assert seen[-1].url.path == "/api/server/performance/cut"
+    assert seen[-1].url.params["period"] == "7d"
     assert "error" in asyncio.run(server.server_status(_ctx("Bearer t"), performance="disk"))
 
 

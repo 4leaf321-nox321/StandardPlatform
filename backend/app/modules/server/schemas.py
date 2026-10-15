@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -242,6 +243,35 @@ class JobKindStatOut(BaseModel):
     wait_max_s: float | None
     queued_oldest_s: float | None
     """아직 대기인 것 가운데 가장 오래 기다린 것 — 워커가 멎으면 여기만 는다."""
+
+
+class CutQuestionOut(BaseModel):
+    """같은 모양으로 끊긴 질문 묶음 하나(ADR 0031)."""
+
+    kind: str
+    """`timeout`(시간 상한) · `too_big`(SPARQL 그래프 · 추론이 큼) · `records`(SPARQL 이 빠진
+    기록 타입을 부름)."""
+    kind_label: str
+    code: str
+    method: str
+    route: str
+    shape: dict[str, Any]
+    """물음의 모양 — 목록 · 통계면 `type` · `group_by` · `split_by` · `conditions`(칸과 연산 —
+    값은 안 남긴다) …, SPARQL 이면 `types` · `query`(앞부분)."""
+    count: int
+    users: int
+    """물은 사람 수(로그인 전 요청은 안 센다)."""
+    last_at: datetime
+    last_request_id: str | None
+    """마지막 것의 요청 ID — app.log 에서 그 줄을 찾는다."""
+
+
+class CutQuestionsOut(BaseModel):
+    period: str
+    since: datetime
+    items: list[CutQuestionOut]
+    total: int
+    """그 기간의 모양 수(`items` 는 많이 끊긴 것부터 일부)."""
 
 
 class JobStatsOut(BaseModel):

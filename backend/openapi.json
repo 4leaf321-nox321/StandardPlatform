@@ -15288,6 +15288,67 @@
         }
       }
     },
+    "/api/server/performance/cut": {
+      "get": {
+        "tags": [
+          "server"
+        ],
+        "summary": "Performance Cut",
+        "description": "**끊긴 질문**(ADR 0031) — 시간 상한(504)에 걸린 목록 · 통계와 SPARQL 의 거절(그래프가\n큼 · 빠진 기록 타입)을 같은 모양끼리 묶어 많이 끊긴 것부터. 무엇을 지표로 미리 세어\n둘지, 트리플 스토어가 정말 필요한지를 실제 물음으로 가른다.",
+        "operationId": "performance_cut_api_server_performance_cut_get",
+        "parameters": [
+          {
+            "name": "period",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "1h",
+                "24h",
+                "7d"
+              ],
+              "type": "string",
+              "default": "24h",
+              "title": "Period"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "maximum": 200,
+              "minimum": 1,
+              "default": 50,
+              "title": "Limit"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CutQuestionsOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/server/performance/jobs": {
       "get": {
         "tags": [
@@ -23660,6 +23721,106 @@
         ],
         "title": "CreateAccountRequest",
         "description": "관리자가 직접 계정을 만들 때. 승인 절차 없이 바로 활성이다."
+      },
+      "CutQuestionOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "kind_label": {
+            "type": "string",
+            "title": "Kind Label"
+          },
+          "code": {
+            "type": "string",
+            "title": "Code"
+          },
+          "method": {
+            "type": "string",
+            "title": "Method"
+          },
+          "route": {
+            "type": "string",
+            "title": "Route"
+          },
+          "shape": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Shape"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          },
+          "users": {
+            "type": "integer",
+            "title": "Users"
+          },
+          "last_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Last At"
+          },
+          "last_request_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Last Request Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "kind_label",
+          "code",
+          "method",
+          "route",
+          "shape",
+          "count",
+          "users",
+          "last_at",
+          "last_request_id"
+        ],
+        "title": "CutQuestionOut",
+        "description": "같은 모양으로 끊긴 질문 묶음 하나(ADR 0031)."
+      },
+      "CutQuestionsOut": {
+        "properties": {
+          "period": {
+            "type": "string",
+            "title": "Period"
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Since"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CutQuestionOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "period",
+          "since",
+          "items",
+          "total"
+        ],
+        "title": "CutQuestionsOut"
       },
       "CutinOut": {
         "properties": {

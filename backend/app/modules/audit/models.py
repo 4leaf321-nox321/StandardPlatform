@@ -126,6 +126,42 @@ class RequestTiming(Base):
     """파일 로그와 잇는 끈 — 이 값으로 app.log 에서 그 요청의 모든 줄을 찾는다."""
 
 
+class CutQuestion(Base):
+    """**끊긴 질문** — 답을 못 받고 끊긴 물음과 그 모양(ADR 0031).
+
+    시간 상한(504)에 걸린 목록 · 통계, 너무 커서 세우기 전에 거절한 SPARQL, 빠진 기록 타입을
+    부른 SPARQL. 무엇을 지표로 미리 세어 둘지, 트리플 스토어가 정말 필요한지를 **실제
+    물음으로** 가르려고 남긴다 — 전에는 짐작뿐이었다.
+
+    **모양만 남긴다** — 타입 · 기준 · 세부 기준 · 조건의 칸과 연산. 조건의 값과 검색어는
+    남기지 않는다(요청 시간 기록이 물음표 뒤를 안 남기는 것과 같은 까닭). SPARQL 은 질의문이
+    곧 물음이라 앞부분을 남긴다. 드물게 생기는 줄이라 요청 시간 기록처럼 모아 넣지 않고 그때
+    한 줄 넣는다.
+    """
+
+    __tablename__ = "cut_questions"
+
+    id: Mapped[int] = mapped_column(BigInteger, Identity(always=False), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
+    kind: Mapped[str] = mapped_column(String(16))
+    """`timeout`(시간 상한) · `too_big`(SPARQL 그래프 · 추론이 큼) · `records`(SPARQL 이 빠진
+    기록 타입을 부름)."""
+    code: Mapped[str] = mapped_column(String(40))
+    """사람이 받은 오류 코드 — `APP-COMMON-0504` · `APP-RDF-0005` …"""
+    method: Mapped[str] = mapped_column(String(10))
+    route: Mapped[str] = mapped_column(String(300))
+    """경로 틀(요청 시간 기록과 같다) — 같은 물음을 묶는 단위의 하나."""
+    shape: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
+    """물음의 모양 — 묶는 단위의 나머지. 값이 같으면 같은 물음이다
+    (`shared/cut_questions.py`)."""
+    user_id: Mapped[uuid.UUID | None] = mapped_column(PgUUID(as_uuid=True), nullable=True)
+    """누가 물었나 — 외래키가 없다(요청 시간 기록과 같은 까닭)."""
+    request_id: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    """app.log 와 잇는 끈."""
+
+
 class AuditEntry(Base):
     """감사 로그 — **무엇이 바뀌었고 누가 승인했는가.**
 

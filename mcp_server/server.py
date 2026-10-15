@@ -3776,6 +3776,7 @@ _PERFORMANCE = {
     "requests": "/api/server/performance/requests",
     "cases": "/api/server/performance/requests/cases",
     "jobs": "/api/server/performance/jobs",
+    "cut": "/api/server/performance/cut",
 }
 
 
@@ -3798,6 +3799,9 @@ async def server_status(
       (`1h` · `24h` · `7d` …) · `sort`.
     - `cases` — 한 경로의 최근 최악 사례. `route`(경로 틀) · `method` 필수.
     - `jobs` — 작업 종류마다 끝난 수 · 소요 · 대기.
+    - `cut` — **끊긴 질문**(ADR 0031): 시간 상한 · SPARQL 크기에 걸려 답을 못 받은 물음을
+      같은 모양끼리(타입 · 기준 · 조건의 칸과 연산 — 값은 없다, SPARQL 은 질의문). 자주
+      끊기는 물음은 지표(`metric_define`)로 미리 세어 둘 후보다 — 사람에게 제안한다.
 
     손이 가야 하는 일(승인 대기 · 적용 안 한 계획 · 실패한 동기화)은 `server_maintenance`."""
     if performance is not None:

@@ -309,7 +309,10 @@ def register_error_handlers(app: FastAPI) -> None:
         그대로 두면 500 「서버 오류」 라 사람은 고장으로 읽고 다시 누른다 — 같은 무거운 질의가
         또 돈다. 504 인 까닭은 `querycap` 머리에(503 이면 이중화의 nginx 가 다른 서버에 다시
         보낸다). 그 밖의 DB 오류는 지금까지처럼 500 이다."""
+        from starlette.concurrency import run_in_threadpool
+
         from app.config import get_settings
+        from app.shared import cut_questions
         from app.shared.querycap import cancelled
 
         if not cancelled(exc):
@@ -317,6 +320,14 @@ def register_error_handlers(app: FastAPI) -> None:
         seconds = get_settings().read_query_seconds
         logger.warning(
             "%s %s -> 504 질의 시간 상한(%ss)", request.method, request.url.path, seconds
+        )
+        # 끊긴 질문으로 남긴다 — 무엇을 지표로 미리 세어 둘지 실제 물음으로 가른다(ADR 0031).
+        await run_in_threadpool(
+            cut_questions.note,
+            request,
+            "timeout",
+            code("COMMON", 504),
+            cut_questions.objects_shape(request),
         )
         return JSONResponse(
             status_code=504,

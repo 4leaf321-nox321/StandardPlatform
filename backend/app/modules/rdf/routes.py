@@ -18,6 +18,7 @@ from sqlalchemy.orm import Session
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.rdf import export
+from app.shared import cut_questions
 from app.shared.auth import current_user
 from app.shared.errors import Conflict, code
 
@@ -222,6 +223,12 @@ def query(
             left_out = logs
             asked = _asks_records(prepared.algebra, names, logs)
             if asked:
+                cut_questions.note(
+                    request,
+                    "records",
+                    code("RDF", 6),
+                    cut_questions.sparql_shape(payload.types, payload.query),
+                )
                 raise Conflict(
                     code("RDF", 6),
                     f"질의가 기록 타입({', '.join(asked)})을 부르는데, `types` 를 안 주면 "
@@ -232,9 +239,26 @@ def query(
                     details={"record_types": asked},
                 )
 
-    _require_size(db, types, user)
+    try:
+        _require_size(db, types, user)
+    except Conflict as refused:
+        # 끊긴 질문으로 남긴다 — 트리플 스토어가 정말 필요한지를 실제 물음으로 가른다
+        # (ADR 0031).
+        cut_questions.note(
+            request,
+            "too_big",
+            refused.code,
+            cut_questions.sparql_shape(payload.types, payload.query),
+        )
+        raise
     graph, stored, added = export.graph_for(db, names, types, payload.infer, user=user)
     if payload.infer and stored > export.INFER_MAX_TRIPLES:
+        cut_questions.note(
+            request,
+            "too_big",
+            code("RDF", 3),
+            cut_questions.sparql_shape(payload.types, payload.query),
+        )
         raise Conflict(
             code("RDF", 3),
             f"추론을 켜기에는 큽니다({stored} 트리플). `types` 로 범위를 좁히세요 "
