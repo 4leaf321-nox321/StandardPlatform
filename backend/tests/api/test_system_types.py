@@ -283,6 +283,39 @@ def test_객체와_부서를_잇는_선은_관계와_같이_보인다(
     )
 
 
+def test_부서와_이은_선으로_묶고_거른다(
+    client: TestClient, admin: Signed, workspace: Workspace
+) -> None:
+    """원 표로 가는 관계 걸음 — 선은 `object_links` 하나만 읽고 uuid 로 잇는다(ADR 0031).
+    막대의 키는 글자(부서 id)이고, 같은 값으로 조건을 걸면 같은 수다."""
+    w = _world(client, admin)
+    made = _link(client, admin, w["part"], w["bolt"]["id"], w["kind"], str(workspace.id))
+    assert made.status_code == 201, made.text
+    _make_object(client, admin, w["part"], label="너트")
+    found = client.get(
+        f"/api/objects/{w['part']}/summary",
+        params={"group_by": f"out.{w['kind']}"},
+        headers=admin.headers,
+    ).json()
+    assert {(one["key"], one["label"]): one["count"] for one in found["buckets"]} == {
+        (str(workspace.id), workspace.name): 1,
+        (None, "(비어 있음)"): 1,
+    }
+    listed = client.get(
+        f"/api/objects/{w['part']}",
+        params={f"f.out.{w['kind']}.eq": str(workspace.id)},
+        headers=admin.headers,
+    ).json()
+    assert [row["label"] for row in listed["items"]] == ["볼트"]
+    # id 가 아닌 글자를 줘도 오류가 아니라 「안 맞음」 이다.
+    odd = client.get(
+        f"/api/objects/{w['part']}",
+        params={f"f.out.{w['kind']}.eq": "부서아님"},
+        headers=admin.headers,
+    )
+    assert odd.status_code == 200 and odd.json()["total"] == 0
+
+
 def test_허용하지_않은_원_표로는_못_잇는다(
     client: TestClient, admin: Signed, workspace: Workspace
 ) -> None:

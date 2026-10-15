@@ -37,7 +37,7 @@ export interface MetricRule {
  */
 export interface Dimension {
   name: string
-  /** 통계 · 조건과 같은 주소 — `properties.<칸>` · `ref.<칸>.<칸>` · `out.<관계>` … 걸음 셋까지. */
+  /** 통계 · 조건과 같은 주소 — `properties.<칸>` · `ref.<칸>.<칸>` · `out.<관계>` … 걸음 넷까지. */
   address?: string | null
   grain?: Grain | null
   rules?: MetricRule[] | null

@@ -78,9 +78,6 @@ NUMERIC_RE = r"^-?[0-9]+(\.[0-9]+)?$"
 #: `date_or_null` 이 같은 뜻을 정규식 없이 검사한다(비용).
 DATE_RE = r"^[0-9]{4}-?[0-9]{2}-?[0-9]{2}([T ].*)?$"
 
-#: 걸음을 몇 번까지 잇나. 넷부터는 조건을 화면에서 읽을 수 없고 질의 비용을 짐작할 수 없다.
-MAX_HOPS = 3
-
 
 @dataclass
 class Axis:
@@ -406,7 +403,7 @@ class JoinPlan:
                         (
                             target,
                             and_(
-                                cast(target.id, String) == edges.c.other,
+                                paths.reaches(target, edges),
                                 target.deleted_at.is_(None),
                                 *owner.seen(target),
                             ),
@@ -510,7 +507,9 @@ class JoinPlan:
                     raise _not_dated(chain.label)
                 hop, owner = end.hop, end.owner
                 return Axis(
-                    end.edges.c.other,
+                    # 막대의 키는 글자다(이름표 · 조건으로 돌아가는 값) — 걸음은 uuid 로
+                    # 잇는다.
+                    cast(end.edges.c.other, String),
                     chain.label,
                     "related",
                     end.joins,

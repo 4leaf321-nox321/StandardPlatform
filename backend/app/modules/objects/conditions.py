@@ -528,7 +528,7 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
             linked = linked.join(
                 target,
                 and_(
-                    cast(target.id, String) == edges.c.other,
+                    paths.reaches(target, edges),
                     target.deleted_at.is_(None),
                     *owner.seen(target),
                 ),
@@ -552,12 +552,15 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
             return ~linked.exists()
         if op == "notempty":
             return linked.exists()
+        # 사람이 준 값(id 글자)과 견준다 — 선은 uuid 라 글자로 바꿔 본다(id 가 아닌 글자도
+        # 오류 없이 「안 맞음」 이 되게).
+        other = cast(last_edges.c.other, String)
         if op == "eq":
-            return linked.where(last_edges.c.other == raw).exists()
+            return linked.where(other == raw).exists()
         if op == "ne":
-            return ~linked.where(last_edges.c.other == raw).exists()
+            return ~linked.where(other == raw).exists()
         values = _values(raw)
-        return linked.where(last_edges.c.other.in_(values)).exists() if values else false()
+        return linked.where(other.in_(values)).exists() if values else false()
 
     assert chain.field is not None and last_target is not None
     inner = clause(

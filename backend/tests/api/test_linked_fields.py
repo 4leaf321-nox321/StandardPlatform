@@ -447,16 +447,25 @@ def test_같은_여럿_걸음을_두_기준이_지나도_곱으로_불지_않는
         assert sum(part["count"] for part in bucket["parts"]) == bucket["count"]
 
 
-def test_걸음은_셋까지_모르는_걸음은_이유를_말한다(client: TestClient, admin: Signed) -> None:
+def test_걸음은_넷까지_모르는_걸음은_이유를_말한다(client: TestClient, admin: Signed) -> None:
+    """셋에서 넷으로(ADR 0031) — 비용은 걸음 수가 아니라 지나가는 줄 수라 시간 상한이 막는다.
+    네 걸음: 기록 → 모델 → 기본 모델 → 제조사 → (같은 제조사의) 기본 모델 › 계열."""
     w = _deep_world(client, admin)
     rel = w["made_by"]
+    four = f"ref.model.ref.base.out.{rel}.in.{rel}.series"
+    found = _summary(client, admin, w["case"], group_by=four)
+    assert {one["label"]: one["count"] for one in found["buckets"]} == {"S": 3, "A": 2}
+    listed = client.get(
+        f"/api/objects/{w['case']}", params={f"f.{four}.eq": "A"}, headers=admin.headers
+    ).json()
+    assert listed["total"] == 2
     too_long = client.get(
         f"/api/objects/{w['case']}/summary",
-        params={"group_by": f"ref.model.ref.base.out.{rel}.out.{rel}.country"},
+        params={"group_by": f"ref.model.ref.base.out.{rel}.in.{rel}.out.{rel}.country"},
         headers=admin.headers,
     )
     assert too_long.status_code == 422
-    assert "걸음" in too_long.json()["error"]["message"]
+    assert "걸음은 4번까지" in too_long.json()["error"]["message"]
     unknown = client.get(
         f"/api/objects/{w['case']}/summary",
         params={"group_by": "ref.model.ref.nothing.x"},

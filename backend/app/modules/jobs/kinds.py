@@ -445,6 +445,7 @@ def _list_query(work: Work) -> tuple[ObjectType, Any]:
         year=int(year) if year else None,
         under=uuid.UUID(under) if under else None,
         deep=(params.get("deep") or "true").lower() != "false",
+        cap=False,
     )
     return object_type, stmt
 

@@ -362,6 +362,10 @@ def _unwrap(r: httpx.Response) -> Any:
     return body
 
 
+#: GET 을 얼마나 기다리나 — 백엔드의 읽기 시간 상한(기본 60초)보다 길어야 한다(`_get`).
+_READ_WAIT_SECONDS = 90.0
+
+
 def _client(timeout: float) -> httpx.AsyncClient:
     return httpx.AsyncClient(base_url=API_BASE, timeout=timeout, transport=_TRANSPORT)
 
@@ -532,7 +536,10 @@ async def _get(
     path: str,
     params: dict[str, Any] | list[tuple[str, Any]] | None = None,
 ) -> Any:
-    async with _client(60) as client:
+    # 백엔드의 읽기 시간 상한(`READ_QUERY_SECONDS`, 기본 60초 — ADR 0031)보다 길게 기다린다.
+    # 같거나 짧으면 백엔드가 「좁히거나 지표로」 를 504 로 내기 전에 여기서 끊겨, AI 는 그
+    # 안내 대신 맨 시간 초과를 받는다.
+    async with _client(_READ_WAIT_SECONDS) as client:
         return _unwrap(await client.get(path, params=params, headers=_forward_headers(ctx)))
 
 
@@ -1643,11 +1650,14 @@ async def objects_summary(
     **목록을 전부 받아 직접 세지 않는다** — 쪽 상한에서 틀리고, 수천 건이면
     못 한다. 서버가 센다. 거르기(`q`·`properties`·`conditions`·`status`)는
     `objects_list` 와 같다 — 그래서 목록의 `total` 과 여기 `total` 이 같다.
+    **시간 상한이 있다**(기본 60초) — 기록 수천만 건을 지나가는 기준 · 조건은 끊긴다
+    (`[APP-COMMON-0504]`). 그러면 끝이 좁은 조건을 먼저 걸어 다시 묻거나, 자주 보는 물음이면
+    지표(`metric_query`)로 — 같은 것을 그대로 다시 부르지 않는다.
 
     - `group_by` 기준: `label`·`key`·`status`·`workspace`(소유 부서)·
       `created_year`, 속성은 `properties.<키>`, 다른 타입의 칸은
       `object_fields` 의 주소. 걸음은 이어 적을 수 있다(`ref.model.ref.base.series`,
-      셋까지). 긴 글·파일은 안 된다.
+      넷까지). 긴 글·파일은 안 된다.
       `type_slug` 가 인터페이스면 `type`(어느 구현 타입인가)도 된다.
       쓸 수 있는 기준 전부가 응답의 `group_options` 다.
     - `split_by` 세부 기준(같은 규칙). 주면 칸마다 `parts` 로 나뉜다.
@@ -3161,7 +3171,7 @@ async def metric_define(
       - `cohort`: 같은 모양(선택) — 「판매월」 처럼 묶어 둘 둘째 날짜. 단위는 `time` 과
         같아야 한다
       - `dimensions`: `[{"name": "base_model", "address": "ref.model.base_model"}]` 여덟까지
-        — 주소는 `objects_summary` 의 `group_by` 와 같다(걸음 셋까지). 날짜 기준에는 `grain`.
+        — 주소는 `objects_summary` 의 `group_by` 와 같다(걸음 넷까지). 날짜 기준에는 `grain`.
         **규칙 기준**(ADR 0015 — 성격 분류): 주소 대신 `{"name": "nature", "label": "성격",
         "rules": [{"label": "SW", "when": [{"field": "action", "op": "starts", "value":
         "SW"}]}, …], "else": "기타"}` — 기록마다 위에서부터 **처음 맞는 규칙**의 이름이 값,

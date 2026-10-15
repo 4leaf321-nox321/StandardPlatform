@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-15b
+GUIDE_VERSION: 2026-10-15c
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -434,7 +434,7 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   자체로는 묶지 않는다. 기록은 토큰 주인이 볼 수 있는 것만 잇는다. 지표의 기준으로는 못 쓴다.
 - **두 걸음까지 준다** — 「개발사의 모회사의 국가」 는 `ref.vendor.ref.parent.country`, 「기록의 모델의
   과제의 프로젝트」 는 `ref.model.ref.task.project`. 같은 관계를 되짚는 걸음(끝이 출발한 쪽)은 없다.
-  주소로는 셋까지 받지만 `object_fields` 에 없는 주소는 지어내지 않는다.
+  주소로는 넷까지 받지만 `object_fields` 에 없는 주소는 지어내지 않는다.
 - 이어진 것이 여럿이면 **그중 하나라도** 맞으면 걸린다. 이어진 것이 **없는** 객체는 너머의 칸
   조건에 안 걸린다(`ne` 도). 「개발사가 없는 툴」 은 참조 칸 `vendor` 의 `empty` 로 묻는다.
 - 참조 칸과 관계가 같은 이름일 수 있다 — `heading` 으로 가른다.
@@ -447,8 +447,13 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 와 같아서 **같은 조건이면 total 이 같다.**
 
 - `group_by`: `status`·`workspace`·`created_year`·`label`·`key`, 속성은 `properties.<키>`, 다른
-  타입의 칸은 `object_fields` 의 주소. 쓸 수 있는 전부가 응답의 `group_options`. 걸음은 셋까지
+  타입의 칸은 `object_fields` 의 주소. 쓸 수 있는 전부가 응답의 `group_options`. 걸음은 넷까지
   이어 적을 수 있다(`group_options` 에는 두 걸음까지 실린다).
+- **걸리는 시간은 걸음 수가 아니라 지나가는 기록 수다.** 끝이 좁은 네 걸음(「그 부품이 교체된 기록이
+  있는 프로젝트」)은 몇 초, 기록 2,000만 건을 다 지나가는 기준은 분 단위다. 목록 · 통계에는 **시간
+  상한**(기본 60초)이 있어 넘으면 `[APP-COMMON-0504] 질의가 …초를 넘겨 멈췄습니다` 로 끊긴다 —
+  같은 것을 다시 부르지 말고 **끝이 좁은 조건을 먼저 걸거나**(특정 부품 · 모델 · 기간), 자주 보는
+  물음이면 **지표**(`metric_list` → `metric_query`, 없으면 `metric_define` 제안)로 묻는다.
 - `metric` 이 `sum`·`avg`·`min`·`max` 면 `metric_field`(숫자 속성)가 필요하다.
 - `order="asc"` 는 「가장 낮은 것」 을 찾을 때. **「월별 추이」 는 `grain="month", order="key"`** —
   `grain`(`day`·`week`·`month`·`quarter`·`year`)이 날짜 축을 그 단위로 묶고, `order="key"` 가
@@ -1218,7 +1223,7 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 **정의할 때.** 시간 칸 · 코호트 칸은 **자기 타입의 날짜 칸**이어야 하고, 기준은 여덟까지, 분모의
 `on` 은 양쪽에 같은 이름 · 같은 값 종류(같은 타입을 가리키는 참조, 같은 종류의 칸)여야 한다.
 자유 글자 칸을 기준으로 두면 셀이 행 수만큼 나온다 — 계획의 경고를 그대로 전한다. 이름 붙인
-기준의 주소는 `objects_summary` 의 `group_by` 와 같다(`ref.model.ref.base.series` 처럼 걸음 셋까지 — 끝은
+기준의 주소는 `objects_summary` 의 `group_by` 와 같다(`ref.model.ref.base.series` 처럼 걸음 넷까지 — 끝은
 칸 이름이다: SKU 의 기본 모델 참조 칸 자체는 `ref.model.base_model`, `ref.model.ref.base_model` 이 아니다).
 
 **자주 세우는 셋 — 분모가 있는 비율.** 분모가 되는 집계 지표를 **먼저** 세우고(분모의 분모는

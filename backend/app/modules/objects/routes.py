@@ -171,7 +171,7 @@ from app.modules.ontology.services import (
     validate_properties,
 )
 from app.modules.workspaces.models import Workspace
-from app.shared import audit, sheets
+from app.shared import audit, querycap, sheets
 from app.shared.auth import current_user
 from app.shared.errors import AppError, Conflict, Forbidden, NotFound, code
 from app.shared.pagination import clamp_limit
@@ -800,7 +800,7 @@ def linked_fields(
 
     조건 고르개가 이 타입 자신의 칸 아래에 제목별로 붙인다. 통계 기준은 `/summary` 의
     `group_options` 에 같은 주소로 실린다. 두 걸음까지 늘어놓는다(「모델 › 과제 › 프로젝트」) —
-    같은 관계를 되짚는 걸음은 뺀다. 주소로는 셋까지 받는다.
+    같은 관계를 되짚는 걸음은 뺀다. 주소로는 넷까지 받는다.
     """
     scope = _scope(db, type_slug)
     if _projection(scope) is not None:
@@ -895,6 +895,7 @@ def _filtered(
     under: uuid.UUID | None = None,
     deep: bool = True,
     omit: str | None = None,
+    cap: bool = True,
 ) -> Any:
     """목록과 내보내기가 **같은 거르기**를 쓴다. 따로 적으면 「화면에는 있는데 파일에는
     없는」 줄이 생기고, 어느 쪽이 맞는지 아무도 모른다.
@@ -906,6 +907,10 @@ def _filtered(
     인터페이스 목록이면 구현 타입 전부가 범위다(ADR 0006) — `types=a|b` 로 그중 몇 타입만
     본다. 트리는 타입의 것이라 인터페이스에서는 거절한다.
     """
+    if cap:
+        # 화면 · AI 가 기다리는 읽기 — 이 요청의 질의마다 시간 상한(ADR 0031). 작업(내보내기)은
+        # `cap=False` 로 부른다: 사람이 기다리지 않고, 2,000만 건 CSV 는 원래 몇 분이다.
+        querycap.cap(db)
     scope = scopes.as_scope(db, target)
     stmt = select(ObjectInstance).where(
         scope.clause(),

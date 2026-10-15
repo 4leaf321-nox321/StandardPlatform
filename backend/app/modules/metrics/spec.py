@@ -10,7 +10,7 @@
                  | share — 조건 비율: `share_when` 에 맞는 기록의 몫(분모는 같은 기록 전체)
     time         {address: properties.<날짜 칸>, grain: day|week|month|quarter|year}
     cohort       같은 모양(선택) — 경과(age)는 이 단위. 시간 칸과 단위가 같아야 한다
-    dimensions   [{name, address, grain?}] 8개까지 — 주소는 통계 · 조건과 같다(걸음 셋까지)
+    dimensions   [{name, address, grain?}] 8개까지 — 주소는 통계 · 조건과 같다(걸음 넷까지)
                  | {name, rules: [{label, when: [{field, op, value}]}], else, label?} — 규칙
                  기준(ADR 0015): 위에서부터 **처음 맞는 규칙**의 이름이 값, 안 맞으면 `else`
     filters      [{field, op, value}] — 목록 조건과 같은 뜻

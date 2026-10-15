@@ -20,6 +20,7 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse, PlainTextResponse, Response
+from sqlalchemy.exc import OperationalError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from app.branding import ERROR_PREFIX
@@ -297,6 +298,35 @@ def register_error_handlers(app: FastAPI) -> None:
             content=_body(
                 code("COMMON", 500),
                 "서버 오류가 발생했습니다. 요청 ID를 관리자에게 알려주세요.",
+            ),
+            headers={REQUEST_ID_HEADER: get_request_id()},
+        )
+
+    @app.exception_handler(OperationalError)
+    async def _db_operational(request: Request, exc: OperationalError) -> JSONResponse:
+        """**시간 상한으로 끊긴 질의**(`shared/querycap`, ADR 0031)는 사람이 할 일을 말한다.
+
+        그대로 두면 500 「서버 오류」 라 사람은 고장으로 읽고 다시 누른다 — 같은 무거운 질의가
+        또 돈다. 504 인 까닭은 `querycap` 머리에(503 이면 이중화의 nginx 가 다른 서버에 다시
+        보낸다). 그 밖의 DB 오류는 지금까지처럼 500 이다."""
+        from app.config import get_settings
+        from app.shared.querycap import cancelled
+
+        if not cancelled(exc):
+            return await _unhandled(request, exc)
+        seconds = get_settings().read_query_seconds
+        logger.warning(
+            "%s %s -> 504 질의 시간 상한(%ss)", request.method, request.url.path, seconds
+        )
+        return JSONResponse(
+            status_code=504,
+            content=_body(
+                code("COMMON", 504),
+                f"질의가 {seconds:g}초를 넘겨 멈췄습니다 — 서버를 붙잡지 않게 끊은 것이고 "
+                "바뀐 것은 없습니다. 이어진 것 너머로 많은 기록을 지나가는 기준 · 조건이면 "
+                "끝이 좁은 조건(특정 부품 · 모델 같은 것)을 먼저 걸어 범위를 줄이고, 자주 "
+                "보는 물음이면 지표로 미리 세어 두세요.",
+                {"seconds": seconds},
             ),
             headers={REQUEST_ID_HEADER: get_request_id()},
         )

@@ -1,4 +1,4 @@
-"""이어진 것 너머의 칸 — **고르개는 두 걸음, 주소는 셋까지.**
+"""이어진 것 너머의 칸 — **고르개는 두 걸음, 주소는 넷까지.**
 
 「미국 기업이 만든 툴만」 「개발사 국가별 툴 수」 는 목록에서 바로 나와야 하는 물음이다. 칸이
 그 타입 자신의 것뿐이면, 사람은 기업 목록에서 미국 기업을 찾아 적어 두고 툴 목록으로
@@ -16,17 +16,22 @@
 조건(`f.<주소>.<연산>=값`)과 통계 기준(`group_by=<주소>`)이 **같은 주소**를 쓴다 — 막대를
 누르면 그 주소 그대로 조건이 된다. 속성 키에는 점이 없으므로 이 주소와 겹치지 않는다.
 
-## 고르개는 두 걸음, 주소는 셋까지
+## 고르개는 두 걸음, 주소는 넷까지
 
 화면의 고르개는 두 걸음까지 늘어놓는다 — 「서비스 기록 → 개발모델 → 과제 › 프로젝트」, 「→ 기본
 모델 › 이름」. 한 걸음만 보이던 때는 기록에서 축의 축으로 가는 물음이 대부분 막혔고, 그때마다
 칸을 복사해 두라고 하면 복사한 칸이 원본과 갈린다. 두 걸음이면 고르개가 수백 줄이 되므로 화면은
 치거나 훑는 고르개(제목 아래로 모은)에 싣는다. **같은 관계를 되짚는 걸음은 늘어놓지 않는다** —
-끝이 출발한 쪽이다. 주소로 적으면 셋까지 받는다(`parse_chain`, ADR 0013 — 지표의 기준). 걸음의
-상대가 하나로 정해져 있어야 다음 걸음을 간다.
+끝이 출발한 쪽이다. 주소로 적으면 넷까지 받는다(`parse_chain`, ADR 0013 — 지표의 기준,
+ADR 0031 — 셋에서 넷으로). 걸음의 상대가 하나로 정해져 있어야 다음 걸음을 간다.
 
 규모(기록 200만, 2026-10-04): 두 걸음 조건 0.04~0.46초, 두 걸음 통계 2.2초(과제 › 프로젝트)
 · 4.1초(기본 모델 이름 2,001가지).
+
+**값은 걸음 수가 아니라 지나가는 줄 수다**(기록 2,000만, ADR 0031) — PostgreSQL 은 좁은
+끝에서 출발하므로 끝이 좁은 네 걸음 조건(「그 부품이 교체된 기록이 있는 프로젝트」)은 2초,
+프로젝트 하나에 걸린 기록 16만 건을 지나가는 세 걸음 조건은 26~70초, 2,000만 건을 지나가는
+네 걸음 통계는 3분이다. 그래서 걸음 수로 막지 않고 **시간으로 막는다**(`shared/querycap`).
 
 ## 뜻 — 「이어진 것 중 하나라도」
 
@@ -55,8 +60,10 @@ from app.shared.permissions import visible_owner_clause
 
 HOP_KINDS = ("ref", "out", "in")
 
-#: 걸음을 몇 번까지 잇나. 넷부터는 조건을 화면에서 읽을 수 없고 질의 비용을 짐작할 수 없다.
-MAX_HOPS = 3
+#: 걸음을 몇 번까지 잇나(ADR 0031 — 셋에서 넷). 비용은 걸음 수가 아니라 지나가는 줄 수가
+#: 정하고, 그것은 시간 상한(`shared/querycap`)이 막는다. 다섯부터는 사람이 주소를 읽어 뜻을
+#: 확인하기 어렵다 — 화면의 고르개는 그대로 두 걸음(`PICKER_HOPS`)이다.
+MAX_HOPS = 4
 
 #: 고르개가 몇 걸음까지 늘어놓나. 주소로는 `MAX_HOPS` 까지 받는다.
 PICKER_HOPS = 2
@@ -482,16 +489,32 @@ class Resolver:
 
     def edges(self, hop: Hop, name: str) -> Any:
         """(me, other) — 이 타입의 객체와 관계로 이어진 것의 id. 객체끼리의 관계와 원 표와
-        이은 선(`object_links`)을 함께 본다: 「사용 부서」 는 대개 뒤쪽에 있다."""
+        이은 선(`object_links`)을 함께 본다: 「사용 부서」 는 대개 뒤쪽에 있다.
+
+        **읽을 것이 하나면 uuid 그대로 낸다**(대부분 — 방향 있는 관계의 저쪽이 객체 타입뿐).
+        예전에는 늘 `other` 를 글자로 바꿔 냈고, 저쪽 객체를 `objects.id::text = other` 로
+        이어야 했다 — 그 조인은 색인을 못 타 객체 표 전부(기록 2,000만 건)를 훑었고, 행 수
+        어림도 2.5억으로 틀어져 계획 전체가 나빠졌다(모델 6천 개의 네 걸음 통계 21초, ADR
+        0031). 저쪽은 `reaches` 로 잇는다 — 이 열의 형이 무엇이든 맞게.
+
+        **여럿을 합칠 때는(방향 없는 관계 · 객체와 원 표가 섞인 끝) 예전처럼 글자로** 합친다.
+        uuid 를 `UNION ALL` 로 합친 선 위에서 묶으면 PostgreSQL 16 이 「could not find pathkey
+        item to sort」 내부 오류를 냈다(16.15, 2026-10-15)."""
         relation = hop.relation
         if relation is None:  # pragma: no cover - 참조 칸 걸음에는 부르지 않는다
             raise ValueError("관계가 아닌 걸음입니다")
         mine = self.scope.type_slugs
+        types = system.types_by_slug(self.db)
+        theirs = [types[slug] for slug in hop.target_slugs if slug in types]
+        # 끝을 안 정한 관계면 둘 다 볼 수 있다.
+        to_objects = not theirs or any(not system.is_system(one) for one in theirs)
+        to_links = not theirs or any(system.is_system(one) for one in theirs)
 
-        def between(me: Any, other: Any) -> Any:
+        def between(me: Any, other: Any, text: bool) -> Any:
             """객체끼리의 선 — 저쪽 끝은 **보는 사람이 볼 수 있는 객체만**(`seen`). 원 표와
             이은 선의 저쪽은 부서 · 계정이라 부서 소유가 아니다(늘 보인다)."""
-            stmt = select(me.label("me"), cast(other, String).label("other")).where(
+            end_id = cast(other, String) if text else other
+            stmt = select(me.label("me"), end_id.label("other")).where(
                 ObjectRelation.relation == relation.slug
             )
             end = aliased(ObjectInstance)
@@ -500,24 +523,33 @@ class Resolver:
                 stmt = stmt.join(end, end.id == other).where(*visible)
             return stmt
 
-        parts: list[Any] = []
+        def linked(me: Any, other: Any, text: bool) -> Any:
+            end_id = cast(other, String) if text else other
+            me_type = ObjectLink.src_type if me is ObjectLink.src_id else ObjectLink.dst_type
+            return select(me.label("me"), end_id.label("other")).where(
+                ObjectLink.relation == relation.slug, me_type.in_(mine)
+            )
+
+        pairs: list[tuple[Any, Any, Any]] = []
         if hop.kind == "out" or not relation.directed:
-            parts += [
-                between(ObjectRelation.src_object_id, ObjectRelation.dst_object_id),
-                select(
-                    ObjectLink.src_id.label("me"),
-                    cast(ObjectLink.dst_id, String).label("other"),
-                ).where(ObjectLink.relation == relation.slug, ObjectLink.src_type.in_(mine)),
-            ]
+            if to_objects:
+                pairs.append(
+                    (between, ObjectRelation.src_object_id, ObjectRelation.dst_object_id)
+                )
+            if to_links:
+                pairs.append((linked, ObjectLink.src_id, ObjectLink.dst_id))
         if hop.kind == "in" or not relation.directed:
-            parts += [
-                between(ObjectRelation.dst_object_id, ObjectRelation.src_object_id),
-                select(
-                    ObjectLink.dst_id.label("me"),
-                    cast(ObjectLink.src_id, String).label("other"),
-                ).where(ObjectLink.relation == relation.slug, ObjectLink.dst_type.in_(mine)),
-            ]
-        return union_all(*parts).subquery(name)
+            if to_objects:
+                pairs.append(
+                    (between, ObjectRelation.dst_object_id, ObjectRelation.src_object_id)
+                )
+            if to_links:
+                pairs.append((linked, ObjectLink.dst_id, ObjectLink.src_id))
+
+        if len(pairs) == 1:
+            make, me, other = pairs[0]
+            return make(me, other, False).subquery(name)
+        return union_all(*(make(me, other, True) for make, me, other in pairs)).subquery(name)
 
     def names(self, hop: Hop, keys: list[str]) -> dict[str, str]:
         """관계로 이어진 것들의 이름 — 원 표(부서 등)에서 먼저, 나머지는 객체에서."""
@@ -664,3 +696,12 @@ def ends_at_hop(path: str) -> bool:
     """주소가 걸음으로 끝나나(관계로 이어진 것 **자체**) — 칸으로 끝나면 조각 수가 홀수다.
     `out.used_by` · `ref.model.out.used_by` 는 걸음, `ref.model.series` 는 칸."""
     return len(path.split(".")) % 2 == 0
+
+
+def reaches(target: Any, edges: Any) -> Any:
+    """선(`Resolver.edges`)의 저쪽 끝이 이 객체 — uuid 면 색인(`objects` 의 기본 키)을 타고,
+    여럿을 합친 선(글자)이면 글자로 견준다."""
+    other = edges.c.other
+    if isinstance(other.type, String):
+        return cast(target.id, String) == other
+    return target.id == other
