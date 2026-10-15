@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import uuid
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -13,7 +14,7 @@ from sqlalchemy.orm import Session
 from app.modules.workspaces.models import Workspace
 from app.shared.errors import code
 from tests.api.conftest import Signed
-from tests.api.test_ontology import _import, _make_object, _make_type, _uniq
+from tests.api.test_ontology import _import, _make_object, _make_property, _make_type, _uniq
 
 
 def _turtle(client: TestClient, admin: Signed, path: str) -> Graph:
@@ -340,6 +341,59 @@ def test_너무_큰_그래프는_세우기_전에_거절하고_좁히라고_한�
     assert asked.json()["error"]["details"] == {"objects": 2, "limit": 1}
     data = client.get("/api/rdf/data", params={"type": part}, headers=admin.headers)
     assert data.status_code == 409
+
+
+def test_SPARQL_은_types_를_안_주면_기록을_빼고_빠진_기록을_부르면_거절한다(
+    client: TestClient, admin: Signed
+) -> None:
+    """기록은 수천만 건이라 그래프에 올리면 5만 객체 상한에 늘 걸리고, 그러면 축을 건너뛰는
+    물음까지 막혔다 — 안 좁히면 기록 타입은 뺀다(ADR 0031). 빠진 기록을 부르는 질의는 0건이
+    아니라 거절이다(0건이면 「없다」 로 읽힌다). 좁혀서 물으면 범위 밖 축은 가리키는 것만
+    IRI 를 받는다."""
+    model = _make_type(client, admin, label="모델", key_policy="required")
+    case = _make_type(client, admin, label="기록", usage="log")
+    _make_property(
+        client,
+        admin,
+        case,
+        key="model",
+        label="모델",
+        data_type="object_ref",
+        ref_type_slug=model,
+    )
+    made = _make_object(client, admin, model, key="M-1", label="M-1")
+    _make_object(client, admin, model, key="M-2", label="M-2")
+    _make_object(client, admin, case, label="건1", properties={"model": made["id"]})
+
+    def ask(query: str, **extra: Any) -> Any:
+        got = client.post(
+            "/api/rdf/query", json={"query": query, **extra}, headers=admin.headers
+        )
+        return {"status": got.status_code, **got.json()}
+
+    found = ask(f"SELECT ?k WHERE {{ ?x a sp:{model} ; dcterms:identifier ?k }}")
+    assert found["status"] == 200, found
+    assert {row["k"] for row in found["rows"]} == {"M-1", "M-2"}
+    assert case in found["left_out"]
+
+    for sneaky in (
+        f"SELECT ?x WHERE {{ ?x a sp:{case} }}",
+        f"SELECT ?m WHERE {{ ?x sp:{case}.model ?m }}",
+        f"SELECT ?x WHERE {{ ?m ^sp:{case}.model ?x }}",
+    ):
+        refused = ask(sneaky)
+        assert refused["status"] == 409, sneaky
+        error = refused["error"]
+        assert error["code"] == code("RDF", 6)
+        assert error["details"] == {"record_types": [case]}
+
+    # 좁혀서 물으면 기록도 — 범위 밖 모델은 기록이 가리키는 것(M-1)만 IRI 를 받는다.
+    narrowed = ask(f"SELECT ?m WHERE {{ ?x sp:{case}.model ?m }}", types=[case])
+    assert narrowed["status"] == 200, narrowed
+    assert [str(row["m"]).strip("<>").rsplit("/", 1)[-1] for row in narrowed["rows"]] == [
+        "M-1"
+    ]
+    assert narrowed["left_out"] == []
 
 
 def test_SPARQL_은_표기를_바꿔도_바깥을_부르지_않는다(

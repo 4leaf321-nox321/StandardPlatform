@@ -8,7 +8,8 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from pydantic import BaseModel, Field
-from rdflib import Graph
+from rdflib import Graph, URIRef
+from rdflib.paths import Path
 from rdflib.plugins.sparql.algebra import translateQuery
 from rdflib.plugins.sparql.parser import expandUnicodeEscapes, parseQuery
 from rdflib.plugins.sparql.parserutils import CompValue
@@ -93,7 +94,9 @@ class QueryRequest(BaseModel):
     query: str = Field(min_length=1, max_length=20_000)
     """SPARQL — `SELECT` 또는 `ASK` 만. 쓰기(INSERT · DELETE)와 바깥 호출(SERVICE)은 막는다."""
     types: list[str] | None = None
-    """이 타입들만 그래프에 올린다. **큰 설치에서는 좁히는 편이 빠르다.**"""
+    """이 타입들만 그래프에 올린다. **안 주면 기록 타입(`usage="log"`)은 빠진다**(ADR
+    0031) — 기록까지 물으려면 그 타입을 여기 적는다(5만 객체 상한). 큰 설치에서는 좁히는
+    편이 빠르다."""
     infer: bool = False
     """OWL-RL 추론 — 상속 분류 · 역관계 · 이행이 답에 들어온다. 느리니 범위를 좁힌다."""
     limit: int = Field(default=200, ge=1, le=5_000)
@@ -109,9 +112,44 @@ class QueryOut(BaseModel):
     elapsed_ms: int
     prefixes: dict[str, str]
     """질의에 쓸 접두어 — `sp:` 가 이 설치의 정의 자리다."""
+    left_out: list[str] = []
+    """`types` 를 안 줘서 **빠진 기록 타입**(slug) — 답에 그 기록은 없다. 기록까지 물으려면
+    `types` 에 적어 다시 부른다."""
 
 
 _BLOCKED = ("insert", "delete", "load", "clear", "drop", "create", "service", "with")
+
+
+def _algebra_iris(node: Any, out: set[str] | None = None) -> set[str]:
+    """파싱한 질의 나무에 나오는 IRI 전부 — 삼중 패턴 · 속성 경로(`sp:a/sp:b`, `^sp:a`) ·
+    FILTER 안까지. 접두어를 무엇으로 적었든 풀린 IRI 로 본다."""
+    found = out if out is not None else set()
+    if isinstance(node, URIRef):
+        found.add(str(node))
+    elif isinstance(node, dict):  # CompValue 도 dict 다
+        for value in node.values():
+            _algebra_iris(value, found)
+    elif isinstance(node, (list, tuple, set, frozenset)):
+        for value in node:
+            _algebra_iris(value, found)
+    elif isinstance(node, Path):
+        for value in vars(node).values():
+            _algebra_iris(value, found)
+    return found
+
+
+def _asks_records(algebra: Any, names: export.Names, slugs: list[str]) -> list[str]:
+    """빠진 기록 타입 중 질의가 부르는 것 — 그 타입(`sp:<slug>`) · 그 칸(`sp:<slug>.<칸>`) ·
+    그 개체(`<base>o/<slug>/…`)."""
+    iris = _algebra_iris(algebra)
+    hit: list[str] = []
+    for slug in slugs:
+        kind = str(names.type_(slug))
+        field = f"{names.ns}{slug}."
+        individual = f"{names.base}o/{slug}/"
+        if any(one == kind or one.startswith((field, individual)) for one in iris):
+            hit.append(slug)
+    return hit
 
 
 def _algebra_names(node: Any, seen: set[str] | None = None) -> set[str]:
@@ -150,18 +188,12 @@ def query(
             raise Conflict(code("RDF", 2), f"질의에 쓸 수 없는 말입니다: {word}")
 
     names = _names(request)
-    _require_size(db, payload.types, user)
-    graph, stored, added = export.graph_for(db, names, payload.types, payload.infer, user=user)
-    if payload.infer and stored > export.INFER_MAX_TRIPLES:
-        raise Conflict(
-            code("RDF", 3),
-            f"추론을 켜기에는 큽니다({stored} 트리플). `types` 로 범위를 좁히세요 "
-            f"(상한 {export.INFER_MAX_TRIPLES}).",
-        )
-
+    # **그래프를 세우기 전에 질의를 푼다** — 접두어만 있으면 된다. 문법이 틀린 질의로 수만
+    # 트리플을 세우지 않고, 범위에서 빠진 기록 타입을 부르는지 미리 본다.
     try:
         prepared = translateQuery(
-            parseQuery(payload.query), initNs=dict(graph.namespace_manager.namespaces())
+            parseQuery(payload.query),
+            initNs=dict(export.bound(names).namespace_manager.namespaces()),
         )
     except Exception as failure:  # rdflib 의 문법 오류는 종류가 많다
         raise Conflict(code("RDF", 4), f"질의를 이해하지 못했습니다: {failure}") from failure
@@ -171,6 +203,43 @@ def query(
         raise Conflict(code("RDF", 1), "SELECT 또는 ASK 질의만 됩니다.")
     if "ServiceGraphPattern" in _algebra_names(prepared.algebra):
         raise Conflict(code("RDF", 2), "질의에 쓸 수 없는 말입니다: service")
+
+    # **안 좁혔으면 기록 타입은 뺀다**(ADR 0031) — 기록 수천만 건이 5만 객체 상한에 걸려 코어를
+    # 건너뛰는 물음까지 막히던 것. 빠진 기록을 부르는 질의는 0건이 아니라 거절로 — 0건이면
+    # 「없다」 로 읽힌다.
+    types = payload.types
+    left_out: list[str] = []
+    if not types:
+        logs = sorted(one.slug for one in export.record_types(db))
+        if logs:
+            types = export.default_types(db)
+            if not types:
+                raise Conflict(
+                    code("RDF", 6),
+                    "기록 타입뿐이라 기본 범위(기록 타입을 뺀 것)가 비었습니다 — `types` 에 "
+                    f"물을 기록 타입을 적으세요: {', '.join(logs)}",
+                )
+            left_out = logs
+            asked = _asks_records(prepared.algebra, names, logs)
+            if asked:
+                raise Conflict(
+                    code("RDF", 6),
+                    f"질의가 기록 타입({', '.join(asked)})을 부르는데, `types` 를 안 주면 "
+                    "기록 타입은 범위에서 빠집니다 — 그대로면 0건이라 「없다」 로 읽힙니다. "
+                    "`types` 에 그 기록 타입과 질의가 지나는 축 타입을 적어 다시 부르세요(5만 "
+                    "객체 상한). 기록을 세거나 나누는 물음이면 통계(objects_summary) · 지표가 "
+                    "빠릅니다.",
+                    details={"record_types": asked},
+                )
+
+    _require_size(db, types, user)
+    graph, stored, added = export.graph_for(db, names, types, payload.infer, user=user)
+    if payload.infer and stored > export.INFER_MAX_TRIPLES:
+        raise Conflict(
+            code("RDF", 3),
+            f"추론을 켜기에는 큽니다({stored} 트리플). `types` 로 범위를 좁히세요 "
+            f"(상한 {export.INFER_MAX_TRIPLES}).",
+        )
 
     started = time.perf_counter()
     try:
@@ -188,6 +257,7 @@ def query(
             inferred_triples=added,
             elapsed_ms=elapsed,
             prefixes=_prefixes(names),
+            left_out=left_out,
         )
     columns = [str(one) for one in (result.vars or [])]
     rows: list[dict[str, Any]] = []
@@ -213,6 +283,7 @@ def query(
         inferred_triples=added,
         elapsed_ms=elapsed,
         prefixes=_prefixes(names),
+        left_out=left_out,
     )
 
 

@@ -30,12 +30,12 @@ import uuid
 from typing import Any
 
 from rdflib import DCTERMS, OWL, RDF, RDFS, SKOS, XSD, Graph, Literal, Namespace, URIRef
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import select, union
+from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
 from app.modules.objects import aliases
-from app.modules.objects.models import ObjectInstance, ObjectRelation
+from app.modules.objects.models import ObjectInstance, ObjectRef, ObjectRelation
 from app.modules.objects.services import properties_of
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef, RelationType
@@ -95,6 +95,28 @@ def _bind(graph: Graph, names: Names) -> None:
     graph.bind("skos", SKOS)
     graph.bind("dcterms", DCTERMS)
     graph.bind("sp", names.ns)
+
+
+def bound(names: Names) -> Graph:
+    """접두어만 묶은 빈 그래프 — 그래프를 세우기 **전에** 질의를 풀어 보는 자리
+    (`routes.query`)."""
+    graph = Graph()
+    _bind(graph, names)
+    return graph
+
+
+def record_types(db: Session) -> list[ObjectType]:
+    """기록 타입(`usage="log"`) — 질의의 **기본 범위에서 빠진다**(ADR 0031). 기록은 수백만
+    ~ 수천만 건이라 그래프에 올리면 5만 객체 상한에 늘 걸리고, 그러면 코어(축)를 건너뛰는
+    물음까지 막힌다. 기록의 세기 · 나누기는 통계 · 지표가 DB 에서 바로 한다."""
+    return list(db.scalars(select(ObjectType).where(ObjectType.usage == "log")))
+
+
+def default_types(db: Session) -> list[str]:
+    """`types` 를 안 줬을 때의 범위 — 기록이 아닌 타입 전부."""
+    return [
+        row.slug for row in db.scalars(select(ObjectType).where(ObjectType.usage != "log"))
+    ]
 
 
 def schema_graph(db: Session, names: Names) -> Graph:
@@ -282,12 +304,30 @@ def data_graph(
     iri_of: dict[uuid.UUID, URIRef] = {}
     for row in rows:
         iri_of[row.id] = names.individual(types[row.type_id].slug, row.key, row.id)
-    # 참조가 가리키는 상대는 범위 밖 타입이어도 IRI 가 필요하다 — 보이는 것만 미리 알아 둔다.
+    # 참조 · 관계가 가리키는 상대는 범위 밖 타입이어도 IRI 가 필요하다 — 보이는 것만, 그리고
+    # **실제로 가리키는 것만** 읽는다. 예전에는 범위 밖 객체 전부를 읽어서, 축 몇 타입으로
+    # 좁혀도 기록 2,000만 건의 id 를 다 올렸다(ADR 0031 — 기록을 기본 범위에서 빼면 늘 이
+    # 길이다).
     all_iri: dict[uuid.UUID, URIRef] = dict(iri_of)
+    mine = aliased(ObjectInstance)
+    inside = select(mine.id).where(
+        mine.deleted_at.is_(None),
+        mine.merged_into_id.is_(None),
+        visible_owner_clause(user, mine.owner_workspace_id),
+        mine.type_id.in_(wanted),
+    )
     if type_slugs:
+        pointed = union(
+            select(ObjectRef.dst_id.label("id")).where(ObjectRef.src_id.in_(inside)),
+            select(ObjectRelation.dst_object_id.label("id")).where(
+                ObjectRelation.src_object_id.in_(inside)
+            ),
+        ).subquery("pointed")
         others = db.execute(
             select(ObjectInstance.id, ObjectInstance.type_id, ObjectInstance.key).where(
-                *seen, ObjectInstance.type_id.not_in(wanted)
+                *seen,
+                ObjectInstance.type_id.not_in(wanted),
+                ObjectInstance.id.in_(select(pointed.c.id)),
             )
         )
         for other_id, other_type, other_key in others:
@@ -315,7 +355,11 @@ def data_graph(
                 graph, names, object_type, prop, node, row.properties.get(prop.key), all_iri
             )
 
-    relations = db.scalars(select(ObjectRelation))
+    # 선은 범위 안에서 나가는 것만 쓴다(아래) — 좁혔으면 그것만 읽는다.
+    edges = select(ObjectRelation)
+    if type_slugs:
+        edges = edges.where(ObjectRelation.src_object_id.in_(inside))
+    relations = db.scalars(edges)
     for edge in relations:
         src = iri_of.get(edge.src_object_id)
         dst = iri_of.get(edge.dst_object_id) or all_iri.get(edge.dst_object_id)

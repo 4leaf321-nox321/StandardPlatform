@@ -35052,6 +35052,14 @@
             },
             "type": "object",
             "title": "Prefixes"
+          },
+          "left_out": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Left Out",
+            "default": []
           }
         },
         "type": "object",
