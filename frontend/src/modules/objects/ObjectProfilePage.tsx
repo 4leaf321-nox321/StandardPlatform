@@ -36,7 +36,19 @@ import { Textarea } from '@/shared/components/ui/textarea'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
+/**
+ * **객체마다 화면을 새로 세운다.** 같은 주소 틀(`/o/:typeSlug/:objectId`)이라 다른 객체로 건너가도
+ * React 는 같은 화면을 다시 쓰고, 그러면 새 응답이 오기 전까지 **앞 객체의 응답 · 편집 상태**가 남는다.
+ * 그 사이 아래의 「실제 타입 주소로 옮기기」 가 앞 객체의 타입을 보고 `/o/<앞 타입>/<새 id>` 로 옮겨
+ * 404 「객체를 찾을 수 없습니다」 가 났다(기본 모델 → 판매 모델, 2026-10-15). 열쇠가 id 라
+ * 인터페이스 주소에서 실제 타입으로 옮길 때(같은 객체)는 다시 세우지 않는다.
+ */
 export default function ObjectProfilePage() {
+  const { objectId = '' } = useParams()
+  return <ObjectProfile key={objectId} />
+}
+
+function ObjectProfile() {
   const { typeSlug = '', objectId = '' } = useParams()
   const navigate = useNavigate()
   const profile = useResource(() => objectApi.profile(typeSlug, objectId), [typeSlug, objectId])
@@ -86,7 +98,9 @@ export default function ObjectProfilePage() {
 
   // **인터페이스 주소로 열었으면 객체의 실제 타입으로 간다**(ADR 0006) — 「설비」 를 가리키는
   // 칸에서 누르면 이 주소가 된다. 고치기 · 이력 · 연도는 타입의 길이라 주소가 타입이어야 한다.
-  const actualType = row?.type_slug
+  // 응답이 **지금 주소의 객체**일 때만 본다 — 다른 객체의 응답으로 옮기면 그 타입에 이 id 를 붙인
+  // 없는 주소가 된다(위 `ObjectProfilePage`).
+  const actualType = row?.id === objectId ? row.type_slug : undefined
   useEffect(() => {
     if (actualType && actualType !== typeSlug) {
       navigate(`/o/${actualType}/${objectId}`, { replace: true })
