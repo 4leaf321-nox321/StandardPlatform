@@ -23,6 +23,8 @@ import { useState } from 'react'
 import { Link, useParams } from 'react-router-dom'
 import { Plus } from 'lucide-react'
 
+import { InsightList } from '@/modules/insights/InsightList'
+import { insightsApi } from '@/modules/insights/api'
 import { MetricHomeWidget } from '@/modules/metrics/MetricHomeWidget'
 import { HomeWidget } from '@/modules/objects/HomeWidget'
 import { AddWidgetDialog } from '@/modules/workspaces/AddWidgetDialog'
@@ -49,6 +51,8 @@ function WorkspaceHome() {
   const { slug } = useParams<{ slug?: string }>()
   const { user } = useAuth()
   const maintenance = useResource(() => api.get<MaintenanceItem[]>('/server/maintenance'), [])
+  // 플랫폼이 스스로 훑어 찾은 것 — 최근 30일에 처음 본 것, 점수 높은 다섯(ADR 0032).
+  const insights = useResource(() => insightsApi.list({ days: 30, limit: 5 }), [])
   // **다른 부서 것도 함께** 볼 수 있다. 사람은 대개 여러 부서에 속하고, 그때 부서를
   // 갈아 가며 도는 일이 생긴다. 기본은 지금 부서만 — 홈은 「여기」 의 자리다.
   const [everywhere, setEverywhere] = useState(false)
@@ -117,6 +121,21 @@ function WorkspaceHome() {
           </ul>
         )}
       </section>
+
+      {/* --- 눈여겨볼 것 ------------------------------------------------------
+          **없으면 안 그린다** — 「남은 일」 과 같은 까닭(빈 자리를 매일 보면 그 자리를 안
+          읽게 된다). */}
+      {(insights.data?.items ?? []).length > 0 && (
+        <section className="space-y-3">
+          <div className="flex items-baseline justify-between gap-2">
+            <h2 className="text-base font-semibold">눈여겨볼 것</h2>
+            <Link to="/insights" className="text-muted-foreground text-xs underline">
+              모두 보기
+            </Link>
+          </div>
+          <InsightList items={insights.data?.items ?? []} />
+        </section>
+      )}
 
       {/* --- 부서가 올린 위젯 -------------------------------------------------
           화면을 고쳐서 더하지 않는다. 목록에서 조건을 걸고 「통계」 기준을 고른 뒤

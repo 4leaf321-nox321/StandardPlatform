@@ -157,6 +157,8 @@ def out(db: Session, metric: MetricDef) -> schemas.MetricOut:
         dims=dims,
         broken=broken,
         analyses=recipes.registry.availability(built, broken),
+        insights_off=metric.insights_off,
+        insights_scanned_at=metric.insights_scanned_at,
         current_run_id=metric.current_run_id,
         last_run_at=metric.last_run_at,
         last_status=metric.last_status,

@@ -22,6 +22,7 @@ import {
   Home,
   Inbox,
   LayoutGrid,
+  Lightbulb,
   ListChecks,
   Megaphone,
   ScrollText,
@@ -157,6 +158,8 @@ export const NAV_GROUPS: NavGroup[] = [
       // **기록을 미리 세어 둔 값.** 비율 · 추이 · 코호트는 통계가 그때그때 세는 것으로는 안
       // 되고, 세어 둔 값은 계산 시각과 함께 보여야 한다(ADR 0013).
       { label: '지표', icon: ChartLine, to: '/metrics' },
+      // **묻기 전에 알린다.** 지표를 기준 값마다 훑어 찾은 변화 · 차이(ADR 0032).
+      { label: '눈여겨볼 것', icon: Lightbulb, to: '/insights' },
       { label: '공지', icon: Megaphone, to: '/notices' },
     ],
   },

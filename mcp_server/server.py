@@ -65,6 +65,7 @@ BASE_INSTRUCTIONS = (
     "  이 플랫폼의 자기소개를 적는다   platform_profile → platform_profile_update\n"
     "  그 타입에 무엇이 있나           objects_list\n"
     "  몇 건인가 · 어떻게 갈리나       objects_summary  (세려고 전부 받지 마라)\n"
+    "  요즘 이상한 것 · 무엇부터 볼까  insights         (근거는 metric_analyze)\n"
     "  이 객체의 모든 것               object_get · object_references · object_rollup\n"
     "  계층을 한 단계씩                object_tree\n"
     "  이것과 이어진 것들              graph_neighbors  (타입 지형은 graph_overview)\n"
@@ -3089,6 +3090,37 @@ async def metric_analyze(
     if name in ("sprt", "changes") and (options or {}).get("by"):
         path += "/scan"  # 값마다 훑기 — 응답 모양이 달라 경로가 따로다
     return await _get(ctx, path, params=params)
+
+
+@tool()
+async def insights(
+    ctx: Context,
+    metric: str | None = None,
+    kind: str | None = None,
+    days: int | None = None,
+    include_past: bool = False,
+    limit: int = 20,
+) -> Any:
+    """**눈여겨볼 것** — 플랫폼이 스스로 지표를 훑어 찾은 변화 · 차이(ADR 0032). 「요즘 뭐가
+    이상해?」 「무엇부터 봐야 하나」 에 **먼저** 부른다 — 사람이 지표 · 기준 · 값을 골라 묻지
+    않아도 서는 결론이다(증상 x 모델 같은 조합까지 훑는다).
+
+    - 점수 높은 것부터. 제목에 「몇 배 · 몇 건」 이 든다 — 그대로 옮긴다.
+    - `kind`: `change`(변화점) · `worse`(새 모델이 전작보다 나쁨) · `high`(다른 집단보다 높음).
+      `days` 는 최근 N일에 처음 본 것만, `include_past` 는 마지막 훑기에 안 나온 것도.
+    - 결론마다 `link` 가 그 분석을 그 인자로 연다 — 근거를 보이려면 `metric_analyze` 로 같은
+      인자를 부른다(`recipe` · 링크의 쿼리).
+    - **후보다** — 원인을 단정하지 않는다. q 값 · 잠정 · 지남을 함께 말한다. 결론은 그 지표의
+      셀이 든 부서를 모두 보는 사람에게만 보인다 — 비었다고 「이상 없음」 이 아니다.
+
+    읽기만. 그만 보기 · 지표마다 끄기 · 지금 훑기는 화면에서(시스템 관리자)."""
+    params: list[tuple[str, Any]] = [("limit", str(max(1, min(limit, 200))))]
+    for key, value in (("metric", metric), ("kind", kind), ("days", days)):
+        if value:
+            params.append((key, str(value)))
+    if include_past:
+        params.append(("include_past", "true"))
+    return await _get(ctx, "/api/insights", params=params)
 
 
 @tool()

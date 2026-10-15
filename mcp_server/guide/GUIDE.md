@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-16a
+GUIDE_VERSION: 2026-10-16b
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -33,6 +33,7 @@ GUIDE_VERSION: 2026-10-16a
 | **세어 둔 수에서 추론** — 「B10 수명」 「전작보다 나빠졌나」 「관리도 신호」 「언제 바뀌었나」 「몰려 있나」 | `metric_list` 의 `analyses` → `metric_analyze(slug, recipe, options=)` | **셀을 받아 직접 계산하지 않는다.** `caveats` 를 그대로 전하고, `unreachable` 인 B수명은 값이 없다 — `get_guide(topic="metrics")` 의 「분석」 |
 | **요즘 무엇이 울렸나** — 「내 경보」 「새로 나빠진 모델 있나」 | `metric_alerts(slug=)` · 경보 하나는 `alert_id`(`check=True` 면 지금 확인) | 발생은 「그때 처음 본 결론」 — 지금도 그런지는 `metric_analyze` 로 |
 | **「나빠지면 알려 줘」** — 경보 걸기 · 이름 · 끄기 | `metric_alert_save(apply=false)` → 사람 확인 → `apply=true` | 미리 보기가 지금 분석을 한 번 돌려 보인다. 인자는 못 고친다 — 새로 걸고 옛 것은 `config_delete(kind="metric_alert")` |
+| **요즘 뭐가 이상한가 · 무엇부터 볼까** | `insights()` → 근거는 `metric_analyze` 로 같은 인자 | 플랫폼이 스스로 훑은 **후보**다 — 「몇 배 · 몇 건」 · q · 잠정을 그대로 옮기고 원인을 단정하지 않는다. 비었다고 「이상 없음」 이 아니다(그 지표의 셀이 든 부서를 다 봐야 보인다) |
 | 지표 값이 이상하다 · 언제 셌나 · 왜 그대로인가 | `metric_runs(slug)` → (시스템 관리자) `metric_recompute(slug)` | 실패한 계산은 옛 값을 두고 이유를 남긴다. 평소에는 타이머가 바뀐 기간만 센다 — `mode` · `note` |
 | 지표를 **부서 홈**에 올리기 · 내리기 | `metric_home(slug, workspace_slug, split=)` · `remove=true` | **그 부서 관리자만.** 홈은 부서 모두가 보는 자리 — 사용자가 올리자고 한 것만 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」 · 「모델의 과제의 프로젝트별 건수」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 두 걸음까지 준다. 주소를 추측하지 않는다 |

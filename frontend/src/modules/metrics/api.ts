@@ -134,6 +134,9 @@ export interface Metric {
   stale: boolean
   /** 되는 분석과 안 되는 이유 — 서버가 정의를 보고 판단한다. */
   analyses: AnalysisAvail[]
+  /** 「눈여겨볼 것」 훑기를 껐나(ADR 0032). */
+  insights_off: boolean
+  insights_scanned_at: string | null
   created_at: string
   updated_at: string
 }

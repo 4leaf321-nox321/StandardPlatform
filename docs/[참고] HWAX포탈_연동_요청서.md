@@ -165,8 +165,8 @@ PER_USER_SSO_APPS="… {{ID}}:{{PREFIX}}"                       # 이미 있는 
 
 ### 5-4. 도구 이름 — 접두어 `{{ID}}_`
 
-우리 MCP 는 도구 92개를 낸다(`search` · `whoami` · `objects_list` · `ontology_schema` …). 같은 코드로 띄운 인스턴스는 **이름이 전부
-같다** — 게이트웨이 규칙대로 겹친 것은 양쪽 모두 `<키>_<도구>` 로 노출되므로, 인스턴스가 둘 이상이면 92개 전부 `{{ID}}_objects_list`
+우리 MCP 는 도구 93개를 낸다(`search` · `whoami` · `objects_list` · `ontology_schema` …). 같은 코드로 띄운 인스턴스는 **이름이 전부
+같다** — 게이트웨이 규칙대로 겹친 것은 양쪽 모두 `<키>_<도구>` 로 노출되므로, 인스턴스가 둘 이상이면 93개 전부 `{{ID}}_objects_list`
 꼴이 된다(하나뿐이어도 다른 앱과 겹치는 `search` 같은 것은 붙는다). `{{ID}}_<도구>` 별칭으로는 늘 부를 수 있다. 우리 쪽에서 할 것은 없다.
 
 ## 6. 권한 표 — `backend/config/access.local.yaml`(박스 파일)
@@ -289,7 +289,7 @@ curl -s http://127.0.0.1:9110/tools-map | python3 -c 'import json,sys; print(sum
 grep -n "{{ID}}" infra/nginx/hwax.conf | head                         # location 하나 · loc_extras 가 들어갔나
 ```
 
-- [ ] ① 위 숫자 — 화면 200 · health(우리 slug) · 딥링크 200 · 콜백 **303** · 게이트웨이 백엔드 True · 도구 92
+- [ ] ① 위 숫자 — 화면 200 · health(우리 slug) · 딥링크 200 · 콜백 **303** · 게이트웨이 백엔드 True · 도구 93
 - [ ] ② 10-2 — 이메일 없이 400, 승인된 사람으로 200 + `access_token`
 - [ ] ③ 포털 타일 「{{NAME}}」 을 누르면 로그인된 첫 화면(`/{{ID}}/`). 처음 보는 사람은 우리 로그인 화면에 「가입 승인을 기다립니다」
 - [ ] ④ Claude 를 포털 `/mcp-gw/mcp` 로 붙여 `{{ID}}_whoami`(또는 `whoami`)가 **그 사람**을 말한다 — 게이트웨이 감사에 `mode=as-user-pat`

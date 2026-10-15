@@ -16,6 +16,7 @@
 import { Suspense, lazy, useMemo, useState } from 'react'
 import { Link, useLocation, useParams, useSearchParams } from 'react-router-dom'
 
+import { MetricInsightsTab } from '@/modules/insights/MetricInsightsTab'
 import { AlertsTab } from '@/modules/metrics/AlertsTab'
 import { metricsApi } from '@/modules/metrics/api'
 import type {
@@ -65,8 +66,8 @@ const COMPOSABLE = ['count', 'sum', 'share']
 /** 코호트 표에 늘어놓을 경과 칸의 상한 — 그보다 길면 히트맵만 읽는다. */
 const AGES_IN_TABLE = 24
 
-type Tab = 'table' | 'series' | 'cohort' | 'analysis' | 'alerts' | 'runs'
-const TABS: Tab[] = ['table', 'series', 'cohort', 'analysis', 'alerts', 'runs']
+type Tab = 'table' | 'series' | 'cohort' | 'analysis' | 'alerts' | 'insights' | 'runs'
+const TABS: Tab[] = ['table', 'series', 'cohort', 'analysis', 'alerts', 'insights', 'runs']
 type By = 'none' | 'period' | 'cohort'
 
 const RUN_STATUS: Record<string, { label: string; className: string }> = {
@@ -344,6 +345,7 @@ function MetricDetail({ slug }: { slug: string }) {
           {found.cohort_grain && <TabsTrigger value="cohort">코호트</TabsTrigger>}
           {found.analyses.length > 0 && <TabsTrigger value="analysis">분석</TabsTrigger>}
           <TabsTrigger value="alerts">경보</TabsTrigger>
+          <TabsTrigger value="insights">눈여겨볼 것</TabsTrigger>
           <TabsTrigger value="runs">계산 기록</TabsTrigger>
         </TabsList>
 
@@ -574,6 +576,12 @@ function MetricDetail({ slug }: { slug: string }) {
 
         <TabsContent value="alerts" className="space-y-3">
           {tab === 'alerts' && <AlertsTab metric={found} />}
+        </TabsContent>
+
+        <TabsContent value="insights" className="space-y-3">
+          {tab === 'insights' && (
+            <MetricInsightsTab metric={found} onChanged={() => metric.reload()} />
+          )}
         </TabsContent>
 
         <TabsContent value="runs" className="space-y-3">

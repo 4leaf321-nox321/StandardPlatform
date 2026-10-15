@@ -30591,6 +30591,23 @@
             "type": "array",
             "title": "Analyses"
           },
+          "insights_off": {
+            "type": "boolean",
+            "title": "Insights Off",
+            "default": false
+          },
+          "insights_scanned_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Insights Scanned At"
+          },
           "current_run_id": {
             "anyOf": [
               {

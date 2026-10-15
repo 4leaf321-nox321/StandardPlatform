@@ -55,6 +55,9 @@ class MetricOut(BaseModel):
     broken: str | None = None
     """정의가 지금 안 지어지는 이유(칸이 지워짐 · 분모가 사라짐). 있으면 계산이 실패한다."""
     analyses: list[AnalysisAvailOut] = Field(default_factory=list)
+    insights_off: bool = False
+    """「눈여겨볼 것」 훑기를 끈 지표(ADR 0032)."""
+    insights_scanned_at: datetime | None = None
     """이 지표 위에서 되는 분석과 안 되는 이유(ADR 0014)."""
     current_run_id: uuid.UUID | None
     last_run_at: datetime | None

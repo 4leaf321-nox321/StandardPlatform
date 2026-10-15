@@ -97,6 +97,7 @@ TOOLS = {
     "metric_query",
     "metric_analyze",
     "metric_alerts",
+    "insights",
     "metric_define",
     "platform_profile",
     "platform_profile_update",
@@ -1533,3 +1534,21 @@ def test_위험_도구는_시스템_관리자만_쓴다() -> None:
     seen = _serve(lambda _r: httpx.Response(200, json={"rows": []}), admin=True)
     assert asyncio.run(server.jobs_purge(ctx))["applied"] is False
     assert server.objects_delete.__name__ == "objects_delete"
+
+
+def test_눈여겨볼_것은_거르기를_그대로_넘긴다() -> None:
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 0}))
+    asyncio.run(
+        server.insights(
+            _ctx("Bearer t"), metric="svc", kind="change", days=30, include_past=True
+        )
+    )
+    request = seen[-1]
+    assert request.url.path == "/api/insights"
+    assert dict(request.url.params) == {
+        "limit": "20",
+        "metric": "svc",
+        "kind": "change",
+        "days": "30",
+        "include_past": "true",
+    }

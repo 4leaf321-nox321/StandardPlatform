@@ -33,6 +33,7 @@ const AccountsAdminPage = lazy(() => import('@/modules/accounts/AccountsAdminPag
 const AuditPage = lazy(() => import('@/modules/audit/AuditPage'))
 const JobsPage = lazy(() => import('@/modules/jobs/JobsPage'))
 const MetricsPage = lazy(() => import('@/modules/metrics/MetricsPage'))
+const InsightsPage = lazy(() => import('@/modules/insights/InsightsPage'))
 const MetricDetailPage = lazy(() => import('@/modules/metrics/MetricDetailPage'))
 const GraphPage = lazy(() => import('@/modules/graph/GraphPage'))
 const MembersPage = lazy(() => import('@/modules/workspaces/MembersPage'))
@@ -118,6 +119,8 @@ export const router = createBrowserRouter(
             // 기록을 미리 세어 둔 값 — 비율 · 추이 · 코호트(ADR 0013).
             { path: 'metrics', element: <MetricsPage /> },
             { path: 'metrics/:slug', element: <MetricDetailPage /> },
+            // 플랫폼이 스스로 훑어 찾은 변화 · 차이 — 묻기 전에 알린다(ADR 0032).
+            { path: 'insights', element: <InsightsPage /> },
             // **타입을 모르는 사람이 서는 자리.** 목록은 타입마다 따로다.
             { path: 'search', element: <SearchPage /> },
             { path: 'notices', element: <NoticesPage /> },
