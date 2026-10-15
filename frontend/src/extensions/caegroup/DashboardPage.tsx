@@ -201,7 +201,7 @@ export default function DashboardPage() {
                 axis={axis}
                 steps={steps}
                 dark={dark}
-                onPick={(tile) => navigate(`pairs?pair=${tile.id}`)}
+                onPick={(tile) => navigate(`pairs?pair=${tile.id}&kind=${kind}`)}
               />
             )}
           </Suspense>
@@ -223,7 +223,7 @@ export default function DashboardPage() {
                 <button
                   type="button"
                   className="font-medium hover:underline"
-                  onClick={() => navigate(`pairs?pair=${one.pair_id}`)}
+                  onClick={() => navigate(`pairs?pair=${one.pair_id}&kind=${kind}`)}
                 >
                   {one.label}
                 </button>

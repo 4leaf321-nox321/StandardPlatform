@@ -199,7 +199,8 @@ export default function OntologyTypesPage() {
             <TypeIcon name={exampleTarget.icon} className="mr-2 inline align-text-bottom" />
             {exampleTarget.label} 의 예시
           </h2>
-          <TypeExamples type={exampleTarget} />
+          {/* 타입마다 새로 — 다시 쓰면 B 의 제목 아래 A 의 예시가 서고, 그 링크는 /o/B/<A 의 id>(404). */}
+          <TypeExamples key={exampleTarget.slug} type={exampleTarget} />
         </section>
       )}
 

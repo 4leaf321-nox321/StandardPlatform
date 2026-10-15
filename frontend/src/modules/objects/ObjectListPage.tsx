@@ -365,6 +365,11 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
     // 목록은 전체 연도였다(2026-10-08).
     [typeSlug, query, JSON.stringify(conditions), status, under, deep, year, yearApplies, offset],
   )
+  // **고른 것 중 지금 쪽에 보이는 것만** 대상이다. 조건 · 검색어 · 쪽을 바꾼 직후 옛 목록이 아직
+  // 보이는 사이(`stale`)에 고른 줄은 새 목록에 없는데도 「N건 골랐습니다」 로 남아 일괄 수정 ·
+  // 삭제의 대상이 됐다 — 그 사이에는 고르기도 막는다.
+  const pageIds = new Set((list.stale ? [] : (list.data?.items ?? [])).map((one) => one.id))
+  const chosenIds = [...picked].filter((id) => pageIds.has(id))
 
   /** 내보내기 · 통계에 그대로 넘기는 필터 — 쪽(offset)만 뺀다. 파일은 전부다. */
   const exportQuery: ObjectQuery = {
@@ -760,10 +765,10 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
 
         {/* **고른 것이 있으면 무엇을 할 수 있는지 그 자리에 뜬다.** 위쪽 도구 막대에
             숨겨 두면 고른 사람은 그것을 찾지 못하고, 결국 한 건씩 연다. */}
-        {picked.size > 0 && !isSystem && !managed && (
+        {chosenIds.length > 0 && !isSystem && !managed && (
           <div className="bg-muted/50 mb-4 flex flex-wrap items-center gap-3 rounded-md border p-3">
             <span className="text-sm">
-              <strong>{picked.size}건</strong> 골랐습니다
+              <strong>{chosenIds.length}건</strong> 골랐습니다
             </span>
             <Button size="sm" onClick={() => setBulkEditing(true)}>
               <Pencil className="mr-1 size-4" />
@@ -826,9 +831,10 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                         type="checkbox"
                         aria-label="이 쪽 전부 선택"
                         className="size-4"
+                        disabled={list.stale}
                         checked={
                           (list.data?.items.length ?? 0) > 0 &&
-                          picked.size === (list.data?.items.length ?? 0)
+                          chosenIds.length === (list.data?.items.length ?? 0)
                         }
                         onChange={(event) =>
                           setPicked(
@@ -870,6 +876,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                           type="checkbox"
                           aria-label={`${row.label} 선택`}
                           className="size-4"
+                          disabled={list.stale}
                           checked={picked.has(row.id)}
                           onChange={(event) =>
                             setPicked((before) => {
@@ -927,7 +934,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
       {type && bulkEditing && (
         <BulkEditDialog
           typeSlug={typeSlug}
-          ids={[...picked]}
+          ids={chosenIds}
           defs={type.properties}
           workspaces={(myWorkspaces.data ?? []).map((one) => ({ slug: one.slug, name: one.name }))}
           onClose={() => setBulkEditing(false)}
@@ -946,7 +953,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
         <BulkDeleteDialog
           typeSlug={typeSlug}
           typeLabel={type.label}
-          ids={[...picked]}
+          ids={chosenIds}
           onClose={() => setBulkDeleting(false)}
           onApplied={() => {
             list.reload()

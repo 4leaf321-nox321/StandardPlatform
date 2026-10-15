@@ -49,8 +49,10 @@ export default function InfraPage() {
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState<Error | null>(null)
 
-  // 부서를 바꾸면 그 부서의 값으로 칸을 채운다.
+  // 부서를 바꾸면 그 부서의 값으로 칸을 채운다. **그 부서의 응답이 온 뒤에만** — 앞 부서의
+  // 응답이 남은 사이(`stale`)에 채우거나 저장하면 앞 부서의 값이 이 부서에 들어간다.
   useEffect(() => {
+    if (current.stale) return
     const row = current.data
     if (!row) return
     setSw(row.sw)
@@ -58,10 +60,12 @@ export default function InfraPage() {
     setMaterials(row.material_types === null ? '' : String(row.material_types))
     setStd(row.has_process_std)
     setNote(row.note)
-  }, [current.data])
+  }, [current.data, current.stale])
+  /** 칸이 **지금 고른 부서의 값**인가 — 아니면 저장을 막는다. */
+  const formReady = Boolean(target) && !current.stale && current.data !== null
 
   async function save() {
-    if (!target) return
+    if (!target || !formReady) return
     setBusy(true)
     setFailed(null)
     try {
@@ -149,7 +153,7 @@ export default function InfraPage() {
             ))}
           </SelectContent>
         </Select>
-        <Button className="ml-auto" onClick={() => void save()} disabled={busy || !target}>
+        <Button className="ml-auto" onClick={() => void save()} disabled={busy || !formReady}>
           <Save className="size-4" /> 저장
         </Button>
       </div>

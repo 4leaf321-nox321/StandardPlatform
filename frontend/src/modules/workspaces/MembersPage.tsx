@@ -36,7 +36,17 @@ import {
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDate } from '@/shared/lib/datetime'
 
+/**
+ * **부서마다 화면을 새로 세운다.** 헤더의 부서 고르개는 `/w/A/members` → `/w/B/members` 로 같은 화면을
+ * 다시 쓰는데, 그러면 B 의 응답이 오기 전까지 A 의 멤버 줄에 B 의 권한이 붙어 역할 바꾸기 · 빼기가
+ * B 로 나갔다(두 부서에 다 든 사람이면 B 에서 실제로 빠진다).
+ */
 export default function MembersPage() {
+  const { slug = '' } = useParams<{ slug: string }>()
+  return <Members key={slug} />
+}
+
+function Members() {
   const { slug = '' } = useParams<{ slug: string }>()
   const { user } = useAuth()
   const list = useResource(() => workspaceApi.members(slug), [slug])

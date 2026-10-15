@@ -303,9 +303,11 @@ export default function BulkPage() {
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState<Error | null>(null)
 
-  // **현재값 불러오기.** 축을 바꾸거나 다시 받으면 표가 그 값으로 채워진다.
+  // **현재값 불러오기.** 축을 바꾸거나 다시 받으면 표가 그 값으로 채워진다. 앞 축 · 종류의 응답이
+  // 남은 사이(`stale`)에는 표가 앞 축의 것이라 저장을 막는다(`sheetReady`) — 열과 저장 대상은 이미
+  // 새 축이라, 그대로 저장하면 값 칸이 수준 칸으로 읽히는 식으로 엉뚱하게 들어간다.
   useEffect(() => {
-    if (sheet.data) {
+    if (sheet.data && !sheet.stale) {
       setRows(rowsOf(sheet.data, columns))
       setResults(null)
     }
@@ -365,8 +367,9 @@ export default function BulkPage() {
     return out
   }, [marksSheet.data])
 
-  // 불량 유형 표 — **시험 항목마다 한 줄**, 지금 든 유형이 채워진 채로 시작한다.
-  const subjectRows = subjects.data?.items ?? []
+  // 불량 유형 표 — **시험 항목마다 한 줄**, 지금 든 유형이 채워진 채로 시작한다. 종류를 바꾼
+  // 직후 앞 종류의 목록이 남은 사이에는 비운다 — 그 줄의 객체를 새 종류의 타입으로 고치면 404 다.
+  const subjectRows = subjects.stale ? [] : (subjects.data?.items ?? [])
   useEffect(() => {
     setDefectRows(
       subjectRows.map((one) => [
@@ -380,7 +383,7 @@ export default function BulkPage() {
     )
     // 줄은 시험 항목 목록이 정한다 — 재현 표시는 읽기용 칸이라 같이 다시 그린다.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [subjects.data, markedTypes])
+  }, [subjects.data, subjects.stale, markedTypes])
 
   const defectCols = useMemo(
     () =>
@@ -479,7 +482,7 @@ export default function BulkPage() {
   }, [defectRows, markedTypes])
 
   async function saveDefects() {
-    if (!subjectSlug) return
+    if (!subjectSlug || subjects.stale) return
     setBusy(true)
     setFailed(null)
     try {
@@ -559,8 +562,11 @@ export default function BulkPage() {
     }
   }
 
+  /** 표가 **지금 축 · 종류의 것**인가 — 아니면 저장을 막는다(위의 「현재값 불러오기」). */
+  const sheetReady = !sheet.stale && sheet.data !== null
+
   async function save() {
-    if (!axis) return
+    if (!axis || !sheetReady) return
     setBusy(true)
     setFailed(null)
     try {
@@ -657,7 +663,7 @@ export default function BulkPage() {
             <Button
               className="ml-auto"
               onClick={() => void saveDefects()}
-              disabled={busy || !subjectSlug || defectRows.length === 0}
+              disabled={busy || !subjectSlug || subjects.stale || defectRows.length === 0}
             >
               <Save className="size-4" /> 저장
             </Button>
@@ -829,7 +835,11 @@ export default function BulkPage() {
         >
           <Download className="size-4" /> 엑셀로 내려받기
         </Button>
-        <Button className="ml-auto" onClick={() => void save()} disabled={busy || rows.length === 0}>
+        <Button
+          className="ml-auto"
+          onClick={() => void save()}
+          disabled={busy || !sheetReady || rows.length === 0}
+        >
           <Save className="size-4" /> 저장
         </Button>
       </div>

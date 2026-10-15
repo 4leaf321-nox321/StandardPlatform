@@ -1382,6 +1382,8 @@ function ExploreView({
       <aside className="min-h-0 overflow-y-auto text-sm lg:pr-1">
         {picked ? (
           <NodeDetail
+            // 노드마다 새로 — 다시 쓰면 B 의 이름 아래 A 의 속성 · 관계가 응답이 올 때까지(오류면 계속) 남는다.
+            key={picked.id}
             node={picked}
             hidden={pickedHidden}
             isFocus={picked.id === explored?.focus}

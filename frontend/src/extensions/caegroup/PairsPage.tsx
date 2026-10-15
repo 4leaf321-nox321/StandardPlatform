@@ -70,7 +70,10 @@ export default function PairsPage() {
   const [target, setTarget] = useState<string>(home ?? '')
   // **목록은 종류로 갈린다.** 시험 연계와 전용 검토는 재는 축이 달라, 한 표에 섞으면
   // 채울 수 없는 칸이 생긴다(가상검증률은 비교할 시험이 있어야 한다).
-  const [kind, setKind] = useState<PairKind>('test')
+  // 대시보드의 액자 · 최근 변경을 누르면 `?pair=…&kind=…` 로 온다 — 그 종류의 탭으로 연다(안 그러면
+  // 전용 검토의 연계를 시험 연계 목록에서 찾느라 못 고른다).
+  const [params] = useSearchParams()
+  const [kind, setKind] = useState<PairKind>(params.get('kind') === 'sim_only' ? 'sim_only' : 'test')
   const setup = useResource(() => dtApi.setupStatus(), [])
   const defs = useResource(() => dtApi.defs(), [])
   const workspaces = useResource(() => workspaceApi.list(true), [])
@@ -85,7 +88,6 @@ export default function PairsPage() {
   const [unlinking, setUnlinking] = useState<Pair | null>(null)
   // 대시보드의 액자를 누르면 `?pair=…` 로 온다 — **그 줄이 골라진 채로 열린다.**
   // 안 그러면 사람이 방금 누른 것을 목록에서 다시 찾아야 한다.
-  const [params] = useSearchParams()
   const [picked, setPicked] = useState<string | null>(params.get('pair'))
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Pair | null>(null)
@@ -131,11 +133,11 @@ export default function PairsPage() {
   }
 
   async function moveChosen() {
-    if (!bulkTarget || chosen.length === 0) return
+    if (!bulkTarget || selected.length === 0) return
     setBusy(true)
     setFailed(null)
     try {
-      await dtApi.bulkMove(chosen, bulkTarget)
+      await dtApi.bulkMove(selected, bulkTarget)
       setChosen([])
       setBulkTarget('')
       pairs.reload()
@@ -190,6 +192,10 @@ export default function PairsPage() {
       : true,
   )
   const groups = groupBySubject(shown)
+  // **고른 것 중 지금 보이는 것만** 대상이다 — 탭을 옮기거나 찾기로 가려진 줄, 앞 탭의 응답이
+  // 아직 남은 사이의 줄이 해제 · 옮기기에 섞이면 안 보이는 연계가 평가 · 이력과 함께 지워진다.
+  const shownIds = new Set(shown.map((one) => one.id))
+  const selected = pairs.stale ? [] : chosen.filter((id) => shownIds.has(id))
   const current = (pairs.data ?? []).find((one) => one.id === picked) ?? null
   // **불량 유형은 시험 항목이 든 목록이다.** 수단에 두면 같은 시험인데 도구마다 목록이
   // 갈려 「이 시험의 불량 중 아직 아무 데서도 재현 안 되는 것」 을 셀 수 없다.
@@ -215,7 +221,13 @@ export default function PairsPage() {
           등록하면 그 종류로 선다. 탭을 옮기면 열이 달라지는 것으로 규칙이 드러난다. */}
       {ready && kinds.length > 1 && (
         <div className="space-y-1">
-          <Tabs value={kind} onValueChange={(value) => setKind(value as PairKind)}>
+          <Tabs
+            value={kind}
+            onValueChange={(value) => {
+              setKind(value as PairKind)
+              setChosen([])
+            }}
+          >
             <TabsList>
               {kinds.map((one) => (
                 <TabsTrigger key={one.key} value={one.key}>
@@ -245,9 +257,9 @@ export default function PairsPage() {
 
           {/* **고른 것이 있으면 할 수 있는 일을 옆에 둔다.** 서른 건을 고른 사람에게
               서른 번을 누르게 하지 않는다. */}
-          {chosen.length > 0 && (
+          {selected.length > 0 && (
             <div className="ml-auto flex flex-wrap items-center gap-2">
-              <span className="text-sm">{chosen.length}건 선택</span>
+              <span className="text-sm">{selected.length}건 선택</span>
               <Select value={bulkTarget} onValueChange={setBulkTarget}>
                 <SelectTrigger className="w-44">
                   <SelectValue placeholder="부서 옮기기" />
@@ -406,7 +418,7 @@ export default function PairsPage() {
                     <input
                       type="checkbox"
                       aria-label="모두 선택"
-                      checked={shown.length > 0 && chosen.length === shown.length}
+                      checked={shown.length > 0 && selected.length === shown.length}
                       onChange={(event) =>
                         setChosen(event.target.checked ? shown.map((one) => one.id) : [])
                       }
@@ -435,7 +447,7 @@ export default function PairsPage() {
                         <input
                           type="checkbox"
                           aria-label={`${row.subject_label} · ${row.agent_label} 선택`}
-                          checked={chosen.includes(row.id)}
+                          checked={selected.includes(row.id)}
                           onChange={(event) =>
                             setChosen((was) =>
                               event.target.checked
@@ -505,6 +517,9 @@ export default function PairsPage() {
             <div className="rounded-md border p-4">
               {current && defs.data ? (
                 <AssessmentPanel
+                  // **연계마다 새로 세운다** — 같은 판을 다시 쓰면 앞 연계의 펼친 축과 폼 값이
+                  // 남아, 「저장」 이 앞 연계의 값으로 이 연계를 덮었다.
+                  key={current.id}
                   pair={current}
                   defs={defs.data}
                   kind={kind}
@@ -567,12 +582,12 @@ export default function PairsPage() {
 
       <ConfirmDialog
         open={bulkUnlinking}
-        title={`연계 ${chosen.length}건을 해제합니까?`}
+        title={`연계 ${selected.length}건을 해제합니까?`}
         description="고른 연계와 그 평가 · 변경 이력이 함께 삭제됩니다."
         destructive
         confirmLabel="해제"
         onConfirm={async () => {
-          await dtApi.bulkUnlink(chosen)
+          await dtApi.bulkUnlink(selected)
           setChosen([])
           setBulkUnlinking(false)
           pairs.reload()

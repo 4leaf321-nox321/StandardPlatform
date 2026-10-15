@@ -39,7 +39,13 @@ import { TypeIcon } from '@/shared/components/TypeIcon'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
+/** 부서마다 새로 세운다 — 다시 쓰면 B 의 제목 아래 A 의 위젯이 응답이 올 때까지 남는다. */
 export default function WorkspaceHomePage() {
+  const { slug } = useParams<{ slug?: string }>()
+  return <WorkspaceHome key={slug ?? ''} />
+}
+
+function WorkspaceHome() {
   const { slug } = useParams<{ slug?: string }>()
   const { user } = useAuth()
   const maintenance = useResource(() => api.get<MaintenanceItem[]>('/server/maintenance'), [])
