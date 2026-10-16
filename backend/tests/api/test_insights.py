@@ -99,11 +99,21 @@ def test_증상마다_변화점을_찾고_오래된_것은_점수가_준다(
     assert leak["detail"]["at"] == "2029-09-01"
     assert leak["detail"]["provisional"] is True
     assert heat["detail"]["at"] == "2028-07-01"
-    # 점수 = 세기 x 근거. 끝 넉 달의 누수는 잠정이라 절반, 18달 전의 발열은 오래돼 반감(자료의
-    # 마지막 기간에서 잰다 — 오늘이 아니라).
-    leak_full = insights.score_of(leak["detail"]["ratio"], leak["detail"]["support"])
-    heat_full = insights.score_of(heat["detail"]["ratio"], heat["detail"]["support"])
-    assert leak["score"] == round(leak_full / 2, 4)
+
+    # 점수 = 세기 x 근거. 세기는 적게 잡은 비(비의 구간 중 1 에 가까운 끝). 끝 넉 달의 누수는
+    # 잠정이라 절반, 18달 전의 발열은 오래돼 반감(자료의 마지막 기간에서 잰다 — 오늘이 아니라).
+    def full(one: dict[str, Any]) -> float:
+        low, high = one["detail"]["ratio_ci"]
+        assert abs(one["detail"]["ratio_bound"] - low) < 1e-3  # 오른 것은 아래 끝
+        return insights.score_of(
+            one["detail"]["ratio"], one["detail"]["support"], interval=(low, high)
+        )
+
+    leak_full, heat_full = full(leak), full(heat)
+    assert (
+        0 < leak_full < insights.score_of(leak["detail"]["ratio"], leak["detail"]["support"])
+    )
+    assert abs(leak["score"] - leak_full / 2) < 1e-3
     assert 0.45 * heat_full < heat["score"] < 0.6 * heat_full
     assert found == sorted(found, key=lambda one: -one["score"])
     # 링크는 그 분석 그 인자 — 증상마다 훑기.

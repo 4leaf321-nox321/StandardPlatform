@@ -1,6 +1,7 @@
 """눈여겨볼 것의 점수와 다듬기(ADR 0032) — DB 없이.
 
-- 점수는 「몇 배 · 몇 건」 으로 설명된다: |ln 비| x log10(1 + 건수), 잠정이면 절반.
+- 점수는 「몇 배 · 몇 건」 으로 설명된다: |ln 적게 잡은 비| x log10(1 + 건수), 잠정이면 절반.
+  적게 잡은 비는 비의 95% 구간 중 1 에 가까운 끝 — 작은 칸의 큰 비가 큰 칸 위에 서지 않게.
 - 전체가 움직인 만큼은 뺀다, 같은 칸은 하나, 거른 값이 아무것도 더하지 않는 조합은 뺀다.
 """
 
@@ -9,7 +10,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
-from app.modules.metrics.insights import Found, score_of, tidy
+from app.modules.metrics.insights import Found, bound_of, score_of, strength_of, tidy
 
 
 def _found(**kw: Any) -> Found:
@@ -36,6 +37,22 @@ def test_점수는_세기와_근거의_곱이고_잠정이면_절반() -> None:
     assert score_of(2.0, 99, provisional=True) == round(math.log(2.0), 4)
     assert score_of(None, 9) == 1.0  # 비를 모르면 세기 1
     assert score_of(3.0, 0) == 0.0  # 근거가 없으면 0
+
+
+def test_세기는_적게_잡은_비로_잰다() -> None:
+    assert bound_of((1.2, 3.0)) == 1.2
+    assert bound_of((0.2, 0.6)) == 0.6
+    assert bound_of((0.8, 1.3)) == 1.0  # 1 을 걸치면 「달라졌다고 못 한다」
+    assert bound_of(None) is None
+    assert strength_of(2.0, (1.5, 2.6)) == math.log(1.5)
+    assert strength_of(2.0, (0.9, 4.0)) == 0.0
+    assert strength_of(2.0) == math.log(2.0)  # 구간을 모르면 비 그대로
+    # 개발 DB 에서 드러난 것 — 28건의 0.31배가 2,852건의 1.39배 위에 섰다. 구간으로 재면
+    # 아래로.
+    small = score_of(0.31, 28, interval=(0.17, 0.58))
+    big = score_of(1.39, 2852, interval=(1.34, 1.44))
+    assert score_of(0.31, 28) > score_of(1.39, 2852)
+    assert big > small
 
 
 def test_전체가_움직인_만큼은_빼고_본다() -> None:
@@ -147,3 +164,37 @@ def test_그_값_때문에_전체가_오른_것은_그_값에서_빼지_않는�
     ]
     assert "rest_ratio" not in kept.detail
     assert kept.score == score_of(1.5 / (560 / 510), 300)
+
+
+def test_전체를_뺄_때_구간도_같이_나눈다() -> None:
+    overall = _found(
+        key="up:2029-09-01", direction="up", at="2029-09-01", ratio=1.5, support=30000
+    )
+    kept_up = _found(
+        key="up:2029-09-01@P5",
+        direction="up",
+        at="2029-09-01",
+        ratio=1.8,
+        interval=(1.6, 2.0),
+        support=500,
+        cell=frozenset({("base_model", "P5")}),
+        detail={"by": "base_model"},
+    )
+    lost = _found(
+        key="up:2029-09-01@P6",
+        direction="up",
+        at="2029-09-01",
+        ratio=1.8,
+        interval=(1.2, 2.7),
+        support=500,
+        cell=frozenset({("base_model", "P6")}),
+        detail={"by": "base_model"},
+    )
+    kept = {one.key: one for one in tidy([overall, kept_up, lost], "month")}
+    assert kept["up:2029-09-01@P5"].detail["ratio_bound"] == round(1.6 / 1.5, 4)
+    assert kept["up:2029-09-01@P5"].score == score_of(
+        1.2, 500, interval=(1.6 / 1.5, 2.0 / 1.5)
+    )
+    # 전체의 1.5배를 빼면 구간 0.8 ~ 1.8 — 전체보다 더 올랐다고 못 한다.
+    assert kept["up:2029-09-01@P6"].detail["ratio_bound"] == 1.0
+    assert kept["up:2029-09-01@P6"].score == 0.0

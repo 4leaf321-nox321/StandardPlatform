@@ -102,6 +102,8 @@ class Found:
     """`up` · `down`(변화점) · `high`(집단) · `worse`."""
     at: str | None = None
     ratio: float | None = None
+    interval: tuple[float, float] | None = None
+    """비의 95% 구간 — 점수의 세기는 이것의 1 에 가까운 끝으로 잰다(`strength_of`)."""
     support: float | None = None
     provisional: bool = False
     weight: float = 1.0
@@ -119,13 +121,54 @@ class ScanResult:
 # --- 점수 ----------------------------------------------------------------------------------
 
 
-def score_of(ratio: float | None, support: float | None, provisional: bool = False) -> float:
-    """세기 x 근거 — **「몇 배 · 몇 건」 으로 설명되는 식만.** 세기는 |ln 비|(비를 모르면 1 —
-    0 에서 생긴 변화처럼), 근거는 log10(1 + 건수), 잠정이면 절반."""
-    strength = abs(math.log(ratio)) if ratio is not None and ratio > 0 else 1.0
+def bound_of(interval: tuple[float, float] | None) -> float | None:
+    """**적게 잡은 비** — 비의 95% 구간 중 1 에 가까운 끝, 구간이 1 을 걸치면 1."""
+    if interval is None:
+        return None
+    low, high = interval
+    if low > 1.0:
+        return low
+    if 0.0 < high < 1.0:
+        return high
+    return 1.0
+
+
+def strength_of(ratio: float | None, interval: tuple[float, float] | None = None) -> float:
+    """세기 |ln 비| — 구간이 있으면 **적게 잡은 비**(`bound_of`)로 잰다. 작은 칸의 큰 비는
+    구간이 넓어 1 쪽으로 끌린다(개발 DB: 28건의 0.31배가 2,852건의 1.39배 위에 섰다). 비를
+    모르면 1 — 0 에서 생긴 변화처럼."""
+    bound = bound_of(interval)
+    if bound is not None:
+        return abs(math.log(bound))
+    return abs(math.log(ratio)) if ratio is not None and ratio > 0 else 1.0
+
+
+def score_of(
+    ratio: float | None,
+    support: float | None,
+    provisional: bool = False,
+    interval: tuple[float, float] | None = None,
+) -> float:
+    """세기 x 근거 — **「몇 배 · 몇 건」 으로 설명되는 식만.** 세기는 `strength_of`(적게 잡은
+    비), 근거는 log10(1 + 건수), 잠정이면 절반."""
     evidence = math.log10(1.0 + max(float(support or 0.0), 0.0))
-    value = strength * evidence
+    value = strength_of(ratio, interval) * evidence
     return round(value * (0.5 if provisional else 1.0), 4)
+
+
+def _interval(low: Any, high: Any) -> tuple[float, float] | None:
+    """분석이 준 구간 — 끝이 하나라도 없으면 모른다. 위 끝이 없으면(0 건 등) 끝없음."""
+    if low is None:
+        return None
+    return float(low), float(high) if high is not None else math.inf
+
+
+def _scored(one: Found, ratio: float | None, interval: tuple[float, float] | None) -> None:
+    """점수를 매기고, 점수가 쓴 적게 잡은 비를 상세에 남긴다(화면이 「적게 잡아 몇 배」)."""
+    one.score = round(score_of(ratio, one.support, one.provisional, interval) * one.weight, 4)
+    bound = bound_of(interval)
+    if bound is not None:
+        one.detail["ratio_bound"] = round(bound, 4)
 
 
 # --- 무엇을 돌리나 ------------------------------------------------------------------
@@ -274,12 +317,15 @@ def _from_outcome(
         weight = 1.0
         if plan.recipe == "sprt":
             ratio = detail.get("smr")
+            interval = _interval(detail.get("smr_low"), detail.get("smr_high"))
             support = detail.get("observed")
             provisional = False
         else:
             ratio = detail.get("ratio")
             if ratio is None and detail.get("before"):
                 ratio = float(detail.get("after") or 0) / float(detail["before"])
+            band = detail.get("ratio_ci")
+            interval = _interval(band[0], band[1]) if band else None
             support = detail.get("support")
             provisional = bool(detail.get("provisional"))
             weight = _recency(detail.get("at"), grain, today)
@@ -295,26 +341,27 @@ def _from_outcome(
             pinned.add((plan.values.get("dim", ""), str(detail["target"])))
         elif detail.get("by") and detail.get("value") is not None:
             pinned.add((str(detail["by"]), str(detail["value"])))
-        out.append(
-            Found(
-                key=f"{one.key}{plan.tag}"[: alerts.KEY_MAX],
-                kind=plan.kind,
-                recipe=plan.recipe,
-                values=values,
-                title=f"{plan.prefix}{one.title}"[:300],
-                detail=detail,
-                score=round(score_of(ratio, support, provisional) * weight, 4),
-                run_id=outcome.run_id,
-                cell=frozenset(pinned),
-                combo=plan.combo,
-                direction=one.key.partition(":")[0],
-                at=detail.get("at"),
-                ratio=ratio,
-                support=support,
-                provisional=provisional,
-                weight=weight,
-            )
+        found = Found(
+            key=f"{one.key}{plan.tag}"[: alerts.KEY_MAX],
+            kind=plan.kind,
+            recipe=plan.recipe,
+            values=values,
+            title=f"{plan.prefix}{one.title}"[:300],
+            detail=detail,
+            score=0.0,
+            run_id=outcome.run_id,
+            cell=frozenset(pinned),
+            combo=plan.combo,
+            direction=one.key.partition(":")[0],
+            at=detail.get("at"),
+            ratio=ratio,
+            interval=interval,
+            support=support,
+            provisional=provisional,
+            weight=weight,
         )
+        _scored(found, ratio, interval)
+        out.append(found)
     return out
 
 
@@ -345,37 +392,47 @@ def _groups(
             continue
         ratio = row.ratio
         shown = f"{ratio:.2f}배" if ratio is not None else "높음"
-        out.append(
-            Found(
-                key=f"high:{result.dim}@{row.key}{plan.tag}"[: alerts.KEY_MAX],
-                kind=plan.kind,
-                recipe="groups",
-                values=dict(plan.values),
-                title=(
-                    f"{plan.prefix}{result.dim_label} {row.label}: 전체의 {shown} — "
-                    f"{row.count:,}건 (q={row.q_value:.3g})"
-                )[:300],
-                detail={
-                    "dim": result.dim,
-                    "dim_label": result.dim_label,
-                    "value": row.key,
-                    "value_label": row.label,
-                    "count": row.count,
-                    "rate": row.rate,
-                    "shrunk": row.shrunk,
-                    "ratio": ratio,
-                    "q_value": row.q_value,
-                    "looks": plan.looks,
-                },
-                score=score_of(ratio, row.count),
-                run_id=result.run_id,
-                cell=frozenset({*_filters(plan.values), (result.dim, str(row.key))}),
-                combo=plan.combo,
-                direction="high",
-                ratio=ratio,
-                support=row.count,
+        # 줄인 비율의 구간을 전체 비율로 나눈다(비 = 줄인 비율 / 전체 비율). 집단 사이 차이가
+        # 우연만 하면(τ² = 0) 구간이 없고 비는 1 이다.
+        interval = None
+        if ratio is not None and row.shrunk and row.shrunk_low is not None:
+            pooled = row.shrunk / ratio
+            interval = _interval(
+                row.shrunk_low / pooled,
+                row.shrunk_high / pooled if row.shrunk_high is not None else None,
             )
+        found = Found(
+            key=f"high:{result.dim}@{row.key}{plan.tag}"[: alerts.KEY_MAX],
+            kind=plan.kind,
+            recipe="groups",
+            values=dict(plan.values),
+            title=(
+                f"{plan.prefix}{result.dim_label} {row.label}: 전체의 {shown} — "
+                f"{row.count:,}건 (q={row.q_value:.3g})"
+            )[:300],
+            detail={
+                "dim": result.dim,
+                "dim_label": result.dim_label,
+                "value": row.key,
+                "value_label": row.label,
+                "count": row.count,
+                "rate": row.rate,
+                "shrunk": row.shrunk,
+                "ratio": ratio,
+                "q_value": row.q_value,
+                "looks": plan.looks,
+            },
+            score=0.0,
+            run_id=result.run_id,
+            cell=frozenset({*_filters(plan.values), (result.dim, str(row.key))}),
+            combo=plan.combo,
+            direction="high",
+            ratio=ratio,
+            interval=interval,
+            support=row.count,
         )
+        _scored(found, ratio, interval)
+        out.append(found)
     return out
 
 
@@ -437,11 +494,18 @@ def tidy(
                 continue
             assert base.ratio is not None
             rest = _rest_ratio(base, one) if one.detail.get("by") in shared else None
-            net = one.ratio / (rest if rest is not None else base.ratio)
+            divisor = rest if rest is not None else base.ratio
             one.detail["overall_ratio"] = base.ratio
             if rest is not None:
                 one.detail["rest_ratio"] = round(rest, 4)
-            one.score = round(score_of(net, one.support, one.provisional) * one.weight, 4)
+            # 구간도 같이 나눈다 — 나머지의 비는 그 값보다 훨씬 많은 건수에서 와 흔들림을
+            # 무시한다.
+            interval = (
+                (one.interval[0] / divisor, one.interval[1] / divisor)
+                if one.interval
+                else None
+            )
+            _scored(one, one.ratio / divisor, interval)
             break
     best: dict[tuple[Any, ...], Found] = {}
     for one in founds:

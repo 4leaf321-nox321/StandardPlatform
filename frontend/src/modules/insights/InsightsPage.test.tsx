@@ -58,10 +58,15 @@ describe('눈여겨볼 것', () => {
   })
 
   it('결론과 그 분석을 여는 링크를 보이고, 관리자는 그만 볼 수 있다', async () => {
-    insightsApi.list.mockResolvedValue({ items: [insight()], total: 1, scanned_at: null })
+    insightsApi.list.mockResolvedValue({
+      items: [insight({ detail: { ratio_bound: 1.8456 } })],
+      total: 1,
+      scanned_at: null,
+    })
     insightsApi.dismiss.mockResolvedValue(insight({ dismissed: true }))
     await openPage()
     expect(await screen.findByText(/F5 폴드: 전체의 1.92배/)).toBeInTheDocument()
+    expect(screen.getByText(/적게 잡아 1.85배/)).toBeInTheDocument() // 점수가 쓴 비
     expect(screen.getByRole('link', { name: '분석 열기' })).toHaveAttribute(
       'href',
       '/metrics/svc_rate_uiw?tab=analysis&recipe=groups&dim=base_model',

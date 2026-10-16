@@ -357,6 +357,8 @@ def _sprt(
                     "observed": out.observed,
                     "expected": out.expected,
                     "smr": out.smr,
+                    "smr_low": out.smr_low,
+                    "smr_high": out.smr_high,
                 },
             )
         )
@@ -434,6 +436,8 @@ def _sprt_scan(
                     "observed": item.observed,
                     "expected": item.expected,
                     "smr": item.smr,
+                    "smr_low": item.smr_low,
+                    "smr_high": item.smr_high,
                 },
             )
         )
@@ -535,6 +539,7 @@ def _changes(
                     "before": change.before,
                     "after": change.after,
                     "ratio": change.ratio,
+                    "ratio_ci": change.ratio_ci,
                     "provisional": change.provisional,
                     # 근거 — 변화점부터의 닫힌 건수(눈여겨볼 것의 점수가 쓴다, ADR 0032).
                     "support": sum(
@@ -599,6 +604,7 @@ def _changes_scan(
                         "before": change.before,
                         "after": change.after,
                         "ratio": change.ratio,
+                        "ratio_ci": change.ratio_ci,
                         "provisional": change.provisional,
                         # 근거 — 변화 뒤 닫힌 기간의 몫만큼(값마다의 기간별 건수는 응답에
                         # 없다).

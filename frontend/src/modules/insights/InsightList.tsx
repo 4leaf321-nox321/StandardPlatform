@@ -2,7 +2,8 @@
  * 눈여겨볼 것의 줄들 — 화면 「눈여겨볼 것」 · 홈 카드 · 지표 상세가 같은 줄을 쓴다.
  *
  * 줄마다 **무엇이 · 얼마나 · 언제부터**(제목에 「몇 배 · 몇 건」 이 든다)와, 그 분석을 그 인자로 여는
- * 링크. 눌러서 본 것이 이 줄이 말한 것과 같아야 한다 — 그래서 링크는 서버가 짓는다.
+ * 링크. 눌러서 본 것이 이 줄이 말한 것과 같아야 한다 — 그래서 링크는 서버가 짓는다. 「적게 잡아
+ * 몇 배」 는 점수가 쓴 비(구간 중 1 에 가까운 끝) — 작은 칸의 큰 비가 왜 아래에 섰는지 보인다.
  */
 
 import { Link } from 'react-router-dom'
@@ -44,6 +45,8 @@ export function InsightList({
             </p>
             <p className="text-muted-foreground text-xs">
               처음 본 때 {shownDateTime(one.first_seen_at)} · {one.recipe_label}
+              {typeof one.detail.ratio_bound === 'number' &&
+                ` · 적게 잡아 ${one.detail.ratio_bound.toFixed(2)}배`}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
