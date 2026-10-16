@@ -59,7 +59,9 @@ def test_워커는_앱과_같은_등록으로_돌고_웹훅은_작업마다_요�
         "app.modules.datasources.services",
         "app.modules.metrics.services",
     } <= set(found["contents"])
-    assert found["owners"] == ["objects"]
+    # 첨부 자리 — 객체와 게시글(ADR 0033). 워커가 모르면 작업으로 붙이는 첨부가 예전
+    # 규칙으로 판정된다.
+    assert found["owners"] == ["board_posts", "objects"]
     # 변경 이벤트도 앱과 같이 듣는다 — 예전에는 비워 둬서 작업으로 한 일은 웹훅 · 지켜보기
     # 알림이 하나도 안 갔다. 웹훅은 작업 안에서 줄마다 말고 요약 한 건만(2026-10-10).
     assert found["listeners"] == [

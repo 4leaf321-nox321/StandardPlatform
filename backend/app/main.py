@@ -31,6 +31,9 @@ from app.modules.accounts import routes as accounts_routes
 from app.modules.accounts import services as accounts_services
 from app.modules.audit import routes as audit_routes
 from app.modules.auth import routes as auth_routes
+from app.modules.board import models as board_models
+from app.modules.board import routes as board_routes
+from app.modules.board import services as board_services
 from app.modules.bundles import routes as bundles_routes
 from app.modules.coreapi import routes as coreapi_routes
 from app.modules.datasources import routes as datasources_routes
@@ -96,6 +99,7 @@ def _api_router(settings: Settings) -> APIRouter:
     router.include_router(accounts_routes.router)
     router.include_router(workspaces_routes.router)
     router.include_router(notices_routes.router)
+    router.include_router(board_routes.router)
     router.include_router(webhooks_routes.router)
     router.include_router(datasources_routes.router)
     router.include_router(notifications_routes.router)
@@ -175,6 +179,12 @@ def _register_extensions() -> None:
     extensions.register_workspace_content(metrics_services.workspace_content)
     # 객체에 붙는 첨부 — 객체가 있나 · 고칠 수 있나 · 파일 칸인가 · 이미지만인가(ADR 0012).
     extensions.register_attachment_owner("objects", objects_attachments.owner)
+    # 게시글의 첨부 — 작성자가 자기 글에 붙이고 뗀다(ADR 0033). 안 걸면 첨부의 예전 규칙
+    # (전역은 시스템 관리자만)이 걸려 작성자가 파일을 못 붙인다.
+    extensions.register_attachment_owner(
+        board_models.POST_TABLE, board_services.attachment_owner
+    )
+    extensions.register_stats(board_services.stats)
     # 데이터 품질 — 필수값 빈 것·고아·깨진 참조·이름 같은 것을 홈 「남은 일」 에.
     extensions.register_maintenance(objects_quality.maintenance)
     extensions.register_stats(objects_quality.stats)

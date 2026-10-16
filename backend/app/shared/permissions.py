@@ -177,3 +177,19 @@ def require_owner_edit(
     if workspace is None:
         raise NotFound(code_value, f"{what}의 소속 부서를 찾을 수 없습니다.")
     require_manager(db, workspace=workspace, user=user)
+
+
+def can_edit_authored(user: User, author_id: uuid.UUID | None) -> bool:
+    """**누구나 쓰는 자리**(게시판, ADR 0033)의 글 · 댓글을 수정 · 삭제할 수 있나 — 작성자와
+    시스템 관리자. 부서 관리자는 아니다 — 게시판은 부서의 것이 아니라 설치 전체의 것이다."""
+    return user.is_system_admin or (author_id is not None and author_id == user.id)
+
+
+def require_authored_edit(
+    user: User, author_id: uuid.UUID | None, *, what: str, code_value: str
+) -> None:
+    """`can_edit_authored` 가 아니면 거절한다 — 화면의 단추와 서버가 같은 판정을 쓴다."""
+    if not can_edit_authored(user, author_id):
+        raise Forbidden(
+            code_value, f"{what}은(는) 작성자와 시스템 관리자만 수정 · 삭제할 수 있습니다."
+        )

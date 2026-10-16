@@ -38,6 +38,9 @@ const MetricDetailPage = lazy(() => import('@/modules/metrics/MetricDetailPage')
 const GraphPage = lazy(() => import('@/modules/graph/GraphPage'))
 const MembersPage = lazy(() => import('@/modules/workspaces/MembersPage'))
 const NoticesPage = lazy(() => import('@/modules/notices/NoticesPage'))
+const BoardPage = lazy(() => import('@/modules/board/BoardPage'))
+const BoardPostPage = lazy(() => import('@/modules/board/BoardPostPage'))
+const BoardEditPage = lazy(() => import('@/modules/board/BoardEditPage'))
 const ObjectListPage = lazy(() => import('@/modules/objects/ObjectListPage'))
 const ObjectTypesPage = lazy(() => import('@/modules/objects/ObjectTypesPage'))
 const SearchPage = lazy(() => import('@/modules/search/SearchPage'))
@@ -124,6 +127,10 @@ export const router = createBrowserRouter(
             // **타입을 모르는 사람이 서는 자리.** 목록은 타입마다 따로다.
             { path: 'search', element: <SearchPage /> },
             { path: 'notices', element: <NoticesPage /> },
+            { path: 'board', element: <BoardPage /> },
+            { path: 'board/new', element: <BoardEditPage /> },
+            { path: 'board/:postId', element: <BoardPostPage /> },
+            { path: 'board/:postId/edit', element: <BoardEditPage /> },
             { path: 'audit', element: <AuditPage /> },
             { path: 'quality', element: <QualityPage /> },
             // 사람이 판단할 일 — 원래 자리에서 읽어 모은다(ADR 0027).

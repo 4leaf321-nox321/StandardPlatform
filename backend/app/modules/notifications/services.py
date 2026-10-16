@@ -45,6 +45,8 @@ METRIC_ALERT = "metric.alert"
 METRIC_ALERT_FAILED = "metric.alert.failed"
 """내 경보를 돌리지 못했다(지표 정의가 바뀌어 기준이 사라졌다 등). 처음 한 번만 — 다시 되면
 조용히 돌아온다."""
+BOARD_COMMENT = "board.comment"
+"""내 게시글에 남이 댓글을 작성했다(ADR 0033). 내가 단 댓글은 안 알린다."""
 
 
 def notify(
