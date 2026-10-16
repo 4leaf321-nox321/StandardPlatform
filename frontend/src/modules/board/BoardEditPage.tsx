@@ -16,6 +16,7 @@ import type { Post } from '@/modules/board/api'
 import { AttachmentList } from '@/modules/files/AttachmentList'
 import { attachmentApi } from '@/modules/files/api'
 import { shownSize } from '@/modules/files/ImageViewer'
+import { shownLimit, tooLargeMessage, useAttachmentLimit } from '@/modules/files/limit'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
 import { Button } from '@/shared/components/ui/button'
@@ -48,6 +49,8 @@ function PostForm({ existing }: { existing?: Post }) {
   const [title, setTitle] = useState(existing?.title ?? '')
   const [body, setBody] = useState(existing?.body ?? '')
   const [files, setFiles] = useState<File[]>([])
+  const limit = useAttachmentLimit()
+  const [refused, setRefused] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [failed, setFailed] = useState<Error | null>(null)
   const picker = useRef<HTMLInputElement>(null)
@@ -130,7 +133,7 @@ function PostForm({ existing }: { existing?: Post }) {
               파일 첨부
             </Button>
             <span className="text-muted-foreground text-xs">
-              등록하면 글과 함께 업로드됩니다. 파일 하나에 50MB 까지.
+              등록하면 글과 함께 업로드됩니다. 파일 하나에 {shownLimit(limit)} 까지.
             </span>
             <input
               ref={picker}
@@ -139,12 +142,19 @@ function PostForm({ existing }: { existing?: Post }) {
               hidden
               aria-label="첨부할 파일"
               onChange={(event) => {
+                // 상한을 넘는 파일은 **고르는 자리에서** 뺀다 — 등록 뒤에 보내 보고 알면 늦다.
                 const chosen = Array.from(event.target.files ?? [])
-                setFiles((before) => [...before, ...chosen])
+                setRefused(tooLargeMessage(chosen, limit))
+                setFiles((before) => [...before, ...chosen.filter((one) => one.size <= limit)])
                 event.target.value = ''
               }}
             />
           </div>
+          {refused && (
+            <p className="text-destructive text-sm" role="alert">
+              {refused} — 제외했습니다.
+            </p>
+          )}
           {files.length > 0 && (
             <ul className="divide-y rounded-md border text-sm">
               {files.map((file, index) => (

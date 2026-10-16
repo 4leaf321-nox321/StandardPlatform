@@ -185,7 +185,7 @@ def test_크기를_미리_밝히면_받기_전에_끊는다(
 ) -> None:
     """`Content-Length` 가 상한을 넘으면 한 바이트도 받지 않는다 — 받다가 끊는 것은 그 값을 안
     밝히거나 속인 요청의 몫이다. 표는 쓰지 않은 채로 남는다(작게 고쳐 다시 올린다)."""
-    monkeypatch.setattr(services, "MAX_BYTES", 2048)
+    monkeypatch.setattr(services, "max_bytes", lambda: 2048)
     w = _world(client, admin)
     issued = _ticket(client, admin, w["id"]).json()
     status, pulled = _asgi_put(issued["ticket"], chunks=8)
@@ -196,7 +196,7 @@ def test_크기를_미리_밝히면_받기_전에_끊는다(
 def test_크기_상한을_넘으면_받다가_끊는다(
     client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr(services, "MAX_BYTES", 1000)
+    monkeypatch.setattr(services, "max_bytes", lambda: 1000)
     w = _world(client, admin)
     issued = _ticket(client, admin, w["id"]).json()
     # 크기를 안 밝히고(chunked) 보낸다 — 밝힌 요청은 받기 전에 끊긴다(위 시험).

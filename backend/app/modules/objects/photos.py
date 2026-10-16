@@ -14,7 +14,7 @@
     not_found   못 찾음 — 그 이름의 객체가 없다(안 보이는 것도 없다고 말한다)
     ambiguous   여럿에 맞음 — **짐작하지 않는다**, 파일 이름을 식별자로 바꿔 다시 올린다
     not_image   이미지 아님 — 서버가 열어 보고 PNG · JPEG · GIF · WebP 로 못 읽었다
-    too_large   너무 큼 — 한 파일의 상한(`files.services.MAX_BYTES`)을 넘는다
+    too_large   너무 큼 — 한 파일의 상한(`files.services.max_bytes()`)을 넘는다
     forbidden   권한 없음 — 보이지만 고칠 수 없는 객체(소유 부서 관리자가 아니다)
     bad_entry   읽지 않음 — zip 밖을 가리키는 경로 · 링크 · 암호 · 깨진 항목
 
@@ -439,11 +439,11 @@ def _plan(
         if refused:
             row.status, row.message = "bad_entry", refused
             continue
-        if entry.info.file_size > files_services.MAX_BYTES:
+        limit = files_services.max_bytes()
+        if entry.info.file_size > limit:
             row.status = "too_large"
             row.message = (
-                f"한 파일은 {files_services.MAX_BYTES // (1024 * 1024)}MB 까지입니다 — 줄여서 "
-                "다시 업로드하세요."
+                f"한 파일은 {limit // (1024 * 1024)}MB 까지입니다 — 줄여서 다시 업로드하세요."
             )
             continue
         body = _read(archive, entry)

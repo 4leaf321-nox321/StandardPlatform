@@ -102,6 +102,23 @@ describe('올리기', () => {
     expect(await screen.findByText(/성적서\.pdf: 이 칸은 이미지만 받습니다/)).toBeTruthy()
   })
 
+  it('상한을 넘는 파일은 보내지 않고 이름과 상한을 알린다 — 나머지는 올린다', async () => {
+    attachmentApi.list.mockResolvedValue([])
+    attachmentApi.upload.mockResolvedValue(row('a', '작은.txt', false))
+    await show({ canEdit: true })
+    const input = (await screen.findByRole('heading', { name: /사진/ }))
+      .closest('section')!
+      .querySelector('input[type="file"]') as HTMLInputElement
+    const big = new File(['x'], '큰영상.mp4', { type: 'video/mp4' })
+    Object.defineProperty(big, 'size', { value: 600 * 1024 * 1024 })
+    const small = new File(['y'], '작은.txt', { type: 'text/plain' })
+    fireEvent.change(input, { target: { files: [big, small] } })
+    await waitFor(() => expect(attachmentApi.upload).toHaveBeenCalledTimes(1))
+    expect(attachmentApi.upload.mock.calls[0][0]).toMatchObject({ file: small })
+    // 상한은 서버에 묻는다 — 못 물으면 기본값(500MB).
+    expect(await screen.findByText(/큰영상\.mp4: 한 파일은 500MB 까지입니다/)).toBeTruthy()
+  })
+
   it('패널을 누르고 붙여넣으면 올린다 — 화면 캡처를 바로', async () => {
     attachmentApi.list.mockResolvedValue([])
     attachmentApi.upload.mockResolvedValue(row('a', 'image.png', true))

@@ -8,6 +8,11 @@ from datetime import datetime
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class AttachmentLimitsOut(BaseModel):
+    max_bytes: int
+    """첨부 한 파일의 상한(바이트) — 넘는 업로드는 본문을 받기 전에 413."""
+
+
 class AttachmentOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 

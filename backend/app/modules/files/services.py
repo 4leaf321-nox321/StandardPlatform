@@ -32,9 +32,25 @@ from app.shared.permissions import (
 from app.shared.request_context import get_actor_token, set_actor_token
 from app.shared.text import clean
 
-#: 한 파일의 상한. **서버가 강제한다** — 화면의 검사는 우회할 수 있고, 우회되면
-#: 디스크가 찬다. 디스크가 차면 앱만이 아니라 DB 도 함께 멈춘다.
-MAX_BYTES = 50 * 1024 * 1024
+
+def max_bytes() -> int:
+    """한 파일의 상한 — 설치가 정한다(`attachment_max_bytes`, 기본 500MB). **서버가
+    강제한다** — 화면의 검사는 우회할 수 있고, 우회되면 디스크가 찬다. 디스크가 차면 앱만이
+    아니라 DB 도 함께 멈춘다."""
+    return get_settings().attachment_max_bytes
+
+
+def too_large(limit: int, *, size: int | None = None) -> AppError:
+    """상한을 넘은 파일 — 받기 전(밝힌 크기) · 받다가 · 받은 뒤 어디서 끊어도 같은 말."""
+    details: dict[str, int] = {"max_bytes": limit}
+    if size is not None:
+        details["size_bytes"] = size
+    return AppError(
+        code("FILES", 3),
+        f"파일이 너무 큽니다 (최대 {limit // 1024 // 1024}MB).",
+        status=413,
+        details=details,
+    )
 
 
 #: 이미지만 받는 칸에 넣을 수 있는 것 — 사람에게 보일 말.
@@ -161,15 +177,12 @@ def attach(
     stored = filestore.save(stream)
     if stored.size == 0:
         raise AppError(code("FILES", 2), "빈 파일입니다.", status=400)
-    if stored.size > MAX_BYTES:
-        # **저장하고 나서 잰다.** 미리 재려면 Content-Length 를 믿어야 하는데 그
-        # 값은 틀릴 수 있다. 파일은 남지만 행이 없으므로 아무도 못 본다.
-        raise AppError(
-            code("FILES", 3),
-            f"파일이 너무 큽니다 (최대 {MAX_BYTES // 1024 // 1024}MB).",
-            status=413,
-            details={"size_bytes": stored.size, "max_bytes": MAX_BYTES},
-        )
+    limit = max_bytes()
+    if stored.size > limit:
+        # **저장하고 나서도 잰다.** 밝힌 크기(Content-Length)로는 받기 전에 끊지만
+        # (`routes.RefuseDeclaredTooLarge`), 그 값은 안 밝히거나 틀릴 수 있다. 파일은 남지만
+        # 행이 없으므로 아무도 못 보고, 고아 정리가 지운다.
+        raise too_large(limit, size=stored.size)
 
     attachment = Attachment(
         owner_table=owner_table,
@@ -460,7 +473,7 @@ def issue_ticket(
         upload_url=_public_upload_url(path),
         expires_at=expires_at,
         expires_in_seconds=int(TICKET_TTL.total_seconds()),
-        max_bytes=MAX_BYTES,
+        max_bytes=max_bytes(),
         accept=owner.accept,
     )
 

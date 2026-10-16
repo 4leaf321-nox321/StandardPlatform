@@ -128,10 +128,11 @@ describe('생성 화면의 파일 칸', () => {
     )
     await userEvent.type(screen.getByLabelText(/이름/), '볼트')
     const big = new File(['x'], '큰사진.png', { type: 'image/png' })
-    Object.defineProperty(big, 'size', { value: 60 * 1024 * 1024 })
+    Object.defineProperty(big, 'size', { value: 600 * 1024 * 1024 })
     pick([big])
     await userEvent.click(screen.getByRole('button', { name: '생성' }))
-    expect(await screen.findByText(/50MB 까지입니다 — 큰사진.png/)).toBeInTheDocument()
+    // 상한은 서버에 묻는다 — 못 물으면 기본값(500MB).
+    expect(await screen.findByText(/500MB 까지입니다 — 큰사진.png/)).toBeInTheDocument()
     expect(objectApi.create).not.toHaveBeenCalled()
   })
 })

@@ -15,7 +15,8 @@
 
 import { useState } from 'react'
 
-import { attachmentApi, ATTACHMENT_MAX_BYTES } from '@/modules/files/api'
+import { attachmentApi } from '@/modules/files/api'
+import { tooLargeMessage, useAttachmentLimit } from '@/modules/files/limit'
 import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
 import { PropertyFields } from '@/modules/objects/PropertyFields'
@@ -55,6 +56,7 @@ interface PartialFailure {
 
 export function ObjectCreateDialog({ type, defs, onClose, onCreated, onOpen }: Props) {
   const { user } = useAuth()
+  const limit = useAttachmentLimit()
   const [key, setKey] = useState('')
   const [label, setLabel] = useState('')
   const [description, setDescription] = useState('')
@@ -84,14 +86,12 @@ export function ObjectCreateDialog({ type, defs, onClose, onCreated, onOpen }: P
   async function submit() {
     setError(null)
     // **만들기 전에** 크기를 본다 — 만든 뒤에 거절되면 객체만 남는다(서버도 같은 상한으로 막는다).
-    const tooBig = pending.filter((one) => one.file.size > ATTACHMENT_MAX_BYTES)
-    if (tooBig.length > 0) {
-      setError(
-        new Error(
-          `한 파일은 ${ATTACHMENT_MAX_BYTES / 1024 / 1024}MB 까지입니다 — ` +
-            tooBig.map((one) => one.file.name).join(', '),
-        ),
-      )
+    const tooBig = tooLargeMessage(
+      pending.map((one) => one.file),
+      limit,
+    )
+    if (tooBig) {
+      setError(new Error(tooBig))
       return
     }
     setSaving(true)

@@ -339,6 +339,12 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
   컨테이너에 보이는 곳이어야 한다(기본 bind 는 `/tmp` · `/data/filestore` · `/data/logs`). `.env` 에 적으면
   안 먹는다(앱 설정이 아니라 프로세스 환경이다). `filestore/` 를 따로 백업하는 설치는 `_jobs/` 를 빼도
   된다(임시물이다).
+- **첨부 한 파일 `ATTACHMENT_MAX_BYTES`(기본 500MB, 2026-10-16 — 그 전에는 50MB 고정)** — 객체 첨부 · 게시판 ·
+  사진 일괄 업로드의 한 장 · MCP 업로드가 함께 쓴다. 넘는 업로드는 **본문을 받기 전에** 413 이다(밝힌 크기로
+  끊는다 — 화면은 서버에 상한을 물어 넘는 파일을 아예 보내지 않는다). 받는 동안 앱의 임시 폴더(`/tmp`)에 한
+  벌 놓이므로 동시 업로드 수 × 상한만큼 여유를 본다. 이중화 nginx 의 `client_max_body_size 512m` 를 넘겨
+  올리면 그 조각도 함께 올리고(안 올리면 nginx 가 413), 업로드는 요청 안에서 받으므로 nginx 의 600초 안에
+  끝나는 크기인지도 본다. HWAX 포털에 붙은 설치는 포털 nginx 의 상한도 따로 있다(포털 담당에게 묻는다).
 - **이중화 nginx** — 다른 경로는 `client_max_body_size 512m` 그대로이고 **사진 zip 경로
   (`/<slug>/api/objects/<타입>/photos/import`)만 2100m · 흘려 넘김(`proxy_request_buffering off`)** 이다
   (`main-server-nginx.conf` 의 정규식 location — 메인 서버 쪽에 그 조각을 다시 넣어 달라고 한다).

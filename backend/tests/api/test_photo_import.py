@@ -389,7 +389,7 @@ def test_zip_을_믿지_않는다(
     from app.modules.files import services as files_services
 
     _make_object(client, admin, kind, label="큰 것", key="BIG")
-    monkeypatch.setattr(files_services, "MAX_BYTES", 1_000)
+    monkeypatch.setattr(files_services, "max_bytes", lambda: 1_000)
     plan = _plan(client, admin, kind, _zip({"BIG.png": _png(800)}))
     assert _rows(plan)["BIG.png"]["status"] == "too_large"
     assert plan["result"]["ok"] is False

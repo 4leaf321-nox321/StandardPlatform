@@ -178,6 +178,20 @@ describe('게시판', () => {
     await waitFor(() => expect(boardApi.get).toHaveBeenCalledTimes(2))
   })
 
+  it('상한을 넘는 파일은 고르는 자리에서 빼고 알린다', async () => {
+    at('/board/new')
+    const big = new File(['x'], '큰영상.mp4', { type: 'video/mp4' })
+    Object.defineProperty(big, 'size', { value: 600 * 1024 * 1024 })
+    await userEvent.upload(await screen.findByLabelText('첨부할 파일'), [
+      big,
+      new File(['a'], '절차서.pdf', { type: 'application/pdf' }),
+    ])
+    // 상한은 서버에 묻는다 — 못 물으면 기본값(500MB).
+    expect(screen.getByRole('alert')).toHaveTextContent('500MB 까지입니다 — 큰영상.mp4')
+    expect(screen.getByText('절차서.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('큰영상.mp4')).not.toBeInTheDocument()
+  })
+
   it('새 글은 고른 파일을 글이 생긴 뒤 업로드하고, 못 올린 파일은 글 화면이 알린다', async () => {
     boardApi.create.mockResolvedValue(post({ id: 'p9', can_edit: true }))
     boardApi.get.mockResolvedValue(post({ id: 'p9', can_edit: true }))

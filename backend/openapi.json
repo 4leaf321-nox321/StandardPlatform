@@ -3421,6 +3421,28 @@
         }
       }
     },
+    "/api/attachments/limits": {
+      "get": {
+        "tags": [
+          "files"
+        ],
+        "summary": "Limits",
+        "description": "첨부 한 파일의 상한 — 화면이 보내기 **전에** 견준다(넘는 파일은 아예 안 보낸다).\n설치마다 다르다(`.env` 의 `ATTACHMENT_MAX_BYTES`).",
+        "operationId": "limits_api_attachments_limits_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AttachmentLimitsOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/attachments": {
       "post": {
         "tags": [
@@ -20077,6 +20099,19 @@
           "created_at"
         ],
         "title": "AttachmentBrief"
+      },
+      "AttachmentLimitsOut": {
+        "properties": {
+          "max_bytes": {
+            "type": "integer",
+            "title": "Max Bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "max_bytes"
+        ],
+        "title": "AttachmentLimitsOut"
       },
       "AttachmentOut": {
         "properties": {

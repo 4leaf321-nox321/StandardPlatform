@@ -17,21 +17,27 @@ from __future__ import annotations
 
 import tempfile
 import uuid
-from typing import BinaryIO, cast
+from collections.abc import Callable, Coroutine
+from typing import Any, BinaryIO, cast
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, UploadFile
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
+from fastapi.routing import APIRoute
 from sqlalchemy.orm import Session
 from starlette.concurrency import run_in_threadpool
 
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.files import services
-from app.modules.files.schemas import AttachmentOut, TicketOut, TicketRequest
+from app.modules.files.schemas import (
+    AttachmentLimitsOut,
+    AttachmentOut,
+    TicketOut,
+    TicketRequest,
+)
 from app.shared import filestore
 from app.shared.auth import current_user
-from app.shared.errors import AppError, code
 
 router = APIRouter(prefix="/attachments", tags=["files"])
 
@@ -43,7 +49,40 @@ FILE_HEADERS = {
 }
 
 
-@router.post("", response_model=AttachmentOut, status_code=201)
+#: multipart 본문에서 파일이 아닌 몫 — 경계 · 칸 머리 · 다른 칸(owner_table 등). 밝힌 크기가
+#: 상한 + 이만큼을 넘어야 받기 전에 끊는다(상한에 꼭 맞는 파일은 받아서 잰다).
+MULTIPART_SLACK = 64 * 1024
+
+
+class RefuseDeclaredTooLarge(APIRoute):
+    """**본문을 받기 전에** 밝힌 크기(`Content-Length`)로 거절한다.
+
+    FastAPI 는 multipart 를 끝까지 받아 임시 파일로 푼 **다음에야** 엔드포인트(와 그 의존성)를
+    부른다 — 거기서 재면 상한을 넘는 파일도 다 받아 디스크에 쓰고 나서 거절한다. 그래서
+    엔드포인트를 부르기 전, 머리만 보고 끊는다. 크기를 안 밝힌(chunked) 본문은 저장한 뒤의
+    검사(`services.attach`)가 막는다. 여기서 던진 오류도 다른 오류와 같은 처리기를 거친다.
+    """
+
+    def get_route_handler(self) -> Callable[[Request], Coroutine[Any, Any, Response]]:
+        handler = super().get_route_handler()
+
+        async def checked(request: Request) -> Response:
+            declared = request.headers.get("content-length", "")
+            limit = services.max_bytes()
+            if declared.isdigit() and int(declared) > limit + MULTIPART_SLACK:
+                raise services.too_large(limit, size=int(declared))
+            return await handler(request)
+
+        return checked
+
+
+@router.get("/limits", response_model=AttachmentLimitsOut)
+def limits(_: User = Depends(current_user)) -> AttachmentLimitsOut:
+    """첨부 한 파일의 상한 — 화면이 보내기 **전에** 견준다(넘는 파일은 아예 안 보낸다).
+    설치마다 다르다(`.env` 의 `ATTACHMENT_MAX_BYTES`)."""
+    return AttachmentLimitsOut(max_bytes=services.max_bytes())
+
+
 def upload(
     owner_table: str = Form(max_length=60),
     owner_id: uuid.UUID = Form(),
@@ -69,6 +108,18 @@ def upload(
         content_type=upload_file.content_type,
         stream=upload_file.file,
     )
+
+
+# 받기 전에 끊으려면 라우트 클래스가 엔드포인트보다 먼저 돌아야 한다 — 데코레이터는 그 자리를
+# 안 열어 주므로 직접 건다.
+router.add_api_route(
+    "",
+    upload,
+    methods=["POST"],
+    response_model=AttachmentOut,
+    status_code=201,
+    route_class_override=RefuseDeclaredTooLarge,
+)
 
 
 @router.post("/tickets", response_model=TicketOut, status_code=201)
@@ -106,25 +157,16 @@ async def upload_with_ticket(
     받으며 세다가 상한을 넘는 순간 끊는다(다 받고 나서 재지 않는다).
     """
     await run_in_threadpool(services.check_ticket, db, ticket=ticket)
-    limit = services.MAX_BYTES
-
-    def too_large() -> AppError:
-        return AppError(
-            code("FILES", 3),
-            f"파일이 너무 큽니다 (최대 {limit // 1024 // 1024}MB).",
-            status=413,
-            details={"max_bytes": limit},
-        )
-
+    limit = services.max_bytes()
     declared = request.headers.get("content-length", "")
     if declared.isdigit() and int(declared) > limit:
-        raise too_large()
+        raise services.too_large(limit, size=int(declared))
     with tempfile.SpooledTemporaryFile(max_size=1024 * 1024) as spool:
         size = 0
         async for chunk in request.stream():
             size += len(chunk)
             if size > limit:
-                raise too_large()
+                raise services.too_large(limit)
             spool.write(chunk)
         spool.seek(0)
         return await run_in_threadpool(
