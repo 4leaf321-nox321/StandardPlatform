@@ -487,7 +487,8 @@ class InsightOut(BaseModel):
     title: str
     detail: dict[str, Any]
     score: float
-    """세기(|ln 비|) x 근거(log10(1 + 건수)), 잠정이면 절반 — 줄 세우는 데만 쓴다."""
+    """세기(|ln 적게 잡은 비|) x 근거(log10(1 + 건수)), 잠정이면 절반 — 줄 세우는 데만
+    쓴다. 적게 잡은 비는 `detail.ratio_bound`."""
     first_seen_at: datetime
     last_seen_at: datetime
     past: bool
@@ -495,12 +496,16 @@ class InsightOut(BaseModel):
     dismissed: bool
     link: str
     """그 분석을 그 인자로 연다 — 눌러서 본 것이 이 결론과 같다."""
+    also: list[str] = Field(default_factory=list)
+    """같은 줄(종류 · 제목의 수까지)이 선 다른 지표의 이름 — 같은 기록을 같은 분모로 센
+    지표끼리는 같은 결론이 서서, 목록에는 점수 높은 쪽 하나만 보인다."""
 
 
 class InsightsOut(BaseModel):
     items: list[InsightOut]
     total: int
-    """거른 결론 수(`items` 는 점수 높은 것부터 일부)."""
+    """거른 결론 수 — 여러 지표에 선 같은 줄은 하나로 센다(`items` 는 점수 높은 것부터
+    일부)."""
     scanned_at: datetime | None
     """보이는 지표 가운데 가장 최근 훑기."""
 

@@ -28489,6 +28489,13 @@
           "link": {
             "type": "string",
             "title": "Link"
+          },
+          "also": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Also"
           }
         },
         "type": "object",

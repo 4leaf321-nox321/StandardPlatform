@@ -298,8 +298,9 @@ describe('느린 요청 · 큰 응답', () => {
     )
     const heading = await screen.findByRole('heading', { name: '끊긴 질문' })
     const section = heading.closest('section') as HTMLElement
-    const rows = await within(section).findAllByRole('row')
-    expect(rows).toHaveLength(3) // 머리 + 둘
+    // 머리 줄이 먼저 그려진다 — 몸통 둘까지 기다린다(부하가 걸리면 그 사이에 찾기가 끝났다).
+    await waitFor(() => expect(within(section).getAllByRole('row')).toHaveLength(3))
+    const rows = within(section).getAllByRole('row')
     expect(within(rows[1]).getByText('시간 상한')).toBeInTheDocument()
     expect(within(rows[1]).getByText('ref.model.ref.task.ref.project.label')).toBeInTheDocument()
     expect(within(rows[1]).getByText('ref.parts.label eq')).toBeInTheDocument()

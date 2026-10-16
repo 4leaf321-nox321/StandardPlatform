@@ -96,16 +96,28 @@ def list_insights(
             MetricInsight.last_seen_at
             >= func.coalesce(MetricDef.insights_scanned_at, func.now())
         )
-    total = int(db.scalar(select(func.count()).select_from(stmt.subquery())) or 0)
+    # 같은 줄이 여러 지표에 서면(같은 기록을 같은 분모로 센 지표끼리) 점수 높은 쪽 하나만 —
+    # 나머지 지표는 `also` 에. 결론은 지표마다 수백이라 다 읽어 가른다.
     rows = db.scalars(
-        stmt.order_by(MetricInsight.score.desc(), MetricInsight.first_seen_at.desc()).limit(
-            limit
+        stmt.order_by(
+            MetricInsight.score.desc(),
+            MetricInsight.first_seen_at.desc(),
+            MetricInsight.id,
         )
     )
+    shown: dict[tuple[str, str], InsightOut] = {}
+    for row in rows:
+        metric_def = by_id[row.metric_id]
+        same = shown.get((row.kind, row.title))
+        if same is not None:
+            if metric_def.label not in same.also and metric_def.slug != same.metric_slug:
+                same.also.append(metric_def.label)
+            continue
+        shown[(row.kind, row.title)] = _out(row, metric_def)
     scanned = [one.insights_scanned_at for one in by_id.values() if one.insights_scanned_at]
     return InsightsOut(
-        items=[_out(row, by_id[row.metric_id]) for row in rows],
-        total=total,
+        items=list(shown.values())[:limit],
+        total=len(shown),
         scanned_at=max(scanned) if scanned else None,
     )
 

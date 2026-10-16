@@ -22,7 +22,7 @@ from app.modules.workspaces.models import Workspace
 from app.shared.errors import code
 from tests.api.conftest import Signed
 from tests.api.test_metric_analysis import _month, _plant, _symptom_months
-from tests.api.test_metrics import _world
+from tests.api.test_metrics import _two, _world
 
 
 def _setup(client: TestClient, admin: Signed) -> tuple[dict[str, Any], str]:
@@ -246,3 +246,103 @@ def test_훑기_작업은_다른_작업이_없을_때_집는다(
     assert following is not None and following.id == scan_job.id
     following.status = "cancelled"
     db.commit()
+
+
+def test_코호트_축은_긴_창으로도_훑는다(client: TestClient, admin: Signed) -> None:
+    """판매 뒤 몇 달에 나는 고장은 기본 창(출고 뒤 3개월)에 안 든다 — 12개월 창에서만 선다
+    (개발 DB: 심은 「한 공장 · 석 달 x4」 가 생산월 지표의 12개월 창에서야 변화점으로 섰다)."""
+    w = _world(client, admin)
+    sales, cases = _two(client, admin, w)
+    first, watermark = date(2026, 1, 1), datetime(2030, 2, 15, tzinfo=UTC)
+    dims = {"base_model": w["s_base"]}
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(first, c),
+                "dims": dims,
+                "count": 1,
+                "value_count": 1,
+                "sum": 1000.0,
+            }
+            for c in range(48)
+        ],
+        watermark,
+    )
+
+    def count(c: int, age: int) -> int:
+        if age < 3:
+            return 2  # 출고 초기는 그대로
+        return 12 if c >= 24 else 6  # 2028-01 판매분부터 늦은 고장이 두 배
+
+    _plant(
+        cases["slug"],
+        [
+            {
+                "period": _month(first, c + age),
+                "cohort": _month(first, c),
+                "age": age,
+                "dims": dims,
+                "count": count(c, age),
+            }
+            for c in range(48)
+            for age in range(12)
+            if c + age < 49
+        ],
+        watermark,
+    )
+    _scan(client, admin, cases["slug"])
+    found = _mine(client, admin, cases["slug"])
+    changes = [one for one in found if one["kind"] == "change"]
+    assert changes, [one["title"] for one in found]
+    assert all("window=12" in one["link"] for one in changes)  # 기본 창에서는 안 선다
+    (overall,) = [one for one in changes if not one["detail"].get("by")]
+    assert overall["detail"]["at"] == "2028-01-01"
+    assert overall["detail"]["ratio"] > 1.7
+    assert "12개월 안 · " in overall["title"]
+    assert "window=12" in overall["link"]
+
+
+def test_여러_지표에_선_같은_줄은_하나로_보인다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """같은 기록을 같은 분모로 센 두 지표(개발 DB 의 판매월 지표 둘)에는 같은 결론이 선다 —
+    목록에는 점수 높은 쪽 하나, 나머지 지표는 `also` 에."""
+    _, slug = _setup(client, admin)
+    _scan(client, admin, slug)
+    top = _mine(client, admin, slug)[0]
+    metric = db.scalar(select(MetricDef).where(MetricDef.slug == slug))
+    assert metric is not None
+    other = db.scalar(
+        select(MetricDef).where(MetricDef.slug == metric.spec["denominator"]["metric"])
+    )
+    row = db.get(MetricInsight, uuid.UUID(top["id"]))
+    assert other is not None and row is not None
+    # 다른 시험의 같은 모양 지표도 같은 제목을 낸다(그것도 합쳐진다) — 이 시험의 줄만 보게,
+    # 그리고 함께 도는 시험의 결론 수와 상관없이 맨 앞에 서게.
+    row.title = f"{row.title} #{uuid.uuid4().hex[:8]}"
+    row.score = 1000.0
+    db.add(
+        MetricInsight(
+            metric_id=other.id,
+            key=row.key,
+            kind=row.kind,
+            recipe=row.recipe,
+            values=row.values,
+            title=row.title,
+            detail=row.detail,
+            score=row.score - 0.01,
+            first_seen_at=row.first_seen_at,
+            last_seen_at=row.last_seen_at,
+        )
+    )
+    other.insights_scanned_at = row.last_seen_at
+    db.commit()
+    listed = client.get("/api/insights", params={"limit": 200}, headers=admin.headers)
+    assert listed.status_code == 200, listed.text
+    same = [one for one in listed.json()["items"] if one["title"] == row.title]
+    assert len(same) == 1
+    assert same[0]["metric_slug"] == slug and same[0]["also"] == [other.label]
+    # 그 지표만 보면 그 지표의 줄이다.
+    (alone,) = [one for one in _mine(client, admin, other.slug) if one["title"] == row.title]
+    assert alone["also"] == []

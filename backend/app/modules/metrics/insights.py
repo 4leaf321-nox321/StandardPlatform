@@ -66,6 +66,12 @@ HALF_LIFE = 12
 COMBO_TOP = 15
 #: 지표 하나의 훑기가 이보다 길면 조합 훑기를 거기서 멈추고 그렇다고 적는다.
 SCAN_BUDGET_SECONDS = 600.0
+#: 분석의 기본 창 — 코호트(생산월 · 판매월)마다 출고 뒤 몇 기간 안의 기록을 세나.
+DEFAULT_WINDOW = 3
+#: 코호트 축이면 창 하나를 더 — 1년. 기본 창은 출고 초기만 세서 판매 · 사용 뒤 몇 달에 나는
+#: 결함을 거의 못 본다(개발 DB: 생산월 지표의 충전 단자 기록 599건 중 3개월 창에 드는 것은
+#: 45건 — 심은 「한 공장 · 석 달 x4」 는 12개월 창에서야 변화점으로 선다).
+LONG_WINDOW = {"week": 52, "month": 12, "quarter": 4}
 
 
 @dataclass
@@ -83,6 +89,17 @@ class Plan:
     looks: int = 1
     """같은 물음을 몇 번 거른 값으로 봤나 — 집단 비교의 문턱을 이것으로 나눈다."""
     combo: bool = False
+
+
+@dataclass
+class View:
+    """같은 분석을 보는 눈 하나 — 기본 창, 그리고 코호트 축이면 긴 창."""
+
+    values: dict[str, str]
+    tag: str
+    """열쇠에 붙인다 — 긴 창의 결론은 기본 창의 것과 다른 열쇠."""
+    changes_prefix: str
+    groups_prefix: str
 
 
 @dataclass
@@ -205,24 +222,34 @@ def plans_of(
     den = spec.denominator
     on = list(den.on) if den is not None else []
     # 변화점의 축은 분석의 기본(`series.default_axis`) — 분모가 코호트(생산월 · 판매월)와
-    # 짝이면 코호트 축이다. 그때는 제목에 그 축을 적는다(「생산일 기준 · …」).
-    axis_prefix = ""
+    # 짝이면 코호트 축이다. 그때는 제목에 그 축을 적고, 긴 창으로도 본다(`LONG_WINDOW`).
+    views = [View({}, "", "", "")]
     if series.default_axis(built) == "cohort" and built.cohort is not None:
-        axis_prefix = f"{built.cohort.definition.label} 기준 · "
-    change_axes: list[tuple[dict[str, str], str, str]] = [({}, "", axis_prefix)]
+        axis_label = f"{built.cohort.definition.label} 기준"
+        views = [View({}, "", f"{axis_label} · ", "")]
+        long = LONG_WINDOW.get(built.cohort.grain)
+        if long:
+            span = f"{axis_label} {long}{series.SPAN.get(built.cohort.grain, '')} 안 · "
+            views.append(View({"window": str(long)}, f"|w{long}", span, span))
     # 변화점 — 비율 · 조건 비율만. 분모 없는 건수의 변화는 「판매가 늘어서」 와 못 가른다.
     if can_change:
-        for axis_values, axis_tag, axis_prefix in change_axes:
+        for view in views:
             out.append(
-                Plan("changes", dict(axis_values), "change", tag=axis_tag, prefix=axis_prefix)
+                Plan(
+                    "changes",
+                    dict(view.values),
+                    "change",
+                    tag=view.tag,
+                    prefix=view.changes_prefix,
+                )
             )
             out.extend(
                 Plan(
                     "changes",
-                    {"by": one.name, **axis_values},
+                    {"by": one.name, **view.values},
                     "change",
-                    tag=axis_tag,
-                    prefix=axis_prefix,
+                    tag=view.tag,
+                    prefix=view.changes_prefix,
                 )
                 for one in built.dims
             )
@@ -246,7 +273,17 @@ def plans_of(
     # 집단 비교 — 분모 짝 기준마다(조건 비율이면 기준마다).
     compared = [one.name for one in built.dims] if share else on
     if can_group:
-        out.extend(Plan("groups", {"dim": name}, "high") for name in compared)
+        out.extend(
+            Plan(
+                "groups",
+                {"dim": name, **view.values},
+                "high",
+                tag=view.tag,
+                prefix=view.groups_prefix,
+            )
+            for view in views
+            for name in compared
+        )
     # 조합 — 나누지 않는 기준의 많은 값마다 걸러, 견주는 기준으로 다시.
     splits = list(built.dims) if share else [one for one in built.dims if one.name not in on]
     for split in splits:
@@ -264,31 +301,31 @@ def plans_of(
             for name in compared:
                 if name == split.name:
                     continue
-                if can_group:
-                    out.append(
-                        Plan(
-                            "groups",
-                            {"dim": name, **filters},
-                            "high",
-                            tag=tag,
-                            prefix=prefix,
-                            looks=len(top),
-                            combo=True,
+                for view in views:
+                    if can_group:
+                        out.append(
+                            Plan(
+                                "groups",
+                                {"dim": name, **filters, **view.values},
+                                "high",
+                                tag=f"{tag}{view.tag}",
+                                prefix=f"{view.groups_prefix}{prefix}",
+                                looks=len(top),
+                                combo=True,
+                            )
                         )
-                    )
-                if can_change:
-                    out.extend(
-                        Plan(
-                            "changes",
-                            {"by": name, **filters, **axis_values},
-                            "change",
-                            tag=f"{tag}{axis_tag}",
-                            prefix=f"{axis_prefix}{prefix}",
-                            looks=len(top),
-                            combo=True,
+                    if can_change:
+                        out.append(
+                            Plan(
+                                "changes",
+                                {"by": name, **filters, **view.values},
+                                "change",
+                                tag=f"{tag}{view.tag}",
+                                prefix=f"{view.changes_prefix}{prefix}",
+                                looks=len(top),
+                                combo=True,
+                            )
                         )
-                        for axis_values, axis_tag, axis_prefix in change_axes
-                    )
     return out
 
 
@@ -306,6 +343,16 @@ def _recency(at: str | None, grain: str | None, today: date) -> float:
         return 1.0
     periods = (today - when).days / _PERIOD_DAYS.get(grain or "month", 31)
     return float(0.5 ** (max(periods - RECENT_FULL, 0.0) / HALF_LIFE))
+
+
+def _seen_until(today: date, grain: str | None, plan: Plan) -> date:
+    """오래됨을 재는 끝 — 긴 창은 코호트가 그만큼 늦게 닫혀, 기본 창보다 (창 차이)만큼 앞에서
+    끝난다. 그만큼 당겨 재야 같은 잣대다(안 그러면 긴 창의 결론은 늘 오래돼 보인다)."""
+    window = int(plan.values.get("window", DEFAULT_WINDOW))
+    if window <= DEFAULT_WINDOW:
+        return today
+    days = (window - DEFAULT_WINDOW) * _PERIOD_DAYS.get(grain or "month", 31)
+    return date.fromordinal(today.toordinal() - days)
 
 
 def _from_outcome(
@@ -328,7 +375,7 @@ def _from_outcome(
             interval = _interval(band[0], band[1]) if band else None
             support = detail.get("support")
             provisional = bool(detail.get("provisional"))
-            weight = _recency(detail.get("at"), grain, today)
+            weight = _recency(detail.get("at"), grain, _seen_until(today, grain, plan))
         values = dict(plan.values)
         if plan.recipe == "sprt" and detail.get("target"):
             # 결론 하나를 연다 — 훑기가 아니라 그 모델로(경보 발생의 링크와 같다).
@@ -384,6 +431,7 @@ def _groups(
         built,
         params.ask_from_values(plan.values),
         dim=plan.values["dim"],
+        window=int(plan.values.get("window", DEFAULT_WINDOW)),
     )
     threshold = GROUP_Q / max(plan.looks, 1)
     out: list[Found] = []
@@ -480,13 +528,16 @@ def tidy(
     3. 거른 값이 아무것도 더하지 않는 조합은 뺀다 — 그 값 하나로도 이미 보이는 결론이면.
     """
     overall = [one for one in founds if one.kind == "change" and not one.cell and one.ratio]
-    # 변화점의 축(기간 · 코호트)이 다르면 다른 물음이다 — 섞어 견주지 않는다.
+    # 변화점의 축(기간 · 코호트)이 다르면 다른 물음이다 — 섞어 견주지 않는다. 전체가 움직인
+    # 만큼은 같은 창의 전체로만 뺀다. 같은 칸 · 조합 견주기는 창을 가리지 않는다 — 두 창에서 선
+    # 같은 결론은 하나(점수 높은 쪽).
     axis_of = {id(one): one.values.get("axis", "period") for one in founds}
+    view_of = {id(one): (axis_of[id(one)], one.values.get("window")) for one in founds}
     for one in founds:
         if one.kind != "change" or not one.cell or one.ratio is None:
             continue
         for base in overall:
-            if axis_of[id(base)] != axis_of[id(one)]:
+            if view_of[id(base)] != view_of[id(one)]:
                 continue
             if base.direction != one.direction or not _near(
                 base.at, one.at, EXPLAIN_PERIODS, grain

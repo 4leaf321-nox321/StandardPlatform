@@ -19,7 +19,7 @@ export interface Insight {
   recipe_label: string
   title: string
   detail: Record<string, unknown>
-  /** 세기(|ln 비|) x 근거(log10(1 + 건수)), 잠정이면 절반 — 줄 세우는 데만. */
+  /** 세기(|ln 적게 잡은 비|) x 근거(log10(1 + 건수)), 잠정이면 절반 — 줄 세우는 데만. */
   score: number
   first_seen_at: string
   last_seen_at: string
@@ -28,6 +28,8 @@ export interface Insight {
   dismissed: boolean
   /** 그 분석을 그 인자로 연다. */
   link: string
+  /** 같은 줄이 선 다른 지표의 이름 — 목록에는 하나만 보인다. */
+  also?: string[]
 }
 
 export interface Insights {

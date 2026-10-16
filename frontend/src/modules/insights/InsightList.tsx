@@ -47,6 +47,7 @@ export function InsightList({
               처음 본 때 {shownDateTime(one.first_seen_at)} · {one.recipe_label}
               {typeof one.detail.ratio_bound === 'number' &&
                 ` · 적게 잡아 ${one.detail.ratio_bound.toFixed(2)}배`}
+              {one.also && one.also.length > 0 && ` · 같은 줄: ${one.also.join(', ')}`}
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
