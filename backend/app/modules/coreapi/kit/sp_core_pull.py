@@ -5,25 +5,35 @@
     python sp_core_pull.py --config config.ini
 
 무엇을 하나
-    1. 카탈로그(GET /core)로 공개 타입과 칸을 읽는다.
+    1. 카탈로그(GET /core)로 공개 타입과 칸을 읽는다. 정의 판(revision)이 바뀌었으면 무엇이
+       달라졌는지 적고, 전부 처음부터 다시 받는다.
     2. 타입마다 GET /core/<타입>?since=... 를 next 가 빌 때까지 이어 받는다.
-    3. 그 타입에 열린 관계가 있으면 GET /core/<타입>/relations 도 같은 식으로 받는다.
+    3. 객체를 다 받은 뒤, 관계가 열린 타입은 GET /core/<타입>/relations 도 같은 식으로 받는다.
     4. 받은 행을 CSV 와 SQLite 에 저장한다(save_rows 를 고치면 자기 DB 로 간다).
     5. 마지막에 온 as_of 를 state.json 에 적어 두고, 다음 실행에서 그대로 돌려준다.
 
-지켜야 할 것 여섯 — 이 파일은 이미 지키고 있다
+지켜야 할 것 — 이 파일은 이미 지키고 있다
     · as_of 는 서버가 준 값을 그대로 돌려준다(자기 시계로 만들지 않는다)
     · next 가 있으면 as_of 를 저장하지 않는다(끝까지 받은 뒤에만)
     · key 를 저장한다(다음 수신이 수정이 되는 근거)
     · deleted 행은 비활성 처리한다(삭제하지 않는다) — hidden 이면 이름 · 칸은 그대로 둔다
+    · 사라진 객체를 끝으로 하는 선은 끊는다(공개 측은 그 선을 「끊긴 선」 으로 보내지 않는다)
+    · renamed_from · previous_keys 가 오면 가진 행과 선을 새 key 로 옮긴다
     · 모르는 칸은 무시한다(공개 측이 칸을 추가해도 깨지지 않는다)
-    · reset 이 오면 그 타입을 비우고 처음부터 받는다(아래)
+    · 처음부터 받았으면(--full · reset · 정의 판 변경) 끝까지 받은 뒤 안 온 것을 정리한다
+    · 404 는 두 가지다 — 공개 안 된 타입은 건너뛰고 알리고, 커서를 못 읽으면 다시 받는다
 
 reset 은 무엇인가
     오래 안 받아 갔으면 서버가 「그 시점부터는 **끊긴 것을 알려 줄 수 없다**」 고 말한다
     (끊긴 선의 기록은 한동안만 들고 있다). 그때 빈 쪽을 「바뀐 것 없음」 으로 읽으면 이미
-    끊긴 선을 영영 들고 있게 된다 — 그래서 저장한 시각을 버리고, 그 타입의 현재 상태를
-    비우고, 처음부터 다시 받는다. 비우지 않으면 그 사이에 사라진 것이 그대로 남는다.
+    끊긴 선을 영영 들고 있게 된다 — 그래서 저장한 시각을 버리고 처음부터 다시 받고,
+    **마지막 쪽까지 받은 뒤** 이번에 안 온 것을 정리한다. 먼저 비우지 않는 것은 중간에
+    실패하면 아직 안 받은 것까지 사라지기 때문이다.
+
+끝나는 값
+    0  정상
+    1  멈춤(인증 · 주소 · 연결 · 서버 오류) — 화면의 마지막 줄이 까닭이다
+    2  끝까지 돌았지만 사람이 볼 것이 있다(공개 안 된 타입 · 정리를 멈춘 타입) — 「확인 필요」 줄
 """
 from __future__ import annotations
 
@@ -36,11 +46,37 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 import requests
 
-ENVELOPE = ("key", "label", "status", "updated_at", "deleted", "hidden", "merged_into")
+#: 이 키트의 판 — 바뀐 것은 CHANGES.md 에 같은 이름으로 적는다.
+KIT_VERSION = "2026-10-21"
+
+ENVELOPE = (
+    "key",
+    "label",
+    "status",
+    "updated_at",
+    "deleted",
+    "hidden",
+    "merged_into",
+    "renamed_from",
+    "previous_keys",
+)
+
+#: 처음부터 다시 받았는데 가진 것의 이 비율보다 많이(그리고 GONE_FLOOR 건보다 많이) 안 왔으면
+#: 정리하지 않고 멈춘다 — 토큰의 부서 · 공개 범위가 바뀐 날 전부를 비활성으로 만들지 않게.
+GONE_LIMIT = 0.5
+GONE_FLOOR = 10
+
+
+class NotPublished(Exception):
+    """APP-CORE-0001 — 공개되지 않은 타입이다(공개를 거두었거나 이름이 틀렸다)."""
+
+
+class CursorLost(Exception):
+    """APP-CORE-0002 — 커서를 읽을 수 없다. 커서 없이 같은 시각부터 다시 받는다."""
 
 
 def load_config(path: str) -> dict[str, Any]:
@@ -51,9 +87,12 @@ def load_config(path: str) -> dict[str, Any]:
     token = os.environ.get("SP_TOKEN") or section.get("token", "")
     if not token:
         sys.exit("토큰이 없습니다. config.ini 의 token 또는 환경변수 SP_TOKEN 을 지정하세요.")
+    base_url = section.get("base_url", "").strip().rstrip("/")
+    if not base_url.startswith(("http://", "https://")) or "<" in base_url:
+        sys.exit(f"config.ini 의 base_url 에 공개 측이 알려 준 주소를 적으세요(끝이 /api): {base_url!r}")
     types = [one.strip() for one in section.get("types", "").split(",") if one.strip()]
     return {
-        "base_url": section.get("base_url", "").rstrip("/"),
+        "base_url": base_url,
         "token": token,
         "types": types,
         "out_dir": Path(section.get("out_dir", "out")),
@@ -78,7 +117,13 @@ def request_json(cfg: dict[str, Any], path: str, params: dict[str, Any] | None =
         if response.status_code in (401, 403):
             sys.exit(f"인증이 거절되었습니다(HTTP {response.status_code}). 토큰과 범위를 확인하세요: {said(response)}")
         if response.status_code == 404:
-            sys.exit(f"공개된 타입이 아닙니다: {path} — {said(response)}")
+            # **404 는 두 가지다.** 상태 코드만 보고 멈추면 커서 문제 하나로 수신이 통째로 선다.
+            code = error_code(response)
+            if code.endswith("CORE-0001"):
+                raise NotPublished(said(response))
+            if code.endswith("CORE-0002"):
+                raise CursorLost(said(response))
+            sys.exit(f"주소를 찾지 못했습니다(HTTP 404): {url} — config.ini 의 base_url 을 확인하세요")
         if response.status_code >= 500 or response.status_code == 429:
             if attempt == cfg["retries"]:
                 sys.exit(f"서버 오류가 계속됩니다(HTTP {response.status_code}): {said(response)}")
@@ -97,6 +142,13 @@ def said(response: requests.Response) -> str:
         return response.text[:300]
 
 
+def error_code(response: requests.Response) -> str:
+    try:
+        return str((response.json().get("error") or {}).get("code") or "")
+    except Exception:
+        return ""
+
+
 def state_path(cfg: dict[str, Any]) -> Path:
     return cfg["out_dir"] / "state.json"
 
@@ -110,6 +162,51 @@ def load_state(cfg: dict[str, Any]) -> dict[str, str]:
 
 def save_state(cfg: dict[str, Any], state: dict[str, str]) -> None:
     state_path(cfg).write_text(json.dumps(state, ensure_ascii=False, indent=1), encoding="utf-8")
+
+
+def remember_catalog(cfg: dict[str, Any], catalog: dict[str, Any]) -> list[str]:
+    """카탈로그를 `out/catalog.json` 에 둔다 — 정의 판이 바뀌었으면 **무엇이 달라졌나**를 돌려준다.
+
+    직전 것은 `catalog.prev.json` 으로 남긴다. 처음이면(직전 것이 없으면) 빈 목록이다.
+    """
+    path = cfg["out_dir"] / "catalog.json"
+    lines: list[str] = []
+    if path.exists():
+        before = json.loads(path.read_text(encoding="utf-8"))
+        if before.get("revision") != catalog.get("revision"):
+            lines.append(
+                f"정의 판이 바뀌었습니다: {before.get('revision')} → {catalog.get('revision')}"
+            )
+            lines.extend(diff_catalog(before, catalog))
+            path.replace(cfg["out_dir"] / "catalog.prev.json")
+    path.write_text(json.dumps(catalog, ensure_ascii=False, indent=1), encoding="utf-8")
+    return lines
+
+
+def diff_catalog(before: dict[str, Any], after: dict[str, Any]) -> list[str]:
+    """두 카탈로그의 차이 — 타입 · 칸 · 관계. 표시 문구(이름 · 설명)는 보지 않는다."""
+    old = {one["slug"]: one for one in before.get("types") or []}
+    new = {one["slug"]: one for one in after.get("types") or []}
+    out = [f"  + 타입 {slug}" for slug in sorted(set(new) - set(old))]
+    out += [f"  - 타입 {slug} (더 이상 공개되지 않음)" for slug in sorted(set(old) - set(new))]
+    for slug in sorted(set(new) & set(old)):
+        a = {one["key"]: one for one in old[slug].get("properties") or []}
+        b = {one["key"]: one for one in new[slug].get("properties") or []}
+        out += [f"  + {slug}.{key} ({b[key].get('data_type')})" for key in sorted(set(b) - set(a))]
+        out += [f"  - {slug}.{key}" for key in sorted(set(a) - set(b))]
+        for key in sorted(set(a) & set(b)):
+            changed = [
+                name
+                for name in ("data_type", "multi", "ref_type_slug", "enum_options", "unit")
+                if a[key].get(name) != b[key].get(name)
+            ]
+            if changed:
+                out.append(f"  ~ {slug}.{key}: {', '.join(changed)} 바뀜")
+        was = set(old[slug].get("relations") or [])
+        now = set(new[slug].get("relations") or [])
+        out += [f"  + {slug} 관계 {one}" for one in sorted(now - was)]
+        out += [f"  - {slug} 관계 {one}" for one in sorted(was - now)]
+    return out
 
 
 def flatten(row: dict[str, Any]) -> dict[str, Any]:
@@ -127,16 +224,119 @@ def flatten(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
-def save_rows(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -> None:
-    """저장 — **여기만 고치면 자기 DB 로 간다.**
+def connect(cfg: dict[str, Any]) -> sqlite3.Connection:
+    cfg["out_dir"].mkdir(parents=True, exist_ok=True)
+    return sqlite3.connect(cfg["out_dir"] / "sp_core.sqlite")
+
+
+def chunks(items: list[Any], size: int = 400) -> Iterator[list[Any]]:
+    """IN (...) 에 넣을 만큼씩 — 옛 SQLite 는 한 문장의 자리표가 999 개까지다."""
+    for start in range(0, len(items), size):
+        yield items[start : start + size]
+
+
+def object_table(db: sqlite3.Connection, type_slug: str) -> None:
+    db.execute(
+        f'CREATE TABLE IF NOT EXISTS "{type_slug}" '
+        "(key TEXT PRIMARY KEY, label TEXT, status TEXT, updated_at TEXT, "
+        "deleted INTEGER, merged_into TEXT, properties TEXT)"
+    )
+
+
+def relation_tables(db: sqlite3.Connection) -> list[str]:
+    """이미 만든 선 표 전부 — 옛 키트가 만든 것이면 키를 먼저 바꿔 둔다."""
+    names = [
+        one
+        for (one,) in db.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE '%\\_\\_relations' ESCAPE '\\'"
+        )
+    ]
+    for name in names:
+        relations_table(db, name)
+    return names
+
+
+def old_keys(row: dict[str, Any]) -> list[str]:
+    """이 행의 옛 식별자 — `previous_keys`(전부, 오래된 것부터)와 `renamed_from`(마지막 것)."""
+    out: list[str] = []
+    for one in [*(row.get("previous_keys") or []), row.get("renamed_from")]:
+        if one and one != row["key"] and one not in out:
+            out.append(str(one))
+    return out
+
+
+def rekey(db: sqlite3.Connection, type_slug: str, key: str, olds: list[str]) -> int:
+    """식별자가 바뀐 것 — 가진 행과 선을 **새 key 로 옮긴다.** 옮긴 행 수를 돌려준다.
+
+    옮기지 않으면 새 key 가 처음 보는 것이 되어 같은 것이 둘이 된다. 오래 안 받았으면 가진
+    것이 마지막 옛 식별자가 아닐 수 있어(A→B→C 에서 A) 옛 식별자를 전부 본다. 옛 → 새 짝은
+    `<타입>__previous_keys` 표에 남긴다 — 다른 행의 참조 칸에 남은 옛 값을 거기서 푼다.
+    """
+    db.execute(
+        f'CREATE TABLE IF NOT EXISTS "{type_slug}__previous_keys" '
+        "(old_key TEXT PRIMARY KEY, key TEXT)"
+    )
+    db.executemany(
+        f'INSERT INTO "{type_slug}__previous_keys" (old_key, key) VALUES (?, ?) '
+        "ON CONFLICT(old_key) DO UPDATE SET key=excluded.key",
+        [(old, key) for old in olds],
+    )
+    moved = 0
+    has_new = db.execute(f'SELECT 1 FROM "{type_slug}" WHERE key=?', (key,)).fetchone() is not None
+    for old in olds:
+        if has_new:
+            # 새 key 로 이미 받았다 — 옛 행은 같은 것의 두 번째 줄이다.
+            moved += db.execute(f'DELETE FROM "{type_slug}" WHERE key=?', (old,)).rowcount
+        else:
+            done = db.execute(f'UPDATE "{type_slug}" SET key=? WHERE key=?', (key, old)).rowcount
+            moved += done
+            has_new = has_new or done > 0
+    mine = f"{type_slug}__relations"
+    for table in relation_tables(db):
+        if table == mine:
+            db.executemany(
+                f'UPDATE OR REPLACE "{table}" SET src=? WHERE src=?', [(key, old) for old in olds]
+            )
+        db.executemany(
+            f'UPDATE OR REPLACE "{table}" SET dst=? WHERE dst=? AND dst_type IN (?, \'\')',
+            [(key, old, type_slug) for old in olds],
+        )
+    return moved
+
+
+def cut_touching(db: sqlite3.Connection, type_slug: str, keys: list[str]) -> int:
+    """그 객체를 끝으로 하는 선을 끊는다 — 지워졌거나 더 이상 안 보이는 객체.
+
+    공개 측은 객체를 지우면 그 선을 **내보내지 않을 뿐, 「끊긴 선」 으로 알려 주지 않는다**
+    (합쳐진 쪽도 같다 — 선은 이긴 쪽으로 옮겨 새로 온다). 받는 쪽이 끊지 않으면 없는 객체에
+    매달린 선이 남는다.
+    """
+    if not keys:
+        return 0
+    cut = 0
+    mine = f"{type_slug}__relations"
+    for table in relation_tables(db):
+        for part in chunks(keys):
+            marks = ",".join("?" * len(part))
+            if table == mine:
+                cut += db.execute(f'DELETE FROM "{table}" WHERE src IN ({marks})', part).rowcount
+            cut += db.execute(
+                f'DELETE FROM "{table}" WHERE dst IN ({marks}) AND dst_type IN (?, \'\')',
+                [*part, type_slug],
+            ).rowcount
+    return cut
+
+
+def save_rows(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -> dict[str, int]:
+    """저장 — **여기만 고치면 자기 DB 로 간다.** 옮긴 것 · 되살아난 것의 수를 돌려준다.
 
     기본 동작
         CSV      이번에 받은 행을 이어 적는다 — **수신 이력**이다(같은 key 가 여러 번 나온다).
         SQLite   `key` 기준 upsert — **현재 상태**다. 삭제 행은 deleted=1 로 남는다.
-    
     """
+    done = {"renamed": 0, "revived": 0}
     if not rows:
-        return
+        return done
     cfg["out_dir"].mkdir(parents=True, exist_ok=True)
     flat = [flatten(one) for one in rows]
     columns: list[str] = []
@@ -153,13 +353,26 @@ def save_rows(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -
             writer.writeheader()
         writer.writerows(flat)
 
-    db = sqlite3.connect(cfg["out_dir"] / "sp_core.sqlite")
+    db = connect(cfg)
     try:
-        db.execute(
-            f'CREATE TABLE IF NOT EXISTS "{type_slug}" '
-            '(key TEXT PRIMARY KEY, label TEXT, status TEXT, updated_at TEXT, '
-            "deleted INTEGER, merged_into TEXT, properties TEXT)"
-        )
+        object_table(db, type_slug)
+        # 식별자가 바뀐 것을 **먼저** 옮긴다 — 그래야 아래 upsert 가 「새로 만들기」 가 아니라
+        # 「고침」 이 된다.
+        for one in rows:
+            olds = old_keys(one)
+            if olds:
+                done["renamed"] += rekey(db, type_slug, one["key"], olds)
+
+        shown = [one for one in rows if not one.get("hidden")]
+        # 되살아난 것 — 지웠던 key 가 deleted=false 로 다시 왔다. 그 선은 바뀐 것이 아니라서
+        # 증분으로 다시 오지 않는다(main 이 선을 처음부터 다시 받는다).
+        alive = [one["key"] for one in shown if not one.get("deleted")]
+        for part in chunks(alive):
+            marks = ",".join("?" * len(part))
+            done["revived"] += db.execute(
+                f'SELECT count(*) FROM "{type_slug}" WHERE deleted=1 AND key IN ({marks})', part
+            ).fetchone()[0]
+
         db.executemany(
             f'INSERT INTO "{type_slug}" (key,label,status,updated_at,deleted,merged_into,properties) '
             "VALUES (?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
@@ -175,8 +388,7 @@ def save_rows(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -
                     one.get("merged_into"),
                     json.dumps(one.get("properties") or {}, ensure_ascii=False),
                 )
-                for one in rows
-                if not one.get("hidden")
+                for one in shown
             ],
         )
         # hidden — 지운 것이 아니라 이 토큰으로 더 이상 안 보이는 것(소유 부서가 옮겨 감).
@@ -185,9 +397,11 @@ def save_rows(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -
             f'UPDATE "{type_slug}" SET deleted=1, updated_at=? WHERE key=?',
             [(one.get("updated_at"), one["key"]) for one in rows if one.get("hidden")],
         )
+        cut_touching(db, type_slug, [one["key"] for one in rows if one.get("deleted")])
         db.commit()
     finally:
         db.close()
+    return done
 
 
 RELATION_TABLE = (
@@ -222,10 +436,20 @@ def relations_table(db: sqlite3.Connection, table: str) -> None:
     db.execute(f'DROP TABLE "{old}"')
 
 
+def gone_here(db: sqlite3.Connection, type_slug: str, key: Any) -> bool:
+    """그 객체가 이쪽에서 비활성인가 — 그 타입을 받지 않으면(표가 없으면) 모른다(아니다)."""
+    try:
+        row = db.execute(f'SELECT deleted FROM "{type_slug}" WHERE key=?', (key,)).fetchone()
+    except sqlite3.OperationalError:
+        return False
+    return bool(row and row[0])
+
+
 def save_relations(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -> None:
     """선 저장 — CSV 는 수신 이력, SQLite 는 현재 상태(출발 · 관계 · 도착 · 도착 타입이 키다).
 
-    `deleted` 인 줄은 **지운다** — 선은 상태가 아니라 있음/없음이다.
+    `deleted` 인 줄은 **지운다** — 선은 상태가 아니라 있음/없음이다. 도착 객체가 이쪽에서
+    비활성이면 넣지 않는다 — 공개 측은 출발이 지워진 선만 거르고 도착이 지워진 선은 보낸다.
     """
     if not rows:
         return
@@ -257,13 +481,13 @@ def save_relations(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any
         writer.writerows(flat)
 
     table = f"{type_slug}__relations"
-    db = sqlite3.connect(cfg["out_dir"] / "sp_core.sqlite")
+    db = connect(cfg)
     try:
         relations_table(db, table)
         for one in rows:
             keys = (one.get("src"), one.get("relation"), one.get("dst"))
             dst_type = one.get("dst_type") or ""
-            if one.get("deleted"):
+            if one.get("deleted") or gone_here(db, dst_type, one.get("dst")):
                 # 도착 타입이 빈 줄은 옛 키트가 받은 것이다 — 그것도 같은 선으로 본다.
                 db.execute(
                     f'DELETE FROM "{table}" WHERE src=? AND relation=? AND dst=? '
@@ -290,146 +514,286 @@ def save_relations(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any
         db.close()
 
 
-def forget(cfg: dict[str, Any], table: str) -> None:
-    """그 표의 **현재 상태를 비운다** — 처음부터 다시 받기 전에.
+def too_many(gone: int, held: int) -> bool:
+    return gone > GONE_FLOOR and gone > GONE_LIMIT * held
 
-    CSV(수신 이력)는 그대로 둔다. 「무엇이 언제 왔나」 는 지우면 안 되는 기록이고, 현재
-    상태는 SQLite 쪽이다 — 비우지 않으면 그 사이에 사라진 행 · 선이 영영 남는다.
+
+def prune_rows(
+    cfg: dict[str, Any], type_slug: str, seen: set[str], *, allow_shrink: bool
+) -> tuple[int, int]:
+    """처음부터 받았으면 **이번에 안 온 것을 비활성으로 둔다** — (정리한 수, 멈춘 수).
+
+    `since` 없이 받으면 지워진 것은 오지 않는다 — 「지워졌다」 를 들을 길이 없으니 부재로
+    안다. 마지막 쪽까지 받은 뒤에만 부른다(중간에 대조하면 아직 안 받은 것이 지워진다).
     """
-    path = cfg["out_dir"] / "sp_core.sqlite"
-    if not path.exists():
-        return
-    db = sqlite3.connect(path)
+    db = connect(cfg)
     try:
-        db.execute(f'DELETE FROM "{table}"')
+        object_table(db, type_slug)
+        held = [key for (key,) in db.execute(f'SELECT key FROM "{type_slug}" WHERE deleted=0')]
+        gone = [key for key in held if key not in seen]
+        if too_many(len(gone), len(held)) and not allow_shrink:
+            return 0, len(gone)
+        for part in chunks(gone):
+            marks = ",".join("?" * len(part))
+            db.execute(f'UPDATE "{type_slug}" SET deleted=1 WHERE key IN ({marks})', part)
+        cut_touching(db, type_slug, gone)
         db.commit()
-    except sqlite3.OperationalError:
-        # 아직 만들지도 않은 표다 — 비울 것이 없다.
-        pass
+        return len(gone), 0
     finally:
         db.close()
 
 
-def pull_relations(
-    cfg: dict[str, Any], type_slug: str, state: dict[str, str]
-) -> dict[str, int]:
-    """그 타입에서 출발하는 선 — 객체와 **같은 규칙**(since · next · as_of · reset)."""
-    mark = f"{type_slug}#relations"
-    since = state.get(mark, "")
+def prune_relations(
+    cfg: dict[str, Any], type_slug: str, seen: set[tuple[str, ...]], *, allow_shrink: bool
+) -> tuple[int, int]:
+    """선도 같다 — 처음부터 받았으면 이번에 안 온 선을 끊는다. (끊은 수, 멈춘 수)."""
+    table = f"{type_slug}__relations"
+    db = connect(cfg)
+    try:
+        relations_table(db, table)
+        held = [
+            tuple(one)
+            for one in db.execute(f'SELECT src, relation, dst, dst_type FROM "{table}"')
+        ]
+        gone = [one for one in held if one not in seen]
+        if too_many(len(gone), len(held)) and not allow_shrink:
+            return 0, len(gone)
+        db.executemany(
+            f'DELETE FROM "{table}" WHERE src=? AND relation=? AND dst=? AND dst_type=?', gone
+        )
+        db.commit()
+        return len(gone), 0
+    finally:
+        db.close()
+
+
+def new_counts() -> dict[str, int]:
+    return {
+        "rows": 0,
+        "deleted": 0,
+        "pages": 0,
+        "reset": 0,
+        "restarted": 0,
+        "full": 0,
+        "renamed": 0,
+        "revived": 0,
+        "gone": 0,
+        "held_back": 0,
+    }
+
+
+def pages(
+    cfg: dict[str, Any], path: str, since: str, counts: dict[str, int], label: str
+) -> Iterator[dict[str, Any]]:
+    """쪽을 마지막까지 내준다 — 객체와 선이 **같은 규칙**(since · next · as_of · reset · 404).
+
+    끝나면 `counts["full"]` 이 처음부터 받았는지(since 없이) 말한다 — 그때만 부재 대조를 한다.
+    """
     cursor: str | None = None
-    counts = {"rows": 0, "deleted": 0, "pages": 0, "reset": 0}
     while True:
         params: dict[str, Any] = {"limit": cfg["page_size"]}
         if since:
             params["since"] = since
         if cursor:
             params["cursor"] = cursor
-        body = request_json(cfg, f"/core/{type_slug}/relations", params)
+        try:
+            body = request_json(cfg, path, params)
+        except CursorLost as lost:
+            # 커서를 못 읽으면 커서 없이 **같은 시각부터** 다시 받는다 — 같은 행이 두 번 와도
+            # 덮어쓰면 그만이다. 되풀이되면 무한히 돌 자리다.
+            if not cursor or counts["restarted"]:
+                sys.exit(f"{label}: 커서를 읽을 수 없다는 답이 되풀이됩니다 — 공개 측에 문의하세요: {lost}")
+            print(f"    커서를 읽을 수 없다고 합니다 — 같은 시각부터 다시 받습니다: {lost}")
+            cursor = None
+            counts["restarted"] = 1
+            continue
         if body.get("reset"):
             # **처음부터 다시 받으라는 말이다.** 빈 쪽을 「바뀐 것 없음」 으로 읽으면 이미
-            # 끊긴 선을 영영 들고 있는다.
+            # 끊긴 것을 영영 들고 있는다. 오늘은 선 쪽만 이 말을 하지만, 말이 오면 따른다.
             if counts["reset"]:
                 sys.exit(
-                    f"{type_slug} 관계: since 를 비웠는데도 reset 이 옵니다 — "
+                    f"{label}: since 를 비웠는데도 reset 이 옵니다 — "
                     f"공개 측에 문의하세요: {body.get('reset_reason') or ''}"
                 )
             print(f"    처음부터 다시 받습니다 — {body.get('reset_reason') or 'reset'}")
-            forget(cfg, f"{type_slug}__relations")
-            state.pop(mark, None)
             since, cursor = "", None
             counts["reset"] = 1
             continue
+        counts["pages"] += 1
+        cursor = body.get("next")
+        if not cursor:
+            counts["full"] = 0 if since else 1
+        yield body
+        if not cursor:
+            return
+
+
+def pull_type(
+    cfg: dict[str, Any], type_slug: str, state: dict[str, str], *, allow_shrink: bool = False
+) -> dict[str, int]:
+    """한 타입의 객체. 처음부터 받았으면 끝까지 받은 뒤 안 온 것을 비활성으로 둔다."""
+    counts = new_counts()
+    seen: set[str] = set()
+    last: dict[str, Any] = {}
+    for body in pages(cfg, f"/core/{type_slug}", state.get(type_slug, ""), counts, type_slug):
+        items = body.get("items") or []
+        # 자기 DB 로 고친 save_rows 가 아무것도 돌려주지 않아도 돈다(옛 키트에서 옮겨 온 것).
+        done = save_rows(cfg, type_slug, items) or {}
+        counts["renamed"] += done.get("renamed", 0)
+        counts["revived"] += done.get("revived", 0)
+        counts["rows"] += len(items)
+        counts["deleted"] += sum(1 for one in items if one.get("deleted"))
+        seen.update(str(one["key"]) for one in items if not one.get("deleted"))
+        last = body
+    if counts["full"]:
+        counts["gone"], counts["held_back"] = prune_rows(
+            cfg, type_slug, seen, allow_shrink=allow_shrink
+        )
+    # **끝까지 받았을 때만 시각을 옮긴다.**
+    if last.get("as_of"):
+        state[type_slug] = str(last["as_of"])
+    return counts
+
+
+def pull_relations(
+    cfg: dict[str, Any], type_slug: str, state: dict[str, str], *, allow_shrink: bool = False
+) -> dict[str, int]:
+    """그 타입에서 출발하는 선 — 객체와 **같은 규칙**. 기준 시각은 `<타입>#relations` 로 따로."""
+    mark = f"{type_slug}#relations"
+    counts = new_counts()
+    seen: set[tuple[str, ...]] = set()
+    last: dict[str, Any] = {}
+    label = f"{type_slug} 관계"
+    for body in pages(cfg, f"/core/{type_slug}/relations", state.get(mark, ""), counts, label):
         items = body.get("items") or []
         save_relations(cfg, type_slug, items)
         counts["rows"] += len(items)
         counts["deleted"] += sum(1 for one in items if one.get("deleted"))
-        counts["pages"] += 1
-        cursor = body.get("next")
-        if cursor:
-            continue
-        if body.get("as_of"):
-            state[mark] = str(body["as_of"])
-        return counts
+        seen.update(
+            (str(one.get("src")), str(one.get("relation")), str(one.get("dst")), one.get("dst_type") or "")
+            for one in items
+            if not one.get("deleted")
+        )
+        last = body
+    if counts["full"]:
+        counts["gone"], counts["held_back"] = prune_relations(
+            cfg, type_slug, seen, allow_shrink=allow_shrink
+        )
+    if last.get("as_of"):
+        state[mark] = str(last["as_of"])
+    return counts
 
 
-def pull_type(cfg: dict[str, Any], type_slug: str, state: dict[str, str]) -> dict[str, int]:
-    since = state.get(type_slug, "")
-    cursor: str | None = None
-    counts = {"rows": 0, "deleted": 0, "pages": 0, "reset": 0}
-    while True:
-        params: dict[str, Any] = {"limit": cfg["page_size"]}
-        if since:
-            params["since"] = since
-        if cursor:
-            params["cursor"] = cursor
-        body = request_json(cfg, f"/core/{type_slug}", params)
-        if body.get("reset"):
-            # 오늘은 선 쪽만 이 말을 하지만, **말이 오면 따른다** — 나중에 객체 쪽이
-            # 같은 말을 하기 시작할 때 받는 쪽을 고치러 다니지 않는다.
-            if counts["reset"]:
-                sys.exit(
-                    f"{type_slug}: since 를 비웠는데도 reset 이 옵니다 — "
-                    f"공개 측에 문의하세요: {body.get('reset_reason') or ''}"
-                )
-            print(f"    처음부터 다시 받습니다 — {body.get('reset_reason') or 'reset'}")
-            forget(cfg, type_slug)
-            state.pop(type_slug, None)
-            since, cursor = "", None
-            counts["reset"] = 1
-            continue
-        items = body.get("items") or []
-        save_rows(cfg, type_slug, items)
-        counts["rows"] += len(items)
-        counts["deleted"] += sum(1 for one in items if one.get("deleted"))
-        counts["pages"] += 1
-        cursor = body.get("next")
-        if cursor:
-            continue
-        # **끝까지 받았을 때만 시각을 옮긴다.**
-        if body.get("as_of"):
-            state[type_slug] = str(body["as_of"])
-        return counts
+def tail(counts: dict[str, int]) -> str:
+    """한 줄 요약의 꼬리 — 일어난 것만."""
+    parts = []
+    if counts["reset"]:
+        parts.append("처음부터 다시 받음(reset)")
+    if counts["restarted"]:
+        parts.append("커서 다시 받음")
+    if counts["renamed"]:
+        parts.append(f"식별자 옮김 {counts['renamed']}")
+    if counts["revived"]:
+        parts.append(f"되살아남 {counts['revived']}")
+    if counts["gone"]:
+        parts.append(f"안 와서 정리 {counts['gone']}")
+    if counts["held_back"]:
+        parts.append(f"정리 멈춤 {counts['held_back']}")
+    return "".join(f" · {one}" for one in parts)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Standard Platform 코어 수신")
     parser.add_argument("--config", default="config.ini")
-    parser.add_argument("--full", action="store_true", help="처음부터 다시 받는다")
-    args = parser.parse_args()
+    parser.add_argument("--full", action="store_true", help="처음부터 다시 받는다(끝나면 안 온 것을 정리)")
+    parser.add_argument(
+        "--allow-shrink",
+        action="store_true",
+        help="처음부터 받았을 때 가진 것의 절반 넘게 안 와도 정리한다(정말 줄었을 때만)",
+    )
+    parser.add_argument("--version", action="version", version=f"sp_core_pull {KIT_VERSION}")
+    args = parser.parse_args(argv)
 
     cfg = load_config(args.config)
     cfg["out_dir"].mkdir(parents=True, exist_ok=True)
     catalog = request_json(cfg, "/core")
     opened = [one["slug"] for one in catalog.get("types") or []]
-    print(f"시스템 {catalog.get('system')} · 정의 판 {catalog.get('revision')} · 공개 타입 {opened}")
+    print(
+        f"키트 {KIT_VERSION} · 시스템 {catalog.get('system')} · 정의 판 {catalog.get('revision')}"
+        f" · 공개 타입 {opened}"
+    )
+    changed = remember_catalog(cfg, catalog)
+    for line in changed:
+        print(line)
 
+    problems: list[str] = []
     wanted = cfg["types"] or opened
-    unknown = [one for one in wanted if one not in opened]
-    if unknown:
-        sys.exit(f"공개된 타입이 아닙니다: {unknown}. 공개 측 관리자에게 확인하세요.")
+    missing = [one for one in wanted if one not in opened]
+    if missing:
+        problems.append(f"공개되지 않은 타입은 건너뛰었습니다: {missing} — 공개 측 관리자에게 확인하세요")
+        wanted = [one for one in wanted if one in opened]
 
     has_relations = {
         one["slug"]: bool(one.get("relations"))
         for one in catalog.get("types") or []
     }
-    state = {} if args.full else load_state(cfg)
+    state: dict[str, str] = {} if args.full else load_state(cfg)
+    if changed and state:
+        # 새로 열린 칸 · 관계의 기존 값은 바뀐 것이 아니라서 증분으로 오지 않는다.
+        print("정의가 바뀌어 전부 처음부터 다시 받습니다")
+        state = {}
+
+    def held(label: str, counts: dict[str, int]) -> None:
+        if counts["held_back"]:
+            problems.append(
+                f"{label}: 처음부터 받았는데 가진 것 중 {counts['held_back']}건이 안 와서(절반 넘음) "
+                "정리하지 않았습니다. 토큰의 부서 · 공개 범위를 공개 측에 확인하고, 정말 줄어든 "
+                "것이면 --full --allow-shrink 로 한 번 더 받으세요"
+            )
+
+    # 객체를 **모두 먼저** 받는다 — 식별자 옮김 · 지워진 끝을 알아야 선을 바로 놓는다.
+    revived = False
+    pulled: list[str] = []
     for type_slug in wanted:
-        counts = pull_type(cfg, type_slug, state)
+        try:
+            counts = pull_type(cfg, type_slug, state, allow_shrink=args.allow_shrink)
+        except NotPublished as caught:
+            problems.append(f"{type_slug}: 공개되지 않은 타입이라 건너뛰었습니다 — {caught}")
+            continue
+        pulled.append(type_slug)
         print(
             f"  {type_slug}: {counts['rows']}건 수신"
-            f"(삭제 {counts['deleted']}) · {counts['pages']}페이지"
-            + (" · 처음부터 다시 받음" if counts["reset"] else "")
+            f"(삭제 {counts['deleted']}) · {counts['pages']}페이지{tail(counts)}"
         )
-        if has_relations.get(type_slug):
-            edges = pull_relations(cfg, type_slug, state)
-            print(
-                f"  {type_slug} 관계: {edges['rows']}건 수신"
-                f"(끊김 {edges['deleted']}) · {edges['pages']}페이지"
-                + (" · 처음부터 다시 받음" if edges["reset"] else "")
-            )
+        held(type_slug, counts)
+        revived = revived or counts["revived"] > 0
         save_state(cfg, state)
+
+    if revived:
+        # 되살아난 객체의 선은 바뀐 것이 아니라서 증분으로 다시 오지 않는다.
+        print("  되살아난 객체가 있어 선을 처음부터 다시 받습니다")
+        for mark in [one for one in state if one.endswith("#relations")]:
+            state.pop(mark)
+
+    for type_slug in pulled:
+        if not has_relations.get(type_slug):
+            continue
+        try:
+            edges = pull_relations(cfg, type_slug, state, allow_shrink=args.allow_shrink)
+        except NotPublished as caught:
+            problems.append(f"{type_slug} 관계: 공개되지 않아 건너뛰었습니다 — {caught}")
+            continue
+        print(
+            f"  {type_slug} 관계: {edges['rows']}건 수신"
+            f"(끊김 {edges['deleted']}) · {edges['pages']}페이지{tail(edges)}"
+        )
+        held(f"{type_slug} 관계", edges)
+        save_state(cfg, state)
+
     print(f"저장 위치: {cfg['out_dir'].resolve()}")
-    return 0
+    for one in problems:
+        print(f"확인 필요: {one}", file=sys.stderr)
+    return 2 if problems else 0
 
 
 if __name__ == "__main__":

@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import hashlib
 import io
+import re
 import uuid
 import zipfile
 from datetime import UTC, datetime, timedelta
@@ -701,7 +702,9 @@ def relations(
     src = ObjectInstance
     dst = aliased(ObjectInstance)
     reachable = visible_owner_clause(user, dst.owner_workspace_id)
-    # 출발점이 이 타입인 것만. 양 끝이 보이는 부서의 것만(객체 쪽과 같은 규칙).
+    # 출발점이 이 타입인 것만. 양 끝이 보이는 부서의 것만(객체 쪽과 같은 규칙). **양 끝이
+    # 살아 있는 것만** — 도착이 지워진 선을 보내면 처음 받는 쪽은 받은 적 없는 key 를 끝으로
+    # 쥔다. 지운 객체의 선은 무덤 없이 빠지고, 받는 쪽이 객체 무덤을 보고 끊는다(지침서 §4.2).
     live = (
         select(
             ObjectRelation.id.label("id"),
@@ -714,6 +717,7 @@ def relations(
             ObjectRelation.relation.in_(slugs),
             src.type_id == object_type.id,
             src.deleted_at.is_(None),
+            dst.deleted_at.is_(None),
             dst.type_id.in_(open_ids),
             visible,
             reachable,
@@ -1029,7 +1033,14 @@ def withheld_references(db: Session) -> list[CoreWithheldReferenceOut]:
 KIT_DIR = Path(__file__).resolve().parent / "kit"
 
 #: zip 에 담을 파일과 그 안에서의 이름.
-KIT_FILES = ("README.md", "config.example.ini", "sp_core_pull.py", "check.sh")
+KIT_FILES = ("README.md", "CHANGES.md", "config.example.ini", "sp_core_pull.py", "check.sh")
+
+
+def kit_version() -> str:
+    """키트의 판 — **수신 스크립트가 정본이다.** 안내서에 따로 적으면 둘이 어긋난다."""
+    text = (KIT_DIR / "sp_core_pull.py").read_text(encoding="utf-8")
+    found = re.search(r'^KIT_VERSION = "([^"]+)"', text, re.MULTILINE)
+    return found.group(1) if found else "unknown"
 
 
 def kit_zip(db: Session, user: User, *, base: str) -> bytes:
@@ -1049,6 +1060,7 @@ def kit_zip(db: Session, user: User, *, base: str) -> bytes:
         "{SYSTEM}": catalog_out.system,
         "{SYSTEM_NAME}": get_settings().app_name,
         "{REVISION}": catalog_out.revision,
+        "{KIT_VERSION}": kit_version(),
         "{AT}": datetime.now(UTC).strftime("%Y-%m-%d %H:%M UTC"),
         "{TYPES}": ", ".join(slugs),
         "{TYPES_LONG}": (
@@ -1062,8 +1074,11 @@ def kit_zip(db: Session, user: User, *, base: str) -> bytes:
     with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as bundle:
         for name in KIT_FILES:
             text = (KIT_DIR / name).read_text(encoding="utf-8")
-            for token, value in fill.items():
-                text = text.replace(token, value)
+            # 스크립트는 채우지 않는다 — 주소는 config.ini 가 들고, f-문자열의 `{KIT_VERSION}`
+            # 같은 이름이 자리표시와 겹친다.
+            if not name.endswith(".py"):
+                for token, value in fill.items():
+                    text = text.replace(token, value)
             info = zipfile.ZipInfo(f"sp-core-client/{name}")
             # 실행 권한을 살려 둔다 — 풀자마자 `./check.sh` 가 되게.
             info.external_attr = (0o755 if name.endswith(".sh") else 0o644) << 16

@@ -510,6 +510,7 @@ def test_연동_키트에_주소와_공개_타입이_채워진다(client: TestCl
     names = set(bundle.namelist())
     assert names == {
         "sp-core-client/README.md",
+        "sp-core-client/CHANGES.md",
         "sp-core-client/config.example.ini",
         "sp-core-client/sp_core_pull.py",
         "sp-core-client/check.sh",
@@ -526,6 +527,12 @@ def test_연동_키트에_주소와_공개_타입이_채워진다(client: TestCl
     assert vendor in readme and vendor in config
     # 자리표시가 남아 있으면 그대로 전달된다 — 받는 쪽은 그것을 주소로 읽는다.
     assert "{BASE}" not in readme and "{TYPES}" not in config
+    # 키트 판은 스크립트의 것이 안내서에 박힌다 — 옛 키트를 가진 쪽이 CHANGES 와 대조한다.
+    assert "{KIT_VERSION}" not in readme
+    from app.modules.coreapi import services
+
+    kit_version = services.kit_version()
+    assert kit_version != "unknown" and f"`{kit_version}`" in readme
 
     # 스크립트는 **그대로 돌아가야 한다** — 문법이 깨진 채로 나가면 상대가 고치게 된다.
     import ast
