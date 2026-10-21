@@ -1032,8 +1032,21 @@ def withheld_references(db: Session) -> list[CoreWithheldReferenceOut]:
 #: 키트 파일이 있는 자리. 패키지 안에 두어 배포본에 항상 포함된다.
 KIT_DIR = Path(__file__).resolve().parent / "kit"
 
-#: zip 에 담을 파일과 그 안에서의 이름.
-KIT_FILES = ("README.md", "CHANGES.md", "config.example.ini", "sp_core_pull.py", "check.sh")
+#: zip 에 담을 파일과 그 안에서의 이름. 받는 쪽은 대개 이것을 **자기 AI 코딩 도우미에게**
+#: 준다 — 사람용 안내 · AI 용 지시서 · 정답 구현 · 시험장(가짜 SP)이 한 벌이다.
+KIT_FILES = (
+    "00-START-HERE.md",
+    "01-AI-GUIDE.md",
+    "UPGRADE.md",
+    "CHANGES.md",
+    "README.md",
+    "config.example.ini",
+    "sp_core_pull.py",
+    "check.sh",
+    "testbed/fake_sp.py",
+    "testbed/compare.py",
+    "testbed/dump_reference.py",
+)
 
 
 def kit_version() -> str:

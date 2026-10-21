@@ -584,3 +584,19 @@ def test_키트_판이_CHANGES_맨_위에_적혀_있다() -> None:
     changes = (KIT.parent / "CHANGES.md").read_text(encoding="utf-8")
     first = next(line for line in changes.splitlines() if line.startswith("## 20"))
     assert kit.KIT_VERSION in first
+
+
+def test_지운_행은_가진_칸을_두고_비활성만_한다(tmp_path: Path) -> None:
+    """지운 행은 칸이 빈 채로 온다 — 그것으로 덮으면 이미 쓴 기록이 보일 값이 사라진다.
+    살아 있는 행은 칸을 통째로 바꾼다(SP 에서 비운 칸이 남지 않게)."""
+    kit = _kit()
+    cfg = {"out_dir": tmp_path, "page_size": 500}
+    path = tmp_path / "sp_core.sqlite"
+    kit.save_rows(cfg, "vendor", [_obj("V-1", properties={"grade": "A", "country": "KR"})])
+    kit.save_rows(cfg, "vendor", [_obj("V-1", properties={"grade": "B"})])
+    assert _all(path, 'SELECT properties FROM "vendor"') == [('{"grade": "B"}',)]
+
+    kit.save_rows(cfg, "vendor", [_obj("V-1", deleted=True, merged_into="V-9", properties={})])
+    assert _all(path, 'SELECT deleted, merged_into, properties FROM "vendor"') == [
+        (1, "V-9", '{"grade": "B"}')
+    ]

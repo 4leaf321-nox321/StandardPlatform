@@ -509,12 +509,26 @@ def test_연동_키트에_주소와_공개_타입이_채워진다(client: TestCl
     bundle = zipfile.ZipFile(_io.BytesIO(got.content))
     names = set(bundle.namelist())
     assert names == {
-        "sp-core-client/README.md",
-        "sp-core-client/CHANGES.md",
-        "sp-core-client/config.example.ini",
-        "sp-core-client/sp_core_pull.py",
-        "sp-core-client/check.sh",
+        f"sp-core-client/{name}"
+        for name in (
+            "00-START-HERE.md",
+            "01-AI-GUIDE.md",
+            "UPGRADE.md",
+            "CHANGES.md",
+            "README.md",
+            "config.example.ini",
+            "sp_core_pull.py",
+            "check.sh",
+            "testbed/fake_sp.py",
+            "testbed/compare.py",
+            "testbed/dump_reference.py",
+        )
     }
+    # 사람이 처음 여는 안내에도 이 설치의 주소 · 타입이 채워져 있다.
+    start = bundle.read("sp-core-client/00-START-HERE.md").decode()
+    assert vendor in start and "{BASE}" not in start and "{TYPES_LONG}" not in start
+    guide = bundle.read("sp-core-client/01-AI-GUIDE.md").decode()
+    assert "{KIT_VERSION}" not in guide
 
     readme = bundle.read("sp-core-client/README.md").decode()
     config = bundle.read("sp-core-client/config.example.ini").decode()

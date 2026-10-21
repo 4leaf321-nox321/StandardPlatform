@@ -373,24 +373,31 @@ def save_rows(cfg: dict[str, Any], type_slug: str, rows: list[dict[str, Any]]) -
                 f'SELECT count(*) FROM "{type_slug}" WHERE deleted=1 AND key IN ({marks})', part
             ).fetchone()[0]
 
-        db.executemany(
+        def values(one: dict[str, Any]) -> tuple[Any, ...]:
+            return (
+                one["key"],
+                one.get("label"),
+                one.get("status"),
+                one.get("updated_at"),
+                1 if one.get("deleted") else 0,
+                one.get("merged_into"),
+                json.dumps(one.get("properties") or {}, ensure_ascii=False),
+            )
+
+        insert = (
             f'INSERT INTO "{type_slug}" (key,label,status,updated_at,deleted,merged_into,properties) '
             "VALUES (?,?,?,?,?,?,?) ON CONFLICT(key) DO UPDATE SET "
             "label=excluded.label, status=excluded.status, updated_at=excluded.updated_at, "
-            "deleted=excluded.deleted, merged_into=excluded.merged_into, properties=excluded.properties",
-            [
-                (
-                    one["key"],
-                    one.get("label"),
-                    one.get("status"),
-                    one.get("updated_at"),
-                    1 if one.get("deleted") else 0,
-                    one.get("merged_into"),
-                    json.dumps(one.get("properties") or {}, ensure_ascii=False),
-                )
-                for one in shown
-            ],
+            "deleted=excluded.deleted, merged_into=excluded.merged_into"
         )
+        # 살아 있는 행은 칸을 **통째로** 바꾼다 — 합치면 SP 에서 비운 칸이 남는다.
+        db.executemany(
+            insert + ", properties=excluded.properties",
+            [values(one) for one in shown if not one.get("deleted")],
+        )
+        # 지운 행은 칸이 빈 채로 온다 — 가진 칸은 두고(이미 쓴 기록이 그 값을 보인다) 비활성만.
+        # 가진 적 없으면 비활성 행으로 만든다(merged_into 를 남기려고).
+        db.executemany(insert, [values(one) for one in shown if one.get("deleted")])
         # hidden — 지운 것이 아니라 이 토큰으로 더 이상 안 보이는 것(소유 부서가 옮겨 감).
         # 이름 · 칸은 오지 않으므로 가진 것을 그대로 두고 비활성만 한다. 없던 것은 만들지 않는다.
         db.executemany(
