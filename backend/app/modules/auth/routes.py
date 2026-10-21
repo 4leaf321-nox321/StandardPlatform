@@ -205,6 +205,24 @@ def gateway_sso_revoke(request: Request, db: Session = Depends(get_db)) -> Deleg
     return delegation.revoke(db, request, get_settings())
 
 
+#: 점검은 이메일을 안 보고 계정을 안 찾는다 — 거절은 꺼짐 · 허용 밖 · 비밀뿐이다.
+_VERIFY_REFUSED: dict[int | str, dict[str, Any]] = {
+    401: _REFUSED[401],
+    403: {"description": "허용 주소 밖 — 한 줄"},
+    404: _REFUSED[404],
+}
+
+
+@router.post("/sso/verify", status_code=204, responses=_VERIFY_REFUSED)
+def gateway_sso_verify(request: Request) -> None:
+    """**연결 점검** — 게이트웨이가 위임 설정(주소 · 비밀)이 맞는지만 본다. 맞으면 본문 없는
+    204.
+
+    `X-Heax-Gateway-Secret` 만 본다(이메일 머리는 요구하지 않는다). 계정 · 토큰 · 감사를
+    건드리지 않는다 — `/sso` 로 점검하면 토큰이 실제로 나가므로 따로 둔다."""
+    delegation.verify(request, get_settings())
+
+
 @router.post("/logout", status_code=204)
 def logout(request: Request, response: Response, db: Session = Depends(get_db)) -> None:
     raw = request.cookies.get(get_settings().refresh_cookie_name)

@@ -216,6 +216,30 @@
         }
       }
     },
+    "/api/auth/sso/verify": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Gateway Sso Verify",
+        "description": "**연결 점검** — 게이트웨이가 위임 설정(주소 · 비밀)이 맞는지만 본다. 맞으면 본문 없는\n204.\n\n`X-Heax-Gateway-Secret` 만 본다(이메일 머리는 요구하지 않는다). 계정 · 토큰 · 감사를\n건드리지 않는다 — `/sso` 로 점검하면 토큰이 실제로 나가므로 따로 둔다.",
+        "operationId": "gateway_sso_verify_api_auth_sso_verify_post",
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "401": {
+            "description": "게이트웨이 비밀이 다르다 — 한 줄"
+          },
+          "403": {
+            "description": "허용 주소 밖 — 한 줄"
+          },
+          "404": {
+            "description": "위임 꺼짐(`HEAX_SSO_SECRET` 없음) — JSON"
+          }
+        }
+      }
+    },
     "/api/auth/logout": {
       "post": {
         "tags": [

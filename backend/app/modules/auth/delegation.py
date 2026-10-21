@@ -28,6 +28,14 @@
 처음 보는 사람을 만들지 않는다(JIT 없음) — 포털 로그인(타일 · 「HWAX 포털로 로그인」)이 가입
 신청을 만들고 관리자가 승인하는 문이 이미 있다. 거절 본문이 그 길을 말한다.
 
+## 창구 셋 — 같은 머리 · 같은 거절
+
+`/sso`(발급, 200 토큰) · `/sso/revoke`(회수, 200 `{revoked}`) · `/sso/verify`(연결 점검,
+204). 셋 다 꺼짐 404 JSON → 허용 밖 403 → 비밀 401 순서로 보고(`_guard`), 발급 · 회수는 그
+뒤에 이메일(없으면 400)을 본다. 점검은 이메일을 안 본다 — 게이트웨이가 「이 앱과 연결 설정이
+맞나」 만 묻는 자리라, `/sso` 로 점검하면 토큰이 실제로 나간다(ComponentCore · SimEngBay 와
+같은 계약).
+
 ## 토큰
 
 이름 `HWAX 게이트웨이(<client>)` · 수명 하루(게이트웨이는 최대 12시간 쓴다) · 범위는 `read` +
@@ -272,9 +280,9 @@ def _check_secret(request: Request, settings: Settings) -> None:
         )
 
 
-def _gate(request: Request, settings: Settings) -> tuple[str, str]:
-    """꺼짐 · 주소 · 비밀 · client · 이메일을 본다 → (아이디, client). 순서가 곧 뜻이다 —
-    비밀을 모르는 쪽에게는 그 뒤의 것(누가 있나)을 말하지 않는다."""
+def _guard(request: Request, settings: Settings) -> None:
+    """꺼짐 · 주소 · 비밀 — 위임 창구 셋(발급 · 회수 · 점검)이 **같은 순서로** 본다. 순서가 곧
+    뜻이다 — 비밀을 모르는 쪽에게는 그 뒤의 것(누가 있나)을 말하지 않는다."""
     # 이 요청에서 남는 감사 · 로그는 전부 게이트웨이 통로다. 머리(X-Client)는 믿지 않는다.
     set_actor_client(CLIENT)
     if not enabled(settings):
@@ -288,6 +296,11 @@ def _gate(request: Request, settings: Settings) -> tuple[str, str]:
         )
     _check_origin(request, settings)
     _check_secret(request, settings)
+
+
+def _gate(request: Request, settings: Settings) -> tuple[str, str]:
+    """`_guard` 에 더해 client · 이메일을 본다 → (아이디, client)."""
+    _guard(request, settings)
 
     client = (request.headers.get(CLIENT_HEADER) or "").strip() or DEFAULT_CLIENT
     if not _CLIENT_SHAPE.fullmatch(client):
@@ -454,6 +467,18 @@ def issue(db: Session, request: Request, settings: Settings) -> DelegatedTokenOu
         "게이트웨이 위임 발급: %s (%s, 직전 %d개 회수)", user.email, client, len(alive)
     )
     return DelegatedTokenOut(access_token=raw, expires_in=int(TOKEN_LIFETIME.total_seconds()))
+
+
+def verify(request: Request, settings: Settings) -> None:
+    """연결 점검 — 게이트웨이가 「이 앱과 위임 설정(주소 · 비밀)이 맞나」 만 본다. 맞으면 아무
+    일도 안 하고 돌아간다(라우트가 204).
+
+    **이메일 머리는 요구하지 않는다** — 누구의 토큰도 내주지 않으므로. 계정 · 토큰 · 감사를
+    건드리지 않는다(`/sso` 로 점검하면 토큰이 실제로 나가고 직전 토큰이 회수된다). 거절은
+    발급과 같은 길(`_refuse`)이라 서버 화면의 「마지막으로 거절한 때」 에도 잡힌다(접근 로그
+    `GATEWAY_SSO`)."""
+    _guard(request, settings)
+    logger.debug("게이트웨이 위임 점검 통과(원격 %s)", _remote(request))
 
 
 def revoke(db: Session, request: Request, settings: Settings) -> DelegationRevokeOut:

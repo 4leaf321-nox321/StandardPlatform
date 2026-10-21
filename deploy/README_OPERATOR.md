@@ -835,10 +835,10 @@ B 도) 넣는다 — 아니면 MCP 가 421 로 거절한다.
 ### 9.3 확인
 
 ```bash
-# 이 서버에서 — 포털 JWKS 가 닿나 · 위임이 켜졌나(이메일 없이 → 400 이 정상, 토큰을 만들지 않는다)
+# 이 서버에서 — 포털 JWKS 가 닿나 · 위임이 켜졌나(점검 창구 — 토큰 · 계정을 건드리지 않는다)
 curl -s -o /dev/null -w '%{http_code}\n' http://<포털>:8088/.well-known/jwks.json             # 200
 S=$(sudo sed -n 's/^HEAX_SSO_SECRET=//p' <.env 경로>)
-curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:<앱 포트>/api/auth/sso -H "X-Heax-Gateway-Secret: $S"   # 400
+curl -s -o /dev/null -w '%{http_code}\n' -X POST http://127.0.0.1:<앱 포트>/api/auth/sso/verify -H "X-Heax-Gateway-Secret: $S"   # 204
 # 포털 경유 — 콜백에 가짜 토큰(포털 update-all 의 진단과 같은 것)
 curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' -X POST \
   https://hwax.sec.samsung.net/<id>/api/auth/portal-callback -d token=probe-not-a-token       # 303 …/<id>/login?sso=invalid
@@ -852,13 +852,13 @@ curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' -X POST \
 | 200 + HTML · 404 + HTML | 포털 nginx 에 라우트가 없다 · 경로가 어긋났다 | 포털 담당(`routes.local.env`) |
 | 502 · 504 · 000 | 포털이 이 서버 `:<앱 포트>` 에 못 닿는다 | 방화벽 · `systemctl status <slug>` |
 
-| 위임 숫자(`/api/auth/sso`) | 뜻 | 할 일 |
+| 위임 숫자(`/api/auth/sso` · `/sso/verify`) | 뜻 | 할 일 |
 | --- | --- | --- |
-| **400**(이메일 없이) · **200**(승인된 사람으로) | 켜짐 · 비밀 맞음 | — |
+| **204**(점검 `/sso/verify`) · **400**(`/sso` 에 이메일 없이) · **200**(승인된 사람으로) | 켜짐 · 비밀 맞음 | — |
 | 401 + 한 줄 | 비밀이 다르다 | 포털 담당과 같은 값인지(따로 전한 것) |
 | 403 + 한 줄 | 처음 보는 사람 · 승인 대기 · 정지 · 허용 주소 밖 — 본문이 무엇인지 말한다 | 사람이면 포털에서 타일을 한 번 열고(가입 신청) 승인 · 주소면 `HEAX_SSO_ALLOWED_IPS` |
 | 404 + JSON | 위임이 꺼져 있다 | `HEAX_SSO_SECRET` → `sudo ./deploy.sh restart` |
-| 405 | 위임이 없는 옛 판 | 새 번들로 `sudo ./deploy.sh update` |
+| 405 | 위임이 없는 옛 판(`/sso/verify` 는 v0.4.57 까지 없다) | 새 번들로 `sudo ./deploy.sh update` |
 
 화면에서는 **관리 › 서버 › 「HWAX 포털 로그인」**(시스템 관리자) — 켜졌나 · 포털 공개 키를 지금 받아 보고 닿나 · kid · 마지막
 오류 · 설정끼리 안 맞는 것(접두어 없음 · `TRUST_PROXY` 꺼짐 · `MCP_PUBLIC_URL` …), 그리고 「게이트웨이 위임」 — 켜졌나 · 허용

@@ -120,7 +120,11 @@
   목록이 있으면 그 머리가 붙은 요청을 받지 않는다. 못 읽는 값이 있으면 모두 거절(서버 화면이 말한다).
 - **기록** — 감사 `auth.gateway_delegated` · `auth.gateway_delegation_revoked`, 위임 토큰으로 든 요청의 통로는
   `hwax-gateway`(감사 `actor_client`, 토큰 이름은 `actor_token`). 접근 로그는 발급이 `GATEWAY_SSO`, 위임 토큰으로 든
-  요청이 `GATEWAY_API`. 거절의 자세한 사유는 앱 로그 `게이트웨이 위임 거절(<숫자>): …`.
+  요청이 `GATEWAY_API`(발급 · 회수 · 점검 모두 `GATEWAY_SSO` — 점검의 거절도 서버 화면의 「마지막 거절」 에 잡힌다). 거절의 자세한 사유는 앱 로그 `게이트웨이 위임 거절(<숫자>): …`.
+- **점검** — `POST /api/auth/sso/verify`(같은 머리 — 이메일은 안 본다) → 본문 없는 **204**. 토큰 · 계정 · 감사를 건드리지
+  않는다 — 게이트웨이가 「이 앱과 연결 설정(주소 · 비밀)이 맞나」 만 볼 때(`/sso` 로 보면 토큰이 실제로 나가고 직전 토큰이
+  회수된다). 거절은 꺼짐 404 JSON · 허용 밖 403 · 비밀 401 — 발급과 같은 순서 · 같은 한 줄. 세 플랫폼(Standard Platform ·
+  ComponentCore · SimEngBay)이 네 창구(portal-callback · sso · sso/verify · sso/revoke)를 같은 계약으로 둔다.
 - **회수** — `POST /api/auth/sso/revoke`(같은 머리) → `{"revoked": n}`. 사람을 끊는 것은 계정 정지가 맞다(위임 토큰은
   정지된 사람에게 안 통하고, 게이트웨이가 다시 받으려 하면 403 「정지된 계정」).
 - **도구 이름** — 같은 틀의 인스턴스는 도구 이름이 같아 게이트웨이가 `<id>_` 를 붙인다(둘 이상이면 93개 전부).

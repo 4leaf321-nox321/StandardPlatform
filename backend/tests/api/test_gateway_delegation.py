@@ -16,7 +16,7 @@ from datetime import UTC, datetime, timedelta
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
@@ -32,6 +32,7 @@ from tests.api.conftest import PASSWORD, Signed, _make_user
 
 SSO = "/api/auth/sso"
 REVOKE = "/api/auth/sso/revoke"
+VERIFY = "/api/auth/sso/verify"
 SECRET = "5f" * 32
 LAUNCH_URL = "https://portal.test/launch/hwaxapp"
 
@@ -216,6 +217,88 @@ def test_허용_주소_밖이면_403_프록시_머리는_믿지_않는다(
     get_settings.cache_clear()
     with _from("10.1.2.3") as inside:
         _one_line(_ask(inside, user.email), 403, code("AUTH", 19))
+
+
+# --- 연결 점검(`/sso/verify`) — 세 플랫폼이 같은 계약 -------------------------------------
+
+
+def test_점검은_꺼짐_404_JSON_비밀_401_허용_밖_403(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """발급과 같은 순서 · 같은 숫자 — 꺼짐 404 JSON(진단표의 「꺼짐」) → 허용 밖 403 → 비밀
+    401. 거절 본문은 발급과 같은 한국어 한 줄이다."""
+    monkeypatch.setenv("HEAX_SSO_SECRET", "")
+    get_settings.cache_clear()
+    try:
+        off = client.post(VERIFY, headers={"X-Heax-Gateway-Secret": ""})
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+    assert off.status_code == 404, off.text
+    assert off.json()["error"]["code"] == code("AUTH", 11)
+
+    monkeypatch.setenv("HEAX_SSO_SECRET", SECRET)
+    monkeypatch.setenv("HEAX_SSO_ALLOWED_IPS", "")
+    monkeypatch.setenv("TRUST_PROXY", "false")
+    get_settings.cache_clear()
+    delegation.refusals.reset()
+    try:
+        _one_line(_ask(client, None, path=VERIFY, secret="wrong"), 401, code("AUTH", 12))
+        _one_line(_ask(client, None, path=VERIFY, secret=None), 401, code("AUTH", 12))
+        monkeypatch.setenv("HEAX_SSO_ALLOWED_IPS", "10.1.2.3")
+        get_settings.cache_clear()
+        with _from("10.9.9.9") as outside:
+            # 비밀이 맞아도 허용 밖이면 403 — 주소를 비밀보다 먼저 본다(발급과 같다).
+            _one_line(_ask(outside, None, path=VERIFY), 403, code("AUTH", 19))
+        with _from("10.1.2.3") as inside:
+            assert _ask(inside, None, path=VERIFY).status_code == 204
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
+        delegation.refusals.reset()
+
+
+def test_점검은_이메일_없이_204_계정_토큰_감사를_건드리지_않는다(
+    client: TestClient, gateway_on: None, db: Session, workspace: Workspace
+) -> None:
+    """`/sso` 로 점검하면 토큰이 실제로 나가고 직전 토큰이 회수된다 — 점검은 아무것도 안 한다.
+    이메일 머리를 실어도(처음 보는 사람이어도) 그것을 보지 않는다."""
+    user = _person(db, workspace)
+
+    def counts() -> tuple[int | None, int | None, int | None]:
+        db.expire_all()
+        return (
+            db.scalar(select(func.count()).select_from(User)),
+            db.scalar(select(func.count()).select_from(PersonalAccessToken)),
+            db.scalar(select(func.count()).select_from(AuditEntry)),
+        )
+
+    before = counts()
+    got = _ask(client, None, path=VERIFY, client=None)
+    assert got.status_code == 204 and got.content == b""
+    assert _ask(client, user.email, path=VERIFY).status_code == 204
+    stranger = f"new-{uuid.uuid4().hex[:6]}@corp.example"
+    assert _ask(client, stranger, path=VERIFY).status_code == 204
+    assert counts() == before
+
+
+def test_점검의_거절도_서버_화면의_마지막_거절에_잡힌다(
+    client: TestClient, gateway_on: None, admin: Signed, db: Session
+) -> None:
+    """접근 로그가 점검도 `GATEWAY_SSO` 로 적는다 — 포털 담당이 점검에서 401 을 받았다고 하면
+    서버 화면의 「마지막으로 거절한 때」 에 그것이 있어야 한다."""
+    assert _ask(client, None, path=VERIFY).status_code == 204
+    _ask(client, None, path=VERIFY, secret="wrong")
+    rows = db.scalars(select(AccessLog).where(AccessLog.path == VERIFY)).all()
+    assert {(one.action, one.status_code) for one in rows} >= {
+        ("GATEWAY_SSO", 204),
+        ("GATEWAY_SSO", 401),
+    }
+    refusal = client.get("/api/auth/portal-status", headers=admin.headers).json()[
+        "delegation"
+    ]["last_refusal"]
+    assert refusal is not None and refusal["status"] == 401
+    assert "비밀이 다르다" in refusal["reason"]
 
 
 # --- 정상 발급 ---------------------------------------------------------------------

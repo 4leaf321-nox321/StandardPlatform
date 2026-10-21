@@ -161,6 +161,7 @@ PER_USER_SSO_APPS="… {{ID}}:{{PREFIX}}"                       # 이미 있는 
 | 401 신호 | 토큰이 거절되면 우리 MCP 도구는 `Error executing tool <이름>: GET /api/… → HTTP 401: …` 로 실패한다 — 게이트웨이 `_TOKEN_REJECTED` 에 맞아 한 번 다시 받는다 |
 | 함께 오는 머리 | `X-Heax-User-Affiliation` · `X-Heax-Aff-Proof` 는 쓰지 않는다(우리 공유는 부서가 정한다) |
 | 회수 | `POST /api/auth/sso/revoke`(같은 머리) → `{"revoked": n}` — 포털이 사람을 정지할 때 불러도 된다(선택) |
+| 점검 | `POST /api/auth/sso/verify`(같은 머리 — 이메일은 안 본다) → 본문 없는 **204**. 토큰 · 계정을 건드리지 않는다 — 연결 설정(주소 · 비밀)만 볼 때. 거절은 꺼짐 404 JSON · 허용 밖 403 · 비밀 401(세 플랫폼 공통 계약) |
 | 주소 제한 | 우리 쪽 선택 `HEAX_SSO_ALLOWED_IPS`(포털 박스 주소) — TCP 원격 주소로만 본다(프록시 머리를 믿지 않는다) |
 
 ### 5-4. 도구 이름 — 접두어 `{{ID}}_`
@@ -254,8 +255,8 @@ curl -s -o /dev/null -w '%{http_code} %{redirect_url}\n' -m 8 -X POST \
 
 ```bash
 S='<비밀>'; A='<A 주소>'
-curl -s -o /dev/null -w '%{http_code}\n' -X POST "http://$A:{{APP_PORT}}/api/auth/sso" -H "X-Heax-Gateway-Secret: $S"
-#   400 — 켜짐 · 비밀 맞음(이메일을 안 줬다). 토큰을 만들지 않는 점검이다
+curl -s -o /dev/null -w '%{http_code}\n' -X POST "http://$A:{{APP_PORT}}/api/auth/sso/verify" -H "X-Heax-Gateway-Secret: $S"
+#   204 — 켜짐 · 비밀 맞음 · 허용 주소 안. 토큰을 만들지 않는 점검 창구다
 curl -s -X POST "http://$A:{{APP_PORT}}/api/auth/sso" -H "X-Heax-Gateway-Secret: $S" \
   -H "X-Heax-User-Email: <우리에게 승인된 사람>" -H "X-Heax-Client: gateway"
 #   200 {"access_token":"{{ID}}_pat_…","token_type":"bearer","expires_in":86400}
@@ -264,11 +265,11 @@ curl -s -X POST "http://$A:{{APP_PORT}}/api/auth/sso" -H "X-Heax-Gateway-Secret:
 | 숫자 | 뜻 | 누구 몫 |
 | --- | --- | --- |
 | **200** + `access_token` | 정상 — 받은 토큰으로 `GET http://$A:{{APP_PORT}}/api/auth/me` 가 그 사람 | — |
-| **400**(이메일 없이) | 켜짐 · 비밀 맞음 · 도달 | 정상 |
+| **204**(`/sso/verify`) · **400**(`/sso` 에 이메일 없이) | 켜짐 · 비밀 맞음 · 도달 | 정상 |
 | 401 + 한 줄 | 비밀이 다르다 | 둘이 같이 — 같은 값인지(따로 전한 것) |
 | 403 + 한 줄 | 처음 보는 사람 · 승인 대기 · 정지 · 허용 주소 밖 — 본문이 무엇인지 말한다 | 사람이면 포털에서 타일을 한 번 열고 우리 승인을 기다린다 · 주소면 우리 |
 | 404 + JSON | 우리 위임이 꺼져 있다(`HEAX_SSO_SECRET` 없음 · 재시작 전) | 우리 |
-| 405 | 위임이 없는 옛 판 | 우리 — 새 번들로 update |
+| 405 | 위임이 없는 옛 판(`/sso/verify` 는 우리 v0.4.57 까지 없다) | 우리 — 새 번들로 update |
 | 000 | `<A 주소>:{{APP_PORT}}` 에 못 닿는다 | 방화벽 · 우리 앱 상태 |
 
 ## 11. 검증 체크리스트

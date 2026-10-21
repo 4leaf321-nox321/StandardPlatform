@@ -41,7 +41,8 @@ USER_ID_SCOPE_KEY = "app_user_id"
 #: 이 같은 `API` 줄이 된다.
 ACTION_SCOPE_KEY = "app_access_action"
 
-#: 게이트웨이 위임 발급 · 회수(`/api/auth/sso`) — 거절도 이 이름으로 남는다(상태 코드와 함께).
+#: 게이트웨이 위임 발급 · 회수 · 점검(`/api/auth/sso` · `/revoke` · `/verify`) — 거절도 이
+#: 이름으로 남는다(상태 코드와 함께). 서버 화면의 「마지막으로 거절한 때」 가 이것을 읽는다.
 GATEWAY_SSO = "GATEWAY_SSO"
 #: 게이트웨이의 위임 토큰으로 든 요청(`ACTION_SCOPE_KEY`).
 GATEWAY_API = "GATEWAY_API"
@@ -73,7 +74,7 @@ def _action(path: str) -> str:
     # **게이트웨이 위임 발급 · 회수**(ADR 0028) — 거절도 이 이름으로 남아(상태 코드와 함께)
     # 서버 화면의 「마지막으로 거절한 때」 가 이 줄을 읽는다. 워커 · 서버가 여럿이라 메모리로는
     # 못 본다.
-    if path.endswith(("/auth/sso", "/auth/sso/revoke")):
+    if path.endswith(("/auth/sso", "/auth/sso/revoke", "/auth/sso/verify")):
         return GATEWAY_SSO
     return "API"
 
