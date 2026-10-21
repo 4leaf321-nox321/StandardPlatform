@@ -41,6 +41,7 @@ JWKS_URL = "http://portal.test:8088/.well-known/jwks.json"
 ISSUER = "https://portal.test"
 LAUNCH_URL = "https://portal.test/launch/hwaxapp"
 CALLBACK = "/api/auth/portal-callback"
+EXCHANGE = "/api/auth/portal-exchange"
 
 #: 키 만들기는 수십 ms — 시험마다 만들지 않는다.
 KEY_A = rsa.generate_private_key(public_exponent=65537, key_size=2048)
@@ -397,6 +398,119 @@ def test_공개_키를_못_받으면_분명히_말한다(
     status = client.get("/api/auth/portal-status", headers=admin.headers).json()
     assert status["enabled"] is True and status["reachable"] is False
     assert "연결 거부" in status["last_error"]
+
+
+# --- 포털 안에서 바로 들어온 사람 — 교환(`/portal-exchange`) -----------------------------
+
+
+def _exchange(web: TestClient, token: str) -> httpx.Response:
+    """화면이 하는 일 — 포털의 launch 로 받은 토큰을 JSON 으로 바꾼다."""
+    got: httpx.Response = web.post(EXCHANGE, json={"token": token})
+    return got
+
+
+def _refused(got: httpx.Response, status: int) -> str:
+    assert got.status_code == status, got.text
+    error = got.json()["error"]
+    assert error["code"] == code("AUTH", 20)
+    reason: str = error["details"]["reason"]
+    return reason
+
+
+def test_교환은_꺼져_있으면_404_JSON(client: TestClient, portal_off: None) -> None:
+    got = client.post(EXCHANGE, json={"token": "probe-not-a-token"})
+    assert got.status_code == 404, got.text
+    assert got.json()["error"]["code"] == code("AUTH", 9)
+
+
+def test_교환은_비밀번호_로그인처럼_access_와_쿠키를_준다(
+    browser: TestClient, fake_portal: FakePortal, db: Session, workspace: Workspace
+) -> None:
+    """콜백과 같은 확인 · 같은 세션 — 응답 모양만 비밀번호 로그인이다(화면이 바로 쓴다)."""
+    user = _person(db, workspace)
+    token = fake_portal.mint(user.email)
+    got = _exchange(browser, token)
+    assert got.status_code == 200, got.text
+    body = got.json()
+    assert body["user"]["email"] == user.email and body["expires_in"] > 0
+    cookie = _refresh_cookie(got)
+    assert cookie is not None and "Path=/api/auth" in cookie and "HttpOnly" in cookie
+    me = browser.get(
+        "/api/auth/me", headers={"Authorization": f"Bearer {body['access_token']}"}
+    )
+    assert me.status_code == 200 and me.json()["email"] == user.email
+    # 새로 고침하면 그 쿠키로 이어진다.
+    assert browser.post("/api/auth/refresh").json()["user"]["email"] == user.email
+
+    # 한 토큰은 한 번 — 콜백과 교환이 같은 jti 장부를 쓴다.
+    assert _refused(_exchange(browser, token), 401) == portal.INVALID
+    assert _reason(_arrive(browser, token)) == portal.INVALID
+
+    logged = {
+        (one.path, one.action, one.user_id)
+        for one in db.scalars(select(AccessLog).where(AccessLog.path == EXCHANGE))
+    }
+    assert (EXCHANGE, "PORTAL_LOGIN", user.id) in logged
+    entry = db.scalar(
+        select(AuditEntry).where(
+            AuditEntry.action == "auth.portal_login", AuditEntry.target_id == user.id
+        )
+    )
+    assert entry is not None and entry.actor_client == portal.CLIENT
+
+
+def test_교환의_거절은_콜백과_같은_사유를_JSON_으로(
+    browser: TestClient, fake_portal: FakePortal, db: Session, workspace: Workspace
+) -> None:
+    """화면은 숫자가 아니라 사유로 사람 말을 고른다(콜백의 `?sso=` 와 같은 말)."""
+    assert _refused(_exchange(browser, "probe-not-a-token"), 401) == portal.INVALID
+    user = _person(db, workspace)
+    stale = fake_portal.mint(user.email, shift=-600)
+    assert _refused(_exchange(browser, stale), 401) == portal.EXPIRED
+
+    newcomer = f"newcomer-{uuid.uuid4().hex[:8]}@corp.test"
+    got = _exchange(browser, fake_portal.mint(newcomer))
+    assert _refused(got, 403) == portal.PENDING
+    assert _refresh_cookie(got) is None
+    made = db.scalar(select(User).where(User.email == newcomer))
+    assert made is not None and made.status == "pending"  # 콜백처럼 가입 신청이 된다
+
+    fake_portal.down = True
+    portal.jwks.reset()
+    assert (
+        _refused(_exchange(browser, fake_portal.mint(user.email)), 502) == portal.UNAVAILABLE
+    )
+
+
+def test_화면에_포털_타일_id_를_받을_준비가_됐을_때만_심는다(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """자동 로그인은 `/systems/<id>/launch` 를 부른다 — id 는 타일 id = audience(기본 slug).
+    받는 쪽(`PORTAL_JWKS_URL`)이 꺼져 있으면 비워 화면이 시도하지 않게."""
+    from app.main import create_app
+
+    dist = tmp_path / "dist"
+    (dist / "assets").mkdir(parents=True)
+    (dist / "index.html").write_text(
+        "<!doctype html><html><head><title>x</title></head><body></body></html>",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("FRONTEND_DIST", str(dist))
+    monkeypatch.setenv("PORTAL_JWKS_URL", "")
+    monkeypatch.setenv("PORTAL_AUDIENCE", "")
+    try:
+        get_settings.cache_clear()
+        with TestClient(create_app()) as web:
+            assert '<meta name="app-portal-system" content="" />' in web.get("/login").text
+        monkeypatch.setenv("PORTAL_JWKS_URL", JWKS_URL)
+        get_settings.cache_clear()
+        slug = get_settings().app_slug
+        with TestClient(create_app()) as web:
+            page = web.get("/login").text
+            assert f'<meta name="app-portal-system" content="{slug}" />' in page
+    finally:
+        monkeypatch.undo()
+        get_settings.cache_clear()
 
 
 # --- 사람 ------------------------------------------------------------------------

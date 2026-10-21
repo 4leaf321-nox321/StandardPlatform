@@ -31,6 +31,7 @@ from app.modules.auth.schemas import (
     PatCreateRequest,
     PatCreateResponse,
     PatOut,
+    PortalExchangeRequest,
     PortalStatusOut,
     ProfileUpdateRequest,
     TokenScopesOut,
@@ -138,21 +139,88 @@ def portal_callback(
         )
     base = settings.base_path
     try:
-        user, refresh_raw = portal.sign_in(db, token or "", request.headers.get("user-agent"))
-    except portal.PortalLoginError as failed:
-        # 승인 대기 · 정지는 사람이 할 일이 있는 정상적인 거절이고, 나머지는 살펴볼 일이다.
-        level = (
-            logging.INFO
-            if failed.reason in (portal.PENDING, portal.SUSPENDED, portal.DELETED)
-            else logging.WARNING
+        user, _access, _expires_in, refresh_raw = portal.sign_in(
+            db, token or "", request.headers.get("user-agent")
         )
-        logger.log(level, "포털 로그인 거절(%s): %s", failed.reason, failed.detail)
+    except portal.PortalLoginError as failed:
+        _log_portal_refusal(failed)
         return RedirectResponse(f"{base}/login?sso={failed.reason}", status_code=303)
     # 접근 로그가 「누가」 를 알게 — 미들웨어는 인증보다 바깥이라 스스로 모른다.
     request.scope[USER_ID_SCOPE_KEY] = user.id
     response = RedirectResponse(f"{base}/", status_code=303)
     _set_refresh_cookie(request, response, refresh_raw)
     return response
+
+
+def _log_portal_refusal(failed: portal.PortalLoginError) -> None:
+    # 승인 대기 · 정지는 사람이 할 일이 있는 정상적인 거절이고, 나머지는 살펴볼 일이다.
+    level = (
+        logging.INFO
+        if failed.reason in (portal.PENDING, portal.SUSPENDED, portal.DELETED)
+        else logging.WARNING
+    )
+    logger.log(level, "포털 로그인 거절(%s): %s", failed.reason, failed.detail)
+
+
+#: 교환의 거절 숫자 — 토큰 문제는 401, 계정 문제는 403, 포털 공개 키를 못 받으면 502. 화면은
+#: 숫자가 아니라 `details.reason` 으로 사람 말을 고른다(콜백의 `?sso=` 와 같은 사유).
+_EXCHANGE_STATUS = {
+    portal.INVALID: 401,
+    portal.EXPIRED: 401,
+    portal.UNAVAILABLE: 502,
+}
+
+
+@router.post(
+    "/portal-exchange",
+    response_model=LoginResponse,
+    responses={
+        401: {"description": "토큰을 확인하지 못함 · 만료 — `details.reason`"},
+        403: {
+            "description": "승인 대기 · 정지 · 삭제 · sub 로만 맞은 관리자 — `details.reason`"
+        },
+        404: {"description": "포털 로그인 꺼짐(`PORTAL_JWKS_URL` 없음)"},
+        502: {"description": "포털의 공개 키를 받지 못함"},
+    },
+)
+def portal_exchange(
+    payload: PortalExchangeRequest,
+    request: Request,
+    response: Response,
+    db: Session = Depends(get_db),
+) -> LoginResponse:
+    """**포털 안에서 앱으로 바로 들어온 사람**(북마크 · 링크)의 자동 로그인 — Report Archive 와
+    같은 길.
+
+    화면이 포털 로그인 쿠키(`hwax_csrf`)를 보면, 포털의 표준 launch(`POST
+    /systems/{id}/launch`, 타일이 쓰는 그것)를 포털 세션으로 불러 토큰을 받고 여기서 바꾼다.
+    확인 · 계정 판정은 콜백과 **같고**(`portal.sign_in`), 응답은 비밀번호 로그인과 같다 —
+    refresh 쿠키 + access. 거절은 사유(`details.reason`)를 달아 JSON 으로 — 화면이 콜백의
+    `?sso=` 와 같은 말을 보인다.
+    """
+    settings = get_settings()
+    if not portal.enabled(settings):
+        raise NotFound(
+            code("AUTH", 9),
+            "포털 SSO 가 꺼져 있습니다 — 이 설치의 .env 에 PORTAL_JWKS_URL 이 없습니다.",
+        )
+    try:
+        user, access, expires_in, refresh_raw = portal.sign_in(
+            db, payload.token, request.headers.get("user-agent")
+        )
+    except portal.PortalLoginError as failed:
+        _log_portal_refusal(failed)
+        raise AppError(
+            code("AUTH", 20),
+            "HWAX 포털 로그인을 받지 못했습니다.",
+            status=_EXCHANGE_STATUS.get(failed.reason, 403),
+            details={"reason": failed.reason},
+        ) from None
+    request.scope[USER_ID_SCOPE_KEY] = user.id
+    _set_refresh_cookie(request, response, refresh_raw)
+    return LoginResponse(
+        access_token=access, expires_in=expires_in, user=services.user_out(db, user)
+    )
 
 
 @router.get("/portal-callback", include_in_schema=False)

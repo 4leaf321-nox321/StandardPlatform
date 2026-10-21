@@ -771,7 +771,7 @@ sudo ./deploy.sh status
 ## 9. HWAX 포털에 붙이기 — `https://hwax.sec.samsung.net/<id>/` · 포털 로그인 · Claude(게이트웨이)
 
 HWAX 포털(사내 앱 모음)이 `/<id>/` 경로로 이 앱을 넘겨 주고, 타일을 누르면 포털에 로그인한 그 사람으로 들어오게 하며
-(jwt-handoff), 사람들의 Claude 는 **포털의 MCP 게이트웨이**가 사람마다 그 사람 명의의 토큰을 받아 이 설치의 MCP 를 부른다
+(jwt-handoff — 북마크로 `/<id>/` 를 바로 열어도 포털 안이면 화면이 포털의 launch 로 저절로 로그인한다), 사람들의 Claude 는 **포털의 MCP 게이트웨이**가 사람마다 그 사람 명의의 토큰을 받아 이 설치의 MCP 를 부른다
 (사람별 위임). **Report Archive 를 붙였을 때와 같은 방식이다** — 결정과 까닭은 저장소의 `docs/adr/0028-HWAX-포털에-붙이기.md`,
 통합 정리는 `docs/HWAX-PORTAL-INTEGRATION.md`. **이중화 조각(`main-server-nginx.conf`)은 쓰지 않는다** — 포털 nginx 는 경로
 목록으로 location 을 만든다. 포털의 앱 id `<id>` 는 **`APP_SLUG` 와 같게** 둔다(타일 id · audience · 게이트웨이 키 · 권한

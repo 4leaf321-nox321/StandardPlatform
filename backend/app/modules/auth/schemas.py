@@ -53,6 +53,12 @@ class UserOut(BaseModel):
     memberships: list[WorkspaceMembershipOut]
 
 
+class PortalExchangeRequest(BaseModel):
+    """화면이 포털의 표준 launch(`POST /systems/{id}/launch`)로 받은 토큰(ADR 0028)."""
+
+    token: str = Field(min_length=1, max_length=8192)
+
+
 class LoginResponse(BaseModel):
     access_token: str
     expires_in: int

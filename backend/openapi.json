@@ -126,6 +126,60 @@
         }
       }
     },
+    "/api/auth/portal-exchange": {
+      "post": {
+        "tags": [
+          "auth"
+        ],
+        "summary": "Portal Exchange",
+        "description": "**포털 안에서 앱으로 바로 들어온 사람**(북마크 · 링크)의 자동 로그인 — Report Archive 와\n같은 길.\n\n화면이 포털 로그인 쿠키(`hwax_csrf`)를 보면, 포털의 표준 launch(`POST\n/systems/{id}/launch`, 타일이 쓰는 그것)를 포털 세션으로 불러 토큰을 받고 여기서 바꾼다.\n확인 · 계정 판정은 콜백과 **같고**(`portal.sign_in`), 응답은 비밀번호 로그인과 같다 —\nrefresh 쿠키 + access. 거절은 사유(`details.reason`)를 달아 JSON 으로 — 화면이 콜백의\n`?sso=` 와 같은 말을 보인다.",
+        "operationId": "portal_exchange_api_auth_portal_exchange_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PortalExchangeRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LoginResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "토큰을 확인하지 못함 · 만료 — `details.reason`"
+          },
+          "403": {
+            "description": "승인 대기 · 정지 · 삭제 · sub 로만 맞은 관리자 — `details.reason`"
+          },
+          "404": {
+            "description": "포털 로그인 꺼짐(`PORTAL_JWKS_URL` 없음)"
+          },
+          "502": {
+            "description": "포털의 공개 키를 받지 못함"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/auth/portal-status": {
       "get": {
         "tags": [
@@ -35078,6 +35132,22 @@
         ],
         "title": "PointsOut",
         "description": "**안 센 값들.** 분포는 집계로 안 보인다 — 평균이 같은 두 공정이 전혀 다른\n모양일 수 있고, 그 차이가 대개 문제의 자리다."
+      },
+      "PortalExchangeRequest": {
+        "properties": {
+          "token": {
+            "type": "string",
+            "maxLength": 8192,
+            "minLength": 1,
+            "title": "Token"
+          }
+        },
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "title": "PortalExchangeRequest",
+        "description": "화면이 포털의 표준 launch(`POST /systems/{id}/launch`)로 받은 토큰(ADR 0028)."
       },
       "PortalStatusOut": {
         "properties": {

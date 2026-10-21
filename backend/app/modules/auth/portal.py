@@ -360,8 +360,10 @@ def _request_signup(db: Session, *, login_id: str, name: str, sub: str) -> NoRet
     raise PortalLoginError(PENDING, f"가입 신청(승인 대기) — {login_id}")
 
 
-def sign_in(db: Session, token: str, user_agent: str | None) -> tuple[User, str]:
-    """launch 토큰으로 로그인한다 — (사람, refresh 평문). 아니면 `PortalLoginError`.
+def sign_in(db: Session, token: str, user_agent: str | None) -> tuple[User, str, int, str]:
+    """launch 토큰으로 로그인한다 — (사람, access, access 수명(초), refresh 평문). 아니면
+    `PortalLoginError`. 콜백(브라우저의 폼)은 refresh 만 쿠키로 심고, 교환(화면의 요청)은
+    비밀번호 로그인처럼 access 도 돌려준다.
 
     세션은 비밀번호 로그인과 **같은 것**(`issue_session`)이다 — access 토큰에 그 사람의 세대
     (`session_epoch`)가 박히므로 정지 · 비밀번호 초기화가 끊는 것도 같다.
@@ -413,8 +415,8 @@ def sign_in(db: Session, token: str, user_agent: str | None) -> tuple[User, str]
             "포털 로그인: email(%s)이 아니라 sub(%s)로 %s 에 붙였다", email, sub, user.email
         )
     # 감사 기록과 refresh 가 한 커밋이다(`issue_session` 이 커밋한다).
-    _access, _expires_in, refresh_raw = auth_services.issue_session(db, user, user_agent)
-    return user, refresh_raw
+    access, expires_in, refresh_raw = auth_services.issue_session(db, user, user_agent)
+    return user, access, expires_in, refresh_raw
 
 
 # --- 진단 ----------------------------------------------------------------------

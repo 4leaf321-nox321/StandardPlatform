@@ -7,13 +7,17 @@
  * **HWAX 포털로 로그인**(ADR 0028) — 설치가 포털에 붙어 있으면 단추가 선다. 포털이 그 사람으로
  * 토큰을 만들어 서버에 보내고, 서버가 쿠키를 심어 첫 화면으로 보낸다. 안 되면 서버가 이 화면에
  * `?sso=<사유>` 를 달아 돌려보낸다 — 그 사유를 여기서 사람 말로 보인다.
+ *
+ * **포털 안에서 열렸으면**(포털 쿠키가 보이면) 단추가 페이지를 옮기지 않고 그 자리에서 포털
+ * 로그인을 한다(Report Archive 와 같은 길 — `portalHandoff`). 화면이 뜰 때 한 번은 저절로 하고
+ * (`AuthContext`), 이 단추는 로그아웃한 뒤 · 거절된 뒤에 사람이 다시 누르는 자리다.
  */
 
 import { useState } from 'react'
 import type { FormEvent } from 'react'
 import { Link, Navigate, useLocation, useNavigate, useSearchParams } from 'react-router-dom'
 
-import { portalLaunchUrl, ssoMessage } from '@/modules/auth/portal'
+import { insidePortal, portalLaunchUrl, ssoMessage } from '@/modules/auth/portal'
 import { ApiError } from '@/shared/api/client'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { APP_NAME, APP_TAGLINE } from '@/shared/branding'
@@ -23,13 +27,15 @@ import { Input } from '@/shared/components/ui/input'
 import { Label } from '@/shared/components/ui/label'
 
 export default function LoginPage() {
-  const { status, login } = useAuth()
+  const { status, login, loginWithPortal, portalRefusal } = useAuth()
   const navigate = useNavigate()
   const location = useLocation()
   const [params] = useSearchParams()
-  const sso = params.get('sso')
+  const [portalReason, setPortalReason] = useState<string | null>(null)
+  const sso = params.get('sso') ?? portalReason ?? portalRefusal
   const notice = sso ? ssoMessage(sso) : null
   const launch = portalLaunchUrl()
+  const inside = insidePortal()
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<ApiError | Error | null>(null)
@@ -41,6 +47,27 @@ export default function LoginPage() {
   const from = wanted && !['/login', '/force-password-change'].includes(wanted) ? wanted : undefined
 
   if (status === 'authenticated') return <Navigate to={from ?? '/'} replace />
+
+  async function portalLogin() {
+    setBusy(true)
+    setError(null)
+    setPortalReason(null)
+    try {
+      const got = await loginWithPortal()
+      if (got.ok) {
+        navigate(from ?? '/', { replace: true })
+        return
+      }
+      // 포털 로그인이 끝났으면 포털로 — 거기서 로그인하면 타일이 다시 데려온다.
+      if (got.reason === 'portal-login' && launch) {
+        window.location.assign(launch)
+        return
+      }
+      setPortalReason(got.reason)
+    } finally {
+      setBusy(false)
+    }
+  }
 
   async function submit(event: FormEvent) {
     event.preventDefault()
@@ -83,12 +110,25 @@ export default function LoginPage() {
         )}
 
         {/* **주소는 서버가 준다**(`PORTAL_LAUNCH_URL`) — 포털에 붙지 않은 설치에는 단추가 없다.
-            포털 화면을 거쳐 돌아오므로 앱에 직접 들어온 사람도 같은 길로 로그인된다. */}
-        {launch && (
+            포털 화면을 거쳐 돌아오므로 앱에 직접 들어온 사람도 같은 길로 로그인된다. 포털 안에서
+            열렸으면 페이지를 옮기지 않고 그 자리에서 한다. */}
+        {(launch || inside) && (
           <>
-            <Button asChild variant="outline" className="w-full">
-              <a href={launch}>HWAX 포털로 로그인</a>
-            </Button>
+            {inside ? (
+              <Button
+                type="button"
+                variant="outline"
+                className="w-full"
+                disabled={busy}
+                onClick={() => void portalLogin()}
+              >
+                {busy ? 'HWAX 포털 계정 확인 중…' : 'HWAX 포털로 로그인'}
+              </Button>
+            ) : (
+              <Button asChild variant="outline" className="w-full">
+                <a href={launch}>HWAX 포털로 로그인</a>
+              </Button>
+            )}
             <p className="text-muted-foreground text-center text-xs">
               또는 이 플랫폼의 아이디 · 비밀번호로
             </p>

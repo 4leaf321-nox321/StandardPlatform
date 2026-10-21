@@ -85,6 +85,12 @@
 `/launch/<id>` 로 보낸다. 포털이 그 사람으로 토큰을 만들어 포털 주소의 콜백에 보내므로, 로그인 뒤에는 포털 주소
 (`https://hwax.sec.samsung.net/<id>/`) 위에 있다.
 
+**포털 안에서 바로 들어온 사람**(북마크 · 링크 — Report Archive 와 같은 길) — 화면이 포털 로그인 쿠키(`hwax_csrf`)를 보면
+포털의 표준 launch(`POST /systems/<id>/launch`, 포털 세션 · `X-CSRF-Token`)로 토큰을 받아 `POST /api/auth/portal-exchange`
+로 바꾼다 — 콜백과 같은 확인 · 같은 세션(refresh 쿠키 + access), 거절은 `details.reason` 이 콜백의 `?sso=` 와 같다. 브라우저
+세션당 한 번이고, 포털 안에서 로그아웃하면 그 세션에는 다시 저절로 들이지 않는다(인스턴스마다 따로 기억). 타일 id 는 서버가
+`<meta name="app-portal-system">`(= `PORTAL_AUDIENCE`)로 심는다 — 포털 쪽에 새로 할 일은 없다.
+
 **처음 보는 사람** — 가입 신청(승인 대기)이 되고 관리자의 홈 「남은 일」 에 「가입 승인 대기」 로 뜬다. 희망 부서가 비어
 있으므로 관리 › 계정의 「승인」 이 부서를 묻는다. 비밀번호가 없는 계정이다 — 아이디 · 비밀번호로도 들어와야 하면 승인 뒤
 「비밀번호 초기화」.

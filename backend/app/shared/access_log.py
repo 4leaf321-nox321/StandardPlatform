@@ -69,7 +69,7 @@ def _action(path: str) -> str:
     # **포털 로그인은 따로 적는다**(ADR 0028) — 비밀번호 로그인과 한 이름이면 「이 사람이 어느
     # 길로 들어왔나」 가 안 갈린다. 성공한 줄에만 사람이 붙는다(실패 · 승인 대기는 사람 칸이
     # 빈다 — 둘 다 303 이라 상태 코드로는 안 갈린다).
-    if path.endswith("/auth/portal-callback"):
+    if path.endswith(("/auth/portal-callback", "/auth/portal-exchange")):
         return "PORTAL_LOGIN"
     # **게이트웨이 위임 발급 · 회수**(ADR 0028) — 거절도 이 이름으로 남아(상태 코드와 함께)
     # 서버 화면의 「마지막으로 거절한 때」 가 이 줄을 읽는다. 워커 · 서버가 여럿이라 메모리로는

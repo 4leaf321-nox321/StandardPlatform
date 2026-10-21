@@ -353,6 +353,13 @@ def _mount_spa(app: FastAPI, settings: Settings) -> None:
                 "app-portal-launch",
                 settings.portal_launch_url.strip() if settings.portal_jwks_url.strip() else "",
             ),
+            # **포털 안에서 열렸을 때의 자동 로그인**(ADR 0028) — 화면이 포털의 표준 launch
+            # (`/systems/<id>/launch`)를 부를 타일 id. 타일 id = audience(기본 slug)다. 받는
+            # 쪽이 꺼져 있으면 비운다 — 그때 화면은 자동 로그인을 시도하지 않는다.
+            (
+                "app-portal-system",
+                settings.portal_audience.strip() if settings.portal_jwks_url.strip() else "",
+            ),
             # **이 자리는 요청마다 채운다.** 켜짐이 화면에서 바뀌므로(시스템 관리자 ›
             # 서버) 기동 때 박아 두면 재시작까지 옛 메뉴가 붙는다.
             ("app-extensions", _EXTENSIONS_TOKEN),
