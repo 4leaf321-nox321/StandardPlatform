@@ -345,6 +345,11 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
   벌 놓이므로 동시 업로드 수 × 상한만큼 여유를 본다. 이중화 nginx 의 `client_max_body_size 512m` 를 넘겨
   올리면 그 조각도 함께 올리고(안 올리면 nginx 가 413), 업로드는 요청 안에서 받으므로 nginx 의 600초 안에
   끝나는 크기인지도 본다. HWAX 포털에 붙은 설치는 포털 nginx 의 상한도 따로 있다(포털 담당에게 묻는다).
+- **누가 무엇을 보나 `VIEW_SCOPE`(기본 `all`, 2026-10-22 — ADR 0034)** — `all` 은 부서와 상관없이 가입자
+  누구나 모든 자료를 본다(목록 · 검색 · 그래프 · 지표 · RDF · MCP · 코어 API 가 모두 같다). `department` 는
+  예전 규칙인 「전역 + 내가 속한 부서 것만」 이다. 고치는 것은 어느 쪽이든 소유 부서의 관리자다. 바꾸면 앱을
+  다시 띄운다. 코어 API 의 받는 쪽은 토큰 주인의 부서와 상관없이 공개 타입 전부를 받게 된다 — `all` 에서
+  `department` 로 좁히면 받던 것이 표식 없이 빠지므로 받는 쪽에 「처음부터 다시 받기」 를 알린다.
 - **이중화 nginx** — 다른 경로는 `client_max_body_size 512m` 그대로이고 **사진 zip 경로
   (`/<slug>/api/objects/<타입>/photos/import`)만 2100m · 흘려 넘김(`proxy_request_buffering off`)** 이다
   (`main-server-nginx.conf` 의 정규식 location — 메인 서버 쪽에 그 조각을 다시 넣어 달라고 한다).

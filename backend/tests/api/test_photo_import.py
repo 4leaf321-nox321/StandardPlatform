@@ -132,6 +132,7 @@ def _attached(client: TestClient, who: Signed, object_id: str, field: str) -> li
 # --- 목록의 파일 칸 ------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_목록의_파일_칸은_첫_사진과_수를_한_번에_싣는다(
     client: TestClient, admin: Signed, member: Signed, db: Session
 ) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.api.conftest import Signed
@@ -115,6 +116,7 @@ def test_와일드카드를_글자로_본다(client: TestClient, admin: Signed) 
     assert f"수율{tag} 50건 달성" not in labels
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_남의_부서_것은_수에도_안_잡힌다(
     client: TestClient, admin: Signed, member: Signed, db: Any
 ) -> None:
@@ -127,9 +129,6 @@ def test_남의_부서_것은_수에도_안_잡힌다(
         json={"slug": f"secret-{tag}", "name": "비밀팀"},
         headers=admin.headers,
     ).json()
-    client.patch(
-        f"/api/workspaces/{other['slug']}", json={"restricted": True}, headers=admin.headers
-    )
     made = client.post(
         f"/api/objects/{part}",
         json={"label": f"기밀{tag}", "workspace_slug": other["slug"]},

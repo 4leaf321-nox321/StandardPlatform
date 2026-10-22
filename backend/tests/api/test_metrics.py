@@ -11,6 +11,7 @@ import uuid
 from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
@@ -591,6 +592,7 @@ def test_합과_평균은_숫자로_읽힌_값에서만(client: TestClient, admi
     assert cells["소음"]["avg"] == 96.0 / 5 and cells["소음"]["min"] == 1.0
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_보이는_부서의_셀만_더한다(client: TestClient, admin: Signed, manager: Signed) -> None:
     w = _world(client, admin)
     other = client.post(

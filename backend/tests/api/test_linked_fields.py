@@ -12,6 +12,7 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.api.conftest import Signed
@@ -566,6 +567,7 @@ def test_나를_가리키는_것으로_거르고_객체마다_한_번_센다(
         assert sum(part["count"] for part in bucket["parts"]) == bucket["count"]
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_가리키는_기록은_보이는_것만_잇는다(
     client: TestClient, admin: Signed, member: Signed, db: Any
 ) -> None:

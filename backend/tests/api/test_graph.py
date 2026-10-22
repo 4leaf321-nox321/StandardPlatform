@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from app.modules.graph import routes
@@ -240,6 +241,7 @@ def test_참조_칸으로_이은_이웃도_타입으로_거른다(client: TestCl
     assert {node["label"] for node in deeper["nodes"]} == {"볼트", "ACME", "너트"}
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_남의_부서_객체는_이웃에도_굵기에도_안_샌다(
     client: TestClient, admin: Signed, member: Signed
 ) -> None:
@@ -268,6 +270,7 @@ def test_남의_부서_객체는_이웃에도_굵기에도_안_샌다(
     assert hidden.status_code == 404
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_검색은_타입을_가리지_않는다(
     client: TestClient, admin: Signed, member: Signed
 ) -> None:

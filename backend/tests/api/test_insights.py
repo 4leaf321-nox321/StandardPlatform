@@ -11,6 +11,7 @@ import uuid
 from datetime import UTC, date, datetime
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select, text
 from sqlalchemy.orm import Session
@@ -149,6 +150,7 @@ def test_다시_훑어도_같은_결론은_한_줄이고_그만_보기는_관리
     assert target not in {one["id"] for one in _mine(client, admin, slug)}
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_셀이_든_부서를_모두_보는_사람에게만_보인다(
     client: TestClient, admin: Signed, member: Signed, db: Session
 ) -> None:

@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -114,6 +115,7 @@ def test_결과가_있으면_진단은_있다고만_말한다(client: TestClient
     assert got["total"] == 1
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_부서_밖이라_안_보이는_것은_없는_것과_다르다(
     client: TestClient, admin: Signed, member: Signed, db: Session
 ) -> None:

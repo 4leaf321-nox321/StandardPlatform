@@ -230,6 +230,7 @@ def test_인터페이스는_클래스이고_공통_속성은_구현_타입_속�
     assert [str(one["label"]) for one in renamed.json()["rows"]] == ["장비"]
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_목록에서_안_보이는_남의_부서_객체는_RDF_로도_안_나간다(
     client: TestClient, admin: Signed, member: Signed, db: Session
 ) -> None:
@@ -274,6 +275,7 @@ def test_목록에서_안_보이는_남의_부서_객체는_RDF_로도_안_나�
     assert asked(member) == {"MINE-1", "ALL-1"}
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_SPARQL_은_읽기_토큰으로도_묻되_쓰는_말은_막고_보이는_것만(
     client: TestClient, admin: Signed, member: Signed, db: Session
 ) -> None:

@@ -199,7 +199,7 @@ export default function SearchPage() {
       ) : data && data.items.length === 0 ? (
         <EmptyState
           title="맞는 것이 없습니다"
-          hint="다른 말로 찾아 보세요. 남의 부서 것은 여기 안 보입니다 — 그 부서 사람에게 물어야 합니다."
+          hint="다른 말로 찾아 보세요 — 이름 · 식별자 · 별칭으로 찾습니다."
         />
       ) : (
         <ul className="divide-y rounded-md border">

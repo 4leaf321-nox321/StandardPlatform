@@ -56,7 +56,6 @@ function space(slug: string, name: string): Workspace {
     path: name,
     sort_order: 0,
     is_active: true,
-    restricted: false,
     created_at: '',
     member_count: 1,
     my_role: 'manager',

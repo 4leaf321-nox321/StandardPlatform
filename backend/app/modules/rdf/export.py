@@ -40,7 +40,7 @@ from app.modules.objects.services import properties_of
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef, RelationType
 from app.modules.workspaces.models import WorkspaceMember
-from app.shared.permissions import visible_owner_clause
+from app.shared.permissions import sees_every_department, visible_owner_clause
 
 XSD_OF: dict[str, URIRef] = {
     "text": XSD.string,
@@ -525,9 +525,10 @@ def version(db: Session) -> tuple[Any, ...]:
 def scope_of(db: Session, user: User) -> str:
     """이 사람이 **무엇을 볼 수 있나**를 한 글자로 — 캐시 열쇠다.
 
-    시스템 관리자는 전부, 그 밖은 속한 부서의 id 들(가시성은 전역 + 내 부서다). 열쇠에 이것이
-    없으면 관리자가 세운 그래프를 다음 사람이 받아 간다."""
-    if user.is_system_admin:
+    모든 부서를 보면(시스템 관리자 · 조회가 전원에게 열린 설치 — 기본, ADR 0034) 전부, 그 밖은
+    속한 부서의 id 들(전역 + 내 부서). 열쇠에 이것이 없으면 관리자가 세운 그래프를 다음 사람이
+    받아 간다."""
+    if sees_every_department(user):
         return "*"
     mine = db.scalars(
         select(WorkspaceMember.workspace_id).where(WorkspaceMember.user_id == user.id)

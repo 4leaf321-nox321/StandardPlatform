@@ -14,6 +14,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 from sqlalchemy.orm import Session
@@ -54,6 +55,7 @@ def _pull(client: TestClient, headers: dict[str, str], slug: str, **params: Any)
     return got.json()
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_통폐합으로_옮겨_간_객체는_토큰의_부서에_따라_무덤_또는_바뀐_행으로_간다(
     client: TestClient, admin: Signed, db: Session
 ) -> None:

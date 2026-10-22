@@ -153,6 +153,7 @@ def test_전역_첨부는_시스템_관리자만(client: TestClient, member: Sig
     assert response.status_code == 403
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_남의_부서_첨부는_없는_것과_같다(
     client: TestClient, db: Session, admin: Signed, member: Signed
 ) -> None:

@@ -9,6 +9,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import update
 from sqlalchemy.orm import Session
@@ -235,6 +236,7 @@ def test_지워진_것을_가리키는_참조는_지워졌다고_적힌다(
     assert profile["object"]["ref_labels"][acme["id"]] == "ACME (지워짐)"
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_남의_부서가_가리키면_수만_말한다(
     client: TestClient, admin: Signed, member: Signed
 ) -> None:

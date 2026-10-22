@@ -150,6 +150,7 @@ def test_셀이_상한에서_잘리면_거절한다(
     assert refused["code"].endswith("METRICS-0020") and "잘렸습니다" in refused["message"]
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_일부_부서만_보이면_그렇게_말한다(
     client: TestClient, admin: Signed, manager: Signed
 ) -> None:
@@ -1010,6 +1011,7 @@ def test_코호트_축으로_값마다_훑으면_건_보기에_창을_못_적는
     assert all("age" not in one["drill"]["partial"] for one in period["items"])
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_요청에_적은_못_보는_객체는_이름을_풀지_않는다(
     client: TestClient, admin: Signed, manager: Signed
 ) -> None:

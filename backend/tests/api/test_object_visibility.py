@@ -6,6 +6,9 @@
 
     내 부서(workspace) — admin · manager · member 가 함께 있다
     다른 부서(other)    — 시스템 관리자(admin)만 그 안의 객체를 본다
+
+**조회를 부서로 좁힌 설치(`VIEW_SCOPE=department`)의 이야기다.** 기본은 누구나 전부 본다
+(ADR 0034) — 그때는 가릴 것이 없다. 이 파일의 시험은 모두 좁힌 설치에서 돈다.
 """
 
 from __future__ import annotations
@@ -14,6 +17,7 @@ import json
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, update
 from sqlalchemy.orm import Session
@@ -31,6 +35,8 @@ from tests.api.test_ontology import (
     _tree_type,
 )
 from tests.api.test_watches import _watch
+
+pytestmark = pytest.mark.usefixtures("department_scope")
 
 HIDDEN = "(볼 수 없는 객체)"
 

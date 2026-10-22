@@ -36,6 +36,7 @@ from app.modules.metrics.recipes import changes, groups, series, sprt
 from app.modules.objects.services import properties_of
 from app.modules.ontology.models import ObjectType
 from app.modules.workspaces.models import WorkspaceMember
+from app.shared import permissions
 from app.shared.errors import AppError
 
 log = logging.getLogger(__name__)
@@ -754,8 +755,9 @@ def request(db: Session, metric: MetricDef) -> Job | None:
 
 
 def visible_metric_ids(db: Session, user: User, metrics: list[MetricDef]) -> set[uuid.UUID]:
-    """결론이 보이는 지표 — **셀이 든 부서를 모두 보는 사람에게만**(ADR 0032 결정 3)."""
-    if user.is_system_admin:
+    """결론이 보이는 지표 — **셀이 든 부서를 모두 보는 사람에게만**(ADR 0032 결정 3). 조회가
+    전원에게 열린 설치(기본, ADR 0034)에서는 누구나다."""
+    if permissions.sees_every_department(user):
         return {one.id for one in metrics}
     mine = {
         str(one)

@@ -13,6 +13,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 
 from tests.api.conftest import Signed
@@ -309,6 +310,7 @@ def test_전역_객체는_시스템_관리자만_만든다(
     assert allowed.json()["owner_workspace_slug"] is None
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_남의_부서_객체는_안_보인다(client: TestClient, admin: Signed, member: Signed) -> None:
     """**없는 것과 안 보이는 것을 같은 말로 답한다** — 구별해 주면 남의 부서에
     무엇이 있는지 id 를 바꿔 가며 알아낼 수 있다."""

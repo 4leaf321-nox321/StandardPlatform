@@ -5,6 +5,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
 
@@ -133,6 +134,7 @@ def test_깨진_참조는_지워진_것을_이름으로_말한다(
     assert found["hits"][0]["detail"] == "공급사 → ACME (지워짐)"
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_볼_수_있는_것만_세고_홈에는_관리자에게만_뜬다(
     client: TestClient, admin: Signed, manager: Signed, member: Signed
 ) -> None:

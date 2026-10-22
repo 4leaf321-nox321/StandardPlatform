@@ -41,7 +41,6 @@ export function WorkspaceEditDialog({ workspace, all, onClose, onSaved }: Props)
   const [name, setName] = useState(workspace.name)
   const [description, setDescription] = useState(workspace.description)
   const [parent, setParent] = useState<string>(workspace.parent_slug ?? ROOT)
-  const [restricted, setRestricted] = useState(workspace.restricted)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<Error | null>(null)
 
@@ -58,12 +57,8 @@ export function WorkspaceEditDialog({ workspace, all, onClose, onSaved }: Props)
     setBusy(true)
     setError(null)
     try {
-      if (
-        name !== workspace.name ||
-        description !== workspace.description ||
-        restricted !== workspace.restricted
-      ) {
-        await workspaceApi.update(workspace.slug, { name, description, restricted })
+      if (name !== workspace.name || description !== workspace.description) {
+        await workspaceApi.update(workspace.slug, { name, description })
       }
       // 상위를 바꾸면 **형제 끝으로 간다.** 옛 자리의 순서를 새 형제들 사이로 들고
       // 오면 아무도 시키지 않은 자리에 끼어든다.
@@ -107,32 +102,6 @@ export function WorkspaceEditDialog({ workspace, all, onClose, onSaved }: Props)
               placeholder="재료 시험과 성적서 발행"
               maxLength={255}
             />
-          </div>
-          <div className="space-y-2">
-            <Label>이 부서의 자료를 누가 보나</Label>
-            {/* **가리는 쪽이 예외다.** 사내 플랫폼의 물음은 대개 부서를 가로지른다 —
-                기본이 「멤버만」 이면 그 물음마다 사람을 찾아 물어야 한다. */}
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                size="sm"
-                variant={restricted ? 'outline' : 'default'}
-                onClick={() => setRestricted(false)}
-              >
-                가입자 전원
-              </Button>
-              <Button
-                type="button"
-                size="sm"
-                variant={restricted ? 'default' : 'outline'}
-                onClick={() => setRestricted(true)}
-              >
-                멤버만
-              </Button>
-            </div>
-            <p className="text-muted-foreground text-xs">
-              수정하는 것은 이 값과 상관없이 늘 소유 부서의 관리자만 합니다.
-            </p>
           </div>
           <div className="space-y-2">
             <Label htmlFor="edit-parent">상위 부서</Label>

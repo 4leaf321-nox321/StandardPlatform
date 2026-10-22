@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select, text
 from sqlalchemy.orm import Session
@@ -823,6 +824,7 @@ def _other_workspace(client: TestClient, admin: Signed) -> str:
     return str(made.json()["slug"])
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_못_보는_부서의_상대는_참조로도_선으로도_안_나간다(
     client: TestClient, admin: Signed, member: Signed
 ) -> None:
@@ -885,6 +887,7 @@ def test_못_보는_부서의_상대는_참조로도_선으로도_안_나간다(
     assert [one["dst"] for one in _relations(client, member, part)["items"]] == ["ACME-001"]
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_보이던_부서에서_옮겨_간_객체는_무덤으로_알린다(
     client: TestClient, admin: Signed, member: Signed
 ) -> None:

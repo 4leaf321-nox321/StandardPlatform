@@ -35,8 +35,6 @@ class WorkspaceOut(BaseModel):
     path: str
     sort_order: int
     is_active: bool
-    restricted: bool
-    """자료를 멤버에게만 보이나. 기본 false — 가입자 전원이 본다."""
     created_at: datetime
     member_count: int
     my_role: str | None
@@ -53,7 +51,7 @@ class WorkspaceCreateRequest(BaseModel):
 class WorkspaceUpdateRequest(BaseModel):
     """**안 보낸 것과 비운 것을 구별한다.** None 은 "안 바꿈" 이다.
 
-    구별하지 않으면 이름만 고칠 때마다 공개 설정이 함께 초기화되고, 그 손실은
+    구별하지 않으면 이름만 고칠 때마다 다른 칸이 함께 초기화되고, 그 손실은
     저장한 사람 눈에 안 보인다.
     """
 
@@ -61,8 +59,6 @@ class WorkspaceUpdateRequest(BaseModel):
     description: str | None = Field(default=None, max_length=255)
     is_active: bool | None = None
     """false 로 두면 보관 상태. 자료는 남기고 새 활동만 막는다(삭제하지 않는다)."""
-    restricted: bool | None = None
-    """true 로 두면 이 부서의 자료를 **멤버에게만** 보인다. 안 보내면 그대로."""
 
 
 class WorkspaceMoveRequest(BaseModel):

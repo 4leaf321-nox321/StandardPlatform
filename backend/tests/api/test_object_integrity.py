@@ -10,6 +10,7 @@ from __future__ import annotations
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import update
 from sqlalchemy.orm import Session
@@ -455,6 +456,7 @@ def test_검색_자리가_못_훑는_칸뿐이면_이름으로_찾는다(
 # --- 관계 고치기 -------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_저쪽_끝을_못_보는_관계는_고치기_전에_404_다(
     client: TestClient, admin: Signed, manager: Signed, db: Session
 ) -> None:

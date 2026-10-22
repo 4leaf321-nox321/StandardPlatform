@@ -67,6 +67,18 @@ def _make_user(
 
 
 @pytest.fixture
+def department_scope(monkeypatch: pytest.MonkeyPatch) -> None:
+    """조회를 **전역 + 내 부서**로 좁힌 설치(`VIEW_SCOPE=department`).
+
+    기본은 누구나 전부 본다(ADR 0034). 남의 부서 것을 가리는 길(이름 가리기 · 수만 말하기 ·
+    없는 것과 같게)은 그대로 남아 있고, 이 설정을 켠 설치에서 다시 쓰인다 — 그 길을 지키는
+    시험은 이것을 켜고 돈다. 안 켜면 가릴 것이 없어 그 시험들은 아무것도 지키지 못한다."""
+    from app.config import get_settings
+
+    monkeypatch.setattr(get_settings(), "view_scope", "department")
+
+
+@pytest.fixture
 def workspace(db: Session) -> Workspace:
     row = Workspace(slug=f"team-{uuid.uuid4().hex[:8]}", name="시험팀")
     db.add(row)

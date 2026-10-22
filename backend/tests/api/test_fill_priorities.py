@@ -172,6 +172,7 @@ def test_관계는_끝을_정한_종류만_세고_하나인_끝이_무겁다(
     assert back["side"] == "in" and back["one"] is False and back["missing"] == 0
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_객체가_없는_타입과_안_보이는_타입을_가른다(
     client: TestClient, admin: Signed, db: Session
 ) -> None:

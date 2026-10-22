@@ -905,7 +905,8 @@ async def search(
     `types[]` 가 타입별 건수라 **어느 타입에 있는지**가 먼저 보인다. 타입을 알면
     `objects_list`(조건 거르기) · `object_resolve`(하나로 정하기)가 낫다 — 이것은
     「어디 있나」 를 묻는 도구지 「어느 것인가」 를 정하는 도구가 아니다.
-    볼 수 있는 것만 나온다(남의 부서 것은 수에도 안 잡힌다). `type_slug` 에 인터페이스를
+    볼 수 있는 것만 나온다(기본은 전부 — 조회를 부서로 좁힌 설치는 남의 부서 것이 수에도 안
+    잡힌다). `type_slug` 에 인터페이스를
     주면 구현 타입 전부에서 찾는다.
 
     **기록**(`usage="log"` — 시장 서비스 건 · 시험 결과)은 섞어 찾을 때 줄로 안 오고
@@ -1792,8 +1793,8 @@ async def object_rollup(ctx: Context, type_slug: str, object_id: str) -> Any:
 async def object_references(ctx: Context, type_slug: str, object_id: str) -> Any:
     """이 객체를 **가리키는 것** — 속성으로 가리키는 객체들과 걸린 관계들.
 
-    지우거나 합치기 전에 본다. 남의 부서 것은 수만 온다(`hidden_*`) — 「아무것도 안
-    걸렸다」 로 읽고 지우면 그쪽 화면이 깨진다."""
+    지우거나 합치기 전에 본다. 못 보는 것은 수만 온다(`hidden_*` — 조회를 부서로 좁힌
+    설치에서만) — 「아무것도 안 걸렸다」 로 읽고 지우면 그쪽 화면이 깨진다."""
     return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/references")
 
 
@@ -2864,7 +2865,7 @@ async def metric_query(
     composition: str | bool | None = None,
 ) -> Any:
     """**지표 읽기** — 세어 둔 셀 위에서 비율 · 누적 · 전기 · 전년 동기 · 건 보기까지.
-    보이는 부서의 것만 더한다(목록 · 통계와 같은 규칙).
+    보이는 것을 더한다(목록 · 통계와 같은 규칙 — 기본은 전부).
 
     - `shape="table"`: `dims`(묶을 기준 이름들, `metric_list` 의 `dims[].name`)와 `by`
       (`period` · `cohort` · `age` 중 묶을 것)별 셀. 셀마다 `count` · `value`(이 지표의

@@ -162,11 +162,6 @@ export function WorkspaceTree({
                   </span>
                   <span className="text-muted-foreground font-mono text-xs">{node.slug}</span>
                   {!node.is_active && <StatusBadge kind="workspace" value="archived" />}
-                  {node.restricted && (
-                    <span className="bg-muted text-muted-foreground rounded px-1.5 py-0.5 text-xs">
-                      멤버만
-                    </span>
-                  )}
                   {collapsed && hidden > 0 && (
                     <span className="text-muted-foreground text-xs">하위 {hidden}</span>
                   )}

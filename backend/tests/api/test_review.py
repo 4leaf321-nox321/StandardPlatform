@@ -866,6 +866,7 @@ def test_지워진_것을_가리키는_칸의_빠른_길은_예전_길과_같은
     assert sum(one[1] for one in old["statements"]) == 14
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_지워진_것을_가리키는_칸은_바뀌는_칸만_검사하고_막을_것은_막는다(
     client: TestClient, admin: Signed, manager: Signed, db: Session
 ) -> None:
@@ -1111,6 +1112,7 @@ def test_병합_후보는_원래_병합으로_가고_복원은_없다고_말한�
 # --- 권한 ----------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_못_보는_부서의_항목은_안_보이고_멤버는_못_연다(
     client: TestClient, admin: Signed, manager: Signed, member: Signed, db: Session
 ) -> None:

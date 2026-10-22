@@ -173,7 +173,6 @@ def update_workspace(
         name=payload.name,
         description=payload.description,
         is_active=payload.is_active,
-        restricted=payload.restricted,
     )
     return services.workspace_out(db, workspace, admin)
 

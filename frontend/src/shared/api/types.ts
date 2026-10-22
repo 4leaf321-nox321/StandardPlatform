@@ -61,7 +61,6 @@ export interface Workspace {
   path: string
   sort_order: number
   is_active: boolean
-  restricted: boolean
   created_at: string
   member_count: number
   my_role: string | null

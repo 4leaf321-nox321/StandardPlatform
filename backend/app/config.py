@@ -11,7 +11,7 @@ from __future__ import annotations
 import re
 from functools import lru_cache
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -162,6 +162,12 @@ class Settings(BaseSettings):
     worker_stale_seconds: int = 300
     """`running` 인데 이만큼 심장박동이 없으면 워커가 죽은 것으로 보고 되돌린다."""
     worker_max_attempts: int = 3
+
+    view_scope: Literal["all", "department"] = "all"
+    """**누가 무엇을 보나**(ADR 0034). `all` — 부서와 상관없이 가입자 누구나 모든 자료를
+    본다(기본, 2026-10-22). `department` — 전역 + 내가 속한 부서 것만(그 전의 규칙). 고치는
+    것은 어느 쪽이든 소유 부서의 관리자다. 이 값을 읽는 것은 `shared/permissions` 하나다 —
+    목록 · 검색 · 그래프 · 지표 · 코어 API 가 모두 그것을 거친다."""
 
     tombstone_ttl_days: int = 90
     """**끊긴 선의 무덤**을 이만큼만 들고 있는다. 무덤은 영영 쌓이고, 내보내기는 그 이력을

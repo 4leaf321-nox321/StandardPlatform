@@ -151,7 +151,6 @@ def workspace_out(
         depth=depth or 0,
         path=path or workspace.name,
         sort_order=workspace.sort_order,
-        restricted=workspace.restricted,
         is_active=workspace.is_active,
         created_at=workspace.created_at,
         member_count=member_count(db, workspace.id),
@@ -237,10 +236,9 @@ def update(
     name: str | None,
     description: str | None,
     is_active: bool | None,
-    restricted: bool | None,
 ) -> Workspace:
     """**안 보낸 것과 비운 것을 구별한다.** None 은 "안 바꿈" 이다 — 구별하지 않으면
-    이름만 고칠 때마다 공개 설정이 함께 초기화된다."""
+    이름만 고칠 때마다 보관 상태가 함께 초기화된다."""
     workspace = workspace_by_slug(db, slug)
     if name is not None:
         workspace.name = clean(name)
@@ -248,8 +246,6 @@ def update(
         workspace.description = clean(description)
     if is_active is not None:
         workspace.is_active = is_active
-    if restricted is not None:
-        workspace.restricted = restricted
     db.commit()
     db.refresh(workspace)
     return workspace
@@ -857,7 +853,6 @@ EXPORT_HEADER = (
     "status",
     "description",
     "sort_order",
-    "restricted",
     "member_count",
     "managers",
     "created_at",
@@ -903,7 +898,6 @@ def export_rows(db: Session) -> list[list[object]]:
                 "active" if workspace.is_active else "archived",
                 workspace.description or "",
                 workspace.sort_order,
-                "true" if workspace.restricted else "false",
                 counts.get(workspace.id, 0),
                 "; ".join(managers.get(workspace.id, [])),
                 workspace.created_at.isoformat() if workspace.created_at else "",
@@ -967,8 +961,8 @@ SYSTEM_SOURCE = system_sources.SystemSource(
 
 # --- 붙여 넣어 추가 — 다른 플랫폼(ReportArchive 등)의 부서 정보 내보내기를 그대로 ------------
 #
-# 내보내기 CSV 의 열 이름이 그대로 열쇠다(slug·name·parent_slug·status·description·sort_order·
-# restricted). ReportArchive 것에는 kind·external_view_default 같은 열이 더 있는데 모르는 열은
+# 내보내기 CSV 의 열 이름이 그대로 열쇠다(slug·name·parent_slug·status·description·sort_order).
+# ReportArchive 것에는 kind·external_view_default · restricted 같은 열이 더 있는데 모르는 열은
 # **무시한다** — 부서 정보는 정의가 고정돼 있어 「모르는 열 = 오타」 가 아니라 「저쪽에만 있는
 # 열」 이다. 다만 personal(개인 공간)은 부서가 아니니 건너뛴다.
 #
@@ -982,7 +976,6 @@ IMPORT_COLUMNS = (
     "status",
     "description",
     "sort_order",
-    "restricted",
 )
 
 
@@ -1019,10 +1012,6 @@ def _cell(row: dict[str, Any], name: str) -> str | None:
     if name not in row or row[name] is None:
         return None
     return str(row[name]).strip()
-
-
-def _truthy(text: str) -> bool:
-    return text.strip().lower() in ("true", "1", "yes", "y", "예", "참")
 
 
 def plan_import(db: Session, rows: list[dict[str, Any]]) -> ImportPlan:
@@ -1135,13 +1124,6 @@ def plan_import(db: Session, rows: list[dict[str, Any]]) -> ImportPlan:
             current_parent.slug if current_parent else None
         ):
             changes.append("parent_slug")
-        restricted = _cell(row, "restricted")
-        if (
-            restricted is not None
-            and restricted != ""
-            and _truthy(restricted) != current.restricted
-        ):
-            changes.append("restricted")
         plan.rows.append(
             ImportRow(
                 row=index,
@@ -1171,7 +1153,6 @@ def apply_import(db: Session, rows: list[dict[str, Any]], *, actor: User) -> Imp
         name = _cell(row, "name")
         description = _cell(row, "description")
         status = _cell(row, "status")
-        restricted = _cell(row, "restricted")
         order = _cell(row, "sort_order")
         if planned.action == "create":
             workspace = Workspace(
@@ -1179,7 +1160,6 @@ def apply_import(db: Session, rows: list[dict[str, Any]], *, actor: User) -> Imp
                 name=clean(name or slug),
                 description=clean(description or ""),
                 is_active=(status or "active").lower() == "active",
-                restricted=_truthy(restricted) if restricted else False,
                 sort_order=int(order) if order and order.lstrip("-").isdigit() else 0,
             )
             db.add(workspace)
@@ -1201,7 +1181,6 @@ def apply_import(db: Session, rows: list[dict[str, Any]], *, actor: User) -> Imp
             "name": workspace.name,
             "description": workspace.description,
             "is_active": workspace.is_active,
-            "restricted": workspace.restricted,
         }
         if "name" in planned.changes and name:
             workspace.name = clean(name)
@@ -1209,13 +1188,10 @@ def apply_import(db: Session, rows: list[dict[str, Any]], *, actor: User) -> Imp
             workspace.description = clean(description)
         if "status" in planned.changes and status:
             workspace.is_active = status.lower() == "active"
-        if "restricted" in planned.changes and restricted:
-            workspace.restricted = _truthy(restricted)
         after = {
             "name": workspace.name,
             "description": workspace.description,
             "is_active": workspace.is_active,
-            "restricted": workspace.restricted,
         }
         audit.record(
             db,

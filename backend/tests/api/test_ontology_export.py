@@ -11,6 +11,7 @@ import json
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
 from openpyxl import load_workbook
 from sqlalchemy.orm import Session
@@ -217,6 +218,7 @@ def test_JSON_묶음은_부서마다_나뉘고_그대로_다시_넣을_수_있�
     assert mine["plan"]["counts"].get("unchanged", 0) >= 1
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_볼_수_있는_것만_나간다(
     client: TestClient, admin: Signed, member: Signed, db: Session
 ) -> None:

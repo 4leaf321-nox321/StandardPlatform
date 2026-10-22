@@ -12,6 +12,8 @@
 부서가 소유하는 표에 `owner_workspace_id`(nullable) 한 칸을 두면 아래 셋이 그대로
 붙는다: `visible_owner_clause` · `resolve_owner_workspace` · `require_owner_edit`.
 NULL 은 **전역**이다 — 여러 부서가 함께 쓰고, 고치는 것은 시스템 관리자뿐이다.
+**보는 것은 기본이 부서와 상관없이 누구나**다(ADR 0034, `VIEW_SCOPE`) — 부서는 고치는
+사람을 가른다.
 
 각 모듈이 자기 판정을 따로 적으면 "A 는 되는데 B 는 안 되는" 식으로 어긋나고,
 그 어긋남이 부서 관리자를 막다른 길로 보낸다.
@@ -24,6 +26,7 @@ import uuid
 from sqlalchemy import ColumnElement, or_, select, true
 from sqlalchemy.orm import InstrumentedAttribute, Session
 
+from app.config import get_settings
 from app.modules.accounts.models import User
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 from app.shared.errors import Forbidden, NotFound, code
@@ -89,37 +92,29 @@ def is_any_manager(db: Session, user: User) -> bool:
 # --- 부서 소유 자산 ---------------------------------------------------------
 
 
+def sees_every_department(user: User) -> bool:
+    """이 사람이 **모든 부서의 자료를** 보나 — 시스템 관리자, 또는 조회가 전원에게 열린
+    설치(`VIEW_SCOPE=all`, 기본 — ADR 0034)."""
+    return user.is_system_admin or get_settings().view_scope == "all"
+
+
 def visible_owner_clause(
     user: User, column: InstrumentedAttribute[uuid.UUID | None]
 ) -> ColumnElement[bool]:
-    """전역 + 내 부서 필터. 목록·조회·검색이 **같은 것**을 봐야 한다.
+    """볼 수 있는 것 — 기본은 **부서와 상관없이 전부**(ADR 0034).
+    `VIEW_SCOPE=department` 면 전역 + 내 부서. 목록 · 조회 · 검색 · 그래프 · 지표 ·
+    코어 API 가 모두 이것 하나를 부른다.
 
-    같은 규칙을 두 번 적으면 언젠가 한쪽만 고쳐지고, 그때 검색 결과와 목록이
-    서로 다른 것을 보여 준다.
+    같은 규칙을 두 번 적으면 언젠가 한쪽만 고쳐지고, 그때 검색 결과와 목록이 서로 다른 것을
+    보여 준다. 고치는 것은 이것과 다른 축이다 — 늘 소유 부서의 관리자(`require_owner_edit`).
+
+    예전에는 부서마다 「멤버만」 을 켜는 칸(`restricted`)이 있었지만 그 칸을 부르는 조회가
+    하나도 없어 화면의 설정이 아무 데도 안 걸렸다(2026-10-22 발견, 칸은 지웠다).
     """
-    if user.is_system_admin:
+    if sees_every_department(user):
         return true()
     mine = select(WorkspaceMember.workspace_id).where(WorkspaceMember.user_id == user.id)
     return or_(column.is_(None), column.in_(mine))
-
-
-def open_owner_clause(
-    user: User, column: InstrumentedAttribute[uuid.UUID | None]
-) -> ColumnElement[bool]:
-    """전역 + 열린 부서 + 내 부서.
-
-    **가리는 쪽을 예외로 두고 싶을 때 쓴다.** 조직을 가로지르는 물음에 답하는
-    플랫폼("우리 조직에 그게 있나")에서는 자기 부서 것만 보이면 그 물음에 아무도
-    답할 수 없고, 그러면 사람은 예전처럼 전화를 돌린다.
-
-    쓰기는 이것과 무관하다. **보이는 것과 고칠 수 있는 것은 다른 축**이고, 고치는
-    쪽은 여전히 소유 부서의 관리자다(require_owner_edit).
-    """
-    if user.is_system_admin:
-        return true()
-    mine = select(WorkspaceMember.workspace_id).where(WorkspaceMember.user_id == user.id)
-    opened = select(Workspace.id).where(Workspace.restricted.is_(False))
-    return or_(column.is_(None), column.in_(opened), column.in_(mine))
 
 
 def editable_owner_clause(

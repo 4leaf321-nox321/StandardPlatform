@@ -20,7 +20,6 @@ function node(
     path: name,
     sort_order: order,
     is_active: true,
-    restricted: false,
     created_at: '2026-01-01T00:00:00Z',
     member_count: 0,
     my_role: null,

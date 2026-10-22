@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -227,22 +228,23 @@ def test_마지막_부서_관리자는_뺄_수_없다(
 
 def test_안_보낸_칸은_안_바뀐다(client: TestClient, admin: Signed) -> None:
     """**부분 수정에서 "안 보낸 것" 과 "비운 것" 을 구별한다.** 안 구별하면 이름
-    하나 바꿀 때마다 공개 설정이 함께 초기화되고, 그 손실은 저장한 사람 눈에
+    하나 바꿀 때마다 보관 상태 · 설명이 함께 초기화되고, 그 손실은 저장한 사람 눈에
     안 보인다."""
+    slug = f"div-{uuid.uuid4().hex[:6]}"
     client.post(
         "/api/workspaces",
-        json={"slug": "div-d", "name": "D본부", "description": "설명"},
+        json={"slug": slug, "name": "D본부", "description": "설명"},
         headers=admin.headers,
     )
-    client.patch("/api/workspaces/div-d", json={"restricted": True}, headers=admin.headers)
+    client.patch(f"/api/workspaces/{slug}", json={"is_active": False}, headers=admin.headers)
 
     renamed = client.patch(
-        "/api/workspaces/div-d", json={"name": "D사업본부"}, headers=admin.headers
+        f"/api/workspaces/{slug}", json={"name": "D사업본부"}, headers=admin.headers
     )
     assert renamed.status_code == 200, renamed.text
     body = renamed.json()
     assert body["name"] == "D사업본부"
-    assert body["restricted"] is True  # 함께 초기화되지 않았다
+    assert body["is_active"] is False  # 함께 초기화되지 않았다
     assert body["description"] == "설명"
 
 

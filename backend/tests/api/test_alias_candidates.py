@@ -101,6 +101,7 @@ def test_못_찾은_말이_남고_별칭으로_붙이면_다음부터_찾힌다(
     assert pending["total"] == 0
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_거르는_말과_있는데_안_보인_말은_남지_않는다(
     client: TestClient, admin: Signed, db: Session
 ) -> None:
@@ -224,6 +225,7 @@ def test_다른_객체가_쓰는_별칭이면_막고_범위_밖_객체에는_안
     assert wrong.status_code == 422 and "OBJECTS-0113" in wrong.json()["error"]["code"]
 
 
+@pytest.mark.usefixtures("department_scope")
 def test_부서_관리자_이상만_보고_자기_부서_것에만_붙인다(
     client: TestClient, admin: Signed, member: Signed, db: Session
 ) -> None:

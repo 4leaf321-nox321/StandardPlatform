@@ -44682,10 +44682,6 @@
             "type": "boolean",
             "title": "Is Active"
           },
-          "restricted": {
-            "type": "boolean",
-            "title": "Restricted"
-          },
           "created_at": {
             "type": "string",
             "format": "date-time",
@@ -44718,7 +44714,6 @@
           "path",
           "sort_order",
           "is_active",
-          "restricted",
           "created_at",
           "member_count",
           "my_role"
@@ -44828,22 +44823,11 @@
               }
             ],
             "title": "Is Active"
-          },
-          "restricted": {
-            "anyOf": [
-              {
-                "type": "boolean"
-              },
-              {
-                "type": "null"
-              }
-            ],
-            "title": "Restricted"
           }
         },
         "type": "object",
         "title": "WorkspaceUpdateRequest",
-        "description": "**안 보낸 것과 비운 것을 구별한다.** None 은 \"안 바꿈\" 이다.\n\n구별하지 않으면 이름만 고칠 때마다 공개 설정이 함께 초기화되고, 그 손실은\n저장한 사람 눈에 안 보인다."
+        "description": "**안 보낸 것과 비운 것을 구별한다.** None 은 \"안 바꿈\" 이다.\n\n구별하지 않으면 이름만 고칠 때마다 다른 칸이 함께 초기화되고, 그 손실은\n저장한 사람 눈에 안 보인다."
       },
       "app__extensions__caegroup__schemas__CoverageOut": {
         "properties": {

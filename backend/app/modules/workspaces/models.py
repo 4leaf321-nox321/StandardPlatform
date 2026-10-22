@@ -66,17 +66,6 @@ class Workspace(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, server_default="true")
     """false 면 보관 상태. 자료는 남기고 새 활동만 막는다."""
 
-    restricted: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
-    """이 부서의 자료를 **멤버에게만** 보이나.
-
-    기본은 false — 가입자 전원이 본다. 조직을 가로지르는 물음에 답하는 것이 사내
-    플랫폼의 존재 이유라, **가리는 쪽이 예외여야 한다.** 쓰기는 이 값과 무관하게
-    여전히 소유 부서의 관리자만 한다(shared/permissions.py).
-
-    이 칸을 실제로 쓰는 것은 `open_owner_clause` 를 부르는 도메인 조회다. 도메인이
-    없으면 아무 데도 안 걸리지만, 칸을 나중에 만들면 그때 이미 쌓인 자료의 기본값을
-    무엇으로 할지 아무도 못 정한다."""
-
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now()
     )
