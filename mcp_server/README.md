@@ -111,7 +111,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 
 스텁엔 안내 본문이 없으므로 **한 번 깔면 다시 복사할 일이 없다.**
 
-## 도구 아흔셋
+## 도구 백
 
 | 도구 | 무엇 |
 | --- | --- |
@@ -119,6 +119,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `whoami` · `search` | 이 토큰의 주인(내 부서 · 역할)과 **어느 플랫폼인가**(`platform`) · **타입을 모를 때** 이름·식별자·별칭으로 전부 찾기 |
 | `platform_profile` · `platform_profile_update` | **이 플랫폼의 자기소개** — 사람이 쓴 소개(무엇을 하러 오는 곳 · 정본은 어디)와 **지금 담긴 것**(조회 때 센다 — 기록 · 축과 건수, 들어오는 곳, 정본이 바깥인 타입, 지표), 쓴 뒤 달라진 것(`stale`). 고치기는 미리 보기 뒤 저장(시스템 관리자). 같은 틀로 띄운 플랫폼 여럿이 붙으면 도구가 전부 같아서, **접속 때 그 사람의 토큰으로** 센 소개가 안내문 첫머리에 실려 어디에 물을지 가른다 |
 | `ontology_schema` | 묶음·타입·속성·관계 전부 |
+| `slide_templates` · `slides_list` · `slide_get` · `slide_create` · `slide_candidates` · `slide_update` | **장표**(ADR 0037) — 여러 기록을 정형 배치(틀) 한 장에. 틀 보기 · 장표 찾기 · 읽기(기록마다 칸 이름 → 값 · 연결 항목 줄, 살아 있는 값) · 만들기(틀 + 주제) · 선택 영역의 후보 · 제목 · 글 · 선택 고치기. **AI 가 쓴 글은 「AI 초안」 으로 표시**되고 사람이 고치면 풀린다. 기록의 값 · 연결은 객체 도구로, 틀은 화면에서만, pptx 는 화면에서 |
 | `ontology_import` | 정의를 한 트랜잭션으로. **기본은 미리 보기**(`apply=false`) |
 | `object_resolve` | **이름 하나가 어느 객체인가** — `exact`/`candidates`/`none`. 이름으로 가리키기 전에 부른다 |
 | `objects_resolve_many` | 이름 **여럿을 한 번에**(500개까지) — 넣기 전에 「없는 것 · 여럿과 맞는 것」 을 먼저 걸러 묶음 전체가 거절되지 않게 |
@@ -160,7 +161,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 ### 왜 타입마다 도구를 안 만드나
 
 타입 20개에 도구가 80개가 되고, **도구 목록이 길수록 모델은 엉뚱한 것을 고른다.**
-도구는 아흔셋으로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
+도구는 백으로 고정하고 `ontology_schema` 하나가 「지금 무엇이 있고 각 타입이 무엇을
 받는가」 를 말한다 — **동적인 것은 도구가 아니라 스키마다.**
 
 검증도 권한도 백엔드가 한다. 여기에 규칙을 두면 **MCP 로는 되는데 화면에서는 안

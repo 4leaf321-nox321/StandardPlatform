@@ -248,4 +248,9 @@ describe('장표 그리기', () => {
     expect(onMakeRecord).toHaveBeenCalledWith(opinion)
     expect(screen.getByRole('link', { name: '대책 확인' })).toHaveAttribute('href', '/o/risk/m1')
   })
+
+  it('AI 가 쓴 글은 「AI 초안」 으로 표시된다', () => {
+    draw([area({ key: 'opinion', title: '종합 의견', kind: 'text', text: '초안', ai_draft: true })])
+    expect(screen.getByText('AI 초안')).toBeInTheDocument()
+  })
 })

@@ -759,6 +759,7 @@ async def get_guide(ctx: Context, topic: str | None = None) -> dict[str, Any]:
       - `extensions` 이 설치에만 있는 기능(확장) — 무엇을 부를 수 있나
       - `reports` 보고서 기록 — RA 에서 쌓인 보고서에 묻기
       - `platforms` 같은 도구를 가진 플랫폼이 여럿일 때 — 어디에 물을지 · 자기소개
+      - `slides` 장표 — 여러 기록을 정형 배치 한 장에(틀 · 장표 · 글 초안)
       - `admin` 운영 · 설정 — 코어 공개 현황 · 부서 · 뷰 · 지켜보기 · 서버 · 지우기
 
     한 번에 다 받지 마라 — 필요한 주제만 받는 게 싸다."""
@@ -3969,6 +3970,223 @@ async def export_start(
         params += _filter_params(q, status, properties, conditions)
     job = await _post(ctx, template.format(type_slug=type_slug), None, params=params)
     return await _wait_job(ctx, job, JOB_WAIT_MAX)
+
+
+# --- 장표(ADR 0037) -------------------------------------------------------------
+
+
+def _link_line(links: list[Any]) -> str:
+    """연결 항목 줄 — 「부품: 커넥터 · 모델: A」(화면 · pptx 와 같은 말)."""
+    return " · ".join(
+        f"{one['label']}: {', '.join(item['label'] for item in one['items'])}"
+        for one in links
+        if one.get("items")
+    )
+
+
+def _slide_brief(slide: Any) -> Any:
+    """장표를 AI 가 읽기 좋게 — 기록마다 칸 이름 → 값과 연결 항목 줄 하나. 화면의 그림 정보
+    (자리 · 열 너비)와 고칠 때 쓰는 id 묶음(`ties` · `link`)은 뺀다."""
+    if not isinstance(slide, dict) or "areas" not in slide:
+        return slide
+    areas = []
+    for area in slide.get("areas") or []:
+        labels = {one["key"]: one["label"] for one in area.get("fields") or []}
+        one_area: dict[str, Any] = {
+            "key": area.get("key"),
+            "title": area.get("title"),
+            "kind": area.get("kind"),
+            "fill": area.get("fill"),
+            "type_slug": area.get("type_slug"),
+        }
+        if area.get("pair_of"):
+            one_area["pair_of"] = area["pair_of"]
+        if area.get("follow_title"):
+            one_area["follows"] = area["follow_title"]
+        if area.get("kind") == "text":
+            one_area["text"] = area.get("text") or ""
+            one_area["ai_draft"] = bool(area.get("ai_draft"))
+            if area.get("made"):
+                one_area["made"] = area["made"]
+        else:
+            one_area["records"] = [
+                {
+                    "id": record.get("id"),
+                    "label": record.get("label"),
+                    "line": _link_line(record.get("links") or []),
+                    "values": {
+                        labels.get(key, key): value
+                        for key, value in (record.get("values") or {}).items()
+                    },
+                    "can_edit": record.get("can_edit"),
+                }
+                for record in area.get("records") or []
+            ]
+            one_area["total"] = area.get("total")
+            if area.get("problem"):
+                one_area["problem"] = area["problem"]
+        areas.append(one_area)
+    return {
+        "id": slide.get("id"),
+        "title": slide.get("title"),
+        "template": slide.get("template_name"),
+        "subject": slide.get("subject"),
+        "author": slide.get("author_name"),
+        "rendered_at": slide.get("rendered_at"),
+        "can_edit": slide.get("can_edit"),
+        "areas": areas,
+    }
+
+
+@tool()
+async def slide_templates(ctx: Context) -> Any:
+    """**장표의 틀** — 조직의 정형 배치(ADR 0037). 장표를 만들기 전에 어느 틀이 있나 본다.
+
+    줄마다: `id` · `name` · `description` · `subject_type_slug`(주제 타입 — 장표 한 장이 무엇에
+    대한 것인가, 예: 모델) · `areas[]`(영역 `key` · `title` · `kind`(`records` 기록 / `text`
+    글) ·
+    `fill`(`condition` 조건에 맞는 것 전부 / `pick` 장표마다 선택 / `follow` 다른 영역을
+    따라옴) ·
+    `type_slug` · `limit`) · `slides`(이 틀로 만든 장표 수). **틀은 시스템 관리자가 화면(관리 ›
+    장표 틀)에서 만든다** — 이 도구로는 못 만든다. 맞는 틀이 없으면 사람에게 그렇게 말한다."""
+    rows = await _get(ctx, "/api/slides/templates")
+    if not isinstance(rows, list):
+        return rows
+    return [
+        {
+            "id": one.get("id"),
+            "name": one.get("name"),
+            "description": one.get("description"),
+            "subject_type_slug": one.get("subject_type_slug"),
+            "subject_type_label": one.get("subject_type_label"),
+            "slides": one.get("slides"),
+            "areas": [
+                {
+                    key: area.get(key)
+                    for key in (
+                        "key",
+                        "title",
+                        "kind",
+                        "fill",
+                        "type_slug",
+                        "fields",
+                        "limit",
+                        "pair_of",
+                        "follow_area",
+                    )
+                    if area.get(key) not in (None, [], "")
+                }
+                for area in one.get("areas") or []
+            ],
+        }
+        for one in rows
+    ]
+
+
+@tool()
+async def slides_list(
+    ctx: Context,
+    q: str | None = None,
+    template_id: str | None = None,
+    subject_id: str | None = None,
+    mine: bool = False,
+    limit: int | None = None,
+    offset: int = 0,
+) -> Any:
+    """**장표 목록** — 새로 고친 것부터. `subject_id`(주제 객체 id)로 거르면 「모델 A 의
+    장표」,
+    `template_id` 로 거르면 그 틀의 장표, `q` 는 제목에 든 말. 한 장은 `slide_get`."""
+    params: dict[str, Any] = {"offset": offset}
+    for key, value in (
+        ("q", q),
+        ("template_id", template_id),
+        ("subject_id", subject_id),
+        ("limit", limit),
+    ):
+        if value:
+            params[key] = value
+    if mine:
+        params["mine"] = True
+    return await _get(ctx, "/api/slides", params)
+
+
+@tool()
+async def slide_get(ctx: Context, slide_id: str, compact: bool = True) -> Any:
+    """**장표 한 장** — 영역마다 **지금의** 기록(살아 있는 값 — `rendered_at` 이 기준 시각).
+
+    전할 때: 기록의 값은 플랫폼이 읽은 것이라 **그대로 옮긴다** — 바꿔 말하거나 지어내지
+    않는다.
+    글 영역(`kind=text`)은 사람이 쓴 글이고, `ai_draft` 면 AI 가 쓴 초안이다(사람이 아직 안
+    고침).
+    `problem` 이 있는 영역은 그 까닭을 말한다. `total` 이 `records` 보다 많으면 「외 N건」
+    이다.
+    `compact`(기본)면 기록마다 칸 이름 → 값(`values`)과 연결 항목 줄(`line`)만, 아니면 화면이
+    받는
+    모양 그대로. pptx 는 사람이 장표 화면의 「pptx 다운로드」 로 받는다(파일은 MCP 로 안
+    넘긴다)."""
+    got = await _get(ctx, f"/api/slides/{slide_id}")
+    return _slide_brief(got) if compact else got
+
+
+@tool()
+async def slide_create(
+    ctx: Context, template_id: str, subject_id: str, title: str | None = None
+) -> Any:
+    """**장표를 만든다** — 틀 하나(`slide_templates`) + 주제 객체 하나. 누구나 만든다.
+
+    주제는 틀의 `subject_type_slug` 타입의 객체다 — 이름으로 받았으면 `object_resolve` 로 id 를
+    찾고, `candidates` 면 **고르지 말고 사람에게 묻는다.** `title` 을 비우면 「주제 이름 + 틀
+    이름」.
+    만든 뒤: 선택 영역(`fill=pick`)은 `slide_candidates` 로 후보를 보이고 사람이 고른 것을
+    `slide_update(picks=)` 로, 글 영역은 `slide_update(texts=)` 로."""
+    body: dict[str, Any] = {"template_id": template_id, "subject_id": subject_id}
+    if title:
+        body["title"] = title
+    return _slide_brief(await _post(ctx, "/api/slides", body))
+
+
+@tool()
+async def slide_candidates(ctx: Context, slide_id: str, area_key: str, q: str = "") -> Any:
+    """선택 영역(`fill=pick`)의 **후보** — 틀의 조건(이 장표의 주제와 이어진 기록 등)에 맞는
+    것,
+    50건까지. `q` 는 이름 · 식별자에 든 말. **비슷한 이름을 골라 넣지 말고, 후보를 사람에게
+    보여
+    고르게 한다.**"""
+    params = {"q": q} if q else None
+    return await _get(ctx, f"/api/slides/{slide_id}/areas/{area_key}/candidates", params)
+
+
+@tool()
+async def slide_update(
+    ctx: Context,
+    slide_id: str,
+    title: str | None = None,
+    texts: dict[str, str] | None = None,
+    picks: dict[str, list[str]] | None = None,
+) -> Any:
+    """**장표의 제목 · 글 영역 · 선택 영역을 고친다** — 장표의 작성자와 시스템 관리자만.
+
+    - `texts` — `{영역 키: 글}`. **네가 쓴 글은 「AI 초안」 으로 표시된다** — 사람이 화면에서
+    고치면
+      풀린다. 글에는 장표에 실린 기록 · 값에 근거한 것만 쓰고 **숫자 · 사실을 지어내지
+      않는다.**
+      쓰기 전에 사람에게 무엇을 쓸지 보여 준다.
+    - `picks` — `{영역 키: [기록 id, …]}` **통째로**(차례가 장표의 차례). 후보는
+    `slide_candidates`
+      — 후보가 아닌 기록이나 건수 상한을 넘으면 거절된다.
+    - 기록의 **값 · 연결은 이 도구로 바꾸지 않는다** — `object_update` · `relation_add` ·
+    `relation_remove`
+      (기록의 권한을 따른다). 장표는 기록을 가리킬 뿐이다."""
+    body: dict[str, Any] = {}
+    if title is not None:
+        body["title"] = title
+    if texts:
+        body["texts"] = texts
+        # AI 가 쓴 글이라고 남긴다 — 화면이 「AI 초안」 으로 보이고, 사람이 고치면 풀린다.
+        body["ai_drafts"] = list(texts)
+    if picks is not None:
+        body["picks"] = picks
+    return _slide_brief(await _patch(ctx, f"/api/slides/{slide_id}", body))
 
 
 # --- 기동 ----------------------------------------------------------------------

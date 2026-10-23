@@ -295,6 +295,7 @@ def render(
             filled = content.get(area.key) or {}
             text_area = _shell(area, None, [], text=str(filled.get("text") or ""))
             text_area.made = _made(db, filled.get("made"))
+            text_area.ai_draft = bool(filled.get("ai"))
             out.append(text_area)
             continue
         primary = by_key.get(area.pair_of or "") if area.pair_of else area

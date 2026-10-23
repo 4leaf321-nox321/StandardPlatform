@@ -123,6 +123,12 @@ TOOLS = {
     "server_status",
     "jobs_purge",
     "export_start",
+    "slide_templates",
+    "slides_list",
+    "slide_get",
+    "slide_create",
+    "slide_candidates",
+    "slide_update",
 }
 
 

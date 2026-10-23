@@ -293,10 +293,13 @@ def update_slide(
     template = _template(db, row.template_id)
     areas = {one["key"]: one for one in template.areas}
     content = {key: dict(value) for key, value in (row.content or {}).items()}
+    drafted = set(payload.ai_drafts or [])
     for key, text in (payload.texts or {}).items():
         if (areas.get(key) or {}).get("kind") != "text":
             raise InvalidValue(code("SLIDES", 31), f"글 영역이 아닙니다: {key}")
         content.setdefault(key, {})["text"] = text
+        # AI 가 쓴 초안인가 — 사람이 다시 저장하면(표시 없이) 풀린다.
+        content[key]["ai"] = key in drafted
     for key, picked in (payload.picks or {}).items():
         area = areas.get(key) or {}
         if area.get("kind") != "records" or area.get("fill") != "pick" or area.get("pair_of"):

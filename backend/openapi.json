@@ -20708,6 +20708,11 @@
               }
             ]
           },
+          "ai_draft": {
+            "type": "boolean",
+            "title": "Ai Draft",
+            "default": false
+          },
           "limit": {
             "type": "integer",
             "title": "Limit",
@@ -43417,6 +43422,20 @@
               }
             ],
             "title": "Texts"
+          },
+          "ai_drafts": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Ai Drafts"
           },
           "picks": {
             "anyOf": [

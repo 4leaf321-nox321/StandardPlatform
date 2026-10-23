@@ -150,6 +150,15 @@ function TextArea({
         <Badge variant="outline" className="text-xs font-normal">
           작성한 글
         </Badge>
+        {area.ai_draft && (
+          <Badge
+            variant="secondary"
+            className="text-xs font-normal"
+            title="AI 가 쓴 초안입니다 — 확인하고 수정해 저장하면 표시가 사라집니다."
+          >
+            AI 초안
+          </Badge>
+        )}
         {editable && onSave && draft === null && (
           <Button
             size="sm"

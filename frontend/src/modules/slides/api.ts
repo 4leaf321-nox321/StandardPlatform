@@ -122,6 +122,8 @@ export interface RenderedArea {
   link: AreaLink | null
   /** 글 영역의 글로 만든 기록. */
   made: LinkItem | null
+  /** 글 영역의 글이 AI(MCP)가 쓴 초안인가 — 사람이 다시 저장하면 풀린다. */
+  ai_draft?: boolean
   limit: number
   fields: { key: string; label: string }[]
   text: string

@@ -96,6 +96,10 @@ class SlidePatchIn(BaseModel):
     title: str | None = Field(default=None, min_length=1, max_length=200)
     texts: dict[str, str] | None = None
     """글 영역의 글 — 영역 키마다. 보낸 영역만 바뀐다."""
+    ai_drafts: list[str] | None = None
+    """이 요청의 `texts` 가운데 **AI 가 쓴 초안**인 영역(MCP 의 `slide_update` 가 채운다).
+    화면은
+    「AI 초안」 으로 보이고, 사람이 그 글을 다시 저장하면(이 칸 없이) 표시가 풀린다."""
     picks: dict[str, list[uuid.UUID]] | None = None
     """고르기 영역의 기록 — 영역 키마다 **통째로**. 보낸 영역만 바뀐다."""
     made: dict[str, uuid.UUID | None] | None = None
@@ -201,6 +205,8 @@ class AreaOut(BaseModel):
     """따라오는 영역을 장표에서 연결 · 해제하는 법 — 걸음이 둘 이상이면 없다."""
     made: LinkItemOut | None = None
     """글 영역의 글로 만든 기록."""
+    ai_draft: bool = False
+    """글 영역의 글이 AI 가 쓴 초안인가 — 사람이 아직 고치지 않았다."""
     limit: int = AREA_LIMIT
     problem: str | None = None
     """이 영역만 못 그린 이유 — 칸이 지워졌거나 조건이 이제 안 맞을 때. 장표는 나머지를

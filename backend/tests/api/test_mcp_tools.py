@@ -31,6 +31,7 @@ from sqlalchemy.orm import Session
 from app.main import app as fastapi_app
 from tests.api.conftest import Signed
 from tests.api.test_delete_plan import _only
+from tests.api.test_slides import world  # noqa: F401 — 장표 시험과 같은 세상
 
 SERVER_PY = Path(__file__).resolve().parents[3] / "mcp_server" / "server.py"
 
@@ -1721,3 +1722,52 @@ def test_규칙_기준을_도구로_정의하고_구성비를_읽고_건_보기�
         assert listed["total"] == cell["count"], cell
     runs = bot.call(server.metric_runs, slug)
     assert runs[0]["rules"][0]["name"] == "nature"
+
+
+# --- 장표(ADR 0037 4단계) ---------------------------------------------------------------
+
+
+def test_장표_도구로_틀을_보고_만들고_고르고_글_초안을_쓴다(
+    client: TestClient,
+    admin: Signed,
+    bot: Bot,
+    world: dict[str, Any],  # noqa: F811
+) -> None:
+    """선택 영역은 후보에서, 따라오는 영역은 저절로, 글은 「AI 초안」 으로 — 값은
+    플랫폼에서만."""
+    from tests.api.test_slides import _one_change_template
+
+    made = client.post(
+        "/api/slides/templates", json=_one_change_template(world), headers=admin.headers
+    )
+    assert made.status_code == 201, made.text
+    template = made.json()
+    listed = bot.call(server.slide_templates)
+    mine = next(one for one in listed if one["id"] == template["id"])
+    assert mine["subject_type_slug"] == world["model"]
+    assert {one["key"] for one in mine["areas"]} >= {"asis", "tobe", "risks", "opinion"}
+
+    slide = bot.call(server.slide_create, template["id"], world["models"]["A"]["id"])
+    found = bot.call(server.slide_candidates, slide["id"], "asis")
+    # 후보는 주제(모델 A)의 변경점만.
+    assert {one["label"] for one in found["items"]} == {"핀 수", "재질"}
+    pin = next(one["id"] for one in found["items"] if one["label"] == "핀 수")
+
+    shown = bot.call(
+        server.slide_update,
+        slide["id"],
+        picks={"asis": [pin]},
+        texts={"opinion": "핀 수 변경 — 접촉 불량 · 핀 변형 리스크 확인 필요"},
+    )
+    areas = {one["key"]: one for one in shown["areas"]}
+    assert areas["asis"]["records"][0]["values"] == {"변경 전": "핀 수 전"}
+    assert areas["asis"]["records"][0]["line"] == "부품: 커넥터"
+    assert [one["label"] for one in areas["risks"]["records"]] == ["접촉 불량", "핀 변형"]
+    assert areas["risks"]["follows"] == "AS-IS"
+    # AI 가 쓴 글은 초안으로 남는다 — 사람이 화면에서 고치면 풀린다.
+    assert areas["opinion"]["ai_draft"] is True
+
+    again = bot.call(server.slide_get, slide["id"])
+    assert again["rendered_at"] and again["subject"]["label"] == "A"
+    listed_slides = bot.call(server.slides_list, subject_id=world["models"]["A"]["id"])
+    assert [one["id"] for one in listed_slides["items"]] == [slide["id"]]

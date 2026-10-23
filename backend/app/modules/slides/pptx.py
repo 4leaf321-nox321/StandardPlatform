@@ -400,7 +400,11 @@ def _text_table(page: Any, area: AreaOut, block: _Block, top: float, scale: floa
     table = _table(page, block, top)
     table.columns[0].width = Inches(block.width)
     _write(
-        table.cell(0, 0), f"{area.title} (작성한 글)", HEAD_PT * scale, bold=True, fill=HEAD
+        table.cell(0, 0),
+        f"{area.title} ({'작성한 글 · AI 초안' if area.ai_draft else '작성한 글'})",
+        HEAD_PT * scale,
+        bold=True,
+        fill=HEAD,
     )
     _write(table.cell(1, 0), area.text or "—", VALUE_PT * scale)
 

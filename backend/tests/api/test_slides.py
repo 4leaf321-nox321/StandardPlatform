@@ -771,3 +771,29 @@ def test_pptx_한_장에_안_들면_넘친_기록을_계속_장으로_빠뜨리�
         if shape.has_text_frame
     ]
     assert any("(계속 1/" in one for one in titles)
+
+
+# --- 4단계 — AI 초안 ----------------------------------------------------------------
+
+
+def test_AI_가_쓴_글은_초안으로_보이고_사람이_다시_저장하면_풀린다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    slide = _slide(
+        client, member, _made_template(client, admin, world), world["models"]["A"]["id"]
+    )
+    path = f"/api/slides/{slide['id']}"
+    drafted = client.patch(
+        path,
+        json={
+            "texts": {"opinion": "핀 수 변경의 접촉 불량(상) 대책 확인 필요"},
+            "ai_drafts": ["opinion"],
+        },
+        headers=member.headers,
+    )
+    assert drafted.status_code == 200, drafted.text
+    assert _areas(drafted.json())["opinion"]["ai_draft"] is True
+    human = client.patch(
+        path, json={"texts": {"opinion": "확인 완료 — 12월 재검토"}}, headers=member.headers
+    )
+    assert _areas(human.json())["opinion"]["ai_draft"] is False
