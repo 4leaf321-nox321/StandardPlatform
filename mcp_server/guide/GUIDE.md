@@ -44,6 +44,7 @@ GUIDE_VERSION: 2026-10-16c
 | 어제 무슨 일이 있었나 — 전체 | `audit_recent` | **부서 관리자 이상.** 시간 · 사람으로는 못 거른다 — 최근 것부터 받아 본다 |
 | 계층(트리)을 한 단계씩 | `object_tree(parent=)` | 깊이 전부는 `rdf_query` 의 `+` 경로 |
 | **이것과 이어진 것들**(한 걸음 너머) | `graph_neighbors(object_id, depth=, relations=, types=)` | 화면의 지식 그래프와 같은 길. **`truncated` 면 잘린 것** — 좁혀서 다시 |
+| **두 객체가 어떻게 이어져 있나** | `graph_path(source_id, target_id, max_depth=, relations=, types=)` | 가장 짧은 길들. **`truncated` 면 「없다」 가 아니라 「찾다가 멈춤」** — 좁혀서 다시 |
 | 어느 타입에서 어디로 갈 수 있나 | `graph_overview` | 관계 이름을 짐작하지 않는다 — 질의를 쓰기 전에 |
 | 지우기·합치기 전에 무엇이 걸렸나 | `object_references` | 안 보이는 것은 수만(조회를 부서로 좁힌 설치) |
 | 어셈블리 총 무게처럼 「아래 전부」 의 합 | `object_rollup` | `missing` 을 함께 말한다 |

@@ -68,6 +68,7 @@ TOOLS = {
     "object_rollup",
     "object_tree",
     "graph_neighbors",
+    "graph_path",
     "graph_overview",
     "bulk_edit",
     "bulk_edit_undo",

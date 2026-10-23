@@ -28,6 +28,8 @@ from app.modules.graph.schemas import (
     NeighborhoodOut,
     NodeOut,
     OverviewOut,
+    PathOut,
+    PathStepsOut,
     SearchHitOut,
     SubgraphOut,
     TypeEdgeOut,
@@ -39,7 +41,7 @@ from app.modules.objects.schemas import LogCountOut
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import NavGroup, ObjectType, RelationType
 from app.modules.workspaces.models import Workspace
-from app.shared import system_sources
+from app.shared import querycap, system_sources
 from app.shared.auth import current_user
 from app.shared.errors import NotFound, code
 from app.shared.permissions import visible_owner_clause
@@ -582,6 +584,140 @@ def neighborhood(
                 else []
             )
         ],
+    )
+
+
+PATH_DEFAULT_DEPTH = 6
+PATH_DEFAULT_LIMIT = 3
+PATH_MAX_LIMIT = 10
+
+
+@router.get("/path", response_model=PathOut)
+def path(
+    source: uuid.UUID = Query(description="출발 객체"),
+    target: uuid.UUID = Query(description="도착 객체"),
+    max_depth: int | None = Query(
+        default=None,
+        description=(
+            f"길의 최대 길이(선 수). 기본 {PATH_DEFAULT_DEPTH}, 최대 {graph.PATH_MAX_DEPTH}"
+        ),
+    ),
+    relations: str | None = Query(default=None, description="따라갈 관계 slug, 쉼표로"),
+    types: str | None = Query(
+        default=None,
+        description=(
+            "거쳐 갈 타입 slug, 쉼표로. 인터페이스면 구현 타입 전부. 출발 · 도착은 늘 든다"
+        ),
+    ),
+    records: bool = Query(
+        default=False, description="기록(ADR 0011)을 거쳐 가는 길도 찾는다. 기본은 안 거친다"
+    ),
+    limit: int | None = Query(
+        default=None,
+        description=(
+            f"같은 길이의 길 몇 개까지. 기본 {PATH_DEFAULT_LIMIT}, 최대 {PATH_MAX_LIMIT}"
+        ),
+    ),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> PathOut:
+    """두 객체 사이의 **가장 짧은 길들** — 「A 와 B 는 어떻게 이어져 있나」.
+
+    관계와 참조 칸을 **방향과 상관없이** 따라간다(거슬러 가는 길도 길이다 — 선의 방향은 답에
+    실린다). 이웃 그림과 달리 노드마다 30개로 자르지 않는다 — 잘린 곳의 길을 「없다」 로 답하지
+    않으려고. 대신 들른 노드 수 · 노드당 선 수에 상한이 있고, 닿으면 `truncated` 다 — 그때
+    못 찾은 것은 「없다」 가 아니다. 기록(ADR 0011)은 `records` 일 때만 거친다.
+    """
+    depth_n = _clamp(max_depth, default=PATH_DEFAULT_DEPTH, maximum=graph.PATH_MAX_DEPTH)
+    limit_n = _clamp(limit, default=PATH_DEFAULT_LIMIT, maximum=PATH_MAX_LIMIT)
+    ends = {
+        row.id: row
+        for row in db.scalars(
+            select(ObjectInstance).where(
+                ObjectInstance.id.in_([source, target]),
+                ObjectInstance.deleted_at.is_(None),
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+            )
+        )
+    }
+    if source not in ends or target not in ends:
+        # 없는 것과 안 보이는 것을 같은 말로 답한다 — objects 와 같은 규칙.
+        raise NotFound(code("GRAPH", 1), "객체를 찾을 수 없습니다.")
+
+    all_types = {row.id: row for row in db.scalars(select(ObjectType))}
+    type_ids: list[uuid.UUID] | None = None
+    if asked_types := _csv(types):
+        wanted = interfaces.load_ends(db).types_of(asked_types)
+        type_ids = [row.id for row in all_types.values() if row.slug in wanted]
+        for end_row in ends.values():
+            if end_row.type_id not in type_ids:
+                type_ids.append(end_row.type_id)
+
+    querycap.cap(db)
+    found = graph.shortest_paths(
+        db,
+        source=source,
+        target=target,
+        user=user,
+        max_depth=depth_n,
+        relations=_csv(relations),
+        type_ids=type_ids,
+        records=records,
+        limit=limit_n,
+    )
+
+    order = list(dict.fromkeys(node for nodes in found.nodes for node in nodes))
+    for end in (source, target):
+        if end not in order:
+            order.append(end)
+    edges = {edge.id: edge for one in found.edges for edge in one}
+    rows = {
+        row.id: row
+        for row in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(order)))
+    }
+    degrees = _degrees(db, order, user, _system_types(all_types), skip_logs=not records)
+    shown: dict[uuid.UUID, int] = {}
+    for edge in edges.values():
+        shown[edge.src] = shown.get(edge.src, 0) + 1
+        shown[edge.dst] = shown.get(edge.dst, 0) + 1
+    workspaces = _workspace_slugs(db)
+    nodes: list[NodeOut] = []
+    for node_id in order:
+        row = rows.get(node_id)
+        if row is None:
+            continue
+        object_type = all_types.get(row.type_id)
+        degree = degrees.get(node_id, 0)
+        nodes.append(
+            NodeOut(
+                id=row.id,
+                label=row.label,
+                key=row.key,
+                type_slug=object_type.slug if object_type else "",
+                type_label=object_type.label if object_type else "알 수 없음",
+                status=row.status,
+                owner_workspace_slug=(
+                    workspaces.get(row.owner_workspace_id) if row.owner_workspace_id else None
+                ),
+                degree=degree,
+                truncated=degree > shown.get(node_id, 0),
+            )
+        )
+    kinds = _kinds(db)
+    return PathOut(
+        source=source,
+        target=target,
+        found=found.length is not None,
+        length=found.length,
+        paths=[
+            PathStepsOut(nodes=nodes_of, edges=[edge.id for edge in edges_of])
+            for nodes_of, edges_of in zip(found.nodes, found.edges, strict=True)
+        ],
+        nodes=nodes,
+        edges=[_edge_out(edge, kinds) for edge in edges.values()],
+        max_depth=depth_n,
+        visited=found.visited,
+        truncated=found.truncated,
     )
 
 

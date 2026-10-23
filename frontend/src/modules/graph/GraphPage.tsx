@@ -29,6 +29,7 @@ import {
   Maximize2,
   Minimize2,
   RotateCw,
+  Route,
   Search,
   Share2,
   Waypoints,
@@ -42,6 +43,7 @@ import type {
   GraphNode,
   Neighborhood,
   Overview,
+  PathResult,
   SearchHit,
   Subgraph,
 } from '@/modules/graph/api'
@@ -79,7 +81,11 @@ type Mode = 'schema' | 'explore'
 type ColorBy = 'type' | 'group' | 'workspace' | 'status' | 'community'
 
 /** 탐색의 씨앗 — 어디서 시작하나. */
-export type Seed = { kind: 'focus'; id: string } | { kind: 'type'; slugs: string[]; offset: number }
+export type Seed =
+  | { kind: 'focus'; id: string }
+  | { kind: 'type'; slugs: string[]; offset: number }
+  /** 두 객체 사이의 길 — 주소로는 `?focus=<출발>&to=<도착>`. */
+  | { kind: 'path'; from: string; to: string }
 
 /**
  * 고를 수 있는 값들 — **기본은 낮게, 갈 수 있는 데까지는 넉넉히.**
@@ -115,6 +121,18 @@ interface Explored {
   origin: Map<string, string>
   /** 시작점을 가리키는 기록(ADR 0011) — 그림에 안 싣고 수와 목록 고리로 보인다. */
   logCounts: LogCount[]
+  /** 길 찾기의 답 — 길을 그렸을 때만. 펼쳐도 남는다(그 그림이 무엇에서 시작했는지). */
+  path: PathInfo | null
+}
+
+interface PathInfo {
+  target: string
+  found: boolean
+  length: number | null
+  count: number
+  visited: number
+  maxDepth: number
+  truncated: boolean
 }
 
 function mergeNodes(
@@ -137,6 +155,7 @@ function mergeNeighborhood(previous: Explored | null, fresh: Neighborhood): Expl
   return {
     ...mergeNodes(previous, fresh, previous ? fresh.focus : null),
     focus: previous ? previous.focus : fresh.focus,
+    path: previous?.path ?? null,
     // 확장은 늘 1단계로 부르므로 안내문의 상한은 **첫 응답 것**을 지킨다.
     limits: previous?.limits ?? {
       depth: fresh.depth,
@@ -149,9 +168,29 @@ function mergeNeighborhood(previous: Explored | null, fresh: Neighborhood): Expl
   }
 }
 
+function fromPath(fresh: PathResult): Explored {
+  return {
+    ...mergeNodes(null, fresh, null),
+    focus: fresh.source,
+    limits: { node_limit: fresh.nodes.length },
+    page: null,
+    logCounts: [],
+    path: {
+      target: fresh.target,
+      found: fresh.found,
+      length: fresh.length,
+      count: fresh.paths.length,
+      visited: fresh.visited,
+      maxDepth: fresh.max_depth,
+      truncated: fresh.truncated,
+    },
+  }
+}
+
 function fromSubgraph(fresh: Subgraph): Explored {
   return {
     ...mergeNodes(null, fresh, null),
+    path: null,
     focus: null,
     limits: { node_limit: fresh.limit },
     page: {
@@ -222,6 +261,8 @@ function writeControls(params: URLSearchParams, controls: Controls): void {
 
 function seedFromParams(params: URLSearchParams): Seed | null {
   const focus = params.get('focus')
+  const to = params.get('to')
+  if (focus && to) return { kind: 'path', from: focus, to }
   if (focus) return { kind: 'focus', id: focus }
   const type = params.get('type')
   if (type) return { kind: 'type', slugs: type.split(',').filter(Boolean), offset: 0 }
@@ -252,16 +293,18 @@ export default function GraphPage() {
   // 올 때(재마운트 없음) 옛 그림이 남는다. 쪽(offset)만은 주소에 안 적어 여기 든다.
   // 값이 같으면 같은 객체여야 한다 — 매번 새 객체면 색 기준만 바꿔도 그림을 다시 읽는다.
   const focusParam = params.get('focus')
+  const toParam = params.get('to')
   const typeParam = params.get('type')
   const urlSeed = useMemo(
     () =>
       seedFromParams(
         new URLSearchParams({
           ...(focusParam ? { focus: focusParam } : {}),
+          ...(toParam ? { to: toParam } : {}),
           ...(typeParam ? { type: typeParam } : {}),
         }),
       ),
-    [focusParam, typeParam],
+    [focusParam, toParam, typeParam],
   )
   const [offset, setOffset] = useState(0)
   const seed = useMemo<Seed | null>(
@@ -302,8 +345,13 @@ export default function GraphPage() {
         (current) => {
           const query = new URLSearchParams(current)
           query.delete('focus')
+          query.delete('to')
           query.delete('type')
           if (next?.kind === 'focus') query.set('focus', next.id)
+          if (next?.kind === 'path') {
+            query.set('focus', next.from)
+            query.set('to', next.to)
+          }
           if (next?.kind === 'type') query.set('type', next.slugs.join(','))
           return query
         },
@@ -829,16 +877,25 @@ function ExploreView({
     const request =
       seed.kind === 'focus'
         ? query(seed.id).then((fresh) => mergeNeighborhood(null, fresh))
-        : graphApi
-            .subgraph({
-              types: seed.slugs,
-              relations: [...relationFilter],
-              // 「한 타입 전부」 도 같은 상한을 쓴다 — 화면에서 고른 값이 여기만
-              // 안 먹으면 「왜 저기서는 3,000개가 되고 여기서는 안 되지」 가 된다.
-              limit: nodeLimit,
-              offset: seed.offset,
-            })
-            .then(fromSubgraph)
+        : seed.kind === 'path'
+          ? graphApi
+              .path({
+                source: seed.from,
+                target: seed.to,
+                relations: [...relationFilter],
+                types: [...typeFilter],
+              })
+              .then(fromPath)
+          : graphApi
+              .subgraph({
+                types: seed.slugs,
+                relations: [...relationFilter],
+                // 「한 타입 전부」 도 같은 상한을 쓴다 — 화면에서 고른 값이 여기만
+                // 안 먹으면 「왜 저기서는 3,000개가 되고 여기서는 안 되지」 가 된다.
+                limit: nodeLimit,
+                offset: seed.offset,
+              })
+              .then(fromSubgraph)
     request
       .then((fresh) => {
         if (cancelled) return
@@ -854,7 +911,7 @@ function ExploreView({
     return () => {
       cancelled = true
     }
-  }, [seed, query, relationFilter, reloadTick])
+  }, [seed, query, relationFilter, typeFilter, reloadTick])
 
   const pickFocus = (id: string | null) => onSeed(id ? { kind: 'focus', id } : null)
 
@@ -1298,6 +1355,13 @@ function ExploreView({
                     </p>
                   </div>
                 )}
+                {explored?.path && seed?.kind === 'path' && !loading && (
+                  <PathNotice
+                    path={explored.path}
+                    filtered={relationFilter.size + typeFilter.size > 0}
+                    onClear={() => onSeed({ kind: 'focus', id: seed.from })}
+                  />
+                )}
                 {explored && nodeList.length === 1 && !loading && (
                   <div className="text-muted-foreground absolute inset-x-0 top-3 text-center text-xs">
                     연결된 관계가 없습니다
@@ -1396,6 +1460,12 @@ function ExploreView({
               void expand(picked.id)
             }}
             onFocus={() => pickFocus(picked.id)}
+            onPathTo={
+              explored?.focus && picked.id !== explored.focus
+                ? () => onSeed({ kind: 'path', from: explored.focus!, to: picked.id })
+                : undefined
+            }
+            onPathFind={(target) => onSeed({ kind: 'path', from: picked.id, to: target })}
             onSelect={selectAndGo}
             onClose={() => setSelected(null)}
           />
@@ -1405,7 +1475,13 @@ function ExploreView({
             링이 시작점, 「+N」 은 화면에 안 실린 관계의 수입니다.
           </div>
         )}
-        {explored && (
+        {explored?.path && (
+          <p className="text-muted-foreground mt-3 text-xs">
+            연결 경로는 노드마다 자르지 않고 탐색합니다 — {explored.path.maxDepth}단계까지, 들른
+            노드 수와 노드당 관계 수에만 상한이 있습니다. 기록을 거치는 경로는 탐색하지 않습니다.
+          </p>
+        )}
+        {explored && !explored.path && (
           <p className="text-muted-foreground mt-3 text-xs">
             {explored.limits.depth !== undefined
               ? `한 번에 ${explored.limits.depth}단계 · 노드당 이웃 ${explored.limits.fanout}개 · `
@@ -1420,6 +1496,109 @@ function ExploreView({
 
 // --- 고른 노드 -----------------------------------------------------------------
 
+/** 길 찾기의 답을 그림 위에 — **못 찾은 것과 찾다가 멈춘 것을 가른다.** */
+function PathNotice({
+  path,
+  filtered,
+  onClear,
+}: {
+  path: PathInfo
+  filtered: boolean
+  onClear: () => void
+}) {
+  return (
+    <div className="bg-background/90 absolute inset-x-0 top-3 mx-auto flex w-fit max-w-[90%] items-center gap-2 rounded border px-3 py-1.5 text-xs shadow-sm">
+      <Route className="size-3.5 shrink-0" />
+      {path.found ? (
+        <span>
+          가장 짧은 연결 경로 <b>{path.length}단계</b>
+          {path.count > 1 ? ` · ${path.count}개` : ''}
+        </span>
+      ) : path.truncated ? (
+        <span className="text-amber-600 dark:text-amber-400">
+          탐색 중 상한에 도달했습니다 — 경로가 없다는 뜻이 아닙니다. 관계 · 타입 필터로 범위를 좁혀
+          다시 탐색하세요.
+        </span>
+      ) : (
+        <span>
+          {path.maxDepth}단계 안에 연결 경로가 없습니다
+          {filtered ? ' — 관계 · 타입 필터를 넓혀 보세요.' : '.'}
+        </span>
+      )}
+      {path.found && path.truncated && (
+        <span className="text-amber-600 dark:text-amber-400">
+          · 상한에 도달해 더 짧은 경로를 놓쳤을 수 있습니다
+        </span>
+      )}
+      <Button size="xs" variant="ghost" onClick={onClear}>
+        경로 해제
+      </Button>
+    </div>
+  )
+}
+
+/** 길의 상대를 고른다 — 이름 · 식별자로 찾고 누르면 그 사이의 길을 그린다. */
+function PathFinder({ exclude, onPick }: { exclude: string; onPick: (id: string) => void }) {
+  const [text, setText] = useState('')
+  const [hits, setHits] = useState<SearchHit[]>([])
+  const [error, setError] = useState<Error | null>(null)
+  useEffect(() => {
+    const wanted = text.trim()
+    if (wanted.length < 1) {
+      setHits([])
+      return
+    }
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      graphApi
+        .search(wanted)
+        .then((found) => {
+          if (!cancelled) setHits(found.filter((one) => one.id !== exclude).slice(0, 8))
+        })
+        .catch((caught: unknown) => {
+          if (!cancelled) setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+        })
+    }, 250)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [text, exclude])
+  return (
+    <div className="space-y-1.5 rounded-md border border-dashed p-2">
+      <Input
+        autoFocus
+        value={text}
+        onChange={(event) => setText(event.target.value)}
+        placeholder="상대 객체 — 이름 · 식별자로 검색"
+        aria-label="연결 경로의 상대 검색"
+        className="h-8 text-xs"
+      />
+      {error && <ErrorNotice error={error} />}
+      {hits.length > 0 && (
+        <ul className="space-y-0.5">
+          {hits.map((one) => (
+            <li key={one.id}>
+              <button
+                type="button"
+                className="hover:bg-muted w-full truncate rounded px-1.5 py-1 text-left text-xs"
+                onClick={() => onPick(one.id)}
+              >
+                {one.label}
+                <span className="text-muted-foreground">
+                  {' '}
+                  · {one.type_label}
+                  {one.key ? ` · ${one.key}` : ''}
+                </span>
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 interface NodeDetailProps {
   node: GraphNode
   /** 화면에 안 실린 관계의 수. */
@@ -1431,6 +1610,10 @@ interface NodeDetailProps {
   typeLabel: string
   onExpand: () => void
   onFocus: () => void
+  /** 시작점에서 이 노드까지의 길 — 시작점이 따로 있을 때만. */
+  onPathTo?: () => void
+  /** 이 노드에서 고른 객체까지의 길. */
+  onPathFind: (target: string) => void
   onSelect: (id: string) => void
   onClose: () => void
 }
@@ -1455,9 +1638,12 @@ function NodeDetail({
   typeLabel,
   onExpand,
   onFocus,
+  onPathTo,
+  onPathFind,
   onSelect,
   onClose,
 }: NodeDetailProps) {
+  const [finding, setFinding] = useState(false)
   const profile = useResource(
     () => objectApi.profile(node.type_slug, node.id),
     [node.type_slug, node.id],
@@ -1529,7 +1715,22 @@ function NodeDetail({
             상세 보기
           </Link>
         </Button>
+        {onPathTo && (
+          <Button size="sm" variant="outline" disabled={loading} onClick={onPathTo}>
+            <Route className="mr-1 size-3.5" />
+            시작점부터 연결 경로
+          </Button>
+        )}
+        <Button
+          size="sm"
+          variant={finding ? 'secondary' : 'outline'}
+          onClick={() => setFinding((on) => !on)}
+        >
+          <Route className="mr-1 size-3.5" />
+          연결 경로
+        </Button>
       </div>
+      {finding && <PathFinder exclude={node.id} onPick={onPathFind} />}
 
       {profile.error && <ErrorNotice error={profile.error} />}
       {profile.data?.object.description && (

@@ -102,6 +102,36 @@ export interface SearchHit {
   type_label: string
 }
 
+/** 길 하나 — `edges[k]` 가 `nodes[k]` 와 `nodes[k+1]` 을 잇는다. */
+export interface PathSteps {
+  nodes: string[]
+  edges: string[]
+}
+
+/** 두 객체 사이의 가장 짧은 길들. 못 찾았어도 출발 · 도착은 `nodes` 에 든다. */
+export interface PathResult {
+  source: string
+  target: string
+  found: boolean
+  /** 선 수. 못 찾았으면 null. */
+  length: number | null
+  paths: PathSteps[]
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+  max_depth: number
+  /** 찾느라 들른 노드 수. */
+  visited: number
+  /** 상한에 닿아 덜 찾았다 — **못 찾았어도 「길이 없다」 가 아니다.** */
+  truncated: boolean
+}
+
+export interface PathQuery {
+  source: string
+  target: string
+  relations?: string[]
+  types?: string[]
+}
+
 export interface NeighborhoodQuery {
   focus: string
   depth?: number
@@ -139,6 +169,13 @@ export const graphApi = {
   /** 시작점에서 depth 단계 — **서버가 상한을 강제한다.** */
   neighborhood: (query: NeighborhoodQuery) =>
     api.get<Neighborhood>(`/graph/neighborhood${neighborhoodQuery(query)}`),
+  /** 두 객체 사이의 가장 짧은 길들 — 노드마다 자르지 않고 찾고, 상한에 닿으면 그렇다고 말한다. */
+  path: (query: PathQuery) => {
+    const params = new URLSearchParams({ source: query.source, target: query.target })
+    if (query.relations?.length) params.set('relations', query.relations.join(','))
+    if (query.types?.length) params.set('types', query.types.join(','))
+    return api.get<PathResult>(`/graph/path?${params.toString()}`)
+  },
   /** 한 타입의 인스턴스 전부 — **「전부」 를 묻는 사람에게 "N개 중 M개" 라고 답한다.** */
   subgraph: (query: SubgraphQuery) => api.get<Subgraph>(`/graph/subgraph${subgraphQuery(query)}`),
 }

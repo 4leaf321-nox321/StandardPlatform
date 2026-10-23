@@ -583,3 +583,197 @@ def link_partner_ids(db: Session, *, ids: list[uuid.UUID]) -> set[uuid.UUID]:
     for mine, other in ((link.src_id, link.dst_id), (link.dst_id, link.src_id)):
         out.update(db.scalars(select(other).where(mine.in_(ids))))
     return out
+
+
+# --- 두 객체 사이의 길 ---------------------------------------------------------
+#
+# 「A 와 B 는 어떻게 이어져 있나」. 이웃 그림은 노드마다 fanout 개까지만 데려오므로, 그것을
+# 이어 붙여 길을 찾으면 잘린 곳에 있던 길을 「없다」 로 답한다. 그래서 길 찾기는 **양 끝에서
+# 한 층씩**(작은 쪽을 넓힌다) 넓히고, 상한에 닿으면 「없다」 가 아니라 「찾다가 멈췄다」 고
+# 말한다. 선은 이웃 그림과 같은 둘(관계 · 참조 칸) — 보이는 것 · 지운 것 · 기록을 다루는
+# 규칙이 같다.
+
+#: 길 하나의 최대 길이(선 수). 그 너머의 「이어짐」 은 사람에게 뜻이 없고, 탐색만 커진다.
+PATH_MAX_DEPTH = 8
+#: 길 찾기가 들고 다니는 노드 수 상한 — 넘으면 멈추고 `truncated`.
+PATH_VISIT_LIMIT = 50_000
+#: 노드 하나에서 따라가는 선 수 상한. 허브(「본사」)가 이웃 수만 개를 끌고 오지 않게 —
+#: 닿으면 그 너머를 덜 본 것이라 `truncated`.
+PATH_FANOUT = 2_000
+#: 한 번에 넓히는 frontier 조각(`IN (...)` 의 크기).
+_PATH_CHUNK = 1_000
+
+PathEdge = Edge | refedges.RefEdge
+
+
+@dataclass(frozen=True)
+class PathSearch:
+    """길 찾기의 답 — 같은 길이의 가장 짧은 길들."""
+
+    nodes: list[list[uuid.UUID]]
+    """길마다 노드 차례(출발 → 도착)."""
+    edges: list[list[PathEdge]]
+    """길마다 선 차례 — `nodes[i][k]` 와 `nodes[i][k+1]` 을 잇는 것이 `edges[i][k]`."""
+    length: int | None
+    """선 수. 못 찾았으면 None."""
+    visited: int
+    """양쪽에서 들른 노드 수."""
+    truncated: bool
+    """상한(노드 수 · 노드당 선 수)에 닿아 덜 찾았다 — **길이 없다는 뜻이 아니다.**"""
+
+
+def _path_step(
+    db: Session,
+    frontier: list[uuid.UUID],
+    *,
+    user: User,
+    relations: list[str] | None,
+    type_ids: list[uuid.UUID] | None,
+    records: bool,
+) -> tuple[list[PathEdge], bool]:
+    """frontier 에서 한 걸음 — (선들, 노드당 선 상한에 닿았나)."""
+    found: list[PathEdge] = []
+    for part in chunks(frontier, _PATH_CHUNK):
+        found += neighbor_edges(
+            db,
+            frontier=part,
+            user=user,
+            fanout=PATH_FANOUT,
+            relations=relations,
+            type_ids=type_ids,
+        )
+        found += refedges.neighbor_edges(
+            db,
+            frontier=part,
+            user=user,
+            fanout=PATH_FANOUT,
+            relations=relations,
+            type_ids=type_ids,
+            skip_logs=not records,
+        )
+    here = set(frontier)
+    per_anchor: dict[uuid.UUID, int] = {}
+    for edge in found:
+        for end in {edge.src, edge.dst} & here:
+            per_anchor[end] = per_anchor.get(end, 0) + 1
+    return found, any(n >= PATH_FANOUT for n in per_anchor.values())
+
+
+def _chains(
+    parents: dict[uuid.UUID, list[tuple[uuid.UUID, PathEdge]]],
+    node: uuid.UUID,
+    limit: int,
+) -> list[tuple[list[uuid.UUID], list[PathEdge]]]:
+    """node 에서 그 쪽의 출발점까지 거꾸로 — (노드들, 선들), **출발점이 먼저**.
+    limit 개까지."""
+    if not parents[node]:
+        return [([node], [])]
+    out: list[tuple[list[uuid.UUID], list[PathEdge]]] = []
+    for previous, edge in parents[node]:
+        for nodes, edges in _chains(parents, previous, limit):
+            out.append(([*nodes, node], [*edges, edge]))
+            if len(out) >= limit:
+                return out
+    return out
+
+
+def shortest_paths(
+    db: Session,
+    *,
+    source: uuid.UUID,
+    target: uuid.UUID,
+    user: User,
+    max_depth: int = 6,
+    relations: list[str] | None = None,
+    type_ids: list[uuid.UUID] | None = None,
+    records: bool = False,
+    limit: int = 3,
+) -> PathSearch:
+    """source 에서 target 까지 **가장 짧은 길들**(같은 길이로 limit 개까지).
+
+    방향은 보지 않는다 — 「이 부품이 들어간 제품」 처럼 관계를 거슬러 가는 길도 길이다(선의
+    방향은 답에 그대로 실린다). 기록(ADR 0011)을 거쳐 가는 길은 `records` 일 때만 — 인기 모델은
+    기록 10만 건이 가리켜서, 기록으로 넓히면 거의 모든 것이 두 걸음 안에 이어진다.
+    """
+    max_depth = max(1, min(max_depth, PATH_MAX_DEPTH))
+    if source == target:
+        return PathSearch(nodes=[[source]], edges=[[]], length=0, visited=1, truncated=False)
+    dist: tuple[dict[uuid.UUID, int], dict[uuid.UUID, int]] = ({source: 0}, {target: 0})
+    parents: tuple[
+        dict[uuid.UUID, list[tuple[uuid.UUID, PathEdge]]],
+        dict[uuid.UUID, list[tuple[uuid.UUID, PathEdge]]],
+    ] = ({source: []}, {target: []})
+    frontier: list[list[uuid.UUID]] = [[source], [target]]
+    depth = [0, 0]
+    truncated = False
+    meet: list[uuid.UUID] = []
+    while frontier[0] and frontier[1] and depth[0] + depth[1] < max_depth:
+        if len(dist[0]) + len(dist[1]) >= PATH_VISIT_LIMIT:
+            truncated = True
+            break
+        side = 0 if len(frontier[0]) <= len(frontier[1]) else 1
+        here = set(frontier[side])
+        found, capped = _path_step(
+            db,
+            frontier[side],
+            user=user,
+            relations=relations,
+            type_ids=type_ids,
+            records=records,
+        )
+        truncated = truncated or capped
+        mine, theirs = dist[side], dist[1 - side]
+        step = depth[side] + 1
+        nxt: list[uuid.UUID] = []
+        for edge in found:
+            for near, far in ((edge.src, edge.dst), (edge.dst, edge.src)):
+                if near not in here:
+                    continue
+                if far not in mine:
+                    mine[far] = step
+                    parents[side][far] = [(near, edge)]
+                    nxt.append(far)
+                elif mine[far] == step and all(e.id != edge.id for _, e in parents[side][far]):
+                    parents[side][far].append((near, edge))
+        depth[side] = step
+        frontier[side] = nxt
+        touching = [node for node in nxt if node in theirs]
+        if touching:
+            best = min(dist[0][node] + dist[1][node] for node in touching)
+            meet = [node for node in touching if dist[0][node] + dist[1][node] == best]
+            break
+    if not meet:
+        return PathSearch(
+            nodes=[],
+            edges=[],
+            length=None,
+            visited=len(dist[0]) + len(dist[1]),
+            truncated=truncated,
+        )
+    out_nodes: list[list[uuid.UUID]] = []
+    out_edges: list[list[PathEdge]] = []
+    seen: set[tuple[uuid.UUID, ...]] = set()
+    for node in meet:
+        for head_nodes, head_edges in _chains(parents[0], node, limit):
+            for tail_nodes, tail_edges in _chains(parents[1], node, limit):
+                nodes = head_nodes + list(reversed(tail_nodes))[1:]
+                edges = head_edges + list(reversed(tail_edges))
+                signature = tuple(edge.id for edge in edges)
+                if signature in seen:
+                    continue
+                seen.add(signature)
+                out_nodes.append(nodes)
+                out_edges.append(edges)
+                if len(out_nodes) >= limit:
+                    break
+            if len(out_nodes) >= limit:
+                break
+        if len(out_nodes) >= limit:
+            break
+    return PathSearch(
+        nodes=out_nodes,
+        edges=out_edges,
+        length=len(out_edges[0]),
+        visited=len(dist[0]) + len(dist[1]),
+        truncated=truncated,
+    )

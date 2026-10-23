@@ -827,6 +827,12 @@ def test_이어진_것을_질의어_없이_훑는다(bot: Bot) -> None:
     none = bot.call(server.graph_neighbors, top["id"], depth=2, relations=["없는관계"])
     assert [one["label"] for one in none["nodes"]] == ["상위"]
 
+    # 두 객체 사이의 길 — 양 끝을 알면 펼쳐 이어 붙이지 않고 한 번에.
+    path = bot.call(server.graph_path, leaf["id"], top["id"])
+    assert path["found"] is True and path["length"] == 2
+    assert path["paths"][0]["nodes"] == [leaf["id"], middle["id"], top["id"]]
+    assert bot.call(server.graph_path, leaf["id"], top["id"], max_depth=1)["found"] is False
+
     # 타입 지형 — 질의를 쓰기 전에 어디로 갈 수 있는지 본다.
     shape = bot.call(server.graph_overview)
     assert any(one["slug"] == part for one in shape["nodes"])

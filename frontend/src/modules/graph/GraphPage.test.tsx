@@ -10,7 +10,7 @@ import userEvent from '@testing-library/user-event'
 import { MemoryRouter } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { Neighborhood, Overview, Subgraph } from '@/modules/graph/api'
+import type { Neighborhood, Overview, PathResult, Subgraph } from '@/modules/graph/api'
 
 vi.mock('@/shared/auth/AuthContext', () => ({
   useAuth: () => ({ user: { is_system_admin: true, memberships: [] } }),
@@ -156,6 +156,7 @@ const graphApi = vi.hoisted(() => ({
   search: vi.fn(),
   neighborhood: vi.fn(),
   subgraph: vi.fn(),
+  path: vi.fn(),
 }))
 vi.mock('@/modules/graph/api', () => ({ graphApi }))
 const objectApi = vi.hoisted(() => ({
@@ -515,6 +516,81 @@ describe('지식 그래프', () => {
     // 관계 칩은 이웃을 부른 **뒤에** 그려진다 — 부른 것을 본 순간 바로 찾으면 느린 CI 에서만
     // 없다고 나온다(v0.2.0 에서 실제로 막혔다). 그려질 때까지 기다린다.
     expect(await screen.findByRole('checkbox', { name: /공급받음/ })).toBeChecked()
+  })
+})
+
+describe('두 객체 사이의 길', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  const FOUND: PathResult = {
+    source: 'a',
+    target: 'b',
+    found: true,
+    length: 2,
+    paths: [{ nodes: ['a', 'hub', 'b'], edges: ['e1', 'e2'] }],
+    nodes: NEIGHBORHOOD.nodes,
+    edges: NEIGHBORHOOD.edges,
+    max_depth: 6,
+    visited: 12,
+    truncated: false,
+  }
+
+  it('?focus=&to= 로 들어오면 길을 찾아 그리고 길이를 말한다', async () => {
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    graphApi.path.mockResolvedValue(FOUND)
+    await mount('/graph?focus=a&to=b')
+    await waitFor(() => expect(screen.getByText('2단계')).toBeInTheDocument())
+    expect(graphApi.path).toHaveBeenCalledWith(
+      expect.objectContaining({ source: 'a', target: 'b' }),
+    )
+    expect(graphApi.neighborhood).not.toHaveBeenCalled()
+    expect(screen.getByText(/노드 3 · 관계 2/)).toBeInTheDocument()
+    expect(screen.getByText(/노드마다 자르지 않고 탐색합니다/)).toBeInTheDocument()
+  })
+
+  it('못 찾은 것과 찾다가 멈춘 것을 가른다', async () => {
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    const none = { ...FOUND, found: false, length: null, paths: [], nodes: [], edges: [] }
+    graphApi.path.mockResolvedValueOnce(none)
+    const { unmount } = await mount('/graph?focus=a&to=b')
+    await waitFor(() =>
+      expect(screen.getByText(/6단계 안에 연결 경로가 없습니다/)).toBeInTheDocument(),
+    )
+    unmount()
+    graphApi.path.mockResolvedValueOnce({ ...none, truncated: true })
+    await mount('/graph?focus=a&to=b')
+    await waitFor(() => expect(screen.getByText(/경로가 없다는 뜻이 아닙니다/)).toBeInTheDocument())
+  })
+
+  it('「경로 해제」 는 출발점을 중심으로 한 탐색으로 돌아간다', async () => {
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    graphApi.path.mockResolvedValue(FOUND)
+    graphApi.neighborhood.mockResolvedValue({ ...NEIGHBORHOOD, focus: 'a' })
+    await mount('/graph?focus=a&to=b')
+    await waitFor(() => expect(screen.getByText('2단계')).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: '경로 해제' }))
+    await waitFor(() =>
+      expect(graphApi.neighborhood).toHaveBeenCalledWith(expect.objectContaining({ focus: 'a' })),
+    )
+  })
+
+  it('노드 상세에서 상대를 찾아 고르면 그 사이의 길을 그린다', async () => {
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    graphApi.neighborhood.mockResolvedValue(NEIGHBORHOOD)
+    graphApi.search.mockResolvedValue([
+      { id: 'far', label: '먼 부품', key: 'P-9', type_slug: 'part', type_label: '부품' },
+    ])
+    graphApi.path.mockResolvedValue({ ...FOUND, source: 'hub', target: 'far' })
+    await mount('/graph?focus=hub')
+    await waitFor(() => expect(screen.getByText(/노드 3 · 관계 2/)).toBeInTheDocument())
+    await userEvent.click(screen.getByRole('button', { name: /^연결 경로$/ }))
+    await userEvent.type(screen.getByLabelText('연결 경로의 상대 검색'), '먼')
+    await userEvent.click(await screen.findByRole('button', { name: /먼 부품/ }))
+    await waitFor(() =>
+      expect(graphApi.path).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'hub', target: 'far' }),
+      ),
+    )
   })
 })
 

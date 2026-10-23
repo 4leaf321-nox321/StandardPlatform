@@ -96,6 +96,36 @@ class SubgraphOut(BaseModel):
     truncated: bool
 
 
+class PathStepsOut(BaseModel):
+    """길 하나 — 노드 차례와 그 사이의 선 차례.
+
+    `edges[k]` 가 `nodes[k]` 와 `nodes[k+1]` 을 잇는다."""
+
+    nodes: list[uuid.UUID]
+    edges: list[uuid.UUID]
+
+
+class PathOut(BaseModel):
+    """두 객체 사이의 **가장 짧은 길들** — 그림에 세울 노드 · 선과, 길마다의 차례."""
+
+    source: uuid.UUID
+    target: uuid.UUID
+    found: bool
+    length: int | None
+    """선 수. 못 찾았으면 null."""
+    paths: list[PathStepsOut]
+    """같은 길이의 길들(`limit` 개까지)."""
+    nodes: list[NodeOut]
+    """길들이 지나는 노드 전부. 못 찾았으면 출발 · 도착 둘."""
+    edges: list[EdgeOut]
+    max_depth: int
+    visited: int
+    """찾느라 들른 노드 수(양쪽 합)."""
+    truncated: bool
+    """상한(들른 노드 수 · 노드당 선 수)에 닿아 덜 찾았다 — **못 찾았어도 「길이 없다」 가
+    아니다.** 관계 · 타입을 좁혀 다시 찾는다."""
+
+
 class SearchHitOut(BaseModel):
     id: uuid.UUID
     label: str

@@ -1860,6 +1860,49 @@ async def graph_neighbors(
 
 
 @tool()
+async def graph_path(
+    ctx: Context,
+    source_id: str,
+    target_id: str,
+    max_depth: int = 6,
+    relations: list[str] | None = None,
+    types: list[str] | None = None,
+    records: bool = False,
+    limit: int = 3,
+) -> Any:
+    """**두 객체가 어떻게 이어져 있나** — 가장 짧은 길들(같은 길이로 `limit` 개까지).
+
+    「이 부품은 이 프로젝트와 무슨 사이인가」 처럼 양 끝을 알 때 쓴다. `graph_neighbors` 를
+    여러 번 펼쳐 이어 붙이면 노드마다 잘린 곳의 길을 「없다」 로 읽게 된다 — 이 도구는 자르지
+    않고 찾는다. 관계와 참조 칸을 **방향과 상관없이** 따라간다(선의 방향은 `edges` 에 실린다).
+
+    - `paths[].nodes` · `paths[].edges` 가 차례다 — `edges[k]` 가 `nodes[k]` 와
+      `nodes[k+1]` 을 잇는다. 이름은 `nodes`(id · 이름 · 타입)에서, 관계의 말은
+      `edges`(label · inverse_label)에서.
+    - `found=false` 면 `max_depth`(기본 6, 최대 8) 안에 길이 없다. 단 **`truncated` 면
+      「없다」 가 아니라 「찾다가 멈췄다」** 다(들른 노드 · 노드당 선 상한) — `relations` ·
+      `types` 로 좁혀 다시 부른다.
+    - **기록**(`usage="log"`)은 `records=True` 일 때만 거친다 — 인기 모델은 기록 10만 건이
+      가리켜서, 기록을 거치면 거의 모든 것이 두 걸음 안에 이어진다.
+
+    사람에게 옮길 때는 「A —(관계)→ B ←(관계)— C」 처럼 **이름과 관계의 말**로 말한다.
+    """
+    params: list[tuple[str, Any]] = [
+        ("source", source_id),
+        ("target", target_id),
+        ("max_depth", max_depth),
+        ("limit", limit),
+    ]
+    if relations:
+        params.append(("relations", ",".join(relations)))
+    if types:
+        params.append(("types", ",".join(types)))
+    if records:
+        params.append(("records", "true"))
+    return await _get(ctx, "/api/graph/path", params=params)
+
+
+@tool()
 async def graph_overview(ctx: Context) -> Any:
     """**무엇이 무엇과 이어져 있나** — 타입 사이의 지형 한 장(객체가 아니라 타입 수준).
 

@@ -15240,6 +15240,148 @@
         }
       }
     },
+    "/api/graph/path": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Path",
+        "description": "두 객체 사이의 **가장 짧은 길들** — 「A 와 B 는 어떻게 이어져 있나」.\n\n관계와 참조 칸을 **방향과 상관없이** 따라간다(거슬러 가는 길도 길이다 — 선의 방향은 답에\n실린다). 이웃 그림과 달리 노드마다 30개로 자르지 않는다 — 잘린 곳의 길을 「없다」 로 답하지\n않으려고. 대신 들른 노드 수 · 노드당 선 수에 상한이 있고, 닿으면 `truncated` 다 — 그때\n못 찾은 것은 「없다」 가 아니다. 기록(ADR 0011)은 `records` 일 때만 거친다.",
+        "operationId": "path_api_graph_path_get",
+        "parameters": [
+          {
+            "name": "source",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "출발 객체",
+              "title": "Source"
+            },
+            "description": "출발 객체"
+          },
+          {
+            "name": "target",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "도착 객체",
+              "title": "Target"
+            },
+            "description": "도착 객체"
+          },
+          {
+            "name": "max_depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "길의 최대 길이(선 수). 기본 6, 최대 8",
+              "title": "Max Depth"
+            },
+            "description": "길의 최대 길이(선 수). 기본 6, 최대 8"
+          },
+          {
+            "name": "relations",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "따라갈 관계 slug, 쉼표로",
+              "title": "Relations"
+            },
+            "description": "따라갈 관계 slug, 쉼표로"
+          },
+          {
+            "name": "types",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "거쳐 갈 타입 slug, 쉼표로. 인터페이스면 구현 타입 전부. 출발 · 도착은 늘 든다",
+              "title": "Types"
+            },
+            "description": "거쳐 갈 타입 slug, 쉼표로. 인터페이스면 구현 타입 전부. 출발 · 도착은 늘 든다"
+          },
+          {
+            "name": "records",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "기록(ADR 0011)을 거쳐 가는 길도 찾는다. 기본은 안 거친다",
+              "default": false,
+              "title": "Records"
+            },
+            "description": "기록(ADR 0011)을 거쳐 가는 길도 찾는다. 기본은 안 거친다"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "같은 길이의 길 몇 개까지. 기본 3, 최대 10",
+              "title": "Limit"
+            },
+            "description": "같은 길이의 길 몇 개까지. 기본 3, 최대 10"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PathOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/graph/subgraph": {
       "get": {
         "tags": [
@@ -34752,6 +34894,110 @@
           "revoked_at"
         ],
         "title": "PatOut"
+      },
+      "PathOut": {
+        "properties": {
+          "source": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Source"
+          },
+          "target": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Target"
+          },
+          "found": {
+            "type": "boolean",
+            "title": "Found"
+          },
+          "length": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Length"
+          },
+          "paths": {
+            "items": {
+              "$ref": "#/components/schemas/PathStepsOut"
+            },
+            "type": "array",
+            "title": "Paths"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/NodeOut"
+            },
+            "type": "array",
+            "title": "Nodes"
+          },
+          "edges": {
+            "items": {
+              "$ref": "#/components/schemas/EdgeOut"
+            },
+            "type": "array",
+            "title": "Edges"
+          },
+          "max_depth": {
+            "type": "integer",
+            "title": "Max Depth"
+          },
+          "visited": {
+            "type": "integer",
+            "title": "Visited"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          }
+        },
+        "type": "object",
+        "required": [
+          "source",
+          "target",
+          "found",
+          "length",
+          "paths",
+          "nodes",
+          "edges",
+          "max_depth",
+          "visited",
+          "truncated"
+        ],
+        "title": "PathOut",
+        "description": "두 객체 사이의 **가장 짧은 길들** — 그림에 세울 노드 · 선과, 길마다의 차례."
+      },
+      "PathStepsOut": {
+        "properties": {
+          "nodes": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Nodes"
+          },
+          "edges": {
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            },
+            "type": "array",
+            "title": "Edges"
+          }
+        },
+        "type": "object",
+        "required": [
+          "nodes",
+          "edges"
+        ],
+        "title": "PathStepsOut",
+        "description": "길 하나 — 노드 차례와 그 사이의 선 차례.\n\n`edges[k]` 가 `nodes[k]` 와 `nodes[k+1]` 을 잇는다."
       },
       "PerformanceThresholdsOut": {
         "properties": {
