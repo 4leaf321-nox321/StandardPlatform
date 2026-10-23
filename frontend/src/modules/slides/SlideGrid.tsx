@@ -2,8 +2,8 @@
  * 장표 한 장을 그린다(ADR 0037) — 틀의 격자 그대로, 영역마다 표.
  *
  * - **기록 영역**: 기록마다 연결 항목 줄(「모델: A · 부품: 커넥터」) 한 줄, 그 아래 칸 표.
- * - **짝 영역**(AS-IS / TO-BE): 짝끼리 **한 덩이**로 그린다 — 기록마다 연결 항목 줄 한 번, 그 아래
- *   왼쪽 칸 | 오른쪽 칸. 따로 그리면 칸 길이가 다를 때 줄이 어긋난다.
+ * - **짝 영역**(AS-IS / TO-BE): 짝끼리 **표 하나**로 그린다 — 머리글 줄, 기록마다 연결 항목 줄 한 번,
+ *   그 아래 왼쪽 칸 | 오른쪽 칸. 따로 그리면 머리글과 구분선 · 좌우의 가로선이 어긋난다.
  * - **글 영역**: 사람이 쓴 글. 기록에서 온 값과 눈으로 갈리게 머리에 「작성한 글」 을 단다.
  *
  * 값은 서버가 열 때 센 것이다(살아 있는 값). 영역 하나가 고장 나면 그 영역만 까닭을 말한다.
@@ -151,6 +151,35 @@ function TextArea({
   )
 }
 
+/** 칸이 둘 이상인 영역은 「칸 이름 | 값」 두 열, 하나면 값 한 열. 이름 열의 몫. */
+const LABEL_SHARE = 0.32
+
+interface Column {
+  area: RenderedArea
+  part: 'label' | 'value'
+  width: number
+}
+
+/** 덩이의 열 — 영역마다 그 너비(`col_span`)의 몫을 나눠 가진다. 머리글 · 연결 항목 줄 · 칸 줄이
+ *  **같은 열**을 써서 구분선이 한 자리에 선다. */
+export function columnsOf(group: RenderedArea[]): Column[] {
+  const span = group.reduce((sum, one) => sum + one.col_span, 0)
+  return group.flatMap((one) => {
+    const share = (one.col_span / span) * 100
+    return one.fields.length > 1
+      ? [
+          { area: one, part: 'label' as const, width: share * LABEL_SHARE },
+          { area: one, part: 'value' as const, width: share * (1 - LABEL_SHARE) },
+        ]
+      : [{ area: one, part: 'value' as const, width: share }]
+  })
+}
+
+/**
+ * 기록 영역(짝이면 짝까지)을 **표 하나**로 — 머리글 줄, 기록마다 연결 항목 줄과 칸 줄. 짝 영역의 칸
+ * 수가 다르면 적은 쪽은 빈 칸으로 채워 가로선도 맞는다. 따로 그리던 때는 머리글 옆의 표시 때문에
+ * 머리글 폭이 표보다 좁아 「TO-BE」 가 구분선보다 왼쪽에 섰다(2026-10-23).
+ */
 function RecordsBlock({
   group,
   editable,
@@ -167,20 +196,13 @@ function RecordsBlock({
     primary.type_slug && Object.keys(primary.list_params).length > 0
       ? `/o/${primary.type_slug}?${new URLSearchParams(primary.list_params).toString()}`
       : null
+  const columns = columnsOf(group)
+  const height = Math.max(1, ...group.map((one) => one.fields.length))
+  const cell = 'border px-2 py-1 align-top'
 
   return (
-    <div className="space-y-2">
-      <header className="flex flex-wrap items-center gap-2">
-        <div
-          className="grid min-w-0 flex-1 gap-2"
-          style={{ gridTemplateColumns: group.map((one) => `${one.col_span}fr`).join(' ') }}
-        >
-          {group.map((one) => (
-            <h3 key={one.key} className="truncate font-semibold">
-              {one.title}
-            </h3>
-          ))}
-        </div>
+    <div className="space-y-1.5">
+      <div className="flex flex-wrap items-center justify-end gap-2">
         {primary.type_label && (
           <Badge variant="secondary" className="text-xs font-normal">
             {primary.type_label}
@@ -197,37 +219,79 @@ function RecordsBlock({
             기록 선택
           </Button>
         )}
-      </header>
+      </div>
+      <table className="w-full table-fixed border-collapse text-sm">
+        <colgroup>
+          {columns.map((one, index) => (
+            <col key={index} style={{ width: `${one.width}%` }} />
+          ))}
+        </colgroup>
+        <thead>
+          <tr className="bg-muted/70">
+            {group.map((one) => (
+              <th
+                key={one.key}
+                colSpan={one.fields.length > 1 ? 2 : 1}
+                className={`${cell} truncate py-1.5 text-left font-semibold`}
+              >
+                {one.title}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        {records.map((record, index) => (
+          <tbody key={record.id} aria-label={record.label}>
+            <tr>
+              <td colSpan={columns.length} className={`${cell} bg-muted/30 text-xs`}>
+                <LinkLine record={record} />
+              </td>
+            </tr>
+            {Array.from({ length: height }, (_, row) => (
+              <tr key={row}>
+                {group.map((one) => {
+                  const shown = one.records[index]
+                  const field = one.fields[row]
+                  const value = field && shown ? shown.values[field.key] || '—' : ''
+                  if (one.fields.length > 1) {
+                    return [
+                      <th
+                        key={`${one.key}-label`}
+                        scope="row"
+                        className={`${cell} text-muted-foreground text-left font-normal`}
+                      >
+                        {field?.label ?? ''}
+                      </th>,
+                      <td key={`${one.key}-value`} className={`${cell} whitespace-pre-wrap`}>
+                        {value}
+                      </td>,
+                    ]
+                  }
+                  // 칸이 하나면 값 한 칸이 기록의 높이를 다 쓴다.
+                  return row === 0 ? (
+                    <td key={one.key} rowSpan={height} className={`${cell} whitespace-pre-wrap`}>
+                      {value}
+                    </td>
+                  ) : null
+                })}
+              </tr>
+            ))}
+          </tbody>
+        ))}
+      </table>
       {primary.problem ? (
         <p role="alert" className="text-destructive text-sm">
           이 영역을 표시하지 못했습니다 — {primary.problem}
         </p>
-      ) : records.length === 0 ? (
-        <p className="text-muted-foreground text-sm">
-          {primary.fill === 'pick'
-            ? '선택한 기록이 없습니다.'
-            : primary.fill === 'follow'
-              ? `「${primary.follow_title ?? ''}」 의 기록과 이어진 기록이 없습니다.`
-              : '해당하는 기록이 없습니다.'}
-        </p>
       ) : (
-        <ol className="space-y-2">
-          {records.map((record, index) => (
-            <li key={record.id} className="rounded-sm border">
-              <LinkLine record={record} />
-              <div
-                className="grid divide-x"
-                style={{
-                  gridTemplateColumns: group.map((one) => `${one.col_span}fr`).join(' '),
-                }}
-              >
-                {group.map((one) => (
-                  <FieldTable key={one.key} area={one} record={one.records[index]} />
-                ))}
-              </div>
-            </li>
-          ))}
-        </ol>
+        records.length === 0 && (
+          <p className="text-muted-foreground text-sm">
+            {primary.fill === 'pick'
+              ? '선택한 기록이 없습니다.'
+              : primary.fill === 'follow'
+                ? `「${primary.follow_title ?? ''}」 의 기록과 이어진 기록이 없습니다.`
+                : '해당하는 기록이 없습니다.'}
+          </p>
+        )
       )}
       {(more > 0 || listHref) && !primary.problem && (
         <p className="text-muted-foreground flex items-center gap-2 text-xs">
@@ -248,7 +312,7 @@ function RecordsBlock({
 function LinkLine({ record }: { record: SlideRecord }) {
   const parts = record.links.filter((one) => one.items.length > 0)
   return (
-    <div className="bg-muted/60 flex items-center gap-2 border-b px-2 py-1 text-xs">
+    <div className="flex items-center gap-2">
       <span className="min-w-0 flex-1 truncate">
         {parts.length === 0 ? (
           <span className="text-muted-foreground">{record.label}</span>
@@ -282,30 +346,5 @@ function LinkLine({ record }: { record: SlideRecord }) {
         <ArrowUpRight className="size-3" />
       </Link>
     </div>
-  )
-}
-
-/** 칸 표 — 칸이 하나면 값만, 둘 이상이면 「칸 | 값」. */
-function FieldTable({ area, record }: { area: RenderedArea; record?: SlideRecord }) {
-  if (!record) return <div />
-  if (area.fields.length === 1) {
-    const only = area.fields[0]
-    return (
-      <p className="px-2 py-1.5 text-sm whitespace-pre-wrap">{record.values[only.key] || '—'}</p>
-    )
-  }
-  return (
-    <table className="w-full text-sm">
-      <tbody>
-        {area.fields.map((field) => (
-          <tr key={field.key} className="border-b last:border-b-0">
-            <th className="text-muted-foreground w-1/3 px-2 py-1 text-left align-top font-normal">
-              {field.label}
-            </th>
-            <td className="px-2 py-1 whitespace-pre-wrap">{record.values[field.key] || '—'}</td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
   )
 }

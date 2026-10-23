@@ -9,7 +9,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { RenderedArea, SlideRecord } from '@/modules/slides/api'
-import { SlideGrid, blocksOf } from '@/modules/slides/SlideGrid'
+import { SlideGrid, blocksOf, columnsOf } from '@/modules/slides/SlideGrid'
 
 function record(id: string, values: Record<string, string>): SlideRecord {
   return {
@@ -72,25 +72,53 @@ function draw(areas: RenderedArea[], extra: Partial<Parameters<typeof SlideGrid>
 }
 
 describe('장표 그리기', () => {
-  it('짝 영역은 한 덩이 — 기록마다 연결 항목 줄 한 번, 좌우 칸이 같은 줄', () => {
+  it('짝 영역은 표 하나 — 머리글 · 기록마다 연결 항목 줄 한 번 · 좌우 칸이 같은 줄', () => {
     expect(blocksOf([tobe, asis]).map((group) => group.map((one) => one.key))).toEqual([
       ['asis', 'tobe'],
     ])
     draw([asis, tobe])
     const block = screen.getByRole('region', { name: 'AS-IS · TO-BE' })
-    const rows = within(block).getAllByRole('listitem')
-    expect(rows).toHaveLength(2)
-    expect(within(rows[0]).getAllByText('커넥터')).toHaveLength(1)
-    expect(within(rows[0]).getByText('2핀')).toBeInTheDocument()
-    expect(within(rows[0]).getByText('4핀')).toBeInTheDocument()
-    expect(within(rows[1]).getByText('PA66')).toBeInTheDocument()
-    expect(within(rows[1]).getByText('PBT')).toBeInTheDocument()
+    // 머리글이 표의 첫 줄이다 — 표와 같은 열을 써서 구분선과 어긋나지 않는다.
+    expect(within(block).getAllByRole('table')).toHaveLength(1)
+    expect(within(block).getByRole('columnheader', { name: 'AS-IS' })).toBeInTheDocument()
+    expect(within(block).getByRole('columnheader', { name: 'TO-BE' })).toBeInTheDocument()
+    const pin = within(block).getByRole('rowgroup', { name: '핀 수' })
+    expect(within(pin).getAllByText('커넥터')).toHaveLength(1)
+    const [line, values] = within(pin).getAllByRole('row')
+    expect(line).toHaveTextContent('부품: 커넥터')
+    expect(within(values).getByText('2핀')).toBeInTheDocument()
+    expect(within(values).getByText('4핀')).toBeInTheDocument()
+    const material = within(block).getByRole('rowgroup', { name: '재질' })
+    expect(within(material).getByText('PA66')).toBeInTheDocument()
+    expect(within(material).getByText('PBT')).toBeInTheDocument()
     // 더 있으면 수를 말하고, 같은 조건의 목록으로 간다.
     expect(within(block).getByText('1건 더 있습니다.')).toBeInTheDocument()
     expect(within(block).getByRole('link', { name: /목록에서 보기/ })).toHaveAttribute(
       'href',
       '/o/change?f.model.eq=m1',
     )
+  })
+
+  it('짝의 칸 수가 달라도 줄이 맞는다 — 적은 쪽은 빈 칸', () => {
+    const left = { ...asis, fields: [asis.fields[0], { key: 'label', label: '이름' }] }
+    const right = {
+      ...tobe,
+      fields: [
+        { key: 'after', label: '변경 후' },
+        { key: 'when', label: '적용 시점' },
+        { key: 'state', label: '진행 상태' },
+      ],
+    }
+    // 열 — 좌우가 너비의 반씩, 칸 이름 열과 값 열로.
+    const widths = columnsOf([left, right]).map((one) => Math.round(one.width))
+    expect(widths).toEqual([16, 34, 16, 34])
+    draw([left, right])
+    const pin = screen.getByRole('rowgroup', { name: '핀 수' })
+    const rows = within(pin).getAllByRole('row')
+    // 연결 항목 줄 하나 + 칸 줄 셋(많은 쪽) — 왼쪽 셋째 줄은 비어 있다.
+    expect(rows).toHaveLength(4)
+    expect(within(rows[3]).getByText('진행 상태')).toBeInTheDocument()
+    expect(within(rows[3]).getAllByRole('rowheader')[0]).toHaveTextContent('')
   })
 
   it('따라오는 영역은 무엇을 따라오는지 말하고, 비면 그 까닭을 말한다', () => {
