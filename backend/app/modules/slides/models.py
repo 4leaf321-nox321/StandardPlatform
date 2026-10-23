@@ -90,3 +90,28 @@ class Slide(Base):
     deleted_by_id: Mapped[uuid.UUID | None] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
     )
+
+
+class SlideRef(Base):
+    """장표를 **마지막으로 열었을 때** 영역에 실린 기록 — 기록 상세의 「이 기록이 쓰인 장표」.
+
+    장표는 살아 있는 값이라 정확히 알려면 모든 장표를 그려 봐야 한다. 기록 하나를 열 때마다
+    그럴 수는
+    없어서, 장표를 열 때 실린 것을 적어 두고 화면은 「마지막으로 열었을 때」 라고 말한다.
+    """
+
+    __tablename__ = "slide_refs"
+
+    slide_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("slides.id", ondelete="CASCADE"), primary_key=True
+    )
+    object_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("objects.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+    area_key: Mapped[str] = mapped_column(String(40), primary_key=True)
+    seen_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )

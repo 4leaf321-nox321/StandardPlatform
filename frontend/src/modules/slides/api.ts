@@ -68,12 +68,40 @@ export interface RecordLink {
   items: LinkItem[]
 }
 
+/** 따라오는 기록 하나와 따라갈 기록 하나를 잇는 것 — 관계면 관계 id, 칸이면 따라갈 기록의 id. */
+export interface Tie {
+  id: string
+  source_id: string
+}
+
 export interface SlideRecord {
   id: string
   label: string
   type_slug: string
   values: Record<string, string>
   links: RecordLink[]
+  /** 이 사람이 이 기록의 값을 수정할 수 있나 — 객체 상세와 같은 판정. */
+  can_edit: boolean
+  /** 따라오는 영역에서 「연결 해제」 가 끊을 것. */
+  ties: Tie[]
+}
+
+/**
+ * 따라오는 영역이 따라갈 영역의 기록과 어떻게 이어지나 — 장표에서 연결 · 해제할 때 **객체 API** 로
+ * 무엇을 부를지. 걸음이 둘 이상이면 없다(장표에서 잇지 않는다).
+ */
+export interface AreaLink {
+  /** 관계 하나 · 이 기록의 참조 칸 · 따라갈 기록의 참조 칸. */
+  kind: 'relation' | 'ref' | 'backref'
+  relation: string | null
+  /** 관계의 방향 — `in` 이면 따라갈 기록이 출발점(관계를 거기서 맺는다). */
+  direction: 'in' | 'out' | null
+  property: string | null
+  multi: boolean
+  source_type_slug: string
+  sources: LinkItem[]
+  /** 따라갈 기록 쪽을 고치는 연결이면 그 기록들을 수정할 수 있나. */
+  can_link: boolean
 }
 
 export interface RenderedArea {
@@ -90,6 +118,10 @@ export interface RenderedArea {
   type_label: string | null
   /** 따라오는 영역이면 따라가는 영역의 머리글. */
   follow_title: string | null
+  /** 따라오는 영역을 장표에서 연결 · 해제하는 법. */
+  link: AreaLink | null
+  /** 글 영역의 글로 만든 기록. */
+  made: LinkItem | null
   limit: number
   fields: { key: string; label: string }[]
   text: string
@@ -167,8 +199,15 @@ export const slideApi = {
   /** 보낸 것만 바뀐다 — 글은 영역마다, 고른 기록은 영역마다 통째로. */
   update: (
     id: string,
-    body: { title?: string; texts?: Record<string, string>; picks?: Record<string, string[]> },
+    body: {
+      title?: string
+      texts?: Record<string, string>
+      picks?: Record<string, string[]>
+      made?: Record<string, string | null>
+    },
   ) => api.patch<Slide>(`/slides/${id}`, body),
+  /** 이 객체가 쓰인 장표 — 주제인 것과, 마지막으로 열었을 때 영역에 실렸던 것. */
+  usedIn: (objectId: string) => api.get<UsedIn[]>(`/slides/used-in/${objectId}`),
   remove: (id: string) => api.delete<void>(`/slides/${id}`),
 
   templates: () => api.get<Template[]>('/slides/templates'),
@@ -210,4 +249,13 @@ export function blankArea(key: string, row: number, col: number): AreaDef {
     limit: 10,
     order: 'newest',
   }
+}
+
+export interface UsedIn {
+  slide: SlideSummary
+  role: 'subject' | 'record'
+  /** 실린 영역의 머리글 — 주제면 비어 있다. */
+  areas: string[]
+  /** 영역에 실린 것을 본 때 — 그 뒤에 바뀌었을 수 있다. */
+  seen_at: string | null
 }

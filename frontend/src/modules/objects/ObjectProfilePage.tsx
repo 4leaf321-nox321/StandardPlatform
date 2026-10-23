@@ -18,6 +18,7 @@ import { RelatedObjects } from '@/modules/objects/RelatedObjects'
 import { SimilarRecords } from '@/modules/objects/SimilarRecords'
 import { LogCounts } from '@/modules/objects/LogCounts'
 import { RollupPanel } from '@/modules/objects/RollupPanel'
+import { UsedInSlides } from '@/modules/slides/UsedInSlides'
 import type { PropertyDef, SectionView } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
 import { PropertyFields, groupBySection, propertyText } from '@/modules/objects/PropertyFields'
@@ -306,6 +307,9 @@ function ObjectProfile() {
       )}
 
       <LogCounts objectId={objectId} counts={profile.data.log_counts ?? []} />
+
+      {/* 이 객체가 쓰인 장표 — 주제이거나 마지막으로 열었을 때 실렸거나(ADR 0037). 없으면 안 선다. */}
+      <UsedInSlides objectId={objectId} />
 
       <RelatedObjects
         typeSlug={typeSlug}

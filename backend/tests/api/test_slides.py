@@ -105,6 +105,7 @@ def world(client: TestClient, admin: Signed, member: Signed) -> dict[str, Any]:
         "risk": risk,
         "covers": covers,
         "affects": affects,
+        "parts_type": part,
         "meeting": meeting,
         "talk": talk,
         "models": models,
@@ -527,3 +528,150 @@ def test_따라가기가_제자리로_돌면_거절한다(
     got = client.post("/api/slides/templates", json=body, headers=admin.headers)
     assert got.status_code == 422
     assert "제자리" in got.json()["error"]["message"]
+
+
+# --- 2단계 — 바로 수정 · 연결 · 새 기록 · 글을 기록으로 · 쓰인 장표 ---------------
+
+
+def test_기록마다_수정할_수_있나를_객체와_같은_판정으로_말한다(
+    client: TestClient, db: Session, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    slide = _slide(
+        client, member, _made_template(client, admin, world), world["models"]["A"]["id"]
+    )
+    assert all(one["can_edit"] for one in _areas(slide)["asis"]["records"])
+
+    from app.modules.workspaces.models import Workspace
+
+    room = db.query(Workspace).filter(Workspace.slug == member.workspace).one()
+    other = _make_user(db, room, label="peer", is_system_admin=False, role="member")
+    peer = Signed(email=other.email, token=_login(client, other.email), workspace=room.slug)
+    seen = client.get(f"/api/slides/{slide['id']}", headers=peer.headers).json()
+    assert not any(one["can_edit"] for one in _areas(seen)["asis"]["records"])
+
+
+def test_따라오는_영역을_관계로_잇고_끊으면_장표가_따라온다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    made = client.post(
+        "/api/slides/templates", json=_one_change_template(world), headers=admin.headers
+    )
+    slide = _slide(client, member, made.json(), world["models"]["A"]["id"])
+    path = f"/api/slides/{slide['id']}"
+    pin = world["changes"]["핀 수"]["id"]
+    shown = client.patch(path, json={"picks": {"asis": [pin]}}, headers=member.headers).json()
+    risks = _areas(shown)["risks"]
+    link = risks["link"]
+    assert link["kind"] == "relation" and link["direction"] == "in"
+    assert link["relation"] == world["affects"] and link["can_link"] is True
+    assert [one["id"] for one in link["sources"]] == [pin]
+    # 기록마다 끊을 관계가 실려 온다.
+    assert all([tie["source_id"] for tie in one["ties"]] == [pin] for one in risks["records"])
+
+    # 화면이 하는 대로 — 객체 API 로 잇는다(관계는 출발점 = 따라갈 기록에서 맺는다).
+    loose = world["risks"]["상관없는 것"]["id"]
+    linked = _link(client, member, world["change"], pin, world["affects"], loose)
+    assert linked.status_code == 201, linked.text
+    again = client.get(path, headers=member.headers).json()
+    labels = [one["label"] for one in _areas(again)["risks"]["records"]]
+    assert "상관없는 것" in labels
+
+    # 끊으면 빠진다.
+    tie = next(
+        one["ties"][0]["id"] for one in _areas(again)["risks"]["records"] if one["id"] == loose
+    )
+    gone = client.delete(
+        f"/api/objects/{world['change']}/{pin}/relations/{tie}", headers=member.headers
+    )
+    assert gone.status_code == 204, gone.text
+    after = client.get(path, headers=member.headers).json()
+    assert "상관없는 것" not in [one["label"] for one in _areas(after)["risks"]["records"]]
+
+
+def test_칸으로_이어진_따라오는_영역도_잇는_법을_말한다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    """자기 칸이 가리키는 것(ref)과, 따라갈 기록의 칸이 가리키는 것(backref)."""
+    _make_property(
+        client,
+        admin,
+        world["risk"],
+        key="change",
+        label="원인 변경점",
+        data_type="object_ref",
+        ref_type_slug=world["change"],
+    )
+    pin = world["changes"]["핀 수"]["id"]
+    patched = client.patch(
+        f"/api/objects/{world['risk']}/{world['risks']['접촉 불량']['id']}",
+        json={"properties": {"change": pin}},
+        headers=member.headers,
+    )
+    assert patched.status_code == 200, patched.text
+    body = _one_change_template(world)
+    body["areas"][2]["follow_field"] = "change"
+    body["areas"][3] = {
+        "key": "parts",
+        "title": "부품",
+        "row": 1,
+        "col": 1,
+        "type_slug": world["parts_type"],
+        "fields": ["label"],
+        "fill": "follow",
+        "follow_area": "asis",
+        "follow_field": f"in.{world['change']}:part",
+    }
+    made = client.post("/api/slides/templates", json=body, headers=admin.headers)
+    assert made.status_code == 201, made.text
+    slide = _slide(client, member, made.json(), world["models"]["A"]["id"])
+    shown = client.patch(
+        f"/api/slides/{slide['id']}", json={"picks": {"asis": [pin]}}, headers=member.headers
+    ).json()
+    risks, parts = _areas(shown)["risks"], _areas(shown)["parts"]
+    assert risks["link"]["kind"] == "ref" and risks["link"]["property"] == "change"
+    assert [one["ties"] for one in risks["records"]] == [[{"id": pin, "source_id": pin}]]
+    assert parts["link"]["kind"] == "backref" and parts["link"]["property"] == "part"
+    assert [one["label"] for one in parts["records"]] == ["커넥터"]
+    assert parts["records"][0]["ties"] == [{"id": pin, "source_id": pin}]
+
+
+def test_글로_만든_기록을_장표가_기억한다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    slide = _slide(
+        client, member, _made_template(client, admin, world), world["models"]["A"]["id"]
+    )
+    path = f"/api/slides/{slide['id']}"
+    risk = _make_object(
+        client, member, world["risk"], label="대책 확인 필요", properties={"severity": "중"}
+    )
+    got = client.patch(path, json={"made": {"opinion": risk["id"]}}, headers=member.headers)
+    assert got.status_code == 200, got.text
+    assert _areas(got.json())["opinion"]["made"]["label"] == "대책 확인 필요"
+    wrong = client.patch(path, json={"made": {"asis": risk["id"]}}, headers=member.headers)
+    assert wrong.status_code == 422
+    cleared = client.patch(path, json={"made": {"opinion": None}}, headers=member.headers)
+    assert _areas(cleared.json())["opinion"]["made"] is None
+
+
+def test_기록이_쓰인_장표를_말한다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    slide = _slide(
+        client, member, _made_template(client, admin, world), world["models"]["A"]["id"]
+    )
+    pin = world["changes"]["핀 수"]["id"]
+    used = client.get(f"/api/slides/used-in/{pin}", headers=member.headers)
+    assert used.status_code == 200, used.text
+    [one] = used.json()
+    assert one["role"] == "record" and one["slide"]["id"] == slide["id"]
+    assert sorted(one["areas"]) == ["AS-IS", "TO-BE"]
+    subject = client.get(
+        f"/api/slides/used-in/{world['models']['A']['id']}", headers=member.headers
+    ).json()
+    assert [(one["role"], one["slide"]["id"]) for one in subject] == [("subject", slide["id"])]
+    # B 의 변경점은 이 장표에 실리지 않았다.
+    other = client.get(
+        f"/api/slides/used-in/{world['changes']['B 변경']['id']}", headers=member.headers
+    ).json()
+    assert other == []

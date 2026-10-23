@@ -18,6 +18,8 @@ function record(id: string, values: Record<string, string>): SlideRecord {
     type_slug: 'change',
     values,
     links: [{ label: '부품', items: [{ id: 'p1', label: '커넥터', type_slug: 'part' }] }],
+    can_edit: false,
+    ties: [],
   }
 }
 
@@ -40,6 +42,8 @@ function area(extra: Partial<RenderedArea>): RenderedArea {
     total: 0,
     list_params: {},
     follow_title: null,
+    link: null,
+    made: null,
     limit: 10,
     problem: null,
     ...extra,
@@ -156,5 +160,92 @@ describe('장표 그리기', () => {
     await userEvent.type(box, '대책 완료')
     await userEvent.click(screen.getByRole('button', { name: '저장' }))
     expect(save).toHaveBeenCalledWith('opinion', '대책 완료')
+  })
+
+  it('수정할 수 있는 기록의 값 칸만 클릭으로 수정한다', async () => {
+    const onEditValue = vi.fn()
+    const mine = { ...asis, records: [{ ...asis.records[0], can_edit: true }, asis.records[1]] }
+    draw([mine, tobe], { onEditValue })
+    await userEvent.click(screen.getByRole('button', { name: '핀 수 변경 전 수정' }))
+    expect(onEditValue).toHaveBeenCalledWith(mine, mine.records[0], {
+      key: 'before',
+      label: '변경 전',
+    })
+    // 남의 기록(can_edit 거짓)은 버튼이 아니다.
+    expect(screen.queryByRole('button', { name: '재질 변경 전 수정' })).not.toBeInTheDocument()
+  })
+
+  it('따라오는 영역 — 연결 · 해제 · 새 기록이 권한대로 선다', async () => {
+    const onLink = vi.fn()
+    const onUnlink = vi.fn()
+    const onCreate = vi.fn()
+    const risks = area({
+      key: 'risks',
+      title: '잠재리스크',
+      row: 1,
+      fill: 'follow',
+      follow_title: 'AS-IS',
+      type_label: '잠재 리스크',
+      fields: [{ key: 'label', label: '이름' }],
+      records: [
+        { ...record('접촉 불량', { label: '접촉 불량' }), ties: [{ id: 'x', source_id: 's' }] },
+      ],
+      link: {
+        kind: 'relation',
+        relation: 'affects',
+        direction: 'in',
+        property: null,
+        multi: false,
+        source_type_slug: 'change',
+        sources: [{ id: 's', label: '핀 수', type_slug: 'change' }],
+        can_link: true,
+      },
+    })
+    draw([risks], { onLink, onUnlink, onCreate, canCreate: () => true })
+    await userEvent.click(screen.getByRole('button', { name: /연결$/ }))
+    expect(onLink).toHaveBeenCalledWith(risks)
+    await userEvent.click(screen.getByRole('button', { name: '접촉 불량 연결 해제' }))
+    expect(onUnlink).toHaveBeenCalledWith(risks, risks.records[0])
+    await userEvent.click(screen.getByRole('button', { name: /새 잠재 리스크/ }))
+    expect(onCreate).toHaveBeenCalledWith(risks)
+  })
+
+  it('따라갈 기록을 수정할 수 없으면 연결 · 해제가 없다', () => {
+    const risks = area({
+      key: 'risks',
+      fill: 'follow',
+      fields: [{ key: 'label', label: '이름' }],
+      records: [
+        { ...record('접촉 불량', {}), can_edit: true, ties: [{ id: 'x', source_id: 's' }] },
+      ],
+      link: {
+        kind: 'relation',
+        relation: 'affects',
+        direction: 'in',
+        property: null,
+        multi: false,
+        source_type_slug: 'change',
+        sources: [{ id: 's', label: '핀 수', type_slug: 'change' }],
+        can_link: false,
+      },
+    })
+    draw([risks], { onLink: vi.fn(), onUnlink: vi.fn() })
+    expect(screen.queryByRole('button', { name: /연결$/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /연결 해제/ })).not.toBeInTheDocument()
+  })
+
+  it('글 영역 — 기록으로 저장과 만든 기록', async () => {
+    const onMakeRecord = vi.fn()
+    const opinion = area({
+      key: 'opinion',
+      title: '종합 의견',
+      kind: 'text',
+      text: '대책 확인',
+      made: { id: 'm1', label: '대책 확인', type_slug: 'risk' },
+    })
+    draw([opinion], { editable: true, onSaveText: vi.fn(), onMakeRecord })
+    await userEvent.click(screen.getByRole('button', { name: /기록으로 저장/ }))
+    expect(onMakeRecord).toHaveBeenCalledWith(opinion)
+    expect(screen.getByRole('link', { name: '대책 확인' })).toHaveAttribute('href', '/o/risk/m1')
   })
 })

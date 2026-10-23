@@ -12,6 +12,7 @@ import { Pencil, RefreshCw, Trash2, X } from 'lucide-react'
 import { slideApi } from '@/modules/slides/api'
 import type { RenderedArea, Slide } from '@/modules/slides/api'
 import { SlideGrid } from '@/modules/slides/SlideGrid'
+import { useRecordActions } from '@/modules/slides/useRecordActions'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -138,16 +139,16 @@ export default function SlidePage() {
         </form>
       )}
       <ErrorNotice error={error ?? loaded.error} />
-      <SlideGrid
-        rows={slide.rows}
-        cols={slide.cols}
-        areas={slide.areas}
-        editable={slide.can_edit}
+      <SlideCanvas
+        slide={slide}
+        refresh={reload}
+        fail={(caught) => setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))}
         onSaveText={(key, text) => patch({ texts: { [key]: text } })}
         onPick={setPicking}
       />
       <p className="text-muted-foreground text-xs">
-        기록의 값은 원래 자리에서 수정합니다 — 장표는 열 때마다 지금의 기록을 읽습니다.
+        값 칸을 클릭하면 그 기록의 값을 수정합니다(그 기록을 수정할 수 있는 사람만) — 수정한 값은 이
+        기록이 실린 모든 장표에 반영됩니다. 장표는 열 때마다 지금의 기록을 읽습니다.
       </p>
       {picking && (
         <PickDialog
@@ -302,5 +303,36 @@ function PickDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** 장표 한 장과 기록에 하는 일(값 수정 · 연결 · 새 기록 · 글을 기록으로) — 장표를 읽은 뒤에만 선다. */
+function SlideCanvas({
+  slide,
+  refresh,
+  fail,
+  onSaveText,
+  onPick,
+}: {
+  slide: Slide
+  refresh: () => Promise<void>
+  fail: (error: unknown) => void
+  onSaveText: (key: string, text: string) => Promise<void>
+  onPick: (area: RenderedArea) => void
+}) {
+  const { actions, dialogs } = useRecordActions({ slide, refresh, fail })
+  return (
+    <>
+      <SlideGrid
+        rows={slide.rows}
+        cols={slide.cols}
+        areas={slide.areas}
+        editable={slide.can_edit}
+        onSaveText={onSaveText}
+        onPick={onPick}
+        {...actions}
+      />
+      {dialogs}
+    </>
   )
 }

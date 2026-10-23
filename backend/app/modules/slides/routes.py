@@ -17,7 +17,7 @@ from app.modules.objects.models import ObjectInstance
 from app.modules.ontology.models import ObjectType
 from app.modules.ontology.services import InvalidValue
 from app.modules.slides import services
-from app.modules.slides.models import Slide, SlideTemplate
+from app.modules.slides.models import Slide, SlideRef, SlideTemplate
 from app.modules.slides.schemas import (
     AREA_LIMIT_MAX,
     CandidateOut,
@@ -31,6 +31,7 @@ from app.modules.slides.schemas import (
     SubjectOut,
     TemplateIn,
     TemplateOut,
+    UsedInOut,
 )
 from app.shared import audit
 from app.shared.auth import current_user, require_system_admin
@@ -298,6 +299,22 @@ def update_slide(
         content.setdefault(key, {})["picks"] = [
             str(one) for one in services.check_picks(db, user, area, subject, picked)
         ]
+    for key, made in (payload.made or {}).items():
+        if (areas.get(key) or {}).get("kind") != "text":
+            raise InvalidValue(code("SLIDES", 31), f"글 영역이 아닙니다: {key}")
+        if made is None:
+            content.setdefault(key, {}).pop("made", None)
+            continue
+        visible = db.scalar(
+            select(ObjectInstance.id).where(
+                ObjectInstance.id == made,
+                ObjectInstance.deleted_at.is_(None),
+                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+            )
+        )
+        if visible is None:
+            raise NotFound(code("SLIDES", 39), "만든 기록을 찾을 수 없습니다.")
+        content.setdefault(key, {})["made"] = str(made)
     if payload.title is not None:
         row.title = payload.title.strip()
     row.content = content
@@ -352,6 +369,51 @@ def delete_slide(
     )
     db.commit()
     return Response(status_code=204)
+
+
+@router.get("/used-in/{object_id}", response_model=list[UsedInOut])
+def used_in(
+    object_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[UsedInOut]:
+    """이 객체가 쓰인 장표 — 주제인 장표와, **마지막으로 열었을 때** 영역에 실렸던 장표. 장표는
+    살아 있는 값이라 그 뒤에 빠졌을 수 있다(`seen_at`)."""
+    out: list[UsedInOut] = []
+    subjects = db.scalars(
+        select(Slide)
+        .where(Slide.subject_id == object_id, Slide.deleted_at.is_(None))
+        .order_by(func.coalesce(Slide.edited_at, Slide.created_at).desc())
+        .limit(50)
+    )
+    for one in subjects:
+        out.append(UsedInOut(slide=_summary(db, one), role="subject", areas=[], seen_at=None))
+    seen: dict[uuid.UUID, tuple[Slide, list[str], datetime]] = {}
+    for slide, area_key, seen_at in db.execute(
+        select(Slide, SlideRef.area_key, SlideRef.seen_at)
+        .join(SlideRef, SlideRef.slide_id == Slide.id)
+        .where(SlideRef.object_id == object_id, Slide.deleted_at.is_(None))
+        .order_by(SlideRef.seen_at.desc())
+        .limit(200)
+    ):
+        template = db.get(SlideTemplate, slide.template_id)
+        title = next(
+            (
+                str(one.get("title") or area_key)
+                for one in (template.areas if template else [])
+                if one.get("key") == area_key
+            ),
+            area_key,
+        )
+        if slide.id in seen:
+            seen[slide.id][1].append(title)
+        else:
+            seen[slide.id] = (slide, [title], seen_at)
+    for slide, titles, seen_at in seen.values():
+        out.append(
+            UsedInOut(slide=_summary(db, slide), role="record", areas=titles, seen_at=seen_at)
+        )
+    return out
 
 
 # --- 도우미 ------------------------------------------------------------------
@@ -459,6 +521,9 @@ def _slide_out(db: Session, user: User, row: Slide) -> SlideOut:
     subject = db.get(ObjectInstance, row.subject_id) if row.subject_id else None
     rendered_at = datetime.now(UTC)
     areas = services.render(db, user, template.areas, subject, row.content or {})
+    # 지금 실린 기록을 적어 둔다 — 기록 상세의 「이 기록이 쓰인 장표」.
+    services.remember(db, row, areas)
+    db.commit()
     return SlideOut(
         **_summary(db, row).model_dump(),
         rows=template.rows,

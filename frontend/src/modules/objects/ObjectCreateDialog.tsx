@@ -42,9 +42,14 @@ interface Props {
   type: ObjectType
   defs: PropertyDef[]
   onClose: () => void
-  onCreated: () => void
+  /** 만든 객체 — 장표가 그 객체를 영역에 잇는다(ADR 0037). 목록은 다시 읽기만 한다. */
+  onCreated: (created: { id: string; label: string }) => void
   /** 만든 객체의 상세로 — 파일 업로드가 실패했을 때 「상세 열기」 가 쓴다. */
   onOpen?: (id: string) => void
+  /** 미리 채운 값 — 장표의 「새 기록」 이 주제 · 따라갈 기록을, 「기록으로 저장」 가 글을 넣는다. */
+  initial?: { label?: string; values?: PropertyValues }
+  /** 대화상자 제목 — 비우면 「<타입> 생성」. */
+  title?: string
 }
 
 /** 객체는 만들었는데 파일 일부가 실패한 상태 — 창을 닫지 않고 알린다. */
@@ -54,13 +59,21 @@ interface PartialFailure {
   failed: string[]
 }
 
-export function ObjectCreateDialog({ type, defs, onClose, onCreated, onOpen }: Props) {
+export function ObjectCreateDialog({
+  type,
+  defs,
+  onClose,
+  onCreated,
+  onOpen,
+  initial,
+  title,
+}: Props) {
   const { user } = useAuth()
   const limit = useAttachmentLimit()
   const [key, setKey] = useState('')
-  const [label, setLabel] = useState('')
+  const [label, setLabel] = useState(initial?.label ?? '')
   const [description, setDescription] = useState('')
-  const [values, setValues] = useState<PropertyValues>({})
+  const [values, setValues] = useState<PropertyValues>(initial?.values ?? {})
   /** 파일 칸에서 고른 파일 — 객체를 만든 뒤 올린다. */
   const [files, setFiles] = useState<PickedFiles>({})
   const [error, setError] = useState<Error | null>(null)
@@ -134,7 +147,7 @@ export function ObjectCreateDialog({ type, defs, onClose, onCreated, onOpen }: P
     setProgress(null)
     setSaving(false)
     if (failed.length === 0) {
-      onCreated()
+      onCreated({ id: created.id, label: created.label })
       return
     }
     setPartial({ id: created.id, label: created.label, failed })
@@ -144,10 +157,10 @@ export function ObjectCreateDialog({ type, defs, onClose, onCreated, onOpen }: P
     // 객체는 있다 — 닫으면 목록을 다시 읽는다(onCreated). 다시 「생성」 을 누를 자리는 없다
     // (누르면 같은 것이 둘이 된다).
     return (
-      <Dialog open onOpenChange={(open) => !open && onCreated()}>
+      <Dialog open onOpenChange={(open) => !open && onCreated(partial)}>
         <DialogContent className="sm:max-w-lg">
           <DialogHeader>
-            <DialogTitle>{type.label} 생성</DialogTitle>
+            <DialogTitle>{title ?? `${type.label} 생성`}</DialogTitle>
           </DialogHeader>
           <Alert variant="destructive">
             <AlertTitle>
@@ -166,13 +179,13 @@ export function ObjectCreateDialog({ type, defs, onClose, onCreated, onOpen }: P
             </AlertDescription>
           </Alert>
           <DialogFooter>
-            <Button variant="outline" onClick={onCreated}>
+            <Button variant="outline" onClick={() => onCreated(partial)}>
               닫기
             </Button>
             {onOpen && (
               <Button
                 onClick={() => {
-                  onCreated()
+                  onCreated(partial)
                   onOpen(partial.id)
                 }}
               >
@@ -189,7 +202,7 @@ export function ObjectCreateDialog({ type, defs, onClose, onCreated, onOpen }: P
     <Dialog open onOpenChange={(open) => !open && !saving && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>{type.label} 생성</DialogTitle>
+          <DialogTitle>{title ?? `${type.label} 생성`}</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">

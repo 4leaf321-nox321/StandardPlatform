@@ -3201,6 +3201,54 @@
         }
       }
     },
+    "/api/slides/used-in/{object_id}": {
+      "get": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "Used In",
+        "description": "이 객체가 쓰인 장표 — 주제인 장표와, **마지막으로 열었을 때** 영역에 실렸던 장표. 장표는\n살아 있는 값이라 그 뒤에 빠졌을 수 있다(`seen_at`).",
+        "operationId": "used_in_api_slides_used_in__object_id__get",
+        "parameters": [
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UsedInOut"
+                  },
+                  "title": "Response Used In Api Slides Used In  Object Id  Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/webhooks": {
       "get": {
         "tags": [
@@ -20412,6 +20460,85 @@
         "title": "AreaIn",
         "description": "틀의 영역 하나 — 격자의 자리와 무엇을 받는가."
       },
+      "AreaLinkOut": {
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "relation",
+              "ref",
+              "backref"
+            ],
+            "title": "Kind"
+          },
+          "relation": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Relation"
+          },
+          "direction": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "in",
+                  "out"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Direction"
+          },
+          "property": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Property"
+          },
+          "multi": {
+            "type": "boolean",
+            "title": "Multi",
+            "default": false
+          },
+          "source_type_slug": {
+            "type": "string",
+            "title": "Source Type Slug"
+          },
+          "sources": {
+            "items": {
+              "$ref": "#/components/schemas/LinkItemOut"
+            },
+            "type": "array",
+            "title": "Sources"
+          },
+          "can_link": {
+            "type": "boolean",
+            "title": "Can Link"
+          }
+        },
+        "type": "object",
+        "required": [
+          "kind",
+          "source_type_slug",
+          "sources",
+          "can_link"
+        ],
+        "title": "AreaLinkOut",
+        "description": "따라오는 영역이 따라갈 영역의 기록과 **어떻게** 이어지나 — 장표에서 연결 · 해제할 때\n객체\nAPI 로 무엇을 부를지. 걸음이 둘 이상인 주소면 장표에서 잇지 않는다(없음)."
+      },
       "AreaOut": {
         "properties": {
           "key": {
@@ -20520,6 +20647,26 @@
               }
             ],
             "title": "Follow Title"
+          },
+          "link": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/AreaLinkOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "made": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/LinkItemOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
           },
           "limit": {
             "type": "integer",
@@ -38229,6 +38376,18 @@
             },
             "type": "array",
             "title": "Links"
+          },
+          "can_edit": {
+            "type": "boolean",
+            "title": "Can Edit",
+            "default": false
+          },
+          "ties": {
+            "items": {
+              "$ref": "#/components/schemas/TieOut"
+            },
+            "type": "array",
+            "title": "Ties"
           }
         },
         "type": "object",
@@ -43236,6 +43395,28 @@
               }
             ],
             "title": "Picks"
+          },
+          "made": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "format": "uuid"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Made"
           }
         },
         "type": "object",
@@ -45218,6 +45399,25 @@
         "title": "TicketRequest",
         "description": "업로드 표를 낸다 — 어느 자료의 어느 자리에 올릴지 **지금** 정하고 확인한다."
       },
+      "TieOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "source_id": {
+            "type": "string",
+            "title": "Source Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "source_id"
+        ],
+        "title": "TieOut",
+        "description": "따라오는 기록 하나와 따라갈 기록 하나를 잇는 것."
+      },
       "TileLevelOut": {
         "properties": {
           "rung": {
@@ -45591,6 +45791,49 @@
           "unread"
         ],
         "title": "UnreadCountOut"
+      },
+      "UsedInOut": {
+        "properties": {
+          "slide": {
+            "$ref": "#/components/schemas/SlideSummaryOut"
+          },
+          "role": {
+            "type": "string",
+            "enum": [
+              "subject",
+              "record"
+            ],
+            "title": "Role"
+          },
+          "areas": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Areas"
+          },
+          "seen_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Seen At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slide",
+          "role",
+          "areas",
+          "seen_at"
+        ],
+        "title": "UsedInOut",
+        "description": "이 객체가 쓰인 장표 하나 — 주제이거나, 마지막으로 열었을 때 영역에 실렸거나."
       },
       "UserOut": {
         "properties": {

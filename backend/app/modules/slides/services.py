@@ -20,23 +20,26 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from typing import Any
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import delete, func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.objects import conditions, paths, system
-from app.modules.objects.models import ObjectInstance
+from app.modules.objects import access, conditions, paths, system
+from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.objects.scope import as_scope
-from app.modules.ontology.models import ObjectType, PropertyDef
+from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.services import InvalidValue
+from app.modules.slides.models import Slide, SlideRef
 from app.modules.slides.schemas import (
     AreaIn,
+    AreaLinkOut,
     AreaOut,
     FieldOut,
     LinkItemOut,
     LinkOut,
     RecordOut,
     TemplateIn,
+    TieOut,
 )
 from app.shared import querycap
 from app.shared.errors import AppError, NotFound, code
@@ -289,11 +292,10 @@ def render(
     out: list[AreaOut] = []
     for area in parsed:
         if area.kind == "text":
-            out.append(
-                _shell(
-                    area, None, [], text=str((content.get(area.key) or {}).get("text") or "")
-                )
-            )
+            filled = content.get(area.key) or {}
+            text_area = _shell(area, None, [], text=str(filled.get("text") or ""))
+            text_area.made = _made(db, filled.get("made"))
+            out.append(text_area)
             continue
         primary = by_key.get(area.pair_of or "") if area.pair_of else area
         rows = found.get(primary.key if primary else "", _Rows(problem="짝 영역이 없습니다."))
@@ -302,8 +304,174 @@ def render(
         if area.fill == "follow" and area.pair_of is None:
             source = source_of(area, by_key)
             drawn.follow_title = source.title if source else None
+            if not rows.problem:
+                drawn.link, ties = _link_of(db, user, area, by_key, found)
+                for record in drawn.records:
+                    record.ties = ties.get(record.id, [])
         out.append(drawn)
     return out
+
+
+@dataclass(frozen=True)
+class _LinkKind:
+    kind: str
+    relation: str | None = None
+    direction: str | None = None
+    prop: str | None = None
+    multi: bool = False
+
+
+def _link_kind(
+    db: Session, address: str, follower: ObjectType, source: ObjectType
+) -> _LinkKind | None:
+    """따라가는 주소가 **한 걸음**이면 장표에서 이을 수 있다 — 자기 참조 칸(`change`), 관계
+    (`in.<관계>` · `out.<관계>`), 나를 가리키는 칸(`in.<타입>:<칸>`). 걸음이 둘 이상이면 어느
+    것을 고쳐 이을지 하나로 정해지지 않는다."""
+    tokens = address.split(".")
+    if len(tokens) == 1:
+        own = {one.key: one for one in _defs_of(db, follower)}.get(address)
+        if (
+            own is not None
+            and own.data_type == "object_ref"
+            and own.ref_type_slug == source.slug
+        ):
+            return _LinkKind("ref", prop=own.key, multi=own.multi)
+        return None
+    if len(tokens) != 2 or tokens[0] not in ("in", "out"):
+        return None
+    head, name = tokens
+    if ":" in name:
+        type_slug, key = name.split(":", 1)
+        theirs = {one.key: one for one in _defs_of(db, source)}.get(key)
+        if head == "in" and type_slug == source.slug and theirs is not None:
+            return _LinkKind("backref", prop=key, multi=theirs.multi)
+        return None
+    if db.scalar(select(RelationType.slug).where(RelationType.slug == name)) is None:
+        return None
+    return _LinkKind("relation", relation=name, direction=head)
+
+
+def _link_of(
+    db: Session,
+    user: User,
+    area: AreaIn,
+    by_key: dict[str, AreaIn],
+    found: dict[str, _Rows],
+) -> tuple[AreaLinkOut | None, dict[uuid.UUID, list[TieOut]]]:
+    """따라오는 영역을 장표에서 잇는 법과, 기록마다 「연결 해제」 가 끊을 것."""
+    source = source_of(area, by_key)
+    if source is None or source.key not in found:
+        return None, {}
+    try:
+        follower_type = type_by_slug(db, area.type_slug or "", what="기록")
+        source_type = type_by_slug(db, source.type_slug or "", what="기록")
+    except AppError:
+        return None, {}
+    kind = _link_kind(db, area.follow_field or "", follower_type, source_type)
+    if kind is None:
+        return None, {}
+    sources = found[source.key].rows
+    rows = found[area.key].rows
+    source_ids = {one.id for one in sources}
+    ties: dict[uuid.UUID, list[TieOut]] = {}
+    if kind.kind == "relation" and rows and sources:
+        mine = (
+            ObjectRelation.dst_object_id
+            if kind.direction == "in"
+            else ObjectRelation.src_object_id
+        )
+        theirs = (
+            ObjectRelation.src_object_id
+            if kind.direction == "in"
+            else ObjectRelation.dst_object_id
+        )
+        for relation_id, record_id, source_id in db.execute(
+            select(ObjectRelation.id, mine, theirs).where(
+                ObjectRelation.relation == kind.relation,
+                mine.in_([one.id for one in rows]),
+                theirs.in_(source_ids),
+            )
+        ):
+            ties.setdefault(record_id, []).append(
+                TieOut(id=str(relation_id), source_id=str(source_id))
+            )
+    elif kind.kind == "ref":
+        for row in rows:
+            ties[row.id] = [
+                TieOut(id=str(one), source_id=str(one))
+                for one in _uuids(_values((row.properties or {}).get(kind.prop or "")))
+                if one in source_ids
+            ]
+    elif kind.kind == "backref":
+        for src in sources:
+            for one in _uuids(_values((src.properties or {}).get(kind.prop or ""))):
+                ties.setdefault(one, []).append(TieOut(id=str(src.id), source_id=str(src.id)))
+    # 따라갈 기록 쪽을 고치는 연결이면 그 기록들을 고칠 수 있어야 한다 — 관계는 출발점을 고칠
+    # 수
+    # 있는 사람이 맺는다(`objects.add_relation`).
+    source_side = kind.kind == "backref" or (
+        kind.kind == "relation" and kind.direction == "in"
+    )
+    can_link = bool(sources) and (
+        all(access.can_edit(db, user, source_type, one) for one in sources)
+        if source_side
+        else True
+    )
+    return (
+        AreaLinkOut(
+            kind=kind.kind,  # type: ignore[arg-type]
+            relation=kind.relation,
+            direction=kind.direction,  # type: ignore[arg-type]
+            property=kind.prop,
+            multi=kind.multi,
+            source_type_slug=source_type.slug,
+            sources=[
+                LinkItemOut(id=str(one.id), label=one.label, type_slug=source_type.slug)
+                for one in sources
+            ],
+            can_link=can_link,
+        ),
+        ties,
+    )
+
+
+def _values(raw: Any) -> list[Any]:
+    if raw is None or raw == "":
+        return []
+    return raw if isinstance(raw, list) else [raw]
+
+
+def _made(db: Session, raw: Any) -> LinkItemOut | None:
+    """글 영역의 글로 만든 기록 — 지워졌으면 그렇다고 적는다."""
+    made = _uuid(raw) if raw else None
+    if made is None:
+        return None
+    row = db.get(ObjectInstance, made)
+    if row is None:
+        return None
+    object_type = db.get(ObjectType, row.type_id)
+    label = row.label if row.deleted_at is None else f"{row.label} (삭제됨)"
+    return LinkItemOut(
+        id=str(row.id), label=label, type_slug=object_type.slug if object_type else None
+    )
+
+
+def remember(db: Session, slide: Slide, areas: list[AreaOut]) -> None:
+    """이 장표에 **지금** 실린 기록을 적어 둔다 — 기록 상세의 「이 기록이 쓰인 장표」. 장표는
+    살아
+    있는 값이라 영역마다 기록을 다시 세어야 정확한데, 기록 하나를 열 때마다 모든 장표를 그릴
+    수는
+    없다. 그래서 장표를 열 때 실린 것을 적고, 화면은 「마지막으로 열었을 때」 라고 말한다.
+    **부르는 쪽이 커밋한다.**"""
+    db.execute(delete(SlideRef).where(SlideRef.slide_id == slide.id))
+    seen = {
+        (record.id, area.key)
+        for area in areas
+        if area.kind == "records"
+        for record in area.records
+    }
+    for record_id, area_key in seen:
+        db.add(SlideRef(slide_id=slide.id, object_id=record_id, area_key=area_key))
 
 
 def _follow_rows(
@@ -525,6 +693,7 @@ def _records(
             type_slug=type_slug or "",
             values={key: _text(row, key, by_key.get(key), labels) for key in area.fields},
             links=[_link(row, one, labels) for one in ref_line],
+            can_edit=record_type is not None and access.can_edit(db, user, record_type, row),
         )
         for row in rows.rows
     ]

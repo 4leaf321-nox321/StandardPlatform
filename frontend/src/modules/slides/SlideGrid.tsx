@@ -11,14 +11,30 @@
 
 import { useState } from 'react'
 import { Link } from 'react-router-dom'
-import { ArrowUpRight, ListFilter, Pencil } from 'lucide-react'
+import { ArrowUpRight, FilePlus2, Link2, ListFilter, Pencil, Plus, Unlink } from 'lucide-react'
 
 import type { RenderedArea, SlideRecord } from '@/modules/slides/api'
 import { Badge } from '@/shared/components/ui/badge'
 import { Button } from '@/shared/components/ui/button'
 import { Textarea } from '@/shared/components/ui/textarea'
 
-interface Props {
+/** 장표에서 기록에 하는 일 — 값 수정 · 연결 · 해제 · 새 기록 · 글을 기록으로. 모두 **기록의 권한**을
+ *  따른다(장표의 작성자인지와 다른 축). 장표 화면이 객체 API 로 한다. */
+export interface RecordActions {
+  onEditValue?: (
+    area: RenderedArea,
+    record: SlideRecord,
+    field: { key: string; label: string },
+  ) => void
+  onLink?: (area: RenderedArea) => void
+  onUnlink?: (area: RenderedArea, record: SlideRecord) => void
+  /** 이 영역에 새 기록을 만들 수 있나 — 타입의 용도와 내 소속으로(`canCreateObject`). */
+  canCreate?: (area: RenderedArea) => boolean
+  onCreate?: (area: RenderedArea) => void
+  onMakeRecord?: (area: RenderedArea) => void
+}
+
+interface Props extends RecordActions {
   rows: number
   cols: number
   areas: RenderedArea[]
@@ -26,6 +42,15 @@ interface Props {
   editable?: boolean
   onSaveText?: (key: string, text: string) => Promise<void>
   onPick?: (area: RenderedArea) => void
+}
+
+/** 이 기록과 따라갈 기록의 연결을 끊을 수 있나 — 따라갈 기록 쪽을 고치는 연결이면 그쪽 권한. */
+export function canUnlink(area: RenderedArea, record: SlideRecord): boolean {
+  const link = area.link
+  if (!link || record.ties.length === 0) return false
+  const sourceSide =
+    link.kind === 'backref' || (link.kind === 'relation' && link.direction === 'in')
+  return sourceSide ? link.can_link : record.can_edit
 }
 
 /** 짝끼리 묶은 덩이 — 짝이 없으면 영역 하나가 한 덩이. 왼쪽부터. */
@@ -39,7 +64,15 @@ export function blocksOf(areas: RenderedArea[]): RenderedArea[][] {
   return out
 }
 
-export function SlideGrid({ rows, cols, areas, editable = false, onSaveText, onPick }: Props) {
+export function SlideGrid({
+  rows,
+  cols,
+  areas,
+  editable = false,
+  onSaveText,
+  onPick,
+  ...actions
+}: Props) {
   return (
     <div
       className="grid gap-px overflow-hidden rounded-md border bg-border"
@@ -66,12 +99,16 @@ export function SlideGrid({ rows, cols, areas, editable = false, onSaveText, onP
                 area={first}
                 editable={editable}
                 onSave={onSaveText ? (text) => onSaveText(first.key, text) : undefined}
+                onMakeRecord={
+                  editable && actions.onMakeRecord ? () => actions.onMakeRecord?.(first) : undefined
+                }
               />
             ) : (
               <RecordsBlock
                 group={group}
                 editable={editable}
                 onPick={onPick ? () => onPick(first) : undefined}
+                actions={actions}
               />
             )}
           </section>
@@ -85,10 +122,12 @@ function TextArea({
   area,
   editable,
   onSave,
+  onMakeRecord,
 }: {
   area: RenderedArea
   editable: boolean
   onSave?: (text: string) => Promise<void>
+  onMakeRecord?: () => void
 }) {
   const [draft, setDraft] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -122,7 +161,24 @@ function TextArea({
             수정
           </Button>
         )}
+        {onMakeRecord && draft === null && area.text.trim() && (
+          <Button size="sm" variant="ghost" className="h-7" onClick={onMakeRecord}>
+            <FilePlus2 className="mr-1 size-3" />
+            기록으로 저장
+          </Button>
+        )}
       </header>
+      {area.made && (
+        <p className="text-muted-foreground text-xs">
+          이 글로 만든 기록:{' '}
+          <Link
+            to={area.made.type_slug ? `/o/${area.made.type_slug}/${area.made.id}` : '#'}
+            className="text-foreground hover:underline"
+          >
+            {area.made.label}
+          </Link>
+        </p>
+      )}
       {draft === null ? (
         area.text ? (
           <p className="text-sm whitespace-pre-wrap">{area.text}</p>
@@ -184,12 +240,15 @@ function RecordsBlock({
   group,
   editable,
   onPick,
+  actions,
 }: {
   group: RenderedArea[]
   editable: boolean
   onPick?: () => void
+  actions: RecordActions
 }) {
   const primary = group[0]
+  const link = primary.link
   const records = primary.records
   const more = primary.total - records.length
   const listHref =
@@ -219,6 +278,27 @@ function RecordsBlock({
             기록 선택
           </Button>
         )}
+        {link && link.can_link && link.sources.length > 0 && actions.onLink && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7"
+            onClick={() => actions.onLink?.(primary)}
+          >
+            <Link2 className="mr-1 size-3" />
+            연결
+          </Button>
+        )}
+        {actions.onCreate && actions.canCreate?.(primary) && (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="h-7"
+            onClick={() => actions.onCreate?.(primary)}
+          >
+            <Plus className="mr-1 size-3" />새 {primary.type_label}
+          </Button>
+        )}
       </div>
       <table className="w-full table-fixed border-collapse text-sm">
         <colgroup>
@@ -243,7 +323,14 @@ function RecordsBlock({
           <tbody key={record.id} aria-label={record.label}>
             <tr>
               <td colSpan={columns.length} className={`${cell} bg-muted/30 text-xs`}>
-                <LinkLine record={record} />
+                <LinkLine
+                  record={record}
+                  onUnlink={
+                    actions.onUnlink && canUnlink(primary, record)
+                      ? () => actions.onUnlink?.(primary, record)
+                      : undefined
+                  }
+                />
               </td>
             </tr>
             {Array.from({ length: height }, (_, row) => (
@@ -262,14 +349,30 @@ function RecordsBlock({
                         {field?.label ?? ''}
                       </th>,
                       <td key={`${one.key}-value`} className={`${cell} whitespace-pre-wrap`}>
-                        {value}
+                        <Value
+                          text={value}
+                          label={shown && field ? `${shown.label} ${field.label} 수정` : undefined}
+                          onEdit={
+                            shown && field && editableField(field.key) && shown.can_edit
+                              ? () => actions.onEditValue?.(one, shown, field)
+                              : undefined
+                          }
+                        />
                       </td>,
                     ]
                   }
                   // 칸이 하나면 값 한 칸이 기록의 높이를 다 쓴다.
                   return row === 0 ? (
                     <td key={one.key} rowSpan={height} className={`${cell} whitespace-pre-wrap`}>
-                      {value}
+                      <Value
+                        text={value}
+                        label={shown && field ? `${shown.label} ${field.label} 수정` : undefined}
+                        onEdit={
+                          shown && field && editableField(field.key) && shown.can_edit
+                            ? () => actions.onEditValue?.(one, shown, field)
+                            : undefined
+                        }
+                      />
                     </td>
                   ) : null
                 })}
@@ -308,8 +411,29 @@ function RecordsBlock({
   )
 }
 
+/** 식별자는 장표에서 수정하지 않는다 — 바꾸면 밖에서 처음 보는 것이 되어 상세에서 이유와 함께 한다. */
+function editableField(key: string): boolean {
+  return key !== 'key'
+}
+
+/** 값 칸 — 수정할 수 있으면 클릭해 그 자리에서 수정한다. */
+function Value({ text, label, onEdit }: { text: string; label?: string; onEdit?: () => void }) {
+  if (!onEdit) return <>{text}</>
+  return (
+    <button
+      type="button"
+      onClick={onEdit}
+      aria-label={label}
+      title="클릭해 수정"
+      className="hover:bg-muted -mx-1 w-[calc(100%+0.5rem)] rounded px-1 text-left whitespace-pre-wrap"
+    >
+      {text || <span className="text-muted-foreground">—</span>}
+    </button>
+  )
+}
+
 /** 연결 항목 줄 — 기록이 가리키는 온톨로지 항목을 한 줄로. 끝에 그 기록 자신으로 가는 길. */
-function LinkLine({ record }: { record: SlideRecord }) {
+function LinkLine({ record, onUnlink }: { record: SlideRecord; onUnlink?: () => void }) {
   const parts = record.links.filter((one) => one.items.length > 0)
   return (
     <div className="flex items-center gap-2">
@@ -337,6 +461,17 @@ function LinkLine({ record }: { record: SlideRecord }) {
           ))
         )}
       </span>
+      {onUnlink && (
+        <button
+          type="button"
+          onClick={onUnlink}
+          className="text-muted-foreground hover:text-destructive inline-flex items-center gap-0.5"
+          aria-label={`${record.label} 연결 해제`}
+          title="연결 해제"
+        >
+          <Unlink className="size-3" />
+        </button>
+      )}
       <Link
         to={`/o/${record.type_slug}/${record.id}`}
         className="text-muted-foreground hover:text-foreground inline-flex items-center"

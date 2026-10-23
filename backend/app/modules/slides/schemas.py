@@ -98,6 +98,8 @@ class SlidePatchIn(BaseModel):
     """글 영역의 글 — 영역 키마다. 보낸 영역만 바뀐다."""
     picks: dict[str, list[uuid.UUID]] | None = None
     """고르기 영역의 기록 — 영역 키마다 **통째로**. 보낸 영역만 바뀐다."""
+    made: dict[str, uuid.UUID | None] | None = None
+    """글 영역의 글로 만든 기록 — 영역 키마다. `null` 이면 그 표시를 지운다(기록은 남는다)."""
 
 
 class PreviewIn(BaseModel):
@@ -125,6 +127,15 @@ class LinkOut(BaseModel):
     items: list[LinkItemOut]
 
 
+class TieOut(BaseModel):
+    """따라오는 기록 하나와 따라갈 기록 하나를 잇는 것."""
+
+    id: str
+    """관계면 관계 id, 칸이면 따라갈 기록의 id."""
+    source_id: str
+    """잇는 따라갈 기록."""
+
+
 class RecordOut(BaseModel):
     id: uuid.UUID
     label: str
@@ -132,6 +143,36 @@ class RecordOut(BaseModel):
     values: dict[str, str]
     """보이는 칸의 값을 글로 — 참조는 이름, 여러 값은 「, 」 로."""
     links: list[LinkOut]
+    can_edit: bool = False
+    """이 사람이 이 기록의 값을 수정할 수 있나 — 객체 상세의 `can_edit` 와 같은 판정(ADR
+    0036)."""
+    ties: list[TieOut] = Field(default_factory=list)
+    """따라오는 영역에서 이 기록을 따라갈 영역의 기록과 잇는 것 — 「연결 해제」 가 이것을
+    끊는다."""
+
+
+class AreaLinkOut(BaseModel):
+    """따라오는 영역이 따라갈 영역의 기록과 **어떻게** 이어지나 — 장표에서 연결 · 해제할 때
+    객체
+    API 로 무엇을 부를지. 걸음이 둘 이상인 주소면 장표에서 잇지 않는다(없음)."""
+
+    kind: Literal["relation", "ref", "backref"]
+    """`relation` — 관계 하나. `ref` — 이 기록의 참조 칸이 따라갈 기록을 가리킨다. `backref` —
+    따라갈 기록의 참조 칸이 이 기록을 가리킨다."""
+    relation: str | None = None
+    direction: Literal["in", "out"] | None = None
+    """관계의 방향 — `in` 이면 따라갈 기록이 출발점(관계를 거기서 맺는다), `out` 이면 이
+    기록이."""
+    property: str | None = None
+    """`ref` 면 이 기록의 칸, `backref` 면 따라갈 기록의 칸."""
+    multi: bool = False
+    source_type_slug: str
+    sources: list[LinkItemOut]
+    """따라갈 영역에 표시된 기록 — 둘 이상이면 어느 것과 이을지 고른다."""
+    can_link: bool
+    """따라갈 기록 쪽을 고치는 연결(`in` 관계 · `backref`)이면 그 기록들을 고칠 수 있나. 이
+    기록
+    쪽을 고치는 연결이면 참 — 기록마다 서버가 다시 판정한다."""
 
 
 class AreaOut(BaseModel):
@@ -156,6 +197,10 @@ class AreaOut(BaseModel):
     있다."""
     follow_title: str | None = None
     """따라오는 영역이면 따라가는 영역의 머리글."""
+    link: AreaLinkOut | None = None
+    """따라오는 영역을 장표에서 연결 · 해제하는 법 — 걸음이 둘 이상이면 없다."""
+    made: LinkItemOut | None = None
+    """글 영역의 글로 만든 기록."""
     limit: int = AREA_LIMIT
     problem: str | None = None
     """이 영역만 못 그린 이유 — 칸이 지워졌거나 조건이 이제 안 맞을 때. 장표는 나머지를
@@ -207,3 +252,14 @@ class CandidatesOut(BaseModel):
 
     items: list[CandidateOut]
     total: int
+
+
+class UsedInOut(BaseModel):
+    """이 객체가 쓰인 장표 하나 — 주제이거나, 마지막으로 열었을 때 영역에 실렸거나."""
+
+    slide: SlideSummaryOut
+    role: Literal["subject", "record"]
+    areas: list[str]
+    """실린 영역의 머리글 — 주제면 비어 있다."""
+    seen_at: datetime | None
+    """영역에 실린 것을 본 때 — 장표는 살아 있는 값이라 그 뒤에 바뀌었을 수 있다."""
