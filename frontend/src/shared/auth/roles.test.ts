@@ -8,7 +8,12 @@
 import { describe, expect, it } from 'vitest'
 
 import type { CurrentUser } from '@/shared/auth/types'
-import { defaultOwnerWorkspace, managedMemberships } from '@/shared/auth/roles'
+import {
+  canCreateObject,
+  defaultOwnerWorkspace,
+  managedMemberships,
+  ownableMemberships,
+} from '@/shared/auth/roles'
 
 function user(extra: Partial<CurrentUser>): CurrentUser {
   return {
@@ -50,5 +55,28 @@ describe('defaultOwnerWorkspace', () => {
 
   it('관리하는 곳이 없으면 없다 — 대표 소속을 내밀지 않는다', () => {
     expect(defaultOwnerWorkspace(user({ memberships: [room('a', 'member')] }))).toBeNull()
+  })
+})
+
+describe('기록은 구성원도 넣는다(ADR 0036)', () => {
+  const plain = user({ memberships: [room('a', 'member'), room('b', 'member')] })
+
+  it('기록이면 소속 부서 전부가 고를 거리이고, 축이면 관리하는 곳만이다', () => {
+    expect(ownableMemberships(plain, 'log').map((each) => each.slug)).toEqual(['a', 'b'])
+    expect(ownableMemberships(plain, 'axis')).toEqual([])
+    // 용도를 모르면 좁은 쪽(축)으로 본다.
+    expect(ownableMemberships(plain)).toEqual([])
+  })
+
+  it('멤버뿐인 사람도 기록의 「생성」 단추는 선다', () => {
+    expect(canCreateObject(plain, 'log')).toBe(true)
+    expect(canCreateObject(plain, 'axis')).toBe(false)
+    expect(canCreateObject(user({ memberships: [] }), 'log')).toBe(false)
+  })
+
+  it('기록의 기본 부서는 대표 소속이다 — 멤버여도', () => {
+    expect(defaultOwnerWorkspace(plain, null, 'log')).toBe('a')
+    expect(defaultOwnerWorkspace(plain, 'b', 'log')).toBe('b')
+    expect(defaultOwnerWorkspace(plain, null, 'axis')).toBeNull()
   })
 })

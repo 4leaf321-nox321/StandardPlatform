@@ -2039,7 +2039,8 @@ async def object_create(
 ) -> Any:
     """객체 하나를 만든다.
 
-    `workspace_slug` 를 비우면 **전역**이 되고 시스템 관리자만 만들 수 있다.
+    `workspace_slug` 를 비우면 **전역**이 되고 시스템 관리자만 만들 수 있다. 기록 타입은 그
+    부서의 구성원이면 넣고, 축 타입은 그 부서의 관리자만 넣는다.
     속성은 정의에 없는 키를 넣으면 거절된다 — 먼저 `ontology_schema` 를 읽는다."""
     return await _post(
         ctx,

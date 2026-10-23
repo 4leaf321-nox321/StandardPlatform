@@ -7,6 +7,8 @@
  * **고를 수 있는 것만** 내놓는다 — 고를 수 있다고 보여 주고 나서 거절하지 않는다.
  *
  * 시스템 관리자는 어느 부서에든 만든다 — 소속만 내놓으면 남의 부서에 만들 길이 없다.
+ *
+ * **기록은 구성원이면 넣는다**(ADR 0036) — `usage` 가 `log` 면 관리하는 곳이 아니라 소속 전부다.
  */
 
 import { useEffect, useState } from 'react'
@@ -14,7 +16,7 @@ import { useEffect, useState } from 'react'
 import { workspaceApi } from '@/modules/workspaces/api'
 import type { WorkspaceOption } from '@/modules/workspaces/api'
 import { useAuth } from '@/shared/auth/AuthContext'
-import { isSystemAdmin, managedMemberships } from '@/shared/auth/roles'
+import { isSystemAdmin, ownableMemberships } from '@/shared/auth/roles'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
 import type { PickerOption } from '@/shared/components/SearchablePicker'
 
@@ -23,9 +25,11 @@ interface Props {
   onChange: (slug: string) => void
   id?: string
   className?: string
+  /** 만드는 것의 용도 — `log`(기록)면 소속 전부, 아니면 관리하는 소속. */
+  usage?: string | null
 }
 
-export function OwnerWorkspacePicker({ value, onChange, id, className }: Props) {
+export function OwnerWorkspacePicker({ value, onChange, id, className, usage }: Props) {
   const { user } = useAuth()
   const admin = isSystemAdmin(user)
   // 전체 부서는 시스템 관리자만 받는다 — 나머지는 내 소속(로그인 때 이미 받은 것)으로 끝난다.
@@ -50,7 +54,7 @@ export function OwnerWorkspacePicker({ value, onChange, id, className }: Props) 
     ? everyone?.length
       ? everyone
       : (user?.memberships ?? [])
-    : managedMemberships(user)
+    : ownableMemberships(user, usage)
   const options: PickerOption[] = source.map((one) => ({
     value: one.slug,
     label: one.name,
@@ -73,7 +77,7 @@ export function OwnerWorkspacePicker({ value, onChange, id, className }: Props) 
       ariaLabel="소유 부서"
       placeholder="부서를 선택하세요"
       searchPlaceholder="부서 이름이나 주소로 검색"
-      emptyText="관리하는 부서가 없습니다"
+      emptyText={usage === 'log' ? '소속 부서가 없습니다' : '관리하는 부서가 없습니다'}
     />
   )
 }

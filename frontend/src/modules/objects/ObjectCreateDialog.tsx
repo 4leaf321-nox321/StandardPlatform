@@ -69,13 +69,17 @@ export function ObjectCreateDialog({ type, defs, onClose, onCreated, onOpen }: P
   const [partial, setPartial] = useState<PartialFailure | null>(null)
 
   /**
-   * 어느 부서 것으로 만들 것인가 — **내가 관리자인 부서 중에서 고른다.**
+   * 어느 부서 것으로 만들 것인가 — **내가 관리자인 부서 중에서 고른다**(기록은 소속 부서 중에서,
+   * ADR 0036).
    *
    * 전역은 여러 부서가 함께 쓰므로 시스템 관리자만 만들고, 기본값으로 두면 아무나 전역을
    * 만들려다 403 을 본다. 대표 소속을 고정으로 보내던 때는 B 의 관리자인데 대표 소속 A 에서는
    * 멤버인 사람이 늘 403 을 봤다(2026-10-08) — 기본은 대표 소속이 관리 부서일 때만 그것이다.
    */
-  const [owner, setOwner] = useState<string | null>(() => defaultOwnerWorkspace(user))
+  const record = type.usage === 'log'
+  const [owner, setOwner] = useState<string | null>(() =>
+    defaultOwnerWorkspace(user, null, type.usage),
+  )
   /** 부서 없이(전역) 보낼 수 있나 — 서버가 시스템 관리자에게만 받아 준다. */
   const canGlobal = isSystemAdmin(user)
 
@@ -246,13 +250,18 @@ export function ObjectCreateDialog({ type, defs, onClose, onCreated, onOpen }: P
               className="w-full"
               value={owner}
               onChange={setOwner}
+              usage={type.usage}
             />
             <p className="text-muted-foreground text-xs">
               {owner
-                ? '이 부서의 관리자가 수정합니다. 관리하는 부서만 선택할 수 있습니다.'
+                ? record
+                  ? '만든 사람과 이 부서의 관리자가 수정합니다. 소속 부서만 선택할 수 있습니다.'
+                  : '이 부서의 관리자가 수정합니다. 관리하는 부서만 선택할 수 있습니다.'
                 : canGlobal
                   ? '부서를 선택하지 않으면 전역으로 만듭니다 — 시스템 관리자만 됩니다.'
-                  : '관리하는 부서가 없으면 만들 수 없습니다 — 부서 관리자에게 요청하세요.'}
+                  : record
+                    ? '소속 부서가 없으면 만들 수 없습니다 — 시스템 관리자에게 요청하세요.'
+                    : '관리하는 부서가 없으면 만들 수 없습니다 — 부서 관리자에게 요청하세요.'}
             </p>
           </div>
         </div>

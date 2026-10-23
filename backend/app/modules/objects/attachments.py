@@ -26,6 +26,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.files import services as files_services
 from app.modules.files.models import Attachment
+from app.modules.objects import access
 from app.modules.objects.models import ObjectInstance
 from app.modules.objects.services import properties_of
 from app.modules.ontology import managed
@@ -33,7 +34,7 @@ from app.modules.ontology.models import ObjectType
 from app.shared import audit
 from app.shared.errors import Conflict, NotFound, code
 from app.shared.extensions import AttachmentOwner
-from app.shared.permissions import require_owner_edit, visible_owner_clause
+from app.shared.permissions import visible_owner_clause
 
 ATTACHED = "object.attachment.add"
 DETACHED = "object.attachment.remove"
@@ -54,9 +55,7 @@ def owner(
         raise NotFound(code("OBJECTS", 11), "객체를 찾을 수 없습니다.")
     object_type = db.get(ObjectType, row.type_id)
     assert object_type is not None  # FK 다
-    require_owner_edit(
-        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 16)
-    )
+    access.require_edit(db, user, object_type, row, code_value=code("OBJECTS", 16))
     managed.require_objects_editable(object_type, what="첨부를 변경하지")
 
     accept: str | None = None

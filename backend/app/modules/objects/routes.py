@@ -33,6 +33,7 @@ from app.modules.jobs import services as job_services
 from app.modules.jobs.schemas import JobOut
 from app.modules.metrics.models import MetricDef
 from app.modules.objects import (
+    access,
     aliases,
     bulk,
     bulkedit,
@@ -308,16 +309,6 @@ def _visible(
         # 무엇이 있는지 id 를 바꿔 가며 알아낼 수 있다.
         raise NotFound(code("OBJECTS", 11), "객체를 찾을 수 없습니다.")
     return row
-
-
-def _can_edit(db: Session, user: User, row: ObjectInstance) -> bool:
-    try:
-        require_owner_edit(
-            db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 12)
-        )
-    except Exception:
-        return False
-    return True
 
 
 def _tree_spec(object_type: ObjectType) -> tuple[str | None, graph.ParentEnd]:
@@ -2253,8 +2244,9 @@ def object_profile(
             )
             for one in refedges.log_counts(db, target=row.id, user=user)
         ],
-        can_edit=_can_edit(db, user, row) and not managed.owner_of(object_type),
-        can_link=_can_edit(db, user, row),
+        can_edit=access.can_edit(db, user, object_type, row)
+        and not managed.owner_of(object_type),
+        can_link=access.can_edit(db, user, object_type, row),
         watching=watches.watching(db, object_id=row.id, user_id=user.id),
         watcher_count=watches.counts(db, [row.id]).get(row.id, 0),
     )
@@ -2275,8 +2267,8 @@ def create_object(
     _not_system(object_type, "만들지")
     managed.require_objects_editable(object_type, what="만들지")
 
-    owner_workspace_id = resolve_owner_workspace(
-        db, user, payload.workspace_slug, what="객체", code_value=code("OBJECTS", 15)
+    owner_workspace_id = access.resolve_create_owner(
+        db, user, object_type, payload.workspace_slug, code_value=code("OBJECTS", 15)
     )
     key = normalize_key(object_type, payload.key)
     require_key_free(db, object_type, key, owner_workspace_id=owner_workspace_id)
@@ -2328,9 +2320,7 @@ def update_object(
 ) -> ObjectOut:
     object_type = _type(db, type_slug)
     row = _visible(db, user, object_type, object_id)
-    require_owner_edit(
-        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 16)
-    )
+    access.require_edit(db, user, object_type, row, code_value=code("OBJECTS", 16))
 
     managed.require_objects_editable(object_type)
     before = audit_state(row)
@@ -2404,9 +2394,7 @@ def set_aliases(
     _not_system(object_type, "별칭을 붙이지")
     managed.require_objects_editable(object_type, what="별칭을 붙이지")
     row = _visible(db, user, object_type, object_id)
-    require_owner_edit(
-        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 12)
-    )
+    access.require_edit(db, user, object_type, row, code_value=code("OBJECTS", 12))
     # **화면에서 사람이 붙인 것은 곧 확인한 것이다** — 검수 대기로 남는 것은 기계가 붙인
     # 것뿐이어야 한다. 안 그러면 그 목록은 곧 수천 줄이 되어 아무도 안 읽는다.
     before, after = aliases.set_human(db, row, object_type, payload.aliases, verified=user)
@@ -2702,9 +2690,7 @@ def restore_object(
     지워졌거나 규칙이 바뀌었으면 막고 이유를 말한다."""
     object_type = _type(db, type_slug)
     row = _visible(db, user, object_type, object_id)
-    require_owner_edit(
-        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 16)
-    )
+    access.require_edit(db, user, object_type, row, code_value=code("OBJECTS", 16))
     managed.require_objects_editable(object_type, what="되돌리지")
     history.restore(db, user, row, object_type, payload.entry_id)
     db.refresh(row)
@@ -2731,11 +2717,14 @@ def delete_object(
     """
     object_type = _type(db, type_slug)
     row = _visible(db, user, object_type, object_id)
-    require_owner_edit(
-        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 17)
-    )
+    access.require_edit(db, user, object_type, row, code_value=code("OBJECTS", 17))
     managed.require_objects_editable(object_type, what="삭제하지")
     if mode == "detach":
+        # **참조를 끊는 것은 남의 객체를 고치는 일이다** — 기록을 넣은 사람이라도 그것은 부서
+        # 관리자의 일이다(ADR 0036). 막는 것(`block`)은 내 기록만 지운다.
+        require_owner_edit(
+            db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 17)
+        )
         lifecycle.delete_detaching(db, user, row, object_type)
     else:
         lifecycle.delete_blocking(db, user, row, object_type)
@@ -3034,9 +3023,7 @@ def add_relation(
     """
     object_type = _type(db, type_slug)
     src = _visible(db, user, object_type, object_id)
-    require_owner_edit(
-        db, user, src.owner_workspace_id, what="객체", code_value=code("OBJECTS", 27)
-    )
+    access.require_edit(db, user, object_type, src, code_value=code("OBJECTS", 27))
 
     kind = rel.relation_type(db, payload.relation)
     managed.require_relation_editable(kind)
@@ -3131,9 +3118,7 @@ def update_relation(
     """관계의 속성과 근거를 고친다. **양끝과 종류는 못 바꾼다** — 그건 다른 관계다."""
     object_type = _type(db, type_slug)
     row = _visible(db, user, object_type, object_id)
-    require_owner_edit(
-        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 30)
-    )
+    access.require_edit(db, user, object_type, row, code_value=code("OBJECTS", 30))
     link = _link(db, relation_id, row)
     if link is not None:
         managed.require_relation_editable(rel.relation_type(db, link.relation))
@@ -3212,9 +3197,7 @@ def remove_relation(
     """
     object_type = _type(db, type_slug)
     row = _visible(db, user, object_type, object_id)
-    require_owner_edit(
-        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 31)
-    )
+    access.require_edit(db, user, object_type, row, code_value=code("OBJECTS", 31))
     link = _link(db, relation_id, row)
     if link is not None:
         managed.require_relation_editable(rel.relation_type(db, link.relation))
@@ -3341,9 +3324,7 @@ def set_years(
     """
     object_type = _type(db, type_slug)
     row = _visible(db, user, object_type, object_id)
-    require_owner_edit(
-        db, user, row.owner_workspace_id, what="객체", code_value=code("OBJECTS", 34)
-    )
+    access.require_edit(db, user, object_type, row, code_value=code("OBJECTS", 34))
     managed.require_objects_editable(object_type, what="연도를 배정하지")
     if object_type.temporal_kind != "yearly":
         raise Conflict(

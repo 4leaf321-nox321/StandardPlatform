@@ -498,6 +498,8 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 - `object_create(type_slug, label, key=, properties=, workspace_slug=)` —
   `workspace_slug` 를 비우면 **전역** 객체라 시스템 관리자만 만들 수 있다.
   `key_policy` 가 `required` 인 타입은 `key` 가 있어야 한다.
+  **누가 만드나:** 기록 타입(`usage=log`)은 그 부서의 **구성원**이면 넣고, 넣은 사람과 부서
+  관리자가 고친다. 축 타입(모델 · 부품 …)은 그 부서의 관리자만. 거절되면 그 말을 사람에게 전한다.
 - `object_update(type_slug, object_id, properties=)` — **보낸 키만** 병합한다.
   값을 비우려면 그 키에 `null`. 통째로 덮지 않는다.
 - 참조 속성(`data_type: object_ref`)에는 상대 객체의 **id** 를 넣는다. id 를 모르면

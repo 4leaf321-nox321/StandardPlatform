@@ -41,7 +41,7 @@ import { InterfaceListPage } from '@/modules/objects/InterfaceListPage'
 import { ObjectTree } from '@/modules/objects/ObjectTree'
 import { conditionsFromParams, withConditions } from '@/modules/objects/urlConditions'
 import { useAuth } from '@/shared/auth/AuthContext'
-import { isAnyManager } from '@/shared/auth/roles'
+import { canCreateObject, isAnyManager } from '@/shared/auth/roles'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { PageHeader } from '@/shared/components/PageHeader'
@@ -293,9 +293,10 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
    *  이것을 담는다. 빠뜨리던 때는 월별로 저장한 뷰가 다시 열면 해별이었다(2026-10-08). */
   const [summaryGrain, setSummaryGrain] = useState<string | null>(null)
   const { user } = useAuth()
-  /** 생성 · 일괄 입력은 **어느 부서든 관리자일 때만** 선다 — 서버가 소유 부서의 관리자만
-   *  받아 준다(`resolve_owner_workspace`). 누구에게나 세우면 눌러 보고서야 403 을 안다. */
-  const canCreate = isAnyManager(user)
+  /** 일괄 입력 · 사진 일괄 업로드는 **어느 부서든 관리자일 때만** 선다 — 서버가 소유 부서의
+   *  관리자만 받아 준다(`resolve_owner_workspace`). 누구에게나 세우면 눌러 보고서야 403 을 안다.
+   *  한 건 생성은 기록이면 구성원도 된다(`canCreateObject`, ADR 0036). */
+  const canBulk = isAnyManager(user)
   /** 고른 줄 — **쪽을 넘기면 푼다.** 안 보이는 것을 고른 채로 두면 「10건 골랐다」 는
    *  말과 눈에 보이는 것이 어긋나고, 그때 사람은 무엇을 바꾸는지 모른다. */
   const [picked, setPicked] = useState<Set<string>>(new Set())
@@ -515,13 +516,13 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                       <BarChart3 className="mr-1 size-4" />
                       통계
                     </Button>
-                    {!managed && canCreate && (
+                    {!managed && canBulk && (
                       <>
                         <Button size="sm" variant="outline" onClick={() => setImporting(true)}>
                           <FileUp className="mr-1 size-4" />
                           일괄 입력
                         </Button>
-                        {/* 사진은 객체를 고치는 일이라 생성 · 일괄 입력과 같은 자리 · 같은 문턱
+                        {/* 사진은 객체를 고치는 일이라 일괄 입력과 같은 자리 · 같은 문턱
                             이다(객체마다의 권한은 계획이 「권한 없음」 으로 가른다). */}
                         {type.properties.some((def) => def.data_type === 'file') && (
                           <Button
@@ -533,11 +534,13 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                             사진 일괄 업로드
                           </Button>
                         )}
-                        <Button size="sm" onClick={() => setCreating(true)}>
-                          <Plus className="mr-1 size-4" />
-                          생성
-                        </Button>
                       </>
+                    )}
+                    {!managed && canCreateObject(user, type.usage) && (
+                      <Button size="sm" onClick={() => setCreating(true)}>
+                        <Plus className="mr-1 size-4" />
+                        생성
+                      </Button>
                     )}
                   </>
                 )}

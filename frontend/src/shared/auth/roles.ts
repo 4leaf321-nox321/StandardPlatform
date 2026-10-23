@@ -36,20 +36,48 @@ export function managedMemberships(user: CurrentUser | null | undefined): Worksp
   return (user?.memberships ?? []).filter((one) => one.role === 'manager')
 }
 
+/** 이 용도의 객체를 넣을 수 있는 소속 — **기록(`log`)은 구성원이면, 축은 관리자일 때**
+ *  (ADR 0036, 서버의 `objects/access.py`). 용도를 모르면 축으로 본다(좁은 쪽). */
+export function ownableMemberships(
+  user: CurrentUser | null | undefined,
+  usage?: string | null,
+): WorkspaceMembership[] {
+  return usage === 'log' ? (user?.memberships ?? []) : managedMemberships(user)
+}
+
+/** 이 용도의 객체를 어딘가에 넣을 수 있나 — 목록의 「생성」 단추가 설 근거다. */
+export function canCreateObject(
+  user: CurrentUser | null | undefined,
+  usage?: string | null,
+): boolean {
+  return isSystemAdmin(user) || ownableMemberships(user, usage).length > 0
+}
+
+function canOwn(
+  user: CurrentUser | null | undefined,
+  slug: string,
+  usage?: string | null,
+): boolean {
+  if (isSystemAdmin(user)) return true
+  return ownableMemberships(user, usage).some((one) => one.slug === slug)
+}
+
 /**
  * 부서 소유 자료를 **어느 부서 것으로** 만들지의 기본값.
  *
  * 차례: 지금 보고 있는 부서(`preferred`) → 대표 소속 → 관리하는 소속의 첫째. **대표 소속이라고
  * 무조건 고르지 않는다** — B 의 관리자인데 대표 소속 A 에서는 멤버인 사람이 A 로 보내면 403 을
  * 보고, 그 단추는 그 사람에게 아예 안 서야 맞았다(2026-10-08). 관리하는 곳이 없으면 null.
+ * 기록(`usage` 가 `log`)은 구성원인 곳이면 된다(ADR 0036).
  */
 export function defaultOwnerWorkspace(
   user: CurrentUser | null | undefined,
   preferred?: string | null,
+  usage?: string | null,
 ): string | null {
-  if (preferred && isManagerOf(user, preferred)) return preferred
+  if (preferred && canOwn(user, preferred, usage)) return preferred
   const home = user?.home_workspace_slug ?? null
-  if (home && isManagerOf(user, home)) return home
+  if (home && canOwn(user, home, usage)) return home
   if (isSystemAdmin(user)) return user?.memberships[0]?.slug ?? null
-  return managedMemberships(user)[0]?.slug ?? null
+  return ownableMemberships(user, usage)[0]?.slug ?? null
 }
