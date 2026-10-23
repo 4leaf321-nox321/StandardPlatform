@@ -675,3 +675,99 @@ def test_기록이_쓰인_장표를_말한다(
         f"/api/slides/used-in/{world['changes']['B 변경']['id']}", headers=member.headers
     ).json()
     assert other == []
+
+
+# --- 3단계 — pptx 내보내기 -----------------------------------------------------------
+
+
+def test_pptx_는_영역마다_PPT_표_하나_짝은_한_표(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    import io
+
+    from pptx import Presentation
+    from pptx.oxml.ns import qn
+
+    slide = _slide(
+        client, member, _made_template(client, admin, world), world["models"]["A"]["id"]
+    )
+    client.patch(
+        f"/api/slides/{slide['id']}",
+        json={"texts": {"opinion": "접촉 불량 대책 확인\n12월 재검토"}},
+        headers=member.headers,
+    )
+    got = client.get(f"/api/slides/{slide['id']}/pptx", headers=member.headers)
+    assert got.status_code == 200, got.text
+    assert got.headers["content-type"].startswith(
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+    )
+    assert ".pptx" in got.headers["content-disposition"]
+
+    [page] = Presentation(io.BytesIO(got.content)).slides
+    tables = [shape.table for shape in page.shapes if shape.has_table]
+    # AS-IS · TO-BE 가 한 표, 잠재리스크 한 표, 종합 의견 한 표.
+    assert len(tables) == 3
+    pair = tables[0]
+    assert [cell.text for cell in pair.rows[0].cells] == ["AS-IS", "TO-BE"]
+    line = pair.cell(1, 0)
+    assert line.is_merge_origin and line.span_width == 2
+    assert line.text == "부품: 커넥터"
+    assert [cell.text for cell in pair.rows[2].cells] == ["재질 전", "재질 후"]
+    assert [cell.text for cell in pair.rows[4].cells] == ["핀 수 전", "핀 수 후"]
+    # 한글 글꼴 · 언어를 박는다 — 안 박으면 PowerPoint 가 영문 글꼴로 그린다.
+    props = pair.cell(0, 0).text_frame.paragraphs[0].runs[0]._r.rPr
+    assert props.find(qn("a:ea")).get("typeface") == "맑은 고딕"
+    assert props.get("lang") == "ko-KR"
+    opinion = tables[2]
+    assert opinion.cell(0, 0).text == "종합 의견 (작성한 글)"
+    assert opinion.cell(1, 0).text == "접촉 불량 대책 확인\n12월 재검토"
+    words = " ".join(shape.text_frame.text for shape in page.shapes if shape.has_text_frame)
+    assert slide["title"] in words and "기준 시각" in words
+
+
+def test_pptx_한_장에_안_들면_넘친_기록을_계속_장으로_빠뜨리지_않는다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    import io
+
+    from pptx import Presentation
+
+    for index in range(14):
+        _make_object(
+            client,
+            member,
+            world["change"],
+            label=f"변경 {index:02d}",
+            properties={
+                "model": world["models"]["A"]["id"],
+                "before": f"변경 {index:02d} 전 — 사양 · 재질 · 치수의 이전 값을 적은 설명",
+                "after": f"변경 {index:02d} 후",
+            },
+        )
+    body = _template(world)
+    body["areas"][0]["limit"] = 20
+    made = client.post("/api/slides/templates", json=body, headers=admin.headers)
+    slide = _slide(client, member, made.json(), world["models"]["A"]["id"])
+    got = client.get(f"/api/slides/{slide['id']}/pptx", headers=member.headers)
+    assert got.status_code == 200, got.text
+    pages = list(Presentation(io.BytesIO(got.content)).slides)
+    assert len(pages) >= 2
+    texts = [
+        cell.text
+        for page in pages
+        for shape in page.shapes
+        if shape.has_table
+        for row in shape.table.rows
+        for cell in row.cells
+    ]
+    assert any(text.startswith("다음 장에 계속") for text in texts)
+    # 기록 열여섯(심은 것 + 핀 수 · 재질)이 모두, 한 번씩 — 빠지거나 겹치지 않는다.
+    befores = [text for text in texts if text.endswith(" 전") or "전 — " in text]
+    assert len(befores) == 16 and len(set(befores)) == 16
+    titles = [
+        shape.text_frame.text
+        for page in pages[1:]
+        for shape in page.shapes
+        if shape.has_text_frame
+    ]
+    assert any("(계속 1/" in one for one in titles)

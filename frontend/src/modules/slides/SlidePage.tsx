@@ -7,7 +7,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
-import { Pencil, RefreshCw, Trash2, X } from 'lucide-react'
+import { FileDown, Pencil, RefreshCw, Trash2, X } from 'lucide-react'
 
 import { slideApi } from '@/modules/slides/api'
 import type { RenderedArea, Slide } from '@/modules/slides/api'
@@ -93,6 +93,21 @@ export default function SlidePage() {
         }
         actions={
           <div className="flex gap-2">
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                slideApi
+                  .pptx(slide.id, slide.title)
+                  .catch((caught: unknown) =>
+                    setError(caught instanceof Error ? caught : new Error('알 수 없는 오류')),
+                  )
+              }
+              title="지금의 기록으로 PPT 표를 만들어 다운로드합니다"
+            >
+              <FileDown className="mr-1 size-4" />
+              pptx 다운로드
+            </Button>
             <Button size="sm" variant="outline" onClick={reload} title="지금의 기록으로 다시 읽기">
               <RefreshCw className="mr-1 size-4" />
               새로 고침

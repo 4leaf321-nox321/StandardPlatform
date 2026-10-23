@@ -3135,6 +3135,46 @@
         }
       }
     },
+    "/api/slides/{slide_id}/pptx": {
+      "get": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "Slide Pptx",
+        "description": "장표를 pptx 로 — **지금** 센 값으로(살아 있는 값). 파일은 그때의 사본이라 이름 · 바닥에\n기준\n시각을 찍는다. 영역마다 PPT 표 하나(짝 영역은 표 하나).",
+        "operationId": "slide_pptx_api_slides__slide_id__pptx_get",
+        "parameters": [
+          {
+            "name": "slide_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Slide Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "장표 한 장의 pptx",
+            "content": {
+              "application/vnd.openxmlformats-officedocument.presentationml.presentation": {}
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/slides/{slide_id}/areas/{area_key}/candidates": {
       "get": {
         "tags": [

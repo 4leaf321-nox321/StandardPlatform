@@ -5,7 +5,7 @@
  * 다시 판정한다). 화면의 말은 「장표 · 틀 · 영역」(`docs/용어.md`).
  */
 
-import { api } from '@/shared/api/client'
+import { api, downloadFile } from '@/shared/api/client'
 
 export interface AreaCondition {
   field: string
@@ -209,6 +209,8 @@ export const slideApi = {
   /** 이 객체가 쓰인 장표 — 주제인 것과, 마지막으로 열었을 때 영역에 실렸던 것. */
   usedIn: (objectId: string) => api.get<UsedIn[]>(`/slides/used-in/${objectId}`),
   remove: (id: string) => api.delete<void>(`/slides/${id}`),
+  /** pptx — 지금 센 값으로(그때의 사본). 이름은 서버가 정한다(제목 + 기준 시각). */
+  pptx: (id: string, title: string) => downloadFile(`/slides/${id}/pptx`, `${title}.pptx`),
 
   templates: () => api.get<Template[]>('/slides/templates'),
   template: (id: string) => api.get<Template>(`/slides/templates/${id}`),

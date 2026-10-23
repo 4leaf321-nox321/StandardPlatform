@@ -4,8 +4,10 @@
 
 from __future__ import annotations
 
+import re
 import uuid
 from datetime import UTC, datetime
+from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Response
 from sqlalchemy import func, select
@@ -16,7 +18,7 @@ from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology.models import ObjectType
 from app.modules.ontology.services import InvalidValue
-from app.modules.slides import services
+from app.modules.slides import pptx, services
 from app.modules.slides.models import Slide, SlideRef, SlideTemplate
 from app.modules.slides.schemas import (
     AREA_LIMIT_MAX,
@@ -44,6 +46,10 @@ from app.shared.permissions import (
 )
 
 router = APIRouter(prefix="/slides", tags=["slides"])
+
+PPTX = "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+#: 파일 이름에 못 쓰는 글자 — Windows 가 거절하는 것.
+_UNSAFE = re.compile(r'[\\/:*?"<>|\n\r\t]+')
 
 
 # --- 틀 ----------------------------------------------------------------------
@@ -322,6 +328,33 @@ def update_slide(
     db.commit()
     db.refresh(row)
     return _slide_out(db, user, row)
+
+
+@router.get(
+    "/{slide_id}/pptx",
+    response_class=Response,
+    responses={200: {"content": {PPTX: {}}, "description": "장표 한 장의 pptx"}},
+)
+def slide_pptx(
+    slide_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """장표를 pptx 로 — **지금** 센 값으로(살아 있는 값). 파일은 그때의 사본이라 이름 · 바닥에
+    기준
+    시각을 찍는다. 영역마다 PPT 표 하나(짝 영역은 표 하나)."""
+    shown = _slide_out(db, user, _slide(db, slide_id))
+    stamp = shown.rendered_at.astimezone().strftime("%Y%m%d-%H%M")
+    name = f"{_UNSAFE.sub('_', shown.title).strip() or '장표'}_{stamp}.pptx"
+    ascii_name = name.encode("ascii", "replace").decode().replace('"', "")
+    return Response(
+        content=pptx.build(shown),
+        media_type=PPTX,
+        headers={
+            "Content-Disposition": f'attachment; filename="{ascii_name}"; '
+            f"filename*=UTF-8''{quote(name)}"
+        },
+    )
 
 
 @router.get("/{slide_id}/areas/{area_key}/candidates", response_model=CandidatesOut)
