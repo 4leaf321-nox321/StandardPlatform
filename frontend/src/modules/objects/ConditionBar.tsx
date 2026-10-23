@@ -49,6 +49,7 @@ const OP_LABEL: Record<ConditionOp, string> = {
   starts: '로 시작',
   empty: '비어 있음',
   notempty: '비어 있지 않음',
+  under: '하위 전체(자신 포함)',
 }
 
 const OP_SIGN: Record<ConditionOp, string> = {
@@ -63,10 +64,21 @@ const OP_SIGN: Record<ConditionOp, string> = {
   starts: '^',
   empty: '= ∅',
   notempty: '≠ ∅',
+  under: '⊆',
 }
 
-/** 칸 종류별 연산 — 서버 `ops_for` 와 같은 표. */
-export function opsFor(dataType: DataType | 'fixed' | 'relation'): ConditionOp[] {
+/** 목록의 객체 **자신**에 거는 칸 — 트리가 있는 타입만(`f.id.under`). */
+const SELF_KEY = 'id'
+
+/**
+ * 칸 종류별 연산 — 서버 `ops_for` 와 같은 표. `tree` 면 가리키는 타입에 트리가 있어 「하위
+ * 전체」 를 더한다(서버도 트리가 없으면 거절한다). 목록 자신(`self`)은 「하위 전체」 하나뿐이다.
+ */
+export function opsFor(
+  dataType: DataType | 'fixed' | 'relation',
+  { tree = false, self = false }: { tree?: boolean; self?: boolean } = {},
+): ConditionOp[] {
+  if (self) return ['under']
   const any: ConditionOp[] = ['empty', 'notempty']
   if (dataType === 'number' || dataType === 'date' || dataType === 'datetime') {
     return ['eq', 'ne', 'gt', 'gte', 'lt', 'lte', 'in', ...any]
@@ -79,7 +91,9 @@ export function opsFor(dataType: DataType | 'fixed' | 'relation'): ConditionOp[]
   ) {
     return ['eq', 'ne', 'contains', 'starts', 'in', ...any]
   }
-  if (dataType === 'enum' || dataType === 'object_ref') return ['eq', 'ne', 'in', ...any]
+  if (dataType === 'object_ref')
+    return ['eq', 'ne', 'in', ...(tree ? ['under' as const] : []), ...any]
+  if (dataType === 'enum') return ['eq', 'ne', 'in', ...any]
   if (dataType === 'bool') return ['eq', ...any]
   return any
 }
@@ -95,9 +109,19 @@ interface Field {
   heading?: string
 }
 
-function fieldsOf(defs: PropertyDef[], linked: LinkedField[]): Field[] {
+function fieldsOf(defs: PropertyDef[], linked: LinkedField[], selfType?: string): Field[] {
   return [
     ...FIXED,
+    ...(selfType
+      ? [
+          {
+            key: SELF_KEY,
+            label: '자신(이 목록의 객체)',
+            data_type: 'object_ref' as const,
+            ref_type_slug: selfType,
+          },
+        ]
+      : []),
     ...defs
       .filter((def) => def.data_type !== 'file')
       .map((def) => ({
@@ -138,7 +162,16 @@ interface ConditionBarProps {
   allowExclude?: boolean
   /** 「조건 추가」 단추의 이름 — 한 화면에 조건 줄이 여럿이면 어느 것인지 말한다. */
   addLabel?: string
+  /**
+   * 트리(`list_view.tree`)가 정해진 타입들 — 그 타입을 가리키는 칸에 「하위 전체」 를 낸다.
+   * 안 주면 내지 않는다(서버가 트리 없는 칸을 거절하므로 모르면 안 보이는 편이 낫다).
+   */
+  treeTypes?: ReadonlySet<string>
+  /** 이 목록의 타입 — 트리가 있으면 객체 **자신**에 「하위 전체」 를 거는 칸이 선다. */
+  selfType?: string
 }
+
+const NO_TREES: ReadonlySet<string> = new Set()
 
 /** 제외 묶음 번호들 — 걸린 차례대로. */
 function groupsOf(conditions: Condition[]): number[] {
@@ -157,8 +190,13 @@ export function ConditionBar({
   linked = NO_LINKED,
   allowExclude = true,
   addLabel = '조건 추가',
+  treeTypes = NO_TREES,
+  selfType,
 }: ConditionBarProps) {
-  const fields = useMemo(() => fieldsOf(defs, linked), [defs, linked])
+  const fields = useMemo(
+    () => fieldsOf(defs, linked, selfType && treeTypes.has(selfType) ? selfType : undefined),
+    [defs, linked, selfType, treeTypes],
+  )
   // 고르면서 본 이름 — 이어진 것 너머의 참조는 목록 행에 이름이 안 실려 온다.
   const [known, setKnown] = useState<Record<string, string>>({})
   const remember = useCallback(
@@ -183,7 +221,8 @@ export function ConditionBar({
       const field = byKey.get(one.field)
       if (field?.data_type !== 'object_ref' || !field.ref_type_slug) continue
       if (one.op === 'empty' || one.op === 'notempty') continue
-      const values = one.op === 'in' ? one.value.split(CONDITION_MULTI_SEP) : [one.value]
+      const values =
+        one.op === 'in' || one.op === 'under' ? one.value.split(CONDITION_MULTI_SEP) : [one.value]
       for (const value of values) {
         if (!value || refLabels[value] || known[value] || asked.current.has(value)) continue
         asked.current.add(value)
@@ -208,8 +247,10 @@ export function ConditionBar({
     const field = byKey.get(one.field)
     const label = field?.label ?? one.field
     if (one.op === 'empty' || one.op === 'notempty') return `${label} ${OP_SIGN[one.op]}`
-    const values = one.op === 'in' ? one.value.split(CONDITION_MULTI_SEP) : [one.value]
+    const values =
+      one.op === 'in' || one.op === 'under' ? one.value.split(CONDITION_MULTI_SEP) : [one.value]
     const shown = values.map((value) => refLabels[value] ?? known[value] ?? value).join(', ')
+    if (one.op === 'under') return `${label}: ${shown} 하위 전체`
     return `${label} ${OP_SIGN[one.op]} ${shown}`
   }
 
@@ -265,6 +306,7 @@ export function ConditionBar({
         <PopoverContent align="start" className="w-80 p-3">
           <ConditionEditor
             fields={fields}
+            treeTypes={treeTypes}
             onNames={remember}
             groups={allowExclude ? groups : null}
             onAdd={(next) => {
@@ -289,6 +331,7 @@ export function ConditionBar({
 
 interface ConditionEditorProps {
   fields: Field[]
+  treeTypes: ReadonlySet<string>
   onAdd: (next: Condition) => void
   onNames?: (names: Record<string, string>) => void
   /** 걸린 제외 묶음 번호들 — 있으면(빈 목록도) 「넣을 곳」 을 고른다. null 이면 보통 조건만. */
@@ -300,7 +343,13 @@ const PLAIN = 'plain'
 const NEW_GROUP = 'new'
 
 /** 칸 → 연산 → 값. 연산과 값 입력은 칸의 종류를 따라간다. */
-function ConditionEditor({ fields, onAdd, onNames, groups = null }: ConditionEditorProps) {
+function ConditionEditor({
+  fields,
+  treeTypes,
+  onAdd,
+  onNames,
+  groups = null,
+}: ConditionEditorProps) {
   // **치거나 훑는다.** 이어진 것을 두 걸음까지 늘어놓으면(「모델 › 과제 › 프로젝트」) 큰 타입은
   // 칸이 수백이다 — 펼쳐 놓고 눈으로 찾게 하지 않는다. 자기 칸(제목 없음)이 먼저, 이어진 것은
   // 걸음마다 제목 아래로.
@@ -316,7 +365,11 @@ function ConditionEditor({ fields, onAdd, onNames, groups = null }: ConditionEdi
   const [fieldKey, setFieldKey] = useState(fields[0]?.key ?? '')
   const field = fields.find((one) => one.key === fieldKey) ?? fields[0]
   const kind = FIXED.some((one) => one.key === field?.key) ? 'fixed' : (field?.data_type ?? 'text')
-  const ops = opsFor(kind)
+  const shape = {
+    tree: Boolean(field?.ref_type_slug && treeTypes.has(field.ref_type_slug)),
+    self: field?.key === SELF_KEY,
+  }
+  const ops = opsFor(kind, shape)
   const [op, setOp] = useState<ConditionOp>(ops[0])
   const [value, setValue] = useState('')
   const [picked, setPicked] = useState<string[]>([])
@@ -324,7 +377,7 @@ function ConditionEditor({ fields, onAdd, onNames, groups = null }: ConditionEdi
 
   // 칸이 바뀌면 연산·값을 그 칸에 맞게 되돌린다.
   useEffect(() => {
-    setOp(opsFor(kind)[0])
+    setOp(opsFor(kind, { self: fieldKey === SELF_KEY })[0])
     setValue('')
     setPicked([])
   }, [fieldKey, kind])

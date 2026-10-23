@@ -10,17 +10,7 @@
 import { Suspense, lazy, useEffect, useMemo, useState } from 'react'
 import type { ReactNode } from 'react'
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom'
-import {
-  BarChart3,
-  Download,
-  FileUp,
-  Images,
-  Loader2,
-  Pencil,
-  Plus,
-  Trash2,
-  X,
-} from 'lucide-react'
+import { BarChart3, Download, FileUp, Images, Loader2, Pencil, Plus, Trash2, X } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
 import type { OntologySchema } from '@/modules/ontology/api'
@@ -340,6 +330,16 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
   }
 
   const foundType = schema.data?.types.find((row) => row.slug === typeSlug)
+  // 트리가 정해진 타입들 — 그 타입을 가리키는 칸에 조건 「하위 전체」 가 선다(ADR 0035).
+  const treeTypes = useMemo(
+    () =>
+      new Set(
+        (schema.data?.types ?? [])
+          .filter((row) => row.list_view?.tree?.relation)
+          .map((row) => row.slug),
+      ),
+    [schema.data],
+  )
   /** 연도가 뜻을 갖는 축인가. `evergreen` 이면 토글을 안 그린다 — **없는 것을
    *  있는 척하지 않는다.** */
   const yearApplies = Boolean(foundType && foundType.temporal_kind !== 'evergreen')
@@ -681,7 +681,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
               }}
             />
             {/* 상태 거르기는 고르개가 없다 — 지표의 「N건 보기」 가 싣고 올 때만 선다. 그래서
-                **걸려 있다고 보이고 풀 수 있어야 한다** — 안 보이면 목록이 왜 적은지 모른다. */}
+             **걸려 있다고 보이고 풀 수 있어야 한다** — 안 보이면 목록이 왜 적은지 모른다. */}
             {status && (
               <span className="flex items-center gap-1 rounded-md border px-2 py-1 text-xs">
                 상태 <StatusBadge kind="object" value={status} />
@@ -707,6 +707,8 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
               }}
               refLabels={refLabelsOfList}
               linked={linked.data ?? NO_LINKED}
+              treeTypes={treeTypes}
+              selfType={type.slug}
             />
           </div>
         )}

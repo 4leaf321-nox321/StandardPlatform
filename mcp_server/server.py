@@ -1284,7 +1284,8 @@ async def objects_list(
     - `conditions`: `[{"field": "power", "op": "gte", "value": "10"}, ...]` — 칸끼리 AND,
       같은 칸에 여럿이면 그 안은 OR. 연산은 칸의 종류가 정한다:
       숫자·날짜 `eq ne gt gte lt lte in` · 글자 `eq ne contains starts in` ·
-      선택·참조 `eq ne in` · 참/거짓 `eq` · 모두 `empty notempty`.
+      선택·참조 `eq ne in` · 참/거짓 `eq` · 모두 `empty notempty`. 참조 칸 · 자신(`id`)에는
+      `under`(하위 전체 — 그 객체이거나 트리로 그 아래 전부, 트리가 있는 타입만).
       `in` 의 값은 `|` 로 잇는다(`"A|B"`). `field` 는 속성 키 또는 `label`·`key`·`status`.
       **다른 타입의 칸**도 된다 — `ref.vendor.country`(참조 칸이 가리키는 것의 칸),
       `out.used_by`(관계로 이어진 것 자체), `in.resells.country`. 주소는 `object_fields`

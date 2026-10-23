@@ -656,7 +656,10 @@ def test_두_번_세면_셀이_한_벌이고_실패하면_옛_값이_남는다(
     assert broken["last_status"] == "failed" and "없는 칸" in broken["last_error"]
     assert broken["broken"] is not None and broken["current_run_id"] == now["current_run_id"]
     runs = client.get(f"/api/metrics/{cases['slug']}/runs", headers=admin.headers).json()
-    assert runs[0]["status"] == "failed" and runs[0]["error"]
+    # 방금 실패한 실행은 **작업 번호로** 집는다 — 맨 앞(가장 최근)으로 집으면 이 PC(WSL)의
+    # 시계가 뒤로 튈 때 앞 실행이 잡힌다(2026-10-23, 전체 검사에서 한 번).
+    (mine,) = [one for one in runs if one["job_id"] == failed.json()["id"]]
+    assert mine["status"] == "failed" and mine["error"]
     # 홈의 「남은 일」 이 실패한 지표를 말한다 — 시스템 관리자에게.
     items = {
         one["key"]: one

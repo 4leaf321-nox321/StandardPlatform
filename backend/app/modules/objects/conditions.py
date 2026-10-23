@@ -6,6 +6,7 @@
     숫자·날짜     gt · gte · lt · lte · eq · ne · in
     글자·주소     eq · ne · contains · starts · in
     선택·참조     eq · ne · in           (여러 값이면 「그 중 하나」)
+    참조 · 자신   under                  (「하위 전체」 — 그 객체이거나 트리로 그 아래 전부)
     예/아니오     eq
     모두          empty · notempty
 
@@ -43,6 +44,7 @@ from __future__ import annotations
 
 import re
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date
 from typing import Any
@@ -63,7 +65,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import aliased
 
-from app.modules.objects import axes, paths
+from app.modules.objects import axes, graph, paths
 from app.modules.objects.models import ObjectInstance, ObjectRef
 from app.modules.objects.services import like_escape
 from app.modules.ontology import conversion
@@ -76,6 +78,14 @@ OPS_TEXT: tuple[str, ...] = ("eq", "ne", "contains", "starts", "in")
 OPS_CHOICE: tuple[str, ...] = ("eq", "ne", "in")
 OPS_BOOL: tuple[str, ...] = ("eq",)
 OPS_ANY: tuple[str, ...] = ("empty", "notempty")
+#: 「하위 전체」(ADR 0035) — 그 객체이거나, 그 타입의 트리(`list_view.tree`)로 그 아래 전부.
+#: 값은 객체 id, 여럿이면 `|`(어느 하나의 아래). 목록의 객체 **자신**에 걸 때는 칸이 `id` 다.
+OPS_TREE: tuple[str, ...] = ("under",)
+SELF_FIELD = "id"
+
+#: (타입 slug, 뿌리들) → 뿌리와 그 아래 전부, 트리가 없으면 None. 조건은 DB 없이 짓는다 —
+#: 트리를 아는 쪽(`paths.Resolver.subtree_of`)이 넘긴다.
+SubtreeOf = Callable[[str | None, list[uuid.UUID]], list[uuid.UUID] | None]
 
 FIXED_FIELDS = ("label", "key", "status")
 MULTI_SEP = "|"
@@ -105,7 +115,9 @@ def ops_for(data_type: str) -> tuple[str, ...]:
         base = OPS_ORDER
     elif data_type in ("text", "text_long", "url"):
         base = OPS_TEXT
-    elif data_type in ("enum", "object_ref"):
+    elif data_type == "object_ref":
+        base = (*OPS_CHOICE, *OPS_TREE)
+    elif data_type == "enum":
         base = OPS_CHOICE
     elif data_type == "bool":
         base = OPS_BOOL
@@ -190,6 +202,8 @@ def clause(
     definition: PropertyDef | None,
     entity: Any = ObjectInstance,
     label: str | None = None,
+    *,
+    subtree_of: SubtreeOf | None = None,
 ) -> Any:
     """조건 하나 → SQL. `entity` 는 보통 목록의 객체이고, 이어진 것 너머의 칸이면 그
     이어진 객체(별칭)다 — 같은 규칙을 두 벌로 적지 않는다. 지표의 규칙 기준(ADR 0015)도 이
@@ -210,6 +224,13 @@ def clause(
         )
 
     if data_type == "object_ref":
+        if op in OPS_TREE:
+            assert definition is not None
+            roots = _ids(_values(raw))
+            found = subtree_of(definition.ref_type_slug, roots) if subtree_of else None
+            return _ref_clause(
+                entity, field, op, raw, subtree=_subtree_or_refuse(found, label)
+            )
         return _ref_clause(entity, field, op, raw)
 
     column = _column(field, entity)
@@ -325,7 +346,24 @@ def _any_element(json_col: Any, pattern: str) -> Any:
     )
 
 
-def _ref_clause(entity: Any, field: str, op: str, raw: str) -> Any:
+def _subtree_or_refuse(found: list[uuid.UUID] | None, label: str) -> list[uuid.UUID]:
+    if found is None:
+        raise InvalidValue(
+            code("OBJECTS", 72),
+            f"{label}: 「하위 전체」 는 트리가 정의된 타입에만 걸립니다 — 그 타입의 "
+            "「목록 화면」 에서 트리로 쓸 관계를 선택하세요.",
+        )
+    return found
+
+
+def _ref_clause(
+    entity: Any,
+    field: str,
+    op: str,
+    raw: str,
+    *,
+    subtree: list[uuid.UUID] | None = None,
+) -> Any:
     """참조 칸 — **참조 색인**으로 묻는다(ADR 0010). JSONB 를 펴서 견주면 그 타입을 통째로
     읽는다(200만 건에서 1.3초, 실측) — 색인은 (누가 · 칸 · 누구를) 인덱스 하나다.
 
@@ -336,10 +374,13 @@ def _ref_clause(entity: Any, field: str, op: str, raw: str) -> Any:
         return ~linked.exists()
     if op == "notempty":
         return linked.exists()
-    wanted = _ids(_values(raw) if op == "in" else [raw])
+    wanted = _ids(_values(raw) if op in ("in", "under") else [raw])
     if not wanted:
         # 모양이 id 가 아닌 값은 아무것도 가리키지 않는다 — 같음은 없고 다름은 전부다.
         return true() if op == "ne" else false()
+    if op == "under":
+        assert subtree is not None
+        return linked.where(graph.any_of(ObjectRef.dst_id, subtree)).exists()
     hit = linked.where(ObjectRef.dst_id.in_(wanted)).exists()
     return ~hit if op == "ne" else hit
 
@@ -431,12 +472,31 @@ def _one(
         if resolver is None:
             raise InvalidValue(code("OBJECTS", 73), f"없는 칸입니다: {condition.field}")
         return _hop_clause(resolver, condition, index)
+    if condition.field == SELF_FIELD:
+        return _self_clause(resolver, condition, index)
     definition = by_key.get(condition.field)
     if condition.field not in FIXED_FIELDS and definition is None:
         raise InvalidValue(code("OBJECTS", 73), f"없는 칸입니다: {condition.field}")
     if definition is not None and definition.data_type == "file":
         raise InvalidValue(code("OBJECTS", 73), f"{definition.label}: 파일 칸은 못 겁니다.")
-    return clause(condition, definition)
+    return clause(condition, definition, subtree_of=resolver.subtree_of if resolver else None)
+
+
+def _self_clause(resolver: paths.Resolver | None, condition: Condition, index: int) -> Any:
+    """목록의 객체 **자신**이 그 객체이거나 그 아래 전부인가 — `f.id.under=<id>`. 목록의
+    「하위 포함」 과 같은 뜻을 조건으로 — 통계 · 지표 · 저장된 뷰에도 걸린다."""
+    if condition.op not in OPS_TREE:
+        raise InvalidValue(
+            code("OBJECTS", 72),
+            f"객체 자신(id)에는 「하위 전체」(under)만 걸립니다: {condition.op}",
+        )
+    scope_type = resolver.scope.object_type if resolver else None
+    roots = _ids(_values(condition.value))
+    found = _subtree_or_refuse(
+        resolver.subtree_of(scope_type.slug, roots) if resolver and scope_type else None,
+        scope_type.label if scope_type else "이 목록",
+    )
+    return graph.any_of(ObjectInstance.id, found)
 
 
 def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> Any:
@@ -455,7 +515,9 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
 
     if whole:
         # 관계로 이어진 것 자체 — 누구와 이어졌나, 또는 이어져 있기는 한가.
-        allowed = (*OPS_CHOICE, *OPS_ANY) if chain.data_type == "object_ref" else OPS_ANY
+        allowed = (
+            (*OPS_CHOICE, *OPS_TREE, *OPS_ANY) if chain.data_type == "object_ref" else OPS_ANY
+        )
         if op not in allowed:
             raise InvalidValue(
                 code("OBJECTS", 72),
@@ -539,6 +601,11 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
     if whole and chain.hop.is_back:
         # 나를 가리키는 것 자체(**마지막 걸음이** 그것일 때) — 있음 · 없음, 또는 특정 객체가
         # 가리키나. 앞 걸음이 그것이고 끝이 관계면 아래 관계 길이다.
+        if op in OPS_TREE:
+            raise InvalidValue(
+                code("OBJECTS", 72),
+                f"{chain.label}: 나를 가리키는 것에는 「하위 전체」 를 못 겁니다.",
+            )
         if op == "empty":
             return ~linked.exists()
         if op == "notempty":
@@ -552,6 +619,14 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
             return ~linked.exists()
         if op == "notempty":
             return linked.exists()
+        if op in OPS_TREE:
+            far = chain.hop.target.object_type if chain.hop.target else None
+            roots = _ids(_values(raw))
+            found = _subtree_or_refuse(
+                resolver.subtree_of(far.slug, roots) if far else None,
+                far.label if far else chain.label,
+            )
+            return linked.where(graph.any_of(last_edges.c.other, found)).exists()
         # 사람이 준 값(id 글자)과 견준다 — 선은 uuid 라 글자로 바꿔 본다(id 가 아닌 글자도
         # 오류 없이 「안 맞음」 이 되게).
         other = cast(last_edges.c.other, String)
@@ -564,7 +639,11 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
 
     assert chain.field is not None and last_target is not None
     inner = clause(
-        Condition(chain.field, op, raw), chain.definition, last_target, label=chain.label
+        Condition(chain.field, op, raw),
+        chain.definition,
+        last_target,
+        label=chain.label,
+        subtree_of=resolver.subtree_of,
     )
     return linked.where(inner).exists()
 

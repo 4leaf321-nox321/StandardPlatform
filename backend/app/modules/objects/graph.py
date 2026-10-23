@@ -21,13 +21,15 @@ import uuid
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from sqlalchemy import case, func, or_, select, text
+from sqlalchemy import any_, case, false, func, literal, or_, select, text
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import ColumnElement
 
 from app.modules.accounts.models import User
 from app.modules.objects import refedges
-from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
+from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRef, ObjectRelation
 from app.shared.batches import chunks
 from app.shared.permissions import visible_owner_clause
 
@@ -36,6 +38,81 @@ ParentEnd = Literal["src", "dst"]
 #: 재귀를 여기서 끊는다. **없으면 관계가 촘촘해지는 날 질의 하나가 DB 를 통째로
 #: 훑는다** — 그리고 느려진 이유는 화면 어디에도 안 적힌다.
 MAX_DEPTH = 20
+
+
+@dataclass(frozen=True)
+class Tree:
+    """한 타입의 트리 — 「아래 전부」 를 펼칠 관계와 부모 쪽 끝(`list_view.tree`)."""
+
+    relation: str
+    parent_end: ParentEnd
+    type_id: uuid.UUID
+    type_label: str
+
+
+def tree_spec(list_view: dict[str, Any] | None) -> tuple[str | None, ParentEnd]:
+    """`list_view.tree` 가 정한 트리 관계와 부모 쪽 끝 — 트리 화면 · 「하위 포함」 · 조건의
+    「하위 전체」 가 같은 것을 읽는다.
+
+    안 정했으면 트리가 없다 — **`transitive` 인 관계가 둘 이상일 수 있어서** 아무거나 골라
+    펼치면 그 「아래」 가 무엇의 아래인지 말할 수 없다.
+    """
+    spec = (list_view or {}).get("tree") or {}
+    relation = spec.get("relation")
+    parent_end: ParentEnd = "src" if spec.get("parent") == "src" else "dst"
+    return (relation if isinstance(relation, str) and relation else None, parent_end)
+
+
+def subtree_ids(db: Session, tree: Tree, roots: list[uuid.UUID]) -> list[uuid.UUID]:
+    """roots 와 **그 아래 전부**(깊이 MAX_DEPTH) — 조건의 「하위 전체」 가 먼저 뽑아
+    `any_of` 로 건다.
+
+    재귀를 조건식 안에 넣지 않는다 — PostgreSQL 은 재귀 CTE 의 줄 수를 어림하지 못해(늘
+    백여 줄) 아래가 큰데도 한 줄씩 견주는 길을 골랐다(기록 200만, 모델 1,555개 아래 5초 ·
+    전부 19초). 뽑은 것을 배열 하나로 넘기면 개수를 알고 고른다(같은 것이 0.6초 · 0.9초, 실측).
+    """
+    if not roots:
+        return []
+    seed = select(
+        func.unnest(literal(list(roots), ARRAY(PgUUID(as_uuid=True)))).label("id"),
+        literal(0).label("depth"),
+    )
+    walk = seed.cte("subtree", recursive=True)
+    if refedges.is_ref(tree.relation):
+        key = tree.relation[len(refedges.PREFIX) :].split(".", 1)[1]
+        step = aliased(ObjectRef)
+        parent_col, child_col = {"dst": ("dst_id", "src_id"), "src": ("src_id", "dst_id")}[
+            tree.parent_end
+        ]
+        walk = walk.union_all(
+            select(getattr(step, child_col), walk.c.depth + 1).where(
+                step.key == key,
+                step.src_type_id == tree.type_id,
+                getattr(step, parent_col) == walk.c.id,
+                walk.c.depth < MAX_DEPTH,
+            )
+        )
+    else:
+        step_rel = aliased(ObjectRelation)
+        parent_col, child_col = _ends(tree.parent_end)
+        walk = walk.union_all(
+            select(getattr(step_rel, child_col), walk.c.depth + 1).where(
+                step_rel.relation == tree.relation,
+                getattr(step_rel, parent_col) == walk.c.id,
+                walk.c.depth < MAX_DEPTH,
+            )
+        )
+    return list(dict.fromkeys(db.scalars(select(walk.c.id))))
+
+
+def any_of(column: Any, ids: list[uuid.UUID]) -> ColumnElement[bool]:
+    """`column = ANY(배열)` — 자리표 하나. `IN (…)` 은 값마다 자리표라 수만 개면 넘친다."""
+    if not ids:
+        return false()
+    found: ColumnElement[bool] = column == any_(
+        literal(list(ids), ARRAY(PgUUID(as_uuid=True)))
+    )
+    return found
 
 
 def _ends(parent_end: ParentEnd) -> tuple[str, str]:

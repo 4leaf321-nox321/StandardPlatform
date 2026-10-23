@@ -303,9 +303,20 @@ export interface Condition {
   exclude?: number
 }
 
-
 export type ConditionOp =
-  'eq' | 'ne' | 'gt' | 'gte' | 'lt' | 'lte' | 'in' | 'contains' | 'starts' | 'empty' | 'notempty'
+  | 'eq'
+  | 'ne'
+  | 'gt'
+  | 'gte'
+  | 'lt'
+  | 'lte'
+  | 'in'
+  | 'contains'
+  | 'starts'
+  | 'empty'
+  | 'notempty'
+  /** 하위 전체 — 그 객체이거나 그 타입의 트리로 아래 전부(ADR 0035). */
+  | 'under'
 
 /** 값 여럿(`in`)의 구분자. 서버와 같다. */
 export const CONDITION_MULTI_SEP = '|'
@@ -637,9 +648,7 @@ export interface AliasAttachPlan {
 }
 
 export const aliasCandidateApi = {
-  list: (
-    options: { type?: string; status?: string; limit?: number; suggest?: boolean } = {},
-  ) => {
+  list: (options: { type?: string; status?: string; limit?: number; suggest?: boolean } = {}) => {
     const params = new URLSearchParams()
     if (options.type !== undefined) params.set('type', options.type)
     if (options.status) params.set('status', options.status)

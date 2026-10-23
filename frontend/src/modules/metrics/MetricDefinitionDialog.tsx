@@ -101,6 +101,16 @@ function slugOf(label: string): string {
 export function MetricDefinitionDialog({ existing, draft = null, onClose, onSaved }: Props) {
   const schema = useResource(() => ontologyApi.schema(), [])
   const metrics = useResource(() => metricsApi.list(), [])
+  // 트리가 정해진 타입들 — 그 타입을 가리키는 칸에 거르기 「하위 전체」 가 선다(ADR 0035).
+  const treeTypes = useMemo(
+    () =>
+      new Set(
+        (schema.data?.types ?? [])
+          .filter((row) => row.list_view?.tree?.relation)
+          .map((row) => row.slug),
+      ),
+    [schema.data],
+  )
   // 처음 칸 — 고칠 지표, 아니면 초안.
   const seed = existing ?? draft
   const spec0 = seed?.spec
@@ -116,24 +126,23 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
   const [grain, setGrain] = useState<string>(spec0?.time?.grain ?? 'month')
   const [cohortAddress, setCohortAddress] = useState(spec0?.cohort?.address ?? '')
   const [dims, setDims] = useState<DimRow[]>(
-    (spec0?.dimensions ?? []).map(
-      (one): DimRow =>
-        one.rules || one.else
-          ? {
-              kind: 'rules',
-              name: one.name,
-              label: one.label ?? '',
-              rules: (one.rules ?? []).map((rule) => ({
-                label: rule.label,
-                when: rule.when.map((cond) => ({
-                  field: cond.field,
-                  op: cond.op as ConditionOp,
-                  value: cond.value,
-                })),
+    (spec0?.dimensions ?? []).map((one): DimRow =>
+      one.rules || one.else
+        ? {
+            kind: 'rules',
+            name: one.name,
+            label: one.label ?? '',
+            rules: (one.rules ?? []).map((rule) => ({
+              label: rule.label,
+              when: rule.when.map((cond) => ({
+                field: cond.field,
+                op: cond.op as ConditionOp,
+                value: cond.value,
               })),
-              other: one.else ?? '기타',
-            }
-          : { kind: 'address', name: one.name, address: one.address ?? '', grain: one.grain ?? '' },
+            })),
+            other: one.else ?? '기타',
+          }
+        : { kind: 'address', name: one.name, address: one.address ?? '', grain: one.grain ?? '' },
     ),
   )
   const [filters, setFilters] = useState<Condition[]>(
@@ -283,9 +292,7 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
           : null,
       settle_days: Number(settleDays) || 0,
       visits:
-        visitKey && timeAddress
-          ? { key: visitKey, within_days: Number(visitDays) || 90 }
-          : null,
+        visitKey && timeAddress ? { key: visitKey, within_days: Number(visitDays) || 90 } : null,
       stay:
         Number(stayPeriods) > 0 && timeAddress
           ? { periods: Number(stayPeriods), periods_from: stayFrom || null }
@@ -593,65 +600,65 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
                 }}
               />
             ) : (
-            <div key={index} className="flex flex-wrap items-center gap-2">
-              <Input
-                aria-label={`기준 ${index + 1} 이름`}
-                className="w-36"
-                placeholder="이름 (영문)"
-                value={dim.name}
-                onChange={(event) => {
-                  const next = [...dims]
-                  next[index] = { ...dim, name: event.target.value }
-                  setDims(next)
-                  invalidate()
-                }}
-              />
-              <Input
-                aria-label={`기준 ${index + 1} 주소`}
-                className="flex-1"
-                list="metric-address-options"
-                placeholder="주소 — properties.<칸> · ref.<칸>.<칸> · out.<관계>"
-                value={dim.address}
-                onChange={(event) => {
-                  const next = [...dims]
-                  next[index] = { ...dim, address: event.target.value }
-                  setDims(next)
-                  invalidate()
-                }}
-              />
-              <Select
-                value={dim.grain || NONE}
-                onValueChange={(value) => {
-                  const next = [...dims]
-                  next[index] = { ...dim, grain: value === NONE ? '' : value }
-                  setDims(next)
-                  invalidate()
-                }}
-              >
-                <SelectTrigger aria-label={`기준 ${index + 1} 기간 단위`} className="w-28">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={NONE}>단위 없음</SelectItem>
-                  {GRAINS.map((one) => (
-                    <SelectItem key={one} value={one}>
-                      {GRAIN_LABELS[one]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Button
-                size="sm"
-                variant="ghost"
-                aria-label={`기준 ${index + 1} 지우기`}
-                onClick={() => {
-                  setDims(dims.filter((_, at) => at !== index))
-                  invalidate()
-                }}
-              >
-                <Trash2 className="size-4" />
-              </Button>
-            </div>
+              <div key={index} className="flex flex-wrap items-center gap-2">
+                <Input
+                  aria-label={`기준 ${index + 1} 이름`}
+                  className="w-36"
+                  placeholder="이름 (영문)"
+                  value={dim.name}
+                  onChange={(event) => {
+                    const next = [...dims]
+                    next[index] = { ...dim, name: event.target.value }
+                    setDims(next)
+                    invalidate()
+                  }}
+                />
+                <Input
+                  aria-label={`기준 ${index + 1} 주소`}
+                  className="flex-1"
+                  list="metric-address-options"
+                  placeholder="주소 — properties.<칸> · ref.<칸>.<칸> · out.<관계>"
+                  value={dim.address}
+                  onChange={(event) => {
+                    const next = [...dims]
+                    next[index] = { ...dim, address: event.target.value }
+                    setDims(next)
+                    invalidate()
+                  }}
+                />
+                <Select
+                  value={dim.grain || NONE}
+                  onValueChange={(value) => {
+                    const next = [...dims]
+                    next[index] = { ...dim, grain: value === NONE ? '' : value }
+                    setDims(next)
+                    invalidate()
+                  }}
+                >
+                  <SelectTrigger aria-label={`기준 ${index + 1} 기간 단위`} className="w-28">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={NONE}>단위 없음</SelectItem>
+                    {GRAINS.map((one) => (
+                      <SelectItem key={one} value={one}>
+                        {GRAIN_LABELS[one]}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  aria-label={`기준 ${index + 1} 지우기`}
+                  onClick={() => {
+                    setDims(dims.filter((_, at) => at !== index))
+                    invalidate()
+                  }}
+                >
+                  <Trash2 className="size-4" />
+                </Button>
+              </div>
             ),
           )}
         </section>
@@ -661,6 +668,7 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
           <ConditionBar
             defs={defs}
             linked={linked.data ?? undefined}
+            treeTypes={treeTypes}
             conditions={filters}
             allowExclude={false}
             onChange={(next) => {
@@ -678,6 +686,7 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
             <ConditionBar
               defs={defs}
               linked={linked.data ?? undefined}
+              treeTypes={treeTypes}
               conditions={shareWhen}
               allowExclude={false}
               onChange={(next) => {
@@ -908,8 +917,8 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
               {intervalText(intervalHours)}
               {intervalMode === 'nights' &&
                 ' — 밤(서버 2시대)에만 셉니다. 무거운 계산이 낮에 안 돌고, 백업에 그날 값이 듭니다.'}
-              {intervalMode === 'hours' && ' — 그 시간이 지나면 낮에도 셉니다.'}
-              {' '}자료가 들어오면(동기화 · 가져오기) 주기와 상관없이 바로 다시 셉니다.
+              {intervalMode === 'hours' && ' — 그 시간이 지나면 낮에도 셉니다.'} 자료가
+              들어오면(동기화 · 가져오기) 주기와 상관없이 바로 다시 셉니다.
             </p>
           </div>
         </section>

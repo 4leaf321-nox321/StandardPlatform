@@ -43,7 +43,7 @@ from app.config import get_settings
 from app.modules.audit.models import AuditEntry
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import MetricDef, MetricRun
-from app.modules.objects import axes
+from app.modules.objects import axes, conditions, paths, refedges
 from app.modules.objects.models import ObjectInstance, ObjectRelation, ObjectRelationTombstone
 from app.modules.objects.paths import HOP_KINDS
 from app.modules.ontology.interfaces import load_ends
@@ -138,6 +138,75 @@ def _foreign_change(
     return None
 
 
+def _tree_types(built: spec_module.Built) -> set[str]:
+    """「하위 전체」 조건(ADR 0035)이 펼치는 트리의 타입들 — 거르기 · 조건 비율 · 규칙의 조건.
+
+    그 트리가 바뀌면(부품이 다른 어셈블리로 옮겨 감) 기록의 시각은 안 올라도 걸리는 기록이
+    바뀐다. 너머의 주소(`ref.` · `out.` · `in.`)만 보던 증분은 자기 칸의 「하위 전체」 를
+    몰랐다."""
+    spec = built.spec
+    found = [*spec.filters, *spec.share_when]
+    found += [
+        cond for one in spec.dimensions for rule in one.rules or [] for cond in rule.when
+    ]
+    defs = {one.key: one for one in built.scope.defs}
+    out: set[str] = set()
+    for cond in found:
+        if cond.op not in conditions.OPS_TREE:
+            continue
+        target: str | None = None
+        if cond.field == conditions.SELF_FIELD:
+            target = built.scope.object_type.slug if built.scope.object_type else None
+        elif paths.is_path(cond.field):
+            chain = built.plan.resolver.parse_chain(cond.field)
+            if chain.field is not None:
+                target = chain.definition.ref_type_slug if chain.definition else None
+            elif chain.hop.target is not None and chain.hop.target.object_type is not None:
+                target = chain.hop.target.object_type.slug
+        elif (definition := defs.get(cond.field)) is not None:
+            target = definition.ref_type_slug
+        if target:
+            out.add(target)
+    return out
+
+
+def _tree_change(
+    db: Session, built: spec_module.Built, slugs: set[str], since: datetime
+) -> str | None:
+    """그 타입들의 트리에 `since` 뒤로 바뀐 것이 있으면 그 까닭 — 관계 트리는 선과 끊긴 선,
+    참조 칸 트리는 그 타입 객체의 변경(참조는 칸에 산다)."""
+    for slug in sorted(slugs):
+        tree = built.plan.resolver.tree_of(slug)
+        if tree is None:
+            continue
+        if refedges.is_ref(tree.relation):
+            changed = db.scalar(
+                select(ObjectInstance.id)
+                .where(
+                    ObjectInstance.type_id == tree.type_id, ObjectInstance.updated_at > since
+                )
+                .limit(1)
+            )
+        else:
+            changed = db.scalar(
+                select(ObjectRelation.id)
+                .where(
+                    ObjectRelation.relation == tree.relation, ObjectRelation.updated_at > since
+                )
+                .limit(1)
+            ) or db.scalar(
+                select(ObjectRelationTombstone.id)
+                .where(
+                    ObjectRelationTombstone.relation == tree.relation,
+                    ObjectRelationTombstone.removed_at > since,
+                )
+                .limit(1)
+            )
+        if changed:
+            return f"「하위 전체」 가 펼치는 트리({tree.type_label})가 바뀌었다"
+    return None
+
+
 def _audited_periods(
     db: Session, built: spec_module.Built, recent: Any, since: datetime
 ) -> set[date | None]:
@@ -196,6 +265,11 @@ def plan(
     foreign = _foreign_addresses(built.spec)
     if foreign:
         reason = _foreign_change(db, built, foreign, since)
+        if reason is not None:
+            return reason
+    trees = _tree_types(built)
+    if trees:
+        reason = _tree_change(db, built, trees, since)
         if reason is not None:
             return reason
 

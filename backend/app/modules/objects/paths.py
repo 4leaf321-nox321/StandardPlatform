@@ -50,7 +50,7 @@ from sqlalchemy import String, cast, select, union_all
 from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
-from app.modules.objects import refedges, system
+from app.modules.objects import graph, refedges, system
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.objects.scope import Scope, as_scope
 from app.modules.objects.scope import find as find_scope
@@ -217,6 +217,30 @@ class Resolver:
         self._hops: list[Hop] | None = None
         self._children: dict[str, Resolver] = {}
         self._kinds = _kinds
+        self._trees: dict[str, graph.Tree | None] = {}
+
+    def tree_of(self, type_slug: str | None) -> graph.Tree | None:
+        """그 타입의 트리(`list_view.tree`) — 조건의 「하위 전체」 가 펼칠 관계. 트리를 안
+        정했거나 타입이 아니면(인터페이스) None."""
+        if not type_slug:
+            return None
+        if type_slug not in self._trees:
+            row = self.db.scalar(select(ObjectType).where(ObjectType.slug == type_slug))
+            relation, parent_end = graph.tree_spec(row.list_view if row else None)
+            self._trees[type_slug] = (
+                graph.Tree(relation, parent_end, row.id, row.label)
+                if row is not None and relation is not None
+                else None
+            )
+        return self._trees[type_slug]
+
+    def subtree_of(
+        self, type_slug: str | None, roots: list[uuid.UUID]
+    ) -> list[uuid.UUID] | None:
+        """그 타입의 트리로 roots 와 그 아래 전부 — 조건의 「하위 전체」. 트리가 없으면
+        None."""
+        tree = self.tree_of(type_slug)
+        return None if tree is None else graph.subtree_ids(self.db, tree, roots)
 
     def ref_kinds(self) -> dict[str, refedges.RefKind]:
         """이 설치의 참조 칸 전부 — 걸음의 상대에서 다시 걸을 때도 한 번만 읽는다."""

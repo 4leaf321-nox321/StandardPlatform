@@ -230,11 +230,79 @@ describe('조건 줄', () => {
 
   it('제외를 받지 않는 자리(지표의 거르기 · 규칙)는 「넣을 곳」 이 없다', async () => {
     const { ConditionBar } = await import('@/modules/objects/ConditionBar')
-    render(
-      <ConditionBar defs={DEFS} conditions={[]} onChange={vi.fn()} allowExclude={false} />,
-    )
+    render(<ConditionBar defs={DEFS} conditions={[]} onChange={vi.fn()} allowExclude={false} />)
     await userEvent.click(screen.getByRole('button', { name: /조건 추가/ }))
     await screen.findByRole('button', { name: '걸기' })
     expect(screen.queryByRole('combobox', { name: '넣을 곳' })).not.toBeInTheDocument()
+  })
+})
+
+describe('하위 전체(ADR 0035)', () => {
+  const REFS = [
+    {
+      key: 'part',
+      label: '교체 부품',
+      data_type: 'object_ref',
+      multi: false,
+      ref_type_slug: 'part',
+    },
+    { key: 'model', label: '모델', data_type: 'object_ref', multi: false, ref_type_slug: 'model' },
+  ] as unknown as PropertyDef[]
+
+  it('트리가 있는 타입을 가리키는 칸에만 연산이 선다', async () => {
+    const { opsFor } = await import('@/modules/objects/ConditionBar')
+    expect(opsFor('object_ref')).toEqual(['eq', 'ne', 'in', 'empty', 'notempty'])
+    expect(opsFor('object_ref', { tree: true })).toEqual([
+      'eq',
+      'ne',
+      'in',
+      'under',
+      'empty',
+      'notempty',
+    ])
+    // 목록 자신은 「하위 전체」 하나뿐이다.
+    expect(opsFor('object_ref', { self: true })).toEqual(['under'])
+  })
+
+  it('칩은 「…: 이름 하위 전체」 로 읽히고 이름은 상세에서 채운다', async () => {
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    render(
+      <ConditionBar
+        defs={REFS}
+        conditions={[{ field: 'part', op: 'under', value: 'w1' }]}
+        onChange={vi.fn()}
+        treeTypes={new Set(['part'])}
+      />,
+    )
+    expect(await screen.findByText('교체 부품: 해석팀 하위 전체')).toBeInTheDocument()
+  })
+
+  it('목록 자신이 트리 타입이면 「자신」 칸이 서고, 아니면 안 선다', async () => {
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    const { unmount } = render(
+      <ConditionBar
+        defs={REFS}
+        conditions={[]}
+        onChange={vi.fn()}
+        treeTypes={new Set(['part'])}
+        selfType="part"
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: /조건 추가/ }))
+    await userEvent.click(screen.getByRole('combobox', { name: '칸' }))
+    expect(screen.getByRole('button', { name: /자신\(이 목록의 객체\)/ })).toBeInTheDocument()
+    unmount()
+    render(
+      <ConditionBar
+        defs={REFS}
+        conditions={[]}
+        onChange={vi.fn()}
+        treeTypes={new Set(['part'])}
+        selfType="model"
+      />,
+    )
+    await userEvent.click(screen.getByRole('button', { name: /조건 추가/ }))
+    await userEvent.click(screen.getByRole('combobox', { name: '칸' }))
+    expect(screen.queryByRole('button', { name: /자신\(이 목록의 객체\)/ })).not.toBeInTheDocument()
   })
 })

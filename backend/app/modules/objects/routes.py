@@ -325,10 +325,7 @@ def _tree_spec(object_type: ObjectType) -> tuple[str | None, graph.ParentEnd]:
     안 정했으면 트리를 안 그린다 — **`transitive` 인 관계가 둘 이상일 수 있어서**
     아무거나 골라 그리면 그 트리는 무엇을 보여 주는지 말할 수 없다.
     """
-    spec = (object_type.list_view or {}).get("tree") or {}
-    relation = spec.get("relation")
-    parent_end: graph.ParentEnd = "src" if spec.get("parent") == "src" else "dst"
-    return (relation if isinstance(relation, str) and relation else None, parent_end)
+    return graph.tree_spec(object_type.list_view)
 
 
 # --- 품질 -------------------------------------------------------------------
