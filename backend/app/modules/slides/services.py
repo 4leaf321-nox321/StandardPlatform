@@ -20,12 +20,12 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select, tuple_
+from sqlalchemy import delete, func, or_, select, text, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.objects import access, conditions, paths, system
+from app.modules.objects import access, conditions, paths, relations, system
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.objects.scope import as_scope
 from app.modules.ontology import managed
@@ -355,9 +355,12 @@ def _link_kind(
         return None
     if not relation.directed:
         # 방향이 없는 관계는 양 끝 모두 `out.<관계>` 로 적힌다(`paths.Resolver`). 새로 맺을
-        # 때는 출발점으로 둘 수 있는 쪽에서 — 출발 타입이 정해져 있으면 그 타입이 출발점이다.
-        allowed = relation.src_type_slugs
-        head = "out" if not allowed or follower.slug in allowed else "in"
+        # 때는 출발점으로 둘 수 있는 쪽에서 — 객체 API 와 같은 판정(인터페이스 끝 포함)으로.
+        try:
+            relations.require_end_types_allowed(db, relation, follower.slug, source.slug)
+            head = "out"
+        except AppError:
+            head = "in"
     return _LinkKind("relation", relation=relation, direction=head)
 
 
@@ -482,6 +485,12 @@ def remember(db: Session, slide: Slide, areas: list[AreaOut]) -> None:
     시각만 고친다(upsert). 통째로 지우고 다시 넣던 첫 판은 동시에 연 둘이 같은 줄을 두 번 넣어
     반이 500 이 났다(2026-10-24 재현 — 개발 화면은 한 번 열 때 두 번 부른다). 차례를 정해 넣어
     서로 기다리다 엉키지 않게 한다. **부르는 쪽이 커밋한다.**"""
+    # 같은 장표의 색인은 한 번에 하나씩 — 보는 사람마다 보이는 기록이 달라(부서) 한쪽은 지우고
+    # 한쪽은 넣으면, 줄 차례만으로는 서로 기다리다 엉키는 것을 못 막는다(2026-10-24 점검).
+    # 트랜잭션이 끝나면 풀린다.
+    db.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:key))"), {"key": f"slide_refs:{slide.id}"}
+    )
     seen = sorted(
         {
             (record.id, area.key)
@@ -731,14 +740,17 @@ def _records(
     )
     defs = _defs_of(db, record_type) if record_type is not None else []
     by_key = {one.key: one for one in defs}
+    # 칸을 하나도 고르지 않은 영역은 이름을 보인다 — 빈 칸만 선 표는 고장 난 것처럼 보인다
+    # (2026-10-24 점검 — 개발 DB 의 틀 하나가 그랬다).
+    fields = area.fields or ["label"]
     shown = [
         FieldOut(
             key=key, label=FIXED.get(key) or (by_key[key].label if key in by_key else key)
         )
-        for key in area.fields
+        for key in fields
     ]
     ref_line = [by_key[key] for key in area.ref_line if key in by_key]
-    wanted = [by_key[key] for key in (*area.fields, *area.ref_line) if key in by_key]
+    wanted = [by_key[key] for key in (*fields, *area.ref_line) if key in by_key]
     labels = system.ref_labels(
         db, wanted, [one.properties or {} for one in rows.rows], viewer=user
     )
@@ -747,7 +759,7 @@ def _records(
             id=row.id,
             label=row.label,
             type_slug=type_slug or "",
-            values={key: _text(row, key, by_key.get(key), labels) for key in area.fields},
+            values={key: _text(row, key, by_key.get(key), labels) for key in fields},
             links=[_link(row, one, labels) for one in ref_line],
             can_edit=record_type is not None
             and not managed.owner_of(record_type)

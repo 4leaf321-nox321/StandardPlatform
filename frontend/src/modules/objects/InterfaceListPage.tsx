@@ -297,8 +297,21 @@ export function InterfaceListPage({
                   onClose={() => setGrouping(false)}
                   // 홈에 거는 위젯은 저장된 뷰로 선다 — 인터페이스 목록에는 뷰가 없다.
                   pinnable={false}
-                  onPick={(field, key) => {
+                  onPick={(field, key, _range, drill) => {
                     if (key === null || field === 'status') return
+                    if (drill) {
+                      // 계층 축 — 서버가 정한 칸 · 연산 그대로(「하위 전체」 또는 「같음」). 안 보고
+                      // `f.<칸>@0.eq` 를 걸던 때는 서버가 「없는 칸」 으로 거절했다(2026-10-24 점검).
+                      const kept = conditions.filter(
+                        (one) =>
+                          one.exclude ||
+                          !(one.field === drill.field && (one.op === 'eq' || one.op === 'under')),
+                      )
+                      sync({
+                        conditions: [...kept, { field: drill.field, op: drill.op, value: key }],
+                      })
+                      return
+                    }
                     // **누른 막대가 곧 필터다** — 타입 막대는 타입 좁히기로.
                     if (field === 'type') {
                       const slug = implementers.find((one) => one.id === key)?.slug

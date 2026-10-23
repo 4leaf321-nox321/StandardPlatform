@@ -58,6 +58,27 @@ const EMPTY: TemplateBody = {
   areas: [],
 }
 
+/**
+ * 영역은 **자리(차례)로** 고친다 — 키로 찾던 때는 키 칸을 칠 때마다 편집기가 새로 서서 입력이
+ * 끊겼고, 잠깐 다른 영역과 키가 같아지면 다음 입력이 두 영역을 함께 덮었다(2026-10-24 점검).
+ * 키가 바뀌면 그 영역을 가리키던 짝 · 따라갈 영역도 새 키로 옮긴다 — 단 옛 키를 다른 영역도
+ * 쓰고 있었으면(입력 중 잠깐 겹친 키) 옮기지 않는다. 그 가리킴은 다른 영역의 것이다.
+ */
+export function withArea(areas: AreaDef[], index: number, next: AreaDef): AreaDef[] {
+  const before = areas[index]
+  const shared = areas.some((one, at) => at !== index && one.key === before.key)
+  const renamed = before.key !== next.key && !shared
+  return areas.map((one, at) => {
+    if (at === index) return next
+    if (!renamed) return one
+    return {
+      ...one,
+      pair_of: one.pair_of === before.key ? next.key : one.pair_of,
+      follow_area: one.follow_area === before.key ? next.key : one.follow_area,
+    }
+  })
+}
+
 export default function SlideTemplateEditPage() {
   const { templateId = 'new' } = useParams()
   const creating = templateId === 'new'
@@ -100,25 +121,8 @@ export default function SlideTemplateEditPage() {
     setPreview(null)
   }
 
-  /**
-   * 영역은 **자리(차례)로** 고친다 — 키로 찾던 때는 키 칸을 칠 때마다 편집기가 새로 서서 입력이
-   * 끊겼고, 잠깐 다른 영역과 키가 같아지면 다음 입력이 두 영역을 함께 덮었다(2026-10-24 점검).
-   * 키가 바뀌면 그 영역을 가리키던 짝 · 따라갈 영역도 새 키로 옮긴다.
-   */
   function setArea(index: number, next: AreaDef) {
-    const before = body!.areas[index]
-    const renamed = before.key !== next.key
-    set({
-      areas: body!.areas.map((one, at) => {
-        if (at === index) return next
-        if (!renamed) return one
-        return {
-          ...one,
-          pair_of: one.pair_of === before.key ? next.key : one.pair_of,
-          follow_area: one.follow_area === before.key ? next.key : one.follow_area,
-        }
-      }),
-    })
+    set({ areas: withArea(body!.areas, index, next) })
   }
 
   function addArea(row: number, col: number) {
@@ -515,7 +519,8 @@ function AreaEditor({
                   onValueChange={(next) =>
                     set({
                       type_slug: next,
-                      fields: [],
+                      // 이름은 늘 보인다 — 칸을 하나도 안 고른 표는 빈 칸만 선다.
+                      fields: ['label'],
                       ref_line: [],
                       conditions: [],
                       subject_field: null,
@@ -745,6 +750,12 @@ function RecordSource({
           </Select>
         </div>
       </div>
+      {area.fill === 'condition' && !area.subject_field && (
+        <p className="text-xs text-amber-700 dark:text-amber-400">
+          주제로 거르지 않으면 장표마다 이 타입의 기록 <b>전체</b>에서 {area.limit}건이 들어갑니다 —
+          보통은 「주제와 이어지는 칸」 을 선택합니다.
+        </p>
+      )}
       {area.fill === 'pick' && (
         <p className="text-muted-foreground text-xs">
           주제와 이어지는 칸 · 고정 조건은 선택 후보를 좁힙니다. 건수가 1 이면 장표 한 장이 기록

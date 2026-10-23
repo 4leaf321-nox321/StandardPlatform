@@ -9,7 +9,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { RenderedArea, SlideRecord } from '@/modules/slides/api'
-import { SlideGrid, blocksOf, columnsOf, primaryOf } from '@/modules/slides/SlideGrid'
+import { SlideGrid, blocksOf, canUnlink, columnsOf, primaryOf } from '@/modules/slides/SlideGrid'
 
 function record(id: string, values: Record<string, string>): SlideRecord {
   return {
@@ -231,6 +231,34 @@ describe('장표 그리기', () => {
     })
     draw([risks], { onLink: vi.fn(), onUnlink: vi.fn() })
     expect(screen.queryByRole('button', { name: /연결$/ })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /연결 해제/ })).not.toBeInTheDocument()
+  })
+
+  it('이 기록 쪽을 고치는 연결도 `can_link` 가 거짓이면 해제가 없다', () => {
+    // 허브가 관리하는 관계 — 기록은 내 것이어도 그 관계는 끊지 못한다.
+    const risks = area({
+      key: 'risks',
+      fill: 'follow',
+      fields: [{ key: 'label', label: '이름' }],
+      records: [
+        { ...record('접촉 불량', {}), can_edit: true, ties: [{ id: 'x', source_id: 's' }] },
+      ],
+      link: {
+        kind: 'relation',
+        relation: 'affects',
+        direction: 'out',
+        property: null,
+        multi: false,
+        source_type_slug: 'change',
+        sources: [{ id: 's', label: '핀 수', type_slug: 'change' }],
+        can_link: false,
+      },
+    })
+    expect(canUnlink(risks, risks.records[0])).toBe(false)
+    expect(
+      canUnlink({ ...risks, link: { ...risks.link!, can_link: true } }, risks.records[0]),
+    ).toBe(true)
+    draw([risks], { onLink: vi.fn(), onUnlink: vi.fn() })
     expect(screen.queryByRole('button', { name: /연결 해제/ })).not.toBeInTheDocument()
   })
 

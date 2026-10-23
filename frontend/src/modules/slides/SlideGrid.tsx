@@ -50,7 +50,8 @@ export function canUnlink(area: RenderedArea, record: SlideRecord): boolean {
   if (!link || record.ties.length === 0) return false
   const sourceSide =
     link.kind === 'backref' || (link.kind === 'relation' && link.direction === 'in')
-  return sourceSide ? link.can_link : record.can_edit
+  // 이 기록 쪽을 고치는 연결도 `can_link` 를 본다 — 허브가 관리하는 관계면 끊지 못한다(2026-10-24).
+  return sourceSide ? link.can_link : record.can_edit && link.can_link
 }
 
 /**

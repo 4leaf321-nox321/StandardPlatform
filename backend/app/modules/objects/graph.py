@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -111,9 +112,11 @@ class Levels:
 
     up: dict[uuid.UUID, uuid.UUID]
     """그 단계보다 깊은 노드 → 그 단계의 조상. 여기 없는 노드는 자기 자신이 값이다."""
-    shallow: frozenset[uuid.UUID]
-    """그 단계보다 얕은 노드 — 자기 자신이 값이지만 그 아래는 다른 값으로 간다. 그래서 이
-    값의 칸을 누르면 「하위 전체」 가 아니라 「같음」 으로 돌아간다."""
+    folded: frozenset[uuid.UUID]
+    """**그 단계의** 노드 — 자기와 그 아래가 한 값이다. 그래서 이 값의 칸을 누르면 「하위
+    전체」 로 돌아간다. 나머지(그 단계보다 얕은 노드, 뿌리에서 닿지 않는 노드 — 부모가
+    지워졌거나 깊이 상한 너머)는 자기 자신만 센 값이라 「같음」 이다. 「얕은 것만 같음」 으로
+    두던 때는 닿지 않는 노드의 칸을 누르면 그 아래 기록까지 섞였다(2026-10-24 점검)."""
 
 
 def levels(db: Session, tree: Tree, level: int) -> Levels:
@@ -145,7 +148,9 @@ def levels(db: Session, tree: Tree, level: int) -> Levels:
                    AND NOT EXISTS (
                        SELECT 1 FROM {table} e WHERE {edge} AND e.{child_col} = o.id
                    )
-                UNION ALL
+                -- UNION(ALL 아님) — 부모가 여럿인 DAG 에서 같은 (노드, 깊이, 조상)으로 모이는
+                -- 길을 한 줄로 접는다. ALL 이면 길마다 줄이 갈라져 깊이마다 곱으로 늘었다.
+                UNION
                 SELECT e.{child_col}, d.depth + 1,
                        CASE WHEN d.depth + 1 <= :level THEN e.{child_col} ELSE d.anc END
                   FROM {table} e
@@ -163,13 +168,13 @@ def levels(db: Session, tree: Tree, level: int) -> Levels:
         },
     )
     up: dict[uuid.UUID, uuid.UUID] = {}
-    shallow: set[uuid.UUID] = set()
+    folded: set[uuid.UUID] = set()
     for row in rows:
         if row.depth > level:
             up[row.id] = row.anc
-        elif row.depth < level:
-            shallow.add(row.id)
-    return Levels(up=up, shallow=frozenset(shallow))
+        elif row.depth == level:
+            folded.add(row.id)
+    return Levels(up=up, folded=frozenset(folded))
 
 
 def any_of(column: Any, ids: list[uuid.UUID]) -> ColumnElement[bool]:
@@ -244,7 +249,7 @@ def descendant_ids(
                 SELECT r.{child_col}, 1
                   FROM object_relations r
                  WHERE r.{parent_col} = :root AND r.relation = :rel
-                UNION ALL
+                UNION
                 SELECT r.{child_col}, w.depth + 1
                   FROM object_relations r
                   JOIN walk w ON r.{parent_col} = w.id
@@ -280,7 +285,7 @@ def ancestor_ids(
                 SELECT r.{parent_col}, 1
                   FROM object_relations r
                  WHERE r.{child_col} = :start AND r.relation = :rel
-                UNION ALL
+                UNION
                 SELECT r.{parent_col}, w.depth + 1
                   FROM object_relations r
                   JOIN walk w ON r.{child_col} = w.id
@@ -744,6 +749,8 @@ PATH_VISIT_LIMIT = 50_000
 #: 노드 하나에서 따라가는 선 수 상한. 허브(「본사」)가 이웃 수만 개를 끌고 오지 않게 —
 #: 닿으면 그 너머를 덜 본 것이라 `truncated`.
 PATH_FANOUT = 2_000
+#: 한 층에서 읽는 선의 상한 — 넘으면 그 층에서 멈추고 `truncated`.
+PATH_EDGE_BUDGET = 200_000
 #: 한 번에 넓히는 frontier 조각(`IN (...)` 의 크기).
 _PATH_CHUNK = 1_000
 
@@ -775,32 +782,49 @@ def _path_step(
     type_ids: list[uuid.UUID] | None,
     records: bool,
 ) -> tuple[list[PathEdge], bool]:
-    """frontier 에서 한 걸음 — (선들, 노드당 선 상한에 닿았나)."""
+    """frontier 에서 한 걸음 — (선들, 상한에 닿았나).
+
+    노드당 상한은 관계 · 참조 칸이 **따로** 건다(`neighbor_edges` 마다 `fanout`). 둘을
+    합쳐 세던 때는 관계 1,500 · 참조 600 처럼 어느 쪽도 안 잘렸는데 「상한에 닿음」 이라 했다.
+    한 층에서 읽는 선도 `PATH_EDGE_BUDGET` 에서 멈춘다 — 들른 노드 상한은 층 사이에서만 보므로,
+    넓은 층 하나가 그 사이에 선을 수백만 개 읽을 수 있었다(2026-10-24 점검)."""
     found: list[PathEdge] = []
-    for part in chunks(frontier, _PATH_CHUNK):
-        found += neighbor_edges(
-            db,
-            frontier=part,
-            user=user,
-            fanout=PATH_FANOUT,
-            relations=relations,
-            type_ids=type_ids,
-        )
-        found += refedges.neighbor_edges(
-            db,
-            frontier=part,
-            user=user,
-            fanout=PATH_FANOUT,
-            relations=relations,
-            type_ids=type_ids,
-            skip_logs=not records,
-        )
     here = set(frontier)
+    hit = False
+    for part in chunks(frontier, _PATH_CHUNK):
+        for edges in (
+            neighbor_edges(
+                db,
+                frontier=part,
+                user=user,
+                fanout=PATH_FANOUT,
+                relations=relations,
+                type_ids=type_ids,
+            ),
+            refedges.neighbor_edges(
+                db,
+                frontier=part,
+                user=user,
+                fanout=PATH_FANOUT,
+                relations=relations,
+                type_ids=type_ids,
+                skip_logs=not records,
+            ),
+        ):
+            found += edges
+            hit = hit or _capped(edges, here)
+        if len(found) >= PATH_EDGE_BUDGET:
+            return found, True
+    return found, hit
+
+
+def _capped(edges: Sequence[PathEdge], here: set[uuid.UUID]) -> bool:
+    """한 종류(관계 또는 참조 칸)의 선이 어느 노드에서 노드당 상한에 닿았나."""
     per_anchor: dict[uuid.UUID, int] = {}
-    for edge in found:
+    for edge in edges:
         for end in {edge.src, edge.dst} & here:
             per_anchor[end] = per_anchor.get(end, 0) + 1
-    return found, any(n >= PATH_FANOUT for n in per_anchor.values())
+    return any(n >= PATH_FANOUT for n in per_anchor.values())
 
 
 def _chains(

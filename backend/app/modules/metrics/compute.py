@@ -76,6 +76,30 @@ def lock_key(slug: str) -> int:
     return int.from_bytes(digest, "big", signed=True)
 
 
+def _once_per_record(inner: Any, columns: list[Any], value: Any) -> Any:
+    """(기록, 셀 열들, 값)을 한 번씩 남기고 그 위에서 센다 — 열 이름은 `statement` 의 안쪽과
+    같다(`ws` · `period` · `cohort` · `d<n>` · `w` · `n` · `vn` · `vs` · `vmin` · `vmax`). 셀
+    열 전부로 묶는다 — 기간 · 코호트가 없으면 그 열은 NULL 하나라 묶어도 같다."""
+    picked = [ObjectInstance.id.label("oid"), *columns]
+    if value is not None:
+        picked.append(value.label("val"))
+    pairs = inner.with_only_columns(*picked).distinct().subquery("once")
+    names = [one.name for one in columns]
+    measured = pairs.c.val if value is not None else None
+    measures: list[Any] = [
+        func.count().label("n"),
+        (func.count(measured) if measured is not None else cast(literal(0), BigInteger)).label(
+            "vn"
+        ),
+        (func.sum(measured) if measured is not None else cast(null(), Float)).label("vs"),
+        (func.min(measured) if measured is not None else cast(null(), Float)).label("vmin"),
+        (func.max(measured) if measured is not None else cast(null(), Float)).label("vmax"),
+    ]
+    return select(*[pairs.c[name] for name in names], *measures).group_by(
+        *[pairs.c[name] for name in names]
+    )
+
+
 def statement(
     built: spec_module.Built,
     *,
@@ -146,7 +170,13 @@ def statement(
         joining.append(stay.source)
     inner = axes.joined(inner, *joining)
     inner = conditions.apply(inner, built.scope.defs, built.conds, built.plan.resolver)
-    grouped = inner.group_by(*group).subquery("g")
+    if any(one.axis.tree is not None and one.axis.multi for one in built.dims):
+        # **여러 값 칸을 계층으로 접으면** 두 값이 같은 조상으로 접힐 수 있다 — 그러면 한
+        # 기록이 같은 셀에 두 번 센다(부품 [p1, p2] 가 모두 뿌리 R 아래면 R 이 2). (기록, 셀)을
+        # 한 번씩 남긴 뒤 센다 — 통계의 막대가 같은 일을 한다(`summary._grouped`, 2026-10-24).
+        grouped = _once_per_record(inner, columns, value).subquery("g")
+    else:
+        grouped = inner.group_by(*group).subquery("g")
     if stay is not None:
         assert built.time is not None
         grouped = _spread(grouped, len(built.dims), built.time.grain, stay)

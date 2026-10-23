@@ -15,9 +15,16 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
+from app.modules.objects.graph import MAX_DEPTH
 from tests.api.conftest import Signed, finish_job
 from tests.api.test_metric_incremental import _recount
-from tests.api.test_ontology import _link, _make_property
+from tests.api.test_ontology import (
+    _link,
+    _make_object,
+    _make_property,
+    _make_type,
+    _tree_type,
+)
 from tests.api.test_tree_conditions import world  # noqa: F401 — 같은 세상을 쓴다
 
 
@@ -207,3 +214,79 @@ def test_트리가_바뀌면_계층_축_지표도_전량으로_센다(
         "TOP": 2,
         "OTHER": 2,
     }
+
+
+def test_여러_값_칸을_접으면_한_기록은_한_칸에_한_번만_센다(
+    client: TestClient,
+    admin: Signed,
+    member: Signed,
+    world: dict[str, Any],  # noqa: F811
+) -> None:
+    """부품 [LEAF, MID, OTHER] 인 기록 하나 — 뿌리로 접으면 LEAF · MID 가 둘 다 TOP 이다.
+    펼친 줄을 그대로 세던 때는 TOP 칸이 2 였다(2026-10-24 점검)."""
+    svc, p = world["svc"], world["parts"]
+    _make_property(
+        client,
+        admin,
+        svc,
+        key="parts",
+        label="교체 부품들",
+        data_type="object_ref",
+        ref_type_slug=world["part"],
+        multi=True,
+    )
+    _make_object(
+        client,
+        admin,
+        svc,
+        label="R-MANY",
+        properties={"parts": [p["LEAF"]["id"], p["MID"]["id"], p["OTHER"]["id"]]},
+    )
+    bars = _bars(_summary(client, member, svc, "properties.parts@0"))
+    assert bars["TOP"][0] == 1 and bars["OTHER"][0] == 1, bars
+    slug = _metric(
+        client,
+        admin,
+        svc,
+        {
+            "measure": "count",
+            "dimensions": [{"name": "root", "address": "properties.parts@0"}],
+        },
+        "lvm",
+    )
+    cells = _cells(client, admin, slug, "root")
+    assert cells["TOP"]["count"] == 1 and cells["OTHER"]["count"] == 1, cells
+
+
+def test_뿌리에서_닿지_않는_값은_누르면_같음이다(client: TestClient, admin: Signed) -> None:
+    """깊이 상한(`MAX_DEPTH`) 너머의 노드는 접히지 않고 자기 자신이 값이다 — 자기만 센 칸이라
+    누르면 「같음」 이어야 한다. 「얕은 것만 같음」 이던 때는 「하위 전체」 로 돌아가 그 아래
+    기록까지 섞였다(2026-10-24 점검)."""
+    part, part_of = _tree_type(client, admin)
+    chain = [_make_object(client, admin, part, label=f"N{i}") for i in range(MAX_DEPTH + 3)]
+    for child, parent in zip(chain[1:], chain, strict=False):
+        assert (
+            _link(client, admin, part, child["id"], part_of, parent["id"]).status_code == 201
+        )
+    svc = _make_type(client, admin, label="서비스 기록", usage="log")
+    _make_property(
+        client,
+        admin,
+        svc,
+        key="part",
+        label="교체 부품",
+        data_type="object_ref",
+        ref_type_slug=part,
+    )
+    far, farther = chain[MAX_DEPTH + 1], chain[MAX_DEPTH + 2]
+    for target in (chain[0], far, farther):
+        _make_object(
+            client, admin, svc, label=f"R-{target['label']}", properties={"part": target["id"]}
+        )
+    body = _summary(client, admin, svc, "properties.part@0")
+    bars = {one["key"]: one for one in body["buckets"]}
+    assert bars[chain[0]["id"]]["drill"]["op"] == "under"
+    for node in (far, farther):
+        drill = bars[node["id"]]["drill"]
+        assert drill["op"] == "eq"
+        assert _listed(client, admin, svc, drill["field"], drill["op"], node["id"]) == 1

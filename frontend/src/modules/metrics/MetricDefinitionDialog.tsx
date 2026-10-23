@@ -98,6 +98,13 @@ function slugOf(label: string): string {
     .slice(0, 32)
 }
 
+/** 주소가 관계 걸음 자체로 끝나나(`out.<관계>` · `in.<관계>` · `in.<타입>:<칸>`) — 칸이 아니다. */
+function isWholeHop(field: string): boolean {
+  const tokens = field.split('.')
+  const hop = tokens[tokens.length - 2]
+  return tokens.length >= 2 && (hop === 'out' || hop === 'in')
+}
+
 export function MetricDefinitionDialog({ existing, draft = null, onClose, onSaved }: Props) {
   const schema = useResource(() => ontologyApi.schema(), [])
   const metrics = useResource(() => metricsApi.list(), [])
@@ -238,7 +245,14 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
         .filter((one) => one.data_type === 'object_ref' && treeTypes.has(one.ref_type_slug ?? ''))
         .map((one) => ({ value: `properties.${one.key}`, label: one.label })),
       ...(linked.data ?? [])
-        .filter((one) => one.data_type === 'object_ref' && treeTypes.has(one.ref_type_slug ?? ''))
+        // 걸음 끝의 **참조 칸**만 — 관계 자체(`out.<관계>`)는 접을 칸이 아니라 서버가 거절한다
+        // (통계의 고르개도 뺀다, 2026-10-24 점검).
+        .filter(
+          (one) =>
+            one.data_type === 'object_ref' &&
+            treeTypes.has(one.ref_type_slug ?? '') &&
+            !isWholeHop(one.field),
+        )
         .map((one) => ({ value: one.field, label: one.label })),
     ].flatMap((one) => [
       { value: `${one.value}@0`, label: `${one.label} (뿌리)` },

@@ -117,11 +117,12 @@ class TreeAxis:
     level: int
     field: str
     """막대 · 칸을 누르면 거는 조건의 칸(참조 칸)."""
-    shallow: frozenset[str]
-    """그 단계보다 얕은 값 — 그 칸은 「같음」 으로, 나머지는 「하위 전체」 로 돌아간다."""
+    folded: frozenset[str]
+    """그 단계의 값 — 자기와 그 아래를 센 칸이라 「하위 전체」 로, 나머지(얕은 값 · 뿌리에서
+    닿지 않는 값)는 자기만 센 칸이라 「같음」 으로 돌아간다(`graph.Levels.folded`)."""
 
     def drill_op(self, key: str) -> str:
-        return "eq" if key in self.shallow else "under"
+        return "under" if key in self.folded else "eq"
 
 
 @dataclass
@@ -590,7 +591,7 @@ class JoinPlan:
             inner.ref_def,
             address=address,
             tree=TreeAxis(
-                level, condition_field(base), frozenset(str(one) for one in found.shallow)
+                level, condition_field(base), frozenset(str(one) for one in found.folded)
             ),
         )
 

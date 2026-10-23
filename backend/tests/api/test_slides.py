@@ -952,3 +952,16 @@ def test_주제가_합쳐지면_장표는_이긴_쪽을_주제로_이어_간다(
         "재질",
         "B 변경",
     }
+
+
+def test_칸을_하나도_고르지_않은_영역은_이름을_보인다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    body = _template(world)
+    body["areas"][2]["fields"] = []
+    made = client.post("/api/slides/templates", json=body, headers=admin.headers)
+    assert made.status_code == 201, made.text
+    slide = _slide(client, member, made.json(), world["models"]["A"]["id"])
+    risks = _areas(slide)["risks"]
+    assert risks["fields"] == [{"key": "label", "label": "이름"}]
+    assert [one["values"] for one in risks["records"]] == [{"label": "접촉 불량"}]
