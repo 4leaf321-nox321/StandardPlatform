@@ -20,13 +20,15 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from typing import Any
 
-from sqlalchemy import delete, func, or_, select
+from sqlalchemy import delete, func, or_, select, tuple_
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.objects import access, conditions, paths, system
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.objects.scope import as_scope
+from app.modules.ontology import managed
 from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.ontology.services import InvalidValue
 from app.modules.slides.models import Slide, SlideRef
@@ -266,6 +268,7 @@ def render(
     """영역마다 그린다. 짝 영역은 짝의 기록을 같은 차례로 — 칸만 다르다. 따라오는 영역은 따라갈
     영역을 먼저 센 뒤에 센다."""
     querycap.cap(db)
+    editor = access.Editor(db, user)
     parsed = [AreaIn.model_validate(one) for one in areas]
     by_key = {one.key: one for one in parsed}
     found: dict[str, _Rows] = {}
@@ -301,12 +304,12 @@ def render(
         primary = by_key.get(area.pair_of or "") if area.pair_of else area
         rows = found.get(primary.key if primary else "", _Rows(problem="짝 영역이 없습니다."))
         type_slug = primary.type_slug if primary else None
-        drawn = _records(db, user, area, type_slug, rows)
+        drawn = _records(db, user, editor, area, type_slug, rows)
         if area.fill == "follow" and area.pair_of is None:
             source = source_of(area, by_key)
             drawn.follow_title = source.title if source else None
             if not rows.problem:
-                drawn.link, ties = _link_of(db, user, area, by_key, found)
+                drawn.link, ties = _link_of(db, editor, area, by_key, found)
                 for record in drawn.records:
                     record.ties = ties.get(record.id, [])
         out.append(drawn)
@@ -316,7 +319,7 @@ def render(
 @dataclass(frozen=True)
 class _LinkKind:
     kind: str
-    relation: str | None = None
+    relation: RelationType | None = None
     direction: str | None = None
     prop: str | None = None
     multi: bool = False
@@ -347,14 +350,20 @@ def _link_kind(
         if head == "in" and type_slug == source.slug and theirs is not None:
             return _LinkKind("backref", prop=key, multi=theirs.multi)
         return None
-    if db.scalar(select(RelationType.slug).where(RelationType.slug == name)) is None:
+    relation = db.scalar(select(RelationType).where(RelationType.slug == name))
+    if relation is None:
         return None
-    return _LinkKind("relation", relation=name, direction=head)
+    if not relation.directed:
+        # 방향이 없는 관계는 양 끝 모두 `out.<관계>` 로 적힌다(`paths.Resolver`). 새로 맺을
+        # 때는 출발점으로 둘 수 있는 쪽에서 — 출발 타입이 정해져 있으면 그 타입이 출발점이다.
+        allowed = relation.src_type_slugs
+        head = "out" if not allowed or follower.slug in allowed else "in"
+    return _LinkKind("relation", relation=relation, direction=head)
 
 
 def _link_of(
     db: Session,
-    user: User,
+    editor: access.Editor,
     area: AreaIn,
     by_key: dict[str, AreaIn],
     found: dict[str, _Rows],
@@ -375,27 +384,26 @@ def _link_of(
     rows = found[area.key].rows
     source_ids = {one.id for one in sources}
     ties: dict[uuid.UUID, list[TieOut]] = {}
-    if kind.kind == "relation" and rows and sources:
-        mine = (
-            ObjectRelation.dst_object_id
-            if kind.direction == "in"
-            else ObjectRelation.src_object_id
-        )
-        theirs = (
-            ObjectRelation.src_object_id
-            if kind.direction == "in"
-            else ObjectRelation.dst_object_id
-        )
-        for relation_id, record_id, source_id in db.execute(
-            select(ObjectRelation.id, mine, theirs).where(
-                ObjectRelation.relation == kind.relation,
-                mine.in_([one.id for one in rows]),
-                theirs.in_(source_ids),
-            )
-        ):
-            ties.setdefault(record_id, []).append(
-                TieOut(id=str(relation_id), source_id=str(source_id))
-            )
+    relation = kind.relation
+    if relation is not None and rows and sources:
+        # 방향이 없는 관계는 어느 쪽에서 맺었든 이어진 것이다 — 양쪽 차례를 다 본다.
+        ends = [
+            (ObjectRelation.dst_object_id, ObjectRelation.src_object_id),
+            (ObjectRelation.src_object_id, ObjectRelation.dst_object_id),
+        ]
+        if relation.directed:
+            ends = ends[:1] if kind.direction == "in" else ends[1:]
+        for mine, theirs in ends:
+            for relation_id, record_id, source_id in db.execute(
+                select(ObjectRelation.id, mine, theirs).where(
+                    ObjectRelation.relation == relation.slug,
+                    mine.in_([one.id for one in rows]),
+                    theirs.in_(source_ids),
+                )
+            ):
+                ties.setdefault(record_id, []).append(
+                    TieOut(id=str(relation_id), source_id=str(source_id))
+                )
     elif kind.kind == "ref":
         for row in rows:
             ties[row.id] = [
@@ -407,21 +415,28 @@ def _link_of(
         for src in sources:
             for one in _uuids(_values((src.properties or {}).get(kind.prop or ""))):
                 ties.setdefault(one, []).append(TieOut(id=str(src.id), source_id=str(src.id)))
-    # 따라갈 기록 쪽을 고치는 연결이면 그 기록들을 고칠 수 있어야 한다 — 관계는 출발점을 고칠
-    # 수
-    # 있는 사람이 맺는다(`objects.add_relation`).
+    # 따라갈 기록 쪽을 고치는 연결이면 그 기록들을 고칠 수 있어야 한다 — 관계는 출발점을
+    # 고칠 수 있는 사람이 맺는다(`objects.add_relation`). 허브가 관리하는 관계 종류 · 타입은
+    # 이 설치에서 잇지도 고치지도 않는다(`managed`) — 단추를 세우면 누르고서야 409 를 본다
+    # (2026-10-24 점검).
     source_side = kind.kind == "backref" or (
         kind.kind == "relation" and kind.direction == "in"
     )
-    can_link = bool(sources) and (
-        all(access.can_edit(db, user, source_type, one) for one in sources)
-        if source_side
-        else True
+    if relation is not None:
+        locked = bool(managed.owner_of(relation))
+    else:
+        locked = bool(
+            managed.owner_of(source_type if kind.kind == "backref" else follower_type)
+        )
+    can_link = (
+        bool(sources)
+        and not locked
+        and (all(editor(source_type, one) for one in sources) if source_side else True)
     )
     return (
         AreaLinkOut(
             kind=kind.kind,  # type: ignore[arg-type]
-            relation=kind.relation,
+            relation=relation.slug if relation is not None else None,
             direction=kind.direction,  # type: ignore[arg-type]
             property=kind.prop,
             multi=kind.multi,
@@ -459,20 +474,37 @@ def _made(db: Session, raw: Any) -> LinkItemOut | None:
 
 def remember(db: Session, slide: Slide, areas: list[AreaOut]) -> None:
     """이 장표에 **지금** 실린 기록을 적어 둔다 — 기록 상세의 「이 기록이 쓰인 장표」. 장표는
-    살아
-    있는 값이라 영역마다 기록을 다시 세어야 정확한데, 기록 하나를 열 때마다 모든 장표를 그릴
-    수는
-    없다. 그래서 장표를 열 때 실린 것을 적고, 화면은 「마지막으로 열었을 때」 라고 말한다.
-    **부르는 쪽이 커밋한다.**"""
-    db.execute(delete(SlideRef).where(SlideRef.slide_id == slide.id))
-    seen = {
-        (record.id, area.key)
-        for area in areas
-        if area.kind == "records"
-        for record in area.records
-    }
-    for record_id, area_key in seen:
-        db.add(SlideRef(slide_id=slide.id, object_id=record_id, area_key=area_key))
+    살아 있는 값이라 영역마다 기록을 다시 세어야 정확한데, 기록 하나를 열 때마다 모든 장표를
+    그릴 수는 없다. 그래서 장표를 열 때 실린 것을 적고, 화면은 「마지막으로 열었을 때」 라고
+    말한다.
+
+    **같은 장표가 동시에 열려도 부딪히지 않게** — 낡은 줄만 지우고, 넣을 때 이미 있으면 본
+    시각만 고친다(upsert). 통째로 지우고 다시 넣던 첫 판은 동시에 연 둘이 같은 줄을 두 번 넣어
+    반이 500 이 났다(2026-10-24 재현 — 개발 화면은 한 번 열 때 두 번 부른다). 차례를 정해 넣어
+    서로 기다리다 엉키지 않게 한다. **부르는 쪽이 커밋한다.**"""
+    seen = sorted(
+        {
+            (record.id, area.key)
+            for area in areas
+            if area.kind == "records"
+            for record in area.records
+        }
+    )
+    stale = delete(SlideRef).where(SlideRef.slide_id == slide.id)
+    if seen:
+        stale = stale.where(tuple_(SlideRef.object_id, SlideRef.area_key).not_in(seen))
+    db.execute(stale)
+    if not seen:
+        return
+    fresh = pg_insert(SlideRef).values(
+        [{"slide_id": slide.id, "object_id": one, "area_key": key} for one, key in seen]
+    )
+    db.execute(
+        fresh.on_conflict_do_update(
+            index_elements=[SlideRef.slide_id, SlideRef.object_id, SlideRef.area_key],
+            set_={"seen_at": func.now()},
+        )
+    )
 
 
 def _follow_rows(
@@ -517,6 +549,13 @@ def _rows_of(
     order = _ORDERS[area.order]
     if area.fill == "pick":
         picked = _uuids((content.get(area.key) or {}).get("picks") or [])
+        # 합쳐진 기록은 이긴 쪽을 보인다 — 객체 API 가 `merged_into` 를 따라가는 것과 같다.
+        picked = list(
+            dict.fromkeys(
+                winner.id if (winner := follow_merges(db, one)) is not None else one
+                for one in picked
+            )
+        )
         if not picked:
             return _Rows()
         stmt = _base(db, user, record_type).where(ObjectInstance.id.in_(picked))
@@ -532,6 +571,17 @@ def _rows_of(
     total = db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
     rows = list(db.scalars(stmt.order_by(*order).limit(area.limit)))
     return _Rows(rows=rows, total=int(total), list_params=_list_params(area, subject))
+
+
+def follow_merges(db: Session, object_id: uuid.UUID | None) -> ObjectInstance | None:
+    """그 객체 — 다른 것에 합쳐졌으면 **이긴 쪽**(사슬이면 끝까지). 장표의 주제 · 고른 기록이
+    합쳐진 뒤에도 비지 않게 한다(2026-10-24 점검 — 합친 모델의 장표가 통째로 비었다)."""
+    row = db.get(ObjectInstance, object_id) if object_id else None
+    for _ in range(8):
+        if row is None or row.deleted_at is None or row.merged_into_id is None:
+            return row
+        row = db.get(ObjectInstance, row.merged_into_id)
+    return row
 
 
 def _base(db: Session, user: User | None, record_type: ObjectType) -> Any:
@@ -667,7 +717,12 @@ def _list_params(area: AreaIn, subject: ObjectInstance | None) -> dict[str, str]
 
 
 def _records(
-    db: Session, user: User, area: AreaIn, type_slug: str | None, rows: _Rows
+    db: Session,
+    user: User,
+    editor: access.Editor,
+    area: AreaIn,
+    type_slug: str | None,
+    rows: _Rows,
 ) -> AreaOut:
     record_type = (
         db.scalar(select(ObjectType).where(ObjectType.slug == type_slug))
@@ -694,7 +749,9 @@ def _records(
             type_slug=type_slug or "",
             values={key: _text(row, key, by_key.get(key), labels) for key in area.fields},
             links=[_link(row, one, labels) for one in ref_line],
-            can_edit=record_type is not None and access.can_edit(db, user, record_type, row),
+            can_edit=record_type is not None
+            and not managed.owner_of(record_type)
+            and editor(record_type, row),
         )
         for row in rows.rows
     ]

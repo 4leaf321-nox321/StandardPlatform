@@ -180,9 +180,19 @@ export function useRecordActions({
     onEditValue: (area, record, field) => setEditing({ area, record, field }),
     onLink: (area) => setLinking(area),
     onUnlink: (area, record) => setUnlinking({ area, record }),
+    /**
+     * 「새 기록」 은 **만든 기록이 그 영역에 실릴 때만** 세운다 — 만든 뒤 잇는 일(선택에 더하기 · 따라갈
+     * 기록에 연결)이 거절되면 기록만 덩그러니 남는다(2026-10-24 점검). 선택 영역은 장표를 수정할 수
+     * 있는 사람, 따라오는 영역은 따라갈 기록이 하나이고 연결할 수 있을 때.
+     */
     canCreate: (area) => {
       const type = area.type_slug ? types.get(area.type_slug) : undefined
-      return Boolean(type) && canCreateObject(user, type?.usage)
+      if (!type || !canCreateObject(user, type.usage)) return false
+      if (area.fill === 'pick') return slide.can_edit
+      if (area.fill === 'follow') {
+        return Boolean(area.link?.can_link && area.link.sources.length === 1)
+      }
+      return true
     },
     onCreate: (area) => {
       const type = area.type_slug ? types.get(area.type_slug) : undefined

@@ -10,7 +10,7 @@ from datetime import UTC, datetime
 from urllib.parse import quote
 
 from fastapi import APIRouter, Depends, Query, Response
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -152,20 +152,22 @@ def delete_template(
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
 ) -> Response:
-    """틀을 지운다 — **이 틀로 만든 장표가 없을 때만.** 장표가 있으면 몇 장인지 말하며
-    막는다."""
+    """틀을 지운다 — **이 틀로 만든 장표(삭제하지 않은 것)가 없을 때만.** 있으면 몇 장인지
+    말하며 막는다. 삭제한 장표만 남았으면 그것들을 함께 영구 삭제한다 — 화면은 삭제한 장표를
+    세지 않아 「0장」 인데, 그것들이 틀을 붙들어 삭제가 끝내 안 되던 길을 막는다(2026-10-24
+    점검). 무엇이 지워졌는지는 감사 기록에 수로 남는다."""
     row = _template(db, template_id)
-    used = int(
-        db.scalar(select(func.count()).select_from(Slide).where(Slide.template_id == row.id))
-        or 0
-    )
-    if used:
+    live = _slide_count(db, row.id)
+    if live:
         raise Conflict(
             code("SLIDES", 21),
-            f"이 틀로 만든 장표가 {used}장 있습니다(삭제한 것 포함) — 틀을 삭제하면 그 장표를 "
-            "표시할 수 없습니다.",
-            details={"slides": used},
+            f"이 틀로 만든 장표가 {live}장 있습니다 — 틀을 삭제하면 그 장표를 표시할 수 "
+            "없습니다. 장표를 먼저 삭제하세요.",
+            details={"slides": live},
         )
+    gone = (Slide.template_id == row.id, Slide.deleted_at.is_not(None))
+    purged = int(db.scalar(select(func.count()).select_from(Slide).where(*gone)) or 0)
+    db.execute(delete(Slide).where(*gone))
     audit.record(
         db,
         action="slides.template.delete",
@@ -173,6 +175,7 @@ def delete_template(
         target_table="slide_templates",
         target_id=row.id,
         target_label=row.name,
+        changes={"purged_deleted_slides": purged} if purged else None,
     )
     db.delete(row)
     db.commit()
@@ -304,7 +307,7 @@ def update_slide(
         area = areas.get(key) or {}
         if area.get("kind") != "records" or area.get("fill") != "pick" or area.get("pair_of"):
             raise InvalidValue(code("SLIDES", 32), f"선택 영역이 아닙니다: {key}")
-        subject = db.get(ObjectInstance, row.subject_id) if row.subject_id else None
+        subject = services.follow_merges(db, row.subject_id)
         content.setdefault(key, {})["picks"] = [
             str(one) for one in services.check_picks(db, user, area, subject, picked)
         ]
@@ -376,7 +379,7 @@ def pick_candidates(
     )
     if area is None or area.get("fill") != "pick" or area.get("pair_of"):
         raise NotFound(code("SLIDES", 38), f"선택 영역이 아닙니다: {area_key}")
-    subject = db.get(ObjectInstance, row.subject_id) if row.subject_id else None
+    subject = services.follow_merges(db, row.subject_id)
     found, total = services.candidates(db, user, area, subject, q, AREA_LIMIT_MAX)
     return CandidatesOut(
         items=[CandidateOut(id=one.id, label=one.label) for one in found], total=total
@@ -526,7 +529,7 @@ def _template_out(db: Session, row: SlideTemplate) -> TemplateOut:
 def _subject_out(db: Session, subject_id: uuid.UUID | None) -> SubjectOut | None:
     if subject_id is None:
         return None
-    found = db.get(ObjectInstance, subject_id)
+    found = services.follow_merges(db, subject_id)
     if found is None:
         return None
     object_type = db.get(ObjectType, found.type_id)
@@ -554,7 +557,10 @@ def _summary(db: Session, row: Slide) -> SlideSummaryOut:
 
 def _slide_out(db: Session, user: User, row: Slide) -> SlideOut:
     template = _template(db, row.template_id)
-    subject = db.get(ObjectInstance, row.subject_id) if row.subject_id else None
+    subject = services.follow_merges(db, row.subject_id)
+    if subject is not None and subject.id != row.subject_id:
+        # 주제가 다른 것에 합쳐졌다 — 장표는 이긴 쪽을 주제로 이어 간다(아래에서 커밋한다).
+        row.subject_id = subject.id
     rendered_at = datetime.now(UTC)
     areas = services.render(db, user, template.areas, subject, row.content or {})
     # 지금 실린 기록을 적어 둔다 — 기록 상세의 「이 기록이 쓰인 장표」.

@@ -104,7 +104,8 @@ def build(slide: SlideOut) -> bytes:
             if first.kind == "text":
                 _text_table(page, first, block, top, scale)
             else:
-                _records_table(page, block, top, scale, spec.continued.get(first.key, 0))
+                continued = spec.continued.get(primary_of(block.group).key, 0)
+                _records_table(page, block, top, scale, continued)
         _box(
             page,
             MARGIN_IN,
@@ -169,7 +170,8 @@ def _paginate(slide: SlideOut) -> list[_Page]:
             longest,
             key=lambda one: len(one[0].records) * max(1, *(len(area.fields) for area in one)),
         )
-        moved[group[0].key] = moved.get(group[0].key, 0) + 1
+        key = primary_of(group).key
+        moved[key] = moved.get(key, 0) + 1
         first = trimmed()
     pages = [first]
     place = {one.key: (one.row, one.col) for one in slide.areas}
@@ -228,6 +230,13 @@ def blocks_of(areas: list[AreaOut]) -> list[list[AreaOut]]:
     return out
 
 
+def primary_of(group: list[AreaOut]) -> AreaOut:
+    """덩이의 원본 — 짝이 아닌 영역. 덩이는 열 차례로 놓여 짝이 왼쪽에 올 수 있다 — 그때 첫
+    영역을 원본으로 읽으면 넘긴 기록을 짝의 키로 세어 쪽 나누기가 끝나지 않았다(2026-10-24
+    점검)."""
+    return next((one for one in group if not one.pair_of), group[0])
+
+
 def columns_of(group: list[AreaOut]) -> list[tuple[AreaOut, str, float]]:
     """덩이의 열 — (영역, `label`|`value`, 너비 몫). 화면의 `columnsOf` 와 같다."""
     span = sum(one.col_span for one in group)
@@ -257,7 +266,9 @@ def _layout(slide: _Page, scale: float) -> tuple[list[_Block], list[float]]:
         heights = (
             _text_heights(first, width, scale)
             if first.kind == "text"
-            else _records_heights(group, width, scale, slide.continued.get(first.key, 0))
+            else _records_heights(
+                group, width, scale, slide.continued.get(primary_of(group).key, 0)
+            )
         )
         blocks.append(_Block(group, MARGIN_IN + first.col * (cell + GAP_IN), width, heights))
     rows = [0.0] * slide.rows
@@ -294,7 +305,7 @@ def _records_heights(
     """`_records_table` 이 세우는 줄과 같은 차례로 — 머리글, 기록마다 연결 항목 줄과 칸 줄,
     끝의 알림."""
     head, value_pt, small = HEAD_PT * scale, VALUE_PT * scale, SMALL_PT * scale
-    primary = group[0]
+    primary = primary_of(group)
     shares = [share * width for _, _, share in columns_of(group)]
     depth_of = max(1, *(len(one.fields) for one in group))
     out = [max(_height(_lines(one.title, width * 0.5, head), head) for one in group)]
@@ -342,7 +353,7 @@ def _text_heights(area: AreaOut, width: float, scale: float) -> list[float]:
 
 def _records_table(page: Any, block: _Block, top: float, scale: float, continued: int) -> None:
     group = block.group
-    primary = group[0]
+    primary = primary_of(group)
     records = primary.records
     columns = columns_of(group)
     depth_of = max(1, *(len(one.fields) for one in group))

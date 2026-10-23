@@ -797,3 +797,158 @@ def test_AI_가_쓴_글은_초안으로_보이고_사람이_다시_저장하면_
         path, json={"texts": {"opinion": "확인 완료 — 12월 재검토"}}, headers=member.headers
     )
     assert _areas(human.json())["opinion"]["ai_draft"] is False
+
+
+def test_같은_장표를_동시에_열어도_부딪히지_않는다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    """열 때마다 「쓰인 장표」 색인을 적는다 — 통째로 지우고 다시 넣던 첫 판은 동시에 연 둘이
+    같은 줄을 두 번 넣어 반이 500 이었다(2026-10-24)."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    from app.main import app as fastapi_app
+
+    slide = _slide(
+        client, member, _made_template(client, admin, world), world["models"]["A"]["id"]
+    )
+
+    def one(_: int) -> int:
+        with TestClient(fastapi_app, raise_server_exceptions=False) as other:
+            got = other.get(f"/api/slides/{slide['id']}", headers=member.headers)
+            return int(got.status_code)
+
+    with ThreadPoolExecutor(6) as pool:
+        codes = list(pool.map(one, range(12)))
+    assert codes == [200] * 12
+    used = client.get(
+        f"/api/slides/used-in/{world['changes']['핀 수']['id']}", headers=member.headers
+    ).json()
+    assert [one["slide"]["id"] for one in used] == [slide["id"]]
+
+
+def test_삭제한_장표만_남은_틀은_지워진다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    """화면은 삭제한 장표를 세지 않아 「0장」 인데 그것들이 틀을 붙들어 삭제가 끝내 안 됐다."""
+    template = _made_template(client, admin, world)
+    slide = _slide(client, member, template, world["models"]["A"]["id"])
+    path = f"/api/slides/templates/{template['id']}"
+    assert client.delete(path, headers=admin.headers).status_code == 409
+    assert (
+        client.delete(f"/api/slides/{slide['id']}", headers=member.headers).status_code == 204
+    )
+    shown = client.get(path, headers=admin.headers).json()
+    assert shown["slides"] == 0
+    assert client.delete(path, headers=admin.headers).status_code == 204
+    assert client.get(path, headers=admin.headers).status_code == 404
+
+
+# --- 2026-10-24 점검에서 찾은 것 -------------------------------------------------------
+
+
+def test_짝이_원본보다_왼쪽이어도_원본으로_그리고_pptx_가_끝난다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    """덩이는 열 차례로 놓인다 — 첫 영역을 원본으로 읽던 때 pptx 쪽 나누기가 끝나지 않았다."""
+    import io
+
+    from pptx import Presentation
+
+    for index in range(12):
+        _make_object(
+            client,
+            member,
+            world["change"],
+            label=f"변경 {index:02d}",
+            properties={
+                "model": world["models"]["A"]["id"],
+                "before": f"변경 {index:02d} 전 — 사양 · 재질 · 치수의 이전 값을 적은 설명",
+                "after": f"변경 {index:02d} 후 — 사양 · 재질 · 치수의 새 값을 적은 설명",
+            },
+        )
+    body = _template(world)
+    body["areas"][0].update(col=1, limit=20)  # 원본(AS-IS)이 오른쪽
+    body["areas"][1].update(col=0)  # 짝(TO-BE)이 왼쪽
+    made = client.post("/api/slides/templates", json=body, headers=admin.headers)
+    assert made.status_code == 201, made.text
+    slide = _slide(client, member, made.json(), world["models"]["A"]["id"])
+    got = client.get(f"/api/slides/{slide['id']}/pptx", headers=member.headers)
+    assert got.status_code == 200, got.text
+    assert len(list(Presentation(io.BytesIO(got.content)).slides)) >= 2
+
+
+def test_허브가_관리하는_타입_관계는_장표에서_수정_연결을_세우지_않는다(
+    client: TestClient, db: Session, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    from app.modules.ontology.models import ObjectType, RelationType
+
+    made = client.post(
+        "/api/slides/templates", json=_one_change_template(world), headers=admin.headers
+    )
+    slide = _slide(client, member, made.json(), world["models"]["A"]["id"])
+    path = f"/api/slides/{slide['id']}"
+    pin = world["changes"]["핀 수"]["id"]
+    client.patch(path, json={"picks": {"asis": [pin]}}, headers=member.headers)
+    db.query(ObjectType).filter(ObjectType.slug == world["change"]).one().managed_by = "hub"
+    db.query(RelationType).filter(
+        RelationType.slug == world["affects"]
+    ).one().managed_by = "hub"
+    db.commit()
+    shown = _areas(client.get(path, headers=member.headers).json())
+    assert not any(one["can_edit"] for one in shown["asis"]["records"])
+    assert shown["risks"]["link"]["can_link"] is False
+
+
+def test_방향_없는_관계로_따라와도_잇는_방향과_끊을_것을_안다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    """방향이 없는 관계는 양 끝 모두 `out.<관계>` 로 적힌다 — 「out 이면 이 기록이 출발점」
+    으로 읽던 때 끊을 것이 비고, 장표에서 맺으면 타입 제한에 걸렸다."""
+    related = _make_relation(
+        client,
+        admin,
+        base="related",
+        directed=False,
+        src_type_slugs=[world["change"]],
+        dst_type_slugs=[world["risk"]],
+    )
+    pin = world["changes"]["핀 수"]["id"]
+    linked = _link(
+        client, member, world["change"], pin, related, world["risks"]["상관없는 것"]["id"]
+    )
+    assert linked.status_code == 201, linked.text
+    body = _one_change_template(world)
+    body["areas"][2]["follow_field"] = f"out.{related}"
+    made = client.post("/api/slides/templates", json=body, headers=admin.headers)
+    assert made.status_code == 201, made.text
+    slide = _slide(client, member, made.json(), world["models"]["A"]["id"])
+    shown = client.patch(
+        f"/api/slides/{slide['id']}", json={"picks": {"asis": [pin]}}, headers=member.headers
+    ).json()
+    risks = _areas(shown)["risks"]
+    assert [one["label"] for one in risks["records"]] == ["상관없는 것"]
+    # 따라갈 기록(변경점)이 출발 타입이라 그쪽에서 맺는다 — 끊을 관계도 실려 온다.
+    assert risks["link"]["direction"] == "in"
+    assert [len(one["ties"]) for one in risks["records"]] == [1]
+
+
+def test_주제가_합쳐지면_장표는_이긴_쪽을_주제로_이어_간다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    slide = _slide(
+        client, member, _made_template(client, admin, world), world["models"]["A"]["id"]
+    )
+    merged = client.post(
+        f"/api/objects/{world['model']}/{world['models']['A']['id']}/merge",
+        json={"into": world["models"]["B"]["id"]},
+        headers=admin.headers,
+    )
+    assert merged.status_code == 200, merged.text
+    shown = client.get(f"/api/slides/{slide['id']}", headers=member.headers).json()
+    assert shown["subject"]["label"] == "B" and shown["subject"]["deleted"] is False
+    # 합친 뒤 변경점은 B 를 가리킨다 — 장표도 그것을 모은다.
+    assert {one["label"] for one in _areas(shown)["asis"]["records"]} == {
+        "핀 수",
+        "재질",
+        "B 변경",
+    }

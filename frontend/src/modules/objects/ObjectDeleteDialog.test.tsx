@@ -21,6 +21,10 @@ const objectApi = vi.hoisted(() => ({
 vi.mock('@/modules/objects/api', () => ({ objectApi }))
 const jobsApi = vi.hoisted(() => ({ waitFor: vi.fn() }))
 vi.mock('@/modules/jobs/api', () => ({ jobsApi }))
+/** 보는 사람 — 기본은 시스템 관리자(참조 끊기 · 병합까지 고를 수 있다). */
+const ADMIN = { is_system_admin: true, memberships: [] }
+const auth = vi.hoisted(() => ({ user: null as unknown }))
+vi.mock('@/shared/auth/AuthContext', () => ({ useAuth: () => auth }))
 
 const ACME = { id: 'acme', label: 'ACME', key: null, status: 'active', properties: {} } as ObjectRow
 
@@ -60,7 +64,7 @@ const SOME: References = {
   total: 4,
 }
 
-async function mount() {
+async function mount(object: ObjectRow = ACME) {
   const { ObjectDeleteDialog } = await import('@/modules/objects/ObjectDeleteDialog')
   const onDone = vi.fn()
   render(
@@ -68,7 +72,7 @@ async function mount() {
       <ObjectDeleteDialog
         typeSlug="vendor"
         typeLabel="공급사"
-        object={ACME}
+        object={object}
         onClose={() => {}}
         onDone={onDone}
       />
@@ -80,6 +84,7 @@ async function mount() {
 describe('삭제 창', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    auth.user = ADMIN
     // 병합 후보 — 창이 열리면 늘 찾는다. **값 없는 가짜로 두면** `undefined.then` 이 되어,
     // 시험은 다 통과하는데 처리 안 된 오류 하나가 실행 전체를 실패로 만든다(v0.1.1 릴리스).
     objectApi.list.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
@@ -114,6 +119,22 @@ describe('삭제 창', () => {
     expect(screen.getByRole('button', { name: '삭제' })).toBeDisabled()
   })
 
+  it('기록을 만든 멤버에게는 참조 끊기 · 병합을 내밀지 않는다 — 부서 관리자의 일이다', async () => {
+    // ADR 0036 — 멤버도 자기가 만든 기록의 삭제 단추는 보인다. 걸린 것이 있을 때 두 길을 내밀면
+    // 누르고서야 403 을 본다(2026-10-24 점검).
+    auth.user = {
+      is_system_admin: false,
+      memberships: [
+        { slug: 'team', role: 'member', name: '팀', path: '팀', workspace_id: 't', depth: 0 },
+      ],
+    }
+    objectApi.references.mockResolvedValue(SOME)
+    await mount({ ...ACME, owner_workspace_slug: 'team' } as ObjectRow)
+    await waitFor(() => expect(screen.getByText(/이 객체를 가리키는 것 4개/)).toBeInTheDocument())
+    expect(screen.getAllByRole('radio')).toHaveLength(1)
+    expect(screen.getByText(/부서 관리자가 합니다/)).toBeInTheDocument()
+  })
+
   it('인기 객체는 목록이 앞의 일부만 와도 수는 서버가 센 대로 말한다', async () => {
     // 10만 건이 가리키는 개발모델 — 목록은 한 줄만 왔고 나머지는 수로 온다(ADR 0010).
     objectApi.references.mockResolvedValue({
@@ -135,7 +156,7 @@ describe('삭제 창', () => {
     objectApi.remove.mockResolvedValue(undefined)
     const onDone = await mount()
     await userEvent.click(
-      await screen.findByRole('radio', { name: /참조를 참조를 비우고 관계를 해제한 뒤 삭제/ }),
+      await screen.findByRole('radio', { name: /참조를 비우고 관계를 해제한 뒤 삭제/ }),
     )
     await userEvent.click(screen.getByRole('button', { name: '참조 해제 후 삭제' }))
     await waitFor(() => expect(objectApi.remove).toHaveBeenCalledWith('vendor', 'acme', 'detach'))
@@ -182,7 +203,7 @@ describe('삭제 창', () => {
     jobsApi.waitFor.mockResolvedValue({ id: 'j1', status: 'done', error: null })
     const onDone = await mount()
     await userEvent.click(
-      await screen.findByRole('radio', { name: /참조를 참조를 비우고 관계를 해제한 뒤 삭제/ }),
+      await screen.findByRole('radio', { name: /참조를 비우고 관계를 해제한 뒤 삭제/ }),
     )
     await userEvent.click(screen.getByRole('button', { name: '참조 해제 후 삭제' }))
     await waitFor(() => expect(onDone).toHaveBeenCalledWith(null))

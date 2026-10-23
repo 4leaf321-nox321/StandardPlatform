@@ -2760,7 +2760,7 @@
           "slides"
         ],
         "summary": "Delete Template",
-        "description": "틀을 지운다 — **이 틀로 만든 장표가 없을 때만.** 장표가 있으면 몇 장인지 말하며\n막는다.",
+        "description": "틀을 지운다 — **이 틀로 만든 장표(삭제하지 않은 것)가 없을 때만.** 있으면 몇 장인지\n말하며 막는다. 삭제한 장표만 남았으면 그것들을 함께 영구 삭제한다 — 화면은 삭제한 장표를\n세지 않아 「0장」 인데, 그것들이 틀을 붙들어 삭제가 끝내 안 되던 길을 막는다(2026-10-24\n점검). 무엇이 지워졌는지는 감사 기록에 수로 남는다.",
         "operationId": "delete_template_api_slides_templates__template_id__delete",
         "parameters": [
           {

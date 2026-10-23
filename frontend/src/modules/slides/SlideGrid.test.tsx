@@ -9,7 +9,7 @@ import { MemoryRouter } from 'react-router-dom'
 import { describe, expect, it, vi } from 'vitest'
 
 import type { RenderedArea, SlideRecord } from '@/modules/slides/api'
-import { SlideGrid, blocksOf, columnsOf } from '@/modules/slides/SlideGrid'
+import { SlideGrid, blocksOf, columnsOf, primaryOf } from '@/modules/slides/SlideGrid'
 
 function record(id: string, values: Record<string, string>): SlideRecord {
   return {
@@ -252,5 +252,15 @@ describe('장표 그리기', () => {
   it('AI 가 쓴 글은 「AI 초안」 으로 표시된다', () => {
     draw([area({ key: 'opinion', title: '종합 의견', kind: 'text', text: '초안', ai_draft: true })])
     expect(screen.getByText('AI 초안')).toBeInTheDocument()
+  })
+
+  it('짝이 원본보다 왼쪽이어도 원본의 채우는 법으로 그린다 — 「기록 선택」 이 원본을 연다', async () => {
+    const onPick = vi.fn()
+    const primary = { ...asis, col: 1, fill: 'pick' as const }
+    const pair = { ...tobe, col: 0 }
+    expect(primaryOf([pair, primary])).toBe(primary)
+    draw([pair, primary], { editable: true, onPick })
+    await userEvent.click(screen.getByRole('button', { name: /기록 선택/ }))
+    expect(onPick).toHaveBeenCalledWith(primary)
   })
 })

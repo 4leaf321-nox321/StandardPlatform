@@ -15,11 +15,13 @@ from __future__ import annotations
 
 import uuid
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.objects.models import ObjectInstance
 from app.modules.ontology.models import ObjectType
+from app.modules.workspaces.models import WorkspaceMember
 from app.shared.errors import Forbidden
 from app.shared.permissions import (
     membership_of,
@@ -102,3 +104,35 @@ def _authored(db: Session, user: User, row: ObjectInstance) -> bool:
 
 def _member(db: Session, user: User, workspace_id: uuid.UUID) -> bool:
     return membership_of(db, workspace_id=workspace_id, user_id=user.id) is not None
+
+
+class Editor:
+    """여러 객체의 「수정할 수 있나」 를 한 번에 — 소속을 **한 번만** 읽는다. 장표 한 장이
+    기록을 수백 개 그리는데 객체마다 소속을 물으면 그만큼 질의가 는다(2026-10-24 점검). 판정은
+    `require_edit` 와 같다 — 시스템 관리자, 소유 부서의 관리자, 기록이면 아직 그 부서에 있는
+    만든 사람. 전역은 시스템 관리자뿐이다."""
+
+    def __init__(self, db: Session, user: User) -> None:
+        self.admin = user.is_system_admin
+        self.user_id = user.id
+        rows = db.execute(
+            select(WorkspaceMember.workspace_id, WorkspaceMember.role).where(
+                WorkspaceMember.user_id == user.id
+            )
+        ).all()
+        self.member = {one.workspace_id for one in rows}
+        self.manager = {one.workspace_id for one in rows if one.role == "manager"}
+
+    def __call__(self, object_type: ObjectType, row: ObjectInstance) -> bool:
+        if self.admin:
+            return True
+        owner = row.owner_workspace_id
+        if owner is None:
+            return False
+        if owner in self.manager:
+            return True
+        return (
+            is_record(object_type)
+            and row.created_by_id == self.user_id
+            and owner in self.member
+        )

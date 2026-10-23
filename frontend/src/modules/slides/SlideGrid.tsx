@@ -53,6 +53,14 @@ export function canUnlink(area: RenderedArea, record: SlideRecord): boolean {
   return sourceSide ? link.can_link : record.can_edit
 }
 
+/**
+ * 덩이의 원본 — 짝이 아닌 영역. 덩이는 열 차례로 놓여 짝이 왼쪽에 올 수 있다 — 그때 첫 영역을
+ * 원본으로 읽으면 짝의 채우는 법 · 연결로 그려 「기록 선택」 · 「연결」 이 사라졌다(2026-10-24 점검).
+ */
+export function primaryOf(group: RenderedArea[]): RenderedArea {
+  return group.find((one) => !one.pair_of) ?? group[0]
+}
+
 /** 짝끼리 묶은 덩이 — 짝이 없으면 영역 하나가 한 덩이. 왼쪽부터. */
 export function blocksOf(areas: RenderedArea[]): RenderedArea[][] {
   const out: RenderedArea[][] = []
@@ -83,6 +91,7 @@ export function SlideGrid({
     >
       {blocksOf(areas).map((group) => {
         const first = group[0]
+        const primary = primaryOf(group)
         const last = group[group.length - 1]
         return (
           <section
@@ -107,7 +116,7 @@ export function SlideGrid({
               <RecordsBlock
                 group={group}
                 editable={editable}
-                onPick={onPick ? () => onPick(first) : undefined}
+                onPick={onPick ? () => onPick(primary) : undefined}
                 actions={actions}
               />
             )}
@@ -256,7 +265,7 @@ function RecordsBlock({
   onPick?: () => void
   actions: RecordActions
 }) {
-  const primary = group[0]
+  const primary = primaryOf(group)
   const link = primary.link
   const records = primary.records
   const more = primary.total - records.length

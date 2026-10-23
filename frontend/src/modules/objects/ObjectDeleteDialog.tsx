@@ -22,6 +22,8 @@ import { objectApi } from '@/modules/objects/api'
 import { useObjectOptions } from '@/modules/objects/useObjectOptions'
 import type { ObjectRow } from '@/modules/objects/api'
 import { ApiError } from '@/shared/api/client'
+import { useAuth } from '@/shared/auth/AuthContext'
+import { isManagerOf, isSystemAdmin } from '@/shared/auth/roles'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
 import { Button } from '@/shared/components/ui/button'
@@ -65,6 +67,15 @@ export function ObjectDeleteDialog({
   const [error, setError] = useState<ApiError | Error | null>(null)
 
   const blocked = Boolean(refs.data && refs.data.total > 0)
+  const { user } = useAuth()
+  /**
+   * 참조를 끊거나 병합하는 것은 **남의 객체를 고치는 일**이라 소유 부서의 관리자 · 시스템 관리자만
+   * 한다(ADR 0036, 서버의 `require_owner_edit`). 기록을 만든 멤버도 삭제 단추는 보이므로, 그 사람에게
+   * 두 길을 내밀면 누르고서야 403 을 본다(2026-10-24 점검).
+   */
+  const canManage =
+    isSystemAdmin(user) ||
+    (Boolean(object.owner_workspace_slug) && isManagerOf(user, object.owner_workspace_slug))
 
   // 합칠 상대 — 같은 타입의 다른 객체. **서버가 찾는다** — 200개 안에 없는 것을 「없다」 로
   // 읽고 새로 만들면 그것이 바로 합치려던 중복이다.
@@ -235,39 +246,49 @@ export function ObjectDeleteDialog({
                     </span>
                   </span>
                 </label>
-                <label className="flex cursor-pointer items-start gap-2 rounded-md border p-2">
-                  <input
-                    type="radio"
-                    name="choice"
-                    checked={choice === 'detach'}
-                    onChange={() => setChoice('detach')}
-                    className="mt-1"
-                  />
-                  <span>
-                    <span className="font-medium">참조를 참조를 비우고 관계를 해제한 뒤 삭제</span>
-                    <span className="text-muted-foreground block text-xs">
-                      가리키던 {summary.props}개의 칸이 비고 관계 {summary.rels}개가 끊깁니다. 그
-                      객체마다 「왜 비었는지」 기록이 남습니다.
-                    </span>
-                  </span>
-                </label>
-                <label className="flex cursor-pointer items-start gap-2 rounded-md border p-2">
-                  <input
-                    type="radio"
-                    name="choice"
-                    checked={choice === 'merge'}
-                    onChange={() => setChoice('merge')}
-                    className="mt-1"
-                  />
-                  <span>
-                    <span className="font-medium">다른 {typeLabel}에 병합 후 삭제</span>
-                    <span className="text-muted-foreground block text-xs">
-                      <b>같은 것이 둘로 갈렸을 때</b>(「ACME」 와 「ACME Inc.」 처럼). 이긴 쪽만
-                      남기고, 이 객체를 가리키던 참조와 관계를 전부 그리로 옮깁니다. 옛 주소로
-                      들어오면 이긴 쪽으로 갑니다. 같은 {typeLabel}끼리만 됩니다.
-                    </span>
-                  </span>
-                </label>
+                {!canManage && (
+                  <p className="text-muted-foreground text-xs">
+                    참조를 비우고 해제하거나 다른 {typeLabel}에 병합하는 것은 부서 관리자가 합니다 —
+                    위 목록에서 먼저 해제 · 수정하거나 부서 관리자에게 요청하세요.
+                  </p>
+                )}
+                {canManage && (
+                  <>
+                    <label className="flex cursor-pointer items-start gap-2 rounded-md border p-2">
+                      <input
+                        type="radio"
+                        name="choice"
+                        checked={choice === 'detach'}
+                        onChange={() => setChoice('detach')}
+                        className="mt-1"
+                      />
+                      <span>
+                        <span className="font-medium">참조를 비우고 관계를 해제한 뒤 삭제</span>
+                        <span className="text-muted-foreground block text-xs">
+                          가리키던 {summary.props}개의 칸이 비고 관계 {summary.rels}개가 끊깁니다.
+                          그 객체마다 「왜 비었는지」 기록이 남습니다.
+                        </span>
+                      </span>
+                    </label>
+                    <label className="flex cursor-pointer items-start gap-2 rounded-md border p-2">
+                      <input
+                        type="radio"
+                        name="choice"
+                        checked={choice === 'merge'}
+                        onChange={() => setChoice('merge')}
+                        className="mt-1"
+                      />
+                      <span>
+                        <span className="font-medium">다른 {typeLabel}에 병합 후 삭제</span>
+                        <span className="text-muted-foreground block text-xs">
+                          <b>같은 것이 둘로 갈렸을 때</b>(「ACME」 와 「ACME Inc.」 처럼). 이긴 쪽만
+                          남기고, 이 객체를 가리키던 참조와 관계를 전부 그리로 옮깁니다. 옛 주소로
+                          들어오면 이긴 쪽으로 갑니다. 같은 {typeLabel}끼리만 됩니다.
+                        </span>
+                      </span>
+                    </label>
+                  </>
+                )}
                 {/* 피커는 라벨 **밖**에 — 안에 두면 피커를 누를 때마다 라디오가 눌리고, 접근성
                     이름도 꼬인다. */}
                 {choice === 'merge' && (
