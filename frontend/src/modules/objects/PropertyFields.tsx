@@ -216,7 +216,7 @@ function OneValue({
  * 둘 다 있다. 후보는 **서버가 찾는다**(`useObjectOptions`) — 처음 200개만 받아 화면에서
  * 거르면 201번째부터 없는 것으로 보이고, 못 찾은 사람은 새로 만든다.
  */
-function ObjectRefPicker({
+export function ObjectRefPicker({
   typeSlug,
   value,
   onChange,

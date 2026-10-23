@@ -22,10 +22,12 @@ import {
   Home,
   Inbox,
   LayoutGrid,
+  LayoutTemplate,
   Lightbulb,
   ListChecks,
   Megaphone,
   MessagesSquare,
+  Presentation,
   ScrollText,
   ShieldCheck,
   Search,
@@ -161,6 +163,9 @@ export const NAV_GROUPS: NavGroup[] = [
       { label: '지표', icon: ChartLine, to: '/metrics' },
       // **묻기 전에 알린다.** 지표를 기준 값마다 훑어 찾은 변화 · 차이(ADR 0032).
       { label: '눈여겨볼 것', icon: Lightbulb, to: '/insights' },
+      // **여러 타입의 기록을 틀 한 장에.** 값은 열 때 센다 — 손으로 옮겨 적은 장표처럼 낡지 않는다
+      // (ADR 0037).
+      { label: '장표', icon: Presentation, to: '/slides' },
       { label: '공지', icon: Megaphone, to: '/notices' },
       // **누구나 쓰는 자리.** 공지는 운영자가 전하는 말이고, 물음 · 자료는 여기서 나눈다 —
       // 메일 · 메신저가 없는 사내 설치에서는 앱 안밖에 자리가 없다(ADR 0033).
@@ -214,6 +219,13 @@ export const NAV_GROUPS: NavGroup[] = [
         label: '온톨로지',
         icon: Boxes,
         to: '/admin/ontology',
+        audience: 'system_admin',
+      },
+      // **조직의 정형 배치.** 틀은 시스템 관리자가, 장표는 누구나(ADR 0037).
+      {
+        label: '장표 틀',
+        icon: LayoutTemplate,
+        to: '/admin/slide-templates',
         audience: 'system_admin',
       },
       { label: '서버', icon: Server, to: '/admin/server', audience: 'system_admin' },

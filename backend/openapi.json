@@ -2595,6 +2595,546 @@
         }
       }
     },
+    "/api/slides/templates": {
+      "get": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "List Templates",
+        "description": "틀 전부 — 장표를 만들 때 고른다. 이름 차례.",
+        "operationId": "list_templates_api_slides_templates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateOut"
+                  },
+                  "type": "array",
+                  "title": "Response List Templates Api Slides Templates Get"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "Create Template",
+        "description": "틀을 만든다 — **세워 보고** 저장한다(틀린 주소 · 칸은 어느 영역의 무엇인지 말하며\n거절).",
+        "operationId": "create_template_api_slides_templates_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/slides/templates/{template_id}": {
+      "get": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "Get Template",
+        "operationId": "get_template_api_slides_templates__template_id__get",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "Update Template",
+        "description": "틀을 통째로 고친다. **주제 타입은 바꾸지 못한다** — 이 틀로 만든 장표의 주제가 다른\n타입이\n된다. 영역의 키를 바꾸거나 빼면 그 영역에 써 둔 글 · 고른 기록은 장표에서 안\n보인다(남는다).",
+        "operationId": "update_template_api_slides_templates__template_id__put",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TemplateIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TemplateOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "Delete Template",
+        "description": "틀을 지운다 — **이 틀로 만든 장표가 없을 때만.** 장표가 있으면 몇 장인지 말하며\n막는다.",
+        "operationId": "delete_template_api_slides_templates__template_id__delete",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Template Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/slides/templates/preview": {
+      "post": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "Preview Template",
+        "description": "저장하지 않은 틀을 주제 하나로 세워 본다 — 틀 편집의 미리 보기.",
+        "operationId": "preview_template_api_slides_templates_preview_post",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PreviewIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RenderOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/slides": {
+      "get": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "List Slides",
+        "description": "장표 목록 — 새로 고친 것부터.",
+        "operationId": "list_slides_api_slides_get",
+        "parameters": [
+          {
+            "name": "template_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 틀로 만든 것만",
+              "title": "Template Id"
+            },
+            "description": "이 틀로 만든 것만"
+          },
+          {
+            "name": "subject_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "이 주제의 것만",
+              "title": "Subject Id"
+            },
+            "description": "이 주제의 것만"
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "maxLength": 100
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "제목에 든 말",
+              "title": "Q"
+            },
+            "description": "제목에 든 말"
+          },
+          {
+            "name": "mine",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "내가 만든 것만",
+              "default": false,
+              "title": "Mine"
+            },
+            "description": "내가 만든 것만"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Limit"
+            }
+          },
+          {
+            "name": "offset",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0,
+              "default": 0,
+              "title": "Offset"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Page_SlideSummaryOut_"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "Create Slide",
+        "description": "장표를 만든다 — 틀 하나와 주제 하나. 누구나.",
+        "operationId": "create_slide_api_slides_post",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlideCreateIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlideOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/slides/{slide_id}": {
+      "get": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "Get Slide",
+        "description": "장표 — 영역의 기록은 **지금** 센다(살아 있는 값).",
+        "operationId": "get_slide_api_slides__slide_id__get",
+        "parameters": [
+          {
+            "name": "slide_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Slide Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlideOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "Update Slide",
+        "description": "제목 · 글 영역의 글 · 고르기 영역의 기록을 고친다 — 작성자와 시스템 관리자.",
+        "operationId": "update_slide_api_slides__slide_id__patch",
+        "parameters": [
+          {
+            "name": "slide_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Slide Id"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SlidePatchIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SlideOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "Delete Slide",
+        "description": "장표를 지운다 — 목록에서 내려가고 행은 남는다. 기록은 그대로다(장표는 기록을 가리킬\n뿐).",
+        "operationId": "delete_slide_api_slides__slide_id__delete",
+        "parameters": [
+          {
+            "name": "slide_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Slide Id"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Successful Response"
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/webhooks": {
       "get": {
         "tags": [
@@ -19628,6 +20168,287 @@
         "type": "object",
         "title": "ApproveRequest"
       },
+      "AreaIn": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "maxLength": 40,
+            "minLength": 1,
+            "pattern": "^[a-z][a-z0-9_]*$",
+            "title": "Key"
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 60,
+            "minLength": 1,
+            "title": "Title"
+          },
+          "row": {
+            "type": "integer",
+            "exclusiveMaximum": 3.0,
+            "minimum": 0.0,
+            "title": "Row"
+          },
+          "col": {
+            "type": "integer",
+            "exclusiveMaximum": 3.0,
+            "minimum": 0.0,
+            "title": "Col"
+          },
+          "row_span": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Row Span",
+            "default": 1
+          },
+          "col_span": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Col Span",
+            "default": 1
+          },
+          "kind": {
+            "type": "string",
+            "enum": [
+              "records",
+              "text"
+            ],
+            "title": "Kind",
+            "default": "records"
+          },
+          "type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type Slug"
+          },
+          "fields": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "title": "Fields"
+          },
+          "fill": {
+            "type": "string",
+            "enum": [
+              "condition",
+              "pick"
+            ],
+            "title": "Fill",
+            "default": "condition"
+          },
+          "subject_field": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Subject Field"
+          },
+          "subject_op": {
+            "type": "string",
+            "enum": [
+              "eq",
+              "under"
+            ],
+            "title": "Subject Op",
+            "default": "eq"
+          },
+          "conditions": {
+            "items": {
+              "$ref": "#/components/schemas/ConditionOut"
+            },
+            "type": "array",
+            "maxItems": 20,
+            "title": "Conditions"
+          },
+          "ref_line": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "maxItems": 12,
+            "title": "Ref Line"
+          },
+          "pair_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pair Of"
+          },
+          "limit": {
+            "type": "integer",
+            "maximum": 50.0,
+            "minimum": 1.0,
+            "title": "Limit",
+            "default": 10
+          },
+          "order": {
+            "type": "string",
+            "enum": [
+              "newest",
+              "oldest",
+              "label"
+            ],
+            "title": "Order",
+            "default": "newest"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "title",
+          "row",
+          "col"
+        ],
+        "title": "AreaIn",
+        "description": "틀의 영역 하나 — 격자의 자리와 무엇을 받는가."
+      },
+      "AreaOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "row": {
+            "type": "integer",
+            "title": "Row"
+          },
+          "col": {
+            "type": "integer",
+            "title": "Col"
+          },
+          "row_span": {
+            "type": "integer",
+            "title": "Row Span"
+          },
+          "col_span": {
+            "type": "integer",
+            "title": "Col Span"
+          },
+          "kind": {
+            "type": "string",
+            "title": "Kind"
+          },
+          "fill": {
+            "type": "string",
+            "title": "Fill"
+          },
+          "pair_of": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pair Of"
+          },
+          "type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type Label"
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/FieldOut"
+            },
+            "type": "array",
+            "title": "Fields"
+          },
+          "text": {
+            "type": "string",
+            "title": "Text",
+            "default": ""
+          },
+          "records": {
+            "items": {
+              "$ref": "#/components/schemas/RecordOut"
+            },
+            "type": "array",
+            "title": "Records"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total",
+            "default": 0
+          },
+          "list_params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "List Params"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "title",
+          "row",
+          "col",
+          "row_span",
+          "col_span",
+          "kind",
+          "fill",
+          "pair_of",
+          "type_slug",
+          "type_label",
+          "fields"
+        ],
+        "title": "AreaOut"
+      },
       "AssessmentIn": {
         "properties": {
           "value": {
@@ -26925,6 +27746,24 @@
         "title": "FieldOptionOut",
         "description": "이어진 것 너머의 칸 하나 — 조건 고르개와 통계 기준이 **같은 주소**를 쓴다."
       },
+      "FieldOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label"
+        ],
+        "title": "FieldOut"
+      },
       "FileCellOut": {
         "properties": {
           "count": {
@@ -30550,6 +31389,58 @@
         ],
         "title": "LineOut"
       },
+      "LinkItemOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type Slug"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "type_slug"
+        ],
+        "title": "LinkItemOut"
+      },
+      "LinkOut": {
+        "properties": {
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/LinkItemOut"
+            },
+            "type": "array",
+            "title": "Items"
+          }
+        },
+        "type": "object",
+        "required": [
+          "label",
+          "items"
+        ],
+        "title": "LinkOut",
+        "description": "연결 항목 줄의 한 칸 — 「모델: A」."
+      },
       "LogCountOut": {
         "properties": {
           "type_slug": {
@@ -34033,6 +34924,37 @@
         ],
         "title": "Page[PostSummaryOut]"
       },
+      "Page_SlideSummaryOut_": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SlideSummaryOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit"
+          },
+          "offset": {
+            "type": "integer",
+            "title": "Offset"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total",
+          "limit",
+          "offset"
+        ],
+        "title": "Page[SlideSummaryOut]"
+      },
       "PairBulkIn": {
         "properties": {
           "ids": {
@@ -35715,6 +36637,25 @@
         ],
         "title": "PostWriteIn"
       },
+      "PreviewIn": {
+        "properties": {
+          "template": {
+            "$ref": "#/components/schemas/TemplateIn"
+          },
+          "subject_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Subject Id"
+          }
+        },
+        "type": "object",
+        "required": [
+          "template",
+          "subject_id"
+        ],
+        "title": "PreviewIn",
+        "description": "틀 편집의 미리 보기 — 저장하지 않은 틀을 주제 하나로 세워 본다."
+      },
       "PreviewOut": {
         "properties": {
           "columns": {
@@ -37113,6 +38054,46 @@
         ],
         "title": "RecentOut"
       },
+      "RecordOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "values": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Values"
+          },
+          "links": {
+            "items": {
+              "$ref": "#/components/schemas/LinkOut"
+            },
+            "type": "array",
+            "title": "Links"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "type_slug",
+          "values",
+          "links"
+        ],
+        "title": "RecordOut"
+      },
       "RecurrenceItemOut": {
         "properties": {
           "keys": {
@@ -38431,6 +39412,33 @@
           "to"
         ],
         "title": "RenameOptionRequest"
+      },
+      "RenderOut": {
+        "properties": {
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "cols": {
+            "type": "integer",
+            "title": "Cols"
+          },
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/AreaOut"
+            },
+            "type": "array",
+            "title": "Areas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "rows",
+          "cols",
+          "areas"
+        ],
+        "title": "RenderOut",
+        "description": "미리 보기 — 저장하지 않은 틀을 세운 모습."
       },
       "RequestCaseOut": {
         "properties": {
@@ -41909,6 +42917,248 @@
         "title": "SimilarTagOut",
         "description": "태그 하나 — 참조 칸과 가리키는 객체, 그 무게(ln(N / 그 태그를 가진 기록 수))."
       },
+      "SlideCreateIn": {
+        "properties": {
+          "template_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Template Id"
+          },
+          "subject_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Subject Id"
+          },
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          }
+        },
+        "type": "object",
+        "required": [
+          "template_id",
+          "subject_id"
+        ],
+        "title": "SlideCreateIn"
+      },
+      "SlideOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "template_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Template Id"
+          },
+          "template_name": {
+            "type": "string",
+            "title": "Template Name"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SubjectOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "author_name": {
+            "type": "string",
+            "title": "Author Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "edited_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edited At"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "cols": {
+            "type": "integer",
+            "title": "Cols"
+          },
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/AreaOut"
+            },
+            "type": "array",
+            "title": "Areas"
+          },
+          "can_edit": {
+            "type": "boolean",
+            "title": "Can Edit"
+          },
+          "rendered_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Rendered At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "template_id",
+          "template_name",
+          "subject",
+          "author_name",
+          "created_at",
+          "edited_at",
+          "rows",
+          "cols",
+          "areas",
+          "can_edit",
+          "rendered_at"
+        ],
+        "title": "SlideOut"
+      },
+      "SlidePatchIn": {
+        "properties": {
+          "title": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200,
+                "minLength": 1
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Title"
+          },
+          "texts": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Texts"
+          },
+          "picks": {
+            "anyOf": [
+              {
+                "additionalProperties": {
+                  "items": {
+                    "type": "string",
+                    "format": "uuid"
+                  },
+                  "type": "array"
+                },
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Picks"
+          }
+        },
+        "type": "object",
+        "title": "SlidePatchIn"
+      },
+      "SlideSummaryOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "template_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Template Id"
+          },
+          "template_name": {
+            "type": "string",
+            "title": "Template Name"
+          },
+          "subject": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SubjectOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "author_name": {
+            "type": "string",
+            "title": "Author Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "edited_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Edited At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "template_id",
+          "template_name",
+          "subject",
+          "author_name",
+          "created_at",
+          "edited_at"
+        ],
+        "title": "SlideSummaryOut"
+      },
       "SprtCohortOut": {
         "properties": {
           "cohort": {
@@ -43205,6 +44455,35 @@
         "title": "SubgraphOut",
         "description": "한 타입(들)의 인스턴스 전부 — **상한 안에서.**"
       },
+      "SubjectOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "deleted": {
+            "type": "boolean",
+            "title": "Deleted"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "type_slug",
+          "deleted"
+        ],
+        "title": "SubjectOut"
+      },
       "SummaryOut": {
         "properties": {
           "group_field": {
@@ -43564,6 +44843,120 @@
           "total_value"
         ],
         "title": "TableOut"
+      },
+      "TemplateIn": {
+        "properties": {
+          "name": {
+            "type": "string",
+            "maxLength": 100,
+            "minLength": 1,
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000,
+            "title": "Description",
+            "default": ""
+          },
+          "subject_type_slug": {
+            "type": "string",
+            "minLength": 1,
+            "title": "Subject Type Slug"
+          },
+          "rows": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Rows"
+          },
+          "cols": {
+            "type": "integer",
+            "maximum": 3.0,
+            "minimum": 1.0,
+            "title": "Cols"
+          },
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/AreaIn"
+            },
+            "type": "array",
+            "maxItems": 9,
+            "minItems": 1,
+            "title": "Areas"
+          }
+        },
+        "type": "object",
+        "required": [
+          "name",
+          "subject_type_slug",
+          "rows",
+          "cols",
+          "areas"
+        ],
+        "title": "TemplateIn"
+      },
+      "TemplateOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "name": {
+            "type": "string",
+            "title": "Name"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "subject_type_slug": {
+            "type": "string",
+            "title": "Subject Type Slug"
+          },
+          "subject_type_label": {
+            "type": "string",
+            "title": "Subject Type Label"
+          },
+          "rows": {
+            "type": "integer",
+            "title": "Rows"
+          },
+          "cols": {
+            "type": "integer",
+            "title": "Cols"
+          },
+          "areas": {
+            "items": {
+              "$ref": "#/components/schemas/AreaIn"
+            },
+            "type": "array",
+            "title": "Areas"
+          },
+          "slides": {
+            "type": "integer",
+            "title": "Slides"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Updated At"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "subject_type_slug",
+          "subject_type_label",
+          "rows",
+          "cols",
+          "areas",
+          "slides",
+          "updated_at"
+        ],
+        "title": "TemplateOut"
       },
       "TemporaryPasswordResponse": {
         "properties": {

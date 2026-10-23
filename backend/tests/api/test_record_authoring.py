@@ -97,7 +97,7 @@ def test_남이_넣은_기록은_넣은_사람과_관리자만_고친다(
     assert _profile(client, peer, kinds["log"], made["id"])["can_edit"] is False
     denied = client.patch(path, json={"label": "몰래"}, headers=peer.headers)
     assert denied.status_code == 403
-    assert "넣은 사람과 부서 관리자" in denied.json()["error"]["message"]
+    assert "만든 사람과 부서 관리자" in denied.json()["error"]["message"]
     assert client.delete(path, headers=peer.headers).status_code == 403
     assert client.patch(path, json={"label": "관리자가"}, headers=manager.headers).is_success
 

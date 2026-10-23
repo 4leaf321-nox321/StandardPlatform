@@ -66,6 +66,7 @@ from app.modules.ontology.models import (
 )
 from app.modules.review.models import ReviewDecision
 from app.modules.server.models import ExtensionState, PlatformProfile
+from app.modules.slides.models import Slide, SlideTemplate
 from app.modules.webhooks.models import Webhook, WebhookDelivery
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 
@@ -123,6 +124,8 @@ __all__ = [
     "ReviewDecision",
     "SavedView",
     "SearchMiss",
+    "Slide",
+    "SlideTemplate",
     "User",
     "Webhook",
     "WebhookDelivery",

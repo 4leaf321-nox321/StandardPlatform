@@ -41,6 +41,10 @@ const NoticesPage = lazy(() => import('@/modules/notices/NoticesPage'))
 const BoardPage = lazy(() => import('@/modules/board/BoardPage'))
 const BoardPostPage = lazy(() => import('@/modules/board/BoardPostPage'))
 const BoardEditPage = lazy(() => import('@/modules/board/BoardEditPage'))
+const SlidesPage = lazy(() => import('@/modules/slides/SlidesPage'))
+const SlidePage = lazy(() => import('@/modules/slides/SlidePage'))
+const SlideTemplatesPage = lazy(() => import('@/modules/slides/SlideTemplatesPage'))
+const SlideTemplateEditPage = lazy(() => import('@/modules/slides/SlideTemplateEditPage'))
 const ObjectListPage = lazy(() => import('@/modules/objects/ObjectListPage'))
 const ObjectTypesPage = lazy(() => import('@/modules/objects/ObjectTypesPage'))
 const SearchPage = lazy(() => import('@/modules/search/SearchPage'))
@@ -131,6 +135,8 @@ export const router = createBrowserRouter(
             { path: 'board/new', element: <BoardEditPage /> },
             { path: 'board/:postId', element: <BoardPostPage /> },
             { path: 'board/:postId/edit', element: <BoardEditPage /> },
+            { path: 'slides', element: <SlidesPage /> },
+            { path: 'slides/:slideId', element: <SlidePage /> },
             { path: 'audit', element: <AuditPage /> },
             { path: 'quality', element: <QualityPage /> },
             // 사람이 판단할 일 — 원래 자리에서 읽어 모은다(ADR 0027).
@@ -162,6 +168,8 @@ export const router = createBrowserRouter(
               ],
             },
             { path: 'admin/workspaces', element: <WorkspacesAdminPage /> },
+            { path: 'admin/slide-templates', element: <SlideTemplatesPage /> },
+            { path: 'admin/slide-templates/:templateId', element: <SlideTemplateEditPage /> },
             { path: 'admin/server', element: <ServerPage /> },
             { path: 'admin/webhooks', element: <WebhooksPage /> },
             { path: 'admin/datasources', element: <DataSourcesPage /> },

@@ -52,7 +52,7 @@ def resolve_create_owner(
     if not user.is_system_admin and not _member(db, user, workspace.id):
         raise Forbidden(
             code_value,
-            f"「{workspace.name}」 의 구성원만 이 부서에 기록을 넣을 수 있습니다.",
+            f"「{workspace.name}」 의 구성원만 이 부서에 기록을 추가할 수 있습니다.",
         )
     return workspace.id
 
@@ -77,7 +77,7 @@ def require_edit(
         if not is_record(object_type) or row.owner_workspace_id is None:
             raise
         raise Forbidden(
-            code_value, "이 기록은 넣은 사람과 부서 관리자만 고칠 수 있습니다."
+            code_value, "이 기록은 만든 사람과 부서 관리자만 수정할 수 있습니다."
         ) from None
 
 

@@ -65,6 +65,7 @@ from app.modules.search import routes as search_routes
 from app.modules.server import performance as server_performance
 from app.modules.server import routes as server_routes
 from app.modules.server import services as server_services
+from app.modules.slides import routes as slides_routes
 from app.modules.webhooks import routes as webhooks_routes
 from app.modules.webhooks import services as webhooks_services
 from app.modules.workspaces import routes as workspaces_routes
@@ -100,6 +101,8 @@ def _api_router(settings: Settings) -> APIRouter:
     router.include_router(workspaces_routes.router)
     router.include_router(notices_routes.router)
     router.include_router(board_routes.router)
+    # 여러 타입의 기록을 틀 한 장에 모아 본다 — 값은 열 때 센다(ADR 0037).
+    router.include_router(slides_routes.router)
     router.include_router(webhooks_routes.router)
     router.include_router(datasources_routes.router)
     router.include_router(notifications_routes.router)
@@ -285,6 +288,10 @@ def _register_extensions() -> None:
     # (결정 수백 개를 본문에 싣는다).
     scopes.register_write_scope("/api/review", "objects:write")
     scopes.register_read_only_post("/api/review/plan")
+    # 장표는 기록을 모아 보는 글이다 — 객체를 넣는 범위와 같다. 틀은 시스템 관리자만이라 토큰의
+    # 범위가 있어도 사람의 권한이 막는다. 틀의 미리 보기는 POST 지만 읽기다.
+    scopes.register_write_scope("/api/slides", "objects:write")
+    scopes.register_read_only_post("/api/slides/templates/preview")
     # `import` 는 POST 지만 `dry_run` 이면 아무것도 안 바꾼다. 그래도 **읽기로
     # 열지 않는다** — 같은 경로가 적용도 하기 때문이다. 읽기 토큰은 `schema` 로
     # 본다.

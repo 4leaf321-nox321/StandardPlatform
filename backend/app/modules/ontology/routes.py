@@ -120,6 +120,7 @@ from app.modules.ontology.services import (
     reserved_slug_error,
     validate_properties,
 )
+from app.modules.slides.models import SlideTemplate
 from app.shared import sheets, system_sources
 from app.shared.audit import record as record_audit
 from app.shared.auth import current_user, require_system_admin
@@ -797,6 +798,28 @@ def _type_deletion(db: Session, row: ObjectType) -> _Deletion:
                 f"지표 {', '.join(metrics)} 이(가) {row.label}을(를) 원천으로 셉니다. 지표를 "
                 "먼저 지우세요(공통 › 지표).",
                 details={"metrics": metrics},
+            )
+        )
+    templates = list(
+        db.scalars(
+            select(SlideTemplate.name).where(
+                or_(
+                    SlideTemplate.subject_type_id == row.id,
+                    SlideTemplate.areas.contains([{"type_slug": row.slug}]),
+                )
+            )
+        )
+    )
+    if templates:
+        # 장표의 틀이 주제 · 영역으로 쓰는 타입 — 주제는 RESTRICT 라 지우는 자리에서 500 이
+        # 나고,
+        # 영역은 FK 가 없어 그 영역이 조용히 「타입이 없습니다」 가 된다(ADR 0037).
+        found.blocking.append(
+            Conflict(
+                code("ONTOLOGY", 94),
+                f"장표의 틀 {', '.join(templates)} 이(가) {row.label}을(를) 씁니다. 틀을 먼저 "
+                "수정하거나 삭제하세요(관리 › 장표 틀).",
+                details={"slide_templates": templates},
             )
         )
     if row.kind_class == "system":
