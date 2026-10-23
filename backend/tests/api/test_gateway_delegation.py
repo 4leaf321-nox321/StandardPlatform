@@ -25,6 +25,7 @@ from app.modules.accounts.models import User
 from app.modules.audit.models import AccessLog, AuditEntry
 from app.modules.auth import delegation, security
 from app.modules.auth.models import PersonalAccessToken
+from app.modules.server import services as server_services
 from app.modules.workspaces.models import Workspace
 from app.shared import scopes
 from app.shared.errors import code
@@ -330,7 +331,10 @@ def test_승인된_사람에게_하루짜리_개인_토큰을_봉투_없이_준�
     left = token.expires_at - datetime.now(UTC)
     assert timedelta(hours=23) < left <= timedelta(days=1)
     # 범위 — 읽기 + 쓰기 범위 전부. 좁은 읽기(core:read)도 관리 범위도 없다.
-    assert token.scopes == ["read", *scopes.write_scopes()]
+    assert token.scopes == [
+        "read",
+        *scopes.write_scopes(server_services.enabled_names(db)),
+    ]
     assert "core:read" not in token.scopes
     assert not [one for one in token.scopes if one == "admin" or one.endswith(":admin")]
 

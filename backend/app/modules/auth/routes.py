@@ -37,6 +37,7 @@ from app.modules.auth.schemas import (
     TokenScopesOut,
     UserOut,
 )
+from app.modules.server import services as server_services
 from app.shared import scopes
 from app.shared.access_log import USER_ID_SCOPE_KEY
 from app.shared.auth import current_user, require_system_admin
@@ -337,14 +338,16 @@ def change_password(
 
 
 @router.get("/token-scopes", response_model=TokenScopesOut)
-def token_scopes(_: User = Depends(current_user)) -> TokenScopesOut:
-    """이 설치가 아는 범위.
+def token_scopes(
+    _: User = Depends(current_user), db: Session = Depends(get_db)
+) -> TokenScopesOut:
+    """지금 발급할 수 있는 범위 — 꺼진 확장 모듈의 범위는 빠진다.
 
     **화면이 목록을 손으로 들지 않는다.** 도메인이 범위를 더하면 발급 화면은
     아무것도 안 고쳐도 새 범위를 보여 준다 — 손 목록은 반드시 서버와 어긋나고,
     어긋난 날 사람은 있는 범위를 못 고른다.
     """
-    return TokenScopesOut(scopes=list(scopes.known_scopes()))
+    return TokenScopesOut(scopes=list(scopes.known_scopes(server_services.enabled_names(db))))
 
 
 @router.post("/tokens", response_model=PatCreateResponse, status_code=201)

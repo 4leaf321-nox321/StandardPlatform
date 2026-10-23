@@ -18,12 +18,24 @@
 
 from __future__ import annotations
 
+from collections.abc import Collection, Iterator
+from contextlib import contextmanager
+
 #: 언제나 있는 범위. 읽기는 하나로 묶는다 — 읽기를 경로마다 쪼개면 토큰 하나를
 #: 만들 때마다 목록을 다 훑어야 하고, 그러면 사람은 전부 켜 버린다.
 READ = "read"
 
 #: 이 설치가 아는 범위 전부. 발급 요청에 없는 범위가 오면 거절한다.
 _known: list[str] = [READ]
+
+#: 범위 → 그것을 연 확장. **코어가 연 범위는 여기 없다** — 언제나 있다.
+#:
+#: 확장의 범위는 그 확장이 꺼져 있으면 발급 목록에서 빠진다. 꺼진 확장의 경로는 404 라 그
+#: 범위로 열 문이 없는데, 목록에 남아 있으면 사람은 켜져 있는 기능으로 읽는다(2026-10-23).
+_owners: dict[str, set[str]] = {}
+
+#: 지금 범위를 등록하고 있는 확장 — `main.py` 가 확장의 `register` 를 `owned_by` 안에서 부른다.
+_registering: str | None = None
 
 #: (경로 앞머리, 그 아래 **쓰기**에 필요한 범위).
 _write: list[tuple[str, str]] = []
@@ -51,10 +63,37 @@ _read_only_post_patterns: list[tuple[str, ...]] = []
 SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 
+@contextmanager
+def owned_by(extension: str) -> Iterator[None]:
+    """이 안에서 연 범위는 그 확장의 것이다.
+
+    확장이 자기 이름을 적게 두지 않고 조립 지점(`main.py`)이 씌운다 — 적게 두면 언젠가
+    빠뜨리고, 빠뜨린 범위는 확장을 끈 뒤에도 목록에 남는다.
+    """
+    global _registering
+    before, _registering = _registering, extension
+    try:
+        yield
+    finally:
+        _registering = before
+
+
 def register_scope(scope: str) -> None:
-    """이 설치가 아는 범위에 하나 더한다. 같은 것을 두 번 넣어도 안전하다."""
+    """이 설치가 아는 범위에 하나 더한다. 같은 것을 두 번 넣어도 안전하다.
+
+    코어가 연 범위는 확장이 같은 것을 열어도 코어의 것이다 — 확장을 꺼도 안 빠진다.
+    """
+    if _registering is None:
+        _owners.pop(scope, None)
+    elif scope not in _known or scope in _owners:
+        _owners.setdefault(scope, set()).add(_registering)
     if scope not in _known:
         _known.append(scope)
+
+
+def _live(scope: str, enabled: Collection[str]) -> bool:
+    owners = _owners.get(scope)
+    return owners is None or not owners.isdisjoint(enabled)
 
 
 def register_write_scope(path_prefix: str, scope: str) -> None:
@@ -120,18 +159,28 @@ def _matches(path: str, pattern: tuple[str, ...]) -> bool:
     )
 
 
-def known_scopes() -> tuple[str, ...]:
-    return tuple(_known)
+def known_scopes(enabled: Collection[str]) -> tuple[str, ...]:
+    """지금 발급할 수 있는 범위 — 코어의 것 전부와 **켠** 확장의 것.
+
+    `enabled` 는 켠 확장의 이름이다(`server.services.enabled_names`). 켜짐은 DB 가 정하므로
+    여기서 묻지 않고 받는다 — shared 는 모듈의 표를 모른다.
+    """
+    return tuple(one for one in _known if _live(one, enabled))
 
 
-def write_scopes() -> tuple[str, ...]:
-    """쓰기를 여는 범위 전부 — 등록된 순서로, 한 번씩. 좁은 읽기 범위(`core:read`)는 빠진다
-    (`read` 가 이미 덮는다).
+def extension_of(scope: str) -> tuple[str, ...]:
+    """이 범위를 연 확장 — 코어의 범위면 빈 것. 꺼진 확장의 범위를 거절할 때 이름을 말한다."""
+    return tuple(sorted(_owners.get(scope, ())))
+
+
+def write_scopes(enabled: Collection[str]) -> tuple[str, ...]:
+    """쓰기를 여는 범위 — 등록된 순서로, 한 번씩, 꺼진 확장의 것은 빼고. 좁은 읽기
+    범위(`core:read`)는 빠진다(`read` 가 이미 덮는다).
 
     HWAX 게이트웨이의 위임 토큰(ADR 0028)이 「그 사람이 화면에서 받을 수 있는 최대」 로 `read`
-    와 이것을 받는다 — 확장이 범위를 더하면 다음 발급부터 따라온다. 범위는 경로를 여는 것일
-    뿐이고 고칠 수 있나는 그 사람의 권한이 정한다(사람 세션과 같다)."""
-    return tuple(dict.fromkeys(scope for _prefix, scope in _write))
+    와 이것을 받는다 — 확장이 범위를 더하면(그리고 켜면) 다음 발급부터 따라온다. 범위는 경로를
+    여는 것일 뿐이고 고칠 수 있나는 그 사람의 권한이 정한다(사람 세션과 같다)."""
+    return tuple(dict.fromkeys(scope for _prefix, scope in _write if _live(scope, enabled)))
 
 
 def is_reading(method: str, path: str) -> bool:

@@ -283,3 +283,36 @@ def test_확장마다_하는_일_한_줄이_있고_목록이_싣는다(
         )
     listed = client.get("/api/server/extensions", headers=admin.headers).json()
     assert all(one["description"] for one in listed)
+
+
+def test_꺼진_확장의_범위는_토큰_발급_목록에서_빠진다(
+    client: TestClient, admin: Signed
+) -> None:
+    """`caegroup:write` 는 caegroup 을 켰을 때만 고른다. 꺼진 확장의 경로는 404 라 그 범위로
+    열 문이 없는데, 목록에 남아 있으면 켜져 있는 기능으로 읽힌다(2026-10-23)."""
+
+    def listed() -> list[str]:
+        got = client.get("/api/auth/token-scopes", headers=admin.headers)
+        assert got.status_code == 200, got.text
+        return list(got.json()["scopes"])
+
+    def issue() -> Any:
+        return client.post(
+            "/api/auth/tokens",
+            json={"name": "디지털 트윈", "scopes": ["read", "caegroup:write"]},
+            headers=admin.headers,
+        )
+
+    toggle = "/api/server/extensions/caegroup"
+    assert client.patch(toggle, json={"enabled": False}, headers=admin.headers).is_success
+    assert "caegroup:write" not in listed()
+    # 코어의 범위는 그대로다.
+    assert {"read", "objects:write", "ontology:write"} <= set(listed())
+    refused = issue()
+    assert refused.status_code == 400
+    message = refused.json()["error"]["message"]
+    assert "꺼진 확장 모듈" in message and "caegroup" in message
+
+    assert client.patch(toggle, json={"enabled": True}, headers=admin.headers).is_success
+    assert "caegroup:write" in listed()
+    assert issue().status_code == 201, "켜면 다시 고를 수 있다"

@@ -138,7 +138,9 @@ def _api_router(settings: Settings) -> APIRouter:
     for name in names:
         gated = APIRouter(dependencies=[Depends(server_services.require_extension(name))])
         module = ext_loader.load(name)
-        module.register(gated)
+        # 여기서 연 범위는 그 확장의 것 — 끄면 토큰 발급 목록에서 빠진다(`shared/scopes.py`).
+        with scopes.owned_by(name):
+            module.register(gated)
         # 하는 일 한 줄 — 자기소개 · 서버 화면이 이름 곁에 싣는다(코어는 확장을 모르므로
         # 여기서 넘긴다).
         server_services.register_description(name, getattr(module, "DESCRIPTION", ""))

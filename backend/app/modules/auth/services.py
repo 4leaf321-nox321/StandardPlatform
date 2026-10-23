@@ -19,6 +19,7 @@ from app.modules.accounts.models import User
 from app.modules.auth import security
 from app.modules.auth.models import PersonalAccessToken, RefreshToken
 from app.modules.auth.schemas import PatOut, UserOut, WorkspaceMembershipOut
+from app.modules.server import services as server_services
 from app.modules.workspaces import services as workspaces
 from app.modules.workspaces.models import Workspace, WorkspaceMember
 from app.shared import audit, scopes
@@ -360,8 +361,19 @@ def create_pat(
     되고, 나중은 오지 않는다.
     """
     granted = list(dict.fromkeys(granted_scopes or [scopes.READ]))
-    known = scopes.known_scopes()
+    known = scopes.known_scopes(server_services.enabled_names(db))
     unknown = [one for one in granted if one not in known]
+    off = [one for one in unknown if scopes.extension_of(one)]
+    if off:
+        # 꺼진 확장의 범위 — 「모르는 범위」 라고 하면 오타를 찾게 된다. 고칠 자리를 말한다.
+        names = sorted({name for one in off for name in scopes.extension_of(one)})
+        raise AppError(
+            code("AUTH", 108),
+            f"꺼진 확장 모듈의 범위입니다: {', '.join(off)} — 시스템 관리자 › 서버 › "
+            f"「확장 모듈」 에서 {', '.join(names)} 을(를) 켜면 고를 수 있습니다.",
+            status=400,
+            details={"known": list(known), "extensions": names},
+        )
     if unknown:
         raise AppError(
             code("AUTH", 107),

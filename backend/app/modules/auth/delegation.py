@@ -73,6 +73,7 @@ from app.modules.auth.schemas import (
     GatewayRefusalOut,
 )
 from app.modules.auth.services import normalize_login_id
+from app.modules.server import services as server_services
 from app.shared import audit, scopes
 from app.shared.access_log import GATEWAY_SSO, USER_ID_SCOPE_KEY
 from app.shared.errors import AppError, NotFound, PlainTextError, code
@@ -117,13 +118,14 @@ def token_name(client: str) -> str:
     return f"HWAX 게이트웨이({client})"
 
 
-def granted_scopes() -> list[str]:
-    """위임 토큰의 범위 — `read` + 등록된 쓰기 범위 전부.
+def granted_scopes(db: Session) -> list[str]:
+    """위임 토큰의 범위 — `read` + 등록된 쓰기 범위 전부(꺼진 확장의 것은 빼고).
 
     관리 범위는 주지 않는다 — 지금 그런 범위는 없고(계정 · 부서 · 서버 관리는 어느 범위로도 안
     열린다, `shared/auth.py` 의 「모르는 것은 막는다」), 누가 `…:admin` 같은 것을 등록하는
     날에도 게이트웨이 너머의 AI 에게 저절로 가지 않게 이름으로 거른다."""
-    return [scopes.READ, *(one for one in scopes.write_scopes() if not _admin_like(one))]
+    live = scopes.write_scopes(server_services.enabled_names(db))
+    return [scopes.READ, *(one for one in live if not _admin_like(one))]
 
 
 def _admin_like(scope: str) -> bool:
@@ -432,7 +434,7 @@ def issue(db: Session, request: Request, settings: Settings) -> DelegatedTokenOu
             db.delete(one)
 
     raw, prefix, token_hash = security.new_pat()
-    granted = granted_scopes()
+    granted = granted_scopes(db)
     name = token_name(client)
     token = PersonalAccessToken(
         user_id=user.id,
@@ -551,7 +553,7 @@ def status(db: Session, settings: Settings) -> GatewayDelegationOut:
         sso_path=SSO_PATH,
         allowed_ips=[str(one) for one in networks],
         invalid_ips=invalid,
-        scopes=granted_scopes(),
+        scopes=granted_scopes(db),
         token_seconds=int(TOKEN_LIFETIME.total_seconds()),
         live_tokens=int(live or 0),
         last_issued_at=last_issued,
