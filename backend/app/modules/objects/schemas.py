@@ -615,6 +615,14 @@ class PartOut(BaseModel):
     value: float | None = None
 
 
+class DrillOut(BaseModel):
+    """막대를 누를 때 거는 조건 — 계층 축(ADR 0035)이면 `f.<field>.<op>=<key>`. 기준의 주소
+    (`…@<단계>`)는 조건의 칸이 아니라서 따로 준다."""
+
+    field: str
+    op: str
+
+
 class RangeOut(BaseModel):
     """날짜 칸의 범위 조건 — `f.<칸>.gte` · `f.<칸>.lt` 로 그대로 쓴다."""
 
@@ -631,6 +639,9 @@ class BucketOut(BaseModel):
     range: RangeOut | None = None
     """날짜 축이면 이 칸의 범위 — 막대를 누르면 `gte` · `lt` 두 조건이 된다. 키 하나를 `eq` 로
     걸면 0건이다(저장값은 날짜 하나하나다)."""
+    drill: DrillOut | None = None
+    """계층 축이면 누를 때 거는 조건(그 단계의 조상이면 「하위 전체」, 얕은 것이면
+    「같음」)."""
     parts: list[PartOut] = Field(default_factory=list)
 
 

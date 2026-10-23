@@ -93,6 +93,7 @@ from app.modules.objects.schemas import (
     BulkEditRow,
     BulkUndoRequest,
     DiagnosisOut,
+    DrillOut,
     FieldOptionOut,
     FileCellOut,
     FillReportOut,
@@ -603,6 +604,11 @@ def summary(
                 range=(
                     RangeOut(gte=one.range[0], lt=one.range[1])
                     if one.range is not None
+                    else None
+                ),
+                drill=(
+                    DrillOut(field=one.drill[0], op=one.drill[1])
+                    if one.drill is not None
                     else None
                 ),
                 parts=[

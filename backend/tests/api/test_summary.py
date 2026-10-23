@@ -674,6 +674,7 @@ def test_기간_단위마다_키와_이름이_다르다(client: TestClient, admi
         "value": None,
         "range": {"gte": "2026-01-01", "lt": "2026-04-01"},
         "parts": [],
+        "drill": None,
     }
     week = _summary(client, admin, kind, group_by="properties.made", grain="week", order="key")
     # 2026-01-05 는 월요일 — ISO 주의 시작이고 그해 둘째 주다(1월 1일이 목요일).

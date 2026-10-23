@@ -41,6 +41,7 @@ import {
 
 import { objectApi } from '@/modules/objects/api'
 import type {
+  Bucket,
   GroupOption,
   ObjectQuery,
   Points,
@@ -121,7 +122,12 @@ interface Props {
   onSettings: (next: SummarySettings) => void
   /** 막대를 눌렀을 때 — 걸 수 있는 축이면 부른다. 날짜 축이면 그 칸의 범위(`gte` · `lt`)를
    *  함께 준다 — 키 하나를 `eq` 로 걸면 0건이다. */
-  onPick: (field: string, key: string | null, range?: { gte: string; lt: string } | null) => void
+  onPick: (
+    field: string,
+    key: string | null,
+    range?: { gte: string; lt: string } | null,
+    drill?: Bucket['drill'],
+  ) => void
   onClose: () => void
   /**
    * 홈 게시를 낼 수 있나 — **인터페이스 목록은 안 된다**(게시는 저장된 뷰라 타입의 것이다).
@@ -714,7 +720,7 @@ export function SummaryPanel({
                       if (typeof key !== 'string') return
                       // 날짜 축은 그 기간의 **범위**로 — 시작일 하나를 `eq` 로 걸면 0건이다.
                       const picked = data.buckets.find((one) => one.key === key)
-                      onPick(data.group_field, key, picked?.range ?? null)
+                      onPick(data.group_field, key, picked?.range ?? null, picked?.drill ?? null)
                     }
                   : undefined
               }

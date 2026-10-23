@@ -730,11 +730,22 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                 homeWorkspace={homeWorkspace}
                 onGrain={setSummaryGrain}
                 onClose={() => setGrouping(false)}
-                onPick={(field, key, range) => {
+                onPick={(field, key, range, drill) => {
                   // **누른 막대가 곧 필터다.** 여기서 필터 칸으로 돌아가 값을 다시
                   // 치게 하면, 그 한 번이 사람을 엑셀로 돌려보낸다.
                   if (key === null) return
                   if (field === 'status') return
+                  if (drill) {
+                    // 계층 축 — 서버가 정한 칸 · 연산 그대로(「하위 전체」 또는 「같음」).
+                    const rest = conditions.filter(
+                      (one) =>
+                        one.exclude ||
+                        !(one.field === drill.field && (one.op === 'eq' || one.op === 'under')),
+                    )
+                    setConditions([...rest, { field: drill.field, op: drill.op, value: key }])
+                    setOffset(0)
+                    return
+                  }
                   // 자기 칸은 `properties.<키>` → `<키>`, 이어진 것 너머의 칸은 주소 그대로.
                   const propertyKey = field.startsWith('properties.')
                     ? field.slice('properties.'.length)

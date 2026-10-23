@@ -95,7 +95,7 @@ def _foreign_change(
     relations: set[str] = set()
     for address in addresses:
         try:
-            chain = built.plan.resolver.parse_chain(address)
+            chain = built.plan.resolver.parse_chain(axes.split_tree(address)[0])
         except Exception:
             return f"주소를 다시 풀 수 없다({address})"
         for hop in chain.hops:
@@ -167,6 +167,11 @@ def _tree_types(built: spec_module.Built) -> set[str]:
             target = definition.ref_type_slug
         if target:
             out.add(target)
+    # 계층 축(`…@<단계>`) — 값이 트리의 조상이라 트리가 바뀌면 같은 기록이 다른 칸으로 간다.
+    for dim in built.dims:
+        ref = dim.axis.ref_def
+        if dim.axis.tree is not None and ref is not None and ref.ref_type_slug:
+            out.add(ref.ref_type_slug)
     return out
 
 

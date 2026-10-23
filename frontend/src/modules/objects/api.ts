@@ -730,6 +730,11 @@ export interface Bucket {
   parts: Part[]
   /** 날짜 축이면 이 칸의 범위 — 막대를 누르면 `gte` · `lt` 두 조건이 된다(`eq` 는 0건). */
   range?: { gte: string; lt: string } | null
+  /**
+   * 계층 축(`…@<단계>`, ADR 0035)이면 누를 때 거는 조건 — 그 단계의 조상이면 「하위 전체」,
+   * 그보다 얕아 자기 자신이 값이면 「같음」. 기준의 주소는 조건의 칸이 아니라서 따로 온다.
+   */
+  drill?: { field: string; op: ConditionOp } | null
 }
 
 /** 묶을 수 있는(또는 셀 수 있는) 축 하나. */

@@ -166,7 +166,10 @@ describe('통계', () => {
     const dated = {
       ...BASE,
       group_field: 'properties.made',
-      group_options: [...BASE.group_options, { field: 'properties.made', label: '만든 날', kind: 'date' }],
+      group_options: [
+        ...BASE.group_options,
+        { field: 'properties.made', label: '만든 날', kind: 'date' },
+      ],
     }
     await panel(dated, { groupBy: 'properties.made', grain: 'month' })
     await waitFor(() =>
@@ -182,7 +185,7 @@ describe('통계', () => {
   it('막대를 클릭하면 **원래 값**으로 거른다 — 빈 칸은 거를 값이 없다', async () => {
     const { onPick } = await panel(BASE)
     await userEvent.click(screen.getByRole('button', { name: 'A' }))
-    expect(onPick).toHaveBeenCalledWith('properties.grade', 'A', null)
+    expect(onPick).toHaveBeenCalledWith('properties.grade', 'A', null, null)
 
     onPick.mockClear()
     await userEvent.click(screen.getByRole('button', { name: '(비어 있음)' }))
@@ -434,7 +437,7 @@ describe('개별 순위', () => {
   it('이어진 것 너머의 기준도 막대를 클릭하면 그 주소로 거른다', async () => {
     const { onPick } = await panel({ ...BASE, group_field: 'ref.vendor.country' })
     await userEvent.click(screen.getByRole('button', { name: 'A' }))
-    expect(onPick).toHaveBeenCalledWith('ref.vendor.country', 'A', null)
+    expect(onPick).toHaveBeenCalledWith('ref.vendor.country', 'A', null, null)
   })
 })
 
@@ -473,10 +476,12 @@ describe('기간 단위', () => {
     const { onPick, onSettings } = await panel(DATED, { groupBy: 'properties.made' })
     expect(screen.getByLabelText('기간 단위')).toBeTruthy()
     await userEvent.click(screen.getByRole('button', { name: '2026-01' }))
-    expect(onPick).toHaveBeenCalledWith('properties.made', '2026-01-01', {
-      gte: '2026-01-01',
-      lt: '2026-02-01',
-    })
+    expect(onPick).toHaveBeenCalledWith(
+      'properties.made',
+      '2026-01-01',
+      { gte: '2026-01-01', lt: '2026-02-01' },
+      null,
+    )
     // 차례 단추는 큰 값부터 → 작은 값부터 → 시간순으로 돈다 — 날짜가 아닌 기준에는 없는 자리다.
     await userEvent.click(screen.getByRole('button', { name: '순서 변경' }))
     expect(onSettings).toHaveBeenLastCalledWith(expect.objectContaining({ order: 'asc' }))
@@ -535,6 +540,45 @@ describe('기간 단위', () => {
     expect(objectApi.exportPoints.mock.calls.at(-1)?.[2]).toMatchObject({
       x: 'properties.weight',
       grain: 'month',
+    })
+  })
+})
+
+describe('계층 축(ADR 0035)', () => {
+  it('막대를 누르면 서버가 정한 칸 · 연산(하위 전체 · 같음)을 그대로 넘긴다', async () => {
+    const TREE = {
+      ...BASE,
+      group_field: 'properties.part@1',
+      group_label: '교체 부품 (1단 상위)',
+      buckets: [
+        {
+          key: 'mid',
+          label: 'MID',
+          count: 2,
+          value: null,
+          parts: [],
+          drill: { field: 'part', op: 'under' },
+        },
+        {
+          key: 'top',
+          label: 'TOP',
+          count: 1,
+          value: null,
+          parts: [],
+          drill: { field: 'part', op: 'eq' },
+        },
+      ],
+    }
+    const { onPick } = await panel(TREE, { groupBy: 'properties.part@1' })
+    await userEvent.click(screen.getByRole('button', { name: 'MID' }))
+    expect(onPick).toHaveBeenCalledWith('properties.part@1', 'mid', null, {
+      field: 'part',
+      op: 'under',
+    })
+    await userEvent.click(screen.getByRole('button', { name: 'TOP' }))
+    expect(onPick).toHaveBeenLastCalledWith('properties.part@1', 'top', null, {
+      field: 'part',
+      op: 'eq',
     })
   })
 })

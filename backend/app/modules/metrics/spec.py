@@ -268,6 +268,11 @@ class Dim:
         if self.rules is not None:
             return (RULE_KIND, self.rules.fingerprint)
         axis = self.axis
+        if axis.tree is not None:
+            # 계층 축(ADR 0035) — 값은 그 단계의 조상이라, 같은 타입을 가리키는 참조와 **다른
+            # 값**이다(분모가 노드마다 세었으면 조상끼리 짝지을 수 없다).
+            target = axis.ref_def.ref_type_slug if axis.ref_def is not None else ""
+            return ("tree", target or "", str(axis.tree.level))
         if axis.kind == "object_ref" and axis.ref_def is not None:
             return ("ref", axis.ref_def.ref_type_slug or "")
         if axis.kind == "related":
@@ -468,8 +473,9 @@ def _dimension(
                 "있어야 합니다."
             )
         return Dim(name, dim_in.address, None, visits_module.axis(visits, dim_in.address))
-    if paths.is_path(dim_in.address) and any(
-        hop.is_back for hop in plan.resolver.parse_chain(dim_in.address).hops
+    base_address = axes.split_tree(dim_in.address)[0]
+    if paths.is_path(base_address) and any(
+        hop.is_back for hop in plan.resolver.parse_chain(base_address).hops
     ):
         # 지표는 기록을 센다 — 나를 가리키는 것으로 거꾸로 가면 한 기록이 가리키는 것마다
         # 불어나 셀의 합이 기록 수와 어긋난다(ADR 0017). 목록의 통계에서는 된다.

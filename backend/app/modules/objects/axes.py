@@ -30,11 +30,24 @@ from dataclasses import dataclass, field
 from datetime import date, timedelta
 from typing import Any
 
-from sqlalchemy import Date, Float, Integer, Select, String, and_, case, cast, func, true
+from sqlalchemy import (
+    Date,
+    Float,
+    Integer,
+    Select,
+    String,
+    and_,
+    case,
+    cast,
+    func,
+    literal,
+    true,
+)
+from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
-from app.modules.objects import paths, system
+from app.modules.objects import graph, paths, system
 from app.modules.objects.models import ObjectInstance, ObjectRef
 from app.modules.objects.scope import Scope, as_scope
 from app.modules.ontology.models import ObjectType, PropertyDef
@@ -79,6 +92,38 @@ NUMERIC_RE = r"^-?[0-9]+(\.[0-9]+)?$"
 DATE_RE = r"^[0-9]{4}-?[0-9]{2}-?[0-9]{2}([T ].*)?$"
 
 
+#: 계층 축의 표시 — 참조 칸 주소 끝에 `@<단계>`(뿌리가 0). `properties.part@0` 은 「교체 부품의
+#: 뿌리」, `ref.model.part@1` 은 「모델의 주 부품의 1단 상위」(ADR 0035 3단계).
+TREE_MARK = "@"
+
+
+def split_tree(address: str) -> tuple[str, int | None]:
+    """주소 → (참조 칸 주소, 단계). 계층 축이 아니면 단계가 None."""
+    base, mark, level = address.rpartition(TREE_MARK)
+    if not mark or not level.isdigit():
+        return address, None
+    return base, int(level)
+
+
+def condition_field(address: str) -> str:
+    """기준의 주소 → 조건의 칸. 자기 칸은 `properties.<키>` → `<키>`, 너머는 그대로."""
+    return address.split(".", 1)[1] if address.startswith("properties.") else address
+
+
+@dataclass(frozen=True)
+class TreeAxis:
+    """계층 축 — 참조 칸의 값을 그 타입 트리의 한 단계로 접었다."""
+
+    level: int
+    field: str
+    """막대 · 칸을 누르면 거는 조건의 칸(참조 칸)."""
+    shallow: frozenset[str]
+    """그 단계보다 얕은 값 — 그 칸은 「같음」 으로, 나머지는 「하위 전체」 로 돌아간다."""
+
+    def drill_op(self, key: str) -> str:
+        return "eq" if key in self.shallow else "under"
+
+
 @dataclass
 class Axis:
     """기준 하나를 SQL 로 — 식·보여 줄 이름·종류, 그리고 바깥 조인으로 붙일 것들."""
@@ -106,6 +151,8 @@ class Axis:
     viewer: User | None = None
     """보는 사람 — 참조 칸 기준의 이름표가 그 사람이 못 보는 객체의 이름을 가린다
     (`labels`). 없으면(지표 · 저장 검사) 가리지 않는다."""
+    tree: TreeAxis | None = None
+    """계층 축이면(`…@<단계>`) — 값은 그 단계의 조상이다."""
 
 
 def own_property(defs: list[PropertyDef], field_name: str) -> PropertyDef:
@@ -485,9 +532,67 @@ class JoinPlan:
         """주소 하나 → 기준. 식은 **글자**를 내놓는다 — 그래야 한 자리에서 상태·부서·속성을
         같은 규칙으로 다룬다. 여러 값 칸과 여럿과 이어진 걸음은 한 행이 여러 막대에 들고, 그
         사실을 `multi` 로 화면에 넘겨 **적게 한다**."""
-        found = self._axis(address, grain=grain)
+        base, level = split_tree(address)
+        found = (
+            self._axis(address, grain=grain)
+            if level is None
+            else self._tree_axis(address, base, level, grain=grain)
+        )
         found.viewer = self.resolver.viewer
         return found
+
+    def _tree_axis(self, address: str, base: str, level: int, *, grain: str | None) -> Axis:
+        """계층 축 — 참조 칸의 값을 그 타입 트리의 `level` 단계 조상으로 접는다(ADR 0035).
+
+        조상 대응표는 지금 한 번 뽑아 배열 둘로 붙인다(재귀를 질의 안에 넣지 않는다 — 조건의
+        「하위 전체」 와 같은 까닭). 그 단계보다 깊은 값만 대응표에 들고, 나머지는 자기
+        자신이다.
+        """
+        if grain is not None:
+            raise _not_dated(base)
+        if level > graph.MAX_DEPTH:
+            raise AppError(
+                code("OBJECTS", 42),
+                f"계층 축의 단계는 0 ~ {graph.MAX_DEPTH} 입니다: {address}",
+                status=422,
+            )
+        inner = self._axis(base)
+        target = inner.ref_def.ref_type_slug if inner.ref_def is not None else None
+        tree = self.resolver.tree_of(target) if inner.kind == "object_ref" else None
+        if tree is None:
+            raise AppError(
+                code("OBJECTS", 42),
+                f"「{inner.label}」 은 계층 축이 되지 않습니다 — 트리가 정의된 타입을 "
+                "가리키는 참조 칸이어야 합니다(그 타입의 「목록 화면」 에서 트리로 쓸 관계를 "
+                "선택).",
+                status=422,
+            )
+        found = graph.levels(self.db, tree, level)
+        expr, joins = inner.expr, list(inner.joins)
+        if found.up:
+            self._count += 1
+            folded = (
+                func.unnest(
+                    literal([str(one) for one in found.up], ARRAY(String)),
+                    literal([str(one) for one in found.up.values()], ARRAY(String)),
+                )
+                .table_valued("node", "anc")
+                .render_derived(name=f"{self.prefix}{self._count}_tree")
+            )
+            joins.append((folded, folded.c.node == inner.expr))
+            expr = func.coalesce(folded.c.anc, inner.expr)
+        return Axis(
+            expr,
+            f"{inner.label} ({'뿌리' if level == 0 else f'{level}단 상위'})",
+            inner.kind,
+            joins,
+            inner.multi,
+            inner.ref_def,
+            address=address,
+            tree=TreeAxis(
+                level, condition_field(base), frozenset(str(one) for one in found.shallow)
+            ),
+        )
 
     def _axis(self, address: str, *, grain: str | None = None) -> Axis:
         defs = self.scope.defs

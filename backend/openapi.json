@@ -20196,7 +20196,7 @@
             "title": "Q Value"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -20971,6 +20971,16 @@
             "anyOf": [
               {
                 "$ref": "#/components/schemas/RangeOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "drill": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/app__modules__objects__schemas__DrillOut"
               },
               {
                 "type": "null"
@@ -21956,12 +21966,12 @@
             "title": "Closed"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           },
           "value_drill": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/DrillOut"
+                "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
               },
               {
                 "type": "null"
@@ -22395,7 +22405,7 @@
             "title": "Closed"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -22502,7 +22512,7 @@
             "title": "Note"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -22839,7 +22849,7 @@
             "title": "Closed"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -23674,7 +23684,7 @@
             "title": "Signals"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -24621,7 +24631,7 @@
             "title": "Count"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -25299,7 +25309,7 @@
             "title": "Side"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -25372,7 +25382,7 @@
           "drill": {
             "anyOf": [
               {
-                "$ref": "#/components/schemas/DrillOut"
+                "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
               },
               {
                 "type": "null"
@@ -26650,35 +26660,6 @@
           "used_percent"
         ],
         "title": "DiskOut"
-      },
-      "DrillOut": {
-        "properties": {
-          "type_slug": {
-            "type": "string",
-            "title": "Type Slug"
-          },
-          "params": {
-            "additionalProperties": {
-              "type": "string"
-            },
-            "type": "object",
-            "title": "Params"
-          },
-          "partial": {
-            "items": {
-              "type": "string"
-            },
-            "type": "array",
-            "title": "Partial"
-          }
-        },
-        "type": "object",
-        "required": [
-          "type_slug",
-          "params"
-        ],
-        "title": "DrillOut",
-        "description": "이 셀을 이룬 기록의 **목록 조건** — `/api/objects/<타입>?<params>` 에 그대로."
       },
       "EdgeOut": {
         "properties": {
@@ -28094,7 +28075,7 @@
             "title": "Flag"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -29944,7 +29925,7 @@
             "title": "Horizon"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -34388,7 +34369,7 @@
             "title": "Ratio"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -36036,7 +36017,7 @@
             "title": "Share"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           },
           "points": {
             "items": {
@@ -36198,7 +36179,7 @@
             "title": "Lift"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -37157,7 +37138,7 @@
             "title": "Now"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -41951,7 +41932,7 @@
             "title": "Expected"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           }
         },
         "type": "object",
@@ -45590,6 +45571,35 @@
         "title": "CoverageOut",
         "description": "커버리지 — 「다뤄야 할 축 조합 중 무엇을 다뤘고 무엇이 비었나」."
       },
+      "app__modules__metrics__schemas__DrillOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "params": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Params"
+          },
+          "partial": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Partial"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "params"
+        ],
+        "title": "DrillOut",
+        "description": "이 셀을 이룬 기록의 **목록 조건** — `/api/objects/<타입>?<params>` 에 그대로."
+      },
       "app__modules__metrics__schemas__PointOut": {
         "properties": {
           "period": {
@@ -45653,7 +45663,7 @@
             "title": "Closed"
           },
           "drill": {
-            "$ref": "#/components/schemas/DrillOut"
+            "$ref": "#/components/schemas/app__modules__metrics__schemas__DrillOut"
           },
           "composition": {
             "anyOf": [
@@ -45680,6 +45690,25 @@
           "drill"
         ],
         "title": "PointOut"
+      },
+      "app__modules__objects__schemas__DrillOut": {
+        "properties": {
+          "field": {
+            "type": "string",
+            "title": "Field"
+          },
+          "op": {
+            "type": "string",
+            "title": "Op"
+          }
+        },
+        "type": "object",
+        "required": [
+          "field",
+          "op"
+        ],
+        "title": "DrillOut",
+        "description": "막대를 누를 때 거는 조건 — 계층 축(ADR 0035)이면 `f.<field>.<op>=<key>`. 기준의 주소\n(`…@<단계>`)는 조건의 칸이 아니라서 따로 준다."
       },
       "app__modules__objects__schemas__ImportPlanOut": {
         "properties": {

@@ -108,6 +108,10 @@ class Bucket:
     range: tuple[str, str] | None = None
     """날짜 축이면 이 칸의 (gte, lt) — 막대를 누르면 **범위 조건** 둘이 된다. 키 하나를 `eq` 로
     걸면 0건이다(저장값은 날짜 하나하나다)."""
+    drill: tuple[str, str] | None = None
+    """계층 축이면(ADR 0035) 막대를 누를 때 거는 (칸, 연산) — 그 단계의 조상이면 「하위 전체」,
+    그보다 얕아 자기 자신이 값인 것이면 「같음」. 기준의 주소(`…@<단계>`)는 조건의 칸이
+    아니다."""
 
 
 @dataclass
@@ -157,6 +161,35 @@ class GroupOption:
     서는데, 제목이 그 둘을 가른다."""
 
 
+#: 고르개에 내놓는 계층 축의 단계 — 뿌리와 그 바로 아래. 더 깊은 단계는 주소(`…@<단계>`)로.
+TREE_LEVELS = (0, 1)
+
+
+def _tree_options(
+    field: str,
+    label: str,
+    ref_type: str | None,
+    resolver: paths.Resolver | None,
+    *,
+    multi: bool,
+    heading: str = "",
+) -> list[GroupOption]:
+    """트리가 있는 타입을 가리키는 참조 칸이면 계층 축(ADR 0035)을 그 뒤에 — 「교체 부품
+    (뿌리)」 · 「교체 부품 (1단 상위)」."""
+    if resolver is None or resolver.tree_of(ref_type) is None:
+        return []
+    return [
+        GroupOption(
+            field=f"{field}{axes.TREE_MARK}{level}",
+            label=f"{label} ({'뿌리' if level == 0 else f'{level}단 상위'})",
+            kind="object_ref",
+            multi=multi,
+            heading=heading,
+        )
+        for level in TREE_LEVELS
+    ]
+
+
 def group_options(
     target: ObjectType | Scope,
     defs: list[PropertyDef],
@@ -182,6 +215,14 @@ def group_options(
                 multi=one.multi,
             )
         )
+        if one.data_type == "object_ref":
+            out += _tree_options(
+                f"properties.{one.key}",
+                one.label,
+                one.ref_type_slug,
+                resolver,
+                multi=one.multi,
+            )
     # **이어진 것 너머** — 「개발사 › 국가」, 「사용 부서」. 자기 칸 뒤에 선다.
     for option in resolver.options(for_group=True) if resolver is not None else []:
         itself = paths.ends_at_hop(option.field)
@@ -196,6 +237,15 @@ def group_options(
                 heading=option.heading,
             )
         )
+        if not itself and option.data_type == "object_ref":
+            out += _tree_options(
+                option.field,
+                option.label,
+                option.ref_type_slug,
+                resolver,
+                multi=option.multi,
+                heading=option.heading,
+            )
     return out
 
 
@@ -301,6 +351,11 @@ def summarize(
             range=(
                 axes.period_range(str(row.k), group.grain)
                 if group.grain is not None and row.k is not None
+                else None
+            ),
+            drill=(
+                (group.tree.field, group.tree.drill_op(str(row.k)))
+                if group.tree is not None and row.k is not None
                 else None
             ),
         )

@@ -232,14 +232,26 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
       .map((one) => ({ value: `properties.${one.key}`, label: one.label }))
     const fixed = FIXED.map(([value, text]) => ({ value, label: text }))
     const beyond = (linked.data ?? []).map((one) => ({ value: one.field, label: one.label }))
+    // 계층 축(ADR 0035) — 트리가 있는 타입을 가리키는 참조 칸을 뿌리 · 1단 상위로 접는다.
+    const folded = [
+      ...defs
+        .filter((one) => one.data_type === 'object_ref' && treeTypes.has(one.ref_type_slug ?? ''))
+        .map((one) => ({ value: `properties.${one.key}`, label: one.label })),
+      ...(linked.data ?? [])
+        .filter((one) => one.data_type === 'object_ref' && treeTypes.has(one.ref_type_slug ?? ''))
+        .map((one) => ({ value: one.field, label: one.label })),
+    ].flatMap((one) => [
+      { value: `${one.value}@0`, label: `${one.label} (뿌리)` },
+      { value: `${one.value}@1`, label: `${one.label} (1단 상위)` },
+    ])
     const visits = visitKey
       ? [
           { value: 'visit.number', label: '방문 차례(1 · 2 · 3 · 4+)' },
           { value: 'visit.repeat', label: `${visitDays}일 안 재방문(예 · 아니오 · 아직 열림)` },
         ]
       : []
-    return [...own, ...fixed, ...beyond, ...visits]
-  }, [defs, linked.data, visitKey, visitDays])
+    return [...own, ...fixed, ...beyond, ...folded, ...visits]
+  }, [defs, linked.data, visitKey, visitDays, treeTypes])
 
   const denominatorCandidates = (metrics.data ?? []).filter(
     (one) => one.slug !== slug && !one.spec.denominator && one.spec.measure !== 'share',

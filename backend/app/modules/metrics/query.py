@@ -820,6 +820,17 @@ def _dim_condition(conds: _Conds, dim: spec_module.Dim, value: str | None) -> No
     if dim.rules is not None:
         _rule_condition(conds, dim, value)
         return
+    tree = dim.axis.tree
+    if tree is not None:
+        # 계층 축(ADR 0035) — 그 단계의 조상이면 「하위 전체」, 얕아 자기 자신이 값이면
+        # 「같음」.
+        if value is not None:
+            conds.put(f"f.{tree.field}.{tree.drill_op(value)}", value, dim.name)
+        elif not paths.is_path(tree.field):
+            conds.put(f"f.{tree.field}.empty", "1", dim.name)
+        else:
+            conds.miss(dim.name)
+        return
     address = dim.address
     if address in visits_module.ADDRESSES:
         # 방문 차례 · 재방문은 같은 시리얼의 다른 기록에 달린 값이라 목록 조건이 없다.

@@ -105,6 +105,73 @@ def subtree_ids(db: Session, tree: Tree, roots: list[uuid.UUID]) -> list[uuid.UU
     return list(dict.fromkeys(db.scalars(select(walk.c.id))))
 
 
+@dataclass(frozen=True)
+class Levels:
+    """한 트리를 단계 하나로 접은 것 — 계층 축(ADR 0035 3단계)이 쓴다."""
+
+    up: dict[uuid.UUID, uuid.UUID]
+    """그 단계보다 깊은 노드 → 그 단계의 조상. 여기 없는 노드는 자기 자신이 값이다."""
+    shallow: frozenset[uuid.UUID]
+    """그 단계보다 얕은 노드 — 자기 자신이 값이지만 그 아래는 다른 값으로 간다. 그래서 이
+    값의 칸을 누르면 「하위 전체」 가 아니라 「같음」 으로 돌아간다."""
+
+
+def levels(db: Session, tree: Tree, level: int) -> Levels:
+    """뿌리에서 아래로 한 번 훑어 노드마다 **그 단계의 조상**을 찾는다(뿌리가 0단, 깊이
+    MAX_DEPTH).
+
+    뿌리는 그 타입의 지우지 않은 객체 중 부모가 없는 것이다. 부모가 여럿이면(트리가 아니라
+    DAG) 뿌리에 가장 가까운 길 하나를 고른다 — 같은 노드가 두 값에 들면 칸의 합이 기록 수와
+    어긋난다.
+    """
+    if refedges.is_ref(tree.relation):
+        key = tree.relation[len(refedges.PREFIX) :].split(".", 1)[1]
+        table = "object_refs"
+        parent_col, child_col = {"dst": ("dst_id", "src_id"), "src": ("src_id", "dst_id")}[
+            tree.parent_end
+        ]
+        edge = "e.key = :key AND e.src_type_id = :type"
+    else:
+        key = ""
+        table = "object_relations"
+        parent_col, child_col = _ends(tree.parent_end)
+        edge = "e.relation = :rel"
+    rows = db.execute(
+        text(f"""
+            WITH RECURSIVE down(id, depth, anc) AS (
+                SELECT o.id, 0, o.id
+                  FROM objects o
+                 WHERE o.type_id = :type AND o.deleted_at IS NULL
+                   AND NOT EXISTS (
+                       SELECT 1 FROM {table} e WHERE {edge} AND e.{child_col} = o.id
+                   )
+                UNION ALL
+                SELECT e.{child_col}, d.depth + 1,
+                       CASE WHEN d.depth + 1 <= :level THEN e.{child_col} ELSE d.anc END
+                  FROM {table} e
+                  JOIN down d ON e.{parent_col} = d.id
+                 WHERE {edge} AND d.depth < :max_depth
+            )
+            SELECT DISTINCT ON (id) id, depth, anc FROM down ORDER BY id, depth, anc
+        """),
+        {
+            "type": str(tree.type_id),
+            "rel": tree.relation,
+            "key": key,
+            "level": level,
+            "max_depth": MAX_DEPTH,
+        },
+    )
+    up: dict[uuid.UUID, uuid.UUID] = {}
+    shallow: set[uuid.UUID] = set()
+    for row in rows:
+        if row.depth > level:
+            up[row.id] = row.anc
+        elif row.depth < level:
+            shallow.add(row.id)
+    return Levels(up=up, shallow=frozenset(shallow))
+
+
 def any_of(column: Any, ids: list[uuid.UUID]) -> ColumnElement[bool]:
     """`column = ANY(배열)` — 자리표 하나. `IN (…)` 은 값마다 자리표라 수만 개면 넘친다."""
     if not ids:

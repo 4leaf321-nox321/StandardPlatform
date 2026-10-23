@@ -1660,7 +1660,8 @@ async def objects_summary(
     - `group_by` 기준: `label`·`key`·`status`·`workspace`(소유 부서)·
       `created_year`, 속성은 `properties.<키>`, 다른 타입의 칸은
       `object_fields` 의 주소. 걸음은 이어 적을 수 있다(`ref.model.ref.base.series`,
-      넷까지). 긴 글·파일은 안 된다.
+      넷까지). 긴 글·파일은 안 된다. 트리가 있는 타입을 가리키는 참조 칸 끝에 `@<단계>`
+      면 계층 축(`properties.part@0` 뿌리별) — 막대의 조건은 `buckets[].drill` 이다.
       `type_slug` 가 인터페이스면 `type`(어느 구현 타입인가)도 된다.
       쓸 수 있는 기준 전부가 응답의 `group_options` 다.
     - `split_by` 세부 기준(같은 규칙). 주면 칸마다 `parts` 로 나뉜다.
