@@ -79,12 +79,13 @@ import { cn } from '@/shared/lib/utils'
 export { DEFAULT_SUMMARY }
 export type { SummarySettings }
 
-/** 그림 모양. **막대가 기본이다** — 길이는 눈이 바로 비교하지만 각도는 못 한다. */
+/** 그림 모양. **막대형이 기본이다** — 길이는 눈이 바로 비교하지만 각도는 못 한다. 흔한 넷의 이름은
+ *  PowerPoint · Excel 과 같다(「영역」 은 장표의 말이라 차트는 「영역형」). */
 const KINDS: { value: SummarySettings['chart']; label: string; Icon: typeof BarChart3 }[] = [
-  { value: 'bar', label: '막대', Icon: BarChart3 },
-  { value: 'line', label: '꺾은선', Icon: ChartLine },
-  { value: 'area', label: '영역', Icon: ChartArea },
-  { value: 'pie', label: '원', Icon: ChartPie },
+  { value: 'bar', label: '막대형', Icon: BarChart3 },
+  { value: 'line', label: '꺾은선형', Icon: ChartLine },
+  { value: 'area', label: '영역형', Icon: ChartArea },
+  { value: 'pie', label: '원형', Icon: ChartPie },
   // **세부 기준이 있을 때만 뜻이 있다.** 세부 기준 없는 히트맵은 색칠한 막대 하나일 뿐이다.
   { value: 'heatmap', label: '히트맵', Icon: Grid3x3 },
   // 아래 둘은 **안 센 값**을 그린다 — 분포는 집계로 안 보인다.

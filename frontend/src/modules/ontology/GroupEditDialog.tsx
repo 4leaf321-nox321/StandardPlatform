@@ -206,7 +206,7 @@ export function GroupEditDialog({ group, attached, groups = [], onClose, onChang
               </div>
               <p className="text-muted-foreground text-xs">
                 그래프에서 <b>이 묶음의 타입들이 이 색</b>으로 그려집니다. 비워 두면(자동) 순서대로
-                팔레트에서 받고, 상위 묶음이 있으면 그 색의 농도만 달라집니다 — 같은 영역이 같은
+                팔레트에서 받고, 상위 묶음이 있으면 그 색의 농도만 달라집니다 — 같은 묶음이 같은
                 계열로 읽혀야 합니다.
               </p>
             </div>

@@ -208,7 +208,7 @@ describe('통계', () => {
 
   it('그림 모양을 바꾸면 **호스트에게 알린다** — 그래야 뷰에 담긴다', async () => {
     const { onSettings } = await panel(BASE)
-    const pie = screen.getByRole('button', { name: '원' })
+    const pie = screen.getByRole('button', { name: '원형' })
     expect(pie).toHaveAttribute('aria-pressed', 'false')
     await userEvent.click(pie)
     expect(onSettings).toHaveBeenCalledWith(expect.objectContaining({ chart: 'pie' }))

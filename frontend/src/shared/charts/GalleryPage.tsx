@@ -117,7 +117,7 @@ export default function ChartGalleryPage() {
         </Card>
 
         <Card
-          title="영역 — 쌓아서 전체를 볼 때"
+          title="영역형 — 쌓아서 전체를 볼 때"
           code={`<Chart kind="area" stacked data={rows} x="name"\n  series={[{ key: '접수' }, { key: '완료' }]} />`}
         >
           <Chart
