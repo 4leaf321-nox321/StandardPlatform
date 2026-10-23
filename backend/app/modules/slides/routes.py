@@ -20,6 +20,8 @@ from app.modules.slides import services
 from app.modules.slides.models import Slide, SlideTemplate
 from app.modules.slides.schemas import (
     AREA_LIMIT_MAX,
+    CandidateOut,
+    CandidatesOut,
     PreviewIn,
     RenderOut,
     SlideCreateIn,
@@ -292,8 +294,9 @@ def update_slide(
         area = areas.get(key) or {}
         if area.get("kind") != "records" or area.get("fill") != "pick" or area.get("pair_of"):
             raise InvalidValue(code("SLIDES", 32), f"선택 영역이 아닙니다: {key}")
+        subject = db.get(ObjectInstance, row.subject_id) if row.subject_id else None
         content.setdefault(key, {})["picks"] = [
-            str(one) for one in _picks(db, user, area, picked)
+            str(one) for one in services.check_picks(db, user, area, subject, picked)
         ]
     if payload.title is not None:
         row.title = payload.title.strip()
@@ -302,6 +305,29 @@ def update_slide(
     db.commit()
     db.refresh(row)
     return _slide_out(db, user, row)
+
+
+@router.get("/{slide_id}/areas/{area_key}/candidates", response_model=CandidatesOut)
+def pick_candidates(
+    slide_id: uuid.UUID,
+    area_key: str,
+    q: str = Query(default="", max_length=100, description="이름 · 식별자에 든 말"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> CandidatesOut:
+    """선택 영역의 후보 — 틀의 조건(주제와 이어지는 칸 · 고정 조건)에 맞는 것, 50건까지."""
+    row = _slide(db, slide_id)
+    area = next(
+        (one for one in _template(db, row.template_id).areas if one.get("key") == area_key),
+        None,
+    )
+    if area is None or area.get("fill") != "pick" or area.get("pair_of"):
+        raise NotFound(code("SLIDES", 38), f"선택 영역이 아닙니다: {area_key}")
+    subject = db.get(ObjectInstance, row.subject_id) if row.subject_id else None
+    found, total = services.candidates(db, user, area, subject, q, AREA_LIMIT_MAX)
+    return CandidatesOut(
+        items=[CandidateOut(id=one.id, label=one.label) for one in found], total=total
+    )
 
 
 @router.delete("/{slide_id}", status_code=204)
@@ -380,39 +406,6 @@ def _subject(
             f"이 틀의 주제는 {subject_type.label}입니다 — 다른 타입의 객체를 선택했습니다.",
         )
     return found
-
-
-def _picks(
-    db: Session, user: User, area: dict[str, object], picked: list[uuid.UUID]
-) -> list[uuid.UUID]:
-    """고른 기록 — 그 영역의 타입이고 살아 있고 보이는 것만, 고른 차례대로."""
-    wanted = list(dict.fromkeys(picked))
-    if len(wanted) > AREA_LIMIT_MAX:
-        raise InvalidValue(
-            code("SLIDES", 35), f"영역 하나에는 {AREA_LIMIT_MAX}건까지 선택할 수 있습니다."
-        )
-    if not wanted:
-        return []
-    record_type = services.type_by_slug(db, str(area.get("type_slug") or ""), what="기록")
-    alive = set(
-        db.scalars(
-            select(ObjectInstance.id).where(
-                ObjectInstance.id.in_(wanted),
-                ObjectInstance.type_id == record_type.id,
-                ObjectInstance.deleted_at.is_(None),
-                visible_owner_clause(user, ObjectInstance.owner_workspace_id),
-            )
-        )
-    )
-    strangers = [str(one) for one in wanted if one not in alive]
-    if strangers:
-        raise InvalidValue(
-            code("SLIDES", 36),
-            f"{record_type.label}이(가) 아니거나 찾을 수 없는 것을 선택했습니다: "
-            f"{', '.join(strangers[:5])}",
-            details={"ids": strangers},
-        )
-    return wanted
 
 
 def _template_out(db: Session, row: SlideTemplate) -> TemplateOut:

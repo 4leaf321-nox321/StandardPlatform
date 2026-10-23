@@ -3135,6 +3135,72 @@
         }
       }
     },
+    "/api/slides/{slide_id}/areas/{area_key}/candidates": {
+      "get": {
+        "tags": [
+          "slides"
+        ],
+        "summary": "Pick Candidates",
+        "description": "선택 영역의 후보 — 틀의 조건(주제와 이어지는 칸 · 고정 조건)에 맞는 것, 50건까지.",
+        "operationId": "pick_candidates_api_slides__slide_id__areas__area_key__candidates_get",
+        "parameters": [
+          {
+            "name": "slide_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Slide Id"
+            }
+          },
+          {
+            "name": "area_key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Area Key"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 100,
+              "description": "이름 · 식별자에 든 말",
+              "default": "",
+              "title": "Q"
+            },
+            "description": "이름 · 식별자에 든 말"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CandidatesOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/webhooks": {
       "get": {
         "tags": [
@@ -20241,7 +20307,8 @@
             "type": "string",
             "enum": [
               "condition",
-              "pick"
+              "pick",
+              "follow"
             ],
             "title": "Fill",
             "default": "condition"
@@ -20282,6 +20349,29 @@
             "type": "array",
             "maxItems": 12,
             "title": "Ref Line"
+          },
+          "follow_area": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follow Area"
+          },
+          "follow_field": {
+            "anyOf": [
+              {
+                "type": "string",
+                "maxLength": 200
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follow Field"
           },
           "pair_of": {
             "anyOf": [
@@ -20419,6 +20509,22 @@
             },
             "type": "object",
             "title": "List Params"
+          },
+          "follow_title": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Follow Title"
+          },
+          "limit": {
+            "type": "integer",
+            "title": "Limit",
+            "default": 10
           },
           "problem": {
             "anyOf": [
@@ -22280,6 +22386,47 @@
         },
         "type": "object",
         "title": "BundleIn"
+      },
+      "CandidateOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label"
+        ],
+        "title": "CandidateOut"
+      },
+      "CandidatesOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "CandidatesOut",
+        "description": "선택 영역의 후보 — 틀의 조건에 맞는 것."
       },
       "CapacityBulkIn": {
         "properties": {

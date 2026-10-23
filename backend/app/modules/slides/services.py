@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from itertools import pairwise
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -126,15 +126,62 @@ def _check_area(
                 code("SLIDES", 7),
                 f"영역 「{area.title}」 의 연결 항목 줄에 참조 칸이 아닌 것이 있습니다: {key}",
             )
-    if area.fill == "condition":
-        # 주소 · 칸 · 연산을 **실제로 세워 본다** — 아무 주제나 넣어 문장을 짓는다(돌리지
-        # 않는다).
-        try:
-            _statement(db, None, record_type, area, uuid.uuid4())
-        except AppError as error:
+    if area.fill == "follow":
+        _check_follow(db, area, areas, record_type)
+        return
+    # 조건 영역의 조건 · 선택 영역의 후보 범위 — 주소 · 칸 · 연산을 **실제로 세워 본다**. 아무
+    # 주제나 넣어 문장을 짓는다(돌리지 않는다).
+    try:
+        _statement(db, None, record_type, area, uuid.uuid4())
+    except AppError as error:
+        raise InvalidValue(
+            code("SLIDES", 8), f"영역 「{area.title}」 의 조건: {error.message}"
+        ) from error
+
+
+def _check_follow(
+    db: Session, area: AreaIn, areas: dict[str, AreaIn], record_type: ObjectType
+) -> None:
+    """따라오는 영역 — 따라갈 영역은 기록 영역이고(짝이면 그 짝), 따라가다 제게 돌아오지
+    않는다."""
+    source = source_of(area, areas)
+    if source is None:
+        raise InvalidValue(
+            code("SLIDES", 13),
+            f"영역 「{area.title}」 이 따라갈 기록 영역이 없습니다: {area.follow_area}",
+        )
+    seen = {area.key}
+    walker: AreaIn | None = source
+    while walker is not None:
+        if walker.key in seen:
             raise InvalidValue(
-                code("SLIDES", 8), f"영역 「{area.title}」 의 조건: {error.message}"
-            ) from error
+                code("SLIDES", 14),
+                f"영역 「{area.title}」 의 따라가기가 「{walker.title}」 에서 "
+                "제자리로 돌아옵니다.",
+            )
+        seen.add(walker.key)
+        walker = source_of(walker, areas) if walker.fill == "follow" else None
+    if not area.follow_field:
+        raise InvalidValue(
+            code("SLIDES", 15),
+            f"영역 「{area.title}」 — 따라갈 영역의 기록을 가리키는 칸을 정하세요.",
+        )
+    try:
+        _follow_statement(db, None, record_type, area, [uuid.uuid4()])
+    except AppError as error:
+        raise InvalidValue(
+            code("SLIDES", 8), f"영역 「{area.title}」 의 조건: {error.message}"
+        ) from error
+
+
+def source_of(area: AreaIn, areas: dict[str, AreaIn]) -> AreaIn | None:
+    """따라갈 영역 — 짝 영역을 골랐으면 그 짝(기록은 짝의 것이다). 기록 영역이 아니면 없다."""
+    found = areas.get(area.follow_area or "")
+    if found is not None and found.pair_of:
+        found = areas.get(found.pair_of)
+    if found is None or found.kind != "records" or found.key == area.key:
+        return None
+    return found
 
 
 def _check_pair(area: AreaIn, areas: dict[str, AreaIn]) -> AreaIn:
@@ -213,14 +260,32 @@ def render(
     subject: ObjectInstance | None,
     content: dict[str, Any],
 ) -> list[AreaOut]:
-    """영역마다 그린다. 짝 영역은 짝의 기록을 같은 차례로 — 칸만 다르다."""
+    """영역마다 그린다. 짝 영역은 짝의 기록을 같은 차례로 — 칸만 다르다. 따라오는 영역은 따라갈
+    영역을 먼저 센 뒤에 센다."""
     querycap.cap(db)
     parsed = [AreaIn.model_validate(one) for one in areas]
-    found: dict[str, _Rows] = {}
-    for area in parsed:
-        if area.kind == "records" and area.pair_of is None:
-            found[area.key] = _rows_of(db, user, area, subject, content)
     by_key = {one.key: one for one in parsed}
+    found: dict[str, _Rows] = {}
+    pending = [one for one in parsed if one.kind == "records" and one.pair_of is None]
+    while pending:
+        ready = [
+            one
+            for one in pending
+            if one.fill != "follow"
+            or (source := source_of(one, by_key)) is None
+            or source.key in found
+        ]
+        if not ready:
+            # 저장할 때 막았지만, 틀을 직접 고친 자리에서 돌 수 있다 — 그 영역만 말한다.
+            for one in pending:
+                found[one.key] = _Rows(problem="따라가기가 제자리로 돌아옵니다.")
+            break
+        for one in ready:
+            if one.fill == "follow":
+                found[one.key] = _follow_rows(db, user, one, by_key, found)
+            else:
+                found[one.key] = _rows_of(db, user, one, subject, content)
+            pending.remove(one)
     out: list[AreaOut] = []
     for area in parsed:
         if area.kind == "text":
@@ -233,8 +298,40 @@ def render(
         primary = by_key.get(area.pair_of or "") if area.pair_of else area
         rows = found.get(primary.key if primary else "", _Rows(problem="짝 영역이 없습니다."))
         type_slug = primary.type_slug if primary else None
-        out.append(_records(db, user, area, type_slug, rows))
+        drawn = _records(db, user, area, type_slug, rows)
+        if area.fill == "follow" and area.pair_of is None:
+            source = source_of(area, by_key)
+            drawn.follow_title = source.title if source else None
+        out.append(drawn)
     return out
+
+
+def _follow_rows(
+    db: Session,
+    user: User,
+    area: AreaIn,
+    by_key: dict[str, AreaIn],
+    found: dict[str, _Rows],
+) -> _Rows:
+    """따라오는 영역 — 따라갈 영역에 **표시된** 기록과 이어진 것 전부."""
+    source = source_of(area, by_key)
+    if source is None or source.key not in found:
+        return _Rows(problem="따라갈 영역이 없습니다.")
+    if found[source.key].problem:
+        return _Rows(problem=f"따라갈 영역 「{source.title}」 을 표시하지 못했습니다.")
+    ids = [one.id for one in found[source.key].rows]
+    if not ids:
+        return _Rows()
+    try:
+        record_type = type_by_slug(db, area.type_slug or "", what="기록")
+        stmt = _follow_statement(db, user, record_type, area, ids)
+    except AppError as error:
+        return _Rows(problem=error.message)
+    total = db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
+    rows = list(db.scalars(stmt.order_by(*_ORDERS[area.order]).limit(area.limit)))
+    params = _list_params(area, None)
+    params[f"f.{area.follow_field}.in"] = "|".join(str(one) for one in ids)
+    return _Rows(rows=rows, total=int(total), list_params=params)
 
 
 def _rows_of(
@@ -282,13 +379,15 @@ def _statement(
     record_type: ObjectType,
     area: AreaIn,
     subject_id: uuid.UUID | None,
+    extra: list[conditions.Condition] | None = None,
 ) -> Any:
-    """조건 영역의 문장 — 목록과 같은 조건(`conditions.apply`)에 「주제와 이어지는 칸」 하나를
-    더한다."""
+    """조건 영역의 문장 · 선택 영역의 후보 — 목록과 같은 조건(`conditions.apply`)에 「주제와
+    이어지는 칸」 하나를 더한다."""
     asked = [
         conditions.Condition(field=one.field, op=one.op, value=one.value, exclude=one.exclude)
         for one in area.conditions
     ]
+    asked.extend(extra or [])
     if area.subject_field and subject_id is not None:
         asked.append(
             conditions.Condition(
@@ -304,10 +403,91 @@ def _statement(
     )
 
 
+def _follow_statement(
+    db: Session,
+    user: User | None,
+    record_type: ObjectType,
+    area: AreaIn,
+    ids: list[uuid.UUID],
+) -> Any:
+    """따라오는 영역의 문장 — 고정 조건에 「이 칸이 그 기록들 중 하나」 를 더한다. 주제로는
+    거르지
+    않는다(따라갈 영역이 이미 주제의 것이다)."""
+    follow = conditions.Condition(
+        field=area.follow_field or "", op="in", value="|".join(str(one) for one in ids)
+    )
+    return _statement(db, user, record_type, area, None, [follow])
+
+
+def candidates(
+    db: Session,
+    user: User,
+    area_def: dict[str, Any],
+    subject: ObjectInstance | None,
+    q: str,
+    limit: int,
+) -> tuple[list[ObjectInstance], int]:
+    """선택 영역의 후보 — 틀의 조건(주제와 이어지는 칸 · 고정 조건)에 맞는 것. 이름 · 식별자로
+    좁힌다."""
+    area = AreaIn.model_validate(area_def)
+    stmt = _pick_scope(db, user, area, subject)
+    needle = q.strip()
+    if needle:
+        stmt = stmt.where(
+            or_(
+                ObjectInstance.label.icontains(needle, autoescape=True),
+                ObjectInstance.key.icontains(needle, autoescape=True),
+            )
+        )
+    total = db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
+    rows = list(db.scalars(stmt.order_by(*_ORDERS[area.order]).limit(limit)))
+    return rows, int(total)
+
+
+def check_picks(
+    db: Session,
+    user: User,
+    area_def: dict[str, Any],
+    subject: ObjectInstance | None,
+    picked: list[uuid.UUID],
+) -> list[uuid.UUID]:
+    """선택한 기록 — 건수 상한 안이고, 모두 후보(틀의 조건에 맞고 보이는 것)여야 한다. 선택한
+    차례
+    그대로 돌려준다."""
+    area = AreaIn.model_validate(area_def)
+    wanted = list(dict.fromkeys(picked))
+    if len(wanted) > area.limit:
+        raise InvalidValue(
+            code("SLIDES", 35),
+            f"영역 「{area.title}」 은 {area.limit}건까지 선택할 수 있습니다.",
+        )
+    if not wanted:
+        return []
+    stmt = _pick_scope(db, user, area, subject).where(ObjectInstance.id.in_(wanted))
+    alive = {one.id for one in db.scalars(stmt)}
+    strangers = [str(one) for one in wanted if one not in alive]
+    if strangers:
+        raise InvalidValue(
+            code("SLIDES", 36),
+            f"영역 「{area.title}」 의 후보가 아닌 기록을 선택했습니다 — 타입이 다르거나, "
+            "주제와 이어지지 않거나, 조건에 맞지 않습니다.",
+            details={"ids": strangers},
+        )
+    return wanted
+
+
+def _pick_scope(db: Session, user: User, area: AreaIn, subject: ObjectInstance | None) -> Any:
+    if area.subject_field and subject is None:
+        raise InvalidValue(
+            code("SLIDES", 37), "장표의 주제가 없어 이 영역의 후보를 정할 수 없습니다."
+        )
+    record_type = type_by_slug(db, area.type_slug or "", what="기록")
+    return _statement(db, user, record_type, area, subject.id if subject else None)
+
+
 def _list_params(area: AreaIn, subject: ObjectInstance | None) -> dict[str, str]:
     """「목록에서 보기」 의 주소 — 같은 조건. 같은 칸 · 연산이 둘이면 마지막 것만 실린다(목록
-    주소의
-    한계 — 장표의 조건은 영역마다 짧다)."""
+    주소의 한계 — 장표의 조건은 영역마다 짧다)."""
     params = {
         (f"nf{one.exclude}" if one.exclude else "f") + f".{one.field}.{one.op}": one.value
         for one in area.conditions
@@ -379,6 +559,7 @@ def _shell(
         fields=fields,
         text=text,
         records=records or [],
+        limit=area.limit,
     )
 
 

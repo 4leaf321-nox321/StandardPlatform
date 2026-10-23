@@ -87,11 +87,26 @@ def world(client: TestClient, admin: Signed, member: Signed) -> dict[str, Any]:
     }
     linked = _link(client, member, meeting, talk["id"], covers, risks["접촉 불량"]["id"])
     assert linked.status_code == 201, linked.text
+    # 변경점 「핀 수」 가 일으키는 잠재리스크 둘 — 변경점 → 잠재리스크 관계.
+    affects = _make_relation(
+        client, admin, base="affects", src_type_slugs=[change], dst_type_slugs=[risk]
+    )
+    risks["핀 변형"] = _make_object(
+        client, member, risk, label="핀 변형", properties={"severity": "중"}
+    )
+    for name in ("접촉 불량", "핀 변형"):
+        made = _link(
+            client, member, change, changes["핀 수"]["id"], affects, risks[name]["id"]
+        )
+        assert made.status_code == 201, made.text
     return {
         "model": model,
         "change": change,
         "risk": risk,
         "covers": covers,
+        "affects": affects,
+        "meeting": meeting,
+        "talk": talk,
         "models": models,
         "changes": changes,
         "risks": risks,
@@ -387,3 +402,128 @@ def test_미리_보기는_저장하지_않은_틀을_세워_본다(
     )
     assert got.status_code == 200, got.text
     assert [one["label"] for one in _areas(got.json())["asis"]["records"]] == ["B 변경"]
+
+
+def _one_change_template(world: dict[str, Any]) -> dict[str, Any]:
+    """변경점 하나가 한 장 — AS-IS 에서 하나를 선택하고, 잠재리스크는 그 변경점을 따라온다."""
+    body = _template(world)
+    body["areas"][0].update(fill="pick", limit=1)
+    body["areas"][2] = {
+        "key": "risks",
+        "title": "잠재리스크",
+        "row": 1,
+        "col": 0,
+        "type_slug": world["risk"],
+        "fields": ["label", "severity"],
+        "fill": "follow",
+        "follow_area": "tobe",  # 짝을 골라도 그 짝(asis)의 기록을 따라간다
+        "follow_field": f"in.{world['affects']}",
+        "order": "label",
+    }
+    return body
+
+
+def test_변경점_하나가_한_장이고_이어진_잠재리스크가_모두_따라온다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    made = client.post(
+        "/api/slides/templates", json=_one_change_template(world), headers=admin.headers
+    )
+    assert made.status_code == 201, made.text
+    slide = _slide(client, member, made.json(), world["models"]["A"]["id"])
+    path = f"/api/slides/{slide['id']}"
+    # 선택 전에는 비어 있고, 따라오는 영역도 비어 있다.
+    assert _areas(slide)["asis"]["records"] == [] and _areas(slide)["risks"]["records"] == []
+
+    # 후보는 주제(모델 A)의 변경점만 — B 의 변경점은 후보가 아니다.
+    found = client.get(f"{path}/areas/asis/candidates", headers=member.headers)
+    assert found.status_code == 200, found.text
+    assert {one["label"] for one in found.json()["items"]} == {"핀 수", "재질"}
+
+    changes = world["changes"]
+    picked = client.patch(
+        path, json={"picks": {"asis": [changes["핀 수"]["id"]]}}, headers=member.headers
+    )
+    assert picked.status_code == 200, picked.text
+    areas = _areas(picked.json())
+    assert [one["values"]["before"] for one in areas["asis"]["records"]] == ["핀 수 전"]
+    assert [one["values"]["after"] for one in areas["tobe"]["records"]] == ["핀 수 후"]
+    # 이어진 잠재리스크는 **모두** — 이름 차례.
+    assert [one["label"] for one in areas["risks"]["records"]] == ["접촉 불량", "핀 변형"]
+    assert areas["risks"]["follow_title"] == "AS-IS"
+    # 「목록에서 보기」 도 같은 수.
+    listed = client.get(
+        f"/api/objects/{world['risk']}",
+        params=areas["risks"]["list_params"],
+        headers=member.headers,
+    )
+    assert listed.status_code == 200 and listed.json()["total"] == 2
+
+    # 하나만 선택하는 영역 · 후보가 아닌 기록은 거절한다.
+    two = client.patch(
+        path,
+        json={"picks": {"asis": [changes["핀 수"]["id"], changes["재질"]["id"]]}},
+        headers=member.headers,
+    )
+    assert two.status_code == 422 and "1건까지" in two.json()["error"]["message"]
+    other = client.patch(
+        path, json={"picks": {"asis": [changes["B 변경"]["id"]]}}, headers=member.headers
+    )
+    assert other.status_code == 422 and "후보가 아닌" in other.json()["error"]["message"]
+
+
+def test_설명회_하나를_선택하면_설명회가_잇는_잠재리스크가_따라온다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    body = _template(world)
+    body["areas"] = [
+        {
+            "key": "talk",
+            "title": "설명회",
+            "row": 0,
+            "col": 0,
+            "col_span": 2,
+            "type_slug": world["meeting"],
+            "fields": ["label"],
+            "fill": "pick",
+            "limit": 1,
+            "subject_field": "model",
+        },
+        {
+            "key": "risks",
+            "title": "잠재리스크",
+            "row": 1,
+            "col": 0,
+            "col_span": 2,
+            "type_slug": world["risk"],
+            "fields": ["label", "severity"],
+            "fill": "follow",
+            "follow_area": "talk",
+            "follow_field": f"in.{world['covers']}",
+        },
+    ]
+    made = client.post("/api/slides/templates", json=body, headers=admin.headers)
+    assert made.status_code == 201, made.text
+    slide = _slide(client, member, made.json(), world["models"]["A"]["id"])
+    got = client.patch(
+        f"/api/slides/{slide['id']}",
+        json={"picks": {"talk": [world["talk"]["id"]]}},
+        headers=member.headers,
+    )
+    assert got.status_code == 200, got.text
+    assert [one["label"] for one in _areas(got.json())["risks"]["records"]] == ["접촉 불량"]
+
+
+def test_따라가기가_제자리로_돌면_거절한다(
+    client: TestClient, admin: Signed, world: dict[str, Any]
+) -> None:
+    body = _template(world)
+    body["areas"][0].update(
+        fill="follow", follow_area="risks", follow_field=f"out.{world['affects']}"
+    )
+    body["areas"][2].update(
+        fill="follow", follow_area="asis", follow_field=f"in.{world['affects']}"
+    )
+    got = client.post("/api/slides/templates", json=body, headers=admin.headers)
+    assert got.status_code == 422
+    assert "제자리" in got.json()["error"]["message"]

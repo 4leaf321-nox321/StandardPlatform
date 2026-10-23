@@ -186,6 +186,11 @@ function RecordsBlock({
             {primary.type_label}
           </Badge>
         )}
+        {primary.follow_title && (
+          <Badge variant="outline" className="text-xs font-normal">
+            「{primary.follow_title}」 따라옴
+          </Badge>
+        )}
         {editable && onPick && primary.fill === 'pick' && (
           <Button size="sm" variant="ghost" className="h-7" onClick={onPick}>
             <Pencil className="mr-1 size-3" />
@@ -199,7 +204,11 @@ function RecordsBlock({
         </p>
       ) : records.length === 0 ? (
         <p className="text-muted-foreground text-sm">
-          {primary.fill === 'pick' ? '선택한 기록이 없습니다.' : '해당하는 기록이 없습니다.'}
+          {primary.fill === 'pick'
+            ? '선택한 기록이 없습니다.'
+            : primary.fill === 'follow'
+              ? `「${primary.follow_title ?? ''}」 의 기록과 이어진 기록이 없습니다.`
+              : '해당하는 기록이 없습니다.'}
         </p>
       ) : (
         <ol className="space-y-2">

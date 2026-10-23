@@ -25,12 +25,17 @@ export interface AreaDef {
   kind: 'records' | 'text'
   type_slug: string | null
   fields: string[]
-  fill: 'condition' | 'pick'
+  /** 조건에 맞는 것 전부 · 장표마다 선택(후보는 조건으로 좁힘) · 다른 영역을 따라옴. */
+  fill: 'condition' | 'pick' | 'follow'
   subject_field: string | null
   subject_op: 'eq' | 'under'
   conditions: AreaCondition[]
   ref_line: string[]
+  /** 따라갈 영역과, 이 기록에서 그 영역의 기록을 가리키는 칸(주소). */
+  follow_area: string | null
+  follow_field: string | null
   pair_of: string | null
+  /** 표시할 건수 — 선택 영역이면 선택할 수 있는 건수(1 이면 기록 하나). */
   limit: number
   order: 'newest' | 'oldest' | 'label'
 }
@@ -79,10 +84,13 @@ export interface RenderedArea {
   row_span: number
   col_span: number
   kind: 'records' | 'text'
-  fill: 'condition' | 'pick'
+  fill: 'condition' | 'pick' | 'follow'
   pair_of: string | null
   type_slug: string | null
   type_label: string | null
+  /** 따라오는 영역이면 따라가는 영역의 머리글. */
+  follow_title: string | null
+  limit: number
   fields: { key: string; label: string }[]
   text: string
   records: SlideRecord[]
@@ -169,6 +177,11 @@ export const slideApi = {
   updateTemplate: (id: string, body: TemplateBody) =>
     api.put<Template>(`/slides/templates/${id}`, body),
   removeTemplate: (id: string) => api.delete<void>(`/slides/templates/${id}`),
+  /** 선택 영역의 후보 — 틀의 조건에 맞는 것, 이름 · 식별자로 좁힌다. */
+  candidates: (slideId: string, areaKey: string, q = '') =>
+    api.get<{ items: { id: string; label: string }[]; total: number }>(
+      `/slides/${slideId}/areas/${areaKey}/candidates${q ? `?q=${encodeURIComponent(q)}` : ''}`,
+    ),
   /** 저장하지 않은 틀을 주제 하나로 세워 본다. */
   preview: (template: TemplateBody, subjectId: string) =>
     api.post<Rendered>('/slides/templates/preview', { template, subject_id: subjectId }),
@@ -191,6 +204,8 @@ export function blankArea(key: string, row: number, col: number): AreaDef {
     subject_op: 'eq',
     conditions: [],
     ref_line: [],
+    follow_area: null,
+    follow_field: null,
     pair_of: null,
     limit: 10,
     order: 'newest',

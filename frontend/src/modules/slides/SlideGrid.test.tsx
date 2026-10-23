@@ -39,6 +39,8 @@ function area(extra: Partial<RenderedArea>): RenderedArea {
     records: [],
     total: 0,
     list_params: {},
+    follow_title: null,
+    limit: 10,
     problem: null,
     ...extra,
   }
@@ -89,6 +91,16 @@ describe('장표 그리기', () => {
       'href',
       '/o/change?f.model.eq=m1',
     )
+  })
+
+  it('따라오는 영역은 무엇을 따라오는지 말하고, 비면 그 까닭을 말한다', () => {
+    draw([
+      asis,
+      tobe,
+      area({ key: 'risks', title: '잠재리스크', row: 1, fill: 'follow', follow_title: 'AS-IS' }),
+    ])
+    expect(screen.getByText('「AS-IS」 따라옴')).toBeInTheDocument()
+    expect(screen.getByText('「AS-IS」 의 기록과 이어진 기록이 없습니다.')).toBeInTheDocument()
   })
 
   it('고장 난 영역만 까닭을 말한다', () => {

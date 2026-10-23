@@ -5,12 +5,10 @@
  * 자리(객체 상세)에서 수정한다 — 장표는 기록을 가리킬 뿐이다.
  */
 
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Link, useNavigate, useParams } from 'react-router-dom'
 import { Pencil, RefreshCw, Trash2, X } from 'lucide-react'
 
-import { objectApi } from '@/modules/objects/api'
-import { ObjectRefPicker } from '@/modules/objects/PropertyFields'
 import { slideApi } from '@/modules/slides/api'
 import type { RenderedArea, Slide } from '@/modules/slides/api'
 import { SlideGrid } from '@/modules/slides/SlideGrid'
@@ -153,6 +151,7 @@ export default function SlidePage() {
       </p>
       {picking && (
         <PickDialog
+          slideId={slideId}
           area={picking}
           onClose={() => setPicking(null)}
           onSave={(ids) => patch({ picks: { [picking.key]: ids } }).then(() => setPicking(null))}
@@ -173,12 +172,17 @@ export default function SlidePage() {
   )
 }
 
-/** 고르기 영역의 기록 — 차례가 장표의 차례다. */
+/**
+ * 선택 영역의 기록 — 후보는 **서버가 틀의 조건으로 좁힌 것**(주제의 변경점 등)이다. 차례가 장표의
+ * 차례다. 선택할 수 있는 건수가 1 이면 새로 선택한 것이 앞의 것을 바꾼다(기록 하나 = 한 장).
+ */
 function PickDialog({
+  slideId,
   area,
   onClose,
   onSave,
 }: {
+  slideId: string
   area: RenderedArea
   onClose: () => void
   onSave: (ids: string[]) => Promise<void>
@@ -186,9 +190,35 @@ function PickDialog({
   const [chosen, setChosen] = useState(() =>
     area.records.map((one) => ({ id: one.id, label: one.label })),
   )
-  const [next, setNext] = useState<string | null>(null)
+  const [q, setQ] = useState('')
+  const [found, setFound] = useState<{ items: { id: string; label: string }[]; total: number }>()
+  const [error, setError] = useState<Error | null>(null)
   const [saving, setSaving] = useState(false)
   const taken = useMemo(() => new Set(chosen.map((one) => one.id)), [chosen])
+  const single = area.limit === 1
+  const full = !single && chosen.length >= area.limit
+
+  useEffect(() => {
+    let cancelled = false
+    const timer = window.setTimeout(() => {
+      slideApi
+        .candidates(slideId, area.key, q.trim())
+        .then((next) => {
+          if (!cancelled) setFound(next)
+        })
+        .catch((caught: unknown) => {
+          if (!cancelled) setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+        })
+    }, 200)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [slideId, area.key, q])
+
+  function choose(one: { id: string; label: string }) {
+    setChosen((before) => (single ? [one] : [...before, one]))
+  }
 
   async function save() {
     setSaving(true)
@@ -205,13 +235,15 @@ function PickDialog({
         <DialogHeader>
           <DialogTitle>{area.title} — 기록 선택</DialogTitle>
           <DialogDescription>
-            {area.type_label} 기록을 선택합니다. 선택한 차례대로 장표에 표시됩니다.
+            {single
+              ? `${area.type_label} 기록 하나를 선택합니다.`
+              : `${area.type_label} 기록을 ${area.limit}건까지 선택합니다. 선택한 차례대로 표시됩니다.`}
           </DialogDescription>
         </DialogHeader>
         <ol className="space-y-1 text-sm">
           {chosen.map((one, index) => (
             <li key={one.id} className="flex items-center gap-2 rounded border px-2 py-1">
-              <span className="text-muted-foreground w-5 text-right">{index + 1}</span>
+              {!single && <span className="text-muted-foreground w-5 text-right">{index + 1}</span>}
               <span className="flex-1 truncate">{one.label}</span>
               <Button
                 size="sm"
@@ -228,25 +260,37 @@ function PickDialog({
             <li className="text-muted-foreground">선택한 기록이 없습니다.</li>
           )}
         </ol>
-        {area.type_slug && (
-          <div className="flex items-center gap-2">
-            <div className="flex-1">
-              <ObjectRefPicker typeSlug={area.type_slug} value={next} onChange={setNext} />
-            </div>
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={!next || taken.has(next)}
-              onClick={async () => {
-                if (!next || !area.type_slug) return
-                const found = await objectApi.profile(area.type_slug, next)
-                setChosen((before) => [...before, { id: next, label: found.object.label }])
-                setNext(null)
-              }}
-            >
-              추가
-            </Button>
-          </div>
+        <Input
+          aria-label="후보 검색"
+          placeholder="이름 · 식별자로 검색"
+          value={q}
+          onChange={(event) => setQ(event.target.value)}
+          className="h-8"
+        />
+        <ErrorNotice error={error} />
+        <ul className="max-h-64 space-y-1 overflow-y-auto text-sm" aria-label="후보">
+          {(found?.items ?? []).map((one) => (
+            <li key={one.id}>
+              <button
+                type="button"
+                className="hover:bg-muted w-full rounded px-2 py-1 text-left disabled:opacity-50"
+                disabled={taken.has(one.id) || full}
+                onClick={() => choose(one)}
+              >
+                {one.label}
+              </button>
+            </li>
+          ))}
+          {found && found.items.length === 0 && (
+            <li className="text-muted-foreground px-2">
+              후보가 없습니다 — 이 장표의 주제와 이어진 기록이 없거나 조건에 맞지 않습니다.
+            </li>
+          )}
+        </ul>
+        {found && found.total > found.items.length && (
+          <p className="text-muted-foreground text-xs">
+            후보 {found.total}건 중 {found.items.length}건을 표시합니다 — 검색으로 좁히세요.
+          </p>
         )}
         <DialogFooter>
           <Button variant="outline" onClick={onClose} disabled={saving}>

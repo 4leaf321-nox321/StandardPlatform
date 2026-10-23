@@ -530,6 +530,11 @@ function AreaEditor({
               recordType={recordType}
               subjectType={body.subject_type_slug}
               treeTypes={treeTypes}
+              sources={primaries.map((one) => ({
+                key: one.key,
+                title: one.title,
+                type_slug: one.type_slug,
+              }))}
               onChange={set}
             />
           )}
@@ -545,25 +550,35 @@ function RecordSource({
   recordType,
   subjectType,
   treeTypes,
+  sources,
   onChange,
 }: {
   area: AreaDef
   recordType: TypeWithProps
   subjectType: string
   treeTypes: ReadonlySet<string>
+  /** 따라갈 수 있는 영역 — 짝이 없는 다른 기록 영역과 그 타입. */
+  sources: { key: string; title: string; type_slug: string | null }[]
   onChange: (patch: Partial<AreaDef>) => void
 }) {
   const linked = useResource(() => objectApi.fields(recordType.slug), [recordType.slug])
   const refs = recordType.properties.filter((one) => one.data_type === 'object_ref')
-  // 주제와 이어지는 칸 — 주제 타입을 가리키는 자기 칸과 걸음 끝의 칸.
-  const toSubject = [
-    ...refs
-      .filter((one) => one.ref_type_slug === subjectType)
-      .map((one) => ({ field: one.key, label: one.label })),
-    ...(linked.data ?? [])
-      .filter((one) => one.ref_type_slug === subjectType)
-      .map((one) => ({ field: one.field, label: `${one.heading} › ${one.label}` })),
-  ]
+  /** 이 기록에서 그 타입을 가리키는 칸 — 자기 칸과 걸음 끝의 칸(관계 · 나를 가리키는 것 포함). */
+  const pointing = (target: string | null) =>
+    target
+      ? [
+          ...refs
+            .filter((one) => one.ref_type_slug === target)
+            .map((one) => ({ field: one.key, label: one.label })),
+          ...(linked.data ?? [])
+            .filter((one) => one.ref_type_slug === target)
+            .map((one) => ({ field: one.field, label: `${one.heading} › ${one.label}` })),
+        ]
+      : []
+  const toSubject = pointing(subjectType)
+  const source = sources.find((one) => one.key === area.follow_area)
+  const toSource = pointing(source?.type_slug ?? null)
+  const scoped = area.fill !== 'follow'
 
   return (
     <div className="space-y-3">
@@ -572,18 +587,26 @@ function RecordSource({
           <Label>채우는 법</Label>
           <Select
             value={area.fill}
-            onValueChange={(next) => onChange({ fill: next as AreaDef['fill'] })}
+            onValueChange={(next) =>
+              onChange({
+                fill: next as AreaDef['fill'],
+                follow_area: null,
+                follow_field: null,
+                limit: next === 'pick' ? 1 : area.limit,
+              })
+            }
           >
-            <SelectTrigger className="h-8 w-44" aria-label="채우는 법">
+            <SelectTrigger className="h-8 w-56" aria-label="채우는 법">
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
-              <SelectItem value="condition">조건 — 주제의 기록</SelectItem>
+              <SelectItem value="condition">조건에 맞는 것 전부(목록)</SelectItem>
               <SelectItem value="pick">장표마다 선택</SelectItem>
+              <SelectItem value="follow">다른 영역을 따라옴</SelectItem>
             </SelectContent>
           </Select>
         </div>
-        {area.fill === 'condition' && (
+        {scoped && (
           <div className="space-y-1">
             <Label>주제와 이어지는 칸</Label>
             <Select
@@ -604,7 +627,7 @@ function RecordSource({
             </Select>
           </div>
         )}
-        {area.fill === 'condition' && area.subject_field && treeTypes.has(subjectType) && (
+        {scoped && area.subject_field && treeTypes.has(subjectType) && (
           <div className="space-y-1">
             <Label>주제와의 관계</Label>
             <Select
@@ -621,8 +644,56 @@ function RecordSource({
             </Select>
           </div>
         )}
+        {area.fill === 'follow' && (
+          <>
+            <div className="space-y-1">
+              <Label>따라갈 영역</Label>
+              <Select
+                value={area.follow_area ?? undefined}
+                onValueChange={(next) => onChange({ follow_area: next, follow_field: null })}
+              >
+                <SelectTrigger className="h-8 w-48" aria-label="따라갈 영역">
+                  <SelectValue placeholder="선택하세요" />
+                </SelectTrigger>
+                <SelectContent>
+                  {sources.map((one) => (
+                    <SelectItem key={one.key} value={one.key}>
+                      {one.title || one.key}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1">
+              <Label>그 영역의 기록을 가리키는 칸</Label>
+              <Select
+                value={area.follow_field ?? undefined}
+                onValueChange={(next) => onChange({ follow_field: next })}
+                disabled={!source}
+              >
+                <SelectTrigger className="h-8 w-72" aria-label="그 영역의 기록을 가리키는 칸">
+                  <SelectValue placeholder="선택하세요" />
+                </SelectTrigger>
+                <SelectContent>
+                  {toSource.map((one) => (
+                    <SelectItem key={one.field} value={one.field}>
+                      {one.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              {source && toSource.length === 0 && (
+                <p className="text-muted-foreground text-xs">
+                  이 기록에서 그 영역의 기록으로 이어지는 칸 · 관계가 없습니다.
+                </p>
+              )}
+            </div>
+          </>
+        )}
         <div className="space-y-1">
-          <Label htmlFor={`${area.key}-limit`}>건수 상한</Label>
+          <Label htmlFor={`${area.key}-limit`}>
+            {area.fill === 'pick' ? '선택할 수 있는 건수' : '건수 상한'}
+          </Label>
           <Input
             id={`${area.key}-limit`}
             type="number"
@@ -652,22 +723,26 @@ function RecordSource({
           </Select>
         </div>
       </div>
-      {area.fill === 'condition' && (
-        <div className="space-y-1">
-          <Label>고정 조건</Label>
-          <ConditionBar
-            defs={recordType.properties}
-            conditions={area.conditions as Condition[]}
-            onChange={(next) =>
-              onChange({
-                conditions: next.map((one) => ({ ...one, exclude: one.exclude ?? 0 })),
-              })
-            }
-            linked={linked.data ?? []}
-            treeTypes={treeTypes}
-          />
-        </div>
+      {area.fill === 'pick' && (
+        <p className="text-muted-foreground text-xs">
+          주제와 이어지는 칸 · 고정 조건은 선택 후보를 좁힙니다. 건수가 1 이면 장표 한 장이 기록
+          하나에 대한 것입니다.
+        </p>
       )}
+      <div className="space-y-1">
+        <Label>고정 조건</Label>
+        <ConditionBar
+          defs={recordType.properties}
+          conditions={area.conditions as Condition[]}
+          onChange={(next) =>
+            onChange({
+              conditions: next.map((one) => ({ ...one, exclude: one.exclude ?? 0 })),
+            })
+          }
+          linked={linked.data ?? []}
+          treeTypes={treeTypes}
+        />
+      </div>
       {refs.length > 0 && (
         <Checks
           title="연결 항목 줄 — 기록마다 표 위에 한 줄로 표시할 참조 칸"

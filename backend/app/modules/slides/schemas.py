@@ -37,8 +37,10 @@ class AreaIn(BaseModel):
     """기록 영역의 타입. 짝 영역은 비워 둔다(짝의 것을 쓴다)."""
     fields: list[str] = Field(default_factory=list, max_length=FIELDS_MAX)
     """보여 줄 칸 — 속성 키, 또는 `label`(이름) · `key`(식별자)."""
-    fill: Literal["condition", "pick"] = "condition"
-    """채우는 법 — 조건(주제와 이어진 기록)이냐, 장표마다 사람이 고르냐."""
+    fill: Literal["condition", "pick", "follow"] = "condition"
+    """채우는 법 — 조건에 맞는 것 전부(목록), 장표마다 선택(후보는 조건으로 좁힌다), 다른
+    영역을
+    따라옴(그 영역에 표시된 기록과 이어진 것 전부)."""
     subject_field: str | None = Field(default=None, max_length=200)
     """주제와 이어지는 칸의 주소(`model` · `ref.meeting.model` · `in.<관계>.model` …). 비우면
     주제로
@@ -49,9 +51,14 @@ class AreaIn(BaseModel):
     """고정 조건 — 목록의 거르기와 같은 말."""
     ref_line: list[str] = Field(default_factory=list, max_length=FIELDS_MAX)
     """연결 항목 줄에 실을 참조 칸."""
+    follow_area: str | None = None
+    """따라갈 영역 — `fill` 이 `follow` 일 때."""
+    follow_field: str | None = Field(default=None, max_length=200)
+    """이 기록의 어느 칸(주소)이 따라갈 영역의 기록을 가리키나 — `change` · `in.<관계>` …."""
     pair_of: str | None = None
     """짝 영역 — 이 영역은 그 영역의 기록을 같은 차례로 보이고 칸만 다르다(AS-IS / TO-BE)."""
     limit: int = Field(default=AREA_LIMIT, ge=1, le=AREA_LIMIT_MAX)
+    """표시할 건수 — 선택 영역이면 선택할 수 있는 건수(1 이면 「기록 하나」)."""
     order: Literal["newest", "oldest", "label"] = "newest"
 
 
@@ -147,6 +154,9 @@ class AreaOut(BaseModel):
     list_params: dict[str, str] = Field(default_factory=dict)
     """「목록에서 보기」 — 같은 조건의 목록 주소(`f.<칸>.<연산>`). 고르기 · 글 영역은 비어
     있다."""
+    follow_title: str | None = None
+    """따라오는 영역이면 따라가는 영역의 머리글."""
+    limit: int = AREA_LIMIT
     problem: str | None = None
     """이 영역만 못 그린 이유 — 칸이 지워졌거나 조건이 이제 안 맞을 때. 장표는 나머지를
     그린다."""
@@ -185,3 +195,15 @@ class RenderOut(BaseModel):
     rows: int
     cols: int
     areas: list[AreaOut]
+
+
+class CandidateOut(BaseModel):
+    id: uuid.UUID
+    label: str
+
+
+class CandidatesOut(BaseModel):
+    """선택 영역의 후보 — 틀의 조건에 맞는 것."""
+
+    items: list[CandidateOut]
+    total: int
