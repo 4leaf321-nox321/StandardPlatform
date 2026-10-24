@@ -292,6 +292,11 @@ def _register_extensions() -> None:
     # 범위가 있어도 사람의 권한이 막는다. 틀의 미리 보기는 POST 지만 읽기다.
     scopes.register_write_scope("/api/slides", "objects:write")
     scopes.register_read_only_post("/api/slides/templates/preview")
+    # 눈여겨볼 것의 처리(그만 보기 · 지금 훑기 · 지표마다 끄기)는 지표 정의와 같은
+    # 범위다 — 모두 되돌릴 수 있고 사람의 권한(시스템 관리자)이 그대로 막는다. 처음에는
+    # 관리의 쓰기라 토큰에 열지 않았다 — 그러면 결론을 읽는 AI 가 사람이 「확인함」 이라
+    # 한 것을 내리지 못한다(2026-10-25 사용자 결정, ADR 0032).
+    scopes.register_write_scope("/api/insights", "ontology:write")
     # `import` 는 POST 지만 `dry_run` 이면 아무것도 안 바꾼다. 그래도 **읽기로
     # 열지 않는다** — 같은 경로가 적용도 하기 때문이다. 읽기 토큰은 `schema` 로
     # 본다.

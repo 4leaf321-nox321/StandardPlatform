@@ -267,7 +267,7 @@ DESTRUCTIVE_TOOLS = frozenset(
         "filestore_gc",  # 가리키는 곳 없는 파일을 지운다
         "review_decide",  # 검토함 결정을 객체에 반영한다
         "review_undo",  # 검토함 묶음을 되돌린다
-        "config_delete",  # 지표 · 경보 · 데이터 소스 · 뷰 · 공지 · 부서 삭제
+        "config_delete",  # 지표 · 경보 · 데이터 소스 · 뷰 · 장표 · 장표 틀 삭제
         "jobs_purge",  # 작업 파일 · 끝난 작업 기록 삭제
         "extension_call",  # 확장 API 를 그대로 부른다 — DELETE 도 된다
     }
@@ -950,6 +950,10 @@ async def ontology_import(
     같은 키가 있으면 `errors` 가 무엇이 다른지 말한다(짐작으로 맞추지 말고 사람에게 보인다).
     속성의 `data_type` 을 바꾸면 저장된 값도 변환된다 — 변환할 수 없는 값은 `errors` 가 값과
     함께 말한다(대체 값은 사람이 화면의 「종류 변경」 에서 정한다).
+    **계층(트리)** 은 타입의 `list_view.tree` 다 — `{"relation": "part_of", "parent": "dst"}`
+    (`dst` 면 자식이 부모를 가리키는 관계, 기본), 참조 칸으로 이으면 `"relation":
+    "ref:<타입>.<칸>"`. 트리가 있어야 「하위 전체」(`under`) 조건 · 계층 축(`…@0`) ·
+    `object_tree` · 롤업이 된다.
     자세한 것은 `get_guide("schema")`."""
     return await _post(
         ctx,
@@ -1809,8 +1813,10 @@ async def object_tree(
 
     타입의 「목록 화면」 에 트리 관계가 정해져 있어야 한다(없으면 빈 트리). 통째로 안
     온다 — 부품 5천 개짜리 트리를 한 번에 받으면 답이 잘린다. **깊이 전부가 필요하면
-    `rdf_query` 로 `+` 경로**(`ns:part_of+`)를 쓴다. `orphans=true` 는 어디에도 안 이어진
-    것만."""
+    `objects_list` 의 「하위 전체」 조건**(`{"field": "id", "op": "under", "value": <id>}` —
+    그 객체와 그 아래 전부, 20단계까지)을 쓴다. 다른 타입의 기록이 그 아래를 가리키는 것은
+    참조 칸에 `under`, 단계별로 세려면 `objects_summary(group_by="properties.<칸>@<단계>")`.
+    `orphans=true` 는 어디에도 안 이어진 것만."""
     params: list[tuple[str, Any]] = [("orphans", "true" if orphans else "false")]
     if parent:
         params.append(("parent", parent))
@@ -3164,7 +3170,7 @@ async def insights(
     - **후보다** — 원인을 단정하지 않는다. q 값 · 잠정 · 지남을 함께 말한다. 결론은 그 지표의
       셀이 든 부서를 모두 보는 사람에게만 보인다 — 비었다고 「이상 없음」 이 아니다.
 
-    읽기만. 그만 보기 · 지표마다 끄기 · 지금 훑기는 화면에서(시스템 관리자)."""
+    처리(그만 보기 · 지금 훑기 · 지표마다 끄기)는 `insight_manage`."""
     params: list[tuple[str, Any]] = [("limit", str(max(1, min(limit, 200))))]
     for key, value in (("metric", metric), ("kind", kind), ("days", days)):
         if value:
@@ -3172,6 +3178,45 @@ async def insights(
     if include_past:
         params.append(("include_past", "true"))
     return await _get(ctx, "/api/insights", params=params)
+
+
+#: `insight_manage` 의 일 — 결론 하나(`insight_id`)를 내리고 올리거나, 지표(`metric`)를 훑는다.
+_INSIGHT_ACTIONS = ("dismiss", "restore", "scan", "mute", "unmute")
+
+
+@tool()
+async def insight_manage(
+    ctx: Context,
+    action: str,
+    insight_id: str | None = None,
+    metric: str | None = None,
+) -> Any:
+    """**눈여겨볼 것을 처리한다**(ADR 0032) — 시스템 관리자만(서버가 본다). 모두 되돌릴 수
+    있다.
+
+    - `dismiss` · `restore` (`insight_id`) — 「그만 보기」 와 그 되돌리기. 그만 보면
+      **모두에게서** 내려가고, 같은 결론은 다시 안 뜬다(값이 달라진 새 결론은 뜬다). 사람이
+      「확인했다 · 원인을 안다」 고 한 것만 내린다 — 네 판단으로 내리지 않는다.
+    - `scan` (`metric` 은 선택) — 지금 훑기. 작업으로 들어가고, 평소에는 지표를 다시 센 뒤
+      저절로 돈다. 비우면 켜진 지표 전부.
+    - `mute` · `unmute` (`metric`) — 그 지표는 훑지 않기 · 다시 훑기. 결론이 잡음뿐인 지표에만,
+      사람이 정한 것만. 끈 지표의 결론은 「지남」 으로 남는다."""
+    name = (action or "").strip()
+    if name not in _INSIGHT_ACTIONS:
+        return {"error": f"action 은 {', '.join(_INSIGHT_ACTIONS)} 중 하나입니다: {action!r}"}
+    if name in ("dismiss", "restore"):
+        if not insight_id:
+            return {
+                "error": f"{name} 은 insight_id 가 필요합니다 — `insights` 의 줄마다 `id`."
+            }
+        return await _put(
+            ctx, f"/api/insights/{insight_id}/dismissed", {"dismissed": name == "dismiss"}
+        )
+    if name == "scan":
+        return await _post(ctx, "/api/insights/scan", {"metric": metric or None})
+    if not metric:
+        return {"error": f"{name} 은 metric(지표 slug)이 필요합니다."}
+    return await _put(ctx, f"/api/insights/metrics/{metric}", {"off": name == "mute"})
 
 
 @tool()
@@ -3516,7 +3561,18 @@ _CONFIG_KINDS = (
     "metric_alert",
     "datasource",
     "view",
+    "slide",
+    "slide_template",
 )
+#: 종류마다 있어야 하는 인자.
+_CONFIG_ARGS = {
+    "metric": ("slug",),
+    "metric_alert": ("slug", "id"),
+    "datasource": ("slug",),
+    "view": ("slug", "id"),
+    "slide": ("id",),
+    "slide_template": ("id",),
+}
 
 
 @tool()
@@ -3527,7 +3583,7 @@ async def config_delete(
     id: str | None = None,
     apply: bool = False,
 ) -> Any:
-    """설정 하나를 **지운다** — 지표 · 경보 · 데이터 소스 · 저장된 뷰.
+    """설정 하나를 **지운다** — 지표 · 경보 · 데이터 소스 · 저장된 뷰 · 장표 · 장표 틀.
     `apply=False`(기본)면 **무엇이 지워지나만** 보인다 — 사용자의 판단 뒤 `apply=True`.
 
     | kind | 인자 | 지우면 |
@@ -3536,16 +3592,19 @@ async def config_delete(
     | `metric_alert` | `slug`(지표) · `id`(경보) | 경보와 그 발생 기록. 내 경보만 |
     | `datasource` | `slug` | 소스 정의만 — **객체는 남는다**. 시스템 관리자 |
     | `view` | `slug`(타입) · `id`(뷰) | 저장된 거르기 조건. 데이터는 그대로 |
+    | `slide` | `id`(장표) | 장표 한 장 — 글 · 고른 기록. **기록은 그대로다** |
+    | `slide_template` | `id`(틀) | 틀 — 이 틀로 만든 장표가 있으면 몇 장인지 말하며 막힌다 |
 
-    되살리는 길이 없다 — **사용자가 지우라고 한 것만** 지운다. 부서 · 공지 · 웹훅 같은 관리
-    설정은 MCP 로 안 지운다(관리는 토큰에 안 열린다 — 사람이 화면에서)."""
+    되살리는 길이 없다 — **사용자가 지우라고 한 것만** 지운다. 위험 도구라 MCP 로는 시스템
+    관리자만 쓴다 — 장표를 만든 사람은 화면에서 지운다. 부서 · 공지 · 웹훅 같은 관리 설정은
+    MCP 로 안 지운다(관리는 토큰에 안 열린다 — 사람이 화면에서)."""
     name = (kind or "").strip()
     if name not in _CONFIG_KINDS:
         return {"error": f"kind 는 {', '.join(_CONFIG_KINDS)} 중 하나입니다: {kind!r}"}
-    needs_id = name in ("metric_alert", "view")
-    if not slug or (needs_id and not id):
-        wanted = "slug · id" if needs_id else "slug"
-        return {"error": f"{name} 을 지우려면 {wanted} 가 필요합니다."}
+    given = {"slug": slug, "id": id}
+    wanted = _CONFIG_ARGS[name]
+    if not all(given[one] for one in wanted):
+        return {"error": f"{name} 을 지우려면 {' · '.join(wanted)} 가 필요합니다."}
     if name == "metric":
         path, current = f"/api/metrics/{slug}", await _get(ctx, f"/api/metrics/{slug}")
     elif name == "metric_alert":
@@ -3553,9 +3612,15 @@ async def config_delete(
         current = _pick(await _get(ctx, f"/api/metrics/{slug}/alerts"), "id", str(id))
     elif name == "datasource":
         path, current = f"/api/datasources/{slug}", await _get(ctx, f"/api/datasources/{slug}")
-    else:
+    elif name == "view":
         path = f"/api/objects/{slug}/views/{id}"
         current = _pick(await _get(ctx, f"/api/objects/{slug}/views"), "id", str(id))
+    elif name == "slide":
+        path = f"/api/slides/{id}"
+        current = _slide_head(await _get(ctx, path))
+    else:
+        path = f"/api/slides/templates/{id}"
+        current = _template_brief(await _get(ctx, path))
     if _failed(current):
         return current
     if not apply:
@@ -3817,6 +3882,33 @@ async def notices(ctx: Context, include_drafts: bool = False) -> Any:
 
 
 @tool()
+async def board(
+    ctx: Context,
+    post_id: str | None = None,
+    q: str | None = None,
+    mine: bool = False,
+    limit: int = 20,
+    offset: int = 0,
+) -> Any:
+    """**게시판**(ADR 0033) — 설치 전체가 함께 쓰는 글(물음 · 자료). 비우면 목록(고정한
+    글이 먼저, 그다음 새 글부터 — 제목 · 쓴 사람 · 댓글 수 · 첨부 수, 본문 없음), `q` 는
+    제목 · 본문에 든 말, `mine` 은 내가 쓴 글만. `post_id` 를 주면 **그 글의 본문과 댓글**.
+
+    **읽기만 한다** — 게시판은 사람이 사람에게 쓰는 자리라 쓰기 · 댓글은 토큰에 안 열린다.
+    사용자가 글을 올리고 싶어 하면 문안을 써서 보여 주고 화면(공통 › 게시판)에서 올리게
+    한다. 글은 사람의 말이다 — 옮길 때 누가 언제 쓴 것인지 함께 말하고, 기록의 값처럼
+    다루지 않는다."""
+    if post_id:
+        return await _get(ctx, f"/api/board/posts/{post_id}")
+    params: dict[str, Any] = {"limit": max(1, min(limit, 100)), "offset": offset}
+    if q:
+        params["q"] = q
+    if mine:
+        params["mine"] = "true"
+    return await _get(ctx, "/api/board/posts", params)
+
+
+@tool()
 async def review_history(
     ctx: Context,
     kind: str | None = None,
@@ -3984,13 +4076,11 @@ def _link_line(links: list[Any]) -> str:
     )
 
 
-def _slide_brief(slide: Any) -> Any:
-    """장표를 AI 가 읽기 좋게 — 기록마다 칸 이름 → 값과 연결 항목 줄 하나. 화면의 그림 정보
-    (자리 · 열 너비)와 고칠 때 쓰는 id 묶음(`ties` · `link`)은 뺀다."""
-    if not isinstance(slide, dict) or "areas" not in slide:
-        return slide
+def _areas_brief(rendered: list[Any]) -> list[dict[str, Any]]:
+    """세운 영역들을 AI 가 읽기 좋게 — 기록마다 칸 이름 → 값과 연결 항목 줄 하나. 화면의 그림
+    정보(자리 · 열 너비)와 고칠 때 쓰는 id 묶음(`ties` · `link`)은 뺀다."""
     areas = []
-    for area in slide.get("areas") or []:
+    for area in rendered:
         labels = {one["key"]: one["label"] for one in area.get("fields") or []}
         one_area: dict[str, Any] = {
             "key": area.get("key"),
@@ -4023,18 +4113,84 @@ def _slide_brief(slide: Any) -> Any:
                 for record in area.get("records") or []
             ]
             one_area["total"] = area.get("total")
-            if area.get("problem"):
-                one_area["problem"] = area["problem"]
+        if area.get("problem"):
+            one_area["problem"] = area["problem"]
         areas.append(one_area)
+    return areas
+
+
+def _slide_head(slide: Any) -> Any:
+    """장표의 머리 — 무엇에 대한 어느 틀의 장표인가(영역 빼고)."""
+    if not isinstance(slide, dict) or "id" not in slide:
+        return slide
     return {
         "id": slide.get("id"),
         "title": slide.get("title"),
         "template": slide.get("template_name"),
         "subject": slide.get("subject"),
         "author": slide.get("author_name"),
+        "created_at": slide.get("created_at"),
+        "edited_at": slide.get("edited_at"),
+    }
+
+
+def _slide_brief(slide: Any) -> Any:
+    """장표 한 장을 AI 가 읽기 좋게 — 머리와 영역마다의 기록 · 글."""
+    if not isinstance(slide, dict) or "areas" not in slide:
+        return slide
+    return {
+        **_slide_head(slide),
         "rendered_at": slide.get("rendered_at"),
         "can_edit": slide.get("can_edit"),
-        "areas": areas,
+        "areas": _areas_brief(slide.get("areas") or []),
+    }
+
+
+#: 틀의 영역에서 AI 에게 보이는 칸 — 비어 있으면 뺀다.
+_TEMPLATE_AREA_KEYS = (
+    "key",
+    "title",
+    "row",
+    "col",
+    "row_span",
+    "col_span",
+    "kind",
+    "fill",
+    "type_slug",
+    "fields",
+    "subject_field",
+    "subject_op",
+    "conditions",
+    "ref_line",
+    "pair_of",
+    "follow_area",
+    "follow_field",
+    "limit",
+    "order",
+)
+
+
+def _template_brief(template: Any) -> Any:
+    """틀 하나 — 영역은 비어 있지 않은 칸만(그대로 고쳐 `slide_template_save` 에 넘긴다)."""
+    if not isinstance(template, dict) or "areas" not in template:
+        return template
+    return {
+        "id": template.get("id"),
+        "name": template.get("name"),
+        "description": template.get("description"),
+        "subject_type_slug": template.get("subject_type_slug"),
+        "subject_type_label": template.get("subject_type_label"),
+        "rows": template.get("rows"),
+        "cols": template.get("cols"),
+        "slides": template.get("slides"),
+        "areas": [
+            {
+                key: area.get(key)
+                for key in _TEMPLATE_AREA_KEYS
+                if area.get(key) not in (None, [], "")
+            }
+            for area in template.get("areas") or []
+        ],
     }
 
 
@@ -4042,45 +4198,90 @@ def _slide_brief(slide: Any) -> Any:
 async def slide_templates(ctx: Context) -> Any:
     """**장표의 틀** — 조직의 정형 배치(ADR 0037). 장표를 만들기 전에 어느 틀이 있나 본다.
 
-    줄마다: `id` · `name` · `description` · `subject_type_slug`(주제 타입 — 장표 한 장이 무엇에
-    대한 것인가, 예: 모델) · `areas[]`(영역 `key` · `title` · `kind`(`records` 기록 / `text`
-    글) ·
-    `fill`(`condition` 조건에 맞는 것 전부 / `pick` 장표마다 선택 / `follow` 다른 영역을
-    따라옴) ·
-    `type_slug` · `limit`) · `slides`(이 틀로 만든 장표 수). **틀은 시스템 관리자가 화면(관리 ›
-    장표 틀)에서 만든다** — 이 도구로는 못 만든다. 맞는 틀이 없으면 사람에게 그렇게 말한다."""
+    줄마다: `id` · `name` · `description` · `subject_type_slug`(주제 타입 — 장표 한 장이
+    무엇에 대한 것인가, 예: 모델) · `rows` · `cols`(격자) · `areas[]`(영역 — `key` · `title` ·
+    자리 · `kind`(`records` 기록 / `text` 글) · `fill`(`condition` 조건에 맞는 것 전부 /
+    `pick` 장표마다 선택 / `follow` 다른 영역을 따라옴) · `type_slug` · `fields` · `limit` …) ·
+    `slides`(이 틀로 만든 장표 수). 맞는 틀이 없으면 사람에게 그렇게 말한다 — 새 틀은
+    `slide_template_save`(시스템 관리자)."""
     rows = await _get(ctx, "/api/slides/templates")
     if not isinstance(rows, list):
         return rows
-    return [
-        {
-            "id": one.get("id"),
-            "name": one.get("name"),
-            "description": one.get("description"),
-            "subject_type_slug": one.get("subject_type_slug"),
-            "subject_type_label": one.get("subject_type_label"),
-            "slides": one.get("slides"),
-            "areas": [
-                {
-                    key: area.get(key)
-                    for key in (
-                        "key",
-                        "title",
-                        "kind",
-                        "fill",
-                        "type_slug",
-                        "fields",
-                        "limit",
-                        "pair_of",
-                        "follow_area",
-                    )
-                    if area.get(key) not in (None, [], "")
-                }
-                for area in one.get("areas") or []
-            ],
+    return [_template_brief(one) for one in rows]
+
+
+@tool()
+async def slide_template_save(
+    ctx: Context,
+    template: dict[str, Any],
+    template_id: str | None = None,
+    subject_id: str | None = None,
+    apply: bool = False,
+) -> Any:
+    """장표의 **틀을 만들거나 고친다** — 시스템 관리자만(서버가 본다). 틀은 조직의 정형
+    배치라 **사람이 원한 모양으로만** 만든다 — 네가 배치를 정하지 않는다.
+
+    `template` = `{name, description, subject_type_slug, rows, cols, areas: [...]}`(고칠
+    때는 **통째로** — `slide_templates` 의 그 틀을 고쳐서 넘긴다). 격자는 2 ~ 3줄 · 2 ~ 3열이
+    보통이다. 영역 하나:
+
+    - `key`(영문 소문자 · 숫자 · `_`) · `title`(머리글) · `row` · `col`(0 부터) · `row_span` ·
+      `col_span`
+    - `kind`: `records`(기록 표) · `text`(사람이 쓰는 글 — 「종합 의견」)
+    - `type_slug`(기록 타입) · `fields`(보일 칸 — 속성 키 · `label` · `key`) · `ref_line`(기록
+      위 한 줄에 실을 참조 칸) · `limit` · `order`(`newest` · `oldest` · `label`)
+    - `fill`: `condition`(조건에 맞는 것 전부) · `pick`(장표마다 사람이 선택 — `limit` 1 이면
+      기록 하나) · `follow`(`follow_area` 영역에 실린 기록과 이어진 것 — `follow_field` 는 이
+      기록에서 그 기록을 가리키는 칸 주소: `change` · `in.<관계>` …)
+    - `subject_field` — 주제와 이어지는 칸 주소(`model` · `ref.meeting.model` …), `subject_op`
+      `under` 면 주제의 하위 전체. 비우면 **그 타입 기록 전체**에서 채운다 — 보통은 준다.
+    - `conditions` — 고정 조건(`objects_list` 의 `conditions` 와 같은 꼴)
+    - `pair_of` — 짝(AS-IS / TO-BE): 그 영역의 기록을 같은 차례로 보이고 `fields` 만 다르다
+      (`type_slug` 는 비운다)
+
+    `apply=False`(기본)면 **저장하지 않고** `subject_id`(주제 타입의 객체 하나)로 세워 본다 —
+    영역마다 실릴 기록과 `problem`(틀린 칸 · 주소)을 사람에게 보인다. 고칠 때 빠지는 영역
+    키(`dropped_keys`)에 써 둔 글 · 고른 기록은 장표에서 안 보이게 된다. 사람의 판단 뒤
+    `apply=True`."""
+    if not isinstance(template, dict):
+        return {"error": "template 은 {name, subject_type_slug, rows, cols, areas} 꼴입니다."}
+    current = None
+    if template_id:
+        current = _template_brief(await _get(ctx, f"/api/slides/templates/{template_id}"))
+        if _failed(current):
+            return current
+    if apply:
+        if template_id:
+            return _template_brief(
+                await _put(ctx, f"/api/slides/templates/{template_id}", template)
+            )
+        return _template_brief(await _post(ctx, "/api/slides/templates", template))
+    if not subject_id:
+        return {
+            "error": "미리 보려면 subject_id(이 틀의 주제 타입 객체 하나 — "
+            "`object_resolve` 로)를 줍니다. 저장 전에 세워 본 모양을 사람에게 보인다."
         }
-        for one in rows
-    ]
+    rendered = await _post(
+        ctx, "/api/slides/templates/preview", {"template": template, "subject_id": subject_id}
+    )
+    if _failed(rendered):
+        return rendered
+    would: dict[str, Any] = {
+        "action": "update" if template_id else "create",
+        "areas": _areas_brief(rendered.get("areas") or []),
+    }
+    if isinstance(current, dict):
+        kept = {str(one.get("key")) for one in template.get("areas") or []}
+        dropped = [
+            one["key"] for one in current.get("areas") or [] if one.get("key") not in kept
+        ]
+        if dropped:
+            would["dropped_keys"] = dropped
+    return _preview(
+        would,
+        current=current,
+        note="`areas` 는 그 주제로 세워 본 것이다 — `problem` 이 있는 영역은 고친다.",
+    )
 
 
 @tool()
@@ -4089,13 +4290,20 @@ async def slides_list(
     q: str | None = None,
     template_id: str | None = None,
     subject_id: str | None = None,
+    object_id: str | None = None,
     mine: bool = False,
     limit: int | None = None,
     offset: int = 0,
 ) -> Any:
     """**장표 목록** — 새로 고친 것부터. `subject_id`(주제 객체 id)로 거르면 「모델 A 의
-    장표」,
-    `template_id` 로 거르면 그 틀의 장표, `q` 는 제목에 든 말. 한 장은 `slide_get`."""
+    장표」, `template_id` 로 거르면 그 틀의 장표, `q` 는 제목에 든 말. 한 장은 `slide_get`.
+
+    `object_id` 를 주면 **그 객체가 쓰인 장표**다(다른 거르기는 안 본다) — 주제인 장표
+    (`role="subject"`)와, 영역에 실린 장표(`role="record"` · `areas` 실린 영역 머리글). 실린
+    것은 **마지막으로 열었을 때** 본 것이라(`seen_at`) 그 뒤에 빠졌을 수 있다 — 지금의 모습은
+    `slide_get`."""
+    if object_id:
+        return await _get(ctx, f"/api/slides/used-in/{object_id}")
     params: dict[str, Any] = {"offset": offset}
     for key, value in (
         ("q", q),
@@ -4115,14 +4323,11 @@ async def slide_get(ctx: Context, slide_id: str, compact: bool = True) -> Any:
     """**장표 한 장** — 영역마다 **지금의** 기록(살아 있는 값 — `rendered_at` 이 기준 시각).
 
     전할 때: 기록의 값은 플랫폼이 읽은 것이라 **그대로 옮긴다** — 바꿔 말하거나 지어내지
-    않는다.
-    글 영역(`kind=text`)은 사람이 쓴 글이고, `ai_draft` 면 AI 가 쓴 초안이다(사람이 아직 안
-    고침).
-    `problem` 이 있는 영역은 그 까닭을 말한다. `total` 이 `records` 보다 많으면 「외 N건」
-    이다.
+    않는다. 글 영역(`kind=text`)은 사람이 쓴 글이고, `ai_draft` 면 AI 가 쓴 초안이다(사람이
+    아직 안 고침). `problem` 이 있는 영역은 그 까닭을 말한다. `total` 이 `records` 보다
+    많으면 「외 N건」 이다.
     `compact`(기본)면 기록마다 칸 이름 → 값(`values`)과 연결 항목 줄(`line`)만, 아니면 화면이
-    받는
-    모양 그대로. pptx 는 사람이 장표 화면의 「pptx 다운로드」 로 받는다(파일은 MCP 로 안
+    받는 모양 그대로. pptx 는 사람이 장표 화면의 「pptx 다운로드」 로 받는다(파일은 MCP 로 안
     넘긴다)."""
     got = await _get(ctx, f"/api/slides/{slide_id}")
     return _slide_brief(got) if compact else got
@@ -4136,9 +4341,8 @@ async def slide_create(
 
     주제는 틀의 `subject_type_slug` 타입의 객체다 — 이름으로 받았으면 `object_resolve` 로 id 를
     찾고, `candidates` 면 **고르지 말고 사람에게 묻는다.** `title` 을 비우면 「주제 이름 + 틀
-    이름」.
-    만든 뒤: 선택 영역(`fill=pick`)은 `slide_candidates` 로 후보를 보이고 사람이 고른 것을
-    `slide_update(picks=)` 로, 글 영역은 `slide_update(texts=)` 로."""
+    이름」. 만든 뒤: 선택 영역(`fill=pick`)은 `slide_candidates` 로 후보를 보이고 사람이 고른
+    것을 `slide_update(picks=)` 로, 글 영역은 `slide_update(texts=)` 로."""
     body: dict[str, Any] = {"template_id": template_id, "subject_id": subject_id}
     if title:
         body["title"] = title
@@ -4148,10 +4352,8 @@ async def slide_create(
 @tool()
 async def slide_candidates(ctx: Context, slide_id: str, area_key: str, q: str = "") -> Any:
     """선택 영역(`fill=pick`)의 **후보** — 틀의 조건(이 장표의 주제와 이어진 기록 등)에 맞는
-    것,
-    50건까지. `q` 는 이름 · 식별자에 든 말. **비슷한 이름을 골라 넣지 말고, 후보를 사람에게
-    보여
-    고르게 한다.**"""
+    것, 50건까지. `q` 는 이름 · 식별자에 든 말. **비슷한 이름을 골라 넣지 말고, 후보를
+    사람에게 보여 고르게 한다.**"""
     params = {"q": q} if q else None
     return await _get(ctx, f"/api/slides/{slide_id}/areas/{area_key}/candidates", params)
 
@@ -4167,16 +4369,13 @@ async def slide_update(
     """**장표의 제목 · 글 영역 · 선택 영역을 고친다** — 장표의 작성자와 시스템 관리자만.
 
     - `texts` — `{영역 키: 글}`. **네가 쓴 글은 「AI 초안」 으로 표시된다** — 사람이 화면에서
-    고치면
-      풀린다. 글에는 장표에 실린 기록 · 값에 근거한 것만 쓰고 **숫자 · 사실을 지어내지
-      않는다.**
-      쓰기 전에 사람에게 무엇을 쓸지 보여 준다.
+      고치면 풀린다. 글에는 장표에 실린 기록 · 값에 근거한 것만 쓰고 **숫자 · 사실을 지어내지
+      않는다.** 쓰기 전에 사람에게 무엇을 쓸지 보여 준다.
     - `picks` — `{영역 키: [기록 id, …]}` **통째로**(차례가 장표의 차례). 후보는
-    `slide_candidates`
-      — 후보가 아닌 기록이나 건수 상한을 넘으면 거절된다.
+      `slide_candidates` — 후보가 아닌 기록이나 건수 상한을 넘으면 거절된다.
     - 기록의 **값 · 연결은 이 도구로 바꾸지 않는다** — `object_update` · `relation_add` ·
-    `relation_remove`
-      (기록의 권한을 따른다). 장표는 기록을 가리킬 뿐이다."""
+      `relation_remove`(기록의 권한을 따른다). 장표는 기록을 가리킬 뿐이다.
+    - 지우기는 `config_delete(kind="slide")`(MCP 로는 시스템 관리자) — 만든 사람은 화면에서."""
     body: dict[str, Any] = {}
     if title is not None:
         body["title"] = title

@@ -34,6 +34,7 @@ GUIDE_VERSION: 2026-10-24a
 | **요즘 무엇이 울렸나** — 「내 경보」 「새로 나빠진 모델 있나」 | `metric_alerts(slug=)` · 경보 하나는 `alert_id`(`check=True` 면 지금 확인) | 발생은 「그때 처음 본 결론」 — 지금도 그런지는 `metric_analyze` 로 |
 | **「나빠지면 알려 줘」** — 경보 걸기 · 이름 · 끄기 | `metric_alert_save(apply=false)` → 사람 확인 → `apply=true` | 미리 보기가 지금 분석을 한 번 돌려 보인다. 인자는 못 고친다 — 새로 걸고 옛 것은 `config_delete(kind="metric_alert")` |
 | **요즘 뭐가 이상한가 · 무엇부터 볼까** | `insights()` → 근거는 `metric_analyze` 로 같은 인자 | 플랫폼이 스스로 훑은 **후보**다 — 「몇 배 · 몇 건」 · q · 잠정을 그대로 옮기고 원인을 단정하지 않는다. 비었다고 「이상 없음」 이 아니다(그 지표의 셀이 든 부서를 다 봐야 보인다) |
+| 「그건 확인했어」 · 지금 다시 훑기 · 잡음뿐인 지표 끄기 | `insight_manage(action="dismiss" · "restore" · "scan" · "mute" · "unmute")` | **시스템 관리자.** 모두 되돌릴 수 있다. 사람이 확인했다고 한 결론만 내린다 — 네 판단으로 내리지 않는다 |
 | 지표 값이 이상하다 · 언제 셌나 · 왜 그대로인가 | `metric_runs(slug)` → (시스템 관리자) `metric_recompute(slug)` | 실패한 계산은 옛 값을 두고 이유를 남긴다. 평소에는 타이머가 바뀐 기간만 센다 — `mode` · `note` |
 | 지표를 **부서 홈**에 올리기 · 내리기 | `metric_home(slug, workspace_slug, split=)` · `remove=true` | **그 부서 관리자만.** 홈은 부서 모두가 보는 자리 — 사용자가 올리자고 한 것만 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」 · 「모델의 과제의 프로젝트별 건수」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 두 걸음까지 준다. 주소를 추측하지 않는다 |
@@ -42,7 +43,7 @@ GUIDE_VERSION: 2026-10-24a
 | **비슷한 과거 사례** — 「이 이슈와 비슷한 보고」 「이 부품 · 메커니즘 조합을 다룬 것」 | `objects_similar(type_slug, object_id=)` 또는 `tags={참조 칸: [id]}` | 축 태그가 겹친 것 — 드문 태그가 겹칠수록 위. `shared`(왜 비슷한가)를 함께 말하고, 본문 비교는 `object_get` 으로 읽어서 |
 | 언제 누가 무엇을 바꿨나 — 이 객체 | `object_history` | 되돌리기는 `object_restore(entry_id)` — **시점은 사람이 정한다** |
 | 어제 무슨 일이 있었나 — 전체 | `audit_recent` | **부서 관리자 이상.** 시간 · 사람으로는 못 거른다 — 최근 것부터 받아 본다 |
-| 계층(트리)을 한 단계씩 | `object_tree(parent=)` | 깊이 전부는 `rdf_query` 의 `+` 경로 |
+| 계층(트리)을 한 단계씩 | `object_tree(parent=)` | **깊이 전부**는 `objects_list(conditions=[{"field": "id", "op": "under", "value": <id>}])` — 그 객체와 그 아래 전부 |
 | **이것과 이어진 것들**(한 걸음 너머) | `graph_neighbors(object_id, depth=, relations=, types=)` | 화면의 지식 그래프와 같은 길. **`truncated` 면 잘린 것** — 좁혀서 다시 |
 | **두 객체가 어떻게 이어져 있나** | `graph_path(source_id, target_id, max_depth=, relations=, types=)` | 가장 짧은 길들. **`truncated` 면 「없다」 가 아니라 「찾다가 멈춤」** — 좁혀서 다시 |
 | 어느 타입에서 어디로 갈 수 있나 | `graph_overview` | 관계 이름을 짐작하지 않는다 — 질의를 쓰기 전에 |
@@ -75,7 +76,8 @@ GUIDE_VERSION: 2026-10-24a
 | **운영 · 설정** — 코어 공개 현황 · 부서 · 저장된 뷰 · 지켜보기 · 연도 · 웹훅 · 공지 · 검토 이력 · 서버 · 내보내기 | `get_guide(topic="admin")` | 고치는 것은 전부 미리 보기 먼저. 지우기는 `config_delete` 하나. 부서 · 공지 · 웹훅 · 서버는 읽기만 |
 | 첨부 저장소의 고아 파일 | `filestore_gc()` → 사람 확인 → `job_apply` | **시스템 관리자만.** 지운 파일은 못 되살린다 — 워커가 매일 스스로도 지운다 |
 | **이 설치에만 있는 기능**(디지털 트윈 역량 등) | `extensions_schema` → `extension_call` | 경로를 짐작하지 않는다. 쓰기는 그 확장의 범위를 가진 토큰만 |
-| **장표** — 여러 기록(변경점 · 잠재리스크 …)을 정형 배치 한 장에 모아 보기 · 만들기 · 글 초안 | `slide_templates` → `slide_create` → `slide_candidates` → `slide_update` · 읽기는 `slides_list` · `slide_get` | 값은 기록에서만 — **지어내지 않는다.** 네가 쓴 글은 「AI 초안」 으로 표시된다. `get_guide(topic="slides")` |
+| **장표** — 여러 기록(변경점 · 잠재리스크 …)을 정형 배치 한 장에 모아 보기 · 만들기 · 글 초안 | `slide_templates` → `slide_create` → `slide_candidates` → `slide_update` · 읽기는 `slides_list` · `slide_get` · 이 기록이 실린 장표는 `slides_list(object_id=)` | 값은 기록에서만 — **지어내지 않는다.** 네가 쓴 글은 「AI 초안」 으로 표시된다. 틀은 `slide_template_save`(시스템 관리자). `get_guide(topic="slides")` |
+| **게시판** — 구성원이 묻고 나눈 글 | `board(q=)` → `board(post_id=)`(본문 · 댓글) | **읽기만.** 사람의 말이다 — 누가 언제 쓴 것인지 함께 옮긴다. 올리기는 화면에서 |
 | 여러 타입을 건너뛰어 잇는 물음 · 역관계로 거슬러 세기 | `rdf_schema` → `rdf_query` | **먼저 `objects_summary` 로 되는 물음인지 본다.** 질의어는 그것으로 안 되는 자리에 |
 
 ## 기본 습관
@@ -221,6 +223,14 @@ GUIDE_VERSION: 2026-10-24a
   `objects_summary` 로.
 - 기록은 참조 후보로 제안되지 않는다(`table_infer`). 표에서 만든 타입은 기본이 기록이다(`table_build(usage=)`).
 - 축인지 기록인지는 사람이 정한다 — 크기로 가르지 않는다. 바꾸는 것은 `ontology_import` 의 `usage`.
+
+### 계층(트리) — 타입의 `list_view.tree`
+
+부품 구성 · 조직처럼 **위아래가 있는 타입**은 트리를 정한다 — `ontology_import` 에서 그 타입에
+`"list_view": {"tree": {"relation": "part_of", "parent": "dst"}}`. `parent` 는 관계의 어느 끝이
+부모인가(`dst` — 자식이 부모를 가리키는 관계, 기본). 자기 타입을 가리키는 참조 칸으로 이었으면
+`"relation": "ref:<타입>.<칸>"`. 트리가 있어야 되는 것: `object_tree`, 「하위 전체」(`under`) 조건,
+계층 축(`…@<단계>`), 롤업(`list_view.rollups`). 트리는 하나다 — 어느 관계로 그릴지 사람이 정한다.
 
 ### 표에서 기록 타입 — `table_infer(rows)` → `table_build(...)`
 
@@ -458,9 +468,12 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   타입의 칸은 `object_fields` 의 주소. 쓸 수 있는 전부가 응답의 `group_options`. 걸음은 넷까지
   이어 적을 수 있다(`group_options` 에는 두 걸음까지 실린다).
 - **계층 축** — 트리가 있는 타입을 가리키는 참조 칸 주소 끝에 `@<단계>` 를 붙이면 값을 그 트리의 한
-  단계로 접어 센다(`properties.part@0` 은 뿌리별, `@1` 은 뿌리 바로 아래별). 그 단계보다 얕은 값은
-  자기 자신이다. 막대마다 `drill`(`{field, op}`)이 오면 **그것이 그 막대의 조건**이다(`under` 또는
-  `eq`) — 주소(`…@1`)를 조건의 칸으로 쓰지 않는다. 지표의 기준 주소에도 같은 꼴을 쓴다.
+  단계로 접어 센다(`properties.part@0` 은 뿌리별, `@1` 은 뿌리 바로 아래별). 그 단계보다 얕은 값과
+  뿌리에서 닿지 않는 값(깊이 20단계 너머)은 자기 자신이다. 막대마다 `drill`(`{field, op}`)이 오면
+  **그것이 그 막대의 조건**이다(`under` 또는 `eq`) — 주소(`…@1`)를 조건의 칸으로 쓰지 않는다. 여러 값
+  칸이면 한 기록의 두 값이 같은 조상으로 모여도 그 칸에 **한 번**만 센다. 지표의 기준 주소에도 같은
+  꼴을 쓴다. 부모가 여럿인 트리에서는 한 노드가 가까운 조상 하나에만 들어, 칸을 누른 목록이 칸의
+  수보다 많을 수 있다 — 그렇다고 말한다.
 - **걸리는 시간은 걸음 수가 아니라 지나가는 기록 수다.** 끝이 좁은 네 걸음(「그 부품이 교체된 기록이
   있는 프로젝트」)은 몇 초, 기록 2,000만 건을 다 지나가는 기준은 분 단위다. 목록 · 통계에는 **시간
   상한**(기본 60초)이 있어 넘으면 `[APP-COMMON-0504] 질의가 …초를 넘겨 멈췄습니다` 로 끊긴다 —
@@ -1271,7 +1284,7 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 <!--@ slides -->
 ## 장표 — 여러 기록을 정형 배치 한 장에
 
-**장표**는 틀(조직의 정형 배치 — 시스템 관리자가 화면에서 만든다) 하나 + 주제 객체(예: 모델 A) 하나다.
+**장표**는 틀(조직의 정형 배치 — 시스템 관리자가 만든다) 하나 + 주제 객체(예: 모델 A) 하나다.
 영역마다 기록이 모이고, **값은 열 때마다 지금의 기록에서 읽는다**(살아 있는 값 — `rendered_at`).
 
 | 하려는 일 | 도구 |
@@ -1282,6 +1295,9 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 | 장표 만들기 | 주제를 `object_resolve` 로 찾고 → `slide_create(template_id, subject_id)` |
 | 선택 영역 채우기 | `slide_candidates(slide_id, area_key)` → **사람이 고른 것**을 `slide_update(picks=)` |
 | 글 영역에 초안 쓰기(종합 의견 등) | `slide_get` 으로 실린 기록을 읽고 → 사람에게 무엇을 쓸지 보이고 → `slide_update(texts=)` |
+| 「이 변경점이 어느 장표에 실렸나」 | `slides_list(object_id=)` — 주제인 장표와 실린 장표(마지막으로 열었을 때 기준) |
+| 틀 만들기 · 고치기(시스템 관리자) | `slide_template_save(template, subject_id=)` 로 세워 본 모양을 보이고 → `apply=true`. 고칠 때는 `slide_templates` 의 그 틀을 통째로 고쳐 넘긴다 |
+| 장표 · 틀 지우기 | `config_delete(kind="slide" · "slide_template", id=)` — MCP 로는 시스템 관리자. 만든 사람은 화면에서 |
 
 지켜야 하는 것:
 
@@ -1292,7 +1308,9 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 - **선택 영역은 사람이 고른다.** `slide_candidates` 의 후보를 보이고 고르게 한다 — 비슷한 이름을 네가 골라 넣지 않는다.
 - **기록의 값 · 연결은 장표 도구로 바꾸지 않는다** — `object_update` · `relation_add` · `relation_remove`(기록의 권한을
   따른다 — 기록은 만든 사람과 부서 관리자가 수정한다). 바꾸면 그 기록이 실린 모든 장표가 바뀐다.
-- **틀은 만들지 못한다.** 맞는 틀이 없으면 사람에게 「관리 › 장표 틀」 에서 만들자고 전한다.
+- **틀의 배치는 사람이 정한다.** 사람이 원한 모양(어느 기록을 어디에, 몇 줄 몇 열)을 받아 만든다 — 네가
+  배치를 지어 저장하지 않는다. 저장 전에 세워 본 모양과 `problem` 을 보이고, 고칠 때 `dropped_keys`(그 영역의 글 ·
+  고른 기록이 안 보이게 됨)를 말한다. 시스템 관리자가 아니면 「관리 › 장표 틀」 에서 만들자고 전한다.
 - **pptx 는 사람이 받는다** — 장표 화면의 「pptx 다운로드」(파일은 MCP 로 넘기지 않는다). 화면 주소는 `/slides/<id>`.
 
 <!--@ admin -->
@@ -1317,10 +1335,12 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 | **끊긴 질문** — 답을 못 받고 끊긴 물음 · 지표로 세어 둘 후보 | `server_status(performance="cut", period="7d", suggest=True)` → 줄의 `suggestion` 을 `metric_define(apply=false)` 로 | 같은 모양끼리 몇 번 · 몇 명. 자주 끊기는 목록 · 통계는 `metric_define(apply=false)` 로 **제안**만 — 지표는 사람이 정한다. SPARQL 이 「그래프가 큼」 으로 자주 끊기면 그것도 사람에게 알린다(트리플 스토어를 판단할 근거) |
 | 작업 여럿 한 번에 적용 · 멈추기 · 오래된 작업 정리 | `job_apply(job_ids=)` · `job_cancel(job_ids=)` · `jobs_purge(apply=false)` | 적용은 사람이 계획을 본 것만 |
 | 파일로 내보내기(객체 · 관계) | `export_start(type_slug, kind, format, 거르기)` | 작업만 시작한다 — **파일은 사람이 화면의 「작업」 에서 받는다**. 내용으로 답하려면 내보내지 말고 `objects_list` · `objects_summary` |
-| 설정 지우기 — 지표 · 경보 · 데이터 소스 · 뷰 | `config_delete(kind, slug=, id=, apply=false)` | 되살리는 길이 없다 — **사용자가 지우라고 한 것만** |
+| 설정 지우기 — 지표 · 경보 · 데이터 소스 · 뷰 · 장표 · 장표 틀 | `config_delete(kind, slug=, id=, apply=false)` | 되살리는 길이 없다 — **사용자가 지우라고 한 것만** |
+| 눈여겨볼 것 처리 — 그만 보기 · 되돌리기 · 지금 훑기 · 지표마다 끄기 | `insight_manage(action, insight_id=, metric=)` | 미리 보기 없이 바로 된다 — 모두 되돌릴 수 있어서다(`restore` · `unmute`). 사람이 확인했다고 한 것만 내리고, 끄는 것은 사람이 정한 지표만 |
+| 게시판 읽기 | `board()` · `board(post_id=)` | **읽기만.** 글 · 댓글 올리기는 화면에서 — 문안이 필요하면 써서 보여 준다 |
 
 **MCP 로 하지 않는 것** — 로그인 · 토큰 · 계정 관리, 부서 관리(만들기 · 옮기기 · 통폐합 · 지우기 ·
-구성원 · 역할), 공지 올리기 · 지우기, 웹훅 등록 · 수정 · 삭제 · 다시 보내기, 확장 켜고 끄기, 온톨로지
+구성원 · 역할), 공지 올리기 · 지우기, 게시판 글 · 댓글 쓰기, 웹훅 등록 · 수정 · 삭제 · 다시 보내기, 확장 켜고 끄기, 온톨로지
 초기화, 접근 기록, 데이터 소스의 인증 비밀, 알림 읽음 처리, 파일 내려받기 · 사진 묶음 올리기.
 관리 쓰기는 토큰에 안 열린다(「계정 · 부서 · 서버 관리는 어느 범위로도 안 열린다」). 사용자가 원하면
 **화면의 자리를 알려 준다**(우회하지 않는다).

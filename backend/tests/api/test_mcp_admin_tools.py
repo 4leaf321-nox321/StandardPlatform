@@ -149,3 +149,35 @@ def test_검토_이력_내보내기_작업_정리를_도구로_본다(bot: Bot) 
     assert "화면" in exported["next"]
 
     assert bot.call(server.jobs_purge)["applied"] is False
+
+
+def test_눈여겨볼_것을_도구로_훑고_내리고_되돌리고_끈다(
+    client: TestClient, admin: Signed, bot: Bot
+) -> None:
+    """처리는 `ontology:write` 토큰의 시스템 관리자 — 모두 되돌릴 수 있다(2026-10-25,
+    ADR 0032)."""
+    from app.modules.jobs import services as job_services
+    from tests.api.test_insights import _setup
+
+    _, slug = _setup(client, admin)
+    assert bot.call(server.insight_manage, "scan", metric=slug) == {"queued": 1}
+    while job_services.process_one("test-worker"):
+        pass
+
+    def shown() -> list[str]:
+        return [
+            one["id"] for one in bot.call(server.insights, metric=slug, limit=200)["items"]
+        ]
+
+    top = shown()[0]
+    assert bot.call(server.insight_manage, "dismiss", insight_id=top)["dismissed"] is True
+    assert top not in shown()
+    assert bot.call(server.insight_manage, "restore", insight_id=top)["dismissed"] is False
+    assert top in shown()
+    assert bot.call(server.insight_manage, "mute", metric=slug) == {"slug": slug, "off": True}
+    assert bot.call(server.insight_manage, "unmute", metric=slug) == {
+        "slug": slug,
+        "off": False,
+    }
+    with pytest.raises(ToolError, match="insight_id"):
+        bot.call(server.insight_manage, "dismiss")

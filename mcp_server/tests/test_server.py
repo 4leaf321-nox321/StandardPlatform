@@ -129,6 +129,9 @@ TOOLS = {
     "slide_create",
     "slide_candidates",
     "slide_update",
+    "slide_template_save",
+    "board",
+    "insight_manage",
 }
 
 
@@ -1381,6 +1384,125 @@ def test_설정_지우기는_미리_보기가_기본이고_종류마다_제_자�
     for kind in ("account", "workspace", "notice"):
         assert "error" in asyncio.run(server.config_delete(ctx, kind, slug="x", id="y"))
     assert "error" in asyncio.run(server.config_delete(ctx, "view", slug="part"))
+
+
+def test_장표와_틀은_id_로_지운다() -> None:
+    ctx = _ctx("Bearer t")
+    seen = _route(
+        {
+            ("GET", "/api/slides/s1"): {"id": "s1", "title": "A 변경점 검토", "areas": []},
+            ("DELETE", "/api/slides/s1"): 204,
+            ("GET", "/api/slides/templates/t1"): {"id": "t1", "name": "변경점", "areas": []},
+            ("DELETE", "/api/slides/templates/t1"): 204,
+        }
+    )
+    got = asyncio.run(server.config_delete(ctx, "slide", id="s1"))
+    assert got["applied"] is False and got["current"]["title"] == "A 변경점 검토"
+    asyncio.run(server.config_delete(ctx, "slide", id="s1", apply=True))
+    assert (seen[-1].method, seen[-1].url.path) == ("DELETE", "/api/slides/s1")
+    asyncio.run(server.config_delete(ctx, "slide_template", id="t1", apply=True))
+    assert (seen[-1].method, seen[-1].url.path) == ("DELETE", "/api/slides/templates/t1")
+    # 장표는 slug 가 아니라 id 다.
+    assert "id" in asyncio.run(server.config_delete(ctx, "slide", slug="s1"))["error"]
+
+
+def test_장표_틀은_세워_본_뒤_저장하고_빠지는_영역_키를_말한다() -> None:
+    ctx = _ctx("Bearer t")
+    body = {
+        "name": "변경점",
+        "subject_type_slug": "model",
+        "rows": 1,
+        "cols": 1,
+        "areas": [{"key": "asis", "title": "AS-IS", "row": 0, "col": 0}],
+    }
+    current = {
+        **body,
+        "id": "t1",
+        "areas": [*body["areas"], {"key": "opinion", "title": "의견"}],
+    }
+    seen = _route(
+        {
+            ("GET", "/api/slides/templates/t1"): current,
+            ("POST", "/api/slides/templates/preview"): {
+                "rows": 1,
+                "cols": 1,
+                "areas": [{"key": "asis", "title": "AS-IS", "kind": "records", "records": []}],
+            },
+            ("POST", "/api/slides/templates"): {**body, "id": "t2"},
+            ("PUT", "/api/slides/templates/t1"): {**body, "id": "t1"},
+        }
+    )
+    # 미리 보기는 주제 하나로 세워 본다 — 주제가 없으면 저장 전에 보일 것이 없다.
+    assert "subject_id" in asyncio.run(server.slide_template_save(ctx, body))["error"]
+    assert seen == []
+    plan = asyncio.run(
+        server.slide_template_save(ctx, body, template_id="t1", subject_id="m1")
+    )
+    assert plan["applied"] is False and plan["would"]["action"] == "update"
+    assert plan["would"]["dropped_keys"] == ["opinion"]
+    preview = seen[-1]
+    assert preview.url.path == "/api/slides/templates/preview"
+    assert json.loads(preview.content) == {"template": body, "subject_id": "m1"}
+    asyncio.run(server.slide_template_save(ctx, body, apply=True))
+    assert (seen[-1].method, seen[-1].url.path) == ("POST", "/api/slides/templates")
+    asyncio.run(server.slide_template_save(ctx, body, template_id="t1", apply=True))
+    assert (seen[-1].method, seen[-1].url.path) == ("PUT", "/api/slides/templates/t1")
+
+
+def test_쓰인_장표는_객체로_찾는다() -> None:
+    ctx = _ctx("Bearer t")
+    seen = _route({("GET", "/api/slides/used-in/o1"): []})
+    assert asyncio.run(server.slides_list(ctx, q="무시", object_id="o1")) == []
+    assert seen[-1].url.path == "/api/slides/used-in/o1" and not seen[-1].url.params
+
+
+def test_게시판은_목록과_글_하나를_읽는다() -> None:
+    ctx = _ctx("Bearer t")
+    seen = _route(
+        {
+            ("GET", "/api/board/posts"): {"items": [], "total": 0},
+            ("GET", "/api/board/posts/p1"): {"id": "p1", "comments": []},
+        }
+    )
+    asyncio.run(server.board(ctx, q="커넥터", mine=True, limit=500))
+    assert dict(seen[-1].url.params) == {
+        "limit": "100",
+        "offset": "0",
+        "q": "커넥터",
+        "mine": "true",
+    }
+    assert asyncio.run(server.board(ctx, post_id="p1"))["id"] == "p1"
+
+
+def test_눈여겨볼_것의_처리는_일마다_제_자리를_부른다() -> None:
+    ctx = _ctx("Bearer t")
+    seen = _route(
+        {
+            ("PUT", "/api/insights/i1/dismissed"): {"id": "i1"},
+            ("POST", "/api/insights/scan"): {"queued": 1},
+            ("PUT", "/api/insights/metrics/m"): {"slug": "m", "off": True},
+        }
+    )
+    for action, wanted in (
+        ("dismiss", {"dismissed": True}),
+        ("restore", {"dismissed": False}),
+    ):
+        asyncio.run(server.insight_manage(ctx, action, insight_id="i1"))
+        assert json.loads(seen[-1].content) == wanted
+    asyncio.run(server.insight_manage(ctx, "scan"))
+    assert json.loads(seen[-1].content) == {"metric": None}
+    asyncio.run(server.insight_manage(ctx, "mute", metric="m"))
+    assert (seen[-1].url.path, json.loads(seen[-1].content)) == (
+        "/api/insights/metrics/m",
+        {"off": True},
+    )
+    count = len(seen)
+    assert "insight_id" in asyncio.run(server.insight_manage(ctx, "dismiss"))["error"]
+    assert "metric" in asyncio.run(server.insight_manage(ctx, "unmute"))["error"]
+    assert (
+        "action" in asyncio.run(server.insight_manage(ctx, "delete", insight_id="i1"))["error"]
+    )
+    assert len(seen) == count
 
 
 def test_데이터_소스_저장은_비밀을_안_받고_있으면_고치고_없으면_만든다() -> None:

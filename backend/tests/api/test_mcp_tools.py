@@ -1771,3 +1771,80 @@ def test_장표_도구로_틀을_보고_만들고_고르고_글_초안을_쓴다
     assert again["rendered_at"] and again["subject"]["label"] == "A"
     listed_slides = bot.call(server.slides_list, subject_id=world["models"]["A"]["id"])
     assert [one["id"] for one in listed_slides["items"]] == [slide["id"]]
+
+
+def test_장표_틀을_도구로_세워_보고_만들고_고치고_지운다(
+    client: TestClient,
+    bot: Bot,
+    world: dict[str, Any],  # noqa: F811
+) -> None:
+    """틀은 주제 하나로 세워 본 모양을 먼저 보이고(저장 안 함), 고칠 때 빠지는 영역 키를
+    말한다. 쓰인 장표는 객체로 찾고, 장표가 남은 틀은 지우지 못한다(2026-10-25)."""
+    from tests.api.test_slides import _template
+
+    body = _template(world)
+    subject = world["models"]["A"]["id"]
+    with pytest.raises(ToolError, match="subject_id"):
+        bot.call(server.slide_template_save, body)
+    seen = bot.call(server.slide_template_save, body, subject_id=subject)
+    assert seen["applied"] is False and seen["would"]["action"] == "create"
+    areas = {one["key"]: one for one in seen["would"]["areas"]}
+    assert {one["label"] for one in areas["asis"]["records"]} == {"핀 수", "재질"}
+    assert all(one["name"] != body["name"] for one in bot.call(server.slide_templates))
+    made = bot.call(server.slide_template_save, body, apply=True)
+    assert made["name"] == body["name"] and made["slides"] == 0
+
+    # 빠지는 영역 키 — 그 영역에 써 둔 글이 장표에서 안 보이게 된다.
+    fewer = {**body, "areas": [one for one in body["areas"] if one["key"] != "opinion"]}
+    plan = bot.call(
+        server.slide_template_save, fewer, template_id=made["id"], subject_id=subject
+    )
+    assert plan["would"]["dropped_keys"] == ["opinion"]
+    assert "opinion" in {one["key"] for one in plan["current"]["areas"]}
+
+    # 쓰인 장표 — 주제로도, 실린 기록으로도(열어 본 뒤의 색인).
+    slide = bot.call(server.slide_create, made["id"], subject)
+    bot.call(server.slide_get, slide["id"])
+    as_subject = bot.call(server.slides_list, object_id=subject)
+    assert [(one["slide"]["id"], one["role"]) for one in as_subject] == [
+        (slide["id"], "subject")
+    ]
+    as_record = bot.call(server.slides_list, object_id=world["changes"]["핀 수"]["id"])
+    assert [(one["slide"]["id"], one["role"]) for one in as_record] == [
+        (slide["id"], "record")
+    ]
+    assert "AS-IS" in as_record[0]["areas"]
+
+    # 장표가 남은 틀은 지우지 못한다 — 장표를 먼저(미리 보기 → 지우기).
+    with pytest.raises(ToolError, match="1장"):
+        bot.call(server.config_delete, "slide_template", id=made["id"], apply=True)
+    head = bot.call(server.config_delete, "slide", id=slide["id"])
+    assert head["applied"] is False and head["current"]["title"] == slide["title"]
+    bot.call(server.config_delete, "slide", id=slide["id"], apply=True)
+    assert bot.call(server.slides_list, object_id=subject) == []
+    bot.call(server.config_delete, "slide_template", id=made["id"], apply=True)
+    assert all(one["id"] != made["id"] for one in bot.call(server.slide_templates))
+
+
+def test_게시판은_도구로_목록과_글을_읽는다(
+    client: TestClient, admin: Signed, bot: Bot
+) -> None:
+    title = _uniq("커넥터 규격")
+    made = client.post(
+        "/api/board/posts",
+        json={"title": title, "body": "핀 규격 문서는 어디 있나요?"},
+        headers=admin.headers,
+    )
+    assert made.status_code == 201, made.text
+    post = made.json()
+    replied = client.post(
+        f"/api/board/posts/{post['id']}/comments",
+        json={"body": "기준정보 › 부품에 있습니다."},
+        headers=admin.headers,
+    )
+    assert replied.status_code == 201, replied.text
+    listed = bot.call(server.board, q=title)
+    assert [(one["id"], one["comment_count"]) for one in listed["items"]] == [(post["id"], 1)]
+    one = bot.call(server.board, post_id=post["id"])
+    assert one["body"] == "핀 규격 문서는 어디 있나요?"
+    assert [reply["body"] for reply in one["comments"]] == ["기준정보 › 부품에 있습니다."]

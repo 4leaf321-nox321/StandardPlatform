@@ -208,19 +208,33 @@ def test_끄면_훑지_않고_작업은_지표마다_하나만_든다(
     assert insights.request(db, metric) is None
 
 
-def test_개인_토큰은_읽기만_한다(client: TestClient, admin: Signed) -> None:
-    """`/api/insights` 는 범위 표에 없다 — 토큰으로는 읽기만(「모르는 것은 막는다」)."""
-    made = client.post(
-        "/api/auth/tokens",
-        json={"name": "읽기", "scopes": ["read", "objects:write", "ontology:write"]},
-        headers=admin.headers,
-    )
-    assert made.status_code == 201, made.text
-    token = {"Authorization": f"Bearer {made.json()['token']}"}
-    assert client.get("/api/insights", headers=token).status_code == 200
-    refused = client.post("/api/insights/scan", json={}, headers=token)
+def test_개인_토큰의_처리는_정의_범위다(
+    client: TestClient, admin: Signed, member: Signed
+) -> None:
+    """처리(그만 보기 · 지금 훑기 · 끄기)는 `ontology:write` — 읽기 토큰은 읽기만 한다. 범위가
+    있어도 사람의 권한(시스템 관리자)이 그대로 막는다(2026-10-25, ADR 0032)."""
+
+    def token(who: Signed, scopes: list[str]) -> dict[str, str]:
+        made = client.post(
+            "/api/auth/tokens",
+            json={"name": f"t{len(scopes)}", "scopes": scopes},
+            headers=who.headers,
+        )
+        assert made.status_code == 201, made.text
+        return {"Authorization": f"Bearer {made.json()['token']}"}
+
+    reader = token(admin, ["read"])
+    assert client.get("/api/insights", headers=reader).status_code == 200
+    refused = client.post("/api/insights/scan", json={}, headers=reader)
+    # 등록된 경로라 「범위 없음」 이다(전에는 「열린 자리 아님」, AUTH 105).
     assert refused.status_code == 403
-    assert refused.json()["error"]["code"] == code("AUTH", 105)
+    assert refused.json()["error"]["code"] == code("AUTH", 106)
+
+    writer = token(admin, ["read", "ontology:write"])
+    assert client.post("/api/insights/scan", json={}, headers=writer).status_code == 202
+
+    member_writer = token(member, ["read", "ontology:write"])
+    assert client.post("/api/insights/scan", json={}, headers=member_writer).status_code == 403
 
 
 def test_훑기_작업은_다른_작업이_없을_때_집는다(
