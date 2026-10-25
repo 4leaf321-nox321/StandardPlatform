@@ -16,7 +16,7 @@ from typing import Any
 import pytest
 from fastapi.testclient import TestClient
 
-from tests.api.conftest import Signed, finish_job
+from tests.api.conftest import Signed, clock_settled, finish_job
 from tests.api.test_ontology import (
     _link,
     _make_object,
@@ -246,6 +246,7 @@ def test_트리가_바뀌면_지표의_증분이_전량으로_센다(
             headers=admin.headers,
         )
         assert patched.status_code == 200, patched.text
+    clock_settled()
     made = client.post(
         "/api/metrics",
         params={"recompute": True},
@@ -263,6 +264,7 @@ def test_트리가_바뀌면_지표의_증분이_전량으로_센다(
     )
     assert made.status_code == 201, made.text
     assert finish_job(client, admin, made.json()["job"])["status"] == "done"
+    clock_settled()
     slug = made.json()["metric"]["slug"]
 
     def total() -> int:

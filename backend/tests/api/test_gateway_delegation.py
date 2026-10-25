@@ -29,7 +29,7 @@ from app.modules.server import services as server_services
 from app.modules.workspaces.models import Workspace
 from app.shared import scopes
 from app.shared.errors import code
-from tests.api.conftest import PASSWORD, Signed, _make_user
+from tests.api.conftest import PASSWORD, Signed, _make_user, clock_settled
 
 SSO = "/api/auth/sso"
 REVOKE = "/api/auth/sso/revoke"
@@ -289,6 +289,7 @@ def test_점검의_거절도_서버_화면의_마지막_거절에_잡힌다(
     """접근 로그가 점검도 `GATEWAY_SSO` 로 적는다 — 포털 담당이 점검에서 401 을 받았다고 하면
     서버 화면의 「마지막으로 거절한 때」 에 그것이 있어야 한다."""
     assert _ask(client, None, path=VERIFY).status_code == 204
+    clock_settled()  # 이 거절이 앞서 남은 거절들보다 뒤에 찍히게(그래야 「마지막」 이다)
     _ask(client, None, path=VERIFY, secret="wrong")
     rows = db.scalars(select(AccessLog).where(AccessLog.path == VERIFY)).all()
     assert {(one.action, one.status_code) for one in rows} >= {

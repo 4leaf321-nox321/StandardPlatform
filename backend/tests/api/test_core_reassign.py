@@ -12,6 +12,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -21,7 +22,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.audit.models import AuditEntry
 from app.modules.workspaces.models import Workspace, WorkspaceMember
-from tests.api.conftest import Signed, _login, _make_user
+from tests.api.conftest import Signed, _login, _make_user, clock_settled
 from tests.api.test_core_api import _open
 from tests.api.test_ontology import _make_object, _make_type
 from tests.api.test_workspace_reassign_job import reassign
@@ -86,6 +87,8 @@ def test_통폐합으로_옮겨_간_객체는_토큰의_부서에_따라_무덤_
         }.items()
     }
 
+    # 통폐합이 「여기까지 봤다」 뒤에 찍히게(시계가 튀면 앞으로 찍혀 받기에서 빠진다).
+    clock_settled(max(datetime.fromisoformat(one) for one in marks.values()))
     moved = reassign(client, admin, source.slug, target.slug, ["objects"])
     assert moved["moved"] == {"objects": 1}
 

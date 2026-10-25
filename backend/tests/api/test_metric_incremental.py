@@ -14,7 +14,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 from sqlalchemy import func, select
 
-from tests.api.conftest import Signed, finish_job
+from tests.api.conftest import Signed, clock_settled, finish_job
 from tests.api.test_metrics import _define, _world
 from tests.api.test_ontology import _make_object
 
@@ -26,6 +26,7 @@ def _recount(
     from app.database import SessionLocal
     from app.modules.metrics import services
 
+    clock_settled()  # 이 계산의 워터마크가 앞서 쓴 기록 뒤에 서게
     with SessionLocal() as db:
         metric = services.get(db, slug)
         job = services.enqueue_recompute(db, metric, user=None, reason=reason)
@@ -33,6 +34,7 @@ def _recount(
         job_id = str(job.id)
     done = finish_job(client, admin, {"id": job_id})
     assert done["status"] == "done", done
+    clock_settled()  # 뒤에 쓰는 기록이 이 워터마크 뒤에 서게
     runs = client.get(f"/api/metrics/{slug}/runs", headers=admin.headers)
     assert runs.status_code == 200, runs.text
     # **방금 넣은 작업의 실행을 작업 번호로 집는다** — 「맨 앞(가장 최근)」 으로 집던 때는
@@ -180,7 +182,7 @@ def test_바뀐_기간만_다시_센_값이_전부_다시_센_값과_같다(
 
     # 바뀐 것이 없으면 아무 기간도 안 센다 — 그래도 실행은 남는다(워터마크가 나아간다).
     idle = _recount(client, admin, slug)
-    assert idle["mode"] == "incremental"
+    assert idle["mode"] == "incremental", idle["note"]
     if not _clock_went_back(w["case"], first["watermark"]):
         assert idle["periods"] == []
     assert idle["cells"] == first["cells"] and idle["rows"] == first["rows"]

@@ -15,7 +15,7 @@ import pytest
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
-from tests.api.conftest import Signed, finish_job
+from tests.api.conftest import Signed, clock_settled, finish_job
 from tests.api.test_datasources import (  # noqa: F401 — plm 은 픽스처
     FakeOData,
     _source,
@@ -207,6 +207,8 @@ def _define(
     **kw: Any,
 ) -> dict[str, Any]:
     body = {"slug": _slug("m"), "label": label, "source_type_slug": source, "spec": spec, **kw}
+    if recompute:
+        clock_settled()  # 계산의 워터마크가 앞서 쓴 기록 뒤에 서게
     made = client.post(
         "/api/metrics", params={"recompute": recompute}, json=body, headers=admin.headers
     )
@@ -216,6 +218,7 @@ def _define(
         return dict(saved["metric"])
     done = finish_job(client, admin, saved["job"])
     assert done["status"] == "done", done
+    clock_settled()  # 뒤에 쓰는 기록이 워터마크 뒤에 서게
     # 계산이 끝난 뒤의 정의 — 계산 시각 · 셀 수 · 상태가 실린 것.
     got = client.get(f"/api/metrics/{saved['metric']['slug']}", headers=admin.headers)
     assert got.status_code == 200, got.text

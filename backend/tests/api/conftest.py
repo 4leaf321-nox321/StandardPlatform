@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 import contextlib
+import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -130,6 +132,53 @@ def notifications_of(client: TestClient, who: Signed, kind: str) -> list[dict[st
     body: Any = got.json()
     rows: list[dict[str, Any]] = body["items"] if isinstance(body, dict) else body
     return [one for one in rows if one["kind"] == kind]
+
+
+#: 「나중 일」 이 그 앞의 시각을 넘어야 하는 자리 — 바뀐 것을 시각으로 가르는 곳 전부. 1분
+#: 넘게 앞선 시각은 시계 튐이 아니라 시험이 심은 값이다(분석 시험의 워터마크 2030 년) — 그것을
+#: 기다리면 부를 때마다 상한까지 선다.
+_LATEST_WRITE = """
+    WITH marks(at) AS (
+        SELECT max(updated_at) FROM objects
+        UNION ALL SELECT max(greatest(created_at, updated_at, datasource_seen_at))
+          FROM object_relations
+        UNION ALL SELECT max(removed_at) FROM object_relation_tombstones
+        UNION ALL SELECT max(created_at) FROM audit_entries
+        UNION ALL SELECT max(created_at) FROM access_logs
+        UNION ALL SELECT max(greatest(watermark, finished_at)) FROM metric_runs
+          WHERE greatest(watermark, finished_at) < clock_timestamp() + interval '1 minute'
+    )
+    SELECT max(at) FROM marks WHERE at < clock_timestamp() + interval '1 minute'
+"""
+
+
+def clock_settled(after: datetime | None = None, *, limit: float = 10.0) -> None:
+    """**DB 시계가 지금까지 찍힌 가장 늦은 시각(과 `after`)을 지날 때까지** 기다린다 —
+    「나중 일」 을 일으키기 직전에 부른다. 시계가 그대로 갔으면 질의 한 번으로 지나간다.
+
+    이 PC(WSL)의 벽시계는 뒤로 튄다(2026-10-25 실측 — 7분에 13번, 가장 큰 것 2.3초, 단조
+    시계와 32초 어긋남). 그러면 나중 일이 앞의 일보다 이른 시각으로 찍힌다: 계산 전에 쓴
+    기록이 계산의 워터마크 뒤로 읽혀 증분이 전량으로 가고, 「여기까지 봤다」 뒤의 통폐합 ·
+    다시 받기의 시작이 앞으로 찍혀 빠지고, 나중 거절이 앞 거절보다 이르게 찍힌다. 시험이
+    바라는 시간 차례를 되살릴 뿐이다 — 제품은 시계가 앞으로만 간다고 본다(운영 서버는 시각
+    동기화가 천천히 맞춘다).
+    """
+    from sqlalchemy import text
+
+    from app.database import SessionLocal
+
+    with SessionLocal() as db:
+        latest = db.scalar(text(_LATEST_WRITE))
+    marks = [one for one in (latest, after) if one is not None]
+    if not marks:
+        return
+    target = max(marks)
+    deadline = time.monotonic() + limit
+    while time.monotonic() < deadline:
+        with SessionLocal() as db:
+            if db.scalar(text("SELECT clock_timestamp() > :at"), {"at": target}):
+                return
+        time.sleep(0.05)
 
 
 def finish_job(client: TestClient, who: Signed, job: dict[str, Any]) -> dict[str, Any]:

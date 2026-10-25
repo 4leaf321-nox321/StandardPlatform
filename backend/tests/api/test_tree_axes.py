@@ -16,7 +16,7 @@ from typing import Any
 from fastapi.testclient import TestClient
 
 from app.modules.objects.graph import MAX_DEPTH
-from tests.api.conftest import Signed, finish_job
+from tests.api.conftest import Signed, clock_settled, finish_job
 from tests.api.test_metric_incremental import _recount
 from tests.api.test_ontology import (
     _link,
@@ -117,6 +117,7 @@ def test_고르개에_트리가_있는_참조_칸만_계층_축이_선다(
 def _metric(
     client: TestClient, admin: Signed, svc: str, spec: dict[str, Any], suffix: str
 ) -> str:
+    clock_settled()
     made = client.post(
         "/api/metrics",
         params={"recompute": True},
@@ -130,6 +131,7 @@ def _metric(
     )
     assert made.status_code == 201, made.text
     assert finish_job(client, admin, made.json()["job"])["status"] == "done"
+    clock_settled()
     return str(made.json()["metric"]["slug"])
 
 

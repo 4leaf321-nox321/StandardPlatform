@@ -22,7 +22,7 @@ from sqlalchemy.orm import Session, aliased
 from app.modules.datasources import odata
 from app.modules.datasources.models import DataSource
 from app.modules.objects.models import ObjectInstance, ObjectRelation
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, clock_settled
 from tests.api.test_datasource_core import (
     FakeCore,
     _edge,
@@ -85,6 +85,9 @@ def _reset(sibling: FakeCore, kind: str, pairs: list[tuple[int, int]]) -> None:
     sibling.edges = _hub(kind, pairs, "2026-09-05T00:00:00.000000Z")
     sibling.edges_as_of = "2026-09-06T00:00:00.000000Z"
     sibling.edges_reset = True
+    # 다시 받기의 세대는 시작한 때로 「전에 이은 선」 을 가른다 — 그 때가 앞서 이은 선보다
+    # 뒤에 서게.
+    clock_settled()
 
 
 def test_한_번에_끝나는_처음부터_다시_받기도_이_소스가_이은_선만_끊는다(
