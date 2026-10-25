@@ -32,7 +32,7 @@ from app.modules.jobs.models import Job
 from app.modules.metrics import alerts, compute, params, query
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import MetricDef, MetricInsight, MetricValue
-from app.modules.metrics.recipes import changes, groups, series, sprt
+from app.modules.metrics.recipes import changes, control, groups, series, sprt
 from app.modules.objects.services import properties_of
 from app.modules.ontology.models import ObjectType
 from app.modules.workspaces.models import WorkspaceMember
@@ -47,6 +47,7 @@ KIND_LABELS = {
     "change": "변화점",
     "worse": "새 모델이 전작보다 나쁨",
     "high": "다른 집단보다 높음",
+    "signal": "관리도 신호",
 }
 
 #: 새 모델 훑기 — 최근 몇 기간 안에 처음 팔린 모델(경보의 기본과 같다).
@@ -73,6 +74,13 @@ DEFAULT_WINDOW = 3
 #: 결함을 거의 못 본다(개발 DB: 생산월 지표의 충전 단자 기록 599건 중 3개월 창에 드는 것은
 #: 45건 — 심은 「한 공장 · 석 달 x4」 는 12개월 창에서야 변화점으로 선다).
 LONG_WINDOW = {"week": 52, "month": 12, "quarter": 4}
+#: 관리도는 끝에서 이만큼 닫힌 점까지 본다 — 그 뒤로 다시 안 걸리면 「지남」.
+CONTROL_RECENT = 3
+#: 관리도에서 결론으로 세는 규칙 — 한계 밖 한 점(1)과 한쪽 아홉 점(2). 3 · 5 는 약해서
+#: 경보에만.
+CONTROL_RULES = {1: 1, 2: 9}
+"""규칙 → 배수를 잴 점 수. 아홉 점 연속은 한 점이 아니라 아홉 점의 평균이 신호다 — 한 점의
+구간은 대개 1 을 걸쳐 점수가 0 이 된다."""
 
 
 @dataclass
@@ -285,6 +293,21 @@ def plans_of(
             for view in views
             for name in compared
         )
+    # 관리도 — 비율 · 조건 비율만(분모 없는 건수의 관리도는 판매가 늘면 신호처럼 보인다).
+    # 전체와, 대수를 아는 기준(분모 짝 — 조건 비율이면 기준마다)으로 나눠서. 조합은 안 한다 —
+    # 차트마다 · 점마다 · 규칙마다라, 거른 값 수만큼 우연히 걸리는 점이 는다.
+    if rate and control.available(built) is None:
+        for view in views:
+            out.extend(
+                Plan(
+                    "control",
+                    {**({"split": name} if name else {}), **view.values},
+                    "signal",
+                    tag=view.tag,
+                    prefix=view.changes_prefix,
+                )
+                for name in ["", *compared]
+            )
     # 조합 — 나누지 않는 기준의 많은 값마다 걸러, 견주는 기준으로 다시.
     splits = list(built.dims) if share else [one for one in built.dims if one.name not in on]
     for split in splits:
@@ -485,6 +508,115 @@ def _groups(
     return out
 
 
+def _control(
+    db: Session,
+    user: User,
+    metric: MetricDef,
+    built: spec_module.Built,
+    plan: Plan,
+    grain: str | None,
+    today: date,
+) -> list[Found]:
+    """관리도의 신호 — 끝 `CONTROL_RECENT` 닫힌 점에서 **위로** 걸린 규칙 1 · 2 만. 아래로
+    벗어난 것은 좋아진 것이다.
+
+    배수는 중심선의 몇 배(그 점 · 아홉 점 평균의 비율 / 중심선), 구간은 그 점의 라니 보정
+    σ — 한계가 중심선 ± 3σ 이므로 한계에서 거꾸로 읽는다(`_sigma`). 다른 종류와 같은
+    잣대(적게 잡은 배수 x 건수)라, 한계를 겨우 넘은 작은 칸은 아래에 선다."""
+    split = plan.values.get("split") or None
+    result = control.run(
+        db,
+        user,
+        metric,
+        built,
+        params.ask_from_values(plan.values),
+        window=int(plan.values.get("window", DEFAULT_WINDOW)),
+        split=split,
+    )
+    seen_until = _seen_until(today, grain, plan)
+    out: list[Found] = []
+    for chart in result.charts:
+        center = chart.center
+        if center is None or center <= 0:
+            continue
+        # 차트 하나에 결론 하나 — 신호가 석 달 이어지면 석 줄이 아니라 가장 센 한 줄이다.
+        best: Found | None = None
+        closed = [one for one in chart.points if one.closed]
+        for index in range(max(len(closed) - CONTROL_RECENT, 0), len(closed)):
+            point = closed[index]
+            for rule in point.signals:
+                span = CONTROL_RULES.get(rule)
+                if span is None or point.rate is None or point.rate <= center:
+                    continue
+                run = closed[max(index - span + 1, 0) : index + 1]
+                rates = [one.rate for one in run if one.rate is not None]
+                sigmas = [_sigma(one, center) for one in run]
+                if not rates or any(one is None for one in sigmas):
+                    continue
+                mean = sum(rates) / len(rates)
+                spread = math.sqrt(sum(one * one for one in sigmas if one)) / len(rates)
+                ratio = mean / center
+                interval = ((mean - 1.96 * spread) / center, (mean + 1.96 * spread) / center)
+                count = sum(one.count for one in run)
+                rule_label = control.RULES.get(rule, str(rule))
+                found = Found(
+                    key=(
+                        f"signal:{split or '-'}={chart.key or '-'}@{point.when}:{rule}"
+                        f"{plan.tag}"
+                    )[: alerts.KEY_MAX],
+                    kind=plan.kind,
+                    recipe="control",
+                    values=dict(plan.values),
+                    title=(
+                        f"{plan.prefix}{chart.label} · {point.label}: {rule_label} — 중심선의 "
+                        f"{ratio:.2f}배 · {count:,}건"
+                    )[:300],
+                    detail={
+                        "split": split,
+                        "split_label": result.split_label,
+                        "value": chart.key,
+                        "value_label": chart.label,
+                        "when": point.when,
+                        "rule": rule,
+                        "points": len(run),
+                        "count": count,
+                        "rate": round(mean, 6),
+                        "center": center,
+                        "ucl": point.ucl,
+                        "ratio": round(ratio, 4),
+                    },
+                    score=0.0,
+                    run_id=result.run_id,
+                    cell=frozenset(
+                        {
+                            *_filters(plan.values),
+                            *([(split, str(chart.key))] if split and chart.key else []),
+                        }
+                    ),
+                    direction="up",
+                    at=point.when,
+                    ratio=ratio,
+                    interval=interval,
+                    support=count,
+                    weight=_recency(point.when, grain, seen_until),
+                )
+                _scored(found, ratio, interval)
+                if best is None or found.score > best.score:
+                    best = found
+        if best is not None:
+            out.append(best)
+    return out
+
+
+def _sigma(point: Any, center: float) -> float | None:
+    """그 점의 σ(라니 보정 포함) — 한계가 중심선 ± 3σ 다. 아래 한계는 0 에서, 위 한계는 비율
+    1(p-관리도)에서 잘리므로 둘 중 큰 쪽이 잘리지 않은 쪽이다."""
+    sides = [
+        abs(limit - center) / 3.0 for limit in (point.ucl, point.lcl) if limit is not None
+    ]
+    return max(sides) if sides else None
+
+
 def _near(a: str | None, b: str | None, periods: float, grain: str | None) -> bool:
     if not a or not b:
         return False
@@ -527,6 +659,9 @@ def tidy(
        DB 의 NTF 몫).
     2. 같은 칸을 가리키는 결론은 하나 — 「브라질 · P5」 와 「P5 · 브라질」.
     3. 거른 값이 아무것도 더하지 않는 조합은 뺀다 — 그 값 하나로도 이미 보이는 결론이면.
+    4. 위로의 변화점이 이미 말한 관리도 신호는 뺀다 — 같은 칸 · 같은 창에서 변화점 뒤
+       `EXPLAIN_PERIODS` 기간 안의 신호는 그 계단의 끝이다(「언제부터」 를 말하는 변화점이
+       낫다).
     """
     overall = [one for one in founds if one.kind == "change" and not one.cell and one.ratio]
     # 변화점의 축(기간 · 코호트)이 다르면 다른 물음이다 — 섞어 견주지 않는다. 전체가 움직인
@@ -579,7 +714,21 @@ def tidy(
         ):
             continue
         out.append(one)
-    return out
+    steps = [one for one in out if one.kind == "change" and one.direction == "up"]
+    return [
+        one
+        for one in out
+        if not (
+            one.kind == "signal"
+            and any(
+                step.cell == one.cell
+                and view_of[id(step)] == view_of[id(one)]
+                and (step.at or "") <= (one.at or "")
+                and _near(step.at, one.at, EXPLAIN_PERIODS, grain)
+                for step in steps
+            )
+        )
+    ]
 
 
 def system_viewer(db: Session) -> User | None:
@@ -649,6 +798,26 @@ def _same_change(
     return None
 
 
+def _same_signal(
+    found: Found, existing: dict[str, MetricInsight], grain: str | None
+) -> MetricInsight | None:
+    """같은 차트 · 같은 규칙의 신호가 `CONTROL_RECENT` 기간 안에 이미 있나 — 이어지는 신호는
+    한 줄로 이어 간다(마지막에 본 점에서 잰다). 그만 본 것도 그래서 다시 안 뜬다."""
+    if found.kind != "signal" or not found.at:
+        return None
+    head, _, rest = found.key.partition("@")
+    tail = rest.partition(":")[2]
+    for row in existing.values():
+        if row.kind != "signal" or row.values != found.values:
+            continue
+        old_head, _, old_rest = row.key.partition("@")
+        if old_head != head or old_rest.partition(":")[2] != tail:
+            continue
+        if _near(str((row.detail or {}).get("when") or ""), found.at, CONTROL_RECENT, grain):
+            return row
+    return None
+
+
 def scan(db: Session, metric_id: uuid.UUID) -> ScanResult:
     """지표 하나를 훑어 적는다 — **분석 하나의 실패는 훑기를 멈추지 않는다**(그 줄만
     적는다)."""
@@ -681,6 +850,8 @@ def scan(db: Session, metric_id: uuid.UUID) -> ScanResult:
         try:
             if plan.recipe == "groups":
                 founds.extend(_groups(db, viewer, metric, built, plan))
+            elif plan.recipe == "control":
+                founds.extend(_control(db, viewer, metric, built, plan, grain, today))
             else:
                 asked = dict(plan.values)
                 if plan.recipe == "changes":
@@ -711,7 +882,11 @@ def scan(db: Session, metric_id: uuid.UUID) -> ScanResult:
         if found.key in taken:
             continue
         taken.add(found.key)
-        row = existing.get(found.key) or _same_change(found, existing, grain)
+        row = (
+            existing.get(found.key)
+            or _same_change(found, existing, grain)
+            or _same_signal(found, existing, grain)
+        )
         if row is None:
             row = MetricInsight(metric_id=metric.id, key=found.key, first_seen_at=now)
             db.add(row)

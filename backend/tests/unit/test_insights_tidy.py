@@ -198,3 +198,106 @@ def test_전체를_뺄_때_구간도_같이_나눈다() -> None:
     # 전체의 1.5배를 빼면 구간 0.8 ~ 1.8 — 전체보다 더 올랐다고 못 한다.
     assert kept["up:2029-09-01@P6"].detail["ratio_bound"] == 1.0
     assert kept["up:2029-09-01@P6"].score == 0.0
+
+
+def test_위로의_변화점이_말한_관리도_신호는_뺀다() -> None:
+    """계단이 2025-03 에 섰고 관리도는 그 끝(2025-05)에 걸렸다 — 「언제부터」 를 말하는 변화점
+    하나면 된다. 다른 칸의 신호 · 변화점보다 앞선 신호 · 멀리 떨어진 신호는 남는다."""
+    cell = frozenset({("base_model", "S")})
+    step = _found(
+        key="up:2025-03-01@S",
+        direction="up",
+        at="2025-03-01",
+        ratio=1.8,
+        support=900,
+        cell=cell,
+    )
+    signals = {
+        "explained": _found(
+            key="signal:a",
+            kind="signal",
+            recipe="control",
+            direction="up",
+            at="2025-05-01",
+            ratio=2.0,
+            support=300,
+            cell=cell,
+        ),
+        "other_cell": _found(
+            key="signal:b",
+            kind="signal",
+            recipe="control",
+            direction="up",
+            at="2025-05-01",
+            ratio=2.0,
+            support=300,
+            cell=frozenset({("base_model", "A")}),
+        ),
+        "before": _found(
+            key="signal:c",
+            kind="signal",
+            recipe="control",
+            direction="up",
+            at="2025-01-01",
+            ratio=2.0,
+            support=300,
+            cell=cell,
+        ),
+        "far": _found(
+            key="signal:d",
+            kind="signal",
+            recipe="control",
+            direction="up",
+            at="2026-03-01",
+            ratio=2.0,
+            support=300,
+            cell=cell,
+        ),
+    }
+    kept = {one.key for one in tidy([step, *signals.values()], "month")}
+    assert "up:2025-03-01@S" in kept
+    assert "signal:a" not in kept
+    assert {"signal:b", "signal:c", "signal:d"} <= kept
+
+
+def test_관리도의_시그마는_잘리지_않은_한계에서_읽는다() -> None:
+    from types import SimpleNamespace
+
+    from app.modules.metrics.insights import _sigma
+
+    # 중심선 10, 위 한계 13(3σ = 3), 아래 한계는 0 에서 잘렸다(10 - 3σ 이면 7 이어야).
+    assert _sigma(SimpleNamespace(ucl=13.0, lcl=8.5), 10.0) == 1.0
+    # p-관리도의 위 한계가 1 에서 잘리면 아래 쪽이 맞다(0.85 - 0.4 = 3σ).
+    capped = _sigma(SimpleNamespace(ucl=1.0, lcl=0.4), 0.85)
+    assert capped is not None and abs(capped - 0.15) < 1e-9
+    assert _sigma(SimpleNamespace(ucl=None, lcl=None), 10.0) is None
+
+
+def test_이어지는_관리도_신호는_한_줄로_이어_간다() -> None:
+    """같은 차트 · 같은 규칙의 신호가 마지막에 본 점에서 석 달 안이면 그 결론을 이어 간다 —
+    그만 본 것도 다시 안 뜬다. 규칙이 다르거나 멀면 새 결론."""
+    from app.modules.metrics.insights import _same_signal
+    from app.modules.metrics.models import MetricInsight
+
+    values = {"split": "base_model"}
+    old = MetricInsight(
+        key="signal:base_model=S@2025-03-01:1",
+        kind="signal",
+        values=values,
+        detail={"when": "2025-04-01"},
+    )
+    existing = {old.key: old}
+
+    def found(when: str, rule: int = 1, **kw: Any) -> Found:
+        return _found(
+            key=f"signal:base_model=S@{when}:{rule}",
+            kind="signal",
+            recipe="control",
+            values=kw.get("values", values),
+            at=when,
+        )
+
+    assert _same_signal(found("2025-06-01"), existing, "month") is old
+    assert _same_signal(found("2025-06-01", rule=2), existing, "month") is None
+    assert _same_signal(found("2025-10-01"), existing, "month") is None
+    assert _same_signal(found("2025-06-01", values={}), existing, "month") is None

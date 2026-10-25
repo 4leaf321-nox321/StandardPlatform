@@ -26,6 +26,7 @@ const KINDS: { value: InsightKind | ''; label: string }[] = [
   { value: 'change', label: '변화점' },
   { value: 'worse', label: '새 모델이 전작보다 나쁨' },
   { value: 'high', label: '다른 집단보다 높음' },
+  { value: 'signal', label: '관리도 신호' },
 ]
 
 export default function InsightsPage() {

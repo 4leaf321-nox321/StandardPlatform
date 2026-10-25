@@ -480,7 +480,8 @@ class InsightOut(BaseModel):
     metric_slug: str
     metric_label: str
     kind: str
-    """`change`(변화점) · `worse`(새 모델이 전작보다 나쁨) · `high`(다른 집단보다 높음)."""
+    """`change`(변화점) · `worse`(새 모델이 전작보다 나쁨) · `high`(다른 집단보다 높음) ·
+    `signal`(관리도 신호)."""
     kind_label: str
     recipe: str
     recipe_label: str

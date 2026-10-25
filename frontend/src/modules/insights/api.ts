@@ -7,7 +7,7 @@
 
 import { api } from '@/shared/api/client'
 
-export type InsightKind = 'change' | 'worse' | 'high'
+export type InsightKind = 'change' | 'worse' | 'high' | 'signal'
 
 export interface Insight {
   id: string

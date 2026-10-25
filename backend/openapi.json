@@ -15293,10 +15293,10 @@
                   "type": "null"
                 }
               ],
-              "description": "change · worse · high",
+              "description": "change · worse · high · signal",
               "title": "Kind"
             },
-            "description": "change · worse · high"
+            "description": "change · worse · high · signal"
           },
           {
             "name": "days",

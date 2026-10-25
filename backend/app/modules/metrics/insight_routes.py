@@ -62,7 +62,7 @@ def _out(row: MetricInsight, metric: MetricDef) -> InsightOut:
 @router.get("", response_model=InsightsOut)
 def list_insights(
     metric: str | None = Query(default=None, description="이 지표만(slug)"),
-    kind: str | None = Query(default=None, description="change · worse · high"),
+    kind: str | None = Query(default=None, description="change · worse · high · signal"),
     days: int | None = Query(
         default=None, ge=1, le=3650, description="최근 N일에 처음 본 것만"
     ),

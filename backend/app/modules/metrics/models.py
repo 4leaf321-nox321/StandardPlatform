@@ -329,7 +329,8 @@ class MetricInsight(Base):
     )
     key: Mapped[str] = mapped_column(String(300))
     kind: Mapped[str] = mapped_column(String(16))
-    """`change`(변화점) · `worse`(새 모델이 전작보다 나쁨) · `high`(집단이 높음)."""
+    """`change`(변화점) · `worse`(새 모델이 전작보다 나쁨) · `high`(집단이 높음) ·
+    `signal`(관리도 신호)."""
     recipe: Mapped[str] = mapped_column(String(16))
     values: Mapped[dict[str, str]] = mapped_column(JSONB, default=dict, server_default="{}")
     """그 분석의 인자 — 링크가 분석 탭을 그대로 연다."""

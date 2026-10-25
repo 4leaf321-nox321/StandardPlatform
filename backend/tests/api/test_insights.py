@@ -362,3 +362,60 @@ def test_여러_지표에_선_같은_줄은_하나로_보인다(
     # 그 지표만 보면 그 지표의 줄이다.
     (alone,) = [one for one in _mine(client, admin, other.slug) if one["title"] == row.title]
     assert alone["also"] == []
+
+
+def test_관리도는_튄_달을_신호로_세우고_그_모델의_차트에_적는다(
+    client: TestClient, admin: Signed
+) -> None:
+    """기본 모델 둘 · 48달 · 대수 2만 — 소음은 그대로인데 S 만 마지막 달에 세 배. 관리도가
+    S 의 차트에 「한계 밖 한 점」 으로 잡는다. 배수는 중심선의 몇 배, 점수는 다른 종류와 같은
+    잣대(2026-10-25)."""
+    w = _world(client, admin)
+    sales, monthly = _symptom_months(client, admin, w)
+    first, watermark = date(2026, 1, 1), datetime(2030, 2, 15, tzinfo=UTC)
+    models = (w["s_base"], w["a_base"])
+    _plant(
+        sales["slug"],
+        [
+            {
+                "period": _month(first, i),
+                "dims": {"base_model": model},
+                "count": 1,
+                "value_count": 1,
+                "sum": 20000.0,
+            }
+            for i in range(48)
+            for model in models
+        ],
+        watermark,
+    )
+    _plant(
+        monthly["slug"],
+        [
+            {
+                "period": _month(first, i),
+                "dims": {"base_model": model, "symptom": "소음"},
+                "count": 600 if (model == w["s_base"] and i == 47) else 200,
+            }
+            for i in range(48)
+            for model in models
+        ],
+        watermark,
+    )
+    _scan(client, admin, monthly["slug"])
+    found = _mine(client, admin, monthly["slug"], kind="signal")
+    by_value = {one["detail"].get("value"): one for one in found}
+    spike = by_value[w["s_base"]]
+    assert spike["kind_label"] == "관리도 신호" and spike["recipe"] == "control"
+    assert spike["detail"]["when"] == "2029-12-01" and spike["detail"]["rule"] == 1
+    assert 2.5 < spike["detail"]["ratio"] < 3.0 and spike["detail"]["ratio_bound"] > 2.0
+    assert "중심선의" in spike["title"] and "600건" in spike["title"]
+    assert "split=base_model" in spike["link"]
+    assert w["a_base"] not in by_value  # 그대로인 모델은 조용하다
+    # 전체 차트도 같은 달에 걸리지만, 전체의 변화점(끝 석 달을 한 구간으로 — 잠정)이 바로
+    # 앞에 서 있어 그것이 말한다 — 관리도 줄은 뺀다(정리 4). S 의 칸에는 변화점이 없다.
+    changes = _mine(client, admin, monthly["slug"], kind="change")
+    assert [one["detail"].get("at") for one in changes if not one["detail"].get("by")] == [
+        "2029-10-01"
+    ]
+    assert None not in by_value
