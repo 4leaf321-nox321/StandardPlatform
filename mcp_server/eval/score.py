@@ -63,6 +63,7 @@ WRITE_TOOLS = {
     "bundle_import",
     "ontology_import",
     "metric_define",
+    "slide_create",  # 주제를 이름으로 받는다 — 후보가 여럿이면 묻는다
 }
 FIRST_OK = {"get_guide", "ontology_schema"}
 GAP_SECONDS = 120.0

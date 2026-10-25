@@ -63,6 +63,46 @@ def _clock_went_back(type_slug: str, watermark: str) -> bool:
     return latest is not None and latest > datetime.fromisoformat(watermark)
 
 
+def _assert_periods(
+    run: dict[str, Any],
+    expected: list[str | None],
+    *,
+    type_slug: str,
+    since: str,
+    touched: set[str],
+) -> bool:
+    """증분이 다시 센 기간이 **바꾼 기록의 기간**인가 — 시계가 뒤로 튀었으면 넉넉해도 된다.
+
+    시계가 튀면 손대지 않은 기록이 지난 워터마크(`since`) 「뒤」 로 읽혀 그 기간을 한 번 더
+    센다(`_clock_went_back`). 값은 같다 — 틀린 것이 아니라 넉넉한 쪽이다. 첫 비교만 그것을
+    봐서, 둘째 비교가 가끔 「오늘」 기록(건8)의 기간을 더 받아 실패했다(2026-10-24 · 25,
+    `-n 8` 에서만). 그런 기록이 **실제로 있을 때만** 넉넉함을 받는다 — 있었으면 참."""
+    from datetime import datetime
+
+    from app.database import SessionLocal
+    from app.modules.objects.models import ObjectInstance
+    from app.modules.ontology.models import ObjectType
+
+    with SessionLocal() as db:
+        late = [
+            str(object_id)
+            for object_id in db.scalars(
+                select(ObjectInstance.id)
+                .join(ObjectType, ObjectType.id == ObjectInstance.type_id)
+                .where(
+                    ObjectType.slug == type_slug,
+                    ObjectInstance.updated_at > datetime.fromisoformat(since),
+                )
+            )
+            if str(object_id) not in touched
+        ]
+    if late:
+        assert set(expected) <= set(run["periods"]), (run["periods"], late)
+    else:
+        assert run["periods"] == expected
+    return bool(late)
+
+
 def _cells(slug: str) -> list[tuple[Any, ...]]:
     """셀이 든 실행의 셀 전부 — 실행 번호는 빼고(증분과 전량은 번호가 다르다)."""
     from app.database import SessionLocal
@@ -153,18 +193,25 @@ def test_바뀐_기간만_다시_센_값이_전부_다시_센_값과_같다(
     gone = client.delete(f"/api/objects/{w['case']}/{cases['건4']}", headers=admin.headers)
     assert gone.status_code == 204, gone.text
     _patch(client, admin, w["case"], cases["건6"], properties={"received": "2026-01-31"})
-    _make_object(
+    nine = _make_object(
         client,
         admin,
         w["case"],
         label="건9",
         properties={"received": "2026-02-11", "symptom": "발열", "factory": "F2", "cost": 7},
     )
+    touched = {str(cases[name]) for name in ("건1", "건2", "건4", "건6")} | {nine["id"]}
 
     step = _recount(client, admin, slug)
     assert step["mode"] == "incremental", step["note"]
-    assert step["periods"] == ["2026-01-01", "2026-02-01", "2026-03-01", None]
-    assert "바뀐 기록 5건" in step["note"]
+    late = _assert_periods(
+        step,
+        ["2026-01-01", "2026-02-01", "2026-03-01", None],
+        type_slug=w["case"],
+        since=idle["watermark"],
+        touched=touched,
+    )
+    assert ("바뀐 기록" if late else "바뀐 기록 5건") in step["note"]
     increment = _cells(slug)
 
     full = _recount(client, admin, slug, reason="manual")
@@ -178,7 +225,13 @@ def test_바뀐_기간만_다시_센_값이_전부_다시_센_값과_같다(
     _patch(client, admin, w["case"], cases["건3"], properties={"received": "2026-03-21"})
     twice = _recount(client, admin, slug)
     assert twice["mode"] == "incremental"
-    assert set(twice["periods"]) == {"2026-01-01", "2026-02-01", "2026-03-01"}
+    _assert_periods(
+        twice,
+        ["2026-01-01", "2026-02-01", "2026-03-01"],
+        type_slug=w["case"],
+        since=full["watermark"],
+        touched={str(cases["건3"])},
+    )
     increment = _cells(slug)
     _recount(client, admin, slug, reason="manual")
     assert _cells(slug) == increment

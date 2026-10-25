@@ -932,6 +932,44 @@ def test_방향_없는_관계로_따라와도_잇는_방향과_끊을_것을_안
     assert [len(one["ties"]) for one in risks["records"]] == [1]
 
 
+def test_방향_없는_관계의_출발_끝이_인터페이스여도_출발점을_안다(
+    client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
+) -> None:
+    """출발 끝이 인터페이스(잠재리스크가 구현한 「위험 항목」)면 잠재리스크가 출발점이다 — 출발
+    타입 목록에서 slug 를 그대로 찾던 때는 못 알아보고 반대쪽(변경점)에서 맺으려다 타입 제한에
+    걸렸다(2026-10-24 점검). 객체 API 와 같은 `require_end_types_allowed` 로 본다."""
+    from tests.api.test_interfaces import _implement, _make_interface
+
+    hazard = _make_interface(client, admin, base="hazard", label="위험 항목")
+    assert _implement(client, admin, world["risk"], hazard).status_code == 200
+    related = _make_relation(
+        client,
+        admin,
+        base="related",
+        directed=False,
+        src_type_slugs=[hazard],
+        dst_type_slugs=[world["change"]],
+    )
+    pin = world["changes"]["핀 수"]["id"]
+    linked = _link(
+        client, member, world["risk"], world["risks"]["상관없는 것"]["id"], related, pin
+    )
+    assert linked.status_code == 201, linked.text
+    body = _one_change_template(world)
+    body["areas"][2]["follow_field"] = f"out.{related}"
+    made = client.post("/api/slides/templates", json=body, headers=admin.headers)
+    assert made.status_code == 201, made.text
+    slide = _slide(client, member, made.json(), world["models"]["A"]["id"])
+    shown = client.patch(
+        f"/api/slides/{slide['id']}", json={"picks": {"asis": [pin]}}, headers=member.headers
+    ).json()
+    risks = _areas(shown)["risks"]
+    assert [one["label"] for one in risks["records"]] == ["상관없는 것"]
+    # 따라오는 기록(잠재리스크)이 출발점이다 — 장표에서 맺는 것도 그쪽에서.
+    assert risks["link"]["direction"] == "out"
+    assert [len(one["ties"]) for one in risks["records"]] == [1]
+
+
 def test_주제가_합쳐지면_장표는_이긴_쪽을_주제로_이어_간다(
     client: TestClient, admin: Signed, member: Signed, world: dict[str, Any]
 ) -> None:

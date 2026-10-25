@@ -161,3 +161,47 @@ def test_같은_객체면_길이_0(client: TestClient, admin: Signed, member: Si
         and got["length"] == 0
         and got["paths"][0]["nodes"] == [made[0]["id"]]
     )
+
+
+def test_노드당_상한은_관계와_참조_칸이_따로_센다(
+    client: TestClient, admin: Signed, member: Signed, monkeypatch: Any
+) -> None:
+    """X 에 관계 둘 · 참조 칸 둘 — 어느 쪽도 상한(셋)에 안 닿았다. 둘을 합쳐 넷으로 세던
+    때는 잘리지 않았는데 「찾다가 멈춤」(`truncated`)이라 했다(2026-10-24 점검). 관계가
+    셋이면 닿는다. 한 층에서 읽은 선이 `PATH_EDGE_BUDGET` 에 닿아도 멈춘다."""
+    from app.modules.objects import graph
+
+    part = _make_type(client, admin, label="부품")
+    near = _make_relation(
+        client, admin, base="near", src_type_slugs=[part], dst_type_slugs=[part]
+    )
+    model = _make_type(client, admin, label="모델")
+    _make_property(
+        client,
+        admin,
+        model,
+        key="part",
+        label="부품",
+        data_type="object_ref",
+        ref_type_slug=part,
+    )
+    x = _make_object(client, admin, part, label="X")
+    for name in ("R1", "R2"):
+        other = _make_object(client, admin, part, label=name)
+        assert _link(client, admin, part, x["id"], near, other["id"]).status_code == 201
+    for name in ("M1", "M2"):
+        _make_object(client, admin, model, label=name, properties={"part": x["id"]})
+    alone = _make_object(client, admin, part, label="외딴 것")
+
+    monkeypatch.setattr(graph, "PATH_FANOUT", 3)
+    got = _path(client, member, x["id"], alone["id"])
+    assert got["found"] is False and got["truncated"] is False
+
+    third = _make_object(client, admin, part, label="R3")
+    assert _link(client, admin, part, x["id"], near, third["id"]).status_code == 201
+    assert _path(client, member, x["id"], alone["id"])["truncated"] is True
+
+    monkeypatch.setattr(graph, "PATH_FANOUT", 100)
+    assert _path(client, member, x["id"], alone["id"])["truncated"] is False
+    monkeypatch.setattr(graph, "PATH_EDGE_BUDGET", 2)
+    assert _path(client, member, x["id"], alone["id"])["truncated"] is True
