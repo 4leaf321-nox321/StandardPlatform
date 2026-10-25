@@ -6,14 +6,17 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
+from app.modules.board import services as board
 from app.modules.objects import misses
 from app.modules.search import services
-from app.modules.search.schemas import SearchHitOut, SearchOut, SearchTypeOut
+from app.modules.search.schemas import SearchHitOut, SearchOut, SearchPostOut, SearchTypeOut
 from app.shared.auth import current_user
 from app.shared.pagination import clamp_limit
 
@@ -41,6 +44,12 @@ def search(
         # **못 찾은 말은 별칭 후보로 남는다** — 응답 뒤에, 실패해도 이 답과 무관하게. 타입을
         # 안 골랐으면 범위는 「통합 검색」(빈 글자)이다.
         misses.note(background, user, type_slug or "", q, "search")
+    # 게시판 글 — 좁히지 않은 첫 쪽에만. 타입을 골랐으면 그 타입을 찾는 것이고, 글은 쪽을
+    # 넘기지 않는다(나머지는 「게시판에서 모두 보기」).
+    posts: list[tuple[Any, int]] = []
+    posts_total = 0
+    if type_slug is None and offset == 0 and len(q.strip()) >= services.MIN_QUERY:
+        posts, posts_total = board.search_posts(db, q)
     return SearchOut(
         q=q.strip(),
         total=found.total,
@@ -71,4 +80,16 @@ def search(
         limit=capped,
         offset=offset,
         min_query=services.MIN_QUERY,
+        posts=[
+            SearchPostOut(
+                id=post.id,
+                title=post.title,
+                author_name=post.author_name,
+                created_at=post.created_at,
+                comment_count=comments,
+                snippet=board.snippet(post.body, q),
+            )
+            for post, comments in posts
+        ],
+        posts_total=posts_total,
     )

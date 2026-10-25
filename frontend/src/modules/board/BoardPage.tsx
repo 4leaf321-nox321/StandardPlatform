@@ -7,7 +7,7 @@
 
 import { useState } from 'react'
 import type { FormEvent } from 'react'
-import { Link } from 'react-router-dom'
+import { Link, useSearchParams } from 'react-router-dom'
 import { MessageSquare, Paperclip, Pin } from 'lucide-react'
 
 import { boardApi } from '@/modules/board/api'
@@ -30,8 +30,10 @@ import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
 export default function BoardPage() {
-  const [draft, setDraft] = useState('')
-  const [q, setQ] = useState('')
+  // 통합 검색의 「게시판에서 모두 보기」 가 `?q=` 로 들어온다 — 그 말로 거른 목록부터.
+  const [params] = useSearchParams()
+  const [draft, setDraft] = useState(params.get('q') ?? '')
+  const [q, setQ] = useState(params.get('q')?.trim() ?? '')
   const [mine, setMine] = useState(false)
   const [offset, setOffset] = useState(0)
   const page = useResource(() => boardApi.list({ q, mine, offset }), [q, mine, offset])

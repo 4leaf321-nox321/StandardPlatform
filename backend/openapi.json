@@ -42459,6 +42459,19 @@
           "min_query": {
             "type": "integer",
             "title": "Min Query"
+          },
+          "posts": {
+            "items": {
+              "$ref": "#/components/schemas/SearchPostOut"
+            },
+            "type": "array",
+            "title": "Posts",
+            "default": []
+          },
+          "posts_total": {
+            "type": "integer",
+            "title": "Posts Total",
+            "default": 0
           }
         },
         "type": "object",
@@ -42472,6 +42485,47 @@
           "min_query"
         ],
         "title": "SearchOut"
+      },
+      "SearchPostOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "title": {
+            "type": "string",
+            "title": "Title"
+          },
+          "author_name": {
+            "type": "string",
+            "title": "Author Name"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "comment_count": {
+            "type": "integer",
+            "title": "Comment Count"
+          },
+          "snippet": {
+            "type": "string",
+            "title": "Snippet"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "author_name",
+          "created_at",
+          "comment_count",
+          "snippet"
+        ],
+        "title": "SearchPostOut",
+        "description": "게시판 글 하나(ADR 0033) — 객체가 아니라 사람이 쓴 글이라 따로 싣는다."
       },
       "SearchTypeOut": {
         "properties": {

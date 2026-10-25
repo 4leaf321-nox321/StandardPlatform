@@ -912,7 +912,11 @@ async def search(
 
     **기록**(`usage="log"` — 시장 서비스 건 · 시험 결과)은 섞어 찾을 때 줄로 안 오고
     `types[]` 의 건수와 `records` 로만 온다. 기록에서 찾으려면 그 타입을 `type_slug` 로
-    준다."""
+    준다.
+
+    **게시판 글**은 `posts`(제목 · 쓴 사람 · 때 · 맞은 자리 앞뒤 `snippet`, 새 글부터 다섯)와
+    `posts_total` 로 따로 온다 — 좁히지 않은 첫 쪽에만. 사람이 쓴 글이라 기록의 값처럼 옮기지
+    않는다. 본문 · 댓글은 `board(post_id=)`, 나머지는 `board(q=)`."""
     params: list[tuple[str, Any]] = [("q", q), ("limit", limit), ("offset", offset)]
     if type_slug:
         params.append(("type", type_slug))

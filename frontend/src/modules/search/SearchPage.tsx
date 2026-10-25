@@ -18,7 +18,7 @@
 
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Loader2, Search } from 'lucide-react'
+import { Loader2, MessagesSquare, Search } from 'lucide-react'
 
 import { searchApi } from '@/modules/search/api'
 import type { SearchResult } from '@/modules/search/api'
@@ -29,6 +29,7 @@ import { Pagination } from '@/shared/components/Pagination'
 import { TypeIcon } from '@/shared/components/TypeIcon'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
+import { shownDateTime } from '@/shared/lib/datetime'
 import { cn } from '@/shared/lib/utils'
 
 const MATCHED: Record<string, string> = {
@@ -117,12 +118,13 @@ export default function SearchPage() {
   }
 
   const tooShort = Boolean(q) && data !== null && q.length < data.min_query
+  const posts = data && !type ? (data.posts ?? []) : []
 
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader
         title="검색"
-        description="타입을 가리지 않고 이름·식별자·별칭으로 찾습니다. 볼 수 있는 것만 나옵니다."
+        description="타입을 가리지 않고 이름·식별자·별칭으로 찾습니다. 볼 수 있는 것만 나옵니다. 게시판 글은 제목·본문으로 함께 찾습니다."
       />
 
       <form
@@ -198,7 +200,7 @@ export default function SearchPage() {
         />
       ) : data && data.items.length === 0 ? (
         <EmptyState
-          title="맞는 것이 없습니다"
+          title={posts.length > 0 ? '맞는 객체가 없습니다' : '맞는 것이 없습니다'}
           hint="다른 말로 찾아 보세요 — 이름 · 식별자 · 별칭으로 찾습니다."
         />
       ) : (
@@ -251,6 +253,43 @@ export default function SearchPage() {
           {data.total.toLocaleString()}건 중 {data.items.length}건을 보고 있습니다. 위에서 타입을
           골라 좁히면 나머지까지 쪽을 넘겨 볼 수 있습니다.
         </p>
+      )}
+
+      {/* **게시판 글은 따로 선다** — 객체가 아니라 사람이 쓴 글이다(ADR 0033). 맞은 자리 앞뒤를
+          보여 왜 걸렸는지 말하고, 나머지는 그 말로 거른 게시판으로 이어 준다. */}
+      {posts.length > 0 && (
+        <section aria-label="게시판 글" className="mt-6">
+          <h2 className="mb-2 flex items-center gap-2 text-sm font-medium">
+            <MessagesSquare className="size-4" />
+            게시판 글 {(data?.posts_total ?? posts.length).toLocaleString()}건
+          </h2>
+          <ul className="divide-y rounded-md border">
+            {posts.map((one) => (
+              <li key={one.id}>
+                <Link to={`/board/${one.id}`} className="hover:bg-muted/50 block px-3 py-2">
+                  <span className="block truncate">{one.title}</span>
+                  <span className="text-muted-foreground block truncate text-xs">
+                    {one.author_name} · {shownDateTime(one.created_at)}
+                    {one.comment_count > 0 && ` · 댓글 ${one.comment_count}`}
+                  </span>
+                  {one.snippet && (
+                    <span className="text-muted-foreground mt-0.5 block truncate text-xs">
+                      {one.snippet}
+                    </span>
+                  )}
+                </Link>
+              </li>
+            ))}
+          </ul>
+          {(data?.posts_total ?? 0) > posts.length && (
+            <Link
+              to={`/board?q=${encodeURIComponent(q)}`}
+              className="text-primary mt-2 inline-block text-sm underline-offset-4 hover:underline"
+            >
+              게시판에서 {(data?.posts_total ?? 0).toLocaleString()}건 모두 보기
+            </Link>
+          )}
+        </section>
       )}
     </div>
   )

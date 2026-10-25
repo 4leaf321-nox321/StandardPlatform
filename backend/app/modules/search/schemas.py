@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from pydantic import BaseModel
 
@@ -31,6 +32,18 @@ class SearchHitOut(BaseModel):
     matched_text: str
 
 
+class SearchPostOut(BaseModel):
+    """게시판 글 하나(ADR 0033) — 객체가 아니라 사람이 쓴 글이라 따로 싣는다."""
+
+    id: uuid.UUID
+    title: str
+    author_name: str
+    created_at: datetime
+    comment_count: int
+    snippet: str
+    """본문에서 그 말이 든 자리 앞뒤 — 왜 걸렸나."""
+
+
 class SearchOut(BaseModel):
     q: str
     total: int
@@ -43,3 +56,7 @@ class SearchOut(BaseModel):
     offset: int
     min_query: int
     """이 글자 수부터 찾는다. 화면이 「두 글자 이상」 이라고 말할 근거."""
+    posts: list[SearchPostOut] = []
+    """제목 · 본문에 그 말이 든 게시판 글, 새 글부터 다섯 — **좁히지 않은 첫 쪽에만.**"""
+    posts_total: int = 0
+    """그 말이 든 글 전부의 수 — 다섯보다 많으면 「게시판에서 모두 보기」."""

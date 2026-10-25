@@ -80,6 +80,14 @@ describe('게시판', () => {
     EditLazy = (await import('@/modules/board/BoardEditPage')).default
   })
 
+  it('통합 검색의 「모두 보기」 로 들어오면 그 말로 거른 목록부터', async () => {
+    boardApi.list.mockResolvedValue({ items: [summary()], total: 1, limit: 50, offset: 0 })
+    at('/board?q=%EC%84%9C%EB%B2%84')
+    await screen.findByRole('link', { name: '빌드 서버 느림' })
+    expect(boardApi.list).toHaveBeenCalledWith({ q: '서버', mine: false, offset: 0 })
+    expect(screen.getByRole('textbox', { name: '검색어' })).toHaveValue('서버')
+  })
+
   it('목록은 고정 · 댓글 수 · 첨부 수를 보이고 검색 · 내 글로 거른다', async () => {
     boardApi.list.mockResolvedValue({
       items: [summary({ pinned: true, comment_count: 3, attachment_count: 2 })],

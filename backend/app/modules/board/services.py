@@ -13,7 +13,7 @@ from __future__ import annotations
 import uuid
 from datetime import UTC, datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import func, or_, select, update
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -24,6 +24,51 @@ from app.modules.notifications import services as notifications
 from app.shared import audit, extensions
 from app.shared.errors import NotFound, code
 from app.shared.permissions import can_edit_authored, require_authored_edit
+
+#: 통합 검색에 싣는 글 수 — 나머지는 「게시판에서 모두 보기」(그 말로 거른 게시판 목록).
+SEARCH_POSTS = 5
+#: 발췌에서 맞은 자리 앞뒤로 보이는 글자 수.
+SNIPPET_SIDE = 40
+
+
+def search_posts(
+    db: Session, q: str, *, limit: int = SEARCH_POSTS
+) -> tuple[list[tuple[BoardPost, int]], int]:
+    """제목 · 본문에 그 말이 든 글 — (새 글부터 `limit` 개와 댓글 수, 전부의 수). 목록의
+    거르기(`q`)와 같은 말로 찾는다 — 「모두 보기」 가 그 목록으로 이어지므로 수가 같아야
+    한다."""
+    needle = q.strip()
+    matched = (
+        BoardPost.deleted_at.is_(None),
+        or_(
+            BoardPost.title.icontains(needle, autoescape=True),
+            BoardPost.body.icontains(needle, autoescape=True),
+        ),
+    )
+    total = int(db.scalar(select(func.count()).select_from(BoardPost).where(*matched)) or 0)
+    if not total:
+        return [], 0
+    posts = list(
+        db.scalars(
+            select(BoardPost)
+            .where(*matched)
+            .order_by(BoardPost.created_at.desc(), BoardPost.id)
+            .limit(limit)
+        )
+    )
+    counts = comment_counts(db, [one.id for one in posts])
+    return [(one, counts.get(one.id, 0)) for one in posts], total
+
+
+def snippet(body: str, q: str) -> str:
+    """본문에서 그 말이 든 자리 앞뒤 — **왜 걸렸나.** 제목에만 들었으면 본문 앞머리."""
+    flat = " ".join(body.split())
+    at = flat.lower().find(q.strip().lower())
+    if at < 0:
+        return flat[: SNIPPET_SIDE * 2] + ("…" if len(flat) > SNIPPET_SIDE * 2 else "")
+    start = max(at - SNIPPET_SIDE, 0)
+    end = min(at + len(q.strip()) + SNIPPET_SIDE, len(flat))
+    return ("…" if start else "") + flat[start:end] + ("…" if end < len(flat) else "")
 
 
 def live_post(db: Session, post_id: uuid.UUID) -> BoardPost:

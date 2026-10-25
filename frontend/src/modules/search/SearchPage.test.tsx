@@ -159,4 +159,35 @@ describe('검색', () => {
     )
     expect(screen.getByRole('button', { name: /시장 서비스 900/ })).toHaveTextContent('기록')
   })
+
+  it('게시판 글은 따로 서고 그 글로, 나머지는 그 말로 거른 게시판으로 간다', async () => {
+    searchApi.find.mockResolvedValue({
+      ...RESULT,
+      total: 0,
+      types: [],
+      items: [],
+      posts: [
+        {
+          id: 'p1',
+          title: '핀 문의',
+          author_name: '김설계',
+          created_at: '2026-10-20T09:00:00+09:00',
+          comment_count: 2,
+          snippet: '…설명 끝에 ansys 규격서는 어디에…',
+        },
+      ],
+      posts_total: 7,
+    })
+    await open('/search?q=ansys')
+    const section = await screen.findByRole('region', { name: '게시판 글' })
+    expect(section).toHaveTextContent('게시판 글 7건')
+    expect(screen.getByRole('link', { name: /핀 문의/ })).toHaveAttribute('href', '/board/p1')
+    expect(screen.getByText(/ansys 규격서는 어디에/)).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '게시판에서 7건 모두 보기' })).toHaveAttribute(
+      'href',
+      '/board?q=ansys',
+    )
+    // 객체는 없고 글만 있다 — 「맞는 것이 없다」 고 하면 아래의 글과 어긋난다.
+    expect(screen.getByText('맞는 객체가 없습니다')).toBeInTheDocument()
+  })
 })
