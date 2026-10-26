@@ -1923,7 +1923,10 @@ async def graph_overview(ctx: Context) -> Any:
     `rdf_query` 로 들어간다. 관계 이름을 짐작해 질의를 쓰면 대개 0건이 나오고, 그 0건은
     「없다」 로 잘못 읽힌다.
 
-    돌려주는 것: 타입마다 객체 수, 타입 사이의 관계 종류와 그 수.
+    돌려주는 것: 타입마다 객체 수, 타입 사이의 관계 종류와 그 수. 관계의 수는 **찍어 둔
+    값**이다(`counted_at` — 큰 설치에서 세는 데 분 단위라 작업이 세어 둔다). `counting` 이면
+    아직 안 셌다 — 선의 수 0 은 「비어 있음」 이 아니라 「모름」 이다. 지금 몇 개인지가
+    중요하면 `objects_summary` 의 관계 주소로 센다.
     """
     return await _get(ctx, "/api/graph/overview")
 

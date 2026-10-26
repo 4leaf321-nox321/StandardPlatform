@@ -799,6 +799,22 @@ def metrics_recompute(work: Work) -> dict[str, Any]:
     )
 
 
+def graph_edge_counts(work: Work) -> dict[str, Any]:
+    """정의 그래프의 선 굵기를 세어 찍는다(ADR 0038) — 그래프 첫 화면이 낡은 값을 보면 넣는다.
+    큰 설치에서 분 단위라 화면이 그 자리에서 세지 않는다."""
+    from app.modules.objects import graphcounts
+
+    work.progress("세기", 0, 1)
+    taken = graphcounts.take(work.db)
+    work.progress("세기", 1, 1)
+    return {
+        "relations": len(taken.relations),
+        "refs": len(taken.refs),
+        "links": len(taken.links),
+        "seconds": taken.seconds,
+    }
+
+
 def metric_insights(work: Work) -> dict[str, Any]:
     """지표 하나를 훑어 「눈여겨볼 것」 을 적는다(ADR 0032) — 지표를 다시 센 뒤 들어온다.
     분석 하나의 실패는 훑기를 멈추지 않고 결과에 적는다."""
@@ -958,6 +974,17 @@ register(
         False,
         False,
         metrics_recompute,
+        allow_system=True,
+        admin_only=True,
+    )
+)
+register(
+    Kind(
+        "graph_edge_counts",
+        "그래프 선 굵기 세기",
+        False,
+        False,
+        graph_edge_counts,
         allow_system=True,
         admin_only=True,
     )

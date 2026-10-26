@@ -23,7 +23,9 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
+    BigInteger,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -40,7 +42,7 @@ from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
-from app.modules.objects import attachment_sync, refindex
+from app.modules.objects import attachment_sync, refindex, typecounts
 from app.modules.ontology.models import SLUG_MAX
 
 #: 식별자의 비교키를 DB 에서 — `shared.text.compare_key`(NFKC · 공백 정리 · 소문자)와 같게.
@@ -423,8 +425,41 @@ class ObjectRef(Base):
     src_type_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True))
 
 
+class ObjectTypeCount(Base):
+    """타입마다 살아 있는 객체 수의 **증감 줄**(ADR 0038) — 트리거가 적고(`typecounts`),
+    읽을 때 타입마다 더한다. 한 줄을 고쳐 쓰지 않는 까닭은 그 줄의 잠금(같은 타입을 넣는
+    트랜잭션끼리 기다림)이다. **FK 가 없다** — 타입을 지우는 문장 안에서 그 타입의 객체를
+    지운 줄이 적힌다."""
+
+    __tablename__ = "object_type_counts"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    type_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True))
+    delta: Mapped[int] = mapped_column(BigInteger)
+
+
+class GraphEdgeSnapshot(Base):
+    """정의 그래프의 선 굵기를 **찍어 둔 값**(ADR 0038, `graphcounts`) — 한 줄(id 1)을 통째로
+    바꾼다. 그래프 첫 화면이 열 때마다 관계 · 참조 색인 · 링크 전부를 세던 것(운영 4분)을
+    작업이 세어 여기 둔다."""
+
+    __tablename__ = "graph_edge_snapshots"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    counted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    seconds: Mapped[float] = mapped_column(Float, default=0.0)
+    """세는 데 걸린 시간 — 화면이 「세는 데 몇 분」 을 말할 근거."""
+    relations: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    """[관계 slug, 출발 타입 id, 도착 타입 id, 수]."""
+    refs: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    """[출발 타입 id, 칸 키, 가리킨 타입 id, 수]."""
+    links: Mapped[list[Any]] = mapped_column(JSONB, default=list)
+    """[관계 slug, 출발 타입 slug, 도착 타입 slug, 수] — 원 표와 이은 선."""
+
+
 refindex.attach(Base.metadata)
 attachment_sync.attach(Base.metadata)
+typecounts.attach(Base.metadata)
 
 
 def _need_trigram(_target: Any, connection: Any, **_kw: Any) -> None:

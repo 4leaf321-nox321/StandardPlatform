@@ -76,6 +76,7 @@ import {
 } from '@/shared/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
 import { useResource } from '@/shared/hooks/useResource'
+import { shownDateTime } from '@/shared/lib/datetime'
 
 type Mode = 'schema' | 'explore'
 type ColorBy = 'type' | 'group' | 'workspace' | 'status' | 'community'
@@ -568,16 +569,20 @@ function SchemaView({
         radius: 7 + Math.sqrt(one.count / maxCount) * 12,
         shape: 'square',
       })),
+      // 선 굵기를 아직 안 셌으면(`counting`) 0 은 「비어 있음」 이 아니라 「모름」 — 점선으로
+      // 그리면 이어진 관계까지 비어 보인다.
       links: overview.edges.map((one): CanvasLink => ({
         id: `${one.relation}:${one.src_type}:${one.dst_type}`,
         source: one.src_type,
         target: one.dst_type,
-        label: one.count
-          ? `${one.label} · ${one.count.toLocaleString()}`
-          : `${one.label} · 비어 있음`,
+        label: overview.counting
+          ? one.label
+          : one.count
+            ? `${one.label} · ${one.count.toLocaleString()}`
+            : `${one.label} · 비어 있음`,
         directed: one.directed,
         width: one.count ? 1 + (one.count / maxEdge) * 5 : 1,
-        dashed: one.count === 0,
+        dashed: !overview.counting && one.count === 0,
       })),
     }
   }, [overview, typeColor])
@@ -705,8 +710,15 @@ function SchemaView({
               {overview && (
                 <div className="text-muted-foreground bg-background/80 absolute bottom-2 left-2 rounded px-2 py-1 text-xs">
                   타입 {overview.nodes.length} · 관계 종류 {overview.edges.length} · 객체{' '}
-                  {overview.object_count.toLocaleString()} · 관계{' '}
-                  {overview.edge_count.toLocaleString()}
+                  {overview.object_count.toLocaleString()} ·{' '}
+                  {overview.counting ? (
+                    '관계 수는 세는 중입니다 — 잠시 뒤 다시 열면 선 굵기가 보입니다'
+                  ) : (
+                    <>
+                      관계 {overview.edge_count.toLocaleString()}
+                      {overview.counted_at && ` (${shownDateTime(overview.counted_at)} 기준)`}
+                    </>
+                  )}
                 </div>
               )}
             </>

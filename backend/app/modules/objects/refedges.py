@@ -411,14 +411,39 @@ class TypeRefEdge:
     count: int
 
 
-def type_edge_counts(db: Session, *, user: User) -> list[TypeRefEdge]:
-    """타입 사이에 참조 칸으로 실제 몇 개가 이어졌나 — 정의 그래프의 선 굵기.
+RefCounts = dict[tuple[uuid.UUID, str, uuid.UUID], int]
+"""(출발 타입 id, 칸 키, 가리킨 타입 id) → 수."""
 
-    보이는 규칙을 **양 끝에 따로** 건다 — 관계의 굵기와 같은 원칙(`graph.type_edge_counts`).
-    참조 색인을 **한 번** 묶는다(예전에는 칸마다 가리키는 타입을 두 번씩 통째로 읽었다)."""
+
+def type_edge_counts(
+    db: Session, *, user: User, counted: RefCounts | None = None
+) -> list[TypeRefEdge]:
+    """타입 사이에 참조 칸으로 실제 몇 개가 이어졌나 — 정의 그래프의 선 굵기. `counted` 를 주면
+    세지 않고 그것으로(찍어 둔 값 — `graphcounts`)."""
     all_kinds = kinds(db)
     if not all_kinds:
         return []
+    if counted is None:
+        counted = ref_counts(db, user=user)
+    # 대상이 인터페이스면 **구현 타입마다** 한 선 — 그림에는 타입만 선다. 0 인 선도 낸다.
+    return [
+        TypeRefEdge(
+            kind.slug,
+            kind.src_type.id,
+            dst.id,
+            counted.get((kind.src_type.id, kind.key, dst.id), 0),
+        )
+        for kind in all_kinds.values()
+        for dst in kind.dst_types
+    ]
+
+
+def ref_counts(db: Session, *, user: User) -> RefCounts:
+    """참조 칸으로 이어진 수를 (출발 타입 · 칸 · 가리킨 타입)마다 — **참조 색인 전부를 객체
+    표와 양 끝으로 잇는다**(큰 설치에서 분 단위, 그래서 그래프는 찍어 둔 값을 쓴다).
+
+    보이는 규칙을 **양 끝에 따로** 건다 — 관계의 굵기와 같은 원칙(`graph.type_edge_counts`).
+    참조 색인을 **한 번** 묶는다(예전에는 칸마다 가리키는 타입을 두 번씩 통째로 읽었다)."""
     source = aliased(ObjectInstance)
     target = aliased(ObjectInstance)
     rows = db.execute(
@@ -432,18 +457,7 @@ def type_edge_counts(db: Session, *, user: User) -> list[TypeRefEdge]:
         )
         .group_by(ObjectRef.src_type_id, ObjectRef.key, target.type_id)
     )
-    counted = {(src, key, dst): int(count) for src, key, dst, count in rows}
-    # 대상이 인터페이스면 **구현 타입마다** 한 선 — 그림에는 타입만 선다. 0 인 선도 낸다.
-    return [
-        TypeRefEdge(
-            kind.slug,
-            kind.src_type.id,
-            dst.id,
-            counted.get((kind.src_type.id, kind.key, dst.id), 0),
-        )
-        for kind in all_kinds.values()
-        for dst in kind.dst_types
-    ]
+    return {(src, key, dst): int(count) for src, key, dst, count in rows}
 
 
 # --- 트리 — 자식이 부모를 칸으로 가리킨다 ------------------------------------

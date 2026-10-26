@@ -181,6 +181,17 @@ def clock_settled(after: datetime | None = None, *, limit: float = 10.0) -> None
         time.sleep(0.05)
 
 
+def graph_counted() -> None:
+    """그래프 선 굵기를 **지금** 찍는다(ADR 0038) — 개요는 찍어 둔 값을 그리므로, 방금 이은
+    선의 굵기를 보려면 먼저 센다(운영에서는 작업이 낡은 값을 다시 센다)."""
+    from app.database import SessionLocal
+    from app.modules.objects import graphcounts
+
+    with SessionLocal() as db:
+        graphcounts.take(db)
+        db.commit()
+
+
 def finish_job(client: TestClient, who: Signed, job: dict[str, Any]) -> dict[str, Any]:
     """워커를 **이 프로세스에서** 돌려 그 작업이 끝날 때까지. 시험은 워커 프로세스를 안
     띄운다 — 같은 코드를 같은 DB 로 부르면 그것이 곧 워커다. 남이 넣은 작업이 앞에 있어도

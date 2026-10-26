@@ -12,7 +12,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, graph_counted
 from tests.api.test_graph import _neighborhood
 from tests.api.test_ontology import _make_object, _make_property, _make_type
 
@@ -70,6 +70,7 @@ def test_정의_그래프에_참조_칸이_선으로_굵기와_함께_선다(
     client: TestClient, admin: Signed
 ) -> None:
     h = _hierarchy(client, admin)
+    graph_counted()  # 선 굵기는 찍어 둔 값이다(ADR 0038)
     body = client.get("/api/graph/overview", headers=admin.headers).json()
     edges = {(e["relation"], e["src_type"], e["dst_type"]): e for e in body["edges"]}
     task_to_project = edges[(f"ref:{h['task']}.project", h["task"], h["project"])]

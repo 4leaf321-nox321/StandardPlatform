@@ -276,6 +276,18 @@ describe('지식 그래프', () => {
     expect(screen.queryByRole('button', { name: /전부 보기|전체 보기/ })).not.toBeInTheDocument()
   })
 
+  it('선 굵기는 찍어 둔 때를 말하고, 아직 안 셌으면 세는 중이라고 한다', async () => {
+    // ADR 0038 — 개요는 선 굵기를 작업이 찍어 둔 값으로 그린다.
+    graphApi.overview.mockResolvedValue({ ...OVERVIEW, counted_at: '2026-10-26T09:30:00+09:00' })
+    const { unmount } = await mount()
+    await waitFor(() => expect(screen.getByText(/관계 5 \(.+ 기준\)/)).toBeInTheDocument())
+    unmount()
+
+    graphApi.overview.mockResolvedValue({ ...OVERVIEW, edge_count: 0, counting: true })
+    await mount()
+    await waitFor(() => expect(screen.getByText(/관계 수는 세는 중입니다/)).toBeInTheDocument())
+  })
+
   it('정의가 없으면 이유와 갈 곳을 말한다', async () => {
     graphApi.overview.mockResolvedValue({ nodes: [], edges: [], object_count: 0, edge_count: 0 })
     await mount()

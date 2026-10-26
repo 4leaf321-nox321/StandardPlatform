@@ -35128,6 +35128,23 @@
           "edge_count": {
             "type": "integer",
             "title": "Edge Count"
+          },
+          "counted_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Counted At"
+          },
+          "counting": {
+            "type": "boolean",
+            "title": "Counting",
+            "default": false
           }
         },
         "type": "object",

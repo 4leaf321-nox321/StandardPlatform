@@ -19,7 +19,7 @@ from app.modules.ontology import promotion
 from app.modules.ontology.models import ObjectType
 from app.modules.workspaces.models import Workspace
 from app.shared import system_sources
-from tests.api.conftest import Signed, export_file
+from tests.api.conftest import Signed, export_file, graph_counted
 from tests.api.test_ontology import (
     _link,
     _make_object,
@@ -554,6 +554,7 @@ def test_그래프가_원_표와_이은_선을_본다(
         == 201
     )
 
+    graph_counted()  # 선 굵기는 찍어 둔 값이다(ADR 0038)
     overview = client.get("/api/graph/overview", headers=admin.headers).json()
     edge = next(e for e in overview["edges"] if e["relation"] == w["kind"])
     assert (

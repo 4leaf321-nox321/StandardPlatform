@@ -60,7 +60,7 @@ from app.modules.coreapi.schemas import (
     CoreWithheldReferenceOut,
     CoreWithheldRelationOut,
 )
-from app.modules.objects import aliases
+from app.modules.objects import aliases, typecounts
 from app.modules.objects import keys as key_history
 from app.modules.objects.models import (
     ObjectInstance,
@@ -73,7 +73,7 @@ from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
 from app.modules.workspaces.models import WorkspaceMember
 from app.shared import audit
 from app.shared.errors import NotFound, code
-from app.shared.permissions import visible_owner_clause
+from app.shared.permissions import sees_every_department, visible_owner_clause
 
 #: 한 번에 줄 행의 기본·상한. 상한을 서버가 강제하는 이유는 목록과 같다 — 받는 쪽이
 #: `limit=1000000` 을 넣는 날 이쪽이 죽는다.
@@ -287,7 +287,11 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
     ids = [one.id for one in types]
     counts: dict[uuid.UUID, int] = {}
     latest_of: dict[uuid.UUID, datetime] = {}
-    if ids:
+    if ids and sees_every_department(user):
+        # 모든 부서를 보면 계수표(ADR 0038) — 객체 표를 세지 않는다.
+        everything = typecounts.counts(db)
+        counts = {type_id: everything[type_id] for type_id in ids if type_id in everything}
+    elif ids:
         counts = {
             type_id: total
             for type_id, total in db.execute(
@@ -300,6 +304,7 @@ def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:
                 .group_by(ObjectInstance.type_id)
             )
         }
+    if ids:
         latest_of = {
             type_id: when
             for type_id, when in db.execute(

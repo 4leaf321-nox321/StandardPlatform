@@ -11,7 +11,7 @@ from typing import Any
 
 from fastapi.testclient import TestClient
 
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, graph_counted
 from tests.api.test_interfaces import _add_common, _code, _make_interface
 from tests.api.test_ontology import _make_object, _make_property, _make_type, _uniq
 
@@ -247,6 +247,7 @@ def test_인터페이스를_가리키는_칸으로_공통_속성을_건너_거�
     )
     assert edge["dst_type_slug"] == w["iface"]  # 적힌 대로
 
+    graph_counted()  # 선 굵기는 찍어 둔 값이다(ADR 0038)
     overview = client.get("/api/graph/overview", headers=admin.headers).json()
     drawn = {
         (one["dst_type"], one["count"])

@@ -25,7 +25,7 @@ from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs import services as job_services
 from app.modules.jobs.schemas import JobOut
 from app.modules.metrics.models import MetricDef
-from app.modules.objects import bulk, purge, refedges
+from app.modules.objects import bulk, purge, refedges, typecounts
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.ontology import (
     codebook,
@@ -195,14 +195,10 @@ def _type(db: Session, slug: str) -> ObjectType:
 
 
 def _counts(db: Session) -> dict[uuid.UUID, int]:
-    """타입별 객체 수. **한 번에 센다** — 타입마다 세면 목록 하나에 질의가
-    타입 수만큼 붙고, 타입은 늘어나기만 한다."""
-    rows = db.execute(
-        select(ObjectInstance.type_id, func.count())
-        .where(ObjectInstance.deleted_at.is_(None))
-        .group_by(ObjectInstance.type_id)
-    )
-    return {type_id: count for type_id, count in rows}
+    """타입별 객체 수 — **계수표에서**(ADR 0038). 읽을 때마다 객체 표 전체를 세던 때는
+    운영(객체 수천만)에서 24초였고, 그동안 목록 화면이 머리글 「부서 · 상태」 만 세운 채
+    기다렸다."""
+    return typecounts.counts(db)
 
 
 def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectTypeOut:

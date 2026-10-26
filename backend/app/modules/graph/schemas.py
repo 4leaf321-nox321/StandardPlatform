@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import datetime
 
 from pydantic import BaseModel
 
@@ -40,6 +41,12 @@ class OverviewOut(BaseModel):
     object_count: int
     """전체 객체 수(보이는 것). 「이 그림이 몇 개를 요약한 것인가」."""
     edge_count: int
+    counted_at: datetime | None = None
+    """선 굵기(관계 · 참조 칸 · 링크 수)를 **찍어 둔 때**(ADR 0038) — 비면 지금 센 것(부서로
+    조회를 좁힌 설치)이거나 아직 한 번도 안 센 것(`counting`)."""
+    counting: bool = False
+    """선 굵기를 아직 안 찍었다 — 세는 작업이 돈다. 그동안 선의 수는 0 이 아니라 「모름」
+    이다."""
 
 
 # --- 이웃 그래프 --------------------------------------------------------------

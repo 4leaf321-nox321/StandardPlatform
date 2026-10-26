@@ -14,7 +14,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.modules.graph import routes
-from tests.api.conftest import Signed
+from tests.api.conftest import Signed, graph_counted
 from tests.api.test_ontology import (
     _link,
     _make_object,
@@ -57,6 +57,7 @@ def test_정의_그래프는_타입과_관계_종류를_준다(client: TestClien
     acme = _make_object(client, admin, vendor, label="ACME")
     assert _link(client, admin, part, bolt["id"], kind, acme["id"]).status_code == 201
 
+    graph_counted()  # 선 굵기는 찍어 둔 값이다(ADR 0038)
     body = client.get("/api/graph/overview", headers=admin.headers).json()
     slugs = {node["slug"]: node for node in body["nodes"]}
     assert slugs[part]["count"] == 1

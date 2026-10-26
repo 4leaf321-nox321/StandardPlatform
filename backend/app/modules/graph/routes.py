@@ -35,7 +35,7 @@ from app.modules.graph.schemas import (
     TypeEdgeOut,
     TypeNodeOut,
 )
-from app.modules.objects import graph, refedges, system
+from app.modules.objects import graph, graphcounts, refedges, system
 from app.modules.objects.models import ObjectAlias, ObjectInstance
 from app.modules.objects.schemas import LogCountOut
 from app.modules.ontology import interfaces
@@ -44,7 +44,7 @@ from app.modules.workspaces.models import Workspace
 from app.shared import querycap, system_sources
 from app.shared.auth import current_user
 from app.shared.errors import NotFound, code
-from app.shared.permissions import visible_owner_clause
+from app.shared.permissions import sees_every_department, visible_owner_clause
 from app.shared.system_sources import SystemRef
 
 router = APIRouter(prefix="/graph", tags=["graph"])
@@ -204,6 +204,16 @@ def overview(user: User = Depends(current_user), db: Session = Depends(get_db)) 
     groups = {row.id: row.slug for row in db.scalars(select(NavGroup))}
     kinds = _kinds(db)
     counts = graph.object_counts_by_type(db, user=user)
+    # **선 굵기는 찍어 둔 값**(ADR 0038) — 열 때마다 관계 · 참조 색인 · 링크 전부를 세면 큰
+    # 설치에서 분 단위(운영 4분)다. 없거나 낡았으면 다시 세는 작업을 넣고, 그동안은 있는 값을
+    # 그린다. 부서로 조회를 좁힌 설치는 사람마다 보이는 수가 달라 지금처럼 센다.
+    snapshot: graphcounts.Snapshot | None = None
+    shared = sees_every_department(user)
+    if shared:
+        snapshot = graphcounts.read(db)
+        if graphcounts.stale(snapshot):
+            graphcounts.request(db)
+            db.commit()
     by_id = {row.id: row for row in types}
     by_slug = {row.slug: row for row in types}
     systems = _system_types(by_id)
@@ -227,7 +237,12 @@ def overview(user: User = Depends(current_user), db: Session = Depends(get_db)) 
     # 있어야 「왜 이 선이 없지」 를 묻지 않는다.
     seen: set[tuple[str, str, str]] = set()
     edges: list[TypeEdgeOut] = []
-    for found in graph.type_edge_counts(db, user=user):
+    relation_counts = (
+        snapshot.relations
+        if snapshot is not None
+        else ([] if shared else graph.type_edge_counts(db, user=user))
+    )
+    for found in relation_counts:
         src = by_id.get(found.src_type_id)
         dst = by_id.get(found.dst_type_id)
         if src is None or dst is None:
@@ -246,7 +261,8 @@ def overview(user: User = Depends(current_user), db: Session = Depends(get_db)) 
         )
     # 참조 칸도 선이다 — 「개발모델의 과제」 는 칸에 저장한 관계라, 여기 안 그리면 계층이
     # 안 보인다.
-    for ref in refedges.type_edge_counts(db, user=user):
+    ref_counted = snapshot.refs if snapshot is not None else ({} if shared else None)
+    for ref in refedges.type_edge_counts(db, user=user, counted=ref_counted):
         src = by_id.get(ref.src_type_id)
         dst = by_id.get(ref.dst_type_id)
         kind = kinds.get(ref.relation)
@@ -264,7 +280,12 @@ def overview(user: User = Depends(current_user), db: Session = Depends(get_db)) 
             )
         )
     # 원 표와 이은 선도 굵기에 든다 — 안 그러면 「사용 부서」 선이 정의만 있는 점선으로 보인다.
-    for link in graph.type_link_counts(db, user=user, systems=list(systems)):
+    link_counts = (
+        snapshot.links
+        if snapshot is not None
+        else ([] if shared else graph.type_link_counts(db, user=user, systems=list(systems)))
+    )
+    for link in link_counts:
         if link.src_type_slug not in by_slug or link.dst_type_slug not in by_slug:
             continue
         kind = kinds.get(link.relation)
@@ -311,6 +332,8 @@ def overview(user: User = Depends(current_user), db: Session = Depends(get_db)) 
         edges=edges,
         object_count=sum(counts.values()),
         edge_count=sum(edge.count for edge in edges),
+        counted_at=snapshot.counted_at if snapshot is not None else None,
+        counting=shared and snapshot is None,
     )
 
 

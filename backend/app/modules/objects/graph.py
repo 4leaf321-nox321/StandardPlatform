@@ -29,10 +29,10 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import ColumnElement
 
 from app.modules.accounts.models import User
-from app.modules.objects import refedges
+from app.modules.objects import refedges, typecounts
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRef, ObjectRelation
 from app.shared.batches import chunks
-from app.shared.permissions import visible_owner_clause
+from app.shared.permissions import sees_every_department, visible_owner_clause
 
 ParentEnd = Literal["src", "dst"]
 
@@ -560,7 +560,10 @@ def type_edge_counts(db: Session, *, user: User) -> list[TypeEdge]:
 
 
 def object_counts_by_type(db: Session, *, user: User) -> dict[uuid.UUID, int]:
-    """타입마다 보이는 객체가 몇 개인가 — 정의 그래프의 노드 크기."""
+    """타입마다 보이는 객체가 몇 개인가 — 정의 그래프의 노드 크기. 모든 부서를 보는 사람이면
+    계수표(ADR 0038), 부서로 좁힌 설치의 멤버만 그 자리에서 센다."""
+    if sees_every_department(user):
+        return typecounts.counts(db)
     obj = ObjectInstance
     rows = db.execute(
         select(obj.type_id, func.count())

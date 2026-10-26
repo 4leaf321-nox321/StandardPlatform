@@ -7,39 +7,23 @@
 
 from __future__ import annotations
 
-import time
 import uuid
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.modules.objects.models import ObjectInstance
+from app.modules.objects import typecounts
 from app.modules.ontology.models import ObjectType
 from app.shared.extensions import ProfileFact, count_text
 
 #: 한 줄에 늘어놓는 타입 수 — 그 밖은 「그 밖에 N종」.
 SHOWN = 12
-#: 건수는 이만큼 붙들어 둔다 — 홈의 「남은 일」 · MCP 접속마다 기록 200만 건을 다시 세지 않게.
-#: 낡음 판정은 건수를 안 쓰므로 늘 지금이다.
-COUNT_TTL = 60.0
-_counted: tuple[float, dict[uuid.UUID, int]] = (0.0, {})
 
 
 def _counts(db: Session) -> dict[uuid.UUID, int]:
-    global _counted
-    at, cached = _counted
-    if at and time.monotonic() - at < COUNT_TTL:
-        return cached
-    fresh: dict[uuid.UUID, int] = {
-        type_id: int(count)
-        for type_id, count in db.execute(
-            select(ObjectInstance.type_id, func.count())
-            .where(ObjectInstance.deleted_at.is_(None))
-            .group_by(ObjectInstance.type_id)
-        ).all()
-    }
-    _counted = (time.monotonic(), fresh)
-    return fresh
+    """타입별 객체 수 — 계수표(ADR 0038). 1분씩 붙들어 두던 것(그래도 비면 운영에서 수십 초 —
+    MCP 접속이 그만큼 늦었다)을 걷었다."""
+    return typecounts.counts(db)
 
 
 def _listed(rows: list[tuple[ObjectType, int]]) -> str:

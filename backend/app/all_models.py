@@ -45,12 +45,14 @@ from app.modules.metrics.models import (
 from app.modules.notices.models import Notice, NoticeRead
 from app.modules.notifications.models import Notification
 from app.modules.objects.models import (
+    GraphEdgeSnapshot,
     ObjectAlias,
     ObjectInstance,
     ObjectLink,
     ObjectRef,
     ObjectRelation,
     ObjectRelationTombstone,
+    ObjectTypeCount,
     ObjectWatch,
     ObjectYear,
     SavedView,
@@ -90,6 +92,7 @@ __all__ = [
     "DataSource",
     "DataSourceRun",
     "ExtensionState",
+    "GraphEdgeSnapshot",
     "HomeMetric",
     "Job",
     "JobFile",
@@ -111,6 +114,7 @@ __all__ = [
     "ObjectRelation",
     "ObjectRelationTombstone",
     "ObjectType",
+    "ObjectTypeCount",
     "ObjectWatch",
     "ObjectYear",
     "OntologySnapshot",

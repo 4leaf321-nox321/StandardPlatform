@@ -34,6 +34,10 @@ export interface Overview {
   edges: TypeEdge[]
   object_count: number
   edge_count: number
+  /** 선 굵기를 찍어 둔 때(ADR 0038) — 비면 지금 센 것이거나 아직 안 센 것(`counting`). */
+  counted_at?: string | null
+  /** 선 굵기를 아직 안 찍었다 — 세는 중. 그동안 선의 수는 0 이 아니라 「모름」. */
+  counting?: boolean
 }
 
 export interface GraphNode {
