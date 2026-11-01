@@ -316,7 +316,8 @@ export function Sidebar({ collapsed, workspaceSlug }: SidebarProps) {
       data-collapsed={collapsed}
       aria-hidden={collapsed}
       className={cn(
-        'bg-sidebar hidden h-full shrink-0 flex-col overflow-hidden md:flex',
+        // 인쇄에는 본문만 — 한 장 보고서(자주검증 …)에 메뉴가 찍히면 그 자리만큼 표가 좁아진다.
+        'bg-sidebar hidden h-full shrink-0 flex-col overflow-hidden md:flex print:hidden',
         'transition-[width] duration-200 ease-in-out',
         collapsed ? 'w-0 border-r-0' : 'w-60 border-r',
       )}

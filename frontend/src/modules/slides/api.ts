@@ -12,6 +12,8 @@ export interface AreaCondition {
   op: string
   value: string
   exclude: number
+  /** 같은 관계 묶음(ADR 0043) — 0 이면 묶지 않음. */
+  edge?: number
 }
 
 /** 틀의 영역 하나 — 서버의 `AreaIn`. */

@@ -5,12 +5,20 @@
  * 화면의 말로 바뀌는 자리다: 상한 안내, 「+N」 의 근거, 빈 상태의 이유.
  */
 
-import { render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { MemoryRouter } from 'react-router-dom'
+import type { ReactNode } from 'react'
+import { MemoryRouter, useLocation } from 'react-router-dom'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-import type { Neighborhood, Overview, PathResult, Subgraph } from '@/modules/graph/api'
+import type {
+  MapData,
+  Neighborhood,
+  Overview,
+  PathResult,
+  Subgraph,
+  Whole,
+} from '@/modules/graph/api'
 
 vi.mock('@/shared/auth/AuthContext', () => ({
   useAuth: () => ({ user: { is_system_admin: true, memberships: [] } }),
@@ -157,8 +165,96 @@ const graphApi = vi.hoisted(() => ({
   neighborhood: vi.fn(),
   subgraph: vi.fn(),
   path: vi.fn(),
+  whole: vi.fn(),
+  map: vi.fn(),
+  mapPoints: vi.fn(),
+  mapLinks: vi.fn(),
+  mapLocate: vi.fn(),
+  mapRelayout: vi.fn(),
+  hubKeys: vi.fn(),
+  setHubKey: vi.fn(),
 }))
 vi.mock('@/modules/graph/api', () => ({ graphApi }))
+/** 지도 시험이 카메라를 움직인 척할 때 알릴 보이는 범위. */
+const camera = vi.hoisted(() => ({ view: { x0: 0, y0: 0, x1: 1, y1: 1 } }))
+
+// 정적 그리기 — sigma(WebGL)는 happy-dom 에서 안 돈다. 그리는 쪽을 경계에서 바꿔, 무엇을 받았는지
+// (이름 · 자리 수 · 그림 위의 말)만 본다. 배치 작업자도 여기서 바꾼다(작업자가 없다).
+vi.mock('@/modules/graph/WholeCanvas', () => ({
+  default: ({
+    labels,
+    positions,
+    onSelect,
+    onOpen,
+    overlay,
+    map,
+    legend,
+    onLegendClick,
+  }: {
+    labels: string[]
+    positions: Float32Array
+    onSelect: (at: number | null) => void
+    onOpen?: (at: number) => void
+    overlay?: ReactNode
+    map?: {
+      bbox: number[]
+      onView?: (view: unknown) => void
+      extra?: { labels: string[] } | null
+      links?: { src: number[]; dst: number[] } | null
+    } | null
+    legend?: { label: string; line?: boolean; key?: number }[]
+    onLegendClick?: (key: number) => void
+  }) => (
+    <div
+      data-testid="whole-canvas"
+      data-placed={positions.length / 2}
+      data-frame={map ? map.bbox.join(',') : ''}
+      data-extra={map?.extra?.labels.length ?? 0}
+      data-links={
+        map?.links ? map.links.src.map((a, k) => `${a}>${map.links!.dst[k]}`).join(' ') : ''
+      }
+    >
+      {map &&
+        legend
+          ?.filter((item) => item.line && item.key !== undefined)
+          .map((item) => (
+            <button key={item.label} type="button" onClick={() => onLegendClick?.(item.key!)}>
+              선 범례 {item.label}
+            </button>
+          ))}
+      {labels.map((label, at) => (
+        <button key={label} type="button" onClick={() => onSelect(at)}>
+          그림 노드 {label}
+        </button>
+      ))}
+      {labels.map((label, at) => (
+        <button key={`open:${label}`} type="button" onClick={() => onOpen?.(at)}>
+          두 번 클릭 {label}
+        </button>
+      ))}
+      {map && (
+        <button
+          type="button"
+          onClick={() =>
+            map.onView?.({
+              ...camera.view,
+              width: 800,
+              height: 600,
+              ratio: 0.1,
+              unitPx: 4,
+              project: (x: number, y: number) => [x, y],
+            })
+          }
+        >
+          카메라 움직임
+        </button>
+      )}
+      {overlay}
+    </div>
+  ),
+}))
+const layoutWorker = vi.hoisted(() => ({ startCluster: vi.fn() }))
+vi.mock('@/modules/graph/wholeWorker', () => layoutWorker)
 const objectApi = vi.hoisted(() => ({
   list: vi.fn(),
   profile: vi.fn(() =>
@@ -303,7 +399,8 @@ describe('지식 그래프', () => {
     await mount()
     await userEvent.click(screen.getByRole('tab', { name: '탐색' }))
     expect(screen.getByText('시작점을 선택하세요')).toBeInTheDocument()
-    expect(screen.getByText(/모든 타입을 한 번에 그리는 단추는 없습니다/)).toBeInTheDocument()
+    // 전부를 한 번에 보는 길은 그림이 아니라 지도다 — 어디 있는지 말한다.
+    expect(screen.getByText(/「전체 지도」 — 서버가 미리 놓아 둔 지도입니다/)).toBeInTheDocument()
     expect(graphApi.neighborhood).not.toHaveBeenCalled()
   })
 
@@ -547,6 +644,33 @@ describe('두 객체 사이의 길', () => {
     truncated: false,
   }
 
+  it('기준일이 이웃 · 연결 경로 요청에 실린다(ADR 0039)', async () => {
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    graphApi.neighborhood.mockResolvedValue(NEIGHBORHOOD)
+    graphApi.path.mockResolvedValue(FOUND)
+    await mount('/graph?focus=hub&as_of=2026-02-15')
+    await waitFor(() =>
+      expect(graphApi.neighborhood).toHaveBeenCalledWith(
+        expect.objectContaining({ focus: 'hub', asOf: '2026-02-15' }),
+      ),
+    )
+    // 고르개에서 바꾸면 그날의 관계로 다시 그린다.
+    fireEvent.change(screen.getByLabelText('기준일'), { target: { value: '2026-04-15' } })
+    await waitFor(() =>
+      expect(graphApi.neighborhood).toHaveBeenLastCalledWith(
+        expect.objectContaining({ focus: 'hub', asOf: '2026-04-15' }),
+      ),
+    )
+    cleanup()
+
+    await mount('/graph?focus=a&to=b&as_of=2026-02-15')
+    await waitFor(() =>
+      expect(graphApi.path).toHaveBeenCalledWith(
+        expect.objectContaining({ source: 'a', target: 'b', asOf: '2026-02-15' }),
+      ),
+    )
+  })
+
   it('?focus=&to= 로 들어오면 길을 찾아 그리고 길이를 말한다', async () => {
     graphApi.overview.mockResolvedValue(OVERVIEW)
     graphApi.path.mockResolvedValue(FOUND)
@@ -686,5 +810,541 @@ describe('구조 — 흐름(사케이)', () => {
     await mount()
     await waitFor(() => expect(screen.getByText(/타입 2 · 관계 종류 1/)).toBeInTheDocument())
     expect(screen.queryByRole('button', { name: /흐름으로/ })).not.toBeInTheDocument()
+  })
+})
+
+describe('정적 그리기', () => {
+  const WHOLE: Whole = {
+    seed: 'focus',
+    focus: 'hub',
+    seed_types: ['part'],
+    depth: 1,
+    records: false,
+    as_of: '2026-11-01',
+    max_nodes: 200_000,
+    max_edges: 700_000,
+    types: [{ slug: 'part', label: '부품', count: 3 }],
+    relations: [
+      { slug: 'near', label: '가까움', inverse_label: '가까움', directed: true, count: 2 },
+    ],
+    nodes: {
+      ids: ['hub', 'a', 'b'],
+      type: [0, 0, 0],
+      label: ['허브', '잎A', '잎B'],
+      depth: [0, 1, 1],
+      parent: [-1, 0, 0],
+      x: null,
+      y: null,
+    },
+    edges: { src: [0, 0], dst: [1, 2], rel: [0, 0] },
+    over: null,
+  }
+  const TYPES: Whole = { ...WHOLE, seed: 'types', focus: null }
+
+  function Where() {
+    return <output data-testid="where">{useLocation().search}</output>
+  }
+
+  async function mountWhole(path: string) {
+    const { default: GraphPage } = await import('@/modules/graph/GraphPage')
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <GraphPage />
+        <Where />
+      </MemoryRouter>,
+    )
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    graphApi.hubKeys.mockResolvedValue([])
+    layoutWorker.startCluster.mockImplementation((input: { n: number }) => ({
+      promise: Promise.resolve(new Float32Array(input.n * 2)),
+      cancel: vi.fn(),
+    }))
+  })
+
+  it('켜면 주소에 남고, 노드마다 자르는 고르개를 감추고 통째 그림을 받는다', async () => {
+    graphApi.neighborhood.mockResolvedValue(NEIGHBORHOOD)
+    graphApi.whole.mockResolvedValue(WHOLE)
+    await mountWhole('/graph?focus=hub')
+    await waitFor(() => expect(graphApi.neighborhood).toHaveBeenCalled())
+    expect(screen.getByText('노드당 이웃')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('checkbox', { name: '정적 그리기' }))
+    // **붙여 넣으면 같은 그림** — 다른 조작처럼 주소에 남는다.
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toContain('whole=1'))
+    await waitFor(() =>
+      expect(graphApi.whole).toHaveBeenCalledWith(
+        expect.objectContaining({ focus: 'hub', depth: 1 }),
+      ),
+    )
+    // 노드마다 자르지 않으니 그 고르개는 뜻이 없다.
+    expect(screen.queryByText('노드당 이웃')).not.toBeInTheDocument()
+    expect(screen.queryByText('그림에 세울 노드')).not.toBeInTheDocument()
+    // 정직한 줄 — 무엇을 전부 그렸는지 말한다. 단계 배치라 자리가 노드 수만큼 있다.
+    expect(
+      await screen.findByText(/노드 3 · 선 2 — 1단계 안을 전부 그렸습니다/),
+    ).toBeInTheDocument()
+    expect(screen.getByTestId('whole-canvas')).toHaveAttribute('data-placed', '3')
+    expect(layoutWorker.startCluster).not.toHaveBeenCalled()
+  })
+
+  it('배치의 기본값 — 객체 하나는 단계, 타입 전부는 무리이고 단계는 쓸 수 없다', async () => {
+    graphApi.whole.mockResolvedValue(WHOLE)
+    const { unmount } = await mountWhole('/graph?focus=hub&whole=1')
+    expect(await screen.findByRole('radio', { name: '단계' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    expect(screen.getByRole('radio', { name: '무리' })).toHaveAttribute('aria-checked', 'false')
+    unmount()
+
+    graphApi.whole.mockResolvedValue(TYPES)
+    await mountWhole('/graph?type=part&whole=1&lay=rings')
+    // 주소에 「단계」 가 적혀 와도 타입 전부에는 출발점이 없어 무리로 그린다.
+    expect(await screen.findByRole('radio', { name: '무리' })).toHaveAttribute(
+      'aria-checked',
+      'true',
+    )
+    expect(screen.getByRole('radio', { name: '단계' })).toBeDisabled()
+    expect(screen.getByText(/타입 전부에는 출발점이 없어/)).toBeInTheDocument()
+    await waitFor(() =>
+      expect(graphApi.whole).toHaveBeenLastCalledWith(
+        expect.objectContaining({ types: ['part'], depth: 1 }),
+      ),
+    )
+    await waitFor(() => expect(layoutWorker.startCluster).toHaveBeenCalled())
+  })
+
+  it('무리 배치는 진행률을 보이며 자리를 잡는다', async () => {
+    graphApi.whole.mockResolvedValue(TYPES)
+    layoutWorker.startCluster.mockImplementation(
+      (_input: unknown, onProgress: (fraction: number) => void) => {
+        onProgress(0.4)
+        return { promise: new Promise(() => {}), cancel: vi.fn() }
+      },
+    )
+    await mountWhole('/graph?type=part&whole=1')
+    expect(await screen.findByText(/자리 잡는 중 40%/)).toBeInTheDocument()
+    expect(screen.queryByTestId('whole-canvas')).not.toBeInTheDocument()
+  })
+
+  it('상한을 넘으면 그리지 않고 타입별 수와 좁히는 길을 말한다', async () => {
+    graphApi.whole.mockResolvedValue({
+      ...WHOLE,
+      types: [],
+      relations: [],
+      nodes: { ids: [], type: [], label: [], depth: [], parent: [] },
+      edges: { src: [], dst: [], rel: [] },
+      over: {
+        what: 'nodes',
+        count: 200_001,
+        exact: false,
+        limit: 200_000,
+        types: [
+          { slug: 'vendor', label: '공급사', count: 200_000 },
+          { slug: 'part', label: '부품', count: 1 },
+        ],
+        layers: [1, 200_000],
+        relations: [],
+      },
+    })
+    await mountWhole('/graph?focus=hub&whole=1')
+    expect(
+      await screen.findByText(/노드 200,001개 이상 — 정적 그리기 상한\(200,000개\)을 넘습니다/),
+    ).toBeInTheDocument()
+    const table = screen.getByRole('table')
+    expect(table).toHaveTextContent('공급사200,000')
+    expect(screen.getByText(/1단계 200,000\(세다가 멈춤\)/)).toBeInTheDocument()
+    expect(screen.queryByTestId('whole-canvas')).not.toBeInTheDocument()
+
+    // 좁히는 길 — 가장 많은 이웃 타입을 제외하고 다시(「이웃 타입」 은 고른 것만 싣는 필터다).
+    await userEvent.click(screen.getByRole('button', { name: '「공급사」 제외하고 다시 그리기' }))
+    await waitFor(() =>
+      expect(graphApi.whole).toHaveBeenLastCalledWith(
+        expect.objectContaining({ neighborTypes: ['part'] }),
+      ),
+    )
+    await userEvent.click(screen.getByRole('button', { name: /정적 그리기 해제/ }))
+    await waitFor(() => expect(screen.getByTestId('where').textContent).not.toContain('whole=1'))
+  })
+
+  it('노드를 고르면 상세가 나오고 「여기서 확장」 은 없다 — 이미 전부다', async () => {
+    graphApi.whole.mockResolvedValue(WHOLE)
+    await mountWhole('/graph?focus=hub&whole=1')
+    await userEvent.click(await screen.findByRole('button', { name: '그림 노드 잎A' }))
+    expect(await screen.findByText('그림 안의 선 1개')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /여기서 확장/ })).not.toBeInTheDocument()
+  })
+
+  /** 기록 1.2만여 건이 판매 모델 · 센터 두 축에 함께 걸린 큰 그림(무리 배치가 가운데로 모으는 모양). */
+  function bigRecords(records: number): Whole {
+    const ids = ['sku1', 'center1', ...Array.from({ length: records }, (_, k) => `r${k}`)]
+    const src: number[] = []
+    const dst: number[] = []
+    for (let k = 0; k < records; k += 1) {
+      src.push(2 + k, 2 + k)
+      dst.push(0, 1)
+    }
+    return {
+      ...WHOLE,
+      seed: 'types',
+      focus: null,
+      seed_types: ['svc'],
+      types: [
+        { slug: 'svc', label: '서비스', count: records },
+        { slug: 'sku', label: '판매 모델', count: 1 },
+        { slug: 'center', label: '센터', count: 1 },
+      ],
+      nodes: {
+        ids,
+        type: [1, 2, ...Array.from({ length: records }, () => 0)],
+        label: ids,
+        depth: ids.map((_, at) => (at < 2 ? 1 : 0)),
+        parent: ids.map(() => -1),
+        x: null,
+        y: null,
+      },
+      edges: { src, dst, rel: src.map(() => 0) },
+    }
+  }
+  const HUB_KEYS = [
+    {
+      type_slug: 'svc',
+      type_label: '서비스',
+      mode: 'auto',
+      key: 'sku',
+      auto_key: 'sku',
+      used_key: 'sku',
+      in_layout: true,
+      stale: false,
+      candidates: [
+        {
+          key: 'sku',
+          label: '판매 모델',
+          target_label: '판매 모델',
+          target_types: ['sku'],
+          required: true,
+          hubs: 1,
+        },
+      ],
+    },
+  ]
+
+  it('기록 씨앗이 여러 축에 걸린 큰 무리 그림이면 「가운데가 뭉친다」 와 허브 칸 하나로 좁히는 단추를 낸다', async () => {
+    window.localStorage.clear()
+    graphApi.whole.mockResolvedValue(bigRecords(12_500))
+    graphApi.hubKeys.mockResolvedValue(HUB_KEYS)
+    await mountWhole('/graph?type=svc&whole=1')
+    expect(
+      await screen.findByText(/기록이 여러 축에 함께 걸려 가운데가 뭉칩니다/),
+    ).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '판매 모델만 보기' }))
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toContain('ty=sku'))
+  })
+
+  it('작은 그림 · 축 하나 · 허브 칸이 없는 타입에서는 단추가 없거나 뜨지 않는다', async () => {
+    window.localStorage.clear()
+    graphApi.hubKeys.mockResolvedValue(HUB_KEYS)
+    graphApi.whole.mockResolvedValue({ ...TYPES, seed_types: ['svc'] })
+    const { unmount } = await mountWhole('/graph?type=svc&whole=1')
+    await waitFor(() => expect(screen.getByTestId('whole-canvas')).toBeInTheDocument())
+    expect(screen.queryByText(/가운데가 뭉칩니다/)).not.toBeInTheDocument()
+    unmount()
+
+    // 허브 칸이 없는 기록 타입 — 단추 없이 「하나만 골라 보세요」.
+    graphApi.hubKeys.mockResolvedValue([{ ...HUB_KEYS[0], key: null, mode: 'none' }])
+    graphApi.whole.mockResolvedValue(bigRecords(12_500))
+    const second = await mountWhole('/graph?type=svc&whole=1')
+    expect(await screen.findByText(/「이웃 타입」 에서 하나만 골라 보세요/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /만 보기/ })).not.toBeInTheDocument()
+    // 닫으면 그 씨앗에서는 다시 안 뜬다.
+    await userEvent.click(screen.getByRole('button', { name: '안내 닫기' }))
+    expect(screen.queryByText(/가운데가 뭉칩니다/)).not.toBeInTheDocument()
+    second.unmount()
+    await mountWhole('/graph?type=svc&whole=1')
+    await waitFor(() => expect(screen.getByTestId('whole-canvas')).toBeInTheDocument())
+    expect(screen.queryByText(/가운데가 뭉칩니다/)).not.toBeInTheDocument()
+  })
+
+  it('연결 경로에는 쓰지 않는다 — 경로 자체가 그림이다', async () => {
+    graphApi.path.mockResolvedValue({
+      source: 'a',
+      target: 'b',
+      found: false,
+      length: null,
+      paths: [],
+      nodes: [],
+      edges: [],
+      max_depth: 6,
+      visited: 2,
+      truncated: false,
+    } satisfies PathResult)
+    await mountWhole('/graph?focus=a&to=b&whole=1')
+    expect(await screen.findByRole('checkbox', { name: '정적 그리기' })).toBeDisabled()
+    await waitFor(() => expect(graphApi.path).toHaveBeenCalled())
+    expect(graphApi.whole).not.toHaveBeenCalled()
+  })
+})
+
+describe('전체 지도', () => {
+  const MAP: MapData = {
+    ready: true,
+    layout: {
+      version: 3,
+      kind: 'append',
+      laid_at: '2026-11-01T04:00:00+09:00',
+      full_version: 2,
+      full_at: '2026-10-31T12:00:00+09:00',
+      by_timer: false,
+      masters: 2,
+      moved_p50: 0.012,
+      moved_p95: 0.03,
+    },
+    counted_at: '2026-11-01T11:00:00+09:00',
+    scale: 1,
+    bbox: [-50, -50, 150, 50],
+    max_points: 50,
+    types: [
+      { slug: 'part', label: '부품', record: false, count: 2 },
+      {
+        slug: 'svc',
+        label: '서비스',
+        record: true,
+        hub_key: 'model',
+        hub_label: '모델',
+        count: 100,
+      },
+    ],
+    masters: { ids: ['m1', 'm2'], type: [0, 0], label: ['모델1', '모델2'], x: [0, 100], y: [0, 0] },
+    discs: {
+      x: [0],
+      y: [0],
+      r: [10],
+      hub: [0],
+      slot: [-1],
+      count_disc: [0],
+      count_type: [1],
+      count_n: [100],
+    },
+    unplaced: [],
+    relations: [
+      { slug: 'ref:part.next', label: '다음', inverse_label: '', directed: true, count: 1 },
+      { slug: 'ref:svc.model', label: '모델', inverse_label: '', directed: true, count: 0 },
+    ],
+    // 모델1 → 모델2(기준정보끼리) — 늘 긋는다.
+    lines: { src: [0], dst: [1], rel: [0] },
+    job: null,
+    last_error: null,
+    can_relayout: true,
+    drift: [],
+  }
+
+  function Where() {
+    return <output data-testid="where">{useLocation().search}</output>
+  }
+
+  async function mountMap(path: string) {
+    const { default: GraphPage } = await import('@/modules/graph/GraphPage')
+    return render(
+      <MemoryRouter initialEntries={[path]}>
+        <GraphPage />
+        <Where />
+      </MemoryRouter>,
+    )
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    graphApi.map.mockResolvedValue(MAP)
+    graphApi.mapLinks.mockResolvedValue({ hub: 'm1', items: [], withheld: false })
+    // 「여기서 정적 그리기」 로 가면 탐색 · 정적 그리기가 받는다 — 앞 시험이 넣어 둔 값에 기대지 않게.
+    graphApi.neighborhood.mockResolvedValue(NEIGHBORHOOD)
+    graphApi.whole.mockReturnValue(new Promise(() => {}))
+  })
+
+  it('시작점 없이 「전체 지도」 로 들어가고, 판 · 기준 시각 · 「자리는 뜻이 없다」 를 적는다', async () => {
+    await mountMap('/graph')
+    await userEvent.click(screen.getByRole('tab', { name: '탐색' }))
+    await userEvent.click(screen.getByRole('button', { name: '전체 지도' }))
+    await waitFor(() => expect(screen.getByTestId('where').textContent).toContain('map=1'))
+    await waitFor(() => expect(graphApi.map).toHaveBeenCalled())
+    const canvas = await screen.findByTestId('whole-canvas')
+    // 지도 좌표 고정 모드 — 판의 틀을 그대로 준다(자리가 바뀌어도 다시 맞추지 않는다).
+    expect(canvas).toHaveAttribute('data-frame', '-50,-50,150,50')
+    expect(screen.getByText(/판 3 · 덧붙임/)).toBeInTheDocument()
+    expect(screen.getByText(/원반 안의 자리는 뜻이 없습니다/)).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /서비스/ })).toBeChecked()
+    expect(screen.getByRole('button', { name: /전체 다시 배치/ })).toBeInTheDocument()
+  })
+
+  it('확대해 화면의 기대 수가 상한 이하면 상자의 점을 받아 그린다', async () => {
+    graphApi.mapPoints.mockResolvedValue({
+      box: [-3, -3, 3, 3],
+      expected: 5,
+      over: false,
+      limit: 50,
+      count: 2,
+      types: ['svc'],
+      ids: ['r1', 'r2'],
+      x: [0, 1],
+      y: [0, 1],
+      type: [0, 0],
+      labels: ['건1', '건2'],
+      skipped: [],
+      lines_up_to: 5000,
+      lines: null,
+    })
+    camera.view = { x0: -2, y0: -2, x1: 2, y1: 2 }
+    await mountMap('/graph?map=1')
+    await userEvent.click(await screen.findByRole('button', { name: '카메라 움직임' }))
+    await waitFor(() => expect(graphApi.mapPoints).toHaveBeenCalled())
+    const [box, types] = graphApi.mapPoints.mock.calls[0] as [Record<string, number>, string[]]
+    expect(types).toEqual(['svc'])
+    expect(box.x0).toBeLessThanOrEqual(-2)
+    await waitFor(() =>
+      expect(screen.getByTestId('whole-canvas')).toHaveAttribute('data-extra', '2'),
+    )
+    expect(screen.getByText(/점 2개 — 이 상자의 기록 전부/)).toBeInTheDocument()
+    expect(
+      screen.getByText(/기록의 선은 점이 5,000개 이하로 확대하면 긋습니다/),
+    ).toBeInTheDocument()
+  })
+
+  it('기준정보끼리의 선은 늘 긋고, 범례에서 종류를 끄고 켠다', async () => {
+    await mountMap('/graph?map=1')
+    const canvas = await screen.findByTestId('whole-canvas')
+    expect(canvas).toHaveAttribute('data-links', '0>1')
+    // 참조 칸은 「타입 → 칸」 — 같은 이름의 타입과 헷갈리지 않게. 안 그은 종류는 범례에 없다.
+    await userEvent.click(screen.getByRole('button', { name: '선 범례 부품 → 다음' }))
+    expect(canvas).toHaveAttribute('data-links', '')
+    expect(screen.queryByRole('button', { name: /선 범례 서비스 → 모델/ })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: '선 범례 부품 → 다음 (끔)' }))
+    expect(canvas).toHaveAttribute('data-links', '0>1')
+  })
+
+  it('확대한 점의 선 — 끝이 점이면 점 번호, 기준정보면 그 기준정보 번호로 긋는다', async () => {
+    graphApi.mapPoints.mockResolvedValue({
+      box: [-3, -3, 3, 3],
+      expected: 5,
+      over: false,
+      limit: 50,
+      count: 2,
+      types: ['svc'],
+      ids: ['r1', 'r2'],
+      x: [0, 1],
+      y: [0, 1],
+      type: [0, 0],
+      labels: ['건1', '건2'],
+      skipped: [],
+      lines_up_to: 5000,
+      // 건1 → 모델1(점 수 2 다음 번호 = masters[0]), 건2 → 건1.
+      lines: {
+        src: [0, 1],
+        dst: [2, 0],
+        rel: [0, 1],
+        kinds: ['ref:svc.model', 'rel'],
+        masters: ['m1'],
+      },
+    })
+    camera.view = { x0: -2, y0: -2, x1: 2, y1: 2 }
+    await mountMap('/graph?map=1')
+    await userEvent.click(await screen.findByRole('button', { name: '카메라 움직임' }))
+    // 기준정보는 0 · 1, 점은 2 · 3. 주 참조(허브 칸 「모델」)의 선은 처음엔 꺼 둔다 — 원반 자리가
+    // 이미 말한다.
+    await waitFor(() =>
+      expect(screen.getByTestId('whole-canvas')).toHaveAttribute('data-links', '0>1 3>2'),
+    )
+    expect(screen.queryByText(/기록의 선은 점이/)).toBeNull()
+    // 켜면 건1 → 모델1(기준정보 번호 0)이다.
+    await userEvent.click(screen.getByRole('button', { name: '선 범례 서비스 → 모델 (끔)' }))
+    expect(screen.getByTestId('whole-canvas')).toHaveAttribute('data-links', '0>1 2>0 3>2')
+  })
+
+  it('기대 수가 상한을 넘으면 점을 안 받고 「더 확대」 를 말한다', async () => {
+    camera.view = { x0: -50, y0: -50, x1: 150, y1: 50 }
+    await mountMap('/graph?map=1')
+    await userEvent.click(await screen.findByRole('button', { name: '카메라 움직임' }))
+    expect(
+      await screen.findByText(/이 화면에 기록 약 100건 — 더 확대하면 점으로 그립니다\(50건까지\)/),
+    ).toBeInTheDocument()
+    expect(graphApi.mapPoints).not.toHaveBeenCalled()
+  })
+
+  it('점을 고르면 상세에 「여기서 정적 그리기」 가 있고 누르면 그 객체에서 정적 그리기로 간다', async () => {
+    await mountMap('/graph?map=1')
+    await userEvent.click(await screen.findByRole('button', { name: '그림 노드 모델1' }))
+    await userEvent.click(await screen.findByRole('button', { name: /여기서 정적 그리기/ }))
+    await waitFor(() => {
+      const where = screen.getByTestId('where').textContent ?? ''
+      expect(where).toContain('focus=m1')
+      expect(where).toContain('whole=1')
+      expect(where).not.toContain('map=1')
+    })
+  })
+
+  it('허브를 고르면 주 참조 밖의 연결을 받는다', async () => {
+    graphApi.mapLinks.mockResolvedValue({
+      hub: 'm1',
+      items: [{ id: 'm2', label: '모델2', type_slug: 'part', count: 7, x: 100, y: 0 }],
+      withheld: false,
+      counted_at: '2026-10-31T12:00:00+09:00',
+    })
+    await mountMap('/graph?map=1')
+    await userEvent.click(await screen.findByRole('button', { name: '그림 노드 모델1' }))
+    await waitFor(() => expect(graphApi.mapLinks).toHaveBeenCalledWith('m1'))
+    expect(await screen.findByText('7건')).toBeInTheDocument()
+  })
+
+  it('정적 그리기 거절 안내에서 「지도에서 보기」 — 거절된 타입만 켜고 그 객체로 간다', async () => {
+    graphApi.whole.mockResolvedValue({
+      seed: 'focus',
+      focus: 'm1',
+      seed_types: ['part'],
+      depth: 1,
+      records: true,
+      max_nodes: 200_000,
+      max_edges: 700_000,
+      types: [],
+      relations: [],
+      nodes: { ids: [], type: [], label: [], depth: [], parent: [] },
+      edges: { src: [], dst: [], rel: [] },
+      over: {
+        what: 'nodes',
+        count: 200_001,
+        exact: false,
+        limit: 200_000,
+        types: [
+          { slug: 'svc', label: '서비스', count: 200_000 },
+          { slug: 'part', label: '부품', count: 1 },
+        ],
+        layers: [1, 200_000],
+        relations: [],
+      },
+    } satisfies Whole)
+    graphApi.mapLocate.mockResolvedValue({
+      id: 'm1',
+      kind: 'master',
+      x: 0,
+      y: 0,
+      r: null,
+      label: '모델1',
+      type_slug: 'part',
+      reason: null,
+    })
+    await mountMap('/graph?focus=m1&whole=1')
+    await userEvent.click(await screen.findByRole('button', { name: /지도에서 보기/ }))
+    await waitFor(() => {
+      const where = decodeURIComponent(screen.getByTestId('where').textContent ?? '')
+      expect(where).toContain('map=1')
+      expect(where).toContain('mty=svc,part')
+      expect(where).toContain('at=m1')
+    })
+    await waitFor(() => expect(graphApi.mapLocate).toHaveBeenCalledWith('m1'))
+    // 지도에 없는 「부품」 은 기록 타입이 아니라 버리고, 서비스만 켠다.
+    expect(await screen.findByRole('checkbox', { name: /서비스/ })).toBeChecked()
   })
 })

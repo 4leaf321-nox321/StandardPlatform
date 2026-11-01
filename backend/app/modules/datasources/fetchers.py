@@ -271,7 +271,17 @@ def core_watermark(
 
 
 #: 코어 선 한 줄의 봉투 — 그대로 관계 적재의 칸 이름이 된다(`src` · `relation` · `dst`).
-CORE_EDGE = ("src", "relation", "dst", "dst_type", "evidence_note", "deleted")
+#: 유효 기간(ADR 0039)도 같은 이름이다 — 비어 있으면 그 키가 안 실린다.
+CORE_EDGE = (
+    "src",
+    "relation",
+    "dst",
+    "dst_type",
+    "evidence_note",
+    "valid_from",
+    "valid_to",
+    "deleted",
+)
 
 
 def core_edge(item: dict[str, Any]) -> dict[str, Any]:
@@ -283,7 +293,7 @@ def core_edge(item: dict[str, Any]) -> dict[str, Any]:
     values = item.get("properties")
     out: dict[str, Any] = dict(values) if isinstance(values, dict) else {}
     for name in CORE_EDGE:
-        if name in item:
+        if name in item and not (name in ("valid_from", "valid_to") and item[name] is None):
             out[name] = item[name]
     return out
 

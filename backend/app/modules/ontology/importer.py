@@ -28,8 +28,9 @@ from sqlalchemy import Boolean, Float, Integer, String, func, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
+from app.modules.objects import edges as edge_rule
 from app.modules.objects.models import ObjectInstance, ObjectRelation
-from app.modules.ontology import interfaces, managed, retype, views
+from app.modules.ontology import interfaces, managed, quantity, retype, revision, views
 from app.modules.ontology.models import (
     ACCEPTS,
     CARDINALITIES,
@@ -94,6 +95,8 @@ TYPE_FIELDS = {
     "key_scope",
     "temporal_kind",
     "usage",
+    # 개정 칸(ADR 0041) — 그 타입의 글자 · 고르기 · 숫자 속성 하나의 키. 계획이 모양을 본다.
+    "revision_key",
     "list_view",
     "form_view",
     "detail_view",
@@ -147,6 +150,11 @@ RELATION_FIELDS = {
     "transitive",
     "acyclic",
     "cardinality",
+    "effectivity",
+    # 수량 칸(ADR 0040) — 그 종류의 숫자 관계 속성 하나의 키. 계획이 모양을 본다(`quantity`).
+    "quantity_key",
+    # 계보의 원천 끝(ADR 0041) — `""` · `src` · `dst`, 방향 있는 종류만.
+    "lineage_source",
     "src_type_slugs",
     "dst_type_slugs",
     "sort_order",
@@ -165,6 +173,7 @@ CHOICES = {
     "temporal_kind": TEMPORAL_KINDS,
     "usage": USAGES,
     "cardinality": CARDINALITIES,
+    "lineage_source": revision.SOURCES,
     "data_type": DATA_TYPES,
     "accept": ACCEPTS,
 }
@@ -530,6 +539,7 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
             source=source,
         )
         _overlay_type(after, slug, one, normalized, source)
+        _plan_revision(slug, object_type, one, after, out)
 
     for one in payload.get("relation_types") or []:
         _reject_unknown(one, RELATION_FIELDS, what="관계 종류")
@@ -548,6 +558,17 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
                 f"관계 {slug}: 재귀로 펼치는 관계는 순환을 막아야 합니다 — "
                 "안 그러면 트리가 무한히 돕니다."
             )
+        if (
+            relation is not None
+            and relation.effectivity
+            and one.get("effectivity") is False
+            and (dated := edge_rule.dated_count(db, relation.slug))
+        ):
+            # 적용에서 DB 트리거가 막는다 — 계획에서 먼저 말한다(ADR 0039).
+            out.errors.append(
+                f"관계 {slug}: 유효 기간을 끌 수 없습니다 — 기간이 든 관계가 {dated}개 "
+                "있습니다. 그 관계들의 기간을 먼저 비우거나 정리하세요."
+            )
         if relation is None:
             out.changes.append(Change("relation_type", slug, "create"))
         else:
@@ -565,6 +586,19 @@ def plan(db: Session, payload: dict[str, Any], *, source: str = "") -> Plan:
             owner_kind="relation",
             ref_targets=ref_targets,
         )
+        _plan_quantity(db, slug, relation, one, out)
+        directed = one.get("directed", relation.directed if relation is not None else True)
+        lineage = one.get("lineage_source", relation.lineage_source if relation else "")
+        if isinstance(lineage, str) and lineage in revision.SOURCES:
+            wrong_source = revision.source_problem(
+                lineage, directed=bool(directed), kind_label=f"관계 {slug}"
+            )
+            if wrong_source:
+                out.errors.append(wrong_source)
+
+    # 이 파일에 없는 타입의 개정 칸도 — 구현한 인터페이스의 공통 속성이 바뀌면 그 칸이 개정
+    # 칸이 될 수 없게 될 수 있다(ADR 0041).
+    _plan_untouched_revisions(types, incoming_types, after, out)
 
     # **인터페이스를 따라 바뀌는 구현 타입의 속성** — 파일에 없던 타입도 걸린다.
     out.bindings = interfaces.plan_bindings(before, after, source=source)
@@ -1144,6 +1178,100 @@ def _warn_type_risks(db: Session, found: ObjectType, one: dict[str, Any], out: P
                 interfaces.normalized_slugs(one["interface_slugs"]),
             )
         )
+
+
+def _revision_shape(after: interfaces.Catalog, slug: str, key: str) -> revision.Shape | None:
+    """적용이 만들 상태에서 그 타입의 그 속성 모양 — 타입의 속성 위에 구현 인터페이스의 공통
+    속성을 얹어 본다."""
+    entry = after.types.get(slug)
+    if entry is None:
+        return None
+    props = dict(entry.props)
+    if entry.interfaces:
+        try:
+            wanted, _collisions = interfaces.contract(after, entry.interfaces)
+        except KeyError:
+            # 없는 인터페이스 — 그 오류는 인터페이스 검사가 말한다.
+            wanted = {}
+        props.update({name: prop for name, (prop, _iface) in wanted.items()})
+    found = props.get(key)
+    if found is None:
+        return None
+    return revision.Shape(
+        label=found.label or key, data_type=found.shape.data_type, multi=found.shape.multi
+    )
+
+
+def _plan_revision(
+    slug: str,
+    object_type: ObjectType | None,
+    one: dict[str, Any],
+    after: interfaces.Catalog,
+    out: Plan,
+) -> None:
+    """개정 칸(ADR 0041) — **적용이 만들 상태 그대로** 본다(수량 칸과 같은 무늬). 파일이 개정
+    칸을 새로 정했으면 「될 수 없는 칸」, 지금의 개정 칸을 파일의 속성이 바꾸면 「개정 칸이라
+    못 바꾼다」."""
+    current = object_type.revision_key if object_type is not None else ""
+    key = one.get("revision_key", current)
+    if not isinstance(key, str) or not key:
+        return
+    label = str(one.get("label") or (object_type.label if object_type is not None else slug))
+    found = _revision_shape(after, slug, key)
+    if key != current:
+        message = revision.problem(key, found, type_label=label)
+    else:
+        message = revision.breaking(key, found, type_label=label)
+    if message:
+        out.errors.append(f"타입 {slug}: {message}")
+
+
+def _plan_untouched_revisions(
+    types: dict[str, ObjectType],
+    incoming: set[str],
+    after: interfaces.Catalog,
+    out: Plan,
+) -> None:
+    for slug, object_type in sorted(types.items()):
+        if slug in incoming or not object_type.revision_key:
+            continue
+        key = object_type.revision_key
+        message = revision.breaking(
+            key, _revision_shape(after, slug, key), type_label=object_type.label
+        )
+        if message:
+            out.errors.append(f"타입 {slug}: {message}")
+
+
+def _plan_quantity(
+    db: Session, slug: str, relation: RelationType | None, one: dict[str, Any], out: Plan
+) -> None:
+    """수량 칸(ADR 0040) — **적용이 만들 상태 그대로** 본다: 지금 속성 위에 파일의 속성을 얹고,
+    파일이 적은(또는 지금의) 수량 칸이 그중 숫자 · 값 하나인 속성인가. 파일이 수량 칸을 새로
+    정했으면 「될 수 없는 칸」, 지금의 수량 칸을 파일의 속성이 바꾸면 「수량 칸이라 못
+    바꾼다」."""
+    current = relation.quantity_key if relation is not None else ""
+    key = one.get("quantity_key", current)
+    if not isinstance(key, str) or not key:
+        return
+    after = quantity.shapes(db, relation.id) if relation is not None else {}
+    for prop in one.get("properties") or []:
+        name = prop.get("key")
+        if not isinstance(name, str):
+            continue
+        before = after.get(name)
+        after[name] = quantity.Shape(
+            label=str(prop.get("label") or (before.label if before else name)),
+            data_type=str(prop.get("data_type") or (before.data_type if before else "text")),
+            multi=bool(prop.get("multi", before.multi if before else False)),
+        )
+    label = str(one.get("label") or (relation.label if relation is not None else slug))
+    if key != current:
+        message = quantity.problem(key, after.get(key), kind_label=label)
+    else:
+        message = quantity.breaking(key, after.get(key), kind_label=label)
+    if message:
+        out.errors.append(f"관계 {slug}: {message}")
 
 
 def _warn_relation_risks(

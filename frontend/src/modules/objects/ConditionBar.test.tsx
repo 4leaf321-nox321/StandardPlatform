@@ -237,6 +237,90 @@ describe('조건 줄', () => {
   })
 })
 
+describe('같은 관계 묶음(ADR 0043)', () => {
+  const LINKED = [
+    {
+      field: 'out.bom.label',
+      label: '구성품 › 이름',
+      heading: '관계 · 구성품 (부품)',
+      data_type: 'text',
+      multi: true,
+      enum_options: null,
+      ref_type_slug: null,
+    },
+    {
+      field: 'out.bom~qty',
+      label: '구성품 관계 › 수량',
+      heading: '관계 · 구성품 (부품)',
+      data_type: 'number',
+      multi: true,
+      enum_options: null,
+      ref_type_slug: null,
+      edge: true,
+    },
+  ]
+
+  it('묶은 조건은 실선 테두리 안에 모여 서고, 제외 묶음 안에서도 따로 선다', async () => {
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    const onChange = vi.fn()
+    const conditions = [
+      { field: 'out.bom.label', op: 'eq' as const, value: 'X', edge: 1 },
+      { field: 'out.bom~qty', op: 'gte' as const, value: '4', edge: 1 },
+      { field: 'out.bom~qty', op: 'gt' as const, value: '9' },
+      { field: 'out.bom.label', op: 'eq' as const, value: 'Y', exclude: 1, edge: 2 },
+      { field: 'out.bom~qty', op: 'lt' as const, value: '2', exclude: 1, edge: 2 },
+    ]
+    render(<ConditionBar defs={DEFS} conditions={conditions} onChange={onChange} linked={LINKED} />)
+    const bound = screen.getByRole('group', { name: '같은 관계 1' })
+    expect(bound).toHaveTextContent('구성품 › 이름 = X')
+    expect(bound).toHaveTextContent('구성품 관계 › 수량 ≥ 4')
+    expect(bound).not.toHaveTextContent('> 9')
+    const excluded = screen.getByRole('group', { name: '제외 묶음 1' })
+    expect(screen.getByRole('group', { name: '같은 관계 2' })).toHaveTextContent('수량 < 2')
+    expect(excluded).toContainElement(screen.getByRole('group', { name: '같은 관계 2' }))
+    await userEvent.click(screen.getByRole('button', { name: '같은 관계 1 삭제' }))
+    expect(onChange).toHaveBeenLastCalledWith([conditions[2], conditions[3], conditions[4]])
+  })
+
+  it('관계 걸음을 지나는 칸이면 「같은 관계」 에서 새 묶음 · 걸린 묶음을 고른다', async () => {
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    const onChange = vi.fn()
+    const conditions = [
+      { field: 'out.bom.label', op: 'eq' as const, value: 'X', edge: 1 },
+      { field: 'out.bom.label', op: 'eq' as const, value: 'Z', exclude: 1, edge: 2 },
+    ]
+    render(<ConditionBar defs={DEFS} conditions={conditions} onChange={onChange} linked={LINKED} />)
+    await userEvent.click(screen.getByRole('button', { name: /조건 추가/ }))
+    // 자기 칸에는 「같은 관계」 가 없다.
+    await screen.findByRole('button', { name: '걸기' })
+    expect(screen.queryByRole('combobox', { name: '같은 관계' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('combobox', { name: '칸' }))
+    await userEvent.click(screen.getByRole('button', { name: '구성품 관계 › 수량' }))
+    await userEvent.click(screen.getByRole('combobox', { name: '연산' }))
+    await userEvent.click(await screen.findByRole('option', { name: '이상' }))
+    await userEvent.type(screen.getByRole('spinbutton'), '4')
+    await userEvent.click(screen.getByRole('combobox', { name: '같은 관계' }))
+    // 보통 조건 자리의 묶음(1)만 — 제외 묶음 안의 것(2)은 다른 자리다.
+    expect(screen.queryByRole('option', { name: /같은 관계 2/ })).not.toBeInTheDocument()
+    await userEvent.click(await screen.findByRole('option', { name: /같은 관계 1 에 추가/ }))
+    await userEvent.click(screen.getByRole('button', { name: '걸기' }))
+    expect(onChange).toHaveBeenLastCalledWith([
+      ...conditions,
+      { field: 'out.bom~qty', op: 'gte', value: '4', edge: 1 },
+    ])
+  })
+
+  it('관계 걸음을 지나는 주소를 가른다 — 나를 가리키는 것은 선이 아니다', async () => {
+    const { bindable } = await import('@/modules/objects/ConditionBar')
+    expect(bindable('out.bom~qty')).toBe(true)
+    expect(bindable('out.bom.label')).toBe(true)
+    expect(bindable('ref.model.in.bom')).toBe(true)
+    expect(bindable('ref.vendor.country')).toBe(false)
+    expect(bindable('in.svc_case:model.symptom')).toBe(false)
+    expect(bindable('weight')).toBe(false)
+  })
+})
+
 describe('하위 전체(ADR 0035)', () => {
   const REFS = [
     {
@@ -304,5 +388,51 @@ describe('하위 전체(ADR 0035)', () => {
     await userEvent.click(screen.getByRole('button', { name: /조건 추가/ }))
     await userEvent.click(screen.getByRole('combobox', { name: '칸' }))
     expect(screen.queryByRole('button', { name: /자신\(이 목록의 객체\)/ })).not.toBeInTheDocument()
+  })
+})
+
+describe('계보 조건(ADR 0041)', () => {
+  it('「낡은 것만」 · 「바로 낡은 것만」 · 「낡지 않은 것」 으로 읽히고 삭제하면 빠진다', async () => {
+    // 속성 목록에 없는 칸이다 — 그대로 두면 「lineage = stale」 로 선다.
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    const onChange = vi.fn()
+    render(
+      <ConditionBar
+        defs={DEFS}
+        conditions={[
+          { field: 'lineage', op: 'eq', value: 'stale' },
+          { field: 'lineage', op: 'eq', value: 'direct', exclude: 1 },
+          { field: 'lineage', op: 'ne', value: 'stale' },
+          { field: 'lineage', op: 'eq', value: 'odd' },
+        ]}
+        onChange={onChange}
+      />,
+    )
+    expect(screen.getByText('낡은 것만')).toBeInTheDocument()
+    expect(screen.getByText('바로 낡은 것만')).toBeInTheDocument()
+    expect(screen.getByText('낡지 않은 것')).toBeInTheDocument()
+    // 모르는 값은 그대로 — 칸 이름은 「계보」.
+    expect(screen.getByText('계보 = odd')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '조건 삭제: 낡은 것만' }))
+    expect(onChange).toHaveBeenCalledWith([
+      { field: 'lineage', op: 'eq', value: 'direct', exclude: 1 },
+      { field: 'lineage', op: 'ne', value: 'stale' },
+      { field: 'lineage', op: 'eq', value: 'odd' },
+    ])
+  })
+
+  it('같은 키의 속성이 있으면 속성이 이긴다(서버와 같다)', async () => {
+    const { ConditionBar } = await import('@/modules/objects/ConditionBar')
+    render(
+      <ConditionBar
+        defs={[
+          ...DEFS,
+          { key: 'lineage', label: '혈통', data_type: 'text', multi: false } as PropertyDef,
+        ]}
+        conditions={[{ field: 'lineage', op: 'eq', value: 'stale' }]}
+        onChange={vi.fn()}
+      />,
+    )
+    expect(screen.getByText('혈통 = stale')).toBeInTheDocument()
   })
 })

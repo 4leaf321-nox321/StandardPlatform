@@ -17,6 +17,7 @@ import { ENABLED_EXTENSIONS } from '@/shared/branding'
 import type { NavGroup } from '@/shared/layout/navigation'
 
 import { caegroupExtension } from './caegroup'
+import { jajuverifyExtension } from './jajuverify'
 import { sampleExtension } from './sample'
 
 export { ExtensionsProvider, useEnabledExtensions, useExtensionsReload } from './EnabledProvider'
@@ -42,6 +43,7 @@ export interface ExtensionDef {
 const REGISTRY: Record<string, ExtensionDef> = {
   [sampleExtension.name]: sampleExtension,
   [caegroupExtension.name]: caegroupExtension,
+  [jajuverifyExtension.name]: jajuverifyExtension,
 }
 
 /** 켜져 있는데 화면 쪽 짝이 없는 이름 — 서버 화면이 말한다. */

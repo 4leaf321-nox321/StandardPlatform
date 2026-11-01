@@ -9,6 +9,8 @@
     참조 · 자신   under                  (「하위 전체」 — 그 객체이거나 트리로 그 아래 전부)
     예/아니오     eq
     모두          empty · notempty
+    계보(자신)    eq · ne                (`lineage` — 낡음 `stale` · 바로 낡음 `direct` ·
+                                          낡지 않음 `fresh`, ADR 0041)
 
 전체를 OR 로 잇는 트리는 안 만든다 — 화면에 그릴 수 없고, 그려도 사람이 못 읽는다.
 「같은 칸 안 OR(`in`) + 칸끼리 AND」 가 대부분의 물음을 덮는다.
@@ -38,6 +40,21 @@
 맞으므로 남는다(`NOT coalesce(묶음, false)`). 지표의 `CASE WHEN` 이 NULL 을 「안 맞음」
 으로 넘기는 것과 같은 뜻이다 — 맨 `NOT` 이면 NULL 의 부정이 NULL 이라 그 기록이 양쪽에서
 다 빠진다.
+
+## 같은 관계 묶음 — 같은 선 하나에서 함께 맞는다(ADR 0043)
+
+    ?fe1.out.bom.eq=<X>&fe1.out.bom~qty.gte=4
+
+이어진 것 너머의 조건은 하나하나가 「그중 하나라도」 다 — 그대로 두면 「X 가 1개, 다른 부품이
+5개」 인 제품이 `out.bom = X` 와 `out.bom~qty ≥ 4` 에 **다른 선으로** 걸린다. 그 뜻은 바꾸지
+않는다(저장된 뷰 · 지표 · 규칙이 그 뜻으로 저장돼 있다). 대신 `fe<번호>.` 로 **묶은** 조건들은
+그 번호의 묶음이 함께 지나는 **마지막 관계 걸음의 선 하나**(그 선의 칸 · 상대 · 상대의 칸,
+그 너머는 그 상대에서 「하나라도」)에서 모두 맞아야 걸린다 — `EXISTS(선 e: 조건1(e) AND
+조건2(e) …)`. API · 저장된 뷰의 조건에는 `edge`(묶음 번호, 0 은 묶지 않음) 한 칸이 붙는다.
+
+제외 묶음과 함께면 `nf<n>.fe<m>.<칸>.<연산>` — 같은 관계 묶음은 **그 제외 묶음 안의 한 조건**이
+된다(「X 가 4개 이상 든 것은 뺀다」 = `NOT EXISTS(선: X AND 수량 ≥ 4)`). 같은 관계 묶음 번호는
+한 자리(보통 조건 또는 제외 묶음 하나)에만 선다 — 한 선이 걸리면서 빠질 수는 없다.
 """
 
 from __future__ import annotations
@@ -65,7 +82,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.orm import aliased
 
-from app.modules.objects import axes, graph, paths
+from app.modules.objects import axes, graph, lineage, paths
 from app.modules.objects.models import ObjectInstance, ObjectRef
 from app.modules.objects.services import like_escape
 from app.modules.ontology import conversion
@@ -82,6 +99,10 @@ OPS_ANY: tuple[str, ...] = ("empty", "notempty")
 #: 값은 객체 id, 여럿이면 `|`(어느 하나의 아래). 목록의 객체 **자신**에 걸 때는 칸이 `id` 다.
 OPS_TREE: tuple[str, ...] = ("under",)
 SELF_FIELD = "id"
+#: 「낡은 것만」(ADR 0041) — 목록의 객체 **자신**이 계보로 낡았나. 값은
+#: `lineage.CONDITION_VALUES`. 그 타입에 같은 키의 속성이 있으면 속성이 이긴다(예전 조건이 안
+#: 바뀌게) — 속성 키 `lineage` 는 드물다.
+LINEAGE_FIELD = "lineage"
 
 #: (타입 slug, 뿌리들) → 뿌리와 그 아래 전부, 트리가 없으면 None. 조건은 DB 없이 짓는다 —
 #: 트리를 아는 쪽(`paths.Resolver.subtree_of`)이 넘긴다.
@@ -96,6 +117,11 @@ EXCLUDE_PREFIX = "nf"
 #: (규칙 20개).
 MAX_EXCLUDE = 99
 _EXCLUDE_KEY = re.compile(r"^nf([0-9]{1,2})\.(.+)$")
+#: 같은 관계 묶음의 앞머리 — `fe<번호>.<칸>.<연산>`(ADR 0043). 제외 묶음 안이면
+#: `nf<n>.fe<m>.<칸>.<연산>`(제외 묶음이 먼저).
+EDGE_PREFIX = "fe"
+MAX_EDGE = 99
+_EDGE_KEY = re.compile(r"^fe([0-9]{1,2})\.(.+)$")
 
 
 @dataclass(frozen=True)
@@ -106,6 +132,9 @@ class Condition:
     exclude: int = 0
     """0 이면 보통 조건. 1 이상이면 그 번호의 **제외 묶음** — 같은 번호끼리 AND 로 묶어 그
     묶음에 맞는 것을 뺀다."""
+    edge: int = 0
+    """0 이면 묶지 않음. 1 이상이면 그 번호의 **같은 관계 묶음** — 같은 번호의 조건은 같은 선
+    하나에서 함께 맞아야 걸린다(ADR 0043)."""
 
 
 def ops_for(data_type: str) -> tuple[str, ...]:
@@ -133,9 +162,12 @@ def parse(params: Any) -> list[Condition]:
     for key, value in (
         params.multi_items() if hasattr(params, "multi_items") else params.items()
     ):
-        exclude = 0
+        exclude = edge = 0
+        bound = False
         if key.startswith(PREFIX):
             rest = key[len(PREFIX) :]
+        elif (found := _EDGE_KEY.match(key)) is not None:
+            bound, edge, rest = True, int(found.group(1)), found.group(2)
         else:
             found = _EXCLUDE_KEY.match(key)
             if found is None:
@@ -146,21 +178,37 @@ def parse(params: Any) -> list[Condition]:
                     code("OBJECTS", 70),
                     f"제외 묶음 번호는 1 부터입니다: {key} (nf<번호>.<칸>.<연산>)",
                 )
-        if "." not in rest:
+            if (inner := _EDGE_KEY.match(rest)) is not None:
+                bound, edge, rest = True, int(inner.group(1)), inner.group(2)
+        if bound and edge < 1:
             raise InvalidValue(
                 code("OBJECTS", 70),
-                f"조건의 모양이 틀렸습니다: {key} "
-                f"({'nf<번호>' if exclude else 'f'}.<칸>.<연산>)",
+                f"같은 관계 묶음 번호는 1 부터입니다: {key} (fe<번호>.<칸>.<연산>)",
+            )
+        if _EXCLUDE_KEY.match(rest) is not None:
+            raise InvalidValue(
+                code("OBJECTS", 70),
+                f"조건의 모양이 틀렸습니다: {key} — 제외 묶음이 앞에 섭니다"
+                "(nf<번호>.fe<번호>.<칸>.<연산>).",
+            )
+        if "." not in rest:
+            head = f"{'nf<번호>.' if exclude else ''}{'fe<번호>' if bound else ''}"
+            raise InvalidValue(
+                code("OBJECTS", 70),
+                f"조건의 모양이 틀렸습니다: {key} ({head.rstrip('.') or 'f'}.<칸>.<연산>)",
             )
         field, op = rest.rsplit(".", 1)
-        out.append(Condition(field=field, op=op, value=value, exclude=exclude))
+        out.append(Condition(field=field, op=op, value=value, exclude=exclude, edge=edge))
     return out
 
 
 def key_of(condition: Condition) -> str:
-    """조건 하나의 쿼리 키 — `parse` 의 역. 제외 묶음이면 `nf<번호>.` 로 시작한다."""
-    head = f"{EXCLUDE_PREFIX}{condition.exclude}." if condition.exclude else PREFIX
-    return f"{head}{condition.field}.{condition.op}"
+    """조건 하나의 쿼리 키 — `parse` 의 역. 제외 묶음이면 `nf<번호>.`, 같은 관계 묶음이면
+    `fe<번호>.` 로 시작한다(둘 다면 `nf<n>.fe<m>.`)."""
+    head = f"{EXCLUDE_PREFIX}{condition.exclude}." if condition.exclude else ""
+    if condition.edge:
+        head += f"{EDGE_PREFIX}{condition.edge}."
+    return f"{head or PREFIX}{condition.field}.{condition.op}"
 
 
 def _column(field: str, entity: Any = ObjectInstance) -> Any:
@@ -204,16 +252,20 @@ def clause(
     label: str | None = None,
     *,
     subtree_of: SubtreeOf | None = None,
+    fixed: bool = True,
 ) -> Any:
     """조건 하나 → SQL. `entity` 는 보통 목록의 객체이고, 이어진 것 너머의 칸이면 그
     이어진 객체(별칭)다 — 같은 규칙을 두 벌로 적지 않는다. 지표의 규칙 기준(ADR 0015)도 이
     식을 `CASE WHEN` 안에 넣는다(칸 · 연산 · 값을 따로 배우지 않는다) — 이어진 것 너머까지 한
-    번에 다루는 입구는 `clauses` · `matches` 다."""
+    번에 다루는 입구는 `clauses` · `matches` 다.
+
+    `fixed=False` 면 고정 칸(이름 · 식별자 · 상태)이 없는 자리다 — 선의 칸(ADR 0043)은
+    `properties` 하나뿐이라, 키가 `status` 인 관계 속성도 속성으로 읽는다."""
     field, op, raw = condition.field, condition.op, condition.value
-    is_fixed = field in FIXED_FIELDS
+    is_fixed = fixed and field in FIXED_FIELDS
     data_type = "text" if is_fixed else (definition.data_type if definition else "")
     multi = bool(definition and definition.multi)
-    if field == "status":
+    if is_fixed and field == "status":
         data_type = "enum"
     allowed = ops_for(data_type)
     label = label or (definition.label if definition else field)
@@ -418,23 +470,54 @@ def clauses(
     *,
     offset: int = 0,
 ) -> list[Any]:
-    """조건마다 WHERE 식 하나, 제외 묶음마다 하나 — `apply` 가 문장에 걸고, 지표의 조건
-    비율 · 규칙 기준은 `CASE WHEN` 안에 넣는다(`matches`). 검사는 `apply` 와 같다.
+    """조건마다 WHERE 식 하나, 같은 관계 묶음마다 하나, 제외 묶음마다 하나 — `apply` 가
+    문장에 걸고, 지표의 조건 비율 · 규칙 기준은 `CASE WHEN` 안에 넣는다(`matches`). 검사는
+    `apply` 와 같다.
 
     `offset` 은 이어진 것 너머 조건의 별칭 번호를 어디서 시작하나 — 한 문장에 조건 묶음을 여럿
     넣을 때(규칙 열 개) 별칭 이름이 겹치지 않게."""
     by_key = {d.key: d for d in defs}
     out: list[Any] = []
     groups: dict[int, list[Any]] = {}
+    bound: dict[tuple[int, int], list[tuple[int, Condition]]] = {}
+    seat: dict[int, int] = {}
     for index, condition in enumerate(conditions, offset):
         if condition.exclude < 0 or condition.exclude > MAX_EXCLUDE:
             raise InvalidValue(
                 code("OBJECTS", 70),
                 f"제외 묶음 번호는 1 ~ {MAX_EXCLUDE} 입니다: {condition.exclude}",
             )
+        if condition.edge < 0 or condition.edge > MAX_EDGE:
+            raise InvalidValue(
+                code("OBJECTS", 70),
+                f"같은 관계 묶음 번호는 1 ~ {MAX_EDGE} 입니다: {condition.edge}",
+            )
+        if condition.edge:
+            # 같은 관계 묶음은 한 자리에만 — 한 선이 걸리면서 빠질 수는 없다.
+            first = seat.setdefault(condition.edge, condition.exclude)
+            if first != condition.exclude:
+                where = {0: "보통 조건"}
+                raise InvalidValue(
+                    code("OBJECTS", 146),
+                    f"같은 관계 묶음 {condition.edge} 이 "
+                    f"{where.get(first, f'제외 묶음 {first}')}과 "
+                    f"{where.get(condition.exclude, f'제외 묶음 {condition.exclude}')}에 "
+                    "함께 있습니다 — 같은 관계 묶음 하나는 한 자리(보통 조건 또는 제외 묶음 "
+                    "하나)에만 둡니다. 다른 자리면 번호를 다르게 적습니다.",
+                )
+            bound.setdefault((condition.exclude, condition.edge), []).append(
+                (index, condition)
+            )
+            continue
         found = _one(by_key, resolver, condition, index)
         if condition.exclude:
             groups.setdefault(condition.exclude, []).append(found)
+        else:
+            out.append(found)
+    for (exclude, edge), members in sorted(bound.items()):
+        found = _bound_clause(resolver, members, edge)
+        if exclude:
+            groups.setdefault(exclude, []).append(found)
         else:
             out.append(found)
     out.extend(excluded(groups[number]) for number in sorted(groups))
@@ -474,6 +557,13 @@ def _one(
         return _hop_clause(resolver, condition, index)
     if condition.field == SELF_FIELD:
         return _self_clause(resolver, condition, index)
+    if condition.field == LINEAGE_FIELD and LINEAGE_FIELD not in by_key:
+        if resolver is None:
+            raise InvalidValue(
+                code("OBJECTS", 132),
+                "계보 조건(낡은 것만)은 목록 · 통계 · 내보내기 · 지표에서만 걸립니다.",
+            )
+        return lineage.condition(resolver.db, ObjectInstance, condition.op, condition.value)
     definition = by_key.get(condition.field)
     if condition.field not in FIXED_FIELDS and definition is None:
         raise InvalidValue(code("OBJECTS", 73), f"없는 칸입니다: {condition.field}")
@@ -499,48 +589,55 @@ def _self_clause(resolver: paths.Resolver | None, condition: Condition, index: i
     return graph.any_of(ObjectInstance.id, found)
 
 
-def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> Any:
-    """이어진 것 너머의 조건 — **「이어진 것 중 하나라도 맞으면」** (`EXISTS`).
-
-    조인으로 걸면 이어진 것이 여럿인 객체가 목록에 여러 번 선다. EXISTS 는 몇 개가
-    이어져 있든 한 번이다. 걸음이 여럿이면(`ref.model.ref.base.series`) EXISTS 안에서 걸음을
-    이어 붙인다 — 뜻은 그대로 「그 길로 닿는 것 중 하나라도」 다.
-    """
+def chain_of(resolver: paths.Resolver, address: str) -> paths.Chain:
+    """주소 → 걸음들. 못 풀면 조건의 말(422)로 — 「없는 칸」 과 같은 번호다."""
     try:
-        chain = resolver.parse_chain(condition.field)
+        return resolver.parse_chain(address)
     except AppError as caught:
         raise InvalidValue(code("OBJECTS", 73), caught.message) from caught
-    op, raw = condition.op, condition.value
-    whole = chain.field is None
 
-    if whole:
-        # 관계로 이어진 것 자체 — 누구와 이어졌나, 또는 이어져 있기는 한가.
-        allowed = (
-            (*OPS_CHOICE, *OPS_TREE, *OPS_ANY) if chain.data_type == "object_ref" else OPS_ANY
-        )
-        if op not in allowed:
-            raise InvalidValue(
-                code("OBJECTS", 72),
-                f"{chain.label}: 「{op}」 는 이 칸에 못 겁니다. 되는 것: {', '.join(allowed)}",
-            )
-    elif chain.definition is not None and chain.definition.data_type == "file":
-        raise InvalidValue(code("OBJECTS", 73), f"{chain.label}: 파일 칸은 못 겁니다.")
 
-    # 걸음을 잇는다 — 첫 걸음은 바깥(목록의 객체)과 상관 관계로 묶이고, 다음 걸음은 앞 걸음의
-    # 끝(이어진 객체)에서 나간다.
+@dataclass
+class Walked:
+    """걸음을 이은 EXISTS 의 몸통 — 마지막 관계 걸음의 선 · 마지막 「나를 가리키는 것」 의 참조
+    색인 줄 · 마지막 걸음의 상대 객체(관계 자체로 끝나면 None)."""
+
+    linked: Any
+    edges: Any
+    back: Any
+    target: Any
+
+
+def walk(
+    hops: list[paths.Hop],
+    owners: list[paths.Resolver],
+    start: Any,
+    name: str,
+    *,
+    stop_at_edge: bool = False,
+    edge: bool = False,
+) -> Walked:
+    """걸음을 잇는다 — 첫 걸음은 `start`(목록의 객체, 또는 바깥 질의의 별칭)와 상관 관계로
+    묶이고, 다음 걸음은 앞 걸음의 끝(이어진 객체)에서 나간다. 이어진 칸(목록의 열)도 같은
+    몸통을 쓴다 — 조건과 열이 같은 주소를 다르게 걸으면 「조건에는 걸리는데 열에는 없는」 줄이
+    생긴다.
+
+    `stop_at_edge` 면 마지막 관계 걸음의 상대 객체를 잇지 않는다(관계로 이어진 것 자체 · 선의
+    칸 — 선만 본다). `edge` 면 마지막 관계 걸음의 선이 선의 칸(`props` · `valid_from` ·
+    `valid_to`)을 싣는다."""
     linked: Any = None
-    previous: Any = ObjectInstance
+    previous: Any = start
     last_edges: Any = None
     last_back: Any = None
     last_target: Any = None
-    for depth, (hop, owner) in enumerate(zip(chain.hops, chain.owners, strict=True)):
-        name = f"hop{index}_{depth}"
-        final = depth == len(chain.hops) - 1
+    for depth, (hop, owner) in enumerate(zip(hops, owners, strict=True)):
+        step_name = f"{name}_{depth}"
+        final = depth == len(hops) - 1
         if hop.is_back:
             # 나를 가리키는 것(ADR 0017) — 참조 색인을 거꾸로(`dst_id` 색인). 그 객체는 보는
             # 사람이 볼 수 있는 것만 — 남의 부서 기록이 있다는 사실이 새지 않게.
-            link = aliased(ObjectRef, name=f"{name}_back")
-            target = aliased(ObjectInstance, name=f"{name}_obj")
+            link = aliased(ObjectRef, name=f"{step_name}_back")
+            target = aliased(ObjectInstance, name=f"{step_name}_obj")
             step = and_(
                 link.dst_id == previous.id,
                 link.key == hop.back_key,
@@ -558,8 +655,8 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
         elif hop.kind == "ref":
             # 참조 색인으로 잇는다 — 예전의 JSONB 포함(`@>`) 조인은 타입 제한이 없는 비등가
             # 조인이라 200만 건에서 2분을 넘겼다(실측).
-            link = aliased(ObjectRef, name=f"{name}_ref")
-            target = aliased(ObjectInstance, name=f"{name}_obj")
+            link = aliased(ObjectRef, name=f"{step_name}_ref")
+            target = aliased(ObjectInstance, name=f"{step_name}_obj")
             step = and_(link.src_id == previous.id, link.key == hop.name)
             if linked is None:
                 linked = select(literal(1)).select_from(link).where(step)
@@ -576,17 +673,17 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
         else:
             # 관계 걸음 — 저쪽 끝은 선(`edges`)에서 이미 보이는 것만 남는다. 관계로 이어진 것
             # **자체**(있음 · 없음 · 특정 객체)도 그래서 못 보는 객체로는 안 걸린다.
-            edges = owner.edges(hop, f"{name}_edges")
+            edges = owner.edges(hop, f"{step_name}_edges", edge=edge and final)
             step = edges.c.me == previous.id
             if linked is None:
                 linked = select(literal(1)).select_from(edges).where(step)
             else:
                 linked = linked.join(edges, step)
             last_edges = edges
-            if final and whole:
+            if final and stop_at_edge:
                 last_target = None
                 break
-            target = aliased(ObjectInstance, name=f"{name}_obj")
+            target = aliased(ObjectInstance, name=f"{step_name}_obj")
             linked = linked.join(
                 target,
                 and_(
@@ -597,6 +694,61 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
             )
             last_target = target
         previous = last_target
+    return Walked(linked, last_edges, last_back, last_target)
+
+
+def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> Any:
+    """이어진 것 너머의 조건 — **「이어진 것 중 하나라도 맞으면」** (`EXISTS`).
+
+    조인으로 걸면 이어진 것이 여럿인 객체가 목록에 여러 번 선다. EXISTS 는 몇 개가
+    이어져 있든 한 번이다. 걸음이 여럿이면(`ref.model.ref.base.series`) EXISTS 안에서 걸음을
+    이어 붙인다 — 뜻은 그대로 「그 길로 닿는 것 중 하나라도」 다.
+    """
+    chain = chain_of(resolver, condition.field)
+    return _chain_clause(
+        resolver, chain, condition.op, condition.value, ObjectInstance, f"hop{index}"
+    )
+
+
+def _chain_clause(
+    resolver: paths.Resolver,
+    chain: paths.Chain,
+    op: str,
+    raw: str,
+    start: Any,
+    name: str,
+    *,
+    from_depth: int = 0,
+) -> Any:
+    """`start` 에서 `chain` 의 `from_depth` 번째 걸음부터 끝까지 — 「그 길로 닿는 것 중
+    하나라도」. 같은 관계 묶음은 묶은 선의 상대에서 나머지 걸음을 이것으로 잇는다."""
+    whole = chain.field is None
+
+    if whole:
+        # 관계로 이어진 것 자체 — 누구와 이어졌나, 또는 이어져 있기는 한가.
+        allowed = (
+            (*OPS_CHOICE, *OPS_TREE, *OPS_ANY) if chain.data_type == "object_ref" else OPS_ANY
+        )
+        if op not in allowed:
+            raise InvalidValue(
+                code("OBJECTS", 72),
+                f"{chain.label}: 「{op}」 는 이 칸에 못 겁니다. 되는 것: {', '.join(allowed)}",
+            )
+    elif chain.edge:
+        require_edge_usable(chain)
+    elif chain.definition is not None and chain.definition.data_type == "file":
+        raise InvalidValue(code("OBJECTS", 73), f"{chain.label}: 파일 칸은 못 겁니다.")
+
+    walked = walk(
+        chain.hops[from_depth:],
+        chain.owners[from_depth:],
+        start,
+        name,
+        # 관계 자체 · 선의 칸은 선만 본다 — 상대 객체를 잇지 않는다(예전과 같은 질의).
+        stop_at_edge=whole or chain.edge,
+        edge=chain.edge,
+    )
+    linked = walked.linked
 
     if whole and chain.hop.is_back:
         # 나를 가리키는 것 자체(**마지막 걸음이** 그것일 때) — 있음 · 없음, 또는 특정 객체가
@@ -611,41 +763,270 @@ def _hop_clause(resolver: paths.Resolver, condition: Condition, index: int) -> A
         if op == "notempty":
             return linked.exists()
         picked = _ids(_values(raw) if op == "in" else [raw])
-        hit = linked.where(last_back.src_id.in_(picked)).exists() if picked else false()
+        hit = linked.where(walked.back.src_id.in_(picked)).exists() if picked else false()
         return ~hit if op == "ne" else hit
     if whole:
-        assert last_edges is not None
+        assert walked.edges is not None
         if op == "empty":
             return ~linked.exists()
         if op == "notempty":
             return linked.exists()
-        if op in OPS_TREE:
-            far = chain.hop.target.object_type if chain.hop.target else None
-            roots = _ids(_values(raw))
-            found = _subtree_or_refuse(
-                resolver.subtree_of(far.slug, roots) if far else None,
-                far.label if far else chain.label,
-            )
-            return linked.where(graph.any_of(last_edges.c.other, found)).exists()
-        # 사람이 준 값(id 글자)과 견준다 — 선은 uuid 라 글자로 바꿔 본다(id 가 아닌 글자도
-        # 오류 없이 「안 맞음」 이 되게).
-        other = cast(last_edges.c.other, String)
-        if op == "eq":
-            return linked.where(other == raw).exists()
-        if op == "ne":
-            return ~linked.where(other == raw).exists()
-        values = _values(raw)
-        return linked.where(other.in_(values)).exists() if values else false()
+        return _other_clause(resolver, chain, op, raw, walked.edges, linked)
 
-    assert chain.field is not None and last_target is not None
-    inner = clause(
-        Condition(chain.field, op, raw),
-        chain.definition,
-        last_target,
-        label=chain.label,
-        subtree_of=resolver.subtree_of,
-    )
+    assert chain.field is not None
+    if chain.edge:
+        inner = _edge_clause(Condition(chain.field, op, raw), chain, walked.edges)
+    else:
+        assert walked.target is not None
+        inner = clause(
+            Condition(chain.field, op, raw),
+            chain.definition,
+            walked.target,
+            label=chain.label,
+            subtree_of=resolver.subtree_of,
+        )
     return linked.where(inner).exists()
+
+
+def _other_clause(
+    resolver: paths.Resolver,
+    chain: paths.Chain,
+    op: str,
+    raw: str,
+    edges: Any,
+    linked: Any,
+) -> Any:
+    """관계로 이어진 것 **자체**가 그 객체인가(`eq` · `ne` · `in` · `under`) — 선의 저쪽 끝."""
+    if op in OPS_TREE:
+        far = chain.hop.target.object_type if chain.hop.target else None
+        roots = _ids(_values(raw))
+        found = _subtree_or_refuse(
+            resolver.subtree_of(far.slug, roots) if far else None,
+            far.label if far else chain.label,
+        )
+        return linked.where(graph.any_of(edges.c.other, found)).exists()
+    # 사람이 준 값(id 글자)과 견준다 — 선은 uuid 라 글자로 바꿔 본다(id 가 아닌 글자도
+    # 오류 없이 「안 맞음」 이 되게).
+    other = cast(edges.c.other, String)
+    if op == "eq":
+        return linked.where(other == raw).exists()
+    if op == "ne":
+        return ~linked.where(other == raw).exists()
+    values = _values(raw)
+    return linked.where(other.in_(values)).exists() if values else false()
+
+
+def _other_match(
+    chain: paths.Chain, resolver: paths.Resolver, op: str, raw: str, edges: Any
+) -> Any:
+    """같은 관계 묶음 안에서 — **이 선의** 저쪽 끝이 그 객체인가(묶은 선 위의 식)."""
+    if op in ("empty", "notempty"):
+        raise InvalidValue(
+            code("OBJECTS", 146),
+            f"{chain.label}: 같은 관계 묶음 안에서는 관계 자체에 「비어 있음 · 비어 있지 "
+            "않음」 을 걸지 않습니다 — 묶음은 이미 그 관계가 있다는 뜻입니다. 「없는 것」 은 "
+            "묶지 않은 조건으로 겁니다.",
+        )
+    if op in OPS_TREE:
+        far = chain.hop.target.object_type if chain.hop.target else None
+        roots = _ids(_values(raw))
+        found = _subtree_or_refuse(
+            resolver.subtree_of(far.slug, roots) if far else None,
+            far.label if far else chain.label,
+        )
+        return graph.any_of(edges.c.other, found)
+    other = cast(edges.c.other, String)
+    if op == "eq":
+        return other == raw
+    if op == "ne":
+        return other != raw
+    values = _values(raw)
+    return other.in_(values) if values else false()
+
+
+def require_edge_usable(chain: paths.Chain) -> None:
+    """선의 칸 중 참조 · 파일은 못 건다 — 참조 색인은 객체의 칸만 담는다."""
+    if chain.definition is not None and chain.definition.data_type in paths.EDGE_UNUSABLE:
+        raise InvalidValue(
+            code("OBJECTS", 73),
+            f"{chain.label}: 관계 속성 중 참조 · 파일 칸은 조건 · 기준으로 쓰지 않습니다.",
+        )
+
+
+class _EdgeRow:
+    """선의 칸을 `clause` 에 넘기는 모양 — `properties` 가 그 선의 관계 속성(JSONB)이다."""
+
+    def __init__(self, edges: Any) -> None:
+        self.properties = edges.c.props
+
+
+def _edge_clause(condition: Condition, chain: paths.Chain, edges: Any) -> Any:
+    """선의 칸 하나(ADR 0043) — 관계 속성은 객체의 칸과 **같은 형별 규칙**(`clause`)으로,
+    시작일 · 끝날은 날짜 칸으로 견준다."""
+    require_edge_usable(chain)
+    if chain.definition is None:
+        return _period_clause(
+            edges.c[condition.field], condition.op, condition.value, chain.label
+        )
+    return clause(condition, chain.definition, _EdgeRow(edges), label=chain.label, fixed=False)
+
+
+def _period_clause(column: Any, op: str, raw: str, label: str) -> Any:
+    """선의 시작일 · 끝날(`date` 칸, 비면 그쪽 끝이 열린 것) — 날짜 칸과 같은 연산."""
+    allowed = (*OPS_ORDER, *OPS_ANY)
+    if op not in allowed:
+        raise InvalidValue(
+            code("OBJECTS", 72),
+            f"{label}: 「{op}」 는 이 칸에 못 겁니다. 되는 것: {', '.join(allowed)}",
+        )
+    if op == "empty":
+        return column.is_(None)
+    if op == "notempty":
+        return column.is_not(None)
+    if op == "in":
+        days = [_date(label, one) for one in _values(raw)]
+        return column.in_(days) if days else false()
+    when = _date(label, raw)
+    return {
+        "eq": column == when,
+        # 「다름」 은 비어 있는 것(열린 끝)도 든다 — 다른 칸의 「다름」 과 같은 뜻.
+        "ne": or_(column.is_(None), column != when),
+        "gt": column > when,
+        "gte": column >= when,
+        "lt": column < when,
+        "lte": column <= when,
+    }[op]
+
+
+def _bound_clause(
+    resolver: paths.Resolver | None, members: list[tuple[int, Condition]], number: int
+) -> Any:
+    """같은 관계 묶음 하나(ADR 0043) — 묶음의 주소들이 **함께 지나는 마지막 관계 걸음**의 선
+    하나에서 조건이 모두 맞나: `EXISTS(선 e: 조건1(e) AND 조건2(e) …)`.
+
+    조건마다 묶은 선에서 보는 것이 다르다 — 선의 칸(`out.bom~qty`), 관계 자체(`out.bom` 의
+    같음 · 그 중 하나 · 하위 전체 — 이 선의 상대가 그 객체인가), 상대의 칸(`out.bom.label`),
+    그 너머(`out.bom.ref.vendor.country` — 이 선의 상대에서 「하나라도」)."""
+    if resolver is None:
+        raise InvalidValue(
+            code("OBJECTS", 146),
+            f"같은 관계 묶음 {number}: 이어진 것 너머의 조건이 걸리지 않는 자리입니다.",
+        )
+    chains: list[paths.Chain] = []
+    for _index, condition in members:
+        if not paths.is_path(condition.field):
+            raise InvalidValue(
+                code("OBJECTS", 146),
+                f"같은 관계 묶음 {number}: 「{condition.field}」 는 관계 걸음을 지나는 주소가 "
+                "아닙니다 — 묶음에는 out.<관계> · in.<관계> 를 지나는 주소(관계 속성 "
+                "out.<관계>~<관계 속성> 포함)만 넣습니다.",
+            )
+        chains.append(chain_of(resolver, condition.field))
+    paths_of = [[(hop.kind, hop.name) for hop in chain.hops] for chain in chains]
+    common = 0
+    while (
+        all(len(one) > common for one in paths_of)
+        and len({one[common] for one in paths_of}) == 1
+    ):
+        common += 1
+    at = next(
+        (depth for depth in range(common - 1, -1, -1) if chains[0].hops[depth].is_relation),
+        None,
+    )
+    if at is None:
+        said = ", ".join(condition.field for _index, condition in members)
+        raise InvalidValue(
+            code("OBJECTS", 146),
+            f"같은 관계 묶음 {number}: 조건들이 함께 지나는 관계 걸음이 없습니다({said}) — "
+            "묶음의 주소는 같은 관계 걸음(out.<관계> · in.<관계>)으로 시작해야 같은 선을 "
+            "가리킵니다.",
+        )
+    depth = at + 1
+    head = chains[0]
+    # 상대 객체가 필요한 조건(상대의 칸 · 그 너머)이 있을 때만 상대를 잇는다 — 선의 칸 · 관계
+    # 자체만이면 선만 본다(묶지 않은 조건과 같은 질의).
+    needs_target = any(
+        len(chain.hops) > depth or (not chain.edge and chain.field is not None)
+        for chain in chains
+    )
+    first = members[0][0]
+    walked = walk(
+        head.hops[:depth],
+        head.owners[:depth],
+        ObjectInstance,
+        f"bnd{first}",
+        stop_at_edge=not needs_target,
+        edge=True,
+    )
+    parts: list[Any] = []
+    for (index, condition), chain in zip(members, chains, strict=True):
+        if len(chain.hops) > depth:
+            assert walked.target is not None
+            parts.append(
+                _chain_clause(
+                    resolver,
+                    chain,
+                    condition.op,
+                    condition.value,
+                    walked.target,
+                    f"hop{index}",
+                    from_depth=depth,
+                )
+            )
+        elif chain.edge:
+            parts.append(
+                _edge_clause(
+                    Condition(chain.field or "", condition.op, condition.value),
+                    chain,
+                    walked.edges,
+                )
+            )
+        elif chain.field is None:
+            if chain.data_type != "object_ref" or chain.hop.is_back:
+                raise InvalidValue(
+                    code("OBJECTS", 146),
+                    f"{chain.label}: 상대가 하나로 정해지지 않은 관계 · 나를 가리키는 것 "
+                    "자체는 같은 관계 묶음에 넣지 않습니다 — 상대의 칸이나 관계 속성으로 "
+                    "겁니다.",
+                )
+            parts.append(
+                _other_match(chain, resolver, condition.op, condition.value, walked.edges)
+            )
+        else:
+            if chain.definition is not None and chain.definition.data_type == "file":
+                raise InvalidValue(code("OBJECTS", 73), f"{chain.label}: 파일 칸은 못 겁니다.")
+            assert walked.target is not None
+            parts.append(
+                clause(
+                    Condition(chain.field, condition.op, condition.value),
+                    chain.definition,
+                    walked.target,
+                    label=chain.label,
+                    subtree_of=resolver.subtree_of,
+                )
+            )
+    return walked.linked.where(and_(*parts)).exists()
+
+
+def of(one: Any) -> Condition:
+    """저장된 · 받은 조건 하나(스키마 · 저장된 JSON) → `Condition`. 제외 묶음 · 같은 관계 묶음
+    번호를 함께 옮긴다 — 자리마다 손으로 옮기면 한 자리만 묶음을 잃고, 그 자리의 목록만 뜻이
+    달라진다."""
+    if isinstance(one, dict):
+        return Condition(
+            str(one.get("field", "")),
+            str(one.get("op", "")),
+            str(one.get("value", "")),
+            int(one.get("exclude") or 0),
+            int(one.get("edge") or 0),
+        )
+    return Condition(
+        one.field,
+        one.op,
+        one.value,
+        int(getattr(one, "exclude", 0) or 0),
+        int(getattr(one, "edge", 0) or 0),
+    )
 
 
 def to_query(conditions: list[Condition]) -> dict[str, str]:

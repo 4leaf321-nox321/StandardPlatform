@@ -67,6 +67,9 @@ BY_KEYS = ("period", "cohort", "age")
 #: 구성비를 낼 수 있는 집계 — 더해지는 값(건수 · 합계 · 조건 건수)만.
 COMPOSABLE = ("count", "sum", spec_module.SHARE)
 _GROUP_KEY = re.compile(r"^nf([0-9]+)\.")
+#: 같은 관계 묶음(ADR 0043) — 보통 조건(`fe<m>.`)이든 제외 묶음 안(`nf<n>.fe<m>.`)이든. 번호
+#: 하나는 한 자리에만 설 수 있어 건 보기 전체에서 겹치지 않게 매긴다.
+_EDGE_KEY = re.compile(r"^(?:nf[0-9]+\.)?fe([0-9]+)\.")
 
 
 @dataclass
@@ -685,10 +688,8 @@ def drill(
         _bounds(conds, built.cohort, ask.cohort_from, ask.cohort_to)
     if numerator and built.spec.measure == spec_module.SHARE:
         # 조건 비율의 분자 — 「조건에 맞는 N건」 이 그 목록이다(분석의 건수는 이것이다).
-        for one in built.spec.share_when:
-            conds.put(f"f.{one.field}.{one.op}", one.value, "share_when")
-    for cond in built.conds:
-        conds.put(f"f.{cond.field}.{cond.op}", cond.value, "filters")
+        conds.put_all([one.condition() for one in built.spec.share_when], "share_when")
+    conds.put_all(built.conds, "filters")
     return schemas.DrillOut(
         type_slug=built.source.slug, params=conds.params, partial=conds.partial
     )
@@ -742,6 +743,29 @@ class _Conds:
         """다음 제외 묶음 번호."""
         used = [int(found.group(1)) for key in self.params if (found := _GROUP_KEY.match(key))]
         return max(used, default=0) + 1
+
+    def renamed(
+        self, conds: list[conditions.Condition], *, exclude: int = 0
+    ) -> list[conditions.Condition]:
+        """조건 묶음(거르기 · 조건 비율 · 규칙 하나)의 **같은 관계 묶음 번호를 새 번호로**
+        (ADR 0043) — 묶음 번호는 그 조건 묶음 안에서만 뜻이 있어, 거르기의 `fe1` 과 규칙의
+        `fe1` 을 그대로 실으면 두 묶음이 한 선을 가리키는 뜻으로 바뀐다(한 번호가 두 자리에
+        서면 목록이 거절한다)."""
+        used = [int(found.group(1)) for key in self.params if (found := _EDGE_KEY.match(key))]
+        fresh = max(used, default=0)
+        mapping: dict[int, int] = {}
+        out: list[conditions.Condition] = []
+        for one in conds:
+            if one.edge and one.edge not in mapping:
+                fresh += 1
+                mapping[one.edge] = fresh
+            out.append(replace(one, exclude=exclude, edge=mapping.get(one.edge, 0)))
+        return out
+
+    def put_all(self, conds: list[conditions.Condition], why: str) -> None:
+        """조건 묶음을 보통 조건으로 싣는다 — 같은 관계 묶음 번호는 새로(`renamed`)."""
+        for moved in self.renamed(conds):
+            self.put(conditions.key_of(moved), moved.value, why)
 
     def put(self, key: str, value: str, why: str) -> None:
         have = self.params.get(key)
@@ -879,13 +903,10 @@ def _rule_condition(conds: _Conds, dim: spec_module.Dim, value: str | None) -> N
     before = rules.conds if index is None else rules.conds[:index]
     for one in before:
         number = conds.group()
-        for cond in one:
-            conds.params[f"{conditions.EXCLUDE_PREFIX}{number}.{cond.field}.{cond.op}"] = (
-                cond.value
-            )
+        for cond in conds.renamed(one, exclude=number):
+            conds.params[conditions.key_of(cond)] = cond.value
     if index is not None:
-        for cond in rules.conds[index]:
-            conds.put(f"f.{cond.field}.{cond.op}", cond.value, dim.name)
+        conds.put_all(rules.conds[index], dim.name)
 
 
 def labels_for(

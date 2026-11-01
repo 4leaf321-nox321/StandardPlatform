@@ -25,15 +25,15 @@
 import { useRef, useState } from 'react'
 import { Download, ImageIcon, Paperclip, Trash2, Upload } from 'lucide-react'
 
-import { attachmentApi, attachmentPaths } from '@/modules/files/api'
+import { attachmentApi } from '@/modules/files/api'
 import type { Attachment } from '@/modules/files/api'
+import { AttachmentThumbnail } from '@/modules/files/AttachmentThumbnail'
 import { ImageViewer, shownSize } from '@/modules/files/ImageViewer'
-import { shownLimit, useAttachmentLimit } from '@/modules/files/limit'
+import { useAttachmentUpload } from '@/modules/files/useAttachmentUpload'
 import { ApiError } from '@/shared/api/client'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
-import { useBlobUrl } from '@/shared/hooks/useBlobUrl'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDate } from '@/shared/lib/datetime'
 
@@ -68,26 +68,8 @@ interface AttachmentListProps {
   excludeFields?: string[]
 }
 
-const IMAGE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp'
-
-function Thumbnail({ one, onOpen }: { one: Attachment; onOpen: () => void }) {
-  const thumb = useBlobUrl(attachmentPaths.thumbnail(one.id))
-  return (
-    <button
-      type="button"
-      onClick={onOpen}
-      title={one.original_name}
-      aria-label={`${one.original_name} 크게 보기`}
-      className="bg-muted/40 hover:ring-primary/40 flex size-32 items-center justify-center overflow-hidden rounded-md border hover:ring-2"
-    >
-      {thumb.url ? (
-        <img src={thumb.url} alt={one.original_name} className="size-full object-cover" />
-      ) : (
-        <ImageIcon className="text-muted-foreground size-6" />
-      )}
-    </button>
-  )
-}
+/** 고르는 창이 사진만 보이게 — 바인딩 키트의 사진 칸도 같은 값을 쓴다. */
+export const IMAGE_ACCEPT = 'image/png,image/jpeg,image/gif,image/webp'
 
 export function AttachmentList({
   ownerTable,
@@ -103,53 +85,29 @@ export function AttachmentList({
     () => attachmentApi.list(ownerTable, ownerId, ownerField),
     [ownerTable, ownerId, ownerField],
   )
-  const [error, setError] = useState<ApiError | Error | null>(null)
-  const [progress, setProgress] = useState<string | null>(null)
+  const [failure, setFailure] = useState<ApiError | Error | null>(null)
   const [dragging, setDragging] = useState(false)
   const [viewing, setViewing] = useState<number | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
   const imageOnly = accept === 'image'
-  const limit = useAttachmentLimit()
+  // 올리기는 바인딩 키트의 사진 칸과 한 벌이다(`useAttachmentUpload`) — 차례로 · 상한 · 실패한 이름.
+  const {
+    uploadAll,
+    progress,
+    error: uploadError,
+    setError: setUploadError,
+  } = useAttachmentUpload({ ownerTable, ownerId, ownerField, workspaceSlug }, () => list.reload())
+  const error = failure ?? uploadError
 
   async function act(run: () => Promise<unknown>) {
-    setError(null)
+    setFailure(null)
+    setUploadError(null)
     try {
       await run()
       list.reload()
     } catch (caught) {
-      setError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+      setFailure(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
     }
-  }
-
-  /** 한 장씩 차례로 — 동시에 보내면 큰 사진 여러 장이 서로의 시간을 잡아먹고, 어느 것이
-   *  실패했는지 가리기 어렵다. 실패한 것은 이름을 붙여 남기고 나머지는 계속 올린다. 상한을
-   *  넘는 파일은 **보내지 않는다** — 다 보낸 뒤에 거절당하면 그 시간이 통째로 헛것이다. */
-  async function uploadAll(chosen: File[]) {
-    if (chosen.length === 0 || progress) return
-    setError(null)
-    const failed = chosen
-      .filter((file) => file.size > limit)
-      .map((file) => `${file.name}: 한 파일은 ${shownLimit(limit)} 까지입니다`)
-    const files = chosen.filter((file) => file.size <= limit)
-    for (const [index, file] of files.entries()) {
-      setProgress(
-        files.length > 1 ? `${files.length}개 중 ${index + 1}번째 업로드 중…` : '업로드 중…',
-      )
-      try {
-        await attachmentApi.upload({
-          ownerTable,
-          ownerId,
-          ownerField,
-          workspaceSlug: workspaceSlug ?? null,
-          file,
-        })
-      } catch (caught) {
-        failed.push(`${file.name}: ${caught instanceof Error ? caught.message : '알 수 없는 오류'}`)
-      }
-    }
-    setProgress(null)
-    list.reload()
-    if (failed.length > 0) setError(new Error(failed.join(' / ')))
   }
 
   const rows = (list.data ?? []).filter(
@@ -243,7 +201,11 @@ export function AttachmentList({
             <ul className="flex flex-wrap gap-2" aria-label={`${title} 사진`}>
               {images.map((one, index) => (
                 <li key={one.id} className="relative">
-                  <Thumbnail one={one} onOpen={() => setViewing(index)} />
+                  <AttachmentThumbnail
+                    id={one.id}
+                    name={one.original_name}
+                    onOpen={() => setViewing(index)}
+                  />
                   {canEdit && (
                     <Button
                       variant="secondary"

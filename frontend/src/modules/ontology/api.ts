@@ -60,19 +60,25 @@ export interface PropertyDef {
 }
 
 /** 목록 화면의 모양. **없으면 모든 목록이 똑같아지고, 똑같으면 아무도 안 쓴다.** */
-export type RollupFn = 'sum' | 'min' | 'max' | 'avg' | 'count'
+export type RollupFn = 'sum' | 'min' | 'max' | 'avg' | 'count' | 'product'
 export const ROLLUP_FNS: [RollupFn, string][] = [
   ['sum', '합계'],
   ['min', '최소'],
   ['max', '최대'],
   ['avg', '평균'],
   ['count', '개수'],
+  // 값을 모두 곱한다 — 「수량 반영」 이면 총수량만큼 거듭제곱(직렬 신뢰도, ADR 0040).
+  ['product', '곱'],
 ]
 
 export interface RollupSpec {
   property: string
   fn: RollupFn
   label?: string
+  /** 「수량 반영」(ADR 0040) — 아래 객체의 값을 총수량만큼 센다. 끄면 키를 싣지 않는다. */
+  weighted?: boolean
+  /** 「말단만」 — 그 기준일의 트리에서 아래가 없는 객체만 모은다(중간 조립품을 두 번 안 센다). */
+  leaves_only?: boolean
 }
 
 export interface ListView {
@@ -142,11 +148,20 @@ export interface ObjectType {
   form_view: SectionView
   detail_view: SectionView
   title_template: string
+  /**
+   * **개정 칸**(ADR 0041) — 이 타입의 판(「Rev.C」 · 「3」)을 적는 속성 키(글자 · 선택 · 숫자, 값
+   * 하나). 원천의 개정이 고정 뒤에 바뀌면 파생물이 낡음이 된다. 빈 글자면 개정 칸이 없고 원천의
+   * 수정 시각으로 판정한다.
+   */
+  revision_key?: string
   is_active: boolean
   object_count: number
 }
 
 export type Cardinality = 'one_to_one' | 'one_to_many' | 'many_to_one' | 'many_to_many'
+
+/** 계보 관계의 원천 끝(ADR 0041) — 빈 글자면 계보 관계가 아니다. */
+export type LineageSource = '' | 'src' | 'dst'
 
 export interface ReferenceEdge {
   /** `ref:<타입>.<칸>` — 그래프 · 이웃 필터가 관계 slug 와 같은 자리에 쓴다. */
@@ -171,6 +186,24 @@ export interface RelationType {
   transitive: boolean
   acyclic: boolean
   cardinality: Cardinality
+  /**
+   * **유효 기간을 받는가**(ADR 0039). 켜면 관계마다 시작일(포함) · 끝날(제외)을 적고, 같은 두 객체
+   * 사이에 기간이 겹치지 않는 관계를 여럿 둔다. 기간이 든 관계가 있으면 끌 수 없다(409).
+   */
+  effectivity?: boolean
+  /**
+   * **수량 칸**(ADR 0040) — 이 종류의 숫자 · 값 하나 관계 속성의 키. BOM 전개가 관계마다 「부모
+   * 하나에 자식 몇 개」 로 읽고 경로를 따라 곱한다. 빈 글자면 모든 관계를 1개로 센다.
+   */
+  quantity_key?: string
+  /**
+   * **계보 관계**(ADR 0041) — 어느 끝이 원천인가(`src` 출발 · `dst` 도착, 빈 글자면 계보가 아님).
+   * 방향이 있는 종류만 된다(ONTOLOGY-0097). 켜거나 끝을 바꾸면 이 종류의 관계 전부를 지금 값으로
+   * 다시 고정하고, 해제하면 고정을 비운다.
+   */
+  lineage_source?: LineageSource
+  /** 이 종류의 관계 속성(관계 자체에 붙는 값 — 수량 · 근거 건수 …). 정의 가져오기로만 추가한다. */
+  properties?: PropertyDef[]
   src_type_slugs: string[] | null
   dst_type_slugs: string[] | null
   sort_order: number

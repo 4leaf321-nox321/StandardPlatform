@@ -97,6 +97,32 @@ def test_코어는_확장을_모른다() -> None:
                 )
 
 
+#: 프론트에서 확장 하나의 폴더를 부르는 모양 — `from '@/extensions/<이름>…'` · `import('@/…')`.
+_FRONT_EXTENSION_IMPORT = re.compile(
+    r"""(?:from\s+|import\(\s*)['"]@/extensions/([A-Za-z0-9_]+)"""
+)
+
+
+def test_프론트_코어도_확장을_모른다() -> None:
+    """화면도 같다 — `src/modules` · `src/shared` 는 확장의 폴더(`@/extensions/<이름>`)를
+    import 하지 않는다. 아는 것은 레지스트리(`@/extensions` — 켜진 목록 · 메뉴 · 문)뿐이다.
+    코어 화면이 확장의 부품을 부르면 그 확장을 뺀 번들이 안 서고, 그것은 확장이 다 든 개발 PC
+    에서는 안 드러난다. 확장이 쓰는 공용 부품(자동 저장 글 칸 · 사진 칸)은 반대로 코어에 두고
+    확장이 부른다.
+    """
+    src = BACKEND.parent / "frontend" / "src"
+    if not src.exists():  # pragma: no cover - 백엔드만 받은 설치
+        return
+    names = {path.name for path in (src / "extensions").iterdir() if path.is_dir()}
+    offenders: list[str] = []
+    for root in ("modules", "shared"):
+        for path in (src / root).rglob("*.ts*"):
+            for name in _FRONT_EXTENSION_IMPORT.findall(path.read_text(encoding="utf-8")):
+                if name in names:
+                    offenders.append(f"{path.relative_to(src)} -> @/extensions/{name}")
+    assert not offenders, "코어 화면이 확장을 압니다: " + ", ".join(offenders)
+
+
 def test_코드는_제품_이름을_branding_에서_import_하지_않는다() -> None:
     """이름은 설치마다 다르다(`.env`). 코드가 `branding` 의 기본값을 쓰면 **모든 설치가
     틀의 이름으로 보인다** — 읽는 자리는 `get_settings().app_name` 뿐이다. `config.py` 만

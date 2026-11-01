@@ -16,8 +16,8 @@
 ## 무엇을 지우나
 
 정의(묶음·타입·속성·관계 종류)와 **그 정의에 매달린 것 전부**(객체·관계·링크·별칭·
-연도·저장된 뷰·데이터 소스). 부서·계정·공지·웹훅은 안 건드린다 — 그것들은 온톨로지가
-아니라 이 설치 자체의 것이다.
+연도·저장된 뷰·데이터 소스·지표 정의·장표 틀과 장표·제안된 관계). 부서·계정·공지·웹훅은
+안 건드린다 — 그것들은 온톨로지가 아니라 이 설치 자체의 것이다.
 
 첨부는 **행만 지운다**(`files` 모듈의 규칙 그대로). 같은 내용을 다른 행이 가리킬 수
 있어서, 파일까지 지우면 그쪽이 가리킬 곳을 잃는다.
@@ -47,6 +47,7 @@ from app.modules.objects.models import (
     ObjectRelation,
     ObjectRelationTombstone,
     ObjectYear,
+    RelationProposal,
     SavedView,
 )
 from app.modules.ontology.models import (
@@ -56,6 +57,7 @@ from app.modules.ontology.models import (
     PropertyDef,
     RelationType,
 )
+from app.modules.slides.models import Slide, SlideTemplate
 from app.shared.errors import AppError, Conflict, code
 
 #: 확인 문구 — **계획에 뜬 그대로 쳐야 한다.** 실수로 누르는 것과 작정하고 하는 것
@@ -101,6 +103,9 @@ def plan(db: Session) -> ResetPlan:
             # 지운 객체(`deleted_at`)도 센다 — 행이 남아 있으면 FK 는 그대로 붙든다.
             ResetItem("objects", "객체(지운 것 포함)", _count(db, ObjectInstance)),
             ResetItem("object_relations", "관계", _count(db, ObjectRelation)),
+            # 제안된 관계(ADR 0042)는 **객체를 가리킨다**(CASCADE) — 세지 않으면 계획에 안
+            # 보이고 객체와 함께 소리 없이 사라진다(장표 틀이 빠져 409 가 났던 자리와 같다).
+            ResetItem("relation_proposals", "제안된 관계", _count(db, RelationProposal)),
             ResetItem("object_links", "원 표와 이은 선", _count(db, ObjectLink)),
             ResetItem("object_aliases", "별칭", _count(db, ObjectAlias)),
             ResetItem("object_years", "연도 배정", _count(db, ObjectYear)),
@@ -109,6 +114,9 @@ def plan(db: Session) -> ResetPlan:
             # 지표 정의는 **타입을 가리킨다**(`source_type_id`, RESTRICT) — 세지 않으면
             # 계획에는 안 보이고 적용만 FK 로 막힌다.
             ResetItem("metric_defs", "지표 정의", _count(db, MetricDef)),
+            # 장표 틀도 **주제 타입을 가리킨다**(RESTRICT), 장표는 틀을 가리킨다(RESTRICT).
+            ResetItem("slide_templates", "장표 틀", _count(db, SlideTemplate)),
+            ResetItem("slides", "장표(지운 것 포함)", _count(db, Slide)),
             ResetItem(
                 "attachments",
                 "객체에 붙은 첨부",
@@ -140,10 +148,15 @@ def apply(db: Session, *, confirm: str) -> ResetPlan:
         db.execute(delete(MetricValue))
         db.execute(delete(MetricRun))
         db.execute(delete(MetricDef))
+        # 장표 → 틀 차례로. 장표가 마지막으로 실은 기록(`slide_refs`)은 CASCADE 로 함께 간다.
+        db.execute(delete(Slide))
+        db.execute(delete(SlideTemplate))
         db.execute(delete(SavedView))
         db.execute(delete(ObjectYear))
         db.execute(delete(ObjectAlias))
         db.execute(delete(ObjectLink))
+        # 제안 → 선 차례로(제안이 확정으로 생긴 선을 가리킨다).
+        db.execute(delete(RelationProposal))
         db.execute(delete(ObjectRelation))
         # 통째로 지우는 자리다 — 무덤을 남기면 받는 쪽이 「끊겼다」 를 6천 줄 받는다.
         db.execute(delete(ObjectRelationTombstone))

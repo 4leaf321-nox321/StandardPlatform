@@ -11,6 +11,12 @@
 | 참조 속성(`object_ref`) | `owl:ObjectProperty` + `rdfs:range` 대상 타입, 역방향 inverseOf |
 | 관계 종류 | `owl:ObjectProperty` + domain/range(허용 타입이 하나일 때), 이행 → Transitive, |
 |  | 무방향 → Symmetric, 역방향 이름 → `owl:inverseOf` |
+| 관계의 유효 기간(ADR 0039) | **오늘 유효한 선만** 트리플로. 기간이 있는 선은 그 트리플을 |
+|  | 가리키는 `rdf:Statement`(구체화)에 `sp:validFrom` · `sp:validTo`(xsd:date, 끝은 제외) |
+| 계보 관계(ADR 0041) | W3C PROV 의 `prov:wasDerivedFrom`(파생물 → 원천)에 `rdfs:subPropertyOf`
+— 원천이 |
+|  | 도착이면 그 속성이, 출발이면 그 역방향 속성(`owl:inverseOf`)이 잇는다. 선의 고정은 |
+|  | 구체화한 진술에 `sp:pinnedRevision`(글자) · `sp:pinnedAt`(xsd:dateTime) |
 | 객체 | 개체(`rdf:type` 타입 + 구현 인터페이스), `rdfs:label` 이름, |
 |  | `dcterms:identifier` 식별자, 별칭 altLabel |
 | 값 · 관계 | 트리플 |
@@ -29,18 +35,33 @@ import time
 import uuid
 from typing import Any
 
-from rdflib import DCTERMS, OWL, RDF, RDFS, SKOS, XSD, Graph, Literal, Namespace, URIRef
+from rdflib import (
+    DCTERMS,
+    OWL,
+    RDF,
+    RDFS,
+    SKOS,
+    XSD,
+    BNode,
+    Graph,
+    Literal,
+    Namespace,
+    URIRef,
+)
 from sqlalchemy import select, union
 from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
-from app.modules.objects import aliases
+from app.modules.objects import aliases, edges, typecounts
 from app.modules.objects.models import ObjectInstance, ObjectRef, ObjectRelation
 from app.modules.objects.services import properties_of
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef, RelationType
 from app.modules.workspaces.models import WorkspaceMember
 from app.shared.permissions import sees_every_department, visible_owner_clause
+
+#: W3C PROV-O — 계보 관계를 잇는 표준 어휘(ADR 0041).
+PROV = Namespace("http://www.w3.org/ns/prov#")
 
 XSD_OF: dict[str, URIRef] = {
     "text": XSD.string,
@@ -77,6 +98,26 @@ class Names:
     def relation_inverse(self, slug: str) -> URIRef:
         return self.ns[f"rel.{slug}.inverse"]
 
+    @property
+    def valid_from(self) -> URIRef:
+        """선의 유효 기간 시작일(포함) — 구체화한 진술(`rdf:Statement`)에 붙는다."""
+        return self.ns["validFrom"]
+
+    @property
+    def valid_to(self) -> URIRef:
+        """선의 유효 기간 끝날(**제외**)."""
+        return self.ns["validTo"]
+
+    @property
+    def pinned_revision(self) -> URIRef:
+        """계보 선의 고정 개정 — 맺을 때(다시 고정할 때) 원천의 개정 값(ADR 0041)."""
+        return self.ns["pinnedRevision"]
+
+    @property
+    def pinned_at(self) -> URIRef:
+        """계보 선의 고정 시각 — 그 순간 원천의 바뀐 때."""
+        return self.ns["pinnedAt"]
+
     def individual(self, type_slug: str, key: str | None, object_id: uuid.UUID) -> URIRef:
         tail = key if key else str(object_id)
         return URIRef(f"{self.base}o/{type_slug}/{_iri_safe(tail)}")
@@ -94,6 +135,7 @@ def _bind(graph: Graph, names: Names) -> None:
     graph.bind("xsd", XSD)
     graph.bind("skos", SKOS)
     graph.bind("dcterms", DCTERMS)
+    graph.bind("prov", PROV)
     graph.bind("sp", names.ns)
 
 
@@ -226,6 +268,66 @@ def _add_relation(graph: Graph, names: Names, rel: RelationType) -> None:
         graph.add((inverse, RDF.type, OWL.ObjectProperty))
         graph.add((inverse, RDFS.label, Literal(rel.inverse_label, lang="ko")))
         graph.add((inverse, OWL.inverseOf, node))
+    if rel.lineage_source in ("src", "dst"):
+        _add_lineage(graph, names, rel, node)
+    if rel.effectivity:
+        # 유효 기간을 받는 종류 — 선마다 기간이 구체화한 진술에 붙는다(ADR 0039).
+        graph.add(
+            (
+                node,
+                SKOS.note,
+                Literal("유효 기간을 받는다 — 오늘 유효한 선만 실린다", lang="ko"),
+            )
+        )
+        for term, label in (
+            (names.valid_from, "유효 기간 시작일(포함)"),
+            (names.valid_to, "유효 기간 끝날(제외 — 그날부터 무효)"),
+        ):
+            graph.add((term, RDF.type, OWL.DatatypeProperty))
+            graph.add((term, RDFS.domain, RDF.Statement))
+            graph.add((term, RDFS.range, XSD.date))
+            graph.add((term, RDFS.label, Literal(label, lang="ko")))
+    if rel.quantity_key:
+        # 수량 칸(ADR 0040) — 관계 속성은 트리플로 안 나가므로 어느 칸이 수량인지만 적는다.
+        graph.add(
+            (
+                node,
+                SKOS.note,
+                Literal(
+                    f"수량 칸 {rel.quantity_key} — 관계 하나에 자식 몇 개"
+                    "(전개가 경로 따라 곱한다)",
+                    lang="ko",
+                ),
+            )
+        )
+
+
+def _add_lineage(graph: Graph, names: Names, rel: RelationType, node: URIRef) -> None:
+    """계보 관계(ADR 0041) → `prov:wasDerivedFrom`(파생물 wasDerivedFrom 원천).
+
+    원천이 **도착**인 종류는 선의 방향이 곧 「파생물 → 원천」 이라 그 속성이 바로 하위
+    속성이다. 원천이 **출발**인 종류는 거꾸로라 역방향 속성을 세워(`owl:inverseOf`) 그것을
+    잇는다 — 속성 자신을 이으면 추론기가 「원천이 파생물에서 만들어졌다」 로 읽는다."""
+    if rel.lineage_source == "dst":
+        graph.add((node, RDFS.subPropertyOf, PROV.wasDerivedFrom))
+        said = "원천은 도착 — 출발이 도착에서 만들어졌다(prov:wasDerivedFrom)"
+    else:
+        inverse = names.relation_inverse(rel.slug)
+        graph.add((inverse, RDF.type, OWL.ObjectProperty))
+        if not rel.inverse_label:
+            graph.add((inverse, RDFS.label, Literal(f"{rel.label}의 반대", lang="ko")))
+        graph.add((inverse, OWL.inverseOf, node))
+        graph.add((inverse, RDFS.subPropertyOf, PROV.wasDerivedFrom))
+        said = "원천은 출발 — 도착이 출발에서 만들어졌다(역방향이 prov:wasDerivedFrom)"
+    graph.add((node, SKOS.note, Literal(f"계보 관계: {said}", lang="ko")))
+    for term, label, kind in (
+        (names.pinned_revision, "고정 개정(맺을 때 원천의 개정)", XSD.string),
+        (names.pinned_at, "고정 시각(그때 원천의 바뀐 때)", XSD.dateTime),
+    ):
+        graph.add((term, RDF.type, OWL.DatatypeProperty))
+        graph.add((term, RDFS.domain, RDF.Statement))
+        graph.add((term, RDFS.range, kind))
+        graph.add((term, RDFS.label, Literal(label, lang="ko")))
 
 
 #: 그래프를 세울 수 있는 객체 수 — 넘으면 **세우기 전에** 거절한다. 그래프는 메모리에 선다
@@ -309,6 +411,7 @@ def data_graph(
     # 좁혀도 기록 2,000만 건의 id 를 다 올렸다(ADR 0031 — 기록을 기본 범위에서 빼면 늘 이
     # 길이다).
     all_iri: dict[uuid.UUID, URIRef] = dict(iri_of)
+    alive = edges.alive(ObjectRelation, edges.today())
     mine = aliased(ObjectInstance)
     inside = select(mine.id).where(
         mine.deleted_at.is_(None),
@@ -320,7 +423,7 @@ def data_graph(
         pointed = union(
             select(ObjectRef.dst_id.label("id")).where(ObjectRef.src_id.in_(inside)),
             select(ObjectRelation.dst_object_id.label("id")).where(
-                ObjectRelation.src_object_id.in_(inside)
+                ObjectRelation.src_object_id.in_(inside), alive
             ),
         ).subquery("pointed")
         others = db.execute(
@@ -355,17 +458,42 @@ def data_graph(
                 graph, names, object_type, prop, node, row.properties.get(prop.key), all_iri
             )
 
-    # 선은 범위 안에서 나가는 것만 쓴다(아래) — 좁혔으면 그것만 읽는다.
-    edges = select(ObjectRelation)
+    # 선은 범위 안에서 나가는 것만 쓴다(아래) — 좁혔으면 그것만 읽는다. **오늘 유효한 선만**
+    # (ADR 0039) — 트리플에는 기간을 담을 자리가 없어, 지난 선을 실으면 지금 선과 구별되지
+    # 않는다. 기간이 있는 선은 그 트리플의 진술(구체화)에 기간을 단다.
+    stmt = select(ObjectRelation).where(alive)
     if type_slugs:
-        edges = edges.where(ObjectRelation.src_object_id.in_(inside))
-    relations = db.scalars(edges)
-    for edge in relations:
+        stmt = stmt.where(ObjectRelation.src_object_id.in_(inside))
+    for edge in db.scalars(stmt):
         src = iri_of.get(edge.src_object_id)
         dst = iri_of.get(edge.dst_object_id) or all_iri.get(edge.dst_object_id)
         if src is None or dst is None:
             continue
-        graph.add((src, names.relation(edge.relation), dst))
+        predicate = names.relation(edge.relation)
+        graph.add((src, predicate, dst))
+        if (
+            edge.valid_from is not None
+            or edge.valid_to is not None
+            or edge.pinned_at is not None
+        ):
+            said = BNode()
+            graph.add((said, RDF.type, RDF.Statement))
+            graph.add((said, RDF.subject, src))
+            graph.add((said, RDF.predicate, predicate))
+            graph.add((said, RDF.object, dst))
+            # 계보 선의 고정(ADR 0041) — 「이 결과는 도면 Rev.C 기준」.
+            if edge.pinned_revision is not None:
+                graph.add((said, names.pinned_revision, Literal(edge.pinned_revision)))
+            if edge.pinned_at is not None:
+                graph.add(
+                    (said, names.pinned_at, Literal(edge.pinned_at, datatype=XSD.dateTime))
+                )
+            if edge.valid_from is not None:
+                graph.add(
+                    (said, names.valid_from, Literal(edge.valid_from, datatype=XSD.date))
+                )
+            if edge.valid_to is not None:
+                graph.add((said, names.valid_to, Literal(edge.valid_to, datatype=XSD.date)))
     return graph
 
 
@@ -485,8 +613,12 @@ def _noise(triple: tuple[Any, Any, Any]) -> bool:
 # 들어온 AI 가 한 질문에 그만큼을 기다린다. 정의 · 객체가 바뀌면 판(version)이 달라져 저절로
 # 버려진다. 메모리를 위해 두 벌까지만 둔다 — 더 두면 워커 넷이 각자 들고 있게 된다.
 
-#: (설치 주소, 타입들, 추론, **보이는 범위**) → (판, 세운 시각, 그래프).
-_CACHE: dict[tuple[str, tuple[str, ...], bool, str], tuple[tuple[Any, ...], float, Graph]] = {}
+#: (설치 주소, 타입들, 추론, **보이는 범위**) → (판, 세운 시각, 그래프, 저장된 트리플 수,
+#: 추론이 더한 수). 수도 함께 둔다 — 그래프의 길이는 정의 트리플까지 세어, 처음과 캐시에서
+#: 답의 `triples` 가 달랐다.
+_CACHE: dict[
+    tuple[str, tuple[str, ...], bool, str], tuple[tuple[Any, ...], float, Graph, int, int]
+] = {}
 _CACHE_MAX = 2
 #: 판(version)이 못 잡는 변화도 있다 — 속성 정의에는 `updated_at` 이 없어 이름만 고치면 수가
 #: 그대로다. 그래서 이 시간이 지나면 어차피 다시 세운다(질의는 3초 안이라 감당된다).
@@ -496,19 +628,39 @@ _CACHE_TTL_SECONDS = 120.0
 INFER_MAX_TRIPLES = 20_000
 
 
-def version(db: Session) -> tuple[Any, ...]:
-    """지금 데이터의 판 — 정의 · 객체 · 관계가 바뀌면 값이 달라진다(속성 이름만 고친 것은
-    못 잡는다 — 그것은 TTL 이 받는다).
+def version(db: Session, type_ids: set[uuid.UUID]) -> tuple[Any, ...]:
+    """지금 데이터의 판 — 정의 · **범위 안 타입(`type_ids`)의 객체** · 관계가 바뀌면 값이
+    달라진다(속성 이름만 고친 것은 못 잡는다 — 그것은 TTL 이 받는다).
 
     정의(타입 · 인터페이스)는 `updated_at` 의 **합**으로 본다 — 최댓값으로 보면 시계가 뒤로
     가는 순간(WSL 에서 실측: 「Time jumped backwards」) 고친 시각이 옛 최댓값보다 작아져 고친
     것이 판에 안 잡히고, 120초 동안 옛 이름이 나온다. 합은 어느 행이 어느 쪽으로 바뀌든
-    달라진다. 행이 수십 개라 값싸다."""
-    from sqlalchemy import func
+    달라진다. 행이 수십 개라 값싸다.
+
+    객체는 **범위 안 타입만** 본다 — 타입마다 최근 수정 시각(색인 `ix_objects_type_updated` 를
+    거꾸로 한 줄)과 계수표의 수(ADR 0038). 예전에는 객체 표 전체의 최근 수정 시각과 수를
+    질의마다 셌다 — 200만 건 실측 DB 에서 0.45초(캐시가 식었으면 2.2초)였고, 범위에서 빠진
+    기록이 한 건만 들어와도 판이 바뀌어 그래프를 처음부터 다시 세웠다(축 1.3만 객체에 5 ~ 8초,
+    2026-10-30). 지금은 0.02초다. 범위 밖이지만 범위 안이 가리키는 객체(IRI 만 싣는다)의
+    식별자 변경 · 지움은 판이 못 잡는다 — TTL 이 받는다. 관계는 축끼리 잇는 것이라(기록은
+    참조 칸으로 잇는다) 전부 센다."""
+    from sqlalchemy import func, text
 
     def stamp(column: Any) -> Any:
         return db.scalar(select(func.sum(func.extract("epoch", column))))
 
+    wanted = sorted(type_ids)
+    counts = typecounts.counts(db)
+    latest = db.scalar(
+        text("""
+            SELECT max(x.latest)
+              FROM unnest(CAST(:types AS uuid[])) AS t(id)
+              CROSS JOIN LATERAL (
+                  SELECT max(o.updated_at) AS latest FROM objects o WHERE o.type_id = t.id
+              ) x
+        """),
+        {"types": [str(one) for one in wanted]},
+    )
     return (
         stamp(ObjectType.updated_at),
         db.scalar(select(func.count()).select_from(ObjectType)),
@@ -516,9 +668,15 @@ def version(db: Session) -> tuple[Any, ...]:
         stamp(ObjectInterface.updated_at),
         db.scalar(select(func.count()).select_from(ObjectInterface)),
         db.scalar(select(func.count()).select_from(PropertyDef)),
-        db.scalar(select(func.max(ObjectInstance.updated_at))),
-        db.scalar(select(func.count()).select_from(ObjectInstance)),
+        latest,
+        tuple(counts.get(one, 0) for one in wanted),
         db.scalar(select(func.count()).select_from(ObjectRelation)),
+        # 선의 기간을 고쳐도(ADR 0039) · 날짜가 넘어가도 실리는 선이 바뀐다.
+        db.scalar(select(func.max(ObjectRelation.updated_at))),
+        edges.today(),
+        # 다시 고정(ADR 0041)은 선의 바뀐 때를 안 올린다 — 고정 시각의 합으로 본다(합은 어느
+        # 선이 어느 쪽으로 바뀌어도 달라진다).
+        stamp(ObjectRelation.pinned_at),
     )
 
 
@@ -543,11 +701,10 @@ def graph_for(
 
     같은 판 · 같은 보이는 범위면 다시 세우지 않는다."""
     key = (names.base, tuple(sorted(type_slugs or ())), infer, scope_of(db, user))
-    now = version(db)
+    now = version(db, _chosen_ids(db, type_slugs))
     hit = _CACHE.get(key)
     if hit and hit[0] == now and time.monotonic() - hit[1] < _CACHE_TTL_SECONDS:
-        graph = hit[2]
-        return graph, len(graph), 0
+        return hit[2], hit[3], hit[4]
 
     schema = schema_graph(db, names)
     data = data_graph(db, names, type_slugs, user=user)
@@ -567,7 +724,7 @@ def graph_for(
             graph.add(triple)
     if len(_CACHE) >= _CACHE_MAX:
         _CACHE.pop(next(iter(_CACHE)))
-    _CACHE[key] = (now, time.monotonic(), graph)
+    _CACHE[key] = (now, time.monotonic(), graph, stored, added)
     return graph, stored, added
 
 

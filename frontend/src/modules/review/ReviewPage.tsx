@@ -65,8 +65,20 @@ function rowKey(item: ReviewItem): string {
   return `${item.kind}:${item.id}`
 }
 
-function confidenceText(value: number | null): string {
-  return value === null ? '추천 없음' : `확신도 ${value.toFixed(2)}`
+/**
+ * 줄의 확신도 배지. **추천은 있는데 확신도가 없는 종류**가 있다(낡은 파생물 — 「영향 없음 확인」 을
+ * 추천하지만 규칙이 그것을 얼마나 믿을지 말하지 못한다). 그 줄에 「추천 없음」 을 적으면 강조된
+ * 추천 단추와 말이 어긋난다 — 「확신도 없음」 으로 적고, 「추천대로 모두」 에 들지 않는다고 말한다.
+ */
+function confidenceText(value: number | null, recommended: string | null): string {
+  if (value !== null) return `확신도 ${value.toFixed(2)}`
+  return recommended ? '확신도 없음' : '추천 없음'
+}
+
+function confidenceTitle(value: number | null, recommended: string | null): string | undefined {
+  return value === null && recommended
+    ? '확신도가 없는 추천입니다 — 「추천대로 모두」 에 들지 않습니다. 선택한 뒤 「추천대로」 로 처리합니다.'
+    : undefined
 }
 
 /** 고른 줄 모두에게 있는 후보 — 「다른 것으로」 가 고를 수 있는 것. */
@@ -672,8 +684,9 @@ export default function ReviewPage() {
                                   ? 'default'
                                   : 'secondary'
                               }
+                              title={confidenceTitle(row.confidence, row.recommended)}
                             >
-                              {confidenceText(row.confidence)}
+                              {confidenceText(row.confidence, row.recommended)}
                             </Badge>
                           )}
                         </span>

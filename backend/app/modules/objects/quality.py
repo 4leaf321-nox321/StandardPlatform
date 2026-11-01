@@ -175,6 +175,8 @@ def _orphans(
     if not applies:
         return None
     # 원 표(부서·계정)와 이은 선도 관계다 — 안 세면 「담당 부서」 만 걸린 객체가 고아로 뜬다.
+    # 유효 기간이 지난 선도 센다(ADR 0039) — 지난 구성에 들었던 것은 데이터가 빠진 고아가
+    # 아니다.
     linked = union(
         select(ObjectRelation.src_object_id),
         select(ObjectRelation.dst_object_id),

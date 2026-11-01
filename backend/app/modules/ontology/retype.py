@@ -935,12 +935,7 @@ def _view_error(db: Session, view: Any) -> str | None:
     defs = properties_of(db, owner.id)
     resolver = paths.Resolver(db, owner)
     asked = [
-        conditions.Condition(
-            str(one.get("field", "")),
-            str(one.get("op", "")),
-            str(one.get("value", "")),
-            int(one.get("exclude") or 0),
-        )
+        conditions.of(one)
         for one in (view.query or {}).get("conditions") or []
         if isinstance(one, dict)
     ]

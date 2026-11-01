@@ -7,8 +7,8 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
-from typing import Any
+from datetime import UTC, date, datetime
+from typing import Any, Literal
 
 from fastapi import (
     APIRouter,
@@ -38,16 +38,21 @@ from app.modules.objects import (
     bulk,
     bulkedit,
     conditions,
+    edges,
+    explode,
     fill,
     graph,
     history,
     home,
     humanedits,
     lifecycle,
+    lineage,
+    linked,
     links,
     misses,
     paths,
     photos,
+    proposals,
     quality,
     refedges,
     resolve,
@@ -95,6 +100,11 @@ from app.modules.objects.schemas import (
     BulkUndoRequest,
     DiagnosisOut,
     DrillOut,
+    ExplodeLineOut,
+    ExplodeObjectOut,
+    ExplodeOut,
+    ExplodeTopOut,
+    ExplodeTotalsOut,
     FieldOptionOut,
     FileCellOut,
     FillReportOut,
@@ -106,6 +116,14 @@ from app.modules.objects.schemas import (
     ImportPlanOut,
     ImportRowOut,
     ImportRowsRequest,
+    LineageOut,
+    LineagePinOut,
+    LineageRepinnedOut,
+    LineageRepinOut,
+    LineageRepinRequest,
+    LinkedCellOut,
+    LinkedColumnOut,
+    LinkedValueOut,
     LogCountOut,
     MergeRequest,
     MergeResultOut,
@@ -127,6 +145,14 @@ from app.modules.objects.schemas import (
     RelationCreateRequest,
     RelationHitOut,
     RelationPatchRequest,
+    RelationProposalBulkOut,
+    RelationProposalBulkRequest,
+    RelationProposalCreateRequest,
+    RelationProposalDecisionRequest,
+    RelationProposalOut,
+    RelationProposalPage,
+    RelationProposalReopenOut,
+    RelationProposalResultOut,
     ResolveManyIn,
     ResolveManyOut,
     ResolveOneOut,
@@ -168,6 +194,7 @@ from app.modules.ontology import managed
 from app.modules.ontology.models import ObjectInterface, ObjectType, PropertyDef, RelationType
 from app.modules.ontology.schemas import PropertyDefOut
 from app.modules.ontology.services import (
+    InvalidValue,
     merge_properties,
     require_choice,
     validate_properties,
@@ -309,6 +336,13 @@ def _visible(
         # 무엇이 있는지 id 를 바꿔 가며 알아낼 수 있다.
         raise NotFound(code("OBJECTS", 11), "객체를 찾을 수 없습니다.")
     return row
+
+
+#: 기준일 칸의 설명 — 트리 · 목록 · 통계 · 상세 · 롤업이 같은 말로(ADR 0039).
+AS_OF = (
+    "기준일(YYYY-MM-DD) — 그날 유효한 관계만 따라간다(트리 · 하위 포함 · 관계 조건 · 관계 "
+    "기준 · 계층 축). 비우면 오늘. 유효 기간을 받지 않는 관계 종류의 관계는 늘 유효하다."
+)
 
 
 def _tree_spec(object_type: ObjectType) -> tuple[str | None, graph.ParentEnd]:
@@ -511,6 +545,188 @@ def decide_alias_candidates(
     return AliasCandidateDecisionOut(done=done, refused=refused)
 
 
+# --- 제안된 관계 (ADR 0042) ----------------------------------------------------
+#
+# `/{type_slug}` 로 시작하는 길보다 **먼저** 건다 — 뒤에 걸면 `relation-proposals` 가 타입 slug
+# 로 읽혀 목록 · 만들기 · 지우기로 간다.
+
+
+def _proposal_out(view: proposals.View) -> RelationProposalOut:
+    return RelationProposalOut.model_validate(view)
+
+
+def _proposal_result(
+    db: Session,
+    user: User,
+    index: int,
+    found: proposals.Result,
+    *,
+    mine: uuid.UUID | None = None,
+) -> RelationProposalResultOut:
+    shown = proposals.views(db, user, [found.proposal], mine=mine) if found.proposal else []
+    return RelationProposalResultOut(
+        index=index,
+        status=found.status,
+        message=found.message,
+        proposal=_proposal_out(shown[0]) if shown else None,
+        relation_id=found.relation_id,
+        updated=found.updated,
+        error_code=found.error_code,
+    )
+
+
+@router.get("/relation-proposals", response_model=RelationProposalPage)
+def list_relation_proposals(
+    status: Literal["proposed", "accepted", "rejected", "all"] = Query(
+        default="proposed", description="상태 — 기본은 열린 제안"
+    ),
+    relation: str | None = Query(default=None, description="관계 종류 slug"),
+    type_slug: str | None = Query(default=None, description="양 끝 중 하나가 이 타입"),
+    origin: str | None = Query(default=None, description="출처 — user · mcp · rule …"),
+    mine: bool = Query(default=False, description="내가 제안한 것만"),
+    decidable: bool = Query(default=False, description="내가 확정할 수 있는 것만"),
+    limit: int | None = Query(default=None, ge=1),
+    offset: int = Query(default=0, ge=0),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RelationProposalPage:
+    """제안 목록 — **양 끝을 볼 수 있고 지우지 않은 것만**, 새것부터(ADR 0042)."""
+    size = clamp_limit(limit)
+    found, total = proposals.page(
+        db,
+        user,
+        proposals.PageQuery(
+            status=status,
+            relation=relation,
+            type_slug=type_slug,
+            origin=origin,
+            mine=mine,
+            decidable=decidable,
+        ),
+        limit=size,
+        offset=offset,
+    )
+    return RelationProposalPage(
+        items=[_proposal_out(one) for one in found], total=total, limit=size, offset=offset
+    )
+
+
+@router.post("/relation-proposals", response_model=RelationProposalBulkOut)
+def propose_relations(
+    payload: RelationProposalBulkRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RelationProposalBulkOut:
+    """여러 건 제안 — **줄마다 결과**(만듦 · 이미 열림 · 이미 이어짐 · 거절된 적 있음 · 오류).
+    한 줄이 틀려도 나머지는 남는다. 한 번에 500줄까지.
+
+    양 끝을 **볼 수만 있으면** 제안할 수 있다 — 고칠 수 없는 사람 · AI 가 「이어야 할 것
+    같다」 를 남기는 길이다. 확정 전의 제안은 트리 · 롤업 · 지표 · 코어 API 에 안 보인다."""
+    results = proposals.propose_many(
+        db,
+        user,
+        [
+            proposals.Spec(
+                relation=row.relation,
+                src_id=row.src_object_id,
+                dst_id=row.dst_object_id,
+                properties=row.properties,
+                evidence_note=row.evidence_note,
+                valid_from=row.valid_from,
+                valid_to=row.valid_to,
+                confidence=row.confidence,
+                origin=row.origin,
+                origin_ref=row.origin_ref,
+            )
+            for row in payload.rows
+        ],
+        again=payload.again,
+    )
+    db.commit()
+    rows = [_proposal_result(db, user, index, one) for index, one in enumerate(results)]
+    counts = {key: 0 for key in ("created", "open", "connected", "rejected_before", "error")}
+    for one in rows:
+        counts[one.status] += 1
+    return RelationProposalBulkOut(rows=rows, counts=counts)
+
+
+@router.get("/relation-proposals/{proposal_id}", response_model=RelationProposalOut)
+def relation_proposal(
+    proposal_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RelationProposalOut:
+    row = proposals.get(db, user, proposal_id)
+    return _proposal_out(proposals.views(db, user, [row])[0])
+
+
+@router.post("/relation-proposals/{proposal_id}/accept", response_model=RelationProposalOut)
+def accept_relation_proposal(
+    proposal_id: uuid.UUID,
+    payload: RelationProposalDecisionRequest | None = None,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RelationProposalOut:
+    """**확정** — 「관계 추가」 와 같은 길로 선을 만든다(개수 제약 · 순환 · 기간 겹침 · 계보
+    고정 · 감사가 그대로). 출발 객체를 수정할 수 있는 사람만. 그 사이 끝이 지워졌거나 선
+    만들기가 거절하면 사람 말로 거절하고 제안은 열린 채로 남는다(OBJECTS-0141 · 0143)."""
+    row = proposals.get(db, user, proposal_id)
+    proposals.accept(db, user, row, note=payload.note if payload else "")
+    db.commit()
+    return _proposal_out(proposals.views(db, user, [row])[0])
+
+
+@router.post("/relation-proposals/{proposal_id}/reject", response_model=RelationProposalOut)
+def reject_relation_proposal(
+    proposal_id: uuid.UUID,
+    payload: RelationProposalDecisionRequest | None = None,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RelationProposalOut:
+    """**거절** — 까닭을 남긴다. 같은 제안이 다시 오면 만들지 않고 이 까닭을 돌려준다."""
+    row = proposals.get(db, user, proposal_id)
+    proposals.reject(db, user, row, note=payload.note if payload else "")
+    db.commit()
+    return _proposal_out(proposals.views(db, user, [row])[0])
+
+
+@router.post(
+    "/relation-proposals/{proposal_id}/reopen", response_model=RelationProposalReopenOut
+)
+def reopen_relation_proposal(
+    proposal_id: uuid.UUID,
+    apply: bool = Query(default=True, description="거짓이면 무엇이 되나만"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RelationProposalReopenOut:
+    """확정 · 거절을 **되돌려 다시 연다** — 확정이면 그 선을 해제한다(확정 뒤 선이 수정됐으면
+    건너뛰고 말한다)."""
+    row = proposals.get(db, user, proposal_id)
+    done, message = proposals.reopen(db, user, row, apply=apply)
+    if apply and done:
+        db.commit()
+    else:
+        db.rollback()
+    row = proposals.get(db, user, proposal_id)
+    return RelationProposalReopenOut(
+        reopened=done and apply,
+        message=message,
+        proposal=_proposal_out(proposals.views(db, user, [row])[0]),
+    )
+
+
+@router.delete("/relation-proposals/{proposal_id}", status_code=204)
+def withdraw_relation_proposal(
+    proposal_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> None:
+    """**철회** — 제안한 사람이 열린 제안을 지운다(시스템 관리자도)."""
+    row = proposals.get(db, user, proposal_id)
+    proposals.withdraw(db, user, row)
+    db.commit()
+
+
 # --- 트리 -------------------------------------------------------------------
 
 
@@ -538,6 +754,7 @@ def summary(
     under: uuid.UUID | None = Query(default=None),
     deep: bool = Query(default=True),
     year: int | None = Query(default=None, ge=1900, le=2999),
+    as_of: date | None = Query(default=None, description=AS_OF),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> SummaryOut:
@@ -557,7 +774,16 @@ def summary(
             f"{scope.label}은(는) 다른 표를 비추는 타입이라 여기서 세지 않습니다.",
         )
     stmt = _filtered(
-        db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
+        db,
+        user,
+        scope,
+        request,
+        q=q,
+        status=status,
+        year=year,
+        under=under,
+        deep=deep,
+        as_of=as_of,
     )
     summary_service.check_grain(grain)
     found = summary_service.summarize(
@@ -571,6 +797,7 @@ def summary(
         order=order,
         grain=grain,
         viewer=user,
+        at=edges.at(as_of),
     )
     defs = scope.defs
     return SummaryOut(
@@ -642,6 +869,7 @@ def points(
     under: uuid.UUID | None = Query(default=None),
     deep: bool = Query(default=True),
     year: int | None = Query(default=None, ge=1900, le=2999),
+    as_of: date | None = Query(default=None, description=AS_OF),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> PointsOut:
@@ -660,10 +888,27 @@ def points(
             f"{scope.label}은(는) 다른 표를 비추는 타입이라 여기서 못 그립니다.",
         )
     stmt = _filtered(
-        db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
+        db,
+        user,
+        scope,
+        request,
+        q=q,
+        status=status,
+        year=year,
+        under=under,
+        deep=deep,
+        as_of=as_of,
     )
     found = summary_service.points(
-        db, scope, stmt, x=x, y=y, group_by=group_by, grain=grain, viewer=user
+        db,
+        scope,
+        stmt,
+        x=x,
+        y=y,
+        group_by=group_by,
+        grain=grain,
+        viewer=user,
+        at=edges.at(as_of),
     )
     defs = scope.defs
     return PointsOut(
@@ -709,6 +954,7 @@ def summary_export(
     under: uuid.UUID | None = Query(default=None),
     deep: bool = Query(default=True),
     year: int | None = Query(default=None, ge=1900, le=2999),
+    as_of: date | None = Query(default=None, description=AS_OF),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Response:
@@ -724,7 +970,16 @@ def summary_export(
             f"{scope.label}은(는) 다른 표를 비추는 타입이라 여기서 세지 않습니다.",
         )
     stmt = _filtered(
-        db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
+        db,
+        user,
+        scope,
+        request,
+        q=q,
+        status=status,
+        year=year,
+        under=under,
+        deep=deep,
+        as_of=as_of,
     )
     found = summary_service.summarize(
         db,
@@ -737,6 +992,7 @@ def summary_export(
         order=order,
         grain=grain,
         viewer=user,
+        at=edges.at(as_of),
     )
     header, rows = summary_service.summary_table(found)
     return sheets.file_response(
@@ -758,6 +1014,7 @@ def points_export(
     under: uuid.UUID | None = Query(default=None),
     deep: bool = Query(default=True),
     year: int | None = Query(default=None, ge=1900, le=2999),
+    as_of: date | None = Query(default=None, description=AS_OF),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> Response:
@@ -773,10 +1030,27 @@ def points_export(
             f"{scope.label}은(는) 다른 표를 비추는 타입이라 여기서 못 그립니다.",
         )
     stmt = _filtered(
-        db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
+        db,
+        user,
+        scope,
+        request,
+        q=q,
+        status=status,
+        year=year,
+        under=under,
+        deep=deep,
+        as_of=as_of,
     )
     found = summary_service.points(
-        db, scope, stmt, x=x, y=y, group_by=group_by, grain=grain, viewer=user
+        db,
+        scope,
+        stmt,
+        x=x,
+        y=y,
+        group_by=group_by,
+        grain=grain,
+        viewer=user,
+        at=edges.at(as_of),
     )
     header, rows = summary_service.points_table(found)
     return sheets.file_response(
@@ -810,6 +1084,7 @@ def object_tree(
     type_slug: str,
     parent: uuid.UUID | None = Query(default=None, description="펼칠 노드. 없으면 뿌리"),
     orphans: bool = Query(default=False, description="어디에도 연결되지 않은 것만"),
+    as_of: date | None = Query(default=None, description=AS_OF),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> TreeOut:
@@ -817,23 +1092,39 @@ def object_tree(
 
     **통째로 안 불러온다.** 펼칠 때 그 단계만 읽는다 — 안 그러면 부품 5천 개짜리
     트리에서 첫 화면이 안 뜬다.
+
+    **기준일의 트리다**(ADR 0039) — 그날 유효한 선만 따라간다. 3월에 빠진 부품은 4월 기준의
+    트리에서 그 어셈블리 아래에 없고, 다른 곳에도 안 걸렸으면 「어디에도 안 걸린 것」 이 된다.
     """
     object_type = _type(db, type_slug)
     relation, parent_end = _tree_spec(object_type)
+    day = edges.at(as_of)
     if relation is None:
         return TreeOut(nodes=[], orphan_count=0)
 
     if parent is not None:
-        ids = graph.child_ids(db, relation=relation, parent_id=parent, parent_end=parent_end)
+        ids = graph.child_ids(
+            db, relation=relation, parent_id=parent, parent_end=parent_end, at=day
+        )
         orphan_count = 0
     else:
         # 뿌리 · 외톨이 · 자식 수 모두 **보이는 것만** 센다 — 남의 부서 것까지 세면 「어디에도
         # 안 걸린 것 12」 를 눌러 9개만 나오고, 그 차이가 남의 부서에 무엇이 있는지 말한다.
         parentless = graph.parentless_ids(
-            db, relation=relation, type_id=object_type.id, parent_end=parent_end, user=user
+            db,
+            relation=relation,
+            type_id=object_type.id,
+            parent_end=parent_end,
+            at=day,
+            user=user,
         )
         counts = graph.child_counts(
-            db, relation=relation, parent_ids=parentless, parent_end=parent_end, user=user
+            db,
+            relation=relation,
+            parent_ids=parentless,
+            parent_end=parent_end,
+            at=day,
+            user=user,
         )
         roots = [one for one in parentless if counts.get(one, 0) > 0]
         orphan_ids = [one for one in parentless if counts.get(one, 0) == 0]
@@ -841,7 +1132,7 @@ def object_tree(
         orphan_count = len(orphan_ids)
 
     if not ids:
-        return TreeOut(nodes=[], orphan_count=orphan_count)
+        return TreeOut(nodes=[], orphan_count=orphan_count, as_of=day)
 
     # **볼 수 있는 것만 준다.** 남의 부서 것은 트리에도 안 나온다.
     rows = list(
@@ -860,6 +1151,7 @@ def object_tree(
         relation=relation,
         parent_ids=[row.id for row in rows],
         parent_end=parent_end,
+        at=day,
         user=user,
     )
     return TreeOut(
@@ -874,6 +1166,7 @@ def object_tree(
             for row in rows
         ],
         orphan_count=orphan_count,
+        as_of=day,
     )
 
 
@@ -890,6 +1183,7 @@ def _filtered(
     deep: bool = True,
     omit: str | None = None,
     cap: bool = True,
+    as_of: date | None = None,
 ) -> Any:
     """목록과 내보내기가 **같은 거르기**를 쓴다. 따로 적으면 「화면에는 있는데 파일에는
     없는」 줄이 생기고, 어느 쪽이 맞는지 아무도 모른다.
@@ -900,7 +1194,11 @@ def _filtered(
 
     인터페이스 목록이면 구현 타입 전부가 범위다(ADR 0006) — `types=a|b` 로 그중 몇 타입만
     본다. 트리는 타입의 것이라 인터페이스에서는 거절한다.
+
+    `as_of`(기준일, ADR 0039)는 「하위 포함」 과 관계 조건이 따라갈 선을 고른다 — 비우면 오늘.
+    진단이 그것만 빼 보면(`omit="as_of"`) 오늘로 돌아간다.
     """
+    day = edges.at(None if omit == "as_of" else as_of)
     if cap:
         # 화면 · AI 가 기다리는 읽기 — 이 요청의 질의마다 시간 상한(ADR 0031). 작업(내보내기)은
         # `cap=False` 로 부른다: 사람이 기다리지 않고, 2,000만 건 CSV 는 원래 몇 분이다.
@@ -953,7 +1251,7 @@ def _filtered(
         wanted = [under]
         if deep:
             wanted += graph.descendant_ids(
-                db, relation=relation, root_id=under, parent_end=parent_end
+                db, relation=relation, root_id=under, parent_end=parent_end, at=day
             )
         stmt = stmt.where(ObjectInstance.id.in_(wanted))
     filters = {
@@ -971,16 +1269,19 @@ def _filtered(
     ]
     if asked:
         stmt = conditions.apply(
-            stmt, scope.defs, asked, paths.Resolver(db, scope, viewer=user)
+            stmt, scope.defs, asked, paths.Resolver(db, scope, viewer=user, at=day)
         )
     return stmt
 
 
 def _condition_name(one: conditions.Condition, index: int) -> str:
-    """조건 하나를 가리키는 이름. 같은 칸·같은 연산이 둘일 수 있어 차례를 붙인다. 제외 묶음은
-    **묶음 하나가 한 이름**이다 — 묶음의 조건 하나만 빼면 뜻이 다른 묶음이 된다."""
+    """조건 하나를 가리키는 이름. 같은 칸·같은 연산이 둘일 수 있어 차례를 붙인다. 제외 묶음 ·
+    같은 관계 묶음은 **묶음 하나가 한 이름**이다 — 묶음의 조건 하나만 빼면 뜻이 다른 묶음이
+    된다."""
     if one.exclude:
         return f"{conditions.EXCLUDE_PREFIX}{one.exclude}"
+    if one.edge:
+        return f"{conditions.EDGE_PREFIX}{one.edge}"
     return f"f.{one.field}.{one.op}#{index}"
 
 
@@ -991,8 +1292,10 @@ def _filter_parts(
     status: str | None,
     year: int | None,
     under: uuid.UUID | None,
+    as_of: date | None = None,
 ) -> list[tuple[str, str]]:
-    """걸린 거르기 전부 — (이름, 사람이 읽을 설명). 진단이 하나씩 떼어 본다."""
+    """걸린 거르기 전부 — (이름, 사람이 읽을 설명). 진단이 하나씩 떼어 본다. 기준일은 **오늘이
+    아닌 날을 적었을 때만** 거르기다 — 오늘이면 빼 봐도 같다."""
     parts: list[tuple[str, str]] = []
     if request.query_params.get("types"):
         parts.append(("types", f"타입 = {request.query_params['types']}"))
@@ -1004,18 +1307,21 @@ def _filter_parts(
         parts.append(("year", f"연도 = {year}"))
     if under is not None:
         parts.append(("under", "트리에서 고른 가지 아래"))
+    if as_of is not None and as_of != edges.today():
+        parts.append(("as_of", f"기준일 = {as_of.isoformat()}(그날 유효한 관계만)"))
     for key, value in request.query_params.items():
         if key.startswith("p."):
             parts.append((key, f"{key[2:]} = {value}"))
     groups: dict[str, list[str]] = {}
     for index, one in enumerate(conditions.parse(request.query_params)):
         said = f"{one.field} {one.op} {one.value}"
-        if one.exclude:
+        if one.exclude or one.edge:
             groups.setdefault(_condition_name(one, index), []).append(said)
         else:
             parts.append((_condition_name(one, index), said))
     for name, said_all in groups.items():
-        parts.append((name, f"제외: ({' 그리고 '.join(said_all)})"))
+        head = "제외" if name.startswith(conditions.EXCLUDE_PREFIX) else "같은 관계"
+        parts.append((name, f"{head}: ({' 그리고 '.join(said_all)})"))
     return parts
 
 
@@ -1301,10 +1607,7 @@ def create_view(
     conditions.apply(
         select(ObjectInstance),
         properties_of(db, object_type.id),
-        [
-            conditions.Condition(c.field, c.op, c.value, c.exclude)
-            for c in payload.query.conditions
-        ],
+        [conditions.of(c) for c in payload.query.conditions],
         paths.Resolver(db, object_type),
     )
     row = SavedView(
@@ -1351,10 +1654,7 @@ def update_view(
         conditions.apply(
             select(ObjectInstance),
             properties_of(db, object_type.id),
-            [
-                conditions.Condition(c.field, c.op, c.value, c.exclude)
-                for c in payload.query.conditions
-            ],
+            [conditions.of(c) for c in payload.query.conditions],
             paths.Resolver(db, object_type),
         )
         row.query = payload.query.model_dump()
@@ -1716,6 +2016,17 @@ def export_objects(
     for key, value in request.query_params.multi_items():
         if key != "format":
             query.setdefault(key, []).append(value)
+    if query.get("columns"):
+        # 이어진 칸(ADR 0043) — 틀린 주소는 맡기기 전에 422 로(몇 분 뒤 「실패」 가 아니라).
+        raw_day = (query.get("as_of") or [""])[0]
+        try:
+            day = edges.at(date.fromisoformat(raw_day) if raw_day else None)
+        except ValueError:
+            day = edges.at(None)
+        linked.parse(paths.Resolver(db, object_type, viewer=user, at=day), query["columns"])
+    # 기준일을 **맡긴 날로 박는다**(ADR 0039) — 워커가 자정을 넘겨 돌면 「오늘」 이 하루
+    # 밀린다.
+    query.setdefault("as_of", [edges.today().isoformat()])
     job = jobs_routes.submit(
         db,
         user,
@@ -1904,8 +2215,17 @@ def list_objects(
     year: int | None = Query(
         default=None, ge=1900, le=2999, description="그 해에 해당하는 것만"
     ),
+    as_of: date | None = Query(default=None, description=AS_OF),
     limit: int | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
+    columns: list[str] = Query(
+        default=[],
+        description=(
+            "이어진 칸 — 줄마다 그 주소의 값을 `linked` 로 싣는다(조건과 같은 주소: "
+            "`out.sku_base.label` · `in.svc_case:model` · `out.bom~qty`). 칸마다 20개까지, "
+            "더 있으면 `more`. 10개까지."
+        ),
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> ObjectPageOut:
@@ -1915,9 +2235,17 @@ def list_objects(
     정하고, 안 정해 뒀으면 기본형으로 떨어진다 — **빈 화면이 되지는 않는다.**
 
     목록 화면의 열에 파일 속성이 있으면 그 칸들(첫 장 · 수)이 `files` 로 함께 온다.
+    `columns`(이어진 칸, ADR 0043)를 주면 줄마다 그 주소의 값이 `linked` 로 함께 온다 —
+    상대의 값이 필요할 때 줄마다 상세를 다시 읽지 않게.
     """
     scope = _scope(db, type_slug)
     capped = clamp_limit(limit)
+    # 이어진 칸 — 목록을 세기 전에 주소를 본다(틀린 주소는 422 로 먼저).
+    linked_columns = (
+        linked.parse(paths.Resolver(db, scope, viewer=user, at=edges.at(as_of)), columns)
+        if columns and _projection(scope) is None
+        else []
+    )
 
     projected = _projection(scope)
     if projected is not None:
@@ -1932,7 +2260,16 @@ def list_objects(
         )
 
     stmt = _filtered(
-        db, user, scope, request, q=q, status=status, year=year, under=under, deep=deep
+        db,
+        user,
+        scope,
+        request,
+        q=q,
+        status=status,
+        year=year,
+        under=under,
+        deep=deep,
+        as_of=as_of,
     )
 
     total = count_of(db, stmt)
@@ -1961,7 +2298,40 @@ def list_objects(
         limit=capped,
         offset=offset,
         files=_file_cells(db, user, scope, found),
+        # 낡은 줄만(ADR 0041) — 계보 종류가 없는 설치는 질의도 없다.
+        lineage={
+            str(one): state
+            for one, state in lineage.page_states(db, [row.id for row in found]).items()
+        },
+        linked_columns=[
+            LinkedColumnOut(
+                field=one.address, label=one.label, data_type=one.data_type, multi=one.multi
+            )
+            for one in linked_columns
+        ],
+        linked=_linked_cells(db, user, linked_columns, found),
     )
+
+
+def _linked_cells(
+    db: Session, user: User, columns: list[linked.Column], rows: list[ObjectInstance]
+) -> dict[str, dict[str, LinkedCellOut]]:
+    """이어진 칸의 값 — 칸마다 쪽 크기만큼의 질의 하나(ADR 0043)."""
+    if not columns:
+        return {}
+    found = linked.cells(db, user, columns, [row.id for row in rows])
+    return {
+        str(object_id): {
+            address: LinkedCellOut(
+                values=[
+                    LinkedValueOut(value=one.value, label=one.label) for one in cell.values
+                ],
+                more=cell.more,
+            )
+            for address, cell in by_address.items()
+        }
+        for object_id, by_address in found.items()
+    }
 
 
 def _file_cells(
@@ -2067,6 +2437,7 @@ def diagnose_list(
     under: uuid.UUID | None = Query(default=None),
     deep: bool = Query(default=True),
     year: int | None = Query(default=None, ge=1900, le=2999),
+    as_of: date | None = Query(default=None, description=AS_OF),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> DiagnosisOut:
@@ -2089,6 +2460,7 @@ def diagnose_list(
             under=under,
             deep=deep,
             omit=omit,
+            as_of=as_of,
         )
 
     defs = scope.defs
@@ -2113,7 +2485,7 @@ def diagnose_list(
                 rest,
                 defs,
                 [conditions.Condition(field=field, op="notempty", value="")],
-                paths.Resolver(db, scope, viewer=user),
+                paths.Resolver(db, scope, viewer=user, at=edges.at(as_of)),
             )
             return max(count_of(db, rest) - count_of(db, known), 0)
         except AppError:
@@ -2130,7 +2502,7 @@ def diagnose_list(
         user,
         scope,
         total=total,
-        parts=_filter_parts(request, q=q, status=status, year=year, under=under),
+        parts=_filter_parts(request, q=q, status=status, year=year, under=under, as_of=as_of),
         without=build,
         unknown=unknown,
         count=lambda stmt: count_of(db, stmt),
@@ -2159,6 +2531,15 @@ def _profile_type(db: Session, slug: str, object_id: uuid.UUID) -> ObjectType:
 def object_profile(
     type_slug: str,
     object_id: uuid.UUID,
+    as_of: date | None = Query(
+        default=None, description="관련 객체의 기준일 — 그날 유효한 관계만. 비우면 오늘"
+    ),
+    all_periods: bool = Query(
+        default=False,
+        description=(
+            "지난 관계 · 예정 관계까지 모두(유효 기간이 끝났거나 아직 시작 안 한 관계)"
+        ),
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> ObjectProfileOut:
@@ -2232,7 +2613,7 @@ def object_profile(
         type_label=object_type.label,
         properties_schema=[PropertyDefOut.model_validate(p) for p in defs],
         attachments=[AttachmentBrief.model_validate(a) for a in attachments],
-        related=_related(db, user, row),
+        related=_related(db, user, row, at=edges.at(as_of, every=all_periods), as_of=as_of),
         log_counts=[
             LogCountOut(
                 type_slug=one.kind.src_type.slug,
@@ -2509,6 +2890,7 @@ def set_watch(
 def object_rollup(
     type_slug: str,
     object_id: uuid.UUID,
+    as_of: date | None = Query(default=None, description=AS_OF),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> list[RollupOut]:
@@ -2525,9 +2907,306 @@ def object_rollup(
     return [
         RollupOut(**one.__dict__)
         for one in rollup.compute(
-            db, user, object_type, row, defs, relation=relation, parent_end=parent_end
+            db,
+            user,
+            object_type,
+            row,
+            defs,
+            relation=relation,
+            parent_end=parent_end,
+            at=edges.at(as_of),
         )
     ]
+
+
+def _explode_tree(object_type: ObjectType) -> graph.Tree:
+    """전개할 트리 — 목록 화면이 정한 트리 관계(`list_view.tree`). 없으면 거절한다 — 무엇의
+    「아래」 를 펼칠지 트리가 정한다(롤업과 같다)."""
+    relation, parent_end = _tree_spec(object_type)
+    if relation is None:
+        raise Conflict(
+            code("OBJECTS", 131),
+            f"{object_type.label}에는 트리 관계가 없어 전개할 수 없습니다 — 타입 편집 › 목록 "
+            "화면에서 트리를 정하면 그 관계로 펼칩니다.",
+        )
+    return graph.Tree(relation, parent_end, object_type.id, object_type.label)
+
+
+def _explode_object(item: explode.Item) -> dict[str, Any]:
+    """줄의 객체 칸 — 못 보거나 삭제된 것은 id 를 싣지 않는다."""
+    return {
+        "id": item.id if item.shown else None,
+        "label": item.label,
+        "key": item.key,
+        "type_slug": item.type_slug,
+        "status": item.status,
+        "hidden": item.hidden,
+        "deleted": item.deleted,
+    }
+
+
+def _number(value: float) -> float:
+    """곱하고 더한 값의 끝자리 잡음(0.1 곱하기 3 = 0.30000000000000004)을 걷는다."""
+    return value if isinstance(value, int) else round(value, 9)
+
+
+def _explosion(
+    db: Session,
+    user: User,
+    type_slug: str,
+    object_id: uuid.UUID,
+    *,
+    mode: str,
+    as_of: date | None,
+    limit: int,
+) -> ExplodeOut:
+    object_type = _type(db, type_slug)
+    row = _visible(db, user, object_type, object_id)
+    tree = _explode_tree(object_type)
+    day = edges.at(as_of)
+    found = explode.explode(
+        db,
+        user,
+        tree,
+        row,
+        mode=explode.mode_of(mode),
+        at=day,
+        limit=limit,
+    )
+    return ExplodeOut(
+        mode=found.mode,
+        root=ExplodeObjectOut(**_explode_object(found.root)),
+        as_of=day or edges.today(),
+        relation=found.relation,
+        relation_label=found.relation_label,
+        parent_end=found.parent_end,
+        quantity_key=found.quantity_key,
+        quantity_label=found.quantity_label,
+        lines=[
+            ExplodeLineOut(
+                **_explode_object(one.item),
+                level=one.level,
+                total=_number(one.total),
+                quantity=one.quantity,
+                quantity_missing=one.quantity_missing,
+                depth_max=one.depth_max,
+                paths=one.paths,
+                missing=one.missing,
+            )
+            for one in found.lines
+        ],
+        tops=[
+            ExplodeTopOut(
+                **_explode_object(one.item),
+                total=_number(one.total),
+                paths=one.paths,
+                level=one.level,
+            )
+            for one in found.tops
+        ],
+        totals=ExplodeTotalsOut(
+            objects=found.objects,
+            lines=len(found.lines),
+            lines_total=found.lines_total,
+            links=found.links,
+            missing=found.missing,
+            hidden=found.hidden,
+            deleted=found.deleted,
+        ),
+        truncated=found.truncated,
+    )
+
+
+@router.get("/{type_slug}/{object_id}/lineage", response_model=LineageOut)
+def object_lineage(
+    type_slug: str,
+    object_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> LineageOut:
+    """계보(ADR 0041) — 위(원천 사슬: 무엇에서 만들어졌나) · 아래(파생물 사슬: 이것으로 만든
+    것), 줄마다 양 끝의 낡음과 까닭, 이 객체의 낡음, 영향 범위(이것으로 만든 것 n개 · 낡음
+    m개).
+
+    **바로 낡음**은 원천이 고정 뒤에 바뀐 것(원천 타입에 개정 칸이 있으면 개정 값이 다름,
+    없으면 원천의 바뀐 때가 고정한 때보다 뒤), **위에서 낡음**은 원천이 낡은 것이다. 오늘
+    유효한 계보 선만, 깊이 20 안, 지운 객체는 원천으로 치지 않는다. 위 · 아래는 각각 500줄에서
+    자르고 전체 수(`up_total` · `down_total`)를 준다."""
+    object_type = _type(db, type_slug)
+    row = _visible(db, user, object_type, object_id)
+    return lineage.view(db, user, row, object_type)
+
+
+@router.post("/{type_slug}/{object_id}/lineage/repin", response_model=LineageRepinOut)
+def object_lineage_repin(
+    type_slug: str,
+    object_id: uuid.UUID,
+    payload: LineageRepinRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> LineageRepinOut:
+    """다시 고정(ADR 0041) — 이 파생물의 원천 선(`relation_ids`, 비우면 전부)의 고정을 **지금
+    값**으로. 「영향 없음 확인」(`checked`) · 「다시 만들었음」(`rebuilt`). 이미 지금 값이던
+    선은 그대로 두고 센다. 선마다 감사(`lineage.repin`, 앞뒤 개정)와 양 끝의 이력에 남는다.
+
+    원천 객체는 안 바뀐다 — **그 위의 낡음에는 영향이 없다**(위에서 낡음은 원천을 다시 고정해야
+    풀린다). 이 객체를 고칠 수 있는 사람만(OBJECTS-0134), 허브가 관리하는 계보 종류는 못
+    한다."""
+    object_type = _type(db, type_slug)
+    row = _visible(db, user, object_type, object_id)
+    done = lineage.repin(
+        db,
+        user,
+        row,
+        relation_ids=payload.relation_ids,
+        basis=payload.basis,
+        note=payload.note,
+    )
+    total = len(lineage.source_links(db, row.id))
+    labels = lineage.nodes(db, user, [one.source_id for one in done])
+    db.commit()
+    return LineageRepinOut(
+        changed=[
+            LineageRepinnedOut(
+                relation_id=one.relation_id,
+                relation=one.relation,
+                source_id=one.source_id,
+                source_label=labels[one.source_id].name
+                if one.source_id in labels
+                else system.HIDDEN_LABEL,
+                before=LineagePinOut(revision=one.before.revision, at=one.before.at),
+                after=LineagePinOut(revision=one.after.revision, at=one.after.at),
+            )
+            for one in done
+        ],
+        unchanged=(len(payload.relation_ids) if payload.relation_ids is not None else total)
+        - len(done),
+        lineage=lineage.view(db, user, row, object_type),
+    )
+
+
+#: 전개 보기의 이름 — 쿼리 · 파일 이름.
+EXPLODE_MODE = "^(summary|indented|where_used)$"
+
+
+@router.get("/{type_slug}/{object_id}/explode", response_model=ExplodeOut)
+def object_explode(
+    type_slug: str,
+    object_id: uuid.UUID,
+    mode: str = Query(
+        default="summary",
+        pattern=EXPLODE_MODE,
+        description="summary(정리) · indented(단계별) · where_used(어디에 쓰였나)",
+    ),
+    as_of: date | None = Query(default=None, description=AS_OF),
+    limit: int = Query(default=explode.LINES_MAX, ge=1, le=explode.LINES_MAX),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ExplodeOut:
+    """BOM 전개(ADR 0040) — 트리 관계(`list_view.tree`)의 **수량을 경로 따라 곱한다.**
+
+    관계 종류의 수량 칸(`quantity_key`)이 관계마다 「부모 하나에 자식 몇 개」 다. 같은 하위
+    조립품이 여러 경로로 오면 그 몫을 더한다(총수량). 수량이 빈 관계는 1개로 세고 그 수를
+    `totals.missing` 으로 준다. 기준일(`as_of`, 비우면 오늘)에 유효한 관계로 펼친다.
+
+    볼 수 없는 · 삭제된 객체는 지나가며 센다(롤업과 같다) — 정리에는 안 나오고, 단계별 · 어디에
+    쓰였나에는 가린 줄로 나온다. 단계별은 `limit` 줄(최대 5,000)에서 자르고 `truncated` 와
+    전체 줄 수(`totals.lines_total`)를 준다. 트리가 순환하면 409(OBJECTS-0130)."""
+    return _explosion(db, user, type_slug, object_id, mode=mode, as_of=as_of, limit=limit)
+
+
+@router.get("/{type_slug}/{object_id}/explode/export")
+def object_explode_export(
+    type_slug: str,
+    object_id: uuid.UUID,
+    mode: str = Query(default="summary", pattern=EXPLODE_MODE),
+    as_of: date | None = Query(default=None, description=AS_OF),
+    format: str = Query(default="csv", pattern="^(csv|xlsx)$"),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> Response:
+    """전개를 **파일로** — 화면의 표와 같은 열 · 같은 순서(UTF-8 BOM, 엑셀이 한글을 읽는다).
+    잘렸으면 파일 맨 끝에 그렇다고 적는다 — 안 적으면 파일은 「이게 전부」 로 읽힌다."""
+    found = _explosion(
+        db, user, type_slug, object_id, mode=mode, as_of=as_of, limit=explode.LINES_MAX
+    )
+    # 타입은 이름으로 — 화면의 표와 같은 글자(slug 는 사람이 읽는 말이 아니다).
+    names = dict(db.execute(select(ObjectType.slug, ObjectType.label)).tuples().all())
+    header, rows = explode_table(found, names)
+    return sheets.file_response(
+        header, rows, fmt=format, stem=f"{type_slug}-explode-{found.mode}", sheet="전개"
+    )
+
+
+def explode_table(
+    found: ExplodeOut, type_names: dict[str, str] | None = None
+) -> tuple[list[str], list[list[Any]]]:
+    """전개 → (머리줄, 행들). 보기마다 화면의 표와 같은 열 · 같은 순서."""
+    names = type_names or {}
+
+    def kind(slug: str | None) -> str:
+        return names.get(slug, slug) if slug else ""
+
+    def plain(value: float | None) -> float | int | None:
+        # 24.0 은 24 로 — 엑셀이 같은 수로 읽지만 사람 눈에는 소수로 보인다.
+        return int(value) if isinstance(value, float) and value.is_integer() else value
+
+    amount = found.quantity_label or "수량"
+    rows: list[list[Any]] = []
+    if found.mode == "summary":
+        header = [
+            "가장 얕은 단계",
+            "식별자",
+            "이름",
+            "타입",
+            "총수량",
+            "가장 깊은 단계",
+            "경로 수",
+            "수량 없음",
+        ]
+        for one in found.lines:
+            rows.append(
+                [
+                    one.level,
+                    one.key or "",
+                    one.label,
+                    kind(one.type_slug),
+                    plain(one.total),
+                    one.depth_max,
+                    one.paths,
+                    one.missing,
+                ]
+            )
+    else:
+        header = ["단계", "식별자", "이름", "타입", amount, "누적 수량"]
+        if found.mode == "where_used":
+            header[-1] = f"하나에 든 {found.root.label}"
+        for one in found.lines:
+            rows.append(
+                [
+                    one.level,
+                    one.key or "",
+                    ("  " * (one.level - 1)) + one.label,
+                    kind(one.type_slug),
+                    "(없음)" if one.quantity_missing else plain(one.quantity),
+                    plain(one.total),
+                ]
+            )
+    if found.truncated:
+        rows.append(
+            [
+                f"(앞의 {found.totals.lines:,}줄만 실었습니다 — 전체 "
+                f"{found.totals.lines_total:,}줄. 화면의 「정리」 는 객체마다 한 줄입니다)"
+            ]
+        )
+    if found.mode == "where_used" and found.tops:
+        rows.append([])
+        rows.append(["맨 위", "식별자", "이름", "타입", "", f"하나에 든 {found.root.label}"])
+        for top in found.tops:
+            rows.append(
+                ["", top.key or "", top.label, kind(top.type_slug), "", plain(top.total)]
+            )
+    return header, rows
 
 
 @router.get("/{type_slug}/{object_id}/similar", response_model=SimilarOut)
@@ -2843,7 +3522,14 @@ def run_rewrite_job(
 # --- 관련 객체 --------------------------------------------------------------
 
 
-def _related(db: Session, user: User, row: ObjectInstance) -> list[RelatedObjectOut]:
+def _related(
+    db: Session,
+    user: User,
+    row: ObjectInstance,
+    *,
+    at: date | None,
+    as_of: date | None = None,
+) -> list[RelatedObjectOut]:
     """이 객체에 걸린 관계들 — **양방향 다.**
 
     「이것이 가리키는 것」 만 주면 「이것을 가리키는 것」 을 물을 자리가 없어진다.
@@ -2851,23 +3537,27 @@ def _related(db: Session, user: User, row: ObjectInstance) -> list[RelatedObject
 
     **볼 수 있는 것만 준다.** 저쪽 끝이 남의 부서 것이면 그 줄은 안 나온다 —
     없는 것과 안 보이는 것을 같은 말로 답하는 이 틀의 규칙 그대로다.
+
+    **기준일(`at`)에 유효한 선만** 준다(ADR 0039) — `at=None` 이면 지난 · 앞으로의 선까지 모두,
+    줄마다 그 선이 기준일(`as_of`, 비우면 오늘)에 어디인지(`period_state`)를 단다.
     """
-    edges = list(
+    found_edges = list(
         db.scalars(
             select(ObjectRelation)
             .where(
                 (ObjectRelation.src_object_id == row.id)
-                | (ObjectRelation.dst_object_id == row.id)
+                | (ObjectRelation.dst_object_id == row.id),
+                edges.alive(ObjectRelation, at),
             )
             .order_by(ObjectRelation.created_at)
         )
     )
-    if not edges:
+    if not found_edges:
         return _related_refs(db, user, row) + _related_links(db, user, row.id)
 
     other_ids = {
         (edge.dst_object_id if edge.src_object_id == row.id else edge.src_object_id)
-        for edge in edges
+        for edge in found_edges
     }
     others = {
         one.id: one
@@ -2883,7 +3573,7 @@ def _related(db: Session, user: User, row: ObjectInstance) -> list[RelatedObject
     types = {one.id: one for one in db.scalars(select(ObjectType))}
 
     out: list[RelatedObjectOut] = []
-    for edge in edges:
+    for edge in found_edges:
         outgoing = edge.src_object_id == row.id
         other = others.get(edge.dst_object_id if outgoing else edge.src_object_id)
         if other is None:
@@ -2914,6 +3604,9 @@ def _related(db: Session, user: User, row: ObjectInstance) -> list[RelatedObject
                 properties=edge.properties or {},
                 evidence_note=edge.evidence_note,
                 created_at=edge.created_at,
+                valid_from=edge.valid_from,
+                valid_to=edge.valid_to,
+                period_state=edges.state(edge.valid_from, edge.valid_to, as_of or at),
             )
         )
     return out + _related_refs(db, user, row) + _related_links(db, user, row.id)
@@ -3027,10 +3720,12 @@ def add_relation(
 
     kind = rel.relation_type(db, payload.relation)
     managed.require_relation_editable(kind)
+    valid_from, valid_to = edges.checked_period(kind, payload.valid_from, payload.valid_to)
     dst_end = system.find_end(db, user, payload.dst_object_id, allowed=kind.dst_type_slugs)
     if dst_end is None:
         raise NotFound(code("OBJECTS", 28), "이을 객체를 찾을 수 없습니다.")
     if dst_end.is_system:
+        _require_no_link_period(valid_from, valid_to)
         # 도착점이 원 표(부서·계정)면 선은 `object_links` 에 — 규칙은 같다.
         defs = list(
             db.scalars(
@@ -3053,54 +3748,21 @@ def add_relation(
 
     dst = db.get(ObjectInstance, dst_end.id)
     assert dst is not None
-    rel.require_endpoints_allowed(db, kind, src, dst)
-    rel.require_cardinality(db, kind, src.id, dst.id)
-    rel.require_no_cycle(db, kind, src.id, dst.id)
-
-    existing = db.scalar(
-        select(ObjectRelation).where(
-            ObjectRelation.src_object_id == src.id,
-            ObjectRelation.dst_object_id == dst.id,
-            ObjectRelation.relation == kind.slug,
-        )
-    )
-    if existing is not None:
-        raise Conflict(code("OBJECTS", 29), "이미 이어져 있습니다.")
-
-    # 관계 종류가 정한 속성 모양대로 검증한다 — **타입의 속성과 같은 규칙**이다.
-    defs = list(
-        db.scalars(
-            select(PropertyDef).where(
-                PropertyDef.owner_kind == "relation", PropertyDef.owner_id == kind.id
-            )
-        )
-    )
-    properties = validate_properties(defs, payload.properties, apply_defaults=True)
-
-    edge = ObjectRelation(
-        src_object_id=src.id,
-        dst_object_id=dst.id,
-        relation=kind.slug,
-        properties=properties,
-        evidence_note=payload.evidence_note,
-        created_by_id=user.id,
-    )
-    db.add(edge)
-    db.flush()
-    audit.record(
+    # 끝 타입 · 같은 선 · 개수 · 순환 · 속성 · 넣기 · 감사 — 제안의 확정과 같은 길(ADR 0042).
+    edge = rel.add_edge(
         db,
-        action="object.relation.add",
-        actor=user,
-        target_table="object_relations",
-        target_id=edge.id,
-        target_label=f"{src.label} -{kind.slug}-> {dst.label}",
-        workspace_id=src.owner_workspace_id,
-        # 양 끝을 id 로 남긴다 — 객체의 이력이 「이 관계가 나에게 걸린 것」 을 찾는 근거.
-        changes=audit.relation_endpoints(edge, src.label, dst.label),
+        user,
+        kind,
+        src,
+        dst,
+        properties=payload.properties,
+        evidence_note=payload.evidence_note,
+        valid_from=valid_from,
+        valid_to=valid_to,
     )
     db.commit()
 
-    found = [one for one in _related(db, user, src) if one.relation_id == edge.id]
+    found = [one for one in _related(db, user, src, at=None) if one.relation_id == edge.id]
     return found[0]
 
 
@@ -3115,13 +3777,22 @@ def update_relation(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> RelatedObjectOut:
-    """관계의 속성과 근거를 고친다. **양끝과 종류는 못 바꾼다** — 그건 다른 관계다."""
+    """관계의 속성 · 근거 · 유효 기간을 고친다. **양끝과 종류는 못 바꾼다** — 그건 다른 관계다.
+
+    기간은 보낸 쪽만 바뀐다(`null` 은 그쪽 끝을 연다). 바꾼 기간이 같은 선의 다른 기간과
+    겹치거나, 개수 제약(같은 때에 하나)을 깨면 거절한다 — 맺을 때와 같은 검사다(ADR 0039).
+    """
     object_type = _type(db, type_slug)
     row = _visible(db, user, object_type, object_id)
     access.require_edit(db, user, object_type, row, code_value=code("OBJECTS", 30))
+    sent = payload.model_fields_set
     link = _link(db, relation_id, row)
     if link is not None:
         managed.require_relation_editable(rel.relation_type(db, link.relation))
+        if ("valid_from" in sent and payload.valid_from is not None) or (
+            "valid_to" in sent and payload.valid_to is not None
+        ):
+            _require_no_link_period(payload.valid_from, payload.valid_to)
         if payload.evidence_note is not None:
             link.evidence_note = payload.evidence_note
         if payload.properties is not None:
@@ -3151,7 +3822,35 @@ def update_relation(
     edge = _edge(db, relation_id, row)
     _require_other_end_visible(db, user, edge, row)
     managed.require_relation_editable(rel.relation_type(db, edge.relation))
+    before = audit.relation_state(edge)
 
+    if "valid_from" in sent or "valid_to" in sent:
+        kind = rel.relation_type(db, edge.relation)
+        valid_from, valid_to = edges.checked_period(
+            kind,
+            payload.valid_from if "valid_from" in sent else edge.valid_from,
+            payload.valid_to if "valid_to" in sent else edge.valid_to,
+        )
+        if (valid_from, valid_to) != (edge.valid_from, edge.valid_to):
+            edges.require_no_overlap(
+                db,
+                src_id=edge.src_object_id,
+                dst_id=edge.dst_object_id,
+                relation=edge.relation,
+                valid_from=valid_from,
+                valid_to=valid_to,
+                skip=edge.id,
+            )
+            rel.require_cardinality(
+                db,
+                kind,
+                edge.src_object_id,
+                edge.dst_object_id,
+                valid_from=valid_from,
+                valid_to=valid_to,
+                skip=edge.id,
+            )
+            edge.valid_from, edge.valid_to = valid_from, valid_to
     if payload.evidence_note is not None:
         edge.evidence_note = payload.evidence_note
     if payload.properties is not None:
@@ -3174,10 +3873,16 @@ def update_relation(
         target_id=edge.id,
         target_label=f"{row.label} · {edge.relation}",
         workspace_id=row.owner_workspace_id,
-        changes=audit.relation_endpoints(edge, *_edge_labels(db, edge)),
+        # 무엇이 바뀌었나 — 속성 · 근거 · 유효 기간(기간만 바꿔도 그 앞뒤가 남는다). 끝점과
+        # 키가 겹치지 않게 따로 싣는다(끝점의 `valid_from` 은 지금 값이다).
+        changes={
+            **audit.relation_endpoints(edge, *_edge_labels(db, edge)),
+            "changed": audit.diff(before, audit.relation_state(edge)),
+        },
     )
+    edges.flush(db)
     db.commit()
-    found = [one for one in _related(db, user, row) if one.relation_id == edge.id]
+    found = [one for one in _related(db, user, row, at=None) if one.relation_id == edge.id]
     return found[0]
 
 
@@ -3227,6 +3932,71 @@ def remove_relation(
     )
     db.delete(edge)
     db.commit()
+
+
+@router.get(
+    "/{type_slug}/{object_id}/relation-proposals", response_model=list[RelationProposalOut]
+)
+def object_relation_proposals(
+    type_slug: str,
+    object_id: uuid.UUID,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> list[RelationProposalOut]:
+    """이 객체에 걸린 **열린 제안** — 양방향, 새것부터(ADR 0042). 저쪽 끝이 지워졌거나 볼 수
+    없으면 뺀다(「관련 객체」 와 같다). 줄마다 이 사람이 확정 · 철회할 수 있나."""
+    object_type = _profile_type(db, type_slug, object_id)
+    row = _visible(db, user, object_type, object_id)
+    return [_proposal_out(one) for one in proposals.of_object(db, user, row)]
+
+
+@router.post(
+    "/{type_slug}/{object_id}/relation-proposals", response_model=RelationProposalResultOut
+)
+def propose_relation(
+    type_slug: str,
+    object_id: uuid.UUID,
+    payload: RelationProposalCreateRequest,
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> RelationProposalResultOut:
+    """이 객체에서 출발하는 선을 **제안**한다 — 양 끝을 볼 수만 있으면 된다(ADR 0042).
+
+    모양(종류 · 끝 타입 · 속성 · 기간)만 보고 남긴다 — 개수 제약 · 순환 · 기간 겹침은 확정할
+    때. 같은 선이 이미 있으면 `connected`, 같은 열린 제안이 있으면 `open`(더 높은 확신도면
+    근거 · 확신도를 새 것으로), 거절된 적 있으면 `rejected_before`(언제 누가 왜 — `again`
+    으로만 다시)."""
+    object_type = _type(db, type_slug)
+    src = _visible(db, user, object_type, object_id)
+    found = proposals.propose(
+        db,
+        user,
+        proposals.Spec(
+            relation=payload.relation,
+            src_id=src.id,
+            dst_id=payload.dst_object_id,
+            properties=payload.properties,
+            evidence_note=payload.evidence_note,
+            valid_from=payload.valid_from,
+            valid_to=payload.valid_to,
+            confidence=payload.confidence,
+            origin=payload.origin,
+            origin_ref=payload.origin_ref,
+        ),
+        again=payload.again,
+    )
+    db.commit()
+    return _proposal_result(db, user, 0, found, mine=src.id)
+
+
+def _require_no_link_period(valid_from: date | None, valid_to: date | None) -> None:
+    """원 표(부서 · 계정)와 잇는 선(`object_links`)에는 유효 기간이 없다 — 그 선은 늘 유효하다.
+    조용히 버리면 사람은 기간을 적은 줄 안다(ADR 0039)."""
+    if valid_from is not None or valid_to is not None:
+        raise InvalidValue(
+            code("OBJECTS", 129),
+            "부서 · 계정처럼 원 표를 비추는 객체와 잇는 관계에는 유효 기간을 둘 수 없습니다.",
+        )
 
 
 def _require_other_end_visible(

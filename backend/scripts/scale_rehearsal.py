@@ -657,6 +657,20 @@ def measure(timeout: int, repeat: int, only: str | None) -> None:
         results.extend(_incremental_rehearsal(client, admin, url))
     if not only or "rules" in (only or ""):
         results.extend(_rules_rehearsal(client, admin))
+    if not only or "periods" in (only or ""):
+        results.extend(_periods_rehearsal(repeat))
+    if not only or "explode" in (only or ""):
+        results.extend(_explode_rehearsal(repeat))
+    if not only or "lineage" in (only or ""):
+        results.extend(_lineage_rehearsal(repeat))
+    if not only or "proposals" in (only or ""):
+        results.extend(_proposals_rehearsal(repeat))
+    if not only or "edgefields" in (only or ""):
+        results.extend(_edgefields_rehearsal(client, admin, repeat))
+    if only and "map" in only.split(","):
+        # 판을 만들어 **남긴다**(지도는 계산해 둔 사본 — 화면이 이 판으로 선다). 덧붙임 · 쓰기
+        # 비용은 롤백 안에서 잰다. 전체 측정에는 안 든다(판 만들기가 분 단위).
+        results.extend(_map_rehearsal(client, admin, manager, repeat))
 
     print("\n| 영역 | 무엇 | 중앙값 | 비고 |\n| --- | --- | --- | --- |")
     for area, label, took, note in results:
@@ -2225,6 +2239,1452 @@ def _infer_plan(
     return ("infer", label, f"{took:.2f}초", note)
 
 
+def _periods_rehearsal(repeat: int) -> list[tuple[str, str, str, str]]:
+    """관계의 유효 기간(ADR 0039) — 기준일(`at`)을 주면 트리 · 하위 전체 · 롤업 · 연결 경로가
+    얼마나 달라지나, 그리고 **유효 기간이 꺼진 종류**(이 DB 의 `sku_base` 6,000줄)의 질의가
+    기준일 때문에 느려지지 않나.
+
+    한 세션 안에서 심고 재고 **롤백한다**(아무것도 안 남는다): 유효 기간을 켠 BOM 관계 하나와
+    부품 타입 — 제품 40 · 어셈블리 400 · 서브 4,000 · 부품 36,000(선 40,440)에, 부품 선의 20%
+    (7,200)를 「3월 1일부터 다른 부품으로 바뀜」 으로(끝난 선 + 새 부품의 새 선) — 선 47,600,
+    기간이 든 선 14,400. 기준일 None(예전과 같은 SQL — 판정이 `TRUE`) · 2월 · 4월을 견준다."""
+    from datetime import date as date_type
+
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.modules.accounts.models import User
+    from app.modules.objects import graph
+    from app.modules.objects.models import ObjectRelation
+    from app.modules.ontology.models import ObjectType
+
+    out: list[tuple[str, str, str, str]] = []
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("periods", label, f"{took:.3f}초", note))
+        print(f"{took:8.3f}초  {label}  {note}", flush=True)
+
+    def timed(call: Callable[[], Any]) -> tuple[float, Any]:
+        times: list[float] = []
+        found: Any = None
+        for _ in range(max(repeat, 3)):
+            started = time.perf_counter()
+            found = call()
+            times.append(time.perf_counter() - started)
+        return statistics.median(times), found
+
+    feb, apr = date_type(2026, 2, 15), date_type(2026, 4, 15)
+    days: list[tuple[str, date_type | None]] = [
+        ("기간 안 봄", None),
+        ("2월", feb),
+        ("4월", apr),
+    ]
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(User).where(User.email == ADMIN))
+        assert user is not None
+        # --- 꺼진 종류(sku_base) — 기준일이 붙어도 같은 속도인가 ---------------------------
+        base_type = db.scalar(select(ObjectType).where(ObjectType.slug == "plm_base"))
+        assert base_type is not None
+        hub = db.scalar(
+            select(ObjectRelation.dst_object_id)
+            .where(ObjectRelation.relation == "sku_base")
+            .group_by(ObjectRelation.dst_object_id)
+            .order_by(func_count_desc())
+            .limit(1)
+        )
+        for label, day in days[:2]:
+            took, kids = timed(
+                lambda day=day: graph.child_ids(
+                    db, relation="sku_base", parent_id=hub, parent_end="dst", at=day
+                )
+            )
+            row(f"꺼진 종류 · 펼침 한 단계(기본 모델 → SKU) — {label}", took, f"{len(kids)}개")
+            took, roots = timed(
+                lambda day=day: graph.parentless_ids(
+                    db,
+                    relation="sku_base",
+                    type_id=base_type.id,
+                    parent_end="dst",
+                    at=day,
+                    user=user,
+                )
+            )
+            row(f"꺼진 종류 · 뿌리 찾기(기본 모델 2,001) — {label}", took, f"{len(roots)}개")
+            took, counts = timed(
+                lambda day=day, roots=roots: graph.child_counts(
+                    db,
+                    relation="sku_base",
+                    parent_ids=roots,
+                    parent_end="dst",
+                    at=day,
+                    user=user,
+                )
+            )
+            row(f"꺼진 종류 · 자식 수(뿌리 전부) — {label}", took, f"{len(counts)}개")
+
+        # --- 켜진 종류 — 심는다(롤백) ------------------------------------------------------
+        seeded, part, kind = _seed_bom(db)
+        edges_n, dated_n = _bom_counts(db, kind.slug)
+        row(
+            "켜진 종류 · 심기(객체 47,640 · 선 INSERT, 트리거 포함)",
+            seeded,
+            f"선 {edges_n:,} · 기간 {dated_n:,}",
+        )
+        product, leaf, products = _bom_ends(db, part.id)
+        tree = graph.Tree(kind.slug, "dst", part.id, part.label)
+        for label, day in days:
+            took, kids = timed(
+                lambda day=day: graph.child_ids(
+                    db, relation=kind.slug, parent_id=product, parent_end="dst", at=day
+                )
+            )
+            row(f"켜진 종류 · 트리 펼침 한 단계(제품) — {label}", took, f"{len(kids)}개")
+            took, roots = timed(
+                lambda day=day: graph.parentless_ids(
+                    db,
+                    relation=kind.slug,
+                    type_id=part.id,
+                    parent_end="dst",
+                    at=day,
+                    user=user,
+                )
+            )
+            row(f"켜진 종류 · 뿌리 · 외톨이 찾기 — {label}", took, f"{len(roots)}개")
+            took, below = timed(
+                lambda day=day: graph.descendant_ids(
+                    db, relation=kind.slug, root_id=product, parent_end="dst", at=day
+                )
+            )
+            row(
+                f"켜진 종류 · 하위 전체(제품 하나 — 롤업이 펼치는 것) — {label}",
+                took,
+                f"{len(below)}개",
+            )
+            took, everything = timed(
+                lambda day=day: graph.subtree_ids(db, tree, products, at=day)
+            )
+            row(
+                f"켜진 종류 · 하위 전체(제품 40 — 조건 `under`) — {label}",
+                took,
+                f"{len(everything)}개",
+            )
+            took, folded = timed(lambda day=day: graph.levels(db, tree, 1, at=day))
+            row(
+                f"켜진 종류 · 계층 축 @1(전체 접기) — {label}",
+                took,
+                f"깊은 노드 {len(folded.up):,}",
+            )
+            took, found = timed(
+                lambda day=day: graph.shortest_paths(
+                    db, source=leaf, target=product, user=user, at=day, max_depth=6
+                )
+            )
+            row(
+                f"켜진 종류 · 연결 경로(부품 → 제품) — {label}",
+                took,
+                f"길이 {found.length} · 들른 {found.visited:,}",
+            )
+    finally:
+        db.rollback()
+        db.close()
+    return out
+
+
+def _edgefields_rehearsal(
+    client: Any, admin: dict[str, str], repeat: int
+) -> list[tuple[str, str, str, str]]:
+    """선의 칸 조건 · 이어진 칸(ADR 0043).
+
+    1. **이어진 칸**(읽기만 — 이 DB 그대로): 개발모델 목록 200줄에 열 셋 — 한 걸음 관계
+       (`out.sku_base.label`), 두 걸음 참조(`ref.task.ref.project.label`), 기록으로 내려가는 것
+       (`in.svc_case:model` — 뜨거운 모델은 기록 10만 건, 상한 20 에서 자른다). 열 없는 목록과
+       견준다. 서비스 기록 목록 200줄에 두 걸음 열(참조 → 관계)도.
+    2. **선의 칸 조건**(한 세션 안에서 심고 롤백): `--only periods` 와 같은 BOM(선 47,600 ·
+       수량 칸 qty 1 ~ 4)에서 묶지 않은 · 묶은(같은 관계 묶음) · 제외 묶음 안의 묶음 · 날짜
+       선의 칸 · 선의 칸 통계 · 제품 40 의 이어진 칸."""
+    from datetime import date as date_type
+
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.modules.accounts.models import User
+    from app.modules.objects import conditions, linked, paths, summary
+    from app.modules.objects.models import ObjectInstance
+
+    out: list[tuple[str, str, str, str]] = []
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("edgefields", label, f"{took:.3f}초", note))
+        print(f"{took:8.3f}초  {label}  {note}", flush=True)
+
+    def timed(call: Callable[[], Any]) -> tuple[float, Any]:
+        times: list[float] = []
+        found: Any = None
+        for _ in range(max(repeat, 3)):
+            started = time.perf_counter()
+            found = call()
+            times.append(time.perf_counter() - started)
+        return statistics.median(times), found
+
+    # --- 1. 이어진 칸 — 이 DB 그대로(읽기만) ------------------------------------------------
+    def page(slug: str, columns: list[str]) -> Callable[[], Any]:
+        return lambda: client.get(
+            f"/api/objects/{slug}",
+            params={"limit": 200, "columns": columns},
+            headers=admin,
+        )
+
+    def shaped(response: Any, columns: list[str]) -> str:
+        if response.status_code >= 400:
+            return f"HTTP {response.status_code} {response.text[:120]}"
+        body = response.json()
+        filled = {
+            column: sum(1 for cells in body["linked"].values() if column in cells)
+            for column in columns
+        }
+        more = sum(
+            1 for cells in body["linked"].values() for cell in cells.values() if cell["more"]
+        )
+        return f"{len(body['items'])}줄 · 채운 칸 {filled} · 더 있음 {more}"
+
+    model_columns = ["out.sku_base.label", "ref.task.ref.project.label", "in.svc_case:model"]
+    for label, slug, columns in (
+        ("이어진 칸 없음 — 개발모델 200줄(기준)", "plm_model", []),
+        (
+            "이어진 칸 셋 — 개발모델 200줄(관계 · 두 걸음 · 기록 상한)",
+            "plm_model",
+            model_columns,
+        ),
+        ("이어진 칸 — 기록으로(`in.svc_case:model`)만", "plm_model", ["in.svc_case:model"]),
+        (
+            "이어진 칸 — 기록의 증상(`in.svc_case:model.symptom`)",
+            "plm_model",
+            ["in.svc_case:model.symptom"],
+        ),
+        ("이어진 칸 없음 — 서비스 기록 200줄(기준)", "svc_case", []),
+        (
+            "이어진 칸 둘 — 서비스 기록 200줄(참조 → 관계 · 참조 → 참조)",
+            "svc_case",
+            ["ref.model.out.sku_base.label", "ref.model.ref.task.label"],
+        ),
+    ):
+        took, response = timed(page(slug, columns))
+        row(label, took, shaped(response, columns))
+
+    # --- 2. 선의 칸 조건 — 심고 롤백 --------------------------------------------------------
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(User).where(User.email == ADMIN))
+        assert user is not None
+        seeded, part, kind = _seed_bom(db, quantities=True)
+        # 끝을 부품으로 정한다 — 끝이 안 정해진 관계는 「있음 · 없음」 만 걸린다.
+        kind.src_type_slugs = [part.slug]
+        kind.dst_type_slugs = [part.slug]
+        db.flush()
+        row("심기(BOM — 수량 칸 qty)", seeded, f"선 {_bom_counts(db, kind.slug)[0]:,}")
+        _product, _leaf, products = _bom_ends(db, part.id)
+        today = date_type.today()
+        # X — 수량이 4 가 아닌 서브(N442, 수량 (442 % 4) + 1 = 3). 묶지 않으면 그 부모의 다른
+        # 서브(수량 4)와 짝이 되어 걸리고, 묶으면 안 걸린다.
+        x = db.scalar(
+            select(ObjectInstance.id).where(
+                ObjectInstance.type_id == part.id, ObjectInstance.key == "N442"
+            )
+        )
+        rel = kind.slug
+
+        def count(asked: list[conditions.Condition]) -> Callable[[], int]:
+            def run() -> int:
+                resolver = paths.Resolver(db, part, viewer=user, at=today)
+                stmt = (
+                    select(func_count())
+                    .select_from(ObjectInstance)
+                    .where(
+                        ObjectInstance.type_id == part.id, ObjectInstance.deleted_at.is_(None)
+                    )
+                )
+                return int(db.scalar(conditions.apply(stmt, [], asked, resolver)) or 0)
+
+            return run
+
+        cond = conditions.Condition
+        for label, asked in (
+            ("선의 칸 · 묶지 않음(`in.bom~qty ≥ 4`)", [cond(f"in.{rel}~qty", "gte", "4")]),
+            (
+                "선의 칸 · 묶지 않은 둘(`in.bom = X` · `~qty ≥ 4`)",
+                [cond(f"in.{rel}", "eq", str(x)), cond(f"in.{rel}~qty", "gte", "4")],
+            ),
+            (
+                "선의 칸 · 같은 관계 묶음(X 이고 4개 이상)",
+                [
+                    cond(f"in.{rel}", "eq", str(x), edge=1),
+                    cond(f"in.{rel}~qty", "gte", "4", edge=1),
+                ],
+            ),
+            (
+                "선의 칸 · 같은 관계 묶음 — 상대의 칸과(`.label` 시작 N44 이고 4개 이상)",
+                [
+                    cond(f"in.{rel}.label", "starts", "N44", edge=1),
+                    cond(f"in.{rel}~qty", "gte", "4", edge=1),
+                ],
+            ),
+            (
+                "선의 칸 · 제외 묶음 안의 같은 관계 묶음",
+                [
+                    cond(f"in.{rel}.label", "starts", "N44", exclude=1, edge=1),
+                    cond(f"in.{rel}~qty", "gte", "4", exclude=1, edge=1),
+                ],
+            ),
+            (
+                "선의 칸 · 시작일(`in.bom~valid_from ≥ 3월 1일`)",
+                [cond(f"in.{rel}~valid_from", "gte", "2026-03-01")],
+            ),
+        ):
+            took, found = timed(count(asked))
+            row(label, took, f"{found:,}개")
+
+        def grouped(address: str) -> Callable[[], Any]:
+            def run() -> Any:
+                filtered = select(ObjectInstance).where(
+                    ObjectInstance.type_id == part.id, ObjectInstance.deleted_at.is_(None)
+                )
+                return summary.summarize(
+                    db, part, filtered, group_by=address, viewer=user, at=today
+                )
+
+            return run
+
+        for address in (f"in.{rel}~qty", f"out.{rel}~qty"):
+            took, found = timed(grouped(address))
+            row(
+                f"선의 칸 통계(`{address.replace(rel, 'bom')}`)",
+                took,
+                ", ".join(f"{one.key}: {one.count:,}" for one in found.buckets[:5]),
+            )
+
+        def cells() -> Any:
+            resolver = paths.Resolver(db, part, viewer=user, at=today)
+            columns = linked.parse(resolver, [f"in.{rel}~qty", f"in.{rel}.label"])
+            return linked.cells(db, user, columns, products)
+
+        took, found = timed(cells)
+        row(
+            "이어진 칸 — 제품 40 x (`in.bom~qty` · `in.bom.label`)",
+            took,
+            f"{len(found)}줄 · 더 있음 "
+            f"{sum(1 for one in found.values() for cell in one.values() if cell.more)}",
+        )
+    finally:
+        db.rollback()
+        db.close()
+    return out
+
+
+def _seed_bom(
+    db: Any, *, quantities: bool = False, weights: bool = False
+) -> tuple[float, Any, Any]:
+    """유효 기간을 켠 BOM 하나를 심는다 — `--only periods` · `--only explode` 가 같은 모양을
+    쓴다.
+
+    제품 40 · 어셈블리 400 · 서브 4,000 · 부품 36,000(선 40,440)에, 부품 선의 20%(7,200)를
+    「3월 1일부터 다른 부품으로 바뀜」 으로(끝난 선 + 새 부품의 새 선) — 선 47,600, 기간이 든
+    선 14,400. `quantities` 면 선마다 수량 칸 `qty`(1 ~ 4)를 싣고 그 종류의 수량 칸으로 정한다.
+    `weights` 면 객체마다 무게(`weight`)와 신뢰도(`rel`)를 싣는다. (걸린 초, 타입, 관계
+    종류)."""
+    from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
+
+    tag = uuid_hex()
+    part = ObjectType(slug=f"per_part_{tag}", label=f"BOM 부품 {tag}")
+    db.add(part)
+    kind = RelationType(
+        slug=f"per_bom_{tag}",
+        label="BOM",
+        transitive=True,
+        acyclic=True,
+        effectivity=True,
+        quantity_key="qty" if quantities else "",
+    )
+    db.add(kind)
+    db.flush()
+    if quantities:
+        db.add(
+            PropertyDef(
+                owner_kind="relation",
+                owner_id=kind.id,
+                key="qty",
+                label="수량",
+                data_type="number",
+            )
+        )
+    if weights:
+        for key, label in (("weight", "무게"), ("rel", "신뢰도")):
+            db.add(
+                PropertyDef(
+                    owner_kind="type",
+                    owner_id=part.id,
+                    key=key,
+                    label=label,
+                    data_type="number",
+                )
+            )
+    db.flush()
+    started = time.perf_counter()
+    props = (
+        "jsonb_build_object('weight', (g % 7) + 1, 'rel', 0.999)" if weights else "'{}'::jsonb"
+    )
+    db.execute(
+        text(
+            f"""
+            INSERT INTO objects (id, type_id, label, key, properties)
+            SELECT gen_random_uuid(), :type, 'N' || g, 'N' || g, {props}
+              FROM generate_series(1, 47640) g
+            """
+        ),
+        {"type": str(part.id)},
+    )
+    amount = "jsonb_build_object('qty', (c.k % 4) + 1)" if quantities else "'{}'::jsonb"
+    # 1 ~ 40 제품, 41 ~ 440 어셈블리, 441 ~ 4440 서브, 4441 ~ 40440 부품,
+    # 40441 ~ 47640 3월부터 바뀐 부품.
+    db.execute(
+        text(
+            f"""
+            WITH n AS (
+                SELECT id, substr(key, 2)::int AS k FROM objects WHERE type_id = :type
+            )
+            INSERT INTO object_relations (id, src_object_id, dst_object_id, relation,
+                                          valid_from, valid_to, properties)
+            SELECT gen_random_uuid(), c.id, p.id, :rel,
+                   CASE WHEN c.k > 40440 THEN DATE '2026-03-01' END,
+                   CASE WHEN c.k BETWEEN 4441 AND 40440 AND c.k % 5 = 0
+                        THEN DATE '2026-03-01' END,
+                   {amount}
+              FROM n c
+              JOIN n p ON p.k = CASE
+                   WHEN c.k BETWEEN 41 AND 440 THEN (c.k - 41) / 10 + 1
+                   WHEN c.k BETWEEN 441 AND 4440 THEN (c.k - 441) / 10 + 41
+                   WHEN c.k BETWEEN 4441 AND 40440 THEN (c.k - 4441) / 9 + 441
+                   WHEN c.k > 40440 THEN ((c.k - 40441) * 5 + 4445 - 4441) / 9 + 441
+              END
+            """
+        ),
+        {"type": str(part.id), "rel": kind.slug},
+    )
+    db.execute(text("ANALYZE objects"))
+    db.execute(text("ANALYZE object_relations"))
+    return time.perf_counter() - started, part, kind
+
+
+def _bom_counts(db: Any, relation: str) -> tuple[int, int]:
+    """(선 수, 기간이 든 선 수)."""
+    from sqlalchemy import select
+
+    from app.modules.objects.models import ObjectRelation
+
+    edges_n = db.scalar(
+        select(func_count())
+        .select_from(ObjectRelation)
+        .where(ObjectRelation.relation == relation)
+    )
+    dated_n = db.scalar(
+        select(func_count())
+        .select_from(ObjectRelation)
+        .where(
+            ObjectRelation.relation == relation,
+            (ObjectRelation.valid_from.is_not(None)) | (ObjectRelation.valid_to.is_not(None)),
+        )
+    )
+    return int(edges_n or 0), int(dated_n or 0)
+
+
+def _bom_ends(db: Any, type_id: Any) -> tuple[Any, Any, list[Any]]:
+    """(제품 N1, 부품 N4445, 제품 40)."""
+    from sqlalchemy import select
+
+    from app.modules.objects.models import ObjectInstance
+
+    def one(key: str) -> Any:
+        return db.scalar(
+            select(ObjectInstance.id).where(
+                ObjectInstance.type_id == type_id, ObjectInstance.key == key
+            )
+        )
+
+    products = list(
+        db.scalars(
+            select(ObjectInstance.id).where(
+                ObjectInstance.type_id == type_id,
+                ObjectInstance.key.in_([f"N{n}" for n in range(1, 41)]),
+            )
+        )
+    )
+    return one("N1"), one("N4445"), products
+
+
+def _explode_rehearsal(repeat: int) -> list[tuple[str, str, str, str]]:
+    """BOM 전개(ADR 0040) — 수량을 경로 따라 곱하는 세 보기와 수량 반영 롤업.
+
+    한 세션 안에서 심고 재고 **롤백한다**: `--only periods` 와 같은 BOM(유효 기간, 선 47,600)에
+    선마다 수량(1 ~ 4)을 싣고, **공용 부품** 200개를 서브마다 둘씩 더 잇는다(서브 4,000 x 2 =
+    선 8,000 — 공용 부품 하나가 서브 40개 · 제품 여럿에서 쓰인다). 그리고 **경로가 곱으로 느는
+    사다리**(단마다 둘, 20단 — 단마다 앞 단 둘 모두에 이어, 선 74로 맨 아래 하나까지 경로
+    2^18)를 따로 세워 선 집합과 경로 수의 차이를 본다. 기준일은 4월(바뀐 부품이 든 구성)."""
+    from datetime import date as date_type
+
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.modules.accounts.models import User
+    from app.modules.objects import explode, graph, rollup
+    from app.modules.objects.models import ObjectInstance
+    from app.modules.ontology.models import ObjectType, RelationType
+
+    out: list[tuple[str, str, str, str]] = []
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("explode", label, f"{took:.3f}초", note))
+        print(f"{took:8.3f}초  {label}  {note}", flush=True)
+
+    def timed(call: Callable[[], Any]) -> tuple[float, Any]:
+        times: list[float] = []
+        found: Any = None
+        for _ in range(max(repeat, 3)):
+            started = time.perf_counter()
+            found = call()
+            times.append(time.perf_counter() - started)
+        return statistics.median(times), found
+
+    apr = date_type(2026, 4, 15)
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(User).where(User.email == ADMIN))
+        assert user is not None
+        seeded, part, kind = _seed_bom(db, quantities=True, weights=True)
+        started = time.perf_counter()
+        # 공용 부품 200(N47641 ~ N47840) — 서브(441 ~ 4440)마다 둘(k % 200, k * 7 % 200).
+        db.execute(
+            text(
+                """
+                INSERT INTO objects (id, type_id, label, key, properties)
+                SELECT gen_random_uuid(), :type, 'N' || g, 'N' || g,
+                       jsonb_build_object('weight', 0.1, 'rel', 0.9999)
+                  FROM generate_series(47641, 47840) g
+                """
+            ),
+            {"type": str(part.id)},
+        )
+        db.execute(
+            text(
+                """
+                WITH n AS (
+                    SELECT id, substr(key, 2)::int AS k FROM objects WHERE type_id = :type
+                )
+                INSERT INTO object_relations (id, src_object_id, dst_object_id, relation,
+                                              properties)
+                SELECT gen_random_uuid(), c.id, s.id, :rel,
+                       jsonb_build_object('qty', (s.k % 3) + 2)
+                  FROM n s
+                  JOIN n c ON c.k IN (47641 + s.k % 200, 47641 + (s.k * 7 + 1) % 200)
+                 WHERE s.k BETWEEN 441 AND 4440
+                """
+            ),
+            {"type": str(part.id), "rel": kind.slug},
+        )
+        db.execute(text("ANALYZE object_relations"))
+        seeded += time.perf_counter() - started
+        edges_n, _ = _bom_counts(db, kind.slug)
+        row("심기(객체 47,840 · 선 INSERT, 수량 · 무게 포함)", seeded, f"선 {edges_n:,}")
+        product, _leaf, products = _bom_ends(db, part.id)
+        common = db.scalar(
+            select(ObjectInstance.id).where(
+                ObjectInstance.type_id == part.id, ObjectInstance.key == "N47641"
+            )
+        )
+        root = db.get(ObjectInstance, product)
+        tree = graph.Tree(kind.slug, "dst", part.id, part.label)
+
+        for mode, label in (
+            ("summary", "정리"),
+            ("indented", "단계별"),
+        ):
+            took, found = timed(
+                lambda mode=mode: explode.explode(db, user, tree, root, mode=mode, at=apr)
+            )
+            row(
+                f"제품 하나 · {label}",
+                took,
+                f"객체 {found.objects:,} · 선 {found.links:,} · 줄 {len(found.lines):,}"
+                f"/{found.lines_total:,}",
+            )
+        took, found = timed(
+            lambda: explode.explode(
+                db, user, tree, db.get(ObjectInstance, common), mode="where_used", at=apr
+            )
+        )
+        row(
+            "공용 부품 하나 · 어디에 쓰였나",
+            took,
+            f"맨 위 {len(found.tops)} · 줄 {len(found.lines):,}/{found.lines_total:,} · "
+            f"선 {found.links:,}",
+        )
+        took, found = timed(
+            lambda: [
+                explode.explode(
+                    db, user, tree, db.get(ObjectInstance, one), mode="summary", at=apr
+                )
+                for one in products
+            ]
+        )
+        row(
+            "제품 40 · 정리(하나씩)",
+            took,
+            f"객체 합 {sum(one.objects for one in found):,}",
+        )
+        took, links = timed(
+            lambda: explode.fetch(db, tree, product, up=False, at=apr, quantity_key="qty")
+        )
+        row("제품 하나 · 선 집합만(SQL)", took, f"선 {len(links.links):,}")
+
+        holder = db.get(ObjectType, part.id)
+        assert holder is not None
+        for specs, label in (
+            ([{"property": "weight", "fn": "sum"}], "롤업 합계(예전 — 하위 전체)"),
+            (
+                [
+                    {"property": "weight", "fn": "sum", "weighted": True},
+                    {"property": "weight", "fn": "sum", "weighted": True, "leaves_only": True},
+                    {
+                        "property": "rel",
+                        "fn": "product",
+                        "weighted": True,
+                        "leaves_only": True,
+                    },
+                ],
+                "수량 반영 롤업 셋(합계 · 말단만 합계 · 곱)",
+            ),
+        ):
+            holder.list_view = {
+                "tree": {"relation": kind.slug, "parent": "dst"},
+                "rollups": specs,
+            }
+            took, found = timed(
+                lambda: rollup.compute(
+                    db, user, holder, root, [], relation=kind.slug, parent_end="dst", at=apr
+                )
+            )
+            row(
+                f"제품 하나 · {label}",
+                took,
+                " · ".join(
+                    f"{one.value:,.4g}" if one.value is not None else "-" for one in found
+                ),
+            )
+
+        # --- 사다리 — 선은 78, 경로는 2^19 ----------------------------------------------
+        ladder = RelationType(
+            slug=f"ladder_{uuid_hex()}", label="사다리", transitive=True, acyclic=True
+        )
+        db.add(ladder)
+        db.flush()
+        db.execute(
+            text(
+                """
+                INSERT INTO objects (id, type_id, label, key)
+                SELECT gen_random_uuid(), :type, 'L' || g, 'L' || g
+                  FROM generate_series(0, 39) g
+                """
+            ),
+            {"type": str(part.id)},
+        )
+        db.execute(
+            text(
+                """
+                WITH n AS (
+                    SELECT id, substr(key, 2)::int AS k FROM objects
+                     WHERE type_id = :type AND key LIKE 'L%'
+                )
+                INSERT INTO object_relations (id, src_object_id, dst_object_id, relation)
+                SELECT gen_random_uuid(), c.id, p.id, :rel
+                  FROM n p JOIN n c ON c.k / 2 = p.k / 2 + 1
+                """
+            ),
+            {"type": str(part.id), "rel": ladder.slug},
+        )
+        top = db.scalar(
+            select(ObjectInstance).where(
+                ObjectInstance.type_id == part.id, ObjectInstance.key == "L0"
+            )
+        )
+        steps = graph.Tree(ladder.slug, "dst", part.id, part.label)
+        for mode, label in (("summary", "정리"), ("indented", "단계별(잘림)")):
+            took, found = timed(
+                lambda mode=mode: explode.explode(db, user, steps, top, mode=mode, at=apr)
+            )
+            row(
+                f"사다리(20단 x 2) · {label}",
+                took,
+                f"선 {found.links} · 줄 {len(found.lines):,}/{found.lines_total:,} · "
+                f"잘림 {found.truncated}",
+            )
+    finally:
+        db.rollback()
+        db.close()
+    return out
+
+
+def _lineage_rehearsal(repeat: int) -> list[tuple[str, str, str, str]]:
+    """파생 · 계보와 개정 고정(ADR 0041) — 낡음 판정이 규모에서 얼마나 드나.
+
+    한 세션 안에서 심고 재고 **롤백한다**(아무것도 안 남는다): 도면 2,000(개정 칸 `rev`) →
+    메시 10,000 → 결과 50,000. 도면 → 메시는 원천이 **출발**인 계보 종류(메시 하나에 도면 하나,
+    도면 하나에 메시 다섯), 결과 → 메시는 원천이 **도착**인 종류(결과 하나에 메시 하나, 메시
+    하나에 결과 다섯) — 두 방향이 한 사슬에 섞인다. 선 6만 줄은 트리거가 박는다(넣기의 값을
+    잰다 — 같은 수의 계보 아닌 선 · 트리거를 끈 선과 견준다). 그다음 도면 40(2%)의 개정을
+    바꾸고(메시 200 바로 낡음 · 결과 1,000 위에서 낡음), 메시 100(1%)의 이름만 고친다(개정 칸이
+    없어 바뀐 때로 — 결과 500 바로 낡음)."""
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.modules.accounts.models import User
+    from app.modules.objects import lineage, lineage_review
+    from app.modules.objects.models import ObjectInstance
+    from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
+    from app.modules.review.registry import Filters
+
+    out: list[tuple[str, str, str, str]] = []
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("lineage", label, f"{took:.3f}초", note))
+        print(f"{took:8.3f}초  {label}  {note}", flush=True)
+
+    def timed(call: Callable[[], Any]) -> tuple[float, Any]:
+        times: list[float] = []
+        found: Any = None
+        for _ in range(max(repeat, 3)):
+            started = time.perf_counter()
+            found = call()
+            times.append(time.perf_counter() - started)
+        return statistics.median(times), found
+
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(User).where(User.email == ADMIN))
+        assert user is not None
+        tag = uuid_hex()
+        cad = ObjectType(slug=f"lin_cad_{tag}", label="도면", revision_key="rev")
+        mesh = ObjectType(slug=f"lin_mesh_{tag}", label="메시")
+        result = ObjectType(slug=f"lin_res_{tag}", label="결과")
+        made = RelationType(slug=f"lin_made_{tag}", label="만든 것", lineage_source="src")
+        used = RelationType(slug=f"lin_used_{tag}", label="사용한 메시", lineage_source="dst")
+        plain = RelationType(slug=f"lin_plain_{tag}", label="그냥 관계")
+        db.add_all([cad, mesh, result, made, used, plain])
+        db.flush()
+        db.add(
+            PropertyDef(
+                owner_kind="type", owner_id=cad.id, key="rev", label="개정", data_type="text"
+            )
+        )
+        db.flush()
+        for type_row, count, prefix, props in (
+            (cad, 2000, "C", "jsonb_build_object('rev', 'A')"),
+            (mesh, 10000, "M", "'{}'::jsonb"),
+            (result, 50000, "R", "'{}'::jsonb"),
+        ):
+            db.execute(
+                text(
+                    f"""
+                    INSERT INTO objects (id, type_id, label, key, properties)
+                    SELECT gen_random_uuid(), :type, :prefix || g, :prefix || g, {props}
+                      FROM generate_series(1, :n) g
+                    """
+                ),
+                {"type": str(type_row.id), "prefix": prefix, "n": count},
+            )
+        db.execute(text("ANALYZE objects"))
+
+        def link(rel: str, src_type: Any, dst_type: Any, src_mod: int, dst_mod: int) -> float:
+            """출발 타입의 k 번째가 도착 타입의 (k % dst_mod) + 1 번째에 — 걸린 초."""
+            started = time.perf_counter()
+            db.execute(
+                text(
+                    """
+                    WITH s AS (SELECT id, substr(key, 2)::int AS k FROM objects
+                                WHERE type_id = :src),
+                         d AS (SELECT id, substr(key, 2)::int AS k FROM objects
+                                WHERE type_id = :dst)
+                    INSERT INTO object_relations (id, src_object_id, dst_object_id, relation)
+                    SELECT gen_random_uuid(), s.id, d.id, :rel
+                      FROM s JOIN d ON d.k = (s.k % :dst_mod) + 1
+                     WHERE s.k <= :src_mod
+                    """
+                ),
+                {
+                    "src": str(src_type.id),
+                    "dst": str(dst_type.id),
+                    "rel": rel,
+                    "src_mod": src_mod,
+                    "dst_mod": dst_mod,
+                },
+            )
+            return time.perf_counter() - started
+
+        # 도면 → 메시: 메시마다 도면 하나(메시 j 의 원천 = 도면 (j % 2000)+1).
+        started = time.perf_counter()
+        db.execute(
+            text(
+                """
+                WITH c AS (SELECT id, substr(key, 2)::int AS k FROM objects
+                            WHERE type_id = :cad),
+                     m AS (SELECT id, substr(key, 2)::int AS k FROM objects
+                            WHERE type_id = :mesh)
+                INSERT INTO object_relations (id, src_object_id, dst_object_id, relation)
+                SELECT gen_random_uuid(), c.id, m.id, :rel
+                  FROM m JOIN c ON c.k = (m.k % 2000) + 1
+                """
+            ),
+            {"cad": str(cad.id), "mesh": str(mesh.id), "rel": made.slug},
+        )
+        row("넣기 · 도면 → 메시 계보 선 1만(트리거가 고정)", time.perf_counter() - started, "")
+        took = link(used.slug, result, mesh, 50000, 10000)
+        row("넣기 · 결과 → 메시 계보 선 5만(트리거가 고정)", took, "원천이 도착인 종류")
+        unpinned = db.scalar(
+            text(
+                "SELECT count(*) FROM object_relations WHERE relation IN (:a, :b) "
+                "AND pinned_at IS NULL"
+            ),
+            {"a": made.slug, "b": used.slug},
+        )
+        row("고정 안 된 계보 선", 0.0, f"{unpinned}줄(0 이어야 한다)")
+        db.execute(text("ANALYZE object_relations"))
+
+        # 개정을 바꾼다 — 도면 40(2%), 그리고 메시 100(1%)의 이름만(바뀐 때로 판정).
+        db.execute(text("SELECT pg_sleep(0.01)"))
+        db.execute(
+            text(
+                """
+                UPDATE objects SET properties = jsonb_set(properties, '{rev}', '"B"'),
+                       updated_at = clock_timestamp()
+                 WHERE type_id = :cad AND substr(key, 2)::int % 50 = 0
+                """
+            ),
+            {"cad": str(cad.id)},
+        )
+        db.execute(
+            text(
+                """
+                UPDATE objects SET label = label || '-2', updated_at = clock_timestamp()
+                 WHERE type_id = :mesh AND substr(key, 2)::int % 100 = 7
+                """
+            ),
+            {"mesh": str(mesh.id)},
+        )
+
+        def one(type_row: Any, key: str) -> ObjectInstance:
+            found = db.scalar(
+                select(ObjectInstance).where(
+                    ObjectInstance.type_id == type_row.id, ObjectInstance.key == key
+                )
+            )
+            assert found is not None
+            return found
+
+        changed_cad = one(cad, "C50")
+        stale_mesh = one(mesh, "M49")  # (49 % 2000)+1 = 도면 50 — 바뀐 도면
+        below = one(result, "R48")  # (48 % 10000)+1 = 메시 49
+        took, seen = timed(lambda: lineage.view(db, user, changed_cad, cad))
+        row(
+            "객체 하나의 계보 · 도면(위 0 · 아래 30)",
+            took,
+            f"아래 {seen.down_total}줄 · 영향 {seen.impact.derived}(낡음 {seen.impact.stale})",
+        )
+        took, seen = timed(lambda: lineage.view(db, user, stale_mesh, mesh))
+        row(
+            "객체 하나의 계보 · 메시(위 1 · 아래 5)",
+            took,
+            f"{seen.state} · {seen.reasons[:1]}",
+        )
+        took, seen = timed(lambda: lineage.view(db, user, below, result))
+        row("객체 하나의 계보 · 결과(위 2)", took, f"{seen.state}")
+        took, counted = timed(lambda: lineage.impact(db, changed_cad.id))
+        row("원천 하나의 영향 범위(도면)", took, f"{counted.derived}개(낡음 {counted.stale})")
+
+        def whole(direct_only: bool) -> int:
+            lineage.forget(db)  # 세션이 기억한 집합을 버리고 — 되풀이마다 처음부터 센다
+            return len(lineage.stale_ids(db, direct_only=direct_only))
+
+        took, n = timed(lambda: whole(False))
+        row("전체 낡음 집합(낡은 것만의 재료)", took, f"{n}개(메시 200 + 결과 1,500)")
+        took, n = timed(lambda: whole(True))
+        row("전체 바로 낡음 집합", took, f"{n}개(메시 200 + 결과 500)")
+
+        def stale_count(type_row: Any, value: str) -> int:
+            return int(
+                db.scalar(
+                    select(func_count())
+                    .select_from(ObjectInstance)
+                    .where(
+                        ObjectInstance.type_id == type_row.id,
+                        ObjectInstance.deleted_at.is_(None),
+                        lineage.condition(db, ObjectInstance, "eq", value),
+                    )
+                )
+                or 0
+            )
+
+        lineage.forget(db)
+        took, n = timed(lambda: stale_count(result, "stale"))
+        row("목록 「낡은 것만」 세기 · 결과 5만(집합은 기억)", took, f"{n}건(1,000 + 500)")
+        took, n = timed(lambda: stale_count(mesh, "stale"))
+        row("목록 「낡은 것만」 세기 · 메시 1만(집합은 기억)", took, f"{n}건(200)")
+        stale_page = list(
+            db.scalars(
+                select(ObjectInstance.id)
+                .where(
+                    ObjectInstance.type_id == result.id,
+                    lineage.condition(db, ObjectInstance, "eq", "stale"),
+                )
+                .limit(50)
+            )
+        )
+        plain_page = list(
+            db.scalars(
+                select(ObjectInstance.id).where(ObjectInstance.type_id == result.id).limit(50)
+            )
+        )
+        took, n = timed(lambda: len(lineage.page_states(db, stale_page)))
+        row("목록 한 쪽(50) 낡음 표시 · 낡은 줄", took, f"표시 {n}줄")
+        took, n = timed(lambda: len(lineage.page_states(db, plain_page)))
+        row("목록 한 쪽(50) 낡음 표시 · 아무 줄", took, f"낡은 줄 {n}")
+        took, got = timed(lambda: lineage_review.collect(db, user, Filters()))
+        row(
+            "검토함 모으기 · 낡은 파생물",
+            took,
+            f"항목 {len(got.items)} · {'; '.join(got.notes) or '잘림 없음'}",
+        )
+        took, done = timed(lambda: lineage.repin(db, user, stale_mesh, basis="checked"))
+        row("다시 고정 · 메시 하나", took, f"바뀐 선 {len(done)}(첫 번째 뒤로는 0)")
+        # 넣기의 값 견주기 — 읽기를 다 잰 뒤에(트리거를 끄는 DDL · 5만 줄 지우기가 같은
+        # 트랜잭션의 읽기 계획을 흔들지 않게).
+        took = link(plain.slug, result, mesh, 50000, 10000)
+        row("넣기 · 같은 모양의 계보 아닌 선 5만", took, "종류 조회만")
+        db.execute(text("ALTER TABLE object_relations DISABLE TRIGGER object_relations_kind"))
+        db.execute(
+            text("DELETE FROM object_relations WHERE relation = :rel"), {"rel": plain.slug}
+        )
+        took = link(plain.slug, result, mesh, 50000, 10000)
+        row("넣기 · 같은 모양 5만 — 트리거 끔", took, "견줌")
+        db.execute(text("ALTER TABLE object_relations ENABLE TRIGGER object_relations_kind"))
+        db.execute(
+            text("DELETE FROM object_relations WHERE relation = :rel"), {"rel": plain.slug}
+        )
+    finally:
+        db.rollback()
+        db.close()
+    return out
+
+
+def _map_rehearsal(
+    client: Any, admin: dict[str, str], manager: dict[str, str], repeat: int
+) -> list[tuple[str, str, str, str]]:
+    """전체 지도(ADR 0046) — 판 만들기 · 시간마다 집계 · 멀리 보기 응답 · 확대 상자 · 쓰기
+    비용.
+
+    1. 전체 배치(처음이면 처음 판, 있으면 앞 판에서 출발) 두 번 — 두 번째의 움직인 거리.
+       **남긴다.**
+    2. 시간마다 집계 · 덧붙임(새 기준정보 없음)과 새 개발모델 60(1%) + 기록 6,000 을 심은
+       덧붙임 — 기존 자리 움직임 0 을 확인하고 **롤백**.
+    3. `GET /graph/map`(관리자 · 부서 관리자 — 부서별 반지름) 시간 · 크기(gzip).
+    4. 확대 상자(측정 보고의 a · b · b' · c) — 처음 · 다시, 점 수, 크기.
+    5. 쓰기 — 기록 2만 줄 넣기와 그 뒤 시간마다의 점 표 맞춤(바뀐 기록만, 롤백)."""
+    import gzip
+    import math
+
+    from app.database import SessionLocal
+    from app.modules.graph import mapbuild, mapread
+
+    out: list[tuple[str, str, str, str]] = []
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("map", label, f"{took:.3f}초", note))
+        print(f"{took:8.3f}초  {label}  {note}", flush=True)
+
+    def job(name: str, call: Callable[[Any], Any], commit: bool) -> Any:
+        with SessionLocal() as db:
+            started = time.perf_counter()
+            got = call(db)
+            took = time.perf_counter() - started
+            if commit:
+                db.commit()
+            else:
+                db.rollback()
+        mapread.forget()
+        return took, got
+
+    took, got = job("full", lambda db: mapbuild.run_full(db, user_id=None), True)
+    row(
+        "전체 배치(1)",
+        took,
+        f"기준정보 {got['masters']:,} · 허브 {got['hubs']:,} · "
+        f"공동 참조 짝 {got['coref_pairs']:,} · 선 {got['edges']:,} · "
+        f"선 모으기 {got['edge_seconds']}초 · 집계 {got['count_seconds']}초 · "
+        f"배치 {got['layout_seconds']}초 · 겹침 바로잡기 {got['overlap_rounds']}번",
+    )
+    took, got = job("full", lambda db: mapbuild.run_full(db, user_id=None), True)
+    row("전체 다시 배치(2, 앞 판에서)", took, f"움직임(지도 폭 대비) {got['moved']}")
+    took, got = job("count", lambda db: mapbuild.run_count(db), True)
+    row("시간마다 집계", took, f"줄 {got.get('rows', 0):,}")
+    took, got = job("append", lambda db: mapbuild.run_append(db), False)
+    row("매일 덧붙임 — 새 기준정보 없음", took, f"{got}")
+
+    def seeded_append(db: Any) -> Any:
+        """새 개발모델 60 + 기록 6,000(모델마다 100)을 심고 덧붙임 — 롤백한다."""
+        before = {
+            one: (x, y)
+            for one, x, y in db.execute(text("SELECT object_id, x, y FROM graph_map_masters"))
+        }
+        db.execute(
+            text("""
+            CREATE TEMP TABLE new_models ON COMMIT DROP AS
+            SELECT gen_random_uuid() AS id, o.type_id, o.key || '-new' AS key, o.label,
+                   o.properties, o.owner_workspace_id
+              FROM objects o JOIN object_types t ON t.id = o.type_id
+             WHERE t.slug = 'plm_model' ORDER BY o.key LIMIT 60
+            """)
+        )
+        db.execute(
+            text("""
+            INSERT INTO objects (id, type_id, key, label, properties, owner_workspace_id)
+            SELECT id, type_id, key, label, properties, owner_workspace_id FROM new_models
+            """)
+        )
+        db.execute(
+            text("""
+            INSERT INTO objects (id, type_id, key, label, properties, owner_workspace_id)
+            SELECT gen_random_uuid(), c.type_id, c.key || '-n' || g.n, c.label,
+                   jsonb_set(c.properties, '{model}', to_jsonb(m.id::text)),
+                   c.owner_workspace_id
+              FROM (SELECT id, row_number() OVER () AS k FROM new_models) m
+              CROSS JOIN generate_series(1, 100) AS g(n)
+              JOIN LATERAL (
+                SELECT o.* FROM objects o JOIN object_types t ON t.id = o.type_id
+                 WHERE t.slug = 'svc_case' LIMIT 1 OFFSET (m.k * 100 + g.n)
+              ) c ON true
+            """)
+        )
+        started = time.perf_counter()
+        got = mapbuild.run_append(db)
+        took = time.perf_counter() - started
+        after = {
+            one: (x, y)
+            for one, x, y in db.execute(text("SELECT object_id, x, y FROM graph_map_masters"))
+        }
+        moved = sum(1 for one, at in before.items() if after.get(one) != at)
+        return took, got, moved
+
+    _took_all, (took, got, moved) = job("append+", seeded_append, False)
+    row(
+        "매일 덧붙임 — 새 개발모델 60 · 기록 6,000",
+        took,
+        f"새 기준정보 {got.get('new')} · 새 허브 {got.get('new_hubs')} · "
+        f"기존 자리 움직임 {moved}개"
+        " (롤백)",
+    )
+
+    def far(who: dict[str, str], label: str) -> Any:
+        times: list[float] = []
+        response: Any = None
+        for _ in range(max(repeat, 2)):
+            started = time.perf_counter()
+            response = client.get("/api/graph/map", headers={**who, "Accept-Encoding": "gzip"})
+            times.append(time.perf_counter() - started)
+        body = response.json()
+        raw = len(response.content)
+        packed = len(gzip.compress(response.content, 5))
+        row(
+            label,
+            statistics.median(times),
+            f"기준정보 {len(body['masters']['ids']):,} · 원반 {len(body['discs']['x']):,} · "
+            f"JSON {raw / 1e6:.2f}MB · gzip {packed / 1e6:.2f}MB",
+        )
+        return body
+
+    body = far(admin, "멀리 보기 GET /graph/map(관리자)")
+    far(manager, "멀리 보기 GET /graph/map(부서 관리자 — 보는 사람 기준 반지름)")
+
+    discs = body["discs"]
+    radius = discs["r"]
+    hot = max(range(len(radius)), key=lambda at: radius[at])
+    hx, hy, hr = discs["x"][hot], discs["y"][hot], radius[hot]
+    order = sorted(range(len(radius)), key=lambda at: radius[at])
+    typical = order[len(order) // 3]
+    tx, ty = discs["x"][typical], discs["y"][typical]
+    # (a) 보통 허브를 가운데로, 닿는 원반이 30개 남짓이 될 때까지 넓힌다.
+    half = radius[typical]
+    for _ in range(200):
+        touching = sum(
+            1
+            for at in range(len(radius))
+            if math.hypot(discs["x"][at] - tx, discs["y"][at] - ty) <= radius[at] + half * 1.42
+        )
+        if touching >= 30:
+            break
+        half *= 1.15
+    # (a') 같은 자리에서 기대 수가 상한 아래로 들 때까지 줄인다 — 허브 여럿을 실제로 읽는 상자.
+    # (고르는 동안 마지막 한 번은 점을 읽으므로 아래 「처음」 은 찬 캐시가 아니다.)
+    small = half
+    for _ in range(60):
+        got = client.get(
+            "/api/graph/map/points",
+            params={"x0": tx - small, "y0": ty - small, "x1": tx + small, "y1": ty + small},
+            headers=admin,
+        ).json()
+        if got["expected"] <= 45_000:
+            break
+        small *= 0.85
+    boxes = {
+        "a 허브 30여 개": (tx - half, ty - half, tx + half, ty + half),
+        "a' 허브 여럿(기대 4.5만 이하)": (tx - small, ty - small, tx + small, ty + small),
+        "b 뜨거운 원반 안(변 0.1R)": (
+            hx + 0.45 * hr,
+            hy - 0.05 * hr,
+            hx + 0.55 * hr,
+            hy + 0.05 * hr,
+        ),
+        "b' 뜨거운 원반 안(변 0.3R)": (
+            hx + 0.35 * hr,
+            hy - 0.15 * hr,
+            hx + 0.65 * hr,
+            hy + 0.15 * hr,
+        ),
+        "c 뜨거운 원반 전체": (hx - hr, hy - hr, hx + hr, hy + hr),
+    }
+    for label, (x0, y0, x1, y1) in boxes.items():
+        for attempt in ("처음", "다시"):
+            started = time.perf_counter()
+            response = client.get(
+                "/api/graph/map/points",
+                params={"x0": x0, "y0": y0, "x1": x1, "y1": y1},
+                headers={**admin, "Accept-Encoding": "gzip"},
+            )
+            took = time.perf_counter() - started
+            got = response.json()
+            row(
+                f"확대 {label} · {attempt}",
+                took,
+                f"기대 {got['expected']:,} · 점 {got['count']:,}"
+                f"{' · 상한 넘음(안 읽음)' if got['over'] else ''} · JSON "
+                f"{len(response.content) / 1e6:.2f}MB · gzip "
+                f"{len(gzip.compress(response.content, 5)) / 1e6:.2f}MB",
+            )
+        started = time.perf_counter()
+        response = client.get(
+            "/api/graph/map/points",
+            params={"x0": x0, "y0": y0, "x1": x1, "y1": y1},
+            headers=manager,
+        )
+        took = time.perf_counter() - started
+        got = response.json()
+        row(
+            f"확대 {label} · 부서 관리자",
+            took,
+            f"기대 {got['expected']:,} · 점 {got['count']:,}",
+        )
+
+    def ingest_then_refresh() -> tuple[float, float, dict[str, Any]]:
+        """기록 2만 줄을 넣고(쓰기 길 — 지도는 아무것도 안 붙인다) 시간마다의 점 표 맞춤을
+        잰다(롤백)."""
+        with SessionLocal() as db:
+            db.execute(
+                text("""
+                CREATE TEMP TABLE src_rows ON COMMIT DROP AS
+                SELECT o.type_id, o.key, o.label, o.properties, o.owner_workspace_id
+                  FROM objects o JOIN object_types t ON t.id = o.type_id
+                 WHERE t.slug = 'svc_case' LIMIT 20000
+                """)
+            )
+            started = time.perf_counter()
+            db.execute(
+                text("""
+                INSERT INTO objects (id, type_id, key, label, properties, owner_workspace_id)
+                SELECT gen_random_uuid(), type_id, key || 'z', label, properties,
+                       owner_workspace_id
+                  FROM src_rows
+                """)
+            )
+            took_insert = time.perf_counter() - started
+            layout = mapbuild.current(db)
+            assert layout is not None
+            started = time.perf_counter()
+            got = mapbuild.refresh_points(db, layout.hub_keys)
+            took_refresh = time.perf_counter() - started
+            db.rollback()
+        return took_insert, took_refresh, got
+
+    for rnd in range(2):
+        took_insert, took_refresh, got = ingest_then_refresh()
+        row(
+            f"쓰기 — 기록 2만 줄 넣기({rnd + 1}회)",
+            took_insert,
+            "지도는 쓰기 길에 아무것도 안 붙인다 · 다음 집계의 점 표 맞춤 "
+            f"{took_refresh:.3f}초 "
+            f"(바뀐 기록 {got['points_changed']:,} · 넣은 점 {got['points_rows']:,})",
+        )
+    with SessionLocal() as db:
+        size = db.execute(
+            text(
+                "SELECT pg_size_pretty(pg_total_relation_size('graph_map_points')), "
+                "pg_size_pretty(pg_relation_size('ix_graph_map_points_hub')), "
+                "pg_size_pretty(pg_total_relation_size('graph_map_masters') + "
+                "pg_total_relation_size('graph_map_frozen') + "
+                "pg_total_relation_size('graph_map_counts') + "
+                "pg_total_relation_size('graph_map_links'))"
+            )
+        ).one()
+    row(
+        "저장 크기",
+        0.0,
+        f"확대 점 표(색인 포함) {size[0]} · 그중 (허브, 해시) 색인 {size[1]} · "
+        f"지도 표 넷 {size[2]}",
+    )
+    return out
+
+
+def _proposals_rehearsal(repeat: int) -> list[tuple[str, str, str, str]]:
+    """제안된 관계(ADR 0042) — 제안 10만 건이 규모에서 얼마나 드나.
+
+    한 세션 안에서 심고 재고 **롤백한다**(아무것도 안 남는다): 부품 2만 · 고장 모드 2,000(둘
+    다 부서 관리자의 부서 것)과 그 사이 관계 종류 하나, 부품마다 고장 모드 다섯으로 가는 열린
+    제안 10만(고장 모드 하나에 제안 쉰, 확신도는 0 ~ 1 에 고르게, 출처 글 스무 가지). 그다음
+    객체 하나의 제안 목록 · 전체 목록 첫 쪽 · 검토함 모으기 · 홈 「남은 일」 · 검토함 미리
+    보기(확정 100건) · 확정 100건(「관계 추가」 와 같은 길) · 여러 건 제안 500줄을 잰다."""
+    from sqlalchemy import select
+
+    from app.database import SessionLocal
+    from app.modules.accounts.models import User
+    from app.modules.objects import proposal_review, proposals
+    from app.modules.objects.models import ObjectInstance, RelationProposal
+    from app.modules.ontology.models import ObjectType, RelationType
+    from app.modules.review import services as review_services
+    from app.modules.review.registry import Filters
+    from app.modules.workspaces.models import WorkspaceMember
+
+    out: list[tuple[str, str, str, str]] = []
+
+    def row(label: str, took: float, note: str) -> None:
+        out.append(("proposals", label, f"{took:.3f}초", note))
+        print(f"{took:8.3f}초  {label}  {note}", flush=True)
+
+    def timed(call: Callable[[], Any]) -> tuple[float, Any]:
+        times: list[float] = []
+        found: Any = None
+        for _ in range(max(repeat, 3)):
+            started = time.perf_counter()
+            found = call()
+            times.append(time.perf_counter() - started)
+        return statistics.median(times), found
+
+    db = SessionLocal()
+    try:
+        user = db.scalar(select(User).where(User.email == ADMIN))
+        boss = db.scalar(select(User).where(User.email == MANAGER))
+        assert user is not None and boss is not None
+        home = db.scalar(
+            select(WorkspaceMember.workspace_id).where(
+                WorkspaceMember.user_id == boss.id, WorkspaceMember.role == "manager"
+            )
+        )
+        tag = uuid_hex()
+        part = ObjectType(slug=f"prp_part_{tag}", label="부품")
+        mode = ObjectType(slug=f"prp_mode_{tag}", label="고장 모드")
+        db.add_all([part, mode])
+        db.flush()
+        kind = RelationType(
+            slug=f"prp_fails_{tag}",
+            label="고장 모드",
+            inverse_label="나는 부품",
+            src_type_slugs=[part.slug],
+            dst_type_slugs=[mode.slug],
+        )
+        db.add(kind)
+        db.flush()
+        for type_row, count, prefix in ((part, 20000, "P"), (mode, 2000, "F")):
+            db.execute(
+                text(
+                    """
+                    INSERT INTO objects
+                        (id, type_id, label, key, properties, owner_workspace_id)
+                    SELECT gen_random_uuid(), :type, :prefix || g, :prefix || g,
+                           '{}'::jsonb, :ws
+                      FROM generate_series(1, :n) g
+                    """
+                ),
+                {"type": str(type_row.id), "prefix": prefix, "n": count, "ws": str(home)},
+            )
+        db.execute(text("ANALYZE objects"))
+        started = time.perf_counter()
+        db.execute(
+            text(
+                """
+                WITH p AS (SELECT id, substr(key, 2)::int AS k FROM objects
+                            WHERE type_id = :p),
+                     f AS (SELECT id, substr(key, 2)::int AS k FROM objects
+                            WHERE type_id = :f),
+                     j AS (SELECT generate_series(0, 4) AS j)
+                INSERT INTO relation_proposals
+                    (id, relation, src_object_id, dst_object_id, evidence_note, confidence,
+                     origin, origin_ref, status, proposed_by_id, created_at)
+                SELECT gen_random_uuid(), :rel, p.id, f.id,
+                       'FMEA 시트 ' || p.k || '행 — 원인 칸이 이 고장 모드를 말함',
+                       ((p.k * 37 + j.j * 11) % 101) / 100.0,
+                       'mcp', 'FMEA-' || (p.k % 20), 'proposed', :user,
+                       now() - make_interval(secs => p.k + j.j)
+                  FROM p CROSS JOIN j
+                  JOIN f ON f.k = ((p.k * 5 + j.j) % 2000) + 1
+                """
+            ),
+            {"p": str(part.id), "f": str(mode.id), "rel": kind.slug, "user": str(user.id)},
+        )
+        planted = db.scalar(
+            select(func_count())
+            .select_from(RelationProposal)
+            .where(RelationProposal.relation == kind.slug)
+        )
+        row(
+            "넣기 · 열린 제안 10만(SQL 한 문장)",
+            time.perf_counter() - started,
+            f"{planted:,}건",
+        )
+        db.execute(text("ANALYZE relation_proposals"))
+
+        def pick(type_row: Any, key: str) -> ObjectInstance:
+            found = db.scalar(
+                select(ObjectInstance).where(
+                    ObjectInstance.type_id == type_row.id, ObjectInstance.key == key
+                )
+            )
+            assert found is not None
+            return found
+
+        p1, f1 = pick(part, "P77"), pick(mode, "F386")
+        took, seen = timed(lambda: proposals.of_object(db, user, p1))
+        row("객체 하나의 제안 목록 · 부품(출발 다섯)", took, f"{len(seen)}줄")
+        took, seen = timed(lambda: proposals.of_object(db, user, f1))
+        row("객체 하나의 제안 목록 · 고장 모드(도착 쉰)", took, f"{len(seen)}줄")
+        took, (page, total) = timed(
+            lambda: proposals.page(db, user, proposals.PageQuery(), limit=50, offset=0)
+        )
+        row(
+            "전체 목록 첫 쪽(50) · 열린 제안(전체 수 세기 포함)",
+            took,
+            f"{len(page)}줄 / {total:,}",
+        )
+        took, (page, total) = timed(
+            lambda: proposals.page(
+                db, boss, proposals.PageQuery(decidable=True), limit=50, offset=0
+            )
+        )
+        row("전체 목록 첫 쪽 · 부서 관리자 · 확정할 수 있는 것", took, f"{total:,}건")
+        took, got = timed(lambda: proposal_review.collect(db, user, Filters()))
+        row(
+            "검토함 모으기 · 제안된 관계(시스템 관리자)",
+            took,
+            f"항목 {len(got.items):,} / {got.total:,} · 추천 "
+            f"{sum(1 for one in got.items if one.recommended):,}",
+        )
+        took, got = timed(
+            lambda: proposal_review.collect(db, boss, Filters(type_slug=mode.slug))
+        )
+        row("검토함 모으기 · 부서 관리자 · 타입 거르기", took, f"항목 {len(got.items):,}")
+        took, items = timed(lambda: proposals.maintenance(db, boss))
+        row("홈 「남은 일」 · 부서 관리자", took, f"{items[0].count:,}건" if items else "0")
+
+        # 확신도 높은 것부터 100건 — 미리 보기(검토함의 계획)와 확정.
+        top = list(
+            db.scalars(
+                select(RelationProposal)
+                .where(
+                    RelationProposal.relation == kind.slug,
+                    RelationProposal.status == "proposed",
+                )
+                .order_by(RelationProposal.confidence.desc(), RelationProposal.id)
+                .limit(300)
+            )
+        )
+        decisions = [
+            review_services.Decision(
+                kind=proposal_review.KIND, item_id=str(one.id), action="accept"
+            )
+            for one in top[:100]
+        ]
+        took, planned = timed(lambda: review_services.plan(db, boss, decisions))
+        row(
+            "검토함 미리 보기 · 확정 100건(부서 관리자)",
+            took,
+            f"적용 {sum(1 for one in planned if one.status == 'apply')}",
+        )
+        times: list[float] = []
+        for start in (0, 100, 200):
+            batch = top[start : start + 100]
+            started = time.perf_counter()
+            for one in batch:
+                proposals.accept(db, boss, one, note="검토함 — 확정")
+            db.flush()
+            times.append(time.perf_counter() - started)
+        made = db.scalar(
+            select(func_count())
+            .select_from(RelationProposal)
+            .where(
+                RelationProposal.relation == kind.slug, RelationProposal.status == "accepted"
+            )
+        )
+        row(
+            "확정 100건(「관계 추가」 와 같은 길 · 감사 포함)",
+            statistics.median(times),
+            f"확정 {made}건(100건씩 3번)",
+        )
+        specs = [
+            proposals.Spec(
+                relation=kind.slug,
+                src_id=pick(part, f"P{k}").id,
+                dst_id=pick(mode, f"F{(k * 13) % 2000 + 1}").id,
+                confidence=0.7,
+                evidence_note="여러 건 제안 리허설",
+                origin="mcp",
+                origin_ref="rehearsal",
+            )
+            for k in range(1, 501)
+        ]
+        started = time.perf_counter()
+        results = proposals.propose_many(db, user, specs, again=False)
+        took = time.perf_counter() - started
+        counts: dict[str, int] = {}
+        for result in results:
+            counts[result.status] = counts.get(result.status, 0) + 1
+        row("여러 건 제안 500줄(줄마다 검사 · savepoint)", took, str(counts))
+    finally:
+        db.rollback()
+        db.close()
+    return out
+
+
+def uuid_hex() -> str:
+    import uuid as uuid_module
+
+    return uuid_module.uuid4().hex[:6]
+
+
+def func_count() -> Any:
+    from sqlalchemy import func
+
+    return func.count()
+
+
+def func_count_desc() -> Any:
+    from sqlalchemy import func
+
+    return func.count().desc()
+
+
 def _explain(engine: Any, model_id: Any) -> None:
     """참조 질의의 **모양** — 지금 쓰는 꼴과 인덱스가 타는 꼴."""
     shapes = {
@@ -2264,7 +3724,8 @@ def main() -> None:
         "--only",
         help=(
             "이 영역만 잰다(list · profile · graph · summary · metrics · recipes · visits · "
-            "alerts · incremental · rules …)"
+            "alerts · incremental · rules · periods · explode · lineage · proposals · "
+            "edgefields · map …). map 은 이름으로만(판을 만들어 남긴다)"
         ),
     )
     args = parser.parse_args()

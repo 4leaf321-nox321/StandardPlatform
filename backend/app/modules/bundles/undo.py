@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select, text
@@ -39,6 +39,7 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.objects import aliases, bulk, lifecycle
+from app.modules.objects import edges as edge_rule
 from app.modules.objects import relations as rel
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRef, ObjectRelation
 from app.modules.objects.services import audit_state, properties_of
@@ -230,6 +231,25 @@ def run_undo(
 
 
 # --- 줄마다 -----------------------------------------------------------------------
+
+
+def _period_of(state: dict[str, Any]) -> tuple[date | None, date | None]:
+    """되돌릴 기록의 유효 기간(ISO 글자) → 날짜. 없으면 (None, None) — 기간 없는 선."""
+    found: list[date | None] = []
+    for name in ("valid_from", "valid_to"):
+        raw = state.get(name)
+        found.append(date.fromisoformat(str(raw)) if raw else None)
+    return found[0], found[1]
+
+
+def _pin_of(state: dict[str, Any]) -> dict[str, Any]:
+    """되돌릴 기록의 고정(ISO 글자) → 선의 두 칸. 없으면 둘 다 None — 계보 아닌 선 · 이 판 전의
+    기록."""
+    raw = state.get("pinned_at")
+    return {
+        "pinned_revision": state.get("pinned_revision") if raw else None,
+        "pinned_at": datetime.fromisoformat(str(raw)) if raw else None,
+    }
 
 
 def _stale(current: dict[str, Any], after: dict[str, Any]) -> list[str]:
@@ -537,12 +557,16 @@ def _relation(
         src_id = uuid.UUID(str(entry.before["src"]))
         dst_id = uuid.UUID(str(entry.before["dst"]))
         slug = str(entry.before.get("relation") or "")
-        twin = db.scalar(
-            select(ObjectRelation.id).where(
-                ObjectRelation.src_object_id == src_id,
-                ObjectRelation.dst_object_id == dst_id,
-                ObjectRelation.relation == slug,
-            )
+        # 끊은 선의 유효 기간(ADR 0039) — 이 판 전의 기록에는 없다(그때는 기간이 없었다).
+        valid_from, valid_to = _period_of(entry.before)
+        twin = edge_rule.find_overlap(
+            db,
+            src_id=src_id,
+            dst_id=dst_id,
+            relation=slug,
+            valid_from=valid_from,
+            valid_to=valid_to,
+            skip=None,
         )
         if twin is not None:
             # 그 사이 **같은 선이 새 id 로** 이어졌다 — 다시 넣으면 유일 제약에 걸려 그 판
@@ -554,7 +578,7 @@ def _relation(
                 message="같은 선이 이미 이어져 있습니다",
             )
         refused = _edge_refusal(db, user, src_id, slug, ctx) or _relink_refusal(
-            db, ctx, slug, src_id, dst_id, cut
+            db, ctx, slug, src_id, dst_id, cut, period=(valid_from, valid_to)
         )
         if refused:
             return bulk.RowPlan(row=index, action="error", label=entry.label, message=refused)
@@ -567,6 +591,11 @@ def _relation(
                 properties=dict(entry.before.get("properties") or {}),
                 evidence_note=str(entry.before.get("evidence_note") or ""),
                 created_by_id=user.id,
+                valid_from=valid_from,
+                valid_to=valid_to,
+                # 계보 선의 고정(ADR 0041) — 끊을 때의 기준을 그대로 되살린다(새로 박지
+                # 않는다). 이 판 전의 기록 · 계보 아닌 선은 비어 트리거가 지금 값으로 박는다.
+                **_pin_of(entry.before),
             )
             db.add(made)
             db.flush()
@@ -596,6 +625,8 @@ def _relation(
     current = {
         "properties": dict(edge.properties or {}),
         "evidence_note": edge.evidence_note or "",
+        **bulk._period_state(edge.valid_from, edge.valid_to),
+        **bulk._pin_state(edge.pinned_revision, edge.pinned_at),
     }
     stale = _stale(current, entry.after)
     if stale:
@@ -605,9 +636,36 @@ def _relation(
             label=entry.label,
             message=f"그 뒤에 {', '.join(stale)} 이(가) 바뀌어 안 되돌립니다",
         )
+    # 기간도 되돌린다(ADR 0039) — 이 판이 기간을 고쳤으면 그 앞 기간으로. 그 사이 같은 선이
+    # 그 기간에 이어졌으면 겹치므로 안 되돌린다.
+    restore = (
+        _period_of(entry.before)
+        if "valid_from" in entry.before or "valid_to" in entry.before
+        else (edge.valid_from, edge.valid_to)
+    )
+    if restore != (edge.valid_from, edge.valid_to) and edge_rule.find_overlap(
+        db,
+        src_id=edge.src_object_id,
+        dst_id=edge.dst_object_id,
+        relation=edge.relation,
+        valid_from=restore[0],
+        valid_to=restore[1],
+        skip=edge.id,
+    ):
+        return bulk.RowPlan(
+            row=index,
+            action="error",
+            label=entry.label,
+            message="그 사이 같은 관계가 되돌릴 기간에 이어져 기간을 되돌리지 못합니다",
+        )
     if apply:
         edge.properties = dict(entry.before.get("properties") or {})
         edge.evidence_note = str(entry.before.get("evidence_note") or "")
+        edge.valid_from, edge.valid_to = restore
+        if "pinned_at" in entry.before:
+            # 이 판이 고정을 옮겼으면(허브가 다시 고정한 선) 그 앞 고정으로.
+            pin = _pin_of(entry.before)
+            edge.pinned_revision, edge.pinned_at = pin["pinned_revision"], pin["pinned_at"]
         db.flush()
         audit.record(
             db,
@@ -654,6 +712,8 @@ def _relink_refusal(
     src_id: uuid.UUID,
     dst_id: uuid.UUID,
     cut: set[uuid.UUID],
+    *,
+    period: tuple[date | None, date | None] = (None, None),
 ) -> str:
     """끊었던 선을 **다시 이으면 잇는 규칙을 깨나** — 깨면 사람이 읽는 까닭.
 
@@ -682,11 +742,11 @@ def _relink_refusal(
     except AppError as refused:
         return refused.message
     if kind.cardinality in ("one_to_one", "many_to_one") and _edges_from(
-        db, kind.slug, src_id, cut, side="src"
+        db, kind.slug, src_id, cut, side="src", period=period
     ):
         return f"{kind.label}은 하나만 맺을 수 있는데 그 사이 다른 선이 이어졌습니다"
     if kind.cardinality in ("one_to_one", "one_to_many") and _edges_from(
-        db, kind.slug, dst_id, cut, side="dst"
+        db, kind.slug, dst_id, cut, side="dst", period=period
     ):
         return f"{kind.label}의 도착 쪽은 하나만 받을 수 있는데 그 사이 다른 선이 이어졌습니다"
     if kind.acyclic and _closes_cycle(db, kind.slug, src_id, dst_id, cut):
@@ -695,15 +755,26 @@ def _relink_refusal(
 
 
 def _edges_from(
-    db: Session, slug: str, end: uuid.UUID, cut: set[uuid.UUID], *, side: str
+    db: Session,
+    slug: str,
+    end: uuid.UUID,
+    cut: set[uuid.UUID],
+    *,
+    side: str,
+    period: tuple[date | None, date | None] = (None, None),
 ) -> bool:
     """그 끝에 이 관계의 선이 **이 되돌리기가 끊을 것 말고** 있나 — 두 표(`object_relations`
-    · 원 표와 잇는 `object_links`)를 다 본다(`relations.require_cardinality` 와 같다)."""
+    · 원 표와 잇는 `object_links`)를 다 본다(`relations.require_cardinality` 와 같다). 유효
+    기간이 있으면 그 기간과 겹치는 선만(ADR 0039)."""
     edge_end = ObjectRelation.src_object_id if side == "src" else ObjectRelation.dst_object_id
     link_end = ObjectLink.src_id if side == "src" else ObjectLink.dst_id
     found = [
         *db.scalars(
-            select(ObjectRelation.id).where(ObjectRelation.relation == slug, edge_end == end)
+            select(ObjectRelation.id).where(
+                ObjectRelation.relation == slug,
+                edge_end == end,
+                edge_rule.overlaps(ObjectRelation, *period),
+            )
         ),
         *db.scalars(select(ObjectLink.id).where(ObjectLink.relation == slug, link_end == end)),
     ]

@@ -701,12 +701,402 @@ def test_트리와_감사_기록을_도구로도_본다(bot: Bot) -> None:
         apply=True,
     )
     # 트리 관계가 안 정해진 타입은 빈 트리 — 오류가 아니다.
-    assert bot.call(server.object_tree, part) == {"nodes": [], "orphan_count": 0}
+    assert bot.call(server.object_tree, part) == {
+        "nodes": [],
+        "orphan_count": 0,
+        "as_of": None,
+    }
 
     bot.call(server.object_create, part, label="볼트")
     recent = bot.call(server.audit_recent, action="object.create", limit=5)
     assert recent["total"] >= 1
     assert recent["items"][0]["action"] == "object.create"
+
+
+def test_유효_기간을_도구로_적고_기준일로_읽는다(bot: Bot) -> None:
+    """「3월 1일부터 A1 이 A2 로 바뀜」 — 도구로 기간을 적고(ADR 0039), 트리 · 길 · 롤업 ·
+    상세가 기준일로 그 날의 구성을 읽는다. 기본은 오늘이다."""
+    part, bom = _uniq("part"), _uniq("bom")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": part,
+                    "label": "부품",
+                    "key_policy": "optional",
+                    "properties": [{"key": "w", "label": "무게", "data_type": "number"}],
+                }
+            ],
+            "relation_types": [
+                {
+                    "slug": bom,
+                    "label": "구성",
+                    "inverse_label": "구성품",
+                    "transitive": True,
+                    "acyclic": True,
+                    "effectivity": True,
+                    "src_type_slugs": [part],
+                    "dst_type_slugs": [part],
+                }
+            ],
+        },
+        apply=True,
+    )
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": part,
+                    "label": "부품",
+                    "list_view": {
+                        "tree": {"relation": bom, "parent": "dst"},
+                        "rollups": [{"property": "w", "fn": "sum"}],
+                    },
+                }
+            ]
+        },
+        apply=True,
+    )
+    schema = bot.call(server.ontology_schema)
+    kind = next(one for one in schema["relation_types"] if one["slug"] == bom)
+    assert kind["effectivity"] is True
+
+    top = bot.call(server.object_create, part, label="제품")
+    old = bot.call(server.object_create, part, label="A1", properties={"w": 1})
+    new = bot.call(server.object_create, part, label="A2", properties={"w": 2})
+    bot.call(
+        server.relation_add,
+        part,
+        old["id"],
+        bom,
+        top["id"],
+        evidence_note="ECO-1",
+        valid_to="2026-03-01",
+    )
+    added = bot.call(
+        server.relation_add,
+        part,
+        new["id"],
+        bom,
+        top["id"],
+        evidence_note="ECO-1",
+        valid_from="2026-03-01",
+    )
+    assert added["valid_from"] == "2026-03-01" and added["valid_to"] is None
+
+    def children(as_of: str) -> set[str]:
+        tree = bot.call(server.object_tree, part, parent=top["id"], as_of=as_of)
+        assert tree["as_of"] == as_of
+        return {one["label"] for one in tree["nodes"]}
+
+    assert children("2026-02-15") == {"A1"}
+    assert children("2026-04-15") == {"A2"}
+
+    feb = bot.call(server.graph_path, old["id"], top["id"], as_of="2026-02-15")
+    assert feb["found"] is True and feb["edges"][0]["valid_to"] == "2026-03-01"
+    assert (
+        bot.call(server.graph_path, old["id"], top["id"], as_of="2026-04-15")["found"] is False
+    )
+    rollup = bot.call(server.object_rollup, part, top["id"], as_of="2026-02-15")
+    assert rollup[0]["value"] == 1
+
+    # 오늘(2026-03-01 뒤)의 상세에는 A2 만, 지난 선까지 보면 A1 이 `past` 로.
+    now = bot.call(server.object_get, part, top["id"])
+    assert {one["object_label"] for one in now["related"]} == {"A2"}
+    every = bot.call(server.object_get, part, top["id"], all_periods=True)
+    states = {one["object_label"]: one["period_state"] for one in every["related"]}
+    assert states == {"A1": "past", "A2": "current"}
+
+    # 기간만 고친다 — 빈 글자는 그쪽 끝을 연다.
+    fixed = bot.call(
+        server.relation_update,
+        part,
+        new["id"],
+        added["relation_id"],
+        valid_to="2027-01-01",
+    )
+    assert fixed["valid_to"] == "2027-01-01" and fixed["valid_from"] == "2026-03-01"
+    opened = bot.call(
+        server.relation_update, part, new["id"], added["relation_id"], valid_to=""
+    )
+    assert opened["valid_to"] is None
+
+    # 겹치는 기간은 서버가 막는다 — 도구가 그 말을 그대로 전한다.
+    with pytest.raises(ToolError, match="겹치는"):
+        bot.call(server.relation_add, part, new["id"], bom, top["id"], valid_from="2026-06-01")
+
+
+def test_수량_칸을_정의하고_전개를_도구로_본다(bot: Bot) -> None:
+    """BOM 전개(ADR 0040) — 정의 파일 하나로 관계 속성과 수량 칸을 함께 적고, 관계마다 수량을
+    싣고, `object_explode` 가 경로 따라 곱한다. 롤업의 수량 반영도 같은 수다."""
+    part, bom = _uniq("part"), _uniq("bom")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": part,
+                    "label": "부품",
+                    "key_policy": "optional",
+                    "properties": [{"key": "w", "label": "무게", "data_type": "number"}],
+                }
+            ],
+            "relation_types": [
+                {
+                    "slug": bom,
+                    "label": "구성",
+                    "transitive": True,
+                    "acyclic": True,
+                    "quantity_key": "qty",
+                    "src_type_slugs": [part],
+                    "dst_type_slugs": [part],
+                    "properties": [{"key": "qty", "label": "수량", "data_type": "number"}],
+                }
+            ],
+        },
+        apply=True,
+    )
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": part,
+                    "label": "부품",
+                    "list_view": {
+                        "tree": {"relation": bom, "parent": "dst"},
+                        "rollups": [{"property": "w", "fn": "sum", "weighted": True}],
+                    },
+                }
+            ]
+        },
+        apply=True,
+    )
+    kind = next(
+        one for one in bot.call(server.ontology_schema)["relation_types"] if one["slug"] == bom
+    )
+    assert kind["quantity_key"] == "qty"
+    assert [one["key"] for one in kind["properties"]] == ["qty"]
+
+    made = {
+        name: bot.call(server.object_create, part, label=name, properties=props)
+        for name, props in (("P", {}), ("A", {}), ("BOLT", {"w": 0.5}))
+    }
+    for child, parent, qty in (("A", "P", 2), ("BOLT", "A", 3)):
+        bot.call(
+            server.relation_add,
+            part,
+            made[child]["id"],
+            bom,
+            made[parent]["id"],
+            evidence_note="도면",
+            properties={"qty": qty},
+        )
+
+    found = bot.call(server.object_explode, part, made["P"]["id"])
+    assert {one["label"]: one["total"] for one in found["lines"]} == {"A": 2, "BOLT": 6}
+    assert found["quantity_key"] == "qty" and found["totals"]["missing"] == 0
+    used = bot.call(server.object_explode, part, made["BOLT"]["id"], mode="where_used")
+    assert [(one["label"], one["total"]) for one in used["tops"]] == [("P", 6)]
+    rollup = bot.call(server.object_rollup, part, made["P"]["id"])
+    assert rollup[0]["weighted"] is True and rollup[0]["value"] == 3
+
+    # 숫자 아닌 칸을 수량 칸으로 — 계획이 막는다(서버의 말 그대로).
+    plan = bot.call(
+        server.ontology_import,
+        {
+            "relation_types": [
+                {
+                    "slug": bom,
+                    "label": "구성",
+                    "quantity_key": "memo",
+                    "properties": [{"key": "memo", "label": "메모", "data_type": "text"}],
+                }
+            ]
+        },
+    )
+    assert any("숫자 관계 속성" in one for one in plan["errors"])
+
+
+def test_선의_칸으로_거르고_이어진_칸을_한_번에_싣는다(bot: Bot) -> None:
+    """ADR 0043 — `object_fields` 가 선의 칸 주소(`edge: true`)를 주고, 같은 `edge` 번호로 묶은
+    조건만 같은 선 하나에서 맞는다. 상대의 값은 `columns` 로 한 번에 — 줄마다 `object_get` 하지
+    않는다."""
+    part, product, bom = _uniq("part"), _uniq("prod"), _uniq("bom")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {"slug": part, "label": "부품", "key_policy": "optional"},
+                {"slug": product, "label": "제품", "key_policy": "optional"},
+            ],
+            "relation_types": [
+                {
+                    "slug": bom,
+                    "label": "구성품",
+                    "src_type_slugs": [product],
+                    "dst_type_slugs": [part],
+                    "properties": [{"key": "qty", "label": "수량", "data_type": "number"}],
+                }
+            ],
+        },
+        apply=True,
+    )
+    parts = {name: bot.call(server.object_create, part, label=name) for name in ("X", "Y")}
+    products = {
+        name: bot.call(server.object_create, product, label=name) for name in ("P1", "P2")
+    }
+    for src, dst, qty in (("P1", "X", 1), ("P1", "Y", 5), ("P2", "X", 4)):
+        bot.call(
+            server.relation_add,
+            product,
+            products[src]["id"],
+            bom,
+            parts[dst]["id"],
+            evidence_note="BOM",
+            properties={"qty": qty},
+        )
+    fields = {one["field"]: one for one in bot.call(server.object_fields, product)}
+    assert fields[f"out.{bom}~qty"]["edge"] is True
+    x = parts["X"]["id"]
+    loose = [
+        {"field": f"out.{bom}", "op": "eq", "value": x},
+        {"field": f"out.{bom}~qty", "op": "gte", "value": "4"},
+    ]
+    listed = bot.call(server.objects_list, product, conditions=loose)
+    assert sorted(one["label"] for one in listed["items"]) == ["P1", "P2"]
+    tight = [{**one, "edge": 1} for one in loose]
+    listed = bot.call(server.objects_list, product, conditions=tight)
+    assert [one["label"] for one in listed["items"]] == ["P2"]
+
+    listed = bot.call(
+        server.objects_list, product, columns=[f"out.{bom}.label", f"out.{bom}~qty"]
+    )
+    p1 = listed["linked"][products["P1"]["id"]]
+    assert [one["label"] for one in p1[f"out.{bom}.label"]["values"]] == ["X", "Y"]
+    assert sorted(one["value"] for one in p1[f"out.{bom}~qty"]["values"]) == [1, 5]
+    assert [one["field"] for one in listed["linked_columns"]] == [
+        f"out.{bom}.label",
+        f"out.{bom}~qty",
+    ]
+
+
+def test_계보를_정의하고_낡음을_도구로_보고_다시_고정한다(
+    client: TestClient, manager: Signed, bot: Bot
+) -> None:
+    """계보(ADR 0041) — 정의 파일 하나로 개정 칸과 계보 종류를 세우고, 도구로 이은 선에 고정이
+    박힌다. 원천의 개정이 바뀌면 파생물이 바로 낡고 그 아래가 위에서 낡는다. 다시 고정은 그
+    객체의 원천 선만 옮긴다 — **위에서 낡음은 그 객체를 다시 고정해도 안 풀리고**, 원천부터
+    풀면 함께 풀린다."""
+    cad, mesh, result, made = _uniq("cad"), _uniq("mesh"), _uniq("result"), _uniq("made")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": cad,
+                    "label": "도면",
+                    "key_policy": "optional",
+                    "revision_key": "rev",
+                    "properties": [{"key": "rev", "label": "개정", "data_type": "text"}],
+                },
+                {"slug": mesh, "label": "메시", "key_policy": "optional"},
+                {"slug": result, "label": "결과", "key_policy": "optional"},
+            ],
+            "relation_types": [
+                {
+                    "slug": made,
+                    "label": "만든 것",
+                    "lineage_source": "src",
+                    "src_type_slugs": [cad, mesh],
+                    "dst_type_slugs": [mesh, result],
+                }
+            ],
+        },
+        apply=True,
+    )
+    schema = bot.call(server.ontology_schema)
+    assert (
+        next(one for one in schema["relation_types"] if one["slug"] == made)["lineage_source"]
+        == "src"
+    )
+    assert next(one for one in schema["types"] if one["slug"] == cad)["revision_key"] == "rev"
+
+    drawing = bot.call(server.object_create, cad, label="브래킷", properties={"rev": "B"})
+    grid = bot.call(server.object_create, mesh, label="M-12")
+    run = bot.call(server.object_create, result, label="R-7")
+    bot.call(server.relation_add, cad, drawing["id"], made, grid["id"], evidence_note="메싱")
+    bot.call(server.relation_add, mesh, grid["id"], made, run["id"], evidence_note="해석")
+
+    # 맺는 순간 원천의 지금 개정이 박힌다 — 맺기만 해서는 안 낡는다.
+    fresh = bot.call(server.object_lineage, mesh, grid["id"])
+    assert fresh["state"] == "fresh" and made in fresh["kinds"]
+    assert [(one["source"]["label"], one["pinned_revision"]) for one in fresh["up"]] == [
+        ("브래킷", "B")
+    ]
+
+    bot.call(server.object_update, cad, drawing["id"], properties={"rev": "C"})
+    direct = bot.call(server.object_lineage, mesh, grid["id"])
+    assert direct["state"] == "direct", direct
+    assert any("B → C" in one for one in direct["reasons"]), direct["reasons"]
+    below = bot.call(server.object_lineage, result, run["id"])
+    assert below["state"] == "upstream", below
+    top = bot.call(server.object_lineage, cad, drawing["id"])
+    assert top["impact"] == {"derived": 2, "stale": 2}
+
+    # 「낡은 것만」 은 목록의 조건 — 응답이 낡은 줄을 표시한다.
+    stale = bot.call(
+        server.objects_list,
+        result,
+        conditions=[{"field": "lineage", "op": "eq", "value": "stale"}],
+    )
+    assert [one["id"] for one in stale["items"]] == [run["id"]]
+    assert stale["lineage"] == {run["id"]: "upstream"}
+    only_direct = bot.call(
+        server.objects_list,
+        result,
+        conditions=[{"field": "lineage", "op": "eq", "value": "direct"}],
+    )
+    assert only_direct["total"] == 0
+
+    # 고칠 수 없는 사람은 다시 고정도 못 한다(전역 객체 — 시스템 관리자만).
+    token = client.post(
+        "/api/auth/tokens",
+        json={"name": _uniq("mgr"), "scopes": ["read", "objects:write"]},
+        headers=manager.headers,
+    )
+    assert token.status_code == 201, token.text
+    with pytest.raises(ToolError, match="OBJECTS-0134"):
+        Bot(token.json()["token"]).call(server.lineage_repin, mesh, grid["id"])
+
+    # 아래(결과)를 다시 고정해도 위에서 낡음은 안 풀린다 — 그 선은 낡지 않았다.
+    kept = bot.call(server.lineage_repin, result, run["id"], note="결과는 그대로")
+    assert kept["changed"] == [] and kept["unchanged"] == 1
+    assert kept["lineage"]["state"] == "upstream"
+
+    # 원천 쪽(메시)을 「영향 없음 확인」 — 고른 선의 고정이 지금 개정으로 옮겨진다.
+    line = direct["up"][0]
+    fixed = bot.call(
+        server.lineage_repin,
+        mesh,
+        grid["id"],
+        relation_ids=[line["relation_id"]],
+        basis="checked",
+        note="하중 경로 무관",
+    )
+    assert [
+        (one["before"]["revision"], one["after"]["revision"]) for one in fixed["changed"]
+    ] == [("B", "C")]
+    assert fixed["lineage"]["state"] == "fresh"
+    # 메시 자체는 안 바뀌었으니 그 아래도 함께 풀린다.
+    assert bot.call(server.object_lineage, result, run["id"])["state"] == "fresh"
+
+    # 사람이 말한 근거가 감사에 남는다.
+    logged = bot.call(server.audit_recent, action="lineage.repin", limit=50)
+    mine = [one for one in logged["items"] if one["target_id"] == line["relation_id"]]
+    assert len(mine) == 1 and "하중 경로 무관" in (mine[0]["reason"] or ""), mine
 
 
 def test_확장_기능도_도구_둘로_닿는다(client: TestClient, admin: Signed, bot: Bot) -> None:
@@ -1296,6 +1686,73 @@ def test_사진은_curl_명령으로_붙인다_바이트는_도구를_거치지_
     assert removed == {"ok": True, "message": "완료"}
 
 
+def test_자주검증_칸_사진도_curl_명령으로_붙인다(
+    client: TestClient, admin: Signed, bot: Bot, db: Session
+) -> None:
+    """확장의 칸도 같은 길이다(ADR 0044) — `owner_table="jv_rows"` 로 표를 받고, 셸이 올린 뒤
+    AI 는 돌아온 id 로 칸 글에 표시 줄을 넣는다(다음 할 일이 그것을 말한다)."""
+    import shlex
+
+    from sqlalchemy import delete
+
+    from app.modules.server.models import ExtensionState
+    from tests.api.test_attachment_images import _png
+
+    client.patch(
+        "/api/server/extensions/jajuverify", json={"enabled": True}, headers=admin.headers
+    )
+    try:
+        meeting = client.post(
+            "/api/ext/jajuverify/meetings",
+            json={"kind": "review", "title": "AI 사진", "workspace_slug": admin.workspace},
+            headers=admin.headers,
+        ).json()
+        row = client.post(
+            f"/api/ext/jajuverify/meetings/{meeting['id']}/rows",
+            json={"topic": "힌지"},
+            headers=admin.headers,
+        ).json()
+        token = bot.ctx.request_context.request.headers["authorization"]
+        ctx = SimpleNamespace(
+            request_context=SimpleNamespace(
+                request=SimpleNamespace(
+                    headers={"authorization": token, "host": "sp.example.com"}
+                )
+            )
+        )
+        got = asyncio.run(
+            server.attachment_upload_prepare(
+                ctx, "", row["id"], "/home/me/캡처.png", field="problem", owner_table="jv_rows"
+            )
+        )
+        assert "error" not in got, got
+        assert got["owner_table"] == "jv_rows" and "photo:" in got["next"]
+        words = shlex.split(got["curl"])
+        ticket = words[words.index("-H") + 1].removeprefix("X-Upload-Ticket: ")
+        done = client.put(
+            "/api/attachments/upload?" + words[-1].split("?", 1)[1],
+            content=_png(),
+            headers={"X-Upload-Ticket": ticket},
+        )
+        assert done.status_code == 201, done.text
+        sheet = client.get(
+            f"/api/ext/jajuverify/meetings/{meeting['id']}", headers=admin.headers
+        ).json()
+        assert [one["id"] for one in sheet["rows"][0]["photos"]["problem"]] == [
+            done.json()["id"]
+        ]
+        # 칸이 아닌 자리는 표를 안 낸다 — 서버의 말이 그대로 온다.
+        wrong = asyncio.run(
+            server.attachment_upload_prepare(
+                ctx, "", row["id"], "/tmp/a.png", field="schedule", owner_table="jv_rows"
+            )
+        )
+        assert "error" in wrong
+    finally:
+        db.execute(delete(ExtensionState))
+        db.commit()
+
+
 def test_업로드_주소는_들어온_주소를_따른다() -> None:
     """nginx 뒤면 포트 없이 그 호스트, MCP 포트로 바로 왔으면 앱 포트(-2)."""
 
@@ -1848,3 +2305,77 @@ def test_게시판은_도구로_목록과_글을_읽는다(
     one = bot.call(server.board, post_id=post["id"])
     assert one["body"] == "핀 규격 문서는 어디 있나요?"
     assert [reply["body"] for reply in one["comments"]] == ["기준정보 › 부품에 있습니다."]
+
+
+def test_추론한_선은_제안으로_남기고_사람이_정한_것만_확정한다(
+    client: TestClient, member: Signed, bot: Bot
+) -> None:
+    """제안된 관계(ADR 0042) — 출발 객체를 못 고치는 토큰은 `relation_add` 가 거절되고
+    `relation_propose` 는 된다(양 끝을 볼 수만 있으면). 줄마다 결과(만듦 · 이미 이어짐), 출처는
+    AI(`mcp`) · 도구의 `origin_ref`. 열린 제안은 `object_get` 의 `related` 에 없다 — 확정해야
+    관계다. 확정은 출발 객체를 고칠 수 있는 토큰만."""
+    part, vendor, supplied = _uniq("part"), _uniq("vendor"), _uniq("supplied")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [{"slug": part, "label": "부품"}, {"slug": vendor, "label": "공급사"}],
+            "relation_types": [
+                {
+                    "slug": supplied,
+                    "label": "공급받음",
+                    "src_type_slugs": [part],
+                    "dst_type_slugs": [vendor],
+                }
+            ],
+        },
+        apply=True,
+    )
+    bolt = bot.call(server.object_create, part, label="볼트")
+    acme = bot.call(server.object_create, vendor, label="ACME")
+    beta = bot.call(server.object_create, vendor, label="BETA")
+    bot.call(server.relation_add, part, bolt["id"], supplied, beta["id"], evidence_note="계약")
+
+    token = client.post(
+        "/api/auth/tokens",
+        json={"name": _uniq("ai"), "scopes": ["read", "objects:write"]},
+        headers=member.headers,
+    )
+    assert token.status_code == 201, token.text
+    ai = Bot(token.json()["token"])
+    with pytest.raises(ToolError):
+        ai.call(server.relation_add, part, bolt["id"], supplied, acme["id"])
+    got = ai.call(
+        server.relation_propose,
+        [
+            {
+                "src_object_id": bolt["id"],
+                "relation": supplied,
+                "dst_object_id": acme["id"],
+                "confidence": 0.8,
+                "evidence_note": "FMEA 12행",
+            },
+            {"src_object_id": bolt["id"], "relation": supplied, "dst_object_id": beta["id"]},
+        ],
+        origin_ref="FMEA.xlsx",
+    )
+    assert [one["status"] for one in got["rows"]] == ["created", "connected"], got
+    proposal = got["rows"][0]["proposal"]
+    assert proposal["origin"] == "mcp" and proposal["origin_ref"] == "FMEA.xlsx"
+    assert proposal["can_decide"] is False
+
+    # 열린 제안은 아직 관계가 아니다 — 관련 객체에 없고, 제안 목록에 있다.
+    related = bot.call(server.object_get, part, bolt["id"])["related"]
+    assert {one["object_id"] for one in related} == {beta["id"]}
+    seen = ai.call(server.relation_proposals, type_slug=part, object_id=bolt["id"])
+    assert [one["id"] for one in seen] == [proposal["id"]]
+    mine = ai.call(server.relation_proposals, mine=True, relation=supplied)
+    assert mine["total"] == 1
+
+    with pytest.raises(ToolError, match="관리자"):
+        ai.call(server.relation_proposal_decide, proposal["id"], "accept")
+    accepted = bot.call(
+        server.relation_proposal_decide, proposal["id"], "accept", note="사람이 확인"
+    )
+    assert accepted["status"] == "accepted" and accepted["relation_id"]
+    related = bot.call(server.object_get, part, bolt["id"])["related"]
+    assert {one["object_id"] for one in related} == {acme["id"], beta["id"]}

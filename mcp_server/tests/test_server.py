@@ -58,6 +58,9 @@ TOOLS = {
     "attachment_upload_prepare",
     "attachment_remove",
     "relation_add",
+    "relation_propose",
+    "relation_proposals",
+    "relation_proposal_decide",
     "objects_import",
     "bundle_import",
     "bundle_runs",
@@ -66,6 +69,9 @@ TOOLS = {
     "object_history",
     "object_references",
     "object_rollup",
+    "object_explode",
+    "object_lineage",
+    "lineage_repin",
     "object_tree",
     "graph_neighbors",
     "graph_path",
@@ -320,6 +326,43 @@ def test_조건은_화면과_같은_모양으로_건너간다() -> None:
     assert params["f.license.in"] == "A|B" and params["status"] == "active"
 
 
+def test_같은_관계_묶음과_이어진_칸이_그대로_건너간다() -> None:
+    """ADR 0043 — 조건의 `edge` 는 `fe<번호>.`(제외 묶음 안이면 `nf<n>.fe<m>.`), 이어진 칸은
+    `columns` 여럿으로. 선의 칸 주소(`~`)는 손대지 않고 건넨다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 1}))
+    ctx = _ctx("Bearer t")
+    asyncio.run(
+        server.objects_list(
+            ctx,
+            "product",
+            conditions=[
+                {"field": "out.bom", "op": "eq", "value": "X", "edge": 1},
+                {"field": "out.bom~qty", "op": "gte", "value": "4", "edge": "1"},
+                {"field": "out.bom~opts", "op": "eq", "value": "B", "exclude": 2, "edge": 3},
+                {"field": "out.bom~memo", "op": "notempty", "value": "", "edge": 0},
+            ],
+            columns=["out.sku_base.label", "out.bom~qty"],
+        )
+    )
+    params = seen[0].url.params
+    assert params["fe1.out.bom.eq"] == "X" and params["fe1.out.bom~qty.gte"] == "4"
+    assert params["nf2.fe3.out.bom~opts.eq"] == "B" and params["f.out.bom~memo.notempty"] == ""
+    assert params.get_list("columns") == ["out.sku_base.label", "out.bom~qty"]
+
+    seen = _serve(lambda _r: httpx.Response(202, json={"id": "j1", "status": "done"}))
+    asyncio.run(
+        server.export_start(
+            ctx,
+            "product",
+            conditions=[{"field": "out.bom~qty", "op": "gte", "value": "4", "edge": 1}],
+            columns=["out.bom.label"],
+        )
+    )
+    params = seen[0].url.params
+    assert params["fe1.out.bom~qty.gte"] == "4"
+    assert params.get_list("columns") == ["out.bom.label"]
+
+
 def test_통계는_목록과_같은_거르기로_건너간다() -> None:
     """목록과 통계가 거르기를 따로 만들면 「목록은 12건인데 통계는 15건」 이 된다."""
     seen = _serve(lambda _r: httpx.Response(200, json={"buckets": [], "total": 0}))
@@ -474,6 +517,27 @@ def test_가이드는_서버가_쥔다() -> None:
     assert "error" in missing and "bulk" in missing["topics"]
 
 
+def test_자주검증_가이드가_읽고_나서_쓰는_길을_말한다() -> None:
+    """AI 가 표를 고치는 길 전부 — 읽기 → `expected` → 409 면 사람에게 → 사진 표시 줄 → 일정 →
+    옮기기 → 확정은 묻고. 가이드에 없으면 AI 는 짐작해서 덮어쓴다."""
+    overview = asyncio.run(server.get_guide(_ctx(None)))
+    assert "jajuverify" in overview["more_topics"]
+    assert 'topic="jajuverify"' in overview["content"]
+    got = asyncio.run(server.get_guide(_ctx(None), topic="jajuverify"))["content"]
+    for must in (
+        "expected",
+        "422",
+        "JAJUVERIFY-0010",
+        "photo:<첨부 id>?w=50",
+        'owner_table="jv_rows"',
+        '"schedule"',
+        "meetings/{id}/move",
+        "skipped",
+        "confirm",
+    ):
+        assert must in got, must
+
+
 def test_질의는_그대로_넘기고_본문을_돌려준다() -> None:
     """SPARQL 은 서버가 검사한다 — MCP 는 고쳐 쓰지 않고 그대로 넘긴다."""
     seen = _serve(lambda _r: httpx.Response(200, json={"columns": ["x"], "rows": []}))
@@ -584,6 +648,37 @@ def test_본문은_본문_있는_메서드에만_실린다() -> None:
         server.extension_call(_ctx("Bearer t"), "caegroup", "dt/defs", body={"버릴": "것"})
     )
     assert not seen[1].content
+
+
+def test_업로드_표는_자주검증_칸에도_그_자리로_묻는다() -> None:
+    """기본은 객체(`objects`)다 — 자주검증 칸은 `owner_table="jv_rows"` 로 그 줄 · 칸을 묻고,
+    다음 할 일이 표시 줄(`![](photo:<id>?w=50)`)을 넣으라고 말한다."""
+    ticket = {
+        "ticket": "t1",
+        "upload_path": "/api/attachments/upload",
+        "upload_url": "https://sp.example.com/api/attachments/upload",
+        "accept": "image",
+        "max_bytes": 1,
+        "expires_in_seconds": 300,
+    }
+    seen = _serve(lambda _r: httpx.Response(201, json=ticket))
+    got = asyncio.run(
+        server.attachment_upload_prepare(
+            _ctx("Bearer t"), "", "r1", "/tmp/a.png", field="problem", owner_table="jv_rows"
+        )
+    )
+    assert json.loads(seen[0].content) == {
+        "owner_table": "jv_rows",
+        "owner_id": "r1",
+        "owner_field": "problem",
+        "filename": "a.png",
+    }
+    assert got["owner_table"] == "jv_rows" and "photo:" in got["next"]
+    plain = asyncio.run(
+        server.attachment_upload_prepare(_ctx("Bearer t"), "part", "o1", "/tmp/a.png")
+    )
+    assert json.loads(seen[1].content)["owner_table"] == "objects"
+    assert "photo:" not in plain["next"]
 
 
 def test_파일을_주는_자리는_바이트를_안_흘린다() -> None:
@@ -1684,3 +1779,206 @@ def test_눈여겨볼_것은_거르기를_그대로_넘긴다() -> None:
         "days": "30",
         "include_past": "true",
     }
+
+
+def test_관계의_유효_기간과_기준일이_그대로_건너간다() -> None:
+    """유효 기간(ADR 0039) — 맺기 · 고치기가 기간을 싣고(안 준 것은 안 보내고, 빈 글자는
+    비움), 읽는 도구가 기준일을 쿼리에 싣는다. 안 실으면 서버는 오늘로 보고, 「3월 기준」 을
+    물은 사람은 오늘의 구성을 3월의 것으로 받는다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 1}))
+    ctx = _ctx("Bearer t")
+    asyncio.run(
+        server.relation_add(
+            ctx, "part", "p1", "bom_of", "p2", valid_from="2026-03-01", valid_to="2026-09-01"
+        )
+    )
+    asyncio.run(server.relation_add(ctx, "part", "p1", "uses", "p3"))
+    first, plain = json.loads(seen[0].content), json.loads(seen[1].content)
+    assert first["valid_from"] == "2026-03-01" and first["valid_to"] == "2026-09-01"
+    assert "valid_from" not in plain and "valid_to" not in plain
+
+    asyncio.run(
+        server.relation_update(ctx, "part", "p1", "r1", valid_from="", valid_to="2026-06-01")
+    )
+    patched = json.loads(seen[2].content)
+    assert seen[2].method == "PATCH"
+    assert patched == {"valid_from": None, "valid_to": "2026-06-01"}
+    asyncio.run(server.relation_update(ctx, "part", "p1", "r1", evidence_note="도면"))
+    assert json.loads(seen[3].content) == {"evidence_note": "도면"}
+
+    asyncio.run(server.object_tree(ctx, "part", parent="p1", as_of="2026-03-31"))
+    asyncio.run(server.graph_path(ctx, "a", "b", as_of="2026-03-31"))
+    asyncio.run(server.graph_neighbors(ctx, "a", as_of="2026-03-31"))
+    asyncio.run(server.object_rollup(ctx, "part", "p1", as_of="2026-03-31"))
+    asyncio.run(server.objects_summary(ctx, "part", as_of="2026-03-31"))
+    asyncio.run(
+        server.objects_list(
+            ctx,
+            "part",
+            conditions=[{"field": "id", "op": "under", "value": "p1"}],
+            as_of="2026-03-31",
+        )
+    )
+    for request in seen[4:]:
+        assert request.url.params["as_of"] == "2026-03-31", request.url
+
+    asyncio.run(server.object_get(ctx, "part", "p1", all_periods=True))
+    asyncio.run(server.object_get(ctx, "part", "p1"))
+    assert seen[-2].url.params["all_periods"] == "true"
+    # 안 주면 안 보낸다 — 서버의 기본(오늘)이 정한다.
+    assert "all_periods" not in seen[-1].url.params and "as_of" not in seen[-1].url.params
+
+    relations = asyncio.run(server.get_guide(_ctx(None), topic="relations"))
+    assert "valid_from" in relations["content"] and "as_of" in relations["content"]
+
+
+def test_전개는_보기_기준일_상한을_쿼리로_싣는다() -> None:
+    """BOM 전개(ADR 0040) — 보기 · 기준일 · 줄 상한을 그대로 넘긴다. 안 준 것은 안
+    보낸다(서버의 기본 — 정리 · 오늘 · 5,000줄)."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"lines": []}))
+    ctx = _ctx("Bearer t")
+    asyncio.run(
+        server.object_explode(
+            ctx, "part", "p1", mode="where_used", as_of="2026-03-31", limit=100
+        )
+    )
+    asyncio.run(server.object_explode(ctx, "part", "p1"))
+    asyncio.run(server.relation_add(ctx, "part", "p1", "bom_of", "p2", properties={"qty": 4}))
+    first, plain = seen[0].url, seen[1].url
+    assert json.loads(seen[2].content)["properties"] == {"qty": 4}
+    assert first.path == "/api/objects/part/p1/explode"
+    assert dict(first.params) == {"mode": "where_used", "as_of": "2026-03-31", "limit": "100"}
+    assert dict(plain.params) == {"mode": "summary"}
+
+    schema = asyncio.run(server.get_guide(_ctx(None), topic="schema"))
+    assert "quantity_key" in schema["content"] and "object_explode" in schema["content"]
+
+
+def test_계보는_줄을_잘라_주고_다시_고정은_고른_선만_싣는다() -> None:
+    """계보(ADR 0041) — 읽기는 그 경로로, 줄이 많으면 앞(얕은 것부터)만 주고 **잘랐다고**
+    적는다(전체 수는 서버의 것 그대로). 다시 고정은 근거 · 메모를 싣고, 선을 안 고르면
+    `relation_ids` 를 안 보낸다(서버가 전부로 본다) — 빈 목록은 그대로 싣는다(「아무것도」 가
+    「전부」 가 되지 않게)."""
+    line = {"relation_id": "r", "depth": 1, "stale": False}
+    view = {
+        "state": "upstream",
+        "up": [line] * 3,
+        "up_total": 3,
+        "down": [line] * 250,
+        "down_total": 600,
+        "truncated": True,
+    }
+
+    def backend(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/repin"):
+            return httpx.Response(200, json={"changed": [], "unchanged": 1, "lineage": view})
+        return httpx.Response(200, json=view)
+
+    seen = _serve(backend)
+    ctx = _ctx("Bearer t")
+    got = asyncio.run(server.object_lineage(ctx, "mesh", "m1"))
+    assert seen[-1].method == "GET" and seen[-1].url.path == "/api/objects/mesh/m1/lineage"
+    assert len(got["up"]) == 3 and len(got["down"]) == server.LINEAGE_LINES
+    assert got["truncated"] is True and got["down_total"] == 600
+    assert got["lines_shown"] == {"up": 3, "down": server.LINEAGE_LINES}
+    small = {"state": "fresh", "up": [line], "down": [], "truncated": False}
+    seen = _serve(lambda _r: httpx.Response(200, json=small))
+    assert asyncio.run(server.object_lineage(ctx, "mesh", "m1", limit=5)) == small
+
+    seen = _serve(backend)
+    done = asyncio.run(server.lineage_repin(ctx, "mesh", "m1"))
+    assert seen[-1].method == "POST"
+    assert seen[-1].url.path == "/api/objects/mesh/m1/lineage/repin"
+    assert json.loads(seen[-1].content) == {"basis": "checked", "note": ""}
+    assert len(done["lineage"]["down"]) == server.LINEAGE_LINES
+    asyncio.run(
+        server.lineage_repin(
+            ctx, "mesh", "m1", relation_ids=["r1"], basis="rebuilt", note="메시 다시 생성"
+        )
+    )
+    assert json.loads(seen[-1].content) == {
+        "basis": "rebuilt",
+        "note": "메시 다시 생성",
+        "relation_ids": ["r1"],
+    }
+    asyncio.run(server.lineage_repin(ctx, "mesh", "m1", relation_ids=[]))
+    assert json.loads(seen[-1].content)["relation_ids"] == []
+
+    # 「낡은 것만」 은 목록의 조건 하나다 — 화면과 같은 주소로.
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 1}))
+    asyncio.run(
+        server.objects_list(
+            ctx, "result", conditions=[{"field": "lineage", "op": "eq", "value": "stale"}]
+        )
+    )
+    assert seen[-1].url.params["f.lineage.eq"] == "stale"
+
+    # 정의 · 읽기 · 풀기가 가이드에 있어야 AI 가 부르기 전에 안다.
+    schema = asyncio.run(server.get_guide(_ctx(None), topic="schema"))
+    assert "lineage_source" in schema["content"] and "revision_key" in schema["content"]
+    relations = asyncio.run(server.get_guide(_ctx(None), topic="relations"))
+    assert "object_lineage" in relations["content"]
+    assert "lineage_repin" in relations["content"] and "위에서 낡음" in relations["content"]
+    find = asyncio.run(server.get_guide(_ctx(None), topic="find"))
+    assert "stale_lineage" in find["content"] and '"lineage"' in find["content"]
+
+
+def test_제안은_줄마다_출처를_싣고_보기는_객체와_전체로_결정은_세_갈래() -> None:
+    """제안된 관계(ADR 0042) — 이 도구로 오는 제안은 출처가 AI(`mcp`)이고, 도구의 `origin_ref`
+    가 줄마다 실린다(줄에 따로 적은 출처 · 출처 글은 그대로). 보기는 객체 하나 · 전체 목록 두
+    길, 결정은 확정 · 거절(본문에 까닭) · 철회(DELETE)."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"rows": [], "counts": {}}))
+    ctx = _ctx("Bearer t")
+    asyncio.run(
+        server.relation_propose(
+            ctx,
+            [
+                {
+                    "src_object_id": "a",
+                    "relation": "r",
+                    "dst_object_id": "b",
+                    "confidence": 0.7,
+                },
+                {
+                    "src_object_id": "a",
+                    "relation": "r",
+                    "dst_object_id": "c",
+                    "origin": "rule",
+                    "origin_ref": "규칙 7",
+                },
+            ],
+            origin_ref="FMEA.xlsx",
+        )
+    )
+    assert seen[-1].method == "POST" and seen[-1].url.path == "/api/objects/relation-proposals"
+    sent = json.loads(seen[-1].content)
+    assert sent["again"] is False
+    assert [(one["origin"], one["origin_ref"]) for one in sent["rows"]] == [
+        ("mcp", "FMEA.xlsx"),
+        ("rule", "규칙 7"),
+    ]
+
+    seen = _serve(lambda _r: httpx.Response(200, json=[]))
+    asyncio.run(server.relation_proposals(ctx, type_slug="part", object_id="p1"))
+    assert seen[-1].url.path == "/api/objects/part/p1/relation-proposals"
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 0}))
+    asyncio.run(server.relation_proposals(ctx, relation="r", mine=True))
+    assert seen[-1].url.path == "/api/objects/relation-proposals"
+    assert seen[-1].url.params["relation"] == "r" and seen[-1].url.params["mine"] == "true"
+    assert "error" in asyncio.run(server.relation_proposals(ctx, object_id="p1"))
+
+    seen = _serve(lambda _r: httpx.Response(200, json={"status": "accepted"}))
+    asyncio.run(server.relation_proposal_decide(ctx, "x1", "accept", note="사람이 확인"))
+    assert seen[-1].url.path == "/api/objects/relation-proposals/x1/accept"
+    assert json.loads(seen[-1].content) == {"note": "사람이 확인"}
+    seen = _serve(lambda _r: httpx.Response(204))
+    done = asyncio.run(server.relation_proposal_decide(ctx, "x1", "withdraw"))
+    assert seen[-1].method == "DELETE" and done == {"ok": True, "message": "완료"}
+    assert "error" in asyncio.run(server.relation_proposal_decide(ctx, "x1", "maybe"))
+
+    # 언제 relation_add 이고 언제 relation_propose 인가 — 가이드가 말해야 AI 가 고른다.
+    relations = asyncio.run(server.get_guide(_ctx(None), topic="relations"))
+    assert "relation_propose" in relations["content"]
+    assert "사실로 말한" in relations["content"]
+    find = asyncio.run(server.get_guide(_ctx(None), topic="find"))
+    assert "proposed_relation" in find["content"]

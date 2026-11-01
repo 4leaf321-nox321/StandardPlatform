@@ -14,7 +14,7 @@ import { Plus, Trash2 } from 'lucide-react'
 
 import { jobsApi } from '@/modules/jobs/api'
 import { metricsApi } from '@/modules/metrics/api'
-import type { Grain, Metric, MetricPlan, MetricSpec } from '@/modules/metrics/api'
+import type { Grain, Metric, MetricFilter, MetricPlan, MetricSpec } from '@/modules/metrics/api'
 import {
   MAX_HOURS,
   MAX_NIGHTS,
@@ -90,6 +90,19 @@ interface Props {
   onSaved: (metric: Metric) => void
 }
 
+/**
+ * 조건 줄의 조건 → 정의의 조건. 같은 관계 묶음(`edge`, ADR 0043)은 있을 때만 싣는다 — 묶지 않은
+ * 조건에 `edge: 0` 을 붙이면 고치지 않은 지표도 정의 지문이 바뀌어 전량으로 센다.
+ */
+function toFilter(one: Condition): MetricFilter {
+  return {
+    field: one.field,
+    op: one.op,
+    value: one.value,
+    ...(one.edge ? { edge: one.edge } : {}),
+  }
+}
+
 function slugOf(label: string): string {
   return label
     .toLowerCase()
@@ -145,6 +158,7 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
                 field: cond.field,
                 op: cond.op as ConditionOp,
                 value: cond.value,
+                ...(cond.edge ? { edge: cond.edge } : {}),
               })),
             })),
             other: one.else ?? '기타',
@@ -157,6 +171,7 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
       field: one.field,
       op: one.op as ConditionOp,
       value: one.value,
+      ...(one.edge ? { edge: one.edge } : {}),
     })),
   )
   // 조건 비율의 조건 — 거르기를 통과한 기록 중 이 조건에 맞는 몫.
@@ -165,6 +180,7 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
       field: one.field,
       op: one.op as ConditionOp,
       value: one.value,
+      ...(one.edge ? { edge: one.edge } : {}),
     })),
   )
   const [denMetric, setDenMetric] = useState(spec0?.denominator?.metric ?? '')
@@ -277,9 +293,7 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
     return {
       measure: measure as MetricSpec['measure'],
       measure_field: measure === 'count' || share ? null : measureField || null,
-      share_when: share
-        ? shareWhen.map((one) => ({ field: one.field, op: one.op, value: one.value }))
-        : [],
+      share_when: share ? shareWhen.map(toFilter) : [],
       time: timeAddress ? { address: timeAddress, grain: grain as Grain } : null,
       cohort:
         cohortAddress && timeAddress ? { address: cohortAddress, grain: grain as Grain } : null,
@@ -292,11 +306,7 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
                 label: one.label.trim() || null,
                 rules: one.rules.map((rule) => ({
                   label: rule.label.trim(),
-                  when: rule.when.map((cond) => ({
-                    field: cond.field,
-                    op: cond.op,
-                    value: cond.value,
-                  })),
+                  when: rule.when.map(toFilter),
                 })),
                 else: one.other,
               }
@@ -306,7 +316,7 @@ export function MetricDefinitionDialog({ existing, draft = null, onClose, onSave
                 grain: one.grain ? (one.grain as Grain) : null,
               },
         ),
-      filters: filters.map((one) => ({ field: one.field, op: one.op, value: one.value })),
+      filters: filters.map(toFilter),
       denominator:
         denMetric && !share
           ? {

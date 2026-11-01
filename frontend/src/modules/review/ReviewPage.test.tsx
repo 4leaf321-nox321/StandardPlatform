@@ -253,7 +253,7 @@ describe('검토함', () => {
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('적용 2건')).toBeInTheDocument()
     expect(within(dialog).getByText('막힘 1건')).toBeInTheDocument()
-    expect(within(dialog).getByText('문턱 아래 · 추천 없음 3건')).toBeInTheDocument()
+    expect(within(dialog).getByText('문턱 아래 · 확신도 없음 3건')).toBeInTheDocument()
     expect(within(dialog).getByText(/병합 후보은\(는\) 적용하면 복원할 수/)).toBeInTheDocument()
 
     await userEvent.click(within(dialog).getByRole('button', { name: '2건 적용' }))
@@ -338,5 +338,86 @@ describe('검토함', () => {
     await waitFor(() => expect(jobsApi.waitFor).toHaveBeenCalledWith('job1', expect.any(Function)))
     expect(await screen.findByText('300건을 처리했습니다.')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '복원' })).toBeInTheDocument()
+  })
+})
+
+describe('확신도가 없는 추천(낡은 파생물, ADR 0041)', () => {
+  it('추천은 있는데 확신도가 없으면 「추천 없음」 이 아니라 「확신도 없음」 으로 적는다', async () => {
+    reviewApi.items.mockResolvedValue(
+      page([
+        item('r1'),
+        item('r2', {
+          kind: 'stale_lineage',
+          kind_label: '낡은 파생물',
+          choices: [
+            { value: 'checked', label: '영향 없음 확인', detail: '', score: null },
+            { value: 'rebuilt', label: '다시 만들었음', detail: '', score: null },
+          ],
+          recommended: 'checked',
+          recommended_label: '영향 없음 확인',
+          confidence: null,
+          reason: '메시 M-12 의 개정 B → C',
+          ignorable: false,
+        }),
+      ]),
+    )
+    await open()
+    const row = rowOf('r2')
+    const badge = within(row).getByText('확신도 없음')
+    expect(badge).toHaveAttribute(
+      'title',
+      expect.stringContaining('「추천대로 모두」 에 들지 않습니다'),
+    )
+    expect(within(row).queryByText('추천 없음')).toBeNull()
+    // 추천 단추는 그대로 강조되고, 점수 없는 후보에는 수가 안 붙는다.
+    expect(within(row).getByRole('button', { name: /영향 없음 확인/ })).toHaveTextContent(
+      /^1영향 없음 확인$/,
+    )
+  })
+})
+
+describe('제안된 관계(ADR 0042)', () => {
+  it('확신도가 높으면 「확정」 을 추천하고, 없으면 추천 없음 — 근거 · 출처가 보인다', async () => {
+    const proposal = (id: string, dst: string, extra: Record<string, unknown>) =>
+      item(id, {
+        kind: 'proposed_relation',
+        kind_label: '제안된 관계',
+        question: `「볼트」 —공급받음→ 「${dst}」 을(를) 이을까요?`,
+        evidence: ['부품 → 공급사', `근거: ${dst} 공급 계약서`, 'AI(MCP) 「대화 #12」 · member'],
+        choices: [
+          { value: 'accept', label: '확정', detail: '「관계 추가」 와 같은 검사', score: null },
+          { value: 'reject', label: '거절', detail: '같은 제안을 다시 만들지 않음', score: null },
+        ],
+        group: '',
+        group_label: '',
+        link: '/o/part/bolt',
+        ...extra,
+      })
+    reviewApi.items.mockResolvedValue(
+      page([
+        item('r1'),
+        proposal('p1', 'ACME', {
+          recommended: 'accept',
+          recommended_label: '확정',
+          confidence: 0.95,
+          reason: '제안한 쪽의 확신도 0.95 — 「확정」 을 앞에 둡니다.',
+        }),
+        proposal('p2', 'BETA', {
+          recommended: null,
+          recommended_label: null,
+          confidence: null,
+          reason: '확신도가 없는 제안이라 추천하지 않습니다 — 근거를 보고 고르세요.',
+        }),
+      ]),
+    )
+    await open()
+    const high = screen.getByText('「볼트」 —공급받음→ 「ACME」 을(를) 이을까요?').closest('li')!
+    expect(within(high).getByText('확신도 0.95')).toBeInTheDocument()
+    expect(within(high).getByText(/근거: ACME 공급 계약서/)).toBeInTheDocument()
+    expect(within(high).getByText(/AI\(MCP\) 「대화 #12」/)).toBeInTheDocument()
+    expect(within(high).getByRole('button', { name: /확정/ })).toBeInTheDocument()
+    expect(within(high).getByRole('button', { name: /거절/ })).toBeInTheDocument()
+    const low = screen.getByText('「볼트」 —공급받음→ 「BETA」 을(를) 이을까요?').closest('li')!
+    expect(within(low).getByText('추천 없음')).toBeInTheDocument()
   })
 })

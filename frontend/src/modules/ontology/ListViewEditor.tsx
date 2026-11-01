@@ -362,7 +362,12 @@ export function ListViewEditor({
         />
       )}
       {owner === 'type' && value.tree?.relation && (
-        <RollupSection defs={defs} value={value} onChange={onChange} />
+        <RollupSection
+          defs={defs}
+          value={value}
+          onChange={onChange}
+          treeKind={relationTypes.find((one) => one.slug === value.tree?.relation) ?? null}
+        />
       )}
 
       {/* --- 검색·필터 ------------------------------------------------ */}
@@ -527,20 +532,29 @@ function TreeSection({
 /**
  * 롤업 — 「아래 전부」 의 숫자를 모아 상세에 띄운다. 트리가 있을 때만 뜻이 있고,
  * 숫자 속성만 고를 수 있다. 저장하지 않고 볼 때마다 세므로 여기서 정의만 한다.
+ *
+ * 「수량 반영」 · 「말단만」(ADR 0040)은 줄마다 켠다 — 같은 무게라도 총 무게(수량 반영 · 말단만)와
+ * 「종류마다 하나씩」 의 합은 다른 물음이다. 끈 것은 키를 싣지 않는다(정의 파일이 짧게 남는다).
  */
 function RollupSection({
   defs,
   value,
   onChange,
+  treeKind,
 }: {
   defs: PropertyDef[]
   value: ListView
   onChange: (next: ListView) => void
+  /** 트리 관계 종류 — 수량 칸이 없으면 「수량 반영」 이 경로 수만큼 센다고 말한다. */
+  treeKind: RelationType | null
 }) {
   const numeric = defs.filter((def) => def.data_type === 'number')
   const rows = value.rollups ?? []
   const set = (next: RollupSpec[]) =>
     onChange({ ...value, rollups: next.length > 0 ? next : undefined })
+  const flag = (index: number, name: 'weighted' | 'leaves_only', on: boolean) =>
+    set(rows.map((one, i) => (i === index ? { ...one, [name]: on || undefined } : one)))
+  const unweighted = treeKind !== null && !treeKind.quantity_key
 
   return (
     <div className="space-y-2">
@@ -559,7 +573,7 @@ function RollupSection({
                   set(rows.map((one, i) => (i === index ? { ...one, property: next } : one)))
                 }
               >
-                <SelectTrigger className="w-40">
+                <SelectTrigger className="w-40" aria-label="모을 속성">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -576,7 +590,7 @@ function RollupSection({
                   set(rows.map((one, i) => (i === index ? { ...one, fn: next as RollupFn } : one)))
                 }
               >
-                <SelectTrigger className="w-28">
+                <SelectTrigger className="w-28" aria-label="모으는 법">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -599,6 +613,24 @@ function RollupSection({
                   )
                 }
               />
+              <label className="flex items-center gap-1.5 text-sm whitespace-nowrap">
+                <input
+                  type="checkbox"
+                  className="size-4"
+                  checked={Boolean(row.weighted)}
+                  onChange={(event) => flag(index, 'weighted', event.target.checked)}
+                />
+                수량 반영
+              </label>
+              <label className="flex items-center gap-1.5 text-sm whitespace-nowrap">
+                <input
+                  type="checkbox"
+                  className="size-4"
+                  checked={Boolean(row.leaves_only)}
+                  onChange={(event) => flag(index, 'leaves_only', event.target.checked)}
+                />
+                말단만
+              </label>
               <Button
                 type="button"
                 size="icon"
@@ -623,6 +655,14 @@ function RollupSection({
             상세 화면에 「아래 전부」 의 값이 표시됩니다 — 어셈블리의 총 무게, 과제의 예산 합계처럼.
             저장하지 않고 볼 때마다 세므로 부품을 수정하면 바로 바뀝니다. 값이 빈 것은 몇 개인지
             함께 보입니다.
+          </p>
+          <p className="text-muted-foreground text-xs">
+            <b>수량 반영</b>은 아래 객체의 값을 총수량만큼 셉니다 — 합계는 값 곱하기 총수량, 개수는
+            총개수, 평균은 총수량으로 가중, 곱은 총수량만큼 거듭제곱(직렬 신뢰도)입니다.{' '}
+            <b>중간 조립품에도 값이 있으면 두 번 셉니다 — 그래서 「말단만」 이 있습니다</b>(그
+            기준일의 트리에서 아래가 없는 객체만 모읍니다).
+            {unweighted &&
+              ` 트리 관계 「${treeKind.label}」 에 수량 칸이 없어 수량 반영은 모든 관계를 1개로 셉니다(경로 수만큼).`}
           </p>
         </>
       )}

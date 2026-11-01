@@ -25,7 +25,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
-from app.modules.objects import access, conditions, paths, relations, system
+from app.modules.objects import access, conditions, edges, paths, relations, system
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.objects.scope import as_scope
 from app.modules.ontology import managed
@@ -402,6 +402,8 @@ def _link_of(
                     ObjectRelation.relation == relation.slug,
                     mine.in_([one.id for one in rows]),
                     theirs.in_(source_ids),
+                    # 오늘 유효한 선만(ADR 0039) — 장표는 지금의 모습이다.
+                    edges.alive(ObjectRelation, edges.today()),
                 )
             ):
                 ties.setdefault(record_id, []).append(
@@ -611,10 +613,7 @@ def _statement(
 ) -> Any:
     """조건 영역의 문장 · 선택 영역의 후보 — 목록과 같은 조건(`conditions.apply`)에 「주제와
     이어지는 칸」 하나를 더한다."""
-    asked = [
-        conditions.Condition(field=one.field, op=one.op, value=one.value, exclude=one.exclude)
-        for one in area.conditions
-    ]
+    asked = [conditions.of(one) for one in area.conditions]
     asked.extend(extra or [])
     if area.subject_field and subject_id is not None:
         asked.append(
@@ -716,10 +715,7 @@ def _pick_scope(db: Session, user: User, area: AreaIn, subject: ObjectInstance |
 def _list_params(area: AreaIn, subject: ObjectInstance | None) -> dict[str, str]:
     """「목록에서 보기」 의 주소 — 같은 조건. 같은 칸 · 연산이 둘이면 마지막 것만 실린다(목록
     주소의 한계 — 장표의 조건은 영역마다 짧다)."""
-    params = {
-        (f"nf{one.exclude}" if one.exclude else "f") + f".{one.field}.{one.op}": one.value
-        for one in area.conditions
-    }
+    params = {conditions.key_of(conditions.of(one)): one.value for one in area.conditions}
     if area.subject_field and subject is not None:
         params[f"f.{area.subject_field}.{area.subject_op}"] = str(subject.id)
     return params

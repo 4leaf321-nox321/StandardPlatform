@@ -106,7 +106,11 @@ export default function OntologyImportPage() {
           properties: propertiesOf(rest.properties),
         }),
       ),
-      relation_types: schema.relation_types.map(({ id: _id, managed_by: _m, ...rest }) => rest),
+      // 관계 종류도 관계 속성(수량 칸이 가리키는 것 · 근거 건수 …)을 싣는다 — 타입과 같이 뗀다.
+      relation_types: schema.relation_types.map(({ id: _id, managed_by: _m, ...rest }) => ({
+        ...rest,
+        properties: propertiesOf(rest.properties ?? []),
+      })),
     }
     setText(JSON.stringify(body, null, 2))
   }

@@ -13,6 +13,7 @@ import { ChevronDown, ChevronRight, History, Layers, Loader2, RotateCcw } from '
 import { objectApi } from '@/modules/objects/api'
 import { BulkUndoDialog } from '@/modules/objects/BulkUndoDialog'
 import type { HistoryEntry, Snapshot } from '@/modules/objects/api'
+import { hasPeriod, periodText } from '@/modules/objects/periods'
 import { propertyText } from '@/modules/objects/PropertyFields'
 import type { PropertyDef } from '@/modules/ontology/api'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -53,6 +54,16 @@ const ACTION_LABEL: Record<string, string> = {
   'object.relation.remove': '관계 끊음',
   'object.attachment.add': '첨부 추가',
   'object.attachment.remove': '첨부 삭제',
+  // 계보(ADR 0041) — 원천 관계의 고정을 원천의 지금 값으로 바꾼 기록. 양 끝의 이력에 선다.
+  'lineage.repin': '다시 고정',
+  // 제안된 관계(ADR 0042) — 관계 기록과 같은 모양(양 끝)으로 양 끝의 이력에 선다. 확정으로 생긴
+  // 관계는 「관계 맺음」 이 따로 선다.
+  'relation.propose': '관계 제안',
+  'relation.proposal.update': '제안 수정',
+  'relation.proposal.accept': '제안 확정',
+  'relation.proposal.reject': '제안 거절',
+  'relation.proposal.reopen': '제안 다시 열기',
+  'relation.proposal.withdraw': '제안 철회',
 }
 
 const FIXED_LABEL: Record<string, string> = {
@@ -64,6 +75,36 @@ const FIXED_LABEL: Record<string, string> = {
   valid_to_year: '끝 연도',
   // 서버가 id 를 이름으로 바꿔 보낸다 — 부서 이름은 바뀌므로 기록은 id 로 남는다.
   owner_workspace_id: '소유 부서',
+}
+
+/**
+ * 관계 수정 기록에서 보이는 칸 — 유효 기간(ADR 0039)과 근거, 다시 고정(ADR 0041)의 고정 개정 ·
+ * 고정 시각, 제안 수정(ADR 0042)의 확신도.
+ */
+const RELATION_FIELDS = [
+  'valid_from',
+  'valid_to',
+  'evidence_note',
+  'pinned_revision',
+  'pinned_at',
+  'confidence',
+] as const
+type RelationField = (typeof RELATION_FIELDS)[number]
+const RELATION_FIELD_LABEL: Record<RelationField, string> = {
+  valid_from: '시작일',
+  valid_to: '끝날',
+  evidence_note: '근거',
+  pinned_revision: '고정 개정',
+  pinned_at: '고정 시각',
+  // 제안의 수정(ADR 0042) — 더 높은 확신도로 같은 제안이 다시 오면 근거 · 확신도가 바뀐다.
+  confidence: '확신도',
+}
+
+/** 관계 칸의 값 — 고정 시각은 시각으로 읽히게(저장은 ISO 글자). 빈 값은 「비어 있음」. */
+function relationValueText(field: RelationField, value: unknown): string {
+  if (value === null || value === undefined || value === '') return '비어 있음'
+  if (field === 'pinned_at' && typeof value === 'string') return shownDateTime(value)
+  return String(value)
 }
 
 /** 처음에 보여 줄 줄 수. 그 위는 「더 보기」. */
@@ -158,8 +199,26 @@ export function ObjectHistory({
                         {one.relation.outgoing ? '→' : '←'}{' '}
                         {one.relation.other_label || '(이름 없음)'}{' '}
                         <span className="text-muted-foreground">({one.relation.relation})</span>
+                        {/* 유효 기간(ADR 0039) — 기간을 달리한 같은 관계가 여럿일 때 어느 것인지. */}
+                        {hasPeriod(one.relation.valid_from, one.relation.valid_to) && (
+                          <span className="text-muted-foreground">
+                            {' '}
+                            · {periodText(one.relation.valid_from, one.relation.valid_to)}
+                          </span>
+                        )}
                       </span>
                     )}
+                    {/* 관계를 수정한 기록 — 기간 · 근거의 앞뒤(속성은 관련 객체에서 본다). */}
+                    {one.relation &&
+                      RELATION_FIELDS.filter((key) => one.relation?.changed?.[key]).map((key) => (
+                        <span key={key} className="mt-0.5 block truncate text-xs">
+                          <span className="text-muted-foreground">{RELATION_FIELD_LABEL[key]}</span>{' '}
+                          <span className="line-through opacity-60">
+                            {relationValueText(key, one.relation?.changed?.[key]?.before)}
+                          </span>{' '}
+                          → {relationValueText(key, one.relation?.changed?.[key]?.after)}
+                        </span>
+                      ))}
                     {fields.length > 0 && (
                       <span className="mt-0.5 block space-y-0.5 text-xs">
                         {fields.slice(0, 4).map((field) => (

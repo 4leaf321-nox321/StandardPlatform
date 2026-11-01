@@ -142,6 +142,22 @@ class FilterIn(BaseModel):
     field: str = Field(min_length=1, max_length=200)
     op: str = Field(min_length=1, max_length=12)
     value: str = Field(default="", max_length=2000)
+    edge: int = Field(default=0, ge=0, le=conditions.MAX_EDGE)
+    """같은 관계 묶음 번호(ADR 0043) — 같은 번호의 조건은 같은 선 하나에서 함께 맞아야 한다.
+    0 이면 묶지 않음(「그중 하나라도」). 묶음은 거르기 · 조건 비율 · 규칙 하나 안에서만 뜻이
+    있다."""
+
+    @model_serializer(mode="wrap")
+    def _compact(self, handler: SerializerFunctionWrapHandler) -> dict[str, Any]:
+        """묶지 않은 조건은 예전 모양 그대로 — `edge: 0` 을 붙이면 고치지 않은 지표를 다시
+        저장하기만 해도 정의 지문이 바뀌어 전량으로 센다(`incremental.spec_hash`)."""
+        out = dict(handler(self))
+        if not out.get("edge"):
+            out.pop("edge", None)
+        return out
+
+    def condition(self) -> conditions.Condition:
+        return conditions.Condition(self.field, self.op, self.value, edge=self.edge)
 
 
 class RuleIn(BaseModel):
@@ -410,7 +426,7 @@ def _share(scope: Scope, spec: MetricSpec, plan: axes.JoinPlan) -> Any:
         raise _bad("조건 비율은 조건(share_when)이 하나 이상 있어야 합니다 — 무엇의 몫인가.")
     if spec.denominator is not None:
         raise _bad("조건 비율은 같은 기록 전체가 분모입니다 — 분모 지표를 두지 않습니다.")
-    conds = [conditions.Condition(one.field, one.op, one.value) for one in spec.share_when]
+    conds = [one.condition() for one in spec.share_when]
     found = conditions.clauses(scope.defs, conds, plan.resolver)
     return case((and_(*found), 1), else_=0)
 
@@ -564,15 +580,16 @@ def _rule_dimension(plan: axes.JoinPlan, dim_in: DimensionIn) -> Dim:
             )
         if len(rule.when) > MAX_RULE_CONDITIONS:
             raise _bad(f"{where} 의 조건은 {MAX_RULE_CONDITIONS}개까지입니다.")
-        pairs: set[tuple[str, str]] = set()
+        pairs: set[tuple[str, str, int]] = set()
         for one in rule.when:
-            if (one.field, one.op) in pairs:
+            # 같은 관계 묶음이 다르면 다른 선의 조건이다(「X 도 있고 Y 도 있다」, ADR 0043).
+            if (one.field, one.op, one.edge) in pairs:
                 raise _bad(
                     f"{where} 에 같은 칸 · 같은 연산이 두 번 있습니다({one.field} {one.op}) — "
                     "하나로 합칩니다(여러 값은 「그 중 하나(in)」)."
                 )
-            pairs.add((one.field, one.op))
-        conds = [conditions.Condition(one.field, one.op, one.value) for one in rule.when]
+            pairs.add((one.field, one.op, one.edge))
+        conds = [one.condition() for one in rule.when]
         try:
             found = conditions.matches(
                 plan.scope.defs, conds, plan.resolver, offset=number * _RULE_ALIAS_STEP
@@ -594,7 +611,7 @@ def _rule_dimension(plan: axes.JoinPlan, dim_in: DimensionIn) -> Dim:
 def _filters(
     plan: axes.JoinPlan, scope: Scope, spec: MetricSpec
 ) -> list[conditions.Condition]:
-    conds = [conditions.Condition(one.field, one.op, one.value) for one in spec.filters]
+    conds = [one.condition() for one in spec.filters]
     if conds:
         # 실제로 지어 본다 — 없는 칸 · 안 맞는 연산이 여기서 걸린다.
         conditions.apply(select(ObjectInstance.id), scope.defs, conds, plan.resolver)

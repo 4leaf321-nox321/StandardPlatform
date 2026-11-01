@@ -46,7 +46,9 @@ export function AppShell() {
     // **켜진 확장은 서버가 답한다**(ExtensionsProvider) — 사이드바와 확장 경로가 같은 목록을
     // 보므로, 켜고 끈 것이 새로 고침 없이 따라온다.
     <ExtensionsProvider>
-      <div className="flex h-svh overflow-hidden">
+      {/* **인쇄는 본문만, 쪽을 넘겨 끝까지** — 화면의 틀(높이 고정 · 본문만 스크롤)을 그대로 찍으면
+          첫 쪽의 보이는 만큼만 나온다. 메뉴 · 머리는 각자 `print:hidden` 이다. */}
+      <div className="flex h-svh overflow-hidden print:block print:h-auto print:overflow-visible">
       <Sidebar collapsed={collapsed} workspaceSlug={workspaceSlug} />
       <SidebarDrawer open={drawer} onOpenChange={setDrawer} workspaceSlug={workspaceSlug} />
 
@@ -65,7 +67,7 @@ export function AppShell() {
           }}
           workspaceSlug={workspaceSlug}
         />
-        <main className="flex-1 overflow-auto p-6">
+        <main className="flex-1 overflow-auto p-6 print:overflow-visible print:p-0">
           {/* **본문은 폭을 다 쓴다.** 상한을 두면 넓은 표가 접히고, 그때마다
               「이 화면도 예외로」 가 반복돼 목록이 곧 전부가 된다. 좁아야 하는
               화면은 자기 안에서 다시 좁힌다. */}

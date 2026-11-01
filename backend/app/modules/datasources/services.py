@@ -46,6 +46,7 @@ from app.modules.jobs import services as job_services
 from app.modules.jobs.models import Job
 from app.modules.notifications import services as notifications
 from app.modules.objects import aliases, bulk
+from app.modules.objects import edges as edge_rule
 from app.modules.objects.models import ObjectAlias, ObjectInstance, ObjectRelation
 from app.modules.objects.schemas import ImportRowOut
 from app.modules.objects.services import properties_of
@@ -1589,9 +1590,17 @@ def wants_relations(source: DataSource) -> bool:
     return source.kind in RELATION_KINDS and bool((source.options or {}).get("relations"))
 
 
-def _edge_row(raw: dict[str, Any]) -> dict[str, Any]:
-    """코어의 선 한 줄 → 관계 적재의 한 줄. **봉투 이름이 그대로 칸 이름이다.**"""
-    return {key: value for key, value in raw.items() if key not in EDGE_SKIP}
+def _edge_row(raw: dict[str, Any], periodic: set[str]) -> dict[str, Any]:
+    """코어의 선 한 줄 → 관계 적재의 한 줄. **봉투 이름이 그대로 칸 이름이다.**
+
+    유효 기간(ADR 0039)은 이쪽 관계 종류가 받을 때만 싣는다(`periodic`) — 안 받는 종류에
+    실으면 그 줄이 거절되어 동기화가 막힌다. 버려도 뜻은 지켜진다: 상대 창구는 **오늘 유효한
+    선만** 보내고, 기간이 끝나는 날 그 선을 끊긴 선으로 알린다."""
+    out = {key: value for key, value in raw.items() if key not in EDGE_SKIP}
+    if str(out.get("relation") or "").strip() not in periodic:
+        out.pop("valid_from", None)
+        out.pop("valid_to", None)
+    return out
 
 
 def _apply_edges(
@@ -1868,7 +1877,8 @@ def _sync_relations(
                 "받은 차례에 상대에 없는 선(이 소스가 이은 것만)을 끊습니다."
             )
 
-    rows = [_edge_row(one) for one in got.rows if not one.get(fetchers.CORE_DELETED)]
+    periodic = edge_rule.kinds_with_periods(db)
+    rows = [_edge_row(one, periodic) for one in got.rows if not one.get(fetchers.CORE_DELETED)]
     gone = [one for one in got.rows if one.get(fetchers.CORE_DELETED)]
     # **기다리던 선을 다시 싣는다**(끝점이 지난번에 없었다). 이번에 같은 선이 다시 왔으면 새
     # 줄을 쓰고, 상대가 끊었다고 왔으면 버린다. 첫 쪽부터 전량을 다시 받는 세대의 첫 차례면

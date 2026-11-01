@@ -24,7 +24,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, cast
 
 from sqlalchemy import CursorResult, Select, Table, func, insert, literal, select
@@ -106,21 +106,52 @@ def relation_endpoints(edge: Any, src_label: str, dst_label: str) -> dict[str, A
     이름은 바뀌고 겹친다.
     """
     return relation_ends(
-        edge.relation, edge.src_object_id, edge.dst_object_id, src_label, dst_label
+        edge.relation,
+        edge.src_object_id,
+        edge.dst_object_id,
+        src_label,
+        dst_label,
+        valid_from=getattr(edge, "valid_from", None),
+        valid_to=getattr(edge, "valid_to", None),
     )
 
 
 def relation_ends(
-    relation: str, src_id: uuid.UUID, dst_id: uuid.UUID, src_label: str, dst_label: str
+    relation: str,
+    src_id: uuid.UUID,
+    dst_id: uuid.UUID,
+    src_label: str,
+    dst_label: str,
+    *,
+    valid_from: date | None = None,
+    valid_to: date | None = None,
 ) -> dict[str, Any]:
     """`relation_endpoints` 와 같은 모양 — 선을 ORM 객체 없이 넣는 자리(일괄 입력의 COPY)가
-    쓴다. 모양은 여기 한 벌이다(객체 이력이 이 키로 찾는다)."""
-    return {
+    쓴다. 모양은 여기 한 벌이다(객체 이력이 이 키로 찾는다).
+
+    **유효 기간이 있으면 함께**(ADR 0039) — 같은 두 객체 사이에 기간을 달리한 선이 여럿일 수
+    있어, 끝점 · 종류만으로는 어느 선의 기록인지 모른다. 기간이 없는 선(대부분)은 예전 모양
+    그대로다."""
+    out: dict[str, Any] = {
         "relation": relation,
         "src": str(src_id),
         "dst": str(dst_id),
         "src_label": src_label,
         "dst_label": dst_label,
+    }
+    if valid_from is not None or valid_to is not None:
+        out["valid_from"] = valid_from.isoformat() if valid_from else None
+        out["valid_to"] = valid_to.isoformat() if valid_to else None
+    return out
+
+
+def relation_state(edge: Any) -> dict[str, Any]:
+    """관계를 고친 기록의 앞 · 뒤 — 속성 · 근거 · 유효 기간. `diff` 로 바뀐 것만 남긴다."""
+    return {
+        "properties": dict(edge.properties or {}),
+        "evidence_note": edge.evidence_note or "",
+        "valid_from": edge.valid_from.isoformat() if edge.valid_from else None,
+        "valid_to": edge.valid_to.isoformat() if edge.valid_to else None,
     }
 
 

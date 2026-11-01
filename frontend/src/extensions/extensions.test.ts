@@ -25,6 +25,7 @@ describe('extensions', () => {
     const paths = extensionRoutes().map((r) => r.path)
     expect(paths).toContain('ext/sample')
     expect(paths).toContain('ext/caegroup/dt')
+    expect(paths).toContain('ext/jajuverify/meetings/review/:meetingId')
   })
 
   it('caegroup 은 「디지털 트윈」 그룹으로 화면 여섯을 낸다', () => {
@@ -40,6 +41,21 @@ describe('extensions', () => {
     ])
     // 「설정」 은 시스템 관리자에게만 보인다 — **표시일 뿐 권한이 아니다**(서버가 막는다).
     expect(groups[0].items.at(-1)?.audience).toBe('system_admin')
+  })
+
+  it('jajuverify 는 「자주검증」 그룹으로 회의 종류 셋을 내고, 종류마다 목록 · 한 장이 따로다', () => {
+    const groups = extensionNavGroups(['jajuverify'])
+    expect(groups.map((g) => g.title)).toEqual(['자주검증'])
+    expect(groups[0].items.map((i) => [i.label, i.to])).toEqual([
+      ['심사회', '/ext/jajuverify/meetings/review'],
+      ['포스트모텀', '/ext/jajuverify/meetings/postmortem'],
+      ['설명회', '/ext/jajuverify/meetings/briefing'],
+    ])
+    const paths = extensionRoutes().map((r) => r.path)
+    for (const kind of ['review', 'postmortem', 'briefing']) {
+      expect(paths).toContain(`ext/jajuverify/meetings/${kind}`)
+      expect(paths).toContain(`ext/jajuverify/meetings/${kind}/:meetingId`)
+    }
   })
 
   it('화면 쪽 짝이 없는 이름은 따로 알린다', () => {

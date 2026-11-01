@@ -21,7 +21,15 @@
   — 한 기록이 여러 기간에 든다).
 - **다른 객체에서 오는 값**(참조 · 관계 너머의 기준 · 거르기 · 측정값)인데 그 객체들이나 관계가
   바뀌었다 — 그런 변경은 원천 기록의 시각을 안 올린다. 원 표를 비추는 타입(부서 · 계정)을
-  거치면 바뀐 것을 알 길이 없어 늘 전량이다.
+  거치면 바뀐 것을 알 길이 없어 늘 전량이다. **선의 칸**(`out.bom~qty`, ADR 0043)도 같은
+  길이다 — 선의 칸을 고치면 그 선의 `updated_at` 이 오르고(ORM `onupdate`), 그 걸음의 관계
+  종류에 워터마크 뒤에 바뀐 선이 있으면 전량이다(같은 관계 묶음 · 제외 묶음 안의 선의 칸도
+  주소가 같아 함께 본다).
+- **거쳐 가는 관계 · 펼치는 트리의 선 중 유효 기간의 경계일이 지난 계산 뒤에 지났다**(ADR
+  0039). 지표는 계산하는 날(오늘)에 유효한 선을 따라가므로, 날짜가 넘어가기만 해도 답이
+  바뀐다 — 선도 기록도 안 바뀌어 시각으로는 못 본다(「시계가 앞으로만 간다」 의 한 경우).
+- 조건에 계보(「낡은 것만」, ADR 0041)가 있다 — 원천의 개정이 바뀌면 기록은 그대로인데 낡음이
+  바뀐다.
 - 바뀐 기록이 많다(기본 원천의 20% 넘게 — 그러면 전량이 오히려 싸다).
 - 워터마크 전부터 있던 기록인데 그 뒤의 감사 기록이 없다 — 옛 날짜를 모른다(줄마다 감사를 안
   남기는 백필 등).
@@ -43,7 +51,7 @@ from app.config import get_settings
 from app.modules.audit.models import AuditEntry
 from app.modules.metrics import spec as spec_module
 from app.modules.metrics.models import MetricDef, MetricRun
-from app.modules.objects import axes, conditions, paths, refedges
+from app.modules.objects import axes, conditions, edges, paths, refedges
 from app.modules.objects.models import ObjectInstance, ObjectRelation, ObjectRelationTombstone
 from app.modules.objects.paths import HOP_KINDS
 from app.modules.ontology.interfaces import load_ends
@@ -71,6 +79,16 @@ class Increment:
     periods: list[date | None]
     changed: int
     """바뀐 원천 기록 수."""
+
+
+def _uses_lineage(spec: spec_module.MetricSpec) -> bool:
+    """조건에 계보(「낡은 것만」, ADR 0041)가 있나 — 원천의 개정이 바뀌면 기록은 그대로인데
+    낡음이 바뀐다. 기록의 시각으로는 못 보므로 늘 전량이다."""
+    fields = [one.field for one in [*spec.filters, *spec.share_when]]
+    fields += [
+        cond.field for one in spec.dimensions for rule in one.rules or [] for cond in rule.when
+    ]
+    return conditions.LINEAGE_FIELD in fields
 
 
 def _foreign_addresses(spec: spec_module.MetricSpec) -> list[str]:
@@ -119,6 +137,10 @@ def _foreign_change(
         .limit(1)
     ):
         return "참조 · 관계 너머의 객체가 바뀌었다"
+    if relations and edges.crossed(
+        db, relations, after=since.astimezone().date(), until=edges.today()
+    ):
+        return "거쳐 가는 관계의 유효 기간 경계일이 지났다"
     if relations and (
         db.scalar(
             select(ObjectRelation.id)
@@ -159,6 +181,9 @@ def _tree_types(built: spec_module.Built) -> set[str]:
             target = built.scope.object_type.slug if built.scope.object_type else None
         elif paths.is_path(cond.field):
             chain = built.plan.resolver.parse_chain(cond.field)
+            if chain.edge:
+                # 선의 칸에는 「하위 전체」 가 없다(날짜 · 숫자 · 고를 값 — ADR 0043).
+                continue
             if chain.field is not None:
                 target = chain.definition.ref_type_slug if chain.definition else None
             elif chain.hop.target is not None and chain.hop.target.object_type is not None:
@@ -193,6 +218,13 @@ def _tree_change(
                 .limit(1)
             )
         else:
+            if edges.crossed(
+                db, [tree.relation], after=since.astimezone().date(), until=edges.today()
+            ):
+                return (
+                    f"「하위 전체」 가 펼치는 트리({tree.type_label})의 유효 기간 경계일이 "
+                    "지났다"
+                )
             changed = db.scalar(
                 select(ObjectRelation.id)
                 .where(
@@ -266,6 +298,8 @@ def plan(
         return "방문 지표다(한 기록이 다른 기간을 바꾼다)"
     if built.stay is not None:
         return "머무는 기간 지표다(한 기록이 여러 기간에 든다)"
+    if _uses_lineage(built.spec):
+        return "계보 조건(낡은 것만)이 든 지표다(원천이 바뀌면 기록의 시각 없이 답이 바뀐다)"
     since = current.watermark
     foreign = _foreign_addresses(built.spec)
     if foreign:

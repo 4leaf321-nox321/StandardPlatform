@@ -36,6 +36,13 @@ export default function OntologyRelationsPage() {
   const interfaces = schema?.interfaces ?? []
   const target = relations.find((row) => row.slug === editing) ?? null
 
+  /** 수량 칸(ADR 0040)의 이름 — 그 관계 속성의 이름, 모르면 키. */
+  function quantityLabel(row: RelationType): string {
+    return (
+      row.properties?.find((one) => one.key === row.quantity_key)?.label ?? row.quantity_key ?? ''
+    )
+  }
+
   /** 「부품 → 공급사」 처럼 무엇과 무엇을 잇는지. 비어 있으면 제약이 없다는 뜻이다. */
   function endpoints(row: RelationType): string {
     const label = (slugs: string[] | null) =>
@@ -113,7 +120,15 @@ export default function OntologyRelationsPage() {
                     <TableCell className="text-muted-foreground text-xs">
                       {/* **트리가 이것으로 갈린다.** 성질을 안 보여 주면 「왜 이건
                           트리가 안 되지」 를 물을 자리가 없다. */}
-                      {[row.transitive && '재귀', row.acyclic && '순환 금지']
+                      {[
+                        row.transitive && '재귀',
+                        row.acyclic && '순환 금지',
+                        row.effectivity && '유효 기간',
+                        row.quantity_key && `수량 칸 ${quantityLabel(row)}`,
+                        // 계보 관계(ADR 0041) — 어느 끝이 원천인가.
+                        row.lineage_source === 'src' && '계보(출발이 원천)',
+                        row.lineage_source === 'dst' && '계보(도착이 원천)',
+                      ]
                         .filter(Boolean)
                         .join(' · ') || '—'}
                     </TableCell>

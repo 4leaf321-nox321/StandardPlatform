@@ -38,6 +38,8 @@ QUERY_TEXT_MAX = 2000
 
 #: 값 없이 「걸었다」 만 남기는 거르기.
 _FLAGS = ("q", "under")
+#: 묶음이 붙은 조건 키 — `nf<n>.`(제외) · `fe<n>.`(같은 관계) · `nf<n>.fe<m>.`.
+_GROUPED = re.compile(r"^(nf[0-9]+\.)?(fe[0-9]+\.)?(.+\..+)$")
 #: 값까지 남기는 것 — 물음의 모양이고 사람이 친 글자가 아니다.
 _VALUES = (
     "group_by",
@@ -70,10 +72,12 @@ def objects_shape(request: Request) -> dict[str, Any]:
         if key.startswith("f.") and "." in key[2:]:
             field, op = key[2:].rsplit(".", 1)
             conditions.add(f"{field} {op}")
-        elif key.startswith("nf") and key.count(".") >= 2:
-            _, rest = key.split(".", 1)
-            field, op = rest.rsplit(".", 1)
-            conditions.add(f"제외 {field} {op}")
+        elif (grouped := _GROUPED.match(key)) is not None and (
+            grouped.group(1) or grouped.group(2)
+        ):
+            # 제외 묶음(`nf<n>.`) · 같은 관계 묶음(`fe<n>.`, ADR 0043) — 번호는 모양이 아니다.
+            field, op = grouped.group(3).rsplit(".", 1)
+            conditions.add(f"제외 {field} {op}" if grouped.group(1) else f"{field} {op}")
         elif key.startswith("p."):
             conditions.add(f"{key[2:]} eq")
     if conditions:

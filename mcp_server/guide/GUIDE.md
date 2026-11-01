@@ -5,7 +5,7 @@
 읽어 준다. 이 파일만 고치면 모두에게 즉시 반영된다(서버 재시작도 필요 없다).
 
 주제 구분자: `<!--@ 주제이름 -->`. 순서는 상관없다. -->
-GUIDE_VERSION: 2026-10-24a
+GUIDE_VERSION: 2026-10-31a
 
 <!--@ overview -->
 ## 무엇을 하려는가 → 어떤 도구
@@ -38,23 +38,28 @@ GUIDE_VERSION: 2026-10-24a
 | 지표 값이 이상하다 · 언제 셌나 · 왜 그대로인가 | `metric_runs(slug)` → (시스템 관리자) `metric_recompute(slug)` | 실패한 계산은 옛 값을 두고 이유를 남긴다. 평소에는 타이머가 바뀐 기간만 센다 — `mode` · `note` |
 | 지표를 **부서 홈**에 올리기 · 내리기 | `metric_home(slug, workspace_slug, split=)` · `remove=true` | **그 부서 관리자만.** 홈은 부서 모두가 보는 자리 — 사용자가 올리자고 한 것만 |
 | 다른 타입의 칸으로 거르거나 세기(「미국 기업이 만든 툴」 · 「모델의 과제의 프로젝트별 건수」) | `object_fields` → 주소를 `conditions`·`group_by` 에 | 두 걸음까지 준다. 주소를 추측하지 않는다 |
+| **선의 값으로 거르기** — 「부품 X 가 4개 이상 들어간 제품」 「옵션 B 에서만 들어가는 부품」 | `object_fields` 의 `edge: true` 주소(`out.<관계>~<관계 속성>`) → `conditions`(같은 선이면 `"edge": <번호>` 로 묶기) | 안 묶으면 조건마다 「이어진 것 중 하나라도」 — **다른 선끼리 맞아도 걸린다** |
+| **목록에 상대의 값도** — 「제품마다 기본 모델 이름」 「모델마다 기록 몇 건(20건까지)」 | `objects_list(columns=[<주소>…])` | **줄마다 `object_get` 하지 않는다.** 칸마다 20개까지 · `more` 면 더 있다(수는 `objects_summary`) |
 | 객체 하나 자세히(관련 객체까지) | `object_get` | 긴 글 칸은 6,000자씩 — `clipped` 면 `text_from` 으로 이어 읽는다 |
 | **보고서에 묻기** — 「모델 X 의 강성 해석 보고서」 「지난 분기 CAE 보고서 요지」 | `get_guide(topic="reports")` → `objects_list(<보고서 타입>, q=)` → `object_get` | 목록의 본문은 앞부분뿐. 답에 원문 주소(`url`)를 붙이고, 「원본에서 내려감」 이면 그렇게 말한다 |
 | **비슷한 과거 사례** — 「이 이슈와 비슷한 보고」 「이 부품 · 메커니즘 조합을 다룬 것」 | `objects_similar(type_slug, object_id=)` 또는 `tags={참조 칸: [id]}` | 축 태그가 겹친 것 — 드문 태그가 겹칠수록 위. `shared`(왜 비슷한가)를 함께 말하고, 본문 비교는 `object_get` 으로 읽어서 |
 | 언제 누가 무엇을 바꿨나 — 이 객체 | `object_history` | 되돌리기는 `object_restore(entry_id)` — **시점은 사람이 정한다** |
 | 어제 무슨 일이 있었나 — 전체 | `audit_recent` | **부서 관리자 이상.** 시간 · 사람으로는 못 거른다 — 최근 것부터 받아 본다 |
 | 계층(트리)을 한 단계씩 | `object_tree(parent=)` | **깊이 전부**는 `objects_list(conditions=[{"field": "id", "op": "under", "value": <id>}])` — 그 객체와 그 아래 전부 |
+| **그 날짜의 구성** — 「3월 기준 BOM」 「예전에 들어 있던 부품」 「다음 달부터 바뀌는 것」 | 트리 · 목록 · 통계 · 롤업 · 그래프 · 길 도구의 `as_of="YYYY-MM-DD"` · `object_get(all_periods=True)` | **기본은 오늘**이라 유효 기간이 지난 선은 안 보인다 — 「없다」 로 답하기 전에 그때의 날짜로 다시 묻는다. 답에 「○월 ○일 기준」 을 붙인다(`relations` 주제) |
 | **이것과 이어진 것들**(한 걸음 너머) | `graph_neighbors(object_id, depth=, relations=, types=)` | 화면의 지식 그래프와 같은 길. **`truncated` 면 잘린 것** — 좁혀서 다시 |
 | **두 객체가 어떻게 이어져 있나** | `graph_path(source_id, target_id, max_depth=, relations=, types=)` | 가장 짧은 길들. **`truncated` 면 「없다」 가 아니라 「찾다가 멈춤」** — 좁혀서 다시 |
 | 어느 타입에서 어디로 갈 수 있나 | `graph_overview` | 관계 이름을 짐작하지 않는다 — 질의를 쓰기 전에 |
 | 지우기·합치기 전에 무엇이 걸렸나 | `object_references` | 안 보이는 것은 수만(조회를 부서로 좁힌 설치) |
-| 어셈블리 총 무게처럼 「아래 전부」 의 합 | `object_rollup` | `missing` 을 함께 말한다 |
+| 어셈블리 총 무게처럼 「아래 전부」 의 합 | `object_rollup` | `missing` 을 함께 말한다. `weighted` 면 수량 반영(총수량만큼 셌다) |
+| **제품 하나에 이 부품이 몇 개** · 「이 부품은 어디에 쓰였나」 | `object_explode(mode="summary"·"indented"·"where_used", as_of=)` | 관계의 수량을 경로 따라 곱한다. `totals.missing`(수량 없음 — 1개로 셈) · `hidden` · `truncated` 를 함께 말한다. `quantity_key` 가 비었으면 「수량 칸이 없어 모두 1개로 셌다」 |
+| **무엇에서 만들어졌나 · 낡았나** — 「이 결과는 어느 도면 기준?」 「도면이 바뀌면 무엇을 다시 봐야 하나」 | `object_lineage` · 한 타입에서 낡은 것만은 `objects_list(conditions=[{"field": "lineage", "op": "eq", "value": "stale"}])` | `reasons` · `impact` 를 그대로 옮긴다. 풀기(`lineage_repin`)는 **사람이 정한 뒤에만** — 위에서 낡음은 원천부터(`relations` 주제) |
 | **요즘 챙길 것** — 승인 대기 · 실패한 작업 · 멎은 지표 · 동기화 실패 | `server_maintenance` | 홈의 「남은 일」 과 같다. 보는 사람의 권한대로 |
 | 내 알림 — 지켜보는 것이 바뀜 · 경보 · 내 작업이 끝남 | `notifications(unread_only=)` | 읽음 처리는 안 한다(사람이 화면에서 본 것으로 둔다) |
 | 무엇이 나빠지고 있나(필수값·고아·끊긴 참조·중복) | `quality_report` | 볼 수 있는 것만 |
 | **어디부터 채우나** — 「지금 무엇을 먼저 채워야 하나」 | `fill_priorities(type_slug=)` | 쓰는 곳(필수 · 지표 · 코어 공개 · 뷰)으로 가중한 줄. `gain` · `link` 를 함께 전하고, `estimated` 면 「약」 을 붙인다 |
 | **못 찾은 이름을 별칭으로** — 「이걸로는 왜 안 찾혀?」 | `alias_candidates` → 사람 확인 → `alias_candidate_apply(action="attach", object_id=, apply=true)` | `suggestions` 는 짐작 — **어느 객체인지 사람이 정한다.** 아닌 말은 `ignore` |
-| **판단을 기다리는 일 한꺼번에** — 「검토할 것 뭐 있어?」 「확실한 것은 추천대로 해」 | `review_list` → 사람 확인 → `review_decide(..., apply=false)` → 사람 확인 → 같은 인자에 `apply=true, fingerprint=` | 별칭 후보 · 검수 대기 별칭 · 병합 후보 · 지워진 것을 가리키는 칸을 한 곳에서. **추천대로 모두(`recommended=True`)는 사람이 그러라고 했을 때만.** 병합은 복원이 없다 |
+| **판단을 기다리는 일 한꺼번에** — 「검토할 것 뭐 있어?」 「확실한 것은 추천대로 해」 | `review_list` → 사람 확인 → `review_decide(..., apply=false)` → 사람 확인 → 같은 인자에 `apply=true, fingerprint=` | 별칭 후보 · 검수 대기 별칭 · 병합 후보 · 지워진 것을 가리키는 칸 · 낡은 파생물을 한 곳에서. **추천대로 모두(`recommended=True`)는 사람이 그러라고 했을 때만.** 병합은 복원이 없다 |
 | 객체 하나 만들기 | `object_create` | 정의에 없는 속성 키는 거절된다 |
 | 객체 고치기 | `object_update` | **보낸 키만** 병합. 비우려면 `null`. 식별자 · 상태 · 유효 연도 · 별칭도 |
 | **사진 · 파일 붙이기** | `attachment_upload_prepare` → 셸에서 `curl` | **파일을 읽거나 base64 로 옮기지 않는다** — 바이트는 셸이 직접 올린다. 셸이 없으면 사람에게 화면에서 |
@@ -65,7 +70,9 @@ GUIDE_VERSION: 2026-10-24a
 | 정제 도구가 만든 묶음(정의 · 객체 · 관계)이 어떻게 들어갈지 | `bundle_import(bundle)` → 사람 확인 → `job_apply` | **넣는 것은 사람이 미리 보기를 본 뒤에만.** 원천을 곧바로 넣지 않는다 — `pipeline/AGENTS.md` |
 | 넣은 묶음이 틀렸다 — 통째로 되돌리기 | `bundle_runs` → 번호 → `bundle_undo(run_id)` → 사람 확인 → `apply=True` | **스스로 되돌리지 않는다.** 건너뛴 줄의 이유도 함께 보여 준다 |
 | 여러 행 한 번에(upsert) | `objects_import` → 사람 확인 → `job_apply(job_id)` | **작업이 된다.** 같은 `key` 면 고침. 한 행이라도 오류면 전부 안 넣음. **사람이 화면에서 고친 칸은 비켜 간다** — 계획의 그 말을 사용자에게 보여 준다 |
-| 객체 둘 잇기 | `relation_add` | **근거(evidence_note)를 적는다** |
+| 객체 둘 잇기 — **사용자가 사실로 말한 선** | `relation_add` | **근거(evidence_note)를 적는다** |
+| **추론 · 추출한 선**(문서 · 표에서 뽑은 고장 모드 ↔ 부품, 시험 ↔ 요구사항 — 확실하지 않음) | `relation_propose(rows)` | **선이 아니라 제안**이다 — 확정은 사람이(화면 · 검토함). 줄마다 확신도 · 근거, `origin_ref` 에 문서 이름(`relations` 주제) |
+| 제안된 것 보기 · 사람이 정한 확정 · 거절 | `relation_proposals` · `relation_proposal_decide` | 열린 제안은 **아직 관계가 아니다** — 「이어져 있다」 로 답하지 않는다 |
 | 잘못 이은 관계 | `relation_update`(근거 · 속성) · `relation_remove`(끊기) | 양끝 · 종류는 못 바꾼다 — 끊고 새로 잇는다. 확실하지 않으면 끊지 말고 사람에게 |
 | 관계 여러 줄 한 번에 | `relations_import(mode=)` → 사람 확인 → `job_apply` | 이미 이어진 건 그대로. `replace`·`replace_type` 은 **파일에 없는 선을 끊는다** |
 | 기계가 붙인 별칭 검수 | `aliases_pending` → 사람 확인 → `aliases_review` | **스스로 승인하지 않는다** |
@@ -76,6 +83,7 @@ GUIDE_VERSION: 2026-10-24a
 | **운영 · 설정** — 코어 공개 현황 · 부서 · 저장된 뷰 · 지켜보기 · 연도 · 웹훅 · 공지 · 검토 이력 · 서버 · 내보내기 | `get_guide(topic="admin")` | 고치는 것은 전부 미리 보기 먼저. 지우기는 `config_delete` 하나. 부서 · 공지 · 웹훅 · 서버는 읽기만 |
 | 첨부 저장소의 고아 파일 | `filestore_gc()` → 사람 확인 → `job_apply` | **시스템 관리자만.** 지운 파일은 못 되살린다 — 워커가 매일 스스로도 지운다 |
 | **이 설치에만 있는 기능**(디지털 트윈 역량 등) | `extensions_schema` → `extension_call` | 경로를 짐작하지 않는다. 쓰기는 그 확장의 범위를 가진 토큰만 |
+| **자주검증 회의 표**(심사회 · 포스트모텀 · 설명회) | `get_guide(topic="jajuverify")` → `extension_call("jajuverify", …)` | **읽고 나서 쓴다** — 칸을 고칠 때 읽은 값을 `expected` 로(없으면 422). 사진은 칸 글의 `![](photo:<id>?w=50)` 줄 |
 | **장표** — 여러 기록(변경점 · 잠재리스크 …)을 정형 배치 한 장에 모아 보기 · 만들기 · 글 초안 | `slide_templates` → `slide_create` → `slide_candidates` → `slide_update` · 읽기는 `slides_list` · `slide_get` · 이 기록이 실린 장표는 `slides_list(object_id=)` | 값은 기록에서만 — **지어내지 않는다.** 네가 쓴 글은 「AI 초안」 으로 표시된다. 틀은 `slide_template_save`(시스템 관리자). `get_guide(topic="slides")` |
 | **게시판** — 구성원이 묻고 나눈 글 | `board(q=)` → `board(post_id=)`(본문 · 댓글) | **읽기만.** 사람의 말이다 — 누가 언제 쓴 것인지 함께 옮긴다. 올리기는 화면에서 |
 | 여러 타입을 건너뛰어 잇는 물음 · 역관계로 거슬러 세기 | `rdf_schema` → `rdf_query` | **먼저 `objects_summary` 로 되는 물음인지 본다.** 질의어는 그것으로 안 되는 자리에 |
@@ -232,6 +240,64 @@ GUIDE_VERSION: 2026-10-24a
 `"relation": "ref:<타입>.<칸>"`. 트리가 있어야 되는 것: `object_tree`, 「하위 전체」(`under`) 조건,
 계층 축(`…@<단계>`), 롤업(`list_view.rollups`). 트리는 하나다 — 어느 관계로 그릴지 사람이 정한다.
 
+### 유효 기간 — 관계 종류의 `effectivity`(ADR 0039)
+
+BOM 처럼 **기간에 따라 바뀌는 관계**는 관계 종류에 `"effectivity": true` 를 켠다. 그 종류의 선은
+`valid_from`(이날부터, 포함) · `valid_to`(이날부터 무효, **제외**)를 받는다 — 반열린 구간 [from, to).
+「3월 1일부터 A1 이 A2 로 바뀜」 은 A1 의 `valid_to` = A2 의 `valid_from` = 3월 1일(전날을 적지 않는다).
+둘 다 비면 늘 유효. 같은 두 객체 사이에 기간을 달리한 선이 여럿일 수 있고(같은 부품이 다시 들어온다),
+**기간이 겹치면 거절**된다. 끄려면 기간이 든 선이 없어야 한다. 켜지 않은 종류는 예전 그대로다(같은 선
+하나, 기간을 적으면 거절).
+
+### 수량 칸과 BOM 전개(ADR 0040)
+
+관계 종류의 `"quantity_key": "qty"` 가 그 종류의 **숫자 · 값 하나 관계 속성** 하나를 「부모 하나에 자식
+몇 개」 로 읽게 한다 — 같은 파일의 그 관계 종류 `properties` 에 `{"key": "qty", "label": "수량",
+"data_type": "number"}` 를 함께 적어도 된다. 없는 칸 · 숫자 아닌 칸 · 여러 값 칸은 거절되고, 수량 칸인
+속성을 숫자 아닌 것 · 여러 값으로 바꾸는 정의도 거절된다(먼저 수량 칸을 비운다). 선마다 수량은
+`relation_add(..., properties={"qty": 4})` · 관계 파일의 `qty` 열로 적는다.
+
+- `object_explode(type_slug, id, mode=)` — 그 타입의 트리(`list_view.tree`)를 따라 **수량을 경로 따라
+  곱하고, 같은 하위 조립품이 여러 경로로 오면 더한다**(총수량). 보기 셋: `summary`(객체마다 총수량 ·
+  가장 얕은 · 깊은 단계 · 경로 수), `indented`(경로마다 한 줄 — 5,000줄 상한, 넘으면 `truncated` 와
+  전체 줄 수), `where_used`(위로 — 맨 위 객체마다 「그것 하나에 이것 몇 개」 가 `tops[]`).
+- 수량이 빈 선은 **1개로 세고** `totals.missing` 으로 말한다(0 은 0). 수량 칸이 없는 종류 · 참조 칸 트리는
+  모두 1개다. 남의 부서 · 삭제된 객체는 지나가며 센다(줄은 가린다 — `hidden` · `deleted`). 순환하는
+  트리는 오류.
+- 롤업(`list_view.rollups[]`)의 `"weighted": true`(수량 반영 — 합계는 값 곱하기 총수량, 개수는 총개수,
+  평균은 총수량으로 가중, 곱은 총수량만큼 거듭제곱), `"leaves_only": true`(말단만), `"fn": "product"`
+  (곱 — 직렬 신뢰도). **중간 조립품에도 값이 있으면 두 번 센다** — 무게 · 원가처럼 말단에만 원값이
+  있는 숫자는 `leaves_only` 를 켠다.
+- 아직 없는 것: 가중 최단 경로 · 병렬(k-of-n) 신뢰도 · 단위 환산 · 지표에서 전개 수량 쓰기 · 대체 부품.
+
+- **날짜 밖의 적용 조건**(옵션 · 시리얼 범위 · 사양)은 이번에는 **관계 칸**(관계 종류의 `properties` —
+  `{"key": "option", ...}`)으로 적는다. 엔진(트리 · 롤업 · 조건)은 날짜만 본다 — 관계 칸은 상세의
+  관련 객체 · 관계 파일 내보내기에 실릴 뿐, 지금은 조건 · 통계로 그 칸을 거르지 못한다(`find` 주제).
+
+### 계보 관계와 개정 칸(ADR 0041)
+
+CAE · 제품 개발의 「무엇에서 만들어졌나」(도면 → 메시 → 해석 조건 → 해석 실행 → 결과 → 보고서)는
+**계보 관계**로 잇는다 — 관계 종류에 `"lineage_source"` 를 적는다: `"src"`(출발이 **원천** — 만드는 데
+쓰인 것) · `"dst"`(도착이 원천) · `""`(계보 아님, 기본). 다른 끝이 **파생물**이다. **방향 있는 종류만**
+된다. 「도면 —만든 것→ 메시」 면 `src`, 「결과 —사용한 메시→ 메시」 면 `dst` — 한 사슬에 둘이 섞여도 된다.
+
+원천 타입에는 **개정 칸**(`"revision_key"` — 그 타입의 글자 · 고르기 · 숫자, 값 하나 속성의 키)을
+둔다. 같은 파일의 `properties` 에 함께 적어도 된다.
+
+```json
+{"types": [{"slug": "cad", "label": "도면", "revision_key": "rev",
+            "properties": [{"key": "rev", "label": "개정", "data_type": "text"}]}],
+ "relation_types": [{"slug": "made_from", "label": "만든 것", "lineage_source": "src",
+                     "src_type_slugs": ["cad"], "dst_type_slugs": ["mesh"]}]}
+```
+
+- 선을 맺는 순간(어느 길로든) 원천의 지금 개정과 수정 시각이 선에 박힌다(**고정**). 원천의 개정이
+  바뀌면 파생물이 **바로 낡음**, 그 아래는 **위에서 낡음**이다 — 읽기 · 풀기는 `relations` 주제.
+- **개정 칸이 없으면 수정 시각으로** 판정한다 — 이름 · 별칭 · 설명만 고쳐도 낡음이 된다(잡음). 판이
+  있는 원천(도면 · 사양 · 모델)이면 개정 칸을 정하자고 사람에게 제안한다.
+- 개정 칸인 속성은 지우거나 다른 종류 · 여러 값으로 못 바꾼다(계획의 `errors`) — 먼저 개정 칸을
+  비우거나 다른 속성으로 정한다. 방향 없는 종류에 원천 끝을 적어도 거절된다.
+
 ### 표에서 기록 타입 — `table_infer(rows)` → `table_build(...)`
 
 시장 서비스 건 · 시험 결과처럼 **축(개발모델 · 과제 · 부서)을 가리키는 기록**을 표에서 만든다.
@@ -373,8 +439,8 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 
 ### 판단을 기다리는 일 — 검토함: `review_list` · `review_decide`
 
-별칭 후보 · 기계가 붙인 별칭 · 이름이 같은 객체(병합 후보) · 지워진 것을 가리키는 칸은 원래
-자리가 다 다르다. 검토함은 그것을 **원래 자리에서 읽어** 한 줄(물음 · 근거 · 후보 · 추천 ·
+별칭 후보 · 기계가 붙인 별칭 · 이름이 같은 객체(병합 후보) · 지워진 것을 가리키는 칸 · 낡은
+파생물 · 제안된 관계는 원래 자리가 다 다르다. 검토함은 그것을 **원래 자리에서 읽어** 한 줄(물음 · 근거 · 후보 · 추천 ·
 확신도)로 세운다 — 처리도 원래 기능으로 간다(그래서 위의 `alias_candidate_apply` ·
 `aliases_review` 와 결과가 같다). 「검토할 것 뭐 있어?」 · 「확실한 건 추천대로 해 줘」 에 쓴다.
 
@@ -397,6 +463,17 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 `ignore`(무시 — 검수 대기 별칭에는 없다). 「적용을 기다리는 계획」 · 「선 기다림」 줄은 처리
 길이 없다 — `link`(원래 화면)를 사람에게 전한다.
 
+**제안된 관계**(`proposed_relation`, ADR 0042) — 열린 제안마다 한 줄(근거 · 확신도 · 출처 · 양 끝).
+후보는 `accept`(확정) · `reject`(거절). 제안의 확신도가 0.5 이상이면 추천이 `accept` 이고 줄의 확신도가
+그 값이다 — 「추천대로 모두」 는 문턱 이상만. 확신도가 없거나 낮으면 추천이 없다. 같은 `origin_ref`
+의 줄은 `group=True` 로 접힌다. 복원(화면)은 확정한 관계를 해제하고 제안을 다시 연다(그 뒤 관계가
+수정됐으면 하지 않는다). 네가 낸 제안을 네가 「추천대로 모두」 로 확정하지 않는다 — 사람이 말한 것만.
+
+**낡은 파생물**(`stale_lineage`, ADR 0041) — 바로 낡은 파생물마다 한 줄(어느 원천이 어떻게
+바뀌었나). 후보는 `checked`(영향 없음 확인) · `rebuilt`(다시 만들었음)이고 추천은 `checked` 지만
+**확신도가 없다** — 영향이 있는지는 규칙이 모른다. 줄마다 사람이 정한 것만 `decisions` 로 보낸다
+(처리는 `lineage_repin` 과 같은 다시 고정, `relations` 주제의 계보).
+
 ### 어디부터 채우나 — `fill_priorities(type_slug=, limit=)`
 
 「이 플랫폼에서 지금 무엇을 먼저 채워야 해?」 에 답하는 자리다. 품질(`quality_report`)이 「무엇이
@@ -411,7 +488,7 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 - **큰 타입은 표본 어림이다**(`estimated`, `sample_rows`, `notes`). 수를 전할 때 「약」 을 붙인다.
 - 끝을 정하지 않은 관계 종류는 세지 않는다 — 어느 타입이 그 선을 가져야 하는지 정해지지 않았다.
 
-`objects_list(type_slug, q=, properties=, conditions=, status=, limit=, offset=)`:
+`objects_list(type_slug, q=, properties=, conditions=, status=, limit=, offset=, columns=)`:
 
 - `q` 는 이름·식별자·검색 속성. `properties={"grade": "A"}` 는 「같음」 의 짧은 꼴.
 - `conditions` 는 화면의 조건 줄과 같다 — **칸끼리 AND, 같은 칸 안은 OR**:
@@ -431,6 +508,14 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 - **제외** — 조건에 `"exclude": <번호>` 를 붙이면 같은 번호끼리 AND 로 묶어 **그 묶음에 맞는
   것을 뺀다**(「(SW 로 시작) 인 것은 빼고」). 묶음끼리 · 다른 조건과는 AND. 칸이 비어 비교가 안
   되는 기록은 남는다. 화면 주소는 `nf<번호>.<칸>.<연산>=<값>` 이다.
+- **같은 관계 묶음** — 조건에 `"edge": <번호>` 를 붙이면 같은 번호끼리 **같은 선 하나**에서 함께
+  맞아야 걸린다(아래 「다른 타입의 칸」 의 선의 칸). 제외와 함께면 `{"exclude": 1, "edge": 1}` —
+  「(그 선이 X 이고 4개 이상) 인 것은 뺀다」. 화면 주소는 `fe<번호>.` · `nf<n>.fe<m>.` 이다.
+- **이어진 칸** — `columns=["out.sku_base.label", "in.svc_case:model"]` 면 줄마다 그 주소의 값이
+  `linked[<id>][<주소>] = {values: [{value, label}], more}` 로 온다(`linked_columns` 가 열 머리).
+  **상대의 값이 필요하면 줄마다 `object_get` 하지 말고 `columns`** — 한 번에 온다. 칸마다 20개까지,
+  이어진 것마다 값 하나(같은 값이 여러 번일 수 있다), `more: true` 면 더 있다(몇 개인지는 세지 않았다
+  — 수는 `objects_summary`). 볼 수 없는 객체는 걷지 않는다. 주소는 조건과 같다(10개까지).
 - 응답의 `total` 이 전체 수다. 한 쪽은 200까지. **몇 건인지 세려면 넘기지 말고 통계로.**
 
 ### 다른 타입의 칸 — `object_fields(type_slug)`
@@ -456,6 +541,28 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 - 이어진 것이 여럿이면 **그중 하나라도** 맞으면 걸린다. 이어진 것이 **없는** 객체는 너머의 칸
   조건에 안 걸린다(`ne` 도). 「개발사가 없는 툴」 은 참조 칸 `vendor` 의 `empty` 로 묻는다.
 - 참조 칸과 관계가 같은 이름일 수 있다 — `heading` 으로 가른다.
+- `out.<관계>.<칸>` 의 칸은 **이어진 객체(상대)의 칸**이다. 선에 붙은 **관계 속성**(BOM 의 수량 · 적용
+  옵션처럼 관계 종류의 `properties`)은 **선의 칸** `out.<관계>~<관계 속성>`(`in.<관계>~…` 도)으로
+  거르고 센다 — `object_fields` 의 `edge: true` 줄. 유효 기간을 받는 종류는 `~valid_from` ·
+  `~valid_to`(시작일 · 끝날)도 선의 칸이다. 선의 칸은 주소 끝에만 선다(`ref.model.out.bom~qty` 는
+  되고 `out.bom~qty.label` 은 안 된다). 형별 연산은 객체의 칸과 같다(숫자 범위 · 고를 값 여럿은 「담고
+  있나」). 관계 속성 중 참조 · 파일 칸은 못 쓴다.
+- **같은 선 묶기 — 가장 흔한 함정.** 조건마다 「이어진 것 중 하나라도」 라서
+  `[{"field": "out.bom", "op": "eq", "value": <X>}, {"field": "out.bom~qty", "op": "gte", "value": "4"}]`
+  는 **X 1개 + 다른 부품 5개**인 제품도 건다(두 조건이 다른 선에서 맞는다). 「X 가 4개 이상」 이면 두
+  조건에 같은 `"edge": 1` 을 붙인다 — 같은 번호의 조건은 그 묶음이 함께 지나는 **마지막 관계 걸음의
+  선 하나**(그 선의 칸 · 상대 · 상대의 칸, 그 너머는 그 상대에서 「하나라도」)에서 모두 맞아야 걸린다.
+  묶음 안에 관계 자체의 `empty` · `notempty` 는 못 건다(묶음은 이미 그 선이 있다는 뜻). 「옵션 B 에서만
+  들어가는 부품」 은 부품 목록에서 `{"field": "in.bom~opts", "op": "eq", "value": "B"}` +
+  `{"field": "in.bom~opts", "op": "ne", "value": "B", "exclude": 1}`(B 가 없는 선이 있는 것은 뺀다).
+- 통계 `group_by="out.bom~qty"` 는 선마다 그 막대에 든다(제품마다 한 번 — `overlap`). `group_by` 와
+  `split_by` 가 같은 관계 걸음(`out.bom.label` x `out.bom~qty`)이면 **같은 선**의 값끼리 나뉜다.
+- **기준일** — 관계 걸음(`out.` · `in.`) · 「하위 전체」 · 계층 축은 `as_of`(비우면 오늘)에 **유효한
+  관계만** 따라간다. 목록 · 통계 · 내보내기의 `as_of` 가 같은 뜻이다. 참조 칸 걸음(`ref.`)은 기간이
+  없다(늘 유효).
+- **낡은 것만** — 칸 `lineage`(그 객체 자신의 계보 낡음, ADR 0041): `{"field": "lineage", "op": "eq",
+  "value": "stale"}`(바로 · 위에서) · `"direct"`(바로만) · `"fresh"`(낡지 않음), `ne` 도. 기준일과
+  상관없이 **오늘의 판정**이다(`relations` 주제의 계보).
 - 타입 사이의 **길 전부**는 `ontology_schema` 의 `relation_types` + `reference_edges` 다 — 참조 칸도
   `ref:<타입>.<칸>` 이라는 관계 모양으로 나온다(그래프 · 관련 객체가 같은 것을 쓴다).
 
@@ -695,11 +802,81 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
   `{"src": "<key 또는 label>", "relation": "<slug>", "dst": "...", "evidence_note": "..."}`.
   이미 이어진 것은 `unchanged` 라 두 번 올려도 두 겹이 안 된다. 관계에 속성이 있으면
   같은 행에 `"properties": {...}`.
+- **유효 기간**(관계 종류가 `effectivity` 일 때, `schema` 주제) — `relation_add(..., valid_from=,
+  valid_to=)`(`YYYY-MM-DD`, 끝은 **제외**). 기간만 고치려면 `relation_update(..., valid_to="2026-06-01")`,
+  비우려면 빈 글자 `""`(그쪽 끝이 열린다). 겹치는 기간 · 같은 때에 둘이 되는 개수 제약은 서버가
+  거절한다 — 우회하지 말고 있는 선의 기간을 먼저 줄인다. 일괄 줄에도 `"valid_from"` · `"valid_to"`.
+- **수량** — 관계 종류에 수량 칸(`quantity_key`, `schema` 주제)이 있으면 `relation_add(...,
+  properties={"<수량 칸>": 4})` 로 「부모 하나에 자식 4개」 를 적는다. 비우면 전개가 1개로 센다.
+- **기본은 오늘이다.** `object_get` · `object_tree` · `object_rollup` · `object_explode` · `graph_neighbors` ·
+  `graph_path` · `objects_list` · `objects_summary` 는 기준일(`as_of`, 비우면 오늘)에 **유효한 선만**
+  본다 — 유효 기간이 지난 선 · 아직 안 된 선은 빠진다. 「예전 구성」 「다음 달 구성」 은 `as_of` 를
+  그 날짜로, 기간을 가리지 않고 다 보려면 `object_get(all_periods=True)`(줄의 `period_state` 가
+  `past` · `current` · `future`). 사람에게 답할 때 **「○월 ○일 기준」** 을 붙인다 — 날짜 없이 「구성품은
+  셋」 이라고 하면 다음 달에 틀린 말이 된다.
+- 지표는 **계산하는 날(오늘)** 의 선으로 센다(정의에 기준일이 없다) — 과거 기간의 막대도 지금 구성으로
+  묶인다. 「그때의 구성으로」 가 필요하면 `objects_summary(as_of=그 기간의 끝날)`.
 - `mode` 가 **없어진 선을 어떻게 할지**다. 기본 `add` — 파일에 없는 선은 그대로 둔다.
   `replace` 는 파일에 나온 **출발 객체 · 관계마다** 그 밖의 선을 끊고, `replace_type` 은
   **타입 전체 · 관계마다** 끊는다. 원천이 그 범위를 통째로 가지고 있을 때만 쓴다 — 조각을
   `replace_type` 으로 보내면 나머지가 전부 지워진다. 끊을 선은 계획에 `unlink` 로 오니,
   **적용 전에 그 수를 사람에게 보여 준다.**
+
+### 제안 — 확실하지 않은 선은 관계가 아니라 제안으로(ADR 0042)
+
+**사용자가 사실로 말한 선은 `relation_add`, 네가 추론 · 추출한 선은 `relation_propose`.** 문서 ·
+표 · 대화에서 「이 고장 모드는 이 부품에서 난다」 「이 시험이 이 요구사항을 확인한다」 를 뽑았으면
+그것은 네 판단이다 — 바로 이으면 확정 안 된 선이 트리 · 롤업 · 지표 · 코어 API 에 섞이고, 틀린 것을
+나중에 아무도 못 가려낸다. 제안은 따로 둔 표에 남아 **확정 전에는 어디에도 안 섞인다.**
+
+- `relation_propose(rows, origin_ref=)` — 줄마다 `{"src_object_id", "relation", "dst_object_id",
+  "confidence", "evidence_note"}`(속성 · 기간도 `relation_add` 와 같이). 한 번에 500줄까지. 양 끝은
+  id — 이름이면 `objects_resolve_many` 로 먼저 풀고, `candidates` 면 제안하지 말고 묻는다.
+- **확신도는 정직하게.** 근거가 그대로 말하면 0.9 이상, 미루어 짐작이면 낮게, 모르면 빼라. 검토함은
+  0.5 이상만 「확정」 을 추천하고 「추천대로 모두」 는 문턱(기본 0.9) 이상만 고른다 — 부풀린 확신도는
+  사람이 안 보고 확정하게 만든다.
+- **근거는 검토자가 읽는 전부다** — 어느 문서의 어느 줄 · 왜 그렇게 봤나(500자). 확정하면 그 관계의
+  근거가 된다. `origin_ref` 에 문서 · 작업 이름을 주면 검토함이 그 출처의 제안을 한 줄로 묶는다.
+- 응답 `rows[].status`: `created` · `open`(같은 열린 제안 — 더 높은 확신도면 갱신) · `connected`(**이미
+  이어져 있다**) · `rejected_before`(**사람이 거절한 적 있다** — `message` 의 까닭을 그대로 전하고,
+  사람이 다시 보라고 할 때만 `again=True`) · `error`. `counts` 로 「30건 중 22건 제안, 5건은 이미
+  이어져 있음, 3건 거절된 적 있음」 처럼 말한다.
+- 권한: 양 끝을 **볼 수만 있으면** 제안된다 — 출발 객체를 못 고치는 토큰이라 `relation_add` 가
+  거절됐으면 그것을 제안으로 남겨도 된다(사람에게 그렇게 했다고 말한다). 부서 · 계정(원 표)으로 가는
+  선은 제안을 안 받는다.
+- 보기: `relation_proposals(type_slug=, object_id=)`(그 객체의 열린 제안) · `relation_proposals(status=,
+  relation=, mine=, decidable=)`(전체). **열린 제안은 아직 관계가 아니다** — 「제안돼 있다(확신도 0.8,
+  근거 …)」 로 말한다. `object_get` 의 `related` 에는 없다.
+- 확정 · 거절은 **사람이 정한 것만** `relation_proposal_decide(id, "accept" | "reject", note=)` — 네가
+  제안한 것을 네가 확정하지 않는다. 확정은 「관계 추가」 와 같은 검사(개수 제약 · 순환 · 기간 겹침)를
+  타고, 걸리면 OBJECTS-0143(`details.cause`)로 거절되며 제안은 남는다. 잘못 제안한 것은 `withdraw`
+  (제안한 사람만). 여러 건 판단은 검토함(`review_list(kind="proposed_relation")`, `find` 주제).
+
+### 계보 — 무엇에서 만들어졌나, 낡았나(ADR 0041)
+
+계보 관계(`relation_types[].lineage_source`, `schema` 주제)는 **맺는 순간 원천의 지금 개정 · 수정
+시각이 선에 박힌다**(고정) — `relation_add` · `relations_import` · 묶음 · 화면 어느 길이든. 「이 결과는
+도면 Rev.C 기준」 이 선에 남는다.
+
+- `object_lineage(type_slug, id)` — 위(원천 사슬) · 아래(파생물 사슬), 이 객체의 `state`(`fresh` ·
+  `direct` **바로 낡음** — 원천이 고정 뒤에 바뀜 · `upstream` **위에서 낡음** — 원천이 낡음)와
+  `reasons`(「도면 브래킷 의 개정 B → C」 — 그대로 옮긴다). 원천이면 `impact`(이것으로 만든 것 n개 ·
+  낡음 m개) — 「도면을 바꾸면 무엇이 영향받나」 는 그 도면의 `impact` 와 `down`.
+- 한 타입에서 낡은 것만: `objects_list(type, conditions=[{"field": "lineage", "op": "eq", "value":
+  "stale"}])`(`direct` 는 바로 낡은 것만, `fresh` 는 낡지 않은 것, `ne` 도). 통계 · 내보내기도 같은
+  조건이다. 목록 응답의 `lineage` 가 그 쪽의 낡은 줄만 `{id: "direct" | "upstream"}` 로 표시한다.
+- **낡음은 오늘의 판정이다** — `as_of` 와 상관없이 오늘 유효한 선 · 지금 값으로 본다. 20단계까지,
+  지운 원천은 치지 않는다. 줄의 `revision_key` 가 비었으면 원천에 개정 칸이 없어 수정 시각으로 본
+  것이다(이름만 고쳐도 낡음) — 그렇게 말한다.
+- **다시 고정** — `lineage_repin(type_slug, id, relation_ids=, basis=, note=)`, **사람이 정한 뒤에만**:
+  `basis="checked"`(영향 없음 확인) · `"rebuilt"`(다시 만들었음). 낡음 표시를 없애려고 네가 고르지
+  않는다 — 옮긴 고정은 이 도구로 되돌릴 길이 없다. `note` 에 사람이 말한 근거를 적는다(감사 · 이력에
+  앞뒤 개정과 함께 남는다). `relation_ids` 를 안 주면 이 객체의 원천 선 전부다.
+- **위에서 낡음은 그 객체를 다시 고정해도 안 풀린다** — 원천이 그대로 낡았기 때문이다. 위에서부터
+  차례로: 바로 낡은 원천을 다시 고정하면, 그 아래는 다른 까닭이 없으면 함께 풀린다. 원천을 고쳐
+  다시 만들었으면(수정) 그 아래가 바로 낡음이 되는 것이 정상이다 — 한 단 내려가 같은 판단을 받는다.
+- 검토함(`review_list(kind="stale_lineage")`)에도 바로 낡은 파생물마다 한 줄로 선다 — 처리는 같은
+  다시 고정이다(`find` 주제의 검토함).
 
 <!--@ sparql -->
 ## 질의어로 묻기 (SPARQL)
@@ -787,6 +964,90 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
 - 기준 정보는 **코어 도구로** 다룬다. 확장의 기준 정보도 온톨로지 객체다(시험 항목 ·
   시뮬레이션 해석) — `objects_list` · `object_create` · `object_update` · `objects_import`
   가 그대로 쓰이고, 불량 유형처럼 목록인 칸도 그 객체의 속성이다.
+- **자주검증 회의 표(`jajuverify`)는 온톨로지가 아니다**(ADR 0044 — 먼저 독립된 표). `objects_*` 로 안
+  보인다 — 읽고 쓰는 길 전부가 `get_guide(topic="jajuverify")` 에 있다.
+
+<!--@ jajuverify -->
+## 자주검증 회의 표 — 읽고 나서 쓴다(ADR 0044)
+
+심사회 · 포스트모텀 · 설명회의 회의 한 장 = 머리(제목 · 일자) + 표. 열은 **항목 · 문제점 · 개선대책 · 일정 ·
+비고**이고, 줄은 묶음(머리줄 「설계 부문」)으로 나뉜다. 온톨로지가 아니라 확장의 표다 — 전부
+`extension_call("jajuverify", <경로>, method=…, query=…, body=…)` 로 부른다(경로는 `extensions_schema`
+가 말한 그대로). 여럿이 동시에 쓰는 표라 **읽은 값을 함께 보내야** 쓴다.
+
+### 1. 찾고 읽는다
+
+- 목록: `GET meetings` — `query={"kind": "review" | "postmortem" | "briefing", "q": …}`(제목 · 묶음 이름 ·
+  칸 글 검색). 줄 수 · 작성 완료 수 · 확정(`confirmed_at`)이 함께 온다.
+- **한 장: `GET meetings/{id}`** — 고치기 전에 **반드시** 읽는다. `cells`(열 — `kind` 가 `text` 면 글 + 사진,
+  `schedule` 이면 일정), `groups`(묶음, 차례대로), `rows`(묶음 없는 것부터 표의 차례대로 — 줄마다 `group_id` ·
+  글 칸 넷 · `schedule` · `due_on` · `photos` · `done`), `can_write`(줄 · 묶음 · 사진 · 작성 완료) ·
+  `can_manage`(제목 · 일자 · 삭제 · 확정). 못 쓰면 `write_refusal` 의 까닭을 사람에게 그대로 전한다.
+
+### 2. 칸을 고친다 — `PATCH rows/{row_id}`, 고친 칸마다 `expected`
+
+```json
+{"problem": "열림 소음 — 저온에서 심함", "expected": {"problem": "열림 소음"}}
+```
+
+- `expected` 는 **방금 읽은 그 칸의 값**이다. 빠진 칸이 있으면 422(「고치기 전 값을 expected 에 함께
+  보냅니다 — 먼저 한 장을 읽으세요」, `details.missing`) — 한 장을 읽고 다시 보낸다.
+- **409(`JAJUVERIFY-0010`)는 그사이 다른 사람이 같은 칸을 고친 것이다.** `details.current`(지금 값) ·
+  `updated_by` · `updated_at` 을 사람에게 보이고 **덮어쓸지 묻는다** — 묻지 않고 `expected` 를 지금 값으로
+  바꿔 다시 보내지 않는다(그것이 남의 글을 지우는 일이다). 다른 칸끼리는 부딪치지 않는다.
+- 보낸 칸만 바뀐다. 글 칸은 빈 글로 비운다. 옛 칸 `due_on` · 오타는 422 다(말없이 버리지 않는다).
+- 회의 제목 · 일자(`PATCH meetings/{id}`) · 묶음 이름(`PATCH groups/{id}`)도 같은 규칙이다(`expected`).
+
+### 3. 사진 — 올리고, 글 사이에 놓고, 크기를 고른다
+
+사진은 **그 칸의 첨부가 정본**이고, 칸 글 안의 **한 줄 표시**가 자리와 폭을 말한다:
+
+```
+문제점 글 첫 문단
+![캡처](photo:<첨부 id>?w=50)
+둘째 문단
+```
+
+- 표시는 **제 줄 하나**(앞뒤에 다른 글이 있으면 글이다), 폭 `w` 는 칸 너비의 % — 10 ~ 100(빠른 폭 25 · 50 ·
+  75 · 100). `[...]` 안의 이름은 비워도 된다.
+- **올리기**: `attachment_upload_prepare("", <줄 id>, <로컬 경로>, field="problem", owner_table="jv_rows")` →
+  돌아온 `curl` 을 셸에서 한 번 → 응답의 `id`. 칸은 글 칸(`topic` · `problem` · `action` · `remark`)만,
+  이미지만 붙는다. 토큰은 `objects:write` 가 함께 있어야 한다(첨부는 공통 자리라 그 범위다 —
+  `jajuverify:write` 만으로는 표가 안 나온다).
+- **놓기 · 옮기기 · 크기**: 한 장을 읽고, 그 칸 글에 표시 줄을 넣거나(원하는 문단 사이) 옮기거나 `w` 를 고쳐
+  `PATCH rows/{id}` 로 보낸다(`expected` 와 함께). 표시를 안 넣은 사진은 칸 끝에 기본 폭(50%)으로 선다.
+- 그 칸의 첨부가 아닌 id 를 가리키는 표시는 그려지지 않는다(남의 칸 사진을 옮기려면 그 칸에 다시 올린다).
+- **떼기**: `attachment_remove(<첨부 id>)` — **사람이 떼라고 한 것만.** 칸 글의 그 표시 줄은 서버가 뺀다.
+
+### 4. 일정 — 값의 열
+
+`"schedule": [{"date": "2026-11-15", "label": "설계 변경"}, {"date": "2026-11-30", "label": "재시험"}]` — 날짜
+차례로 저장되고, `due_on`(완료 예정일)은 그 가장 늦은 날로 따라온다(직접 못 쓴다). 비우려면 `[]`. 덮어쓰기
+보호는 목록 통째로다(`"expected": {"schedule": <읽은 목록>}`).
+
+### 5. 줄 · 묶음 — 더하기 · 옮기기(차례 충돌 없음)
+
+- 줄 추가: `POST meetings/{id}/rows` — `{"after_id": 줄}`(그 줄 아래, 그 줄의 묶음) 또는 `{"group_id": 묶음}`
+  (그 묶음의 맨 아래) + 처음 값(글 칸 · `schedule`, `expected` 없음).
+- 묶음 추가: `POST meetings/{id}/groups` — `{"title": "설계 부문", "row_ids": [옮길 줄…]}` → 새 묶음은
+  `group_id`.
+- **옮기기: `POST meetings/{id}/move`** — 상대 동작이라 그사이 남이 줄을 더하거나 지워도 409 가 아니다:
+  - `{"rows": [줄], "step": "up" | "down"}` — 그 묶음 안의 이웃과(경계는 안 넘는다)
+  - `{"group": 묶음, "step": "up" | "down"}`
+  - `{"rows": [줄…], "to": {"group": 묶음 | null, "before": 줄, "after": 줄, "at": "start" | "end"}}` — null 은 묶음
+    없음(표 맨 위). 기준 줄이 살아 있으면 그 줄의 묶음이 이긴다.
+  - 응답의 `skipped`(그사이 사라진 줄 · 묶음), `anchor_missing`(기준 줄이 사라져 끝에 놓음), `changed` 를
+    사람에게 전한다.
+- **지우기는 사람에게 먼저 묻는다** — `DELETE rows/{id}`, `DELETE groups/{id}?with_rows=false|true`(묶음만 해제 ·
+  줄까지), `DELETE meetings/{id}`.
+
+### 6. 작성 완료 · 확정
+
+- 작성 완료: `PUT rows/{id}/done` — `{"done": true}`(그 회의 부서의 구성원 누구나). 수정을 막지는 않는다.
+- **확정: `POST meetings/{id}/confirm` 은 사람에게 먼저 묻는다** — 확정되면 확정 해제(`DELETE …/confirm`)까지
+  아무도 고치지 못한다(모든 쓰기가 409 `JAJUVERIFY-0009`). 확정 · 해제 · 제목 · 일자 · 회의 삭제는 만든 사람 ·
+  그 부서 관리자 · 시스템 관리자만.
+- `pulse` · `presence` 는 화면이 쓰는 자리다 — AI 는 부르지 않아도 된다.
 
 <!--@ reports -->
 ## 보고서 기록 — RA 에서 쌓인 보고서에 묻기
@@ -1145,7 +1406,8 @@ Standard Platform 으로 띄운 플랫폼(허브 · 쌍둥이 · 그룹마다의
 - 「그 수가 뭔데」 — 셀의 `drill.params` 를 `objects_list(type_slug=drill.type_slug, conditions=)`
   로. `f.<칸>.<연산>=<값>` 을 `{"field": "<칸>", "op": "<연산>", "value": "<값>"}` 로,
   `nf<번호>.<칸>.<연산>=<값>`(제외 묶음 — 규칙 기준의 「앞 규칙에 안 맞음」)은 거기에
-  `"exclude": <번호>` 를 붙여 풀고, `status=` · `year=` 는 그 인자로. `drill.partial` 이 비어
+  `"exclude": <번호>` 를, `fe<번호>.`(같은 관계 묶음 — 같은 선 하나, `nf<n>.fe<m>.` 이면 둘 다)는
+  `"edge": <번호>` 를 붙여 풀고, `status=` · `year=` 는 그 인자로. `drill.partial` 이 비어
   있을 때 목록의 `total` 이 셀의 `count` 와 같다.
 
 **분석 — 세어 둔 셀 위의 통계(ADR 0014).** 「B10 이 몇 달이냐」 「새 모델이 전작보다

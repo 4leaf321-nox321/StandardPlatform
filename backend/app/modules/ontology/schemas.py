@@ -129,6 +129,10 @@ class ObjectTypeOut(BaseModel):
     usage: str = "axis"
     """`axis`(축) · `log`(기록, ADR 0011) — 기록은 통합 검색 · 축의 상세 · 그래프에서 건수로
     선다."""
+    revision_key: str = ""
+    """개정 칸(ADR 0041) — 이 타입의 판을 적는 속성(글자 · 고르기 · 숫자, 값 하나)의 키. 계보
+    관계의 원천이면 선이 맺힐 때 이 값이 박히고, 바뀌면 파생물이 낡음이다. 비었으면 개정 칸이
+    없어 객체의 바뀐 때로 판정한다."""
     list_view: dict[str, Any]
     form_view: dict[str, Any]
     detail_view: dict[str, Any]
@@ -161,6 +165,9 @@ class ObjectTypeWriteRequest(BaseModel):
     temporal_kind: str = "evergreen"
     usage: str = "axis"
     """`axis`(축) · `log`(기록)."""
+    revision_key: str = Field(default="", max_length=48)
+    """개정 칸 — 이 타입의 글자 · 고르기 · 숫자 속성(값 하나)의 키. 만들 때는 속성이 아직
+    없으므로 대개 비운다."""
     core: bool = False
     list_view: dict[str, Any] = Field(default_factory=dict)
     form_view: dict[str, Any] = Field(default_factory=dict)
@@ -195,6 +202,9 @@ class ObjectTypePatchRequest(BaseModel):
     key_scope: str | None = None
     temporal_kind: str | None = None
     usage: str | None = None
+    revision_key: str | None = Field(default=None, max_length=48)
+    """개정 칸 — 빈 글자(`""`)는 개정 칸을 비운다. 바꾸면 그 타입을 원천으로 둔 계보 선의
+    고정이 판정을 지키며 옮겨진다(ADR 0041)."""
     core: bool | None = None
     list_view: dict[str, Any] | None = None
     form_view: dict[str, Any] | None = None
@@ -229,11 +239,22 @@ class RelationTypeOut(BaseModel):
     transitive: bool
     acyclic: bool
     cardinality: str
+    effectivity: bool = False
+    """유효 기간을 받는가(ADR 0039) — 켜면 선마다 `valid_from`(포함) · `valid_to`(제외)."""
+    quantity_key: str = ""
+    """수량 칸(ADR 0040) — 이 종류의 숫자 관계 속성 하나의 키. 전개(BOM)가 관계마다 「부모
+    하나에 자식 몇 개」 로 읽고 경로를 따라 곱한다. 비었으면 모든 관계가 1개다."""
+    lineage_source: str = ""
+    """계보 관계인가, 어느 끝이 원천인가(ADR 0041) — `""`(계보 아님) · `src`(출발이 원천) ·
+    `dst`(도착이 원천). 원천은 만드는 데 쓰인 것이고 다른 끝이 파생물이다."""
     src_type_slugs: list[str] | None
     dst_type_slugs: list[str] | None
     managed_by: str = ""
     sort_order: int
     is_active: bool
+    properties: list[PropertyDefOut] = Field(default_factory=list)
+    """이 종류의 관계 속성(관계 자체에 붙는 값 — 근거 건수 · 수량 …). 정의 가져오기로
+    추가한다."""
 
 
 class RelationTypeWriteRequest(BaseModel):
@@ -245,6 +266,12 @@ class RelationTypeWriteRequest(BaseModel):
     transitive: bool = False
     acyclic: bool = False
     cardinality: str = "many_to_many"
+    effectivity: bool = False
+    quantity_key: str = Field(default="", max_length=48)
+    """수량 칸 — 이 종류의 숫자 관계 속성의 키. 만들 때는 관계 속성이 아직 없으므로 대개
+    비운다."""
+    lineage_source: str = Field(default="", max_length=8)
+    """계보의 원천 끝 — `""` · `src` · `dst`. 방향 있는 종류만."""
     src_type_slugs: list[str] | None = None
     dst_type_slugs: list[str] | None = None
     sort_order: int = 0
@@ -261,6 +288,13 @@ class RelationTypePatchRequest(BaseModel):
     transitive: bool | None = None
     acyclic: bool | None = None
     cardinality: str | None = None
+    effectivity: bool | None = None
+    """끄려면 기간이 든 관계가 없어야 한다 — 있으면 거절한다(그 기간이 뜻을 잃는다)."""
+    quantity_key: str | None = Field(default=None, max_length=48)
+    """수량 칸 — 이 종류의 숫자 · 값 하나 관계 속성의 키. 빈 글자(`""`)는 수량 칸을 비운다."""
+    lineage_source: str | None = Field(default=None, max_length=8)
+    """계보의 원천 끝 — `""`(계보 끄기) · `src` · `dst`. 켜거나 끝을 바꾸면 이 종류의 선 전부를
+    지금 값으로 다시 고정하고, 끄면 고정을 비운다(ADR 0041)."""
     src_type_slugs: list[str] | None = None
     dst_type_slugs: list[str] | None = None
     sort_order: int | None = None

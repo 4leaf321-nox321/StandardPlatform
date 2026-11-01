@@ -81,6 +81,14 @@ def plan(db: Session, object_type: ObjectType, source_key: str) -> PromotionPlan
 
     edges = _edges_of(db, ids)
     out.relations = len(edges)
+    dated = [one for one in edges if one.valid_from is not None or one.valid_to is not None]
+    if dated:
+        # 원 표와 잇는 선(`object_links`)에는 유효 기간이 없다(ADR 0039) — 옮기면 기간이
+        # 사라져 지난 선이 지금 선이 된다. 조용히 버리지 않고 먼저 정리하게 한다.
+        out.errors.append(
+            f"유효 기간이 든 관계가 {len(dated)}개 있어 승격하지 않습니다 — 원 표와 잇는 "
+            "관계는 기간을 담지 못합니다. 그 관계들의 기간을 비우거나 지난 관계를 정리하세요."
+        )
     return out
 
 

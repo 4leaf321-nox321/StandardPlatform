@@ -54,6 +54,9 @@ _VALIDATION_MESSAGES = {
     "too_long": "너무 많습니다",
     "too_short": "개수가 모자랍니다",
     "less_than_equal": "너무 큽니다",
+    # 모르는 칸을 거절하는 본문(`extra="forbid"`) — 옛 칸 · 오타를 말없이 버리면 보낸 쪽은
+    # 저장된 줄 안다.
+    "extra_forbidden": "모르는 칸입니다",
 }
 
 #: 한 번에 보여 줄 항목 수. 다 늘어놓으면 첫 줄부터 안 읽는다.

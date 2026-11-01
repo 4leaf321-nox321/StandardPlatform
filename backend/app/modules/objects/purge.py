@@ -12,9 +12,10 @@ RESTRICT 로 붙들어서, 객체를 한 번이라도 넣어 본 타입은 영�
 - 첨부는 **행만** 지운다(`files` 의 규칙 — 같은 내용을 다른 행이 가리킬 수 있다).
   초기화와 같다.
 
-관계 · 원 표와 이은 선 · 별칭 · 연도 배정은 FK 가 함께 지울 것도 여기서 **명시적으로** 지운다 —
-무엇이 얼마나 사라졌는지가 미리 보기와 맞아야 사람이 믿는다. 끊은 선의 무덤은 남기지 않는다:
-끝의 객체까지 사라져 받는 쪽이 식별자로 바꿀 수 없고, 그 객체의 삭제 표식이 이미 그것을 말했다.
+관계 · 원 표와 이은 선 · 별칭 · 연도 배정 · 제안된 관계는 FK 가 함께 지울 것도 여기서
+**명시적으로** 지운다 — 무엇이 얼마나 사라졌는지가 미리 보기와 맞아야 사람이 믿는다. 끊은 선의
+무덤은 남기지 않는다: 끝의 객체까지 사라져 받는 쪽이 식별자로 바꿀 수 없고, 그 객체의 삭제
+표식이 이미 그것을 말했다.
 """
 
 from __future__ import annotations
@@ -37,6 +38,7 @@ from app.modules.objects.models import (
     ObjectRelation,
     ObjectWatch,
     ObjectYear,
+    RelationProposal,
 )
 from app.modules.ontology.models import ObjectType
 from app.shared.errors import AppError, code
@@ -56,6 +58,8 @@ class Purge:
     aliases: int = 0
     years: int = 0
     attachments: int = 0
+    proposals: int = 0
+    """그 객체들에 걸린 제안된 관계(ADR 0042) — 상태와 상관없이."""
     pointing: list[str] = field(default_factory=list)
     """살아 있는 객체가 지운 객체를 가리키는 자리 — 「타입.칸 N개」. 있으면 하지 않는다."""
 
@@ -70,6 +74,7 @@ class Purge:
             (self.aliases, "별칭"),
             (self.years, "연도 배정"),
             (self.attachments, "첨부(파일 목록의 행)"),
+            (self.proposals, "제안된 관계"),
         ):
             if count:
                 lines.append(f"{what} {count}개")
@@ -117,6 +122,14 @@ def plan(db: Session, object_type: ObjectType) -> Purge:
         attachments=_count(
             db, Attachment, Attachment.owner_table == "objects", Attachment.owner_id.in_(ids)
         ),
+        proposals=_count(
+            db,
+            RelationProposal,
+            or_(
+                RelationProposal.src_object_id.in_(ids),
+                RelationProposal.dst_object_id.in_(ids),
+            ),
+        ),
         pointing=_pointing(db, object_type, ids),
     )
 
@@ -161,6 +174,15 @@ def apply(db: Session, found: Purge) -> None:
         db.execute(
             delete(ObjectLink).where(
                 or_(ObjectLink.src_id.in_(ids), ObjectLink.dst_id.in_(ids))
+            )
+        )
+        # 제안 — 선보다 먼저(확정으로 생긴 선을 가리킨다, SET NULL 이지만 계획과 맞추려고).
+        db.execute(
+            delete(RelationProposal).where(
+                or_(
+                    RelationProposal.src_object_id.in_(ids),
+                    RelationProposal.dst_object_id.in_(ids),
+                )
             )
         )
         db.execute(

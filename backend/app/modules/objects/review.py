@@ -36,7 +36,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import json
 import re
 import uuid
@@ -57,6 +56,7 @@ from app.modules.objects import (
     lifecycle,
     misses,
     quality,
+    reviewkit,
     rewrite,
     system,
 )
@@ -67,7 +67,6 @@ from app.modules.ontology import managed
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.modules.ontology.services import validate_properties
 from app.modules.review import registry
-from app.modules.review.models import ReviewDecision
 from app.modules.review.registry import (
     IGNORE,
     Applied,
@@ -124,50 +123,6 @@ def _uuid(raw: str) -> uuid.UUID | None:
 
 def _uuids(raw: Iterable[str]) -> list[uuid.UUID]:
     return [one for one in (_uuid(text) for text in raw) if one is not None]
-
-
-def _hash(*parts: str) -> str:
-    return hashlib.sha1("\x1f".join(parts).encode("utf-8")).hexdigest()[:16]
-
-
-class _Editable:
-    """「이 사람이 이 부서 것을 고칠 수 있나」 — 부서마다 한 번만 묻는다."""
-
-    def __init__(self, db: Session, user: User) -> None:
-        self.db = db
-        self.user = user
-        self.seen: dict[uuid.UUID | None, str | None] = {}
-
-    def why_not(self, workspace_id: uuid.UUID | None) -> str | None:
-        if workspace_id not in self.seen:
-            try:
-                require_owner_edit(
-                    self.db,
-                    self.user,
-                    workspace_id,
-                    what="객체",
-                    code_value=code("OBJECTS", 12),
-                )
-            except AppError as denied:
-                self.seen[workspace_id] = denied.message
-            else:
-                self.seen[workspace_id] = None
-        return self.seen[workspace_id]
-
-
-def _ignored(db: Session, kind: str) -> set[tuple[str, str]]:
-    """결정 기록에만 기억하는 무시 — (항목, 지문). 복원한 것은 뺀다."""
-    return {
-        (item_id, signature)
-        for item_id, signature in db.execute(
-            select(ReviewDecision.item_id, ReviewDecision.signature).where(
-                ReviewDecision.kind == kind,
-                ReviewDecision.action == "ignore",
-                ReviewDecision.status == "done",
-                ReviewDecision.undone_at.is_(None),
-            )
-        )
-    }
 
 
 def _workspace_names(db: Session) -> dict[uuid.UUID, str]:
@@ -528,7 +483,7 @@ def collect_aliases(db: Session, user: User, flt: Filters) -> Collected:
             f"검수 대기 별칭은 오래된 것부터 {ALIAS_CAP:,}건만 싣습니다 — 나머지 "
             f"{total - len(found):,}건은 이것을 처리한 뒤에 표시됩니다."
         )
-    editable = _Editable(db, user)
+    editable = reviewkit.Editable(db, user)
     items: list[Item] = []
     for alias_row, label, key, workspace_id, object_type, similarity, clash in found:
         choice, confidence, reason = _alias_recommendation(
@@ -782,8 +737,8 @@ def collect_duplicates(db: Session, user: User, flt: Filters) -> Collected:
     """이름을 정규화하면 같은 객체들(`quality.duplicate_key`) — 타입마다, **볼 수 있는 것만.**
     품질과 같은 상한: 객체가 `quality.SCAN_MAX_ROWS` 를 넘는 타입은 훑지 않고 그렇다고
     말한다."""
-    ignored = _ignored(db, "duplicate")
-    editable = _Editable(db, user)
+    ignored = reviewkit.ignored(db, "duplicate")
+    editable = reviewkit.Editable(db, user)
     names = _workspace_names(db)
     wanted = flt.item_ids
     items: list[Item] = []
@@ -820,7 +775,7 @@ def collect_duplicates(db: Session, user: User, flt: Filters) -> Collected:
             norm: members
             for norm, members in groups.items()
             if len(members) > 1
-            and (wanted is None or f"{object_type.slug}:{_hash(norm)}" in wanted)
+            and (wanted is None or f"{object_type.slug}:{reviewkit.digest(norm)}" in wanted)
         }
         if not dupes:
             continue
@@ -854,8 +809,8 @@ def collect_duplicates(db: Session, user: User, flt: Filters) -> Collected:
             for one in members:
                 one.refs = refs.get(one.id, 0)
                 one.properties = props.get(one.id)
-            item_id = f"{object_type.slug}:{_hash(norm)}"
-            signature = _hash(*sorted(str(one.id) for one in members))
+            item_id = f"{object_type.slug}:{reviewkit.digest(norm)}"
+            signature = reviewkit.digest(*sorted(str(one.id) for one in members))
             if (item_id, signature) in ignored:
                 continue
             total += 1
@@ -1250,9 +1205,9 @@ def collect_broken_refs(db: Session, user: User, flt: Filters) -> Collected:
             f"지워진 것을 가리키는 칸은 줄이 많은 것부터 {REF_CAP:,}묶음까지 싣습니다."
         )
         groups = groups[:REF_CAP]
-    ignored = _ignored(db, "broken_ref")
+    ignored = reviewkit.ignored(db, "broken_ref")
     dead = _dead_info(db, user, list({row[2] for row in groups}))
-    editable = _Editable(db, user)
+    editable = reviewkit.Editable(db, user)
     candidates: dict[tuple[uuid.UUID, tuple[uuid.UUID, ...]], tuple[list[Choice], str]] = {}
     items: list[Item] = []
     for type_id, key, dst_id, workspace_id, count in groups:
@@ -1461,7 +1416,7 @@ def _ref_changes(
         groups.setdefault(json.dumps(after, sort_keys=True), []).append(
             _RefChange(object_id, workspace_id, value, after)
         )
-    editable = _Editable(db, user)
+    editable = reviewkit.Editable(db, user)
     for members in groups.values():
         # 새 값의 모양은 값마다 한 번 — 값 하나 칸이면 묶음 전체가 같은 값이다.
         try:
@@ -1759,7 +1714,7 @@ def undo_broken_ref(
             )
         )
     }
-    editable = _Editable(db, user)
+    editable = reviewkit.Editable(db, user)
     writes: list[tuple[uuid.UUID, bool, Any]] = []
     history: list[tuple[uuid.UUID, str, uuid.UUID | None, dict[str, Any]]] = []
     skipped: Counter[str] = Counter()

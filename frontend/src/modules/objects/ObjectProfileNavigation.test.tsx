@@ -17,6 +17,8 @@ const objectApi = vi.hoisted(() => ({
   history: vi.fn().mockResolvedValue([]),
   rollup: vi.fn().mockResolvedValue([]),
   years: vi.fn().mockResolvedValue([]),
+  // 관련 객체가 열린 제안을 따로 읽는다(ADR 0042).
+  relationProposals: vi.fn().mockResolvedValue([]),
 }))
 const ontologyApi = vi.hoisted(() => ({ schema: vi.fn() }))
 vi.mock('@/modules/objects/api', () => ({ objectApi }))

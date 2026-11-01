@@ -36,6 +36,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.objects import axes, paths
+from app.modules.objects import edges as edge_rule
 from app.modules.objects.axes import (  # noqa: F401 — 통계의 공개 이름으로 다시 내보낸다
     BOOL_LABELS,
     DATE_KINDS,
@@ -270,6 +271,7 @@ def summarize(
     order: str = "desc",
     grain: str | None = None,
     viewer: User | None = None,
+    at: edge_rule.AtArg = "today",
 ) -> Summary:
     """목록과 **같은 거르기** 위에서 센다. `split_by`(세부 기준)를 주면 한 번 더 나눈다.
 
@@ -297,7 +299,8 @@ def summarize(
         )
     scope = as_scope(db, target)
     defs = scope.defs
-    plan = axes.JoinPlan(db, scope, prefix="g", viewer=viewer)
+    # 기준일(ADR 0039) — 관계 너머 · 계층 축의 기준이 목록의 거르기와 같은 날의 선을 따라간다.
+    plan = axes.JoinPlan(db, scope, prefix="g", viewer=viewer, at=at)
     # 기간 단위는 날짜인 축에 건다 — 화면의 고르개 하나가 기준 · 세부 기준 중 날짜인 쪽의
     # 것이다. 기준이 날짜가 아니고 세부 기준이 날짜면 세부 기준만 받는다. 둘 다 아니면 기준이
     # 받아 「날짜 칸이 아니다」 로 거절한다(조용히 버리면 고른 단위가 무시된 그림이 「월별」 로
@@ -601,6 +604,7 @@ def points(
     group_by: str | None = None,
     grain: str | None = None,
     viewer: User | None = None,
+    at: edge_rule.AtArg = "today",
 ) -> Points:
     """고른 것들의 **원값**을 그대로. 상자 그림은 x 하나와 기준, 산점도는 x·y 둘."""
     scope = as_scope(db, target)
@@ -609,7 +613,7 @@ def points(
     y_def = _number_def(defs, y) if y else None
     axis = None
     if group_by:
-        plan = axes.JoinPlan(db, scope, prefix="g", viewer=viewer)
+        plan = axes.JoinPlan(db, scope, prefix="g", viewer=viewer, at=at)
         # 분포의 묶음은 화면의 세부 기준이다 — 날짜일 때만 기간 단위를 받는다.
         axis = plan.axis(group_by, grain=grain if plan.dated(group_by) else None)
     group_expr = axis.expr if axis else None

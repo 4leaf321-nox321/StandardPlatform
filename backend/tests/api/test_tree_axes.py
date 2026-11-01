@@ -198,7 +198,11 @@ def test_트리가_바뀌면_계층_축_지표도_전량으로_센다(
         "TOP": 3,
         "OTHER": 1,
     }
-    assert _recount(client, admin, slug)["mode"] == "incremental"
+    first = _recount(client, admin, slug)
+    assert first["mode"] == "incremental", first["note"]
+    # 바꾼 선이 계산의 워터마크 뒤에 찍혀야 「트리가 바뀌었다」 를 본다 — 시계가 뒤로 튀면
+    # 앞에 찍혀 증분으로 갔다(전체 시험에서 가끔).
+    clock_settled()
     gone = client.delete(
         f"/api/objects/{part}/{p['LEAF']['id']}/relations/{world['links']['LEAF']}",
         headers=admin.headers,

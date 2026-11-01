@@ -39,7 +39,9 @@ import { ObjectImportDialog } from '@/modules/objects/ObjectImportDialog'
 import { PhotoImportDialog } from '@/modules/objects/PhotoImportDialog'
 import { InterfaceListPage } from '@/modules/objects/InterfaceListPage'
 import { ObjectTree } from '@/modules/objects/ObjectTree'
+import { AsOfPicker } from '@/modules/objects/AsOfPicker'
 import { conditionsFromParams, withConditions } from '@/modules/objects/urlConditions'
+import { canBeDerived, hasStaleOnly, withStaleOnly } from '@/modules/objects/lineage'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { canCreateObject, isAnyManager } from '@/shared/auth/roles'
 import { EmptyState } from '@/shared/components/EmptyState'
@@ -270,6 +272,11 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
   const [under, setUnder] = useState<string | null>(null)
   const [deep, setDeep] = useState(true)
   /**
+   * **기준일**(ADR 0039, 빈 글자 = 오늘) — 트리 · 하위 포함 · 관계 조건 · 통계가 그날 유효한
+   * 관계만 따라간다. 주소의 `as_of` 로도 온다(링크로 그날의 구조를 건넨다).
+   */
+  const [asOf, setAsOf] = useState(() => params.get('as_of') ?? '')
+  /**
    * **올해가 기본이다.** 연도를 쓰는 축에서 전체를 먼저 보여 주면 몇 해치가
    * 섞여 뜨고, 사람은 그것을 지금 쓰는 것으로 읽는다. 「전체 보기」 는 옵트인이다.
    *
@@ -341,6 +348,15 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
       ),
     [schema.data],
   )
+  /**
+   * 「낡은 것만」(ADR 0041) — 이 타입이 계보의 **파생물** 끝에 설 수 있을 때만 선다(낡는 것은
+   * 파생물이다). 조건 `f.lineage.eq=stale` 이라 주소 · 저장된 뷰 · 통계 · 내보내기에 같이 간다.
+   */
+  const staleApplies =
+    Boolean(foundType) &&
+    foundType?.kind_class !== 'system' &&
+    canBeDerived(typeSlug, schema.data?.relation_types ?? [], schema.data?.interfaces ?? [])
+  const staleOnly = hasStaleOnly(conditions)
   /** 연도가 뜻을 갖는 축인가. `evergreen` 이면 토글을 안 그린다 — **없는 것을
    *  있는 척하지 않는다.** */
   const yearApplies = Boolean(foundType && foundType.temporal_kind !== 'evergreen')
@@ -348,7 +364,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
   // 목록이 달라지면 고른 것을 푼다(쪽 넘김·필터·타입 바꾸기).
   useEffect(() => {
     setPicked(new Set())
-  }, [typeSlug, query, JSON.stringify(conditions), status, under, deep, year, offset])
+  }, [typeSlug, query, JSON.stringify(conditions), status, under, deep, year, offset, asOf])
 
   const list = useResource(
     () =>
@@ -360,11 +376,23 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
         deep,
         year: yearApplies ? year : null,
         offset,
+        asOf: asOf || null,
       }),
     // conditions 는 배열이라 참조가 매번 바뀐다 — 내용으로 비교한다. `yearApplies` 도 —
     // 정의가 오기 전의 첫 요청은 연도 없이 나가는데, 그것만 보고 멈추면 고르개는 「올해」 인데
     // 목록은 전체 연도였다(2026-10-08).
-    [typeSlug, query, JSON.stringify(conditions), status, under, deep, year, yearApplies, offset],
+    [
+      typeSlug,
+      query,
+      JSON.stringify(conditions),
+      status,
+      under,
+      deep,
+      year,
+      yearApplies,
+      offset,
+      asOf,
+    ],
   )
   // **고른 것 중 지금 쪽에 보이는 것만** 대상이다. 조건 · 검색어 · 쪽을 바꾼 직후 옛 목록이 아직
   // 보이는 사이(`stale`)에 고른 줄은 새 목록에 없는데도 「N건 골랐습니다」 로 남아 일괄 수정 ·
@@ -380,6 +408,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
     under,
     deep,
     year: yearApplies ? year : null,
+    asOf: asOf || null,
   }
 
   /** 참조 조건의 값을 이름으로 보여 주려고 — 목록에 실린 것들의 ref_labels 를 모은다. */
@@ -400,9 +429,21 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
     conditions.length > 0 ||
     Boolean(status) ||
     Boolean(under) ||
+    Boolean(asOf) ||
     (yearApplies && year !== null)
   /** 트리가 정의된 타입인가. 안 정했으면 왼쪽을 안 그린다. */
   const hasTree = Boolean(type?.list_view?.tree?.relation)
+  /**
+   * 기준일 고르개를 세우나 — 관계를 따라가는 것이 있을 때만(트리 · 관계 조건 · 「하위 전체」).
+   * 관계를 안 따라가는 목록에 세우면 바꿔도 아무것도 안 바뀌고, 그것은 고장으로 읽힌다.
+   */
+  const followsRelations =
+    hasTree ||
+    Boolean(asOf) ||
+    grouping ||
+    conditions.some(
+      (one) => one.op === 'under' || one.field.startsWith('out.') || one.field.startsWith('in.'),
+    )
   const columns = useMemo(
     () =>
       type
@@ -439,6 +480,7 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
             setOffset(0)
           }}
           reloadKey={list.data?.total ?? 0}
+          asOf={asOf}
         />
       )}
 
@@ -631,6 +673,36 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
               아래 것까지 포함
             </label>
           )}
+          {/* 「낡은 것만」 — 원천이 고정 뒤에 바뀐 파생물(바로 · 위에서). 계보는 오늘의 관계로
+            판정한다(기준일과 상관없다). */}
+          {staleApplies && (
+            <label
+              className="text-muted-foreground flex items-center gap-1.5 pb-1.5 text-sm"
+              title="원천이 고정 뒤에 바뀐 파생물(낡음 · 위에서 낡음)만 표시합니다"
+            >
+              <input
+                type="checkbox"
+                className="size-4"
+                checked={staleOnly}
+                onChange={(event) => {
+                  setConditions(withStaleOnly(conditions, event.target.checked))
+                  setOffset(0)
+                }}
+              />
+              낡은 것만
+            </label>
+          )}
+          {/* **기준일** — 「하위 포함」 과 관계 조건이 그날 유효한 관계로 펼친다(비우면 오늘). */}
+          {followsRelations && !isSystem && (
+            <AsOfPicker
+              value={asOf}
+              onChange={(next) => {
+                setAsOf(next)
+                setOffset(0)
+              }}
+              className="pb-0.5"
+            />
+          )}
         </div>
 
         {exportError && <ErrorNotice error={exportError} className="mb-4" />}
@@ -811,9 +883,11 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
               narrowed
                 ? under
                   ? '고른 가지 아래에 맞는 것이 없습니다. 왼쪽에서 「전체 보기」 를 누르거나 필터를 줄여 보세요.'
-                  : yearApplies && year !== null
-                    ? `${year}년에 해당하는 것이 없습니다. 「전체 연도」 로 바꿔 보세요.`
-                    : '찾는 말이나 필터를 줄여 보세요.'
+                  : staleOnly
+                    ? '낡은 것이 없습니다 — 원천이 고정 뒤에 바뀐 파생물이 없거나 다른 조건(연도 · 검색어)이 좁습니다. 「낡은 것만」 을 해제하면 다시 표시합니다.'
+                    : yearApplies && year !== null
+                      ? `${year}년에 해당하는 것이 없습니다. 「전체 연도」 로 바꿔 보세요.`
+                      : '찾는 말이나 필터를 줄여 보세요.'
                 : isSystem
                   ? '비추는 원 표가 비어 있습니다.'
                   : '「생성」 로 첫 항목을 넣거나, 다른 부서의 것이라면 그 부서 사람에게 물어보세요.'
@@ -926,7 +1000,13 @@ function TypeListPage({ schema }: { schema: Resource<OntologySchema> }) {
                       </TableCell>
                     )}
                     <TableCell>
-                      <StatusBadge kind="object" value={row.status} />
+                      <span className="flex flex-wrap items-center gap-1">
+                        <StatusBadge kind="object" value={row.status} />
+                        {/* 계보의 낡음(ADR 0041) — 서버가 낡은 줄만 싣는다. */}
+                        {list.data?.lineage?.[row.id] && (
+                          <StatusBadge kind="lineage" value={list.data.lineage[row.id]} />
+                        )}
+                      </span>
                     </TableCell>
                   </TableRow>
                 ))}

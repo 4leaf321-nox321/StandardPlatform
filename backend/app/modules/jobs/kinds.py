@@ -21,7 +21,7 @@ import zipfile
 from collections.abc import Callable
 from contextlib import AbstractContextManager
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from types import SimpleNamespace
 from typing import Any, BinaryIO
 
@@ -435,6 +435,7 @@ def _list_query(work: Work) -> tuple[ObjectType, Any]:
     params = QueryParams(pairs)
     under = params.get("under")
     year = params.get("year")
+    as_of = params.get("as_of")
     stmt = objects_routes._filtered(
         work.db,
         _user(work),
@@ -446,6 +447,8 @@ def _list_query(work: Work) -> tuple[ObjectType, Any]:
         under=uuid.UUID(under) if under else None,
         deep=(params.get("deep") or "true").lower() != "false",
         cap=False,
+        # 맡길 때 박은 기준일(ADR 0039) — 없으면(그 전에 맡긴 작업) 오늘.
+        as_of=date.fromisoformat(as_of) if as_of else None,
     )
     return object_type, stmt
 
@@ -457,11 +460,42 @@ EXPORT_CHUNK = 2_000
 EXPORT_PLAIN_MAX = 100_000
 
 
+def _linked_columns(work: Work, object_type: ObjectType) -> list[Any]:
+    """목록의 이어진 칸(`columns`, ADR 0043) — 맡길 때 적은 주소를 같은 기준일로 다시 푼다."""
+    from app.modules.objects import edges, linked, paths
+
+    query = work.params.get("query") or {}
+    addresses = [str(one) for one in query.get("columns") or []]
+    if not addresses:
+        return []
+    raw_day = (query.get("as_of") or [None])[0]
+    day = edges.at(date.fromisoformat(raw_day) if raw_day else None)
+    resolver = paths.Resolver(work.db, object_type, viewer=_user(work), at=day)
+    return linked.parse(resolver, addresses)
+
+
+def _linked_record(cell: Any, fmt: str) -> Any:
+    """이어진 칸 하나를 파일의 칸으로 — CSV 는 ` | ` 로 이은 글(더 있으면 끝에 `…`), JSON 은
+    `{"values": [...], "more": …}`."""
+    labels = [one.label for one in cell.values] if cell is not None else []
+    more = bool(cell is not None and cell.more)
+    if fmt == "json":
+        return {"values": labels, "more": more}
+    return " | ".join([*labels, "…"] if more else labels)
+
+
 def objects_export(work: Work) -> dict[str, Any]:
     """목록과 같은 거르기 · 정렬로 **덩어리마다 읽어 쓴다**(`yield_per`). 예전에는 타입 전체를
-    객체로 싣고 파일을 한 번에 만들어, 기록 200만 건이면 워커의 메모리가 먼저 바닥났다."""
+    객체로 싣고 파일을 한 번에 만들어, 기록 200만 건이면 워커의 메모리가 먼저 바닥났다.
+
+    목록의 이어진 칸(`columns`)도 같은 덩어리마다 붙는다 — 열 이름은 주소
+    (`out.sku_base.label`)다. 가져오기는 그 열을 건너뛴다(읽기 전용 열 — 내보낸 파일을 그대로
+    다시 올릴 수 있게)."""
+    from app.modules.objects import linked
+
     object_type, stmt = _list_query(work)
     defs = properties_of(work.db, object_type.id)
+    more_columns = _linked_columns(work, object_type)
     total = int(
         work.db.scalar(select(func.count()).select_from(stmt.order_by(None).subquery())) or 0
     )
@@ -470,7 +504,7 @@ def objects_export(work: Work) -> dict[str, Any]:
     fmt = "json" if str(work.params.get("format") or "csv") == "json" else "csv"
     name = f"{object_type.slug}-{stamp}.{fmt}"
     zipped = total > EXPORT_PLAIN_MAX
-    columns = bulk.export_columns(defs)
+    columns = [*bulk.export_columns(defs), *(one.address for one in more_columns)]
 
     buffer = io.BytesIO()
     archive = zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) if zipped else None
@@ -481,7 +515,17 @@ def objects_export(work: Work) -> dict[str, Any]:
         apply_sort(stmt, object_type.list_view or {}).execution_options(yield_per=EXPORT_CHUNK)
     )
     for part in rows.partitions():
-        records = bulk.export_rows(work.db, defs, list(part), viewer=work.user)
+        found = list(part)
+        records = bulk.export_rows(work.db, defs, found, viewer=work.user)
+        if more_columns:
+            # 볼 수 없는 객체를 가리키는 값은 비운다 — 파일이 화면에서 가린 것을 열지 않게.
+            cells = linked.cells(
+                work.db, work.user, more_columns, [one.id for one in found], hidden_label=None
+            )
+            for row, record in zip(found, records, strict=True):
+                mine = cells.get(row.id, {})
+                for column in more_columns:
+                    record[column.address] = _linked_record(mine.get(column.address), fmt)
         if fmt == "csv":
             out.write("".join(_csv_line(columns, one) for one in records).encode("utf-8"))
         else:
@@ -534,13 +578,11 @@ def relations_export(work: Work) -> dict[str, Any]:
             data=payload,
         )
     else:
-        # **열은 나온 줄에서 모은다.** 고정 넷만 적으면 관계에 붙은 값(근거 건수 · 근거
-        # 종류 …)이 파일에서 조용히 빠지고, 그 파일을 다시 넣으면 그 값이 사라진다.
-        extra = sorted({key for one in records for key in one} - set(bulk.RELATION_COLUMNS))
+        # **열은 나온 줄에서 모은다**(`relation_columns_of`).
         work.emit(
             name=f"{object_type.slug}-relations-{stamp}.csv",
             content_type="text/csv; charset=utf-8",
-            data=bulk.to_csv([*bulk.RELATION_COLUMNS, *extra], records),
+            data=bulk.to_csv(bulk.relation_columns_of(records), records),
         )
     return {"type_slug": object_type.slug, "rows": len(records), "format": fmt}
 
@@ -815,6 +857,32 @@ def graph_edge_counts(work: Work) -> dict[str, Any]:
     }
 
 
+def graph_map_full(work: Work) -> dict[str, Any]:
+    """지식 그래프 지도의 전체 배치(ADR 0046) — 처음 판 · 관리자의 「전체 다시 배치」. 기준정보
+    전부를 힘 배치로 놓고 원반 크기의 수를 얼린다. 기준정보가 상한(20만)을 넘으면 판을 만들지
+    않고 그렇다고 말한다(작업 실패 — 화면이 그 까닭을 그대로 보인다)."""
+    from app.modules.graph import mapbuild
+
+    return mapbuild.run_full(
+        work.db, user_id=work.user.id if work.user else None, progress=work.progress
+    )
+
+
+def graph_map_append(work: Work) -> dict[str, Any]:
+    """지도의 매일 덧붙임 — 새 기준정보만 빈자리에(기존 자리 움직임 0). 판이 없으면 전체
+    배치."""
+    from app.modules.graph import mapbuild
+
+    return mapbuild.run_append(work.db, progress=work.progress)
+
+
+def graph_map_count(work: Work) -> dict[str, Any]:
+    """지도의 시간마다 집계 — (허브, 기록 타입, 부서) → 지금의 수."""
+    from app.modules.graph import mapbuild
+
+    return mapbuild.run_count(work.db, progress=work.progress)
+
+
 def metric_insights(work: Work) -> dict[str, Any]:
     """지표 하나를 훑어 「눈여겨볼 것」 을 적는다(ADR 0032) — 지표를 다시 센 뒤 들어온다.
     분석 하나의 실패는 훑기를 멈추지 않고 결과에 적는다."""
@@ -985,6 +1053,41 @@ register(
         False,
         False,
         graph_edge_counts,
+        allow_system=True,
+        admin_only=True,
+    )
+)
+# 지식 그래프 지도(ADR 0046) — 타이머(워커가 5분마다 `mapbuild.schedule`)가 넣고, 전체 다시
+# 배치는 시스템 관리자가 전용 경로(`POST /api/graph/map/relayout`)로.
+register(
+    Kind(
+        "graph_map_full",
+        "지식 그래프 지도 전체 배치",
+        False,
+        False,
+        graph_map_full,
+        allow_system=True,
+        admin_only=True,
+    )
+)
+register(
+    Kind(
+        "graph_map_append",
+        "지식 그래프 지도 덧붙임",
+        False,
+        False,
+        graph_map_append,
+        allow_system=True,
+        admin_only=True,
+    )
+)
+register(
+    Kind(
+        "graph_map_count",
+        "지식 그래프 지도 집계",
+        False,
+        False,
+        graph_map_count,
         allow_system=True,
         admin_only=True,
     )

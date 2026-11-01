@@ -23,9 +23,14 @@ interface Props {
   onSelect: (id: string | null) => void
   /** 관계가 바뀌면 다시 읽는다. */
   reloadKey: number
+  /**
+   * 기준일(`YYYY-MM-DD`, ADR 0039) — 그날 유효한 관계로 그린다. 비우면 오늘. 3월에 빠진 부품은
+   * 4월 기준의 트리에서 그 어셈블리 아래에 없다.
+   */
+  asOf?: string
 }
 
-export function ObjectTree({ typeSlug, selected, onSelect, reloadKey }: Props) {
+export function ObjectTree({ typeSlug, selected, onSelect, reloadKey, asOf = '' }: Props) {
   const [roots, setRoots] = useState<TreeNode[]>([])
   const [orphanCount, setOrphanCount] = useState(0)
   const [showOrphans, setShowOrphans] = useState(false)
@@ -36,7 +41,7 @@ export function ObjectTree({ typeSlug, selected, onSelect, reloadKey }: Props) {
     let cancelled = false
     setLoading(true)
     objectApi
-      .tree(typeSlug)
+      .tree(typeSlug, { asOf: asOf || null })
       .then((data) => {
         if (cancelled) return
         setRoots(data.nodes)
@@ -48,18 +53,18 @@ export function ObjectTree({ typeSlug, selected, onSelect, reloadKey }: Props) {
     return () => {
       cancelled = true
     }
-  }, [typeSlug, reloadKey])
+  }, [typeSlug, reloadKey, asOf])
 
   useEffect(() => {
     if (!showOrphans) return
     let cancelled = false
-    objectApi.tree(typeSlug, { orphans: true }).then((data) => {
+    objectApi.tree(typeSlug, { orphans: true, asOf: asOf || null }).then((data) => {
       if (!cancelled) setOrphans(data.nodes)
     })
     return () => {
       cancelled = true
     }
-  }, [typeSlug, showOrphans, reloadKey])
+  }, [typeSlug, showOrphans, reloadKey, asOf])
 
   if (loading) return null
 
@@ -79,7 +84,9 @@ export function ObjectTree({ typeSlug, selected, onSelect, reloadKey }: Props) {
 
       {roots.length === 0 && orphanCount === 0 ? (
         <p className="text-muted-foreground text-xs">
-          아직 이어진 것이 없습니다. 객체 상세의 「관련 객체」 에서 이으면 여기 구조가 생깁니다.
+          {asOf
+            ? `기준일 ${asOf} 에 유효한 관계가 없습니다 — 기준일을 비우면 오늘의 구조를 표시합니다.`
+            : '아직 이어진 것이 없습니다. 객체 상세의 「관련 객체」 에서 이으면 여기 구조가 생깁니다.'}
         </p>
       ) : (
         <ul className="space-y-0.5">
@@ -92,6 +99,7 @@ export function ObjectTree({ typeSlug, selected, onSelect, reloadKey }: Props) {
               selected={selected}
               onSelect={onSelect}
               reloadKey={reloadKey}
+              asOf={asOf}
             />
           ))}
         </ul>
@@ -138,6 +146,7 @@ function Node({
   selected,
   onSelect,
   reloadKey,
+  asOf,
 }: {
   typeSlug: string
   node: TreeNode
@@ -145,6 +154,7 @@ function Node({
   selected: string | null
   onSelect: (id: string) => void
   reloadKey: number
+  asOf: string
 }) {
   const [open, setOpen] = useState(false)
   const [children, setChildren] = useState<TreeNode[] | null>(null)
@@ -153,12 +163,14 @@ function Node({
     // **펼칠 때 그 단계만 읽는다.** 접힌 가지를 미리 읽으면 트리가 커질수록
     // 첫 화면이 느려지고, 그 느려짐은 화면 어디에도 안 적힌다.
     if (!open || children !== null) return
-    objectApi.tree(typeSlug, { parent: node.id }).then((data) => setChildren(data.nodes))
-  }, [open, children, typeSlug, node.id])
+    objectApi
+      .tree(typeSlug, { parent: node.id, asOf: asOf || null })
+      .then((data) => setChildren(data.nodes))
+  }, [open, children, typeSlug, node.id, asOf])
 
   useEffect(() => {
     setChildren(null)
-  }, [reloadKey])
+  }, [reloadKey, asOf])
 
   return (
     <li>
@@ -198,6 +210,7 @@ function Node({
               selected={selected}
               onSelect={onSelect}
               reloadKey={reloadKey}
+              asOf={asOf}
             />
           ))}
         </ul>

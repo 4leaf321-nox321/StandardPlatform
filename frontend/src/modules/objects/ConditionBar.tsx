@@ -9,12 +9,18 @@
  * 「넣을 곳」 에서 고르고, 묶음은 테두리 안의 칩들로 선다. 지표의 규칙 기준이 「앞 규칙에 안 맞음」
  * 을 이것으로 적어 「N건 보기」 가 셀의 수와 정확히 같다. 주소는 `nf<번호>.<칸>.<연산>`.
  *
+ * **같은 관계 묶음**(ADR 0043) — 관계 걸음을 지나는 조건(상대의 칸 · 선의 칸 `out.<관계>~<관계 속성>`)을
+ * 묶으면 **같은 선 하나**에서 함께 맞아야 걸린다(「X 가 4개 이상」 — X 1개 + 다른 부품 5개는 안 걸림).
+ * 안 묶으면 조건마다 「이어진 것 중 하나라도」 다. 「조건 추가」 의 「같은 관계」 에서 고르고, 묶음은
+ * 실선 테두리 안의 칩들로 선다. 주소는 `fe<번호>.`(제외 묶음 안이면 `nf<n>.fe<m>.`).
+ *
  * 전체를 OR 로 잇는 트리는 안 만든다. 화면에 그릴 수 없고, 그려도 사람이 못 읽는다.
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Plus, X } from 'lucide-react'
 
+import { LINEAGE_FIELD, lineageConditionText } from '@/modules/objects/lineage'
 import { useObjectOptions } from '@/modules/objects/useObjectOptions'
 import type { Condition, ConditionOp, LinkedField } from '@/modules/objects/api'
 import { CONDITION_MULTI_SEP, objectApi } from '@/modules/objects/api'
@@ -182,6 +188,23 @@ function groupsOf(conditions: Condition[]): number[] {
   return out
 }
 
+/** 같은 관계 묶음 번호들 — 그 자리(보통 조건 0 · 제외 묶음 n)에 걸린 차례대로. */
+function edgesOf(conditions: Condition[], exclude: number): number[] {
+  const out: number[] = []
+  for (const one of conditions) {
+    if ((one.exclude ?? 0) === exclude && one.edge && !out.includes(one.edge)) out.push(one.edge)
+  }
+  return out
+}
+
+/**
+ * 관계 걸음(`out.<관계>` · `in.<관계>`)을 지나는 주소인가 — 같은 관계 묶음으로 묶을 수 있는 칸.
+ * 나를 가리키는 것(`in.<타입>:<칸>`)은 선이 아니라 걸음이 아니다.
+ */
+export function bindable(field: string): boolean {
+  return /(^|\.)(out|in)\.[a-z][a-z0-9_]*(~|\.|$)/.test(field)
+}
+
 export function ConditionBar({
   defs,
   conditions,
@@ -243,9 +266,21 @@ export function ConditionBar({
     })
   }, [conditions, byKey, refLabels, known, remember])
 
+  /**
+   * 「낡은 것만」(ADR 0041) — 목록의 객체 **자신**의 계보 조건. 속성 목록에 없는 칸이라 그대로 두면
+   * 「lineage = stale」 로 선다. 같은 키의 속성이 있으면 속성이 이긴다(서버와 같다).
+   */
+  const lineageOf = (one: Condition): boolean =>
+    one.field === LINEAGE_FIELD && !byKey.has(LINEAGE_FIELD)
+  const fieldLabel = (one: Condition): string =>
+    byKey.get(one.field)?.label ?? (lineageOf(one) ? '계보' : one.field)
+
   const describe = (one: Condition): string => {
-    const field = byKey.get(one.field)
-    const label = field?.label ?? one.field
+    if (lineageOf(one)) {
+      const text = lineageConditionText(one)
+      if (text) return text
+    }
+    const label = fieldLabel(one)
     if (one.op === 'empty' || one.op === 'notempty') return `${label} ${OP_SIGN[one.op]}`
     const values =
       one.op === 'in' || one.op === 'under' ? one.value.split(CONDITION_MULTI_SEP) : [one.value]
@@ -257,25 +292,57 @@ export function ConditionBar({
   const groups = groupsOf(conditions)
   const chip = (one: Condition, index: number) => (
     <span
-      key={`${one.exclude ?? 0}.${one.field}.${one.op}.${index}`}
+      key={`${one.exclude ?? 0}.${one.edge ?? 0}.${one.field}.${one.op}.${index}`}
       className="bg-muted inline-flex items-center gap-1 rounded-full py-0.5 pr-1 pl-2.5 text-xs"
-      title={`${byKey.get(one.field)?.label ?? one.field} ${OP_LABEL[one.op]} ${one.value}`}
+      title={`${fieldLabel(one)} ${OP_LABEL[one.op]} ${one.value}`}
     >
       {describe(one)}
       <button
         type="button"
         className="hover:bg-background rounded-full p-0.5"
-        aria-label={`${one.exclude ? `제외 묶음 ${one.exclude} 의 ` : ''}조건 삭제: ${describe(one)}`}
+        aria-label={`${one.exclude ? `제외 묶음 ${one.exclude} 의 ` : ''}${one.edge ? `같은 관계 ${one.edge} 의 ` : ''}조건 삭제: ${describe(one)}`}
         onClick={() => onChange(conditions.filter((_, i) => i !== index))}
       >
         <X className="size-3" />
       </button>
     </span>
   )
+  /** 그 자리(보통 조건 0 · 제외 묶음 n)의 조건 — 묶지 않은 칩, 그 뒤에 같은 관계 묶음마다 실선 테두리. */
+  const seat = (exclude: number) => [
+    ...conditions.map((one, index) =>
+      (one.exclude ?? 0) === exclude && !one.edge ? chip(one, index) : null,
+    ),
+    ...edgesOf(conditions, exclude).map((edge) => (
+      <span
+        key={`edge-${exclude}-${edge}`}
+        role="group"
+        aria-label={`같은 관계 ${edge}`}
+        className="border-primary/50 inline-flex flex-wrap items-center gap-1 rounded-full border py-0.5 pr-1 pl-2 text-xs"
+        title="이 묶음의 조건은 같은 관계 하나에서 함께 맞아야 합니다"
+      >
+        <span className="text-primary font-medium">같은 관계</span>
+        {conditions.map((one, index) =>
+          (one.exclude ?? 0) === exclude && one.edge === edge ? chip(one, index) : null,
+        )}
+        <button
+          type="button"
+          className="hover:bg-background rounded-full p-0.5"
+          aria-label={`같은 관계 ${edge} 삭제`}
+          onClick={() =>
+            onChange(
+              conditions.filter((one) => !((one.exclude ?? 0) === exclude && one.edge === edge)),
+            )
+          }
+        >
+          <X className="size-3" />
+        </button>
+      </span>
+    )),
+  ]
 
   return (
     <div className="flex flex-wrap items-center gap-1.5">
-      {conditions.map((one, index) => (one.exclude ? null : chip(one, index)))}
+      {seat(0)}
       {groups.map((group) => (
         <span
           key={`group-${group}`}
@@ -285,7 +352,7 @@ export function ConditionBar({
           title="이 묶음의 조건에 모두 맞는 것은 뺍니다"
         >
           <span className="text-destructive font-medium">제외</span>
-          {conditions.map((one, index) => (one.exclude === group ? chip(one, index) : null))}
+          {seat(group)}
           <button
             type="button"
             className="hover:bg-background rounded-full p-0.5"
@@ -309,6 +376,7 @@ export function ConditionBar({
             treeTypes={treeTypes}
             onNames={remember}
             groups={allowExclude ? groups : null}
+            edges={conditions}
             onAdd={(next) => {
               onChange([...conditions, next])
               setOpen(false)
@@ -336,11 +404,17 @@ interface ConditionEditorProps {
   onNames?: (names: Record<string, string>) => void
   /** 걸린 제외 묶음 번호들 — 있으면(빈 목록도) 「넣을 곳」 을 고른다. null 이면 보통 조건만. */
   groups?: number[] | null
+  /** 걸린 조건 전부 — 「같은 관계」 에 고를 묶음(그 자리의 것)과 새 번호를 정한다. */
+  edges?: Condition[]
 }
 
 /** 「넣을 곳」 — 보통 조건 · 새 제외 묶음 · 걸린 제외 묶음. */
 const PLAIN = 'plain'
 const NEW_GROUP = 'new'
+/** 「같은 관계」 — 묶지 않음 · 새 묶음 · 그 자리에 걸린 묶음. */
+const LOOSE = 'loose'
+const NEW_EDGE = 'new'
+const NO_CONDITIONS: Condition[] = []
 
 /** 칸 → 연산 → 값. 연산과 값 입력은 칸의 종류를 따라간다. */
 function ConditionEditor({
@@ -349,6 +423,7 @@ function ConditionEditor({
   onAdd,
   onNames,
   groups = null,
+  edges = NO_CONDITIONS,
 }: ConditionEditorProps) {
   // **치거나 훑는다.** 이어진 것을 두 걸음까지 늘어놓으면(「모델 › 과제 › 프로젝트」) 큰 타입은
   // 칸이 수백이다 — 펼쳐 놓고 눈으로 찾게 하지 않는다. 자기 칸(제목 없음)이 먼저, 이어진 것은
@@ -374,6 +449,10 @@ function ConditionEditor({
   const [value, setValue] = useState('')
   const [picked, setPicked] = useState<string[]>([])
   const [target, setTarget] = useState(PLAIN)
+  const [edge, setEdge] = useState(LOOSE)
+  // 같은 관계 묶음은 그 자리(보통 조건 · 그 제외 묶음) 안에서만 — 다른 자리의 번호는 고르지 않는다.
+  const seatNumber = target === PLAIN || target === NEW_GROUP ? 0 : Number(target)
+  const seatEdges = target === NEW_GROUP ? [] : edgesOf(edges, seatNumber)
 
   // 칸이 바뀌면 연산·값을 그 칸에 맞게 되돌린다.
   useEffect(() => {
@@ -436,7 +515,13 @@ function ConditionEditor({
       {groups && (
         <label className="block space-y-1">
           <span className="text-muted-foreground text-xs">넣을 곳</span>
-          <Select value={target} onValueChange={setTarget}>
+          <Select
+            value={target}
+            onValueChange={(next) => {
+              setTarget(next)
+              setEdge(LOOSE)
+            }}
+          >
             <SelectTrigger size="sm" className="w-full" aria-label="넣을 곳">
               <SelectValue />
             </SelectTrigger>
@@ -452,6 +537,25 @@ function ConditionEditor({
           </Select>
         </label>
       )}
+      {bindable(field.key) && (
+        <label className="block space-y-1">
+          <span className="text-muted-foreground text-xs">같은 관계</span>
+          <Select value={edge} onValueChange={setEdge}>
+            <SelectTrigger size="sm" className="w-full" aria-label="같은 관계">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={LOOSE}>묶지 않음 — 이어진 것 중 하나라도</SelectItem>
+              <SelectItem value={NEW_EDGE}>새 묶음 — 같은 관계 하나에서 함께 맞음</SelectItem>
+              {seatEdges.map((one) => (
+                <SelectItem key={one} value={String(one)}>
+                  같은 관계 {one} 에 추가
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </label>
+      )}
       <div className="flex justify-end">
         <Button
           size="sm"
@@ -460,6 +564,13 @@ function ConditionEditor({
             const made: Condition = { field: field.key, op, value: needsValue ? finalValue : '' }
             if (groups && target !== PLAIN) {
               made.exclude = target === NEW_GROUP ? Math.max(0, ...groups) + 1 : Number(target)
+            }
+            if (bindable(field.key) && edge !== LOOSE) {
+              // 새 번호는 **모든 자리**에서 겹치지 않게 — 한 번호는 한 자리에만 선다(서버가 거절).
+              made.edge =
+                edge === NEW_EDGE
+                  ? Math.max(0, ...edges.map((one) => one.edge ?? 0)) + 1
+                  : Number(edge)
             }
             onAdd(made)
           }}

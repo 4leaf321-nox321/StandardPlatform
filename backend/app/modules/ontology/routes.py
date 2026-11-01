@@ -26,6 +26,8 @@ from app.modules.jobs import services as job_services
 from app.modules.jobs.schemas import JobOut
 from app.modules.metrics.models import MetricDef
 from app.modules.objects import bulk, purge, refedges, typecounts
+from app.modules.objects import edges as edge_rule
+from app.modules.objects import proposals as objects_proposals
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.ontology import (
     codebook,
@@ -34,8 +36,10 @@ from app.modules.ontology import (
     interfaces,
     linking,
     managed,
+    quantity,
     reset,
     retype,
+    revision,
     views,
 )
 from app.modules.ontology import (
@@ -221,6 +225,7 @@ def _type_out(row: ObjectType, group_slug: str | None, count: int) -> ObjectType
         key_scope=row.key_scope,
         temporal_kind=row.temporal_kind,
         usage=row.usage,
+        revision_key=row.revision_key or "",
         list_view=row.list_view or {},
         form_view=row.form_view or {},
         detail_view=row.detail_view or {},
@@ -513,6 +518,8 @@ def create_type(
     row.list_view = views.validate_list_view(payload.list_view, defs)
     row.form_view = views.validate_form_view(payload.form_view, defs, what="폼 화면")
     row.detail_view = views.validate_form_view(payload.detail_view, defs, what="상세 화면")
+    # 개정 칸(ADR 0041) — 구현한 인터페이스의 공통 속성까지 선 뒤에 본다.
+    row.revision_key = revision.require(db, row, payload.revision_key)
     _audit(
         db,
         user,
@@ -634,6 +641,10 @@ def update_type(
         row.title_template = payload.title_template
     if "is_active" in sent and payload.is_active is not None:
         row.is_active = payload.is_active
+    if "revision_key" in sent and payload.revision_key is not None:
+        # 개정 칸(ADR 0041) — 글자 · 고르기 · 숫자, 값 하나. 바꾸면 그 타입을 원천으로 둔 계보
+        # 선의 고정을 DB 트리거가 판정을 지키며 옮긴다(`objects/pinning.py`).
+        row.revision_key = revision.require(db, row, payload.revision_key)
     # **투영 타입은 못 연다.** 행이 원 표(부서 · 계정)에 있어 사람 정보가 그대로 나가고,
     # 그것을 바깥에 여는 일은 온톨로지 공개가 아니라 다른 판단이다.
     core_flip: tuple[bool, bool] | None = None
@@ -1010,6 +1021,28 @@ def _relation_types(db: Session) -> list[RelationType]:
     )
 
 
+def _relation_types_out(db: Session, rows: list[RelationType]) -> list[RelationTypeOut]:
+    """관계 종류 + 그 관계 속성 — 속성은 **한 질의로** 읽는다(수량 칸을 고르는 화면이 숫자 관계
+    속성을 여기서 본다)."""
+    owned: dict[uuid.UUID, list[PropertyDef]] = {row.id: [] for row in rows}
+    if owned:
+        for prop in db.scalars(
+            select(PropertyDef)
+            .where(
+                PropertyDef.owner_kind == "relation",
+                PropertyDef.owner_id.in_(list(owned)),
+            )
+            .order_by(PropertyDef.sort_order, PropertyDef.key)
+        ):
+            owned[prop.owner_id].append(prop)
+    return [
+        RelationTypeOut.model_validate(row).model_copy(
+            update={"properties": [PropertyDefOut.model_validate(p) for p in owned[row.id]]}
+        )
+        for row in rows
+    ]
+
+
 def _relation_type(db: Session, slug: str) -> RelationType:
     row = db.scalar(select(RelationType).where(RelationType.slug == slug))
     if row is None:
@@ -1049,8 +1082,8 @@ def _check_relation_shape(payload: RelationTypeWriteRequest) -> None:
 @router.get("/relation-types", response_model=list[RelationTypeOut])
 def list_relation_types(
     _: User = Depends(current_user), db: Session = Depends(get_db)
-) -> list[RelationType]:
-    return _relation_types(db)
+) -> list[RelationTypeOut]:
+    return _relation_types_out(db, _relation_types(db))
 
 
 @router.post("/relation-types", response_model=RelationTypeOut, status_code=201)
@@ -1058,7 +1091,7 @@ def create_relation_type(
     payload: RelationTypeWriteRequest,
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
-) -> RelationType:
+) -> RelationTypeOut:
     slug = require_slug(payload.slug, what="관계 slug")
     _check_relation_shape(payload)
     _check_type_slugs(db, payload.src_type_slugs, what="출발 타입")
@@ -1075,6 +1108,11 @@ def create_relation_type(
         transitive=payload.transitive,
         acyclic=payload.acyclic,
         cardinality=payload.cardinality,
+        effectivity=payload.effectivity,
+        # 계보의 원천 끝(ADR 0041) — 방향 있는 종류만.
+        lineage_source=revision.require_source(
+            payload.lineage_source, directed=payload.directed, kind_label=payload.label
+        ),
         src_type_slugs=payload.src_type_slugs,
         dst_type_slugs=payload.dst_type_slugs,
         sort_order=payload.sort_order,
@@ -1082,6 +1120,9 @@ def create_relation_type(
     )
     db.add(row)
     db.flush()
+    # 새 종류에는 관계 속성이 아직 없다 — 수량 칸을 적었으면 「없는 칸」 으로 거절된다(ADR
+    # 0040).
+    row.quantity_key = quantity.require(db, row, payload.quantity_key)
     _audit(
         db,
         user,
@@ -1092,7 +1133,7 @@ def create_relation_type(
     )
     db.commit()
     db.refresh(row)
-    return row
+    return _relation_types_out(db, [row])[0]
 
 
 @router.patch("/relation-types/{slug}", response_model=RelationTypeOut)
@@ -1101,7 +1142,7 @@ def update_relation_type(
     payload: RelationTypePatchRequest,
     user: User = Depends(require_system_admin),
     db: Session = Depends(get_db),
-) -> RelationType:
+) -> RelationTypeOut:
     """**보낸 것만 바꾼다.** slug 는 안 바꾼다 — 이미 맺힌 관계가 그 값을
     문자열로 들고 있어서, 바꾸면 그 관계들이 통째로 고아가 된다."""
     row = _relation_type(db, slug)
@@ -1118,6 +1159,22 @@ def update_relation_type(
         value = getattr(payload, flag)
         if flag in sent and value is not None:
             setattr(row, flag, value)
+    if "effectivity" in sent and payload.effectivity is not None:
+        if row.effectivity and not payload.effectivity:
+            # 끄면 그 선들의 기간이 뜻을 잃는다(늘 유효로 읽힌다) — 그리고 기간을 달리한 같은
+            # 선이 「같은 선 하나」 를 어긴다. DB 트리거도 막지만 사람의 말로 먼저(ADR 0039).
+            edge_rule.require_can_turn_off(db, row)
+        # 선마다 든 사본은 DB 트리거가 다시 맞춘다(`objects/effectivity.py`).
+        row.effectivity = payload.effectivity
+    if "quantity_key" in sent and payload.quantity_key is not None:
+        # 수량 칸 — 이 종류의 숫자 · 값 하나 관계 속성이어야 한다(ADR 0040). 빈 글자는 비운다.
+        row.quantity_key = quantity.require(db, row, payload.quantity_key)
+    if "lineage_source" in sent and payload.lineage_source is not None:
+        # 계보의 원천 끝(ADR 0041). 켜거나 끝을 바꾸면 이 종류의 선 전부의 고정을 DB 트리거가
+        # 지금 값으로 다시 박는다(끄면 비운다 — `objects/pinning.py`).
+        row.lineage_source = payload.lineage_source.strip()
+    # 방향을 끄는 것도 같은 검사 — 계보 관계는 방향이 있어야 원천 끝이 정해진다.
+    revision.require_source(row.lineage_source, directed=row.directed, kind_label=row.label)
 
     # **`null` 을 명시하면 제약을 푼다.** 안 보내면 그대로 둔다.
     for field, what in (("src_type_slugs", "출발 타입"), ("dst_type_slugs", "도착 타입")):
@@ -1143,7 +1200,7 @@ def update_relation_type(
     )
     db.commit()
     db.refresh(row)
-    return row
+    return _relation_types_out(db, [row])[0]
 
 
 def _relation_type_deletion(db: Session, row: RelationType) -> _Deletion:
@@ -1178,6 +1235,13 @@ def _relation_type_deletion(db: Session, row: RelationType) -> _Deletion:
     owned = _owned_properties(db, "relation", row.id)
     if owned:
         found.removes.append(f"관계 속성 정의 {owned}개")
+    # 제안된 관계(ADR 0042)는 막지 않고 **함께 지운다** — 자료가 아니라 작업 거리라, 종류가
+    # 없으면 확정할 수도 없다. 남기면 검토함에 확정할 수 없는 항목으로 영영 선다.
+    proposed = objects_proposals.count_of_kind(db, row.slug)
+    if proposed:
+        found.removes.append(
+            f"이 종류의 제안된 관계 {proposed}개(열림 · 확정 · 거절 기록 모두)"
+        )
     return found
 
 
@@ -1194,7 +1258,7 @@ def delete_relation_type(
     로 남고, 화면은 그 줄에 slug 를 그대로 보여 줄 수밖에 없다.
 
     비어 있으면 지운다. **속성 정의도 함께** — 안 지우면 같은 slug 로 다시 만들 때
-    옛 속성이 되살아난다.
+    옛 속성이 되살아난다. 그 종류의 **제안된 관계**도 함께 지운다(ADR 0042 — 작업 거리다).
     """
     row = _relation_type(db, slug)
     _relation_type_deletion(db, row).require()
@@ -1210,6 +1274,7 @@ def delete_relation_type(
     db.query(PropertyDef).filter(
         PropertyDef.owner_kind == "relation", PropertyDef.owner_id == row.id
     ).delete(synchronize_session=False)
+    objects_proposals.delete_of_kind(db, row.slug)
     db.delete(row)
     db.commit()
 
@@ -1909,6 +1974,14 @@ def update_property(
             f"속성 종류는 수정으로 바꾸지 않습니다({row.data_type} → {payload.data_type}) — "
             "「종류 변경」(POST …/retype)이 저장된 값을 변환하는 계획을 먼저 보여 줍니다.",
         )
+    # 개정 칸이면 여러 값으로 못 바꾼다(ADR 0041).
+    revision.require_property_change(
+        _type(db, slug),
+        key,
+        data_type=payload.data_type,
+        multi=payload.multi,
+        label=payload.label,
+    )
     row.label = payload.label
     row.unit = payload.unit
     row.help = payload.help
@@ -2007,6 +2080,8 @@ def promote_property(
     managed.require_definition_editable(owner)
     definition = _property(db, slug, key)
     _refuse_bound(db, slug, key, what="코드표로 승격하지 않습니다")
+    # 승격하면 참조 칸이 된다 — 개정 칸이면 막는다(ADR 0041).
+    revision.require_not_revision(owner, key, what="코드표로 승격할")
     args = {
         "existing_slug": payload.target_type_slug,
         "new_slug": payload.new_slug,
@@ -2052,6 +2127,22 @@ def _retype_wanted(payload: RetypeRequest, *, with_unique: bool) -> dict[str, An
         if payload.inverse_label is not None:
             wanted["inverse_label"] = payload.inverse_label.strip()
     return wanted
+
+
+def _check_revision_retype(
+    db: Session, owner: str, slug: str, key: str, row: PropertyDef, payload: RetypeRequest
+) -> None:
+    """개정 칸인 속성을 개정 칸이 될 수 없는 종류로 바꾸면 거절(ADR 0041, ONTOLOGY-0099) —
+    인터페이스의 공통 속성이면 구현 타입 중 그것을 개정 칸으로 쓰는 타입이 있는지 본다."""
+    if owner == "type":
+        owners = [_type(db, slug)]
+    else:
+        names = interfaces.implementers(interfaces.load(db), slug)
+        owners = list(db.scalars(select(ObjectType).where(ObjectType.slug.in_(names))))
+    for one in owners:
+        revision.require_property_change(
+            one, key, data_type=payload.data_type, multi=bool(row.multi), label=row.label
+        )
 
 
 def _check_retype(db: Session, before: str, payload: RetypeRequest, *, name: str) -> None:
@@ -2169,6 +2260,7 @@ def retype_property_job(
     _type(db, slug)
     row = _property(db, slug, key)
     _check_retype(db, row.data_type, payload, name=f"{slug}.{key}")
+    _check_revision_retype(db, "type", slug, key, row, payload)
     return _retype_job(db, user, owner="type", slug=slug, key=key, payload=payload)
 
 
@@ -2188,6 +2280,7 @@ def _retype_type(
     row = _property(db, slug, key)
     _refuse_bound(db, slug, key, what="종류를 여기서 변경하지 않습니다")
     _check_retype(db, row.data_type, payload, name=f"{slug}.{key}")
+    _check_revision_retype(db, "type", slug, key, row, payload)
     target, notes = retype.target_for(owner, row, _retype_wanted(payload, with_unique=True))
     if inline:
         _refuse_large(db, [target], path=f"/api/ontology/types/{slug}/properties/{key}")
@@ -2260,6 +2353,7 @@ def retype_interface_property_job(
     _interface(db, slug)
     row = _interface_property(db, slug, key)
     _check_retype(db, row.data_type, payload, name=f"{slug}.{key}")
+    _check_revision_retype(db, "interface", slug, key, row, payload)
     return _retype_job(db, user, owner="interface", slug=slug, key=key, payload=payload)
 
 
@@ -2278,6 +2372,7 @@ def _retype_interface(
     managed.require_definition_editable(owner)
     row = _interface_property(db, slug, key)
     _check_retype(db, row.data_type, payload, name=f"{slug}.{key}")
+    _check_revision_retype(db, "interface", slug, key, row, payload)
     wanted = _retype_wanted(payload, with_unique=False)
     shape = interfaces.shape_of(wanted, interfaces.shape_of(row))
     wrong = interfaces.interface_property_error(key, {**shape.written(), "unique": False})
@@ -2510,6 +2605,8 @@ def _property_deletion(db: Session, owner: ObjectType, row: PropertyDef) -> _Del
     found = _Deletion(label=f"{owner.label} · {row.label}")
     found.check(lambda: managed.require_definition_editable(owner))
     found.check(lambda: _refuse_bound(db, owner.slug, row.key, what="삭제하지 않습니다"))
+    # 개정 칸이면 막는다(ADR 0041) — 지우면 그 타입을 원천으로 둔 파생물의 판정이 흔들린다.
+    found.check(lambda: revision.require_not_revision(owner, row.key, what="삭제할"))
     found.removes.append("속성 정의")
     if views.prune_field(owner.list_view or {}, row.key) != (owner.list_view or {}):
         found.removes.append("목록의 열")
@@ -2828,7 +2925,7 @@ def ontology_schema(
         groups=[NavGroupOut.model_validate(g) for g in groups],
         interfaces=ifaces,
         types=types,
-        relation_types=[RelationTypeOut.model_validate(r) for r in _relation_types(db)],
+        relation_types=_relation_types_out(db, _relation_types(db)),
         reference_edges=[
             ReferenceEdgeOut(
                 slug=kind.slug,

@@ -32,7 +32,7 @@ import re
 import uuid
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass, field
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, cast
 
 from sqlalchemy import Table, and_, func, or_, select, true
@@ -40,7 +40,7 @@ from sqlalchemy.orm import Session, load_only
 
 from app.modules.accounts.models import User
 from app.modules.bundles import journal
-from app.modules.objects import aliases, humanedits, links, system
+from app.modules.objects import aliases, edges, humanedits, lineage, links, system
 from app.modules.objects import keys as key_history
 from app.modules.objects import relations as rel
 from app.modules.objects.models import (
@@ -1194,6 +1194,10 @@ def _column_map(
     for header in headers:
         if header in FIXED_COLUMNS or header == "":
             continue
+        if _linked_header(header):
+            # 내보내기의 이어진 칸(ADR 0043) — 다른 객체의 값이라 읽기 전용이다. 내보낸 파일을
+            # 고쳐 그대로 다시 올리는 길이 막히지 않게 건너뛴다.
+            continue
         if header in by_key:
             mapping[header] = header
         elif header in by_label and len(by_label[header]) == 1:
@@ -1201,6 +1205,12 @@ def _column_map(
         else:
             unknown.append(header)
     return mapping, sorted(unknown)
+
+
+def _linked_header(header: str) -> bool:
+    """이어진 칸의 열인가 — `ref.` · `out.` · `in.` 로 시작하는 주소(속성 키에는 점이 없다)."""
+    head, dot, rest = header.partition(".")
+    return bool(dot) and head in ("ref", "out", "in") and bool(rest)
 
 
 def _fixed(row: dict[str, Any], name: str) -> Any:
@@ -2098,14 +2108,38 @@ def to_csv(columns: list[str], rows: list[dict[str, Any]]) -> bytes:
 
 # --- 관계 -----------------------------------------------------------------------
 
-RELATION_COLUMNS = ("src", "relation", "dst", "evidence_note")
+RELATION_BASE = ("src", "relation", "dst", "evidence_note")
+RELATION_PERIOD = ("valid_from", "valid_to")
+RELATION_COLUMNS = (*RELATION_BASE, *RELATION_PERIOD)
 """관계 파일의 **고정 열.** 그 밖의 열은 **관계 종류의 속성**으로 읽는다 —
-`property_defs.owner_kind='relation'` 이 모양을 정한다(근거 건수 · 근거 종류처럼)."""
+`property_defs.owner_kind='relation'` 이 모양을 정한다(근거 건수 · 근거 종류처럼).
+
+`valid_from`(포함) · `valid_to`(제외)는 유효 기간(ADR 0039) — 유효 기간을 받는 관계 종류의
+줄만 적는다(다른 종류의 줄에 적으면 그 줄이 거절된다). 같은 두 객체 · 같은 종류의 줄이 기간을
+달리해 여럿일 수 있다. 내보내기는 **그런 종류가 든 파일에만** 두 열을 싣는다 — 기간을 안 쓰는
+설치의 파일 모양은 예전 그대로다(`relation_columns_of`)."""
+
+
+def relation_columns_of(records: list[dict[str, Any]]) -> list[str]:
+    """내보낼 관계 파일의 열 — 고정 넷, 기간 둘(실린 줄이 있을 때만), 관계 속성(가나다순).
+    **열은 나온 줄에서 모은다** — 고정 넷만 적으면 관계에 붙은 값(근거 건수 · 근거 종류 …)이
+    파일에서 조용히 빠지고, 그 파일을 다시 넣으면 그 값이 사라진다."""
+    keys = {key for one in records for key in one}
+    period = [one for one in RELATION_PERIOD if one in keys]
+    extra = sorted(keys - set(RELATION_COLUMNS))
+    return [*RELATION_BASE, *period, *extra]
+
 
 #: 근거 메모의 길이 — 표의 칸(`evidence_note` String(500))과 같다. 화면 요청은 스키마가 본다.
 EVIDENCE_MAX = 500
 
-RELATION_RESERVED = (*RELATION_COLUMNS, "properties", "dst_type")
+RELATION_PIN = ("pinned_revision", "pinned_at", "pinned_stale")
+"""계보 선의 고정(ADR 0041) — **묶음이 싣는 칸**(사람의 관계 파일 내보내기에는 없다). 실려 오면
+새 선 · 있는 선에 그대로 박는다(트리거가 새로 박지 않는다 — 허브의 「Rev.C 기준」 이 받는
+쪽에서도 Rev.C 다). 원천 타입에 개정 칸이 없는 선은 고정 시각이 그 설치의 시계라 판정을 옮긴다
+(`pinned_stale`, `lineage.settle_carried`). 계보 종류가 아닌 줄에 적은 값은 버린다."""
+
+RELATION_RESERVED = (*RELATION_COLUMNS, *RELATION_PIN, "properties", "dst_type")
 """속성으로 읽지 않는 이름 — CSV 는 칸을 펼쳐 적고(`n`, `basis`), JSON · 허브 묶음은
 `properties` 객체로 적는다. **같은 정의로 같게 검사한다.**
 
@@ -2124,6 +2158,101 @@ def _dst_memo(kind: RelationType, hint: str) -> str:
     """도착점 기억의 자리 — **도착 타입을 적은 줄은 따로 기억한다**(같은 글자라도 다른 타입의
     다른 객체다)."""
     return f"dst:{kind.slug}:{hint}" if hint else f"dst:{kind.slug}"
+
+
+Span = tuple[date | None, date | None]
+
+
+@dataclass(frozen=True)
+class _Carried:
+    """줄에 실려 온 고정(묶음)."""
+
+    revision: str | None
+    at: datetime
+    stale: bool
+
+
+def _row_pin(kind: RelationType, row: dict[str, Any]) -> _Carried | None:
+    """계보 종류의 줄에 실려 온 고정 — 없거나 계보 종류가 아니면 None. 시각을 못 읽으면 그 줄의
+    오류다(조용히 버리면 받는 쪽이 새로 박아 허브의 기준이 사라진다)."""
+    if kind.lineage_source not in ("src", "dst"):
+        return None
+    raw = row.get("pinned_at")
+    if raw in (None, ""):
+        return None
+    try:
+        at = raw if isinstance(raw, datetime) else datetime.fromisoformat(str(raw))
+    except ValueError:
+        raise InvalidValue(
+            code("OBJECTS", 136), f"pinned_at: 고정 시각은 ISO 시각이어야 합니다: {raw!r}"
+        ) from None
+    if at.tzinfo is None:
+        at = at.replace(tzinfo=UTC)
+    revision = row.get("pinned_revision")
+    return _Carried(
+        revision=None if revision is None else str(revision),
+        at=at,
+        stale=bool(row.get("pinned_stale")),
+    )
+
+
+def _pin_changed(carried: _Carried, state: lineage.PinState | None) -> list[str]:
+    """실려 온 고정이 있는 선과 **뜻이** 다른가 — 개정 칸이 있으면 고정 개정이, 없으면 낡음
+    판정이(시각은 설치마다 다른 시계라 견주지 않는다). 다르면 바뀐 칸 이름."""
+    if state is None:
+        return []
+    if state.revision_key:
+        return ["pinned_revision"] if carried.revision != state.pinned_revision else []
+    return ["pinned_at"] if carried.stale != state.stale else []
+
+
+def _pin_state_of(
+    db: Session, memo: _RelIndex, edge: ObjectRelation
+) -> lineage.PinState | None:
+    """있는 선의 지금 고정 판정 — 미리 읽어 둔 선은 한 질의로(`memo.pins`)."""
+    if memo.pins is None:
+        memo.pins = lineage.pin_states(
+            db, [one.id for found in memo.edges.values() for one in found]
+        )
+    if edge.id not in memo.pins:
+        memo.pins.update(lineage.pin_states(db, [edge.id]))
+    return memo.pins.get(edge.id)
+
+
+def _row_period(kind: RelationType, row: dict[str, Any]) -> Span:
+    """줄의 유효 기간 — 빈 칸은 열린 끝. 날짜 칸과 같은 표기를 받는다(`2026.3.1` ·
+    `2026년 3월 1일`). 꺼진 종류에 적었거나 시작일이 끝날보다 늦으면 그 줄의 오류다."""
+    found: list[date | None] = []
+    for name, said in (("valid_from", "유효 기간 시작일"), ("valid_to", "유효 기간 끝날")):
+        raw = row.get(name)
+        text = raw.isoformat() if isinstance(raw, date) else str(raw or "").strip()
+        if not text:
+            found.append(None)
+            continue
+        try:
+            found.append(date.fromisoformat(text))
+            continue
+        except ValueError:
+            pass
+        try:
+            value, dropped = conversion.parse_date(text)
+        except conversion.Unconvertible:
+            value, dropped = "", True
+        if dropped or not value:
+            raise InvalidValue(
+                code("OBJECTS", 127), f"{name}: {said}은 날짜(YYYY-MM-DD)여야 합니다: {text!r}"
+            )
+        found.append(date.fromisoformat(value))
+    return edges.checked_period(kind, found[0], found[1])
+
+
+def _spans_meet(a: Span, b: Span) -> bool:
+    """두 반열린 기간 [from, to) 가 겹치나 — 빈 끝은 열린 끝(`edges.overlaps` 와 같은 뜻)."""
+    a_from, a_to = a
+    b_from, b_to = b
+    return (a_to is None or b_from is None or b_from < a_to) and (
+        b_to is None or a_from is None or a_from < b_to
+    )
 
 
 def _relation_defs_all(db: Session, kinds: list[RelationType]) -> dict[str, list[PropertyDef]]:
@@ -2217,8 +2346,11 @@ class _RelIndex:
         default_factory=dict
     )
     """허용 타입 묶음 → **파일에 나온 글자들**로 미리 읽어 둔 끝점 후보(`_ends_of`)."""
-    edges: dict[tuple[uuid.UUID, str, uuid.UUID], ObjectRelation] = field(default_factory=dict)
-    """이미 이어진 선 — (출발 · 종류 · 도착)."""
+    edges: dict[tuple[uuid.UUID, str, uuid.UUID], list[ObjectRelation]] = field(
+        default_factory=dict
+    )
+    """이미 이어진 선 — (출발 · 종류 · 도착) → 그 선들. 유효 기간을 받는 종류는 기간을 달리해
+    여럿일 수 있다(ADR 0039)."""
     editable: dict[uuid.UUID | None, AppError | None] = field(default_factory=dict)
     loaded_src: set[uuid.UUID] = field(default_factory=set)
     """선을 **미리 읽어 둔** 출발점들. 여기 있는 출발점은 `edges` 에 없으면 정말 없는 것이다
@@ -2229,6 +2361,9 @@ class _RelIndex:
     pending: dict[str, set[str]] = field(default_factory=dict)
     """타입 slug → **이 묶음이 만들 것**의 식별자 · 이름(가벼운 미리 보기에서만)."""
     skip_missing: bool = False
+    pins: dict[uuid.UUID, lineage.PinState] | None = None
+    """있는 계보 선의 고정 판정 — 묶음이 고정을 실어 왔을 때만 한 번
+    읽는다(`_pin_state_of`)."""
     """참이면 끝점을 못 찾은 줄을 **오류로 만들지 않고 건너뛴다**(줄에 적는다). 선은 값이
     아니라 있음/없음이라 「빈칸으로 넣기」 가 없다 — 건너뛰는 것이 그에 해당한다."""
     end_types: interfaces.Ends | None = None
@@ -2247,29 +2382,64 @@ class _RelIndex:
        센다 — 적용은 표를 보고 다시 판정하므로 잘못 들어가지는 않는다."""
     file_by_dst: dict[tuple[str, str], set[str]] = field(default_factory=dict)
     """(관계 종류, 도착 표) → 그 도착점을 받은 **출발 표**들. 도착 쪽 개수 제약이 본다."""
+    file_spans: dict[tuple[str, str, str], list[Span]] = field(default_factory=dict)
+    """(관계 종류, 끝의 자리, 표) → 이 파일이 그 자리에 둔 선들의 **유효 기간**. 자리는
+    `pair:<출발>|<도착>`(같은 선 두 번) · `src:<출발>` · `dst:<도착>`(개수 제약) — 기간이
+    겹칠 때만 「두 번」 · 「하나만」 이다(ADR 0039). 기간이 없는 종류는 늘 (None, None) 이라
+    예전과 같다."""
 
 
-def _existing_edge(
+def _existing_edges(
     db: Session, memo: _RelIndex, src_id: uuid.UUID, slug: str, dst_id: uuid.UUID
-) -> ObjectRelation | None:
-    """이미 이어진 선 — **이 파일의 출발점들 것을 한 번에 읽어**(`_load_edges`) 두고 본다."""
+) -> list[ObjectRelation]:
+    """이미 이어진 같은 선들 — **이 파일의 출발점들 것을 한 번에 읽어**(`_load_edges`) 두고
+    본다."""
     key = (src_id, slug, dst_id)
     if key in memo.edges:
         return memo.edges[key]
     if src_id in memo.loaded_src:
         # 그 출발점의 선은 **전부** 읽어 뒀다 — 여기 없으면 정말 없다. 다시 묻지 않는다.
-        return None
+        return []
     # 미리 읽지 못한 출발점(나중에 알게 된 것)만 한 번 묻는다.
-    found = db.scalar(
-        select(ObjectRelation).where(
-            ObjectRelation.src_object_id == src_id,
-            ObjectRelation.dst_object_id == dst_id,
-            ObjectRelation.relation == slug,
+    found = list(
+        db.scalars(
+            select(ObjectRelation).where(
+                ObjectRelation.src_object_id == src_id,
+                ObjectRelation.dst_object_id == dst_id,
+                ObjectRelation.relation == slug,
+            )
         )
     )
-    if found is not None:
+    if found:
         memo.edges[key] = found
     return found
+
+
+def _existing_edge(
+    db: Session,
+    memo: _RelIndex,
+    src_id: uuid.UUID,
+    slug: str,
+    dst_id: uuid.UUID,
+    period: Span = (None, None),
+) -> ObjectRelation | None:
+    """이 줄이 가리키는 **있는 선** — 기간이 같은 것, 없으면 기간이 겹치는 것 하나(그 선의
+    기간을 고친다). 겹치는 것이 둘 이상이면 어느 것인지 몰라 거절한다(ADR 0039).
+
+    기간이 없는 종류는 같은 선이 하나뿐이라 예전과 같다 — 늘 겹친다."""
+    found = _existing_edges(db, memo, src_id, slug, dst_id)
+    same = [one for one in found if (one.valid_from, one.valid_to) == period]
+    if same:
+        return same[0]
+    meeting = [one for one in found if _spans_meet((one.valid_from, one.valid_to), period)]
+    if len(meeting) > 1:
+        raise Conflict(
+            code("OBJECTS", 128),
+            f"기간({edges.describe(*period)})이 같은 두 객체 사이의 관계 {len(meeting)}개와 "
+            "겹칩니다 — 어느 관계를 고칠지 모릅니다. 기간을 있는 관계 하나와만 겹치게 "
+            "적으세요.",
+        )
+    return meeting[0] if meeting else None
 
 
 def _load_pool(
@@ -2374,13 +2544,30 @@ def _endpoint_maker(
     return find
 
 
-def _require_file_twice(kind: RelationType, memo: _RelIndex, src: str, dst: str) -> None:
-    """같은 선이 이 파일에 두 번 있나 — **표로 본다**(앞줄을 훑지 않는다)."""
-    if dst in memo.file_by_src.get((kind.slug, src), frozenset()):
-        raise InvalidValue(code("OBJECTS", 44), "같은 관계가 이 파일에 두 번 있습니다.")
+def _file_meets(memo: _RelIndex, kind: RelationType, place: str, period: Span) -> bool:
+    """이 파일의 앞 줄이 그 자리에 둔 선 중 기간이 겹치는 것이 있나."""
+    return any(
+        _spans_meet(one, period) for one in memo.file_spans.get((kind.slug, place, ""), [])
+    )
 
 
-def _require_file_limits(kind: RelationType, memo: _RelIndex, src: str, dst: str) -> None:
+def _require_file_twice(
+    kind: RelationType, memo: _RelIndex, src: str, dst: str, period: Span = (None, None)
+) -> None:
+    """같은 선이 이 파일에 두 번 있나 — **표로 본다**(앞줄을 훑지 않는다). 유효 기간을 받는
+    종류는 기간이 겹칠 때만 두 번이다(ADR 0039)."""
+    if _file_meets(memo, kind, f"pair:{src}|{dst}", period):
+        raise InvalidValue(
+            code("OBJECTS", 44),
+            "같은 관계가 이 파일에 두 번 있습니다."
+            if period == (None, None)
+            else "기간이 겹치는 같은 관계가 이 파일에 두 번 있습니다.",
+        )
+
+
+def _require_file_limits(
+    kind: RelationType, memo: _RelIndex, src: str, dst: str, period: Span = (None, None)
+) -> None:
     """**이 파일의 앞 줄이 이미 채웠나** — 개수 제약과 순환을 표만 보고 판정하면 못 본다.
 
     계획은 아무것도 쓰지 않으므로 표에는 앞 줄의 선이 없다. 그 줄들은 `file_by_src` ·
@@ -2391,15 +2578,15 @@ def _require_file_limits(kind: RelationType, memo: _RelIndex, src: str, dst: str
        `require_no_cycle` 가 보고, 파일과 표를 번갈아 지나는 길은 적용이 쓰면서 본다
        (`_guarded` 가 먼저 flush 한다) — 계획에 안 보일 수는 있어도 들어가지는 않는다.
     """
-    if kind.cardinality in ("one_to_one", "many_to_one") and memo.file_by_src.get(
-        (kind.slug, src)
+    if kind.cardinality in ("one_to_one", "many_to_one") and _file_meets(
+        memo, kind, f"src:{src}", period
     ):
         raise Conflict(
             code("OBJECTS", 23),
             f"{kind.label}은 하나만 맺을 수 있습니다 — 이 파일의 앞 줄이 이미 맺었습니다.",
         )
-    if kind.cardinality in ("one_to_one", "one_to_many") and memo.file_by_dst.get(
-        (kind.slug, dst)
+    if kind.cardinality in ("one_to_one", "one_to_many") and _file_meets(
+        memo, kind, f"dst:{dst}", period
     ):
         raise Conflict(
             code("OBJECTS", 24),
@@ -2431,10 +2618,14 @@ def _file_reaches(memo: _RelIndex, slug: str, start: str, goal: str) -> bool:
     return False
 
 
-def _remember_file_edge(kind: RelationType, memo: _RelIndex, src: str, dst: str) -> None:
+def _remember_file_edge(
+    kind: RelationType, memo: _RelIndex, src: str, dst: str, period: Span = (None, None)
+) -> None:
     """뒷줄이 보게 남긴다 — **검사를 지난 뒤에** 넣는다(제 줄을 세지 않게)."""
     memo.file_by_src.setdefault((kind.slug, src), set()).add(dst)
     memo.file_by_dst.setdefault((kind.slug, dst), set()).add(src)
+    for place in (f"pair:{src}|{dst}", f"src:{src}", f"dst:{dst}"):
+        memo.file_spans.setdefault((kind.slug, place, ""), []).append(period)
 
 
 def _end_token(text: str, end: Any) -> str:
@@ -2459,7 +2650,8 @@ def _load_edges(db: Session, memo: _RelIndex) -> None:
     for edge in db.scalars(
         select(ObjectRelation).where(ObjectRelation.src_object_id.in_(starts))
     ):
-        memo.edges[(edge.src_object_id, edge.relation, edge.dst_object_id)] = edge
+        key = (edge.src_object_id, edge.relation, edge.dst_object_id)
+        memo.edges.setdefault(key, []).append(edge)
     memo.loaded_src |= starts
 
 
@@ -2762,18 +2954,21 @@ def plan_relations(
     _load_edges(db, index_data)
 
     seen: set[tuple[uuid.UUID, str, uuid.UUID]] = set()
+    kept: set[uuid.UUID] = set()
     for index, row in enumerate(rows, start=1):
         _tick(on_progress, "계획", index, len(rows))
         try:
             plan.rows.append(
                 _plan_relation(
-                    db, user, object_type, kinds, row, index, seen, source, index_data
+                    db, user, object_type, kinds, row, index, seen, source, index_data, kept
                 )
             )
         except AppError as caught:
             plan.rows.append(RowPlan(row=index, action="error", message=caught.message))
     if mode in ("replace", "replace_type") and plan.ok:
-        plan.rows.extend(_unlinks(db, user, object_type, seen, wide=mode == "replace_type"))
+        plan.rows.extend(
+            _unlinks(db, user, object_type, seen, kept, wide=mode == "replace_type")
+        )
     plan.index = index_data
     return plan
 
@@ -2783,6 +2978,7 @@ def _unlinks(
     user: User,
     object_type: ObjectType,
     seen: set[tuple[uuid.UUID, str, uuid.UUID]],
+    kept: set[uuid.UUID],
     *,
     wide: bool,
 ) -> list[RowPlan]:
@@ -2794,6 +2990,10 @@ def _unlinks(
 
     `wide` 면 **(출발 타입 · 관계 종류)** 전체를 본다 — 원천에서 어떤 객체의 선이 통째로
     사라진 경우가 그것이다. 파일이 그 타입의 **전부**일 때만 쓴다.
+
+    남길 선은 파일의 줄이 **가리킨 선**(`kept` — 같은 기간이거나 기간을 고칠 선)이다. 유효
+    기간을 받는 종류는 같은 두 객체 사이에 기간을 달리한 선이 여럿이라, 파일에 없는 기간의 선은
+    끊는다(ADR 0039). 기간이 없는 종류는 선이 하나라 예전과 같다.
     """
     pairs = {(src, kind) for src, kind, _ in seen}
     if not pairs:
@@ -2812,12 +3012,10 @@ def _unlinks(
         )
     else:
         stmt = stmt.where(ObjectRelation.src_object_id.in_({src for src, _ in pairs}))
-    edges = db.scalars(stmt)
     doomed = [
         edge
-        for edge in edges
-        if (wide or (edge.src_object_id, edge.relation) in pairs)
-        and (edge.src_object_id, edge.relation, edge.dst_object_id) not in seen
+        for edge in db.scalars(stmt)
+        if (wide or (edge.src_object_id, edge.relation) in pairs) and edge.id not in kept
     ]
     if not doomed:
         return []
@@ -2852,6 +3050,7 @@ def _plan_relation(
     seen: set[tuple[uuid.UUID, str, uuid.UUID]],
     source: str = "",
     index_data: _RelIndex | None = None,
+    kept: set[uuid.UUID] | None = None,
 ) -> RowPlan:
     src_text = str(row.get("src") or "").strip()
     dst_text = str(row.get("dst") or "").strip()
@@ -2878,6 +3077,7 @@ def _plan_relation(
             code("OBJECTS", 47), f"{kind.label}은 지금 쓰지 않는 관계 종류입니다."
         )
     managed.require_relation_editable(kind, source=source)
+    period = _row_period(kind, row)
 
     memo = index_data if index_data is not None else _RelIndex()
     # **먼저 있는 것으로 풀어 본다.** 예전에는 「이 묶음이 만들 것」 목록을 먼저 봐서 두 가지가
@@ -2925,9 +3125,9 @@ def _plan_relation(
             _relation_properties(db, kind, row, Refs(db, user), defs=memo.defs.get(kind.slug))
             src_token = _end_token(src_text, src_end)
             dst_token = _end_token(dst_text, dst_end)
-            _require_file_twice(kind, memo, src_token, dst_token)
-            _require_file_limits(kind, memo, src_token, dst_token)
-            _remember_file_edge(kind, memo, src_token, dst_token)
+            _require_file_twice(kind, memo, src_token, dst_token, period)
+            _require_file_limits(kind, memo, src_token, dst_token, period)
+            _remember_file_edge(kind, memo, src_token, dst_token, period)
             return RowPlan(row=index, action="create", label=label, message=later)
         gone = src_gone or dst_gone
         assert gone is not None
@@ -2957,13 +3157,22 @@ def _plan_relation(
     rel.require_end_types_allowed(db, kind, object_type.slug, dst.type_slug, memo.end_types)
 
     src_token, dst_token = f"id:{src.id}", f"id:{dst.id}"
-    _require_file_twice(kind, memo, src_token, dst_token)
+    _require_file_twice(kind, memo, src_token, dst_token, period)
     # **파일에 있는 선**이다 — 「파일대로 맞춤」 이 끊지 않는다(이미 이어진 것도 여기 든다).
     seen.add((src.id, kind.slug, dst.id))
     label = f"{src.label} -{kind.label}-> {dst.label}"
+    if period != (None, None):
+        label = f"{label} ({edges.describe(*period)})"
     wanted = _relation_properties(db, kind, row, Refs(db, user), defs=memo.defs.get(kind.slug))
     if dst.is_system:
-        # 한쪽 끝이 원 표면 선은 `object_links` 에 있다(속성은 안 받는다).
+        # 한쪽 끝이 원 표면 선은 `object_links` 에 있다(속성은 안 받는다). 그 선에는 유효
+        # 기간이 없다 — 적은 기간을 조용히 버리지 않는다.
+        if period != (None, None):
+            raise InvalidValue(
+                code("OBJECTS", 129),
+                "부서 · 계정처럼 원 표를 비추는 객체와 잇는 관계에는 유효 기간을 둘 수 "
+                "없습니다.",
+            )
         found = links.existing(db, src.id, dst.id, kind.slug)
         if found is not None:
             _remember_file_edge(kind, memo, src_token, dst_token)
@@ -2972,16 +3181,34 @@ def _plan_relation(
         _require_file_limits(kind, memo, src_token, dst_token)
         _remember_file_edge(kind, memo, src_token, dst_token)
         return RowPlan(row=index, action="create", label=label)
-    found_edge = _existing_edge(db, memo, src.id, kind.slug, dst.id)
+    found_edge = _existing_edge(db, memo, src.id, kind.slug, dst.id, period)
     if found_edge is not None:
         # **이미 이어진 선이라도 속성 · 근거가 다르면 고친다.** 예전에는 늘 `unchanged` 라,
-        # 근거 건수처럼 관계에 붙는 값을 나중에 채울 길이 없었다.
+        # 근거 건수처럼 관계에 붙는 값을 나중에 채울 길이 없었다. 기간이 겹치는 있는 선이면
+        # 그 선의 기간을 이 줄대로 고친다(ADR 0039 — 내려받아 끝날을 적어 다시 넣는 길).
         note = str(row.get("evidence_note") or "").strip()
         current = found_edge.properties or {}
         changed = [key for key, value in wanted.items() if current.get(key) != value]
         if note and note != (found_edge.evidence_note or ""):
             changed.append("evidence_note")
-        _remember_file_edge(kind, memo, src_token, dst_token)
+        carried = _row_pin(kind, row)
+        if carried is not None:
+            # 묶음이 실어 온 고정(ADR 0041) — 뜻이 다를 때만 고친다(허브가 다시 고정한 선).
+            changed += _pin_changed(carried, _pin_state_of(db, memo, found_edge))
+        if (found_edge.valid_from, found_edge.valid_to) != period:
+            changed += ["valid_from", "valid_to"]
+            rel.require_cardinality(
+                db,
+                kind,
+                src.id,
+                dst.id,
+                valid_from=period[0],
+                valid_to=period[1],
+                skip=found_edge.id,
+            )
+        if kept is not None:
+            kept.add(found_edge.id)
+        _remember_file_edge(kind, memo, src_token, dst_token, period)
         return RowPlan(
             row=index,
             action="update" if changed else "unchanged",
@@ -2989,10 +3216,10 @@ def _plan_relation(
             object_id=found_edge.id,
             changes=sorted(changed),
         )
-    rel.require_cardinality(db, kind, src.id, dst.id)
+    rel.require_cardinality(db, kind, src.id, dst.id, valid_from=period[0], valid_to=period[1])
     rel.require_no_cycle(db, kind, src.id, dst.id)
-    _require_file_limits(kind, memo, src_token, dst_token)
-    _remember_file_edge(kind, memo, src_token, dst_token)
+    _require_file_limits(kind, memo, src_token, dst_token, period)
+    _remember_file_edge(kind, memo, src_token, dst_token, period)
     return RowPlan(row=index, action="create", label=label)
 
 
@@ -3040,6 +3267,8 @@ def apply_relations(
     refs = Refs(db, user)
     # **새 선은 모았다가 COPY 로 넣는다**(`_Writes`) — 감사 · 되돌릴 기록도 함께.
     writes = _Writes(db, ObjectRelation.__table__)
+    #: 묶음이 실어 온 고정(선 id → 허브에서 낡았나) — 다 쓴 뒤 이 설치의 시계로 옮긴다.
+    carried_pins: dict[uuid.UUID, bool] = {}
     for row_plan in plan.rows:
         _tick(on_progress, "적용", row_plan.row, len(rows))
         if row_plan.action == "unlink" and row_plan.object_id is not None:
@@ -3077,6 +3306,7 @@ def apply_relations(
             kind = kinds.get(edge.relation) or by_label[edge.relation]
             before = dict(edge.properties or {})
             was_note = edge.evidence_note or ""
+            was_period = (edge.valid_from, edge.valid_to)
             # **`or` 로 잇지 않는다** — 속성 정의가 없는 종류는 빈 목록이라 거짓이고, 그러면
             # 줄마다 정의를 다시 물었다(2만 줄 근거 고치기 14.7초 중 9초 남짓, 2026-10-10).
             found_defs = memo.defs.get(kind.slug)
@@ -3089,24 +3319,51 @@ def apply_relations(
             note = str(row.get("evidence_note") or "").strip()
             if note:
                 edge.evidence_note = note
+            # 기간이 겹치는 있는 선을 이 줄의 기간으로(ADR 0039) — 계획이 그 선을 골랐다.
+            period = _row_period(kind, row)
+            if period != was_period:
+                edge.valid_from, edge.valid_to = period
+            # 묶음이 실어 온 고정(ADR 0041) — 계획이 뜻이 다르다고 본 선만.
+            carried = _row_pin(kind, row)
+            was_pin = _pin_state(edge.pinned_revision, edge.pinned_at)
+            pin_moved = carried is not None and bool(
+                {"pinned_revision", "pinned_at"} & set(row_plan.changes)
+            )
+            if carried is not None and pin_moved:
+                edge.pinned_revision, edge.pinned_at = carried.revision, carried.at
+                carried_pins[edge.id] = carried.stale
             journal.changed(
                 db,
                 "object_relations",
                 edge.id,
-                before={"properties": before, "evidence_note": was_note},
+                before={
+                    "properties": before,
+                    "evidence_note": was_note,
+                    **_period_state(*was_period),
+                    **(was_pin if pin_moved else {}),
+                },
                 after={
                     "properties": dict(edge.properties or {}),
                     "evidence_note": edge.evidence_note or "",
+                    **_period_state(edge.valid_from, edge.valid_to),
+                    **(_pin_state(edge.pinned_revision, edge.pinned_at) if pin_moved else {}),
                 },
                 label=row_plan.label,
             )
+            changes: dict[str, Any] = {
+                "properties": {"before": before, "after": edge.properties}
+            }
+            if period != was_period:
+                changes["changed"] = audit.diff(
+                    _period_state(*was_period), _period_state(*period)
+                )
             writes.audit.record(
                 action="object.relation.update",
                 actor=user,
                 target_table="object_relations",
                 target_id=edge.id,
                 target_label=row_plan.label,
-                changes={"properties": {"before": before, "after": edge.properties}},
+                changes=changes,
                 reason="일괄 가져오기",
             )
             writes.changed.append(edge)
@@ -3151,10 +3408,19 @@ def apply_relations(
         if _guarded(kind):
             writes.write()
             db.flush()
-        rel.require_cardinality(db, kind, src.id, dst.id)
+        # 기간 겹침(같은 선 · 이 파일 안)은 계획이 이미 봤다 — 같은 순간의 다른 요청은 DB 가.
+        period = _row_period(kind, row)
+        rel.require_cardinality(
+            db, kind, src.id, dst.id, valid_from=period[0], valid_to=period[1]
+        )
         rel.require_no_cycle(db, kind, src.id, dst.id)
         # **id 를 여기서 정한다** — 감사 기록이 선이 들어가기를 기다리지 않는다.
         made = uuid.uuid4()
+        # 계보 선의 고정(ADR 0041) — 실려 왔으면 그대로, 아니면 비워 두어 트리거가 박는다.
+        # COPY 의 줄은 모두 같은 칸이어야 해서 늘 싣는다.
+        carried = _row_pin(kind, row)
+        if carried is not None:
+            carried_pins[made] = carried.stale
         writes.rows.append(
             {
                 "id": made,
@@ -3167,6 +3433,10 @@ def apply_relations(
                 "evidence_note": str(row.get("evidence_note") or "").strip(),
                 "created_by_id": user.id,
                 "datasource_id": datasource_id,
+                "valid_from": period[0],
+                "valid_to": period[1],
+                "pinned_revision": carried.revision if carried is not None else None,
+                "pinned_at": carried.at if carried is not None else None,
             }
         )
         row_plan.object_id = made
@@ -3181,7 +3451,15 @@ def apply_relations(
             target_label=row_plan.label,
             workspace_id=src.owner_workspace_id,
             changes={
-                **audit.relation_ends(kind.slug, src.id, dst.id, src.label, dst.label),
+                **audit.relation_ends(
+                    kind.slug,
+                    src.id,
+                    dst.id,
+                    src.label,
+                    dst.label,
+                    valid_from=period[0],
+                    valid_to=period[1],
+                ),
                 **(mark or {}),
             },
             reason="일괄 가져오기",
@@ -3189,6 +3467,9 @@ def apply_relations(
         writes.maybe()
     # 남은 것을 넣는다 — **묶음 한 줄보다 먼저**(감사의 차례는 넣는 차례다).
     writes.write()
+    # 실려 온 고정 중 바뀐 때로 판정하는 것은 이 설치의 시계로(ADR 0041).
+    db.flush()
+    lineage.settle_carried(db, carried_pins)
     audit.record(
         db,
         action="object.relation.import",
@@ -3203,13 +3484,34 @@ def apply_relations(
 
 
 def _edge_state(edge: ObjectRelation) -> dict[str, Any]:
-    """선 하나를 **되살릴 수 있는 만큼** — 되돌릴 기록에 담는 모양."""
+    """선 하나를 **되살릴 수 있는 만큼** — 되돌릴 기록에 담는 모양. 유효 기간도(ADR 0039) —
+    빠뜨리면 되살린 선이 늘 유효한 선이 되어 지난 구성이 지금 구성에 섞인다."""
     return {
         "src": str(edge.src_object_id),
         "dst": str(edge.dst_object_id),
         "relation": edge.relation,
         "properties": dict(edge.properties or {}),
         "evidence_note": edge.evidence_note or "",
+        **_period_state(edge.valid_from, edge.valid_to),
+        # 계보 선의 고정(ADR 0041) — 되살린 선이 새로 박히지 않고 그때의 기준을 지킨다.
+        **(
+            _pin_state(edge.pinned_revision, edge.pinned_at)
+            if edge.pinned_at is not None
+            else {}
+        ),
+    }
+
+
+def _pin_state(revision: str | None, at: datetime | None) -> dict[str, Any]:
+    """되돌릴 기록에 싣는 고정 — 시각은 글자(ISO)로."""
+    return {"pinned_revision": revision, "pinned_at": at.isoformat() if at else None}
+
+
+def _period_state(valid_from: date | None, valid_to: date | None) -> dict[str, Any]:
+    """되돌릴 기록 · 감사에 싣는 기간 — 글자(ISO)로."""
+    return {
+        "valid_from": valid_from.isoformat() if valid_from else None,
+        "valid_to": valid_to.isoformat() if valid_to else None,
     }
 
 
@@ -3241,6 +3543,7 @@ def export_relations(db: Session, user: User, object_type: ObjectType) -> list[d
         if dst_ids
         else {}
     )
+    periodic = edges.kinds_with_periods(db)
     out: list[dict[str, Any]] = []
     for edge, source in rows:
         target = dsts.get(edge.dst_object_id)
@@ -3254,6 +3557,16 @@ def export_relations(db: Session, user: User, object_type: ObjectType) -> list[d
                 "relation": edge.relation,
                 "dst": target.key or target.label,
                 "evidence_note": edge.evidence_note or "",
+                # 기간을 가리지 않고 전부 — 고쳐서 다시 넣는 길이라, 지난 · 앞으로의 선을 빼면
+                # 「파일대로 맞춤」 이 그 선을 끊는다(ADR 0039). 기간을 받는 종류의 줄만.
+                **(
+                    {
+                        "valid_from": edge.valid_from.isoformat() if edge.valid_from else "",
+                        "valid_to": edge.valid_to.isoformat() if edge.valid_to else "",
+                    }
+                    if edge.relation in periodic
+                    else {}
+                ),
                 **{
                     key: MULTI_SEP.join(str(one) for one in value)
                     if isinstance(value, list)

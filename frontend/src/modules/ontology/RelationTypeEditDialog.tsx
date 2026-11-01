@@ -7,12 +7,27 @@
  *
  * 끝에는 **인터페이스**도 고른다(ADR 0006) — 「설비를 교정함」 이면 설비를 구현한 타입 전부가
  * 도착점이 되고, 구현 타입이 늘어도 이 관계 종류는 안 고친다.
+ *
+ * **수량 칸**(ADR 0040)은 이 종류의 숫자 관계 속성 하나를 「관계 하나에 몇 개」 로 읽게 한다 — BOM
+ * 전개가 그 값을 경로 따라 곱한다. 관계 속성은 정의 가져오기로만 생기므로 새로 만드는 창에는 고를
+ * 것이 없다.
+ *
+ * **계보 관계**(ADR 0041)는 어느 끝이 원천인가를 정한다 — 「무엇에서 만들어졌나」. 방향이 있어야
+ * 끝을 가를 수 있으므로 방향 없는 종류에서는 고르지 못한다(서버도 거절한다, ONTOLOGY-0097).
  */
 
 import { useState } from 'react'
 
 import { ontologyApi } from '@/modules/ontology/api'
-import type { Cardinality, ObjectInterface, ObjectType, RelationType } from '@/modules/ontology/api'
+import type {
+  Cardinality,
+  LineageSource,
+  ObjectInterface,
+  ObjectType,
+  PropertyDef,
+  RelationType,
+} from '@/modules/ontology/api'
+import { endLabel } from '@/modules/ontology/interfaces'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
 import { Button } from '@/shared/components/ui/button'
@@ -38,6 +53,17 @@ export const CARDINALITY_LABELS: Record<Cardinality, string> = {
   one_to_many: '1 : N',
   many_to_one: 'N : 1',
   many_to_many: 'N : N',
+}
+
+/** 「수량 칸 없음」. 빈 문자열을 쓸 수 없다 — Select 가 그것을 「고른 것 없음」 으로 본다. */
+const NO_QUANTITY = '__none__'
+
+/** 「계보 관계가 아님」 — 빈 문자열은 Select 가 「고른 것 없음」 으로 본다. */
+const NO_LINEAGE = '__none__'
+
+/** 수량 칸이 될 수 있는 관계 속성 — **숫자이고 값이 하나인 것만**(서버 검사와 같다, ONTOLOGY-0096). */
+function quantityCandidates(properties: PropertyDef[] | undefined): PropertyDef[] {
+  return (properties ?? []).filter((one) => one.data_type === 'number' && !one.multi)
 }
 
 const CARDINALITY_HINTS: Record<Cardinality, string> = {
@@ -72,6 +98,11 @@ export function RelationTypeEditDialog({
   const [directed, setDirected] = useState(relation?.directed ?? true)
   const [transitive, setTransitive] = useState(relation?.transitive ?? false)
   const [acyclic, setAcyclic] = useState(relation?.acyclic ?? false)
+  const [effectivity, setEffectivity] = useState(relation?.effectivity ?? false)
+  const [quantityKey, setQuantityKey] = useState(relation?.quantity_key ?? '')
+  const [lineageSource, setLineageSource] = useState<LineageSource>(relation?.lineage_source ?? '')
+  /** 방향이 없으면 계보가 될 수 없다 — 저장되는 값은 「없음」 이다(서버도 거절한다). */
+  const lineage: LineageSource = directed ? lineageSource : ''
   const [cardinality, setCardinality] = useState<string>(relation?.cardinality ?? 'many_to_many')
   const [src, setSrc] = useState<string[]>(relation?.src_type_slugs ?? [])
   const [dst, setDst] = useState<string[]>(relation?.dst_type_slugs ?? [])
@@ -93,12 +124,32 @@ export function RelationTypeEditDialog({
         // **재귀로 펼치는 관계는 순환을 막아야 한다.** 서버도 막지만, 화면이
         // 먼저 켜 두면 거절당하고 나서 무엇을 고칠지 찾을 일이 없다.
         acyclic: transitive ? true : acyclic,
+        // 끄려는데 기간이 든 관계가 있으면 서버가 거절한다(ONTOLOGY-0095) — 그 말이 위에 뜬다.
+        effectivity,
         cardinality,
         src_type_slugs: src.length > 0 ? src : null,
         dst_type_slugs: dst.length > 0 ? dst : null,
       }
-      if (relation) await ontologyApi.updateRelationType(relation.slug, body)
-      else await ontologyApi.createRelationType({ slug, ...body })
+      if (relation) {
+        // **바꾼 때만 싣는다** — 안 보낸 것(그대로)과 빈 글자(수량 칸 비움)는 다른 말이다. 숫자 · 값
+        // 하나가 아닌 속성이면 서버가 거절한다(ONTOLOGY-0096) — 그 말이 위에 뜬다.
+        const quantity =
+          quantityKey !== (relation.quantity_key ?? '') ? { quantity_key: quantityKey } : {}
+        // 계보도 바꾼 때만 — 켜거나 끝을 바꾸면 이 종류의 관계 전부를 다시 고정한다.
+        const lineageChange =
+          lineage !== (relation.lineage_source ?? '') ? { lineage_source: lineage } : {}
+        await ontologyApi.updateRelationType(relation.slug, {
+          ...body,
+          ...quantity,
+          ...lineageChange,
+        })
+      } else {
+        await ontologyApi.createRelationType({
+          slug,
+          ...body,
+          ...(lineage ? { lineage_source: lineage } : {}),
+        })
+      }
       onChanged()
       onClose()
     } catch (caught) {
@@ -202,6 +253,12 @@ export function RelationTypeEditDialog({
                     없습니다.
                   </p>
                 </div>
+
+                <QuantityField
+                  relation={relation ?? null}
+                  value={quantityKey}
+                  onChange={setQuantityKey}
+                />
               </section>
 
               <section className="space-y-4">
@@ -223,6 +280,14 @@ export function RelationTypeEditDialog({
                   interfaces={interfaces}
                   chosen={dst}
                   onChange={setDst}
+                />
+                <LineageField
+                  value={lineageSource}
+                  onChange={setLineageSource}
+                  directed={directed}
+                  wasLineage={Boolean(relation?.lineage_source)}
+                  srcText={endsText(src, types, interfaces)}
+                  dstText={endsText(dst, types, interfaces)}
                 />
               </section>
 
@@ -279,6 +344,28 @@ export function RelationTypeEditDialog({
                     </span>
                   </span>
                 </label>
+
+                <label className="flex items-start gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    className="mt-0.5 size-4"
+                    checked={effectivity}
+                    onChange={(event) => setEffectivity(event.target.checked)}
+                  />
+                  <span>
+                    유효 기간을 받는다
+                    <span className="text-muted-foreground ml-1 text-xs">
+                      관계마다 <b>시작일(포함) · 끝날(제외)</b>을 적습니다 — 「3월 1일부터 B 로
+                      바뀜」 은 앞 관계의 끝날과 뒤 관계의 시작일을 같은 날로 적습니다. 같은 두 객체
+                      사이에 기간이 겹치지 않는 관계를 여럿 둘 수 있습니다(BOM 의 같은 부품이 다시
+                      들어옴). 트리 · 목록 · 그래프는 <b>기준일</b>(비우면 오늘)에 유효한 관계만
+                      표시합니다.
+                      {editing &&
+                        relation?.effectivity &&
+                        ' 기간이 든 관계가 있으면 끌 수 없습니다 — 그 기간이 뜻을 잃기 때문입니다.'}
+                    </span>
+                  </span>
+                </label>
               </div>
             </div>
           </div>
@@ -327,6 +414,138 @@ export function RelationTypeEditDialog({
         />
       )}
     </>
+  )
+}
+
+/**
+ * 수량 칸 — 이 종류의 숫자 · 값 하나 관계 속성 중 하나, 또는 없음. 고를 것이 없으면 **왜 없는지**
+ * 말한다(비활성만 시키면 고장으로 읽힌다).
+ */
+function QuantityField({
+  relation,
+  value,
+  onChange,
+}: {
+  relation: RelationType | null
+  value: string
+  onChange: (next: string) => void
+}) {
+  const candidates = quantityCandidates(relation?.properties)
+  /** 지금 값이 후보에 없으면(옛 정의) 그대로 보인다 — 안 보이면 저장 한 번에 말없이 비워진다. */
+  const orphan = value && !candidates.some((one) => one.key === value) ? value : null
+  const help =
+    'BOM 전개가 이 칸의 값을 「관계 하나에 몇 개」 로 읽고 경로를 따라 곱합니다. 비우면 모든 관계를 1개로 셉니다. 값이 빈 관계는 1개로 세고 「수량 없음」 으로 표시합니다.'
+
+  if (!relation) {
+    return (
+      <div className="space-y-1.5">
+        <Label>수량 칸</Label>
+        <p className="text-muted-foreground text-xs">
+          관계 속성은 정의 가져오기로 추가합니다 — 숫자 관계 속성을 추가한 뒤 이 창에서 수량 칸을
+          정합니다. {help}
+        </p>
+      </div>
+    )
+  }
+  return (
+    <div className="space-y-1.5">
+      <Label htmlFor="rel-quantity">수량 칸</Label>
+      <Select
+        value={value || NO_QUANTITY}
+        onValueChange={(next) => onChange(next === NO_QUANTITY ? '' : next)}
+        disabled={candidates.length === 0 && !orphan}
+      >
+        <SelectTrigger id="rel-quantity" aria-label="수량 칸">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_QUANTITY}>없음 (모든 관계를 1개로)</SelectItem>
+          {candidates.map((one) => (
+            <SelectItem key={one.key} value={one.key}>
+              {one.label}
+              {one.unit && ` (${one.unit})`}
+            </SelectItem>
+          ))}
+          {orphan && <SelectItem value={orphan}>{orphan} (숫자 · 값 하나가 아님)</SelectItem>}
+        </SelectContent>
+      </Select>
+      <p className="text-muted-foreground text-xs">
+        {candidates.length === 0 && (
+          <b>숫자 관계 속성이 없습니다 — 정의 가져오기로 관계 속성을 추가하세요. </b>
+        )}
+        {help} 숫자이고 값이 하나인 관계 속성만 고를 수 있습니다.
+      </p>
+    </div>
+  )
+}
+
+/** 끝에 고른 타입 · 인터페이스의 이름 — 안 골랐으면 「아무 타입」. */
+function endsText(chosen: string[], types: ObjectType[], interfaces: ObjectInterface[]): string {
+  return chosen.length > 0
+    ? chosen.map((one) => endLabel(one, types, interfaces)).join(' · ')
+    : '아무 타입'
+}
+
+/**
+ * 계보 관계 — 없음 · 출발이 원천 · 도착이 원천. 고르는 줄에 **원천과 파생물이 무엇이 되는지**를
+ * 적는다(「출발」 · 「도착」 만으로는 어느 쪽이 도면인지 다시 읽어야 한다). 방향이 없으면 막고
+ * 까닭을 적는다.
+ */
+function LineageField({
+  value,
+  onChange,
+  directed,
+  wasLineage,
+  srcText,
+  dstText,
+}: {
+  value: LineageSource
+  onChange: (next: LineageSource) => void
+  directed: boolean
+  /** 저장된 값이 계보 관계인가 — 방향을 끄면 해제된다고 말한다. */
+  wasLineage: boolean
+  srcText: string
+  dstText: string
+}) {
+  return (
+    <div className="space-y-1.5 border-t border-dashed pt-3">
+      <Label htmlFor="rel-lineage">계보 관계</Label>
+      <Select
+        value={directed ? value || NO_LINEAGE : NO_LINEAGE}
+        onValueChange={(next) => onChange(next === NO_LINEAGE ? '' : (next as LineageSource))}
+        disabled={!directed}
+      >
+        <SelectTrigger id="rel-lineage" aria-label="계보 관계">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NO_LINEAGE}>없음 — 계보 관계가 아님</SelectItem>
+          <SelectItem value="src">
+            출발이 원천 (원천 {srcText} → 파생물 {dstText})
+          </SelectItem>
+          <SelectItem value="dst">
+            도착이 원천 (원천 {dstText} → 파생물 {srcText})
+          </SelectItem>
+        </SelectContent>
+      </Select>
+      <p className="text-muted-foreground text-xs">
+        {!directed && (
+          <b>
+            방향이 없는 관계는 계보 관계가 될 수 없습니다 — 어느 끝이 원천인지 가를 수
+            없습니다.{' '}
+          </b>
+        )}
+        「무엇에서 만들어졌나」 를 잇는 관계입니다(도면 → 메시 → 해석 결과). 관계를 맺는 순간 원천의
+        지금 개정(고정 개정)과 수정 시각(고정 시각)을 적어 두고, 원천이 그 뒤에 바뀌면 파생물이
+        낡음이 됩니다. 정하거나 원천 끝을 변경하면 이 종류의 관계 전부를 지금 값으로 다시 고정하고,
+        해제하면 고정을 비웁니다.
+      </p>
+      {!directed && wasLineage && (
+        <p className="text-destructive text-xs">
+          방향을 끄면 계보 관계도 해제됩니다 — 저장하면 이 종류 관계의 고정이 비워집니다.
+        </p>
+      )}
+    </div>
   )
 }
 

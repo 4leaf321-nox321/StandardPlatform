@@ -68,12 +68,15 @@ BASE_INSTRUCTIONS = (
     "  요즘 이상한 것 · 무엇부터 볼까  insights         (근거는 metric_analyze)\n"
     "  이 객체의 모든 것               object_get · object_references · object_rollup\n"
     "  계층을 한 단계씩                object_tree\n"
+    "  BOM 전개 · 어디에 쓰였나        object_explode  (수량을 경로 따라 곱한다)\n"
+    "  무엇에서 만들어졌나 · 낡았나    object_lineage  (풀기는 사람이 정한 뒤 lineage_repin)\n"
     "  이것과 이어진 것들              graph_neighbors  (타입 지형은 graph_overview)\n"
     "  누가 언제 무엇을 바꿨나         object_history(하나) · audit_recent(전체)\n"
     "  여러 객체의 한 칸을 한 값으로   bulk_edit (apply=false 로 먼저 · undo 있음)\n"
     "  객체를 지운다 · 둘을 합친다     objects_delete · object_merge (apply=false 먼저)\n"
     "  객체를 이력의 그 값으로         object_restore\n"
     "  잘못 이은 관계                  relation_update · relation_remove\n"
+    "  추론 · 추출한 관계(확실치 않음)  relation_propose  (확정은 사람이 — 검토함)\n"
     "  여러 타입을 건너뛰는 물음       rdf_query (SPARQL)\n"
     "  어디부터 채우나                 fill_priorities  (무엇이 나쁜가는 quality_report)\n"
     "  못 찾은 이름을 별칭으로         alias_candidates → alias_candidate_apply\n"
@@ -933,7 +936,8 @@ async def ontology_schema(ctx: Context) -> Any:
     무엇을 만들 수 있고 각 타입이 어떤 값을 받는지가 여기 다 있다. **다른 도구를
     부르기 전에 이것부터 읽는다.** 인터페이스는 여러 타입이 따르는 공통 모양이다 —
     타입의 `interface_slugs` 가 구현이고, 속성의 `interface_slug` 가 붙어 있으면 공통
-    속성이다."""
+    속성이다. 관계 종류의 `lineage_source`(`src` · `dst` 면 **계보 관계** — 그 끝이 원천)와
+    타입의 `revision_key`(개정 칸)가 `object_lineage` 를 부를 자리인지 말한다(ADR 0041)."""
     return await _get(ctx, "/api/ontology/schema")
 
 
@@ -958,6 +962,16 @@ async def ontology_import(
     (`dst` 면 자식이 부모를 가리키는 관계, 기본), 참조 칸으로 이으면 `"relation":
     "ref:<타입>.<칸>"`. 트리가 있어야 「하위 전체」(`under`) 조건 · 계층 축(`…@0`) ·
     `object_tree` · 롤업이 된다.
+    **유효 기간** — 관계 종류에 `"effectivity": true` 면 그 선이 기간(`valid_from` ·
+    `valid_to`)을 받는다(BOM 의 적용 기간). 끄려면 기간이 든 선이 없어야 한다.
+    **수량 칸** — 관계 종류의 `"quantity_key": "<관계 속성 키>"` 가 관계마다 「부모 하나에 자식
+    몇 개」 다(그 종류의 숫자 · 값 하나 관계 속성, 같은 파일의 `properties` 에 적어도 된다).
+    `object_explode` 가 경로 따라 곱한다. 롤업(`list_view.rollups[]`)은 `"weighted": true`
+    (수량 반영) · `"leaves_only": true`(말단만) · `"fn": "product"`(곱)를 받는다.
+    **계보**(ADR 0041) — 「무엇에서 만들어졌나」 를 잇는 관계 종류에 `"lineage_source": "src"`
+    (출발이 원천) · `"dst"`(도착이 원천), 방향 있는 종류만. 원천 타입의 `"revision_key": "<속성
+    키>"`(개정 칸 — 글자 · 고르기 · 숫자, 값 하나)가 바뀔 때만 파생물이 낡는다(없으면 수정
+    시각으로 — 이름만 고쳐도 낡음). 개정 칸인 속성은 지우거나 종류를 못 바꾼다.
     자세한 것은 `get_guide("schema")`."""
     return await _post(
         ctx,
@@ -1281,6 +1295,8 @@ async def objects_list(
     properties: dict[str, str] | None = None,
     conditions: list[dict[str, str]] | None = None,
     status: str | None = None,
+    as_of: str | None = None,
+    columns: list[str] | None = None,
 ) -> Any:
     """그 타입의 객체 목록 — 화면의 목록과 **같은 거르기**다.
 
@@ -1301,8 +1317,26 @@ async def objects_list(
       가 준다 — 추측하지 않는다.
       **제외**: 조건에 `"exclude": 1`(묶음 번호)을 주면 같은 번호끼리 AND 로 묶어 **그 묶음에
       맞는 것을 뺀다**(`nf1.<칸>.<연산>`). 칸이 비어 비교가 안 되는 기록은 남는다. 지표 건
-      보기의 `nf<번호>.<칸>.<연산>` 키는 `{"field", "op", "value", "exclude": <번호>}` 로 푼다.
+      보기의 `nf<번호>.<칸>.<연산>` 키는 `{"field", "op", "value", "exclude": <번호>}` 로,
+      `fe<번호>.` 는 `"edge": <번호>` 로 푼다(`nf<n>.fe<m>.` 이면 둘 다).
+      **낡은 것만**(계보, ADR 0041): `{"field": "lineage", "op": "eq", "value": "stale"}`
+      (바로 · 위에서 낡음) · `"direct"`(바로 낡음만) · `"fresh"`(낡지 않음), `ne` 도 된다.
+      응답의 `lineage` 가 그 쪽의 **낡은 줄만** `{id: "direct" | "upstream"}` 로 표시한다.
+      **선의 칸**(관계 속성 — BOM 의 수량 · 적용 옵션, ADR 0043): `out.<관계>~<관계 속성>`
+      (`object_fields` 의 `edge: true` 줄). **같은 선에서 함께 맞아야 하면** 조건마다
+      `"edge": <번호>` 를 붙여 묶는다 — 「부품 X 가 4개 이상」 은
+      `[{"field": "out.bom", "op": "eq", "value": <X id>, "edge": 1},
+      {"field": "out.bom~qty", "op": "gte", "value": "4", "edge": 1}]`. 안 묶으면 조건마다
+      「이어진 것 중 하나라도」 라 X 1개 + 다른 부품 5개인 제품도 걸린다.
     - `status`: `active` · `deprecated`.
+    - `as_of`: **기준일**(`YYYY-MM-DD`, 비우면 오늘) — 관계 조건(`out.` · `in.`) · 「하위
+      전체」(`under`)가 **그날 유효한 관계만** 따라간다(유효 기간, ADR 0039). 「3월 기준 그
+      어셈블리 아래 부품」 은 `under` 조건에 `as_of="2026-03-31"`.
+    - `columns`: **이어진 칸** — 줄마다 그 주소의 값을 `linked[<id>][<주소>]` 로 싣는다
+      (`object_fields` 의 주소 · 선의 칸, 10개까지). **상대의 값이 필요하면 줄마다
+      `object_get` 하지 말고 `columns`** 로 한 번에. 칸마다 20개까지 · 이어진 것마다 값
+      하나(같은 값이 여러 번일 수 있다) · `more: true` 면 더 있다(몇 개인지는 세지 않았다 —
+      수는 `objects_summary`). 볼 수 없는 객체는 걷지 않는다.
 
     응답의 `total` 이 전체 수다 — 한 쪽(limit ≤ 200)씩 `offset` 으로 넘긴다.
     **몇 건인지 세려면 전부 받지 말고 `objects_summary`.**
@@ -1315,8 +1349,9 @@ async def objects_list(
 
     **긴 글 칸(보고서 본문 같은 것)은 앞 300자만** 온다 — 줄의 `clipped` 가 그 칸의 전체
     길이를 말한다. 내용으로 답하려면 그 객체를 `object_get` 으로 읽는다."""
-    filters = _filter_params(q, status, properties, conditions)
+    filters = _filter_params(q, status, properties, conditions, as_of)
     params: list[tuple[str, Any]] = [("limit", limit), ("offset", offset), *filters]
+    params += [("columns", one) for one in columns or []]
     found = await _get(ctx, f"/api/objects/{type_slug}", params=params)
     if isinstance(found, dict):
         for row in found.get("items") or []:
@@ -1338,14 +1373,18 @@ def _filter_params(
     status: str | None,
     properties: dict[str, str] | None,
     conditions: list[dict[str, str]] | None,
+    as_of: str | None = None,
 ) -> list[tuple[str, Any]]:
     """목록과 통계가 **같은 거르기**를 보낸다.
 
     따로 만들면 「목록은 12건인데 통계는 15건」 이 되고, 모델은 어느 쪽을
-    믿을지 모른다."""
+    믿을지 모른다. 기준일(`as_of`)도 거르기다 — 관계 조건 · 하위 전체가 따라갈 선을 고른다
+    (안 주면 서버가 오늘로 본다)."""
     params: list[tuple[str, Any]] = []
     if q:
         params.append(("q", q))
+    if as_of:
+        params.append(("as_of", as_of))
     if status:
         params.append(("status", status))
     for key, value in (properties or {}).items():
@@ -1357,9 +1396,13 @@ def _filter_params(
             one.get("value", ""),
         )
         # 제외 묶음(ADR 0015) — 같은 번호끼리 AND 로 묶어 뺀다. 지표 건 보기의 `nf<번호>.` 키.
+        # 같은 관계 묶음(ADR 0043) — 같은 번호끼리 같은 선 하나에서 맞는다(`fe<번호>.`).
         group = str(one.get("exclude") or "").strip()
-        head = f"nf{group}" if group and group != "0" else "f"
-        params.append((f"{head}.{field}.{op}", value))
+        edge = str(one.get("edge") or "").strip()
+        head = f"nf{group}." if group and group != "0" else ""
+        if edge and edge != "0":
+            head += f"fe{edge}."
+        params.append((f"{head or 'f.'}{field}.{op}", value))
     return params
 
 
@@ -1537,7 +1580,9 @@ async def review_list(
 ) -> Any:
     """**검토함** — 사람이 판단할 일을 한 곳에서(ADR 0027). 별칭 후보(못 찾은 말) · 검수 대기
     별칭 · 병합 후보(이름이 같은 객체) · 지워진 것을 가리키는 칸, 그리고 원래 화면에서만
-    처리하는 적용 대기 계획 · 선 기다림.
+    처리하는 적용 대기 계획 · 선 기다림. **낡은 파생물**(`stale_lineage`, ADR 0041)은 바로 낡은
+    파생물마다 한 줄 — 후보 `checked`(영향 없음 확인) · `rebuilt`(다시 만들었음), 확신도가 없어
+    줄마다 사람이 정한다(처리는 `lineage_repin` 과 같은 다시 고정).
 
     줄마다 `question`(물음) · `evidence`(근거) · `choices`(후보, `score`) · `recommended` ·
     `confidence`(0~1) · `reason`(왜 이 추천인가) · `rows`(한 결정이 손대는 줄 수) · `blocked`
@@ -1656,6 +1701,7 @@ async def objects_summary(
     properties: dict[str, str] | None = None,
     conditions: list[dict[str, str]] | None = None,
     status: str | None = None,
+    as_of: str | None = None,
 ) -> Any:
     """**통계** — 「부서별 몇 건」 「개발사 국가별 툴 수」. 화면의 「통계」 와 같다.
 
@@ -1678,6 +1724,8 @@ async def objects_summary(
       `metric_field`(숫자 속성 `properties.<키>`)가 필요하다.
     - `order`: `desc`(큰 값부터)·`asc`(작은 값부터 — 「가장 낮은 것」)·`key`(키 순 —
       날짜 축을 **시간순**으로 볼 때).
+    - `as_of`: 기준일(`YYYY-MM-DD`, 비우면 오늘) — 관계 너머의 기준(`out.` · `in.`) · 계층 축
+      (`@<단계>`) · 관계 조건이 **그날 유효한 관계만** 따라간다(`objects_list` 와 같다).
     - `grain`: 날짜 축의 기간 단위 `day`·`week`·`month`·`quarter`·`year`(기본). 「월별
       추이」 는 `grain="month", order="key"`. 날짜 칸의 `buckets[].key` 는 그 기간의
       **시작일**이고 `range` 가 `{gte, lt}` 다 — 그 칸을 보려면 `objects_list` 에
@@ -1702,7 +1750,7 @@ async def objects_summary(
         params.append(("metric_field", metric_field))
     if grain:
         params.append(("grain", grain))
-    params += _filter_params(q, status, properties, conditions)
+    params += _filter_params(q, status, properties, conditions, as_of)
     return await _get(ctx, f"/api/objects/{type_slug}/summary", params=params)
 
 
@@ -1712,7 +1760,9 @@ async def object_fields(ctx: Context, type_slug: str) -> Any:
     의 `group_by` 에 그대로 넣는다. 자기 칸은 `ontology_schema` 에 있다.
 
     두 걸음까지 준다: `ref.<참조 칸>.<칸>`(참조 칸이 가리키는 것의 칸),
-    `out.<관계>`(관계로 이어진 것 자체 — 값은 상대 id), `out.<관계>.<칸>`,
+    `out.<관계>`(관계로 이어진 것 자체 — 값은 상대 id), `out.<관계>.<칸>`(상대의 칸),
+    `out.<관계>~<관계 속성>`(**선의 칸** — 선 자체의 값: BOM 의 수량 · 적용 옵션, 유효 기간을
+    받는 종류는 `~valid_from` · `~valid_to`. 줄의 `edge` 가 true),
     `in.<관계>[.<칸>]`(들어오는 관계), `in.<타입>:<참조 칸>[.<칸>]`(나를 가리키는 것 —
     그 타입의 참조 칸이 이 객체를 가리키는 것, 개발모델에서 `in.svc_case:model.symptom` 은
     「이 모델을 가리키는 서비스 기록의 증상」), 그리고 그 너머 한 걸음 더
@@ -1722,7 +1772,10 @@ async def object_fields(ctx: Context, type_slug: str) -> Any:
 
     뜻: 이어진 것이 여럿이면 **그중 하나라도** 맞으면 걸린다. 이어진 것이 없는
     객체는 그 너머의 칸 조건에 안 걸린다(`ne` 도) — 그것은 참조 칸이나 관계의
-    `empty` 로 묻는다. 인터페이스 slug 도 받는다 — 공통 속성에서 나가는 걸음이다."""
+    `empty` 로 묻는다. 조건이 **같은 선 하나**(선의 칸 · 상대 · 상대의 칸)에서 함께 맞아야
+    하면 같은 `"edge": <번호>` 로 묶는다(`objects_list` 의 `conditions`). 같은 주소는
+    `objects_list(columns=[...])` 의 이어진 칸으로도 싣는다. 인터페이스 slug 도 받는다 — 공통
+    속성에서 나가는 걸음이다."""
     return await _get(ctx, f"/api/objects/{type_slug}/fields")
 
 
@@ -1767,8 +1820,21 @@ async def objects_similar(
 
 
 @tool()
-async def object_get(ctx: Context, type_slug: str, object_id: str, text_from: int = 0) -> Any:
+async def object_get(
+    ctx: Context,
+    type_slug: str,
+    object_id: str,
+    text_from: int = 0,
+    as_of: str | None = None,
+    all_periods: bool = False,
+) -> Any:
     """객체 하나 — 속성·첨부·**관련 객체**(양방향)까지.
+
+    **관련 객체는 기준일(`as_of`, 비우면 오늘)에 유효한 관계만** 온다 — 유효 기간이 지난 선 ·
+    아직 안 된 선은 빠진다(ADR 0039). `all_periods=True` 면 지난 · 앞으로의 선까지 모두 오고,
+    줄마다 `period_state`(`current` 지금 · `past` 지난 선 · `future` 앞으로의 선)와 기간
+    (`valid_from` 포함 · `valid_to` **제외**)이 붙는다 — 「예전에 들어 있던 부품」 ·
+    「다음 달부터 바뀌는 구성」 은 이것으로 본다.
 
     첨부(`attachments[]`)는 이름 · 크기 · `is_image` · 가로세로뿐이다 — **바이트는
     오지 않는다**(사진은 화면에서 본다). `owner_field` 가 그 파일 칸의 키다.
@@ -1776,7 +1842,12 @@ async def object_get(ctx: Context, type_slug: str, object_id: str, text_from: in
     **긴 글 칸은 6,000자씩** 온다. `clipped[<칸>] = {from, to, length}` 가 있으면 잘린
     것이다 — `to < length` 면 `text_from=<to>` 로 다시 불러 이어 읽는다. 다 읽기 전에
     「본문에 그런 내용은 없다」 고 답하지 마라."""
-    found = await _get(ctx, f"/api/objects/{type_slug}/{object_id}")
+    params: list[tuple[str, Any]] = []
+    if as_of:
+        params.append(("as_of", as_of))
+    if all_periods:
+        params.append(("all_periods", "true"))
+    found = await _get(ctx, f"/api/objects/{type_slug}/{object_id}", params=params or None)
     _clip(found, start=text_from, size=GET_TEXT)
     return found
 
@@ -1791,13 +1862,149 @@ async def object_history(ctx: Context, type_slug: str, object_id: str) -> Any:
 
 
 @tool()
-async def object_rollup(ctx: Context, type_slug: str, object_id: str) -> Any:
+async def object_rollup(
+    ctx: Context, type_slug: str, object_id: str, as_of: str | None = None
+) -> Any:
     """이 객체 **「아래 전부」 의 숫자를 모은 것** — 어셈블리의 총 무게, 과제의 예산 합계.
 
-    타입의 `list_view.rollups` 가 정한 대로 트리 관계 아래를 펼쳐 `sum·min·max·avg·count`
-    로 모은다. 저장된 값이 아니라 볼 때마다 센 것이다. `missing` 이 0 이 아니면 그 합계는
-    「전부의 합」 이 아니다 — 사용자에게 함께 말한다. 정의가 없는 타입은 빈 목록."""
-    return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/rollup")
+    타입의 `list_view.rollups` 가 정한 대로 트리 관계 아래를 펼쳐 `sum·min·max·avg·count·
+    product` 로 모은다. 저장된 값이 아니라 볼 때마다 센 것이다. `missing` 이 0 이 아니면 그
+    합계는 「전부의 합」 이 아니다 — 사용자에게 함께 말한다. 정의가 없는 타입은 빈 목록.
+    `as_of`(기준일, 비우면 오늘)에 유효한 관계로 펼친다 — 「3월 기준 총 무게」.
+
+    줄의 `weighted` 가 참이면 **수량 반영**(ADR 0040) — 아래 객체마다 총수량(관계의 수량을
+    경로 따라 곱해 더한 것)만큼 셌다(합계 = 값 곱하기 총수량, 개수 = 총개수, 곱 = 총수량만큼
+    거듭제곱 — 직렬 신뢰도). `quantity_missing` 은 수량이 비어 1개로 센 관계 수, `leaves_only`
+    면 말단(아래가 없는 것)만 모았다. `note` 가 있으면 값을 못 낸 까닭(트리의 순환)이다."""
+    params = [("as_of", as_of)] if as_of else None
+    return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/rollup", params=params)
+
+
+@tool()
+async def object_explode(
+    ctx: Context,
+    type_slug: str,
+    object_id: str,
+    mode: str = "summary",
+    as_of: str | None = None,
+    limit: int | None = None,
+) -> Any:
+    """**BOM 전개**(ADR 0040) — 트리 관계의 **수량을 경로 따라 곱한다.** 「제품 하나에 볼트가
+    몇 개 드나」 · 「이 부품은 어디에 쓰였나」.
+
+    관계 종류의 수량 칸(`ontology_schema` 의 `relation_types[].quantity_key`)이 관계마다 「부모
+    하나에 자식 몇 개」 다. 같은 하위 조립품이 여러 경로로 오면 그 몫을 **더한다**(총수량).
+
+    - `mode="summary"`(정리, 기본) — 객체마다 한 줄: `total`(총수량) · `level`(가장 얕은 단계)
+      · `depth_max` · `paths`(경로 수).
+    - `mode="indented"`(단계별) — 경로마다 한 줄(깊이 우선, 형제는 이름순): `level` ·
+      `quantity`(그 관계의 수량) · `total`(뿌리에서 그 줄까지 곱한 누적 수량).
+    - `mode="where_used"`(어디에 쓰였나) — 위로: 바로 위 부모와 그 관계의 수량, 그리고 `tops[]`
+      — 맨 위 객체마다 「그것 하나에 이 객체가 총 몇 개」.
+
+    **빠진 것을 함께 말한다**: `totals.missing`(수량 칸이 빈 관계 — 1개로 셌다),
+    `totals.hidden`(볼 수 없는 객체 — 줄은 가리지만 그 아래는 셌다), `truncated`(단계별이 줄
+    상한 `limit`(기본 · 최대 5,000)에 닿음 — `totals.lines_total` 이 전체 줄 수; 그때는
+    정리로 본다). `quantity_key` 가 비었으면 수량 칸이 없어 모든 관계를 1개로 센 것이다 —
+    그 사실을 사용자에게 말한다. 트리가 없는 타입 · 순환하는 트리는 오류(어느 객체에서
+    돌았는지). `as_of`(기준일, 비우면 오늘) — 응답의 `as_of` 를 「○월 ○일 기준」 으로 함께."""
+    params: list[tuple[str, Any]] = [("mode", mode)]
+    if as_of:
+        params.append(("as_of", as_of))
+    if limit:
+        params.append(("limit", limit))
+    return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/explode", params=params)
+
+
+#: 계보의 위 · 아래 줄을 MCP 에서 자르는 기본(각각) — 서버는 500줄씩 주는데 줄마다 양 끝 객체와
+#: 고정 값이 실려, 그대로 넘기면 큰 원천(도면 하나에 메시 수백) 하나가 문맥을 채운다(`_clip` 과
+#: 같은 까닭). 잘랐으면 **잘랐다고** 적는다 — 서버가 자른 것과 같은 표시(`truncated`)로.
+LINEAGE_LINES = 100
+
+
+def _trim_lineage(found: Any, limit: int) -> Any:
+    """계보의 `up` · `down` 을 앞(얕은 것부터) `limit` 줄씩. 잘랐으면 `truncated` 를 켜고
+    보인 줄 수를 `lines_shown` 에 — 전체 수는 서버의 `up_total` · `down_total` 그대로다."""
+    if not isinstance(found, dict):
+        return found
+    cap = max(1, limit)
+    cut = False
+    for side in ("up", "down"):
+        lines = found.get(side)
+        if isinstance(lines, list) and len(lines) > cap:
+            found[side] = lines[:cap]
+            cut = True
+    if cut:
+        found["truncated"] = True
+        found["lines_shown"] = {side: len(found.get(side) or []) for side in ("up", "down")}
+    return found
+
+
+@tool()
+async def object_lineage(
+    ctx: Context, type_slug: str, object_id: str, limit: int = LINEAGE_LINES
+) -> Any:
+    """**계보**(ADR 0041) — 「이 결과는 무엇에서 만들어졌나(어느 도면 · 메시 기준)」 · 「이것이
+    낡았나, 왜」 · 「이 도면이 바뀌면 무엇을 다시 봐야 하나」. 계보 관계 종류(`ontology_schema`
+    의 `relation_types[].lineage_source` 가 `src` · `dst`)만 따라 위(원천 사슬)와 아래(파생물
+    사슬)를 20단계까지 본다. 그냥 이어진 것은 `graph_neighbors`, 한 타입에서 낡은 것만 모으려면
+    `objects_list(conditions=[{"field": "lineage", "op": "eq", "value": "stale"}])`.
+
+    - `state` — `fresh`(낡지 않음) · `direct`(**바로 낡음** — 원천이 고정 뒤에 바뀜) ·
+      `upstream`(**위에서 낡음** — 원천 중 하나가 낡음). `reasons` 가 사람이 읽을 까닭이다
+      (「도면 브래킷 의 개정 B → C」) — 그대로 옮긴다.
+    - `up` · `down` — 줄마다 **원천 → 파생물**(관계 종류의 방향과 상관없이), 얕은 것부터:
+      `depth`(1 이 바로 붙은 선) · `source` · `derived`(각 끝의 `state`) ·
+      `pinned_revision`(맺을 때 박힌 개정) · `revision`(원천의 지금 개정) · `stale` · `reason`.
+      `revision_key` 가 빈 줄은 원천에 개정 칸이 없어 **수정 시각**으로 판정했다 — 이름만
+      고쳐도 낡음이니 그렇게 말한다.
+    - `impact` — 「이것으로 만든 것 `derived` 개(낡음 `stale` 개)」. 원천을 고치기 전에
+      사람에게 보인다.
+    - `truncated` 면 줄이 잘렸다 — 전체는 `up_total` · `down_total`. 위 · 아래 각각 `limit`
+      (기본 100, 서버 상한 500)줄까지.
+    - `kinds` 가 비었으면 이 설치에 계보 관계가 없다(`note`).
+
+    낡음은 **오늘의 판정**이다(기준일 없음 — 오늘 유효한 선 · 지금 값, 지운 원천은 치지
+    않는다). 풀기는 `lineage_repin` — 사람이 정한 뒤에."""
+    found = await _get(ctx, f"/api/objects/{type_slug}/{object_id}/lineage")
+    return _trim_lineage(found, limit)
+
+
+@tool()
+async def lineage_repin(
+    ctx: Context,
+    type_slug: str,
+    object_id: str,
+    relation_ids: list[str] | None = None,
+    basis: str = "checked",
+    note: str = "",
+) -> Any:
+    """**다시 고정**(ADR 0041) — 낡은 파생물을 「영향 없음 확인」(`basis="checked"`) 또는
+    「다시 만들었음」(`basis="rebuilt"`)으로 처리한다. 이 객체의 원천 선(`relation_ids` — 안
+    주면 전부, 빈 목록이면 아무것도)의 고정을 원천의 **지금 값**으로 바꾼다.
+
+    **사람이 정한 것만** — 「영향 없다」 · 「다시 만들었다」 는 사람의 판단이다. 낡음 표시를
+    없애려고 네가 고르지 마라: 옮긴 고정은 이 도구로 되돌릴 길이 없다. 먼저 `object_lineage` 의
+    까닭(`reasons`)과 줄을 사람에게 보이고 근거를 받아 `note` 에 적는다(「하중 경로 무관 —
+    설계 확인」). 감사 · 양 끝의 이력에 앞뒤 개정과 함께 남는다.
+
+    - `relation_ids` — `object_lineage` 의 `up[]` 가운데 `depth` 가 1 인 줄(이 객체의 원천
+      선)의 `relation_id`. 다른 선을 주면 거절된다.
+    - **위에서 낡음은 안 풀린다** — 원천 객체는 그대로 낡았기 때문이다. 낡은 원천을 먼저 다시
+      고정한다(위에서부터 차례로).
+    - 응답: `changed[]`(바뀐 선 — `before` · `after` 의 개정과 시각) · `unchanged`(이미 지금
+      값이던 선 수) · `lineage`(다시 고정한 뒤의 계보 — `state` 가 아직 `upstream` 이면 그 위를
+      사람에게 말한다).
+    - 이 객체를 고칠 수 있는 사람만(OBJECTS-0134), 허브가 관리하는 계보 종류는 거절된다."""
+    body: dict[str, Any] = {"basis": basis, "note": note}
+    # 안 주면(None) 전부, 빈 목록이면 아무것도 — 잘못 비운 목록이 「전부」 가 되지 않게
+    # 그대로 싣는다.
+    if relation_ids is not None:
+        body["relation_ids"] = relation_ids
+    got = await _post(ctx, f"/api/objects/{type_slug}/{object_id}/lineage/repin", body)
+    if isinstance(got, dict) and "lineage" in got:
+        got["lineage"] = _trim_lineage(got["lineage"], LINEAGE_LINES)
+    return got
 
 
 @tool()
@@ -1811,7 +2018,11 @@ async def object_references(ctx: Context, type_slug: str, object_id: str) -> Any
 
 @tool()
 async def object_tree(
-    ctx: Context, type_slug: str, parent: str | None = None, orphans: bool = False
+    ctx: Context,
+    type_slug: str,
+    parent: str | None = None,
+    orphans: bool = False,
+    as_of: str | None = None,
 ) -> Any:
     """계층(트리) **한 단계** — `parent` 없이 부르면 뿌리들, 있으면 그 아래 한 단계.
 
@@ -1820,10 +2031,17 @@ async def object_tree(
     `objects_list` 의 「하위 전체」 조건**(`{"field": "id", "op": "under", "value": <id>}` —
     그 객체와 그 아래 전부, 20단계까지)을 쓴다. 다른 타입의 기록이 그 아래를 가리키는 것은
     참조 칸에 `under`, 단계별로 세려면 `objects_summary(group_by="properties.<칸>@<단계>")`.
-    `orphans=true` 는 어디에도 안 이어진 것만."""
+    `orphans=true` 는 어디에도 안 이어진 것만.
+
+    **기준일(`as_of`, `YYYY-MM-DD`)의 트리다** — 비우면 오늘. 관계 종류가 유효 기간을 받으면
+    그날 유효한 선만 따라간다(「3월 1일부터 A1 이 A2 로 바뀜」 이면 2월 기준에는 A1, 4월
+    기준에는 A2). 응답의 `as_of` 가 그 날이다 — 사람에게 「○월 ○일 기준」 이라고 함께
+    말한다."""
     params: list[tuple[str, Any]] = [("orphans", "true" if orphans else "false")]
     if parent:
         params.append(("parent", parent))
+    if as_of:
+        params.append(("as_of", as_of))
     return await _get(ctx, f"/api/objects/{type_slug}/tree", params=params)
 
 
@@ -1837,6 +2055,7 @@ async def graph_neighbors(
     fanout: int | None = None,
     limit: int | None = None,
     records: bool = False,
+    as_of: str | None = None,
 ) -> Any:
     """이 객체에서 **몇 단계 안에 무엇이 이어져 있나** — 질의어 없이 그래프를 훑는다.
 
@@ -1857,8 +2076,13 @@ async def graph_neighbors(
     타입, conditions=[칸 = 이 객체])`, 이웃으로 싣고 싶으면 `records=True`.
 
     깊이 전부를 한 번에(부품 트리 밑바닥까지) 봐야 하면 `rdf_query` 의 `+` 경로를 쓴다.
+
+    `as_of`(기준일, 비우면 오늘) — 그날 유효한 관계만 그린다. 선마다 유효 기간(`valid_from` ·
+    `valid_to`)이 실린다(유효 기간을 받는 종류만).
     """
     params: list[tuple[str, Any]] = [("focus", object_id), ("depth", depth)]
+    if as_of:
+        params.append(("as_of", as_of))
     if fanout is not None:
         params.append(("fanout", fanout))
     if limit is not None:
@@ -1882,6 +2106,7 @@ async def graph_path(
     types: list[str] | None = None,
     records: bool = False,
     limit: int = 3,
+    as_of: str | None = None,
 ) -> Any:
     """**두 객체가 어떻게 이어져 있나** — 가장 짧은 길들(같은 길이로 `limit` 개까지).
 
@@ -1898,6 +2123,9 @@ async def graph_path(
     - **기록**(`usage="log"`)은 `records=True` 일 때만 거친다 — 인기 모델은 기록 10만 건이
       가리켜서, 기록을 거치면 거의 모든 것이 두 걸음 안에 이어진다.
 
+    - `as_of`(기준일, 비우면 오늘) — 그날 유효한 관계만 따라간다. 오늘 길이 없어도 예전에는
+      이어져 있었을 수 있다 — 「그때는?」 이면 그 날짜로 다시 부른다.
+
     사람에게 옮길 때는 「A —(관계)→ B ←(관계)— C」 처럼 **이름과 관계의 말**로 말한다.
     """
     params: list[tuple[str, Any]] = [
@@ -1906,6 +2134,8 @@ async def graph_path(
         ("max_depth", max_depth),
         ("limit", limit),
     ]
+    if as_of:
+        params.append(("as_of", as_of))
     if relations:
         params.append(("relations", ",".join(relations)))
     if types:
@@ -2094,7 +2324,11 @@ async def object_update(
 
     `aliases` 는 **다른 이름 전부**(통째로 바꿈). 「Ansys」 를 「앤시스」 로도 부르면 여기
     적는다 — 그 뒤로 찾기·참조·파일이 그 이름으로도 같은 객체를 찾는다. 같은 타입의 다른
-    객체가 쓰는 별칭이면 거절된다."""
+    객체가 쓰는 별칭이면 거절된다.
+
+    **계보의 원천**이면(ADR 0041) 개정 칸(`types[].revision_key`)을 고치는 순간 — 개정 칸이
+    없는 타입은 무엇을 고쳐도 — 그것으로 만든 것이 낡음이 된다(영향 범위는 `object_lineage`
+    의 `impact`)."""
     body: dict[str, Any] = {
         name: value
         for name, value in (
@@ -2238,8 +2472,9 @@ async def attachment_upload_prepare(
     local_path: str,
     field: str | None = None,
     filename: str | None = None,
+    owner_table: str = "objects",
 ) -> Any:
-    """사진 · 파일을 객체에 붙일 **curl 명령**을 만든다 — 파일 바이트는 모델을 거치지 않는다.
+    """사진 · 파일을 객체 · 자주검증 칸에 붙일 **curl 명령** — 바이트는 모델을 안 거친다.
 
     ⚠️ 파일을 읽어 base64 로 옮기거나 내용을 도구 인자에 넣지 않는다 — 1MB 가 수십만 토큰이다.
     이 도구는 한 번 쓰는 업로드 표(5분)를 받아 명령을 돌려줄 뿐이고, **파일은 당신의 셸이
@@ -2250,9 +2485,15 @@ async def attachment_upload_prepare(
     - `field`: 파일 칸의 키(`object_fields` · `ontology_schema` 의 `data_type: file`).
       비우면 「그 밖의 첨부」. 칸의 `accept` 가 `image` 면 **서버가 이미지(PNG · JPEG ·
       GIF · WebP)로 읽은 것만** 붙는다.
+    - `owner_table`: 기본은 객체(`objects`). **자주검증 표의 칸 사진**이면 `"jv_rows"` —
+      `object_id` 는 줄 id, `field` 는 글 칸(`topic` · `problem` · `action` · `remark`),
+      `type_slug` 는 비워도 된다(`""`). 올린 뒤 돌아온 id 로 그 칸 글에 표시 줄
+      `![](photo:<id>?w=50)` 을 넣어 자리 · 폭을 정한다(`PATCH rows/{id}` — `expected` 와
+      함께).
     - 돌아온 `curl` 을 그대로 한 번 실행한다. 응답은 붙은 첨부(id · `is_image` ·
       가로세로)이고, 실패하면 `{"error": ...}` 봉투가 온다 — 그 말을 사용자에게 전한다.
-    - 객체를 고칠 수 있어야 한다(소유 부서 관리자 · 토큰은 `objects:write`). 안 되면 표가
+    - 그 자료를 고칠 수 있어야 한다(객체는 소유 부서 관리자, 자주검증 칸은 그 회의 부서의
+      구성원 · 토큰은 `objects:write` — 첨부는 공통 자리라 확장의 칸도 이 범위다). 안 되면 표가
       안 나온다.
     """
     name = filename or PureWindowsPath(local_path).name or "이름없음"
@@ -2260,7 +2501,7 @@ async def attachment_upload_prepare(
         ctx,
         "/api/attachments/tickets",
         {
-            "owner_table": "objects",
+            "owner_table": (owner_table or "objects").strip(),
             "owner_id": object_id,
             "owner_field": field,
             "filename": name,
@@ -2284,6 +2525,7 @@ async def attachment_upload_prepare(
     )
     return {
         "curl": command,
+        "owner_table": (owner_table or "objects").strip(),
         "type_slug": type_slug,
         "object_id": object_id,
         "field": field,
@@ -2292,13 +2534,23 @@ async def attachment_upload_prepare(
         "expires_in_seconds": issued.get("expires_in_seconds"),
         "next": "셸에서 curl 을 그대로 한 번 실행합니다(5분 안). 응답 JSON 의 id · is_image "
         "로 붙었는지 확인하고 사용자에게 알립니다. Windows PowerShell 이면 curl.exe 로 "
-        "부릅니다.",
+        "부릅니다."
+        + (
+            " 자주검증 칸이면 그 id 로 칸 글에 `![](photo:<id>?w=50)` 한 줄을 넣어 "
+            "자리 · 폭을 정합니다(한 장을 읽고 expected 와 함께 — 안 넣으면 칸 끝에 "
+            "섭니다)."
+            if (owner_table or "").strip() == "jv_rows"
+            else ""
+        ),
     }
 
 
 @tool()
 async def attachment_remove(ctx: Context, attachment_id: str) -> Any:
-    """붙은 첨부를 뗀다 — id 는 `object_get` 의 `attachments[].id`. 객체의 이력에 남는다.
+    """붙은 첨부를 뗀다 — id 는 `object_get` 의 `attachments[].id`(자주검증은 칸의 사진 id).
+
+    객체의 이력(자주검증은 그 줄의 감사)에 남는다. 자주검증 칸 사진을 떼면 칸 글의 표시 줄도
+    서버가 뺀다.
 
     **사람이 떼라고 한 것만.** 잘못 올린 것을 고칠 때 쓴다 — 파일 자체는 저장소에 남는다."""
     return await _delete(ctx, f"/api/attachments/{attachment_id}")
@@ -2442,6 +2694,9 @@ async def relation_add(
     relation: str,
     dst_object_id: str,
     evidence_note: str = "",
+    valid_from: str | None = None,
+    valid_to: str | None = None,
+    properties: dict[str, Any] | None = None,
 ) -> Any:
     """객체 둘을 잇는다.
 
@@ -2449,15 +2704,156 @@ async def relation_add(
     확인하려면 처음부터 다시 조사해야 하기 때문이다. 기계가 이은 것이면 더 그렇다.
 
     양끝은 관계 종류가 허용한 타입이어야 한다 — 끝에 인터페이스가 적혔으면 그것을 구현한
-    타입이면 된다. 안 맞으면 서버가 무엇만 되는지 이름으로 말하며 거절한다."""
+    타입이면 된다. 안 맞으면 서버가 무엇만 되는지 이름으로 말하며 거절한다.
+
+    **유효 기간**(ADR 0039) — 관계 종류가 `effectivity` 면 `valid_from`(이날부터, 포함) ·
+    `valid_to`(이날부터 무효, **제외**)를 `YYYY-MM-DD` 로 적는다. 비우면 그쪽이 열린 끝이다.
+    「3월 1일부터 B 로 바뀜」 은 A 의 `valid_to` 와 B 의 `valid_from` 을 **같은 3월 1일**로 —
+    전날을 적지 않는다. 같은 두 객체 사이에 기간을 달리한 선이 여럿일 수 있지만 **겹치면
+    거절**된다. 유효 기간을 안 받는 종류에 적으면 거절된다(`ontology_schema` 의
+    `relation_types[].effectivity`).
+
+    `properties` 는 **선에 붙는 값**(그 관계 종류의 속성 — `relation_types[].properties`). 수량
+    칸 (`relation_types[].quantity_key`, ADR 0040)이 있는 종류면 여기에 「부모 하나에 자식 몇
+    개」 — `{"qty": 4}`. 비우면 전개(`object_explode`)가 1개로 센다.
+
+    **계보 관계**(`relation_types[].lineage_source`, ADR 0041)면 맺는 순간 원천의 지금 개정 ·
+    수정 시각이 선에 박힌다(고정) — 원천이 그 뒤에 바뀌면 파생물이 낡음이 된다
+    (`object_lineage`)."""
+    body: dict[str, Any] = {
+        "relation": relation,
+        "dst_object_id": dst_object_id,
+        "evidence_note": evidence_note,
+    }
+    if valid_from:
+        body["valid_from"] = valid_from
+    if valid_to:
+        body["valid_to"] = valid_to
+    if properties:
+        body["properties"] = properties
+    return await _post(ctx, f"/api/objects/{type_slug}/{object_id}/relations", body)
+
+
+@tool()
+async def relation_propose(
+    ctx: Context,
+    rows: list[dict[str, Any]],
+    origin_ref: str = "",
+    again: bool = False,
+) -> Any:
+    """**관계를 제안한다**(ADR 0042) — 선을 바로 만들지 않고 「이어야 할 것 같다」 를 남긴다.
+    출발 객체를 수정할 수 있는 사람이 화면 · 검토함에서 **확정**해야 관계가 된다. 확정 전에는
+    트리 · 롤업 · 통계 · 지표 · 코어 API 에 안 나온다.
+
+    **언제 이것인가:** 문서 · 표에서 **추론하거나 추출한** 선(고장 모드 ↔ 부품, 시험 ↔
+    요구사항), 확실하지 않은 선은 이것이다. 사용자가 **사실로 말한** 선(「A 는 B 에
+    들어간다」)은 `relation_add`. 이 토큰의 주인이 출발 객체를 수정할 수 없으면 `relation_add`
+    는 거절되고 이것은 된다 — 양 끝을 **볼 수만 있으면** 제안할 수 있다.
+
+    `rows` — 한 번에 500줄까지, 줄마다:
+    `{"src_object_id", "relation", "dst_object_id", "confidence": 0~1, "evidence_note": "...",
+    "properties"?: {...}, "valid_from"?: "YYYY-MM-DD", "valid_to"?: "YYYY-MM-DD",
+    "origin_ref"?}`.
+    - **확신도(`confidence`)를 정직하게** — 근거가 직접 말하면 높게(0.9~), 추론이면 낮게.
+      검토함은 0.5 이상만 「확정」 을 추천하고, 「추천대로 모두」 는 문턱(기본 0.9) 이상만
+      고른다. 모르면 빼라(추천 없음 — 사람이 근거를 보고 고른다).
+    - **근거(`evidence_note`, 500자)** — 검토자가 이것만 보고 판단한다: 어느 문서의 어느 줄 ·
+      왜 그렇게 봤나. 확정하면 그 관계의 근거가 된다.
+    - `origin_ref` — 이 대화 · 문서 · 작업의 짧은 이름(「FMEA 2026Q3.xlsx」). 검토함이 같은
+      출처를 한 줄로 묶어 「이 문서에서 나온 제안 30건」 을 한 번에 판단하게 한다.
+    - 양 끝은 **id** 다 — 이름이면 `objects_resolve_many` 로 먼저 푼다(`candidates` 면 제안하지
+      말고 사람에게).
+
+    응답 `rows[]` 는 줄마다 `status`: `created`(제안함) · `open`(같은 열린 제안이 이미 — 더
+    높은 확신도면 근거 · 확신도를 바꿨다 `updated`) · `connected`(**이미 이어져 있다** — 다시
+    제안할 것 없음) · `rejected_before`(**거절된 적 있다** — `message` 에 언제 누가 왜. 사람이
+    다시 보라고 할 때만 `again=True`) · `error`(`message` 그대로 사람에게). `counts` 로
+    요약한다. 부서 · 계정(원 표)으로 가는 선은 제안으로 받지 않는다(그것은 `relation_add`
+    로)."""
+    body_rows: list[dict[str, Any]] = []
+    for row in rows:
+        one = dict(row)
+        # 이 도구로 오는 제안은 기본이 AI 다 — 출처를 따로 적은 줄(규칙 · 파일)은 그대로.
+        one.setdefault("origin", "mcp")
+        if origin_ref and not one.get("origin_ref"):
+            one["origin_ref"] = origin_ref
+        body_rows.append(one)
     return await _post(
-        ctx,
-        f"/api/objects/{type_slug}/{object_id}/relations",
-        {
-            "relation": relation,
-            "dst_object_id": dst_object_id,
-            "evidence_note": evidence_note,
-        },
+        ctx, "/api/objects/relation-proposals", {"rows": body_rows, "again": again}
+    )
+
+
+@tool()
+async def relation_proposals(
+    ctx: Context,
+    type_slug: str | None = None,
+    object_id: str | None = None,
+    status: str = "proposed",
+    relation: str | None = None,
+    origin: str | None = None,
+    mine: bool = False,
+    decidable: bool = False,
+    limit: int = 50,
+    offset: int = 0,
+) -> Any:
+    """**제안된 관계 보기**(ADR 0042) — 확정 전의 「이어야 할 것 같다」.
+
+    - `object_id`(와 `type_slug`) — 그 객체에 걸린 **열린** 제안(양방향). 줄의 `label` 은 그
+      객체 쪽에서 읽는 말, `outgoing` 이 거짓이면 저쪽이 이 객체를 가리킨다.
+    - 없으면 전체 목록(쪽 넘기기 — `total` · `limit` · `offset`): `status`(`proposed` 기본 ·
+      `accepted` · `rejected` · `all`), `relation`(종류 slug), `type_slug`(양 끝 중 하나가 그
+      타입), `origin`(`mcp` · `user` · `rule` · `datasource` · `import`), `mine`(이 토큰 주인이
+      제안한 것), `decidable`(이 토큰 주인이 확정할 수 있는 것).
+
+    줄마다 양 끝 이름 · 근거 · 확신도 · 출처 · 제안한 사람 · `can_decide`(확정 · 거절할 수
+    있나) · `can_withdraw`(철회할 수 있나). **열린 제안은 아직 관계가 아니다** — 「A 와 B 는
+    이어져 있다」 로 답하지 말고 「제안돼 있다(확신도 0.8, 근거 …)」 로 말한다. 사람의 판단을
+    모으는 자리는 검토함(`review_list(kind="proposed_relation")`)이다."""
+    if object_id:
+        if not type_slug:
+            return {"error": "object_id 를 주면 type_slug 도 준다(그 객체의 타입)."}
+        return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/relation-proposals")
+    params: dict[str, Any] = {"status": status, "limit": limit, "offset": offset}
+    for name, value in (("relation", relation), ("type_slug", type_slug), ("origin", origin)):
+        if value:
+            params[name] = value
+    if mine:
+        params["mine"] = "true"
+    if decidable:
+        params["decidable"] = "true"
+    return await _get(ctx, "/api/objects/relation-proposals", params)
+
+
+@tool()
+async def relation_proposal_decide(
+    ctx: Context,
+    proposal_id: str,
+    decision: str,
+    note: str = "",
+) -> Any:
+    """제안 하나를 **확정 · 거절 · 철회**한다(ADR 0042) — `decision` 은 `accept` · `reject` ·
+    `withdraw`.
+
+    **확정 · 거절은 사람이 정한 것만.** 네가 제안한 것을 네가 확정하지 마라 — 그러면 제안으로
+    남긴 뜻이 없다(그럴 거면 처음부터 `relation_add` 였다). 사람이 「확정해」 「아니다」 라고
+    한 제안만, 그 말을 `note` 에 적어 부른다. 여러 건을 한꺼번에 판단하는 자리는 검토함
+    (`review_list(kind="proposed_relation")` → `review_decide`)이다.
+
+    - `accept` — 「관계 추가」 와 **같은 검사**(끝 타입 · 개수 제약 · 순환 · 기간 겹침)로
+      관계를 만든다. 출발 객체를 수정할 수 있는 사람만. 그 사이 끝이 지워졌으면 OBJECTS-0141,
+      선 만들기가 거절하면 OBJECTS-0143(`details.cause` 에 원래 까닭) — **제안은 열린 채로
+      남는다.** 우회하지 말고 그 말을 사람에게 전한다(있는 선을 먼저 해제할지는 사람이 정한다).
+    - `reject` — 까닭(`note`)을 남긴다. 같은 제안이 다시 오면 만들지 않고 이 까닭을 돌려준다.
+    - `withdraw` — **제안한 사람만**(시스템 관리자도) 열린 제안을 지운다. 네가 잘못 제안한 것을
+      거둘 때. 거절과 달리 기록이 남지 않아 같은 제안을 다시 할 수 있다.
+
+    확정 · 거절을 되돌리는 것(다시 열기)은 화면이나 검토함의 「복원」 에서 한다."""
+    if decision == "withdraw":
+        return await _delete(ctx, f"/api/objects/relation-proposals/{proposal_id}")
+    if decision not in ("accept", "reject"):
+        return {"error": "decision 은 accept · reject · withdraw 중 하나다."}
+    return await _post(
+        ctx, f"/api/objects/relation-proposals/{proposal_id}/{decision}", {"note": note}
     )
 
 
@@ -2469,14 +2865,26 @@ async def relation_update(
     relation_id: str,
     evidence_note: str | None = None,
     properties: dict[str, Any] | None = None,
+    valid_from: str | None = None,
+    valid_to: str | None = None,
 ) -> Any:
-    """관계의 **근거와 속성**을 고친다 — 보낸 것만. **양끝과 종류는 못 바꾼다** — 그건
-    다른 관계다(끊고 새로 잇는다). `relation_id` 는 `object_get` 의 `related[].relation_id`."""
+    """관계의 **근거 · 속성 · 유효 기간**을 고친다 — 보낸 것만. **양끝과 종류는 못 바꾼다** —
+    그건 다른 관계다(끊고 새로 잇는다). `relation_id` 는 `object_get` 의
+    `related[].relation_id`(지난 선 · 앞으로의 선은 `object_get(all_periods=True)` 에서).
+
+    기간은 `YYYY-MM-DD`(`valid_to` 는 그날부터 무효 — 제외). **안 주면 그대로, 빈 글자 `""`
+    를 주면 비운다**(그쪽 끝이 열린다 — 「끝없이」 · 「처음부터」). 「이 부품은 6월 1일부터
+    빠진다」 는 `valid_to="2026-06-01"` 하나만. 바꾼 기간이 같은 선의 다른 기간과 겹치거나 개수
+    제약(같은 때에 하나)을 깨면 거절된다 — 고치기 전과 후는 감사 · 이력에 남는다."""
     body: dict[str, Any] = {}
     if evidence_note is not None:
         body["evidence_note"] = evidence_note
     if properties is not None:
         body["properties"] = properties
+    # 「안 보냄」 과 「비움」 을 가른다 — 빈 글자는 null 로(서버가 그쪽 끝을 연다).
+    for name, value in (("valid_from", valid_from), ("valid_to", valid_to)):
+        if value is not None:
+            body[name] = value or None
     return await _patch(
         ctx, f"/api/objects/{type_slug}/{object_id}/relations/{relation_id}", body
     )
@@ -2508,6 +2916,14 @@ async def relations_import(
 
     선에 붙는 값은 `{"properties": {...}}` 로(인과 관계의 근거 건수처럼). 모양은 그 **관계
     종류의 속성 정의**로 본다 — 정의에 없는 키는 그 줄이 오류다.
+
+    **유효 기간**을 받는 종류면 줄에 `"valid_from"` · `"valid_to"`(`YYYY-MM-DD`, 끝은 제외).
+    같은 두 객체의 줄이 기간을 달리해 여럿일 수 있다 — 기간이 같은 선은 「그대로」, 있는 선
+    하나와 겹치면 그 선의 기간을 이 줄대로 「고침」, 둘 이상과 겹치거나 이 파일 안에서 겹치면
+    그 줄의 오류다. `replace` 는 기간까지가 선의 정체다 — 파일에 없는 기간의 선은 끊는다.
+
+    **계보 관계**면 줄마다 맺는 순간 원천의 지금 개정이 박힌다(고정, ADR 0041 — 어느 길로
+    맺어도 같다).
 
     `mode` 는 **더할지 맞출지**다. 사라진 관계를 정리할 길이 이것뿐이다:
 
@@ -2954,8 +3370,9 @@ async def metric_query(
     - `denominator.missing` 이 0 이 아니면 분모가 없어 비율이 빈 셀이 있다.
     - 「그 수가 뭔데」 는 셀의 `drill.params` 를 `objects_list` 의 `conditions` 로 —
       `f.<칸>.<연산>` 키를 `{field, op, value}` 로, `nf<번호>.<칸>.<연산>`(제외 묶음 — 규칙
-      기준의 「앞 규칙에 안 맞음」)은 `{field, op, value, exclude: <번호>}` 로 풀면 된다
-      (`drill.partial` 이 비어 있을 때 수가 같다)."""
+      기준의 「앞 규칙에 안 맞음」)은 `{field, op, value, exclude: <번호>}` 로, `fe<번호>.`
+      (같은 관계 묶음 — 같은 선 하나)는 `edge: <번호>` 로 풀면 된다(`drill.partial` 이 비어
+      있을 때 수가 같다)."""
     where = _METRIC_SHAPES.get((shape or "table").strip().lower())
     if where is None:
         return {"error": f"shape 는 {', '.join(_METRIC_SHAPES)} 중 하나입니다: {shape!r}"}
@@ -4051,13 +4468,19 @@ async def export_start(
     status: str | None = None,
     properties: dict[str, str] | None = None,
     conditions: list[dict[str, str]] | None = None,
+    as_of: str | None = None,
+    columns: list[str] | None = None,
 ) -> Any:
     """**파일로 내보내기를 시작한다** — 쪽 상한 없이 전부. 작업이 되고, **파일은 사람이 화면의
     「작업」 에서 받는다**(바이트는 모델을 거치지 않는다).
 
     - `kind="objects"` — 그 타입의 객체를 `objects_list` 와 **같은 거르기**(`q` · `status` ·
       `properties` · `conditions`)로.
+      `as_of` 도 같다(기준일 — 비우면 맡긴 날). `columns`(이어진 칸)도 같다 — 열 이름은 주소,
+      칸은 값을 ` | ` 로 이은 것(20개까지, 더 있으면 끝에 `…`).
     - `kind="relations"` — 그 타입에서 출발하는 관계 전부(`src` · `relation` · `dst` · 근거).
+      유효 기간을 받는 종류가 있으면 **기간을 가리지 않고 전부**와 `valid_from` · `valid_to`
+      열.
     - `format` — `csv` · `json`.
 
     내용을 읽어 답하려면 내보내지 말고 `objects_list` · `objects_summary`."""
@@ -4068,7 +4491,8 @@ async def export_start(
         return {"error": "format 은 csv · json 입니다."}
     params: list[tuple[str, Any]] = [("format", format)]
     if kind == "objects":
-        params += _filter_params(q, status, properties, conditions)
+        params += _filter_params(q, status, properties, conditions, as_of)
+        params += [("columns", one) for one in columns or []]
     job = await _post(ctx, template.format(type_slug=type_slug), None, params=params)
     return await _wait_job(ctx, job, JOB_WAIT_MAX)
 

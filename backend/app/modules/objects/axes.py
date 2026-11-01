@@ -47,6 +47,7 @@ from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
+from app.modules.objects import edges as edge_rule
 from app.modules.objects import graph, paths, system
 from app.modules.objects.models import ObjectInstance, ObjectRef
 from app.modules.objects.scope import Scope, as_scope
@@ -366,6 +367,58 @@ def field_axis(
     return Axis(expr, label, definition.data_type, joins, multi, ref_def, address=address)
 
 
+class _EdgeRow:
+    """선의 칸을 `field_axis` 에 넘기는 모양 — `properties` 가 그 선의 관계 속성(JSONB)."""
+
+    def __init__(self, edges: Any) -> None:
+        self.properties = edges.c.props
+
+
+def edge_axis(
+    edges: Any,
+    chain: paths.Chain,
+    alias: str,
+    joins: list[tuple[Any, Any]],
+    *,
+    grain: str | None = None,
+    address: str = "",
+) -> Axis:
+    """선의 칸 하나로 센다(ADR 0043) — 「구성품 관계 › 수량」. 관계 속성은 객체의 칸과 같은
+    규칙(`field_axis`), 시작일 · 끝날은 날짜 칸(기간 단위로 묶는다). 선이 여럿이면 한 객체가
+    여러 막대에 든다(겹침)."""
+    if chain.definition is not None and chain.definition.data_type in paths.EDGE_UNUSABLE:
+        raise AppError(
+            code("OBJECTS", 42),
+            f"「{chain.label}」 은 기준으로 쓸 수 없는 관계 속성입니다 — 참조 · 파일 칸은 "
+            "기준이 되지 않습니다.",
+            status=422,
+        )
+    assert chain.field is not None
+    if chain.definition is None:
+        unit = grain or DEFAULT_GRAIN
+        column = edges.c[chain.field]
+        return Axis(
+            func.to_char(bucket(column, unit), "YYYY-MM-DD"),
+            f"{chain.label} ({GRAIN_LABELS[unit]})",
+            "date",
+            list(joins),
+            chain.multi,
+            grain=unit,
+            address=address,
+        )
+    return field_axis(
+        _EdgeRow(edges),
+        chain.field,
+        chain.definition,
+        chain.label,
+        alias,
+        joins,
+        many=chain.many_hops,
+        grain=grain,
+        address=address,
+    )
+
+
 class JoinPlan:
     """한 질의의 기준들이 붙일 조인 — **같은 걸음은 한 번만.**
 
@@ -380,11 +433,13 @@ class JoinPlan:
         *,
         prefix: str = "ax",
         viewer: User | None = None,
+        at: edge_rule.AtArg = "today",
     ) -> None:
         self.db = db
         self.scope = as_scope(db, target)
-        # 보는 사람 — 들어오는 참조 걸음이 그 사람이 볼 수 있는 객체만 잇게(ADR 0017).
-        self.resolver = paths.Resolver(db, self.scope, viewer=viewer)
+        # 보는 사람 — 들어오는 참조 걸음이 그 사람이 볼 수 있는 객체만 잇게(ADR 0017). 기준일
+        # — 관계 걸음 · 계층 축이 그날 살아 있는 선만(ADR 0039, 비우면 오늘).
+        self.resolver = paths.Resolver(db, self.scope, viewer=viewer, at=at)
         self.prefix = prefix
         self._ends: dict[tuple[tuple[str, str], ...], _End] = {}
         self._count = 0
@@ -444,7 +499,9 @@ class JoinPlan:
                 else:
                     # 관계 걸음 — 선(`edges`)이 저쪽 끝을 보이는 것만 남긴다. 예전에는 걸리지
                     # 않아 `in.<관계>` 로 묶으면 남의 부서 객체 이름이 막대로 섰다(2026-10-08).
-                    edges = owner.edges(hop, f"{name}_edges")
+                    # 선의 칸(ADR 0043)이 있는 종류면 선이 그 칸을 싣는다 — 같은 걸음을 쓰는
+                    # 기준(「구성품 › 이름」 과 「구성품 관계 › 수량」)이 **같은 선**을 본다.
+                    edges = owner.edges(hop, f"{name}_edges", edge=bool(hop.edge_fields()))
                     target = aliased(ObjectInstance, name=f"{name}_obj")
                     mine = [
                         (edges, edges.c.me == entity.id),
@@ -495,6 +552,13 @@ class JoinPlan:
             ]
             return Reach(cast(target.id, String), target, joins, [hop])
         chain = self.resolver.parse_chain(address)
+        if chain.edge:
+            raise AppError(
+                code("OBJECTS", 41),
+                f"「{chain.label}」 은 관계 속성이라 객체에 닿는 길이 아닙니다 — 관계 "
+                "걸음이나 참조 칸으로 끝나야 합니다.",
+                status=422,
+            )
         if chain.field is not None:
             definition = chain.definition
             if definition is None or definition.data_type != "object_ref":
@@ -517,6 +581,8 @@ class JoinPlan:
         칸이 아니다」 로 거절되던 것(v0.4.34 까지)."""
         if paths.is_path(address):
             chain = self.resolver.parse_chain(address)
+            if chain.edge:
+                return chain.data_type in DATE_KINDS
             definition = chain.definition
             return (
                 chain.field is not None
@@ -568,7 +634,7 @@ class JoinPlan:
                 "선택).",
                 status=422,
             )
-        found = graph.levels(self.db, tree, level)
+        found = graph.levels(self.db, tree, level, at=self.resolver.at)
         expr, joins = inner.expr, list(inner.joins)
         if found.up:
             self._count += 1
@@ -606,6 +672,16 @@ class JoinPlan:
                     f"「{chain.label}」 자체로는 묶지 않습니다 — 가리키는 객체마다 막대가 "
                     "하나씩 섭니다. 그 객체의 칸(예: 증상)으로 묶습니다.",
                     status=422,
+                )
+            if chain.edge:
+                self._count += 1
+                return edge_axis(
+                    end.edges,
+                    chain,
+                    f"{self.prefix}{self._count}e",
+                    end.joins,
+                    grain=grain,
+                    address=address,
                 )
             if chain.field is None:
                 assert end.edges is not None and end.hop is not None and end.owner is not None

@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import uuid
+from datetime import date
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field
@@ -57,6 +58,14 @@ class RelationTombstoneIn(BaseModel):
     """도착점의 타입 slug — 있으면 그 타입의 것만 끊는다. 끝이 인터페이스인 종류는 도착이
     여러 타입이고 식별자는 타입 안에서만 하나라, 이것 없이 찾으면 같은 식별자를 가진 다른
     타입의 선을 끊을 수 있다. 이 설치에 없는 타입이면 버린다(예전처럼 세 끝으로 찾는다)."""
+    valid_from: date | None = None
+    valid_to: date | None = None
+    """끊긴 선의 **유효 기간**(ADR 0039) — 기간을 달리한 같은 선이 여럿일 수 있어, 적었으면 그
+    기간의 선만 끊는다. 둘 다 비면(`period` 가 거짓) 그 선 중 **오늘 유효한 것**을 끊는다 —
+    코어 창구의 끊긴 선(「오늘 유효한 같은 선이 없다」)이 그 뜻이다."""
+    period: bool = False
+    """참이면 `valid_from` · `valid_to` 가 그 선의 기간이다(둘 다 비었으면 「늘 유효한 선」).
+    거짓이면 기간을 모른다(코어 창구 · 예전 묶음)."""
 
 
 class TombstonesIn(BaseModel):

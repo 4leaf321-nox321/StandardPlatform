@@ -34,9 +34,12 @@ INTERFACE_LIST_KEYS = {"columns", "sort", "filters", "search"}
 INTERFACE_FIELDS = frozenset({"type"})
 SORT_KEYS = {"field", "dir"}
 TREE_KEYS = {"relation", "parent"}
-ROLLUP_KEYS = {"property", "fn", "label"}
-#: 롤업이 하는 셈. 「아래 전부」 의 숫자 속성을 트리 관계로 모은다.
-ROLLUP_FNS = ("sum", "min", "max", "avg", "count")
+ROLLUP_KEYS = {"property", "fn", "label", "weighted", "leaves_only"}
+#: 롤업이 하는 셈. 「아래 전부」 의 숫자 속성을 트리 관계로 모은다. `product`(곱)는 신뢰도처럼
+#: 곱해 모으는 값 — 「수량 반영」 이면 총수량만큼 거듭제곱한다(직렬 신뢰도, ADR 0040).
+ROLLUP_FNS = ("sum", "min", "max", "avg", "count", "product")
+#: 롤업의 켜고 끄는 칸 — 「수량 반영」(총수량만큼 센다) · 「말단만」(아래가 없는 객체만).
+ROLLUP_FLAGS = ("weighted", "leaves_only")
 
 #: 폼·상세가 아는 것. 둘이 같은 모양인 이유는 **같은 묶음을 쓰기 때문**이다.
 FORM_KEYS = {"sections"}
@@ -180,6 +183,12 @@ def validate_list_view(
                 code("ONTOLOGY", 60),
                 f"롤업의 셈은 {', '.join(ROLLUP_FNS)} 중 하나여야 합니다: {one.get('fn')!r}",
             )
+        for flag in ROLLUP_FLAGS:
+            if flag in one and not isinstance(one[flag], bool):
+                raise InvalidValue(
+                    code("ONTOLOGY", 60),
+                    f"롤업의 {flag} 는 참/거짓이어야 합니다: {one[flag]!r}",
+                )
     return spec
 
 

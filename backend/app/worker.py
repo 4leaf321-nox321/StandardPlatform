@@ -35,6 +35,9 @@ HEARTBEAT_EVERY = 30.0
 RECOVER_EVERY = 60.0
 PURGE_EVERY = 3600.0
 IDLE_MAX = 5.0
+#: 지식 그래프 지도(ADR 0046)의 차례를 보는 간격 — 처음 판 · 매일 밤 덧붙임 · 한 시간마다
+#: 집계를 넣을지 DB 의 시각으로 판단한다(재시작해도 밀리지 않는다).
+MAP_CHECK_EVERY = 300.0
 #: 고아 첨부 정리는 기동 한 시간 뒤가 첫 차례 — 업데이트로 워커가 자주 다시 떠도 밀리지 않게,
 #: 그렇다고 기동하자마자 저장소 전체를 훑지는 않게.
 GC_FIRST_AFTER = 3600.0
@@ -115,6 +118,7 @@ class Worker:
         self._last_recover = 0.0
         self._last_purge = 0.0
         self._last_webhook = 0.0
+        self._last_map = 0.0
         hours = get_settings().filestore_gc_hours
         self._gc_every = hours * 3600.0 if hours > 0 else 0.0
         self._last_gc = time.monotonic() - max(self._gc_every - GC_FIRST_AFTER, 0.0)
@@ -138,6 +142,15 @@ class Worker:
                 if webhooks.pending_count(db):
                     webhooks.enqueue_dispatch(db)
             self._last_webhook = now
+        if now - self._last_map >= MAP_CHECK_EVERY:
+            # 지도 작업은 **넣기만** 한다 — 도는 것은 다음 바퀴의 `process_one` 이다.
+            self._last_map = now
+            from app.modules.graph import mapbuild
+
+            with SessionLocal() as db:
+                queued = mapbuild.schedule(db)
+            if queued:
+                log.info("지식 그래프 지도 작업을 넣었습니다: %s", queued)
         if now - self._last_purge >= PURGE_EVERY:
             with SessionLocal() as db:
                 gone = services.purge_expired_files(db)

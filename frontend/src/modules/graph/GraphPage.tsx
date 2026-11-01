@@ -1,5 +1,5 @@
 /**
- * 지식 그래프 — **두 그림, 하나의 규칙: 「전부」 는 없다.**
+ * 지식 그래프 — **두 그림, 하나의 규칙: 「전부」 는 없다 — 예외는 정적 그리기 하나다.**
  *
  *   구조   타입이 노드, 관계 종류가 선. 객체가 백만 개여도 노드는 타입 수만큼이다.
  *          선의 굵기가 실제로 걸린 관계 수라서 「어디가 붐비나」 가 여기서 보인다.
@@ -9,6 +9,12 @@
  * 그림 하나가 모든 것을 담으려 하면 아무것도 안 보인다. 그래서 「전체 보기」 단추가
  * 없다 — 전체는 구조 그림이고, 자세한 것은 탐색 그림에서 한 걸음씩 간다.
  *
+ * **정적 그리기(ADR 0045)가 그 예외다.** 「일부만 보여 구조를 모르겠다」 는 물음에는 한 걸음씩이
+ * 답이 아니어서, 켜면 씨앗 안의 노드와 선을 자르지 않고 **통째로** 받아 한 번 배치하고(무리 ·
+ * 단계) WebGL 로 그린다(`WholeView`). 그 예외를 감당하는 것은 상한의 크기가 아니라 정직함이다 —
+ * 상한(노드 20만 · 선 70만)을 넘으면 **자르지 않고 수를 말하고 거절한다**(`WholeRefusal`). 반쯤
+ * 그린 그림은 「이게 전부」 로 읽히고, 그것이 이 화면이 처음부터 막아 온 거짓말이다.
+ *
  * 탐색 그림은 **여러 번의 응답을 합쳐** 든다(씨앗 + 펼친 것들). 그래서 같은 노드가
  * 두 응답에 있어도 하나로 합치고, 나중 응답의 degree 로 갱신한다.
  *
@@ -17,7 +23,7 @@
  *   type   한 타입의 인스턴스 전부 — 쪽 단위(서버 상한), 「N개 중 M개」 를 적는다
  */
 
-import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
 import {
   Boxes,
@@ -26,6 +32,7 @@ import {
   Crosshair,
   ExternalLink,
   Loader2,
+  Map as MapIcon,
   Maximize2,
   Minimize2,
   RotateCw,
@@ -37,15 +44,20 @@ import {
 } from 'lucide-react'
 
 import { graphApi } from '@/modules/graph/api'
+import { edgeTooltip } from '@/modules/graph/edgeText'
+import { AsOfPicker } from '@/modules/objects/AsOfPicker'
 import { useFillHeight } from '@/modules/graph/useElementSize'
+import type { ClumpHint } from '@/modules/graph/WholeView'
 import type {
   GraphEdge,
   GraphNode,
+  MapHubKey,
   Neighborhood,
   Overview,
   PathResult,
   SearchHit,
   Subgraph,
+  Whole,
 } from '@/modules/graph/api'
 import { colorScale, groupColorScale, typeColorScale, withAlpha } from '@/modules/graph/colors'
 import { GraphCanvas } from '@/modules/graph/GraphCanvas'
@@ -53,6 +65,10 @@ import type { CanvasLink, CanvasNode } from '@/modules/graph/GraphCanvas'
 import { COMMUNITY_MIN_NODES, useCommunities } from '@/modules/graph/useCommunities'
 import { useFullscreen } from '@/modules/graph/useFullscreen'
 import { useShortcuts } from '@/modules/graph/useShortcuts'
+import { MapExplore } from '@/modules/graph/MapExplore'
+import type { MapSelection } from '@/modules/graph/MapView'
+import { prepareWhole } from '@/modules/graph/wholeData'
+import { WholeRefusal } from '@/modules/graph/WholeRefusal'
 import { objectApi } from '@/modules/objects/api'
 import type { LogCount, ObjectRow, RelatedObject } from '@/modules/objects/api'
 import { propertyText } from '@/modules/objects/PropertyFields'
@@ -79,6 +95,13 @@ import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 
 type Mode = 'schema' | 'explore'
+/** 정적 그리기의 배치 — 무리(ForceAtlas2) · 단계(동심원). */
+type Arrange = 'cluster' | 'rings'
+
+/**
+ * 정적 그리기 — 그리기(sigma) · 배치(ForceAtlas2 작업자)가 무거워 **켤 때만** 받는다.
+ */
+const WholeView = lazy(() => import('@/modules/graph/WholeView'))
 type ColorBy = 'type' | 'group' | 'workspace' | 'status' | 'community'
 
 /** 탐색의 씨앗 — 어디서 시작하나. */
@@ -215,6 +238,26 @@ interface Controls {
   colorBy: ColorBy
   /** 관계 없는 노드를 숨긴다 — 타입 전부를 그릴 때 잎만 수백 개면 아무것도 안 보인다. */
   hideIsolated: boolean
+  /**
+   * 기준일(`YYYY-MM-DD`, ADR 0039) — 그날 유효한 관계만 그린다(이웃 · 연결 경로 · 인스턴스
+   * 전체). 빈 글자면 오늘. 주소에 남는다 — 「3월 1일의 구성」 을 링크로 건넨다.
+   */
+  asOf: string
+  /**
+   * 정적 그리기(ADR 0045) — 노드마다 자르지 않고 통째로 받아 한 번 배치해 그린다. 주소에 남는다 —
+   * 붙여 넣으면 같은 그림.
+   */
+  whole: boolean
+  /** 정적 그리기의 배치. 빈 글자면 씨앗이 정한다(객체 하나 → 단계, 타입 전부 → 무리). */
+  layout: '' | Arrange
+  /** 전체 지도(ADR 0046) — 서버가 미리 놓아 둔 자리. 켜면 탐색 자리에 지도가 선다. */
+  map: boolean
+  /** 지도에서 켠 기록 타입 — 비면 전부. */
+  mapTypes: Set<string>
+  /** 지도가 찾아갈 객체 id(좌표가 아니라 객체 — 판이 바뀌어도 같은 것을 찾는다). */
+  at: string
+  /** 지도의 확대 수준(0 = 전체, 1 늘 때마다 두 배). */
+  zoom: number | null
 }
 
 const CONTROL_KEYS = {
@@ -225,15 +268,24 @@ const CONTROL_KEYS = {
   types: 'ty',
   colorBy: 'color',
   hideIsolated: 'iso',
+  asOf: 'as_of',
+  whole: 'whole',
+  layout: 'lay',
+  map: 'map',
+  mapTypes: 'mty',
+  at: 'at',
+  zoom: 'z',
 }
 
 function controlsFromParams(params: URLSearchParams): Controls {
   const csv = (raw: string | null) => new Set((raw ?? '').split(',').filter(Boolean))
-  const depth = Number(params.get(CONTROL_KEYS.depth))
+  // 0단계는 정적 그리기의 「타입 전부만」 이다 — 비어 있는 것(`Number(null)` = 0)과 가른다.
+  const rawDepth = params.get(CONTROL_KEYS.depth)
+  const depth = rawDepth === null ? 1 : Number(rawDepth)
   const fanout = Number(params.get(CONTROL_KEYS.fanout))
   const nodeLimit = Number(params.get(CONTROL_KEYS.nodeLimit))
   return {
-    depth: DEPTHS.includes(depth) ? depth : 1,
+    depth: depth === 0 || DEPTHS.includes(depth) ? depth : 1,
     fanout: FANOUTS.includes(fanout) ? fanout : 30,
     nodeLimit: NODE_LIMITS.includes(nodeLimit) ? nodeLimit : NODE_LIMITS[0],
     relations: csv(params.get(CONTROL_KEYS.relations)),
@@ -243,6 +295,16 @@ function controlsFromParams(params: URLSearchParams): Controls {
         (one) => one === params.get(CONTROL_KEYS.colorBy),
       ) ?? 'type',
     hideIsolated: params.get(CONTROL_KEYS.hideIsolated) === '1',
+    asOf: params.get(CONTROL_KEYS.asOf) ?? '',
+    whole: params.get(CONTROL_KEYS.whole) === '1',
+    layout:
+      (['cluster', 'rings'] as const).find((one) => one === params.get(CONTROL_KEYS.layout)) ?? '',
+    map: params.get(CONTROL_KEYS.map) === '1',
+    mapTypes: csv(params.get(CONTROL_KEYS.mapTypes)),
+    at: params.get(CONTROL_KEYS.at) ?? '',
+    zoom: /^\d{1,2}$/.test(params.get(CONTROL_KEYS.zoom) ?? '')
+      ? Number(params.get(CONTROL_KEYS.zoom))
+      : null,
   }
 }
 
@@ -258,6 +320,17 @@ function writeControls(params: URLSearchParams, controls: Controls): void {
   put(CONTROL_KEYS.types, [...controls.types].join(','), controls.types.size === 0)
   put(CONTROL_KEYS.colorBy, controls.colorBy, controls.colorBy === 'type')
   put(CONTROL_KEYS.hideIsolated, '1', !controls.hideIsolated)
+  put(CONTROL_KEYS.asOf, controls.asOf, !controls.asOf)
+  put(CONTROL_KEYS.whole, '1', !controls.whole)
+  put(CONTROL_KEYS.layout, controls.layout, !controls.layout)
+  put(CONTROL_KEYS.map, '1', !controls.map)
+  put(
+    CONTROL_KEYS.mapTypes,
+    [...controls.mapTypes].join(','),
+    !controls.map || controls.mapTypes.size === 0,
+  )
+  put(CONTROL_KEYS.at, controls.at, !controls.map || !controls.at)
+  put(CONTROL_KEYS.zoom, String(controls.zoom), !controls.map || controls.zoom === null)
 }
 
 function seedFromParams(params: URLSearchParams): Seed | null {
@@ -320,10 +393,10 @@ export default function GraphPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [controlsKey],
   )
-  const [mode, setMode] = useState<Mode>(seed ? 'explore' : 'schema')
+  const [mode, setMode] = useState<Mode>(seed || controls.map ? 'explore' : 'schema')
   useEffect(() => {
-    if (urlSeed) setMode('explore')
-  }, [urlSeed])
+    if (urlSeed || controls.map) setMode('explore')
+  }, [urlSeed, controls.map])
 
   const setControls = useCallback(
     (patch: Partial<Controls>) => {
@@ -360,6 +433,46 @@ export default function GraphPage() {
       )
     },
     [setParams],
+  )
+
+  /**
+   * 지도를 떠나 씨앗으로 — **주소를 한 번에** 바꾼다(씨앗과 조작을 따로 쓰면 뒤의 것이 앞의 것을
+   * 덮는다). 정적 그리기로 가면 `whole=1`.
+   */
+  const leaveMap = useCallback(
+    (next: Seed, patch: Partial<Controls> = {}) => {
+      setOffset(0)
+      setParams(
+        (current) => {
+          const query = new URLSearchParams(current)
+          writeControls(query, {
+            ...controlsFromParams(current),
+            map: false,
+            at: '',
+            zoom: null,
+            mapTypes: new Set(),
+            ...patch,
+          })
+          query.delete('focus')
+          query.delete('to')
+          query.delete('type')
+          if (next.kind === 'focus') query.set('focus', next.id)
+          if (next.kind === 'path') {
+            query.set('focus', next.from)
+            query.set('to', next.to)
+          }
+          if (next.kind === 'type') query.set('type', next.slugs.join(','))
+          return query
+        },
+        { replace: true },
+      )
+    },
+    [setParams],
+  )
+  /** 「여기서 정적 그리기」 — 그 객체에서 정적 그리기(1단계, `whole=1&focus=id`). */
+  const openWhole = useCallback(
+    (id: string) => leaveMap({ kind: 'focus', id }, { whole: true }),
+    [leaveMap],
   )
 
   const schema = useResource(() => ontologyApi.schema(), [])
@@ -438,6 +551,50 @@ export default function GraphPage() {
             setSeed({ kind: 'type', slugs: [slug], offset: 0 })
             setMode('explore')
           }}
+        />
+      ) : controls.map ? (
+        <MapExplore
+          types={controls.mapTypes}
+          onTypes={(next) => setControls({ mapTypes: next })}
+          at={controls.at}
+          onAt={(id) => setControls({ at: id })}
+          zoom={controls.zoom}
+          onZoom={(level) => setControls({ zoom: level })}
+          typeColor={typeColor}
+          onClose={() => setControls({ map: false, at: '', zoom: null, mapTypes: new Set() })}
+          onOpen={(picked) => openWhole(picked.id)}
+          detail={(picked: MapSelection, close) => (
+            <NodeDetail
+              key={picked.id}
+              node={{
+                id: picked.id,
+                label: picked.label,
+                key: null,
+                type_slug: picked.typeSlug,
+                type_label: typeLabel.get(picked.typeSlug) ?? picked.typeSlug,
+                status: '',
+                owner_workspace_slug: null,
+                degree: 0,
+                truncated: false,
+              }}
+              hidden={0}
+              isFocus={false}
+              loading={false}
+              expandable={false}
+              hideDegree
+              focusLabel="여기서 정적 그리기"
+              inGraph={() => true}
+              color={typeColor(picked.typeSlug)}
+              typeLabel={typeLabel.get(picked.typeSlug) ?? picked.typeSlug}
+              onExpand={() => {}}
+              onFocus={() => openWhole(picked.id)}
+              onPathFind={(target) => leaveMap({ kind: 'path', from: picked.id, to: target })}
+              onSelect={(id) => setControls({ at: id })}
+              onClose={close}
+            />
+          )}
+          wide={fullscreen.active}
+          onToggleWide={fullscreen.toggle}
         />
       ) : (
         <ExploreView
@@ -834,7 +991,14 @@ function ExploreView({
     types: typeFilter,
     colorBy,
     hideIsolated,
+    asOf,
+    whole: wholeWanted,
+    layout,
   } = controls
+  /** 정적 그리기 — 객체 하나 · 타입 전부에서만(연결 경로는 길 자체가 그림이다). */
+  const wholeOn = wholeWanted && seed !== null && seed.kind !== 'path'
+  /** 배치 — 타입 전부에는 출발점이 없어 단계를 못 쓴다. 고르지 않았으면 씨앗이 정한다. */
+  const arrange: Arrange = seed?.kind === 'type' ? 'cluster' : layout || 'rings'
   const setDepth = (value: number) => onControls({ depth: value })
   const setFanout = (value: number) => onControls({ fanout: value })
   const setNodeLimit = (value: number) => onControls({ nodeLimit: value })
@@ -862,13 +1026,15 @@ function ExploreView({
     (id: string, depthOverride?: number) =>
       graphApi.neighborhood({
         focus: id,
-        depth: depthOverride ?? depth,
+        // 0단계는 정적 그리기의 「타입 전부만」 — 탐색에서는 1단계다.
+        depth: Math.max(1, depthOverride ?? depth),
         fanout,
         limit: nodeLimit,
         relations: [...relationFilter],
         types: [...typeFilter],
+        asOf: asOf || null,
       }),
-    [depth, fanout, nodeLimit, relationFilter, typeFilter],
+    [depth, fanout, nodeLimit, relationFilter, typeFilter, asOf],
   )
 
   // 씨앗·상한·필터가 바뀌면 **처음부터 다시** 든다. 펼쳐 둔 것은 버린다 —
@@ -878,7 +1044,8 @@ function ExploreView({
   const generation = useRef(0)
   useEffect(() => {
     generation.current += 1
-    if (!seed) {
+    // 정적 그리기를 켜면 탐색 그림은 안 받는다 — 아래 효과가 통째 그림을 받는다.
+    if (!seed || wholeOn) {
       setExplored(null)
       setLoading(false)
       return
@@ -896,6 +1063,7 @@ function ExploreView({
                 target: seed.to,
                 relations: [...relationFilter],
                 types: [...typeFilter],
+                asOf: asOf || null,
               })
               .then(fromPath)
           : graphApi
@@ -906,6 +1074,7 @@ function ExploreView({
                 // 안 먹으면 「왜 저기서는 3,000개가 되고 여기서는 안 되지」 가 된다.
                 limit: nodeLimit,
                 offset: seed.offset,
+                asOf: asOf || null,
               })
               .then(fromSubgraph)
     request
@@ -923,7 +1092,102 @@ function ExploreView({
     return () => {
       cancelled = true
     }
-  }, [seed, query, relationFilter, typeFilter, reloadTick])
+  }, [seed, query, relationFilter, typeFilter, reloadTick, asOf, wholeOn])
+
+  // --- 정적 그리기 — 통째 그림을 받는다(ADR 0045) ---
+  const [whole, setWhole] = useState<Whole | null>(null)
+  const [wholeLoading, setWholeLoading] = useState(false)
+  const [wholeError, setWholeError] = useState<ApiError | Error | null>(null)
+  useEffect(() => {
+    if (!wholeOn || !seed) {
+      setWhole(null)
+      setWholeLoading(false)
+      return
+    }
+    let cancelled = false
+    // 받는 동안 앞 그림을 두지 않는다 — 수만 개가 다른 씨앗의 그림이면 무엇을 보는지 말할 수 없다.
+    setWhole(null)
+    setWholeLoading(true)
+    setWholeError(null)
+    graphApi
+      .whole({
+        focus: seed.kind === 'focus' ? seed.id : undefined,
+        types: seed.kind === 'type' ? seed.slugs : undefined,
+        depth,
+        relations: [...relationFilter],
+        neighborTypes: [...typeFilter],
+        asOf: asOf || null,
+      })
+      .then((fresh) => {
+        if (cancelled) return
+        setWhole(fresh)
+        setSelected(fresh.focus)
+      })
+      .catch((caught: unknown) => {
+        if (!cancelled) {
+          setWholeError(caught instanceof Error ? caught : new Error('알 수 없는 오류'))
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setWholeLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [wholeOn, seed, depth, relationFilter, typeFilter, asOf, reloadTick])
+  const prepared = useMemo(() => (whole && !whole.over ? prepareWhole(whole) : null), [whole])
+
+  // 「가운데가 뭉친다」 안내(ADR 0045) — 기록 타입 씨앗에 이웃 타입이 여럿이고 무리로 그릴 때. 단추는
+  // 이웃을 그 기록 타입의 **허브 칸**(전체 지도와 같은 기준, ADR 0046)이 가리키는 타입 하나로 좁힌다.
+  const [hubKeys, setHubKeys] = useState<MapHubKey[] | null>(null)
+  const typeSeedKey = seed?.kind === 'type' ? seed.slugs.join(',') : ''
+  useEffect(() => {
+    if (!wholeOn || !typeSeedKey) return undefined
+    let live = true
+    graphApi
+      .hubKeys()
+      .then((rows) => {
+        if (live) setHubKeys(rows)
+      })
+      .catch(() => {
+        if (live) setHubKeys([])
+      })
+    return () => {
+      live = false
+    }
+  }, [wholeOn, typeSeedKey])
+  const clumpStore = `sp.graph.clumpHint.${typeSeedKey}`
+  const [clumpClosed, setClumpClosed] = useState<string | null>(null)
+  useEffect(() => {
+    try {
+      setClumpClosed(window.localStorage.getItem(clumpStore) ? typeSeedKey : null)
+    } catch {
+      setClumpClosed(null) // 저장소를 못 쓰면 매번 뜬다 — 닫기는 그 자리에서만
+    }
+  }, [clumpStore, typeSeedKey])
+  const clump = useMemo<ClumpHint | null>(() => {
+    if (!typeSeedKey || arrange !== 'cluster' || typeFilter.size === 1) return null
+    if (clumpClosed === typeSeedKey) return null
+    const record = (hubKeys ?? []).find((one) => typeSeedKey.split(',').includes(one.type_slug))
+    if (!record) return null
+    const target = record.candidates.find((one) => one.key === record.key) ?? null
+    return {
+      target: target?.target_label ?? null,
+      onNarrow: target ? () => onControls({ types: new Set(target.target_types) }) : null,
+      onDismiss: () => {
+        setClumpClosed(typeSeedKey)
+        try {
+          window.localStorage.setItem(clumpStore, '1')
+        } catch {
+          // 저장소를 못 쓰는 창(사생활 모드) — 이번에만 닫는다
+        }
+      },
+    }
+  }, [typeSeedKey, arrange, typeFilter, clumpClosed, hubKeys, onControls, clumpStore])
+  const wholeIndexOf = useCallback(
+    (id: string | null) => (id && prepared ? (prepared.index.get(id) ?? null) : null),
+    [prepared],
+  )
 
   const pickFocus = (id: string | null) => onSeed(id ? { kind: 'focus', id } : null)
 
@@ -964,6 +1228,10 @@ function ExploreView({
     [allNodes, hideIsolated, shown, explored?.focus],
   )
   const isolatedCount = allNodes.length - nodeList.length
+  const wholeIsolated = useMemo(
+    () => (prepared ? prepared.degree.reduce((sum, one) => sum + (one === 0 ? 1 : 0), 0) : 0),
+    [prepared],
+  )
   const nodeIds = useMemo(() => nodeList.map((one) => one.id), [nodeList])
   const communities = useCommunities(nodeIds, edgeList, colorBy === 'community')
   const [findText, setFindText] = useState('')
@@ -1084,10 +1352,8 @@ function ExploreView({
           source: one.src,
           target: one.dst,
           label: one.label,
-          tooltip:
-            one.directed && one.inverse_label && one.inverse_label !== one.label
-              ? `${one.label} ↔ ${one.inverse_label}`
-              : one.label,
+          // 유효 기간이 든 선이면 hover 에 기간도(ADR 0039).
+          tooltip: edgeTooltip(one),
           directed: one.directed,
           width: 1,
           color: relationScale ? relationScale(one.relation) : undefined,
@@ -1104,8 +1370,47 @@ function ExploreView({
     explored?.origin,
   ])
 
-  const picked = selected ? (explored?.nodes.get(selected) ?? null) : null
-  const pickedHidden = picked ? picked.degree - (shown.get(picked.id) ?? 0) : 0
+  // 정적 그리기의 고른 노드 — 열 배열에서 노드 하나를 탐색 그림의 모양으로(상세 판이 같은 것을 쓴다).
+  const wholePicked = useMemo<GraphNode | null>(() => {
+    const at = wholeIndexOf(selected)
+    if (at === null || !prepared || !whole) return null
+    const type = whole.types[prepared.type[at]]
+    return {
+      id: prepared.ids[at],
+      label: prepared.labels[at],
+      key: null,
+      type_slug: type?.slug ?? '',
+      type_label: type?.label ?? '',
+      status: '',
+      owner_workspace_slug: null,
+      degree: prepared.degree[at],
+      truncated: false,
+    }
+  }, [selected, prepared, whole, wholeIndexOf])
+  /** 시작점 — 정적 그리기면 통째 그림의 씨앗, 아니면 탐색 그림의 씨앗. */
+  const startId = wholeOn ? (whole?.focus ?? null) : (explored?.focus ?? null)
+  const picked = wholeOn ? wholePicked : selected ? (explored?.nodes.get(selected) ?? null) : null
+  // 정적 그리기에는 「화면에 없는 것」 이 없다 — 단계 안의 것은 전부 그려져 있다.
+  const pickedHidden = picked && !wholeOn ? picked.degree - (shown.get(picked.id) ?? 0) : 0
+
+  // 정적 그리기의 찾기 — 이름의 일부. 맞는 노드는 그림이 크게 그리고, Enter 로 차례로 찾아간다.
+  const wholeMatches = useMemo(() => {
+    const needle = findText.trim().toLowerCase()
+    if (!needle || !prepared) return null
+    const out = new Set<number>()
+    prepared.labels.forEach((label, at) => {
+      if (label.toLowerCase().includes(needle)) out.add(at)
+    })
+    return out
+  }, [findText, prepared])
+  const matchCursor = useRef(0)
+  useEffect(() => {
+    matchCursor.current = 0
+  }, [wholeMatches])
+  const wholeFocus = useMemo(() => {
+    const at = centerOn ? wholeIndexOf(centerOn.id) : null
+    return at === null || !centerOn ? null : { index: at, nonce: centerOn.nonce }
+  }, [centerOn, wholeIndexOf])
 
   /** 목록에서 선택 — 선택하고 카메라도 옮긴다. 캔버스 클릭과 달리 어디 있는지 모르니까. */
   const selectAndGo = useCallback((id: string) => {
@@ -1126,7 +1431,7 @@ function ExploreView({
     useMemo(
       () => ({
         Enter: () => {
-          if (picked && pickedHidden > 0 && !loading) void expand(picked.id)
+          if (!wholeOn && picked && pickedHidden > 0 && !loading) void expand(picked.id)
         },
         'shift+Enter': () => {
           if (picked && picked.id !== explored?.focus) pickFocus(picked.id)
@@ -1144,7 +1449,7 @@ function ExploreView({
       }),
       // expand·pickFocus 는 매 렌더 새 함수라 그대로 적는다 — 빼면 옛 필터로 펼친다.
       // eslint-disable-next-line react-hooks/exhaustive-deps
-      [picked, pickedHidden, loading, explored?.focus, seed, expand, pickFocus],
+      [picked, pickedHidden, loading, explored?.focus, seed, expand, pickFocus, wholeOn],
     ),
     Boolean(seed),
   )
@@ -1171,66 +1476,171 @@ function ExploreView({
           onClear={() => onSeed(null)}
         />
 
+        {/* **정적 그리기** — 일부가 아니라 전부를 한 그림에(ADR 0045). 켜면 「노드당 이웃」 ·
+            「그림에 세울 노드」 가 뜻을 잃으므로 감추고, 대신 배치를 고른다. */}
+        <div className="space-y-2 rounded-md border p-2">
+          <label className="flex cursor-pointer items-center gap-2">
+            <input
+              type="checkbox"
+              className="size-3.5"
+              checked={wholeWanted}
+              disabled={seed?.kind === 'path'}
+              onChange={(event) => onControls({ whole: event.target.checked })}
+            />
+            <span className="font-medium">정적 그리기</span>
+          </label>
+          {seed?.kind === 'path' ? (
+            <p className="text-muted-foreground text-xs">
+              연결 경로에는 쓰지 않습니다 — 경로 자체가 그림입니다. 「경로 해제」 뒤에 켭니다.
+            </p>
+          ) : wholeWanted ? (
+            <>
+              <p className="text-muted-foreground text-xs">
+                노드마다 자르지 않고 {seed?.kind === 'type' ? '선택한 타입 전부에서' : '시작점에서'}{' '}
+                단계 안을 <b>통째로</b> 받아 한 번 배치해 그립니다.{' '}
+                {whole
+                  ? `노드 ${whole.max_nodes.toLocaleString()} · 선 ${whole.max_edges.toLocaleString()}개를`
+                  : '상한을'}{' '}
+                넘으면 그리지 않고 수를 알려 드립니다.
+              </p>
+              <div className="space-y-1">
+                <span className="text-muted-foreground text-xs">배치</span>
+                <div role="radiogroup" aria-label="배치" className="grid grid-cols-2 gap-1">
+                  {(
+                    [
+                      ['cluster', '무리', '이어진 것끼리 모입니다 — 무리가 보입니다'],
+                      ['rings', '단계', '시작점을 가운데에 두고 단계마다 동심원으로 놓습니다'],
+                    ] as const
+                  ).map(([key, label, hint]) => {
+                    const off = key === 'rings' && seed?.kind === 'type'
+                    const on = arrange === key
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        role="radio"
+                        aria-checked={on}
+                        disabled={off}
+                        title={off ? '타입 전부에는 출발점이 없어 단계 배치를 쓰지 않습니다' : hint}
+                        className={`rounded border px-2 py-1 text-xs disabled:cursor-not-allowed disabled:opacity-50 ${
+                          on ? 'bg-foreground text-background border-foreground' : 'hover:bg-muted'
+                        }`}
+                        onClick={() => onControls({ layout: key })}
+                      >
+                        {label}
+                      </button>
+                    )
+                  })}
+                </div>
+                {seed?.kind === 'type' && (
+                  <p className="text-muted-foreground text-xs">
+                    타입 전부에는 출발점이 없어 「단계」 배치를 쓰지 않습니다.
+                  </p>
+                )}
+              </div>
+            </>
+          ) : (
+            <p className="text-muted-foreground text-xs">
+              켜면 일부만이 아니라 전부를 한 그림에 그립니다 — 구조를 한눈에 볼 때.
+            </p>
+          )}
+          {/* 씨앗 없이 전체 — 상한을 넘는 규모는 서버가 미리 놓아 둔 지도로 본다(ADR 0046). */}
+          {!seed && (
+            <div className="space-y-1 border-t pt-2">
+              <Button
+                size="sm"
+                variant="outline"
+                className="w-full"
+                onClick={() => onControls({ map: true, at: '', zoom: null, mapTypes: new Set() })}
+              >
+                <MapIcon className="mr-1 size-3.5" />
+                전체 지도
+              </Button>
+              <p className="text-muted-foreground text-xs">
+                시작점 없이 전부를 — 서버가 미리 놓아 둔 지도입니다. 멀리서는 밀도, 확대하면 기록
+                하나하나가 점으로 보입니다.
+              </p>
+            </div>
+          )}
+        </div>
+
         <div className="grid grid-cols-2 gap-2">
-          <label className="space-y-1">
+          <label className={wholeOn ? 'col-span-2 space-y-1' : 'space-y-1'}>
             <span className="text-muted-foreground text-xs">단계</span>
-            <Select value={String(depth)} onValueChange={(value) => setDepth(Number(value))}>
-              <SelectTrigger size="sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {DEPTHS.map((one) => (
-                  <SelectItem key={one} value={String(one)}>
-                    {one}단계
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </label>
-          <label className="space-y-1">
-            <span className="text-muted-foreground text-xs">노드당 이웃</span>
-            <Select value={String(fanout)} onValueChange={(value) => setFanout(Number(value))}>
-              <SelectTrigger size="sm">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {FANOUTS.map((one) => (
-                  <SelectItem key={one} value={String(one)}>
-                    {one}개까지
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </label>
-          <label className="col-span-2 space-y-1">
-            <span className="text-muted-foreground text-xs">그림에 세울 노드</span>
             <Select
-              value={String(nodeLimit)}
-              onValueChange={(value) => setNodeLimit(Number(value))}
+              value={String(wholeOn ? depth : Math.max(1, depth))}
+              onValueChange={(value) => setDepth(Number(value))}
             >
               <SelectTrigger size="sm">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                {NODE_LIMITS.map((one) => (
+                {/* 0단계는 정적 그리기의 「선택한 타입만」 — 탐색의 타입 전부와 같은 그림이다. */}
+                {(wholeOn && seed?.kind === 'type' ? [0, ...DEPTHS] : DEPTHS).map((one) => (
                   <SelectItem key={one} value={String(one)}>
-                    {one === NODE_LIMITS[NODE_LIMITS.length - 1]
-                      ? `전부 (${one.toLocaleString()}개까지)`
-                      : `${one.toLocaleString()}개까지`}
+                    {one === 0 ? '0단계 (선택한 타입만)' : `${one}단계`}
                   </SelectItem>
                 ))}
               </SelectContent>
             </Select>
-            {/* **많이 고르면 느려진다는 말을 미리 한다.** 느려진 뒤에 알게 되면 사람은
-                그것을 고장으로 읽고, 다음부터 이 화면을 안 연다. */}
-            {nodeLimit > NODE_LIMITS[1] && (
-              <span className="text-muted-foreground block text-xs">
-                수천 개를 한 그림에 두면 배치가 느려집니다 — 1만 개가 넘으면 자리 잡는 데 수십 초가
-                걸릴 수 있습니다. 필터로 좁히는 편이 대개 빠르고 잘 읽힙니다.
-              </span>
-            )}
           </label>
+          {!wholeOn && (
+            <>
+              <label className="space-y-1">
+                <span className="text-muted-foreground text-xs">노드당 이웃</span>
+                <Select value={String(fanout)} onValueChange={(value) => setFanout(Number(value))}>
+                  <SelectTrigger size="sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {FANOUTS.map((one) => (
+                      <SelectItem key={one} value={String(one)}>
+                        {one}개까지
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="col-span-2 space-y-1">
+                <span className="text-muted-foreground text-xs">그림에 세울 노드</span>
+                <Select
+                  value={String(nodeLimit)}
+                  onValueChange={(value) => setNodeLimit(Number(value))}
+                >
+                  <SelectTrigger size="sm">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {NODE_LIMITS.map((one) => (
+                      <SelectItem key={one} value={String(one)}>
+                        {one === NODE_LIMITS[NODE_LIMITS.length - 1]
+                          ? `전부 (${one.toLocaleString()}개까지)`
+                          : `${one.toLocaleString()}개까지`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {/* **많이 고르면 느려진다는 말을 미리 한다.** 느려진 뒤에 알게 되면 사람은
+                    그것을 고장으로 읽고, 다음부터 이 화면을 안 연다. */}
+                {nodeLimit > NODE_LIMITS[1] && (
+                  <span className="text-muted-foreground block text-xs">
+                    수천 개를 한 그림에 두면 배치가 느려집니다 — 1만 개가 넘으면 자리 잡는 데 수십
+                    초가 걸릴 수 있습니다. 구조를 한눈에 보려면 「정적 그리기」 가 빠릅니다.
+                  </span>
+                )}
+              </label>
+            </>
+          )}
         </div>
+
+        {/* **기준일** — 그날 유효한 관계만 그린다(ADR 0039, 비우면 오늘). 지난 구성과 지금 구성을
+            한 그림에 섞으면 둘 다 아니다. */}
+        <AsOfPicker
+          id="graph-as-of"
+          value={asOf}
+          onChange={(next) => onControls({ asOf: next })}
+          className="flex-wrap"
+        />
 
         <FilterList
           title="관계 종류"
@@ -1257,39 +1667,46 @@ function ExploreView({
           />
           <span>
             관계 없는 것 숨기기
-            {isolatedCount > 0 && (
-              <span className="text-muted-foreground ml-1 text-xs">({isolatedCount}개 숨김)</span>
+            {(wholeOn ? (hideIsolated ? wholeIsolated : 0) : isolatedCount) > 0 && (
+              <span className="text-muted-foreground ml-1 text-xs">
+                ({(wholeOn ? wholeIsolated : isolatedCount).toLocaleString()}개 숨김)
+              </span>
             )}
           </span>
         </label>
 
-        <label className="space-y-1">
-          <span className="text-muted-foreground text-xs">색</span>
-          <Select value={colorBy} onValueChange={(value) => setColorBy(value as ColorBy)}>
-            <SelectTrigger size="sm">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="type">타입별</SelectItem>
-              {/* **타입이 백 개면 타입별 범례는 백 줄이다.** 묶음별로 보면 열 줄로 읽히고,
+        {/* 정적 그리기는 타입 색 하나다 — 노드 20만 개의 부서 · 상태를 함께 실으면 응답이 그만큼 커진다. */}
+        {!wholeOn && (
+          <label className="space-y-1">
+            <span className="text-muted-foreground text-xs">색</span>
+            <Select value={colorBy} onValueChange={(value) => setColorBy(value as ColorBy)}>
+              <SelectTrigger size="sm">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="type">타입별</SelectItem>
+                {/* **타입이 백 개면 타입별 범례는 백 줄이다.** 묶음별로 보면 열 줄로 읽히고,
                   색의 뜻도 그것이다(어느 영역의 것인가). */}
-              <SelectItem value="group">묶음별</SelectItem>
-              <SelectItem value="workspace">부서별</SelectItem>
-              <SelectItem value="status">상태별</SelectItem>
-              <SelectItem value="community">
-                무리별
-                {nodeList.length < COMMUNITY_MIN_NODES
-                  ? ` (노드 ${COMMUNITY_MIN_NODES}개부터)`
-                  : ''}
-              </SelectItem>
-            </SelectContent>
-          </Select>
-        </label>
+                <SelectItem value="group">묶음별</SelectItem>
+                <SelectItem value="workspace">부서별</SelectItem>
+                <SelectItem value="status">상태별</SelectItem>
+                <SelectItem value="community">
+                  무리별
+                  {nodeList.length < COMMUNITY_MIN_NODES
+                    ? ` (노드 ${COMMUNITY_MIN_NODES}개부터)`
+                    : ''}
+                </SelectItem>
+              </SelectContent>
+            </Select>
+          </label>
+        )}
       </aside>
 
       {/* 가운데 — 그림. 남은 높이를 전부 쓴다. */}
       <div className="flex min-h-0 flex-col gap-2">
-        {error && <ErrorNotice error={error} />}
+        {wholeOn
+          ? wholeError && <ErrorNotice error={wholeError} />
+          : error && <ErrorNotice error={error} />}
         {seed && (
           <div className="flex items-center gap-2">
             <div className="relative flex-1">
@@ -1303,14 +1720,25 @@ function ExploreView({
                     setFindText('')
                     event.currentTarget.blur()
                   }
+                  // 정적 그리기 — Enter 로 맞는 노드를 차례로 찾아간다(20만 개에서 눈으로는 못 찾는다).
+                  if (event.key === 'Enter' && wholeOn && prepared && wholeMatches?.size) {
+                    const list = [...wholeMatches]
+                    const at = list[matchCursor.current % list.length]
+                    matchCursor.current += 1
+                    selectAndGo(prepared.ids[at])
+                  }
                 }}
-                placeholder="그림 안에서 검색 (/) — 맞는 노드만 또렷하게"
+                placeholder={
+                  wholeOn
+                    ? '이름으로 찾기 (/) — Enter 로 차례로 찾아가기'
+                    : '그림 안에서 검색 (/) — 맞는 노드만 또렷하게'
+                }
                 className="pl-8"
-                disabled={nodeList.length < 2}
+                disabled={wholeOn ? !prepared : nodeList.length < 2}
               />
-              {matchIds && (
+              {(wholeOn ? wholeMatches : matchIds) && (
                 <span className="text-muted-foreground absolute top-2 right-2 text-xs">
-                  {matchIds.size}개
+                  {(wholeOn ? wholeMatches?.size : matchIds?.size)?.toLocaleString()}개
                 </span>
               )}
             </div>
@@ -1319,7 +1747,7 @@ function ExploreView({
               variant="outline"
               aria-label="새로고침"
               title="같은 씨앗을 다시 읽기 (R)"
-              disabled={loading}
+              disabled={loading || wholeLoading}
               onClick={() => setReloadTick((value) => value + 1)}
             >
               <RotateCw className={`size-3.5 ${loading ? 'animate-spin' : ''}`} />
@@ -1329,8 +1757,70 @@ function ExploreView({
         {!seed ? (
           <EmptyState
             title="시작점을 선택하세요"
-            hint="왼쪽에서 이름으로 객체를 찾거나, 타입에서 탐색해 선택하거나, 한 타입의 인스턴스를 전부 그립니다. 모든 타입을 한 번에 그리는 단추는 없습니다 — 전체 모양은 「구조」 에서 봅니다."
+            hint="왼쪽에서 이름으로 객체를 찾거나, 타입에서 탐색해 선택하거나, 한 타입의 인스턴스를 전부 그립니다. 전부를 한 번에 보려면 왼쪽 「정적 그리기」 칸의 「전체 지도」 — 서버가 미리 놓아 둔 지도입니다. 타입 사이의 모양은 「구조」 에서 봅니다."
           />
+        ) : wholeOn ? (
+          wholeError ? null : !whole ? (
+            <div className="flex min-h-[420px] flex-1 items-center justify-center rounded-md border">
+              <p className="text-muted-foreground flex items-center gap-2 text-sm" role="status">
+                <Loader2 className="size-4 animate-spin" />
+                통째 그림을 불러오는 중 — 노드가 많으면 몇 초 걸립니다
+              </p>
+            </div>
+          ) : whole.over ? (
+            <WholeRefusal
+              over={whole.over}
+              depth={depth}
+              seedTypes={whole.seed_types}
+              onLessDepth={
+                depth > (seed.kind === 'type' ? 0 : 1)
+                  ? () => onControls({ depth: depth - 1 })
+                  : undefined
+              }
+              onExclude={(slug) => {
+                // 「이웃 타입」 은 고른 것만 싣는 거르기다 — 빼려면 나머지를 고른다.
+                const base =
+                  typeFilter.size > 0
+                    ? [...typeFilter]
+                    : types.filter((one) => one.is_active).map((one) => one.slug)
+                onControls({ types: new Set(base.filter((one) => one !== slug)) })
+              }}
+              onOff={() => onControls({ whole: false })}
+              onMap={() =>
+                onControls({
+                  map: true,
+                  // 거절된 범위의 타입만 켠다 — 지도가 기록 타입이 아닌 것은 버린다.
+                  mapTypes: new Set(whole.over?.types.map((one) => one.slug) ?? []),
+                  at: seed.kind === 'focus' ? seed.id : '',
+                  zoom: null,
+                })
+              }
+            />
+          ) : prepared ? (
+            <Suspense
+              fallback={
+                <div className="flex min-h-[420px] flex-1 items-center justify-center rounded-md border">
+                  <Loader2 className="text-muted-foreground size-5 animate-spin" />
+                </div>
+              }
+            >
+              <WholeView
+                whole={whole}
+                prepared={prepared}
+                arrange={arrange}
+                typeColor={typeColor}
+                selected={wholeIndexOf(selected)}
+                onSelect={(at) => setSelected(at === null ? null : prepared.ids[at])}
+                onOpen={(at) => pickFocus(prepared.ids[at])}
+                focusOn={wholeFocus}
+                matches={wholeMatches}
+                clump={clump}
+                hideIsolated={hideIsolated}
+                wide={wide}
+                onToggleWide={onToggleWide}
+              />
+            </Suspense>
+          ) : null
         ) : (
           <GraphCanvas
             nodes={nodes}
@@ -1462,9 +1952,12 @@ function ExploreView({
             key={picked.id}
             node={picked}
             hidden={pickedHidden}
-            isFocus={picked.id === explored?.focus}
+            isFocus={picked.id === startId}
             loading={loading}
-            inGraph={(id) => Boolean(explored?.nodes.has(id))}
+            expandable={!wholeOn}
+            inGraph={(id) =>
+              wholeOn ? Boolean(prepared?.index.has(id)) : Boolean(explored?.nodes.has(id))
+            }
             color={typeColor(picked.type_slug)}
             typeLabel={typeLabel.get(picked.type_slug) ?? picked.type_label}
             onExpand={() => {
@@ -1473,19 +1966,32 @@ function ExploreView({
             }}
             onFocus={() => pickFocus(picked.id)}
             onPathTo={
-              explored?.focus && picked.id !== explored.focus
-                ? () => onSeed({ kind: 'path', from: explored.focus!, to: picked.id })
+              startId && picked.id !== startId
+                ? () => onSeed({ kind: 'path', from: startId, to: picked.id })
                 : undefined
             }
             onPathFind={(target) => onSeed({ kind: 'path', from: picked.id, to: target })}
             onSelect={selectAndGo}
             onClose={() => setSelected(null)}
           />
+        ) : wholeOn ? (
+          <div className="text-muted-foreground rounded-md border border-dashed p-3">
+            노드를 클릭하면 상세가 나옵니다. 더블클릭은 「여기를 중심으로」. 정적 그리기에는 「+N」
+            이 없습니다 — 단계 안의 것은 전부 그려져 있습니다. 범례의 타입을 클릭하면 그 타입만 크게
+            보입니다.
+          </div>
         ) : (
           <div className="text-muted-foreground rounded-md border border-dashed p-3">
             노드를 클릭하면 상세와 「여기서 확장」 가 나옵니다. 더블클릭은 「여기를 중심으로」. 주황
             링이 시작점, 「+N」 은 화면에 안 실린 관계의 수입니다.
           </div>
+        )}
+        {wholeOn && whole && !whole.over && (
+          <p className="text-muted-foreground mt-3 text-xs">
+            노드마다 자르지 않았습니다 — 노드 {whole.max_nodes.toLocaleString()} · 선{' '}
+            {whole.max_edges.toLocaleString()}개를 넘으면 그리지 않고 수를 알립니다. 상한은 서버가
+            정합니다.
+          </p>
         )}
         {explored?.path && (
           <p className="text-muted-foreground mt-3 text-xs">
@@ -1617,6 +2123,8 @@ interface NodeDetailProps {
   hidden: number
   isFocus: boolean
   loading: boolean
+  /** 「여기서 확장」 이 뜻이 있나 — 정적 그리기는 이미 전부라 없다. */
+  expandable?: boolean
   inGraph: (id: string) => boolean
   color: string
   typeLabel: string
@@ -1628,6 +2136,10 @@ interface NodeDetailProps {
   onPathFind: (target: string) => void
   onSelect: (id: string) => void
   onClose: () => void
+  /** 「여기를 중심으로」 단추의 말 — 지도에서는 「여기서 정적 그리기」. */
+  focusLabel?: string
+  /** 선 수 줄을 감춘다 — 지도에는 「그림 안의 선」 이 없다. */
+  hideDegree?: boolean
 }
 
 /** 상세에서 보여 줄 속성 수 — 전부는 상세 화면이 있다. */
@@ -1645,6 +2157,7 @@ function NodeDetail({
   hidden,
   isFocus,
   loading,
+  expandable = true,
   inGraph,
   color,
   typeLabel,
@@ -1654,6 +2167,8 @@ function NodeDetail({
   onPathFind,
   onSelect,
   onClose,
+  focusLabel = '여기를 중심으로',
+  hideDegree = false,
 }: NodeDetailProps) {
   const [finding, setFinding] = useState(false)
   const profile = useResource(
@@ -1696,7 +2211,9 @@ function NodeDetail({
               className="inline-block size-3 shrink-0 rounded-full"
               style={{ background: color }}
             />
-            <span className="truncate font-medium">{node.label}</span>
+            <span className="truncate font-medium">
+              {node.label || profile.data?.object.label || '…'}
+            </span>
           </div>
           <p className="text-muted-foreground mt-0.5 text-xs">
             {typeLabel}
@@ -1709,17 +2226,19 @@ function NodeDetail({
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <Button
-          size="sm"
-          variant={hidden > 0 ? 'default' : 'outline'}
-          disabled={loading || hidden === 0}
-          onClick={onExpand}
-        >
-          여기서 확장{hidden > 0 ? ` (+${hidden})` : ''}
-        </Button>
+        {expandable && (
+          <Button
+            size="sm"
+            variant={hidden > 0 ? 'default' : 'outline'}
+            disabled={loading || hidden === 0}
+            onClick={onExpand}
+          >
+            여기서 확장{hidden > 0 ? ` (+${hidden})` : ''}
+          </Button>
+        )}
         <Button size="sm" variant="outline" disabled={isFocus} onClick={onFocus}>
           <Crosshair className="mr-1 size-3.5" />
-          여기를 중심으로
+          {focusLabel}
         </Button>
         <Button asChild size="sm" variant="outline">
           <Link to={`/o/${node.type_slug}/${node.id}`}>
@@ -1764,8 +2283,8 @@ function NodeDetail({
       )}
 
       <div className="space-y-1.5">
-        <p className="text-muted-foreground text-xs">
-          관계 {node.degree}개
+        <p className={hideDegree ? 'hidden' : 'text-muted-foreground text-xs'}>
+          {expandable ? `관계 ${node.degree}개` : `그림 안의 선 ${node.degree.toLocaleString()}개`}
           {hidden > 0 && (
             <>
               {' '}
@@ -1792,7 +2311,9 @@ function NodeDetail({
                       title={
                         here
                           ? one.evidence_note || '그림에서 선택'
-                          : '그림에 없습니다 — 「여기서 확장」 로 불러옵니다'
+                          : expandable
+                            ? '그림에 없습니다 — 「여기서 확장」 로 불러옵니다'
+                            : '그림에 없습니다 — 단계 · 필터 밖입니다'
                       }
                       disabled={!here}
                       onClick={() => onSelect(one.object_id)}

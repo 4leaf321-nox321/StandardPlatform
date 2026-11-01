@@ -124,13 +124,15 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `ontology_import` | 정의를 한 트랜잭션으로. **기본은 미리 보기**(`apply=false`) |
 | `object_resolve` | **이름 하나가 어느 객체인가** — `exact`/`candidates`/`none`. 이름으로 가리키기 전에 부른다 |
 | `objects_resolve_many` | 이름 **여럿을 한 번에**(500개까지) — 넣기 전에 「없는 것 · 여럿과 맞는 것」 을 먼저 걸러 묶음 전체가 거절되지 않게 |
-| `objects_list` · `object_get` | 객체 읽기 — 화면과 같은 조건 거르기, 조건 묶음을 빼는 **제외**(`exclude`, 주소의 `nf<번호>.`) 포함 (`object_get` 은 관련 객체까지). **0건이면 `diagnosis` 가 붙는다**. 긴 글 칸은 잘라 준다(목록 300자 · 상세 6,000자씩, `clipped` · `text_from`) |
+| `objects_list` · `object_get` | 객체 읽기 — 화면과 같은 조건 거르기, 조건 묶음을 빼는 **제외**(`exclude`, 주소의 `nf<번호>.`) · 같은 선 하나에서 함께 맞는 **같은 관계 묶음**(`edge`, 주소의 `fe<번호>.` — ADR 0043) 포함 (`object_get` 은 관련 객체까지). **이어진 칸** `columns=[주소…]` — 줄마다 상대의 값을 한 번에(칸마다 20개 · `more`), 줄마다 `object_get` 하지 않게. **0건이면 `diagnosis` 가 붙는다**. 긴 글 칸은 잘라 준다(목록 300자 · 상세 6,000자씩, `clipped` · `text_from`) |
 | `objects_similar` | **비슷한 기록**(ADR 0022) — 축 태그(참조 칸)가 많이 겹치는 같은 타입의 기록, 드문 태그가 겹칠수록 위에. 겹친 태그(왜 비슷한가)와 함께. 기록 대신 태그 묶음으로도 |
-| `objects_summary` · `object_fields` | 통계(서버가 센다 — 화면의 「통계」 와 같다) · 다른 타입의 칸 주소(`ref.vendor.country` 등) |
-| `object_history` · `object_references` · `object_rollup` · `quality_report` | 이력 · 가리키는 것 · 아래 전부의 합 · 품질 — 화면의 읽기와 대칭 |
+| `objects_summary` · `object_fields` | 통계(서버가 센다 — 화면의 「통계」 와 같다) · 다른 타입의 칸 주소(`ref.vendor.country` 등, 선의 칸 `out.<관계>~<관계 속성>` — `edge: true`) |
+| `object_history` · `object_references` · `object_rollup` · `quality_report` | 이력 · 가리키는 것 · 아래 전부의 합(수량 반영 · 말단만 · 곱 — ADR 0040) · 품질 — 화면의 읽기와 대칭 |
 | `graph_neighbors` · `graph_overview` | **이것과 이어진 것들**(한 걸음 너머, 질의어 없이) · 타입 사이의 지형 — 화면의 지식 그래프와 같은 길 |
 | `graph_path` | **두 객체가 어떻게 이어져 있나** — 가장 짧은 길들(관계 · 참조 칸, 방향 무관). 상한에 닿으면 「찾다가 멈춤」 |
 | `object_tree` · `audit_recent` | 계층 한 단계씩 · 누가 언제 무엇을 바꿨나(전체, 부서 관리자 이상) |
+| `object_explode` | **BOM 전개**(ADR 0040) — 트리 관계의 수량(관계 종류의 수량 칸)을 경로 따라 곱한다. 정리(객체마다 총수량) · 단계별(경로마다, 5,000줄 상한 · 잘림) · 어디에 쓰였나(맨 위 객체마다 총 몇 개). 수량 없음(1개로 셈) · 볼 수 없는 객체 수를 함께 |
+| `object_lineage` · `lineage_repin` | **계보**(ADR 0041) — 무엇에서 만들어졌나(위 · 아래 사슬, 20단계) · 낡음(바로 · 위에서)과 까닭 · 영향 범위(이것으로 만든 것 n개 · 낡음 m개). 위 · 아래 각 100줄까지(`limit`, 서버 상한 500 — 잘리면 `truncated`). **다시 고정**은 사람이 정한 근거로(영향 없음 확인 · 다시 만들었음) — 위에서 낡음은 원천부터. 한 타입의 낡은 것만은 목록 조건 `lineage` |
 | `bulk_edit` · `bulk_edit_undo` | 여러 객체의 **한 칸**을 같은 값으로 — 계획 먼저, `batch_id` 로 통째로 되돌리기 |
 | `object_create` · `object_update` | 객체 쓰기 (`update` 는 보낸 것만) |
 | `objects_import` | 여러 행 한 번에(upsert). **작업이 된다** — 계획을 돌려주고, 적용은 `job_apply`. `aliases_mode="replace"` 면 파일에 없는 별칭을 지운다(기본은 더하기), 행의 `renamed_from`·`previous_keys` 로 **키를 바꾼다** |
@@ -140,7 +142,8 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `bundle_import` | 정의 · 객체 · 관계를 한 묶음으로 — 작업이 되어 한 번에 미리 보기, 적용은 `job_apply`(전부 아니면 무) |
 | `bundle_runs` · `bundle_undo` | **넣은 판을 통째로 되돌린다** — 목록에서 번호를 찾고, 기본은 계획(사람 확인 뒤 `apply=True`). 되돌릴 기록은 30일 보관 |
 | `job_status` · `job_apply` · `jobs_list` · `job_cancel` · `jobs_purge` | 작업이 어디까지 됐나(`next` 가 종류마다 다음 할 일을 말한다) · 사람이 확인한 계획 적용(`job_ids` 로 여럿) · 작업 목록(상태 · 종류 · 내 것으로 거르기)과 워커 생존 · 멈추기(여럿도) · 기한 지난 작업 파일 · 끝난 기록 정리(시스템 관리자) |
-| `relation_add` · `relation_update` · `relation_remove` · `relations_import` | 객체 둘을 잇기 (**근거를 적는다**) · 근거 고치기 · 끊기(틀리게 이은 것을 되돌리는 자리). `relations_import(mode="replace")` 는 **파일에 없는 선을 끊음으로** 계획에 올린다(`replace_type` 은 그 타입 전체에서) |
+| `relation_add` · `relation_update` · `relation_remove` · `relations_import` | 객체 둘을 잇기 (**근거를 적는다**) · 근거 · 속성 · **유효 기간** 고치기 · 끊기(틀리게 이은 것을 되돌리는 자리). `relations_import(mode="replace")` 는 **파일에 없는 선을 끊음으로** 계획에 올린다(`replace_type` 은 그 타입 전체에서). 유효 기간을 받는 관계 종류(`effectivity`)면 `valid_from`(포함) · `valid_to`(제외). 계보 관계(`lineage_source`)면 맺는 순간 원천의 개정이 박힌다(고정) |
+| `relation_propose` · `relation_proposals` · `relation_proposal_decide` | **제안된 관계**(ADR 0042) — 추론 · 추출한(확실하지 않은) 선을 관계가 아니라 **제안**으로 남기기(여러 줄, 줄마다 확신도 · 근거, `origin_ref` 로 출처 묶음) · 객체 하나 또는 전체의 제안 보기 · 사람이 정한 확정 · 거절 · 철회. 확정 전의 제안은 트리 · 롤업 · 지표 · 코어 API 에 안 섞인다. 양 끝을 볼 수만 있으면 제안되고, 확정은 출발 객체를 수정할 수 있는 사람만(「관계 추가」 와 같은 검사). 사용자가 사실로 말한 선은 `relation_add` |
 | `datasources_list` · `datasource_save` · `datasource_sync` · `datasource_runs` · `datasource_preview` | 바깥 시스템(OData · REST · 파일 · 다른 플랫폼)에서 읽어 채우기 — 계획 먼저. 소스 하나 · 다른 플랫폼 칸 대응 초안 · RA 게시판(`datasources_list(slug, suggest=, boards=)`) · 만들기 · 고치기 · RA 보고서 기록 타입(`datasource_save` — **인증 비밀은 받지 않는다**, 화면에서) · 지난 실행 기록(실패 이유 · 미룬 관계) · 앞 몇 행을 칸 대응한 모습 |
 | `fill_priorities` | **어디부터 채우나**(ADR 0025) — 타입마다 필수 칸 · 칸별 채움률 · 선이 없는 관계 · 지워진 것을 가리키는 칸 · 별칭 없는 객체 · 객체 없는 타입을 세고, 쓰는 곳(필수 · 지표 · 코어 공개 · 뷰 · 개수 제약)으로 가중해 줄 세운다. 줄마다 「이것을 채우면 무엇이 좋아지나」(`gain`)와 빈 것만 거른 화면(`link`). 큰 타입은 표본 어림(`estimated` · `notes`). 「무엇이 나쁜가」 는 `quality_report` |
 | `server_maintenance` · `notifications` · `filestore_gc` | 홈의 「남은 일」(보는 사람의 권한대로) · 내 알림 · 첨부 저장소의 고아 파일 정리(계획 → `job_apply`, 시스템 관리자) |
@@ -158,6 +161,36 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `server_status` | **서버 상태**(판 · 스키마 · 디스크 · 백업 · 확장 · 정제 도구 키트) · 느린 경로 · 최악 사례 · 작업 소요(`performance`). 읽기만 — 확장 켜고 끄기는 화면에서. 시스템 관리자 |
 | `export_start` | **파일로 내보내기**(객체 — 목록과 같은 거르기 · 관계) — 작업만 시작하고 파일은 사람이 화면의 「작업」 에서 받는다 |
 | `config_delete` | **설정 지우기** — 지표 · 경보 · 데이터 소스 · 뷰 · 장표 · 장표 틀. 미리 보기 먼저, 되살리는 길이 없다(위험 도구 — MCP 로는 시스템 관리자) |
+
+### 유효 기간과 기준일(ADR 0039)
+
+관계 종류가 `effectivity` 면 선이 `valid_from`(포함) · `valid_to`(**제외** — 그날부터 무효)를 받는다
+(반열린 [from, to) — 「3월 1일부터 바뀜」 을 앞 선의 끝날 = 뒤 선의 시작일 하나로 적는다). 읽는 도구
+(`objects_list` · `objects_summary` · `object_get` · `object_tree` · `object_rollup` · `object_explode` · `graph_neighbors` ·
+`graph_path` · `export_start`)는 **기준일 `as_of`**(비우면 오늘)를 받아 그날 유효한 선만 따라간다 —
+유효 기간이 지난 선은 기본에서 빠진다. `object_get(all_periods=True)` 는 지난 · 앞으로의 선까지
+(`period_state`). 날짜 밖의 적용 조건(옵션 · 시리얼)은 관계 칸으로 적되 조건으로는 아직 못 거른다.
+
+### 계보와 낡음(ADR 0041)
+
+관계 종류의 `lineage_source`(`src` · `dst` — 그 끝이 원천)가 **계보 관계**를, 타입의 `revision_key` 가
+**개정 칸**을 정한다(둘 다 `ontology_import` · `ontology_schema` 에 실린다). 선은 맺는 순간 원천의 개정 ·
+수정 시각을 박고(고정), 원천의 개정이 바뀌면 파생물이 **바로 낡음**, 그 아래가 **위에서 낡음**이다.
+`object_lineage` 가 까닭 · 영향 범위를, 목록 조건 `f.lineage.eq=stale`(`direct` · `fresh`)이 한 타입의
+낡은 것을 준다. `lineage_repin` 은 **사람이 정한 판단**(영향 없음 확인 · 다시 만들었음)을 적는 자리라
+도구 설명이 AI 에게 스스로 고르지 말라고 한다 — 이 도구로 옮긴 고정은 되돌리는 도구가 없다. 위험
+도구(`DESTRUCTIVE_TOOLS`)에는 넣지 않았다 — 값을 지우지 않고, 앞뒤 개정이 감사 · 이력에 남는다.
+
+### 제안된 관계(ADR 0042)
+
+**사용자가 사실로 말한 선은 `relation_add`, AI 가 추론 · 추출한 선은 `relation_propose`.** 제안은 따로
+둔 표(`relation_proposals`)에 남아 확정 전에는 선을 읽는 어느 자리(트리 · 롤업 · 지표 · 코어 API · RDF ·
+묶음)에도 안 섞인다. 확정은 화면 · 검토함(`proposed_relation`)에서 출발 객체를 수정할 수 있는 사람이
+하고, 「관계 추가」 와 같은 길이라 개수 제약 · 순환 · 기간 겹침 · 계보 고정이 그대로 걸린다. 응답은 줄마다
+`created` · `open` · `connected`(이미 이어짐) · `rejected_before`(거절된 적 있음 — `again` 으로만 다시) ·
+`error`. `relation_proposal_decide` 는 위험 도구(`DESTRUCTIVE_TOOLS`)에 넣지 않았다 — 확정은 선 하나를
+만드는 일로 `relation_add` 와 무게가 같고, 거절은 화면에서 다시 열 수 있으며, 철회는 제안한 사람의
+작업 거리만 지운다. 대신 도구 설명이 「사람이 정한 것만 — 네가 제안한 것을 네가 확정하지 마라」 를 말한다.
 
 ### 왜 타입마다 도구를 안 만드나
 

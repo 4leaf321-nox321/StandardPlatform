@@ -11,7 +11,7 @@
  * 무거운 이웃(조건 줄 · 트리 · 통계 · 뷰 고르개)은 가짜로 두고 **넘기는 것**만 본다.
  */
 
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { useEffect } from 'react'
 import { MemoryRouter, Route, Routes } from 'react-router-dom'
@@ -251,5 +251,174 @@ describe('타입 목록', () => {
     expect(screen.getByText('성적서.pdf')).toBeInTheDocument()
     // 파일 속성이 있는 타입에서만 선다.
     expect(screen.getByRole('button', { name: /사진 일괄 업로드/ })).toBeInTheDocument()
+  })
+})
+
+describe('기준일(ADR 0039)', () => {
+  const TREE_TYPE = { ...TYPE, list_view: { tree: { relation: 'bom_of', parent: 'dst' } } }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    auth.user = MEMBER
+    objectApi.list.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
+    objectApi.fields.mockResolvedValue([])
+    workspaceApi.list.mockResolvedValue([])
+  })
+
+  it('트리가 있는 타입에는 기준일이 서고, 고른 날이 목록 요청에 실린다', async () => {
+    ontologyApi.schema.mockResolvedValue({ types: [TREE_TYPE], interfaces: [] })
+    await open()
+    const picker = await screen.findByLabelText('기준일')
+    fireEvent.change(picker, { target: { value: '2026-03-01' } })
+    await waitFor(() =>
+      expect(objectApi.list).toHaveBeenLastCalledWith(
+        'part',
+        expect.objectContaining({ asOf: '2026-03-01' }),
+      ),
+    )
+    // 비우면 오늘 — 요청에서 빠진다(서버의 기본).
+    await userEvent.click(screen.getByRole('button', { name: '오늘' }))
+    await waitFor(() =>
+      expect(objectApi.list).toHaveBeenLastCalledWith(
+        'part',
+        expect.objectContaining({ asOf: null }),
+      ),
+    )
+  })
+
+  it('주소의 as_of 를 읽어 그날의 구조로 연다', async () => {
+    ontologyApi.schema.mockResolvedValue({ types: [TREE_TYPE], interfaces: [] })
+    await open('/o/part?as_of=2026-02-15')
+    expect(objectApi.list).toHaveBeenCalledWith(
+      'part',
+      expect.objectContaining({ asOf: '2026-02-15' }),
+    )
+    expect(screen.getByLabelText('기준일')).toHaveValue('2026-02-15')
+  })
+
+  it('관계를 따라가는 것이 없는 목록에는 기준일이 안 선다', async () => {
+    ontologyApi.schema.mockResolvedValue({ types: [TYPE], interfaces: [] })
+    await open()
+    expect(screen.queryByLabelText('기준일')).not.toBeInTheDocument()
+  })
+})
+
+describe('낡은 것만(ADR 0041)', () => {
+  /** 「도면 → 부품」 계보 — 도착(도면)이 원천이고 부품이 파생물이다. */
+  const MADE_FROM = {
+    slug: 'made_from',
+    label: '만든 원천',
+    directed: true,
+    lineage_source: 'dst',
+    src_type_slugs: ['part'],
+    dst_type_slugs: ['drawing'],
+  }
+  const DRAWING = { ...TYPE, id: 't2', slug: 'drawing', label: '도면' }
+
+  function row(id: string, label: string) {
+    return {
+      id,
+      type_slug: 'part',
+      key: null,
+      label,
+      description: '',
+      properties: {},
+      ref_labels: {},
+      status: 'active',
+      owner_workspace_slug: 'cae',
+      owner_workspace_name: '해석팀',
+      valid_from_year: null,
+      valid_to_year: null,
+      created_at: '2026-10-08T00:00:00Z',
+      updated_at: '2026-10-08T00:00:00Z',
+    }
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    auth.user = MEMBER
+    ontologyApi.schema.mockResolvedValue({
+      types: [TYPE, DRAWING],
+      interfaces: [],
+      relation_types: [MADE_FROM],
+    })
+    objectApi.list.mockResolvedValue({ items: [], total: 0, limit: 50, offset: 0 })
+    objectApi.fields.mockResolvedValue([])
+    workspaceApi.list.mockResolvedValue([])
+  })
+
+  it('파생물 끝에 설 수 있는 타입에 토글이 서고, 켜면 조건으로 목록 · 저장된 뷰에 실린다', async () => {
+    await open()
+    const toggle = await screen.findByRole('checkbox', { name: '낡은 것만' })
+    expect(toggle).not.toBeChecked()
+    await userEvent.click(toggle)
+    await waitFor(() =>
+      expect(objectApi.list.mock.calls.at(-1)?.[1].conditions).toContainEqual({
+        field: 'lineage',
+        op: 'eq',
+        value: 'stale',
+      }),
+    )
+    expect(screen.getByRole('checkbox', { name: '낡은 것만' })).toBeChecked()
+    // 저장된 뷰도 같은 조건을 담는다 — 주소 · 통계 · 내보내기와 한 길.
+    expect(screen.getByTestId('view-picker')).toHaveTextContent('"field":"lineage"')
+    // 비면 「낡은 것만」 때문일 수 있다고 말한다.
+    expect(await screen.findByText(/「낡은 것만」 을 해제하면 다시 표시합니다/)).toBeInTheDocument()
+  })
+
+  it('주소의 f.lineage.eq=stale 이면 켜진 채 열리고, 끄면 그 조건만 빠진다', async () => {
+    await open('/o/part?f.lineage.eq=stale&f.grade.eq=A')
+    expect(objectApi.list.mock.calls.at(-1)?.[1].conditions).toContainEqual({
+      field: 'lineage',
+      op: 'eq',
+      value: 'stale',
+    })
+    const toggle = screen.getByRole('checkbox', { name: '낡은 것만' })
+    expect(toggle).toBeChecked()
+    await userEvent.click(toggle)
+    await waitFor(() =>
+      expect(objectApi.list.mock.calls.at(-1)?.[1].conditions).toEqual([
+        { field: 'grade', op: 'eq', value: 'A' },
+      ]),
+    )
+  })
+
+  it('원천 끝에만 서는 타입 · 계보가 없는 설치에는 토글이 없다', async () => {
+    await open('/o/drawing')
+    expect(screen.queryByRole('checkbox', { name: '낡은 것만' })).not.toBeInTheDocument()
+    cleanup()
+    ontologyApi.schema.mockResolvedValue({ types: [TYPE], interfaces: [], relation_types: [] })
+    await open()
+    expect(screen.queryByRole('checkbox', { name: '낡은 것만' })).not.toBeInTheDocument()
+  })
+
+  it('줄마다 낡음 · 위에서 낡음 배지 — 서버가 실은 줄만', async () => {
+    ontologyApi.schema.mockResolvedValue({
+      types: [{ ...TYPE, list_view: { columns: ['label'] } }, DRAWING],
+      interfaces: [],
+      relation_types: [MADE_FROM],
+    })
+    objectApi.list.mockResolvedValue({
+      items: [row('a', '브래킷'), row('b', '하우징'), row('c', '볼트')],
+      total: 3,
+      limit: 50,
+      offset: 0,
+      lineage: { a: 'direct', b: 'upstream' },
+    })
+    const { default: ObjectListPage } = await import('@/modules/objects/ObjectListPage')
+    render(
+      <MemoryRouter initialEntries={['/o/part']}>
+        <Routes>
+          <Route path="/o/:typeSlug" element={<ObjectListPage />} />
+        </Routes>
+      </MemoryRouter>,
+    )
+    const line = async (label: string) =>
+      (await screen.findByRole('link', { name: label })).closest('tr') as HTMLElement
+    expect(within(await line('브래킷')).getByText('낡음')).toBeInTheDocument()
+    expect(within(await line('하우징')).getByText('위에서 낡음')).toBeInTheDocument()
+    const bolt = await line('볼트')
+    expect(within(bolt).queryByText('낡음')).toBeNull()
+    expect(within(bolt).queryByText('위에서 낡음')).toBeNull()
   })
 })

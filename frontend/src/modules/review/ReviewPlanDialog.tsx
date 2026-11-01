@@ -62,8 +62,11 @@ export function ReviewPlanDialog({
           {plan.counts.blocked > 0 && (
             <Badge variant="destructive">막힘 {plan.counts.blocked.toLocaleString()}건</Badge>
           )}
+          {/* 추천이 없는 줄도, 추천은 있지만 확신도가 없는 줄(낡은 파생물)도 문턱에 안 걸린다. */}
           {plan.skipped > 0 && (
-            <Badge variant="secondary">문턱 아래 · 추천 없음 {plan.skipped.toLocaleString()}건</Badge>
+            <Badge variant="secondary">
+              문턱 아래 · 확신도 없음 {plan.skipped.toLocaleString()}건
+            </Badge>
           )}
           {plan.as_job && <Badge variant="outline">작업으로 실행</Badge>}
         </div>

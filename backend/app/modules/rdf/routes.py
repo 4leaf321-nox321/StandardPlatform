@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+from itertools import islice
 from typing import Any
 
 from fastapi import APIRouter, Depends, Query, Request, Response
@@ -111,6 +112,7 @@ class QueryOut(BaseModel):
     triples: int
     inferred_triples: int
     elapsed_ms: int
+    """질의를 계산해 줄을 꺼내는 데 든 시간 — 그래프 세우기 · 캐시 확인은 뺀다."""
     prefixes: dict[str, str]
     """질의에 쓸 접두어 — `sp:` 가 이 설치의 정의 자리다."""
     left_out: list[str] = []
@@ -265,17 +267,22 @@ def query(
             f"(상한 {export.INFER_MAX_TRIPLES}).",
         )
 
+    # **줄을 꺼내는 데까지 잰다** — rdflib 은 `query` 에서 질의를 세우기만 하고 줄을 꺼낼 때
+    # 계산한다. 예전에는 `query` 만 재서 `elapsed_ms` 가 늘 0 이었고(200만 건 실측 DB 에서
+    # 0.5초 걸린 질의도), 꺼내다 난 평가 오류는 409 가 아니라 500 이었다.
     started = time.perf_counter()
     try:
         result = graph.query(prepared)
+        answer = bool(result.askAnswer) if result.type == "ASK" else None
+        found = [] if answer is not None else list(islice(result, payload.limit + 1))
     except Exception as failure:  # rdflib 의 평가 오류도 종류가 많다
         raise Conflict(code("RDF", 4), f"질의를 이해하지 못했습니다: {failure}") from failure
     elapsed = int((time.perf_counter() - started) * 1000)
 
-    if result.type == "ASK":
+    if answer is not None:
         return QueryOut(
             columns=["answer"],
-            rows=[{"answer": bool(result.askAnswer)}],
+            rows=[{"answer": answer}],
             truncated=False,
             triples=stored,
             inferred_triples=added,
@@ -285,11 +292,8 @@ def query(
         )
     columns = [str(one) for one in (result.vars or [])]
     rows: list[dict[str, Any]] = []
-    truncated = False
-    for index, row in enumerate(result):
-        if index >= payload.limit:
-            truncated = True
-            break
+    truncated = len(found) > payload.limit
+    for row in found[: payload.limit]:
         values = list(row) if isinstance(row, tuple) else []
         rows.append(
             {

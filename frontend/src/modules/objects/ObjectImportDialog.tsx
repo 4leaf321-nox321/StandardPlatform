@@ -54,12 +54,32 @@ type Kind = 'objects' | 'relations'
 /** 어디서 입력하나 — **표에 붙여넣기가 기본**이고, 파일 업로드는 그 옆이다. */
 type Source = 'grid' | 'file'
 
-/** 관계 표의 열 — 서버가 받는 네 개 그대로. */
+/** 관계 표의 열 — 서버가 받는 고정 넷 그대로. */
 const RELATION_COLUMNS: GridColumn[] = [
   { key: 'src', header: 'src', label: '출발', help: '식별자(없으면 이름)', required: true },
   { key: 'relation', header: 'relation', label: '관계', help: '관계 종류의 slug', required: true },
   { key: 'dst', header: 'dst', label: '도착', help: '식별자(없으면 이름)', required: true },
   { key: 'evidence_note', header: 'evidence_note', label: '근거', help: '어느 문서에서 나왔나' },
+]
+
+/**
+ * 유효 기간 두 열(ADR 0039) — **유효 기간을 받는 관계 종류가 있을 때만** 선다. 내보낸 관계 파일과
+ * 같은 차례(고정 넷 뒤)다 — 다운로드해 수정한 파일을 그대로 붙여넣는 길이라서. 같은 두 객체 ·
+ * 같은 종류의 줄이 기간을 달리해 여럿일 수 있다.
+ */
+const RELATION_PERIOD_COLUMNS: GridColumn[] = [
+  {
+    key: 'valid_from',
+    header: 'valid_from',
+    label: '시작일',
+    help: 'YYYY-MM-DD · 포함 · 비우면 처음부터',
+  },
+  {
+    key: 'valid_to',
+    header: 'valid_to',
+    label: '끝날',
+    help: 'YYYY-MM-DD · 제외(그날부터 무효) · 비우면 끝없이',
+  },
 ]
 
 /**
@@ -152,7 +172,15 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
   // **정의가 표의 열을 만든다.** 속성을 더하면 표에 그 칸이 저절로 선다 — 안내 문구를 따로
   // 고칠 자리가 없다.
   const properties = useResource(() => ontologyApi.properties(type.slug), [type.slug])
-  const columns = kind === 'objects' ? objectColumns(type, properties.data ?? []) : RELATION_COLUMNS
+  /** 유효 기간을 받는 관계 종류가 있나 — 있으면 관계 표에 기간 두 열이 선다. */
+  const relationTypes = useResource(() => ontologyApi.relationTypes(), [])
+  const periodic = (relationTypes.data ?? []).some((one) => one.effectivity)
+  const columns =
+    kind === 'objects'
+      ? objectColumns(type, properties.data ?? [])
+      : periodic
+        ? [...RELATION_COLUMNS, ...RELATION_PERIOD_COLUMNS]
+        : RELATION_COLUMNS
   const rows = grid ?? emptyRows(columns)
   const filled = filledRows(rows)
 
@@ -301,8 +329,16 @@ export function ObjectImportDialog({ type, onClose, onApplied }: ObjectImportDia
             </>
           ) : (
             <p>
-              열은 <code>src, relation, dst, evidence_note</code>. 출발점은 {type.label}, 끝점은
-              식별자(없으면 이름). 이미 이어진 것은 「그대로」 라 두 번 올려도 두 겹이 안 됩니다.
+              열은 <code>src, relation, dst, evidence_note</code>
+              {periodic && (
+                <>
+                  {' '}
+                  과 유효 기간 <code>valid_from, valid_to</code>(시작일 포함 · 끝날 제외 — 유효
+                  기간을 받는 관계 종류의 줄만)
+                </>
+              )}
+              . 출발점은 {type.label}, 끝점은 식별자(없으면 이름). 이미 이어진 것은 「그대로」 라 두
+              번 올려도 두 겹이 안 됩니다.
             </p>
           )}
           <div className="flex flex-wrap gap-2 pt-1">

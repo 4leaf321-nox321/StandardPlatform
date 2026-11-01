@@ -55,6 +55,30 @@ export interface FileCell {
  */
 export interface ObjectPage extends Page<ObjectRow> {
   files?: Record<string, Record<string, FileCell>>
+  /**
+   * 계보의 낡음(ADR 0041) — `{객체 id: 'direct' | 'upstream'}`, **낡은 줄만**. 계보 관계 종류가 없는
+   * 설치는 늘 비어 있다.
+   */
+  lineage?: Record<string, LineageStaleState>
+  /** 요청한 이어진 칸(`columns`, ADR 0043)의 머리 — 받은 차례대로. */
+  linked_columns?: LinkedColumn[]
+  /** `{객체 id: {주소: 칸}}` — 이어진 칸의 값. 이어진 것이 없는 칸은 없다. */
+  linked?: Record<string, Record<string, LinkedCell>>
+}
+
+/** 이어진 칸 하나의 머리(ADR 0043). */
+export interface LinkedColumn {
+  field: string
+  label: string
+  /** 끝 칸의 종류 — 관계로 이어진 것 자체면 `object`. */
+  data_type: string
+  multi: boolean
+}
+
+/** 한 줄의 이어진 칸 — 20개까지, 더 있으면 `more`(몇 개인지는 세지 않았다). */
+export interface LinkedCell {
+  values: { value: unknown; label: string }[]
+  more: boolean
 }
 
 /** 사진 일괄 업로드의 한 줄 — zip 안의 파일 하나가 무엇이 되나(`objects/photos.py`). */
@@ -121,6 +145,96 @@ export interface RelatedObject {
   /** `relation`(관계 줄) · `field`(참조 칸 — 칸에 저장한 관계, 끊는 대신 칸을 고친다). */
   stored_as?: 'relation' | 'field'
   field_key?: string | null
+  /** 유효 기간의 시작일(포함, ADR 0039) — 유효 기간을 받는 관계 종류의 관계만. 비면 처음부터. */
+  valid_from?: string | null
+  /** 유효 기간의 끝날(**제외** — 그날부터 무효). 비면 끝없이. */
+  valid_to?: string | null
+  /**
+   * 기준일에 이 관계가 어디인가 — `current`(유효) · `past`(지난 관계) · `future`(예정 관계).
+   * 기본 상세에는 `current` 만 온다 — 「지난 · 예정 관계 포함」 이면 셋 다.
+   */
+  period_state?: 'current' | 'past' | 'future'
+}
+
+/**
+ * 제안된 관계(ADR 0042) — 서버의 `RelationProposalOut`(`objects/schemas.py`)과 같은 모양.
+ *
+ * 생성 타입(`@/shared/api/schema`)을 쓰지 않는 까닭은 아래 「채울 곳」 과 같다 — 그 파일은 커밋하지
+ * 않는 생성물이라 CI 의 빌드 단계에는 아직 없다.
+ */
+export type ProposalStatus = 'proposed' | 'accepted' | 'rejected'
+/** 누가 · 무엇이 제안했나 — 사람 · AI(MCP) · 규칙 · 데이터 소스 · 파일 가져오기. */
+export type ProposalOrigin = 'user' | 'mcp' | 'rule' | 'datasource' | 'import'
+/** 제안 하나의 결과 — 만들지 않은 까닭도 결과다. */
+export type ProposalOutcome = 'created' | 'open' | 'connected' | 'rejected_before' | 'error'
+
+export interface RelationProposal {
+  id: string
+  relation: string
+  relation_label: string
+  /** 보는 객체 쪽에서 읽는 말 — 정방향이면 종류 이름, 역방향이면 반대 이름. */
+  label: string
+  /** 보는 객체가 출발점인가. */
+  outgoing: boolean
+  status: ProposalStatus
+  src_object_id: string
+  /** 못 보는 객체면 「(볼 수 없는 객체)」. */
+  src_label: string
+  src_key: string | null
+  src_type_slug: string
+  src_type_label: string
+  dst_object_id: string
+  dst_label: string
+  dst_key: string | null
+  dst_type_slug: string
+  dst_type_label: string
+  properties: Record<string, unknown>
+  valid_from: string | null
+  valid_to: string | null
+  /** 근거 — 검토자가 읽는다. 확정하면 관계의 근거가 된다. */
+  evidence_note: string
+  /** 확신도(0 ~ 1) — 비면 모른다. */
+  confidence: number | null
+  origin: string
+  /** 어느 대화 · 규칙 · 소스 · 파일인지. */
+  origin_ref: string
+  proposed_by_label: string
+  created_at: string
+  decided_by_label: string
+  decided_at: string | null
+  decision_note: string
+  /** 확정으로 생긴 관계 — 해제되면 비어 있다. */
+  relation_id: string | null
+  /** 이 사람이 확정 · 거절할 수 있나(출발 객체를 수정할 수 있나). */
+  can_decide: boolean
+  /** 이 사람이 철회할 수 있나(제안한 사람 · 시스템 관리자). */
+  can_withdraw: boolean
+}
+
+export interface RelationProposalCreate {
+  relation: string
+  dst_object_id: string
+  properties?: Record<string, unknown>
+  evidence_note?: string
+  valid_from?: string | null
+  valid_to?: string | null
+  confidence?: number | null
+  origin?: ProposalOrigin
+  origin_ref?: string
+  /** 거절된 적 있는 같은 제안도 다시 만든다. */
+  again?: boolean
+}
+
+export interface RelationProposalResult {
+  index: number
+  status: ProposalOutcome
+  message: string
+  proposal?: RelationProposal | null
+  /** `connected` 면 이미 있는 그 관계. */
+  relation_id?: string | null
+  /** `open` 이고 더 높은 확신도로 근거 · 확신도를 바꿨으면 참. */
+  updated: boolean
+  error_code?: string | null
 }
 
 /** 이 객체를 가리키는 기록 — 타입 · 칸 하나의 수(ADR 0011). */
@@ -170,6 +284,8 @@ export interface TreeOut {
   nodes: TreeNode[]
   /** 부모도 자식도 없는 것의 수. **안 보여 주면 눈에서 사라진 채 남는다.** */
   orphan_count: number
+  /** 이 트리의 기준일(ADR 0039) — 안 주면 오늘. 트리가 없으면 null. */
+  as_of?: string | null
 }
 
 /** 일괄 계획의 한 줄 — 행마다 무엇이 되는지. */
@@ -242,6 +358,9 @@ export interface References {
     other_id: string
     other_label: string
     other_type_slug: string
+    /** 유효 기간(ADR 0039) — 삭제하면 지난 · 예정 관계도 함께 해제된다. */
+    valid_from?: string | null
+    valid_to?: string | null
   }[]
   /** 볼 수 없는 부서의 것 — **수만 온다.** */
   hidden_property_refs: number
@@ -284,6 +403,11 @@ export interface HistoryEntry {
     outgoing: boolean
     other_id: string
     other_label: string
+    /** 그 관계의 유효 기간(ADR 0039) — 기간을 달리한 같은 관계가 여럿일 때 어느 것인지. */
+    valid_from?: string | null
+    valid_to?: string | null
+    /** 수정 기록이면 무엇이 바뀌었나 — 속성 · 근거 · 기간의 `{before, after}`. */
+    changed?: Record<string, { before: unknown; after: unknown }>
   } | null
   /** 값 기록에만 있다 — 복원의 목표. */
   snapshot: Snapshot | null
@@ -301,6 +425,12 @@ export interface Condition {
    * 주소는 `nf<번호>.<칸>.<연산>=<값>`. 없거나 0 이면 보통 조건.
    */
   exclude?: number
+  /**
+   * **같은 관계 묶음** 번호(1 부터, ADR 0043) — 같은 번호의 조건은 같은 선 하나(선의 칸 · 상대 ·
+   * 상대의 칸)에서 함께 맞아야 걸린다. 주소는 `fe<번호>.` · 제외 묶음 안이면 `nf<n>.fe<m>.`.
+   * 없거나 0 이면 묶지 않음(「그중 하나라도」).
+   */
+  edge?: number
 }
 
 export type ConditionOp =
@@ -421,7 +551,212 @@ export interface Rollup {
   count: number
   /** 아래에 있지만 값이 빈 객체 수. 이것이 붙어야 합계가 「전부의 합」 으로 안 읽힌다. */
   missing: number
+  /** 모은 대상 객체 수 — 롤업마다 다르다(「말단만」 이면 말단의 수). */
   descendants: number
+  /** 「수량 반영」(ADR 0040) — 아래 객체마다 총수량만큼 셌다. */
+  weighted: boolean
+  /** 「말단만」 — 그 기준일의 트리에서 아래가 없는 객체만 모았다. */
+  leaves_only: boolean
+  /** 「수량 반영」 일 때 아래 관계 중 수량 칸이 빈 것 — 1개로 셌다. */
+  quantity_missing: number
+  /** 값을 못 낸 까닭(트리의 순환 등) — 비었으면 없다. */
+  note: string
+}
+
+/** BOM 전개의 보기(ADR 0040) — 정리 · 단계별 · 어디에 쓰였나. */
+export type ExplodeMode = 'summary' | 'indented' | 'where_used'
+
+/**
+ * 전개의 객체 하나. **볼 수 없거나 삭제된 것은 가린다** — `id` 가 null 이고 이름이 「(볼 수 없는
+ * 객체)」 · 「(삭제된 객체)」 다. 그 객체를 지나 아래(위)는 센다.
+ */
+export interface ExplodeObject {
+  id: string | null
+  label: string
+  key: string | null
+  type_slug: string | null
+  status: string | null
+  hidden: boolean
+  deleted: boolean
+}
+
+/** 전개의 줄 하나 — 보기마다 쓰는 칸이 다르다. */
+export interface ExplodeLine extends ExplodeObject {
+  /** 단계(시작 객체가 0). 정리에서는 가장 얕은 단계. */
+  level: number
+  /** 단계별: 누적 수량 · 정리: 총수량 · 어디에 쓰였나: 이 객체 하나에 시작 객체가 몇 개(그 경로). */
+  total: number
+  /** 단계별 · 어디에 쓰였나 — 그 줄로 오는 관계에 적힌 수량. null 이면 1개로 셌다. */
+  quantity: number | null
+  /** 그 관계가 수량 없음(수량 칸이 비었거나 숫자가 아님 — 1개로 셌다). */
+  quantity_missing: boolean
+  /** 정리 — 가장 깊은 단계 · 경로 수 · 이 객체로 오는 관계 중 수량 없음. */
+  depth_max: number | null
+  paths: number | null
+  missing: number | null
+}
+
+/** 어디에 쓰였나의 맨 위 객체(부모가 없는 것) — 「그것 하나에 시작 객체가 총 몇 개」. */
+export interface ExplodeTop extends ExplodeObject {
+  total: number
+  paths: number
+  /** 가장 먼 단계. */
+  level: number
+}
+
+export interface ExplodeTotals {
+  /** 서로 다른 보이는 객체 수(시작 객체는 뺀다). */
+  objects: number
+  /** 실린 줄 수. */
+  lines: number
+  /** 자르기 전의 전체 줄 수. */
+  lines_total: number
+  /** 따라간 관계 수. */
+  links: number
+  /** 수량 없음 — 수량 칸이 비었거나 숫자가 아닌 관계 수(1개로 셌다). */
+  missing: number
+  /** 지나간 볼 수 없는 객체 수 — 줄로는 가린다. */
+  hidden: number
+  /** 지나간 삭제된 객체 수. */
+  deleted: number
+}
+
+/** BOM 전개(ADR 0040) — 트리 관계의 수량을 경로 따라 곱한 것. */
+export interface ExplodeOut {
+  mode: ExplodeMode
+  /** 시작 객체 — 전개면 뿌리, 어디에 쓰였나면 그 객체. */
+  root: ExplodeObject
+  /** 기준일 — 비워 부르면 서버가 오늘을 싣는다. */
+  as_of: string
+  relation: string
+  relation_label: string
+  parent_end: 'src' | 'dst'
+  /** 관계 종류의 수량 칸. 빈 글자면 모든 관계를 1개로 셌다. */
+  quantity_key: string
+  quantity_label: string
+  lines: ExplodeLine[]
+  /** 어디에 쓰였나만 — 맨 위 객체마다 그것 하나에 시작 객체가 총 몇 개. */
+  tops: ExplodeTop[]
+  totals: ExplodeTotals
+  /** 줄 상한에 닿아 다 싣지 않았다 — `totals.lines_total` 이 전체 줄 수. */
+  truncated: boolean
+}
+
+/**
+ * 계보의 낡음(ADR 0041) — `fresh` 낡지 않음 · `direct` 바로 낡음(원천이 고정 뒤에 바뀜) ·
+ * `upstream` 위에서 낡음(원천 중 하나가 낡음).
+ */
+export type LineageState = 'fresh' | 'direct' | 'upstream'
+export type LineageStaleState = Exclude<LineageState, 'fresh'>
+
+/** 계보 줄의 한 끝 — 볼 수 없는 객체는 `id` 가 null 이고 이름을 가린다. */
+export interface LineageEnd {
+  id: string | null
+  label: string
+  key: string | null
+  type_slug: string
+  type_label: string
+  state: LineageState
+  hidden: boolean
+}
+
+/** 계보 선 하나 — **원천 → 파생물**로 돌려 세운 것(관계 종류의 방향과 상관없이). */
+export interface LineageLine {
+  relation_id: string
+  relation: string
+  relation_label: string
+  /** 시작 객체에서 몇 걸음 — 1 이 바로 붙은 선. */
+  depth: number
+  source: LineageEnd
+  derived: LineageEnd
+  /** 원천 타입의 개정 칸 — 비었으면 수정 시각으로 판정한 선이다. */
+  revision_key: string
+  /** 고정 개정 — 맺을 때 · 다시 고정할 때의 원천 개정. */
+  pinned_revision: string | null
+  /** 고정 시각 — 그 순간 원천의 수정 시각. */
+  pinned_at: string | null
+  /** 원천의 지금 개정. */
+  revision: string | null
+  source_updated_at: string | null
+  /** 이 선이 바로 낡았나 — 원천이 고정 뒤에 바뀌었다. */
+  stale: boolean
+  /** 낡았으면 그 까닭 — 「메시 M-12 의 개정 Rev.B → Rev.C」. */
+  reason: string
+}
+
+/** 객체 하나의 계보 — 위(원천 사슬) · 아래(파생물 사슬), 줄마다 낡음과 까닭. */
+export interface LineageOut {
+  object_id: string
+  type_slug: string
+  label: string
+  state: LineageState
+  /** 낡았으면 까닭들 — 바로(선마다) · 위에서(낡은 원천마다). */
+  reasons: string[]
+  /** 이 타입의 개정 칸 · 이 객체의 지금 개정. */
+  revision_key: string
+  revision: string | null
+  /** 원천 사슬 — 얕은 것부터. */
+  up: LineageLine[]
+  up_total: number
+  /** 파생물 사슬 — 얕은 것부터. */
+  down: LineageLine[]
+  down_total: number
+  /** 위 · 아래 중 하나라도 줄 상한(500)에서 잘렸다. */
+  truncated: boolean
+  /** 영향 범위 — 이것으로 만든 것 n개(낡음 m개). */
+  impact: { derived: number; stale: number }
+  /** 이 사람이 이 객체의 원천 관계를 다시 고정할 수 있나(표시일 뿐 — 서버가 다시 본다). */
+  can_repin: boolean
+  /** 이 설치의 계보 관계 종류(slug) — 비면 계보가 없는 설치. */
+  kinds: string[]
+  /** 빈 결과의 까닭. */
+  note: string
+}
+
+/** 다시 고정의 근거 — `checked` 영향 없음 확인 · `rebuilt` 다시 만들었음. */
+export type RepinBasis = 'checked' | 'rebuilt'
+
+export interface LineageRepinRequest {
+  /** 다시 고정할 원천 관계 — 비우면 이 객체의 원천 관계 전부. */
+  relation_ids?: string[]
+  basis: RepinBasis
+  note?: string
+}
+
+export interface LineagePin {
+  revision: string | null
+  at: string | null
+}
+
+export interface LineageRepinOut {
+  /** 고정이 바뀐 관계 — 이미 지금 값이던 것은 안 든다(`unchanged` 로 센다). */
+  changed: {
+    relation_id: string
+    relation: string
+    source_id: string
+    source_label: string
+    before: LineagePin
+    after: LineagePin
+  }[]
+  unchanged: number
+  /** 다시 고정한 뒤의 계보. */
+  lineage: LineageOut
+}
+
+/** 전개의 기준 — 화면과 파일이 **같은 주소**를 쓴다. */
+export interface ExplodeOptions {
+  mode: ExplodeMode
+  /** 기준일(`YYYY-MM-DD`). 비우면 오늘. */
+  asOf?: string | null
+  /** 줄 상한(1~5,000). 비우면 서버의 상한. */
+  limit?: number
+}
+
+function explodeParams(options: ExplodeOptions): URLSearchParams {
+  const params = new URLSearchParams({ mode: options.mode })
+  if (options.asOf) params.set('as_of', options.asOf)
+  if (options.limit) params.set('limit', String(options.limit))
+  return params
 }
 
 export interface ObjectQuery {
@@ -441,6 +776,11 @@ export interface ObjectQuery {
   status?: string | null
   /** 인터페이스 목록에서 그중 몇 타입만(ADR 0006). `types=a|b` 로 나간다. */
   types?: string[]
+  /**
+   * 기준일(`YYYY-MM-DD`, ADR 0039) — 그날 유효한 관계만 따라간다(하위 포함 · 관계 조건 · 관계
+   * 기준 · 계층 축). 비우면 오늘. 목록 · 통계 · 분포 · 내보내기가 같은 값을 싣는다.
+   */
+  asOf?: string | null
 }
 
 function queryString(query: ObjectQuery): string {
@@ -456,6 +796,7 @@ function queryString(query: ObjectQuery): string {
   }
   if (query.status) params.set('status', query.status)
   if (query.types?.length) params.set('types', query.types.join('|'))
+  if (query.asOf) params.set('as_of', query.asOf)
   for (const one of query.conditions ?? []) {
     params.append(conditionKey(one), one.value)
   }
@@ -853,6 +1194,8 @@ export interface LinkedField {
   multi: boolean
   enum_options: string[] | null
   ref_type_slug: string | null
+  /** 선의 칸(`out.<관계>~<관계 속성>`, ADR 0043) — 같은 관계 묶음으로 묶을 수 있다. */
+  edge?: boolean
 }
 
 export const objectApi = {
@@ -1015,16 +1358,70 @@ export const objectApi = {
   /** 사람이 붙인 다른 이름을 통째로. 같은 타입의 다른 객체가 쓰는 별칭이면 거절된다. */
   setAliases: (typeSlug: string, id: string, aliases: string[]) =>
     api.put<ObjectRow>(`/objects/${typeSlug}/${id}/aliases`, { aliases }),
-  /** 「아래 전부」 를 모은 수 — `list_view.rollups` 가 정한 대로. 없으면 빈 목록. */
-  rollup: (typeSlug: string, id: string) => api.get<Rollup[]>(`/objects/${typeSlug}/${id}/rollup`),
-  tree: (typeSlug: string, opts: { parent?: string; orphans?: boolean } = {}) => {
+  /**
+   * 「아래 전부」 를 모은 수 — `list_view.rollups` 가 정한 대로. 없으면 빈 목록. 기준일
+   * (`asOf`, 비우면 오늘)에 유효한 관계로 펼친다(ADR 0039).
+   */
+  rollup: (typeSlug: string, id: string, asOf?: string | null) =>
+    api.get<Rollup[]>(
+      `/objects/${typeSlug}/${id}/rollup${asOf ? `?as_of=${encodeURIComponent(asOf)}` : ''}`,
+    ),
+  /**
+   * BOM 전개(ADR 0040) — 트리 관계의 **수량을 경로 따라 곱한** 줄. 기준일(`asOf`, 비우면 오늘)에
+   * 유효한 관계로 펼친다. 트리가 없으면(OBJECTS-0131) · 순환하면(OBJECTS-0130) 409.
+   */
+  explode: (typeSlug: string, id: string, options: ExplodeOptions) =>
+    api.get<ExplodeOut>(`/objects/${typeSlug}/${id}/explode?${explodeParams(options).toString()}`),
+  /** 전개를 파일로 — 화면의 표와 같은 열 · 같은 순서. 잘렸으면 파일 끝에 그렇다고 적힌다. */
+  exportExplode: (
+    typeSlug: string,
+    id: string,
+    options: ExplodeOptions,
+    format: 'csv' | 'xlsx',
+    filename: string,
+  ) => {
+    const params = explodeParams(options)
+    params.set('format', format)
+    return downloadFile(`/objects/${typeSlug}/${id}/explode/export?${params.toString()}`, filename)
+  },
+  /**
+   * 계보(ADR 0041) — 위(원천 사슬) · 아래(파생물 사슬), 줄마다 낡음과 까닭, 이 객체의 낡음, 영향
+   * 범위. 오늘 유효한 계보 관계만, 위 · 아래 각 500줄에서 자른다.
+   */
+  lineage: (typeSlug: string, id: string) =>
+    api.get<LineageOut>(`/objects/${typeSlug}/${id}/lineage`),
+  /**
+   * 다시 고정 — 이 파생물의 원천 관계의 고정을 원천의 지금 값으로. 원천 객체는 안 바뀌므로 위에서
+   * 낡음은 풀리지 않는다. 권한이 없으면 403(OBJECTS-0134).
+   */
+  repinLineage: (typeSlug: string, id: string, body: LineageRepinRequest) =>
+    api.post<LineageRepinOut>(`/objects/${typeSlug}/${id}/lineage/repin`, body),
+  tree: (
+    typeSlug: string,
+    opts: { parent?: string; orphans?: boolean; asOf?: string | null } = {},
+  ) => {
     const params = new URLSearchParams()
     if (opts.parent) params.set('parent', opts.parent)
     if (opts.orphans) params.set('orphans', 'true')
+    if (opts.asOf) params.set('as_of', opts.asOf)
     const text = params.toString()
     return api.get<TreeOut>(`/objects/${typeSlug}/tree${text ? `?${text}` : ''}`)
   },
-  profile: (typeSlug: string, id: string) => api.get<ObjectProfile>(`/objects/${typeSlug}/${id}`),
+  /**
+   * 상세. 관련 객체는 기준일(`asOf`, 비우면 오늘)에 유효한 관계만 — `allPeriods` 면 지난 · 예정
+   * 관계까지 모두(줄마다 `period_state`).
+   */
+  profile: (
+    typeSlug: string,
+    id: string,
+    opts: { asOf?: string | null; allPeriods?: boolean } = {},
+  ) => {
+    const params = new URLSearchParams()
+    if (opts.asOf) params.set('as_of', opts.asOf)
+    if (opts.allPeriods) params.set('all_periods', 'true')
+    const text = params.toString()
+    return api.get<ObjectProfile>(`/objects/${typeSlug}/${id}${text ? `?${text}` : ''}`)
+  },
   create: (typeSlug: string, body: Record<string, unknown>) =>
     api.post<ObjectRow>(`/objects/${typeSlug}`, body),
   update: (typeSlug: string, id: string, body: Record<string, unknown>) =>
@@ -1067,6 +1464,24 @@ export const objectApi = {
   ) => api.patch<RelatedObject>(`/objects/${typeSlug}/${id}/relations/${relationId}`, body),
   removeRelation: (typeSlug: string, id: string, relationId: string) =>
     api.delete<void>(`/objects/${typeSlug}/${id}/relations/${relationId}`),
+  /** 이 객체에 걸린 **열린** 제안(ADR 0042) — 양방향, 새것부터. 저쪽 끝을 못 보면 빠진다. */
+  relationProposals: (typeSlug: string, id: string) =>
+    api.get<RelationProposal[]>(`/objects/${typeSlug}/${id}/relation-proposals`),
+  /**
+   * 이 객체에서 출발하는 관계를 **제안**한다 — 양 끝을 볼 수만 있으면 된다. 만들지 않은 까닭(이미
+   * 연결됨 · 이미 열린 제안 · 거절된 적 있음)도 결과로 온다.
+   */
+  proposeRelation: (typeSlug: string, id: string, body: RelationProposalCreate) =>
+    api.post<RelationProposalResult>(`/objects/${typeSlug}/${id}/relation-proposals`, body),
+  /** 확정 — 「관계 추가」 와 같은 검사. 막히면 409(OBJECTS-0141 · 0143)와 까닭. */
+  acceptProposal: (proposalId: string, note = '') =>
+    api.post<RelationProposal>(`/objects/relation-proposals/${proposalId}/accept`, { note }),
+  /** 거절 — 까닭은 같은 제안이 다시 올 때 그대로 보인다. */
+  rejectProposal: (proposalId: string, note = '') =>
+    api.post<RelationProposal>(`/objects/relation-proposals/${proposalId}/reject`, { note }),
+  /** 철회 — 제안한 사람이 열린 제안을 삭제한다. */
+  withdrawProposal: (proposalId: string) =>
+    api.delete<void>(`/objects/relation-proposals/${proposalId}`),
 
   years: (typeSlug: string, id: string) => api.get<number[]>(`/objects/${typeSlug}/${id}/years`),
   /** **통째로** 정한다 — 화면이 보여 준 것과 저장되는 것이 같아야 한다. */

@@ -56,6 +56,26 @@ _RECORDED_METHODS = {"POST", "PATCH", "PUT", "DELETE"}
 #: 가득 채우고, 그때 접근 로그는 조회할 수 없는 크기가 된다.
 _SKIP = ("/api/health", "/api/notifications/unread-count")
 
+#: 경로에 id 가 든 폴링 경로 — **맞은 라우트의 틀**로 견준다
+#: (`/api/ext/x/meetings/{meeting_id}/pulse`). `_SKIP` 의 글자 그대로는 회의마다 다른 주소를
+#: 못 맞춘다. 도메인 · 확장이 등록한다(`register_polling_route`) — 공통이 확장의 경로를 적으면
+#: 방향이 거꾸로 선다.
+_SKIP_ROUTES: set[str] = set()
+
+
+def register_polling_route(template: str) -> None:
+    """폴링 경로(틀 — `{…}` 그대로)를 접근 로그 · 요청 시간 기록에서 뺀다. 같은 것을 두 번
+    넣어도 된다(`create_app()` 은 시험에서 여러 번 불린다)."""
+    _SKIP_ROUTES.add(template)
+
+
+def _skipped(scope: Scope, path: str) -> bool:
+    if path in _SKIP:
+        return True
+    # 틀은 라우터가 맞춘 뒤에야 안다 — 요청을 처리한 다음에 묻는다.
+    return bool(_SKIP_ROUTES) and route_template(scope, path) in _SKIP_ROUTES
+
+
 #: 맞는 라우트가 없던 요청의 경로 틀. **원 경로를 그대로 묶음 열쇠로 쓰지 않는다** — 아무
 #: 주소나 두드리는 요청 하나하나가 묶음을 늘리면 집계 화면이 그것으로 찬다.
 UNMATCHED_ROUTE = "(없는 경로)"
@@ -152,7 +172,7 @@ class AccessLogMiddleware:
         if base and (path == base or path.startswith(base + "/")):
             path = path[len(base) :] or "/"
         method = str(scope.get("method", ""))
-        timed = path.startswith("/api/") and path not in _SKIP and method != "OPTIONS"
+        timed = path.startswith("/api/") and method != "OPTIONS"
         received_at = datetime.now(UTC)
         started = time.perf_counter()
         seen = _Response()
@@ -181,13 +201,14 @@ class AccessLogMiddleware:
         except BaseException:
             # 처리 못 한 예외의 500 은 바깥(ServerErrorMiddleware)이 만든다 — 느려서 터진
             # 요청이 가장 보고 싶은 줄이라 여기서도 남긴다.
-            if timed:
+            if timed and not _skipped(scope, path):
                 self._time(scope, path, method, received_at, started, seen, failed=True)
             raise
-        if timed:
+        quiet = _skipped(scope, path)
+        if timed and not quiet:
             self._time(scope, path, method, received_at, started, seen, failed=False)
 
-        if not path.startswith("/api/") or path in _SKIP:
+        if not path.startswith("/api/") or quiet:
             return
         if method not in _RECORDED_METHODS:
             return

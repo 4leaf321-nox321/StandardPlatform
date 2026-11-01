@@ -25,6 +25,7 @@ from app.extensions.caegroup.models import (
     CaeDtSetting,
     CaeDtStaff,
 )
+from app.extensions.jajuverify.models import JvGroup, JvMeeting, JvPresence, JvRow
 from app.modules.accounts.models import User
 from app.modules.audit.models import AccessLog, AuditEntry, CutQuestion, RequestTiming
 from app.modules.auth.models import PersonalAccessToken, PortalLaunchJti, RefreshToken
@@ -32,6 +33,16 @@ from app.modules.board.models import BoardComment, BoardPost
 from app.modules.bundles.models import BundleRun, BundleUndoEntry
 from app.modules.datasources.models import DataSource, DataSourceRun
 from app.modules.files.models import Attachment, AttachmentTicket
+from app.modules.graph.models import (
+    MapCount,
+    MapCounted,
+    MapFrozen,
+    MapHubKey,
+    MapLayout,
+    MapLink,
+    MapMaster,
+    MapPoint,
+)
 from app.modules.jobs.models import Job, JobFile, WorkerHeartbeat
 from app.modules.metrics.models import (
     HomeMetric,
@@ -55,6 +66,7 @@ from app.modules.objects.models import (
     ObjectTypeCount,
     ObjectWatch,
     ObjectYear,
+    RelationProposal,
     SavedView,
     SearchMiss,
 )
@@ -96,6 +108,18 @@ __all__ = [
     "HomeMetric",
     "Job",
     "JobFile",
+    "JvGroup",
+    "JvMeeting",
+    "JvPresence",
+    "JvRow",
+    "MapCount",
+    "MapCounted",
+    "MapFrozen",
+    "MapHubKey",
+    "MapLayout",
+    "MapLink",
+    "MapMaster",
+    "MapPoint",
     "MetricAlert",
     "MetricAlertEvent",
     "MetricDef",
@@ -123,6 +147,7 @@ __all__ = [
     "PortalLaunchJti",
     "PropertyDef",
     "RefreshToken",
+    "RelationProposal",
     "RelationType",
     "RequestTiming",
     "ReviewDecision",

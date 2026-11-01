@@ -269,6 +269,16 @@ class ObjectType(Base):
     usage: Mapped[str] = mapped_column(String(16), default="axis", server_default="axis")
     """축(`axis`)인가 기록(`log`)인가 — `USAGES`. 표에서 만든 타입은 기본이 기록이다."""
 
+    revision_key: Mapped[str] = mapped_column(String(48), default="", server_default="")
+    """**개정 칸**(ADR 0041) — 이 타입의 판(「Rev.C」 · 「3」)을 적는 속성 하나의 키(글자 ·
+    고르기 · 숫자, 값 하나). 비우면 개정 칸 없음.
+
+    계보 관계(`RelationType.lineage_source`)로 이 타입의 객체에서 무엇을 만들면, 선을 맺는 순간
+    이 칸의 값을 선에 박는다(`object_relations.pinned_revision`). 뒤에 이 값이 바뀌면 그
+    파생물이 「낡음」 이다 — 이름 · 설명 · 다른 칸을 고친 것으로는 안 낡는다. **없으면 객체의
+    바뀐 때(`updated_at`)로 대신 판정한다** — 무엇을 고쳐도(별칭 하나를 더해도) 낡음이 되는
+    잡음이 있다. 검사는 `ontology/revision.py` 한 곳이다."""
+
     list_view: Mapped[dict[str, Any]] = mapped_column(JSONB, default=dict, server_default="{}")
     """목록 화면의 모양 — 열·정렬·검색·필터.
 
@@ -492,6 +502,32 @@ class RelationType(Base):
     cardinality: Mapped[str] = mapped_column(
         String(20), default="many_to_many", server_default="many_to_many"
     )
+
+    effectivity: Mapped[bool] = mapped_column(Boolean, default=False, server_default="false")
+    """**유효 기간을 받는가**(ADR 0039). 켜면 이 종류의 선이 `valid_from`(포함) · `valid_to`
+    (제외) 날짜를 받고, 같은 두 객체 사이에 기간을 달리한 선이 여럿일 수 있다 — BOM 에서 같은
+    부품이 기간을 바꿔 다시 들어온다. 끄면 예전 그대로 같은 선은 하나다.
+
+    선마다 이 값의 사본(`object_relations.effectivity`)을 DB 트리거가 맞춘다 — 두 제약(같은 선
+    하나 · 기간 겹침 금지)이 그 사본으로 갈린다(`objects/effectivity.py`)."""
+
+    quantity_key: Mapped[str] = mapped_column(String(48), default="", server_default="")
+    """**수량 칸**(ADR 0040) — 이 종류의 **숫자** 관계 속성 하나의 키. 전개(BOM)가 선마다
+    「부모 하나에 자식 몇 개」 로 읽고 경로를 따라 곱한다(`objects/explode.py`). 비우면 모든
+    선이 1개다.
+
+    저장할 때 그 칸이 이 종류의 숫자 · 단일 값 속성인지 본다(`ontology/quantity.py`). 그 속성을
+    숫자 아닌 것으로 바꾸거나 여러 값으로 바꾸는 정의는 거절한다 — 바꾸면 전개가 모든 선을
+    「수량 없음」(1개)으로 세고, 그 총수량은 틀린 수인데 아무 데도 안 뜬다."""
+
+    lineage_source: Mapped[str] = mapped_column(String(8), default="", server_default="")
+    """**계보 관계인가, 어느 끝이 원천인가**(ADR 0041) — `""`(계보 아님) · `"src"` · `"dst"`.
+    원천은 만드는 데 쓰인 것(도면 · 메시)이고 다른 끝이 파생물(메시 · 해석 결과)이다.
+
+    계보 관계의 선은 맺는 순간 원천의 지금 개정 값과 바뀐 때를 박고(`pinned_revision` ·
+    `pinned_at` — DB 트리거, `objects/effectivity.py`), 원천이 그 뒤에 바뀌면 파생물이 낡음이
+    된다(`objects/lineage.py`). 방향이 있는 종류만 된다 — 방향 없는 선은 어느 끝이 원천인지
+    정할 수 없다."""
 
     src_type_slugs: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)
     dst_type_slugs: Mapped[list[str] | None] = mapped_column(JSONB, nullable=True)

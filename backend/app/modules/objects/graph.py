@@ -13,6 +13,13 @@
 수도 있고 `contains`(부모 -> 자식)로 적을 수도 있다. 그래서 트리를 그리는 쪽이
 **부모가 어느 끝인지**를 함께 준다(`parent_end`). 안 주고 하나로 정하면, 반대로
 정의한 사람의 트리가 **뒤집힌 채로 그려지고 그것을 말해 주는 자리가 없다.**
+
+## 기준일
+
+관계(`object_relations`)를 읽는 함수는 모두 기준일 `at` 을 **꼭** 받는다 — 그날 살아 있는
+선만 따라간다(유효 기간, ADR 0039). 판정은 `edges.alive` 한 곳이고, 여기는 부르기만 한다.
+기본값을 두지 않은 까닭: 기본값이 있으면 새로 부르는 자리가 기준일을 잊어도 조용히 돌고, 그
+자리만 지난 선까지 센다. `None` 은 기간을 안 본다(모두).
 """
 
 from __future__ import annotations
@@ -20,6 +27,7 @@ from __future__ import annotations
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass
+from datetime import date
 from typing import Any, Literal
 
 from sqlalchemy import any_, case, false, func, literal, or_, select, text
@@ -29,6 +37,7 @@ from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql import ColumnElement
 
 from app.modules.accounts.models import User
+from app.modules.objects import edges as edge_rule
 from app.modules.objects import refedges, typecounts
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRef, ObjectRelation
 from app.shared.batches import chunks
@@ -64,7 +73,9 @@ def tree_spec(list_view: dict[str, Any] | None) -> tuple[str | None, ParentEnd]:
     return (relation if isinstance(relation, str) and relation else None, parent_end)
 
 
-def subtree_ids(db: Session, tree: Tree, roots: list[uuid.UUID]) -> list[uuid.UUID]:
+def subtree_ids(
+    db: Session, tree: Tree, roots: list[uuid.UUID], *, at: date | None
+) -> list[uuid.UUID]:
     """roots 와 **그 아래 전부**(깊이 MAX_DEPTH) — 조건의 「하위 전체」 가 먼저 뽑아
     `any_of` 로 건다.
 
@@ -101,6 +112,7 @@ def subtree_ids(db: Session, tree: Tree, roots: list[uuid.UUID]) -> list[uuid.UU
                 step_rel.relation == tree.relation,
                 getattr(step_rel, parent_col) == walk.c.id,
                 walk.c.depth < MAX_DEPTH,
+                edge_rule.alive(step_rel, at),
             )
         )
     return list(dict.fromkeys(db.scalars(select(walk.c.id))))
@@ -119,7 +131,7 @@ class Levels:
     두던 때는 닿지 않는 노드의 칸을 누르면 그 아래 기록까지 섞였다(2026-10-24 점검)."""
 
 
-def levels(db: Session, tree: Tree, level: int) -> Levels:
+def levels(db: Session, tree: Tree, level: int, *, at: date | None) -> Levels:
     """뿌리에서 아래로 한 번 훑어 노드마다 **그 단계의 조상**을 찾는다(뿌리가 0단, 깊이
     MAX_DEPTH).
 
@@ -138,7 +150,7 @@ def levels(db: Session, tree: Tree, level: int) -> Levels:
         key = ""
         table = "object_relations"
         parent_col, child_col = _ends(tree.parent_end)
-        edge = "e.relation = :rel"
+        edge = f"e.relation = :rel AND {edge_rule.alive_sql('e', at)}"
     rows = db.execute(
         text(f"""
             WITH RECURSIVE down(id, depth, anc) AS (
@@ -203,7 +215,12 @@ def _ends(parent_end: ParentEnd) -> tuple[str, str]:
 
 
 def child_ids(
-    db: Session, *, relation: str, parent_id: uuid.UUID, parent_end: ParentEnd
+    db: Session,
+    *,
+    relation: str,
+    parent_id: uuid.UUID,
+    parent_end: ParentEnd,
+    at: date | None,
 ) -> list[uuid.UUID]:
     """바로 아래 한 단계. **한 단계씩 읽는 것이 트리의 기본**이다 — 통째로
     불러오면 부품 5천 개짜리에서 첫 화면이 안 뜬다."""
@@ -219,6 +236,7 @@ def child_ids(
              WHERE r.{parent_col} = :parent
                AND r.relation = :rel
                AND o.deleted_at IS NULL
+               AND {edge_rule.alive_sql("r", at)}
         """),
         {"parent": str(parent_id), "rel": relation},
     )
@@ -231,6 +249,7 @@ def descendant_ids(
     relation: str,
     root_id: uuid.UUID,
     parent_end: ParentEnd,
+    at: date | None,
     max_depth: int = MAX_DEPTH,
 ) -> list[uuid.UUID]:
     """그 아래 **전부**(자기 자신은 뺀다).
@@ -243,17 +262,18 @@ def descendant_ids(
             db, relation=relation, root_id=root_id, max_depth=max_depth
         )
     parent_col, child_col = _ends(parent_end)
+    alive = edge_rule.alive_sql("r", at)
     rows = db.execute(
         text(f"""
             WITH RECURSIVE walk(id, depth) AS (
                 SELECT r.{child_col}, 1
                   FROM object_relations r
-                 WHERE r.{parent_col} = :root AND r.relation = :rel
+                 WHERE r.{parent_col} = :root AND r.relation = :rel AND {alive}
                 UNION
                 SELECT r.{child_col}, w.depth + 1
                   FROM object_relations r
                   JOIN walk w ON r.{parent_col} = w.id
-                 WHERE r.relation = :rel AND w.depth < :max_depth
+                 WHERE r.relation = :rel AND w.depth < :max_depth AND {alive}
             )
             SELECT DISTINCT w.id
               FROM walk w
@@ -271,6 +291,7 @@ def ancestor_ids(
     relation: str,
     object_id: uuid.UUID,
     parent_end: ParentEnd,
+    at: date | None,
     max_depth: int = MAX_DEPTH,
 ) -> list[uuid.UUID]:
     """위로 올라가며 만나는 것 전부. 상세 화면의 경로(빵부스러기)가 쓴다."""
@@ -279,17 +300,18 @@ def ancestor_ids(
             db, relation=relation, node_id=object_id, max_depth=max_depth
         )
     parent_col, child_col = _ends(parent_end)
+    alive = edge_rule.alive_sql("r", at)
     rows = db.execute(
         text(f"""
             WITH RECURSIVE walk(id, depth) AS (
                 SELECT r.{parent_col}, 1
                   FROM object_relations r
-                 WHERE r.{child_col} = :start AND r.relation = :rel
+                 WHERE r.{child_col} = :start AND r.relation = :rel AND {alive}
                 UNION
                 SELECT r.{parent_col}, w.depth + 1
                   FROM object_relations r
                   JOIN walk w ON r.{child_col} = w.id
-                 WHERE r.relation = :rel AND w.depth < :max_depth
+                 WHERE r.relation = :rel AND w.depth < :max_depth AND {alive}
             )
             SELECT DISTINCT w.id
               FROM walk w
@@ -301,12 +323,90 @@ def ancestor_ids(
     return [row.id for row in rows]
 
 
+@dataclass(frozen=True)
+class TreeLink:
+    """트리의 선 하나 — 부모 · 자식과 그 선의 수량 칸 값(ADR 0040)."""
+
+    parent: uuid.UUID
+    child: uuid.UUID
+    quantity: Any
+    """선의 수량 칸에 적힌 값 그대로(JSON) — 수량 칸을 안 줬거나 참조 칸 트리면 None."""
+
+
+def tree_links(
+    db: Session,
+    tree: Tree,
+    start: uuid.UUID,
+    *,
+    up: bool,
+    at: date | None,
+    quantity_key: str = "",
+    max_depth: int = MAX_DEPTH,
+) -> list[TreeLink]:
+    """start 에서 트리를 따라 닿는 **선 전부**(한 번씩) — 아래로, 또는 `up` 이면 위로.
+    전개(BOM, `explode.py`)가 이것을 받아 수량을 경로 따라 곱한다.
+
+    **경로가 아니라 선의 집합이다.** 같은 하위 조립품을 여러 곳에서 쓰면 경로 수는 곱으로
+    늘지만(10곳 x 10곳 x 10곳이면 천 갈래) 선은 한 번씩이다 — 경로를 SQL 에서 늘어놓으면 줄
+    수가 그 곱이 된다. 닿는 노드는 `descendant_ids` · `ancestor_ids` 와 같다: 같은 깊이 상한,
+    같은 판정(`edges.alive_sql`), **지운 객체도 지나간다**(그 아래는 닿는다 — 거르는 것은
+    부르는 쪽).
+    선은 깊이 `max_depth` 보다 얕은 노드에서 나간 것만이다(그 너머의 노드는 닿지 않는다).
+    """
+    if refedges.is_ref(tree.relation):
+        # 참조 칸 트리 — 칸에는 선의 칸이 없다. 수량은 늘 비어 있다(전개가 1개로 센다).
+        key = tree.relation[len(refedges.PREFIX) :].split(".", 1)[1]
+        table = "object_refs"
+        parent_col, child_col = {"dst": ("dst_id", "src_id"), "src": ("src_id", "dst_id")}[
+            tree.parent_end
+        ]
+        edge = "e.key = :key AND e.src_type_id = CAST(:type AS uuid)"
+        amount = "NULL"
+    else:
+        key = ""
+        table = "object_relations"
+        parent_col, child_col = _ends(tree.parent_end)
+        edge = f"e.relation = :rel AND {edge_rule.alive_sql('e', at)}"
+        amount = "e.properties -> CAST(:qkey AS text)" if quantity_key else "NULL"
+    near, far = (child_col, parent_col) if up else (parent_col, child_col)
+    rows = db.execute(
+        text(f"""
+            WITH RECURSIVE walk(id, depth) AS (
+                SELECT CAST(:start AS uuid), 0
+                -- UNION(ALL 아님) — 같은 (노드, 깊이)로 모이는 길을 한 줄로 접는다(`levels`).
+                UNION
+                SELECT e.{far}, w.depth + 1
+                  FROM {table} e
+                  JOIN walk w ON e.{near} = w.id
+                 WHERE {edge} AND w.depth < :max_depth
+            )
+            SELECT e.{parent_col} AS parent, e.{child_col} AS child, {amount} AS quantity
+              FROM {table} e
+              JOIN (SELECT DISTINCT id FROM walk WHERE depth < :max_depth) w
+                ON e.{near} = w.id
+             WHERE {edge}
+        """),
+        {
+            "start": str(start),
+            "rel": tree.relation,
+            "key": key,
+            "type": str(tree.type_id),
+            "qkey": quantity_key,
+            "max_depth": max_depth,
+        },
+    )
+    return [
+        TreeLink(parent=row.parent, child=row.child, quantity=row.quantity) for row in rows
+    ]
+
+
 def child_counts(
     db: Session,
     *,
     relation: str,
     parent_ids: list[uuid.UUID],
     parent_end: ParentEnd,
+    at: date | None,
     user: User | None = None,
 ) -> dict[uuid.UUID, int]:
     """여러 노드의 자식 수를 **한 번에** 센다.
@@ -332,6 +432,7 @@ def child_counts(
                 ObjectRelation.relation == relation,
                 parent_col.in_(batch),
                 ObjectInstance.deleted_at.is_(None),
+                edge_rule.alive(ObjectRelation, at),
             )
             .group_by(parent_col)
         )
@@ -348,6 +449,7 @@ def parentless_ids(
     relation: str,
     type_id: uuid.UUID,
     parent_end: ParentEnd,
+    at: date | None,
     user: User | None = None,
 ) -> list[uuid.UUID]:
     """부모가 없는 것들 — 트리의 꼭대기 후보.
@@ -364,7 +466,11 @@ def parentless_ids(
     _, child_col = _columns(parent_end)
     has_parent = (
         select(ObjectRelation.id)
-        .where(child_col == ObjectInstance.id, ObjectRelation.relation == relation)
+        .where(
+            child_col == ObjectInstance.id,
+            ObjectRelation.relation == relation,
+            edge_rule.alive(ObjectRelation, at),
+        )
         .exists()
     )
     stmt = select(ObjectInstance.id).where(
@@ -408,6 +514,9 @@ class Edge:
     dst_type: str | None = None
     """링크(`object_links`)만 채운다 — 원 표의 행은 id 만으로는 어느 타입인지 모른다
     (부서를 비추는 타입이 둘일 수 있다). 관계는 객체 행이 타입을 안다."""
+    valid_from: date | None = None
+    valid_to: date | None = None
+    """유효 기간(ADR 0039) — 관계만. 그림 · 길이 선마다 기간을 적는다."""
 
 
 def _ends_of(
@@ -426,6 +535,7 @@ def neighbor_edges(
     frontier: list[uuid.UUID],
     user: User,
     fanout: int,
+    at: date | None,
     relations: list[str] | None = None,
     type_ids: list[uuid.UUID] | None = None,
 ) -> list[Edge]:
@@ -442,6 +552,7 @@ def neighbor_edges(
         or_(rel.src_object_id.in_(frontier), rel.dst_object_id.in_(frontier)),
         obj.deleted_at.is_(None),
         visible_owner_clause(user, obj.owner_workspace_id),
+        edge_rule.alive(rel, at),
     ]
     if relations:
         conditions.append(rel.relation.in_(relations))
@@ -453,6 +564,8 @@ def neighbor_edges(
             rel.relation,
             rel.src_object_id,
             rel.dst_object_id,
+            rel.valid_from,
+            rel.valid_to,
             func.row_number().over(partition_by=anchor, order_by=rel.created_at).label("rn"),
         )
         .select_from(rel)
@@ -462,13 +575,25 @@ def neighbor_edges(
     )
     rows = db.execute(select(ranked).where(ranked.c.rn <= fanout))
     return [
-        Edge(id=r.id, relation=r.relation, src=r.src_object_id, dst=r.dst_object_id)
+        Edge(
+            id=r.id,
+            relation=r.relation,
+            src=r.src_object_id,
+            dst=r.dst_object_id,
+            valid_from=r.valid_from,
+            valid_to=r.valid_to,
+        )
         for r in rows
     ]
 
 
 def induced_edges(
-    db: Session, *, ids: list[uuid.UUID], limit: int, relations: list[str] | None = None
+    db: Session,
+    *,
+    ids: list[uuid.UUID],
+    limit: int,
+    at: date | None,
+    relations: list[str] | None = None,
 ) -> list[Edge]:
     """양 끝이 모두 ids 안인 관계 — **이미 화면에 있는 노드끼리의 선.**
 
@@ -478,22 +603,42 @@ def induced_edges(
     if not ids:
         return []
     rel = ObjectRelation
-    conditions = [rel.src_object_id.in_(ids), rel.dst_object_id.in_(ids)]
+    conditions = [
+        rel.src_object_id.in_(ids),
+        rel.dst_object_id.in_(ids),
+        edge_rule.alive(rel, at),
+    ]
     if relations:
         conditions.append(rel.relation.in_(relations))
     rows = db.execute(
-        select(rel.id, rel.relation, rel.src_object_id, rel.dst_object_id)
+        select(
+            rel.id,
+            rel.relation,
+            rel.src_object_id,
+            rel.dst_object_id,
+            rel.valid_from,
+            rel.valid_to,
+        )
         .where(*conditions)
         .order_by(rel.created_at)
         .limit(limit)
     )
     return [
-        Edge(id=r.id, relation=r.relation, src=r.src_object_id, dst=r.dst_object_id)
+        Edge(
+            id=r.id,
+            relation=r.relation,
+            src=r.src_object_id,
+            dst=r.dst_object_id,
+            valid_from=r.valid_from,
+            valid_to=r.valid_to,
+        )
         for r in rows
     ]
 
 
-def degree_counts(db: Session, *, ids: list[uuid.UUID], user: User) -> dict[uuid.UUID, int]:
+def degree_counts(
+    db: Session, *, ids: list[uuid.UUID], user: User, at: date | None
+) -> dict[uuid.UUID, int]:
     """각 노드에 걸린 **보이는** 관계의 수. 화면이 「+N 더」 를 적는 근거다."""
     if not ids:
         return {}
@@ -513,6 +658,7 @@ def degree_counts(db: Session, *, ids: list[uuid.UUID], user: User) -> dict[uuid
                 mine.in_(ids),
                 obj.deleted_at.is_(None),
                 visible_owner_clause(user, obj.owner_workspace_id),
+                edge_rule.alive(rel, at),
             )
             .group_by(mine)
         )
@@ -529,7 +675,7 @@ class TypeEdge:
     count: int
 
 
-def type_edge_counts(db: Session, *, user: User) -> list[TypeEdge]:
+def type_edge_counts(db: Session, *, user: User, at: date | None) -> list[TypeEdge]:
     """타입 사이에 실제로 몇 개의 관계가 걸려 있나 — **정의 그래프의 선 굵기.**
 
     객체가 백만 개여도 답은 (관계 종류 x 타입 쌍) 줄이다. 그래서 이것이 그래프
@@ -550,6 +696,7 @@ def type_edge_counts(db: Session, *, user: User) -> list[TypeEdge]:
             dst.deleted_at.is_(None),
             visible_owner_clause(user, src.owner_workspace_id),
             visible_owner_clause(user, dst.owner_workspace_id),
+            edge_rule.alive(rel, at),
         )
         .group_by(rel.relation, src.type_id, dst.type_id)
     )
@@ -784,6 +931,7 @@ def _path_step(
     relations: list[str] | None,
     type_ids: list[uuid.UUID] | None,
     records: bool,
+    at: date | None,
 ) -> tuple[list[PathEdge], bool]:
     """frontier 에서 한 걸음 — (선들, 상한에 닿았나).
 
@@ -801,6 +949,7 @@ def _path_step(
                 frontier=part,
                 user=user,
                 fanout=PATH_FANOUT,
+                at=at,
                 relations=relations,
                 type_ids=type_ids,
             ),
@@ -854,6 +1003,7 @@ def shortest_paths(
     source: uuid.UUID,
     target: uuid.UUID,
     user: User,
+    at: date | None,
     max_depth: int = 6,
     relations: list[str] | None = None,
     type_ids: list[uuid.UUID] | None = None,
@@ -891,6 +1041,7 @@ def shortest_paths(
             relations=relations,
             type_ids=type_ids,
             records=records,
+            at=at,
         )
         truncated = truncated or capped
         mine, theirs = dist[side], dist[1 - side]

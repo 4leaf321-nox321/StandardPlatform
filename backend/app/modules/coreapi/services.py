@@ -32,12 +32,24 @@ import io
 import re
 import uuid
 import zipfile
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import String, and_, cast, exists, func, literal, or_, select, text
-from sqlalchemy import false as sa_false
+from sqlalchemy import (
+    DateTime,
+    String,
+    and_,
+    cast,
+    exists,
+    func,
+    literal,
+    or_,
+    select,
+    text,
+    tuple_,
+    union_all,
+)
 from sqlalchemy.orm import Session, aliased
 from sqlalchemy.sql.elements import ColumnElement
 
@@ -60,7 +72,7 @@ from app.modules.coreapi.schemas import (
     CoreWithheldReferenceOut,
     CoreWithheldRelationOut,
 )
-from app.modules.objects import aliases, typecounts
+from app.modules.objects import aliases, edges, typecounts
 from app.modules.objects import keys as key_history
 from app.modules.objects.models import (
     ObjectInstance,
@@ -638,7 +650,17 @@ def open_relation_kinds(
             continue
         if not any(object_type.slug in end.types for end in src):
             continue
-        out.append(CoreRelationKindOut(slug=kind.slug, label=kind.label, src=src, dst=dst))
+        out.append(
+            CoreRelationKindOut(
+                slug=kind.slug,
+                label=kind.label,
+                src=src,
+                dst=dst,
+                effectivity=bool(kind.effectivity),
+                quantity_key=kind.quantity_key or "",
+                lineage_source=kind.lineage_source or "",
+            )
+        )
     return out
 
 
@@ -647,10 +669,13 @@ def _kind_mark(kind: CoreRelationKindOut) -> str:
     **끝에 인터페이스가 있으면 도착에 설 수 있는 열린 타입까지.** 구현한 타입이 하나 더
     열리거나 구현을 해제하면 `dst_type` 에 올 수 있는 것이 달라지는데, 판이 그대로면 받는 쪽은
     「구조가 그대로다」 로 읽는다."""
+    # 유효 기간을 켜면 선에 기간 칸이 실린다 — 구조가 바뀐 것이라 판에 든다(끈 종류는 예전
+    # 값 그대로, ADR 0039).
+    slug = f"{kind.slug}@period" if kind.effectivity else kind.slug
     if not any(end.interface for end in kind.src + kind.dst):
-        return kind.slug
-    dst = sorted({slug for end in kind.dst for slug in end.types})
-    return f"{kind.slug}>{'/'.join(dst)}"
+        return slug
+    dst = sorted({one for end in kind.dst for one in end.types})
+    return f"{slug}>{'/'.join(dst)}"
 
 
 def relations(
@@ -674,6 +699,15 @@ def relations(
     **도착 객체의 타입이 열린 선만** 나간다 — 끝이 인터페이스인 종류는 구현한 타입 중 안 열린
     것의 객체도 잇는다. 그 선을 보내면 받는 쪽이 못 찾는 끝점을 쥔다(무덤도 같은 규칙 — 받은
     적 없는 선을 끊으라고 할 이유가 없다).
+
+    ## 오늘 유효한 선만(ADR 0039)
+
+    받는 쪽은 선을 `(src, relation, dst, dst_type)` 하나로 쥔다 — 그래서 **오늘 유효한 선만**
+    보낸다(기간이 겹치지 않으므로 같은 두 객체 사이에 하나다). 선마다 기간(`valid_from` ·
+    `valid_to`)을 싣는다. 흐름에 드는 일은 셋이다 — 선이 바뀜(`updated_at`), 끊김(무덤),
+    **유효 기간의 경계일이 지남**(그날 0시를 시각으로). 무엇이 들었든 그 선의 **지금 상태**를
+    보낸다: 오늘 유효한 같은 선이 있으면 그 선을, 없으면 `deleted` 를. 지난 선을 고치거나 지운
+    일, 앞으로의 선을 만든 일도 그래서 받는 쪽의 선을 흔들지 않는다(지금 상태 그대로가 온다).
     """
     started = _cursor(cursor)[2] if cursor else None
     now = watermark(db)
@@ -703,60 +737,77 @@ def relations(
             ),
         )
     slugs = [one.slug for one in kinds]
+    today = edges.today()
+    rel = ObjectRelation
     visible = visible_owner_clause(user, ObjectInstance.owner_workspace_id)
     src = ObjectInstance
     dst = aliased(ObjectInstance)
     reachable = visible_owner_clause(user, dst.owner_workspace_id)
-    # 출발점이 이 타입인 것만. 양 끝이 보이는 부서의 것만(객체 쪽과 같은 규칙). **양 끝이
-    # 살아 있는 것만** — 도착이 지워진 선을 보내면 처음 받는 쪽은 받은 적 없는 key 를 끝으로
-    # 쥔다. 지운 객체의 선은 무덤 없이 빠지고, 받는 쪽이 객체 무덤을 보고 끊는다(지침서 §4.2).
-    live = (
-        select(
-            ObjectRelation.id.label("id"),
-            ObjectRelation.updated_at.label("at"),
-            literal(False).label("gone"),
+
+    def edge_events(at: Any, *where: Any) -> Any:
+        """선에서 오는 일 — 출발점이 이 타입인 것만, 양 끝이 보이는 부서의 것만(객체 쪽과 같은
+        규칙), **양 끝이 살아 있는 것만**(도착이 지워진 선을 보내면 처음 받는 쪽은 받은 적 없는
+        key 를 끝으로 쥔다. 지운 객체의 선은 무덤 없이 빠지고, 받는 쪽이 객체 무덤을 보고
+        끊는다 — 지침서 §4.2)."""
+        return (
+            select(rel.id.label("id"), at.label("at"), literal(False).label("gone"))
+            .join(src, src.id == rel.src_object_id)
+            .join(dst, dst.id == rel.dst_object_id)
+            .where(
+                rel.relation.in_(slugs),
+                src.type_id == object_type.id,
+                src.deleted_at.is_(None),
+                dst.deleted_at.is_(None),
+                dst.type_id.in_(open_ids),
+                visible,
+                reachable,
+                *where,
+            )
         )
-        .join(src, src.id == ObjectRelation.src_object_id)
-        .join(dst, dst.id == ObjectRelation.dst_object_id)
-        .where(
-            ObjectRelation.relation.in_(slugs),
-            src.type_id == object_type.id,
-            src.deleted_at.is_(None),
-            dst.deleted_at.is_(None),
-            dst.type_id.in_(open_ids),
-            visible,
-            reachable,
-        )
-    )
-    if since is not None:
-        live = live.where(ObjectRelation.updated_at > since)
-    # **무덤도 출발 타입으로 거른다.** 안 그러면 같은 관계 종류를 쓰는 다른 타입의 끊긴 선이
-    # 섞여 오고, 받는 쪽은 제 것이 아닌 선을 끊으려다 「없다」 만 본다.
-    graves = (
-        select(
-            ObjectRelationTombstone.id.label("id"),
-            ObjectRelationTombstone.removed_at.label("at"),
-            literal(True).label("gone"),
-        )
-        .join(src, src.id == ObjectRelationTombstone.src_object_id)
-        .join(dst, dst.id == ObjectRelationTombstone.dst_object_id)
-        .where(
-            ObjectRelationTombstone.relation.in_(slugs),
-            src.type_id == object_type.id,
-            dst.type_id.in_(open_ids),
-            visible,
-            reachable,
-        )
-    )
-    if since is not None:
-        graves = graves.where(ObjectRelationTombstone.removed_at > since)
+
+    streams: list[Any] = []
+    if since is None:
+        # 처음 받는 쪽 — 오늘 유효한 선 전부.
+        streams.append(edge_events(rel.updated_at, edges.alive(rel, today)))
     else:
-        # 처음 받는 쪽에 무덤을 보내지 않는다 — 없던 선을 끊으라고 할 이유가 없다.
-        graves = graves.where(sa_false())
+        streams.append(edge_events(rel.updated_at, rel.updated_at > since))
+        # **무덤도 출발 타입으로 거른다.** 안 그러면 같은 관계 종류를 쓰는 다른 타입의 끊긴
+        # 선이 섞여 오고, 받는 쪽은 제 것이 아닌 선을 끊으려다 「없다」 만 본다. 처음 받는
+        # 쪽에는 무덤을 보내지 않는다 — 없던 선을 끊으라고 할 이유가 없다.
+        grave = ObjectRelationTombstone
+        streams.append(
+            select(
+                grave.id.label("id"),
+                grave.removed_at.label("at"),
+                literal(True).label("gone"),
+            )
+            .join(src, src.id == grave.src_object_id)
+            .join(dst, dst.id == grave.dst_object_id)
+            .where(
+                grave.relation.in_(slugs),
+                src.type_id == object_type.id,
+                dst.type_id.in_(open_ids),
+                visible,
+                reachable,
+                grave.removed_at > since,
+            )
+        )
+        # 유효 기간의 경계일이 (지난번, 오늘] 에 든 선 — 그날 0시가 그 일의 시각이다. 선도
+        # 기록도 안 바뀌어 `updated_at` 으로는 안 보인다.
+        after = since.astimezone().date()
+        if after < today:
+            for column in (rel.valid_from, rel.valid_to):
+                streams.append(
+                    edge_events(
+                        cast(column, DateTime(timezone=True)),
+                        column > after,
+                        column <= today,
+                    )
+                )
 
     # **쪽 넘김은 SQL 이 한다.** 예전에는 둘을 전부 읽어 파이썬에서 세웠다 — 쪽을 넘길
     # 때마다 처음부터 다시 읽는 셈이라, 선이 몇만이면 마지막 쪽이 가장 느렸다.
-    stream = live.union_all(graves).subquery()
+    stream = union_all(*streams).subquery()
     ordered = select(stream).order_by(stream.c.at, stream.c.id)
     if cursor:
         mark, last, _ = _cursor(cursor)
@@ -772,12 +823,7 @@ def relations(
     grave_ids = [one.id for one in picked if one.gone]
     if live_ids:
         rows_by_id.update(
-            {
-                one.id: one
-                for one in db.scalars(
-                    select(ObjectRelation).where(ObjectRelation.id.in_(live_ids))
-                )
-            }
+            {one.id: one for one in db.scalars(select(rel).where(rel.id.in_(live_ids)))}
         )
     if grave_ids:
         rows_by_id.update(
@@ -790,14 +836,23 @@ def relations(
                 )
             }
         )
-    marks: list[tuple[datetime, uuid.UUID, bool, Any]] = [
-        (one.at, one.id, bool(one.gone), rows_by_id[one.id])
-        for one in picked
-        if one.id in rows_by_id
+    marks: list[tuple[datetime, uuid.UUID, Any]] = [
+        (one.at, one.id, rows_by_id[one.id]) for one in picked if one.id in rows_by_id
     ]
+    # 일마다 그 선의 **지금 상태** — 오늘 유효한 같은 선(같은 두 객체 · 같은 종류)이 있나.
+    triples = {(row.src_object_id, row.relation, row.dst_object_id) for _, _, row in marks}
+    current: dict[tuple[uuid.UUID, str, uuid.UUID], ObjectRelation] = {}
+    if triples:
+        for one in db.scalars(
+            select(rel).where(
+                tuple_(rel.src_object_id, rel.relation, rel.dst_object_id).in_(list(triples)),
+                edges.alive(rel, today),
+            )
+        ):
+            current[(one.src_object_id, one.relation, one.dst_object_id)] = one
 
     wanted: set[uuid.UUID] = set()
-    for _, _, _, row in marks:
+    for _, _, row in marks:
         wanted.add(row.src_object_id)
         wanted.add(row.dst_object_id)
     ends = {
@@ -815,21 +870,26 @@ def relations(
         )
     }
     items: list[CoreRelationOut] = []
-    for when, _, gone, row in marks:
+    for when, _, row in marks:
         start, end = ends.get(row.src_object_id), ends.get(row.dst_object_id)
         if start is None or end is None:
             # 끝점까지 정말 사라진 줄 — 그 객체의 무덤이 이미 그것을 말한다.
             continue
+        live = current.get((row.src_object_id, row.relation, row.dst_object_id))
         items.append(
             CoreRelationOut(
                 src=start.key or start.label,
                 relation=row.relation,
                 dst=end.key or end.label,
                 dst_type=type_slugs.get(end.type_id, ""),
-                evidence_note="" if gone else (row.evidence_note or ""),
-                properties={} if gone else {k: v for k, v in (row.properties or {}).items()},
+                evidence_note="" if live is None else (live.evidence_note or ""),
+                properties={}
+                if live is None
+                else {k: v for k, v in (live.properties or {}).items()},
+                valid_from=_day(live.valid_from) if live is not None else None,
+                valid_to=_day(live.valid_to) if live is not None else None,
                 updated_at=_stamp(when) or "",
-                deleted=gone,
+                deleted=live is None,
             )
         )
     last_mark = marks[-1] if marks else None
@@ -841,6 +901,10 @@ def relations(
         next=(_next_cursor(last_mark[0], last_mark[1], as_of) if more and last_mark else None),
         items=items,
     )
+
+
+def _day(value: date | None) -> str | None:
+    return value.isoformat() if value is not None else None
 
 
 def _aliases_of(human: dict[uuid.UUID, list[str]], row: ObjectInstance) -> dict[str, Any]:
@@ -979,6 +1043,8 @@ def withheld_relations(db: Session) -> list[CoreWithheldRelationOut]:
                 end.deleted_at.is_(None),
                 or_(start.type_id.in_(open_ids), end.type_id.in_(open_ids)),
                 ~sent,
+                # 창구는 오늘 유효한 선만 보낸다(ADR 0039) — 빠지는 수도 같은 것을 센다.
+                edges.alive(ObjectRelation, edges.today()),
             )
             .group_by(ObjectRelation.relation)
         )

@@ -13,6 +13,7 @@ import { Link, useNavigate } from 'react-router-dom'
 import { Waypoints } from 'lucide-react'
 
 import { graphApi } from '@/modules/graph/api'
+import { edgeTooltip } from '@/modules/graph/edgeText'
 import { typeColorScale } from '@/modules/graph/colors'
 import { GraphCanvas } from '@/modules/graph/GraphCanvas'
 import type { CanvasLink, CanvasNode } from '@/modules/graph/GraphCanvas'
@@ -34,13 +35,16 @@ interface GraphPanelProps {
    */
   types: { slug: string; nav_group_slug?: string | null }[]
   groups: { slug: string; color?: string | null; parent_slug?: string | null }[]
+  /** 기준일(ADR 0039, 빈 글자 = 오늘) — 상세의 관련 객체와 같은 날의 관계를 그린다. */
+  asOf?: string
 }
 
-export function GraphPanel({ objectId, types, groups }: GraphPanelProps) {
+export function GraphPanel({ objectId, types, groups, asOf = '' }: GraphPanelProps) {
   const navigate = useNavigate()
   const graph = useResource(
-    () => graphApi.neighborhood({ focus: objectId, depth: DEPTH, fanout: FANOUT }),
-    [objectId],
+    () =>
+      graphApi.neighborhood({ focus: objectId, depth: DEPTH, fanout: FANOUT, asOf: asOf || null }),
+    [objectId, asOf],
   )
   const typeColor = useMemo(() => typeColorScale(types, groups), [types, groups])
 
@@ -74,10 +78,8 @@ export function GraphPanel({ objectId, types, groups }: GraphPanelProps) {
           source: one.src,
           target: one.dst,
           label: one.label,
-          tooltip:
-            one.directed && one.inverse_label && one.inverse_label !== one.label
-              ? `${one.label} ↔ ${one.inverse_label}`
-              : one.label,
+          // 유효 기간이 든 선이면 hover 에 기간도(ADR 0039).
+          tooltip: edgeTooltip(one),
           directed: one.directed,
           width: 1,
         }),
@@ -103,7 +105,7 @@ export function GraphPanel({ objectId, types, groups }: GraphPanelProps) {
           </span>
         </h2>
         <Button asChild size="sm" variant="outline">
-          <Link to={`/graph?focus=${objectId}`}>
+          <Link to={`/graph?focus=${objectId}${asOf ? `&as_of=${asOf}` : ''}`}>
             <Waypoints className="mr-1 size-3.5" />
             지식 그래프에서 넓게
           </Link>

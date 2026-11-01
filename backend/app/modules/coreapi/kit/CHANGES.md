@@ -69,6 +69,17 @@ grep -n "KIT_VERSION\|RELATION_TABLE\|\"hidden\"\|def forget\|def save_relations
 - `--version` 과 `KIT_VERSION`. CSV 에 `renamed_from` · `previous_keys` 칸 — 이미 있는 CSV 는
   머리줄이 정해져 있어 새 칸이 생기지 않습니다. 보려면 그 CSV 를 옮겨 두고 받으십시오.
 
+**창구 쪽 보강(2026-10-30 — 키트 파일은 그대로):** 관계 종류가 유효 기간을 받으면 선에
+`valid_from`(포함) · `valid_to`(제외)가 실리고, 카탈로그의 `relation_kinds[]` 에 `effectivity` 가
+섭니다. SP 는 **오늘 유효한 선만** 보내고 끝날이 지나면 그 선을 `deleted` 로 알리므로 선의 키는 그대로
+다섯 칸입니다 — 이 판의 키트는 두 칸을 읽지 않고, 그래도 맞습니다(`01-AI-GUIDE.md` §5.4). 그 종류를 켜면
+정의 판(`revision`)이 한 번 바뀝니다. 같은 날 카탈로그의 `relation_kinds[]` 에 `quantity_key`(수량 칸 —
+선의 `properties` 중 수량인 칸의 키, 비어 있을 수 있음)도 섭니다. 선의 모양은 그대로라 판이 바뀌지 않고,
+키트는 고칠 것이 없습니다.
+같은 날 `relation_kinds[]` 에 `lineage_source`(계보 관계의 원천 끝 — `src` · `dst` · 빈 값)도 섭니다. 역시
+선의 모양은 그대로라 판이 바뀌지 않고 키트는 고칠 것이 없습니다(개정 고정 · 낡음은 SP 안의 판정이라
+창구로 나가지 않습니다).
+
 ## 2026-10-09 — 선의 키에 도착 타입
 
 관계의 끝에 **인터페이스**(여러 타입이 따르는 공통 모양)를 적은 종류는 `dst_type` 이 선마다

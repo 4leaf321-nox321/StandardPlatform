@@ -6,11 +6,15 @@
  *
  * **속성 정의는 여기 없다.** 그것은 그것대로 자기 자리가 있다 — 한 창에 섞으면
  * 「타입의 설정」 과 「그 타입이 담는 값의 모양」 이 같은 것처럼 읽힌다.
+ *
+ * **개정 칸**(ADR 0041)은 속성 하나를 고르는 타입의 설정이다 — 원천의 개정이 바뀌면 그것으로 만든
+ * 파생물이 낡음이 된다.
  */
 
 import { useState } from 'react'
 
 import { ListViewEditor } from '@/modules/ontology/ListViewEditor'
+import { MapHubKeyField } from '@/modules/ontology/MapHubKeyField'
 import { SectionViewEditor } from '@/modules/ontology/SectionViewEditor'
 import { TypeDeleteDialog } from '@/modules/ontology/TypeDeleteDialog'
 import { ontologyApi } from '@/modules/ontology/api'
@@ -49,6 +53,14 @@ import { Textarea } from '@/shared/components/ui/textarea'
 
 /** 「묶음 없음」. **빈 문자열을 쓸 수 없다** — Select 가 그것을 「고른 것 없음」 으로 본다. */
 const NONE = '__none__'
+
+/** 개정 칸이 될 수 있는 종류 — 글자 · 선택 · 숫자(서버 검사와 같다, ONTOLOGY-0098). */
+const REVISION_TYPES = new Set(['text', 'enum', 'number'])
+
+/** 개정 칸 후보 — **값이 하나인** 글자 · 선택 · 숫자 속성. 여러 값이면 「지금 개정」 이 하나가 아니다. */
+function revisionCandidates(properties: PropertyDef[]): PropertyDef[] {
+  return properties.filter((one) => REVISION_TYPES.has(one.data_type) && !one.multi)
+}
 
 interface Props {
   /** 속성 정의까지 들고 온다 — **열로 고를 것이 그 목록에서 나온다.** */
@@ -92,6 +104,7 @@ export function TypeEditDialog({
   const [sortOrder, setSortOrder] = useState(String(type.sort_order))
   const [isActive, setIsActive] = useState(type.is_active)
   const [core, setCore] = useState(type.core ?? false)
+  const [revisionKey, setRevisionKey] = useState(type.revision_key ?? '')
   const [listView, setListView] = useState<ListView>(type.list_view ?? {})
   const [formView, setFormView] = useState<SectionView>(type.form_view ?? {})
   const [detailView, setDetailView] = useState<SectionView>(type.detail_view ?? {})
@@ -122,6 +135,9 @@ export function TypeEditDialog({
         sort_order: Number(sortOrder) || 0,
         is_active: isActive,
         core,
+        // **바꾼 때만 보낸다** — 안 보낸 것(그대로)과 빈 글자(개정 칸 비움)는 다른 말이다. 안 맞는
+        // 속성이면 서버가 거절한다(ONTOLOGY-0098) — 그 말이 위에 뜬다.
+        ...(revisionKey !== (type.revision_key ?? '') ? { revision_key: revisionKey } : {}),
         list_view: listView,
         form_view: formView,
         detail_view: detailView,
@@ -354,6 +370,22 @@ export function TypeEditDialog({
                       />
                     </div>
                   </div>
+
+                  {/* 투영은 속성이 없다 — 고를 것도 없다. */}
+                  {kindClass !== 'system' && (
+                    <RevisionField
+                      properties={type.properties}
+                      value={revisionKey}
+                      onChange={setRevisionKey}
+                      lineageReady={relationTypes.some(
+                        (one) => one.lineage_source === 'src' || one.lineage_source === 'dst',
+                      )}
+                    />
+                  )}
+                  {/* 전체 지도(ADR 0046)에서 기록을 놓을 곳 — 저장된 기록 타입만(바로 저장된다). */}
+                  {type.usage === 'log' && kindClass !== 'system' && (
+                    <MapHubKeyField typeSlug={type.slug} canEdit />
+                  )}
                 </section>
 
                 {/* 설명이 길어 단 안에 두면 한쪽만 늘어난다 — 두 단 아래 전폭으로. */}
@@ -486,6 +518,62 @@ function Field({
           ))}
         </SelectContent>
       </Select>
+    </div>
+  )
+}
+
+/**
+ * 개정 칸 — 값이 하나인 글자 · 선택 · 숫자 속성 중 하나, 또는 없음. 고를 것이 없으면 **왜 없는지**
+ * 말한다(비활성만 시키면 고장으로 읽힌다).
+ */
+function RevisionField({
+  properties,
+  value,
+  onChange,
+  lineageReady,
+}: {
+  properties: PropertyDef[]
+  value: string
+  onChange: (next: string) => void
+  /** 이 설치에 계보 관계 종류가 있나 — 없으면 아직 쓰이지 않는다고 말한다. */
+  lineageReady: boolean
+}) {
+  const candidates = revisionCandidates(properties)
+  /** 지금 값이 후보에 없으면(옛 정의) 그대로 보인다 — 안 보이면 저장 한 번에 말없이 비워진다. */
+  const orphan = value && !candidates.some((one) => one.key === value) ? value : null
+  return (
+    <div className="space-y-1.5 border-t pt-3">
+      <Label htmlFor="type-edit-revision">개정 칸</Label>
+      <Select
+        value={value || NONE}
+        onValueChange={(next) => onChange(next === NONE ? '' : next)}
+        disabled={candidates.length === 0 && !orphan}
+      >
+        <SelectTrigger id="type-edit-revision" aria-label="개정 칸">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={NONE}>없음 (수정 시각으로 판정)</SelectItem>
+          {candidates.map((one) => (
+            <SelectItem key={one.key} value={one.key}>
+              {one.label}
+            </SelectItem>
+          ))}
+          {orphan && (
+            <SelectItem value={orphan}>{orphan} (글자 · 선택 · 숫자 · 값 하나가 아님)</SelectItem>
+          )}
+        </SelectContent>
+      </Select>
+      <p className="text-muted-foreground text-xs">
+        {candidates.length === 0 && (
+          <b>글자 · 선택 · 숫자이고 값이 하나인 속성이 없습니다 — 속성을 먼저 추가하세요. </b>
+        )}
+        원천의 개정이 바뀌면 그것으로 만든 파생물이 낡음이 됩니다. 비우면 수정 시각으로 판정해 이름
+        · 별칭만 수정해도 낡음이 됩니다. 개정 칸으로 정한 속성은 삭제하거나 다른 종류 · 여러 값으로
+        변경할 수 없습니다.
+        {!lineageReady &&
+          ' 이 설치에는 아직 계보 관계 종류가 없습니다 — 관계 종류 편집에서 「계보 관계」 를 정하면 쓰입니다.'}
+      </p>
     </div>
   )
 }

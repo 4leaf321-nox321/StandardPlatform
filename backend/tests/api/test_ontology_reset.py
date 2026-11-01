@@ -64,6 +64,76 @@ def test_지표_정의가_있어도_비워진다(client: TestClient, admin: Sign
     assert client.get("/api/metrics", headers=admin.headers).json() == []
 
 
+def test_장표_틀과_장표가_있어도_비워진다(client: TestClient, admin: Signed) -> None:
+    """장표 틀은 **주제 타입을 가리키고**, 장표는 틀을 가리킨다(둘 다 RESTRICT).
+
+    비우기가 두 표를 안 지워 장표 틀이 하나라도 있는 설치에서는 「비우기」 가 FK 로 막혔다.
+    전체 시험에서는 장표 시험이 같은 작업자에서 먼저 돌 때만 걸려서, 여기서 직접 만들고 비운다.
+    """
+    model = _make_type(client, admin, label="모델")
+    subject = _make_object(client, admin, model, label="A")
+    template = client.post(
+        "/api/slides/templates",
+        json={
+            "name": "초기화 시험 틀",
+            "subject_type_slug": model,
+            "rows": 1,
+            "cols": 1,
+            "areas": [{"key": "note", "title": "의견", "row": 0, "col": 0, "kind": "text"}],
+        },
+        headers=admin.headers,
+    )
+    assert template.status_code == 201, template.text
+    slide = client.post(
+        "/api/slides",
+        json={"template_id": template.json()["id"], "subject_id": subject["id"]},
+        headers=admin.headers,
+    )
+    assert slide.status_code == 201, slide.text
+
+    planned = _reset(client, admin).json()
+    counts = {one["table"]: one["count"] for one in planned["items"]}
+    assert counts.get("slide_templates", 0) >= 1 and counts.get("slides", 0) >= 1, counts
+
+    applied = _reset(client, admin, confirm=CONFIRM_PHRASE, apply=True)
+    assert applied.status_code == 200, applied.text
+    assert client.get("/api/slides/templates", headers=admin.headers).json() == []
+
+
+def test_제안된_관계가_있어도_비워지고_계획이_센다(client: TestClient, admin: Signed) -> None:
+    """제안된 관계(ADR 0042)는 **객체를 가리킨다**(CASCADE) — 비우기가 그 표를 안 세면 계획에는
+    안 보이고 객체와 함께 소리 없이 사라진다. 확정된 제안은 선도 가리킨다(SET NULL). 장표 틀이
+    빠졌던 자리와 같은 실수를 막으려고 여기서 직접 만들고(열린 것 · 확정한 것) 비운다."""
+    part = _make_type(client, admin, label="부품")
+    vendor = _make_type(client, admin, label="공급사")
+    kind = _make_relation(client, admin, "supplied_by", label="공급받음")
+    bolt = _make_object(client, admin, part, label="볼트")
+    acme = _make_object(client, admin, vendor, label="ACME")
+    beta = _make_object(client, admin, vendor, label="BETA")
+    made = []
+    for dst in (acme, beta):
+        got = client.post(
+            f"/api/objects/{part}/{bolt['id']}/relation-proposals",
+            json={"relation": kind, "dst_object_id": dst["id"], "confidence": 0.8},
+            headers=admin.headers,
+        )
+        assert got.status_code == 200 and got.json()["status"] == "created", got.text
+        made.append(got.json()["proposal"]["id"])
+    accepted = client.post(
+        f"/api/objects/relation-proposals/{made[0]}/accept", headers=admin.headers
+    )
+    assert accepted.status_code == 200, accepted.text
+
+    planned = _reset(client, admin).json()
+    counts = {one["table"]: one["count"] for one in planned["items"]}
+    assert counts.get("relation_proposals", 0) >= 2, counts
+
+    applied = _reset(client, admin, confirm=CONFIRM_PHRASE, apply=True)
+    assert applied.status_code == 200, applied.text
+    after = {one["table"]: one["count"] for one in _reset(client, admin).json()["items"]}
+    assert after["relation_proposals"] == 0 and after["object_relations"] == 0, after
+
+
 def test_계획이_먼저고_아무것도_안_지운다(client: TestClient, admin: Signed) -> None:
     """「정말 삭제하시겠습니까」 만 묻는 창은 아무도 안 읽고 예를 누른다 — 읽을 것이
     없어서다."""

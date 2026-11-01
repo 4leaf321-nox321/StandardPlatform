@@ -19,11 +19,14 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
+    CheckConstraint,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -37,12 +40,13 @@ from sqlalchemy import (
     insert,
     text,
 )
-from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import JSONB, ExcludeConstraint
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.database import Base
-from app.modules.objects import attachment_sync, refindex, typecounts
+from app.modules.graph import maphash
+from app.modules.objects import attachment_sync, effectivity, pinning, refindex, typecounts
 from app.modules.ontology.models import SLUG_MAX
 
 #: 식별자의 비교키를 DB 에서 — `shared.text.compare_key`(NFKC · 공백 정리 · 소문자)와 같게.
@@ -276,9 +280,30 @@ class ObjectRelation(Base):
     __tablename__ = "object_relations"
     __table_args__ = (
         # 같은 것을 두 번 맺지 않는다. **막지 않으면 「관련 객체」 에 같은 줄이
-        # 둘 서고, 사람은 그것을 데이터가 이상한 것으로 읽는다.**
-        UniqueConstraint(
-            "src_object_id", "dst_object_id", "relation", name="uq_object_relations_edge"
+        # 둘 서고, 사람은 그것을 데이터가 이상한 것으로 읽는다.** 유효 기간이 켜진 종류의
+        # 선은 이 색인 밖이다 — 같은 선이 기간을 달리해 여럿일 수 있고, 겹치는 것은 아래
+        # 배제 제약이 막는다(ADR 0039, `effectivity.py`).
+        Index(
+            effectivity.SAME_EDGE,
+            "src_object_id",
+            "dst_object_id",
+            "relation",
+            unique=True,
+            postgresql_where=text("effectivity IS NULL"),
+        ),
+        # 같은 선의 기간이 겹치면 거절한다 — 유효 기간이 켜진 종류의 선만(대개 적다).
+        ExcludeConstraint(
+            ("src_object_id", "="),
+            ("dst_object_id", "="),
+            ("relation", "="),
+            (text("daterange(valid_from, valid_to, '[)')"), "&&"),
+            name=effectivity.OVERLAP_CONSTRAINT,
+            using="gist",
+            where=text("effectivity"),
+        ),
+        # 이름은 규칙(`ck_<표>_<이름>`)이 앞을 붙인다 — `ck_object_relations_period`.
+        CheckConstraint(
+            "valid_from IS NULL OR valid_to IS NULL OR valid_from < valid_to", name="period"
         ),
         # 양방향으로 훑는다 — 「이것이 가리키는 것」 과 「이것을 가리키는 것」.
         Index("ix_object_relations_src", "src_object_id", "relation"),
@@ -343,6 +368,33 @@ class ObjectRelation(Base):
     지우면 비워진다(선은 남는다). 2026-10-08 전에 소스가 이은 선은 비어 있다 — 누가 이었는지
     가를 기록이 없다."""
 
+    valid_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    """**이날부터 유효**(포함) — 비면 처음부터. 유효 기간을 받는 종류
+    (`RelationType.effectivity`)의 선만 채운다(꺼진 종류에 오면 트리거가 거절한다). 판정은
+    `edges.alive` 한 곳이다."""
+
+    valid_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    """**이날부터 무효**(제외) — 비면 끝없이. 반열린 구간 [from, to) 라 「3월 1일부터 B 로
+    바뀜」 을 A 의 to = B 의 from = 3월 1일로 적고, 그날 둘이 겹치지 않는다(ADR 0039)."""
+
+    effectivity: Mapped[bool | None] = mapped_column(Boolean, nullable=True)
+    """**종류의 표시 사본** — 유효 기간이 켜진 종류의 선이면 참, 아니면 NULL. 두 제약(같은 선
+    하나 · 기간 겹침 금지)을 가르는 칸이다. **앱은 쓰지 않는다** — 트리거가 종류에서 읽어 넣고,
+    종류의 표시가 바뀌면 다시 맞춘다(`effectivity.py`). 그래서 넣은 직후의 ORM 객체에서는 이
+    값을 믿지 않는다."""
+
+    pinned_revision: Mapped[str | None] = mapped_column(Text, nullable=True)
+    """**고정한 개정** — 계보 관계(`RelationType.lineage_source`)의 선이 맺힌 순간(또는 다시
+    고정한 순간) 원천의 개정 칸 값(ADR 0041). 원천 타입에 개정 칸이 없거나 값이 비었으면
+    NULL. 원천의 지금 개정 값이 이것과 다르면 파생물이 낡음이다(`objects/lineage.py`).
+
+    **앱은 맺을 때 쓰지 않는다** — 넣는 길이 열 곳이 넘어 DB 트리거가 박는다(`effectivity.py`).
+    묶음 · 되돌리기는 박힌 값을 그대로 싣고 되살린다(값이 오면 트리거가 새로 박지 않는다)."""
+
+    pinned_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """**고정한 때** — 그 순간 원천의 바뀐 때(`objects.updated_at`). 원천 타입에 개정 칸이
+    없으면 「원천의 바뀐 때가 이보다 뒤」 가 낡음이다. 계보 관계가 아닌 선은 NULL."""
+
     datasource_seen_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True
     )
@@ -372,6 +424,11 @@ class ObjectRelationTombstone(Base):
     src_object_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True), index=True)
     dst_object_id: Mapped[uuid.UUID] = mapped_column(PgUUID(as_uuid=True))
     relation: Mapped[str] = mapped_column(String(SLUG_MAX), index=True)
+    valid_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    valid_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    """끊긴 선의 **유효 기간** — 같은 두 객체 사이에 기간을 달리한 선이 여럿일 수 있어
+    (ADR 0039), 끝점 · 종류만으로는 **어느** 선이 끊겼는지 모른다. 받는 쪽(묶음 · 형제 코어)이
+    기간까지 맞춰 그 선만 끊는다."""
     removed_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.clock_timestamp(), nullable=False
     )
@@ -395,8 +452,122 @@ def _leave_tombstone(_mapper: Any, connection: Any, target: ObjectRelation) -> N
             src_object_id=target.src_object_id,
             dst_object_id=target.dst_object_id,
             relation=target.relation,
+            valid_from=target.valid_from,
+            valid_to=target.valid_to,
         )
     )
+
+
+#: 제안의 상태 — 열림(검토를 기다림) · 확정(선이 됨) · 거절.
+PROPOSAL_STATUSES = ("proposed", "accepted", "rejected")
+#: 누가 · 무엇이 제안했나 — 사람(화면) · AI(MCP) · 규칙 · 데이터 소스 · 파일 가져오기.
+PROPOSAL_ORIGINS = ("user", "mcp", "rule", "datasource", "import")
+
+
+class RelationProposal(Base):
+    """**제안된 관계** — 「이 둘은 이어져야 할 것 같다」 를 선이 되기 전에 남긴 것(ADR 0042).
+
+    `object_relations` 에 상태 칸을 두지 않고 **따로 둔 표**다. 선을 읽는 자리(트리 · 롤업 ·
+    지표 · 코어 API · RDF · 묶음 · 개수 제약 · 순환 검사 · 유일 색인 · 계수표 트리거 …)가 수십
+    곳이라, 한 곳이라도 상태를 안 거르면 확정 안 된 선이 섞인다. 따로 두면 그 질의들은 제안을
+    볼 길이 없다. **확정은 보통의 선 만들기**(`relations.add_edge`)라 개수 제약 · 순환 · 기간
+    겹침 · 계보 고정 트리거 · 감사가 그대로 돈다 — 규칙은 `objects/proposals.py` 한 곳.
+
+    양 끝은 객체만 — 원 표(부서 · 계정, `object_links`)로 가는 제안은 받지 않는다.
+    """
+
+    __tablename__ = "relation_proposals"
+    __table_args__ = (
+        # 같은 선의 열린 제안은 하나 — 둘이면 검토자가 같은 것을 두 번 판단한다. 확정 · 거절된
+        # 것은 이력이라 여럿이어도 된다(「거절된 적 있음」 을 찾는 근거).
+        Index(
+            "uq_relation_proposals_open",
+            "relation",
+            "src_object_id",
+            "dst_object_id",
+            unique=True,
+            postgresql_where=text("status = 'proposed'"),
+        ),
+        # 객체 화면의 「이 객체에 걸린 제안」 — 양방향. 객체를 정말 지울 때(영구 삭제 · 초기화)
+        # CASCADE 가 이 색인으로 찾는다(없으면 객체마다 표를 훑는다).
+        Index("ix_relation_proposals_src", "src_object_id", "status"),
+        Index("ix_relation_proposals_dst", "dst_object_id", "status"),
+        # 검토함 · 목록 — 열린 것을 새것부터.
+        Index(
+            "ix_relation_proposals_open_created",
+            "created_at",
+            postgresql_where=text("status = 'proposed'"),
+        ),
+        # 선을 지울 때 SET NULL 이 이 색인으로 찾는다 — 없으면 선 하나 지울 때마다 표를 훑는다
+        # (합치기 · 영구 삭제 · 「파일대로 맞춤」 이 선을 수만 개 지운다).
+        Index(
+            "ix_relation_proposals_relation_id",
+            "relation_id",
+            postgresql_where=text("relation_id IS NOT NULL"),
+        ),
+        CheckConstraint("status IN ('proposed', 'accepted', 'rejected')", name="status"),
+        CheckConstraint(
+            "origin IN ('user', 'mcp', 'rule', 'datasource', 'import')", name="origin"
+        ),
+        CheckConstraint(
+            "confidence IS NULL OR (confidence >= 0 AND confidence <= 1)", name="confidence"
+        ),
+        CheckConstraint(
+            "valid_from IS NULL OR valid_to IS NULL OR valid_from < valid_to", name="period"
+        ),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    relation: Mapped[str] = mapped_column(String(SLUG_MAX))
+    """관계 종류의 slug — 선(`object_relations.relation`)과 같이 FK 없이. 종류를 지우면 그
+    종류의 제안을 함께 지운다(제안은 자료가 아니라 작업 거리다)."""
+    src_object_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE")
+    )
+    dst_object_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE")
+    )
+    properties: Mapped[dict[str, Any]] = mapped_column(
+        JSONB, default=dict, server_default="{}"
+    )
+    """선에 붙을 값 — 확정할 때 그 종류의 속성 정의로 다시 검증한다."""
+    valid_from: Mapped[date | None] = mapped_column(Date, nullable=True)
+    valid_to: Mapped[date | None] = mapped_column(Date, nullable=True)
+    evidence_note: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    """**근거** — 검토자가 읽는 글(어느 문서의 어느 줄 · 왜 그렇게 봤나). 확정하면 선의 근거가
+    된다."""
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    """**확신도**(0 ~ 1) — 제안한 쪽이 매긴 값. 비면 모른다(검토함이 추천을 안 낸다)."""
+    origin: Mapped[str] = mapped_column(String(20), default="user", server_default="user")
+    """누가 · 무엇이 제안했나 — `PROPOSAL_ORIGINS`."""
+    origin_ref: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    """어느 소스 · 규칙 · 대화 · 파일인지 짧은 글."""
+    status: Mapped[str] = mapped_column(
+        String(20), default="proposed", server_default="proposed"
+    )
+    proposed_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    decided_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    """확정 · 거절한 때 — **DB 의 `now()`** 라 확정으로 생긴 선의 `updated_at` 과 같은 값이다.
+    확정 되돌리기가 그 둘이 같은지로 「그 뒤 선이 고쳐졌나」 를 본다(시계가 흔들려도 같음은
+    안 흔들린다)."""
+    decision_note: Mapped[str] = mapped_column(String(500), default="", server_default="")
+    """거절 · 확정의 까닭."""
+    relation_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("object_relations.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    """확정으로 생긴 선 — 그 선이 지워지면 비워진다(제안은 「확정됨」 그대로 남는다)."""
 
 
 class ObjectRef(Base):
@@ -460,6 +631,8 @@ class GraphEdgeSnapshot(Base):
 refindex.attach(Base.metadata)
 attachment_sync.attach(Base.metadata)
 typecounts.attach(Base.metadata)
+effectivity.attach(Base.metadata)
+pinning.attach(Base.metadata)
 
 
 def _need_trigram(_target: Any, connection: Any, **_kw: Any) -> None:
@@ -469,6 +642,8 @@ def _need_trigram(_target: Any, connection: Any, **_kw: Any) -> None:
     # 두 글자 조각 함수도 인덱스보다 먼저(운영은 0054). 날짜 읽기 함수도(운영은 0061).
     connection.exec_driver_sql(BIGRAMS_SQL)
     connection.exec_driver_sql(DATE_SQL)
+    # 지도의 기록 자리 해시도 — 확대 점 표(`graph_map_points`)를 채울 때 쓴다(운영은 0093).
+    connection.exec_driver_sql(maphash.HASH_SQL)
 
 
 event.listen(Base.metadata, "before_create", _need_trigram)

@@ -13,6 +13,7 @@ from __future__ import annotations
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from statistics import NormalDist
+from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
@@ -108,3 +109,52 @@ def beta_ppf(q: float, a: float, b: float) -> float:
     from scipy import stats
 
     return float(stats.beta.ppf(q, a, b))
+
+
+# --- 공간 · 주파수(지식 그래프 지도의 배치, ADR 0046)
+# -----------------------------------------
+#
+# 배치 엔진(`graph/mapengine.py`)도 scipy 를 이 문으로만 부른다 — 입자-격자 반발의 FFT 와
+# 가까운 짝을 찾는 KD-tree. 결과는 ndarray · int 로 바꿔 내보낸다.
+
+
+def rfft2(grid: NDArray[Any]) -> NDArray[Any]:
+    """2차원 실수 FFT(모든 코어)."""
+    from scipy import fft
+
+    return np.asarray(fft.rfft2(grid, workers=-1))
+
+
+def irfft2(spectrum: NDArray[Any], shape: tuple[int, int]) -> NDArray[Any]:
+    from scipy import fft
+
+    return np.asarray(fft.irfft2(spectrum, s=shape, workers=-1))
+
+
+def close_pairs(points: NDArray[np.float64], reach: float) -> NDArray[np.int64]:
+    """거리가 `reach` 이하인 점 짝 (i, j), i < j — n x 2."""
+    from scipy.spatial import cKDTree
+
+    found = cKDTree(points).query_pairs(r=reach, output_type="ndarray")
+    return np.asarray(found, dtype=np.int64).reshape(-1, 2)
+
+
+def nearest_other(points: NDArray[np.float64]) -> NDArray[np.float64]:
+    """점마다 가장 가까운 다른 점까지의 거리."""
+    from scipy.spatial import cKDTree
+
+    dist, _ = cKDTree(points).query(points, k=2)
+    return np.asarray(dist[:, 1], dtype=np.float64)
+
+
+def around(
+    points: NDArray[np.float64], centers: NDArray[np.float64], reach: NDArray[np.float64]
+) -> list[list[int]]:
+    """가운데마다 그 반경 안의 점 번호."""
+    from scipy.spatial import cKDTree
+
+    tree = cKDTree(points)
+    return [
+        [int(one) for one in tree.query_ball_point(center, r=float(r))]
+        for center, r in zip(centers, reach, strict=True)
+    ]

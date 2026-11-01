@@ -258,6 +258,10 @@ class Settings(BaseSettings):
     나뉜다. 서버의 `max_parallel_workers`(기본 8, `deploy/pg-tune.sh` 가 CPU 수로 맞춘다)
     안에서만 실제로 뜬다. -1 이면 서버 설정을 따른다."""
 
+    graph_map_night_hour: int = 4
+    """지식 그래프 「전체 지도」 의 **매일 덧붙임**(새 기준정보만 빈자리에)을 워커가 넣는 밤
+    시간 (서버 현지 시각, 0 ~ 23 — ADR 0046). 지표의 밤(`METRICS_NIGHT_HOUR`, 2시) ·
+    백업(3시)과 겹치지 않게 4시. 시간마다의 집계는 이것과 상관없이 한 시간마다다."""
     filestore_gc_hours: int = 24
     """첨부 저장소의 **고아 파일 정리**를 워커가 몇 시간마다 하나(`files/gc.py`). 0 이면 안
     한다 — 시스템 관리자가 작업(「고아 첨부 파일 정리」)으로만."""

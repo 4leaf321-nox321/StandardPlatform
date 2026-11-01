@@ -46,7 +46,7 @@ from sqlalchemy.orm import Session, aliased
 from app.modules.accounts.models import User
 from app.modules.datasources.models import DataSource
 from app.modules.metrics.models import MetricDef
-from app.modules.objects import misses, system
+from app.modules.objects import edges, misses, system
 from app.modules.objects.models import (
     ObjectAlias,
     ObjectInstance,
@@ -358,20 +358,22 @@ def _filled(key: str) -> Any:
 
 def _edge(relation: str, side: str) -> Any:
     """그 관계의 선이 이 객체에 하나라도 있나 — 객체끼리(`object_relations`)와 원 표 끝
-    (`object_links`) 둘 다."""
+    (`object_links`) 둘 다. **오늘 유효한 선만**(ADR 0039) — 기간이 끝난 선만 남은 객체는 지금
+    비어 있는 것이다(채울 곳)."""
     me = ObjectInstance.id
+    alive = edges.alive(ObjectRelation, edges.today())
     parts = []
     if side in ("out", "both"):
         parts += [
             exists().where(
-                ObjectRelation.src_object_id == me, ObjectRelation.relation == relation
+                ObjectRelation.src_object_id == me, ObjectRelation.relation == relation, alive
             ),
             exists().where(ObjectLink.src_id == me, ObjectLink.relation == relation),
         ]
     if side in ("in", "both"):
         parts += [
             exists().where(
-                ObjectRelation.dst_object_id == me, ObjectRelation.relation == relation
+                ObjectRelation.dst_object_id == me, ObjectRelation.relation == relation, alive
             ),
             exists().where(ObjectLink.dst_id == me, ObjectLink.relation == relation),
         ]

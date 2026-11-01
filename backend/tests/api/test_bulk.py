@@ -17,7 +17,14 @@ from app.database import engine
 from app.modules.accounts.models import User
 from app.modules.objects import bulk
 from app.modules.ontology.models import ObjectType
-from tests.api.conftest import Signed, bundle_import, export_file, finish_job, import_file
+from tests.api.conftest import (
+    Signed,
+    bundle_import,
+    clock_settled,
+    export_file,
+    finish_job,
+    import_file,
+)
 from tests.api.test_ontology import (
     _make_object,
     _make_property,
@@ -587,7 +594,10 @@ def test_다시_넣어도_사람이_붙인_별칭은_남는다(client: TestClien
         headers=admin.headers,
     )
     made = _id_of(client, admin, mode, "F-1")
-    # 사람이 화면에서 하나 더 붙인다.
+    # 사람이 화면에서 하나 더 붙인다 — 별칭은 붙인 차례(`created_at`)로 선다. 이 기계의
+    # 벽시계가 뒤로 튀면 나중 별칭이 앞으로 찍혀 차례가 뒤집혔다(-n 8 전체 시험에서 가끔,
+    # 2026-10-31).
+    clock_settled()
     put = client.put(
         f"/api/objects/{mode}/{made}/aliases",
         json={"aliases": ["코팅 벗김", "사람이 붙인 별칭"]},

@@ -425,3 +425,96 @@ def test_SPARQL_은_표기를_바꿔도_바깥을_부르지_않는다(
         assert asked.status_code == 409, asked.text
         assert asked.json()["error"]["code"] == code("RDF", 2)
     assert called == []
+
+
+def test_SPARQL_그래프는_범위_밖_기록이_늘어도_다시_세우지_않고_범위_안이_바뀌면_다시_세운다(
+    client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """캐시의 판은 **범위 안 타입의 객체만** 본다 — 예전에는 객체 표 전체의 최근 수정 시각과
+    수를 질의마다 세어(200만 건에서 0.45초), 범위에서 빠진 기록이 한 건만 들어와도 그래프를
+    처음부터 다시 세웠다(축 1.3만 객체에 5 ~ 8초). 범위 안이 늘거나 고쳐지면 다시 세운다."""
+    from app.modules.rdf import export
+    from tests.api.conftest import clock_settled
+
+    model = _make_type(client, admin, label="모델", key_policy="required")
+    case = _make_type(client, admin, label="기록", usage="log")
+    _make_property(
+        client,
+        admin,
+        case,
+        key="model",
+        label="모델",
+        data_type="object_ref",
+        ref_type_slug=model,
+    )
+    first = _make_object(client, admin, model, key="M-1", label="M-1")
+
+    built: list[object] = []
+    original = export.data_graph
+
+    def counting(*args: Any, **kwargs: Any) -> Graph:
+        built.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(export, "data_graph", counting)
+
+    def ask() -> dict[str, Any]:
+        got = client.post(
+            "/api/rdf/query",
+            json={
+                "query": f"SELECT ?k ?l WHERE {{ ?x a sp:{model} ; dcterms:identifier ?k ; "
+                "rdfs:label ?l }",
+                "types": [model],
+            },
+            headers=admin.headers,
+        )
+        assert got.status_code == 200, got.text
+        body: dict[str, Any] = got.json()
+        return body
+
+    cold = ask()
+    warm = ask()
+    assert len(built) == 1
+    # 캐시에서 꺼내도 트리플 수가 같다 — 예전에는 정의 트리플까지 세어 처음과 달랐다.
+    assert warm["triples"] == cold["triples"]
+
+    _make_object(client, admin, case, label="건1", properties={"model": first["id"]})
+    ask()
+    assert len(built) == 1, "범위 밖 기록이 그래프를 다시 세웠다"
+
+    _make_object(client, admin, model, key="M-2", label="M-2")
+    assert {row["k"] for row in ask()["rows"]} == {"M-1", "M-2"}
+    assert len(built) == 2
+
+    clock_settled()
+    renamed = client.patch(
+        f"/api/objects/{model}/{first['id']}",
+        json={"label": "M-1 새 이름"},
+        headers=admin.headers,
+    )
+    assert renamed.status_code == 200, renamed.text
+    assert {row["l"] for row in ask()["rows"]} == {"M-1 새 이름", "M-2"}
+    assert len(built) == 3
+
+
+def test_SPARQL_의_걸린_시간은_줄을_꺼내는_데까지_잰다(
+    client: TestClient, admin: Signed
+) -> None:
+    """rdflib 은 `query` 에서 질의를 세우기만 하고 줄을 꺼낼 때 계산한다 — 세우기만 재면
+    `elapsed_ms` 가 늘 0 이라(200만 건 실측 DB 에서 0.5초 걸린 질의도) AI 가 「빠르다」 로
+    읽는다."""
+    part = _make_type(client, admin, label="부품", key_policy="required")
+    _make_object(client, admin, part, key="P-1", label="P-1")
+    asked = client.post(
+        "/api/rdf/query",
+        json={
+            "query": "SELECT * WHERE { ?a ?b ?c . ?d ?e ?f }",
+            "types": [part],
+            "limit": 2000,
+        },
+        headers=admin.headers,
+    )
+    assert asked.status_code == 200, asked.text
+    body = asked.json()
+    assert body["truncated"] is True and len(body["rows"]) == 2000
+    assert body["elapsed_ms"] >= 1

@@ -18,6 +18,9 @@ import { RelatedObjects } from '@/modules/objects/RelatedObjects'
 import { SimilarRecords } from '@/modules/objects/SimilarRecords'
 import { LogCounts } from '@/modules/objects/LogCounts'
 import { RollupPanel } from '@/modules/objects/RollupPanel'
+import { ExplodePanel } from '@/modules/objects/ExplodePanel'
+import { LineagePanel } from '@/modules/objects/LineagePanel'
+import { inLineage } from '@/modules/objects/lineage'
 import { UsedInSlides } from '@/modules/slides/UsedInSlides'
 import type { PropertyDef, SectionView } from '@/modules/ontology/api'
 import { objectApi } from '@/modules/objects/api'
@@ -52,7 +55,25 @@ export default function ObjectProfilePage() {
 function ObjectProfile() {
   const { typeSlug = '', objectId = '' } = useParams()
   const navigate = useNavigate()
-  const profile = useResource(() => objectApi.profile(typeSlug, objectId), [typeSlug, objectId])
+  /**
+   * 관련 객체 · 롤업 · BOM 전개의 **기준일**(ADR 0039, 빈 글자 = 오늘)과 「지난 · 예정 관계 포함」 —
+   * 상세 한 화면이 같은 날을 쓴다(롤업이 다른 날의 트리를 모으면 관련 객체 · 전개와 수가 어긋난다).
+   */
+  const [asOf, setAsOf] = useState('')
+  const [allPeriods, setAllPeriods] = useState(false)
+  /**
+   * 관계를 고친 횟수 — BOM 전개가 이것으로 다시 센다. 상세 응답(`profile.data`)을 열쇠로 쓰면 기준일을
+   * 바꿀 때 전개 자신의 요청 하나에 상세가 다시 읽힌 뒤 또 하나가 나간다 — 큰 BOM 은 그 한 번이 비싸다.
+   */
+  const [relationsChanged, setRelationsChanged] = useState(0)
+  const profile = useResource(
+    () =>
+      // 고른 것이 없으면 예전과 같은 요청 — 기준일 · 지난 관계는 고른 때만 싣는다.
+      asOf || allPeriods
+        ? objectApi.profile(typeSlug, objectId, { asOf: asOf || null, allPeriods })
+        : objectApi.profile(typeSlug, objectId),
+    [typeSlug, objectId, asOf, allPeriods],
+  )
   // 관계 종류는 스키마에서 온다 — **어떤 관계를 맺을 수 있는지 화면이 알아야
   // 고를 것을 걸러 줄 수 있다.**
   const schema = useResource(() => ontologyApi.schema(), [])
@@ -71,12 +92,34 @@ function ObjectProfile() {
   // **색의 근거는 묶음이다** — 타입 순서로 주면 열셋째부터 전부 회색이다.
   const colorTypes = useMemo(() => schema.data?.types ?? [], [schema.data])
   const colorGroups = useMemo(() => schema.data?.groups ?? [], [schema.data])
+  /** 전개 표의 「타입」 칸 — slug 를 사람이 읽는 이름으로. */
+  const typeLabels = useMemo(
+    () => Object.fromEntries((schema.data?.types ?? []).map((one) => [one.slug, one.label])),
+    [schema.data],
+  )
   const row = profile.data?.object
   const defs = profile.data?.properties_schema ?? []
   /** 원 표를 비추는 객체 — 속성·첨부·이력·연도가 없고, 고치는 곳은 그 표의 화면이다. */
   const isSystem = objectType?.kind_class === 'system'
   /** 허브가 내려준 객체 — 값은 허브에서 고치고, 여기서는 관계로 가리키기만 한다. */
   const managed = Boolean(objectType?.managed_by)
+  /**
+   * BOM 전개의 트리 관계(ADR 0040) — **관계 트리만.** 참조 칸 트리(`ref:`)는 칸에 수량을 적을 자리가
+   * 없어 모든 줄이 1개라, 펼쳐도 트리 화면과 같은 것을 한 번 더 보일 뿐이다.
+   */
+  const treeRelation = objectType?.list_view?.tree?.relation ?? ''
+  const explodeKind =
+    treeRelation && !treeRelation.startsWith('ref:') && !isSystem
+      ? (schema.data?.relation_types.find((one) => one.slug === treeRelation) ?? null)
+      : null
+
+  /**
+   * 계보 패널(ADR 0041) — 이 타입이 어느 계보 관계 종류의 끝(원천 · 파생물)에 설 수 있을 때만.
+   * 원 표의 객체는 관계의 끝이지만 개정 · 수정 시각을 이 설치가 적지 않는다.
+   */
+  const lineageApplies =
+    !isSystem &&
+    inLineage(typeSlug, schema.data?.relation_types ?? [], schema.data?.interfaces ?? [])
 
   // 편집을 열 때 지금 값을 담는다. **화면 상태를 서버 값과 따로 두면** 저장을
   // 취소했을 때 어느 쪽이 진짜인지 알 수 없다.
@@ -303,7 +346,34 @@ function ObjectProfile() {
 
       {/* 롤업 — 트리와 롤업 정의가 있는 타입에서만. 정의가 없으면 빈 목록이라 안 뜬다. */}
       {objectType?.list_view?.tree?.relation && (objectType.list_view.rollups?.length ?? 0) > 0 && (
-        <RollupPanel typeSlug={typeSlug} objectId={objectId} reloadKey={profile.data} />
+        <RollupPanel typeSlug={typeSlug} objectId={objectId} reloadKey={profile.data} asOf={asOf} />
+      )}
+
+      {/* BOM 전개 — 관계 트리가 있는 타입에서만. 접어 두고 펼칠 때 센다(큰 BOM 을 열 때마다 세지
+          않게). 기준일은 위 롤업 · 아래 관련 객체와 같은 값이다. */}
+      {explodeKind && (
+        <ExplodePanel
+          typeSlug={typeSlug}
+          objectId={objectId}
+          relationLabel={explodeKind.label}
+          asOf={asOf}
+          onAsOf={setAsOf}
+          periodic={Boolean(explodeKind.effectivity)}
+          typeLabels={typeLabels}
+          reloadKey={relationsChanged}
+        />
+      )}
+
+      {/* 계보 — 계보 관계 종류의 끝에 설 수 있는 타입에서만. 접어 두고 펼칠 때 읽는다. 이 객체를
+          수정하면(개정이 바뀌면 아래가 낡음이 된다) · 관계를 수정하면 다시 읽는다. */}
+      {lineageApplies && (
+        <LineagePanel
+          typeSlug={typeSlug}
+          objectId={objectId}
+          defs={defs}
+          reloadKey={`${row.updated_at}|${relationsChanged}`}
+          onRepinned={profile.reload}
+        />
       )}
 
       <LogCounts objectId={objectId} counts={profile.data.log_counts ?? []} />
@@ -319,7 +389,17 @@ function ObjectProfile() {
         related={profile.data.related}
         relationTypes={schema.data?.relation_types ?? []}
         canEdit={profile.data.can_link ?? profile.data.can_edit}
-        onChanged={profile.reload}
+        onChanged={() => {
+          profile.reload()
+          setRelationsChanged((count) => count + 1)
+        }}
+        asOf={asOf}
+        onAsOf={setAsOf}
+        allPeriods={allPeriods}
+        onAllPeriods={setAllPeriods}
+        // 원 표를 비추는 타입(부서 · 계정)은 제안의 끝이 되지 않는다(ADR 0042) — 정의를 받기 전에는
+        // 어느 쪽인지 몰라 묻지 않는다(원 표 객체에 물으면 404 가 잠깐 뜬다).
+        proposals={Boolean(objectType) && !isSystem}
       />
 
       {/* 기록 요약 — 이 타입을 기준(축)으로 가진 지표가 있으면(ADR 0022). 없으면 안 그린다. */}
@@ -331,7 +411,7 @@ function ObjectProfile() {
       )}
 
       {/* 상세를 떠나지 않고 보는 관계도 — 관계가 없으면 안 그린다. */}
-      <GraphPanel objectId={objectId} types={colorTypes} groups={colorGroups} />
+      <GraphPanel objectId={objectId} types={colorTypes} groups={colorGroups} asOf={asOf} />
 
       {/* 이 값이 어디서 왔나 — 상세가 다시 읽힐 때마다 이력도 다시(관계 변경은 updated_at 을
           안 건드리므로 응답 객체 자체를 키로 쓴다). 원 표의 객체는 이력이 그 표에 있다. */}

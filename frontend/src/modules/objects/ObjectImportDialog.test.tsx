@@ -34,7 +34,7 @@ const jobsApi = vi.hoisted(() => ({
 // STUCK_MS 도 함께 — 모듈을 통째로 가짜로 두면 상수까지 사라지고, 그러면 화면은
 // 「대기가 길어졌나」 를 못 재고 조용히 돈다.
 vi.mock('@/modules/jobs/api', () => ({ jobsApi, STUCK_MS: 15_000 }))
-const ontologyApi = vi.hoisted(() => ({ properties: vi.fn() }))
+const ontologyApi = vi.hoisted(() => ({ properties: vi.fn(), relationTypes: vi.fn() }))
 vi.mock('@/modules/ontology/api', () => ({ ontologyApi }))
 
 /** 작업 흉내 — 올리면 이 작업이 오고, 기다리면 `result` 에 계획이 들어 있다. */
@@ -119,7 +119,8 @@ const CLEAN: ImportPlan = {
   counts: { create: 1, update: 1, unchanged: 0, unlink: 0, error: 0 },
 }
 
-async function mount() {
+async function mount(relationTypes: unknown[] = []) {
+  ontologyApi.relationTypes.mockResolvedValue(relationTypes)
   ontologyApi.properties.mockResolvedValue([
     {
       key: 'weight',
@@ -273,5 +274,32 @@ describe('일괄 입력', () => {
     await upload()
     await waitFor(() => expect(objectApi.importRelations).toHaveBeenCalled())
     expect(objectApi.import).not.toHaveBeenCalled()
+  })
+
+  it('유효 기간을 받는 관계 종류가 없으면 관계 표에 기간 열이 안 선다', async () => {
+    await mount([{ slug: 'uses', label: '씀', effectivity: false }])
+    await userEvent.click(screen.getByRole('tab', { name: '관계' }))
+    expect(await screen.findByLabelText('1번 줄 src')).toBeInTheDocument()
+    expect(screen.queryByLabelText('1번 줄 valid_from')).not.toBeInTheDocument()
+  })
+
+  it('유효 기간을 받는 관계 종류가 있으면 기간 두 열이 고정 넷 뒤에 선다', async () => {
+    // 내보낸 관계 파일과 같은 차례 — 다운로드해 수정한 파일을 그대로 붙여넣는다(ADR 0039).
+    objectApi.importRelations.mockResolvedValue(job('j1', null, 'queued'))
+    jobsApi.waitFor.mockResolvedValue(job('j1', CLEAN))
+    await mount([{ slug: 'bom_of', label: '구성', effectivity: true }])
+    await userEvent.click(screen.getByRole('tab', { name: '관계' }))
+    const cell = await screen.findByLabelText('1번 줄 src')
+    await waitFor(() => expect(screen.getByLabelText('1번 줄 valid_to')).toBeInTheDocument())
+    cell.focus()
+    await userEvent.paste('A\tbom_of\tP\t\t\t2026-03-01\nA2\tbom_of\tP\t\t2026-03-01\t')
+    await userEvent.click(screen.getByRole('button', { name: /미리 보기 — 2줄/ }))
+
+    await waitFor(() => expect(objectApi.importRelations).toHaveBeenCalled())
+    const sent = objectApi.importRelations.mock.calls[0][1] as File
+    expect(await sent.text()).toBe(
+      'src\trelation\tdst\tevidence_note\tvalid_from\tvalid_to\n' +
+        'A\tbom_of\tP\t\t\t2026-03-01\nA2\tbom_of\tP\t\t2026-03-01\t',
+    )
   })
 })

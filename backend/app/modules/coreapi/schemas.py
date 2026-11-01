@@ -63,6 +63,17 @@ class CoreRelationKindOut(BaseModel):
     label: str
     src: list[CoreRelationEndOut]
     dst: list[CoreRelationEndOut]
+    effectivity: bool = False
+    """유효 기간을 받는 종류인가(ADR 0039) — 참이면 선마다 `valid_from` · `valid_to` 가 실린다.
+    창구는 오늘 유효한 선만 보낸다."""
+    quantity_key: str = ""
+    """수량 칸(ADR 0040) — 선의 `properties` 중 「부모 하나에 자식 몇 개」 인 숫자 칸의 키.
+    비었으면 없다(그 종류의 선은 모두 1개로 읽는다). 선의 모양은 그대로라 판(`revision`)에 들지
+    않는다."""
+    lineage_source: str = ""
+    """계보 관계인가(ADR 0041) — `src`(출발이 원천) · `dst`(도착이 원천) · 빈 값(계보 아님).
+    원천은 만드는 데 쓰인 것이고 다른 끝이 파생물이다(W3C PROV 의 `wasDerivedFrom` 과 같은 뜻 —
+    파생물 → 원천). 선의 모양은 그대로라 판(`revision`)에 들지 않는다."""
 
 
 class CoreTypeOut(BaseModel):
@@ -185,9 +196,17 @@ class CoreRelationOut(BaseModel):
     evidence_note: str = ""
     properties: dict[str, Any] = Field(default_factory=dict)
     """선 자체에 붙은 값(근거 건수처럼). **빈 값은 키를 뺀다.**"""
+    valid_from: str | None = None
+    """유효 기간의 시작일(포함, `YYYY-MM-DD`, ADR 0039) — 유효 기간을 받는 관계 종류의 선만.
+    **이 창구는 오늘 유효한 선만 준다** — 같은 `(src, relation, dst, dst_type)` 은 한 줄이다.
+    기간은 받는 쪽이 「언제까지인가」 를 알게 싣는다."""
+    valid_to: str | None = None
+    """유효 기간의 끝날(**제외** — 그날부터 무효). 그날이 지나면 이 창구가 그 선을
+    `deleted` 로 알린다(다른 기간의 같은 선이 그날 시작하면 그 선으로 바꿔 준다)."""
     updated_at: str
     deleted: bool = False
-    """참이면 **끊긴 선**이다 — 받는 쪽은 자기 쪽에서도 끊는다."""
+    """참이면 **끊긴 선**이다 — 받는 쪽은 자기 쪽에서도 끊는다. 유효 기간이 끝나 오늘 유효하지
+    않게 된 선도 이것으로 온다."""
 
 
 class CoreRelationPageOut(BaseModel):

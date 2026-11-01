@@ -6,8 +6,8 @@
 
     block    그대로 둔다 — 먼저 끊거나 고치러 간다 (기본)
     detach   참조를 비우고 관계를 끊고 지운다 — 가리키던 객체마다 감사 기록이 남는다
-    merge    다른 객체에 합치고 지운다 — 참조·관계가 이긴 쪽으로 옮겨 가고,
-             지는 쪽은 `merged_into` 로 남아 옛 링크가 새 것으로 간다
+    merge    다른 객체에 합치고 지운다 — 참조·관계(제안된 관계도)가 이긴 쪽으로 옮겨
+             가고, 지는 쪽은 `merged_into` 로 남아 옛 링크가 새 것으로 간다
 
 ## 보이지 않는 것도 센다
 
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 from sqlalchemy import func, select
@@ -28,7 +28,8 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.files import services as files_services
-from app.modules.objects import aliases, links, rewrite, system
+from app.modules.objects import aliases, links, proposals, rewrite, system
+from app.modules.objects import edges as edge_rule
 from app.modules.objects import relations as rel
 from app.modules.objects.models import ObjectInstance, ObjectRef, ObjectRelation
 from app.modules.ontology import interfaces
@@ -59,6 +60,9 @@ class RelationHit:
     other_id: uuid.UUID
     other_label: str
     other_type_slug: str
+    valid_from: date | None = None
+    valid_to: date | None = None
+    """유효 기간(ADR 0039) — 지우면 기간이 지난 선 · 앞으로의 선도 함께 끊긴다."""
 
 
 #: 「가리키는 것」 목록에 싣는 수 — 칸마다. 인기 모델은 10만 건이 가리킨다 — 다 실을 화면이
@@ -180,6 +184,8 @@ def references_of(
                     other_id=end.id,
                     other_label=end.label,
                     other_type_slug=types[end.type_id].slug if end.type_id in types else "",
+                    valid_from=edge.valid_from,
+                    valid_to=edge.valid_to,
                 )
             )
         else:
@@ -224,6 +230,8 @@ def _soft_delete(
     # 지운 객체의 별칭은 비운다 — 남기면 그 이름을 다른 객체가 못 쓴다. (합치기는 이 전에
     # 이긴 쪽으로 옮겨 두었다.)
     aliases.drop_all(db, row.id)
+    # 제안된 관계(ADR 0042)는 남긴다 — 끝이 지워진 제안은 목록 · 검토함에서 빠지고 확정은
+    # 거절된다(OBJECTS-0141). 되살리면 다시 뜬다.
     audit.record(
         db,
         action="object.delete",
@@ -466,7 +474,7 @@ def merge_into(
         db, user, row, object_type, new_id=target.id, reason=reason
     )
 
-    edges = list(
+    mine = list(
         db.scalars(
             select(ObjectRelation).where(
                 (ObjectRelation.src_object_id == row.id)
@@ -477,16 +485,20 @@ def merge_into(
     kinds = {one.slug: one for one in db.scalars(select(RelationType))}
     moved_edges = 0
     dropped_edges = 0
-    for edge in edges:
+    for edge in mine:
         src = target.id if edge.src_object_id == row.id else edge.src_object_id
         dst = target.id if edge.dst_object_id == row.id else edge.dst_object_id
+        # 이긴 쪽에 같은 선이 이미 있나 — 유효 기간이 있으면 **기간이 겹치는** 같은 선만
+        # 같은 것이다(ADR 0039). 기간이 갈린 선은 함께 옮겨 이긴 쪽의 이력이 된다.
         duplicate = src == dst or (
-            db.scalar(
-                select(ObjectRelation.id).where(
-                    ObjectRelation.src_object_id == src,
-                    ObjectRelation.dst_object_id == dst,
-                    ObjectRelation.relation == edge.relation,
-                )
+            edge_rule.find_overlap(
+                db,
+                src_id=src,
+                dst_id=dst,
+                relation=edge.relation,
+                valid_from=edge.valid_from,
+                valid_to=edge.valid_to,
+                skip=edge.id,
             )
             is not None
         )
@@ -500,7 +512,15 @@ def merge_into(
         if kind is not None:
             # 이 선은 아직 지는 쪽에 걸려 있어 이긴 쪽 기준의 개수·순환 검사에 안 세어진다.
             try:
-                rel.require_cardinality(db, kind, src, dst)
+                rel.require_cardinality(
+                    db,
+                    kind,
+                    src,
+                    dst,
+                    valid_from=edge.valid_from,
+                    valid_to=edge.valid_to,
+                    skip=edge.id,
+                )
                 rel.require_no_cycle(db, kind, src, dst)
             except AppError:
                 db.delete(edge)
@@ -533,6 +553,9 @@ def merge_into(
             link.src_type = object_type.slug
         moved_edges += 1
     db.flush()
+
+    # 제안된 관계(ADR 0042)도 이긴 쪽으로 — 같은 열린 제안이 되거나 자기 자신으로 가면 버린다.
+    proposals_moved, proposals_dropped = proposals.move_on_merge(db, row, target)
 
     # 지는 쪽의 비어 있는 칸을 이긴 쪽이 채운다 — 값이 있는 칸은 이긴 쪽이 맞다.
     before = dict(target.properties or {})
@@ -572,6 +595,8 @@ def merge_into(
             "aliases_moved": aliases_moved,
             "aliases_dropped": aliases_dropped,
             "attachments_moved": attachments_moved,
+            "proposals_moved": proposals_moved,
+            "proposals_dropped": proposals_dropped,
             **audit.diff({"properties": before}, {"properties": target.properties or {}}),
         },
         reason=reason,

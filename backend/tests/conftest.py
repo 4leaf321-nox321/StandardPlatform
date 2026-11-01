@@ -20,6 +20,7 @@ bcrypt 라운드를 낮춘다. 시험 하나가 계정을 만들고(해시) 로�
 from __future__ import annotations
 
 import atexit
+import fcntl
 import os
 import shutil
 import tempfile
@@ -123,10 +124,19 @@ def schema() -> None:
         raise RuntimeError(f"시험 DB 가 아닙니다: {name}. 이름이 _test 로 끝나야 합니다.")
 
     _ensure_database(name)
-    with engine.begin() as connection:
-        connection.execute(text("DROP SCHEMA public CASCADE"))
-        connection.execute(text("CREATE SCHEMA public"))
-    Base.metadata.create_all(bind=engine)
+    # **작업자끼리 차례로 지우고 세운다.** 스키마를 통째로 지우는 트랜잭션은 표 · 색인 · 제약 ·
+    # 형식마다 잠금을 하나씩 쥐어(실측 600개 남짓) 작업자 8개가 함께 하면 Postgres 의 잠금 표
+    # (기본 64 곱하기 접속 100)가 넘친다 — 「out of shared memory」 로 시험 전부가 시작도 못
+    # 했다(2026-10-30, 관계 유효 기간의 제약 · 트리거가 더해진 뒤). 같은 PC 의 작업자끼리
+    # 줄을 세운다.
+    stem = make_url(os.environ["APP_TEST_DATABASE_URL"]).database or "test"
+    queue = os.path.join(tempfile.gettempdir(), f"sp-pytest-schema-{stem}.lock")
+    with open(queue, "w") as held:
+        fcntl.flock(held, fcntl.LOCK_EX)
+        with engine.begin() as connection:
+            connection.execute(text("DROP SCHEMA public CASCADE"))
+            connection.execute(text("CREATE SCHEMA public"))
+        Base.metadata.create_all(bind=engine)
 
 
 @pytest.fixture(autouse=True)

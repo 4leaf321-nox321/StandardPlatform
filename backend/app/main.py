@@ -49,7 +49,10 @@ from app.modules.metrics import services as metrics_services
 from app.modules.notices import routes as notices_routes
 from app.modules.notifications import routes as notifications_routes
 from app.modules.objects import attachments as objects_attachments
+from app.modules.objects import lineage_review as objects_lineage_review
 from app.modules.objects import misses as objects_misses
+from app.modules.objects import proposal_review as objects_proposal_review
+from app.modules.objects import proposals as objects_proposals
 from app.modules.objects import quality as objects_quality
 from app.modules.objects import review as objects_review
 from app.modules.objects import routes as objects_routes
@@ -198,8 +201,16 @@ def _register_extensions() -> None:
     extensions.register_maintenance(objects_misses.maintenance)
     # **검토함의 종류** — 사람의 판단을 기다리는 일을 원래 자리에서 읽어 모으는 제공자(ADR
     # 0027). 안 걸면 그 종류는 검토함에 안 뜨고, 홈 「남은 일」 의 그 줄도 원래 화면으로 간다.
-    for provider in (*objects_review.PROVIDERS, *review_links.PROVIDERS):
+    for provider in (
+        *objects_review.PROVIDERS,
+        *objects_lineage_review.PROVIDERS,
+        *objects_proposal_review.PROVIDERS,
+        *review_links.PROVIDERS,
+    ):
         review_registry.register(provider)
+    # **제안된 관계**(ADR 0042) — AI · 규칙이 남긴 것을 아무도 안 열면 영영 제안으로 남는다.
+    # 확정할 수 있는 사람의 홈에 수를 띄우고, 누르면 검토함의 그 종류로 간다.
+    extensions.register_maintenance(objects_proposals.maintenance)
 
     # `system` 타입이 비추는 원 표. **등록하지 않으면 그 타입은 만들 수 없다** —
     # 스키마의 `system_sources` 가 여기서 나온다. 승격한 전용 표도 여기 더한다.

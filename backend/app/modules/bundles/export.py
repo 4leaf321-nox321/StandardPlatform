@@ -11,7 +11,9 @@
 - 정의: 고른 묶음들, 그 안의 타입(원 표를 비추는 타입 제외), **양끝이 모두 그 안인** 관계 종류.
 - 객체: 지워지지 않은 것 전부. 참조 칸은 상대의 **식별자**로 — 받는 쪽에서 다시 푼다. 사용
   중지도 상태로 간다.
-- 관계: 내보내는 관계 종류의 줄 — **붙은 속성도 `properties` 로 함께**(근거 건수처럼).
+- 관계: 내보내는 관계 종류의 줄 — **붙은 속성도 `properties` 로 함께**(근거 건수처럼). 계보
+  선은 고정(`pinned_revision` · `pinned_at`, 바로 낡았으면 `pinned_stale`)도 — 받는 쪽은 새로
+  박지 않는다(ADR 0041).
 - 별칭: **배열로.** 예전에는 `;` 로 이어 보냈고, 그래서 이름 안에 `;` 가 든 별칭이 받는 쪽에서
   둘로 갈렸다(고장 모드 80건 · 메커니즘 482건이 그런 이름이다).
 - **무덤(`tombstones`):** 허브에서 지운 객체와 끊긴 선. 예전에는 아무것도 안 갔고, 그래서
@@ -31,7 +33,7 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from app.modules.objects import aliases
+from app.modules.objects import aliases, lineage
 from app.modules.objects.bulk import MAX_ROWS, relation_defs
 from app.modules.objects.models import (
     ObjectAlias,
@@ -204,7 +206,14 @@ def export_group(
         kind_slugs,
         alive_keys={(type_of[row.type_id].slug, row.key or row.label) for row in rows},
         alive_edges={
-            (batch["type_slug"], str(one["src"]), str(one["relation"]), str(one["dst"]))
+            (
+                batch["type_slug"],
+                str(one["src"]),
+                str(one["relation"]),
+                str(one["dst"]),
+                one.get("valid_from"),
+                one.get("valid_to"),
+            )
             for batch in relations
             for one in batch["rows"]
         },
@@ -237,7 +246,7 @@ def _tombstones(
     kind_slugs: list[str],
     *,
     alive_keys: set[tuple[str, str]],
-    alive_edges: set[tuple[str, str, str, str]],
+    alive_edges: set[tuple[str, str, str, str, str | None, str | None]],
     since: datetime | None = None,
 ) -> dict[str, list[dict[str, Any]]]:
     """**사라진 것.** 지운 객체(합쳐진 것은 이긴 쪽의 식별자와 함께)와 끊긴 선.
@@ -290,11 +299,17 @@ def _tombstones(
             start, end = ends.get(grave.src_object_id), ends.get(grave.dst_object_id)
             if start is None or end is None or start.type_id not in type_of:
                 continue
+            # 유효 기간까지가 선의 정체다(ADR 0039) — 같은 두 객체 사이에 기간을 달리한 선이
+            # 여럿일 수 있다. 받는 쪽은 그 기간의 선만 끊는다.
+            valid_from = grave.valid_from.isoformat() if grave.valid_from else None
+            valid_to = grave.valid_to.isoformat() if grave.valid_to else None
             edge = (
                 type_of[start.type_id].slug,
                 start.key or start.label,
                 grave.relation,
                 end.key or end.label,
+                valid_from,
+                valid_to,
             )
             if edge in alive_edges:
                 # 다시 이은 선이다 — 무덤을 보내면 받는 쪽이 방금 받은 선을 끊는다.
@@ -305,6 +320,9 @@ def _tombstones(
                     "src": edge[1],
                     "relation": edge[2],
                     "dst": edge[3],
+                    "valid_from": valid_from,
+                    "valid_to": valid_to,
+                    "period": True,
                     "at": grave.removed_at.isoformat(),
                 }
             )
@@ -410,15 +428,19 @@ def _relations(
         one.slug: relation_defs(db, one)
         for one in db.scalars(select(RelationType).where(RelationType.slug.in_(kinds)))
     }
-    edges = db.scalars(
-        select(ObjectRelation)
-        .where(
-            ObjectRelation.relation.in_(kinds),
-            ObjectRelation.src_object_id.in_(list(names)),
-            ObjectRelation.dst_object_id.in_(list(names)),
+    edges = list(
+        db.scalars(
+            select(ObjectRelation)
+            .where(
+                ObjectRelation.relation.in_(kinds),
+                ObjectRelation.src_object_id.in_(list(names)),
+                ObjectRelation.dst_object_id.in_(list(names)),
+            )
+            .order_by(ObjectRelation.created_at, ObjectRelation.id)
         )
-        .order_by(ObjectRelation.created_at, ObjectRelation.id)
     )
+    # 계보 선의 고정과 지금 판정(ADR 0041) — 고정된 선만 묻는다(대부분의 설치는 없다).
+    pins = lineage.pin_states(db, [edge.id for edge in edges if edge.pinned_at is not None])
     rows_by_type: dict[str, list[dict[str, Any]]] = {}
     for edge in edges:
         row: dict[str, Any] = {
@@ -427,6 +449,20 @@ def _relations(
             "dst": names[edge.dst_object_id],
             "evidence_note": edge.evidence_note or "",
         }
+        # 유효 기간(ADR 0039) — 기간을 가리지 않고 전부 싣는다. 받는 쪽의 「맞춤」 은 묶음에
+        # 없는 선을 끊으므로, 지난 · 앞으로의 선을 빼면 받는 쪽에서 그 선이 끊긴다.
+        if edge.valid_from is not None:
+            row["valid_from"] = edge.valid_from.isoformat()
+        if edge.valid_to is not None:
+            row["valid_to"] = edge.valid_to.isoformat()
+        pinned = pins.get(edge.id)
+        if pinned is not None and edge.pinned_at is not None:
+            # 계보 선의 고정 — 받는 쪽은 새로 박지 않고 이 기준을 그대로 쓴다. 바뀐 때로
+            # 판정하는 선은 시각이 이 설치의 시계라 판정(`pinned_stale`)도 싣는다.
+            row["pinned_revision"] = edge.pinned_revision
+            row["pinned_at"] = edge.pinned_at.isoformat()
+            if pinned.stale:
+                row["pinned_stale"] = True
         properties = _properties(edge.properties or {}, defs_of.get(edge.relation, []), names)
         if properties:
             row["properties"] = properties

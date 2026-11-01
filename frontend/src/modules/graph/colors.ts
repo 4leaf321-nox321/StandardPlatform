@@ -80,9 +80,7 @@ export function shade(hex: string, amount: number): string {
   if (!amount) return hex
   const h = hex.replace('#', '')
   const mix = (channel: number) =>
-    amount > 0
-      ? Math.round(channel + (255 - channel) * amount)
-      : Math.round(channel * (1 + amount))
+    amount > 0 ? Math.round(channel + (255 - channel) * amount) : Math.round(channel * (1 + amount))
   const parts = [0, 2, 4].map((at) => mix(parseInt(h.slice(at, at + 2), 16)))
   return `#${parts.map((one) => Math.max(0, Math.min(255, one)).toString(16).padStart(2, '0')).join('')}`
 }
@@ -163,4 +161,22 @@ export function colorScale(keys: string[]): (key: string) => string {
     if (i === undefined || i >= PALETTE.length) return OVERFLOW_COLOR
     return PALETTE[i]
   }
+}
+
+/** 캔버스 바탕 — 선의 흐린 색을 이것과 섞는다(`WholeCanvas` 의 바탕과 같다). */
+export const BACKDROP = { light: '#f8fafc', dark: '#0b1220' }
+
+/**
+ * 색을 바탕과 섞은 **불투명** 색 — `t` 가 1 이면 바탕.
+ *
+ * 반투명 색(`rgba(…, 0.1)`)을 WebGL 선에 그대로 주면 캔버스가 그 색을 「미리 곱한 알파」 로 합성해
+ * 흐려지기는커녕 밝은 노랑 · 하늘색으로 번졌다(시장 서비스 전부, 선 62만 — 실측). 바탕과 미리 섞으면
+ * 겹쳐도 그 색 그대로다.
+ */
+export function blend(hex: string, backdrop: string, t: number): string {
+  const channel = (h: string, at: number) => parseInt(h.replace('#', '').slice(at, at + 2), 16)
+  const parts = [0, 2, 4].map((at) =>
+    Math.round(channel(hex, at) * (1 - t) + channel(backdrop, at) * t),
+  )
+  return `#${parts.map((one) => one.toString(16).padStart(2, '0')).join('')}`
 }

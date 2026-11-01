@@ -23,7 +23,7 @@ from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
 from app.modules.jobs.models import Job
-from app.modules.objects import graph, refedges, system
+from app.modules.objects import edges, graph, refedges, system
 from app.modules.objects.models import GraphEdgeSnapshot
 from app.modules.ontology.models import ObjectType
 from app.shared import system_sources
@@ -104,7 +104,8 @@ def take(db: Session) -> Snapshot:
         for row in db.scalars(select(ObjectType).where(ObjectType.is_active.is_(True)))
         if system.is_system(row) and system_sources.system_source(row.system_source)
     ]
-    relations = graph.type_edge_counts(db, user=viewer)
+    # 오늘 유효한 선만(ADR 0039) — 지난 선까지 세면 그림에 없는 선이 굵기로 든다.
+    relations = graph.type_edge_counts(db, user=viewer, at=edges.today())
     refs = refedges.ref_counts(db, user=viewer)
     links = graph.type_link_counts(db, user=viewer, systems=systems)
     snapshot = Snapshot(

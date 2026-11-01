@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -98,6 +98,36 @@ class FileCellOut(BaseModel):
     """사진이 있으면 가장 먼저 올라온 사진, 없으면 가장 먼저 올라온 파일."""
 
 
+class LinkedValueOut(BaseModel):
+    """이어진 칸의 값 하나 — 이어진 것 하나의 값(여러 값 칸이면 원소 하나)."""
+
+    value: Any
+    """원래 값 — 숫자는 숫자, 객체(관계로 이어진 것 자체 · 참조 칸)면 그 id."""
+    label: str
+    """사람이 읽는 말 — 객체면 이름(볼 수 없으면 「(볼 수 없는 객체)」)."""
+
+
+class LinkedCellOut(BaseModel):
+    """한 줄의 이어진 칸 하나(ADR 0043) — 상한(20)까지만 싣는다."""
+
+    values: list[LinkedValueOut]
+    more: bool = False
+    """상한보다 많이 이어져 있다 — 실린 것이 전부가 아니다. **몇 개인지는 세지 않았다**(정확한
+    수는 통계 · 조건으로)."""
+
+
+class LinkedColumnOut(BaseModel):
+    """요청한 이어진 칸 하나 — 열 머리에 쓸 이름과 모양."""
+
+    field: str
+    label: str
+    """「기본 모델 › 이름」 · 「구성품 관계 › 수량」."""
+    data_type: str
+    """끝 칸의 종류 — 관계로 이어진 것 자체면 `object`."""
+    multi: bool
+    """한 줄에 값이 여럿일 수 있다(여럿과 이어진 걸음 · 여러 값 칸)."""
+
+
 class ObjectPageOut(Page[ObjectOut]):
     """객체 목록 한 쪽. 목록 화면(`list_view.columns`)에 파일 속성이 있으면 그 칸들이
     `files` 로 함께 온다 — 줄마다 첨부를 물으러 가면 한 쪽에 요청이 수십 개 붙는다.
@@ -107,6 +137,13 @@ class ObjectPageOut(Page[ObjectOut]):
 
     files: dict[str, dict[str, FileCellOut]] = Field(default_factory=dict)
     """{객체 id: {속성 키: 칸}}. 첨부가 없는 칸은 없다(빈 칸)."""
+    lineage: dict[str, str] = Field(default_factory=dict)
+    """{객체 id: 낡음} — **낡은 줄만**(ADR 0041). `direct`(바로 낡음 — 원천이 고정 뒤에 바뀜) ·
+    `upstream`(위에서 낡음 — 원천이 낡음). 계보 관계 종류가 없는 설치는 늘 비어 있다."""
+    linked_columns: list[LinkedColumnOut] = Field(default_factory=list)
+    """요청한 이어진 칸(`columns`)의 머리 — 받은 차례대로."""
+    linked: dict[str, dict[str, LinkedCellOut]] = Field(default_factory=dict)
+    """{객체 id: {주소: 칸}} — 이어진 칸의 값(ADR 0043). 이어진 것이 없는 칸은 없다."""
 
 
 class RelatedObjectOut(BaseModel):
@@ -138,6 +175,14 @@ class RelatedObjectOut(BaseModel):
     고치라고 화면이 안내한다."""
     field_key: str | None = None
     """`stored_as='field'` 일 때 어느 칸인가(가리키는 쪽 객체의 속성 키)."""
+    valid_from: date | None = None
+    """유효 기간의 시작일(포함, ADR 0039) — 유효 기간을 받는 관계 종류의 선만. 비면
+    처음부터."""
+    valid_to: date | None = None
+    """유효 기간의 끝날(**제외** — 그날부터 무효). 비면 끝없이."""
+    period_state: str = "current"
+    """기준일에 이 선이 어디인가 — `current`(유효) · `past`(지난 선) · `future`(앞으로의 선).
+    기본 화면에는 `current` 만 온다 — 「지난 · 앞으로의 선 포함」(`all_periods`)이면 셋 다."""
 
 
 class TreeNodeOut(BaseModel):
@@ -154,6 +199,8 @@ class TreeNodeOut(BaseModel):
 
 class TreeOut(BaseModel):
     nodes: list[TreeNodeOut]
+    as_of: date | None = None
+    """이 트리의 기준일(ADR 0039) — 안 주면 오늘이 여기 실린다."""
     orphan_count: int
     """부모도 자식도 없는 것의 수.
 
@@ -167,13 +214,151 @@ class RelationCreateRequest(BaseModel):
     dst_object_id: uuid.UUID
     properties: dict[str, Any] = Field(default_factory=dict)
     evidence_note: str = Field(default="", max_length=500)
+    valid_from: date | None = None
+    """유효 기간의 시작일(포함) — 유효 기간을 받는 관계 종류에만(ADR 0039). 비면 처음부터."""
+    valid_to: date | None = None
+    """유효 기간의 끝날(**제외** — 그날부터 무효). 비면 끝없이."""
 
 
 class RelationPatchRequest(BaseModel):
-    """**보낸 것만 바꾼다.** 양끝과 종류는 못 바꾼다 — 그건 다른 관계다."""
+    """**보낸 것만 바꾼다.** 양끝과 종류는 못 바꾼다 — 그건 다른 관계다. 기간은 `null` 을
+    보내면 비운다(그쪽 끝이 열린다), 안 보내면 그대로."""
 
     properties: dict[str, Any] | None = None
     evidence_note: str | None = Field(default=None, max_length=500)
+    valid_from: date | None = None
+    valid_to: date | None = None
+
+
+ProposalOrigin = Literal["user", "mcp", "rule", "datasource", "import"]
+ProposalOutcome = Literal["created", "open", "connected", "rejected_before", "error"]
+
+
+class RelationProposalCreateRequest(BaseModel):
+    """**제안** 하나 — 이 객체에서 출발하는 선(ADR 0042). 「관계 추가」 와 같은 칸에 확신도 ·
+    출처를 더한다. 양 끝을 **볼 수만 있으면** 된다(확정은 출발 객체를 고칠 수 있는 사람)."""
+
+    relation: str
+    dst_object_id: uuid.UUID
+    properties: dict[str, Any] = Field(default_factory=dict)
+    evidence_note: str = Field(default="", max_length=500)
+    """**근거** — 검토자가 읽는다(어느 문서의 어느 줄 · 왜 그렇게 봤나). 확정하면 선의 근거."""
+    valid_from: date | None = None
+    valid_to: date | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    """**확신도**(0 ~ 1) — 비우면 「모름」(검토함이 추천을 안 낸다)."""
+    origin: ProposalOrigin = "user"
+    """누가 · 무엇이 — 사람 · AI(MCP) · 규칙 · 데이터 소스 · 파일 가져오기."""
+    origin_ref: str = Field(default="", max_length=200)
+    """어느 대화 · 규칙 · 소스 · 파일인지 짧은 글 — 검토함이 같은 출처끼리 묶는다."""
+    again: bool = False
+    """**거절된 적 있는 같은 제안**도 다시 만든다. 거짓이면 「언제 누가 왜 거절했나」 만
+    돌려준다."""
+
+
+class RelationProposalRowIn(BaseModel):
+    """여러 건 제안의 한 줄 — 출발 객체를 줄마다 적는다."""
+
+    src_object_id: uuid.UUID
+    relation: str
+    dst_object_id: uuid.UUID
+    properties: dict[str, Any] = Field(default_factory=dict)
+    evidence_note: str = Field(default="", max_length=500)
+    valid_from: date | None = None
+    valid_to: date | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    origin: ProposalOrigin = "user"
+    origin_ref: str = Field(default="", max_length=200)
+
+
+class RelationProposalBulkRequest(BaseModel):
+    rows: list[RelationProposalRowIn] = Field(min_length=1, max_length=500)
+    again: bool = False
+    """거절된 적 있는 같은 제안도 다시 만든다(모든 줄에)."""
+
+
+class RelationProposalOut(BaseModel):
+    """제안 한 줄 — 양 끝 · 근거 · 확신도 · 누가/무엇이 · 상태 · 이 사람이 할 수 있는 것."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    relation: str
+    relation_label: str
+    label: str
+    """보는 객체 쪽에서 읽는 말 — 정방향이면 종류 이름, 역방향이면 반대 이름."""
+    outgoing: bool
+    """보는 객체가 출발점인가(객체 화면). 전체 목록에서는 늘 참."""
+    status: Literal["proposed", "accepted", "rejected"]
+    src_object_id: uuid.UUID
+    src_label: str
+    """못 보는 객체면 「(볼 수 없는 객체)」."""
+    src_key: str | None
+    src_type_slug: str
+    src_type_label: str
+    dst_object_id: uuid.UUID
+    dst_label: str
+    dst_key: str | None
+    dst_type_slug: str
+    dst_type_label: str
+    properties: dict[str, Any]
+    valid_from: date | None
+    valid_to: date | None
+    evidence_note: str
+    confidence: float | None
+    origin: str
+    origin_ref: str
+    proposed_by_label: str
+    created_at: datetime
+    decided_by_label: str
+    decided_at: datetime | None
+    decision_note: str
+    relation_id: uuid.UUID | None
+    """확정으로 생긴 선 — 그 선이 해제되면 비어 있다."""
+    can_decide: bool
+    """이 사람이 확정 · 거절할 수 있나(출발 객체를 수정할 수 있나)."""
+    can_withdraw: bool
+    """이 사람이 철회할 수 있나(제안한 사람 · 시스템 관리자)."""
+
+
+class RelationProposalResultOut(BaseModel):
+    """제안 하나의 결과 — **만들지 않은 까닭도 결과다**(이미 이어짐 · 이미 열림 · 거절된 적
+    있음). 여러 건이면 줄마다 하나(`index` 는 보낸 차례)."""
+
+    index: int = 0
+    status: ProposalOutcome
+    message: str
+    proposal: RelationProposalOut | None = None
+    """만든 · 이미 열린 · 거절된 그 제안. `connected` · `error` 면 비어 있다."""
+    relation_id: uuid.UUID | None = None
+    """`connected` 면 이미 있는 그 선."""
+    updated: bool = False
+    """`open` 이고 더 높은 확신도로 근거 · 확신도를 바꿨으면 참."""
+    error_code: str | None = None
+
+
+class RelationProposalBulkOut(BaseModel):
+    rows: list[RelationProposalResultOut]
+    counts: dict[str, int]
+    """결과마다의 수 — created · open · connected · rejected_before · error."""
+
+
+class RelationProposalDecisionRequest(BaseModel):
+    note: str = Field(default="", max_length=500)
+    """까닭 — 거절이면 다음에 같은 제안이 올 때 그대로 보인다."""
+
+
+class RelationProposalPage(BaseModel):
+    items: list[RelationProposalOut]
+    total: int
+    limit: int
+    offset: int
+
+
+class RelationProposalReopenOut(BaseModel):
+    reopened: bool
+    message: str
+    proposal: RelationProposalOut | None = None
 
 
 class LogCountOut(BaseModel):
@@ -240,6 +425,99 @@ class RollupOut(BaseModel):
     missing: int
     """아래에 있지만 값이 빈 객체 수. **이것이 붙어야 합계가 「전부의 합」 으로 안 읽힌다.**"""
     descendants: int
+    """모은 대상 객체 수 — 「말단만」 이면 말단의 수."""
+    weighted: bool = False
+    """「수량 반영」(ADR 0040) — 아래 객체마다 총수량만큼 셌다."""
+    leaves_only: bool = False
+    """「말단만」 — 그 기준일의 트리에서 아래가 없는 객체만 모았다."""
+    quantity_missing: int = 0
+    """「수량 반영」 일 때 아래 선 중 수량 칸이 빈 것 — 1개로 셌다."""
+    note: str = ""
+    """값을 못 낸 까닭(트리의 순환 등) — 비었으면 없다."""
+
+
+# --- BOM 전개 (ADR 0040) ----------------------------------------------------
+
+
+class ExplodeObjectOut(BaseModel):
+    """전개의 객체 하나. **못 보거나 삭제된 것은 가린다** — id 가 null 이고 이름이 「(볼 수
+    없는 객체)」 · 「(삭제된 객체)」. 그 객체를 지나 아래(위)는 센다."""
+
+    id: uuid.UUID | None
+    label: str
+    key: str | None = None
+    type_slug: str | None = None
+    status: str | None = None
+    hidden: bool = False
+    deleted: bool = False
+
+
+class ExplodeLineOut(ExplodeObjectOut):
+    """전개의 줄 하나 — 보기마다 쓰는 칸이 다르다."""
+
+    level: int
+    """단계 — 단계별 · 어디에 쓰였나는 그 줄의 깊이(시작 객체가 0), 정리는 가장 얕은 단계."""
+    total: float
+    """단계별: 누적 수량(뿌리에서 이 줄까지 곱한 것) · 정리: 총수량(모든 경로의 합) · 어디에
+    쓰였나: 이 객체 하나에 시작 객체가 몇 개(이 줄까지의 경로)."""
+    quantity: float | None = None
+    """단계별 · 어디에 쓰였나 — 그 줄로 오는 관계에 적힌 수량. null 이면 1개로 셌다."""
+    quantity_missing: bool = False
+    """그 관계의 수량 칸이 비었거나 숫자가 아니다(1개로 셌다)."""
+    depth_max: int | None = None
+    """정리 — 가장 깊은 단계."""
+    paths: int | None = None
+    """정리 — 뿌리에서 이 객체까지의 경로 수."""
+    missing: int | None = None
+    """정리 — 이 객체로 오는 관계 중 수량 없음인 것."""
+
+
+class ExplodeTopOut(ExplodeObjectOut):
+    """어디에 쓰였나의 맨 위 객체(부모가 없는 것) — 「그것 하나에 시작 객체가 총 몇 개」."""
+
+    total: float
+    paths: int
+    level: int
+    """가장 먼 단계."""
+
+
+class ExplodeTotalsOut(BaseModel):
+    objects: int
+    """서로 다른 보이는 객체 수(시작 객체는 뺀다)."""
+    lines: int
+    """실린 줄 수."""
+    lines_total: int
+    """자르기 전의 전체 줄 수 — 단계별은 경로 수의 합."""
+    links: int
+    """따라간 관계 수."""
+    missing: int
+    """수량 없음 — 수량 칸이 비었거나 숫자가 아닌 관계 수(1개로 셌다)."""
+    hidden: int
+    """지나간 볼 수 없는 객체 수(조회를 부서로 좁힌 설치의 남의 부서) — 줄로는 가린다."""
+    deleted: int
+    """지나간 삭제된 객체 수 — 롤업 · 하위 포함과 같이 그 아래는 센다."""
+
+
+class ExplodeOut(BaseModel):
+    """BOM 전개(ADR 0040) — 관계의 수량을 경로 따라 곱한 것."""
+
+    mode: str
+    """summary(정리) · indented(단계별) · where_used(어디에 쓰였나)."""
+    root: ExplodeObjectOut
+    """시작 객체 — 전개면 뿌리, 어디에 쓰였나면 그 객체."""
+    as_of: date
+    relation: str
+    relation_label: str
+    parent_end: str
+    quantity_key: str
+    """관계 종류의 수량 칸 — 비었으면 모든 관계를 1개로 셌다(참조 칸 트리도 그렇다)."""
+    quantity_label: str
+    lines: list[ExplodeLineOut]
+    tops: list[ExplodeTopOut] = Field(default_factory=list)
+    """어디에 쓰였나 — 맨 위 객체마다 그것 하나에 시작 객체가 총 몇 개."""
+    totals: ExplodeTotalsOut
+    truncated: bool
+    """줄 상한(`limit`)에 닿아 다 싣지 않았다 — `totals.lines_total` 이 전체 줄 수."""
 
 
 # --- 일괄 -------------------------------------------------------------------
@@ -342,6 +620,8 @@ class RelationHitOut(BaseModel):
     other_id: uuid.UUID
     other_label: str
     other_type_slug: str
+    valid_from: date | None = None
+    valid_to: date | None = None
 
 
 class ReferencesOut(BaseModel):
@@ -423,6 +703,10 @@ class ConditionOut(BaseModel):
     exclude: int = Field(default=0, ge=0, le=99)
     """0 이면 보통 조건, 1 이상이면 그 번호의 **제외 묶음**(같은 번호끼리 AND 로 묶어 뺀다 —
     주소의 `nf<번호>.<칸>.<연산>`, ADR 0015)."""
+    edge: int = Field(default=0, ge=0, le=99)
+    """0 이면 묶지 않음, 1 이상이면 그 번호의 **같은 관계 묶음**(ADR 0043) — 같은 번호의 조건은
+    같은 관계 걸음의 **선 하나**(그 선의 칸 · 상대 · 상대의 칸)에서 함께 맞아야 걸린다. 주소의
+    `fe<번호>.<칸>.<연산>`(제외 묶음 안이면 `nf<n>.fe<m>.`)."""
 
 
 class SavedViewQuery(BaseModel):
@@ -592,6 +876,9 @@ class FieldOptionOut(BaseModel):
     multi: bool = False
     enum_options: list[str] | None = None
     ref_type_slug: str | None = None
+    edge: bool = False
+    """**선의 칸**(`out.<관계>~<관계 속성>` — 관계 속성 · 시작일 · 끝날, ADR 0043). 같은 선에서
+    함께 맞아야 하는 조건은 같은 관계 묶음(`edge` 번호)으로 묶는다."""
 
 
 class GroupOptionOut(BaseModel):
@@ -1058,3 +1345,115 @@ class AliasCandidateDecision(BaseModel):
 class AliasCandidateDecisionOut(BaseModel):
     done: int
     refused: list[str]
+
+
+# --- 파생 · 계보(ADR 0041) -------------------------------------------------------
+
+
+class LineageEndOut(BaseModel):
+    """계보 줄의 한 끝 — 못 보는 객체는 가린다(id 없음 · 「(볼 수 없는 객체)」)."""
+
+    id: uuid.UUID | None
+    label: str
+    key: str | None = None
+    type_slug: str = ""
+    type_label: str = ""
+    state: str = "fresh"
+    """그 객체의 낡음 — `fresh` · `direct`(바로 낡음) · `upstream`(위에서 낡음)."""
+    hidden: bool = False
+
+
+class LineageLineOut(BaseModel):
+    """계보 선 하나 — **원천 → 파생물**로 돌려 세운 것(관계 종류의 방향과 상관없이)."""
+
+    relation_id: uuid.UUID
+    relation: str
+    relation_label: str
+    """파생물 쪽에서 읽는 말이 아니라 관계 종류의 이름 그대로."""
+    depth: int
+    """시작 객체에서 몇 걸음(1 이 바로 붙은 선)."""
+    source: LineageEndOut
+    derived: LineageEndOut
+    revision_key: str = ""
+    """원천 타입의 개정 칸 — 비었으면 바뀐 때로 판정한 선이다."""
+    pinned_revision: str | None = None
+    """고정한 개정(맺을 때 · 다시 고정할 때의 원천 개정 값)."""
+    pinned_at: datetime | None = None
+    """고정한 때(그 순간 원천의 바뀐 때)."""
+    revision: str | None = None
+    """원천의 지금 개정 값."""
+    source_updated_at: datetime | None = None
+    stale: bool = False
+    """이 선이 바로 낡았나 — 원천이 고정 뒤에 바뀌었다."""
+    reason: str = ""
+    """낡았으면 그 까닭 — 「메시 M-12 의 개정 Rev.B → Rev.C」."""
+
+
+class LineageImpactOut(BaseModel):
+    derived: int
+    """이것으로 만든 것(아래 사슬, 지우지 않은 것 — 깊이 20 안)."""
+    stale: int
+    """그중 낡은 것(바로 · 위에서)."""
+
+
+class LineageOut(BaseModel):
+    """객체 하나의 계보 — 위(원천 사슬) · 아래(파생물 사슬), 줄마다 낡음과 까닭."""
+
+    object_id: uuid.UUID
+    type_slug: str
+    label: str
+    state: str
+    """이 객체의 낡음 — `fresh` · `direct` · `upstream`."""
+    reasons: list[str]
+    """낡았으면 까닭들 — 바로(선마다) · 위에서(낡은 원천마다)."""
+    revision_key: str = ""
+    """이 타입의 개정 칸."""
+    revision: str | None = None
+    """이 객체의 지금 개정 값."""
+    up: list[LineageLineOut]
+    """원천 사슬 — 얕은 것부터."""
+    up_total: int
+    down: list[LineageLineOut]
+    """파생물 사슬 — 얕은 것부터."""
+    down_total: int
+    truncated: bool = False
+    """위 · 아래 중 하나라도 줄 상한(500)에서 잘렸다 — 전체 수는 `up_total` · `down_total`."""
+    impact: LineageImpactOut
+    """이것으로 만든 것 n개(낡음 m개)."""
+    can_repin: bool = False
+    """이 사람이 이 객체의 원천 선을 다시 고정할 수 있나(표시일 뿐 — 서버가 다시 본다)."""
+    kinds: list[str] = Field(default_factory=list)
+    """이 설치의 계보 관계 종류(slug) — 비었으면 계보가 없는 설치다."""
+    note: str = ""
+    """빈 결과의 까닭 — 「계보 관계 종류가 없습니다」 처럼."""
+
+
+class LineageRepinRequest(BaseModel):
+    """다시 고정 — 원천 선(`relation_ids`, 비우면 전부)의 고정을 지금 값으로."""
+
+    relation_ids: list[uuid.UUID] | None = None
+    basis: Literal["checked", "rebuilt"] = "checked"
+    """`checked`(영향 없음 확인) · `rebuilt`(다시 만들었음) — 감사 기록의 까닭이 된다."""
+    note: str = Field(default="", max_length=500)
+
+
+class LineagePinOut(BaseModel):
+    revision: str | None = None
+    at: datetime | None = None
+
+
+class LineageRepinnedOut(BaseModel):
+    relation_id: uuid.UUID
+    relation: str
+    source_id: uuid.UUID
+    source_label: str
+    before: LineagePinOut
+    after: LineagePinOut
+
+
+class LineageRepinOut(BaseModel):
+    changed: list[LineageRepinnedOut]
+    """고정이 바뀐 선 — 이미 지금 값이던 선은 안 든다."""
+    unchanged: int
+    lineage: LineageOut
+    """다시 고정한 뒤의 계보."""

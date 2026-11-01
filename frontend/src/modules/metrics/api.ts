@@ -22,6 +22,8 @@ export interface MetricFilter {
   field: string
   op: string
   value: string
+  /** 같은 관계 묶음(ADR 0043) — 같은 번호의 조건은 같은 선 하나에서 함께 맞는다. 없으면 묶지 않음. */
+  edge?: number
 }
 
 /** 규칙 하나 — 조건 전부(AND)에 맞으면 이 이름(ADR 0015). */

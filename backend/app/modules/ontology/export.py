@@ -263,6 +263,7 @@ def pages(db: Session) -> list[Page]:
                 "식별자 범위",
                 "시간 축",
                 "축 · 기록",
+                "개정 칸",
                 "속성 수",
                 "객체 수",
                 "코어",
@@ -282,6 +283,7 @@ def pages(db: Session) -> list[Page]:
                     one.key_scope,
                     one.temporal_kind,
                     "기록" if one.usage == "log" else "축",
+                    one.revision_key,
                     len(type_props[one.id]),
                     counts.get(one.id, 0),
                     _yes(one.core),
@@ -317,6 +319,9 @@ def pages(db: Session) -> list[Page]:
                 "방향 있음",
                 "이행",
                 "비순환",
+                "유효 기간",
+                "수량 칸",
+                "계보 원천",
                 "개수 제한",
                 "관리 주체",
                 "쓰임",
@@ -332,6 +337,9 @@ def pages(db: Session) -> list[Page]:
                     _yes(one.directed),
                     _yes(one.transitive),
                     _yes(one.acyclic),
+                    _yes(one.effectivity),
+                    one.quantity_key,
+                    {"src": "출발", "dst": "도착"}.get(one.lineage_source, ""),
                     one.cardinality,
                     one.managed_by,
                     _yes(one.is_active),
@@ -450,7 +458,7 @@ def data_pages(db: Session, user: User, *, progress: Progress = None) -> list[Pa
     total = len(types)
     cut: list[str] = []
     skipped: list[str] = []
-    relations: list[list[Any]] = []
+    relations: list[dict[str, Any]] = []
     rows_total = 0
 
     for done, object_type in enumerate(types, start=1):
@@ -471,11 +479,21 @@ def data_pages(db: Session, user: User, *, progress: Progress = None) -> list[Pa
             )
         )
         relations.extend(
-            [object_type.slug, row["src"], row["relation"], row["dst"], row["evidence_note"]]
+            {"type": object_type.slug, **row}
             for row in _relations_of(db, user, object_type, skipped)
         )
 
-    out.append(Page("관계", ["출발 타입", *bulk.RELATION_COLUMNS], relations))
+    # 관계 칸은 넷 — 유효 기간(ADR 0039)을 받는 종류의 줄이 있으면 기간 둘을 더한다.
+    columns = [
+        one for one in bulk.relation_columns_of(relations) if one in bulk.RELATION_COLUMNS
+    ]
+    out.append(
+        Page(
+            "관계",
+            ["출발 타입", *columns],
+            [[row["type"], *(row.get(one, "") for one in columns)] for row in relations],
+        )
+    )
 
     # **개요가 이 파일이 무엇인지 말한다** — 시트 이름만 보고는 「속성 정의」 인지 「객체 행」
     # 인지 알 수 없다.

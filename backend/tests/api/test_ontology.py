@@ -1293,7 +1293,7 @@ def test_트리를_안_정하면_안_그린다(client: TestClient, admin: Signed
     트리는 무엇을 보여 주는지 말할 수 없다."""
     part = _make_type(client, admin, label="부품")
     _make_object(client, admin, part, label="볼트")
-    assert _tree(client, admin, part) == {"nodes": [], "orphan_count": 0}
+    assert _tree(client, admin, part) == {"nodes": [], "orphan_count": 0, "as_of": None}
 
 
 def test_뿌리와_어디에도_안_걸린_것을_가른다(client: TestClient, admin: Signed) -> None:

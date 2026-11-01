@@ -208,3 +208,75 @@ describe('변경 이력', () => {
     expect(screen.getByText('해석팀')).toBeInTheDocument()
   })
 })
+
+describe('다시 고정의 기록(ADR 0041)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('동작은 「다시 고정」, 칸은 「고정 개정」 · 「고정 시각」 의 앞뒤로 선다', async () => {
+    objectApi.history.mockResolvedValue([
+      {
+        id: 'p1',
+        at: '2026-10-30T10:00:00+09:00',
+        actor_label: '김',
+        action: 'lineage.repin',
+        reason: '영향 없음 확인',
+        kind: 'relation',
+        changes: {},
+        relation: {
+          relation: 'made_from',
+          outgoing: true,
+          other_id: 'mesh',
+          other_label: '메시 M-12',
+          changed: {
+            pinned_revision: { before: 'B', after: 'C' },
+            pinned_at: { before: null, after: '2026-10-20T09:00:00+09:00' },
+          },
+        },
+        snapshot: null,
+      },
+    ])
+    await mount()
+    expect(await screen.findByText('다시 고정')).toBeInTheDocument()
+    expect(screen.getByText('고정 개정').parentElement).toHaveTextContent('고정 개정 B → C')
+    const at = screen.getByText('고정 시각').parentElement as HTMLElement
+    // 시각은 ISO 글자가 아니라 읽히는 시각으로, 빈 앞값은 「비어 있음」.
+    expect(at).toHaveTextContent('비어 있음')
+    expect(at).not.toHaveTextContent('2026-10-20T09:00')
+    expect(screen.getByText(/→ 메시 M-12/)).toBeInTheDocument()
+  })
+})
+
+describe('제안된 관계의 기록(ADR 0042)', () => {
+  beforeEach(() => vi.clearAllMocks())
+
+  it('제안 · 확정 · 수정은 관계 기록처럼 양 끝과 함께 이름표로 선다', async () => {
+    const entry = (id: string, action: string, changed: Record<string, unknown> = {}) => ({
+      id,
+      at: '2026-10-30T10:00:00+09:00',
+      actor_label: '김',
+      action,
+      reason: null,
+      kind: 'relation',
+      changes: {},
+      relation: {
+        relation: 'supplied_by',
+        outgoing: true,
+        other_id: 'acme',
+        other_label: 'ACME',
+        changed,
+      },
+      snapshot: null,
+    })
+    objectApi.history.mockResolvedValue([
+      entry('a', 'relation.proposal.accept'),
+      entry('u', 'relation.proposal.update', { confidence: { before: 0.6, after: 0.9 } }),
+      entry('p', 'relation.propose'),
+    ])
+    await mount()
+    expect(await screen.findByText('관계 제안')).toBeInTheDocument()
+    expect(screen.getByText('제안 확정')).toBeInTheDocument()
+    expect(screen.getByText('제안 수정')).toBeInTheDocument()
+    expect(screen.getByText('확신도').parentElement).toHaveTextContent('확신도 0.6 → 0.9')
+    expect(screen.getAllByText(/→ ACME/).length).toBeGreaterThan(0)
+  })
+})

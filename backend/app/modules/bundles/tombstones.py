@@ -25,7 +25,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import and_, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import User
@@ -35,7 +35,7 @@ from app.modules.bundles.schemas import (
     RelationTombstoneIn,
     TombstonesIn,
 )
-from app.modules.objects import bulk, lifecycle
+from app.modules.objects import bulk, edges, lifecycle
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.ontology import managed
 from app.modules.ontology.models import ObjectType
@@ -227,10 +227,25 @@ def _relation_row(
         if grave.dst_type
         else None
     )
+    # 어느 선인가 — 기간을 적었으면 그 기간의 선, 안 적었으면(코어 창구 · 예전 묶음) 오늘
+    # 유효한 선(ADR 0039). 지난 · 앞으로의 선은 「지금 끊겼다」 는 말에 들지 않는다.
+    which = (
+        and_(
+            ObjectRelation.valid_from.is_(None)
+            if grave.valid_from is None
+            else ObjectRelation.valid_from == grave.valid_from,
+            ObjectRelation.valid_to.is_(None)
+            if grave.valid_to is None
+            else ObjectRelation.valid_to == grave.valid_to,
+        )
+        if grave.period
+        else edges.alive(ObjectRelation, edges.today())
+    )
     for one in db.scalars(
         select(ObjectRelation).where(
             ObjectRelation.src_object_id == src.id,
             ObjectRelation.relation == grave.relation,
+            which,
         )
     ):
         end = db.get(ObjectInstance, one.dst_object_id)

@@ -162,8 +162,11 @@ def _entries(db: Session, row: ObjectInstance) -> list[AuditEntry]:
         .where(
             or_(
                 (AuditEntry.target_table == "objects") & (AuditEntry.target_id == row.id),
-                # 원 표와 이은 선(`object_links`)도 같은 모양으로 남는다 — 이력에 함께.
-                AuditEntry.target_table.in_(("object_relations", "object_links"))
+                # 원 표와 이은 선(`object_links`) · 제안된 관계(`relation_proposals`, ADR
+                # 0042)도 같은 모양(양 끝 id)으로 남는다 — 이력에 함께.
+                AuditEntry.target_table.in_(
+                    ("object_relations", "object_links", "relation_proposals")
+                )
                 & or_(
                     AuditEntry.changes["src"].astext == mine,
                     AuditEntry.changes["dst"].astext == mine,
@@ -237,6 +240,11 @@ def history_of(db: Session, row: ObjectInstance, *, viewer: User | None = None) 
                 if str(other_id) in hidden
                 else (changes.get("dst_label") if outgoing else changes.get("src_label"))
                 or "",
+                # 유효 기간(ADR 0039) — 기간을 달리한 같은 선이 여럿일 때 어느 선인지. 고친
+                # 기록이면 무엇이 바뀌었나(속성 · 근거 · 기간의 앞뒤).
+                "valid_from": changes.get("valid_from"),
+                "valid_to": changes.get("valid_to"),
+                "changed": changes.get("changed") or {},
             }
         out.append(
             Entry(

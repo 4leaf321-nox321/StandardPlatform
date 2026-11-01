@@ -18,7 +18,13 @@ from sqlalchemy.orm import Session
 
 from app.modules.webhooks import services
 from app.modules.webhooks.models import Webhook, WebhookDelivery
-from tests.api.conftest import Signed, maintenance_counts, notifications_of, work_until
+from tests.api.conftest import (
+    Signed,
+    clock_settled,
+    maintenance_counts,
+    notifications_of,
+    work_until,
+)
 from tests.api.test_ontology import _make_object, _make_type
 
 
@@ -141,15 +147,19 @@ def test_거절된_저장은_알리지_않는다(
 
 
 def _later(db: Session, hook: dict[str, Any]) -> None:
-    """시계를 돌리는 대신 — 그 웹훅의 마지막 시도를 재시도 간격보다 앞으로 민다."""
+    """시계를 돌리는 대신 — 그 웹훅의 마지막 시도를 재시도 간격보다 앞으로 민다.
+
+    민 뒤에 **시계가 그 「지금」 을 지날 때까지** 기다린다(`clock_settled`) — 이 기계의
+    벽시계는 뒤로 튄다(ADR 0024). 여유가 1초뿐이라 그 사이 시계가 2초 뒤로 가면 재시도가
+    「아직 이르다」 가 되어 포기 알림이 안 났다(-n 8 전체 시험에서 가끔, 2026-10-31)."""
+    now = datetime.now(UTC)
     db.execute(
         update(Webhook)
         .where(Webhook.id == uuid.UUID(hook["id"]))
-        .values(
-            last_at=datetime.now(UTC) - timedelta(seconds=services.RETRY_AFTER_SECONDS + 1)
-        )
+        .values(last_at=now - timedelta(seconds=services.RETRY_AFTER_SECONDS + 1))
     )
     db.commit()
+    clock_settled(now)
 
 
 def test_실패는_남아서_다시_보낸다(

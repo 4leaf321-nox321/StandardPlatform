@@ -38,18 +38,33 @@ ADR 0031 — 셋에서 넷으로). 걸음의 상대가 하나로 정해져 있�
 이어진 것이 여럿이면(여러 값 참조, 여럿과 맺는 관계) 조건은 **그중 하나라도 맞으면** 걸린다.
 이어진 것이 없는 객체는 이어진 것의 칸 조건에 안 걸린다 — 「개발사 › 국가 ≠ 미국」 에 개발사가
 빈 툴은 안 나온다. 이어진 것이 없는 것은 그 참조 칸·관계의 「비어 있음」 으로 묻는다.
+
+## 선의 칸 — `out.<관계>~<관계 속성>`(ADR 0043)
+
+관계 걸음의 끝에 `~<키>` 를 붙이면 **이어진 객체가 아니라 선 자체**(관계 속성 — BOM 의 수량 ·
+적용 옵션)의 칸이다. 유효 기간을 받는 종류는 `~valid_from` · `~valid_to`(시작일 · 끝날)도 선의
+칸이다. 선의 칸은 주소의 끝에만 선다 — 값이지 걸음이 아니다(`ref.model.out.bom~qty` 는 되고
+`out.bom~qty.label` 은 안 된다). `~` 는 slug · 속성 키에 못 들어가고 URL 질의 키에서도 안전하다
+(`@` 는 계층 축, `:` 는 나를 가리키는 것, `|` 는 값 여럿이 이미 쓴다).
+
+조건이 여럿이면 각각 「그중 하나라도」 라 `out.bom = X` 와 `out.bom~qty ≥ 4` 가 **다른 선**에서
+맞을 수 있다 — 같은 선에서 함께 맞아야 하면 조건을 「같은 관계 묶음」 으로 묶는다
+(`conditions.py`, `fe<번호>.`).
 """
 
 from __future__ import annotations
 
 import uuid
 from dataclasses import dataclass
+from dataclasses import field as dc_field
+from datetime import date
 from typing import Any
 
-from sqlalchemy import String, cast, select, union_all
+from sqlalchemy import Date, String, cast, null, select, union_all
 from sqlalchemy.orm import Session, aliased
 
 from app.modules.accounts.models import User
+from app.modules.objects import edges as edge_rule
 from app.modules.objects import graph, refedges, system
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.objects.scope import Scope, as_scope
@@ -74,6 +89,19 @@ BACK_SEP = ":"
 
 #: 이어진 것의 고정 칸.
 TARGET_FIXED = {"label": "이름", "key": "식별자", "status": "상태"}
+
+#: 선의 칸(관계 속성)을 가리키는 표시 — `out.bom~qty`(ADR 0043). slug · 속성 키에는 못
+#: 들어가고(`SLUG_RE` · `KEY_RE`), 주소의 다른 구분자(`.` · `:` · `@` · `|`)와 안 겹치며, URL
+#: 질의 키에서 이스케이프가 필요 없다.
+EDGE_SEP = "~"
+
+#: 선의 고정 칸 — **유효 기간을 받는 종류**의 선만(ADR 0039). 같은 키의 관계 속성이 있으면
+#: 속성이 이긴다.
+EDGE_FIXED = {"valid_from": "시작일", "valid_to": "끝날"}
+
+#: 선의 칸 중 조건 · 기준으로 못 쓰는 종류 — 참조는 참조 색인(`object_refs`)이 객체의 칸만
+#: 담아 「가리키는 것」 으로 못 걸고, 파일은 객체의 칸에서도 못 건다.
+EDGE_UNUSABLE = ("object_ref", "file")
 
 SEP = " › "
 
@@ -106,6 +134,8 @@ class Hop:
     back_type_id: uuid.UUID | None = None
     """들어오는 참조(ADR 0017) — 나를 가리키는 객체의 타입. `back_key` 가 그 참조 칸."""
     back_key: str | None = None
+    edge_defs: list[PropertyDef] = dc_field(default_factory=list)
+    """관계 걸음이면 그 종류의 관계 속성(`owner_kind='relation'`) — 선의 칸(ADR 0043)."""
 
     @property
     def is_back(self) -> bool:
@@ -113,11 +143,48 @@ class Hop:
         return self.back_key is not None
 
     @property
+    def is_relation(self) -> bool:
+        """관계 종류의 한 방향 — 선(`object_relations` · `object_links`)을 걷는 걸음."""
+        return self.relation is not None and not self.is_back
+
+    def edge_fields(self) -> list[EdgeField]:
+        """이 걸음의 선이 가진 칸 — 관계 속성, 유효 기간을 받는 종류면 시작일 · 끝날까지."""
+        if not self.is_relation or self.relation is None:
+            return []
+        out = [
+            EdgeField(one.key, one.label, one.data_type, one, bool(one.multi))
+            for one in self.edge_defs
+        ]
+        if self.relation.effectivity:
+            taken = {one.key for one in self.edge_defs}
+            out += [
+                EdgeField(key, label, "date", None)
+                for key, label in EDGE_FIXED.items()
+                if key not in taken
+            ]
+        return out
+
+    def edge_field(self, key: str) -> EdgeField | None:
+        return next((one for one in self.edge_fields() if one.key == key), None)
+
+    @property
     def heading(self) -> str:
         where = f" ({self.target.label})" if self.target else ""
         if self.is_back:
             return f"가리키는 것 · {self.label}"
         return f"{self.label}{where}" if self.kind == "ref" else f"관계 · {self.label}{where}"
+
+
+@dataclass(frozen=True)
+class EdgeField:
+    """선의 칸 하나 — 관계 속성(`definition`)이거나 고정 칸(시작일 · 끝날 — `definition`
+    없음)."""
+
+    key: str
+    label: str
+    data_type: str
+    definition: PropertyDef | None
+    multi: bool = False
 
 
 @dataclass
@@ -152,6 +219,9 @@ class Chain:
     """걸음 중 하나라도 여럿과 이어지나."""
     multi: bool
     """`many_hops` 이거나 끝 칸이 여러 값 칸 — 한 행이 여러 막대에 든다."""
+    edge: bool = False
+    """끝 칸이 **선의 칸**인가(`out.<관계>~<키>`, ADR 0043) — 그러면 `field` 는 선의 칸 키,
+    `definition` 은 관계 속성(시작일 · 끝날이면 None)이고 마지막 걸음은 관계 걸음이다."""
 
     @property
     def hop(self) -> Hop:
@@ -177,6 +247,8 @@ class FieldOption:
     multi: bool = False
     enum_options: list[str] | None = None
     ref_type_slug: str | None = None
+    edge: bool = False
+    """선의 칸(관계 속성 · 시작일 · 끝날)인가 — 같은 관계 묶음(`fe<번호>.`)으로 묶는다."""
 
 
 def _no_target(hop: Hop) -> str:
@@ -207,6 +279,7 @@ class Resolver:
         target: ObjectType | Scope,
         *,
         viewer: User | None = None,
+        at: edge_rule.AtArg = "today",
         _kinds: dict[str, refedges.RefKind] | None = None,
     ) -> None:
         self.db = db
@@ -214,6 +287,10 @@ class Resolver:
         self.viewer = viewer
         """보는 사람 — 들어오는 참조 걸음은 이 사람이 볼 수 있는 객체만 잇는다(ADR 0017).
         없으면(지표 · 저장 검사) 가리지 않는다."""
+        self.at: date | None = edge_rule.resolved(at)
+        """기준일(ADR 0039) — 관계 걸음 · 「하위 전체」 가 그날 살아 있는 선만 따라간다. 비우면
+        오늘(지표 · 저장 검사 · 고르개도 같다), None 은 기간을 안 본다. 다음 걸음의 Resolver 도
+        같은 날을 쓴다."""
         self._hops: list[Hop] | None = None
         self._children: dict[str, Resolver] = {}
         self._kinds = _kinds
@@ -240,7 +317,7 @@ class Resolver:
         """그 타입의 트리로 roots 와 그 아래 전부 — 조건의 「하위 전체」. 트리가 없으면
         None."""
         tree = self.tree_of(type_slug)
-        return None if tree is None else graph.subtree_ids(self.db, tree, roots)
+        return None if tree is None else graph.subtree_ids(self.db, tree, roots, at=self.at)
 
     def ref_kinds(self) -> dict[str, refedges.RefKind]:
         """이 설치의 참조 칸 전부 — 걸음의 상대에서 다시 걸을 때도 한 번만 읽는다."""
@@ -307,11 +384,25 @@ class Resolver:
                 )
             )
 
-        relations = db.scalars(
-            select(RelationType)
-            .where(RelationType.is_active.is_(True))
-            .order_by(RelationType.label)
+        relations = list(
+            db.scalars(
+                select(RelationType)
+                .where(RelationType.is_active.is_(True))
+                .order_by(RelationType.label)
+            )
         )
+        # 선의 칸(관계 속성, ADR 0043) — 종류마다 따로 읽지 않는다.
+        owned: dict[uuid.UUID, list[PropertyDef]] = {}
+        if relations:
+            for prop in db.scalars(
+                select(PropertyDef)
+                .where(
+                    PropertyDef.owner_kind == "relation",
+                    PropertyDef.owner_id.in_([one.id for one in relations]),
+                )
+                .order_by(PropertyDef.sort_order, PropertyDef.key)
+            ):
+                owned.setdefault(prop.owner_id, []).append(prop)
         for relation in relations:
             src, dst = relation.src_type_slugs, relation.dst_type_slugs
             sides: list[tuple[str, list[str] | None, str]] = []
@@ -345,6 +436,7 @@ class Resolver:
                         defs,
                         many,
                         relation=relation,
+                        edge_defs=owned.get(relation.id, []),
                     )
                 )
 
@@ -405,13 +497,17 @@ class Resolver:
         slug = hop.target.slug
         if slug not in self._children:
             self._children[slug] = Resolver(
-                self.db, hop.target, viewer=self.viewer, _kinds=self.ref_kinds()
+                self.db, hop.target, viewer=self.viewer, at=self.at, _kinds=self.ref_kinds()
             )
         return self._children[slug]
 
     def parse_chain(self, path: str, *, max_hops: int = MAX_HOPS) -> Chain:
         """주소 → 걸음들과 끝 칸. 걸음은 `ref.<칸>` · `out.<관계>` · `in.<관계>` 가 이어진
-        것이고, 끝은 칸 하나(없으면 마지막 관계로 이어진 것 자체)."""
+        것이고, 끝은 칸 하나(없으면 마지막 관계로 이어진 것 자체). 마지막 관계 걸음에
+        `~<키>` 가 붙으면 끝은 **선의 칸**이다(ADR 0043)."""
+        head, mark, edge_key = path.partition(EDGE_SEP)
+        if mark:
+            return self._edge_chain(path, head, edge_key, max_hops=max_hops)
         tokens = path.split(".")
         hops: list[Hop] = []
         owners: list[Resolver] = []
@@ -498,6 +594,57 @@ class Resolver:
             many_hops or definition.multi,
         )
 
+    def _edge_chain(self, path: str, head: str, key: str, *, max_hops: int) -> Chain:
+        """`<걸음들>~<선의 칸>` — 앞은 걸음으로 끝나고, 마지막 걸음은 관계 걸음이어야 한다."""
+        if not key or "." in key or EDGE_SEP in key:
+            raise _no_path(
+                path,
+                "관계 속성(~)은 주소 끝에 하나만 씁니다 — out.<관계>~<관계 속성>"
+                "(관계 속성 너머로는 걷지 않습니다).",
+            )
+        tokens = head.split(".")
+        if len(tokens) % 2 or tokens[-2] not in HOP_KINDS:
+            raise _no_path(
+                path,
+                "관계 속성(~)은 관계 걸음 바로 뒤에 붙습니다 — out.<관계>~<관계 속성>, "
+                "in.<관계>~<관계 속성>.",
+            )
+        if tokens[-2] == "ref":
+            raise _no_path(
+                path,
+                f"참조 칸({tokens[-1]})에는 관계 속성이 없습니다 — 관계 속성(~)은 관계 걸음"
+                "(out. · in.<관계>) 뒤에만 섭니다.",
+            )
+        chain = self.parse_chain(head, max_hops=max_hops)
+        last = chain.hop
+        if not last.is_relation:
+            raise _no_path(
+                path,
+                f"「{last.label}」 에는 관계 속성이 없습니다 — 관계 속성(~)은 관계 걸음"
+                "(out. · in.<관계>) 뒤에만 섭니다(참조 칸 · 나를 가리키는 것은 관계가 "
+                "아닙니다).",
+            )
+        found = last.edge_field(key)
+        if found is None:
+            have = ", ".join(one.key for one in last.edge_fields())
+            raise _no_path(
+                path,
+                f"「{last.label}」 관계에 없는 관계 속성입니다: {key}. 있는 것: "
+                f"{have or '(없음 — 관계 속성은 정의 가져오기로 추가합니다)'}",
+            )
+        return Chain(
+            path,
+            chain.hops,
+            chain.owners,
+            key,
+            found.definition,
+            f"{chain.label} 관계{SEP}{found.label}",
+            found.data_type,
+            chain.many_hops,
+            chain.many_hops or found.multi,
+            edge=True,
+        )
+
     def parse(self, path: str) -> PathField:
         """한 걸음 주소 — 고르개 · 옛 호출자용. 걸음을 잇는 것은 `parse_chain`."""
         chain = self.parse_chain(path, max_hops=1)
@@ -511,9 +658,13 @@ class Resolver:
             chain.multi,
         )
 
-    def edges(self, hop: Hop, name: str) -> Any:
+    def edges(self, hop: Hop, name: str, *, edge: bool = False) -> Any:
         """(me, other) — 이 타입의 객체와 관계로 이어진 것의 id. 객체끼리의 관계와 원 표와
         이은 선(`object_links`)을 함께 본다: 「사용 부서」 는 대개 뒤쪽에 있다.
+
+        `edge` 면 **선의 칸**도 싣는다(ADR 0043) — `props`(관계 속성) · `valid_from` ·
+        `valid_to`. 원 표와 이은 선은 기간이 없어 둘이 비어 있다. 안 쓰는 질의(대부분)는 예전과
+        같은 열만 든다.
 
         **읽을 것이 하나면 uuid 그대로 낸다**(대부분 — 방향 있는 관계의 저쪽이 객체 타입뿐).
         예전에는 늘 `other` 를 글자로 바꿔 냈고, 저쪽 객체를 `objects.id::text = other` 로
@@ -534,12 +685,30 @@ class Resolver:
         to_objects = not theirs or any(not system.is_system(one) for one in theirs)
         to_links = not theirs or any(system.is_system(one) for one in theirs)
 
+        def carried(props: Any, valid_from: Any, valid_to: Any) -> list[Any]:
+            if not edge:
+                return []
+            return [
+                props.label("props"),
+                valid_from.label("valid_from"),
+                valid_to.label("valid_to"),
+            ]
+
         def between(me: Any, other: Any, text: bool) -> Any:
             """객체끼리의 선 — 저쪽 끝은 **보는 사람이 볼 수 있는 객체만**(`seen`). 원 표와
             이은 선의 저쪽은 부서 · 계정이라 부서 소유가 아니다(늘 보인다)."""
             end_id = cast(other, String) if text else other
-            stmt = select(me.label("me"), end_id.label("other")).where(
-                ObjectRelation.relation == relation.slug
+            stmt = select(
+                me.label("me"),
+                end_id.label("other"),
+                *carried(
+                    ObjectRelation.properties,
+                    ObjectRelation.valid_from,
+                    ObjectRelation.valid_to,
+                ),
+            ).where(
+                ObjectRelation.relation == relation.slug,
+                edge_rule.alive(ObjectRelation, self.at),
             )
             end = aliased(ObjectInstance)
             visible = self.seen(end)
@@ -550,9 +719,11 @@ class Resolver:
         def linked(me: Any, other: Any, text: bool) -> Any:
             end_id = cast(other, String) if text else other
             me_type = ObjectLink.src_type if me is ObjectLink.src_id else ObjectLink.dst_type
-            return select(me.label("me"), end_id.label("other")).where(
-                ObjectLink.relation == relation.slug, me_type.in_(mine)
-            )
+            return select(
+                me.label("me"),
+                end_id.label("other"),
+                *carried(ObjectLink.properties, cast(null(), Date), cast(null(), Date)),
+            ).where(ObjectLink.relation == relation.slug, me_type.in_(mine))
 
         pairs: list[tuple[Any, Any, Any]] = []
         if hop.kind == "out" or not relation.directed:
@@ -599,15 +770,17 @@ class Resolver:
             # 걸음이 이미 거르지만(`edges`), 이름표는 따로 한 번 더 — 못 보는 객체의 이름이
             # 막대 이름으로 나가면 그것이 곧 샌 것이다.
             hidden = system.hidden_objects(self.db, self.viewer, rest)
-            for row in self.db.scalars(
-                select(ObjectInstance).where(ObjectInstance.id.in_(rest))
+            # 이름 칸만 읽는다 — 이어진 칸(ADR 0043)은 한 쪽에 기록 수천 개의 이름을 묻는데,
+            # 객체를 통째로(속성 JSONB 까지) 읽으면 그것이 질의보다 오래 걸렸다(200줄 x 20).
+            for row_id, label, deleted_at in self.db.execute(
+                select(
+                    ObjectInstance.id, ObjectInstance.label, ObjectInstance.deleted_at
+                ).where(ObjectInstance.id.in_(rest))
             ):
-                if row.id in hidden:
-                    out[str(row.id)] = system.HIDDEN_LABEL
+                if row_id in hidden:
+                    out[str(row_id)] = system.HIDDEN_LABEL
                     continue
-                out[str(row.id)] = (
-                    row.label if row.deleted_at is None else f"{row.label} (지워짐)"
-                )
+                out[str(row_id)] = label if deleted_at is None else f"{label} (지워짐)"
         return out
 
     def options(self, *, for_group: bool, depth: int = PICKER_HOPS) -> list[FieldOption]:
@@ -682,6 +855,25 @@ def _hop_options(
                 single,
             )
         )
+    # **선의 칸**(ADR 0043) — 관계 속성 · 시작일 · 끝날. 상대가 하나로 안 정해져도 선은 있다.
+    for edge in hop.edge_fields():
+        if edge.data_type in EDGE_UNUSABLE:
+            continue
+        out.append(
+            FieldOption(
+                f"{prefix}{EDGE_SEP}{edge.key}",
+                f"{label}{hop.label} 관계{SEP}{edge.label}",
+                heading,
+                edge.data_type,
+                many or edge.multi,
+                (
+                    list(edge.definition.enum_options)
+                    if edge.definition is not None and edge.definition.enum_options
+                    else None
+                ),
+                edge=True,
+            )
+        )
     if hop.target is None:
         return out
     for key, fixed in TARGET_FIXED.items():
@@ -718,8 +910,14 @@ def _hop_options(
 
 def ends_at_hop(path: str) -> bool:
     """주소가 걸음으로 끝나나(관계로 이어진 것 **자체**) — 칸으로 끝나면 조각 수가 홀수다.
-    `out.used_by` · `ref.model.out.used_by` 는 걸음, `ref.model.series` 는 칸."""
-    return len(path.split(".")) % 2 == 0
+    `out.used_by` · `ref.model.out.used_by` 는 걸음, `ref.model.series` 는 칸. 선의 칸
+    (`out.bom~qty`)은 칸이다."""
+    return EDGE_SEP not in path and len(path.split(".")) % 2 == 0
+
+
+def is_edge_field(path: str) -> bool:
+    """주소가 선의 칸으로 끝나나(`out.<관계>~<키>`, ADR 0043)."""
+    return is_path(path) and EDGE_SEP in path
 
 
 def reaches(target: Any, edges: Any) -> Any:
