@@ -32,6 +32,20 @@ class BackupOut(BaseModel):
     problem: str | None
 
 
+class EmbeddingOut(BaseModel):
+    """뜻으로 찾기의 바탕(ADR 0050) — pgvector · Ollama · 모델 · 차원. **배포는 깔다 실패해도
+    멈추지 않으므로** 그 사실이 드러날 자리가 여기다."""
+
+    state: str
+    """ready · off(EMBEDDING_BACKEND=off) · problem."""
+    backend: str
+    model: str
+    url: str
+    vector_version: str | None
+    dim: int | None
+    problem: str | None
+
+
 class ServerStatusOut(BaseModel):
     app_name: str
     app_slug: str
@@ -51,6 +65,7 @@ class ServerStatusOut(BaseModel):
     엉뚱한 화면의 500 으로 만난다."""
     disk: DiskOut | None
     backup: BackupOut
+    embedding: EmbeddingOut
     counts: list[TableCountOut]
     """`shared/extensions.py` 의 레지스트리가 채운다 — 도메인이 등록한 만큼 는다."""
     started_at: datetime

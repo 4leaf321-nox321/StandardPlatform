@@ -57,7 +57,8 @@
 
 - Python 3.12 (`.python-version`) — 배포 이미지가 ubuntu:24.04 의 `python3.12` 를 쓴다
 - Node 20 (`.node-version`)
-- PostgreSQL
+- PostgreSQL + pgvector(`postgresql-16-pgvector`)
+- Ollama + `ollama pull bge-m3` — 뜻으로 찾기의 임베딩 모델(ADR 0050). 없어도 앱은 돈다
 - Apptainer — 배포 이미지를 만들 때만 필요하다
 
 ### 백엔드
@@ -75,6 +76,10 @@ createdb -U postgres standardplatform_test
 # .env 를 만들고 접속 정보(사용자·비밀번호)를 자기 것으로 고친다.
 # **BOM 없이 UTF-8** 로 저장한다 — BOM 이 붙으면 첫 줄 키가 조용히 무시된다.
 cp .env.example .env
+
+# pgvector 확장 — postgres 계정만 만든다(ADR 0050). 그 계정의 DB 전부와 새 시험 DB 의 틀
+# (<이름>_template)에 만든다. 처음 한 번, 그리고 DB 를 새로 만들었을 때.
+sudo ../scripts/dev_pgvector.sh
 
 .venv/bin/alembic upgrade head
 .venv/bin/python scripts/seed_install.py --email admin --name 관리자

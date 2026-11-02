@@ -29,6 +29,7 @@ from app.modules.server.schemas import (
     CutQuestionOut,
     CutQuestionsOut,
     DiskOut,
+    EmbeddingOut,
     ExtensionApiOut,
     ExtensionOut,
     ExtensionPatchIn,
@@ -47,7 +48,7 @@ from app.modules.server.schemas import (
     ServerStatusOut,
     TableCountOut,
 )
-from app.shared import cut_questions, extensions, ops
+from app.shared import cut_questions, embedding, extensions, ops
 from app.shared.auth import current_user, require_system_admin
 from app.shared.errors import NotFound, code
 from app.shared.pagination import MAX_LIMIT, clamp_limit
@@ -112,6 +113,7 @@ def status(
         schema_behind=bool(head and current and head != current),
         disk=disk,
         backup=BackupOut(**vars(ops.backup_status())),
+        embedding=EmbeddingOut(**vars(embedding.readiness(db))),
         counts=[
             TableCountOut(label=item.label, count=item.count)
             for item in extensions.stat_items(db)

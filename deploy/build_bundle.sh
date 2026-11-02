@@ -6,7 +6,7 @@
 #
 # 산출물: release/<slug>-<버전>.tar.gz
 #   app.sif · deploy.sh · ha.sh · pg-ha.sh · pg-tune.sh · backup.sh · restore.sh · *.template · .env.example
-#   · BUILD_INFO · README.md · mcp_server/ (서버 + 오프라인 설치용 휠) · apptainer_debs/ (폐쇄망용)
+#   · BUILD_INFO · README.md · mcp_server/ (서버 + 오프라인 설치용 휠) · apptainer_debs/ · pgvector_debs/ (폐쇄망용)
 #
 # **배포 스크립트를 번들에 함께 담는다.** 서버가 릴리스만 받는 환경이어도 tar 하나로
 # 그다음 배포가 돌아야 한다 — 빠뜨리면 첫 배포에 저장소를 클론하는 수밖에 없고,
@@ -173,6 +173,22 @@ else
     rm -rf "$STAGE/apptainer_debs"
     echo "    ⚠ apt-get download 실패(빌드 머신에 apptainer PPA 가 없나?) — .deb 미동봉."
     echo "      폐쇄망 서버에서는 ensure_apptainer 가 안내하는 수동 반입이 필요합니다."
+fi
+
+# pgvector(ADR 0050) — 뜻으로 찾기의 확장. 폐쇄망 서버도 갱신만으로 깔리게(update 가 이 폴더를 먼저 본다). **우분투 저장소의 판을 고른다** — 빌드 머신에 PostgreSQL 공식 저장소(PGDG)가 붙어 있으면 그쪽의 더
+# 새 판이 먼저 잡혀, 인터넷으로 까는 서버(우분투 판)와 판이 갈린다. 운영과 같은 PostgreSQL 주 판(16).
+PG_VERSION="${PG_VERSION:-16}"
+echo "==> [3a/4] pgvector .deb 동봉 (postgresql-$PG_VERSION-pgvector)"
+mkdir -p "$STAGE/pgvector_debs"
+pgvector_ver="$(apt-cache madison "postgresql-$PG_VERSION-pgvector" 2>/dev/null \
+    | awk -F'|' '/ubuntu\.com/ { gsub(/ /, "", $2); print $2; exit }')"
+if [[ -n "$pgvector_ver" ]] \
+    && (cd "$STAGE/pgvector_debs" && apt-get download "postgresql-$PG_VERSION-pgvector=$pgvector_ver" >/dev/null 2>&1); then
+    echo "    동봉: $(ls "$STAGE/pgvector_debs" | tr '\n' ' ')"
+else
+    rm -rf "$STAGE/pgvector_debs"
+    echo "    ⚠ 우분투 저장소에서 postgresql-$PG_VERSION-pgvector 를 받지 못했습니다 — .deb 미동봉."
+    echo "      폐쇄망 서버에서는 deploy.sh 가 안내하는 수동 반입이 필요합니다."
 fi
 
 # ── 3b. MCP 서버 (별도 venv 로 운영 서버에서 돌아감) ──────────────────────────

@@ -37,7 +37,11 @@ ls
 #  .env.example  BUILD_INFO  README.md  쉬운-설치.md  HWAX-연동요청서.template.md(9절 — hwax-request 가 채운다)
 #  mcp_server/   (Claude 연동 MCP 서버 + 오프라인 설치용 휠)
 #  apptainer_debs/  (폐쇄망용 apptainer .deb — prepare 가 먼저 본다)
+#  pgvector_debs/   (폐쇄망용 pgvector .deb — 뜻으로 찾기의 확장, 5d-3)
 ```
+
+임베딩 모델(Ollama · bge-m3, 약 2.6GB)은 번들에 없다 — `install` · `update` 가 인터넷으로 받는다. 폐쇄망이면
+**임베딩 꾸러미**를 따로 옮겨 이 폴더에 푼다(5d-3).
 
 **정제 도구 키트**(사용자 PC 에 푸는 `sp-pipeline` — 원천 파일을 한꺼번에 넣는 도구)는 `app.sif`
 안에 같은 판으로 들어 있다. 운영자가 따로 옮길 것이 없다 — 각 사람이 화면 「내 정보」 에서 받는다.
@@ -108,7 +112,7 @@ scp <slug>-<태그>.tar.gz <계정>@<서버>:~/ && \
 sudo ./deploy.sh prepare
 ```
 
-apt 패키지(postgresql·python3-venv), **apptainer**, DB 역할과 데이터베이스, 설치 폴더를 만든다.
+apt 패키지(postgresql·python3-venv), **apptainer**, DB 역할과 데이터베이스, pgvector 확장(5d-3), 설치 폴더를 만든다.
 **멱등하다** — 다시 돌려도 이미 있는 것은 건드리지 않는다.
 
 **apptainer 는 우분투 기본 저장소에 없다.** 그래서 `prepare` 는 이 순서로 찾는다:
@@ -147,11 +151,12 @@ sudo ./deploy.sh install
 2. `.env` 생성 — **JWT 비밀키를 난수로 만들고 DB 비밀번호를 돌린다**
    (이미 있으면 손대지 않는다. 덮으면 전원이 다시 로그인한다)
 3. `app.sif` 배치
-4. 마이그레이션 → 설치 시드
+4. pgvector 확장(postgres 계정으로 — 5d-3) → 마이그레이션 → 설치 시드
 5. systemd 유닛 렌더 → `enable` → `start`
 6. `/api/health` 확인
 7. MCP 서버 설치(별도 venv + `<slug>-mcp` 유닛) — 아래 「MCP 서버」. 실패해도
    백엔드 배포는 그대로다
+8. 임베딩 모델(Ollama · bge-m3) — 없으면 받아 띄운다(5d-3). 실패해도 그대로다
 
 > 관리자 **임시 비밀번호가 화면에 한 번만** 찍힌다. 받아 적어 전달한다.
 > 첫 로그인에서 변경이 강제된다.
@@ -175,6 +180,9 @@ sudo journalctl -u <slug> -f
 # 새 번들을 풀고 그 안에서
 sudo ./deploy.sh update
 ```
+
+**서비스를 내리기 전에** pgvector 확장부터 갖추고, 앱이 다시 뜬 뒤 끝에 임베딩 모델을 확인한다(5d-3 — 처음이면
+깔고 받는다). 둘 다 못 갖춰도 갱신은 끝난다 — 경고를 찍고 서버 화면이 말한다. 스크립트로 돌려도 묻는 것이 없다.
 
 **스크립트도 새 번들의 것을 쓴다** — 옛 `deploy.sh` 로 새 SIF 를 깔면 그 릴리스가
 기대하는 단계가 통째로 안 돌고, 안 돌았다는 사실은 아무 데도 안 적힌다. 번들
@@ -504,6 +512,53 @@ Claude Code 에서 온톨로지를 읽고 채울 수 있다.
 - **허브 칸**(기록을 어느 기준정보 곁에 둘까)은 온톨로지 › 타입 편집 창의 「지도의 허브 칸」 — 바꾸면 **다음
   전체 다시 배치부터** 반영된다.
 
+## 5d-3. 뜻으로 찾기의 바탕 — pgvector · 임베딩 모델 (ADR 0050)
+
+글을 **뜻의 자리**(숫자 1,024개)로 바꿔 DB 에 담아 두면, 낱말이 달라도(「냉각수 누설」 과 「쿨런트 샘」) 뜻이
+가까운 것을 찾는다. 바꾸는 모델(bge-m3)은 **이 서버 안의 Ollama** 가 돌린다 — 글이 서버 밖으로 나가지 않는다.
+배포가 둘을 갖춘다.
+
+| | 무엇 | 언제 | 실패하면 |
+| --- | --- | --- | --- |
+| **pgvector** | DB 확장(`postgresql-16-pgvector`, 우분투 판 0.6). DB 의 `extensions` 스키마에 산다 | `prepare` · `install` · `reset`(마이그레이션 앞) · `update`(서비스를 내리기 전) | **안 멈춘다** — 이 판에는 그것을 쓰는 표가 아직 없다. 경고를 찍고, 서버 화면의 「뜻으로 찾기」 가 말한다 |
+| **Ollama + bge-m3** | 임베딩 모델 서버(`ollama.service`, 127.0.0.1:11434) + 모델 1.2GB | `install` · `update` 의 끝(앱이 뜬 뒤) | **안 멈춘다** — 앱은 그대로 돌고, 서버 화면의 「뜻으로 찾기」 가 무엇이 빠졌는지 말한다 |
+
+**따로 칠 것은 없다 — `update` 하나로 갖춰진다.** 스크립트로 돌려도 된다: apt 는 묻지 않게 부르고
+(needrestart 의 「어느 서비스를 다시 띄울까」 창 없음 · 다른 서비스를 다시 띄우지 않음), 받는 진행 막대는
+터미널일 때만 찍는다. 처음 한 번은 Ollama 1.4GB · 모델 1.2GB 를 받느라 몇 분 더 걸린다(앱은 이미 떠 있다).
+**쓰는 표가 드는 판부터는** pgvector 를 못 갖추면 서비스를 내리기 전에 멈춘다 — 그 전에 이 판으로 한 번
+올려 두면 그때는 이미 있다.
+
+- **따로 돌리기**: `sudo ./deploy.sh pgvector`(확장만) · `sudo ./deploy.sh ollama`(모델만 — 고친 뒤 다시).
+- **Ollama 는 서버에 하나** — 이 서버의 플랫폼들과 다른 제품(보고서 보관함 같은)이 함께 쓴다. 이미 깔려
+  있으면(누가 깔았든) 판도 유닛도 건드리지 않고 모델만 확인한다. 새로 깔 때는 박아 둔 판(`OLLAMA_VERSION`,
+  `deploy.sh` — 개발 PC 에서 bge-m3 을 재 본 판)을 `/usr/local` 에 푼다. 공식 설치 스크립트는 쓰지 않는다 —
+  NVIDIA 드라이버까지 깔려 든다.
+- **GPU** — NVIDIA 드라이버가 있으면 Ollama 가 저절로 쓴다(`update` 의 마지막 줄 「임베딩: bge-m3 · 1024차원 ·
+  GPU — …」). 없으면 CPU 로 돈다 — 화면에서 고른 칸만 바꾸므로 돌기는 하지만, 기록 수백만 건을 처음 채우는
+  일은 GPU 가 있어야 하루 안에 끝난다(개발 PC RTX 3070: 초당 약 86건).
+- **끄기**: `.env` 에 `EMBEDDING_BACKEND=off` → `sudo ./deploy.sh restart`. 배포도 Ollama 를 깔지 않는다.
+  다른 서버의 Ollama 를 쓰면 `OLLAMA_BASE_URL=http://<그 서버>:11434` — 이 서버에는 깔지 않는다.
+- **폐쇄망** — pgvector 는 번들의 `pgvector_debs/` 로 깐다(따로 할 일 없음). Ollama · 모델은 **임베딩 꾸러미**를
+  인터넷이 되는 PC 에서 한 번 만들어(저장소의 `./deploy/build_ai_bundle.sh` → `release/ai-bundle-<판>-bge-m3.tar`,
+  약 2.6GB · sudo 필요 없음) 옮긴 뒤 번들 폴더에 푼다:
+
+  ```bash
+  tar xf ai-bundle-v0.30.10-bge-m3.tar -C <번들 폴더>    # → <번들 폴더>/ai/
+  sudo ./deploy.sh update                                 # 또는 이미 갱신했으면 sudo ./deploy.sh ollama
+  # 다른 자리에 풀었으면: sudo AI_BUNDLE=<풀어 둔 ai 폴더> ./deploy.sh ollama
+  ```
+
+  꾸러미는 앱 판과 무관하다 — 한 번 만들어 두고 서버를 새로 세울 때마다 쓴다. 이미 깔린 서버는 다시 안 받는다.
+- **디스크** — Ollama 약 2GB(`/usr/local/lib/ollama`, GPU 라이브러리 포함) + 모델 1.2GB
+  (`/usr/share/ollama/.ollama/models`). DB 는 **뜻의 자리를 담은 객체 하나에 약 14KB**(실측 — 표 5.7KB + 찾는
+  색인 8.2KB) — 100만 건이면 약 14GB, 1,000만 건이면 약 140GB. 무엇을 담을지는 관리자가 칸마다 고른다(고른 것만 늘어난다).
+- **복구** — 덤프에 pgvector 가 들어 있으면 `restore.sh` 가 pg_restore 앞에서 확장을 만든다. 확장은 postgres
+  계정만 만들므로 **DB 가 있는 서버에서 `sudo` 로** 돌린다.
+- **이중화** — 패키지는 두 서버 다(승격하는 날 필요하다), 확장은 주에서 만들어 복제로 온다. 갱신은 B 먼저인데
+  B 는 확장을 만들 수 없다 — B 는 패키지만 깔고 지나가고, 이어지는 A 의 갱신이 만든다. 순서를 바꿀 것도 따로
+  칠 것도 없다.
+
 ## 5e. 느린 요청 · 큰 응답 — 어디가 느린가 (ADR 0026)
 
 작업 목록 한 번이 93MB · 4.4초였던 것을 사용자가 「적용을 누르면 화면이 너무 느리다」 고 말하고 나서야
@@ -626,6 +681,8 @@ PostgreSQL 은 설치한 기본값(공유 버퍼 128MB · 작업 메모리 4MB �
 | 기동 거부: `JWT_SECRET` | 기본값 그대로다. 그것이 의도다 — `.env` 에 난수를 넣는다 |
 | `connection refused` (DB) | `systemctl status postgresql`, `.env` 의 포트 확인 |
 | 화면이 500, 로그에 "없는 컬럼" | 마이그레이션이 안 돌았다. `sudo ./deploy.sh update` |
+| `update` 가 「pgvector 를 깔지 못했습니다」 를 경고한다 | 저장소에 안 닿고 번들에 `.deb` 가 없다(갱신은 끝난다). 닿는 PC 에서 `apt-get download postgresql-16-pgvector` → 서버에서 `sudo dpkg -i` → `sudo ./deploy.sh pgvector`(5d-3). DB 가 다른 서버면 그 서버에서 |
+| 서버 화면의 「뜻으로 찾기」 가 「준비 안 됨」 | 그 줄의 까닭대로 — 대개 Ollama 가 없거나 모델을 못 받았다. `sudo ./deploy.sh ollama`, 폐쇄망이면 임베딩 꾸러미(5d-3) |
 | 포트가 이미 쓰인다 | 같은 서버의 다른 플랫폼과 겹쳤다. `ss -ltnp 'sport = :<포트>'` |
 | 업로드 파일에 `Permission denied` | `sudo chown -R <계정>:<계정> ~/apps/<slug>/filestore` |
 | 사진 zip 업로드가 413 · 「Request Entity Too Large」(nginx 의 말) | 메인 서버 nginx 에 사진 zip 경로의 location(2100m)이 없다 — `main-server-nginx.conf` 를 다시 넘긴다(5b-2). 앱의 413 은 「파일이 너무 큽니다」(`JOBS-0001`)로 온다 |

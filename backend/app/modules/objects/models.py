@@ -48,6 +48,7 @@ from app.database import Base
 from app.modules.graph import maphash
 from app.modules.objects import attachment_sync, effectivity, pinning, refindex, typecounts
 from app.modules.ontology.models import SLUG_MAX
+from app.shared import vectors
 
 #: 식별자의 비교키를 DB 에서 — `shared.text.compare_key`(NFKC · 공백 정리 · 소문자)와 같게.
 #: 인덱스와 질의가 **같은 글자**를 써야 인덱스를 탄다(`objects.resolve`).
@@ -633,6 +634,8 @@ attachment_sync.attach(Base.metadata)
 typecounts.attach(Base.metadata)
 effectivity.attach(Base.metadata)
 pinning.attach(Base.metadata)
+# 뜻으로 찾기의 바탕(ADR 0050) — 확장이 있는지 표보다 먼저 본다(만드는 것은 postgres 계정이다).
+vectors.attach(Base.metadata)
 
 
 def _need_trigram(_target: Any, connection: Any, **_kw: Any) -> None:

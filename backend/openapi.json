@@ -30475,6 +30475,71 @@
         ],
         "title": "EdgeOut"
       },
+      "EmbeddingOut": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "backend": {
+            "type": "string",
+            "title": "Backend"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "url": {
+            "type": "string",
+            "title": "Url"
+          },
+          "vector_version": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Vector Version"
+          },
+          "dim": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Dim"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "backend",
+          "model",
+          "url",
+          "vector_version",
+          "dim",
+          "problem"
+        ],
+        "title": "EmbeddingOut",
+        "description": "뜻으로 찾기의 바탕(ADR 0050) — pgvector · Ollama · 모델 · 차원. **배포는 깔다 실패해도\n멈추지 않으므로** 그 사실이 드러날 자리가 여기다."
+      },
       "ExplodeLineOut": {
         "properties": {
           "id": {
@@ -49629,6 +49694,9 @@
           "backup": {
             "$ref": "#/components/schemas/BackupOut"
           },
+          "embedding": {
+            "$ref": "#/components/schemas/EmbeddingOut"
+          },
           "counts": {
             "items": {
               "$ref": "#/components/schemas/TableCountOut"
@@ -49656,6 +49724,7 @@
           "schema_behind",
           "disk",
           "backup",
+          "embedding",
           "counts",
           "started_at"
         ],

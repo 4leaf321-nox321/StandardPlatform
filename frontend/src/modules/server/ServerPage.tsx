@@ -202,6 +202,14 @@ function ServerStatusTab() {
         </div>
       )}
 
+      {/* **배포는 Ollama · 모델을 깔다 실패해도 멈추지 않는다** — 앱은 그대로 돌고, 그 사실이
+          드러날 자리가 여기다(ADR 0050). */}
+      {one.embedding.state === 'problem' && (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/5 p-3 text-sm">
+          뜻으로 찾기를 쓸 수 없습니다 — {one.embedding.problem}
+        </div>
+      )}
+
       <dl className="grid gap-4 rounded-md border p-4 sm:grid-cols-2 lg:grid-cols-4">
         <div>
           <dt className="text-muted-foreground text-xs">플랫폼</dt>
@@ -247,6 +255,23 @@ function ServerStatusTab() {
               <span className="text-muted-foreground ml-1 text-xs tabular-nums">
                 ({Math.round(one.backup.age_hours)}시간 전)
               </span>
+            )}
+          </dd>
+        </div>
+        <div>
+          <dt className="text-muted-foreground text-xs">뜻으로 찾기</dt>
+          <dd className="text-sm">
+            {one.embedding.state === 'ready' && (
+              <>
+                준비됨{' '}
+                <span className="text-muted-foreground font-mono text-xs">
+                  ({one.embedding.model} · pgvector {one.embedding.vector_version})
+                </span>
+              </>
+            )}
+            {one.embedding.state === 'off' && <span className="text-muted-foreground">끔</span>}
+            {one.embedding.state === 'problem' && (
+              <span className="text-amber-700 dark:text-amber-400">준비 안 됨</span>
             )}
           </dd>
         </div>

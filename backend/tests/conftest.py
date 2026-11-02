@@ -80,6 +80,7 @@ os.environ["DATABASE_URL"] = _for_worker(os.environ["APP_TEST_DATABASE_URL"])
 
 from collections.abc import Iterator  # noqa: E402
 
+import httpx  # noqa: E402
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import create_engine, text  # noqa: E402
@@ -88,19 +89,35 @@ from sqlalchemy.orm import Session  # noqa: E402
 import app.all_models  # noqa: F401,E402
 from app.database import Base, SessionLocal, engine  # noqa: E402
 from app.main import app as fastapi_app  # noqa: E402
+from app.shared import embedding  # noqa: E402
 
 
 def _ensure_database(name: str) -> None:
     """시험 DB 가 없으면 만든다 — 병렬 작업자의 DB 는 처음 돌 때 없다. 같은 접속 정보로
-    관리 DB(`postgres`)에 붙어서. 있으면 아무것도 안 한다(만들 권한이 없어도 된다)."""
+    관리 DB(`postgres`)에 붙어서. 있으면 아무것도 안 한다(만들 권한이 없어도 된다).
+
+    **틀(`<이름>_template`)이 있으면 그것에서** — pgvector 확장은 postgres 계정만
+    만들어(ADR 0050), 앱 계정이 만든 빈 DB 에는 없다. 개발 PC 는 `scripts/dev_pgvector.sh` 가
+    확장을 든 틀을 만든다. CI 는 틀이 없고, superuser 라 표를 세울 때 스스로
+    만든다(`vectors.ensure`)."""
+    stem = (make_url(os.environ["APP_TEST_DATABASE_URL"]).database or "").removesuffix("_test")
     admin = create_engine(engine.url.set(database="postgres"), isolation_level="AUTOCOMMIT")
     try:
         with admin.connect() as connection:
-            found = connection.execute(
-                text("SELECT 1 FROM pg_database WHERE datname = :name"), {"name": name}
-            ).first()
-            if found is None:
-                connection.execute(text(f'CREATE DATABASE "{name}"'))
+            known = {
+                row[0]
+                for row in connection.execute(
+                    text(
+                        "SELECT datname FROM pg_database WHERE datname IN (:name, :template)"
+                    ),
+                    {"name": name, "template": f"{stem}_template"},
+                )
+            }
+            if name not in known:
+                template = (
+                    f' TEMPLATE "{stem}_template"' if f"{stem}_template" in known else ""
+                )
+                connection.execute(text(f'CREATE DATABASE "{name}"{template}'))
     finally:
         admin.dispose()
 
@@ -150,6 +167,20 @@ def _request_timing_in_foreground() -> Iterator[None]:
     writer.discard()
     yield
     writer.discard()
+
+
+@pytest.fixture(autouse=True)
+def _no_real_ollama() -> Iterator[None]:
+    """**진짜 Ollama 에 닿지 않는다**(ADR 0050) — 개발 PC 에는 떠 있고 CI 에는 없어, 서버
+    화면을 부르는 시험의 답이 PC 마다 갈린다. 닿지 않는 것으로 두고, 보는 시험은 제 가짜를
+    끼운다."""
+
+    def unreachable(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("시험은 진짜 Ollama 에 닿지 않는다", request=request)
+
+    embedding.transport = httpx.MockTransport(unreachable)
+    yield
+    embedding.transport = None
 
 
 @pytest.fixture

@@ -246,6 +246,17 @@ export interface ServerStatus {
     stale: boolean
     problem: string | null
   }
+  /** 뜻으로 찾기의 바탕(ADR 0050) — pgvector · Ollama · 모델. 배포는 깔다 실패해도 안 멈추므로 여기서 드러난다. */
+  embedding: {
+    /** ready · off(EMBEDDING_BACKEND=off) · problem */
+    state: string
+    backend: string
+    model: string
+    url: string
+    vector_version: string | null
+    dim: number | null
+    problem: string | null
+  }
   counts: { label: string; count: number }[]
   started_at: string
 }

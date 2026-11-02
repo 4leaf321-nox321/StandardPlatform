@@ -134,8 +134,15 @@ PY
 )"
   export PGPASSWORD="$password"
   local drop="DROP DATABASE IF EXISTS $probe"
+  # **pgvector 를 든 틀에서 만든다**(ADR 0050) — 확장은 postgres 계정만 만들어, 앱 계정이 만든 빈 DB
+  # 에는 없다(그것을 쓰는 마이그레이션이 거기서 멈춘다). 틀은 `sudo ./scripts/dev_pgvector.sh` 가 만든다.
+  local template="${parts##*|}_template" from=""
+  if [[ "$(psql -h "$host" -p "$port" -U "$user" -d postgres -tAc \
+      "SELECT 1 FROM pg_database WHERE datname = '$template'")" == "1" ]]; then
+    from=" TEMPLATE $template"
+  fi
   psql -h "$host" -p "$port" -U "$user" -d postgres -tAc "$drop" >/dev/null
-  psql -h "$host" -p "$port" -U "$user" -d postgres -tAc "CREATE DATABASE $probe" >/dev/null
+  psql -h "$host" -p "$port" -U "$user" -d postgres -tAc "CREATE DATABASE $probe$from" >/dev/null
   # **성공이든 실패든 지운다.** `trap ... RETURN` 은 함수 밖에서 펼쳐져 지역 변수를
   # 못 보고, 그때 `set -u` 가 스크립트를 죽인다 — 실측으로 그렇게 멈췄다.
   local status=0

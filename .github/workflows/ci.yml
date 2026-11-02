@@ -25,8 +25,10 @@ jobs:
     runs-on: ubuntu-latest
 
     services:
+      # **pgvector 가 든 이미지 — 우분투 24.04 서버가 받는 판(0.6.0)과 같게**(ADR 0050). 더 새 판이면
+      # 그 판에만 있는 것(halfvec · 걸러 찾기의 이어 훑기)을 쓴 코드가 여기서 통과하고 서버에서 멈춘다.
       postgres:
-        image: postgres:16
+        image: pgvector/pgvector:0.6.0-pg16
         env:
           POSTGRES_PASSWORD: postgres
         options: >-

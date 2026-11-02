@@ -288,6 +288,20 @@ class Settings(BaseSettings):
     graph_map_temp_limit: str = "20GB"
     """지도 작업의 임시 파일 상한(`temp_file_limit`, ADR 0049) — 넘으면 그 작업만 실패한다.
     `READ_TEMP_LIMIT` 처럼 배포가 앱 계정에 권한을 줄 때만 걸린다. 비우면 안 건다."""
+
+    embedding_backend: Literal["ollama", "off"] = "ollama"
+    """글을 뜻의 자리(숫자 1,024개)로 바꾸는 임베딩 모델을 어디서 돌리나(ADR 0050).
+    `ollama` 면 서버 안의 Ollama — 글이 서버 밖으로 나가지 않는다. `off` 면 뜻으로 찾기를 끈
+    설치이고 배포도 Ollama 를 깔지 않는다."""
+    ollama_base_url: str = "http://127.0.0.1:11434"
+    """Ollama 의 주소. 배포는 이것이 이 서버(127.0.0.1 · localhost)일 때만 Ollama 를 깐다 —
+    서버의 플랫폼들(다른 제품 포함)이 하나를 함께 쓴다. 앱 · 워커는 컨테이너 안에서 이 주소로
+    부른다(apptainer 는 호스트의 네트워크를 쓴다)."""
+    embedding_model: str = "bge-m3"
+    """Ollama 의 임베딩 모델. 뜻의 자리를 담는 칸이 1,024차원이라 **차원이 같은 모델만** 된다 —
+    서버 화면이 모델이 말하는 차원을 견줘 다르면 말한다. 바꾸면 담아 둔 것을 다시 만들어야 한다
+    (다른 모델의 자리끼리는 견줄 수 없다)."""
+
     filestore_gc_hours: int = 24
     """첨부 저장소의 **고아 파일 정리**를 워커가 몇 시간마다 하나(`files/gc.py`). 0 이면 안
     한다 — 시스템 관리자가 작업(「고아 첨부 파일 정리」)으로만."""
