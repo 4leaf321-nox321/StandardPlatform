@@ -180,8 +180,10 @@ fi
 PG_VERSION="${PG_VERSION:-16}"
 echo "==> [3a/4] pgvector .deb 동봉 (postgresql-$PG_VERSION-pgvector)"
 mkdir -p "$STAGE/pgvector_debs"
+# 주소로 고르지 않는다 — GitHub 러너는 우분투 저장소를 미러 목록(`mirror+file:/etc/apt/apt-mirrors.txt`)으로
+# 가리켜 주소에 ubuntu.com 이 없다(v0.4.71 의 첫 빌드가 그래서 못 받았다). PGDG 만(`<판>-pgdg`) 뺀다.
 pgvector_ver="$(apt-cache madison "postgresql-$PG_VERSION-pgvector" 2>/dev/null \
-    | awk -F'|' '/ubuntu\.com/ { gsub(/ /, "", $2); print $2; exit }')"
+    | awk -F'|' '$3 !~ /pgdg/ { gsub(/ /, "", $2); print $2; exit }')"
 if [[ -n "$pgvector_ver" ]] \
     && (cd "$STAGE/pgvector_debs" && apt-get download "postgresql-$PG_VERSION-pgvector=$pgvector_ver" >/dev/null 2>&1); then
     echo "    동봉: $(ls "$STAGE/pgvector_debs" | tr '\n' ' ')"

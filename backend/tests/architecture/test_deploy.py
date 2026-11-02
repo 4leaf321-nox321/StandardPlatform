@@ -833,7 +833,8 @@ def test_갱신은_pgvector_를_못_갖춰도_멈추지_않는다() -> None:
 def test_번들이_pgvector_deb_를_우분투_판으로_동봉한다() -> None:
     builder = (DEPLOY / "build_bundle.sh").read_text(encoding="utf-8")
     assert "pgvector_debs" in builder
-    assert "apt-cache madison" in builder and "ubuntu\\.com" in builder
+    # PGDG 만 뺀다 — 러너는 우분투 저장소를 미러 목록으로 가리켜 주소로는 못 고른다.
+    assert "apt-cache madison" in builder and "$3 !~ /pgdg/" in builder
     assert "pgvector_debs" in _piece(
         (DEPLOY / "deploy.sh").read_text(encoding="utf-8"), "ensure_vector_package"
     )
