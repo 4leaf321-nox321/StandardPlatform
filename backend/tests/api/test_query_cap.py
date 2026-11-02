@@ -50,6 +50,9 @@ def test_메모리_병렬은_env_로_정하고_틀린_값은_서버_설정을_�
     monkeypatch.setattr(settings, "read_work_mem", "64MB; DROP TABLE objects")
     monkeypatch.setattr(settings, "read_parallel_workers", -1)
     monkeypatch.setattr(settings, "read_query_seconds", 0)
+    # 임시 파일 상한도 틀린 값 — 맞는 값이면 DB 계정이 걸 수 있는지(superuser 인 CI 는 건다)에
+    # 따라 답이 갈린다.
+    monkeypatch.setattr(settings, "read_temp_limit", "5GB; DROP TABLE objects")
     assert set(querycap.tuning()) == {
         "join_collapse_limit",
         "from_collapse_limit",
