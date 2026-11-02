@@ -839,6 +839,19 @@ def test_번들이_pgvector_deb_를_우분투_판으로_동봉한다() -> None:
     )
 
 
+def test_번들은_서버와_같은_우분투에서_만들고_deb_가_빠지면_멈춘다() -> None:
+    """`ubuntu-latest` 가 26.04 로 바뀌자 서버(24.04)용 .deb 를 못 받아, 빌드는 경고만 하고
+    .deb 없는 번들이 나갔다(v0.4.69 · v0.4.70) — 폐쇄망 서버는 그것으로 apptainer · pgvector 를
+    깐다."""
+    release = (REPO / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    # 일 하나씩(들여쓰기 두 칸의 `<이름>:` 줄에서 자른다).
+    jobs = re.split(r"\n  (?=[\w-]+:\s*\n)", release)
+    build = next(job for job in jobs if "./deploy/build_bundle.sh" in job)
+    assert "runs-on: ubuntu-24.04" in build
+    assert "apptainer_debs/apptainer_" in build
+    assert "pgvector_debs/postgresql-16-pgvector_" in build
+
+
 def test_복구는_덤프의_pgvector_를_먼저_만든다() -> None:
     """앱 계정의 pg_restore 는 확장을 못 만든다 — 그것을 쓰는 표가 안 돌아온 채 끝난다."""
     restore = (DEPLOY / "restore.sh").read_text(encoding="utf-8")
