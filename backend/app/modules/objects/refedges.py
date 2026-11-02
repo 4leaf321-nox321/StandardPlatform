@@ -24,7 +24,7 @@ from __future__ import annotations
 import uuid
 from collections import Counter
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, Literal
 
 from sqlalchemy import and_, func, or_, select
 from sqlalchemy.orm import Session, aliased
@@ -34,7 +34,7 @@ from app.modules.objects.models import ObjectInstance, ObjectRef
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType, PropertyDef
 from app.shared.batches import chunks
-from app.shared.permissions import visible_owner_clause
+from app.shared.permissions import sees_every_department, visible_owner_clause
 
 PREFIX = "ref:"
 _NAMESPACE = uuid.UUID("5f1f4b7e-2f7c-4b1e-9d3a-7c2e6f0a9b11")
@@ -242,9 +242,10 @@ def neighbor_edges(
     relations: list[str] | None = None,
     type_ids: list[uuid.UUID] | None = None,
     skip_logs: bool = False,
+    direction: Literal["both", "in", "out"] = "both",
 ) -> list[RefEdge]:
-    """frontier 의 각 노드에서 참조 칸으로 이어진 이웃 — 가리키는 것과 나를 가리키는 것.
-    노드마다 fanout 개까지(관계의 이웃과 같은 상한).
+    """frontier 의 각 노드에서 참조 칸으로 이어진 이웃 — 가리키는 것(`out`)과 나를 가리키는
+    것(`in`). 노드마다 fanout 개까지(관계의 이웃과 같은 상한).
 
     `skip_logs` 면 **나를 가리키는 기록**(ADR 0011)은 뺀다 — 인기 모델은 기록 10만 건이
     가리킨다. 그것은 줄 대신 `log_counts` 의 수로 선다."""
@@ -262,7 +263,7 @@ def neighbor_edges(
             )
         )
     )
-    outgoing = _outgoing(rows, by_src)
+    outgoing = _outgoing(rows, by_src) if direction != "in" else []
     visible_targets = _visible_ids(db, user, {edge.dst for edge in outgoing})
     edges = [edge for edge in outgoing if edge.dst in visible_targets]
     by_dst: dict[uuid.UUID, list[RefKind]] = {}
@@ -278,7 +279,8 @@ def neighbor_edges(
         for type_id, kind_list in by_dst.items()
         if type_id in set(row_types.values())
     }
-    edges += _incoming(db, user, frontier, relevant, per_target=fanout)
+    if direction != "out":
+        edges += _incoming(db, user, frontier, relevant, per_target=fanout)
     if type_ids is not None:
         allowed = set(type_ids)
         types_of = _types_of(db, {e.dst for e in edges} | {e.src for e in edges})
@@ -348,17 +350,17 @@ def degree_counts(
     unique = {kind.slug: kind for kind_list in by_dst.values() for kind in kind_list}
     if unique:
         for batch in chunks(ids):
-            pointing = db.execute(
-                select(ObjectRef.dst_id, func.count())
-                .join(ObjectInstance, ObjectInstance.id == ObjectRef.src_id)
-                .where(
-                    ObjectRef.dst_id.in_(batch),
-                    _kind_clause(list(unique.values())),
-                    visible_owner_clause(user, ObjectInstance.owner_workspace_id),
-                )
-                .group_by(ObjectRef.dst_id)
+            stmt = select(ObjectRef.dst_id, func.count()).where(
+                ObjectRef.dst_id.in_(batch), _kind_clause(list(unique.values()))
             )
-            for dst, count in pointing:
+            # 색인에는 살아 있는 출발점만 있다(`refindex`) — 모두를 보는 사람이면 객체 표를 안
+            # 거친다. 거치면 객체 2,000만 줄을 해시로 디스크에 쏟았다(모델 6천 개의 「+N」 에
+            # 20초 · 임시 파일 1.7GB, ADR 0048).
+            if not sees_every_department(user):
+                stmt = stmt.join(ObjectInstance, ObjectInstance.id == ObjectRef.src_id).where(
+                    visible_owner_clause(user, ObjectInstance.owner_workspace_id)
+                )
+            for dst, count in db.execute(stmt.group_by(ObjectRef.dst_id)):
                 counts[dst] += int(count)
     return dict(counts)
 
@@ -375,8 +377,8 @@ def log_counts(db: Session, *, target: uuid.UUID, user: User) -> list[LogCount]:
     """이 객체를 가리키는 **기록**(ADR 0011)의 수 — 타입 · 칸마다, 보이는 것만.
 
     축의 상세 · 그래프는 기록을 줄로 싣지 않고 이 수로 보인다(「시장 서비스 100,000건」 →
-    걸러진 목록). 색인의 `(dst_id, key)` 로 센다 — 시스템 관리자면 객체 표를 거치지 않는다
-    (색인에는 살아 있는 것만 있다)."""
+    걸러진 목록). 색인의 `(dst_id, key)` 로 센다 — 모두를 보는 사람이면 객체 표를 거치지
+    않는다(색인에는 살아 있는 것만 있다)."""
     by_pair = {
         (kind.src_type.id, kind.key): kind
         for kind in kinds(db).values()
@@ -388,7 +390,7 @@ def log_counts(db: Session, *, target: uuid.UUID, user: User) -> list[LogCount]:
         ObjectRef.dst_id == target,
         ObjectRef.src_type_id.in_({type_id for type_id, _ in by_pair}),
     )
-    if not user.is_system_admin:
+    if not sees_every_department(user):
         stmt = stmt.join(ObjectInstance, ObjectInstance.id == ObjectRef.src_id).where(
             visible_owner_clause(user, ObjectInstance.owner_workspace_id)
         )

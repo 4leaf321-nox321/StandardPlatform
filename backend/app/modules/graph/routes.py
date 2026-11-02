@@ -24,12 +24,15 @@ from __future__ import annotations
 import gzip
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from datetime import date
+from typing import Any, Literal
 
 from fastapi import APIRouter, Depends, Query, Request, Response
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import get_db
 from app.modules.accounts.models import User
 from app.modules.graph import mapbuild, maphubs, maplines, mapread
@@ -51,6 +54,9 @@ from app.modules.graph.schemas import (
     OverviewOut,
     PathOut,
     PathStepsOut,
+    ReachNodeOut,
+    ReachOut,
+    ReachTypeCountOut,
     SearchHitOut,
     SubgraphOut,
     TypeEdgeOut,
@@ -65,14 +71,23 @@ from app.modules.graph.schemas import (
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs.schemas import JobOut
 from app.modules.objects import edges as edge_rule
-from app.modules.objects import graph, graphcounts, graphwhole, refedges, system
+from app.modules.objects import (
+    graph,
+    graphcounts,
+    graphwhole,
+    reach,
+    refedges,
+    system,
+    typecounts,
+)
 from app.modules.objects.models import ObjectAlias, ObjectInstance
 from app.modules.objects.schemas import LogCountOut
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import NavGroup, ObjectType, RelationType
 from app.modules.workspaces.models import Workspace
-from app.shared import querycap, system_sources
+from app.shared import querycap, readguard, system_sources
 from app.shared.auth import current_user, require_system_admin
+from app.shared.batches import chunks
 from app.shared.errors import AppError, NotFound, code
 from app.shared.permissions import sees_every_department, visible_owner_clause
 from app.shared.system_sources import SystemRef
@@ -208,6 +223,16 @@ def _system_nodes(
                 truncated=degree > shown.get(ref.id, 0),
             )
     return out
+
+
+async def _explore[T](
+    request: Request, db: Session, work: Callable[[], T], *, what: str, hint: str
+) -> T:
+    """탐색 그림(이웃 · 타입 전체 표시)의 안전장치 — 끊기면 멈추고, 요청 하나의 시간 상한(ADR
+    0048). 정적 그리기와 달리 동시 개수는 세지 않는다 — 펼칠 때마다 부르는 가벼운 길이다."""
+    return await readguard.run(
+        request, db, work, seconds=get_settings().long_read_seconds, what=what, hint=hint
+    )
 
 
 def _degrees(
@@ -441,7 +466,8 @@ def search(
 
 
 @router.get("/neighborhood", response_model=NeighborhoodOut)
-def neighborhood(
+async def neighborhood(
+    request: Request,
     focus: uuid.UUID = Query(description="시작 객체"),
     depth: int | None = Query(default=None, description=f"몇 단계까지. 최대 {MAX_DEPTH}"),
     fanout: int | None = Query(
@@ -457,6 +483,12 @@ def neighborhood(
         description="나를 가리키는 기록(ADR 0011)도 이웃으로 싣는다. 기본은 수로만",
     ),
     as_of: date | None = Query(default=None, description=AS_OF),
+    direction: Literal["both", "in", "out"] = Query(
+        default="both",
+        description="어느 선으로 넓히나 — both · in(들어오는 선: 나를 가리키는 것) · "
+        "out(나가는 선: 내가 가리키는 것). 단계마다 그 노드에서 본 방향이다. 방향 없는 관계 "
+        "종류는 양쪽",
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> NeighborhoodOut:
@@ -469,7 +501,50 @@ def neighborhood(
     **나를 가리키는 기록은 기본으로 안 싣는다**(ADR 0011) — 인기 모델은 기록 10만 건이
     가리키고, 그중 30개를 늘어놓으면 축의 모양이 묻힌다. 시작점을 가리키는 기록은
     `log_counts` 에 수로 온다. `records=true` 거나 `types` 로 고르면 싣는다.
+
+    `direction` 으로 한쪽 선만 따라 넓힌다 — 이미 실린 노드끼리의 선은 방향과 상관없이 긋는다
+    (그림에 있는 두 노드 사이의 선을 숨기면 「관계없음」 으로 읽힌다).
+
+    끊기면(화면이 다른 것을 고르거나 닫으면) 멈추고, `LONG_READ_SECONDS` 를 넘기면 504(ADR
+    0048).
     """
+    return await _explore(
+        request,
+        db,
+        lambda: _neighborhood(
+            focus=focus,
+            depth=depth,
+            fanout=fanout,
+            limit=limit,
+            relations=relations,
+            types=types,
+            records=records,
+            as_of=as_of,
+            direction=direction,
+            user=user,
+            db=db,
+        ),
+        what="이웃 그림",
+        hint="단계 · 노드당 이웃 · 그림에 세울 노드를 줄이거나 관계 · 이웃 타입으로 거르세요.",
+    )
+
+
+def _neighborhood(
+    *,
+    focus: uuid.UUID,
+    depth: int | None,
+    fanout: int | None,
+    limit: int | None,
+    relations: str | None,
+    types: str | None,
+    records: bool,
+    as_of: date | None,
+    direction: Literal["both", "in", "out"],
+    user: User,
+    db: Session,
+) -> NeighborhoodOut:
+    """이웃 그림의 몸 — `neighborhood` 가 안전장치(`readguard`) 안에서 부른다."""
+    querycap.cap(db)
     depth_n = _clamp(depth, default=DEFAULT_DEPTH, maximum=MAX_DEPTH)
     fanout_n = _clamp(fanout, default=DEFAULT_FANOUT, maximum=MAX_FANOUT)
     day = edge_rule.at(as_of)
@@ -528,6 +603,7 @@ def neighborhood(
                 at=day,
                 relations=wanted_relations,
                 type_ids=type_ids,
+                direction=direction,
             )
             + graph.neighbor_link_edges(
                 db,
@@ -537,6 +613,7 @@ def neighborhood(
                 systems=list(systems),
                 relations=wanted_relations,
                 type_slugs=type_slugs,
+                direction=direction,
             )
             + refedges.neighbor_edges(
                 db,
@@ -546,6 +623,7 @@ def neighborhood(
                 relations=wanted_relations,
                 type_ids=type_ids,
                 skip_logs=skip_logs,
+                direction=direction,
             )
         )
         next_frontier: list[uuid.UUID] = []
@@ -648,10 +726,178 @@ def neighborhood(
             )
             for one in (
                 refedges.log_counts(db, target=focus, user=user)
-                if skip_logs and start is not None
+                if skip_logs and start is not None and direction != "out"
                 else []
             )
         ],
+    )
+
+
+@router.get("/reach", response_model=ReachOut)
+async def reach_closure(
+    request: Request,
+    start: uuid.UUID = Query(description="시작 객체"),
+    relations: str = Query(
+        description="따라갈 선의 종류 — 관계 slug · 참조 칸(`ref:<타입>.<칸>`), 쉼표로"
+    ),
+    direction: Literal["in", "out"] = Query(
+        default="in",
+        description="in = 들어오는 선(이것에 기대는 것 — 영향 범위) · out = 나가는 선(이것이 "
+        "기대는 것). 방향 없는 관계 종류는 양쪽",
+    ),
+    depth: int | None = Query(
+        default=None, description=f"몇 단계까지. 최대 {reach.MAX_DEPTH}"
+    ),
+    limit: int | None = Query(
+        default=None,
+        description=f"닿은 객체 상한(기본 {reach.DEFAULT_NODES}, 최대 {reach.MAX_NODES})",
+    ),
+    as_of: date | None = Query(default=None, description=AS_OF),
+    user: User = Depends(current_user),
+    db: Session = Depends(get_db),
+) -> ReachOut:
+    """**영향 범위** — 고른 선을 한 방향으로 끝까지(20단) 따라가 닿은 객체 전부.
+
+    트리 「위 전부」 · BOM 「어디에 쓰였나」 · 계보 사슬은 정해 둔 관계 하나만 따라간다. 이것은
+    아무 관계 종류 · 참조 칸을 고른다. 고리가 있어도 한 번 닿은 객체는 다시 펼치지 않고, 처음
+    닿은 단계와 그 길 하나(`parent` · `via`)를 적는다. 보이지 않는 객체에서는 멈춘다. 상한에
+    닿으면 `truncated` 로 **잘렸다고 말한다.**
+
+    요청한 쪽이 떠나면 멈추고, `LONG_READ_SECONDS` 를 넘기면 504(ADR 0048).
+    """
+    return await readguard.run(
+        request,
+        db,
+        lambda: _reach(
+            start=start,
+            relations=relations,
+            direction=direction,
+            depth=depth,
+            limit=limit,
+            as_of=as_of,
+            user=user,
+            db=db,
+        ),
+        seconds=get_settings().long_read_seconds,
+        what="영향 범위",
+        hint="단계(depth)나 상한(limit)을 줄이거나 따라갈 선의 종류를 좁히세요.",
+    )
+
+
+def _reach(
+    *,
+    start: uuid.UUID,
+    relations: str,
+    direction: Literal["in", "out"],
+    depth: int | None,
+    limit: int | None,
+    as_of: date | None,
+    user: User,
+    db: Session,
+) -> ReachOut:
+    """영향 범위의 몸 — `reach_closure` 가 안전장치(`readguard`) 안에서 부른다."""
+    wanted = _csv(relations)
+    if not wanted:
+        raise AppError(
+            code("GRAPH", 16),
+            "relations 에 따라갈 선의 종류를 하나 이상 적습니다.",
+            status=422,
+        )
+    found = db.scalar(
+        select(ObjectInstance).where(
+            ObjectInstance.id == start,
+            ObjectInstance.deleted_at.is_(None),
+            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+        )
+    )
+    if found is None:
+        raise NotFound(code("GRAPH", 1), "객체를 찾을 수 없습니다.")
+    depth_n = _clamp(depth, default=reach.MAX_DEPTH, maximum=reach.MAX_DEPTH)
+    node_limit = _clamp(limit, default=reach.DEFAULT_NODES, maximum=reach.MAX_NODES)
+    day = edge_rule.at(as_of)
+    try:
+        walked = reach.walk(
+            db,
+            start=start,
+            user=user,
+            relations=wanted,
+            direction=direction,
+            depth=depth_n,
+            limit=node_limit,
+            day=day,
+        )
+    except reach.UnknownKinds as unknown:
+        raise AppError(
+            code("GRAPH", 17),
+            f"없는 관계 종류 · 참조 칸입니다: {', '.join(unknown.slugs)} — 관계 종류는 slug, "
+            "참조 칸은 ref:<타입 slug>.<칸 키>",
+            status=422,
+            details={"unknown": unknown.slugs},
+        ) from None
+
+    ids = [one.id for one in walked.nodes]
+    # 필요한 칸만 — 2만 개를 속성(JSONB)까지 통째로 읽지 않는다.
+    obj = ObjectInstance
+    rows: dict[uuid.UUID, Any] = {}
+    for batch in chunks(ids):
+        rows.update(
+            (row.id, row)
+            for row in db.execute(
+                select(
+                    obj.id, obj.label, obj.key, obj.type_id, obj.status, obj.owner_workspace_id
+                ).where(obj.id.in_(batch))
+            )
+        )
+    all_types = {row.id: row for row in db.scalars(select(ObjectType))}
+    workspaces = _workspace_slugs(db)
+    nodes: list[ReachNodeOut] = []
+    counted: Counter[uuid.UUID] = Counter()
+    levels: Counter[int] = Counter()
+    for one in walked.nodes:
+        row = rows.get(one.id)
+        if row is None:
+            continue
+        object_type = all_types.get(row.type_id)
+        levels[one.depth] += 1
+        if one.depth > 0:
+            counted[row.type_id] += 1
+        nodes.append(
+            ReachNodeOut(
+                id=row.id,
+                label=row.label,
+                key=row.key,
+                type_slug=object_type.slug if object_type else "",
+                type_label=object_type.label if object_type else "알 수 없음",
+                status=row.status,
+                owner_workspace_slug=(
+                    workspaces.get(row.owner_workspace_id) if row.owner_workspace_id else None
+                ),
+                depth=one.depth,
+                parent=one.parent,
+                via=one.via,
+            )
+        )
+    reached_depth = max(levels) if levels else 0
+    return ReachOut(
+        start=start,
+        direction=direction,
+        relations=wanted,
+        depth=depth_n,
+        reached_depth=reached_depth,
+        node_limit=node_limit,
+        truncated=walked.truncated,
+        exhausted=walked.exhausted,
+        as_of=day,
+        by_type=[
+            ReachTypeCountOut(
+                type_slug=all_types[type_id].slug if type_id in all_types else "",
+                type_label=all_types[type_id].label if type_id in all_types else "알 수 없음",
+                count=count,
+            )
+            for type_id, count in counted.most_common()
+        ],
+        levels=[levels.get(level, 0) for level in range(reached_depth + 1)],
+        nodes=nodes,
     )
 
 
@@ -796,7 +1042,8 @@ def path(
 
 
 @router.get("/subgraph", response_model=SubgraphOut)
-def subgraph(
+async def subgraph(
+    request: Request,
     types: str = Query(description="타입 slug, 쉼표로. 인터페이스면 그 구현 타입 전부"),
     relations: str | None = Query(default=None, description="관계 slug, 쉼표로"),
     q: str | None = Query(default=None, description="이름·식별자의 일부"),
@@ -812,7 +1059,41 @@ def subgraph(
     과 함께 잘렸다고 말한다 — 화면은 「1,234개 중 500개」 라고 적고 다음 쪽으로 넘긴다.
     다른 타입으로 나가는 선은 여기 없다(노드의 `degree` 로 「+N」 만 붙는다) — 그것은
     노드를 눌러 펼친다.
+
+    끊기면(화면이 다른 것을 고르거나 닫으면) 멈추고, `LONG_READ_SECONDS` 를 넘기면 504(ADR
+    0048).
     """
+    return await _explore(
+        request,
+        db,
+        lambda: _subgraph(
+            types=types,
+            relations=relations,
+            q=q,
+            limit=limit,
+            offset=offset,
+            as_of=as_of,
+            user=user,
+            db=db,
+        ),
+        what="타입 전체 표시",
+        hint="그림에 세울 노드를 줄이거나 이름으로 좁히세요.",
+    )
+
+
+def _subgraph(
+    *,
+    types: str,
+    relations: str | None,
+    q: str | None,
+    limit: int | None,
+    offset: int,
+    as_of: date | None,
+    user: User,
+    db: Session,
+) -> SubgraphOut:
+    """「타입 전체 표시」 의 몸 — `subgraph` 가 안전장치(`readguard`) 안에서 부른다."""
+    querycap.cap(db)
     node_limit = _clamp(limit, default=DEFAULT_NODES, maximum=MAX_NODES)
     wanted_relations = _csv(relations)
     day = edge_rule.at(as_of)
@@ -852,9 +1133,15 @@ def subgraph(
         conditions.append(
             or_(ObjectInstance.label.ilike(needle), ObjectInstance.key.ilike(needle))
         )
-    total = int(
-        db.scalar(select(func.count()).select_from(ObjectInstance).where(*conditions)) or 0
-    )
+    if not (q and q.strip()) and sees_every_department(user):
+        # 계수표(ADR 0038) — 「2,000만 개 중 300개」 의 총수를 세려고 기록 타입을 통째로 훑으면
+        # 그것만 10초 넘게 들었다(ADR 0048).
+        counted = typecounts.counts(db)
+        total = sum(counted.get(type_id, 0) for type_id in type_ids)
+    else:
+        total = int(
+            db.scalar(select(func.count()).select_from(ObjectInstance).where(*conditions)) or 0
+        )
     # **쪽을 타입마다 나눠 채운다.** 이름순으로 통째로 뜨면 한 타입이 첫 쪽을 다 차지하고
     # (「SM-…」 이 한글보다 앞), 다른 타입이 없는 그림은 선이 하나도 없어 「관계없음」 으로
     # 읽힌다.
@@ -1028,7 +1315,7 @@ def _whole_relation(slug: str, count: int, kinds: dict[str, Kind]) -> WholeRelat
 
 
 @router.get("/whole", response_model=WholeOut)
-def whole(
+async def whole(
     request: Request,
     focus: uuid.UUID | None = Query(
         default=None, description="시작 객체 — focus 와 types 중 하나만 준다"
@@ -1073,7 +1360,49 @@ def whole(
     비운다. 타입 씨앗은 계수표로 먼저 세어(ADR 0038) 넘으면 넓히기 전에 거절한다.
 
     노드는 열 배열이다(노드 사전 20만 개는 수십 MB) — 받는 쪽이 gzip 을 받으면 줄여서 준다.
+
+    **안전장치(ADR 0048)** — 요청한 쪽이 떠나면(화면을 닫거나 씨앗 · 단계를 바꾸면) DB 질의를
+    취소하고 멈춘다. 요청 하나는 `LONG_READ_SECONDS`(기본 120초)를 넘기면 504, 설치 전체에서
+    동시에 `WHOLE_SLOTS`(기본 2)개까지 — 넘으면 429.
     """
+    settings = get_settings()
+    return await readguard.run(
+        request,
+        db,
+        lambda: _whole(
+            request,
+            focus=focus,
+            types=types,
+            depth=depth,
+            relations=relations,
+            neighbor_types=neighbor_types,
+            records=records,
+            as_of=as_of,
+            user=user,
+            db=db,
+        ),
+        seconds=settings.long_read_seconds,
+        what="정적 그리기",
+        hint="단계를 줄이거나 관계 · 이웃 타입으로 거르거나, 전부는 「전체 지도」 에서 "
+        "보세요.",
+        slots=readguard.Slots("graph_whole", settings.whole_slots),
+    )
+
+
+def _whole(
+    request: Request,
+    *,
+    focus: uuid.UUID | None,
+    types: str | None,
+    depth: int | None,
+    relations: str | None,
+    neighbor_types: str | None,
+    records: bool,
+    as_of: date | None,
+    user: User,
+    db: Session,
+) -> Response:
+    """정적 그리기의 몸 — `whole` 이 안전장치(`readguard`) 안에서 부른다."""
     seed_types_asked = _csv(types)
     if (focus is None) == (seed_types_asked is None):
         raise AppError(

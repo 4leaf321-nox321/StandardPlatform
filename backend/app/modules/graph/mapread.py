@@ -344,8 +344,8 @@ def shown_masters(
 
 
 def etag(db: Session, user: User) -> str | None:
-    """멀리 보기의 ETag — 판 번호 · 집계 시각 · 보이는 부서 · 도는 지도 작업. 판이 없으면
-    None."""
+    """멀리 보기의 ETag — 판 번호 · 집계 시각 · 보이는 부서 · 도는 지도 작업 · 자동 계산을
+    멈춘 까닭(ADR 0049). 판이 없으면 None."""
     from app.modules.jobs.models import Job
 
     layout = mapbuild.current(db)
@@ -364,6 +364,7 @@ def etag(db: Session, user: User) -> str | None:
             counted.counted_at.isoformat() if counted is not None else "-",
             viewer_of(db, user).key,
             f"{pending[0]}:{pending[1]}" if pending else "-",
+            mapbuild.paused(db) or "-",
         ]
     )
     return '"' + hashlib.sha1(raw.encode()).hexdigest()[:20] + '"'
@@ -773,6 +774,7 @@ def far(db: Session, user: User) -> Any:
             lines=WholeEdgesOut(src=[], dst=[], rel=[]),
             job=job,
             last_error=_last_error(db),
+            paused=mapbuild.paused(db),
             can_relayout=user.is_system_admin,
             drift=[],
         )
@@ -910,6 +912,7 @@ def far(db: Session, user: User) -> Any:
         ),
         job=job,
         last_error=_last_error(db),
+        paused=mapbuild.paused(db),
         can_relayout=user.is_system_admin,
         drift=drift,
     )

@@ -47,7 +47,8 @@ GUIDE_VERSION: 2026-10-31a
 | 어제 무슨 일이 있었나 — 전체 | `audit_recent` | **부서 관리자 이상.** 시간 · 사람으로는 못 거른다 — 최근 것부터 받아 본다 |
 | 계층(트리)을 한 단계씩 | `object_tree(parent=)` | **깊이 전부**는 `objects_list(conditions=[{"field": "id", "op": "under", "value": <id>}])` — 그 객체와 그 아래 전부 |
 | **그 날짜의 구성** — 「3월 기준 BOM」 「예전에 들어 있던 부품」 「다음 달부터 바뀌는 것」 | 트리 · 목록 · 통계 · 롤업 · 그래프 · 길 도구의 `as_of="YYYY-MM-DD"` · `object_get(all_periods=True)` | **기본은 오늘**이라 유효 기간이 지난 선은 안 보인다 — 「없다」 로 답하기 전에 그때의 날짜로 다시 묻는다. 답에 「○월 ○일 기준」 을 붙인다(`relations` 주제) |
-| **이것과 이어진 것들**(한 걸음 너머) | `graph_neighbors(object_id, depth=, relations=, types=)` | 화면의 지식 그래프와 같은 길. **`truncated` 면 잘린 것** — 좁혀서 다시 |
+| **이것과 이어진 것들**(한 걸음 너머) | `graph_neighbors(object_id, depth=, relations=, types=, direction=)` | 화면의 지식 그래프와 같은 길. `direction="in"` 이면 나를 가리키는 쪽만. **`truncated` 면 잘린 것** — 좁혀서 다시 |
+| **이것에 기대는 것 전부**(영향 범위) — 「이 부품이 바뀌면 무엇이 흔들리나」 | `graph_reach(object_id, relations=[...], direction="in")` | 고른 관계 · 참조 칸만 **끝까지**(20단) 거꾸로. `by_type` · `levels` 를 먼저 읽는다. **`truncated` 면 전부가 아니다.** 트리 · BOM · 계보로 정해 둔 관계면 그 도구가 먼저 |
 | **두 객체가 어떻게 이어져 있나** | `graph_path(source_id, target_id, max_depth=, relations=, types=)` | 가장 짧은 길들. **`truncated` 면 「없다」 가 아니라 「찾다가 멈춤」** — 좁혀서 다시 |
 | 어느 타입에서 어디로 갈 수 있나 | `graph_overview` | 관계 이름을 짐작하지 않는다 — 질의를 쓰기 전에 |
 | 지우기·합치기 전에 무엇이 걸렸나 | `object_references` | 안 보이는 것은 수만(조회를 부서로 좁힌 설치) |
@@ -809,7 +810,7 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 - **수량** — 관계 종류에 수량 칸(`quantity_key`, `schema` 주제)이 있으면 `relation_add(...,
   properties={"<수량 칸>": 4})` 로 「부모 하나에 자식 4개」 를 적는다. 비우면 전개가 1개로 센다.
 - **기본은 오늘이다.** `object_get` · `object_tree` · `object_rollup` · `object_explode` · `graph_neighbors` ·
-  `graph_path` · `objects_list` · `objects_summary` 는 기준일(`as_of`, 비우면 오늘)에 **유효한 선만**
+  `graph_reach` · `graph_path` · `objects_list` · `objects_summary` 는 기준일(`as_of`, 비우면 오늘)에 **유효한 선만**
   본다 — 유효 기간이 지난 선 · 아직 안 된 선은 빠진다. 「예전 구성」 「다음 달 구성」 은 `as_of` 를
   그 날짜로, 기간을 가리지 않고 다 보려면 `object_get(all_periods=True)`(줄의 `period_state` 가
   `past` · `current` · `future`). 사람에게 답할 때 **「○월 ○일 기준」** 을 붙인다 — 날짜 없이 「구성품은
@@ -889,7 +890,8 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 - 인터페이스로 묶어 보기 — 「설비인 것 전부」(시험장비 · 계측기를 한 번에)
 
 **질의어를 쓰기 전에 `graph_neighbors` 로 되는지 본다.** 「이것과 이어진 것들」 은 그쪽이 빠르고,
-질의문을 틀리게 쓸 일이 없다. 질의어는 **조건을 걸어 묶어 세는** 물음에 쓴다(「부서별로 몇 건」).
+질의문을 틀리게 쓸 일이 없다. 적어 두지 않은 방향을 **끝까지**(`^관계+`) 따라가는 물음은
+`graph_reach` 가 먼저다 — SPARQL 은 객체 5만 개 안에서만 돈다. 질의어는 **조건을 걸어 묶어 세는** 물음에 쓴다(「부서별로 몇 건」).
 
 **보이는 것만 답한다** — 목록과 같은 규칙이다(기본은 부서와 상관없이 전부, 조회를 부서로 좁힌 설치는
 전역 + 내 부서). 좁힌 설치에서는 남의 부서 객체가 그래프에 없으므로 0건이 「없다」 는 뜻이 아닐 수 있다 —

@@ -53,6 +53,7 @@ import type {
   GraphNode,
   MapHubKey,
   Neighborhood,
+  NeighborDirection,
   Overview,
   PathResult,
   SearchHit,
@@ -123,6 +124,12 @@ export type Seed =
  */
 const DEPTHS = [1, 2, 3, 4, 5, 6]
 const FANOUTS = [10, 30, 100, 300, 500]
+/** 넓히는 방향 — 단계마다 그 노드에서 본 방향이다. 방향 없는 관계는 어느 쪽에서도 보인다. */
+const DIRECTIONS: { value: NeighborDirection; label: string }[] = [
+  { value: 'both', label: '양쪽' },
+  { value: 'in', label: '들어오는 선만 (나를 가리키는 것)' },
+  { value: 'out', label: '나가는 선만 (내가 가리키는 것)' },
+]
 /** 그림에 세울 노드 수. 큰 것을 고르면 느려진다는 말을 화면이 함께 한다. */
 const NODE_LIMITS = [300, 800, 1500, 3000, 10000, 20000]
 /** 타입별 목록의 한 쪽. */
@@ -243,6 +250,8 @@ interface Controls {
    * 전체). 빈 글자면 오늘. 주소에 남는다 — 「3월 1일의 구성」 을 링크로 건넨다.
    */
   asOf: string
+  /** 어느 선으로 넓히나(ADR 0047) — 「이 부품을 쓰는 것」 만 보려면 들어오는 선. */
+  direction: NeighborDirection
   /**
    * 정적 그리기(ADR 0045) — 노드마다 자르지 않고 통째로 받아 한 번 배치해 그린다. 주소에 남는다 —
    * 붙여 넣으면 같은 그림.
@@ -269,6 +278,7 @@ const CONTROL_KEYS = {
   colorBy: 'color',
   hideIsolated: 'iso',
   asOf: 'as_of',
+  direction: 'dir',
   whole: 'whole',
   layout: 'lay',
   map: 'map',
@@ -296,6 +306,8 @@ function controlsFromParams(params: URLSearchParams): Controls {
       ) ?? 'type',
     hideIsolated: params.get(CONTROL_KEYS.hideIsolated) === '1',
     asOf: params.get(CONTROL_KEYS.asOf) ?? '',
+    direction:
+      (['in', 'out'] as const).find((one) => one === params.get(CONTROL_KEYS.direction)) ?? 'both',
     whole: params.get(CONTROL_KEYS.whole) === '1',
     layout:
       (['cluster', 'rings'] as const).find((one) => one === params.get(CONTROL_KEYS.layout)) ?? '',
@@ -321,6 +333,7 @@ function writeControls(params: URLSearchParams, controls: Controls): void {
   put(CONTROL_KEYS.colorBy, controls.colorBy, controls.colorBy === 'type')
   put(CONTROL_KEYS.hideIsolated, '1', !controls.hideIsolated)
   put(CONTROL_KEYS.asOf, controls.asOf, !controls.asOf)
+  put(CONTROL_KEYS.direction, controls.direction, controls.direction === 'both')
   put(CONTROL_KEYS.whole, '1', !controls.whole)
   put(CONTROL_KEYS.layout, controls.layout, !controls.layout)
   put(CONTROL_KEYS.map, '1', !controls.map)
@@ -992,6 +1005,7 @@ function ExploreView({
     colorBy,
     hideIsolated,
     asOf,
+    direction,
     whole: wholeWanted,
     layout,
   } = controls
@@ -1023,7 +1037,7 @@ function ExploreView({
   const [error, setError] = useState<ApiError | Error | null>(null)
 
   const query = useCallback(
-    (id: string, depthOverride?: number) =>
+    (id: string, depthOverride?: number, signal?: AbortSignal) =>
       graphApi.neighborhood({
         focus: id,
         // 0단계는 정적 그리기의 「타입 전부만」 — 탐색에서는 1단계다.
@@ -1033,8 +1047,10 @@ function ExploreView({
         relations: [...relationFilter],
         types: [...typeFilter],
         asOf: asOf || null,
+        direction,
+        signal,
       }),
-    [depth, fanout, nodeLimit, relationFilter, typeFilter, asOf],
+    [depth, fanout, nodeLimit, relationFilter, typeFilter, asOf, direction],
   )
 
   // 씨앗·상한·필터가 바뀌면 **처음부터 다시** 든다. 펼쳐 둔 것은 버린다 —
@@ -1051,11 +1067,15 @@ function ExploreView({
       return
     }
     let cancelled = false
+    // 앞 요청은 끊는다 — 서버가 그 질의를 멈춘다(ADR 0048).
+    const controller = new AbortController()
     setLoading(true)
     setError(null)
     const request =
       seed.kind === 'focus'
-        ? query(seed.id).then((fresh) => mergeNeighborhood(null, fresh))
+        ? query(seed.id, undefined, controller.signal).then((fresh) =>
+            mergeNeighborhood(null, fresh),
+          )
         : seed.kind === 'path'
           ? graphApi
               .path({
@@ -1075,6 +1095,7 @@ function ExploreView({
                 limit: nodeLimit,
                 offset: seed.offset,
                 asOf: asOf || null,
+                signal: controller.signal,
               })
               .then(fromSubgraph)
     request
@@ -1091,6 +1112,7 @@ function ExploreView({
       })
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [seed, query, relationFilter, typeFilter, reloadTick, asOf, wholeOn])
 
@@ -1105,6 +1127,9 @@ function ExploreView({
       return
     }
     let cancelled = false
+    // **앞 요청은 끊는다** — 결과만 버리면 서버는 아무도 안 받는 그림을 끝까지 만들고, 단계를 몇 번
+    // 바꾸면 그만큼 쌓여 돈다(ADR 0048). 끊으면 서버가 그 질의를 취소한다.
+    const controller = new AbortController()
     // 받는 동안 앞 그림을 두지 않는다 — 수만 개가 다른 씨앗의 그림이면 무엇을 보는지 말할 수 없다.
     setWhole(null)
     setWholeLoading(true)
@@ -1117,6 +1142,7 @@ function ExploreView({
         relations: [...relationFilter],
         neighborTypes: [...typeFilter],
         asOf: asOf || null,
+        signal: controller.signal,
       })
       .then((fresh) => {
         if (cancelled) return
@@ -1133,6 +1159,7 @@ function ExploreView({
       })
     return () => {
       cancelled = true
+      controller.abort()
     }
   }, [wholeOn, seed, depth, relationFilter, typeFilter, asOf, reloadTick])
   const prepared = useMemo(() => (whole && !whole.over ? prepareWhole(whole) : null), [whole])
@@ -1596,6 +1623,24 @@ function ExploreView({
                     {FANOUTS.map((one) => (
                       <SelectItem key={one} value={String(one)}>
                         {one}개까지
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </label>
+              <label className="col-span-2 space-y-1">
+                <span className="text-muted-foreground text-xs">방향</span>
+                <Select
+                  value={direction}
+                  onValueChange={(value) => onControls({ direction: value as NeighborDirection })}
+                >
+                  <SelectTrigger size="sm" aria-label="방향">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {DIRECTIONS.map((one) => (
+                      <SelectItem key={one.value} value={one.value}>
+                        {one.label}
                       </SelectItem>
                     ))}
                   </SelectContent>

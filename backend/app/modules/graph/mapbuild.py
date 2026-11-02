@@ -76,6 +76,25 @@ COUNT_EVERY = timedelta(minutes=55)
 #: 때나.
 APPEND_EVERY = timedelta(hours=20)
 APPEND_MISSED = timedelta(hours=30)
+#: 실패 · 취소한 **집계**를 타이머가 다시 넣기까지. 전체 배치 · 덧붙임이 실패 · 취소되면
+#: 타이머는 사람이 「전체 다시 배치」 를 누를 때까지 다시 넣지 않는다(ADR 0049) — 고장 추적
+#: DB(293GB)에서 전체 배치가 메모리를 다 써 강제 종료되고, 판이 없으니 5분마다 다시 넣어 끝없이
+#: 돌았다(운영).
+COUNT_RETRY = timedelta(hours=6)
+#: 공동 참조 짝짓기가 지나가는 짝 줄의 상한 — 넘을 것 같으면 기록을 id 해시로 고르게 덜어
+#: 낸다. 2,000만 건 DB 는 기록마다 참조가 대여섯이라 다 든다. 기록이 서로 다른 것을 수십 개씩
+#: 가리키면 짝은 그 제곱으로 는다(기록 하나에 참조 45개면 짝 990줄). 운영의 고장 추적 DB 에서
+#: 전체 배치가 임시 파일 50GB · 메모리 31GB 를 다 썼다(2026-11-02).
+COREF_PAIR_ROWS = 200_000_000
+#: 짝지을 참조 줄의 상한 — 짝이 적어도 참조 줄이 많으면 두 벌을 잇는 조인이 디스크로
+#: 넘친다(2,000만 건 DB: 기록 참조 5,019만 줄에 임시 파일 5.5GB, 2026-11-02). 넘으면 같은
+#: 길로 덜어 낸다.
+COREF_REF_ROWS = 100_000_000
+#: 짝 줄을 어림하려고 읽는 참조 표의 몫(%, 블록 표본).
+COREF_PROBE_PERCENT = 1.0
+#: 기준정보마다 받는 공동 참조 짝 — 배치는 노드마다 위 `TOPK` 개만 쓰므로 그 몇 배만 받는다.
+#: 안 거르면 짝 전부가 파이썬 목록으로 올라온다.
+COREF_KEEP = 3 * TOPK
 
 _UUID = re.compile(
     r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
@@ -291,6 +310,7 @@ def run_count(db: Session, progress: Progress = _quiet) -> dict[str, Any]:
     """시간마다의 집계 — 판의 허브 칸으로. 다른 지도 작업이 돌면 건너뛴다(그것이 함께 센다)."""
     if not lock(db, wait=False):
         return {"skipped": "다른 지도 작업이 돌고 있습니다 — 그 작업이 함께 셉니다."}
+    _cap_temp(db)
     layout = current(db)
     if layout is None:
         return {"skipped": "지도 판이 아직 없습니다."}
@@ -310,7 +330,10 @@ class Refused(AppError):
     """판을 만들지 않는다 — 기준정보가 상한을 넘는다."""
 
 
-def refuse_if_too_many(db: Session, master_types: list[uuid.UUID]) -> int:
+def refuse_if_too_many(
+    db: Session, master_types: list[uuid.UUID], records: list[uuid.UUID]
+) -> int:
+    """계산하기 전에 센다(계수표 — 즉시). 넘으면 아무것도 읽지 않고 거절한다."""
     counted = typecounts.counts(db)
     total = sum(counted.get(one, 0) for one in master_types)
     if total > MAX_MASTERS:
@@ -321,7 +344,27 @@ def refuse_if_too_many(db: Session, master_types: list[uuid.UUID]) -> int:
             "(ADR 0046 「다음」). 정적 그리기와 탐색은 그대로 쓸 수 있습니다.",
             status=409,
         )
+    cap = get_settings().graph_map_max_records
+    many = sum(counted.get(one, 0) for one in records)
+    if cap > 0 and many > cap:
+        raise Refused(
+            code("GRAPH", 18),
+            f"기록이 {many:,}건으로 지도의 상한({cap:,}건, GRAPH_MAP_MAX_RECORDS)을 넘어 "
+            "판을 만들지 않습니다 — 확대 점 표가 기록 한 건에 한 줄이고, 계산이 서버의 "
+            "메모리 · 디스크를 넘을 수 있습니다(ADR 0049). 정적 그리기와 탐색은 그대로 쓸 수 "
+            "있습니다.",
+            status=409,
+        )
     return total
+
+
+def _cap_temp(db: Session) -> None:
+    """지도 작업의 임시 파일 상한 — 걸 수 있을 때만(`querycap.temp_limit_allowed`)."""
+    from app.shared import querycap
+
+    limit = get_settings().graph_map_temp_limit
+    if limit and querycap.temp_limit_allowed(limit):
+        db.execute(text("SELECT set_config('temp_file_limit', :v, true)"), {"v": limit})
 
 
 @dataclass
@@ -382,28 +425,92 @@ def by_workspace() -> bool:
     return get_settings().view_scope == "department"
 
 
+@dataclass
+class Coref:
+    rows: list[tuple[uuid.UUID, uuid.UUID, uuid.UUID | None, int]]
+    """(a, b, 부서, 기록 수) — 덜어 냈으면 수는 몫으로 나눈 어림이다."""
+    share: float = 1.0
+    """짝지은 기록의 몫 — 1 이면 전부."""
+    estimated_pairs: int = 0
+
+
+def _coref_share(db: Session, records: list[uuid.UUID]) -> tuple[float, int]:
+    """(짝지을 기록의 몫, 어림한 짝 줄) — 참조 표를 블록 표본으로 조금 읽어 기록의 참조 줄과
+    기록마다의 짝(참조 수 C 2)을 어림한다. 둘 다 상한(`COREF_REF_ROWS` · `COREF_PAIR_ROWS`)
+    안이면 1."""
+    refs, pairs_seen = db.execute(
+        text("""
+            SELECT coalesce(sum(c), 0), coalesce(sum(c * (c - 1) / 2), 0) FROM (
+              SELECT count(*) AS c
+                FROM object_refs TABLESAMPLE SYSTEM (:pct) REPEATABLE (7)
+               WHERE src_type_id = ANY(CAST(:records AS uuid[]))
+               GROUP BY src_id) s
+        """),
+        {"pct": COREF_PROBE_PERCENT, "records": records},
+    ).one()
+    scale = 100 / COREF_PROBE_PERCENT
+    ref_rows = float(refs or 0) * scale
+    pairs = int(float(pairs_seen or 0) * scale)
+    share = min(
+        1.0,
+        COREF_PAIR_ROWS / pairs if pairs else 1.0,
+        COREF_REF_ROWS / ref_rows if ref_rows else 1.0,
+    )
+    return share, pairs
+
+
+def _hash_cut(share: float) -> int:
+    """`sp_map_hash`(부호 있는 64비트, 고르게)가 이것보다 작은 기록이 몫 `share` 다."""
+    return min(int(-(2**63) + share * 2**64), 2**63 - 1)
+
+
 def _coref(
     db: Session, records: list[uuid.UUID], only: list[uuid.UUID] | None, *, split: bool
-) -> list[tuple[uuid.UUID, uuid.UUID, uuid.UUID | None, int]]:
+) -> Coref:
     """공동 참조 — 기록 하나가 함께 가리킨 짝(a, b)과 기록 수(`split` 이면 부서별, 아니면 부서
     None 한 줄). 전량이면 참조 색인을 통째로 짝짓는다(2,000만 건 DB 20 ~ 63초). `only` 가
-    있으면 그 기준정보를 가리키는 기록에서만(덧붙임)."""
+    있으면 그 기준정보를 가리키는 기록에서만(덧붙임).
+
+    **상한(ADR 0049)** — 짝 줄이 `COREF_PAIR_ROWS` 를 넘을 것 같으면 기록을 id 해시로 고르게
+    덜어 내고(수는 몫으로 나눠 어림), 전량이면 기준정보마다 위 `COREF_KEEP` 개 짝만 받는다."""
     if not records:
-        return []
+        return Coref([])
     db.execute(text("SET LOCAL work_mem = '256MB'"))
+    share, estimated = _coref_share(db, records)
+    params: dict[str, Any] = {"records": records}
+    cut = ""
+    if share < 1.0:
+        cut = "AND sp_map_hash(a.src_id) < :cut"
+        params["cut"] = _hash_cut(share)
+        log.warning(
+            "지도 공동 참조: 짝 줄 어림 %s — 기록의 %.1f%% 만 짝짓는다",
+            f"{estimated:,}",
+            100 * share,
+        )
     ws = "o.owner_workspace_id" if split else "NULL::uuid"
     join = "JOIN objects o ON o.id = a.src_id" if split else ""
     if only is None:
+        params["keep"] = COREF_KEEP
         sql = f"""
-            SELECT a.dst_id, b.dst_id, {ws}, count(*)
-              FROM object_refs a
-              JOIN object_refs b
-                ON b.src_id = a.src_id AND (b.key, b.dst_id) > (a.key, a.dst_id)
-              {join}
-             WHERE a.src_type_id = ANY(CAST(:records AS uuid[]))
-             GROUP BY 1, 2, 3
+            WITH pairs AS (
+                SELECT a.dst_id AS a, b.dst_id AS b, {ws} AS ws, count(*) AS n
+                  FROM object_refs a
+                  JOIN object_refs b
+                    ON b.src_id = a.src_id AND (b.key, b.dst_id) > (a.key, a.dst_id)
+                   AND b.dst_id <> a.dst_id
+                  {join}
+                 WHERE a.src_type_id = ANY(CAST(:records AS uuid[])) {cut}
+                 GROUP BY 1, 2, 3
+            ), ranked AS (
+                SELECT a, b,
+                       row_number() OVER (PARTITION BY a ORDER BY sum(n) DESC, b) AS ra,
+                       row_number() OVER (PARTITION BY b ORDER BY sum(n) DESC, a) AS rb
+                  FROM pairs GROUP BY a, b
+            )
+            SELECT p.a, p.b, p.ws, p.n
+              FROM pairs p JOIN ranked r ON r.a = p.a AND r.b = p.b
+             WHERE r.ra <= :keep OR r.rb <= :keep
         """
-        params: dict[str, Any] = {"records": records}
     else:
         sql = f"""
             SELECT a.dst_id, b.dst_id, {ws}, count(*)
@@ -411,11 +518,15 @@ def _coref(
               JOIN object_refs b ON b.src_id = a.src_id AND b.dst_id <> a.dst_id
               {join}
              WHERE a.dst_id = ANY(CAST(:only AS uuid[]))
-               AND a.src_type_id = ANY(CAST(:records AS uuid[]))
+               AND a.src_type_id = ANY(CAST(:records AS uuid[])) {cut}
              GROUP BY 1, 2, 3
         """
-        params = {"records": records, "only": only}
-    return [(a, b, w, int(n)) for a, b, w, n in db.execute(text(sql), params)]
+        params["only"] = only
+    rows = [
+        (a, b, w, int(n) if share >= 1.0 else max(1, round(int(n) / share)))
+        for a, b, w, n in db.execute(text(sql), params)
+    ]
+    return Coref(rows, share, estimated)
 
 
 @dataclass
@@ -586,11 +697,12 @@ def run_full(
     """전체 배치 — 처음 판이거나 관리자의 「전체 다시 배치」. 앞 판이 있으면 그 자리에서
     출발한다."""
     lock(db, wait=True)
+    _cap_temp(db)
     started = time.perf_counter()
     master_types = maphubs.master_type_ids(db)
-    refuse_if_too_many(db, master_types)
     hub_keys = maphubs.chosen_keys(db)
     records = [uuid.UUID(one) for one in hub_keys]
+    refuse_if_too_many(db, master_types, records)
     progress("기준정보", 0, 5)
     masters = _masters(db, master_types)
     n = len(masters.ids)
@@ -598,8 +710,8 @@ def run_full(
     t_edges = time.perf_counter()
     direct = _direct_edges(db, masters, master_types, None)
     split = by_workspace()
-    coref_rows = _coref(db, records, None, split=split)
-    graph = _graph(n, direct, coref_rows, masters)
+    coref = _coref(db, records, None, split=split)
+    graph = _graph(n, direct, coref.rows, masters)
     edge_seconds = time.perf_counter() - t_edges
     progress("수", 2, 5)
     counts = count_records(db, hub_keys)
@@ -733,6 +845,8 @@ def run_full(
         "moved": moved,
         "ring_radius": round(ring_r, 3),
         "links_by_workspace": split,
+        "coref_share": round(coref.share, 4),
+        "coref_pairs_estimated": coref.estimated_pairs,
         **points,
         "seconds": round(time.perf_counter() - started, 2),
     }
@@ -789,12 +903,13 @@ def run_append(db: Session, *, progress: Progress = _quiet) -> dict[str, Any]:
     """새 기준정보만 빈자리에 놓는다 — **기존 자리는 고정**(움직임 0). 판이 없으면 전체
     배치."""
     lock(db, wait=True)
+    _cap_temp(db)
     started = time.perf_counter()
     base = current(db)
     if base is None:
         return run_full(db, user_id=None, progress=progress)
     master_types = maphubs.master_type_ids(db)
-    refuse_if_too_many(db, master_types)
+    refuse_if_too_many(db, master_types, [uuid.UUID(one) for one in base.hub_keys])
     progress("기준정보", 0, 4)
     masters = _masters(db, master_types)
     placed = {row.object_id: row for row in db.scalars(select(MapMaster))}
@@ -823,7 +938,7 @@ def run_append(db: Session, *, progress: Progress = _quiet) -> dict[str, Any]:
     records = [uuid.UUID(one) for one in base.hub_keys]
     direct = _direct_edges(db, everyone, master_types, set(fresh))
     split = bool(base.stats.get("links_by_workspace"))
-    coref_rows = _coref(db, records, fresh, split=split)
+    coref_rows = _coref(db, records, fresh, split=split).rows
     # 짝이 (새, 새) 면 두 번 온다(양쪽에서) — 반만 센다.
     halved: dict[tuple[uuid.UUID, uuid.UUID, uuid.UUID | None], int] = defaultdict(int)
     fresh_set = set(fresh)
@@ -1001,10 +1116,56 @@ def _grow_bbox(
 # --- 타이머 -----------------------------------------------------------------------
 
 
+#: 지도 작업의 종류 이름 — 화면 · 멈춘 까닭에 쓴다.
+_KIND_LABEL = {
+    "graph_map_full": "전체 배치",
+    "graph_map_append": "덧붙임",
+    "graph_map_count": "집계",
+}
+
+
+def _last_finished(db: Session) -> Any:
+    """마지막으로 끝난 지도 작업(끝남 · 실패 · 취소) — 없으면 None."""
+    from app.modules.jobs.models import Job
+
+    return db.execute(
+        select(Job.kind, Job.status, Job.finished_at, Job.created_at)
+        .where(Job.kind.in_(KINDS), Job.status.in_(("done", "failed", "cancelled")))
+        .order_by(Job.created_at.desc())
+        .limit(1)
+    ).first()
+
+
+def paused(db: Session) -> str | None:
+    """타이머가 지도 작업을 **넣지 않는** 까닭(ADR 0049) — 넣으면 None.
+
+    - 설정으로 껐다(`GRAPH_MAP_AUTO=false`).
+    - 마지막 전체 배치 · 덧붙임이 실패하거나 취소됐다 — 같은 일을 5분마다 다시 넣으면 큰
+      설치에서 서버를 끝없이 버겁게 한다(운영의 고장 추적 DB: 강제 종료 → 판이 없음 → 다시
+      넣음). 사람이 「전체 다시 배치」 를 눌러 끝나면 다시 돈다.
+
+    집계의 실패는 멈추지 않는다 — `COUNT_RETRY` 뒤에 다시 본다(`schedule`)."""
+    if not get_settings().graph_map_auto:
+        return (
+            "자동 계산이 꺼져 있습니다(GRAPH_MAP_AUTO=false) — 시스템 관리자의 「전체 다시 "
+            "배치」 만 돕니다."
+        )
+    last = _last_finished(db)
+    if last is not None and last.status != "done" and last.kind != "graph_map_count":
+        what = "실패했습니다" if last.status == "failed" else "취소됐습니다"
+        label = _KIND_LABEL.get(last.kind, last.kind)
+        return (
+            f"지난 지도 작업({label})이 {what} — 같은 일을 다시 넣지 않게 자동 계산을 "
+            "멈췄습니다. 시스템 관리자가 「전체 다시 배치」 로 다시 시작합니다."
+        )
+    return None
+
+
 def schedule(db: Session, now: datetime | None = None) -> str | None:
     """**워커가 5분마다 부른다** — 차례가 된 지도 작업을 넣는다(넣었으면 그 종류). 처음 판 ·
     매일 밤 덧붙임 · 한 시간마다 집계. 지도 작업이 기다리거나 돌면 아무것도 안 넣는다(겹치지
-    않게). 두 워커가 같은 때 봐도 하나만 넣는다(자문 잠금)."""
+    않게). 두 워커가 같은 때 봐도 하나만 넣는다(자문 잠금). 껐거나 지난 작업이 실패 ·
+    취소됐으면 넣지 않는다(`paused`)."""
     from app.modules.jobs import services as job_services
     from app.modules.jobs.models import Job
 
@@ -1015,6 +1176,8 @@ def schedule(db: Session, now: datetime | None = None) -> str | None:
     if db.scalar(
         select(Job.id).where(Job.kind.in_(KINDS), Job.status.in_(("queued", "running")))
     ):
+        return None
+    if paused(db) is not None:
         return None
     now = now or datetime.now(UTC)
     layout = current(db)
@@ -1036,6 +1199,14 @@ def schedule(db: Session, now: datetime | None = None) -> str | None:
             or now - counted_row.counted_at >= COUNT_EVERY
         ):
             kind = "graph_map_count"
+            last = _last_finished(db)
+            if (
+                last is not None
+                and last.kind == "graph_map_count"
+                and last.status != "done"
+                and now - (last.finished_at or last.created_at) < COUNT_RETRY
+            ):
+                kind = None
     if kind is None:
         return None
     job_services.enqueue(

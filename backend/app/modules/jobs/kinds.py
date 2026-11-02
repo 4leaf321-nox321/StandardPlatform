@@ -111,6 +111,13 @@ class Kind:
     admin_only: bool = False
     """시킨 사람이 있으면 **시스템 관리자여야** 하는 종류 — 워커가 돌리기 전에 한 번 더 본다
     (넣는 길이 몇이든)."""
+    retries: bool = True
+    """워커가 죽어 멎은 이 작업을 되살려 다시 돌리나(`services.recover_stale`). 워커를 죽인
+    것이 그 작업 자체일 수 있는 계산(지식 그래프 지도 — 메모리를 다 써 강제 종료)은 다시 돌면
+    또 죽는다. 그런 종류는 한 번에 `failed` 로 끝낸다(ADR 0049)."""
+    stop_midway: bool = False
+    """취소하면 **도는 질의까지** 끊나. 기본은 단계 사이(진행 보고)에서 본다 — 질의 하나가 몇십
+    분인 계산은 단계 사이가 오지 않아 취소가 먹지 않았다(ADR 0049). 끊긴 질의는 롤백된다."""
     max_file_setting: str = "job_file_max_bytes"
     """올리는 파일의 상한을 읽는 **설정 이름** — 종류마다 다르다(2026-10-10). 표 파일(일괄
     입력 · 묶음)은 통째로 메모리에 올려 풀므로 100MB(`job_file_max_bytes`), 사진 zip 은 파일로
@@ -1058,7 +1065,8 @@ register(
     )
 )
 # 지식 그래프 지도(ADR 0046) — 타이머(워커가 5분마다 `mapbuild.schedule`)가 넣고, 전체 다시
-# 배치는 시스템 관리자가 전용 경로(`POST /api/graph/map/relayout`)로.
+# 배치는 시스템 관리자가 전용 경로(`POST /api/graph/map/relayout`)로. 워커가 멎으면 다시 돌리지
+# 않고, 취소하면 도는 질의까지 끊는다(ADR 0049 — 큰 설치에서 강제 종료가 되풀이됐다).
 register(
     Kind(
         "graph_map_full",
@@ -1068,6 +1076,8 @@ register(
         graph_map_full,
         allow_system=True,
         admin_only=True,
+        retries=False,
+        stop_midway=True,
     )
 )
 register(
@@ -1079,6 +1089,8 @@ register(
         graph_map_append,
         allow_system=True,
         admin_only=True,
+        retries=False,
+        stop_midway=True,
     )
 )
 register(
@@ -1090,6 +1102,8 @@ register(
         graph_map_count,
         allow_system=True,
         admin_only=True,
+        retries=False,
+        stop_midway=True,
     )
 )
 register(

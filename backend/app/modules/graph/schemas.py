@@ -97,6 +97,53 @@ class NeighborhoodOut(BaseModel):
     """시작점을 가리키는 **기록**(ADR 0011) — 이웃으로 안 싣고 수로 보인다."""
 
 
+class ReachNodeOut(BaseModel):
+    id: uuid.UUID
+    label: str
+    key: str | None
+    type_slug: str
+    type_label: str
+    status: str
+    owner_workspace_slug: str | None
+    depth: int
+    """시작점에서 몇 단계 — 시작점은 0. 여러 길로 닿으면 가장 가까운 것."""
+    parent: uuid.UUID | None
+    """처음 닿을 때 거쳐 온 객체(그 길 하나) — 시작점은 null."""
+    via: str | None
+    """그때 따라온 선의 종류(관계 slug · `ref:<타입>.<칸>`)."""
+
+
+class ReachTypeCountOut(BaseModel):
+    type_slug: str
+    type_label: str
+    count: int
+
+
+class ReachOut(BaseModel):
+    """영향 범위 — 고른 선을 한 방향으로 끝까지 따라가 닿은 객체(시작점 포함)."""
+
+    start: uuid.UUID
+    direction: str
+    """`in`(들어오는 선 — 이것에 기대는 것) · `out`(나가는 선 — 이것이 기대는 것)."""
+    relations: list[str]
+    depth: int
+    """물은 깊이."""
+    reached_depth: int
+    """실제로 닿은 가장 깊은 단계."""
+    node_limit: int
+    truncated: bool
+    """객체 상한이나 선 상한에 닿았다 — **「이게 전부」 가 아니다.** 종류를 좁히거나 깊이를
+    줄인다."""
+    exhausted: bool
+    """더 갈 곳이 없어 멈췄다 — 깊이 상한 전에 끝까지 갔다."""
+    as_of: date | None
+    by_type: list[ReachTypeCountOut]
+    """시작점을 뺀 닿은 객체의 타입별 수 — 많은 차례."""
+    levels: list[int]
+    """단계별 닿은 수 — `levels[0]` 은 시작점(1)."""
+    nodes: list[ReachNodeOut]
+
+
 class SubgraphOut(BaseModel):
     """한 타입(들)의 인스턴스 전부 — **상한 안에서.**"""
 
@@ -352,6 +399,9 @@ class MapOut(BaseModel):
     """기다리거나 도는 지도 작업."""
     last_error: str | None = None
     """마지막 지도 작업이 실패했으면 그 까닭(판을 못 만든 까닭 — 상한 넘음 등)."""
+    paused: str | None = None
+    """워커가 지도 작업을 스스로 넣지 않는 까닭(ADR 0049) — 설정으로 껐거나, 지난 전체 배치 ·
+    덧붙임이 실패 · 취소됐다. None 이면 돈다."""
     can_relayout: bool
     """「전체 다시 배치」 를 누를 수 있나(시스템 관리자)."""
     drift: list[str]

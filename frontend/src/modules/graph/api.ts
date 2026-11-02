@@ -98,6 +98,11 @@ export interface Subgraph {
 }
 
 export interface SubgraphQuery {
+  /**
+   * 끊을 신호 — 씨앗 · 거르기를 바꾸거나 화면을 떠나면 앞 요청을 끊는다. 끊으면 서버도 그 질의를
+   * 멈춘다(ADR 0048). 결과만 버리면 서버는 아무도 안 받는 답을 끝까지 만든다.
+   */
+  signal?: AbortSignal
   types: string[]
   relations?: string[]
   q?: string
@@ -150,6 +155,11 @@ export interface PathQuery {
 }
 
 export interface NeighborhoodQuery {
+  /**
+   * 끊을 신호 — 씨앗 · 거르기를 바꾸거나 화면을 떠나면 앞 요청을 끊는다. 끊으면 서버도 그 질의를
+   * 멈춘다(ADR 0048). 결과만 버리면 서버는 아무도 안 받는 답을 끝까지 만든다.
+   */
+  signal?: AbortSignal
   focus: string
   depth?: number
   fanout?: number
@@ -158,7 +168,11 @@ export interface NeighborhoodQuery {
   types?: string[]
   /** 기준일(`YYYY-MM-DD`, ADR 0039) — 비우면 오늘. */
   asOf?: string | null
+  /** 어느 선으로 넓히나(ADR 0047) — 들어오는 선(나를 가리키는 것) · 나가는 선. 비우면 양쪽. */
+  direction?: NeighborDirection
 }
+
+export type NeighborDirection = 'both' | 'in' | 'out'
 
 function neighborhoodQuery(query: NeighborhoodQuery): string {
   const params = new URLSearchParams({ focus: query.focus })
@@ -168,6 +182,7 @@ function neighborhoodQuery(query: NeighborhoodQuery): string {
   if (query.relations?.length) params.set('relations', query.relations.join(','))
   if (query.types?.length) params.set('types', query.types.join(','))
   if (query.asOf) params.set('as_of', query.asOf)
+  if (query.direction && query.direction !== 'both') params.set('direction', query.direction)
   return `?${params.toString()}`
 }
 
@@ -256,6 +271,11 @@ export interface Whole {
 }
 
 export interface WholeQuery {
+  /**
+   * 끊을 신호 — 씨앗 · 거르기를 바꾸거나 화면을 떠나면 앞 요청을 끊는다. 끊으면 서버도 그 질의를
+   * 멈춘다(ADR 0048). 결과만 버리면 서버는 아무도 안 받는 답을 끝까지 만든다.
+   */
+  signal?: AbortSignal
   /** 객체 하나에서 — `types` 와 둘 중 하나. */
   focus?: string
   /** 타입(들)의 인스턴스 전부에서. */
@@ -348,6 +368,8 @@ export interface MapData {
   lines: WholeEdges
   job?: MapJob | null
   last_error?: string | null
+  /** 워커가 지도 작업을 스스로 넣지 않는 까닭(ADR 0049) — 껐거나 지난 작업이 실패 · 취소됐다. */
+  paused?: string | null
   can_relayout: boolean
   /** 허브 칸 설정이 판과 다른 기록 타입(slug). */
   drift: string[]
@@ -452,7 +474,9 @@ export const graphApi = {
     api.get<SearchHit[]>(`/graph/search?${new URLSearchParams({ q }).toString()}`),
   /** 시작점에서 depth 단계 — **서버가 상한을 강제한다.** */
   neighborhood: (query: NeighborhoodQuery) =>
-    api.get<Neighborhood>(`/graph/neighborhood${neighborhoodQuery(query)}`),
+    api.get<Neighborhood>(`/graph/neighborhood${neighborhoodQuery(query)}`, {
+      signal: query.signal,
+    }),
   /** 두 객체 사이의 가장 짧은 길들 — 노드마다 자르지 않고 찾고, 상한에 닿으면 그렇다고 말한다. */
   path: (query: PathQuery) => {
     const params = new URLSearchParams({ source: query.source, target: query.target })
@@ -462,9 +486,11 @@ export const graphApi = {
     return api.get<PathResult>(`/graph/path?${params.toString()}`)
   },
   /** 한 타입의 인스턴스 전부 — **「전부」 를 묻는 사람에게 "N개 중 M개" 라고 답한다.** */
-  subgraph: (query: SubgraphQuery) => api.get<Subgraph>(`/graph/subgraph${subgraphQuery(query)}`),
+  subgraph: (query: SubgraphQuery) =>
+    api.get<Subgraph>(`/graph/subgraph${subgraphQuery(query)}`, { signal: query.signal }),
   /** 정적 그리기 — **자르지 않고 통째로.** 넘으면 그리지 않고 수를 말한다(`over`). */
-  whole: (query: WholeQuery) => api.get<Whole>(`/graph/whole${wholeQuery(query)}`),
+  whole: (query: WholeQuery) =>
+    api.get<Whole>(`/graph/whole${wholeQuery(query)}`, { signal: query.signal }),
   /** 전체 지도 — 보이는 기준정보의 자리와 허브 원반(판 번호로 ETag — 브라우저가 다시 묻는다). */
   map: () => api.get<MapData>('/graph/map'),
   /** 상자 안의 기록 점 — 기대 수가 상한을 넘으면 `over`. */

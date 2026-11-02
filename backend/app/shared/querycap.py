@@ -6,6 +6,10 @@
 끝까지 돈다. 이중화의 nginx 는 600초를 넘기면 **같은 요청을 다른 서버에 다시 보낸다**
 (`proxy_next_upstream timeout`).
 
+임시 파일(정렬 · 해시가 디스크로 넘어간 것)에도 상한을 건다(`read_temp_limit`, ADR 0048) —
+넘으면 그 질의만 끊고 507 「범위를 좁히라」. 질의 하나가 디스크를 다 채우면 DB 가 멈춘다.
+superuser 만 바꾸는 설정이라 배포가 권한을 준 설치에서만 걸린다(`temp_limit_allowed`).
+
 상한은 `SET LOCAL` 이라 그 요청의 트랜잭션에만 걸린다 — 작업(내보내기 · 지표 계산)은 따로
 돈다. 넘으면 PostgreSQL 이 질의를 취소하고(`57014`), 오류 처리기가 「좁히거나 지표로」 를
 504 로 낸다(`errors.register_error_handlers`). 503 이 아닌 까닭: nginx 가 503 이면 다른 서버로
@@ -14,16 +18,22 @@
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 
+log = logging.getLogger(__name__)
+
 #: PostgreSQL 의 「질의 취소」 — statement_timeout 을 넘겼거나 누가 취소했다.
 QUERY_CANCELED = "57014"
+#: 「임시 파일이 temp_file_limit 를 넘었다」(configuration_limit_exceeded).
+TEMP_LIMIT_EXCEEDED = "53400"
 
 #: `work_mem` 으로 받는 모양 — 틀린 값은 걸지 않고 서버 설정을 따른다(기동은 막지 않는다).
 _MEMORY_RE = re.compile(r"^[1-9][0-9]*(kB|MB|GB)$")
@@ -50,7 +60,47 @@ def tuning() -> dict[str, str]:
         out["max_parallel_workers_per_gather"] = str(settings.read_parallel_workers)
     if settings.read_query_seconds > 0:
         out["statement_timeout"] = str(max(1, round(settings.read_query_seconds * 1000)))
+    if _MEMORY_RE.match(settings.read_temp_limit) and temp_limit_allowed(
+        settings.read_temp_limit
+    ):
+        # 정렬 · 해시가 디스크로 넘어가는 크기의 상한 — 넘으면 그 질의만 실패한다(ADR 0048).
+        # 없으면 한 질의가 디스크를 다 채워 DB 가 멈춘다.
+        out["temp_file_limit"] = settings.read_temp_limit
     return out
+
+
+#: 걸어 본 답 — 값마다. **확실한 「못 건다」**(권한 없음 · 틀린 값)만 기억한다 — 기동 직후 DB
+#: 가 잠깐 안 닿은 것을 기억하면 그 프로세스는 재시작까지 상한 없이 돈다.
+_TEMP_ALLOWED: dict[str, bool] = {}
+_DEFINITELY_NOT = {"42501", "22023"}  # insufficient_privilege · invalid_parameter_value
+
+
+def temp_limit_allowed(value: str) -> bool:
+    """이 접속 계정이 `temp_file_limit` 를 걸 수 있나 — 프로세스마다 값마다 한 번 **걸어
+    본다**.
+
+    superuser 만 바꾸는 설정이라 배포가 권한을 준다(`GRANT SET ON PARAMETER`, PostgreSQL 15
+    부터 — `deploy.sh`). 권한 없이 걸면 그 요청이 통째로 실패하므로, 걸어 본 것이 된 때만 건다.
+    """
+    known = _TEMP_ALLOWED.get(value)
+    if known is not None:
+        return known
+    from app.database import engine
+
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("SELECT set_config('temp_file_limit', :v, true)"), {"v": value})
+    except DBAPIError as caught:
+        if _sqlstate(caught) in _DEFINITELY_NOT:
+            log.info(
+                "임시 파일 상한(%s)을 걸 수 없어 서버 설정을 따릅니다: %s", value, caught.orig
+            )
+            _TEMP_ALLOWED[value] = False
+        else:
+            log.warning("임시 파일 상한을 걸 수 있는지 보지 못했습니다(다음 요청에 다시)")
+        return False
+    _TEMP_ALLOWED[value] = True
+    return True
 
 
 def cap(db: Session) -> None:
@@ -69,5 +119,14 @@ def cap(db: Session) -> None:
 
 def cancelled(caught: BaseException) -> bool:
     """시간 상한(또는 취소)으로 끊긴 질의인가 — SQLAlchemy 가 감싼 psycopg 오류의 sqlstate."""
+    return _sqlstate(caught) == QUERY_CANCELED
+
+
+def temp_exceeded(caught: BaseException) -> bool:
+    """임시 파일 상한(`read_temp_limit`)을 넘겨 끊긴 질의인가."""
+    return _sqlstate(caught) == TEMP_LIMIT_EXCEEDED
+
+
+def _sqlstate(caught: BaseException) -> str | None:
     orig: Any = getattr(caught, "orig", None)
-    return getattr(orig, "sqlstate", None) == QUERY_CANCELED
+    return getattr(orig, "sqlstate", None)

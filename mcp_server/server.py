@@ -71,6 +71,7 @@ BASE_INSTRUCTIONS = (
     "  BOM 전개 · 어디에 쓰였나        object_explode  (수량을 경로 따라 곱한다)\n"
     "  무엇에서 만들어졌나 · 낡았나    object_lineage  (풀기는 사람이 정한 뒤 lineage_repin)\n"
     "  이것과 이어진 것들              graph_neighbors  (타입 지형은 graph_overview)\n"
+    "  이것에 기대는 것 전부(영향 범위) graph_reach  (고른 관계를 끝까지 거꾸로)\n"
     "  누가 언제 무엇을 바꿨나         object_history(하나) · audit_recent(전체)\n"
     "  여러 객체의 한 칸을 한 값으로   bulk_edit (apply=false 로 먼저 · undo 있음)\n"
     "  객체를 지운다 · 둘을 합친다     objects_delete · object_merge (apply=false 먼저)\n"
@@ -2056,6 +2057,7 @@ async def graph_neighbors(
     limit: int | None = None,
     records: bool = False,
     as_of: str | None = None,
+    direction: str = "both",
 ) -> Any:
     """이 객체에서 **몇 단계 안에 무엇이 이어져 있나** — 질의어 없이 그래프를 훑는다.
 
@@ -2079,10 +2081,16 @@ async def graph_neighbors(
 
     `as_of`(기준일, 비우면 오늘) — 그날 유효한 관계만 그린다. 선마다 유효 기간(`valid_from` ·
     `valid_to`)이 실린다(유효 기간을 받는 종류만).
+
+    `direction` — `in` 이면 **나를 가리키는 쪽만**(들어오는 선 — 이 부품을 쓰는 어셈블리, 이
+    공급사를 가리키는 부품), `out` 이면 내가 가리키는 쪽만, 기본 `both`. 단계마다 그 노드에서
+    본 방향이고, 방향 없는 관계 종류는 양쪽이다. 끝까지 거꾸로 따라가려면 `graph_reach`.
     """
     params: list[tuple[str, Any]] = [("focus", object_id), ("depth", depth)]
     if as_of:
         params.append(("as_of", as_of))
+    if direction != "both":
+        params.append(("direction", direction))
     if fanout is not None:
         params.append(("fanout", fanout))
     if limit is not None:
@@ -2094,6 +2102,54 @@ async def graph_neighbors(
     if records:
         params.append(("records", "true"))
     return await _get(ctx, "/api/graph/neighborhood", params=params)
+
+
+REACH_NODES = 300
+
+
+@tool()
+async def graph_reach(
+    ctx: Context,
+    object_id: str,
+    relations: list[str],
+    direction: str = "in",
+    depth: int = 20,
+    limit: int = REACH_NODES,
+    as_of: str | None = None,
+) -> Any:
+    """**영향 범위** — 고른 선을 한 방향으로 **끝까지**(20단) 따라가 닿은 객체 전부. 「이
+    부품이 바뀌면 무엇이 흔들리나」(`direction="in"` — 나를 가리키는 것, 그것을 가리키는 것,
+    …) · 「이것이 기대는 것 전부」(`direction="out"`).
+
+    `graph_neighbors` 는 몇 단계 안의 이웃을 노드마다 잘라 보여 준다. 이것은 고른 종류만
+    끝까지 간다. 트리 「위 전부」(`object_tree`) · BOM 「어디에 쓰였나」(`object_explode`) ·
+    계보(`object_lineage`)는 정해 둔 관계 하나만 따라가니 그것이면 그것을 쓴다(수량 곱 ·
+    낡음 판정은 그쪽에만 있다).
+
+    - `relations`(꼭) — 관계 종류 slug · 참조 칸 `ref:<타입 slug>.<칸 키>`. `graph_overview`
+      나 `ontology_schema` 에서 고른다. **기록 타입의 참조 칸**(`usage="log"` — 서비스 기록
+      → 모델)을 넣으면 인기 모델 하나에 기록 수십만 건이 온다 — 그 수가 궁금하면
+      `objects_summary` 로 센다.
+    - 고리가 있어도 한 번 닿은 것은 다시 펼치지 않는다. 노드의 `depth`(가장 가까운 단계) ·
+      `parent` · `via` 가 그 길 하나다 — 「D 는 C 를 거쳐 A 에 기댄다」 를 여기서 읽는다.
+    - **먼저 `by_type`(타입별 수) · `levels`(단계별 수)를 읽는다** — 노드는 `limit`(기본
+      300, 서버 상한 2만)개까지라 큰 범위는 수로 답한다.
+    - `truncated` 면 **「이게 전부」 가 아니다** — 종류를 좁히거나 `depth` 를 줄여 다시 부르고,
+      사람에게 잘렸다고 말한다. `exhausted` 면 끝까지 갔다.
+    - 보이지 않는 객체(남의 부서 — 부서로 좁힌 설치)에서는 멈춘다. 원 표(부서 · 계정)와 잇는
+      관계는 따라가지 않는다.
+    - `as_of`(기준일, 비우면 오늘) — 그날 유효한 관계만. 참조 칸은 기간이 없다.
+    """
+    params: list[tuple[str, Any]] = [
+        ("start", object_id),
+        ("relations", ",".join(relations)),
+        ("direction", direction),
+        ("depth", depth),
+        ("limit", limit),
+    ]
+    if as_of:
+        params.append(("as_of", as_of))
+    return await _get(ctx, "/api/graph/reach", params=params)
 
 
 @tool()

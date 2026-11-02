@@ -198,6 +198,7 @@ vi.mock('@/modules/graph/WholeCanvas', () => ({
     overlay?: ReactNode
     map?: {
       bbox: number[]
+      home?: number[] | null
       onView?: (view: unknown) => void
       extra?: { labels: string[] } | null
       links?: { src: number[]; dst: number[] } | null
@@ -209,6 +210,7 @@ vi.mock('@/modules/graph/WholeCanvas', () => ({
       data-testid="whole-canvas"
       data-placed={positions.length / 2}
       data-frame={map ? map.bbox.join(',') : ''}
+      data-home={map?.home ? map.home.join(',') : ''}
       data-extra={map?.extra?.labels.length ?? 0}
       data-links={
         map?.links ? map.links.src.map((a, k) => `${a}>${map.links!.dst[k]}`).join(' ') : ''
@@ -361,6 +363,24 @@ async function mount(path = '/graph') {
 
 describe('지식 그래프', () => {
   beforeEach(() => vi.clearAllMocks())
+
+  it('탐색 그림도 떠나면 받던 요청을 끊는다 — 타입 전체 표시 · 이웃(ADR 0048)', async () => {
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    graphApi.subgraph.mockReturnValue(new Promise(() => {}))
+    const types = await mount('/graph?type=part')
+    await waitFor(() => expect(graphApi.subgraph).toHaveBeenCalledTimes(1))
+    const listed = graphApi.subgraph.mock.calls[0][0].signal as AbortSignal
+    expect(listed.aborted).toBe(false)
+    types.unmount()
+    expect(listed.aborted).toBe(true)
+
+    graphApi.neighborhood.mockReturnValue(new Promise(() => {}))
+    const focused = await mount('/graph?focus=hub')
+    await waitFor(() => expect(graphApi.neighborhood).toHaveBeenCalledTimes(1))
+    const around = graphApi.neighborhood.mock.calls[0][0].signal as AbortSignal
+    focused.unmount()
+    expect(around.aborted).toBe(true)
+  })
 
   it('구조 그림은 타입·관계 종류·객체 수를 요약한다', async () => {
     graphApi.overview.mockResolvedValue(OVERVIEW)
@@ -644,6 +664,27 @@ describe('두 객체 사이의 길', () => {
     truncated: false,
   }
 
+  it('방향이 주소에서 이웃 요청으로 실리고, 기본(양쪽)이면 「양쪽」 으로 보인다(ADR 0047)', async () => {
+    graphApi.overview.mockResolvedValue(OVERVIEW)
+    graphApi.neighborhood.mockResolvedValue(NEIGHBORHOOD)
+    await mount('/graph?focus=hub&dir=in')
+    await waitFor(() =>
+      expect(graphApi.neighborhood).toHaveBeenCalledWith(
+        expect.objectContaining({ focus: 'hub', direction: 'in' }),
+      ),
+    )
+    expect(screen.getByRole('combobox', { name: '방향' })).toHaveTextContent('들어오는 선만')
+    cleanup()
+
+    await mount('/graph?focus=hub&dir=nope')
+    await waitFor(() =>
+      expect(graphApi.neighborhood).toHaveBeenLastCalledWith(
+        expect.objectContaining({ focus: 'hub', direction: 'both' }),
+      ),
+    )
+    expect(screen.getByRole('combobox', { name: '방향' })).toHaveTextContent('양쪽')
+  })
+
   it('기준일이 이웃 · 연결 경로 요청에 실린다(ADR 0039)', async () => {
     graphApi.overview.mockResolvedValue(OVERVIEW)
     graphApi.neighborhood.mockResolvedValue(NEIGHBORHOOD)
@@ -877,7 +918,7 @@ describe('정적 그리기', () => {
     await waitFor(() => expect(screen.getByTestId('where').textContent).toContain('whole=1'))
     await waitFor(() =>
       expect(graphApi.whole).toHaveBeenCalledWith(
-        expect.objectContaining({ focus: 'hub', depth: 1 }),
+        expect.objectContaining({ focus: 'hub', depth: 1, signal: expect.any(AbortSignal) }),
       ),
     )
     // 노드마다 자르지 않으니 그 고르개는 뜻이 없다.
@@ -889,6 +930,23 @@ describe('정적 그리기', () => {
     ).toBeInTheDocument()
     expect(screen.getByTestId('whole-canvas')).toHaveAttribute('data-placed', '3')
     expect(layoutWorker.startCluster).not.toHaveBeenCalled()
+  })
+
+  it('끄거나 떠나면 받던 그림 요청을 끊는다 — 서버가 질의를 멈추게(ADR 0048)', async () => {
+    // 오래 걸리는 그림 — 답이 오지 않는다.
+    graphApi.whole.mockReturnValue(new Promise(() => {}))
+    const { unmount } = await mountWhole('/graph?focus=hub&whole=1')
+    await waitFor(() => expect(graphApi.whole).toHaveBeenCalledTimes(1))
+    const first = graphApi.whole.mock.calls[0][0].signal as AbortSignal
+    expect(first.aborted).toBe(false)
+    await userEvent.click(screen.getByRole('checkbox', { name: '정적 그리기' }))
+    await waitFor(() => expect(first.aborted).toBe(true))
+
+    await userEvent.click(screen.getByRole('checkbox', { name: '정적 그리기' }))
+    await waitFor(() => expect(graphApi.whole).toHaveBeenCalledTimes(2))
+    const second = graphApi.whole.mock.calls[1][0].signal as AbortSignal
+    unmount()
+    expect(second.aborted).toBe(true)
   })
 
   it('배치의 기본값 — 객체 하나는 단계, 타입 전부는 무리이고 단계는 쓸 수 없다', async () => {
@@ -1175,6 +1233,8 @@ describe('전체 지도', () => {
     const canvas = await screen.findByTestId('whole-canvas')
     // 지도 좌표 고정 모드 — 판의 틀을 그대로 준다(자리가 바뀌어도 다시 맞추지 않는다).
     expect(canvas).toHaveAttribute('data-frame', '-50,-50,150,50')
+    // 처음 화면은 내용(기준정보 · 원반 반지름)에 맞춘다 — 틀은 비어 있는 「미지정」 자리까지 잡아 넓다.
+    expect(canvas).toHaveAttribute('data-home', '-10,-10,100,10')
     expect(screen.getByText(/판 3 · 덧붙임/)).toBeInTheDocument()
     expect(screen.getByText(/원반 안의 자리는 뜻이 없습니다/)).toBeInTheDocument()
     expect(screen.getByRole('checkbox', { name: /서비스/ })).toBeChecked()

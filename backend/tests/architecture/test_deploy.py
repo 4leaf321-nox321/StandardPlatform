@@ -291,7 +291,8 @@ def _piece(text: str, name: str) -> str:
     one_line = re.search(rf"^{name}\(\)\s*\{{[^\n]*\}}$", text, re.M)
     if one_line:
         return one_line.group(0)
-    block = re.search(rf"^{name}\(\)\s*\{{\n.*?^\}}$", text, re.M | re.S)
+    # 여는 괄호 뒤의 주석(`cmd_service() {  # $1 = …`)도 받는다.
+    block = re.search(rf"^{name}\(\)\s*\{{[^\n]*\n.*?^\}}$", text, re.M | re.S)
     assert block, f"deploy.sh 에 {name} 이 없습니다"
     return block.group(0)
 
@@ -449,6 +450,186 @@ def test_우분투가_아니면_PPA_를_쓰지_않고_설치_안내를_준다(tm
     assert done.returncode != 0
     assert "apptainer.org" in done.stderr
     assert not any(one.startswith("add-apt-repository") for one in calls)
+
+
+# --- 임시 파일 상한 권한(ADR 0048) ----------------------------------------------------
+#
+# 앱이 읽기 요청마다 `temp_file_limit` 를 걸려면 앱 계정에 권한이 있어야 한다(superuser 만
+# 바꾸는 설정, PostgreSQL 15 부터 GRANT). 못 주는 서버(대기 · 15 아래 · DB 가 다른 곳)에서
+# update 가 멈추면 안 된다 — 앱은 권한이 없으면 상한 없이 돈다.
+
+
+def _grant_temp_limit(
+    tmp_path: Path, *, recovery: bool = False, version: str | None = "160004"
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    ha = (DEPLOY / "ha.sh").read_text(encoding="utf-8")
+    pieces = [_piece(text, name) for name in ("err", "info", "warn", "grant_temp_limit")]
+    pieces.append(_piece(ha, "pg_in_recovery"))
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    log = tmp_path / "calls.log"
+    answer_version = f"echo {version}" if version else "exit 2"
+    _stub(
+        bin_dir / "sudo",
+        f'echo "$*" >> "{log}"\n'
+        'case "$*" in\n'
+        f"  *pg_is_in_recovery*) echo {'t' if recovery else 'f'} ;;\n"
+        f"  *server_version_num*) {answer_version} ;;\n"
+        "esac\n",
+    )
+    script = "set -euo pipefail\nDB_USER=plmhub\n" + "\n".join(pieces) + "\ngrant_temp_limit\n"
+    done = subprocess.run(
+        [shutil.which("bash") or "bash", "-c", script],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return done, calls
+
+
+@_no_bash
+def test_주_DB_면_앱_계정에_임시_파일_상한_권한을_준다(tmp_path: Path) -> None:
+    done, calls = _grant_temp_limit(tmp_path)
+    assert done.returncode == 0, done.stderr
+    assert any('GRANT SET ON PARAMETER temp_file_limit TO "plmhub"' in one for one in calls)
+
+
+@_no_bash
+@pytest.mark.parametrize(
+    ("recovery", "version", "said"),
+    [(True, "160004", ""), (False, "140011", "15 아래"), (False, None, "붙지 못해")],
+)
+def test_권한을_못_주는_서버에서도_멈추지_않는다(
+    tmp_path: Path, recovery: bool, version: str | None, said: str
+) -> None:
+    """대기 서버(주에서 준 것이 복제로 온다) · 15 아래 · DB 가 다른 서버."""
+    done, calls = _grant_temp_limit(tmp_path, recovery=recovery, version=version)
+    assert done.returncode == 0, done.stderr
+    assert not any("GRANT" in one for one in calls)
+    assert said in done.stderr
+
+
+def test_update_와_prepare_가_권한을_주고_remove_는_거둔_뒤_역할을_지운다() -> None:
+    """권한이 남은 역할은 DROP ROLE 이 거절한다 — remove 가 거기서 멈춘다."""
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    update = _piece(text, "cmd_update")
+    assert update.index("run_migrations") < update.index("grant_temp_limit")
+    assert update.index("grant_temp_limit") < update.index('systemctl start "$SERVICE_NAME"')
+    assert "grant_temp_limit" in _piece(text, "cmd_prepare")
+    remove = text[text.index('REVOKE SET ON PARAMETER temp_file_limit FROM "$DB_USER"') :]
+    assert "DROP ROLE IF EXISTS" in remove[:400]
+
+
+# --- 꺼 둔 워커(ADR 0049) ---------------------------------------------------------------
+#
+# 운영에서 지도 계산이 워커를 되풀이해 죽여 워커를 껐더니, update 가 다시 켰다(2026-11-02).
+
+
+def _setup_worker(
+    tmp_path: Path, *, had_unit: bool, state: str
+) -> tuple[subprocess.CompletedProcess[str], list[str]]:
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    pieces = [_piece(text, name) for name in ("err", "info", "warn", "setup_worker")]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    here = tmp_path / "bundle"
+    here.mkdir()
+    (here / "worker.service.template").write_text("[Unit]\n", encoding="utf-8")
+    unit = tmp_path / "plm-worker.service"
+    if had_unit:
+        unit.write_text("[Unit]\n", encoding="utf-8")
+    log = tmp_path / "calls.log"
+    _stub(
+        bin_dir / "systemctl",
+        f'echo "systemctl $*" >> "{log}"\n'
+        f'case "$1" in is-enabled) echo {state}; [ {state} = enabled ] ;; esac\n',
+    )
+    script = (
+        "set -euo pipefail\n"
+        f'HERE="{here}"\nWORKER_SERVICE_UNIT="{unit}"\nWORKER_SERVICE_NAME=plm-worker\n'
+        'render_unit_paths() { cat "$1"; }\n' + "\n".join(pieces) + "\nsetup_worker\n"
+    )
+    done = subprocess.run(
+        [shutil.which("bash") or "bash", "-c", script],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    calls = log.read_text(encoding="utf-8").splitlines() if log.exists() else []
+    return done, calls
+
+
+@_no_bash
+def test_update_는_꺼_둔_워커를_켜지_않는다(tmp_path: Path) -> None:
+    done, calls = _setup_worker(tmp_path, had_unit=True, state="disabled")
+    assert done.returncode == 0, done.stderr
+    assert not any(one.startswith(("systemctl enable", "systemctl restart")) for one in calls)
+    assert "꺼 둔 상태라 켜지 않습니다" in done.stderr
+
+
+@_no_bash
+@pytest.mark.parametrize(("had_unit", "state"), [(True, "enabled"), (False, "disabled")])
+def test_켜_둔_워커와_처음_설치는_켜고_다시_띄운다(
+    tmp_path: Path, had_unit: bool, state: str
+) -> None:
+    """처음 설치는 유닛이 없어 `is-enabled` 가 disabled 라고 답한다 — 그것은 끈 것이 아니다."""
+    done, calls = _setup_worker(tmp_path, had_unit=had_unit, state=state)
+    assert done.returncode == 0, done.stderr
+    assert "systemctl enable plm-worker" in calls
+    assert "systemctl restart plm-worker" in calls
+
+
+@_no_bash
+@pytest.mark.parametrize(
+    ("action", "state", "worker"),
+    [
+        ("restart", "disabled", False),
+        ("start", "disabled", False),
+        ("restart", "enabled", True),
+        ("stop", "disabled", True),
+    ],
+)
+def test_restart_도_꺼_둔_워커는_띄우지_않는다(
+    tmp_path: Path, action: str, state: str, worker: bool
+) -> None:
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    pieces = [
+        _piece(text, name)
+        for name in ("err", "info", "warn", "units_of", "cmd_service", "health_check")
+    ]
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    etc = tmp_path / "etc"
+    etc.mkdir()
+    (etc / "worker.service").write_text("", encoding="utf-8")
+    log = tmp_path / "calls.log"
+    _stub(
+        bin_dir / "systemctl",
+        f'echo "systemctl $*" >> "{log}"\n'
+        f'case "$1" in is-enabled) echo {state}; [ {state} = enabled ] ;; esac\n',
+    )
+    _stub(bin_dir / "curl", "exit 0\n")
+    script = (
+        "set -euo pipefail\n"
+        f'ETC="{etc}"\nSERVICE_NAME=plm\nWORKER_SERVICE_NAME=plm-worker\n'
+        "WORKER_SERVICE_UNIT=/worker.service\nMCP_SERVICE_UNIT=/mcp.service\nAPP_PORT=1\n"
+        "sleep() { :; }\n" + "\n".join(pieces) + f"\ncmd_service {action}\n"
+    )
+    done = subprocess.run(
+        [shutil.which("bash") or "bash", "-c", script],
+        env={"PATH": f"{bin_dir}:/usr/bin:/bin"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert done.returncode == 0, done.stderr
+    calls = log.read_text(encoding="utf-8").splitlines()
+    acted = [one for one in calls if one.startswith(f"systemctl {action}")]
+    assert acted and ("plm-worker" in acted[0]) is worker, acted
 
 
 def test_pg_tune_은_보여_주기만이_기본이고_바꾸면_재시작할_것을_말한다() -> None:

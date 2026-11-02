@@ -128,7 +128,8 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `objects_similar` | **비슷한 기록**(ADR 0022) — 축 태그(참조 칸)가 많이 겹치는 같은 타입의 기록, 드문 태그가 겹칠수록 위에. 겹친 태그(왜 비슷한가)와 함께. 기록 대신 태그 묶음으로도 |
 | `objects_summary` · `object_fields` | 통계(서버가 센다 — 화면의 「통계」 와 같다) · 다른 타입의 칸 주소(`ref.vendor.country` 등, 선의 칸 `out.<관계>~<관계 속성>` — `edge: true`) |
 | `object_history` · `object_references` · `object_rollup` · `quality_report` | 이력 · 가리키는 것 · 아래 전부의 합(수량 반영 · 말단만 · 곱 — ADR 0040) · 품질 — 화면의 읽기와 대칭 |
-| `graph_neighbors` · `graph_overview` | **이것과 이어진 것들**(한 걸음 너머, 질의어 없이) · 타입 사이의 지형 — 화면의 지식 그래프와 같은 길 |
+| `graph_neighbors` · `graph_overview` | **이것과 이어진 것들**(한 걸음 너머, 질의어 없이 — `direction` 으로 한쪽 선만) · 타입 사이의 지형 — 화면의 지식 그래프와 같은 길 |
+| `graph_reach` | **영향 범위** — 고른 관계 · 참조 칸을 한 방향으로 끝까지(20단). 타입별 · 단계별 수와 노드마다 가장 가까운 길 하나(ADR 0047) |
 | `graph_path` | **두 객체가 어떻게 이어져 있나** — 가장 짧은 길들(관계 · 참조 칸, 방향 무관). 상한에 닿으면 「찾다가 멈춤」 |
 | `object_tree` · `audit_recent` | 계층 한 단계씩 · 누가 언제 무엇을 바꿨나(전체, 부서 관리자 이상) |
 | `object_explode` | **BOM 전개**(ADR 0040) — 트리 관계의 수량(관계 종류의 수량 칸)을 경로 따라 곱한다. 정리(객체마다 총수량) · 단계별(경로마다, 5,000줄 상한 · 잘림) · 어디에 쓰였나(맨 위 객체마다 총 몇 개). 수량 없음(1개로 셈) · 볼 수 없는 객체 수를 함께 |
@@ -167,7 +168,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 관계 종류가 `effectivity` 면 선이 `valid_from`(포함) · `valid_to`(**제외** — 그날부터 무효)를 받는다
 (반열린 [from, to) — 「3월 1일부터 바뀜」 을 앞 선의 끝날 = 뒤 선의 시작일 하나로 적는다). 읽는 도구
 (`objects_list` · `objects_summary` · `object_get` · `object_tree` · `object_rollup` · `object_explode` · `graph_neighbors` ·
-`graph_path` · `export_start`)는 **기준일 `as_of`**(비우면 오늘)를 받아 그날 유효한 선만 따라간다 —
+`graph_reach` · `graph_path` · `export_start`)는 **기준일 `as_of`**(비우면 오늘)를 받아 그날 유효한 선만 따라간다 —
 유효 기간이 지난 선은 기본에서 빠진다. `object_get(all_periods=True)` 는 지난 · 앞으로의 선까지
 (`period_state`). 날짜 밖의 적용 조건(옵션 · 시리얼)은 관계 칸으로 적되 조건으로는 아직 못 거른다.
 

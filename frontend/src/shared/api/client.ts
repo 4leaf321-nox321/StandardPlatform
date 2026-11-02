@@ -263,7 +263,11 @@ export async function fetchBlob(path: string): Promise<Blob> {
 }
 
 export const api = {
-  get: <T>(path: string) => request<T>(path),
+  /**
+   * `signal` 을 주면 그 요청을 끊을 수 있다 — 끊으면 서버도 질의를 멈춘다(오래 도는 읽기, ADR
+   * 0048). 결과만 버리면 서버는 아무도 안 받는 답을 끝까지 만든다.
+   */
+  get: <T>(path: string, options?: { signal?: AbortSignal }) => request<T>(path, options),
   post: <T>(path: string, body?: unknown) =>
     request<T>(path, { method: 'POST', body: JSON.stringify(body ?? {}) }),
   /**

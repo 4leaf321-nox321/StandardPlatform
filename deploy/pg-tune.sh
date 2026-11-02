@@ -69,6 +69,15 @@ workers=$(max "$cpus" 8)
 gather=$(min 4 "$(max 2 $(( cpus / 4 )))")
 maint_workers=$(min 4 "$(max 1 $(( cpus / 4 )))")
 if (( SSD )); then page_cost=1.1; io=200; else page_cost=4; io=2; fi
+# 임시 파일 상한(ADR 0048) — 프로세스 하나가 정렬 · 해시로 디스크에 쓸 수 있는 크기. 데이터 디스크의 1/5(100GB
+# 까지). 넘으면 그 질의 · 작업만 실패한다 — 디스크가 차서 DB 가 통째로 멈추는 것보다 낫다. 앱의 읽기 요청은 따로
+# 더 작게 건다(READ_TEMP_LIMIT). 데이터 폴더를 못 읽으면(superuser 가 아닌 --url) 권하지 않는다.
+temp_limit=""
+data_dir="$(psql_run "SHOW data_directory" 2>/dev/null || true)"
+if [[ -n "$data_dir" ]]; then
+    disk_kb="$(df -Pk "$data_dir" 2>/dev/null | awk 'NR == 2 { print $2 }' || true)"
+    [[ -n "$disk_kb" ]] && temp_limit="$(min $(( disk_kb / 1024 / 5 )) 102400)MB"
+fi
 
 declare -A WANT=(
     [shared_buffers]="${shared}MB"
@@ -83,6 +92,7 @@ declare -A WANT=(
 )
 ORDER=(shared_buffers effective_cache_size maintenance_work_mem random_page_cost effective_io_concurrency
        max_worker_processes max_parallel_workers max_parallel_workers_per_gather max_parallel_maintenance_workers)
+if [[ -n "$temp_limit" ]]; then WANT[temp_file_limit]="$temp_limit"; ORDER+=(temp_file_limit); fi
 
 names=$(printf "'%s'," "${ORDER[@]}"); names="${names%,}"
 show() {

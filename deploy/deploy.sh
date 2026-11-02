@@ -580,6 +580,29 @@ run_migrations() {
     in_container sh -c 'cd /opt/app/backend && /opt/app/venv/bin/python -m alembic upgrade head'
 }
 
+# **임시 파일 상한을 앱이 요청마다 걸 수 있게 한다**(ADR 0048). 정렬 · 해시가 디스크로 넘어간 임시 파일에
+# 상한이 없으면 무거운 질의 하나가 디스크를 다 채워 DB 가 멈춘다. 그 설정(temp_file_limit)은 superuser 만
+# 바꾸므로 앱 계정에 권한을 준다(PostgreSQL 15 부터). 권한이 없으면 앱은 상한 없이 돈다(서버 설정을 따른다) —
+# 그래서 실패해도 멈추지 않는다. 대기 서버는 건너뛴다(주에서 준 것이 복제로 넘어온다). 멱등하다.
+grant_temp_limit() {
+    pg_in_recovery && return 0
+    local version
+    version="$(sudo -u postgres psql -X -tAqc 'SHOW server_version_num' 2>/dev/null)" || version=""
+    if [[ -z "$version" ]]; then
+        warn "이 서버의 PostgreSQL 에 붙지 못해 임시 파일 상한 권한을 건너뜁니다(DB 가 다른 서버면 그 서버에서: GRANT SET ON PARAMETER temp_file_limit TO \"$DB_USER\")"
+        return 0
+    fi
+    if (( version < 150000 )); then
+        warn "PostgreSQL 15 아래라 앱이 임시 파일 상한을 걸 수 없습니다 — 서버 전체 값은 sudo ./deploy.sh pg-tune 이 권합니다"
+        return 0
+    fi
+    if sudo -u postgres psql -X -qc "GRANT SET ON PARAMETER temp_file_limit TO \"$DB_USER\"" >/dev/null; then
+        info "임시 파일 상한 권한: $DB_USER (읽기 요청마다 READ_TEMP_LIMIT, 기본 5GB)"
+    else
+        warn "임시 파일 상한 권한을 주지 못했습니다 — 앱은 상한 없이 돕니다"
+    fi
+}
+
 run_seed() {
     # 뿌리 부서와 관리자 계정. **이것 없이는 아무도 로그인할 수 없다** —
     # 가입은 승인이 필요한데 승인할 사람이 없기 때문이다. 멱등하다.
@@ -695,10 +718,18 @@ setup_mcp() {
 # ── 작업 워커 — 같은 SIF 재사용. **치명적이다**: 없으면 파일 가져오기가 안 돈다. ──
 setup_worker() {
     [[ -f "$HERE/worker.service.template" ]] || err "worker.service.template 없음 — 번들이 깨졌습니다"
+    local had_unit=0
+    [[ -f "$WORKER_SERVICE_UNIT" ]] && had_unit=1
     info "작업 워커 렌더 → $WORKER_SERVICE_UNIT"
     render_unit_paths "$HERE/worker.service.template" > "$WORKER_SERVICE_UNIT"
     chmod 644 "$WORKER_SERVICE_UNIT"
     systemctl daemon-reload
+    # **운영자가 꺼 둔(disable) 워커는 켜지 않는다**(ADR 0049). update 가 다시 켜면 끈 까닭(지도 계산이
+    # 서버를 버겁게 했다 등)이 그대로 되살아난다(운영, 2026-11-02). 처음 설치(유닛이 없던 때)만 켠다.
+    if (( had_unit )) && [[ "$(systemctl is-enabled "$WORKER_SERVICE_NAME" 2>/dev/null || true)" == "disabled" ]]; then
+        warn "작업 워커($WORKER_SERVICE_NAME)는 꺼 둔 상태라 켜지 않습니다 — 다시 켜기: sudo systemctl enable --now $WORKER_SERVICE_NAME"
+        return 0
+    fi
     systemctl enable "$WORKER_SERVICE_NAME" >/dev/null 2>&1 || true
     systemctl restart "$WORKER_SERVICE_NAME" \
         || warn "작업 워커 기동 실패 — 'journalctl -u $WORKER_SERVICE_NAME' 확인. 파일 가져오기가 「대기」 에 머뭅니다"
@@ -813,6 +844,7 @@ MSG
     else
         info "데이터베이스가 이미 있습니다: $DB_NAME"
     fi
+    grant_temp_limit
 
     # **맨 끝에 둔다.** PPA 에 닿지 않는 서버에서 여기서 멈춰도 DB·폴더는 이미 서 있고,
     # apptainer 만 따로 깐 뒤 prepare 를 다시 돌리면 된다(앞 단계는 멱등하다).
@@ -884,6 +916,8 @@ cmd_update() {
     fi
     place_sif
     run_migrations
+    # 앱이 뜨기 전에 — 앱은 기동 뒤 처음 읽을 때 한 번 걸어 보고 그 답을 기억한다.
+    grant_temp_limit
     # 템플릿(경로·하드닝)이 바뀌었을 수 있으므로 다시 렌더한다.
     render_service_unit
 
@@ -962,8 +996,15 @@ cmd_units() {
 }
 
 cmd_service() {  # $1 = start|stop|restart
-    local action="$1" unit
+    local action="$1" unit one
     mapfile -t unit < <(units_of)
+    if [[ "$action" != "stop" ]] && [[ "$(systemctl is-enabled "$WORKER_SERVICE_NAME" 2>/dev/null || true)" == "disabled" ]]; then
+        # 꺼 둔(disable) 워커는 띄우지 않는다(ADR 0049 — update 와 같은 규칙).
+        local kept=()
+        for one in "${unit[@]}"; do [[ "$one" == "$WORKER_SERVICE_NAME" ]] || kept+=("$one"); done
+        unit=("${kept[@]}")
+        warn "작업 워커($WORKER_SERVICE_NAME)는 꺼 둔 상태라 띄우지 않습니다 — 다시 켜기: sudo systemctl enable --now $WORKER_SERVICE_NAME"
+    fi
     info "$action: ${unit[*]}"
     systemctl "$action" "${unit[@]}"
     [[ "$action" == "stop" ]] && return 0
@@ -1182,6 +1223,13 @@ MSG
     else
         sudo -u postgres psql -v ON_ERROR_STOP=1 <<SQL
 DROP DATABASE IF EXISTS "$DB_NAME";
+-- 임시 파일 상한 권한(grant_temp_limit)이 남아 있으면 역할을 못 지운다(PostgreSQL 15+).
+DO \$\$ BEGIN
+    IF current_setting('server_version_num')::int >= 150000
+       AND EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '$DB_USER') THEN
+        EXECUTE 'REVOKE SET ON PARAMETER temp_file_limit FROM "$DB_USER"';
+    END IF;
+END \$\$;
 DROP ROLE IF EXISTS "$DB_USER";
 SQL
         info "DB · 역할 삭제: $DB_NAME"

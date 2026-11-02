@@ -16867,7 +16867,7 @@
           "graph"
         ],
         "summary": "Neighborhood",
-        "description": "시작점에서 depth 단계까지의 이웃.\n\n**한 단계씩, 노드마다 fanout 개까지, 전체 node_limit 개까지.** 셋 다 서버가\n상한을 강제한다. 잘리면 `truncated` 와 노드의 `degree` 로 **잘렸다고 말한다** —\n화면은 그 노드에 「+N 더」 를 적고, 사람은 거기서 다시 펼친다.\n\n**나를 가리키는 기록은 기본으로 안 싣는다**(ADR 0011) — 인기 모델은 기록 10만 건이\n가리키고, 그중 30개를 늘어놓으면 축의 모양이 묻힌다. 시작점을 가리키는 기록은\n`log_counts` 에 수로 온다. `records=true` 거나 `types` 로 고르면 싣는다.",
+        "description": "시작점에서 depth 단계까지의 이웃.\n\n**한 단계씩, 노드마다 fanout 개까지, 전체 node_limit 개까지.** 셋 다 서버가\n상한을 강제한다. 잘리면 `truncated` 와 노드의 `degree` 로 **잘렸다고 말한다** —\n화면은 그 노드에 「+N 더」 를 적고, 사람은 거기서 다시 펼친다.\n\n**나를 가리키는 기록은 기본으로 안 싣는다**(ADR 0011) — 인기 모델은 기록 10만 건이\n가리키고, 그중 30개를 늘어놓으면 축의 모양이 묻힌다. 시작점을 가리키는 기록은\n`log_counts` 에 수로 온다. `records=true` 거나 `types` 로 고르면 싣는다.\n\n`direction` 으로 한쪽 선만 따라 넓힌다 — 이미 실린 노드끼리의 선은 방향과 상관없이 긋는다\n(그림에 있는 두 노드 사이의 선을 숨기면 「관계없음」 으로 읽힌다).\n\n끊기면(화면이 다른 것을 고르거나 닫으면) 멈추고, `LONG_READ_SECONDS` 를 넘기면 504(ADR\n0048).",
         "operationId": "neighborhood_api_graph_neighborhood_get",
         "parameters": [
           {
@@ -17002,6 +17002,23 @@
               "title": "As Of"
             },
             "description": "기준일(YYYY-MM-DD) — 그날 유효한 관계만 그린다(지난 관계 · 예정 관계는 빠진다). 비우면 오늘. 참조 칸 · 원 표와 이은 관계는 기간이 없어 늘 그린다."
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "both",
+                "in",
+                "out"
+              ],
+              "type": "string",
+              "description": "어느 선으로 넓히나 — both · in(들어오는 선: 나를 가리키는 것) · out(나가는 선: 내가 가리키는 것). 단계마다 그 노드에서 본 방향이다. 방향 없는 관계 종류는 양쪽",
+              "default": "both",
+              "title": "Direction"
+            },
+            "description": "어느 선으로 넓히나 — both · in(들어오는 선: 나를 가리키는 것) · out(나가는 선: 내가 가리키는 것). 단계마다 그 노드에서 본 방향이다. 방향 없는 관계 종류는 양쪽"
           }
         ],
         "responses": {
@@ -17011,6 +17028,134 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NeighborhoodOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/graph/reach": {
+      "get": {
+        "tags": [
+          "graph"
+        ],
+        "summary": "Reach Closure",
+        "description": "**영향 범위** — 고른 선을 한 방향으로 끝까지(20단) 따라가 닿은 객체 전부.\n\n트리 「위 전부」 · BOM 「어디에 쓰였나」 · 계보 사슬은 정해 둔 관계 하나만 따라간다. 이것은\n아무 관계 종류 · 참조 칸을 고른다. 고리가 있어도 한 번 닿은 객체는 다시 펼치지 않고, 처음\n닿은 단계와 그 길 하나(`parent` · `via`)를 적는다. 보이지 않는 객체에서는 멈춘다. 상한에\n닿으면 `truncated` 로 **잘렸다고 말한다.**\n\n요청한 쪽이 떠나면 멈추고, `LONG_READ_SECONDS` 를 넘기면 504(ADR 0048).",
+        "operationId": "reach_closure_api_graph_reach_get",
+        "parameters": [
+          {
+            "name": "start",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "description": "시작 객체",
+              "title": "Start"
+            },
+            "description": "시작 객체"
+          },
+          {
+            "name": "relations",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "description": "따라갈 선의 종류 — 관계 slug · 참조 칸(`ref:<타입>.<칸>`), 쉼표로",
+              "title": "Relations"
+            },
+            "description": "따라갈 선의 종류 — 관계 slug · 참조 칸(`ref:<타입>.<칸>`), 쉼표로"
+          },
+          {
+            "name": "direction",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "enum": [
+                "in",
+                "out"
+              ],
+              "type": "string",
+              "description": "in = 들어오는 선(이것에 기대는 것 — 영향 범위) · out = 나가는 선(이것이 기대는 것). 방향 없는 관계 종류는 양쪽",
+              "default": "in",
+              "title": "Direction"
+            },
+            "description": "in = 들어오는 선(이것에 기대는 것 — 영향 범위) · out = 나가는 선(이것이 기대는 것). 방향 없는 관계 종류는 양쪽"
+          },
+          {
+            "name": "depth",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "몇 단계까지. 최대 20",
+              "title": "Depth"
+            },
+            "description": "몇 단계까지. 최대 20"
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "닿은 객체 상한(기본 2000, 최대 20000)",
+              "title": "Limit"
+            },
+            "description": "닿은 객체 상한(기본 2000, 최대 20000)"
+          },
+          {
+            "name": "as_of",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "anyOf": [
+                {
+                  "type": "string",
+                  "format": "date"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "기준일(YYYY-MM-DD) — 그날 유효한 관계만 그린다(지난 관계 · 예정 관계는 빠진다). 비우면 오늘. 참조 칸 · 원 표와 이은 관계는 기간이 없어 늘 그린다.",
+              "title": "As Of"
+            },
+            "description": "기준일(YYYY-MM-DD) — 그날 유효한 관계만 그린다(지난 관계 · 예정 관계는 빠진다). 비우면 오늘. 참조 칸 · 원 표와 이은 관계는 기간이 없어 늘 그린다."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReachOut"
                 }
               }
             }
@@ -17195,7 +17340,7 @@
           "graph"
         ],
         "summary": "Subgraph",
-        "description": "한 타입(들)의 인스턴스를 **쪽 단위로** 전부, 그 사이의 관계와 함께.\n\n「이 타입에 뭐가 있나」 를 그림으로 답하는 길이다. 상한(limit)을 넘으면 `total`\n과 함께 잘렸다고 말한다 — 화면은 「1,234개 중 500개」 라고 적고 다음 쪽으로 넘긴다.\n다른 타입으로 나가는 선은 여기 없다(노드의 `degree` 로 「+N」 만 붙는다) — 그것은\n노드를 눌러 펼친다.",
+        "description": "한 타입(들)의 인스턴스를 **쪽 단위로** 전부, 그 사이의 관계와 함께.\n\n「이 타입에 뭐가 있나」 를 그림으로 답하는 길이다. 상한(limit)을 넘으면 `total`\n과 함께 잘렸다고 말한다 — 화면은 「1,234개 중 500개」 라고 적고 다음 쪽으로 넘긴다.\n다른 타입으로 나가는 선은 여기 없다(노드의 `degree` 로 「+N」 만 붙는다) — 그것은\n노드를 눌러 펼친다.\n\n끊기면(화면이 다른 것을 고르거나 닫으면) 멈추고, `LONG_READ_SECONDS` 를 넘기면 504(ADR\n0048).",
         "operationId": "subgraph_api_graph_subgraph_get",
         "parameters": [
           {
@@ -17324,7 +17469,7 @@
           "graph"
         ],
         "summary": "Whole",
-        "description": "정적 그리기의 재료 — 씨앗에서 depth 단계 안의 노드와 **그 사이의 선 전부**(ADR 0045).\n\n씨앗 · 거르기 · 기준일 · 기록의 뜻은 이웃 그림(neighborhood)과 같고, 다른 것은 **노드마다\n자르지 않는다**는 것 하나다(fanout · limit 이 없다). 타입 씨앗(types)은 그 타입의 인스턴스\n전부가 0단계다 — depth 1 이면 그것들과 이어진 것까지.\n\n상한(노드 20만 · 선 70만, 응답의 `max_nodes` · `max_edges`)을 넘으면 그림을 반쯤 주지\n않는다: `over` 에 무엇이 얼마나 많은지(타입별 · 단계별 · 선 종류별)를 담고 nodes · edges 는\n비운다. 타입 씨앗은 계수표로 먼저 세어(ADR 0038) 넘으면 넓히기 전에 거절한다.\n\n노드는 열 배열이다(노드 사전 20만 개는 수십 MB) — 받는 쪽이 gzip 을 받으면 줄여서 준다.",
+        "description": "정적 그리기의 재료 — 씨앗에서 depth 단계 안의 노드와 **그 사이의 선 전부**(ADR 0045).\n\n씨앗 · 거르기 · 기준일 · 기록의 뜻은 이웃 그림(neighborhood)과 같고, 다른 것은 **노드마다\n자르지 않는다**는 것 하나다(fanout · limit 이 없다). 타입 씨앗(types)은 그 타입의 인스턴스\n전부가 0단계다 — depth 1 이면 그것들과 이어진 것까지.\n\n상한(노드 20만 · 선 70만, 응답의 `max_nodes` · `max_edges`)을 넘으면 그림을 반쯤 주지\n않는다: `over` 에 무엇이 얼마나 많은지(타입별 · 단계별 · 선 종류별)를 담고 nodes · edges 는\n비운다. 타입 씨앗은 계수표로 먼저 세어(ADR 0038) 넘으면 넓히기 전에 거절한다.\n\n노드는 열 배열이다(노드 사전 20만 개는 수십 MB) — 받는 쪽이 gzip 을 받으면 줄여서 준다.\n\n**안전장치(ADR 0048)** — 요청한 쪽이 떠나면(화면을 닫거나 씨앗 · 단계를 바꾸면) DB 질의를\n취소하고 멈춘다. 요청 하나는 `LONG_READ_SECONDS`(기본 120초)를 넘기면 504, 설치 전체에서\n동시에 `WHOLE_SLOTS`(기본 2)개까지 — 넘으면 429.",
         "operationId": "whole_api_graph_whole_get",
         "parameters": [
           {
@@ -36412,6 +36557,17 @@
             ],
             "title": "Last Error"
           },
+          "paused": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Paused"
+          },
           "can_relayout": {
             "type": "boolean",
             "title": "Can Relayout"
@@ -43510,6 +43666,207 @@
         ],
         "title": "RangeOut",
         "description": "날짜 칸의 범위 조건 — `f.<칸>.gte` · `f.<칸>.lt` 로 그대로 쓴다."
+      },
+      "ReachNodeOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "owner_workspace_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Owner Workspace Slug"
+          },
+          "depth": {
+            "type": "integer",
+            "title": "Depth"
+          },
+          "parent": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "uuid"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent"
+          },
+          "via": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Via"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "key",
+          "type_slug",
+          "type_label",
+          "status",
+          "owner_workspace_slug",
+          "depth",
+          "parent",
+          "via"
+        ],
+        "title": "ReachNodeOut"
+      },
+      "ReachOut": {
+        "properties": {
+          "start": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Start"
+          },
+          "direction": {
+            "type": "string",
+            "title": "Direction"
+          },
+          "relations": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Relations"
+          },
+          "depth": {
+            "type": "integer",
+            "title": "Depth"
+          },
+          "reached_depth": {
+            "type": "integer",
+            "title": "Reached Depth"
+          },
+          "node_limit": {
+            "type": "integer",
+            "title": "Node Limit"
+          },
+          "truncated": {
+            "type": "boolean",
+            "title": "Truncated"
+          },
+          "exhausted": {
+            "type": "boolean",
+            "title": "Exhausted"
+          },
+          "as_of": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "As Of"
+          },
+          "by_type": {
+            "items": {
+              "$ref": "#/components/schemas/ReachTypeCountOut"
+            },
+            "type": "array",
+            "title": "By Type"
+          },
+          "levels": {
+            "items": {
+              "type": "integer"
+            },
+            "type": "array",
+            "title": "Levels"
+          },
+          "nodes": {
+            "items": {
+              "$ref": "#/components/schemas/ReachNodeOut"
+            },
+            "type": "array",
+            "title": "Nodes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "start",
+          "direction",
+          "relations",
+          "depth",
+          "reached_depth",
+          "node_limit",
+          "truncated",
+          "exhausted",
+          "as_of",
+          "by_type",
+          "levels",
+          "nodes"
+        ],
+        "title": "ReachOut",
+        "description": "영향 범위 — 고른 선을 한 방향으로 끝까지 따라가 닿은 객체(시작점 포함)."
+      },
+      "ReachTypeCountOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "count": {
+            "type": "integer",
+            "title": "Count"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "type_label",
+          "count"
+        ],
+        "title": "ReachTypeCountOut"
       },
       "RecentOut": {
         "properties": {

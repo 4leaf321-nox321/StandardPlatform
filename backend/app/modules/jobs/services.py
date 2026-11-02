@@ -26,7 +26,7 @@ from app.modules.jobs import files, kinds
 from app.modules.jobs.models import Job, JobFile, WorkerHeartbeat
 from app.modules.notifications import services as notifications
 from app.modules.workspaces.models import WorkspaceMember
-from app.shared import events, extensions
+from app.shared import events, extensions, readguard
 from app.shared.errors import AppError, Conflict, Forbidden, NotFound, code
 
 log = logging.getLogger(__name__)
@@ -386,9 +386,11 @@ def worker_identity() -> str:
     return f"{socket.gethostname()}:{os.getpid()}"
 
 
-def heartbeat(worker_id: str, job_id: uuid.UUID | None) -> None:
-    """짧은 세션으로 — 본 트랜잭션과 섞이면 안 된다."""
+def heartbeat(worker_id: str, job_id: uuid.UUID | None) -> bool:
+    """짧은 세션으로 — 본 트랜잭션과 섞이면 안 된다. 쥔 작업에 **취소 요청이 있나**를
+    돌려준다."""
     now = datetime.now(UTC)
+    wanted = False
     with SessionLocal() as db:
         row = db.get(WorkerHeartbeat, worker_id)
         if row is None:
@@ -407,8 +409,15 @@ def heartbeat(worker_id: str, job_id: uuid.UUID | None) -> None:
         if job_id is not None:
             # 내가 쥔 것만 — 되살려져 남이 집은 작업의 박동을 대신 뛰면, 그 워커가 죽어도
             # 살아 있는 것처럼 보인다.
-            db.execute(update(Job).where(_owned(job_id, worker_id)).values(heartbeat_at=now))
+            marked = db.execute(
+                update(Job)
+                .where(_owned(job_id, worker_id))
+                .values(heartbeat_at=now)
+                .returning(Job.cancel_requested)
+            ).first()
+            wanted = bool(marked is not None and marked[0])
         db.commit()
+    return wanted
 
 
 def report_progress(
@@ -511,7 +520,16 @@ def recover_stale(db: Session) -> int:
         )
     stale = [job for job in stale if job.id not in busy]
     for job in stale:
-        if job.attempts >= settings.worker_max_attempts:
+        spec = kinds.get(job.kind)
+        if spec is not None and not spec.retries:
+            # 워커를 죽인 것이 이 작업 자체일 수 있다 — 다시 돌리면 또 죽는다(ADR 0049).
+            job.status = "failed"
+            job.error = (
+                f"워커가 이 작업을 하다 멈췄습니다(마지막 워커 {job.worker_id}) — 메모리를 다 "
+                "써 강제 종료됐을 수 있습니다. 이 종류는 다시 돌리지 않습니다."
+            )
+            job.finished_at = datetime.now(UTC)
+        elif job.attempts >= settings.worker_max_attempts:
             job.status = "failed"
             job.error = (
                 f"워커가 {job.attempts}번 시도했지만 끝내지 못했습니다"
@@ -789,6 +807,10 @@ def _run(job: Job, *, worker_id: str) -> Outcome:
             return Outcome("failed", error=f"[{caught.code}] {caught.message}")
         except Exception as caught:  # 워커는 죽지 않는다. 스택은 로그에.
             db.rollback()
+            if readguard.stopped() == "cancel":
+                # 취소가 도는 질의를 끊었다(`stop_midway`) — 실패가 아니다.
+                log.info("작업 취소 — 도는 질의를 끊었습니다: %s (%s)", job.id, job.kind)
+                return Outcome("cancelled")
             log.exception("작업 실패: %s (%s)", job.id, job.kind)
             return Outcome("failed", error=f"{type(caught).__name__}: {caught}"[:2000])
 
@@ -906,18 +928,25 @@ class _Beating:
     살아서 이 작업을 쥐고 있다」 는 사실이고, 그 사실은 진행 보고와 따로 뛰어야 한다.
     """
 
-    def __init__(self, worker_id: str, job_id: uuid.UUID) -> None:
+    def __init__(
+        self, worker_id: str, job_id: uuid.UUID, guard: readguard.Guard | None = None
+    ) -> None:
         self.worker_id = worker_id
         self.job_id = job_id
+        self.guard = guard
+        """있으면 취소 요청을 보는 대로 도는 질의를 끊는다(`Kind.stop_midway`)."""
         self.done = threading.Event()
         self.thread = threading.Thread(target=self._beat, name="job-heartbeat", daemon=True)
 
     def _beat(self) -> None:
         while not self.done.wait(HEARTBEAT_EVERY):
             try:
-                heartbeat(self.worker_id, self.job_id)
+                wanted = heartbeat(self.worker_id, self.job_id)
             except Exception:  # 박동 하나 못 남긴 것으로 작업을 죽이지 않는다.
                 log.warning("심장박동을 남기지 못했습니다 (작업 %s)", self.job_id)
+                continue
+            if wanted and self.guard is not None:
+                readguard.stop(self.guard, "cancel")
 
     def __enter__(self) -> _Beating:
         self.thread.start()
@@ -938,8 +967,14 @@ def process_one(worker_id: str) -> bool:
         db.expunge(job)
     heartbeat(worker_id, job_id)
     log.info("작업 시작: %s (%s)", job_id, kind)
-    with _Beating(worker_id, job_id):
-        outcome = run(job, worker_id=worker_id)
+    spec = kinds.get(kind)
+    if spec is not None and spec.stop_midway:
+        # 정산(`settle`)은 지켜보기 밖에서 — 멈춘 맥락의 질의는 보내지 않으므로.
+        with readguard.watching() as guard, _Beating(worker_id, job_id, guard):
+            outcome = run(job, worker_id=worker_id)
+    else:
+        with _Beating(worker_id, job_id):
+            outcome = run(job, worker_id=worker_id)
     settle(job_id, outcome, worker_id=worker_id)
     heartbeat(worker_id, None)
     log.info("작업 끝: %s (%s) → %s", job_id, kind, outcome.status)

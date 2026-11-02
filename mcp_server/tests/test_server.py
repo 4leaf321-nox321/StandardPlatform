@@ -74,6 +74,7 @@ TOOLS = {
     "lineage_repin",
     "object_tree",
     "graph_neighbors",
+    "graph_reach",
     "graph_path",
     "graph_overview",
     "bulk_edit",
@@ -1781,6 +1782,26 @@ def test_눈여겨볼_것은_거르기를_그대로_넘긴다() -> None:
     }
 
 
+def test_영향_범위와_이웃의_방향이_그대로_건너간다() -> None:
+    """`graph_reach` 는 종류를 쉼표로 묶고 기본 방향 · 상한을 싣는다(AI 의 맥락이 넘치지 않게
+    300). `graph_neighbors` 의 방향은 기본(`both`)이면 안 보낸다 — 서버의 기본이 정한다."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"nodes": []}))
+    ctx = _ctx("Bearer t")
+    asyncio.run(server.graph_reach(ctx, "p1", ["uses", "ref:part.maker"]))
+    assert seen[0].url.path == "/api/graph/reach"
+    assert dict(seen[0].url.params) == {
+        "start": "p1",
+        "relations": "uses,ref:part.maker",
+        "direction": "in",
+        "depth": "20",
+        "limit": "300",
+    }
+    asyncio.run(server.graph_neighbors(ctx, "p1", direction="in"))
+    asyncio.run(server.graph_neighbors(ctx, "p1"))
+    assert seen[1].url.params["direction"] == "in"
+    assert "direction" not in seen[2].url.params
+
+
 def test_관계의_유효_기간과_기준일이_그대로_건너간다() -> None:
     """유효 기간(ADR 0039) — 맺기 · 고치기가 기간을 싣고(안 준 것은 안 보내고, 빈 글자는
     비움), 읽는 도구가 기준일을 쿼리에 싣는다. 안 실으면 서버는 오늘로 보고, 「3월 기준」 을
@@ -1809,6 +1830,7 @@ def test_관계의_유효_기간과_기준일이_그대로_건너간다() -> Non
     asyncio.run(server.object_tree(ctx, "part", parent="p1", as_of="2026-03-31"))
     asyncio.run(server.graph_path(ctx, "a", "b", as_of="2026-03-31"))
     asyncio.run(server.graph_neighbors(ctx, "a", as_of="2026-03-31"))
+    asyncio.run(server.graph_reach(ctx, "a", ["uses"], as_of="2026-03-31"))
     asyncio.run(server.object_rollup(ctx, "part", "p1", as_of="2026-03-31"))
     asyncio.run(server.objects_summary(ctx, "part", as_of="2026-03-31"))
     asyncio.run(

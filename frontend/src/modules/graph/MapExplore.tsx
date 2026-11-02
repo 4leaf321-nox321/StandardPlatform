@@ -313,7 +313,11 @@ export function MapExplore({
                 {((layout.moved_p95 ?? 0) * 100).toFixed(1)}%(지도 폭 대비)
               </p>
             )}
-            <p>매일 밤 새 기준정보만 빈자리에 덧붙입니다 — 있던 자리는 움직이지 않습니다.</p>
+            {data?.paused ? (
+              <p className="text-amber-700 dark:text-amber-400">{data.paused}</p>
+            ) : (
+              <p>매일 밤 새 기준정보만 빈자리에 덧붙입니다 — 있던 자리는 움직이지 않습니다.</p>
+            )}
             {data && data.drift.length > 0 && (
               <p className="text-amber-700 dark:text-amber-400">
                 허브 칸 설정이 이 판과 다른 기록 타입이 있습니다({data.drift.join(', ')}) — 다음
@@ -381,13 +385,18 @@ export function MapExplore({
         ) : !data.ready ? (
           <EmptyState
             title="지도 판이 아직 없습니다"
-            hint={
-              data.last_error
-                ? `마지막 지도 작업이 실패했습니다 — ${data.last_error}`
-                : data.job
-                  ? '첫 판을 만드는 중입니다 — 잠시 뒤 다시 엽니다.'
-                  : '처음 판은 워커가 만듭니다(기준정보가 있으면 몇 분 안). 시스템 관리자는 「전체 다시 배치」 로 바로 만듭니다.'
-            }
+            hint={[
+              data.last_error ? `마지막 지도 작업이 실패했습니다 — ${data.last_error}` : null,
+              data.job
+                ? '첫 판을 만드는 중입니다 — 잠시 뒤 다시 엽니다.'
+                : data.paused
+                  ? data.paused
+                  : data.last_error
+                    ? null
+                    : '처음 판은 워커가 만듭니다(기준정보가 있으면 몇 분 안). 시스템 관리자는 「전체 다시 배치」 로 바로 만듭니다.',
+            ]
+              .filter(Boolean)
+              .join(' ')}
           />
         ) : (
           <Suspense

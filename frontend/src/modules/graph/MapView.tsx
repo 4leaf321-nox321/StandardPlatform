@@ -125,6 +125,7 @@ export default function MapView({
 
   const discs = useMemo(() => discsOf(data, on), [data, on])
   const typesOn = useMemo(() => [...on].sort(), [on])
+  const home = useMemo(() => contentBox(data), [data])
 
   // --- 확대 — 화면의 기대 수가 상한 이하면 상자의 점을 받는다 -----------------------------
   const [view, setView] = useState<MapViewport | null>(null)
@@ -493,6 +494,7 @@ export default function MapView({
       exportName="전체 지도"
       map={{
         bbox: data.bbox,
+        home,
         underlay,
         underlayKey: underlay,
         onView,
@@ -517,6 +519,26 @@ function lineLabel(slug: string, label: string, typeLabel: Map<string, string>):
   const owner = slug.slice(4).split('.')[0]
   const name = typeLabel.get(owner)
   return name ? `${name} → ${label}` : label
+}
+
+/**
+ * 처음 화면이 맞출 범위 — 보이는 기준정보와 원반(보는 사람의 반지름). 판의 틀은 기록 타입마다의
+ * 「미지정」 자리를 가장자리에 잡아 두어, 그 자리가 비면 내용보다 넓다(개발 DB — 틀 폭의 58%).
+ */
+function contentBox(data: MapData): number[] | null {
+  let x0 = Infinity
+  let y0 = Infinity
+  let x1 = -Infinity
+  let y1 = -Infinity
+  const take = (x: number, y: number, r: number) => {
+    x0 = Math.min(x0, x - r)
+    y0 = Math.min(y0, y - r)
+    x1 = Math.max(x1, x + r)
+    y1 = Math.max(y1, y + r)
+  }
+  data.masters.x.forEach((x, at) => take(x, data.masters.y[at], 0))
+  data.discs.x.forEach((x, at) => take(x, data.discs.y[at], data.discs.r[at]))
+  return x0 <= x1 ? [x0, y0, x1, y1] : null
 }
 
 function boxOf(points: MapPoints): MapBox {

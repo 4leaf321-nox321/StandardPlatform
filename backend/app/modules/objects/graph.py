@@ -30,7 +30,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Literal
 
-from sqlalchemy import any_, case, false, func, literal, or_, select, text
+from sqlalchemy import and_, any_, case, false, func, literal, not_, or_, select, text
 from sqlalchemy.dialects.postgresql import ARRAY
 from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import Session, aliased
@@ -40,6 +40,7 @@ from app.modules.accounts.models import User
 from app.modules.objects import edges as edge_rule
 from app.modules.objects import refedges, typecounts
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRef, ObjectRelation
+from app.modules.ontology.models import RelationType
 from app.shared.batches import chunks
 from app.shared.permissions import sees_every_department, visible_owner_clause
 
@@ -519,14 +520,24 @@ class Edge:
     """유효 기간(ADR 0039) — 관계만. 그림 · 길이 선마다 기간을 적는다."""
 
 
-def _ends_of(
-    ids: list[uuid.UUID],
-) -> tuple[ColumnElement[uuid.UUID], ColumnElement[uuid.UUID]]:
-    """(내 쪽 끝, 저쪽 끝). 양쪽 다 ids 에 있으면 src 를 내 쪽으로 친다."""
-    rel = ObjectRelation
-    anchor = case((rel.src_object_id.in_(ids), rel.src_object_id), else_=rel.dst_object_id)
-    other = case((rel.src_object_id.in_(ids), rel.dst_object_id), else_=rel.src_object_id)
-    return anchor, other
+Direction = Literal["both", "in", "out"]
+"""이웃을 어느 선으로 — 양쪽 · 들어오는 선(저쪽이 출발) · 나가는 선(저쪽이 도착). 방향 없는
+관계 종류는 어느 쪽으로 보든 잇는다."""
+
+
+def _facing(
+    src: Any, dst: Any, relation: Any, ids: list[uuid.UUID], direction: Direction
+) -> tuple[ColumnElement[bool], ColumnElement[bool]]:
+    """(고르는 조건, 「출발 끝이 내 쪽」) — `case((src_mine, src), else_=dst)` 가 내 쪽 끝이다.
+    양쪽 다 ids 에 있으면 방향이 고른 쪽(양쪽이면 출발)을 내 쪽으로 친다."""
+    if direction == "both":
+        return or_(src.in_(ids), dst.in_(ids)), src.in_(ids)
+    undirected = relation.in_(
+        select(RelationType.slug).where(RelationType.directed.is_(False))
+    )
+    if direction == "out":
+        return or_(src.in_(ids), and_(dst.in_(ids), undirected)), src.in_(ids)
+    return or_(dst.in_(ids), and_(src.in_(ids), undirected)), not_(dst.in_(ids))
 
 
 def neighbor_edges(
@@ -538,6 +549,7 @@ def neighbor_edges(
     at: date | None,
     relations: list[str] | None = None,
     type_ids: list[uuid.UUID] | None = None,
+    direction: Direction = "both",
 ) -> list[Edge]:
     """frontier 의 각 노드에서 **fanout 개까지**의 이웃 관계.
 
@@ -547,9 +559,13 @@ def neighbor_edges(
     if not frontier:
         return []
     rel, obj = ObjectRelation, ObjectInstance
-    anchor, other = _ends_of(frontier)
+    where, src_mine = _facing(
+        rel.src_object_id, rel.dst_object_id, rel.relation, frontier, direction
+    )
+    anchor = case((src_mine, rel.src_object_id), else_=rel.dst_object_id)
+    other = case((src_mine, rel.dst_object_id), else_=rel.src_object_id)
     conditions = [
-        or_(rel.src_object_id.in_(frontier), rel.dst_object_id.in_(frontier)),
+        where,
         obj.deleted_at.is_(None),
         visible_owner_clause(user, obj.owner_workspace_id),
         edge_rule.alive(rel, at),
@@ -753,16 +769,18 @@ def neighbor_link_edges(
     systems: list[str],
     relations: list[str] | None = None,
     type_slugs: list[str] | None = None,
+    direction: Direction = "both",
 ) -> list[Edge]:
     """frontier 의 각 노드에서 fanout 개까지의 링크 — `neighbor_edges` 와 같은 규칙."""
     if not frontier:
         return []
     link = ObjectLink
-    anchor = case((link.src_id.in_(frontier), link.src_id), else_=link.dst_id)
-    other_type = case((link.src_id.in_(frontier), link.dst_type), else_=link.src_type)
-    other_id = case((link.src_id.in_(frontier), link.dst_id), else_=link.src_id)
+    where, src_mine = _facing(link.src_id, link.dst_id, link.relation, frontier, direction)
+    anchor = case((src_mine, link.src_id), else_=link.dst_id)
+    other_type = case((src_mine, link.dst_type), else_=link.src_type)
+    other_id = case((src_mine, link.dst_id), else_=link.src_id)
     conditions = [
-        or_(link.src_id.in_(frontier), link.dst_id.in_(frontier)),
+        where,
         _link_other_visible(user, other_type, other_id, systems),
     ]
     if relations:

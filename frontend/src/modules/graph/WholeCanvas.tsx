@@ -86,6 +86,9 @@ export interface ExtraNodes {
 export interface WholeCanvasMap {
   /** 지도 틀 [x0, y0, x1, y1] — 정규화를 여기에 고정한다. */
   bbox: number[]
+  /** 처음 화면 · 화면 맞춤 · PNG 가 맞출 내용의 범위 [x0, y0, x1, y1]. 틀은 비어 있는 「미지정」
+   * 자리까지 잡아 두어 내용보다 넓다 — 틀에 맞추면 지도가 작게 한쪽으로 섰다. 비우면 틀. */
+  home?: number[] | null
   /** 밑그림(원반 · 밀도) — 카메라가 움직일 때마다 다시 그린다. */
   underlay?: (ctx: CanvasRenderingContext2D, view: MapViewport) => void
   /** 밑그림이 바뀌었다(켠 타입 · 테마) — 값이 바뀌면 다시 그린다. */
@@ -143,6 +146,40 @@ const NEIGHBOR_LABELS = 40
 const MATCH_LABELS = 30
 /** 찾아가기의 배율 — 1 이 전체다. */
 const FOCUS_RATIO = 0.08
+/** 지도의 처음 화면에서 비워 둘 가장자리(px) — 위는 상태 한 줄, 아래는 판 · 풀이(좁으면 세 줄)가
+ * 덮고, 이름표는 점의 오른쪽에 붙는다(오른쪽을 좁게 두면 끝의 이름표가 잘렸다). */
+const HOME_PAD = { top: 44, bottom: 80, left: 24, right: 110 }
+
+/**
+ * 지도의 처음 화면 — 내용(`home`, 없으면 틀)이 가장자리를 뺀 칸에 차게. 정규화는 틀에 고정이라
+ * 배율(`ratio`)의 뜻은 그대로다(1 = 틀 전체 — 주소의 확대 수준이 이것이다).
+ */
+function homeState(renderer: Sigma, map: WholeCanvasMap) {
+  const reset = { x: 0.5, y: 0.5, ratio: 1, angle: 0 }
+  const at = { cameraState: reset }
+  const [x0, y0, x1, y1] = map.home ?? map.bbox
+  const a = renderer.graphToViewport({ x: x0, y: y0 }, at)
+  const b = renderer.graphToViewport({ x: x1, y: y1 }, at)
+  const { width, height } = renderer.getDimensions()
+  const roomWidth = Math.max(width - HOME_PAD.left - HOME_PAD.right, 1)
+  const roomHeight = Math.max(height - HOME_PAD.top - HOME_PAD.bottom, 1)
+  const ratio = Math.min(
+    Math.max(Math.abs(b.x - a.x) / roomWidth, Math.abs(b.y - a.y) / roomHeight, 0.01),
+    4,
+  )
+  const middle = renderer.viewportToFramedGraph({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 }, at)
+  // 내용의 가운데를 화면 가운데가 아니라 칸의 가운데에 — 가장자리가 고르지 않아 그만큼 카메라를 민다.
+  const origin = renderer.viewportToFramedGraph({ x: 0, y: 0 }, at)
+  const step = renderer.viewportToFramedGraph({ x: 1, y: 1 }, at)
+  const right = ((HOME_PAD.left - HOME_PAD.right) / 2) * ratio
+  const down = ((HOME_PAD.top - HOME_PAD.bottom) / 2) * ratio
+  return {
+    x: middle.x - (step.x - origin.x) * right,
+    y: middle.y - (step.y - origin.y) * down,
+    ratio,
+    angle: 0,
+  }
+}
 
 function stamp(): string {
   const now = new Date()
@@ -334,7 +371,6 @@ export default function WholeCanvas(props: WholeCanvasProps) {
     const [x0, y0, x1, y1] = current.bbox
     renderer.setCustomBBox({ x: [x0, x1], y: [y0, y1] })
     const camera = renderer.getCamera()
-    if (kept.current?.key === key) camera.setState(kept.current.state)
     const canvas = renderer.createCanvas('underlay', { beforeLayer: 'edges' })
     const viewport = (): MapViewport => {
       const { width, height } = renderer.getDimensions()
@@ -384,10 +420,12 @@ export default function WholeCanvas(props: WholeCanvasProps) {
       callbacks.current.map?.onView?.(viewport())
     }
     renderer.on('afterRender', draw)
-    camera.on('updated', moved)
     redrawUnderlay.current = draw
-    moved()
+    // 틀에 맞춘 정규화는 sigma 가 처리할 때 선다 — 처리한 뒤에 처음 화면을 잰다.
     renderer.refresh()
+    camera.setState(kept.current?.key === key ? kept.current.state : homeState(renderer, current))
+    camera.on('updated', moved)
+    moved()
     return () => {
       renderer.off('afterRender', draw)
       camera.off('updated', moved)
@@ -582,7 +620,11 @@ export default function WholeCanvas(props: WholeCanvasProps) {
   }, [size.width, size.height])
 
   const fit = useCallback(() => {
-    void rendererRef.current?.getCamera().animatedReset({ duration: 300 })
+    const renderer = rendererRef.current
+    if (!renderer) return
+    const map = callbacks.current.map
+    if (map) void renderer.getCamera().animate(homeState(renderer, map), { duration: 300 })
+    else void renderer.getCamera().animatedReset({ duration: 300 })
   }, [])
   const zoom = useCallback((factor: number) => {
     const camera = rendererRef.current?.getCamera()
@@ -599,7 +641,8 @@ export default function WholeCanvas(props: WholeCanvasProps) {
     if (!renderer) return
     const camera = renderer.getCamera()
     const kept = camera.getState()
-    camera.setState({ x: 0.5, y: 0.5, ratio: 1, angle: 0 })
+    const map = callbacks.current.map
+    camera.setState(map ? homeState(renderer, map) : { x: 0.5, y: 0.5, ratio: 1, angle: 0 })
     renderer.refresh()
     const { width, height } = renderer.getDimensions()
     const canvases = renderer.getCanvases()

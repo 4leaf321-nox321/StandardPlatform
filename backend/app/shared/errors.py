@@ -316,8 +316,26 @@ def register_error_handlers(app: FastAPI) -> None:
 
         from app.config import get_settings
         from app.shared import cut_questions
-        from app.shared.querycap import cancelled
+        from app.shared.querycap import cancelled, temp_exceeded
 
+        if temp_exceeded(exc):
+            # 임시 파일 상한(`READ_TEMP_LIMIT`, ADR 0048) — 디스크를 채우기 전에 끊었다. 503 이
+            # 아닌 까닭은 504 와 같다.
+            limit = get_settings().read_temp_limit
+            logger.warning(
+                "%s %s -> 507 임시 파일 상한(%s)", request.method, request.url.path, limit
+            )
+            return JSONResponse(
+                status_code=507,
+                content=_body(
+                    code("COMMON", 507),
+                    f"이 물음이 서버의 임시 공간 상한({limit})을 넘어 멈췄습니다 — 디스크를 "
+                    "지키려고 끊은 것이고 바뀐 것은 없습니다. 범위를 좁혀(타입 · 조건 · 단계) "
+                    "다시 물어 주세요.",
+                    {"temp_limit": limit},
+                ),
+                headers={REQUEST_ID_HEADER: get_request_id()},
+            )
         if not cancelled(exc):
             return await _unhandled(request, exc)
         seconds = get_settings().read_query_seconds
