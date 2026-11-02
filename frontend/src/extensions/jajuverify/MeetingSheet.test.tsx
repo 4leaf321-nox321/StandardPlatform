@@ -197,6 +197,13 @@ async function open(sheet: Sheet) {
   await waitFor(() => expect(jvApi.pulse).toHaveBeenCalled())
 }
 
+/**
+ * 덮어쓰기 보호의 상자. **역할로 찾으면 표 전체의 접근성 트리를 매번 다시 훑는다** — 회의 표는 칸이 많아 한
+ * 번에 수백 ms 라, 시험을 여럿 함께 돌리면 기본 1초 안에 못 찾고 가끔 떨어졌다(2026-11-03, 밀기 전 점검 세 번에
+ * 두 번). 기다리는 시간만 늘린다 — 찾는 것은 그대로다.
+ */
+const conflictBox = () => screen.findByRole('alert', {}, { timeout: 5000 })
+
 /** 탭이 다시 보였다 — 판 번호를 곧 묻는다(시계를 기다리지 않는다). */
 async function poke() {
   await act(async () => {
@@ -294,7 +301,7 @@ describe('여럿이 함께 — 덮어쓰기 보호 · 자동 반영 · 수정 �
     const cell = screen.getByLabelText('1번 줄 문제점')
     await userEvent.type(cell, '내 수정')
     await userEvent.tab()
-    const box = await screen.findByRole('alert')
+    const box = await conflictBox()
     expect(within(box).getByText(/김철수 님이 먼저 수정했습니다/)).toBeInTheDocument()
     expect(within(box).getByText('남의 글')).toBeInTheDocument()
     expect(within(box).getByText('내 수정')).toBeInTheDocument()
@@ -322,7 +329,7 @@ describe('여럿이 함께 — 덮어쓰기 보호 · 자동 반영 · 수정 �
     const cell = screen.getByLabelText('1번 줄 비고')
     await userEvent.type(cell, '내 글')
     await userEvent.tab()
-    const box = await screen.findByRole('alert')
+    const box = await conflictBox()
     await userEvent.click(within(box).getByRole('button', { name: '상대 글 사용' }))
     expect(cell).toHaveValue('남의 글')
     expect(screen.queryByRole('alert')).toBeNull()
@@ -614,7 +621,7 @@ describe('칸의 사진 — 글 사이에 놓고 크기를 고른다', () => {
     )
     await open(sheetOf([placed(`앞 글\n![](photo:${P1}?w=50)`)]))
     await userEvent.click(screen.getByRole('button', { name: '캡처.png 삭제' }))
-    expect(await screen.findByRole('alert')).toBeInTheDocument()
+    expect(await conflictBox()).toBeInTheDocument()
     expect(attachmentApi.remove).not.toHaveBeenCalled()
   })
 })
