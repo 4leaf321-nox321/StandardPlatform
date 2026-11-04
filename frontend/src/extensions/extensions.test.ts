@@ -62,4 +62,27 @@ describe('extensions', () => {
     expect(missingExtensions(['sample', 'nope'])).toEqual(['nope'])
     expect(enabledExtensions(['nope'])).toEqual([])
   })
+  it('svinput 은 「자주검증 입력」 그룹으로 문제점 · 포스트모텀 · 집계 · 설정을 내고, 설정은 시스템 관리자만 본다', () => {
+    const groups = extensionNavGroups(['svinput'])
+    expect(groups.map((g) => g.title)).toEqual(['자주검증 입력'])
+    expect(groups[0].items.map((i) => [i.label, i.to])).toEqual([
+      ['문제점', '/ext/svinput/issues'],
+      ['포스트모텀', '/ext/svinput/postmortems'],
+      ['집계', '/ext/svinput/dashboard'],
+      ['설정', '/ext/svinput/setup'],
+    ])
+    expect(groups[0].items.at(-1)?.audience).toBe('system_admin')
+    const paths = extensionRoutes().map((r) => r.path)
+    for (const path of [
+      'ext/svinput/issues',
+      'ext/svinput/postmortems',
+      'ext/svinput/postmortems/:reportId',
+      'ext/svinput/issues/:issueId',
+      'ext/svinput/dashboard',
+      'ext/svinput/setup',
+    ]) {
+      expect(paths).toContain(path)
+    }
+  })
+
 })

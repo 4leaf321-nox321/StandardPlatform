@@ -3223,7 +3223,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/CandidatesOut"
+                  "$ref": "#/components/schemas/app__modules__slides__schemas__CandidatesOut"
                 }
               }
             }
@@ -21642,6 +21642,136 @@
           }
         }
       }
+    },
+    "/api/ext/svinput/status": {
+      "get": {
+        "tags": [
+          "ext:svinput"
+        ],
+        "summary": "Status",
+        "description": "설정 상태 — 역할마다 고른 타입 · 칸과 빠진 것, 쓸 준비가 됐나(`ready`).",
+        "operationId": "status_api_ext_svinput_status_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/svinput/candidates": {
+      "get": {
+        "tags": [
+          "ext:svinput"
+        ],
+        "summary": "Candidates",
+        "description": "설정 후보 — 허브 접두(`sv_pm_`)가 맞는 타입과 속성 키. 시스템 관리자.",
+        "operationId": "candidates_api_ext_svinput_candidates_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/app__extensions__svinput__schemas__CandidatesOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/svinput/settings": {
+      "put": {
+        "tags": [
+          "ext:svinput"
+        ],
+        "summary": "Settings",
+        "description": "역할 → 타입 · 칸 저장(보낸 역할만, type=null 이면 비움). 시스템 관리자 — 사람에게\n먼저 묻는다.",
+        "operationId": "settings_api_ext_svinput_settings_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SettingsIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/ext/svinput/reports/{report_id}": {
+      "get": {
+        "tags": [
+          "ext:svinput"
+        ],
+        "summary": "Report Sheet",
+        "description": "포스트모텀 문서 한 장 — 머리 · 문제점 줄(일정 상태 · 하위 기록 수 · 판정 통과/실패) ·\n지표.\n\n문제점 · 하위 기록을 고치려면 코어 객체 API(`PATCH /api/objects/<타입>/<id>`)를 쓴다.",
+        "operationId": "report_sheet_api_ext_svinput_reports__report_id__get",
+        "parameters": [
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Report Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportSheetOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -25338,27 +25468,59 @@
         ],
         "title": "CandidateOut"
       },
-      "CandidatesOut": {
+      "CandidateRelation": {
         "properties": {
-          "items": {
-            "items": {
-              "$ref": "#/components/schemas/CandidateOut"
-            },
-            "type": "array",
-            "title": "Items"
+          "slug": {
+            "type": "string",
+            "title": "Slug"
           },
-          "total": {
-            "type": "integer",
-            "title": "Total"
+          "label": {
+            "type": "string",
+            "title": "Label"
           }
         },
         "type": "object",
         "required": [
-          "items",
-          "total"
+          "slug",
+          "label"
         ],
-        "title": "CandidatesOut",
-        "description": "선택 영역의 후보 — 틀의 조건에 맞는 것."
+        "title": "CandidateRelation"
+      },
+      "CandidateType": {
+        "properties": {
+          "slug": {
+            "type": "string",
+            "title": "Slug"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "usage": {
+            "type": "string",
+            "title": "Usage"
+          },
+          "hub": {
+            "type": "boolean",
+            "title": "Hub"
+          },
+          "properties": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Properties"
+          }
+        },
+        "type": "object",
+        "required": [
+          "slug",
+          "label",
+          "usage",
+          "hub",
+          "properties"
+        ],
+        "title": "CandidateType"
       },
       "CapacityBulkIn": {
         "properties": {
@@ -26486,6 +26648,42 @@
         ],
         "title": "ChangesScanOut",
         "description": "⑩ 값마다 훑기 — 「계절을 빼면 실제로 늘고 있는 증상은?」 늘어난 것부터."
+      },
+      "ChildCounts": {
+        "properties": {
+          "stage_result": {
+            "type": "integer",
+            "title": "Stage Result",
+            "default": 0
+          },
+          "cause": {
+            "type": "integer",
+            "title": "Cause",
+            "default": 0
+          },
+          "prevention": {
+            "type": "integer",
+            "title": "Prevention",
+            "default": 0
+          },
+          "figure": {
+            "type": "integer",
+            "title": "Figure",
+            "default": 0
+          },
+          "passed": {
+            "type": "integer",
+            "title": "Passed",
+            "default": 0
+          },
+          "failed": {
+            "type": "integer",
+            "title": "Failed",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "title": "ChildCounts"
       },
       "CohortCellOut": {
         "properties": {
@@ -33818,6 +34016,72 @@
         ],
         "title": "InterfaceUsageOut",
         "description": "**지우기 전에 무엇이 가리키는지.** 하나라도 있으면 지우지 않는다."
+      },
+      "IssueLine": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "properties": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Properties"
+          },
+          "ref_labels": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "type": "object",
+            "title": "Ref Labels"
+          },
+          "plan_status": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Plan Status"
+          },
+          "counts": {
+            "$ref": "#/components/schemas/ChildCounts"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "key",
+          "status",
+          "properties",
+          "ref_labels",
+          "plan_status",
+          "counts"
+        ],
+        "title": "IssueLine"
       },
       "JobBulkIn": {
         "properties": {
@@ -46177,6 +46441,58 @@
         "title": "RenderOut",
         "description": "미리 보기 — 저장하지 않은 틀을 세운 모습."
       },
+      "ReportSheetOut": {
+        "properties": {
+          "report": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Report"
+          },
+          "report_type_slug": {
+            "type": "string",
+            "title": "Report Type Slug"
+          },
+          "issue_type_slug": {
+            "type": "string",
+            "title": "Issue Type Slug"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/IssueLine"
+            },
+            "type": "array",
+            "title": "Issues"
+          },
+          "total_issues": {
+            "type": "integer",
+            "title": "Total Issues"
+          },
+          "kpis": {
+            "items": {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            "type": "array",
+            "title": "Kpis"
+          },
+          "can_edit": {
+            "type": "boolean",
+            "title": "Can Edit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "report",
+          "report_type_slug",
+          "issue_type_slug",
+          "issues",
+          "total_issues",
+          "kpis",
+          "can_edit"
+        ],
+        "title": "ReportSheetOut",
+        "description": "문서 한 장 — 머리 + 문제점 줄 + 하위 기록 수. 화면이 이슈마다 세 번 묻지 않게 한\n번에."
+      },
       "RequestCaseOut": {
         "properties": {
           "created_at": {
@@ -48280,6 +48596,168 @@
         "type": "object",
         "title": "ReviewUndoRequest"
       },
+      "RoleDef": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "description": {
+            "type": "string",
+            "title": "Description"
+          },
+          "default_type": {
+            "type": "string",
+            "title": "Default Type"
+          },
+          "hub": {
+            "type": "boolean",
+            "title": "Hub",
+            "default": true
+          },
+          "fields": {
+            "items": {
+              "$ref": "#/components/schemas/RoleFieldDef"
+            },
+            "type": "array",
+            "title": "Fields"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "description",
+          "default_type",
+          "fields"
+        ],
+        "title": "RoleDef"
+      },
+      "RoleFieldDef": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "required": {
+            "type": "boolean",
+            "title": "Required"
+          },
+          "default": {
+            "type": "string",
+            "title": "Default"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "required",
+          "default"
+        ],
+        "title": "RoleFieldDef"
+      },
+      "RoleIn": {
+        "properties": {
+          "type": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type"
+          },
+          "fields": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Fields"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "title": "RoleIn"
+      },
+      "RoleState": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "type_slug": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Type Label"
+          },
+          "fields": {
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "type": "object",
+            "title": "Fields"
+          },
+          "missing": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array",
+            "title": "Missing"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "type_slug",
+          "type_label",
+          "fields",
+          "missing"
+        ],
+        "title": "RoleState",
+        "description": "역할 하나의 지금 — 설정값과 그것이 실제로 있는지."
+      },
       "RollupOut": {
         "properties": {
           "property": {
@@ -49729,6 +50207,24 @@
           "started_at"
         ],
         "title": "ServerStatusOut"
+      },
+      "SettingsIn": {
+        "properties": {
+          "roles": {
+            "additionalProperties": {
+              "$ref": "#/components/schemas/RoleIn"
+            },
+            "type": "object",
+            "title": "Roles"
+          }
+        },
+        "additionalProperties": false,
+        "type": "object",
+        "required": [
+          "roles"
+        ],
+        "title": "SettingsIn",
+        "description": "역할 → 타입 · 칸. **모르는 역할은 거절한다** — 조용히 버리면 보낸 쪽은 저장된 줄\n안다."
       },
       "SetupStatusOut": {
         "properties": {
@@ -51585,6 +52081,36 @@
           "by_kind"
         ],
         "title": "StaffSummaryOut"
+      },
+      "StatusOut": {
+        "properties": {
+          "roles": {
+            "items": {
+              "$ref": "#/components/schemas/RoleState"
+            },
+            "type": "array",
+            "title": "Roles"
+          },
+          "ready": {
+            "type": "boolean",
+            "title": "Ready"
+          },
+          "defs": {
+            "items": {
+              "$ref": "#/components/schemas/RoleDef"
+            },
+            "type": "array",
+            "title": "Defs"
+          }
+        },
+        "type": "object",
+        "required": [
+          "roles",
+          "ready",
+          "defs"
+        ],
+        "title": "StatusOut",
+        "description": "화면이 처음 묻는 것 — 쓸 준비가 됐나."
       },
       "StayIn": {
         "properties": {
@@ -54270,6 +54796,34 @@
         "title": "SheetOut",
         "description": "회의 한 장 — 화면이 한 번에 받는다."
       },
+      "app__extensions__svinput__schemas__CandidatesOut": {
+        "properties": {
+          "prefix": {
+            "type": "string",
+            "title": "Prefix"
+          },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateType"
+            },
+            "type": "array",
+            "title": "Types"
+          },
+          "relations": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateRelation"
+            },
+            "type": "array",
+            "title": "Relations"
+          }
+        },
+        "type": "object",
+        "required": [
+          "prefix",
+          "types"
+        ],
+        "title": "CandidatesOut"
+      },
       "app__modules__bundles__routes__RunOut": {
         "properties": {
           "id": {
@@ -55447,6 +56001,28 @@
           "matched_text"
         ],
         "title": "SearchHitOut"
+      },
+      "app__modules__slides__schemas__CandidatesOut": {
+        "properties": {
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CandidateOut"
+            },
+            "type": "array",
+            "title": "Items"
+          },
+          "total": {
+            "type": "integer",
+            "title": "Total"
+          }
+        },
+        "type": "object",
+        "required": [
+          "items",
+          "total"
+        ],
+        "title": "CandidatesOut",
+        "description": "선택 영역의 후보 — 틀의 조건에 맞는 것."
       }
     }
   }

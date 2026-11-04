@@ -26,6 +26,7 @@ from app.extensions.caegroup.models import (
     CaeDtStaff,
 )
 from app.extensions.jajuverify.models import JvGroup, JvMeeting, JvPresence, JvRow
+from app.extensions.svinput.models import SvInputSetting
 from app.modules.accounts.models import User
 from app.modules.audit.models import AccessLog, AuditEntry, CutQuestion, RequestTiming
 from app.modules.auth.models import PersonalAccessToken, PortalLaunchJti, RefreshToken
@@ -156,6 +157,7 @@ __all__ = [
     "Slide",
     "SlideRef",
     "SlideTemplate",
+    "SvInputSetting",
     "User",
     "Webhook",
     "WebhookDelivery",

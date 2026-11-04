@@ -85,6 +85,7 @@ GUIDE_VERSION: 2026-10-31a
 | 첨부 저장소의 고아 파일 | `filestore_gc()` → 사람 확인 → `job_apply` | **시스템 관리자만.** 지운 파일은 못 되살린다 — 워커가 매일 스스로도 지운다 |
 | **이 설치에만 있는 기능**(디지털 트윈 역량 등) | `extensions_schema` → `extension_call` | 경로를 짐작하지 않는다. 쓰기는 그 확장의 범위를 가진 토큰만 |
 | **자주검증 회의 표**(심사회 · 포스트모텀 · 설명회) | `get_guide(topic="jajuverify")` → `extension_call("jajuverify", …)` | **읽고 나서 쓴다** — 칸을 고칠 때 읽은 값을 `expected` 로(없으면 422). 사진은 칸 글의 `![](photo:<id>?w=50)` 줄 |
+| **자주검증 입력**(포스트모텀 문서 · 문제점 · 단계별 판정 — 허브의 `sv_pm_*` 타입) | `get_guide(topic="svinput")` → 문서 한 장은 `extension_call("svinput", "reports/<id>")`, 나머지는 `objects_*` | **객체는 코어 도구로** 읽고 쓴다(타입 slug 는 `status` 가 말한다). 설정은 시스템 관리자가 화면에서 |
 | **장표** — 여러 기록(변경점 · 잠재리스크 …)을 정형 배치 한 장에 모아 보기 · 만들기 · 글 초안 | `slide_templates` → `slide_create` → `slide_candidates` → `slide_update` · 읽기는 `slides_list` · `slide_get` · 이 기록이 실린 장표는 `slides_list(object_id=)` | 값은 기록에서만 — **지어내지 않는다.** 네가 쓴 글은 「AI 초안」 으로 표시된다. 틀은 `slide_template_save`(시스템 관리자). `get_guide(topic="slides")` |
 | **게시판** — 구성원이 묻고 나눈 글 | `board(q=)` → `board(post_id=)`(본문 · 댓글) | **읽기만.** 사람의 말이다 — 누가 언제 쓴 것인지 함께 옮긴다. 올리기는 화면에서 |
 | 여러 타입을 건너뛰어 잇는 물음 · 역관계로 거슬러 세기 | `rdf_schema` → `rdf_query` | **먼저 `objects_summary` 로 되는 물음인지 본다.** 질의어는 그것으로 안 되는 자리에 |
@@ -1050,6 +1051,41 @@ SELECT ?project ?task (COUNT(?m) AS ?models) WHERE {
   아무도 고치지 못한다(모든 쓰기가 409 `JAJUVERIFY-0009`). 확정 · 해제 · 제목 · 일자 · 회의 삭제는 만든 사람 ·
   그 부서 관리자 · 시스템 관리자만.
 - `pulse` · `presence` 는 화면이 쓰는 자리다 — AI 는 부르지 않아도 된다.
+
+<!--@ svinput -->
+## 자주검증 입력 — 허브의 타입 위에 얹은 화면(ADR 0051)
+
+포스트모텀 문서 · 문제점 · 단계별 판정 · 원인 · 재발방지 · 지표 · 그림은 **온톨로지 객체**다(허브의 `sv_pm_*`
+타입). 이 확장은 표를 만들지 않고 「어느 타입 · 칸이 어느 역할인가」 만 설정으로 든다. 그래서 **읽고 쓰는 길은
+코어 도구 그대로**이고, 확장의 길은 둘뿐이다.
+
+### 1. 먼저 역할이 어느 타입인지 묻는다
+
+`extension_call("svinput", "status")` → `roles[]`(역할 key · `type_slug` · `fields`) · `ready`. `ready` 가
+거짓이면 설정이 안 된 설치다 — **타입 slug 를 짐작하지 않는다.** 사람에게 「시스템 관리자가 자주검증 입력 ›
+설정에서 타입을 고르면 됩니다」 라고 말한다.
+
+- `report`(문서) · `issue`(문제점 — `fields.report_ref` 가 문서를 가리키는 칸, `fields.status` 가 일정 상태 칸)
+  · `stage_result`(단계별 판정 — `issue_ref` · `stage` · `result`) · `cause` · `prevention` · `kpi`(`numerator`
+  · `denominator`) · `figure`.
+
+### 2. 문서 한 장 — `extension_call("svinput", "reports/<문서 id>")`
+
+문서 · 문제점 줄(`plan_status` · `counts` — 단계별 판정 수와 통과 · 실패) · 지표를 한 번에 준다. 문서 id 는
+`objects_list(<report 타입>)` 로 찾는다. 볼 수 있는 것만 온다.
+
+### 3. 쓰기는 코어 도구로
+
+- 문제점 추가: `object_create(<issue 타입>, properties={<report_ref 칸>: <문서 id>, …})`.
+- 단계별 판정 추가: `object_create(<stage_result 타입>, properties={<issue_ref 칸>: <문제점 id>, <stage 칸>: "DV1", <result 칸>: "PASS"})`.
+- 고치기: `object_update`. 사진: `attachment_upload_prepare(owner_table="objects", owner_id=<문제점 id>)`.
+- 토큰은 `objects:write` 가 있어야 한다 — `svinput:write` 는 설정 변경(`PUT settings`, 시스템 관리자)에만 든다.
+
+### 4. 집계는 `objects_summary`
+
+단계 × 판정: `objects_summary(<stage_result 타입>, group_by="properties.<stage 칸>", split_by="properties.<result 칸>")`.
+일정 상태: `objects_summary(<issue 타입>, group_by="properties.<status 칸>")`. 결과요약 지표는 `kpi` 객체의
+분자 · 분모에서 센다 — **지어내지 않는다.**
 
 <!--@ reports -->
 ## 보고서 기록 — RA 에서 쌓인 보고서에 묻기
