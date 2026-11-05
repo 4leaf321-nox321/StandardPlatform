@@ -319,7 +319,17 @@ function ManyValues({
 export function groupBySection(
   defs: PropertyDef[],
   view?: SectionView,
-): { name: string; columns: number; collapsed: boolean; defs: PropertyDef[] }[] {
+): {
+  name: string
+  columns: number
+  /**
+   * 열 수를 뷰가 정하지 않았다 — 폼은 1열로 두고, 상세(읽기)는 폭에 맞춰 2 · 3열로 편다.
+   * 상세를 1열로 두면 칸 열일곱이 「이름 / 값」 으로 한 화면을 다 채운다(2026-11-05).
+   */
+  auto: boolean
+  collapsed: boolean
+  defs: PropertyDef[]
+}[] {
   const byName = new Map<string, PropertyDef[]>()
   for (const def of defs) {
     const name = def.section || ''
@@ -341,6 +351,7 @@ export function groupBySection(
     return {
       name,
       columns: spec?.columns ?? 1,
+      auto: spec?.columns === undefined,
       collapsed: spec?.collapsed ?? false,
       defs: byName.get(name) ?? [],
     }

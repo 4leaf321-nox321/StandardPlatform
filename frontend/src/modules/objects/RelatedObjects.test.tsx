@@ -282,3 +282,50 @@ describe('관련 객체의 제안된 관계', () => {
     await waitFor(() => expect(objectApi.relationProposals).toHaveBeenCalledTimes(2))
   })
 })
+
+/**
+ * 상세에서는 **이 객체의 참조 칸이 가리키는 묶음을 접는다** — 그 값은 기본 정보에 링크로 있다.
+ * 저쪽 칸이 이 객체를 가리키는 줄(역방향)과 관계로 이은 줄은 그대로 선다.
+ */
+describe('이 객체의 칸이 가리키는 것', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    objectApi.relationProposals.mockResolvedValue([])
+  })
+
+  const related = [
+    row('f1', '대한민국', {
+      relation: 'ref:country',
+      label: '국가',
+      stored_as: 'field',
+      object_type_slug: 'country',
+      object_type_label: '국가',
+    }),
+    row('f2', 'SM-N120K', {
+      relation: 'ref:base_model',
+      label: '판매 모델',
+      outgoing: false,
+      stored_as: 'field',
+      field_key: 'base_model',
+      object_type_slug: 'sku',
+      object_type_label: '판매 모델',
+    }),
+    row('r1', '힌지 어셈블리', { relation: 'uses', label: '씀' }),
+  ]
+
+  it('접어 두고 몇 건인지 말하며, 펼치면 보인다', async () => {
+    await mount(related, [PLAIN], { foldOwnFields: true })
+    expect(screen.queryByRole('link', { name: '대한민국' })).not.toBeInTheDocument()
+    expect(screen.getByRole('link', { name: 'SM-N120K' })).toBeInTheDocument()
+    expect(screen.getByRole('link', { name: '힌지 어셈블리' })).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('button', { name: /이 객체의 칸이 가리키는 것 1건/ }))
+    expect(screen.getByRole('link', { name: '대한민국' })).toBeInTheDocument()
+  })
+
+  it('접지 않으면(기본) 예전처럼 다 보인다', async () => {
+    await mount(related, [PLAIN])
+    expect(screen.getByRole('link', { name: '대한민국' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /이 객체의 칸이 가리키는 것/ })).toBeNull()
+  })
+})

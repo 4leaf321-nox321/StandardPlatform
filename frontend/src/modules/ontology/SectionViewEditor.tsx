@@ -168,7 +168,9 @@ export function SectionViewEditor({ defs, value, onChange, what }: Props) {
           {/* **여기 없는 묶음도 화면에는 뜬다.** 새 속성을 만들었는데 뷰를 안
               고쳤다고 그 속성이 사라지면, 만든 사람은 저장이 안 된 줄 안다. */}
           <p className="text-muted-foreground text-xs">
-            안 정해도 <b>맨 뒤에 1열로 표시됩니다</b> — 새로 만든 속성이 화면에서 사라지지 않게.
+            안 정해도{' '}
+            <b>맨 뒤에 {what === '상세' ? '화면 폭에 맞춰 2 · 3열로' : '1열로'} 표시됩니다</b> —
+            새로 만든 속성이 화면에서 사라지지 않게.
           </p>
         </div>
       )}

@@ -54,13 +54,16 @@ export function AliasesPanel({
 
   return (
     <section className="space-y-2">
-      <h2 className="flex items-center gap-2 text-base font-semibold">
-        <Tags className="size-4" />
-        다른 이름
-        <span className="text-muted-foreground text-sm font-normal">
+      {/* 설명은 제목 아래 한 줄 — 상세의 좁은 오른쪽 단에서 제목 옆에 두면 제목이 꺾인다. */}
+      <div>
+        <h2 className="flex items-center gap-2 text-base font-semibold">
+          <Tags className="size-4" />
+          다른 이름
+        </h2>
+        <p className="text-muted-foreground text-xs">
           이 이름으로도 찾고, 파일·동기화가 이것으로도 풉니다
-        </span>
-      </h2>
+        </p>
+      </div>
       {error && <ErrorNotice error={error} />}
       <div className="flex flex-wrap items-center gap-2">
         {aliases.map((one) => (

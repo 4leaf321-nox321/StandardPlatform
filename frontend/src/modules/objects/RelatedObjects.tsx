@@ -66,6 +66,12 @@ interface Props {
    * 제안의 끝이 되지 않아 끈다. 기본은 켬.
    */
   proposals?: boolean
+  /**
+   * **이 객체의 참조 칸이 가리키는 묶음은 접어 둔다** — 그 값은 상세의 기본 정보에 링크로 이미 있다.
+   * 안 접으면 시장 서비스 한 건이 칸 다섯(모델 · 국가 · 센터 · 불량 · 부품)을 한 줄짜리 상자 다섯으로
+   * 또 보여, 정작 이 객체를 가리키는 쪽(역방향)이 화면 아래로 밀린다(2026-11-05).
+   */
+  foldOwnFields?: boolean
 }
 
 /** 관계 종류 · 방향 하나의 묶음 — 관계 줄과 그 방향의 열린 제안. */
@@ -90,8 +96,10 @@ export function RelatedObjects({
   allPeriods = false,
   onAllPeriods,
   proposals = true,
+  foldOwnFields = false,
 }: Props) {
   const [adding, setAdding] = useState(false)
+  const [showOwnFields, setShowOwnFields] = useState(false)
   const [editing, setEditing] = useState<RelatedObject | null>(null)
   const [cutting, setCutting] = useState<RelatedObject | null>(null)
   const [rejecting, setRejecting] = useState<RelationProposal | null>(null)
@@ -130,6 +138,17 @@ export function RelatedObjects({
   }
   for (const row of related) groupOf(row.relation, row.outgoing, row.label).rows.push(row)
   for (const one of open) groupOf(one.relation, one.outgoing, one.label).proposals.push(one)
+  /** 이 객체의 참조 칸만으로 이뤄진 묶음 — 제안이 걸려 있으면 접지 않는다(결정할 것이 숨는다). */
+  const ownFieldsOnly = (group: Group) =>
+    group.outgoing &&
+    group.proposals.length === 0 &&
+    group.rows.length > 0 &&
+    group.rows.every((row) => row.stored_as === 'field')
+  const folded = foldOwnFields ? [...groups.values()].filter(ownFieldsOnly) : []
+  const foldedCount = folded.reduce((sum, group) => sum + group.rows.length, 0)
+  const shownGroups = [...groups.entries()].filter(
+    ([, group]) => showOwnFields || !folded.includes(group),
+  )
 
   /** 확정 · 거절 · 철회 뒤 — 제안 목록과 상세(관련 객체)를 다시 읽는다. */
   function decided() {
@@ -213,7 +232,7 @@ export function RelatedObjects({
         />
       ) : (
         <div className="space-y-3">
-          {[...groups.entries()].map(([key, group]) => (
+          {shownGroups.map(([key, group]) => (
             <div key={key} className="rounded-md border">
               <div className="text-muted-foreground flex items-center gap-1.5 border-b px-3 py-1.5 text-xs">
                 {/* **방향을 보여 준다.** 어느 쪽으로 읽는지가 말의 뜻을 바꾼다. */}
@@ -365,6 +384,18 @@ export function RelatedObjects({
               </ul>
             </div>
           ))}
+          {foldedCount > 0 && (
+            <button
+              type="button"
+              className="text-muted-foreground hover:text-foreground text-xs hover:underline"
+              aria-expanded={showOwnFields}
+              onClick={() => setShowOwnFields((shown) => !shown)}
+            >
+              {showOwnFields
+                ? '이 객체의 칸이 가리키는 것 접기'
+                : `이 객체의 칸이 가리키는 것 ${foldedCount}건 — 위 기본 정보에 링크로 있습니다 · 펼치기`}
+            </button>
+          )}
         </div>
       )}
 

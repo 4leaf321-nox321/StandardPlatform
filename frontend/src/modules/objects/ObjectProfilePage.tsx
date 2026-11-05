@@ -176,7 +176,10 @@ function ObjectProfile() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl space-y-6">
+    // **넓게 쓴다.** 768px 한 줄이던 때는 1440 화면의 절반이 비었고, 열세 패널이 같은 무게로
+    // 내리 쌓여 이력 · 첨부까지 세 화면을 내려가야 했다(2026-11-05). 본문(이 객체의 내용과 관계)과
+    // 오른쪽 단(가리키는 기록 · 다른 이름 · 이력 · 첨부)으로 가르고, 관계도는 맨 아래에 전체 폭으로.
+    <div className="mx-auto max-w-screen-2xl space-y-6">
       <PageHeader
         title={row.label}
         description={row.key ? `식별자 ${row.key}` : undefined}
@@ -248,221 +251,241 @@ function ObjectProfile() {
 
       {error && <ErrorNotice error={error} />}
 
-      {managed && (
-        <p className="text-muted-foreground text-sm">
-          {objectType?.managed_by === 'hub' ? '허브' : objectType?.managed_by}가 내려준
-          기준정보입니다 — 값은 허브에서 수정한 뒤 받습니다. 이 설치의 관계(산출 문서 · 참여 등)는
-          여기서 잇습니다.
-        </p>
-      )}
+      <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_22rem] xl:items-start">
+        <div className="min-w-0 space-y-6">
+          {managed && (
+            <p className="text-muted-foreground text-sm">
+              {objectType?.managed_by === 'hub' ? '허브' : objectType?.managed_by}가 내려준
+              기준정보입니다 — 값은 허브에서 수정한 뒤 받습니다. 이 설치의 관계(산출 문서 · 참여
+              등)는 여기서 잇습니다.
+            </p>
+          )}
 
-      <section className="space-y-3 rounded-md border p-4">
-        <div className="flex flex-wrap items-center gap-3 text-sm">
-          <StatusBadge kind="object" value={row.status} />
-          {!isSystem && (
-            <span className="text-muted-foreground">
-              {/* **NULL 은 전역이다.** 빈 칸으로 두면 「부서가 없다」 로 읽힌다. */}
-              {row.owner_workspace_name ?? row.owner_workspace_slug ?? '전역'}
-            </span>
+          <section className="space-y-3 rounded-md border p-4">
+            <div className="flex flex-wrap items-center gap-3 text-sm">
+              <StatusBadge kind="object" value={row.status} />
+              {!isSystem && (
+                <span className="text-muted-foreground">
+                  {/* **NULL 은 전역이다.** 빈 칸으로 두면 「부서가 없다」 로 읽힌다. */}
+                  {row.owner_workspace_name ?? row.owner_workspace_slug ?? '전역'}
+                </span>
+              )}
+              {!isSystem && (
+                <span className="text-muted-foreground">
+                  수정한 때 {shownDateTime(row.updated_at)}
+                </span>
+              )}
+            </div>
+
+            {isSystem ? (
+              <p className="text-muted-foreground text-sm">
+                {row.description || '원 표의 행입니다.'}
+              </p>
+            ) : editing ? (
+              <div className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-label">이름</Label>
+                  <Input
+                    id="edit-label"
+                    value={label}
+                    onChange={(event) => setLabel(event.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="edit-description">설명</Label>
+                  <Textarea
+                    id="edit-description"
+                    rows={2}
+                    value={description}
+                    onChange={(event) => setDescription(event.target.value)}
+                  />
+                </div>
+
+                <PropertyFields
+                  defs={valueDefs}
+                  values={values}
+                  onChange={setValues}
+                  disabled={saving}
+                  view={objectType?.form_view}
+                />
+
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={() => setEditing(false)} disabled={saving}>
+                    취소
+                  </Button>
+                  <Button onClick={save} disabled={saving || !label.trim()}>
+                    저장
+                  </Button>
+                </div>
+              </div>
+            ) : (
+              <ReadOnlyProperties
+                defs={valueDefs}
+                values={row.properties}
+                refLabels={row.ref_labels}
+                note={row.description}
+                view={objectType?.detail_view}
+              />
+            )}
+          </section>
+
+          {isSystem && (
+            <p className="text-muted-foreground text-sm">
+              이 객체는 다른 표(원 표)를 비춥니다. 이름과 내용은 그 표의 화면에서 수정합니다 —
+              여기서는 이것을 가리키는 관계만 봅니다.
+            </p>
           )}
-          {!isSystem && (
-            <span className="text-muted-foreground">수정한 때 {shownDateTime(row.updated_at)}</span>
+
+          {/* **연도를 쓰는 축에서만 나온다.** 없는 것을 있는 척하지 않는다. */}
+          {objectType?.temporal_kind === 'yearly' && (
+            <ObjectYears typeSlug={typeSlug} objectId={objectId} canEdit={profile.data.can_edit} />
           )}
+
+          {/* 롤업 — 트리와 롤업 정의가 있는 타입에서만. 정의가 없으면 빈 목록이라 안 뜬다. */}
+          {objectType?.list_view?.tree?.relation &&
+            (objectType.list_view.rollups?.length ?? 0) > 0 && (
+              <RollupPanel
+                typeSlug={typeSlug}
+                objectId={objectId}
+                reloadKey={profile.data}
+                asOf={asOf}
+              />
+            )}
+
+          {/* BOM 전개 — 관계 트리가 있는 타입에서만. 접어 두고 펼칠 때 센다(큰 BOM 을 열 때마다 세지
+          않게). 기준일은 위 롤업 · 아래 관련 객체와 같은 값이다. */}
+          {explodeKind && (
+            <ExplodePanel
+              typeSlug={typeSlug}
+              objectId={objectId}
+              relationLabel={explodeKind.label}
+              asOf={asOf}
+              onAsOf={setAsOf}
+              periodic={Boolean(explodeKind.effectivity)}
+              typeLabels={typeLabels}
+              reloadKey={relationsChanged}
+            />
+          )}
+
+          {/* 계보 — 계보 관계 종류의 끝에 설 수 있는 타입에서만. 접어 두고 펼칠 때 읽는다. 이 객체를
+          수정하면(개정이 바뀌면 아래가 낡음이 된다) · 관계를 수정하면 다시 읽는다. */}
+          {lineageApplies && (
+            <LineagePanel
+              typeSlug={typeSlug}
+              objectId={objectId}
+              defs={defs}
+              reloadKey={`${row.updated_at}|${relationsChanged}`}
+              onRepinned={profile.reload}
+            />
+          )}
+
+          <RelatedObjects
+            typeSlug={typeSlug}
+            objectId={objectId}
+            objectLabel={row.label}
+            objectTypeSlug={row.type_slug}
+            related={profile.data.related}
+            relationTypes={schema.data?.relation_types ?? []}
+            canEdit={profile.data.can_link ?? profile.data.can_edit}
+            onChanged={() => {
+              profile.reload()
+              setRelationsChanged((count) => count + 1)
+            }}
+            asOf={asOf}
+            onAsOf={setAsOf}
+            allPeriods={allPeriods}
+            onAllPeriods={setAllPeriods}
+            // 원 표를 비추는 타입(부서 · 계정)은 제안의 끝이 되지 않는다(ADR 0042) — 정의를 받기 전에는
+            // 어느 쪽인지 몰라 묻지 않는다(원 표 객체에 물으면 404 가 잠깐 뜬다).
+            proposals={Boolean(objectType) && !isSystem}
+            foldOwnFields
+          />
+
+          {/* 기록 요약 — 이 타입을 기준(축)으로 가진 지표가 있으면(ADR 0022). 없으면 안 그린다. */}
+          {!isSystem && <AxisProfile typeSlug={typeSlug} objectId={objectId} />}
+
+          {/* 비슷한 기록 — 축 태그(참조 칸)가 있는 기록 타입에서만(ADR 0022). */}
+          {objectType?.usage === 'log' && defs.some((one) => one.data_type === 'object_ref') && (
+            <SimilarRecords typeSlug={typeSlug} objectId={objectId} />
+          )}
+
+          {/* **속성이 둘이면 첨부 목록도 둘이다.** 안 가르면 「도면」 칸에
+          「시험성적서」 가 섞여 보이고, 그 목록은 무엇도 말해 주지 못한다. 칸의 첨부는 이 객체의
+          내용이라 본문에 선다. */}
+          {fileDefs.map((def) => (
+            <AttachmentList
+              key={def.key}
+              ownerTable="objects"
+              ownerId={row.id}
+              ownerField={def.key}
+              title={def.label}
+              workspaceSlug={row.owner_workspace_slug}
+              canEdit={profile.data?.can_edit ?? false}
+              accept={def.accept}
+            />
+          ))}
         </div>
 
-        {isSystem ? (
-          <p className="text-muted-foreground text-sm">{row.description || '원 표의 행입니다.'}</p>
-        ) : editing ? (
-          <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-label">이름</Label>
-              <Input
-                id="edit-label"
-                value={label}
-                onChange={(event) => setLabel(event.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="edit-description">설명</Label>
-              <Textarea
-                id="edit-description"
-                rows={2}
-                value={description}
-                onChange={(event) => setDescription(event.target.value)}
-              />
-            </div>
+        {/* 오른쪽 단 — 이 객체 **둘레의** 것. 좁은 화면(xl 아래 — 사이드바 240px 를 빼면 본문이 360px 로 찌그러진다)에서는 본문 아래로 내려간다. */}
+        <aside className="min-w-0 space-y-6" aria-label="둘레">
+          <LogCounts objectId={objectId} counts={profile.data.log_counts ?? []} />
 
-            <PropertyFields
-              defs={valueDefs}
-              values={values}
-              onChange={setValues}
-              disabled={saving}
-              view={objectType?.form_view}
+          {/* 이 객체가 쓰인 장표 — 주제이거나 마지막으로 열었을 때 실렸거나(ADR 0037). 없으면 안 선다. */}
+          <UsedInSlides objectId={objectId} />
+
+          {/* 다른 이름 — 원 표의 객체에는 없다(그 표가 이름을 갖는다). */}
+          {!isSystem && (
+            <AliasesPanel
+              typeSlug={typeSlug}
+              objectId={objectId}
+              aliases={row.aliases ?? []}
+              externalIds={row.external_ids ?? {}}
+              canEdit={profile.data.can_edit}
+              onChanged={profile.reload}
             />
+          )}
 
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setEditing(false)} disabled={saving}>
-                취소
-              </Button>
-              <Button onClick={save} disabled={saving || !label.trim()}>
-                저장
-              </Button>
-            </div>
-          </div>
-        ) : (
-          <ReadOnlyProperties
-            defs={valueDefs}
-            values={row.properties}
-            refLabels={row.ref_labels}
-            note={row.description}
-            view={objectType?.detail_view}
-          />
-        )}
-      </section>
-
-      {isSystem && (
-        <p className="text-muted-foreground text-sm">
-          이 객체는 다른 표(원 표)를 비춥니다. 이름과 내용은 그 표의 화면에서 수정합니다 — 여기서는
-          이것을 가리키는 관계만 봅니다.
-        </p>
-      )}
-
-      {/* **연도를 쓰는 축에서만 나온다.** 없는 것을 있는 척하지 않는다. */}
-      {objectType?.temporal_kind === 'yearly' && (
-        <ObjectYears typeSlug={typeSlug} objectId={objectId} canEdit={profile.data.can_edit} />
-      )}
-
-      {/* 다른 이름 — 원 표의 객체에는 없다(그 표가 이름을 갖는다). */}
-      {!isSystem && (
-        <AliasesPanel
-          typeSlug={typeSlug}
-          objectId={objectId}
-          aliases={row.aliases ?? []}
-          externalIds={row.external_ids ?? {}}
-          canEdit={profile.data.can_edit}
-          onChanged={profile.reload}
-        />
-      )}
-
-      {/* 롤업 — 트리와 롤업 정의가 있는 타입에서만. 정의가 없으면 빈 목록이라 안 뜬다. */}
-      {objectType?.list_view?.tree?.relation && (objectType.list_view.rollups?.length ?? 0) > 0 && (
-        <RollupPanel typeSlug={typeSlug} objectId={objectId} reloadKey={profile.data} asOf={asOf} />
-      )}
-
-      {/* BOM 전개 — 관계 트리가 있는 타입에서만. 접어 두고 펼칠 때 센다(큰 BOM 을 열 때마다 세지
-          않게). 기준일은 위 롤업 · 아래 관련 객체와 같은 값이다. */}
-      {explodeKind && (
-        <ExplodePanel
-          typeSlug={typeSlug}
-          objectId={objectId}
-          relationLabel={explodeKind.label}
-          asOf={asOf}
-          onAsOf={setAsOf}
-          periodic={Boolean(explodeKind.effectivity)}
-          typeLabels={typeLabels}
-          reloadKey={relationsChanged}
-        />
-      )}
-
-      {/* 계보 — 계보 관계 종류의 끝에 설 수 있는 타입에서만. 접어 두고 펼칠 때 읽는다. 이 객체를
-          수정하면(개정이 바뀌면 아래가 낡음이 된다) · 관계를 수정하면 다시 읽는다. */}
-      {lineageApplies && (
-        <LineagePanel
-          typeSlug={typeSlug}
-          objectId={objectId}
-          defs={defs}
-          reloadKey={`${row.updated_at}|${relationsChanged}`}
-          onRepinned={profile.reload}
-        />
-      )}
-
-      <LogCounts objectId={objectId} counts={profile.data.log_counts ?? []} />
-
-      {/* 이 객체가 쓰인 장표 — 주제이거나 마지막으로 열었을 때 실렸거나(ADR 0037). 없으면 안 선다. */}
-      <UsedInSlides objectId={objectId} />
-
-      <RelatedObjects
-        typeSlug={typeSlug}
-        objectId={objectId}
-        objectLabel={row.label}
-        objectTypeSlug={row.type_slug}
-        related={profile.data.related}
-        relationTypes={schema.data?.relation_types ?? []}
-        canEdit={profile.data.can_link ?? profile.data.can_edit}
-        onChanged={() => {
-          profile.reload()
-          setRelationsChanged((count) => count + 1)
-        }}
-        asOf={asOf}
-        onAsOf={setAsOf}
-        allPeriods={allPeriods}
-        onAllPeriods={setAllPeriods}
-        // 원 표를 비추는 타입(부서 · 계정)은 제안의 끝이 되지 않는다(ADR 0042) — 정의를 받기 전에는
-        // 어느 쪽인지 몰라 묻지 않는다(원 표 객체에 물으면 404 가 잠깐 뜬다).
-        proposals={Boolean(objectType) && !isSystem}
-      />
-
-      {/* 기록 요약 — 이 타입을 기준(축)으로 가진 지표가 있으면(ADR 0022). 없으면 안 그린다. */}
-      {!isSystem && <AxisProfile typeSlug={typeSlug} objectId={objectId} />}
-
-      {/* 비슷한 기록 — 축 태그(참조 칸)가 있는 기록 타입에서만(ADR 0022). */}
-      {objectType?.usage === 'log' && defs.some((one) => one.data_type === 'object_ref') && (
-        <SimilarRecords typeSlug={typeSlug} objectId={objectId} />
-      )}
-
-      {/* 상세를 떠나지 않고 보는 관계도 — 관계가 없으면 안 그린다. */}
-      <GraphPanel objectId={objectId} types={colorTypes} groups={colorGroups} asOf={asOf} />
-
-      {/* 이 값이 어디서 왔나 — 상세가 다시 읽힐 때마다 이력도 다시(관계 변경은 updated_at 을
+          {/* 이 값이 어디서 왔나 — 상세가 다시 읽힐 때마다 이력도 다시(관계 변경은 updated_at 을
           안 건드리므로 응답 객체 자체를 키로 쓴다). 원 표의 객체는 이력이 그 표에 있다. */}
-      {!isSystem && (
-        <ObjectHistory
-          typeSlug={typeSlug}
-          objectId={objectId}
-          defs={defs}
-          current={{
-            key: row.key,
-            label: row.label,
-            status: row.status,
-            properties: row.properties,
-            description: row.description,
-            valid_from_year: row.valid_from_year,
-            valid_to_year: row.valid_to_year,
-          }}
-          refLabels={row.ref_labels}
-          canEdit={profile.data.can_edit}
-          onRestored={profile.reload}
-          reloadKey={profile.data}
-        />
-      )}
+          {!isSystem && (
+            <ObjectHistory
+              typeSlug={typeSlug}
+              objectId={objectId}
+              defs={defs}
+              current={{
+                key: row.key,
+                label: row.label,
+                status: row.status,
+                properties: row.properties,
+                description: row.description,
+                valid_from_year: row.valid_from_year,
+                valid_to_year: row.valid_to_year,
+              }}
+              refLabels={row.ref_labels}
+              canEdit={profile.data.can_edit}
+              onRestored={profile.reload}
+              reloadKey={profile.data}
+            />
+          )}
 
-      {/* **속성이 둘이면 첨부 목록도 둘이다.** 안 가르면 「도면」 칸에
-          「시험성적서」 가 섞여 보이고, 그 목록은 무엇도 말해 주지 못한다. */}
-      {fileDefs.map((def) => (
-        <AttachmentList
-          key={def.key}
-          ownerTable="objects"
-          ownerId={row.id}
-          ownerField={def.key}
-          title={def.label}
-          workspaceSlug={row.owner_workspace_slug}
-          canEdit={profile.data?.can_edit ?? false}
-          accept={def.accept}
-        />
-      ))}
+          {/* 속성으로 정해지지 않은 첨부. 자리를 안 나눠 쓰는 경우다. 원 표의 객체에는 없다. */}
+          {!isSystem && (
+            <AttachmentList
+              ownerTable="objects"
+              ownerId={row.id}
+              workspaceSlug={row.owner_workspace_slug}
+              canEdit={profile.data.can_edit}
+              title={fileDefs.length > 0 ? '그 밖의 첨부' : '첨부'}
+              // 칸별 첨부는 위의 목록들이 보인다 — 여기서 또 보이면 같은 파일이 두 번 선다.
+              excludeFields={fileDefs.map((def) => def.key)}
+              compact
+            />
+          )}
+        </aside>
+      </div>
 
-      {/* 속성으로 정해지지 않은 첨부. 자리를 안 나눠 쓰는 경우다. 원 표의 객체에는 없다. */}
-      {!isSystem && (
-        <AttachmentList
-          ownerTable="objects"
-          ownerId={row.id}
-          workspaceSlug={row.owner_workspace_slug}
-          canEdit={profile.data.can_edit}
-          title={fileDefs.length > 0 ? '그 밖의 첨부' : '첨부'}
-          // 칸별 첨부는 위의 목록들이 보인다 — 여기서 또 보이면 같은 파일이 두 번 선다.
-          excludeFields={fileDefs.map((def) => def.key)}
-        />
-      )}
+      {/* 상세를 떠나지 않고 보는 관계도 — 관계가 없으면 안 그린다. 전체 폭이어야 이름이 읽힌다. */}
+      <GraphPanel objectId={objectId} types={colorTypes} groups={colorGroups} asOf={asOf} />
 
       {confirming && (
         <ObjectDeleteDialog
@@ -511,32 +534,25 @@ function ReadOnlyProperties({
             )}
             <dl
               className={
-                group.columns === 3
-                  ? 'grid gap-x-6 gap-y-2 sm:grid-cols-3'
-                  : group.columns === 1
-                    ? 'grid gap-y-2'
-                    : 'grid gap-x-6 gap-y-2 sm:grid-cols-2'
+                // 뷰가 열 수를 안 정했으면 폭에 맞춰 편다 — 정했으면(1열 포함) 그대로 따른다.
+                group.auto
+                  ? 'grid gap-x-8 gap-y-3 sm:grid-cols-2 xl:grid-cols-3'
+                  : group.columns === 3
+                    ? 'grid gap-x-8 gap-y-3 sm:grid-cols-3'
+                    : group.columns === 1
+                      ? 'grid gap-y-3'
+                      : 'grid gap-x-8 gap-y-3 sm:grid-cols-2'
               }
             >
               {group.defs.map((def) => (
-                <div key={def.key}>
+                // 긴 글은 한 줄을 다 쓴다 — 좁은 칸에 갇히면 증상 · 수리 내역이 열 줄로 꺾인다.
+                <div key={def.key} className={def.data_type === 'text_long' ? 'col-span-full' : ''}>
                   <dt className="text-muted-foreground text-xs">
                     {def.label}
                     {def.unit && ` (${def.unit})`}
                   </dt>
-                  <dd className="text-sm break-words">
-                    {def.data_type === 'url' && typeof values[def.key] === 'string' ? (
-                      <a
-                        className="hover:underline"
-                        href={values[def.key] as string}
-                        target="_blank"
-                        rel="noreferrer"
-                      >
-                        {values[def.key] as string}
-                      </a>
-                    ) : (
-                      propertyText(def, values[def.key], refLabels)
-                    )}
+                  <dd className="text-sm break-words whitespace-pre-wrap">
+                    <PropertyValue def={def} value={values[def.key]} refLabels={refLabels} />
                   </dd>
                 </div>
               ))}
@@ -546,4 +562,67 @@ function ReadOnlyProperties({
       )}
     </div>
   )
+}
+
+/** 숫자는 세 자리마다 쉼표 — `1250000` 은 백만인지 천만인지 세어야 읽힌다. 숫자 칸은 모두 단위가 있다. */
+function numberText(value: unknown): string | null {
+  const number = typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN
+  if (value === '' || !Number.isFinite(number)) return null
+  return number.toLocaleString('ko-KR', { maximumFractionDigits: 20 })
+}
+
+/**
+ * 읽기 칸의 값 하나 — **참조 칸은 누르면 그 객체로 간다**(인터페이스를 가리키는 칸이면 상세가 실제
+ * 타입으로 옮긴다, ADR 0006). 예전에는 글자뿐이라 같은 객체를 아래 「관련 객체」 에서 다시 찾아 눌렀다.
+ */
+function PropertyValue({
+  def,
+  value,
+  refLabels,
+}: {
+  def: PropertyDef
+  value: unknown
+  refLabels: Record<string, string>
+}) {
+  if (def.data_type === 'url' && typeof value === 'string' && value) {
+    return (
+      <a className="hover:underline" href={value} target="_blank" rel="noreferrer">
+        {value}
+      </a>
+    )
+  }
+  if (def.data_type === 'object_ref' && def.ref_type_slug) {
+    const ids = (Array.isArray(value) ? value : [value]).filter(
+      (one): one is string => typeof one === 'string' && one !== '',
+    )
+    if (ids.length > 0) {
+      return (
+        <>
+          {ids.map((id, index) => (
+            <span key={id}>
+              {index > 0 && ', '}
+              {refLabels[id] ? (
+                <Link
+                  // 글자와 똑같아 보이면 누를 수 있는 줄 모른다 — 옅은 밑줄로 말한다.
+                  className="decoration-muted-foreground/50 hover:decoration-foreground underline underline-offset-4"
+                  to={`/o/${def.ref_type_slug}/${id}`}
+                >
+                  {refLabels[id]}
+                </Link>
+              ) : (
+                // 못 찾은 객체는 링크를 걸지 않는다 — 누르면 404 다.
+                propertyText(def, id, refLabels)
+              )}
+            </span>
+          ))}
+        </>
+      )
+    }
+  }
+  if (def.data_type === 'number') {
+    const items = Array.isArray(value) ? value : [value]
+    const texts = items.map(numberText)
+    if (items.length > 0 && texts.every((one) => one !== null)) return <>{texts.join(', ')}</>
+  }
+  return <>{propertyText(def, value, refLabels)}</>
 }

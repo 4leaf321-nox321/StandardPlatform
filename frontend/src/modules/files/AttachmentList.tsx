@@ -66,6 +66,11 @@ interface AttachmentListProps {
    * 그 첨부는 「그 밖의」 에 남는다 — 갈 곳이 없어지지 않게.
    */
   excludeFields?: string[]
+  /**
+   * 좁은 단에 끼울 때 — 비었으면 큰 빈 상자 대신 한 줄. 객체 상세의 오른쪽 단이 쓴다(첨부 없는
+   * 객체가 대부분인데, 큰 상자가 단의 절반을 차지했다).
+   */
+  compact?: boolean
 }
 
 /** 고르는 창이 사진만 보이게 — 바인딩 키트의 사진 칸도 같은 값을 쓴다. */
@@ -80,6 +85,7 @@ export function AttachmentList({
   canEdit = false,
   accept,
   excludeFields,
+  compact = false,
 }: AttachmentListProps) {
   const list = useResource(
     () => attachmentApi.list(ownerTable, ownerId, ownerField),
@@ -184,7 +190,12 @@ export function AttachmentList({
 
       <ErrorNotice error={error ?? list.error} />
 
-      {rows.length === 0 ? (
+      {rows.length === 0 && compact ? (
+        <p className="text-muted-foreground rounded-md border border-dashed px-3 py-2 text-xs">
+          {imageOnly ? '사진이 없습니다' : '첨부가 없습니다'}
+          {canEdit && ' — 끌어다 놓거나, 누른 뒤 붙여넣기(Ctrl+V)로도 올립니다.'}
+        </p>
+      ) : rows.length === 0 ? (
         <EmptyState
           title={imageOnly ? '사진이 없습니다' : '첨부가 없습니다'}
           hint={

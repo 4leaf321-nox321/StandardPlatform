@@ -114,7 +114,8 @@ export function GraphPanel({ objectId, types, groups, asOf = '' }: GraphPanelPro
       <GraphCanvas
         nodes={nodes}
         links={links}
-        className="h-[360px]! min-h-0!"
+        // 상세 맨 아래 전체 폭에 선다 — 360 이면 넓어진 폭을 높이가 막아 이름이 그대로 작았다(2026-11-05).
+        className="h-[480px]! min-h-0!"
         exportName="관계도"
         onNodeClick={(id) => {
           if (id === objectId) return
