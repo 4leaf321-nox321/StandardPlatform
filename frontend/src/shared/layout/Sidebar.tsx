@@ -4,52 +4,74 @@
  * 폭을 0으로 만들되 내부 래퍼는 고정폭을 유지한다. 그래야 접힐 때 글자가
  * 찌그러지지 않고 그대로 잘려 나간다.
  *
- * **묶음은 하나씩 접는다.** 타입이 늘면 사이드바가 길어지고, 그때 사람은 자기가 쓰는 묶음을
- * 찾으려고 매번 스크롤한다 — 안 쓰는 묶음을 접어 두면 그 일이 없어진다. 접은 것은 브라우저에
- * 기억한다(사람마다 쓰는 묶음이 다르니 서버가 알 일이 아니다).
+ * **묶음은 기본으로 접혀 있고, 지금 보는 화면이 든 묶음만 펴진다.** 다 펼쳐 두던 때는 타입이
+ * 늘수록 사이드바가 길어져 관리자 화면에서 48줄 · 약 1,900px 이 됐고(2026-11-05), 사람은 자기가
+ * 쓰는 묶음을 찾으려고 매번 스크롤했다. 사람이 편 묶음은 브라우저에 기억한다(사람마다 쓰는 묶음이
+ * 다르니 서버가 알 일이 아니다).
+ *
+ * **맨 위의 「메뉴 찾기」** 는 접힌 묶음까지 뒤진다 — 묶음을 하나씩 펴 가며 찾지 않게. 타입이
+ * 수백 개가 되어도 길이와 상관없이 닿는다.
  */
 
-import { useCallback, useEffect, useState } from 'react'
-import { ChevronRight } from 'lucide-react'
-import { NavLink, useLocation } from 'react-router-dom'
+import { useEffect, useState } from 'react'
+import type { KeyboardEvent } from 'react'
+import { ChevronRight, Search } from 'lucide-react'
+import { NavLink, useLocation, useNavigate } from 'react-router-dom'
 
 import { UNKNOWN_VERSION, systemApi } from '@/shared/api/system'
 import { useAuth } from '@/shared/auth/AuthContext'
 import { isAnyManager, isSystemAdmin } from '@/shared/auth/roles'
 import { APP_NAME, APP_TAGLINE, STORAGE_PREFIX } from '@/shared/branding'
+import { Input } from '@/shared/components/ui/input'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/shared/components/ui/sheet'
 import { useResource } from '@/shared/hooks/useResource'
 import { ontologyApi } from '@/modules/ontology/api'
 import { extensionNavGroups, useEnabledExtensions } from '@/extensions'
-import type { NavGroup } from '@/shared/layout/navigation'
+import type { NavGroup, NavItem } from '@/shared/layout/navigation'
 import { itemHref, visibleGroups } from '@/shared/layout/navigation'
 import { onNavChanged } from '@/shared/layout/navSignal'
 import { cn } from '@/shared/lib/utils'
 
-/** 접어 둔 묶음. **한 서버에 두 플랫폼이 있을 수 있어** 키에 slug 를 붙인다. */
-const STORAGE_KEY = `${STORAGE_PREFIX}.sidebar.folded`
+/** 사람이 편 묶음. **한 서버에 두 플랫폼이 있을 수 있어** 키에 slug 를 붙인다. */
+const STORAGE_KEY = `${STORAGE_PREFIX}.sidebar.opened`
+/**
+ * 다 펼쳐 두던 때의 「접은 묶음」 — 뜻이 거꾸로라 옮기지 않고 지운다. 옮기면 몇 개만 접어 둔
+ * 사람의 사이드바가 다시 다 펼쳐진 긴 목록이 된다.
+ */
+const LEGACY_FOLDED_KEY = `${STORAGE_PREFIX}.sidebar.folded`
 
-function readFolded(): string[] {
+function readOpened(): string[] {
   try {
+    window.localStorage.removeItem(LEGACY_FOLDED_KEY)
     const raw = window.localStorage.getItem(STORAGE_KEY)
     const parsed: unknown = raw ? JSON.parse(raw) : []
     return Array.isArray(parsed)
       ? parsed.filter((one): one is string => typeof one === 'string')
       : []
   } catch {
-    // 사생활 보호 창이나 저장을 막은 브라우저 — 접힘은 편의일 뿐이라 그냥 다 펼친다.
+    // 사생활 보호 창이나 저장을 막은 브라우저 — 펼침은 편의일 뿐이라 이번 화면에서만 기억한다.
     return []
   }
 }
 
-/** 묶음 접기 상태. 제목이 열쇠다 — 동적 묶음은 서버가 준 이름을 쓴다. */
-function useFoldedGroups() {
-  const [folded, setFolded] = useState<string[]>(readFolded)
-  const toggle = useCallback((title: string) => {
-    setFolded((current) => {
-      const next = current.includes(title)
-        ? current.filter((one) => one !== title)
-        : [...current, title]
+/**
+ * 묶음 펼침 상태 — **사람이 편 것**(기억한다)과 **지금 화면이 든 것**(저절로 펴진다)의 합.
+ *
+ * 지금 화면이 든 묶음을 사람이 접으면 그 화면에 있는 동안은 접힌 채다(`shut`) — 다른 묶음의
+ * 화면으로 옮기면 잊는다. 그것을 기억하면 다음에 그 묶음의 화면으로 왔을 때 어디 있는지 안 보인다.
+ */
+function useOpenedGroups(activeKeys: string[]) {
+  const [opened, setOpened] = useState<string[]>(readOpened)
+  const here = activeKeys.join('|')
+  const [shut, setShut] = useState<{ here: string; keys: string[] }>({ here, keys: [] })
+  const shutNow = shut.here === here ? shut.keys : []
+
+  const isOpen = (key: string, hasActive: boolean) =>
+    opened.includes(key) || (hasActive && !shutNow.includes(key))
+
+  function toggle(key: string, open: boolean, hasActive: boolean) {
+    setOpened((current) => {
+      const next = open ? current.filter((one) => one !== key) : [...current, key]
       try {
         window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next))
       } catch {
@@ -57,8 +79,48 @@ function useFoldedGroups() {
       }
       return next
     })
-  }, [])
-  return { folded, toggle }
+    if (open && hasActive) setShut({ here, keys: [...shutNow, key] })
+    if (!open) setShut({ here, keys: shutNow.filter((one) => one !== key) })
+  }
+  return { isOpen, toggle }
+}
+
+/** 묶음의 열쇠 — 제목이 없으면(홈) 접을 것도 없다. */
+function groupKey(group: NavGroup): string | undefined {
+  return group.foldKey ?? group.title
+}
+
+/** 지금 화면이 든 묶음들(상위 묶음 포함)의 열쇠. */
+function activeGroupKeys(groups: NavGroup[], pathname: string, workspaceSlug: string): string[] {
+  return groups.flatMap((group) => {
+    if (!holdsActive(group, pathname, workspaceSlug)) return []
+    const key = groupKey(group)
+    return [
+      ...(key ? [key] : []),
+      ...activeGroupKeys(group.children ?? [], pathname, workspaceSlug),
+    ]
+  })
+}
+
+/** 메뉴 찾기의 한 줄 — 항목과 그것이 든 묶음(같은 이름이 두 묶음에 있을 수 있다: 「설명회」). */
+interface FoundItem {
+  item: NavItem
+  where: string
+}
+
+function flatItems(groups: NavGroup[], trail: string[] = []): FoundItem[] {
+  return groups.flatMap((group) => {
+    const path = group.title ? [...trail, group.title] : trail
+    return [
+      ...group.items.map((item) => ({ item, where: path.join(' › ') })),
+      ...flatItems(group.children ?? [], path),
+    ]
+  })
+}
+
+/** 띄어쓰기 · 대소문자를 안 가린다 — 「시뮬레이션해석」 으로 쳐도 「시뮬레이션 해석」 이 나온다. */
+function squash(text: string): string {
+  return text.replace(/\s+/g, '').toLowerCase()
 }
 
 /** 이 묶음(또는 그 아래)에 **지금 보는 화면**이 있나 — 접었을 때 점을 찍는 근거. */
@@ -79,7 +141,7 @@ function holdsActive(group: NavGroup, pathname: string, workspaceSlug: string): 
 function GroupBlock({
   group,
   depth,
-  folded,
+  isOpen,
   toggle,
   pathname,
   workspaceSlug,
@@ -87,8 +149,8 @@ function GroupBlock({
 }: {
   group: NavGroup
   depth: number
-  folded: string[]
-  toggle: (key: string) => void
+  isOpen: (key: string, hasActive: boolean) => boolean
+  toggle: (key: string, open: boolean, hasActive: boolean) => void
   pathname: string
   workspaceSlug: string
   onNavigate?: () => void
@@ -96,11 +158,11 @@ function GroupBlock({
   // **제목이 있어야 접을 수 있다.** 제목이 없는 묶음은 홈 하나뿐이라 접을 것도 없고,
   // 접는 단추를 둘 자리도 없다.
   const title = group.title
-  const key = group.foldKey ?? title
-  const isFolded = Boolean(key && folded.includes(key))
+  const key = groupKey(group)
   // 접힌 묶음 안에 **지금 보는 화면**이 있으면 점을 찍는다 — 접었다고 「어디 있는지」 를
   // 모르게 두면, 사람은 묶음을 하나씩 펴 가며 찾는다.
   const hasActive = holdsActive(group, pathname, workspaceSlug)
+  const isFolded = Boolean(key && !isOpen(key, hasActive))
   const children = group.children ?? []
   return (
     <div className={cn(depth > 0 && 'mt-2 ml-2 border-l pl-2')}>
@@ -110,7 +172,7 @@ function GroupBlock({
         <button
           type="button"
           aria-expanded={!isFolded}
-          onClick={() => toggle(key)}
+          onClick={() => toggle(key, !isFolded, hasActive)}
           className={cn(
             // **글자 크기는 한 벌이다**(`text-sm` — 항목과 같다). 제목만 작게 두면 한 열에
             // 크기가 둘 섞이고, 단계가 둘이 되면서 그것이 세 줄마다 번갈아 나온다 — 단계는
@@ -177,7 +239,7 @@ function GroupBlock({
               key={child.foldKey ?? child.title}
               group={child}
               depth={depth + 1}
-              folded={folded}
+              isOpen={isOpen}
               toggle={toggle}
               pathname={pathname}
               workspaceSlug={workspaceSlug}
@@ -228,8 +290,44 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
     extensionNavGroups(enabled),
   )
 
-  const { folded, toggle } = useFoldedGroups()
   const { pathname } = useLocation()
+  const navigate = useNavigate()
+  const { isOpen, toggle } = useOpenedGroups(activeGroupKeys(groups, pathname, workspaceSlug))
+
+  // 메뉴 찾기 — 접힌 묶음까지. 고르면(누르거나 Enter) 비운다 — 남겨 두면 사이드바가 찾은 줄만
+  // 보이는 채로 굳어, 다음에 열었을 때 묶음이 사라진 줄 안다.
+  const [query, setQuery] = useState('')
+  const [cursor, setCursor] = useState(0)
+  const needle = squash(query)
+  const found = needle
+    ? flatItems(groups).filter(
+        (one) => squash(one.item.label).includes(needle) || squash(one.where).includes(needle),
+      )
+    : []
+  const at = Math.min(cursor, Math.max(found.length - 1, 0))
+
+  function picked() {
+    setQuery('')
+    setCursor(0)
+    onNavigate?.()
+  }
+
+  function onSearchKey(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key === 'Escape') {
+      setQuery('')
+      setCursor(0)
+    } else if (event.key === 'ArrowDown' && found.length > 0) {
+      event.preventDefault()
+      setCursor((at + 1) % found.length)
+    } else if (event.key === 'ArrowUp' && found.length > 0) {
+      event.preventDefault()
+      setCursor((at - 1 + found.length) % found.length)
+    } else if (event.key === 'Enter' && found[at]) {
+      event.preventDefault()
+      navigate(itemHref(found[at].item, workspaceSlug))
+      picked()
+    }
+  }
 
   return (
     <div className="flex h-full w-60 flex-col">
@@ -262,19 +360,78 @@ function SidebarBody({ workspaceSlug, onNavigate }: Omit<SidebarProps, 'collapse
         </span>
       </div>
 
-      <nav className="flex-1 space-y-5 overflow-y-auto px-2 py-4">
-        {groups.map((group) => (
-          <GroupBlock
-            key={group.foldKey ?? group.title ?? group.items[0]?.label}
-            group={group}
-            depth={0}
-            folded={folded}
-            toggle={toggle}
-            pathname={pathname}
-            workspaceSlug={workspaceSlug}
-            onNavigate={onNavigate}
+      {/* 메뉴 찾기 — 위의 「검색」(객체를 찾는다)과 다른 것이라 이름을 가른다. 목록과 함께
+          넘어가지 않게 그 바깥에 선다. */}
+      <div className="shrink-0 px-2 pt-3">
+        <div className="relative">
+          <Search className="text-muted-foreground pointer-events-none absolute top-1/2 left-2 size-3.5 -translate-y-1/2" />
+          <Input
+            type="search"
+            value={query}
+            placeholder="메뉴 찾기"
+            aria-label="메뉴 찾기"
+            className="h-8 pl-7 text-sm"
+            onChange={(event) => {
+              setQuery(event.target.value)
+              setCursor(0)
+            }}
+            onKeyDown={onSearchKey}
           />
-        ))}
+        </div>
+      </div>
+
+      <nav className="flex-1 space-y-5 overflow-y-auto px-2 py-4">
+        {needle ? (
+          found.length === 0 ? (
+            <p className="text-muted-foreground px-2 text-sm">맞는 메뉴가 없습니다.</p>
+          ) : (
+            <ul className="space-y-0.5" aria-label="찾은 메뉴">
+              {found.map((one, index) => (
+                <li key={`${one.where}/${one.item.label}`}>
+                  <NavLink
+                    to={itemHref(one.item, workspaceSlug)}
+                    end={one.item.end}
+                    onClick={picked}
+                    className={({ isActive }) =>
+                      cn(
+                        'flex items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors',
+                        index === at
+                          ? 'bg-sidebar-accent text-sidebar-accent-foreground'
+                          : 'text-muted-foreground hover:bg-sidebar-accent/60 hover:text-foreground',
+                        isActive && 'font-medium',
+                      )
+                    }
+                  >
+                    <one.item.icon className="size-4 shrink-0" />
+                    {/* 이름과 묶음을 두 줄로 — 한 줄에 두면 「시뮬레이션 …」 둘이 똑같이 잘린다. */}
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">{one.item.label}</span>
+                      {/* 어느 묶음의 것인가 — 같은 이름이 두 묶음에 있을 수 있다(「설명회」). */}
+                      {one.where && (
+                        <span className="text-muted-foreground/80 block truncate text-xs font-normal">
+                          {one.where}
+                        </span>
+                      )}
+                    </span>
+                  </NavLink>
+                </li>
+              ))}
+            </ul>
+          )
+        ) : (
+          groups.map((group) => (
+            <GroupBlock
+              key={group.foldKey ?? group.title ?? group.items[0]?.label}
+              group={group}
+              depth={0}
+              isOpen={isOpen}
+              toggle={toggle}
+              pathname={pathname}
+              workspaceSlug={workspaceSlug}
+              onNavigate={onNavigate}
+            />
+          ))
+        )}
       </nav>
     </div>
   )
