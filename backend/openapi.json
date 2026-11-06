@@ -31593,6 +31593,12 @@
             "title": "Allow Outside Refs",
             "description": "묶음 **밖을 가리키는 참조**를 막지 않는다 — 받는 쪽이 그 타입을 이미 다른 묶음으로 받아 뒀을 때만 켠다",
             "default": false
+          },
+          "definitions_only": {
+            "type": "boolean",
+            "title": "Definitions Only",
+            "description": "**정의만** — 객체 · 관계 · 무덤을 안 싣고 크기 상한도 안 본다. 쌓이기만 하는 기록 타입은 정의만 묶음으로 받고, 행은 코어 API 로 바뀐 것만 받는다",
+            "default": false
           }
         },
         "type": "object",

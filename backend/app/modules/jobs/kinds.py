@@ -403,6 +403,7 @@ def bundle_export(work: Work) -> dict[str, Any]:
         wanted,
         allow_outside_refs=bool(work.params.get("allow_outside_refs")),
         since=since,
+        definitions_only=bool(work.params.get("definitions_only")),
     )
     stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M")
     work.emit(

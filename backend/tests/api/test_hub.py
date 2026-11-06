@@ -10,8 +10,14 @@ import json
 import uuid
 from typing import Any
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select, text
+from sqlalchemy.orm import Session
 
+from app.config import get_settings
+from app.modules.ontology.models import ObjectType
+from app.shared.errors import code
 from tests.api.conftest import Signed, bundle_export, bundle_import, finish_job
 
 
@@ -622,3 +628,134 @@ def test_다시_만든_것과_겹치는_무덤은_안_보낸다(client: TestClie
     # 다시 이은 선의 무덤은 빠졌다.
     assert not [one for one in graves["relations"] if one["src"] == "M-2"], graves
     assert body["counts"]["tombstones"] == 0, body["counts"]
+
+
+#: 바인드 한도(65,535)의 반을 넘는 수 — 관계 질의가 객체 id 를 두 번 넣던 때 실패하던 크기.
+MANY = 33_000
+
+
+def test_객체가_3만_3천_개를_넘어도_내보낸다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """**객체 32,768개부터 묶음 내보내기가 통째로 실패했다**(2026-11-06).
+
+    관계를 찾는 질의가 실을 객체의 id 를 출발 · 도착에 한 번씩 넣어 바인드 변수가 객체 수의
+    두 배였다 — 큰 허브는 쌍둥이에 아무것도 못 내려 줬다. 끊긴 선의 무덤도 끝점을 펼쳐
+    물었다 — 무덤은 쌓이기만 하므로 언젠가 같은 벽에 닿는다. 그래서 둘 다 한도를 넘게 넣는다.
+    """
+    tag = uuid.uuid4().hex[:6]
+    hub = _hub(client, admin, tag)
+    model = db.scalars(select(ObjectType).where(ObjectType.slug == hub["model"])).one()
+    # 화면으로 3만 개를 만들면 시험이 몇 분이다 — 표에 바로 넣는다(내보내기는 표만 읽는다).
+    db.execute(
+        text("""
+            INSERT INTO objects (id, type_id, key, label)
+            SELECT gen_random_uuid(), :type_id, 'X-' || n, '대량 ' || n
+              FROM generate_series(1, :n) AS n
+        """),
+        {"type_id": model.id, "n": MANY},
+    )
+    # 끝이 이미 없는 무덤 — 끝점 66,000개. 내보낼 때는 식별자를 못 만들어 빠진다.
+    db.execute(
+        text("""
+            INSERT INTO object_relation_tombstones (id, src_object_id, dst_object_id, relation)
+            SELECT gen_random_uuid(), gen_random_uuid(), gen_random_uuid(), :relation
+              FROM generate_series(1, :n)
+        """),
+        {"relation": hub["derived"], "n": MANY},
+    )
+    db.commit()
+    try:
+        body = bundle_export(client, admin, hub["group"])
+        # 허브가 넣은 다섯(프로젝트 1 · 과제 2 · 모델 2)과 표에 넣은 것 전부.
+        assert body["counts"]["objects"] == MANY + 5, body["counts"]
+        edges = [
+            (one["src"], one["dst"]) for batch in body["relations"] for one in batch["rows"]
+        ]
+        assert edges == [("M-2", "M-1")]
+        assert body["counts"]["tombstones"] == 0, body["counts"]
+    finally:
+        # 다른 시험이 전체를 훑을 때 느려지지 않게 — 같은 시험 DB 를 함께 쓴다.
+        db.execute(
+            text("DELETE FROM object_relation_tombstones WHERE relation = :relation"),
+            {"relation": hub["derived"]},
+        )
+        db.execute(
+            text("DELETE FROM objects WHERE type_id = :type_id AND key LIKE 'X-%'"),
+            {"type_id": model.id},
+        )
+        db.commit()
+
+
+def test_상한을_넘는_묶음은_읽기_전에_거절하고_갈_길을_말한다(
+    client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """**봉투는 통째로 메모리에서 만든다** — 200만 줄 묶음은 객체를 다 읽기도 전에 워커가
+    10GB 를 넘겨 죽었다(2026-11-06 실측). 세어서 먼저 막고, 어느 타입이 큰지와 코어 API 를
+    말한다. 요청에서 바로 막고(정제 도구가 몇 초 기다리지 않게), 작업 안에서 한 번 더 본다."""
+    tag = uuid.uuid4().hex[:6]
+    hub = _hub(client, admin, tag)  # 객체 다섯 · 관계 하나 — 여섯 줄
+    settings = get_settings()
+
+    monkeypatch.setattr(settings, "bundle_export_max_rows", 5)
+    refused = client.post(
+        "/api/bundles/export", json={"group": hub["group"]}, headers=admin.headers
+    )
+    assert refused.status_code == 409, refused.text
+    error = refused.json()["error"]
+    assert error["code"] == code("BUNDLES", 34)
+    assert "/api/core/" in error["message"], error["message"]
+    assert error["details"]["objects"] == 5 and error["details"]["relations"] == 1, error
+    assert error["details"]["by_type"] == {hub["model"]: 2, hub["task"]: 2, hub["project"]: 1}
+
+    # 맞는 크기면 나간다 — 0 은 「안 본다」.
+    for limit in (6, 0):
+        monkeypatch.setattr(settings, "bundle_export_max_rows", limit)
+        assert bundle_export(client, admin, hub["group"])["counts"]["objects"] == 5
+
+    # 요청 뒤에 커진 묶음은 작업이 막는다 — 워커가 읽다가 죽지 않고, 까닭이 작업에 남는다.
+    monkeypatch.setattr(settings, "bundle_export_max_rows", 6)
+    started = client.post(
+        "/api/bundles/export", json={"group": hub["group"]}, headers=admin.headers
+    )
+    assert started.status_code == 202, started.text
+    monkeypatch.setattr(settings, "bundle_export_max_rows", 5)
+    done = finish_job(client, admin, started.json())
+    assert done["status"] == "failed", done
+    assert "BUNDLE_EXPORT_MAX_ROWS" in str(done.get("error")), done
+
+
+def test_정의만은_상한과_상관없이_나가고_쌍둥이에_타입만_선다(
+    client: TestClient, admin: Signed, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """쌓이기만 하는 기록 타입은 봉투 상한에 닿는다 — **정의만** 묶음으로 받고, 행은 코어 API
+    (쌍둥이는 「형제 Standard Platform (코어)」 데이터 소스)로 바뀐 것만 받는다. 정의 내보내기
+    (`/ontology/export`)는 온톨로지 전부라 허브가 관리하는 묶음으로 서지 않는다."""
+    tag = uuid.uuid4().hex[:6]
+    hub = _hub(client, admin, tag)
+    monkeypatch.setattr(get_settings(), "bundle_export_max_rows", 1)
+
+    started = client.post(
+        "/api/bundles/export",
+        json={"group": hub["group"], "definitions_only": True},
+        headers=admin.headers,
+    )
+    assert started.status_code == 202, started.text
+    done = finish_job(client, admin, started.json())
+    assert done["status"] == "done", done
+    body = client.get(f"/api/jobs/{done['id']}/download", headers=admin.headers).json()
+    assert body["objects"] == [] and body["relations"] == [], body
+    assert body["tombstones"] == {"objects": [], "relations": []}
+    assert body["counts"]["objects"] == 0 and body["counts"]["types"] == 3, body["counts"]
+    assert {one["slug"] for one in body["ontology"]["types"]} == {
+        hub["model"],
+        hub["task"],
+        hub["project"],
+    }
+
+    got = _receive(client, admin, _as_twin(body, tag))
+    assert got["applied"] is True, got
+    twin = _names(tag, "twin")
+    listed = client.get(f"/api/objects/{twin['model']}", headers=admin.headers)
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["items"] == []

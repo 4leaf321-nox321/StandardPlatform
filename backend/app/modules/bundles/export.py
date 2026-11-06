@@ -30,9 +30,10 @@ from collections import Counter
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import select
-from sqlalchemy.orm import Session
+from sqlalchemy import Select, func, select
+from sqlalchemy.orm import Session, aliased
 
+from app.config import get_settings
 from app.modules.objects import aliases, lineage
 from app.modules.objects.bulk import MAX_ROWS, relation_defs
 from app.modules.objects.models import (
@@ -50,6 +51,7 @@ from app.modules.ontology.models import (
     PropertyDef,
     RelationType,
 )
+from app.shared.batches import any_of
 from app.shared.errors import Conflict, NotFound, code
 
 FORMAT = "sp-bundle/1"
@@ -61,8 +63,14 @@ def export_group(
     *,
     allow_outside_refs: bool = False,
     since: datetime | None = None,
+    definitions_only: bool = False,
 ) -> dict[str, Any]:
     """고른 묶음(하나 또는 여럿)을 한 봉투로.
+
+    `definitions_only` 는 **정의만** 싣는다(객체 · 관계 · 무덤 없이, 크기 상한도 안 본다).
+    쌓이기만 하는 기록 타입은 봉투 상한(`check_size`)에 닿는다 — 그 타입은 정의만 묶음으로
+    받고, 행은 코어 API(쌍둥이는 「형제 Standard Platform (코어)」 데이터 소스)로 바뀐 것만
+    받는다.
 
     `allow_outside_refs` 는 **밖을 가리키는 참조를 막지 않는다** — 받는 쪽이 그 타입을 이미
     다른 묶음으로 받아 뒀을 때 쓴다. 기본은 막는다: 없는 타입을 가리키면 받는 쪽에서 묶음
@@ -75,22 +83,8 @@ def export_group(
     wanted = [group_slug] if isinstance(group_slug, str) else list(group_slug)
     if not wanted:
         raise Conflict(code("BUNDLES", 21), "내보낼 사이드바 묶음을 하나는 골라야 합니다.")
-    groups: list[NavGroup] = []
-    for slug in wanted:
-        found = db.scalar(select(NavGroup).where(NavGroup.slug == slug))
-        if found is None:
-            raise NotFound(code("BUNDLES", 20), f"사이드바 묶음을 찾을 수 없습니다: {slug}")
-        groups.append(found)
-    types = list(
-        db.scalars(
-            select(ObjectType)
-            .where(
-                ObjectType.nav_group_id.in_([one.id for one in groups]),
-                ObjectType.kind_class != "system",
-            )
-            .order_by(ObjectType.sort_order, ObjectType.slug)
-        )
-    )
+    groups = groups_of(db, wanted)
+    types = types_in(db, groups)
     if not types:
         raise Conflict(
             code("BUNDLES", 21),
@@ -145,6 +139,21 @@ def export_group(
         "relation_types": relation_types,
     }
 
+    kind_slugs = [one["slug"] for one in relation_types]
+    if definitions_only:
+        return _envelope(
+            wanted,
+            ontology,
+            types,
+            relation_types,
+            objects=[],
+            relations=[],
+            tombstones={"objects": [], "relations": []},
+            warnings=_outside_warning(outside),
+        )
+    # **읽기 전에 센다** — 봉투는 통째로 메모리에서 만든다. 너무 크면 읽다가 워커가 죽는다.
+    check_size(db, types, kind_slugs)
+
     ordered = _ordered(types, defs_of)
     type_of = {one.id: one for one in types}
     rows = list(
@@ -162,12 +171,7 @@ def export_group(
         object_id: [one for one in found if one.kind == aliases.HUMAN]
         for object_id, found in aliases.of(db, [row.id for row in rows]).items()
     }
-    warnings: list[str] = []
-    if outside:
-        warnings.append(
-            "묶음 밖을 가리키는 참조 칸을 그대로 보낸다 — 받는 쪽에 그 타입이 없으면 "
-            "**묶음 전체가** 거절된다: " + ", ".join(outside)
-        )
+    warnings = _outside_warning(outside)
     keyless: Counter[str] = Counter()
 
     by_type: dict[str, list[dict[str, Any]]] = {one.slug: [] for one in types}
@@ -200,10 +204,14 @@ def export_group(
                     }
                 )
 
-    kind_slugs = [one["slug"] for one in relation_types]
     type_by_object = {row.id: type_of[row.type_id].slug for row in rows}
     relations = _relations(
-        db, [one["slug"] for one in relation_types], type_by_object, names, warnings
+        db,
+        kind_slugs,
+        list(type_of),
+        type_by_object,
+        names,
+        warnings,
     )
     # **살아 있는 것과 겹치는 무덤은 빼고 보낸다** — 아래에서 왜 그런지 적는다.
     tombstones = _tombstones(
@@ -226,6 +234,29 @@ def export_group(
         since=since,
     )
 
+    return _envelope(
+        wanted,
+        ontology,
+        types,
+        relation_types,
+        objects=objects,
+        relations=relations,
+        tombstones=tombstones,
+        warnings=warnings,
+    )
+
+
+def _envelope(
+    wanted: list[str],
+    ontology: dict[str, Any],
+    types: list[ObjectType],
+    relation_types: list[dict[str, Any]],
+    *,
+    objects: list[dict[str, Any]],
+    relations: list[dict[str, Any]],
+    tombstones: dict[str, list[dict[str, Any]]],
+    warnings: list[str],
+) -> dict[str, Any]:
     return {
         "format": FORMAT,
         "group": ",".join(wanted),
@@ -238,12 +269,21 @@ def export_group(
         "counts": {
             "types": len(types),
             "relation_types": len(relation_types),
-            "objects": len(rows),
+            "objects": sum(len(one["rows"]) for one in objects),
             "relations": sum(len(one["rows"]) for one in relations),
             "tombstones": len(tombstones["objects"]) + len(tombstones["relations"]),
         },
         "warnings": warnings,
     }
+
+
+def _outside_warning(outside: list[str]) -> list[str]:
+    if not outside:
+        return []
+    return [
+        "묶음 밖을 가리키는 참조 칸을 그대로 보낸다 — 받는 쪽에 그 타입이 없으면 "
+        "**묶음 전체가** 거절된다: " + ", ".join(outside)
+    ]
 
 
 def _tombstones(
@@ -258,7 +298,9 @@ def _tombstones(
     """**사라진 것.** 지운 객체(합쳐진 것은 이긴 쪽의 식별자와 함께)와 끊긴 선.
 
     끝점은 식별자로 — 받는 쪽의 uuid 는 우리 것과 다르다. 끝점까지 정말 사라져 식별자를
-    못 만드는 선은 뺀다(그 객체의 무덤이 이미 그것을 말한다).
+    못 만드는 선은 뺀다(그 객체의 무덤이 이미 그것을 말한다). 이긴 쪽 · 끝점은 **배열
+    하나로** 묻는다(`any_of`) — 무덤은 쌓이기만 해서, `IN` 으로 펼치면 끝점이 65,535개를
+    넘는 날 내보내기가 통째로 실패한다.
 
     ⚠️ **살아 있는 것과 겹치는 무덤은 빼고 보낸다.** 무덤은 식별자 · 세 끝으로만 말하므로,
        같은 식별자를 다시 만들거나 같은 선을 다시 이으면 받는 쪽에서는 옛 무덤과 새것이
@@ -275,7 +317,9 @@ def _tombstones(
     won_ids = {one.merged_into_id for one in gone if one.merged_into_id}
     winners = {
         one.id: one.key or one.label
-        for one in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(won_ids)))
+        for one in db.scalars(
+            select(ObjectInstance).where(any_of(ObjectInstance.id, list(won_ids)))
+        )
     }
     objects = [
         {
@@ -299,7 +343,9 @@ def _tombstones(
         end_ids = {one.src_object_id for one in graves} | {one.dst_object_id for one in graves}
         ends = {
             one.id: one
-            for one in db.scalars(select(ObjectInstance).where(ObjectInstance.id.in_(end_ids)))
+            for one in db.scalars(
+                select(ObjectInstance).where(any_of(ObjectInstance.id, list(end_ids)))
+            )
         }
         for grave in graves:
             start, end = ends.get(grave.src_object_id), ends.get(grave.dst_object_id)
@@ -420,31 +466,133 @@ def _name(raw: Any, names: dict[uuid.UUID, str]) -> str:
         return str(raw)
 
 
+def groups_of(db: Session, wanted: list[str]) -> list[NavGroup]:
+    """적은 사이드바 묶음들 — 하나라도 없으면 그 이름으로 거절한다."""
+    groups: list[NavGroup] = []
+    for slug in wanted:
+        found = db.scalar(select(NavGroup).where(NavGroup.slug == slug))
+        if found is None:
+            raise NotFound(code("BUNDLES", 20), f"사이드바 묶음을 찾을 수 없습니다: {slug}")
+        groups.append(found)
+    return groups
+
+
+def types_in(db: Session, groups: list[NavGroup]) -> list[ObjectType]:
+    """묶음들에 든 타입 — 원 표를 비추는 타입(`system`)은 빼고, 사이드바 차례대로."""
+    return list(
+        db.scalars(
+            select(ObjectType)
+            .where(
+                ObjectType.nav_group_id.in_([one.id for one in groups]),
+                ObjectType.kind_class != "system",
+            )
+            .order_by(ObjectType.sort_order, ObjectType.slug)
+        )
+    )
+
+
+def check_size(db: Session, types: list[ObjectType], kinds: list[str] | None = None) -> None:
+    """**한 봉투에 실을 줄(살아 있는 객체 + 관계)이 상한을 넘으면 읽기 전에 거절한다.**
+
+    봉투는 통째로 메모리에서 만들고, 받는 쪽도 통째로 올려 푼다 — 200만 줄 묶음은 객체를
+    다 읽기도 전에 워커가 10GB 를 넘겨 죽었다(2026-11-06 실측). 그 워커가 쥔 다른 작업까지
+    함께 멈추고, 화면에는 까닭이 안 남는다. 그래서 세는 것(색인만 탄다)으로 먼저 막고, 어느
+    타입이 큰지와 갈 길(코어 API)을 말한다. `kinds` 를 안 주면(요청 경로) 양끝이 묶음 안인
+    선을 종류 가리지 않고 센다 — 작업 안에서 정확히 다시 센다.
+    """
+    limit = get_settings().bundle_export_max_rows
+    if limit <= 0 or not types:
+        return
+    by_type: dict[uuid.UUID, int] = {
+        type_id: count
+        for type_id, count in db.execute(
+            select(ObjectInstance.type_id, func.count())
+            .where(
+                ObjectInstance.type_id.in_([one.id for one in types]),
+                ObjectInstance.deleted_at.is_(None),
+            )
+            .group_by(ObjectInstance.type_id)
+        ).tuples()
+    }
+    objects = sum(by_type.values())
+    edges = 0
+    if kinds is None or kinds:
+        counting = _inside(select(func.count()).select_from(ObjectRelation), list(by_type))
+        if kinds is not None:
+            counting = counting.where(ObjectRelation.relation.in_(kinds))
+        edges = db.scalar(counting) or 0
+    if objects + edges <= limit:
+        return
+    slug_of = {one.id: one.slug for one in types}
+    biggest = sorted(by_type.items(), key=lambda item: -item[1])[:3]
+    raise Conflict(
+        code("BUNDLES", 34),
+        f"묶음이 커서 한 봉투로 내보낼 수 없습니다 — 객체 {objects:,}개 · 관계 {edges:,}개로 "
+        f"상한 {limit:,}줄(BUNDLE_EXPORT_MAX_ROWS)을 넘습니다. 큰 타입: "
+        + ", ".join(f"{slug_of[type_id]} {count:,}개" for type_id, count in biggest)
+        + ". 큰 기록 타입은 코어 API(`GET /api/core/{타입}` — since · cursor 로 바뀐 것만 "
+        "쪽씩)로 받게 하고, 묶음에는 정의와 기준정보만 두세요.",
+        details={
+            "objects": objects,
+            "relations": edges,
+            "limit": limit,
+            "by_type": {slug_of[type_id]: count for type_id, count in biggest},
+        },
+    )
+
+
+def _inside[T: tuple[Any, ...]](statement: Select[T], type_ids: list[uuid.UUID]) -> Select[T]:
+    """선 질의를 **양끝이 그 타입들의 살아 있는 객체인 것**으로 — 끝 객체를 이어 붙여 거른다.
+
+    id 목록으로 거르면 바인드 변수가 객체 수만큼 든다(아래 `_relations` 의 ⚠️).
+    """
+    src = aliased(ObjectInstance)
+    dst = aliased(ObjectInstance)
+    return (
+        statement.join(src, src.id == ObjectRelation.src_object_id)
+        .join(dst, dst.id == ObjectRelation.dst_object_id)
+        .where(
+            src.type_id.in_(type_ids),
+            src.deleted_at.is_(None),
+            dst.type_id.in_(type_ids),
+            dst.deleted_at.is_(None),
+        )
+    )
+
+
 def _relations(
     db: Session,
     kinds: list[str],
+    type_ids: list[uuid.UUID],
     type_by_object: dict[uuid.UUID, str],
     names: dict[uuid.UUID, str],
     warnings: list[str],
 ) -> list[dict[str, Any]]:
-    """내보내는 관계 종류의 줄 — 출발 타입마다. **붙은 속성도 함께 간다.**"""
+    """내보내는 관계 종류의 줄 — 출발 타입마다. **붙은 속성도 함께 간다.**
+
+    ⚠️ **양끝을 객체 id 목록으로 묻지 않는다** — 끝 객체를 이어 붙여 「내보내는 타입 · 안
+       지운 것」 으로 거른다. 예전에는 실을 객체의 id 를 출발 · 도착에 한 번씩 넣어 바인드
+       변수가 객체 수의 두 배였고, **객체 32,768개부터 묶음 내보내기가 통째로 실패했다**
+       (「number of parameters must be between 0 and 65535」, 2026-11-06 — 허브가 쌍둥이에
+       내려주는 길이 막혔다). 이제 바인드는 타입 · 관계 종류 수만큼이다.
+    """
     if not kinds or not names:
         return []
     defs_of = {
         one.slug: relation_defs(db, one)
         for one in db.scalars(select(RelationType).where(RelationType.slug.in_(kinds)))
     }
-    edges = list(
-        db.scalars(
-            select(ObjectRelation)
-            .where(
-                ObjectRelation.relation.in_(kinds),
-                ObjectRelation.src_object_id.in_(list(names)),
-                ObjectRelation.dst_object_id.in_(list(names)),
-            )
+    edges = [
+        edge
+        for edge in db.scalars(
+            _inside(select(ObjectRelation), type_ids)
+            .where(ObjectRelation.relation.in_(kinds))
             .order_by(ObjectRelation.created_at, ObjectRelation.id)
         )
-    )
+        # 객체를 읽은 뒤에 생긴 끝은 뺀다 — 질의마다 그때의 상태를 보므로(READ COMMITTED)
+        # 그 사이 새로 만든 객체의 선이 걸릴 수 있다. 그 객체는 이 봉투에 없어 못 푼다.
+        if edge.src_object_id in names and edge.dst_object_id in names
+    ]
     # 계보 선의 고정과 지금 판정(ADR 0041) — 고정된 선만 묻는다(대부분의 설치는 없다).
     pins = lineage.pin_states(db, [edge.id for edge in edges if edge.pinned_at is not None])
     rows_by_type: dict[str, list[dict[str, Any]]] = {}

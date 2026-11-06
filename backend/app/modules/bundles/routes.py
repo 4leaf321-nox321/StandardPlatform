@@ -14,19 +14,18 @@ from typing import Any
 
 from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.modules.accounts.models import User
+from app.modules.bundles import export as bundle_export
 from app.modules.bundles import undo
 from app.modules.bundles.schemas import BundleIn
 from app.modules.jobs import routes as jobs_routes
 from app.modules.jobs import services as job_services
 from app.modules.jobs.schemas import JobOut
-from app.modules.ontology.models import NavGroup
 from app.shared.auth import current_user, require_system_admin
-from app.shared.errors import Conflict, Forbidden, NotFound, code
+from app.shared.errors import Conflict, Forbidden, code
 
 router = APIRouter(prefix="/bundles", tags=["bundles"])
 
@@ -185,6 +184,11 @@ class ExportRequest(BaseModel):
         description="묶음 **밖을 가리키는 참조**를 막지 않는다 — 받는 쪽이 그 타입을 이미 "
         "다른 묶음으로 받아 뒀을 때만 켠다",
     )
+    definitions_only: bool = Field(
+        default=False,
+        description="**정의만** — 객체 · 관계 · 무덤을 안 싣고 크기 상한도 안 본다. 쌓이기만 "
+        "하는 기록 타입은 정의만 묶음으로 받고, 행은 코어 API 로 바뀐 것만 받는다",
+    )
 
     def wanted(self) -> list[str]:
         """적은 차례대로, 겹치는 것은 한 번만."""
@@ -215,11 +219,11 @@ def export_bundle(
         raise Conflict(
             code("BUNDLES", 21), "내보낼 사이드바 묶음을 하나는 골라야 합니다(group · groups)."
         )
-    for slug in wanted:
-        if db.scalar(select(NavGroup).where(NavGroup.slug == slug)) is None:
-            # 넣는 순간 말한다 — 워커가 돌아서야 「없는 묶음」 이라 하면 정제 도구는 몇 초를
-            # 기다린 뒤에야 듣는다.
-            raise NotFound(code("BUNDLES", 20), f"사이드바 묶음을 찾을 수 없습니다: {slug}")
+    # 넣는 순간 말한다 — 워커가 돌아서야 「없는 묶음」 · 「너무 크다」 라 하면 정제 도구는 몇
+    # 초를 기다린 뒤에야 듣는다. 크기는 작업 안에서 관계 종류까지 맞춰 한 번 더 센다.
+    types = bundle_export.types_in(db, bundle_export.groups_of(db, wanted))
+    if not payload.definitions_only:
+        bundle_export.check_size(db, types)
     job = job_services.enqueue(
         db,
         kind="bundle_export",
@@ -228,6 +232,7 @@ def export_bundle(
             "groups": wanted,
             "allow_outside_refs": payload.allow_outside_refs,
             "since": payload.since,
+            "definitions_only": payload.definitions_only,
         },
         user=user,
         workspace_id=None,
