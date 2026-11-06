@@ -1030,6 +1030,9 @@ def _plan_properties(
                 out.errors.append(
                     f"속성 {name}: accept(사진만 허용)는 파일 속성에만 설정합니다."
                 )
+        if owner_kind == "relation" and one.get("data_type") == "document":
+            # 문서는 객체에 붙는다(문서 표의 열쇠가 객체다) — 관계의 칸이 될 수 없다.
+            out.errors.append(f"속성 {name}: 문서 속성은 관계의 속성이 될 수 없습니다.")
         target = one.get("ref_type_slug")
         if ref_targets is not None and target and target not in ref_targets:
             # **경고만** — 옛 스냅샷을 되돌릴 때 사라진 대상 하나가 복원 전체를 막으면 안 된다.

@@ -25,6 +25,7 @@ import { useObjectOptions } from '@/modules/objects/useObjectOptions'
 import type { Condition, ConditionOp, LinkedField } from '@/modules/objects/api'
 import { CONDITION_MULTI_SEP, objectApi } from '@/modules/objects/api'
 import type { DataType, PropertyDef } from '@/modules/ontology/api'
+import { isDetached } from '@/modules/ontology/kinds'
 import { SearchablePicker } from '@/shared/components/SearchablePicker'
 import { Button } from '@/shared/components/ui/button'
 import { Input } from '@/shared/components/ui/input'
@@ -129,7 +130,7 @@ function fieldsOf(defs: PropertyDef[], linked: LinkedField[], selfType?: string)
         ]
       : []),
     ...defs
-      .filter((def) => def.data_type !== 'file')
+      .filter((def) => !isDetached(def.data_type))
       .map((def) => ({
         key: def.key,
         label: def.label,

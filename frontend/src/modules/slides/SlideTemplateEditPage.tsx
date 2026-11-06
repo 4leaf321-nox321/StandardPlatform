@@ -20,6 +20,7 @@ import { objectApi } from '@/modules/objects/api'
 import type { Condition } from '@/modules/objects/api'
 import { ObjectRefPicker } from '@/modules/objects/PropertyFields'
 import { ontologyApi } from '@/modules/ontology/api'
+import { isDetached } from '@/modules/ontology/kinds'
 import type { ObjectType, PropertyDef } from '@/modules/ontology/api'
 import { blankArea, slideApi } from '@/modules/slides/api'
 import type { AreaDef, Rendered, TemplateBody } from '@/modules/slides/api'
@@ -424,7 +425,7 @@ function AreaEditor({
   const shownFields = [
     ...FIXED_FIELDS,
     ...props
-      .filter((one) => one.data_type !== 'file')
+      .filter((one) => !isDetached(one.data_type))
       .map((one) => ({ key: one.key, label: one.label })),
   ]
 

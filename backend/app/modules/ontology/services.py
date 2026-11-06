@@ -15,6 +15,7 @@ from typing import Any
 
 from app.modules.ontology.models import (
     DATA_TYPES,
+    DETACHED_KINDS,
     PropertyDef,
 )
 from app.shared import system_sources
@@ -298,6 +299,14 @@ def _coerce_one(definition: PropertyDef, raw: Any) -> Any:
         # 일이라 objects 쪽 서비스가 본다 — 이 모듈은 세션을 모른다.
         return raw
 
+    if kind == "document":
+        # 문서 본문은 문서 표에 산다(ADR 0053) — 판과 함께 문서 API 로 저장한다.
+        raise InvalidValue(
+            code("ONTOLOGY", 16),
+            f"{label}: 문서 속성은 문서 API(/documents/{{key}})로 저장합니다. "
+            "properties 에 넣지 않습니다.",
+        )
+
     if kind == "file":
         # 첨부는 `properties` 에 안 들어간다(`attachments.owner_field`). 여기로
         # 값이 왔다는 것은 화면이나 API 사용자가 잘못 알고 있다는 뜻이라,
@@ -391,7 +400,7 @@ def validate_properties(
             raw = definition.default_value
 
         if _is_empty(raw):
-            if definition.required and definition.data_type != "file":
+            if definition.required and definition.data_type not in DETACHED_KINDS:
                 raise InvalidValue(
                     code("ONTOLOGY", 21), f"{definition.label}: 값이 필요합니다."
                 )

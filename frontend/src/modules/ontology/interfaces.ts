@@ -7,6 +7,7 @@
  */
 
 import type { ObjectInterface, PropertyDef } from '@/modules/ontology/api'
+import { isDetached } from '@/modules/ontology/kinds'
 
 export type InterfaceWithProperties = ObjectInterface & { properties: PropertyDef[] }
 
@@ -47,7 +48,7 @@ export function defaultInterfaceColumns(defs: PropertyDef[]): string[] {
     'type',
     'key',
     ...defs
-      .filter((one) => one.data_type !== 'file' && one.data_type !== 'text_long')
+      .filter((one) => !isDetached(one.data_type) && one.data_type !== 'text_long')
       .slice(0, 3)
       .map((one) => `properties.${one.key}`),
   ]

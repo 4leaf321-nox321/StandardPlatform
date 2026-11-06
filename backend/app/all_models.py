@@ -58,6 +58,9 @@ from app.modules.notifications.models import Notification
 from app.modules.objects.models import (
     GraphEdgeSnapshot,
     ObjectAlias,
+    ObjectDocument,
+    ObjectDocumentMention,
+    ObjectDocumentRevision,
     ObjectInstance,
     ObjectLink,
     ObjectRef,
@@ -79,6 +82,7 @@ from app.modules.ontology.models import (
     RelationType,
 )
 from app.modules.review.models import ReviewDecision
+from app.modules.semantic.models import ObjectEmbedding, SemanticMark, SemanticTarget
 from app.modules.server.models import ExtensionState, PlatformProfile
 from app.modules.slides.models import Slide, SlideRef, SlideTemplate
 from app.modules.webhooks.models import Webhook, WebhookDelivery
@@ -131,6 +135,10 @@ __all__ = [
     "NoticeRead",
     "Notification",
     "ObjectAlias",
+    "ObjectDocument",
+    "ObjectDocumentMention",
+    "ObjectDocumentRevision",
+    "ObjectEmbedding",
     "ObjectInstance",
     "ObjectInterface",
     "ObjectLink",
@@ -153,6 +161,8 @@ __all__ = [
     "ReviewDecision",
     "SavedView",
     "SearchMiss",
+    "SemanticMark",
+    "SemanticTarget",
     "Slide",
     "SlideRef",
     "SlideTemplate",

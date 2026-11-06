@@ -81,7 +81,7 @@ from app.modules.objects.models import (
 )
 from app.modules.objects.services import properties_of
 from app.modules.ontology.interfaces import Ends, load_ends
-from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
+from app.modules.ontology.models import DETACHED_KINDS, ObjectType, PropertyDef, RelationType
 from app.modules.workspaces.models import WorkspaceMember
 from app.shared import audit
 from app.shared.errors import NotFound, code
@@ -280,7 +280,9 @@ def revision_of(marks: list[str]) -> str:
 def _shown_defs(db: Session, object_type: ObjectType) -> list[PropertyDef]:
     """나가는 칸 — 첨부(`file`)는 뺀다. 파일은 이 길로 옮길 수 없고, 목록에 이름만 남으면
     받는 쪽은 그 파일이 있는 줄 안다."""
-    return [one for one in properties_of(db, object_type.id) if one.data_type != "file"]
+    return [
+        one for one in properties_of(db, object_type.id) if one.data_type not in DETACHED_KINDS
+    ]
 
 
 def catalog(db: Session, user: User, *, base: str) -> CoreCatalogOut:

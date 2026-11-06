@@ -49,6 +49,7 @@ from app.modules.metrics import services as metrics_services
 from app.modules.notices import routes as notices_routes
 from app.modules.notifications import routes as notifications_routes
 from app.modules.objects import attachments as objects_attachments
+from app.modules.objects import documents as objects_documents
 from app.modules.objects import lineage_review as objects_lineage_review
 from app.modules.objects import misses as objects_misses
 from app.modules.objects import proposal_review as objects_proposal_review
@@ -65,6 +66,7 @@ from app.modules.review import links as review_links
 from app.modules.review import registry as review_registry
 from app.modules.review import routes as review_routes
 from app.modules.search import routes as search_routes
+from app.modules.semantic import routes as semantic_routes
 from app.modules.server import performance as server_performance
 from app.modules.server import routes as server_routes
 from app.modules.server import services as server_services
@@ -117,6 +119,8 @@ def _api_router(settings: Settings) -> APIRouter:
     # 메타모델과 그 객체. **도메인이 아니라 메커니즘이다**(ADR 0005) —
     # 도메인은 여전히 이 저장소에 없고, 여기 정의로 얹힌다.
     router.include_router(ontology_routes.router)
+    # 문서(ADR 0053) — 객체 라우터보다 먼저(`/{type}/{id}/…` 의 넓은 경로에 먹히지 않게).
+    router.include_router(objects_documents.router)
     router.include_router(objects_routes.router)
     # 기록을 미리 세어 둔 값 — 물으면 데이터로 바로 답한다(ADR 0013).
     router.include_router(metrics_routes.router)
@@ -128,6 +132,7 @@ def _api_router(settings: Settings) -> APIRouter:
     # 정의 · 데이터를 RDF/OWL 로 — 추론은 바깥(또는 owlrl)이 한다. 플랫폼이 정본, RDF 는 사본.
     router.include_router(rdf_routes.router)
     router.include_router(search_routes.router)
+    router.include_router(semantic_routes.router)
     router.include_router(server_routes.router)
     # 사람이 판단할 일을 한 곳에서 한꺼번에 — 원래 자리에서 읽어 모은다(ADR 0027).
     router.include_router(review_routes.router)

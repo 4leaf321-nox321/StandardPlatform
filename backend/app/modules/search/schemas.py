@@ -44,6 +44,25 @@ class SearchPostOut(BaseModel):
     """본문에서 그 말이 든 자리 앞뒤 — 왜 걸렸나."""
 
 
+class SearchMeaningOut(BaseModel):
+    """뜻이 가까운 것 하나(ADR 0052) — 글자는 안 겹쳐도 뜻이 가까워 걸린 객체."""
+
+    id: uuid.UUID
+    type_slug: str
+    type_label: str
+    icon: str
+    label: str
+    key: str | None
+    similarity: float
+    """코사인 유사도(0 ~ 1) — 클수록 가깝다."""
+    section: str = ""
+    """문서의 절에서 걸렸으면 그 절의 경로(「3. 결과 › 3.1 모서리 찍힘」, ADR 0054)."""
+    anchor: str = ""
+    """그 절의 제목 id — 상세 주소 뒤에 `#` 로 붙이면 그 절로 간다."""
+    same: int = 0
+    """글이 똑같은 다른 객체의 수 — 하나만 세우고 수로 말한다."""
+
+
 class SearchOut(BaseModel):
     q: str
     total: int
@@ -60,3 +79,9 @@ class SearchOut(BaseModel):
     """제목 · 본문에 그 말이 든 게시판 글, 새 글부터 다섯 — **좁히지 않은 첫 쪽에만.**"""
     posts_total: int = 0
     """그 말이 든 글 전부의 수 — 다섯보다 많으면 「게시판에서 모두 보기」."""
+    meaning: list[SearchMeaningOut] = []
+    """뜻이 가까운 것(ADR 0052) — `meaning=true` 로 물은 첫 쪽에만, 글자로 찾은 줄은 뺀다."""
+    meaning_state: str = ""
+    """ready · off(켠 타입이 없거나 끔) · unavailable(Ollama 에 못 닿음).
+
+    안 물었으면 빈 글자."""

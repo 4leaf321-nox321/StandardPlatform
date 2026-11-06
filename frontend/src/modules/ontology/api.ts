@@ -20,6 +20,8 @@ export type DataType =
   | 'url'
   | 'object_ref'
   | 'file'
+  | 'document'
+
 
 export interface PropertyDef {
   id: string

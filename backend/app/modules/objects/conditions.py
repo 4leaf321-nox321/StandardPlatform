@@ -86,7 +86,7 @@ from app.modules.objects import axes, graph, lineage, paths
 from app.modules.objects.models import ObjectInstance, ObjectRef
 from app.modules.objects.services import like_escape
 from app.modules.ontology import conversion
-from app.modules.ontology.models import PropertyDef
+from app.modules.ontology.models import DETACHED_KINDS, PropertyDef
 from app.modules.ontology.services import InvalidValue
 from app.shared.errors import AppError, code
 
@@ -135,6 +135,11 @@ class Condition:
     edge: int = 0
     """0 이면 묶지 않음. 1 이상이면 그 번호의 **같은 관계 묶음** — 같은 번호의 조건은 같은 선
     하나에서 함께 맞아야 걸린다(ADR 0043)."""
+
+
+def _detached(definition: PropertyDef) -> str:
+    """값이 속성 칸에 없는 칸(파일 · 문서)은 조건으로 걸 수 없다 — 그 말."""
+    return "파일 칸은 못 겁니다." if definition.data_type == "file" else "문서 칸은 못 겁니다."
 
 
 def ops_for(data_type: str) -> tuple[str, ...]:
@@ -567,8 +572,8 @@ def _one(
     definition = by_key.get(condition.field)
     if condition.field not in FIXED_FIELDS and definition is None:
         raise InvalidValue(code("OBJECTS", 73), f"없는 칸입니다: {condition.field}")
-    if definition is not None and definition.data_type == "file":
-        raise InvalidValue(code("OBJECTS", 73), f"{definition.label}: 파일 칸은 못 겁니다.")
+    if definition is not None and definition.data_type in DETACHED_KINDS:
+        raise InvalidValue(code("OBJECTS", 73), f"{definition.label}: {_detached(definition)}")
     return clause(condition, definition, subtree_of=resolver.subtree_of if resolver else None)
 
 
@@ -736,8 +741,10 @@ def _chain_clause(
             )
     elif chain.edge:
         require_edge_usable(chain)
-    elif chain.definition is not None and chain.definition.data_type == "file":
-        raise InvalidValue(code("OBJECTS", 73), f"{chain.label}: 파일 칸은 못 겁니다.")
+    elif chain.definition is not None and chain.definition.data_type in DETACHED_KINDS:
+        raise InvalidValue(
+            code("OBJECTS", 73), f"{chain.label}: {_detached(chain.definition)}"
+        )
 
     walked = walk(
         chain.hops[from_depth:],
@@ -993,8 +1000,10 @@ def _bound_clause(
                 _other_match(chain, resolver, condition.op, condition.value, walked.edges)
             )
         else:
-            if chain.definition is not None and chain.definition.data_type == "file":
-                raise InvalidValue(code("OBJECTS", 73), f"{chain.label}: 파일 칸은 못 겁니다.")
+            if chain.definition is not None and chain.definition.data_type in DETACHED_KINDS:
+                raise InvalidValue(
+                    code("OBJECTS", 73), f"{chain.label}: {_detached(chain.definition)}"
+                )
             assert walked.target is not None
             parts.append(
                 clause(

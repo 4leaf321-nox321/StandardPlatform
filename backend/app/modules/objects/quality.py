@@ -29,7 +29,7 @@ from app.modules.accounts.models import User
 from app.modules.objects import aliases, system
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRef, ObjectRelation
 from app.modules.ontology import interfaces
-from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
+from app.modules.ontology.models import DETACHED_KINDS, ObjectType, PropertyDef, RelationType
 from app.shared import extensions
 from app.shared.batches import chunks
 from app.shared.permissions import is_any_manager, visible_owner_clause
@@ -122,7 +122,7 @@ def _missing_required(
     이 검사는 값을 정규화하지 않으니 옮길 수 있었다. 전량을 파이썬으로 읽던 때는 객체가
     몇십만이 되면 홈 「남은 일」 이 이것 하나 때문에 멎었다.
     """
-    required = [d for d in defs if d.required and d.data_type != "file"]
+    required = [d for d in defs if d.required and d.data_type not in DETACHED_KINDS]
     if not required:
         return None
     blank = or_(

@@ -57,7 +57,7 @@ from app.modules.objects.models import (
 )
 from app.modules.objects.scope import find as find_scope
 from app.modules.ontology import interfaces
-from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
+from app.modules.ontology.models import DETACHED_KINDS, ObjectType, PropertyDef, RelationType
 from app.shared.permissions import visible_owner_clause
 
 #: 크기를 어림할 때 훑는 몫의 역수 — id 가 이 몫 안인 행만 센다(0.1%).
@@ -560,7 +560,7 @@ def _count(
     projected: set[str],
 ) -> TypeFill:
     """한 타입을 **질의 하나로** 센다 — 크면 표본에서."""
-    fields = [one for one in defs if one.data_type != "file"]
+    fields = [one for one in defs if one.data_type not in DETACHED_KINDS]
     required = [one for one in fields if one.required]
     ref_keys = [
         one.key

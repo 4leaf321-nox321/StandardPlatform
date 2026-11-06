@@ -413,6 +413,14 @@ export interface HistoryEntry {
   snapshot: Snapshot | null
   /** 일괄 수정으로 **같이 바뀐** 기록이면 그 묶음. 한 번에 되돌리는 입구다. */
   batch?: { id: string; field_label: string; size: number } | null
+  /** 문서를 고친 기록(ADR 0053) — 값이 아니라 판이라 그 시점의 값이 없다. */
+  document?: {
+    key: string
+    revision: number
+    chars: number
+    via: string
+    note: string
+  } | null
 }
 
 /** 조건 하나 — `f.<칸>.<연산>=<값>`. 칸 안에서는 `in` 으로 OR, 칸끼리는 AND. */

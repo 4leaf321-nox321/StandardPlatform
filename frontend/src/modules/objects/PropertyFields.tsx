@@ -471,7 +471,12 @@ export function PropertyFields({ defs, values, onChange, disabled, view, files }
                   {def.required && <span className="text-destructive ml-1">*</span>}
                 </Label>
 
-                {def.data_type === 'file' ? (
+                {def.data_type === 'document' ? (
+                  /* 문서는 판과 함께 따로 담긴다(ADR 0053) — 상세의 문서 칸에서 작성한다. */
+                  <p className="text-muted-foreground text-sm">
+                    저장한 뒤 상세 화면의 「{def.label}」 에서 작성합니다.
+                  </p>
+                ) : def.data_type === 'file' ? (
                   files ? (
                     /* 생성 화면 — 골라 두면 객체를 만든 뒤 올린다. */
                     <FilePick

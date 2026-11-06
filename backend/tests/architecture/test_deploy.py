@@ -652,8 +652,9 @@ def test_pg_tune_은_보여_주기만이_기본이고_바꾸면_재시작할_것
 #
 # pgvector 는 superuser 만 만든다 — 배포가 마이그레이션 앞에서 postgres 계정으로 만든다. 대기
 # 서버는 만들 수 없고(이중화의 갱신은 B 먼저), 폐쇄망은 번들의 .deb 로 깐다. Ollama · 모델은
-# 서버에 하나다. **이 판은 갖추기만 한다** — 쓰는 표가 아직 없어, 어느 것도 못 갖춰도 갱신은
-# 끝난다(운영의 갱신은 사람이 아니라 스크립트가 돌린다 — 묻거나 멈추면 거기서 선다).
+# 서버에 하나다. **pgvector 는 뜻으로 찾기의 표(ADR 0052)가 쓴다** — 못 갖추면 마이그레이션
+# 앞에서 멈춘다(갱신은 서비스를 내리기 전 — 옛 판이 그대로 돈다). Ollama · 모델은 못 갖춰도
+# 갱신이 끝난다(앱은 모델 없이도 돌고 서버 화면이 말한다 — 운영의 갱신은 스크립트가 돌린다).
 
 
 def _vector_sql(text: str) -> str:
@@ -775,7 +776,7 @@ def test_apt_는_묻지_않고_다른_서비스를_다시_띄우지_않는다(tm
 
 @_no_bash
 def test_번들도_저장소도_없으면_할_일을_말하고_실패를_알린다(tmp_path: Path) -> None:
-    """알리기만 한다 — 갱신은 `ensure_vector || warn` 로 이어 간다."""
+    """할 일을 말하고 1 — 갱신 · 설치는 `require_vector` 가 거기서 멈춘다."""
     done, calls = _ensure_vector(tmp_path, package=False, apt_ok=False)
     assert done.returncode != 0
     assert "apt-get download postgresql-16-pgvector" in done.stderr
@@ -803,31 +804,59 @@ def test_대기_서버는_패키지만_깔고_확장은_주의_갱신에_맡긴�
 
 @_no_bash
 def test_PostgreSQL_에_못_붙으면_거기서_할_일을_말한다(tmp_path: Path) -> None:
-    """DB 가 다른 서버 — 그 서버에서 칠 한 줄을 준다."""
+    """DB 가 다른 서버 — 그 서버에서 칠 한 줄을 주고 2(「이 서버에서는 모른다」 — 있는지는
+    마이그레이션이 본다)."""
     done, calls = _ensure_vector(tmp_path, version=None)
-    assert done.returncode != 0
+    assert done.returncode == 2
     assert "CREATE EXTENSION IF NOT EXISTS vector SCHEMA extensions" in done.stderr
     assert not any(one.startswith(("apt-get", "dpkg")) for one in calls)
 
 
-def test_갱신은_pgvector_를_못_갖춰도_멈추지_않는다() -> None:
-    """이 판에는 확장을 쓰는 표가 없다 — 운영의 갱신은 스크립트가 돌리므로 멈추면 거기서 선다.
-    마이그레이션 앞 · update 는 서비스를 내리기 전(패키지를 받는 동안 서비스가 서 있다)."""
+def test_갱신은_pgvector_를_못_갖추면_내리기_전에_멈춘다() -> None:
+    """뜻으로 찾기의 표(ADR 0052)가 확장을 쓴다 — 내린 뒤 마이그레이션에서 멈추면 서비스가 꺼진
+    채 남는다. 그래서 update 는 서비스를 **내리기 전에**, install · reset 은 마이그레이션
+    앞에서
+    `require_vector`(못 갖추면 멈춤). prepare 는 경고하고 이어 간다(뒤의 apptainer)."""
     text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
     update = _piece(text, "cmd_update")
-    assert update.index("ensure_vector") < update.index('systemctl stop "$SERVICE_NAME"')
+    assert update.index("require_vector") < update.index('systemctl stop "$SERVICE_NAME"')
     for command in ("cmd_install", "cmd_reset"):
         body = _piece(text, command)
-        assert body.index("ensure_vector") < body.index("run_migrations"), command
-    for command in ("cmd_install", "cmd_update", "cmd_reset", "cmd_prepare"):
-        body = _piece(text, command)
-        assert body.count('ensure_vector || warn "') == 1, command
+        assert body.index("require_vector") < body.index("run_migrations"), command
+    for command in ("cmd_install", "cmd_update", "cmd_reset"):
+        assert "ensure_vector ||" not in _piece(text, command), command
     prepare = _piece(text, "cmd_prepare")
+    assert prepare.count('ensure_vector || warn "') == 1
     standby = prepare[: prepare.index("        ensure_apptainer\n")]
     assert 'ensure_vector_package "$PG_VERSION" || true' in standby
     # 따로 부를 때는 실패가 실패다.
     assert '    pgvector)       ensure_vector || err "' in text
-    assert not list((REPO / "backend" / "migrations" / "versions").glob("*pgvector*"))
+
+
+@_no_bash
+@pytest.mark.parametrize(
+    ("rc", "stops", "said"),
+    [(0, False, ""), (1, True, "멈춥니다"), (2, False, "확인하지 못했습니다")],
+)
+def test_require_vector_는_못_갖추면_멈추고_모르면_마이그레이션에_맡긴다(
+    rc: int, stops: bool, said: str
+) -> None:
+    text = (DEPLOY / "deploy.sh").read_text(encoding="utf-8")
+    pieces = [_piece(text, name) for name in ("err", "info", "warn", "require_vector")]
+    script = (
+        "set -euo pipefail\n"
+        + "\n".join(pieces)
+        + f"\nensure_vector() {{ return {rc}; }}\nrequire_vector\necho 이어감\n"
+    )
+    done = subprocess.run(
+        [shutil.which("bash") or "bash", "-c", script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert (done.returncode != 0) is stops, done.stderr
+    assert ("이어감" in done.stdout) is not stops
+    assert said in done.stderr
 
 
 def test_번들이_pgvector_deb_를_우분투_판으로_동봉한다() -> None:

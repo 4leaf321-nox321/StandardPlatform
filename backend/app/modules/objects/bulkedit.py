@@ -398,7 +398,7 @@ def selectable(object_type: ObjectType, defs: list[PropertyDef]) -> list[dict[st
     out.extend(
         {"field": f"properties.{one.key}", "label": one.label}
         for one in defs
-        if one.data_type not in ("file", "text_long")
+        if one.data_type not in ("file", "text_long", "document")
     )
     return out
 

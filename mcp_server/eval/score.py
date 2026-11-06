@@ -57,6 +57,7 @@ from typing import Any
 WRITE_TOOLS = {
     "object_create",
     "object_update",
+    "document_write",
     "objects_import",
     "relation_add",
     "relations_import",

@@ -54,6 +54,7 @@ KIND_LABELS = {
     "url": "주소",
     "object_ref": "객체 참조",
     "file": "파일",
+    "document": "문서(마크다운)",
 }
 
 #: 「유일」 을 둘 수 있는 종류 — 화면의 속성 창과 같다.
@@ -251,6 +252,9 @@ def unsupported(before: str, after: str) -> str | None:
         return f"이미 {kind_label(after)} 입니다."
     if "file" in (before, after):
         return "파일 속성은 값이 첨부라 종류를 바꾸지 않습니다."
+    if "document" in (before, after):
+        # 문서는 본문이 문서 표에 판과 함께 산다 — 칸의 값을 옮기는 종류 변경으로는 못 만든다.
+        return "문서 속성은 본문이 문서 표에 있어 종류를 바꾸지 않습니다."
     linkable = " · ".join(kind_label(one) for one in conversion.LINKABLE)
     if after == "object_ref":
         # 있는 축에 잇는다(ADR 0009) — 선택을 **새** 코드표로 만드는 것은 코드표 승격이다.

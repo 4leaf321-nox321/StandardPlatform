@@ -7522,6 +7522,331 @@
         }
       }
     },
+    "/api/objects/{type_slug}/{object_id}/documents/{key}": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Get Document",
+        "description": "지금 본문 — 아직 안 썼으면 빈 문서(판 0).",
+        "operationId": "get_document_api_objects__type_slug___object_id__documents__key__get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Put Document",
+        "description": "본문을 통째로 바꾼다 — 판이 하나 오르고 그 판이 남는다. 그사이 누가 먼저 고쳤으면 409\n(`details.revision` 이 지금 판). 본문이 그대로면 판을 올리지 않는다.",
+        "operationId": "put_document_api_objects__type_slug___object_id__documents__key__put",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DocumentPutIn"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/{object_id}/documents/{key}/revisions": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "List Revisions",
+        "description": "판 목록 — 새 판부터. 본문은 싣지 않는다(판 하나를 열 때 받는다).",
+        "operationId": "list_revisions_api_objects__type_slug___object_id__documents__key__revisions_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentRevisionOut"
+                  },
+                  "title": "Response List Revisions Api Objects  Type Slug   Object Id  Documents  Key  Revisions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/{object_id}/documents/{key}/revisions/{revision}": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Get Revision",
+        "operationId": "get_revision_api_objects__type_slug___object_id__documents__key__revisions__revision__get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          },
+          {
+            "name": "key",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Key"
+            }
+          },
+          {
+            "name": "revision",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "title": "Revision"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentRevisionBodyOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/objects/{type_slug}/{object_id}/mentions": {
+      "get": {
+        "tags": [
+          "objects"
+        ],
+        "summary": "Mentions",
+        "description": "이 객체를 언급한 문서 — **볼 수 있는 것만**, 이름 순. 원 표(부서 · 계정) 객체는 행이\n없어 링크가 있어도 여기 안 모인다.",
+        "operationId": "mentions_api_objects__type_slug___object_id__mentions_get",
+        "parameters": [
+          {
+            "name": "type_slug",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "title": "Type Slug"
+            }
+          },
+          {
+            "name": "object_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid",
+              "title": "Object Id"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/MentionOut"
+                  },
+                  "title": "Response Mentions Api Objects  Type Slug   Object Id  Mentions Get"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/objects/quality/report": {
       "get": {
         "tags": [
@@ -18203,6 +18528,18 @@
               "default": 0,
               "title": "Offset"
             }
+          },
+          {
+            "name": "meaning",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "boolean",
+              "description": "뜻이 가까운 것도 함께(ADR 0052) — 첫 쪽에만. 찾을 말을 뜻으로 바꾸는 데 한 번 더 든다",
+              "default": false,
+              "title": "Meaning"
+            },
+            "description": "뜻이 가까운 것도 함께(ADR 0052) — 첫 쪽에만. 찾을 말을 뜻으로 바꾸는 데 한 번 더 든다"
           }
         ],
         "responses": {
@@ -18222,6 +18559,92 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic": {
+      "get": {
+        "tags": [
+          "semantic"
+        ],
+        "summary": "State",
+        "description": "타입마다 객체 수 · 바꾼 수 · 남은 수 · 켰나, 그리고 가장 최근의 계산.",
+        "operationId": "state_api_semantic_get",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SemanticOut"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic/targets": {
+      "put": {
+        "tags": [
+          "semantic"
+        ],
+        "summary": "Put Targets",
+        "description": "대상을 통째로 정한다 — 바뀌었으면 계산을 곧장 넣는다(대상은 채우고 뺀 것은 지운다).\n\n기록은 칸을 골라야 한다(`SEMANTIC-0004`) — 건수가 많아 전부는 서버가 감당하지 못한다. 고를\n수 없는 칸은 `SEMANTIC-0005`, 원 표 타입은 `SEMANTIC-0002`. 칸을 바꾼 타입은 전부 다시\n맞춘다.",
+        "operationId": "put_targets_api_semantic_targets_put",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SemanticTargetsIn"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SemanticOut"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Validation Error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HTTPValidationError"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/semantic/sync": {
+      "post": {
+        "tags": [
+          "semantic"
+        ],
+        "summary": "Sync",
+        "description": "지금 전부를 다시 맞춘다(해시로 — 바뀐 것만 다시 바꾼다).\n\n이미 기다리거나 돌면 그대로 둔다.",
+        "operationId": "sync_api_semantic_sync_post",
+        "responses": {
+          "200": {
+            "description": "Successful Response",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SemanticOut"
                 }
               }
             }
@@ -30391,6 +30814,197 @@
         ],
         "title": "DiskOut"
       },
+      "DocumentOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          },
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "chars": {
+            "type": "integer",
+            "title": "Chars"
+          },
+          "updated_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated At"
+          },
+          "updated_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Updated By Name"
+          },
+          "updated_via": {
+            "type": "string",
+            "title": "Updated Via"
+          },
+          "can_edit": {
+            "type": "boolean",
+            "title": "Can Edit"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "body",
+          "revision",
+          "chars",
+          "updated_at",
+          "updated_by_name",
+          "updated_via",
+          "can_edit"
+        ],
+        "title": "DocumentOut"
+      },
+      "DocumentPutIn": {
+        "properties": {
+          "body": {
+            "type": "string",
+            "maxLength": 1000000,
+            "title": "Body"
+          },
+          "base_revision": {
+            "type": "integer",
+            "minimum": 0.0,
+            "title": "Base Revision"
+          },
+          "note": {
+            "type": "string",
+            "maxLength": 200,
+            "title": "Note",
+            "default": ""
+          }
+        },
+        "type": "object",
+        "required": [
+          "body",
+          "base_revision"
+        ],
+        "title": "DocumentPutIn"
+      },
+      "DocumentRevisionBodyOut": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "chars": {
+            "type": "integer",
+            "title": "Chars"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "created_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Name"
+          },
+          "via": {
+            "type": "string",
+            "title": "Via"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          },
+          "body": {
+            "type": "string",
+            "title": "Body"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "chars",
+          "created_at",
+          "created_by_name",
+          "via",
+          "note",
+          "body"
+        ],
+        "title": "DocumentRevisionBodyOut"
+      },
+      "DocumentRevisionOut": {
+        "properties": {
+          "revision": {
+            "type": "integer",
+            "title": "Revision"
+          },
+          "chars": {
+            "type": "integer",
+            "title": "Chars"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "created_by_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Created By Name"
+          },
+          "via": {
+            "type": "string",
+            "title": "Via"
+          },
+          "note": {
+            "type": "string",
+            "title": "Note"
+          }
+        },
+        "type": "object",
+        "required": [
+          "revision",
+          "chars",
+          "created_at",
+          "created_by_name",
+          "via",
+          "note"
+        ],
+        "title": "DocumentRevisionOut"
+      },
       "DoneIn": {
         "properties": {
           "done": {
@@ -32898,6 +33512,18 @@
                 "type": "null"
               }
             ]
+          },
+          "document": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Document"
           }
         },
         "type": "object",
@@ -37414,6 +38040,46 @@
         ],
         "title": "MembershipsRequest",
         "description": "소속을 **통째로** 정한다 — 여기 적힌 부서가 소속의 전부가 된다.\n\n「빼기」 와 「넣기」 를 따로 받지 않는 이유: 화면은 지금 소속을 보고 고친 결과를\n보낸다. 차이를 화면이 계산하게 하면, 그 사이에 다른 관리자가 넣은 부서를 화면이\n모른 채 지운다."
+      },
+      "MentionOut": {
+        "properties": {
+          "object_id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Object Id"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "property_label": {
+            "type": "string",
+            "title": "Property Label"
+          }
+        },
+        "type": "object",
+        "required": [
+          "object_id",
+          "type_slug",
+          "type_label",
+          "label",
+          "key",
+          "property_label"
+        ],
+        "title": "MentionOut",
+        "description": "이 객체를 언급한 문서 하나."
       },
       "MergeRequest": {
         "properties": {
@@ -49252,6 +49918,73 @@
         "title": "ScheduleItem",
         "description": "일정의 한 단계 — 날짜와 짧은 이름(「설계 변경」 · 비워도 된다)."
       },
+      "SearchMeaningOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "icon": {
+            "type": "string",
+            "title": "Icon"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "key": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Key"
+          },
+          "similarity": {
+            "type": "number",
+            "title": "Similarity"
+          },
+          "section": {
+            "type": "string",
+            "title": "Section",
+            "default": ""
+          },
+          "anchor": {
+            "type": "string",
+            "title": "Anchor",
+            "default": ""
+          },
+          "same": {
+            "type": "integer",
+            "title": "Same",
+            "default": 0
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "type_slug",
+          "type_label",
+          "icon",
+          "label",
+          "key",
+          "similarity"
+        ],
+        "title": "SearchMeaningOut",
+        "description": "뜻이 가까운 것 하나(ADR 0052) — 글자는 안 겹쳐도 뜻이 가까워 걸린 객체."
+      },
       "SearchOut": {
         "properties": {
           "q": {
@@ -49305,6 +50038,19 @@
             "type": "integer",
             "title": "Posts Total",
             "default": 0
+          },
+          "meaning": {
+            "items": {
+              "$ref": "#/components/schemas/SearchMeaningOut"
+            },
+            "type": "array",
+            "title": "Meaning",
+            "default": []
+          },
+          "meaning_state": {
+            "type": "string",
+            "title": "Meaning State",
+            "default": ""
           }
         },
         "type": "object",
@@ -49454,6 +50200,318 @@
           "points"
         ],
         "title": "SegmentOut"
+      },
+      "SemanticFieldOut": {
+        "properties": {
+          "key": {
+            "type": "string",
+            "title": "Key"
+          },
+          "label": {
+            "type": "string",
+            "title": "Label"
+          },
+          "data_type": {
+            "type": "string",
+            "title": "Data Type"
+          }
+        },
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "data_type"
+        ],
+        "title": "SemanticFieldOut",
+        "description": "고를 수 있는 칸 하나 — 글 · 여러 줄 글 · 선택 · 참조 · 문서."
+      },
+      "SemanticJobOut": {
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "title": "Id"
+          },
+          "status": {
+            "type": "string",
+            "title": "Status"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time",
+            "title": "Created At"
+          },
+          "finished_at": {
+            "anyOf": [
+              {
+                "type": "string",
+                "format": "date-time"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Finished At"
+          },
+          "error": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Error"
+          },
+          "result": {
+            "anyOf": [
+              {
+                "additionalProperties": true,
+                "type": "object"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Result"
+          },
+          "progress": {
+            "additionalProperties": true,
+            "type": "object",
+            "title": "Progress"
+          }
+        },
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "created_at",
+          "finished_at",
+          "error",
+          "result",
+          "progress"
+        ],
+        "title": "SemanticJobOut"
+      },
+      "SemanticOut": {
+        "properties": {
+          "state": {
+            "type": "string",
+            "title": "State"
+          },
+          "problem": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Problem"
+          },
+          "model": {
+            "type": "string",
+            "title": "Model"
+          },
+          "kb_per_object": {
+            "type": "integer",
+            "title": "Kb Per Object"
+          },
+          "min_similarity": {
+            "type": "number",
+            "title": "Min Similarity"
+          },
+          "per_second": {
+            "anyOf": [
+              {
+                "type": "number"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Per Second"
+          },
+          "types": {
+            "items": {
+              "$ref": "#/components/schemas/SemanticTypeOut"
+            },
+            "type": "array",
+            "title": "Types"
+          },
+          "job": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SemanticJobOut"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "type": "object",
+        "required": [
+          "state",
+          "problem",
+          "model",
+          "kb_per_object",
+          "min_similarity",
+          "per_second",
+          "types",
+          "job"
+        ],
+        "title": "SemanticOut"
+      },
+      "SemanticTargetIn": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug"
+        ],
+        "title": "SemanticTargetIn"
+      },
+      "SemanticTargetsIn": {
+        "properties": {
+          "targets": {
+            "items": {
+              "$ref": "#/components/schemas/SemanticTargetIn"
+            },
+            "type": "array",
+            "title": "Targets"
+          }
+        },
+        "type": "object",
+        "required": [
+          "targets"
+        ],
+        "title": "SemanticTargetsIn"
+      },
+      "SemanticTypeOut": {
+        "properties": {
+          "type_slug": {
+            "type": "string",
+            "title": "Type Slug"
+          },
+          "type_label": {
+            "type": "string",
+            "title": "Type Label"
+          },
+          "icon": {
+            "type": "string",
+            "title": "Icon"
+          },
+          "usage": {
+            "type": "string",
+            "title": "Usage"
+          },
+          "objects": {
+            "type": "integer",
+            "title": "Objects"
+          },
+          "synced": {
+            "type": "integer",
+            "title": "Synced"
+          },
+          "pieces": {
+            "type": "integer",
+            "title": "Pieces"
+          },
+          "pending": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Pending"
+          },
+          "enabled": {
+            "type": "boolean",
+            "title": "Enabled"
+          },
+          "fields": {
+            "anyOf": [
+              {
+                "items": {
+                  "type": "string"
+                },
+                "type": "array"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Fields"
+          },
+          "options": {
+            "items": {
+              "$ref": "#/components/schemas/SemanticFieldOut"
+            },
+            "type": "array",
+            "title": "Options"
+          },
+          "why_not": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Why Not"
+          },
+          "estimate_pieces": {
+            "type": "integer",
+            "title": "Estimate Pieces"
+          },
+          "estimate_bytes": {
+            "type": "integer",
+            "title": "Estimate Bytes"
+          }
+        },
+        "type": "object",
+        "required": [
+          "type_slug",
+          "type_label",
+          "icon",
+          "usage",
+          "objects",
+          "synced",
+          "pieces",
+          "pending",
+          "enabled",
+          "fields",
+          "options",
+          "why_not",
+          "estimate_pieces",
+          "estimate_bytes"
+        ],
+        "title": "SemanticTypeOut"
       },
       "SeriesOut": {
         "properties": {

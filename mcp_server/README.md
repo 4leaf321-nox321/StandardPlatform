@@ -136,6 +136,7 @@ cp -r skill/standardplatform ~/.claude/skills/standardplatform   # 선택. 한 �
 | `object_lineage` · `lineage_repin` | **계보**(ADR 0041) — 무엇에서 만들어졌나(위 · 아래 사슬, 20단계) · 낡음(바로 · 위에서)과 까닭 · 영향 범위(이것으로 만든 것 n개 · 낡음 m개). 위 · 아래 각 100줄까지(`limit`, 서버 상한 500 — 잘리면 `truncated`). **다시 고정**은 사람이 정한 근거로(영향 없음 확인 · 다시 만들었음) — 위에서 낡음은 원천부터. 한 타입의 낡은 것만은 목록 조건 `lineage` |
 | `bulk_edit` · `bulk_edit_undo` | 여러 객체의 **한 칸**을 같은 값으로 — 계획 먼저, `batch_id` 로 통째로 되돌리기 |
 | `object_create` · `object_update` | 객체 쓰기 (`update` 는 보낸 것만) |
+| `document_read` · `document_write` · `document_revisions` | 문서 속성(마크다운 · 백서 · 위키) 읽기 · 쓰기 · 판 목록 — 쓸 때 읽은 판을 `base_revision` 으로(ADR 0053) |
 | `objects_import` | 여러 행 한 번에(upsert). **작업이 된다** — 계획을 돌려주고, 적용은 `job_apply`. `aliases_mode="replace"` 면 파일에 없는 별칭을 지운다(기본은 더하기), 행의 `renamed_from`·`previous_keys` 로 **키를 바꾼다** |
 | `aliases_pending` · `aliases_review` | **사람이 아직 안 본 별칭**(기계가 붙인 것) 목록 · 고른 것을 한 번에 확인/지우기. **확인은 사람의 판단이다** |
 | `alias_candidates` · `alias_candidate_apply` | **못 찾은 말**(별칭 후보, ADR 0025) — 이름 풀이 · 검색 · 목록 검색이 아무것도 못 찾은 글자, 많이 · 여럿이 찾은 것부터(「이것 아닐까」 제안과 함께) · 그 객체의 별칭으로 붙이기(`attach`) · 무시(`ignore`) · 되돌리기(`restore`). **기본은 미리 보기**(`apply=false`), 제안은 짐작이라 사람이 고른다. 부서 관리자 이상 |

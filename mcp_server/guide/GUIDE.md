@@ -26,6 +26,7 @@ GUIDE_VERSION: 2026-10-31a
 | **이름으로 무언가를 가리킨다** | `object_resolve(type_slug, name)` | `candidates` 면 **고르지 말고 사람에게 묻는다** |
 | 이름 **여럿**을 한 번에 | `objects_resolve_many(type_slug, names)` | 여러 줄을 넣기 전에 한 번. 왕복이 줄 수만큼 늘지 않는다 |
 | 객체 찾기 | `objects_list(type_slug, q=, properties=, conditions=)` | 화면과 같은 거르기. **0건이면 `diagnosis` 를 읽는다** |
+| **긴 글(백서 · 위키 페이지) 읽기 · 쓰기** | `document_read` → `document_write(body, base_revision)` · 판 목록 `document_revisions` | 문서 속성(`data_type: document`)만. **읽은 판을 `base_revision` 으로** — 그사이 바뀌었으면 거절된다(덮어쓰지 않는다). 객체는 `[이름](/o/<타입>/<id>)` 링크로 가리킨다 |
 | 여러 타입을 한 개념으로 — 「설비 전부」 | `objects_list(<인터페이스 slug>)` · `objects_summary(<인터페이스>, group_by="type")` | **읽기만.** 줄의 `type_slug` 가 실제 타입 — 상세 · 고치기는 그것으로 |
 | 몇 건인가 — 부서별·등급별·개발사 국가별 | `objects_summary(type_slug, group_by=, conditions=)` | **목록을 받아 직접 세지 않는다.** 「(비어 있음)」·「그 밖에」·`overlap` 을 함께 말한다 |
 | **비율 · 추이 · 코호트** — 「판매월별 누적 인입률」 「생산월 x 공장별 건수」 | `metric_list` → `metric_query(slug, shape=)` | **미리 세어 둔 값**이다 — `computed_at` · `stale` · `overlap` 을 함께 말한다. 없으면 `metric_define(apply=false)` 로 제안 |
@@ -680,6 +681,26 @@ objects_summary("equip", group_by="type")        # 어느 타입이 몇 건
 그 뒤에 따로 고쳐진 객체는 되돌리지 않고 이유를 적는다.
 
 <!--@ bulk -->
+### 문서 — 백서 · 위키 페이지(ADR 0053)
+
+문서 속성(`ontology_schema` 의 `data_type: document`)은 **마크다운 본문**이 속성 칸이 아니라 따로
+담긴다 — `object_update(properties=)` 로는 못 쓴다(`[ONTOLOGY-0016]`).
+
+- **고치기 전에 `document_read`.** 돌아온 `revision` 을 `document_write(base_revision=)` 로 보낸다.
+  처음이면 0. 그사이 사람이 고쳤으면 `[OBJECTS-0149]` — **덮어쓰지 말고** 다시 읽어 사람이 고친
+  문장을 살린 본문으로 쓴다.
+- **본문을 통째로** 보낸다(한 절만 고쳐도 전체). 100만 자까지. `note` 에 까닭 한 줄
+  (「백서 v2 반영」 · 「3장 표 수치 수정」) — 판 목록(`document_revisions`)에 남는다.
+- 판마다 누가 · 어느 토큰으로 고쳤는지 남는다 — 네가 쓴 판은 사람이 검토한다. 사실과 원문의
+  문장을 바꿔 쓰지 말고, 요약 · 정리는 원문에 있는 것만.
+- **객체를 가리킬 때는 링크로** — `[N12 카메라](/o/part/<객체 id>)`. id 는 `object_resolve` ·
+  `objects_list` 로 찾는다(짐작하지 않는다). 저장하면 그 객체의 상세에 「이 객체를 언급한 문서」 로
+  모인다. 이름만 적으면 아무것도 이어지지 않는다.
+- **Word · 마크다운 원본을 넣을 때(백필)** — Word 는 마크다운으로 바꿔 넣는다: 제목 → `#` · `##`,
+  목록 → `-`, 표 → `|` 표, 굵게 → `**`. 머리글 · 바닥글 · 쪽 번호는 뺀다. 그림은 아직 못 넣는다 —
+  그 자리에 `> 그림: <캡션>` 을 남긴다. 한 편을 넣은 뒤 `document_read` 로 다시 읽어 잘린 데가 없는지
+  본다.
+
 ## 여러 행 한 번에 — 작업이 된다
 
 `objects_import(type_slug, rows, workspace_slug=)`:

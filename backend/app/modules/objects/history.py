@@ -44,7 +44,7 @@ from app.modules.objects.services import (
     require_unique_properties,
 )
 from app.modules.ontology import conversion, retype
-from app.modules.ontology.models import ObjectType, PropertyDef
+from app.modules.ontology.models import DETACHED_KINDS, ObjectType, PropertyDef
 from app.modules.ontology.services import InvalidValue, validate_properties
 from app.modules.workspaces.models import Workspace
 from app.shared import audit
@@ -91,6 +91,9 @@ class Entry:
     snapshot: Snapshot | None = None
     batch: dict[str, Any] | None = None
     """여럿 골라 고치기로 같이 바뀐 기록이면 `{id, field_label, size}`."""
+    document: dict[str, Any] | None = None
+    """문서를 고친 기록(ADR 0053)이면 `{key, revision, chars, via, note}` — 값이 아니라 판이라
+    그 시점의 값(되돌리기)이 없다. 옛 판은 문서의 「판 이력」 에서 연다."""
 
 
 def _workspace_names(db: Session, rows: list[AuditEntry]) -> dict[str, str]:
@@ -210,6 +213,23 @@ def history_of(db: Session, row: ObjectInstance, *, viewer: User | None = None) 
         is_object = entry.target_table == "objects"
         changes = entry.changes or {}
         snapshot: Snapshot | None = None
+        if entry.action == "object.document":
+            # 문서의 판 — 속성 값은 그대로라 그 시점의 값을 붙이지 않는다(눌러도 열 것이 없다).
+            out.append(
+                Entry(
+                    id=entry.id,
+                    at=entry.created_at,
+                    actor_label=entry.actor_label,
+                    action=entry.action,
+                    reason=entry.reason,
+                    kind="object",
+                    document={
+                        name: changes.get(name)
+                        for name in ("key", "revision", "chars", "via", "note")
+                    },
+                )
+            )
+            continue
         if is_object:
             snapshot = Snapshot(
                 key=running["key"],
@@ -296,6 +316,10 @@ def snapshot_at(
 ) -> tuple[Entry, Snapshot]:
     for entry in history_of(db, row):
         if entry.id == entry_id:
+            if entry.document is not None:
+                raise Conflict(
+                    code("OBJECTS", 60), "문서는 그 문서의 「판 이력」 에서 복원합니다."
+                )
             if entry.snapshot is None:
                 raise Conflict(code("OBJECTS", 60), "관계 기록에는 되돌릴 값이 없습니다.")
             return entry, entry.snapshot
@@ -435,7 +459,7 @@ def restore(
         )
     # 그때는 있었는데 지금은 없는 속성 정의는 **빼고** 되돌린다 — 정의를 지운 것은
     # 그 값을 더는 안 쓴다는 뜻이고, 되살리면 어느 화면에도 안 나오는 값이 된다.
-    known = {d.key for d in defs if d.data_type != "file"}
+    known = {d.key for d in defs if d.data_type not in DETACHED_KINDS}
     dropped = sorted(set(wanted.properties) - known)
     properties = _then_values(
         db,

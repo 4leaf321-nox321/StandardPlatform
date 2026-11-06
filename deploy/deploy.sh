@@ -655,7 +655,7 @@ ensure_vector() {
     version="$(sudo -u postgres psql -X -tAqc 'SHOW server_version_num' 2>/dev/null)" || version=""
     if [[ -z "$version" ]]; then
         warn "이 서버의 PostgreSQL 에 붙지 못해 pgvector 를 건너뜁니다 — DB 가 다른 서버면 그 서버에서 postgresql-<판>-pgvector 를 깔고: sudo -u postgres psql -d $DB_NAME -c 'CREATE SCHEMA IF NOT EXISTS extensions; GRANT USAGE ON SCHEMA extensions TO PUBLIC; CREATE EXTENSION IF NOT EXISTS vector SCHEMA extensions'"
-        return 1
+        return 2   # 이 서버에서는 모른다 — 있는지는 마이그레이션이 본다(require_vector)
     fi
     major=$(( version / 10000 ))
     ensure_vector_package "$major" || return 1
@@ -676,6 +676,20 @@ ensure_vector() {
     fi
     found="$(sudo -u postgres psql -X -tAqd "$DB_NAME" -c "SELECT extversion FROM pg_extension WHERE extname = 'vector'")"
     info "pgvector: $found (extensions 스키마 · $DB_NAME)"
+}
+
+# **이 판부터 pgvector 를 쓰는 표가 있다**(뜻으로 찾기, ADR 0052) — 마이그레이션 앞에서 못 갖추면 여기서 멈춘다.
+# update 는 서비스를 **내리기 전에** 부른다 — 내린 뒤 마이그레이션에서 멈추면 서비스가 꺼진 채 남는다(여기서
+# 멈추면 옛 판이 그대로 돈다). DB 가 다른 서버라 이 서버에서 모르면(2) 지나간다 — 없으면 마이그레이션이 할
+# 일을 말하며 멈춘다. 대기 서버는 패키지만 깔면 된다(확장은 주에서 복제로 온다 — ensure_vector 가 0).
+require_vector() {
+    local rc=0
+    ensure_vector || rc=$?
+    case "$rc" in
+        0) ;;
+        2) warn "pgvector 를 이 서버에서 확인하지 못했습니다 — DB 서버에 확장이 있어야 합니다(없으면 마이그레이션이 할 일을 말하며 멈춥니다)" ;;
+        *) err "pgvector 를 갖추지 못해 멈춥니다 — 이 판부터 뜻으로 찾기의 표가 확장을 씁니다(ADR 0052). 위의 경고대로 고친 뒤 같은 명령을 다시 실행하세요(갱신이면 옛 판이 그대로 돕니다)" ;;
+    esac
 }
 
 # **임베딩 모델 — Ollama 의 bge-m3**(ADR 0050). 글을 뜻의 자리로 바꾸는 모델을 이 서버 안에서 돌린다 — 글이
@@ -1062,7 +1076,7 @@ MSG
         info "데이터베이스가 이미 있습니다: $DB_NAME"
     fi
     grant_temp_limit
-    ensure_vector || warn "pgvector 를 갖추지 못했습니다(비치명적 — 이 판은 아직 쓰지 않는다) — 고친 뒤: sudo ./deploy.sh pgvector"
+    ensure_vector || warn "pgvector 를 갖추지 못했습니다 — install · update 가 마이그레이션 앞에서 다시 갖추고, 그때도 못 갖추면 멈춥니다. 고친 뒤: sudo ./deploy.sh pgvector"
 
     # **맨 끝에 둔다.** PPA 에 닿지 않는 서버에서 여기서 멈춰도 DB·폴더는 이미 서 있고,
     # apptainer 만 따로 깐 뒤 prepare 를 다시 돌리면 된다(앞 단계는 멱등하다).
@@ -1084,8 +1098,8 @@ cmd_install() {
     sync_env_identity
     sync_env_portal
     place_sif
-    # 마이그레이션 앞에서 — 확장을 쓰는 표가 드는 판부터는 마이그레이션이 그것을 본다.
-    ensure_vector || warn "pgvector 를 갖추지 못했습니다(비치명적 — 이 판은 아직 쓰지 않는다) — 고친 뒤: sudo ./deploy.sh pgvector"
+    # 마이그레이션 앞에서 — 뜻으로 찾기의 표(ADR 0052)가 확장을 쓴다.
+    require_vector
     run_migrations
     run_seed
     render_service_unit
@@ -1124,9 +1138,9 @@ cmd_update() {
     ensure_dirs
     sync_env_identity
     sync_env_portal
-    # **내리기 전에** — 패키지를 받는 동안(처음 한 번) 서비스가 서 있다. 확장을 쓰는 표가 드는 판부터는
-    # 여기서 못 갖추면 멈춘다(옛 판이 그대로 돈다).
-    ensure_vector || warn "pgvector 를 갖추지 못했습니다(비치명적 — 이 판은 아직 쓰지 않는다) — 고친 뒤: sudo ./deploy.sh pgvector"
+    # **내리기 전에** — 패키지를 받는 동안(처음 한 번) 서비스가 서 있다. 못 갖추면 여기서 멈춘다(옛 판이
+    # 그대로 돈다) — 뜻으로 찾기의 표(ADR 0052)가 확장을 쓴다.
+    require_vector
 
     info "$SERVICE_NAME 중지"
     systemctl stop "$SERVICE_NAME" || true
@@ -1190,7 +1204,7 @@ MSG
 DROP DATABASE IF EXISTS "$DB_NAME";
 CREATE DATABASE "$DB_NAME" OWNER "$DB_USER" ENCODING 'UTF8';
 SQL
-    ensure_vector || warn "pgvector 를 갖추지 못했습니다(비치명적 — 이 판은 아직 쓰지 않는다) — 고친 뒤: sudo ./deploy.sh pgvector"
+    require_vector
     info "첨부 삭제"
     as_op find "$FILESTORE_HOST_DIR" -mindepth 1 -delete 2>/dev/null || true
 

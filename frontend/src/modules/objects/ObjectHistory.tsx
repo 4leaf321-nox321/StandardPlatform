@@ -29,6 +29,7 @@ import {
 } from '@/shared/components/ui/dialog'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
+import { isDetached } from '@/modules/ontology/kinds'
 
 interface ObjectHistoryProps {
   typeSlug: string
@@ -54,6 +55,8 @@ const ACTION_LABEL: Record<string, string> = {
   'object.relation.remove': '관계 끊음',
   'object.attachment.add': '첨부 추가',
   'object.attachment.remove': '첨부 삭제',
+  // 문서 속성(ADR 0053) — 판이 하나 올랐다. 옛 판은 그 문서의 「판 이력」 에서 연다.
+  'object.document': '문서 수정',
   // 계보(ADR 0041) — 원천 관계의 고정을 원천의 지금 값으로 바꾼 기록. 양 끝의 이력에 선다.
   'lineage.repin': '다시 고정',
   // 제안된 관계(ADR 0042) — 관계 기록과 같은 모양(양 끝)으로 양 끝의 이력에 선다. 확정으로 생긴
@@ -171,7 +174,8 @@ export function ObjectHistory({
         <ol className="divide-y rounded-md border text-sm">
           {shown.map((one) => {
             const fields = Object.keys(one.changes)
-            const clickable = one.kind === 'object'
+            // 문서의 판은 값이 아니라 그 시점의 값이 없다 — 옛 판은 문서의 「판 이력」 에서.
+            const clickable = one.kind === 'object' && !one.document
             return (
               <li key={one.id}>
                 <button
@@ -194,6 +198,22 @@ export function ObjectHistory({
                         <span className="text-muted-foreground text-xs">· {one.reason}</span>
                       )}
                     </span>
+                    {one.document && (
+                      <span className="mt-0.5 block text-xs tabular-nums">
+                        「
+                        {defs.find((def) => def.key === one.document?.key)?.label ??
+                          one.document.key}
+                        」 판 {one.document.revision} · {(one.document.chars ?? 0).toLocaleString()}
+                        자
+                        {one.document.via && (
+                          <span className="text-amber-800 dark:text-amber-300">
+                            {' '}
+                            · 토큰 「{one.document.via}」
+                          </span>
+                        )}
+                        {one.document.note && ` · ${one.document.note}`}
+                      </span>
+                    )}
                     {one.relation && (
                       <span className="mt-0.5 block text-xs">
                         {one.relation.outgoing ? '→' : '←'}{' '}
@@ -335,7 +355,7 @@ function SnapshotDialog({
       out.push({ label, was: then ?? '—', now: now ?? '—', differs: then !== now })
     }
     for (const def of defs) {
-      if (def.data_type === 'file') continue
+      if (isDetached(def.data_type)) continue
       const then = propertyText(def, snapshot.properties[def.key], refLabels)
       const now = propertyText(def, current.properties[def.key], refLabels)
       out.push({ label: def.label, was: then, now, differs: then !== now })

@@ -38,6 +38,9 @@ IDLE_MAX = 5.0
 #: 지식 그래프 지도(ADR 0046)의 차례를 보는 간격 — 처음 판 · 매일 밤 덧붙임 · 한 시간마다
 #: 집계를 넣을지 DB 의 시각으로 판단한다(재시작해도 밀리지 않는다).
 MAP_CHECK_EVERY = 300.0
+#: 뜻으로 찾기(ADR 0052)의 차례를 보는 간격 — 새것 · 고친 것이 있으면 계산을 넣는다(하루 한
+#: 번은 전부).
+SEMANTIC_CHECK_EVERY = 300.0
 #: 고아 첨부 정리는 기동 한 시간 뒤가 첫 차례 — 업데이트로 워커가 자주 다시 떠도 밀리지 않게,
 #: 그렇다고 기동하자마자 저장소 전체를 훑지는 않게.
 GC_FIRST_AFTER = 3600.0
@@ -119,6 +122,7 @@ class Worker:
         self._last_purge = 0.0
         self._last_webhook = 0.0
         self._last_map = 0.0
+        self._last_semantic = 0.0
         hours = get_settings().filestore_gc_hours
         self._gc_every = hours * 3600.0 if hours > 0 else 0.0
         self._last_gc = time.monotonic() - max(self._gc_every - GC_FIRST_AFTER, 0.0)
@@ -151,6 +155,16 @@ class Worker:
                 queued = mapbuild.schedule(db)
             if queued:
                 log.info("지식 그래프 지도 작업을 넣었습니다: %s", queued)
+        if now - self._last_semantic >= SEMANTIC_CHECK_EVERY:
+            # 뜻으로 찾기의 계산도 **넣기만** 한다 — 켠 타입이 없거나 끔이면 아무것도 안
+            # 넣는다.
+            self._last_semantic = now
+            from app.modules.semantic import services as semantic
+
+            with SessionLocal() as db:
+                queued = semantic.schedule(db)
+            if queued:
+                log.info("뜻으로 찾기 계산을 넣었습니다: %s", queued)
         if now - self._last_purge >= PURGE_EVERY:
             with SessionLocal() as db:
                 gone = services.purge_expired_files(db)

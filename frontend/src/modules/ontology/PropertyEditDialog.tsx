@@ -17,6 +17,7 @@
 import { useState } from 'react'
 
 import { ontologyApi } from '@/modules/ontology/api'
+import { isDetached } from '@/modules/ontology/kinds'
 import { EnumOptionsPanel } from '@/modules/ontology/EnumOptionsPanel'
 import { RetypeDialog, retypeChoices } from '@/modules/ontology/RetypeDialog'
 import type { DataType, ObjectInterface, ObjectType, PropertyDef } from '@/modules/ontology/api'
@@ -53,6 +54,7 @@ export const DATA_TYPE_LABELS: Record<DataType, string> = {
   url: '주소',
   object_ref: '객체 참조',
   file: '파일',
+  document: '문서(마크다운)',
 }
 
 /** 종류마다 무엇이 되는지 한 줄. **선택 전에 알아야 고를 수 있다.** */
@@ -67,6 +69,8 @@ const DATA_TYPE_HINTS: Record<DataType, string> = {
   url: '링크로 열립니다. http:// 나 https:// 로 시작해야 합니다.',
   object_ref: '다른 객체를 가리킵니다. 가리킬 타입을 정해 두면 그 안에서만 고릅니다.',
   file: '첨부로 올립니다. 값이 아니라 파일이라 저장한 뒤 상세 화면에서 붙입니다.',
+  document:
+    '긴 글 — 백서 · 위키 페이지. 제목 · 목록 · 표를 쓰는 마크다운이고, 고칠 때마다 판이 남습니다. 저장한 뒤 상세 화면에서 작성합니다.',
 }
 
 /** 규칙 칸을 보여 줄 종류. **안 쓰이는 칸을 세우면 그것이 뭔가 하는 줄 안다.** */
@@ -111,7 +115,9 @@ export function PropertyEditDialog({
       : owner.row.managed_by
         ? `${owner.row.managed_by} 가 관리하는 정의라 여기서 변경하지 않습니다.`
         : retypeChoices(property.data_type).length === 0
-          ? '파일 속성은 값이 첨부라 종류를 변경하지 않습니다.'
+          ? property.data_type === 'document'
+            ? '문서 속성은 본문이 문서 표에 있어 종류를 변경하지 않습니다.'
+            : '파일 속성은 값이 첨부라 종류를 변경하지 않습니다.'
           : null
 
   const [key, setKey] = useState(property?.key ?? '')
@@ -312,8 +318,8 @@ export function PropertyEditDialog({
                         </SelectTrigger>
                         <SelectContent>
                           {(Object.keys(DATA_TYPE_LABELS) as DataType[])
-                            // 파일은 값이 속성 칸에 없어 여러 타입을 한 목록으로 묻지 못한다.
-                            .filter((one) => !(isInterface && one === 'file'))
+                            // 파일 · 문서는 값이 속성 칸에 없어 여러 타입을 한 목록으로 묻지 못한다.
+                            .filter((one) => !(isInterface && isDetached(one)))
                             .map((one) => (
                               <SelectItem key={one} value={one}>
                                 {DATA_TYPE_LABELS[one]}

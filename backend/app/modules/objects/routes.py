@@ -3352,6 +3352,7 @@ def object_history(
             relation=one.relation,
             snapshot=SnapshotOut(**vars(one.snapshot)) if one.snapshot else None,
             batch=HistoryBatchOut(**one.batch) if one.batch else None,
+            document=one.document,
         )
         for one in history.history_of(db, row, viewer=user)
     ]

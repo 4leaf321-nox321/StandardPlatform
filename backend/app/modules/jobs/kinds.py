@@ -1163,6 +1163,40 @@ register(
 )
 
 
+def semantic_sync(work: Work) -> dict[str, Any]:
+    """뜻으로 찾기의 계산(ADR 0052) — 켠 타입의 객체를 뜻의 자리로 바꿔 둔다. 묶음마다 커밋한다
+    (그 커밋마다 워커의 검사가 돈다). 끈 타입 · 지운 객체의 자리는 지운다. Ollama 에 닿지
+    않으면
+    실패로 끝나고 그 말이 작업 화면에 남는다 — 타이머는 한 시간 뒤에 다시 넣는다."""
+    from app.modules.semantic import services as semantic
+    from app.shared import embedding
+
+    try:
+        return semantic.run_sync(
+            work.db,
+            full=bool(work.params.get("full")),
+            progress=work.progress,
+            commit=work.db.commit,
+        )
+    except embedding.Unavailable as caught:
+        raise Conflict(code("SEMANTIC", 3), str(caught)) from caught
+
+
+# 뜻으로 찾기 — 관리 화면(켜기 · 「지금 다시 맞추기」)과 타이머(워커가 5분마다
+# `semantic.schedule`)가 넣는다. 일반 작업 API 로는 못 넣는다.
+register(
+    Kind(
+        "semantic_sync",
+        "뜻으로 찾기 계산",
+        False,
+        False,
+        semantic_sync,
+        allow_system=True,
+        admin_only=True,
+    )
+)
+
+
 def review_apply(work: Work) -> dict[str, Any]:
     """검토함의 큰 묶음(ADR 0027) — 요청 경로와 **같은 함수**(`review.services.apply`)를 같은
     지문으로. 항목마다 원래 기능으로 처리하고 그 커밋마다 워커의 검사가 돈다(`work.db`). 멈추면

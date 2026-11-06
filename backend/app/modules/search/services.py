@@ -196,6 +196,23 @@ def _hit_of(object_type: ObjectType, ref: system_sources.SystemRef, q: str) -> H
     )
 
 
+def type_ids_for(db: Session, type_slug: str | None) -> set[uuid.UUID] | None:
+    """좁힌 타입(인터페이스면 구현 타입 전부)의 id.
+
+    안 좁혔으면 None, 모르는 이름이면 빈 집합."""
+    if not type_slug:
+        return None
+    types = {row.slug: row.id for row in db.scalars(select(ObjectType))}
+    if type_slug in types:
+        return {types[type_slug]}
+    catalog = interfaces.load(db)
+    if type_slug in catalog.interfaces:
+        return {
+            types[one] for one in interfaces.implementers(catalog, type_slug) if one in types
+        }
+    return set()
+
+
 def search(
     db: Session,
     user: User,

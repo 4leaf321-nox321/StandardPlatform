@@ -12,6 +12,7 @@ import { AttachmentList } from '@/modules/files/AttachmentList'
 import { GraphPanel } from '@/modules/graph/GraphPanel'
 import { AxisProfile } from '@/modules/metrics/AxisProfile'
 import { ontologyApi } from '@/modules/ontology/api'
+import { isDetached } from '@/modules/ontology/kinds'
 import { ObjectYears } from '@/modules/objects/ObjectYears'
 import { AliasesPanel } from '@/modules/objects/AliasesPanel'
 import { RelatedObjects } from '@/modules/objects/RelatedObjects'
@@ -28,6 +29,8 @@ import { PropertyFields, groupBySection, propertyText } from '@/modules/objects/
 import type { PropertyValues } from '@/modules/objects/PropertyFields'
 import { ObjectDeleteDialog } from '@/modules/objects/ObjectDeleteDialog'
 import { ObjectHistory } from '@/modules/objects/ObjectHistory'
+import { DocumentPanel } from '@/modules/objects/DocumentPanel'
+import { MentionsPanel } from '@/modules/objects/MentionsPanel'
 import { ApiError } from '@/shared/api/client'
 import { EmptyState } from '@/shared/components/EmptyState'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
@@ -159,7 +162,9 @@ function ObjectProfile() {
   if (row.type_slug !== typeSlug) return null
 
   const fileDefs = defs.filter((def) => def.data_type === 'file')
-  const valueDefs = defs.filter((def) => def.data_type !== 'file')
+  /** 문서 속성(ADR 0053) — 본문은 따로 담겨 기본 정보에 서지 않고, 아래에 제 칸으로 선다. */
+  const documentDefs = defs.filter((def) => def.data_type === 'document')
+  const valueDefs = defs.filter((def) => !isDetached(def.data_type))
 
   async function save() {
     setError(null)
@@ -336,6 +341,17 @@ function ObjectProfile() {
             </p>
           )}
 
+          {/* 문서 — 백서 · 위키 페이지. 이 객체의 내용이라 본문에, 기본 정보 바로 아래. */}
+          {documentDefs.map((def) => (
+            <DocumentPanel
+              key={def.key}
+              typeSlug={typeSlug}
+              objectId={objectId}
+              def={def}
+              onSaved={profile.reload}
+            />
+          ))}
+
           {/* **연도를 쓰는 축에서만 나온다.** 없는 것을 있는 척하지 않는다. */}
           {objectType?.temporal_kind === 'yearly' && (
             <ObjectYears typeSlug={typeSlug} objectId={objectId} canEdit={profile.data.can_edit} />
@@ -429,6 +445,11 @@ function ObjectProfile() {
         {/* 오른쪽 단 — 이 객체 **둘레의** 것. 좁은 화면(xl 아래 — 사이드바 240px 를 빼면 본문이 360px 로 찌그러진다)에서는 본문 아래로 내려간다. */}
         <aside className="min-w-0 space-y-6" aria-label="둘레">
           <LogCounts objectId={objectId} counts={profile.data.log_counts ?? []} />
+
+          {/* 이 객체를 링크로 가리킨 문서(ADR 0053) — 없으면 안 선다. */}
+          {!isSystem && (
+            <MentionsPanel typeSlug={typeSlug} objectId={objectId} reloadKey={profile.data} />
+          )}
 
           {/* 이 객체가 쓰인 장표 — 주제이거나 마지막으로 열었을 때 실렸거나(ADR 0037). 없으면 안 선다. */}
           <UsedInSlides objectId={objectId} />

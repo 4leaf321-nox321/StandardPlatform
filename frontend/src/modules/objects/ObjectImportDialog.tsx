@@ -21,6 +21,7 @@ import { useRef, useState } from 'react'
 import { Download, FileUp, Loader2 } from 'lucide-react'
 
 import { ontologyApi } from '@/modules/ontology/api'
+import { isDetached } from '@/modules/ontology/kinds'
 import type { PropertyDef } from '@/modules/ontology/api'
 import { PasteGrid, emptyRows, filledRows, toLines } from '@/shared/components/PasteGrid'
 import type { GridColumn } from '@/shared/components/PasteGrid'
@@ -99,8 +100,8 @@ function objectColumns(type: ObjectType, properties: PropertyDef[]): GridColumn[
   }
   columns.push({ key: 'label', header: 'label', label: '이름', required: true })
   for (const one of properties) {
-    // 파일 칸은 표로 못 넣는다 — 첨부는 객체 상세에서 업로드한다.
-    if (one.data_type === 'file') continue
+    // 파일 · 문서 칸은 표로 못 넣는다 — 첨부 · 문서는 객체 상세에서.
+    if (isDetached(one.data_type)) continue
     columns.push({
       key: one.key,
       header: one.key,

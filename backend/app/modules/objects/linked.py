@@ -42,6 +42,7 @@ from sqlalchemy.orm import Session, aliased
 from app.modules.accounts.models import User
 from app.modules.objects import axes, conditions, paths, system
 from app.modules.objects.models import ObjectInstance
+from app.modules.ontology.models import DETACHED_KINDS
 from app.shared.errors import AppError, code
 
 #: 칸 하나 · 줄 하나에 싣는 값의 상한 — 넘으면 `more`. 목록의 한 칸에 스물이면 이미 사람이 다
@@ -102,8 +103,9 @@ def parse(resolver: paths.Resolver, addresses: list[str]) -> list[Column]:
             chain = resolver.parse_chain(address)
         except AppError as caught:
             raise _refuse(caught.message) from caught
-        if chain.definition is not None and chain.definition.data_type == "file":
-            raise _refuse(f"{chain.label}: 파일 칸은 이어진 칸으로 싣지 않습니다.")
+        if chain.definition is not None and chain.definition.data_type in DETACHED_KINDS:
+            what = "파일" if chain.definition.data_type == "file" else "문서"
+            raise _refuse(f"{chain.label}: {what} 칸은 이어진 칸으로 싣지 않습니다.")
         if chain.edge:
             conditions.require_edge_usable(chain)
         whole = chain.field is None

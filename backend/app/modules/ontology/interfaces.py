@@ -195,10 +195,11 @@ def interface_property_error(key: str, values: Mapping[str, Any]) -> str | None:
     타입마다 정하는 칸을 인터페이스에 적으면, 적은 사람은 모든 구현 타입에 걸린 줄 안다.
     """
     kind = values.get("data_type")
-    if kind == "file":
+    if kind in ("file", "document"):
+        what = "파일" if kind == "file" else "문서"
         return (
-            f"공통 속성 {key}: 파일 속성은 공통 속성이 될 수 없습니다 — 값이 속성 칸에 없어서 "
-            "여러 타입을 한 목록으로 묻지 못합니다."
+            f"공통 속성 {key}: {what} 속성은 공통 속성이 될 수 없습니다 — "
+            "값이 속성 칸에 없어서 여러 타입을 한 목록으로 묻지 못합니다."
         )
     if kind == "object_ref" and not values.get("ref_type_slug"):
         return (

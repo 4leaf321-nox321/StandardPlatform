@@ -52,7 +52,7 @@ from app.modules.objects.schemas import ImportRowOut
 from app.modules.objects.services import properties_of
 from app.modules.ontology import managed
 from app.modules.ontology.interfaces import load_ends
-from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
+from app.modules.ontology.models import DETACHED_KINDS, ObjectType, PropertyDef, RelationType
 from app.shared import audit, extensions, singleton
 from app.shared.batches import chunks as id_batches
 from app.shared.errors import AppError, Conflict, code
@@ -241,7 +241,7 @@ class Mapping:
                 "찾을 근거입니다.",
                 status=422,
             )
-        keys = {d.key for d in defs if d.data_type != "file"}
+        keys = {d.key for d in defs if d.data_type not in DETACHED_KINDS}
         columns: list[Column] = []
         for one in raw.get("columns") or []:
             if not isinstance(one, dict):
@@ -2470,7 +2470,9 @@ def suggest_core_mapping(
             status=422,
         )
 
-    defs = [one for one in properties_of(db, object_type.id) if one.data_type != "file"]
+    defs = [
+        one for one in properties_of(db, object_type.id) if one.data_type not in DETACHED_KINDS
+    ]
     by_key = {one.key: one for one in defs}
     by_label = {one.label.strip(): one for one in defs}
     columns: list[dict[str, Any]] = [{"source": "label", "target": "label"}]

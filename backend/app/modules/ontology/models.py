@@ -109,6 +109,10 @@ USAGES = ("axis", "log")
 #: `text_long` 과 `text` 를 가르는 이유는 **위젯이 다르기 때문**이다 — 여러 줄
 #: 글을 한 줄 칸에 넣으면 사람은 자기가 쓴 것을 못 본다. `url` 은 링크로 뜬다.
 #: `datetime` 은 날짜만으로 시각을 못 담는 자리(측정·기록 시각)에 쓴다.
+#:
+#: `document` 는 **마크다운 문서**(백서 · 위키 페이지, ADR 0053) — 본문은 `properties` 가
+#: 아니라 따로 된 표(`object_documents`)에 판과 함께 담는다. 수만 자를 한 칸(JSONB)에 두면
+#: 목록을 열 때마다 그것을 함께 읽고, 수정 이력에도 통째로 쌓인다.
 DATA_TYPES = (
     "text",
     "text_long",
@@ -120,7 +124,13 @@ DATA_TYPES = (
     "url",
     "object_ref",
     "file",
+    "document",
 )
+
+#: **값이 `properties` 에 없는 종류** — 파일은 첨부 표, 문서는 문서 표에 산다. 이 둘은 값으로
+#: 거르거나 세거나 표 파일로 주고받지 못하고(목록 · 조건 · 지표 · 일괄 입력 · 동기화 · 코어),
+#: 필수 검사도 객체를 만들 때 하지 않는다(값이 나중에 따로 들어온다).
+DETACHED_KINDS = frozenset({"file", "document"})
 
 #: `file` 칸이 받는 것(`PropertyDef.accept`). 비우면 무엇이든 — 지금은 「이미지만」 하나다.
 ACCEPTS = ("image",)

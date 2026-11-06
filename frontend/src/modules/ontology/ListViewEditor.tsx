@@ -55,7 +55,7 @@ const BUILT_IN: { id: string; label: string }[] = [
  * 낫다**(상세에 있다). `file` 은 값이 아니라 첨부라 예전에는 빈 열이 섰다 — 이제 목록 응답이 칸
  * (첫 장 · 수)을 함께 실어 사진은 작은 미리보기, 그 밖의 파일은 이름으로 선다(2026-10-08).
  */
-const NOT_A_GOOD_COLUMN = new Set(['text_long'])
+const NOT_A_GOOD_COLUMN = new Set(['text_long', 'document'])
 
 /** 「트리 없음」. 빈 문자열을 쓸 수 없다 — Select 가 그것을 「고른 것 없음」 으로 본다. */
 const NO_TREE = '__none__'

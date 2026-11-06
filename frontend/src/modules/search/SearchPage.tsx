@@ -18,7 +18,7 @@
 
 import { useEffect, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Loader2, MessagesSquare, Search } from 'lucide-react'
+import { Loader2, MessagesSquare, Search, Sparkles } from 'lucide-react'
 
 import { searchApi } from '@/modules/search/api'
 import type { SearchResult } from '@/modules/search/api'
@@ -69,7 +69,8 @@ export default function SearchPage() {
     let cancelled = false
     setLoading(true)
     searchApi
-      .find(q, { type, offset })
+      // 뜻이 가까운 것도 — 첫 쪽에만(서버가 쪽을 넘기면 안 붙인다).
+      .find(q, { type, offset, meaning: true })
       .then((found) => {
         if (cancelled) return
         setData(found)
@@ -119,12 +120,13 @@ export default function SearchPage() {
 
   const tooShort = Boolean(q) && data !== null && q.length < data.min_query
   const posts = data && !type ? (data.posts ?? []) : []
+  const meaning = data?.meaning ?? []
 
   return (
     <div className="mx-auto max-w-3xl">
       <PageHeader
         title="검색"
-        description="타입을 가리지 않고 이름·식별자·별칭으로 찾습니다. 볼 수 있는 것만 나옵니다. 게시판 글은 제목·본문으로 함께 찾습니다."
+        description="타입을 가리지 않고 이름·식별자·별칭으로 찾습니다. 볼 수 있는 것만 나옵니다. 게시판 글은 제목·본문으로 함께 찾고, 관리자가 대상으로 지정한 타입은 글자가 달라도 뜻이 가까운 것을 함께 표시합니다."
       />
 
       <form
@@ -199,10 +201,17 @@ export default function SearchPage() {
           hint="한 글자로는 거의 모든 것이 걸려 검색이 아니라 목록이 됩니다."
         />
       ) : data && data.items.length === 0 ? (
-        <EmptyState
-          title={posts.length > 0 ? '맞는 객체가 없습니다' : '맞는 것이 없습니다'}
-          hint="다른 말로 찾아 보세요 — 이름 · 식별자 · 별칭으로 찾습니다."
-        />
+        meaning.length > 0 ? (
+          // 글자로는 없어도 뜻이 가까운 것이 있으면 「없다」 로 끝내지 않는다 — 아래에 선다.
+          <p className="text-muted-foreground text-sm">
+            이름 · 식별자 · 별칭에 그 글자가 포함된 객체는 없습니다.
+          </p>
+        ) : (
+          <EmptyState
+            title={posts.length > 0 ? '맞는 객체가 없습니다' : '맞는 것이 없습니다'}
+            hint="다른 말로 찾아 보세요 — 이름 · 식별자 · 별칭으로 찾습니다."
+          />
+        )
       ) : (
         <ul className="divide-y rounded-md border">
           {(data?.items ?? []).map((one) => (
@@ -252,6 +261,61 @@ export default function SearchPage() {
         <p className="text-muted-foreground mt-3 text-sm">
           {data.total.toLocaleString()}건 중 {data.items.length}건을 보고 있습니다. 위에서 타입을
           골라 좁히면 나머지까지 쪽을 넘겨 볼 수 있습니다.
+        </p>
+      )}
+
+      {/* **뜻이 가까운 것은 따로 선다**(ADR 0052) — 글자는 안 겹쳐도 뜻이 가까워 걸린 것이라,
+          글자로 찾은 줄에 섞으면 「왜 이게 나왔나」 를 말할 수 없다. 가까운 것부터. */}
+      {meaning.length > 0 && (
+        <section aria-label="뜻이 가까운 것" className="mt-6">
+          <h2 className="mb-1 flex items-center gap-2 text-sm font-medium">
+            <Sparkles className="size-4" />
+            뜻이 가까운 것 {meaning.length}건
+          </h2>
+          <p className="text-muted-foreground mb-2 text-xs">
+            글자는 달라도 뜻이 가까운 객체입니다 — 관리자가 대상으로 지정한 타입에서 가까운 것부터
+            표시합니다.
+          </p>
+          <ul className="divide-y rounded-md border">
+            {meaning.map((one) => {
+              // 문서의 절에서 걸렸으면 그 절로 — 절의 경로 맨 앞이 객체 이름(문서 제목)이면 뺀다.
+              const steps = (one.section ?? '').split(' › ').filter(Boolean)
+              const path = (steps[0] === one.label ? steps.slice(1) : steps).join(' › ')
+              const hash = one.anchor ? `#${encodeURIComponent(one.anchor)}` : ''
+              return (
+                <li key={`${one.type_slug}:${one.id}`}>
+                  <Link
+                    to={`/o/${one.type_slug}/${one.id}${hash}`}
+                    className="hover:bg-muted/50 flex items-center gap-3 px-3 py-2"
+                  >
+                    <TypeIcon name={one.icon} className="shrink-0" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate">
+                        {one.label}
+                        {path && <span className="text-muted-foreground"> › {path}</span>}
+                      </span>
+                      <span className="text-muted-foreground block truncate text-xs">
+                        {one.type_label}
+                        {one.key && <span className="ml-2 font-mono">{one.key}</span>}
+                      </span>
+                    </span>
+                    {(one.same ?? 0) > 0 && (
+                      <span className="text-muted-foreground shrink-0 text-xs">
+                        같은 내용 {(one.same ?? 0).toLocaleString()}건 더
+                      </span>
+                    )}
+                  </Link>
+                </li>
+              )
+            })}
+          </ul>
+        </section>
+      )}
+      {/* 모델에 못 닿으면 말한다 — 안 말하면 「뜻으로는 없다」 로 읽힌다. */}
+      {data?.meaning_state === 'unavailable' && (
+        <p className="text-muted-foreground mt-3 text-xs">
+          뜻으로 찾기를 지금 사용할 수 없어 글자로 찾은 것만 표시합니다 — 관리자는 서버 화면의
+          「뜻으로 찾기」 를 확인하세요.
         </p>
       )}
 

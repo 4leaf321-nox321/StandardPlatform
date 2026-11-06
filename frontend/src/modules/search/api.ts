@@ -23,6 +23,24 @@ export interface SearchHit {
   matched_text: string
 }
 
+/** 뜻이 가까운 것 하나(ADR 0052) — 글자는 안 겹쳐도 뜻이 가까워 걸린 객체. */
+export interface SearchMeaning {
+  id: string
+  type_slug: string
+  type_label: string
+  icon: string
+  label: string
+  key: string | null
+  /** 코사인 유사도(0 ~ 1) — 클수록 가깝다. */
+  similarity: number
+  /** 문서의 절에서 걸렸으면 그 절의 경로(ADR 0054). */
+  section?: string
+  /** 그 절의 제목 id — 상세 주소 뒤에 `#` 로. */
+  anchor?: string
+  /** 글이 똑같은 다른 객체의 수 — 하나만 세우고 수로 말한다. */
+  same?: number
+}
+
 /** 게시판 글 하나(ADR 0033) — 객체가 아니라 사람이 쓴 글이라 따로 선다. */
 export interface SearchPost {
   id: string
@@ -50,13 +68,19 @@ export interface SearchResult {
   posts?: SearchPost[]
   /** 그 말이 든 글 전부의 수 — 다섯보다 많으면 「게시판에서 모두 보기」. */
   posts_total?: number
+  /** 뜻이 가까운 것 — `meaning` 으로 물은 첫 쪽에만, 글자로 찾은 줄은 뺀다. */
+  meaning?: SearchMeaning[]
+  /** ready · off(켠 타입이 없거나 끔) · unavailable(모델에 못 닿음) — 안 물었으면 빈 글자. */
+  meaning_state?: string
 }
 
 export const searchApi = {
-  find: (q: string, options: { type?: string | null; offset?: number } = {}) => {
+  find: (q: string, options: { type?: string | null; offset?: number; meaning?: boolean } = {}) => {
     const params = new URLSearchParams({ q })
     if (options.type) params.set('type', options.type)
     if (options.offset) params.set('offset', String(options.offset))
+    // 뜻으로도 — 검색 화면의 첫 쪽만 묻는다(찾을 말을 뜻으로 바꾸는 데 한 번 더 든다).
+    if (options.meaning && !options.offset) params.set('meaning', 'true')
     return api.get<SearchResult>(`/search?${params.toString()}`)
   },
 }

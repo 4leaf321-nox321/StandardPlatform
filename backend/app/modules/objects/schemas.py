@@ -687,6 +687,9 @@ class HistoryEntryOut(BaseModel):
     """값 기록에만 있다. 되돌리기의 목표."""
     batch: HistoryBatchOut | None = None
     """여럿 골라 고치기로 **같이 바뀐** 기록이면 그 묶음. 한 번에 되돌리는 입구다."""
+    document: dict[str, Any] | None = None
+    """문서를 고친 기록(ADR 0053)이면 `{key, revision, chars, via, note}` — 되돌리기는 문서의
+    판 이력에서."""
 
 
 class RestoreRequest(BaseModel):

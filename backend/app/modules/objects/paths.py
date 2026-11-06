@@ -69,7 +69,7 @@ from app.modules.objects import graph, refedges, system
 from app.modules.objects.models import ObjectInstance, ObjectLink, ObjectRelation
 from app.modules.objects.scope import Scope, as_scope
 from app.modules.objects.scope import find as find_scope
-from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
+from app.modules.ontology.models import DETACHED_KINDS, ObjectType, PropertyDef, RelationType
 from app.shared.errors import AppError, code
 from app.shared.permissions import visible_owner_clause
 
@@ -101,7 +101,7 @@ EDGE_FIXED = {"valid_from": "시작일", "valid_to": "끝날"}
 
 #: 선의 칸 중 조건 · 기준으로 못 쓰는 종류 — 참조는 참조 색인(`object_refs`)이 객체의 칸만
 #: 담아 「가리키는 것」 으로 못 걸고, 파일은 객체의 칸에서도 못 건다.
-EDGE_UNUSABLE = ("object_ref", "file")
+EDGE_UNUSABLE = ("object_ref", "file", "document")
 
 SEP = " › "
 
@@ -892,7 +892,7 @@ def _hop_options(
             )
         )
     for one in hop.target_defs:
-        if one.data_type == "file":
+        if one.data_type in DETACHED_KINDS:
             continue
         out.append(
             FieldOption(

@@ -88,6 +88,7 @@ describe('검색', () => {
       expect(searchApi.find).toHaveBeenLastCalledWith('ansys', {
         type: 'vendor',
         offset: 0,
+        meaning: true,
       }),
     )
   })
@@ -189,5 +190,105 @@ describe('검색', () => {
     )
     // 객체는 없고 글만 있다 — 「맞는 것이 없다」 고 하면 아래의 글과 어긋난다.
     expect(screen.getByText('맞는 객체가 없습니다')).toBeInTheDocument()
+  })
+
+  it('뜻이 가까운 것은 글자로 찾은 줄과 따로 서고 그 객체로 간다', async () => {
+    searchApi.find.mockResolvedValue({
+      ...RESULT,
+      meaning: [
+        {
+          id: 'm1',
+          type_slug: 'part',
+          type_label: '부품',
+          icon: 'Cog',
+          label: 'N12 후면 커버',
+          key: 'PT-1',
+          similarity: 0.66,
+        },
+      ],
+      meaning_state: 'ready',
+    })
+    await open('/search?q=ansys')
+    const section = await screen.findByRole('region', { name: '뜻이 가까운 것' })
+    expect(section).toHaveTextContent('뜻이 가까운 것 1건')
+    expect(screen.getByRole('link', { name: /N12 후면 커버/ })).toHaveAttribute(
+      'href',
+      '/o/part/m1',
+    )
+    // 첫 쪽의 물음에 뜻을 함께 묻는다.
+    expect(searchApi.find).toHaveBeenCalledWith('ansys', {
+      type: null,
+      offset: 0,
+      meaning: true,
+    })
+  })
+
+  it('글자로 없어도 뜻이 가까운 것이 있으면 「없다」 로 끝내지 않는다', async () => {
+    searchApi.find.mockResolvedValue({
+      ...RESULT,
+      total: 0,
+      types: [],
+      items: [],
+      meaning: [
+        {
+          id: 'm1',
+          type_slug: 'code',
+          type_label: '불량 코드',
+          icon: '',
+          label: '침수',
+          key: null,
+          similarity: 0.47,
+        },
+      ],
+      meaning_state: 'ready',
+    })
+    await open('/search?q=물에 빠짐')
+    expect(await screen.findByRole('link', { name: /침수/ })).toBeInTheDocument()
+    expect(screen.queryByText('맞는 것이 없습니다')).not.toBeInTheDocument()
+    expect(screen.getByText(/그 글자가 포함된 객체는 없습니다/)).toBeInTheDocument()
+  })
+
+  it('뜻으로 찾기를 쓸 수 없으면 그렇다고 말한다', async () => {
+    searchApi.find.mockResolvedValue({ ...RESULT, meaning: [], meaning_state: 'unavailable' })
+    await open('/search?q=ansys')
+    expect(await screen.findByText(/뜻으로 찾기를 지금 사용할 수 없어/)).toBeInTheDocument()
+    expect(screen.queryByRole('region', { name: '뜻이 가까운 것' })).not.toBeInTheDocument()
+  })
+
+  it('문서의 절에서 걸리면 그 절로 가고, 같은 글은 수로 말한다', async () => {
+    searchApi.find.mockResolvedValue({
+      ...RESULT,
+      meaning: [
+        {
+          id: 'm2',
+          type_slug: 'paper',
+          type_label: '백서',
+          icon: '',
+          label: 'N12 백서',
+          key: null,
+          similarity: 0.64,
+          section: 'N12 백서 › 3. 결과 › 3.1 모서리 찍힘',
+          anchor: '3-1-모서리-찍힘',
+          same: 0,
+        },
+        {
+          id: 'm3',
+          type_slug: 'svc',
+          type_label: '시장 서비스',
+          icon: '',
+          label: 'SR-1',
+          key: null,
+          similarity: 0.6,
+          same: 2,
+        },
+      ],
+      meaning_state: 'ready',
+    })
+    await open('/search?q=ansys')
+    const paper = await screen.findByRole('link', { name: /N12 백서/ })
+    // 절의 경로 맨 앞(문서 제목 = 객체 이름)은 빼고 적는다.
+    expect(paper).toHaveTextContent('N12 백서 › 3. 결과 › 3.1 모서리 찍힘')
+    expect(paper).toHaveAttribute('href', `/o/paper/m2#${encodeURIComponent('3-1-모서리-찍힘')}`)
+    expect(screen.getByRole('link', { name: /SR-1/ })).toHaveTextContent('같은 내용 2건 더')
   })
 })

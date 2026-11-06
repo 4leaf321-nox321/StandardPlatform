@@ -29,6 +29,7 @@ import type {
   SyncResult,
 } from '@/modules/datasources/api'
 import { ontologyApi } from '@/modules/ontology/api'
+import { isDetached } from '@/modules/ontology/kinds'
 import type { PropertyDef } from '@/modules/ontology/api'
 import { workspaceApi } from '@/modules/workspaces/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
@@ -527,7 +528,7 @@ function EditDialog({
   const ra = kind === 'ra_reports'
   const type = types.find((one) => one.slug === typeSlug)
   const propertyTargets = (type?.properties ?? [])
-    .filter((def) => def.data_type !== 'file')
+    .filter((def) => !isDetached(def.data_type))
     .map((def): [string, string] => [`properties.${def.key}`, `${def.label} (${def.key})`])
 
   /** 고정 칸(이름·식별자·설명·별칭)으로 가는 열 — 각자 자리 하나씩. */

@@ -16,7 +16,14 @@ from app.modules.accounts.models import User
 from app.modules.board import services as board
 from app.modules.objects import misses
 from app.modules.search import services
-from app.modules.search.schemas import SearchHitOut, SearchOut, SearchPostOut, SearchTypeOut
+from app.modules.search.schemas import (
+    SearchHitOut,
+    SearchMeaningOut,
+    SearchOut,
+    SearchPostOut,
+    SearchTypeOut,
+)
+from app.modules.semantic import services as semantic
 from app.shared.auth import current_user
 from app.shared.pagination import clamp_limit
 
@@ -30,6 +37,13 @@ def search(
     type_slug: str | None = Query(default=None, alias="type"),
     limit: int | None = Query(default=None),
     offset: int = Query(default=0, ge=0),
+    meaning: bool = Query(
+        default=False,
+        description=(
+            "뜻이 가까운 것도 함께(ADR 0052) — 첫 쪽에만. "
+            "찾을 말을 뜻으로 바꾸는 데 한 번 더 든다"
+        ),
+    ),
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> SearchOut:
@@ -50,6 +64,18 @@ def search(
     posts_total = 0
     if type_slug is None and offset == 0 and len(q.strip()) >= services.MIN_QUERY:
         posts, posts_total = board.search_posts(db, q)
+    # **뜻이 가까운 것** — 검색 화면이 물을 때만(별칭 후보 창 같은 다른 부르는 곳은 글자만
+    # 쓴다). 글자로 이미 찾은 줄은 뺀다 — 같은 것을 두 번 보이지 않게.
+    meaning_state = ""
+    near: list[semantic.Near] = []
+    if meaning and offset == 0 and len(q.strip()) >= services.MIN_QUERY:
+        meaning_state, near = semantic.nearest(
+            db,
+            user,
+            q,
+            among=services.type_ids_for(db, type_slug),
+            exclude=[one.id for one in found.hits],
+        )
     return SearchOut(
         q=q.strip(),
         total=found.total,
@@ -92,4 +118,20 @@ def search(
             for post, comments in posts
         ],
         posts_total=posts_total,
+        meaning=[
+            SearchMeaningOut(
+                id=one.row.id,
+                type_slug=one.object_type.slug,
+                type_label=one.object_type.label,
+                icon=one.object_type.icon,
+                label=one.row.label,
+                key=one.row.key,
+                similarity=one.similarity,
+                section=one.heading,
+                anchor=one.anchor,
+                same=one.same,
+            )
+            for one in near
+        ],
+        meaning_state=meaning_state,
     )

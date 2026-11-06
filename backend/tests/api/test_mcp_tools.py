@@ -2379,3 +2379,46 @@ def test_추론한_선은_제안으로_남기고_사람이_정한_것만_확정�
     assert accepted["status"] == "accepted" and accepted["relation_id"]
     related = bot.call(server.object_get, part, bolt["id"])["related"]
     assert {one["object_id"] for one in related} == {acme["id"], beta["id"]}
+
+
+def test_문서는_읽은_판으로_쓰고_늦으면_덮지_않는다(bot: Bot) -> None:
+    """백서 백필(ADR 0053) — AI 가 MCP 로 문서를 쓴다. 읽은 판을 `base_revision` 으로 보내고,
+    그사이 바뀌었으면 서버의 거절이 그대로 온다(덮어쓰지 않는다). 판에는 토큰 이름이 남는다."""
+    slug = _uniq("paper")
+    bot.call(
+        server.ontology_import,
+        {
+            "types": [
+                {
+                    "slug": slug,
+                    "label": "백서",
+                    "properties": [{"key": "body", "label": "본문", "data_type": "document"}],
+                }
+            ]
+        },
+        apply=True,
+    )
+    paper = bot.call(server.object_create, slug, label="힌지 내구 백서")
+    empty = bot.call(server.document_read, slug, paper["id"], "body")
+    assert empty["revision"] == 0
+
+    written = bot.call(
+        server.document_write,
+        slug,
+        paper["id"],
+        "body",
+        body="# 힌지 내구\n\n| 항목 | 값 |\n|---|---|\n| 회수 | 20만 |",
+        base_revision=empty["revision"],
+        note="백서 v1 반영",
+    )
+    assert written["revision"] == 1 and written["updated_via"].startswith("bot_")
+
+    with pytest.raises(ToolError, match="OBJECTS-0149"):
+        bot.call(
+            server.document_write, slug, paper["id"], "body", body="덮기", base_revision=0
+        )
+
+    history = bot.call(server.document_revisions, slug, paper["id"], "body")
+    assert [(one["revision"], one["note"]) for one in history] == [(1, "백서 v1 반영")]
+    old = bot.call(server.document_read, slug, paper["id"], "body", revision=1)
+    assert "| 회수 | 20만 |" in old["body"]

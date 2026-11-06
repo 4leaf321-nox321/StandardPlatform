@@ -43,7 +43,13 @@ from app.modules.objects.models import (
 )
 from app.modules.objects.services import properties_of
 from app.modules.ontology import importer, interfaces
-from app.modules.ontology.models import NavGroup, ObjectType, PropertyDef, RelationType
+from app.modules.ontology.models import (
+    DETACHED_KINDS,
+    NavGroup,
+    ObjectType,
+    PropertyDef,
+    RelationType,
+)
 from app.shared.errors import Conflict, NotFound, code
 
 FORMAT = "sp-bundle/1"
@@ -92,7 +98,7 @@ def export_group(
         )
     slugs = {one.slug for one in types}
     defs_of = {
-        one.slug: [d for d in properties_of(db, one.id) if d.data_type != "file"]
+        one.slug: [d for d in properties_of(db, one.id) if d.data_type not in DETACHED_KINDS]
         for one in types
     }
     # **타입이 구현한 인터페이스를 함께 싣는다**(상위 인터페이스까지) — 안 실으면 받는 쪽에서

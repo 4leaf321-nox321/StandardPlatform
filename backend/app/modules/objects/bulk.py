@@ -59,7 +59,7 @@ from app.modules.objects.services import (
     stored_text,
 )
 from app.modules.ontology import conversion, interfaces, managed
-from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
+from app.modules.ontology.models import DETACHED_KINDS, ObjectType, PropertyDef, RelationType
 from app.modules.ontology.services import InvalidValue, merge_properties, validate_properties
 from app.shared import audit, copyin, tabular
 from app.shared.batches import any_of, chunks
@@ -1263,7 +1263,7 @@ def plan_objects(
         plan.errors.append(refused)
         return plan
 
-    defs = [d for d in properties_of(db, object_type.id) if d.data_type != "file"]
+    defs = [d for d in properties_of(db, object_type.id) if d.data_type not in DETACHED_KINDS]
     headers = {key for row in rows for key in row}
     mapping, unknown = _column_map(defs, headers)
     if unknown:
@@ -1797,7 +1797,7 @@ def apply_objects(
     if before_apply is not None:
         before_apply(plan)
 
-    defs = [d for d in properties_of(db, object_type.id) if d.data_type != "file"]
+    defs = [d for d in properties_of(db, object_type.id) if d.data_type not in DETACHED_KINDS]
     # 계획이 미리 읽은 것을 그대로 쓴다 — 방금 세운 계획이라 같은 트랜잭션의 같은 사실이다.
     # 칸 값(패치)도 그렇다: 예전에는 여기서 참조 대상을 처음부터 다시 읽고 줄마다 다시 풀었다.
     index_data = plan.index if isinstance(plan.index, _Index) else _Index()
@@ -2011,7 +2011,7 @@ def export_columns(defs: list[PropertyDef]) -> list[str]:
     # `renamed_from` · `previous_keys` 는 템플릿 · 내보내기에 안 넣는다 — 늘 비는 열이 늘고,
     # 내보낸 것을 그대로 올리면 뜻 없는 칸이 된다. 키를 바꿀 때만 손으로 더하는 열이다.
     fixed = [one for one in FIXED_COLUMNS if one not in ("renamed_from", "previous_keys")]
-    return [*fixed, *(d.key for d in defs if d.data_type != "file")]
+    return [*fixed, *(d.key for d in defs if d.data_type not in DETACHED_KINDS)]
 
 
 def export_rows(
@@ -2072,7 +2072,7 @@ def export_rows(
         }
         values = row.properties or {}
         for d in defs:
-            if d.data_type == "file":
+            if d.data_type in DETACHED_KINDS:
                 continue
             raw = values.get(d.key)
             if raw is None:

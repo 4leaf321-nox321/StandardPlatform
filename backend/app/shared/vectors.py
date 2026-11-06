@@ -8,18 +8,21 @@
 따라오지 않는 복구한 DB 에서 「type vector does not exist」 로 멈춘다.
 
 **확장은 superuser 만 만든다** — pg_trgm · btree_gist 와 달리 「신뢰된 확장」 이 아니다.
-운영은 `deploy.sh`, 개발 PC 는 `scripts/dev_pgvector.sh` 가 postgres 계정으로 만든다. 운영은
-아직 그것을 쓰는 표가 없어 없어도 돌고(서버 화면이 말한다), 시험의 표 세우기는 없으면 할 일을
-말하며 멈춘다(superuser 인 CI 는 스스로 만든다).
+운영은 `deploy.sh`, 개발 PC 는 `scripts/dev_pgvector.sh` 가 postgres 계정으로 만든다. 그것을
+쓰는 표(`object_embeddings`, ADR 0052)가 생긴 뒤로는 없으면 마이그레이션이 할 일을 말하며
+멈추고(배포는 그 앞에서 멈춘다 — `require_vector`), 시험의 표 세우기도 그렇다(superuser 인 CI
+는 스스로 만든다).
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import MetaData, event, text
-from sqlalchemy.engine import Connection
+from sqlalchemy import MetaData, cast, event, text
+from sqlalchemy.engine import Connection, Dialect
 from sqlalchemy.orm import Session
+from sqlalchemy.sql.elements import ColumnElement
+from sqlalchemy.types import UserDefinedType
 
 SCHEMA = "extensions"
 #: bge-m3 의 차원 — 뜻의 자리를 담는 칸이 이 크기로 박힌다.
@@ -78,6 +81,43 @@ def ensure(connection: Connection) -> None:
     why = problem(found)
     if why:
         raise RuntimeError(why)
+
+
+class Vector(UserDefinedType[list[float]]):
+    """뜻의 자리를 담는 칸 — `extensions.vector(1024)`.
+
+    **파이썬 pgvector 패키지를 쓰지 않는다.** 폐쇄망 번들에 의존성이 하나 늘고, 하는 일은 글
+    `[0.1,0.2,…]` 로 바꾸고 읽는 것뿐이다. 넣을 때는 그 글을 `CAST(… AS extensions.vector)` 로
+    감싼다 — 드라이버가 글로 보내도 DB 가 형식을 안다.
+    """
+
+    cache_ok = True
+
+    def __init__(self, dim: int = DIM) -> None:
+        self.dim = dim
+
+    def get_col_spec(self, **_kw: Any) -> str:
+        return f"{SCHEMA}.vector({self.dim})"
+
+    def bind_processor(self, dialect: Dialect) -> Any:
+        def write(value: list[float] | None) -> str | None:
+            if value is None:
+                return None
+            return "[" + ",".join(repr(float(one)) for one in value) + "]"
+
+        return write
+
+    def bind_expression(self, bindvalue: Any) -> ColumnElement[Any]:
+        return cast(bindvalue, self)
+
+    def result_processor(self, dialect: Dialect, coltype: object) -> Any:
+        def read(value: str | None) -> list[float] | None:
+            if value is None:
+                return None
+            body = value.strip()[1:-1]
+            return [float(one) for one in body.split(",")] if body else []
+
+        return read
 
 
 def attach(metadata: MetaData) -> None:

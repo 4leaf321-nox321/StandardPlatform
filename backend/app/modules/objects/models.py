@@ -629,6 +629,86 @@ class GraphEdgeSnapshot(Base):
     """[관계 slug, 출발 타입 slug, 도착 타입 slug, 수] — 원 표와 이은 선."""
 
 
+class ObjectDocument(Base):
+    """문서 속성의 **지금 본문**(ADR 0053) — 객체 하나 · 칸 하나에 한 줄. 마크다운이다.
+
+    본문을 `properties` 에 두지 않는 까닭: 백서 한 편이 수만 자다 — 목록을 열 때마다 그것을
+    함께 읽고, 수정 이력(`audit`)에 통째로 쌓인다. 판(`revision`)은 고칠 때마다 하나씩 오르고,
+    고친 내용은 `ObjectDocumentRevision` 에 그대로 남는다. 동시에 고치면 늦게 온 쪽이 「먼저
+    바뀌었습니다」 를 받는다 (`base_revision`) — AI(MCP)와 사람이 같은 문서를 고치는 일이
+    흔하다.
+    """
+
+    __tablename__ = "object_documents"
+
+    object_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE"), primary_key=True
+    )
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    """문서 속성의 키 — 속성을 지워도 본문은 남는다(다시 만들면 돌아온다)."""
+    body: Mapped[str] = mapped_column(Text, default="", server_default="")
+    revision: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    chars: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    updated_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    updated_via: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    """토큰으로 고쳤으면 그 토큰의 이름(MCP · AI) — 화면에서 고쳤으면 빈 글자.
+    「AI 가 쓴 판」 을 사람이 검토하는 흐름의 근거다."""
+
+
+class ObjectDocumentRevision(Base):
+    """문서의 **판 하나** — 고칠 때마다 본문 전체를 남긴다(비교 · 옛 판 보기 · 되돌리기)."""
+
+    __tablename__ = "object_document_revisions"
+    __table_args__ = (UniqueConstraint("object_id", "key", "revision"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), primary_key=True, default=uuid.uuid4
+    )
+    object_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE")
+    )
+    key: Mapped[str] = mapped_column(String(80))
+    revision: Mapped[int] = mapped_column(Integer)
+    body: Mapped[str] = mapped_column(Text, default="", server_default="")
+    chars: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now()
+    )
+    created_by_id: Mapped[uuid.UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+    via: Mapped[str] = mapped_column(String(120), default="", server_default="")
+    """토큰 이름(MCP · AI) — 화면에서 고쳤으면 빈 글자."""
+    note: Mapped[str] = mapped_column(String(200), default="", server_default="")
+    """고친 까닭 한 줄 — 「백서 v2 반영」 「표 2 수치 수정」."""
+
+
+class ObjectDocumentMention(Base):
+    """문서 본문이 **가리키는 객체**(ADR 0053) — 본문의 링크 `[이름](/o/<타입>/<id>)` 를
+    저장할 때 뽑는다. 가리켜진 객체의 상세가 「이 객체를 언급한 문서」 로 모은다. 본문이
+    정본이라 저장마다
+    통째로 다시 적는다."""
+
+    __tablename__ = "object_document_mentions"
+
+    object_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("objects.id", ondelete="CASCADE"), primary_key=True
+    )
+    """문서를 가진 객체."""
+    key: Mapped[str] = mapped_column(String(80), primary_key=True)
+    target_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("objects.id", ondelete="CASCADE"),
+        primary_key=True,
+        index=True,
+    )
+
+
 refindex.attach(Base.metadata)
 attachment_sync.attach(Base.metadata)
 typecounts.attach(Base.metadata)

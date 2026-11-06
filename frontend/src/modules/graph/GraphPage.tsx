@@ -74,6 +74,7 @@ import { objectApi } from '@/modules/objects/api'
 import type { LogCount, ObjectRow, RelatedObject } from '@/modules/objects/api'
 import { propertyText } from '@/modules/objects/PropertyFields'
 import { ontologyApi } from '@/modules/ontology/api'
+import { isDetached } from '@/modules/ontology/kinds'
 import { ApiError } from '@/shared/api/client'
 import { LazyPlot } from '@/shared/charts'
 import { isSystemAdmin } from '@/shared/auth/roles'
@@ -2225,7 +2226,7 @@ function NodeDetail({
     const data = profile.data
     if (!data) return []
     return data.properties_schema
-      .filter((def) => def.data_type !== 'file')
+      .filter((def) => !isDetached(def.data_type))
       .map((def) => ({
         key: def.key,
         label: def.label,

@@ -25,6 +25,7 @@ import { Button } from '@/shared/components/ui/button'
 import { useResource } from '@/shared/hooks/useResource'
 import { shownDateTime } from '@/shared/lib/datetime'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/shared/components/ui/tabs'
+import { SemanticPanel } from '@/modules/semantic/SemanticPanel'
 import { PlatformProfile } from '@/modules/server/PlatformProfile'
 import { PortalLogin } from '@/modules/server/PortalLogin'
 import { Performance, periodOf, sortOf } from '@/modules/server/Performance'
@@ -287,6 +288,8 @@ function ServerStatusTab() {
       </dl>
 
       {isSystemAdmin(user) && <PlatformProfile />}
+
+      {isSystemAdmin(user) && <SemanticPanel />}
 
       {isSystemAdmin(user) && <OrphanFiles />}
 

@@ -29,7 +29,7 @@ from app.modules.objects import access, conditions, edges, paths, relations, sys
 from app.modules.objects.models import ObjectInstance, ObjectRelation
 from app.modules.objects.scope import as_scope
 from app.modules.ontology import managed
-from app.modules.ontology.models import ObjectType, PropertyDef, RelationType
+from app.modules.ontology.models import DETACHED_KINDS, ObjectType, PropertyDef, RelationType
 from app.modules.ontology.services import InvalidValue
 from app.modules.slides.models import Slide, SlideRef
 from app.modules.slides.schemas import (
@@ -235,10 +235,11 @@ def _check_fields(area: AreaIn, defs: list[PropertyDef]) -> None:
             raise InvalidValue(
                 code("SLIDES", 11), f"영역 「{area.title}」 에 없는 칸이 있습니다: {key}"
             )
-        if found.data_type == "file":
+        if found.data_type in DETACHED_KINDS:
+            what = "파일" if found.data_type == "file" else "문서"
             raise InvalidValue(
                 code("SLIDES", 12),
-                f"영역 「{area.title}」 — 파일 칸({found.label})은 아직 장표에 "
+                f"영역 「{area.title}」 — {what} 칸({found.label})은 아직 장표에 "
                 "표시하지 못합니다.",
             )
 

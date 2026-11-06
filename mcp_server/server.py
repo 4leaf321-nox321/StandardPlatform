@@ -2412,6 +2412,56 @@ async def object_update(
 
 
 @tool()
+async def document_read(
+    ctx: Context, type_slug: str, object_id: str, key: str, revision: int | None = None
+) -> Any:
+    """문서 속성(`data_type: document`, ADR 0053)의 본문 — 마크다운. 지금 판과 함께 온다.
+
+    `revision` 을 주면 그 옛 판을 읽는다(판 목록은 `document_revisions`). 아직 안 썼으면
+    빈 본문 · 판 0. **고치기 전에 반드시 읽는다** — 고칠 때 이 판 번호를 `base_revision`
+    으로 보낸다."""
+    base = f"/api/objects/{type_slug}/{object_id}/documents/{key}"
+    if revision is not None:
+        return await _get(ctx, f"{base}/revisions/{revision}")
+    return await _get(ctx, base)
+
+
+@tool()
+async def document_write(
+    ctx: Context,
+    type_slug: str,
+    object_id: str,
+    key: str,
+    body: str,
+    base_revision: int,
+    note: str = "",
+) -> Any:
+    """문서 속성의 본문을 **통째로** 쓴다 — 판이 하나 오르고 그 판이 남는다(누가 · 어느
+    토큰으로).
+
+    `base_revision` 은 `document_read` 로 읽은 판(처음이면 0). 그사이 누가 먼저 고쳤으면
+    `[OBJECTS-0149]` 로 거절된다 — **덮어쓰지 말고** 다시 읽어 사람이 고친 것을 살린 뒤 쓴다.
+    `note` 에 고친 까닭 한 줄(「백서 v2 반영」).
+
+    본문은 마크다운(제목 · 목록 · 표). 객체를 가리킬 때는
+    **`[이름](/o/<타입 slug>/<객체 id>)`** 링크로 쓴다 — 그 객체의 상세에 「이 객체를 언급한
+    문서」 로 모인다. 100만 자까지.
+    Word 원본은 마크다운으로 바꿔 넣는다(제목 → `#`, 표 → `|` 표). 그림은 아직 못 넣는다."""
+    return await _put(
+        ctx,
+        f"/api/objects/{type_slug}/{object_id}/documents/{key}",
+        {"body": body, "base_revision": base_revision, "note": note},
+    )
+
+
+@tool()
+async def document_revisions(ctx: Context, type_slug: str, object_id: str, key: str) -> Any:
+    """문서의 판 목록 — 새 판부터. 판마다 누가 · 언제 · 어느 토큰으로(`via`, 화면이면 빈
+    글자) · 까닭. 본문은 `document_read(revision=)` 로."""
+    return await _get(ctx, f"/api/objects/{type_slug}/{object_id}/documents/{key}/revisions")
+
+
+@tool()
 async def objects_delete(
     ctx: Context,
     type_slug: str,
