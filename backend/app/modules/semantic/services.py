@@ -76,6 +76,10 @@ NEAR_LIMIT = 8
 #: HNSW 가 훑는 후보 수(기본 40). pgvector 0.6 은 걸러 찾을 때 색인을 이어 훑지 못해, 부서 ·
 #: 타입으로 걸러지면 덜 나온다 — 이 질의에서만 키운다(ADR 0050 「다음」).
 EF_SEARCH = 400
+#: 고른 범위의 조각이 이만큼 이하면 색인을 안 쓰고 정확히 잰다 — 작은 타입으로 좁혀도 덜 나오지
+#: 않는다. 개발 PC 실측(1024차원 · 캐시에 든 표, 2026-11-07): 2,000개 15ms · 5,200개 27ms ·
+#: 1만 개 130ms. 뜻으로 바꾸는 데 드는 Ollama 한 번(CPU 수백 ms)보다 작다.
+EXACT_MAX = 10_000
 #: 기본 글의 상한 — bge-m3 은 8,192 토큰까지 받지만 긴 글은 뜻이 흐려진다.
 TEXT_MAX = 4_000
 #: 문서의 절 하나가 이보다 길면 문단 단위로 더 나눈다 — 백서의 한 절이 몇 쪽이면 그 안의 한
@@ -952,61 +956,101 @@ def nearest(
     among: set[uuid.UUID] | None = None,
     exclude: Iterable[uuid.UUID] = (),
     limit: int = NEAR_LIMIT,
-) -> tuple[str, list[Near]]:
-    """찾을 말과 뜻이 가까운 것 — (상태, 줄). 객체마다 가장 가까운 조각 하나.
+) -> tuple[str, list[Near], bool]:
+    """찾을 말과 뜻이 가까운 것 — (상태, 줄, 덜 나왔을 수 있나). 객체마다 가장 가까운 조각
+    하나.
 
     상태: ready · off(대상 타입이 없거나 끔) · unavailable. **볼 수 있는 것만**
     (`visible_owner_clause`), 지운 것 · 이미 글자로 찾은 것(`exclude`)은 뺀다. 뜻으로 못
     바꾸면(Ollama 가 꺼졌다 …) 빈 줄과 `unavailable` — 찾기 전체는 멈추지 않는다.
+
+    고른 범위(대상 타입 ∩ `among`)의 조각이 `EXACT_MAX` 이하면 정확히 잰다. 넘으면 HNSW
+    색인으로 받는데, pgvector 0.6 은 가까운 조각 `EF_SEARCH` 개를 먼저 받고 그 뒤에 타입 ·
+    부서 · 지운 것을 거른다.
+
+    **셋째 값(narrowed)** — 낼 수(`limit`)를 못 채웠는데, 받은 줄이 끝까지 기준 안이고 범위를
+    다 봤다고 할 수 없을 때 참이다. 그러면 **안 본 것 중에 가까운 것이 있을 수 있다** — 빈 줄을
+    「뜻으로도 없다」 로 읽지 않게 알린다(ADR 0052 「추가」).
     """
     chosen = target_ids(db)
     if among is not None:
         chosen &= among
     if not embedding.enabled() or not chosen:
-        return "off", []
+        return "off", [], False
     try:
         [at] = embedding.embed([q.strip()], seconds=embedding.QUERY_SECONDS)
     except embedding.Unavailable as caught:
         log.warning("뜻으로 찾기를 건너뜁니다: %s", caught)
-        return "unavailable", []
-    db.execute(text(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}"))
+        return "unavailable", [], False
     distance = ObjectEmbedding.embedding.op(
         f"OPERATOR({vectors.SCHEMA}.<=>)", return_type=Float()
     )(bindparam("at", at, type_=vectors.Vector()))
     skip = list(set(exclude))
-    query = (
-        select(
-            ObjectEmbedding.object_id,
-            ObjectEmbedding.heading,
-            ObjectEmbedding.anchor,
-            ObjectEmbedding.text_hash,
-            distance,
-        )
-        .join(ObjectInstance, ObjectInstance.id == ObjectEmbedding.object_id)
-        .where(
-            ObjectEmbedding.type_id.in_(list(chosen)),
-            ObjectInstance.deleted_at.is_(None),
-            visible_owner_clause(user, ObjectInstance.owner_workspace_id),
-            distance <= 1 - MIN_SIMILARITY,
-        )
-        .order_by(distance)
-        # 한 객체의 조각이 여럿 · 같은 글의 기록이 수백 걸릴 수 있다 — 넉넉히 받아 객체마다
-        # 가장 가까운 조각 하나, 같은 글은 하나만 남긴다.
-        .limit(EF_SEARCH)
-    )
+    scope: list[Any] = [
+        ObjectEmbedding.type_id.in_(list(chosen)),
+        ObjectInstance.deleted_at.is_(None),
+        visible_owner_clause(user, ObjectInstance.owner_workspace_id),
+    ]
     if skip:
-        query = query.where(ObjectInstance.id.not_in(skip))
+        scope.append(ObjectInstance.id.not_in(skip))
+    # **범위가 작으면 정확히 잰다** — 고른 타입의 조각을 `EXACT_MAX` + 1 까지만 센다(`type_id`
+    # 색인). 계획을 Postgres 에 맡기면 거리 조건 하나로도 색인 · 정확 계산이 갈려, 같은 좁힌
+    # 물음이 어느 날은 다 나오고 어느 날은 덜 나왔다(2026-11-07 검토).
+    in_range = db.scalar(
+        select(func.count()).select_from(
+            select(ObjectEmbedding.object_id)
+            .where(ObjectEmbedding.type_id.in_(list(chosen)))
+            .limit(EXACT_MAX + 1)
+            .subquery()
+        )
+    )
+    exact = int(in_range or 0) <= EXACT_MAX
+    if not exact:
+        db.execute(text(f"SET LOCAL hnsw.ef_search = {EF_SEARCH}"))
+    # 기준(MIN_SIMILARITY)은 질의에 안 건다 — 받은 줄의 수와 끝 줄의 거리로 「덜 나왔나」 를
+    # 알아야 한다.
+    found = list(
+        db.execute(
+            select(
+                ObjectEmbedding.object_id,
+                ObjectEmbedding.heading,
+                ObjectEmbedding.anchor,
+                ObjectEmbedding.text_hash,
+                distance,
+            )
+            .join(ObjectInstance, ObjectInstance.id == ObjectEmbedding.object_id)
+            .where(*scope)
+            # 정확히 잴 때는 색인 차례를 못 쓰게 한다(`+ 0`) — 쓰면 HNSW 가 가까운 것을 받은
+            # 뒤에 걸러 덜 나온다.
+            .order_by(distance + 0 if exact else distance)
+            # 한 객체의 조각이 여럿 · 같은 글의 기록이 수백 걸릴 수 있다 — 넉넉히 받아 객체마다
+            # 가장 가까운 조각 하나, 같은 글은 하나만 남긴다.
+            .limit(EF_SEARCH)
+        ).tuples()
+    )
     best: dict[uuid.UUID, tuple[str, str, str, float]] = {}
     seen_text: set[str] = set()
-    for object_id, heading, anchor, digest, gap in db.execute(query).tuples():
+    for object_id, heading, anchor, digest, gap in found:
+        similarity = 1 - float(gap)
+        if similarity < MIN_SIMILARITY:
+            break  # 가까운 것부터 왔다 — 뒤는 모두 기준 밖이다
         if object_id in best or digest in seen_text:
             continue
         seen_text.add(digest)
-        best[object_id] = (heading, anchor, digest, 1 - float(gap))
+        best[object_id] = (heading, anchor, digest, similarity)
         if len(best) >= limit:
             break
+    # **덜 나왔을 수 있나.** 아닌 셋: 낼 수만큼 다 찼다(안 본 것은 받은 어느 것보다 멀다) · 끝
+    # 줄이 기준 밖이다(기준 안은 다 봤다) · 정확히 쟀고 받는 수보다 적게 왔다(범위를 다 봤다).
+    # 나머지 — 받은 줄이 같은 글로 찼거나, 색인이 가까운 것을 받은 뒤 걸러 모자랐다 — 는 안 본
+    # 가까운 것이 있을 수 있다.
+    narrowed = (
+        len(best) < limit
+        and (not found or 1 - float(found[-1][4]) >= MIN_SIMILARITY)
+        and not (exact and len(found) < EF_SEARCH)
+    )
     if not best:
-        return "ready", []
+        return "ready", [], narrowed
     # 같은 글의 다른 객체 — 볼 수 있는 것만 센다(남의 부서 것이 수로 새지 않게).
     same: dict[str, int] = {
         digest: int(count) - 1
@@ -1032,15 +1076,19 @@ def nearest(
         row.id: row
         for row in db.scalars(select(ObjectType).where(ObjectType.id.in_(list(chosen))))
     }
-    return "ready", [
-        Near(
-            row=rows[object_id],
-            object_type=types[rows[object_id].type_id],
-            similarity=round(similarity, 3),
-            heading=heading,
-            anchor=anchor,
-            same=max(same.get(digest, 1), 0),
-        )
-        for object_id, (heading, anchor, digest, similarity) in best.items()
-        if object_id in rows and rows[object_id].type_id in types
-    ]
+    return (
+        "ready",
+        [
+            Near(
+                row=rows[object_id],
+                object_type=types[rows[object_id].type_id],
+                similarity=round(similarity, 3),
+                heading=heading,
+                anchor=anchor,
+                same=max(same.get(digest, 1), 0),
+            )
+            for object_id, (heading, anchor, digest, similarity) in best.items()
+            if object_id in rows and rows[object_id].type_id in types
+        ],
+        narrowed,
+    )

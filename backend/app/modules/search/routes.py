@@ -64,12 +64,14 @@ def search(
     posts_total = 0
     if type_slug is None and offset == 0 and len(q.strip()) >= services.MIN_QUERY:
         posts, posts_total = board.search_posts(db, q)
-    # **뜻이 가까운 것** — 검색 화면이 물을 때만(별칭 후보 창 같은 다른 부르는 곳은 글자만
-    # 쓴다). 글자로 이미 찾은 줄은 뺀다 — 같은 것을 두 번 보이지 않게.
+    # **뜻이 가까운 것** — 검색 화면과 MCP `search(meaning=True)` 가 물을 때만(별칭 후보 창
+    # 같은 다른 부르는 곳은 글자만 쓴다). 글자로 이미 찾은 줄은 뺀다 — 같은 것을 두 번 보이지
+    # 않게.
     meaning_state = ""
     near: list[semantic.Near] = []
+    narrowed = False
     if meaning and offset == 0 and len(q.strip()) >= services.MIN_QUERY:
-        meaning_state, near = semantic.nearest(
+        meaning_state, near, narrowed = semantic.nearest(
             db,
             user,
             q,
@@ -134,4 +136,5 @@ def search(
             for one in near
         ],
         meaning_state=meaning_state,
+        meaning_narrowed=narrowed,
     )

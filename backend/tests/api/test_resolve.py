@@ -76,6 +76,21 @@ def test_포함으로_하나만_걸려도_확정이_아니다(client: TestClient
     assert got["candidates"][0]["matched_by"] == "contains"
 
 
+def test_포함은_낱말로_나눠_보고_와일드카드를_글자로_본다(
+    client: TestClient, admin: Signed
+) -> None:
+    """ADR 0057 — 「포함」 도 통합 검색과 같은 규칙이다. 예전에는 `%` · `_` 를 그대로 넣어
+    「50%」 가 「50 뒤에 아무거나」 로 읽혔다."""
+    part = _make_type(client, admin, label="부품", key_policy="optional")
+    _make_object(client, admin, part, label="갤럭시 S24 Ultra 후면 커버")
+    _make_object(client, admin, part, label="수율 50건")
+
+    got = _resolve(client, admin, part, "S24 커버")
+    assert got["match"] == "candidates"  # 낱말로 맞아도 짐작이다
+    assert [one["label"] for one in got["candidates"]] == ["갤럭시 S24 Ultra 후면 커버"]
+    assert _resolve(client, admin, part, "50%")["match"] == "none"
+
+
 def test_없으면_없다고_말한다(client: TestClient, admin: Signed) -> None:
     vendor = _make_type(client, admin, label="공급사", key_policy="optional")
     _make_object(client, admin, vendor, label="Ansys")
@@ -105,6 +120,12 @@ def test_빈_타입과_좁은_조건은_다른_이유로_0건이다(client: Test
     assert effect["remaining"] == 2
     # 「조건에 안 맞아 빠진 것」 과 「값이 없어 빠진 것」 은 다른 일이다.
     assert effect["unknown"] == 1
+    # 검색어가 없는 조건이면 뜻으로 찾기를 권하지 않는다 — 글자 문제가 아니다.
+    assert not any("meaning" in one for one in narrow["next_steps"])
+    # 검색어로 0건이면 — 글자가 안 맞았을 수 있으니 뜻으로 찾는 길을 함께 말한다(ADR 0052).
+    by_word = _diagnose(client, admin, part, {"q": "뒷면 커버"})
+    assert by_word["reason"] == "filters"
+    assert any("meaning=True" in one for one in by_word["next_steps"])
 
 
 def test_결과가_있으면_진단은_있다고만_말한다(client: TestClient, admin: Signed) -> None:

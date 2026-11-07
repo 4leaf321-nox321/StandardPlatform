@@ -20,11 +20,13 @@ from typing import Any
 import httpx
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import delete, func, select
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
+from app.modules.accounts.models import User
 from app.modules.jobs.models import Job
+from app.modules.ontology.models import ObjectType
 from app.modules.semantic import services
 from app.modules.semantic.models import ObjectEmbedding, SemanticTarget
 from app.modules.workspaces.models import Workspace
@@ -248,6 +250,7 @@ def test_통합_검색이_글자가_달라도_뜻이_가까운_것을_더한다(
 
     found = _find(client, admin, "battery", meaning="true")
     assert found["meaning_state"] == "ready"
+    assert found["meaning_narrowed"] is False  # 작은 설치는 색인이 모자랄 일이 없다
     assert [one["id"] for one in found["meaning"]] == [battery["id"]]
     assert found["meaning"][0]["similarity"] > 0.9
     assert found["meaning"][0]["type_label"] == "부품"
@@ -264,6 +267,62 @@ def test_통합_검색이_글자가_달라도_뜻이_가까운_것을_더한다(
     plain = _find(client, admin, "battery")
     assert (plain["meaning"], plain["meaning_state"]) == ([], "")
     assert len(ollama) == asked
+
+
+def test_작은_범위는_정확히_재고_못_채운_채_끝나면_덜_나왔다고_알린다(
+    client: TestClient,
+    admin: Signed,
+    db: Session,
+    ollama: list[list[str]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """pgvector 0.6 의 HNSW 는 가까운 조각 `EF_SEARCH` 개를 먼저 받고 그 뒤에 타입 · 부서로
+    거른다. 그래서 고른 범위가 작으면 정확히 재고(`EXACT_MAX`), 큰 범위에서 못 채운 채 끝나면
+    빈 줄을 「뜻으로도 없다」 로 읽지 않게 알린다(ADR 0052 「추가」)."""
+    tag = uuid.uuid4().hex[:6]
+    part = _make_type(client, admin, label="부품")
+    pack = _make_type(client, admin, label="포장")
+    bundle = _make_type(client, admin, label="묶음")
+    for n in range(4):
+        _make_object(client, admin, part, label=f"{tag} 배터리 {n}")
+    # 두 뜻이 섞여 「battery」 와 덜 가깝다(약 0.66) — 그래도 기준(0.45) 안이다.
+    box = _make_object(client, admin, pack, label=f"{tag} 배터리 커버 상자")
+    for _ in range(3):  # 글이 똑같다 — 같은 자리를 옮겨 쓴다
+        _make_object(client, admin, bundle, label=f"{tag} 배터리 묶음")
+    _put(client, admin, [part, pack, bundle])
+    _sync_now(db)
+
+    user = db.scalar(select(User).where(User.email == admin.email))
+    ids = dict(db.execute(select(ObjectType.slug, ObjectType.id)).tuples().all())
+    assert user is not None
+    monkeypatch.setattr(services, "EF_SEARCH", 2)  # 받는 수를 작게 — 운영의 400 을 흉내 낸다
+
+    # 1) 작은 범위는 정확히 잰다 — 받는 수가 2 라도 좁힌 타입의 것이 온다.
+    state, near, narrowed = services.nearest(db, user, "battery", among={ids[pack]})
+    assert (state, [str(one.row.id) for one in near], narrowed) == (
+        "ready",
+        [box["id"]],
+        False,
+    )
+
+    # 2) 큰 범위는 색인으로 받는다(여기서는 `EXACT_MAX` 를 0 으로) — 가까운 두 조각이 다른
+    # 타입이라 걸러지면 빈 줄인데, 「뜻으로도 없다」 가 아니다. 작은 표에서는 Postgres 가 색인
+    # 대신 전부 읽고 정렬하므로 색인 순서로 훑게 한다.
+    monkeypatch.setattr(services, "EXACT_MAX", 0)
+    db.execute(text("SET LOCAL enable_seqscan = off"))
+    db.execute(text("SET LOCAL enable_sort = off"))
+    assert services.nearest(db, user, "battery", among={ids[pack]}) == ("ready", [], True)
+    monkeypatch.setattr(services, "EXACT_MAX", 10_000)
+
+    # 3) 받은 줄이 끝까지 기준 안인데 낼 수를 못 채웠다 — 더 있을 수 있다. 다 찼으면 아니다
+    # (안 본 것은 받은 어느 것보다 멀다).
+    state, near, narrowed = services.nearest(db, user, "battery", among={ids[part]})
+    assert len(near) == 2 and narrowed is True
+    assert services.nearest(db, user, "battery", among={ids[part]}, limit=1)[2] is False
+
+    # 4) 같은 글이 받는 수를 채웠다 — 한 줄만 섰지만 다른 가까운 글이 뒤에 있을 수 있다.
+    state, near, narrowed = services.nearest(db, user, "battery", among={ids[bundle]})
+    assert len(near) == 1 and near[0].same == 2 and narrowed is True
 
 
 def test_볼_수_없는_부서의_것은_뜻으로도_안_나온다(

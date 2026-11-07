@@ -126,7 +126,7 @@ export default function SearchPage() {
     <div className="mx-auto max-w-3xl">
       <PageHeader
         title="검색"
-        description="타입을 가리지 않고 이름·식별자·별칭으로 찾습니다. 볼 수 있는 것만 나옵니다. 게시판 글은 제목·본문으로 함께 찾고, 관리자가 대상으로 지정한 타입은 글자가 달라도 뜻이 가까운 것을 함께 표시합니다."
+        description="타입을 가리지 않고 이름·식별자·별칭으로 찾습니다. 띄어 쓴 낱말은 모두 포함된 것을 찾습니다. 볼 수 있는 것만 나옵니다. 게시판 글은 제목·본문으로 함께 찾고, 관리자가 대상으로 지정한 타입은 글자가 달라도 뜻이 가까운 것을 함께 표시합니다."
       />
 
       <form
@@ -206,6 +206,16 @@ export default function SearchPage() {
           <p className="text-muted-foreground text-sm">
             이름 · 식별자 · 별칭에 그 글자가 포함된 객체는 없습니다.
           </p>
+        ) : data.meaning_narrowed ? (
+          // 뜻으로 찾기가 범위를 다 보지 못했다 — 「없다」 로 끝내지 않는다(ADR 0052 「추가」).
+          <EmptyState
+            title="글자가 포함된 객체가 없습니다"
+            hint={
+              type
+                ? '뜻이 가까운 것은 일부만 확인했습니다 — 더 구체적인 말로 다시 찾거나, 그 타입 목록에서 다른 말로 찾아 보세요.'
+                : '뜻이 가까운 것은 일부만 확인했습니다 — 더 구체적인 말로 다시 찾아 보세요.'
+            }
+          />
         ) : (
           <EmptyState
             title={posts.length > 0 ? '맞는 객체가 없습니다' : '맞는 것이 없습니다'}
@@ -310,6 +320,13 @@ export default function SearchPage() {
             })}
           </ul>
         </section>
+      )}
+      {/* 뜻으로 찾기가 범위를 다 보지 못했으면 말한다 — 줄이 있을 때(없으면 위의 빈 목록이 말한다). */}
+      {data?.meaning_narrowed && (data.items.length > 0 || meaning.length > 0) && (
+        <p className="text-muted-foreground mt-3 text-xs">
+          뜻이 가까운 것이 일부만 표시되었을 수 있습니다 — 더 구체적인 말로 다시 찾으면 다른 결과가
+          표시될 수 있습니다.
+        </p>
       )}
       {/* 모델에 못 닿으면 말한다 — 안 말하면 「뜻으로는 없다」 로 읽힌다. */}
       {data?.meaning_state === 'unavailable' && (

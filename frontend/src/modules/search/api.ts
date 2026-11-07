@@ -72,6 +72,8 @@ export interface SearchResult {
   meaning?: SearchMeaning[]
   /** ready · off(켠 타입이 없거나 끔) · unavailable(모델에 못 닿음) — 안 물었으면 빈 글자. */
   meaning_state?: string
+  /** 타입 · 부서로 걸러져 뜻이 가까운 것이 덜 나왔을 수 있다 — 빈 `meaning` 이 「없다」 가 아니다. */
+  meaning_narrowed?: boolean
 }
 
 export const searchApi = {

@@ -49,11 +49,12 @@ from sqlalchemy.orm import Session
 from app.modules.accounts.models import User
 from app.modules.objects import system
 from app.modules.objects.models import ObjectAlias, ObjectInstance
-from app.modules.objects.services import bigram_plan, containing_ids
+from app.modules.objects.services import bigram_plan, containing_ids, word_patterns
 from app.modules.ontology import interfaces
 from app.modules.ontology.models import ObjectType
 from app.shared import system_sources
 from app.shared.permissions import visible_owner_clause
+from app.shared.text import search_words
 
 #: 이 글자 수 미만으로는 안 찾는다. 한 글자로 찾으면 거의 모든 행이 걸려 「찾기」 가
 #: 아니라 「전부 보기」 가 되고, 그 질의는 느리기까지 하다.
@@ -97,20 +98,18 @@ class Result:
     """섞어 볼 때 줄에 안 섞은 기록의 수 — 그 타입으로 좁히면 나온다."""
 
 
-def _needle(q: str) -> str:
-    # `%` 와 `_` 는 LIKE 의 와일드카드다. 사람이 친 그대로 넣으면 「50%」 가 「50 뒤에
-    # 아무거나」 로 읽혀 엉뚱한 것이 걸린다.
-    escaped = q.strip().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    return f"%{escaped}%"
-
-
 def _where(db: Session, user: User, q: str) -> tuple[Any, ...]:
-    needle = _needle(q)
+    """수 · 줄이 함께 쓰는 조건 — 둘이 따로 만들면 「3건」 이라 해 놓고 두 줄을 보인다.
+
+    띄어 쓴 낱말은 한 칸에 **모두 든 것**이다(`search_words`, ADR 0057). `%` 와 `_` 는 글자
+    그대로다 — 사람이 친 그대로 `LIKE` 에 넣으면 「50%」 가 「50 뒤에 아무거나」 로 읽힌다."""
     return (
         ObjectInstance.deleted_at.is_(None),
         visible_owner_clause(user, ObjectInstance.owner_workspace_id),
         # 이름 · 식별자 · 별칭을 따로 묻고 합친다 — 한 OR 로 묶으면 trigram 인덱스를 못 탄다.
-        ObjectInstance.id.in_(containing_ids(needle, escape="\\", bigrams=bigram_plan(db, q))),
+        ObjectInstance.id.in_(
+            containing_ids(word_patterns(q), escape="\\", bigrams=bigram_plan(db, q))
+        ),
     )
 
 
@@ -123,14 +122,20 @@ def _projection(object_type: ObjectType) -> system_sources.SystemSource | None:
 
 
 def _why(row: ObjectInstance, aliases: list[ObjectAlias], q: str) -> tuple[str, str]:
-    """무엇으로 걸렸나. **이름이 우선이다** — 이름에도 들어 있으면 그것이 답이다."""
-    lowered = q.strip().lower()
-    if lowered in (row.label or "").lower():
+    """무엇으로 걸렸나. **이름이 우선이다** — 이름에도 들어 있으면 그것이 답이다. 낱말로 나눠
+    찾으므로 「들어 있다」 는 낱말이 그 칸에 모두 들었다는 뜻이다(`containing_ids` 와 같다)."""
+    words = [one.lower() for one in search_words(q)]
+
+    def has_all(value: str | None) -> bool:
+        lowered = (value or "").lower()
+        return bool(words) and all(one in lowered for one in words)
+
+    if has_all(row.label):
         return "label", ""
-    if row.key and lowered in row.key.lower():
+    if row.key and has_all(row.key):
         return "key", row.key
     for one in aliases:
-        if lowered in one.value.lower():
+        if has_all(one.value):
             # 외부 식별자(`source:<slug>`)면 어느 소스의 것인지까지 적는다 — 「저쪽
             # 코드로 찾았다」 가 결과를 설명한다.
             source = one.kind.split(":", 1)[1] if one.kind.startswith("source:") else ""
@@ -191,7 +196,9 @@ def _hit_of(object_type: ObjectType, ref: system_sources.SystemRef, q: str) -> H
         icon=object_type.icon,
         label=ref.label,
         key=ref.key,
-        matched="label" if q.lower() in ref.label.lower() else "key",
+        matched="label"
+        if all(one.lower() in ref.label.lower() for one in search_words(q))
+        else "key",
         matched_text=ref.hint,
     )
 

@@ -903,9 +903,24 @@ async def platform_profile_update(
 
 @tool()
 async def search(
-    ctx: Context, q: str, type_slug: str | None = None, limit: int = 20, offset: int = 0
+    ctx: Context,
+    q: str,
+    type_slug: str | None = None,
+    limit: int = 20,
+    offset: int = 0,
+    meaning: bool = False,
 ) -> Any:
     """**타입을 모를 때** 이름·식별자·별칭으로 전부 찾는다 — 「앤시스 관련된 거 뭐 있어」.
+    띄어 쓴 낱말은 한 칸(이름 · 식별자 · 별칭)에 **모두 든 것**을 찾는다 — 「S24 후면 커버」 로
+    「갤럭시 S24 Ultra 후면 커버」 가 걸린다(부서 · 계정도 같다, 게시판 글은 통째로).
+
+    `meaning=True` 면 **뜻이 가까운 것**도 `meaning[]`(유사도 · 문서면 그 절)으로 함께 온다
+    — 첫 쪽에만, 관리자가 대상으로 켠 타입에서. 글자로 0건이거나 적을 때 다시 부른다(「뒷면
+    커버」 → 후면 커버). **짐작이다** — 유사도를 함께 말하고 `object_get` 으로 확인하며,
+    그것으로 쓰기 전에 사람에게 묻는다. `meaning_state` 가 `off` · `unavailable` 이면 뜻으로는
+    못 찾은 것이고, `meaning_narrowed` 가 참이면 다 보지 못해 덜 나왔을 수 있다 — 「없다」 고
+    답하지 말고 더 구체적인 말로 다시 찾거나, 타입을 알면 `objects_list(type_slug, q=)` 로
+    글자로 찾는다(타입을 풀어도 같은 것이 빠진다).
 
     `types[]` 가 타입별 건수라 **어느 타입에 있는지**가 먼저 보인다. 타입을 알면
     `objects_list`(조건 거르기) · `object_resolve`(하나로 정하기)가 낫다 — 이것은
@@ -924,6 +939,10 @@ async def search(
     params: list[tuple[str, Any]] = [("q", q), ("limit", limit), ("offset", offset)]
     if type_slug:
         params.append(("type", type_slug))
+    if meaning:
+        # 안 물으면 안 보낸다 — 뜻으로 바꾸는 데 Ollama 를 한 번 더 부른다(GPU 없는 서버의
+        # 비용).
+        params.append(("meaning", "true"))
     return await _get(ctx, "/api/search", params=params)
 
 

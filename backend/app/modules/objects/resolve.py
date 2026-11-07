@@ -46,7 +46,7 @@ from app.modules.accounts.models import User
 from app.modules.objects import aliases, system
 from app.modules.objects.models import NORMALIZED_KEY_SQL, ObjectAlias, ObjectInstance
 from app.modules.objects.scope import Scope, as_scope
-from app.modules.objects.services import bigram_plan, containing_ids
+from app.modules.objects.services import bigram_plan, containing_ids, word_patterns
 from app.modules.ontology.models import ObjectType
 from app.shared.permissions import visible_owner_clause
 from app.shared.text import clean, compare_key
@@ -252,12 +252,14 @@ def by_name(db: Session, user: User, target: ObjectType | Scope, text: str) -> R
 
     # 4) 포함 — 여기서 나온 것은 하나여도 짐작이다.
     # 이름 · 식별자 · 별칭을 따로 묻고 합친다(trigram 인덱스를 타게). 후보는 상한까지만 —
-    # 「그」 처럼 짧은 말은 수만 건에 걸리고, 그것을 다 읽어 고르라고 할 수는 없다.
-    pattern = f"%{text}%"
+    # 「그」 처럼 짧은 말은 수만 건에 걸리고, 그것을 다 읽어 고르라고 할 수는 없다. 띄어 쓴
+    # 낱말은 한 칸에 모두 든 것(통합 검색과 같다, ADR 0057) · `%` `_` 는 글자 그대로다 —
+    # 예전에는 「50%」 가 와일드카드로 읽혀 엉뚱한 후보가 섞였다.
     matched = containing_ids(
-        pattern,
+        word_patterns(text),
         type_clause=scope.clause(),
         alias_type_clause=scope.clause(ObjectAlias.type_id),
+        escape="\\",
         bigrams=bigram_plan(db, text),
     )
     rows = list(
@@ -418,5 +420,15 @@ def diagnose(
         next_steps=[
             f"「{top.label}」 을(를) 빼고 다시 묻는다.",
             "칸 이름이 맞는지 object_fields 로 확인한다 — 값이 비어 있는 칸일 수 있다.",
+            # 글자가 안 맞아 0건일 수 있다 — 같은 말을 뜻으로 찾는 길이 있다(ADR 0052).
+            *(
+                [
+                    "검색어가 글자로 안 맞았을 수 있다 — search(q, meaning=True) 로 뜻이 "
+                    "가까운 것을 찾아 본다(짐작이니 object_get 으로 확인하고, 쓰기 전에 "
+                    "사람에게 묻는다)."
+                ]
+                if any(one.name == "q" for one in effects)
+                else []
+            ),
         ],
     )

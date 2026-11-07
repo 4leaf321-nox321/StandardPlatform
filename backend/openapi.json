@@ -50057,6 +50057,11 @@
             "type": "string",
             "title": "Meaning State",
             "default": ""
+          },
+          "meaning_narrowed": {
+            "type": "boolean",
+            "title": "Meaning Narrowed",
+            "default": false
           }
         },
         "type": "object",

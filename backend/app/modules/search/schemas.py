@@ -85,3 +85,7 @@ class SearchOut(BaseModel):
     """ready · off(켠 타입이 없거나 끔) · unavailable(Ollama 에 못 닿음).
 
     안 물었으면 빈 글자."""
+    meaning_narrowed: bool = False
+    """**덜 나왔을 수 있다** — 낼 수를 못 채웠는데 범위를 다 봤다고 할 수 없다(큰 범위는 HNSW
+    색인이 가까운 조각을 먼저 받고 타입 · 부서로 나중에 거르고, 같은 글이 받는 수를 채울 수도
+    있다). 이때 빈 `meaning` 은 「뜻으로도 없다」 가 아니다 — 더 구체적인 말로 다시 찾는다."""

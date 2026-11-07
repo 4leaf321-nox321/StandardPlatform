@@ -33,7 +33,7 @@ from app.modules.workspaces.schemas import (
 from app.shared import audit, extensions, system_sources
 from app.shared.errors import AppError, Conflict, NotFound, code
 from app.shared.permissions import membership_of, workspace_by_slug
-from app.shared.text import clean, compare_key
+from app.shared.text import clean, compare_key, search_words
 
 #: 부서 주소 — 만들기 화면(`schemas.SLUG_PATTERN`)과 **같은 규칙**이어야 한다. 갈리면 붙여
 #: 넣기로는 되는데 화면으로는 안 만들어지는 slug 가 생긴다.
@@ -923,14 +923,17 @@ def _system_search(
     보는 사람의 소속과 무관하게 전부 준다 — 「담당 부서」 를 고르려면 남의 부서도
     골라야 하고, 부서 이름은 가입 화면(`/options`)이 이미 로그인 없이 보여 준다.
     """
-    needle = compare_key(q) if q else ""
+    # 통합 검색 · 목록과 같은 규칙 — 띄어 쓴 낱말이 한 칸(이름 · slug · 경로)에 모두 든
+    # 것(ADR 0057).
+    words = [compare_key(one) for one in search_words(q)] if q else []
+
+    def matches(*values: str) -> bool:
+        return any(all(one in compare_key(value) for one in words) for value in values)
+
     rows = [
         _system_ref(node, path)
         for node, _depth, path in ordered_tree(db)
-        if not needle
-        or needle in compare_key(node.name)
-        or needle in compare_key(node.slug)
-        or needle in compare_key(path)
+        if not words or matches(node.name, node.slug, path)
     ]
     return rows[offset : offset + limit], len(rows)
 

@@ -248,6 +248,33 @@ describe('검색', () => {
     expect(screen.getByText(/그 글자가 포함된 객체는 없습니다/)).toBeInTheDocument()
   })
 
+  it('뜻이 덜 나왔을 수 있으면 줄 아래에 그렇다고 말한다', async () => {
+    searchApi.find.mockResolvedValue({
+      ...RESULT,
+      meaning: [],
+      meaning_state: 'ready',
+      meaning_narrowed: true,
+    })
+    await open('/search?q=뒷면 커버')
+    expect(await screen.findByText(/일부만 표시되었을 수 있습니다/)).toBeInTheDocument()
+  })
+
+  it('글자 · 뜻 모두 0건이어도 덜 나왔을 수 있으면 「없다」 로 끝내지 않는다', async () => {
+    searchApi.find.mockResolvedValue({
+      ...RESULT,
+      total: 0,
+      items: [],
+      meaning: [],
+      meaning_state: 'ready',
+      meaning_narrowed: true,
+    })
+    await open('/search?q=뒷면 커버&type=part')
+    expect(await screen.findByText('글자가 포함된 객체가 없습니다')).toBeInTheDocument()
+    expect(screen.getByText(/일부만 확인했습니다/)).toHaveTextContent('그 타입 목록')
+    expect(screen.queryByText('맞는 것이 없습니다')).not.toBeInTheDocument()
+    expect(screen.queryByText(/일부만 표시되었을 수 있습니다/)).not.toBeInTheDocument()
+  })
+
   it('뜻으로 찾기를 쓸 수 없으면 그렇다고 말한다', async () => {
     searchApi.find.mockResolvedValue({ ...RESULT, meaning: [], meaning_state: 'unavailable' })
     await open('/search?q=ansys')

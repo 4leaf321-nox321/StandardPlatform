@@ -330,6 +330,19 @@ def test_조건은_화면과_같은_모양으로_건너간다() -> None:
     assert params["f.license.in"] == "A|B" and params["status"] == "active"
 
 
+def test_뜻으로_찾기는_물을_때만_건너간다() -> None:
+    """`meaning` 은 기본 꺼짐 — 뜻으로 바꾸는 데 서버의 모델을 한 번 더 부른다(ADR 0052)."""
+    seen = _serve(lambda _r: httpx.Response(200, json={"items": [], "total": 0}))
+    asyncio.run(server.search(_ctx("Bearer t"), "뒷면 커버"))
+    assert seen[-1].url.path == "/api/search"
+    assert "meaning" not in seen[-1].url.params
+    asyncio.run(server.search(_ctx("Bearer t"), "뒷면 커버", type_slug="part", meaning=True))
+    params = seen[-1].url.params
+    assert (
+        params["meaning"] == "true" and params["type"] == "part" and params["q"] == "뒷면 커버"
+    )
+
+
 def test_같은_관계_묶음과_이어진_칸이_그대로_건너간다() -> None:
     """ADR 0043 — 조건의 `edge` 는 `fe<번호>.`(제외 묶음 안이면 `nf<n>.fe<m>.`), 이어진 칸은
     `columns` 여럿으로. 선의 칸 주소(`~`)는 손대지 않고 건넨다."""

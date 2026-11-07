@@ -84,11 +84,11 @@ from sqlalchemy.orm import aliased
 
 from app.modules.objects import axes, graph, lineage, paths
 from app.modules.objects.models import ObjectInstance, ObjectRef
-from app.modules.objects.services import like_escape
 from app.modules.ontology import conversion
 from app.modules.ontology.models import DETACHED_KINDS, PropertyDef
 from app.modules.ontology.services import InvalidValue
 from app.shared.errors import AppError, code
+from app.shared.text import like_escape
 
 OPS_ORDER: tuple[str, ...] = ("eq", "ne", "gt", "gte", "lt", "lte", "in")
 OPS_TEXT: tuple[str, ...] = ("eq", "ne", "contains", "starts", "in")

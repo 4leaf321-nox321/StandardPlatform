@@ -10,7 +10,7 @@ import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, select
 from sqlalchemy.orm import Session
 
 from app.modules.accounts.models import USER_STATUSES, User
@@ -25,7 +25,7 @@ from app.modules.workspaces.models import WORKSPACE_ROLES, Workspace, WorkspaceM
 from app.shared import audit, extensions, system_sources
 from app.shared.errors import AppError, Conflict, NotFound, code
 from app.shared.permissions import workspace_by_slug
-from app.shared.text import clean
+from app.shared.text import clean, like_escape, search_words
 
 
 def _now() -> datetime:
@@ -743,8 +743,13 @@ def _system_search(
 ) -> tuple[list[system_sources.SystemRef], int]:
     stmt = _system_base()
     if q:
-        needle = f"%{clean(q)}%"
-        stmt = stmt.where(User.display_name.ilike(needle) | User.email.ilike(needle))
+        # 통합 검색 · 목록과 같은 규칙 — 띄어 쓴 낱말이 한 칸(이름 · 메일)에 모두 든 것, `%` ·
+        # `_` 는 글자 그대로(ADR 0057). 예전에는 「50%」 가 와일드카드로 읽혔다.
+        likes = [f"%{like_escape(one)}%" for one in search_words(clean(q))]
+        stmt = stmt.where(
+            and_(*(User.display_name.ilike(one, escape="\\") for one in likes))
+            | and_(*(User.email.ilike(one, escape="\\") for one in likes))
+        )
     total = db.scalar(select(func.count()).select_from(stmt.subquery())) or 0
     rows = db.scalars(stmt.order_by(User.display_name, User.email).limit(limit).offset(offset))
     return [_system_ref(row) for row in rows], int(total)

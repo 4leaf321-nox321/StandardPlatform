@@ -46,6 +46,7 @@ from app.modules.ontology.services import InvalidValue, object_ref_ids
 from app.modules.workspaces.models import Workspace
 from app.shared import audit, extensions
 from app.shared.errors import Conflict, code
+from app.shared.text import like_escape, search_words
 
 if TYPE_CHECKING:  # 실행 때는 안 읽는다 — scope 가 이 모듈을 읽는다(방향은 한쪽).
     from app.modules.objects.scope import Scope
@@ -275,49 +276,61 @@ _BIGRAM_INDEX = {
 }
 _BIGRAM_FREQ = text(
     """
-    SELECT s.tablename, x.f
+    SELECT s.tablename, x.e, x.f
     FROM pg_stats s,
          unnest(s.most_common_elems::text::text[], s.most_common_elem_freqs) AS x(e, f)
-    WHERE s.schemaname = current_schema() AND s.tablename = ANY(:names) AND x.e = :pair
+    WHERE s.schemaname = current_schema() AND s.tablename = ANY(:names) AND x.e = ANY(:pairs)
     """
 )
 
 
-def bigram_plan(db: Session, term: str | None) -> dict[str, str]:
-    """두 글자로 찾을 때 조각 인덱스를 걸 자리 — {`label` · `key` · `alias`: 조각}.
+def word_patterns(term: str | None) -> list[str]:
+    """`search_words` 의 낱말마다 `ILIKE` 틀 — `escape="\\\\"` 와 함께 쓴다(`like_escape`)."""
+    return [f"%{like_escape(one)}%" for one in search_words(term)]
 
-    trigram 은 세 글자부터라 두 글자는 조각 인덱스(`sp_bigrams`, 0054)로 거른다. 다만 **흔한
-    조각**이면 안 건다 — 그 비율은 Postgres 가 그 인덱스에 모아 둔 통계(`pg_stats` 의 자주
-    나오는 원소)로 안다. 통계에 없으면 드문 것이다."""
-    pair = (term or "").strip().lower()
-    if len(pair) != 2:
+
+def bigram_plan(db: Session, term: str | None) -> dict[str, list[str]]:
+    """두 글자 낱말로 찾을 때 조각 인덱스를 걸 자리 — {`label` · `key` · `alias`: [조각 …]}.
+
+    trigram 은 세 글자부터라 두 글자는 조각 인덱스(`sp_bigrams`, 0054)로 거른다. 낱말로 나눠
+    찾으므로(`search_words`) 두 글자 낱말이 여럿일 수 있고, 그 조각을 **한 배열**로 건다(`@>` —
+    모두 든 것). 다만 **흔한 조각**은 뺀다 — 그 비율은 Postgres 가 그 인덱스에 모아 둔
+    통계(`pg_stats` 의 자주 나오는 원소)로 안다. 통계에 없으면 드문 것이다."""
+    # 소문자로 바꾼 뒤에 잰다 — 「İS」 는 바꾸면 세 글자(i̇s)라 조각이 아니다(예전 규칙과 같다).
+    pairs = sorted({low for one in search_words(term) if len(low := one.lower()) == 2})
+    if not pairs:
         return {}
     broad = {
-        name
-        for name, freq in db.execute(
-            _BIGRAM_FREQ, {"names": list(_BIGRAM_INDEX.values()), "pair": pair}
+        (name, pair)
+        for name, pair, freq in db.execute(
+            _BIGRAM_FREQ, {"names": list(_BIGRAM_INDEX.values()), "pairs": pairs}
         )
         if freq is not None and freq > BIGRAM_BROAD
     }
-    return {where: pair for where, index in _BIGRAM_INDEX.items() if index not in broad}
+    plan: dict[str, list[str]] = {}
+    for where, index in _BIGRAM_INDEX.items():
+        kept = [pair for pair in pairs if (index, pair) not in broad]
+        if kept:
+            plan[where] = kept
+    return plan
 
 
-def _bigram(column: Any, pair: str | None) -> tuple[Any, ...]:
-    """두 글자로 찾을 때 — 두 글자 조각 인덱스로 먼저 거른다(`sp_bigrams`, 0054). 같은 말을
-    `ILIKE` 가 다시 본다."""
-    if pair is None:
+def _bigram(column: Any, pairs: list[str] | None) -> tuple[Any, ...]:
+    """두 글자 낱말로 찾을 때 — 두 글자 조각 인덱스로 먼저 거른다(`sp_bigrams`, 0054). 같은
+    말을 `ILIKE` 가 다시 본다."""
+    if not pairs:
         return ()
-    return (func.sp_bigrams(column).op("@>")(cast(array([pair]), ARRAY(Text))),)
+    return (func.sp_bigrams(column).op("@>")(cast(array(pairs), ARRAY(Text))),)
 
 
 def containing_ids(
-    pattern: str,
+    patterns: str | list[str],
     *,
     type_clause: Any = None,
     alias_type_clause: Any = None,
     fields: tuple[str, ...] = ("label", "key"),
     escape: str | None = None,
-    bigrams: dict[str, str] | None = None,
+    bigrams: dict[str, list[str]] | None = None,
 ) -> Any:
     """「이 글자가 들어간 것」 의 id — 이름 · 식별자 · 속성 칸 · 별칭을 **따로 묻고
     합친다**(UNION).
@@ -326,9 +339,16 @@ def containing_ids(
     trigram 인덱스를 못 쓰고 표 전체를 읽는다 — 별칭 부분 질의가 비트맵 OR 을 막아서다
     (실측: 기록 200만 건에서 627ms, 따로 묻고 합치면 9ms, ADR 0010).
 
+    틀(`patterns`)이 여럿이면(낱말로 나눠 찾기, `word_patterns`) **한 칸에 모두 든 것**이다 —
+    이름에 「S24」 · 「후면」 · 「커버」 가 다 들어야 한다. 낱말이 이름과 별칭에 나뉘어 든 것은
+    안 걸린다: 칸을 넘어 맞추려면 낱말마다 따로 모아 교집합을 내야 하고, 그때는 흔한 낱말
+    하나가 수백만 줄을 모은다(ADR 0057). 한 칸 안의 `ILIKE` 여럿은 같은 trigram 인덱스를 함께
+    탄다.
+
     `bigrams`(`bigram_plan`)가 있으면 두 글자 조각 인덱스를 함께 건다 — trigram 은 세
     글자부터라 「소음」 은 표 전체를 읽었다."""
     plan = bigrams or {}
+    likes = [patterns] if isinstance(patterns, str) else list(patterns)
     where = () if type_clause is None else (type_clause,)
     parts: list[Any] = []
     for field in fields:
@@ -345,7 +365,7 @@ def containing_ids(
             continue
         parts.append(
             select(ObjectInstance.id).where(
-                *where, *indexed, column.ilike(pattern, escape=escape)
+                *where, *indexed, *(column.ilike(one, escape=escape) for one in likes)
             )
         )
     # 별칭에도 걸린다 — 「앤시스」 로 찾아도 「Ansys」 가 나와야 새로 만들지 않는다.
@@ -354,7 +374,7 @@ def containing_ids(
         select(ObjectAlias.object_id).where(
             *alias_where,
             *_bigram(ObjectAlias.value, plan.get("alias")),
-            ObjectAlias.value.ilike(pattern, escape=escape),
+            *(ObjectAlias.value.ilike(one, escape=escape) for one in likes),
         )
     )
     return union(*parts)
@@ -368,7 +388,8 @@ def apply_search(db: Session, stmt: Select[Any], scope: Scope, term: str) -> Sel
 
     정해 둔 자리가 **모두 글자로 못 훑는 것**(상태 · 만든 때처럼 뷰 검증은 받는 자리)이면
     이름과 식별자로 떨어진다 — 예전에는 검색어를 말없이 버려 목록 전체가 「검색 결과」 로
-    나왔다(2026-10-08). 검색어의 `%` · `_` 는 글자 그대로 찾는다(통합 검색과 같다).
+    나왔다(2026-10-08). 검색어의 `%` · `_` 는 글자 그대로 찾는다(통합 검색과 같다). 띄어 쓴
+    낱말은 한 칸에 모두 든 것을 찾는다(`search_words`, ADR 0057).
     """
     view = scope.list_view
     fields = tuple(
@@ -377,7 +398,7 @@ def apply_search(db: Session, stmt: Select[Any], scope: Scope, term: str) -> Sel
         if one in ("label", "key") or one.startswith("properties.")
     ) or ("label", "key")
     matched = containing_ids(
-        f"%{like_escape(term)}%",
+        word_patterns(term),
         type_clause=scope.clause(),
         alias_type_clause=scope.clause(ObjectAlias.type_id),
         fields=fields,
@@ -385,13 +406,6 @@ def apply_search(db: Session, stmt: Select[Any], scope: Scope, term: str) -> Sel
         bigrams=bigram_plan(db, term),
     )
     return stmt.where(ObjectInstance.id.in_(matched))
-
-
-def like_escape(text: str) -> str:
-    """`LIKE` 의 와일드카드(`%` · `_`)와 이스케이프 글자를 글자 그대로 — `escape="\\\\"` 와
-    함께 쓴다. 안 그러면 「50%」 가 「50 뒤에 아무거나」 로, 「A_1」 이 「A 와 1 사이 아무
-    글자」 로 읽혀 엉뚱한 것이 걸린다."""
-    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
 
 
 def apply_property_filters(stmt: Select[Any], filters: dict[str, str]) -> Select[Any]:

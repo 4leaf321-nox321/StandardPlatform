@@ -29,3 +29,47 @@ def compare_key(raw: str) -> str:
     목록에 둘이 나란히 서고 아무도 그 둘이 같다는 것을 모른다.
     """
     return unicodedata.normalize("NFKC", clean(raw)).casefold()
+
+
+#: 찾을 말을 낱말로 나눌 때 이만큼까지만 본다 — 문장을 통째로 붙여 넣으면 낱말마다 조건이
+#: 붙어 질의가 끝없이 길어진다. 넘으면 **두 글자 이상 낱말을 먼저 남긴다**(좁히는 것은
+#: 그쪽이다).
+MAX_WORDS = 8
+
+
+def search_words(term: str | None) -> list[str]:
+    """찾을 말을 낱말로 — 띄어 쓴 낱말이 **모두 든 것**을 찾는다(ADR 0057).
+
+    「S24 후면 커버」 로 「갤럭시 S24 Ultra 후면 커버」 가 걸린다. 한 덩어리
+    (`%S24 후면 커버%`)로 찾던 때는 낱말 차례나 사이 글자 하나만 달라도 0건이었고, 0건을 받은
+    쪽(사람이든 AI 든)은 「없다」 로 읽었다. **낱말이 하나면 예전과 같은 질의다.**
+
+    - 대소문자만 다른 낱말은 하나로 본다(찾기는 대소문자를 안 가린다).
+    - 두 글자 이상인 낱말이 하나도 없으면(「a b」) 통째로 한 낱말로 둔다 — 한 글자 낱말만으로는
+      거의 모든 행이 걸린다.
+    - `MAX_WORDS` 를 넘으면 두 글자 이상 낱말부터 남기고, 남는 자리만 한 글자 낱말로 채운다 —
+      앞에 한 글자 낱말이 여럿 와도 식별자가 버려지지 않게(2026-11-07 검토). 차례는 지킨다.
+    """
+    whole = (term or "").strip()
+    seen: set[str] = set()
+    words: list[str] = []
+    for one in whole.split():
+        folded = one.casefold()
+        if folded not in seen:
+            seen.add(folded)
+            words.append(one)
+    longer = [one for one in words if len(one) >= 2]
+    if not longer:
+        return [whole] if whole else []
+    if len(words) > MAX_WORDS:
+        short = [one for one in words if len(one) < 2]
+        kept = set(longer[:MAX_WORDS] + short[: max(0, MAX_WORDS - len(longer))])
+        words = [one for one in words if one in kept]
+    return words
+
+
+def like_escape(text: str) -> str:
+    """`LIKE` 의 와일드카드(`%` · `_`)와 이스케이프 글자를 글자 그대로 — `escape="\\\\"` 와
+    함께 쓴다. 안 그러면 「50%」 가 「50 뒤에 아무거나」 로, 「A_1」 이 「A 와 1 사이 아무
+    글자」 로 읽혀 엉뚱한 것이 걸린다."""
+    return text.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")

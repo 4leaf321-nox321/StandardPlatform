@@ -11,8 +11,11 @@ from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
+from sqlalchemy.orm import Session
 
-from tests.api.conftest import Signed
+from app.modules.workspaces.models import Workspace
+from tests.api.conftest import Signed, _make_user
 from tests.api.test_ontology import _make_object, _make_type
 
 
@@ -95,6 +98,30 @@ def test_부서도_찾는다(client: TestClient, admin: Signed) -> None:
     narrowed = _find(client, admin, f"찾을부서{tag}", type=projected)
     assert [one["label"] for one in narrowed["items"]] == [f"찾을부서{tag}"]
 
+    # 부서도 객체와 같은 규칙이다 — 띄어 쓴 낱말이 한 칸에 모두 든 것(ADR 0057).
+    split = _find(client, admin, f"{tag} 찾을부서", type=projected)
+    assert [one["label"] for one in split["items"]] == [f"찾을부서{tag}"]
+    assert split["items"][0]["matched"] == "label"
+
+
+def test_계정도_낱말로_찾고_와일드카드를_글자로_본다(
+    client: TestClient, admin: Signed, db: Session
+) -> None:
+    """ADR 0057 — 계정(투영)도 객체와 같은 규칙이다. 예전에는 「50%」 가 와일드카드로 읽혀
+    이름에 50 이 든 계정이 모두 섞여 나왔다."""
+    tag = uuid.uuid4().hex[:6]
+    projected = _make_type(
+        client, admin, label="계정(투영)", kind_class="system", system_source="user"
+    )
+    home = db.scalar(select(Workspace).where(Workspace.slug == admin.workspace))
+    assert home is not None
+    hong = _make_user(db, home, label=f"홍{tag} 길동", is_system_admin=False, role="member")
+    _make_user(db, home, label=f"수율{tag} 50건", is_system_admin=False, role="member")
+
+    split = _find(client, admin, f"길동 홍{tag}", type=projected)
+    assert [one["id"] for one in split["items"]] == [str(hong.id)]
+    assert _find(client, admin, f"{tag} 50%", type=projected)["items"] == []
+
 
 def test_너무_짧으면_안_찾는다(client: TestClient, admin: Signed) -> None:
     """한 글자로 거의 모든 행을 돌려주면 그것은 찾기가 아니라 목록이다."""
@@ -114,6 +141,51 @@ def test_와일드카드를_글자로_본다(client: TestClient, admin: Signed) 
     labels = [one["label"] for one in found["items"]]
     assert f"수율{tag} 50% 목표" in labels
     assert f"수율{tag} 50건 달성" not in labels
+
+
+def test_띄어_쓴_낱말은_한_칸에_모두_든_것을_찾는다(client: TestClient, admin: Signed) -> None:
+    """ADR 0057 — 「S24 후면 커버」 를 한 덩어리로 찾던 때는 사이에 낱말이 하나 끼어도
+    0건이었다."""
+    tag = uuid.uuid4().hex[:6]
+    part = _make_type(client, admin, label="부품")
+    whole = _make_object(client, admin, part, label=f"갤럭시 S24{tag} Ultra 후면 커버")
+    _make_object(client, admin, part, label=f"S24{tag} 배터리")
+    _make_object(client, admin, part, label=f"후면 커버 S23{tag}")
+    pack = _make_object(client, admin, part, label=f"전원{tag}")
+    client.put(
+        f"/api/objects/{part}/{pack['id']}/aliases",
+        json={"aliases": [f"BT 2041{tag} 팩"]},
+        headers=admin.headers,
+    )
+
+    # 낱말 차례가 달라도 · 사이에 다른 낱말이 있어도 — 모두 든 줄 하나만.
+    for q in (f"S24{tag} 후면 커버", f"커버 S24{tag}", f"후면  커버 S24{tag}"):
+        found = _find(client, admin, q, type=part)
+        assert [one["id"] for one in found["items"]] == [whole["id"]], q
+        assert found["total"] == 1 and found["items"][0]["matched"] == "label"
+    # 수와 줄이 같은 조건이다 — 섞어 볼 때 타입별 수도 하나.
+    mixed = _find(client, admin, f"후면 커버 S24{tag}")
+    assert [(one["type_slug"], one["count"]) for one in mixed["types"]] == [(part, 1)]
+
+    # 별칭 하나에 낱말이 모두 들어도 걸리고, 왜 걸렸는지 그 별칭을 적는다.
+    by_alias = _find(client, admin, f"팩 2041{tag}")
+    assert [one["id"] for one in by_alias["items"]] == [pack["id"]]
+    assert by_alias["items"][0]["matched"] == "alias"
+    assert f"BT 2041{tag} 팩" in by_alias["items"][0]["matched_text"]
+
+    # 소문자로 바꾸면 길이가 바뀌는 글자(İ → i̇)가 든 두 글자 낱말도 찾는다 — 조각 인덱스는
+    # 소문자로 바꾼 뒤의 두 글자로만 건다.
+    istanbul = _make_object(client, admin, part, label=f"İSTANBUL {tag} 창고")
+    assert [one["id"] for one in _find(client, admin, f"İS {tag}", type=part)["items"]] == [
+        istanbul["id"]
+    ]
+
+    # 목록의 검색어도 같은 규칙이다.
+    listed = client.get(
+        f"/api/objects/{part}", params={"q": f"커버 후면 S24{tag}"}, headers=admin.headers
+    )
+    assert listed.status_code == 200, listed.text
+    assert [one["id"] for one in listed.json()["items"]] == [whole["id"]]
 
 
 @pytest.mark.usefixtures("department_scope")
