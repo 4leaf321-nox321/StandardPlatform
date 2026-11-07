@@ -375,7 +375,8 @@ README 7장의 「운영이 development 로 뜬다」 는 지금 판의 앱에�
 
 `DATASOURCE_DIR=` 가 특히 위험하다 — `.` 이 허용 폴더가 되면 파일 데이터 소스가 `/opt/app/backend` 아래를 읽을 수 있고, 거기에 `.env` 가
 bind 돼 있다(`fetchers.py` 는 허용 폴더 아래의 파일이면 읽는다). 데이터 소스를 만드는 것은 앱의 시스템 관리자뿐이지만, 서버 계정이
-없는 그 사람이 서버의 DB 비밀번호 · JWT 비밀을 읽는 길이 생긴다(코드로 읽은 것 — 실제로 읽어 보지는 않았다).
+없는 그 사람이 서버의 DB 비밀번호 · JWT 비밀을 읽는 길이 생긴다(개발 PC 에서 확인, 2026-11-08 — 빈 값이 `.` 으로 읽히고, `.env` 가
+허용 폴더 검사를 통과한다).
 
 **3.5 키 이름의 오타는 조용히 무시된다**(`extra="ignore"`). `PUBLIC_URLS=` · `PORTAL_JWKS=` 는 아무 오류 없이 기본값으로 돈다. 그
 판이 모르는 키(예: v0.4.74 의 `PUBLIC_URL`)도 같다. 5.2 의 한 줄로 「이 판이 모르는 키」 를 뽑는다. 확장 이름의 오타만은 서버 화면이 말한다.
@@ -389,12 +390,17 @@ bind 돼 있다(`fetchers.py` 는 허용 폴더 아래의 파일이면 읽는다
 
 **3.8 `APP_SLUG` 는 설치 뒤 바꾸지 않고, 다른 설치의 `.env` 를 복사해 새 설치를 만들지 않는다.** DB 이름 · 쿠키 · PAT 표식 · 유닛이 slug
 에서 나온다. 복사해 고치다 하나를 빠뜨리면 조용한 사고다 — `DATABASE_URL` 의 DB 이름 · 사용자가 남으면 **새 설치가 옆 설치의 DB 를
-마이그레이션한다.** `JWT_SECRET` 도 설치마다 새로: 토큰에 설치 표식(`aud` · `iss`)이 없어(`auth/security.py`) 같은 비밀을 쓰는 두 설치는
-서로의 토큰 서명을 받아 준다 — 백업으로 복제해 사용자 id 가 같은 설치라면 한쪽의 토큰으로 다른 쪽에 로그인된다(코드로 읽은 것, 시험해
-보지는 않았다). `HEAX_SSO_SECRET` 도 설치마다 따로다. 새 설치는 `install` 이 `.env` 를 만들게 둔다.
+마이그레이션한다.** `JWT_SECRET` 은 `install` 이 설치마다 난수로 만들어, 따로 설치하면 저절로 다르다. **이중화 A · B 가 한 값을 쓰는
+것은 같은 설치라서 정상이고, 꼭 그래야 한다**(0.1). 걸리는 것은 다른 설치의 `.env` 를 복사했을 때뿐이다 — 토큰에 설치 표식(`aud` ·
+`iss`)이 없어(`auth/security.py`) 같은 비밀을 쓰는 두 설치는 서로의 토큰 서명을 받아 준다. 사용자 id(UUID)도 설치마다 달라 그것만으로는
+로그인되지 않지만, 백업으로 DB 까지 복제한 설치라면 한쪽의 토큰으로 다른 쪽에 로그인된다(코드로 읽은 것). `HEAX_SSO_SECRET` 도 같다.
+새 설치는 `install` 이 `.env` 를 만들게 둔다.
 
-**3.9 정체 넷은 손으로 고쳐도 되돌아간다.** `APP_NAME` · `APP_TAGLINE` · `EXTENSIONS` 는 `install` · `update` 때마다 env > 설치 기록 >
-번들 기본값으로 다시 적힌다(`sync_env_identity`). 바꾸려면 `sudo APP_NAME="…" ./deploy.sh update` — 설치 기록에도 남는다. **이중화는 설치
+**3.9 이름 · 소개 · 확장 기본값은 `update` 로 바꾼다 — 손으로 고치면 되돌아간다.** 이 셋(`APP_NAME` · `APP_TAGLINE` · `EXTENSIONS`)은
+설치 기록(`/etc/platform-instances/<slug>.conf`)이 정본이고 `.env` 의 줄은 그 사본이다. `install` · `update` 가 매번 env > 설치 기록 >
+번들 기본값으로 다시 적는다(`sync_env_identity`) — 의도한 동작이다. `APP_SLUG` 는 견주기만 한다. **`.env` 의 다른 줄은 `update` 가
+건드리지 않는다**(env 로 준 `PORTAL_*` · `HEAX_SSO_ALLOWED_IPS` 만 더 적는다 — 0.3). 바꾸려면 `sudo APP_NAME="…" ./deploy.sh update` —
+설치 기록에도 남는다. **이중화는 설치
 기록이 서버마다 따로**라, 한 서버에서만 바꾸면 다른 서버의 다음 update 가 공용 `.env` 를 옛 이름으로 되돌린다 — 두 서버의 update 에 같은
 값을 준다(코드로 읽은 것).
 
@@ -420,7 +426,8 @@ sudo APP_SLUG=<slug> APP_PORT=<새 포트> MCP_PORT=<새 포트+2> MCP_API_BASE=
 | --- | --- | --- |
 | `<.env>` | JWT 비밀 · DB 비밀번호 · 위임 비밀 | 600(install) |
 | `<백업 폴더>/env/.env` | 위의 사본(복구하면 전원 재로그인을 피하려고) | 600(`backup.sh`) |
-| `<백업 폴더>/db/db-*.dump` | DB 전부 — **데이터 소스의 인증 비밀(`data_sources.auth`)과 웹훅 서명 비밀(`webhooks.secret`)이 평문으로 든다**(암호화하는 코드가 없다). 계정의 비밀번호 해시 · 토큰 해시도 | **확인 필요** — `backup.sh` · 백업 유닛에 `umask` · `UMask` 가 없어 기본(022)이면 다른 계정이 읽을 수 있다. `ls -l` 로 보고 백업 폴더를 `chmod 700` |
+| `<백업 폴더>/db/db-*.dump` | DB 전부 — **데이터 소스의 인증 비밀(`data_sources.auth`)과 웹훅 서명 비밀(`webhooks.secret`)이 평문으로 든다**(암호화하는 코드가 없다). 계정의 비밀번호 해시 · 토큰 해시도 | **다른 계정이 읽을 수 있다**(개발 PC 에서 재현, 2026-11-08 — 덤프 644 · 폴더 755). `backup.sh` · 백업 유닛에 `umask` · `UMask` 가 없고, `deploy.sh ensure_dirs` 도 폴더를 좁히지 않는다. 고쳐지기 전까지는 `chmod 700 <백업 폴더>` · `chmod 600 <백업 폴더>/db/*.dump` |
+| `<DATA_DIR>/filestore/` | 첨부 원본(문서 · 그림) | 위와 같다 — 755 로 만들어진다. 서버에 다른 계정이 있으면 `chmod 700` |
 | `/home/<계정>/apps/<slug>/setup.log` | 관리자 임시 비밀번호 | 600 |
 | `/home/<계정>/apps/<slug>/handoff/`(이중화 A, 공용 폴더 없을 때) | `.env` · 복제 비밀번호 사본 — B 의 setup 이 가져간 뒤에도 **남는다** | 700 · 600. B 가 선 뒤에는 지운다(남겨 두면 A 의 `.env` 를 고쳐도 옛 사본이 남는다) |
 
@@ -428,12 +435,19 @@ sudo APP_SLUG=<slug> APP_PORT=<새 포트> MCP_PORT=<새 포트+2> MCP_API_BASE=
 
 **3.13 형태를 옮기면 `.env` 를 손으로 맞춘다.** `.env` 는 **없을 때만** 만들어진다. 단독 → 이중화로 옮기면 `PUBLIC_PATH` · `TRUST_PROXY` ·
 `BACKUP_DIR` 을, 나중에 `BACKUP_HOST_DIR` 을 주면 `BACKUP_DIR=/data/backup` 을 손으로 적는다. 단독 서버에서 준 `BACKUP_HOST_DIR` 폴더는
-deploy 가 만들지 않는다 — 유닛이 그 폴더를 bind 하므로 없으면 앱이 못 뜬다(apptainer 는 없는 bind 원본을 거부한다 — 코드로 읽은 것, 확인
-필요). 먼저 `mkdir`.
+deploy 가 만들지 않는다 — 유닛이 그 폴더를 bind 하므로 없으면 앱이 못 뜬다(apptainer 가 `mount source … doesn't exist` 로 거부한다 —
+개발 PC 에서 확인, 2026-11-08). 먼저 `mkdir`.
 
-**3.14 `update` 로 env 를 적을 때는 지금 판의 번들에서.** `update` 는 그 번들의 SIF 로 바꾸고 마이그레이션을 돌린다. 새 번들에서 치면
-판이 오르고, **옛 번들 폴더에서 치면 판이 내려간다**(DB 는 이미 앞서 있다). `.env` 만 바꿀 때는 손으로 고치고 `restart`(SIF 를 안 바꾼다)
-가 안전하다.
+**3.14 `update` 는 그 번들의 판으로 바꾼다 — 옛 번들 폴더에서 치지 않는다.** `update` 는 **서비스를 먼저 내리고**, 그 번들의 SIF 로
+바꾼 뒤(직전 것은 `app.sif.prev`) 마이그레이션을 돌린다. 판을 견주는 단계가 없어, 옛 번들 폴더에서 치면:
+
+- 그사이 DB 구조가 바뀌었으면(마이그레이션이 다르면) 마이그레이션이 `Can't locate revision …` 으로 실패하고 **서비스가 내려간 채
+  멈춘다.** DB 는 그대로다(마이그레이션은 한 트랜잭션). 되살리기는 `update` 가 끝에 찍는 롤백 세 줄 — 이때 `app.sif.prev` 가 방금까지
+  돌던 새 판이다.
+- DB 구조가 같으면 **「갱신 완료」 라며 조용히 판이 내려간다.** `/api/health` 의 `version` 으로 안다(4.3).
+
+서비스를 내린 뒤의 다른 실패(디스크가 차 SIF 를 못 놓는 등)도 같은 자리에서 멈춘다. 또 `update` 를 연달아 두 번 치면 `app.sif.prev` 가
+두 번째 직전 판으로 덮여, 처음 판으로는 못 돌아간다. `.env` 만 바꿀 때는 손으로 고치고 `restart`(SIF 를 안 바꾼다)가 안전하다.
 
 **3.15 끈 타이머 · MCP 는 다음 `update` 가 다시 켠다.** `SYNC_ENABLED` · `METRICS_ENABLED` · `MCP_ENABLED` 는 기억되지 않고 기본이 1 이다 —
 끈 채로 두려면 update 마다 `=0` 을 준다. 작업 워커만은 운영자가 `disable` 한 것을 지킨다(ADR 0049).
