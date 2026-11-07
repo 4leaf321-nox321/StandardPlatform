@@ -77,16 +77,17 @@ describe('눈여겨볼 것', () => {
     expect(insightsApi.list).toHaveBeenCalledTimes(2) // 다시 읽는다
   })
 
-  it('미반영 구간의 결론은 그 말을 함께 보인다', async () => {
+  it('미반영 구간의 결론은 판정 유보로 그 말과 함께 보인다', async () => {
     const gap =
       '2029-07 이후는 미반영 구간입니다(원천 최종 반영 기간 2029-06) — 이 구간의 0건 · 감소는 수집 지연 때문일 수 있으므로, 데이터 소스의 수집 현황을 확인해야 합니다.'
     insightsApi.list.mockResolvedValue({
-      items: [insight({ detail: { data_gap: gap } })],
+      items: [insight({ detail: { data_gap: gap, held: true }, held: true })],
       total: 1,
       scanned_at: null,
     })
     await openPage()
     expect(await screen.findByText(gap)).toBeInTheDocument()
+    expect(screen.getByText('판정 유보')).toBeInTheDocument()
   })
 
   it('관리자가 아니면 그만 보기 · 지금 훑기가 없다', async () => {

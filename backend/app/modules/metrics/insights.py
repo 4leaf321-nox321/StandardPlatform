@@ -11,9 +11,12 @@
   섞여 샌다.
 - **「새로」** — (지표, 열쇠)가 유일. 처음 훑기의 것도 보인다(경보와 다르다). 이번에 다시 안
   나온 것은 「지남」.
-- **원천 기록이 끊긴 뒤** — 그 분석의 머리가 빈 기간을 말했으면(주의 `data_gap`) 결론을 그대로
-  두고 그 말을 `detail.data_gap` 에 싣는다(경보와 같다, `alerts.gap_line`). 다시 훑을 때 원천이
-  돌아왔으면 빠진다.
+- **미반영 구간 — 판정 유보** — 그 분석의 머리가 미반영 구간을 말했으면(주의 `data_gap`) 그
+  말을 `detail.data_gap` 에 싣고, 그 훑기에서 **새로 선 결론은 판정 유보**다(`detail.held` ·
+  `InsightOut.held`, ADR 0059 — 이미 선 결론은 돌리지 않는다): 목록은 점수와 상관없이 뒤에
+  두고(빈 구간의 0건이 「내려감 30 → 0」 처럼 가장 센 결론이 되기 쉽다), 화면 · AI 는 결론으로
+  말하지 않는다. 원천이 돌아온 훑기에서 같은 결론이 다시 서면 풀리고 처음 본 때가 그때로
+  바뀐다 — 「최근 N일에 처음 본 것」 에 다시 든다. 다시 안 서면 「지남」 이다.
 """
 
 from __future__ import annotations
@@ -896,16 +899,26 @@ def scan(db: Session, metric_id: uuid.UUID) -> ScanResult:
             or _same_change(found, existing, grain)
             or _same_signal(found, existing, grain)
         )
+        # 판정 유보는 새로 선 결론만 — 이미 선 결론은 원천이 멎어도 유보로 돌리지 않는다(경보와
+        # 같다). 그 말(`data_gap`)은 어느 쪽이든 싣는다.
+        held = found.detail.get("data_gap") is not None and (row is None or held_of(row))
         if row is None:
             row = MetricInsight(metric_id=metric.id, key=found.key, first_seen_at=now)
             db.add(row)
             existing[found.key] = row
+            if not held:
+                result.new += 1
+        elif not held and held_of(row):
+            # 판정 유보가 풀렸다 — 결론이 선 때부터 「새로」 다.
+            row.first_seen_at = now
             result.new += 1
         row.kind = found.kind
         row.recipe = found.recipe
         row.values = found.values
         row.title = found.title
         row.detail = {k: v for k, v in found.detail.items() if v is not None}
+        if held:
+            row.detail[alerts.HELD] = True
         row.score = found.score
         row.run_id = found.run_id
         row.last_seen_at = now
@@ -955,6 +968,11 @@ def visible_metric_ids(db: Session, user: User, metrics: list[MetricDef]) -> set
         if all(owner is None or owner in mine for owner in owners):
             out.add(metric.id)
     return out
+
+
+def held_of(row: MetricInsight) -> bool:
+    """판정 유보 — 미반영 구간이 있는 훑기에서 새로 선 결론(`detail.held` — 경보와 같다)."""
+    return alerts.is_held(row.detail)
 
 
 def link_of(metric_slug: str, row: MetricInsight) -> str:

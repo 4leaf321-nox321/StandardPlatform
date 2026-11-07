@@ -150,6 +150,12 @@ const SHEET: Record<string, { label: string; tone: Tone }> = {
   confirmed: { label: '확정', tone: 'good' },
 }
 
+/** 경보 · 눈여겨볼 것의 결론(ADR 0059) — 결론이 섰는지. 선 결론에는 붙이지 않는다. */
+const VERDICT: Record<string, { label: string; tone: Tone }> = {
+  // **판정 유보는 주의다** — 틀린 결론이 아니라, 자료가 다 들어오기 전이라 아직 말하지 않는 것이다.
+  held: { label: '판정 유보', tone: 'warn' },
+}
+
 const TABLES = {
   account: ACCOUNT,
   delegation: DELEGATION,
@@ -165,6 +171,7 @@ const TABLES = {
   rollup: ROLLUP,
   sheet: SHEET,
   token: TOKEN,
+  verdict: VERDICT,
   workspace: WORKSPACE,
 } as const
 

@@ -9,6 +9,7 @@
 import { Link } from 'react-router-dom'
 
 import type { Insight } from '@/modules/insights/api'
+import { StatusBadge } from '@/shared/components/StatusBadge'
 import { Badge } from '@/shared/components/ui/badge'
 import { Button } from '@/shared/components/ui/button'
 import { shownDateTime } from '@/shared/lib/datetime'
@@ -37,10 +38,15 @@ export function InsightList({
                   {one.metric_label}
                 </Link>
               )}
+              {one.held && <StatusBadge kind="verdict" value="held" />}
               {one.past && <Badge variant="secondary">지남</Badge>}
               {one.dismissed && <Badge variant="secondary">그만 봄</Badge>}
             </div>
-            <p className={one.past || one.dismissed ? 'text-muted-foreground' : undefined}>
+            <p
+              className={
+                one.past || one.dismissed || one.held ? 'text-muted-foreground' : undefined
+              }
+            >
               {one.title}
             </p>
             <p className="text-muted-foreground text-xs">
@@ -49,7 +55,7 @@ export function InsightList({
                 ` · 적게 잡아 ${one.detail.ratio_bound.toFixed(2)}배`}
               {one.also && one.also.length > 0 && ` · 같은 줄: ${one.also.join(', ')}`}
             </p>
-            {/* 원천 기록이 끊긴 뒤의 결론일 수 있다 — 결론은 그대로 두고 그 말을 함께 싣는다. */}
+            {/* 미반영 구간 — 판정 유보면 그 까닭이고, 이미 선 결론이면 함께 읽을 주의다. */}
             {typeof one.detail.data_gap === 'string' && (
               <p className="text-xs text-amber-700 dark:text-amber-400">{one.detail.data_gap}</p>
             )}

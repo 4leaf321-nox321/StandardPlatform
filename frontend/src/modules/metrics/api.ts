@@ -520,8 +520,10 @@ export interface AlertFinding {
   key: string
   title: string
   detail: Record<string, unknown>
-  /** 이 경보가 아직 안 본 것 — 다음 계산 뒤 알림이 된다. */
+  /** 이 경보가 아직 안 본 것 — 다음 계산 뒤 알림이 된다(`held` 면 판정 유보로 적힌다). */
   new: boolean
+  /** 미반영 구간이 있는 계산에서 선 새 결론 — 알리지 않고 판정 유보로 적힌다(ADR 0059). */
+  held?: boolean
 }
 
 export interface AlertCheck {
@@ -547,7 +549,13 @@ export interface AlertEvent {
   detail: Record<string, unknown>
   /** 처음 확인에서 본 것 — 알리지 않았다. */
   baseline: boolean
+  /**
+   * 판정 유보 — 미반영 구간이 있는 계산에서 선 결론이라 알리지 않았다(그 말은 `detail.data_gap`).
+   * 자료가 들어와 다시 서면 풀려 알림이 가고, 서지 않으면 지워진다(ADR 0059).
+   */
+  held?: boolean
   run_id: string | null
+  /** 처음 본 때 — 판정 유보가 풀린 결론은 판정이 선 때. */
   created_at: string
   link: string
 }

@@ -25,12 +25,22 @@
 
 처음 확인(만들 때)에서 본 것은 「처음부터 있던 것」(`baseline`)으로 적고 알리지 않는다.
 
-## 원천 기록이 끊긴 뒤의 결론
+## 미반영 구간의 결론 — 판정 유보
 
-원천이 멎으면 닫힌 기간의 0건이 「내려감 30 → 0」 · 관리도 신호로 선다. **결론을 보류하지는
-않는다** — 끝쪽 0건이 진짜일 때도 있다(대책 뒤). 대신 그 계산의 머리가 그렇다고
-말했으면(분석의 주의 `data_gap`) 그 말을 발생마다 싣는다: 발견의 `detail.data_gap`(발생 ·
-눈여겨볼 것에 남는다), 지금 확인의 `notes`, 알림 본문의 끝 줄.
+원천이 멎으면 닫힌 기간의 0건이 「내려감 30 → 0」 · 관리도 신호로 선다. 그 계산의 머리가
+미반영 구간을 말했으면(분석의 주의 `data_gap`) **그 확인에서 새로 선 결론은 판정 유보**다
+(ADR 0059): 발생으로 적되 `detail.held` 를 달고(그 말은 `detail.data_gap`) **알리지 않는다**.
+빈 구간의 0건이 관리 한계 · 변화점의 자리까지 끌어내려 그 앞의 결론도 흔들 수 있어, 기간을
+가리지 않고 그 확인의 새 결론을 모두 유보한다.
+
+- 다음 확인에서 미반영 구간이 없는데 같은 결론이 다시 서면 **풀어서 알린다** — 발생 시각은
+  그때(판정이 선 때)로.
+- 다시 서지 않으면 지운다 — 자료가 덜 든 계산에서만 선 결론이다. 유보가 이어지는 동안에도
+  그 확인에서 다시 서지 않은 유보는 지운다(유보는 「지금 서 있는 것」 만 남는다).
+- 처음 확인(`baseline`)은 유보하지 않는다 — 어차피 알리지 않는다.
+
+끝쪽 0건이 진짜일 때도 있다(대책 뒤) — 원천이 돌아오면 그때 같은 결론으로 다시 서서 알림이
+간다. 원천이 멎은 것은 데이터 소스의 수집 실패 알림이 시스템 관리자에게 따로 간다.
 """
 
 from __future__ import annotations
@@ -114,6 +124,16 @@ class Outcome:
     run_id: uuid.UUID | None
     positions: dict[str, int] = field(default_factory=dict)
     """변화점 — 부분군 시작일 → 차례. 「두 기간 안에서 움직인 같은 변화점」 을 가른다."""
+    gap: str | None = None
+    """그 계산의 머리가 말한 미반영 구간(`gap_line`) — 있으면 새 결론은 판정 유보다."""
+
+
+#: 판정 유보의 표식 — 발생의 `detail` 에만 단다(있으면 참). 알리지 않은 결론이다.
+HELD = "held"
+
+
+def is_held(detail: Mapping[str, Any] | None) -> bool:
+    return bool((detail or {}).get(HELD))
 
 
 def gap_line(out: AnalysisHeader) -> str | None:
@@ -123,12 +143,14 @@ def gap_line(out: AnalysisHeader) -> str | None:
 
 
 def _with_gap(outcome: Outcome, line: str | None) -> Outcome:
-    """발견마다 `detail.data_gap` 을, 지금 확인에는 한 줄을 싣는다 — 결론은 그대로 둔다."""
+    """발견마다 `detail.data_gap` 을, 지금 확인에는 한 줄을 싣는다 — 결론의 수는 그대로 두고,
+    적을 때(`record`) 새 결론을 판정 유보로 한다."""
     if line is None:
         return outcome
     for one in outcome.findings:
         one.detail["data_gap"] = line
     outcome.notes.append(line)
+    outcome.gap = line
     return outcome
 
 
@@ -706,38 +728,70 @@ def fresh(outcome: Outcome, seen: set[str], recipe: str) -> list[Finding]:
 
 
 def seen_keys(db: Session, alert_id: uuid.UUID) -> set[str]:
+    """이미 본 결론 — **판정 유보는 뺀다**: 다음 확인이 다시 보고 풀거나 지운다."""
     return set(
-        db.scalars(select(MetricAlertEvent.key).where(MetricAlertEvent.alert_id == alert_id))
+        db.scalars(
+            select(MetricAlertEvent.key).where(
+                MetricAlertEvent.alert_id == alert_id,
+                MetricAlertEvent.detail[HELD].astext.is_(None),
+            )
+        )
     )
+
+
+def _held_rows(db: Session, alert_id: uuid.UUID) -> dict[str, MetricAlertEvent]:
+    rows = db.scalars(
+        select(MetricAlertEvent).where(
+            MetricAlertEvent.alert_id == alert_id,
+            MetricAlertEvent.detail[HELD].astext.is_not(None),
+        )
+    )
+    return {row.key: row for row in rows}
 
 
 def record(
     db: Session, alert: MetricAlert, metric: MetricDef, outcome: Outcome, *, notify: bool
 ) -> list[MetricAlertEvent]:
-    """새 결론을 적고(처음 확인이면 `baseline`) 알린다. **부르는 쪽이 커밋한다.**"""
+    """새 결론을 적고(처음 확인이면 `baseline`) 알린다 — 돌려주는 것은 **선 결론**(새로 선 것 ·
+    판정 유보가 풀린 것 · 처음부터 있던 것)이고 판정 유보는 들지 않는다. **부르는 쪽이
+    커밋한다.**
+
+    그 계산의 머리가 미반영 구간을 말했으면(`outcome.gap`) 새 결론은 `detail.held` 를 달아
+    적고 알리지 않는다. 판정 유보는 확인마다 다시 본다 — 미반영 구간 없이 다시 서면 풀어서
+    (발생 시각을 지금으로) 알리고, 이번 확인에서 다시 서지 않은 유보는 지운다(모듈 머리말)."""
     first = alert.last_checked_at is None
+    hold = outcome.gap is not None and not first
+    held = _held_rows(db, alert.id)
+    now = datetime.now(UTC)
     added: list[MetricAlertEvent] = []
+    released = 0
+    standing: set[str] = set()
     for one in fresh(outcome, seen_keys(db, alert.id), alert.recipe):
-        row = MetricAlertEvent(
-            alert_id=alert.id,
-            run_id=outcome.run_id,
-            key=one.key[:KEY_MAX],
-            title=one.title[:300],
-            detail=one.detail,
-            baseline=first,
-        )
-        db.add(row)
-        added.append(row)
+        key = one.key[:KEY_MAX]
+        standing.add(key)
+        row = held.get(key)
+        if row is None:
+            row = MetricAlertEvent(alert_id=alert.id, key=key, baseline=first)
+            db.add(row)
+        elif not hold:
+            row.created_at = now  # 판정이 선 때 — 새것부터 줄 세우는 목록의 맨 위로
+            released += 1
+        row.run_id = outcome.run_id
+        row.title = one.title[:300]
+        row.detail = {**one.detail, HELD: True} if hold else dict(one.detail)
+        if not hold:
+            added.append(row)
+    for key, row in held.items():
+        if key not in standing:
+            db.delete(row)
     if added and notify and not first:
         lines = [row.title for row in added[:BODY_LINES]]
         if len(added) > BODY_LINES:
             lines.append(f"외 {len(added) - BODY_LINES}건")
-        gap = next(
-            (row.detail["data_gap"] for row in added if row.detail.get("data_gap")), None
-        )
-        if gap:
-            # 원천 기록이 끊긴 뒤의 결론일 수 있다 — 알림만 읽고 대책을 세우지 않게.
-            lines.append(f"주의: {gap}")
+        if released:
+            lines.append(
+                f"이 가운데 {released}건은 판정 유보였다가 자료가 들어온 뒤 섰습니다."
+            )
         notifications.notify(
             db,
             user_id=alert.owner_id,

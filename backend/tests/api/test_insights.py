@@ -421,11 +421,12 @@ def test_관리도는_튄_달을_신호로_세우고_그_모델의_차트에_적
     assert None not in by_value
 
 
-def test_원천_기록이_끊긴_뒤의_결론에는_그_말이_실리고_돌아오면_빠진다(
+def test_미반영_구간에서_선_결론은_판정_유보로_뒤에_서고_자료가_들어오면_풀린다(
     client: TestClient, admin: Signed
 ) -> None:
-    """결론은 보류하지 않는다 — 그 분석의 머리가 빈 기간을 말했으면 결론마다 `detail.data_gap`
-    에 그 말을 싣고(경보와 같다), 원천이 돌아와 다시 훑으면 빠진다."""
+    """그 분석의 머리가 미반영 구간을 말했으면 결론마다 `detail.data_gap` 에 그 말을 싣고, 그
+    훑기에서 새로 선 결론은 판정 유보(`held`)다 — 목록은 점수와 상관없이 뒤에 둔다. 원천이
+    돌아와 다시 훑으면 풀리고, 처음 본 때가 그때로 바뀐다(ADR 0059)."""
     from tests.api.test_metric_data_through import _stamp
 
     _, slug = _setup(client, admin)
@@ -437,8 +438,46 @@ def test_원천_기록이_끊긴_뒤의_결론에는_그_말이_실리고_돌아
         assert one["detail"]["data_gap"].startswith(
             "2029-07 이후는 미반영 구간입니다(원천 최종 반영 기간 2029-06)"
         ), one
+        assert one["held"] is True and one["detail"]["held"] is True
+    seen = {one["id"]: datetime.fromisoformat(one["first_seen_at"]) for one in found}
 
     _stamp(slug, source_through="2030-01-01")
     _scan(client, admin, slug)
     again = [one for one in _mine(client, admin, slug) if not one["past"]]
     assert again and all("data_gap" not in one["detail"] for one in again)
+    assert all(one["held"] is False and "held" not in one["detail"] for one in again)
+    released = [one for one in again if one["id"] in seen]
+    assert released, again
+    assert all(
+        datetime.fromisoformat(one["first_seen_at"]) > seen[one["id"]] for one in released
+    )
+
+
+def test_이미_선_결론은_원천이_멎어도_판정_유보로_돌리지_않고_유보는_뒤에_선다(
+    client: TestClient, admin: Signed
+) -> None:
+    from app.database import SessionLocal
+    from app.modules.metrics.models import MetricInsight
+    from tests.api.test_metric_data_through import _stamp
+
+    _, slug = _setup(client, admin)
+    _scan(client, admin, slug)
+    settled = [one for one in _mine(client, admin, slug) if not one["past"]]
+    assert len(settled) >= 2 and not any(one["held"] for one in settled), settled
+
+    _stamp(slug, source_through="2029-06-01")
+    _scan(client, admin, slug)
+    found = [one for one in _mine(client, admin, slug) if not one["past"]]
+    assert {one["id"] for one in found} >= {one["id"] for one in settled}
+    for one in found:
+        if one["id"] in {s["id"] for s in settled}:
+            assert one["held"] is False and one["detail"]["data_gap"], one
+
+    top = found[0]  # 점수가 가장 높은 것을 유보로 바꿔 보면 맨 뒤로 간다
+    with SessionLocal() as db:
+        row = db.get(MetricInsight, uuid.UUID(top["id"]))
+        assert row is not None
+        row.detail = {**row.detail, "held": True}
+        db.commit()
+    order = [one["id"] for one in _mine(client, admin, slug) if not one["past"]]
+    assert order[-1] == top["id"] and order[0] != top["id"]

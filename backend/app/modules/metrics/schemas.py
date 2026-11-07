@@ -453,7 +453,10 @@ class AlertFindingOut(BaseModel):
     title: str
     detail: dict[str, Any]
     new: bool
-    """이 경보가 아직 안 본 것 — 다음 계산에서 알림이 된다."""
+    """이 경보가 아직 안 본 것 — 다음 계산에서 알림이 된다(`held` 면 판정 유보로 적힌다)."""
+    held: bool = False
+    """미반영 구간이 있는 계산에서 선 새 결론 — 다음 계산에서 알리지 않고 판정 유보로 적힌다
+    (ADR 0059)."""
 
 
 class AlertCheckOut(BaseModel):
@@ -499,8 +502,13 @@ class AlertEventOut(BaseModel):
     title: str
     detail: dict[str, Any]
     baseline: bool
+    held: bool = False
+    """**판정 유보** — 미반영 구간이 있는 계산에서 선 결론이라 알리지 않았다(그 말은
+    `detail.data_gap`). 자료가 들어온 확인에서 다시 서면 풀려 알림이 가고(그때 `created_at` 이
+    바뀐다), 서지 않으면 지워진다(ADR 0059)."""
     run_id: uuid.UUID | None
     created_at: datetime
+    """처음 본 때 — 판정 유보가 풀린 결론은 판정이 선 때."""
     link: str
 
 
@@ -547,6 +555,10 @@ class InsightOut(BaseModel):
     past: bool
     """마지막 훑기에 다시 안 나왔다 — 지난 것."""
     dismissed: bool
+    held: bool = False
+    """**판정 유보** — 미반영 구간이 있는 훑기에서 새로 선 결론이다(그 말은 `detail.data_gap`).
+    결론으로 말하지 않는다 — 자료가 들어온 훑기에서 다시 서면 풀리고 `first_seen_at` 이 그때로
+    바뀐다. 목록은 판정 유보를 점수와 상관없이 뒤에 둔다(ADR 0059)."""
     link: str
     """그 분석을 그 인자로 연다 — 눌러서 본 것이 이 결론과 같다."""
     also: list[str] = Field(default_factory=list)

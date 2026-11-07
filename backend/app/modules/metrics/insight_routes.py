@@ -55,6 +55,7 @@ def _out(row: MetricInsight, metric: MetricDef) -> InsightOut:
         last_seen_at=row.last_seen_at,
         past=past,
         dismissed=row.dismissed_at is not None,
+        held=insights.held_of(row),
         link=insights.link_of(metric.slug, row),
     )
 
@@ -72,7 +73,8 @@ def list_insights(
     user: User = Depends(current_user),
     db: Session = Depends(get_db),
 ) -> InsightsOut:
-    """**점수 높은 것부터** — 보이는 지표의 것만(그 지표의 셀이 든 부서를 모두 보는 사람)."""
+    """**점수 높은 것부터** — 보이는 지표의 것만(그 지표의 셀이 든 부서를 모두 보는 사람).
+    판정 유보(`held`)는 점수와 상관없이 뒤에."""
     metrics_q = select(MetricDef).where(MetricDef.is_active.is_(True))
     if metric:
         metrics_q = metrics_q.where(MetricDef.slug == metric)
@@ -100,6 +102,7 @@ def list_insights(
     # 나머지 지표는 `also` 에. 결론은 지표마다 수백이라 다 읽어 가른다.
     rows = db.scalars(
         stmt.order_by(
+            MetricInsight.detail[alerts.HELD].astext.is_not(None),  # 거짓(선 결론)이 앞
             MetricInsight.score.desc(),
             MetricInsight.first_seen_at.desc(),
             MetricInsight.id,

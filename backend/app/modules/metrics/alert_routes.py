@@ -65,6 +65,7 @@ def _event_out(row: MetricAlertEvent, alert: MetricAlert, metric: MetricDef) -> 
         title=row.title,
         detail=dict(row.detail or {}),
         baseline=row.baseline,
+        held=alerts.is_held(row.detail),
         run_id=row.run_id,
         created_at=row.created_at,
         link=alerts.event_link(
@@ -198,7 +199,8 @@ def check_alert(
     db: Session = Depends(get_db),
 ) -> AlertCheckOut:
     """지금 확인 — **적지도 알리지도 않는다.** 지금 셀에서 보이는 결론과, 그중 이 경보가 아직
-    안 본 것(`new` — 다음 계산 뒤 알림이 될 것)."""
+    안 본 것(`new` — 다음 계산 뒤 알림이 될 것). 미반영 구간이 있는 계산이면 새 결론은 알림이
+    아니라 판정 유보가 된다(`held`)."""
     query.snapshot(db)
     metric = services.get(db, slug)
     alert = _mine(db, user, metric, alert_id)
@@ -210,7 +212,11 @@ def check_alert(
         run_id=outcome.run_id,
         findings=[
             AlertFindingOut(
-                key=one.key, title=one.title, detail=one.detail, new=one.key in new
+                key=one.key,
+                title=one.title,
+                detail=one.detail,
+                new=one.key in new,
+                held=one.key in new and outcome.gap is not None,
             )
             for one in outcome.findings
         ],

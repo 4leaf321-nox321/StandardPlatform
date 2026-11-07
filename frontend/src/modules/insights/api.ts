@@ -26,6 +26,11 @@ export interface Insight {
   /** 마지막 훑기에 다시 안 나왔다. */
   past: boolean
   dismissed: boolean
+  /**
+   * 판정 유보 — 미반영 구간이 있는 훑기에서 새로 선 결론(그 말은 `detail.data_gap`). 결론으로
+   * 말하지 않는다 — 목록은 점수와 상관없이 뒤에 둔다(ADR 0059).
+   */
+  held?: boolean
   /** 그 분석을 그 인자로 연다. */
   link: string
   /** 같은 줄이 선 다른 지표의 이름 — 목록에는 하나만 보인다. */

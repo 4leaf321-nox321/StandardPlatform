@@ -13,6 +13,7 @@ import type { AlertCheck, AlertEvent, Metric, MetricAlert } from '@/modules/metr
 import { metricsApi } from '@/modules/metrics/api'
 import { ConfirmDialog } from '@/shared/components/ConfirmDialog'
 import { ErrorNotice } from '@/shared/components/ErrorNotice'
+import { StatusBadge } from '@/shared/components/StatusBadge'
 import { Badge } from '@/shared/components/ui/badge'
 import { Button } from '@/shared/components/ui/button'
 import { useResource } from '@/shared/hooks/useResource'
@@ -129,12 +130,17 @@ function AlertRow({
         <div className="space-y-1 text-sm" aria-label="지금 확인">
           <p className="text-muted-foreground text-xs">
             지금 셀에서 보이는 결과 {checked.findings.length}건 — 「새것」 은 다음 계산 뒤 알림이
-            됩니다. 확인은 적지도 알리지도 않습니다.
+            됩니다. 미반영 구간이 있으면 알리지 않고 「판정 유보」 로 적습니다. 확인은 적지도
+            알리지도 않습니다.
           </p>
           <ul className="list-disc space-y-0.5 pl-5 text-xs">
             {checked.findings.map((one) => (
               <li key={one.key}>
-                {one.new && <Badge className="mr-1">새것</Badge>}
+                {one.held ? (
+                  <StatusBadge kind="verdict" value="held" className="mr-1" />
+                ) : (
+                  one.new && <Badge className="mr-1">새것</Badge>
+                )}
                 {one.title}
               </li>
             ))}
@@ -152,13 +158,14 @@ function AlertRow({
           {events.map((one) => (
             <li key={one.id}>
               <span className="text-muted-foreground mr-2">{when(one.created_at)}</span>
+              {one.held && <StatusBadge kind="verdict" value="held" className="mr-1" />}
               <Link to={one.link} className="underline-offset-2 hover:underline">
                 {one.title}
               </Link>
               {one.baseline && (
                 <span className="text-muted-foreground ml-1">(만들 때부터 있던 것)</span>
               )}
-              {/* 원천 기록이 끊긴 뒤의 결론일 수 있다 — 그때의 계산 머리가 말한 것(서버가 싣는다). */}
+              {/* 미반영 구간 — 그때의 계산 머리가 말한 것(서버가 싣는다). 판정 유보면 그 까닭이다. */}
               {typeof one.detail.data_gap === 'string' && (
                 <p className="text-amber-700 dark:text-amber-400">{one.detail.data_gap}</p>
               )}

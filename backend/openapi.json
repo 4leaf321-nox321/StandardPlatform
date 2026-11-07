@@ -16544,7 +16544,7 @@
           "metrics"
         ],
         "summary": "Check Alert",
-        "description": "지금 확인 — **적지도 알리지도 않는다.** 지금 셀에서 보이는 결론과, 그중 이 경보가 아직\n안 본 것(`new` — 다음 계산 뒤 알림이 될 것).",
+        "description": "지금 확인 — **적지도 알리지도 않는다.** 지금 셀에서 보이는 결론과, 그중 이 경보가 아직\n안 본 것(`new` — 다음 계산 뒤 알림이 될 것). 미반영 구간이 있는 계산이면 새 결론은 알림이\n아니라 판정 유보가 된다(`held`).",
         "operationId": "check_alert_api_metrics__slug__alerts__alert_id__check_post",
         "parameters": [
           {
@@ -16666,7 +16666,7 @@
           "insights"
         ],
         "summary": "List Insights",
-        "description": "**점수 높은 것부터** — 보이는 지표의 것만(그 지표의 셀이 든 부서를 모두 보는 사람).",
+        "description": "**점수 높은 것부터** — 보이는 지표의 것만(그 지표의 셀이 든 부서를 모두 보는 사람).\n판정 유보(`held`)는 점수와 상관없이 뒤에.",
         "operationId": "list_insights_api_insights_get",
         "parameters": [
           {
@@ -22422,6 +22422,11 @@
             "type": "boolean",
             "title": "Baseline"
           },
+          "held": {
+            "type": "boolean",
+            "title": "Held",
+            "default": false
+          },
           "run_id": {
             "anyOf": [
               {
@@ -22480,6 +22485,11 @@
           "new": {
             "type": "boolean",
             "title": "New"
+          },
+          "held": {
+            "type": "boolean",
+            "title": "Held",
+            "default": false
           }
         },
         "type": "object",
@@ -34894,6 +34904,11 @@
           "dismissed": {
             "type": "boolean",
             "title": "Dismissed"
+          },
+          "held": {
+            "type": "boolean",
+            "title": "Held",
+            "default": false
           },
           "link": {
             "type": "string",
